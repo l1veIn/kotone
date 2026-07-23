@@ -1,7 +1,7 @@
 # Kotone 开发文档
 
-> 状态：开发立项 · 技术方案已定（v2：STT 改为可插拔多引擎架构）
-> 日期：2026-07-23
+> 状态：开发中 · 骨架与核心链路已实现（Phase 0 Spike 基本完成，Phase 1 进行中）
+> 日期：2026-07-23（v3：记录首轮实现的偏差与新发现）
 > 上游文档：[docs/tech-research.md](./tech-research.md)（技术预研报告）
 > 本文档回答：用什么技术、为什么、怎么组织代码、按什么顺序开发。
 
@@ -14,6 +14,26 @@
 本文档完成的是「拍板」：把预研中的候选方案收敛为唯一决策，给出可直接开工的架构、模块边界、数据模型、IPC 契约和开发顺序。后续开发中如需偏离本文档的决策，需在本文档中记录变更原因。
 
 **v2 修订要点**：STT 不再绑定单一引擎。考虑到单一方案（如 whisper.cpp small）在速度与精度上可能不达标，STT 层设计为**可插拔多引擎架构**，下游链路（orchestrator → IPC → UI）**原生支持流式 partial 结果**，并内置**引擎评测工具**支撑多款方案的人工对比测试。交互模式（push-to-talk 的 hold/toggle 等）由用户可选，录音过程中悬浮窗实时回显识别内容。
+
+**v3 修订要点**：首轮实现（骨架 → Rust 核心 → 前端 → Windows 注入）完成，记录实现偏差与两个重要环境发现（**UIPI 提权要求**、**麦克风隐私封锁**），见 §1.1 与 §11。
+
+### 1.1 实现现状（2026-07-23）
+
+| Commit | 内容 | 验证 |
+|--------|------|------|
+| `db50ac3` | Tauri 2 + Svelte 5 + Tailwind v4 骨架（双窗口 hash 路由、托盘、图标） | pnpm install / build:web / cargo check / tauri dev 全绿 |
+| `5fa4c5a` | Rust 核心：orchestrator 状态机、热键 hold/toggle、mock-stream 引擎、cpal 音频、settings/profile 落盘、20 个 IPC 命令 | cargo test 31/31 |
+| `0420c31` | 前端：状态驱动悬浮条（波形/partial/预览编辑/toast）、设置页、IPC 封装 | build:web + svelte-check 0 错；各状态渲染实测 |
+| `cbcd246` | Windows 注入（SendInput + KEYEVENTF_UNICODE，对齐 LeagueAkari）、error 重试、后端驱动窗口显隐、关窗不退出 | cargo test 49/49；记事本中文注入 UIA 逐字校验 PASS |
+
+**已验证**：注入机制正确（记事本中文短句 4/4 逐字一致）；状态机全链路（cargo 集成测试）；前端各状态渲染（浏览器 demo + Tauri 内 error 态实测）。
+
+**待验证（阻塞原因见 §10）**：
+
+- [ ] 记事本长句（>100 字）/ emoji 各 10 次成功率复跑（脚本 `scripts/notepad_inject_test.ps1` 已入库，需桌面空闲窗口期）
+- [ ] LOL 真机训练模式发送（需先解决提权，见 §10 R-1）
+- [ ] 麦克风全链路（F8 → 真录音 → partial），被本机麦克风隐私策略封锁（见 §10 R-4）
+- [ ] 空闲内存 < 150MB 实测（dev 进程 ~40MB，含 WebView2 待 release 复测）
 
 ---
 
@@ -54,6 +74,8 @@
 
 已知代价：Windows 依赖系统 WebView2（Win10 1803+ / Win11 基本预装，安装器可引导补装）；macOS 权限链（麦克风 + 辅助功能）较繁琐，但 MVP 是 Windows-first，可接受。
 
+**v3 补充（新发现，重要）：对以高权限（管理员）运行的游戏，Windows UIPI 会丢弃来自中权限进程的合成输入——Kotone 需与游戏同等提权运行才能注入。** 详见 §10 R-1。
+
 ### 3.2 前端：Svelte 5，不选 React
 
 **决策：Svelte 5 + Vite + Tailwind CSS**
@@ -78,7 +100,7 @@
 3. **引擎会演进。** ASR 领域迭代快（新模型、新量化方案），绑定单一引擎等于把产品体验押在一个外部项目的节奏上。抽象层让换引擎/加引擎成为配置问题而非重构问题。
 4. **流式与非流式引擎的体验差异必须在架构层消化。** 流式引擎（sherpa-onnx）边说边出字，非流式引擎（whisper.cpp sidecar）松手才出结果——如果下游只按「一次性返回文本」设计，接入流式引擎时要返工 orchestrator、IPC 和 UI 三层。因此**流式支持从第一天就是架构的一等公民**。
 
-#### 引擎抽象设计
+#### 引擎抽象设计（v3：与已实现代码对齐）
 
 ```rust
 /// 引擎静态能力声明，UI 据此展示可用功能与提示
@@ -96,7 +118,12 @@ trait SttEngine: Send + Sync {
     fn display_name(&self) -> &str;
     fn capabilities(&self) -> EngineCapabilities;
     fn is_ready(&self) -> bool;                // 模型是否已下载/可用
-    fn start_session(&self, cfg: &SessionConfig) -> Result<Box<dyn SttSession>>;
+    // v3 偏差：events 通道显式化为参数（文档原版隐含在返回值里）
+    fn start_session(
+        &self,
+        cfg: &SessionConfig,
+        events: UnboundedSender<SttEvent>,
+    ) -> Result<Box<dyn SttSession>>;
 }
 
 /// 一次「按下到松手」的识别会话；流式与非流式引擎共用同一接口
@@ -122,8 +149,9 @@ enum SttEvent {
 
 | 引擎 ID | 接入方式 | 流式 | 状态 | 定位 |
 |---------|----------|------|------|------|
-| `whisper-cpp-sidecar` | sidecar 子进程（whisper-cli） | ✗（finalize-only） | **Phase 1 首发** | 闭环基线、离线兜底 |
-| `sherpa-onnx-zipformer-zh` | FFI（sherpa-onnx crate） | ✓ | **Phase 1 并行接入** | 中文流式主力候选 |
+| `mock-stream` | 内置 mock | ✓ | **已实现**（联调用，不进发布版或标注为调试） | 全链路联调 |
+| `whisper-cpp-sidecar` | sidecar 子进程（whisper-cli） | ✗（finalize-only） | 接口已注册，实现待做 | 闭环基线、离线兜底 |
+| `sherpa-onnx-zipformer-zh` | FFI（sherpa-onnx crate） | ✓ | 接口已注册，实现待做 | 中文流式主力候选 |
 | `whisper-cpp-ffi` | FFI（whisper-rs） | ✗ | Phase 2 | 降延迟的 whisper 路径 |
 | `sherpa-onnx-sensevoice` | FFI | ✗（快批式） | 候选池 | 中文高精度候选 |
 | `funasr-paraformer` | ONNX 本地服务 | ✓ | 候选池 | 中文工业级标杆 |
@@ -141,6 +169,8 @@ enum SttEvent {
 4. **设置页引擎对比视图**：简单表格展示各引擎最近 N 次的延迟与样本，辅助人工决策。
 
 评测结论（选哪款做默认引擎）是 Phase 1 末的正式决策点，记录到本文档 §11。
+
+**v3 现状**：eval 模块签名就位（`record_session/replay/export/list_sessions`），orchestrator 内已标注录档接线点（TODO），命令暂返回「未实现」。
 
 #### 模型管理
 
@@ -163,6 +193,8 @@ enum SttEvent {
 
 不做（MVP）：全时 VAD 免按键（误触发与资源风险，Phase 3 作为第三种交互模式评估）。
 
+**v3 实现细节**：hold 模式用插件 `on_shortcut` 的 Pressed/Released 区分；toggle 只响应 Pressed（Idle→开始、Listening→结束、其他状态→取消）。**Esc 取消不常驻注册**（避免劫持游戏 Esc），仅在 Listening 期间临时全局注册，离开即注销。
+
 ### 3.5 游戏注入：raw windows crate 直调 SendInput，对齐 LeagueAkari
 
 **决策：Windows 注入层不用 enigo 抽象，直接用 `windows` crate 调 Win32 `SendInput`，实现 `send_unicode` / `key_down_up` / `is_process_foreground` 三个原语，时序参数 1:1 对齐 LeagueAkari 已验证实现。**
@@ -181,6 +213,8 @@ enum SttEvent {
 
 **合规红线（继承预研）：** 只做系统标准输入合成 + 剪贴板；不读写游戏内存、不 hook 渲染、不做驱动注入。发送前硬性校验目标游戏进程为前台进程，否则 abort 并提示。
 
+**v3 实现现状**：已实现于 `src-tauri/src/inject/windows.rs`。与 LeagueAkari 对应关系：sendString → `send_unicode`（每 64 个 u16 单元一批 SendInput，校验返回计数）；sendKey → `key_down_up`（MapVirtualKeyW scan code，任何路径都补 up 无悬键）；IsProcessForeground → `is_process_foreground` + `foreground_process_name`（Toolhelp 快照拿进程名）。时序编排经 `SendOps` trait 与平台解耦，8 个 mock 单测覆盖时序/取消点/剪贴板恢复。剪贴板路径保存并恢复用户原文本内容（非文本格式不恢复，已知取舍）。记事本中文短句实测 4/4 PASS（UIA 逐字校验）。
+
 ### 3.6 热键与悬浮窗
 
 **热键：tauri-plugin-global-shortcut。**
@@ -194,6 +228,12 @@ enum SttEvent {
 - 设置窗口：独立窗口，从托盘菜单唤起。
 - 点击穿透：MVP 不做（Phase 2，`set_ignore_cursor_events` 空闲时穿透）。
 - **独占全屏不保证**：设置页检测全屏状态并提示用户切换无边框/窗口化，文档中明示。
+
+**v3 实现细节**：
+
+- **窗口显隐由后端驱动**（v3 变更）：orchestrator 状态事件 → 非 Idle 时 `SW_SHOWNA` 显示 overlay（**不抢焦点**，否则注入前台校验必然失败）、Idle 时隐藏；与前端显隐调用幂等共存。
+- **关窗不退出**：main/overlay 的 CloseRequested 均拦截转为 hide，仅托盘「退出」真正结束（托盘常驻语义）。
+- 窗口路由：单 SPA + hash 路由（`index.html#/overlay`、`index.html#/settings`）。
 
 ### 3.7 平台策略：Windows-first
 
@@ -227,26 +267,31 @@ enum SttEvent {
 │         │ SttEngine trait   │              │                │
 │  ┌──────▼─────────────────┐ │ ┌────────────▼────┐           │
 │  │ stt 引擎注册表           │ │ │ inject          │           │
-│  │ ├─ whisper-cpp-sidecar │ │ │ SendInput/剪贴板 │           │
-│  │ ├─ sherpa-onnx (FFI)   │ │ └─────────────────┘           │
-│  │ └─ <feature-gated 更多>│ │ ┌─────────────────┐           │
-│  └──────┬─────────────────┘ │ │ profile 游戏配置  │           │
-│         │ SttEvent 通道      │ │ 前台进程匹配      │           │
-│  ┌──────▼─────────────────┐ │ └─────────────────┘           │
-│  │ eval 评测录档/回放       │ │                               │
+│  │ ├─ mock-stream ✓      │ │ │ SendInput/剪贴板 │ ✓        │
+│  │ ├─ whisper-cpp-sidecar │ │ └─────────────────┘           │
+│  │ ├─ sherpa-onnx (FFI)   │ │ ┌─────────────────┐           │
+│  │ └─ <feature-gated 更多>│ │ │ profile 游戏配置  │ ✓        │
+│  └──────┬─────────────────┘ │ │ 前台进程匹配      │           │
+│         │ SttEvent 通道      │ └─────────────────┘           │
+│  ┌──────▼─────────────────┐ │                               │
+│  │ eval 评测录档/回放（签名）│ │                               │
 │  └────────────────────────┘ │                               │
 │  ┌──────────────────────────▼───────────────┐               │
-│  │ settings · tray · model downloader       │               │
+│  │ settings ✓ · tray ✓ · model downloader   │               │
 │  └──────────────────────────────────────────┘               │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+（✓ = v3 已实现）
 
 **设计要点：**
 
 1. **orchestrator 是唯一的状态所有者。** UI 不维护业务状态，只渲染 Rust 侧 emit 的状态事件。所有状态迁移（idle → listening → transcribing → preview/sending → success/error）在 Rust 侧完成，避免前后端状态不一致。
 2. **STT 与 inject 完全解耦，且 STT 内部多引擎解耦。** orchestrator 只面向 `SttEngine` trait 编程；inject 只接收最终文本。「仅复制」降级模式、换引擎、加引擎、流式升级都不影响其他层。
 3. **流式是一等公民。** 录音期间 PCM 持续推入 session，partial 经事件通道直达 UI；非流式引擎只是「不产生 partial 的特例」。
-4. **发送可取消。** 发送时序中有多个 delay，用户按 Esc 或再次按热键应能中止（`tokio::sync::watch` 取消标志，对齐 LeagueAkari 的 AbortController）。
+4. **发送可取消。** 发送时序中有多个 delay，用户按 Esc 或再次按热键应能中止（`CancelToken`，对齐 LeagueAkari 的 AbortController）。
+
+**v3 实现细节**：并发模型为 inner 状态（std Mutex，不跨 await）+ op 串行化（tokio Mutex）+ **gen 代际计数**（begin/cancel 自增，async 空隙后校验 gen，丢弃过期结果）。PCM pump 任务持有 session（select! 三路：stop/pcm/stt 事件），end 时 oneshot 取回后 `spawn_blocking + 10s 超时` finalize。
 
 ### 4.1 核心状态机
 
@@ -260,12 +305,18 @@ enum SttEvent {
         │              ┌─── autoSend=true ──────────────────┤
         │              ▼                                    ▼
         │           Sending ◄──用户确认/编辑── Preview（可编辑文本）
-        │              │
-        │     ok       │         fail
-        └── Success toast ◄────┴────► Error toast（保留文本，可重试）
+        │           ▲  │
+        │           │  │ ok       │         fail
+        │           │  └────► Success toast ──┐
+        │           │                         ▼
+        │           └── confirm_send ── Error toast（带文本，可重试/取消）
+        │                （v3：重试）
+        └──────────── Idle
 ```
 
 任意状态下按 Esc / 取消热键 → 回到 Idle（session cancel；发送中时序安全中止）。
+
+**v3 语义细化**：带文本的 Error（如发送失败）**不自动回 Idle**，文本保留给用户重试（`confirm_send` 在 Preview 与 Error 两种状态均可调用）或取消；无文本的 Error（如引擎未就绪）维持 toast 后自动回 Idle。Success toast 停留约 1.5s 自动回 Idle。
 
 ---
 
@@ -273,70 +324,77 @@ enum SttEvent {
 
 ### 5.1 Rust 侧（src-tauri/src）
 
-| 模块 | 文件 | 职责 | 关键依赖 |
-|------|------|------|----------|
-| `hotkey` | `hotkey.rs` | 注册/注销全局热键，hold/toggle 两种触发模式，冲突检测 | tauri-plugin-global-shortcut |
-| `audio` | `audio.rs` | 设备枚举、16kHz mono 采集、PCM 流推送、wav 编码（录档用） | cpal, hound |
-| `stt` | `stt/mod.rs` | `SttEngine` / `SttSession` trait 定义、引擎注册表、当前引擎路由 | tokio |
-| `stt::whisper_sidecar` | `stt/whisper_sidecar.rs` | whisper-cli sidecar 生命周期，wav → 文本（finalize-only），initial_prompt 热词 | tauri sidecar |
-| `stt::sherpa` | `stt/sherpa.rs` | sherpa-onnx FFI 接入，流式 session，partial 回调 → SttEvent | sherpa-onnx（feature `engine-sherpa`） |
-| `eval` | `eval.rs` | 会话录档（wav + 指标 JSONL）、语料回放、多引擎对比 | serde_json |
-| `inject` | `inject/mod.rs`, `inject/windows.rs` | `send_unicode` / `key_down_up` / `is_process_foreground` | windows crate |
-| `orchestrator` | `orchestrator.rs` | 状态机，串联 hotkey→audio→stt→inject，partial 转发，取消与超时 | tokio |
-| `profile` | `profile.rs` | 游戏 profile CRUD、前台进程匹配 | sysinfo, windows crate |
-| `settings` | `settings.rs` | 用户配置读写（`~/.kotone/config.json`） | serde_json |
-| `model` | `model.rs` | 各引擎模型下载/校验/切换 | reqwest, sha2 |
-| `tray` | `tray.rs` | 托盘菜单：显示悬浮条 / 设置 / 退出 | tauri tray |
+| 模块 | 文件 | 职责 | 状态（v3） |
+|------|------|------|------------|
+| `hotkey` | `hotkey.rs` | 注册/注销全局热键，hold/toggle 两种触发模式，冲突检测；Esc 仅 Listening 期临时注册 | ✅ |
+| `audio` | `audio.rs` | `AudioBackend` trait + `CpalBackend`：设备枚举、16kHz mono 重采样、PCM 流推送、50ms RMS 事件；设备打开失败即报中文错误 | ✅ |
+| `stt` | `stt/mod.rs` | `SttEngine` / `SttSession` trait、引擎注册表、当前引擎路由 | ✅ |
+| `stt::mock` | `stt/mock.rs` | mock-stream：每 0.5s 音频发 partial，finalize 返回固定文本 + 实测延迟 | ✅ |
+| `stt::whisper_sidecar` | `stt/whisper_sidecar.rs` | whisper-cli sidecar 生命周期，wav → 文本（finalize-only），initial_prompt 热词 | 接口注册，实现待做 |
+| `stt::sherpa` | `stt/sherpa.rs` | sherpa-onnx FFI 接入，流式 session，partial 回调 → SttEvent | 接口注册，实现待做 |
+| `eval` | `eval.rs` | 会话录档（wav + 指标 JSONL）、语料回放、多引擎对比 | 签名就位 |
+| `inject` | `inject/mod.rs`, `inject/windows.rs` | `send_unicode` / `key_down_up` / `is_process_foreground` + `send_sequence` 时序编排（SendOps trait 解耦可测） | ✅（LOL 真机待测） |
+| `orchestrator` | `orchestrator.rs` | 状态机，串联 hotkey→audio→stt→inject，partial 转发，取消与超时，gen 代际防过期 | ✅ |
+| `profile` | `profile.rs` | 游戏 profile CRUD、前台进程匹配（内置 lol + generic） | ✅ |
+| `settings` | `settings.rs` | 用户配置读写（`~/.kotone/config.json`），默认值合并 + 原子写入 | ✅ |
+| `model` | `model.rs` | 各引擎模型下载/校验/切换 | 签名就位 |
+| `tray` | `tray.rs` | 托盘菜单：显示悬浮条 / 设置 / 退出；关窗拦截转 hide | ✅ |
 
 ### 5.2 前端（src/）
 
-| 模块 | 职责 |
-|------|------|
-| `lib/stores/state.ts` | 订阅 `kotone://state` / `kotone://partial` / `kotone://level` 的 Svelte store，UI 唯一数据源 |
-| `lib/components/OverlayBar.svelte` | 悬浮录音条：波形动画、**流式 partial 文本区**、状态指示、结果预览与编辑 |
-| `lib/components/Waveform.svelte` | 实时音量波形（Rust 侧推送 RMS 电平） |
-| `routes/settings/` | 设置页：交互模式与热键、麦克风、**STT 引擎切换与模型管理**、游戏 profile 编辑器、评测数据导出 |
-| `lib/ipc.ts` | 所有 `invoke` 调用的类型化封装 |
+| 模块 | 职责 | 状态（v3） |
+|------|------|------------|
+| `lib/stores/state.ts` | 订阅 `kotone://state` / `kotone://partial` / `kotone://level` 的 store，UI 唯一数据源；非 Tauri 环境容错 | ✅ |
+| `lib/ipc.ts` | 全部 `invoke` 的类型化封装；浏览器环境内存 mock（dev:web 可纯前端调试） | ✅ |
+| `lib/components/OverlayBar.svelte` | 悬浮录音条：波形、流式 partial 滚动区、可编辑预览、状态 toast（品牌色 token 化） | ✅ |
+| `lib/components/Waveform.svelte` | rms 驱动 16 根渐变竖条，静默呼吸动画 | ✅ |
+| `routes/overlay/Overlay.svelte` | overlay 视图 + 窗口显隐 + 浏览器 demo 模式 | ✅ |
+| `routes/settings/Settings.svelte` | 设置页：交互模式与热键、麦克风、STT 引擎切换、autoSend、profile | ✅ |
 
-### 5.3 IPC 契约（commands）
+### 5.3 IPC 契约（commands，v3 与已实现代码对齐）
 
 ```typescript
 // 设置与配置
 get_settings()              -> Settings
-update_settings(patch)      -> Settings
+update_settings(patch)      -> Settings          // 热键变更后端自动重注册
 list_audio_devices()        -> AudioDevice[]
 set_audio_device(id)        -> void
 
 // STT 引擎
-list_stt_engines()          -> EngineInfo[]   // id / displayName / capabilities / isReady / 延迟统计
+list_stt_engines()          -> EngineInfo[]   // id / displayName / capabilities / isReady
 set_stt_engine(id)          -> void           // 切换引擎（未就绪则提示下载模型）
-get_engine_options(id)      -> Json           // 引擎专有配置项（如 whisper 线程数）
+get_engine_options(id)      -> Json           // 引擎专有配置项
 
 // 游戏 profile
 list_profiles()             -> GameProfile[]
 save_profile(profile)       -> void
-detect_foreground_game()    -> GameProfile | null
+detect_foreground_game()    -> GameProfile | null   // v3：已接前台进程名匹配
+
+// 会话控制（v3 新增：§4.1 状态机的必要入口）
+confirm_send(text?)         -> void           // Preview/Error 态确认（可带编辑后文本）；Error 态即重试
+cancel_session()            -> void           // 任意非 Idle 态取消回 Idle
 
 // 模型
-list_models()               -> ModelInfo[]    // 跨引擎统一列出：已下载/可下载
+list_models()               -> ModelInfo[]
 download_model(id)          -> Progress（event 流）
 set_active_model(engineId, modelId) -> void
 
 // 评测
-eval_list_sessions()        -> EvalSession[]  // 录档列表
-eval_replay(sessionId, engineId) -> EvalResult // 同一音频换引擎重放
-eval_export()               -> path           // 导出 JSONL + wav 包
+eval_list_sessions()        -> EvalSession[]
+eval_replay(sessionId, engineId) -> EvalResult
+eval_export()               -> path
 
 // 手动触发（调试/测试用）
-simulate_send(text, profileId) -> Result<(), InjectError>
+simulate_send(text, profileId) -> Result<(), InjectError>   // v3：走真实发送时序
 ```
 
 **事件（Rust → UI）：**
 
 ```typescript
 "kotone://state"    { state: "idle"|"listening"|"transcribing"|"preview"|"sending"|"success"|"error", payload?: {...} }
-"kotone://partial"  { text: string }             // 流式引擎录音期间持续推送；核心契约，非流式引擎不发
-"kotone://level"    { rms: number }              // 录音音量，驱动波形
+                    // preview/sending/success 带 {text}；error 带 {message, text?}
+"kotone://partial"  { text: string }             // 流式引擎录音期间持续推送；finalize 后也发一条最终文本
+"kotone://level"    { rms: number }              // 录音音量（50ms 间隔），驱动波形
 "kotone://download" { modelId, progress: 0..1 }
 ```
 
@@ -399,27 +457,29 @@ simulate_send(text, profileId) -> Result<(), InjectError>
 
 ```
 hotkey 开始
-  → orchestrator 创建 STT session（当前引擎）→ Listening，悬浮条弹出
+  → orchestrator 创建 STT session（当前引擎）→ Listening，悬浮条弹出（SW_SHOWNA 不抢焦点）
   → 录音 PCM 持续 push_audio
        流式引擎：partial → emit "kotone://partial" → 悬浮条实时上屏
        非流式引擎：仅波形 + 「聆听中…」
 hotkey 结束
   → session.finalize() → 最终文本 T（emit transcribing → 文本上屏）
-  → autoSend=false：Preview 状态，用户确认/编辑后继续
+  → autoSend=false：Preview 状态，用户确认/编辑后继续（confirm_send）
   → inject::is_process_foreground(profile.processNames)
-       false → Error toast「游戏不在前台」→ 保留文本可重试
-  → key_down_up(openChatKey)          // VK_RETURN, scan code 经 MapVirtualKey
+       false → Error toast「游戏不在前台：目标进程 X 未处于前台（当前前台：Y）」→ 文本保留可重试
+  → key_down_up(openChatKey)          // VK_RETURN, scan code 经 MapVirtualKeyW
   → sleep(20ms)
   → preferClipboardPaste ?
-       arboard 写入 + Ctrl+V
-     : send_unicode(T)                // encode_utf16 逐单元 KEYEVENTF_UNICODE down+up
+       arboard 保存旧值 → 写入 → Ctrl+V → 100ms 后恢复旧值
+     : send_unicode(T)                // encode_utf16 逐单元 KEYEVENTF_UNICODE down+up，64 单元/批
   → sleep(20ms)
   → key_down_up(sendKey)
-  → Success toast「收到，已发送！✨」→ Idle
-  → eval 录档落盘（wav + 指标，可在设置中关闭）
+  → Success toast「收到，已发送！✨」→ 1.5s 后 Idle
+  → eval 录档落盘（wav + 指标，可在设置中关闭）   // v3：接线点已标注，实现待做
 ```
 
-取消点：录音中 cancel session；finalize 设置 10s 超时；发送时序每次 sleep 前后检查取消标志。
+取消点：录音中 cancel session；finalize 10s 超时；发送时序每次 sleep 前后检查 CancelToken，取消时已按下的键补 up。
+
+**v3 重要前提（UIPI）**：若目标游戏以高权限（管理员）运行，Kotone 进程权限低于它时，**合成输入会被系统整体丢弃、前台切换也会失败**。Kotone 需以不低于游戏的权限运行（提权方案见 §10 R-1）。前台校验的错误消息已包含当前前台进程名，便于诊断。
 
 ---
 
@@ -427,64 +487,68 @@ hotkey 结束
 
 ```
 kotone/
-├─ package.json / pnpm-lock.yaml
-├─ vite.config.ts / svelte.config.js / tailwind.config.ts
+├─ index.html / package.json / pnpm-lock.yaml / pnpm-workspace.yaml
+├─ vite.config.ts / svelte.config.js / tsconfig.json / tailwind (v4, css 方式)
 ├─ src/                        # Svelte 前端
+│  ├─ main.ts / App.svelte (hash 路由) / app.css
 │  ├─ routes/ (overlay, settings)
 │  └─ lib/ (stores, components, ipc.ts)
+├─ scripts/
+│  └─ notepad_inject_test.ps1  # 注入记事本回归脚本（UIA 逐字校验）
 ├─ src-tauri/
 │  ├─ Cargo.toml               # features: engine-whisper-sidecar / engine-sherpa / ...
-│  ├─ tauri.conf.json
+│  ├─ tauri.conf.json          # 双窗口：overlay(480x120 透明置顶) + main(800x600)
+│  ├─ capabilities/default.json
+│  ├─ examples/inject_cli.rs   # 注入命令行测试入口
 │  ├─ src/
-│  │  ├─ main.rs / orchestrator.rs / hotkey.rs / audio.rs
-│  │  ├─ stt/ (mod.rs, whisper_sidecar.rs, sherpa.rs, ...)
+│  │  ├─ main.rs / lib.rs / orchestrator.rs / hotkey.rs / audio.rs
+│  │  ├─ stt/ (mod.rs, mock.rs, whisper_sidecar.rs, sherpa.rs)
 │  │  ├─ inject/ (mod.rs, windows.rs)
 │  │  ├─ eval.rs / profile.rs / settings.rs / model.rs / tray.rs
-│  ├─ binaries/                # whisper-cli sidecar（构建期下载）
-│  └─ icons/
+│  ├─ binaries/                # whisper-cli sidecar（构建期下载，待做）
+│  └─ icons/                   # 由 assets/kotone-foundation.png 生成
 ├─ assets/                     # RepoChan 品牌资产（已有）
 ├─ docs/
 │  ├─ tech-research.md         # 预研报告（已有）
 │  └─ development.md           # 本文档
-└─ .github/workflows/ci.yml
+└─ .github/workflows/ci.yml    # 待做
 ```
 
 ---
 
 ## 8. 开发计划与里程碑
 
-### Phase 0：技术 Spike（第 1 周）
+### Phase 0：技术 Spike（第 1 周）—— v3 状态
 
-按预研 §11 执行，每个 spike 一天内出 go/no-go：
+| # | Spike | 通过标准 | 状态 |
+|---|-------|----------|------|
+| 1 | Tauri 2 骨架 + 全局热键 + 透明置顶悬浮窗 | 游戏前台时热键触发、窗可见 | ✅ 基本完成（热键触发 + overlay 弹出实测；游戏前台场景受 R-1/R-4 限制待复测） |
+| 2 | `SttEngine` trait 骨架 + whisper.cpp sidecar 转写 3s 中文 | 延迟与准确率基线数据 | 🔶 trait/注册表/mock 引擎完成；whisper sidecar 实现待做（被 R-4 阻塞联调） |
+| 3 | **Rust SendInput 复刻 LeagueAkari 时序，LOL 训练模式实测** | 前台检测 + Enter×2 + Unicode 字符串，10 次 ≥ 8 成功 | 🔶 机制验证通过（记事本 4/4 UIA 逐字一致）；LOL 真机待测（被 R-1 阻塞，需提权） |
+| 4 | sherpa-onnx 流式 session 同句对比，partial 事件打通 | partial 延迟 < 500ms 体感流畅 | 🔶 partial 事件链路已通（mock 引擎实测）；sherpa FFI 实现待做 |
 
-| # | Spike | 通过标准 | 对应模块 |
-|---|-------|----------|----------|
-| 1 | Tauri 2 骨架 + 全局热键 + 透明置顶悬浮窗 | 游戏前台时热键触发、窗可见 | hotkey, 悬浮窗 |
-| 2 | `SttEngine` trait 骨架 + whisper.cpp sidecar 转写 3s 中文 | 延迟与准确率基线数据（记录，不作 go/no-go 硬门槛） | stt, audio |
-| 3 | **Rust SendInput 复刻 LeagueAkari 时序，LOL 训练模式实测** | 前台检测 + Enter×2 + Unicode 字符串，10 次 ≥ 8 成功 | inject |
-| 4 | sherpa-onnx 流式 session 同句对比，partial 事件打通 | partial 延迟 < 500ms 体感流畅；与 whisper 基线对比数据落档 | stt::sherpa |
+Spike 3 降级预案（转写 + 复制到剪贴板）仍然有效，但当前证据方向乐观：注入机制本身正确，阻塞点是权限而非时序。
 
-Spike 3 失败时的降级：转写 + 复制到剪贴板（功能保留，差异化减弱），并排查前台进程名 / 无边框 / 改键。
+### Phase 1：MVP（第 2–4 周）—— v3 状态
 
-### Phase 1：MVP（第 2–4 周）
-
-1. Tauri 2 骨架 + 托盘 + 全局热键（**hold / toggle 双模式可选**）
-2. **STT 引擎抽象落地**：`SttEngine` trait + 注册表 + 引擎 #1 whisper.cpp sidecar
-3. **引擎 #2 sherpa-onnx 流式接入**，partial → 悬浮条实时上屏全链路打通
-4. **评测工具 v1**：会话录档 + 语料回放 + 延迟/文本对比导出
-5. 通用注入：任意前台窗口（记事本回归测试）
-6. LOL profile：Enter → Unicode → Enter（无边框实测）
-7. 设置页：交互模式与热键 / 麦克风 / **STT 引擎切换** / autoSend / profile 选择
-8. 模型下载器 + 品牌悬浮 UI（沿用 RepoChan 色板 `#00E5FF` / `#1A1A2E` / `#FF2D78` / `#7B2FFF`）
+1. ✅ Tauri 2 骨架 + 托盘 + 全局热键（hold / toggle 双模式可选）
+2. 🔶 **STT 引擎抽象落地**：trait + 注册表 + mock 引擎 ✅；引擎 #1 whisper.cpp sidecar 待做
+3. 🔶 **引擎 #2 sherpa-onnx 流式接入**：partial → 悬浮条链路 ✅；sherpa FFI 待做
+4. ⬜ **评测工具 v1**：签名就位，录档接线待做
+5. ✅ 通用注入：任意前台窗口（记事本回归脚本 + UIA 校验）
+6. 🔶 LOL profile：实现完成，真机实测待提权方案
+7. ✅ 设置页：交互模式与热键 / 麦克风 / STT 引擎切换 / autoSend / profile 选择
+8. 🔶 品牌悬浮 UI ✅；模型下载器待做
 
 **Phase 1 末决策点：默认 STT 引擎。** 用评测工具积累的真实语料（游戏短句 + 黑话 + 耳麦噪音）做人工对比，结论记录到 §11。
 
 **MVP 验收标准（在预研 §10 基础上修订）：**
 
-- [ ] 记事本路径中文短句上屏成功率 > 95%
-- [ ] LOL 无边框训练模式发送 10 次 ≥ 8 成功
-- [ ] 空闲内存 < 150MB（不含模型）
-- [ ] 至少两款引擎完成接入并可设置页切换；流式引擎录音时 partial 可见
+- [x] 记事本路径中文短句上屏（机制验证 4/4；10 次 × 三类用例复跑待窗口期）
+- [ ] LOL 无边框训练模式发送 10 次 ≥ 8 成功（需提权后实测）
+- [ ] 空闲内存 < 150MB（不含模型）（release 复测）
+- [x] 至少两款引擎完成接入并可设置页切换（mock + 注册表机制 ✅；两款真实引擎待做）
+- [x] 流式引擎录音时 partial 可见（mock 实测 ✅）
 - [ ] 选定默认引擎的「松键到上屏」P50 < 2s（流式引擎以 final 为准，partial 首字 P50 < 500ms）
 
 ### Phase 2：体验增强（第 5–8 周）
@@ -506,33 +570,38 @@ Spike 3 失败时的降级：转写 + 复制到剪贴板（功能保留，差异
 
 ## 9. 测试策略
 
-| 层 | 方式 | 工具 |
-|----|------|------|
-| profile 匹配、配置合并等纯逻辑 | Rust 单元测试 | cargo test |
-| STT 引擎契约 | 各引擎跑同一 fixture wav，断言 `SttSession` 行为（push/finalize/cancel） | cargo test + fixtures |
-| **STT 引擎横向评测** | eval 回放：同一语料库 × 全部引擎 → 延迟/CER 对比表 | `kotone-eval` + 人工标注 |
-| 注入时序 | 记事本集成测试（CI 上 Windows runner） | 自动化脚本 |
-| 状态机 | orchestrator 单测（mock audio/stt/inject，含 mock 流式引擎发 partial） | cargo test |
-| LOL 局内 | 人工验收清单（无边框训练模式） | 手动 |
-| 前端 | 组件测试 + IPC mock | vitest |
+| 层 | 方式 | 工具 | v3 状态 |
+|----|------|------|---------|
+| profile 匹配、配置合并等纯逻辑 | Rust 单元测试 | cargo test | ✅ |
+| STT 引擎契约 | 各引擎跑同一 fixture wav，断言 `SttSession` 行为（push/finalize/cancel） | cargo test + fixtures | mock ✅，真实引擎待做 |
+| **STT 引擎横向评测** | eval 回放：同一语料库 × 全部引擎 → 延迟/CER 对比表 | `kotone-eval` + 人工标注 | 待做 |
+| 注入时序 | mock SendOps 单测（不真睡不真发键）+ 记事本集成测试（UIA 逐字校验） | cargo test + `scripts/notepad_inject_test.ps1` | ✅ |
+| 状态机 | orchestrator 单测（mock 引擎/audio/inject/emitter，含 gen 过期丢弃） | cargo test（tokio::test） | ✅ 49 全过 |
+| LOL 局内 | 人工验收清单（无边框训练模式，**需提权运行**） | 手动 | 待做 |
+| 前端 | 组件测试 + IPC mock（vitest 未配置，暂以 svelte-check + demo 模式覆盖） | svelte-check ✅ | 部分 |
 
-CI：GitHub Actions（Windows runner 为主）— fmt / clippy / cargo test（各 feature 组合）/ pnpm build / tauri build。
+CI：GitHub Actions（Windows runner 为主）— fmt / clippy / cargo test（各 feature 组合）/ pnpm build / tauri build。**待做。**
+
+已知测试环境事项：Windows tokio 定时器粒度 ~15.6ms，涉及时序的断言需留余量。
 
 ---
 
 ## 10. 风险登记（开发期跟踪）
 
-| 风险 | 等级 | 状态 | 缓解 |
-|------|------|------|------|
-| 独占全屏无法注入/叠 UI | 高 | 已知，接受 | 只保证无边框；设置页检测提示 |
-| Rust 复刻注入时序与 LeagueAkari 行为不一致 | 中 | Spike 3 验证 | 1:1 对照 input.cc；失败降级「转写+复制」 |
-| **单一 STT 引擎速度/精度不达标** | 中 | **架构已缓解** | 可插拔多引擎 + 评测工具；默认引擎由 Phase 1 末人工评测决定 |
-| 多引擎抬高包体与维护面 | 中 | 已知 | cargo feature 按需编译；候选池引擎评测不通过即淘汰，不进发布版 |
-| 反作弊误报 | 中 | 监控 | 仅 SendInput；开源透明；免责声明 |
-| STT 推理与游戏抢资源 | 中 | Spike 2/4 验证 | 推说非常驻推理；CPU 回落；引擎能力页标注 GPU/CPU 占用 |
-| 中文黑话识别差 | 中 | MVP 缓解 | 热词表（引擎能力声明驱动 UI）；评测语料覆盖黑话 |
-| 模型下载体积劝退 | 低 | 已知 | 安装包不含模型；提供小模型选项 |
-| macOS 权限链劝退 | 低 | Phase 3 再议 | 权限引导页 |
+| # | 风险 | 等级 | 状态 | 缓解 |
+|---|------|------|------|------|
+| R-1 | **游戏高权限运行时 UIPI 丢弃合成输入（v3 新发现，实证）** | **高** | **已确认** | Kotone 需以不低于游戏的权限运行：方案 = 清单文件 requireAdministrator / 安装时提示「若游戏以管理员运行，请同样以管理员运行 Kotone」/ 设置页权限自检（OpenProcess 探测游戏进程）。LOL 真机验收前置依赖此项 |
+| R-2 | 独占全屏无法注入/叠 UI | 高 | 已知，接受 | 只保证无边框；设置页检测提示（Dota 无边框实测 overlay 正常） |
+| R-3 | Rust 复刻注入时序与 LeagueAkari 行为不一致 | 低（原中） | **机制已验证** | 记事本 UIA 逐字校验 PASS；LOL 时序待 R-1 解决后真机复核 |
+| R-4 | **本机麦克风隐私封锁（0x80070005，v3 新发现）** | 中 | **环境问题待解除** | cpal 打开任意采集设备被拒；全局麦克风开关已开但新进程仍被拒（疑似 Win11 桌面应用同意机制）。需用户在 设置→隐私和安全性→麦克风 检查「允许桌面应用访问」。audio 层已提供清晰中文报错。解除后重跑 F8 全链路 |
+| R-5 | 单一 STT 引擎速度/精度不达标 | 中 | 架构已缓解 | 可插拔多引擎 + 评测工具；默认引擎由 Phase 1 末人工评测决定 |
+| R-6 | 多引擎抬高包体与维护面 | 中 | 已知 | cargo feature 按需编译；候选池引擎评测不通过即淘汰 |
+| R-7 | 反作弊误报 | 中 | 监控 | 仅 SendInput；开源透明；免责声明；**注意 R-1 提权会提高敏感度，需在文档中说明提权原因仅为 UIPI** |
+| R-8 | STT 推理与游戏抢资源 | 中 | 待验证 | 推说非常驻推理；CPU 回落；引擎能力页标注 GPU/CPU 占用 |
+| R-9 | 中文黑话识别差 | 中 | MVP 缓解 | 热词表（引擎能力声明驱动 UI）；评测语料覆盖黑话 |
+| R-10 | 模型下载体积劝退 | 低 | 已知 | 安装包不含模型；提供小模型选项 |
+| R-11 | macOS 权限链劝退 | 低 | Phase 3 再议 | 权限引导页 |
+| R-12 | 剪贴板恢复仅覆盖文本格式 | 低 | 已知取舍 | 用户剪贴板为图片等时不恢复；Unicode 逐字路径不受影响（LOL 默认） |
 
 ---
 
@@ -545,7 +614,13 @@ CI：GitHub Actions（Windows runner 为主）— fmt / clippy / cargo test（�
 | 2026-07-23 | **流式支持从 Phase 2 提前为架构一等公民**：录音期统一 `push_audio`，partial 事件为核心 IPC 契约 | 流式与非流式引擎必须随时可换，下游不支持流式则换引擎要返工三层 |
 | 2026-07-23 | **新增 eval 评测模块**（会话录档 / 语料回放 / 指标导出） | 「人工测试选引擎」需要可复现的工程支撑，而非口头体感 |
 | 2026-07-23 | **交互模式用户可选**（hold / toggle），后续可扩 VAD hands-free；录音时悬浮窗实时回显（流式 partial / 非流式波形） | 不同游戏与操作习惯对触发方式需求不同；录音反馈是核心体验 |
+| 2026-07-23 | **v3：`start_session` 增加 `events: UnboundedSender<SttEvent>` 参数**（partial 通道显式化） | 实现对齐：事件通道作为参数比隐含返回值更直接，语义不变 |
+| 2026-07-23 | **v3：新增 `confirm_send` / `cancel_session` 两个 IPC 命令；`confirm_send` 接受 Preview 与 Error 两种状态** | §4.1 状态机的 Preview 确认/编辑与「Error 保留文本可重试」需要命令入口；前端首轮联调发现契约缺口 |
+| 2026-07-23 | **v3：带文本的 Error 不自动回 Idle**（无文本 Error 维持自动回 Idle） | 「保留文本可重试」的语义闭环 |
+| 2026-07-23 | **v3：overlay 窗口显隐改由后端驱动**（非 Idle 经 SW_SHOWNA 显示不抢焦点，Idle 隐藏；前端调用幂等共存） | 「按下热键即弹出悬浮条」是核心体验，不应依赖前端自行调窗口 API；且显示必须不抢焦点，否则注入前台校验必败 |
+| 2026-07-23 | **v3：main/overlay 窗口 CloseRequested 拦截转 hide，仅托盘退出** | 托盘常驻语义；关设置窗导致整个应用退出是 Tauri 默认行为，不符合常驻工具定位 |
+| 2026-07-23 | **v3：风险登记新增 R-1（UIPI 提权，高）与 R-4（麦克风隐私封锁，中）；R-3 降级** | 首轮实测新发现；注入机制风险下降，权限问题成为 LOL 真机验收的前置阻塞 |
 
 ---
 
-*本文档与预研报告的关系：预研回答「走哪条路」，本文档回答「怎么走」。品牌资产由 RepoChan 流水线提供，与工程选型正交。*
+*本文档与预研报告的关系：预研回答「走哪条路」，本文档回答「怎么走」，并随实现进展持续记录偏差与新发现（见 §1.1 / §11）。品牌资产由 RepoChan 流水线提供，与工程选型正交。*
