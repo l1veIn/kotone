@@ -13,16 +13,21 @@
     listSttEngines,
     setSttEngine,
     listProfiles,
+    getElevationStatus,
+    restartAsAdmin,
     type Settings,
     type AudioDevice,
     type EngineInfo,
     type GameProfile,
+    type ElevationStatus,
   } from "../../lib/ipc";
 
   let settings = $state<Settings | null>(null);
   let devices = $state<AudioDevice[]>([]);
   let engines = $state<EngineInfo[]>([]);
   let profiles = $state<GameProfile[]>([]);
+  let elevation = $state<ElevationStatus | null>(null);
+  let restarting = $state(false);
 
   /** 热键编辑草稿（保存前不动后端） */
   let hotkeyDraft = $state("");
@@ -45,11 +50,12 @@
 
   onMount(async () => {
     try {
-      [settings, devices, engines, profiles] = await Promise.all([
+      [settings, devices, engines, profiles, elevation] = await Promise.all([
         getSettings(),
         listAudioDevices(),
         listSttEngines(),
         listProfiles(),
+        getElevationStatus(),
       ]);
       hotkeyDraft = settings.hotkey.key;
       hotkeyMode = settings.hotkey.mode;
@@ -59,6 +65,35 @@
       loading = false;
     }
   });
+
+  /** UIPI：目标游戏提权且自身未提权 → 显示提权横幅 */
+  const needsElevation = $derived(
+    elevation !== null && !elevation.elevated && elevation.activeGameElevated === true,
+  );
+
+  async function onRestartAsAdmin() {
+    restarting = true;
+    try {
+      // 成功后当前进程直接退出；走到 catch 说明用户取消 UAC 或失败
+      await restartAsAdmin();
+    } catch (e) {
+      restarting = false;
+      toast(false, errText(e));
+    }
+  }
+
+  async function onRunAsAdminOnStartChange(e: Event) {
+    const runAsAdminOnStart = (e.target as HTMLInputElement).checked;
+    try {
+      settings = await updateSettings({ runAsAdminOnStart });
+      toast(
+        true,
+        runAsAdminOnStart ? "已开启启动时自动提权（每次启动弹一次 UAC）" : "已关闭启动时自动提权",
+      );
+    } catch (err) {
+      toast(false, `保存失败：${errText(err)}`);
+    }
+  }
 
   async function saveHotkey() {
     const key = hotkeyDraft.trim();
@@ -245,6 +280,62 @@
         <p class="mt-2 text-[11px] text-white/40">
           未就绪的引擎（模型未下载）切换后按热键会提示错误；联调建议使用 mock-stream。
         </p>
+      </section>
+
+      <!-- 权限（UIPI 提权方案，docs/development.md §10 R-1） -->
+      <section class="mt-4 rounded-xl bg-white/5 p-4 ring-1 ring-white/10">
+        <h2 class="text-sm font-semibold text-kotone-cyan/90">权限</h2>
+        <div class="mt-3 flex items-center justify-between">
+          <span class="text-sm">当前运行权限</span>
+          <span
+            class="rounded px-2 py-0.5 text-xs font-semibold {elevation?.elevated
+              ? 'bg-kotone-cyan/20 text-kotone-cyan'
+              : 'bg-white/10 text-white/60'}"
+          >
+            {elevation === null ? "检测中…" : elevation.elevated ? "管理员" : "普通用户"}
+          </span>
+        </div>
+
+        {#if needsElevation}
+          <!-- 醒目横幅：游戏提权而自身未提权，UIPI 会丢弃合成输入 -->
+          <div class="mt-3 rounded-lg bg-kotone-pink/15 p-3 ring-1 ring-kotone-pink/60">
+            <p class="text-sm font-semibold text-kotone-pink">
+              检测到游戏以管理员运行，Kotone 需要同等权限才能发送
+            </p>
+            <p class="mt-1 text-[11px] leading-relaxed text-white/60">
+              Windows UIPI 会拦截低权限进程发往高权限游戏的模拟输入。重启后会弹出一次 UAC 确认。
+            </p>
+            <button
+              class="mt-2.5 w-full rounded-lg bg-kotone-pink px-3 py-2 text-sm font-semibold text-white transition hover:brightness-110 active:scale-95 disabled:opacity-50"
+              disabled={restarting}
+              onclick={() => void onRestartAsAdmin()}
+            >
+              {restarting ? "正在重启…" : "以管理员身份重启"}
+            </button>
+          </div>
+        {:else if elevation && !elevation.elevated}
+          <p class="mt-2 text-[11px] text-white/40">
+            当前为普通权限。若目标游戏以管理员运行，发送会被系统拦截，此处会提示提权。
+          </p>
+        {/if}
+
+        <label class="mt-4 flex cursor-pointer items-center justify-between">
+          <span>
+            <span class="block text-sm">启动时自动以管理员运行</span>
+            <span class="block text-[11px] text-white/45">
+              每次启动若未提权则自动重启并弹一次 UAC；取消 UAC 则本次按普通权限运行
+            </span>
+          </span>
+          <input
+            type="checkbox"
+            class="peer sr-only"
+            checked={settings.runAsAdminOnStart}
+            onchange={(e) => void onRunAsAdminOnStartChange(e)}
+          />
+          <span
+            class="relative h-5 w-9 shrink-0 rounded-full bg-white/15 transition peer-checked:bg-kotone-cyan/70 after:absolute after:top-0.5 after:left-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:transition peer-checked:after:translate-x-4"
+          ></span>
+        </label>
       </section>
 
       <!-- 发送行为与游戏 profile -->

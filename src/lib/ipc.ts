@@ -27,6 +27,8 @@ export interface Settings {
   activeProfileId: string | null;
   language: string;
   evalRecording: boolean;
+  /** 启动时自动以管理员重启自身（UIPI 方案，默认关） */
+  runAsAdminOnStart: boolean;
 }
 
 /** update_settings 接受任意局部 patch（后端做深合并） */
@@ -76,6 +78,22 @@ export interface ModelInfo {
   downloaded: boolean;
 }
 
+// ---------- 提权（UIPI 方案，docs/development.md §10 R-1） ----------
+
+/** detect_foreground_game 返回值：profile 字段平铺 + 目标进程提权状态 */
+export interface ForegroundGameInfo extends GameProfile {
+  /** null = 无法判断（进程未运行 / 句柄失败） */
+  targetElevated: boolean | null;
+}
+
+/** get_elevation_status 返回值 */
+export interface ElevationStatus {
+  /** Kotone 自身是否已提权 */
+  elevated: boolean;
+  /** 当前激活 profile 的游戏进程是否提权；null = 无法判断 */
+  activeGameElevated: boolean | null;
+}
+
 // ================================================================
 // 浏览器 mock：内存态，模拟后端行为（仅 dev:web 使用）
 // ================================================================
@@ -100,6 +118,7 @@ const mock: MockStore = {
     activeProfileId: "lol",
     language: "zh",
     evalRecording: true,
+    runAsAdminOnStart: false,
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },
@@ -269,4 +288,27 @@ export async function simulateSend(text: string, profileId?: string): Promise<vo
     return;
   }
   return invoke<void>("simulate_send", { text, profileId: profileId ?? null });
+}
+
+// ---------- 提权（UIPI 方案） ----------
+
+/** 检测当前前台游戏并匹配 profile（附带目标进程提权状态） */
+export async function detectForegroundGame(): Promise<ForegroundGameInfo | null> {
+  if (!isTauri) return { ...clone(mock.profiles[1]), targetElevated: null };
+  return invoke<ForegroundGameInfo | null>("detect_foreground_game");
+}
+
+/** 提权状态：自身是否提权 + 激活 profile 的游戏进程是否提权 */
+export async function getElevationStatus(): Promise<ElevationStatus> {
+  if (!isTauri) return { elevated: false, activeGameElevated: null };
+  return invoke<ElevationStatus>("get_elevation_status");
+}
+
+/** 以管理员身份重启（弹 UAC；成功后当前进程退出，调用方无需后续操作） */
+export async function restartAsAdmin(): Promise<void> {
+  if (!isTauri) {
+    console.info("[mock] restart_as_admin");
+    return;
+  }
+  return invoke<void>("restart_as_admin");
 }

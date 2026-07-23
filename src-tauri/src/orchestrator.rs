@@ -449,13 +449,14 @@ impl Orchestrator {
                 self.emit_state(OrchestratorState::Success, Some(json!({ "text": text })));
             }
             Ok(Err(e)) => {
-                // Error 保留文本（preview_text 承载），前端/confirm_send 可重试（§4.1）
+                // Error 保留文本（preview_text 承载），前端/confirm_send 可重试（§4.1）；
+                // needsElevation 透传 UIPI 提权信号（§10 R-1）
                 inner.preview_text = Some(text.clone());
                 inner.state = OrchestratorState::Error;
                 drop(inner);
                 self.emit_state(
                     OrchestratorState::Error,
-                    Some(json!({ "message": e.message, "text": text })),
+                    Some(json!({ "message": e.message, "needsElevation": e.needs_elevation, "text": text })),
                 );
             }
             Err(_) => {

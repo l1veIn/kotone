@@ -15,14 +15,27 @@ use crate::profile::GameProfile;
 
 /// 注入错误
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InjectError {
     pub message: String,
+    /// true = 目标进程权限高于 Kotone（UIPI），提示前端引导管理员重启（§10 R-1）
+    #[serde(default)]
+    pub needs_elevation: bool,
 }
 
 impl InjectError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            needs_elevation: false,
+        }
+    }
+
+    /// 标记「需要提权」的错误（目标游戏以管理员运行，UIPI 会丢弃合成输入）
+    pub fn with_needs_elevation(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            needs_elevation: true,
         }
     }
 }
@@ -183,7 +196,8 @@ mod windows_impl;
 
 #[cfg(windows)]
 pub use windows_impl::{
-    foreground_process_name, is_process_foreground, key_down_up, send_unicode, WindowsInjector,
+    find_pid_by_name, foreground_pid, foreground_process_name, is_process_foreground,
+    key_down_up, process_name_from_pid, send_unicode, WindowsInjector,
 };
 
 #[cfg(not(windows))]
@@ -213,6 +227,18 @@ mod fallback {
     }
 
     pub fn foreground_process_name() -> Option<String> {
+        None
+    }
+
+    pub fn foreground_pid() -> Option<u32> {
+        None
+    }
+
+    pub fn process_name_from_pid(_pid: u32) -> Option<String> {
+        None
+    }
+
+    pub fn find_pid_by_name(_name: &str) -> Option<u32> {
         None
     }
 

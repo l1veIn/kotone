@@ -22,6 +22,8 @@ pub struct Settings {
     pub language: String,
     /// 评测录档开关（默认开）
     pub eval_recording: bool,
+    /// 启动时自动以管理员重启自身（默认关；防循环逻辑见 elevation::should_auto_elevate）
+    pub run_as_admin_on_start: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -49,6 +51,7 @@ impl Default for Settings {
             active_profile_id: Some("lol".into()),
             language: "zh".into(),
             eval_recording: true,
+            run_as_admin_on_start: false,
         }
     }
 }
@@ -141,6 +144,7 @@ mod tests {
         assert_eq!(s.language, "zh");
         assert!(s.eval_recording);
         assert!(s.engine_options["whisper-cpp-sidecar"]["threads"] == 4);
+        assert!(!s.run_as_admin_on_start);
     }
 
     #[test]

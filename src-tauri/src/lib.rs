@@ -2,6 +2,7 @@
 //! 职责划分见 docs/development.md §5.1；IPC 契约见 §5.3（类型对齐 src/lib/ipc.ts）。
 
 mod audio;
+pub mod elevation;
 mod eval;
 mod hotkey;
 pub mod inject;
@@ -183,10 +184,65 @@ fn save_profile(profile: GameProfile) -> Result<(), String> {
     profile::save(&profile)
 }
 
-/// 检测当前前台游戏并匹配 profile（inject::foreground_process_name → find_by_process）
+/// 检测当前前台游戏并匹配 profile（inject::foreground_process_name → find_by_process），
+/// 附带目标进程提权状态（UIPI 诊断用，§10 R-1；null = 无法判断）
 #[tauri::command]
-fn detect_foreground_game() -> Option<GameProfile> {
-    profile::detect_foreground()
+fn detect_foreground_game() -> Option<ForegroundGameInfo> {
+    let pid = inject::foreground_pid()?;
+    let name = inject::process_name_from_pid(pid)?;
+    let profile = profile::find_by_process(&profile::list(), &name)?;
+    Some(ForegroundGameInfo {
+        profile,
+        target_elevated: elevation::is_process_elevated(pid),
+    })
+}
+
+/// detect_foreground_game 返回值：profile 字段平铺 + targetElevated
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForegroundGameInfo {
+    #[serde(flatten)]
+    pub profile: GameProfile,
+    pub target_elevated: Option<bool>,
+}
+
+// ---------- 提权（UIPI 方案，§10 R-1） ----------
+
+/// 提权状态：自身是否提权 + 当前激活 profile 的游戏进程是否提权（null = 无法判断）
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElevationStatus {
+    pub elevated: bool,
+    pub active_game_elevated: Option<bool>,
+}
+
+#[tauri::command]
+fn get_elevation_status(state: tauri::State<SharedState>) -> ElevationStatus {
+    let elevated = elevation::is_elevated();
+    // 激活 profile 的进程名 → 运行中的 pid → TokenElevation
+    let active_game_elevated = {
+        let guard = state.settings.read().unwrap();
+        guard
+            .active_profile_id
+            .as_deref()
+            .and_then(profile::get)
+            .filter(|p| !p.process_names.is_empty())
+            .and_then(|p| p.process_names.iter().find_map(|n| inject::find_pid_by_name(n)))
+            .and_then(elevation::is_process_elevated)
+    };
+    ElevationStatus {
+        elevated,
+        active_game_elevated,
+    }
+}
+
+/// 一键管理员重启：ShellExecuteExW "runas" 拉起新进程后退出当前进程。
+/// 用户在 UAC 弹窗点「否」会返回错误，当前进程继续运行。
+#[tauri::command]
+fn restart_as_admin(app: AppHandle) -> Result<(), String> {
+    elevation::restart_as_admin()?;
+    app.exit(0);
+    Ok(())
 }
 
 // ---------- 模型 / 评测（未实现，返回错误） ----------
@@ -274,6 +330,25 @@ pub fn run() {
             // 首次运行：默认配置 + 内置 profile 落盘（~/.kotone/）
             let settings = settings::load();
             let _ = settings::save(&settings);
+
+            // 自启动提权（§10 R-1）：设置开启且当前未提权时 runas 重启自身。
+            // 防循环：重启子进程带 ELEVATED_RETRY_ARG 标记，若用户取消 UAC
+            // （子进程仍未提权）则本次会话放弃重试。成功拉起后本进程直接退出。
+            #[cfg(windows)]
+            if elevation::should_auto_elevate(
+                settings.run_as_admin_on_start,
+                elevation::is_elevated(),
+                elevation::retry_marker_present(),
+            ) {
+                match elevation::restart_for_auto_elevate() {
+                    Ok(()) => {
+                        app.handle().exit(0);
+                        return Ok(());
+                    }
+                    Err(e) => eprintln!("[kotone] 自动提权重启失败: {e}"),
+                }
+            }
+
             if let Err(e) = profile::ensure_builtin() {
                 eprintln!("[kotone] 内置 profile 落盘失败: {e}");
             }
@@ -326,6 +401,8 @@ pub fn run() {
             list_profiles,
             save_profile,
             detect_foreground_game,
+            get_elevation_status,
+            restart_as_admin,
             list_models,
             download_model,
             set_active_model,

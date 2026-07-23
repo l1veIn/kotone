@@ -53,12 +53,32 @@ impl Injector for WindowsInjector {
                 profile.process_names.join(" / ")
             };
             let foreground = foreground_process_name().unwrap_or_else(|| "（无法获取）".into());
-            return Err(InjectError::new(format!(
+            let message = format!(
                 "游戏不在前台：目标进程「{target}」未处于前台（当前前台：{foreground}），已中止发送"
-            )));
+            );
+            // UIPI（§10 R-1）：目标进程权限高于自身时，前台切换失败多半由此引起，
+            // 追加提权提示并置 needsElevation，前端据此引导管理员重启
+            return Err(if needs_elevation_for(&profile.process_names) {
+                InjectError::with_needs_elevation(format!(
+                    "{message}；目标游戏正以管理员权限运行，请在设置页将 Kotone 以管理员身份重启"
+                ))
+            } else {
+                InjectError::new(message)
+            });
         }
         send_sequence(text, profile, &cancel, &WinOps)
     }
+}
+
+/// 目标进程权限是否高于自身（UIPI 判定）：
+/// 按 profile 进程名找到运行中的 pid → TokenElevation 探测 → 纯逻辑判定。
+/// 进程未运行 / 无法判断时不误报。
+fn needs_elevation_for(process_names: &[String]) -> bool {
+    let target_elevated = process_names
+        .iter()
+        .find_map(|name| find_pid_by_name(name))
+        .and_then(crate::elevation::is_process_elevated);
+    crate::elevation::decide_needs_elevation(target_elevated, crate::elevation::is_elevated())
 }
 
 /// 真实 SendOps：发 Win32 事件 / 操作剪贴板 / 真睡眠
@@ -273,6 +293,11 @@ pub fn is_process_foreground(process_names: &[String]) -> bool {
 
 /// 当前前台窗口所属进程的可执行文件名（如 "notepad.exe"）
 pub fn foreground_process_name() -> Option<String> {
+    process_name_from_pid(foreground_pid()?)
+}
+
+/// 当前前台窗口所属进程 PID（无前台窗口时为 None）
+pub fn foreground_pid() -> Option<u32> {
     let mut pid: u32 = 0;
     unsafe {
         let hwnd = GetForegroundWindow();
@@ -282,13 +307,14 @@ pub fn foreground_process_name() -> Option<String> {
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
     }
     if pid == 0 {
-        return None;
+        None
+    } else {
+        Some(pid)
     }
-    process_name_from_pid(pid)
 }
 
 /// Toolhelp 快照按 PID 查进程名（对齐 LeagueAkari tools.cc 的进程枚举路径）
-fn process_name_from_pid(pid: u32) -> Option<String> {
+pub fn process_name_from_pid(pid: u32) -> Option<String> {
     unsafe {
         let snapshot: HANDLE = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
         let result = (|| {
@@ -303,6 +329,34 @@ fn process_name_from_pid(pid: u32) -> Option<String> {
                         .position(|&c| c == 0)
                         .unwrap_or(entry.szExeFile.len());
                     return Some(String::from_utf16_lossy(&entry.szExeFile[..len]));
+                }
+                if Process32NextW(snapshot, &mut entry).is_err() {
+                    return None;
+                }
+            }
+        })();
+        let _ = CloseHandle(snapshot);
+        result
+    }
+}
+
+/// Toolhelp 快照按可执行文件名（大小写不敏感）查 PID；取首个匹配
+pub fn find_pid_by_name(name: &str) -> Option<u32> {
+    unsafe {
+        let snapshot: HANDLE = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
+        let result = (|| {
+            let mut entry = PROCESSENTRY32W::default();
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            Process32FirstW(snapshot, &mut entry).ok()?;
+            loop {
+                let len = entry
+                    .szExeFile
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(entry.szExeFile.len());
+                let exe = String::from_utf16_lossy(&entry.szExeFile[..len]);
+                if exe.eq_ignore_ascii_case(name) {
+                    return Some(entry.th32ProcessID);
                 }
                 if Process32NextW(snapshot, &mut entry).is_err() {
                     return None;
@@ -375,5 +429,33 @@ mod tests {
         }
         // 空列表 = 通配，恒 true
         assert!(is_process_foreground(&[]));
+    }
+
+    #[test]
+    fn find_pid_by_name_finds_self() {
+        // 用自身 exe 名验证 Toolhelp 反查链路
+        let exe = std::env::current_exe().unwrap();
+        let name = exe.file_name().unwrap().to_string_lossy().to_string();
+        let pid = find_pid_by_name(&name);
+        assert_eq!(pid, Some(std::process::id()));
+        // 不存在的进程名 → None（不误报）
+        assert!(find_pid_by_name("kotone-definitely-not-running-xyz.exe").is_none());
+    }
+
+    #[test]
+    fn not_foreground_error_carries_elevation_hint_only_when_target_elevated() {
+        // 目标进程不存在 → 无法判断权限 → 不带 needsElevation（不发任何按键，安全）
+        let mut profile = GameProfile::builtin_generic();
+        profile.process_names = vec!["kotone-definitely-not-running-xyz.exe".into()];
+        let err = WindowsInjector
+            .send("hi", &profile, CancelToken::default())
+            .unwrap_err();
+        assert!(err.message.contains("游戏不在前台"));
+        assert!(
+            !err.needs_elevation,
+            "目标进程不存在时不应误报提权: {}",
+            err.message
+        );
+        assert!(!err.message.contains("管理员"));
     }
 }
