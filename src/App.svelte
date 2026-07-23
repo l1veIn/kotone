@@ -1,6 +1,15 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import Overlay from "./routes/overlay/Overlay.svelte";
   import Settings from "./routes/settings/Settings.svelte";
+  import { initStateListeners } from "./lib/stores/state";
+
+  // 订阅 Rust 侧 kotone:// 事件（浏览器环境下为 no-op）
+  onMount(() => {
+    let cleanup: (() => void) | undefined;
+    void initStateListeners().then((u) => (cleanup = u));
+    return () => cleanup?.();
+  });
 
   /*
    * 单 SPA 多窗口路由方案：
@@ -17,7 +26,7 @@
     return () => window.removeEventListener("hashchange", onHashChange);
   });
 
-  const view = $derived(hash.replace(/^#\/?/, "").split("/")[0]);
+  const view = $derived(hash.replace(/^#\/?/, "").split(/[/?]/)[0]);
 </script>
 
 {#if view === "overlay"}
