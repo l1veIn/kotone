@@ -13,17 +13,20 @@ pub struct ModelInfo {
     pub downloaded: bool,
 }
 
-/// 列出全部模型（占位实现）
-pub fn list() -> Vec<ModelInfo> {
-    todo!("汇总各引擎的模型声明 + 本地就绪状态")
+/// 列出全部模型
+/// TODO(model 子代理)：汇总各引擎的模型声明 + 本地就绪状态
+pub fn list() -> Result<Vec<ModelInfo>, String> {
+    Err("模型列表未实现".into())
 }
 
-/// 下载模型，进度经 "kotone://download" 事件外发（占位实现）
+/// 下载模型，进度经 "kotone://download" 事件外发
+/// TODO(model 子代理)：reqwest 流式下载 + sha256 校验 + 断点续传
 pub fn download(_model_id: &str) -> Result<(), String> {
-    todo!("reqwest 流式下载 + sha256 校验 + 断点续传")
+    Err("模型下载未实现".into())
 }
 
-/// 切换引擎的活动模型（占位实现）
+/// 切换引擎的活动模型
+/// TODO(model 子代理)：写入配置并通知引擎重载
 pub fn set_active(_engine_id: &str, _model_id: &str) -> Result<(), String> {
-    todo!("写入配置并通知引擎重载")
+    Err("模型切换未实现".into())
 }

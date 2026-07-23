@@ -29,17 +29,27 @@ pub struct EvalSession {
     pub human_label: Option<String>,
 }
 
-/// 录档一次识别会话（wav + 指标 JSONL）（占位实现）
+/// 录档一次识别会话（wav + 指标 JSONL）
+/// TODO(eval 子代理)：写入 ~/.kotone/eval/，可在设置中关闭
+#[allow(dead_code)] // orchestrator 的录档接线由 eval 子代理完成
 pub fn record_session(_session: &EvalSession) -> Result<(), String> {
-    todo!("写入 ~/.kotone/eval/，可在设置中关闭")
+    Err("eval 录档未实现".into())
 }
 
-/// 语料回放：同一 wav 对任意已安装引擎离线重放（占位实现）
+/// 语料回放：同一 wav 对任意已安装引擎离线重放
+/// TODO(eval 子代理)：多引擎对比（逐条文本 + 首字延迟 + 总延迟 + 人工标注 CER）
 pub fn replay(_session_id: &str, _engine_id: &str) -> Result<EvalSession, String> {
-    todo!("多引擎对比：逐条文本 + 首字延迟 + 总延迟 + 人工标注 CER")
+    Err("eval 回放未实现".into())
 }
 
-/// 导出评测数据（JSONL + wav 包）（占位实现）
+/// 导出评测数据（JSONL + wav 包）
+/// TODO(eval 子代理)：打包导出，返回路径
 pub fn export() -> Result<String, String> {
-    todo!("打包导出，返回路径")
+    Err("eval 导出未实现".into())
+}
+
+/// 列出录档会话
+/// TODO(eval 子代理)：读取 ~/.kotone/eval/*.json
+pub fn list_sessions() -> Result<Vec<EvalSession>, String> {
+    Err("eval 列表未实现".into())
 }

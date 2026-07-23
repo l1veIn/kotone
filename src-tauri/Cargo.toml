@@ -20,8 +20,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 
-# 业务依赖（cpal / hound / windows / sysinfo / reqwest / sha2 等）
-# 由后续实现对应模块时按需加入，见 docs/development.md §5.1
+# 音频采集（docs/development.md §2：cpal 为 Rust 跨平台音频采集事实标准）
+cpal = "0.15"
+# 用户目录定位（~/.kotone/）
+dirs = "6"
+
+# 后续模块按需加入：hound（eval wav 录档）、windows / sysinfo（inject/profile 前台匹配）、
+# reqwest / sha2（model 下载）。见 docs/development.md §5.1
+
+[dev-dependencies]
+tempfile = "3"
 
 [features]
 # STT 可插拔引擎按 feature 控制编译，未启用的引擎不进二进制（§3.3）
