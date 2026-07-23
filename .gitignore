@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.repochan/
+.DS_Store
+*.log
