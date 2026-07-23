@@ -1,0 +1,12 @@
+{
+  "identifier": "default",
+  "description": "Kotone 默认权限集：覆盖全部窗口",
+  "windows": ["main", "overlay"],
+  "permissions": [
+    "core:default",
+    "core:window:default",
+    "core:webview:default",
+    "core:event:default",
+    "global-shortcut:default"
+  ]
+}

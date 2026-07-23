@@ -1,0 +1,5 @@
+# pnpm 10+ 配置统一放在 pnpm-workspace.yaml（package.json 的 pnpm 字段已弃用）
+onlyBuiltDependencies:
+  - esbuild
+allowBuilds:
+  esbuild: true

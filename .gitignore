@@ -3,3 +3,7 @@ dist/
 .repochan/
 .DS_Store
 *.log
+
+# Tauri / Rust 构建产物
+src-tauri/target/
+src-tauri/gen/

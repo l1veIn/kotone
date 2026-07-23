@@ -1,0 +1,30 @@
+[package]
+name = "kotone"
+version = "0.1.0"
+description = "Kotone（琴音）— 游戏语音输入工具"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+# Tauri 2 约定：核心逻辑放 lib，main.rs 只做入口
+name = "kotone_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-global-shortcut = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+
+# 业务依赖（cpal / hound / windows / sysinfo / reqwest / sha2 等）
+# 由后续实现对应模块时按需加入，见 docs/development.md §5.1
+
+[features]
+# STT 可插拔引擎按 feature 控制编译，未启用的引擎不进二进制（§3.3）
+default = []
+engine-whisper-sidecar = []
+engine-sherpa = []
