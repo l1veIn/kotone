@@ -25,14 +25,16 @@
 | `5fa4c5a` | Rust 核心：orchestrator 状态机、热键 hold/toggle、mock-stream 引擎、cpal 音频、settings/profile 落盘、20 个 IPC 命令 | cargo test 31/31 |
 | `0420c31` | 前端：状态驱动悬浮条（波形/partial/预览编辑/toast）、设置页、IPC 封装 | build:web + svelte-check 0 错；各状态渲染实测 |
 | `cbcd246` | Windows 注入（SendInput + KEYEVENTF_UNICODE，对齐 LeagueAkari）、error 重试、后端驱动窗口显隐、关窗不退出 | cargo test 49/49；记事本中文注入 UIA 逐字校验 PASS |
+| `d6d78ea` | UIPI 提权方案：权限检测（TokenElevation）、管理员重启（runas + 防循环）、设置页权限分区、InjectError.needsElevation | cargo test 55/55；对真实 LOL 进程检测实证 Some(true) |
 
 **已验证**：注入机制正确（记事本中文短句 4/4 逐字一致）；状态机全链路（cargo 集成测试）；前端各状态渲染（浏览器 demo + Tauri 内 error 态实测）。
 
-**待验证（阻塞原因见 §10）**：
+**待验证（阻塞原因见 §10，均需 LOL 退出后的桌面窗口期）**：
 
-- [ ] 记事本长句（>100 字）/ emoji 各 10 次成功率复跑（脚本 `scripts/notepad_inject_test.ps1` 已入库，需桌面空闲窗口期）
-- [ ] LOL 真机训练模式发送（需先解决提权，见 §10 R-1）
-- [ ] 麦克风全链路（F8 → 真录音 → partial），被本机麦克风隐私策略封锁（见 §10 R-4）
+- [ ] 记事本长句（>100 字）/ emoji 各 10 次成功率复跑（脚本 `scripts/notepad_inject_test.ps1` 已入库）
+- [ ] 提权链路实测：设置页横幅 → 管理员重启 → LOL 训练模式发送 10 次 ≥ 8（提权方案已实现，见 §10 R-1）
+- [ ] 麦克风全链路（F8 → 真录音 → partial）——用户已开放麦克风权限（2026-07-23），待复测确认 R-4 解除
+- [ ] 未提权对 LOL 发送 → Error payload 带 `needsElevation: true` + 提权文案实测
 - [ ] 空闲内存 < 150MB 实测（dev 进程 ~40MB，含 WebView2 待 release 复测）
 
 ---
@@ -590,10 +592,10 @@ CI：GitHub Actions（Windows runner 为主）— fmt / clippy / cargo test（�
 
 | # | 风险 | 等级 | 状态 | 缓解 |
 |---|------|------|------|------|
-| R-1 | **游戏高权限运行时 UIPI 丢弃合成输入（v3 新发现，实证）** | **高** | **已确认** | Kotone 需以不低于游戏的权限运行：方案 = 清单文件 requireAdministrator / 安装时提示「若游戏以管理员运行，请同样以管理员运行 Kotone」/ 设置页权限自检（OpenProcess 探测游戏进程）。LOL 真机验收前置依赖此项 |
+| R-1 | **游戏高权限运行时 UIPI 丢弃合成输入（实证）** | **高** | **方案已实现（d6d78ea），实测待游戏退出** | 方案定为「asInvoker + 运行时检测 + 一键管理员重启」（非常驻 requireAdministrator）：`elevation.rs` TokenElevation 检测自身与目标进程权限（OpenProcess 被拒视为目标更高权限）；`restart_as_admin` 经 ShellExecuteExW runas 重启（UAC 取消不退出、防循环标记 `--kotone-elevated-spawn`）；设置页权限分区 + 品红横幅；`runAsAdminOnStart` 可选开机自动提权；InjectError 带 `needsElevation` 字段 + 提权文案。对真实 LOL 进程检测已实证 Some(true)。剩余：横幅/重启/真机发送实测 |
 | R-2 | 独占全屏无法注入/叠 UI | 高 | 已知，接受 | 只保证无边框；设置页检测提示（Dota 无边框实测 overlay 正常） |
-| R-3 | Rust 复刻注入时序与 LeagueAkari 行为不一致 | 低（原中） | **机制已验证** | 记事本 UIA 逐字校验 PASS；LOL 时序待 R-1 解决后真机复核 |
-| R-4 | **本机麦克风隐私封锁（0x80070005，v3 新发现）** | 中 | **环境问题待解除** | cpal 打开任意采集设备被拒；全局麦克风开关已开但新进程仍被拒（疑似 Win11 桌面应用同意机制）。需用户在 设置→隐私和安全性→麦克风 检查「允许桌面应用访问」。audio 层已提供清晰中文报错。解除后重跑 F8 全链路 |
+| R-3 | Rust 复刻注入时序与 LeagueAkari 行为不一致 | 低（原中） | **机制已验证** | 记事本 UIA 逐字校验 PASS；LOL 时序待 R-1 实测复核 |
+| R-4 | ~~本机麦克风隐私封锁（0x80070005）~~ | 低（原中） | **用户已解除（2026-07-23），待复测确认** | 用户已在 Windows 设置中允许所有应用使用麦克风；audio 层有清晰中文报错兜底。待 LOL 退出后重跑 F8 全链路确认解除 |
 | R-5 | 单一 STT 引擎速度/精度不达标 | 中 | 架构已缓解 | 可插拔多引擎 + 评测工具；默认引擎由 Phase 1 末人工评测决定 |
 | R-6 | 多引擎抬高包体与维护面 | 中 | 已知 | cargo feature 按需编译；候选池引擎评测不通过即淘汰 |
 | R-7 | 反作弊误报 | 中 | 监控 | 仅 SendInput；开源透明；免责声明；**注意 R-1 提权会提高敏感度，需在文档中说明提权原因仅为 UIPI** |
@@ -620,6 +622,8 @@ CI：GitHub Actions（Windows runner 为主）— fmt / clippy / cargo test（�
 | 2026-07-23 | **v3：overlay 窗口显隐改由后端驱动**（非 Idle 经 SW_SHOWNA 显示不抢焦点，Idle 隐藏；前端调用幂等共存） | 「按下热键即弹出悬浮条」是核心体验，不应依赖前端自行调窗口 API；且显示必须不抢焦点，否则注入前台校验必败 |
 | 2026-07-23 | **v3：main/overlay 窗口 CloseRequested 拦截转 hide，仅托盘退出** | 托盘常驻语义；关设置窗导致整个应用退出是 Tauri 默认行为，不符合常驻工具定位 |
 | 2026-07-23 | **v3：风险登记新增 R-1（UIPI 提权，高）与 R-4（麦克风隐私封锁，中）；R-3 降级** | 首轮实测新发现；注入机制风险下降，权限问题成为 LOL 真机验收的前置阻塞 |
+| 2026-07-23 | **v4：提权方案定为「asInvoker + 运行时检测 + 一键管理员重启 + runAsAdminOnStart 选项」，不用 requireAdministrator 常驻清单**（R-1 原缓解方案之一） | 常驻提权每次启动弹 UAC，对麦克风工具过度打扰；检测驱动按需提权体验更好，且检测链路对真实 LOL 进程已实证 |
+| 2026-07-23 | **v4：`InjectError` 增加 `needsElevation: bool` 字段；`detect_foreground_game` 返回附带 `targetElevated`** | 前端可据此显示提权引导，而非解析错误文案 |
 
 ---
 
