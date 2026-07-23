@@ -25,7 +25,19 @@ cpal = "0.15"
 # 用户目录定位（~/.kotone/）
 dirs = "6"
 
-# 后续模块按需加入：hound（eval wav 录档）、windows / sysinfo（inject/profile 前台匹配）、
+# 输入注入（docs/development.md §3.5）：raw windows crate 直调 Win32
+# SendInput / GetForegroundWindow / Toolhelp 进程名 / 剪贴板（CF_UNICODETEXT）
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Threading",
+] }
+arboard = "3"
+
+# 后续模块按需加入：hound（eval wav 录档）、
 # reqwest / sha2（model 下载）。见 docs/development.md §5.1
 
 [dev-dependencies]

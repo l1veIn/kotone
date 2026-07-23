@@ -357,13 +357,15 @@ impl Orchestrator {
         Ok(())
     }
 
-    /// Preview 状态下用户确认/编辑后发送（IPC confirm_send 调用）
+    /// Preview 状态下用户确认/编辑后发送；Error 状态（payload 带文本）也接受，
+    /// 重新进入 Sending 实现重试（docs/development.md §4.1「Error 保留文本可重试」）
     pub async fn confirm_send(&self, text: Option<String>) -> Result<(), String> {
         let (gen, final_text) = {
             let _op = self.op.lock().await;
             let inner = self.inner.lock().unwrap();
-            if inner.state != OrchestratorState::Preview {
-                return Err(format!("当前状态 {:?} 不能确认发送", inner.state));
+            match inner.state {
+                OrchestratorState::Preview | OrchestratorState::Error => {}
+                s => return Err(format!("当前状态 {s:?} 不能确认发送")),
             }
             let t = text
                 .filter(|s| !s.trim().is_empty())
@@ -441,20 +443,23 @@ impl Orchestrator {
         inner.send_cancel = None;
         match result {
             Ok(Ok(())) => {
+                inner.preview_text = None;
                 inner.state = OrchestratorState::Success;
                 drop(inner);
                 self.emit_state(OrchestratorState::Success, Some(json!({ "text": text })));
             }
             Ok(Err(e)) => {
+                // Error 保留文本（preview_text 承载），前端/confirm_send 可重试（§4.1）
+                inner.preview_text = Some(text.clone());
                 inner.state = OrchestratorState::Error;
                 drop(inner);
-                // Error 保留文本，前端可重试（§4.1）
                 self.emit_state(
                     OrchestratorState::Error,
                     Some(json!({ "message": e.message, "text": text })),
                 );
             }
             Err(_) => {
+                inner.preview_text = Some(text.clone());
                 inner.state = OrchestratorState::Error;
                 drop(inner);
                 self.emit_state(
@@ -467,10 +472,11 @@ impl Orchestrator {
         self.schedule_idle(gen);
     }
 
-    /// 开始失败等场景：Error toast → 自动回 Idle
+    /// 开始失败等场景：Error toast → 自动回 Idle（无文本，不可重试）
     fn toast_error(&self, message: &str) {
         let gen = {
             let mut inner = self.inner.lock().unwrap();
+            inner.preview_text = None;
             inner.state = OrchestratorState::Error;
             inner.gen
         };
@@ -487,6 +493,7 @@ impl Orchestrator {
         if inner.gen != gen {
             return;
         }
+        inner.preview_text = text.clone();
         inner.state = OrchestratorState::Error;
         drop(inner);
         self.emit_state(
@@ -496,7 +503,8 @@ impl Orchestrator {
         self.schedule_idle(gen);
     }
 
-    /// toast_dwell 后自动回 Idle（期间有新会话/取消则不动作）
+    /// toast_dwell 后自动回 Idle（期间有新会话/取消则不动作）。
+    /// 带文本的 Error 不自动回 Idle：保留待重试文本，等用户重试或取消（§4.1）。
     fn schedule_idle(&self, gen: u64) {
         let dwell = self.toast_dwell;
         let inner = self.inner.clone();
@@ -504,12 +512,10 @@ impl Orchestrator {
         tokio::spawn(async move {
             tokio::time::sleep(dwell).await;
             let mut g = inner.lock().unwrap();
-            if g.gen == gen
-                && matches!(
-                    g.state,
-                    OrchestratorState::Success | OrchestratorState::Error
-                )
-            {
+            let should_idle = g.gen == gen
+                && (g.state == OrchestratorState::Success
+                    || (g.state == OrchestratorState::Error && g.preview_text.is_none()));
+            if should_idle {
                 g.state = OrchestratorState::Idle;
                 drop(g);
                 emitter.emit(
@@ -576,6 +582,28 @@ mod tests {
         }
     }
 
+    /// 第一次发送失败、之后成功的注入器（验证 Error 保留文本可重试，§4.1）
+    struct FlakyInjector {
+        attempts: Arc<std::sync::atomic::AtomicUsize>,
+        sent: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl Injector for FlakyInjector {
+        fn send(
+            &self,
+            text: &str,
+            _profile: &GameProfile,
+            _cancel: CancelToken,
+        ) -> Result<(), InjectError> {
+            let n = self.attempts.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                return Err(InjectError::new("游戏不在前台：目标进程未处于前台"));
+            }
+            self.sent.lock().unwrap().push(text.to_string());
+            Ok(())
+        }
+    }
+
     /// Vec 收集事件的 mock emitter
     #[derive(Default)]
     struct VecEmitter {
@@ -623,6 +651,16 @@ mod tests {
     fn make_orchestrator(
         auto_send: bool,
     ) -> (Arc<Orchestrator>, Arc<VecEmitter>, Arc<Mutex<Vec<String>>>) {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
+        let (orch, emitter) = make_orchestrator_with(auto_send, injector);
+        (orch, emitter, sent)
+    }
+
+    fn make_orchestrator_with(
+        auto_send: bool,
+        injector: Arc<dyn Injector>,
+    ) -> (Arc<Orchestrator>, Arc<VecEmitter>) {
         let mut settings = Settings::default();
         settings.stt_engine = "mock-stream".into();
         settings.auto_send = auto_send;
@@ -630,8 +668,6 @@ mod tests {
         let settings = Arc::new(RwLock::new(settings));
         let engines = Arc::new(EngineRegistry::new());
         let emitter = Arc::new(VecEmitter::default());
-        let sent = Arc::new(Mutex::new(Vec::new()));
-        let injector = Arc::new(RecordingInjector { sent: sent.clone() });
         let mut orch = Orchestrator::new(
             settings,
             engines,
@@ -641,7 +677,7 @@ mod tests {
         );
         orch.toast_dwell = Duration::from_millis(10);
         orch.finalize_timeout = Duration::from_secs(2);
-        (Arc::new(orch), emitter, sent)
+        (Arc::new(orch), emitter)
     }
 
     #[tokio::test]
@@ -766,5 +802,112 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(40)).await;
         assert_eq!(orch.state(), OrchestratorState::Idle);
         assert!(emitter.state_sequence().contains(&"error".to_string()));
+    }
+
+    /// §4.1：Error 保留文本可重试——confirm_send 在 Error 状态重新进入 Sending
+    #[tokio::test]
+    async fn error_state_retains_text_and_confirm_send_retries() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let injector: Arc<dyn Injector> = Arc::new(FlakyInjector {
+            attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            sent: sent.clone(),
+        });
+        let (orch, emitter) = make_orchestrator_with(false, injector);
+
+        orch.begin().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        orch.end().await.unwrap();
+        assert_eq!(orch.state(), OrchestratorState::Preview);
+
+        // 第一次确认：注入失败 → Error；dwell 后仍停在 Error（文本保留，可重试）
+        orch.confirm_send(None).await.unwrap();
+        assert_eq!(orch.state(), OrchestratorState::Error);
+        tokio::time::sleep(Duration::from_millis(50)).await; // > toast_dwell(10ms)
+        assert_eq!(
+            orch.state(),
+            OrchestratorState::Error,
+            "带文本的 Error 不应自动回 Idle，需保留给用户重试"
+        );
+
+        // 重试：Error 状态 confirm_send 重新进入 Sending 并成功
+        orch.confirm_send(None).await.unwrap();
+        assert_eq!(orch.state(), OrchestratorState::Success);
+        assert_eq!(
+            sent.lock().unwrap().as_slice(),
+            &["对面打野在下路".to_string()]
+        );
+        let seq = emitter.state_sequence();
+        assert_eq!(
+            seq.iter().filter(|s| *s == "sending").count(),
+            2,
+            "重试应第二次进入 Sending: {seq:?}"
+        );
+
+        // Success 仍按 toast 节奏自动回 Idle
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(orch.state(), OrchestratorState::Idle);
+    }
+
+    /// Error 状态下可带编辑后文本重试
+    #[tokio::test]
+    async fn error_state_retry_with_edited_text() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let injector: Arc<dyn Injector> = Arc::new(FlakyInjector {
+            attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            sent: sent.clone(),
+        });
+        let (orch, _emitter) = make_orchestrator_with(false, injector);
+
+        orch.begin().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        orch.end().await.unwrap();
+        orch.confirm_send(None).await.unwrap();
+        assert_eq!(orch.state(), OrchestratorState::Error);
+
+        orch.confirm_send(Some("编辑后重发".into())).await.unwrap();
+        assert_eq!(orch.state(), OrchestratorState::Success);
+        assert_eq!(
+            sent.lock().unwrap().as_slice(),
+            &["编辑后重发".to_string()]
+        );
+    }
+
+    /// 无文本的 Error（如引擎未就绪）不可重试，且仍自动回 Idle
+    #[tokio::test]
+    async fn error_without_text_rejects_retry_and_auto_idles() {
+        let (orch, emitter, _s) = {
+            let (o, e, s) = make_orchestrator(false);
+            o.settings.write().unwrap().stt_engine = "whisper-cpp-sidecar".into();
+            (o, e, s)
+        };
+        let _ = orch.begin().await;
+        assert_eq!(orch.state(), OrchestratorState::Error);
+        // 无待发送文本：confirm_send 拒绝
+        assert!(orch.confirm_send(None).await.is_err());
+        // dwell 后自动回 Idle
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert_eq!(orch.state(), OrchestratorState::Idle);
+        assert!(emitter.state_sequence().contains(&"error".to_string()));
+    }
+
+    /// Error 状态取消：清空保留文本并回 Idle，之后不可再重试
+    #[tokio::test]
+    async fn cancel_from_error_clears_retry_text() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let injector: Arc<dyn Injector> = Arc::new(FlakyInjector {
+            attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            sent: sent.clone(),
+        });
+        let (orch, _emitter) = make_orchestrator_with(false, injector);
+
+        orch.begin().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        orch.end().await.unwrap();
+        orch.confirm_send(None).await.unwrap();
+        assert_eq!(orch.state(), OrchestratorState::Error);
+
+        orch.cancel().await;
+        assert_eq!(orch.state(), OrchestratorState::Idle);
+        assert!(orch.confirm_send(None).await.is_err(), "取消后不可再重试");
     }
 }

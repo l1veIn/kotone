@@ -4,10 +4,10 @@
 mod audio;
 mod eval;
 mod hotkey;
-mod inject;
+pub mod inject;
 mod model;
 mod orchestrator;
-mod profile;
+pub mod profile;
 mod settings;
 mod stt;
 mod tray;
@@ -18,7 +18,7 @@ use tauri::{AppHandle, Manager};
 
 use audio::AudioDevice;
 use hotkey::HotkeyManager;
-use inject::{InjectError, Injector, StubInjector};
+use inject::{InjectError, Injector, WindowsInjector};
 use orchestrator::{Emitter, Orchestrator};
 use profile::GameProfile;
 use settings::Settings;
@@ -32,7 +32,10 @@ pub struct SharedState {
     pub injector: Arc<dyn Injector>,
 }
 
-/// 生产事件出口：转发为 Tauri 事件；并在 Listening 期间联动注册 Esc 取消键
+/// 生产事件出口：转发为 Tauri 事件；联动 Esc 取消键注册与 overlay 窗口显隐。
+/// overlay 显隐规则（后端驱动，幂等，与前端逻辑不冲突）：
+/// - Listening/Transcribing/Preview/Sending/Success/Error → show（不抢焦点）
+/// - Idle → hide
 struct TauriEmitter {
     app: AppHandle,
 }
@@ -41,14 +44,44 @@ impl Emitter for TauriEmitter {
     fn emit(&self, event: &str, payload: serde_json::Value) {
         use tauri::Emitter as _;
         let _ = self.app.emit(event, payload.clone());
-        // 录音期间临时注册 Esc 全局取消键，会话结束注销
         if event == "kotone://state" {
-            let listening = payload.get("state").and_then(|s| s.as_str()) == Some("listening");
+            let state = payload.get("state").and_then(|s| s.as_str()).unwrap_or("");
+            #[cfg(debug_assertions)]
+            eprintln!("[kotone state] {state} {payload}");
+            // 录音期间临时注册 Esc 全局取消键，会话结束注销
             if let Some(mgr) = self.app.try_state::<HotkeyManager>() {
-                mgr.set_cancel_enabled(&self.app, listening);
+                mgr.set_cancel_enabled(&self.app, state == "listening");
+            }
+            // 后端驱动 overlay 显隐
+            if let Some(win) = self.app.get_webview_window("overlay") {
+                if state == "idle" {
+                    let _ = win.hide();
+                } else {
+                    show_window_no_focus(&win);
+                }
             }
         }
     }
+}
+
+/// 显示窗口但不抢焦点（焦点必须留在游戏/目标窗口，否则注入前台校验会失败）。
+/// Windows 上用 SW_SHOWNA；其他平台回退普通 show。
+#[cfg(windows)]
+fn show_window_no_focus(win: &tauri::WebviewWindow) {
+    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNA};
+    match win.hwnd() {
+        Ok(hwnd) => unsafe {
+            let _ = ShowWindow(hwnd, SW_SHOWNA);
+        },
+        Err(_) => {
+            let _ = win.show();
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn show_window_no_focus(win: &tauri::WebviewWindow) {
+    let _ = win.show();
 }
 
 /// 冒烟测试命令：前端可 invoke("ping") 验证 IPC 通路
@@ -150,7 +183,7 @@ fn save_profile(profile: GameProfile) -> Result<(), String> {
     profile::save(&profile)
 }
 
-/// TODO(inject 子代理)：接入前台进程获取后返回匹配的 profile；当前恒 null
+/// 检测当前前台游戏并匹配 profile（inject::foreground_process_name → find_by_process）
 #[tauri::command]
 fn detect_foreground_game() -> Option<GameProfile> {
     profile::detect_foreground()
@@ -206,8 +239,8 @@ async fn cancel_session(state: tauri::State<'_, SharedState>) -> Result<(), Stri
     Ok(())
 }
 
-/// 手动触发发送（调试/测试用）。
-/// TODO(inject 子代理)：StubInjector 当前仅返回 Ok；接入 WindowsInjector 后走真实时序
+/// 手动触发发送（调试/记事本测试用）：走真实 WindowsInjector 时序
+/// （前台校验 → openChatKey → Unicode/剪贴板 → sendKey）
 #[tauri::command]
 fn simulate_send(
     state: tauri::State<SharedState>,
@@ -227,6 +260,14 @@ fn simulate_send(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // 关闭按钮不退出应用：main / overlay 窗口 CloseRequested 一律转 hide（托盘常驻）；
+        // 仅托盘菜单「退出」（app.exit）真正结束进程。
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
+        })
         .setup(|app| {
             tray::setup_tray(app.handle())?;
 
@@ -242,7 +283,7 @@ pub fn run() {
             let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter {
                 app: app.handle().clone(),
             });
-            let injector: Arc<dyn Injector> = Arc::new(StubInjector);
+            let injector: Arc<dyn Injector> = Arc::new(WindowsInjector);
             let audio_backend: Arc<dyn audio::AudioBackend> = Arc::new(audio::CpalBackend);
 
             let orchestrator = Arc::new(Orchestrator::new(

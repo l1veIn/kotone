@@ -202,12 +202,12 @@ pub fn find_by_process(profiles: &[GameProfile], process_name: &str) -> Option<G
         .cloned()
 }
 
-/// 检测当前前台游戏并匹配 profile。
-/// TODO(inject 子代理)：经 inject::is_process_foreground / GetForegroundWindow 取前台进程名，
-/// 再调用 find_by_process。当前返回 None。
+/// 检测当前前台游戏并匹配 profile：
+/// 经 inject::foreground_process_name（GetForegroundWindow + Toolhelp）取前台进程名，
+/// 再调用 find_by_process（具体 profile 优先，generic 通配兜底）。
 pub fn detect_foreground() -> Option<GameProfile> {
-    let _ = find_by_process; // 匹配逻辑已实现，等待前台进程获取能力接入
-    None
+    let name = crate::inject::foreground_process_name()?;
+    find_by_process(&list(), &name)
 }
 
 #[cfg(test)]
