@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use tokio::sync::mpsc;
 
-use super::{EngineCapabilities, SessionConfig, SttEngine, SttEvent, SttSession, Transcript};
+use kotone_core::stt::{EngineCapabilities, SessionConfig, SttEngine, SttEvent, SttSession, Transcript};
 
 /// 每积累多少 16kHz 采样发一条 partial（8000 = 0.5s）
 const PARTIAL_EVERY_SAMPLES: usize = 8000;

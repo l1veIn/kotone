@@ -1,33 +1,24 @@
 //! Kotone Rust 核心：模块组装、共享状态与 IPC 命令。
 //! 职责划分见 docs/development.md §5.1；IPC 契约见 §5.3（类型对齐 src/lib/ipc.ts）。
 
-mod audio;
-pub mod elevation;
-mod eval;
 mod hotkey;
-#[cfg(windows)]
-mod hotkey_ll;
-mod hotkey_spec;
-pub mod inject;
-mod log;
-mod model;
-mod orchestrator;
-pub mod profile;
-mod settings;
-mod stt;
 mod tray;
 
 use std::sync::{Arc, RwLock};
 
 use tauri::{AppHandle, Manager};
 
-use audio::AudioDevice;
 use hotkey::{HotkeyManager, HotkeyStatus};
-use inject::{InjectError, Injector, WinFocusBackend, WindowsInjector};
-use orchestrator::{Emitter, Orchestrator};
-use profile::GameProfile;
-use settings::Settings;
-use stt::{EngineInfo, EngineRegistry};
+use kotone_core::audio::AudioDevice;
+use kotone_core::inject::{CancelToken, FocusBackend, InjectError, Injector};
+use kotone_core::orchestrator::{Emitter, Orchestrator};
+use kotone_core::profile::{self, GameProfile};
+use kotone_core::settings::{self, Settings};
+use kotone_core::stt::{EngineInfo, EngineRegistry};
+use kotone_core::{eval, log};
+use kotone_platform_windows::inject::{WinFocusBackend, WindowsInjector};
+use kotone_platform_windows::{audio as platform_audio, elevation, inject as platform_inject};
+use kotone_stt::model;
 
 /// 全局共享状态：settings 双端共享，orchestrator 是唯一业务状态所有者
 pub struct SharedState {
@@ -51,7 +42,7 @@ impl Emitter for TauriEmitter {
         let _ = self.app.emit(event, payload.clone());
         if event == "kotone://state" {
             let state = payload.get("state").and_then(|s| s.as_str()).unwrap_or("");
-            crate::log::log(&format!("state -> {state} {payload}"));
+            log::log(&format!("state -> {state} {payload}"));
             // 会话激活期间（含 Preview）临时注册 Esc 全局取消键，回 Idle 即注销。
             // Preview 态同样需要 Esc：overlay 不抢焦点，Esc 是预览确认的主要键盘出口。
             if let Some(mgr) = self.app.try_state::<HotkeyManager>() {
@@ -140,7 +131,7 @@ fn update_settings(
 
 #[tauri::command]
 fn list_audio_devices() -> Vec<AudioDevice> {
-    audio::list_devices()
+    platform_audio::list_devices()
 }
 
 #[tauri::command]
@@ -199,8 +190,8 @@ fn save_profile(profile: GameProfile) -> Result<(), String> {
 /// 附带目标进程提权状态（UIPI 诊断用，§10 R-1；null = 无法判断）
 #[tauri::command]
 fn detect_foreground_game() -> Option<ForegroundGameInfo> {
-    let pid = inject::foreground_pid()?;
-    let name = inject::process_name_from_pid(pid)?;
+    let pid = platform_inject::foreground_pid()?;
+    let name = platform_inject::process_name_from_pid(pid)?;
     let profile = profile::find_by_process(&profile::list(), &name)?;
     Some(ForegroundGameInfo {
         profile,
@@ -247,7 +238,7 @@ fn get_elevation_status(state: tauri::State<SharedState>) -> ElevationStatus {
         elevation::resolve_active_game_pid(
             guard.active_profile_id.as_deref(),
             &available,
-            &mut |name| inject::find_pid_by_name(name),
+            &mut |name| platform_inject::find_pid_by_name(name),
         )
         .and_then(elevation::is_process_elevated)
     };
@@ -336,7 +327,7 @@ fn simulate_send(
         .unwrap_or_else(GameProfile::builtin_generic);
     state
         .injector
-        .send(&text, &profile, inject::CancelToken::default())
+        .send(&text, &profile, CancelToken::default())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -401,13 +392,16 @@ pub fn run() {
             }
 
             let settings = Arc::new(RwLock::new(settings));
-            let engines = Arc::new(EngineRegistry::new());
+            let mut registry = EngineRegistry::new();
+            kotone_stt::register_builtin(&mut registry);
+            let engines = Arc::new(registry);
             let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter {
                 app: app.handle().clone(),
             });
             let injector: Arc<dyn Injector> = Arc::new(WindowsInjector);
-            let focus: Arc<dyn inject::FocusBackend> = Arc::new(WinFocusBackend);
-            let audio_backend: Arc<dyn audio::AudioBackend> = Arc::new(audio::CpalBackend);
+            let focus: Arc<dyn FocusBackend> = Arc::new(WinFocusBackend);
+            let audio_backend: Arc<dyn kotone_core::audio::AudioBackend> =
+                Arc::new(platform_audio::CpalBackend);
 
             let orchestrator = Arc::new(Orchestrator::new(
                 settings.clone(),
@@ -420,11 +414,11 @@ pub fn run() {
 
             app.manage(SharedState {
                 settings: settings.clone(),
-                orchestrator,
+                orchestrator: orchestrator.clone(),
                 engines,
                 injector,
             });
-            app.manage(HotkeyManager::new());
+            app.manage(HotkeyManager::new(app.handle(), orchestrator.clone()));
 
             // 按配置注册全局热键（失败不致命，设置页可改键重试）
             let mgr = app.state::<HotkeyManager>();

@@ -1,13 +1,13 @@
-//! STT 可插拔多引擎架构：`SttEngine` trait + 引擎注册表
+//! STT 可插拔多引擎架构（core 端口）：`SttEngine`/`SttSession` trait + 引擎注册表容器
 //! 设计契约见 docs/development.md §3.3 —— 流式支持是架构一等公民。
 //!
 //! 与 §3.3 伪代码的一处扩展：`start_session` 增加 `events` 通道参数，
 //! partial/final 经 `tokio::sync::mpsc::UnboundedSender<SttEvent>` 外发，
 //! 与文档「partial 结果通过事件通道外发」一致，只是把通道显式化。
-
-pub mod mock;
-pub mod sherpa;
-pub mod whisper_sidecar;
+//!
+//! 依赖方向：orchestrator（core）依赖本注册表容器 → 引擎实例必须由外部注入，
+//! 否则 core 会与引擎实现 crate 形成循环依赖。内置引擎（mock/whisper/sherpa）
+//! 在 kotone-stt，经 `kotone_stt::register_builtin` 注入。
 
 use tokio::sync::mpsc;
 
@@ -96,23 +96,25 @@ pub trait SttSession: Send {
     fn cancel(&mut self);
 }
 
-/// 引擎注册表：收集全部已编译引擎。
-/// mock-stream 恒在（全链路联调用）；whisper/sherpa 占位注册（is_ready=false，未实现）。
-/// 后续真实引擎按 cargo feature 控制是否进二进制（docs/development.md §3.3）。
+/// 引擎注册表容器：只持有「已注入」的引擎实例。
+/// 引擎实现（mock/whisper/sherpa 等）由 kotone-stt 经 `register` 注入，
+/// core 不知道任何具体引擎（依赖方向：kotone-stt → core）。
 pub struct EngineRegistry {
     engines: Vec<Box<dyn SttEngine>>,
 }
 
 impl EngineRegistry {
+    /// 空注册表；引擎经 `register`（或 kotone-stt 的 register_builtin）注入
     pub fn new() -> Self {
-        let mut engines: Vec<Box<dyn SttEngine>> = vec![
-            Box::new(mock::MockStreamEngine),
-            Box::new(whisper_sidecar::WhisperSidecarEngine),
-            Box::new(sherpa::SherpaEngine),
-        ];
-        // 候选池引擎（funasr / cloud-asr 等）后续按 feature 追加
-        engines.sort_by(|a, b| a.id().cmp(b.id()));
-        Self { engines }
+        Self {
+            engines: Vec::new(),
+        }
+    }
+
+    /// 注入一个引擎实例（按 id 排序，稳定输出）
+    pub fn register(&mut self, engine: Box<dyn SttEngine>) {
+        self.engines.push(engine);
+        self.engines.sort_by(|a, b| a.id().cmp(b.id()));
     }
 
     /// 按 ID 取引擎实例引用
@@ -137,28 +139,5 @@ impl EngineRegistry {
 impl Default for EngineRegistry {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn registry_contains_mock_and_placeholders() {
-        let reg = EngineRegistry::new();
-        let ids: Vec<String> = reg.list_info().iter().map(|i| i.id.clone()).collect();
-        assert!(ids.contains(&"mock-stream".to_string()));
-        assert!(ids.contains(&"whisper-cpp-sidecar".to_string()));
-        assert!(ids.contains(&"sherpa-onnx-zipformer-zh".to_string()));
-    }
-
-    #[test]
-    fn mock_is_ready_placeholders_are_not() {
-        let reg = EngineRegistry::new();
-        assert!(reg.get("mock-stream").unwrap().is_ready());
-        assert!(!reg.get("whisper-cpp-sidecar").unwrap().is_ready());
-        assert!(!reg.get("sherpa-onnx-zipformer-zh").unwrap().is_ready());
-        assert!(reg.get("no-such-engine").is_none());
     }
 }

@@ -1,15 +1,15 @@
-//! Windows 低级键盘钩子（WH_KEYBOARD_LL）热键后端。
+//! Windows 低级键盘钩子（WH_KEYBOARD_LL）热键源：core `HotkeySource` 端口的实现。
 //!
-//! 背景：RegisterHotKey（tauri-plugin-global-shortcut 底层）在 LOL 等游戏前台时
-//! 不投递热键事件（实测日志实证）；LeagueAkari 等游戏工具均用 LL 钩子解决。
+//! 背景：RegisterHotKey 在 LOL 等游戏前台不投递热键事件（实测日志实证）；
+//! LeagueAkari 等游戏工具均用 LL 钩子解决。
 //!
 //! 线程模型：
 //! - 钩子线程：SetWindowsHookExW(WH_KEYBOARD_LL) + GetMessageW 消息循环
 //!   （LL 钩子回调跑在安装线程上，该线程必须有消息循环）；
 //!   退出时 UnhookWindowsHookEx（PostThreadMessageW(WM_QUIT) 触发）。
-//! - 回调红线：只做「过滤 + channel 发送」，绝不写日志/做 IO/调 orchestrator；
-//!   事件经 std::sync::mpsc 发给消费者线程，由它 spawn 到 tokio runtime。
-//! - 匹配逻辑全部在平台无关的 HookMatcher（hotkey_spec.rs），回调只是翻译层。
+//! - 回调红线：只做「过滤 + channel 发送」，绝不写日志/做 IO/调业务；
+//!   事件经 std::sync::mpsc 发给消费者线程，由它调用构造时注入的 sink。
+//! - 匹配逻辑全部在 core 的 HookMatcher（kotone_core::hotkey），回调只是翻译层。
 //!
 //! 吞键策略：完整命中（主键 + 修饰键严格匹配）才 return 1 吞掉；
 //! 其余按键一律 CallNextHookEx 放行。
@@ -17,9 +17,8 @@
 #![cfg(windows)]
 
 use std::sync::mpsc;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use tauri::{AppHandle, Manager};
 use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -28,9 +27,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
-use crate::hotkey::HotkeyMode;
-use crate::hotkey_spec::{parse_hotkey, HookEvent, HookMatcher, KeyAction};
-use crate::SharedState;
+use kotone_core::hotkey::{parse_hotkey, HookEvent, HookMatcher, HotkeyMode, HotkeySource, KeyAction};
+
+/// 事件出口：构造 LlHookSource 时注入（Tauri 壳 spawn 进 runtime，CLI 送进自己的通道）
+pub type HookSink = Box<dyn Fn(HookEvent) + Send + Sync>;
 
 /// 钩子回调共享状态：匹配器 + 事件出口（OnceLock：回调必须是静态 fn）
 struct HookShared {
@@ -40,9 +40,10 @@ struct HookShared {
 
 static SHARED: OnceLock<HookShared> = OnceLock::new();
 
-/// LL 钩子后端：首次 register 时启动钩子线程与消费者线程，
+/// LL 钩子热键源：首次 register 时启动钩子线程与消费者线程，
 /// 之后改键/改模式只更新共享匹配器配置，不重建线程。
-pub struct LlHook {
+pub struct LlHookSource {
+    sink: Arc<HookSink>,
     state: Mutex<LlHookState>,
 }
 
@@ -52,21 +53,28 @@ struct LlHookState {
     hook_thread_id: Option<u32>,
 }
 
-impl Default for LlHook {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl LlHook {
-    pub fn new() -> Self {
+impl LlHookSource {
+    pub fn new(sink: HookSink) -> Self {
         Self {
+            sink: Arc::new(sink),
             state: Mutex::new(LlHookState::default()),
         }
     }
 
+    /// 停止钩子线程（WM_QUIT → 消息循环退出 → UnhookWindowsHookEx）
+    pub fn shutdown(&self) {
+        let tid = self.state.lock().unwrap().hook_thread_id.take();
+        if let Some(tid) = tid {
+            unsafe {
+                let _ = PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0));
+            }
+        }
+    }
+}
+
+impl HotkeySource for LlHookSource {
     /// 注册/改键：首次调用安装钩子并启动事件泵；失败返回 Err（调用方回退 RegisterHotKey）
-    pub fn register(&self, app: &AppHandle, key: &str, mode: HotkeyMode) -> Result<(), String> {
+    fn register(&self, key: &str, mode: HotkeyMode) -> Result<(), String> {
         let spec = parse_hotkey(key)
             .ok_or_else(|| format!("无法解析热键「{key}」（LL 钩子后端不支持该键名）"))?;
 
@@ -76,7 +84,7 @@ impl LlHook {
             if let Some(shared) = SHARED.get() {
                 shared.matcher.lock().unwrap().set_config(spec, mode);
             }
-            crate::log::log(&format!("llhook reconfigured: {key} ({mode:?})"));
+            kotone_core::log::log(&format!("llhook reconfigured: {key} ({mode:?})"));
             return Ok(());
         }
 
@@ -102,45 +110,35 @@ impl LlHook {
             Err(_) => return Err("钩子线程启动后异常退出".into()),
         };
 
-        let orch = app.state::<SharedState>().orchestrator.clone();
+        let sink = self.sink.clone();
         std::thread::Builder::new()
             .name("kotone-llhook-events".into())
-            .spawn(move || consumer_main(rx, orch))
+            .spawn(move || consumer_main(rx, sink))
             .map_err(|e| format!("启动钩子事件线程失败: {e}"))?;
 
         state.started = true;
         state.hook_thread_id = Some(thread_id);
-        crate::log::log(&format!("llhook backend started: {key} ({mode:?})"));
+        kotone_core::log::log(&format!("llhook backend started: {key} ({mode:?})"));
         Ok(())
     }
 
     /// 注销：匹配器置为禁用（全部按键放行），钩子线程保留以便快速重注册
-    pub fn unregister(&self) {
+    fn unregister(&self) {
         if let Some(shared) = SHARED.get() {
             shared.matcher.lock().unwrap().set_enabled(false);
-            crate::log::log("llhook unregistered (matcher disabled)");
+            kotone_core::log::log("llhook unregistered (matcher disabled)");
         }
     }
 
-    /// 会话激活标志：Esc 取消使能（由 HotkeyManager.set_cancel_enabled 转发）
-    pub fn set_session_active(&self, active: bool) {
+    /// 会话激活标志：Esc 取消使能
+    fn set_cancel_active(&self, active: bool) {
         if let Some(shared) = SHARED.get() {
             shared.matcher.lock().unwrap().set_session_active(active);
         }
     }
-
-    /// 停止钩子线程（WM_QUIT → 消息循环退出 → UnhookWindowsHookEx）
-    pub fn shutdown(&self) {
-        let tid = self.state.lock().unwrap().hook_thread_id.take();
-        if let Some(tid) = tid {
-            unsafe {
-                let _ = PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0));
-            }
-        }
-    }
 }
 
-impl Drop for LlHook {
+impl Drop for LlHookSource {
     fn drop(&mut self) {
         // 进程退出路径：通知钩子线程退出并卸钩（系统也会在进程结束时兜底清理）
         self.shutdown();
@@ -159,14 +157,14 @@ fn hook_thread_main(boot: mpsc::Sender<Result<u32, String>>) {
             }
         };
         let _ = boot.send(Ok(tid));
-        crate::log::log("WH_KEYBOARD_LL hook installed");
+        kotone_core::log::log("WH_KEYBOARD_LL hook installed");
 
         let mut msg = MSG::default();
         // GetMessageW 返回 false = 收到 WM_QUIT
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {}
 
         let _ = UnhookWindowsHookEx(hook);
-        crate::log::log("WH_KEYBOARD_LL hook uninstalled");
+        kotone_core::log::log("WH_KEYBOARD_LL hook uninstalled");
     }
 }
 
@@ -202,32 +200,10 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     unsafe { CallNextHookEx(None::<HHOOK>, code, wparam, lparam) }
 }
 
-/// 消费者线程：钩子事件 → orchestrator（spawn 进 tokio runtime）
-fn consumer_main(rx: mpsc::Receiver<HookEvent>, orch: std::sync::Arc<crate::orchestrator::Orchestrator>) {
+/// 消费者线程：钩子事件 → 构造时注入的 sink（调用方决定如何调度到业务层）
+fn consumer_main(rx: mpsc::Receiver<HookEvent>, sink: Arc<HookSink>) {
     for ev in rx {
-        crate::log::log(&format!("llhook captured: {ev:?}"));
-        let orch = orch.clone();
-        match ev {
-            HookEvent::HoldPressed => {
-                tauri::async_runtime::spawn(async move {
-                    orch.on_hotkey_hold(true).await;
-                });
-            }
-            HookEvent::HoldReleased => {
-                tauri::async_runtime::spawn(async move {
-                    orch.on_hotkey_hold(false).await;
-                });
-            }
-            HookEvent::Toggle => {
-                tauri::async_runtime::spawn(async move {
-                    orch.on_hotkey_toggle().await;
-                });
-            }
-            HookEvent::Cancel => {
-                tauri::async_runtime::spawn(async move {
-                    orch.cancel().await;
-                });
-            }
-        }
+        kotone_core::log::log(&format!("llhook captured: {ev:?}"));
+        (sink)(ev);
     }
 }

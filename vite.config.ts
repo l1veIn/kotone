@@ -12,8 +12,9 @@ export default defineConfig({
     // Tauri 需要监听本机地址
     host: "127.0.0.1",
     watch: {
-      // 不要监听 src-tauri，避免触发不必要的前端 reload
-      ignored: ["**/src-tauri/**"],
+      // 不要监听 src-tauri 与 workspace 共享的 target/（cargo 编译产物，避免触发前端
+      // reload，且 rustc 写入 DLL 时 chokidar watch 会 EBUSY 崩溃）
+      ignored: ["**/src-tauri/**", "**/target/**"],
     },
   },
   build: {

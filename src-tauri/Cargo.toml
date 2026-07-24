@@ -1,7 +1,7 @@
 [package]
-name = "kotone"
+name = "kotone-tauri"
 version = "0.1.0"
-description = "Kotone（琴音）— 游戏语音输入工具"
+description = "Kotone（琴音）— 游戏语音输入工具（Tauri 壳）"
 edition = "2021"
 rust-version = "1.77.2"
 
@@ -10,10 +10,20 @@ rust-version = "1.77.2"
 name = "kotone_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# exe 名保持 kotone.exe（package 改名 kotone-tauri 不影响产物名）
+[[bin]]
+name = "kotone"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# 三个内部 crate：core（域模型/ports/状态机/配置）、stt（引擎）、platform（Windows 适配器）
+kotone-core = { path = "../crates/kotone-core" }
+kotone-stt = { path = "../crates/kotone-stt" }
+kotone-platform-windows = { path = "../crates/kotone-platform-windows" }
+
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
@@ -21,34 +31,15 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 
-# 音频采集（docs/development.md §2：cpal 为 Rust 跨平台音频采集事实标准）
-cpal = "0.15"
-# 用户目录定位（~/.kotone/）
-dirs = "6"
-
-# 输入注入（docs/development.md §3.5）：raw windows crate 直调 Win32
-# SendInput / GetForegroundWindow / Toolhelp 进程名 / 剪贴板（CF_UNICODETEXT）
+# 壳自身的窗口 UI 代码（SW_SHOWNA 不抢焦点显示）
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = [
-    "Win32_Foundation",
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_System_Diagnostics_ToolHelp",
-    "Win32_System_Threading",
-    # 提权检测（TokenElevation）与 runas 重启（docs/development.md §10 R-1）
-    "Win32_Security",
-    "Win32_UI_Shell",
-] }
-arboard = "3"
-
-# 后续模块按需加入：hound（eval wav 录档）、
-# reqwest / sha2（model 下载）。见 docs/development.md §5.1
+windows = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 tempfile = "3"
 
 [features]
-# STT 可插拔引擎按 feature 控制编译，未启用的引擎不进二进制（§3.3）
+# STT 引擎 feature 转发到 kotone-stt（§3.3）
 default = []
-engine-whisper-sidecar = []
-engine-sherpa = []
+engine-whisper-sidecar = ["kotone-stt/engine-whisper-sidecar"]
+engine-sherpa = ["kotone-stt/engine-sherpa"]

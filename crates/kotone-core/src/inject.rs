@@ -1,12 +1,9 @@
-//! 输入注入：Windows 直调 Win32 SendInput，时序 1:1 对齐 LeagueAkari
-//! （docs/development.md §3.5、§5.1、§6）
+//! 输入注入端口与时序编排（core）：`Injector`/`FocusBackend`/`SendOps` trait、
+//! `CancelToken`、`InjectError` 与 §6 发送时序（`send_sequence`，面向可注入的
+//! `SendOps` 编程，单测用 mock，不真睡、不真发键）。
 //!
 //! 合规红线：只做系统标准输入合成 + 剪贴板；不读写游戏内存、不 hook 渲染。
-//!
-//! 结构：
-//! - 本模块：`Injector` trait、`CancelToken`、`InjectError` 与发送时序编排
-//!   （`send_sequence` 面向可注入的 `SendOps` 编程，单测用 mock，不真睡、不真发键）；
-//! - `windows.rs`（cfg(windows)）：三个 Win32 原语的真实实现 + `WindowsInjector`。
+//! Windows 真实实现（SendInput / 前台校验 / 焦点恢复）在 kotone-platform-windows。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -205,91 +202,6 @@ fn send_clipboard_path(
     let _ = cancellable_sleep(ops, CLIPBOARD_RESTORE_DELAY_MS, cancel);
     restore(ops);
     Ok(())
-}
-
-// ---------- 平台实现 ----------
-
-#[cfg(windows)]
-#[path = "windows.rs"]
-mod windows_impl;
-
-#[cfg(windows)]
-pub use windows_impl::{
-    find_pid_by_name, foreground_pid, foreground_process_name, is_process_foreground,
-    key_down_up, process_name_from_pid, send_unicode, WinFocusBackend, WindowsInjector,
-};
-
-#[cfg(not(windows))]
-pub use self::fallback::*;
-
-/// 非 Windows 兜底：保持可编译，运行时返回明确错误（macOS/Linux 注入见 §3.7 平台策略）
-#[cfg(not(windows))]
-mod fallback {
-    use super::{CancelToken, InjectError, Injector};
-    use crate::profile::GameProfile;
-
-    pub fn send_unicode(_text: &str) -> Result<(), InjectError> {
-        Err(InjectError::new(
-            "send_unicode 仅 Windows 实现（MVP Windows-first）",
-        ))
-    }
-
-    pub fn key_down_up(_key: &str) -> Result<(), InjectError> {
-        Err(InjectError::new(
-            "key_down_up 仅 Windows 实现（MVP Windows-first）",
-        ))
-    }
-
-    pub fn is_process_foreground(process_names: &[String]) -> bool {
-        // 空列表 = 通配任意前台进程；非 Windows 无法校验，保守按通配处理
-        process_names.is_empty()
-    }
-
-    pub fn foreground_process_name() -> Option<String> {
-        None
-    }
-
-    pub fn foreground_pid() -> Option<u32> {
-        None
-    }
-
-    pub fn process_name_from_pid(_pid: u32) -> Option<String> {
-        None
-    }
-
-    pub fn find_pid_by_name(_name: &str) -> Option<u32> {
-        None
-    }
-
-    /// 非 Windows 兜底焦点后端：无法捕获/恢复，恒返回空
-    pub struct WinFocusBackend;
-
-    impl super::FocusBackend for WinFocusBackend {
-        fn foreground_window(&self) -> Option<super::TargetWindow> {
-            None
-        }
-        fn restore(&self, _target: super::TargetWindow) -> bool {
-            false
-        }
-    }
-
-    pub struct WindowsInjector;
-
-    impl Injector for WindowsInjector {
-        fn send(
-            &self,
-            _text: &str,
-            _profile: &GameProfile,
-            cancel: CancelToken,
-        ) -> Result<(), InjectError> {
-            if cancel.is_cancelled() {
-                return Err(InjectError::new("发送已取消"));
-            }
-            Err(InjectError::new(
-                "当前平台暂不支持输入注入（MVP Windows-first）",
-            ))
-        }
-    }
 }
 
 // ---------- 时序编排单测（mock ops：不真睡、不真发键） ----------

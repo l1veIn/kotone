@@ -1,33 +1,25 @@
-//! 全局热键：注册/注销，hold / toggle 两种触发模式（docs/development.md §3.6、§5.1）
+//! 全局热键（Tauri 壳）：后端选择/回退/状态暴露（docs/development.md §3.6、§5.1）
 //!
-//! 双后端架构（对上层透明，register/unregister/status 签名不变）：
-//! - **LL 钩子后端**（hotkey_ll.rs，Windows 默认）：WH_KEYBOARD_LL 低级键盘钩子，
-//!   解决 RegisterHotKey 在 LOL 等游戏前台不投递事件的问题（实测日志实证）；
-//! - **RegisterHotKey 后端**（tauri-plugin-global-shortcut）：LL 钩子安装失败时回退，
-//!   以及非 Windows 平台的唯一实现。
+//! 端口在 core（`HotkeySource`）；两种实现：
+//! - **LL 钩子**（kotone-platform-windows，Windows 默认）：WH_KEYBOARD_LL，
+//!   解决 RegisterHotKey 在 LOL 等游戏前台不投递事件的问题；
+//! - **RegisterHotKey**（tauri-plugin-global-shortcut，本文件 `PluginHotkeySource`）：
+//!   依赖 AppHandle 故留在壳内；LL 钩子安装失败时回退，也是非 Windows 唯一实现。
 //!
-//! - hold：按下开始、松开结束；toggle：按一下开始、再按结束（转写/发送中再按 = 取消）；
-//! - Esc 取消：LL 钩子后端由钩子内建处理（会话激活时吞 Esc 并 cancel）；
-//!   RegisterHotKey 后端在会话激活期间临时注册 Escape，会话结束即注销；
-//! - 运行时改键/改模式/改后端：unregister + register 重注册。
+//! 对上层（TauriEmitter / IPC）签名不变：register/unregister/set_cancel_enabled/status。
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
-use crate::settings::HotkeyBackend;
+use kotone_core::hotkey::{HookEvent, HotkeySource};
+use kotone_core::orchestrator::Orchestrator;
+use kotone_core::settings::HotkeyBackend;
+
 use crate::SharedState;
 
-/// 热键触发模式（用户在设置中选择，默认 toggle 引导时确认）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum HotkeyMode {
-    /// 按住说话，松手结束
-    Hold,
-    /// 按一下开始，再按一下结束
-    Toggle,
-}
+pub use kotone_core::hotkey::HotkeyMode;
 
 /// 当前生效的热键后端
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,150 +55,89 @@ pub struct HotkeyStatus {
     pub backend: String,
 }
 
-/// 热键管理器：记录当前注册内容与生效后端，支持运行时改键/改模式/改后端
-pub struct HotkeyManager {
-    /// RegisterHotKey 后端：当前注册的主热键
+/// RegisterHotKey 热键源（tauri-plugin-global-shortcut）：依赖 AppHandle，留在壳内。
+/// Esc 取消走「会话激活期间临时注册 Escape」策略（LL 钩子后端则内建处理）。
+pub struct PluginHotkeySource {
+    app: AppHandle,
+    orch: Arc<Orchestrator>,
     current: Mutex<Option<Shortcut>>,
-    /// RegisterHotKey 后端：会话激活期间临时注册的 Esc 取消键
+    /// 会话激活期间临时注册的 Esc 取消键
     cancel: Mutex<Option<Shortcut>>,
-    /// 最近一次注册失败信息（设置页提示「可能被其他程序/实例占用」）
-    last_error: Mutex<Option<String>>,
-    /// 当前生效后端
-    backend: Mutex<ActiveBackend>,
-    /// 当前注册的热键名（两个后端通用；plugin 的 Shortcut 句柄仅 RegisterHotKey 路径有）
-    registered_key: Mutex<Option<String>>,
-    /// LL 钩子后端（Windows）
-    #[cfg(windows)]
-    llhook: crate::hotkey_ll::LlHook,
 }
 
-impl Default for HotkeyManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl HotkeyManager {
-    pub fn new() -> Self {
+impl PluginHotkeySource {
+    pub fn new(app: &AppHandle, orch: Arc<Orchestrator>) -> Self {
         Self {
+            app: app.clone(),
+            orch,
             current: Mutex::new(None),
             cancel: Mutex::new(None),
-            last_error: Mutex::new(None),
-            backend: Mutex::new(ActiveBackend::None),
-            registered_key: Mutex::new(None),
-            #[cfg(windows)]
-            llhook: crate::hotkey_ll::LlHook::new(),
         }
     }
+}
 
-    /// 注册全局热键（已注册则先注销，实现运行时改键/改模式/改后端）。
-    /// Windows 上按配置优先 LL 钩子，安装失败回退 RegisterHotKey 并记录日志。
-    pub fn register(&self, app: &AppHandle, key: &str, mode: HotkeyMode) -> Result<(), String> {
-        let _ = self.unregister(app);
-        let pref = backend_preference(app);
-
-        #[cfg(windows)]
-        if pref != HotkeyBackend::Register {
-            match self.llhook.register(app, key, mode) {
-                Ok(()) => {
-                    crate::log::log(&format!("hotkey backend=llhook registered ok: {key} ({mode:?})"));
-                    *self.backend.lock().unwrap() = ActiveBackend::LlHook;
-                    *self.registered_key.lock().unwrap() = Some(key.to_string());
-                    *self.last_error.lock().unwrap() = None;
-                    return Ok(());
-                }
-                Err(e) => {
-                    crate::log::log(&format!(
-                        "llhook 后端不可用，回退 RegisterHotKey: {e}"
-                    ));
-                }
-            }
-        }
-
-        self.register_plugin(app, key, mode)
-    }
-
-    /// RegisterHotKey 后端注册路径（tauri-plugin-global-shortcut）
-    fn register_plugin(&self, app: &AppHandle, key: &str, mode: HotkeyMode) -> Result<(), String> {
+impl HotkeySource for PluginHotkeySource {
+    fn register(&self, key: &str, mode: HotkeyMode) -> Result<(), String> {
+        self.unregister();
         let shortcut: Shortcut = key
             .parse()
             .map_err(|e| format!("无法解析热键「{key}」: {e}"))?;
 
-        let registered = app.global_shortcut().on_shortcut(shortcut.clone(), move |app, _sc, event| {
-            crate::log::log(&format!("hotkey fired: mode={mode:?} state={:?}", event.state()));
-            let orch = app.state::<SharedState>().orchestrator.clone();
-            match mode {
-                HotkeyMode::Hold => {
-                    let pressed = event.state() == ShortcutState::Pressed;
-                    tauri::async_runtime::spawn(async move {
-                        orch.on_hotkey_hold(pressed).await;
-                    });
-                }
-                HotkeyMode::Toggle => {
-                    if event.state() == ShortcutState::Pressed {
+        let orch = self.orch.clone();
+        self.app
+            .global_shortcut()
+            .on_shortcut(shortcut.clone(), move |_app, _sc, event| {
+                kotone_core::log::log(&format!(
+                    "hotkey fired: mode={mode:?} state={:?}",
+                    event.state()
+                ));
+                let orch = orch.clone();
+                match mode {
+                    HotkeyMode::Hold => {
+                        let pressed = event.state() == ShortcutState::Pressed;
                         tauri::async_runtime::spawn(async move {
-                            orch.on_hotkey_toggle().await;
+                            orch.on_hotkey_hold(pressed).await;
                         });
                     }
+                    HotkeyMode::Toggle => {
+                        if event.state() == ShortcutState::Pressed {
+                            tauri::async_runtime::spawn(async move {
+                                orch.on_hotkey_toggle().await;
+                            });
+                        }
+                    }
                 }
-            }
-        });
+            })
+            .map_err(|e| format!("注册热键「{key}」失败: {e}（键位可能被其他程序或其他 Kotone 实例占用）"))?;
 
-        match registered {
-            Ok(()) => {
-                crate::log::log(&format!("hotkey backend=register registered ok: {key} ({mode:?})"));
-                *self.current.lock().unwrap() = Some(shortcut);
-                *self.backend.lock().unwrap() = ActiveBackend::Plugin;
-                *self.registered_key.lock().unwrap() = Some(key.to_string());
-                *self.last_error.lock().unwrap() = None;
-                Ok(())
-            }
-            Err(e) => {
-                let msg = format!("注册热键「{key}」失败: {e}（键位可能被其他程序或其他 Kotone 实例占用）");
-                crate::log::log(&format!("hotkey register FAILED: {msg}"));
-                *self.last_error.lock().unwrap() = Some(msg.clone());
-                Err(msg)
-            }
-        }
-    }
-
-    /// 注销当前热键（两个后端都停）
-    pub fn unregister(&self, app: &AppHandle) -> Result<(), String> {
-        #[cfg(windows)]
-        self.llhook.unregister();
-        if let Some(sc) = self.current.lock().unwrap().take() {
-            app.global_shortcut()
-                .unregister(sc)
-                .map_err(|e| format!("注销热键失败: {e}"))?;
-        }
-        *self.backend.lock().unwrap() = ActiveBackend::None;
-        *self.registered_key.lock().unwrap() = None;
+        *self.current.lock().unwrap() = Some(shortcut);
         Ok(())
     }
 
-    /// 会话激活期间的 Esc 取消：
-    /// - LL 钩子后端：钩子内建处理（会话激活时吞 Esc → cancel），无需临时注册；
-    /// - RegisterHotKey 后端：临时全局注册 Escape，会话结束注销。
-    /// 注册失败不致命（仍可通过悬浮窗/热键取消），仅记录日志。
-    pub fn set_cancel_enabled(&self, app: &AppHandle, enabled: bool) {
-        #[cfg(windows)]
-        if *self.backend.lock().unwrap() == ActiveBackend::LlHook {
-            self.llhook.set_session_active(enabled);
-            return;
+    fn unregister(&self) {
+        if let Some(sc) = self.current.lock().unwrap().take() {
+            if let Err(e) = self.app.global_shortcut().unregister(sc) {
+                kotone_core::log::log(&format!("注销热键失败: {e}"));
+            }
         }
+    }
 
+    /// 会话激活期间临时注册 Esc 全局取消键；会话结束注销。
+    /// 注册失败不致命（仍可通过悬浮窗/热键取消），仅记录日志。
+    fn set_cancel_active(&self, active: bool) {
         let mut guard = self.cancel.lock().unwrap();
-        match (enabled, guard.is_some()) {
+        match (active, guard.is_some()) {
             (true, false) => {
                 let shortcut: Shortcut = match "Escape".parse() {
                     Ok(s) => s,
                     Err(_) => return,
                 };
-                let registered = app.global_shortcut().on_shortcut(
+                let orch = self.orch.clone();
+                let registered = self.app.global_shortcut().on_shortcut(
                     shortcut.clone(),
-                    |app, _sc, event| {
+                    move |_app, _sc, event| {
                         if event.state() == ShortcutState::Pressed {
-                            let orch = app.state::<SharedState>().orchestrator.clone();
+                            let orch = orch.clone();
                             tauri::async_runtime::spawn(async move {
                                 orch.cancel().await;
                             });
@@ -215,24 +146,140 @@ impl HotkeyManager {
                 );
                 match registered {
                     Ok(()) => *guard = Some(shortcut),
-                    Err(e) => eprintln!("[kotone hotkey] 注册 Esc 取消键失败（不致命）: {e}"),
+                    Err(e) => kotone_core::log::log(&format!("注册 Esc 取消键失败（不致命）: {e}")),
                 }
             }
             (false, true) => {
                 if let Some(sc) = guard.take() {
-                    if let Err(e) = app.global_shortcut().unregister(sc) {
-                        eprintln!("[kotone hotkey] 注销 Esc 取消键失败: {e}");
+                    if let Err(e) = self.app.global_shortcut().unregister(sc) {
+                        kotone_core::log::log(&format!("注销 Esc 取消键失败: {e}"));
                     }
                 }
             }
             _ => {}
         }
     }
+}
 
-    /// 当前注册的热键（调试用）
-    #[allow(dead_code)]
-    pub fn current_key(&self) -> Option<String> {
-        self.registered_key.lock().unwrap().clone()
+/// LL 钩子事件 → orchestrator（spawn 进 Tauri 的 tokio runtime）
+#[cfg(windows)]
+fn make_llhook_sink(
+    orch: Arc<Orchestrator>,
+) -> kotone_platform_windows::hotkey_ll::HookSink {
+    Box::new(move |ev| {
+        let orch = orch.clone();
+        match ev {
+            HookEvent::HoldPressed => {
+                tauri::async_runtime::spawn(async move {
+                    orch.on_hotkey_hold(true).await;
+                });
+            }
+            HookEvent::HoldReleased => {
+                tauri::async_runtime::spawn(async move {
+                    orch.on_hotkey_hold(false).await;
+                });
+            }
+            HookEvent::Toggle => {
+                tauri::async_runtime::spawn(async move {
+                    orch.on_hotkey_toggle().await;
+                });
+            }
+            HookEvent::Cancel => {
+                tauri::async_runtime::spawn(async move {
+                    orch.cancel().await;
+                });
+            }
+        }
+    })
+}
+
+/// 热键管理器：后端选择/回退 + 状态暴露；对上层签名不变
+pub struct HotkeyManager {
+    /// RegisterHotKey 热键源（回退路径 + 非 Windows）
+    plugin: PluginHotkeySource,
+    /// LL 钩子热键源（Windows 默认）
+    #[cfg(windows)]
+    llhook: kotone_platform_windows::hotkey_ll::LlHookSource,
+    /// 当前生效后端
+    backend: Mutex<ActiveBackend>,
+    /// 当前注册的热键名（两个后端通用）
+    registered_key: Mutex<Option<String>>,
+    /// 最近一次注册失败信息（设置页提示「可能被其他程序/实例占用」）
+    last_error: Mutex<Option<String>>,
+}
+
+impl HotkeyManager {
+    pub fn new(app: &AppHandle, orch: Arc<Orchestrator>) -> Self {
+        Self {
+            plugin: PluginHotkeySource::new(app, orch.clone()),
+            #[cfg(windows)]
+            llhook: kotone_platform_windows::hotkey_ll::LlHookSource::new(make_llhook_sink(orch)),
+            backend: Mutex::new(ActiveBackend::None),
+            registered_key: Mutex::new(None),
+            last_error: Mutex::new(None),
+        }
+    }
+
+    /// 注册全局热键（已注册则先注销，实现运行时改键/改模式/改后端）。
+    /// Windows 上按配置优先 LL 钩子，安装失败回退 RegisterHotKey 并记录日志。
+    pub fn register(&self, app: &AppHandle, key: &str, mode: HotkeyMode) -> Result<(), String> {
+        self.unregister(app)?;
+        let pref = backend_preference(app);
+
+        #[cfg(windows)]
+        if pref != HotkeyBackend::Register {
+            match self.llhook.register(key, mode) {
+                Ok(()) => {
+                    kotone_core::log::log(&format!(
+                        "hotkey backend=llhook registered ok: {key} ({mode:?})"
+                    ));
+                    *self.backend.lock().unwrap() = ActiveBackend::LlHook;
+                    *self.registered_key.lock().unwrap() = Some(key.to_string());
+                    *self.last_error.lock().unwrap() = None;
+                    return Ok(());
+                }
+                Err(e) => {
+                    kotone_core::log::log(&format!("llhook 后端不可用，回退 RegisterHotKey: {e}"));
+                }
+            }
+        }
+
+        match self.plugin.register(key, mode) {
+            Ok(()) => {
+                kotone_core::log::log(&format!(
+                    "hotkey backend=register registered ok: {key} ({mode:?})"
+                ));
+                *self.backend.lock().unwrap() = ActiveBackend::Plugin;
+                *self.registered_key.lock().unwrap() = Some(key.to_string());
+                *self.last_error.lock().unwrap() = None;
+                Ok(())
+            }
+            Err(msg) => {
+                kotone_core::log::log(&format!("hotkey register FAILED: {msg}"));
+                *self.last_error.lock().unwrap() = Some(msg.clone());
+                Err(msg)
+            }
+        }
+    }
+
+    /// 注销当前热键（两个后端都停）
+    pub fn unregister(&self, _app: &AppHandle) -> Result<(), String> {
+        #[cfg(windows)]
+        self.llhook.unregister();
+        self.plugin.unregister();
+        *self.backend.lock().unwrap() = ActiveBackend::None;
+        *self.registered_key.lock().unwrap() = None;
+        Ok(())
+    }
+
+    /// 会话激活期间的 Esc 取消：按当前生效后端路由
+    pub fn set_cancel_enabled(&self, _app: &AppHandle, enabled: bool) {
+        #[cfg(windows)]
+        if *self.backend.lock().unwrap() == ActiveBackend::LlHook {
+            self.llhook.set_cancel_active(enabled);
+            return;
+        }
+        self.plugin.set_cancel_active(enabled);
     }
 
     /// 注册状态快照（设置页热键分区展示注册失败原因与当前后端）

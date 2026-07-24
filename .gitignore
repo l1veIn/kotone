@@ -5,5 +5,7 @@ dist/
 *.log
 
 # Tauri / Rust 构建产物
+# workspace 根共享 target（crates/* 与 src-tauri 共用）
+/target/
 src-tauri/target/
 src-tauri/gen/

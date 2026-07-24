@@ -1,25 +1,14 @@
-//! 音频采集：设备枚举、16kHz mono 采集、PCM 流推送（docs/development.md §5.1）
-//! 依赖 cpal。wav 编码（eval 录档用）后续加 hound。
+//! 音频采集生产实现：cpal（docs/development.md §5.1）
 //!
-//! 结构：`AudioBackend` trait 抽象采集来源（orchestrator 面向 trait 编程，测试用 mock），
-//! `CpalBackend` 是生产实现。采集线程内部完成：
+//! 端口（AudioBackend trait / AudioHandle / AudioDevice）在 kotone-core；
+//! 本模块是 cpal 生产实现。采集线程内部完成：
 //!   设备打开（默认/指定）→ 原生格式转 f32 → 混成 mono → 线性重采样到 16kHz
 //!   → 每 800 采样（50ms）一个 chunk 推入 pcm 通道，同时计算 RMS 推入 level 通道。
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use tokio::sync::mpsc;
 
-/// 目标格式：16kHz mono f32（SttSession.push_audio 契约）
-pub const TARGET_SAMPLE_RATE: u32 = 16000;
-/// 推送粒度：50ms 一个 chunk
-pub const CHUNK_SAMPLES: usize = (TARGET_SAMPLE_RATE as usize) / 20;
-
-/// 音频输入设备
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct AudioDevice {
-    pub id: String,
-    pub name: String,
-}
+use kotone_core::audio::{AudioBackend, AudioDevice, AudioHandle, CHUNK_SAMPLES, TARGET_SAMPLE_RATE};
 
 /// 枚举可用输入设备；首条为 "default" 伪设备（跟随系统默认）
 pub fn list_devices() -> Vec<AudioDevice> {
@@ -44,47 +33,6 @@ pub fn list_devices() -> Vec<AudioDevice> {
         }
     }
     out
-}
-
-/// 采集句柄：接收重采样后的 PCM chunk 与 RMS 电平；Drop 时停止采集
-pub struct AudioHandle {
-    /// Option 包裹便于 orchestrator take 走通道所有权
-    pub pcm_rx: Option<mpsc::UnboundedReceiver<Vec<f32>>>,
-    pub level_rx: Option<mpsc::UnboundedReceiver<f32>>,
-    stop_tx: Option<std::sync::mpsc::Sender<()>>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
-
-impl AudioHandle {
-    /// 无采集线程的测试用句柄（mock AudioBackend 使用）
-    pub fn detached(
-        pcm_rx: mpsc::UnboundedReceiver<Vec<f32>>,
-        level_rx: mpsc::UnboundedReceiver<f32>,
-    ) -> Self {
-        Self {
-            pcm_rx: Some(pcm_rx),
-            level_rx: Some(level_rx),
-            stop_tx: None,
-            thread: None,
-        }
-    }
-}
-
-impl Drop for AudioHandle {
-    fn drop(&mut self) {
-        if let Some(tx) = self.stop_tx.take() {
-            let _ = tx.send(());
-        }
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
-        }
-    }
-}
-
-/// 采集来源抽象（orchestrator 依赖此 trait；测试注入 mock）
-pub trait AudioBackend: Send + Sync {
-    /// 打开设备并开始采集；设备打开失败返回清晰错误
-    fn start(&self, device_id: &str) -> Result<AudioHandle, String>;
 }
 
 /// 生产实现：cpal
@@ -114,12 +62,7 @@ impl AudioBackend for CpalBackend {
         });
 
         match open_rx.recv() {
-            Ok(Ok(())) => Ok(AudioHandle {
-                pcm_rx: Some(pcm_rx),
-                level_rx: Some(level_rx),
-                stop_tx: Some(stop_tx),
-                thread: Some(thread),
-            }),
+            Ok(Ok(())) => Ok(AudioHandle::with_thread(pcm_rx, level_rx, stop_tx, thread)),
             Ok(Err(e)) => {
                 let _ = thread.join();
                 Err(e)

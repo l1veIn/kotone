@@ -57,7 +57,7 @@ pub fn should_auto_elevate(
 /// generic（无进程名）/ 未指定 profile / 进程未运行 → None（无法判断，不误报）。
 pub fn resolve_active_game_pid(
     active_profile_id: Option<&str>,
-    available: &[crate::profile::GameProfile],
+    available: &[kotone_core::profile::GameProfile],
     find_pid: &mut dyn FnMut(&str) -> Option<u32>,
 ) -> Option<u32> {
     let id = active_profile_id?;
@@ -66,8 +66,8 @@ pub fn resolve_active_game_pid(
         .find(|p| p.id == id)
         .cloned()
         .or_else(|| match id {
-            "lol" => Some(crate::profile::GameProfile::builtin_lol()),
-            "generic" => Some(crate::profile::GameProfile::builtin_generic()),
+            "lol" => Some(kotone_core::profile::GameProfile::builtin_lol()),
+            "generic" => Some(kotone_core::profile::GameProfile::builtin_generic()),
             _ => None,
         })?;
     if profile.process_names.is_empty() {
@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn resolve_active_game_pid_chain() {
-        use crate::profile::GameProfile;
+        use kotone_core::profile::GameProfile;
         let available = vec![GameProfile::builtin_lol(), GameProfile::builtin_generic()];
 
         // 命中：激活 lol 且进程在运行（进程枚举 mock 大小写不敏感）

@@ -1,6 +1,6 @@
-//! 热键规格解析与按键匹配状态机（纯逻辑，与 Win32 解耦，可单测）。
+//! 热键端口与纯逻辑：HotkeySource 端口、键名解析、按键匹配状态机（与 Win32 解耦，可单测）。
 //!
-//! LL 钩子后端（hotkey_ll.rs）把 Win32 按键事件翻译为 `on_key` 调用，
+//! LL 钩子实现（kotone-platform-windows）把 Win32 按键事件翻译为 `on_key` 调用，
 //! 本模块决定：是否命中热键、产生什么事件（HookEvent）、是否吞键（swallow）。
 //!
 //! 设计要点：
@@ -11,7 +11,28 @@
 //! - Esc 取消：会话激活（session_active）时 Esc down → Cancel 并吞键，
 //!   不再依赖 RegisterHotKey 临时注册。
 
-use crate::hotkey::HotkeyMode;
+/// 热键触发模式（用户在设置中选择，默认 toggle 引导时确认）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HotkeyMode {
+    /// 按住说话，松手结束
+    Hold,
+    /// 按一下开始，再按一下结束
+    Toggle,
+}
+
+/// 热键事件源端口（core）：WH_KEYBOARD_LL 钩子与 RegisterHotKey 是两种实现。
+///
+/// 实现负责平台线程与按键捕获；事件经构造时注入的 sink 外发（HookEvent），
+/// 本端口只定义注册/注销/会话激活开关。register 失败时调用方负责回退。
+pub trait HotkeySource: Send + Sync {
+    /// 注册/改键（实现内部幂等：已注册则先注销）
+    fn register(&self, key: &str, mode: HotkeyMode) -> Result<(), String>;
+    /// 注销（实现可保留后台线程以便快速重注册）
+    fn unregister(&self);
+    /// 会话激活开关：active=true 期间 Esc 取消使能
+    fn set_cancel_active(&self, active: bool);
+}
 
 // ---------- VK 码（Win32 常量值；定义为 u32 常量以便跨平台编译与测试） ----------
 

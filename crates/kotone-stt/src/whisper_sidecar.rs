@@ -7,7 +7,7 @@
 
 use tokio::sync::mpsc;
 
-use super::{EngineCapabilities, SessionConfig, SttEngine, SttEvent, SttSession};
+use kotone_core::stt::{EngineCapabilities, SessionConfig, SttEngine, SttEvent, SttSession};
 
 pub struct WhisperSidecarEngine;
 

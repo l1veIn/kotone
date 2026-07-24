@@ -1,0 +1,19 @@
+[package]
+name = "kotone-stt"
+version = "0.1.0"
+description = "Kotone STT 引擎适配器：mock / whisper.cpp sidecar / sherpa-onnx + 模型管理 + 内置引擎注册"
+edition = "2021"
+rust-version = "1.77.2"
+
+[dependencies]
+kotone-core = { path = "../kotone-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+
+[features]
+# STT 引擎按 feature 控制编译（docs/development.md §3.3）；
+# 当前引擎均为占位实现，恒注册（is_ready=false），真实实现接入后按 feature 裁剪
+default = ["engine-whisper-sidecar"]
+engine-whisper-sidecar = []
+engine-sherpa = []
