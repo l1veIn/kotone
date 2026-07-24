@@ -20,23 +20,23 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # 三个内部 crate：core（域模型/ports/状态机/配置）、stt（引擎）、platform（Windows 适配器）
-kotone-core = { path = "../crates/kotone-core" }
-kotone-stt = { path = "../crates/kotone-stt" }
-kotone-platform-windows = { path = "../crates/kotone-platform-windows" }
+kotone-core.workspace = true
+kotone-stt.workspace = true
+kotone-platform-windows.workspace = true
 
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tokio = { version = "1", features = ["full"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
 
 # 壳自身的窗口 UI 代码（SW_SHOWNA 不抢焦点显示）
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
+windows = { workspace = true, features = ["Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
 
 [features]
 # STT 引擎 feature 转发到 kotone-stt（§3.3）

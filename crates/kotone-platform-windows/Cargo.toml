@@ -6,14 +6,14 @@ edition = "2021"
 rust-version = "1.77.2"
 
 [dependencies]
-kotone-core = { path = "../kotone-core" }
-tokio = { version = "1", features = ["full"] }
+kotone-core.workspace = true
+tokio.workspace = true
 # 音频采集（docs/development.md §2：cpal 为 Rust 跨平台音频采集事实标准）
 cpal = "0.15"
 
 # 输入注入 / LL 钩子 / 提权检测：raw windows crate 直调 Win32
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = [
+windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
