@@ -496,34 +496,34 @@ hotkey 结束
 
 ## 7. 项目结构
 
+> v8：已重构为 cargo workspace（ADR-001），src-tauri 保留原地（tauri CLI 路径兼容）。
+
 ```
-kotone/
-├─ index.html / package.json / pnpm-lock.yaml / pnpm-workspace.yaml
-├─ vite.config.ts / svelte.config.js / tsconfig.json / tailwind (v4, css 方式)
-├─ src/                        # Svelte 前端
-│  ├─ main.ts / App.svelte (hash 路由) / app.css
-│  ├─ routes/ (overlay, settings)
-│  └─ lib/ (stores, components, ipc.ts)
-├─ scripts/
-│  └─ notepad_inject_test.ps1  # 注入记事本回归脚本（UIA 逐字校验）
-├─ src-tauri/
-│  ├─ Cargo.toml               # features: engine-whisper-sidecar / engine-sherpa / ...
-│  ├─ tauri.conf.json          # 双窗口：overlay(480x120 透明置顶) + main(800x600)
-│  ├─ capabilities/default.json
-│  ├─ examples/inject_cli.rs   # 注入命令行测试入口
-│  ├─ src/
-│  │  ├─ main.rs / lib.rs / orchestrator.rs / hotkey.rs / audio.rs
-│  │  ├─ stt/ (mod.rs, mock.rs, whisper_sidecar.rs, sherpa.rs)
-│  │  ├─ inject/ (mod.rs, windows.rs)
-│  │  ├─ eval.rs / profile.rs / settings.rs / model.rs / tray.rs
-│  ├─ binaries/                # whisper-cli sidecar（构建期下载，待做）
-│  └─ icons/                   # 由 assets/kotone-foundation.png 生成
-├─ assets/                     # RepoChan 品牌资产（已有）
-├─ docs/
-│  ├─ tech-research.md         # 预研报告（已有）
-│  └─ development.md           # 本文档
-└─ .github/workflows/ci.yml    # 待做
+kotone/                      # 虚拟 workspace：members = ["src-tauri", "crates/*"]
+├─ Cargo.toml / Cargo.lock
+├─ crates/
+│  ├─ kotone-core/           # 域模型 + ports + Orchestrator + settings/profile/eval/log
+│  │  │                      # 依赖纪律：仅 serde/tokio/thiserror/dirs 级
+│  │  └─ tests/orchestrator.rs  # 集成测试（dev 环单测会与链接 rlib 类型不兼容，见 ADR-001）
+│  ├─ kotone-stt/            # mock/whisper-sidecar/sherpa 引擎 + 模型管理 + register_builtin
+│  │                          # features: engine-whisper-sidecar（默认）/ engine-sherpa
+│  ├─ kotone-platform-windows/  # cpal / SendInput / WH_KEYBOARD_LL / elevation 适配器
+│  └─ kotone-cli/            # clap：send / listen / eval（stub）——core 的无 GUI 消费者
+├─ src-tauri/                # kotone-tauri 薄壳：IPC/窗口/托盘/单实例/热键回退
+├─ src/                      # Svelte 前端（不变）
+├─ scripts/notepad_inject_test.ps1
+├─ docs/adr/001-workspace-crate-layout.md
+└─ docs/{tech-research.md, development.md}
 ```
+
+依赖方向：`kotone-stt → kotone-core ← kotone-platform-windows`；`kotone-cli / kotone-tauri → 三者`。引擎经 `kotone_stt::register_builtin()` 注入 core 的空注册表容器，避免循环依赖。
+
+### 7.1 架构原则（v8 起生效，详见 ADR-001）
+
+1. **crate 拆分判据**：独立消费者 / 重依赖编译隔离 / 变更节奏——三者满足其一才拆
+2. **ports 在 core**：`SttEngine`、`AudioBackend`、`Injector`、`FocusBackend`、`HotkeySource`、`EventSink`
+3. **配置**：schema/存储/唯一写入口在 core；消费者构造注入配置值；engineOptions 不透明 JSON
+4. **事件**：core 产出结构化事件，壳映射为 `kotone://*` IPC，CLI 打印 JSONL
 
 ---
 
@@ -640,6 +640,7 @@ CI：GitHub Actions（Windows runner 为主）— fmt / clippy / cargo test（�
 | 2026-07-24 | **v6：热键后端从 RegisterHotKey 改为 WH_KEYBOARD_LL 低级钩子（Windows 默认），插件保留为回退** | 日志实证：RegisterHotKey 在 LOL 前台不投递任何热键事件（提权后也无效）；预研 §6.1 预留的 LL hook 方案启用 |
 | 2026-07-24 | **v6：新增文件日志 `~/.kotone/kotone.log`**（启动/注册/触发/状态迁移） | GUI/提权进程无控制台，eprintln 无处可去；本次热键问题的定位即依赖该日志 |
 | 2026-07-24 | **v7：MVP 注入链路全部真机验收通过**（用户手动实测）：A 记事本全链路、提权重启、LL 钩子游戏前台触发、**LOL 训练模式发送成功**。R-1/R-3/R-4/R-13 关闭 | 预研定义的最大风险（游戏注入）正式解除；剩余 MVP 缺口集中在真实 STT 引擎 |
+| 2026-07-24 | **v8：重构为 cargo workspace 五 crate**（core / stt / platform-windows / cli / tauri），开发叙事从业务里程碑切换为架构决策（ADR 起始于 docs/adr/001） | 拆分判据：独立消费者、重依赖编译隔离、变更节奏。core 成为无 Tauri 可跑的独立包（kotone-cli listen 实证）；被否决项：每引擎一 crate、游戏 provider crate（数据驱动差异） |
 | 2026-07-24 | **v5：preview 交互不抢焦点三连修**——begin 记录前台 hwnd 为注入目标（`FocusBackend` 抽象），Sending 前先 `SetForegroundWindow` 恢复焦点（AttachThreadInput 兜底）；toggle 热键在 Preview 态路由为 `confirm_send`；Esc 临时注册从仅 Listening 扩展到全部非 Idle 态；前端 overlay 显隐调用移除（后端 SW_SHOWNA 全权驱动） | 用户实测：preview 按 Enter 键去了记事本（焦点未跟随悬浮条）、点「发送」按钮激活 overlay 导致文字注入给 overlay 自己 |
 | 2026-07-24 | **v5：引入 tauri-plugin-single-instance；热键注册失败状态经 `get_hotkey_status` 暴露到设置页** | 用户实测：`pnpm tauri dev` 重启时旧实例未退出 → 热键 already registered / WebView2 类注册冲突 |
 | 2026-07-24 | **v5：设置页权限分区「以管理员身份重启」未提权时常驻显示；权限状态 3s 轮询（页面隐藏暂停）；`runAsAdminOnStart` 勾选后提示「下次启动生效」+ 立即重启链接；`get_elevation_status` 链路修复**（profile 文件缺失回退内置 profile，纯逻辑 `resolve_active_game_pid` 可单测） | 用户实测：重启入口只在横幅条件触发时出现；勾选自动提权无反馈；LOL 运行时 activeGameElevated 仍可能返回 null |
