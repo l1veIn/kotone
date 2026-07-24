@@ -27,6 +27,11 @@
 | `cbcd246` | Windows 注入（SendInput + KEYEVENTF_UNICODE，对齐 LeagueAkari）、error 重试、后端驱动窗口显隐、关窗不退出 | cargo test 49/49；记事本中文注入 UIA 逐字校验 PASS |
 | `d6d78ea` | UIPI 提权方案：权限检测（TokenElevation）、管理员重启（runas + 防循环）、设置页权限分区、InjectError.needsElevation | cargo test 55/55；对真实 LOL 进程检测实证 Some(true) |
 | `05a3955` | 用户实测 bug 修复：preview 焦点恢复（目标窗口记忆 + 发送前还原）、preview 热键确认、单实例锁、设置页权限区常驻重启按钮 | cargo test 61/61 |
+| `cd1f12c` | WH_KEYBOARD_LL 热键后端（游戏前台热键修复） | cargo test 73/73；LOL 真机通过 |
+| `a7f4a23` / `87b58f5` | workspace 五 crate 拆分（ADR-001）+ apps/crates 归位（ADR-002） | cargo test 73/73；cli listen 无 GUI 实证 |
+| `d5c6f3c` | 引擎 #1 whisper.cpp sidecar + 下载器（ADR-003） | E2E 转写成功（繁体，2.7s） |
+| `0f5fb3b` | 引擎 #2 sherpa-onnx 流式 Zipformer-zh（ADR-004） | partial 27ms、final <1ms、简体全对 |
+| `29fbd29` | eval 评测模块：录档/回放/标注/CER 报告（ADR-005） | 117 测试全绿；三引擎对比表实跑 |
 
 **已验证**：注入机制正确（记事本中文短句 4/4 逐字一致）；状态机全链路（cargo 集成测试）；前端各状态渲染（浏览器 demo + Tauri 内 error 态实测）。
 
@@ -156,13 +161,15 @@ enum SttEvent {
 
 | 引擎 ID | 接入方式 | 流式 | 状态 | 定位 |
 |---------|----------|------|------|------|
-| `mock-stream` | 内置 mock | ✓ | **已实现**（联调用，不进发布版或标注为调试） | 全链路联调 |
-| `whisper-cpp-sidecar` | sidecar 子进程（whisper-cli） | ✗（finalize-only） | 接口已注册，实现待做 | 闭环基线、离线兜底 |
-| `sherpa-onnx-zipformer-zh` | FFI（sherpa-onnx crate） | ✓ | 接口已注册，实现待做 | 中文流式主力候选 |
+| `mock-stream` | 内置 mock | ✓ | **已实现**（联调用） | 全链路联调 |
+| `whisper-cpp-sidecar` | sidecar 子进程（~/.kotone/bin 自管理） | ✗（finalize-only） | **已接入**（E2E：简体→繁体偏差，final 2.7s） | 离线兜底基线 |
+| `sherpa-onnx-zipformer-zh` | 官方 sherpa-onnx crate（feature `engine-sherpa`，默认关） | ✓ | **已接入**（E2E：首字 27ms、简体全对、热词生效） | **默认引擎头号候选** |
 | `whisper-cpp-ffi` | FFI（whisper-rs） | ✗ | Phase 2 | 降延迟的 whisper 路径 |
 | `sherpa-onnx-sensevoice` | FFI | ✗（快批式） | 候选池 | 中文高精度候选 |
 | `funasr-paraformer` | ONNX 本地服务 | ✓ | 候选池 | 中文工业级标杆 |
 | `cloud-asr` | HTTP/WebSocket | ✓ | 候选池（可选增强） | 精度上限参照系 |
+
+> v10：eval 对比实测（SAPI fixture「对面打野在下路」）：sherpa 首字 30ms / final 0ms / CER 0.000；whisper final 2651ms / CER 0.143（繁体）。whisper 繁体问题未修（prompt 引导无效，待简繁后处理或换模型）。sherpa 热词仅 modified_beam_search 支持（greedy 会崩，已恒用 beam search）。
 
 引擎通过 cargo feature 控制编译（如 `engine-sherpa`），未启用的引擎不进二进制，控制包体。
 
@@ -642,6 +649,7 @@ CI：GitHub Actions（Windows runner 为主）— fmt / clippy / cargo test（�
 | 2026-07-24 | **v7：MVP 注入链路全部真机验收通过**（用户手动实测）：A 记事本全链路、提权重启、LL 钩子游戏前台触发、**LOL 训练模式发送成功**。R-1/R-3/R-4/R-13 关闭 | 预研定义的最大风险（游戏注入）正式解除；剩余 MVP 缺口集中在真实 STT 引擎 |
 | 2026-07-24 | **v8：重构为 cargo workspace 五 crate**（core / stt / platform-windows / cli / tauri），开发叙事从业务里程碑切换为架构决策（ADR 起始于 docs/adr/001） | 拆分判据：独立消费者、重依赖编译隔离、变更节奏。core 成为无 Tauri 可跑的独立包（kotone-cli listen 实证）；被否决项：每引擎一 crate、游戏 provider crate（数据驱动差异） |
 | 2026-07-25 | **v9：归位为 `apps/` + `crates/` 产品 monorepo**（ADR-002）；whisper-cli 二进制管理从「Tauri sidecar」改为「kotone-stt 自管理（~/.kotone/bin/）」 | 根目录双重身份（JS+Rust）是脚手架与拆分的两次战术妥协叠加；Tauri sidecar 机制对 CLI 不可用，违背「core 无 Tauri 可跑」原则 |
+| 2026-07-25 | **v10：双引擎接入 + eval 模块落地**（ADR-003/004/005）。sherpa 绑定选官方 crate（社区 sherpa-rs 已被上游收编弃用）；`engine-sherpa` feature 默认关（原生库 ~50MB）；sherpa 热词恒用 modified_beam_search（greedy 遇热词崩进程）；whisper 繁体问题挂起 | eval 实跑数据 sherpa 全面占优（首字 30ms/CER 0 vs whisper 2651ms/CER 0.143）；默认引擎正式决策仍待真人人声语料评测（Phase 1 末决策点） |
 | 2026-07-24 | **v5：preview 交互不抢焦点三连修**——begin 记录前台 hwnd 为注入目标（`FocusBackend` 抽象），Sending 前先 `SetForegroundWindow` 恢复焦点（AttachThreadInput 兜底）；toggle 热键在 Preview 态路由为 `confirm_send`；Esc 临时注册从仅 Listening 扩展到全部非 Idle 态；前端 overlay 显隐调用移除（后端 SW_SHOWNA 全权驱动） | 用户实测：preview 按 Enter 键去了记事本（焦点未跟随悬浮条）、点「发送」按钮激活 overlay 导致文字注入给 overlay 自己 |
 | 2026-07-24 | **v5：引入 tauri-plugin-single-instance；热键注册失败状态经 `get_hotkey_status` 暴露到设置页** | 用户实测：`pnpm tauri dev` 重启时旧实例未退出 → 热键 already registered / WebView2 类注册冲突 |
 | 2026-07-24 | **v5：设置页权限分区「以管理员身份重启」未提权时常驻显示；权限状态 3s 轮询（页面隐藏暂停）；`runAsAdminOnStart` 勾选后提示「下次启动生效」+ 立即重启链接；`get_elevation_status` 链路修复**（profile 文件缺失回退内置 profile，纯逻辑 `resolve_active_game_pid` 可单测） | 用户实测：重启入口只在横幅条件触发时出现；勾选自动提权无反馈；LOL 运行时 activeGameElevated 仍可能返回 null |
