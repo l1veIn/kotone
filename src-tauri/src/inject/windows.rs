@@ -11,11 +11,12 @@
 
 use std::time::Duration;
 
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
     TH32CS_SNAPPROCESS,
 };
+use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
     KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MAPVK_VK_TO_VSC, VIRTUAL_KEY, VK_BACK, VK_CONTROL,
@@ -23,9 +24,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_LEFT, VK_MENU, VK_RETURN, VK_RIGHT,
     VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, GetWindowThreadProcessId, IsWindow, SetForegroundWindow,
+};
 
-use super::{send_sequence, CancelToken, InjectError, Injector, SendOps};
+use super::{send_sequence, CancelToken, FocusBackend, InjectError, Injector, SendOps, TargetWindow};
 use crate::profile::GameProfile;
 
 /// LeagueAkari pressEnter 实测值：sendKey(down) → sleep(20) → sendKey(up)
@@ -337,6 +340,61 @@ pub fn process_name_from_pid(pid: u32) -> Option<String> {
         })();
         let _ = CloseHandle(snapshot);
         result
+    }
+}
+
+// ---------- 原语 4：目标窗口记忆与焦点恢复 ----------
+
+/// 生产焦点后端：GetForegroundWindow 捕获 + SetForegroundWindow 恢复
+/// （失败时 AttachThreadInput 附加到前台/目标线程后重试）。
+pub struct WinFocusBackend;
+
+impl FocusBackend for WinFocusBackend {
+    fn foreground_window(&self) -> Option<TargetWindow> {
+        let hwnd = unsafe { GetForegroundWindow() };
+        if hwnd.0.is_null() {
+            None
+        } else {
+            Some(TargetWindow(hwnd.0 as usize))
+        }
+    }
+
+    fn restore(&self, target: TargetWindow) -> bool {
+        let hwnd = HWND(target.0 as *mut std::ffi::c_void);
+        unsafe {
+            // 窗口已关闭/失效：交由调用方走原前台校验逻辑报错
+            if !IsWindow(Some(hwnd)).as_bool() {
+                return false;
+            }
+            if SetForegroundWindow(hwnd).as_bool() {
+                return true;
+            }
+            // SetForegroundWindow 受限（焦点归属别的线程）：把本线程输入队列
+            // 附加到前台线程与目标线程，取得前台切换权限后重试
+            let cur = GetCurrentThreadId();
+            let fg = GetForegroundWindow();
+            let fg_tid = if fg.0.is_null() {
+                0
+            } else {
+                GetWindowThreadProcessId(fg, None)
+            };
+            let target_tid = GetWindowThreadProcessId(hwnd, None);
+            let attached_fg =
+                fg_tid != 0 && fg_tid != cur && AttachThreadInput(cur, fg_tid, true).as_bool();
+            let attached_target = target_tid != 0
+                && target_tid != cur
+                && AttachThreadInput(cur, target_tid, true).as_bool();
+
+            let ok = SetForegroundWindow(hwnd).as_bool();
+
+            if attached_fg {
+                let _ = AttachThreadInput(cur, fg_tid, false);
+            }
+            if attached_target {
+                let _ = AttachThreadInput(cur, target_tid, false);
+            }
+            ok
+        }
     }
 }
 

@@ -24,11 +24,25 @@ pub enum HotkeyMode {
     Toggle,
 }
 
+/// 热键注册状态（设置页展示用）：注册失败时暴露错误原因
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HotkeyStatus {
+    /// 当前是否处于已注册状态
+    pub registered: bool,
+    /// 当前注册的热键（未注册为 null）
+    pub key: Option<String>,
+    /// 最近一次注册失败信息（成功后清空）
+    pub error: Option<String>,
+}
+
 /// 热键管理器：记录当前注册内容，支持运行时改键/改模式
 pub struct HotkeyManager {
     current: Mutex<Option<Shortcut>>,
     /// 会话激活期间临时注册的 Esc 取消键
     cancel: Mutex<Option<Shortcut>>,
+    /// 最近一次注册失败信息（设置页提示「可能被其他程序/实例占用」）
+    last_error: Mutex<Option<String>>,
 }
 
 impl Default for HotkeyManager {
@@ -42,6 +56,7 @@ impl HotkeyManager {
         Self {
             current: Mutex::new(None),
             cancel: Mutex::new(None),
+            last_error: Mutex::new(None),
         }
     }
 
@@ -52,29 +67,37 @@ impl HotkeyManager {
             .parse()
             .map_err(|e| format!("无法解析热键「{key}」: {e}"))?;
 
-        app.global_shortcut()
-            .on_shortcut(shortcut.clone(), move |app, _sc, event| {
-                let orch = app.state::<SharedState>().orchestrator.clone();
-                match mode {
-                    HotkeyMode::Hold => {
-                        let pressed = event.state() == ShortcutState::Pressed;
+        let registered = app.global_shortcut().on_shortcut(shortcut.clone(), move |app, _sc, event| {
+            let orch = app.state::<SharedState>().orchestrator.clone();
+            match mode {
+                HotkeyMode::Hold => {
+                    let pressed = event.state() == ShortcutState::Pressed;
+                    tauri::async_runtime::spawn(async move {
+                        orch.on_hotkey_hold(pressed).await;
+                    });
+                }
+                HotkeyMode::Toggle => {
+                    if event.state() == ShortcutState::Pressed {
                         tauri::async_runtime::spawn(async move {
-                            orch.on_hotkey_hold(pressed).await;
+                            orch.on_hotkey_toggle().await;
                         });
                     }
-                    HotkeyMode::Toggle => {
-                        if event.state() == ShortcutState::Pressed {
-                            tauri::async_runtime::spawn(async move {
-                                orch.on_hotkey_toggle().await;
-                            });
-                        }
-                    }
                 }
-            })
-            .map_err(|e| format!("注册热键「{key}」失败: {e}（键位可能被其他程序占用）"))?;
+            }
+        });
 
-        *self.current.lock().unwrap() = Some(shortcut);
-        Ok(())
+        match registered {
+            Ok(()) => {
+                *self.current.lock().unwrap() = Some(shortcut);
+                *self.last_error.lock().unwrap() = None;
+                Ok(())
+            }
+            Err(e) => {
+                let msg = format!("注册热键「{key}」失败: {e}（键位可能被其他程序或其他 Kotone 实例占用）");
+                *self.last_error.lock().unwrap() = Some(msg.clone());
+                Err(msg)
+            }
+        }
     }
 
     /// 注销当前热键
@@ -128,6 +151,17 @@ impl HotkeyManager {
     #[allow(dead_code)]
     pub fn current_key(&self) -> Option<String> {
         self.current.lock().unwrap().as_ref().map(|s| s.to_string())
+    }
+
+    /// 注册状态快照（设置页热键分区展示注册失败原因）
+    pub fn status(&self) -> HotkeyStatus {
+        let current = self.current.lock().unwrap();
+        let error = self.last_error.lock().unwrap().clone();
+        HotkeyStatus {
+            registered: current.is_some(),
+            key: current.as_ref().map(|s| s.to_string()),
+            error,
+        }
     }
 }
 

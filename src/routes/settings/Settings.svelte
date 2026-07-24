@@ -14,12 +14,14 @@
     setSttEngine,
     listProfiles,
     getElevationStatus,
+    getHotkeyStatus,
     restartAsAdmin,
     type Settings,
     type AudioDevice,
     type EngineInfo,
     type GameProfile,
     type ElevationStatus,
+    type HotkeyStatus,
   } from "../../lib/ipc";
 
   let settings = $state<Settings | null>(null);
@@ -27,6 +29,7 @@
   let engines = $state<EngineInfo[]>([]);
   let profiles = $state<GameProfile[]>([]);
   let elevation = $state<ElevationStatus | null>(null);
+  let hotkeyStatus = $state<HotkeyStatus | null>(null);
   let restarting = $state(false);
 
   /** 热键编辑草稿（保存前不动后端） */
@@ -50,12 +53,13 @@
 
   onMount(async () => {
     try {
-      [settings, devices, engines, profiles, elevation] = await Promise.all([
+      [settings, devices, engines, profiles, elevation, hotkeyStatus] = await Promise.all([
         getSettings(),
         listAudioDevices(),
         listSttEngines(),
         listProfiles(),
         getElevationStatus(),
+        getHotkeyStatus(),
       ]);
       hotkeyDraft = settings.hotkey.key;
       hotkeyMode = settings.hotkey.mode;
@@ -64,6 +68,40 @@
     } finally {
       loading = false;
     }
+  });
+
+  /** 权限状态轮询：进页刷新一次 + 每 3s；页面隐藏时暂停，回到前台立即补一次 */
+  onMount(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const refresh = async () => {
+      try {
+        elevation = await getElevationStatus();
+      } catch {
+        /* 轮询失败不打扰用户，下轮再试 */
+      }
+    };
+    const start = () => {
+      if (timer === null) timer = setInterval(() => void refresh(), 3000);
+    };
+    const stop = () => {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    const onVisibility = () => {
+      if (document.hidden) stop();
+      else {
+        void refresh();
+        start();
+      }
+    };
+    start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   });
 
   /** UIPI：目标游戏提权且自身未提权 → 显示提权横幅 */
@@ -109,6 +147,13 @@
       toast(true, `热键已保存并生效：${settings.hotkey.key}（${settings.hotkey.mode}）`);
     } catch (e) {
       toast(false, `保存热键失败：${errText(e)}`);
+    } finally {
+      // 无论成败都刷新注册状态（失败原因展示在热键分区）
+      try {
+        hotkeyStatus = await getHotkeyStatus();
+      } catch {
+        /* 状态刷新失败不覆盖保存反馈 */
+      }
     }
   }
 
@@ -219,6 +264,21 @@
           </button>
           <span class="text-[11px] text-white/40">当前：{settings.hotkey.key}（{settings.hotkey.mode}）</span>
         </div>
+        {#if hotkeyStatus?.error}
+          <!-- 热键注册失败：典型原因是旧实例未退出或键位被其他程序占用 -->
+          <div class="mt-3 rounded-lg bg-kotone-pink/15 p-2.5 ring-1 ring-kotone-pink/50">
+            <p class="text-xs font-medium text-kotone-pink">
+              热键注册失败，可能被其他程序或其他 Kotone 实例占用
+            </p>
+            <p class="mt-0.5 text-[11px] break-all text-white/50">{hotkeyStatus.error}</p>
+            <button
+              class="mt-2 rounded-lg bg-kotone-pink/80 px-2.5 py-1 text-xs font-semibold text-white transition hover:brightness-110 active:scale-95"
+              onclick={() => void saveHotkey()}
+            >
+              重新注册
+            </button>
+          </div>
+        {/if}
       </section>
 
       <!-- 麦克风 -->
@@ -305,18 +365,25 @@
             <p class="mt-1 text-[11px] leading-relaxed text-white/60">
               Windows UIPI 会拦截低权限进程发往高权限游戏的模拟输入。重启后会弹出一次 UAC 确认。
             </p>
-            <button
-              class="mt-2.5 w-full rounded-lg bg-kotone-pink px-3 py-2 text-sm font-semibold text-white transition hover:brightness-110 active:scale-95 disabled:opacity-50"
-              disabled={restarting}
-              onclick={() => void onRestartAsAdmin()}
-            >
-              {restarting ? "正在重启…" : "以管理员身份重启"}
-            </button>
           </div>
-        {:else if elevation && !elevation.elevated}
-          <p class="mt-2 text-[11px] text-white/40">
-            当前为普通权限。若目标游戏以管理员运行，发送会被系统拦截，此处会提示提权。
-          </p>
+        {/if}
+
+        {#if elevation && !elevation.elevated}
+          <!-- 常驻入口：未提权时始终可手动管理员重启，不依赖上方横幅的检测条件 -->
+          <button
+            class="mt-3 w-full rounded-lg px-3 py-2 text-sm font-semibold transition active:scale-95 disabled:opacity-50 {needsElevation
+              ? 'bg-kotone-pink text-white hover:brightness-110'
+              : 'bg-white/10 text-white/80 hover:bg-white/20'}"
+            disabled={restarting}
+            onclick={() => void onRestartAsAdmin()}
+          >
+            {restarting ? "正在重启…" : "以管理员身份重启"}
+          </button>
+          {#if !needsElevation}
+            <p class="mt-2 text-[11px] text-white/40">
+              当前为普通权限。若目标游戏以管理员运行，发送会被系统拦截，此处会提示提权。
+            </p>
+          {/if}
         {/if}
 
         <label class="mt-4 flex cursor-pointer items-center justify-between">
@@ -336,6 +403,18 @@
             class="relative h-5 w-9 shrink-0 rounded-full bg-white/15 transition peer-checked:bg-kotone-cyan/70 after:absolute after:top-0.5 after:left-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:transition peer-checked:after:translate-x-4"
           ></span>
         </label>
+        {#if settings.runAsAdminOnStart && elevation && !elevation.elevated}
+          <p class="mt-2 text-[11px] text-white/45">
+            已开启，将在下次启动时生效 ·
+            <button
+              class="text-kotone-cyan underline underline-offset-2 transition hover:brightness-125 disabled:opacity-50"
+              disabled={restarting}
+              onclick={() => void onRestartAsAdmin()}
+            >
+              立即以管理员身份重启
+            </button>
+          </p>
+        {/if}
       </section>
 
       <!-- 发送行为与游戏 profile -->

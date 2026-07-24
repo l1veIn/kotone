@@ -73,6 +73,25 @@ pub trait Injector: Send + Sync {
     ) -> Result<(), InjectError>;
 }
 
+// ---------- 目标窗口记忆与焦点恢复（preview 发送不抢焦点的关键，§6） ----------
+
+/// 注入目标窗口：会话开始（进入 Listening）时的前台窗口。
+/// Windows 上承载 HWND 值；跨平台不透明封装，只作标识用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TargetWindow(pub usize);
+
+/// 前台窗口捕获 / 焦点恢复抽象：生产实现直调 Win32，单测注入 mock。
+///
+/// 背景：overlay 以 SW_SHOWNA 显示不抢焦点，preview 确认（热键或点击）时
+/// 键盘焦点可能在 overlay 或目标窗口两侧漂移；进入 Sending 前必须先把
+/// 焦点还给 begin 时记录的目标窗口，否则前台校验与注入都会打错目标。
+pub trait FocusBackend: Send + Sync {
+    /// 当前前台窗口（begin 时记录为注入目标）；无前台窗口返回 None
+    fn foreground_window(&self) -> Option<TargetWindow>;
+    /// 发送前把焦点还给目标窗口；false = 窗口已关闭/失效（交由原前台校验报错）
+    fn restore(&self, target: TargetWindow) -> bool;
+}
+
 /// 占位实现：什么都不做直接成功。非 Windows 平台兜底（Windows 上由 `WindowsInjector` 接管）。
 pub struct StubInjector;
 
@@ -197,7 +216,7 @@ mod windows_impl;
 #[cfg(windows)]
 pub use windows_impl::{
     find_pid_by_name, foreground_pid, foreground_process_name, is_process_foreground,
-    key_down_up, process_name_from_pid, send_unicode, WindowsInjector,
+    key_down_up, process_name_from_pid, send_unicode, WinFocusBackend, WindowsInjector,
 };
 
 #[cfg(not(windows))]
@@ -240,6 +259,18 @@ mod fallback {
 
     pub fn find_pid_by_name(_name: &str) -> Option<u32> {
         None
+    }
+
+    /// 非 Windows 兜底焦点后端：无法捕获/恢复，恒返回空
+    pub struct WinFocusBackend;
+
+    impl super::FocusBackend for WinFocusBackend {
+        fn foreground_window(&self) -> Option<super::TargetWindow> {
+            None
+        }
+        fn restore(&self, _target: super::TargetWindow) -> bool {
+            false
+        }
     }
 
     pub struct WindowsInjector;

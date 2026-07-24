@@ -1,7 +1,7 @@
 <script lang="ts">
   /*
    * 悬浮窗路由视图（index.html#/overlay）。
-   * 窗口初始 invisible；非 idle 状态自动弹出，回 idle 自动隐藏，
+   * 窗口初始 invisible；显隐由后端状态事件驱动（SW_SHOWNA 不抢焦点），
    * 实现「按下热键即弹出悬浮条」（docs/development.md §3.4、§3.6）。
    * 托盘「显示悬浮条」手动唤起时若处于 idle 会保持可见（仅状态迁移触发隐藏）。
    */
@@ -56,21 +56,13 @@
     };
   });
 
-  $effect(() => {
-    const state = $appState.state;
-    if (!isTauri) return;
-    void (async () => {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      const win = getCurrentWindow();
-      if (state === "idle") {
-        await win.hide();
-      } else {
-        // 只显示不抢焦点：录音时不打断游戏/当前输入，
-        // preview 编辑由用户点击文本框自然获得焦点
-        await win.show();
-      }
-    })();
-  });
+  /*
+   * 窗口显隐完全由后端 TauriEmitter 驱动（lib.rs）：
+   * 非 idle 状态用 SW_SHOWNA 显示（不抢焦点，焦点必须留在游戏/目标窗口，
+   * 否则注入前台校验会打错窗口），idle 时隐藏。
+   * 前端不再调用 win.show()：Tauri show() 走 SW_SHOW 会激活窗口抢焦点，
+   * 与「preview 交互不抢焦点」的设计冲突。
+   */
 </script>
 
 <div class="h-full">

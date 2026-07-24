@@ -18,8 +18,8 @@ use std::sync::{Arc, RwLock};
 use tauri::{AppHandle, Manager};
 
 use audio::AudioDevice;
-use hotkey::HotkeyManager;
-use inject::{InjectError, Injector, WindowsInjector};
+use hotkey::{HotkeyManager, HotkeyStatus};
+use inject::{InjectError, Injector, WinFocusBackend, WindowsInjector};
 use orchestrator::{Emitter, Orchestrator};
 use profile::GameProfile;
 use settings::Settings;
@@ -49,9 +49,10 @@ impl Emitter for TauriEmitter {
             let state = payload.get("state").and_then(|s| s.as_str()).unwrap_or("");
             #[cfg(debug_assertions)]
             eprintln!("[kotone state] {state} {payload}");
-            // 录音期间临时注册 Esc 全局取消键，会话结束注销
+            // 会话激活期间（含 Preview）临时注册 Esc 全局取消键，回 Idle 即注销。
+            // Preview 态同样需要 Esc：overlay 不抢焦点，Esc 是预览确认的主要键盘出口。
             if let Some(mgr) = self.app.try_state::<HotkeyManager>() {
-                mgr.set_cancel_enabled(&self.app, state == "listening");
+                mgr.set_cancel_enabled(&self.app, state != "idle" && !state.is_empty());
             }
             // 后端驱动 overlay 显隐
             if let Some(win) = self.app.get_webview_window("overlay") {
@@ -220,20 +221,36 @@ pub struct ElevationStatus {
 fn get_elevation_status(state: tauri::State<SharedState>) -> ElevationStatus {
     let elevated = elevation::is_elevated();
     // 激活 profile 的进程名 → 运行中的 pid → TokenElevation
+    // 链路修复（resolve_active_game_pid）：profile 文件缺失时回退内置 profile，
+    // 可用列表 = 磁盘 profile + 未覆盖的内置 profile
     let active_game_elevated = {
         let guard = state.settings.read().unwrap();
-        guard
-            .active_profile_id
-            .as_deref()
-            .and_then(profile::get)
-            .filter(|p| !p.process_names.is_empty())
-            .and_then(|p| p.process_names.iter().find_map(|n| inject::find_pid_by_name(n)))
-            .and_then(elevation::is_process_elevated)
+        let mut available = profile::list();
+        for b in [
+            GameProfile::builtin_lol(),
+            GameProfile::builtin_generic(),
+        ] {
+            if !available.iter().any(|p| p.id == b.id) {
+                available.push(b);
+            }
+        }
+        elevation::resolve_active_game_pid(
+            guard.active_profile_id.as_deref(),
+            &available,
+            &mut |name| inject::find_pid_by_name(name),
+        )
+        .and_then(elevation::is_process_elevated)
     };
     ElevationStatus {
         elevated,
         active_game_elevated,
     }
+}
+
+/// 热键注册状态：设置页热键分区展示「注册失败，可能被其他程序/其他 Kotone 实例占用」
+#[tauri::command]
+fn get_hotkey_status(app: AppHandle) -> HotkeyStatus {
+    app.state::<HotkeyManager>().status()
 }
 
 /// 一键管理员重启：ShellExecuteExW "runas" 拉起新进程后退出当前进程。
@@ -315,6 +332,15 @@ fn simulate_send(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 单实例：第二实例启动时唤起已有实例的设置窗口并退出自身，
+        // 避免旧进程未退出导致热键「already registered」与 WebView2 类注册冲突
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // 关闭按钮不退出应用：main / overlay 窗口 CloseRequested 一律转 hide（托盘常驻）；
         // 仅托盘菜单「退出」（app.exit）真正结束进程。
@@ -359,6 +385,7 @@ pub fn run() {
                 app: app.handle().clone(),
             });
             let injector: Arc<dyn Injector> = Arc::new(WindowsInjector);
+            let focus: Arc<dyn inject::FocusBackend> = Arc::new(WinFocusBackend);
             let audio_backend: Arc<dyn audio::AudioBackend> = Arc::new(audio::CpalBackend);
 
             let orchestrator = Arc::new(Orchestrator::new(
@@ -366,6 +393,7 @@ pub fn run() {
                 engines.clone(),
                 audio_backend,
                 injector.clone(),
+                focus,
                 emitter,
             ));
 
@@ -402,6 +430,7 @@ pub fn run() {
             save_profile,
             detect_foreground_game,
             get_elevation_status,
+            get_hotkey_status,
             restart_as_admin,
             list_models,
             download_model,

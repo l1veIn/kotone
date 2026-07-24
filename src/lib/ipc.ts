@@ -94,6 +94,16 @@ export interface ElevationStatus {
   activeGameElevated: boolean | null;
 }
 
+/** get_hotkey_status 返回值：热键注册状态（多实例/占用冲突诊断） */
+export interface HotkeyStatus {
+  /** 当前是否处于已注册状态 */
+  registered: boolean;
+  /** 当前注册的热键；未注册为 null */
+  key: string | null;
+  /** 最近一次注册失败信息（成功后清空） */
+  error: string | null;
+}
+
 // ================================================================
 // 浏览器 mock：内存态，模拟后端行为（仅 dev:web 使用）
 // ================================================================
@@ -311,4 +321,10 @@ export async function restartAsAdmin(): Promise<void> {
     return;
   }
   return invoke<void>("restart_as_admin");
+}
+
+/** 热键注册状态（registered/key/error），设置页热键分区展示占用冲突 */
+export async function getHotkeyStatus(): Promise<HotkeyStatus> {
+  if (!isTauri) return { registered: true, key: mock.settings.hotkey.key, error: null };
+  return invoke<HotkeyStatus>("get_hotkey_status");
 }

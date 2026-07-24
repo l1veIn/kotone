@@ -50,6 +50,32 @@ pub fn should_auto_elevate(
     run_as_admin_on_start && !elevated && !retry_marker_present
 }
 
+/// 「激活 profile → 目标游戏 pid」纯逻辑链路（进程枚举注入，可单测）。
+///
+/// 断链修复：activeProfileId 指向的 profile 文件缺失/损坏时回退同 id 的内置
+/// profile，不再因单点文件问题让 get_elevation_status 静默返回 null。
+/// generic（无进程名）/ 未指定 profile / 进程未运行 → None（无法判断，不误报）。
+pub fn resolve_active_game_pid(
+    active_profile_id: Option<&str>,
+    available: &[crate::profile::GameProfile],
+    find_pid: &mut dyn FnMut(&str) -> Option<u32>,
+) -> Option<u32> {
+    let id = active_profile_id?;
+    let profile = available
+        .iter()
+        .find(|p| p.id == id)
+        .cloned()
+        .or_else(|| match id {
+            "lol" => Some(crate::profile::GameProfile::builtin_lol()),
+            "generic" => Some(crate::profile::GameProfile::builtin_generic()),
+            _ => None,
+        })?;
+    if profile.process_names.is_empty() {
+        return None;
+    }
+    profile.process_names.iter().find_map(|n| find_pid(n))
+}
+
 /// 当前进程命令行是否带有 runas 重启标记
 pub fn retry_marker_present() -> bool {
     std::env::args().any(|a| a == ELEVATED_RETRY_ARG)
@@ -273,6 +299,47 @@ mod tests {
         assert!(!should_auto_elevate(true, true, true));
         // 防循环：runas 子进程仍未提权（用户取消 UAC）→ 本次会话放弃
         assert!(!should_auto_elevate(true, false, true));
+    }
+
+    #[test]
+    fn resolve_active_game_pid_chain() {
+        use crate::profile::GameProfile;
+        let available = vec![GameProfile::builtin_lol(), GameProfile::builtin_generic()];
+
+        // 命中：激活 lol 且进程在运行（进程枚举 mock 大小写不敏感）
+        let pid = resolve_active_game_pid(Some("lol"), &available, &mut |n| {
+            if n.eq_ignore_ascii_case("league of legends.exe") {
+                Some(42)
+            } else {
+                None
+            }
+        });
+        assert_eq!(pid, Some(42));
+
+        // profile 文件缺失（available 为空）→ 回退内置 lol，链路不断
+        let pid = resolve_active_game_pid(Some("lol"), &[], &mut |_| Some(7));
+        assert_eq!(pid, Some(7));
+
+        // 进程未运行 → None（无法判断，不误报）
+        assert_eq!(
+            resolve_active_game_pid(Some("lol"), &available, &mut |_| None),
+            None
+        );
+        // 未指定 profile → None
+        assert_eq!(
+            resolve_active_game_pid(None, &available, &mut |_| Some(1)),
+            None
+        );
+        // generic 无进程名 → None
+        assert_eq!(
+            resolve_active_game_pid(Some("generic"), &available, &mut |_| Some(1)),
+            None
+        );
+        // 未知 profile id（磁盘与内置都没有）→ None
+        assert_eq!(
+            resolve_active_game_pid(Some("ghost"), &available, &mut |_| Some(1)),
+            None
+        );
     }
 
     #[cfg(windows)]

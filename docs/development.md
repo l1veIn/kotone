@@ -624,6 +624,9 @@ CI：GitHub Actions（Windows runner 为主）— fmt / clippy / cargo test（�
 | 2026-07-23 | **v3：风险登记新增 R-1（UIPI 提权，高）与 R-4（麦克风隐私封锁，中）；R-3 降级** | 首轮实测新发现；注入机制风险下降，权限问题成为 LOL 真机验收的前置阻塞 |
 | 2026-07-23 | **v4：提权方案定为「asInvoker + 运行时检测 + 一键管理员重启 + runAsAdminOnStart 选项」，不用 requireAdministrator 常驻清单**（R-1 原缓解方案之一） | 常驻提权每次启动弹 UAC，对麦克风工具过度打扰；检测驱动按需提权体验更好，且检测链路对真实 LOL 进程已实证 |
 | 2026-07-23 | **v4：`InjectError` 增加 `needsElevation: bool` 字段；`detect_foreground_game` 返回附带 `targetElevated`** | 前端可据此显示提权引导，而非解析错误文案 |
+| 2026-07-24 | **v5：preview 交互不抢焦点三连修**——begin 记录前台 hwnd 为注入目标（`FocusBackend` 抽象），Sending 前先 `SetForegroundWindow` 恢复焦点（AttachThreadInput 兜底）；toggle 热键在 Preview 态路由为 `confirm_send`；Esc 临时注册从仅 Listening 扩展到全部非 Idle 态；前端 overlay 显隐调用移除（后端 SW_SHOWNA 全权驱动） | 用户实测：preview 按 Enter 键去了记事本（焦点未跟随悬浮条）、点「发送」按钮激活 overlay 导致文字注入给 overlay 自己 |
+| 2026-07-24 | **v5：引入 tauri-plugin-single-instance；热键注册失败状态经 `get_hotkey_status` 暴露到设置页** | 用户实测：`pnpm tauri dev` 重启时旧实例未退出 → 热键 already registered / WebView2 类注册冲突 |
+| 2026-07-24 | **v5：设置页权限分区「以管理员身份重启」未提权时常驻显示；权限状态 3s 轮询（页面隐藏暂停）；`runAsAdminOnStart` 勾选后提示「下次启动生效」+ 立即重启链接；`get_elevation_status` 链路修复**（profile 文件缺失回退内置 profile，纯逻辑 `resolve_active_game_pid` 可单测） | 用户实测：重启入口只在横幅条件触发时出现；勾选自动提权无反馈；LOL 运行时 activeGameElevated 仍可能返回 null |
 
 ---
 

@@ -11,8 +11,9 @@
    *   error        错误消息 + 重试 / 关闭
    */
   import { fade, fly } from "svelte/transition";
+  import { onMount } from "svelte";
   import { appState } from "../stores/state";
-  import { confirmSend, cancelSession, simulateSend } from "../ipc";
+  import { confirmSend, cancelSession, simulateSend, getSettings } from "../ipc";
   import Waveform from "./Waveform.svelte";
 
   /** 各状态指示点颜色 */
@@ -42,6 +43,17 @@
   let actionError = $state("");
   /** 重试后的本地提示 */
   let actionHint = $state("");
+  /** preview 提示中的热键名（动态读配置，读取失败回退 F8） */
+  let hotkeyLabel = $state("F8");
+
+  onMount(async () => {
+    try {
+      const s = await getSettings();
+      hotkeyLabel = s.hotkey.key;
+    } catch {
+      /* 读取失败保留默认值 */
+    }
+  });
 
   let textScrollEl: HTMLDivElement | undefined = $state();
 
@@ -153,7 +165,7 @@
         {/if}
       </div>
     {:else if $appState.state === "preview"}
-      <!-- 预览：可编辑 + 确认/取消 -->
+      <!-- 预览：可编辑 + 确认/取消。悬浮条不抢焦点，主交互是热键确认 -->
       <div class="flex min-w-0 flex-1 flex-col gap-1.5" in:fade={{ duration: 150 }}>
         <textarea
           bind:value={editText}
@@ -170,6 +182,9 @@
             }
           }}
         ></textarea>
+        <p class="text-[11px] leading-tight text-white/45">
+          按 {hotkeyLabel} 发送 / Esc 取消 · 点击文本框可编辑后 Enter 发送
+        </p>
         {#if actionError}
           <p class="truncate text-[11px] text-kotone-pink">{actionError}</p>
         {/if}

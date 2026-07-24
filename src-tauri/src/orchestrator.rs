@@ -17,7 +17,7 @@ use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::audio::{AudioBackend, AudioHandle};
-use crate::inject::{CancelToken, Injector};
+use crate::inject::{CancelToken, FocusBackend, Injector, TargetWindow};
 use crate::profile::{self, GameProfile};
 use crate::settings::Settings;
 use crate::stt::{EngineRegistry, SessionConfig, SttEvent, SttSession};
@@ -26,6 +26,8 @@ use crate::stt::{EngineRegistry, SessionConfig, SttEvent, SttSession};
 const DEFAULT_FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Success/Error toast 停留时长，之后自动回 Idle
 const DEFAULT_TOAST_DWELL: Duration = Duration::from_millis(1500);
+/// 发送前焦点恢复后的等待：给系统完成前台切换与目标窗口激活的时间
+const DEFAULT_FOCUS_RESTORE_DELAY: Duration = Duration::from_millis(30);
 
 /// 核心状态机（§4.1）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -64,6 +66,8 @@ struct Inner {
     preview_text: Option<String>,
     /// Sending 状态的取消令牌
     send_cancel: Option<CancelToken>,
+    /// begin 时记录的前台窗口 = 注入目标（发送前把焦点还给它）
+    target_window: Option<TargetWindow>,
 }
 
 pub struct Orchestrator {
@@ -74,11 +78,14 @@ pub struct Orchestrator {
     engines: Arc<EngineRegistry>,
     audio: Arc<dyn AudioBackend>,
     injector: Arc<dyn Injector>,
+    focus: Arc<dyn FocusBackend>,
     emitter: Arc<dyn Emitter>,
     /// finalize 超时（测试可调小）
     pub finalize_timeout: Duration,
     /// Success/Error 停留时长（测试可设为 0）
     pub toast_dwell: Duration,
+    /// 发送前焦点恢复后的等待（测试可设为 0）
+    pub focus_restore_delay: Duration,
 }
 
 impl Orchestrator {
@@ -87,6 +94,7 @@ impl Orchestrator {
         engines: Arc<EngineRegistry>,
         audio: Arc<dyn AudioBackend>,
         injector: Arc<dyn Injector>,
+        focus: Arc<dyn FocusBackend>,
         emitter: Arc<dyn Emitter>,
     ) -> Self {
         Self {
@@ -96,15 +104,18 @@ impl Orchestrator {
                 active: None,
                 preview_text: None,
                 send_cancel: None,
+                target_window: None,
             })),
             op: tokio::sync::Mutex::new(()),
             settings,
             engines,
             audio,
             injector,
+            focus,
             emitter,
             finalize_timeout: DEFAULT_FINALIZE_TIMEOUT,
             toast_dwell: DEFAULT_TOAST_DWELL,
+            focus_restore_delay: DEFAULT_FOCUS_RESTORE_DELAY,
         }
     }
 
@@ -114,7 +125,8 @@ impl Orchestrator {
 
     // ---------- 热键入口（hotkey 模块调用） ----------
 
-    /// toggle 模式：按一下开始、再按结束；转写/发送中再按 = 中止（§4 设计要点 4）
+    /// toggle 模式：按一下开始、再按结束；转写/发送中再按 = 中止（§4 设计要点 4）。
+    /// Preview 态再按 = 确认发送当前文本（游戏场景主交互：全程不碰鼠标、不抢焦点）。
     pub async fn on_hotkey_toggle(&self) {
         match self.state() {
             OrchestratorState::Idle => {
@@ -123,14 +135,20 @@ impl Orchestrator {
             OrchestratorState::Listening => {
                 let _ = self.end().await;
             }
+            OrchestratorState::Preview => {
+                let _ = self.confirm_send(None).await;
+            }
             _ => self.cancel().await,
         }
     }
 
-    /// hold 模式：按下开始、松开结束
+    /// hold 模式：按下开始、松开结束。
+    /// 非 Idle 态的按下事件忽略（避免 begin 失败的 Error toast 冲掉预览文本）。
     pub async fn on_hotkey_hold(&self, pressed: bool) {
         if pressed {
-            let _ = self.begin().await;
+            if self.state() == OrchestratorState::Idle {
+                let _ = self.begin().await;
+            }
         } else if self.state() == OrchestratorState::Listening {
             let _ = self.end().await;
         }
@@ -256,6 +274,9 @@ impl Orchestrator {
         inner.gen += 1;
         inner.state = OrchestratorState::Listening;
         inner.preview_text = None;
+        // 目标窗口记忆：用户按下热键说话前所在的前台窗口 = 注入目标，
+        // 发送前（do_send）会把焦点还给它，避免 preview 交互抢焦点导致注入打错窗口
+        inner.target_window = self.focus.foreground_window();
         inner.active = Some(ActiveSession {
             stop_tx: Some(stop_tx),
             session_rx: Some(session_rx),
@@ -410,7 +431,7 @@ impl Orchestrator {
 
     /// Sending → Success/Error（§6 发送时序下半段；inject 实现负责按键细节）
     async fn do_send(&self, text: String, gen: u64) {
-        let (profile, token) = {
+        let (profile, token, target) = {
             let _op = self.op.lock().await;
             let mut inner = self.inner.lock().unwrap();
             if inner.gen != gen {
@@ -419,6 +440,7 @@ impl Orchestrator {
             inner.state = OrchestratorState::Sending;
             let token = CancelToken::default();
             inner.send_cancel = Some(token.clone());
+            let target = inner.target_window;
             drop(inner);
             self.emit_state(OrchestratorState::Sending, Some(json!({ "text": text })));
             let settings = self.settings.read().unwrap().clone();
@@ -427,8 +449,21 @@ impl Orchestrator {
                 .as_deref()
                 .and_then(profile::get)
                 .unwrap_or_else(GameProfile::builtin_generic);
-            (profile, token)
+            (profile, token, target)
         };
+
+        // 焦点恢复：preview 交互（点击悬浮条/热键确认）可能已把焦点带离目标窗口，
+        // 先把焦点还给 begin 时记录的注入目标，再交由注入器做前台校验与注入。
+        // 恢复失败（窗口已关闭）不致命：原前台校验会给出「游戏不在前台」的明确报错。
+        if let Some(t) = target {
+            let focus = self.focus.clone();
+            let restored = tokio::task::spawn_blocking(move || focus.restore(t))
+                .await
+                .unwrap_or(false);
+            if restored && self.focus_restore_delay > Duration::ZERO {
+                tokio::time::sleep(self.focus_restore_delay).await;
+            }
+        }
 
         let injector = self.injector.clone();
         let send_text = text.clone();
@@ -649,6 +684,56 @@ mod tests {
         }
     }
 
+    /// mock 焦点后端：记录 begin 捕获与发送前恢复调用；restore_ok 控制恢复成败
+    struct MockFocusBackend {
+        /// 操作流水（"capture" / "restore:<hwnd>"），与 LoggingInjector 共享以断言顺序
+        log: Arc<Mutex<Vec<String>>>,
+        /// 模拟的前台窗口
+        foreground: TargetWindow,
+        restore_ok: bool,
+    }
+
+    impl MockFocusBackend {
+        fn new(log: Arc<Mutex<Vec<String>>>, foreground: usize, restore_ok: bool) -> Self {
+            Self {
+                log,
+                foreground: TargetWindow(foreground),
+                restore_ok,
+            }
+        }
+    }
+
+    impl FocusBackend for MockFocusBackend {
+        fn foreground_window(&self) -> Option<TargetWindow> {
+            self.log.lock().unwrap().push("capture".into());
+            Some(self.foreground)
+        }
+        fn restore(&self, target: TargetWindow) -> bool {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("restore:{}", target.0));
+            self.restore_ok
+        }
+    }
+
+    /// 发送时同步记录操作流水的注入器（验证「先恢复焦点、后注入」顺序）
+    struct LoggingInjector {
+        log: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl Injector for LoggingInjector {
+        fn send(
+            &self,
+            text: &str,
+            _profile: &GameProfile,
+            _cancel: CancelToken,
+        ) -> Result<(), InjectError> {
+            self.log.lock().unwrap().push(format!("send:{text}"));
+            Ok(())
+        }
+    }
+
     fn make_orchestrator(
         auto_send: bool,
     ) -> (Arc<Orchestrator>, Arc<VecEmitter>, Arc<Mutex<Vec<String>>>) {
@@ -662,6 +747,19 @@ mod tests {
         auto_send: bool,
         injector: Arc<dyn Injector>,
     ) -> (Arc<Orchestrator>, Arc<VecEmitter>) {
+        let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(
+            Arc::new(Mutex::new(Vec::new())),
+            42,
+            true,
+        ));
+        make_orchestrator_full(auto_send, injector, focus)
+    }
+
+    fn make_orchestrator_full(
+        auto_send: bool,
+        injector: Arc<dyn Injector>,
+        focus: Arc<dyn FocusBackend>,
+    ) -> (Arc<Orchestrator>, Arc<VecEmitter>) {
         let mut settings = Settings::default();
         settings.stt_engine = "mock-stream".into();
         settings.auto_send = auto_send;
@@ -674,10 +772,12 @@ mod tests {
             engines,
             Arc::new(MockAudioBackend),
             injector,
+            focus,
             emitter.clone(),
         );
         orch.toast_dwell = Duration::from_millis(10);
         orch.finalize_timeout = Duration::from_secs(2);
+        orch.focus_restore_delay = Duration::ZERO;
         (Arc::new(orch), emitter)
     }
 
@@ -910,5 +1010,135 @@ mod tests {
         orch.cancel().await;
         assert_eq!(orch.state(), OrchestratorState::Idle);
         assert!(orch.confirm_send(None).await.is_err(), "取消后不可再重试");
+    }
+
+    /// 目标窗口记忆与恢复：begin 捕获前台 hwnd，do_send 先恢复焦点再注入
+    #[tokio::test]
+    async fn target_window_captured_on_begin_and_restored_before_send() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let focus: Arc<dyn FocusBackend> =
+            Arc::new(MockFocusBackend::new(log.clone(), 0xBEEF, true));
+        let injector: Arc<dyn Injector> = Arc::new(LoggingInjector { log: log.clone() });
+        let (orch, _emitter) = make_orchestrator_full(false, injector, focus);
+
+        orch.begin().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        orch.end().await.unwrap();
+        assert_eq!(orch.state(), OrchestratorState::Preview);
+        orch.confirm_send(None).await.unwrap();
+        assert_eq!(orch.state(), OrchestratorState::Success);
+
+        let ops = log.lock().unwrap().clone();
+        assert_eq!(ops.first().map(String::as_str), Some("capture"), "begin 应捕获前台窗口");
+        let restore_pos = ops.iter().position(|s| s == "restore:48879"); // 0xBEEF
+        let send_pos = ops.iter().position(|s| s.starts_with("send:"));
+        assert!(restore_pos.is_some(), "发送前应恢复记录的 hwnd: {ops:?}");
+        assert!(
+            restore_pos.unwrap() < send_pos.unwrap(),
+            "必须先恢复焦点再注入: {ops:?}"
+        );
+    }
+
+    /// 焦点恢复失败（窗口已关闭）不阻断流程：注入器仍被调用，由原前台校验决定成败
+    #[tokio::test]
+    async fn send_proceeds_when_focus_restore_fails() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(log.clone(), 1, false));
+        let injector: Arc<dyn Injector> = Arc::new(LoggingInjector { log: log.clone() });
+        let (orch, _emitter) = make_orchestrator_full(false, injector, focus);
+
+        orch.begin().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        orch.end().await.unwrap();
+        orch.confirm_send(None).await.unwrap();
+
+        let ops = log.lock().unwrap().clone();
+        assert!(ops.contains(&"restore:1".to_string()));
+        assert!(
+            ops.iter().any(|s| s.starts_with("send:")),
+            "恢复失败也应继续走注入（由前台校验报错）: {ops:?}"
+        );
+    }
+
+    /// preview 热键确认：toggle 模式下 Preview 态再按热键 = 确认发送（不取消会话）
+    #[tokio::test]
+    async fn hotkey_toggle_in_preview_confirms_send() {
+        let (orch, _emitter, sent) = make_orchestrator(false);
+        orch.begin().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        orch.on_hotkey_toggle().await; // Listening → Transcribing → Preview
+        assert_eq!(orch.state(), OrchestratorState::Preview);
+
+        orch.on_hotkey_toggle().await; // Preview → 确认发送
+        assert_eq!(orch.state(), OrchestratorState::Success, "Preview 态热键应确认发送而非取消");
+        assert_eq!(
+            sent.lock().unwrap().as_slice(),
+            &["对面打野在下路".to_string()]
+        );
+    }
+
+    /// toggle 模式：Sending 态再按热键仍是取消（不受 preview→confirm 路由影响）
+    #[tokio::test]
+    async fn hotkey_toggle_during_sending_cancels() {
+        /// 慢注入器：~500ms，期间可被取消令牌中断
+        struct SlowInjector;
+        impl Injector for SlowInjector {
+            fn send(
+                &self,
+                _text: &str,
+                _profile: &GameProfile,
+                cancel: CancelToken,
+            ) -> Result<(), InjectError> {
+                for _ in 0..50 {
+                    if cancel.is_cancelled() {
+                        return Err(InjectError::new("发送已取消"));
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Ok(())
+            }
+        }
+
+        let (orch, _emitter) =
+            make_orchestrator_with(false, Arc::new(SlowInjector));
+        orch.begin().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        orch.end().await.unwrap();
+        assert_eq!(orch.state(), OrchestratorState::Preview);
+
+        // 后台确认发送，等进入 Sending 后按热键取消
+        let orch2 = orch.clone();
+        let handle = tokio::spawn(async move { orch2.confirm_send(None).await });
+        for _ in 0..200 {
+            if orch.state() == OrchestratorState::Sending {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(orch.state(), OrchestratorState::Sending);
+
+        orch.on_hotkey_toggle().await;
+        assert_eq!(orch.state(), OrchestratorState::Idle, "Sending 态热键应取消");
+        let _ = handle.await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(orch.state(), OrchestratorState::Idle, "取消后不应被过期结果改写");
+    }
+
+    /// hold 模式：非 Idle 态的按下事件忽略（不弹错误 toast 冲掉预览文本）
+    #[tokio::test]
+    async fn hotkey_hold_press_in_preview_is_ignored() {
+        let (orch, _emitter, sent) = make_orchestrator(false);
+        orch.begin().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        orch.end().await.unwrap();
+        assert_eq!(orch.state(), OrchestratorState::Preview);
+
+        orch.on_hotkey_hold(true).await;
+        assert_eq!(orch.state(), OrchestratorState::Preview, "Preview 态按下事件应被忽略");
+        assert!(sent.lock().unwrap().is_empty());
+
+        // 之后仍可正常确认发送
+        orch.confirm_send(None).await.unwrap();
+        assert_eq!(orch.state(), OrchestratorState::Success);
     }
 }
