@@ -220,10 +220,13 @@ enum SttEvent {
 
 ### 3.6 热键与悬浮窗
 
-**热键：tauri-plugin-global-shortcut。**
+**热键：WH_KEYBOARD_LL 低级键盘钩子（Windows 默认）+ tauri-plugin-global-shortcut（回退/非 Windows）。**（v6 变更）
 
-- 默认键位：`F8`（toggle）与 `Alt+V`（hold），首次启动引导选择交互模式与键位，并检测与常见游戏键位冲突。
-- 预研中提到的 `WH_KEYBOARD_LL` 低级钩子**MVP 不做**——global-shortcut 插件已覆盖需求，仅在将来需要「游戏中任意键状态感知」时再加。
+- **变更原因（实测实证）**：RegisterHotKey 在 LOL 前台时完全不投递热键事件（`~/.kotone/kotone.log` 实证：记事本前台事件正常，游戏前台零事件，换多个键位均如此）。游戏工具（AutoHotkey、LeagueAkari）均用 LL 钩子正是为此。
+- 实现：`hotkey_ll.rs` 独立钩子线程（SetWindowsHookExW + 消息循环）+ mpsc 事件通道 + 消费者线程调 orchestrator；回调内零 IO、跳过 LLKHF_INJECTED（防自我触发）。
+- 吞键策略：仅「主键+修饰键严格匹配」时吞掉（防触发游戏内同键绑定），其余键立即放行；Esc 会话激活期吞掉作取消。
+- 回退：`hotkeyBackend: "auto" | "llhook" | "register"`（默认 auto = Windows 优先 llhook，失败回退插件）；设置页显示当前生效后端。
+- 默认键位：`F8`（toggle）/ `Alt+V`（hold），首次启动引导选择并检测冲突。
 
 **悬浮窗：Tauri 多窗口。**
 
@@ -629,6 +632,8 @@ CI：GitHub Actions（Windows runner 为主）— fmt / clippy / cargo test（�
 | 2026-07-24 | **v5：preview 确认主路径改为「再按热键发送 / Esc 取消」；新增目标窗口记忆 + 发送前焦点恢复**（begin 记 hwnd → Sending 前 SetForegroundWindow + AttachThreadInput 兜底） | 用户实测：SW_SHOWNA 不抢焦点导致 Enter 穿透到目标窗口、点按钮又把焦点抢到 overlay 注入错目标。热键确认全程不碰鼠标，是游戏场景的自然交互 |
 | 2026-07-24 | **v5：引入 tauri-plugin-single-instance**；热键注册失败状态暴露到设置页并可重试 | 用户实测：dev 重启多实例导致热键 already registered / WebView2 类注册错误 |
 | 2026-07-24 | **v5：「以管理员身份重启」按钮未提权时常驻显示**；权限状态轮询；修复 activeGameElevated 断链（profile 读盘失败静默返回 null，改为内置 profile 回退） | 用户实测：找不到重启入口；勾选 runAsAdminOnStart 无反馈 |
+| 2026-07-24 | **v6：热键后端从 RegisterHotKey 改为 WH_KEYBOARD_LL 低级钩子（Windows 默认），插件保留为回退** | 日志实证：RegisterHotKey 在 LOL 前台不投递任何热键事件（提权后也无效）；预研 §6.1 预留的 LL hook 方案启用 |
+| 2026-07-24 | **v6：新增文件日志 `~/.kotone/kotone.log`**（启动/注册/触发/状态迁移） | GUI/提权进程无控制台，eprintln 无处可去；本次热键问题的定位即依赖该日志 |
 | 2026-07-24 | **v5：preview 交互不抢焦点三连修**——begin 记录前台 hwnd 为注入目标（`FocusBackend` 抽象），Sending 前先 `SetForegroundWindow` 恢复焦点（AttachThreadInput 兜底）；toggle 热键在 Preview 态路由为 `confirm_send`；Esc 临时注册从仅 Listening 扩展到全部非 Idle 态；前端 overlay 显隐调用移除（后端 SW_SHOWNA 全权驱动） | 用户实测：preview 按 Enter 键去了记事本（焦点未跟随悬浮条）、点「发送」按钮激活 overlay 导致文字注入给 overlay 自己 |
 | 2026-07-24 | **v5：引入 tauri-plugin-single-instance；热键注册失败状态经 `get_hotkey_status` 暴露到设置页** | 用户实测：`pnpm tauri dev` 重启时旧实例未退出 → 热键 already registered / WebView2 类注册冲突 |
 | 2026-07-24 | **v5：设置页权限分区「以管理员身份重启」未提权时常驻显示；权限状态 3s 轮询（页面隐藏暂停）；`runAsAdminOnStart` 勾选后提示「下次启动生效」+ 立即重启链接；`get_elevation_status` 链路修复**（profile 文件缺失回退内置 profile，纯逻辑 `resolve_active_game_pid` 可单测） | 用户实测：重启入口只在横幅条件触发时出现；勾选自动提权无反馈；LOL 运行时 activeGameElevated 仍可能返回 null |
