@@ -415,6 +415,14 @@ pub fn run() {
                 eprintln!("[kotone] {e}");
             }
 
+            // 启动即显示设置窗口：全部窗口默认隐藏时，应用看起来像「没起来」。
+            // 托盘常驻语义不变——关闭此窗口只是隐藏，进程仍在托盘。
+            // 自动提权重启的场合此分支在提权子进程中执行，同样弹窗，符合预期。
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
