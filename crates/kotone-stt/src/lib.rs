@@ -21,7 +21,7 @@ pub fn builtin_engines() -> Vec<Box<dyn SttEngine>> {
     vec![
         Box::new(mock::MockStreamEngine),
         Box::new(whisper_sidecar::WhisperSidecarEngine),
-        Box::new(sherpa::SherpaEngine),
+        Box::new(sherpa::SherpaEngine::new()),
     ]
 }
 
@@ -47,18 +47,26 @@ mod tests {
     }
 
     #[test]
-    fn mock_ready_sherpa_not_whisper_matches_files() {
+    fn readiness_matches_environment() {
         let mut reg = EngineRegistry::new();
         register_builtin(&mut reg);
         assert!(reg.get("mock-stream").unwrap().is_ready());
-        assert!(!reg.get("sherpa-onnx-zipformer-zh").unwrap().is_ready());
-        // whisper 就绪与否取决于 ~/.kotone 下 bin+模型的真实存在情况（真机装好后为 true）
-        let expected = model::bin_installed()
+        // whisper 就绪与否取决于 ~/.kotone 下 bin+模型的真实存在情况
+        let whisper_expected = model::bin_installed()
             && model::model_path(&model::active_model("whisper-cpp-sidecar"))
                 .is_some_and(|p| p.exists());
         assert_eq!(
             reg.get("whisper-cpp-sidecar").unwrap().is_ready(),
-            expected
+            whisper_expected
+        );
+        // sherpa：feature 关闭恒未就绪；开启时取决于模型文件齐备情况
+        #[cfg(feature = "engine-sherpa")]
+        let sherpa_expected = model::multi_model_ready(&model::active_model("sherpa-onnx-zipformer-zh"));
+        #[cfg(not(feature = "engine-sherpa"))]
+        let sherpa_expected = false;
+        assert_eq!(
+            reg.get("sherpa-onnx-zipformer-zh").unwrap().is_ready(),
+            sherpa_expected
         );
         assert!(reg.get("no-such-engine").is_none());
     }

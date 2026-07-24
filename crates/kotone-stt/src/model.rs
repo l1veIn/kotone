@@ -97,6 +97,87 @@ pub fn whisper_cli_path() -> PathBuf {
     bin_dir().join("whisper-cli.exe")
 }
 
+// ---------- sherpa-onnx 多文件模型 ----------
+
+/// 多文件模型中的单个文件（sha256 可选：git 内小文件无 LFS oid，用 size 兜底校验）
+pub struct ModelFile {
+    pub name: &'static str,
+    pub url: &'static str,
+    pub sha256: Option<&'static str>,
+    pub size_bytes: u64,
+}
+
+/// 多文件模型清单条目（下载为 ~/.kotone/models/<dir>/<files>）
+pub struct MultiFileModel {
+    pub id: &'static str,
+    pub engine_id: &'static str,
+    pub display_name: &'static str,
+    pub dir: &'static str,
+    pub files: &'static [ModelFile],
+}
+
+/// sherpa-onnx 模型清单（ADR-004）。默认双语流式 Zipformer（int8 编码器，~200MB）。
+/// SHA256 取自 HuggingFace LFS oid（2025-01 核对）；tokens.txt 为 git 内小文件，
+/// 无 LFS oid，仅按大小校验。
+pub const SHERPA_MODELS: &[MultiFileModel] = &[MultiFileModel {
+    id: "zipformer-bilingual-zh-en-2023-02-20",
+    engine_id: "sherpa-onnx-zipformer-zh",
+    display_name: "sherpa 流式 Zipformer 中英双语（int8，低延迟）",
+    dir: "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
+    files: &[
+        ModelFile {
+            name: "encoder-epoch-99-avg-1.int8.onnx",
+            url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/encoder-epoch-99-avg-1.int8.onnx",
+            sha256: Some("8fa764187a261844f859d7143ebaa563af5d10adfece4c18a8f414c88cba2a9b"),
+            size_bytes: 181_895_032,
+        },
+        ModelFile {
+            name: "decoder-epoch-99-avg-1.onnx",
+            url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/decoder-epoch-99-avg-1.onnx",
+            sha256: Some("2e3b5ec371f8899ee6acd829fd753ba45772df57a91bdf37cde3136354e7db7d"),
+            size_bytes: 13_876_452,
+        },
+        ModelFile {
+            name: "joiner-epoch-99-avg-1.int8.onnx",
+            url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/joiner-epoch-99-avg-1.int8.onnx",
+            sha256: Some("1ed689c5ed19dbaa725d9d191bb4822b5f4855a39e1ffd28cbc1f340d25b2ee0"),
+            size_bytes: 3_228_404,
+        },
+        ModelFile {
+            name: "tokens.txt",
+            url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/tokens.txt",
+            sha256: None,
+            size_bytes: 56_317,
+        },
+    ],
+}];
+
+/// sherpa 引擎的默认模型（engineOptions 未配置或配置了未知 id 时的兜底）
+pub fn sherpa_default_model() -> &'static str {
+    SHERPA_MODELS[0].id
+}
+
+/// 多文件模型目录
+pub fn multi_model_dir(model_id: &str) -> Option<PathBuf> {
+    SHERPA_MODELS
+        .iter()
+        .find(|m| m.id == model_id)
+        .map(|m| models_dir().join(m.dir))
+}
+
+/// 多文件模型是否齐备（全部文件存在且大小匹配）
+pub fn multi_model_ready(model_id: &str) -> bool {
+    let Some(m) = SHERPA_MODELS.iter().find(|m| m.id == model_id) else {
+        return false;
+    };
+    let dir = models_dir().join(m.dir);
+    m.files.iter().all(|f| {
+        fs::metadata(dir.join(f.name))
+            .map(|md| md.len() == f.size_bytes)
+            .unwrap_or(false)
+    })
+}
+
 /// 模型文件路径
 pub fn model_path(model_id: &str) -> Option<PathBuf> {
     MODELS
@@ -105,15 +186,27 @@ pub fn model_path(model_id: &str) -> Option<PathBuf> {
         .map(|m| models_dir().join(m.file))
 }
 
-/// 引擎当前活动模型 ID（读 config.json 的 engineOptions，默认 ggml-small）
+/// 引擎当前活动模型 ID（读 config.json 的 engineOptions；
+/// 缺省按引擎给默认：whisper → ggml-small，sherpa → 清单默认模型）
 pub fn active_model(engine_id: &str) -> String {
-    let s = settings::load();
-    s.engine_options
+    let configured = settings::load()
+        .engine_options
         .get(engine_id)
         .and_then(|o| o.get("model"))
         .and_then(|m| m.as_str())
-        .unwrap_or("ggml-small")
-        .to_string()
+        .map(str::to_string);
+    match (engine_id, configured) {
+        // sherpa：配置的 id 必须在清单里，否则兜底清单默认（config.json 早期默认
+        // 值 zipformer-zh-small 是占位字符串，不是真实清单条目）
+        ("sherpa-onnx-zipformer-zh", Some(id))
+            if SHERPA_MODELS.iter().any(|m| m.id == id) =>
+        {
+            id
+        }
+        ("sherpa-onnx-zipformer-zh", _) => sherpa_default_model().to_string(),
+        (_, Some(id)) => id,
+        _ => "ggml-small".to_string(),
+    }
 }
 
 /// whisper-cli 运行时就绪（exe + 核心 DLL 都在）
@@ -123,7 +216,7 @@ pub fn bin_installed() -> bool {
 
 // ---------- 清单查询 ----------
 
-/// 列出全部模型 + whisper-cli 运行时条目
+/// 列出全部模型（whisper 单文件 + sherpa 多文件）+ whisper-cli 运行时条目
 pub fn list() -> Result<Vec<ModelInfo>, String> {
     let mut out: Vec<ModelInfo> = MODELS
         .iter()
@@ -137,6 +230,15 @@ pub fn list() -> Result<Vec<ModelInfo>, String> {
             downloaded: models_dir().join(m.file).exists(),
         })
         .collect();
+    out.extend(SHERPA_MODELS.iter().map(|m| ModelInfo {
+        id: m.id.into(),
+        engine_id: m.engine_id.into(),
+        display_name: m.display_name.into(),
+        size_bytes: m.files.iter().map(|f| f.size_bytes).sum(),
+        download_url: m.files.first().map(|f| f.url.into()).unwrap_or_default(),
+        sha256: String::new(), // 多文件条目逐文件校验，聚合字段留空
+        downloaded: multi_model_ready(m.id),
+    }));
     out.push(ModelInfo {
         id: WHISPER_BIN_ID.into(),
         engine_id: "whisper-cpp-sidecar".into(),
@@ -151,23 +253,58 @@ pub fn list() -> Result<Vec<ModelInfo>, String> {
 
 // ---------- 下载 ----------
 
-/// 下载模型或 whisper-cli 运行时（id = ggml-* / whisper-cli），进度经回调外发。
-/// 阻塞实现：调用方放阻塞线程。
+/// 下载模型或 whisper-cli 运行时（id = ggml-* / zipformer-* / whisper-cli），
+/// 进度经回调外发（多文件模型聚合进度）。阻塞实现：调用方放阻塞线程。
 pub fn download(id: &str, progress: Progress<'_>) -> Result<(), String> {
     if id == WHISPER_BIN_ID {
         return download_bin(progress);
     }
-    let m = MODELS
-        .iter()
-        .find(|m| m.id == id)
-        .ok_or_else(|| format!("未知模型：{id}（可选：{}）", model_ids().join(", ")))?;
-    let dest = models_dir().join(m.file);
-    download::download_file(m.url, &dest, Some(m.sha256), progress)
+    if let Some(m) = MODELS.iter().find(|m| m.id == id) {
+        let dest = models_dir().join(m.file);
+        return download::download_file(m.url, &dest, Some(m.sha256), progress);
+    }
+    if let Some(m) = SHERPA_MODELS.iter().find(|m| m.id == id) {
+        return download_multi(m, progress);
+    }
+    Err(format!(
+        "未知模型：{id}（可选：{}）",
+        model_ids().join(", ")
+    ))
+}
+
+/// 多文件模型：逐文件下载，聚合进度（已完成文件字节 + 当前文件进度）
+fn download_multi(m: &MultiFileModel, progress: Progress<'_>) -> Result<(), String> {
+    let dir = models_dir().join(m.dir);
+    fs::create_dir_all(&dir).map_err(|e| format!("无法创建目录 {}：{e}", dir.display()))?;
+    let total: u64 = m.files.iter().map(|f| f.size_bytes).sum();
+    let mut done: u64 = 0;
+    for f in m.files {
+        let dest = dir.join(f.name);
+        // 已存在且大小匹配 → 跳过（重跑时天然续传）
+        if fs::metadata(&dest).map(|md| md.len() == f.size_bytes).unwrap_or(false) {
+            done += f.size_bytes;
+            progress(done, Some(total));
+            continue;
+        }
+        let base = done;
+        download::download_file(f.url, &dest, f.sha256, &|d, t| {
+            // 单文件 total 不可靠时仍保证聚合 total 准确
+            let _ = t;
+            progress(base + d, Some(total));
+        })?;
+        done += f.size_bytes;
+        progress(done, Some(total));
+    }
+    Ok(())
 }
 
 /// 可选模型 ID 列表（错误提示用）
 fn model_ids() -> Vec<&'static str> {
-    MODELS.iter().map(|m| m.id).collect()
+    MODELS
+        .iter()
+        .map(|m| m.id)
+        .chain(SHERPA_MODELS.iter().map(|m| m.id))
+        .collect()
 }
 
 /// 下载并安装 whisper-cli 运行时：
@@ -244,11 +381,11 @@ fn download_bin_inner(
 /// 切换引擎的活动模型：写入 config.json 的 engineOptions[engine_id].model。
 /// 模型文件须已下载（否则切了也用不了）。
 pub fn set_active(engine_id: &str, model_id: &str) -> Result<(), String> {
-    let manifest = MODELS
-        .iter()
-        .find(|m| m.id == model_id && m.engine_id == engine_id);
     match engine_id {
         "whisper-cpp-sidecar" => {
+            let manifest = MODELS
+                .iter()
+                .find(|m| m.id == model_id && m.engine_id == engine_id);
             if manifest.is_none() {
                 return Err(format!(
                     "引擎 {engine_id} 没有模型 {model_id}（可选：{}）",
@@ -256,6 +393,20 @@ pub fn set_active(engine_id: &str, model_id: &str) -> Result<(), String> {
                 ));
             }
             if !models_dir().join(manifest.unwrap().file).exists() {
+                return Err(format!("模型 {model_id} 尚未下载，请先下载再切换"));
+            }
+        }
+        "sherpa-onnx-zipformer-zh" => {
+            if !SHERPA_MODELS
+                .iter()
+                .any(|m| m.id == model_id && m.engine_id == engine_id)
+            {
+                return Err(format!(
+                    "引擎 {engine_id} 没有模型 {model_id}（可选：{}）",
+                    model_ids().join(", ")
+                ));
+            }
+            if !multi_model_ready(model_id) {
                 return Err(format!("模型 {model_id} 尚未下载，请先下载再切换"));
             }
         }
@@ -304,10 +455,59 @@ mod tests {
     #[test]
     fn list_contains_models_and_bin_entry() {
         let items = list().unwrap();
-        assert_eq!(items.len(), MODELS.len() + 1);
+        assert_eq!(items.len(), MODELS.len() + SHERPA_MODELS.len() + 1);
         assert!(items.iter().any(|i| i.id == WHISPER_BIN_ID));
         let small = items.iter().find(|i| i.id == "ggml-small").unwrap();
         assert_eq!(small.engine_id, "whisper-cpp-sidecar");
+        let zipformer = items
+            .iter()
+            .find(|i| i.id == "zipformer-bilingual-zh-en-2023-02-20")
+            .unwrap();
+        assert_eq!(zipformer.engine_id, "sherpa-onnx-zipformer-zh");
+        assert_eq!(
+            zipformer.size_bytes,
+            SHERPA_MODELS[0].files.iter().map(|f| f.size_bytes).sum::<u64>()
+        );
+    }
+
+    #[test]
+    fn sherpa_manifest_wellformed() {
+        let mut ids: Vec<_> = SHERPA_MODELS.iter().map(|m| m.id).collect();
+        let n = ids.len();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), n, "sherpa 模型 ID 应唯一");
+        for m in SHERPA_MODELS {
+            assert_eq!(m.engine_id, "sherpa-onnx-zipformer-zh");
+            assert!(!m.files.is_empty(), "{}", m.id);
+            for f in m.files {
+                assert!(f.url.starts_with("https://"), "{}", f.name);
+                assert!(f.url.ends_with(f.name), "{} URL 应以文件名结尾", f.name);
+                assert!(f.size_bytes > 0, "{}", f.name);
+                if let Some(s) = f.sha256 {
+                    assert_eq!(s.len(), 64, "{} sha256 应 64 hex", f.name);
+                    assert!(s.chars().all(|c| c.is_ascii_hexdigit()), "{}", f.name);
+                }
+            }
+        }
+        // 关键文件齐备：encoder/decoder/joiner/tokens
+        let names: Vec<_> = SHERPA_MODELS[0].files.iter().map(|f| f.name).collect();
+        for need in ["encoder", "decoder", "joiner", "tokens.txt"] {
+            assert!(
+                names.iter().any(|n| n.contains(need)),
+                "缺少关键文件 {need}"
+            );
+        }
+    }
+
+    #[test]
+    fn active_model_defaults_per_engine() {
+        // 未配置时（或配置了未知 id 时）的兜底按引擎区分
+        let sherpa = active_model("sherpa-onnx-zipformer-zh");
+        assert!(
+            SHERPA_MODELS.iter().any(|m| m.id == sherpa),
+            "sherpa 默认模型应在清单内：{sherpa}"
+        );
     }
 
     #[test]

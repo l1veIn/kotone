@@ -91,9 +91,12 @@ async fn cmd_download(target: &str) -> i32 {
     let id = match target {
         "bin" => kotone_stt::model::WHISPER_BIN_ID.to_string(),
         "tiny" | "base" | "small" => format!("ggml-{target}"),
-        other if other.starts_with("ggml-") => other.to_string(),
+        "zipformer" => "zipformer-bilingual-zh-en-2023-02-20".to_string(),
+        other if other.starts_with("ggml-") || other.starts_with("zipformer-") => {
+            other.to_string()
+        }
         other => {
-            eprintln!("未知下载目标：{other}（可选：bin / tiny / base / small）");
+            eprintln!("未知下载目标：{other}（可选：bin / tiny / base / small / zipformer）");
             return 2;
         }
     };

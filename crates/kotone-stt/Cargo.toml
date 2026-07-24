@@ -15,13 +15,19 @@ reqwest = { version = "0.12", features = ["blocking"] }
 sha2 = "0.10"
 # whisper-cli 发布包为 zip（deflate），只取解压能力
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# sherpa-onnx 官方 Rust 绑定（ADR-004）：静态链接，build script 自动下载
+# 预编译原生库——体量大（~50MB 原生包 + 链接体积），故仅 engine-sherpa
+# feature 开启时才拉取编译，默认构建零原生依赖
+sherpa-onnx = { version = "1.13.4", optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
 
 [features]
 # STT 引擎按 feature 控制编译（docs/development.md §3.3）；
-# 当前引擎均为占位实现，恒注册（is_ready=false），真实实现接入后按 feature 裁剪
+# whisper sidecar 是纯 std::process 拉起，恒编译恒注册；
+# sherpa 真实实现引入大体量原生依赖（sherpa-onnx 静态库），默认关闭，
+# 显式 --features engine-sherpa 才编译（ADR-004）；关闭时注册占位引擎
 default = ["engine-whisper-sidecar"]
 engine-whisper-sidecar = []
-engine-sherpa = []
+engine-sherpa = ["dep:sherpa-onnx"]
