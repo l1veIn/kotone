@@ -496,24 +496,24 @@ hotkey 结束
 
 ## 7. 项目结构
 
-> v8：已重构为 cargo workspace（ADR-001），src-tauri 保留原地（tauri CLI 路径兼容）。
+> v9：`apps/` + `crates/` 产品 monorepo（ADR-002）。根目录 = 纯 Rust workspace + 转发脚本。
 
 ```
-kotone/                      # 虚拟 workspace：members = ["src-tauri", "crates/*"]
-├─ Cargo.toml / Cargo.lock
+kotone/
+├─ Cargo.toml / Cargo.lock / rust-toolchain.toml   # workspace；依赖版本统一 workspace.dependencies
+├─ package.json / pnpm-workspace.yaml              # 根级转发脚本；单 lock，packages: ["apps/*"]
+├─ apps/
+│  └─ desktop/                  # kotone-desktop：标准 Tauri 应用（canonical 形态）
+│     ├─ package.json / vite.config.ts / index.html / src/ (Svelte)
+│     └─ src-tauri/             # kotone-tauri 薄壳：IPC/窗口/托盘/单实例/热键回退
 ├─ crates/
-│  ├─ kotone-core/           # 域模型 + ports + Orchestrator + settings/profile/eval/log
-│  │  │                      # 依赖纪律：仅 serde/tokio/thiserror/dirs 级
-│  │  └─ tests/orchestrator.rs  # 集成测试（dev 环单测会与链接 rlib 类型不兼容，见 ADR-001）
-│  ├─ kotone-stt/            # mock/whisper-sidecar/sherpa 引擎 + 模型管理 + register_builtin
-│  │                          # features: engine-whisper-sidecar（默认）/ engine-sherpa
-│  ├─ kotone-platform-windows/  # cpal / SendInput / WH_KEYBOARD_LL / elevation 适配器
-│  └─ kotone-cli/            # clap：send / listen / eval（stub）——core 的无 GUI 消费者
-├─ src-tauri/                # kotone-tauri 薄壳：IPC/窗口/托盘/单实例/热键回退
-├─ src/                      # Svelte 前端（不变）
-├─ scripts/notepad_inject_test.ps1
-├─ docs/adr/001-workspace-crate-layout.md
-└─ docs/{tech-research.md, development.md}
+│  ├─ kotone-core/              # 域模型 + ports + Orchestrator + settings/profile/eval/log
+│  ├─ kotone-stt/               # STT 引擎适配器 + 模型/二进制管理（~/.kotone/）
+│  │                            # features: engine-whisper-sidecar（默认）/ engine-sherpa
+│  ├─ kotone-platform-windows/  # cpal / SendInput / WH_KEYBOARD_LL / elevation
+│  └─ kotone-cli/               # clap：send / listen / eval —— core 的无 GUI 消费者
+├─ scripts/ docs/ assets/
+└─ docs/adr/{001,002}-*.md
 ```
 
 依赖方向：`kotone-stt → kotone-core ← kotone-platform-windows`；`kotone-cli / kotone-tauri → 三者`。引擎经 `kotone_stt::register_builtin()` 注入 core 的空注册表容器，避免循环依赖。
@@ -641,6 +641,7 @@ CI：GitHub Actions（Windows runner 为主）— fmt / clippy / cargo test（�
 | 2026-07-24 | **v6：新增文件日志 `~/.kotone/kotone.log`**（启动/注册/触发/状态迁移） | GUI/提权进程无控制台，eprintln 无处可去；本次热键问题的定位即依赖该日志 |
 | 2026-07-24 | **v7：MVP 注入链路全部真机验收通过**（用户手动实测）：A 记事本全链路、提权重启、LL 钩子游戏前台触发、**LOL 训练模式发送成功**。R-1/R-3/R-4/R-13 关闭 | 预研定义的最大风险（游戏注入）正式解除；剩余 MVP 缺口集中在真实 STT 引擎 |
 | 2026-07-24 | **v8：重构为 cargo workspace 五 crate**（core / stt / platform-windows / cli / tauri），开发叙事从业务里程碑切换为架构决策（ADR 起始于 docs/adr/001） | 拆分判据：独立消费者、重依赖编译隔离、变更节奏。core 成为无 Tauri 可跑的独立包（kotone-cli listen 实证）；被否决项：每引擎一 crate、游戏 provider crate（数据驱动差异） |
+| 2026-07-25 | **v9：归位为 `apps/` + `crates/` 产品 monorepo**（ADR-002）；whisper-cli 二进制管理从「Tauri sidecar」改为「kotone-stt 自管理（~/.kotone/bin/）」 | 根目录双重身份（JS+Rust）是脚手架与拆分的两次战术妥协叠加；Tauri sidecar 机制对 CLI 不可用，违背「core 无 Tauri 可跑」原则 |
 | 2026-07-24 | **v5：preview 交互不抢焦点三连修**——begin 记录前台 hwnd 为注入目标（`FocusBackend` 抽象），Sending 前先 `SetForegroundWindow` 恢复焦点（AttachThreadInput 兜底）；toggle 热键在 Preview 态路由为 `confirm_send`；Esc 临时注册从仅 Listening 扩展到全部非 Idle 态；前端 overlay 显隐调用移除（后端 SW_SHOWNA 全权驱动） | 用户实测：preview 按 Enter 键去了记事本（焦点未跟随悬浮条）、点「发送」按钮激活 overlay 导致文字注入给 overlay 自己 |
 | 2026-07-24 | **v5：引入 tauri-plugin-single-instance；热键注册失败状态经 `get_hotkey_status` 暴露到设置页** | 用户实测：`pnpm tauri dev` 重启时旧实例未退出 → 热键 already registered / WebView2 类注册冲突 |
 | 2026-07-24 | **v5：设置页权限分区「以管理员身份重启」未提权时常驻显示；权限状态 3s 轮询（页面隐藏暂停）；`runAsAdminOnStart` 勾选后提示「下次启动生效」+ 立即重启链接；`get_elevation_status` 链路修复**（profile 文件缺失回退内置 profile，纯逻辑 `resolve_active_game_pid` 可单测） | 用户实测：重启入口只在横幅条件触发时出现；勾选自动提权无反馈；LOL 运行时 activeGameElevated 仍可能返回 null |
