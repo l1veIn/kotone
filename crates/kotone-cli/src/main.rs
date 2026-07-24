@@ -3,7 +3,8 @@
 //! 子命令：
 //! - `send`：一次性注入（取代原 src-tauri/examples/inject_cli.rs）
 //! - `listen`：前台常驻全链路——LL 钩子热键 → orchestrator → 全部事件以 JSONL 打印
-//! - `eval`：评测入口（stub，eval 模块未实现）
+//! - `download`：模型 / whisper-cli 运行时下载
+//! - `eval`：引擎评测——录档列表 / 语料回放（多引擎对比）/ 人工标注 / CER 报告
 
 use clap::{Parser, Subcommand};
 
@@ -55,8 +56,35 @@ enum Command {
         /// 下载目标：bin（whisper-cli 运行时）或模型短名（tiny/base/small）
         target: String,
     },
-    /// 引擎评测（未实现）
-    Eval {},
+    /// 引擎评测：录档列表 / 语料回放 / 人工标注 / 对比报告
+    Eval {
+        #[command(subcommand)]
+        action: EvalCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum EvalCommand {
+    /// 列出 ~/.kotone/eval 中的录档会话
+    List,
+    /// 回放会话：指定引擎跑单引擎；不指定则全部就绪引擎对比
+    Replay {
+        /// 录档会话 ID（eval list 可查）
+        session_id: String,
+        /// 目标引擎 id（缺省 = 全部 is_ready 引擎）
+        #[arg(long)]
+        engine: Option<String>,
+    },
+    /// 回填人工标注（正确文本），供 CER 计算
+    Label {
+        /// 录档会话 ID
+        session_id: String,
+        /// 该段音频的正确文本
+        #[arg(long)]
+        text: String,
+    },
+    /// 已标注会话 × 就绪引擎的 CER / 延迟报告（Markdown 表）
+    Report,
 }
 
 #[tokio::main]
@@ -76,10 +104,12 @@ async fn main() {
             mode,
         } => cmd_listen(&engine, profile, key, mode).await,
         Command::Download { target } => cmd_download(&target).await,
-        Command::Eval {} => {
-            println!("eval 子命令未实现（eval 模块签名就位，录档/回放/导出待做）");
-            1
-        }
+        Command::Eval { action } => match action {
+            EvalCommand::List => cmd_eval_list(),
+            EvalCommand::Replay { session_id, engine } => cmd_eval_replay(&session_id, engine).await,
+            EvalCommand::Label { session_id, text } => cmd_eval_label(&session_id, &text),
+            EvalCommand::Report => cmd_eval_report().await,
+        },
     };
     std::process::exit(code);
 }
@@ -290,4 +320,207 @@ async fn cmd_listen(
 ) -> i32 {
     eprintln!("listen 子命令仅 Windows 支持（LL 钩子热键，MVP Windows-first）");
     1
+}
+
+// ---------- eval：录档列表 / 语料回放 / 人工标注 / 对比报告 ----------
+
+/// 评测用引擎注册表（注入全部内置引擎；回放是 core 的无 GUI 消费场景）
+fn eval_registry() -> std::sync::Arc<EngineRegistry> {
+    let mut registry = EngineRegistry::new();
+    kotone_stt::register_builtin(&mut registry);
+    std::sync::Arc::new(registry)
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    let mut it = s.chars();
+    let taken: String = it.by_ref().take(max).collect();
+    if it.next().is_some() {
+        format!("{taken}…")
+    } else {
+        taken
+    }
+}
+
+/// eval list：录档会话表（新→旧）
+fn cmd_eval_list() -> i32 {
+    match kotone_core::eval::list_sessions() {
+        Ok(sessions) => {
+            if sessions.is_empty() {
+                println!("暂无录档会话（确认设置中 evalRecording 开启，并完成一次识别会话）");
+                return 0;
+            }
+            println!(
+                "{:<20} {:<26} {:>7} {:>9} {:>8} {:<4} {}",
+                "会话 ID", "引擎", "音频 s", "partials", "最终 ms", "标注", "最终文本"
+            );
+            for s in &sessions {
+                let audio_s = format!("{:.1}", s.audio_ms as f64 / 1000.0);
+                let labeled = if s.human_label.is_some() { "✓" } else { "" };
+                println!(
+                    "{:<20} {:<26} {:>7} {:>9} {:>8} {:<4} {}",
+                    s.session_id,
+                    s.engine_id,
+                    audio_s,
+                    s.partials.len(),
+                    s.final_ms,
+                    labeled,
+                    truncate_chars(&s.final_text, 24)
+                );
+            }
+            println!(
+                "\n共 {} 条（容量上限 {}，目录 ~/.kotone/eval/）",
+                sessions.len(),
+                kotone_core::eval::MAX_SESSIONS
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("读取录档失败: {e}");
+            1
+        }
+    }
+}
+
+fn print_replay_detail(r: &kotone_core::eval::EvalResult) {
+    println!("回放完成：{} × {}", r.session_id, r.engine_id);
+    println!(
+        "首字延迟：{}   最终延迟：{}ms   CER：{}",
+        r.first_partial_ms
+            .map(|v| format!("{v}ms"))
+            .unwrap_or_else(|| "—（非流式）".into()),
+        r.final_ms,
+        r.cer
+            .map(|c| format!("{c:.3}"))
+            .unwrap_or_else(|| "—（未标注）".into())
+    );
+    println!("最终文本：{}", r.final_text);
+    if !r.partials.is_empty() {
+        println!("partials：");
+        for p in &r.partials {
+            println!("  [{:>5}ms] {}", p.t, p.text);
+        }
+    }
+}
+
+/// eval replay：指定引擎单跑；缺省对全部就绪引擎跑对比表
+async fn cmd_eval_replay(session_id: &str, engine: Option<String>) -> i32 {
+    let registry = eval_registry();
+    match engine {
+        Some(engine_id) => {
+            let reg = registry.clone();
+            let sid = session_id.to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                kotone_core::eval::replay(&sid, &engine_id, &reg)
+            })
+            .await;
+            match r {
+                Ok(Ok(result)) => {
+                    print_replay_detail(&result);
+                    0
+                }
+                Ok(Err(e)) => {
+                    eprintln!("回放失败: {e}");
+                    1
+                }
+                Err(e) => {
+                    eprintln!("回放任务异常: {e}");
+                    1
+                }
+            }
+        }
+        None => {
+            let ready: Vec<_> = registry
+                .list_info()
+                .into_iter()
+                .filter(|i| i.is_ready)
+                .collect();
+            if ready.is_empty() {
+                eprintln!("没有就绪的引擎（先 kotone-cli download 安装模型）");
+                return 1;
+            }
+            println!(
+                "{:<26} {:>8} {:>8} {:>8}  {}",
+                "引擎", "首字 ms", "最终 ms", "CER", "最终文本"
+            );
+            let mut failed = 0;
+            for info in &ready {
+                let reg = registry.clone();
+                let sid = session_id.to_string();
+                let eid = info.id.clone();
+                let r = tokio::task::spawn_blocking(move || {
+                    kotone_core::eval::replay(&sid, &eid, &reg)
+                })
+                .await;
+                match r {
+                    Ok(Ok(result)) => {
+                        println!(
+                            "{:<26} {:>8} {:>8} {:>8}  {}",
+                            info.id,
+                            result
+                                .first_partial_ms
+                                .map(|v| v.to_string())
+                                .unwrap_or_else(|| "—".into()),
+                            result.final_ms,
+                            result
+                                .cer
+                                .map(|c| format!("{c:.3}"))
+                                .unwrap_or_else(|| "—".into()),
+                            truncate_chars(&result.final_text, 24)
+                        );
+                    }
+                    Ok(Err(e)) => {
+                        println!("{:<26}  回放失败: {e}", info.id);
+                        failed += 1;
+                    }
+                    Err(e) => {
+                        println!("{:<26}  回放任务异常: {e}", info.id);
+                        failed += 1;
+                    }
+                }
+            }
+            if failed == ready.len() as i32 {
+                1
+            } else {
+                0
+            }
+        }
+    }
+}
+
+/// eval label：回填人工标注（正确文本），供 CER 计算
+fn cmd_eval_label(session_id: &str, text: &str) -> i32 {
+    match kotone_core::eval::label(session_id, text) {
+        Ok(s) => {
+            println!(
+                "已标注 {}：「{}」（引擎识别：「{}」）",
+                s.session_id, text, s.final_text
+            );
+            println!("提示：eval report 将对已标注会话计算各引擎 CER");
+            0
+        }
+        Err(e) => {
+            eprintln!("标注失败: {e}");
+            1
+        }
+    }
+}
+
+/// eval report：已标注会话 × 就绪引擎的 CER / 延迟 Markdown 报告
+async fn cmd_eval_report() -> i32 {
+    let registry = eval_registry();
+    let r = tokio::task::spawn_blocking(move || kotone_core::eval::report(&registry)).await;
+    match r {
+        Ok(Ok(md)) => {
+            println!("{md}");
+            0
+        }
+        Ok(Err(e)) => {
+            eprintln!("报告生成失败: {e}");
+            1
+        }
+        Err(e) => {
+            eprintln!("报告任务异常: {e}");
+            1
+        }
+    }
 }

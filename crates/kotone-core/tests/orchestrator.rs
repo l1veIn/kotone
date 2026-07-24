@@ -204,6 +204,7 @@ fn make_orchestrator_full(
     settings.stt_engine = "mock-stream".into();
     settings.auto_send = auto_send;
     settings.active_profile_id = None; // 测试不依赖真实 ~/.kotone
+    settings.eval_recording = false; // 默认不录档（需要时测试自行开启并覆盖 eval_dir）
     let settings = Arc::new(RwLock::new(settings));
     let mut registry = EngineRegistry::new();
     // 内置引擎（mock-stream 等）由 kotone-stt 注入（dev-dependency）
@@ -585,4 +586,100 @@ async fn hotkey_hold_press_in_preview_is_ignored() {
     // 之后仍可正常确认发送
     orch.confirm_send(None).await.unwrap();
     assert_eq!(orch.state(), OrchestratorState::Success);
+}
+
+/// 带 eval 录档的 orchestrator：录档目录指向临时目录（不污染真实 ~/.kotone/eval）
+fn make_orchestrator_with_eval(
+    eval_dir: std::path::PathBuf,
+) -> (Arc<Orchestrator>, Arc<VecEmitter>, Arc<Mutex<Vec<String>>>) {
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
+    let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(
+        Arc::new(Mutex::new(Vec::new())),
+        42,
+        true,
+    ));
+    let mut settings = Settings::default();
+    settings.stt_engine = "mock-stream".into();
+    settings.active_profile_id = None;
+    settings.eval_recording = true;
+    let settings = Arc::new(RwLock::new(settings));
+    let mut registry = EngineRegistry::new();
+    kotone_stt::register_builtin(&mut registry);
+    let emitter = Arc::new(VecEmitter::default());
+    let mut orch = Orchestrator::new(
+        settings,
+        Arc::new(registry),
+        Arc::new(MockAudioBackend),
+        injector,
+        focus,
+        emitter.clone(),
+    );
+    orch.toast_dwell = Duration::from_millis(10);
+    orch.finalize_timeout = Duration::from_secs(2);
+    orch.focus_restore_delay = Duration::ZERO;
+    orch.eval_dir = Some(eval_dir);
+    (Arc::new(orch), emitter, sent)
+}
+
+/// eval 录档：finalize 成功后落盘 wav + json（字段契约对齐 docs/development.md §5.4）
+#[tokio::test]
+async fn eval_recording_written_on_finalize() {
+    let dir = tempfile::tempdir().unwrap();
+    let (orch, _emitter, _sent) = make_orchestrator_with_eval(dir.path().to_path_buf());
+
+    orch.begin().await.unwrap();
+    // 录足 1s+ 假音频（Windows 定时器粒度 ~15.6ms，500ms 实际等待 ≈ 1.5s 音频）
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    orch.end().await.unwrap();
+
+    let sessions = kotone_core::eval::list_sessions_at(dir.path()).unwrap();
+    assert_eq!(sessions.len(), 1, "finalize 成功应录档一次");
+    let s = &sessions[0];
+    assert_eq!(s.engine_id, "mock-stream");
+    assert!(s.audio_ms >= 800, "audioMs 应接近录制时长: {s:?}");
+    assert!(!s.partials.is_empty(), "mock 流式引擎应录到 partial: {s:?}");
+    assert!(
+        s.first_partial_ms.is_some() && s.first_partial_ms == s.partials.first().map(|p| p.t),
+        "firstPartialMs 应等于首条 partial 的相对时间戳: {s:?}"
+    );
+    assert_eq!(s.final_text, "对面打野在下路");
+    assert_eq!(s.human_label, None);
+    assert!(dir.path().join(format!("{}.wav", s.session_id)).exists());
+    let pcm = kotone_core::eval::read_wav(&dir.path().join(format!("{}.wav", s.session_id))).unwrap();
+    assert_eq!(pcm.len() as u64, s.audio_ms * 16, "wav 采样数应与 audioMs 一致");
+}
+
+/// eval 录档：取消的会话不录（目录保持为空）
+#[tokio::test]
+async fn eval_recording_discarded_on_cancel() {
+    let dir = tempfile::tempdir().unwrap();
+    let (orch, _emitter, _sent) = make_orchestrator_with_eval(dir.path().to_path_buf());
+
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.cancel().await;
+
+    assert!(
+        kotone_core::eval::list_sessions_at(dir.path()).unwrap().is_empty(),
+        "取消的会话不应录档"
+    );
+}
+
+/// eval 录档：evalRecording 关闭时不落盘
+#[tokio::test]
+async fn eval_recording_off_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (orch, _emitter, _sent) = {
+        let (o, e, s) = make_orchestrator_with_eval(dir.path().to_path_buf());
+        o.settings().write().unwrap().eval_recording = false;
+        (o, e, s)
+    };
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.end().await.unwrap();
+    assert!(
+        kotone_core::eval::list_sessions_at(dir.path()).unwrap().is_empty(),
+        "evalRecording 关闭时不应录档"
+    );
 }

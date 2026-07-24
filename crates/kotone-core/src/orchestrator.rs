@@ -57,6 +57,8 @@ struct ActiveSession {
     guard: Option<AudioHandle>,
     pump: tokio::task::JoinHandle<()>,
     level_task: tokio::task::JoinHandle<()>,
+    /// eval 录档句柄（evalRecording 开启时存在；取消时随会话丢弃不录）
+    recorder: Option<crate::eval::SessionRecorder>,
 }
 
 struct Inner {
@@ -86,6 +88,8 @@ pub struct Orchestrator {
     pub toast_dwell: Duration,
     /// 发送前焦点恢复后的等待（测试可设为 0）
     pub focus_restore_delay: Duration,
+    /// eval 录档目录覆盖（None = ~/.kotone/eval/；测试指向临时目录）
+    pub eval_dir: Option<std::path::PathBuf>,
 }
 
 impl Orchestrator {
@@ -116,6 +120,7 @@ impl Orchestrator {
             finalize_timeout: DEFAULT_FINALIZE_TIMEOUT,
             toast_dwell: DEFAULT_TOAST_DWELL,
             focus_restore_delay: DEFAULT_FOCUS_RESTORE_DELAY,
+            eval_dir: None,
         }
     }
 
@@ -228,9 +233,19 @@ impl Orchestrator {
         let (session_tx, session_rx) = oneshot::channel::<Box<dyn SttSession>>();
         let cancelled_flag = Arc::new(AtomicBool::new(false));
 
+        // eval 录档：evalRecording 开启时创建录档句柄，pump 边录边喂；
+        // finalize 成功后落盘，取消则随会话句柄整体丢弃（docs/adr/005）
+        let recorder = settings.eval_recording.then(|| {
+            crate::eval::SessionRecorder::new_in(
+                self.eval_dir.clone().unwrap_or_else(crate::eval::eval_dir),
+                &engine_id,
+            )
+        });
+
         // PCM pump：录音 → session.push_audio；STT partial → kotone://partial
         let emitter = self.emitter.clone();
         let pump_flag = cancelled_flag.clone();
+        let pump_recorder = recorder.clone();
         let pump = tokio::spawn(async move {
             let mut session = session;
             let mut stop_rx = stop_rx;
@@ -243,6 +258,9 @@ impl Orchestrator {
                     chunk = pcm_rx.recv() => {
                         match chunk {
                             Some(c) => {
+                                if let Some(rec) = &pump_recorder {
+                                    rec.push_pcm(&c);
+                                }
                                 if session.push_audio(&c).is_err() { break; }
                             }
                             None => break, // 采集结束
@@ -251,6 +269,9 @@ impl Orchestrator {
                     ev = stt_rx.recv() => {
                         match ev {
                             Some(SttEvent::Partial { text }) => {
+                                if let Some(rec) = &pump_recorder {
+                                    rec.push_partial(&text);
+                                }
                                 emitter.emit("kotone://partial", json!({ "text": text }));
                             }
                             // Final 由 finalize 返回值承载，这里不重复上屏
@@ -289,6 +310,7 @@ impl Orchestrator {
             guard: Some(handle),
             pump,
             level_task,
+            recorder,
         });
         drop(inner);
         self.emit_state(OrchestratorState::Listening, None);
@@ -356,7 +378,15 @@ impl Orchestrator {
                 // 最终文本上屏（替换 partial）
                 self.emitter
                     .emit("kotone://partial", json!({ "text": t.text }));
-                // TODO(eval 子代理)：eval_recording 开启时在此录档（wav + partial 时间线 + 指标）
+                // eval 录档落盘（wav + partial 时间线 + 指标）；失败静默记日志不阻断流程
+                if let Some(rec) = active.recorder.take() {
+                    match rec.finish(&t.text, t.latency_ms as u64) {
+                        Ok(saved) => {
+                            crate::log::log(&format!("eval 录档完成: {}", saved.session_id))
+                        }
+                        Err(e) => crate::log::log(&format!("eval 录档失败（忽略）: {e}")),
+                    }
+                }
                 let auto_send = self.settings.read().unwrap().auto_send;
                 if auto_send {
                     self.do_send(t.text, gen).await;
