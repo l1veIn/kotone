@@ -33,10 +33,14 @@
 **待验证（阻塞原因见 §10，均需 LOL 退出后的桌面窗口期）**：
 
 - [ ] 记事本长句（>100 字）/ emoji 各 10 次成功率复跑（脚本 `scripts/notepad_inject_test.ps1` 已入库）
-- [ ] 提权链路实测：设置页横幅 → 管理员重启 → LOL 训练模式发送 10 次 ≥ 8（提权方案已实现，见 §10 R-1）
-- [ ] 麦克风全链路（F8 → 真录音 → partial）——用户已开放麦克风权限（2026-07-23），待复测确认 R-4 解除
-- [ ] 未提权对 LOL 发送 → Error payload 带 `needsElevation: true` + 提权文案实测
 - [ ] 空闲内存 < 150MB 实测（dev 进程 ~40MB，含 WebView2 待 release 复测）
+
+**已通过的真机验收（2026-07-24，用户手动实测）**：
+
+- [x] 记事本全链路：热键 → 真麦克风录音 → mock partial → 预览 → F7 确认 → 文本入记事本（A 流程）
+- [x] 提权链路：设置页横幅 → 以管理员身份重启 → UAC → 提权运行（设置页显示「管理员」）
+- [x] **LOL 训练模式真机发送成功**：LL 钩子热键在游戏前台正常触发，文字直达游戏聊天框（C 流程）
+- [x] 提权检测提示：未提权时发送 LOL 正确报「目标游戏正以管理员权限运行」
 
 ---
 
@@ -597,10 +601,11 @@ CI：GitHub Actions（Windows runner 为主）— fmt / clippy / cargo test（�
 
 | # | 风险 | 等级 | 状态 | 缓解 |
 |---|------|------|------|------|
-| R-1 | **游戏高权限运行时 UIPI 丢弃合成输入（实证）** | **高** | **方案已实现（d6d78ea），实测待游戏退出** | 方案定为「asInvoker + 运行时检测 + 一键管理员重启」（非常驻 requireAdministrator）：`elevation.rs` TokenElevation 检测自身与目标进程权限（OpenProcess 被拒视为目标更高权限）；`restart_as_admin` 经 ShellExecuteExW runas 重启（UAC 取消不退出、防循环标记 `--kotone-elevated-spawn`）；设置页权限分区 + 品红横幅；`runAsAdminOnStart` 可选开机自动提权；InjectError 带 `needsElevation` 字段 + 提权文案。对真实 LOL 进程检测已实证 Some(true)。剩余：横幅/重启/真机发送实测 |
+| R-1 | ~~游戏高权限运行时 UIPI 丢弃合成输入~~ | **已解决** | **实测通过（2026-07-24）** | 「asInvoker + 运行时检测 + 一键管理员重启」全链路实测：横幅提示 → runas 重启 → 提权后 LOL 训练模式发送成功 |
 | R-2 | 独占全屏无法注入/叠 UI | 高 | 已知，接受 | 只保证无边框；设置页检测提示（Dota 无边框实测 overlay 正常） |
-| R-3 | Rust 复刻注入时序与 LeagueAkari 行为不一致 | 低（原中） | **机制已验证** | 记事本 UIA 逐字校验 PASS；LOL 时序待 R-1 实测复核 |
-| R-4 | ~~本机麦克风隐私封锁（0x80070005）~~ | 低（原中） | **用户已解除（2026-07-23），待复测确认** | 用户已在 Windows 设置中允许所有应用使用麦克风；audio 层有清晰中文报错兜底。待 LOL 退出后重跑 F8 全链路确认解除 |
+| R-3 | ~~Rust 复刻注入时序与 LeagueAkari 行为不一致~~ | **已解决** | **LOL 真机验证通过（2026-07-24）** | 记事本 UIA 校验 + LOL 训练模式实测均成功 |
+| R-4 | ~~本机麦克风隐私封锁（0x80070005）~~ | **已解决** | **实测通过（2026-07-24）** | 用户开放权限后真麦克风全链路（A 流程）正常 |
+| R-13 | ~~RegisterHotKey 游戏前台不投递热键~~ | **已解决** | **LL 钩子实测通过（2026-07-24）** | v6 改用 WH_KEYBOARD_LL（见 §3.6），LOL 前台热键正常触发，ACE 反作弊未拦截 |
 | R-5 | 单一 STT 引擎速度/精度不达标 | 中 | 架构已缓解 | 可插拔多引擎 + 评测工具；默认引擎由 Phase 1 末人工评测决定 |
 | R-6 | 多引擎抬高包体与维护面 | 中 | 已知 | cargo feature 按需编译；候选池引擎评测不通过即淘汰 |
 | R-7 | 反作弊误报 | 中 | 监控 | 仅 SendInput；开源透明；免责声明；**注意 R-1 提权会提高敏感度，需在文档中说明提权原因仅为 UIPI** |
@@ -634,6 +639,7 @@ CI：GitHub Actions（Windows runner 为主）— fmt / clippy / cargo test（�
 | 2026-07-24 | **v5：「以管理员身份重启」按钮未提权时常驻显示**；权限状态轮询；修复 activeGameElevated 断链（profile 读盘失败静默返回 null，改为内置 profile 回退） | 用户实测：找不到重启入口；勾选 runAsAdminOnStart 无反馈 |
 | 2026-07-24 | **v6：热键后端从 RegisterHotKey 改为 WH_KEYBOARD_LL 低级钩子（Windows 默认），插件保留为回退** | 日志实证：RegisterHotKey 在 LOL 前台不投递任何热键事件（提权后也无效）；预研 §6.1 预留的 LL hook 方案启用 |
 | 2026-07-24 | **v6：新增文件日志 `~/.kotone/kotone.log`**（启动/注册/触发/状态迁移） | GUI/提权进程无控制台，eprintln 无处可去；本次热键问题的定位即依赖该日志 |
+| 2026-07-24 | **v7：MVP 注入链路全部真机验收通过**（用户手动实测）：A 记事本全链路、提权重启、LL 钩子游戏前台触发、**LOL 训练模式发送成功**。R-1/R-3/R-4/R-13 关闭 | 预研定义的最大风险（游戏注入）正式解除；剩余 MVP 缺口集中在真实 STT 引擎 |
 | 2026-07-24 | **v5：preview 交互不抢焦点三连修**——begin 记录前台 hwnd 为注入目标（`FocusBackend` 抽象），Sending 前先 `SetForegroundWindow` 恢复焦点（AttachThreadInput 兜底）；toggle 热键在 Preview 态路由为 `confirm_send`；Esc 临时注册从仅 Listening 扩展到全部非 Idle 态；前端 overlay 显隐调用移除（后端 SW_SHOWNA 全权驱动） | 用户实测：preview 按 Enter 键去了记事本（焦点未跟随悬浮条）、点「发送」按钮激活 overlay 导致文字注入给 overlay 自己 |
 | 2026-07-24 | **v5：引入 tauri-plugin-single-instance；热键注册失败状态经 `get_hotkey_status` 暴露到设置页** | 用户实测：`pnpm tauri dev` 重启时旧实例未退出 → 热键 already registered / WebView2 类注册冲突 |
 | 2026-07-24 | **v5：设置页权限分区「以管理员身份重启」未提权时常驻显示；权限状态 3s 轮询（页面隐藏暂停）；`runAsAdminOnStart` 勾选后提示「下次启动生效」+ 立即重启链接；`get_elevation_status` 链路修复**（profile 文件缺失回退内置 profile，纯逻辑 `resolve_active_game_pid` 可单测） | 用户实测：重启入口只在横幅条件触发时出现；勾选自动提权无反馈；LOL 运行时 activeGameElevated 仍可能返回 null |
