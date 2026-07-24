@@ -50,6 +50,11 @@ enum Command {
         #[arg(long)]
         mode: Option<String>,
     },
+    /// 下载模型或 whisper-cli 运行时：bin | tiny | base | small
+    Download {
+        /// 下载目标：bin（whisper-cli 运行时）或模型短名（tiny/base/small）
+        target: String,
+    },
     /// 引擎评测（未实现）
     Eval {},
 }
@@ -70,12 +75,57 @@ async fn main() {
             key,
             mode,
         } => cmd_listen(&engine, profile, key, mode).await,
+        Command::Download { target } => cmd_download(&target).await,
         Command::Eval {} => {
             println!("eval 子命令未实现（eval 模块签名就位，录档/回放/导出待做）");
             1
         }
     };
     std::process::exit(code);
+}
+
+/// download：bin → whisper-cli 运行时；tiny/base/small → ggml 模型。单行刷新进度。
+async fn cmd_download(target: &str) -> i32 {
+    use std::io::Write as _;
+
+    let id = match target {
+        "bin" => kotone_stt::model::WHISPER_BIN_ID.to_string(),
+        "tiny" | "base" | "small" => format!("ggml-{target}"),
+        other if other.starts_with("ggml-") => other.to_string(),
+        other => {
+            eprintln!("未知下载目标：{other}（可选：bin / tiny / base / small）");
+            return 2;
+        }
+    };
+
+    let id2 = id.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        kotone_stt::model::download(&id2, &|done, total| {
+            match total {
+                Some(t) if t > 0 => {
+                    print!("\r下载中 {id2} … {:5.1}%", done as f64 * 100.0 / t as f64)
+                }
+                _ => print!("\r下载中 {id2} … {done} 字节"),
+            }
+            let _ = std::io::stdout().flush();
+        })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => {
+            println!("\r下载完成：{id}                    ");
+            0
+        }
+        Ok(Err(e)) => {
+            println!("\r下载失败：{e}                    ");
+            1
+        }
+        Err(e) => {
+            println!("\r下载任务异常：{e}                    ");
+            1
+        }
+    }
 }
 
 /// send：一次性注入。退出码 0 = 成功（INJECT_OK）；1 = 失败（INJECT_ERR）

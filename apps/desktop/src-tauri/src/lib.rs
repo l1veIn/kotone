@@ -263,16 +263,31 @@ fn restart_as_admin(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-// ---------- 模型 / 评测（未实现，返回错误） ----------
+// ---------- 模型 / 评测 ----------
 
 #[tauri::command]
 fn list_models() -> Result<Vec<model::ModelInfo>, String> {
     model::list()
 }
 
+/// 下载模型或 whisper-cli 运行时（id = ggml-* / whisper-cli）。
+/// 进度经 "kotone://download" 事件外发：{ id, downloaded, total }。
+/// async 命令 + spawn_blocking：466MB 模型下载不阻塞 UI 线程；IPC 签名不变。
 #[tauri::command]
-fn download_model(id: String) -> Result<(), String> {
-    model::download(&id)
+async fn download_model(app: AppHandle, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let app2 = app.clone();
+        let id2 = id.clone();
+        model::download(&id, &move |downloaded, total| {
+            use tauri::Emitter as _;
+            let _ = app2.emit(
+                "kotone://download",
+                serde_json::json!({ "id": id2, "downloaded": downloaded, "total": total }),
+            );
+        })
+    })
+    .await
+    .map_err(|e| format!("下载任务异常：{e}"))?
 }
 
 #[tauri::command]

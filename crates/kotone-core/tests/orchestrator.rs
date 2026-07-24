@@ -337,7 +337,8 @@ async fn double_begin_rejected() {
 async fn begin_with_unready_engine_toasts_error() {
     let (orch, emitter, _s) = {
         let (o, e, s) = make_orchestrator(false);
-        o.settings().write().unwrap().stt_engine = "whisper-cpp-sidecar".into();
+        // sherpa 恒为未就绪占位（whisper 真机装好后就绪，不能再用它模拟未就绪）
+        o.settings().write().unwrap().stt_engine = "sherpa-onnx-zipformer-zh".into();
         (o, e, s)
     };
     let r = orch.begin().await;
@@ -421,7 +422,8 @@ async fn error_state_retry_with_edited_text() {
 async fn error_without_text_rejects_retry_and_auto_idles() {
     let (orch, emitter, _s) = {
         let (o, e, s) = make_orchestrator(false);
-        o.settings().write().unwrap().stt_engine = "whisper-cpp-sidecar".into();
+        // sherpa 恒为未就绪占位（whisper 真机装好后就绪，不能再用它模拟未就绪）
+        o.settings().write().unwrap().stt_engine = "sherpa-onnx-zipformer-zh".into();
         (o, e, s)
     };
     let _ = orch.begin().await;
