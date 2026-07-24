@@ -68,6 +68,7 @@ impl HotkeyManager {
             .map_err(|e| format!("无法解析热键「{key}」: {e}"))?;
 
         let registered = app.global_shortcut().on_shortcut(shortcut.clone(), move |app, _sc, event| {
+            crate::log::log(&format!("hotkey fired: mode={mode:?} state={:?}", event.state()));
             let orch = app.state::<SharedState>().orchestrator.clone();
             match mode {
                 HotkeyMode::Hold => {
@@ -88,12 +89,14 @@ impl HotkeyManager {
 
         match registered {
             Ok(()) => {
+                crate::log::log(&format!("hotkey registered ok: {key} ({mode:?})"));
                 *self.current.lock().unwrap() = Some(shortcut);
                 *self.last_error.lock().unwrap() = None;
                 Ok(())
             }
             Err(e) => {
                 let msg = format!("注册热键「{key}」失败: {e}（键位可能被其他程序或其他 Kotone 实例占用）");
+                crate::log::log(&format!("hotkey register FAILED: {msg}"));
                 *self.last_error.lock().unwrap() = Some(msg.clone());
                 Err(msg)
             }

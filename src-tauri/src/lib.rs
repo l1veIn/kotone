@@ -6,6 +6,7 @@ pub mod elevation;
 mod eval;
 mod hotkey;
 pub mod inject;
+mod log;
 mod model;
 mod orchestrator;
 pub mod profile;
@@ -47,8 +48,7 @@ impl Emitter for TauriEmitter {
         let _ = self.app.emit(event, payload.clone());
         if event == "kotone://state" {
             let state = payload.get("state").and_then(|s| s.as_str()).unwrap_or("");
-            #[cfg(debug_assertions)]
-            eprintln!("[kotone state] {state} {payload}");
+            crate::log::log(&format!("state -> {state} {payload}"));
             // 会话激活期间（含 Preview）临时注册 Esc 全局取消键，回 Idle 即注销。
             // Preview 态同样需要 Esc：overlay 不抢焦点，Esc 是预览确认的主要键盘出口。
             if let Some(mgr) = self.app.try_state::<HotkeyManager>() {
@@ -351,6 +351,12 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            log::init();
+            log::log(&format!(
+                "startup: args={:?} elevated={}",
+                std::env::args().collect::<Vec<_>>(),
+                elevation::is_elevated()
+            ));
             tray::setup_tray(app.handle())?;
 
             // 首次运行：默认配置 + 内置 profile 落盘（~/.kotone/）
@@ -366,12 +372,17 @@ pub fn run() {
                 elevation::is_elevated(),
                 elevation::retry_marker_present(),
             ) {
+                log::log("auto-elevate: attempting runas restart");
                 match elevation::restart_for_auto_elevate() {
                     Ok(()) => {
+                        log::log("auto-elevate: spawned elevated copy, exiting this process");
                         app.handle().exit(0);
                         return Ok(());
                     }
-                    Err(e) => eprintln!("[kotone] 自动提权重启失败: {e}"),
+                    Err(e) => {
+                        log::log(&format!("auto-elevate failed: {e}"));
+                        eprintln!("[kotone] 自动提权重启失败: {e}");
+                    }
                 }
             }
 
