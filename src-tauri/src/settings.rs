@@ -6,11 +6,28 @@ use std::path::PathBuf;
 
 use crate::hotkey::HotkeyMode;
 
+/// 热键后端选择（docs/development.md §3.6）。
+/// Windows 上 RegisterHotKey 在部分游戏前台不投递事件，LL 钩子（WH_KEYBOARD_LL）是主路径。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HotkeyBackend {
+    /// Windows 优先 LL 钩子，安装失败回退 RegisterHotKey；非 Windows 恒 RegisterHotKey
+    #[default]
+    Auto,
+    /// 强制 LL 钩子（失败仍回退并记录日志）
+    Llhook,
+    /// 强制 RegisterHotKey（tauri-plugin-global-shortcut）
+    Register,
+}
+
 /// 用户配置（字段与 docs/development.md §5.4 config.json 对应）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub hotkey: HotkeyConfig,
+    /// 热键后端：auto（默认）/ llhook / register
+    #[serde(default)]
+    pub hotkey_backend: HotkeyBackend,
     pub audio_device_id: String,
     /// 当前 STT 引擎 ID，设置页可切换
     pub stt_engine: String,
@@ -41,6 +58,7 @@ impl Default for Settings {
                 key: "F8".into(),
                 mode: HotkeyMode::Toggle,
             },
+            hotkey_backend: HotkeyBackend::Auto,
             audio_device_id: "default".into(),
             stt_engine: "whisper-cpp-sidecar".into(),
             engine_options: serde_json::json!({
@@ -137,6 +155,7 @@ mod tests {
         let s = Settings::default();
         assert_eq!(s.hotkey.key, "F8");
         assert_eq!(s.hotkey.mode, HotkeyMode::Toggle);
+        assert_eq!(s.hotkey_backend, HotkeyBackend::Auto);
         assert_eq!(s.audio_device_id, "default");
         assert_eq!(s.stt_engine, "whisper-cpp-sidecar");
         assert!(!s.auto_send);

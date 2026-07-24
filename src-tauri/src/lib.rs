@@ -5,6 +5,9 @@ mod audio;
 pub mod elevation;
 mod eval;
 mod hotkey;
+#[cfg(windows)]
+mod hotkey_ll;
+mod hotkey_spec;
 pub mod inject;
 mod log;
 mod model;
@@ -108,7 +111,11 @@ fn update_settings(
 ) -> Result<Settings, String> {
     let (old_hotkey, updated) = {
         let mut guard = state.settings.write().unwrap();
-        let old_hotkey = (guard.hotkey.key.clone(), guard.hotkey.mode);
+        let old_hotkey = (
+            guard.hotkey.key.clone(),
+            guard.hotkey.mode,
+            guard.hotkey_backend,
+        );
         let mut merged =
             serde_json::to_value(&*guard).map_err(|e| format!("序列化配置失败: {e}"))?;
         settings::merge_json(&mut merged, &patch);
@@ -119,8 +126,11 @@ fn update_settings(
     };
     settings::save(&updated)?;
 
-    // 热键键位/模式变化 → 重注册
-    if old_hotkey.0 != updated.hotkey.key || old_hotkey.1 != updated.hotkey.mode {
+    // 热键键位/模式/后端变化 → 重注册
+    if old_hotkey.0 != updated.hotkey.key
+        || old_hotkey.1 != updated.hotkey.mode
+        || old_hotkey.2 != updated.hotkey_backend
+    {
         if let Some(mgr) = app.try_state::<HotkeyManager>() {
             mgr.register(&app, &updated.hotkey.key, updated.hotkey.mode)?;
         }

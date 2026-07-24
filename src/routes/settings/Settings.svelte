@@ -157,6 +157,34 @@
     }
   }
 
+  async function onHotkeyBackendChange(e: Event) {
+    const hotkeyBackend = (e.target as HTMLSelectElement).value as Settings["hotkeyBackend"];
+    try {
+      // 后端变更后端自动重注册（lib.rs update_settings）
+      settings = await updateSettings({ hotkeyBackend });
+      toast(true, "热键后端已切换并重注册");
+    } catch (err) {
+      toast(false, `切换热键后端失败：${errText(err)}`);
+    } finally {
+      try {
+        hotkeyStatus = await getHotkeyStatus();
+      } catch {
+        /* 状态刷新失败不覆盖切换反馈 */
+      }
+    }
+  }
+
+  /** 当前生效后端的展示名 */
+  const backendLabel = $derived(
+    hotkeyStatus === null
+      ? "检测中…"
+      : hotkeyStatus.backend === "llhook"
+        ? "LL 钩子（游戏前台可用）"
+        : hotkeyStatus.backend === "register"
+          ? "RegisterHotKey（系统热键）"
+          : "未注册",
+  );
+
   async function onDeviceChange(e: Event) {
     const id = (e.target as HTMLSelectElement).value;
     try {
@@ -264,6 +292,23 @@
           </button>
           <span class="text-[11px] text-white/40">当前：{settings.hotkey.key}（{settings.hotkey.mode}）</span>
         </div>
+        <div class="mt-3 flex items-center gap-2">
+          <label class="text-xs text-white/60" for="hotkey-backend">热键后端</label>
+          <select
+            id="hotkey-backend"
+            class="rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60 [&>option]:bg-kotone-deep"
+            value={settings.hotkeyBackend}
+            onchange={(e) => void onHotkeyBackendChange(e)}
+          >
+            <option value="auto">自动（优先 LL 钩子）</option>
+            <option value="llhook">LL 钩子</option>
+            <option value="register">RegisterHotKey</option>
+          </select>
+          <span class="text-[11px] text-white/40">当前生效：{backendLabel}</span>
+        </div>
+        <p class="mt-2 text-[11px] text-white/40">
+          部分游戏前台时系统热键（RegisterHotKey）收不到按键；LL 钩子（WH_KEYBOARD_LL）可覆盖该场景，命中时会吞掉热键避免触发游戏内同键绑定。
+        </p>
         {#if hotkeyStatus?.error}
           <!-- 热键注册失败：典型原因是旧实例未退出或键位被其他程序占用 -->
           <div class="mt-3 rounded-lg bg-kotone-pink/15 p-2.5 ring-1 ring-kotone-pink/50">

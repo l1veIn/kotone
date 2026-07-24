@@ -20,6 +20,8 @@ export interface HotkeyConfig {
 
 export interface Settings {
   hotkey: HotkeyConfig;
+  /** 热键后端：auto（Windows 优先 LL 钩子）/ llhook / register */
+  hotkeyBackend: "auto" | "llhook" | "register";
   audioDeviceId: string;
   sttEngine: string;
   engineOptions: Record<string, unknown>;
@@ -102,6 +104,8 @@ export interface HotkeyStatus {
   key: string | null;
   /** 最近一次注册失败信息（成功后清空） */
   error: string | null;
+  /** 当前生效后端：llhook（低级键盘钩子）/ register（RegisterHotKey）/ none */
+  backend: string;
 }
 
 // ================================================================
@@ -118,6 +122,7 @@ interface MockStore {
 const mock: MockStore = {
   settings: {
     hotkey: { key: "F8", mode: "toggle" },
+    hotkeyBackend: "auto",
     audioDeviceId: "default",
     sttEngine: "mock-stream",
     engineOptions: {
@@ -323,8 +328,9 @@ export async function restartAsAdmin(): Promise<void> {
   return invoke<void>("restart_as_admin");
 }
 
-/** 热键注册状态（registered/key/error），设置页热键分区展示占用冲突 */
+/** 热键注册状态（registered/key/error/backend），设置页热键分区展示占用冲突 */
 export async function getHotkeyStatus(): Promise<HotkeyStatus> {
-  if (!isTauri) return { registered: true, key: mock.settings.hotkey.key, error: null };
+  if (!isTauri)
+    return { registered: true, key: mock.settings.hotkey.key, error: null, backend: "llhook" };
   return invoke<HotkeyStatus>("get_hotkey_status");
 }
