@@ -49,6 +49,9 @@ pub struct Settings {
     pub vad_silence_ms: u32,
     /// 启动时自动以管理员重启自身（默认关；防循环逻辑见 elevation::should_auto_elevate）
     pub run_as_admin_on_start: bool,
+    /// 识别历史记录（默认 capped/1000 条/不含音频；off = 零开销不记录）
+    #[serde(default)]
+    pub history: crate::history::HistoryConfig,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -80,6 +83,7 @@ impl Default for Settings {
             interaction_mode: None,
             vad_silence_ms: default_vad_silence_ms(),
             run_as_admin_on_start: false,
+            history: crate::history::HistoryConfig::default(),
         }
     }
 }
@@ -179,6 +183,9 @@ mod tests {
         assert_eq!(s.vad_silence_ms, 700);
         assert!(s.engine_options["whisper-cpp-sidecar"]["threads"] == 4);
         assert!(!s.run_as_admin_on_start);
+        assert_eq!(s.history.mode, crate::history::HistoryMode::Capped);
+        assert_eq!(s.history.max_records, 1000);
+        assert!(!s.history.include_audio);
     }
 
     #[test]

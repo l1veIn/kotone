@@ -237,6 +237,7 @@ fn make_orchestrator_full(
     settings.auto_send = auto_send;
     settings.active_profile_id = None; // 测试不依赖真实 ~/.kotone
     settings.eval_recording = false; // 默认不录档（需要时测试自行开启并覆盖 eval_dir）
+    settings.history.mode = kotone_core::history::HistoryMode::Off; // 默认不记历史（需要时测试自行开启并覆盖 history_dir）
     let settings = Arc::new(RwLock::new(settings));
     let mut registry = EngineRegistry::new();
     // 内置引擎（mock-stream 等）由 kotone-stt 注入（dev-dependency）
@@ -639,6 +640,7 @@ fn make_orchestrator_with_eval(
     settings.stt_engine = "mock-stream".into();
     settings.active_profile_id = None;
     settings.eval_recording = true;
+    settings.history.mode = kotone_core::history::HistoryMode::Off; // 不写真实 ~/.kotone/history
     let settings = Arc::new(RwLock::new(settings));
     let mut registry = EngineRegistry::new();
     kotone_stt::register_builtin(&mut registry);
@@ -771,6 +773,7 @@ fn make_one_shot_orchestrator(
     settings.stt_engine = "mock-stream".into();
     settings.active_profile_id = None;
     settings.eval_recording = false;
+    settings.history.mode = kotone_core::history::HistoryMode::Off; // 不写真实 ~/.kotone/history
     settings.interaction_mode = Some(kotone_core::interaction::InteractionMode::OneShot);
     settings.vad_silence_ms = 210; // 7 帧静音即判停（测试快进）
     let settings = Arc::new(RwLock::new(settings));
@@ -875,4 +878,193 @@ async fn one_shot_without_vad_factory_begin_fails() {
     // begin 失败走 Error toast → 自动回 Idle；不产生任何发送
     wait_state(&orch, OrchestratorState::Idle, Duration::from_secs(2)).await;
     assert!(sent.lock().unwrap().is_empty());
+}
+
+// ---------- history：终态落账（HistoryDraft → history.jsonl） ----------
+
+/// 带 history 的 orchestrator：history_dir 指向临时目录；
+/// eval_dir 给 Some 时同时开启 evalRecording（验证 includeAudio 复制链路）
+fn make_history_orchestrator(
+    auto_send: bool,
+    injector: Arc<dyn Injector>,
+    history_dir: std::path::PathBuf,
+    eval_dir: Option<std::path::PathBuf>,
+) -> Arc<Orchestrator> {
+    let mut settings = Settings::default();
+    settings.stt_engine = "mock-stream".into();
+    settings.auto_send = auto_send;
+    settings.active_profile_id = Some("lol".into()); // 验证 profileId 落账
+    settings.eval_recording = eval_dir.is_some();
+    // history 默认 capped/1000/不含音频（测试按需再改 settings）
+    let settings = Arc::new(RwLock::new(settings));
+    let mut registry = EngineRegistry::new();
+    kotone_stt::register_builtin(&mut registry);
+    registry.register(Box::new(NeverReadyEngine));
+    let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(
+        Arc::new(Mutex::new(Vec::new())),
+        42,
+        true,
+    ));
+    let mut orch = Orchestrator::new(
+        settings,
+        Arc::new(registry),
+        Arc::new(MockAudioBackend),
+        injector,
+        focus,
+        Arc::new(VecEmitter::default()),
+    );
+    orch.toast_dwell = Duration::from_millis(10);
+    orch.finalize_timeout = Duration::from_secs(2);
+    orch.focus_restore_delay = Duration::ZERO;
+    orch.history_dir = Some(history_dir);
+    orch.eval_dir = eval_dir;
+    orch.into_arc()
+}
+
+/// sent 终态：一条完整记录（文本/引擎/profile/时长/延迟/sessionId）
+#[tokio::test]
+async fn history_sent_records_one_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
+    let orch = make_history_orchestrator(true, injector, dir.path().to_path_buf(), None);
+
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await; // 等 mock-stream 首个 partial
+    orch.end().await.unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Success);
+
+    let records = kotone_core::history::list_in(dir.path()).unwrap();
+    assert_eq!(records.len(), 1, "records: {records:?}");
+    let r = &records[0];
+    assert_eq!(r.outcome, kotone_core::history::HistoryOutcome::Sent);
+    assert_eq!(r.final_text, "对面打野在下路");
+    assert_eq!(r.engine_id, "mock-stream");
+    assert_eq!(r.profile_id.as_deref(), Some("lol"));
+    assert!(r.audio_ms > 0, "录音时长应累计");
+    assert!(r.first_partial_ms.is_some(), "500ms 后应已出现首个 partial");
+    assert!(r.finalize_latency_ms.is_some());
+    assert!(r.error.is_none());
+    assert!(r.audio_file.is_none(), "includeAudio 默认关闭");
+    assert!(!r.session_id.is_empty() && !r.ts.is_empty());
+}
+
+/// cancelled 终态：Listening 中取消，记一条 cancelled（无最终文本）
+#[tokio::test]
+async fn history_cancel_during_listening_records_cancelled() {
+    let dir = tempfile::tempdir().unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent });
+    let orch = make_history_orchestrator(false, injector, dir.path().to_path_buf(), None);
+
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    orch.cancel().await;
+
+    let records = kotone_core::history::list_in(dir.path()).unwrap();
+    assert_eq!(records.len(), 1, "records: {records:?}");
+    assert_eq!(records[0].outcome, kotone_core::history::HistoryOutcome::Cancelled);
+    assert!(records[0].final_text.is_empty());
+    assert!(records[0].finalize_latency_ms.is_none());
+}
+
+/// error → 重试成功：同 sessionId 写 error + sent 两条（刻意的失败→重试叙事）
+#[tokio::test]
+async fn history_error_retry_writes_two_entries_same_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(FlakyInjector {
+        attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        sent: sent.clone(),
+    });
+    let orch = make_history_orchestrator(false, injector, dir.path().to_path_buf(), None);
+
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.end().await.unwrap();
+    orch.confirm_send().await.unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Error);
+    orch.confirm_send().await.unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Success);
+
+    let records = kotone_core::history::list_in(dir.path()).unwrap();
+    assert_eq!(records.len(), 2, "records: {records:?}");
+    // list 新→旧：sent 在前，error 在后
+    assert_eq!(records[0].outcome, kotone_core::history::HistoryOutcome::Sent);
+    assert_eq!(records[1].outcome, kotone_core::history::HistoryOutcome::Error);
+    assert_eq!(records[0].session_id, records[1].session_id, "同会话重试应同 sessionId");
+    assert!(records[1].error.is_some(), "error 记录应带错误信息");
+    assert_eq!(records[0].final_text, "对面打野在下路");
+}
+
+/// error → Esc 取消：error 已落账，cancel 是清理动作，不双记 cancelled
+#[tokio::test]
+async fn history_error_then_cancel_does_not_double_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(FlakyInjector {
+        attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        sent: sent.clone(),
+    });
+    let orch = make_history_orchestrator(false, injector, dir.path().to_path_buf(), None);
+
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.end().await.unwrap();
+    orch.confirm_send().await.unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Error);
+    orch.cancel().await;
+
+    let records = kotone_core::history::list_in(dir.path()).unwrap();
+    assert_eq!(records.len(), 1, "error 后的 cancel 不应双记: {records:?}");
+    assert_eq!(records[0].outcome, kotone_core::history::HistoryOutcome::Error);
+}
+
+/// mode=off：完整走一遍 sent 流程，零记录零文件
+#[tokio::test]
+async fn history_off_mode_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
+    let orch = make_history_orchestrator(true, injector, dir.path().to_path_buf(), None);
+    orch.settings().write().unwrap().history.mode = kotone_core::history::HistoryMode::Off;
+
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.end().await.unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Success);
+
+    assert!(kotone_core::history::list_in(dir.path()).unwrap().is_empty());
+    assert!(!dir.path().join("history.jsonl").exists(), "off 模式不应产生文件");
+}
+
+/// includeAudio：sent 时从 eval 录档复制 wav 到 history/audio/，
+/// audioFile 落相对名，且 history 与 eval 的 sessionId 一致（互查）
+#[tokio::test]
+async fn history_include_audio_copies_eval_wav_with_same_session_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let eval_dir = tempfile::tempdir().unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
+    let orch = make_history_orchestrator(
+        true,
+        injector,
+        dir.path().to_path_buf(),
+        Some(eval_dir.path().to_path_buf()),
+    );
+    orch.settings().write().unwrap().history.include_audio = true;
+
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    orch.end().await.unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Success);
+
+    let records = kotone_core::history::list_in(dir.path()).unwrap();
+    assert_eq!(records.len(), 1);
+    let r = &records[0];
+    let audio_file = r.audio_file.clone().expect("includeAudio 应落音频文件名");
+    assert_eq!(audio_file, format!("{}.wav", r.session_id));
+    // history/audio/ 下确有该 wav，且与 eval 录档同源（同 sessionId 互查）
+    assert!(dir.path().join("audio").join(&audio_file).exists());
+    assert!(eval_dir.path().join(&audio_file).exists(), "eval 录档 wav 同名互查");
 }

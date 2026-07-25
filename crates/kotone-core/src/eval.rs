@@ -21,7 +21,8 @@ use crate::stt::{EngineRegistry, SessionConfig, SttEvent};
 /// 录档容量上限：只保留最近 N 个会话
 pub const MAX_SESSIONS: usize = 200;
 /// 采样率契约：16kHz mono f32（与 audio / stt 层一致）
-const SAMPLE_RATE: u32 = 16000;
+/// 全线统一采样率（16kHz mono f32；pub：orchestrator 的 history 计时按它换算）
+pub const SAMPLE_RATE: u32 = 16000;
 /// 回放时的喂入块大小（100ms）；第一版全量灌，不按原始节奏（ADR-005）
 const REPLAY_CHUNK_SAMPLES: usize = 16000 / 10;
 
@@ -79,7 +80,8 @@ fn session_json_path(dir: &Path, session_id: &str) -> PathBuf {
     dir.join(format!("{session_id}.json"))
 }
 
-fn session_wav_path(dir: &Path, session_id: &str) -> PathBuf {
+/// 录档 wav 路径（pub：history 的 includeAudio 按 sessionId 从 eval 目录复制 wav）
+pub fn session_wav_path(dir: &Path, session_id: &str) -> PathBuf {
     dir.join(format!("{session_id}.wav"))
 }
 
@@ -169,15 +171,27 @@ impl SessionRecorder {
 
     /// 录到指定目录（测试可指向临时目录）
     pub fn new_in(dir: PathBuf, engine_id: &str) -> Self {
+        Self::new_with_id(dir, engine_id, new_session_id())
+    }
+
+    /// 录到指定目录并使用调用方给定的 session id：
+    /// history 与 eval 录档要按同一 sessionId 互查（docs/history 设计），
+    /// 由 orchestrator 生成一次 id 同时喂给录档与历史草稿。语义与 new_in 一致。
+    pub fn new_with_id(dir: PathBuf, engine_id: &str, session_id: String) -> Self {
         Self {
             dir,
-            session_id: new_session_id(),
+            session_id,
             engine_id: engine_id.to_string(),
             started_at: utc_now_iso(),
             started: Instant::now(),
             pcm: Arc::new(Mutex::new(Vec::new())),
             partials: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// 本会话录档的 session id（history 记录与 eval 录档据此互查）
+    pub fn session_id(&self) -> &str {
+        &self.session_id
     }
 
     /// pump 录音线程喂入一块 pcm（追加到录制缓冲）

@@ -71,6 +71,26 @@ struct Inner {
     send_cancel: Option<CancelToken>,
     /// begin 时记录的前台窗口 = 注入目标（发送前把焦点还给它）
     target_window: Option<TargetWindow>,
+    /// history 草稿（history.mode != off 时 begin 创建；不放 ActiveSession——
+    /// end() 会 take 走 active，而 Sending/Error 态的终态落账仍需要草稿）
+    history: Option<Arc<Mutex<HistoryDraft>>>,
+}
+
+/// history 草稿：会话期间累计指标，终态（sent/cancelled/error）时落账一条记录
+struct HistoryDraft {
+    /// 与 eval 录档共用的 sessionId（begin 生成一次同时喂两边，可互查）
+    session_id: String,
+    started: std::time::Instant,
+    engine_id: String,
+    profile_id: Option<String>,
+    /// 已喂入的采样数（落账时按 eval::SAMPLE_RATE 换算 ms）
+    audio_samples: u64,
+    first_partial_ms: Option<u64>,
+    final_text: String,
+    finalize_latency_ms: Option<u64>,
+    /// error 终态已落账（Error 态保留文本供重试：重试成功仍写 sent；
+    /// error 后的 cancel 是清理动作，不再双记 cancelled）
+    reported: bool,
 }
 
 pub struct Orchestrator {
@@ -93,6 +113,8 @@ pub struct Orchestrator {
     pub focus_restore_delay: Duration,
     /// eval 录档目录覆盖（None = ~/.kotone/eval/；测试指向临时目录）
     pub eval_dir: Option<std::path::PathBuf>,
+    /// history 目录覆盖（None = ~/.kotone/history/；测试指向临时目录）
+    pub history_dir: Option<std::path::PathBuf>,
     /// VAD 工厂（ADR-007，B3 静音判停；None = 未接入——VAD 策略下 begin 报清晰错误）。
     /// 构造后注入（壳/CLI 按 feature 与模型就绪情况接线）
     pub vad_factory: Option<crate::vad::VadFactory>,
@@ -118,6 +140,7 @@ impl Orchestrator {
                 preview_text: None,
                 send_cancel: None,
                 target_window: None,
+                history: None,
             })),
             op: tokio::sync::Mutex::new(()),
             settings,
@@ -131,6 +154,7 @@ impl Orchestrator {
             toast_dwell: DEFAULT_TOAST_DWELL,
             focus_restore_delay: DEFAULT_FOCUS_RESTORE_DELAY,
             eval_dir: None,
+            history_dir: None,
             vad_factory: None,
         }
     }
@@ -263,12 +287,30 @@ impl Orchestrator {
         let cancelled_flag = Arc::new(AtomicBool::new(false));
 
         // eval 录档：evalRecording 开启时创建录档句柄，pump 边录边喂；
-        // finalize 成功后落盘，取消则随会话句柄整体丢弃（docs/adr/005）
+        // finalize 成功后落盘，取消则随会话句柄整体丢弃（docs/adr/005）。
+        // history 开启时 sessionId 生成一次同时喂给录档与历史草稿，两边可互查；
+        // history.mode == off 零开销：不建草稿、不生成 id、录档自生成 id。
+        let history_on = settings.history.mode != crate::history::HistoryMode::Off;
+        let session_id = history_on.then(crate::eval::new_session_id);
         let recorder = settings.eval_recording.then(|| {
-            crate::eval::SessionRecorder::new_in(
-                self.eval_dir.clone().unwrap_or_else(crate::eval::eval_dir),
-                &engine_id,
-            )
+            let dir = self.eval_dir.clone().unwrap_or_else(crate::eval::eval_dir);
+            match &session_id {
+                Some(id) => crate::eval::SessionRecorder::new_with_id(dir, &engine_id, id.clone()),
+                None => crate::eval::SessionRecorder::new_in(dir, &engine_id),
+            }
+        });
+        let history_draft = session_id.map(|sid| {
+            Arc::new(Mutex::new(HistoryDraft {
+                session_id: sid,
+                started: std::time::Instant::now(),
+                engine_id: engine_id.clone(),
+                profile_id: settings.active_profile_id.clone(),
+                audio_samples: 0,
+                first_partial_ms: None,
+                final_text: String::new(),
+                finalize_latency_ms: None,
+                reported: false,
+            }))
         });
 
         // B3（VAD 静音判停，ADR-007）：策略要求 VAD 时每会话建一个实例。
@@ -296,6 +338,7 @@ impl Orchestrator {
         let emitter = self.emitter.clone();
         let pump_flag = cancelled_flag.clone();
         let pump_recorder = recorder.clone();
+        let pump_history = history_draft.clone();
         let me_weak = self.me.read().unwrap().clone();
         let pump = tokio::spawn(async move {
             let mut session = session;
@@ -312,6 +355,9 @@ impl Orchestrator {
                             Some(c) => {
                                 if let Some(rec) = &pump_recorder {
                                     rec.push_pcm(&c);
+                                }
+                                if let Some(h) = &pump_history {
+                                    h.lock().unwrap().audio_samples += c.len() as u64;
                                 }
                                 if session.push_audio(&c).is_err() { break; }
                                 // VAD 帧判定与 STT 并行（同一 PCM 流）；
@@ -364,6 +410,13 @@ impl Orchestrator {
                                 if let Some(rec) = &pump_recorder {
                                     rec.push_partial(&text);
                                 }
+                                if let Some(h) = &pump_history {
+                                    let mut g = h.lock().unwrap();
+                                    if g.first_partial_ms.is_none() {
+                                        g.first_partial_ms =
+                                            Some(g.started.elapsed().as_millis() as u64);
+                                    }
+                                }
                                 emitter.emit("kotone://partial", json!({ "text": text }));
                             }
                             // Final 由 finalize 返回值承载，这里不重复上屏
@@ -395,6 +448,7 @@ impl Orchestrator {
         // 目标窗口记忆：用户按下热键说话前所在的前台窗口 = 注入目标，
         // 发送前（do_send）会把焦点还给它，避免 preview 交互抢焦点导致注入打错窗口
         inner.target_window = self.focus.foreground_window();
+        inner.history = history_draft;
         inner.active = Some(ActiveSession {
             stop_tx: Some(stop_tx),
             session_rx: Some(session_rx),
@@ -470,6 +524,12 @@ impl Orchestrator {
                 // 最终文本上屏（替换 partial）
                 self.emitter
                     .emit("kotone://partial", json!({ "text": t.text }));
+                // history 草稿补齐 finalize 产物（终态落账时写入记录）
+                if let Some(h) = &self.inner.lock().unwrap().history {
+                    let mut g = h.lock().unwrap();
+                    g.final_text = t.text.clone();
+                    g.finalize_latency_ms = Some(t.latency_ms as u64);
+                }
                 // eval 录档落盘（wav + partial 时间线 + 指标）；失败静默记日志不阻断流程
                 if let Some(rec) = active.recorder.take() {
                     match rec.finish(&t.text, t.latency_ms as u64) {
@@ -556,6 +616,8 @@ impl Orchestrator {
             // session_rx 随 ActiveSession drop：pump 收尾时 session.cancel() 后发送失败即释放
         }
         self.emit_state(OrchestratorState::Idle, None);
+        // error 已落账过的草稿跳过（Error 后的 Esc 是清理动作，不双记 cancelled）
+        self.write_history(crate::history::HistoryOutcome::Cancelled, None);
     }
 
     // ---------- 内部 ----------
@@ -607,12 +669,15 @@ impl Orchestrator {
             return;
         }
         inner.send_cancel = None;
+        // history 终态（锁外落账，见下方 write_history 调用；三个分支各自赋值一次）
+        let history_write: (crate::history::HistoryOutcome, Option<String>);
         match result {
             Ok(Ok(())) => {
                 inner.preview_text = None;
                 inner.state = OrchestratorState::Success;
                 drop(inner);
                 self.emit_state(OrchestratorState::Success, Some(json!({ "text": text })));
+                history_write = (crate::history::HistoryOutcome::Sent, None);
             }
             Ok(Err(e)) => {
                 // Error 保留文本（preview_text 承载），前端/confirm_send 可重试（§4.1）；
@@ -624,6 +689,7 @@ impl Orchestrator {
                     OrchestratorState::Error,
                     Some(json!({ "message": e.message, "needsElevation": e.needs_elevation, "text": text })),
                 );
+                history_write = (crate::history::HistoryOutcome::Error, Some(e.message));
             }
             Err(_) => {
                 inner.preview_text = Some(text.clone());
@@ -633,9 +699,14 @@ impl Orchestrator {
                     OrchestratorState::Error,
                     Some(json!({ "message": "发送线程异常", "text": text })),
                 );
+                history_write = (
+                    crate::history::HistoryOutcome::Error,
+                    Some("发送线程异常".to_string()),
+                );
             }
         }
         drop(_op);
+        self.write_history(history_write.0, history_write.1);
         self.schedule_idle(gen);
     }
 
@@ -667,7 +738,64 @@ impl Orchestrator {
             OrchestratorState::Error,
             Some(json!({ "message": message, "text": text })),
         );
+        self.write_history(crate::history::HistoryOutcome::Error, Some(message.to_string()));
         self.schedule_idle(gen);
+    }
+
+    /// history 终态落账：取草稿快照 → 组记录 → 追加到 history.jsonl。
+    /// - mode=off / 无草稿（begin 失败等）→ 直接返回（off 零开销在 begin 已保证，这里兜底热更新）；
+    /// - error：落账但保留草稿（Error 态可重试，重试成功同 sessionId 再写一条 sent，
+    ///   两条记录是刻意的「失败→重试成功」叙事）；
+    /// - cancelled：草稿已被 error 落账过则跳过（Error 后的 Esc 是清理动作，不双记）；
+    /// - sent / cancelled：落账并终结草稿；
+    /// - IO 失败静默记日志，绝不炸主流程。
+    fn write_history(&self, outcome: crate::history::HistoryOutcome, error: Option<String>) {
+        let draft = match self.inner.lock().unwrap().history.clone() {
+            Some(d) => d,
+            None => return,
+        };
+        let cfg = self.settings.read().unwrap().history.clone();
+        if cfg.mode == crate::history::HistoryMode::Off {
+            return;
+        }
+        let mut record = {
+            let mut g = draft.lock().unwrap();
+            if outcome == crate::history::HistoryOutcome::Cancelled && g.reported {
+                return;
+            }
+            if outcome != crate::history::HistoryOutcome::Cancelled {
+                g.reported = true;
+            }
+            crate::history::HistoryRecord {
+                session_id: g.session_id.clone(),
+                ts: crate::eval::utc_now_iso(),
+                engine_id: g.engine_id.clone(),
+                profile_id: g.profile_id.clone(),
+                final_text: g.final_text.clone(),
+                audio_ms: g.audio_samples * 1000 / crate::eval::SAMPLE_RATE as u64,
+                first_partial_ms: g.first_partial_ms,
+                finalize_latency_ms: g.finalize_latency_ms,
+                outcome,
+                error,
+                audio_file: None,
+            }
+        };
+        let dir = self
+            .history_dir
+            .clone()
+            .unwrap_or_else(crate::history::history_dir);
+        if cfg.include_audio {
+            // 音频来自 eval 录档（cancel 路径录档随会话丢弃，无 wav 可复制 → None）
+            let eval_dir = self.eval_dir.clone().unwrap_or_else(crate::eval::eval_dir);
+            record.audio_file =
+                crate::history::copy_audio_in(&dir, &eval_dir, &record.session_id);
+        }
+        if let Err(e) = crate::history::append_in(&dir, &record, &cfg) {
+            crate::log::log(&format!("history 落账失败（忽略）: {e}"));
+        }
+        if outcome != crate::history::HistoryOutcome::Error {
+            self.inner.lock().unwrap().history = None;
+        }
     }
 
     /// toast_dwell 后自动回 Idle（期间有新会话/取消则不动作）。

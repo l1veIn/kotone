@@ -13,6 +13,7 @@
 
 pub mod audio;
 pub mod eval;
+pub mod history;
 pub mod hotkey;
 pub mod inject;
 pub mod interaction;
