@@ -33,6 +33,8 @@
 | `0f5fb3b` | 引擎 #2 sherpa-onnx 流式 Zipformer-zh（ADR-004） | partial 27ms、final <1ms、简体全对 |
 | `29fbd29` | eval 评测模块：录档/回放/标注/CER 报告（ADR-005） | 117 测试全绿；三引擎对比表实跑 |
 | `84e979a` | CLI 完整化：config 点路径读写 / devices / play / listen --wav；WavFileBackend；CLI 默认带 sherpa；虚拟声卡自动化 E2E（docs/cli.md） | 135 测试全绿；VB-CABLE 回路无人值守实测 PASS |
+| `fbd94f7` + `d8c0fb6` | ADR-006 会话生命周期交互模式：三决策点策略重构 + 预览只读化（编辑=伪需求）+ 热键捕获录入 | 147 测试全绿，行为零变化 |
+| `2ecc3ba` + `236e813` | ADR-007 silero VAD + 模式 3「说一句就走」（A2+B3+C1） | 159 测试全绿；真实人声 wav 判停 E2E 通过 |
 
 **已验证**：注入机制正确（记事本中文短句 4/4 逐字一致）；状态机全链路（cargo 集成测试）；前端各状态渲染（浏览器 demo + Tauri 内 error 态实测）。
 
@@ -193,22 +195,24 @@ enum SttEvent {
 - 安装包不含任何模型；首次启动引导下载当前引擎的默认模型（whisper small ~466MB / sherpa-onnx zipformer-zh 量级相近）。
 - 用户可在设置中切换引擎，未就绪的引擎显示「需下载模型」。
 
-### 3.4 交互模式：push-to-talk 为主，模式用户可选，录音实时回显
+### 3.4 交互模式：会话生命周期的三个决策点（v12 重构，ADR-006/007）
 
-**决策：**
+**v12 起，交互模式不是硬编码分支，而是三个正交决策点的策略组装**（`kotone-core/interaction.rs`）：
 
-1. **默认 push-to-talk**，提供两种子模式，用户在设置中选择：
-   - **hold**：按住说话，松手结束（游戏内语音键习惯，默认）；
-   - **toggle**：按一下开始，再按一下结束（长句/双手操作场景）。
-2. **交互模式与识别引擎是正交的两个配置维度。** 无论 hold 还是 toggle，对 orchestrator 都是「开始会话 → 持续 push_audio → 结束会话」；后续增加 VAD 免按键模式（hands-free）只改触发层，不动 STT 链路。
-3. **录音中小悬浮窗实时回显。** 按下热键即弹出紧凑悬浮条：
-   - 流式引擎：**partial 文本边说边上屏**（附波形动画），松手后替换为最终文本；
-   - 非流式引擎：显示波形 + 「聆听中…」，松手后显示「转写中…」再出结果。
-   UI 通过 `kotone://partial` 事件驱动，不关心引擎是否流式——没有 partial 事件就停留在波形态。
+- **BeginTrigger**：A1 热键按住 / A2 热键点按 / A3 VAD 全时检测（Phase 3）
+- **EndTrigger**：B1 松手 / B2 再按 / B3 VAD 静音判停（`vadSilenceMs` 默认 700，最短会话保护 500ms；热键强制结束恒在兜底）/ Esc 取消恒在
+- **PostFinalize**：C1 直接发送 / C2 预览确认
+- 流式与否、悬浮框回显**不是模式维度**（引擎能力及其投影）
 
-不做（MVP）：全时 VAD 免按键（误触发与资源风险，Phase 3 作为第三种交互模式评估）。
+**四个预设模式**：对讲机（A1+B1+C1）/ 录音笔（A2+B2+C2）/ **说一句就走 one-shot（A2+B3+C1，已实现）** / 全时免按（Phase 3）。
 
-**v3 实现细节**：hold 模式用插件 `on_shortcut` 的 Pressed/Released 区分；toggle 只响应 Pressed（Idle→开始、Listening→结束、其他状态→取消）。**Esc 取消不常驻注册**（避免劫持游戏 Esc），仅在 Listening 期间临时全局注册，离开即注销。
+**单键语义表**（ADR-006 契约）：触发键按状态路由——Idle→开始、Listening→结束、Preview→确认发送、Sending→中止、Error→重试；Esc 恒为取消。
+
+**预览只读化（用户决策）**：游戏场景错别字要么直接发要么重说，编辑是伪需求。Preview 态只读显示 +「{触发键} 发送 / Esc 重说」；confirm_send 无文本参数；overlay 永不需键盘焦点。
+
+**热键录入**：设置页「点击录入」+ `kotone-cli config set hotkey.key --capture`——LL 钩子捕获模式，按任意组合键即录入，Esc 取消。
+
+**VAD（ADR-007）**：silero-vad ONNX（630KB，模型清单 `silero-vad`）；推理后端复用 sherpa-onnx 内置 VAD（零新增重依赖，feature `vad-silero`，CLI 默认开 / 壳默认关）；判停阈值纯逻辑在 core（可单测可配置）；whisper 静音裁剪暂不做。
 
 ### 3.5 游戏注入：raw windows crate 直调 SendInput，对齐 LeagueAkari
 
@@ -652,6 +656,7 @@ CI：GitHub Actions（Windows runner 为主）— fmt / clippy / cargo test（�
 | 2026-07-25 | **v9：归位为 `apps/` + `crates/` 产品 monorepo**（ADR-002）；whisper-cli 二进制管理从「Tauri sidecar」改为「kotone-stt 自管理（~/.kotone/bin/）」 | 根目录双重身份（JS+Rust）是脚手架与拆分的两次战术妥协叠加；Tauri sidecar 机制对 CLI 不可用，违背「core 无 Tauri 可跑」原则 |
 | 2026-07-25 | **v10：双引擎接入 + eval 模块落地**（ADR-003/004/005）。sherpa 绑定选官方 crate（社区 sherpa-rs 已被上游收编弃用）；`engine-sherpa` feature 默认关（原生库 ~50MB）；sherpa 热词恒用 modified_beam_search（greedy 遇热词崩进程）；whisper 繁体问题挂起 | eval 实跑数据 sherpa 全面占优（首字 30ms/CER 0 vs whisper 2651ms/CER 0.143）；默认引擎正式决策仍待真人人声语料评测（Phase 1 末决策点） |
 | 2026-07-25 | **v11：CLI 为一等消费者完整化**（docs/cli.md）；`WavFileBackend` 归 platform crate（AudioBackend 的虚拟采集实现，core 不放测试工装）；kotone-cli 默认启用 engine-sherpa（kotone-tauri 保持默认关）；无人值守测试双路径（wav 直灌 / VB-CABLE 回路，`scripts/e2e-virtual-audio.sh`） | 用户决策：界面是薄封装最后做，测试自动化优先；虚拟声卡路径的 partial 时间线含系统音频栈延迟，引擎对比以 eval replay 数据为准 |
+| 2026-07-25 | **v12：交互模式业务建模（ADR-006/007）**——三个决策点策略组装替代硬编码分支；**预览只读化**（用户裁定：编辑是伪需求，要么发要么重说）；热键捕获录入；**VAD 与模式 3「说一句就走」落地** | 组合爆炸前的主动建模：流式/回显是引擎能力投影而非模式维度，组合数塌缩为 2×3×2 策略组装；VAD 推理复用 sherpa-onnx 内置实现避免引入第二套 ONNX Runtime |
 | 2026-07-24 | **v5：preview 交互不抢焦点三连修**——begin 记录前台 hwnd 为注入目标（`FocusBackend` 抽象），Sending 前先 `SetForegroundWindow` 恢复焦点（AttachThreadInput 兜底）；toggle 热键在 Preview 态路由为 `confirm_send`；Esc 临时注册从仅 Listening 扩展到全部非 Idle 态；前端 overlay 显隐调用移除（后端 SW_SHOWNA 全权驱动） | 用户实测：preview 按 Enter 键去了记事本（焦点未跟随悬浮条）、点「发送」按钮激活 overlay 导致文字注入给 overlay 自己 |
 | 2026-07-24 | **v5：引入 tauri-plugin-single-instance；热键注册失败状态经 `get_hotkey_status` 暴露到设置页** | 用户实测：`pnpm tauri dev` 重启时旧实例未退出 → 热键 already registered / WebView2 类注册冲突 |
 | 2026-07-24 | **v5：设置页权限分区「以管理员身份重启」未提权时常驻显示；权限状态 3s 轮询（页面隐藏暂停）；`runAsAdminOnStart` 勾选后提示「下次启动生效」+ 立即重启链接；`get_elevation_status` 链路修复**（profile 文件缺失回退内置 profile，纯逻辑 `resolve_active_game_pid` 可单测） | 用户实测：重启入口只在横幅条件触发时出现；勾选自动提权无反馈；LOL 运行时 activeGameElevated 仍可能返回 null |
