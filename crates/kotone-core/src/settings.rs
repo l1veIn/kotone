@@ -39,10 +39,14 @@ pub struct Settings {
     pub language: String,
     /// 评测录档开关（默认开）
     pub eval_recording: bool,
-    /// 交互模式预设（ADR-006）：push-to-talk / dictation；
+    /// 交互模式预设（ADR-006）：push-to-talk / dictation / one-shot；
     /// 缺省 None = 由 hotkey.mode + autoSend 旧字段推导（兼容混合组合）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interaction_mode: Option<crate::interaction::InteractionMode>,
+    /// VAD 静音判停阈值（ms，ADR-007；one-shot 模式生效，默认 700，
+    /// 使用时 clamp 到 vad::SILENCE_MS_RANGE）
+    #[serde(default = "default_vad_silence_ms")]
+    pub vad_silence_ms: u32,
     /// 启动时自动以管理员重启自身（默认关；防循环逻辑见 elevation::should_auto_elevate）
     pub run_as_admin_on_start: bool,
 }
@@ -74,9 +78,14 @@ impl Default for Settings {
             language: "zh".into(),
             eval_recording: true,
             interaction_mode: None,
+            vad_silence_ms: default_vad_silence_ms(),
             run_as_admin_on_start: false,
         }
     }
+}
+
+fn default_vad_silence_ms() -> u32 {
+    crate::vad::DEFAULT_SILENCE_MS
 }
 
 /// Kotone 用户数据目录：~/.kotone/
@@ -167,6 +176,7 @@ mod tests {
         assert_eq!(s.active_profile_id.as_deref(), Some("lol"));
         assert_eq!(s.language, "zh");
         assert!(s.eval_recording);
+        assert_eq!(s.vad_silence_ms, 700);
         assert!(s.engine_options["whisper-cpp-sidecar"]["threads"] == 4);
         assert!(!s.run_as_admin_on_start);
     }

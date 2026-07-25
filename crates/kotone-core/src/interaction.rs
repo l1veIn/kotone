@@ -4,7 +4,8 @@
 //! - 策略由配置推导：`interactionMode` 预设优先，缺省由 `hotkey.mode` +
 //!   `autoSend` 旧字段推导（兼容已有配置与混合组合，行为零变化）；
 //! - orchestrator 每次热键事件现场组装策略（settings 热更新无需失效处理）；
-//! - B3（VAD 静音判停）本期只留枚举与路由接口，下一任务接入判停逻辑。
+//! - B3（VAD 静音判停）由 ADR-007 接入：one-shot 预设生效，VAD 帧判定与
+//!   判停状态机见 `crate::vad`。
 
 use crate::hotkey::HotkeyMode;
 use crate::settings::Settings;
@@ -26,9 +27,7 @@ pub enum EndTrigger {
     HotkeyRelease,
     /// B2：再按一次热键结束
     HotkeyPress,
-    /// B3：VAD 静音判停（下一任务接入；本期无人构造该值，
-    /// 路由层按「热键按下强制结束」兜底，保证插入时不改已有分支）
-    #[allow(dead_code)]
+    /// B3：VAD 静音判停（ADR-007；热键按下强制结束恒在兜底）
     VadSilence,
 }
 
@@ -50,7 +49,11 @@ pub enum InteractionMode {
     /// 录音笔：A2 + B2 + C2（点按开始，再按结束，预览确认后发）
     #[serde(rename = "dictation")]
     Dictation,
-    // one-shot（A2+B3+C1）下一任务；hands-free（A3）Phase 3
+    /// 说一句就走：A2 + B3 + C1（点按开始，VAD 静音判停，转写完直接发；
+    /// 热键强制结束恒在兜底）。需要 VAD 接入（vad_factory），否则 begin 报错
+    #[serde(rename = "one-shot")]
+    OneShot,
+    // hands-free（A3 全时免按）Phase 3
 }
 
 /// 组装后的交互策略：orchestrator 的热键路由只读这个结构
@@ -74,6 +77,11 @@ impl InteractionPolicy {
                 begin: BeginTrigger::HotkeyToggle,
                 end: EndTrigger::HotkeyPress,
                 post: PostFinalize::PreviewConfirm,
+            },
+            InteractionMode::OneShot => Self {
+                begin: BeginTrigger::HotkeyToggle,
+                end: EndTrigger::VadSilence,
+                post: PostFinalize::SendDirect,
             },
         }
     }
@@ -102,6 +110,8 @@ impl InteractionPolicy {
             Some(InteractionMode::PushToTalk)
         } else if *self == Self::from_preset(InteractionMode::Dictation) {
             Some(InteractionMode::Dictation)
+        } else if *self == Self::from_preset(InteractionMode::OneShot) {
+            Some(InteractionMode::OneShot)
         } else {
             None
         }
@@ -156,6 +166,19 @@ mod tests {
         s.interaction_mode = Some(InteractionMode::PushToTalk);
         let p = InteractionPolicy::from_settings(&s);
         assert_eq!(p, InteractionPolicy::from_preset(InteractionMode::PushToTalk));
+    }
+
+    #[test]
+    fn one_shot_preset_is_a2_b3_c1() {
+        let p = InteractionPolicy::from_preset(InteractionMode::OneShot);
+        assert_eq!(p.begin, BeginTrigger::HotkeyToggle);
+        assert_eq!(p.end, EndTrigger::VadSilence);
+        assert_eq!(p.post, PostFinalize::SendDirect);
+        assert_eq!(p.preset(), Some(InteractionMode::OneShot));
+        // 显式配置优先生效
+        let mut s = settings_with(HotkeyMode::Hold, false);
+        s.interaction_mode = Some(InteractionMode::OneShot);
+        assert_eq!(InteractionPolicy::from_settings(&s), p);
     }
 
     #[test]

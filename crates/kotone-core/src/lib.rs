@@ -21,3 +21,4 @@ pub mod orchestrator;
 pub mod profile;
 pub mod settings;
 pub mod stt;
+pub mod vad;

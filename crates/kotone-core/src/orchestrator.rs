@@ -83,6 +83,8 @@ pub struct Orchestrator {
     injector: Arc<dyn Injector>,
     focus: Arc<dyn FocusBackend>,
     emitter: Arc<dyn Emitter>,
+    /// 自引用（Weak）：VAD 判停时 pump 需要触发 end()（与热键结束同路径）
+    me: RwLock<Option<std::sync::Weak<Orchestrator>>>,
     /// finalize 超时（测试可调小）
     pub finalize_timeout: Duration,
     /// Success/Error 停留时长（测试可设为 0）
@@ -91,9 +93,15 @@ pub struct Orchestrator {
     pub focus_restore_delay: Duration,
     /// eval 录档目录覆盖（None = ~/.kotone/eval/；测试指向临时目录）
     pub eval_dir: Option<std::path::PathBuf>,
+    /// VAD 工厂（ADR-007，B3 静音判停；None = 未接入——VAD 策略下 begin 报清晰错误）。
+    /// 构造后注入（壳/CLI 按 feature 与模型就绪情况接线）
+    pub vad_factory: Option<crate::vad::VadFactory>,
 }
 
 impl Orchestrator {
+    /// 构造（返回 Self 便于调用方先调整 pub 字段：超时/录档目录/vad_factory）。
+    /// **必须接 `.into_arc()` 收尾**：VAD 判停靠 Weak 自引用触发 end()，
+    /// 不 into_arc 的实例在 one-shot 模式下不会自动判停。
     pub fn new(
         settings: Arc<RwLock<Settings>>,
         engines: Arc<EngineRegistry>,
@@ -118,11 +126,20 @@ impl Orchestrator {
             injector,
             focus,
             emitter,
+            me: RwLock::new(None),
             finalize_timeout: DEFAULT_FINALIZE_TIMEOUT,
             toast_dwell: DEFAULT_TOAST_DWELL,
             focus_restore_delay: DEFAULT_FOCUS_RESTORE_DELAY,
             eval_dir: None,
+            vad_factory: None,
         }
+    }
+
+    /// 包装为 Arc 并接线 Weak 自引用（VAD 判停 → end() 的回调通道）
+    pub fn into_arc(self) -> Arc<Self> {
+        let orch = Arc::new(self);
+        *orch.me.write().unwrap() = Some(Arc::downgrade(&orch));
+        orch
     }
 
     pub fn state(&self) -> OrchestratorState {
@@ -254,15 +271,38 @@ impl Orchestrator {
             )
         });
 
-        // PCM pump：录音 → session.push_audio；STT partial → kotone://partial
+        // B3（VAD 静音判停，ADR-007）：策略要求 VAD 时每会话建一个实例。
+        // 未接入工厂 / 模型未就绪 → begin 直接失败（清晰错误，不开半截会话）
+        let use_vad = self.policy().end == EndTrigger::VadSilence;
+        let vad_state = if use_vad {
+            let factory = self.vad_factory.clone().ok_or_else(|| {
+                "one-shot 模式需要 VAD，但当前构建未接入（vad-silero feature 未编译）".to_string()
+            })?;
+            let vad = factory()?;
+            let silence_ms = settings
+                .vad_silence_ms
+                .clamp(*crate::vad::SILENCE_MS_RANGE.start(), *crate::vad::SILENCE_MS_RANGE.end());
+            Some((
+                vad,
+                crate::vad::FrameSplitter::new(),
+                crate::vad::SilenceStopTracker::new(silence_ms, crate::vad::MIN_SESSION_MS),
+            ))
+        } else {
+            None
+        };
+
+        // PCM pump：录音 → session.push_audio（VAD 策略下并行喂 VAD）；
+        // STT partial → kotone://partial；VAD 判停 → 触发 end()（与热键结束同路径）
         let emitter = self.emitter.clone();
         let pump_flag = cancelled_flag.clone();
         let pump_recorder = recorder.clone();
+        let me_weak = self.me.read().unwrap().clone();
         let pump = tokio::spawn(async move {
             let mut session = session;
             let mut stop_rx = stop_rx;
             let mut pcm_rx = pcm_rx;
             let mut stt_rx = stt_rx;
+            let mut vad_state = vad_state;
             loop {
                 tokio::select! {
                     biased;
@@ -274,6 +314,46 @@ impl Orchestrator {
                                     rec.push_pcm(&c);
                                 }
                                 if session.push_audio(&c).is_err() { break; }
+                                // VAD 帧判定与 STT 并行（同一 PCM 流）；
+                                // 推理失败只禁用判停（热键强制结束兜底），不断会话
+                                if let Some((vad, splitter, tracker)) = &mut vad_state {
+                                    let mut decision = crate::vad::StopDecision::Continue;
+                                    let mut failed = None;
+                                    for frame in splitter.push(&c) {
+                                        match vad.push_frame(&frame) {
+                                            Ok(speech) => {
+                                                decision = tracker.push(speech);
+                                                if decision == crate::vad::StopDecision::Stop {
+                                                    break;
+                                                }
+                                            }
+                                            Err(e) => {
+                                                failed = Some(e);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if let Some(e) = failed {
+                                        crate::log::log(&format!(
+                                            "VAD 推理失败，本次会话禁用静音判停（热键仍可结束）: {e}"
+                                        ));
+                                        vad_state = None;
+                                    } else if decision == crate::vad::StopDecision::Stop {
+                                        emitter.emit(
+                                            "kotone://vad-stop",
+                                            json!({ "elapsedMs": tracker.elapsed_ms() }),
+                                        );
+                                        if let Some(me) =
+                                            me_weak.as_ref().and_then(|w| w.upgrade())
+                                        {
+                                            tokio::spawn(async move {
+                                                let _ = me.end().await;
+                                            });
+                                        }
+                                        // 立刻交出 session：end() 正在等 session_rx
+                                        break;
+                                    }
+                                }
                             }
                             None => break, // 采集结束
                         }

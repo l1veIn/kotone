@@ -255,7 +255,7 @@ fn make_orchestrator_full(
     orch.toast_dwell = Duration::from_millis(10);
     orch.finalize_timeout = Duration::from_secs(2);
     orch.focus_restore_delay = Duration::ZERO;
-    (Arc::new(orch), emitter)
+    (orch.into_arc(), emitter)
 }
 
 #[tokio::test]
@@ -655,7 +655,7 @@ fn make_orchestrator_with_eval(
     orch.finalize_timeout = Duration::from_secs(2);
     orch.focus_restore_delay = Duration::ZERO;
     orch.eval_dir = Some(eval_dir);
-    (Arc::new(orch), emitter, sent)
+    (orch.into_arc(), emitter, sent)
 }
 
 /// eval 录档：finalize 成功后落盘 wav + json（字段契约对齐 docs/development.md §5.4）
@@ -718,4 +718,161 @@ async fn eval_recording_off_writes_nothing() {
         kotone_core::eval::list_sessions_at(dir.path()).unwrap().is_empty(),
         "evalRecording 关闭时不应录档"
     );
+}
+
+// ---------- 模式 3「说一句就走」（one-shot：A2 + B3 + C1，ADR-007） ----------
+
+/// 脚本化 VAD：按预设序列逐帧返回语音判定（序列用完后恒返回尾部值）
+struct ScriptVad {
+    script: Vec<bool>,
+    idx: usize,
+}
+
+impl ScriptVad {
+    /// n_speech 帧语音后恒静音
+    fn speech_then_silence(n_speech: usize) -> Self {
+        Self {
+            script: vec![true; n_speech],
+            idx: 0,
+        }
+    }
+    /// 恒静音（永不判停）
+    fn all_silence() -> Self {
+        Self {
+            script: Vec::new(),
+            idx: 0,
+        }
+    }
+}
+
+impl kotone_core::vad::Vad for ScriptVad {
+    fn push_frame(&mut self, _frame: &[f32]) -> Result<bool, String> {
+        let v = self.script.get(self.idx).copied().unwrap_or(false);
+        self.idx += 1;
+        Ok(v)
+    }
+    fn reset(&mut self) {
+        self.idx = 0;
+    }
+}
+
+/// one-shot 测试架：预设 interactionMode=one-shot + 快阈值（210ms）+ 脚本 VAD
+fn make_one_shot_orchestrator(
+    vad: ScriptVad,
+) -> (Arc<Orchestrator>, Arc<VecEmitter>, Arc<Mutex<Vec<String>>>) {
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
+    let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(
+        Arc::new(Mutex::new(Vec::new())),
+        42,
+        true,
+    ));
+    let mut settings = Settings::default();
+    settings.stt_engine = "mock-stream".into();
+    settings.active_profile_id = None;
+    settings.eval_recording = false;
+    settings.interaction_mode = Some(kotone_core::interaction::InteractionMode::OneShot);
+    settings.vad_silence_ms = 210; // 7 帧静音即判停（测试快进）
+    let settings = Arc::new(RwLock::new(settings));
+    let mut registry = EngineRegistry::new();
+    kotone_stt::register_builtin(&mut registry);
+    let emitter = Arc::new(VecEmitter::default());
+    let mut orch = Orchestrator::new(
+        settings,
+        Arc::new(registry),
+        Arc::new(MockAudioBackend),
+        injector,
+        focus,
+        emitter.clone(),
+    );
+    orch.toast_dwell = Duration::from_millis(10);
+    orch.finalize_timeout = Duration::from_secs(2);
+    orch.focus_restore_delay = Duration::ZERO;
+    let vad = std::sync::Mutex::new(Some(vad));
+    orch.vad_factory = Some(Arc::new(move || {
+        Ok(Box::new(vad.lock().unwrap().take().unwrap_or_else(ScriptVad::all_silence))
+            as Box<dyn kotone_core::vad::Vad>)
+    }));
+    (orch.into_arc(), emitter, sent)
+}
+
+/// 轮询等待目标状态（VAD 判停是异步的：pump → end() → finalize → 发送）
+async fn wait_state(orch: &Orchestrator, want: OrchestratorState, timeout: Duration) {
+    let start = std::time::Instant::now();
+    while orch.state() != want {
+        assert!(
+            start.elapsed() < timeout,
+            "等待状态 {want:?} 超时（当前 {:?}）",
+            orch.state()
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// 模式 3 全链路：A2 点按开始 → B3 VAD 判停（无需再按）→ C1 直发 → Success
+#[tokio::test]
+async fn one_shot_vad_stop_auto_sends() {
+    // 剧本：30 帧语音（900ms > 最短保护 500ms）后恒静音 → 210ms 阈值判停
+    let (orch, emitter, sent) =
+        make_one_shot_orchestrator(ScriptVad::speech_then_silence(30));
+
+    orch.on_hotkey_toggle().await; // A2：点按开始
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+
+    // B3：VAD 判停自动结束（不用任何按键）→ C1 直发 → Success
+    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(5)).await;
+
+    // 判停事件已外发（CLI/前端可观测）
+    assert!(
+        emitter
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(e, _)| e == "kotone://vad-stop"),
+        "应发出 kotone://vad-stop 事件"
+    );
+    // C1：转写完直接发送 mock 最终文本，全程无 Preview
+    assert_eq!(sent.lock().unwrap().as_slice(), ["对面打野在下路"]);
+    assert!(
+        !emitter.state_sequence().contains(&"preview".to_string()),
+        "one-shot 不应经过 Preview: {:?}",
+        emitter.state_sequence()
+    );
+    // toast 后自动回 Idle
+    wait_state(&orch, OrchestratorState::Idle, Duration::from_secs(2)).await;
+}
+
+/// 模式 3 热键兜底：VAD 失效（恒静音不判停）时再按热键强制结束仍生效
+#[tokio::test]
+async fn one_shot_hotkey_force_end_when_vad_never_stops() {
+    let (orch, _emitter, sent) = make_one_shot_orchestrator(ScriptVad::all_silence());
+
+    orch.on_hotkey_toggle().await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        orch.state(),
+        OrchestratorState::Listening,
+        "恒静音剧本下 VAD 不应判停"
+    );
+
+    orch.on_hotkey_toggle().await; // 热键强制结束（B3 兜底恒在）
+    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(5)).await;
+    assert_eq!(sent.lock().unwrap().as_slice(), ["对面打野在下路"]);
+}
+
+/// 模式 3 未接入 VAD 工厂：begin 报清晰错误（Error toast 后自动回 Idle）
+#[tokio::test]
+async fn one_shot_without_vad_factory_begin_fails() {
+    let (orch, _emitter, sent) = make_orchestrator(true);
+    orch.settings().write().unwrap().interaction_mode =
+        Some(kotone_core::interaction::InteractionMode::OneShot);
+    // vad_factory 保持 None（未接入）
+
+    let err = orch.begin().await.unwrap_err();
+    assert!(err.contains("VAD"), "错误应指明 VAD 未接入: {err}");
+    // begin 失败走 Error toast → 自动回 Idle；不产生任何发送
+    wait_state(&orch, OrchestratorState::Idle, Duration::from_secs(2)).await;
+    assert!(sent.lock().unwrap().is_empty());
 }
