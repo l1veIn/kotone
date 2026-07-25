@@ -18,12 +18,38 @@
 | `devices` | 枚举音频输入/输出设备，标出默认与虚拟声卡 |
 | `play <wav> [--device "<名称子串>"]` | 播放 16kHz wav 到输出设备（自动重采样） |
 | `eval list / replay / label / report` | 引擎评测（ADR-005） |
+| `doctor` | 环境自检：设备/引擎/profile/提权/VAD/history 逐项 ✓/⚠/✗ + 修复建议（有 ✗ 退出码 1） |
+| `elevate` | 以管理员身份重启自身（UIPI：目标游戏提权运行时注入必需） |
+| `profile list / use <id> / detect` | 游戏 profile 列表 / 激活 / 前台进程匹配检测 |
+| `log list [--limit N] [--json] / clear [--yes]` | 识别历史查看 / 清空（~/.kotone/history/） |
 
 ### config set 支持的键
 
 `hotkey.key`、`hotkey.mode`(hold/toggle)、`hotkeyBackend`(auto/llhook/register)、
 `sttEngine`（校验已注册）、`activeProfileId`、`autoSend`(true/false)、
-`audioDeviceId`、`language`、`evalRecording`、`runAsAdminOnStart`
+`audioDeviceId`、`language`、`evalRecording`、`runAsAdminOnStart`、
+`interactionMode`(push-to-talk/dictation/one-shot)、`vadSilenceMs`(200-5000)、
+`history.mode`(capped/keep-all/off)、`history.maxRecords`(1-100000)、
+`history.includeAudio`(true/false)
+
+### 识别历史（log 命令）
+
+history.mode 非 off 时，每次会话终态自动追加一条 JSONL 到
+`~/.kotone/history/history.jsonl`：`sent`（发送成功）/ `cancelled`（Esc 取消）/
+`error`（注入或转写失败）。error 后重试成功会同 sessionId 再记一条 sent
+（刻意的「失败→重试」叙事）；error 后的 Esc 是清理动作，不双记 cancelled。
+sessionId 与 eval 录档一致可互查；`history.includeAudio` 开启时把 eval 录档
+wav 复制到 `history/audio/<sessionId>.wav`（evalRecording 关闭时无 wav 可复制，
+audioFile 为 null）。capped 模式超上限自动裁剪最旧记录（联动删除其音频）。
+
+### doctor 与提权（elevate）
+
+`doctor` 启动自检六项：音频输入设备（标注虚拟声卡）、STT 引擎就绪、
+激活 profile 存在性、提权链路（目标进程已提权而自身未提权 → ✗ 并提示
+`kotone-cli elevate`）、VAD 模型、eval/history 配置摘要。
+`listen`（热键模式）启动时也会做同样的提权预检，命中即 stderr 警告（不阻断）。
+`elevate` 走 ShellExecuteExW runas 重启自身（带当前参数），UAC 确认后新进程接管；
+已是管理员时直接提示无需提权。
 
 ### listen 退出码
 

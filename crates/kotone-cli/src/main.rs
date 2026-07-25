@@ -7,6 +7,10 @@
 //! - `config`：show / get / set（点路径写入 ~/.kotone/config.json）
 //! - `devices` / `play`：设备枚举 / wav 播放（虚拟声卡回路）
 //! - `eval`：引擎评测——录档列表 / 语料回放（多引擎对比）/ 人工标注 / CER 报告
+//! - `doctor`：环境自检（设备/引擎/profile/提权/VAD/history，逐项 ✓/⚠/✗）
+//! - `elevate`：以管理员身份重启自身（UIPI 提权，§10 R-1）
+//! - `profile`：list / use / detect（游戏 profile 管理与前台匹配）
+//! - `log`：识别历史 list / clear（core history 模块的 CLI 出口）
 
 use clap::{Parser, Subcommand};
 
@@ -129,6 +133,21 @@ enum Command {
         #[command(subcommand)]
         action: EvalCommand,
     },
+    /// 环境自检：音频设备 / 引擎就绪 / 激活 profile / 提权链路 / VAD / history，
+    /// 逐项 ✓/⚠/✗ 并给修复建议；有 ✗ 项时退出码 1
+    Doctor,
+    /// 以管理员身份重启自身（UIPI：目标游戏提权运行时注入必需，§10 R-1）
+    Elevate,
+    /// 游戏 profile：list 列表 / use 激活 / detect 前台进程匹配
+    Profile {
+        #[command(subcommand)]
+        action: ProfileCommand,
+    },
+    /// 识别历史：list 列表 / clear 清空（~/.kotone/history/）
+    Log {
+        #[command(subcommand)]
+        action: LogCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -141,7 +160,8 @@ enum ConfigCommand {
     },
     /// 写入配置项（点路径；支持 hotkey.key / hotkey.mode / hotkeyBackend /
     /// sttEngine / activeProfileId / autoSend / audioDeviceId / language /
-    /// evalRecording / runAsAdminOnStart / interactionMode）
+    /// evalRecording / runAsAdminOnStart / interactionMode / vadSilenceMs /
+    /// history.mode / history.maxRecords / history.includeAudio）
     Set {
         key: String,
         /// 写入的值；--capture 模式下省略（录入结果即值）
@@ -174,6 +194,38 @@ enum EvalCommand {
     },
     /// 已标注会话 × 就绪引擎的 CER / 延迟报告（Markdown 表）
     Report,
+}
+
+#[derive(Subcommand)]
+enum ProfileCommand {
+    /// 列出全部 profile（激活项标 *）
+    List,
+    /// 激活指定 profile（写入 activeProfileId）
+    Use {
+        /// profile id（profile list 可查）
+        id: String,
+    },
+    /// 检测当前前台进程命中的 profile（调试匹配规则用）
+    Detect,
+}
+
+#[derive(Subcommand)]
+enum LogCommand {
+    /// 列出识别历史（新→旧）
+    List {
+        /// 最多显示条数
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        /// 以 JSON 数组输出（脚本用）
+        #[arg(long)]
+        json: bool,
+    },
+    /// 清空全部历史记录（含音频）
+    Clear {
+        /// 跳过确认提示
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[tokio::main]
@@ -211,6 +263,17 @@ async fn main() {
             EvalCommand::Replay { session_id, engine } => cmd_eval_replay(&session_id, engine).await,
             EvalCommand::Label { session_id, text } => cmd_eval_label(&session_id, &text),
             EvalCommand::Report => cmd_eval_report().await,
+        },
+        Command::Doctor => cmd_doctor(),
+        Command::Elevate => cmd_elevate(),
+        Command::Profile { action } => match action {
+            ProfileCommand::List => cmd_profile_list(),
+            ProfileCommand::Use { id } => cmd_profile_use(&id),
+            ProfileCommand::Detect => cmd_profile_detect(),
+        },
+        Command::Log { action } => match action {
+            LogCommand::List { limit, json } => cmd_log_list(limit, json),
+            LogCommand::Clear { yes } => cmd_log_clear(yes),
         },
     };
     std::process::exit(code);
@@ -521,6 +584,28 @@ async fn cmd_listen_hotkey(
         "toggle" => HotkeyMode::Toggle,
         _ => settings.hotkey.mode,
     };
+
+    // 提权预检（只警告不阻断）：激活 profile 的目标进程已提权而自身未提权时，
+    // 注入会被 UIPI 整体丢弃——启动即提示（完整链路见 doctor，修复用 elevate）
+    {
+        use kotone_platform_windows::elevation;
+        let profiles = profile::list();
+        if let Some(pid) = elevation::resolve_active_game_pid(
+            settings.active_profile_id.as_deref(),
+            &profiles,
+            &mut kotone_platform_windows::inject::find_pid_by_name,
+        ) {
+            if elevation::decide_needs_elevation(
+                elevation::is_process_elevated(pid),
+                elevation::is_elevated(),
+            ) {
+                eprintln!(
+                    "⚠ 目标游戏进程（pid {pid}）以管理员权限运行而 Kotone 未提权：\
+                     注入将被 UIPI 丢弃 → kotone-cli elevate"
+                );
+            }
+        }
+    }
     let settings = Arc::new(RwLock::new(settings));
 
     let mut registry = EngineRegistry::new();
@@ -844,6 +929,9 @@ const CONFIG_SETTABLE_KEYS: &[&str] = &[
     "runAsAdminOnStart",
     "interactionMode",
     "vadSilenceMs",
+    "history.mode",
+    "history.maxRecords",
+    "history.includeAudio",
 ];
 
 /// 点路径写入：current 上套 patch → Settings 反序列化校验（枚举值在此拦截）。
@@ -857,7 +945,7 @@ fn apply_config_set(current: &Settings, key: &str, raw: &str) -> Result<Settings
     }
     let value = match key {
         // 布尔键在命令行层先校验，给出清晰报错
-        "autoSend" | "evalRecording" | "runAsAdminOnStart" => match raw {
+        "autoSend" | "evalRecording" | "runAsAdminOnStart" | "history.includeAudio" => match raw {
             "true" => serde_json::Value::Bool(true),
             "false" => serde_json::Value::Bool(false),
             _ => return Err(format!("{key} 只接受 true/false（收到「{raw}」）")),
@@ -868,6 +956,15 @@ fn apply_config_set(current: &Settings, key: &str, raw: &str) -> Result<Settings
             _ => {
                 return Err(format!(
                     "{key} 只接受 200-5000 的整数毫秒（收到「{raw}」）"
+                ))
+            }
+        },
+        // 数值键（history capped 容量上限）
+        "history.maxRecords" => match raw.parse::<u32>() {
+            Ok(v) if (1..=100_000).contains(&v) => serde_json::Value::Number(v.into()),
+            _ => {
+                return Err(format!(
+                    "{key} 只接受 1-100000 的整数条数（收到「{raw}」）"
                 ))
             }
         },
@@ -1058,6 +1155,289 @@ fn cmd_play(wav: &str, device: Option<String>) -> i32 {
     }
 }
 
+// ---------- doctor：环境自检（逐项 ✓/⚠/✗ + 修复建议；有 ✗ 退出码 1） ----------
+
+fn cmd_doctor() -> i32 {
+    let settings = settings::load();
+    let mut failures = 0u32;
+
+    // 1. 音频输入设备
+    let inputs = kotone_platform_windows::audio::list_devices();
+    if inputs.is_empty() {
+        println!("✗ 音频输入设备：未枚举到任何采集设备（检查麦克风/驱动）");
+        failures += 1;
+    } else {
+        let default = inputs
+            .iter()
+            .find(|d| d.id == "default")
+            .map(|d| d.name.as_str())
+            .unwrap_or("未知");
+        println!("✓ 音频输入设备：{} 个（默认：{default}）", inputs.len());
+    }
+    for d in inputs.iter().filter(|d| looks_virtual(&d.name)) {
+        println!("  ⚠ 虚拟声卡：{}（自动化测试路径二可用，日常采集别选它）", d.name);
+    }
+
+    // 2. STT 引擎就绪
+    let mut registry = EngineRegistry::new();
+    kotone_stt::register_builtin(&mut registry);
+    match registry.get(&settings.stt_engine) {
+        Some(e) if e.is_ready() => {
+            println!("✓ STT 引擎「{}」就绪", settings.stt_engine);
+        }
+        Some(e) => {
+            println!(
+                "✗ STT 引擎「{}」（{}）未就绪：模型/二进制未下载 → kotone-cli download <模型>",
+                settings.stt_engine,
+                e.display_name()
+            );
+            failures += 1;
+        }
+        None => {
+            println!(
+                "✗ STT 引擎「{}」未注册（检查 sttEngine 拼写；已注册：{}）",
+                settings.stt_engine,
+                registry
+                    .list_info()
+                    .iter()
+                    .map(|i| i.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            failures += 1;
+        }
+    }
+
+    // 3. 激活 profile
+    match settings.active_profile_id.as_deref() {
+        Some(id) => match profile::get(id) {
+            Some(p) => {
+                let procs = if p.process_names.is_empty() {
+                    "通配任意前台窗口".to_string()
+                } else {
+                    format!("processNames: {}", p.process_names.join(", "))
+                };
+                println!("✓ 激活 profile「{}」：{}（{procs}）", p.id, p.display_name);
+            }
+            None => {
+                println!("✗ 激活 profile「{id}」不存在 → kotone-cli profile use <id>");
+                failures += 1;
+            }
+        },
+        None => println!("⚠ 未设置 activeProfileId（按内置 generic 通配；profile use <id> 激活）"),
+    }
+
+    // 4. 提权链路（UIPI §10 R-1）：目标进程提权 + 自身未提权 → 注入会被丢弃
+    {
+        use kotone_platform_windows::elevation;
+        let self_elevated = elevation::is_elevated();
+        let profiles = profile::list();
+        let pid = elevation::resolve_active_game_pid(
+            settings.active_profile_id.as_deref(),
+            &profiles,
+            &mut kotone_platform_windows::inject::find_pid_by_name,
+        );
+        match pid {
+            Some(pid) => {
+                let target = elevation::is_process_elevated(pid);
+                if elevation::decide_needs_elevation(target, self_elevated) {
+                    println!(
+                        "✗ 目标游戏进程（pid {pid}）已提权而 Kotone 未提权：注入将被 UIPI 丢弃 → kotone-cli elevate"
+                    );
+                    failures += 1;
+                } else if target == Some(true) {
+                    println!("✓ 提权链路：目标进程（pid {pid}）已提权，Kotone 同为管理员");
+                } else {
+                    println!("✓ 提权链路：目标进程（pid {pid}）未提权，无需 elevate");
+                }
+            }
+            None => println!(
+                "⚠ 提权链路：激活 profile 的目标进程未运行，无法判断（游戏启动后用 doctor 复查）"
+            ),
+        }
+    }
+
+    // 5. VAD 模型（one-shot 静音判停，ADR-007）
+    if kotone_stt::model::vad_model_ready() {
+        println!("✓ VAD 模型就绪（one-shot 静音判停可用）");
+    } else {
+        println!("⚠ VAD 模型未就绪：one-shot 模式不可用（push-to-talk / dictation 不受影响）");
+    }
+
+    // 6. 录档与历史配置摘要
+    println!(
+        "{} evalRecording：{}（评测录档 → kotone-cli eval list）",
+        if settings.eval_recording { "✓" } else { "⚠" },
+        if settings.eval_recording { "开" } else { "关" }
+    );
+    let h = &settings.history;
+    let mode = match h.mode {
+        kotone_core::history::HistoryMode::Capped => format!("capped（上限 {} 条）", h.max_records),
+        kotone_core::history::HistoryMode::KeepAll => "keep-all（不裁剪）".to_string(),
+        kotone_core::history::HistoryMode::Off => "off（不记录）".to_string(),
+    };
+    println!(
+        "✓ history：{mode}，{}音频（kotone-cli log list 查看）",
+        if h.include_audio { "含" } else { "不含" }
+    );
+
+    if failures > 0 {
+        println!("\n{failures} 项未通过，按上方建议修复后复查");
+        1
+    } else {
+        println!("\n全部关键项通过");
+        0
+    }
+}
+
+// ---------- elevate：以管理员身份重启自身（§10 R-1） ----------
+
+fn cmd_elevate() -> i32 {
+    if kotone_platform_windows::elevation::is_elevated() {
+        println!("已是管理员权限，无需提权");
+        return 0;
+    }
+    match kotone_platform_windows::elevation::restart_as_admin() {
+        Ok(()) => {
+            // 新进程已拉起（带当前参数），当前进程退出（main 的 exit(0)）
+            println!("已发起管理员重启（UAC 确认后新进程接管），当前进程退出");
+            0
+        }
+        Err(e) => {
+            eprintln!("提权失败: {e}");
+            1
+        }
+    }
+}
+
+// ---------- profile：list / use / detect ----------
+
+fn cmd_profile_list() -> i32 {
+    let settings = settings::load();
+    let profiles = profile::list();
+    if profiles.is_empty() {
+        println!("暂无 profile（~/.kotone/profiles/ 为空；内置 lol/generic 会在首次运行时落盘）");
+        return 0;
+    }
+    for p in &profiles {
+        let active = if settings.active_profile_id.as_deref() == Some(p.id.as_str()) {
+            "*"
+        } else {
+            " "
+        };
+        let procs = if p.process_names.is_empty() {
+            "通配任意前台窗口".to_string()
+        } else {
+            p.process_names.join(", ")
+        };
+        println!("{active} {:<10} {:<24} {procs}", p.id, p.display_name);
+    }
+    println!("\n* = 当前激活（config set activeProfileId / profile use 切换）");
+    0
+}
+
+fn cmd_profile_use(id: &str) -> i32 {
+    if profile::get(id).is_none() {
+        eprintln!("profile「{id}」不存在（kotone-cli profile list 查看可用 id）");
+        return 2;
+    }
+    cmd_config_set("activeProfileId", Some(id), false)
+}
+
+fn cmd_profile_detect() -> i32 {
+    let name = match kotone_platform_windows::inject::foreground_process_name() {
+        Some(n) => n,
+        None => {
+            eprintln!("无法读取前台进程（非 Windows 或无前台窗口）");
+            return 1;
+        }
+    };
+    println!("前台进程：{name}");
+    match profile::find_by_process(&profile::list(), &name) {
+        Some(p) => {
+            println!("命中 profile「{}」：{}", p.id, p.display_name);
+            0
+        }
+        None => {
+            println!("未命中任何 profile（将按内置 generic 通配处理）");
+            0
+        }
+    }
+}
+
+// ---------- log：识别历史 list / clear ----------
+
+fn cmd_log_list(limit: usize, json: bool) -> i32 {
+    let records = match kotone_core::history::list() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("读取历史失败: {e}");
+            return 1;
+        }
+    };
+    if json {
+        let shown: Vec<_> = records.iter().take(limit).collect();
+        match serde_json::to_string_pretty(&shown) {
+            Ok(j) => println!("{j}"),
+            Err(e) => {
+                eprintln!("序列化失败: {e}");
+                return 1;
+            }
+        }
+        return 0;
+    }
+    if records.is_empty() {
+        println!("暂无识别历史（history.mode 非 off 时，每次会话终态自动记录）");
+        return 0;
+    }
+    println!(
+        "{:<22} {:<26} {:>7} {:<10} {}",
+        "时间", "引擎", "音频 s", "结局", "最终文本"
+    );
+    for r in records.iter().take(limit) {
+        let outcome = match r.outcome {
+            kotone_core::history::HistoryOutcome::Sent => "sent",
+            kotone_core::history::HistoryOutcome::Cancelled => "cancelled",
+            kotone_core::history::HistoryOutcome::Error => "error",
+        };
+        println!(
+            "{:<22} {:<26} {:>7.1} {:<10} {}",
+            r.ts,
+            r.engine_id,
+            r.audio_ms as f64 / 1000.0,
+            outcome,
+            truncate_chars(&r.final_text, 20)
+        );
+    }
+    println!("\n共 {} 条（显示前 {limit} 条，--json 输出完整字段）", records.len());
+    0
+}
+
+fn cmd_log_clear(yes: bool) -> i32 {
+    if !yes {
+        eprint!("确认清空全部识别历史（含音频文件）？[y/N] ");
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() {
+            eprintln!("\n读取确认失败，已取消");
+            return 2;
+        }
+        if !matches!(line.trim().to_lowercase().as_str(), "y" | "yes") {
+            println!("已取消");
+            return 0;
+        }
+    }
+    match kotone_core::history::clear() {
+        Ok(()) => {
+            println!("已清空识别历史（~/.kotone/history/）");
+            0
+        }
+        Err(e) => {
+            eprintln!("清空失败: {e}");
+            1
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1140,6 +1520,33 @@ mod tests {
         assert!(apply_config_set(&Settings::default(), "vadSilenceMs", "abc").is_err());
         assert!(apply_config_set(&Settings::default(), "vadSilenceMs", "50").is_err());
         assert!(apply_config_set(&Settings::default(), "vadSilenceMs", "99999").is_err());
+    }
+
+    #[test]
+    fn config_set_history_keys() {
+        use kotone_core::history::HistoryMode;
+        // mode：字符串键，枚举值由 Settings 反序列化校验
+        let s = apply_config_set(&Settings::default(), "history.mode", "keep-all").unwrap();
+        assert_eq!(s.history.mode, HistoryMode::KeepAll);
+        let s = apply_config_set(&Settings::default(), "history.mode", "off").unwrap();
+        assert_eq!(s.history.mode, HistoryMode::Off);
+        let s = apply_config_set(&Settings::default(), "history.mode", "capped").unwrap();
+        assert_eq!(s.history.mode, HistoryMode::Capped);
+        assert!(apply_config_set(&Settings::default(), "history.mode", "magic").is_err());
+        // maxRecords：数值键，范围 1-100000
+        let s = apply_config_set(&Settings::default(), "history.maxRecords", "500").unwrap();
+        assert_eq!(s.history.max_records, 500);
+        assert!(apply_config_set(&Settings::default(), "history.maxRecords", "0").is_err());
+        assert!(apply_config_set(&Settings::default(), "history.maxRecords", "abc").is_err());
+        assert!(apply_config_set(&Settings::default(), "history.maxRecords", "100001").is_err());
+        // includeAudio：布尔键
+        let s = apply_config_set(&Settings::default(), "history.includeAudio", "true").unwrap();
+        assert!(s.history.include_audio);
+        assert!(apply_config_set(&Settings::default(), "history.includeAudio", "yes").is_err());
+        // 其余 history 字段不受单项写入影响
+        let s = apply_config_set(&Settings::default(), "history.mode", "off").unwrap();
+        assert_eq!(s.history.max_records, 1000);
+        assert!(!s.history.include_audio);
     }
 
     #[test]
