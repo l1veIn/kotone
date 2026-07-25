@@ -321,13 +321,10 @@ fn eval_export() -> Result<String, String> {
 
 // ---------- 会话控制 / 调试 ----------
 
-/// Preview 状态下确认（可带编辑后文本）发送
+/// Preview 状态下确认发送（ADR-006：预览只读，始终发送预览文本）
 #[tauri::command]
-async fn confirm_send(
-    state: tauri::State<'_, SharedState>,
-    text: Option<String>,
-) -> Result<(), String> {
-    state.orchestrator.confirm_send(text).await
+async fn confirm_send(state: tauri::State<'_, SharedState>) -> Result<(), String> {
+    state.orchestrator.confirm_send().await
 }
 
 /// 取消当前会话（悬浮窗取消按钮 / 调试）

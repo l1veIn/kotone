@@ -5,7 +5,7 @@
    *
    *   listening    波形 + 流式 partial 实时上屏（无 partial 时「聆听中…」）
    *   transcribing 「转写中…」
-   *   preview      可编辑文本框 + 确认 / 取消
+   *   preview      只读识别文本 + 确认 / 取消（ADR-006：预览不可编辑，热键确认）
    *   sending      发送动画
    *   success      「收到，已发送！✨」toast
    *   error        错误消息 + 重试 / 关闭
@@ -37,8 +37,6 @@
     error: "出错了",
   };
 
-  /** preview 态的可编辑文本（进入 preview 时同步 finalText） */
-  let editText = $state("");
   /** 操作中的瞬时错误提示（如 confirm 调用失败） */
   let actionError = $state("");
   /** 重试后的本地提示 */
@@ -59,7 +57,6 @@
 
   $effect(() => {
     if ($appState.state === "preview") {
-      editText = $appState.finalText;
       actionError = "";
       actionHint = "";
     }
@@ -74,7 +71,7 @@
   async function onConfirm() {
     actionError = "";
     try {
-      await confirmSend(editText.trim() ? editText : undefined);
+      await confirmSend();
     } catch (e) {
       actionError = String(e);
     }
@@ -165,25 +162,15 @@
         {/if}
       </div>
     {:else if $appState.state === "preview"}
-      <!-- 预览：可编辑 + 确认/取消。悬浮条不抢焦点，主交互是热键确认 -->
+      <!-- 预览（ADR-006 只读）：识别文本 + 热键确认/重说。悬浮条不抢焦点，主交互是热键 -->
       <div class="flex min-w-0 flex-1 flex-col gap-1.5" in:fade={{ duration: 150 }}>
-        <textarea
-          bind:value={editText}
-          rows="2"
-          spellcheck="false"
-          class="kotone-scroll w-full resize-none rounded-lg bg-white/8 px-2.5 py-1.5 text-sm leading-snug text-white ring-1 ring-kotone-cyan/30 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/70"
-          placeholder="确认识别文本，可直接编辑…"
-          onkeydown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              void onConfirm();
-            } else if (e.key === "Escape") {
-              void onCancel();
-            }
-          }}
-        ></textarea>
+        <div
+          class="kotone-scroll max-h-14 overflow-y-auto rounded-lg bg-white/8 px-2.5 py-1.5 ring-1 ring-kotone-cyan/30"
+        >
+          <p class="text-sm leading-snug break-all text-white">{$appState.finalText}</p>
+        </div>
         <p class="text-[11px] leading-tight text-white/45">
-          按 {hotkeyLabel} 发送 / Esc 取消 · 点击文本框可编辑后 Enter 发送
+          按 {hotkeyLabel} 发送 / Esc 重说
         </p>
         {#if actionError}
           <p class="truncate text-[11px] text-kotone-pink">{actionError}</p>

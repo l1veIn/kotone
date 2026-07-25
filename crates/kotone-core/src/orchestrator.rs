@@ -18,6 +18,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::audio::{AudioBackend, AudioHandle};
 use crate::inject::{CancelToken, FocusBackend, Injector, TargetWindow};
+use crate::interaction::{EndTrigger, InteractionPolicy, PostFinalize};
 use crate::profile::{self, GameProfile};
 use crate::settings::Settings;
 use crate::stt::{EngineRegistry, SessionConfig, SttEvent, SttSession};
@@ -133,33 +134,44 @@ impl Orchestrator {
         &self.settings
     }
 
-    // ---------- 热键入口（hotkey 模块调用） ----------
+    // ---------- 热键入口（hotkey 模块调用；ADR-006 单键语义表 + 策略路由） ----------
 
-    /// toggle 模式：按一下开始、再按结束；转写/发送中再按 = 中止（§4 设计要点 4）。
-    /// Preview 态再按 = 确认发送当前文本（游戏场景主交互：全程不碰鼠标、不抢焦点）。
+    /// 当前配置推导的交互策略（每次事件现场组装：settings 热更新即生效，无需失效处理）
+    fn policy(&self) -> InteractionPolicy {
+        InteractionPolicy::from_settings(&self.settings.read().unwrap())
+    }
+
+    /// toggle 触发键（A2 点按事件）按状态路由：
+    /// Idle 开始 / Listening 结束（B2；B3 接入后兜底强制结束）/
+    /// Preview 确认发送（C2 的主交互，全程不碰鼠标不抢焦点）/ 其余状态中止。
     pub async fn on_hotkey_toggle(&self) {
         match self.state() {
             OrchestratorState::Idle => {
                 let _ = self.begin().await;
             }
             OrchestratorState::Listening => {
-                let _ = self.end().await;
+                // B1（松手结束）策略下不会产生 toggle 事件；B2/B3 均为按下结束
+                if self.policy().end != EndTrigger::HotkeyRelease {
+                    let _ = self.end().await;
+                }
             }
             OrchestratorState::Preview => {
-                let _ = self.confirm_send(None).await;
+                let _ = self.confirm_send().await;
             }
             _ => self.cancel().await,
         }
     }
 
-    /// hold 模式：按下开始、松开结束。
-    /// 非 Idle 态的按下事件忽略（避免 begin 失败的 Error toast 冲掉预览文本）。
+    /// hold 触发键（A1）：按下开始（非 Idle 态按下忽略——v5 实测：避免 begin
+    /// 失败的 Error toast 冲掉预览文本）；松开在 Listening 态结束（B1 松手结束）。
     pub async fn on_hotkey_hold(&self, pressed: bool) {
         if pressed {
             if self.state() == OrchestratorState::Idle {
                 let _ = self.begin().await;
             }
-        } else if self.state() == OrchestratorState::Listening {
+        } else if self.policy().end == EndTrigger::HotkeyRelease
+            && self.state() == OrchestratorState::Listening
+        {
             let _ = self.end().await;
         }
     }
@@ -387,22 +399,25 @@ impl Orchestrator {
                         Err(e) => crate::log::log(&format!("eval 录档失败（忽略）: {e}")),
                     }
                 }
-                let auto_send = self.settings.read().unwrap().auto_send;
-                if auto_send {
-                    self.do_send(t.text, gen).await;
-                } else {
-                    let _op = self.op.lock().await;
-                    let mut inner = self.inner.lock().unwrap();
-                    if inner.gen != gen {
-                        return Ok(());
+                // PostFinalize 策略（ADR-006）：C1 直接发送 / C2 预览确认
+                match self.policy().post {
+                    PostFinalize::SendDirect => {
+                        self.do_send(t.text, gen).await;
                     }
-                    inner.preview_text = Some(t.text.clone());
-                    inner.state = OrchestratorState::Preview;
-                    drop(inner);
-                    self.emit_state(
-                        OrchestratorState::Preview,
-                        Some(json!({ "text": t.text })),
-                    );
+                    PostFinalize::PreviewConfirm => {
+                        let _op = self.op.lock().await;
+                        let mut inner = self.inner.lock().unwrap();
+                        if inner.gen != gen {
+                            return Ok(());
+                        }
+                        inner.preview_text = Some(t.text.clone());
+                        inner.state = OrchestratorState::Preview;
+                        drop(inner);
+                        self.emit_state(
+                            OrchestratorState::Preview,
+                            Some(json!({ "text": t.text })),
+                        );
+                    }
                 }
             }
             Err(e) => {
@@ -413,9 +428,10 @@ impl Orchestrator {
         Ok(())
     }
 
-    /// Preview 状态下用户确认/编辑后发送；Error 状态（payload 带文本）也接受，
-    /// 重新进入 Sending 实现重试（docs/development.md §4.1「Error 保留文本可重试」）
-    pub async fn confirm_send(&self, text: Option<String>) -> Result<(), String> {
+    /// Preview 状态下用户确认发送；Error 状态（payload 带文本）也接受，
+    /// 重新进入 Sending 实现重试（docs/development.md §4.1「Error 保留文本可重试」）。
+    /// ADR-006 预览只读化：不再接受编辑文本，一律发送已定的 preview_text。
+    pub async fn confirm_send(&self) -> Result<(), String> {
         let (gen, final_text) = {
             let _op = self.op.lock().await;
             let inner = self.inner.lock().unwrap();
@@ -423,9 +439,9 @@ impl Orchestrator {
                 OrchestratorState::Preview | OrchestratorState::Error => {}
                 s => return Err(format!("当前状态 {s:?} 不能确认发送")),
             }
-            let t = text
-                .filter(|s| !s.trim().is_empty())
-                .or_else(|| inner.preview_text.clone())
+            let t = inner
+                .preview_text
+                .clone()
                 .ok_or_else(|| "无待发送文本".to_string())?;
             (inner.gen, t)
         };

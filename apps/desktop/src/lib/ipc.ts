@@ -284,10 +284,10 @@ export async function saveProfile(profile: GameProfile): Promise<void> {
   return invoke<void>("save_profile", { profile });
 }
 
-/** Preview 状态下确认（可带编辑后文本）发送 */
-export async function confirmSend(text?: string): Promise<void> {
+/** Preview 状态下确认发送（ADR-006：预览只读，始终发送预览文本） */
+export async function confirmSend(): Promise<void> {
   if (!isTauri) return;
-  return invoke<void>("confirm_send", { text: text ?? null });
+  return invoke<void>("confirm_send");
 }
 
 /** 取消当前会话（任意状态回 Idle） */

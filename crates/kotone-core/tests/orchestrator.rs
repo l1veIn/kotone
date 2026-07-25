@@ -282,7 +282,7 @@ async fn preview_flow_full_transitions() {
         .partials()
         .contains(&"对面打野在下路".to_string()));
 
-    orch.confirm_send(None).await.unwrap();
+    orch.confirm_send().await.unwrap();
     assert_eq!(orch.state(), OrchestratorState::Success);
     assert_eq!(
         sent.lock().unwrap().as_slice(),
@@ -323,18 +323,19 @@ async fn auto_send_flow_skips_preview() {
     assert!(seq.contains(&"sending".to_string()));
 }
 
+/// ADR-006 预览只读化：confirm_send 无文本参数，一律发送 preview_text
 #[tokio::test]
-async fn confirm_send_with_edited_text() {
+async fn confirm_send_uses_preview_text() {
     let (orch, _emitter, sent) = make_orchestrator(false);
     orch.begin().await.unwrap();
     tokio::time::sleep(Duration::from_millis(30)).await;
     orch.end().await.unwrap();
     assert_eq!(orch.state(), OrchestratorState::Preview);
 
-    orch.confirm_send(Some("编辑后的文本".into())).await.unwrap();
+    orch.confirm_send().await.unwrap();
     assert_eq!(
         sent.lock().unwrap().as_slice(),
-        &["编辑后的文本".to_string()]
+        &["对面打野在下路".to_string()]
     );
 }
 
@@ -399,7 +400,7 @@ async fn error_state_retains_text_and_confirm_send_retries() {
     assert_eq!(orch.state(), OrchestratorState::Preview);
 
     // 第一次确认：注入失败 → Error；dwell 后仍停在 Error（文本保留，可重试）
-    orch.confirm_send(None).await.unwrap();
+    orch.confirm_send().await.unwrap();
     assert_eq!(orch.state(), OrchestratorState::Error);
     tokio::time::sleep(Duration::from_millis(50)).await; // > toast_dwell(10ms)
     assert_eq!(
@@ -409,7 +410,7 @@ async fn error_state_retains_text_and_confirm_send_retries() {
     );
 
     // 重试：Error 状态 confirm_send 重新进入 Sending 并成功
-    orch.confirm_send(None).await.unwrap();
+    orch.confirm_send().await.unwrap();
     assert_eq!(orch.state(), OrchestratorState::Success);
     assert_eq!(
         sent.lock().unwrap().as_slice(),
@@ -428,8 +429,9 @@ async fn error_state_retains_text_and_confirm_send_retries() {
 }
 
 /// Error 状态下可带编辑后文本重试
+/// Error 状态重试发送保留的原文（ADR-006：重试不可改文本，改文本 = Esc 重说）
 #[tokio::test]
-async fn error_state_retry_with_edited_text() {
+async fn error_state_retry_sends_retained_text() {
     let sent = Arc::new(Mutex::new(Vec::new()));
     let injector: Arc<dyn Injector> = Arc::new(FlakyInjector {
         attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -440,14 +442,15 @@ async fn error_state_retry_with_edited_text() {
     orch.begin().await.unwrap();
     tokio::time::sleep(Duration::from_millis(60)).await;
     orch.end().await.unwrap();
-    orch.confirm_send(None).await.unwrap();
+    orch.confirm_send().await.unwrap();
     assert_eq!(orch.state(), OrchestratorState::Error);
 
-    orch.confirm_send(Some("编辑后重发".into())).await.unwrap();
+    orch.confirm_send().await.unwrap();
     assert_eq!(orch.state(), OrchestratorState::Success);
+    // FlakyInjector 首次失败不落记录，重试成功应发出保留的原文
     assert_eq!(
         sent.lock().unwrap().as_slice(),
-        &["编辑后重发".to_string()]
+        &["对面打野在下路".to_string()]
     );
 }
 
@@ -463,7 +466,7 @@ async fn error_without_text_rejects_retry_and_auto_idles() {
     let _ = orch.begin().await;
     assert_eq!(orch.state(), OrchestratorState::Error);
     // 无待发送文本：confirm_send 拒绝
-    assert!(orch.confirm_send(None).await.is_err());
+    assert!(orch.confirm_send().await.is_err());
     // dwell 后自动回 Idle
     tokio::time::sleep(Duration::from_millis(40)).await;
     assert_eq!(orch.state(), OrchestratorState::Idle);
@@ -483,12 +486,12 @@ async fn cancel_from_error_clears_retry_text() {
     orch.begin().await.unwrap();
     tokio::time::sleep(Duration::from_millis(60)).await;
     orch.end().await.unwrap();
-    orch.confirm_send(None).await.unwrap();
+    orch.confirm_send().await.unwrap();
     assert_eq!(orch.state(), OrchestratorState::Error);
 
     orch.cancel().await;
     assert_eq!(orch.state(), OrchestratorState::Idle);
-    assert!(orch.confirm_send(None).await.is_err(), "取消后不可再重试");
+    assert!(orch.confirm_send().await.is_err(), "取消后不可再重试");
 }
 
 /// 目标窗口记忆与恢复：begin 捕获前台 hwnd，do_send 先恢复焦点再注入
@@ -504,7 +507,7 @@ async fn target_window_captured_on_begin_and_restored_before_send() {
     tokio::time::sleep(Duration::from_millis(30)).await;
     orch.end().await.unwrap();
     assert_eq!(orch.state(), OrchestratorState::Preview);
-    orch.confirm_send(None).await.unwrap();
+    orch.confirm_send().await.unwrap();
     assert_eq!(orch.state(), OrchestratorState::Success);
 
     let ops = log.lock().unwrap().clone();
@@ -529,7 +532,7 @@ async fn send_proceeds_when_focus_restore_fails() {
     orch.begin().await.unwrap();
     tokio::time::sleep(Duration::from_millis(30)).await;
     orch.end().await.unwrap();
-    orch.confirm_send(None).await.unwrap();
+    orch.confirm_send().await.unwrap();
 
     let ops = log.lock().unwrap().clone();
     assert!(ops.contains(&"restore:1".to_string()));
@@ -587,7 +590,7 @@ async fn hotkey_toggle_during_sending_cancels() {
 
     // 后台确认发送，等进入 Sending 后按热键取消
     let orch2 = orch.clone();
-    let handle = tokio::spawn(async move { orch2.confirm_send(None).await });
+    let handle = tokio::spawn(async move { orch2.confirm_send().await });
     for _ in 0..200 {
         if orch.state() == OrchestratorState::Sending {
             break;
@@ -617,7 +620,7 @@ async fn hotkey_hold_press_in_preview_is_ignored() {
     assert!(sent.lock().unwrap().is_empty());
 
     // 之后仍可正常确认发送
-    orch.confirm_send(None).await.unwrap();
+    orch.confirm_send().await.unwrap();
     assert_eq!(orch.state(), OrchestratorState::Success);
 }
 

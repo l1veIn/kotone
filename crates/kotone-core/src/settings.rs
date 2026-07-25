@@ -39,6 +39,10 @@ pub struct Settings {
     pub language: String,
     /// 评测录档开关（默认开）
     pub eval_recording: bool,
+    /// 交互模式预设（ADR-006）：push-to-talk / dictation；
+    /// 缺省 None = 由 hotkey.mode + autoSend 旧字段推导（兼容混合组合）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interaction_mode: Option<crate::interaction::InteractionMode>,
     /// 启动时自动以管理员重启自身（默认关；防循环逻辑见 elevation::should_auto_elevate）
     pub run_as_admin_on_start: bool,
 }
@@ -69,6 +73,7 @@ impl Default for Settings {
             active_profile_id: Some("lol".into()),
             language: "zh".into(),
             eval_recording: true,
+            interaction_mode: None,
             run_as_admin_on_start: false,
         }
     }

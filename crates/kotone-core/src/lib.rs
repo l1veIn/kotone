@@ -15,6 +15,7 @@ pub mod audio;
 pub mod eval;
 pub mod hotkey;
 pub mod inject;
+pub mod interaction;
 pub mod log;
 pub mod orchestrator;
 pub mod profile;
