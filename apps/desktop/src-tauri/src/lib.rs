@@ -254,6 +254,18 @@ fn get_hotkey_status(app: AppHandle) -> HotkeyStatus {
     app.state::<HotkeyManager>().status()
 }
 
+/// 开始热键捕获（设置页「点击录入」）：结果经 `kotone://hotkey-capture` 事件推送
+#[tauri::command]
+fn start_hotkey_capture(app: AppHandle) -> Result<(), String> {
+    app.state::<HotkeyManager>().start_capture(app.clone())
+}
+
+/// 取消进行中的热键捕获
+#[tauri::command]
+fn cancel_hotkey_capture(app: AppHandle) {
+    app.state::<HotkeyManager>().cancel_capture();
+}
+
 /// 一键管理员重启：ShellExecuteExW "runas" 拉起新进程后退出当前进程。
 /// 用户在 UAC 弹窗点「否」会返回错误，当前进程继续运行。
 #[tauri::command]
@@ -475,6 +487,8 @@ pub fn run() {
             detect_foreground_game,
             get_elevation_status,
             get_hotkey_status,
+            start_hotkey_capture,
+            cancel_hotkey_capture,
             restart_as_admin,
             list_models,
             download_model,

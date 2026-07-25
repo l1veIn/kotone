@@ -10,7 +10,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use kotone_core::hotkey::{HookEvent, HotkeySource};
@@ -293,6 +293,39 @@ impl HotkeyManager {
             error,
             backend: backend.label().to_string(),
         }
+    }
+
+    /// 开始热键捕获（设置页「点击录入」）：LL 钩子捕获下一个按键组合，
+    /// 结果经 `kotone://hotkey-capture` 事件推送（{combo} / {cancelled} / {timeout}）。
+    /// 捕获期间正常热键匹配暂停（matcher 捕获模式不吞键、不产生会话事件）。
+    pub fn start_capture(&self, app: AppHandle) -> Result<(), String> {
+        #[cfg(windows)]
+        {
+            use kotone_platform_windows::hotkey_ll::CaptureResult;
+            let cb = Box::new(move |result: CaptureResult| {
+                let payload = match result {
+                    CaptureResult::Captured(spec) => {
+                        serde_json::json!({ "combo": spec.combo_name() })
+                    }
+                    CaptureResult::Cancelled => serde_json::json!({ "cancelled": true }),
+                    CaptureResult::Timeout => serde_json::json!({ "timeout": true }),
+                };
+                if let Err(e) = app.emit("kotone://hotkey-capture", payload) {
+                    kotone_core::log::log(&format!("hotkey-capture 事件推送失败: {e}"));
+                }
+            });
+            return self
+                .llhook
+                .capture_next(cb, std::time::Duration::from_secs(10));
+        }
+        #[cfg(not(windows))]
+        Err("当前平台不支持热键录入捕获".into())
+    }
+
+    /// 取消进行中的热键捕获（设置页关闭/重新点击的兜底）
+    pub fn cancel_capture(&self) {
+        #[cfg(windows)]
+        self.llhook.cancel_capture();
     }
 }
 

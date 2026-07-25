@@ -4,7 +4,8 @@
    * 分区：交互模式与热键 / 麦克风 / STT 引擎 / 发送行为与游戏 profile。
    * 所有读写走 lib/ipc.ts；浏览器 dev:web 下由 mock 支撑，可纯前端调试。
    */
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import {
     getSettings,
     updateSettings,
@@ -16,12 +17,16 @@
     getElevationStatus,
     getHotkeyStatus,
     restartAsAdmin,
+    isTauri,
+    startHotkeyCapture,
+    cancelHotkeyCapture,
     type Settings,
     type AudioDevice,
     type EngineInfo,
     type GameProfile,
     type ElevationStatus,
     type HotkeyStatus,
+    type HotkeyCaptureEvent,
   } from "../../lib/ipc";
 
   let settings = $state<Settings | null>(null);
@@ -35,6 +40,8 @@
   /** 热键编辑草稿（保存前不动后端） */
   let hotkeyDraft = $state("");
   let hotkeyMode = $state<"toggle" | "hold">("toggle");
+  /** 热键录入捕获中（「点击录入」按钮态） */
+  let capturing = $state(false);
 
   /** 底部反馈条：ok 为绿色提示，否则为错误 */
   let feedback = $state<{ ok: boolean; text: string } | null>(null);
@@ -156,6 +163,47 @@
       }
     }
   }
+
+  /**
+   * 「点击录入」：LL 钩子捕获下一个按键组合（ADR-006 热键捕获）。
+   * 结果经 kotone://hotkey-capture 事件推送；捕获期间全局热键匹配暂停，
+   * Esc 由钩子层转成取消信号（不走 DOM keydown）。
+   */
+  async function startCapture() {
+    if (capturing) return;
+    if (!isTauri) {
+      toast(false, "浏览器调试环境不支持热键录入");
+      return;
+    }
+    capturing = true;
+    let unlisten: (() => void) | undefined;
+    try {
+      unlisten = await listen<HotkeyCaptureEvent>("kotone://hotkey-capture", (ev) => {
+        unlisten?.();
+        unlisten = undefined;
+        capturing = false;
+        const p = ev.payload;
+        if (p.combo) {
+          hotkeyDraft = p.combo;
+          void saveHotkey();
+        } else if (p.cancelled) {
+          toast(false, "已取消录入");
+        } else {
+          toast(false, "录入超时，请重试");
+        }
+      });
+      await startHotkeyCapture();
+    } catch (e) {
+      unlisten?.();
+      capturing = false;
+      toast(false, `无法启动热键录入：${errText(e)}`);
+    }
+  }
+
+  // 组件销毁时兜底取消进行中的捕获（避免钩子停在捕获模式）
+  onDestroy(() => {
+    if (capturing) void cancelHotkeyCapture();
+  });
 
   async function onHotkeyBackendChange(e: Event) {
     const hotkeyBackend = (e.target as HTMLSelectElement).value as Settings["hotkeyBackend"];
@@ -280,12 +328,23 @@
           <input
             id="hotkey-input"
             bind:value={hotkeyDraft}
-            class="w-32 rounded-lg bg-white/8 px-2.5 py-1.5 text-sm ring-1 ring-white/15 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/60"
+            disabled={capturing}
+            class="w-32 rounded-lg bg-white/8 px-2.5 py-1.5 text-sm ring-1 ring-white/15 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/60 disabled:opacity-50"
             placeholder="如 F8 / Alt+V"
             spellcheck="false"
           />
           <button
-            class="rounded-lg bg-kotone-cyan px-3 py-1.5 text-xs font-semibold text-kotone-deep transition hover:brightness-110 active:scale-95"
+            class="rounded-lg px-3 py-1.5 text-xs font-semibold ring-1 transition active:scale-95 disabled:opacity-70 {capturing
+              ? 'animate-pulse bg-kotone-violet/25 text-kotone-violet ring-kotone-violet/60'
+              : 'bg-white/10 text-white/85 ring-white/15 hover:bg-white/20'}"
+            disabled={capturing}
+            onclick={() => void startCapture()}
+          >
+            {capturing ? "请按下热键组合…（Esc 取消）" : "点击录入"}
+          </button>
+          <button
+            class="rounded-lg bg-kotone-cyan px-3 py-1.5 text-xs font-semibold text-kotone-deep transition hover:brightness-110 active:scale-95 disabled:opacity-50"
+            disabled={capturing}
             onclick={() => void saveHotkey()}
           >
             保存并生效

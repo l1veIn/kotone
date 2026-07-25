@@ -334,3 +334,27 @@ export async function getHotkeyStatus(): Promise<HotkeyStatus> {
     return { registered: true, key: mock.settings.hotkey.key, error: null, backend: "llhook" };
   return invoke<HotkeyStatus>("get_hotkey_status");
 }
+
+// ---------- 热键录入捕获（ADR-006） ----------
+
+/** `kotone://hotkey-capture` 事件 payload：三选一 */
+export interface HotkeyCaptureEvent {
+  /** 捕获到的组合键（如 "Ctrl+Alt+V"） */
+  combo?: string;
+  /** 用户按 Esc 或调用方取消 */
+  cancelled?: boolean;
+  /** 超时未按键 */
+  timeout?: boolean;
+}
+
+/** 开始热键捕获（设置页「点击录入」）；结果经 kotone://hotkey-capture 事件推送 */
+export async function startHotkeyCapture(): Promise<void> {
+  if (!isTauri) throw new Error("浏览器调试环境不支持热键录入");
+  return invoke<void>("start_hotkey_capture");
+}
+
+/** 取消进行中的热键捕获（组件销毁/重新点击的兜底） */
+export async function cancelHotkeyCapture(): Promise<void> {
+  if (!isTauri) return;
+  return invoke<void>("cancel_hotkey_capture");
+}

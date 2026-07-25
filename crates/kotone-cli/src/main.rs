@@ -106,10 +106,14 @@ enum ConfigCommand {
     },
     /// 写入配置项（点路径；支持 hotkey.key / hotkey.mode / hotkeyBackend /
     /// sttEngine / activeProfileId / autoSend / audioDeviceId / language /
-    /// evalRecording / runAsAdminOnStart）
+    /// evalRecording / runAsAdminOnStart / interactionMode）
     Set {
         key: String,
-        value: String,
+        /// 写入的值；--capture 模式下省略（录入结果即值）
+        value: Option<String>,
+        /// 按键录入模式：仅 hotkey.key 可用，弹出提示后按下组合键即写入
+        #[arg(long)]
+        capture: bool,
     },
 }
 
@@ -161,7 +165,9 @@ async fn main() {
         Command::Config { action } => match action {
             ConfigCommand::Show => cmd_config_show(),
             ConfigCommand::Get { key } => cmd_config_get(&key),
-            ConfigCommand::Set { key, value } => cmd_config_set(&key, &value),
+            ConfigCommand::Set { key, value, capture } => {
+                cmd_config_set(&key, value.as_deref(), capture)
+            }
         },
         Command::Devices => cmd_devices(),
         Command::Play { wav, device } => cmd_play(&wav, device),
@@ -755,6 +761,7 @@ const CONFIG_SETTABLE_KEYS: &[&str] = &[
     "language",
     "evalRecording",
     "runAsAdminOnStart",
+    "interactionMode",
 ];
 
 /// 点路径写入：current 上套 patch → Settings 反序列化校验（枚举值在此拦截）。
@@ -830,7 +837,56 @@ fn cmd_config_get(key: &str) -> i32 {
     }
 }
 
-fn cmd_config_set(key: &str, value: &str) -> i32 {
+/// 按键录入（--capture）：LL 钩子捕获下一个组合键，返回配置串（如 "Ctrl+Alt+V"）
+#[cfg(windows)]
+fn capture_hotkey_combo() -> Result<String, String> {
+    use kotone_platform_windows::hotkey_ll::{CaptureResult, LlHookSource};
+
+    let source = LlHookSource::new(Box::new(|_| {}));
+    let (tx, rx) = std::sync::mpsc::channel::<CaptureResult>();
+    source.capture_next(
+        Box::new(move |r| {
+            let _ = tx.send(r);
+        }),
+        std::time::Duration::from_secs(30),
+    )?;
+    eprintln!("请按下热键组合…（Esc 取消，30 秒超时）");
+    match rx.recv().map_err(|_| "捕获通道异常断开".to_string())? {
+        CaptureResult::Captured(spec) => Ok(spec.combo_name()),
+        CaptureResult::Cancelled => Err("已取消录入".into()),
+        CaptureResult::Timeout => Err("超时未按键".into()),
+    }
+}
+
+#[cfg(not(windows))]
+fn capture_hotkey_combo() -> Result<String, String> {
+    Err("--capture 热键录入仅支持 Windows".into())
+}
+
+fn cmd_config_set(key: &str, value: Option<&str>, capture: bool) -> i32 {
+    // --capture：按键录入（仅 hotkey.key；结果即写入值）
+    if capture {
+        if key != "hotkey.key" {
+            eprintln!("--capture 仅支持 hotkey.key（收到「{key}」）");
+            return 2;
+        }
+        let combo = match capture_hotkey_combo() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("{e}");
+                return 1;
+            }
+        };
+        println!("捕获到组合键: {combo}");
+        return cmd_config_set(key, Some(&combo), false);
+    }
+    let value = match value {
+        Some(v) => v,
+        None => {
+            eprintln!("缺少 value 参数（录入 hotkey.key 可用 --capture）");
+            return 2;
+        }
+    };
     let current = settings::load();
     let next = match apply_config_set(&current, key, value) {
         Ok(n) => n,
@@ -972,6 +1028,16 @@ mod tests {
         let e = apply_config_set(&Settings::default(), "no.such.key", "x").unwrap_err();
         assert!(e.contains("不支持的配置键"), "{e}");
         assert!(apply_config_set(&Settings::default(), "auto_send", "true").is_err());
+    }
+
+    #[test]
+    fn config_set_interaction_mode() {
+        use kotone_core::interaction::InteractionMode;
+        let s = apply_config_set(&Settings::default(), "interactionMode", "push-to-talk").unwrap();
+        assert_eq!(s.interaction_mode, Some(InteractionMode::PushToTalk));
+        let s = apply_config_set(&Settings::default(), "interactionMode", "dictation").unwrap();
+        assert_eq!(s.interaction_mode, Some(InteractionMode::Dictation));
+        assert!(apply_config_set(&Settings::default(), "interactionMode", "magic").is_err());
     }
 
     #[test]

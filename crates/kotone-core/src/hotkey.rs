@@ -75,6 +75,62 @@ pub struct HotkeySpec {
     pub shift: bool,
 }
 
+impl HotkeySpec {
+    /// 组合键显示名："Ctrl+Alt+V" 式，与 `parse_hotkey` 兼容（可 roundtrip 写回配置）
+    pub fn combo_name(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if self.ctrl {
+            parts.push("Ctrl".into());
+        }
+        if self.alt {
+            parts.push("Alt".into());
+        }
+        if self.shift {
+            parts.push("Shift".into());
+        }
+        parts.push(vk_name(self.vk));
+        parts.join("+")
+    }
+}
+
+/// VK 码 → 键名（`vk_from_name` 的反查；未知码兜底 "VK0x.."，不丢信息）
+fn vk_name(vk: u32) -> String {
+    // A-Z / 0-9 的 VK 码即 ASCII 码
+    if (u32::from(b'0')..=u32::from(b'9')).contains(&vk)
+        || (u32::from(b'A')..=u32::from(b'Z')).contains(&vk)
+    {
+        if let Some(c) = char::from_u32(vk) {
+            return c.to_string();
+        }
+    }
+    // F1..F24 连续
+    if (VK_F1..VK_F1 + 24).contains(&vk) {
+        return format!("F{}", vk - VK_F1 + 1);
+    }
+    let name = match vk {
+        VK_SPACE => "Space",
+        VK_TAB => "Tab",
+        VK_RETURN => "Enter",
+        VK_BACK => "Backspace",
+        VK_DELETE => "Delete",
+        VK_INSERT => "Insert",
+        VK_HOME => "Home",
+        VK_END => "End",
+        VK_PRIOR => "PageUp",
+        VK_NEXT => "PageDown",
+        VK_UP => "Up",
+        VK_DOWN => "Down",
+        VK_LEFT => "Left",
+        VK_RIGHT => "Right",
+        VK_SNAPSHOT => "PrintScreen",
+        VK_PAUSE => "Pause",
+        VK_CAPITAL => "CapsLock",
+        VK_ESCAPE => "Escape",
+        _ => return format!("VK0x{vk:02X}"),
+    };
+    name.to_string()
+}
+
 /// 键名 → VK 码（大小写不敏感）；不识别返回 None
 fn vk_from_name(name: &str) -> Option<u32> {
     let n = name.trim();
@@ -193,11 +249,14 @@ pub struct MatchOutcome {
     /// true = 吞掉该键（不 CallNextHookEx，游戏收不到）
     pub swallow: bool,
     pub event: Option<HookEvent>,
+    /// 捕获模式（热键录入）下命中的组合键；非捕获模式恒为 None
+    pub captured: Option<HotkeySpec>,
 }
 
 const PASS: MatchOutcome = MatchOutcome {
     swallow: false,
     event: None,
+    captured: None,
 };
 
 /// 热键匹配状态机：跟踪修饰键实时状态与主键按下态，过滤重复 down。
@@ -219,6 +278,8 @@ pub struct HookMatcher {
     esc_matched: bool,
     /// 会话激活（state != idle）：Esc 取消使能
     session_active: bool,
+    /// 捕获模式（热键录入）：不吞键、不产生 HookEvent，非修饰键 down 报告组合键
+    capture_active: bool,
 }
 
 impl HookMatcher {
@@ -236,6 +297,7 @@ impl HookMatcher {
             esc_down: false,
             esc_matched: false,
             session_active: false,
+            capture_active: false,
         }
     }
 
@@ -259,15 +321,19 @@ impl HookMatcher {
         self.session_active = active;
     }
 
+    /// 捕获模式开关（热键录入）。捕获期间不吞键、不产生 HookEvent：
+    /// 非修饰键 down 报告 `captured` 组合键；Esc down 不捕获（留给调用层当取消信号）。
+    /// 捕获优先于 enabled：未注册热键时也能用（CLI/首次设置录入）。
+    pub fn set_capture_active(&mut self, active: bool) {
+        self.capture_active = active;
+    }
+
     fn mods_match(&self) -> bool {
         self.ctrl == self.spec.ctrl && self.alt == self.spec.alt && self.shift == self.spec.shift
     }
 
     /// 输入一个按键事件，输出吞键与事件判定（钩子回调里唯一入口）
     pub fn on_key(&mut self, vk: u32, action: KeyAction) -> MatchOutcome {
-        if !self.enabled {
-            return PASS;
-        }
         let down = action == KeyAction::Down;
 
         // 修饰键：只跟踪状态，永不吞键（吞 Ctrl/Alt/Shift 会破坏游戏操作）
@@ -287,6 +353,28 @@ impl HookMatcher {
             _ => {}
         }
 
+        // 捕获模式：录入热键组合（设置页「点击录入」/ CLI --capture）。
+        // 不吞键、不产生 HookEvent；Esc down 不捕获（调用层据此发取消信号）。
+        if self.capture_active {
+            if down && vk != VK_ESCAPE {
+                return MatchOutcome {
+                    swallow: false,
+                    event: None,
+                    captured: Some(HotkeySpec {
+                        vk,
+                        ctrl: self.ctrl,
+                        alt: self.alt,
+                        shift: self.shift,
+                    }),
+                };
+            }
+            return PASS;
+        }
+
+        if !self.enabled {
+            return PASS;
+        }
+
         // 主键
         if vk == self.spec.vk {
             return if down {
@@ -295,6 +383,7 @@ impl HookMatcher {
                     MatchOutcome {
                         swallow: self.main_matched,
                         event: None,
+                        captured: None,
                     }
                 } else {
                     self.main_down = true;
@@ -311,6 +400,7 @@ impl HookMatcher {
                         MatchOutcome {
                             swallow: true,
                             event: Some(event),
+                            captured: None,
                         }
                     } else {
                         PASS
@@ -329,11 +419,13 @@ impl HookMatcher {
                     MatchOutcome {
                         swallow: true,
                         event: Some(HookEvent::HoldReleased),
+                        captured: None,
                     }
                 } else {
                     MatchOutcome {
                         swallow,
                         event: None,
+                        captured: None,
                     }
                 }
             };
@@ -346,6 +438,7 @@ impl HookMatcher {
                     MatchOutcome {
                         swallow: self.esc_matched,
                         event: None,
+                        captured: None,
                     }
                 } else {
                     self.esc_down = true;
@@ -355,6 +448,7 @@ impl HookMatcher {
                         MatchOutcome {
                             swallow: true,
                             event: Some(HookEvent::Cancel),
+                            captured: None,
                         }
                     } else {
                         PASS
@@ -370,6 +464,7 @@ impl HookMatcher {
                 MatchOutcome {
                     swallow,
                     event: None,
+                    captured: None,
                 }
             };
         }
@@ -561,5 +656,94 @@ mod tests {
         assert_eq!(down(&mut m, u32::from(b'A')), PASS);
         assert_eq!(down(&mut m, VK_RETURN), PASS);
         assert_eq!(up(&mut m, VK_SPACE), PASS);
+    }
+
+    // ---------- 捕获模式（热键录入） ----------
+
+    #[test]
+    fn combo_name_roundtrip() {
+        for s in [
+            "F7",
+            "F24",
+            "Alt+V",
+            "Ctrl+Shift+F7",
+            "Ctrl+Alt+Shift+A",
+            "Space",
+            "Up",
+            "PrintScreen",
+        ] {
+            let spec = parse_hotkey(s).unwrap();
+            assert_eq!(
+                parse_hotkey(&spec.combo_name()).unwrap(),
+                spec,
+                "roundtrip: {s}"
+            );
+        }
+        // 未知 VK 码兜底 VK0x..（不可 parse 但不丢信息）
+        assert_eq!(HotkeySpec { vk: 0xFF, ctrl: false, alt: false, shift: false }.combo_name(), "VK0xFF");
+    }
+
+    #[test]
+    fn capture_reports_combo_with_modifiers() {
+        let mut m = matcher("F8", HotkeyMode::Toggle);
+        m.set_capture_active(true);
+        // 修饰键照常跟踪、不吞
+        assert_eq!(down(&mut m, VK_LCONTROL), PASS);
+        assert_eq!(down(&mut m, VK_LMENU), PASS);
+        let r = down(&mut m, u32::from(b'V'));
+        assert_eq!(
+            r.captured,
+            Some(HotkeySpec {
+                vk: u32::from(b'V'),
+                ctrl: true,
+                alt: true,
+                shift: false,
+            })
+        );
+        assert_eq!(r.captured.unwrap().combo_name(), "Ctrl+Alt+V");
+        // 松开修饰键后再按：组合态更新
+        up(&mut m, VK_LCONTROL);
+        up(&mut m, VK_LMENU);
+        let r = down(&mut m, 0x77);
+        assert_eq!(r.captured.unwrap().combo_name(), "F8");
+    }
+
+    #[test]
+    fn capture_esc_is_not_captured() {
+        let mut m = matcher("F8", HotkeyMode::Toggle);
+        m.set_capture_active(true);
+        // Esc down 不捕获（调用层当取消信号）、不吞键
+        let r = down(&mut m, VK_ESCAPE);
+        assert_eq!(r, PASS);
+        assert_eq!(r.captured, None);
+    }
+
+    #[test]
+    fn capture_never_swallows_and_fires_no_events() {
+        let mut m = matcher("F8", HotkeyMode::Toggle);
+        m.set_capture_active(true);
+        m.set_session_active(true);
+        // 即使按下已注册的主键：报告 captured 而非 HookEvent，且不吞键
+        let r = down(&mut m, 0x77);
+        assert!(!r.swallow);
+        assert_eq!(r.event, None);
+        assert!(r.captured.is_some());
+        let r = up(&mut m, 0x77);
+        assert_eq!(r, PASS);
+        // Esc 在捕获期也不发 Cancel（录入优先于会话取消）
+        assert_eq!(down(&mut m, VK_ESCAPE), PASS);
+        // 结束捕获后恢复正常匹配
+        m.set_capture_active(false);
+        assert_eq!(down(&mut m, 0x77).event, Some(HookEvent::Toggle));
+    }
+
+    #[test]
+    fn capture_works_when_disabled() {
+        // 未注册热键（matcher disabled）时也能录入（CLI / 首次设置场景）
+        let mut m = matcher("F24", HotkeyMode::Toggle);
+        m.set_enabled(false);
+        m.set_capture_active(true);
+        let r = down(&mut m, u32::from(b'G'));
+        assert_eq!(r.captured.unwrap().combo_name(), "G");
     }
 }

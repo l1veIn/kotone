@@ -18,6 +18,7 @@
 
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
@@ -27,15 +28,37 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
-use kotone_core::hotkey::{parse_hotkey, HookEvent, HookMatcher, HotkeyMode, HotkeySource, KeyAction};
+use kotone_core::hotkey::{
+    parse_hotkey, HookEvent, HookMatcher, HotkeyMode, HotkeySource, HotkeySpec, KeyAction,
+    VK_ESCAPE,
+};
 
 /// 事件出口：构造 LlHookSource 时注入（Tauri 壳 spawn 进 runtime，CLI 送进自己的通道）
 pub type HookSink = Box<dyn Fn(HookEvent) + Send + Sync>;
+
+/// 捕获消息（热键录入）：组合键命中 / Esc 取消
+enum CaptureMsg {
+    Combo(HotkeySpec),
+    Cancel,
+}
+
+/// 捕获结果（capture_next 回调入参）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureResult {
+    /// 用户按下了组合键
+    Captured(HotkeySpec),
+    /// 用户按 Esc 或调用方 cancel_capture
+    Cancelled,
+    /// 超时未按键
+    Timeout,
+}
 
 /// 钩子回调共享状态：匹配器 + 事件出口（OnceLock：回调必须是静态 fn）
 struct HookShared {
     matcher: Mutex<HookMatcher>,
     tx: mpsc::Sender<HookEvent>,
+    /// 捕获模式出口：Some 期间按键组合/Esc 走此通道而非正常事件流
+    capture: Mutex<Option<mpsc::Sender<CaptureMsg>>>,
 }
 
 static SHARED: OnceLock<HookShared> = OnceLock::new();
@@ -51,6 +74,9 @@ pub struct LlHookSource {
 struct LlHookState {
     started: bool,
     hook_thread_id: Option<u32>,
+    /// 已正式注册热键（register 置 true、unregister 置 false）；
+    /// 捕获模式用它区分「占位启动」与「真实注册」，捕获结束后据此恢复禁用
+    armed: bool,
 }
 
 impl LlHookSource {
@@ -70,6 +96,76 @@ impl LlHookSource {
             }
         }
     }
+
+    /// 捕获下一个按键组合（热键录入：设置页「点击录入」/ CLI --capture）。
+    ///
+    /// 非阻塞：装槽后起 waiter 线程等结果（recv_timeout），结果经 `cb` 回调。
+    /// 未注册过热键时用占位配置（F24/Toggle，捕获优先于匹配故不吞键）启动钩子
+    /// 基础设施，捕获结束后恢复禁用。已有捕获进行中返回 Err。
+    pub fn capture_next(
+        &self,
+        cb: Box<dyn Fn(CaptureResult) + Send + Sync>,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        // 并发守卫：已有捕获进行中
+        if let Some(shared) = SHARED.get() {
+            if shared.capture.lock().unwrap().is_some() {
+                return Err("已有热键捕获进行中".into());
+            }
+        }
+
+        let (was_started, was_armed) = {
+            let state = self.state.lock().unwrap();
+            (state.started, state.armed)
+        };
+
+        if !was_started {
+            // 未注册过：用占位热键启动钩子线程（capture 模式优先于 enabled/匹配，
+            // 不吞键不产生 HookEvent；捕获结束后恢复禁用）
+            self.register("F24", HotkeyMode::Toggle)?;
+            self.state.lock().unwrap().armed = false;
+            if let Some(shared) = SHARED.get() {
+                shared.matcher.lock().unwrap().set_enabled(false);
+            }
+        }
+
+        let shared = SHARED.get().ok_or("LL 钩子未启动".to_string())?;
+        let (tx, rx) = mpsc::channel::<CaptureMsg>();
+        *shared.capture.lock().unwrap() = Some(tx);
+        shared.matcher.lock().unwrap().set_capture_active(true);
+        kotone_core::log::log("llhook capture started");
+
+        std::thread::Builder::new()
+            .name("kotone-llhook-capture".into())
+            .spawn(move || {
+                let result = match rx.recv_timeout(timeout) {
+                    Ok(CaptureMsg::Combo(spec)) => CaptureResult::Captured(spec),
+                    Ok(CaptureMsg::Cancel) => CaptureResult::Cancelled,
+                    Err(_) => CaptureResult::Timeout,
+                };
+                // 清理：关捕获模式 + 清槽；未正式注册过则恢复禁用
+                if let Some(shared) = SHARED.get() {
+                    shared.matcher.lock().unwrap().set_capture_active(false);
+                    *shared.capture.lock().unwrap() = None;
+                    if !was_armed {
+                        shared.matcher.lock().unwrap().set_enabled(false);
+                    }
+                }
+                kotone_core::log::log(&format!("llhook capture ended: {result:?}"));
+                (cb)(result);
+            })
+            .map_err(|e| format!("启动捕获线程失败: {e}"))?;
+        Ok(())
+    }
+
+    /// 取消进行中的捕获（设置页关闭/超时兜底）：waiter 将收到 Cancelled
+    pub fn cancel_capture(&self) {
+        if let Some(shared) = SHARED.get() {
+            if let Some(tx) = shared.capture.lock().unwrap().take() {
+                let _ = tx.send(CaptureMsg::Cancel);
+            }
+        }
+    }
 }
 
 impl HotkeySource for LlHookSource {
@@ -84,6 +180,7 @@ impl HotkeySource for LlHookSource {
             if let Some(shared) = SHARED.get() {
                 shared.matcher.lock().unwrap().set_config(spec, mode);
             }
+            state.armed = true;
             kotone_core::log::log(&format!("llhook reconfigured: {key} ({mode:?})"));
             return Ok(());
         }
@@ -93,6 +190,7 @@ impl HotkeySource for LlHookSource {
         let shared = HookShared {
             matcher: Mutex::new(HookMatcher::new(spec, mode)),
             tx,
+            capture: Mutex::new(None),
         };
         SHARED
             .set(shared)
@@ -117,6 +215,7 @@ impl HotkeySource for LlHookSource {
             .map_err(|e| format!("启动钩子事件线程失败: {e}"))?;
 
         state.started = true;
+        state.armed = true;
         state.hook_thread_id = Some(thread_id);
         kotone_core::log::log(&format!("llhook backend started: {key} ({mode:?})"));
         Ok(())
@@ -124,6 +223,7 @@ impl HotkeySource for LlHookSource {
 
     /// 注销：匹配器置为禁用（全部按键放行），钩子线程保留以便快速重注册
     fn unregister(&self) {
+        self.state.lock().unwrap().armed = false;
         if let Some(shared) = SHARED.get() {
             shared.matcher.lock().unwrap().set_enabled(false);
             kotone_core::log::log("llhook unregistered (matcher disabled)");
@@ -186,7 +286,15 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
                     if let Ok(mut matcher) = shared.matcher.lock() {
                         let outcome = matcher.on_key(kb.vkCode, action);
                         drop(matcher);
-                        if let Some(ev) = outcome.event {
+                        // 捕获模式（热键录入）：组合键 / Esc 取消走 capture 通道
+                        let capture_tx = shared.capture.lock().unwrap().clone();
+                        if let Some(tx) = capture_tx {
+                            if let Some(spec) = outcome.captured {
+                                let _ = tx.send(CaptureMsg::Combo(spec));
+                            } else if action == KeyAction::Down && kb.vkCode == VK_ESCAPE {
+                                let _ = tx.send(CaptureMsg::Cancel);
+                            }
+                        } else if let Some(ev) = outcome.event {
                             let _ = shared.tx.send(ev);
                         }
                         if outcome.swallow {
