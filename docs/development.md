@@ -32,6 +32,7 @@
 | `d5c6f3c` | 引擎 #1 whisper.cpp sidecar + 下载器（ADR-003） | E2E 转写成功（繁体，2.7s） |
 | `0f5fb3b` | 引擎 #2 sherpa-onnx 流式 Zipformer-zh（ADR-004） | partial 27ms、final <1ms、简体全对 |
 | `29fbd29` | eval 评测模块：录档/回放/标注/CER 报告（ADR-005） | 117 测试全绿；三引擎对比表实跑 |
+| `84e979a` | CLI 完整化：config 点路径读写 / devices / play / listen --wav；WavFileBackend；CLI 默认带 sherpa；虚拟声卡自动化 E2E（docs/cli.md） | 135 测试全绿；VB-CABLE 回路无人值守实测 PASS |
 
 **已验证**：注入机制正确（记事本中文短句 4/4 逐字一致）；状态机全链路（cargo 集成测试）；前端各状态渲染（浏览器 demo + Tauri 内 error 态实测）。
 
@@ -650,6 +651,7 @@ CI：GitHub Actions（Windows runner 为主）— fmt / clippy / cargo test（�
 | 2026-07-24 | **v8：重构为 cargo workspace 五 crate**（core / stt / platform-windows / cli / tauri），开发叙事从业务里程碑切换为架构决策（ADR 起始于 docs/adr/001） | 拆分判据：独立消费者、重依赖编译隔离、变更节奏。core 成为无 Tauri 可跑的独立包（kotone-cli listen 实证）；被否决项：每引擎一 crate、游戏 provider crate（数据驱动差异） |
 | 2026-07-25 | **v9：归位为 `apps/` + `crates/` 产品 monorepo**（ADR-002）；whisper-cli 二进制管理从「Tauri sidecar」改为「kotone-stt 自管理（~/.kotone/bin/）」 | 根目录双重身份（JS+Rust）是脚手架与拆分的两次战术妥协叠加；Tauri sidecar 机制对 CLI 不可用，违背「core 无 Tauri 可跑」原则 |
 | 2026-07-25 | **v10：双引擎接入 + eval 模块落地**（ADR-003/004/005）。sherpa 绑定选官方 crate（社区 sherpa-rs 已被上游收编弃用）；`engine-sherpa` feature 默认关（原生库 ~50MB）；sherpa 热词恒用 modified_beam_search（greedy 遇热词崩进程）；whisper 繁体问题挂起 | eval 实跑数据 sherpa 全面占优（首字 30ms/CER 0 vs whisper 2651ms/CER 0.143）；默认引擎正式决策仍待真人人声语料评测（Phase 1 末决策点） |
+| 2026-07-25 | **v11：CLI 为一等消费者完整化**（docs/cli.md）；`WavFileBackend` 归 platform crate（AudioBackend 的虚拟采集实现，core 不放测试工装）；kotone-cli 默认启用 engine-sherpa（kotone-tauri 保持默认关）；无人值守测试双路径（wav 直灌 / VB-CABLE 回路，`scripts/e2e-virtual-audio.sh`） | 用户决策：界面是薄封装最后做，测试自动化优先；虚拟声卡路径的 partial 时间线含系统音频栈延迟，引擎对比以 eval replay 数据为准 |
 | 2026-07-24 | **v5：preview 交互不抢焦点三连修**——begin 记录前台 hwnd 为注入目标（`FocusBackend` 抽象），Sending 前先 `SetForegroundWindow` 恢复焦点（AttachThreadInput 兜底）；toggle 热键在 Preview 态路由为 `confirm_send`；Esc 临时注册从仅 Listening 扩展到全部非 Idle 态；前端 overlay 显隐调用移除（后端 SW_SHOWNA 全权驱动） | 用户实测：preview 按 Enter 键去了记事本（焦点未跟随悬浮条）、点「发送」按钮激活 overlay 导致文字注入给 overlay 自己 |
 | 2026-07-24 | **v5：引入 tauri-plugin-single-instance；热键注册失败状态经 `get_hotkey_status` 暴露到设置页** | 用户实测：`pnpm tauri dev` 重启时旧实例未退出 → 热键 already registered / WebView2 类注册冲突 |
 | 2026-07-24 | **v5：设置页权限分区「以管理员身份重启」未提权时常驻显示；权限状态 3s 轮询（页面隐藏暂停）；`runAsAdminOnStart` 勾选后提示「下次启动生效」+ 立即重启链接；`get_elevation_status` 链路修复**（profile 文件缺失回退内置 profile，纯逻辑 `resolve_active_game_pid` 可单测） | 用户实测：重启入口只在横幅条件触发时出现；勾选自动提权无反馈；LOL 运行时 activeGameElevated 仍可能返回 null |
