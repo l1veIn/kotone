@@ -1,8 +1,9 @@
 <script lang="ts">
   /*
-   * 实时音量波形（docs/development.md §5.2 lib/components/Waveform.svelte）。
+   * 实时音量波形（方向 B：青→品红渐变声波）。
    * 由 Rust 侧 "kotone://level" 事件推送的 RMS 电平驱动（~50ms 一条）。
    * 电平静默时退化为缓慢呼吸动画，提示「仍在聆听」。
+   * 装饰动效经 app.css 全局 prefers-reduced-motion 降级。
    */
   interface Props {
     /** RMS 电平（0..1，实际值通常远小于 1，内部做增益归一） */
@@ -10,7 +11,7 @@
     /** 竖条数量 */
     bars?: number;
   }
-  let { level = 0, bars = 16 }: Props = $props();
+  let { level = 0, bars = 18 }: Props = $props();
 
   // 耳麦 RMS 常见量级 0.02~0.3，做 4 倍增益并截断
   const norm = $derived(Math.min(1, Math.max(0, level * 4)));
@@ -34,8 +35,9 @@
 </div>
 
 <style>
+  /* 青 → 品红渐变声波（方向 B 品牌渐变） */
   .bar {
-    background: linear-gradient(to top, #00e5ff, #7b2fff);
+    background: linear-gradient(to top, #00e5ff, #ff2d78);
     opacity: 0.9;
     transition: height 90ms ease-out;
   }

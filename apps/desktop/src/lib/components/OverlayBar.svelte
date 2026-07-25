@@ -1,35 +1,26 @@
 <script lang="ts">
   /*
-   * 悬浮录音条（docs/development.md §3.4、§5.2 OverlayBar）。
+   * 悬浮录音条（方向 B「中继站」：直播间弹幕气泡风格）。
    * 状态驱动 UI：orchestrator 是唯一状态所有者，这里只渲染 appState。
    *
-   *   listening    波形 + 流式 partial 实时上屏（无 partial 时「聆听中…」）
+   *   listening    麦克风呼吸光晕 + 青→品红渐变声波 + 流式 partial 上屏
    *   transcribing 「转写中…」
-   *   preview      只读识别文本 + 确认 / 取消（ADR-006：预览不可编辑，热键确认）
-   *   sending      发送动画
-   *   success      「收到，已发送！✨」toast
-   *   error        错误消息 + 重试 / 关闭
+   *   preview      聊天气泡（青色描边 + 小尾巴）+「再按一次发送 · Esc 重说」
+   *   sending      品红光晕脉冲
+   *   success      Kotone 贴纸弹出 + 气泡「收到，已发送！✨」
+   *   error        amazed 贴纸 + 错误摘要 + 重试 / 关闭
    */
-  import { fade, fly } from "svelte/transition";
+  import { fade, fly, scale } from "svelte/transition";
   import { onMount } from "svelte";
   import { appState } from "../stores/state";
   import { confirmSend, cancelSession, simulateSend, getSettings } from "../ipc";
   import Waveform from "./Waveform.svelte";
-
-  /** 各状态指示点颜色 */
-  const dotColor: Record<string, string> = {
-    idle: "bg-white/40",
-    listening: "bg-kotone-cyan",
-    transcribing: "bg-kotone-violet",
-    preview: "bg-kotone-cyan",
-    sending: "bg-kotone-violet",
-    success: "bg-kotone-pink",
-    error: "bg-kotone-pink",
-  };
+  import stickerProud from "../../assets/brand/stickers/proud.png";
+  import stickerAmazed from "../../assets/brand/stickers/amazed.png";
 
   const stateLabel: Record<string, string> = {
     idle: "Kotone 待机",
-    listening: "聆听中",
+    listening: "语音输入中…",
     transcribing: "转写中",
     preview: "预览确认",
     sending: "发送中",
@@ -108,41 +99,31 @@
 </script>
 
 <!--
-  480×120 窗口内铺满一条圆角悬浮条；data-tauri-drag-region 使空白处可拖动窗口
+  480×120 窗口内铺满一条圆角悬浮条；data-tauri-drag-region 使空白处可拖动窗口。
+  整体小巧不遮挡游戏：透明背景 + 微弱青光晕描边面板。
 -->
-<div
-  class="flex h-full items-stretch p-2 select-none"
-  data-tauri-drag-region
->
+<div class="flex h-full items-stretch p-2 select-none" data-tauri-drag-region>
   <div
-    class="flex w-full items-center gap-3 rounded-2xl bg-kotone-deep/90 px-4 py-2 shadow-[0_0_24px_rgba(0,229,255,0.15)] ring-1 ring-kotone-cyan/40"
+    class="flex w-full items-center gap-3 rounded-2xl bg-kotone-deep/92 px-4 py-2 shadow-[0_0_24px_rgba(0,229,255,0.18)] ring-1 ring-kotone-cyan/40"
     data-tauri-drag-region
   >
-    <!-- 状态指示点 -->
-    <span
-      class="inline-block h-2.5 w-2.5 shrink-0 rounded-full transition-colors duration-300 {dotColor[
-        $appState.state
-      ]}"
-      class:animate-pulse={$appState.state === "listening" || $appState.state === "sending"}
-    ></span>
-
     {#if $appState.state === "listening"}
-      <!-- 聆听：波形 + 流式 partial 上屏 -->
-      <div class="shrink-0" in:fade={{ duration: 150 }}>
+      <!-- 聆听：麦克风呼吸光晕 + 渐变声波 + 流式 partial 上屏 -->
+      <span class="mic-breath flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-kotone-cyan/12" in:fade={{ duration: 150 }}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="#00e5ff" stroke-width="2" class="h-4.5 w-4.5">
+          <rect x="9" y="2" width="6" height="12" rx="3" />
+          <path d="M5 10a7 7 0 0 0 14 0M12 19v3" stroke-linecap="round" />
+        </svg>
+      </span>
+      <div class="shrink-0">
         <Waveform level={$appState.level} />
       </div>
       <div class="min-w-0 flex-1">
         <p class="text-[11px] leading-tight text-kotone-cyan/80">{stateLabel.listening}</p>
-        <div
-          bind:this={textScrollEl}
-          class="kotone-scroll mt-0.5 max-h-14 overflow-y-auto pr-1"
-        >
+        <div bind:this={textScrollEl} class="kotone-scroll mt-0.5 max-h-14 overflow-y-auto pr-1">
           {#if $appState.partialText}
             {#key $appState.partialText}
-              <p
-                class="text-sm leading-snug break-all text-white"
-                in:fade={{ duration: 180 }}
-              >
+              <p class="text-sm leading-snug break-all text-white" in:fade={{ duration: 180 }}>
                 {$appState.partialText}
               </p>
             {/key}
@@ -162,15 +143,13 @@
         {/if}
       </div>
     {:else if $appState.state === "preview"}
-      <!-- 预览（ADR-006 只读）：识别文本 + 热键确认/重说。悬浮条不抢焦点，主交互是热键 -->
+      <!-- 预览（ADR-006 只读）：聊天气泡 + 热键确认/重说。悬浮条不抢焦点，主交互是热键 -->
       <div class="flex min-w-0 flex-1 flex-col gap-1.5" in:fade={{ duration: 150 }}>
-        <div
-          class="kotone-scroll max-h-14 overflow-y-auto rounded-lg bg-white/8 px-2.5 py-1.5 ring-1 ring-kotone-cyan/30"
-        >
+        <div class="bubble kotone-scroll max-h-14 overflow-y-auto px-3 py-1.5">
           <p class="text-sm leading-snug break-all text-white">{$appState.finalText}</p>
         </div>
         <p class="text-[11px] leading-tight text-white/45">
-          按 {hotkeyLabel} 发送 / Esc 重说
+          再按 {hotkeyLabel} 发送 · Esc 重说
         </p>
         {#if actionError}
           <p class="truncate text-[11px] text-kotone-pink">{actionError}</p>
@@ -178,7 +157,7 @@
       </div>
       <div class="flex shrink-0 flex-col gap-1.5">
         <button
-          class="rounded-lg bg-kotone-cyan px-3 py-1 text-xs font-semibold text-kotone-deep transition hover:brightness-110 active:scale-95"
+          class="rounded-lg bg-kotone-pink px-3 py-1 text-xs font-semibold text-white shadow-glow-pink transition hover:brightness-110 active:scale-95"
           onclick={() => void onConfirm()}
         >
           发送 ⏎
@@ -192,26 +171,38 @@
       </div>
     {:else if $appState.state === "sending"}
       <div class="min-w-0 flex-1" in:fade={{ duration: 150 }}>
-        <p class="flex items-center gap-1.5 text-sm text-kotone-violet">
+        <p class="flex items-center gap-2 text-sm font-semibold text-kotone-pink">
+          <span class="send-pulse inline-block h-3 w-3 rounded-full bg-kotone-pink"></span>
           发送中
-          <span class="send-dots inline-flex gap-0.5">
-            <i></i><i></i><i></i>
-          </span>
         </p>
         <p class="mt-0.5 truncate text-xs text-white/50">{$appState.finalText}</p>
       </div>
     {:else if $appState.state === "success"}
+      <!-- 已发送：Kotone 贴纸弹出 + 气泡 -->
+      <img
+        src={stickerProud}
+        alt="Kotone 点赞"
+        class="h-14 w-14 shrink-0 object-contain"
+        in:scale={{ duration: 220, start: 0.5 }}
+      />
       <div class="min-w-0 flex-1" in:fly={{ y: 6, duration: 200 }}>
-        <p
-          class="bg-gradient-to-r from-kotone-pink to-kotone-cyan bg-clip-text text-sm font-bold text-transparent"
-        >
-          收到，已发送！✨
-        </p>
-        <p class="mt-0.5 truncate text-xs text-white/55">{$appState.finalText}</p>
+        <div class="bubble inline-block max-w-full px-3 py-1.5">
+          <p class="text-sm font-semibold text-white">收到，已发送！✨</p>
+        </div>
+        <p class="mt-1 truncate text-xs text-white/55">{$appState.finalText}</p>
       </div>
     {:else if $appState.state === "error"}
+      <!-- 出错：amazed 贴纸 + 错误摘要 -->
+      <img
+        src={stickerAmazed}
+        alt="Kotone 惊讶"
+        class="h-12 w-12 shrink-0 object-contain"
+        in:scale={{ duration: 200, start: 0.6 }}
+      />
       <div class="min-w-0 flex-1" in:fly={{ y: 6, duration: 200 }}>
-        <p class="line-clamp-2 text-[13px] leading-snug break-all font-medium text-kotone-pink" title={displayError}>{displayError}</p>
+        <p class="line-clamp-2 text-[13px] leading-snug break-all font-medium text-kotone-pink" title={displayError}>
+          {displayError}
+        </p>
         {#if actionHint}
           <p class="mt-0.5 text-[11px] text-kotone-cyan">{actionHint}</p>
         {:else if $appState.errorText}
@@ -245,6 +236,56 @@
 </div>
 
 <style>
+  /* 聊天气泡：青色描边 + 左下小尾巴 */
+  .bubble {
+    position: relative;
+    background: rgba(0, 229, 255, 0.08);
+    border: 1px solid rgba(0, 229, 255, 0.45);
+    border-radius: 12px;
+  }
+  .bubble::after {
+    content: "";
+    position: absolute;
+    left: 14px;
+    bottom: -5px;
+    width: 8px;
+    height: 8px;
+    background: inherit;
+    border-right: 1px solid rgba(0, 229, 255, 0.45);
+    border-bottom: 1px solid rgba(0, 229, 255, 0.45);
+    transform: rotate(45deg);
+  }
+
+  /* 麦克风呼吸光晕 */
+  .mic-breath {
+    animation: kotone-mic-breath 1.8s ease-in-out infinite;
+  }
+  @keyframes kotone-mic-breath {
+    0%,
+    100% {
+      box-shadow: 0 0 6px rgba(0, 229, 255, 0.25);
+    }
+    50% {
+      box-shadow: 0 0 18px rgba(0, 229, 255, 0.6);
+    }
+  }
+
+  /* 发送中：品红光晕脉冲 */
+  .send-pulse {
+    animation: kotone-send-pulse 0.9s ease-in-out infinite;
+  }
+  @keyframes kotone-send-pulse {
+    0%,
+    100% {
+      box-shadow: 0 0 4px rgba(255, 45, 120, 0.4);
+      transform: scale(1);
+    }
+    50% {
+      box-shadow: 0 0 16px rgba(255, 45, 120, 0.85);
+      transform: scale(1.15);
+    }
+  }
+
   /* 转写中的旋转圈 */
   .spinner {
     border: 2px solid rgba(123, 47, 255, 0.25);
@@ -254,32 +295,6 @@
   @keyframes kotone-spin {
     to {
       transform: rotate(360deg);
-    }
-  }
-
-  /* 发送中的三点跳动 */
-  .send-dots i {
-    width: 4px;
-    height: 4px;
-    border-radius: 9999px;
-    background: #7b2fff;
-    animation: kotone-hop 1s ease-in-out infinite;
-  }
-  .send-dots i:nth-child(2) {
-    animation-delay: 0.15s;
-  }
-  .send-dots i:nth-child(3) {
-    animation-delay: 0.3s;
-  }
-  @keyframes kotone-hop {
-    0%,
-    100% {
-      transform: translateY(0);
-      opacity: 0.4;
-    }
-    50% {
-      transform: translateY(-3px);
-      opacity: 1;
     }
   }
 

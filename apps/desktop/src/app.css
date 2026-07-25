@@ -1,14 +1,27 @@
 @import "tailwindcss";
 
 /*
- * 品牌色板（RepoChan 资产）：
- *   cyan  #00E5FF / 深底 #1A1A2E / 粉 #FF2D78 / 紫 #7B2FFF
+ * 方向 B「中继站」品牌 tokens（Gate 1 定案）——全应用唯一色彩来源。
+ * 青 #00E5FF 主强调 / 蓝黑 #1A1A2E 基底 / 品红 #FF2D78 CTA / 紫 #7B2FFF 辅助。
+ * 深色表面三档：base（窗口底）< panel（面板）< card（卡片）。
  */
 @theme {
   --color-kotone-cyan: #00e5ff;
   --color-kotone-deep: #1a1a2e;
+  --color-kotone-panel: #212140;
+  --color-kotone-card: #2a2a4e;
   --color-kotone-pink: #ff2d78;
   --color-kotone-violet: #7b2fff;
+
+  /* 霓虹光晕（导航激活态 / 发送按钮 / 卡片 hover） */
+  --shadow-glow-cyan: 0 0 18px rgba(0, 229, 255, 0.35);
+  --shadow-glow-cyan-lg: 0 0 32px rgba(0, 229, 255, 0.45);
+  --shadow-glow-pink: 0 0 18px rgba(255, 45, 120, 0.45);
+  --shadow-glow-pink-lg: 0 0 32px rgba(255, 45, 120, 0.55);
+
+  /* 圆角规范 */
+  --radius-kotone-panel: 14px;
+  --radius-kotone-card: 12px;
 }
 
 html,
@@ -24,4 +37,60 @@ body,
     "Microsoft YaHei",
     system-ui,
     sans-serif;
+}
+
+/* 青→品红渐变强调字（大标题后半句 / 页标题点缀） */
+.kotone-gradient-text {
+  background: linear-gradient(92deg, #00e5ff 10%, #ff2d78 90%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* 面板 / 卡片表面（配合 bg-kotone-panel / bg-kotone-card 之外的光边） */
+.kotone-panel {
+  background: color-mix(in srgb, #212140 88%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-kotone-panel);
+}
+.kotone-card {
+  background: color-mix(in srgb, #2a2a4e 72%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-kotone-card);
+  transition:
+    box-shadow 180ms ease,
+    border-color 180ms ease,
+    transform 180ms ease;
+}
+.kotone-card:hover {
+  border-color: rgba(0, 229, 255, 0.35);
+  box-shadow: 0 0 18px rgba(0, 229, 255, 0.18);
+}
+
+/* 细滚动条（全局，与悬浮条一致） */
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(0, 229, 255, 0.25);
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/*
+ * 动效降级：所有呼吸/脉冲/弹出动画与过渡在 prefers-reduced-motion 下
+ * 收敛为瞬时（波形 Canvas 绘制本身是音量数据渲染，不属于装饰动效）。
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

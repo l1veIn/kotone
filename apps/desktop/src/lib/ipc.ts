@@ -18,6 +18,18 @@ export interface HotkeyConfig {
   mode: "toggle" | "hold";
 }
 
+/** 交互模式预设（ADR-006；缺省 null = 由 hotkey.mode + autoSend 旧字段推导） */
+export type InteractionMode = "push-to-talk" | "dictation" | "one-shot";
+
+/** 识别历史配置（core history 模块） */
+export interface HistoryConfig {
+  /** capped 只留最近 maxRecords 条 / keep-all 全留 / off 不记录 */
+  mode: "capped" | "keep-all" | "off";
+  maxRecords: number;
+  /** 是否随记录保存音频（从 eval 录档复制 wav） */
+  includeAudio: boolean;
+}
+
 export interface Settings {
   hotkey: HotkeyConfig;
   /** 热键后端：auto（Windows 优先 LL 钩子）/ llhook / register */
@@ -31,6 +43,11 @@ export interface Settings {
   evalRecording: boolean;
   /** 启动时自动以管理员重启自身（UIPI 方案，默认关） */
   runAsAdminOnStart: boolean;
+  /** 交互模式预设（null = 旧字段推导） */
+  interactionMode: InteractionMode | null;
+  /** VAD 静音判停阈值 ms（one-shot 生效，200-5000） */
+  vadSilenceMs: number;
+  history: HistoryConfig;
 }
 
 /** update_settings 接受任意局部 patch（后端做深合并） */
@@ -80,6 +97,24 @@ export interface ModelInfo {
   downloaded: boolean;
 }
 
+// ---------- 识别历史（core history 模块，camelCase 对齐 serde） ----------
+export interface HistoryRecord {
+  /** 与 eval 录档互查的会话 id */
+  sessionId: string;
+  /** 终态落账时间（ISO 8601 UTC） */
+  ts: string;
+  engineId: string;
+  profileId: string | null;
+  finalText: string;
+  audioMs: number;
+  firstPartialMs: number | null;
+  finalizeLatencyMs: number | null;
+  outcome: "sent" | "cancelled" | "error";
+  error: string | null;
+  /** 相对 history/audio/ 的文件名；无音频为 null */
+  audioFile: string | null;
+}
+
 // ---------- 提权（UIPI 方案，docs/development.md §10 R-1） ----------
 
 /** detect_foreground_game 返回值：profile 字段平铺 + 目标进程提权状态 */
@@ -117,6 +152,8 @@ interface MockStore {
   devices: AudioDevice[];
   engines: EngineInfo[];
   profiles: GameProfile[];
+  models: ModelInfo[];
+  history: HistoryRecord[];
 }
 
 const mock: MockStore = {
@@ -134,6 +171,9 @@ const mock: MockStore = {
     language: "zh",
     evalRecording: true,
     runAsAdminOnStart: false,
+    interactionMode: null,
+    vadSilenceMs: 700,
+    history: { mode: "capped", maxRecords: 1000, includeAudio: false },
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },
@@ -185,6 +225,43 @@ const mock: MockStore = {
       preSendDelayMs: 20,
       preferClipboardPaste: false,
       hotwords: ["闪现", "大龙", "gank", "打野", "推塔", "回城"],
+    },
+  ],
+  models: [
+    { id: "ggml-small", engineId: "whisper-cpp-sidecar", sizeBytes: 466_000_000, downloaded: true },
+    {
+      id: "zipformer-bilingual-zh-en-2023-02-20",
+      engineId: "sherpa-onnx-zipformer-zh",
+      sizeBytes: 158_000_000,
+      downloaded: false,
+    },
+  ],
+  history: [
+    {
+      sessionId: "20260725-101443-736",
+      ts: "2026-07-25T10:14:43Z",
+      engineId: "mock-stream",
+      profileId: "lol",
+      finalText: "对面打野在下路",
+      audioMs: 2465,
+      firstPartialMs: 312,
+      finalizeLatencyMs: 60,
+      outcome: "sent",
+      error: null,
+      audioFile: null,
+    },
+    {
+      sessionId: "20260725-100524-711",
+      ts: "2026-07-25T10:05:24Z",
+      engineId: "mock-stream",
+      profileId: null,
+      finalText: "",
+      audioMs: 1200,
+      firstPartialMs: null,
+      finalizeLatencyMs: null,
+      outcome: "cancelled",
+      error: null,
+      audioFile: null,
     },
   ],
 };
@@ -357,4 +434,39 @@ export async function startHotkeyCapture(): Promise<void> {
 export async function cancelHotkeyCapture(): Promise<void> {
   if (!isTauri) return;
   return invoke<void>("cancel_hotkey_capture");
+}
+
+// ---------- 模型下载（引擎与模型页） ----------
+
+/** 全部引擎的模型清单（downloaded 标记） */
+export async function listModels(): Promise<ModelInfo[]> {
+  if (!isTauri) return clone(mock.models);
+  return invoke<ModelInfo[]>("list_models");
+}
+
+/** 下载模型/运行时（进度经 kotone://download 事件推送：{ id, downloaded, total }） */
+export async function downloadModel(id: string): Promise<void> {
+  if (!isTauri) {
+    const m = mock.models.find((x) => x.id === id);
+    if (m) m.downloaded = true;
+    return;
+  }
+  return invoke<void>("download_model", { id });
+}
+
+// ---------- 识别历史（历史记录页） ----------
+
+/** 识别历史列表（新→旧） */
+export async function getHistory(): Promise<HistoryRecord[]> {
+  if (!isTauri) return clone(mock.history);
+  return invoke<HistoryRecord[]>("get_history");
+}
+
+/** 清空全部识别历史（含音频文件；调用方负责二次确认） */
+export async function clearHistory(): Promise<void> {
+  if (!isTauri) {
+    mock.history = [];
+    return;
+  }
+  return invoke<void>("clear_history");
 }
