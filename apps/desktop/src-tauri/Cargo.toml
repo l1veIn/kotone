@@ -43,3 +43,5 @@ tempfile.workspace = true
 default = []
 engine-whisper-sidecar = ["kotone-stt/engine-whisper-sidecar"]
 engine-sherpa = ["kotone-stt/engine-sherpa"]
+# VAD（ADR-007 one-shot 静音判停）：复用 sherpa-onnx 原生依赖，默认关
+vad-silero = ["kotone-stt/vad-silero"]

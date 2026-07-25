@@ -31,3 +31,6 @@ tempfile.workspace = true
 default = ["engine-whisper-sidecar"]
 engine-whisper-sidecar = []
 engine-sherpa = ["dep:sherpa-onnx"]
+# silero VAD（ADR-007 one-shot 静音判停）：与 engine-sherpa 共享同一份
+# sherpa-onnx 原生依赖，独立 feature 控制（只要 VAD 不要 STT 引擎时不必开 engine-sherpa）
+vad-silero = ["dep:sherpa-onnx"]

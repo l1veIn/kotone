@@ -16,6 +16,41 @@ use kotone_core::stt::EngineRegistry;
 #[cfg(windows)]
 use kotone_core::hotkey::HotkeySource;
 
+/// wav 直灌会话模式的注入器（ADR-007）：不碰真实窗口——
+/// one-shot（C1 直发）在无人值守测试里也绝不能触发真实注入，
+/// 注入结果以 JSONL 打印供断言
+#[cfg(windows)]
+struct NullInjector;
+
+#[cfg(windows)]
+impl kotone_core::inject::Injector for NullInjector {
+    fn send(
+        &self,
+        text: &str,
+        _profile: &GameProfile,
+        _cancel: kotone_core::inject::CancelToken,
+    ) -> Result<(), kotone_core::inject::InjectError> {
+        println!(
+            "{}",
+            serde_json::json!({ "event": "cli", "payload": { "inject": "null", "text": text } })
+        );
+        Ok(())
+    }
+}
+
+/// VAD 接线（ADR-007）：vad-silero feature 编译进时给 orchestrator 注入
+/// silero 工厂；feature 关闭时原样收尾（one-shot begin 会报清晰错误）
+#[cfg(windows)]
+fn wire_vad(
+    #[allow(unused_mut)] mut orchestrator: kotone_core::orchestrator::Orchestrator,
+) -> std::sync::Arc<kotone_core::orchestrator::Orchestrator> {
+    #[cfg(feature = "vad-silero")]
+    {
+        orchestrator.vad_factory = Some(kotone_stt::vad::silero_factory());
+    }
+    orchestrator.into_arc()
+}
+
 #[derive(Parser)]
 #[command(name = "kotone-cli", version, about = "Kotone（琴音）命令行前端")]
 struct Cli {
@@ -312,8 +347,13 @@ async fn cmd_listen_session(
     settings.stt_engine = engine.to_string();
     let speed = speed.unwrap_or(1.0);
 
-    // 音频后端与等待时长：wav 直灌按音频时长（/倍速），否则必须显式 --duration
-    let (audio_backend, wait_ms): (Arc<dyn AudioBackend>, u64) = match &wav {
+    // 音频后端 / 注入器 / 等待时长：wav 直灌按音频时长（/倍速）+ NullInjector
+    // （one-shot C1 直发也不碰真实窗口）；否则用配置采集设备 + 真实注入器
+    let (audio_backend, injector, wait_ms): (
+        Arc<dyn AudioBackend>,
+        Arc<dyn kotone_core::inject::Injector>,
+        u64,
+    ) = match &wav {
         Some(path) => {
             let backend = WavFileBackend::new(path, speed);
             let audio_ms = match backend.audio_ms() {
@@ -323,7 +363,8 @@ async fn cmd_listen_session(
                     return 1;
                 }
             };
-            // wav 模式强制预览收尾：无人值守场景绝不能触发真实注入
+            // wav 模式非 one-shot 时强制预览收尾（auto_send=false）；
+            // one-shot 预设的 C1 直发由 NullInjector 安全承接（JSONL 打印）
             settings.auto_send = false;
             let auto_wait = if speed > 0.0 {
                 (audio_ms as f64 / speed) as u64 + 500
@@ -332,6 +373,7 @@ async fn cmd_listen_session(
             };
             (
                 Arc::new(backend),
+                Arc::new(NullInjector),
                 duration.map(|d| d * 1000).unwrap_or(auto_wait),
             )
         }
@@ -343,7 +385,7 @@ async fn cmd_listen_session(
                     return 2;
                 }
             };
-            (Arc::new(CpalBackend), d)
+            (Arc::new(CpalBackend), Arc::new(WindowsInjector), d)
         }
     };
 
@@ -356,11 +398,11 @@ async fn cmd_listen_session(
     }
 
     let emitter: Arc<dyn Emitter> = Arc::new(JsonlEmitter { hotkey: None });
-    let orchestrator = Arc::new(Orchestrator::new(
+    let orchestrator = wire_vad(Orchestrator::new(
         settings,
         Arc::new(registry),
         audio_backend,
-        Arc::new(WindowsInjector),
+        injector,
         Arc::new(WinFocusBackend),
         emitter,
     ));
@@ -373,9 +415,33 @@ async fn cmd_listen_session(
         return 1;
     }
 
+    // 等会话收尾：VAD 判停（one-shot：pump 自己触发 end()，状态离开 Listening）
+    // 或播完/超时后手动 end；Transcribing/Sending 是过渡态，继续等终态。
+    // core 的 finalize 10s 超时兜底，终态等待给 15s 余量
+    let wait_deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(wait_ms);
+    let final_deadline = wait_deadline + std::time::Duration::from_secs(15);
+    let mut manual_end_needed = false;
     let interrupted = tokio::select! {
         _ = tokio::signal::ctrl_c() => true,
-        _ = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => false,
+        _ = async {
+            loop {
+                match orchestrator.state() {
+                    OrchestratorState::Listening => {
+                        if tokio::time::Instant::now() >= wait_deadline {
+                            manual_end_needed = true;
+                            break;
+                        }
+                    }
+                    OrchestratorState::Transcribing | OrchestratorState::Sending => {
+                        if tokio::time::Instant::now() >= final_deadline {
+                            break; // 异常兜底（core finalize 超时会落 Error）
+                        }
+                    }
+                    _ => break, // Preview / Success / Error（或 toast 后 Idle）
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        } => false,
     };
     if interrupted {
         orchestrator.cancel().await;
@@ -386,13 +452,28 @@ async fn cmd_listen_session(
         return 2;
     }
 
-    if let Err(e) = orchestrator.end().await {
-        println!(
-            "{}",
-            serde_json::json!({ "event": "cli", "payload": { "result": "error", "message": e } })
-        );
-        return 1;
+    if manual_end_needed && orchestrator.state() == OrchestratorState::Listening {
+        if let Err(e) = orchestrator.end().await {
+            // VAD 判停与手动 end 竞态：状态已离开 Listening 说明 VAD 先赢了，走终态等待
+            if orchestrator.state() == OrchestratorState::Listening {
+                println!(
+                    "{}",
+                    serde_json::json!({ "event": "cli", "payload": { "result": "error", "message": e } })
+                );
+                return 1;
+            }
+        }
     }
+    // 手动 end（或竞态落入 VAD 路径）后等终态（Sending → Success；finalize 进行中）
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+    while matches!(
+        orchestrator.state(),
+        OrchestratorState::Transcribing | OrchestratorState::Sending
+    ) && tokio::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
     let state = orchestrator.state();
     let ok = matches!(
         state,
@@ -458,7 +539,7 @@ async fn cmd_listen_hotkey(
     let emitter: Arc<dyn Emitter> = Arc::new(JsonlEmitter {
         hotkey: Some(hotkey.clone()),
     });
-    let orchestrator = Arc::new(Orchestrator::new(
+    let orchestrator = wire_vad(Orchestrator::new(
         settings,
         Arc::new(registry),
         Arc::new(CpalBackend),
@@ -762,6 +843,7 @@ const CONFIG_SETTABLE_KEYS: &[&str] = &[
     "evalRecording",
     "runAsAdminOnStart",
     "interactionMode",
+    "vadSilenceMs",
 ];
 
 /// 点路径写入：current 上套 patch → Settings 反序列化校验（枚举值在此拦截）。
@@ -779,6 +861,15 @@ fn apply_config_set(current: &Settings, key: &str, raw: &str) -> Result<Settings
             "true" => serde_json::Value::Bool(true),
             "false" => serde_json::Value::Bool(false),
             _ => return Err(format!("{key} 只接受 true/false（收到「{raw}」）")),
+        },
+        // 数值键（VAD 判停阈值，范围对齐 core vad::SILENCE_MS_RANGE）
+        "vadSilenceMs" => match raw.parse::<u32>() {
+            Ok(v) if (200..=5_000).contains(&v) => serde_json::Value::Number(v.into()),
+            _ => {
+                return Err(format!(
+                    "{key} 只接受 200-5000 的整数毫秒（收到「{raw}」）"
+                ))
+            }
         },
         // 字符串与枚举键：原样写入，枚举由 Settings 反序列化校验
         _ => serde_json::Value::String(raw.to_string()),
@@ -1037,7 +1128,18 @@ mod tests {
         assert_eq!(s.interaction_mode, Some(InteractionMode::PushToTalk));
         let s = apply_config_set(&Settings::default(), "interactionMode", "dictation").unwrap();
         assert_eq!(s.interaction_mode, Some(InteractionMode::Dictation));
+        let s = apply_config_set(&Settings::default(), "interactionMode", "one-shot").unwrap();
+        assert_eq!(s.interaction_mode, Some(InteractionMode::OneShot));
         assert!(apply_config_set(&Settings::default(), "interactionMode", "magic").is_err());
+    }
+
+    #[test]
+    fn config_set_vad_silence_ms_numeric() {
+        let s = apply_config_set(&Settings::default(), "vadSilenceMs", "900").unwrap();
+        assert_eq!(s.vad_silence_ms, 900);
+        assert!(apply_config_set(&Settings::default(), "vadSilenceMs", "abc").is_err());
+        assert!(apply_config_set(&Settings::default(), "vadSilenceMs", "50").is_err());
+        assert!(apply_config_set(&Settings::default(), "vadSilenceMs", "99999").is_err());
     }
 
     #[test]

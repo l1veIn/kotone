@@ -436,14 +436,22 @@ pub fn run() {
             let audio_backend: Arc<dyn kotone_core::audio::AudioBackend> =
                 Arc::new(platform_audio::CpalBackend);
 
-            let orchestrator = Arc::new(Orchestrator::new(
+            #[allow(unused_mut)] // vad-silero feature 关闭时无可变接线
+            let mut orchestrator = Orchestrator::new(
                 settings.clone(),
                 engines.clone(),
                 audio_backend,
                 injector.clone(),
                 focus,
                 emitter,
-            ));
+            );
+            // VAD 接线（ADR-007）：vad-silero feature 开启时注入 silero 工厂；
+            // 默认构建不接入——one-shot 模式 begin 会报清晰错误
+            #[cfg(feature = "vad-silero")]
+            {
+                orchestrator.vad_factory = Some(kotone_stt::vad::silero_factory());
+            }
+            let orchestrator = orchestrator.into_arc();
 
             app.manage(SharedState {
                 settings: settings.clone(),

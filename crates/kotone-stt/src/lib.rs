@@ -11,6 +11,7 @@ pub mod download;
 pub mod mock;
 pub mod model;
 pub mod sherpa;
+pub mod vad;
 pub mod whisper_sidecar;
 
 use kotone_core::stt::{EngineRegistry, SttEngine};

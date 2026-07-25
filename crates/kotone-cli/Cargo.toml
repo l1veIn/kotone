@@ -15,9 +15,11 @@ serde_json.workspace = true
 
 [features]
 # STT 引擎 feature 转发到 kotone-stt（与 kotone-tauri 对齐）。
-# CLI 是开发/自动化工具：默认带 sherpa（50MB 原生库无所谓）；
+# CLI 是开发/自动化工具：默认带 sherpa（50MB 原生库无所谓）与 silero VAD；
 # kotone-tauri 保持默认关（注意：cargo build --workspace 会按 feature
 # 统一把 sherpa 编进同次构建的全部产物；发布壳用 -p kotone-tauri 单独构建）
-default = ["engine-sherpa"]
+default = ["engine-sherpa", "vad-silero"]
 engine-whisper-sidecar = ["kotone-stt/engine-whisper-sidecar"]
 engine-sherpa = ["kotone-stt/engine-sherpa"]
+# silero VAD（ADR-007 one-shot 静音判停）
+vad-silero = ["kotone-stt/vad-silero"]

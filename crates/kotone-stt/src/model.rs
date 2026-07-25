@@ -157,6 +157,33 @@ pub fn sherpa_default_model() -> &'static str {
     SHERPA_MODELS[0].id
 }
 
+// ---------- silero VAD 模型（ADR-007，单文件） ----------
+
+/// silero VAD 模型 ID（list/download 用）
+pub const VAD_MODEL_ID: &str = "silero-vad";
+/// VAD 伪引擎 ID（ModelInfo.engine_id 字段；VAD 不是 STT 引擎）
+pub const VAD_ENGINE_ID: &str = "vad-silero";
+pub const VAD_MODEL_FILE: &str = "silero_vad.onnx";
+/// sherpa-onnx 官方 release 托管的 silero VAD（与 VAD 示例同一来源，钉死 URL 保证 SHA256 稳定）
+pub const VAD_MODEL_URL: &str =
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx";
+/// silero_vad.onnx SHA256（2025-07 本地下载实测）
+pub const VAD_MODEL_SHA256: &str =
+    "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6";
+pub const VAD_MODEL_SIZE: u64 = 643_854;
+
+/// silero VAD 模型路径（~/.kotone/models/silero_vad.onnx）
+pub fn vad_model_path() -> PathBuf {
+    models_dir().join(VAD_MODEL_FILE)
+}
+
+/// silero VAD 模型就绪（存在且大小匹配）
+pub fn vad_model_ready() -> bool {
+    fs::metadata(vad_model_path())
+        .map(|md| md.len() == VAD_MODEL_SIZE)
+        .unwrap_or(false)
+}
+
 /// 多文件模型目录
 pub fn multi_model_dir(model_id: &str) -> Option<PathBuf> {
     SHERPA_MODELS
@@ -240,6 +267,15 @@ pub fn list() -> Result<Vec<ModelInfo>, String> {
         downloaded: multi_model_ready(m.id),
     }));
     out.push(ModelInfo {
+        id: VAD_MODEL_ID.into(),
+        engine_id: VAD_ENGINE_ID.into(),
+        display_name: "silero VAD 语音活动检测（one-shot 静音判停用）".into(),
+        size_bytes: VAD_MODEL_SIZE,
+        download_url: VAD_MODEL_URL.into(),
+        sha256: VAD_MODEL_SHA256.into(),
+        downloaded: vad_model_ready(),
+    });
+    out.push(ModelInfo {
         id: WHISPER_BIN_ID.into(),
         engine_id: "whisper-cpp-sidecar".into(),
         display_name: format!("whisper-cli 运行时（{WHISPER_BIN_VERSION}，CPU 版）"),
@@ -258,6 +294,10 @@ pub fn list() -> Result<Vec<ModelInfo>, String> {
 pub fn download(id: &str, progress: Progress<'_>) -> Result<(), String> {
     if id == WHISPER_BIN_ID {
         return download_bin(progress);
+    }
+    if id == VAD_MODEL_ID {
+        let dest = vad_model_path();
+        return download::download_file(VAD_MODEL_URL, &dest, Some(VAD_MODEL_SHA256), progress);
     }
     if let Some(m) = MODELS.iter().find(|m| m.id == id) {
         let dest = models_dir().join(m.file);
@@ -304,6 +344,7 @@ fn model_ids() -> Vec<&'static str> {
         .iter()
         .map(|m| m.id)
         .chain(SHERPA_MODELS.iter().map(|m| m.id))
+        .chain([VAD_MODEL_ID])
         .collect()
 }
 
@@ -455,7 +496,7 @@ mod tests {
     #[test]
     fn list_contains_models_and_bin_entry() {
         let items = list().unwrap();
-        assert_eq!(items.len(), MODELS.len() + SHERPA_MODELS.len() + 1);
+        assert_eq!(items.len(), MODELS.len() + SHERPA_MODELS.len() + 2);
         assert!(items.iter().any(|i| i.id == WHISPER_BIN_ID));
         let small = items.iter().find(|i| i.id == "ggml-small").unwrap();
         assert_eq!(small.engine_id, "whisper-cpp-sidecar");
@@ -468,6 +509,19 @@ mod tests {
             zipformer.size_bytes,
             SHERPA_MODELS[0].files.iter().map(|f| f.size_bytes).sum::<u64>()
         );
+        let vad = items.iter().find(|i| i.id == VAD_MODEL_ID).unwrap();
+        assert_eq!(vad.engine_id, VAD_ENGINE_ID);
+        assert_eq!(vad.size_bytes, VAD_MODEL_SIZE);
+        assert_eq!(vad.sha256, VAD_MODEL_SHA256);
+    }
+
+    #[test]
+    fn vad_manifest_wellformed() {
+        assert_eq!(VAD_MODEL_SHA256.len(), 64);
+        assert!(VAD_MODEL_SHA256.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(VAD_MODEL_URL.starts_with("https://"));
+        assert!(VAD_MODEL_URL.ends_with(VAD_MODEL_FILE));
+        assert!(VAD_MODEL_SIZE > 100_000);
     }
 
     #[test]
