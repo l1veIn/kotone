@@ -8,7 +8,9 @@
 //! - `is_process_elevated(pid)`：OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)
 //!   + TokenElevation；OpenProcess 被拒（ERROR_ACCESS_DENIED）视为
 //!   「目标权限高于我们」的信号 → Some(true)
-//! - `restart_as_admin()`：ShellExecuteExW "runas" 重启自身 exe（带当前参数）
+//! - `restart_as_admin()`：ShellExecuteExW "runas" 重启自身 exe（带当前参数，GUI 用）
+//! - `run_elevated(args)`：sudo 式——runas 重启自身但参数完全由调用方给定
+//!   （替换语义，CLI elevate <command> 用）
 
 /// 自动提权重启时追加的命令行标记：子进程见到它即不再重复 runas（防循环）
 pub const ELEVATED_RETRY_ARG: &str = "--kotone-elevated-spawn";
@@ -48,6 +50,44 @@ pub fn should_auto_elevate(
     retry_marker_present: bool,
 ) -> bool {
     run_as_admin_on_start && !elevated && !retry_marker_present
+}
+
+/// 单个命令行参数 → lpParameters 片段（MSVC / CommandLineToArgvW 解析规则，
+/// 纯逻辑可单测）：不含空白与引号的非空参数原样透传；其余包双引号，
+/// 内部 `"` 转义为 `\"`，且紧邻引号的连续反斜杠翻倍（其余 `\` 原样）。
+/// 这样 `listen --profile "lol oce"` 经 shell 去引号后能原样还原给提权副本。
+fn quote_arg(arg: &str) -> String {
+    if !arg.is_empty() && !arg.chars().any(|c| c.is_whitespace() || c == '"') {
+        return arg.to_string();
+    }
+    let mut out = String::with_capacity(arg.len() + 2);
+    out.push('"');
+    let mut backslashes = 0usize;
+    for c in arg.chars() {
+        match c {
+            '\\' => backslashes += 1,
+            '"' => {
+                // 引号前的反斜杠翻倍，再加一个转义引号自身的反斜杠
+                out.push_str(&"\\".repeat(backslashes * 2 + 1));
+                out.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                out.push_str(&"\\".repeat(backslashes));
+                backslashes = 0;
+                out.push(c);
+            }
+        }
+    }
+    // 收尾引号前的反斜杠同样翻倍
+    out.push_str(&"\\".repeat(backslashes * 2));
+    out.push('"');
+    out
+}
+
+/// 参数列表 → lpParameters 串（空格分隔；纯逻辑可单测）
+fn build_params(args: &[String]) -> String {
+    args.iter().map(|a| quote_arg(a)).collect::<Vec<_>>().join(" ")
 }
 
 /// 「激活 profile → 目标游戏 pid」纯逻辑链路（进程枚举注入，可单测）。
@@ -157,31 +197,30 @@ mod win {
         }
     }
 
-    /// 把路径/参数包成双引号（含空格时），拼成 lpParameters
-    fn quote_arg(arg: &str) -> String {
-        if arg.chars().any(char::is_whitespace) {
-            format!("\"{arg}\"")
-        } else {
-            arg.to_string()
-        }
-    }
-
     /// ShellExecuteExW "runas" 重启自身 exe。
     /// extra_args 追加在现有参数之后（自动提权路径用来传防循环标记）。
     /// 成功仅表示新进程已拉起；当前进程是否退出由调用方决定。
     pub fn restart_with_extra_args(extra_args: &[&str]) -> Result<(), String> {
-        let exe = std::env::current_exe().map_err(|e| format!("获取自身 exe 路径失败: {e}"))?;
         // 现有参数剔除旧的防循环标记（避免标记逐次堆积），再按需追加
         let mut args: Vec<String> = std::env::args()
             .skip(1)
             .filter(|a| a != super::ELEVATED_RETRY_ARG)
             .collect();
         args.extend(extra_args.iter().map(|s| s.to_string()));
-        let params = args
-            .iter()
-            .map(|a| quote_arg(a))
-            .collect::<Vec<_>>()
-            .join(" ");
+        shell_execute_runas(&super::build_params(&args))
+    }
+
+    /// sudo 式提权：runas 重启自身 exe，参数完全由调用方给定（替换语义，
+    /// 不带当前进程参数）。CLI elevate <command> 用：提权副本在新控制台
+    /// 执行该子命令（典型 `kotone-cli elevate listen`）。
+    pub fn restart_with_args(args: &[String]) -> Result<(), String> {
+        shell_execute_runas(&super::build_params(args))
+    }
+
+    /// ShellExecuteExW "runas" 拉起自身 exe + 给定参数串。
+    /// 成功仅表示新进程已拉起；当前进程是否退出由调用方决定。
+    fn shell_execute_runas(params: &str) -> Result<(), String> {
+        let exe = std::env::current_exe().map_err(|e| format!("获取自身 exe 路径失败: {e}"))?;
 
         let exe_w: Vec<u16> = exe.to_string_lossy().encode_utf16().chain([0]).collect();
         let verb_w: Vec<u16> = "runas".encode_utf16().chain([0]).collect();
@@ -239,6 +278,13 @@ pub fn restart_for_auto_elevate() -> Result<(), String> {
     win::restart_with_extra_args(&[ELEVATED_RETRY_ARG])
 }
 
+/// sudo 式提权执行：以给定参数 runas 重启自身（替换语义，不带当前进程参数）。
+/// 成功仅表示新进程已拉起；调用方负责退出当前进程。
+#[cfg(windows)]
+pub fn run_elevated(args: &[String]) -> Result<(), String> {
+    win::restart_with_args(args)
+}
+
 #[cfg(not(windows))]
 pub fn is_elevated() -> bool {
     false
@@ -257,6 +303,11 @@ pub fn restart_as_admin() -> Result<(), String> {
 #[cfg(not(windows))]
 pub fn restart_for_auto_elevate() -> Result<(), String> {
     Err("提权重启仅 Windows 支持（MVP Windows-first）".into())
+}
+
+#[cfg(not(windows))]
+pub fn run_elevated(_args: &[String]) -> Result<(), String> {
+    Err("提权执行仅 Windows 支持（MVP Windows-first）".into())
 }
 
 #[cfg(test)]
@@ -289,8 +340,45 @@ mod tests {
     }
 
     #[test]
-    fn should_auto_elevate_truth_table() {
-        // 开启 + 未提权 + 无标记 → 发起 runas
+    fn quote_arg_passthrough_and_wrapping() {
+        // 无空白无引号：原样透传（典型：listen / --engine / mock-stream）
+        assert_eq!(quote_arg("listen"), "listen");
+        assert_eq!(quote_arg("--engine"), "--engine");
+        // 含空白：包双引号（lol oce 经 shell 去引号后仍能还原为一个参数）
+        assert_eq!(quote_arg("lol oce"), "\"lol oce\"");
+        // 空参数：空引号对
+        assert_eq!(quote_arg(""), "\"\"");
+    }
+
+    #[test]
+    fn quote_arg_escapes_quotes_and_backslashes() {
+        // 内嵌引号 → \"（MSVC / CommandLineToArgvW 规则）
+        assert_eq!(quote_arg("say \"hi\""), "\"say \\\"hi\\\"\"");
+        // 普通反斜杠不转义
+        assert_eq!(quote_arg("C:\\tmp\\a b"), "\"C:\\tmp\\a b\"");
+        // 紧邻收尾引号的反斜杠翻倍
+        assert_eq!(quote_arg("C:\\Program Files\\"), "\"C:\\Program Files\\\\\"");
+        // 引号前的反斜杠翻倍 + 引号自身转义
+        assert_eq!(quote_arg("a\\\""), "\"a\\\\\\\"\"");
+    }
+
+    #[test]
+    fn build_params_joins_with_spaces() {
+        let args: Vec<String> = ["listen", "--engine", "mock-stream"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(build_params(&args), "listen --engine mock-stream");
+        let args: Vec<String> = ["send", "--text", "打野 在下路"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(build_params(&args), "send --text \"打野 在下路\"");
+        assert_eq!(build_params(&[]), "");
+    }
+
+    #[test]
+    fn should_auto_elevate_truth_table() {        // 开启 + 未提权 + 无标记 → 发起 runas
         assert!(should_auto_elevate(true, false, false));
         // 未开启 → 不动
         assert!(!should_auto_elevate(false, false, false));

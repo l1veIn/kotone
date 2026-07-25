@@ -8,7 +8,7 @@
 //! - `devices` / `play`：设备枚举 / wav 播放（虚拟声卡回路）
 //! - `eval`：引擎评测——录档列表 / 语料回放（多引擎对比）/ 人工标注 / CER 报告
 //! - `doctor`：环境自检（设备/引擎/profile/提权/VAD/history，逐项 ✓/⚠/✗）
-//! - `elevate`：以管理员身份重启自身（UIPI 提权，§10 R-1）
+//! - `elevate <command> [args...]`：sudo 式——以管理员权限执行子命令（UIPI 提权，§10 R-1）
 //! - `profile`：list / use / detect（游戏 profile 管理与前台匹配）
 //! - `log`：识别历史 list / clear（core history 模块的 CLI 出口）
 
@@ -136,8 +136,13 @@ enum Command {
     /// 环境自检：音频设备 / 引擎就绪 / 激活 profile / 提权链路 / VAD / history，
     /// 逐项 ✓/⚠/✗ 并给修复建议；有 ✗ 项时退出码 1
     Doctor,
-    /// 以管理员身份重启自身（UIPI：目标游戏提权运行时注入必需，§10 R-1）
-    Elevate,
+    /// sudo 式提权：以管理员权限在新控制台执行子命令（UIPI：目标游戏提权
+    /// 运行时注入必需，§10 R-1）。典型：kotone-cli elevate listen
+    Elevate {
+        /// 提权执行的子命令与全部参数（如 listen --engine mock-stream）
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// 游戏 profile：list 列表 / use 激活 / detect 前台进程匹配
     Profile {
         #[command(subcommand)]
@@ -265,7 +270,7 @@ async fn main() {
             EvalCommand::Report => cmd_eval_report().await,
         },
         Command::Doctor => cmd_doctor(),
-        Command::Elevate => cmd_elevate(),
+        Command::Elevate { args } => cmd_elevate(&args),
         Command::Profile { action } => match action {
             ProfileCommand::List => cmd_profile_list(),
             ProfileCommand::Use { id } => cmd_profile_use(&id),
@@ -601,7 +606,7 @@ async fn cmd_listen_hotkey(
             ) {
                 eprintln!(
                     "⚠ 目标游戏进程（pid {pid}）以管理员权限运行而 Kotone 未提权：\
-                     注入将被 UIPI 丢弃 → kotone-cli elevate"
+                     注入将被 UIPI 丢弃 → kotone-cli elevate listen（或以管理员身份重开终端）"
                 );
             }
         }
@@ -1242,7 +1247,7 @@ fn cmd_doctor() -> i32 {
                 let target = elevation::is_process_elevated(pid);
                 if elevation::decide_needs_elevation(target, self_elevated) {
                     println!(
-                        "✗ 目标游戏进程（pid {pid}）已提权而 Kotone 未提权：注入将被 UIPI 丢弃 → kotone-cli elevate"
+                        "✗ 目标游戏进程（pid {pid}）已提权而 Kotone 未提权：注入将被 UIPI 丢弃 → kotone-cli elevate listen（或以管理员身份重开终端）"
                     );
                     failures += 1;
                 } else if target == Some(true) {
@@ -1290,17 +1295,21 @@ fn cmd_doctor() -> i32 {
     }
 }
 
-// ---------- elevate：以管理员身份重启自身（§10 R-1） ----------
+// ---------- elevate：sudo 式提权执行子命令（§10 R-1） ----------
 
-fn cmd_elevate() -> i32 {
+fn cmd_elevate(args: &[String]) -> i32 {
     if kotone_platform_windows::elevation::is_elevated() {
         println!("已是管理员权限，无需提权");
         return 0;
     }
-    match kotone_platform_windows::elevation::restart_as_admin() {
+    // 提权副本在新控制台窗口执行给定子命令（典型 kotone-cli elevate listen），
+    // 当前进程退出（main 的 exit(0)）
+    match kotone_platform_windows::elevation::run_elevated(args) {
         Ok(()) => {
-            // 新进程已拉起（带当前参数），当前进程退出（main 的 exit(0)）
-            println!("已发起管理员重启（UAC 确认后新进程接管），当前进程退出");
+            println!(
+                "已发起管理员执行「{}」（UAC 确认后在新控制台运行），当前进程退出",
+                args.join(" ")
+            );
             0
         }
         Err(e) => {
@@ -1522,9 +1531,42 @@ mod tests {
         assert!(apply_config_set(&Settings::default(), "vadSilenceMs", "99999").is_err());
     }
 
+    // ---------- elevate sudo 式参数解析 ----------
+
     #[test]
-    fn config_set_history_keys() {
-        use kotone_core::history::HistoryMode;
+    fn elevate_requires_subcommand_args() {
+        // 裸 elevate：clap 报错（required），不静默重启
+        assert!(Cli::try_parse_from(["kotone-cli", "elevate"]).is_err());
+    }
+
+    #[test]
+    fn elevate_collects_trailing_args_verbatim() {
+        let cli = Cli::try_parse_from(["kotone-cli", "elevate", "listen"]).unwrap();
+        match cli.command {
+            Command::Elevate { args } => assert_eq!(args, ["listen"]),
+            _ => panic!("expect Elevate"),
+        }
+        // 带选项与值的子命令整体透传（allow_hyphen_values 吃掉 --engine 等）
+        let cli = Cli::try_parse_from([
+            "kotone-cli",
+            "elevate",
+            "listen",
+            "--engine",
+            "mock-stream",
+            "--profile",
+            "lol oce",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Elevate { args } => {
+                assert_eq!(args, ["listen", "--engine", "mock-stream", "--profile", "lol oce"])
+            }
+            _ => panic!("expect Elevate"),
+        }
+    }
+
+    #[test]
+    fn config_set_history_keys() {        use kotone_core::history::HistoryMode;
         // mode：字符串键，枚举值由 Settings 反序列化校验
         let s = apply_config_set(&Settings::default(), "history.mode", "keep-all").unwrap();
         assert_eq!(s.history.mode, HistoryMode::KeepAll);
