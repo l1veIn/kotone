@@ -1,0 +1,27 @@
+{
+  "versionId": "v2026-07-25T14-42-15-377Z",
+  "createdAt": "2026-07-25T14:42:15.388Z",
+  "tool": "repochan",
+  "files": [
+    "generated-2026-07-25T14-39-48.png"
+  ],
+  "promptBrief": "应用图标源图：chibi Kotone 正面头像，#1A1A2E 底 + 青色光晕，角落声波元素",
+  "generationPrompt": "ONE single app icon source image for Kotone, a desktop voice-input app for gamers,\nderived from the character's most iconic visual element: a chibi (Q版) head portrait of Kotone — the same character as the reference image: black hair with cyan #00E5FF to magenta #FF2D78 gradient tips in a small side ponytail, bright cyan eyes with star-shaped highlights, cheerful genki smile, collar of her black gaming jersey, black-and-cyan gaming headphones resting around her neck,\nbold simple emblem with a crisp silhouette, using #1A1A2E deep blue-black as the icon backdrop with a neon cyan #00E5FF luminous rim glow near the rounded corners of the square, and #FF2D78 magenta / #7B2FFF purple accents from the character,\nCOMPOSITION: the chibi head is centered with comfortable breathing room on all four sides — nothing important near the canvas corners, so the icon survives a rounded-rectangle mask crop at any corner radius,\na tiny subtle sound-wave motif sits in one corner as a brand detail,\nthe background is part of the design: the deep #1A1A2E brand backdrop ships with the icon — it is NOT a chroma-key matte,\nthe icon must be readable and recognizable at 32×32px tray-icon size — big head, simple shapes, high contrast between character and backdrop,\nminimal layered geometry, premium product finish,\nno text, no letters, no numbers, no watermark, no border, no frame,\nflat cel-shaded style consistent with the character's art style,\nmasterpiece, best quality",
+  "notes": "模板约束'内容充满画布可出血/不为特定 mask 形状设计'与用户明确的'居中留白适配圆角裁切'冲突，按用户指令优先（Tauri icon 工具链自行裁切缩放）。按高 DPI 锐度规范以 1024×1024 生成（≥512 交付尺寸），落位时确定性降采样到 512×512。32px 可辨。",
+  "provenance": {
+    "tool": "repochan",
+    "action": "order.create_result"
+  },
+  "meta": {
+    "referenceImagesUsed": true,
+    "references": [
+      {
+        "orderId": "ord-foundation-001",
+        "role": "character"
+      }
+    ],
+    "templateId": "official/icon-single",
+    "aspectRatio": "1:1",
+    "safetyConstraintsApplied": true
+  }
+}

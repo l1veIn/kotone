@@ -10,3 +10,4 @@ apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
 .tmp-e2e/
 .repochan/web-starter/
+.tools/qa/

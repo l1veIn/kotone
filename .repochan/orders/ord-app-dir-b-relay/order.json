@@ -1,0 +1,56 @@
+{
+  "orderId": "ord-app-dir-b-relay",
+  "status": "delivered",
+  "requestType": "new_asset",
+  "assetType": "readme_banner",
+  "templateId": "official/section-design",
+  "references": [
+    {
+      "type": "order",
+      "orderId": "ord-foundation-001",
+      "role": "character"
+    }
+  ],
+  "brief": {
+    "intent": "Kotone 桌面应用 UI 重设计方向板 B「中继站」——沉浸式品牌方向：整个应用就是 Kotone 的深夜直播间控制面板，角色高频出现。与方向 A 相同的内容骨架（设置窗口 + 悬浮窗），用于 Gate 1 对比。",
+    "mustInclude": [
+      "①与 A 相同的设置窗口骨架（左侧导航：通用/快捷键/引擎与模型/游戏适配/历史记录/关于），但首屏内容区为「欢迎/通用」页：左侧是 Kotone 中景立绘（膝盖以上，签名姿势：右手拢在耳后倾听、左手悬空五指微张准备打字、身体微前倾、元气笑容；黑发尾端青→品红霓虹渐变、青色星芒眼、oversized 黑色游戏球衣、脖子挂黑青耳机），旁边竖排或横排语录文字「想说的话，一秒都别等」",
+      "②窗口背景铺极低透明度的声波波形或机械键轴十字纹理（深色底上隐约可见，不干扰文字）",
+      "③霓虹光晕语言：导航激活态青色辉光、卡片边缘微光、头像外圈光晕",
+      "④悬浮窗：青→品红渐变色声波、识别文字框为聊天气泡造型、品红发光发送按钮；悬浮窗旁一个发送成功小气泡「收到，已发送！✨」配得意表情的 Q 版 chibi Kotone 贴纸（闭眼竖大拇指）",
+      "⑤整体氛围：深夜直播间，RGB 霓虹青与品红光晕，温暖有能量"
+    ],
+    "avoid": [
+      "立绘面部被 UI 元素遮挡",
+      "纹理影响文字可读性",
+      "glitch 失真效果",
+      "真实操作系统窗口边框",
+      "立绘为全身像（会导致面部细节丢失）"
+    ],
+    "creativeFreedom": [
+      "立绘与内容区的版面关系（左绘右文或背景式）",
+      "光晕强度",
+      "纹理三选一（声波/键轴/气泡）",
+      "chibi 贴纸的具体姿态"
+    ]
+  },
+  "acceptanceCriteria": [
+    "角色形象与 ord-foundation-001 设定页一致（发色渐变、青眼星芒、黑色球衣）",
+    "Kotone 品牌感一眼可辨且不过度拥挤",
+    "文字可读性良好"
+  ],
+  "deliverables": [
+    {
+      "name": "direction_board",
+      "format": "png",
+      "width": 1536,
+      "height": 1024
+    }
+  ],
+  "priority": "normal",
+  "createdAt": "2026-07-25T14:01:10.925Z",
+  "updatedAt": "2026-07-25T14:11:15.325Z",
+  "candidateVersions": [],
+  "schemaVersion": "repochan.asset-order.v1",
+  "currentVersion": "v2026-07-25T14-11-15-315Z"
+}

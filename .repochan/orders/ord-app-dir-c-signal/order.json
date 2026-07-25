@@ -1,0 +1,53 @@
+{
+  "orderId": "ord-app-dir-c-signal",
+  "status": "delivered",
+  "requestType": "new_asset",
+  "assetType": "readme_banner",
+  "templateId": "official/section-design",
+  "references": [
+    {
+      "type": "order",
+      "orderId": "ord-foundation-001",
+      "role": "character"
+    }
+  ],
+  "brief": {
+    "intent": "Kotone 桌面应用 UI 重设计方向板 C「深夜信号」——折中方向：功能主义骨架 + 强品牌氛围，无人物立绘，品牌靠纹理、光晕与 chibi 状态贴纸传达。同一内容骨架，用于 Gate 1 对比。",
+    "mustInclude": [
+      "①与 A 相同的设置窗口骨架与「游戏适配」内容页",
+      "②无任何人物中景/全身立绘",
+      "③品牌感三件套：所有表面铺低透明度聊天气泡轮廓纹理、青色霓虹光晕作为分区线与激活态、「游戏适配」等标题用青→品红渐变强调",
+      "④chibi Q 版 Kotone 贴纸只出现在状态位：历史记录区空状态（趴在桌上睡觉的 chibi + 「还没有语音记录」）、悬浮窗发送成功状态（得意 chibi + 「收到，已发送！✨」气泡）",
+      "⑤悬浮窗：青→品红渐变声波、聊天气泡造型识别文字框、品红发送按钮"
+    ],
+    "avoid": [
+      "人物中景或全身立绘",
+      "纹理影响文字可读性",
+      "真实操作系统窗口边框"
+    ],
+    "creativeFreedom": [
+      "纹理密度与种类",
+      "渐变用法",
+      "chibi 摆放位置"
+    ]
+  },
+  "acceptanceCriteria": [
+    "与 A 的差异（氛围纹理+光晕+chibi）一眼可辨",
+    "与 B 的差异（无立绘）一眼可辨",
+    "文字可读性良好"
+  ],
+  "deliverables": [
+    {
+      "name": "direction_board",
+      "format": "png",
+      "width": 1536,
+      "height": 1024
+    }
+  ],
+  "priority": "normal",
+  "createdAt": "2026-07-25T14:01:10.925Z",
+  "updatedAt": "2026-07-25T14:15:30.121Z",
+  "candidateVersions": [],
+  "schemaVersion": "repochan.asset-order.v1",
+  "currentVersion": "v2026-07-25T14-15-30-110Z"
+}

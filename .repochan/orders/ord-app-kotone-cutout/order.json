@@ -1,0 +1,55 @@
+{
+  "orderId": "ord-app-kotone-cutout",
+  "status": "delivered",
+  "requestType": "new_asset",
+  "assetType": "character_cutout",
+  "templateId": "official/character-cutout",
+  "references": [
+    {
+      "type": "order",
+      "orderId": "ord-foundation-001",
+      "role": "character"
+    }
+  ],
+  "brief": {
+    "intent": "Kotone 中景立绘生产资产——Tauri 设置窗欢迎区的独立 L2 抠图素材，uniform matte 绿幕，后续确定性 chroma-key 提取为透明 PNG。",
+    "mustInclude": [
+      "①Kotone 中景（膝盖以上七分身），完全入画、四边留距、不裁切；签名姿势：右手拢在耳后做倾听状、左手悬空身前五指微张准备打字、身体微前倾、元气笑容眼角微弯",
+      "②形象严格遵循设定：黑发尾端青→品红霓虹渐变、松松侧马尾、明亮青色眼带十字星芒高光、oversized 黑色游戏球衣（青+品红几何条纹）、白色短款内搭、黑色运动短裤、脖子挂黑青配色游戏耳机、透明键帽吊坠项链、黑色无指手套",
+      "③纯绿色均匀背景（#00FF00），无环境反光、无投影、无发光溢出到背景",
+      "④cel-shaded 干净动漫线稿风格，与设定页一致"
+    ],
+    "avoid": [
+      "背景纹理/渐变/场景元素",
+      "全身像",
+      "任何文字",
+      "角色出画或裁切",
+      "绿色系配饰（防串色）",
+      "辉光效果"
+    ],
+    "creativeFreedom": [
+      "头部角度微调",
+      "发丝动态"
+    ]
+  },
+  "acceptanceCriteria": [
+    "完全入画四边留距",
+    "绿幕均匀无阴影无溢色",
+    "形象与 ord-foundation-001 设定页一致",
+    "可直接 chroma-key"
+  ],
+  "deliverables": [
+    {
+      "name": "kotone_cutout_matte",
+      "format": "png",
+      "width": 1024,
+      "height": 1024
+    }
+  ],
+  "priority": "normal",
+  "createdAt": "2026-07-25T14:25:39.015Z",
+  "updatedAt": "2026-07-25T14:36:54.914Z",
+  "candidateVersions": [],
+  "schemaVersion": "repochan.asset-order.v1",
+  "currentVersion": "v2026-07-25T14-36-54-903Z"
+}

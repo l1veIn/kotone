@@ -1,0 +1,27 @@
+{
+  "versionId": "v2026-07-25T14-39-14-956Z",
+  "createdAt": "2026-07-25T14:39:14.966Z",
+  "tool": "repochan",
+  "files": [
+    "generated-2026-07-25T14-37-27.png"
+  ],
+  "promptBrief": "设置窗 L1 氛围背景：深夜直播间场景，无人物无文字，中央暗沉均匀供 UI 叠加",
+  "generationPrompt": "atmospheric scene background for Kotone, a desktop voice-input app for gamers — a late-night streaming room (深夜直播间) at 2 AM,\nfeaturing NO character, NO people — pure environment atmosphere only,\nthe scene: a dim gaming desk setup in a dark room — multiple monitor glows at the edges of the frame, an RGB mechanical keyboard with cyan and magenta backlight close-up in one lower corner, a cup of instant noodles with gentle steam on the desk corner, silhouettes of sticky notes and posters on the wall, faint LED strip ambience,\nrendered in cel-shaded anime background style using deep blue-black #1A1A2E as the dominant base with neon cyan #00E5FF and magenta #FF2D78 glow accents and subtle #7B2FFF purple ambient light,\nCOMPOSITION (critical): overall extremely dark and low-key; brightness is concentrated at the frame edges and lower third — the large CENTRAL area of the canvas stays dark, even and uncluttered, a smooth deep #1A1A2E field suitable for overlaying UI text and controls on top,\ngenerous negative space in the center — no bright focal element in the middle, no high-contrast subject,\nsubtle sound-wave line motifs and faint chat-bubble outlines woven into the ambient light and wall details as decorative elements,\natmospheric lighting and mood: warm, quiet, focused late-night energy,\nthe background is a believable environment (not a flat color), but kept soft and non-distracting,\nlandscape 3:2 aspect ratio suitable as an app window background,\nno text, no letters, no watermark, no UI controls, no people rendered in the image,\nmasterpiece, best quality",
+  "notes": "模板 promptTemplate 默认含 character 与 1/3-1/2 人物构图，与用户明确要求的'无人物纯氛围背景'冲突，按用户指令优先（character_visual slot 替换为 no-character 场景说明）。中央区域暗且均匀，亮度集中于边缘与中下部；声波/气泡轮廓融入环境光；无 glitch。",
+  "provenance": {
+    "tool": "repochan",
+    "action": "order.create_result"
+  },
+  "meta": {
+    "referenceImagesUsed": true,
+    "references": [
+      {
+        "orderId": "ord-foundation-001",
+        "role": "character"
+      }
+    ],
+    "templateId": "official/poster-scene",
+    "aspectRatio": "3:2",
+    "safetyConstraintsApplied": true
+  }
+}

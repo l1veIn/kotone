@@ -1,0 +1,53 @@
+{
+  "orderId": "ord-app-dir-a-console",
+  "status": "delivered",
+  "requestType": "new_asset",
+  "assetType": "readme_banner",
+  "templateId": "official/section-design",
+  "references": [
+    {
+      "type": "order",
+      "orderId": "ord-foundation-001",
+      "role": "character"
+    }
+  ],
+  "brief": {
+    "intent": "Kotone 桌面应用 UI 重设计方向板 A「控制台」——功能主义工具美学，克制干净高效。同一内容骨架：一个设置窗口 + 一个语音输入悬浮窗。用于 Gate 1 方向选型对比。",
+    "mustInclude": [
+      "①一个深色（#1A1A2E）桌面设置窗口界面，左侧窄导航栏（通用/快捷键/引擎与模型/游戏适配/历史记录/关于，顶部 Kotone 小头像 logo），右侧内容区为「游戏适配」页：游戏列表卡片（League of Legends/Valorant/Apex Legends/原神，各带图标与开关）+ 选中游戏的发送快捷键配置区（Ctrl+Enter 输入框、聊天框模式下拉、品红「测试发送」按钮）",
+      "②窗口旁边或下方一个语音输入悬浮窗：纯青色 #00E5FF 声波波形、一行识别文字「对面打野在下路草丛，准备来抓」、右下角品红 #FF2D78 圆形发送按钮",
+      "③配色严格：#1A1A2E 底、#00E5FF 强调、#FF2D78 仅用于关键 CTA",
+      "④扁平设计、无纹理、光晕极弱或无、信息对齐严谨"
+    ],
+    "avoid": [
+      "人物形象插画（除导航栏小头像）",
+      "大面积背景纹理",
+      "真实操作系统窗口边框标题栏",
+      "过度发光"
+    ],
+    "creativeFreedom": [
+      "卡片与开关控件造型",
+      "字体层级",
+      "版面节奏"
+    ]
+  },
+  "acceptanceCriteria": [
+    "界面结构清晰可用",
+    "品牌三色贯穿",
+    "与方向 B/C 的差异一眼可辨（A = 无角色、无纹理、纯工具感）"
+  ],
+  "deliverables": [
+    {
+      "name": "direction_board",
+      "format": "png",
+      "width": 1536,
+      "height": 1024
+    }
+  ],
+  "priority": "normal",
+  "createdAt": "2026-07-25T14:01:10.924Z",
+  "updatedAt": "2026-07-25T14:06:18.503Z",
+  "candidateVersions": [],
+  "schemaVersion": "repochan.asset-order.v1",
+  "currentVersion": "v2026-07-25T14-06-18-493Z"
+}
