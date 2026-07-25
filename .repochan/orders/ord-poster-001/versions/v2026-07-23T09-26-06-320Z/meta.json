@@ -1,0 +1,15 @@
+{
+  "versionId": "v2026-07-23T09-26-06-320Z",
+  "createdAt": "2026-07-23T09:26:06.326Z",
+  "tool": "repochan",
+  "files": [
+    "generated-2026-07-23T09-18-05.png"
+  ],
+  "promptBrief": "Kotone Glitch Art数字拼贴海报——RGB通道偏移+扫描线+霓虹直播间氛围",
+  "generationPrompt": "glitch-art digital collage poster for Kotone... title 'Kotone' and subtitle '琴音'...",
+  "notes": "Poster v1. Glitch art style per artStyle 'Neon' keyword match. Reference: foundation sheet.",
+  "provenance": {
+    "tool": "repochan",
+    "action": "order.create_result"
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "schemaVersion": "repochan.analysis.v1",
+  "generatedAt": "2026-07-23T00:00:00.000Z",
+  "context": {
+    "basic": {
+      "project_name": "voxtype",
+      "source": "greenfield",
+      "readme_exists": false,
+      "has_git": true
+    },
+    "identity": {
+      "namingSeeds": {
+        "primary": [
+          "语音",
+          "输入",
+          "文字",
+          "voice",
+          "speech",
+          "desktop",
+          "STT",
+          "转录"
+        ],
+        "secondary": [],
+        "rationale": [
+          "Greenfield project — signals extracted from user's initial description: 桌面语音输入转文字工具"
+        ]
+      }
+    },
+    "file_structure": {},
+    "inventory": {},
+    "tech_stack": {},
+    "pre_analysis": {},
+    "git_profile": {
+      "has_git": true
+    },
+    "docs_narrative": {},
+    "github_meta": {},
+    "color_palette": {},
+    "core_samples": {},
+    "deterministic_tooling": {}
+  },
+  "persona": null,
+  "error": null,
+  "preAnalysis": {
+    "source": "greenfield-interview",
+    "userIntent": "一个桌面语音输入工具，支持将用户的语音实时转换为文字，方便用户在任意应用中快速输入文本",
+    "projectCategory": "desktop_app"
+  },
+  "abstract": {
+    "source": "greenfield-interview",
+    "tonePreference": "",
+    "targetAudience": ""
+  }
+}

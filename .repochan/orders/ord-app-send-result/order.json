@@ -1,0 +1,53 @@
+{
+  "orderId": "ord-app-send-result",
+  "status": "delivered",
+  "requestType": "new_asset",
+  "assetType": "readme_banner",
+  "templateId": "official/section-design",
+  "references": [
+    {
+      "type": "order",
+      "orderId": "ord-foundation-001",
+      "role": "character"
+    }
+  ],
+  "acceptanceCriteria": [
+    "发送成功状态清晰呈现",
+    "'不中断操作'的产品理念得到视觉体现",
+    "适合作为产品官网的功能展示图"
+  ],
+  "brief": {
+    "intent": "Kotone 消息发送成功界面——展示语音转文字后一键发送到游戏聊天的完整流程结果。体现核心价值：'说了就发，手不用离开键盘'。",
+    "mustInclude": [
+      "一个游戏内聊天框的示意界面，暗色半透明背景叠加在游戏画面上",
+      "聊天框中显示刚发送的消息：'对面打野在下路草丛，准备来抓'——带有已发送的时间戳",
+      "悬浮窗缩小到一角显示'✅ 已发送'状态，霓虹青色勾号",
+      "背景隐约可见游戏画面（MOBA风格的地图和角色），但主体是聊天界面",
+      "深色电竞风格配色贯穿整个画面"
+    ],
+    "avoid": [
+      "真实游戏截图或侵权游戏素材",
+      "界面中的人物形象",
+      "模糊不清的聊天文字"
+    ],
+    "creativeFreedom": [
+      "游戏背景的抽象程度",
+      "聊天框的视觉风格",
+      "'发送成功'状态的具体动效表达"
+    ]
+  },
+  "deliverables": [
+    {
+      "name": "app_screenshot_send",
+      "format": "png",
+      "width": 1536,
+      "height": 1024
+    }
+  ],
+  "priority": "normal",
+  "createdAt": "2026-07-23T09:08:18.275Z",
+  "updatedAt": "2026-07-23T09:38:27.874Z",
+  "candidateVersions": [],
+  "schemaVersion": "repochan.asset-order.v1",
+  "currentVersion": "v2026-07-23T09-38-27-867Z"
+}

@@ -1,0 +1,15 @@
+{
+  "versionId": "v2026-07-23T09-44-50-115Z",
+  "createdAt": "2026-07-23T09:44:50.121Z",
+  "tool": "repochan",
+  "files": [
+    "generated-2026-07-23T09-39-40.png"
+  ],
+  "promptBrief": "游戏适配设置界面——侧边栏游戏列表+快捷键配置+测试发送",
+  "generationPrompt": "WEB PAGE SECTION DESIGN... settings panel — game profile configuration page...",
+  "notes": "App screenshot v1. Section-design template.",
+  "provenance": {
+    "tool": "repochan",
+    "action": "order.create_result"
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "orderId": "ord-app-game-config",
+  "status": "delivered",
+  "requestType": "new_asset",
+  "assetType": "readme_banner",
+  "templateId": "official/section-design",
+  "references": [
+    {
+      "type": "order",
+      "orderId": "ord-foundation-001",
+      "role": "character"
+    }
+  ],
+  "acceptanceCriteria": [
+    "游戏适配设置界面清晰可用",
+    "多个游戏选项一目了然",
+    "品牌视觉一致性保持"
+  ],
+  "brief": {
+    "intent": "Kotone 游戏适配设置界面——展示用户可以配置不同游戏的发送快捷键和聊天框适配。体现产品的'多游戏适配'能力。",
+    "mustInclude": [
+      "一个设置面板界面，深色主题（#1A1A2E）+ 霓虹青强调色",
+      "左侧显示已适配的游戏列表：LOL、Valorant、Apex Legends、原神——每个有游戏图标和名称",
+      "右侧显示当前选中游戏的设置：发送快捷键配置、聊天框模式选择",
+      "顶部有 Kotone 的小型 logo/头像作为品牌标识",
+      "界面设计现代、清晰、适合游戏玩家快速操作"
+    ],
+    "avoid": [
+      "过于复杂的技术设置选项",
+      "真实操作系统原生控件样式",
+      "界面中的人物形象"
+    ],
+    "creativeFreedom": [
+      "游戏列表的展示形式（列表/网格/卡片）",
+      "设置选项的具体排版",
+      "配色在品牌色范围内的微调"
+    ]
+  },
+  "deliverables": [
+    {
+      "name": "app_screenshot_config",
+      "format": "png",
+      "width": 1536,
+      "height": 1024
+    }
+  ],
+  "priority": "normal",
+  "createdAt": "2026-07-23T09:08:18.275Z",
+  "updatedAt": "2026-07-23T09:44:50.121Z",
+  "candidateVersions": [],
+  "schemaVersion": "repochan.asset-order.v1",
+  "currentVersion": "v2026-07-23T09-44-50-115Z"
+}

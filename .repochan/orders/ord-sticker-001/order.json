@@ -1,0 +1,52 @@
+{
+  "orderId": "ord-sticker-001",
+  "status": "delivered",
+  "requestType": "new_asset",
+  "assetType": "sticker_sheet",
+  "templateId": "official/chibi-grid-3x3",
+  "references": [
+    {
+      "type": "order",
+      "orderId": "ord-foundation-001",
+      "role": "character"
+    }
+  ],
+  "acceptanceCriteria": [
+    "9个表情情绪明确、互有区分",
+    "Kotone 的角色特征在 chibi 化后仍然可辨（发色渐变、青色眼、游戏球衣）",
+    "每个格子可独立裁切使用"
+  ],
+  "brief": {
+    "intent": "Kotone 3x3 表情贴纸包——用于社媒互动、聊天表情、直播间弹幕反应。chibi 可爱风格，适合粉丝日常使用。",
+    "mustInclude": [
+      "chibi 版 Kotone 9个不同表情，统一风格，排列在3x3网格中",
+      "9个表情：开心、大笑、惊讶、认真、得意、尴尬、加油、困、生气——情绪明确互有区分",
+      "每个表情保持标志特征：黑发+霓虹渐变发尾、青色星芒眼、黑色游戏球衣",
+      "统一深色圆角方格背景，格间有细线分隔"
+    ],
+    "avoid": [
+      "非 chibi 比例",
+      "表情含义模糊不清",
+      "背景过于花哨影响表情识别"
+    ],
+    "creativeFreedom": [
+      "每个表情的具体五官和肢体表达方式",
+      "chibi 化的夸张程度把控",
+      "9个表情的颜色微调以增强区分度"
+    ]
+  },
+  "deliverables": [
+    {
+      "name": "sticker_grid",
+      "format": "png",
+      "width": 1024,
+      "height": 1024
+    }
+  ],
+  "priority": "normal",
+  "createdAt": "2026-07-23T09:01:33.763Z",
+  "updatedAt": "2026-07-23T09:17:45.116Z",
+  "candidateVersions": [],
+  "schemaVersion": "repochan.asset-order.v1",
+  "currentVersion": "v2026-07-23T09-17-45-110Z"
+}
