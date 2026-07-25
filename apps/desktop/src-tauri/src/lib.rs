@@ -331,6 +331,20 @@ fn eval_export() -> Result<String, String> {
     eval::export()
 }
 
+// ---------- 识别历史（core history 薄转发；参考 CLI log list/clear，§8.1 历史面板） ----------
+
+/// 识别历史列表（新→旧；模式/容量配置走通用 update_settings patch）
+#[tauri::command]
+fn get_history() -> Result<Vec<kotone_core::history::HistoryRecord>, String> {
+    kotone_core::history::list()
+}
+
+/// 清空全部识别历史（含音频文件；前端做二次确认，后端不再拦截）
+#[tauri::command]
+fn clear_history() -> Result<(), String> {
+    kotone_core::history::clear()
+}
+
 // ---------- 会话控制 / 调试 ----------
 
 /// Preview 状态下确认发送（ADR-006：预览只读，始终发送预览文本）
@@ -504,6 +518,8 @@ pub fn run() {
             eval_list_sessions,
             eval_replay,
             eval_export,
+            get_history,
+            clear_history,
             confirm_send,
             cancel_session,
             simulate_send,
