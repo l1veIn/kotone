@@ -19,7 +19,7 @@
 | `play <wav> [--device "<名称子串>"]` | 播放 16kHz wav 到输出设备（自动重采样） |
 | `eval list / replay / label / report` | 引擎评测（ADR-005） |
 | `doctor` | 环境自检：设备/引擎/profile/提权/VAD/history 逐项 ✓/⚠/✗ + 修复建议（有 ✗ 退出码 1） |
-| `elevate` | 以管理员身份重启自身（UIPI：目标游戏提权运行时注入必需） |
+| `elevate <command> [args...]` | sudo 式提权：以管理员权限在新控制台执行子命令（典型 `elevate listen`；裸 elevate 报用法错误） |
 | `profile list / use <id> / detect` | 游戏 profile 列表 / 激活 / 前台进程匹配检测 |
 | `log list [--limit N] [--json] / clear [--yes]` | 识别历史查看 / 清空（~/.kotone/history/） |
 
@@ -46,10 +46,12 @@ audioFile 为 null）。capped 模式超上限自动裁剪最旧记录（联动�
 
 `doctor` 启动自检六项：音频输入设备（标注虚拟声卡）、STT 引擎就绪、
 激活 profile 存在性、提权链路（目标进程已提权而自身未提权 → ✗ 并提示
-`kotone-cli elevate`）、VAD 模型、eval/history 配置摘要。
+`kotone-cli elevate listen`）、VAD 模型、eval/history 配置摘要。
 `listen`（热键模式）启动时也会做同样的提权预检，命中即 stderr 警告（不阻断）。
-`elevate` 走 ShellExecuteExW runas 重启自身（带当前参数），UAC 确认后新进程接管；
-已是管理员时直接提示无需提权。
+`elevate <command> [args...]` 是 sudo 式语义：ShellExecuteExW runas 拉起提权副本，
+在新控制台窗口执行给定子命令（参数按 MSVC/CommandLineToArgvW 规则转义透传，
+带空格的参数如 `--profile "lol oce"` 原样还原），UAC 确认后新进程接管；
+裸 `elevate` 无参数报用法错误；已是管理员时直接提示无需提权。
 
 ### listen 退出码
 

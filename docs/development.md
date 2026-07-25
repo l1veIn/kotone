@@ -35,6 +35,8 @@
 | `84e979a` | CLI 完整化：config 点路径读写 / devices / play / listen --wav；WavFileBackend；CLI 默认带 sherpa；虚拟声卡自动化 E2E（docs/cli.md） | 135 测试全绿；VB-CABLE 回路无人值守实测 PASS |
 | `fbd94f7` + `d8c0fb6` | ADR-006 会话生命周期交互模式：三决策点策略重构 + 预览只读化（编辑=伪需求）+ 热键捕获录入 | 147 测试全绿，行为零变化 |
 | `2ecc3ba` + `236e813` | ADR-007 silero VAD + 模式 3「说一句就走」（A2+B3+C1） | 159 测试全绿；真实人声 wav 判停 E2E 通过 |
+| `9c202ec` + `e60e14f` | core 识别历史模块（history.jsonl 三模式 + orchestrator 终态落账，sessionId 与 eval 互查）+ CLI 收尾（doctor / elevate / profile / log + history 配置键 + listen 提权预检） | 175 测试全绿；doctor / log 真机冒烟通过 |
+| `e449608` | elevate 改 sudo 式语义：`kotone-cli elevate <command>` 透传执行；runas 参数转义升级为 MSVC/CommandLineToArgvW 完整规则 | 180 测试全绿；裸 elevate 用法报错实测 |
 
 **已验证**：注入机制正确（记事本中文短句 4/4 逐字一致）；状态机全链路（cargo 集成测试）；前端各状态渲染（浏览器 demo + Tauri 内 error 态实测）。
 
@@ -589,6 +591,28 @@ Spike 3 降级预案（转写 + 复制到剪贴板）仍然有效，但当前证
 - VAD 免按键（hands-free）作为第三种交互模式评估
 - 按游戏自动切换词表
 
+### 8.1 壳（Tauri）缺口清单（封 Tauri 开工单，v14）
+
+core / CLI 侧能力已齐备（历史、提权、交互模式、VAD、评测），壳是薄封装。
+封 Tauri 前按此清单逐项收口：
+
+1. **构建变体**：壳默认不含 sherpa / silero VAD（feature 默认关，原生库 ~50MB），
+   one-shot 模式在 GUI 不可用、引擎只有 whisper sidecar。需要定「带 feature 的壳
+   构建 / 发布策略」：发布版是否默认带 sherpa+VAD、dev 与 release 的 feature 矩阵、
+   模型按需下载与二进制体积的取舍。
+2. **历史面板**：`get_history` / `clear_history` 两个 IPC + 设置页历史 UI。
+   core `history` 模块（list/clear/includeAudio）与 CLI `log` 参考实现已就位，
+   纯接线无设计工作。
+3. **交互模式选择器 + vadSilenceMs 滑块**：`interactionMode`
+   （push-to-talk / dictation / one-shot）与 `vadSilenceMs`（200–5000）设置项
+   已在 config schema 与 CLI 落地，设置页缺对应 UI（one-shot 依赖第 ① 条的
+   VAD 构建变体，UI 需按引擎/VAD 就绪态禁用并提示）。
+4. **首次启动引导**：模型下载向导（首启检测引擎未就绪 → 引导选择并下载模型 /
+   VAD）。`list_models` / `download_model` IPC 已有，缺向导页与首启判定逻辑。
+5. **打包发布**：NSIS 安装包、manifest 保持 asInvoker（运行时检测 + 一键提权
+   方案不变）、GUI 自启动提权入口对齐 CLI 的 auto-elevate 防循环链路
+   （`runAsAdminOnStart` + `restart_for_auto_elevate`，壳侧已具备，打包后回归验证）。
+
 ---
 
 ## 9. 测试策略
@@ -657,6 +681,8 @@ CI：GitHub Actions（Windows runner 为主）— fmt / clippy / cargo test（�
 | 2026-07-25 | **v10：双引擎接入 + eval 模块落地**（ADR-003/004/005）。sherpa 绑定选官方 crate（社区 sherpa-rs 已被上游收编弃用）；`engine-sherpa` feature 默认关（原生库 ~50MB）；sherpa 热词恒用 modified_beam_search（greedy 遇热词崩进程）；whisper 繁体问题挂起 | eval 实跑数据 sherpa 全面占优（首字 30ms/CER 0 vs whisper 2651ms/CER 0.143）；默认引擎正式决策仍待真人人声语料评测（Phase 1 末决策点） |
 | 2026-07-25 | **v11：CLI 为一等消费者完整化**（docs/cli.md）；`WavFileBackend` 归 platform crate（AudioBackend 的虚拟采集实现，core 不放测试工装）；kotone-cli 默认启用 engine-sherpa（kotone-tauri 保持默认关）；无人值守测试双路径（wav 直灌 / VB-CABLE 回路，`scripts/e2e-virtual-audio.sh`） | 用户决策：界面是薄封装最后做，测试自动化优先；虚拟声卡路径的 partial 时间线含系统音频栈延迟，引擎对比以 eval replay 数据为准 |
 | 2026-07-25 | **v12：交互模式业务建模（ADR-006/007）**——三个决策点策略组装替代硬编码分支；**预览只读化**（用户裁定：编辑是伪需求，要么发要么重说）；热键捕获录入；**VAD 与模式 3「说一句就走」落地** | 组合爆炸前的主动建模：流式/回显是引擎能力投影而非模式维度，组合数塌缩为 2×3×2 策略组装；VAD 推理复用 sherpa-onnx 内置实现避免引入第二套 ONNX Runtime |
+| 2026-07-25 | **v13：core 识别历史模块 + CLI 收尾**——`history`（capped/keep-all/off，JSONL 追加，sessionId 与 eval 录档互查）进 settings 并由 orchestrator 在 sent/cancelled/error 终态落账；CLI 补 doctor / elevate / profile / log 四个一等子命令与 listen 提权预检 | 会话可观测性从「日志排查」升级为「结构化历史可查」；CLI 作为一等消费者补齐运维入口，doctor 把六类环境问题（设备/引擎/profile/提权/VAD/配置）变成一条命令的自检 |
+| 2026-07-25 | **v14：elevate 语义修正为 sudo 式**——`kotone-cli elevate <command> [args...]` 透传执行子命令（替换语义，参数完全由调用方给定）；GUI 的「重启自身」语义（`restart_as_admin`）保留不变；runas 参数拼接升级为 MSVC/CommandLineToArgvW 完整转义规则 | 用户裁定：CLI 是无状态进程，「重启自身」副本打 help 即退出毫无意义；sudo 式透传让提权副本直接干正事（`elevate listen`）。原 quote_arg 只包空白不转引号，`--text "a \"quote\""` 类参数会拼坏，一并修正 |
 | 2026-07-24 | **v5：preview 交互不抢焦点三连修**——begin 记录前台 hwnd 为注入目标（`FocusBackend` 抽象），Sending 前先 `SetForegroundWindow` 恢复焦点（AttachThreadInput 兜底）；toggle 热键在 Preview 态路由为 `confirm_send`；Esc 临时注册从仅 Listening 扩展到全部非 Idle 态；前端 overlay 显隐调用移除（后端 SW_SHOWNA 全权驱动） | 用户实测：preview 按 Enter 键去了记事本（焦点未跟随悬浮条）、点「发送」按钮激活 overlay 导致文字注入给 overlay 自己 |
 | 2026-07-24 | **v5：引入 tauri-plugin-single-instance；热键注册失败状态经 `get_hotkey_status` 暴露到设置页** | 用户实测：`pnpm tauri dev` 重启时旧实例未退出 → 热键 already registered / WebView2 类注册冲突 |
 | 2026-07-24 | **v5：设置页权限分区「以管理员身份重启」未提权时常驻显示；权限状态 3s 轮询（页面隐藏暂停）；`runAsAdminOnStart` 勾选后提示「下次启动生效」+ 立即重启链接；`get_elevation_status` 链路修复**（profile 文件缺失回退内置 profile，纯逻辑 `resolve_active_game_pid` 可单测） | 用户实测：重启入口只在横幅条件触发时出现；勾选自动提权无反馈；LOL 运行时 activeGameElevated 仍可能返回 null |
