@@ -2332,6 +2332,7 @@ dependencies = [
  "arboard",
  "cpal",
  "kotone-core",
+ "tempfile",
  "tokio",
  "windows 0.61.3",
 ]

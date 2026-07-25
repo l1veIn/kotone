@@ -9,3 +9,4 @@ dist/
 /target/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
+.tmp-e2e/

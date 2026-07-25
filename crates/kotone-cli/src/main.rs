@@ -1,16 +1,20 @@
 //! kotone-cli：无 Tauri 的命令行前端（验收 core 可独立运行的关键证据）。
 //!
-//! 子命令：
+//! 子命令（详见 docs/cli.md）：
 //! - `send`：一次性注入（取代原 src-tauri/examples/inject_cli.rs）
-//! - `listen`：前台常驻全链路——LL 钩子热键 → orchestrator → 全部事件以 JSONL 打印
+//! - `listen`：热键全链路 JSONL；--wav / --no-hotkey 单次会话模式（自动化测试）
 //! - `download`：模型 / whisper-cli 运行时下载
+//! - `config`：show / get / set（点路径写入 ~/.kotone/config.json）
+//! - `devices` / `play`：设备枚举 / wav 播放（虚拟声卡回路）
 //! - `eval`：引擎评测——录档列表 / 语料回放（多引擎对比）/ 人工标注 / CER 报告
 
 use clap::{Parser, Subcommand};
 
 use kotone_core::profile::{self, GameProfile};
-use kotone_core::settings::{self, HotkeyBackend};
+use kotone_core::settings::{self, HotkeyBackend, Settings};
 use kotone_core::stt::EngineRegistry;
+#[cfg(windows)]
+use kotone_core::hotkey::HotkeySource;
 
 #[derive(Parser)]
 #[command(name = "kotone-cli", version, about = "Kotone（琴音）命令行前端")]
@@ -36,7 +40,8 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         delay_ms: u64,
     },
-    /// 前台常驻：LL 热键 → orchestrator → JSONL 打印全部事件（Ctrl+C 退出）
+    /// 前台常驻：LL 热键 → orchestrator → JSONL 打印全部事件（Ctrl+C 退出）；
+    /// --wav / --no-hotkey 进入单次会话模式（自动化测试用，见 docs/cli.md）
     Listen {
         /// STT 引擎 id
         #[arg(long, default_value = "mock-stream")]
@@ -50,16 +55,61 @@ enum Command {
         /// 触发模式 toggle|hold（缺省用配置文件值）
         #[arg(long)]
         mode: Option<String>,
+        /// wav 直灌：把 16kHz wav 作为 PCM 源喂给 orchestrator（隐含 --no-hotkey）；
+        /// 会话强制预览收尾不触发真实注入，喂完自动 finalize 退出
+        #[arg(long)]
+        wav: Option<String>,
+        /// 跳过 LL 钩子：立即开始会话，--duration 到时自动结束（配合 --wav 或虚拟声卡）
+        #[arg(long)]
+        no_hotkey: bool,
+        /// 会话时长（秒），到时自动结束退出；--wav 模式缺省 = 音频时长
+        #[arg(long)]
+        duration: Option<u64>,
+        /// wav 喂入速度倍率（1.0 = 实时，0 = 全速）
+        #[arg(long)]
+        speed: Option<f64>,
     },
     /// 下载模型或 whisper-cli 运行时：bin | tiny | base | small
     Download {
         /// 下载目标：bin（whisper-cli 运行时）或模型短名（tiny/base/small）
         target: String,
     },
+    /// 配置管理：show / get / set（点路径写入 ~/.kotone/config.json）
+    Config {
+        #[command(subcommand)]
+        action: ConfigCommand,
+    },
+    /// 枚举音频输入（采集）与输出（播放）设备，标出默认与虚拟声卡
+    Devices,
+    /// 播放 16kHz wav 到输出设备（重采样到设备率；--device 为名称子串）
+    Play {
+        /// wav 文件路径（16kHz/16bit/mono，如 eval 录档或 fixtures）
+        wav: String,
+        /// 输出设备名子串（如 "CABLE Input"；缺省 = 系统默认输出）
+        #[arg(long)]
+        device: Option<String>,
+    },
     /// 引擎评测：录档列表 / 语料回放 / 人工标注 / 对比报告
     Eval {
         #[command(subcommand)]
         action: EvalCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigCommand {
+    /// 打印当前完整配置（JSON，含默认值合并结果）
+    Show,
+    /// 读取单个配置项（点路径，如 hotkey.key / autoSend）
+    Get {
+        key: String,
+    },
+    /// 写入配置项（点路径；支持 hotkey.key / hotkey.mode / hotkeyBackend /
+    /// sttEngine / activeProfileId / autoSend / audioDeviceId / language /
+    /// evalRecording / runAsAdminOnStart）
+    Set {
+        key: String,
+        value: String,
     },
 }
 
@@ -102,8 +152,19 @@ async fn main() {
             profile,
             key,
             mode,
-        } => cmd_listen(&engine, profile, key, mode).await,
+            wav,
+            no_hotkey,
+            duration,
+            speed,
+        } => cmd_listen(&engine, profile, key, mode, wav, no_hotkey, duration, speed).await,
         Command::Download { target } => cmd_download(&target).await,
+        Command::Config { action } => match action {
+            ConfigCommand::Show => cmd_config_show(),
+            ConfigCommand::Get { key } => cmd_config_get(&key),
+            ConfigCommand::Set { key, value } => cmd_config_set(&key, &value),
+        },
+        Command::Devices => cmd_devices(),
+        Command::Play { wav, device } => cmd_play(&wav, device),
         Command::Eval { action } => match action {
             EvalCommand::List => cmd_eval_list(),
             EvalCommand::Replay { session_id, engine } => cmd_eval_replay(&session_id, engine).await,
@@ -196,10 +257,156 @@ fn cmd_send(text: &str, profile_id: &str, clipboard: bool, delay_ms: u64) -> i32
     }
 }
 
-/// listen：LL 钩子热键 → orchestrator → JSONL 事件流。
-/// 证明 core + stt + platform 三个 crate 无 Tauri 可跑通全链路。
+/// listen 退出码：0 = 会话成功（Preview/Success），1 = 错误，2 = 中断/用法错误
+///
+/// 两种模式：
+/// - 默认（热键模式）：LL 钩子热键 → orchestrator → JSONL 事件流，Ctrl+C 退出（=2）
+/// - 会话模式（--wav / --no-hotkey）：立即开始一段会话，到时自动 finalize 退出，
+///   无人值守自动化测试用（docs/cli.md）
 #[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
 async fn cmd_listen(
+    engine: &str,
+    profile_id: Option<String>,
+    key: Option<String>,
+    mode: Option<String>,
+    wav: Option<String>,
+    no_hotkey: bool,
+    duration: Option<u64>,
+    speed: Option<f64>,
+) -> i32 {
+    if wav.is_some() || no_hotkey {
+        cmd_listen_session(engine, wav, duration, speed).await
+    } else {
+        cmd_listen_hotkey(engine, profile_id, key, mode).await
+    }
+}
+
+/// 会话模式：跳过热键，begin → 等待（wav 时长或 --duration）→ end → 按终态给退出码。
+/// wav 直灌用 WavFileBackend（强制预览收尾，不触发真实注入）；
+/// --no-hotkey 无 wav 时用配置采集设备（可指向虚拟声卡 CABLE Output）。
+#[cfg(windows)]
+async fn cmd_listen_session(
+    engine: &str,
+    wav: Option<String>,
+    duration: Option<u64>,
+    speed: Option<f64>,
+) -> i32 {
+    use std::sync::{Arc, RwLock};
+
+    use kotone_core::audio::AudioBackend;
+    use kotone_core::orchestrator::{Emitter, Orchestrator, OrchestratorState};
+    use kotone_platform_windows::audio::CpalBackend;
+    use kotone_platform_windows::inject::{WinFocusBackend, WindowsInjector};
+    use kotone_platform_windows::wav_audio::WavFileBackend;
+
+    kotone_core::log::init();
+
+    let mut settings = settings::load();
+    settings.stt_engine = engine.to_string();
+    let speed = speed.unwrap_or(1.0);
+
+    // 音频后端与等待时长：wav 直灌按音频时长（/倍速），否则必须显式 --duration
+    let (audio_backend, wait_ms): (Arc<dyn AudioBackend>, u64) = match &wav {
+        Some(path) => {
+            let backend = WavFileBackend::new(path, speed);
+            let audio_ms = match backend.audio_ms() {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("读取 wav 失败: {e}");
+                    return 1;
+                }
+            };
+            // wav 模式强制预览收尾：无人值守场景绝不能触发真实注入
+            settings.auto_send = false;
+            let auto_wait = if speed > 0.0 {
+                (audio_ms as f64 / speed) as u64 + 500
+            } else {
+                1000 // 全速喂入很快，finalize 耗时在 end() 内等待
+            };
+            (
+                Arc::new(backend),
+                duration.map(|d| d * 1000).unwrap_or(auto_wait),
+            )
+        }
+        None => {
+            let d = match duration {
+                Some(d) => d * 1000,
+                None => {
+                    eprintln!("--no-hotkey 需配合 --duration <秒>（或使用 --wav <file>）");
+                    return 2;
+                }
+            };
+            (Arc::new(CpalBackend), d)
+        }
+    };
+
+    let settings = Arc::new(RwLock::new(settings));
+    let mut registry = EngineRegistry::new();
+    kotone_stt::register_builtin(&mut registry);
+    if registry.get(engine).is_none() {
+        eprintln!("未注册的 STT 引擎: {engine}");
+        return 2;
+    }
+
+    let emitter: Arc<dyn Emitter> = Arc::new(JsonlEmitter { hotkey: None });
+    let orchestrator = Arc::new(Orchestrator::new(
+        settings,
+        Arc::new(registry),
+        audio_backend,
+        Arc::new(WindowsInjector),
+        Arc::new(WinFocusBackend),
+        emitter,
+    ));
+
+    if let Err(e) = orchestrator.begin().await {
+        println!(
+            "{}",
+            serde_json::json!({ "event": "cli", "payload": { "result": "error", "message": e } })
+        );
+        return 1;
+    }
+
+    let interrupted = tokio::select! {
+        _ = tokio::signal::ctrl_c() => true,
+        _ = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => false,
+    };
+    if interrupted {
+        orchestrator.cancel().await;
+        println!(
+            "{}",
+            serde_json::json!({ "event": "cli", "payload": { "result": "interrupted" } })
+        );
+        return 2;
+    }
+
+    if let Err(e) = orchestrator.end().await {
+        println!(
+            "{}",
+            serde_json::json!({ "event": "cli", "payload": { "result": "error", "message": e } })
+        );
+        return 1;
+    }
+    let state = orchestrator.state();
+    let ok = matches!(
+        state,
+        OrchestratorState::Preview | OrchestratorState::Success
+    );
+    println!(
+        "{}",
+        serde_json::json!({ "event": "cli", "payload": { "result": if ok { "ok" } else { "error" }, "state": format!("{state:?}") } })
+    );
+    if ok {
+        0
+    } else {
+        1
+    }
+}
+
+/// 热键模式：LL 钩子热键 → orchestrator → JSONL 事件流。
+/// 证明 core + stt + platform 三个 crate 无 Tauri 可跑通全链路。Ctrl+C 退出（码 2）。
+#[cfg(windows)]
+async fn cmd_listen_hotkey(
     engine: &str,
     profile_id: Option<String>,
     key: Option<String>,
@@ -242,24 +449,8 @@ async fn cmd_listen(
         let _ = ev_tx.send(ev);
     })));
 
-    /// JSONL 事件出口：全部 core 事件打印到 stdout；
-    /// 同时驱动热键源的 Esc 取消使能（state != idle 期间）
-    struct JsonlEmitter {
-        hotkey: Arc<LlHookSource>,
-    }
-    impl Emitter for JsonlEmitter {
-        fn emit(&self, event: &str, payload: serde_json::Value) {
-            println!("{}", serde_json::json!({ "event": event, "payload": payload }));
-            if event == "kotone://state" {
-                let state = payload.get("state").and_then(|s| s.as_str()).unwrap_or("");
-                self.hotkey
-                    .set_cancel_active(!state.is_empty() && state != "idle");
-            }
-        }
-    }
-
     let emitter: Arc<dyn Emitter> = Arc::new(JsonlEmitter {
-        hotkey: hotkey.clone(),
+        hotkey: Some(hotkey.clone()),
     });
     let orchestrator = Arc::new(Orchestrator::new(
         settings,
@@ -304,19 +495,44 @@ async fn cmd_listen(
     };
 
     let _ = tokio::signal::ctrl_c().await;
-    println!("{}", serde_json::json!({ "event": "cli", "payload": { "message": "退出" } }));
+    println!("{}", serde_json::json!({ "event": "cli", "payload": { "message": "退出（中断）" } }));
     pump.abort();
     hotkey.shutdown();
     orchestrator.cancel().await;
-    0
+    2
+}
+
+/// JSONL 事件出口：全部 core 事件打印到 stdout；
+/// 热键模式下联动热键源的 Esc 取消使能（state != idle 期间）
+#[cfg(windows)]
+struct JsonlEmitter {
+    hotkey: Option<std::sync::Arc<kotone_platform_windows::hotkey_ll::LlHookSource>>,
+}
+
+#[cfg(windows)]
+impl kotone_core::orchestrator::Emitter for JsonlEmitter {
+    fn emit(&self, event: &str, payload: serde_json::Value) {
+        println!("{}", serde_json::json!({ "event": event, "payload": payload }));
+        if let Some(hotkey) = &self.hotkey {
+            if event == "kotone://state" {
+                let state = payload.get("state").and_then(|s| s.as_str()).unwrap_or("");
+                hotkey.set_cancel_active(!state.is_empty() && state != "idle");
+            }
+        }
+    }
 }
 
 #[cfg(not(windows))]
+#[allow(clippy::too_many_arguments)]
 async fn cmd_listen(
     _engine: &str,
     _profile_id: Option<String>,
     _key: Option<String>,
     _mode: Option<String>,
+    _wav: Option<String>,
+    _no_hotkey: bool,
+    _duration: Option<u64>,
+    _speed: Option<f64>,
 ) -> i32 {
     eprintln!("listen 子命令仅 Windows 支持（LL 钩子热键，MVP Windows-first）");
     1
@@ -522,5 +738,321 @@ async fn cmd_eval_report() -> i32 {
             eprintln!("报告任务异常: {e}");
             1
         }
+    }
+}
+
+// ---------- config：配置管理（点路径写入，走 core settings 唯一写入口） ----------
+
+/// config set 支持的键（点路径，对齐 config.json 的 camelCase 键名）
+const CONFIG_SETTABLE_KEYS: &[&str] = &[
+    "hotkey.key",
+    "hotkey.mode",
+    "hotkeyBackend",
+    "sttEngine",
+    "activeProfileId",
+    "autoSend",
+    "audioDeviceId",
+    "language",
+    "evalRecording",
+    "runAsAdminOnStart",
+];
+
+/// 点路径写入：current 上套 patch → Settings 反序列化校验（枚举值在此拦截）。
+/// 纯逻辑可单测；文件 IO 在 cmd 包装层。
+fn apply_config_set(current: &Settings, key: &str, raw: &str) -> Result<Settings, String> {
+    if !CONFIG_SETTABLE_KEYS.contains(&key) {
+        return Err(format!(
+            "不支持的配置键「{key}」（支持：{}）",
+            CONFIG_SETTABLE_KEYS.join(", ")
+        ));
+    }
+    let value = match key {
+        // 布尔键在命令行层先校验，给出清晰报错
+        "autoSend" | "evalRecording" | "runAsAdminOnStart" => match raw {
+            "true" => serde_json::Value::Bool(true),
+            "false" => serde_json::Value::Bool(false),
+            _ => return Err(format!("{key} 只接受 true/false（收到「{raw}」）")),
+        },
+        // 字符串与枚举键：原样写入，枚举由 Settings 反序列化校验
+        _ => serde_json::Value::String(raw.to_string()),
+    };
+    let patch = match key.split_once('.') {
+        Some((top, sub)) => serde_json::json!({ top: { sub: value } }),
+        None => serde_json::json!({ key: value }),
+    };
+    let mut merged =
+        serde_json::to_value(current).map_err(|e| format!("序列化当前配置失败: {e}"))?;
+    settings::merge_json(&mut merged, &patch);
+    serde_json::from_value(merged).map_err(|e| format!("值「{raw}」对 {key} 不合法: {e}"))
+}
+
+/// 点路径读取（只读，允许任意存在的路径）
+fn config_get_value(settings: &Settings, key: &str) -> Result<serde_json::Value, String> {
+    let root =
+        serde_json::to_value(settings).map_err(|e| format!("序列化配置失败: {e}"))?;
+    let mut cur = &root;
+    for part in key.split('.') {
+        cur = cur
+            .get(part)
+            .ok_or_else(|| format!("配置项「{key}」不存在"))?;
+    }
+    Ok(cur.clone())
+}
+
+fn cmd_config_show() -> i32 {
+    let s = settings::load();
+    match serde_json::to_string_pretty(&s) {
+        Ok(j) => {
+            println!("{j}");
+            0
+        }
+        Err(e) => {
+            eprintln!("序列化配置失败: {e}");
+            1
+        }
+    }
+}
+
+fn cmd_config_get(key: &str) -> i32 {
+    let s = settings::load();
+    match config_get_value(&s, key) {
+        Ok(v) => {
+            match &v {
+                serde_json::Value::String(s) => println!("{s}"),
+                other => println!("{other}"),
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            1
+        }
+    }
+}
+
+fn cmd_config_set(key: &str, value: &str) -> i32 {
+    let current = settings::load();
+    let next = match apply_config_set(&current, key, value) {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
+        }
+    };
+    // sttEngine 额外校验：必须是已注册引擎（拼错引擎 id 是脚本高发错误）
+    if key == "sttEngine" {
+        let mut registry = EngineRegistry::new();
+        kotone_stt::register_builtin(&mut registry);
+        if registry.get(&next.stt_engine).is_none() {
+            eprintln!("未注册的 STT 引擎: {}（未写入）", next.stt_engine);
+            return 2;
+        }
+    }
+    match settings::save(&next) {
+        Ok(()) => {
+            println!("已写入 {key} = {value}");
+            0
+        }
+        Err(e) => {
+            eprintln!("保存配置失败: {e}");
+            1
+        }
+    }
+}
+
+// ---------- devices：音频设备枚举 ----------
+
+/// 名称关键词判断虚拟声卡（VB-CABLE / Virtual Audio / 虚拟）
+fn looks_virtual(name: &str) -> bool {
+    let n = name.to_lowercase();
+    n.contains("cable") || n.contains("virtual") || name.contains("虚拟")
+}
+
+fn print_device_line(kind: &str, d: &kotone_core::audio::AudioDevice) {
+    let mut desc = String::new();
+    if d.id == "default" {
+        desc.push_str(&d.name);
+        desc.push_str(" [默认]");
+    } else if d.id != d.name {
+        desc.push_str(&d.name);
+    }
+    if looks_virtual(&d.name) {
+        desc.push_str(" [虚拟声卡]");
+    }
+    // 管道分隔：脚本可 `cut -d'|' -f2` 提取设备 id
+    println!("{kind} | {} | {desc}", d.id);
+}
+
+fn cmd_devices() -> i32 {
+    println!("== 音频输入（采集；audioDeviceId 用第 2 列）==");
+    for d in kotone_platform_windows::audio::list_devices() {
+        print_device_line("IN ", &d);
+    }
+    println!("== 音频输出（播放；play --device 用名称子串）==");
+    for d in kotone_platform_windows::audio::list_output_devices() {
+        print_device_line("OUT", &d);
+    }
+    0
+}
+
+// ---------- play：wav 播放到输出设备（虚拟声卡回路的关键一半） ----------
+
+fn cmd_play(wav: &str, device: Option<String>) -> i32 {
+    let path = std::path::PathBuf::from(wav);
+    match kotone_platform_windows::playback::play_wav(&path, device.as_deref()) {
+        Ok(()) => {
+            println!("播放完成：{wav}");
+            0
+        }
+        Err(e) => {
+            eprintln!("播放失败: {e}");
+            1
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---------- config 点路径 ----------
+
+    #[test]
+    fn config_set_hotkey_key() {
+        let s = apply_config_set(&Settings::default(), "hotkey.key", "F9").unwrap();
+        assert_eq!(s.hotkey.key, "F9");
+        // 其余字段不受影响
+        assert_eq!(s.hotkey.mode, kotone_core::hotkey::HotkeyMode::Toggle);
+    }
+
+    #[test]
+    fn config_set_hotkey_mode_validates_enum() {
+        let s = apply_config_set(&Settings::default(), "hotkey.mode", "hold").unwrap();
+        assert_eq!(s.hotkey.mode, kotone_core::hotkey::HotkeyMode::Hold);
+        assert!(apply_config_set(&Settings::default(), "hotkey.mode", "press").is_err());
+    }
+
+    #[test]
+    fn config_set_hotkey_backend() {
+        for (raw, expect) in [
+            ("auto", HotkeyBackend::Auto),
+            ("llhook", HotkeyBackend::Llhook),
+            ("register", HotkeyBackend::Register),
+        ] {
+            let s = apply_config_set(&Settings::default(), "hotkeyBackend", raw).unwrap();
+            assert_eq!(s.hotkey_backend, expect);
+        }
+        assert!(apply_config_set(&Settings::default(), "hotkeyBackend", "magic").is_err());
+    }
+
+    #[test]
+    fn config_set_bool_keys() {
+        let s = apply_config_set(&Settings::default(), "autoSend", "true").unwrap();
+        assert!(s.auto_send);
+        let s = apply_config_set(&Settings::default(), "evalRecording", "false").unwrap();
+        assert!(!s.eval_recording);
+        assert!(apply_config_set(&Settings::default(), "autoSend", "1").is_err());
+        assert!(apply_config_set(&Settings::default(), "autoSend", "yes").is_err());
+    }
+
+    #[test]
+    fn config_set_string_keys() {
+        let s = apply_config_set(&Settings::default(), "sttEngine", "mock-stream").unwrap();
+        assert_eq!(s.stt_engine, "mock-stream");
+        let s = apply_config_set(&Settings::default(), "audioDeviceId", "CABLE Output").unwrap();
+        assert_eq!(s.audio_device_id, "CABLE Output");
+        let s = apply_config_set(&Settings::default(), "activeProfileId", "lol").unwrap();
+        assert_eq!(s.active_profile_id.as_deref(), Some("lol"));
+        let s = apply_config_set(&Settings::default(), "language", "en").unwrap();
+        assert_eq!(s.language, "en");
+    }
+
+    #[test]
+    fn config_set_rejects_unknown_key() {
+        let e = apply_config_set(&Settings::default(), "no.such.key", "x").unwrap_err();
+        assert!(e.contains("不支持的配置键"), "{e}");
+        assert!(apply_config_set(&Settings::default(), "auto_send", "true").is_err());
+    }
+
+    #[test]
+    fn config_get_dotted_path() {
+        let s = Settings::default();
+        assert_eq!(
+            config_get_value(&s, "hotkey.key").unwrap(),
+            serde_json::json!("F8")
+        );
+        assert_eq!(config_get_value(&s, "autoSend").unwrap(), serde_json::json!(false));
+        assert_eq!(
+            config_get_value(&s, "hotkey.mode").unwrap(),
+            serde_json::json!("toggle")
+        );
+        assert!(config_get_value(&s, "hotkey.nosuch").is_err());
+        assert!(config_get_value(&s, "nosuch").is_err());
+    }
+
+    // ---------- devices 虚拟声卡识别 ----------
+
+    #[test]
+    fn virtual_device_keyword_detection() {
+        assert!(looks_virtual("CABLE Output (VB-Audio Virtual Cable)"));
+        assert!(looks_virtual("CABLE Input (VB-Audio Virtual Cable)"));
+        assert!(looks_virtual("VoiceMeeter Virtual Output"));
+        assert!(looks_virtual("虚拟声卡驱动"));
+        assert!(!looks_virtual("麦克风 (Realtek(R) Audio)"));
+        assert!(!looks_virtual("Microphone (USB Audio Device)"));
+    }
+
+    // ---------- listen 会话模式退出码（wav 直灌 + mock 引擎全链路） ----------
+
+    fn fixture_wav() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../kotone-stt/tests/fixtures/zh-game-3s.wav")
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn listen_session_wav_mock_engine_exits_0() {
+        // mock-stream：固定文本「对面打野在下路」，全速喂入 → Preview 收尾 → 0
+        let code = cmd_listen_session(
+            "mock-stream",
+            Some(fixture_wav().to_string_lossy().into_owned()),
+            None,
+            Some(0.0),
+        )
+        .await;
+        assert_eq!(code, 0);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn listen_session_unknown_engine_exits_2() {
+        let code = cmd_listen_session(
+            "no-such-engine",
+            Some(fixture_wav().to_string_lossy().into_owned()),
+            None,
+            Some(0.0),
+        )
+        .await;
+        assert_eq!(code, 2);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn listen_session_missing_wav_exits_1() {
+        let code = cmd_listen_session(
+            "mock-stream",
+            Some("no/such/file.wav".into()),
+            None,
+            Some(0.0),
+        )
+        .await;
+        assert_eq!(code, 1);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn listen_session_no_hotkey_requires_duration() {
+        let code = cmd_listen_session("mock-stream", None, None, None).await;
+        assert_eq!(code, 2);
     }
 }

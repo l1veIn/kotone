@@ -11,3 +11,5 @@ pub mod elevation;
 #[cfg(windows)]
 pub mod hotkey_ll;
 pub mod inject;
+pub mod playback;
+pub mod wav_audio;

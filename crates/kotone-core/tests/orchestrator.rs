@@ -174,6 +174,38 @@ impl Injector for LoggingInjector {
     }
 }
 
+/// 恒未就绪的占位引擎：模拟「引擎未就绪」路径（不能再用 sherpa 占位——
+/// CLI 默认 feature 带 sherpa 后，workspace 构建下 sherpa 在真机是就绪的）
+struct NeverReadyEngine;
+
+impl kotone_core::stt::SttEngine for NeverReadyEngine {
+    fn id(&self) -> &'static str {
+        "never-ready"
+    }
+    fn display_name(&self) -> &str {
+        "恒未就绪占位引擎"
+    }
+    fn capabilities(&self) -> kotone_core::stt::EngineCapabilities {
+        kotone_core::stt::EngineCapabilities {
+            streaming: false,
+            hotwords: false,
+            gpu: false,
+            offline: true,
+            languages: vec![],
+        }
+    }
+    fn is_ready(&self) -> bool {
+        false
+    }
+    fn start_session(
+        &self,
+        _cfg: &kotone_core::stt::SessionConfig,
+        _events: mpsc::UnboundedSender<kotone_core::stt::SttEvent>,
+    ) -> Result<Box<dyn kotone_core::stt::SttSession>, String> {
+        unreachable!("恒未就绪引擎不会 start_session")
+    }
+}
+
 fn make_orchestrator(
     auto_send: bool,
 ) -> (Arc<Orchestrator>, Arc<VecEmitter>, Arc<Mutex<Vec<String>>>) {
@@ -209,6 +241,7 @@ fn make_orchestrator_full(
     let mut registry = EngineRegistry::new();
     // 内置引擎（mock-stream 等）由 kotone-stt 注入（dev-dependency）
     kotone_stt::register_builtin(&mut registry);
+    registry.register(Box::new(NeverReadyEngine));
     let engines = Arc::new(registry);
     let emitter = Arc::new(VecEmitter::default());
     let mut orch = Orchestrator::new(
@@ -338,8 +371,8 @@ async fn double_begin_rejected() {
 async fn begin_with_unready_engine_toasts_error() {
     let (orch, emitter, _s) = {
         let (o, e, s) = make_orchestrator(false);
-        // sherpa 恒为未就绪占位（whisper 真机装好后就绪，不能再用它模拟未就绪）
-        o.settings().write().unwrap().stt_engine = "sherpa-onnx-zipformer-zh".into();
+        // NeverReadyEngine 恒未就绪（whisper/sherpa 真机均已就绪，不能再用它们模拟）
+        o.settings().write().unwrap().stt_engine = "never-ready".into();
         (o, e, s)
     };
     let r = orch.begin().await;
@@ -423,8 +456,8 @@ async fn error_state_retry_with_edited_text() {
 async fn error_without_text_rejects_retry_and_auto_idles() {
     let (orch, emitter, _s) = {
         let (o, e, s) = make_orchestrator(false);
-        // sherpa 恒为未就绪占位（whisper 真机装好后就绪，不能再用它模拟未就绪）
-        o.settings().write().unwrap().stt_engine = "sherpa-onnx-zipformer-zh".into();
+        // NeverReadyEngine 恒未就绪（whisper/sherpa 真机均已就绪，不能再用它们模拟）
+        o.settings().write().unwrap().stt_engine = "never-ready".into();
         (o, e, s)
     };
     let _ = orch.begin().await;

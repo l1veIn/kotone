@@ -35,6 +35,32 @@ pub fn list_devices() -> Vec<AudioDevice> {
     out
 }
 
+/// 枚举可用输出（播放）设备；首条为 "default" 伪设备（跟随系统默认）。
+/// 采集用输入、虚拟声卡灌音用输出（CABLE Input 是输出设备）。
+pub fn list_output_devices() -> Vec<AudioDevice> {
+    let host = cpal::default_host();
+    let mut out = Vec::new();
+    if let Some(d) = host.default_output_device() {
+        if let Ok(name) = d.name() {
+            out.push(AudioDevice {
+                id: "default".into(),
+                name: format!("系统默认（{name}）"),
+            });
+        }
+    }
+    if let Ok(devices) = host.output_devices() {
+        for d in devices {
+            if let Ok(name) = d.name() {
+                out.push(AudioDevice {
+                    id: name.clone(),
+                    name,
+                });
+            }
+        }
+    }
+    out
+}
+
 /// 生产实现：cpal
 pub struct CpalBackend;
 
@@ -193,21 +219,22 @@ impl CaptureState {
     }
 }
 
-/// 线性插值重采样器（任意 src → dst），跨 chunk 保持相位连续
-struct Resampler {
+/// 线性插值重采样器（任意 src → dst），跨 chunk 保持相位连续。
+/// pub：wav 直灌后端（wav_audio）与播放（playback）复用。
+pub struct Resampler {
     step: f64,     // src_rate / dst_rate
     next_pos: f64, // 下一个输出点在源坐标中的位置（相对当前 chunk）
 }
 
 impl Resampler {
-    fn new(src_rate: u32, dst_rate: u32) -> Self {
+    pub fn new(src_rate: u32, dst_rate: u32) -> Self {
         Self {
             step: src_rate as f64 / dst_rate as f64,
             next_pos: 0.0,
         }
     }
 
-    fn process(&mut self, input: &[f32]) -> Vec<f32> {
+    pub fn process(&mut self, input: &[f32]) -> Vec<f32> {
         let mut out = Vec::new();
         if input.is_empty() {
             return out;
