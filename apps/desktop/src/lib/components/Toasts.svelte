@@ -28,8 +28,8 @@
   };
 </script>
 
-<!-- top-16：让开 64px 标题栏；z-[70]：压过首启向导（z-50） -->
-<div class="pointer-events-none fixed top-16 right-4 z-[70] flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2">
+<!-- top-13：让开 48px 标题栏；z-[70]：压过首启向导（z-50） -->
+<div class="pointer-events-none fixed top-13 right-4 z-[70] flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2">
   {#each $toasts as t (t.id)}
     <div
       transition:toastTrans

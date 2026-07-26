@@ -12,6 +12,7 @@
     type ForegroundGameInfo,
   } from "../../../lib/ipc";
   import { settingsStore, toast, errText } from "../../../lib/stores/ui";
+  import { spotlight } from "../../../lib/actions/spotlight";
 
   let profiles = $state<GameProfile[]>([]);
   let foreground = $state<ForegroundGameInfo | null | undefined>(undefined);
@@ -64,7 +65,10 @@
   <div class="mt-4 flex flex-col gap-3">
     {#each profiles as p}
       {@const active = $settingsStore?.activeProfileId === p.id}
-      <div class="kotone-card flex items-center gap-3 p-4 {active ? 'border-kotone-cyan/50 shadow-glow-cyan' : ''}">
+      <div
+        use:spotlight
+        class="kotone-card kotone-spotlight flex items-center gap-3 p-4 {active ? 'border-kotone-cyan/50 shadow-glow-cyan' : ''}"
+      >
         <!-- 图标占位 -->
         <span
           class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-lg
@@ -120,7 +124,7 @@
       </p>
     {/if}
     <button
-      class="mt-3 w-full rounded-lg bg-kotone-pink px-3 py-2.5 text-sm font-bold text-white shadow-glow-pink transition hover:brightness-110 active:scale-95 disabled:opacity-50"
+      class="mt-3 w-full rounded-lg bg-kotone-pink px-3 py-2.5 text-sm font-bold text-white shadow-glow-pink transition hover:shadow-glow-pink-lg hover:brightness-110 active:scale-95 disabled:opacity-50"
       disabled={testing}
       onclick={() => void onTestSend()}
     >

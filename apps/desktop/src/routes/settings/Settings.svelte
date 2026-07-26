@@ -70,7 +70,7 @@
           class="group relative flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition
             {active
             ? 'bg-kotone-cyan/12 text-kotone-cyan shadow-glow-cyan'
-            : 'text-white/60 hover:bg-white/5 hover:text-white/90'}"
+            : 'text-white/60 hover:bg-white/8 hover:text-white/90 hover:shadow-[0_0_14px_rgba(0,229,255,0.15)]'}"
           onclick={() => (page = item.id)}
         >
           <!-- 激活指示条 -->

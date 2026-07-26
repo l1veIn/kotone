@@ -1,6 +1,6 @@
 <script lang="ts">
   /*
-   * 标准标题栏（main 窗 decorations:false，方向 B 富化，高 64px）：
+   * 标准标题栏（main 窗 decorations:false，方向 B 富化，高 48px）：
    * - 左：Kotone 小圆图标（青光晕）+ 名称 + 状态区两行（上行：状态灯 + 相位文字；
    *   下行：引擎 · 模型 · 交互模式）；
    * - 右：启动/停止/重启生效按钮 + 标准窗口控制三键（min / max|还原 / close，最右上角）；
@@ -119,7 +119,7 @@
 <!-- 标题栏整行可拖拽：非按钮区 mousedown 由 startDragging 接管（按钮已排除） -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <header
-  class="relative z-20 flex h-16 shrink-0 items-center justify-between border-b border-white/8 bg-kotone-panel/60 select-none"
+  class="relative z-20 flex h-12 shrink-0 items-center justify-between border-b border-white/8 bg-kotone-panel/60 select-none"
   onmousedown={onDragMouseDown}
 >
   <!-- 克制的背景光晕（方向 B 霓虹语言，标题栏尺度收敛） -->
@@ -133,23 +133,23 @@
       : 'bg-kotone-pink/8'}"
   ></div>
 
-  <!-- 左：品牌 + 状态信息 -->
+  <!-- 左：品牌 + 状态信息（h-12 下两行压缩排布：行距 gap-px + leading 收紧） -->
   <div class="relative flex min-w-0 flex-1 items-center gap-2.5 px-4">
     <img
       src={iconSrc}
       alt=""
-      class="h-7 w-7 shrink-0 rounded-full ring-1 ring-kotone-cyan/70 shadow-glow-cyan object-cover"
+      class="h-6 w-6 shrink-0 rounded-full ring-1 ring-kotone-cyan/70 shadow-glow-cyan object-cover"
     />
     <p class="shrink-0 text-xs font-bold tracking-wide">
       Kotone <span class="font-medium text-white/55">琴音</span>
     </p>
-    <div class="h-6 w-px shrink-0 bg-white/12"></div>
+    <div class="h-5 w-px shrink-0 bg-white/12"></div>
     <!-- 状态区两行：上行 = 状态灯 + 相位文字；下行 = 引擎 · 模型 · 交互模式 -->
-    <div class="flex min-w-0 flex-col justify-center gap-0.5">
-      <div class="flex items-center gap-2">
-        <span class="relative flex h-2.5 w-2.5 shrink-0">
+    <div class="flex min-w-0 flex-col justify-center gap-px">
+      <div class="flex items-center gap-2 leading-none">
+        <span class="relative flex h-2 w-2 shrink-0">
           <span
-            class="h-2.5 w-2.5 rounded-full transition-colors {!rt || rt.phase === 'stopped'
+            class="h-2 w-2 rounded-full transition-colors {!rt || rt.phase === 'stopped'
               ? 'bg-white/25'
               : rt.phase === 'running'
                 ? 'bg-kotone-cyan shadow-glow-cyan animate-pulse'
@@ -163,7 +163,7 @@
           {/if}
         </span>
         <span
-          class="text-[11px] font-semibold {rt?.phase === 'running'
+          class="text-[11px] leading-tight font-semibold {rt?.phase === 'running'
             ? 'text-kotone-cyan'
             : rt && rt.phase !== 'stopped'
               ? 'text-kotone-pink'
@@ -173,7 +173,7 @@
         </span>
       </div>
       {#if statusLine}
-        <p class="truncate pl-[18px] text-[10px] text-white/40" title={statusLine}>
+        <p class="truncate pl-4 text-[10px] leading-tight text-white/40" title={statusLine}>
           {statusLine}
         </p>
       {/if}
@@ -190,7 +190,7 @@
           ? 'bg-kotone-pink text-white shadow-glow-pink-lg hover:brightness-110'
           : rt.restartNeeded
             ? 'bg-yellow-400/90 text-kotone-deep shadow-[0_0_14px_rgba(250,204,21,0.4)] hover:brightness-110'
-            : 'bg-kotone-cyan/15 text-kotone-cyan ring-1 ring-kotone-cyan/50 hover:bg-kotone-cyan/25'}"
+            : 'bg-kotone-cyan/15 text-kotone-cyan ring-1 ring-kotone-cyan/50 hover:bg-kotone-cyan/25 hover:shadow-glow-cyan'}"
       disabled={busy || acting || !rt}
       onclick={() => void onMainButton()}
     >

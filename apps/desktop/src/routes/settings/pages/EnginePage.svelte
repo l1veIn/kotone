@@ -27,6 +27,7 @@
   } from "../../../lib/ipc";
   import { settingsStore, toast, toastWarn, errText } from "../../../lib/stores/ui";
   import { runtimeStore } from "../../../lib/stores/runtime";
+  import { spotlight } from "../../../lib/actions/spotlight";
   import stickerCurious from "../../../assets/brand/stickers/curious.png";
 
   let engines = $state<EngineInfo[] | null>(null);
@@ -325,7 +326,10 @@
         {@const enModels = modelsOf(en.id)}
         {@const selectable = enModels.filter((m) => isSelectableModel(m))}
         {@const runtimes = enModels.filter((m) => !isSelectableModel(m))}
-        <div class="kotone-card p-4 {active ? 'border-kotone-cyan/50 shadow-glow-cyan' : ''}">
+        <div
+          use:spotlight
+          class="kotone-card kotone-spotlight p-4 {active ? 'border-kotone-cyan/50 shadow-glow-cyan' : ''}"
+        >
           <div class="flex items-center gap-3">
             <div class="min-w-0 flex-1">
               <p class="flex items-center gap-2 text-sm font-medium">
@@ -353,7 +357,7 @@
             {#if !active}
               <button
                 class="shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold transition active:scale-95 {en.isReady
-                  ? 'bg-kotone-cyan text-kotone-deep hover:brightness-110'
+                  ? 'bg-kotone-cyan text-kotone-deep hover:shadow-glow-cyan hover:brightness-110'
                   : 'bg-white/10 text-white/60 hover:bg-white/20'}"
                 onclick={() => void onEngineSwitch(en.id)}
               >
@@ -378,7 +382,7 @@
                     class="flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 ring-1 transition
                       {isActive
                       ? 'bg-kotone-cyan/10 ring-kotone-cyan/60 shadow-glow-cyan'
-                      : 'bg-white/4 ring-white/10 hover:bg-white/8 hover:ring-white/25'}"
+                      : 'bg-white/4 ring-white/10 hover:bg-white/8 hover:shadow-[0_0_12px_rgba(0,229,255,0.14)] hover:ring-white/25'}"
                     onclick={() => !isActive && void onSetActive(en.id, m.id)}
                     onkeydown={(e) => {
                       if (e.key === "Enter" && !isActive) void onSetActive(en.id, m.id);
@@ -456,7 +460,7 @@
                         </p>
                       </div>
                       <button
-                        class="shrink-0 rounded-lg bg-kotone-violet/25 px-2.5 py-1 text-[11px] font-semibold text-kotone-violet ring-1 ring-kotone-violet/40 transition hover:bg-kotone-violet/35 active:scale-95 disabled:opacity-50"
+                        class="shrink-0 rounded-lg bg-kotone-violet/25 px-2.5 py-1 text-[11px] font-semibold text-kotone-violet ring-1 ring-kotone-violet/40 transition hover:bg-kotone-violet/35 hover:shadow-[0_0_12px_rgba(123,47,255,0.45)] active:scale-95 disabled:opacity-50"
                         disabled={downloadingAny}
                         onclick={() => void onDownload(m.id)}
                       >
@@ -522,7 +526,7 @@
                     {/if}
                   {:else}
                     <button
-                      class="rounded-lg bg-kotone-violet/25 px-2.5 py-1 text-[11px] font-semibold text-kotone-violet ring-1 ring-kotone-violet/40 transition hover:bg-kotone-violet/35 active:scale-95 disabled:opacity-50"
+                      class="rounded-lg bg-kotone-violet/25 px-2.5 py-1 text-[11px] font-semibold text-kotone-violet ring-1 ring-kotone-violet/40 transition hover:bg-kotone-violet/35 hover:shadow-[0_0_12px_rgba(123,47,255,0.45)] active:scale-95 disabled:opacity-50"
                       disabled={downloadingAny}
                       onclick={() => void onDownload(m.id)}
                     >
@@ -550,7 +554,7 @@
 
       <!-- VAD 组件组（不可设为 active，one-shot 静音判停依赖） -->
       {#if vadModels.length > 0}
-        <div class="kotone-card p-4">
+        <div use:spotlight class="kotone-card kotone-spotlight p-4">
           <p class="text-sm font-medium">VAD 组件</p>
           <p class="mt-1 text-[10px] text-white/40">one-shot「说一句就走」的静音判停依赖；不属于任何识别引擎</p>
           {#each vadModels as m}
@@ -586,7 +590,7 @@
                     {/if}
                   {:else}
                     <button
-                      class="rounded-lg bg-kotone-violet/25 px-2.5 py-1 text-[11px] font-semibold text-kotone-violet ring-1 ring-kotone-violet/40 transition hover:bg-kotone-violet/35 active:scale-95 disabled:opacity-50"
+                      class="rounded-lg bg-kotone-violet/25 px-2.5 py-1 text-[11px] font-semibold text-kotone-violet ring-1 ring-kotone-violet/40 transition hover:bg-kotone-violet/35 hover:shadow-[0_0_12px_rgba(123,47,255,0.45)] active:scale-95 disabled:opacity-50"
                       disabled={downloadingAny}
                       onclick={() => void onDownload(m.id)}
                     >

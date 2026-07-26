@@ -67,6 +67,32 @@ body,
   box-shadow: 0 0 18px rgba(0, 229, 255, 0.18);
 }
 
+/*
+ * 鼠标跟随 spotlight：配合 lib/actions/spotlight.ts 写入的 --mx/--my。
+ * 光斑叠在卡片背景之上、内容之下（半透明，不遮文字）；reduced-motion
+ * 由 action 侧不注册 + 全局 transition 收敛双重降级。
+ */
+.kotone-spotlight {
+  position: relative;
+}
+.kotone-spotlight::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(
+    180px circle at var(--mx, 50%) var(--my, 50%),
+    rgba(0, 229, 255, 0.07),
+    transparent 70%
+  );
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+.kotone-spotlight:hover::before {
+  opacity: 1;
+}
+
 /* 细滚动条（全局，与悬浮条一致） */
 *::-webkit-scrollbar {
   width: 6px;

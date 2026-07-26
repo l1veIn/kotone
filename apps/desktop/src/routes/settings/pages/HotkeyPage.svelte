@@ -232,7 +232,7 @@
         {capturing ? "请按下热键组合…（Esc 取消）" : "点击录入"}
       </button>
       <button
-        class="rounded-lg bg-kotone-cyan px-3 py-1.5 text-xs font-semibold text-kotone-deep transition hover:brightness-110 active:scale-95 disabled:opacity-50"
+        class="rounded-lg bg-kotone-cyan px-3 py-1.5 text-xs font-semibold text-kotone-deep transition hover:shadow-glow-cyan hover:brightness-110 active:scale-95 disabled:opacity-50"
         disabled={capturing}
         onclick={() => void saveHotkey()}
       >
