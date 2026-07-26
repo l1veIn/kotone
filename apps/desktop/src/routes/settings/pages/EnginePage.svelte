@@ -223,7 +223,9 @@
     const configured = ($settingsStore?.engineOptions?.[engineId] as Record<string, unknown> | undefined)
       ?.model as string | undefined;
     if (configured) return configured;
-    return engineId === "sherpa-onnx-zipformer-zh" ? "zipformer-bilingual-zh-en-2023-02-20" : "ggml-small";
+    if (engineId === "sherpa-onnx-zipformer-zh") return "zipformer-bilingual-zh-en-2023-02-20";
+    if (engineId === "sherpa-onnx-sensevoice") return "sense-voice-zh-en-ja-ko-yue-2024-07-17";
+    return "ggml-small";
   }
 
   function modelsOf(engineId: string): ModelInfo[] {

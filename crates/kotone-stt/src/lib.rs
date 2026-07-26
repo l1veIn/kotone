@@ -1,7 +1,8 @@
 //! kotone-stt：STT 引擎适配器与模型管理。
 //!
 //! - 引擎实现：mock（恒在，全链路联调用）、whisper.cpp sidecar（真实引擎 #1）、
-//!   sherpa-onnx（占位）；
+//!   sherpa-onnx zipformer（流式 #2）与 SenseVoice（非流式 #3，同 engine-sherpa
+//!   feature 门控，关闭时均为占位注册）；
 //! - `register_builtin`：把内置引擎注入 core 的 EngineRegistry 容器
 //!   （依赖方向：kotone-stt → kotone-core，core 不认识任何具体引擎）；
 //! - `model`：模型/whisper-cli 运行时清单与下载管理（ADR-003，自管理于 ~/.kotone）；
@@ -10,6 +11,7 @@
 pub mod download;
 pub mod mock;
 pub mod model;
+pub mod sensevoice;
 pub mod sherpa;
 pub mod vad;
 pub mod whisper_sidecar;
@@ -23,6 +25,7 @@ pub fn builtin_engines() -> Vec<Box<dyn SttEngine>> {
         Box::new(mock::MockStreamEngine),
         Box::new(whisper_sidecar::WhisperSidecarEngine),
         Box::new(sherpa::SherpaEngine::new()),
+        Box::new(sensevoice::SenseVoiceEngine::new()),
     ]
 }
 
@@ -45,6 +48,7 @@ mod tests {
         assert!(ids.contains(&"mock-stream".to_string()));
         assert!(ids.contains(&"whisper-cpp-sidecar".to_string()));
         assert!(ids.contains(&"sherpa-onnx-zipformer-zh".to_string()));
+        assert!(ids.contains(&"sherpa-onnx-sensevoice".to_string()));
     }
 
     #[test]
@@ -68,6 +72,16 @@ mod tests {
         assert_eq!(
             reg.get("sherpa-onnx-zipformer-zh").unwrap().is_ready(),
             sherpa_expected
+        );
+        // sensevoice：与 sherpa 同一 feature 门控
+        #[cfg(feature = "engine-sherpa")]
+        let sv_expected =
+            model::multi_model_ready(&model::active_model("sherpa-onnx-sensevoice"));
+        #[cfg(not(feature = "engine-sherpa"))]
+        let sv_expected = false;
+        assert_eq!(
+            reg.get("sherpa-onnx-sensevoice").unwrap().is_ready(),
+            sv_expected
         );
         assert!(reg.get("no-such-engine").is_none());
     }

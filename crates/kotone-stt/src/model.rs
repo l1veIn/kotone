@@ -131,42 +131,76 @@ pub struct MultiFileModel {
 /// sherpa-onnx 模型清单（ADR-004）。默认双语流式 Zipformer（int8 编码器，~200MB）。
 /// SHA256 取自 HuggingFace LFS oid（2025-01 核对）；tokens.txt 为 git 内小文件，
 /// 无 LFS oid，仅按大小校验。
-pub const SHERPA_MODELS: &[MultiFileModel] = &[MultiFileModel {
-    id: "zipformer-bilingual-zh-en-2023-02-20",
-    engine_id: "sherpa-onnx-zipformer-zh",
-    display_name: "sherpa 流式 Zipformer 中英双语（int8，低延迟）",
-    dir: "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
-    files: &[
-        ModelFile {
-            name: "encoder-epoch-99-avg-1.int8.onnx",
-            url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/encoder-epoch-99-avg-1.int8.onnx",
-            sha256: Some("8fa764187a261844f859d7143ebaa563af5d10adfece4c18a8f414c88cba2a9b"),
-            size_bytes: 181_895_032,
-        },
-        ModelFile {
-            name: "decoder-epoch-99-avg-1.onnx",
-            url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/decoder-epoch-99-avg-1.onnx",
-            sha256: Some("2e3b5ec371f8899ee6acd829fd753ba45772df57a91bdf37cde3136354e7db7d"),
-            size_bytes: 13_876_452,
-        },
-        ModelFile {
-            name: "joiner-epoch-99-avg-1.int8.onnx",
-            url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/joiner-epoch-99-avg-1.int8.onnx",
-            sha256: Some("1ed689c5ed19dbaa725d9d191bb4822b5f4855a39e1ffd28cbc1f340d25b2ee0"),
-            size_bytes: 3_228_404,
-        },
-        ModelFile {
-            name: "tokens.txt",
-            url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/tokens.txt",
-            sha256: None,
-            size_bytes: 56_317,
-        },
-    ],
-}];
+pub const SHERPA_MODELS: &[MultiFileModel] = &[
+    MultiFileModel {
+        id: "zipformer-bilingual-zh-en-2023-02-20",
+        engine_id: "sherpa-onnx-zipformer-zh",
+        display_name: "sherpa 流式 Zipformer 中英双语（int8，低延迟）",
+        dir: "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
+        files: &[
+            ModelFile {
+                name: "encoder-epoch-99-avg-1.int8.onnx",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/encoder-epoch-99-avg-1.int8.onnx",
+                sha256: Some("8fa764187a261844f859d7143ebaa563af5d10adfece4c18a8f414c88cba2a9b"),
+                size_bytes: 181_895_032,
+            },
+            ModelFile {
+                name: "decoder-epoch-99-avg-1.onnx",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/decoder-epoch-99-avg-1.onnx",
+                sha256: Some("2e3b5ec371f8899ee6acd829fd753ba45772df57a91bdf37cde3136354e7db7d"),
+                size_bytes: 13_876_452,
+            },
+            ModelFile {
+                name: "joiner-epoch-99-avg-1.int8.onnx",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/joiner-epoch-99-avg-1.int8.onnx",
+                sha256: Some("1ed689c5ed19dbaa725d9d191bb4822b5f4855a39e1ffd28cbc1f340d25b2ee0"),
+                size_bytes: 3_228_404,
+            },
+            ModelFile {
+                name: "tokens.txt",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main/tokens.txt",
+                sha256: None,
+                size_bytes: 56_317,
+            },
+        ],
+    },
+    // SenseVoice（非流式、多语言）：model.int8.onnx 的 SHA256 取自 HF resolve
+    // 头 X-Linked-ETag（LFS sha256，2025-01 核对）；tokens.txt 为 git 内小文件，
+    // 无 LFS oid，仅按大小校验（同 zipformer tokens.txt 惯例）
+    MultiFileModel {
+        id: "sense-voice-zh-en-ja-ko-yue-2024-07-17",
+        engine_id: "sherpa-onnx-sensevoice",
+        display_name: "sherpa SenseVoice 多语言（int8，非流式高准）",
+        dir: "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
+        files: &[
+            ModelFile {
+                name: "model.int8.onnx",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx",
+                sha256: Some("c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"),
+                size_bytes: 239_233_841,
+            },
+            ModelFile {
+                name: "tokens.txt",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/tokens.txt",
+                sha256: None,
+                size_bytes: 315_894,
+            },
+        ],
+    },
+];
 
 /// sherpa 引擎的默认模型（engineOptions 未配置或配置了未知 id 时的兜底）
 pub fn sherpa_default_model() -> &'static str {
     SHERPA_MODELS[0].id
+}
+
+/// SenseVoice 引擎的默认模型（单模型清单，恒为清单条目）
+pub fn sensevoice_default_model() -> &'static str {
+    SHERPA_MODELS
+        .iter()
+        .find(|m| m.engine_id == "sherpa-onnx-sensevoice")
+        .expect("SenseVoice 模型清单缺失")
+        .id
 }
 
 // ---------- silero VAD 模型（ADR-007，单文件） ----------
@@ -226,7 +260,7 @@ pub fn model_path(model_id: &str) -> Option<PathBuf> {
 }
 
 /// 引擎当前活动模型 ID（读 config.json 的 engineOptions；
-/// 缺省按引擎给默认：whisper → ggml-small，sherpa → 清单默认模型）
+/// 缺省按引擎给默认：whisper → ggml-small，sherpa 系 → 各引擎清单默认模型）
 pub fn active_model(engine_id: &str) -> String {
     active_model_from(&settings::load(), engine_id)
 }
@@ -241,14 +275,17 @@ pub fn active_model_from(s: &settings::Settings, engine_id: &str) -> String {
         .and_then(|m| m.as_str())
         .map(str::to_string);
     match (engine_id, configured) {
-        // sherpa：配置的 id 必须在清单里，否则兜底清单默认（config.json 早期默认
-        // 值 zipformer-zh-small 是占位字符串，不是真实清单条目）
-        ("sherpa-onnx-zipformer-zh", Some(id))
-            if SHERPA_MODELS.iter().any(|m| m.id == id) =>
+        // sherpa 系：配置的 id 必须属于该引擎自己的清单（跨引擎 id 不认），否则
+        // 兜底该引擎清单默认（config.json 早期默认值 zipformer-zh-small 是占位串）
+        ("sherpa-onnx-zipformer-zh", Some(id)) | ("sherpa-onnx-sensevoice", Some(id))
+            if SHERPA_MODELS
+                .iter()
+                .any(|m| m.id == id && m.engine_id == engine_id) =>
         {
             id
         }
         ("sherpa-onnx-zipformer-zh", _) => sherpa_default_model().to_string(),
+        ("sherpa-onnx-sensevoice", _) => sensevoice_default_model().to_string(),
         (_, Some(id)) => id,
         _ => "ggml-small".to_string(),
     }
@@ -618,7 +655,7 @@ pub fn set_active(engine_id: &str, model_id: &str) -> Result<(), String> {
                 return Err(format!("模型 {model_id} 尚未下载，请先下载再切换"));
             }
         }
-        "sherpa-onnx-zipformer-zh" => {
+        "sherpa-onnx-zipformer-zh" | "sherpa-onnx-sensevoice" => {
             if !SHERPA_MODELS
                 .iter()
                 .any(|m| m.id == model_id && m.engine_id == engine_id)
@@ -728,7 +765,12 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), n, "sherpa 模型 ID 应唯一");
         for m in SHERPA_MODELS {
-            assert_eq!(m.engine_id, "sherpa-onnx-zipformer-zh");
+            assert!(
+                m.engine_id == "sherpa-onnx-zipformer-zh" || m.engine_id == "sherpa-onnx-sensevoice",
+                "{} 的 engine_id 未注册：{}",
+                m.id,
+                m.engine_id
+            );
             assert!(!m.files.is_empty(), "{}", m.id);
             for f in m.files {
                 assert!(f.url.starts_with("https://"), "{}", f.name);
@@ -748,6 +790,40 @@ mod tests {
                 "缺少关键文件 {need}"
             );
         }
+        // SenseVoice 条目：模型 + tokens 两文件，且默认模型解析到该条目
+        let sv = SHERPA_MODELS
+            .iter()
+            .find(|m| m.engine_id == "sherpa-onnx-sensevoice")
+            .expect("SenseVoice 模型清单缺失");
+        let sv_names: Vec<_> = sv.files.iter().map(|f| f.name).collect();
+        assert!(sv_names.contains(&"model.int8.onnx"));
+        assert!(sv_names.contains(&"tokens.txt"));
+        assert_eq!(sensevoice_default_model(), sv.id);
+    }
+
+    #[test]
+    fn sensevoice_active_model_mapping() {
+        // 未配置 → 清单默认；配置合法 id → 采用；配置跨引擎 id → 兜底默认
+        let s = settings::Settings::default();
+        assert_eq!(
+            active_model_from(&s, "sherpa-onnx-sensevoice"),
+            sensevoice_default_model()
+        );
+        let mut s2 = settings::Settings::default();
+        s2.engine_options["sherpa-onnx-sensevoice"]["model"] =
+            serde_json::json!("sense-voice-zh-en-ja-ko-yue-2024-07-17");
+        assert_eq!(
+            active_model_from(&s2, "sherpa-onnx-sensevoice"),
+            "sense-voice-zh-en-ja-ko-yue-2024-07-17"
+        );
+        let mut s3 = settings::Settings::default();
+        s3.engine_options["sherpa-onnx-sensevoice"]["model"] =
+            serde_json::json!("zipformer-bilingual-zh-en-2023-02-20");
+        assert_eq!(
+            active_model_from(&s3, "sherpa-onnx-sensevoice"),
+            sensevoice_default_model(),
+            "跨引擎模型 id 不应被采用"
+        );
     }
 
     #[test]
