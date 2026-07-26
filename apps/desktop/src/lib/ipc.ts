@@ -21,6 +21,12 @@ export interface HotkeyConfig {
 /** 交互模式预设（ADR-006；缺省 null = 由 hotkey.mode + autoSend 旧字段推导） */
 export type InteractionMode = "push-to-talk" | "dictation" | "one-shot";
 
+/** 桌面壳 UI 状态（core settings `ui` 段） */
+export interface UiConfig {
+  /** 首启向导已完成（或已跳过） */
+  firstRunCompleted: boolean;
+}
+
 /** 识别历史配置（core history 模块） */
 export interface HistoryConfig {
   /** capped 只留最近 maxRecords 条 / keep-all 全留 / off 不记录 */
@@ -48,6 +54,7 @@ export interface Settings {
   /** VAD 静音判停阈值 ms（one-shot 生效，200-5000） */
   vadSilenceMs: number;
   history: HistoryConfig;
+  ui: UiConfig;
 }
 
 /** update_settings 接受任意局部 patch（后端做深合并） */
@@ -174,6 +181,7 @@ const mock: MockStore = {
     interactionMode: null,
     vadSilenceMs: 700,
     history: { mode: "capped", maxRecords: 1000, includeAudio: false },
+    ui: { firstRunCompleted: true },
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },
@@ -437,6 +445,13 @@ export async function cancelHotkeyCapture(): Promise<void> {
 }
 
 // ---------- 模型下载（引擎与模型页） ----------
+
+/** `kotone://download` 事件 payload：模型/运行时下载进度 */
+export interface DownloadProgress {
+  id: string;
+  downloaded: number;
+  total: number;
+}
 
 /** 全部引擎的模型清单（downloaded 标记） */
 export async function listModels(): Promise<ModelInfo[]> {

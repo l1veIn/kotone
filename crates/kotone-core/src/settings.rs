@@ -52,6 +52,18 @@ pub struct Settings {
     /// 识别历史记录（默认 capped/1000 条/不含音频；off = 零开销不记录）
     #[serde(default)]
     pub history: crate::history::HistoryConfig,
+    /// 桌面壳 UI 状态（首启向导等；缺省合并默认 = 未完成的向导会弹一次）
+    #[serde(default)]
+    pub ui: UiConfig,
+}
+
+/// 桌面壳 UI 状态（config.json `ui` 段）
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiConfig {
+    /// 首启向导已完成（或已跳过）；默认 false——老配置升级合并后也会弹一次向导
+    #[serde(default)]
+    pub first_run_completed: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -84,6 +96,7 @@ impl Default for Settings {
             vad_silence_ms: default_vad_silence_ms(),
             run_as_admin_on_start: false,
             history: crate::history::HistoryConfig::default(),
+            ui: UiConfig::default(),
         }
     }
 }
@@ -186,6 +199,7 @@ mod tests {
         assert_eq!(s.history.mode, crate::history::HistoryMode::Capped);
         assert_eq!(s.history.max_records, 1000);
         assert!(!s.history.include_audio);
+        assert!(!s.ui.first_run_completed);
     }
 
     #[test]
@@ -228,6 +242,18 @@ mod tests {
         assert_eq!(s.language, "en");
         assert_eq!(s.stt_engine, "whisper-cpp-sidecar");
         assert!(s.eval_recording);
+        assert!(!s.ui.first_run_completed, "老配置缺 ui 段合并默认 = 未完成");
+    }
+
+    #[test]
+    fn ui_first_run_completed_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut s = Settings::default();
+        s.ui.first_run_completed = true;
+        save_to(&path, &s).unwrap();
+        let loaded = load_from(&path);
+        assert!(loaded.ui.first_run_completed);
     }
 
     #[test]

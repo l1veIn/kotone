@@ -7,6 +7,7 @@
   import { onMount } from "svelte";
   import { getSettings } from "../../lib/ipc";
   import { settingsStore, feedback, toast, errText } from "../../lib/stores/ui";
+  import Onboarding from "./Onboarding.svelte";
   import GeneralPage from "./pages/GeneralPage.svelte";
   import HotkeyPage from "./pages/HotkeyPage.svelte";
   import EnginePage from "./pages/EnginePage.svelte";
@@ -29,10 +30,14 @@
 
   let page = $state<PageId>("general");
   let loading = $state(true);
+  /** 首启向导：ui.firstRunCompleted === false 时弹出（完成/跳过后置 true） */
+  let showOnboarding = $state(false);
 
   onMount(async () => {
     try {
-      settingsStore.set(await getSettings());
+      const s = await getSettings();
+      settingsStore.set(s);
+      showOnboarding = !s.ui.firstRunCompleted;
     } catch (e) {
       toast(false, `加载配置失败：${errText(e)}`);
     } finally {
@@ -129,4 +134,9 @@
       {/if}
     </div>
   </main>
+
+  <!-- 首启向导覆盖层（加载完成且未完成向导时弹出） -->
+  {#if showOnboarding && !loading}
+    <Onboarding onDone={() => (showOnboarding = false)} />
+  {/if}
 </div>

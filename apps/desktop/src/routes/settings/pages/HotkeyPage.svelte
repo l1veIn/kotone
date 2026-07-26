@@ -4,17 +4,13 @@
    * 热键录入捕获（ADR-006）+ 热键后端与注册状态。
    */
   import { onDestroy, onMount } from "svelte";
-  import { listen } from "@tauri-apps/api/event";
   import {
     updateSettings,
     getHotkeyStatus,
-    isTauri,
-    startHotkeyCapture,
-    cancelHotkeyCapture,
     type HotkeyStatus,
-    type HotkeyCaptureEvent,
     type InteractionMode,
   } from "../../../lib/ipc";
+  import { captureHotkey } from "../../../lib/hotkeyCapture";
   import { settingsStore, toast, errText } from "../../../lib/stores/ui";
 
   let hotkeyStatus = $state<HotkeyStatus | null>(null);
@@ -22,6 +18,8 @@
   let hotkeyDraft = $state("");
   /** 热键录入捕获中（「点击录入」按钮态） */
   let capturing = $state(false);
+  /** 进行中捕获的 cleanup（组件销毁兜底取消） */
+  let captureCleanup: (() => void) | null = null;
 
   onMount(async () => {
     try {
@@ -96,44 +94,30 @@
   }
 
   /**
-   * 「点击录入」：LL 钩子捕获下一个按键组合（ADR-006 热键捕获）。
-   * 结果经 kotone://hotkey-capture 事件推送；捕获期间全局热键匹配暂停，
-   * Esc 由钩子层转成取消信号（不走 DOM keydown）。
+   * 「点击录入」：LL 钩子捕获下一个按键组合（共享 helper 见 lib/hotkeyCapture.ts）。
    */
   async function startCapture() {
     if (capturing) return;
-    if (!isTauri) {
-      toast(false, "浏览器调试环境不支持热键录入");
-      return;
-    }
     capturing = true;
-    let unlisten: (() => void) | undefined;
-    try {
-      unlisten = await listen<HotkeyCaptureEvent>("kotone://hotkey-capture", (ev) => {
-        unlisten?.();
-        unlisten = undefined;
-        capturing = false;
-        const p = ev.payload;
-        if (p.combo) {
-          hotkeyDraft = p.combo;
-          void saveHotkey();
-        } else if (p.cancelled) {
-          toast(false, "已取消录入");
-        } else {
-          toast(false, "录入超时，请重试");
-        }
-      });
-      await startHotkeyCapture();
-    } catch (e) {
-      unlisten?.();
+    captureCleanup = await captureHotkey((r) => {
       capturing = false;
-      toast(false, `无法启动热键录入：${errText(e)}`);
-    }
+      captureCleanup = null;
+      if (r.kind === "combo") {
+        hotkeyDraft = r.combo;
+        void saveHotkey();
+      } else if (r.kind === "cancelled") {
+        toast(false, "已取消录入");
+      } else if (r.kind === "timeout") {
+        toast(false, "录入超时，请重试");
+      } else {
+        toast(false, r.message);
+      }
+    });
   }
 
   // 组件销毁时兜底取消进行中的捕获（避免钩子停在捕获模式）
   onDestroy(() => {
-    if (capturing) void cancelHotkeyCapture();
+    captureCleanup?.();
   });
 
   async function onHotkeyBackendChange(e: Event) {
