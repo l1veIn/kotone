@@ -179,10 +179,11 @@ export interface HistoryRecord {
 
 // ---------- 提权（UIPI 方案，docs/development.md §10 R-1） ----------
 
-/** detect_foreground_game 返回值：profile 字段平铺 + 目标进程提权状态 */
-export interface ForegroundGameInfo extends GameProfile {
-  /** null = 无法判断（进程未运行 / 句柄失败） */
-  targetElevated: boolean | null;
+/** import_hotwords 返回值（合并报告） */
+export interface HotwordMergeReport {
+  added: number;
+  duplicates: number;
+  total: number;
 }
 
 /** get_elevation_status 返回值 */
@@ -475,10 +476,20 @@ export async function simulateSend(text: string, profileId?: string): Promise<vo
 
 // ---------- 提权（UIPI 方案） ----------
 
-/** 检测当前前台游戏并匹配 profile（附带目标进程提权状态） */
-export async function detectForegroundGame(): Promise<ForegroundGameInfo | null> {
-  if (!isTauri) return { ...clone(mock.profiles[1]), targetElevated: null };
-  return invoke<ForegroundGameInfo | null>("detect_foreground_game");
+/** 导出 profile 热词到 UTF-8 文本（每行一词条），返回条数 */
+export async function exportHotwords(profileId: string, path: string): Promise<number> {
+  if (!isTauri) {
+    const p = mock.profiles.find((x) => x.id === profileId);
+    console.info(`[mock] export_hotwords: ${p?.hotwords.length ?? 0} 条 → ${path}`);
+    return p?.hotwords.length ?? 0;
+  }
+  return invoke<number>("export_hotwords", { profileId, path });
+}
+
+/** 从 UTF-8 文本导入热词（合并去重），返回合并报告 */
+export async function importHotwords(profileId: string, path: string): Promise<HotwordMergeReport> {
+  if (!isTauri) return { added: 0, duplicates: 0, total: 0 };
+  return invoke<HotwordMergeReport>("import_hotwords", { profileId, path });
 }
 
 /** 提权状态：自身是否提权 + 激活 profile 的游戏进程是否提权 */

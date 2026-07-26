@@ -10,6 +10,7 @@
     "core:window:allow-start-dragging",
     "core:webview:default",
     "core:event:default",
-    "global-shortcut:default"
+    "global-shortcut:default",
+    "dialog:default"
   ]
 }

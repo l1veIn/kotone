@@ -14,7 +14,10 @@ use kotone_core::audio::AudioDevice;
 use kotone_core::inject::{CancelToken, FocusBackend, InjectError, Injector};
 use kotone_core::interaction::effective_hotkey_mode;
 use kotone_core::orchestrator::{Emitter, Orchestrator};
-use kotone_core::profile::{self, GameProfile};
+use kotone_core::profile::{
+    self, format_hotwords_export, merge_hotwords, parse_hotwords_import, GameProfile,
+    HotwordMergeReport,
+};
 use kotone_core::runtime::RuntimePhase;
 use kotone_core::settings::{self, Settings};
 use kotone_core::stt::{EngineInfo, EngineRegistry};
@@ -237,26 +240,25 @@ fn save_profile(profile: GameProfile) -> Result<(), String> {
     profile::save(&profile)
 }
 
-/// 检测当前前台游戏并匹配 profile（inject::foreground_process_name → find_by_process），
-/// 附带目标进程提权状态（UIPI 诊断用，§10 R-1；null = 无法判断）
+/// 导出 profile 热词到 UTF-8 文本（每行一词条，无权重），返回条数。
 #[tauri::command]
-fn detect_foreground_game() -> Option<ForegroundGameInfo> {
-    let pid = platform_inject::foreground_pid()?;
-    let name = platform_inject::process_name_from_pid(pid)?;
-    let profile = profile::find_by_process(&profile::list(), &name)?;
-    Some(ForegroundGameInfo {
-        profile,
-        target_elevated: elevation::is_process_elevated(pid),
-    })
+fn export_hotwords(profile_id: String, path: String) -> Result<u32, String> {
+    let p = profile::get(&profile_id).ok_or_else(|| format!("profile 不存在：{profile_id}"))?;
+    let text = format_hotwords_export(&p.hotwords);
+    std::fs::write(&path, text).map_err(|e| format!("写入 {path} 失败：{e}"))?;
+    Ok(p.hotwords.len() as u32)
 }
 
-/// detect_foreground_game 返回值：profile 字段平铺 + targetElevated
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ForegroundGameInfo {
-    #[serde(flatten)]
-    pub profile: GameProfile,
-    pub target_elevated: Option<bool>,
+/// 从 UTF-8 文本导入热词（合并去重，追加到现有列表末尾），返回合并报告。
+#[tauri::command]
+fn import_hotwords(profile_id: String, path: String) -> Result<HotwordMergeReport, String> {
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("读取 {path} 失败：{e}"))?;
+    let mut p = profile::get(&profile_id).ok_or_else(|| format!("profile 不存在：{profile_id}"))?;
+    let incoming = parse_hotwords_import(&text);
+    let (merged, report) = merge_hotwords(&p.hotwords, &incoming);
+    p.hotwords = merged;
+    profile::save(&p)?;
+    Ok(report)
 }
 
 // ---------- 提权（UIPI 方案，§10 R-1） ----------
@@ -575,6 +577,7 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         // 关闭按钮不退出应用：main / overlay 窗口 CloseRequested 一律转 hide（托盘常驻）；
         // 仅托盘菜单「退出」（app.exit）真正结束进程。
         .on_window_event(|window, event| {
@@ -694,7 +697,8 @@ pub fn run() {
             get_engine_options,
             list_profiles,
             save_profile,
-            detect_foreground_game,
+            export_hotwords,
+            import_hotwords,
             get_elevation_status,
             get_hotkey_status,
             start_hotkey_capture,
