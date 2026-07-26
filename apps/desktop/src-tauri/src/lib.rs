@@ -12,14 +12,14 @@ use tauri::{AppHandle, Manager};
 use hotkey::{HotkeyManager, HotkeyStatus};
 use kotone_core::audio::AudioDevice;
 use kotone_core::inject::{CancelToken, FocusBackend, InjectError, Injector};
-use kotone_core::interaction::effective_hotkey_mode;
+use kotone_core::interaction::{effective_hotkey_mode, InteractionPolicy};
 use kotone_core::orchestrator::{Emitter, Orchestrator};
 use kotone_core::profile::{
     self, format_hotwords_export, merge_hotwords, parse_hotwords_import, GameProfile,
     HotwordMergeReport,
 };
 use kotone_core::runtime::RuntimePhase;
-use kotone_core::settings::{self, Settings};
+use kotone_core::settings::{self, OverlayVisibility, Settings};
 use kotone_core::stt::{EngineInfo, EngineRegistry};
 use kotone_core::log;
 use kotone_platform_windows::inject::{WinFocusBackend, WindowsInjector};
@@ -36,11 +36,16 @@ pub struct SharedState {
 }
 
 /// 生产事件出口：转发为 Tauri 事件；联动 Esc 取消键注册与 overlay 窗口显隐。
-/// overlay 显隐规则（后端驱动，幂等，与前端逻辑不冲突）：
-/// - Listening/Transcribing/Preview/Sending/Success/Error → show（不抢焦点）
-/// - Idle → hide
+/// overlay 显隐规则（后端驱动，幂等，与前端逻辑不冲突）按 `overlay.visibility` 分档：
+/// - always（常驻，默认）：会话态（Listening/…/Error）→ show；Running 期间 idle 不隐藏
+///   （悬浮窗兼作运行指示）；Stopped 由 stop_runtime 显式隐藏。
+/// - on_demand（用时浮现）：平时隐藏；Listening/Transcribing/Preview/Sending → show；
+///   Success/Error（发送完成）延迟 ~600ms 自动隐藏（vis_gen 代际防新会话误藏）；
+///   solo 连续模式保持显示直到会话停止（idle → hide）。
 struct TauriEmitter {
     app: AppHandle,
+    /// overlay 显隐代际：每个状态事件 +1；延迟隐藏任务只认调度时的代际
+    vis_gen: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Emitter for TauriEmitter {
@@ -55,18 +60,55 @@ impl Emitter for TauriEmitter {
             if let Some(mgr) = self.app.try_state::<HotkeyManager>() {
                 mgr.set_cancel_enabled(&self.app, state != "idle" && !state.is_empty());
             }
-            // 后端驱动 overlay 显隐；Running 期间 idle 不隐藏（悬浮窗兼作运行指示），
-            // Stopped 时由 stop_runtime 显式隐藏
+            // 后端驱动 overlay 显隐（显隐一律走原始 Win32 SW_SHOWNA/SW_HIDE 路径，
+            // 不碰 tao set_visible——tao 缓存 diff 短路坑，见 hide_window 注释）
             if let Some(win) = self.app.get_webview_window("overlay") {
-                let running = self
+                let (visibility, continuous) = self
                     .app
-                    .try_state::<RuntimeManager>()
-                    .map(|rt| rt.phase() == RuntimePhase::Running)
-                    .unwrap_or(false);
-                if state == "idle" && !running {
-                    hide_window(&win);
-                } else if state != "idle" {
-                    show_window_no_focus(&win);
+                    .try_state::<SharedState>()
+                    .map(|s| {
+                        let g = s.settings.read().unwrap();
+                        (g.overlay.visibility, InteractionPolicy::from_settings(&g).continuous)
+                    })
+                    .unwrap_or((OverlayVisibility::Always, false));
+                let gen = self
+                    .vis_gen
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    + 1;
+                match visibility {
+                    OverlayVisibility::Always => {
+                        let running = self
+                            .app
+                            .try_state::<RuntimeManager>()
+                            .map(|rt| rt.phase() == RuntimePhase::Running)
+                            .unwrap_or(false);
+                        if state == "idle" && !running {
+                            hide_window(&win);
+                        } else if state != "idle" {
+                            show_window_no_focus(&win);
+                        }
+                    }
+                    OverlayVisibility::OnDemand => match state {
+                        "listening" | "transcribing" | "preview" | "sending" => {
+                            show_window_no_focus(&win);
+                        }
+                        "success" | "error" if !continuous => {
+                            let app = self.app.clone();
+                            let vis_gen = self.vis_gen.clone();
+                            tauri::async_runtime::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                                if vis_gen.load(std::sync::atomic::Ordering::SeqCst) != gen {
+                                    return; // 600ms 内已有新状态事件（新会话/停止），不藏
+                                }
+                                if let Some(win) = app.get_webview_window("overlay") {
+                                    hide_window(&win);
+                                }
+                            });
+                        }
+                        "idle" => hide_window(&win),
+                        // continuous（solo）的 success/error：会话未停，保持显示
+                        _ => {}
+                    },
                 }
             }
         }
@@ -632,6 +674,7 @@ pub fn run() {
             let engines = Arc::new(registry);
             let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter {
                 app: app.handle().clone(),
+                vis_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             });
             let injector: Arc<dyn Injector> = Arc::new(WindowsInjector);
             let focus: Arc<dyn FocusBackend> = Arc::new(WinFocusBackend);

@@ -936,6 +936,7 @@ const CONFIG_SETTABLE_KEYS: &[&str] = &[
     "history.includeAudio",
     "download.source",
     "download.ghProxy",
+    "overlay.visibility",
 ];
 
 /// 点路径写入：current 上套 patch → Settings 反序列化校验（枚举值在此拦截）。

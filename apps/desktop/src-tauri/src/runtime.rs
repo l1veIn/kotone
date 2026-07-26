@@ -210,11 +210,16 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
         return Err(e);
     }
 
-    // 阶段 3：显示悬浮窗（不抢焦点；会话态显隐仍由 TauriEmitter 驱动，
-    // Running 期间 idle 不隐藏——见 TauriEmitter 的相位判断）
+    // 阶段 3：显示悬浮窗（不抢焦点；会话态显隐仍由 TauriEmitter 驱动）。
+    // on_demand（用时浮现）档位启动时不显示——平时隐藏，收音/转写时由
+    // TauriEmitter 的状态事件浮现；always（常驻）维持启动即显示。
     snapshot_and_emit(app, Some("overlay".into()));
-    if let Some(win) = app.get_webview_window("overlay") {
-        show_window_no_focus(&win);
+    let overlay_on_demand = state.settings.read().unwrap().overlay.visibility
+        == kotone_core::settings::OverlayVisibility::OnDemand;
+    if !overlay_on_demand {
+        if let Some(win) = app.get_webview_window("overlay") {
+            show_window_no_focus(&win);
+        }
     }
 
     rt.set_started(Some(StartedSnapshot { engine_id, model_id }));

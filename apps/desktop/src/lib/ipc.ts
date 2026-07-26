@@ -66,6 +66,14 @@ export interface Settings {
   models: ModelsConfig;
   /** 模型下载源配置（auto 默认：镜像优先失败回退官方） */
   download: DownloadConfig;
+  /** 悬浮窗配置 */
+  overlay: OverlayConfig;
+}
+
+/** 悬浮窗配置（config.json `overlay` 段） */
+export interface OverlayConfig {
+  /** 显示模式：always 常驻（启动即显示）/ on_demand 用时浮现（说话时出现，发完自动隐藏） */
+  visibility: "always" | "on_demand";
 }
 
 /** 模型下载配置（config.json `download` 段） */
@@ -239,6 +247,7 @@ const mock: MockStore = {
     ui: { firstRunCompleted: true, autoStart: false },
     models: { dir: "" },
     download: { source: "auto", ghProxy: "https://ghfast.top/" },
+    overlay: { visibility: "always" },
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },

@@ -1,7 +1,7 @@
 <script lang="ts">
   /*
    * 通用页（方向 B 灵魂首屏）：欢迎面板 = 直播间背景 + Kotone 立绘 +
-   * 渐变标题 + 三个特性 chip；下方为通用设置（麦克风 / 运行时 / 权限）。
+   * 渐变标题 + 三个特性 chip；下方为通用设置（麦克风 / 悬浮窗 / 运行时 / 权限）。
    */
   import { onMount } from "svelte";
   import {
@@ -161,6 +161,36 @@
           <option value={d.id}>{d.name}</option>
         {/each}
       </select>
+    </section>
+
+    <!-- 悬浮窗显示模式（overlay.visibility；on_demand 由后端会话事件驱动显隐） -->
+    <section class="kotone-panel mt-4 p-4">
+      <h2 class="text-sm font-semibold text-kotone-cyan/90">悬浮窗</h2>
+      <div class="mt-3 grid grid-cols-2 gap-2">
+        {#each [
+          { id: "always", name: "常驻", desc: "启动即显示，停止才隐藏" },
+          { id: "on_demand", name: "用时浮现", desc: "平时隐藏，说话时出现，发完自动隐藏" },
+        ] as opt}
+          {@const selected = ($settingsStore.overlay?.visibility ?? "always") === opt.id}
+          <button
+            class="rounded-[var(--radius-kotone-card)] px-3 py-2.5 text-left ring-1 transition
+              {selected
+              ? 'bg-kotone-cyan/12 ring-kotone-cyan/60 shadow-glow-cyan'
+              : 'bg-kotone-card/60 ring-white/10 hover:bg-kotone-card'}"
+            onclick={() =>
+              void patch(
+                { overlay: { visibility: opt.id } },
+                opt.id === "always" ? "悬浮窗已切换：常驻" : "悬浮窗已切换：用时浮现",
+              )}
+          >
+            <p class="text-sm font-semibold {selected ? 'text-kotone-cyan' : ''}">{opt.name}</p>
+            <p class="mt-0.5 text-[11px] text-white/50">{opt.desc}</p>
+          </button>
+        {/each}
+      </div>
+      <p class="mt-2 text-[11px] text-white/40">
+        「用时浮现」在独奏模式（solo）下持续显示，直到会话停止。
+      </p>
     </section>
 
     <!-- 运行时（「启动」开关，core runtime 状态机） -->

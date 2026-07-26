@@ -64,6 +64,9 @@ pub struct Settings {
     /// 模型下载源配置（镜像 / 代理，见 DownloadConfig）
     #[serde(default)]
     pub download: DownloadConfig,
+    /// 悬浮窗配置（显示模式等，见 OverlayConfig）
+    #[serde(default)]
+    pub overlay: OverlayConfig,
 }
 
 /// 桌面壳 UI 状态（config.json `ui` 段）
@@ -85,6 +88,27 @@ pub struct ModelsConfig {
     /// 自定义模型目录；空 = 默认 ~/.kotone/models
     #[serde(default)]
     pub dir: String,
+}
+
+/// 悬浮窗显示模式（config.json `overlay.visibility`，docs/development.md §3.6）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlayVisibility {
+    /// 常驻（默认）：启动即显示，停止才隐藏
+    #[default]
+    Always,
+    /// 用时浮现：平时隐藏；收音/转写/发送时浮现；一次发送完成（成功或失败）
+    /// 延迟 ~600ms 自动隐藏；solo 连续模式保持显示直到会话停止
+    OnDemand,
+}
+
+/// 悬浮窗配置（config.json `overlay` 段）
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayConfig {
+    /// 显示模式：always 常驻（默认）/ on_demand 用时浮现
+    #[serde(default)]
+    pub visibility: OverlayVisibility,
 }
 
 /// 下载源选择（config.json `download.source`）。
@@ -160,6 +184,7 @@ impl Default for Settings {
             ui: UiConfig::default(),
             models: ModelsConfig::default(),
             download: DownloadConfig::default(),
+            overlay: OverlayConfig::default(),
         }
     }
 }
@@ -267,6 +292,7 @@ mod tests {
         assert!(s.models.dir.is_empty(), "默认模型目录为空 = ~/.kotone/models");
         assert_eq!(s.download.source, DownloadSource::Auto);
         assert_eq!(s.download.gh_proxy, "https://ghfast.top/");
+        assert_eq!(s.overlay.visibility, OverlayVisibility::Always);
     }
 
     #[test]

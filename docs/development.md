@@ -261,6 +261,7 @@ enum SttEvent {
 **v3 实现细节**：
 
 - **窗口显隐由后端驱动**（v3 变更）：orchestrator 状态事件 → 非 Idle 时 `SW_SHOWNA` 显示 overlay（**不抢焦点**，否则注入前台校验必然失败）、Idle 时隐藏；与前端显隐调用幂等共存。
+- **显示模式 `overlay.visibility`**（两档，通用页可选）：`always` 常驻（默认，启动即显示、停止才隐藏）/ `on_demand` 用时浮现（平时隐藏；Listening/Transcribing/Preview/Sending 浮现；一次发送完成——成功或失败——延迟 ~600ms 自动隐藏，显隐代际防 600ms 内新会话误藏；solo 连续模式保持显示直到会话停止）。显隐一律走原始 Win32 `SW_SHOWNA`/`SW_HIDE` 路径（tao `set_visible` 缓存 diff 短路坑），由 TauriEmitter 会话事件驱动，前端不轮询。
 - **关窗不退出**：main/overlay 的 CloseRequested 均拦截转为 hide，仅托盘「退出」真正结束（托盘常驻语义）。
 - 窗口路由：单 SPA + hash 路由（`index.html#/overlay`、`index.html#/settings`）。
 
