@@ -32,9 +32,15 @@ pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     Ok(())
 }
 
-/// 显示并聚焦指定窗口（窗口初始 invisible，由托盘/热键唤起）
+/// 显示并聚焦指定窗口（窗口初始 invisible，由托盘/热键唤起）。
+/// overlay 走 show_window_no_focus（原始 SW_SHOWNA，与运行时的显隐机制一致，
+/// 不混用 tao 可见性缓存）；main 走 Tauri show + 聚焦。
 fn show_window<R: Runtime>(app: &AppHandle<R>, label: &str) {
     if let Some(win) = app.get_webview_window(label) {
+        if label == "overlay" {
+            crate::show_window_no_focus(&win);
+            return;
+        }
         let _ = win.show();
         let _ = win.unminimize();
         let _ = win.set_focus();

@@ -61,7 +61,7 @@ impl Emitter for TauriEmitter {
                     .map(|rt| rt.phase() == RuntimePhase::Running)
                     .unwrap_or(false);
                 if state == "idle" && !running {
-                    let _ = win.hide();
+                    hide_window(&win);
                 } else if state != "idle" {
                     show_window_no_focus(&win);
                 }
@@ -72,8 +72,11 @@ impl Emitter for TauriEmitter {
 
 /// 显示窗口但不抢焦点（焦点必须留在游戏/目标窗口，否则注入前台校验会失败）。
 /// Windows 上用 SW_SHOWNA；其他平台回退普通 show。
+///
+/// 注意：本函数绕开 tao 的 window_flags 缓存直接操作 Win32 状态，因此隐藏必须
+/// 走对称的 `hide_window`（见下），不能混用 Tauri 的 hide()/show()。
 #[cfg(windows)]
-fn show_window_no_focus(win: &tauri::WebviewWindow) {
+fn show_window_no_focus<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
     use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNA};
     match win.hwnd() {
         Ok(hwnd) => unsafe {
@@ -85,9 +88,34 @@ fn show_window_no_focus(win: &tauri::WebviewWindow) {
     }
 }
 
+/// 隐藏窗口（与 show_window_no_focus 对称的原始 Win32 路径）。
+///
+/// 为什么不能用 Tauri 的 hide()：窗口经 SW_SHOWNA 显示后，tao 的 window_flags
+/// 缓存仍停留在「不可见」（创建时 visible:false）；tao 的 set_visible(false)
+/// 走 apply_diff，对缓存新旧值做 diff——diff 为空则提前返回，根本到不了
+/// ShowWindow(SW_HIDE)（tao 0.35 window_state.rs）。这正是「停止后悬浮窗
+/// 不隐藏」的根因：显隐机制不对称，与 runtime 编排无关。
+#[cfg(windows)]
+fn hide_window<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
+    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+    match win.hwnd() {
+        Ok(hwnd) => unsafe {
+            let _ = ShowWindow(hwnd, SW_HIDE);
+        },
+        Err(_) => {
+            let _ = win.hide();
+        }
+    }
+}
+
 #[cfg(not(windows))]
-fn show_window_no_focus(win: &tauri::WebviewWindow) {
+fn show_window_no_focus<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
     let _ = win.show();
+}
+
+#[cfg(not(windows))]
+fn hide_window<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
+    let _ = win.hide();
 }
 
 /// 冒烟测试命令：前端可 invoke("ping") 验证 IPC 通路

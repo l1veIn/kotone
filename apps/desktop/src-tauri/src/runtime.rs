@@ -14,7 +14,7 @@ use kotone_core::settings::Settings;
 use kotone_core::stt::EngineRegistry;
 
 use crate::hotkey::HotkeyManager;
-use crate::{show_window_no_focus, SharedState};
+use crate::{hide_window, show_window_no_focus, SharedState};
 
 /// 启动时快照：Running 期间与当前配置比对推导 restartNeeded
 #[derive(Debug, Clone)]
@@ -246,9 +246,10 @@ pub async fn stop(app: &AppHandle) -> Result<RuntimeStatus, String> {
     let mgr = app.state::<HotkeyManager>();
     mgr.unregister(app)?;
 
-    // 隐藏悬浮窗
+    // 隐藏悬浮窗（原始 SW_HIDE 路径——Tauri hide() 与我们的 SW_SHOWNA 显示
+    // 不对称，会因 tao 可见性缓存 diff 为空被短路，详见 lib.rs hide_window）
     if let Some(win) = app.get_webview_window("overlay") {
-        let _ = win.hide();
+        hide_window(&win);
     }
 
     // 卸载引擎（释放模型内存）
