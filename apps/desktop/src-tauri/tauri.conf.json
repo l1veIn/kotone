@@ -32,6 +32,7 @@
         "height": 600,
         "minWidth": 640,
         "minHeight": 480,
+        "decorations": false,
         "visible": false
       }
     ],

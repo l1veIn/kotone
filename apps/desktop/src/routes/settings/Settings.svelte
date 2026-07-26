@@ -9,6 +9,7 @@
   import { settingsStore, feedback, toast, errText } from "../../lib/stores/ui";
   import { initRuntime } from "../../lib/stores/runtime";
   import Onboarding from "./Onboarding.svelte";
+  import Titlebar from "./Titlebar.svelte";
   import GeneralPage from "./pages/GeneralPage.svelte";
   import HotkeyPage from "./pages/HotkeyPage.svelte";
   import EnginePage from "./pages/EnginePage.svelte";
@@ -49,7 +50,10 @@
   });
 </script>
 
-<div class="relative flex h-full overflow-hidden bg-kotone-deep text-white">
+<div class="flex h-full flex-col overflow-hidden bg-kotone-deep text-white">
+  <!-- 自绘标题栏（decorations:false）：拖拽区 + 运行状态 + 启动/停止 + 窗口控制 -->
+  <Titlebar />
+  <div class="relative flex min-h-0 flex-1 overflow-hidden">
   <!-- 窗口底纹理：switch 无缝 tile，极低透明度 -->
   <div
     class="pointer-events-none absolute inset-0 opacity-[0.04]"
@@ -142,4 +146,5 @@
   {#if showOnboarding && !loading}
     <Onboarding onDone={() => (showOnboarding = false)} />
   {/if}
+  </div>
 </div>
