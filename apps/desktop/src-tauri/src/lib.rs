@@ -372,6 +372,122 @@ async fn stop_runtime(app: AppHandle) -> Result<RuntimeStatus, String> {
     runtime::stop(&app).await
 }
 
+// ---------- 模型目录管理 ----------
+
+/// 当前模型目录（生效路径 + 是否默认）
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelsDirInfo {
+    pub dir: String,
+    pub is_default: bool,
+}
+
+#[tauri::command]
+fn get_models_dir(state: tauri::State<SharedState>) -> ModelsDirInfo {
+    let settings = state.settings.read().unwrap();
+    ModelsDirInfo {
+        dir: model::models_dir_from(&settings).to_string_lossy().into_owned(),
+        is_default: settings.models.dir.trim().is_empty(),
+    }
+}
+
+/// set_models_dir 返回：新目录 + 迁移报告（moved / failed 条目名）
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelsDirMigration {
+    pub dir: String,
+    pub moved: Vec<String>,
+    pub failed: Vec<String>,
+}
+
+/// 切换模型存储目录：先把旧目录内容移动到新目录（跨卷回退复制），
+/// 迁移完成后才写配置——迁移失败过半也不丢配置一致性（failed 条目需重新下载）。
+/// 传空字符串 = 恢复默认 ~/.kotone/models。
+#[tauri::command]
+fn set_models_dir(
+    app: AppHandle,
+    state: tauri::State<SharedState>,
+    dir: String,
+) -> Result<ModelsDirMigration, String> {
+    let (old_dir, new_dir) = {
+        let settings = state.settings.read().unwrap();
+        let old = model::models_dir_from(&settings);
+        let mut next = settings.clone();
+        next.models.dir = dir.trim().to_string();
+        (old, model::models_dir_from(&next))
+    };
+    if old_dir == new_dir {
+        return Err("新目录与当前目录相同".into());
+    }
+    let report = model::migrate_dir_contents(&old_dir, &new_dir)?;
+
+    let updated = {
+        let mut guard = state.settings.write().unwrap();
+        guard.models.dir = dir.trim().to_string();
+        guard.clone()
+    };
+    settings::save(&updated)?;
+    // 模型路径变化影响就绪判断与 restartNeeded 推导，推送状态
+    runtime::snapshot_and_emit(&app, None);
+    Ok(ModelsDirMigration {
+        dir: new_dir.to_string_lossy().into_owned(),
+        moved: report.moved,
+        failed: report.failed,
+    })
+}
+
+/// 删除已下载模型 / whisper-cli 运行时；active 模型被删时回退默认并同步 SharedState
+#[tauri::command]
+fn delete_model(
+    app: AppHandle,
+    state: tauri::State<SharedState>,
+    id: String,
+) -> Result<model::DeleteOutcome, String> {
+    let outcome = model::delete(&id)?;
+    if outcome.was_active {
+        // model::delete 清了磁盘配置的 engineOptions[engine].model；同步内存副本
+        let mut guard = state.settings.write().unwrap();
+        if let Some(opts) = guard.engine_options.as_object_mut() {
+            for entry in opts.values_mut().filter_map(|e| e.as_object_mut()) {
+                if entry.get("model").and_then(|m| m.as_str()) == Some(id.as_str()) {
+                    entry.remove("model");
+                }
+            }
+        }
+    }
+    runtime::snapshot_and_emit(&app, None);
+    Ok(outcome)
+}
+
+/// 在系统文件管理器中打开模型目录
+#[tauri::command]
+fn open_models_dir(state: tauri::State<SharedState>) -> Result<(), String> {
+    let dir = {
+        let settings = state.settings.read().unwrap();
+        model::models_dir_from(&settings)
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建目录 {}：{e}", dir.display()))?;
+    open_in_file_manager(&dir)
+}
+
+#[cfg(windows)]
+fn open_in_file_manager(dir: &std::path::Path) -> Result<(), String> {
+    std::process::Command::new("explorer.exe")
+        .arg(dir)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("打开目录失败：{e}"))
+}
+
+#[cfg(not(windows))]
+fn open_in_file_manager(dir: &std::path::Path) -> Result<(), String> {
+    std::process::Command::new("xdg-open")
+        .arg(dir)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("打开目录失败：{e}"))
+}
+
 #[tauri::command]
 fn eval_list_sessions() -> Result<Vec<eval::EvalSession>, String> {
     eval::list_sessions()
@@ -586,6 +702,10 @@ pub fn run() {
             get_runtime_status,
             start_runtime,
             stop_runtime,
+            get_models_dir,
+            set_models_dir,
+            delete_model,
+            open_models_dir,
             eval_list_sessions,
             eval_replay,
             eval_export,

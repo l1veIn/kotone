@@ -87,9 +87,20 @@ pub fn bin_dir() -> PathBuf {
     settings::kotone_dir().join("bin")
 }
 
-/// ~/.kotone/models/
+/// 模型目录：settings.models.dir 非空时用自定义目录，否则默认 ~/.kotone/models。
+/// 注意 bin 目录（whisper-cli 运行时）恒为 ~/.kotone/bin，不受自定义路径影响。
 pub fn models_dir() -> PathBuf {
-    settings::kotone_dir().join("models")
+    models_dir_from(&settings::load())
+}
+
+/// 从给定配置推导模型目录（纯函数，便于壳侧与测试复用）
+pub fn models_dir_from(s: &settings::Settings) -> PathBuf {
+    let dir = s.models.dir.trim();
+    if dir.is_empty() {
+        settings::kotone_dir().join("models")
+    } else {
+        PathBuf::from(dir)
+    }
 }
 
 /// whisper-cli 可执行文件路径
@@ -423,6 +434,169 @@ fn download_bin_inner(
     Ok(())
 }
 
+// ---------- 模型目录迁移与删除 ----------
+
+/// 目录迁移报告：moved = 成功移动的顶层条目名；failed = 移动失败的条目（需重新下载）
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrateReport {
+    pub moved: Vec<String>,
+    pub failed: Vec<String>,
+}
+
+/// 把 `src` 目录的全部顶层条目移动到 `dst`（fs::rename 优先，跨卷回退复制+删除）。
+/// 逐条目容错：单个条目失败不阻断其余迁移，失败名记入 report.failed。
+pub fn migrate_dir_contents(src: &PathBuf, dst: &PathBuf) -> Result<MigrateReport, String> {
+    if src == dst {
+        return Err("新目录与当前目录相同".into());
+    }
+    if !src.exists() {
+        // 旧目录不存在（还没下载过模型）：直接建空新目录即可
+        fs::create_dir_all(dst).map_err(|e| format!("无法创建目录 {}：{e}", dst.display()))?;
+        return Ok(MigrateReport::default());
+    }
+    fs::create_dir_all(dst).map_err(|e| format!("无法创建目录 {}：{e}", dst.display()))?;
+    let mut report = MigrateReport::default();
+    for entry in fs::read_dir(src).map_err(|e| format!("读取目录 {} 失败：{e}", src.display()))? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let target = dst.join(&name);
+        if target.exists() {
+            // 目标已有同名条目：视为已迁移（保留目标，删除源以完成合并）
+            if remove_entry(&entry.path()).is_ok() {
+                report.moved.push(name);
+            } else {
+                report.failed.push(name);
+            }
+            continue;
+        }
+        match fs::rename(entry.path(), &target) {
+            Ok(()) => report.moved.push(name),
+            Err(_) => {
+                // 跨卷等情况：复制 + 删除
+                if copy_entry(&entry.path(), &target).and_then(|_| remove_entry(&entry.path())).is_ok()
+                {
+                    report.moved.push(name);
+                } else {
+                    report.failed.push(name);
+                }
+            }
+        }
+    }
+    Ok(report)
+}
+
+fn remove_entry(p: &PathBuf) -> std::io::Result<()> {
+    if p.is_dir() {
+        fs::remove_dir_all(p)
+    } else {
+        fs::remove_file(p)
+    }
+}
+
+fn copy_entry(src: &PathBuf, dst: &PathBuf) -> std::io::Result<()> {
+    if src.is_dir() {
+        fs::create_dir_all(dst)?;
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            copy_entry(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        fs::copy(src, dst).map(|_| ())
+    }
+}
+
+/// 删除模型的结果：was_active = 被删的是引擎当前活动模型（active 标记已清除，回退默认）
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteOutcome {
+    pub was_active: bool,
+}
+
+/// 删除已下载模型 / whisper-cli 运行时（幂等：文件不存在视为成功）。
+/// 多文件模型删整个目录；whisper-cli 删 bin 下运行必需文件；
+/// active 模型被删时清 engineOptions 的 active 标记（回退引擎默认模型）。
+pub fn delete(id: &str) -> Result<DeleteOutcome, String> {
+    delete_files_in(&models_dir(), &bin_dir(), id)?;
+
+    // active 标记清除：被删模型恰是该引擎当前活动模型时
+    let engine_id = engine_of(id).ok_or_else(|| format!("未知模型：{id}"))?;
+    let mut outcome = DeleteOutcome::default();
+    if id != WHISPER_BIN_ID && id != VAD_MODEL_ID && active_model(engine_id) == id {
+        let mut s = settings::load();
+        if let Some(opts) = s.engine_options.as_object_mut() {
+            if let Some(entry) = opts.get_mut(engine_id).and_then(|e| e.as_object_mut()) {
+                entry.remove("model");
+            }
+        }
+        settings::save(&s)?;
+        outcome.was_active = true;
+    }
+    Ok(outcome)
+}
+
+/// 模型所属引擎（VAD / whisper-cli 返回其伪引擎 ID）
+fn engine_of(id: &str) -> Option<&'static str> {
+    if id == WHISPER_BIN_ID {
+        return Some("whisper-cpp-sidecar");
+    }
+    if id == VAD_MODEL_ID {
+        return Some(VAD_ENGINE_ID);
+    }
+    if let Some(m) = MODELS.iter().find(|m| m.id == id) {
+        return Some(m.engine_id);
+    }
+    if let Some(m) = SHERPA_MODELS.iter().find(|m| m.id == id) {
+        return Some(m.engine_id);
+    }
+    None
+}
+
+/// 只删文件不动配置（models/bin 基目录注入，便于测试）
+fn delete_files_in(models: &PathBuf, bin: &PathBuf, id: &str) -> Result<(), String> {
+    if id == WHISPER_BIN_ID {
+        let mut removed_any = false;
+        for name in ["whisper-cli.exe", "whisper.dll"] {
+            removed_any |= remove_if_exists(&bin.join(name))?;
+        }
+        if let Ok(rd) = fs::read_dir(bin) {
+            for entry in rd.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with("ggml") && name.ends_with(".dll") {
+                    removed_any |= remove_if_exists(&entry.path())?;
+                }
+            }
+        }
+        let _ = removed_any; // 幂等：一个都不在也算成功
+        return Ok(());
+    }
+    if id == VAD_MODEL_ID {
+        remove_if_exists(&models.join(VAD_MODEL_FILE))?;
+        return Ok(());
+    }
+    if let Some(m) = MODELS.iter().find(|m| m.id == id) {
+        remove_if_exists(&models.join(m.file))?;
+        return Ok(());
+    }
+    if let Some(m) = SHERPA_MODELS.iter().find(|m| m.id == id) {
+        let dir = models.join(m.dir);
+        if dir.exists() {
+            fs::remove_dir_all(&dir).map_err(|e| format!("删除目录 {} 失败：{e}", dir.display()))?;
+        }
+        return Ok(());
+    }
+    Err(format!("未知模型：{id}"))
+}
+
+fn remove_if_exists(p: &PathBuf) -> Result<bool, String> {
+    match fs::remove_file(p) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(format!("删除 {} 失败：{e}", p.display())),
+    }
+}
+
 // ---------- 活动模型切换 ----------
 
 /// 切换引擎的活动模型：写入 config.json 的 engineOptions[engine_id].model。
@@ -582,6 +756,19 @@ mod tests {
         assert!(err.contains("未知模型"), "err: {err}");
     }
 
+    // ---------- models_dir_from / active_model_from（纯函数） ----------
+
+    #[test]
+    fn models_dir_from_defaults_and_custom() {
+        let s = settings::Settings::default();
+        assert_eq!(models_dir_from(&s), settings::kotone_dir().join("models"));
+        let mut s = settings::Settings::default();
+        s.models.dir = "  ".into(); // 纯空白视为未配置
+        assert_eq!(models_dir_from(&s), settings::kotone_dir().join("models"));
+        s.models.dir = "D:\\models".into();
+        assert_eq!(models_dir_from(&s), PathBuf::from("D:\\models"));
+    }
+
     #[test]
     fn active_model_from_matches_disk_version_fallbacks() {
         let s = settings::Settings::default();
@@ -594,5 +781,69 @@ mod tests {
         let mut s = settings::Settings::default();
         s.engine_options["whisper-cpp-sidecar"]["model"] = serde_json::json!("ggml-tiny");
         assert_eq!(active_model_from(&s, "whisper-cpp-sidecar"), "ggml-tiny");
+    }
+
+    // ---------- 目录迁移 ----------
+
+    #[test]
+    fn migrate_moves_files_and_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("old");
+        let dst = tmp.path().join("new");
+        fs::create_dir_all(src.join("sherpa-dir")).unwrap();
+        fs::write(src.join("ggml-small.bin"), b"model").unwrap();
+        fs::write(src.join("sherpa-dir/tokens.txt"), b"tokens").unwrap();
+
+        let report = migrate_dir_contents(&src, &dst).unwrap();
+        assert_eq!(report.failed.len(), 0, "report: {report:?}");
+        assert_eq!(report.moved.len(), 2);
+        assert_eq!(fs::read(dst.join("ggml-small.bin")).unwrap(), b"model");
+        assert_eq!(fs::read(dst.join("sherpa-dir/tokens.txt")).unwrap(), b"tokens");
+        assert!(!src.join("ggml-small.bin").exists(), "源文件应已移走");
+    }
+
+    #[test]
+    fn migrate_same_dir_errors_and_missing_src_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("m");
+        assert!(migrate_dir_contents(&p, &p).is_err());
+        // 旧目录不存在：只建新目录，报告为空
+        let dst = tmp.path().join("dst");
+        let report = migrate_dir_contents(&p, &dst).unwrap();
+        assert!(report.moved.is_empty() && report.failed.is_empty());
+        assert!(dst.exists());
+    }
+
+    // ---------- 删除 ----------
+
+    #[test]
+    fn delete_files_in_removes_each_kind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let models = tmp.path().join("models");
+        let bin = tmp.path().join("bin");
+        let sherpa_dir = models.join(SHERPA_MODELS[0].dir);
+        fs::create_dir_all(&sherpa_dir).unwrap();
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(models.join("ggml-small.bin"), b"x").unwrap();
+        fs::write(sherpa_dir.join("tokens.txt"), b"x").unwrap();
+        fs::write(models.join(VAD_MODEL_FILE), b"x").unwrap();
+        fs::write(bin.join("whisper-cli.exe"), b"x").unwrap();
+        fs::write(bin.join("whisper.dll"), b"x").unwrap();
+        fs::write(bin.join("ggml-base.dll"), b"x").unwrap();
+        fs::write(bin.join("unrelated.txt"), b"x").unwrap();
+
+        delete_files_in(&models, &bin, "ggml-small").unwrap();
+        assert!(!models.join("ggml-small.bin").exists());
+        delete_files_in(&models, &bin, SHERPA_MODELS[0].id).unwrap();
+        assert!(!sherpa_dir.exists(), "多文件模型删整个目录");
+        delete_files_in(&models, &bin, VAD_MODEL_ID).unwrap();
+        assert!(!models.join(VAD_MODEL_FILE).exists());
+        delete_files_in(&models, &bin, WHISPER_BIN_ID).unwrap();
+        assert!(!bin.join("whisper-cli.exe").exists());
+        assert!(!bin.join("ggml-base.dll").exists());
+        assert!(bin.join("unrelated.txt").exists(), "无关文件不动");
+        // 幂等：再删一遍不报错；未知 id 报错
+        delete_files_in(&models, &bin, "ggml-small").unwrap();
+        assert!(delete_files_in(&models, &bin, "no-such").is_err());
     }
 }

@@ -55,6 +55,9 @@ pub struct Settings {
     /// 桌面壳 UI 状态（首启向导等；缺省合并默认 = 未完成的向导会弹一次）
     #[serde(default)]
     pub ui: UiConfig,
+    /// 模型存储配置（自定义目录；默认空 = ~/.kotone/models）
+    #[serde(default)]
+    pub models: ModelsConfig,
 }
 
 /// 桌面壳 UI 状态（config.json `ui` 段）
@@ -67,6 +70,15 @@ pub struct UiConfig {
     /// app 启动后自动进入 Running（warmup 引擎 + 注册热键 + 显示悬浮窗）；默认 false
     #[serde(default)]
     pub auto_start: bool,
+}
+
+/// 模型存储配置（config.json `models` 段）
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelsConfig {
+    /// 自定义模型目录；空 = 默认 ~/.kotone/models（whisper-cli 运行时 bin 目录不受此影响）
+    #[serde(default)]
+    pub dir: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -100,6 +112,7 @@ impl Default for Settings {
             run_as_admin_on_start: false,
             history: crate::history::HistoryConfig::default(),
             ui: UiConfig::default(),
+            models: ModelsConfig::default(),
         }
     }
 }
@@ -204,6 +217,7 @@ mod tests {
         assert!(!s.history.include_audio);
         assert!(!s.ui.first_run_completed);
         assert!(!s.ui.auto_start);
+        assert!(s.models.dir.is_empty(), "默认模型目录为空 = ~/.kotone/models");
     }
 
     #[test]
@@ -261,14 +275,16 @@ mod tests {
     }
 
     #[test]
-    fn ui_auto_start_roundtrip() {
+    fn auto_start_and_models_dir_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         let mut s = Settings::default();
         s.ui.auto_start = true;
+        s.models.dir = "D:\\kotone-models".into();
         save_to(&path, &s).unwrap();
         let loaded = load_from(&path);
         assert!(loaded.ui.auto_start);
+        assert_eq!(loaded.models.dir, "D:\\kotone-models");
     }
 
     #[test]

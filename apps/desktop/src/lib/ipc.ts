@@ -29,6 +29,12 @@ export interface UiConfig {
   autoStart: boolean;
 }
 
+/** 模型存储配置（core settings `models` 段） */
+export interface ModelsConfig {
+  /** 自定义模型目录；空 = 默认 ~/.kotone/models */
+  dir: string;
+}
+
 /** 识别历史配置（core history 模块） */
 export interface HistoryConfig {
   /** capped 只留最近 maxRecords 条 / keep-all 全留 / off 不记录 */
@@ -57,6 +63,7 @@ export interface Settings {
   vadSilenceMs: number;
   history: HistoryConfig;
   ui: UiConfig;
+  models: ModelsConfig;
 }
 
 // ---------- 运行时「启动」开关 ----------
@@ -72,6 +79,25 @@ export interface RuntimeStatus {
   interactionMode: InteractionMode | null;
   /** 过渡阶段提示（warmup / hotkey / overlay / unload），稳态为 null */
   stage: string | null;
+}
+
+// ---------- 模型目录管理 ----------
+export interface ModelsDirInfo {
+  dir: string;
+  isDefault: boolean;
+}
+
+export interface ModelsDirMigration {
+  dir: string;
+  /** 成功移动的条目名 */
+  moved: string[];
+  /** 移动失败的条目名（需重新下载） */
+  failed: string[];
+}
+
+export interface DeleteOutcome {
+  /** 被删的是引擎当前活动模型（active 标记已清除，回退默认） */
+  wasActive: boolean;
 }
 
 /** update_settings 接受任意局部 patch（后端做深合并） */
@@ -117,6 +143,8 @@ export interface GameProfile {
 export interface ModelInfo {
   id: string;
   engineId: string;
+  /** 展示名（清单内置文案） */
+  displayName: string;
   sizeBytes: number;
   downloaded: boolean;
 }
@@ -199,6 +227,7 @@ const mock: MockStore = {
     vadSilenceMs: 700,
     history: { mode: "capped", maxRecords: 1000, includeAudio: false },
     ui: { firstRunCompleted: true, autoStart: false },
+    models: { dir: "" },
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },
@@ -253,11 +282,39 @@ const mock: MockStore = {
     },
   ],
   models: [
-    { id: "ggml-small", engineId: "whisper-cpp-sidecar", sizeBytes: 466_000_000, downloaded: true },
+    {
+      id: "ggml-small",
+      engineId: "whisper-cpp-sidecar",
+      displayName: "whisper small（默认，中文推荐）",
+      sizeBytes: 466_000_000,
+      downloaded: true,
+    },
+    {
+      id: "ggml-tiny",
+      engineId: "whisper-cpp-sidecar",
+      displayName: "whisper tiny（最快，精度较低）",
+      sizeBytes: 78_000_000,
+      downloaded: false,
+    },
+    {
+      id: "whisper-cli",
+      engineId: "whisper-cpp-sidecar",
+      displayName: "whisper-cli 运行时（v1.9.1，CPU 版）",
+      sizeBytes: 8_000_000,
+      downloaded: true,
+    },
     {
       id: "zipformer-bilingual-zh-en-2023-02-20",
       engineId: "sherpa-onnx-zipformer-zh",
+      displayName: "sherpa 流式 Zipformer 中英双语（int8，低延迟）",
       sizeBytes: 158_000_000,
+      downloaded: false,
+    },
+    {
+      id: "silero-vad",
+      engineId: "vad-silero",
+      displayName: "silero VAD 语音活动检测（one-shot 静音判停用）",
+      sizeBytes: 644_000,
       downloaded: false,
     },
   ],
@@ -515,6 +572,44 @@ export async function stopRuntime(): Promise<RuntimeStatus> {
   return invoke<RuntimeStatus>("stop_runtime");
 }
 
+// ---------- 模型目录管理 ----------
+
+export async function getModelsDir(): Promise<ModelsDirInfo> {
+  if (!isTauri) {
+    const dir = mock.settings.models.dir.trim();
+    return { dir: dir || "~/.kotone/models (mock)", isDefault: dir === "" };
+  }
+  return invoke<ModelsDirInfo>("get_models_dir");
+}
+
+/** 切换模型目录（后端先迁移旧目录内容再写配置；空串 = 恢复默认） */
+export async function setModelsDir(dir: string): Promise<ModelsDirMigration> {
+  if (!isTauri) {
+    mock.settings.models.dir = dir;
+    return { dir: dir || "~/.kotone/models (mock)", moved: [], failed: [] };
+  }
+  return invoke<ModelsDirMigration>("set_models_dir", { dir });
+}
+
+/** 删除已下载模型/运行时；active 模型被删时回退默认 */
+export async function deleteModel(id: string): Promise<DeleteOutcome> {
+  if (!isTauri) {
+    const m = mock.models.find((x) => x.id === id);
+    if (m) m.downloaded = false;
+    return { wasActive: false };
+  }
+  return invoke<DeleteOutcome>("delete_model", { id });
+}
+
+/** 在系统文件管理器中打开模型目录 */
+export async function openModelsDir(): Promise<void> {
+  if (!isTauri) {
+    console.info("[mock] open_models_dir");
+    return;
+  }
+  return invoke<void>("open_models_dir");
+}
+
 // ---------- 模型下载（引擎与模型页） ----------
 
 /** `kotone://download` 事件 payload：模型/运行时下载进度 */
@@ -538,6 +633,16 @@ export async function downloadModel(id: string): Promise<void> {
     return;
   }
   return invoke<void>("download_model", { id });
+}
+
+/** 切换引擎的活动模型（Running 时置 restartNeeded，不自动重启） */
+export async function setActiveModel(engineId: string, modelId: string): Promise<void> {
+  if (!isTauri) {
+    const opts = (mock.settings.engineOptions[engineId] ??= {}) as Record<string, unknown>;
+    opts.model = modelId;
+    return;
+  }
+  return invoke<void>("set_active_model", { engineId, modelId });
 }
 
 // ---------- 识别历史（历史记录页） ----------
