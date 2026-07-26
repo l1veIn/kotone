@@ -257,15 +257,7 @@ impl Orchestrator {
             .as_deref()
             .and_then(profile::get)
             .unwrap_or_else(GameProfile::builtin_generic);
-        let cfg = SessionConfig {
-            language: settings.language.clone(),
-            hotwords: active_profile.hotwords.clone(),
-            options: settings
-                .engine_options
-                .get(&engine_id)
-                .cloned()
-                .unwrap_or(serde_json::Value::Null),
-        };
+        let cfg = build_session_config(&settings, &engine_id, &active_profile);
 
         let (stt_tx, stt_rx) = mpsc::unbounded_channel::<SttEvent>();
         let session = engine.start_session(&cfg, stt_tx)?;
@@ -847,5 +839,54 @@ impl Orchestrator {
             "kotone://state",
             json!({ "state": state, "payload": payload }),
         );
+    }
+}
+
+/// 会话配置组装（纯函数，可单测）：profile 热词 → SessionConfig.hotwords，
+/// 引擎专有配置取 engineOptions[engine_id]（缺省 Null）
+fn build_session_config(
+    settings: &Settings,
+    engine_id: &str,
+    active_profile: &GameProfile,
+) -> SessionConfig {
+    SessionConfig {
+        language: settings.language.clone(),
+        hotwords: active_profile.hotwords.clone(),
+        options: settings
+            .engine_options
+            .get(engine_id)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 热词端到端链路的 core 段：profile.hotwords 原样进 SessionConfig
+    /// （stt 段见 online_transducer 的 format_hotwords 测试）
+    #[test]
+    fn session_config_carries_profile_hotwords() {
+        let settings = Settings::default();
+        let profile = GameProfile::builtin_lol();
+        let cfg = build_session_config(&settings, "sherpa-onnx-x-asr-zh-en", &profile);
+        assert_eq!(cfg.hotwords, profile.hotwords);
+        assert!(cfg.hotwords.contains(&"打野".to_string()));
+        assert_eq!(cfg.language, "zh");
+    }
+
+    #[test]
+    fn session_config_options_fallback_null() {
+        let mut settings = Settings::default();
+        settings.engine_options["sherpa-onnx-x-asr-zh-en"]["provider"] =
+            serde_json::json!("cpu");
+        let generic = GameProfile::builtin_generic();
+        let cfg = build_session_config(&settings, "sherpa-onnx-x-asr-zh-en", &generic);
+        assert_eq!(cfg.options["provider"], "cpu");
+        assert!(cfg.hotwords.is_empty(), "generic 无热词");
+        // 未配置的引擎 → Null
+        let cfg2 = build_session_config(&settings, "mock-stream", &generic);
+        assert!(cfg2.options.is_null());
     }
 }

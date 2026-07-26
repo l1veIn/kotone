@@ -202,6 +202,69 @@ pub fn find_by_process(profiles: &[GameProfile], process_name: &str) -> Option<G
         .cloned()
 }
 
+// ---------- 热词导入导出（纯逻辑，可单测；文件对话框与 IO 在壳侧） ----------
+
+/// 热词导出格式：UTF-8 文本，每行一个词条（末尾换行；空表导出空文件）。
+/// 预留权重位「词条 权重」——底层 hotwords 是 Vec<String> 不支持权重，
+/// 导出永不带权重列；导入按整行词条解析（见 parse_hotwords_import）。
+pub fn format_hotwords_export(hotwords: &[String]) -> String {
+    let mut out = String::new();
+    for w in hotwords {
+        out.push_str(w);
+        out.push('\n');
+    }
+    out
+}
+
+/// 解析热词导入文件：每行一个词条；跳过空行与纯空白行，trim 两端空白，
+/// 文件内重复词条只保留首次出现（保持顺序）。
+pub fn parse_hotwords_import(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let w = line.trim();
+        if w.is_empty() {
+            continue;
+        }
+        if !out.iter().any(|x| x == w) {
+            out.push(w.to_string());
+        }
+    }
+    out
+}
+
+/// 热词合并导入报告
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HotwordMergeReport {
+    /// 实际新增的词条数
+    pub added: usize,
+    /// 与现有热词重复而跳过的词条数
+    pub duplicates: usize,
+    /// 合并后的热词总数
+    pub total: usize,
+}
+
+/// 合并导入：incoming 中与 existing 重复（精确匹配）的跳过，
+/// 新增追加在末尾（保持现有顺序不变）。
+pub fn merge_hotwords(existing: &[String], incoming: &[String]) -> (Vec<String>, HotwordMergeReport) {
+    let mut merged = existing.to_vec();
+    let mut report = HotwordMergeReport {
+        total: 0,
+        added: 0,
+        duplicates: 0,
+    };
+    for w in incoming {
+        if merged.iter().any(|x| x == w) {
+            report.duplicates += 1;
+        } else {
+            merged.push(w.clone());
+            report.added += 1;
+        }
+    }
+    report.total = merged.len();
+    (merged, report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,5 +359,50 @@ mod tests {
         assert!(v.get("processNames").is_some());
         assert!(v.get("preferClipboardPaste").is_some());
         assert!(v.get("preOpenDelayMs").is_some());
+    }
+
+    // ---------- 热词导入导出 ----------
+
+    #[test]
+    fn hotwords_export_one_per_line() {
+        let words = vec!["打野".to_string(), "gank".to_string(), "Blind Monk".to_string()];
+        assert_eq!(format_hotwords_export(&words), "打野\ngank\nBlind Monk\n");
+        assert_eq!(format_hotwords_export(&[]), "", "空表导出空文件");
+    }
+
+    #[test]
+    fn hotwords_import_skips_empty_and_inner_duplicates() {
+        let text = "打野\n\n  \ngank\n打野\n  推塔  \r\n";
+        assert_eq!(parse_hotwords_import(text), vec!["打野", "gank", "推塔"]);
+        assert!(parse_hotwords_import("").is_empty());
+        assert!(parse_hotwords_import("  \n\n").is_empty());
+    }
+
+    #[test]
+    fn hotwords_merge_dedupes_against_existing() {
+        let existing = vec!["打野".to_string(), "gank".to_string()];
+        let incoming = vec!["gank".to_string(), "推塔".to_string(), "回城".to_string()];
+        let (merged, report) = merge_hotwords(&existing, &incoming);
+        assert_eq!(merged, vec!["打野", "gank", "推塔", "回城"]);
+        assert_eq!(
+            report,
+            HotwordMergeReport {
+                added: 2,
+                duplicates: 1,
+                total: 4
+            }
+        );
+        // 全重复：零新增，现有顺序不变
+        let (m2, r2) = merge_hotwords(&existing, &["打野".to_string()]);
+        assert_eq!(m2, existing);
+        assert_eq!(r2.added, 0);
+        assert_eq!(r2.duplicates, 1);
+    }
+
+    #[test]
+    fn hotwords_export_import_roundtrip() {
+        let words = GameProfile::builtin_lol().hotwords;
+        let text = format_hotwords_export(&words);
+        assert_eq!(parse_hotwords_import(&text), words);
     }
 }

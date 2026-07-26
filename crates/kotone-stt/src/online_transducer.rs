@@ -365,3 +365,17 @@ impl SttEngine for OnlineTransducerEngine {
         ))
     }
 }
+
+#[cfg(all(test, feature = "engine-sherpa"))]
+mod tests {
+    use super::imp;
+
+    /// 热词端到端链路的引擎段：SessionConfig.hotwords → sherpa per-stream
+    /// 热词参数（每行一个短语，create_stream_with_hotwords 的输入格式）
+    #[test]
+    fn hotwords_format_for_sherpa_stream() {
+        let words = vec!["打野".to_string(), "gank".to_string(), "盲僧 R 闪".to_string()];
+        assert_eq!(imp::format_hotwords(&words), "打野\ngank\n盲僧 R 闪");
+        assert_eq!(imp::format_hotwords(&[]), "");
+    }
+}
