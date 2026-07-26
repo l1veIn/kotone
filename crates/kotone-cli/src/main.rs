@@ -295,10 +295,16 @@ async fn cmd_download(target: &str) -> i32 {
         other if other.starts_with("ggml-") || other.starts_with("zipformer-") => {
             other.to_string()
         }
-        other => {
-            eprintln!("未知下载目标：{other}（可选：bin / tiny / base / small / zipformer）");
-            return 2;
-        }
+        // 清单内任意模型 id 直接透传（x-asr / sense-voice / funasr / qwen3 / silero-vad 等）
+        other => match kotone_stt::model::list() {
+            Ok(list) if list.iter().any(|m| m.id == other) => other.to_string(),
+            _ => {
+                eprintln!(
+                    "未知下载目标：{other}（可选：bin / tiny / base / small / zipformer / 清单内任意模型 id）"
+                );
+                return 2;
+            }
+        },
     };
 
     let id2 = id.clone();
