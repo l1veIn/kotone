@@ -11,7 +11,7 @@
 | `listen [--engine <id>]` | 热键模式：LL 钩子 → orchestrator → JSONL 事件流（Ctrl+C 退出，码 2） |
 | `listen --wav <file> [--speed N] [--engine <id>]` | wav 直灌会话模式（见下） |
 | `listen --no-hotkey --duration <秒> [--engine <id>]` | 无热键会话模式（配合虚拟声卡） |
-| `download <bin\|tiny\|base\|small\|zipformer>` | 下载 whisper-cli 运行时 / 模型 |
+| `download <模型id>` | 下载模型（清单内任意 id，如 `x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05` / `silero-vad`；镜像策略见 download.source） |
 | `config show` | 打印当前完整配置（JSON，含默认值合并） |
 | `config get <key>` | 读单个配置项（点路径，如 `hotkey.key`） |
 | `config set <key> <value>` | 写配置项（点路径，原子写入，枚举值校验） |
@@ -30,7 +30,8 @@
 `audioDeviceId`、`language`、`evalRecording`、`runAsAdminOnStart`、
 `interactionMode`(push-to-talk/dictation/one-shot)、`vadSilenceMs`(200-5000)、
 `history.mode`(capped/keep-all/off)、`history.maxRecords`(1-100000)、
-`history.includeAudio`(true/false)
+`history.includeAudio`(true/false)、`download.source`(auto/official/mirror)、
+`download.ghProxy`（GitHub 加速代理前缀，默认 `https://ghfast.top/`，失效可换）
 
 ### 识别历史（log 命令）
 
@@ -70,7 +71,7 @@ audioFile 为 null）。capped 模式超上限自动裁剪最旧记录（联动�
 
 ```bash
 cargo run -p kotone-cli -- listen --wav crates/kotone-stt/tests/fixtures/zh-game-3s.wav \
-    --engine sherpa-onnx-zipformer-zh > out.jsonl
+    --engine sherpa-onnx-x-asr-zh-en > out.jsonl
 # 断言 final 文本
 grep -F '"text":"对面打野在下路"' out.jsonl && echo PASS
 ```
@@ -90,7 +91,7 @@ cargo run -p kotone-cli -- config set autoSend false
 
 # 3. 后台 listen，前台 play
 cargo run -p kotone-cli -- listen --no-hotkey --duration 6 \
-    --engine sherpa-onnx-zipformer-zh > out.jsonl &
+    --engine sherpa-onnx-x-asr-zh-en > out.jsonl &
 sleep 1.5
 cargo run -p kotone-cli -- play crates/kotone-stt/tests/fixtures/zh-game-3s.wav \
     --device "CABLE Input"

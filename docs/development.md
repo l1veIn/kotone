@@ -37,6 +37,12 @@
 | `2ecc3ba` + `236e813` | ADR-007 silero VAD + 模式 3「说一句就走」（A2+B3+C1） | 159 测试全绿；真实人声 wav 判停 E2E 通过 |
 | `9c202ec` + `e60e14f` | core 识别历史模块（history.jsonl 三模式 + orchestrator 终态落账，sessionId 与 eval 互查）+ CLI 收尾（doctor / elevate / profile / log + history 配置键 + listen 提权预检） | 175 测试全绿；doctor / log 真机冒烟通过 |
 | `e449608` | elevate 改 sudo 式语义：`kotone-cli elevate <command>` 透传执行；runas 参数转义升级为 MSVC/CommandLineToArgvW 完整规则 | 180 测试全绿；裸 elevate 用法报错实测 |
+| `09f8b7e` + `06584fc` + `2c3e9e3` | 壳运行能力：core runtime「启动」全局开关（引擎 warmup/unload + 壳编排 IPC）+ 壳默认内置 sherpa 引擎与 silero VAD + 自绘标题栏（状态灯/启停/重启生效） | cargo test 全绿；GUI 真机启停链路实测 |
+| `c26f8bb` + `dca8fca` + `97e714b` 等 | 前端：首启向导三步引导 + 模型管理升级（自定义目录迁移/删除/引擎页重构）+ 方向 B「中继站」全界面重设计（六页导航/toast 堆叠/两行标题栏/spotlight） | build:web + svelte-check 0/0 |
+| `727759b` / `295af28` / `b20947a` / `ea50069` | 引擎扩充至六选手：SenseVoice、X-ASR（在线 transducer 骨架泛化接入）、FunASR-Nano、Qwen3-ASR；模型清单 + tar.bz2 整包下载通道 | cargo test 全绿；六引擎语料回放实跑 |
+| `8a49e9f` + `7fcbacd` | P0 修复：X-ASR 崩溃——bpe_vocab 门控 + 文本格式探测 + bpe.model 现场导出；松手丢句尾——采音侧排空 + 静音尾帧 + decode 排空上限 | 甩尾语料「能听到我说话吗」复验 CER 0.000 |
+| `9432dfd` | 六引擎评测手册（docs/eval-playbook.md）+ CLI download 透传清单内任意模型 id | 手册流程实跑收官 |
+| 本轮 | **六引擎砍留**：默认引擎定 X-ASR（砍 whisper.cpp sidecar / 老 zipformer / Qwen3-ASR）；eval_recording 默认关 + 通用页开关；下载镜像（download.source + hf-mirror + ghProxy 回退，CLI/GUI 共用） | 212 测试全绿、build 零警告、svelte-check 0/0；doctor 下载源行 + X-ASR 回放真机复验 |
 
 **已验证**：注入机制正确（记事本中文短句 4/4 逐字一致）；状态机全链路（cargo 集成测试）；前端各状态渲染（浏览器 demo + Tauri 内 error 态实测）。
 
@@ -64,9 +70,8 @@
 | 音频采集 | **cpal** | — | Rust 跨平台音频采集事实标准 |
 | VAD | **silero-vad（ONNX）** | 能量门限兜底 | 裁静音、防误触发，模型仅 ~2MB |
 | **STT 框架** | **可插拔引擎架构：`SttEngine` trait + 引擎注册表** | — | 多方案并行接入、配置切换、统一评测（§3.3） |
-| STT 引擎 #1（首发） | **whisper.cpp，sidecar 子进程方式**（ggml-small，首启下载） | FFI 嵌入（后续） | 跑通闭环最快、崩溃隔离、打包简单 |
-| STT 引擎 #2（首发并行） | **sherpa-onnx 流式 Zipformer-zh（FFI）** | SenseVoice ONNX | 中文流式 + 低延迟，与 #1 形成对比组 |
-| STT 引擎 #3+（候选池） | FunASR ONNX / 云端 API（OpenAI、国内 ASR） | — | 人工评测后择优纳入或淘汰 |
+| STT 引擎（默认，v15 评测冠军） | **sherpa-onnx X-ASR 流式中英标点**（int8，162MB，首启下载） | — | CER 0.008 / 首字 70ms / 最终 31ms（§11 v15） |
+| STT 引擎（保留备选） | **SenseVoice（非流式多语言）/ FunASR-Nano（热词最强）** | 云端 API（OpenAI、国内 ASR） | 非流式质量档；已砍：whisper.cpp sidecar / 老 zipformer / Qwen3-ASR（v15） |
 | 输入注入（Windows） | **raw `windows` crate 直调 SendInput + KEYEVENTF_UNICODE** | enigo（跨平台兜底）、arboard（剪贴板备选） | 与 LeagueAkari 已验证路径 1:1 对齐 |
 | 全局热键 | **tauri-plugin-global-shortcut** | WH_KEYBOARD_LL（仅在需要任意键状态时） | 官方插件够用，MVP 不挂低级钩子 |
 | 托盘 | **Tauri 官方 tray API** | — | 常驻后台，悬浮窗按需显示 |
@@ -131,7 +136,7 @@ struct EngineCapabilities {
 
 /// 一个引擎 = 一种 STT 策略（含其模型管理）
 trait SttEngine: Send + Sync {
-    fn id(&self) -> &'static str;              // "whisper-cpp-sidecar" 等
+    fn id(&self) -> &'static str;              // "sherpa-onnx-x-asr-zh-en" 等
     fn display_name(&self) -> &str;
     fn capabilities(&self) -> EngineCapabilities;
     fn is_ready(&self) -> bool;                // 模型是否已下载/可用
@@ -167,14 +172,12 @@ enum SttEvent {
 | 引擎 ID | 接入方式 | 流式 | 状态 | 定位 |
 |---------|----------|------|------|------|
 | `mock-stream` | 内置 mock | ✓ | **已实现**（联调用） | 全链路联调 |
-| `whisper-cpp-sidecar` | sidecar 子进程（~/.kotone/bin 自管理） | ✗（finalize-only） | **已接入**（E2E：简体→繁体偏差，final 2.7s） | 离线兜底基线 |
-| `sherpa-onnx-zipformer-zh` | 官方 sherpa-onnx crate（feature `engine-sherpa`，默认关） | ✓ | **已接入**（E2E：首字 27ms、简体全对、热词生效） | **默认引擎头号候选** |
-| `whisper-cpp-ffi` | FFI（whisper-rs） | ✗ | Phase 2 | 降延迟的 whisper 路径 |
-| `sherpa-onnx-sensevoice` | FFI | ✗（快批式） | 候选池 | 中文高精度候选 |
-| `funasr-paraformer` | ONNX 本地服务 | ✓ | 候选池 | 中文工业级标杆 |
+| `sherpa-onnx-x-asr-zh-en` | 官方 sherpa-onnx crate（feature `engine-sherpa`） | ✓ | **默认引擎**（v15 评测冠军：CER 0.008 / 首字 70ms / 162MB） | 流式主力 |
+| `sherpa-onnx-sensevoice` | 同上 | ✗（快批式） | **已接入**（CER 0.062 / 最终 121ms / 239MB） | 非流式质量备选 |
+| `sherpa-onnx-funasr-nano` | 同上 | ✗ | **已接入**（CER 0.008 / 最终 1305ms / 948MB） | 热词最强档 |
 | `cloud-asr` | HTTP/WebSocket | ✓ | 候选池（可选增强） | 精度上限参照系 |
 
-> v10：eval 对比实测（SAPI fixture「对面打野在下路」）：sherpa 首字 30ms / final 0ms / CER 0.000；whisper final 2651ms / CER 0.143（繁体）。whisper 繁体问题未修（prompt 引导无效，待简繁后处理或换模型）。sherpa 热词仅 modified_beam_search 支持（greedy 会崩，已恒用 beam search）。
+> v15 砍除：whisper-cpp-sidecar（非流式 + spawn 架构性延迟 + 繁体问题）、sherpa-onnx-zipformer-zh（2023 老模型无标点，被 X-ASR 覆盖）、sherpa-onnx-qwen3-asr（938MB 非流式无差异化优势）。历史评测数据见 §11 v10/v15 与 docs/eval-playbook.md。
 
 引擎通过 cargo feature 控制编译（如 `engine-sherpa`），未启用的引擎不进二进制，控制包体。
 
@@ -193,8 +196,8 @@ enum SttEvent {
 
 #### 模型管理
 
-- 各引擎自带模型声明（ID、大小、下载地址、SHA256），统一走 `model` 模块下载与校验。
-- 安装包不含任何模型；首次启动引导下载当前引擎的默认模型（whisper small ~466MB / sherpa-onnx zipformer-zh 量级相近）。
+- 各引擎自带模型声明（ID、大小、下载地址、SHA256），统一走 `model` 模块下载与校验；下载源镜像策略（hf-mirror / ghProxy 回退）由 settings `download` 段控制（v15）。
+- 安装包不含任何模型；首次启动向导推荐下载默认引擎 X-ASR 模型（162MB）。
 - 用户可在设置中切换引擎，未就绪的引擎显示「需下载模型」。
 
 ### 3.4 交互模式：会话生命周期的三个决策点（v12 重构，ADR-006/007）
@@ -214,7 +217,7 @@ enum SttEvent {
 
 **热键录入**：设置页「点击录入」+ `kotone-cli config set hotkey.key --capture`——LL 钩子捕获模式，按任意组合键即录入，Esc 取消。
 
-**VAD（ADR-007）**：silero-vad ONNX（630KB，模型清单 `silero-vad`）；推理后端复用 sherpa-onnx 内置 VAD（零新增重依赖，feature `vad-silero`，CLI 默认开 / 壳默认关）；判停阈值纯逻辑在 core（可单测可配置）；whisper 静音裁剪暂不做。
+**VAD（ADR-007）**：silero-vad ONNX（630KB，模型清单 `silero-vad`）；推理后端复用 sherpa-onnx 内置 VAD（零新增重依赖，feature `vad-silero`，CLI 默认开 / 壳默认关）；判停阈值纯逻辑在 core（可单测可配置）。
 
 ### 3.5 游戏注入：raw windows crate 直调 SendInput，对齐 LeagueAkari
 
@@ -292,9 +295,9 @@ enum SttEvent {
 │  ┌──────▼─────────────────┐ │ ┌────────────▼────┐           │
 │  │ stt 引擎注册表           │ │ │ inject          │           │
 │  │ ├─ mock-stream ✓      │ │ │ SendInput/剪贴板 │ ✓        │
-│  │ ├─ whisper-cpp-sidecar │ │ └─────────────────┘           │
-│  │ ├─ sherpa-onnx (FFI)   │ │ ┌─────────────────┐           │
-│  │ └─ <feature-gated 更多>│ │ │ profile 游戏配置  │ ✓        │
+│  │ ├─ x-asr（默认）✓     │ │ └─────────────────┘           │
+│  │ ├─ sensevoice ✓       │ │ ┌─────────────────┐           │
+│  │ └─ funasr-nano ✓      │ │ │ profile 游戏配置  │ ✓        │
 │  └──────┬─────────────────┘ │ │ 前台进程匹配      │           │
 │         │ SttEvent 通道      │ └─────────────────┘           │
 │  ┌──────▼─────────────────┐ │                               │
@@ -354,8 +357,7 @@ enum SttEvent {
 | `audio` | `audio.rs` | `AudioBackend` trait + `CpalBackend`：设备枚举、16kHz mono 重采样、PCM 流推送、50ms RMS 事件；设备打开失败即报中文错误 | ✅ |
 | `stt` | `stt/mod.rs` | `SttEngine` / `SttSession` trait、引擎注册表、当前引擎路由 | ✅ |
 | `stt::mock` | `stt/mock.rs` | mock-stream：每 0.5s 音频发 partial，finalize 返回固定文本 + 实测延迟 | ✅ |
-| `stt::whisper_sidecar` | `stt/whisper_sidecar.rs` | whisper-cli sidecar 生命周期，wav → 文本（finalize-only），initial_prompt 热词 | 接口注册，实现待做 |
-| `stt::sherpa` | `stt/sherpa.rs` | sherpa-onnx FFI 接入，流式 session，partial 回调 → SttEvent | 接口注册，实现待做 |
+| `stt::xasr` / `stt::sensevoice` / `stt::funasr_nano` | `kotone-stt/src/` | sherpa-onnx 三引擎：X-ASR 流式（在线 transducer 骨架）+ SenseVoice/FunASR-Nano 非流式（离线骨架）；feature `engine-sherpa` 门控 | ✅（v15 保留集合） |
 | `eval` | `eval.rs` | 会话录档（wav + 指标 JSONL）、语料回放、多引擎对比 | 签名就位 |
 | `inject` | `inject/mod.rs`, `inject/windows.rs` | `send_unicode` / `key_down_up` / `is_process_foreground` + `send_sequence` 时序编排（SendOps trait 解耦可测） | ✅（LOL 真机待测） |
 | `orchestrator` | `orchestrator.rs` | 状态机，串联 hotkey→audio→stt→inject，partial 转发，取消与超时，gen 代际防过期 | ✅ |
@@ -429,15 +431,18 @@ simulate_send(text, profileId) -> Result<(), InjectError>   // v3：走真实发
 {
   "hotkey": { "key": "F8", "mode": "toggle" },   // toggle | hold（用户可选，默认 toggle 引导时确认）
   "audioDeviceId": "default",
-  "sttEngine": "whisper-cpp-sidecar",            // 当前引擎，设置页可切换
+  "sttEngine": "sherpa-onnx-x-asr-zh-en",        // 当前引擎（v15 默认 X-ASR），设置页可切换
   "engineOptions": {                              // 引擎专有配置
-    "whisper-cpp-sidecar": { "model": "ggml-small", "threads": 4 },
-    "sherpa-onnx-zipformer-zh": { "model": "zipformer-zh-small", "provider": "cpu" }
+    "sherpa-onnx-x-asr-zh-en": { "provider": "cpu" }
   },
   "autoSend": false,               // true: 转写完直接发；false: 先预览确认
   "activeProfileId": "lol",
   "language": "zh",
-  "evalRecording": true            // 评测录档开关（默认开，可在设置中关）
+  "evalRecording": false,          // 评测录档开关（v15 起默认关，通用页可开）
+  "download": {                    // v15 模型下载源
+    "source": "auto",              // auto（镜像优先+回退）| official | mirror
+    "ghProxy": "https://ghfast.top/" // GitHub 加速代理前缀（公益服务不稳定，失效可换）
+  }
 }
 ```
 
@@ -464,7 +469,7 @@ simulate_send(text, profileId) -> Result<(), InjectError>   // v3：走真实发
 // ~/.kotone/eval/<sessionId>.json —— 评测录档（配套同名 wav）
 {
   "sessionId": "20260723-190512-3f2a",
-  "engineId": "sherpa-onnx-zipformer-zh",
+  "engineId": "sherpa-onnx-x-asr-zh-en",
   "startedAt": "2026-07-23T19:05:12+08:00",
   "audioMs": 2400,
   "firstPartialMs": 380,          // 非流式引擎为 null
@@ -522,8 +527,8 @@ kotone/
 │     └─ src-tauri/             # kotone-tauri 薄壳：IPC/窗口/托盘/单实例/热键回退
 ├─ crates/
 │  ├─ kotone-core/              # 域模型 + ports + Orchestrator + settings/profile/eval/log
-│  ├─ kotone-stt/               # STT 引擎适配器 + 模型/二进制管理（~/.kotone/）
-│  │                            # features: engine-whisper-sidecar（默认）/ engine-sherpa
+│  ├─ kotone-stt/               # STT 引擎适配器 + 模型管理（~/.kotone/models/）
+│  │                            # features: engine-sherpa（默认关）/ vad-silero
 │  ├─ kotone-platform-windows/  # cpal / SendInput / WH_KEYBOARD_LL / elevation
 │  └─ kotone-cli/               # clap：send / listen / eval —— core 的无 GUI 消费者
 ├─ scripts/ docs/ assets/
@@ -683,6 +688,11 @@ CI：GitHub Actions（Windows runner 为主）— fmt / clippy / cargo test（�
 | 2026-07-25 | **v12：交互模式业务建模（ADR-006/007）**——三个决策点策略组装替代硬编码分支；**预览只读化**（用户裁定：编辑是伪需求，要么发要么重说）；热键捕获录入；**VAD 与模式 3「说一句就走」落地** | 组合爆炸前的主动建模：流式/回显是引擎能力投影而非模式维度，组合数塌缩为 2×3×2 策略组装；VAD 推理复用 sherpa-onnx 内置实现避免引入第二套 ONNX Runtime |
 | 2026-07-25 | **v13：core 识别历史模块 + CLI 收尾**——`history`（capped/keep-all/off，JSONL 追加，sessionId 与 eval 录档互查）进 settings 并由 orchestrator 在 sent/cancelled/error 终态落账；CLI 补 doctor / elevate / profile / log 四个一等子命令与 listen 提权预检 | 会话可观测性从「日志排查」升级为「结构化历史可查」；CLI 作为一等消费者补齐运维入口，doctor 把六类环境问题（设备/引擎/profile/提权/VAD/配置）变成一条命令的自检 |
 | 2026-07-25 | **v14：elevate 语义修正为 sudo 式**——`kotone-cli elevate <command> [args...]` 透传执行子命令（替换语义，参数完全由调用方给定）；GUI 的「重启自身」语义（`restart_as_admin`）保留不变；runas 参数拼接升级为 MSVC/CommandLineToArgvW 完整转义规则 | 用户裁定：CLI 是无状态进程，「重启自身」副本打 help 即退出毫无意义；sudo 式透传让提权副本直接干正事（`elevate listen`）。原 quote_arg 只包空白不转引号，`--text "a \"quote\""` 类参数会拼坏，一并修正 |
+| 2026-07-26 | **补记（评测期 P0 修复）**：`8a49e9f` X-ASR 崩溃三连防——bpe.vocab 文本格式探测（二进制/畸形一律不下传，防 C++ 解析直接 exit 进程）+ 从 bpe.model 现场导出兜底（纯 protobuf wire 解析，不引 sentencepiece 依赖）；`7fcbacd` 松手丢句尾——采音侧排空 + 800ms 静音尾帧 + decode 排空上限 | 六引擎评测真机暴露：热词词表格式问题是崩溃级 P0；甩尾是松手即停的采音-解码竞争，评测语料「能听到我说话吗」复验 CER 0.000 |
+| 2026-07-26 | **v15：六引擎评测收官，默认引擎定 X-ASR**（sherpa-onnx-x-asr-zh-en）。10 条标注语料（游戏黑话/中英混说/甩尾场景）实测：X-ASR CER 0.008 + 首字 70ms + 最终 31ms，162MB——精度与 FunASR-Nano 并列第一（0.008）但最终延迟 31ms vs 1305ms、体积 1/6，且是唯一流式冠军；SenseVoice CER 0.062 居非流式质量备选 | eval report 复验（docs/eval-playbook.md 成绩表）；流式回显是核心体验，同精度下延迟与体积碾压，默认引擎无悬念 |
+| 2026-07-26 | **v15：砍三引擎**——whisper.cpp sidecar（v10 起评测持续落后：非流式 + 每次 spawn 加载模型的架构性延迟 + 繁体问题）、老 zipformer（2023 模型无标点，能力被 X-ASR 完全覆盖）、Qwen3-ASR（938MB 非流式，精度与 FunASR-Nano 同档无差异化优势）。保留 X-ASR（默认）/ SenseVoice / FunASR-Nano（热词最强档）/ mock；ggml 清单、whisper-cli bin 下载通道（zip 依赖一并移除）、CLI 短名、相关 e2e 同步清除；在线 transducer 骨架保留给 X-ASR | 砍差留优收窄维护面：引擎面 6→3+mock，清单/测试/文档同步减半；默认引擎 id 全局切 `sherpa-onnx-x-asr-zh-en`（settings 默认、doctor、CLI、首启向导推荐） |
+| 2026-07-26 | **v15：eval_recording 默认关**（通用页底部加「评测录档」开关；已录语料不动，CLI/doctor 行为不变） | 评测收官后录档回到「按需开」：常态使用不再默认落 wav+json，减少磁盘占用与隐私面 |
+| 2026-07-26 | **v15：模型下载镜像**——settings 新增 `download.source`（auto 默认 / official / mirror）+ `download.ghProxy`（默认 `https://ghfast.top/`）；URL 重写纯函数：HF host 换 `hf-mirror.com`、GitHub 直链拼 ghProxy 前缀；auto 模式镜像失败回退官方一次（SHA 校验失败同样触发）；model.rs 统一下载入口走 `download_resolved`，CLI/GUI 共用；doctor 显示下载源 | HF/GitHub 国内直连常超时，镜像显著提速；公益代理稳定性无保障故前缀做成配置项——失效换前缀即可，无需发版 |
 | 2026-07-24 | **v5：preview 交互不抢焦点三连修**——begin 记录前台 hwnd 为注入目标（`FocusBackend` 抽象），Sending 前先 `SetForegroundWindow` 恢复焦点（AttachThreadInput 兜底）；toggle 热键在 Preview 态路由为 `confirm_send`；Esc 临时注册从仅 Listening 扩展到全部非 Idle 态；前端 overlay 显隐调用移除（后端 SW_SHOWNA 全权驱动） | 用户实测：preview 按 Enter 键去了记事本（焦点未跟随悬浮条）、点「发送」按钮激活 overlay 导致文字注入给 overlay 自己 |
 | 2026-07-24 | **v5：引入 tauri-plugin-single-instance；热键注册失败状态经 `get_hotkey_status` 暴露到设置页** | 用户实测：`pnpm tauri dev` 重启时旧实例未退出 → 热键 already registered / WebView2 类注册冲突 |
 | 2026-07-24 | **v5：设置页权限分区「以管理员身份重启」未提权时常驻显示；权限状态 3s 轮询（页面隐藏暂停）；`runAsAdminOnStart` 勾选后提示「下次启动生效」+ 立即重启链接；`get_elevation_status` 链路修复**（profile 文件缺失回退内置 profile，纯逻辑 `resolve_active_game_pid` 可单测） | 用户实测：重启入口只在横幅条件触发时出现；勾选自动提权无反馈；LOL 运行时 activeGameElevated 仍可能返回 null |
