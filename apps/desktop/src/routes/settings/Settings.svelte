@@ -16,7 +16,6 @@
   import GamePage from "./pages/GamePage.svelte";
   import HistoryPage from "./pages/HistoryPage.svelte";
   import AboutPage from "./pages/AboutPage.svelte";
-  import iconSrc from "../../assets/brand/icon-src.png";
   import patternSwitch from "../../assets/brand/patterns/switch.png";
 
   type PageId = "general" | "hotkey" | "engine" | "game" | "history" | "about";
@@ -61,19 +60,8 @@
     style:background-size="256px"
   ></div>
 
-  <!-- 左侧导航 -->
-  <nav class="relative z-10 flex w-50 shrink-0 flex-col border-r border-white/8 bg-kotone-deep/60 px-3 py-5">
-    <div class="flex flex-col items-center gap-2 pb-5">
-      <img
-        src={iconSrc}
-        alt="Kotone 头像"
-        class="h-16 w-16 rounded-full ring-2 ring-kotone-cyan/70 shadow-glow-cyan object-cover"
-      />
-      <p class="text-sm font-bold tracking-wide">
-        Kotone <span class="text-white/55 font-medium">琴音</span>
-      </p>
-    </div>
-
+  <!-- 左侧导航（品牌位移交顶部操作面板，导航直接从「通用」开始） -->
+  <nav class="relative z-10 flex w-50 shrink-0 flex-col border-r border-white/8 bg-kotone-deep/60 px-3 py-4">
     <div class="flex flex-col gap-1">
       {#each navItems as item}
         {@const active = page === item.id}
