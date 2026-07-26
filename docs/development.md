@@ -43,6 +43,13 @@
 | `8a49e9f` + `7fcbacd` | P0 修复：X-ASR 崩溃——bpe_vocab 门控 + 文本格式探测 + bpe.model 现场导出；松手丢句尾——采音侧排空 + 静音尾帧 + decode 排空上限 | 甩尾语料「能听到我说话吗」复验 CER 0.000 |
 | `9432dfd` | 六引擎评测手册（docs/eval-playbook.md）+ CLI download 透传清单内任意模型 id | 手册流程实跑收官 |
 | 本轮 | **六引擎砍留**：默认引擎定 X-ASR（砍 whisper.cpp sidecar / 老 zipformer / Qwen3-ASR）；eval_recording 默认关 + 通用页开关；下载镜像（download.source + hf-mirror + ghProxy 回退，CLI/GUI 共用） | 212 测试全绿、build 零警告、svelte-check 0/0；doctor 下载源行 + X-ASR 回放真机复验 |
+| `5af2e70` + `dff6e9a` + `6e86e6b` | **UI 收敛轮**：引擎与模型页收纳为「高级」（默认收起一句话摘要，评测录档开关搬入）；游戏适配页瘦身（删前台检测/测试发送联调区，`detect_foreground_game` IPC 连删；`simulate_send` 保留给悬浮条错误重试）；profile 内联编辑器 + 热词管理（导出/导入 IPC + tauri-plugin-dialog；core 纯函数与生效链路单测） | 219 测试全绿、build 零警告、svelte-check 0/0 |
+| `092f4d7` | fix：热词编辑 DataCloneError——`structuredClone` 不认 `$state` 响应式 Proxy，换官方姿势 `$state.snapshot`（全仓审计其余 structuredClone 均源自 legacy writable，安全） | svelte-check 0/0 |
+| `f3a8b3c` | **交互模式「独奏模式」solo**（A2+B3+C1+continuous 连续标志）：VAD 每判停一段→直发→不停机，schedule_idle 置回 Idle 后立即 begin 下一段回 Listening；再点按热键停止（丢弃在途段）；effective_hotkey_mode 单源走 Toggle | 222 测试全绿（含 solo 集成测试×2：发完回 Listening、停止不发送） |
+| `4b28793` | 悬浮窗显示模式 `overlay.visibility`：always 常驻 / on_demand 用时浮现（发送完成 600ms 延迟隐藏 + vis_gen 代际防误藏 + solo 驻留；显隐走原始 SW_SHOWNA/SW_HIDE，会话事件驱动不轮询） | 门槛全绿 |
+| `fe9e089` | 悬浮窗样式 `overlay.style`：card / capsule 胶囊（Win11 语音输入条风——SetWindowPos 按工作区居中靠下 48px、GetDpiForWindow 物理像素换算；前端 fit-content 随文字伸缩；切换即时生效免重启） | 门槛全绿 |
+| `a898992` | **发送路径前台守卫彻底移除**（用户拍板）：`WindowsInjector::send` 删 is_process_foreground 硬校验与「游戏不在前台」中止分支，直发当前前台窗口；profile 自动激活/提权检测等非阻塞匹配链路保留 | 221 测试全绿（删「非前台中止」断言×1）、build 零警告 |
+| `4e38b58` | 热词编辑器改批量文本：chips 换多行 textarea（每行一词条，与导入/导出 txt 同构，几百上千条可用）；实时词条数；保存按 parse_hotwords_import 同款规则规范化去重并提示「已合并 N 个重复」 | svelte-check 0/0、build:web ✓ |
 
 **已验证**：注入机制正确（记事本中文短句 4/4 逐字一致）；状态机全链路（cargo 集成测试）；前端各状态渲染（浏览器 demo + Tauri 内 error 态实测）。
 
