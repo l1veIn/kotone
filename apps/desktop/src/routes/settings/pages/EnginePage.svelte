@@ -225,6 +225,9 @@
     if (configured) return configured;
     if (engineId === "sherpa-onnx-zipformer-zh") return "zipformer-bilingual-zh-en-2023-02-20";
     if (engineId === "sherpa-onnx-sensevoice") return "sense-voice-zh-en-ja-ko-yue-2024-07-17";
+    if (engineId === "sherpa-onnx-x-asr-zh-en") return "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05";
+    if (engineId === "sherpa-onnx-funasr-nano") return "funasr-nano-int8-2025-12-30";
+    if (engineId === "sherpa-onnx-qwen3-asr") return "qwen3-asr-0.6B-int8-2026-03-25";
     return "ggml-small";
   }
 

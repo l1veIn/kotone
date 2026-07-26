@@ -9,9 +9,12 @@
 //! - `download`：通用下载器（流式 + SHA256 校验 + 原子落盘）。
 
 pub mod download;
+pub mod funasr_nano;
 pub mod mock;
 pub mod model;
+pub mod offline_sherpa;
 pub mod online_transducer;
+pub mod qwen3_asr;
 pub mod sensevoice;
 pub mod sherpa;
 pub mod vad;
@@ -29,6 +32,8 @@ pub fn builtin_engines() -> Vec<Box<dyn SttEngine>> {
         Box::new(sherpa::SherpaEngine::new()),
         Box::new(sensevoice::SenseVoiceEngine::new()),
         Box::new(xasr::XAsrEngine::new()),
+        Box::new(funasr_nano::FunAsrNanoEngine::new()),
+        Box::new(qwen3_asr::Qwen3AsrEngine::new()),
     ]
 }
 
@@ -53,6 +58,8 @@ mod tests {
         assert!(ids.contains(&"sherpa-onnx-zipformer-zh".to_string()));
         assert!(ids.contains(&"sherpa-onnx-sensevoice".to_string()));
         assert!(ids.contains(&"sherpa-onnx-x-asr-zh-en".to_string()));
+        assert!(ids.contains(&"sherpa-onnx-funasr-nano".to_string()));
+        assert!(ids.contains(&"sherpa-onnx-qwen3-asr".to_string()));
     }
 
     #[test]
@@ -87,16 +94,22 @@ mod tests {
             reg.get("sherpa-onnx-sensevoice").unwrap().is_ready(),
             sv_expected
         );
-        // X-ASR：同一 feature 门控、同一就绪判据
-        #[cfg(feature = "engine-sherpa")]
-        let x_expected =
-            model::multi_model_ready(&model::active_model("sherpa-onnx-x-asr-zh-en"));
-        #[cfg(not(feature = "engine-sherpa"))]
-        let x_expected = false;
-        assert_eq!(
-            reg.get("sherpa-onnx-x-asr-zh-en").unwrap().is_ready(),
-            x_expected
-        );
+        // 三个新引擎：同一 feature 门控、同一就绪判据
+        for engine in [
+            "sherpa-onnx-x-asr-zh-en",
+            "sherpa-onnx-funasr-nano",
+            "sherpa-onnx-qwen3-asr",
+        ] {
+            #[cfg(feature = "engine-sherpa")]
+            let expected = model::multi_model_ready(&model::active_model(engine));
+            #[cfg(not(feature = "engine-sherpa"))]
+            let expected = false;
+            assert_eq!(
+                reg.get(engine).unwrap().is_ready(),
+                expected,
+                "{engine} 就绪状态与环境不符"
+            );
+        }
         assert!(reg.get("no-such-engine").is_none());
     }
 }
