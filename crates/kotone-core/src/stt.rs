@@ -78,6 +78,13 @@ pub trait SttEngine: Send + Sync {
     fn capabilities(&self) -> EngineCapabilities;
     /// 模型是否已下载/可用
     fn is_ready(&self) -> bool;
+    /// 预热（运行时「启动」调用）：把模型加载进内存 / 做完备性检查。
+    /// 默认空实现——无驻留状态的引擎（如 sidecar 每次识别才拉起子进程）无需实现。
+    fn warmup(&self) -> Result<(), String> {
+        Ok(())
+    }
+    /// 卸载（运行时「停止」调用）：释放模型内存。默认空实现。
+    fn unload(&self) {}
     /// 开始一次识别会话；partial/final 事件经 `events` 外发
     fn start_session(
         &self,

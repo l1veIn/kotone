@@ -52,6 +52,25 @@ impl SttEngine for WhisperSidecarEngine {
         model::model_path(&model_id).is_some_and(|p| p.exists())
     }
 
+    /// 预热：sidecar 无驻留资源（每次识别才 spawn 子进程），warmup 做就绪检查，
+    /// 失败信息对齐 start_session 的引导文案
+    fn warmup(&self) -> Result<(), String> {
+        if !model::bin_installed() {
+            return Err(format!(
+                "whisper-cli 未安装（{}）。请在设置页下载，或运行 kotone-cli download bin",
+                model::whisper_cli_path().display()
+            ));
+        }
+        let model_id = model::active_model(self.id());
+        if model::model_path(&model_id).filter(|p| p.exists()).is_none() {
+            return Err(format!(
+                "模型 {model_id} 未下载。请在设置页下载，或运行 kotone-cli download {}",
+                model_id.trim_start_matches("ggml-")
+            ));
+        }
+        Ok(())
+    }
+
     fn start_session(
         &self,
         cfg: &SessionConfig,

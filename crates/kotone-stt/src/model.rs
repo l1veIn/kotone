@@ -216,7 +216,13 @@ pub fn model_path(model_id: &str) -> Option<PathBuf> {
 /// 引擎当前活动模型 ID（读 config.json 的 engineOptions；
 /// 缺省按引擎给默认：whisper → ggml-small，sherpa → 清单默认模型）
 pub fn active_model(engine_id: &str) -> String {
-    let configured = settings::load()
+    active_model_from(&settings::load(), engine_id)
+}
+
+/// 从给定配置推导活动模型 ID（纯函数：壳侧用 SharedState 推导 restartNeeded，
+/// 避免磁盘/内存双读不一致）
+pub fn active_model_from(s: &settings::Settings, engine_id: &str) -> String {
+    let configured = s
         .engine_options
         .get(engine_id)
         .and_then(|o| o.get("model"))
@@ -574,5 +580,19 @@ mod tests {
     fn download_unknown_model_errors() {
         let err = download("no-such-model", &|_, _| {}).unwrap_err();
         assert!(err.contains("未知模型"), "err: {err}");
+    }
+
+    #[test]
+    fn active_model_from_matches_disk_version_fallbacks() {
+        let s = settings::Settings::default();
+        // 与 active_model 同一兜底：sherpa 占位字符串 → 清单默认；whisper → ggml-small
+        assert_eq!(
+            active_model_from(&s, "sherpa-onnx-zipformer-zh"),
+            sherpa_default_model()
+        );
+        assert_eq!(active_model_from(&s, "whisper-cpp-sidecar"), "ggml-small");
+        let mut s = settings::Settings::default();
+        s.engine_options["whisper-cpp-sidecar"]["model"] = serde_json::json!("ggml-tiny");
+        assert_eq!(active_model_from(&s, "whisper-cpp-sidecar"), "ggml-tiny");
     }
 }

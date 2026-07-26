@@ -25,6 +25,8 @@ export type InteractionMode = "push-to-talk" | "dictation" | "one-shot";
 export interface UiConfig {
   /** 首启向导已完成（或已跳过） */
   firstRunCompleted: boolean;
+  /** app 启动后自动进入 Running（warmup 引擎 + 注册热键 + 显示悬浮窗） */
+  autoStart: boolean;
 }
 
 /** 识别历史配置（core history 模块） */
@@ -55,6 +57,21 @@ export interface Settings {
   vadSilenceMs: number;
   history: HistoryConfig;
   ui: UiConfig;
+}
+
+// ---------- 运行时「启动」开关 ----------
+export type RuntimePhase = "stopped" | "starting" | "running" | "stopping";
+
+/** get_runtime_status 返回值；kotone://runtime 事件同构（全量推送） */
+export interface RuntimeStatus {
+  phase: RuntimePhase;
+  restartNeeded: boolean;
+  engineId: string | null;
+  engineName: string | null;
+  modelId: string | null;
+  interactionMode: InteractionMode | null;
+  /** 过渡阶段提示（warmup / hotkey / overlay / unload），稳态为 null */
+  stage: string | null;
 }
 
 /** update_settings 接受任意局部 patch（后端做深合并） */
@@ -181,7 +198,7 @@ const mock: MockStore = {
     interactionMode: null,
     vadSilenceMs: 700,
     history: { mode: "capped", maxRecords: 1000, includeAudio: false },
-    ui: { firstRunCompleted: true },
+    ui: { firstRunCompleted: true, autoStart: false },
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },
@@ -442,6 +459,60 @@ export async function startHotkeyCapture(): Promise<void> {
 export async function cancelHotkeyCapture(): Promise<void> {
   if (!isTauri) return;
   return invoke<void>("cancel_hotkey_capture");
+}
+
+// ---------- 运行时「启动」开关 ----------
+
+/** mock 运行时：启动快照（推导 restartNeeded 用；对齐壳侧语义） */
+let mockStarted: { engineId: string; modelId: string } | null = null;
+let mockPhase: RuntimePhase = "stopped";
+
+/** mock 的 restartNeeded 推导：Running 且快照 ≠ 当前配置 */
+function mockRuntimeStatus(stage: string | null = null): RuntimeStatus {
+  const s = mock.settings;
+  const engineId = s.sttEngine;
+  const modelId =
+    (s.engineOptions[engineId] as Record<string, unknown> | undefined)?.model as string ??
+    (engineId === "sherpa-onnx-zipformer-zh" ? "zipformer-bilingual-zh-en-2023-02-20" : "ggml-small");
+  const restartNeeded =
+    mockPhase === "running" &&
+    mockStarted !== null &&
+    (mockStarted.engineId !== engineId || mockStarted.modelId !== modelId);
+  return {
+    phase: mockPhase,
+    restartNeeded,
+    engineId,
+    engineName: mock.engines.find((e) => e.id === engineId)?.displayName ?? null,
+    modelId,
+    interactionMode: s.interactionMode,
+    stage,
+  };
+}
+
+export async function getRuntimeStatus(): Promise<RuntimeStatus> {
+  if (!isTauri) return mockRuntimeStatus();
+  return invoke<RuntimeStatus>("get_runtime_status");
+}
+
+/** 启动：warmup 引擎 → 注册热键 → 显示悬浮窗；Running+restartNeeded 时等价重启 */
+export async function startRuntime(): Promise<RuntimeStatus> {
+  if (!isTauri) {
+    mockPhase = "running";
+    const s = mockRuntimeStatus();
+    mockStarted = { engineId: s.engineId ?? "", modelId: s.modelId ?? "" };
+    return mockRuntimeStatus();
+  }
+  return invoke<RuntimeStatus>("start_runtime");
+}
+
+/** 停止：取消会话 → 注销热键 → 隐藏悬浮窗 → 卸载引擎；Stopped 幂等 */
+export async function stopRuntime(): Promise<RuntimeStatus> {
+  if (!isTauri) {
+    mockPhase = "stopped";
+    mockStarted = null;
+    return mockRuntimeStatus();
+  }
+  return invoke<RuntimeStatus>("stop_runtime");
 }
 
 // ---------- 模型下载（引擎与模型页） ----------

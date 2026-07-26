@@ -171,6 +171,18 @@
       />
     </section>
 
+    <!-- 运行时（「启动」开关，core runtime 状态机） -->
+    <section class="kotone-panel mt-4 flex flex-col gap-4 p-4">
+      <h2 class="text-sm font-semibold text-kotone-cyan/90">运行时</h2>
+      <Toggle
+        checked={$settingsStore.ui.autoStart}
+        label="启动 Kotone 后自动开始运行"
+        desc="自动加载识别引擎、注册热键并显示悬浮窗；关闭时需手动点标题栏「启动」"
+        onchange={(v) =>
+          void patch({ ui: { autoStart: v } }, v ? "已开启自动启动" : "已关闭自动启动，需手动点「启动」")}
+      />
+    </section>
+
     <!-- 权限（UIPI 提权方案，docs/development.md §10 R-1） -->
     <section class="kotone-panel mt-4 p-4">
       <h2 class="text-sm font-semibold text-kotone-cyan/90">权限</h2>

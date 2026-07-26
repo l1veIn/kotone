@@ -119,6 +119,18 @@ mod imp {
             crate::model::multi_model_ready(&id)
         }
 
+        /// 预热：显式创建共享 recognizer（模型入内存）；随后 start_session 直接复用
+        fn warmup(&self) -> Result<(), String> {
+            // 与懒加载同一路径；engineOptions 的 threads 只在创建时生效，
+            // 预热用默认线程数（SessionConfig::default 无 options）
+            self.recognizer(&SessionConfig::default()).map(|_| ())
+        }
+
+        /// 卸载：释放共享 recognizer（重新「启动」或下次会话时重建）
+        fn unload(&self) {
+            *self.recognizer.lock().unwrap() = None;
+        }
+
         fn start_session(
             &self,
             cfg: &SessionConfig,

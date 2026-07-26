@@ -64,6 +64,9 @@ pub struct UiConfig {
     /// 首启向导已完成（或已跳过）；默认 false——老配置升级合并后也会弹一次向导
     #[serde(default)]
     pub first_run_completed: bool,
+    /// app 启动后自动进入 Running（warmup 引擎 + 注册热键 + 显示悬浮窗）；默认 false
+    #[serde(default)]
+    pub auto_start: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -200,6 +203,7 @@ mod tests {
         assert_eq!(s.history.max_records, 1000);
         assert!(!s.history.include_audio);
         assert!(!s.ui.first_run_completed);
+        assert!(!s.ui.auto_start);
     }
 
     #[test]
@@ -254,6 +258,17 @@ mod tests {
         save_to(&path, &s).unwrap();
         let loaded = load_from(&path);
         assert!(loaded.ui.first_run_completed);
+    }
+
+    #[test]
+    fn ui_auto_start_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut s = Settings::default();
+        s.ui.auto_start = true;
+        save_to(&path, &s).unwrap();
+        let loaded = load_from(&path);
+        assert!(loaded.ui.auto_start);
     }
 
     #[test]

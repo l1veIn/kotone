@@ -20,6 +20,7 @@ pub mod interaction;
 pub mod log;
 pub mod orchestrator;
 pub mod profile;
+pub mod runtime;
 pub mod settings;
 pub mod stt;
 pub mod vad;

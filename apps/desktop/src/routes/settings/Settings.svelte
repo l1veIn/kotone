@@ -7,6 +7,7 @@
   import { onMount } from "svelte";
   import { getSettings } from "../../lib/ipc";
   import { settingsStore, feedback, toast, errText } from "../../lib/stores/ui";
+  import { initRuntime } from "../../lib/stores/runtime";
   import Onboarding from "./Onboarding.svelte";
   import GeneralPage from "./pages/GeneralPage.svelte";
   import HotkeyPage from "./pages/HotkeyPage.svelte";
@@ -34,6 +35,8 @@
   let showOnboarding = $state(false);
 
   onMount(async () => {
+    // runtime store 独立初始化（kotone://runtime 事件订阅 + 初始拉取）
+    void initRuntime();
     try {
       const s = await getSettings();
       settingsStore.set(s);

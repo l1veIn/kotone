@@ -2,6 +2,7 @@
 //! 职责划分见 docs/development.md §5.1；IPC 契约见 §5.3（类型对齐 src/lib/ipc.ts）。
 
 mod hotkey;
+mod runtime;
 mod tray;
 
 use std::sync::{Arc, RwLock};
@@ -14,12 +15,14 @@ use kotone_core::inject::{CancelToken, FocusBackend, InjectError, Injector};
 use kotone_core::interaction::effective_hotkey_mode;
 use kotone_core::orchestrator::{Emitter, Orchestrator};
 use kotone_core::profile::{self, GameProfile};
+use kotone_core::runtime::RuntimePhase;
 use kotone_core::settings::{self, Settings};
 use kotone_core::stt::{EngineInfo, EngineRegistry};
 use kotone_core::{eval, log};
 use kotone_platform_windows::inject::{WinFocusBackend, WindowsInjector};
 use kotone_platform_windows::{audio as platform_audio, elevation, inject as platform_inject};
 use kotone_stt::model;
+use runtime::{RuntimeManager, RuntimeStatus};
 
 /// 全局共享状态：settings 双端共享，orchestrator 是唯一业务状态所有者
 pub struct SharedState {
@@ -49,11 +52,17 @@ impl Emitter for TauriEmitter {
             if let Some(mgr) = self.app.try_state::<HotkeyManager>() {
                 mgr.set_cancel_enabled(&self.app, state != "idle" && !state.is_empty());
             }
-            // 后端驱动 overlay 显隐
+            // 后端驱动 overlay 显隐；Running 期间 idle 不隐藏（悬浮窗兼作运行指示），
+            // Stopped 时由 stop_runtime 显式隐藏
             if let Some(win) = self.app.get_webview_window("overlay") {
-                if state == "idle" {
+                let running = self
+                    .app
+                    .try_state::<RuntimeManager>()
+                    .map(|rt| rt.phase() == RuntimePhase::Running)
+                    .unwrap_or(false);
+                if state == "idle" && !running {
                     let _ = win.hide();
-                } else {
+                } else if state != "idle" {
                     show_window_no_focus(&win);
                 }
             }
@@ -120,15 +129,23 @@ fn update_settings(
 
     // 热键键位/生效模式/后端变化 → 重注册。生效模式由 interactionMode 预设推导
     // （effective_hotkey_mode），所以切预设（如 push-to-talk）也会走到这里。
+    // 仅 Running 时注册热键：Stopped 语义就是「按热键无反应」，
+    // 配置变更会在下次 start_runtime 时生效。
     let next_mode = effective_hotkey_mode(&updated);
-    if old_hotkey.0 != updated.hotkey.key
+    let hotkey_changed = old_hotkey.0 != updated.hotkey.key
         || old_hotkey.1 != next_mode
-        || old_hotkey.2 != updated.hotkey_backend
-    {
+        || old_hotkey.2 != updated.hotkey_backend;
+    let running = app
+        .try_state::<RuntimeManager>()
+        .map(|rt| rt.phase() == RuntimePhase::Running)
+        .unwrap_or(false);
+    if hotkey_changed && running {
         if let Some(mgr) = app.try_state::<HotkeyManager>() {
             mgr.register(&app, &updated.hotkey.key, next_mode)?;
         }
     }
+    // 引擎/模型/模式可能经 patch 变更 → restartNeeded 推导依赖最新配置，推送全量状态
+    runtime::snapshot_and_emit(&app, None);
     Ok(updated)
 }
 
@@ -155,7 +172,7 @@ fn list_stt_engines(state: tauri::State<SharedState>) -> Vec<EngineInfo> {
 }
 
 #[tauri::command]
-fn set_stt_engine(state: tauri::State<SharedState>, id: String) -> Result<(), String> {
+fn set_stt_engine(app: AppHandle, state: tauri::State<SharedState>, id: String) -> Result<(), String> {
     if state.engines.get(&id).is_none() {
         return Err(format!("未注册的 STT 引擎: {id}"));
     }
@@ -164,7 +181,10 @@ fn set_stt_engine(state: tauri::State<SharedState>, id: String) -> Result<(), St
         guard.stt_engine = id;
         guard.clone()
     };
-    settings::save(&updated)
+    settings::save(&updated)?;
+    // Running 期间换引擎 → restartNeeded 推导变化，推送全量状态
+    runtime::snapshot_and_emit(&app, None);
+    Ok(())
 }
 
 #[tauri::command]
@@ -306,8 +326,50 @@ async fn download_model(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn set_active_model(engine_id: String, model_id: String) -> Result<(), String> {
-    model::set_active(&engine_id, &model_id)
+fn set_active_model(
+    app: AppHandle,
+    state: tauri::State<SharedState>,
+    engine_id: String,
+    model_id: String,
+) -> Result<(), String> {
+    model::set_active(&engine_id, &model_id)?;
+    // model::set_active 直接读写 config.json；同步 SharedState 内存副本，
+    // restartNeeded 推导（快照 vs 当前配置）以内存为准
+    {
+        let mut guard = state.settings.write().unwrap();
+        if let Some(opts) = guard.engine_options.as_object_mut() {
+            let entry = opts
+                .entry(engine_id.clone())
+                .or_insert_with(|| serde_json::json!({}));
+            entry["model"] = serde_json::Value::String(model_id);
+        }
+    }
+    // Running 期间换活动模型 → restartNeeded = true（不自动重启，用户显式重启生效）
+    runtime::snapshot_and_emit(&app, None);
+    Ok(())
+}
+
+// ---------- 运行时「启动」开关 ----------
+
+/// 全量运行时状态（相位 + restartNeeded + 当前引擎/模型/模式）
+#[tauri::command]
+fn get_runtime_status(app: AppHandle, state: tauri::State<SharedState>) -> RuntimeStatus {
+    let rt = app.state::<RuntimeManager>();
+    let settings = state.settings.read().unwrap();
+    rt.status(&settings, &state.engines, None)
+}
+
+/// 启动：warmup 引擎 → 注册热键 → 显示悬浮窗（进度经 kotone://runtime 推送）。
+/// Running + restartNeeded 时等价于 stop + start（重启语义）。
+#[tauri::command]
+async fn start_runtime(app: AppHandle) -> Result<RuntimeStatus, String> {
+    runtime::start(&app).await
+}
+
+/// 停止：取消会话 → 注销热键 → 隐藏悬浮窗 → 卸载引擎。Stopped 时幂等。
+#[tauri::command]
+async fn stop_runtime(app: AppHandle) -> Result<RuntimeStatus, String> {
+    runtime::stop(&app).await
 }
 
 #[tauri::command]
@@ -477,17 +539,18 @@ pub fn run() {
                 injector,
             });
             app.manage(HotkeyManager::new(app.handle(), orchestrator.clone()));
+            app.manage(RuntimeManager::new());
 
-            // 按配置注册全局热键（失败不致命，设置页可改键重试）。
-            // 生效模式由 interactionMode 预设推导（与策略同一源），
-            // 否则 push-to-talk 预设 + 默认 hotkey.mode=toggle 会让松开无反应。
-            let mgr = app.state::<HotkeyManager>();
-            let (key, mode) = {
-                let s = settings.read().unwrap();
-                (s.hotkey.key.clone(), effective_hotkey_mode(&s))
-            };
-            if let Err(e) = mgr.register(app.handle(), &key, mode) {
-                eprintln!("[kotone] {e}");
+            // 「启动」开关（core runtime 状态机）：默认 Stopped——不注册热键、
+            // 不 warmup 引擎、悬浮窗隐藏。ui.autoStart = true 时自动 start_runtime
+            // （warmup → 注册热键 → 显示悬浮窗，进度经 kotone://runtime 推送）。
+            if settings.read().unwrap().ui.auto_start {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = runtime::start(&handle).await {
+                        log::log(&format!("auto-start failed: {e}"));
+                    }
+                });
             }
 
             // 启动即显示设置窗口：全部窗口默认隐藏时，应用看起来像「没起来」。
@@ -520,6 +583,9 @@ pub fn run() {
             list_models,
             download_model,
             set_active_model,
+            get_runtime_status,
+            start_runtime,
+            stop_runtime,
             eval_list_sessions,
             eval_replay,
             eval_export,
