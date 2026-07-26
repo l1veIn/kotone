@@ -154,23 +154,6 @@
       </select>
     </section>
 
-    <!-- 发送行为 -->
-    <section class="kotone-panel mt-4 flex flex-col gap-4 p-4">
-      <h2 class="text-sm font-semibold text-kotone-cyan/90">发送行为</h2>
-      <Toggle
-        checked={$settingsStore.autoSend}
-        label="转写完成后直接发送"
-        desc="关闭时先弹出预览，确认后再发送"
-        onchange={(v) => void patch({ autoSend: v }, v ? "已开启转写后直接发送" : "已改为预览确认后发送")}
-      />
-      <Toggle
-        checked={$settingsStore.evalRecording}
-        label="评测录档"
-        desc="保存每次会话的音频与指标，用于引擎对比评测"
-        onchange={(v) => void patch({ evalRecording: v }, v ? "已开启评测录档" : "已关闭评测录档")}
-      />
-    </section>
-
     <!-- 运行时（「启动」开关，core runtime 状态机） -->
     <section class="kotone-panel mt-4 flex flex-col gap-4 p-4">
       <h2 class="text-sm font-semibold text-kotone-cyan/90">运行时</h2>

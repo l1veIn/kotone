@@ -33,7 +33,10 @@ pub struct Settings {
     pub stt_engine: String,
     /// 引擎专有配置项
     pub engine_options: serde_json::Value,
-    /// true: 转写完直接发；false: 先预览确认
+    /// 【deprecated（UI 已撤）】true: 转写完直接发；false: 先预览确认。
+    /// 仅 `interaction_mode = None` 的兼容路径（InteractionPolicy::from_settings
+    /// 旧字段推导）还读它；三个交互模式预设下被 PostFinalize 完全覆盖。
+    /// CLI wav 模式仍会强制写 false（兼容路径使用），键保留不删。
     pub auto_send: bool,
     pub active_profile_id: Option<String>,
     pub language: String,

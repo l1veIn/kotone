@@ -18,7 +18,7 @@ use kotone_core::profile::{self, GameProfile};
 use kotone_core::runtime::RuntimePhase;
 use kotone_core::settings::{self, Settings};
 use kotone_core::stt::{EngineInfo, EngineRegistry};
-use kotone_core::{eval, log};
+use kotone_core::log;
 use kotone_platform_windows::inject::{WinFocusBackend, WindowsInjector};
 use kotone_platform_windows::{audio as platform_audio, elevation, inject as platform_inject};
 use kotone_stt::model;
@@ -516,30 +516,6 @@ fn open_in_file_manager(dir: &std::path::Path) -> Result<(), String> {
         .map_err(|e| format!("打开目录失败：{e}"))
 }
 
-#[tauri::command]
-fn eval_list_sessions() -> Result<Vec<eval::EvalSession>, String> {
-    eval::list_sessions()
-}
-
-/// 回放是重计算（whisper finalize 走子进程可达数秒）：spawn_blocking 不阻塞 UI；
-/// invoke 签名不变（sessionId, engineId -> EvalResult），引擎注册表由共享状态注入。
-#[tauri::command]
-async fn eval_replay(
-    state: tauri::State<'_, SharedState>,
-    session_id: String,
-    engine_id: String,
-) -> Result<eval::EvalResult, String> {
-    let engines = state.engines.clone();
-    tauri::async_runtime::spawn_blocking(move || eval::replay(&session_id, &engine_id, &engines))
-        .await
-        .map_err(|e| format!("回放任务异常：{e}"))?
-}
-
-#[tauri::command]
-fn eval_export() -> Result<String, String> {
-    eval::export()
-}
-
 // ---------- 识别历史（core history 薄转发；参考 CLI log list/clear，§8.1 历史面板） ----------
 
 /// 识别历史列表（新→旧；模式/容量配置走通用 update_settings patch）
@@ -734,9 +710,6 @@ pub fn run() {
             set_models_dir,
             delete_model,
             open_models_dir,
-            eval_list_sessions,
-            eval_replay,
-            eval_export,
             get_history,
             clear_history,
             confirm_send,
