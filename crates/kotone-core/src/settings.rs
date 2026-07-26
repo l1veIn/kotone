@@ -40,7 +40,7 @@ pub struct Settings {
     pub auto_send: bool,
     pub active_profile_id: Option<String>,
     pub language: String,
-    /// 评测录档开关（默认开）
+    /// 评测录档开关（默认关；需要留语料复现时手动开）
     pub eval_recording: bool,
     /// 交互模式预设（ADR-006）：push-to-talk / dictation / one-shot；
     /// 缺省 None = 由 hotkey.mode + autoSend 旧字段推导（兼容混合组合）
@@ -61,6 +61,9 @@ pub struct Settings {
     /// 模型存储配置（自定义目录；默认空 = ~/.kotone/models）
     #[serde(default)]
     pub models: ModelsConfig,
+    /// 模型下载源配置（镜像 / 代理，见 DownloadConfig）
+    #[serde(default)]
+    pub download: DownloadConfig,
 }
 
 /// 桌面壳 UI 状态（config.json `ui` 段）
@@ -79,9 +82,50 @@ pub struct UiConfig {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelsConfig {
-    /// 自定义模型目录；空 = 默认 ~/.kotone/models（whisper-cli 运行时 bin 目录不受此影响）
+    /// 自定义模型目录；空 = 默认 ~/.kotone/models
     #[serde(default)]
     pub dir: String,
+}
+
+/// 下载源选择（config.json `download.source`）。
+/// 模型文件托管在 HuggingFace / GitHub，国内直连常超时，镜像可显著提速。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DownloadSource {
+    /// 镜像优先，失败后自动回退官方源重试一次（默认）
+    #[default]
+    Auto,
+    /// 只用官方源（huggingface.co / github.com）
+    Official,
+    /// 只用镜像（hf-mirror.com / ghProxy 代理），不回退
+    Mirror,
+}
+
+/// 模型下载配置（config.json `download` 段）
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadConfig {
+    /// 下载源：auto（默认）/ official / mirror
+    #[serde(default)]
+    pub source: DownloadSource,
+    /// GitHub 加速代理前缀（默认 https://ghfast.top/）。
+    /// 此类公益代理稳定性无保障、可能随时失效，故做成可配置项：
+    /// 失效时换成其他可用前缀即可，无需升级版本。
+    #[serde(default = "default_gh_proxy")]
+    pub gh_proxy: String,
+}
+
+impl Default for DownloadConfig {
+    fn default() -> Self {
+        Self {
+            source: DownloadSource::Auto,
+            gh_proxy: default_gh_proxy(),
+        }
+    }
+}
+
+fn default_gh_proxy() -> String {
+    "https://ghfast.top/".into()
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -101,21 +145,21 @@ impl Default for Settings {
             },
             hotkey_backend: HotkeyBackend::Auto,
             audio_device_id: "default".into(),
-            stt_engine: "whisper-cpp-sidecar".into(),
+            stt_engine: "sherpa-onnx-x-asr-zh-en".into(),
             engine_options: serde_json::json!({
-                "whisper-cpp-sidecar": { "model": "ggml-small", "threads": 4 },
-                "sherpa-onnx-zipformer-zh": { "model": "zipformer-zh-small", "provider": "cpu" }
+                "sherpa-onnx-x-asr-zh-en": { "provider": "cpu" }
             }),
             auto_send: false,
             active_profile_id: Some("lol".into()),
             language: "zh".into(),
-            eval_recording: true,
+            eval_recording: false,
             interaction_mode: None,
             vad_silence_ms: default_vad_silence_ms(),
             run_as_admin_on_start: false,
             history: crate::history::HistoryConfig::default(),
             ui: UiConfig::default(),
             models: ModelsConfig::default(),
+            download: DownloadConfig::default(),
         }
     }
 }
@@ -207,13 +251,13 @@ mod tests {
         assert_eq!(s.hotkey.mode, HotkeyMode::Toggle);
         assert_eq!(s.hotkey_backend, HotkeyBackend::Auto);
         assert_eq!(s.audio_device_id, "default");
-        assert_eq!(s.stt_engine, "whisper-cpp-sidecar");
+        assert_eq!(s.stt_engine, "sherpa-onnx-x-asr-zh-en");
         assert!(!s.auto_send);
         assert_eq!(s.active_profile_id.as_deref(), Some("lol"));
         assert_eq!(s.language, "zh");
-        assert!(s.eval_recording);
+        assert!(!s.eval_recording);
         assert_eq!(s.vad_silence_ms, 700);
-        assert!(s.engine_options["whisper-cpp-sidecar"]["threads"] == 4);
+        assert!(s.engine_options["sherpa-onnx-x-asr-zh-en"]["provider"] == "cpu");
         assert!(!s.run_as_admin_on_start);
         assert_eq!(s.history.mode, crate::history::HistoryMode::Capped);
         assert_eq!(s.history.max_records, 1000);
@@ -221,6 +265,8 @@ mod tests {
         assert!(!s.ui.first_run_completed);
         assert!(!s.ui.auto_start);
         assert!(s.models.dir.is_empty(), "默认模型目录为空 = ~/.kotone/models");
+        assert_eq!(s.download.source, DownloadSource::Auto);
+        assert_eq!(s.download.gh_proxy, "https://ghfast.top/");
     }
 
     #[test]
@@ -261,9 +307,43 @@ mod tests {
         assert_eq!(s.hotkey.key, "F9");
         assert_eq!(s.hotkey.mode, HotkeyMode::Toggle, "缺失字段用默认值合并");
         assert_eq!(s.language, "en");
-        assert_eq!(s.stt_engine, "whisper-cpp-sidecar");
-        assert!(s.eval_recording);
+        assert_eq!(s.stt_engine, "sherpa-onnx-x-asr-zh-en");
+        assert!(!s.eval_recording);
+        assert_eq!(s.download.source, DownloadSource::Auto, "老配置缺 download 段合并默认");
+        assert_eq!(s.download.gh_proxy, "https://ghfast.top/");
         assert!(!s.ui.first_run_completed, "老配置缺 ui 段合并默认 = 未完成");
+    }
+
+    #[test]
+    fn download_config_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut s = Settings::default();
+        s.download.source = DownloadSource::Mirror;
+        s.download.gh_proxy = "https://gh-proxy.example.com/".into();
+        save_to(&path, &s).unwrap();
+        let loaded = load_from(&path);
+        assert_eq!(loaded.download.source, DownloadSource::Mirror);
+        assert_eq!(loaded.download.gh_proxy, "https://gh-proxy.example.com/");
+        // 序列化键名 camelCase：ghProxy / source 小写枚举
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("\"ghProxy\""));
+        assert!(raw.contains("\"mirror\""));
+    }
+
+    #[test]
+    fn download_source_rejects_unknown_value() {
+        // 非法枚举值整体回退默认（serde 反序列化失败 → unwrap_or_default）
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{ "download": { "source": "fastest", "ghProxy": "https://x/" } }"#,
+        )
+        .unwrap();
+        let s = load_from(&path);
+        assert_eq!(s.download.source, DownloadSource::Auto);
+        assert_eq!(s.download.gh_proxy, "https://ghfast.top/");
     }
 
     #[test]

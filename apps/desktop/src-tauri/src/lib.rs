@@ -333,9 +333,9 @@ fn list_models() -> Result<Vec<model::ModelInfo>, String> {
     model::list()
 }
 
-/// 下载模型或 whisper-cli 运行时（id = ggml-* / whisper-cli）。
+/// 下载模型（id = 清单内任意模型 / silero-vad；镜像策略见 settings.download）。
 /// 进度经 "kotone://download" 事件外发：{ id, downloaded, total }。
-/// async 命令 + spawn_blocking：466MB 模型下载不阻塞 UI 线程；IPC 签名不变。
+/// async 命令 + spawn_blocking：大模型下载不阻塞 UI 线程；IPC 签名不变。
 #[tauri::command]
 async fn download_model(app: AppHandle, id: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -464,7 +464,7 @@ fn set_models_dir(
     })
 }
 
-/// 删除已下载模型 / whisper-cli 运行时；active 模型被删时回退默认并同步 SharedState
+/// 删除已下载模型；active 模型被删时回退默认并同步 SharedState
 #[tauri::command]
 fn delete_model(
     app: AppHandle,

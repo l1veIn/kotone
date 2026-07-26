@@ -3,7 +3,7 @@
 //! 子命令（详见 docs/cli.md）：
 //! - `send`：一次性注入（取代原 src-tauri/examples/inject_cli.rs）
 //! - `listen`：热键全链路 JSONL；--wav / --no-hotkey 单次会话模式（自动化测试）
-//! - `download`：模型 / whisper-cli 运行时下载
+//! - `download`：模型下载（清单内任意模型 id，镜像策略见 config download.source）
 //! - `config`：show / get / set（点路径写入 ~/.kotone/config.json）
 //! - `devices` / `play`：设备枚举 / wav 播放（虚拟声卡回路）
 //! - `eval`：引擎评测——录档列表 / 语料回放（多引擎对比）/ 人工标注 / CER 报告
@@ -108,9 +108,9 @@ enum Command {
         #[arg(long)]
         speed: Option<f64>,
     },
-    /// 下载模型或 whisper-cli 运行时：bin | tiny | base | small
+    /// 下载模型（清单内任意模型 id，如 x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05 / silero-vad）
     Download {
-        /// 下载目标：bin（whisper-cli 运行时）或模型短名（tiny/base/small）
+        /// 下载目标：清单内任意模型 id（kotone-cli doctor / 引擎页可见列表）
         target: String,
     },
     /// 配置管理：show / get / set（点路径写入 ~/.kotone/config.json）
@@ -284,27 +284,17 @@ async fn main() {
     std::process::exit(code);
 }
 
-/// download：bin → whisper-cli 运行时；tiny/base/small → ggml 模型。单行刷新进度。
+/// download：清单内任意模型 id 透传（x-asr / sense-voice / funasr / silero-vad 等）。
+/// 单行刷新进度；下载源镜像策略由 settings.download 决定（model.rs 内部读取）。
 async fn cmd_download(target: &str) -> i32 {
     use std::io::Write as _;
 
-    let id = match target {
-        "bin" => kotone_stt::model::WHISPER_BIN_ID.to_string(),
-        "tiny" | "base" | "small" => format!("ggml-{target}"),
-        "zipformer" => "zipformer-bilingual-zh-en-2023-02-20".to_string(),
-        other if other.starts_with("ggml-") || other.starts_with("zipformer-") => {
-            other.to_string()
+    let id = match kotone_stt::model::list() {
+        Ok(list) if list.iter().any(|m| m.id == target) => target.to_string(),
+        _ => {
+            eprintln!("未知下载目标：{target}（可选：清单内任意模型 id，见引擎页或 docs/eval-playbook.md）");
+            return 2;
         }
-        // 清单内任意模型 id 直接透传（x-asr / sense-voice / funasr / qwen3 / silero-vad 等）
-        other => match kotone_stt::model::list() {
-            Ok(list) if list.iter().any(|m| m.id == other) => other.to_string(),
-            _ => {
-                eprintln!(
-                    "未知下载目标：{other}（可选：bin / tiny / base / small / zipformer / 清单内任意模型 id）"
-                );
-                return 2;
-            }
-        },
     };
 
     let id2 = id.clone();
@@ -944,6 +934,8 @@ const CONFIG_SETTABLE_KEYS: &[&str] = &[
     "history.mode",
     "history.maxRecords",
     "history.includeAudio",
+    "download.source",
+    "download.ghProxy",
 ];
 
 /// 点路径写入：current 上套 patch → Settings 反序列化校验（枚举值在此拦截）。
@@ -1282,6 +1274,17 @@ fn cmd_doctor() -> i32 {
         if settings.eval_recording { "✓" } else { "⚠" },
         if settings.eval_recording { "开" } else { "关" }
     );
+    let dl = &settings.download;
+    let dl_desc = match dl.source {
+        settings::DownloadSource::Auto => {
+            format!("auto（镜像优先 hf-mirror.com + {}，失败回退官方）", dl.gh_proxy)
+        }
+        settings::DownloadSource::Official => "official（huggingface.co / github.com 直连）".into(),
+        settings::DownloadSource::Mirror => {
+            format!("mirror（仅镜像 hf-mirror.com + {}，不回退）", dl.gh_proxy)
+        }
+    };
+    println!("✓ 下载源：{dl_desc}（kotone-cli config set download.source <auto|official|mirror>）");
     let h = &settings.history;
     let mode = match h.mode {
         kotone_core::history::HistoryMode::Capped => format!("capped（上限 {} 条）", h.max_records),

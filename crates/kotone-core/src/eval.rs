@@ -7,7 +7,7 @@
 //! 容量：只保留最近 200 个会话，超出连同 wav/replay 缓存一起清理。
 //!
 //! 依赖纪律：core 不认识 kotone-stt，回放所需引擎实例经 `EngineRegistry`
-//! 参数由调用方（壳 / CLI）注入；wav 编解码自带（与 whisper_sidecar 的
+//! 参数由调用方（壳 / CLI）注入；wav 编解码自带（与 kotone-stt 评测工具的
 //! 私有 write_wav 重复是有意的——core 不能依赖 stt）。
 
 use std::path::{Path, PathBuf};
@@ -583,7 +583,7 @@ fn levenshtein(a: &[char], b: &[char]) -> usize {
     prev[b.len()]
 }
 
-// ---------- wav 编解码（16kHz/16bit/mono；与 whisper_sidecar 重复是有意的） ----------
+// ---------- wav 编解码（16kHz/16bit/mono；与 kotone-stt 重复是有意的） ----------
 
 /// f32 PCM（-1..1）→ 16bit PCM wav 文件
 pub fn write_wav(path: &Path, pcm: &[f32]) -> std::io::Result<()> {

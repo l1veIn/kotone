@@ -373,7 +373,7 @@ async fn double_begin_rejected() {
 async fn begin_with_unready_engine_toasts_error() {
     let (orch, emitter, _s) = {
         let (o, e, s) = make_orchestrator(false);
-        // NeverReadyEngine 恒未就绪（whisper/sherpa 真机均已就绪，不能再用它们模拟）
+        // NeverReadyEngine 恒未就绪（X-ASR 真机已就绪，不能再用它模拟）
         o.settings().write().unwrap().stt_engine = "never-ready".into();
         (o, e, s)
     };
@@ -460,7 +460,7 @@ async fn error_state_retry_sends_retained_text() {
 async fn error_without_text_rejects_retry_and_auto_idles() {
     let (orch, emitter, _s) = {
         let (o, e, s) = make_orchestrator(false);
-        // NeverReadyEngine 恒未就绪（whisper/sherpa 真机均已就绪，不能再用它们模拟）
+        // NeverReadyEngine 恒未就绪（X-ASR 真机已就绪，不能再用它模拟）
         o.settings().write().unwrap().stt_engine = "never-ready".into();
         (o, e, s)
     };

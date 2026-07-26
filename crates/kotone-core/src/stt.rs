@@ -6,7 +6,7 @@
 //! 与文档「partial 结果通过事件通道外发」一致，只是把通道显式化。
 //!
 //! 依赖方向：orchestrator（core）依赖本注册表容器 → 引擎实例必须由外部注入，
-//! 否则 core 会与引擎实现 crate 形成循环依赖。内置引擎（mock/whisper/sherpa）
+//! 否则 core 会与引擎实现 crate 形成循环依赖。内置引擎（mock/sherpa 系）
 //! 在 kotone-stt，经 `kotone_stt::register_builtin` 注入。
 
 use tokio::sync::mpsc;
@@ -40,7 +40,7 @@ pub struct EngineInfo {
 pub struct SessionConfig {
     pub language: String,
     pub hotwords: Vec<String>,
-    /// 引擎专有配置项（如 whisper 线程数）
+    /// 引擎专有配置项（如推理线程数 threads、provider）
     #[serde(default)]
     pub options: serde_json::Value,
 }
@@ -72,7 +72,7 @@ pub enum SttEvent {
 
 /// 一个引擎 = 一种 STT 策略（含其模型管理）
 pub trait SttEngine: Send + Sync {
-    /// 如 "whisper-cpp-sidecar"
+    /// 如 "sherpa-onnx-x-asr-zh-en"
     fn id(&self) -> &'static str;
     fn display_name(&self) -> &str;
     fn capabilities(&self) -> EngineCapabilities;
@@ -104,7 +104,7 @@ pub trait SttSession: Send {
 }
 
 /// 引擎注册表容器：只持有「已注入」的引擎实例。
-/// 引擎实现（mock/whisper/sherpa 等）由 kotone-stt 经 `register` 注入，
+/// 引擎实现（mock/sherpa 系等）由 kotone-stt 经 `register` 注入，
 /// core 不知道任何具体引擎（依赖方向：kotone-stt → core）。
 pub struct EngineRegistry {
     engines: Vec<Box<dyn SttEngine>>,

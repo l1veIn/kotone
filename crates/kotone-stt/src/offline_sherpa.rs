@@ -1,10 +1,10 @@
-//! 非流式 sherpa-onnx 引擎骨架（ADR-004）：sensevoice.rs / funasr_nano.rs /
-//! qwen3_asr.rs 共用的 recognizer/session 实现。
+//! 非流式 sherpa-onnx 引擎骨架（ADR-004）：sensevoice.rs / funasr_nano.rs
+//! 共用的 recognizer/session 实现。
 //!
 //! 差异全部收敛到 [`OfflineSpec] + 一个 `configure` 函数（填充
 //! OfflineRecognizerConfig 的模型家族字段）。骨架负责：recognizer 懒加载、
 //! threads/provider、warmup/unload、PCM 缓冲会话（push_audio 只缓冲 →
-//! finalize 一次性转写，对齐 whisper sidecar 的会话语义但进程内）。
+//! finalize 一次性转写）。
 //!
 //! feature `engine-sherpa` 控制编译：开启 = 真实实现；关闭 = 占位注册
 //! （恒 is_ready=false，默认构建零原生依赖）。
@@ -23,7 +23,7 @@ pub struct OfflineSpec {
     pub engine_id: &'static str,
     pub display_name: &'static str,
     pub languages: &'static [&'static str],
-    /// capabilities.hotwords（funasr-nano / qwen3-asr 支持模型级热词注入）
+    /// capabilities.hotwords（funasr-nano 支持模型级热词注入）
     pub hotwords: bool,
     /// 模型未下载时的错误提示
     pub not_ready_hint: &'static str,
@@ -45,7 +45,7 @@ pub mod imp {
     const DEFAULT_THREADS: u32 = 2;
 
     /// 模型家族配置函数：给定会话配置与模型目录，填充 OfflineRecognizerConfig
-    /// 的模型家族字段（sense_voice / funasr_nano / qwen3_asr 等）
+    /// 的模型家族字段（sense_voice / funasr_nano 等）
     pub type ConfigureFn = fn(&SessionConfig, &Path, &mut OfflineRecognizerConfig);
 
     /// 非流式引擎：懒加载共享 recognizer（模型加载百毫秒级，复用避免每会话重建）。
@@ -195,7 +195,7 @@ pub mod imp {
         }
     }
 
-    /// profile hotwords → 空格连接（funasr-nano / qwen3-asr 模型级热词字段的
+    /// profile hotwords → 空格连接（funasr-nano 模型级热词字段的
     /// upstream 惯例格式；实际分隔语义待真机验证）
     pub(crate) fn join_hotwords(hotwords: &[String]) -> Option<String> {
         if hotwords.is_empty() {

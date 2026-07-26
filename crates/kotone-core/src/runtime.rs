@@ -162,24 +162,24 @@ mod tests {
 
     #[test]
     fn restart_needed_matrix() {
-        let started = Some(("sherpa-onnx-zipformer-zh", "zipformer-bilingual-zh-en-2023-02-20"));
+        let started = Some(("sherpa-onnx-x-asr-zh-en", "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05"));
         // 同配置 → 不需要
         assert!(!restart_needed(
             RuntimePhase::Running,
             started,
-            ("sherpa-onnx-zipformer-zh", "zipformer-bilingual-zh-en-2023-02-20")
+            ("sherpa-onnx-x-asr-zh-en", "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05")
         ));
         // 换模型 → 需要
         assert!(restart_needed(
             RuntimePhase::Running,
             started,
-            ("sherpa-onnx-zipformer-zh", "other-model")
+            ("sherpa-onnx-x-asr-zh-en", "other-model")
         ));
         // 换引擎 → 需要
         assert!(restart_needed(
             RuntimePhase::Running,
             started,
-            ("whisper-cpp-sidecar", "zipformer-bilingual-zh-en-2023-02-20")
+            ("sherpa-onnx-sensevoice-zh", "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05")
         ));
         // 非 Running 相位恒 false
         assert!(!restart_needed(RuntimePhase::Stopped, started, ("a", "b")));

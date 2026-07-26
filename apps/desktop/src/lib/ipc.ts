@@ -64,6 +64,16 @@ export interface Settings {
   history: HistoryConfig;
   ui: UiConfig;
   models: ModelsConfig;
+  /** 模型下载源配置（auto 默认：镜像优先失败回退官方） */
+  download: DownloadConfig;
+}
+
+/** 模型下载配置（config.json `download` 段） */
+export interface DownloadConfig {
+  /** 下载源：auto（镜像优先+回退）/ official（仅官方）/ mirror（仅镜像） */
+  source: "auto" | "official" | "mirror";
+  /** GitHub 加速代理前缀（公益代理不稳定，做成可配置） */
+  ghProxy: string;
 }
 
 // ---------- 运行时「启动」开关 ----------
@@ -215,19 +225,19 @@ const mock: MockStore = {
     audioDeviceId: "default",
     sttEngine: "mock-stream",
     engineOptions: {
-      "whisper-cpp-sidecar": { model: "ggml-small", threads: 4 },
-      "sherpa-onnx-zipformer-zh": { model: "zipformer-zh-small", provider: "cpu" },
+      "sherpa-onnx-x-asr-zh-en": { provider: "cpu" },
     },
     autoSend: false,
     activeProfileId: "lol",
     language: "zh",
-    evalRecording: true,
+    evalRecording: false,
     runAsAdminOnStart: false,
     interactionMode: null,
     vadSilenceMs: 700,
     history: { mode: "capped", maxRecords: 1000, includeAudio: false },
     ui: { firstRunCompleted: true, autoStart: false },
     models: { dir: "" },
+    download: { source: "auto", ghProxy: "https://ghfast.top/" },
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },
@@ -241,15 +251,21 @@ const mock: MockStore = {
       isReady: true,
     },
     {
-      id: "whisper-cpp-sidecar",
-      displayName: "whisper.cpp（sidecar）",
-      capabilities: { streaming: false, hotwords: true, gpu: false, offline: true, languages: ["zh", "en"] },
+      id: "sherpa-onnx-x-asr-zh-en",
+      displayName: "sherpa-onnx X-ASR 流式中英标点",
+      capabilities: { streaming: true, hotwords: true, gpu: false, offline: true, languages: ["zh", "en"] },
       isReady: false,
     },
     {
-      id: "sherpa-onnx-zipformer-zh",
-      displayName: "sherpa-onnx 流式 Zipformer-zh",
-      capabilities: { streaming: true, hotwords: true, gpu: false, offline: true, languages: ["zh"] },
+      id: "sherpa-onnx-sensevoice",
+      displayName: "sherpa-onnx SenseVoice 多语言",
+      capabilities: { streaming: false, hotwords: false, gpu: false, offline: true, languages: ["zh", "en", "ja", "ko", "yue"] },
+      isReady: false,
+    },
+    {
+      id: "sherpa-onnx-funasr-nano",
+      displayName: "sherpa-onnx FunASR-Nano 中英日",
+      capabilities: { streaming: false, hotwords: true, gpu: false, offline: true, languages: ["zh", "en", "ja"] },
       isReady: false,
     },
   ],
@@ -283,31 +299,24 @@ const mock: MockStore = {
   ],
   models: [
     {
-      id: "ggml-small",
-      engineId: "whisper-cpp-sidecar",
-      displayName: "whisper small（默认，中文推荐）",
-      sizeBytes: 466_000_000,
-      downloaded: true,
-    },
-    {
-      id: "ggml-tiny",
-      engineId: "whisper-cpp-sidecar",
-      displayName: "whisper tiny（最快，精度较低）",
-      sizeBytes: 78_000_000,
+      id: "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05",
+      engineId: "sherpa-onnx-x-asr-zh-en",
+      displayName: "X-ASR 流式中英标点（int8，480ms 低延迟）",
+      sizeBytes: 169_000_000,
       downloaded: false,
     },
     {
-      id: "whisper-cli",
-      engineId: "whisper-cpp-sidecar",
-      displayName: "whisper-cli 运行时（v1.9.1，CPU 版）",
-      sizeBytes: 8_000_000,
-      downloaded: true,
+      id: "sense-voice-zh-en-ja-ko-yue-2024-07-17",
+      engineId: "sherpa-onnx-sensevoice",
+      displayName: "sherpa SenseVoice 多语言（int8，非流式高准）",
+      sizeBytes: 240_000_000,
+      downloaded: false,
     },
     {
-      id: "zipformer-bilingual-zh-en-2023-02-20",
-      engineId: "sherpa-onnx-zipformer-zh",
-      displayName: "sherpa 流式 Zipformer 中英双语（int8，低延迟）",
-      sizeBytes: 158_000_000,
+      id: "funasr-nano-int8-2025-12-30",
+      engineId: "sherpa-onnx-funasr-nano",
+      displayName: "FunASR-Nano 中英日（int8，非流式）",
+      sizeBytes: 1_010_000_000,
       downloaded: false,
     },
     {
@@ -530,7 +539,9 @@ function mockRuntimeStatus(stage: string | null = null): RuntimeStatus {
   const engineId = s.sttEngine;
   const modelId =
     (s.engineOptions[engineId] as Record<string, unknown> | undefined)?.model as string ??
-    (engineId === "sherpa-onnx-zipformer-zh" ? "zipformer-bilingual-zh-en-2023-02-20" : "ggml-small");
+    (engineId === "sherpa-onnx-x-asr-zh-en"
+      ? "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05"
+      : "default");
   const restartNeeded =
     mockPhase === "running" &&
     mockStarted !== null &&

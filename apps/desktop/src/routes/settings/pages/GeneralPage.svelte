@@ -175,6 +175,18 @@
       />
     </section>
 
+    <!-- 评测录档（eval_recording；默认关，需要留语料复现时再开） -->
+    <section class="kotone-panel mt-4 flex flex-col gap-4 p-4">
+      <h2 class="text-sm font-semibold text-kotone-cyan/90">评测录档</h2>
+      <Toggle
+        checked={$settingsStore.evalRecording}
+        label="录制识别会话供评测回放"
+        desc="每次识别保存 wav + 会话 json 到 ~/.kotone/eval（最多留 200 场），供 kotone-cli eval 对比引擎；已录的档案不受影响"
+        onchange={(v) =>
+          void patch({ evalRecording: v }, v ? "已开启评测录档" : "已关闭评测录档（已有录档保留）")}
+      />
+    </section>
+
     <!-- 权限（UIPI 提权方案，docs/development.md §10 R-1） -->
     <section class="kotone-panel mt-4 p-4">
       <h2 class="text-sm font-semibold text-kotone-cyan/90">权限</h2>

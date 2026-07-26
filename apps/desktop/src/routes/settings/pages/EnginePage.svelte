@@ -5,7 +5,7 @@
    * - restartNeeded 黄条（与标题栏「重启生效」联动）；
    * - 按引擎分组的完整模型清单：名称/大小/流式标签/已下载/active 标记 +
    *   下载（进度条）/ 删除（二次确认）/ 设为 active；
-   * - VAD 组件单列一组（不可设为 active）；whisper-cli 运行时归 whisper 组。
+   * - VAD 组件单列一组（不可设为 active）。
    */
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
@@ -218,26 +218,24 @@
     return `${Math.round(bytes / 1_000_000)} MB`;
   }
 
-  /** 引擎当前活动模型 id（engineOptions 未配置按引擎默认） */
+  /** 引擎当前活动模型 id（engineOptions 未配置按引擎清单默认） */
   function activeModelOf(engineId: string): string {
     const configured = ($settingsStore?.engineOptions?.[engineId] as Record<string, unknown> | undefined)
       ?.model as string | undefined;
     if (configured) return configured;
-    if (engineId === "sherpa-onnx-zipformer-zh") return "zipformer-bilingual-zh-en-2023-02-20";
-    if (engineId === "sherpa-onnx-sensevoice") return "sense-voice-zh-en-ja-ko-yue-2024-07-17";
     if (engineId === "sherpa-onnx-x-asr-zh-en") return "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05";
+    if (engineId === "sherpa-onnx-sensevoice") return "sense-voice-zh-en-ja-ko-yue-2024-07-17";
     if (engineId === "sherpa-onnx-funasr-nano") return "funasr-nano-int8-2025-12-30";
-    if (engineId === "sherpa-onnx-qwen3-asr") return "qwen3-asr-0.6B-int8-2026-03-25";
-    return "ggml-small";
+    return "default";
   }
 
   function modelsOf(engineId: string): ModelInfo[] {
     return models.filter((m) => m.engineId === engineId);
   }
 
-  /** 可设为 active 的条目（排除 whisper-cli 运行时与 VAD） */
+  /** 可设为 active 的条目（排除 VAD 组件） */
   function isSelectableModel(m: ModelInfo): boolean {
-    return m.id !== "whisper-cli" && m.engineId !== "vad-silero";
+    return m.engineId !== "vad-silero";
   }
 
   const vadModels = $derived(models.filter((m) => m.engineId === "vad-silero"));
@@ -278,7 +276,7 @@
         </button>
       </div>
       <p class="mt-2 text-[11px] text-white/40">
-        已下载的模型会移动到新目录（迁移失败的条目需重新下载）；whisper-cli 运行时固定在 ~/.kotone/bin，不受影响。
+        已下载的模型会移动到新目录（迁移失败的条目需重新下载）。
       </p>
     {:else}
       <div class="mt-3 flex items-center gap-2">
@@ -330,7 +328,6 @@
         {@const active = $settingsStore?.sttEngine === en.id}
         {@const enModels = modelsOf(en.id)}
         {@const selectable = enModels.filter((m) => isSelectableModel(m))}
-        {@const runtimes = enModels.filter((m) => !isSelectableModel(m))}
         <div
           use:spotlight
           class="kotone-card kotone-spotlight p-4 {active ? 'border-kotone-cyan/50 shadow-glow-cyan' : ''}"
@@ -490,70 +487,6 @@
             </div>
           {/if}
 
-          <!-- 运行时组件（whisper-cli 等：只下载/删除，不参与模型选择） -->
-          {#if runtimes.length > 0}
-            <p class="mt-3 text-[10px] font-semibold tracking-wide text-white/40">运行时组件</p>
-          {/if}
-          {#each runtimes as m}
-            <div class="mt-3 rounded-lg bg-white/5 px-3 py-2 ring-1 ring-white/8">
-              <div class="flex items-center justify-between gap-2">
-                <div class="min-w-0 flex-1">
-                  <p class="flex items-center gap-1.5 text-[12px] text-white/80">
-                    <span class="truncate">{m.displayName}</span>
-                  </p>
-                  <p class="mt-0.5 text-[10px] text-white/35">
-                    {m.id} · {formatSize(m.sizeBytes)}
-                  </p>
-                </div>
-                <div class="flex shrink-0 items-center gap-1.5">
-                  {#if m.downloaded}
-                    {#if confirmingDelete === m.id}
-                      <button
-                        class="rounded-lg bg-kotone-pink px-2.5 py-1 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95 disabled:opacity-50"
-                        disabled={deleting !== null}
-                        onclick={() => void onDelete(m.id)}
-                      >
-                        {deleting === m.id ? "删除中…" : "确认删除"}
-                      </button>
-                      <button
-                        class="rounded-lg bg-white/10 px-2 py-1 text-[11px] text-white/60 transition hover:bg-white/20"
-                        onclick={() => (confirmingDelete = null)}
-                      >
-                        取消
-                      </button>
-                    {:else}
-                      <button
-                        class="rounded-lg bg-white/8 px-2.5 py-1 text-[11px] text-white/55 ring-1 ring-white/12 transition hover:bg-kotone-pink/20 hover:text-kotone-pink active:scale-95"
-                        onclick={() => (confirmingDelete = m.id)}
-                      >
-                        删除
-                      </button>
-                    {/if}
-                  {:else}
-                    <button
-                      class="rounded-lg bg-kotone-violet/25 px-2.5 py-1 text-[11px] font-semibold text-kotone-violet ring-1 ring-kotone-violet/40 transition hover:bg-kotone-violet/35 hover:shadow-[0_0_12px_rgba(123,47,255,0.45)] active:scale-95 disabled:opacity-50"
-                      disabled={downloadingAny}
-                      onclick={() => void onDownload(m.id)}
-                    >
-                      {m.id in dlProgress ? "下载中…" : "下载"}
-                    </button>
-                  {/if}
-                </div>
-              </div>
-              {#if m.id in dlProgress}
-                <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
-                  {#if dlProgress[m.id] !== null}
-                    <div
-                      class="h-full rounded-full bg-kotone-violet transition-[width]"
-                      style:width="{dlProgress[m.id]}%"
-                    ></div>
-                  {:else}
-                    <div class="h-full w-1/3 animate-pulse rounded-full bg-kotone-violet/70"></div>
-                  {/if}
-                </div>
-              {/if}
-            </div>
-          {/each}
         </div>
       {/each}
 

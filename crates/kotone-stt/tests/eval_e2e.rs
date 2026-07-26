@@ -1,11 +1,10 @@
 //! eval 回放 E2E：SAPI fixture 造假录档 → 全部就绪真实引擎回放 → 对比表。
 //!
-//! `#[ignore]`：依赖真机模型安装情况（whisper-cli + ggml 模型），手动跑：
+//! `#[ignore]`：依赖真机模型安装情况（X-ASR 模型），手动跑：
 //! ```text
-//! cargo test -p kotone-stt --test eval_e2e -- --ignored
 //! cargo test -p kotone-stt --features engine-sherpa --test eval_e2e -- --ignored
 //! ```
-//! 默认构建覆盖 whisper + mock；sherpa 需 engine-sherpa feature（ADR-004）。
+//! sherpa 系引擎需 engine-sherpa feature（ADR-004）。
 
 use std::path::PathBuf;
 
@@ -17,7 +16,7 @@ fn fixture_path() -> PathBuf {
 }
 
 #[test]
-#[ignore = "E2E：依赖真机 whisper-cli + 模型，手动跑"]
+#[ignore = "E2E：依赖真机 X-ASR 模型，手动跑"]
 fn replay_fixture_across_ready_engines() {
     let dir = tempfile::tempdir().unwrap();
     let pcm = eval::read_wav(&fixture_path()).expect("fixture wav 应可解码");
@@ -30,7 +29,7 @@ fn replay_fixture_across_ready_engines() {
         final_ms: 0,
         partials: vec![],
         final_text: String::new(),
-        // SAPI 合成语音原文（见 whisper_e2e / sherpa_e2e 的基准）
+        // SAPI 合成语音原文
         human_label: Some("对面打野在下路".into()),
     };
     eval::record_session_at(dir.path(), &session, &pcm).unwrap();
@@ -43,8 +42,8 @@ fn replay_fixture_across_ready_engines() {
         .filter(|i| i.is_ready)
         .collect();
     assert!(
-        ready.iter().any(|i| i.id == "whisper-cpp-sidecar"),
-        "E2E 前提：whisper-cli + ggml 模型已安装（kotone-cli download bin / small）"
+        ready.iter().any(|i| i.id == "sherpa-onnx-x-asr-zh-en"),
+        "E2E 前提：X-ASR 模型已安装（kotone-cli download x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05）"
     );
 
     println!(
@@ -68,11 +67,19 @@ fn replay_fixture_across_ready_engines() {
         }
     }
 
-    // whisper 是基线引擎：必须能回放且文本非空
-    let w = eval::replay_at(dir.path(), &session.session_id, "whisper-cpp-sidecar", &registry)
-        .expect("whisper 回放应成功");
-    assert!(!w.final_text.is_empty(), "whisper 应产出文本");
-    assert!(w.first_partial_ms.is_none(), "whisper 非流式，无首字延迟");
+    // X-ASR 是基线引擎：必须能回放、文本非空、流式有首字延迟
+    let x = eval::replay_at(
+        dir.path(),
+        &session.session_id,
+        "sherpa-onnx-x-asr-zh-en",
+        &registry,
+    )
+    .expect("X-ASR 回放应成功");
+    assert!(!x.final_text.is_empty(), "X-ASR 应产出文本");
+    assert!(
+        x.first_partial_ms.is_some(),
+        "X-ASR 流式引擎应有首字延迟: {x:?}"
+    );
 
     // mock 回放固定文本，与标注一致 → CER = 0
     let m = eval::replay_at(dir.path(), &session.session_id, "mock-stream", &registry)
@@ -80,21 +87,4 @@ fn replay_fixture_across_ready_engines() {
     assert_eq!(m.final_text, "对面打野在下路");
     assert_eq!(m.cer, Some(0.0));
     assert!(!m.partials.is_empty(), "mock 流式应有 partial 时间线");
-
-    // sherpa（engine-sherpa feature 开启且模型齐备时）：流式引擎应有 partial
-    #[cfg(feature = "engine-sherpa")]
-    if ready.iter().any(|i| i.id == "sherpa-onnx-zipformer-zh") {
-        let s = eval::replay_at(
-            dir.path(),
-            &session.session_id,
-            "sherpa-onnx-zipformer-zh",
-            &registry,
-        )
-        .expect("sherpa 回放应成功");
-        assert!(!s.final_text.is_empty(), "sherpa 应产出文本");
-        assert!(
-            s.first_partial_ms.is_some(),
-            "sherpa 流式引擎应有首字延迟: {s:?}"
-        );
-    }
 }

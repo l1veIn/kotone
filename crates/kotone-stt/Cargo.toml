@@ -1,7 +1,7 @@
 [package]
 name = "kotone-stt"
 version = "0.1.0"
-description = "Kotone STT 引擎适配器：mock / whisper.cpp sidecar / sherpa-onnx + 模型管理 + 内置引擎注册"
+description = "Kotone STT 引擎适配器：mock / sherpa-onnx（X-ASR · SenseVoice · FunASR-Nano）+ 模型管理 + 内置引擎注册"
 edition = "2021"
 rust-version = "1.77.2"
 
@@ -10,11 +10,9 @@ kotone-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-# 模型/二进制下载（blocking：调用方自行放 spawn_blocking；天然对齐 shell/CLI 两侧）
+# 模型下载（blocking：调用方自行放 spawn_blocking；天然对齐 shell/CLI 两侧）
 reqwest = { version = "0.12", features = ["blocking"] }
 sha2 = "0.10"
-# whisper-cli 发布包为 zip（deflate），只取解压能力
-zip = { version = "2", default-features = false, features = ["deflate"] }
 # X-ASR 等模型只以 tar.bz2 整包发布（k2-fsa GitHub releases）：
 # tar 解包 + bzip2 解压（bzip2-sys 自带 C 源码，Windows MSVC 可直接编译）
 tar = "0.4"
@@ -28,12 +26,10 @@ sherpa-onnx = { version = "1.13.4", optional = true }
 tempfile.workspace = true
 
 [features]
-# STT 引擎按 feature 控制编译（docs/development.md §3.3）；
-# whisper sidecar 是纯 std::process 拉起，恒编译恒注册；
+# STT 引擎按 feature 控制编译（docs/development.md §3.3）：
 # sherpa 真实实现引入大体量原生依赖（sherpa-onnx 静态库），默认关闭，
 # 显式 --features engine-sherpa 才编译（ADR-004）；关闭时注册占位引擎
-default = ["engine-whisper-sidecar"]
-engine-whisper-sidecar = []
+default = []
 engine-sherpa = ["dep:sherpa-onnx"]
 # silero VAD（ADR-007 one-shot 静音判停）：与 engine-sherpa 共享同一份
 # sherpa-onnx 原生依赖，独立 feature 控制（只要 VAD 不要 STT 引擎时不必开 engine-sherpa）
