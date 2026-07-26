@@ -214,7 +214,7 @@
           <div>
             <h2 class="text-lg font-bold">下载识别模型</h2>
             <p class="mt-1 text-xs leading-relaxed text-white/55">
-              语音识别完全在本地运行，模型只需下载一次。推荐 X-ASR 中英流式模型，边识别边出字。
+              语音识别完全在本地运行，模型只需下载一次。推荐 X-ASR 中英流式模型，边识别边出字。这是推荐设置，之后可在「高级」页调整。
             </p>
           </div>
         </div>

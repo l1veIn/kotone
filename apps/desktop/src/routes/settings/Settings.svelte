@@ -13,20 +13,20 @@
   import Titlebar from "./Titlebar.svelte";
   import GeneralPage from "./pages/GeneralPage.svelte";
   import HotkeyPage from "./pages/HotkeyPage.svelte";
-  import EnginePage from "./pages/EnginePage.svelte";
+  import AdvancedPage from "./pages/AdvancedPage.svelte";
   import GamePage from "./pages/GamePage.svelte";
   import HistoryPage from "./pages/HistoryPage.svelte";
   import AboutPage from "./pages/AboutPage.svelte";
   import patternSwitch from "../../assets/brand/patterns/switch.png";
 
-  type PageId = "general" | "hotkey" | "engine" | "game" | "history" | "about";
+  type PageId = "general" | "hotkey" | "game" | "history" | "advanced" | "about";
 
   const navItems: { id: PageId; label: string; icon: string }[] = [
     { id: "general", label: "通用", icon: "home" },
     { id: "hotkey", label: "快捷键", icon: "keyboard" },
-    { id: "engine", label: "引擎与模型", icon: "chip" },
     { id: "game", label: "游戏适配", icon: "gamepad" },
     { id: "history", label: "历史记录", icon: "clock" },
+    { id: "advanced", label: "高级", icon: "sliders" },
     { id: "about", label: "关于", icon: "info" },
   ];
 
@@ -83,8 +83,8 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M3 10.5 12 3l9 7.5M5 9.5V21h14V9.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
             {:else if item.icon === "keyboard"}
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M18 14h.01M9 14h6" stroke-linecap="round"/></svg>
-            {:else if item.icon === "chip"}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" stroke-linecap="round"/></svg>
+            {:else if item.icon === "sliders"}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" stroke-linecap="round"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
             {:else if item.icon === "gamepad"}
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M6 9h4M8 7v4M15 8h.01M18 10h.01M17.3 5H6.7a4.7 4.7 0 0 0-4.6 5.6l1 5.4A3 3 0 0 0 6 18.6c.8 0 1.6-.3 2.1-.9L9.5 16h5l1.4 1.7c.5.6 1.3.9 2.1.9a3 3 0 0 0 2.9-2.6l1-5.4A4.7 4.7 0 0 0 17.3 5Z" stroke-linecap="round" stroke-linejoin="round"/></svg>
             {:else if item.icon === "clock"}
@@ -111,8 +111,8 @@
       <GeneralPage />
     {:else if page === "hotkey"}
       <HotkeyPage />
-    {:else if page === "engine"}
-      <EnginePage />
+    {:else if page === "advanced"}
+      <AdvancedPage />
     {:else if page === "game"}
       <GamePage />
     {:else if page === "history"}

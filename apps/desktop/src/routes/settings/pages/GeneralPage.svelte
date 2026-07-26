@@ -1,7 +1,7 @@
 <script lang="ts">
   /*
    * 通用页（方向 B 灵魂首屏）：欢迎面板 = 直播间背景 + Kotone 立绘 +
-   * 渐变标题 + 三个特性 chip；下方为通用设置（麦克风 / 发送行为 / 录档 / 权限）。
+   * 渐变标题 + 三个特性 chip；下方为通用设置（麦克风 / 运行时 / 权限）。
    */
   import { onMount } from "svelte";
   import {
@@ -172,18 +172,6 @@
         desc="自动加载识别引擎、注册热键并显示悬浮窗；关闭时需手动点标题栏「启动」"
         onchange={(v) =>
           void patch({ ui: { autoStart: v } }, v ? "已开启自动启动" : "已关闭自动启动，需手动点「启动」")}
-      />
-    </section>
-
-    <!-- 评测录档（eval_recording；默认关，需要留语料复现时再开） -->
-    <section class="kotone-panel mt-4 flex flex-col gap-4 p-4">
-      <h2 class="text-sm font-semibold text-kotone-cyan/90">评测录档</h2>
-      <Toggle
-        checked={$settingsStore.evalRecording}
-        label="录制识别会话供评测回放"
-        desc="每次识别保存 wav + 会话 json 到 ~/.kotone/eval（最多留 200 场），供 kotone-cli eval 对比引擎；已录的档案不受影响"
-        onchange={(v) =>
-          void patch({ evalRecording: v }, v ? "已开启评测录档" : "已关闭评测录档（已有录档保留）")}
       />
     </section>
 

@@ -1,11 +1,11 @@
 <script lang="ts">
   /*
-   * 引擎与模型页（模型管理升级版）：
-   * - 顶部：模型存储位置（当前路径 + 更改[迁移] + 打开目录）；
-   * - restartNeeded 黄条（与标题栏「重启生效」联动）；
-   * - 按引擎分组的完整模型清单：名称/大小/流式标签/已下载/active 标记 +
-   *   下载（进度条）/ 删除（二次确认）/ 设为 active；
-   * - VAD 组件单列一组（不可设为 active）。
+   * 高级页（原引擎与模型页收纳）：
+   * - 默认收起：摘要面板只显示「当前引擎 · 活动模型 · 就绪状态」，普通用户无需展开；
+   * - restartNeeded 黄条常显（收起时也提示，与标题栏「重启生效」联动）；
+   * - 展开后：模型存储位置（更改[迁移]/打开目录）→ 按引擎分组的完整模型清单
+   *   （下载进度/删除二次确认/设为 active）→ VAD 组件组 → 评测录档开关；
+   * - mock 联调引擎仅在此页出现，且沉底弱标识，普通视图绝不出现。
    */
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
@@ -19,6 +19,7 @@
     getModelsDir,
     setModelsDir,
     openModelsDir,
+    updateSettings,
     isTauri,
     type DownloadProgress,
     type EngineInfo,
@@ -28,6 +29,7 @@
   import { settingsStore, toast, toastWarn, errText } from "../../../lib/stores/ui";
   import { runtimeStore } from "../../../lib/stores/runtime";
   import { spotlight } from "../../../lib/actions/spotlight";
+  import Toggle from "../../../lib/components/Toggle.svelte";
   import stickerCurious from "../../../assets/brand/stickers/curious.png";
 
   let engines = $state<EngineInfo[] | null>(null);
@@ -42,6 +44,8 @@
   let editingDir = $state(false);
   let dirDraft = $state("");
   let migrating = $state(false);
+  /** 高级区默认收起：普通视图只看一句话摘要 */
+  let expanded = $state(false);
 
   const downloadingAny = $derived(Object.keys(dlProgress).length > 0);
 
@@ -244,12 +248,71 @@
   const orderedEngines = $derived(
     (engines ?? []).slice().sort((a, b) => Number(a.id === "mock-stream") - Number(b.id === "mock-stream")),
   );
+
+  // ---------- 收起态摘要 ----------
+
+  const currentEngine = $derived(engines?.find((e) => e.id === $settingsStore?.sttEngine) ?? null);
+  const summaryEngine = $derived(
+    engines === null ? "读取中…" : (currentEngine?.displayName ?? "未选择引擎"),
+  );
+  const summaryModel = $derived(currentEngine ? activeModelOf(currentEngine.id) : "—");
+  const summaryStatus = $derived(
+    engines === null
+      ? "正在清点引擎"
+      : currentEngine == null
+        ? "未选择引擎"
+        : currentEngine.isReady
+          ? "就绪"
+          : "未就绪（模型未下载）",
+  );
+
+  /** 评测录档开关（updateSettings 局部补丁，与通用页 patch 同模式） */
+  async function patch(patchObj: Record<string, unknown>, okText: string) {
+    try {
+      settingsStore.set(await updateSettings(patchObj));
+      toast(true, okText);
+    } catch (e) {
+      toast(false, `保存失败：${errText(e)}`);
+    }
+  }
 </script>
 
 <div class="px-6 py-5">
-  <h1 class="text-lg font-bold">引擎与模型</h1>
-  <p class="mt-0.5 text-[11px] text-white/45">识别引擎随时可换，模型本地运行</p>
+  <h1 class="text-lg font-bold">高级</h1>
+  <p class="mt-0.5 text-[11px] text-white/45">引擎、模型与录档等进阶设置，日常使用无需调整</p>
 
+  <!-- 摘要面板（默认收起）：一句话看懂当前引擎 · 模型 · 状态 -->
+  <section class="kotone-panel mt-4 p-4">
+    <button class="flex w-full items-center gap-3 text-left" onclick={() => (expanded = !expanded)}>
+      <div class="min-w-0 flex-1">
+        <p class="truncate text-sm font-medium">{summaryEngine} · {summaryModel}</p>
+        <p
+          class="mt-0.5 text-[11px] {summaryStatus === '就绪'
+            ? 'text-kotone-cyan/80'
+            : 'text-white/40'}"
+        >
+          {summaryStatus}
+        </p>
+      </div>
+      <span
+        class="shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/85 ring-1 ring-white/15 transition hover:bg-white/20"
+      >
+        {expanded ? "收起" : "展开"}
+      </span>
+    </button>
+  </section>
+
+  <!-- restartNeeded 提示（与标题栏联动，收起时也常显） -->
+  {#if $runtimeStore?.restartNeeded}
+    <div class="mt-4 flex items-center gap-2 rounded-lg bg-yellow-400/10 px-3 py-2 ring-1 ring-yellow-400/40">
+      <span class="h-2 w-2 shrink-0 rounded-full bg-yellow-400"></span>
+      <p class="text-[11px] text-yellow-200/90">
+        引擎 / 活动模型已变更，运行中的实例仍用旧配置——点标题栏「重启生效」后按新配置运行。
+      </p>
+    </div>
+  {/if}
+
+  {#if expanded}
   <!-- 模型存储位置 -->
   <section class="kotone-panel mt-4 p-4">
     <h2 class="text-sm font-semibold text-kotone-cyan/90">模型存储位置</h2>
@@ -301,16 +364,6 @@
       </div>
     {/if}
   </section>
-
-  <!-- restartNeeded 提示（与标题栏联动） -->
-  {#if $runtimeStore?.restartNeeded}
-    <div class="mt-4 flex items-center gap-2 rounded-lg bg-yellow-400/10 px-3 py-2 ring-1 ring-yellow-400/40">
-      <span class="h-2 w-2 shrink-0 rounded-full bg-yellow-400"></span>
-      <p class="text-[11px] text-yellow-200/90">
-        引擎 / 活动模型已变更，运行中的实例仍用旧配置——点标题栏「重启生效」后按新配置运行。
-      </p>
-    </div>
-  {/if}
 
   {#if engines === null}
     <div class="mt-10 flex flex-col items-center gap-3">
@@ -557,5 +610,20 @@
     <p class="mt-3 text-[11px] text-white/40">
       未就绪的引擎（模型未下载）「启动」时会报出具体缺失项；切换引擎 / 活动模型后如已「启动」，需点标题栏「重启生效」。
     </p>
+  {/if}
+
+  <!-- 评测录档（eval_recording；默认关，需要留语料复现时再开） -->
+  {#if $settingsStore}
+    <section class="kotone-panel mt-4 flex flex-col gap-4 p-4">
+      <h2 class="text-sm font-semibold text-kotone-cyan/90">评测录档</h2>
+      <Toggle
+        checked={$settingsStore.evalRecording}
+        label="录制识别会话供评测回放"
+        desc="每次识别保存 wav + 会话 json 到 ~/.kotone/eval（最多留 200 场），供 kotone-cli eval 对比引擎；已录的档案不受影响"
+        onchange={(v) =>
+          void patch({ evalRecording: v }, v ? "已开启评测录档" : "已关闭评测录档（已有录档保留）")}
+      />
+    </section>
+  {/if}
   {/if}
 </div>
