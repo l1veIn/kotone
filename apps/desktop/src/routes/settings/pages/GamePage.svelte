@@ -30,7 +30,8 @@
   // ---------- 内联编辑器状态 ----------
   /** 展开编辑中的 profile id（null = 全部收起） */
   let editingId = $state<string | null>(null);
-  /** 编辑草稿（structuredClone 深拷贝，保存才落盘） */
+  /** 编辑草稿（$state.snapshot 取纯数据深拷贝——$state 数组元素是 Proxy，
+   *  structuredClone 不认会抛 DataCloneError；保存才落盘） */
   let draft = $state<GameProfile | null>(null);
   let newHotword = $state("");
   let saving = $state(false);
@@ -60,7 +61,7 @@
 
   function openEditor(p: GameProfile) {
     editingId = p.id;
-    draft = structuredClone(p);
+    draft = $state.snapshot(p);
     newHotword = "";
   }
 
@@ -75,7 +76,7 @@
     saving = true;
     try {
       await saveProfile(draft);
-      profiles = profiles.map((p) => (p.id === draft!.id ? structuredClone(draft!) : p));
+      profiles = profiles.map((p) => (p.id === draft!.id ? $state.snapshot(draft!) : p));
       toast(true, "profile 已保存（热词下次识别生效）");
       closeEditor();
     } catch (e) {
