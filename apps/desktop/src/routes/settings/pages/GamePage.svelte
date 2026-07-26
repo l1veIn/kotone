@@ -2,7 +2,7 @@
   /*
    * 游戏适配页（瘦身版）：profile 游戏卡片（激活开关）+ 内联 profile 编辑器。
    * - 编辑器：发送键配置（openChatKey/sendKey）、聊天框模式（preferClipboardPaste）、
-   *   热词管理（chips 逐条删除 / 添加 / 导出 / 导入）；
+   *   热词管理（批量文本编辑：每行一个词条，与导入/导出同构 / 导出 / 导入）；
    * - 热词表格式：UTF-8 纯文本，每行一词条（底层 Vec<String>，无权重）；
    * - 导入为合并模式：跳过空行、精确匹配去重，报告「新增 N / 重复 M」；
    * - Tauri 走系统保存/打开对话框 + export_hotwords/import_hotwords IPC；
@@ -21,7 +21,7 @@
     isTauri,
     type GameProfile,
   } from "../../../lib/ipc";
-  import { settingsStore, toast, toastWarn, errText } from "../../../lib/stores/ui";
+  import { settingsStore, toast, errText } from "../../../lib/stores/ui";
   import { spotlight } from "../../../lib/actions/spotlight";
   import Toggle from "../../../lib/components/Toggle.svelte";
 
@@ -33,12 +33,18 @@
   /** 编辑草稿（$state.snapshot 取纯数据深拷贝——$state 数组元素是 Proxy，
    *  structuredClone 不认会抛 DataCloneError；保存才落盘） */
   let draft = $state<GameProfile | null>(null);
-  let newHotword = $state("");
+  /** 热词批量编辑文本（每行一个词条，与导入/导出 txt 格式同构） */
+  let hotwordsText = $state("");
   let saving = $state(false);
   let importing = $state(false);
   /** dev:web 导入用隐藏文件选择器 */
   let fileInput = $state<HTMLInputElement | null>(null);
   let importTargetId = $state<string | null>(null);
+
+  /** 实时词条数：非空 trim 行数（不去重——去重在保存时做并提示） */
+  const hotwordCount = $derived(
+    hotwordsText.split(/\r?\n/).filter((l) => l.trim() !== "").length,
+  );
 
   onMount(async () => {
     try {
@@ -62,45 +68,38 @@
   function openEditor(p: GameProfile) {
     editingId = p.id;
     draft = $state.snapshot(p);
-    newHotword = "";
+    hotwordsText = p.hotwords.join("\n");
   }
 
   function closeEditor() {
     editingId = null;
     draft = null;
-    newHotword = "";
+    hotwordsText = "";
   }
 
   async function onSave() {
     if (!draft || saving) return;
     saving = true;
     try {
-      await saveProfile(draft);
-      profiles = profiles.map((p) => (p.id === draft!.id ? $state.snapshot(draft!) : p));
-      toast(true, "profile 已保存（热词下次识别生效）");
+      // 热词规范化：与 core parse_hotwords_import 同款规则
+      // （trim、去空行、保序去重）；有重复被合并则提示
+      const normalized = parseImport(hotwordsText);
+      const duplicates = hotwordCount - normalized.length;
+      const next = { ...$state.snapshot(draft), hotwords: normalized };
+      await saveProfile(next);
+      profiles = profiles.map((p) => (p.id === next.id ? next : p));
+      toast(
+        true,
+        duplicates > 0
+          ? `profile 已保存，已合并 ${duplicates} 个重复（热词下次识别生效）`
+          : "profile 已保存（热词下次识别生效）",
+      );
       closeEditor();
     } catch (e) {
       toast(false, `保存失败：${errText(e)}`);
     } finally {
       saving = false;
     }
-  }
-
-  function addHotword() {
-    if (!draft) return;
-    const w = newHotword.trim();
-    if (!w) return;
-    if (draft.hotwords.includes(w)) {
-      toastWarn(`热词已存在：${w}`);
-      return;
-    }
-    draft.hotwords = [...draft.hotwords, w];
-    newHotword = "";
-  }
-
-  function removeHotword(w: string) {
-    if (!draft) return;
-    draft.hotwords = draft.hotwords.filter((x) => x !== w);
   }
 
   // ---------- 热词导入导出 ----------
@@ -137,12 +136,12 @@
     return { merged, added, duplicates: incoming.length - added };
   }
 
-  /** 导入后刷新 profile 列表；若编辑器开着同一 profile，同步草稿里的热词 */
+  /** 导入后刷新 profile 列表；若编辑器开着同一 profile，同步编辑器里的热词文本 */
   async function refreshAfterImport(profileId: string) {
     profiles = await listProfiles();
     if (editingId === profileId && draft) {
       const fresh = profiles.find((p) => p.id === profileId);
-      if (fresh) draft.hotwords = [...fresh.hotwords];
+      if (fresh) hotwordsText = fresh.hotwords.join("\n");
     }
   }
 
@@ -308,7 +307,7 @@
             <div class="mt-4">
               <div class="flex items-center justify-between gap-2">
                 <p class="text-[10px] font-semibold tracking-wide text-white/40">
-                  热词（{draft.hotwords.length} 个，下次识别生效）
+                  热词（{hotwordCount} 个，下次识别生效）
                 </p>
                 <div class="flex shrink-0 gap-1.5">
                   <button
@@ -327,46 +326,16 @@
                   </button>
                 </div>
               </div>
-              {#if draft.hotwords.length > 0}
-                <div class="mt-2 flex flex-wrap gap-1.5">
-                  {#each draft.hotwords as w}
-                    <span
-                      class="group inline-flex items-center gap-1 rounded-full bg-kotone-violet/15 py-0.5 pr-1 pl-2.5 text-[11px] text-kotone-violet ring-1 ring-kotone-violet/30"
-                    >
-                      {w}
-                      <button
-                        class="flex h-3.5 w-3.5 items-center justify-center rounded-full text-kotone-violet/60 transition hover:bg-kotone-pink/30 hover:text-kotone-pink"
-                        title="删除该热词"
-                        aria-label="删除热词 {w}"
-                        onclick={() => removeHotword(w)}
-                      >
-                        ×
-                      </button>
-                    </span>
-                  {/each}
-                </div>
-              {:else}
-                <p class="mt-2 text-[11px] text-white/35">还没有热词——添加游戏术语可显著提升识别准确率</p>
-              {/if}
-              <div class="mt-2 flex items-center gap-2">
-                <input
-                  bind:value={newHotword}
-                  placeholder="输入热词，回车添加"
-                  spellcheck="false"
-                  class="min-w-0 flex-1 rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/60"
-                  onkeydown={(e) => {
-                    if (e.key === "Enter") addHotword();
-                  }}
-                />
-                <button
-                  class="shrink-0 rounded-lg bg-kotone-cyan/20 px-3 py-1.5 text-xs font-semibold text-kotone-cyan transition hover:bg-kotone-cyan/30 active:scale-95"
-                  onclick={addHotword}
-                >
-                  添加
-                </button>
-              </div>
+              <!-- 批量文本编辑：每行一个词条，与导入/导出 txt 格式同构（几百上千条可用） -->
+              <textarea
+                bind:value={hotwordsText}
+                rows={10}
+                placeholder={"每行一个词条，保存时自动去重\n例：\n打野\n中路MISS\n纳什男爵"}
+                spellcheck="false"
+                class="kotone-scroll mt-2 w-full resize-y rounded-lg bg-white/8 px-2.5 py-2 font-mono text-xs leading-relaxed ring-1 ring-white/15 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/60"
+              ></textarea>
               <p class="mt-1.5 text-[10px] text-white/35">
-                导入为合并模式：UTF-8 文本每行一词条，自动跳过空行与重复；导入立即保存。
+                每行一个词条，保存时自动去重；导入为合并模式（UTF-8 文本同格式，跳过空行与重复，导入立即保存）。
               </p>
             </div>
 
