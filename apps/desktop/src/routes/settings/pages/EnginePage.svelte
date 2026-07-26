@@ -295,8 +295,6 @@
         {@const enModels = modelsOf(en.id)}
         {@const selectable = enModels.filter((m) => isSelectableModel(m))}
         {@const runtimes = enModels.filter((m) => !isSelectableModel(m))}
-        {@const downloaded = selectable.filter((m) => m.downloaded)}
-        {@const notDownloaded = selectable.filter((m) => !m.downloaded)}
         <div class="kotone-card p-4 {active ? 'border-kotone-cyan/50 shadow-glow-cyan' : ''}">
           <div class="flex items-center gap-3">
             <div class="min-w-0 flex-1">
@@ -329,97 +327,95 @@
             {/if}
           </div>
 
-          <!-- 模型：「选择」（radio，点击即切 active）与「下载」（独立分区）视觉分离 -->
+          <!-- 模型：恒显完整清单（含未下载）——已下载行 radio 可选，未下载行置灰 + 行尾下载 -->
           {#if selectable.length > 0}
             <p class="mt-3 text-[10px] font-semibold tracking-wide text-white/40">
-              模型选择（点击即切换）
+              模型（点击已下载行即切换）
             </p>
             <div class="mt-1.5 flex flex-col gap-1.5" role="radiogroup" aria-label="{en.displayName} 模型选择">
-              {#each downloaded as m}
+              {#each selectable as m}
                 {@const isActive = activeModelOf(en.id) === m.id}
-                <div
-                  role="radio"
-                  aria-checked={isActive}
-                  tabindex="0"
-                  class="flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 ring-1 transition
-                    {isActive
-                    ? 'bg-kotone-cyan/10 ring-kotone-cyan/60 shadow-glow-cyan'
-                    : 'bg-white/4 ring-white/10 hover:bg-white/8 hover:ring-white/25'}"
-                  onclick={() => !isActive && void onSetActive(en.id, m.id)}
-                  onkeydown={(e) => {
-                    if (e.key === "Enter" && !isActive) void onSetActive(en.id, m.id);
-                  }}
-                >
-                  <span
-                    class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full ring-2 {isActive
-                      ? 'ring-kotone-cyan'
-                      : 'ring-white/30'}"
+                {#if m.downloaded}
+                  <div
+                    role="radio"
+                    aria-checked={isActive}
+                    tabindex="0"
+                    class="flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 ring-1 transition
+                      {isActive
+                      ? 'bg-kotone-cyan/10 ring-kotone-cyan/60 shadow-glow-cyan'
+                      : 'bg-white/4 ring-white/10 hover:bg-white/8 hover:ring-white/25'}"
+                    onclick={() => !isActive && void onSetActive(en.id, m.id)}
+                    onkeydown={(e) => {
+                      if (e.key === "Enter" && !isActive) void onSetActive(en.id, m.id);
+                    }}
                   >
-                    {#if isActive}
-                      <span class="h-1.5 w-1.5 rounded-full bg-kotone-cyan shadow-glow-cyan"></span>
-                    {/if}
-                  </span>
-                  <div class="min-w-0 flex-1">
-                    <p class="truncate text-[12px] {isActive ? 'font-semibold text-kotone-cyan' : 'text-white/80'}">
-                      {m.displayName}
-                    </p>
-                    <p class="mt-0.5 text-[10px] text-white/35">
-                      {m.id} · {formatSize(m.sizeBytes)}{en.capabilities.streaming ? " · 流式" : ""}
-                    </p>
-                  </div>
-                  {#if isActive}
-                    <span class="shrink-0 rounded bg-kotone-cyan/20 px-1.5 py-0.5 text-[10px] font-semibold text-kotone-cyan">
-                      active
+                    <span
+                      class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full ring-2 {isActive
+                        ? 'ring-kotone-cyan'
+                        : 'ring-white/30'}"
+                    >
+                      {#if isActive}
+                        <span class="h-1.5 w-1.5 rounded-full bg-kotone-cyan shadow-glow-cyan"></span>
+                      {/if}
                     </span>
-                  {/if}
-                  {#if confirmingDelete === m.id}
-                    <button
-                      class="shrink-0 rounded-lg bg-kotone-pink px-2.5 py-1 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95 disabled:opacity-50"
-                      disabled={deleting !== null}
-                      onclick={(e) => {
-                        e.stopPropagation();
-                        void onDelete(m.id);
-                      }}
-                    >
-                      {deleting === m.id ? "删除中…" : "确认删除"}
-                    </button>
-                    <button
-                      class="shrink-0 rounded-lg bg-white/10 px-2 py-1 text-[11px] text-white/60 transition hover:bg-white/20"
-                      onclick={(e) => {
-                        e.stopPropagation();
-                        confirmingDelete = null;
-                      }}
-                    >
-                      取消
-                    </button>
-                  {:else}
-                    <button
-                      class="shrink-0 rounded-lg bg-white/8 px-2 py-1 text-[11px] text-white/45 ring-1 ring-white/12 transition hover:bg-kotone-pink/20 hover:text-kotone-pink active:scale-95"
-                      title="删除模型文件"
-                      onclick={(e) => {
-                        e.stopPropagation();
-                        confirmingDelete = m.id;
-                      }}
-                    >
-                      删除
-                    </button>
-                  {/if}
-                </div>
-              {:else}
-                <p class="rounded-lg bg-white/4 px-3 py-2 text-[11px] text-white/40 ring-1 ring-white/8">
-                  该引擎还没有已下载的模型，先在下方「可下载」区下载。
-                </p>
-              {/each}
-            </div>
-
-            {#if notDownloaded.length > 0}
-              <p class="mt-3 text-[10px] font-semibold tracking-wide text-white/40">可下载</p>
-              <div class="mt-1.5 flex flex-col gap-1.5">
-                {#each notDownloaded as m}
-                  <div class="rounded-lg border border-dashed border-white/15 bg-white/3 px-3 py-2">
-                    <div class="flex items-center justify-between gap-2">
+                    <div class="min-w-0 flex-1">
+                      <p class="truncate text-[12px] {isActive ? 'font-semibold text-kotone-cyan' : 'text-white/80'}">
+                        {m.displayName}
+                      </p>
+                      <p class="mt-0.5 text-[10px] text-white/35">
+                        {m.id} · {formatSize(m.sizeBytes)}{en.capabilities.streaming ? " · 流式" : ""}
+                      </p>
+                    </div>
+                    {#if isActive}
+                      <span class="shrink-0 rounded bg-kotone-cyan/20 px-1.5 py-0.5 text-[10px] font-semibold text-kotone-cyan">
+                        active
+                      </span>
+                    {/if}
+                    {#if confirmingDelete === m.id}
+                      <button
+                        class="shrink-0 rounded-lg bg-kotone-pink px-2.5 py-1 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95 disabled:opacity-50"
+                        disabled={deleting !== null}
+                        onclick={(e) => {
+                          e.stopPropagation();
+                          void onDelete(m.id);
+                        }}
+                      >
+                        {deleting === m.id ? "删除中…" : "确认删除"}
+                      </button>
+                      <button
+                        class="shrink-0 rounded-lg bg-white/10 px-2 py-1 text-[11px] text-white/60 transition hover:bg-white/20"
+                        onclick={(e) => {
+                          e.stopPropagation();
+                          confirmingDelete = null;
+                        }}
+                      >
+                        取消
+                      </button>
+                    {:else}
+                      <button
+                        class="shrink-0 rounded-lg bg-white/8 px-2 py-1 text-[11px] text-white/45 ring-1 ring-white/12 transition hover:bg-kotone-pink/20 hover:text-kotone-pink active:scale-95"
+                        title="删除模型文件"
+                        onclick={(e) => {
+                          e.stopPropagation();
+                          confirmingDelete = m.id;
+                        }}
+                      >
+                        删除
+                      </button>
+                    {/if}
+                  </div>
+                {:else}
+                  <!-- 未下载：radio 置灰不可选，行尾下载按钮 / 进度条 -->
+                  <div
+                    role="radio"
+                    aria-checked="false"
+                    aria-disabled="true"
+                    class="rounded-lg bg-white/3 px-3 py-2 ring-1 ring-white/8"
+                  >
+                    <div class="flex cursor-not-allowed items-center gap-2.5">
+                      <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full ring-2 ring-white/15"></span>
                       <div class="min-w-0 flex-1">
-                        <p class="truncate text-[12px] text-white/55">{m.displayName}</p>
+                        <p class="truncate text-[12px] text-white/45">{m.displayName}</p>
                         <p class="mt-0.5 text-[10px] text-white/30">
                           {m.id} · {formatSize(m.sizeBytes)}{en.capabilities.streaming ? " · 流式" : ""}
                         </p>
@@ -445,12 +441,15 @@
                       </div>
                     {/if}
                   </div>
-                {/each}
-              </div>
-            {/if}
+                {/if}
+              {/each}
+            </div>
           {/if}
 
           <!-- 运行时组件（whisper-cli 等：只下载/删除，不参与模型选择） -->
+          {#if runtimes.length > 0}
+            <p class="mt-3 text-[10px] font-semibold tracking-wide text-white/40">运行时组件</p>
+          {/if}
           {#each runtimes as m}
             <div class="mt-3 rounded-lg bg-white/5 px-3 py-2 ring-1 ring-white/8">
               <div class="flex items-center justify-between gap-2">
