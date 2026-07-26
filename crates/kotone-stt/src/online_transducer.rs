@@ -30,10 +30,26 @@ pub struct OnlineTransducerSpec {
     pub encoder_file: &'static str,
     pub decoder_file: &'static str,
     pub joiner_file: &'static str,
-    /// Some = 模型使用 cjkchar+bpe 建模单元（X-ASR），需同时下发 bpe_vocab 路径
+    /// Some = 模型为 cjkchar+bpe 建模单元（X-ASR），值是热词用的**文本** vocab
+    /// 文件名（bpe.vocab；不存在时可从 bpe.model 现场导出）。仅配置了热词时
+    /// 才会传给 C 侧，且传入前必经格式探测（P0：二进制 bpe.model 会让 C++ exit）
     pub bpe_vocab_file: Option<&'static str>,
     /// 模型未下载时的错误提示
     pub not_ready_hint: &'static str,
+}
+
+/// bpe_vocab 门控（P0 止血核心，纯函数便于无 feature 测试）：
+/// C++ Validate 要求 modeling_unit=cjkchar+bpe 时 bpe_vocab 必须指向存在的
+/// 文件，且创建 recognizer 时立即解析——格式不符直接 exit 进程。
+/// 因此只有「文本 vocab 存在且通过格式探测」才返回 Some（resolve 内部会
+/// 尝试从 bpe.model 现场导出兜底）；否则 None，调用方不得设置
+/// modeling_unit/bpe_vocab（识别不受影响，仅热词降级）。
+pub fn gated_bpe_vocab(
+    spec: &OnlineTransducerSpec,
+    dir: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    spec.bpe_vocab_file
+        .and_then(|name| crate::model::resolve_bpe_vocab(dir, name))
 }
 
 #[cfg(feature = "engine-sherpa")]
@@ -92,10 +108,24 @@ pub mod imp {
             config.model_config.tokens = Some(f("tokens.txt"));
             config.model_config.num_threads = threads;
             config.model_config.provider = Some("cpu".into());
-            // cjkchar+bpe 建模单元（X-ASR）：官方导出附带的 bpe.model 一并下发
-            if let Some(bpe) = self.spec.bpe_vocab_file {
-                config.model_config.modeling_unit = Some("cjkchar+bpe".into());
-                config.model_config.bpe_vocab = Some(f(bpe));
+            // cjkchar+bpe 建模单元（X-ASR）：C++ Validate 要求 bpe_vocab 指向
+            // 存在文件且创建时立即解析（格式不符直接 exit，P0 根因）——
+            // 只有探测合格才设置 modeling_unit+bpe_vocab，否则整体不设
+            // （识别不受影响，仅热词降级）
+            if self.spec.bpe_vocab_file.is_some() {
+                match gated_bpe_vocab(self.spec, &dir) {
+                    Some(vocab) => {
+                        config.model_config.modeling_unit = Some("cjkchar+bpe".into());
+                        config.model_config.bpe_vocab =
+                            Some(vocab.to_string_lossy().into_owned());
+                    }
+                    None => {
+                        kotone_core::log::log(&format!(
+                            "{}: bpe.vocab 缺失或格式不符，未设置 cjkchar+bpe（识别不受影响，热词降级）",
+                            self.spec.engine_id
+                        ));
+                    }
+                }
             }
             // modified_beam_search：contextual biasing（per-stream 热词）只支持该
             // 解码器；greedy_search 遇到带热词的 stream 会 SHERPA_ONNX_EXIT

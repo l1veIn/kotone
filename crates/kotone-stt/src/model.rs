@@ -521,7 +521,11 @@ pub fn download(id: &str, progress: Progress<'_>) -> Result<(), String> {
         return download::download_file(m.url, &dest, Some(m.sha256), progress);
     }
     if let Some(m) = SHERPA_MODELS.iter().find(|m| m.id == id) {
-        return download_multi(m, progress);
+        let result = download_multi(m, progress);
+        if result.is_ok() {
+            maybe_export_bpe_vocab(&models_dir().join(m.dir));
+        }
+        return result;
     }
     Err(format!(
         "未知模型：{id}（可选：{}）",
@@ -665,6 +669,202 @@ fn model_ids() -> Vec<&'static str> {
         .chain(SHERPA_MODELS.iter().map(|m| m.id))
         .chain([VAD_MODEL_ID])
         .collect()
+}
+
+// ---------- bpe.vocab（cjkchar+bpe 模型热词用的文本词表） ----------
+
+/// 解析 sentencepiece bpe.model（二进制 protobuf），导出 sherpa-onnx 热词用的
+/// 文本 bpe.vocab（每行「token<TAB>score」，对齐官方 scripts/export_bpe_vocab.py）。
+/// 只依赖 protobuf wire format（pieces=field 1；Piece.piece=field 1 string，
+/// Piece.score=field 2 fixed32 float），不引 sentencepiece 依赖。
+/// 返回词片数。
+pub fn export_bpe_vocab(bpe_model: &std::path::Path, out: &std::path::Path) -> Result<usize, String> {
+    let data = fs::read(bpe_model)
+        .map_err(|e| format!("无法读取 {}：{e}", bpe_model.display()))?;
+    let mut pieces: Vec<(String, f32)> = Vec::new();
+    let mut i = 0usize;
+    while i < data.len() {
+        let key = pb_varint(&data, &mut i)?;
+        let (field, wire) = (key >> 3, key & 7);
+        if field == 1 && wire == 2 {
+            let n = pb_varint(&data, &mut i)? as usize;
+            if i + n > data.len() {
+                return Err("bpe.model 损坏（piece 消息截断）".into());
+            }
+            let msg = &data[i..i + n];
+            i += n;
+            pieces.push(pb_parse_piece(msg)?);
+        } else {
+            pb_skip(&data, &mut i, wire)?;
+        }
+    }
+    if pieces.is_empty() {
+        return Err("bpe.model 中未解析到任何词片（不是 sentencepiece 模型？）".into());
+    }
+    let mut text = String::new();
+    for (piece, score) in &pieces {
+        text.push_str(piece);
+        text.push('\t');
+        text.push_str(&score.to_string());
+        text.push('\n');
+    }
+    fs::write(out, text).map_err(|e| format!("无法写入 {}：{e}", out.display()))?;
+    Ok(pieces.len())
+}
+
+/// 文本 bpe.vocab 格式探测（P0 防御：C++ 解析失败会直接 exit 进程，
+/// 任何不合格输入都不得传下去）。抽样式检查：前 8KB 必须是合法 UTF-8、
+/// 无 NUL，且抽到的每个非空行都是「token score」两列、score 可解析为浮点。
+pub fn is_valid_bpe_vocab(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let Ok(mut f) = fs::File::open(path) else {
+        return false;
+    };
+    let mut buf = vec![0u8; 8192];
+    let Ok(n) = f.read(&mut buf) else {
+        return false;
+    };
+    if n == 0 {
+        return false;
+    }
+    // 8KB 边界可能截断多字节字符：退到最近的有效 UTF-8 前缀
+    let text = match std::str::from_utf8(&buf[..n]) {
+        Ok(t) => t,
+        Err(e) if e.valid_up_to() > 0 => std::str::from_utf8(&buf[..e.valid_up_to()]).unwrap(),
+        Err(_) => return false,
+    };
+    if text.contains('\0') {
+        return false;
+    }
+    let mut checked = 0usize;
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            continue;
+        }
+        let mut it = line.split_whitespace();
+        let (Some(_token), Some(score)) = (it.next(), it.next()) else {
+            return false;
+        };
+        if score.parse::<f64>().is_err() {
+            return false;
+        }
+        checked += 1;
+        if checked >= 16 {
+            break;
+        }
+    }
+    checked > 0
+}
+
+/// 解析可用的 bpe.vocab 路径（热词门控用）：
+/// 已存在且格式合格 → 直接用；缺失/不合格但目录里有 bpe.model → 现场导出
+/// 兜底（覆盖修复前已下载的老安装）；都不行 → None（调用方降级，不传 C 侧）。
+pub fn resolve_bpe_vocab(dir: &std::path::Path, vocab_name: &str) -> Option<PathBuf> {
+    let vocab = dir.join(vocab_name);
+    if is_valid_bpe_vocab(&vocab) {
+        return Some(vocab);
+    }
+    let model = dir.join("bpe.model");
+    if model.is_file()
+        && export_bpe_vocab(&model, &vocab).is_ok()
+        && is_valid_bpe_vocab(&vocab)
+    {
+        kotone_core::log::log(&format!(
+            "已从 bpe.model 导出热词词表 {}",
+            vocab.display()
+        ));
+        return Some(vocab);
+    }
+    None
+}
+
+/// 下载后处理：模型含 bpe.model 时顺手导出 bpe.vocab（尽力而为，失败不影响下载结果）
+fn maybe_export_bpe_vocab(dir: &std::path::Path) {
+    let model = dir.join("bpe.model");
+    let vocab = dir.join("bpe.vocab");
+    if !model.is_file() || is_valid_bpe_vocab(&vocab) {
+        return;
+    }
+    match export_bpe_vocab(&model, &vocab) {
+        Ok(n) => kotone_core::log::log(&format!(
+            "已导出热词词表 {}（{n} 词片）",
+            vocab.display()
+        )),
+        Err(e) => kotone_core::log::log(&format!("导出 bpe.vocab 失败（热词降级）：{e}")),
+    }
+}
+
+fn pb_varint(b: &[u8], i: &mut usize) -> Result<u64, String> {
+    let mut v: u64 = 0;
+    let mut shift = 0u32;
+    loop {
+        if *i >= b.len() {
+            return Err("protobuf 截断（varint）".into());
+        }
+        let byte = b[*i];
+        *i += 1;
+        v |= ((byte & 0x7f) as u64) << shift;
+        if byte & 0x80 == 0 {
+            return Ok(v);
+        }
+        shift += 7;
+        if shift >= 64 {
+            return Err("protobuf varint 过长".into());
+        }
+    }
+}
+
+fn pb_skip(b: &[u8], i: &mut usize, wire: u64) -> Result<(), String> {
+    match wire {
+        0 => {
+            pb_varint(b, i)?;
+        }
+        1 => *i += 8,
+        2 => *i += pb_varint(b, i)? as usize,
+        5 => *i += 4,
+        _ => return Err(format!("protobuf 未知 wire type {wire}")),
+    }
+    if *i > b.len() {
+        return Err("protobuf 截断（字段）".into());
+    }
+    Ok(())
+}
+
+/// 解析 sentencepiece Piece 子消息 → (token, score)
+fn pb_parse_piece(msg: &[u8]) -> Result<(String, f32), String> {
+    let mut piece: Option<String> = None;
+    let mut score: f32 = 0.0;
+    let mut j = 0usize;
+    while j < msg.len() {
+        let key = pb_varint(msg, &mut j)?;
+        let (field, wire) = (key >> 3, key & 7);
+        match (field, wire) {
+            (1, 2) => {
+                let n = pb_varint(msg, &mut j)? as usize;
+                if j + n > msg.len() {
+                    return Err("bpe.model 损坏（piece token 截断）".into());
+                }
+                piece = Some(
+                    std::str::from_utf8(&msg[j..j + n])
+                        .map_err(|_| "bpe.model 损坏（token 非 UTF-8）".to_string())?
+                        .to_string(),
+                );
+                j += n;
+            }
+            (2, 5) => {
+                if j + 4 > msg.len() {
+                    return Err("bpe.model 损坏（piece score 截断）".into());
+                }
+                score = f32::from_le_bytes(msg[j..j + 4].try_into().unwrap());
+                j += 4;
+            }
+            _ => pb_skip(msg, &mut j, wire)?,
+        }
+    }
+    piece
+        .map(|p| (p, score))
+        .ok_or_else(|| "bpe.model 损坏（piece 缺少 token）".to_string())
 }
 
 /// 下载并安装 whisper-cli 运行时：
@@ -1221,6 +1421,101 @@ mod tests {
     fn download_unknown_model_errors() {
         let err = download("no-such-model", &|_, _| {}).unwrap_err();
         assert!(err.contains("未知模型"), "err: {err}");
+    }
+
+    // ---------- bpe.vocab 导出 / 探测 / 门控解析（P0） ----------
+
+    /// 手工编码一个 sentencepiece Piece（field1=token string, field2=fixed32 score），
+    /// 再包一层 ModelProto pieces（field 1, wire 2）
+    fn sp_model(pieces: &[(&str, f32)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (token, score) in pieces {
+            let mut msg = vec![0x0a, token.len() as u8];
+            msg.extend_from_slice(token.as_bytes());
+            msg.push(0x15);
+            msg.extend_from_slice(&score.to_le_bytes());
+            out.push(0x0a);
+            out.push(msg.len() as u8);
+            out.extend_from_slice(&msg);
+        }
+        out
+    }
+
+    #[test]
+    fn export_bpe_vocab_from_synthetic_model() {
+        let tmp = tempfile::tempdir().unwrap();
+        let model = tmp.path().join("bpe.model");
+        let vocab = tmp.path().join("bpe.vocab");
+        fs::write(
+            &model,
+            sp_model(&[("<blk>", 0.0), ("▁HEL", -1.5), ("LOW", -2.0)]),
+        )
+        .unwrap();
+        let n = export_bpe_vocab(&model, &vocab).unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(fs::read_to_string(&vocab).unwrap(), "<blk>\t0\n▁HEL\t-1.5\nLOW\t-2\n");
+        assert!(is_valid_bpe_vocab(&vocab), "导出的 vocab 应通过格式探测");
+    }
+
+    #[test]
+    fn export_bpe_vocab_rejects_garbage() {
+        let tmp = tempfile::tempdir().unwrap();
+        let model = tmp.path().join("bpe.model");
+        fs::write(&model, b"not a protobuf at all \xff\xff\xff\xff").unwrap();
+        assert!(export_bpe_vocab(&model, &tmp.path().join("bpe.vocab")).is_err());
+    }
+
+    #[test]
+    fn bpe_vocab_probe_accepts_text_rejects_binary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ok = tmp.path().join("ok.vocab");
+        fs::write(&ok, "<blk>\t0\n▁AB\t-1.5\nCD\t-2.25\n").unwrap();
+        assert!(is_valid_bpe_vocab(&ok));
+
+        // 二进制 sentencepiece（真实事故文件的头部特征：含 NUL）
+        let bin = tmp.path().join("bin.vocab");
+        fs::write(
+            &bin,
+            [0x0a, 0x0e, 0x0a, 0x05, b'<', b'b', b'l', b'k', b'>', 0x15, 0, 0, 0, 0],
+        )
+        .unwrap();
+        assert!(!is_valid_bpe_vocab(&bin), "二进制不得通过探测");
+
+        // 单列文本 / 非浮点 score / 空文件 / 不存在
+        let one_col = tmp.path().join("one.vocab");
+        fs::write(&one_col, "token\nanother\n").unwrap();
+        assert!(!is_valid_bpe_vocab(&one_col));
+        let bad_score = tmp.path().join("bad.vocab");
+        fs::write(&bad_score, "token\tnan-x\n").unwrap();
+        assert!(!is_valid_bpe_vocab(&bad_score));
+        let empty = tmp.path().join("empty.vocab");
+        fs::write(&empty, b"").unwrap();
+        assert!(!is_valid_bpe_vocab(&empty));
+        assert!(!is_valid_bpe_vocab(&tmp.path().join("missing.vocab")));
+    }
+
+    #[test]
+    fn resolve_bpe_vocab_exports_from_bpe_model_lazily() {
+        // 只有 bpe.model 的老安装目录 → 现场导出兜底
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("bpe.model"),
+            sp_model(&[("<blk>", 0.0), ("▁AB", -1.0)]),
+        )
+        .unwrap();
+        let got = resolve_bpe_vocab(tmp.path(), "bpe.vocab").unwrap();
+        assert!(got.ends_with("bpe.vocab"));
+        assert!(is_valid_bpe_vocab(&got));
+
+        // 空目录 → None（调用方降级，不传 C 侧）
+        let tmp2 = tempfile::tempdir().unwrap();
+        assert_eq!(resolve_bpe_vocab(tmp2.path(), "bpe.vocab"), None);
+
+        // vocab 已是合格文本 → 直接用，不重导
+        let tmp3 = tempfile::tempdir().unwrap();
+        let v = tmp3.path().join("bpe.vocab");
+        fs::write(&v, "x\t-0.5\n").unwrap();
+        assert_eq!(resolve_bpe_vocab(tmp3.path(), "bpe.vocab"), Some(v));
     }
 
     // ---------- models_dir_from / active_model_from（纯函数） ----------

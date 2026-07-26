@@ -27,7 +27,7 @@ pub(crate) const SPEC: OnlineTransducerSpec = OnlineTransducerSpec {
     encoder_file: "encoder.int8.onnx",
     decoder_file: "decoder.onnx",
     joiner_file: "joiner.int8.onnx",
-    bpe_vocab_file: Some("bpe.model"), // cjkchar+bpe 建模单元
+    bpe_vocab_file: Some("bpe.vocab"), // cjkchar+bpe；文本词表（可由 bpe.model 导出）
     not_ready_hint:
         "X-ASR 模型未下载。请在设置页下载，或运行 kotone-cli download x-asr",
 };
@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn spec_uses_cjkchar_bpe() {
-        assert_eq!(SPEC.bpe_vocab_file, Some("bpe.model"));
+        assert_eq!(SPEC.bpe_vocab_file, Some("bpe.vocab"));
         // X-ASR 与 zipformer 清单条目各归各的引擎
         let m = crate::model::SHERPA_MODELS
             .iter()
@@ -104,6 +104,48 @@ mod tests {
         for need in [SPEC.encoder_file, SPEC.decoder_file, SPEC.joiner_file] {
             assert!(names.contains(&need), "清单缺少 {need}");
         }
+    }
+
+    /// P0 回归：bpe_vocab 门控——只有「文本 vocab 存在且格式合格」才放行
+    /// （C++ Validate 要求文件存在、创建时立即解析，二进制直接 exit）。
+    /// 二进制 bpe.model 场景下 resolve 应现场导出文本 vocab 兜底。
+    #[test]
+    fn bpe_vocab_gating() {
+        use crate::online_transducer::gated_bpe_vocab;
+
+        // 合格文本 vocab → Some
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("bpe.vocab"), b"token\t-1.5\n").unwrap();
+        assert_eq!(
+            gated_bpe_vocab(&SPEC, tmp.path()),
+            Some(tmp.path().join("bpe.vocab"))
+        );
+
+        // vocab 是二进制（P0 事故文件）且无 bpe.model 兜底 → None（不传 C 侧）
+        let tmp2 = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp2.path().join("bpe.vocab"),
+            [0x0a, 0x0e, 0x0a, 0x05, b'<', b'b', b'l', b'k', b'>', 0x00, 0x00],
+        )
+        .unwrap();
+        assert_eq!(gated_bpe_vocab(&SPEC, tmp2.path()), None);
+
+        // vocab 缺失 + 空目录 → None
+        let tmp3 = tempfile::tempdir().unwrap();
+        assert_eq!(gated_bpe_vocab(&SPEC, tmp3.path()), None);
+
+        // 只有 bpe.model（真实用户目录形态）→ 现场导出文本 vocab 并放行
+        let tmp4 = tempfile::tempdir().unwrap();
+        let mut piece = vec![0x0a, 0x05];
+        piece.extend_from_slice(b"<blk>");
+        piece.push(0x15);
+        piece.extend_from_slice(&0.0f32.to_le_bytes());
+        let mut model = vec![0x0a, piece.len() as u8];
+        model.extend_from_slice(&piece);
+        std::fs::write(tmp4.path().join("bpe.model"), model).unwrap();
+        let got = gated_bpe_vocab(&SPEC, tmp4.path()).unwrap();
+        assert!(got.ends_with("bpe.vocab"));
+        assert!(crate::model::is_valid_bpe_vocab(&got));
     }
 
     #[test]
