@@ -32,9 +32,13 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 
-# 壳自身的窗口 UI 代码（SW_SHOWNA 不抢焦点显示）
+# 壳自身的窗口 UI 代码（SW_SHOWNA 不抢焦点显示；胶囊样式 SetWindowPos 居中定位）
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = ["Win32_UI_WindowsAndMessaging"] }
+windows = { workspace = true, features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_HiDpi",
+] }
 
 [dev-dependencies]
 tempfile.workspace = true

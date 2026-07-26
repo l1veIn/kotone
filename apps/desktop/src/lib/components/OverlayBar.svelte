@@ -12,8 +12,9 @@
    */
   import { fade, fly, scale } from "svelte/transition";
   import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { appState } from "../stores/state";
-  import { confirmSend, cancelSession, simulateSend, getSettings } from "../ipc";
+  import { confirmSend, cancelSession, simulateSend, getSettings, isTauri } from "../ipc";
   import Waveform from "./Waveform.svelte";
   import stickerProud from "../../assets/brand/stickers/proud.png";
   import stickerAmazed from "../../assets/brand/stickers/amazed.png";
@@ -34,14 +35,29 @@
   let actionHint = $state("");
   /** preview 提示中的热键名（动态读配置，读取失败回退 F8） */
   let hotkeyLabel = $state("F8");
+  /** overlay.style：true = 胶囊布局（窗口几何由后端 SetWindowPos 居中靠下重排） */
+  let capsule = $state(false);
 
   onMount(async () => {
     try {
       const s = await getSettings();
       hotkeyLabel = s.hotkey.key;
+      capsule = s.overlay?.style === "capsule";
     } catch {
       /* 读取失败保留默认值 */
     }
+  });
+
+  // 设置页切换 overlay.style → 后端重排窗口几何并广播本事件，前端即时换布局
+  onMount(() => {
+    if (!isTauri) return;
+    let un: (() => void) | undefined;
+    void (async () => {
+      un = await listen<{ style: string }>("kotone://overlay-style", (ev) => {
+        capsule = ev.payload.style === "capsule";
+      });
+    })();
+    return () => un?.();
   });
 
   let textScrollEl: HTMLDivElement | undefined = $state();
@@ -99,9 +115,82 @@
 </script>
 
 <!--
-  480×120 窗口内铺满一条圆角悬浮条；data-tauri-drag-region 使空白处可拖动窗口。
-  整体小巧不遮挡游戏：透明背景 + 微弱青光晕描边面板。
+  两种样式（overlay.style）：
+  - card：480×120 窗口内铺满一条圆角悬浮条；data-tauri-drag-region 使空白处可拖动窗口。
+    整体小巧不遮挡游戏：透明背景 + 微弱青光晕描边面板。
+  - capsule：520×64 窗口（后端 SetWindowPos 水平居中靠下，底部留 48px），
+    胶囊本体宽度随内容伸缩（fit-content），轻装饰——Win11 语音输入条风格。
 -->
+{#if capsule}
+  <div class="flex h-full items-center justify-center select-none" data-tauri-drag-region>
+    <div
+      class="flex max-w-full items-center gap-2.5 rounded-full bg-kotone-deep/92 py-2 pr-4 pl-3.5 shadow-[0_6px_28px_rgba(0,0,0,0.5)] ring-1 ring-kotone-cyan/35"
+      style:width="fit-content"
+      data-tauri-drag-region
+    >
+      {#if $appState.state === "listening"}
+        <!-- 录音中：呼吸点 + 波形 + 流式文本（单行截断） -->
+        <span class="mic-breath h-2.5 w-2.5 shrink-0 rounded-full bg-kotone-cyan"></span>
+        <Waveform level={$appState.level} bars={12} />
+        <p class="max-w-[340px] truncate text-sm text-white" in:fade={{ duration: 150 }}>
+          {$appState.partialText || "聆听中…"}
+        </p>
+      {:else if $appState.state === "transcribing"}
+        <span class="spinner inline-block h-3.5 w-3.5 shrink-0 rounded-full"></span>
+        <p class="max-w-[380px] truncate text-sm text-kotone-violet" in:fade={{ duration: 150 }}>
+          {$appState.partialText || "转写中…"}
+        </p>
+      {:else if $appState.state === "preview"}
+        <p class="max-w-[260px] truncate text-sm text-white" in:fade={{ duration: 150 }}>
+          {$appState.finalText}
+        </p>
+        <span class="shrink-0 text-[10px] whitespace-nowrap text-white/40">
+          {hotkeyLabel} 发送 · Esc 重说
+        </span>
+        <button
+          class="shrink-0 rounded-full bg-kotone-pink px-2.5 py-0.5 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95"
+          onclick={() => void onConfirm()}
+        >
+          发送
+        </button>
+      {:else if $appState.state === "sending"}
+        <span class="send-pulse inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-kotone-pink"></span>
+        <p class="max-w-[380px] truncate text-sm text-white/70" in:fade={{ duration: 150 }}>
+          {$appState.finalText || "发送中"}
+        </p>
+      {:else if $appState.state === "success"}
+        <!-- 发送后短暂显示结果（随后按 overlay.visibility 规则隐藏/驻留） -->
+        <span class="shrink-0 text-sm font-bold text-kotone-cyan">✓</span>
+        <p class="max-w-[380px] truncate text-sm text-white" in:fade={{ duration: 150 }}>
+          已发送 · {$appState.finalText}
+        </p>
+      {:else if $appState.state === "error"}
+        <span class="shrink-0 text-sm font-bold text-kotone-pink">✗</span>
+        <p class="max-w-[220px] truncate text-sm text-kotone-pink" title={displayError}>
+          {displayError}
+        </p>
+        {#if $appState.errorText}
+          <button
+            class="shrink-0 rounded-full bg-kotone-pink/80 px-2.5 py-0.5 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95"
+            onclick={() => void onRetry()}
+          >
+            重试
+          </button>
+        {/if}
+        <button
+          class="shrink-0 rounded-full bg-white/10 px-2.5 py-0.5 text-[11px] text-white/75 transition hover:bg-white/20 active:scale-95"
+          onclick={() => void onCancel()}
+        >
+          关闭
+        </button>
+      {:else}
+        <!-- idle（托盘手动唤起时可见） -->
+        <span class="h-2 w-2 shrink-0 rounded-full bg-kotone-cyan/60"></span>
+        <p class="shrink-0 text-sm whitespace-nowrap text-white/70">Kotone 待机 · 按热键说话</p>
+      {/if}
+    </div>
+  </div>
+{:else}
 <div class="flex h-full items-stretch p-2 select-none" data-tauri-drag-region>
   <div
     class="flex w-full items-center gap-3 rounded-2xl bg-kotone-deep/92 px-4 py-2 shadow-[0_0_24px_rgba(0,229,255,0.18)] ring-1 ring-kotone-cyan/40"
@@ -234,6 +323,7 @@
     {/if}
   </div>
 </div>
+{/if}
 
 <style>
   /* 聊天气泡：青色描边 + 左下小尾巴 */

@@ -163,10 +163,11 @@
       </select>
     </section>
 
-    <!-- 悬浮窗显示模式（overlay.visibility；on_demand 由后端会话事件驱动显隐） -->
+    <!-- 悬浮窗（overlay.visibility / overlay.style；显隐由后端会话事件驱动） -->
     <section class="kotone-panel mt-4 p-4">
       <h2 class="text-sm font-semibold text-kotone-cyan/90">悬浮窗</h2>
-      <div class="mt-3 grid grid-cols-2 gap-2">
+      <p class="mt-2 text-[10px] font-semibold tracking-wide text-white/40">显示模式</p>
+      <div class="mt-1.5 grid grid-cols-2 gap-2">
         {#each [
           { id: "always", name: "常驻", desc: "启动即显示，停止才隐藏" },
           { id: "on_demand", name: "用时浮现", desc: "平时隐藏，说话时出现，发完自动隐藏" },
@@ -188,8 +189,31 @@
           </button>
         {/each}
       </div>
+      <p class="mt-3 text-[10px] font-semibold tracking-wide text-white/40">样式</p>
+      <div class="mt-1.5 grid grid-cols-2 gap-2">
+        {#each [
+          { id: "card", name: "卡片", desc: "屏幕中央的圆角面板，贴纸气泡全装饰" },
+          { id: "capsule", name: "胶囊", desc: "底部居中的轻巧胶囊条，随文字伸缩" },
+        ] as opt}
+          {@const selected = ($settingsStore.overlay?.style ?? "card") === opt.id}
+          <button
+            class="rounded-[var(--radius-kotone-card)] px-3 py-2.5 text-left ring-1 transition
+              {selected
+              ? 'bg-kotone-violet/15 ring-kotone-violet/60'
+              : 'bg-kotone-card/60 ring-white/10 hover:bg-kotone-card'}"
+            onclick={() =>
+              void patch(
+                { overlay: { style: opt.id } },
+                opt.id === "card" ? "悬浮窗样式已切换：卡片" : "悬浮窗样式已切换：胶囊",
+              )}
+          >
+            <p class="text-sm font-semibold {selected ? 'text-kotone-violet' : ''}">{opt.name}</p>
+            <p class="mt-0.5 text-[11px] text-white/50">{opt.desc}</p>
+          </button>
+        {/each}
+      </div>
       <p class="mt-2 text-[11px] text-white/40">
-        「用时浮现」在独奏模式（solo）下持续显示，直到会话停止。
+        「用时浮现」在独奏模式（solo）下持续显示，直到会话停止；样式切换即时生效，无需重启。
       </p>
     </section>
 

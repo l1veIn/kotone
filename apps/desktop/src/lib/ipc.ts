@@ -74,6 +74,8 @@ export interface Settings {
 export interface OverlayConfig {
   /** 显示模式：always 常驻（启动即显示）/ on_demand 用时浮现（说话时出现，发完自动隐藏） */
   visibility: "always" | "on_demand";
+  /** 样式：card 卡片（默认）/ capsule 胶囊（水平居中靠下，宽度随内容伸缩） */
+  style: "card" | "capsule";
 }
 
 /** 模型下载配置（config.json `download` 段） */
@@ -247,7 +249,7 @@ const mock: MockStore = {
     ui: { firstRunCompleted: true, autoStart: false },
     models: { dir: "" },
     download: { source: "auto", ghProxy: "https://ghfast.top/" },
-    overlay: { visibility: "always" },
+    overlay: { visibility: "always", style: "card" },
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },

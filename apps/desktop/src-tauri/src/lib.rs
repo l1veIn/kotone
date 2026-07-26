@@ -19,7 +19,7 @@ use kotone_core::profile::{
     HotwordMergeReport,
 };
 use kotone_core::runtime::RuntimePhase;
-use kotone_core::settings::{self, OverlayVisibility, Settings};
+use kotone_core::settings::{self, OverlayStyle, OverlayVisibility, Settings};
 use kotone_core::stt::{EngineInfo, EngineRegistry};
 use kotone_core::log;
 use kotone_platform_windows::inject::{WinFocusBackend, WindowsInjector};
@@ -163,6 +163,81 @@ fn hide_window<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
     let _ = win.hide();
 }
 
+/// 胶囊样式窗口几何（逻辑像素，SetWindowPos 前按窗口 DPI 换算物理像素）
+#[cfg(windows)]
+const CAPSULE_LOGICAL_W: i32 = 520;
+#[cfg(windows)]
+const CAPSULE_LOGICAL_H: i32 = 64;
+#[cfg(windows)]
+const CARD_LOGICAL_W: i32 = 480;
+#[cfg(windows)]
+const CARD_LOGICAL_H: i32 = 120;
+/// 胶囊底边距屏幕工作区底部的间距（逻辑像素）
+#[cfg(windows)]
+const CAPSULE_BOTTOM_GAP: i32 = 48;
+
+/// 按 overlay.style 摆放 overlay 窗口（原始 Win32 SetWindowPos；DPI 感知）。
+/// - capsule：水平居中、靠下（工作区底 - 48px），520×64（前端胶囊宽度随内容伸缩）；
+/// - card：回 480×120 并重新居中（样式从胶囊切回卡片时恢复原位）。
+/// 与显隐同原则：不走 tao set_position/set_size，避免与 SW_SHOWNA 路径的状态缓存分叉。
+#[cfg(windows)]
+fn layout_overlay_window<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>, style: OverlayStyle) {
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows::Win32::UI::HiDpi::GetDpiForWindow;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_NOZORDER,
+    };
+    let Ok(hwnd) = win.hwnd() else { return };
+    unsafe {
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let mut mi = MONITORINFO::default();
+        mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if !GetMonitorInfoW(monitor, &mut mi).as_bool() {
+            return;
+        }
+        let wa = mi.rcWork;
+        let dpi = GetDpiForWindow(hwnd);
+        let dpi = if dpi == 0 { 96 } else { dpi };
+        let scale = |logical: i32| (logical as u32 * dpi).div_ceil(96) as i32;
+        let (w, h) = match style {
+            OverlayStyle::Card => (scale(CARD_LOGICAL_W), scale(CARD_LOGICAL_H)),
+            OverlayStyle::Capsule => (scale(CAPSULE_LOGICAL_W), scale(CAPSULE_LOGICAL_H)),
+        };
+        let x = wa.left + ((wa.right - wa.left) - w) / 2;
+        let y = match style {
+            OverlayStyle::Card => wa.top + ((wa.bottom - wa.top) - h) / 2,
+            OverlayStyle::Capsule => wa.bottom - h - scale(CAPSULE_BOTTOM_GAP),
+        };
+        let flags: SET_WINDOW_POS_FLAGS = SWP_NOZORDER | SWP_NOACTIVATE;
+        let _ = SetWindowPos(hwnd, None, x, y, w, h, flags);
+    }
+}
+
+/// 非 Windows：回退 tao 逻辑像素定位（MVP Windows-first，保证可编译即可）
+#[cfg(not(windows))]
+fn layout_overlay_window<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>, style: OverlayStyle) {
+    use tauri::{LogicalSize, PhysicalPosition};
+    let (w, h) = match style {
+        OverlayStyle::Card => (CARD_FALLBACK.0, CARD_FALLBACK.1),
+        OverlayStyle::Capsule => (520.0, 64.0),
+    };
+    let _ = win.set_size(LogicalSize::new(w, h));
+    if let Ok(Some(monitor)) = win.current_monitor() {
+        let wa = monitor.work_area();
+        let x = wa.position.x + (wa.size.width as i32 - w as i32) / 2;
+        let y = match style {
+            OverlayStyle::Card => wa.position.y + (wa.size.height as i32 - h as i32) / 2,
+            OverlayStyle::Capsule => wa.position.y + wa.size.height as i32 - h as i32 - 48,
+        };
+        let _ = win.set_position(PhysicalPosition::new(x, y));
+    }
+}
+
+#[cfg(not(windows))]
+const CARD_FALLBACK: (f64, f64) = (480.0, 120.0);
+
 /// 冒烟测试命令：前端可 invoke("ping") 验证 IPC 通路
 #[tauri::command]
 fn ping() -> &'static str {
@@ -183,22 +258,35 @@ fn update_settings(
     state: tauri::State<SharedState>,
     patch: serde_json::Value,
 ) -> Result<Settings, String> {
-    let (old_hotkey, updated) = {
+    let (old_hotkey, old_overlay_style, updated) = {
         let mut guard = state.settings.write().unwrap();
         let old_hotkey = (
             guard.hotkey.key.clone(),
             effective_hotkey_mode(&guard),
             guard.hotkey_backend,
         );
+        let old_overlay_style = guard.overlay.style;
         let mut merged =
             serde_json::to_value(&*guard).map_err(|e| format!("序列化配置失败: {e}"))?;
         settings::merge_json(&mut merged, &patch);
         let next: Settings =
             serde_json::from_value(merged).map_err(|e| format!("配置项不合法: {e}"))?;
         *guard = next.clone();
-        (old_hotkey, next)
+        (old_hotkey, old_overlay_style, next)
     };
     settings::save(&updated)?;
+
+    // overlay 样式变化 → 立即重排窗口几何 + 通知 overlay 前端切换布局（无需重启）
+    if old_overlay_style != updated.overlay.style {
+        if let Some(win) = app.get_webview_window("overlay") {
+            layout_overlay_window(&win, updated.overlay.style);
+        }
+        use tauri::Emitter as _;
+        let _ = app.emit(
+            "kotone://overlay-style",
+            serde_json::json!({ "style": serde_json::to_value(updated.overlay.style).unwrap_or_default() }),
+        );
+    }
 
     // 热键键位/生效模式/后端变化 → 重注册。生效模式由 interactionMode 预设推导
     // （effective_hotkey_mode），所以切预设（如 push-to-talk）也会走到这里。

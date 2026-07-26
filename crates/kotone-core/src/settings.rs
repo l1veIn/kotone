@@ -102,6 +102,18 @@ pub enum OverlayVisibility {
     OnDemand,
 }
 
+/// 悬浮窗样式（config.json `overlay.style`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlayStyle {
+    /// 卡片（默认）：480×120 圆角面板，屏幕中央，贴纸/气泡等完整装饰
+    #[default]
+    Card,
+    /// 胶囊：Win11 语音输入条风格——水平居中靠下（底部留 ~48px），
+    /// 圆角胶囊宽度随内容伸缩（窗口上限 520px），轻装饰
+    Capsule,
+}
+
 /// 悬浮窗配置（config.json `overlay` 段）
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -109,6 +121,9 @@ pub struct OverlayConfig {
     /// 显示模式：always 常驻（默认）/ on_demand 用时浮现
     #[serde(default)]
     pub visibility: OverlayVisibility,
+    /// 样式：card 卡片（默认）/ capsule 胶囊
+    #[serde(default)]
+    pub style: OverlayStyle,
 }
 
 /// 下载源选择（config.json `download.source`）。
@@ -293,6 +308,7 @@ mod tests {
         assert_eq!(s.download.source, DownloadSource::Auto);
         assert_eq!(s.download.gh_proxy, "https://ghfast.top/");
         assert_eq!(s.overlay.visibility, OverlayVisibility::Always);
+        assert_eq!(s.overlay.style, OverlayStyle::Card);
     }
 
     #[test]

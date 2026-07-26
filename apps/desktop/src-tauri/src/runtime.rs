@@ -213,9 +213,21 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
     // 阶段 3：显示悬浮窗（不抢焦点；会话态显隐仍由 TauriEmitter 驱动）。
     // on_demand（用时浮现）档位启动时不显示——平时隐藏，收音/转写时由
     // TauriEmitter 的状态事件浮现；always（常驻）维持启动即显示。
+    // capsule 样式启动时按当前显示器工作区重排居中靠下（显示器/DPI 可能已变）；
+    // card 不动——保留用户拖拽位置与 tao 初始居中行为。
     snapshot_and_emit(app, Some("overlay".into()));
-    let overlay_on_demand = state.settings.read().unwrap().overlay.visibility
-        == kotone_core::settings::OverlayVisibility::OnDemand;
+    let (overlay_on_demand, overlay_style) = {
+        let g = state.settings.read().unwrap();
+        (
+            g.overlay.visibility == kotone_core::settings::OverlayVisibility::OnDemand,
+            g.overlay.style,
+        )
+    };
+    if overlay_style == kotone_core::settings::OverlayStyle::Capsule {
+        if let Some(win) = app.get_webview_window("overlay") {
+            crate::layout_overlay_window(&win, overlay_style);
+        }
+    }
     if !overlay_on_demand {
         if let Some(win) = app.get_webview_window("overlay") {
             show_window_no_focus(&win);
