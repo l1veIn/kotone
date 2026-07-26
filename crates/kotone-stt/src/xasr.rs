@@ -164,4 +164,22 @@ mod tests {
                 .is_err());
         }
     }
+
+    /// 松手丢字 P0：静音尾帧与收尾 decode 上限的契约
+    #[cfg(feature = "engine-sherpa")]
+    #[test]
+    fn tail_padding_and_decode_cap_contract() {
+        use crate::online_transducer::imp::{
+            silence_tail, MAX_FINALIZE_DECODE_ROUNDS, TAIL_PADDING_MS,
+        };
+        assert_eq!(silence_tail().len(), TAIL_PADDING_MS * 16, "16kHz 每秒 16000 采样");
+        assert!(
+            TAIL_PADDING_MS >= 480,
+            "尾帧须覆盖 X-ASR 480ms chunk 的 lookahead：{TAIL_PADDING_MS}"
+        );
+        assert!(
+            (64..=4096).contains(&MAX_FINALIZE_DECODE_ROUNDS),
+            "防挂死上限应在合理区间：{MAX_FINALIZE_DECODE_ROUNDS}"
+        );
+    }
 }

@@ -1068,3 +1068,77 @@ async fn history_include_audio_copies_eval_wav_with_same_session_id() {
     assert!(dir.path().join("audio").join(&audio_file).exists());
     assert!(eval_dir.path().join(&audio_file).exists(), "eval 录档 wav 同名互查");
 }
+
+// ---------- 松手丢字 P0：end() 采音侧排空 ----------
+
+/// 一次性吐完固定数量 chunk 后关闭通道的 mock 后端（模拟松手瞬间通道里
+/// 已缓冲但 pump 还没消费的 PCM；任务结束 pcm_tx 随之释放 → 通道关闭）
+struct BurstAudioBackend {
+    chunks: usize,
+}
+
+impl AudioBackend for BurstAudioBackend {
+    fn start(&self, _device_id: &str) -> Result<AudioHandle, String> {
+        let (pcm_tx, pcm_rx) = mpsc::unbounded_channel::<Vec<f32>>();
+        let (level_tx, level_rx) = mpsc::unbounded_channel::<f32>();
+        drop(level_tx);
+        let n = self.chunks;
+        tokio::spawn(async move {
+            for _ in 0..n {
+                if pcm_tx.send(vec![0.1f32; 800]).is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(AudioHandle::detached(pcm_rx, level_rx))
+    }
+}
+
+/// P0 回归：松手（end）时通道里已缓冲未消费的 PCM 必须全部灌进 session
+/// 再 finalize——6 × 50ms chunk（共 300ms 音频）一个都不能丢
+#[tokio::test]
+async fn end_drains_buffered_pcm_before_finalize() {
+    let dir = tempfile::tempdir().unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
+    let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(
+        Arc::new(Mutex::new(Vec::new())),
+        42,
+        true,
+    ));
+    let mut settings = Settings::default();
+    settings.stt_engine = "mock-stream".into();
+    settings.auto_send = true;
+    settings.active_profile_id = None;
+    settings.eval_recording = false;
+    let settings = Arc::new(RwLock::new(settings));
+    let mut registry = EngineRegistry::new();
+    kotone_stt::register_builtin(&mut registry);
+    let mut orch = Orchestrator::new(
+        settings,
+        Arc::new(registry),
+        Arc::new(BurstAudioBackend { chunks: 6 }),
+        injector,
+        focus,
+        Arc::new(VecEmitter::default()),
+    );
+    orch.toast_dwell = Duration::from_millis(10);
+    orch.finalize_timeout = Duration::from_secs(2);
+    orch.focus_restore_delay = Duration::ZERO;
+    orch.history_dir = Some(dir.path().to_path_buf());
+    let orch = orch.into_arc();
+
+    orch.begin().await.unwrap();
+    // 等突发 chunk 全部进通道（pump 可能已消费一部分——不影响总数断言），
+    // 随后立即松手：剩余的必须靠排空路径灌入
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    orch.end().await.unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Success);
+
+    let records = kotone_core::history::list_in(dir.path()).unwrap();
+    assert_eq!(records.len(), 1, "records: {records:?}");
+    assert_eq!(
+        records[0].audio_ms, 300,
+        "松手时通道里缓冲的 PCM 必须全部灌进 session（6 × 50ms = 300ms）"
+    );
+}

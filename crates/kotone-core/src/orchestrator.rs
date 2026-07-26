@@ -346,10 +346,29 @@ impl Orchestrator {
             let mut pcm_rx = pcm_rx;
             let mut stt_rx = stt_rx;
             let mut vad_state = vad_state;
+            // 松手收尾：end() 先停采集再发停止信号，pump 收到信号后把通道里
+            // 已缓冲未消费的 PCM 全部灌进 session（松手丢字 P0：采音侧排空）；
+            // 取消（pump_flag）则立即停，音频丢弃
             loop {
                 tokio::select! {
                     biased;
-                    _ = &mut stop_rx => break,
+                    r = &mut stop_rx => {
+                        let _ = r;
+                        if !pump_flag.load(Ordering::SeqCst) {
+                            // 非阻塞排空：此时采集线程已被 join（end 先 drop
+                            // guard），通道里剩下的就是全部缓冲
+                            while let Ok(c) = pcm_rx.try_recv() {
+                                if let Some(rec) = &pump_recorder {
+                                    rec.push_pcm(&c);
+                                }
+                                if let Some(h) = &pump_history {
+                                    h.lock().unwrap().audio_samples += c.len() as u64;
+                                }
+                                if session.push_audio(&c).is_err() { break; }
+                            }
+                        }
+                        break;
+                    }
                     chunk = pcm_rx.recv() => {
                         match chunk {
                             Some(c) => {
@@ -483,7 +502,10 @@ impl Orchestrator {
             (gen, active)
         };
 
-        // 停 pump 并取回 session（不持锁，允许 cancel 插队，gen 校验兜底）
+        // 停 pump 并取回 session（不持锁，允许 cancel 插队，gen 校验兜底）。
+        // 顺序关键（松手丢字 P0）：先 drop guard 停采集——采集线程 join 后 pcm
+        // 通道不再有新数据，pump 收到停止信号才能一次性排空通道里已缓冲的 PCM
+        drop(active.guard.take());
         if let Some(tx) = active.stop_tx.take() {
             let _ = tx.send(());
         }
@@ -500,8 +522,7 @@ impl Orchestrator {
                 return Err("会话句柄缺失".into());
             }
         };
-        // 停止采集线程与辅助任务
-        drop(active.guard.take());
+        // 停止辅助任务
         active.pump.abort();
         active.level_task.abort();
 

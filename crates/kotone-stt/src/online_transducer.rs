@@ -66,6 +66,21 @@ pub mod imp {
     /// 默认推理线程数（engineOptions["threads"] 可覆盖）
     const DEFAULT_THREADS: u32 = 2;
 
+    /// 流式收尾静音尾帧时长（毫秒）：sherpa-onnx 官方在线流式示例在
+    /// input_finished 前补 ~0.8s 静音，触发模型吐出 lookahead（右上下文）
+    /// 中的最后 token——不补则松手即 finalize 会丢句尾（P0 实锤：X-ASR
+    /// 丢「吗」）。X-ASR 为 480ms chunk，800ms ≈ 1.7 个 chunk，覆盖其 lookahead
+    pub const TAIL_PADDING_MS: usize = 800;
+
+    /// 收尾 decode 轮数上限（防挂死）：每轮至少消化一个 ready chunk（几十毫秒
+    /// 音频），256 轮 ≈ 8s+ 音频当量，远超尾帧所需；异常模型不得卡住发送流程
+    pub const MAX_FINALIZE_DECODE_ROUNDS: u32 = 256;
+
+    /// 静音尾帧（16kHz mono f32 全零）
+    pub fn silence_tail() -> Vec<f32> {
+        vec![0.0; TAIL_PADDING_MS * 16000 / 1000]
+    }
+
     /// 在线 transducer 引擎：懒加载共享 recognizer（模型加载 ~百毫秒级，复用
     /// 避免每会话重建）。recognizer 首次创建后绑定当时模型；切换模型需重启进程生效。
     pub struct OnlineTransducerEngine {
@@ -256,9 +271,20 @@ pub mod imp {
             }
             let started = Instant::now();
             let stream = self.stream.take().expect("stream taken");
+            // 静音尾帧：触发模型输出 lookahead 中残留的最后 token（松手丢字 P0）
+            stream.accept_waveform(16000, &silence_tail());
             stream.input_finished();
-            while self.recognizer.is_ready(&stream) {
+            // 循环 decode 直到没有 ready chunk（不是只 decode 一次），
+            // 轮数上限防挂死：异常模型不能卡住发送流程
+            let mut rounds = 0u32;
+            while self.recognizer.is_ready(&stream) && rounds < MAX_FINALIZE_DECODE_ROUNDS {
                 self.recognizer.decode(&stream);
+                rounds += 1;
+            }
+            if rounds >= MAX_FINALIZE_DECODE_ROUNDS {
+                kotone_core::log::log(
+                    "流式收尾 decode 达到轮数上限（模型异常？），按当前结果收尾",
+                );
             }
             let text = self
                 .recognizer
