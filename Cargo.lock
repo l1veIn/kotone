@@ -2341,12 +2341,14 @@ dependencies = [
 name = "kotone-stt"
 version = "0.1.0"
 dependencies = [
+ "bzip2",
  "kotone-core",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2",
  "sherpa-onnx",
+ "tar",
  "tempfile",
  "tokio",
  "zip",

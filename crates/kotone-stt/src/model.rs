@@ -114,8 +114,17 @@ pub fn whisper_cli_path() -> PathBuf {
 /// 多文件模型中的单个文件（sha256 可选：git 内小文件无 LFS oid，用 size 兜底校验）
 pub struct ModelFile {
     pub name: &'static str,
+    /// 逐文件直下 URL；所属模型走整包（archive）时置空
     pub url: &'static str,
     pub sha256: Option<&'static str>,
+    pub size_bytes: u64,
+}
+
+/// 整包下载源（tar.bz2）：部分模型（如 X-ASR 流式变体）只在 k2-fsa GitHub
+/// releases 以 tar.bz2 发布，无逐文件镜像——下载整包后按 files 白名单解压校验
+pub struct ArchiveSource {
+    pub url: &'static str,
+    pub sha256: &'static str,
     pub size_bytes: u64,
 }
 
@@ -126,6 +135,8 @@ pub struct MultiFileModel {
     pub display_name: &'static str,
     pub dir: &'static str,
     pub files: &'static [ModelFile],
+    /// Some = 整包下载解压（files 的 url 置空）；None = 逐文件直下
+    pub archive: Option<ArchiveSource>,
 }
 
 /// sherpa-onnx 模型清单（ADR-004）。默认双语流式 Zipformer（int8 编码器，~200MB）。
@@ -163,6 +174,7 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
                 size_bytes: 56_317,
             },
         ],
+        archive: None,
     },
     // SenseVoice（非流式、多语言）：model.int8.onnx 的 SHA256 取自 HF resolve
     // 头 X-Linked-ETag（LFS sha256，2025-01 核对）；tokens.txt 为 git 内小文件，
@@ -186,21 +198,169 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
                 size_bytes: 315_894,
             },
         ],
+        archive: None,
+    },
+    // X-ASR（流式 zipformer transducer，中英+标点）：仅在 k2-fsa GitHub releases
+    // 以整包 tar.bz2 发布，无逐文件镜像 → 走 archive 整包下载解压。
+    // 整包及各文件 SHA256 均为本地从官方 tar 实算（2026-07 核对）。
+    MultiFileModel {
+        id: "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05",
+        engine_id: "sherpa-onnx-x-asr-zh-en",
+        display_name: "X-ASR 流式中英标点（int8，480ms 低延迟）",
+        dir: "sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05",
+        files: &[
+            ModelFile {
+                name: "encoder.int8.onnx",
+                url: "",
+                sha256: Some("908596dcc137a73b95be908ca55e88caa1b3dbbe8027c171615f4b0609c5eb1e"),
+                size_bytes: 155_278_641,
+            },
+            ModelFile {
+                name: "decoder.onnx",
+                url: "",
+                sha256: Some("a1cbc9eac2d5e3fb6617a218c67ad6daaa7f4e0fd225f08b2c22ab0413c8c257"),
+                size_bytes: 11_309_084,
+            },
+            ModelFile {
+                name: "joiner.int8.onnx",
+                url: "",
+                sha256: Some("aedb7fa697b2ab43f20499826fff7c997eea7d67db77be97769aeeeb726e63b3"),
+                size_bytes: 2_581_422,
+            },
+            ModelFile {
+                name: "tokens.txt",
+                url: "",
+                sha256: Some("b818a60878b9aae978cbb8ad594acbd403d76d1af2e31ef4197c84e2dbdba27c"),
+                size_bytes: 58_806,
+            },
+            ModelFile {
+                name: "bpe.model",
+                url: "",
+                sha256: Some("f87a38025a5fdd1e4e9591f6a44bb81295097ce0b80df6f4ab9f44e52c64ca5f"),
+                size_bytes: 119_265,
+            },
+        ],
+        archive: Some(ArchiveSource {
+            url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05.tar.bz2",
+            sha256: "fa5f63d618e5a01526e275a358bb7772e403f84808a4769fba52cffd8160bf74",
+            size_bytes: 133_895_136,
+        }),
+    },
+    // FunASR-Nano（非流式，encoder_adaptor + LLM + embedding）：HF 逐文件直下。
+    // SHA256 取自 HF resolve 响应头 X-Linked-ETag（LFS sha256，2026-07 核对）；
+    // merges.txt 为 git 内小文件（git sha1），仅按大小校验。tokenizer 传 Qwen3-0.6B 目录。
+    // 许可证：FunASR 系自定义 Model License（见 HF 仓库 LICENSE）。
+    MultiFileModel {
+        id: "funasr-nano-int8-2025-12-30",
+        engine_id: "sherpa-onnx-funasr-nano",
+        display_name: "FunASR-Nano 中英日（int8，非流式）",
+        dir: "sherpa-onnx-funasr-nano-int8-2025-12-30",
+        files: &[
+            ModelFile {
+                name: "encoder_adaptor.int8.onnx",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/main/encoder_adaptor.int8.onnx",
+                sha256: Some("f36dea2e30fbc33b5db1d7a7265cc976c5e5586c77b042d5adb1ad27c72db422"),
+                size_bytes: 237_792_748,
+            },
+            ModelFile {
+                name: "llm.int8.onnx",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/main/llm.int8.onnx",
+                sha256: Some("dfbf9aa3be41bccc257587f151e15c63fbe1b549f2b517f5ccd5bdce3bf4322a"),
+                size_bytes: 600_356_593,
+            },
+            ModelFile {
+                name: "embedding.int8.onnx",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/main/embedding.int8.onnx",
+                sha256: Some("95e61cd0c9c3b9543339a4cf973c95c116815e745ccc1e0285cbd81f76d18644"),
+                size_bytes: 155_584_380,
+            },
+            ModelFile {
+                name: "Qwen3-0.6B/merges.txt",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/main/Qwen3-0.6B/merges.txt",
+                sha256: None,
+                size_bytes: 1_671_853,
+            },
+            ModelFile {
+                name: "Qwen3-0.6B/tokenizer.json",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/main/Qwen3-0.6B/tokenizer.json",
+                sha256: Some("aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"),
+                size_bytes: 11_422_654,
+            },
+            ModelFile {
+                name: "Qwen3-0.6B/vocab.json",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/main/Qwen3-0.6B/vocab.json",
+                sha256: Some("ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"),
+                size_bytes: 2_776_833,
+            },
+        ],
+        archive: None,
+    },
+    // Qwen3-ASR 0.6B（非流式，Apache 2.0）：HF 逐文件直下，tokenizer 传 tokenizer 目录。
+    // SHA256 取自 HF resolve 响应头 X-Linked-ETag（2026-07 核对）；
+    // merges.txt 仅按大小校验（与 FunASR-Nano 同一文件，交叉印证）。
+    MultiFileModel {
+        id: "qwen3-asr-0.6B-int8-2026-03-25",
+        engine_id: "sherpa-onnx-qwen3-asr",
+        display_name: "Qwen3-ASR 0.6B 多语言（int8，非流式）",
+        dir: "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
+        files: &[
+            ModelFile {
+                name: "conv_frontend.onnx",
+                url: "https://huggingface.co/csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/conv_frontend.onnx",
+                sha256: Some("d22dc4423e0940e49884e903d2ea2f7e5567c14fc1aed97e4e26d6b8f208ef9e"),
+                size_bytes: 44_148_281,
+            },
+            ModelFile {
+                name: "encoder.int8.onnx",
+                url: "https://huggingface.co/csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/encoder.int8.onnx",
+                sha256: Some("60748d3e6744a57c9c91e1b17424a6c2990567e8adceb0783940c03ed98fa9d9"),
+                size_bytes: 182_491_662,
+            },
+            ModelFile {
+                name: "decoder.int8.onnx",
+                url: "https://huggingface.co/csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/decoder.int8.onnx",
+                sha256: Some("4f6885be5959ae26af3089d38ee7972c5fafbeeb1cf8d5e76eab6d8b61ca5771"),
+                size_bytes: 755_914_231,
+            },
+            ModelFile {
+                name: "tokenizer/merges.txt",
+                url: "https://huggingface.co/csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/tokenizer/merges.txt",
+                sha256: None,
+                size_bytes: 1_671_853,
+            },
+            ModelFile {
+                name: "tokenizer/tokenizer_config.json",
+                url: "https://huggingface.co/csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/tokenizer/tokenizer_config.json",
+                sha256: Some("4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c"),
+                size_bytes: 12_487,
+            },
+            ModelFile {
+                name: "tokenizer/vocab.json",
+                url: "https://huggingface.co/csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/tokenizer/vocab.json",
+                sha256: Some("ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"),
+                size_bytes: 2_776_833,
+            },
+        ],
+        archive: None,
     },
 ];
 
+/// 指定 sherpa 系引擎清单中的默认模型（该引擎清单首条；无清单时 None）
+pub fn multi_file_default_model(engine_id: &str) -> Option<&'static str> {
+    SHERPA_MODELS
+        .iter()
+        .find(|m| m.engine_id == engine_id)
+        .map(|m| m.id)
+}
+
 /// sherpa 引擎的默认模型（engineOptions 未配置或配置了未知 id 时的兜底）
 pub fn sherpa_default_model() -> &'static str {
-    SHERPA_MODELS[0].id
+    multi_file_default_model("sherpa-onnx-zipformer-zh").expect("sherpa 模型清单缺失")
 }
 
 /// SenseVoice 引擎的默认模型（单模型清单，恒为清单条目）
 pub fn sensevoice_default_model() -> &'static str {
-    SHERPA_MODELS
-        .iter()
-        .find(|m| m.engine_id == "sherpa-onnx-sensevoice")
-        .expect("SenseVoice 模型清单缺失")
-        .id
+    multi_file_default_model("sherpa-onnx-sensevoice").expect("SenseVoice 模型清单缺失")
 }
 
 // ---------- silero VAD 模型（ADR-007，单文件） ----------
@@ -274,20 +434,22 @@ pub fn active_model_from(s: &settings::Settings, engine_id: &str) -> String {
         .and_then(|o| o.get("model"))
         .and_then(|m| m.as_str())
         .map(str::to_string);
-    match (engine_id, configured) {
+    let is_multi = SHERPA_MODELS.iter().any(|m| m.engine_id == engine_id);
+    match (is_multi, configured) {
         // sherpa 系：配置的 id 必须属于该引擎自己的清单（跨引擎 id 不认），否则
         // 兜底该引擎清单默认（config.json 早期默认值 zipformer-zh-small 是占位串）
-        ("sherpa-onnx-zipformer-zh", Some(id)) | ("sherpa-onnx-sensevoice", Some(id))
+        (true, Some(id))
             if SHERPA_MODELS
                 .iter()
                 .any(|m| m.id == id && m.engine_id == engine_id) =>
         {
             id
         }
-        ("sherpa-onnx-zipformer-zh", _) => sherpa_default_model().to_string(),
-        ("sherpa-onnx-sensevoice", _) => sensevoice_default_model().to_string(),
-        (_, Some(id)) => id,
-        _ => "ggml-small".to_string(),
+        (true, _) => multi_file_default_model(engine_id)
+            .expect("sherpa 系引擎模型清单缺失")
+            .to_string(),
+        (false, Some(id)) => id,
+        (false, None) => "ggml-small".to_string(),
     }
 }
 
@@ -367,8 +529,11 @@ pub fn download(id: &str, progress: Progress<'_>) -> Result<(), String> {
     ))
 }
 
-/// 多文件模型：逐文件下载，聚合进度（已完成文件字节 + 当前文件进度）
+/// 多文件模型：整包（archive）或逐文件下载，聚合进度（已完成文件字节 + 当前文件进度）
 fn download_multi(m: &MultiFileModel, progress: Progress<'_>) -> Result<(), String> {
+    if let Some(archive) = &m.archive {
+        return download_archive(m, archive, progress);
+    }
     let dir = models_dir().join(m.dir);
     fs::create_dir_all(&dir).map_err(|e| format!("无法创建目录 {}：{e}", dir.display()))?;
     let total: u64 = m.files.iter().map(|f| f.size_bytes).sum();
@@ -389,6 +554,105 @@ fn download_multi(m: &MultiFileModel, progress: Progress<'_>) -> Result<(), Stri
         })?;
         done += f.size_bytes;
         progress(done, Some(total));
+    }
+    Ok(())
+}
+
+/// 整包模型（tar.bz2）：下载整包校验后，只按 files 白名单提取到模型目录，
+/// 再逐文件校验大小 + SHA256，最后删除整包（失败同样清理，不留半成品）。
+fn download_archive(
+    m: &MultiFileModel,
+    archive: &ArchiveSource,
+    progress: Progress<'_>,
+) -> Result<(), String> {
+    // 已齐备 → 幂等直接完成
+    if multi_model_ready(m.id) {
+        progress(archive.size_bytes, Some(archive.size_bytes));
+        return Ok(());
+    }
+    let dir = models_dir().join(m.dir);
+    fs::create_dir_all(&dir).map_err(|e| format!("无法创建目录 {}：{e}", dir.display()))?;
+    let tar_path = models_dir().join(format!("{}.tar.bz2", m.dir));
+
+    let result = download_archive_inner(m, archive, &tar_path, &dir, progress);
+    // 成功失败都删整包：失败不留半成品，成功不再占用磁盘
+    let _ = fs::remove_file(&tar_path);
+    result
+}
+
+fn download_archive_inner(
+    m: &MultiFileModel,
+    archive: &ArchiveSource,
+    tar_path: &PathBuf,
+    dir: &PathBuf,
+    progress: Progress<'_>,
+) -> Result<(), String> {
+    download::download_file(archive.url, tar_path, Some(archive.sha256), progress)?;
+
+    let file = fs::File::open(tar_path)
+        .map_err(|e| format!("无法打开整包 {}：{e}", tar_path.display()))?;
+    let decoder = bzip2::read::BzDecoder::new(file);
+    let mut tar = tar::Archive::new(decoder);
+
+    let mut extracted = 0usize;
+    let entries = tar
+        .entries()
+        .map_err(|e| format!("整包损坏（tar 解析失败）：{e}"))?;
+    for entry in entries {
+        let mut entry = entry.map_err(|e| format!("整包读取失败：{e}"))?;
+        let path = entry
+            .path()
+            .map_err(|e| format!("整包条目路径异常：{e}"))?
+            .to_path_buf();
+        let name = path.to_string_lossy().replace('\\', "/");
+        // 白名单匹配：tar 条目通常带顶层目录前缀，按 files 相对路径后缀匹配；
+        // 清单 name 是受控值（不含 .. / 盘符），dir.join(name) 无穿越风险
+        let Some(f) = m
+            .files
+            .iter()
+            .find(|f| name == f.name || name.ends_with(&format!("/{}", f.name)))
+        else {
+            continue;
+        };
+        let out = dir.join(f.name);
+        if let Some(parent) = out.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("无法创建目录 {}：{e}", parent.display()))?;
+        }
+        entry
+            .unpack(&out)
+            .map_err(|e| format!("解压 {} 失败：{e}", f.name))?;
+        extracted += 1;
+    }
+    if extracted != m.files.len() {
+        return Err(format!(
+            "整包内容不符：期望 {} 个文件，实际提取 {extracted} 个（包结构可能已变更）",
+            m.files.len()
+        ));
+    }
+
+    // 逐文件校验（大小 + SHA256）：整包校验只保证包本身，提取后逐文件再核一遍
+    for f in m.files {
+        let out = dir.join(f.name);
+        let md = fs::metadata(&out)
+            .map_err(|e| format!("解压后缺少 {}：{e}", out.display()))?;
+        if md.len() != f.size_bytes {
+            return Err(format!(
+                "文件 {} 大小不符：期望 {}，实际 {}",
+                f.name,
+                f.size_bytes,
+                md.len()
+            ));
+        }
+        if let Some(expected) = f.sha256 {
+            let actual = download::sha256_file(&out)?;
+            if !actual.eq_ignore_ascii_case(expected) {
+                return Err(format!(
+                    "文件 {} SHA256 校验失败：期望 {expected}，实际 {actual}",
+                    f.name
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -640,36 +904,37 @@ fn remove_if_exists(p: &PathBuf) -> Result<bool, String> {
 /// 切换引擎的活动模型：写入 config.json 的 engineOptions[engine_id].model。
 /// 模型文件须已下载（否则切了也用不了）。
 pub fn set_active(engine_id: &str, model_id: &str) -> Result<(), String> {
-    match engine_id {
-        "whisper-cpp-sidecar" => {
-            let manifest = MODELS
-                .iter()
-                .find(|m| m.id == model_id && m.engine_id == engine_id);
-            if manifest.is_none() {
-                return Err(format!(
-                    "引擎 {engine_id} 没有模型 {model_id}（可选：{}）",
-                    model_ids().join(", ")
-                ));
-            }
-            if !models_dir().join(manifest.unwrap().file).exists() {
-                return Err(format!("模型 {model_id} 尚未下载，请先下载再切换"));
-            }
+    if SHERPA_MODELS.iter().any(|m| m.engine_id == engine_id) {
+        if !SHERPA_MODELS
+            .iter()
+            .any(|m| m.id == model_id && m.engine_id == engine_id)
+        {
+            return Err(format!(
+                "引擎 {engine_id} 没有模型 {model_id}（可选：{}）",
+                model_ids().join(", ")
+            ));
         }
-        "sherpa-onnx-zipformer-zh" | "sherpa-onnx-sensevoice" => {
-            if !SHERPA_MODELS
-                .iter()
-                .any(|m| m.id == model_id && m.engine_id == engine_id)
-            {
-                return Err(format!(
-                    "引擎 {engine_id} 没有模型 {model_id}（可选：{}）",
-                    model_ids().join(", ")
-                ));
-            }
-            if !multi_model_ready(model_id) {
-                return Err(format!("模型 {model_id} 尚未下载，请先下载再切换"));
-            }
+        if !multi_model_ready(model_id) {
+            return Err(format!("模型 {model_id} 尚未下载，请先下载再切换"));
         }
-        _ => return Err(format!("引擎 {engine_id} 暂不支持模型切换")),
+    } else {
+        match engine_id {
+            "whisper-cpp-sidecar" => {
+                let manifest = MODELS
+                    .iter()
+                    .find(|m| m.id == model_id && m.engine_id == engine_id);
+                if manifest.is_none() {
+                    return Err(format!(
+                        "引擎 {engine_id} 没有模型 {model_id}（可选：{}）",
+                        model_ids().join(", ")
+                    ));
+                }
+                if !models_dir().join(manifest.unwrap().file).exists() {
+                    return Err(format!("模型 {model_id} 尚未下载，请先下载再切换"));
+                }
+            }
+            _ => return Err(format!("引擎 {engine_id} 暂不支持模型切换")),
+        }
     }
 
     let mut s = settings::load();
@@ -759,6 +1024,13 @@ mod tests {
 
     #[test]
     fn sherpa_manifest_wellformed() {
+        const REGISTERED_ENGINES: &[&str] = &[
+            "sherpa-onnx-zipformer-zh",
+            "sherpa-onnx-sensevoice",
+            "sherpa-onnx-x-asr-zh-en",
+            "sherpa-onnx-funasr-nano",
+            "sherpa-onnx-qwen3-asr",
+        ];
         let mut ids: Vec<_> = SHERPA_MODELS.iter().map(|m| m.id).collect();
         let n = ids.len();
         ids.sort();
@@ -766,16 +1038,29 @@ mod tests {
         assert_eq!(ids.len(), n, "sherpa 模型 ID 应唯一");
         for m in SHERPA_MODELS {
             assert!(
-                m.engine_id == "sherpa-onnx-zipformer-zh" || m.engine_id == "sherpa-onnx-sensevoice",
+                REGISTERED_ENGINES.contains(&m.engine_id),
                 "{} 的 engine_id 未注册：{}",
                 m.id,
                 m.engine_id
             );
             assert!(!m.files.is_empty(), "{}", m.id);
+            if let Some(a) = &m.archive {
+                // 整包条目：url 置空走 archive；archive 自身字段必须良构
+                assert!(a.url.starts_with("https://"), "{}", m.id);
+                assert_eq!(a.sha256.len(), 64, "{} 整包 sha256 应 64 hex", m.id);
+                assert!(a.sha256.chars().all(|c| c.is_ascii_hexdigit()), "{}", m.id);
+                assert!(a.size_bytes > 0, "{}", m.id);
+            }
             for f in m.files {
-                assert!(f.url.starts_with("https://"), "{}", f.name);
-                assert!(f.url.ends_with(f.name), "{} URL 应以文件名结尾", f.name);
+                if m.archive.is_none() {
+                    assert!(f.url.starts_with("https://"), "{}", f.name);
+                    assert!(f.url.ends_with(f.name), "{} URL 应以文件名结尾", f.name);
+                } else {
+                    assert!(f.url.is_empty(), "{} 整包条目文件 url 应置空", f.name);
+                }
                 assert!(f.size_bytes > 0, "{}", f.name);
+                // 文件名不得含路径穿越
+                assert!(!f.name.contains(".."), "{} 文件名不得含 ..", f.name);
                 if let Some(s) = f.sha256 {
                     assert_eq!(s.len(), 64, "{} sha256 应 64 hex", f.name);
                     assert!(s.chars().all(|c| c.is_ascii_hexdigit()), "{}", f.name);
@@ -799,6 +1084,96 @@ mod tests {
         assert!(sv_names.contains(&"model.int8.onnx"));
         assert!(sv_names.contains(&"tokens.txt"));
         assert_eq!(sensevoice_default_model(), sv.id);
+    }
+
+    #[test]
+    fn new_engines_manifest_entries() {
+        // X-ASR：整包发布（archive），含 encoder/decoder/joiner/tokens/bpe.model
+        let x = SHERPA_MODELS
+            .iter()
+            .find(|m| m.engine_id == "sherpa-onnx-x-asr-zh-en")
+            .expect("X-ASR 模型清单缺失");
+        assert!(x.archive.is_some(), "X-ASR 应走整包下载");
+        let x_names: Vec<_> = x.files.iter().map(|f| f.name).collect();
+        for need in [
+            "encoder.int8.onnx",
+            "decoder.onnx",
+            "joiner.int8.onnx",
+            "tokens.txt",
+            "bpe.model",
+        ] {
+            assert!(x_names.contains(&need), "X-ASR 缺少 {need}");
+        }
+        assert_eq!(multi_file_default_model("sherpa-onnx-x-asr-zh-en"), Some(x.id));
+
+        // FunASR-Nano：encoder_adaptor/llm/embedding + Qwen3-0.6B tokenizer 目录
+        let fun = SHERPA_MODELS
+            .iter()
+            .find(|m| m.engine_id == "sherpa-onnx-funasr-nano")
+            .expect("FunASR-Nano 模型清单缺失");
+        let fun_names: Vec<_> = fun.files.iter().map(|f| f.name).collect();
+        for need in [
+            "encoder_adaptor.int8.onnx",
+            "llm.int8.onnx",
+            "embedding.int8.onnx",
+            "Qwen3-0.6B/merges.txt",
+            "Qwen3-0.6B/tokenizer.json",
+            "Qwen3-0.6B/vocab.json",
+        ] {
+            assert!(fun_names.contains(&need), "FunASR-Nano 缺少 {need}");
+        }
+        assert_eq!(
+            multi_file_default_model("sherpa-onnx-funasr-nano"),
+            Some(fun.id)
+        );
+
+        // Qwen3-ASR：conv_frontend/encoder/decoder + tokenizer 目录
+        let qw = SHERPA_MODELS
+            .iter()
+            .find(|m| m.engine_id == "sherpa-onnx-qwen3-asr")
+            .expect("Qwen3-ASR 模型清单缺失");
+        let qw_names: Vec<_> = qw.files.iter().map(|f| f.name).collect();
+        for need in [
+            "conv_frontend.onnx",
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "tokenizer/merges.txt",
+            "tokenizer/tokenizer_config.json",
+            "tokenizer/vocab.json",
+        ] {
+            assert!(qw_names.contains(&need), "Qwen3-ASR 缺少 {need}");
+        }
+        assert_eq!(
+            multi_file_default_model("sherpa-onnx-qwen3-asr"),
+            Some(qw.id)
+        );
+    }
+
+    #[test]
+    fn new_engines_active_model_mapping() {
+        // 三个新引擎共用泛化映射：未配置 → 清单默认；合法 id → 采用；跨引擎 id → 兜底
+        for engine in [
+            "sherpa-onnx-x-asr-zh-en",
+            "sherpa-onnx-funasr-nano",
+            "sherpa-onnx-qwen3-asr",
+        ] {
+            let default = multi_file_default_model(engine).unwrap();
+            let s = settings::Settings::default();
+            assert_eq!(active_model_from(&s, engine), default, "{engine} 未配置兜底");
+
+            let mut s2 = settings::Settings::default();
+            s2.engine_options[engine]["model"] = serde_json::json!(default);
+            assert_eq!(active_model_from(&s2, engine), default, "{engine} 合法 id");
+
+            let mut s3 = settings::Settings::default();
+            s3.engine_options[engine]["model"] =
+                serde_json::json!("zipformer-bilingual-zh-en-2023-02-20");
+            assert_eq!(
+                active_model_from(&s3, engine),
+                default,
+                "{engine} 跨引擎 id 不应被采用"
+            );
+        }
     }
 
     #[test]
