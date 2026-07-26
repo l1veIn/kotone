@@ -3,7 +3,7 @@
 //! `SendOps` 编程，单测用 mock，不真睡、不真发键）。
 //!
 //! 合规红线：只做系统标准输入合成 + 剪贴板；不读写游戏内存、不 hook 渲染。
-//! Windows 真实实现（SendInput / 前台校验 / 焦点恢复）在 kotone-platform-windows。
+//! Windows 真实实现（SendInput / 焦点恢复）在 kotone-platform-windows。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -60,7 +60,8 @@ impl CancelToken {
 }
 
 /// 发送编排接口：orchestrator 只面向此 trait 编程（STT 与 inject 完全解耦）。
-/// 实现负责 §6 发送时序：前台校验 → openChatKey → 文本 → sendKey（含 delay 与取消检查）。
+/// 实现负责 §6 发送时序：openChatKey → 文本 → sendKey（含 delay 与取消检查），
+/// 直发当前前台窗口——发送路径无前台守卫（用户拍板：前台是什么窗就往哪发）。
 pub trait Injector: Send + Sync {
     fn send(
         &self,
@@ -81,11 +82,11 @@ pub struct TargetWindow(pub usize);
 ///
 /// 背景：overlay 以 SW_SHOWNA 显示不抢焦点，preview 确认（热键或点击）时
 /// 键盘焦点可能在 overlay 或目标窗口两侧漂移；进入 Sending 前必须先把
-/// 焦点还给 begin 时记录的目标窗口，否则前台校验与注入都会打错目标。
+/// 焦点还给 begin 时记录的目标窗口，否则注入会打错目标。
 pub trait FocusBackend: Send + Sync {
     /// 当前前台窗口（begin 时记录为注入目标）；无前台窗口返回 None
     fn foreground_window(&self) -> Option<TargetWindow>;
-    /// 发送前把焦点还给目标窗口；false = 窗口已关闭/失效（交由原前台校验报错）
+    /// 发送前把焦点还给目标窗口；false = 窗口已关闭/失效（仍直发当前前台，不阻塞）
     fn restore(&self, target: TargetWindow) -> bool;
 }
 
@@ -148,7 +149,7 @@ fn cancellable_sleep(
     ensure_not_cancelled(cancel)
 }
 
-/// §6 发送时序（前台校验由各 `Injector` 实现在调用前完成）：
+/// §6 发送时序（直发当前前台窗口，无前台守卫）：
 /// key_down_up(openChatKey) → sleep(preOpenDelayMs)
 /// → preferClipboardPaste ? 剪贴板+Ctrl+V : send_unicode
 /// → sleep(preSendDelayMs) → key_down_up(sendKey)。

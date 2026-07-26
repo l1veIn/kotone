@@ -115,7 +115,7 @@ impl Emitter for TauriEmitter {
     }
 }
 
-/// 显示窗口但不抢焦点（焦点必须留在游戏/目标窗口，否则注入前台校验会失败）。
+/// 显示窗口但不抢焦点（焦点必须留在游戏/目标窗口，否则注入会打错窗口）。
 /// Windows 上用 SW_SHOWNA；其他平台回退普通 show。
 ///
 /// 注意：本函数绕开 tao 的 window_flags 缓存直接操作 Win32 状态，因此隐藏必须
@@ -678,7 +678,7 @@ async fn cancel_session(state: tauri::State<'_, SharedState>) -> Result<(), Stri
 }
 
 /// 手动触发发送（调试/记事本测试用）：走真实 WindowsInjector 时序
-/// （前台校验 → openChatKey → Unicode/剪贴板 → sendKey）
+/// （openChatKey → Unicode/剪贴板 → sendKey，直发当前前台窗口）
 #[tauri::command]
 fn simulate_send(
     state: tauri::State<SharedState>,

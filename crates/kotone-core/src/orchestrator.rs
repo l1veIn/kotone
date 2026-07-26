@@ -665,8 +665,8 @@ impl Orchestrator {
         };
 
         // 焦点恢复：preview 交互（点击悬浮条/热键确认）可能已把焦点带离目标窗口，
-        // 先把焦点还给 begin 时记录的注入目标，再交由注入器做前台校验与注入。
-        // 恢复失败（窗口已关闭）不致命：原前台校验会给出「游戏不在前台」的明确报错。
+        // 先把焦点还给 begin 时记录的注入目标，再交由注入器注入。
+        // 恢复失败（窗口已关闭）不致命：前台守卫已移除，仍直发当前前台窗口。
         if let Some(t) = target {
             let focus = self.focus.clone();
             let restored = tokio::task::spawn_blocking(move || focus.restore(t))

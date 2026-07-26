@@ -522,7 +522,7 @@ async fn target_window_captured_on_begin_and_restored_before_send() {
     );
 }
 
-/// 焦点恢复失败（窗口已关闭）不阻断流程：注入器仍被调用，由原前台校验决定成败
+/// 焦点恢复失败（窗口已关闭）不阻断流程：注入器仍被调用（前台守卫已移除，直发当前前台）
 #[tokio::test]
 async fn send_proceeds_when_focus_restore_fails() {
     let log = Arc::new(Mutex::new(Vec::new()));
@@ -539,7 +539,7 @@ async fn send_proceeds_when_focus_restore_fails() {
     assert!(ops.contains(&"restore:1".to_string()));
     assert!(
         ops.iter().any(|s| s.starts_with("send:")),
-        "恢复失败也应继续走注入（由前台校验报错）: {ops:?}"
+        "恢复失败也应继续走注入（直发当前前台）: {ops:?}"
     );
 }
 

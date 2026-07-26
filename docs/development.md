@@ -237,7 +237,7 @@ enum SttEvent {
 - 剪贴板路径保留在 profile 配置中（`preferClipboardPaste`），用于某些对合成键响应差但接受 Ctrl+V 的游戏，或长文本场景。
 - 注意：`KEYEVENTF_UNICODE` 按 UTF-16 code unit 发送，emoji 等代理对必须按 `u16` 单元遍历（Rust 的 `str::encode_utf16()` 天然正确）。
 
-**合规红线（继承预研）：** 只做系统标准输入合成 + 剪贴板；不读写游戏内存、不 hook 渲染、不做驱动注入。发送前硬性校验目标游戏进程为前台进程，否则 abort 并提示。
+**合规红线（继承预研）：** 只做系统标准输入合成 + 剪贴板；不读写游戏内存、不 hook 渲染、不做驱动注入。（v16 起发送路径无前台守卫：直发当前前台窗口，见 §6 发送时序注。）
 
 **v3 实现现状**：已实现于 `src-tauri/src/inject/windows.rs`。与 LeagueAkari 对应关系：sendString → `send_unicode`（每 64 个 u16 单元一批 SendInput，校验返回计数）；sendKey → `key_down_up`（MapVirtualKeyW scan code，任何路径都补 up 无悬键）；IsProcessForeground → `is_process_foreground` + `foreground_process_name`（Toolhelp 快照拿进程名）。时序编排经 `SendOps` trait 与平台解耦，8 个 mock 单测覆盖时序/取消点/剪贴板恢复。剪贴板路径保存并恢复用户原文本内容（非文本格式不恢复，已知取舍）。记事本中文短句实测 4/4 PASS（UIA 逐字校验）。
 
@@ -260,7 +260,7 @@ enum SttEvent {
 
 **v3 实现细节**：
 
-- **窗口显隐由后端驱动**（v3 变更）：orchestrator 状态事件 → 非 Idle 时 `SW_SHOWNA` 显示 overlay（**不抢焦点**，否则注入前台校验必然失败）、Idle 时隐藏；与前端显隐调用幂等共存。
+- **窗口显隐由后端驱动**（v3 变更）：orchestrator 状态事件 → 非 Idle 时 `SW_SHOWNA` 显示 overlay（**不抢焦点**，否则注入会打错窗口）、Idle 时隐藏；与前端显隐调用幂等共存。
 - **显示模式 `overlay.visibility`**（两档，通用页可选）：`always` 常驻（默认，启动即显示、停止才隐藏）/ `on_demand` 用时浮现（平时隐藏；Listening/Transcribing/Preview/Sending 浮现；一次发送完成——成功或失败——延迟 ~600ms 自动隐藏，显隐代际防 600ms 内新会话误藏；solo 连续模式保持显示直到会话停止）。显隐一律走原始 Win32 `SW_SHOWNA`/`SW_HIDE` 路径（tao `set_visible` 缓存 diff 短路坑），由 TauriEmitter 会话事件驱动，前端不轮询。
 - **样式 `overlay.style`**（两档，通用页可选，切换即时生效）：`card` 卡片（默认，480×120 屏幕中央圆角面板）/ `capsule` 胶囊（Win11 语音输入条风格——窗口 520×64，原始 Win32 `SetWindowPos` 按当前显示器工作区水平居中、底部留 48px，`GetDpiForWindow` 换算物理像素；前端胶囊本体 `fit-content` 宽度随文字伸缩，录音中呼吸点+波形、转写中部分文本、发送后短暂显示结果再按 visibility 规则处理）。设置页切换时后端立即重排窗口几何并广播 `kotone://overlay-style`，overlay 前端监听换布局；启动时 capsule 档位重排一次（显示器/DPI 可能已变），card 不动保留用户拖拽位置。
 - **关窗不退出**：main/overlay 的 CloseRequested 均拦截转为 hide，仅托盘「退出」真正结束（托盘常驻语义）。
@@ -498,8 +498,7 @@ hotkey 结束
   → session.finalize() → 最终文本 T（emit transcribing → 文本上屏）
   → autoSend=false：Preview 状态，**再按热键 = 确认发送**（v5：不抢焦点的主交互），Esc 取消；鼠标编辑后点发送也可
   → **恢复焦点到记录的 hwnd**（SetForegroundWindow，失败用 AttachThreadInput 重试）→ 30ms 延迟（v5 新增）
-  → inject::is_process_foreground(profile.processNames)
-       false → Error toast「游戏不在前台：目标进程 X 未处于前台（当前前台：Y）」→ 文本保留可重试
+  → 直发当前前台窗口（前台守卫已移除：热键触发时前台是什么窗就往哪发）
   → key_down_up(openChatKey)          // VK_RETURN, scan code 经 MapVirtualKeyW
   → sleep(20ms)
   → preferClipboardPaste ?
@@ -513,7 +512,9 @@ hotkey 结束
 
 取消点：录音中 cancel session；finalize 10s 超时；发送时序每次 sleep 前后检查 CancelToken，取消时已按下的键补 up。
 
-**v3 重要前提（UIPI）**：若目标游戏以高权限（管理员）运行，Kotone 进程权限低于它时，**合成输入会被系统整体丢弃、前台切换也会失败**。Kotone 需以不低于游戏的权限运行（提权方案见 §10 R-1）。前台校验的错误消息已包含当前前台进程名，便于诊断。
+**v3 重要前提（UIPI）**：若目标游戏以高权限（管理员）运行，Kotone 进程权限低于它时，**合成输入会被系统整体丢弃、前台切换也会失败**。Kotone 需以不低于游戏的权限运行（提权方案见 §10 R-1；通用页「权限」区检测激活 profile 的游戏进程权限并引导提权）。
+
+**前台守卫移除（用户拍板）**：发送路径不再校验「前台是否为目标进程」——前台是什么窗口就往哪发（记事本测试 LoL profile 也必须能发）。进程名匹配仅保留给「按前台游戏自动激活 profile / 提权状态检测」这类不阻塞发送的用途。
 
 ---
 

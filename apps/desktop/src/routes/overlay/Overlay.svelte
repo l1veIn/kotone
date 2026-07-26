@@ -59,7 +59,7 @@
   /*
    * 窗口显隐完全由后端 TauriEmitter 驱动（lib.rs）：
    * 非 idle 状态用 SW_SHOWNA 显示（不抢焦点，焦点必须留在游戏/目标窗口，
-   * 否则注入前台校验会打错窗口），idle 时隐藏。
+   * 否则注入会打错窗口），idle 时隐藏。
    * 前端不再调用 win.show()：Tauri show() 走 SW_SHOW 会激活窗口抢焦点，
    * 与「preview 交互不抢焦点」的设计冲突。
    */

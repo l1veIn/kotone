@@ -1,4 +1,4 @@
-//! Windows 注入生产实现：raw `windows` crate 直调 Win32（SendInput / 前台校验 / 焦点恢复）。
+//! Windows 注入生产实现：raw `windows` crate 直调 Win32（SendInput / 焦点恢复）。
 //! 端口（Injector / FocusBackend / SendOps / send_sequence）在 kotone-core。
 //! 非 Windows 编译为保持可编译的兜底实现（运行时明确报错，MVP Windows-first）。
 
@@ -44,7 +44,10 @@ const KEY_HOLD_MS: u64 = 20;
 /// 单次 SendInput 批量的 UTF-16 code unit 上限（每单元 2 个事件）
 const UNICODE_CHUNK_UNITS: usize = 64;
 
-/// 生产注入器：前台进程硬校验（否则明确报错「游戏不在前台」）→ §6 发送时序
+/// 生产注入器：§6 发送时序直发当前前台窗口。
+/// 前台守卫已彻底移除（用户拍板）：热键触发时前台是什么窗口就往哪发——
+/// 用户在记事本测试 LoL profile 也必须能发出去；进程名匹配仅用于
+/// 「按前台游戏自动激活 profile」这类不阻塞发送的用途（profile::find_by_process）。
 pub struct WindowsInjector;
 
 impl Injector for WindowsInjector {
@@ -57,39 +60,8 @@ impl Injector for WindowsInjector {
         if cancel.is_cancelled() {
             return Err(InjectError::new("发送已取消"));
         }
-        if !is_process_foreground(&profile.process_names) {
-            let target = if profile.process_names.is_empty() {
-                "任意前台窗口".to_string()
-            } else {
-                profile.process_names.join(" / ")
-            };
-            let foreground = foreground_process_name().unwrap_or_else(|| "（无法获取）".into());
-            let message = format!(
-                "游戏不在前台：目标进程「{target}」未处于前台（当前前台：{foreground}），已中止发送"
-            );
-            // UIPI（§10 R-1）：目标进程权限高于自身时，前台切换失败多半由此引起，
-            // 追加提权提示并置 needsElevation，前端据此引导管理员重启
-            return Err(if needs_elevation_for(&profile.process_names) {
-                InjectError::with_needs_elevation(format!(
-                    "{message}；目标游戏正以管理员权限运行，请在设置页将 Kotone 以管理员身份重启"
-                ))
-            } else {
-                InjectError::new(message)
-            });
-        }
         send_sequence(text, profile, &cancel, &WinOps)
     }
-}
-
-/// 目标进程权限是否高于自身（UIPI 判定）：
-/// 按 profile 进程名找到运行中的 pid → TokenElevation 探测 → 纯逻辑判定。
-/// 进程未运行 / 无法判断时不误报。
-fn needs_elevation_for(process_names: &[String]) -> bool {
-    let target_elevated = process_names
-        .iter()
-        .find_map(|name| find_pid_by_name(name))
-        .and_then(crate::elevation::is_process_elevated);
-    crate::elevation::decide_needs_elevation(target_elevated, crate::elevation::is_elevated())
 }
 
 /// 真实 SendOps：发 Win32 事件 / 操作剪贴板 / 真睡眠
@@ -288,10 +260,11 @@ fn vk_from_name(name: &str) -> Option<VIRTUAL_KEY> {
     Some(vk)
 }
 
-// ---------- 原语 3：前台进程校验 ----------
+// ---------- 原语 3：前台进程查询（诊断/通配用，不阻塞发送） ----------
 
-/// 发送前硬性校验：目标游戏进程必须为前台进程。
-/// process_names 为空 = 通配任意前台进程（恒 true）；大小写不敏感。
+/// 前台进程是否匹配进程名列表（大小写不敏感；空列表 = 通配恒 true）。
+/// 保留作诊断与「按前台游戏匹配 profile」类非阻塞用途；发送路径已不做
+/// 前台守卫（见 WindowsInjector 注释）。
 pub fn is_process_foreground(process_names: &[String]) -> bool {
     if process_names.is_empty() {
         return true;
@@ -370,7 +343,7 @@ impl FocusBackend for WinFocusBackend {
     fn restore(&self, target: TargetWindow) -> bool {
         let hwnd = HWND(target.0 as *mut std::ffi::c_void);
         unsafe {
-            // 窗口已关闭/失效：交由调用方走原前台校验逻辑报错
+            // 窗口已关闭/失效：由调用方继续直发当前前台（前台守卫已移除）
             if !IsWindow(Some(hwnd)).as_bool() {
                 return false;
             }
@@ -506,23 +479,6 @@ mod tests {
         assert_eq!(pid, Some(std::process::id()));
         // 不存在的进程名 → None（不误报）
         assert!(find_pid_by_name("kotone-definitely-not-running-xyz.exe").is_none());
-    }
-
-    #[test]
-    fn not_foreground_error_carries_elevation_hint_only_when_target_elevated() {
-        // 目标进程不存在 → 无法判断权限 → 不带 needsElevation（不发任何按键，安全）
-        let mut profile = GameProfile::builtin_generic();
-        profile.process_names = vec!["kotone-definitely-not-running-xyz.exe".into()];
-        let err = WindowsInjector
-            .send("hi", &profile, CancelToken::default())
-            .unwrap_err();
-        assert!(err.message.contains("游戏不在前台"));
-        assert!(
-            !err.needs_elevation,
-            "目标进程不存在时不应误报提权: {}",
-            err.message
-        );
-        assert!(!err.message.contains("管理员"));
     }
 }
 
