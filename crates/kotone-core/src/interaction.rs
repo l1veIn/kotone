@@ -4,8 +4,10 @@
 //! - 策略由配置推导：`interactionMode` 预设优先，缺省由 `hotkey.mode` +
 //!   `autoSend` 旧字段推导（兼容已有配置与混合组合，行为零变化）；
 //! - orchestrator 每次热键事件现场组装策略（settings 热更新无需失效处理）；
-//! - B3（VAD 静音判停）由 ADR-007 接入：one-shot 预设生效，VAD 帧判定与
-//!   判停状态机见 `crate::vad`。
+//! - B3（VAD 静音判停）由 ADR-007 接入：one-shot / solo 预设生效，VAD 帧判定与
+//!   判停状态机见 `crate::vad`；
+//! - solo（独奏模式）= one-shot 触发三元组 + continuous 连续标志：发送完成
+//!   不停机，自动开下一段回到 Listening；Listening 态点按热键 = 停止会话。
 
 use crate::hotkey::HotkeyMode;
 use crate::settings::Settings;
@@ -53,6 +55,11 @@ pub enum InteractionMode {
     /// 热键强制结束恒在兜底）。需要 VAD 接入（vad_factory），否则 begin 报错
     #[serde(rename = "one-shot")]
     OneShot,
+    /// 独奏模式：A2 + B3 + C1 + 连续（点按开始持续收音，VAD 每判停一段 →
+    /// 转写 → 直发 → 不停机回到监听等下一句；再点按热键 / 停止按钮停止）。
+    /// 与 one-shot 的唯一区别是发送完成不停机（continuous = true）
+    #[serde(rename = "solo")]
+    Solo,
     // hands-free（A3 全时免按）Phase 3
 }
 
@@ -64,12 +71,14 @@ pub enum InteractionMode {
 /// `end == HotkeyRelease` 分支也不处理再按）。因此钩子注册侧必须用本函数
 /// 推导出的模式，与策略保持同一预设源。
 ///
-/// 映射：PushToTalk → Hold（按住开始/松开结束）；Dictation / OneShot → Toggle
-/// （点按开始，结束分别由再按 / VAD 判停负责）。
+/// 映射：PushToTalk → Hold（按住开始/松开结束）；Dictation / OneShot / Solo → Toggle
+/// （点按开始，结束分别由再按 / VAD 判停 / 再按停止负责）。
 pub fn effective_hotkey_mode(settings: &Settings) -> HotkeyMode {
     match settings.interaction_mode {
         Some(InteractionMode::PushToTalk) => HotkeyMode::Hold,
-        Some(InteractionMode::Dictation) | Some(InteractionMode::OneShot) => HotkeyMode::Toggle,
+        Some(InteractionMode::Dictation)
+        | Some(InteractionMode::OneShot)
+        | Some(InteractionMode::Solo) => HotkeyMode::Toggle,
         None => settings.hotkey.mode,
     }
 }
@@ -80,6 +89,9 @@ pub struct InteractionPolicy {
     pub begin: BeginTrigger,
     pub end: EndTrigger,
     pub post: PostFinalize,
+    /// 连续模式（solo）：发送完成不停机，自动开下一段回到 Listening；
+    ///  Listening 态点按热键 = 停止会话（不发送在途段）
+    pub continuous: bool,
 }
 
 impl InteractionPolicy {
@@ -90,16 +102,25 @@ impl InteractionPolicy {
                 begin: BeginTrigger::HotkeyHold,
                 end: EndTrigger::HotkeyRelease,
                 post: PostFinalize::SendDirect,
+                continuous: false,
             },
             InteractionMode::Dictation => Self {
                 begin: BeginTrigger::HotkeyToggle,
                 end: EndTrigger::HotkeyPress,
                 post: PostFinalize::PreviewConfirm,
+                continuous: false,
             },
             InteractionMode::OneShot => Self {
                 begin: BeginTrigger::HotkeyToggle,
                 end: EndTrigger::VadSilence,
                 post: PostFinalize::SendDirect,
+                continuous: false,
+            },
+            InteractionMode::Solo => Self {
+                begin: BeginTrigger::HotkeyToggle,
+                end: EndTrigger::VadSilence,
+                post: PostFinalize::SendDirect,
+                continuous: true,
             },
         }
     }
@@ -119,7 +140,7 @@ impl InteractionPolicy {
         } else {
             PostFinalize::PreviewConfirm
         };
-        Self { begin, end, post }
+        Self { begin, end, post, continuous: false }
     }
 
     /// 当前策略命中的预设（混合组合为 None，设置页可显示「自定义」）
@@ -128,6 +149,9 @@ impl InteractionPolicy {
             Some(InteractionMode::PushToTalk)
         } else if *self == Self::from_preset(InteractionMode::Dictation) {
             Some(InteractionMode::Dictation)
+        } else if *self == Self::from_preset(InteractionMode::Solo) {
+            // solo 与 one-shot 触发三元组相同，靠 continuous 区分（先判 solo）
+            Some(InteractionMode::Solo)
         } else if *self == Self::from_preset(InteractionMode::OneShot) {
             Some(InteractionMode::OneShot)
         } else {
@@ -192,10 +216,31 @@ mod tests {
         assert_eq!(p.begin, BeginTrigger::HotkeyToggle);
         assert_eq!(p.end, EndTrigger::VadSilence);
         assert_eq!(p.post, PostFinalize::SendDirect);
+        assert!(!p.continuous);
         assert_eq!(p.preset(), Some(InteractionMode::OneShot));
         // 显式配置优先生效
         let mut s = settings_with(HotkeyMode::Hold, false);
         s.interaction_mode = Some(InteractionMode::OneShot);
+        assert_eq!(InteractionPolicy::from_settings(&s), p);
+    }
+
+    #[test]
+    fn solo_preset_is_one_shot_plus_continuous() {
+        let p = InteractionPolicy::from_preset(InteractionMode::Solo);
+        // 触发三元组与 one-shot 相同（A2+B3+C1），唯一区别 continuous=true
+        assert_eq!(p.begin, BeginTrigger::HotkeyToggle);
+        assert_eq!(p.end, EndTrigger::VadSilence);
+        assert_eq!(p.post, PostFinalize::SendDirect);
+        assert!(p.continuous);
+        // preset() 靠 continuous 区分 solo / one-shot，不串档
+        assert_eq!(p.preset(), Some(InteractionMode::Solo));
+        assert_eq!(
+            InteractionPolicy::from_preset(InteractionMode::OneShot).preset(),
+            Some(InteractionMode::OneShot)
+        );
+        // 显式配置优先生效
+        let mut s = settings_with(HotkeyMode::Hold, true);
+        s.interaction_mode = Some(InteractionMode::Solo);
         assert_eq!(InteractionPolicy::from_settings(&s), p);
     }
 
@@ -212,6 +257,9 @@ mod tests {
         assert_eq!(j, "\"push-to-talk\"");
         let m: InteractionMode = serde_json::from_str("\"dictation\"").unwrap();
         assert_eq!(m, InteractionMode::Dictation);
+        let m: InteractionMode = serde_json::from_str("\"solo\"").unwrap();
+        assert_eq!(m, InteractionMode::Solo);
+        assert_eq!(serde_json::to_string(&m).unwrap(), "\"solo\"");
     }
 
     // ---- effective_hotkey_mode：钩子注册与策略同一预设源（对讲机松开修复） ----
@@ -235,9 +283,13 @@ mod tests {
     }
 
     #[test]
-    fn effective_mode_dictation_and_one_shot_are_toggle() {
-        // 即使 hotkey.mode 旧字段是 hold，录音笔 / 说一句就走必须按 toggle 匹配
-        for mode in [InteractionMode::Dictation, InteractionMode::OneShot] {
+    fn effective_mode_dictation_one_shot_solo_are_toggle() {
+        // 即使 hotkey.mode 旧字段是 hold，录音笔 / 说一句就走 / 独奏必须按 toggle 匹配
+        for mode in [
+            InteractionMode::Dictation,
+            InteractionMode::OneShot,
+            InteractionMode::Solo,
+        ] {
             let mut s = settings_with(HotkeyMode::Hold, false);
             s.interaction_mode = Some(mode);
             assert_eq!(effective_hotkey_mode(&s), HotkeyMode::Toggle);

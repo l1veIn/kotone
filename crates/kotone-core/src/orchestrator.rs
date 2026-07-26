@@ -183,8 +183,8 @@ impl Orchestrator {
     }
 
     /// toggle 触发键（A2 点按事件）按状态路由：
-    /// Idle 开始 / Listening 结束（B2；B3 接入后兜底强制结束）/
-    /// Preview 确认发送（C2 的主交互，全程不碰鼠标不抢焦点）/ 其余状态中止。
+    /// Idle 开始 / Listening 结束（B2；B3 接入后兜底强制结束；solo 连续模式 = 停止会话，
+    /// 不发送在途段）/ Preview 确认发送（C2 的主交互，全程不碰鼠标不抢焦点）/ 其余状态中止。
     pub async fn on_hotkey_toggle(&self) {
         match self.state() {
             OrchestratorState::Idle => {
@@ -192,7 +192,12 @@ impl Orchestrator {
             }
             OrchestratorState::Listening => {
                 // B1（松手结束）策略下不会产生 toggle 事件；B2/B3 均为按下结束
-                if self.policy().end != EndTrigger::HotkeyRelease {
+                let policy = self.policy();
+                if policy.continuous {
+                    // solo：再点按 = 停止会话（发送完成不停机由 schedule_idle 负责；
+                    // 这里丢弃在途段——用户的意图是「停」，不是「把这句发出去」）
+                    self.cancel().await;
+                } else if policy.end != EndTrigger::HotkeyRelease {
                     let _ = self.end().await;
                 }
             }
@@ -310,7 +315,8 @@ impl Orchestrator {
         let use_vad = self.policy().end == EndTrigger::VadSilence;
         let vad_state = if use_vad {
             let factory = self.vad_factory.clone().ok_or_else(|| {
-                "one-shot 模式需要 VAD，但当前构建未接入（vad-silero feature 未编译）".to_string()
+                "one-shot / solo 模式需要 VAD，但当前构建未接入（vad-silero feature 未编译）"
+                    .to_string()
             })?;
             let vad = factory()?;
             let silence_ms = settings
@@ -813,24 +819,49 @@ impl Orchestrator {
 
     /// toast_dwell 后自动回 Idle（期间有新会话/取消则不动作）。
     /// 带文本的 Error 不自动回 Idle：保留待重试文本，等用户重试或取消（§4.1）。
+    /// solo 连续模式：发送成功（Success）不停机——置回 Idle 后立即 begin 下一段，
+    /// 状态经 Success 回到 Listening 而非 stopped；begin 失败走 Error toast 自行收尾。
     fn schedule_idle(&self, gen: u64) {
         let dwell = self.toast_dwell;
         let inner = self.inner.clone();
         let emitter = self.emitter.clone();
+        let settings = self.settings.clone();
+        let me = self.me.read().unwrap().clone();
         tokio::spawn(async move {
             tokio::time::sleep(dwell).await;
-            let mut g = inner.lock().unwrap();
-            let should_idle = g.gen == gen
-                && (g.state == OrchestratorState::Success
-                    || (g.state == OrchestratorState::Error && g.preview_text.is_none()));
-            if should_idle {
-                g.state = OrchestratorState::Idle;
-                drop(g);
-                emitter.emit(
-                    "kotone://state",
-                    json!({ "state": OrchestratorState::Idle, "payload": null }),
-                );
+            let continuous =
+                InteractionPolicy::from_settings(&settings.read().unwrap()).continuous;
+            // 块作用域收窄 MutexGuard（绝不跨 await 持锁）
+            let resume = {
+                let mut g = inner.lock().unwrap();
+                let success = g.state == OrchestratorState::Success;
+                let should_idle = g.gen == gen
+                    && (success
+                        || (g.state == OrchestratorState::Error && g.preview_text.is_none()));
+                if should_idle {
+                    g.state = OrchestratorState::Idle;
+                    Some(success)
+                } else {
+                    None
+                }
+            };
+            let success = match resume {
+                Some(s) => s,
+                None => return,
+            };
+            if continuous && success {
+                // solo：立即开下一段（每个 VAD 切分段 = 完整会话周期，
+                // 采音/会话/录档/history 全部按段独立，甩尾修复逻辑段内生效）
+                if let Some(orch) = me.as_ref().and_then(|w| w.upgrade()) {
+                    let _ = orch.begin().await;
+                    // begin 成功已 emit Listening；失败走 toast_error → 自行回 Idle
+                    return;
+                }
             }
+            emitter.emit(
+                "kotone://state",
+                json!({ "state": OrchestratorState::Idle, "payload": null }),
+            );
         });
     }
 

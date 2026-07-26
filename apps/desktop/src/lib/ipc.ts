@@ -19,7 +19,7 @@ export interface HotkeyConfig {
 }
 
 /** 交互模式预设（ADR-006；缺省 null = 由 hotkey.mode + autoSend 旧字段推导） */
-export type InteractionMode = "push-to-talk" | "dictation" | "one-shot";
+export type InteractionMode = "push-to-talk" | "dictation" | "one-shot" | "solo";
 
 /** 桌面壳 UI 状态（core settings `ui` 段） */
 export interface UiConfig {

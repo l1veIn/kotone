@@ -1,6 +1,6 @@
 <script lang="ts">
   /*
-   * 快捷键页：交互模式三选卡（interactionMode）+ vadSilenceMs 滑块（one-shot）+
+   * 快捷键页：交互模式四选卡（interactionMode）+ vadSilenceMs 滑块（one-shot / solo）+
    * 热键录入捕获（ADR-006）+ 热键后端与注册状态。
    */
   import { onDestroy, onMount } from "svelte";
@@ -35,6 +35,7 @@
     { id: "push-to-talk", name: "对讲机", desc: "按住说话，松开发送", icon: "🎙️" },
     { id: "dictation", name: "录音笔", desc: "点按开始，再点停止", icon: "⏺️" },
     { id: "one-shot", name: "说一句就走", desc: "说完自动停、自动发", icon: "🚀" },
+    { id: "solo", name: "独奏模式", desc: "持续收音，说一句发一句，再点停止", icon: "🎹" },
   ];
 
   const currentMode = $derived($settingsStore?.interactionMode ?? null);
@@ -178,8 +179,8 @@
       </p>
     {/if}
 
-    {#if currentMode === "one-shot"}
-      <!-- one-shot 专属：VAD 静音判停时长 -->
+    {#if currentMode === "one-shot" || currentMode === "solo"}
+      <!-- one-shot / solo 专属：VAD 静音判停时长（solo 按该阈值切分每一句） -->
       <div class="mt-4 rounded-lg bg-white/5 p-3 ring-1 ring-white/10">
         <div class="flex items-center justify-between">
           <label class="text-xs text-white/70" for="vad-slider">静音判停时长</label>
@@ -198,7 +199,11 @@
           class="mt-2 w-full accent-kotone-cyan"
         />
         <p class="mt-1 text-[11px] text-white/40">
-          说完话后静音超过该时长即自动结束并发送（200–5000ms，需要 VAD 模型就绪）。
+          {#if currentMode === "solo"}
+            每句之间静音超过该时长即切分并发送，随后继续监听下一句（200–5000ms，需要 VAD 模型就绪）。
+          {:else}
+            说完话后静音超过该时长即自动结束并发送（200–5000ms，需要 VAD 模型就绪）。
+          {/if}
         </p>
       </div>
     {/if}

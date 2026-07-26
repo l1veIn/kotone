@@ -42,7 +42,7 @@ pub struct Settings {
     pub language: String,
     /// 评测录档开关（默认关；需要留语料复现时手动开）
     pub eval_recording: bool,
-    /// 交互模式预设（ADR-006）：push-to-talk / dictation / one-shot；
+    /// 交互模式预设（ADR-006）：push-to-talk / dictation / one-shot / solo；
     /// 缺省 None = 由 hotkey.mode + autoSend 旧字段推导（兼容混合组合）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interaction_mode: Option<crate::interaction::InteractionMode>,

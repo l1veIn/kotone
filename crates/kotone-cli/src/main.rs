@@ -1265,7 +1265,7 @@ fn cmd_doctor() -> i32 {
     if kotone_stt::model::vad_model_ready() {
         println!("✓ VAD 模型就绪（one-shot 静音判停可用）");
     } else {
-        println!("⚠ VAD 模型未就绪：one-shot 模式不可用（push-to-talk / dictation 不受影响）");
+        println!("⚠ VAD 模型未就绪：one-shot / solo 模式不可用（push-to-talk / dictation 不受影响）");
     }
 
     // 6. 录档与历史配置摘要
@@ -1529,6 +1529,8 @@ mod tests {
         assert_eq!(s.interaction_mode, Some(InteractionMode::Dictation));
         let s = apply_config_set(&Settings::default(), "interactionMode", "one-shot").unwrap();
         assert_eq!(s.interaction_mode, Some(InteractionMode::OneShot));
+        let s = apply_config_set(&Settings::default(), "interactionMode", "solo").unwrap();
+        assert_eq!(s.interaction_mode, Some(InteractionMode::Solo));
         assert!(apply_config_set(&Settings::default(), "interactionMode", "magic").is_err());
     }
 

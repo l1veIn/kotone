@@ -762,6 +762,15 @@ impl kotone_core::vad::Vad for ScriptVad {
 fn make_one_shot_orchestrator(
     vad: ScriptVad,
 ) -> (Arc<Orchestrator>, Arc<VecEmitter>, Arc<Mutex<Vec<String>>>) {
+    make_vad_mode_orchestrator(vad, kotone_core::interaction::InteractionMode::OneShot)
+}
+
+/// VAD 判停模式通用测试架（one-shot / solo）：指定预设 + 快阈值（210ms）+ 脚本 VAD。
+/// 脚本 VAD 只喂第一个会话；判停/停止后的再次 begin 拿到恒静音 VAD（不再判停）。
+fn make_vad_mode_orchestrator(
+    vad: ScriptVad,
+    mode: kotone_core::interaction::InteractionMode,
+) -> (Arc<Orchestrator>, Arc<VecEmitter>, Arc<Mutex<Vec<String>>>) {
     let sent = Arc::new(Mutex::new(Vec::new()));
     let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
     let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(
@@ -774,7 +783,7 @@ fn make_one_shot_orchestrator(
     settings.active_profile_id = None;
     settings.eval_recording = false;
     settings.history.mode = kotone_core::history::HistoryMode::Off; // 不写真实 ~/.kotone/history
-    settings.interaction_mode = Some(kotone_core::interaction::InteractionMode::OneShot);
+    settings.interaction_mode = Some(mode);
     settings.vad_silence_ms = 210; // 7 帧静音即判停（测试快进）
     let settings = Arc::new(RwLock::new(settings));
     let mut registry = EngineRegistry::new();
@@ -878,6 +887,71 @@ async fn one_shot_without_vad_factory_begin_fails() {
     // begin 失败走 Error toast → 自动回 Idle；不产生任何发送
     wait_state(&orch, OrchestratorState::Idle, Duration::from_secs(2)).await;
     assert!(sent.lock().unwrap().is_empty());
+}
+
+// ---------- 模式 4「独奏模式」（solo：A2 + B3 + C1 + 连续，发完不停机） ----------
+
+/// solo 全链路：VAD 判停 → 直发 → Success → 不停机自动回到 Listening 等下一句
+#[tokio::test]
+async fn solo_send_returns_to_listening() {
+    let (orch, emitter, sent) = make_vad_mode_orchestrator(
+        ScriptVad::speech_then_silence(30),
+        kotone_core::interaction::InteractionMode::Solo,
+    );
+
+    orch.on_hotkey_toggle().await; // A2：点按开始持续收音
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+
+    // B3 判停 → C1 直发 → Success（与 one-shot 相同的前半段）
+    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(5)).await;
+    assert_eq!(sent.lock().unwrap().as_slice(), ["对面打野在下路"]);
+
+    // 与 one-shot 的唯一区别：发送完成不停机——toast 后自动 begin 下一段，
+    // 状态回到 Listening 而非停在 Idle/stopped（续段拿恒静音 VAD，不再判停）
+    wait_state(&orch, OrchestratorState::Listening, Duration::from_secs(5)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        orch.state(),
+        OrchestratorState::Listening,
+        "solo 发送完成后应持续监听：{:?}",
+        emitter.state_sequence()
+    );
+    assert_eq!(
+        sent.lock().unwrap().len(),
+        1,
+        "续段无语音不应重复发送"
+    );
+
+    // 停止：再点按热键 → Idle
+    orch.on_hotkey_toggle().await;
+    wait_state(&orch, OrchestratorState::Idle, Duration::from_secs(2)).await;
+}
+
+/// solo 停止语义：Listening 态再点按热键 = 停止会话（丢弃在途段，不发送）
+#[tokio::test]
+async fn solo_toggle_stops_without_sending() {
+    let (orch, emitter, sent) = make_vad_mode_orchestrator(
+        ScriptVad::all_silence(),
+        kotone_core::interaction::InteractionMode::Solo,
+    );
+
+    orch.on_hotkey_toggle().await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening, "恒静音不判停");
+
+    orch.on_hotkey_toggle().await; // 再点按 = 停止（不是把在途段发出去）
+    wait_state(&orch, OrchestratorState::Idle, Duration::from_secs(2)).await;
+    assert!(
+        sent.lock().unwrap().is_empty(),
+        "停止不应发送在途段: {:?}",
+        sent.lock().unwrap()
+    );
+    let seq = emitter.state_sequence();
+    assert!(
+        !seq.contains(&"sending".to_string()),
+        "停止路径不应经过 Sending: {seq:?}"
+    );
 }
 
 // ---------- history：终态落账（HistoryDraft → history.jsonl） ----------
