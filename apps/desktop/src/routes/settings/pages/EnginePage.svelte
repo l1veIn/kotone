@@ -207,7 +207,7 @@
     const tags: { text: string; cls: string }[] = [];
     if (en.capabilities.streaming) tags.push({ text: "流式", cls: "bg-kotone-cyan/15 text-kotone-cyan" });
     if (en.capabilities.offline) tags.push({ text: "离线", cls: "bg-kotone-violet/15 text-kotone-violet" });
-    if (en.capabilities.hotwords) tags.push({ text: "热词", cls: "bg-white/10 text-white/70" });
+    if (en.capabilities.hotwords) tags.push({ text: "热词", cls: "bg-yellow-400/15 text-yellow-300" });
     if (!en.isReady) tags.push({ text: "未就绪", cls: "bg-kotone-pink/15 text-kotone-pink" });
     return tags;
   }
@@ -235,6 +235,11 @@
   }
 
   const vadModels = $derived(models.filter((m) => m.engineId === "vad-silero"));
+
+  /** mock 联调引擎沉底（生产界面不抢首位），其余保持后端顺序 */
+  const orderedEngines = $derived(
+    (engines ?? []).slice().sort((a, b) => Number(a.id === "mock-stream") - Number(b.id === "mock-stream")),
+  );
 </script>
 
 <div class="px-6 py-5">
@@ -315,7 +320,7 @@
     </div>
   {:else}
     <div class="mt-4 flex flex-col gap-3">
-      {#each engines as en}
+      {#each orderedEngines as en}
         {@const active = $settingsStore?.sttEngine === en.id}
         {@const enModels = modelsOf(en.id)}
         {@const selectable = enModels.filter((m) => isSelectableModel(m))}
@@ -328,6 +333,11 @@
                 {#if active}
                   <span class="shrink-0 rounded bg-kotone-cyan/20 px-1.5 py-0.5 text-[10px] text-kotone-cyan">
                     使用中
+                  </span>
+                {/if}
+                {#if en.id === "mock-stream"}
+                  <span class="shrink-0 rounded bg-white/8 px-1.5 py-0.5 text-[10px] text-white/40">
+                    开发用
                   </span>
                 {/if}
               </p>
