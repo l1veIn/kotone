@@ -1,7 +1,8 @@
 <script lang="ts">
   /*
-   * 标准标题栏（main 窗 decorations:false，方向 B 富化，高 56px）：
-   * - 左：Kotone 小圆图标（青光晕）+ 名称 + 状态灯 + 引擎/模型/交互模式一行精简状态；
+   * 标准标题栏（main 窗 decorations:false，方向 B 富化，高 64px）：
+   * - 左：Kotone 小圆图标（青光晕）+ 名称 + 状态区两行（上行：状态灯 + 相位文字；
+   *   下行：引擎 · 模型 · 交互模式）；
    * - 右：启动/停止/重启生效按钮 + 标准窗口控制三键（min / max|还原 / close，最右上角）；
    * - 拖拽：非按钮区 mousedown 由 startDragging() 接管；max/还原图标由 onResized 驱动；
    * - close = 隐藏到托盘（与 CloseRequested 拦截语义一致；退出走托盘菜单）。
@@ -118,7 +119,7 @@
 <!-- 标题栏整行可拖拽：非按钮区 mousedown 由 startDragging 接管（按钮已排除） -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <header
-  class="relative z-20 flex h-14 shrink-0 items-center justify-between border-b border-white/8 bg-kotone-panel/60 select-none"
+  class="relative z-20 flex h-16 shrink-0 items-center justify-between border-b border-white/8 bg-kotone-panel/60 select-none"
   onmousedown={onDragMouseDown}
 >
   <!-- 克制的背景光晕（方向 B 霓虹语言，标题栏尺度收敛） -->
@@ -142,34 +143,41 @@
     <p class="shrink-0 text-xs font-bold tracking-wide">
       Kotone <span class="font-medium text-white/55">琴音</span>
     </p>
-    <div class="h-3.5 w-px shrink-0 bg-white/12"></div>
-    <span class="relative flex h-2.5 w-2.5 shrink-0">
-      <span
-        class="h-2.5 w-2.5 rounded-full transition-colors {!rt || rt.phase === 'stopped'
-          ? 'bg-white/25'
-          : rt.phase === 'running'
-            ? 'bg-kotone-cyan shadow-glow-cyan animate-pulse'
-            : 'bg-kotone-pink shadow-glow-pink animate-ping'}"
-      ></span>
-      {#if rt?.restartNeeded}
+    <div class="h-6 w-px shrink-0 bg-white/12"></div>
+    <!-- 状态区两行：上行 = 状态灯 + 相位文字；下行 = 引擎 · 模型 · 交互模式 -->
+    <div class="flex min-w-0 flex-col justify-center gap-0.5">
+      <div class="flex items-center gap-2">
+        <span class="relative flex h-2.5 w-2.5 shrink-0">
+          <span
+            class="h-2.5 w-2.5 rounded-full transition-colors {!rt || rt.phase === 'stopped'
+              ? 'bg-white/25'
+              : rt.phase === 'running'
+                ? 'bg-kotone-cyan shadow-glow-cyan animate-pulse'
+                : 'bg-kotone-pink shadow-glow-pink animate-ping'}"
+          ></span>
+          {#if rt?.restartNeeded}
+            <span
+              class="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-yellow-400 ring-1 ring-kotone-panel"
+              title="配置已变更，需重启生效"
+            ></span>
+          {/if}
+        </span>
         <span
-          class="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-yellow-400 ring-1 ring-kotone-panel"
-          title="配置已变更，需重启生效"
-        ></span>
+          class="text-[11px] font-semibold {rt?.phase === 'running'
+            ? 'text-kotone-cyan'
+            : rt && rt.phase !== 'stopped'
+              ? 'text-kotone-pink'
+              : 'text-white/45'}"
+        >
+          {phaseLabel}
+        </span>
+      </div>
+      {#if statusLine}
+        <p class="truncate pl-[18px] text-[10px] text-white/40" title={statusLine}>
+          {statusLine}
+        </p>
       {/if}
-    </span>
-    <p
-      class="min-w-0 truncate text-[11px] {rt?.phase === 'running'
-        ? 'text-kotone-cyan/90'
-        : rt && rt.phase !== 'stopped'
-          ? 'text-kotone-pink/90'
-          : 'text-white/40'}"
-      title="{phaseLabel}{statusLine ? ` — ${statusLine}` : ''}"
-    >
-      <span class="font-semibold">{phaseLabel}</span>{#if statusLine}
-        <span class="text-white/35"> · {statusLine}</span>
-      {/if}
-    </p>
+    </div>
   </div>
 
   <!-- 右：启动/停止 + 标准窗口控制三键 -->
