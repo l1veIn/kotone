@@ -587,7 +587,8 @@ async fn cmd_listen_hotkey(
     let hotkey_mode = match mode.as_deref().unwrap_or("") {
         "hold" => HotkeyMode::Hold,
         "toggle" => HotkeyMode::Toggle,
-        _ => settings.hotkey.mode,
+        // 未显式指定时按 interactionMode 预设推导生效模式（与壳同一源）
+        _ => kotone_core::interaction::effective_hotkey_mode(&settings),
     };
 
     // 提权预检（只警告不阻断）：激活 profile 的目标进程已提权而自身未提权时，

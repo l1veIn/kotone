@@ -11,6 +11,7 @@ use tauri::{AppHandle, Manager};
 use hotkey::{HotkeyManager, HotkeyStatus};
 use kotone_core::audio::AudioDevice;
 use kotone_core::inject::{CancelToken, FocusBackend, InjectError, Injector};
+use kotone_core::interaction::effective_hotkey_mode;
 use kotone_core::orchestrator::{Emitter, Orchestrator};
 use kotone_core::profile::{self, GameProfile};
 use kotone_core::settings::{self, Settings};
@@ -104,7 +105,7 @@ fn update_settings(
         let mut guard = state.settings.write().unwrap();
         let old_hotkey = (
             guard.hotkey.key.clone(),
-            guard.hotkey.mode,
+            effective_hotkey_mode(&guard),
             guard.hotkey_backend,
         );
         let mut merged =
@@ -117,13 +118,15 @@ fn update_settings(
     };
     settings::save(&updated)?;
 
-    // 热键键位/模式/后端变化 → 重注册
+    // 热键键位/生效模式/后端变化 → 重注册。生效模式由 interactionMode 预设推导
+    // （effective_hotkey_mode），所以切预设（如 push-to-talk）也会走到这里。
+    let next_mode = effective_hotkey_mode(&updated);
     if old_hotkey.0 != updated.hotkey.key
-        || old_hotkey.1 != updated.hotkey.mode
+        || old_hotkey.1 != next_mode
         || old_hotkey.2 != updated.hotkey_backend
     {
         if let Some(mgr) = app.try_state::<HotkeyManager>() {
-            mgr.register(&app, &updated.hotkey.key, updated.hotkey.mode)?;
+            mgr.register(&app, &updated.hotkey.key, next_mode)?;
         }
     }
     Ok(updated)
@@ -475,11 +478,13 @@ pub fn run() {
             });
             app.manage(HotkeyManager::new(app.handle(), orchestrator.clone()));
 
-            // 按配置注册全局热键（失败不致命，设置页可改键重试）
+            // 按配置注册全局热键（失败不致命，设置页可改键重试）。
+            // 生效模式由 interactionMode 预设推导（与策略同一源），
+            // 否则 push-to-talk 预设 + 默认 hotkey.mode=toggle 会让松开无反应。
             let mgr = app.state::<HotkeyManager>();
             let (key, mode) = {
                 let s = settings.read().unwrap();
-                (s.hotkey.key.clone(), s.hotkey.mode)
+                (s.hotkey.key.clone(), effective_hotkey_mode(&s))
             };
             if let Err(e) = mgr.register(app.handle(), &key, mode) {
                 eprintln!("[kotone] {e}");

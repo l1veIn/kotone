@@ -56,6 +56,24 @@ pub enum InteractionMode {
     // hands-free（A3 全时免按）Phase 3
 }
 
+/// 生效的热键模式（单源）：`interaction_mode` 预设优先，缺省回落 `hotkey.mode` 旧字段。
+///
+/// 修复「对讲机模式松开无反应」的根因：预设只管策略（begin/end/post），
+/// 若 LL 钩子仍按旧 `hotkey.mode`（默认 toggle）匹配，push-to-talk 下按 F8 只发
+/// `Toggle` 事件、松开无事件，会话卡死在 Listening（on_hotkey_toggle 的
+/// `end == HotkeyRelease` 分支也不处理再按）。因此钩子注册侧必须用本函数
+/// 推导出的模式，与策略保持同一预设源。
+///
+/// 映射：PushToTalk → Hold（按住开始/松开结束）；Dictation / OneShot → Toggle
+/// （点按开始，结束分别由再按 / VAD 判停负责）。
+pub fn effective_hotkey_mode(settings: &Settings) -> HotkeyMode {
+    match settings.interaction_mode {
+        Some(InteractionMode::PushToTalk) => HotkeyMode::Hold,
+        Some(InteractionMode::Dictation) | Some(InteractionMode::OneShot) => HotkeyMode::Toggle,
+        None => settings.hotkey.mode,
+    }
+}
+
 /// 组装后的交互策略：orchestrator 的热键路由只读这个结构
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InteractionPolicy {
@@ -194,5 +212,35 @@ mod tests {
         assert_eq!(j, "\"push-to-talk\"");
         let m: InteractionMode = serde_json::from_str("\"dictation\"").unwrap();
         assert_eq!(m, InteractionMode::Dictation);
+    }
+
+    // ---- effective_hotkey_mode：钩子注册与策略同一预设源（对讲机松开修复） ----
+
+    #[test]
+    fn effective_mode_falls_back_to_legacy_hotkey_mode() {
+        // interactionMode 缺省：回落 hotkey.mode 旧字段，行为不变
+        let s = settings_with(HotkeyMode::Hold, false);
+        assert_eq!(effective_hotkey_mode(&s), HotkeyMode::Hold);
+        let s = settings_with(HotkeyMode::Toggle, false);
+        assert_eq!(effective_hotkey_mode(&s), HotkeyMode::Toggle);
+    }
+
+    #[test]
+    fn effective_mode_push_to_talk_is_hold() {
+        // 预设优先生效：即使 hotkey.mode 旧字段是 toggle（默认值），
+        // 对讲机也必须按 hold 匹配，否则松开不发 HoldReleased → 卡死 Listening
+        let mut s = settings_with(HotkeyMode::Toggle, false);
+        s.interaction_mode = Some(InteractionMode::PushToTalk);
+        assert_eq!(effective_hotkey_mode(&s), HotkeyMode::Hold);
+    }
+
+    #[test]
+    fn effective_mode_dictation_and_one_shot_are_toggle() {
+        // 即使 hotkey.mode 旧字段是 hold，录音笔 / 说一句就走必须按 toggle 匹配
+        for mode in [InteractionMode::Dictation, InteractionMode::OneShot] {
+            let mut s = settings_with(HotkeyMode::Hold, false);
+            s.interaction_mode = Some(mode);
+            assert_eq!(effective_hotkey_mode(&s), HotkeyMode::Toggle);
+        }
     }
 }

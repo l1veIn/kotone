@@ -43,7 +43,18 @@
 
   async function onModeSelect(id: InteractionMode) {
     try {
-      settingsStore.set(await updateSettings({ interactionMode: id }));
+      // 预设与 hotkey.mode 同步落盘：壳侧注册用 effective_hotkey_mode 推导，
+      // 这里保持旧字段一致，避免设置页其它处读到脱节的 mode。
+      // 对讲机 = 按住（hold），录音笔 / 说一句就走 = 点按（toggle）。
+      settingsStore.set(
+        await updateSettings({
+          interactionMode: id,
+          hotkey: {
+            key: $settingsStore?.hotkey.key ?? "F8",
+            mode: id === "push-to-talk" ? "hold" : "toggle",
+          },
+        }),
+      );
       const m = modes.find((x) => x.id === id);
       toast(true, `交互模式已切换：${m?.name ?? id}`);
     } catch (e) {
