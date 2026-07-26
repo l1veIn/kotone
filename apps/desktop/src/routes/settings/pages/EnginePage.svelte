@@ -60,17 +60,34 @@
     return () => un?.();
   });
 
+  /** 三项独立加载：单项失败只 toast + console.error，不拖垮整页（曾因 Promise.all
+   *  任一失败把 engines 清空，整页显示「还没有可用引擎」掩盖真实错误） */
   async function reload() {
-    try {
-      [engines, models, dirInfo] = await Promise.all([
-        listSttEngines(),
-        listModels(),
-        getModelsDir(),
-      ]);
-    } catch (e) {
-      toast(false, `加载引擎信息失败：${errText(e)}`);
+    const [en, mo, di] = await Promise.all([
+      listSttEngines().catch((e) => {
+        console.error("[engine-page] list_stt_engines 失败：", e);
+        toast(false, `加载引擎列表失败：${errText(e)}`);
+        return null;
+      }),
+      listModels().catch((e) => {
+        console.error("[engine-page] list_models 失败：", e);
+        toast(false, `加载模型清单失败：${errText(e)}`);
+        return null;
+      }),
+      getModelsDir().catch((e) => {
+        console.error("[engine-page] get_models_dir 失败：", e);
+        toast(false, `读取模型目录失败：${errText(e)}`);
+        return null;
+      }),
+    ]);
+    if (en === null && mo === null && di === null) {
+      // 全灭（通常是壳 IPC 整体故障）：给空态而非半截页面
       engines = [];
+      return;
     }
+    if (en !== null) engines = en;
+    if (mo !== null) models = mo;
+    if (di !== null) dirInfo = di;
   }
 
   // ---------- 模型存储位置 ----------

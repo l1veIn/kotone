@@ -15,6 +15,7 @@ use crate::download::{self, Progress};
 
 /// 模型信息（跨引擎统一列出：已下载/可下载）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
     pub id: String,
     pub engine_id: String,
@@ -693,6 +694,21 @@ mod tests {
         assert_eq!(vad.engine_id, VAD_ENGINE_ID);
         assert_eq!(vad.size_bytes, VAD_MODEL_SIZE);
         assert_eq!(vad.sha256, VAD_MODEL_SHA256);
+    }
+
+    /// 回归：IPC 序列化必须 camelCase（前端按 engineId/displayName/sizeBytes 读取；
+    /// 曾因缺 rename_all 导致壳端模型清单分组键 undefined、引擎页模型区块整体不渲染）
+    #[test]
+    fn model_info_serializes_camel_case() {
+        let items = list().unwrap();
+        let json = serde_json::to_value(&items[0]).unwrap();
+        let obj = json.as_object().unwrap();
+        for key in ["engineId", "displayName", "sizeBytes", "downloadUrl"] {
+            assert!(obj.contains_key(key), "缺少 camelCase 键 {key}：{json}");
+        }
+        for key in ["engine_id", "display_name", "size_bytes", "download_url"] {
+            assert!(!obj.contains_key(key), "不应出现 snake_case 键 {key}");
+        }
     }
 
     #[test]
