@@ -11,21 +11,24 @@
 pub mod download;
 pub mod mock;
 pub mod model;
+pub mod online_transducer;
 pub mod sensevoice;
 pub mod sherpa;
 pub mod vad;
 pub mod whisper_sidecar;
+pub mod xasr;
 
 use kotone_core::stt::{EngineRegistry, SttEngine};
 
-/// 内置引擎实例列表（mock-stream 恒在；whisper 真实引擎；sherpa 占位）
+/// 内置引擎实例列表（mock-stream 恒在；whisper 真实引擎；sherpa 系占位）
 pub fn builtin_engines() -> Vec<Box<dyn SttEngine>> {
-    // 候选池引擎（funasr / cloud-asr 等）后续按 cargo feature 追加
+    // 候选池引擎（cloud-asr 等）后续按 cargo feature 追加
     vec![
         Box::new(mock::MockStreamEngine),
         Box::new(whisper_sidecar::WhisperSidecarEngine),
         Box::new(sherpa::SherpaEngine::new()),
         Box::new(sensevoice::SenseVoiceEngine::new()),
+        Box::new(xasr::XAsrEngine::new()),
     ]
 }
 
@@ -49,6 +52,7 @@ mod tests {
         assert!(ids.contains(&"whisper-cpp-sidecar".to_string()));
         assert!(ids.contains(&"sherpa-onnx-zipformer-zh".to_string()));
         assert!(ids.contains(&"sherpa-onnx-sensevoice".to_string()));
+        assert!(ids.contains(&"sherpa-onnx-x-asr-zh-en".to_string()));
     }
 
     #[test]
@@ -82,6 +86,16 @@ mod tests {
         assert_eq!(
             reg.get("sherpa-onnx-sensevoice").unwrap().is_ready(),
             sv_expected
+        );
+        // X-ASR：同一 feature 门控、同一就绪判据
+        #[cfg(feature = "engine-sherpa")]
+        let x_expected =
+            model::multi_model_ready(&model::active_model("sherpa-onnx-x-asr-zh-en"));
+        #[cfg(not(feature = "engine-sherpa"))]
+        let x_expected = false;
+        assert_eq!(
+            reg.get("sherpa-onnx-x-asr-zh-en").unwrap().is_ready(),
+            x_expected
         );
         assert!(reg.get("no-such-engine").is_none());
     }
