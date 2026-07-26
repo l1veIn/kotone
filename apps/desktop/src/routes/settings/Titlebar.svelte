@@ -10,7 +10,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { isTauri, startRuntime, stopRuntime } from "../../lib/ipc";
   import { runtimeStore } from "../../lib/stores/runtime";
-  import { toast, errText } from "../../lib/stores/ui";
+  import { toast, toastInfo, pushToast, errText } from "../../lib/stores/ui";
   import iconSrc from "../../assets/brand/icon-src.png";
 
   const modeNames: Record<string, string> = {
@@ -74,12 +74,18 @@
   async function onMainButton() {
     if (!rt || busy || acting) return;
     acting = true;
+    const restarting = rt.phase === "running" && rt.restartNeeded;
     try {
       if (rt.phase === "running" && !rt.restartNeeded) {
         await stopRuntime();
+        toastInfo("已停止，热键已注销");
       } else {
         // stopped → 启动；running + restartNeeded → 重启（stop+start，壳侧编排）
         await startRuntime();
+        pushToast(
+          "success",
+          restarting ? "已按新配置重启，Kotone 运行中 ✨" : "模型已加载，Kotone 已启动 ✨",
+        );
       }
     } catch (e) {
       toast(false, errText(e));

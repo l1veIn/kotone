@@ -6,8 +6,9 @@
    */
   import { onMount } from "svelte";
   import { getSettings } from "../../lib/ipc";
-  import { settingsStore, feedback, toast, errText } from "../../lib/stores/ui";
+  import { settingsStore, toast, errText } from "../../lib/stores/ui";
   import { initRuntime } from "../../lib/stores/runtime";
+  import Toasts from "../../lib/components/Toasts.svelte";
   import Onboarding from "./Onboarding.svelte";
   import Titlebar from "./Titlebar.svelte";
   import GeneralPage from "./pages/GeneralPage.svelte";
@@ -120,14 +121,8 @@
       <AboutPage />
     {/if}
 
-    <!-- 底部反馈条 -->
-    <div class="h-10 px-8 pt-3">
-      {#if $feedback}
-        <p class="text-xs {$feedback.ok ? 'text-kotone-cyan' : 'text-kotone-pink'}">
-          {$feedback.text}
-        </p>
-      {/if}
-    </div>
+    <!-- 底部留白（反馈条已升级为右上角 toast，见 <Toasts />） -->
+    <div class="h-4"></div>
   </main>
 
   <!-- 首启向导覆盖层（加载完成且未完成向导时弹出） -->
@@ -135,4 +130,7 @@
     <Onboarding onDone={() => (showOnboarding = false)} />
   {/if}
   </div>
+
+  <!-- 右上角 toast 堆叠（fixed 定位，z 高于向导） -->
+  <Toasts />
 </div>

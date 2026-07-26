@@ -22,9 +22,16 @@
   let elevation = $state<ElevationStatus | null>(null);
   let restarting = $state(false);
 
+  /** 提权重启接力标记：旧进程退出前落 localStorage，新进程检测到已提权后 toast 并清除 */
+  const ADMIN_RESTART_FLAG = "kotone:admin-restart-pending";
+
   onMount(async () => {
     try {
       [devices, elevation] = await Promise.all([listAudioDevices(), getElevationStatus()]);
+      if (localStorage.getItem(ADMIN_RESTART_FLAG)) {
+        localStorage.removeItem(ADMIN_RESTART_FLAG);
+        if (elevation?.elevated) toast(true, "已通过管理员权限运行 ✨");
+      }
     } catch (e) {
       toast(false, `加载设备信息失败：${errText(e)}`);
     }
@@ -82,8 +89,10 @@
     restarting = true;
     try {
       // 成功后当前进程直接退出；走到 catch 说明用户取消 UAC 或失败
+      localStorage.setItem(ADMIN_RESTART_FLAG, "1");
       await restartAsAdmin();
     } catch (e) {
+      localStorage.removeItem(ADMIN_RESTART_FLAG);
       restarting = false;
       toast(false, errText(e));
     }

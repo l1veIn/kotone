@@ -25,7 +25,7 @@
     type ModelInfo,
     type ModelsDirInfo,
   } from "../../../lib/ipc";
-  import { settingsStore, toast, errText } from "../../../lib/stores/ui";
+  import { settingsStore, toast, toastWarn, errText } from "../../../lib/stores/ui";
   import { runtimeStore } from "../../../lib/stores/runtime";
   import stickerCurious from "../../../assets/brand/stickers/curious.png";
 
@@ -100,7 +100,7 @@
     try {
       const report = await setModelsDir(dir);
       if (report.failed.length > 0) {
-        toast(false, `已切换，但 ${report.failed.length} 项迁移失败（需重新下载）：${report.failed.join(", ")}`);
+        toastWarn(`已切换，但 ${report.failed.length} 项迁移失败（需重新下载）：${report.failed.join(", ")}`);
       } else {
         toast(true, report.moved.length > 0 ? `模型目录已切换，迁移 ${report.moved.length} 项` : "模型目录已切换");
       }
@@ -127,7 +127,11 @@
       await setSttEngine(id);
       settingsStore.update((s) => (s ? { ...s, sttEngine: id } : s));
       const name = engines?.find((en) => en.id === id)?.displayName ?? id;
-      toast(true, `已切换到引擎：${name}${$runtimeStore?.phase === "running" ? "（需重启生效）" : ""}`);
+      if ($runtimeStore?.phase === "running") {
+        toastWarn(`已切换到引擎：${name}，重启后生效`);
+      } else {
+        toast(true, `已切换到引擎：${name}`);
+      }
     } catch (e) {
       toast(false, `切换引擎失败：${errText(e)}`);
     }
@@ -187,7 +191,11 @@
         ((next.engineOptions[engineId] ??= {}) as Record<string, unknown>).model = modelId;
         return next;
       });
-      toast(true, `活动模型已切换：${modelId}${$runtimeStore?.phase === "running" ? "（需重启生效）" : ""}`);
+      if ($runtimeStore?.phase === "running") {
+        toastWarn(`活动模型已切换：${modelId}，重启后生效`);
+      } else {
+        toast(true, `活动模型已切换：${modelId}`);
+      }
     } catch (e) {
       toast(false, `切换活动模型失败：${errText(e)}`);
     }

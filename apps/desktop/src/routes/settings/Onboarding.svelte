@@ -16,7 +16,7 @@
     type ModelInfo,
   } from "../../lib/ipc";
   import { captureHotkey } from "../../lib/hotkeyCapture";
-  import { settingsStore, errText } from "../../lib/stores/ui";
+  import { settingsStore, toast, toastInfo, toastWarn, errText } from "../../lib/stores/ui";
   import relayRoomBg from "../../assets/brand/relay-room-bg.png";
   import kotoneCutout from "../../assets/brand/kotone-cutout.png";
   import stickerHello from "../../assets/brand/stickers/hello.png";
@@ -69,8 +69,10 @@
     try {
       await downloadModel(id);
       dlDone = true;
+      toast(true, `模型下载完成：${id}`);
     } catch (e) {
       dlError = errText(e);
+      toast(false, `模型下载失败：${dlError}`);
     } finally {
       downloading = false;
       unlistenDl?.();
@@ -88,7 +90,6 @@
   const currentKey = $derived($settingsStore?.hotkey.key ?? "F8");
   let capturing = $state(false);
   let captureCleanup: (() => void) | null = null;
-  let notice = $state<string | null>(null);
 
   async function selectMode(id: InteractionMode) {
     try {
@@ -100,27 +101,27 @@
           hotkey: { key: currentKey, mode: id === "push-to-talk" ? "hold" : "toggle" },
         }),
       );
-      notice = null;
+      const m = modes.find((x) => x.id === id);
+      toast(true, `交互模式已切换：${m?.name ?? id}`);
     } catch (e) {
-      notice = `切换模式失败：${errText(e)}`;
+      toast(false, `切换模式失败：${errText(e)}`);
     }
   }
 
   async function startCapture() {
     if (capturing) return;
     capturing = true;
-    notice = null;
     captureCleanup = await captureHotkey((r) => {
       capturing = false;
       captureCleanup = null;
       if (r.kind === "combo") {
         void saveKey(r.combo);
       } else if (r.kind === "cancelled") {
-        notice = "已取消录入";
+        toastInfo("已取消录入");
       } else if (r.kind === "timeout") {
-        notice = "录入超时，请重试";
+        toastWarn("录入超时，请重试");
       } else {
-        notice = r.message;
+        toast(false, r.message);
       }
     });
   }
@@ -132,9 +133,9 @@
           hotkey: { key, mode: $settingsStore?.hotkey.mode ?? "toggle" },
         }),
       );
-      notice = `热键已保存并生效：${key}`;
+      toast(true, `热键已保存并生效：${key}`);
     } catch (e) {
-      notice = `保存热键失败：${errText(e)}`;
+      toast(false, `保存热键失败：${errText(e)}`);
     }
   }
 
@@ -256,9 +257,6 @@
                 {dlPercent !== null ? `${dlPercent}%` : "建立连接中…"}
               </p>
             {/if}
-            {#if dlError}
-              <p class="mt-2 text-[11px] break-all text-kotone-pink">下载失败：{dlError}</p>
-            {/if}
           </div>
         {:else}
           <p class="mt-5 rounded-lg bg-white/5 p-3 text-xs text-white/55 ring-1 ring-white/10">
@@ -327,9 +325,6 @@
             {capturing ? "请按下热键组合…（Esc 取消）" : "点击录入"}
           </button>
         </div>
-        {#if notice}
-          <p class="mt-2 text-[11px] text-white/55">{notice}</p>
-        {/if}
 
         <div class="mt-6 flex items-center justify-between">
           <button
