@@ -40,8 +40,10 @@ tempfile.workspace = true
 
 [features]
 # STT 引擎 feature 转发到 kotone-stt（§3.3）
-default = []
+# 默认内置 sherpa-onnx 引擎 + silero VAD（ADR-007 one-shot 静音判停开箱可用）；
+# 裁剪体积可 --no-default-features 后按需开启
+default = ["engine-sherpa", "vad-silero"]
 engine-whisper-sidecar = ["kotone-stt/engine-whisper-sidecar"]
 engine-sherpa = ["kotone-stt/engine-sherpa"]
-# VAD（ADR-007 one-shot 静音判停）：复用 sherpa-onnx 原生依赖，默认关
+# VAD（ADR-007 one-shot 静音判停）：复用 sherpa-onnx 原生依赖
 vad-silero = ["kotone-stt/vad-silero"]
