@@ -76,6 +76,23 @@ export interface OverlayConfig {
   visibility: "always" | "on_demand";
   /** 样式：card 卡片（默认）/ capsule 胶囊（水平居中靠下，宽度随内容伸缩） */
   style: "card" | "capsule";
+  /** 固定位置；custom 为用户拖动后保存的位置。 */
+  position:
+    | "auto"
+    | "top_left"
+    | "top_center"
+    | "top_right"
+    | "center"
+    | "bottom_left"
+    | "bottom_center"
+    | "bottom_right"
+    | "custom";
+  /** 是否允许直接拖动悬浮窗。 */
+  draggable: boolean;
+  /** 鼠标事件穿透到游戏；开启后悬浮窗自身不可点击/拖动。 */
+  clickThrough: boolean;
+  customX?: number;
+  customY?: number;
 }
 
 /** 模型下载配置（config.json `download` 段） */
@@ -99,6 +116,12 @@ export interface RuntimeStatus {
   interactionMode: InteractionMode | null;
   /** 过渡阶段提示（warmup / hotkey / overlay / unload），稳态为 null */
   stage: string | null;
+}
+
+export type OnboardingLaunchMode = "auto" | "always" | "never";
+
+export interface StartupOptions {
+  onboarding: OnboardingLaunchMode;
 }
 
 // ---------- 模型目录管理 ----------
@@ -234,7 +257,7 @@ const mock: MockStore = {
     hotkey: { key: "F8", mode: "toggle" },
     hotkeyBackend: "auto",
     audioDeviceId: "default",
-    sttEngine: "mock-stream",
+    sttEngine: "sherpa-onnx-x-asr-zh-en",
     engineOptions: {
       "sherpa-onnx-x-asr-zh-en": { provider: "cpu" },
     },
@@ -249,7 +272,13 @@ const mock: MockStore = {
     ui: { firstRunCompleted: true, autoStart: false },
     models: { dir: "" },
     download: { source: "auto", ghProxy: "https://ghfast.top/" },
-    overlay: { visibility: "always", style: "card" },
+    overlay: {
+      visibility: "always",
+      style: "card",
+      position: "auto",
+      draggable: true,
+      clickThrough: false,
+    },
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },
@@ -392,6 +421,15 @@ function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
 }
 
+function mockQuery(name: string): string | null {
+  if (typeof window === "undefined") return null;
+  const searchValue = new URLSearchParams(window.location.search).get(name);
+  const hashQuery = window.location.hash.includes("?")
+    ? window.location.hash.slice(window.location.hash.indexOf("?") + 1)
+    : "";
+  return new URLSearchParams(hashQuery).get(name) ?? searchValue;
+}
+
 // ================================================================
 // 命令封装（与 lib.rs invoke_handler 注册名一致）
 // ================================================================
@@ -400,6 +438,25 @@ function clone<T>(v: T): T {
 export async function ping(): Promise<string> {
   if (!isTauri) return "pong(mock)";
   return invoke<string>("ping");
+}
+
+/** 当前进程的新手向导启动策略（CLI: --onboarding=auto|always|never）。 */
+export async function getStartupOptions(): Promise<StartupOptions> {
+  if (!isTauri) {
+    const searchMode = new URLSearchParams(window.location.search).get("onboarding");
+    const hashQuery = window.location.hash.includes("?")
+      ? window.location.hash.slice(window.location.hash.indexOf("?") + 1)
+      : "";
+    const hashMode = new URLSearchParams(hashQuery).get("onboarding");
+    const requested = hashMode ?? searchMode;
+    return {
+      onboarding:
+        requested === "always" || requested === "never" || requested === "auto"
+          ? requested
+          : "auto",
+    };
+  }
+  return invoke<StartupOptions>("get_startup_options");
 }
 
 export async function getSettings(): Promise<Settings> {
@@ -415,6 +472,15 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
     return clone(mock.settings);
   }
   return invoke<Settings>("update_settings", { patch });
+}
+
+/** 用户拖动悬浮窗后保存当前位置并切换为 custom。 */
+export async function saveOverlayPosition(): Promise<Settings> {
+  if (!isTauri) {
+    mock.settings.overlay.position = "custom";
+    return clone(mock.settings);
+  }
+  return invoke<Settings>("save_overlay_position");
 }
 
 export async function listAudioDevices(): Promise<AudioDevice[]> {
@@ -587,6 +653,10 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
 /** 启动：warmup 引擎 → 注册热键 → 显示悬浮窗；Running+restartNeeded 时等价重启 */
 export async function startRuntime(): Promise<RuntimeStatus> {
   if (!isTauri) {
+    const engine = mock.engines.find((item) => item.id === mock.settings.sttEngine);
+    if (!engine?.isReady) {
+      throw new Error("X-ASR 模型未下载。请先下载模型再启动");
+    }
     mockPhase = "running";
     const s = mockRuntimeStatus();
     mockStarted = { engineId: s.engineId ?? "", modelId: s.modelId ?? "" };
@@ -661,8 +731,15 @@ export async function listModels(): Promise<ModelInfo[]> {
 /** 下载模型/运行时（进度经 kotone://download 事件推送：{ id, downloaded, total }） */
 export async function downloadModel(id: string): Promise<void> {
   if (!isTauri) {
+    if (mockQuery("mockDownload") === "fail") {
+      throw new Error("网络连接失败：无法连接模型下载源");
+    }
     const m = mock.models.find((x) => x.id === id);
-    if (m) m.downloaded = true;
+    if (m) {
+      m.downloaded = true;
+      const engine = mock.engines.find((item) => item.id === m.engineId);
+      if (engine) engine.isReady = true;
+    }
     return;
   }
   return invoke<void>("download_model", { id });

@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.16.0
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm -C apps/desktop exec playwright install chromium
+
+      - name: Audit production JavaScript dependencies
+        run: pnpm audit --prod
+
+      - name: Audit Rust dependencies
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+
+      - name: Verify release metadata
+        run: pnpm release:verify
+
+      - name: Check desktop UI
+        run: pnpm check
+
+      - name: Test desktop journeys
+        run: pnpm -C apps/desktop test:e2e
+
+      - name: Test Rust workspace
+        run: cargo test --workspace --locked
+
+      - name: Compile the Tauri desktop shell
+        run: pnpm -C apps/desktop tauri build --debug --no-bundle

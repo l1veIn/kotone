@@ -14,6 +14,8 @@
   import { toast, toastInfo, pushToast, errText } from "../../lib/stores/ui";
   import iconSrc from "../../assets/brand/icon-src.png";
 
+  let { onOpenAdvanced }: { onOpenAdvanced: () => void } = $props();
+
   const modeNames: Record<string, string> = {
     "push-to-talk": "对讲机",
     dictation: "录音笔",
@@ -57,19 +59,15 @@
           : (stageNames[rt.stage ?? ""] ?? "处理中…"),
   );
 
-  /** 一行精简状态：引擎 · 模型 · 交互模式（stopped 时给引导文案） */
+  /** 标题栏只呈现用户任务状态；引擎与模型详情收纳在高级页。 */
   const statusLine = $derived(
     !rt
       ? ""
       : rt.phase === "stopped"
         ? "热键未注册 · 点右侧「启动」开始说话"
-        : [
-            rt.engineName ?? rt.engineId ?? "未知引擎",
-            rt.modelId,
-            rt.interactionMode ? (modeNames[rt.interactionMode] ?? rt.interactionMode) : "兼容模式",
-          ]
-            .filter(Boolean)
-            .join(" · "),
+        : `语音输入已就绪 · ${
+            rt.interactionMode ? (modeNames[rt.interactionMode] ?? "自定义模式") : "自定义模式"
+          }`,
   );
 
   async function onMainButton() {
@@ -89,7 +87,11 @@
         );
       }
     } catch (e) {
-      toast(false, errText(e));
+      const message = errText(e);
+      toast(false, message);
+      if (/模型.*未下载|未就绪|模型文件|recognizer 创建失败/.test(message)) {
+        onOpenAdvanced();
+      }
     } finally {
       acting = false;
     }

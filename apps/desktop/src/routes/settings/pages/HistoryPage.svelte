@@ -1,8 +1,8 @@
 <script lang="ts">
   /*
    * 历史记录页（新 IPC：get_history / clear_history）：
-   * 顶部 history.mode 三态 + includeAudio 开关 + 清空（二次确认）；
-   * 列表 = 时间 / 识别文本 / 状态 / 引擎；空状态配 stickers/sleepy.png。
+   * 顶部 history.mode 三态 + 清空（二次确认）；
+   * 列表 = 时间 / 识别文本 / 时长 / 状态；技术字段收纳到高级页。
    */
   import { onMount } from "svelte";
   import {
@@ -12,7 +12,6 @@
     type HistoryRecord,
   } from "../../../lib/ipc";
   import { settingsStore, toast, errText } from "../../../lib/stores/ui";
-  import Toggle from "../../../lib/components/Toggle.svelte";
   import stickerSleepy from "../../../assets/brand/stickers/sleepy.png";
 
   let records = $state<HistoryRecord[] | null>(null);
@@ -39,15 +38,6 @@
       toast(true, "历史记录模式已保存");
       if (mode === "off") records = [];
       else await refresh();
-    } catch (err) {
-      toast(false, `保存失败：${errText(err)}`);
-    }
-  }
-
-  async function onIncludeAudioChange(v: boolean) {
-    try {
-      settingsStore.set(await updateSettings({ history: { includeAudio: v } }));
-      toast(true, v ? "已开启随记录保存音频" : "已关闭随记录保存音频");
     } catch (err) {
       toast(false, `保存失败：${errText(err)}`);
     }
@@ -101,14 +91,7 @@
         <option value="off">不记录</option>
       </select>
     </div>
-    <div class="flex-1">
-      <Toggle
-        checked={$settingsStore?.history.includeAudio ?? false}
-        label="保存音频"
-        desc="从评测录档复制 wav（需开启评测录档）"
-        onchange={(v) => void onIncludeAudioChange(v)}
-      />
-    </div>
+    <div class="flex-1"></div>
     <button
       class="shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold ring-1 transition active:scale-95 {confirmingClear
         ? 'bg-kotone-pink text-white ring-kotone-pink shadow-glow-pink'
@@ -139,7 +122,7 @@
               {r.finalText || (r.outcome === "cancelled" ? "（未说完成取消）" : "（无文本）")}
             </p>
             <p class="mt-0.5 text-[10px] text-white/35">
-              {r.engineId}{r.profileId ? ` · ${r.profileId}` : ""} · {(r.audioMs / 1000).toFixed(1)}s
+              语音时长 {(r.audioMs / 1000).toFixed(1)} 秒
               {#if r.error}· <span class="text-kotone-pink/80">{r.error}</span>{/if}
             </p>
           </div>

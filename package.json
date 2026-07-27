@@ -7,6 +7,7 @@
     "dev:web": "pnpm -C apps/desktop dev:web",
     "build:web": "pnpm -C apps/desktop build:web",
     "check": "pnpm -C apps/desktop check",
+    "release:verify": "node scripts/verify-release-version.mjs",
     "tauri": "pnpm -C apps/desktop tauri",
     "build:rust": "cargo build --workspace",
     "test:rust": "cargo test --workspace"

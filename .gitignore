@@ -1,5 +1,7 @@
 node_modules/
 dist/
+apps/desktop/test-results/
+apps/desktop/playwright-report/
 .DS_Store
 *.log
 

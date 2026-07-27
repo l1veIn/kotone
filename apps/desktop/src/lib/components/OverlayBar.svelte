@@ -13,8 +13,17 @@
   import { fade, fly, scale } from "svelte/transition";
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { appState } from "../stores/state";
-  import { confirmSend, cancelSession, simulateSend, getSettings, isTauri } from "../ipc";
+  import {
+    confirmSend,
+    cancelSession,
+    simulateSend,
+    getSettings,
+    isTauri,
+    saveOverlayPosition,
+    type OverlayConfig,
+  } from "../ipc";
   import Waveform from "./Waveform.svelte";
   import stickerProud from "../../assets/brand/stickers/proud.png";
   import stickerAmazed from "../../assets/brand/stickers/amazed.png";
@@ -37,28 +46,75 @@
   let hotkeyLabel = $state("F8");
   /** overlay.style：true = 胶囊布局（窗口几何由后端 SetWindowPos 居中靠下重排） */
   let capsule = $state(false);
+  let draggable = $state(true);
+  let clickThrough = $state(false);
+  let manualDragArmed = false;
+  let manualDragMoved = false;
+  let dragSettleTimer: ReturnType<typeof setTimeout> | undefined;
+  let dragDisarmTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function applyOverlayConfig(config: OverlayConfig) {
+    capsule = config.style === "capsule";
+    draggable = config.draggable;
+    clickThrough = config.clickThrough;
+  }
 
   onMount(async () => {
     try {
       const s = await getSettings();
       hotkeyLabel = s.hotkey.key;
-      capsule = s.overlay?.style === "capsule";
+      applyOverlayConfig(s.overlay);
     } catch {
       /* 读取失败保留默认值 */
     }
   });
 
-  // 设置页切换 overlay.style → 后端重排窗口几何并广播本事件，前端即时换布局
+  // 设置页切换 overlay 配置 → 后端应用几何/点击穿透，并广播给前端更新交互。
   onMount(() => {
     if (!isTauri) return;
     let un: (() => void) | undefined;
     void (async () => {
-      un = await listen<{ style: string }>("kotone://overlay-style", (ev) => {
-        capsule = ev.payload.style === "capsule";
+      un = await listen<OverlayConfig>("kotone://overlay-config", (ev) => {
+        applyOverlayConfig(ev.payload);
       });
     })();
     return () => un?.();
   });
+
+  // 预设位置也会产生 moved 事件，所以只在用户从悬浮窗发起拖动后记录坐标。
+  onMount(() => {
+    if (!isTauri) return;
+    let unMoved: (() => void) | undefined;
+    void (async () => {
+      unMoved = await getCurrentWindow().onMoved(() => {
+        if (!manualDragArmed) return;
+        manualDragMoved = true;
+        if (dragSettleTimer) clearTimeout(dragSettleTimer);
+        dragSettleTimer = setTimeout(() => {
+          manualDragArmed = false;
+          void saveOverlayPosition();
+        }, 300);
+      });
+    })();
+    return () => {
+      unMoved?.();
+      if (dragSettleTimer) clearTimeout(dragSettleTimer);
+      if (dragDisarmTimer) clearTimeout(dragDisarmTimer);
+    };
+  });
+
+  function onDragPointerDown(event: PointerEvent) {
+    if (!isTauri || !draggable || clickThrough || event.button !== 0) return;
+    if ((event.target as HTMLElement).closest("button")) return;
+    manualDragArmed = true;
+    manualDragMoved = false;
+    if (dragSettleTimer) clearTimeout(dragSettleTimer);
+    if (dragDisarmTimer) clearTimeout(dragDisarmTimer);
+    // 单击但没有移动时及时撤销，避免后续预设移动被误判成人工拖动。
+    dragDisarmTimer = setTimeout(() => {
+      if (!manualDragMoved) manualDragArmed = false;
+    }, 3000);
+  }
 
   let textScrollEl: HTMLDivElement | undefined = $state();
 
@@ -122,11 +178,18 @@
     胶囊本体宽度随内容伸缩（fit-content），轻装饰——Win11 语音输入条风格。
 -->
 {#if capsule}
-  <div class="flex h-full items-center justify-center select-none" data-tauri-drag-region>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="flex h-full items-center justify-center select-none {draggable && !clickThrough
+      ? 'cursor-move'
+      : ''}"
+    data-tauri-drag-region={draggable && !clickThrough ? "" : undefined}
+    onpointerdown={onDragPointerDown}
+  >
     <div
-      class="flex max-w-full items-center gap-2.5 rounded-full bg-kotone-deep/92 py-2 pr-4 pl-3.5 shadow-[0_6px_28px_rgba(0,0,0,0.5)] ring-1 ring-kotone-cyan/35"
+      class="flex max-w-full items-center gap-2.5 rounded-full bg-kotone-deep/96 py-2 pr-4 pl-3.5 ring-1 ring-kotone-cyan/35"
+      data-tauri-drag-region={draggable && !clickThrough ? "" : undefined}
       style:width="fit-content"
-      data-tauri-drag-region
     >
       {#if $appState.state === "listening"}
         <!-- 录音中：呼吸点 + 波形 + 流式文本（单行截断） -->
@@ -191,10 +254,15 @@
     </div>
   </div>
 {:else}
-<div class="flex h-full items-stretch p-2 select-none" data-tauri-drag-region>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  class="flex h-full items-stretch select-none {draggable && !clickThrough ? 'cursor-move' : ''}"
+  data-tauri-drag-region={draggable && !clickThrough ? "" : undefined}
+  onpointerdown={onDragPointerDown}
+>
   <div
-    class="flex w-full items-center gap-3 rounded-2xl bg-kotone-deep/92 px-4 py-2 shadow-[0_0_24px_rgba(0,229,255,0.18)] ring-1 ring-kotone-cyan/40"
-    data-tauri-drag-region
+    class="flex w-full items-center gap-3 rounded-2xl bg-kotone-deep/96 px-4 py-2 ring-1 ring-inset ring-kotone-cyan/40"
+    data-tauri-drag-region={draggable && !clickThrough ? "" : undefined}
   >
     {#if $appState.state === "listening"}
       <!-- 聆听：麦克风呼吸光晕 + 渐变声波 + 流式 partial 上屏 -->
