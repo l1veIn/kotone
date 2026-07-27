@@ -49,7 +49,6 @@
   const primaryModel = $derived(
     models.find((m) => m.engineId === "sherpa-onnx-x-asr-zh-en") ?? null,
   );
-  const vadModel = $derived(models.find((m) => m.id === "silero-vad") ?? null);
   const isDownloaded = (m: ModelInfo | null) =>
     m !== null && (m.downloaded || downloadedIds.includes(m.id));
   const primaryReady = $derived(isDownloaded(primaryModel));
@@ -238,16 +237,7 @@
     starting = true;
     testError = "";
     try {
-      if (
-        selectedMode === "one-shot" &&
-        vadModel &&
-        !isDownloaded(vadModel)
-      ) {
-        await downloadById(vadModel.id);
-        if (!isDownloaded(vadModel)) {
-          throw new Error("语音自动判停组件未就绪");
-        }
-      }
+      // VAD 判停组件已随应用本体分发，one-shot 无需额外下载
       const hotkeyMode = selectedMode === "push-to-talk" ? "hold" : "toggle";
       settingsStore.set(
         await updateSettings({
@@ -584,12 +574,6 @@
           {/each}
         </div>
 
-        {#if selectedMode === "one-shot"}
-          <p class="mt-3 rounded-lg bg-kotone-violet/10 px-3 py-2 text-[11px] text-white/60 ring-1 ring-kotone-violet/30">
-            启动测试时会自动准备约 1 MB 的语音判停组件。
-          </p>
-        {/if}
-
         <div class="kotone-card mt-4 flex items-center gap-3 p-4">
           <div class="min-w-0 flex-1">
             <p class="text-xs text-white/50">当前热键</p>
@@ -658,7 +642,7 @@
               disabled={starting || downloadTargetId !== null}
               onclick={() => void startForTest()}
             >
-              {starting ? "启动中…" : downloadTargetId ? "准备语音组件中…" : "▶ 启动琴音"}
+              {starting ? "启动中…" : "▶ 启动琴音"}
             </button>
           </div>
         {:else}

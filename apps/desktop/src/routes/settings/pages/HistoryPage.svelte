@@ -4,11 +4,12 @@
    * 顶部 history.mode 三态 + 清空（二次确认）；
    * 列表 = 时间 / 识别文本 / 时长 / 状态；技术字段收纳到高级页。
    */
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import {
     updateSettings,
     getHistory,
     clearHistory,
+    readHistoryAudio,
     type HistoryRecord,
   } from "../../../lib/ipc";
   import { settingsStore, toast, errText } from "../../../lib/stores/ui";
@@ -17,10 +18,68 @@
   let records = $state<HistoryRecord[] | null>(null);
   /** 清空二次确认：点一次进入确认态，3s 内再点执行 */
   let confirmingClear = $state(false);
+  /** 正在播放的记录 id（sessionId+ts）；同时只允许一条在播 */
+  let playingId = $state<string | null>(null);
+  /** 正在加载音频的记录 id（防止加载期间重复点击） */
+  let loadingId = $state<string | null>(null);
+  let audioEl: HTMLAudioElement | null = null;
+  let audioUrl: string | null = null;
 
   onMount(async () => {
     await refresh();
   });
+
+  onDestroy(() => {
+    stopPlayback();
+  });
+
+  function recordId(r: HistoryRecord): string {
+    return r.sessionId + r.ts;
+  }
+
+  /** 停止当前播放并释放 objectURL */
+  function stopPlayback() {
+    audioEl?.pause();
+    audioEl = null;
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+      audioUrl = null;
+    }
+    playingId = null;
+    loadingId = null;
+  }
+
+  /** 播放 / 暂停切换：切播先停上一条；播完（ended）自动停止 */
+  async function togglePlay(r: HistoryRecord) {
+    if (!r.audioFile) return;
+    const id = recordId(r);
+    if (playingId === id || loadingId === id) {
+      stopPlayback();
+      return;
+    }
+    stopPlayback();
+    loadingId = id;
+    try {
+      const bytes = await readHistoryAudio(r.audioFile);
+      if (loadingId !== id) return; // 加载期间已切播/停止
+      const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "audio/wav" }));
+      const el = new Audio(url);
+      el.onended = () => {
+        if (playingId === id) stopPlayback();
+      };
+      audioEl = el;
+      audioUrl = url;
+      playingId = id;
+      await el.play();
+    } catch (e) {
+      if (loadingId === id) {
+        toast(false, `播放失败：${errText(e)}`);
+        stopPlayback();
+      }
+    } finally {
+      if (loadingId === id) loadingId = null;
+    }
+  }
 
   async function refresh() {
     try {
@@ -50,6 +109,7 @@
       return;
     }
     confirmingClear = false;
+    stopPlayback(); // 音频文件随记录一起删除，先停掉在播条目
     try {
       await clearHistory();
       records = [];
@@ -115,6 +175,7 @@
     <div class="mt-4 flex flex-col gap-2">
       {#each records as r (r.sessionId + r.ts)}
         {@const meta = outcomeMeta[r.outcome] ?? outcomeMeta.cancelled}
+        {@const id = recordId(r)}
         <div class="kotone-card flex items-center gap-3 px-4 py-3">
           <span class="shrink-0 text-[11px] text-white/40 tabular-nums">{fmtTime(r.ts)}</span>
           <div class="min-w-0 flex-1">
@@ -126,6 +187,27 @@
               {#if r.error}· <span class="text-kotone-pink/80">{r.error}</span>{/if}
             </p>
           </div>
+          {#if r.audioFile}
+            <!-- 播放/暂停：播放中按钮旁显示简易声波动画 -->
+            <div class="flex shrink-0 items-center gap-1.5">
+              {#if playingId === id}
+                <span class="flex h-3.5 items-end gap-[2px]" aria-hidden="true">
+                  {#each [0, 1, 2, 3] as i}
+                    <span class="wave-bar" style:animation-delay="{i * 0.12}s"></span>
+                  {/each}
+                </span>
+              {/if}
+              <button
+                class="flex h-6 w-6 items-center justify-center rounded-full bg-kotone-cyan/15 text-[10px] text-kotone-cyan ring-1 ring-kotone-cyan/40 transition hover:bg-kotone-cyan/25 active:scale-95 disabled:opacity-50"
+                title={playingId === id ? "停止播放" : "播放录音"}
+                aria-label={playingId === id ? "停止播放" : "播放录音"}
+                disabled={loadingId === id}
+                onclick={() => void togglePlay(r)}
+              >
+                {loadingId === id ? "…" : playingId === id ? "⏸" : "▶"}
+              </button>
+            </div>
+          {/if}
           <span class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold {meta.cls}">
             {meta.text}
           </span>
@@ -135,3 +217,29 @@
     <p class="mt-3 text-[11px] text-white/35">共 {records.length} 条（新→旧）</p>
   {/if}
 </div>
+
+<style>
+  /* 播放中的简易声波动画：四根竖条高低跳动（纯 CSS，暂停/停止即移除节点） */
+  .wave-bar {
+    width: 2px;
+    height: 30%;
+    border-radius: 9999px;
+    background: var(--color-kotone-cyan, #00e5ff);
+    animation: wave-bounce 0.9s ease-in-out infinite;
+  }
+  @keyframes wave-bounce {
+    0%,
+    100% {
+      height: 30%;
+    }
+    50% {
+      height: 100%;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .wave-bar {
+      animation: none;
+      height: 60%;
+    }
+  }
+</style>

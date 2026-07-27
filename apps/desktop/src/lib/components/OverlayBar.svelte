@@ -3,7 +3,7 @@
    * 悬浮录音条（方向 B「中继站」：直播间弹幕气泡风格）。
    * 状态驱动 UI：orchestrator 是唯一状态所有者，这里只渲染 appState。
    *
-   *   listening    麦克风呼吸光晕 + 青→品红渐变声波 + 流式 partial 上屏
+   *   listening    麦克风呼吸光晕 + 流式引擎 partial 上屏 / 非流式引擎青→品红渐变声波
    *   transcribing 「转写中…」
    *   preview      聊天气泡（青色描边 + 小尾巴）+「再按一次发送 · Esc 重说」
    *   sending      品红光晕脉冲
@@ -14,7 +14,7 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { appState } from "../stores/state";
+  import { appState, engineStreaming, initEngineStreaming } from "../stores/state";
   import {
     confirmSend,
     cancelSession,
@@ -60,6 +60,8 @@
   }
 
   onMount(async () => {
+    // 悬浮窗是独立 webview：自行初始化流式检测（决定 listening 显示文本还是声波）
+    void initEngineStreaming();
     try {
       const s = await getSettings();
       hotkeyLabel = s.hotkey.key;
@@ -114,9 +116,13 @@
     dragDisarmTimer = setTimeout(() => {
       if (!manualDragMoved) manualDragArmed = false;
     }, 3000);
+    // data-tauri-drag-region 只在 event.target 自身带属性时生效（子元素无法拖动），
+    // 改为与 Titlebar 一致的 startDragging()：任意非交互位置按下即可整窗拖动。
+    void getCurrentWindow().startDragging();
   }
 
   let textScrollEl: HTMLDivElement | undefined = $state();
+  let previewScrollEl: HTMLDivElement | undefined = $state();
 
   $effect(() => {
     if ($appState.state === "preview") {
@@ -125,10 +131,12 @@
     }
   });
 
-  // partial 更新时滚动到底部（流式上屏）
+  // partial / 预览文本更新时滚动到底部（流式上屏、card 预览气泡）
   $effect(() => {
     void $appState.partialText;
+    void $appState.finalText;
     if (textScrollEl) textScrollEl.scrollTop = textScrollEl.scrollHeight;
+    if (previewScrollEl) previewScrollEl.scrollTop = previewScrollEl.scrollHeight;
   });
 
   async function onConfirm() {
@@ -172,10 +180,12 @@
 
 <!--
   两种样式（overlay.style）：
-  - card：480×120 窗口内铺满一条圆角悬浮条；data-tauri-drag-region 使空白处可拖动窗口。
+  - card：480×120 窗口内铺满一条圆角悬浮条；非按钮区 pointerdown 由 startDragging() 整窗拖动。
     整体小巧不遮挡游戏：透明背景 + 微弱青光晕描边面板。
   - capsule：520×64 窗口（后端 SetWindowPos 水平居中靠下，底部留 48px），
     胶囊本体宽度随内容伸缩（fit-content），轻装饰——Win11 语音输入条风格。
+  单行文本用 .ellipsis-head（direction:rtl）让省略号落在行首：显示最新尾部、头部滚出，
+  文本末尾补 LRM（&#x200E;）防中英混排时尾部标点被 bidi 算法翻转。
 -->
 {#if capsule}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -183,29 +193,39 @@
     class="flex h-full items-center justify-center select-none {draggable && !clickThrough
       ? 'cursor-move'
       : ''}"
-    data-tauri-drag-region={draggable && !clickThrough ? "" : undefined}
     onpointerdown={onDragPointerDown}
   >
     <div
       class="flex max-w-full items-center gap-2.5 rounded-full bg-kotone-deep/96 py-2 pr-4 pl-3.5 ring-1 ring-kotone-cyan/35"
-      data-tauri-drag-region={draggable && !clickThrough ? "" : undefined}
       style:width="fit-content"
     >
       {#if $appState.state === "listening"}
-        <!-- 录音中：呼吸点 + 波形 + 流式文本（单行截断） -->
+        <!-- 录音中：呼吸点 +（流式引擎：partial 文本 / 非流式引擎：声波） -->
         <span class="mic-breath h-2.5 w-2.5 shrink-0 rounded-full bg-kotone-cyan"></span>
-        <Waveform level={$appState.level} bars={12} />
-        <p class="max-w-[340px] truncate text-sm text-white" in:fade={{ duration: 150 }}>
-          {$appState.partialText || "聆听中…"}
-        </p>
+        {#if $engineStreaming}
+          <p
+            class="ellipsis-head max-w-[340px] truncate text-sm text-white"
+            in:fade={{ duration: 150 }}
+          >
+            {$appState.partialText || "聆听中…"}&#x200E;
+          </p>
+        {:else}
+          <Waveform level={$appState.level} bars={12} />
+        {/if}
       {:else if $appState.state === "transcribing"}
         <span class="spinner inline-block h-3.5 w-3.5 shrink-0 rounded-full"></span>
-        <p class="max-w-[380px] truncate text-sm text-kotone-violet" in:fade={{ duration: 150 }}>
-          {$appState.partialText || "转写中…"}
+        <p
+          class="ellipsis-head max-w-[380px] truncate text-sm text-kotone-violet"
+          in:fade={{ duration: 150 }}
+        >
+          {$appState.partialText || "转写中…"}&#x200E;
         </p>
       {:else if $appState.state === "preview"}
-        <p class="max-w-[260px] truncate text-sm text-white" in:fade={{ duration: 150 }}>
-          {$appState.finalText}
+        <p
+          class="ellipsis-head max-w-[260px] truncate text-sm text-white"
+          in:fade={{ duration: 150 }}
+        >
+          {$appState.finalText}&#x200E;
         </p>
         <span class="shrink-0 text-[10px] whitespace-nowrap text-white/40">
           {hotkeyLabel} 发送 · Esc 重说
@@ -218,14 +238,20 @@
         </button>
       {:else if $appState.state === "sending"}
         <span class="send-pulse inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-kotone-pink"></span>
-        <p class="max-w-[380px] truncate text-sm text-white/70" in:fade={{ duration: 150 }}>
-          {$appState.finalText || "发送中"}
+        <p
+          class="ellipsis-head max-w-[380px] truncate text-sm text-white/70"
+          in:fade={{ duration: 150 }}
+        >
+          {$appState.finalText || "发送中"}&#x200E;
         </p>
       {:else if $appState.state === "success"}
         <!-- 发送后短暂显示结果（随后按 overlay.visibility 规则隐藏/驻留） -->
         <span class="shrink-0 text-sm font-bold text-kotone-cyan">✓</span>
-        <p class="max-w-[380px] truncate text-sm text-white" in:fade={{ duration: 150 }}>
-          已发送 · {$appState.finalText}
+        <p
+          class="ellipsis-head max-w-[380px] truncate text-sm text-white"
+          in:fade={{ duration: 150 }}
+        >
+          已发送 · {$appState.finalText}&#x200E;
         </p>
       {:else if $appState.state === "error"}
         <span class="shrink-0 text-sm font-bold text-kotone-pink">✗</span>
@@ -257,38 +283,40 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="flex h-full items-stretch select-none {draggable && !clickThrough ? 'cursor-move' : ''}"
-  data-tauri-drag-region={draggable && !clickThrough ? "" : undefined}
   onpointerdown={onDragPointerDown}
 >
   <div
     class="flex w-full items-center gap-3 rounded-2xl bg-kotone-deep/96 px-4 py-2 ring-1 ring-inset ring-kotone-cyan/40"
-    data-tauri-drag-region={draggable && !clickThrough ? "" : undefined}
   >
     {#if $appState.state === "listening"}
-      <!-- 聆听：麦克风呼吸光晕 + 渐变声波 + 流式 partial 上屏 -->
+      <!-- 聆听：麦克风呼吸光晕 +（流式引擎：partial 上屏 / 非流式引擎：渐变声波） -->
       <span class="mic-breath flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-kotone-cyan/12" in:fade={{ duration: 150 }}>
         <svg viewBox="0 0 24 24" fill="none" stroke="#00e5ff" stroke-width="2" class="h-4.5 w-4.5">
           <rect x="9" y="2" width="6" height="12" rx="3" />
           <path d="M5 10a7 7 0 0 0 14 0M12 19v3" stroke-linecap="round" />
         </svg>
       </span>
-      <div class="shrink-0">
-        <Waveform level={$appState.level} />
-      </div>
-      <div class="min-w-0 flex-1">
-        <p class="text-[11px] leading-tight text-kotone-cyan/80">{stateLabel.listening}</p>
-        <div bind:this={textScrollEl} class="kotone-scroll mt-0.5 max-h-14 overflow-y-auto pr-1">
-          {#if $appState.partialText}
-            {#key $appState.partialText}
-              <p class="text-sm leading-snug break-all text-white" in:fade={{ duration: 180 }}>
-                {$appState.partialText}
-              </p>
-            {/key}
-          {:else}
-            <p class="text-sm text-white/45">聆听中…</p>
-          {/if}
+      {#if $engineStreaming}
+        <div class="min-w-0 flex-1">
+          <p class="text-[11px] leading-tight text-kotone-cyan/80">{stateLabel.listening}</p>
+          <div bind:this={textScrollEl} class="kotone-scroll mt-0.5 max-h-14 overflow-y-auto pr-1">
+            {#if $appState.partialText}
+              {#key $appState.partialText}
+                <p class="text-sm leading-snug break-all text-white" in:fade={{ duration: 180 }}>
+                  {$appState.partialText}
+                </p>
+              {/key}
+            {:else}
+              <p class="text-sm text-white/45">聆听中…</p>
+            {/if}
+          </div>
         </div>
-      </div>
+      {:else}
+        <!-- 非流式引擎没有 partial：只显示声波 -->
+        <div class="flex min-w-0 flex-1 items-center justify-center" in:fade={{ duration: 150 }}>
+          <Waveform level={$appState.level} />
+        </div>
+      {/if}
     {:else if $appState.state === "transcribing"}
       <div class="min-w-0 flex-1" in:fade={{ duration: 150 }}>
         <p class="flex items-center gap-2 text-sm text-kotone-violet">
@@ -302,7 +330,7 @@
     {:else if $appState.state === "preview"}
       <!-- 预览（ADR-006 只读）：聊天气泡 + 热键确认/重说。悬浮条不抢焦点，主交互是热键 -->
       <div class="flex min-w-0 flex-1 flex-col gap-1.5" in:fade={{ duration: 150 }}>
-        <div class="bubble kotone-scroll max-h-14 overflow-y-auto px-3 py-1.5">
+        <div bind:this={previewScrollEl} class="bubble kotone-scroll max-h-14 overflow-y-auto px-3 py-1.5">
           <p class="text-sm leading-snug break-all text-white">{$appState.finalText}</p>
         </div>
         <p class="text-[11px] leading-tight text-white/45">
@@ -394,6 +422,18 @@
 {/if}
 
 <style>
+  /*
+   * 头部省略号（capsule 单行文本）：direction:rtl 让 truncate 的省略号落在行首，
+   * 显示最新尾部、头部滚出；text-align:left 保持视觉左对齐。
+   * 文本尾部需补 LRM（\u200E）：中英混排时尾部标点/数字属中性字符，
+   * 在 RTL 段落方向下会被 bidi 算法翻到行首，LRM 把它们锚回 LTR。
+   * （中文/英文均为强 L 字符，语序本身不受 rtl 影响。）
+   */
+  .ellipsis-head {
+    direction: rtl;
+    text-align: left;
+  }
+
   /* 聊天气泡：青色描边 + 左下小尾巴 */
   .bubble {
     position: relative;
