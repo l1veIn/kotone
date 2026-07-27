@@ -28,7 +28,11 @@ if (unique.size !== 1 || unique.has(undefined)) {
 }
 
 const version = desktopPackage.version;
-const tag = process.env.GITHUB_REF_NAME || process.argv[2];
+const tag =
+  process.argv[2] ||
+  (process.env.GITHUB_REF_TYPE === "tag"
+    ? process.env.GITHUB_REF_NAME
+    : undefined);
 if (tag && tag !== `v${version}`) {
   console.error(`Tag ${tag} does not match application version v${version}.`);
   process.exit(1);
