@@ -35,4 +35,11 @@
 
 - 当前直接分发渠道为 GitHub Release + NSIS（按用户安装，不要求管理员权限）。
 - Windows 代码签名证书接入后再启用签名门禁；未签名构建可能触发 SmartScreen。
-- 自动更新需要单独保管 Tauri updater 私钥。首版不启用 updater，避免在密钥与回滚策略未确定前形成不可维护的更新通道。
+- 自动更新（Tauri updater）已接入：`tauri.conf.json` 的 `plugins.updater` 指向
+  `https://github.com/l1veIn/kotone/releases/latest/download/latest.json`，
+  `bundle.createUpdaterArtifacts` 已开启，`Release Windows` 工作流会随 Release
+  自动上传签名后的更新包与 `latest.json`。
+- updater 私钥与密码只保管在 GitHub Secrets（`TAURI_SIGNING_PRIVATE_KEY` /
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）；公钥写在 `tauri.conf.json`。
+  **私钥或密码丢失 = 更新通道报废**（已装客户端将永远无法校验后续更新），
+  请离线备份；轮换密钥意味着所有用户必须手动重装。
