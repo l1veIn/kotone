@@ -1,7 +1,7 @@
 <script lang="ts">
   /*
    * 快捷键页：交互模式四选卡（interactionMode）+ vadSilenceMs 滑块（one-shot / solo）+
-   * 热键录入捕获（ADR-006）+ 热键后端与注册状态。
+   * 热键录入捕获（ADR-006）与面向用户的注册错误恢复。
    */
   import { onDestroy, onMount } from "svelte";
   import {
@@ -122,32 +122,6 @@
     captureCleanup?.();
   });
 
-  async function onHotkeyBackendChange(e: Event) {
-    const hotkeyBackend = (e.target as HTMLSelectElement).value;
-    try {
-      settingsStore.set(await updateSettings({ hotkeyBackend }));
-      toast(true, "热键后端已切换并重注册");
-    } catch (err) {
-      toast(false, `切换热键后端失败：${errText(err)}`);
-    } finally {
-      try {
-        hotkeyStatus = await getHotkeyStatus();
-      } catch {
-        /* 状态刷新失败不覆盖切换反馈 */
-      }
-    }
-  }
-
-  /** 当前生效后端的展示名 */
-  const backendLabel = $derived(
-    hotkeyStatus === null
-      ? "检测中…"
-      : hotkeyStatus.backend === "llhook"
-        ? "LL 钩子（游戏前台可用）"
-        : hotkeyStatus.backend === "register"
-          ? "RegisterHotKey（系统热键）"
-          : "未注册",
-  );
 </script>
 
 <div class="px-6 py-5">
@@ -245,23 +219,6 @@
       </button>
       <span class="text-[11px] text-white/40">当前：{$settingsStore?.hotkey.key ?? "…"}</span>
     </div>
-    <div class="mt-3 flex items-center gap-2">
-      <label class="text-xs text-white/60" for="hotkey-backend">热键后端</label>
-      <select
-        id="hotkey-backend"
-        class="rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60 [&>option]:bg-kotone-deep"
-        value={$settingsStore?.hotkeyBackend ?? "auto"}
-        onchange={(e) => void onHotkeyBackendChange(e)}
-      >
-        <option value="auto">自动（优先 LL 钩子）</option>
-        <option value="llhook">LL 钩子</option>
-        <option value="register">RegisterHotKey</option>
-      </select>
-      <span class="text-[11px] text-white/40">当前生效：{backendLabel}</span>
-    </div>
-    <p class="mt-2 text-[11px] text-white/40">
-      部分游戏前台时系统热键（RegisterHotKey）收不到按键；LL 钩子（WH_KEYBOARD_LL）可覆盖该场景，命中时会吞掉热键避免触发游戏内同键绑定。
-    </p>
     {#if hotkeyStatus?.error}
       <div class="mt-3 rounded-lg bg-kotone-pink/15 p-2.5 ring-1 ring-kotone-pink/50">
         <p class="text-xs font-medium text-kotone-pink">

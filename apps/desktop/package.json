@@ -9,6 +9,7 @@
     "build": "tauri build",
     "dev:web": "vite dev",
     "build:web": "vite build",
+    "test:e2e": "playwright test",
     "tauri": "tauri",
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },
@@ -17,6 +18,7 @@
     "@tauri-apps/plugin-dialog": "^2.7.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.0",
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "@tailwindcss/vite": "^4.0.0",
     "@tauri-apps/cli": "^2",

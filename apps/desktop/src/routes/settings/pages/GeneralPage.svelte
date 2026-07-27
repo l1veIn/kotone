@@ -1,7 +1,7 @@
 <script lang="ts">
   /*
    * 通用页（方向 B 灵魂首屏）：欢迎面板 = 直播间背景 + Kotone 立绘 +
-   * 渐变标题 + 三个特性 chip；下方为通用设置（麦克风 / 悬浮窗 / 运行时 / 权限）。
+   * 渐变标题 + 三个特性 chip；下方只保留日常高频设置。
    */
   import { onMount } from "svelte";
   import {
@@ -17,6 +17,8 @@
   import Toggle from "../../../lib/components/Toggle.svelte";
   import relayBg from "../../../assets/brand/relay-room-bg.png";
   import cutout from "../../../assets/brand/kotone-cutout.png";
+
+  let { onOpenOnboarding }: { onOpenOnboarding: () => void } = $props();
 
   let devices = $state<AudioDevice[]>([]);
   let elevation = $state<ElevationStatus | null>(null);
@@ -163,10 +165,26 @@
       </select>
     </section>
 
-    <!-- 悬浮窗（overlay.visibility / overlay.style；显隐由后端会话事件驱动） -->
+    {#if needsElevation}
+      <section class="mt-4 flex items-center gap-3 rounded-xl bg-kotone-pink/12 p-4 ring-1 ring-kotone-pink/45">
+        <div class="min-w-0 flex-1">
+          <p class="text-sm font-semibold text-kotone-pink">当前游戏需要更高权限才能接收文字</p>
+          <p class="mt-1 text-[11px] text-white/55">重新启动琴音后即可继续，其他设置不会丢失。</p>
+        </div>
+        <button
+          class="shrink-0 rounded-lg bg-kotone-pink px-3 py-2 text-xs font-semibold text-white transition hover:brightness-110 disabled:opacity-50"
+          disabled={restarting}
+          onclick={() => void onRestartAsAdmin()}
+        >
+          {restarting ? "正在重启…" : "重新启动"}
+        </button>
+      </section>
+    {/if}
+
+    <!-- 悬浮窗：普通用户只需要决定何时出现、放在哪里、是否穿透。 -->
     <section class="kotone-panel mt-4 p-4">
       <h2 class="text-sm font-semibold text-kotone-cyan/90">悬浮窗</h2>
-      <p class="mt-2 text-[10px] font-semibold tracking-wide text-white/40">显示模式</p>
+      <p class="mt-2 text-[10px] font-semibold tracking-wide text-white/40">什么时候出现</p>
       <div class="mt-1.5 grid grid-cols-2 gap-2">
         {#each [
           { id: "always", name: "常驻", desc: "启动即显示，停止才隐藏" },
@@ -189,32 +207,58 @@
           </button>
         {/each}
       </div>
-      <p class="mt-3 text-[10px] font-semibold tracking-wide text-white/40">样式</p>
-      <div class="mt-1.5 grid grid-cols-2 gap-2">
+
+      <p class="mt-4 text-[10px] font-semibold tracking-wide text-white/40">固定位置</p>
+      <div class="mt-1.5 grid grid-cols-4 gap-2">
         {#each [
-          { id: "card", name: "卡片", desc: "屏幕中央的圆角面板，贴纸气泡全装饰" },
-          { id: "capsule", name: "胶囊", desc: "底部居中的轻巧胶囊条，随文字伸缩" },
+          { id: "auto", name: "智能" },
+          { id: "top_left", name: "左上" },
+          { id: "top_center", name: "顶部" },
+          { id: "top_right", name: "右上" },
+          { id: "center", name: "中央" },
+          { id: "bottom_left", name: "左下" },
+          { id: "bottom_center", name: "底部" },
+          { id: "bottom_right", name: "右下" },
         ] as opt}
-          {@const selected = ($settingsStore.overlay?.style ?? "card") === opt.id}
+          {@const selected = ($settingsStore.overlay.position ?? "auto") === opt.id}
           <button
-            class="rounded-[var(--radius-kotone-card)] px-3 py-2.5 text-left ring-1 transition
+            class="rounded-lg px-2 py-2 text-center text-xs font-semibold ring-1 transition
               {selected
-              ? 'bg-kotone-violet/15 ring-kotone-violet/60'
-              : 'bg-kotone-card/60 ring-white/10 hover:bg-kotone-card'}"
+              ? 'bg-kotone-cyan/12 text-kotone-cyan ring-kotone-cyan/60'
+              : 'bg-white/5 text-white/60 ring-white/10 hover:bg-white/10'}"
             onclick={() =>
               void patch(
-                { overlay: { style: opt.id } },
-                opt.id === "card" ? "悬浮窗样式已切换：卡片" : "悬浮窗样式已切换：胶囊",
+                { overlay: { position: opt.id } },
+                `悬浮窗位置已切换：${opt.name}`,
               )}
           >
-            <p class="text-sm font-semibold {selected ? 'text-kotone-violet' : ''}">{opt.name}</p>
-            <p class="mt-0.5 text-[11px] text-white/50">{opt.desc}</p>
+            {opt.name}
           </button>
         {/each}
       </div>
-      <p class="mt-2 text-[11px] text-white/40">
-        「用时浮现」在独奏模式（solo）下持续显示，直到会话停止；样式切换即时生效，无需重启。
-      </p>
+      {#if $settingsStore.overlay.position === "custom"}
+        <p class="mt-2 text-[11px] text-kotone-cyan/75">当前使用你上次拖动后的位置。</p>
+      {/if}
+
+      <div class="mt-4 flex flex-col gap-4 rounded-lg bg-white/4 p-3 ring-1 ring-white/8">
+        <Toggle
+          checked={$settingsStore.overlay.draggable}
+          label="允许拖动悬浮窗"
+          desc="按住悬浮窗空白处拖动，松开后自动记住位置"
+          onchange={(v) =>
+            void patch({ overlay: { draggable: v } }, v ? "悬浮窗已允许拖动" : "悬浮窗位置已锁定")}
+        />
+        <Toggle
+          checked={$settingsStore.overlay.clickThrough}
+          label="鼠标点击穿透"
+          desc="鼠标操作会直接落到游戏；需要调整位置时先在这里关闭"
+          onchange={(v) =>
+            void patch(
+              { overlay: { clickThrough: v } },
+              v ? "已开启鼠标点击穿透" : "已关闭鼠标点击穿透",
+            )}
+        />
+      </div>
     </section>
 
     <!-- 运行时（「启动」开关，core runtime 状态机） -->
@@ -229,72 +273,20 @@
       />
     </section>
 
-    <!-- 权限（UIPI 提权方案，docs/development.md §10 R-1） -->
-    <section class="kotone-panel mt-4 p-4">
-      <h2 class="text-sm font-semibold text-kotone-cyan/90">权限</h2>
-      <div class="mt-3 flex items-center justify-between">
-        <span class="text-sm">当前运行权限</span>
-        <span
-          class="rounded px-2 py-0.5 text-xs font-semibold {elevation?.elevated
-            ? 'bg-kotone-cyan/20 text-kotone-cyan'
-            : 'bg-white/10 text-white/60'}"
-        >
-          {elevation === null ? "检测中…" : elevation.elevated ? "管理员" : "普通用户"}
-        </span>
-      </div>
-
-      {#if needsElevation}
-        <div class="mt-3 rounded-lg bg-kotone-pink/15 p-3 ring-1 ring-kotone-pink/60">
-          <p class="text-sm font-semibold text-kotone-pink">
-            检测到游戏以管理员运行，Kotone 需要同等权限才能发送
-          </p>
-          <p class="mt-1 text-[11px] leading-relaxed text-white/60">
-            Windows UIPI 会拦截低权限进程发往高权限游戏的模拟输入。重启后会弹出一次 UAC 确认。
-          </p>
-        </div>
-      {/if}
-
-      {#if elevation && !elevation.elevated}
-        <button
-          class="mt-3 w-full rounded-lg px-3 py-2 text-sm font-semibold transition active:scale-95 disabled:opacity-50 {needsElevation
-            ? 'bg-kotone-pink text-white shadow-glow-pink hover:brightness-110'
-            : 'bg-white/10 text-white/80 hover:bg-white/20'}"
-          disabled={restarting}
-          onclick={() => void onRestartAsAdmin()}
-        >
-          {restarting ? "正在重启…" : "以管理员身份重启"}
-        </button>
-        {#if !needsElevation}
-          <p class="mt-2 text-[11px] text-white/40">
-            当前为普通权限。若目标游戏以管理员运行，发送会被系统拦截，此处会提示提权。
-          </p>
-        {/if}
-      {/if}
-
-      <div class="mt-4">
-        <Toggle
-          checked={$settingsStore.runAsAdminOnStart}
-          label="启动时自动以管理员运行"
-          desc="每次启动若未提权则自动重启并弹一次 UAC；取消 UAC 则本次按普通权限运行"
-          onchange={(v) =>
-            void patch(
-              { runAsAdminOnStart: v },
-              v ? "已开启启动时自动提权（每次启动弹一次 UAC）" : "已关闭启动时自动提权",
-            )}
-        />
-      </div>
-      {#if $settingsStore.runAsAdminOnStart && elevation && !elevation.elevated}
-        <p class="mt-2 text-[11px] text-white/45">
-          已开启，将在下次启动时生效 ·
-          <button
-            class="text-kotone-cyan underline underline-offset-2 transition hover:brightness-125 disabled:opacity-50"
-            disabled={restarting}
-            onclick={() => void onRestartAsAdmin()}
-          >
-            立即以管理员身份重启
-          </button>
+    <section class="kotone-panel mt-4 flex items-center justify-between gap-4 p-4">
+      <div>
+        <h2 class="text-sm font-semibold text-kotone-cyan/90">设置助手</h2>
+        <p class="mt-1 text-[11px] leading-relaxed text-white/50">
+          重新选择游戏配置、检查模型与麦克风、设置热键，并完成一次真实发送测试。
         </p>
-      {/if}
+      </div>
+      <button
+        class="shrink-0 rounded-lg bg-white/10 px-3 py-2 text-xs font-semibold text-white/85 ring-1 ring-white/15 transition hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-kotone-cyan"
+        onclick={onOpenOnboarding}
+      >
+        重新运行向导
+      </button>
     </section>
+
   {/if}
 </div>

@@ -7,7 +7,7 @@ mod tray;
 
 use std::sync::{Arc, RwLock};
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter as TauriEventEmitter, Manager};
 
 use hotkey::{HotkeyManager, HotkeyStatus};
 use kotone_core::audio::AudioDevice;
@@ -19,7 +19,9 @@ use kotone_core::profile::{
     HotwordMergeReport,
 };
 use kotone_core::runtime::RuntimePhase;
-use kotone_core::settings::{self, OverlayStyle, OverlayVisibility, Settings};
+use kotone_core::settings::{
+    self, OverlayConfig, OverlayPosition, OverlayStyle, OverlayVisibility, Settings,
+};
 use kotone_core::stt::{EngineInfo, EngineRegistry};
 use kotone_core::log;
 use kotone_platform_windows::inject::{WinFocusBackend, WindowsInjector};
@@ -33,6 +35,95 @@ pub struct SharedState {
     pub orchestrator: Arc<Orchestrator>,
     pub engines: Arc<EngineRegistry>,
     pub injector: Arc<dyn Injector>,
+}
+
+/// 启动时如何处理新手向导。
+///
+/// - auto：仅配置中尚未完成时显示（正式用户默认）
+/// - always：本次强制显示，但不重置持久化完成标记（回归测试）
+/// - never：本次强制跳过（自动化/故障排查）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+enum OnboardingLaunchMode {
+    Auto,
+    Always,
+    Never,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartupOptions {
+    onboarding: OnboardingLaunchMode,
+}
+
+fn parse_onboarding_launch_mode<I, S>(args: I) -> OnboardingLaunchMode
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut mode = OnboardingLaunchMode::Auto;
+    let mut expect_value = false;
+    for arg in args {
+        let arg = arg.as_ref();
+        let value = if expect_value {
+            expect_value = false;
+            Some(arg)
+        } else if arg == "--onboarding" {
+            expect_value = true;
+            None
+        } else {
+            arg.strip_prefix("--onboarding=")
+        };
+        mode = match value {
+            Some("always") => OnboardingLaunchMode::Always,
+            Some("never") => OnboardingLaunchMode::Never,
+            Some("auto") => OnboardingLaunchMode::Auto,
+            _ => mode,
+        };
+    }
+    mode
+}
+
+#[tauri::command]
+fn get_startup_options(options: tauri::State<StartupOptions>) -> StartupOptions {
+    options.inner().clone()
+}
+
+#[cfg(test)]
+mod startup_options_tests {
+    use super::{parse_onboarding_launch_mode, OnboardingLaunchMode};
+
+    #[test]
+    fn onboarding_mode_defaults_to_auto() {
+        assert_eq!(
+            parse_onboarding_launch_mode(["kotone.exe"]),
+            OnboardingLaunchMode::Auto
+        );
+    }
+
+    #[test]
+    fn onboarding_mode_accepts_equals_and_split_forms() {
+        assert_eq!(
+            parse_onboarding_launch_mode(["kotone.exe", "--onboarding=always"]),
+            OnboardingLaunchMode::Always
+        );
+        assert_eq!(
+            parse_onboarding_launch_mode(["kotone.exe", "--onboarding", "never"]),
+            OnboardingLaunchMode::Never
+        );
+    }
+
+    #[test]
+    fn invalid_onboarding_mode_keeps_last_valid_value() {
+        assert_eq!(
+            parse_onboarding_launch_mode([
+                "kotone.exe",
+                "--onboarding=always",
+                "--onboarding=invalid",
+            ]),
+            OnboardingLaunchMode::Always
+        );
+    }
 }
 
 /// 生产事件出口：转发为 Tauri 事件；联动 Esc 取消键注册与 overlay 窗口显隐。
@@ -163,6 +254,36 @@ fn hide_window<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
     let _ = win.hide();
 }
 
+/// 把 WebView2 收敛为桌面应用壳：关闭右键浏览器菜单、开发者工具和浏览器快捷键。
+///
+/// 前端还有 capture 阶段的快捷键拦截作为跨平台兜底；Windows 侧必须从
+/// WebView2 Settings 关闭 accelerator keys，才能在 DOM 收到事件前拦住
+/// Ctrl+F、F5、Ctrl+Shift+R 等浏览器行为。
+#[cfg(windows)]
+fn harden_webview<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
+    let label = win.label().to_string();
+    let _ = win.with_webview(move |webview| unsafe {
+        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+        use windows::core::Interface;
+
+        let result = (|| -> windows::core::Result<()> {
+            let core = webview.controller().CoreWebView2()?;
+            let settings = core.Settings()?;
+            settings.SetAreDefaultContextMenusEnabled(false)?;
+            settings.SetAreDevToolsEnabled(false)?;
+            let settings3: ICoreWebView2Settings3 = settings.cast()?;
+            settings3.SetAreBrowserAcceleratorKeysEnabled(false)?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            log::log(&format!("webview hardening failed ({label}): {error}"));
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn harden_webview<R: tauri::Runtime>(_win: &tauri::WebviewWindow<R>) {}
+
 /// 胶囊样式窗口几何（逻辑像素，SetWindowPos 前按窗口 DPI 换算物理像素）
 #[cfg(windows)]
 const CAPSULE_LOGICAL_W: i32 = 520;
@@ -175,40 +296,89 @@ const CARD_LOGICAL_H: i32 = 120;
 /// 胶囊底边距屏幕工作区底部的间距（逻辑像素）
 #[cfg(windows)]
 const CAPSULE_BOTTOM_GAP: i32 = 48;
+#[cfg(windows)]
+const OVERLAY_EDGE_GAP: i32 = 24;
 
-/// 按 overlay.style 摆放 overlay 窗口（原始 Win32 SetWindowPos；DPI 感知）。
-/// - capsule：水平居中、靠下（工作区底 - 48px），520×64（前端胶囊宽度随内容伸缩）；
-/// - card：回 480×120 并重新居中（样式从胶囊切回卡片时恢复原位）。
+/// 按 overlay 配置摆放悬浮窗（原始 Win32 SetWindowPos；DPI 感知）。
+/// auto 保留样式语义：卡片居中、胶囊靠下；固定预设和拖动后的 custom 覆盖它。
 /// 与显隐同原则：不走 tao set_position/set_size，避免与 SW_SHOWNA 路径的状态缓存分叉。
 #[cfg(windows)]
-fn layout_overlay_window<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>, style: OverlayStyle) {
+fn layout_overlay_window<R: tauri::Runtime>(
+    win: &tauri::WebviewWindow<R>,
+    overlay: &OverlayConfig,
+) {
     use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+        GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, MONITORINFO,
+        MONITOR_DEFAULTTONEAREST,
     };
     use windows::Win32::UI::HiDpi::GetDpiForWindow;
     use windows::Win32::UI::WindowsAndMessaging::{
         SetWindowPos, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_NOZORDER,
     };
+    use windows::Win32::Foundation::POINT;
     let Ok(hwnd) = win.hwnd() else { return };
     unsafe {
-        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let dpi = GetDpiForWindow(hwnd);
+        let dpi = if dpi == 0 { 96 } else { dpi };
+        let scale = |logical: i32| (logical as u32 * dpi).div_ceil(96) as i32;
+        let (w, h) = match overlay.style {
+            OverlayStyle::Card => (scale(CARD_LOGICAL_W), scale(CARD_LOGICAL_H)),
+            OverlayStyle::Capsule => (scale(CAPSULE_LOGICAL_W), scale(CAPSULE_LOGICAL_H)),
+        };
+        let custom = match (
+            overlay.position,
+            overlay.custom_x,
+            overlay.custom_y,
+        ) {
+            (OverlayPosition::Custom, Some(x), Some(y)) => Some((x, y)),
+            _ => None,
+        };
+        let monitor = if let Some((x, y)) = custom {
+            MonitorFromPoint(
+                POINT {
+                    x: x + w / 2,
+                    y: y + h / 2,
+                },
+                MONITOR_DEFAULTTONEAREST,
+            )
+        } else {
+            MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+        };
         let mut mi = MONITORINFO::default();
         mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
         if !GetMonitorInfoW(monitor, &mut mi).as_bool() {
             return;
         }
         let wa = mi.rcWork;
-        let dpi = GetDpiForWindow(hwnd);
-        let dpi = if dpi == 0 { 96 } else { dpi };
-        let scale = |logical: i32| (logical as u32 * dpi).div_ceil(96) as i32;
-        let (w, h) = match style {
-            OverlayStyle::Card => (scale(CARD_LOGICAL_W), scale(CARD_LOGICAL_H)),
-            OverlayStyle::Capsule => (scale(CAPSULE_LOGICAL_W), scale(CAPSULE_LOGICAL_H)),
-        };
-        let x = wa.left + ((wa.right - wa.left) - w) / 2;
-        let y = match style {
-            OverlayStyle::Card => wa.top + ((wa.bottom - wa.top) - h) / 2,
-            OverlayStyle::Capsule => wa.bottom - h - scale(CAPSULE_BOTTOM_GAP),
+        let gap = scale(OVERLAY_EDGE_GAP);
+        let left = wa.left + gap;
+        let center_x = wa.left + ((wa.right - wa.left) - w) / 2;
+        let right = wa.right - w - gap;
+        let top = wa.top + gap;
+        let center_y = wa.top + ((wa.bottom - wa.top) - h) / 2;
+        let bottom = wa.bottom - h - gap;
+        let (x, y) = match overlay.position {
+            OverlayPosition::Auto => match overlay.style {
+                OverlayStyle::Card => (center_x, center_y),
+                OverlayStyle::Capsule => (
+                    center_x,
+                    wa.bottom - h - scale(CAPSULE_BOTTOM_GAP),
+                ),
+            },
+            OverlayPosition::TopLeft => (left, top),
+            OverlayPosition::TopCenter => (center_x, top),
+            OverlayPosition::TopRight => (right, top),
+            OverlayPosition::Center => (center_x, center_y),
+            OverlayPosition::BottomLeft => (left, bottom),
+            OverlayPosition::BottomCenter => (center_x, bottom),
+            OverlayPosition::BottomRight => (right, bottom),
+            OverlayPosition::Custom => {
+                let (x, y) = custom.unwrap_or((center_x, center_y));
+                (
+                    x.clamp(wa.left, wa.right - w),
+                    y.clamp(wa.top, wa.bottom - h),
+                )
+            }
         };
         let flags: SET_WINDOW_POS_FLAGS = SWP_NOZORDER | SWP_NOACTIVATE;
         let _ = SetWindowPos(hwnd, None, x, y, w, h, flags);
@@ -217,19 +387,51 @@ fn layout_overlay_window<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>, style
 
 /// 非 Windows：回退 tao 逻辑像素定位（MVP Windows-first，保证可编译即可）
 #[cfg(not(windows))]
-fn layout_overlay_window<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>, style: OverlayStyle) {
+fn layout_overlay_window<R: tauri::Runtime>(
+    win: &tauri::WebviewWindow<R>,
+    overlay: &OverlayConfig,
+) {
     use tauri::{LogicalSize, PhysicalPosition};
-    let (w, h) = match style {
+    let (w, h) = match overlay.style {
         OverlayStyle::Card => (CARD_FALLBACK.0, CARD_FALLBACK.1),
         OverlayStyle::Capsule => (520.0, 64.0),
     };
     let _ = win.set_size(LogicalSize::new(w, h));
     if let Ok(Some(monitor)) = win.current_monitor() {
         let wa = monitor.work_area();
-        let x = wa.position.x + (wa.size.width as i32 - w as i32) / 2;
-        let y = match style {
-            OverlayStyle::Card => wa.position.y + (wa.size.height as i32 - h as i32) / 2,
-            OverlayStyle::Capsule => wa.position.y + wa.size.height as i32 - h as i32 - 48,
+        let center_x = wa.position.x + (wa.size.width as i32 - w as i32) / 2;
+        let center_y = wa.position.y + (wa.size.height as i32 - h as i32) / 2;
+        let (x, y) = match overlay.position {
+            OverlayPosition::Custom => (
+                overlay.custom_x.unwrap_or(center_x),
+                overlay.custom_y.unwrap_or(center_y),
+            ),
+            OverlayPosition::TopLeft => (wa.position.x + 24, wa.position.y + 24),
+            OverlayPosition::TopCenter => (center_x, wa.position.y + 24),
+            OverlayPosition::TopRight => (
+                wa.position.x + wa.size.width as i32 - w as i32 - 24,
+                wa.position.y + 24,
+            ),
+            OverlayPosition::Center => (center_x, center_y),
+            OverlayPosition::BottomLeft => (
+                wa.position.x + 24,
+                wa.position.y + wa.size.height as i32 - h as i32 - 24,
+            ),
+            OverlayPosition::BottomCenter => (
+                center_x,
+                wa.position.y + wa.size.height as i32 - h as i32 - 24,
+            ),
+            OverlayPosition::BottomRight => (
+                wa.position.x + wa.size.width as i32 - w as i32 - 24,
+                wa.position.y + wa.size.height as i32 - h as i32 - 24,
+            ),
+            OverlayPosition::Auto => match overlay.style {
+                OverlayStyle::Card => (center_x, center_y),
+                OverlayStyle::Capsule => (
+                    center_x,
+                    wa.position.y + wa.size.height as i32 - h as i32 - 48,
+                ),
+            },
         };
         let _ = win.set_position(PhysicalPosition::new(x, y));
     }
@@ -237,6 +439,14 @@ fn layout_overlay_window<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>, style
 
 #[cfg(not(windows))]
 const CARD_FALLBACK: (f64, f64) = (480.0, 120.0);
+
+fn apply_overlay_window_config<R: tauri::Runtime>(
+    win: &tauri::WebviewWindow<R>,
+    overlay: &OverlayConfig,
+) {
+    layout_overlay_window(win, overlay);
+    let _ = win.set_ignore_cursor_events(overlay.click_through);
+}
 
 /// 冒烟测试命令：前端可 invoke("ping") 验证 IPC 通路
 #[tauri::command]
@@ -258,34 +468,31 @@ fn update_settings(
     state: tauri::State<SharedState>,
     patch: serde_json::Value,
 ) -> Result<Settings, String> {
-    let (old_hotkey, old_overlay_style, updated) = {
+    let (old_hotkey, old_overlay, updated) = {
         let mut guard = state.settings.write().unwrap();
         let old_hotkey = (
             guard.hotkey.key.clone(),
             effective_hotkey_mode(&guard),
             guard.hotkey_backend,
         );
-        let old_overlay_style = guard.overlay.style;
+        let old_overlay = guard.overlay.clone();
         let mut merged =
             serde_json::to_value(&*guard).map_err(|e| format!("序列化配置失败: {e}"))?;
         settings::merge_json(&mut merged, &patch);
         let next: Settings =
             serde_json::from_value(merged).map_err(|e| format!("配置项不合法: {e}"))?;
         *guard = next.clone();
-        (old_hotkey, old_overlay_style, next)
+        (old_hotkey, old_overlay, next)
     };
     settings::save(&updated)?;
 
-    // overlay 样式变化 → 立即重排窗口几何 + 通知 overlay 前端切换布局（无需重启）
-    if old_overlay_style != updated.overlay.style {
+    // overlay 配置变化 → 立即重排几何/点击穿透 + 通知前端（无需重启）
+    if old_overlay != updated.overlay {
         if let Some(win) = app.get_webview_window("overlay") {
-            layout_overlay_window(&win, updated.overlay.style);
+            apply_overlay_window_config(&win, &updated.overlay);
         }
         use tauri::Emitter as _;
-        let _ = app.emit(
-            "kotone://overlay-style",
-            serde_json::json!({ "style": serde_json::to_value(updated.overlay.style).unwrap_or_default() }),
-        );
+        let _ = app.emit("kotone://overlay-config", &updated.overlay);
     }
 
     // 热键键位/生效模式/后端变化 → 重注册。生效模式由 interactionMode 预设推导
@@ -307,6 +514,32 @@ fn update_settings(
     }
     // 引擎/模型/模式可能经 patch 变更 → restartNeeded 推导依赖最新配置，推送全量状态
     runtime::snapshot_and_emit(&app, None);
+    Ok(updated)
+}
+
+/// 用户拖动悬浮窗后保存物理屏幕坐标；下次启动仍在该位置。
+#[tauri::command]
+fn save_overlay_position(
+    app: AppHandle,
+    state: tauri::State<SharedState>,
+) -> Result<Settings, String> {
+    let win = app
+        .get_webview_window("overlay")
+        .ok_or_else(|| "悬浮窗不存在".to_string())?;
+    let position = win
+        .outer_position()
+        .map_err(|e| format!("读取悬浮窗位置失败: {e}"))?;
+    let updated = {
+        let mut guard = state.settings.write().unwrap();
+        guard.overlay.position = OverlayPosition::Custom;
+        guard.overlay.custom_x = Some(position.x);
+        guard.overlay.custom_y = Some(position.y);
+        let updated = guard.clone();
+        settings::save(&updated)?;
+        updated
+    };
+    use tauri::Emitter as _;
+    let _ = app.emit("kotone://overlay-config", &updated.overlay);
     Ok(updated)
 }
 
@@ -696,14 +929,25 @@ fn simulate_send(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let startup_options = StartupOptions {
+        onboarding: parse_onboarding_launch_mode(std::env::args()),
+    };
     tauri::Builder::default()
         // 单实例：第二实例启动时唤起已有实例的设置窗口并退出自身，
         // 避免旧进程未退出导致热键「already registered」与 WebView2 类注册冲突
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
                 let _ = win.unminimize();
                 let _ = win.set_focus();
+            }
+            // 测试时常从已在托盘运行的实例再次执行
+            // `kotone.exe --onboarding=always`。第二实例不会进入 setup，
+            // 因此必须把强制打开请求转发给现有设置窗口。
+            if parse_onboarding_launch_mode(args.iter().map(String::as_str))
+                == OnboardingLaunchMode::Always
+            {
+                let _ = app.emit_to("main", "kotone://open-onboarding", ());
             }
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -716,7 +960,7 @@ pub fn run() {
                 api.prevent_close();
             }
         })
-        .setup(|app| {
+        .setup(move |app| {
             log::init();
             log::log(&format!(
                 "startup: args={:?} elevated={}",
@@ -724,6 +968,7 @@ pub fn run() {
                 elevation::is_elevated()
             ));
             tray::setup_tray(app.handle())?;
+            app.manage(startup_options.clone());
 
             // 首次运行：默认配置 + 内置 profile 落盘（~/.kotone/）
             let settings = settings::load();
@@ -795,6 +1040,16 @@ pub fn run() {
             app.manage(HotkeyManager::new(app.handle(), orchestrator.clone()));
             app.manage(RuntimeManager::new());
 
+            for label in ["main", "overlay"] {
+                if let Some(win) = app.get_webview_window(label) {
+                    harden_webview(&win);
+                }
+            }
+            if let Some(win) = app.get_webview_window("overlay") {
+                let overlay = settings.read().unwrap().overlay.clone();
+                apply_overlay_window_config(&win, &overlay);
+            }
+
             // 「启动」开关（core runtime 状态机）：默认 Stopped——不注册热键、
             // 不 warmup 引擎、悬浮窗隐藏。ui.autoStart = true 时自动 start_runtime
             // （warmup → 注册热键 → 显示悬浮窗，进度经 kotone://runtime 推送）。
@@ -819,6 +1074,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ping,
+            get_startup_options,
             get_settings,
             update_settings,
             list_audio_devices,
@@ -830,6 +1086,7 @@ pub fn run() {
             save_profile,
             export_hotwords,
             import_hotwords,
+            save_overlay_position,
             get_elevation_status,
             get_hotkey_status,
             start_hotkey_capture,

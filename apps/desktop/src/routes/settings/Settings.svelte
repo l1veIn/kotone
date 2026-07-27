@@ -5,7 +5,7 @@
    * 共享 settingsStore / toast（lib/stores/ui.ts）；IPC 全部走 lib/ipc.ts。
    */
   import { onMount } from "svelte";
-  import { getSettings } from "../../lib/ipc";
+  import { getSettings, getStartupOptions, isTauri } from "../../lib/ipc";
   import { settingsStore, toast, errText } from "../../lib/stores/ui";
   import { initRuntime } from "../../lib/stores/runtime";
   import Toasts from "../../lib/components/Toasts.svelte";
@@ -39,20 +39,33 @@
     // runtime store 独立初始化（kotone://runtime 事件订阅 + 初始拉取）
     void initRuntime();
     try {
-      const s = await getSettings();
+      const [s, startup] = await Promise.all([getSettings(), getStartupOptions()]);
       settingsStore.set(s);
-      showOnboarding = !s.ui.firstRunCompleted;
+      showOnboarding =
+        startup.onboarding === "always" ||
+        (startup.onboarding === "auto" && !s.ui.firstRunCompleted);
     } catch (e) {
       toast(false, `加载配置失败：${errText(e)}`);
     } finally {
       loading = false;
     }
   });
+
+  // 单实例转发：应用已在托盘运行时，再执行
+  // `kotone.exe --onboarding=always` 会唤起现有窗口并重新打开向导。
+  onMount(() => {
+    if (!isTauri) return;
+    let unlisten: (() => void) | undefined;
+    void import("@tauri-apps/api/event")
+      .then(({ listen }) => listen("kotone://open-onboarding", () => (showOnboarding = true)))
+      .then((un) => (unlisten = un));
+    return () => unlisten?.();
+  });
 </script>
 
 <div class="flex h-full flex-col overflow-hidden bg-kotone-deep text-white">
   <!-- 自绘标题栏（decorations:false）：拖拽区 + 运行状态 + 启动/停止 + 窗口控制 -->
-  <Titlebar />
+  <Titlebar onOpenAdvanced={() => (page = "advanced")} />
   <div class="relative flex min-h-0 flex-1 overflow-hidden">
   <!-- 窗口底纹理：switch 无缝 tile，极低透明度 -->
   <div
@@ -108,7 +121,7 @@
     {#if loading}
       <p class="px-8 py-10 text-sm text-white/50">加载配置中…</p>
     {:else if page === "general"}
-      <GeneralPage />
+      <GeneralPage onOpenOnboarding={() => (showOnboarding = true)} />
     {:else if page === "hotkey"}
       <HotkeyPage />
     {:else if page === "advanced"}

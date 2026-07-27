@@ -39,6 +39,7 @@ windows = { workspace = true, features = [
     "Win32_Graphics_Gdi",
     "Win32_UI_HiDpi",
 ] }
+webview2-com = "0.38.2"
 
 [dev-dependencies]
 tempfile.workspace = true

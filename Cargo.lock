@@ -2349,6 +2349,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tempfile",
  "tokio",
+ "webview2-com",
  "windows 0.61.3",
 ]
 

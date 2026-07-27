@@ -38,6 +38,18 @@
 
 <br>
 
+## 📥 下载
+
+Kotone 当前支持 **Windows 10 / Windows 11（x64）**。
+
+1. 前往 [GitHub Releases](https://github.com/l1veIn/kotone/releases) 下载最新的 `Kotone_*_x64-setup.exe`。
+2. 安装并启动，首次运行会自动进入设置向导。
+3. 选择「英雄联盟」或「通用输入」，下载本地语音模型，设置热键并完成一次发送测试。
+
+> 首个公开版本暂未接入 Windows 代码签名，系统可能显示 SmartScreen 提示。请只从本仓库的 GitHub Release 下载，并核对 Release 中公布的 SHA-256。
+
+<br>
+
 <p align="center">
   <table>
     <tr>
@@ -73,13 +85,13 @@
 │     自定义发送快捷键，配合你的操作习惯                 │
 │                                                  │
 │  🎮  多游戏配置                                    │
-│     每款游戏独立配置，自动切换                       │
+│     英雄联盟术语热词 + 通用输入配置                   │
 │                                                  │
 │  🌙  深色电竞UI                                   │
-│     悬浮窗设计，不遮挡游戏画面                       │
+│     固定位置 · 可拖动 · 鼠标点击穿透                 │
 │                                                  │
-│  🖥️  跨平台                                       │
-│     Windows · macOS · Linux                      │
+│  🔒  本地优先                                      │
+│     语音模型在本机运行，不上传录音                    │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -185,9 +197,9 @@
 
 <p align="center">
   <samp>
-    <b>Desktop</b> &nbsp; Tauri / Electron &nbsp;·&nbsp;
-    <b>Voice</b> &nbsp; Whisper / Web Speech API &nbsp;·&nbsp;
-    <b>UI</b> &nbsp; React / Svelte &nbsp;·&nbsp;
+    <b>Desktop</b> &nbsp; Tauri 2 / Rust &nbsp;·&nbsp;
+    <b>Voice</b> &nbsp; sherpa-onnx / X-ASR &nbsp;·&nbsp;
+    <b>UI</b> &nbsp; Svelte 5 / Tailwind CSS &nbsp;·&nbsp;
     <b>Design</b> &nbsp; Cel-shaded + Neon Pop
   </samp>
 </p>
@@ -200,18 +212,27 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/your-username/kotone.git
+git clone https://github.com/l1veIn/kotone.git
 cd kotone
 
 # 安装依赖
-pnpm install
+pnpm install --frozen-lockfile
 
-# 启动开发模式
+# 启动 Tauri 开发模式（需要 Rust 与 Windows C++ Build Tools）
 pnpm dev
 
-# 构建生产版本
+# 运行发布门禁
+pnpm check
+pnpm -C apps/desktop test:e2e
+cargo test --workspace --locked
+
+# 构建 Windows NSIS 安装包
 pnpm build
 ```
+
+安装包输出到 `target/release/bundle/nsis/`。发布检查项见 [`docs/release-checklist.md`](docs/release-checklist.md)。
+
+隐私与第三方模型信息见 [`PRIVACY.md`](PRIVACY.md) 和 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
 <br>
 

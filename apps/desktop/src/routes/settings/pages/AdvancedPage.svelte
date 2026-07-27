@@ -20,9 +20,14 @@
     setModelsDir,
     openModelsDir,
     updateSettings,
+    getElevationStatus,
+    getHotkeyStatus,
+    restartAsAdmin,
     isTauri,
     type DownloadProgress,
+    type ElevationStatus,
     type EngineInfo,
+    type HotkeyStatus,
     type ModelInfo,
     type ModelsDirInfo,
   } from "../../../lib/ipc";
@@ -37,6 +42,8 @@
   let dirInfo = $state<ModelsDirInfo | null>(null);
   /** 下载中模型 id → 进度百分比（null = 连接中） */
   let dlProgress = $state<Record<string, number | null>>({});
+  /** 下载失败模型 id → 可持续显示的错误，直到重试或成功。 */
+  let dlErrors = $state<Record<string, string>>({});
   /** 二次确认删除中的模型 id */
   let confirmingDelete = $state<string | null>(null);
   let deleting = $state<string | null>(null);
@@ -46,6 +53,12 @@
   let migrating = $state(false);
   /** 高级区默认收起：普通视图只看一句话摘要 */
   let expanded = $state(false);
+  let elevation = $state<ElevationStatus | null>(null);
+  let hotkeyStatus = $state<HotkeyStatus | null>(null);
+  let restartingAsAdmin = $state(false);
+  let downloadProxyDraft = $state("");
+
+  const ADMIN_RESTART_FLAG = "kotone:admin-restart-pending";
 
   const downloadingAny = $derived(Object.keys(dlProgress).length > 0);
 
@@ -53,6 +66,15 @@
     let un: (() => void) | undefined;
     void (async () => {
       await reload();
+      [elevation, hotkeyStatus] = await Promise.all([
+        getElevationStatus().catch(() => null),
+        getHotkeyStatus().catch(() => null),
+      ]);
+      downloadProxyDraft = $settingsStore?.download.ghProxy ?? "";
+      if (localStorage.getItem(ADMIN_RESTART_FLAG)) {
+        localStorage.removeItem(ADMIN_RESTART_FLAG);
+        if (elevation?.elevated) toast(true, "已通过管理员权限运行");
+      }
       // 下载进度事件（Tauri 环境；mock 无事件，downloadModel 直接置完成）
       if (!isTauri) return;
       un = await listen<DownloadProgress>("kotone://download", (ev) => {
@@ -90,7 +112,11 @@
       engines = [];
       return;
     }
-    if (en !== null) engines = en;
+    if (en !== null) {
+      engines = en;
+      const configuredEngine = en.find((engine) => engine.id === $settingsStore?.sttEngine);
+      if (configuredEngine && !configuredEngine.isReady) expanded = true;
+    }
     if (mo !== null) models = mo;
     if (di !== null) dirInfo = di;
   }
@@ -144,6 +170,7 @@
 
   async function onDownload(id: string) {
     if (downloadingAny) return;
+    delete dlErrors[id];
     dlProgress[id] = null;
     try {
       await downloadModel(id);
@@ -151,7 +178,8 @@
       toast(true, `下载完成：${id}`);
       await reload();
     } catch (e) {
-      toast(false, `下载失败：${errText(e)}`);
+      dlErrors[id] = errText(e);
+      toast(false, "下载失败，可在模型卡片中重试或调整下载源");
     } finally {
       delete dlProgress[id];
     }
@@ -273,6 +301,31 @@
       toast(true, okText);
     } catch (e) {
       toast(false, `保存失败：${errText(e)}`);
+    }
+  }
+
+  async function onHotkeyBackendChange(e: Event) {
+    const hotkeyBackend = (e.target as HTMLSelectElement).value;
+    await patch({ hotkeyBackend }, "热键兼容模式已更新");
+    hotkeyStatus = await getHotkeyStatus().catch(() => hotkeyStatus);
+  }
+
+  async function saveDownloadProxy() {
+    await patch(
+      { download: { ghProxy: downloadProxyDraft.trim() } },
+      "下载代理地址已保存",
+    );
+  }
+
+  async function onRestartAsAdmin() {
+    restartingAsAdmin = true;
+    try {
+      localStorage.setItem(ADMIN_RESTART_FLAG, "1");
+      await restartAsAdmin();
+    } catch (error) {
+      localStorage.removeItem(ADMIN_RESTART_FLAG);
+      restartingAsAdmin = false;
+      toast(false, errText(error));
     }
   }
 </script>
@@ -499,14 +552,9 @@
                     {/if}
                   </div>
                 {:else}
-                  <!-- 未下载：radio 置灰不可选，行尾下载按钮 / 进度条 -->
-                  <div
-                    role="radio"
-                    aria-checked="false"
-                    aria-disabled="true"
-                    class="rounded-lg bg-white/3 px-3 py-2 ring-1 ring-white/8"
-                  >
-                    <div class="flex cursor-not-allowed items-center gap-2.5">
+                  <!-- 未下载项本身不可选择，但下载/重试操作必须保持可访问。 -->
+                  <div class="rounded-lg bg-white/3 px-3 py-2 ring-1 ring-white/8">
+                    <div class="flex items-center gap-2.5">
                       <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full ring-2 ring-white/15"></span>
                       <div class="min-w-0 flex-1">
                         <p class="truncate text-[12px] text-white/45">{m.displayName}</p>
@@ -532,6 +580,20 @@
                         {:else}
                           <div class="h-full w-1/3 animate-pulse rounded-full bg-kotone-violet/70"></div>
                         {/if}
+                      </div>
+                    {/if}
+                    {#if dlErrors[m.id]}
+                      <div class="mt-2 flex items-start gap-2 rounded-lg bg-kotone-pink/10 px-2.5 py-2 ring-1 ring-kotone-pink/35">
+                        <p class="min-w-0 flex-1 text-[10px] leading-relaxed break-all text-kotone-pink">
+                          下载失败：{dlErrors[m.id]}
+                        </p>
+                        <button
+                          class="shrink-0 rounded bg-kotone-pink/80 px-2 py-1 text-[10px] font-semibold text-white hover:brightness-110 disabled:opacity-50"
+                          disabled={downloadingAny}
+                          onclick={() => void onDownload(m.id)}
+                        >
+                          重试
+                        </button>
                       </div>
                     {/if}
                   </div>
@@ -602,6 +664,20 @@
                   {/if}
                 </div>
               {/if}
+              {#if dlErrors[m.id]}
+                <div class="mt-2 flex items-start gap-2 rounded-lg bg-kotone-pink/10 px-2.5 py-2 ring-1 ring-kotone-pink/35">
+                  <p class="min-w-0 flex-1 text-[10px] leading-relaxed break-all text-kotone-pink">
+                    下载失败：{dlErrors[m.id]}
+                  </p>
+                  <button
+                    class="shrink-0 rounded bg-kotone-pink/80 px-2 py-1 text-[10px] font-semibold text-white hover:brightness-110 disabled:opacity-50"
+                    disabled={downloadingAny}
+                    onclick={() => void onDownload(m.id)}
+                  >
+                    重试
+                  </button>
+                </div>
+              {/if}
             </div>
           {/each}
         </div>
@@ -610,6 +686,129 @@
     <p class="mt-3 text-[11px] text-white/40">
       未就绪的引擎（模型未下载）「启动」时会报出具体缺失项；切换引擎 / 活动模型后如已「启动」，需点标题栏「重启生效」。
     </p>
+  {/if}
+
+  {#if $settingsStore}
+    <section class="kotone-panel mt-4 p-4">
+      <h2 class="text-sm font-semibold text-kotone-cyan/90">悬浮窗外观</h2>
+      <p class="mt-1 text-[11px] text-white/45">只改变展示密度，不影响识别和发送。</p>
+      <div class="mt-3 grid grid-cols-2 gap-2">
+        {#each [
+          { id: "card", name: "卡片", desc: "信息完整，适合首次使用" },
+          { id: "capsule", name: "胶囊", desc: "更轻巧，减少遮挡" },
+        ] as option}
+          {@const selected = $settingsStore.overlay.style === option.id}
+          <button
+            class="rounded-lg px-3 py-2.5 text-left ring-1 transition {selected
+              ? 'bg-kotone-violet/15 ring-kotone-violet/60'
+              : 'bg-white/5 ring-white/10 hover:bg-white/10'}"
+            onclick={() =>
+              void patch({ overlay: { style: option.id } }, `悬浮窗外观已切换：${option.name}`)}
+          >
+            <p class="text-sm font-semibold {selected ? 'text-kotone-violet' : ''}">{option.name}</p>
+            <p class="mt-0.5 text-[11px] text-white/45">{option.desc}</p>
+          </button>
+        {/each}
+      </div>
+    </section>
+
+    <section class="kotone-panel mt-4 p-4">
+      <h2 class="text-sm font-semibold text-kotone-cyan/90">下载网络</h2>
+      <p class="mt-1 text-[11px] text-white/45">仅在模型下载持续失败时调整。</p>
+      <div class="mt-3 grid grid-cols-3 gap-2">
+        {#each [
+          { id: "auto", name: "自动", desc: "镜像失败后回退官方" },
+          { id: "official", name: "仅官方", desc: "Hugging Face / GitHub" },
+          { id: "mirror", name: "仅镜像", desc: "适合官方源不可达时" },
+        ] as option}
+          {@const selected = $settingsStore.download.source === option.id}
+          <button
+            class="rounded-lg px-2.5 py-2 text-left ring-1 transition {selected
+              ? 'bg-kotone-cyan/12 ring-kotone-cyan/60'
+              : 'bg-white/5 ring-white/10 hover:bg-white/10'}"
+            onclick={() =>
+              void patch({ download: { source: option.id } }, `下载源已切换：${option.name}`)}
+          >
+            <p class="text-xs font-semibold {selected ? 'text-kotone-cyan' : ''}">{option.name}</p>
+            <p class="mt-0.5 text-[10px] leading-relaxed text-white/40">{option.desc}</p>
+          </button>
+        {/each}
+      </div>
+      <label class="mt-3 block">
+        <span class="text-[11px] text-white/50">GitHub 镜像代理</span>
+        <div class="mt-1 flex gap-2">
+          <input
+            bind:value={downloadProxyDraft}
+            class="min-w-0 flex-1 rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60"
+            placeholder="https://ghfast.top/"
+            spellcheck="false"
+          />
+          <button
+            class="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/75 hover:bg-white/20"
+            onclick={() => void saveDownloadProxy()}
+          >
+            保存
+          </button>
+        </div>
+      </label>
+    </section>
+
+    <section class="kotone-panel mt-4 p-4">
+      <h2 class="text-sm font-semibold text-kotone-cyan/90">Windows 兼容性</h2>
+      <div class="mt-3 flex items-center gap-2">
+        <label class="text-xs text-white/60" for="advanced-hotkey-backend">热键实现</label>
+        <select
+          id="advanced-hotkey-backend"
+          class="rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60 [&>option]:bg-kotone-deep"
+          value={$settingsStore.hotkeyBackend}
+          onchange={(event) => void onHotkeyBackendChange(event)}
+        >
+          <option value="auto">自动（推荐）</option>
+          <option value="llhook">低层键盘钩子</option>
+          <option value="register">系统热键</option>
+        </select>
+        <span class="text-[11px] text-white/40">
+          当前：{hotkeyStatus?.backend === "llhook"
+            ? "低层钩子"
+            : hotkeyStatus?.backend === "register"
+              ? "系统热键"
+              : "未注册"}
+        </span>
+      </div>
+      <p class="mt-2 text-[11px] text-white/40">除非特定游戏收不到热键，否则保持“自动”。</p>
+
+      <div class="mt-4 border-t border-white/8 pt-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-xs font-semibold">当前进程权限</p>
+            <p class="mt-0.5 text-[11px] text-white/40">
+              {elevation === null ? "检测中…" : elevation.elevated ? "管理员" : "普通用户"}
+            </p>
+          </div>
+          {#if elevation && !elevation.elevated}
+            <button
+              class="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/75 hover:bg-white/20 disabled:opacity-50"
+              disabled={restartingAsAdmin}
+              onclick={() => void onRestartAsAdmin()}
+            >
+              {restartingAsAdmin ? "正在重启…" : "以管理员身份重启"}
+            </button>
+          {/if}
+        </div>
+        <div class="mt-4">
+          <Toggle
+            checked={$settingsStore.runAsAdminOnStart}
+            label="每次启动时请求管理员权限"
+            desc="仅当目标游戏以管理员运行、普通模式无法发送时使用"
+            onchange={(value) =>
+              void patch(
+                { runAsAdminOnStart: value },
+                value ? "已开启启动时权限请求" : "已关闭启动时权限请求",
+              )}
+          />
+        </div>
+      </div>
+    </section>
   {/if}
 
   <!-- 评测录档（eval_recording；默认关，需要留语料复现时再开） -->
@@ -622,6 +821,16 @@
         desc="每次识别保存 wav + 会话 json 到 ~/.kotone/eval（最多留 200 场），供 kotone-cli eval 对比引擎；已录的档案不受影响"
         onchange={(v) =>
           void patch({ evalRecording: v }, v ? "已开启评测录档" : "已关闭评测录档（已有录档保留）")}
+      />
+      <Toggle
+        checked={$settingsStore.history.includeAudio}
+        label="历史记录同时保存音频"
+        desc="仅在开启评测录档时复制对应 wav；会明显增加磁盘占用"
+        onchange={(v) =>
+          void patch(
+            { history: { includeAudio: v } },
+            v ? "已开启历史音频保存" : "已关闭历史音频保存",
+          )}
       />
     </section>
   {/if}

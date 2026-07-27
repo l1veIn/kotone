@@ -114,8 +114,26 @@ pub enum OverlayStyle {
     Capsule,
 }
 
+/// 悬浮窗固定位置（config.json `overlay.position`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlayPosition {
+    /// 跟随样式：卡片居中，胶囊底部居中。
+    #[default]
+    Auto,
+    TopLeft,
+    TopCenter,
+    TopRight,
+    Center,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+    /// 用户拖动后记录物理屏幕坐标。
+    Custom,
+}
+
 /// 悬浮窗配置（config.json `overlay` 段）
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayConfig {
     /// 显示模式：always 常驻（默认）/ on_demand 用时浮现
@@ -124,6 +142,34 @@ pub struct OverlayConfig {
     /// 样式：card 卡片（默认）/ capsule 胶囊
     #[serde(default)]
     pub style: OverlayStyle,
+    /// 固定位置预设；拖动完成后切为 custom。
+    #[serde(default)]
+    pub position: OverlayPosition,
+    /// 是否允许直接拖动悬浮窗。
+    #[serde(default = "default_true")]
+    pub draggable: bool,
+    /// 鼠标点击穿透到游戏；开启时悬浮窗自身按钮和拖动不可用。
+    #[serde(default)]
+    pub click_through: bool,
+    /// custom 位置的物理屏幕坐标（支持多显示器负坐标）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_x: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_y: Option<i32>,
+}
+
+impl Default for OverlayConfig {
+    fn default() -> Self {
+        Self {
+            visibility: OverlayVisibility::default(),
+            style: OverlayStyle::default(),
+            position: OverlayPosition::default(),
+            draggable: true,
+            click_through: false,
+            custom_x: None,
+            custom_y: None,
+        }
+    }
 }
 
 /// 下载源选择（config.json `download.source`）。
@@ -165,6 +211,10 @@ impl Default for DownloadConfig {
 
 fn default_gh_proxy() -> String {
     "https://ghfast.top/".into()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -309,6 +359,11 @@ mod tests {
         assert_eq!(s.download.gh_proxy, "https://ghfast.top/");
         assert_eq!(s.overlay.visibility, OverlayVisibility::Always);
         assert_eq!(s.overlay.style, OverlayStyle::Card);
+        assert_eq!(s.overlay.position, OverlayPosition::Auto);
+        assert!(s.overlay.draggable);
+        assert!(!s.overlay.click_through);
+        assert_eq!(s.overlay.custom_x, None);
+        assert_eq!(s.overlay.custom_y, None);
     }
 
     #[test]
@@ -354,6 +409,9 @@ mod tests {
         assert_eq!(s.download.source, DownloadSource::Auto, "老配置缺 download 段合并默认");
         assert_eq!(s.download.gh_proxy, "https://ghfast.top/");
         assert!(!s.ui.first_run_completed, "老配置缺 ui 段合并默认 = 未完成");
+        assert_eq!(s.overlay.position, OverlayPosition::Auto);
+        assert!(s.overlay.draggable, "老配置升级后默认允许拖动");
+        assert!(!s.overlay.click_through);
     }
 
     #[test]

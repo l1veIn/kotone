@@ -40,6 +40,7 @@
   /** dev:web 导入用隐藏文件选择器 */
   let fileInput = $state<HTMLInputElement | null>(null);
   let importTargetId = $state<string | null>(null);
+  let showTechnical = $state(false);
 
   /** 实时词条数：非空 trim 行数（不去重——去重在保存时做并提示） */
   const hotwordCount = $derived(
@@ -50,14 +51,14 @@
     try {
       profiles = await listProfiles();
     } catch (e) {
-      toast(false, `加载 profile 失败：${errText(e)}`);
+      toast(false, `加载游戏配置失败：${errText(e)}`);
     }
   });
 
   async function onActivate(id: string) {
     try {
       settingsStore.set(await updateSettings({ activeProfileId: id }));
-      toast(true, `已激活 profile：${profiles.find((p) => p.id === id)?.displayName ?? id}`);
+      toast(true, `已切换游戏配置：${profiles.find((p) => p.id === id)?.displayName ?? id}`);
     } catch (e) {
       toast(false, `保存失败：${errText(e)}`);
     }
@@ -69,12 +70,14 @@
     editingId = p.id;
     draft = $state.snapshot(p);
     hotwordsText = p.hotwords.join("\n");
+    showTechnical = false;
   }
 
   function closeEditor() {
     editingId = null;
     draft = null;
     hotwordsText = "";
+    showTechnical = false;
   }
 
   async function onSave() {
@@ -91,8 +94,8 @@
       toast(
         true,
         duplicates > 0
-          ? `profile 已保存，已合并 ${duplicates} 个重复（热词下次识别生效）`
-          : "profile 已保存（热词下次识别生效）",
+          ? `配置已保存，已合并 ${duplicates} 个重复热词（下次识别生效）`
+          : "游戏配置已保存（热词下次识别生效）",
       );
       closeEditor();
     } catch (e) {
@@ -248,7 +251,7 @@
               {/if}
             </p>
             <p class="mt-0.5 truncate text-[11px] text-white/45">
-              {p.processNames.length === 0 ? "通配任意前台窗口" : p.processNames.join(" / ")}
+              {p.id === "lol" ? "英雄联盟输入方式与术语库" : "适用于所有窗口"}
               · 热词 {p.hotwords.length} 个
             </p>
           </div>
@@ -271,43 +274,12 @@
         </div>
 
         {#if editing && draft}
-          <!-- 内联编辑器：发送键配置 + 聊天框模式 + 热词管理 -->
+          <!-- 普通用户只编辑热词；聊天键和注入策略收进高级输入设置。 -->
           <div class="mt-4 border-t border-white/8 pt-4">
-            <p class="text-[10px] font-semibold tracking-wide text-white/40">发送键配置</p>
-            <div class="mt-2 grid grid-cols-2 gap-2">
-              <label class="block">
-                <span class="text-[11px] text-white/55">打开聊天框键</span>
-                <input
-                  bind:value={draft.openChatKey}
-                  placeholder="如 Enter"
-                  spellcheck="false"
-                  class="mt-1 w-full rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/60"
-                />
-              </label>
-              <label class="block">
-                <span class="text-[11px] text-white/55">发送键</span>
-                <input
-                  bind:value={draft.sendKey}
-                  placeholder="如 Enter"
-                  spellcheck="false"
-                  class="mt-1 w-full rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/60"
-                />
-              </label>
-            </div>
-
-            <div class="mt-4">
-              <Toggle
-                checked={draft.preferClipboardPaste}
-                label="剪贴板粘贴模式"
-                desc="开启：模拟 Ctrl+V 粘贴（快、长文本稳定）；关闭：Unicode 逐字输入（兼容性更广）"
-                onchange={(v) => (draft!.preferClipboardPaste = v)}
-              />
-            </div>
-
-            <div class="mt-4">
+            <div>
               <div class="flex items-center justify-between gap-2">
                 <p class="text-[10px] font-semibold tracking-wide text-white/40">
-                  热词（{hotwordCount} 个，下次识别生效）
+                  自定义词汇（{hotwordCount} 个，下次识别生效）
                 </p>
                 <div class="flex shrink-0 gap-1.5">
                   <button
@@ -338,6 +310,46 @@
                 每行一个词条，保存时自动去重；导入为合并模式（UTF-8 文本同格式，跳过空行与重复，导入立即保存）。
               </p>
             </div>
+
+            <button
+              class="mt-4 text-[11px] text-white/45 underline-offset-2 transition hover:text-white/75 hover:underline"
+              onclick={() => (showTechnical = !showTechnical)}
+            >
+              {showTechnical ? "收起高级输入设置" : "高级输入设置"}
+            </button>
+            {#if showTechnical}
+              <div class="mt-3 rounded-lg bg-white/4 p-3 ring-1 ring-white/8">
+                <p class="text-[10px] font-semibold tracking-wide text-white/40">聊天键</p>
+                <div class="mt-2 grid grid-cols-2 gap-2">
+                  <label class="block">
+                    <span class="text-[11px] text-white/55">打开聊天框</span>
+                    <input
+                      bind:value={draft.openChatKey}
+                      placeholder="如 Enter"
+                      spellcheck="false"
+                      class="mt-1 w-full rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/60"
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="text-[11px] text-white/55">发送消息</span>
+                    <input
+                      bind:value={draft.sendKey}
+                      placeholder="如 Enter"
+                      spellcheck="false"
+                      class="mt-1 w-full rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/60"
+                    />
+                  </label>
+                </div>
+                <div class="mt-4">
+                  <Toggle
+                    checked={draft.preferClipboardPaste}
+                    label="使用剪贴板粘贴"
+                    desc="仅在目标游戏无法正常接收逐字输入时开启"
+                    onchange={(v) => (draft!.preferClipboardPaste = v)}
+                  />
+                </div>
+              </div>
+            {/if}
 
             <div class="mt-4 flex items-center justify-end gap-2">
               <button

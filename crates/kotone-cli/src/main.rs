@@ -938,6 +938,9 @@ const CONFIG_SETTABLE_KEYS: &[&str] = &[
     "download.ghProxy",
     "overlay.visibility",
     "overlay.style",
+    "overlay.position",
+    "overlay.draggable",
+    "overlay.clickThrough",
 ];
 
 /// 点路径写入：current 上套 patch → Settings 反序列化校验（枚举值在此拦截）。
@@ -951,7 +954,12 @@ fn apply_config_set(current: &Settings, key: &str, raw: &str) -> Result<Settings
     }
     let value = match key {
         // 布尔键在命令行层先校验，给出清晰报错
-        "autoSend" | "evalRecording" | "runAsAdminOnStart" | "history.includeAudio" => match raw {
+        "autoSend"
+        | "evalRecording"
+        | "runAsAdminOnStart"
+        | "history.includeAudio"
+        | "overlay.draggable"
+        | "overlay.clickThrough" => match raw {
             "true" => serde_json::Value::Bool(true),
             "false" => serde_json::Value::Bool(false),
             _ => return Err(format!("{key} 只接受 true/false（收到「{raw}」）")),
@@ -1499,6 +1507,10 @@ mod tests {
         assert!(s.auto_send);
         let s = apply_config_set(&Settings::default(), "evalRecording", "false").unwrap();
         assert!(!s.eval_recording);
+        let s = apply_config_set(&Settings::default(), "overlay.draggable", "false").unwrap();
+        assert!(!s.overlay.draggable);
+        let s = apply_config_set(&Settings::default(), "overlay.clickThrough", "true").unwrap();
+        assert!(s.overlay.click_through);
         assert!(apply_config_set(&Settings::default(), "autoSend", "1").is_err());
         assert!(apply_config_set(&Settings::default(), "autoSend", "yes").is_err());
     }
@@ -1513,6 +1525,12 @@ mod tests {
         assert_eq!(s.active_profile_id.as_deref(), Some("lol"));
         let s = apply_config_set(&Settings::default(), "language", "en").unwrap();
         assert_eq!(s.language, "en");
+        let s = apply_config_set(&Settings::default(), "overlay.position", "bottom_right").unwrap();
+        assert_eq!(
+            s.overlay.position,
+            kotone_core::settings::OverlayPosition::BottomRight
+        );
+        assert!(apply_config_set(&Settings::default(), "overlay.position", "outside").is_err());
     }
 
     #[test]
