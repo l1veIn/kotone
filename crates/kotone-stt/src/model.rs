@@ -5,6 +5,10 @@
 //!
 //! 清单内置：ID / 大小 / URL / SHA256。下载经 download.rs（流式 + 校验 + 原子落盘 +
 //! 镜像回退，download.source 策略见 settings）。
+//!
+//! silero VAD 例外：随应用本体分发（`include_bytes!` 内嵌，`ensure_vad_model`
+//! 解包落盘），不出现在用户可管理的模型清单；download/delete 仍保留
+//! `silero-vad` 分支作 CLI 兜底与旧文件清理。
 
 use std::fs;
 use std::path::PathBuf;
@@ -212,11 +216,11 @@ pub fn sensevoice_default_model() -> &'static str {
     multi_file_default_model("sherpa-onnx-sensevoice").expect("SenseVoice 模型清单缺失")
 }
 
-// ---------- silero VAD 模型（ADR-007，单文件） ----------
+// ---------- silero VAD 模型（ADR-007，单文件，随本体分发） ----------
 
-/// silero VAD 模型 ID（list/download 用）
+/// silero VAD 模型 ID（download/delete 用；VAD 已本体分发，不在用户清单里）
 pub const VAD_MODEL_ID: &str = "silero-vad";
-/// VAD 伪引擎 ID（ModelInfo.engine_id 字段；VAD 不是 STT 引擎）
+/// VAD 伪引擎 ID（VAD 不是 STT 引擎；delete 清理路径用）
 pub const VAD_ENGINE_ID: &str = "vad-silero";
 pub const VAD_MODEL_FILE: &str = "silero_vad.onnx";
 /// sherpa-onnx 官方 release 托管的 silero VAD（与 VAD 示例同一来源，钉死 URL 保证 SHA256 稳定）
@@ -226,6 +230,9 @@ pub const VAD_MODEL_URL: &str =
 pub const VAD_MODEL_SHA256: &str =
     "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6";
 pub const VAD_MODEL_SIZE: u64 = 643_854;
+
+/// VAD 模型内嵌字节（随应用本体分发，不再让用户在 UI 里下载）
+const VAD_BUNDLED_BYTES: &[u8] = include_bytes!("../assets/silero_vad.onnx");
 
 /// silero VAD 模型路径（~/.kotone/models/silero_vad.onnx）
 pub fn vad_model_path() -> PathBuf {
@@ -237,6 +244,38 @@ pub fn vad_model_ready() -> bool {
     fs::metadata(vad_model_path())
         .map(|md| md.len() == VAD_MODEL_SIZE)
         .unwrap_or(false)
+}
+
+/// 确保 VAD 模型已落盘（本体分发兜底：应用启动/切到 VAD 模式时调用）。
+/// 已就绪 → Ok(false)；缺失/大小不符 → 把内嵌字节原子写入 vad_model_path() → Ok(true)。
+pub fn ensure_vad_model() -> Result<bool, String> {
+    ensure_vad_model_in(&models_dir())
+}
+
+/// 可传 models 目录的内部实现（models_dir 依赖全局配置，测试注入临时目录隔离）
+fn ensure_vad_model_in(models: &PathBuf) -> Result<bool, String> {
+    let dest = models.join(VAD_MODEL_FILE);
+    if fs::metadata(&dest)
+        .map(|md| md.len() == VAD_MODEL_SIZE)
+        .unwrap_or(false)
+    {
+        return Ok(false);
+    }
+    fs::create_dir_all(models).map_err(|e| format!("无法创建目录 {}：{e}", models.display()))?;
+    // 原子落盘：先写临时文件再 rename（对齐 download 的落盘风格）
+    let tmp = models.join(format!("{VAD_MODEL_FILE}.tmp"));
+    fs::write(&tmp, VAD_BUNDLED_BYTES)
+        .map_err(|e| format!("写入 VAD 模型失败 {}：{e}", tmp.display()))?;
+    fs::rename(&tmp, &dest).map_err(|e| format!("落盘 VAD 模型失败 {}：{e}", dest.display()))?;
+    let size = fs::metadata(&dest)
+        .map_err(|e| format!("读取 VAD 模型失败 {}：{e}", dest.display()))?
+        .len();
+    if size != VAD_MODEL_SIZE {
+        return Err(format!(
+            "VAD 模型大小不符：期望 {VAD_MODEL_SIZE}，实际 {size}"
+        ));
+    }
+    Ok(true)
 }
 
 /// 多文件模型目录
@@ -298,9 +337,9 @@ pub fn active_model_from(s: &settings::Settings, engine_id: &str) -> String {
 
 // ---------- 清单查询 ----------
 
-/// 列出全部模型（sherpa 多文件）+ silero VAD 条目
+/// 列出全部用户可管理模型（sherpa 多文件；silero VAD 随本体分发，不在清单内）
 pub fn list() -> Result<Vec<ModelInfo>, String> {
-    let mut out: Vec<ModelInfo> = SHERPA_MODELS
+    let out: Vec<ModelInfo> = SHERPA_MODELS
         .iter()
         .map(|m| ModelInfo {
             id: m.id.into(),
@@ -312,15 +351,6 @@ pub fn list() -> Result<Vec<ModelInfo>, String> {
             downloaded: multi_model_ready(m.id),
         })
         .collect();
-    out.push(ModelInfo {
-        id: VAD_MODEL_ID.into(),
-        engine_id: VAD_ENGINE_ID.into(),
-        display_name: "silero VAD 语音活动检测（one-shot 静音判停用）".into(),
-        size_bytes: VAD_MODEL_SIZE,
-        download_url: VAD_MODEL_URL.into(),
-        sha256: VAD_MODEL_SHA256.into(),
-        downloaded: vad_model_ready(),
-    });
     Ok(out)
 }
 
@@ -863,9 +893,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn list_contains_sherpa_models_and_vad_entry() {
+    fn list_contains_sherpa_models_without_vad_entry() {
         let items = list().unwrap();
-        assert_eq!(items.len(), SHERPA_MODELS.len() + 1, "sherpa 模型 + VAD 条目");
+        assert_eq!(
+            items.len(),
+            SHERPA_MODELS.len(),
+            "VAD 随本体分发，不应出现在用户可管理的模型清单"
+        );
+        assert!(
+            items.iter().all(|i| i.id != VAD_MODEL_ID),
+            "清单不应包含 silero-vad 伪条目"
+        );
         let x = items
             .iter()
             .find(|i| i.id == "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05")
@@ -875,10 +913,6 @@ mod tests {
             x.size_bytes,
             SHERPA_MODELS[0].files.iter().map(|f| f.size_bytes).sum::<u64>()
         );
-        let vad = items.iter().find(|i| i.id == VAD_MODEL_ID).unwrap();
-        assert_eq!(vad.engine_id, VAD_ENGINE_ID);
-        assert_eq!(vad.size_bytes, VAD_MODEL_SIZE);
-        assert_eq!(vad.sha256, VAD_MODEL_SHA256);
     }
 
     /// 回归：IPC 序列化必须 camelCase（前端按 engineId/displayName/sizeBytes 读取；
@@ -903,6 +937,44 @@ mod tests {
         assert!(VAD_MODEL_URL.starts_with("https://"));
         assert!(VAD_MODEL_URL.ends_with(VAD_MODEL_FILE));
         assert!(VAD_MODEL_SIZE > 100_000);
+        // 内嵌字节与清单一致（本体分发的就是清单钉死的那个文件）
+        assert_eq!(VAD_BUNDLED_BYTES.len() as u64, VAD_MODEL_SIZE);
+    }
+
+    // ---------- VAD 本体分发：ensure_vad_model ----------
+
+    #[test]
+    fn ensure_vad_model_unpacks_bundled_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let models = tmp.path().join("models");
+
+        // 首次：解包内嵌字节落盘
+        assert_eq!(ensure_vad_model_in(&models), Ok(true));
+        let dest = models.join(VAD_MODEL_FILE);
+        let written = fs::read(&dest).unwrap();
+        assert_eq!(written.len() as u64, VAD_MODEL_SIZE);
+        assert_eq!(written, VAD_BUNDLED_BYTES, "落盘内容应与内嵌字节一致");
+        assert!(!models.join(format!("{VAD_MODEL_FILE}.tmp")).exists(), "临时文件应已 rename");
+
+        // 幂等：已就绪不再写
+        assert_eq!(ensure_vad_model_in(&models), Ok(false));
+    }
+
+    #[test]
+    fn ensure_vad_model_keeps_existing_ready_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let models = tmp.path().join("models");
+        fs::create_dir_all(&models).unwrap();
+        // 已有文件大小匹配（如下载版）→ 视为就绪，不覆盖
+        let dest = models.join(VAD_MODEL_FILE);
+        fs::write(&dest, vec![0xABu8; VAD_MODEL_SIZE as usize]).unwrap();
+        assert_eq!(ensure_vad_model_in(&models), Ok(false));
+        assert_eq!(fs::read(&dest).unwrap(), vec![0xABu8; VAD_MODEL_SIZE as usize]);
+
+        // 大小不符（残缺文件）→ 重新解包覆盖
+        fs::write(&dest, b"truncated").unwrap();
+        assert_eq!(ensure_vad_model_in(&models), Ok(true));
+        assert_eq!(fs::read(&dest).unwrap().len() as u64, VAD_MODEL_SIZE);
     }
 
     #[test]

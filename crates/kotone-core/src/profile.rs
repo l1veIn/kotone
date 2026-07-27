@@ -25,6 +25,10 @@ pub struct GameProfile {
     /// false = Unicode 逐字（不污染剪贴板）；true = 剪贴板粘贴
     pub prefer_clipboard_paste: bool,
     pub hotwords: Vec<String>,
+    /// 用户在内置 profile 里显式删除的内置词条：版本更新合并内置热词时
+    /// 尊重删除、不复活（见 ensure_builtin_in）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_builtin_hotwords: Vec<String>,
 }
 
 impl GameProfile {
@@ -41,14 +45,30 @@ impl GameProfile {
             pre_paste_delay_ms: 20,
             pre_send_delay_ms: 20,
             prefer_clipboard_paste: false,
-            hotwords: vec![
-                "闪现".into(),
-                "大龙".into(),
-                "gank".into(),
-                "打野".into(),
-                "推塔".into(),
-                "回城".into(),
-            ],
+            // 内置热词（大致按：召唤师技能 → 位置/角色 → 地图资源 → 视野 →
+            // 战术 → 战斗数据 → 兵线建筑 → 对局模式 → 热门英雄）
+            hotwords: [
+                "闪现", "点燃", "传送", "治疗术", "惩戒", "虚弱", "屏障", "净化", "疾跑",
+                "打野", "上单", "中单", "下路", "辅助", "ADC", "刺客", "坦克", "战士",
+                "大龙", "小龙", "纳什男爵", "远古巨龙", "峡谷先锋", "虚空巢虫",
+                "红buff", "蓝buff", "河蟹",
+                "真眼", "假眼", "控制守卫", "扫描", "视野", "排眼", "插眼",
+                "gank", "反野", "反蹲", "越塔", "推塔", "守塔", "换线", "分带", "抱团",
+                "开团", "反手", "拉扯", "风筝", "抢龙", "偷家", "一波", "回城",
+                "出装", "神装", "破甲", "法穿", "攻速", "暴击", "冷却缩减",
+                "一血", "双杀", "三杀", "四杀", "五杀", "超神", "团灭",
+                "兵线", "炮车", "超级兵", "水晶", "高地", "门牙塔",
+                "召唤师峡谷", "大乱斗", "排位",
+                "亚索", "永恩", "盲僧", "劫", "阿卡丽", "阿狸", "金克丝", "卡莎",
+                "卢锡安", "伊泽瑞尔", "薇恩", "盖伦", "德莱厄斯", "剑姬", "杰斯",
+                "辛德拉", "乐芙兰", "拉克丝", "提莫", "墨菲特", "塞恩", "雷克顿",
+                "贾克斯", "赵信", "嘉文四世", "瑟庄妮", "烬", "霞", "洛", "锤石",
+                "璐璐", "悠米",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            removed_builtin_hotwords: vec![],
         }
     }
 
@@ -66,6 +86,7 @@ impl GameProfile {
             pre_send_delay_ms: 20,
             prefer_clipboard_paste: false,
             hotwords: vec![],
+            removed_builtin_hotwords: vec![],
         }
     }
 }
@@ -89,7 +110,9 @@ fn profile_path_in(dir: &PathBuf, id: &str) -> PathBuf {
     dir.join(format!("{safe}.json"))
 }
 
-/// 确保内置 profile 已落盘（首次运行调用；不覆盖用户已有文件）
+/// 确保内置 profile 已落盘（首次运行调用；不覆盖用户已有文件）。
+/// 文件已存在时做「版本更新合并」：把新版扩充的内置词条追加到用户文件末尾
+/// （尊重 removedBuiltinHotwords 里用户显式删除的词条，不复活）。
 pub fn ensure_builtin() -> Result<(), String> {
     ensure_builtin_in(&profiles_dir())
 }
@@ -102,9 +125,40 @@ pub fn ensure_builtin_in(dir: &PathBuf) -> Result<(), String> {
             let json = serde_json::to_string_pretty(&p)
                 .map_err(|e| format!("序列化内置 profile 失败: {e}"))?;
             std::fs::write(&path, json).map_err(|e| format!("写入内置 profile 失败: {e}"))?;
+        } else {
+            merge_builtin_hotwords_in(dir, &p);
         }
     }
     Ok(())
+}
+
+/// 版本更新合并：已有内置 profile 文件补上新版新增的内置词条。
+/// missing = 内置词条 - 文件现有热词 - 用户显式删除的内置词条，追加到末尾
+/// （用户自定义词条与其余字段原样保留）。合并失败只记日志，不阻断启动流程。
+fn merge_builtin_hotwords_in(dir: &PathBuf, builtin: &GameProfile) {
+    let result = (|| -> Result<(), String> {
+        let path = profile_path_in(dir, &builtin.id);
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|e| format!("读取内置 profile 失败: {e}"))?;
+        let mut file: GameProfile =
+            serde_json::from_str(&raw).map_err(|e| format!("解析内置 profile 失败: {e}"))?;
+        let missing: Vec<String> = builtin
+            .hotwords
+            .iter()
+            .filter(|w| {
+                !file.hotwords.contains(w) && !file.removed_builtin_hotwords.contains(w)
+            })
+            .cloned()
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        file.hotwords.extend(missing);
+        save_in(dir, &file)
+    })();
+    if let Err(e) = result {
+        eprintln!("合并内置热词失败（{}，忽略）: {e}", builtin.id);
+    }
 }
 
 /// 列出全部 profile（按 id 排序，稳定输出）
@@ -325,6 +379,11 @@ mod tests {
         assert_eq!(lol.open_chat_key, "Enter");
         assert_eq!(lol.send_key, "Enter");
         assert!(lol.hotwords.contains(&"打野".to_string()));
+        // 内置热词应去重
+        let mut sorted = lol.hotwords.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), lol.hotwords.len(), "内置热词不应有重复");
     }
 
     #[test]
@@ -359,6 +418,72 @@ mod tests {
         assert!(v.get("processNames").is_some());
         assert!(v.get("preferClipboardPaste").is_some());
         assert!(v.get("preOpenDelayMs").is_some());
+        // 空删除表不序列化；非空时按 camelCase 落盘
+        assert!(v.get("removedBuiltinHotwords").is_none());
+        let mut lol2 = GameProfile::builtin_lol();
+        lol2.removed_builtin_hotwords = vec!["提莫".into()];
+        let v2 = serde_json::to_value(&lol2).unwrap();
+        assert_eq!(v2["removedBuiltinHotwords"][0], "提莫");
+    }
+
+    // ---------- 内置热词版本更新合并 ----------
+
+    /// 模拟一份「旧版本」lol 文件：内置词条的子集 + 一个用户自定义词条
+    fn write_legacy_lol(dir: &PathBuf, hotwords: &[&str], removed: &[&str]) {
+        let mut legacy = GameProfile::builtin_lol();
+        legacy.hotwords = hotwords.iter().map(|s| s.to_string()).collect();
+        legacy.removed_builtin_hotwords = removed.iter().map(|s| s.to_string()).collect();
+        save_in(dir, &legacy).unwrap();
+    }
+
+    #[test]
+    fn ensure_builtin_merges_new_hotwords_into_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path().to_path_buf();
+        write_legacy_lol(&dir, &["闪现"], &[]);
+
+        ensure_builtin_in(&dir).unwrap();
+        let lol = get_in(&dir, "lol").unwrap();
+        // 新版内置词条全部补齐，追加在末尾（旧词条「闪现」保持在最前）
+        assert_eq!(lol.hotwords.first().map(String::as_str), Some("闪现"));
+        for w in &GameProfile::builtin_lol().hotwords {
+            assert!(lol.hotwords.contains(w), "合并后缺少内置词条 {w}");
+        }
+        // 再跑一遍幂等：数量稳定不重复追加
+        let n = lol.hotwords.len();
+        ensure_builtin_in(&dir).unwrap();
+        assert_eq!(get_in(&dir, "lol").unwrap().hotwords.len(), n);
+    }
+
+    #[test]
+    fn ensure_builtin_respects_user_removed_hotwords() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path().to_path_buf();
+        // 用户删掉了「提莫」「悠米」（记进 removedBuiltinHotwords）
+        write_legacy_lol(&dir, &["闪现"], &["提莫", "悠米"]);
+
+        ensure_builtin_in(&dir).unwrap();
+        let lol = get_in(&dir, "lol").unwrap();
+        assert!(!lol.hotwords.contains(&"提莫".to_string()), "删除的词条不应复活");
+        assert!(!lol.hotwords.contains(&"悠米".to_string()));
+        assert!(lol.hotwords.contains(&"亚索".to_string()), "其余新词条照常合并");
+    }
+
+    #[test]
+    fn ensure_builtin_keeps_user_custom_hotwords() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path().to_path_buf();
+        write_legacy_lol(&dir, &["闪现", "我的自定义词"], &[]);
+
+        ensure_builtin_in(&dir).unwrap();
+        let lol = get_in(&dir, "lol").unwrap();
+        assert!(
+            lol.hotwords.contains(&"我的自定义词".to_string()),
+            "用户自定义词条应保留"
+        );
+        // 其他字段不被合并改动
+        assert_eq!(lol.open_chat_key, "Enter");
+        assert_eq!(lol.pre_send_delay_ms, 20);
     }
 
     // ---------- 热词导入导出 ----------

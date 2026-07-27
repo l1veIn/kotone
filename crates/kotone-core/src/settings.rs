@@ -52,6 +52,9 @@ pub struct Settings {
     pub vad_silence_ms: u32,
     /// 启动时自动以管理员重启自身（默认关；防循环逻辑见 elevation::should_auto_elevate）
     pub run_as_admin_on_start: bool,
+    /// 「以管理员权限重启」启动提示：用户勾选「不再提示」后置 true，不再弹窗（默认 false）
+    #[serde(default)]
+    pub admin_prompt_dismissed: bool,
     /// 识别历史记录（默认 capped/1000 条/不含音频；off = 零开销不记录）
     #[serde(default)]
     pub history: crate::history::HistoryConfig,
@@ -245,6 +248,7 @@ impl Default for Settings {
             interaction_mode: None,
             vad_silence_ms: default_vad_silence_ms(),
             run_as_admin_on_start: false,
+            admin_prompt_dismissed: false,
             history: crate::history::HistoryConfig::default(),
             ui: UiConfig::default(),
             models: ModelsConfig::default(),

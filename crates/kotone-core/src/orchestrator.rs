@@ -204,16 +204,44 @@ impl Orchestrator {
             OrchestratorState::Preview => {
                 let _ = self.confirm_send().await;
             }
+            // Success / 无文本 Error 的 toast 驻留期：点按 = 立即开始下一句
+            // （先 cancel 清理 toast 再 begin，「第一次按没反应」修复）。
+            // 带文本的 Error（发送失败待重试）保持只取消，不吞掉重试入口。
+            OrchestratorState::Success => {
+                self.cancel().await;
+                let _ = self.begin().await;
+            }
+            OrchestratorState::Error
+                if self.inner.lock().unwrap().preview_text.is_none() =>
+            {
+                self.cancel().await;
+                let _ = self.begin().await;
+            }
             _ => self.cancel().await,
         }
     }
 
-    /// hold 触发键（A1）：按下开始（非 Idle 态按下忽略——v5 实测：避免 begin
-    /// 失败的 Error toast 冲掉预览文本）；松开在 Listening 态结束（B1 松手结束）。
+    /// hold 触发键（A1）：按下开始。Idle 直接 begin；Success / 无文本 Error 的
+    /// toast 驻留期内按下 = 立即开始下一句（先 cancel 再 begin，「第一次按没反应」
+    /// 修复）；其余非 Idle 态按下忽略（Preview / 带文本 Error 保留确认与重试入口，
+    /// 不让 begin 失败的 Error toast 冲掉预览文本）。松开在 Listening 态结束（B1）。
     pub async fn on_hotkey_hold(&self, pressed: bool) {
         if pressed {
-            if self.state() == OrchestratorState::Idle {
-                let _ = self.begin().await;
+            match self.state() {
+                OrchestratorState::Idle => {
+                    let _ = self.begin().await;
+                }
+                OrchestratorState::Success => {
+                    self.cancel().await;
+                    let _ = self.begin().await;
+                }
+                OrchestratorState::Error
+                    if self.inner.lock().unwrap().preview_text.is_none() =>
+                {
+                    self.cancel().await;
+                    let _ = self.begin().await;
+                }
+                _ => {}
             }
         } else if self.policy().end == EndTrigger::HotkeyRelease
             && self.state() == OrchestratorState::Listening
@@ -252,7 +280,7 @@ impl Orchestrator {
             .ok_or_else(|| format!("未注册的 STT 引擎: {engine_id}"))?;
         if !engine.is_ready() {
             return Err(format!(
-                "引擎「{}」未就绪（模型未下载或未实现），联调可切换到 mock-stream",
+                "引擎「{}」未就绪（模型未下载），请到「设置 → 高级」下载模型",
                 engine.display_name()
             ));
         }
@@ -540,6 +568,31 @@ impl Orchestrator {
 
         match result {
             Ok(t) => {
+                // 空转录「无事发生」：不发送、不进预览、不落 history/eval 录档、
+                // 不发 toast，状态直接回 Idle（空文本还会触发注入器敲两个回车，
+                // openChatKey/sendKey 都是 Enter 时表现为莫名换行）
+                if t.text.trim().is_empty() {
+                    // 录档句柄直接 drop（不落盘）；history 草稿清掉不写记录
+                    drop(active.recorder.take());
+                    let continuous = self.policy().continuous;
+                    // 块作用域收窄 MutexGuard（绝不跨 await 持锁）
+                    {
+                        let _op = self.op.lock().await;
+                        let mut inner = self.inner.lock().unwrap();
+                        if inner.gen != gen {
+                            return Ok(());
+                        }
+                        inner.history = None;
+                        inner.state = OrchestratorState::Idle;
+                    }
+                    self.emit_state(OrchestratorState::Idle, None);
+                    // solo 连续模式：立即开下一段（同 schedule_idle 的 continuous 处理；
+                    // begin 失败走自身 toast_error 收尾）
+                    if continuous {
+                        let _ = self.begin().await;
+                    }
+                    return Ok(());
+                }
                 // 最终文本上屏（替换 partial）
                 self.emitter
                     .emit("kotone://partial", json!({ "text": t.text }));

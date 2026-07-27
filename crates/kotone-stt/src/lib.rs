@@ -5,7 +5,8 @@
 //!   关闭时均为占位注册）；
 //! - `register_builtin`：把内置引擎注入 core 的 EngineRegistry 容器
 //!   （依赖方向：kotone-stt → kotone-core，core 不认识任何具体引擎）；
-//! - `model`：模型清单与下载管理（ADR-003，自管理于 ~/.kotone）；
+//! - `model`：模型清单与下载管理（ADR-003，自管理于 ~/.kotone；
+//!   silero VAD 随本体分发，见 model::ensure_vad_model）；
 //! - `download`：通用下载器（流式 + SHA256 校验 + 原子落盘 + 镜像回退）。
 
 pub mod download;
