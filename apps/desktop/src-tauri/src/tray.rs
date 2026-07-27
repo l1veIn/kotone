@@ -1,24 +1,78 @@
-//! 系统托盘：菜单「显示悬浮条 / 设置 / 退出」（docs/development.md §3.6）
+//! 系统托盘：左键唤起主窗口；右键菜单「打开主页面 / 启动引擎 / 退出」
+//! （docs/development.md §3.6）
+//!
+//! 「启动引擎」为动态文案：引擎运行中显示「停止引擎」，由 runtime.rs 在
+//! 状态推送时（snapshot_and_emit）同步更新；启动/停止完成都会经过该推送点。
 
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::TrayIconBuilder,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, Runtime,
 };
 
-/// 构建托盘图标与菜单，点击行为：唤起对应窗口或退出
-pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    let show_overlay = MenuItem::with_id(app, "show-overlay", "显示悬浮条", true, None::<&str>)?;
-    let show_settings = MenuItem::with_id(app, "show-settings", "设置", true, None::<&str>)?;
+/// 托盘状态：toggle 引擎菜单项句柄，供 runtime 状态推送时动态改文案
+pub struct TrayState {
+    pub toggle_item: MenuItem<tauri::Wry>,
+}
+
+/// 按运行时相位更新「启动引擎 / 停止引擎」文案。
+/// 任何相位变化（启动/停止完成、失败回滚）都应调用，保证文案始终正确。
+pub fn sync_toggle_label(app: &AppHandle, running: bool) {
+    if let Some(tray) = app.try_state::<TrayState>() {
+        let text = if running { "停止引擎" } else { "启动引擎" };
+        let _ = tray.toggle_item.set_text(text);
+    }
+}
+
+/// 构建托盘图标与菜单：左键释放唤起主窗口，右键菜单切换引擎或退出
+pub fn setup_tray(app: &AppHandle<tauri::Wry>) -> tauri::Result<()> {
+    let open_main = MenuItem::with_id(app, "open-main", "打开主页面", true, None::<&str>)?;
+    let toggle_engine = MenuItem::with_id(app, "toggle-engine", "启动引擎", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show_overlay, &show_settings, &quit])?;
+    let menu = Menu::with_items(app, &[&open_main, &toggle_engine, &quit])?;
+
+    // 存句柄供 runtime 状态推送时更新文案
+    app.manage(TrayState {
+        toggle_item: toggle_engine.clone(),
+    });
 
     let mut builder = TrayIconBuilder::with_id("kotone-tray")
         .tooltip("Kotone 琴音")
         .menu(&menu)
+        // 左键不再弹菜单：释放时显示并聚焦主窗口
+        // （回调首参是 &TrayIcon 而非 AppHandle，经 app_handle() 取回）
+        .menu_on_left_click(false)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_window(tray.app_handle(), "main");
+            }
+        })
         .on_menu_event(|app, event| match event.id().as_ref() {
-            "show-overlay" => show_window(app, "overlay"),
-            "show-settings" => show_window(app, "main"),
+            "open-main" => show_window(app, "main"),
+            "toggle-engine" => {
+                // 按当前相位异步启动/停止（避免阻塞菜单事件循环）；
+                // 文案更新统一走 runtime 状态推送（snapshot_and_emit）
+                let running = app
+                    .try_state::<crate::runtime::RuntimeManager>()
+                    .map(|rt| rt.phase() == kotone_core::runtime::RuntimePhase::Running)
+                    .unwrap_or(false);
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let result = if running {
+                        crate::runtime::stop(&handle).await
+                    } else {
+                        crate::runtime::start(&handle).await
+                    };
+                    if let Err(e) = result {
+                        kotone_core::log::log(&format!("tray toggle engine failed: {e}"));
+                    }
+                });
+            }
             "quit" => app.exit(0),
             _ => {}
         });
