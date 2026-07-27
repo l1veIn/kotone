@@ -9,11 +9,12 @@
 //! 对上层（TauriEmitter / IPC）签名不变：register/unregister/set_cancel_enabled/status。
 
 use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc;
 
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
-use kotone_core::hotkey::{HookEvent, HotkeySource};
+use kotone_core::hotkey::{parse_hotkey, HookEvent, HotkeySource};
 use kotone_core::orchestrator::Orchestrator;
 use kotone_core::settings::HotkeyBackend;
 
@@ -204,18 +205,39 @@ pub struct HotkeyManager {
     backend: Mutex<ActiveBackend>,
     /// 当前注册的热键名（两个后端通用）
     registered_key: Mutex<Option<String>>,
+    /// 当前注册模式，供 WebView 内按键兜底复用与全局钩子一致的语义。
+    registered_mode: Mutex<Option<HotkeyMode>>,
+    /// WebView 兜底按下态：过滤浏览器 keydown repeat，并保证 hold 成对释放。
+    local_down: Mutex<bool>,
+    /// WebView 兜底事件必须 FIFO：快速 tap 时不能让 release 抢在 press 业务完成前执行。
+    local_tx: mpsc::UnboundedSender<HookEvent>,
     /// 最近一次注册失败信息（设置页提示「可能被其他程序/实例占用」）
     last_error: Mutex<Option<String>>,
 }
 
 impl HotkeyManager {
     pub fn new(app: &AppHandle, orch: Arc<Orchestrator>) -> Self {
+        let (local_tx, mut local_rx) = mpsc::unbounded_channel::<HookEvent>();
+        let local_orch = orch.clone();
+        tauri::async_runtime::spawn(async move {
+            while let Some(event) = local_rx.recv().await {
+                match event {
+                    HookEvent::HoldPressed => local_orch.on_hotkey_hold(true).await,
+                    HookEvent::HoldReleased => local_orch.on_hotkey_hold(false).await,
+                    HookEvent::Toggle => local_orch.on_hotkey_toggle().await,
+                    HookEvent::Cancel => local_orch.cancel().await,
+                }
+            }
+        });
         Self {
             plugin: PluginHotkeySource::new(app, orch.clone()),
             #[cfg(windows)]
             llhook: kotone_platform_windows::hotkey_ll::LlHookSource::new(make_llhook_sink(orch)),
             backend: Mutex::new(ActiveBackend::None),
             registered_key: Mutex::new(None),
+            registered_mode: Mutex::new(None),
+            local_down: Mutex::new(false),
+            local_tx,
             last_error: Mutex::new(None),
         }
     }
@@ -235,6 +257,7 @@ impl HotkeyManager {
                     ));
                     *self.backend.lock().unwrap() = ActiveBackend::LlHook;
                     *self.registered_key.lock().unwrap() = Some(key.to_string());
+                    *self.registered_mode.lock().unwrap() = Some(mode);
                     *self.last_error.lock().unwrap() = None;
                     return Ok(());
                 }
@@ -251,6 +274,7 @@ impl HotkeyManager {
                 ));
                 *self.backend.lock().unwrap() = ActiveBackend::Plugin;
                 *self.registered_key.lock().unwrap() = Some(key.to_string());
+                *self.registered_mode.lock().unwrap() = Some(mode);
                 *self.last_error.lock().unwrap() = None;
                 Ok(())
             }
@@ -269,6 +293,8 @@ impl HotkeyManager {
         self.plugin.unregister();
         *self.backend.lock().unwrap() = ActiveBackend::None;
         *self.registered_key.lock().unwrap() = None;
+        *self.registered_mode.lock().unwrap() = None;
+        *self.local_down.lock().unwrap() = false;
         Ok(())
     }
 
@@ -295,9 +321,55 @@ impl HotkeyManager {
         }
     }
 
+    /// WebView 获得焦点时的兜底入口。
+    ///
+    /// 正常情况下 LL 钩子会在 DOM 收到按键前吞掉命中的热键；只有钩子没有拦住、
+    /// 按键实际落进 WebView 时前端才会调用这里，因此不会与正常钩子双触发。
+    /// RegisterHotKey 后端不走此兜底，避免与系统 WM_HOTKEY 回调重复。
+    pub fn trigger_local(&self, combo: &str, pressed: bool) -> bool {
+        if *self.backend.lock().unwrap() != ActiveBackend::LlHook {
+            return false;
+        }
+        let registered = self.registered_key.lock().unwrap().clone();
+        let Some(registered) = registered else {
+            return false;
+        };
+        if parse_hotkey(combo) != parse_hotkey(&registered) {
+            return false;
+        }
+        let Some(mode) = *self.registered_mode.lock().unwrap() else {
+            return false;
+        };
+
+        let mut local_down = self.local_down.lock().unwrap();
+        if pressed {
+            if *local_down {
+                return true;
+            }
+            *local_down = true;
+            kotone_core::log::log(&format!(
+                "webview hotkey fallback: {combo} ({mode:?}) pressed"
+            ));
+            let event = match mode {
+                HotkeyMode::Hold => HookEvent::HoldPressed,
+                HotkeyMode::Toggle => HookEvent::Toggle,
+            };
+            let _ = self.local_tx.send(event);
+        } else if *local_down {
+            *local_down = false;
+            if mode == HotkeyMode::Hold {
+                kotone_core::log::log(&format!(
+                    "webview hotkey fallback: {combo} ({mode:?}) released"
+                ));
+                let _ = self.local_tx.send(HookEvent::HoldReleased);
+            }
+        }
+        true
+    }
+
     /// 开始热键捕获（设置页「点击录入」）：LL 钩子捕获下一个按键组合，
     /// 结果经 `kotone://hotkey-capture` 事件推送（{combo} / {cancelled} / {timeout}）。
-    /// 捕获期间正常热键匹配暂停（matcher 捕获模式不吞键、不产生会话事件）。
+    /// 捕获期间正常热键匹配暂停（matcher 吞掉录入主键、不产生会话事件）。
     pub fn start_capture(&self, app: AppHandle) -> Result<(), String> {
         #[cfg(windows)]
         {

@@ -278,8 +278,11 @@ pub struct HookMatcher {
     esc_matched: bool,
     /// 会话激活（state != idle）：Esc 取消使能
     session_active: bool,
-    /// 捕获模式（热键录入）：不吞键、不产生 HookEvent，非修饰键 down 报告组合键
+    /// 捕获模式（热键录入）：吞掉主键、不产生 HookEvent，非修饰键 down 报告组合键
     capture_active: bool,
+    /// 捕获到的主键：捕获结束可能早于物理 keyup，仍需吞掉对应重复 down / up，
+    /// 避免 Tab、Space、Enter 等按键落进 WebView 改变焦点或触发控件。
+    capture_swallow_vk: Option<u32>,
 }
 
 impl HookMatcher {
@@ -298,6 +301,7 @@ impl HookMatcher {
             esc_matched: false,
             session_active: false,
             capture_active: false,
+            capture_swallow_vk: None,
         }
     }
 
@@ -321,7 +325,7 @@ impl HookMatcher {
         self.session_active = active;
     }
 
-    /// 捕获模式开关（热键录入）。捕获期间不吞键、不产生 HookEvent：
+    /// 捕获模式开关（热键录入）。捕获期间吞掉被录入的主键、不产生 HookEvent：
     /// 非修饰键 down 报告 `captured` 组合键；Esc down 不捕获（留给调用层当取消信号）。
     /// 捕获优先于 enabled：未注册热键时也能用（CLI/首次设置录入）。
     pub fn set_capture_active(&mut self, active: bool) {
@@ -335,6 +339,19 @@ impl HookMatcher {
     /// 输入一个按键事件，输出吞键与事件判定（钩子回调里唯一入口）
     pub fn on_key(&mut self, vk: u32, action: KeyAction) -> MatchOutcome {
         let down = action == KeyAction::Down;
+
+        // 捕获结果会在主键 down 时立即回传，调用方可能在物理 keyup 前关闭捕获。
+        // 对这一个主键持续吞到 keyup，不能让 Tab/Space 等尾事件落进 WebView。
+        if self.capture_swallow_vk == Some(vk) {
+            if !down {
+                self.capture_swallow_vk = None;
+            }
+            return MatchOutcome {
+                swallow: true,
+                event: None,
+                captured: None,
+            };
+        }
 
         // 修饰键：只跟踪状态，永不吞键（吞 Ctrl/Alt/Shift 会破坏游戏操作）
         match vk {
@@ -354,11 +371,12 @@ impl HookMatcher {
         }
 
         // 捕获模式：录入热键组合（设置页「点击录入」/ CLI --capture）。
-        // 不吞键、不产生 HookEvent；Esc down 不捕获（调用层据此发取消信号）。
+        // 吞掉被录入的主键、不产生 HookEvent；Esc down 不捕获（调用层据此发取消信号）。
         if self.capture_active {
             if down && vk != VK_ESCAPE {
+                self.capture_swallow_vk = Some(vk);
                 return MatchOutcome {
-                    swallow: false,
+                    swallow: true,
                     event: None,
                     captured: Some(HotkeySpec {
                         vk,
@@ -719,18 +737,23 @@ mod tests {
     }
 
     #[test]
-    fn capture_never_swallows_and_fires_no_events() {
+    fn capture_swallows_main_key_and_fires_no_events() {
         let mut m = matcher("F8", HotkeyMode::Toggle);
         m.set_capture_active(true);
         m.set_session_active(true);
-        // 即使按下已注册的主键：报告 captured 而非 HookEvent，且不吞键
+        // 即使按下已注册的主键：报告 captured 而非 HookEvent，并吞键
         let r = down(&mut m, 0x77);
-        assert!(!r.swallow);
+        assert!(r.swallow);
         assert_eq!(r.event, None);
         assert!(r.captured.is_some());
+        // 捕获层通常会在 down 后立即结束；对应的重复 down / up 仍必须吞掉。
+        m.set_capture_active(false);
+        assert!(down(&mut m, 0x77).swallow);
         let r = up(&mut m, 0x77);
-        assert_eq!(r, PASS);
+        assert!(r.swallow);
+        assert_eq!(r.event, None);
         // Esc 在捕获期也不发 Cancel（录入优先于会话取消）
+        m.set_capture_active(true);
         assert_eq!(down(&mut m, VK_ESCAPE), PASS);
         // 结束捕获后恢复正常匹配
         m.set_capture_active(false);
