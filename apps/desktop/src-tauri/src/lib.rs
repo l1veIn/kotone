@@ -682,6 +682,12 @@ fn cancel_hotkey_capture(app: AppHandle) {
     app.state::<HotkeyManager>().cancel_capture();
 }
 
+/// WebView 内收到已配置热键时的兜底。正常 LL 钩子已吞键时 DOM 不会调用到这里。
+#[tauri::command]
+fn trigger_local_hotkey(app: AppHandle, combo: String, pressed: bool) -> bool {
+    app.state::<HotkeyManager>().trigger_local(&combo, pressed)
+}
+
 /// 一键管理员重启：ShellExecuteExW "runas" 拉起新进程后退出当前进程。
 /// 用户在 UAC 弹窗点「否」会返回错误，当前进程继续运行。
 #[tauri::command]
@@ -1091,6 +1097,7 @@ pub fn run() {
             get_hotkey_status,
             start_hotkey_capture,
             cancel_hotkey_capture,
+            trigger_local_hotkey,
             restart_as_admin,
             list_models,
             download_model,

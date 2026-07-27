@@ -2283,7 +2283,7 @@ dependencies = [
 
 [[package]]
 name = "kotone-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "kotone-core",
@@ -2295,7 +2295,7 @@ dependencies = [
 
 [[package]]
 name = "kotone-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dirs",
  "kotone-stt",
@@ -2307,7 +2307,7 @@ dependencies = [
 
 [[package]]
 name = "kotone-platform-windows"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arboard",
  "cpal",
@@ -2319,7 +2319,7 @@ dependencies = [
 
 [[package]]
 name = "kotone-stt"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bzip2",
  "kotone-core",
@@ -2335,7 +2335,7 @@ dependencies = [
 
 [[package]]
 name = "kotone-tauri"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "kotone-core",
  "kotone-platform-windows",

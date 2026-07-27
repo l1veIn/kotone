@@ -1,6 +1,6 @@
 [package]
 name = "kotone-cli"
-version = "0.1.0"
+version = "0.1.1"
 description = "Kotone 命令行前端：send 注入 / listen 全链路（wav 直灌+虚拟声卡）/ config / devices / play / eval"
 edition = "2021"
 rust-version = "1.77.2"

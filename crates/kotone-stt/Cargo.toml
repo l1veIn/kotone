@@ -1,6 +1,6 @@
 [package]
 name = "kotone-stt"
-version = "0.1.0"
+version = "0.1.1"
 description = "Kotone STT 引擎适配器：mock / sherpa-onnx（X-ASR · SenseVoice · FunASR-Nano）+ 模型管理 + 内置引擎注册"
 edition = "2021"
 rust-version = "1.77.2"

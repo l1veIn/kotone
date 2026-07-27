@@ -100,7 +100,7 @@ impl LlHookSource {
     /// 捕获下一个按键组合（热键录入：设置页「点击录入」/ CLI --capture）。
     ///
     /// 非阻塞：装槽后起 waiter 线程等结果（recv_timeout），结果经 `cb` 回调。
-    /// 未注册过热键时用占位配置（F24/Toggle，捕获优先于匹配故不吞键）启动钩子
+    /// 未注册过热键时用占位配置（F24/Toggle，捕获优先于匹配）启动钩子
     /// 基础设施，捕获结束后恢复禁用。已有捕获进行中返回 Err。
     pub fn capture_next(
         &self,
@@ -121,7 +121,7 @@ impl LlHookSource {
 
         if !was_started {
             // 未注册过：用占位热键启动钩子线程（capture 模式优先于 enabled/匹配，
-            // 不吞键不产生 HookEvent；捕获结束后恢复禁用）
+            // 不产生 HookEvent；捕获到的主键会被吞掉，结束后恢复禁用）
             self.register("F24", HotkeyMode::Toggle)?;
             self.state.lock().unwrap().armed = false;
             if let Some(shared) = SHARED.get() {

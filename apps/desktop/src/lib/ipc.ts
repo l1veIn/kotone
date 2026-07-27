@@ -615,6 +615,12 @@ export async function cancelHotkeyCapture(): Promise<void> {
   return invoke<void>("cancel_hotkey_capture");
 }
 
+/** Kotone 窗口内的热键兜底；仅 LL 钩子后端且组合键确实匹配时会触发。 */
+export async function triggerLocalHotkey(combo: string, pressed: boolean): Promise<boolean> {
+  if (!isTauri) return false;
+  return invoke<boolean>("trigger_local_hotkey", { combo, pressed });
+}
+
 // ---------- 运行时「启动」开关 ----------
 
 /** mock 运行时：启动快照（推导 restartNeeded 用；对齐壳侧语义） */

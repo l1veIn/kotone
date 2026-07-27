@@ -40,7 +40,7 @@
     </blockquote>
 
     <div class="mt-5 flex items-center gap-4 text-[12px] text-white/45">
-      <span>v0.1.0（MVP）</span>
+      <span>v0.1.1（MVP）</span>
       <span class="text-white/20">|</span>
       <a
         class="text-kotone-cyan/80 underline underline-offset-2 transition hover:text-kotone-cyan"
