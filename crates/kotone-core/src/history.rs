@@ -3,8 +3,8 @@
 //! 设计要点：
 //! - 追加式 JSONL：每次会话终态（sent / cancelled / error）追加一行，零索引成本；
 //! - sessionId 与 eval 录档共用（orchestrator 生成一次 id 同时喂两边），可互查；
-//! - includeAudio 开启时把 eval 录档的 wav 复制到 history/audio/<sessionId>.wav，
-//!   记录里的 audioFile 存相对文件名（eval 录档关闭时无 wav 可复制，audioFile 为 null）；
+//! - includeAudio 开启时独立把会话 PCM 写到 history/audio/<sessionId>.wav，
+//!   不依赖评测录档；记录里的 audioFile 存相对文件名；
 //! - 并发取舍：单机单用户 best-effort——append 用单次 write 追加，
 //!   capped 裁剪（全读 → 保留尾部 → 原子重写）极少发生，不加文件锁；
 //!   最坏情况是并发写交错出一行坏 JSON，list 会跳过坏行，不致命。
@@ -30,7 +30,7 @@ pub struct HistoryConfig {
     pub mode: HistoryMode,
     /// capped 模式下的容量上限
     pub max_records: u32,
-    /// 是否随记录保存音频（从 eval 录档复制 wav 到 history/audio/）
+    /// 是否随记录独立保存音频到 history/audio/（不依赖评测录档）
     pub include_audio: bool,
 }
 
@@ -70,7 +70,7 @@ pub struct HistoryRecord {
     pub finalize_latency_ms: Option<u64>,
     pub outcome: HistoryOutcome,
     pub error: Option<String>,
-    /// 相对 history/audio/ 的文件名；includeAudio 关闭或无 wav 可复制时为 null
+    /// 相对 history/audio/ 的文件名；includeAudio 关闭或音频写入失败时为 null
     pub audio_file: Option<String>,
 }
 
@@ -134,11 +134,20 @@ fn trim_in(dir: &Path, max: u32) -> Result<(), String> {
         return Ok(());
     }
     let (dropped, kept) = lines.split_at(lines.len() - max);
+    let kept_audio: std::collections::HashSet<String> = kept
+        .iter()
+        .filter_map(|line| serde_json::from_str::<HistoryRecord>(line).ok())
+        .filter_map(|rec| rec.audio_file)
+        .collect();
     // 被裁记录的音频一并删除（best-effort，删不掉不阻塞裁剪）
     for line in dropped {
         if let Ok(rec) = serde_json::from_str::<HistoryRecord>(line) {
             if let Some(file) = rec.audio_file {
-                let _ = std::fs::remove_file(audio_dir(dir).join(file));
+                // error → retry 会产生两条共享同一会话音频的记录；
+                // 只裁掉旧记录时不能误删仍被保留记录引用的 WAV。
+                if !kept_audio.contains(&file) {
+                    let _ = std::fs::remove_file(audio_dir(dir).join(file));
+                }
             }
         }
     }
@@ -192,18 +201,21 @@ pub fn clear_in(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// includeAudio 落音频：把 eval 录档 wav 复制到 history/audio/<sessionId>.wav，
-/// 成功返回相对文件名（填入 HistoryRecord.audioFile）；
-/// eval 录档关闭（无 wav）或复制失败返回 None（记录照写，不致命）。
-pub fn copy_audio_in(dir: &Path, eval_dir: &Path, session_id: &str) -> Option<String> {
-    let src = crate::eval::session_wav_path(eval_dir, session_id);
-    if !src.exists() {
+/// includeAudio 落音频：把会话 PCM 直接写到 history/audio/<sessionId>.wav。
+/// 成功返回相对文件名（填入 HistoryRecord.audioFile）；失败返回 None，
+/// 记录本身仍照常写入。该路径与 evalRecording 完全独立。
+pub fn write_audio_in(dir: &Path, session_id: &str, pcm: &[f32]) -> Option<String> {
+    if session_id.is_empty()
+        || session_id.contains('/')
+        || session_id.contains('\\')
+        || session_id.contains("..")
+    {
         return None;
     }
     let adir = audio_dir(dir);
     std::fs::create_dir_all(&adir).ok()?;
     let name = format!("{session_id}.wav");
-    std::fs::copy(&src, adir.join(&name)).ok()?;
+    crate::eval::write_wav(&adir.join(&name), pcm).ok()?;
     Some(name)
 }
 
@@ -338,6 +350,28 @@ mod tests {
     }
 
     #[test]
+    fn capped_trim_keeps_audio_still_referenced_by_retry_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let adir = audio_dir(dir.path());
+        std::fs::create_dir_all(&adir).unwrap();
+        std::fs::write(adir.join("shared.wav"), b"RIFF-fake").unwrap();
+
+        let mut failed = rec("same-session", HistoryOutcome::Error);
+        failed.audio_file = Some("shared.wav".to_string());
+        append_in(dir.path(), &failed, &cfg(HistoryMode::Capped, 1)).unwrap();
+
+        let mut retried = rec("same-session", HistoryOutcome::Sent);
+        retried.audio_file = Some("shared.wav".to_string());
+        append_in(dir.path(), &retried, &cfg(HistoryMode::Capped, 1)).unwrap();
+
+        assert_eq!(list_in(dir.path()).unwrap().len(), 1);
+        assert!(
+            adir.join("shared.wav").exists(),
+            "仍被重试成功记录引用的音频不能删除"
+        );
+    }
+
+    #[test]
     fn list_skips_corrupt_lines() {
         let dir = tempfile::tempdir().unwrap();
         append_in(dir.path(), &rec("s1", HistoryOutcome::Sent), &cfg(HistoryMode::Capped, 10))
@@ -373,17 +407,13 @@ mod tests {
     }
 
     #[test]
-    fn copy_audio_copies_eval_wav() {
+    fn write_audio_writes_history_wav_without_eval_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let eval = tempfile::tempdir().unwrap();
-        std::fs::write(eval.path().join("s1.wav"), b"RIFF-fake").unwrap();
-        let name = copy_audio_in(dir.path(), eval.path(), "s1");
+        let pcm = vec![0.25f32; crate::eval::SAMPLE_RATE as usize];
+        let name = write_audio_in(dir.path(), "s1", &pcm);
         assert_eq!(name.as_deref(), Some("s1.wav"));
-        assert_eq!(
-            std::fs::read(audio_dir(dir.path()).join("s1.wav")).unwrap(),
-            b"RIFF-fake"
-        );
-        // eval 无 wav → None（记录照写，audioFile 为 null）
-        assert!(copy_audio_in(dir.path(), eval.path(), "ghost").is_none());
+        let written = crate::eval::read_wav(&audio_dir(dir.path()).join("s1.wav")).unwrap();
+        assert_eq!(written.len(), pcm.len());
+        assert!(write_audio_in(dir.path(), "../escape", &pcm).is_none());
     }
 }

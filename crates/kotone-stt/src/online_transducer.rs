@@ -2,8 +2,7 @@
 //! xasr.rs（X-ASR 流式中英标点）共用的 recognizer/session 实现。
 //!
 //! 差异全部收敛到 [`OnlineTransducerSpec]：引擎 id / 展示名 / 语言 / 三个模型
-//! 文件名 / 可选 bpe_vocab（Some 时设 modeling_unit="cjkchar+bpe"，X-ASR 类
-//! 模型需要）。model_type 不显式设置——encoder.onnx 元数据自带
+//! 文件名 / 热词建模单元 / 可选 bpe_vocab。model_type 不显式设置——encoder.onnx 元数据自带
 //! （zipformer2 / zipformer2r），C 侧自动探测。
 //!
 //! feature `engine-sherpa` 控制编译：开启 = 真实实现；关闭 = 占位注册
@@ -30,16 +29,18 @@ pub struct OnlineTransducerSpec {
     pub encoder_file: &'static str,
     pub decoder_file: &'static str,
     pub joiner_file: &'static str,
-    /// Some = 模型为 cjkchar+bpe 建模单元（X-ASR），值是热词用的**文本** vocab
-    /// 文件名（bpe.vocab；不存在时可从 bpe.model 现场导出）。仅配置了热词时
-    /// 才会传给 C 侧，且传入前必经格式探测（P0：二进制 bpe.model 会让 C++ exit）
+    /// sherpa 热词编码使用的建模单元，例如 bpe / cjkchar / cjkchar+bpe。
+    pub modeling_unit: &'static str,
+    /// Some = 热词编码需要 SentencePiece **文本** vocab，值为文件名
+    /// （bpe.vocab；不存在时可从 bpe.model 现场导出）。传入前必经格式探测
+    /// （P0：把二进制 bpe.model 当 vocab 传入会让 C++ exit）。
     pub bpe_vocab_file: Option<&'static str>,
     /// 模型未下载时的错误提示
     pub not_ready_hint: &'static str,
 }
 
 /// bpe_vocab 门控（P0 止血核心，纯函数便于无 feature 测试）：
-/// C++ Validate 要求 modeling_unit=cjkchar+bpe 时 bpe_vocab 必须指向存在的
+/// C++ Validate 要求 modeling_unit=bpe/cjkchar+bpe 时 bpe_vocab 必须指向存在的
 /// 文件，且创建 recognizer 时立即解析——格式不符直接 exit 进程。
 /// 因此只有「文本 vocab 存在且通过格式探测」才返回 Some（resolve 内部会
 /// 尝试从 bpe.model 现场导出兜底）；否则 None，调用方不得设置
@@ -123,21 +124,22 @@ pub mod imp {
             config.model_config.tokens = Some(f("tokens.txt"));
             config.model_config.num_threads = threads;
             config.model_config.provider = Some("cpu".into());
-            // cjkchar+bpe 建模单元（X-ASR）：C++ Validate 要求 bpe_vocab 指向
+            // BPE 类建模单元：C++ Validate 要求 bpe_vocab 指向
             // 存在文件且创建时立即解析（格式不符直接 exit，P0 根因）——
             // 只有探测合格才设置 modeling_unit+bpe_vocab，否则整体不设
             // （识别不受影响，仅热词降级）
             if self.spec.bpe_vocab_file.is_some() {
                 match gated_bpe_vocab(self.spec, &dir) {
                     Some(vocab) => {
-                        config.model_config.modeling_unit = Some("cjkchar+bpe".into());
+                        config.model_config.modeling_unit =
+                            Some(self.spec.modeling_unit.into());
                         config.model_config.bpe_vocab =
                             Some(vocab.to_string_lossy().into_owned());
                     }
                     None => {
                         kotone_core::log::log(&format!(
-                            "{}: bpe.vocab 缺失或格式不符，未设置 cjkchar+bpe（识别不受影响，热词降级）",
-                            self.spec.engine_id
+                            "{}: bpe.vocab 缺失或格式不符，未设置 {}（识别不受影响，热词降级）",
+                            self.spec.engine_id, self.spec.modeling_unit
                         ));
                     }
                 }
@@ -210,7 +212,15 @@ pub mod imp {
             let stream = if cfg.hotwords.is_empty() {
                 recognizer.create_stream()
             } else {
-                recognizer.create_stream_with_hotwords(&format_hotwords(&cfg.hotwords))
+                let stream =
+                    recognizer.create_stream_with_hotwords(&format_hotwords(&cfg.hotwords));
+                kotone_core::log::log(&format!(
+                    "{}: 已向本次会话提交 {} 条热词（modeling_unit={}）",
+                    self.spec.engine_id,
+                    cfg.hotwords.len(),
+                    self.spec.modeling_unit
+                ));
+                stream
             };
             Ok(Box::new(OnlineTransducerSession {
                 recognizer,

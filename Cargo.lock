@@ -2404,8 +2404,9 @@ dependencies = [
 
 [[package]]
 name = "kotone-tauri"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
+ "dirs",
  "kotone-core",
  "kotone-platform-windows",
  "kotone-stt",
@@ -2423,6 +2424,7 @@ dependencies = [
  "tokio",
  "webview2-com",
  "windows 0.61.3",
+ "zip",
 ]
 
 [[package]]

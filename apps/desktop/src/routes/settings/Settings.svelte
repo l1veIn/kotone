@@ -14,18 +14,17 @@
   import Onboarding from "./Onboarding.svelte";
   import Titlebar from "./Titlebar.svelte";
   import GeneralPage from "./pages/GeneralPage.svelte";
-  import HotkeyPage from "./pages/HotkeyPage.svelte";
   import AdvancedPage from "./pages/AdvancedPage.svelte";
   import GamePage from "./pages/GamePage.svelte";
   import HistoryPage from "./pages/HistoryPage.svelte";
   import AboutPage from "./pages/AboutPage.svelte";
+  import CharacterPage from "./pages/CharacterPage.svelte";
   import patternSwitch from "../../assets/brand/patterns/switch.png";
 
-  type PageId = "general" | "hotkey" | "game" | "history" | "advanced" | "about";
+  type PageId = "general" | "game" | "history" | "advanced" | "about" | "character";
 
   const navItems: { id: PageId; label: string; icon: string }[] = [
     { id: "general", label: "通用", icon: "home" },
-    { id: "hotkey", label: "快捷键", icon: "keyboard" },
     { id: "game", label: "游戏适配", icon: "gamepad" },
     { id: "history", label: "历史记录", icon: "clock" },
     { id: "advanced", label: "高级", icon: "sliders" },
@@ -33,6 +32,12 @@
   ];
 
   let page = $state<PageId>("general");
+  /** 右侧滚动容器：切页时复位到顶部（角色详情页是长滚动页） */
+  let mainEl = $state<HTMLElement>();
+  $effect(() => {
+    page;
+    mainEl?.scrollTo({ top: 0 });
+  });
   let loading = $state(true);
   /** 首启向导：ui.firstRunCompleted === false 时弹出（完成/跳过后置 true） */
   let showOnboarding = $state(false);
@@ -97,7 +102,7 @@
   <nav class="relative z-10 flex w-50 shrink-0 flex-col border-r border-white/8 bg-kotone-deep/60 px-3 py-4">
     <div class="flex flex-col gap-1">
       {#each navItems as item}
-        {@const active = page === item.id}
+        {@const active = page === item.id || (page === "character" && item.id === "about")}
         <button
           class="group relative flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition
             {active
@@ -113,8 +118,6 @@
           <span class="inline-flex h-4.5 w-4.5 items-center justify-center" aria-hidden="true">
             {#if item.icon === "home"}
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M3 10.5 12 3l9 7.5M5 9.5V21h14V9.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            {:else if item.icon === "keyboard"}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M18 14h.01M9 14h6" stroke-linecap="round"/></svg>
             {:else if item.icon === "sliders"}
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" stroke-linecap="round"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
             {:else if item.icon === "gamepad"}
@@ -131,26 +134,26 @@
     </div>
 
     <p class="mt-auto px-2 pt-4 text-[10px] leading-relaxed text-white/30">
-      打字比打游戏快的主播<br />深夜直播间 · 随时待命
+       反馈群：1092354484
     </p>
   </nav>
 
   <!-- 右侧内容 -->
-  <main class="relative z-10 min-w-0 flex-1 overflow-y-auto">
+  <main class="relative z-10 min-w-0 flex-1 overflow-y-auto" bind:this={mainEl}>
     {#if loading}
       <p class="px-8 py-10 text-sm text-white/50">加载配置中…</p>
     {:else if page === "general"}
-      <GeneralPage onOpenOnboarding={() => (showOnboarding = true)} />
-    {:else if page === "hotkey"}
-      <HotkeyPage />
+      <GeneralPage onOpenAdvanced={() => (page = "advanced")} />
     {:else if page === "advanced"}
-      <AdvancedPage />
+      <AdvancedPage onOpenOnboarding={() => (showOnboarding = true)} />
     {:else if page === "game"}
       <GamePage />
     {:else if page === "history"}
       <HistoryPage />
+    {:else if page === "character"}
+      <CharacterPage onBack={() => (page = "about")} />
     {:else}
-      <AboutPage />
+      <AboutPage onOpenCharacter={() => (page = "character")} />
     {/if}
 
     <!-- 底部留白（反馈条已升级为右上角 toast，见 <Toasts />） -->

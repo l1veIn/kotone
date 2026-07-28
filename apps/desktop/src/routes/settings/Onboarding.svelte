@@ -28,8 +28,7 @@
     toastInfo,
     toastWarn,
   } from "../../lib/stores/ui";
-  import relayRoomBg from "../../assets/brand/relay-room-bg.png";
-  import kotoneCutout from "../../assets/brand/kotone-cutout.png";
+  import heroOnboarding from "../../assets/brand/hero-onboarding.webp";
   import stickerHello from "../../assets/brand/stickers/hello.png";
   import stickerThinking from "../../assets/brand/stickers/thinking.png";
   import stickerCheering from "../../assets/brand/stickers/cheering.png";
@@ -56,7 +55,7 @@
   let selectedProfileId = $state("lol");
   let selectedDeviceId = $state("default");
   let selectedMode = $state<InteractionMode>("push-to-talk");
-  let currentKey = $state("F8");
+  let currentKey = $state("CapsLock");
 
   const modes: { id: InteractionMode; name: string; desc: string; icon: string }[] = [
     { id: "push-to-talk", name: "对讲机", desc: "按住说话，松开发送", icon: "🎙️" },
@@ -95,7 +94,7 @@
       }
       selectedDeviceId = settings?.audioDeviceId ?? devices[0]?.id ?? "default";
       selectedMode = settings?.interactionMode ?? "push-to-talk";
-      currentKey = settings?.hotkey.key ?? "F8";
+      currentKey = settings?.hotkey.key ?? "CapsLock";
     } catch (e) {
       resourceError = errText(e);
     } finally {
@@ -356,42 +355,34 @@
 
     {#if step === 0}
       <div class="relative overflow-hidden">
-        <div
-          class="pointer-events-none absolute inset-0 opacity-25"
-          style:background-image="url({relayRoomBg})"
-          style:background-size="cover"
-          style:background-position="center"
-        ></div>
-        <div class="relative flex items-center gap-6 p-8">
-          <div class="min-w-0 flex-1">
-            <img src={stickerHello} alt="" class="mb-3 h-12 w-12" />
-            <h1 class="text-2xl font-bold">
-              欢迎来到 <span class="kotone-gradient-text">Kotone 琴音</span>
-            </h1>
-            <p class="mt-2 text-sm leading-relaxed text-white/65">
-              游戏里不动手，说话就能发消息。<br />
-              接下来会选游戏配置、准备本地模型、设置热键，并完成一次真实发送测试。
-            </p>
-            <div class="mt-6 flex items-center gap-3">
-              <button
-                class="rounded-lg bg-kotone-cyan px-5 py-2 text-sm font-semibold text-kotone-deep transition hover:brightness-110 focus-visible:ring-2 focus-visible:ring-white active:scale-95"
-                onclick={() => (step = 1)}
-              >
-                开始设置
-              </button>
-              <button
-                class="text-xs text-white/50 underline-offset-2 transition hover:text-white/80 hover:underline"
-                onclick={() => void finish(true)}
-              >
-                跳过向导
-              </button>
-            </div>
+        <!-- 欢迎视觉：ord-ui-onboarding-hero 合成图（张开双臂的邀请感） -->
+        <div class="relative">
+          <img src={heroOnboarding} alt="Kotone 张开双臂欢迎来到直播间" class="h-52 w-full object-cover object-top" />
+          <div class="absolute inset-0 bg-gradient-to-t from-kotone-panel via-kotone-panel/30 to-transparent"></div>
+        </div>
+        <div class="relative -mt-8 px-8 pb-8">
+          <img src={stickerHello} alt="" class="mb-3 h-12 w-12" />
+          <h1 class="text-2xl font-bold">
+            欢迎来到 <span class="kotone-gradient-text">Kotone 琴音</span>
+          </h1>
+          <p class="mt-2 text-sm leading-relaxed text-white/65">
+            游戏里不动手，说话就能发消息。<br />
+            接下来会选游戏配置、准备本地模型、设置热键，并完成一次真实发送测试。
+          </p>
+          <div class="mt-6 flex items-center gap-3">
+            <button
+              class="rounded-lg bg-kotone-cyan px-5 py-2 text-sm font-semibold text-kotone-deep transition hover:brightness-110 focus-visible:ring-2 focus-visible:ring-white active:scale-95"
+              onclick={() => (step = 1)}
+            >
+              开始设置
+            </button>
+            <button
+              class="text-xs text-white/50 underline-offset-2 transition hover:text-white/80 hover:underline"
+              onclick={() => void finish(true)}
+            >
+              跳过向导
+            </button>
           </div>
-          <img
-            src={kotoneCutout}
-            alt="Kotone 看板娘"
-            class="h-44 w-auto shrink-0 drop-shadow-[0_0_24px_rgba(0,229,255,0.35)]"
-          />
         </div>
       </div>
     {:else if step === 1}

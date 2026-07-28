@@ -256,7 +256,7 @@ enum SttEvent {
 - 实现：`hotkey_ll.rs` 独立钩子线程（SetWindowsHookExW + 消息循环）+ mpsc 事件通道 + 消费者线程调 orchestrator；回调内零 IO、跳过 LLKHF_INJECTED（防自我触发）。
 - 吞键策略：仅「主键+修饰键严格匹配」时吞掉（防触发游戏内同键绑定），其余键立即放行；Esc 会话激活期吞掉作取消。
 - 回退：`hotkeyBackend: "auto" | "llhook" | "register"`（默认 auto = Windows 优先 llhook，失败回退插件）；设置页显示当前生效后端。
-- 默认键位：`F8`（toggle）/ `Alt+V`（hold），首次启动引导选择并检测冲突。
+- 默认键位：`CapsLock`（toggle）；首次启动引导可重新录入并检测冲突。
 
 **悬浮窗：Tauri 多窗口。**
 
@@ -268,8 +268,8 @@ enum SttEvent {
 **v3 实现细节**：
 
 - **窗口显隐由后端驱动**（v3 变更）：orchestrator 状态事件 → 非 Idle 时 `SW_SHOWNA` 显示 overlay（**不抢焦点**，否则注入会打错窗口）、Idle 时隐藏；与前端显隐调用幂等共存。
-- **显示模式 `overlay.visibility`**（两档，通用页可选）：`always` 常驻（默认，启动即显示、停止才隐藏）/ `on_demand` 用时浮现（平时隐藏；Listening/Transcribing/Preview/Sending 浮现；一次发送完成——成功或失败——延迟 ~600ms 自动隐藏，显隐代际防 600ms 内新会话误藏；solo 连续模式保持显示直到会话停止）。显隐一律走原始 Win32 `SW_SHOWNA`/`SW_HIDE` 路径（tao `set_visible` 缓存 diff 短路坑），由 TauriEmitter 会话事件驱动，前端不轮询。
-- **样式 `overlay.style`**（两档，通用页可选，切换即时生效）：`card` 卡片（默认，480×120 屏幕中央圆角面板）/ `capsule` 胶囊（Win11 语音输入条风格——窗口 520×64，原始 Win32 `SetWindowPos` 按当前显示器工作区水平居中、底部留 48px，`GetDpiForWindow` 换算物理像素；前端胶囊本体 `fit-content` 宽度随文字伸缩，录音中呼吸点+波形、转写中部分文本、发送后短暂显示结果再按 visibility 规则处理）。设置页切换时后端立即重排窗口几何并广播 `kotone://overlay-style`，overlay 前端监听换布局；启动时 capsule 档位重排一次（显示器/DPI 可能已变），card 不动保留用户拖拽位置。
+- **显示模式 `overlay.visibility`**（两档，通用页可选）：`on_demand` 用时浮现（默认；平时隐藏，Listening/Transcribing/Preview/Sending 浮现；一次发送完成——成功或失败——延迟 ~600ms 自动隐藏，显隐代际防 600ms 内新会话误藏；solo 连续模式保持显示直到会话停止）/ `always` 常驻（启动即显示、停止才隐藏）。显隐一律走原始 Win32 `SW_SHOWNA`/`SW_HIDE` 路径（tao `set_visible` 缓存 diff 短路坑），由 TauriEmitter 会话事件驱动，前端不轮询。
+- **样式 `overlay.style`**（两档，通用页可选，切换即时生效）：`capsule` 胶囊（默认；Win11 语音输入条风格——窗口 520×64，原始 Win32 `SetWindowPos` 按当前显示器工作区水平居中、底部留 48px，`GetDpiForWindow` 换算物理像素；前端胶囊本体 `fit-content` 宽度随文字伸缩）/ `card` 卡片（480×120 屏幕中央圆角面板）。设置页切换时后端立即重排窗口几何并广播配置事件。
 - **关窗不退出**：main/overlay 的 CloseRequested 均拦截转为 hide，仅托盘「退出」真正结束（托盘常驻语义）。
 - 窗口路由：单 SPA + hash 路由（`index.html#/overlay`、`index.html#/settings`）。
 
@@ -440,7 +440,7 @@ simulate_send(text, profileId) -> Result<(), InjectError>   // v3：走真实发
 ```jsonc
 // ~/.kotone/config.json
 {
-  "hotkey": { "key": "F8", "mode": "toggle" },   // toggle | hold（用户可选，默认 toggle 引导时确认）
+  "hotkey": { "key": "CapsLock", "mode": "toggle" }, // toggle | hold（用户可选，默认 toggle 引导时确认）
   "audioDeviceId": "default",
   "sttEngine": "sherpa-onnx-x-asr-zh-en",        // 当前引擎（v15 默认 X-ASR），设置页可切换
   "engineOptions": {                              // 引擎专有配置
@@ -449,7 +449,7 @@ simulate_send(text, profileId) -> Result<(), InjectError>   // v3：走真实发
   "autoSend": false,               // true: 转写完直接发；false: 先预览确认
   "activeProfileId": "lol",
   "language": "zh",
-  "evalRecording": false,          // 评测录档开关（v15 起默认关，通用页可开）
+  "evalRecording": false,          // 内部评测录档开关（默认关；不在用户设置页展示）
   "download": {                    // v15 模型下载源
     "source": "auto",              // auto（镜像优先+回退）| official | mirror
     "ghProxy": "https://ghfast.top/" // GitHub 加速代理前缀（公益服务不稳定，失效可换）

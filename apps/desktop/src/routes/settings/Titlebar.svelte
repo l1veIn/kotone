@@ -9,11 +9,12 @@
    * - close = 弹确认框：「退出」彻底退出进程，「最小化到托盘」保持隐藏语义。
    */
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { ask } from "@tauri-apps/plugin-dialog";
   import { exit } from "@tauri-apps/plugin-process";
-  import { getResourceUsage, isTauri, startRuntime, stopRuntime } from "../../lib/ipc";
+  import { getResourceUsage, isTauri } from "../../lib/ipc";
   import { runtimeStore } from "../../lib/stores/runtime";
-  import { toast, toastInfo, pushToast, errText } from "../../lib/stores/ui";
+  import { settingsStore, toast, errText } from "../../lib/stores/ui";
+  import ExitPrompt from "../../lib/components/ExitPrompt.svelte";
+  import RuntimeButton from "../../lib/components/RuntimeButton.svelte";
   import iconSrc from "../../assets/brand/icon-src.png";
 
   let { onOpenAdvanced }: { onOpenAdvanced: () => void } = $props();
@@ -22,6 +23,7 @@
     "push-to-talk": "对讲机",
     dictation: "录音笔",
     "one-shot": "说一句就走",
+    solo: "独奏模式",
   };
   const stageNames: Record<string, string> = {
     warmup: "正在加载引擎…",
@@ -31,9 +33,8 @@
   };
 
   const rt = $derived($runtimeStore);
-  const busy = $derived(rt?.phase === "starting" || rt?.phase === "stopping");
-  /** 防连点（busy 已由相位覆盖，acting 覆盖事件未回的瞬间） */
-  let acting = $state(false);
+  let showExitPrompt = $state(false);
+  let exiting = $state(false);
 
   /** 运行中的资源占用文本（空 = 非 running 或尚未采样成功） */
   let resourceText = $state("");
@@ -71,42 +72,18 @@
   );
 
   /** 标题栏只呈现用户任务状态；引擎与模型详情收纳在高级页。 */
+  const hotkeyLabel = $derived($settingsStore?.hotkey.key ?? "—");
   const statusLine = $derived(
     !rt
-      ? ""
+      ? `快捷键：${hotkeyLabel} · 状态未知`
       : rt.phase === "stopped"
-        ? "热键未注册 · 点右侧「启动」开始说话"
-        : `语音输入已就绪 · ${
-            rt.interactionMode ? (modeNames[rt.interactionMode] ?? "自定义模式") : "自定义模式"
-          }`,
+        ? `快捷键：${hotkeyLabel} · 未注册 · 点右侧「启动」开始说话`
+        : rt.phase === "running"
+          ? `快捷键：${hotkeyLabel} · 已注册 · ${
+              rt.interactionMode ? (modeNames[rt.interactionMode] ?? "自定义模式") : "自定义模式"
+            }`
+          : `快捷键：${hotkeyLabel} · ${phaseLabel}`,
   );
-
-  async function onMainButton() {
-    if (!rt || busy || acting) return;
-    acting = true;
-    const restarting = rt.phase === "running" && rt.restartNeeded;
-    try {
-      if (rt.phase === "running" && !rt.restartNeeded) {
-        await stopRuntime();
-        toastInfo("已停止，热键已注销");
-      } else {
-        // stopped → 启动；running + restartNeeded → 重启（stop+start，壳侧编排）
-        await startRuntime();
-        pushToast(
-          "success",
-          restarting ? "已按新配置重启，Kotone 运行中 ✨" : "模型已加载，Kotone 已启动 ✨",
-        );
-      }
-    } catch (e) {
-      const message = errText(e);
-      toast(false, message);
-      if (/模型.*未下载|未就绪|模型文件|recognizer 创建失败/.test(message)) {
-        onOpenAdvanced();
-      }
-    } finally {
-      acting = false;
-    }
-  }
 
   /** 非按钮区按下即整窗拖拽（按钮自身 mousedown 不触发） */
   function onDragMouseDown(e: MouseEvent) {
@@ -124,20 +101,29 @@
     }
   }
 
-  /** 关闭：弹确认框——「退出」彻底退出进程，「最小化到托盘」保持隐藏到托盘语义 */
-  async function close() {
+  /** 关闭：展示 Kotone 自绘确认弹窗。 */
+  function close() {
     if (!isTauri) return;
+    showExitPrompt = true;
+  }
+
+  async function minimizeToTray() {
     try {
-      const quit = await ask("是否彻底退出 Kotone？\n「取消」将最小化到系统托盘。", {
-        title: "退出确认",
-        kind: "warning",
-        okLabel: "退出",
-        cancelLabel: "最小化到托盘",
-      });
-      if (quit) await exit(0);
-      else await getCurrentWindow().hide();
-    } catch {
-      /* 对话框/窗口操作失败静默 */
+      await getCurrentWindow().hide();
+      showExitPrompt = false;
+    } catch (e) {
+      toast(false, `最小化到托盘失败：${errText(e)}`);
+    }
+  }
+
+  async function quitApp() {
+    if (exiting) return;
+    exiting = true;
+    try {
+      await exit(0);
+    } catch (e) {
+      exiting = false;
+      toast(false, `退出失败：${errText(e)}`);
     }
   }
 </script>
@@ -164,7 +150,7 @@
     <img
       src={iconSrc}
       alt=""
-      class="h-6 w-6 shrink-0 rounded-full ring-1 ring-kotone-cyan/70 shadow-glow-cyan object-cover"
+      class="h-8 w-8 shrink-0 rounded-full ring-1 ring-kotone-cyan/70 shadow-glow-cyan object-cover"
     />
     <p class="shrink-0 text-xs font-bold tracking-wide">
       Kotone <span class="font-medium text-white/55">琴音</span>
@@ -213,29 +199,7 @@
         {resourceText}
       </span>
     {/if}
-    <button
-      class="mr-2 flex h-7 items-center gap-1.5 rounded-[var(--radius-kotone-card)] px-3 text-[11px] font-bold transition active:scale-95 disabled:cursor-not-allowed {busy ||
-      acting
-        ? 'bg-white/10 text-white/50'
-        : !rt || rt.phase === 'stopped'
-          ? 'bg-kotone-pink text-white shadow-glow-pink-lg hover:brightness-110'
-          : rt.restartNeeded
-            ? 'bg-yellow-400/90 text-kotone-deep shadow-[0_0_14px_rgba(250,204,21,0.4)] hover:brightness-110'
-            : 'bg-kotone-cyan/15 text-kotone-cyan ring-1 ring-kotone-cyan/50 hover:bg-kotone-cyan/25 hover:shadow-glow-cyan'}"
-      disabled={busy || acting || !rt}
-      onclick={() => void onMainButton()}
-    >
-      {#if busy || acting}
-        <span class="h-3 w-3 animate-spin rounded-full border-2 border-white/25 border-t-white/80"></span>
-        {rt?.phase === "stopping" ? "停止中" : "启动中"}
-      {:else if !rt || rt.phase === "stopped"}
-        ▶ 启动
-      {:else if rt.restartNeeded}
-        重启生效
-      {:else}
-        ■ 停止
-      {/if}
-    </button>
+    <RuntimeButton variant="titlebar" {onOpenAdvanced} />
     <div class="h-4 w-px bg-white/10"></div>
     <button
       class="flex h-full w-12 items-center justify-center text-white/55 transition hover:bg-white/10 hover:text-white"
@@ -253,3 +217,11 @@
     </button>
   </div>
 </header>
+
+{#if showExitPrompt}
+  <ExitPrompt
+    busy={exiting}
+    onExit={() => void quitApp()}
+    onMinimize={() => void minimizeToTray()}
+  />
+{/if}

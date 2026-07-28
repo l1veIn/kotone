@@ -80,7 +80,7 @@ fn session_json_path(dir: &Path, session_id: &str) -> PathBuf {
     dir.join(format!("{session_id}.json"))
 }
 
-/// 录档 wav 路径（pub：history 的 includeAudio 按 sessionId 从 eval 目录复制 wav）
+/// 录档 wav 路径（供评测录档、回放与导出使用）
 pub fn session_wav_path(dir: &Path, session_id: &str) -> PathBuf {
     dir.join(format!("{session_id}.wav"))
 }
@@ -135,6 +135,12 @@ fn utc_now_parts() -> (i64, u32, u32, u32, u32, u32, u32) {
 pub fn utc_now_iso() -> String {
     let (y, m, d, hh, mm, ss, _) = utc_now_parts();
     format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
+}
+
+/// ISO 8601 UTC（毫秒精度，供流程事件稳定排序）。
+pub fn utc_now_iso_millis() -> String {
+    let (y, m, d, hh, mm, ss, ms) = utc_now_parts();
+    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}.{ms:03}Z")
 }
 
 fn utc_compact() -> String {

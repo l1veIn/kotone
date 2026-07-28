@@ -63,5 +63,5 @@ jobs:
       - name: Test Rust workspace
         run: cargo test --workspace --locked
 
-      - name: Compile the Tauri desktop shell
-        run: pnpm -C apps/desktop tauri build --debug --no-bundle
+      - name: Compile the Tauri desktop shell and NSIS installer
+        run: pnpm -C apps/desktop tauri build --debug --bundles nsis --config src-tauri/tauri.ci.conf.json

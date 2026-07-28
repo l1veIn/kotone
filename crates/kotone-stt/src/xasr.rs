@@ -1,8 +1,9 @@
 //! 引擎 #4：X-ASR 流式中英标点（zipformer2r transducer，sherpa-onnx 2026-06 发布）。
 //!
 //! 在线 transducer 骨架（online_transducer.rs）的 X-ASR 实例。与 zipformer 的
-//! 差异仅在模型文件名与建模单元：X-ASR 为 cjkchar+bpe（官方导出附带
-//! bpe.model），骨架据此设 modeling_unit + bpe_vocab。model_type 不显式设置
+//! 差异仅在模型文件名与建模单元：X-ASR 的中英文 token 都来自 SentencePiece
+//! BPE（包括 `▁闪` 这类中文 piece，官方导出附带 bpe.model），因此必须使用
+//! modeling_unit=bpe + bpe_vocab。model_type 不显式设置
 //! ——encoder.int8.onnx 元数据自带 model_type=zipformer2r，C 侧自动探测。
 //!
 //! 模型发布形态特殊：仅 k2-fsa GitHub releases 整包 tar.bz2（无逐文件镜像），
@@ -27,7 +28,8 @@ pub(crate) const SPEC: OnlineTransducerSpec = OnlineTransducerSpec {
     encoder_file: "encoder.int8.onnx",
     decoder_file: "decoder.onnx",
     joiner_file: "joiner.int8.onnx",
-    bpe_vocab_file: Some("bpe.vocab"), // cjkchar+bpe；文本词表（可由 bpe.model 导出）
+    modeling_unit: "bpe",
+    bpe_vocab_file: Some("bpe.vocab"), // SentencePiece 文本词表（可由 bpe.model 导出）
     not_ready_hint:
         "X-ASR 模型未下载。请在设置页下载，或运行 kotone-cli download x-asr",
 };
@@ -93,7 +95,11 @@ mod tests {
     }
 
     #[test]
-    fn spec_uses_cjkchar_bpe() {
+    fn spec_uses_sentencepiece_bpe() {
+        assert_eq!(
+            SPEC.modeling_unit, "bpe",
+            "X-ASR tokens 使用 ▁ 前缀的 SentencePiece piece；cjkchar+bpe 会把中文拆成词表中不存在的裸字"
+        );
         assert_eq!(SPEC.bpe_vocab_file, Some("bpe.vocab"));
         // X-ASR 与 zipformer 清单条目各归各的引擎
         let m = crate::model::SHERPA_MODELS
@@ -181,5 +187,38 @@ mod tests {
             (64..=4096).contains(&MAX_FINALIZE_DECODE_ROUNDS),
             "防挂死上限应在合理区间：{MAX_FINALIZE_DECODE_ROUNDS}"
         );
+    }
+
+    /// 真机冒烟：使用已下载的 X-ASR 创建带中英混合热词的 stream。
+    /// 手动运行：
+    /// cargo test -p kotone-stt --features engine-sherpa
+    ///   xasr::tests::local_model_accepts_lol_hotwords -- --ignored --nocapture
+    ///
+    /// 成功标准：测试通过，且 stderr 不出现 Cannot find ID / Encode hotwords failed。
+    #[cfg(feature = "engine-sherpa")]
+    #[test]
+    #[ignore = "依赖本机已下载的 X-ASR 真模型"]
+    fn local_model_accepts_lol_hotwords() {
+        let e = XAsrEngine::new();
+        if !e.is_ready() {
+            eprintln!("X-ASR 模型未下载，跳过真机热词冒烟");
+            return;
+        }
+        e.warmup().expect("X-ASR 预热失败");
+        let cfg = SessionConfig {
+            language: "zh".into(),
+            hotwords: vec![
+                "闪现".into(),
+                "大龙".into(),
+                "gank".into(),
+                "打野".into(),
+                "悠米".into(),
+                "璐璐".into(),
+            ],
+            options: serde_json::Value::Null,
+        };
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut session = e.start_session(&cfg, tx).expect("创建带热词的 X-ASR stream 失败");
+        session.cancel();
     }
 }

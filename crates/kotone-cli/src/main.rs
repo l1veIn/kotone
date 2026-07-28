@@ -88,7 +88,7 @@ enum Command {
         /// 游戏 profile id（缺省用配置文件值）
         #[arg(long)]
         profile: Option<String>,
-        /// 热键（缺省用配置文件值，如 F8 / Alt+V）
+        /// 热键（缺省用配置文件值，如 CapsLock / Alt+V）
         #[arg(long)]
         key: Option<String>,
         /// 触发模式 toggle|hold（缺省用配置文件值）
@@ -381,7 +381,7 @@ async fn cmd_listen(
     speed: Option<f64>,
 ) -> i32 {
     if wav.is_some() || no_hotkey {
-        cmd_listen_session(engine, wav, duration, speed).await
+        cmd_listen_session(engine, profile_id, wav, duration, speed).await
     } else {
         cmd_listen_hotkey(engine, profile_id, key, mode).await
     }
@@ -393,6 +393,7 @@ async fn cmd_listen(
 #[cfg(windows)]
 async fn cmd_listen_session(
     engine: &str,
+    profile_id: Option<String>,
     wav: Option<String>,
     duration: Option<u64>,
     speed: Option<f64>,
@@ -409,6 +410,9 @@ async fn cmd_listen_session(
 
     let mut settings = settings::load();
     settings.stt_engine = engine.to_string();
+    if let Some(profile_id) = profile_id {
+        settings.active_profile_id = Some(profile_id);
+    }
     let speed = speed.unwrap_or(1.0);
 
     // 音频后端 / 注入器 / 等待时长：wav 直灌按音频时长（/倍速）+ NullInjector
@@ -1628,7 +1632,7 @@ mod tests {
         let s = Settings::default();
         assert_eq!(
             config_get_value(&s, "hotkey.key").unwrap(),
-            serde_json::json!("F8")
+            serde_json::json!("CapsLock")
         );
         assert_eq!(config_get_value(&s, "autoSend").unwrap(), serde_json::json!(false));
         assert_eq!(
@@ -1664,6 +1668,7 @@ mod tests {
         // mock-stream：固定文本「对面打野在下路」，全速喂入 → Preview 收尾 → 0
         let code = cmd_listen_session(
             "mock-stream",
+            None,
             Some(fixture_wav().to_string_lossy().into_owned()),
             None,
             Some(0.0),
@@ -1677,6 +1682,7 @@ mod tests {
     async fn listen_session_unknown_engine_exits_2() {
         let code = cmd_listen_session(
             "no-such-engine",
+            None,
             Some(fixture_wav().to_string_lossy().into_owned()),
             None,
             Some(0.0),
@@ -1690,6 +1696,7 @@ mod tests {
     async fn listen_session_missing_wav_exits_1() {
         let code = cmd_listen_session(
             "mock-stream",
+            None,
             Some("no/such/file.wav".into()),
             None,
             Some(0.0),
@@ -1701,7 +1708,7 @@ mod tests {
     #[cfg(windows)]
     #[tokio::test]
     async fn listen_session_no_hotkey_requires_duration() {
-        let code = cmd_listen_session("mock-stream", None, None, None).await;
+        let code = cmd_listen_session("mock-stream", None, None, None, None).await;
         assert_eq!(code, 2);
     }
 }

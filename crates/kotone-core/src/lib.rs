@@ -19,6 +19,7 @@ pub mod inject;
 pub mod interaction;
 pub mod log;
 pub mod orchestrator;
+pub mod process_log;
 pub mod profile;
 pub mod runtime;
 pub mod settings;

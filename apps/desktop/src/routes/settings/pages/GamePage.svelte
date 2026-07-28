@@ -24,6 +24,7 @@
   import { settingsStore, toast, errText } from "../../../lib/stores/ui";
   import { spotlight } from "../../../lib/actions/spotlight";
   import Toggle from "../../../lib/components/Toggle.svelte";
+  import lolIcon from "../../../assets/games/lol-kotone.webp";
 
   let profiles = $state<GameProfile[]>([]);
 
@@ -236,12 +237,20 @@
         class="kotone-card kotone-spotlight p-4 {active ? 'border-kotone-cyan/50 shadow-glow-cyan' : ''}"
       >
         <div class="flex items-center gap-3">
-          <!-- 图标占位 -->
+          <!-- 游戏图标：LOL 用生成的琴音徽章，通用配置用 lucide 地球 -->
           <span
-            class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-lg
+            class="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl
               {active ? 'bg-kotone-cyan/15' : 'bg-white/8'}"
           >
-            {p.processNames.length === 0 ? "🌐" : "🎮"}
+            {#if p.id === "lol"}
+              <img src={lolIcon} alt="英雄联盟 · 琴音徽章" class="h-full w-full object-contain" />
+            {:else if p.processNames.length === 0}
+              <!-- lucide: globe -->
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5 text-white/60"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+            {:else}
+              <!-- lucide: gamepad-2 -->
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5 text-white/60"><line x1="6" x2="10" y1="11" y2="11"/><line x1="8" x2="8" y1="9" y2="13"/><line x1="15" x2="15.01" y1="12" y2="12"/><line x1="18" x2="18.01" y1="10" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/></svg>
+            {/if}
           </span>
           <div class="min-w-0 flex-1">
             <p class="flex items-center gap-2 text-sm font-semibold">

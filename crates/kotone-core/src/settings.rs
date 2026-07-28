@@ -97,11 +97,11 @@ pub struct ModelsConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OverlayVisibility {
-    /// 常驻（默认）：启动即显示，停止才隐藏
-    #[default]
+    /// 常驻：启动即显示，停止才隐藏
     Always,
-    /// 用时浮现：平时隐藏；收音/转写/发送时浮现；一次发送完成（成功或失败）
+    /// 用时浮现（默认）：平时隐藏；收音/转写/发送时浮现；一次发送完成（成功或失败）
     /// 延迟 ~600ms 自动隐藏；solo 连续模式保持显示直到会话停止
+    #[default]
     OnDemand,
 }
 
@@ -109,11 +109,11 @@ pub enum OverlayVisibility {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OverlayStyle {
-    /// 卡片（默认）：480×120 圆角面板，屏幕中央，贴纸/气泡等完整装饰
-    #[default]
+    /// 卡片：480×120 圆角面板，屏幕中央，贴纸/气泡等完整装饰
     Card,
-    /// 胶囊：Win11 语音输入条风格——水平居中靠下（底部留 ~48px），
+    /// 胶囊（默认）：Win11 语音输入条风格——水平居中靠下（底部留 ~48px），
     /// 圆角胶囊宽度随内容伸缩（窗口上限 520px），轻装饰
+    #[default]
     Capsule,
 }
 
@@ -139,10 +139,10 @@ pub enum OverlayPosition {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayConfig {
-    /// 显示模式：always 常驻（默认）/ on_demand 用时浮现
+    /// 显示模式：on_demand 用时浮现（默认）/ always 常驻
     #[serde(default)]
     pub visibility: OverlayVisibility,
-    /// 样式：card 卡片（默认）/ capsule 胶囊
+    /// 样式：capsule 胶囊（默认）/ card 卡片
     #[serde(default)]
     pub style: OverlayStyle,
     /// 固定位置预设；拖动完成后切为 custom。
@@ -171,6 +171,21 @@ impl Default for OverlayConfig {
             click_through: false,
             custom_x: None,
             custom_y: None,
+        }
+    }
+}
+
+impl OverlayConfig {
+    /// UI 只保留一个「允许交互并拖动」开关：
+    /// - 允许拖动 = 不穿透；
+    /// - 不允许拖动 = 鼠标穿透。
+    ///
+    /// 老配置可能同时写了两个独立字段，迁移时点击穿透优先，避免升级后突然拦截游戏鼠标。
+    pub fn normalize_interaction(&mut self) {
+        if self.click_through {
+            self.draggable = false;
+        } else {
+            self.click_through = !self.draggable;
         }
     }
 }
@@ -232,7 +247,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             hotkey: HotkeyConfig {
-                key: "F8".into(),
+                key: "CapsLock".into(),
                 mode: HotkeyMode::Toggle,
             },
             hotkey_backend: HotkeyBackend::Auto,
@@ -301,7 +316,9 @@ pub fn load_from(path: &PathBuf) -> Settings {
     if let Ok(user) = serde_json::from_str::<serde_json::Value>(&raw) {
         merge_json(&mut merged, &user);
     }
-    serde_json::from_value(merged).unwrap_or_default()
+    let mut settings: Settings = serde_json::from_value(merged).unwrap_or_default();
+    settings.overlay.normalize_interaction();
+    settings
 }
 
 /// 写入指定路径（原子写入）
@@ -341,7 +358,7 @@ mod tests {
     #[test]
     fn default_values_match_doc() {
         let s = Settings::default();
-        assert_eq!(s.hotkey.key, "F8");
+        assert_eq!(s.hotkey.key, "CapsLock");
         assert_eq!(s.hotkey.mode, HotkeyMode::Toggle);
         assert_eq!(s.hotkey_backend, HotkeyBackend::Auto);
         assert_eq!(s.audio_device_id, "default");
@@ -361,8 +378,8 @@ mod tests {
         assert!(s.models.dir.is_empty(), "默认模型目录为空 = ~/.kotone/models");
         assert_eq!(s.download.source, DownloadSource::Auto);
         assert_eq!(s.download.gh_proxy, "https://ghfast.top/");
-        assert_eq!(s.overlay.visibility, OverlayVisibility::Always);
-        assert_eq!(s.overlay.style, OverlayStyle::Card);
+        assert_eq!(s.overlay.visibility, OverlayVisibility::OnDemand);
+        assert_eq!(s.overlay.style, OverlayStyle::Capsule);
         assert_eq!(s.overlay.position, OverlayPosition::Auto);
         assert!(s.overlay.draggable);
         assert!(!s.overlay.click_through);
@@ -394,7 +411,7 @@ mod tests {
         let path = dir.path().join("config.json");
         assert!(!path.exists());
         let s = load_from(&path);
-        assert_eq!(s.hotkey.key, "F8");
+        assert_eq!(s.hotkey.key, "CapsLock");
         assert!(path.exists(), "首次运行应落盘默认配置");
     }
 
@@ -416,6 +433,30 @@ mod tests {
         assert_eq!(s.overlay.position, OverlayPosition::Auto);
         assert!(s.overlay.draggable, "老配置升级后默认允许拖动");
         assert!(!s.overlay.click_through);
+    }
+
+    #[test]
+    fn legacy_overlay_interaction_fields_are_normalized() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+
+        std::fs::write(
+            &path,
+            r#"{ "overlay": { "draggable": false, "clickThrough": false } }"#,
+        )
+        .unwrap();
+        let locked = load_from(&path);
+        assert!(!locked.overlay.draggable);
+        assert!(locked.overlay.click_through);
+
+        std::fs::write(
+            &path,
+            r#"{ "overlay": { "draggable": true, "clickThrough": true } }"#,
+        )
+        .unwrap();
+        let click_through = load_from(&path);
+        assert!(!click_through.overlay.draggable);
+        assert!(click_through.overlay.click_through);
     }
 
     #[test]
@@ -480,6 +521,6 @@ mod tests {
         let path = dir.path().join("config.json");
         std::fs::write(&path, "not json {{{").unwrap();
         let s = load_from(&path);
-        assert_eq!(s.hotkey.key, "F8");
+        assert_eq!(s.hotkey.key, "CapsLock");
     }
 }

@@ -9,6 +9,7 @@
  */
 
 import { writable } from "svelte/store";
+import { logFrontendError } from "../ipc";
 import type { Settings } from "../ipc";
 
 export const settingsStore = writable<Settings | null>(null);
@@ -30,6 +31,9 @@ const timers = new Map<number, ReturnType<typeof setTimeout>>();
 export function pushToast(kind: ToastKind, text: string): number {
   const id = ++seq;
   toasts.update((list) => [...list, { id, kind, text }]);
+  if (kind === "error") {
+    void logFrontendError("toast", text).catch(() => {});
+  }
   timers.set(
     id,
     setTimeout(() => dismissToast(id), kind === "error" ? 8000 : 4000),

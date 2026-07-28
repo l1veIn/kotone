@@ -40,7 +40,7 @@ export interface HistoryConfig {
   /** capped 只留最近 maxRecords 条 / keep-all 全留 / off 不记录 */
   mode: "capped" | "keep-all" | "off";
   maxRecords: number;
-  /** 是否随记录保存音频（从 eval 录档复制 wav） */
+  /** 是否随记录独立保存音频（不依赖评测录档） */
   includeAudio: boolean;
 }
 
@@ -76,7 +76,7 @@ export interface Settings {
 export interface OverlayConfig {
   /** 显示模式：always 常驻（启动即显示）/ on_demand 用时浮现（说话时出现，发完自动隐藏） */
   visibility: "always" | "on_demand";
-  /** 样式：card 卡片（默认）/ capsule 胶囊（水平居中靠下，宽度随内容伸缩） */
+  /** 样式：capsule 胶囊（默认）/ card 卡片 */
   style: "card" | "capsule";
   /** 固定位置；custom 为用户拖动后保存的位置。 */
   position:
@@ -260,7 +260,7 @@ interface MockStore {
 
 const mock: MockStore = {
   settings: {
-    hotkey: { key: "F8", mode: "toggle" },
+    hotkey: { key: "CapsLock", mode: "toggle" },
     hotkeyBackend: "auto",
     audioDeviceId: "default",
     sttEngine: "sherpa-onnx-x-asr-zh-en",
@@ -280,8 +280,8 @@ const mock: MockStore = {
     models: { dir: "" },
     download: { source: "auto", ghProxy: "https://ghfast.top/" },
     overlay: {
-      visibility: "always",
-      style: "card",
+      visibility: "on_demand",
+      style: "capsule",
       position: "auto",
       draggable: true,
       clickThrough: false,
@@ -601,10 +601,40 @@ export interface ResourceUsage {
   memoryBytes: number;
 }
 
+/** 脱敏诊断包导出结果。 */
+export interface DiagnosticExportResult {
+  reportId: string;
+  path: string;
+  eventCount: number;
+  historyCount: number;
+}
+
 /** 当前进程的 CPU / 内存占用（调用方按 ~2s 间隔轮询） */
 export async function getResourceUsage(): Promise<ResourceUsage> {
   if (!isTauri) return { cpuPercent: 3.2, memoryBytes: 86 * 1024 * 1024 };
   return invoke<ResourceUsage>("get_resource_usage");
+}
+
+/** 导出诊断 ZIP；包内不含录音、识别文本或热词。 */
+export async function exportDiagnostics(path: string): Promise<DiagnosticExportResult> {
+  if (!isTauri) {
+    return {
+      reportId: "KT-MOCK",
+      path: path.endsWith(".zip") ? path : `${path}.zip`,
+      eventCount: 0,
+      historyCount: mock.history.length,
+    };
+  }
+  return invoke<DiagnosticExportResult>("export_diagnostics", { path });
+}
+
+/** 将前端已处理/未处理异常写入后端持久日志；后端负责脱敏和截断。 */
+export async function logFrontendError(context: string, message: string): Promise<void> {
+  if (!isTauri) {
+    console.warn(`[frontend:${context}]`, message);
+    return;
+  }
+  return invoke<void>("log_frontend_error", { context, message });
 }
 
 // ---------- 热键录入捕获（ADR-006） ----------

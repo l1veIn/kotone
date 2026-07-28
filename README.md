@@ -94,9 +94,9 @@
 ## 📸 界面
 
 <p align="center">
-  <img src="assets/screenshot-voice.webp" alt="语音输入悬浮窗" width="82%">
+  <img src="assets/screenshot-voice.webp" alt="Kotone 通用设置主界面" width="82%">
   <br>
-  <samp>🎤 语音输入悬浮窗 — 说出的话实时转成文字，一键发送</samp>
+  <samp>🎤 Kotone 通用设置 — 麦克风、热键与交互模式一站配置</samp>
 </p>
 
 <br>
@@ -109,9 +109,9 @@
       <samp>⚙️ 游戏适配设置</samp>
     </td>
     <td width="50%" align="center">
-      <img src="assets/screenshot-send.webp" alt="发送成功界面" width="95%">
+      <img src="assets/screenshot-send.webp" alt="Kotone 角色档案" width="95%">
       <br>
-      <samp>✅ 发送成功，操作不中断</samp>
+      <samp>✨ 琴音角色档案</samp>
     </td>
   </tr>
 </table>

@@ -6,7 +6,7 @@
 import { check } from "@tauri-apps/plugin-updater";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { isTauri } from "./ipc";
+import { isTauri, logFrontendError } from "./ipc";
 import { toastInfo, toastWarn } from "./stores/ui";
 
 /** 检查一次更新；有更新时询问用户是否立即下载安装并重启 */
@@ -38,5 +38,6 @@ export async function checkForUpdates(): Promise<void> {
   } catch (e) {
     // 离线 / 无 release / 权限问题等：静默跳过
     console.warn("[updater] 检查更新失败（已忽略）：", e);
+    void logFrontendError("updater", e instanceof Error ? e.message : String(e)).catch(() => {});
   }
 }

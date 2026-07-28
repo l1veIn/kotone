@@ -23,7 +23,9 @@ test("forced onboarding completes the full guided setup and can be reopened", as
   await expect(page.getByTestId("onboarding-test")).toBeVisible();
   await page.getByRole("button", { name: "▶ 启动琴音", exact: true }).click();
   await expect(page.getByTestId("training-input")).toBeFocused();
-  await expect(page.getByText("✓ F8 已注册", { exact: true })).toBeVisible();
+  await expect(
+    page.getByTestId("onboarding-test").getByText("✓ CapsLock 已注册", { exact: true }),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "只测试文字发送", exact: true }).click();
   await expect(page.getByTestId("test-success")).toContainText("琴音测试发送");
@@ -33,6 +35,7 @@ test("forced onboarding completes the full guided setup and can be reopened", as
   await finish.click();
   await expect(onboarding).toBeHidden();
 
+  await page.getByRole("button", { name: "高级", exact: true }).click();
   await page.getByRole("button", { name: "重新运行向导", exact: true }).click();
   await expect(onboarding).toBeVisible();
 });

@@ -1,6 +1,6 @@
 [package]
 name = "kotone-tauri"
-version = "0.1.1"
+version = "0.1.2"
 description = "Kotone（琴音）— 游戏语音输入工具（Tauri 壳）"
 edition = "2021"
 rust-version = "1.77.2"
@@ -35,6 +35,9 @@ serde_json.workspace = true
 tokio.workspace = true
 # 进程资源占用（CPU/内存），供设置页实时展示
 sysinfo = "0.30"
+# 脱敏诊断包 ZIP（版本已由 updater 间接锁定，显式依赖以供壳侧写包）
+zip = { version = "4.6.1", default-features = false }
+dirs = "6"
 
 # 壳自身的窗口 UI 代码（SW_SHOWNA 不抢焦点显示；胶囊样式 SetWindowPos 居中定位）
 [target.'cfg(windows)'.dependencies]

@@ -1,16 +1,18 @@
 <script lang="ts">
   /*
    * 高级页（原引擎与模型页收纳）：
-   * - 默认收起：摘要面板只显示「当前引擎 · 活动模型 · 就绪状态」，普通用户无需展开；
+   * - 默认展开：摘要面板仍可手动收起；
    * - restartNeeded 黄条常显（收起时也提示，与标题栏「重启生效」联动）；
    * - 展开后：模型存储位置（更改[迁移]/打开目录）→ 按引擎分组的完整模型清单
-   *   （下载进度/删除二次确认/设为 active）→ 评测录档开关；
+   *   （下载进度/删除二次确认/设为 active）；
    * - mock 联调引擎与 VAD 组件不在此页出现（VAD 已随应用本体分发，无需下载）。
    */
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
+  import { save as saveDialog } from "@tauri-apps/plugin-dialog";
   import {
     listSttEngines,
+    exportDiagnostics,
     setSttEngine,
     listModels,
     downloadModel,
@@ -37,6 +39,9 @@
   import Toggle from "../../../lib/components/Toggle.svelte";
   import stickerCurious from "../../../assets/brand/stickers/curious.png";
 
+  /** 设置助手入口：由 Settings 打开首启向导（自「通用」页迁入） */
+  let { onOpenOnboarding }: { onOpenOnboarding: () => void } = $props();
+
   let engines = $state<EngineInfo[] | null>(null);
   let models = $state<ModelInfo[]>([]);
   let dirInfo = $state<ModelsDirInfo | null>(null);
@@ -51,11 +56,13 @@
   let editingDir = $state(false);
   let dirDraft = $state("");
   let migrating = $state(false);
-  /** 高级区默认收起：普通视图只看一句话摘要 */
-  let expanded = $state(false);
+  /** 高级区默认展开；用户仍可通过摘要面板临时收起。 */
+  let expanded = $state(true);
   let elevation = $state<ElevationStatus | null>(null);
   let hotkeyStatus = $state<HotkeyStatus | null>(null);
   let restartingAsAdmin = $state(false);
+  /** 诊断包导出中（从「关于」页迁入：排障入口归高级页） */
+  let exportingDiagnostics = $state(false);
   let downloadProxyDraft = $state("");
 
   const ADMIN_RESTART_FLAG = "kotone:admin-restart-pending";
@@ -265,8 +272,18 @@
     return models.filter((m) => m.engineId === engineId);
   }
 
-  /** mock 联调引擎不在此页出现（后端可能仍返回，界面直接过滤），其余保持后端顺序 */
-  const orderedEngines = $derived((engines ?? []).filter((e) => e.id !== "mock-stream"));
+  /** 固定产品顺序：X-ASR → SenseVoice → FunASR；mock 联调引擎不展示。 */
+  const engineOrder: Record<string, number> = {
+    "sherpa-onnx-x-asr-zh-en": 0,
+    "sherpa-onnx-sensevoice": 1,
+    "sherpa-onnx-funasr-nano": 2,
+  };
+  const orderedEngines = $derived(
+    (engines ?? [])
+      .filter((e) => e.id !== "mock-stream")
+      .slice()
+      .sort((a, b) => (engineOrder[a.id] ?? 99) - (engineOrder[b.id] ?? 99)),
+  );
 
   // ---------- 收起态摘要 ----------
 
@@ -285,7 +302,7 @@
           : "未就绪（模型未下载）",
   );
 
-  /** 评测录档开关（updateSettings 局部补丁，与通用页 patch 同模式） */
+  /** 通用局部配置更新。 */
   async function patch(patchObj: Record<string, unknown>, okText: string) {
     try {
       settingsStore.set(await updateSettings(patchObj));
@@ -308,6 +325,29 @@
     );
   }
 
+  /** 导出诊断包（不含录音、识别文本和热词），可安全发给测试群管理员 */
+  async function onExportDiagnostics() {
+    if (exportingDiagnostics) return;
+    exportingDiagnostics = true;
+    try {
+      const defaultName = `kotone-diagnostics-${new Date().toISOString().slice(0, 10)}.zip`;
+      const path = isTauri
+        ? await saveDialog({
+            title: "导出 Kotone 诊断包",
+            defaultPath: defaultName,
+            filters: [{ name: "ZIP 诊断包", extensions: ["zip"] }],
+          })
+        : defaultName;
+      if (!path) return;
+      const result = await exportDiagnostics(path);
+      toast(true, `诊断包已导出：${result.reportId}`);
+    } catch (error) {
+      toast(false, `导出诊断包失败：${errText(error)}`);
+    } finally {
+      exportingDiagnostics = false;
+    }
+  }
+
   async function onRestartAsAdmin() {
     restartingAsAdmin = true;
     try {
@@ -323,9 +363,9 @@
 
 <div class="px-6 py-5">
   <h1 class="text-lg font-bold">高级</h1>
-  <p class="mt-0.5 text-[11px] text-white/45">引擎、模型与录档等进阶设置，日常使用无需调整</p>
+  <p class="mt-0.5 text-[11px] text-white/45">引擎、模型与 Windows 兼容性设置</p>
 
-  <!-- 摘要面板（默认收起）：一句话看懂当前引擎 · 模型 · 状态 -->
+  <!-- 摘要面板：默认展开，也可临时收起。 -->
   <section class="kotone-panel mt-4 p-4">
     <button class="flex w-full items-center gap-3 text-left" onclick={() => (expanded = !expanded)}>
       <div class="min-w-0 flex-1">
@@ -596,13 +636,41 @@
   {/if}
 
   {#if $settingsStore}
+    <!-- 运行时（自「通用」页迁入：自动启动属于进阶偏好） -->
+    <section class="kotone-panel mt-4 flex flex-col gap-4 p-4">
+      <h2 class="text-sm font-semibold text-kotone-cyan/90">运行时</h2>
+      <Toggle
+        checked={$settingsStore.ui.autoStart}
+        label="启动 Kotone 后自动开始运行"
+        desc="自动加载识别引擎、注册热键并显示悬浮窗；关闭时需手动点「启动」"
+        onchange={(v) =>
+          void patch({ ui: { autoStart: v } }, v ? "已开启自动启动" : "已关闭自动启动，需手动点「启动」")}
+      />
+    </section>
+
+    <!-- 设置助手（自「通用」页迁入） -->
+    <section class="kotone-panel mt-4 flex items-center justify-between gap-4 p-4">
+      <div>
+        <h2 class="text-sm font-semibold text-kotone-cyan/90">设置助手</h2>
+        <p class="mt-1 text-[11px] leading-relaxed text-white/50">
+          重新选择游戏配置、检查模型与麦克风、设置热键，并完成一次真实发送测试。
+        </p>
+      </div>
+      <button
+        class="shrink-0 rounded-lg bg-white/10 px-3 py-2 text-xs font-semibold text-white/85 ring-1 ring-white/15 transition hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-kotone-cyan"
+        onclick={onOpenOnboarding}
+      >
+        重新运行向导
+      </button>
+    </section>
+
     <section class="kotone-panel mt-4 p-4">
       <h2 class="text-sm font-semibold text-kotone-cyan/90">悬浮窗外观</h2>
       <p class="mt-1 text-[11px] text-white/45">只改变展示密度，不影响识别和发送。</p>
       <div class="mt-3 grid grid-cols-2 gap-2">
         {#each [
-          { id: "card", name: "卡片", desc: "信息完整，适合首次使用" },
           { id: "capsule", name: "胶囊", desc: "更轻巧，减少遮挡" },
+          { id: "card", name: "卡片", desc: "信息完整，适合首次使用" },
         ] as option}
           {@const selected = $settingsStore.overlay.style === option.id}
           <button
@@ -705,12 +773,15 @@
         <div class="mt-4">
           <Toggle
             checked={$settingsStore.runAsAdminOnStart}
-            label="每次启动时请求管理员权限"
-            desc="仅当目标游戏以管理员运行、普通模式无法发送时使用"
+            label="启动时自动请求管理员权限"
+            desc="与启动提示中的“以后每次启动自动请求管理员权限”是同一设置；每次启动都会出现 Windows UAC 确认"
             onchange={(value) =>
               void patch(
-                { runAsAdminOnStart: value },
-                value ? "已开启启动时权限请求" : "已关闭启动时权限请求",
+                {
+                  runAsAdminOnStart: value,
+                  ...(value ? { adminPromptDismissed: true } : {}),
+                },
+                value ? "已开启启动时自动权限请求" : "已关闭启动时自动权限请求",
               )}
           />
         </div>
@@ -718,28 +789,25 @@
     </section>
   {/if}
 
-  <!-- 评测录档（eval_recording；默认关，需要留语料复现时再开） -->
-  {#if $settingsStore}
-    <section class="kotone-panel mt-4 flex flex-col gap-4 p-4">
-      <h2 class="text-sm font-semibold text-kotone-cyan/90">评测录档</h2>
-      <Toggle
-        checked={$settingsStore.evalRecording}
-        label="录制识别会话供评测回放"
-        desc="每次识别保存 wav + 会话 json 到 ~/.kotone/eval（最多留 200 场），供 kotone-cli eval 对比引擎；已录的档案不受影响"
-        onchange={(v) =>
-          void patch({ evalRecording: v }, v ? "已开启评测录档" : "已关闭评测录档（已有录档保留）")}
-      />
-      <Toggle
-        checked={$settingsStore.history.includeAudio}
-        label="历史记录同时保存音频"
-        desc="仅在开启评测录档时复制对应 wav；会明显增加磁盘占用"
-        onchange={(v) =>
-          void patch(
-            { history: { includeAudio: v } },
-            v ? "已开启历史音频保存" : "已关闭历史音频保存",
-          )}
-      />
-    </section>
-  {/if}
+  <!-- 诊断包导出（自「关于」页迁入：排障入口归高级页） -->
+  <section class="kotone-panel mt-4 p-4">
+    <h2 class="text-sm font-semibold text-kotone-cyan/90">诊断包</h2>
+    <p class="mt-1 text-[11px] text-white/45">
+      不包含录音、识别文本和热词，可安全分享给测试群管理员。
+    </p>
+    <button
+      class="mt-3 inline-flex items-center gap-2 rounded-xl bg-kotone-cyan/12 px-4 py-2.5 text-xs font-semibold text-kotone-cyan
+        ring-1 ring-kotone-cyan/25 transition hover:bg-kotone-cyan/18 hover:shadow-glow-cyan
+        disabled:cursor-wait disabled:opacity-60"
+      disabled={exportingDiagnostics}
+      onclick={() => void onExportDiagnostics()}
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4" aria-hidden="true">
+        <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 18v2h14v-2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      {exportingDiagnostics ? "正在生成…" : "导出诊断包"}
+    </button>
+  </section>
+
   {/if}
 </div>

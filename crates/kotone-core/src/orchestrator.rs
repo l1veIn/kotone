@@ -58,7 +58,7 @@ struct ActiveSession {
     guard: Option<AudioHandle>,
     pump: tokio::task::JoinHandle<()>,
     level_task: tokio::task::JoinHandle<()>,
-    /// eval 录档句柄（evalRecording 开启时存在；取消时随会话丢弃不录）
+    /// eval 录档句柄（仅 evalRecording 开启时存在；历史音频使用独立缓冲）
     recorder: Option<crate::eval::SessionRecorder>,
 }
 
@@ -71,6 +71,8 @@ struct Inner {
     send_cancel: Option<CancelToken>,
     /// begin 时记录的前台窗口 = 注入目标（发送前把焦点还给它）
     target_window: Option<TargetWindow>,
+    /// 本地诊断流程的 case id；无论 history 是否关闭，每次 begin 都生成。
+    process_case_id: Option<String>,
     /// history 草稿（history.mode != off 时 begin 创建；不放 ActiveSession——
     /// end() 会 take 走 active，而 Sending/Error 态的终态落账仍需要草稿）
     history: Option<Arc<Mutex<HistoryDraft>>>,
@@ -85,6 +87,11 @@ struct HistoryDraft {
     profile_id: Option<String>,
     /// 已喂入的采样数（落账时按 eval::SAMPLE_RATE 换算 ms）
     audio_samples: u64,
+    /// 历史音频独立缓冲；仅 history.includeAudio 开启时分配，
+    /// 不依赖 evalRecording，也不会写入 ~/.kotone/eval。
+    audio_pcm: Option<Vec<f32>>,
+    /// finalize 成功后写入 history/audio 的相对文件名。
+    audio_file: Option<String>,
     first_partial_ms: Option<u64>,
     final_text: String,
     finalize_latency_ms: Option<u64>,
@@ -140,6 +147,7 @@ impl Orchestrator {
                 preview_text: None,
                 send_cancel: None,
                 target_window: None,
+                process_case_id: None,
                 history: None,
             })),
             op: tokio::sync::Mutex::new(()),
@@ -256,15 +264,20 @@ impl Orchestrator {
     pub async fn begin(&self) -> Result<(), String> {
         let _op = self.op.lock().await;
         {
-            let inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock().unwrap();
             if inner.state != OrchestratorState::Idle {
                 return Err(format!("当前状态 {:?} 不能开始新会话", inner.state));
             }
+            inner.process_case_id = Some(format!("session-{}", crate::eval::new_session_id()));
         }
         match self.begin_locked() {
             Ok(()) => Ok(()),
             Err(e) => {
                 // 开始失败（如引擎未就绪）：Error toast 提示后自动回 Idle
+                self.emit_process(
+                    "session_failed",
+                    json!({ "outcome": "error", "errorCode": "SESSION_BEGIN_FAILED" }),
+                );
                 self.toast_error(&e);
                 Err(e)
             }
@@ -313,16 +326,21 @@ impl Orchestrator {
 
         // eval 录档：evalRecording 开启时创建录档句柄，pump 边录边喂；
         // finalize 成功后落盘，取消则随会话句柄整体丢弃（docs/adr/005）。
-        // history 开启时 sessionId 生成一次同时喂给录档与历史草稿，两边可互查；
-        // history.mode == off 零开销：不建草稿、不生成 id、录档自生成 id。
+        // history 音频使用自己的 PCM 缓冲，与评测录档完全解耦。
+        // process case id 在 begin 入口生成；history/eval 开启时复用同一 id，
+        // 便于诊断包里的 events.csv 与 history/eval 互查。
         let history_on = settings.history.mode != crate::history::HistoryMode::Off;
-        let session_id = history_on.then(crate::eval::new_session_id);
+        let process_case_id = self
+            .inner
+            .lock()
+            .unwrap()
+            .process_case_id
+            .clone()
+            .unwrap_or_else(|| format!("session-{}", crate::eval::new_session_id()));
+        let session_id = history_on.then(|| process_case_id.clone());
         let recorder = settings.eval_recording.then(|| {
             let dir = self.eval_dir.clone().unwrap_or_else(crate::eval::eval_dir);
-            match &session_id {
-                Some(id) => crate::eval::SessionRecorder::new_with_id(dir, &engine_id, id.clone()),
-                None => crate::eval::SessionRecorder::new_in(dir, &engine_id),
-            }
+            crate::eval::SessionRecorder::new_with_id(dir, &engine_id, process_case_id.clone())
         });
         let history_draft = session_id.map(|sid| {
             Arc::new(Mutex::new(HistoryDraft {
@@ -331,6 +349,8 @@ impl Orchestrator {
                 engine_id: engine_id.clone(),
                 profile_id: settings.active_profile_id.clone(),
                 audio_samples: 0,
+                audio_pcm: settings.history.include_audio.then(Vec::new),
+                audio_file: None,
                 first_partial_ms: None,
                 final_text: String::new(),
                 finalize_latency_ms: None,
@@ -365,6 +385,8 @@ impl Orchestrator {
         let pump_flag = cancelled_flag.clone();
         let pump_recorder = recorder.clone();
         let pump_history = history_draft.clone();
+        let pump_case_id = process_case_id.clone();
+        let mut pump_first_partial_seen = false;
         let me_weak = self.me.read().unwrap().clone();
         let pump = tokio::spawn(async move {
             let mut session = session;
@@ -388,7 +410,11 @@ impl Orchestrator {
                                     rec.push_pcm(&c);
                                 }
                                 if let Some(h) = &pump_history {
-                                    h.lock().unwrap().audio_samples += c.len() as u64;
+                                    let mut h = h.lock().unwrap();
+                                    h.audio_samples += c.len() as u64;
+                                    if let Some(pcm) = &mut h.audio_pcm {
+                                        pcm.extend_from_slice(&c);
+                                    }
                                 }
                                 if session.push_audio(&c).is_err() { break; }
                             }
@@ -402,7 +428,11 @@ impl Orchestrator {
                                     rec.push_pcm(&c);
                                 }
                                 if let Some(h) = &pump_history {
-                                    h.lock().unwrap().audio_samples += c.len() as u64;
+                                    let mut h = h.lock().unwrap();
+                                    h.audio_samples += c.len() as u64;
+                                    if let Some(pcm) = &mut h.audio_pcm {
+                                        pcm.extend_from_slice(&c);
+                                    }
                                 }
                                 if session.push_audio(&c).is_err() { break; }
                                 // VAD 帧判定与 STT 并行（同一 PCM 流）；
@@ -462,6 +492,17 @@ impl Orchestrator {
                                             Some(g.started.elapsed().as_millis() as u64);
                                     }
                                 }
+                                if !pump_first_partial_seen {
+                                    pump_first_partial_seen = true;
+                                    emitter.emit(
+                                        "kotone://process",
+                                        json!({
+                                            "caseId": pump_case_id.clone(),
+                                            "activity": "first_partial",
+                                            "data": { "textChars": text.chars().count() as u64 }
+                                        }),
+                                    );
+                                }
                                 emitter.emit("kotone://partial", json!({ "text": text }));
                             }
                             // Final 由 finalize 返回值承载，这里不重复上屏
@@ -505,6 +546,7 @@ impl Orchestrator {
         });
         drop(inner);
         self.emit_state(OrchestratorState::Listening, None);
+        self.emit_process("capture_started", json!({}));
         Ok(())
     }
 
@@ -527,6 +569,7 @@ impl Orchestrator {
             self.emit_state(OrchestratorState::Transcribing, None);
             (gen, active)
         };
+        self.emit_process("capture_stopped", json!({}));
 
         // 停 pump 并取回 session（不持锁，允许 cancel 插队，gen 校验兜底）。
         // 顺序关键（松手丢字 P0）：先 drop guard 停采集——采集线程 join 后 pcm
@@ -553,6 +596,7 @@ impl Orchestrator {
         active.level_task.abort();
 
         // finalize（同步引擎可能耗时，spawn_blocking + 10s 超时）
+        self.emit_process("finalize_started", json!({}));
         let finalize = tokio::task::spawn_blocking(move || session.finalize());
         let result = match tokio::time::timeout(self.finalize_timeout, finalize).await {
             Ok(Ok(Ok(t))) => Ok(t),
@@ -572,6 +616,14 @@ impl Orchestrator {
                 // 不发 toast，状态直接回 Idle（空文本还会触发注入器敲两个回车，
                 // openChatKey/sendKey 都是 Enter 时表现为莫名换行）
                 if t.text.trim().is_empty() {
+                    self.emit_process(
+                        "transcript_empty",
+                        json!({
+                            "outcome": "empty",
+                            "durationMs": t.latency_ms as u64,
+                            "textChars": 0
+                        }),
+                    );
                     // 录档句柄直接 drop（不落盘）；history 草稿清掉不写记录
                     drop(active.recorder.take());
                     let continuous = self.policy().continuous;
@@ -593,6 +645,14 @@ impl Orchestrator {
                     }
                     return Ok(());
                 }
+                self.emit_process(
+                    "transcript_ready",
+                    json!({
+                        "outcome": "success",
+                        "durationMs": t.latency_ms as u64,
+                        "textChars": t.text.chars().count() as u64
+                    }),
+                );
                 // 最终文本上屏（替换 partial）
                 self.emitter
                     .emit("kotone://partial", json!({ "text": t.text }));
@@ -602,6 +662,8 @@ impl Orchestrator {
                     g.final_text = t.text.clone();
                     g.finalize_latency_ms = Some(t.latency_ms as u64);
                 }
+                // 历史音频独立落盘：即使 evalRecording 关闭也能保存与播放。
+                self.persist_history_audio();
                 // eval 录档落盘（wav + partial 时间线 + 指标）；失败静默记日志不阻断流程
                 if let Some(rec) = active.recorder.take() {
                     match rec.finish(&t.text, t.latency_ms as u64) {
@@ -633,6 +695,10 @@ impl Orchestrator {
                 }
             }
             Err(e) => {
+                self.emit_process(
+                    "recognize_failed",
+                    json!({ "outcome": "error", "errorCode": "STT_FINALIZE_FAILED" }),
+                );
                 self.fail(gen, &e, None);
                 return Err(e);
             }
@@ -688,6 +754,10 @@ impl Orchestrator {
             // session_rx 随 ActiveSession drop：pump 收尾时 session.cancel() 后发送失败即释放
         }
         self.emit_state(OrchestratorState::Idle, None);
+        self.emit_process(
+            "session_cancelled",
+            json!({ "outcome": "cancelled" }),
+        );
         // error 已落账过的草稿跳过（Error 后的 Esc 是清理动作，不双记 cancelled）
         self.write_history(crate::history::HistoryOutcome::Cancelled, None);
     }
@@ -696,6 +766,11 @@ impl Orchestrator {
 
     /// Sending → Success/Error（§6 发送时序下半段；inject 实现负责按键细节）
     async fn do_send(&self, text: String, gen: u64) {
+        let injection_started_at = std::time::Instant::now();
+        self.emit_process(
+            "injection_started",
+            json!({ "textChars": text.chars().count() as u64 }),
+        );
         let (profile, token, target) = {
             let _op = self.op.lock().await;
             let mut inner = self.inner.lock().unwrap();
@@ -749,6 +824,13 @@ impl Orchestrator {
                 inner.state = OrchestratorState::Success;
                 drop(inner);
                 self.emit_state(OrchestratorState::Success, Some(json!({ "text": text })));
+                self.emit_process(
+                    "injection_succeeded",
+                    json!({
+                        "outcome": "success",
+                        "durationMs": injection_started_at.elapsed().as_millis() as u64
+                    }),
+                );
                 history_write = (crate::history::HistoryOutcome::Sent, None);
             }
             Ok(Err(e)) => {
@@ -761,6 +843,18 @@ impl Orchestrator {
                     OrchestratorState::Error,
                     Some(json!({ "message": e.message, "needsElevation": e.needs_elevation, "text": text })),
                 );
+                self.emit_process(
+                    "injection_failed",
+                    json!({
+                        "outcome": "error",
+                        "errorCode": if e.needs_elevation {
+                            "INJECTION_ELEVATION_REQUIRED"
+                        } else {
+                            "INJECTION_FAILED"
+                        },
+                        "durationMs": injection_started_at.elapsed().as_millis() as u64
+                    }),
+                );
                 history_write = (crate::history::HistoryOutcome::Error, Some(e.message));
             }
             Err(_) => {
@@ -770,6 +864,14 @@ impl Orchestrator {
                 self.emit_state(
                     OrchestratorState::Error,
                     Some(json!({ "message": "发送线程异常", "text": text })),
+                );
+                self.emit_process(
+                    "injection_failed",
+                    json!({
+                        "outcome": "error",
+                        "errorCode": "INJECTION_THREAD_FAILED",
+                        "durationMs": injection_started_at.elapsed().as_millis() as u64
+                    }),
                 );
                 history_write = (
                     crate::history::HistoryOutcome::Error,
@@ -830,7 +932,7 @@ impl Orchestrator {
         if cfg.mode == crate::history::HistoryMode::Off {
             return;
         }
-        let mut record = {
+        let record = {
             let mut g = draft.lock().unwrap();
             if outcome == crate::history::HistoryOutcome::Cancelled && g.reported {
                 return;
@@ -849,25 +951,48 @@ impl Orchestrator {
                 finalize_latency_ms: g.finalize_latency_ms,
                 outcome,
                 error,
-                audio_file: None,
+                audio_file: g.audio_file.clone(),
             }
         };
         let dir = self
             .history_dir
             .clone()
             .unwrap_or_else(crate::history::history_dir);
-        if cfg.include_audio {
-            // 音频来自 eval 录档（cancel 路径录档随会话丢弃，无 wav 可复制 → None）
-            let eval_dir = self.eval_dir.clone().unwrap_or_else(crate::eval::eval_dir);
-            record.audio_file =
-                crate::history::copy_audio_in(&dir, &eval_dir, &record.session_id);
-        }
         if let Err(e) = crate::history::append_in(&dir, &record, &cfg) {
             crate::log::log(&format!("history 落账失败（忽略）: {e}"));
         }
         if outcome != crate::history::HistoryOutcome::Error {
             self.inner.lock().unwrap().history = None;
         }
+    }
+
+    /// finalize 成功后把历史音频缓冲直接写入 history/audio。
+    /// 关闭评测录档不影响该路径；取消/空转录不会调用，因此不留下无效音频。
+    fn persist_history_audio(&self) {
+        let cfg = self.settings.read().unwrap().history.clone();
+        if cfg.mode == crate::history::HistoryMode::Off || !cfg.include_audio {
+            return;
+        }
+        let draft = match self.inner.lock().unwrap().history.clone() {
+            Some(d) => d,
+            None => return,
+        };
+        let (session_id, pcm) = {
+            let mut g = draft.lock().unwrap();
+            (g.session_id.clone(), g.audio_pcm.take())
+        };
+        let Some(pcm) = pcm else {
+            return;
+        };
+        let dir = self
+            .history_dir
+            .clone()
+            .unwrap_or_else(crate::history::history_dir);
+        let audio_file = crate::history::write_audio_in(&dir, &session_id, &pcm);
+        if audio_file.is_none() {
+            crate::log::log("history 音频落盘失败（忽略）");
+        }
+        draft.lock().unwrap().audio_file = audio_file;
     }
 
     /// toast_dwell 后自动回 Idle（期间有新会话/取消则不动作）。
@@ -919,9 +1044,21 @@ impl Orchestrator {
     }
 
     fn emit_state(&self, state: OrchestratorState, payload: Option<serde_json::Value>) {
+        let case_id = self.inner.lock().unwrap().process_case_id.clone();
         self.emitter.emit(
             "kotone://state",
-            json!({ "state": state, "payload": payload }),
+            json!({ "state": state, "payload": payload, "caseId": case_id }),
+        );
+    }
+
+    fn emit_process(&self, activity: &str, data: serde_json::Value) {
+        let case_id = self.inner.lock().unwrap().process_case_id.clone();
+        let Some(case_id) = case_id else {
+            return;
+        };
+        self.emitter.emit(
+            "kotone://process",
+            json!({ "caseId": case_id, "activity": activity, "data": data }),
         );
     }
 }

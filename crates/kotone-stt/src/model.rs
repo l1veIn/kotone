@@ -521,7 +521,7 @@ fn model_ids() -> Vec<&'static str> {
         .collect()
 }
 
-// ---------- bpe.vocab（cjkchar+bpe 模型热词用的文本词表） ----------
+// ---------- bpe.vocab（bpe / cjkchar+bpe 模型热词用的文本词表） ----------
 
 /// 解析 sentencepiece bpe.model（二进制 protobuf），导出 sherpa-onnx 热词用的
 /// 文本 bpe.vocab（每行「token<TAB>score」，对齐官方 scripts/export_bpe_vocab.py）。

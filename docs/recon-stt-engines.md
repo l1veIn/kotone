@@ -8,7 +8,7 @@
 |---|------|------|--------------------------|-------------|------|------|----------|--------|
 | 1 | Paraformer 流式 (bilingual zh-en) | ✅ 真实 | ✅ 老支持（online paraformer） | 中（官方 demo 中英混有明显错误，无标点无时间戳） | ❌（Paraformer 非 transducer，sherpa 热词仅限 transducer） | ✅ | 配置级 | ★★（被 X-ASR 全面压制） |
 | 2 | Moonshine v1/v2 | v1 真实但**纯英文**；「Base 支持中文」为假。v2 真实、含中文（阿/中/英/日/韩/西/乌/越） | ✅（v1.12.28 起支持 v2） | v1 ❌ / v2 有中文但未经验证 | ❌ | ❌ 非流式 | 配置级 | ★（中文主力不够用） |
-| 3 | X-ASR | ✅ **真实**，2026-06 k2-fsa 导出的中英流式 zipformer2 transducer，自带标点 | ✅ v1.13.3+（#3662/#3656） | ✅ 强（官方 demo：「昨天是 Monday，today is 礼拜二」全对，带标点） | ✅（标准 online transducer，modified_beam_search + cjkchar+bpe） | ✅ 480ms/960ms chunk | 配置级 | ★★★★★ |
+| 3 | X-ASR | ✅ **真实**，2026-06 k2-fsa 导出的中英流式 zipformer2 transducer，自带标点 | ✅ v1.13.3+（#3662/#3656） | ✅ 强（官方 demo：「昨天是 Monday，today is 礼拜二」全对，带标点） | ✅（标准 online transducer，modified_beam_search + SentencePiece BPE） | ✅ 480ms/960ms chunk | 配置级 | ★★★★★ |
 | 4 | Nemotron-3.5 ASR Streaming 0.6B | ✅ 真实，`nvidia/nemotron-3.5-asr-streaming-0.6b`（2026-06-04，OpenMDW-1.1 可商用） | ✅ v1.13.3+（#3671，prompt_index 多语） | ⚠️ 中文仅 broad-coverage 档，FLEURS CER ≈19–20%，明显弱于中文原生模型 | ❌（NeMo transducer 仅 greedy_search，issue #3572 确认无热词路径） | ✅ cache-aware 80ms–1.12s | 配置级 | ★★（英文强，中文劝退） |
 | 5 | Voxtral Realtime | ✅ 真实，`mistralai/Voxtral-Mini-4B-Realtime-2602`（2026-02，Apache 2.0，13 语言含中文） | ❌ 无 ONNX/sherpa 支持 | 有中文但未见中英混专项数据 | ⚠️ context biasing 仅 Mistral 官方 API 有，开源权重/vLLM 无 | ✅ 原生流式 | 不可行（4.4B，fp16 需 16GB VRAM；CPU 流式不现实；需 vLLM/MLX sidecar） | 排除 |
 | 6 | Fun-ASR-Nano | ✅ 真实，`FunAudioLLM/Fun-ASR-Nano-2512`（800M，SenseVoice encoder + Qwen3-0.6B decoder，通义/钉钉） | ✅ **v1.13.x 原生支持**（`sherpa-onnx-funasr-nano-int8-2025-12-30`），**不需要 Python** | ✅ 中英日 + 7 中文方言/26 口音，自带标点+ITN | ✅（`OfflineFunASRNanoModelConfig.hotwords` 字段，issue #3092） | ❌ 非流式（VAD 伪流式） | 适配级（新模型类型） | ★★★★ |
@@ -27,7 +27,7 @@
 
 | 模型 | 路径 | 文件与体积 | 许可证 |
 |------|------|-----------|--------|
-| X-ASR streaming | sherpa-onnx OnlineTransducer（`model_type=zipformer2`），热词走 modified_beam_search + bpe.model（cjkchar+bpe） | `sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05.tar.bz2`：encoder.int8 148M + decoder 11M + joiner.int8 2.5M ≈ **162MB**（另有 960ms 版与非流式版 2026-06-03） | ⚠️ 未确认（README 仅 96B，发布方/训练数据量「百万小时」未证实，接入前需补查） |
+| X-ASR streaming | sherpa-onnx OnlineTransducer（`model_type=zipformer2`），热词走 modified_beam_search + bpe.model（`modeling_unit=bpe`） | `sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05.tar.bz2`：encoder.int8 148M + decoder 11M + joiner.int8 2.5M ≈ **162MB**（另有 960ms 版与非流式版 2026-06-03） | ⚠️ 未确认（README 仅 96B，发布方/训练数据量「百万小时」未证实，接入前需补查） |
 | Fun-ASR-Nano | sherpa-onnx OfflineFunASRNano（encoder_adaptor/llm/embedding/tokenizer 四件套 + hotwords 参数） | `sherpa-onnx-funasr-nano-int8-2025-12-30.tar.bz2` ≈ **948MB**（int8）；第三方实测峰值内存 ~2.5GB | ⚠️ 需确认（FunASR 系模型多为自定义 Model License，商用条款接入前核实） |
 | Qwen3-ASR-0.6B | sherpa-onnx OfflineQwen3ASR（conv_frontend/encoder/decoder/tokenizer + hotwords） | `sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2` ≈ **938MB** | Apache 2.0 ✅ |
 

@@ -42,8 +42,8 @@
   let actionError = $state("");
   /** 重试后的本地提示 */
   let actionHint = $state("");
-  /** preview 提示中的热键名（动态读配置，读取失败回退 F8） */
-  let hotkeyLabel = $state("F8");
+  /** preview 提示中的热键名（动态读配置，读取失败回退 CapsLock） */
+  let hotkeyLabel = $state("CapsLock");
   /** overlay.style：true = 胶囊布局（窗口几何由后端 SetWindowPos 居中靠下重排） */
   let capsule = $state(false);
   let draggable = $state(true);

@@ -19,8 +19,12 @@
   /** 勾选状态合并成一次 patch 写盘（两个都勾也只写一次） */
   async function persistChoices() {
     const patch: Record<string, unknown> = {};
-    if (neverAsk) patch.adminPromptDismissed = true;
-    if (alwaysAdmin) patch.runAsAdminOnStart = true;
+    if (alwaysAdmin) {
+      patch.runAsAdminOnStart = true;
+      patch.adminPromptDismissed = true;
+    } else if (neverAsk) {
+      patch.adminPromptDismissed = true;
+    }
     if (Object.keys(patch).length === 0) return;
     settingsStore.set(await updateSettings(patch));
   }
@@ -59,20 +63,41 @@
         <h2 class="text-base font-bold">需要管理员权限</h2>
         <p class="mt-1.5 text-[13px] leading-relaxed text-white/65">
           当前未以管理员权限运行，部分游戏（如 League of Legends）内可能无法注入文字。
-          是否以管理员权限重启？
+          可以仅本次以管理员权限重启，也可以让 Kotone 以后每次启动都自动发起 Windows UAC 请求。
         </p>
       </div>
     </div>
 
     <div class="mt-4 flex flex-col gap-2">
       <label class="flex cursor-pointer items-center gap-2 text-xs text-white/70">
-        <input type="checkbox" bind:checked={neverAsk} class="h-3.5 w-3.5 accent-kotone-cyan" />
+        <input
+          type="checkbox"
+          checked={neverAsk}
+          class="h-3.5 w-3.5 accent-kotone-cyan"
+          onchange={(event) => {
+            neverAsk = (event.target as HTMLInputElement).checked;
+            if (neverAsk) alwaysAdmin = false;
+          }}
+        />
         不再提示
       </label>
       <label class="flex cursor-pointer items-center gap-2 text-xs text-white/70">
-        <input type="checkbox" bind:checked={alwaysAdmin} class="h-3.5 w-3.5 accent-kotone-cyan" />
-        以后默认以管理员权限启动
+        <input
+          type="checkbox"
+          checked={alwaysAdmin}
+          class="h-3.5 w-3.5 accent-kotone-cyan"
+          onchange={(event) => {
+            alwaysAdmin = (event.target as HTMLInputElement).checked;
+            if (alwaysAdmin) neverAsk = false;
+          }}
+        />
+        以后每次启动自动请求管理员权限
       </label>
+      {#if alwaysAdmin}
+        <p class="pl-5.5 text-[11px] leading-relaxed text-white/40">
+          Windows 仍会显示 UAC 确认；普通桌面应用不能静默获得管理员权限。
+        </p>
+      {/if}
     </div>
 
     <div class="mt-5 flex items-center justify-end gap-3">

@@ -1114,7 +1114,7 @@ async fn solo_toggle_stops_without_sending() {
 // ---------- history：终态落账（HistoryDraft → history.jsonl） ----------
 
 /// 带 history 的 orchestrator：history_dir 指向临时目录；
-/// eval_dir 给 Some 时同时开启 evalRecording（验证 includeAudio 复制链路）
+/// eval_dir 给 Some 时同时开启 evalRecording（历史音频不依赖该开关）。
 fn make_history_orchestrator(
     auto_send: bool,
     injector: Arc<dyn Injector>,
@@ -1269,21 +1269,15 @@ async fn history_off_mode_writes_nothing() {
     assert!(!dir.path().join("history.jsonl").exists(), "off 模式不应产生文件");
 }
 
-/// includeAudio：sent 时从 eval 录档复制 wav 到 history/audio/，
-/// audioFile 落相对名，且 history 与 eval 的 sessionId 一致（互查）
+/// includeAudio：即使 evalRecording 关闭，sent 也独立写入 history/audio/。
 #[tokio::test]
-async fn history_include_audio_copies_eval_wav_with_same_session_id() {
+async fn history_include_audio_works_when_eval_recording_is_off() {
     let dir = tempfile::tempdir().unwrap();
-    let eval_dir = tempfile::tempdir().unwrap();
     let sent = Arc::new(Mutex::new(Vec::new()));
     let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
-    let orch = make_history_orchestrator(
-        true,
-        injector,
-        dir.path().to_path_buf(),
-        Some(eval_dir.path().to_path_buf()),
-    );
+    let orch = make_history_orchestrator(true, injector, dir.path().to_path_buf(), None);
     orch.settings().write().unwrap().history.include_audio = true;
+    assert!(!orch.settings().read().unwrap().eval_recording);
 
     orch.begin().await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1295,9 +1289,12 @@ async fn history_include_audio_copies_eval_wav_with_same_session_id() {
     let r = &records[0];
     let audio_file = r.audio_file.clone().expect("includeAudio 应落音频文件名");
     assert_eq!(audio_file, format!("{}.wav", r.session_id));
-    // history/audio/ 下确有该 wav，且与 eval 录档同源（同 sessionId 互查）
-    assert!(dir.path().join("audio").join(&audio_file).exists());
-    assert!(eval_dir.path().join(&audio_file).exists(), "eval 录档 wav 同名互查");
+    let wav = dir.path().join("audio").join(&audio_file);
+    assert!(wav.exists(), "history/audio/ 下应有独立 wav");
+    assert!(
+        !kotone_core::eval::read_wav(&wav).unwrap().is_empty(),
+        "历史音频应包含本次会话 PCM"
+    );
 }
 
 // ---------- 松手丢字 P0：end() 采音侧排空 ----------

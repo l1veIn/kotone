@@ -9,7 +9,7 @@
 |------|------|
 | `send --text <文本> [--profile lol] [--clipboard] [--delay-ms N]` | 一次性注入文本到前台窗口 |
 | `listen [--engine <id>]` | 热键模式：LL 钩子 → orchestrator → JSONL 事件流（Ctrl+C 退出，码 2） |
-| `listen --wav <file> [--speed N] [--engine <id>]` | wav 直灌会话模式（见下） |
+| `listen --wav <file> [--speed N] [--engine <id>] [--profile <id>]` | wav 直灌会话模式（可固定音频 A/B 对比 profile 热词，见下） |
 | `listen --no-hotkey --duration <秒> [--engine <id>]` | 无热键会话模式（配合虚拟声卡） |
 | `download <模型id>` | 下载模型（清单内任意 id，如 `x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05` / `silero-vad`；镜像策略见 download.source） |
 | `config show` | 打印当前完整配置（JSON，含默认值合并） |
@@ -39,9 +39,9 @@ history.mode 非 off 时，每次会话终态自动追加一条 JSONL 到
 `~/.kotone/history/history.jsonl`：`sent`（发送成功）/ `cancelled`（Esc 取消）/
 `error`（注入或转写失败）。error 后重试成功会同 sessionId 再记一条 sent
 （刻意的「失败→重试」叙事）；error 后的 Esc 是清理动作，不双记 cancelled。
-sessionId 与 eval 录档一致可互查；`history.includeAudio` 开启时把 eval 录档
-wav 复制到 `history/audio/<sessionId>.wav`（evalRecording 关闭时无 wav 可复制，
-audioFile 为 null）。capped 模式超上限自动裁剪最旧记录（联动删除其音频）。
+sessionId 与 eval 录档一致时仍可互查；`history.includeAudio` 开启时会独立把
+会话音频写到 `history/audio/<sessionId>.wav`，不要求开启 `evalRecording`。
+capped 模式超上限自动裁剪最旧记录（联动删除其音频）。
 
 ### doctor 与提权（elevate）
 
@@ -75,6 +75,24 @@ cargo run -p kotone-cli -- listen --wav crates/kotone-stt/tests/fixtures/zh-game
 # 断言 final 文本
 grep -F '"text":"对面打野在下路"' out.jsonl && echo PASS
 ```
+
+### 热词 A/B 验证
+
+对同一个包含稀有词的 WAV 分别使用无热词 `generic` 和 LOL profile 回放，排除
+两次说话内容、语速和麦克风噪声不同造成的干扰：
+
+```powershell
+cargo run -p kotone-cli -- listen --engine sherpa-onnx-x-asr-zh-en `
+  --profile generic --wav "C:\path\lol-hotword.wav" --speed 0 > without-hotwords.jsonl
+cargo run -p kotone-cli -- listen --engine sherpa-onnx-x-asr-zh-en `
+  --profile lol --wav "C:\path\lol-hotword.wav" --speed 0 > with-hotwords.jsonl
+```
+
+建议语料包含容易写成同音常用词的专名，例如“悠米跟打野去大龙”或
+“璐璐辅助去插真眼”。第二次运行的控制台或 `~/.kotone/kotone.log` 应出现
+“已向本次会话提交 N 条热词（modeling_unit=bpe）”，且不得出现 `Cannot find ID` /
+`Encode hotwords failed`；JSONL 最终文本中目标专名的命中率应高于无热词对照。
+热词是解码偏置而非强制替换，单句两边都正确不能证明无效，应使用多条或多次回放统计。
 
 ## 自动化测试路径二：虚拟声卡回路（全系统音频栈）
 

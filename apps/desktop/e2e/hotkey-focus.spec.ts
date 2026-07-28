@@ -2,7 +2,6 @@ import { expect, test } from "@playwright/test";
 
 test("a configured Tab hotkey does not move focus inside Kotone", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
-  await page.getByRole("button", { name: "快捷键", exact: true }).click();
 
   const input = page.locator("#hotkey-input");
   await input.fill("Tab");

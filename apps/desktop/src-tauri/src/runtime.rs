@@ -130,6 +130,14 @@ pub fn snapshot_and_emit(app: &AppHandle, stage: Option<String>) -> Option<Runti
 /// 启动：warmup 当前引擎 → 注册热键 → 显示悬浮窗。
 /// Running + restartNeeded 时等价于 stop + start（用户显式点「重启」走这里）。
 pub async fn start(app: &AppHandle) -> Result<RuntimeStatus, String> {
+    crate::record_process_event(
+        app,
+        &serde_json::json!({
+            "caseId": kotone_core::process_log::app_session_id(),
+            "activity": "runtime_start_requested",
+            "data": {}
+        }),
+    );
     let rt = app.state::<RuntimeManager>();
     // Running + restartNeeded → 先停再启（restart 语义）；Running 且无变更 → 幂等返回
     match rt.phase() {
@@ -157,6 +165,14 @@ pub async fn start(app: &AppHandle) -> Result<RuntimeStatus, String> {
     let result = start_inner(app).await;
     if let Err(ref e) = result {
         kotone_core::log::log(&format!("runtime start failed: {e}"));
+        crate::record_process_event(
+            app,
+            &serde_json::json!({
+                "caseId": kotone_core::process_log::app_session_id(),
+                "activity": "runtime_start_failed",
+                "data": { "outcome": "error", "errorCode": "RUNTIME_START_FAILED" }
+            }),
+        );
         let _ = rt.transit(runtime::fail_start);
     }
     let status = snapshot_and_emit(app, None);
@@ -185,6 +201,15 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
     }
 
     // 阶段 1：warmup（模型入内存；sherpa 百毫秒级，放阻塞线程不卡 UI）
+    crate::record_process_event(
+        app,
+        &serde_json::json!({
+            "caseId": kotone_core::process_log::app_session_id(),
+            "activity": "model_warmup_started",
+            "data": {}
+        }),
+    );
+    let warmup_started = std::time::Instant::now();
     let engines: Arc<EngineRegistry> = state.engines.clone();
     let warm_engine = engine_id.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -196,9 +221,28 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
     .await
     .map_err(|e| format!("warmup 任务异常：{e}"))??;
     kotone_core::log::log(&format!("runtime warmup ok: {engine_id} ({model_id})"));
+    crate::record_process_event(
+        app,
+        &serde_json::json!({
+            "caseId": kotone_core::process_log::app_session_id(),
+            "activity": "model_ready",
+            "data": {
+                "outcome": "success",
+                "durationMs": warmup_started.elapsed().as_millis() as u64
+            }
+        }),
+    );
 
     // 阶段 2：注册全局热键（失败回滚：卸载引擎，不半截启动）
     snapshot_and_emit(app, Some("hotkey".into()));
+    crate::record_process_event(
+        app,
+        &serde_json::json!({
+            "caseId": kotone_core::process_log::app_session_id(),
+            "activity": "hotkey_register_started",
+            "data": {}
+        }),
+    );
     let mgr = app.state::<HotkeyManager>();
     if let Err(e) = mgr.register(app, &key, mode) {
         let engines = state.engines.clone();
@@ -239,6 +283,14 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
     rt.set_started(Some(StartedSnapshot { engine_id, model_id }));
     rt.transit(runtime::finish_start)?;
     kotone_core::log::log("runtime started");
+    crate::record_process_event(
+        app,
+        &serde_json::json!({
+            "caseId": kotone_core::process_log::app_session_id(),
+            "activity": "runtime_ready",
+            "data": { "outcome": "success" }
+        }),
+    );
     Ok(())
 }
 
@@ -284,5 +336,13 @@ pub async fn stop(app: &AppHandle) -> Result<RuntimeStatus, String> {
     rt.set_started(None);
     rt.transit(runtime::finish_stop)?;
     kotone_core::log::log("runtime stopped");
+    crate::record_process_event(
+        app,
+        &serde_json::json!({
+            "caseId": kotone_core::process_log::app_session_id(),
+            "activity": "runtime_stopped",
+            "data": { "outcome": "success" }
+        }),
+    );
     snapshot_and_emit(app, None).ok_or_else(|| "运行时状态未初始化".to_string())
 }

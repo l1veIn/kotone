@@ -68,8 +68,10 @@ $sidebar.Graphics.DrawString("KOTONE", $titleFont, $white, 12, 11)
 $sidebar.Graphics.DrawString("VOICE  //  READY", $labelFont, $cyanBrush, 14, 39)
 
 $mascot = [System.Drawing.Image]::FromFile($mascotPath)
-$source = [System.Drawing.Rectangle]::new(120, 0, 790, 1010)
-$dest = [System.Drawing.Rectangle]::new(-14, 57, 198, 253)
+# The current RepoChan delivery is a full-body thumbs-up pose. Crop below the
+# knees so the face and hand stay readable in MUI2's narrow 164 px sidebar.
+$source = [System.Drawing.Rectangle]::new(300, 15, 390, 760)
+$dest = [System.Drawing.Rectangle]::new(15, 53, 133, 259)
 $sidebar.Graphics.DrawImage($mascot, $dest, $source, [System.Drawing.GraphicsUnit]::Pixel)
 $mascot.Dispose()
 

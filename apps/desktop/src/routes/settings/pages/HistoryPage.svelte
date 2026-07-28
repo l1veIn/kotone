@@ -1,10 +1,13 @@
 <script lang="ts">
   /*
    * 历史记录页（新 IPC：get_history / clear_history）：
-   * 顶部 history.mode 三态 + 清空（二次确认）；
+   * 顶部 history.mode 三态 + 独立音频保留开关 + 清空（二次确认）；
    * 列表 = 时间 / 识别文本 / 时长 / 状态；技术字段收纳到高级页。
+   * 音频回放手写 Web Audio 管线（decodeAudioData + AudioBufferSourceNode），
+   * 不走 WebView2 的 <audio> 元素——此前「no supported source」的根源；
+   * 波形用 canvas 手绘（峰值柱 + 进度高亮），点击可 seek。
    */
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import {
     updateSettings,
     getHistory,
@@ -13,6 +16,7 @@
     type HistoryRecord,
   } from "../../../lib/ipc";
   import { settingsStore, toast, errText } from "../../../lib/stores/ui";
+  import Toggle from "../../../lib/components/Toggle.svelte";
   import stickerSleepy from "../../../assets/brand/stickers/sleepy.png";
 
   let records = $state<HistoryRecord[] | null>(null);
@@ -22,8 +26,18 @@
   let playingId = $state<string | null>(null);
   /** 正在加载音频的记录 id（防止加载期间重复点击） */
   let loadingId = $state<string | null>(null);
-  let audioEl: HTMLAudioElement | null = null;
-  let audioUrl: string | null = null;
+  /** 共享 AudioContext（懒创建；纯 Web Audio 播放，绕开 WebView2 <audio> 管线） */
+  let ac: AudioContext | null = null;
+  let src: AudioBufferSourceNode | null = null;
+  /** 当前解码好的音频（seek 时复用，不重复解码） */
+  let buf: AudioBuffer | null = null;
+  /** 当前段起点：ac.currentTime 基准 + buffer 内偏移 */
+  let startedAt = 0;
+  let startOffset = 0;
+  /** 播放进度重绘句柄（rAF） */
+  let raf = 0;
+  /** 行内波形画布（仅播放中的行渲染） */
+  let waveCanvas: HTMLCanvasElement | undefined = $state();
 
   onMount(async () => {
     await refresh();
@@ -31,54 +45,156 @@
 
   onDestroy(() => {
     stopPlayback();
+    void ac?.close();
+    ac = null;
   });
 
   function recordId(r: HistoryRecord): string {
     return r.sessionId + r.ts;
   }
 
-  /** 停止当前播放并释放 objectURL */
+  /** 停止当前播放：停 rAF、停 source、清解码缓存 */
   function stopPlayback() {
-    audioEl?.pause();
-    audioEl = null;
-    if (audioUrl) {
-      URL.revokeObjectURL(audioUrl);
-      audioUrl = null;
+    if (raf) cancelAnimationFrame(raf);
+    raf = 0;
+    if (src) {
+      src.onended = null;
+      try {
+        src.stop();
+      } catch {
+        /* 未 start 或已停止 */
+      }
+      src.disconnect();
+      src = null;
     }
+    buf = null;
     playingId = null;
     loadingId = null;
   }
 
-  /** 播放 / 暂停切换：切播先停上一条；播完（ended）自动停止 */
+  /** 播放 / 停止切换：切播先停上一条；播完（ended）自动停止。
+   *  纯 Web Audio 管线：decodeAudioData 解码 + AudioBufferSourceNode 输出，
+   *  不经过 <audio> 元素（WebView2 对本应用 16kHz WAV blob 会报
+   *  「no supported source」，wavesurfer v7 播放层同样走 media element）。 */
   async function togglePlay(r: HistoryRecord) {
     if (!r.audioFile) return;
     const id = recordId(r);
-    if (playingId === id || loadingId === id) {
+    if (playingId === id) {
       stopPlayback();
       return;
     }
+    if (loadingId === id) return;
     stopPlayback();
     loadingId = id;
     try {
       const bytes = await readHistoryAudio(r.audioFile);
       if (loadingId !== id) return; // 加载期间已切播/停止
-      const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "audio/wav" }));
-      const el = new Audio(url);
-      el.onended = () => {
-        if (playingId === id) stopPlayback();
-      };
-      audioEl = el;
-      audioUrl = url;
+      if (bytes.byteLength === 0) throw new Error("音频文件为空或已被清理");
+      ac ??= new AudioContext();
+      await ac.resume(); // 点击手势内调用，自动播放策略安全
+      // 复制一份再解码（decodeAudioData 可能 detach 传入的 buffer）
+      const decoded = await ac.decodeAudioData(
+        bytes.buffer.slice(
+          bytes.byteOffset,
+          bytes.byteOffset + bytes.byteLength,
+        ) as ArrayBuffer,
+      );
+      if (loadingId !== id) return;
+      buf = decoded;
       playingId = id;
-      await el.play();
+      await tick(); // 等行内画布渲染出来
+      startFrom(0);
     } catch (e) {
-      if (loadingId === id) {
+      if (loadingId === id || playingId === id) {
         toast(false, `播放失败：${errText(e)}`);
         stopPlayback();
       }
     } finally {
       if (loadingId === id) loadingId = null;
     }
+  }
+
+  /** 从 buffer 偏移处起播（seek 复用）；自然播完时自动停止 */
+  function startFrom(offset: number) {
+    if (!ac || !buf) return;
+    if (src) {
+      src.onended = null;
+      try {
+        src.stop();
+      } catch {
+        /* 未 start 或已停止 */
+      }
+      src.disconnect();
+    }
+    const node = ac.createBufferSource();
+    node.buffer = buf;
+    node.connect(ac.destination);
+    node.onended = () => {
+      if (src === node) stopPlayback();
+    };
+    src = node;
+    startedAt = ac.currentTime;
+    startOffset = offset;
+    node.start(0, offset);
+    if (raf) cancelAnimationFrame(raf);
+    drawProgress();
+  }
+
+  /** rAF 进度重绘（播放中持续刷新高亮与进度线） */
+  function drawProgress() {
+    if (!ac || !buf) return;
+    const t = Math.min(startOffset + (ac.currentTime - startedAt), buf.duration);
+    drawWave(t / buf.duration);
+    raf = requestAnimationFrame(drawProgress);
+  }
+
+  /** 波形绘制：整条峰值柱（青 28%）+ 已播部分高亮（青）+ 品红进度线 */
+  function drawWave(progress: number) {
+    const canvas = waveCanvas;
+    if (!canvas || !buf) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth;
+    const cssH = canvas.clientHeight;
+    if (cssW === 0 || cssH === 0) return;
+    if (canvas.width !== Math.round(cssW * dpr)) {
+      canvas.width = Math.round(cssW * dpr);
+      canvas.height = Math.round(cssH * dpr);
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    const data = buf.getChannelData(0);
+    const bars = Math.max(48, Math.floor(cssW / 3));
+    const barW = cssW / bars;
+    const mid = cssH / 2;
+    const played = Math.floor(bars * progress);
+    for (let i = 0; i < bars; i++) {
+      const from = Math.floor((i / bars) * data.length);
+      const to = Math.max(from + 1, Math.floor(((i + 1) / bars) * data.length));
+      let peak = 0;
+      for (let j = from; j < to; j += 16) {
+        const v = Math.abs(data[j]);
+        if (v > peak) peak = v;
+      }
+      const h = Math.max(2, peak * (cssH - 6));
+      ctx.fillStyle = i <= played ? "#00e5ff" : "rgba(0, 229, 255, 0.28)";
+      ctx.beginPath();
+      ctx.roundRect(i * barW + 0.5, mid - h / 2, Math.max(1, barW - 1), h, 1.5);
+      ctx.fill();
+    }
+    if (progress > 0 && progress < 1) {
+      ctx.fillStyle = "#ff2d78";
+      ctx.fillRect(progress * cssW - 0.5, 2, 1, cssH - 4);
+    }
+  }
+
+  /** 点击波形 seek（按比例换算 buffer 偏移重播） */
+  function onWaveClick(e: MouseEvent) {
+    if (!buf || !waveCanvas) return;
+    const rect = waveCanvas.getBoundingClientRect();
+    const ratio = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 0.999);
+    startFrom(buf.duration * ratio);
   }
 
   async function refresh() {
@@ -97,6 +213,20 @@
       toast(true, "历史记录模式已保存");
       if (mode === "off") records = [];
       else await refresh();
+    } catch (err) {
+      toast(false, `保存失败：${errText(err)}`);
+    }
+  }
+
+  async function onIncludeAudioChange(includeAudio: boolean) {
+    try {
+      settingsStore.set(await updateSettings({ history: { includeAudio } }));
+      toast(
+        true,
+        includeAudio
+          ? "已开启历史音频保存"
+          : "已关闭历史音频保存（已有音频保留）",
+      );
     } catch (err) {
       toast(false, `保存失败：${errText(err)}`);
     }
@@ -162,6 +292,15 @@
     </button>
   </section>
 
+  <section class="kotone-panel mt-3 p-4">
+    <Toggle
+      checked={$settingsStore?.history.includeAudio ?? false}
+      label="保存历史记录音频"
+      desc="为之后的新记录独立保存 WAV，便于在本页回听；会增加磁盘占用"
+      onchange={(value) => void onIncludeAudioChange(value)}
+    />
+  </section>
+
   <!-- 记录列表 -->
   {#if records === null}
     <p class="mt-8 text-center text-sm text-white/50">读取中…</p>
@@ -176,7 +315,8 @@
       {#each records as r (r.sessionId + r.ts)}
         {@const meta = outcomeMeta[r.outcome] ?? outcomeMeta.cancelled}
         {@const id = recordId(r)}
-        <div class="kotone-card flex items-center gap-3 px-4 py-3">
+        <div class="kotone-card px-4 py-3">
+          <div class="flex items-center gap-3">
           <span class="shrink-0 text-[11px] text-white/40 tabular-nums">{fmtTime(r.ts)}</span>
           <div class="min-w-0 flex-1">
             <p class="truncate text-[13px] {r.finalText ? 'text-white/90' : 'text-white/35'}">
@@ -190,13 +330,6 @@
           {#if r.audioFile}
             <!-- 播放/暂停：播放中按钮旁显示简易声波动画 -->
             <div class="flex shrink-0 items-center gap-1.5">
-              {#if playingId === id}
-                <span class="flex h-3.5 items-end gap-[2px]" aria-hidden="true">
-                  {#each [0, 1, 2, 3] as i}
-                    <span class="wave-bar" style:animation-delay="{i * 0.12}s"></span>
-                  {/each}
-                </span>
-              {/if}
               <button
                 class="flex h-6 w-6 items-center justify-center rounded-full bg-kotone-cyan/15 text-[10px] text-kotone-cyan ring-1 ring-kotone-cyan/40 transition hover:bg-kotone-cyan/25 active:scale-95 disabled:opacity-50"
                 title={playingId === id ? "停止播放" : "播放录音"}
@@ -211,35 +344,18 @@
           <span class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold {meta.cls}">
             {meta.text}
           </span>
+          </div>
+          {#if playingId === id}
+            <!-- 行内波形（canvas 手绘峰值柱，点击可 seek） -->
+            <canvas
+              bind:this={waveCanvas}
+              class="mt-2.5 h-10 w-full cursor-pointer rounded-lg bg-white/4 ring-1 ring-white/8"
+              onclick={onWaveClick}
+            ></canvas>
+          {/if}
         </div>
       {/each}
     </div>
     <p class="mt-3 text-[11px] text-white/35">共 {records.length} 条（新→旧）</p>
   {/if}
 </div>
-
-<style>
-  /* 播放中的简易声波动画：四根竖条高低跳动（纯 CSS，暂停/停止即移除节点） */
-  .wave-bar {
-    width: 2px;
-    height: 30%;
-    border-radius: 9999px;
-    background: var(--color-kotone-cyan, #00e5ff);
-    animation: wave-bounce 0.9s ease-in-out infinite;
-  }
-  @keyframes wave-bounce {
-    0%,
-    100% {
-      height: 30%;
-    }
-    50% {
-      height: 100%;
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .wave-bar {
-      animation: none;
-      height: 60%;
-    }
-  }
-</style>

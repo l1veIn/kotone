@@ -41,7 +41,7 @@ pub fn setup_tray(app: &AppHandle<tauri::Wry>) -> tauri::Result<()> {
         .menu(&menu)
         // 左键不再弹菜单：释放时显示并聚焦主窗口
         // （回调首参是 &TrayIcon 而非 AppHandle，经 app_handle() 取回）
-        .menu_on_left_click(false)
+        .show_menu_on_left_click(false)
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,

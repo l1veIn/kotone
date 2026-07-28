@@ -1,6 +1,7 @@
 //! Kotone Rust 核心：模块组装、共享状态与 IPC 命令。
 //! 职责划分见 docs/development.md §5.1；IPC 契约见 §5.3（类型对齐 src/lib/ipc.ts）。
 
+mod diagnostics;
 mod hotkey;
 mod runtime;
 mod tray;
@@ -23,7 +24,7 @@ use kotone_core::settings::{
     self, OverlayConfig, OverlayPosition, OverlayStyle, OverlayVisibility, Settings,
 };
 use kotone_core::stt::{EngineInfo, EngineRegistry};
-use kotone_core::log;
+use kotone_core::{log, process_log};
 use kotone_platform_windows::inject::{WinFocusBackend, WindowsInjector};
 use kotone_platform_windows::{audio as platform_audio, elevation, inject as platform_inject};
 use kotone_stt::model;
@@ -145,7 +146,15 @@ impl Emitter for TauriEmitter {
         let _ = self.app.emit(event, payload.clone());
         if event == "kotone://state" {
             let state = payload.get("state").and_then(|s| s.as_str()).unwrap_or("");
-            log::log(&format!("state -> {state} {payload}"));
+            let text_chars = payload
+                .pointer("/payload/text")
+                .and_then(|v| v.as_str())
+                .map(|text| text.chars().count())
+                .unwrap_or(0);
+            let has_error = payload.pointer("/payload/message").is_some();
+            log::log(&format!(
+                "state -> {state} text_chars={text_chars} has_error={has_error}"
+            ));
             // 会话激活期间（含 Preview）临时注册 Esc 全局取消键，回 Idle 即注销。
             // Preview 态同样需要 Esc：overlay 不抢焦点，Esc 是预览确认的主要键盘出口。
             if let Some(mgr) = self.app.try_state::<HotkeyManager>() {
@@ -202,7 +211,49 @@ impl Emitter for TauriEmitter {
                     },
                 }
             }
+        } else if event == "kotone://process" {
+            record_process_event(&self.app, &payload);
         }
+    }
+}
+
+fn record_process_event(app: &AppHandle, payload: &serde_json::Value) {
+    let Some(case_id) = payload.get("caseId").and_then(|v| v.as_str()) else {
+        return;
+    };
+    let Some(activity) = payload.get("activity").and_then(|v| v.as_str()) else {
+        return;
+    };
+    let mut event = process_log::ProcessEvent::new(case_id, activity);
+    if let Some(state) = app.try_state::<SharedState>() {
+        let settings = state.settings.read().unwrap();
+        event.context.engine_id = Some(settings.stt_engine.clone());
+        event.context.model_id =
+            Some(model::active_model_from(&settings, &settings.stt_engine));
+        event.context.profile_id = settings.active_profile_id.clone();
+        event.context.interaction_mode = settings.interaction_mode.as_ref().map(|mode| {
+            serde_json::to_string(mode)
+                .unwrap_or_default()
+                .trim_matches('"')
+                .to_string()
+        });
+    }
+    event.context.elevated = Some(elevation::is_elevated());
+    if let Some(data) = payload.get("data") {
+        event.data.outcome = data
+            .get("outcome")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        event.data.error_code = data
+            .get("errorCode")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        event.data.duration_ms = data.get("durationMs").and_then(|v| v.as_u64());
+        event.data.audio_ms = data.get("audioMs").and_then(|v| v.as_u64());
+        event.data.text_chars = data.get("textChars").and_then(|v| v.as_u64());
+    }
+    if let Err(error) = process_log::record(event) {
+        log::log(&format!("process event write failed: {error}"));
     }
 }
 
@@ -454,6 +505,27 @@ fn ping() -> &'static str {
     "pong"
 }
 
+/// 导出不含识别文本、音频和热词的诊断 ZIP。
+#[tauri::command]
+fn export_diagnostics(
+    app: AppHandle,
+    path: String,
+) -> Result<diagnostics::DiagnosticExportResult, String> {
+    diagnostics::export(&app, std::path::Path::new(&path))
+}
+
+/// 前端全局异常与更新器错误落入持久日志。消息先做主目录脱敏并限制长度。
+#[tauri::command]
+fn log_frontend_error(context: String, message: String) {
+    let context: String = context
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+        .take(64)
+        .collect();
+    let message = diagnostics::redact_home(&message.replace('\r', " ").replace('\n', " "));
+    log::log(&format!("frontend error [{context}]: {message}"));
+}
+
 // ---------- 设置与配置（§5.3） ----------
 
 #[tauri::command]
@@ -479,8 +551,9 @@ fn update_settings(
         let mut merged =
             serde_json::to_value(&*guard).map_err(|e| format!("序列化配置失败: {e}"))?;
         settings::merge_json(&mut merged, &patch);
-        let next: Settings =
+        let mut next: Settings =
             serde_json::from_value(merged).map_err(|e| format!("配置项不合法: {e}"))?;
+        next.overlay.normalize_interaction();
         *guard = next.clone();
         (old_hotkey, old_overlay, next)
     };
@@ -728,8 +801,24 @@ fn list_models() -> Result<Vec<model::ModelInfo>, String> {
 /// async 命令 + spawn_blocking：大模型下载不阻塞 UI 线程；IPC 签名不变。
 #[tauri::command]
 async fn download_model(app: AppHandle, id: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let app2 = app.clone();
+    let case_id = format!(
+        "model-download-{}-{}",
+        id,
+        kotone_core::eval::new_session_id()
+    );
+    record_process_event(
+        &app,
+        &serde_json::json!({
+            "caseId": case_id.clone(),
+            "activity": "model_download_started",
+            "data": {}
+        }),
+    );
+    let started = std::time::Instant::now();
+    let app_for_download = app.clone();
+    let case_for_result = case_id.clone();
+    let result = match tauri::async_runtime::spawn_blocking(move || {
+        let app2 = app_for_download.clone();
         let id2 = id.clone();
         model::download(&id, &move |downloaded, total| {
             use tauri::Emitter as _;
@@ -740,7 +829,32 @@ async fn download_model(app: AppHandle, id: String) -> Result<(), String> {
         })
     })
     .await
-    .map_err(|e| format!("下载任务异常：{e}"))?
+    {
+        Ok(result) => result,
+        Err(error) => Err(format!("下载任务异常：{error}")),
+    };
+    let (activity, outcome, error_code) = if result.is_ok() {
+        ("model_download_succeeded", "success", None)
+    } else {
+        (
+            "model_download_failed",
+            "error",
+            Some("MODEL_DOWNLOAD_FAILED"),
+        )
+    };
+    record_process_event(
+        &app,
+        &serde_json::json!({
+            "caseId": case_for_result,
+            "activity": activity,
+            "data": {
+                "outcome": outcome,
+                "errorCode": error_code,
+                "durationMs": started.elapsed().as_millis() as u64
+            }
+        }),
+    );
+    result
 }
 
 #[tauri::command]
@@ -1040,10 +1154,17 @@ pub fn run() {
         })
         .setup(move |app| {
             log::init();
+            let previous_panic_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                log::log(&format!("panic: {info}"));
+                previous_panic_hook(info);
+            }));
             log::log(&format!(
-                "startup: args={:?} elevated={}",
-                std::env::args().collect::<Vec<_>>(),
+                "startup: version={} elevated={} arch={}",
+                env!("CARGO_PKG_VERSION"),
                 elevation::is_elevated()
+                ,
+                std::env::consts::ARCH
             ));
             tray::setup_tray(app.handle())?;
             app.manage(startup_options.clone());
@@ -1051,6 +1172,14 @@ pub fn run() {
             // 首次运行：默认配置 + 内置 profile 落盘（~/.kotone/）
             let settings = settings::load();
             let _ = settings::save(&settings);
+            let mut app_started =
+                process_log::ProcessEvent::new(process_log::app_session_id(), "app_started");
+            app_started.context.engine_id = Some(settings.stt_engine.clone());
+            app_started.context.model_id =
+                Some(model::active_model_from(&settings, &settings.stt_engine));
+            app_started.context.profile_id = settings.active_profile_id.clone();
+            app_started.context.elevated = Some(elevation::is_elevated());
+            let _ = process_log::record(app_started);
 
             // 自启动提权（§10 R-1）：设置开启且当前未提权时 runas 重启自身。
             // 防循环：重启子进程带 ELEVATED_RETRY_ARG 标记，若用户取消 UAC
@@ -1164,6 +1293,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ping,
+            export_diagnostics,
+            log_frontend_error,
             get_startup_options,
             get_settings,
             update_settings,
