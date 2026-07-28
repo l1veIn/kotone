@@ -57,6 +57,8 @@ export interface Settings {
   evalRecording: boolean;
   /** 启动时自动以管理员重启自身（UIPI 方案，默认关） */
   runAsAdminOnStart: boolean;
+  /** 「建议以管理员运行」提示已被用户关闭（不再重复提示） */
+  adminPromptDismissed: boolean;
   /** 交互模式预设（null = 旧字段推导） */
   interactionMode: InteractionMode | null;
   /** VAD 静音判停阈值 ms（one-shot 生效，200-5000） */
@@ -180,6 +182,8 @@ export interface GameProfile {
   preSendDelayMs: number;
   preferClipboardPaste: boolean;
   hotwords: string[];
+  /** 用户从内置热词中移除的词条（保留内置集，仅记录差集；可选） */
+  removedBuiltinHotwords?: string[];
 }
 
 // ---------- 模型 ----------
@@ -225,6 +229,8 @@ export interface ElevationStatus {
   elevated: boolean;
   /** 当前激活 profile 的游戏进程是否提权；null = 无法判断 */
   activeGameElevated: boolean | null;
+  /** 当前平台是否支持提权方案（非 Windows 为 false） */
+  supported: boolean;
 }
 
 /** get_hotkey_status 返回值：热键注册状态（多实例/占用冲突诊断） */
@@ -266,6 +272,7 @@ const mock: MockStore = {
     language: "zh",
     evalRecording: false,
     runAsAdminOnStart: false,
+    adminPromptDismissed: false,
     interactionMode: null,
     vadSilenceMs: 700,
     history: { mode: "capped", maxRecords: 1000, includeAudio: false },
@@ -358,13 +365,6 @@ const mock: MockStore = {
       engineId: "sherpa-onnx-funasr-nano",
       displayName: "FunASR-Nano 中英日（int8，非流式）",
       sizeBytes: 1_010_000_000,
-      downloaded: false,
-    },
-    {
-      id: "silero-vad",
-      engineId: "vad-silero",
-      displayName: "silero VAD 语音活动检测（one-shot 静音判停用）",
-      sizeBytes: 644_000,
       downloaded: false,
     },
   ],
@@ -571,7 +571,7 @@ export async function importHotwords(profileId: string, path: string): Promise<H
 
 /** 提权状态：自身是否提权 + 激活 profile 的游戏进程是否提权 */
 export async function getElevationStatus(): Promise<ElevationStatus> {
-  if (!isTauri) return { elevated: false, activeGameElevated: null };
+  if (!isTauri) return { elevated: false, activeGameElevated: null, supported: false };
   return invoke<ElevationStatus>("get_elevation_status");
 }
 
@@ -589,6 +589,22 @@ export async function getHotkeyStatus(): Promise<HotkeyStatus> {
   if (!isTauri)
     return { registered: true, key: mock.settings.hotkey.key, error: null, backend: "llhook" };
   return invoke<HotkeyStatus>("get_hotkey_status");
+}
+
+// ---------- 资源占用（标题栏运行中展示） ----------
+
+/** get_resource_usage 返回值（camelCase 对齐 serde） */
+export interface ResourceUsage {
+  /** CPU 占用百分比（依赖后端两次采样间隔，需周期性轮询才有意义） */
+  cpuPercent: number;
+  /** 进程内存占用（字节） */
+  memoryBytes: number;
+}
+
+/** 当前进程的 CPU / 内存占用（调用方按 ~2s 间隔轮询） */
+export async function getResourceUsage(): Promise<ResourceUsage> {
+  if (!isTauri) return { cpuPercent: 3.2, memoryBytes: 86 * 1024 * 1024 };
+  return invoke<ResourceUsage>("get_resource_usage");
 }
 
 // ---------- 热键录入捕获（ADR-006） ----------
@@ -776,4 +792,11 @@ export async function clearHistory(): Promise<void> {
     return;
   }
   return invoke<void>("clear_history");
+}
+
+/** 读取历史记录随附的音频（相对 history/audio/ 的文件名 → wav 字节） */
+export async function readHistoryAudio(fileName: string): Promise<Uint8Array> {
+  if (!isTauri) return new Uint8Array(0);
+  const bytes = await invoke<number[]>("read_history_audio", { fileName });
+  return new Uint8Array(bytes);
 }

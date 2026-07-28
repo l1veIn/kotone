@@ -174,6 +174,68 @@ impl Injector for LoggingInjector {
     }
 }
 
+/// finalize 返回固定文本的 stub 引擎（测空转录等边界；mock-stream 的文本是钉死的）
+struct StubFinalEngine {
+    final_text: &'static str,
+}
+
+impl kotone_core::stt::SttEngine for StubFinalEngine {
+    fn id(&self) -> &'static str {
+        "stub-final"
+    }
+    fn display_name(&self) -> &str {
+        "Stub 固定文本引擎"
+    }
+    fn capabilities(&self) -> kotone_core::stt::EngineCapabilities {
+        kotone_core::stt::EngineCapabilities {
+            streaming: true,
+            hotwords: false,
+            gpu: false,
+            offline: true,
+            languages: vec!["zh".into()],
+        }
+    }
+    fn is_ready(&self) -> bool {
+        true
+    }
+    fn start_session(
+        &self,
+        _cfg: &kotone_core::stt::SessionConfig,
+        _events: mpsc::UnboundedSender<kotone_core::stt::SttEvent>,
+    ) -> Result<Box<dyn kotone_core::stt::SttSession>, String> {
+        Ok(Box::new(StubFinalSession {
+            final_text: self.final_text,
+            cancelled: false,
+        }))
+    }
+}
+
+struct StubFinalSession {
+    final_text: &'static str,
+    cancelled: bool,
+}
+
+impl kotone_core::stt::SttSession for StubFinalSession {
+    fn push_audio(&mut self, _pcm: &[f32]) -> Result<(), String> {
+        if self.cancelled {
+            return Err("会话已取消".into());
+        }
+        Ok(())
+    }
+    fn finalize(self: Box<Self>) -> Result<kotone_core::stt::Transcript, String> {
+        if self.cancelled {
+            return Err("会话已取消".into());
+        }
+        Ok(kotone_core::stt::Transcript {
+            text: self.final_text.into(),
+            latency_ms: 1,
+        })
+    }
+    fn cancel(&mut self) {
+        self.cancelled = true;
+    }
+}
+
 /// 恒未就绪的占位引擎：模拟「引擎未就绪」路径（不能再用 sherpa 占位——
 /// CLI 默认 feature 带 sherpa 后，workspace 构建下 sherpa 在真机是就绪的）
 struct NeverReadyEngine;
@@ -623,6 +685,101 @@ async fn hotkey_hold_press_in_preview_is_ignored() {
     // 之后仍可正常确认发送
     orch.confirm_send().await.unwrap();
     assert_eq!(orch.state(), OrchestratorState::Success);
+}
+
+/// hold 模式：Success toast 驻留期内按下 = 立即开始下一句（「第一次按没反应」修复）
+#[tokio::test]
+async fn hotkey_hold_press_during_success_starts_next_session() {
+    let (orch, _emitter, sent) = make_orchestrator(true);
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.end().await.unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Success);
+
+    // 驻留期（toast_dwell=10ms 测试值）内按下：不再被忽略，清掉 toast 并开新会话
+    orch.on_hotkey_hold(true).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    assert_eq!(sent.lock().unwrap().len(), 1, "上一句只发送一次");
+
+    orch.cancel().await;
+}
+
+/// toggle 模式：Success 驻留期内点按同样立即开始下一句（与 hold 同语义）
+#[tokio::test]
+async fn hotkey_toggle_during_success_starts_next_session() {
+    let (orch, _emitter, sent) = make_orchestrator(true);
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.end().await.unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Success);
+
+    orch.on_hotkey_toggle().await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    assert_eq!(sent.lock().unwrap().len(), 1, "上一句只发送一次");
+
+    orch.cancel().await;
+}
+
+/// 空转录「无事发生」：finalize 空文本 → 不发送、不写 history、直接回 Idle
+#[tokio::test]
+async fn empty_finalize_returns_idle_silently() {
+    let dir = tempfile::tempdir().unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
+    let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(
+        Arc::new(Mutex::new(Vec::new())),
+        42,
+        true,
+    ));
+    let mut settings = Settings::default();
+    settings.stt_engine = "stub-final".into();
+    settings.auto_send = true; // C1 直发模式：空文本也不应触发注入器敲回车
+    settings.active_profile_id = None;
+    settings.eval_recording = false;
+    // history 保持默认开启（落账目录指临时目录），验证空转录不写记录
+    let settings = Arc::new(RwLock::new(settings));
+    let mut registry = EngineRegistry::new();
+    registry.register(Box::new(StubFinalEngine { final_text: "" }));
+    let emitter = Arc::new(VecEmitter::default());
+    let mut orch = Orchestrator::new(
+        settings,
+        Arc::new(registry),
+        Arc::new(MockAudioBackend),
+        injector,
+        focus,
+        emitter.clone(),
+    );
+    orch.toast_dwell = Duration::from_millis(10);
+    orch.finalize_timeout = Duration::from_secs(2);
+    orch.focus_restore_delay = Duration::ZERO;
+    orch.history_dir = Some(dir.path().to_path_buf());
+    let orch = orch.into_arc();
+
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    orch.end().await.unwrap();
+
+    // 状态直接回 Idle：不经 Preview/Sending/Success，也不发 Error toast
+    assert_eq!(orch.state(), OrchestratorState::Idle);
+    let seq = emitter.state_sequence();
+    for unexpected in ["preview", "sending", "success", "error"] {
+        assert!(
+            !seq.contains(&unexpected.to_string()),
+            "空转录不应经过 {unexpected}: {seq:?}"
+        );
+    }
+    assert!(seq.contains(&"idle".to_string()), "应发出 idle 状态事件: {seq:?}");
+    // 注入器未被调用（空文本不该敲出两个回车）
+    assert!(sent.lock().unwrap().is_empty(), "空转录不应触发注入");
+    // 不写 history 记录
+    assert!(
+        kotone_core::history::list_in(dir.path()).unwrap().is_empty(),
+        "空转录不应落 history 记录"
+    );
+    // 之后可正常开始新会话
+    orch.begin().await.unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    orch.cancel().await;
 }
 
 /// 带 eval 录档的 orchestrator：录档目录指向临时目录（不污染真实 ~/.kotone/eval）

@@ -121,6 +121,8 @@ pub fn snapshot_and_emit(app: &AppHandle, stage: Option<String>) -> Option<Runti
         let settings = state.settings.read().unwrap();
         rt.status(&settings, &state.engines, stage)
     };
+    // 托盘「启动引擎 / 停止引擎」文案同步：启动/停止完成都会经过本推送点
+    crate::tray::sync_toggle_label(app, status.phase == "running");
     emit_status(app, &status);
     Some(status)
 }

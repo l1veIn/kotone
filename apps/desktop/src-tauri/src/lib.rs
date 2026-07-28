@@ -5,7 +5,7 @@ mod hotkey;
 mod runtime;
 mod tray;
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use tauri::{AppHandle, Emitter as TauriEventEmitter, Manager};
 
@@ -598,8 +598,24 @@ fn list_profiles() -> Vec<GameProfile> {
     profile::list()
 }
 
+/// 保存 profile。内置 profile（lol / generic）会同步推导 removedBuiltinHotwords：
+/// 内置热词全量列表 − 传入热词列表 = 用户主动删除的内置热词（供后续合并逻辑排除）。
+/// 非内置 id 不触碰该字段。
 #[tauri::command]
-fn save_profile(profile: GameProfile) -> Result<(), String> {
+fn save_profile(mut profile: GameProfile) -> Result<(), String> {
+    let builtin = match profile.id.as_str() {
+        "lol" => Some(GameProfile::builtin_lol()),
+        "generic" => Some(GameProfile::builtin_generic()),
+        _ => None,
+    };
+    if let Some(builtin) = builtin {
+        profile.removed_builtin_hotwords = builtin
+            .hotwords
+            .iter()
+            .filter(|w| !profile.hotwords.contains(w))
+            .cloned()
+            .collect();
+    }
     profile::save(&profile)
 }
 
@@ -632,6 +648,8 @@ fn import_hotwords(profile_id: String, path: String) -> Result<HotwordMergeRepor
 pub struct ElevationStatus {
     pub elevated: bool,
     pub active_game_elevated: Option<bool>,
+    /// 当前平台是否支持提权语义（仅 Windows；其他平台前端据此不弹提权提示）
+    pub supported: bool,
 }
 
 #[tauri::command]
@@ -661,6 +679,7 @@ fn get_elevation_status(state: tauri::State<SharedState>) -> ElevationStatus {
     ElevationStatus {
         elevated,
         active_game_elevated,
+        supported: cfg!(windows),
     }
 }
 
@@ -901,6 +920,57 @@ fn clear_history() -> Result<(), String> {
     kotone_core::history::clear()
 }
 
+/// 读取历史记录的音频文件字节（~/.kotone/history/audio/<file_name>）。
+/// file_name 只允许纯文件名：含 /、\\、.. 或为空直接拒绝（防路径穿越）。
+#[tauri::command]
+fn read_history_audio(file_name: String) -> Result<Vec<u8>, String> {
+    if file_name.is_empty()
+        || file_name.contains('/')
+        || file_name.contains('\\')
+        || file_name.contains("..")
+    {
+        return Err(format!("非法的音频文件名：{file_name}"));
+    }
+    let path = kotone_core::history::history_dir()
+        .join("audio")
+        .join(&file_name);
+    std::fs::read(&path).map_err(|e| format!("读取音频 {} 失败：{e}", path.display()))
+}
+
+// ---------- 进程资源占用 ----------
+
+/// sysinfo System 常驻进程内存：CPU 百分比依赖两次 refresh 的间隔采样，
+/// 复用同一实例才能保证前端每次轮询拿到增量而非 0。
+struct ResourceMonitor(Mutex<sysinfo::System>);
+
+/// 当前进程资源占用（前端每 2s 轮询一次）
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceUsage {
+    /// CPU 占用百分比（保留 1 位小数）。sysinfo 语义：自上次 refresh 以来
+    /// 的增量采样，首次调用可能为 0；前端 2s 轮询正好提供采样间隔。
+    pub cpu_percent: f32,
+    /// 常驻内存（字节）
+    pub memory_bytes: u64,
+}
+
+#[tauri::command]
+fn get_resource_usage(monitor: tauri::State<ResourceMonitor>) -> ResourceUsage {
+    let pid = sysinfo::Pid::from_u32(std::process::id());
+    let mut sys = monitor.0.lock().unwrap();
+    // sysinfo 0.30 无按 pid 过滤的 refresh（ProcessesToUpdate 是 0.32+ 的 API），
+    // 全量刷新后只取本进程；2s 轮询频率下开销可接受。
+    sys.refresh_processes();
+    let (cpu_percent, memory_bytes) = sys
+        .process(pid)
+        .map(|p| ((p.cpu_usage() * 10.0).round() / 10.0, p.memory()))
+        .unwrap_or((0.0, 0));
+    ResourceUsage {
+        cpu_percent,
+        memory_bytes,
+    }
+}
+
 // ---------- 会话控制 / 调试 ----------
 
 /// Preview 状态下确认发送（ADR-006：预览只读，始终发送预览文本）
@@ -958,6 +1028,8 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         // 关闭按钮不退出应用：main / overlay 窗口 CloseRequested 一律转 hide（托盘常驻）；
         // 仅托盘菜单「退出」（app.exit）真正结束进程。
         .on_window_event(|window, event| {
@@ -1007,6 +1079,17 @@ pub fn run() {
                 eprintln!("[kotone] 内置 profile 落盘失败: {e}");
             }
 
+            // silero VAD 模型随二进制打包，首次启动解压到模型目录；
+            // 失败仅记日志不阻断启动（one-shot 判停缺失时 begin 会报清晰错误）
+            match model::ensure_vad_model() {
+                Ok(written) => {
+                    if written {
+                        log::log("silero VAD 模型已写入模型目录");
+                    }
+                }
+                Err(e) => log::log(&format!("silero VAD 模型写入失败: {e}")),
+            }
+
             let settings = Arc::new(RwLock::new(settings));
             let mut registry = EngineRegistry::new();
             kotone_stt::register_builtin(&mut registry);
@@ -1045,6 +1128,7 @@ pub fn run() {
             });
             app.manage(HotkeyManager::new(app.handle(), orchestrator.clone()));
             app.manage(RuntimeManager::new());
+            app.manage(ResourceMonitor(Mutex::new(sysinfo::System::new())));
 
             for label in ["main", "overlay"] {
                 if let Some(win) = app.get_webview_window(label) {
@@ -1111,6 +1195,8 @@ pub fn run() {
             open_models_dir,
             get_history,
             clear_history,
+            read_history_audio,
+            get_resource_usage,
             confirm_send,
             cancel_session,
             simulate_send,

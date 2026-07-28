@@ -5,10 +5,12 @@
    * 共享 settingsStore / toast（lib/stores/ui.ts）；IPC 全部走 lib/ipc.ts。
    */
   import { onMount } from "svelte";
-  import { getSettings, getStartupOptions, isTauri } from "../../lib/ipc";
+  import { getSettings, getStartupOptions, getElevationStatus, isTauri } from "../../lib/ipc";
   import { settingsStore, toast, errText } from "../../lib/stores/ui";
   import { initRuntime } from "../../lib/stores/runtime";
+  import { checkForUpdates } from "../../lib/updater";
   import Toasts from "../../lib/components/Toasts.svelte";
+  import ElevationPrompt from "../../lib/components/ElevationPrompt.svelte";
   import Onboarding from "./Onboarding.svelte";
   import Titlebar from "./Titlebar.svelte";
   import GeneralPage from "./pages/GeneralPage.svelte";
@@ -34,6 +36,8 @@
   let loading = $state(true);
   /** 首启向导：ui.firstRunCompleted === false 时弹出（完成/跳过后置 true） */
   let showOnboarding = $state(false);
+  /** 管理员提权提示（仅 Windows 未提权且用户未表态时弹一次） */
+  let showElevationPrompt = $state(false);
 
   onMount(async () => {
     // runtime store 独立初始化（kotone://runtime 事件订阅 + 初始拉取）
@@ -44,6 +48,16 @@
       showOnboarding =
         startup.onboarding === "always" ||
         (startup.onboarding === "auto" && !s.ui.firstRunCompleted);
+      // 未提权且用户未勾选「不再提示」/「默认提权启动」时，弹一次提权提示
+      if (isTauri) {
+        const st = await getElevationStatus().catch(() => null);
+        showElevationPrompt =
+          st !== null &&
+          st.supported &&
+          !st.elevated &&
+          !s.adminPromptDismissed &&
+          !s.runAsAdminOnStart;
+      }
     } catch (e) {
       toast(false, `加载配置失败：${errText(e)}`);
     } finally {
@@ -55,11 +69,16 @@
   // `kotone.exe --onboarding=always` 会唤起现有窗口并重新打开向导。
   onMount(() => {
     if (!isTauri) return;
+    // 启动后静默检测一次更新（离线/无 release 不打扰用户）
+    const updateTimer = setTimeout(() => void checkForUpdates(), 3000);
     let unlisten: (() => void) | undefined;
     void import("@tauri-apps/api/event")
       .then(({ listen }) => listen("kotone://open-onboarding", () => (showOnboarding = true)))
       .then((un) => (unlisten = un));
-    return () => unlisten?.();
+    return () => {
+      clearTimeout(updateTimer);
+      unlisten?.();
+    };
   });
 </script>
 
@@ -141,6 +160,11 @@
   <!-- 首启向导覆盖层（加载完成且未完成向导时弹出） -->
   {#if showOnboarding && !loading}
     <Onboarding onDone={() => (showOnboarding = false)} />
+  {/if}
+
+  <!-- 管理员提权提示（Windows 未提权且用户未表态时弹一次） -->
+  {#if showElevationPrompt && !loading}
+    <ElevationPrompt onClose={() => (showElevationPrompt = false)} />
   {/if}
   </div>
 

@@ -3,13 +3,15 @@
    * 标准标题栏（main 窗 decorations:false，方向 B 富化，高 48px）：
    * - 左：Kotone 小圆图标（青光晕）+ 名称 + 状态区两行（上行：状态灯 + 相位文字；
    *   下行：引擎 · 模型 · 交互模式）；
-   * - 右：启动/停止/重启生效按钮 + 标准窗口控制三键（min / max|还原 / close，最右上角）；
-   * - 拖拽：非按钮区 mousedown 由 startDragging() 接管；max/还原图标由 onResized 驱动；
-   * - close = 隐藏到托盘（与 CloseRequested 拦截语义一致；退出走托盘菜单）。
+   * - 右：运行中显示 CPU/内存占用（2s 轮询）+ 启动/停止/重启生效按钮
+   *   + 标准窗口控制两键（min / close，最右上角；conf 已设 maximizable:false）；
+   * - 拖拽：非按钮区 mousedown 由 startDragging() 接管；
+   * - close = 弹确认框：「退出」彻底退出进程，「最小化到托盘」保持隐藏语义。
    */
-  import { onMount } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { isTauri, startRuntime, stopRuntime } from "../../lib/ipc";
+  import { ask } from "@tauri-apps/plugin-dialog";
+  import { exit } from "@tauri-apps/plugin-process";
+  import { getResourceUsage, isTauri, startRuntime, stopRuntime } from "../../lib/ipc";
   import { runtimeStore } from "../../lib/stores/runtime";
   import { toast, toastInfo, pushToast, errText } from "../../lib/stores/ui";
   import iconSrc from "../../assets/brand/icon-src.png";
@@ -32,19 +34,28 @@
   const busy = $derived(rt?.phase === "starting" || rt?.phase === "stopping");
   /** 防连点（busy 已由相位覆盖，acting 覆盖事件未回的瞬间） */
   let acting = $state(false);
-  let isMaximized = $state(false);
 
-  onMount(() => {
-    if (!isTauri) return;
-    let un: (() => void) | undefined;
-    void (async () => {
-      const win = getCurrentWindow();
-      isMaximized = await win.isMaximized();
-      un = await win.onResized(async () => {
-        isMaximized = await win.isMaximized();
-      });
-    })();
-    return () => un?.();
+  /** 运行中的资源占用文本（空 = 非 running 或尚未采样成功） */
+  let resourceText = $state("");
+
+  async function pollResourceUsage() {
+    try {
+      const u = await getResourceUsage();
+      resourceText = `CPU ${u.cpuPercent.toFixed(1)}% · 内存 ${Math.round(u.memoryBytes / 1024 / 1024)} MB`;
+    } catch {
+      /* 采样失败保留旧值 */
+    }
+  }
+
+  // running 期间每 2s 轮询资源占用（CPU% 依赖后端两次采样间隔）；离开 running 或销毁时清除
+  $effect(() => {
+    if (rt?.phase !== "running") {
+      resourceText = "";
+      return;
+    }
+    void pollResourceUsage();
+    const timer = setInterval(() => void pollResourceUsage(), 2000);
+    return () => clearInterval(timer);
   });
 
   const phaseLabel = $derived(
@@ -105,16 +116,29 @@
   }
 
   async function minimize() {
-    if (isTauri) await getCurrentWindow().minimize();
+    if (!isTauri) return;
+    try {
+      await getCurrentWindow().minimize();
+    } catch {
+      /* 最小化失败静默（窗口可能已销毁） */
+    }
   }
 
-  async function toggleMaximize() {
-    if (isTauri) await getCurrentWindow().toggleMaximize();
-  }
-
-  /** 关闭 = 隐藏到托盘（与 CloseRequested 拦截语义一致；退出走托盘菜单） */
+  /** 关闭：弹确认框——「退出」彻底退出进程，「最小化到托盘」保持隐藏到托盘语义 */
   async function close() {
-    if (isTauri) await getCurrentWindow().hide();
+    if (!isTauri) return;
+    try {
+      const quit = await ask("是否彻底退出 Kotone？\n「取消」将最小化到系统托盘。", {
+        title: "退出确认",
+        kind: "warning",
+        okLabel: "退出",
+        cancelLabel: "最小化到托盘",
+      });
+      if (quit) await exit(0);
+      else await getCurrentWindow().hide();
+    } catch {
+      /* 对话框/窗口操作失败静默 */
+    }
   }
 </script>
 
@@ -182,8 +206,13 @@
     </div>
   </div>
 
-  <!-- 右：启动/停止 + 标准窗口控制三键 -->
+  <!-- 右：资源占用（running 时）+ 启动/停止 + 标准窗口控制两键 -->
   <div class="relative flex h-full shrink-0 items-center">
+    {#if rt?.phase === "running" && resourceText}
+      <span class="mr-2 text-[10px] text-white/40 tabular-nums" title="Kotone 进程资源占用">
+        {resourceText}
+      </span>
+    {/if}
     <button
       class="mr-2 flex h-7 items-center gap-1.5 rounded-[var(--radius-kotone-card)] px-3 text-[11px] font-bold transition active:scale-95 disabled:cursor-not-allowed {busy ||
       acting
@@ -216,19 +245,8 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M5 12h14" stroke-linecap="round" /></svg>
     </button>
     <button
-      class="flex h-full w-12 items-center justify-center text-white/55 transition hover:bg-white/10 hover:text-white"
-      title={isMaximized ? "还原" : "最大化"}
-      onclick={() => void toggleMaximize()}
-    >
-      {#if isMaximized}
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-3.5 w-3.5"><rect x="7" y="7" width="11" height="11" rx="1.5" /><path d="M17 7V5.5A1.5 1.5 0 0 0 15.5 4H6A1.5 1.5 0 0 0 4.5 5.5V15A1.5 1.5 0 0 0 6 16.5H7" stroke-linecap="round" transform="translate(0.5 0.5)" /></svg>
-      {:else}
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-3.5 w-3.5"><rect x="5.5" y="5.5" width="13" height="13" rx="1.5" /></svg>
-      {/if}
-    </button>
-    <button
       class="flex h-full w-12 items-center justify-center text-white/55 transition hover:bg-red-500 hover:text-white"
-      title="关闭（隐藏到托盘）"
+      title="关闭"
       onclick={() => void close()}
     >
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round" /></svg>

@@ -4,8 +4,8 @@
    * - 默认收起：摘要面板只显示「当前引擎 · 活动模型 · 就绪状态」，普通用户无需展开；
    * - restartNeeded 黄条常显（收起时也提示，与标题栏「重启生效」联动）；
    * - 展开后：模型存储位置（更改[迁移]/打开目录）→ 按引擎分组的完整模型清单
-   *   （下载进度/删除二次确认/设为 active）→ VAD 组件组 → 评测录档开关；
-   * - mock 联调引擎仅在此页出现，且沉底弱标识，普通视图绝不出现。
+   *   （下载进度/删除二次确认/设为 active）→ 评测录档开关；
+   * - mock 联调引擎与 VAD 组件不在此页出现（VAD 已随应用本体分发，无需下载）。
    */
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
@@ -265,17 +265,8 @@
     return models.filter((m) => m.engineId === engineId);
   }
 
-  /** 可设为 active 的条目（排除 VAD 组件） */
-  function isSelectableModel(m: ModelInfo): boolean {
-    return m.engineId !== "vad-silero";
-  }
-
-  const vadModels = $derived(models.filter((m) => m.engineId === "vad-silero"));
-
-  /** mock 联调引擎沉底（生产界面不抢首位），其余保持后端顺序 */
-  const orderedEngines = $derived(
-    (engines ?? []).slice().sort((a, b) => Number(a.id === "mock-stream") - Number(b.id === "mock-stream")),
-  );
+  /** mock 联调引擎不在此页出现（后端可能仍返回，界面直接过滤），其余保持后端顺序 */
+  const orderedEngines = $derived((engines ?? []).filter((e) => e.id !== "mock-stream"));
 
   // ---------- 收起态摘要 ----------
 
@@ -433,7 +424,6 @@
       {#each orderedEngines as en}
         {@const active = $settingsStore?.sttEngine === en.id}
         {@const enModels = modelsOf(en.id)}
-        {@const selectable = enModels.filter((m) => isSelectableModel(m))}
         <div
           use:spotlight
           class="kotone-card kotone-spotlight p-4 {active ? 'border-kotone-cyan/50 shadow-glow-cyan' : ''}"
@@ -445,11 +435,6 @@
                 {#if active}
                   <span class="shrink-0 rounded bg-kotone-cyan/20 px-1.5 py-0.5 text-[10px] text-kotone-cyan">
                     使用中
-                  </span>
-                {/if}
-                {#if en.id === "mock-stream"}
-                  <span class="shrink-0 rounded bg-white/8 px-1.5 py-0.5 text-[10px] text-white/40">
-                    开发用
                   </span>
                 {/if}
               </p>
@@ -475,12 +460,12 @@
           </div>
 
           <!-- 模型：恒显完整清单（含未下载）——已下载行 radio 可选，未下载行置灰 + 行尾下载 -->
-          {#if selectable.length > 0}
+          {#if enModels.length > 0}
             <p class="mt-3 text-[10px] font-semibold tracking-wide text-white/40">
               模型（点击已下载行即切换）
             </p>
             <div class="mt-1.5 flex flex-col gap-1.5" role="radiogroup" aria-label="{en.displayName} 模型选择">
-              {#each selectable as m}
+              {#each enModels as m}
                 {@const isActive = activeModelOf(en.id) === m.id}
                 {#if m.downloaded}
                   <div
@@ -604,84 +589,6 @@
 
         </div>
       {/each}
-
-      <!-- VAD 组件组（不可设为 active，one-shot 静音判停依赖） -->
-      {#if vadModels.length > 0}
-        <div use:spotlight class="kotone-card kotone-spotlight p-4">
-          <p class="text-sm font-medium">VAD 组件</p>
-          <p class="mt-1 text-[10px] text-white/40">one-shot「说一句就走」的静音判停依赖；不属于任何识别引擎</p>
-          {#each vadModels as m}
-            <div class="mt-3 rounded-lg bg-white/5 px-3 py-2 ring-1 ring-white/8">
-              <div class="flex items-center justify-between gap-2">
-                <div class="min-w-0 flex-1">
-                  <p class="text-[12px] text-white/80">{m.displayName}</p>
-                  <p class="mt-0.5 text-[10px] text-white/35">{m.id} · {formatSize(m.sizeBytes)}</p>
-                </div>
-                <div class="flex shrink-0 items-center gap-1.5">
-                  {#if m.downloaded}
-                    {#if confirmingDelete === m.id}
-                      <button
-                        class="rounded-lg bg-kotone-pink px-2.5 py-1 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95 disabled:opacity-50"
-                        disabled={deleting !== null}
-                        onclick={() => void onDelete(m.id)}
-                      >
-                        {deleting === m.id ? "删除中…" : "确认删除"}
-                      </button>
-                      <button
-                        class="rounded-lg bg-white/10 px-2 py-1 text-[11px] text-white/60 transition hover:bg-white/20"
-                        onclick={() => (confirmingDelete = null)}
-                      >
-                        取消
-                      </button>
-                    {:else}
-                      <button
-                        class="rounded-lg bg-white/8 px-2.5 py-1 text-[11px] text-white/55 ring-1 ring-white/12 transition hover:bg-kotone-pink/20 hover:text-kotone-pink active:scale-95"
-                        onclick={() => (confirmingDelete = m.id)}
-                      >
-                        删除
-                      </button>
-                    {/if}
-                  {:else}
-                    <button
-                      class="rounded-lg bg-kotone-violet/25 px-2.5 py-1 text-[11px] font-semibold text-kotone-violet ring-1 ring-kotone-violet/40 transition hover:bg-kotone-violet/35 hover:shadow-[0_0_12px_rgba(123,47,255,0.45)] active:scale-95 disabled:opacity-50"
-                      disabled={downloadingAny}
-                      onclick={() => void onDownload(m.id)}
-                    >
-                      {m.id in dlProgress ? "下载中…" : "下载"}
-                    </button>
-                  {/if}
-                </div>
-              </div>
-              {#if m.id in dlProgress}
-                <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
-                  {#if dlProgress[m.id] !== null}
-                    <div
-                      class="h-full rounded-full bg-kotone-violet transition-[width]"
-                      style:width="{dlProgress[m.id]}%"
-                    ></div>
-                  {:else}
-                    <div class="h-full w-1/3 animate-pulse rounded-full bg-kotone-violet/70"></div>
-                  {/if}
-                </div>
-              {/if}
-              {#if dlErrors[m.id]}
-                <div class="mt-2 flex items-start gap-2 rounded-lg bg-kotone-pink/10 px-2.5 py-2 ring-1 ring-kotone-pink/35">
-                  <p class="min-w-0 flex-1 text-[10px] leading-relaxed break-all text-kotone-pink">
-                    下载失败：{dlErrors[m.id]}
-                  </p>
-                  <button
-                    class="shrink-0 rounded bg-kotone-pink/80 px-2 py-1 text-[10px] font-semibold text-white hover:brightness-110 disabled:opacity-50"
-                    disabled={downloadingAny}
-                    onclick={() => void onDownload(m.id)}
-                  >
-                    重试
-                  </button>
-                </div>
-              {/if}
-            </div>
-          {/each}
-        </div>
-      {/if}
     </div>
     <p class="mt-3 text-[11px] text-white/40">
       未就绪的引擎（模型未下载）「启动」时会报出具体缺失项；切换引擎 / 活动模型后如已「启动」，需点标题栏「重启生效」。
