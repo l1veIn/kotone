@@ -1,266 +1,238 @@
 <p align="center">
-  <picture>
-    <img src="assets/banner.png" alt="Kotone — 琴音" width="100%">
-  </picture>
+  <img src="assets/banner.webp" alt="Kotone — 琴音 · 游戏玩家的语音输入中继站" width="100%">
+</p>
+
+<h3 align="center">
+  <samp>🎤 说话 &nbsp;→&nbsp; ⚡ 成字 &nbsp;→&nbsp; 🎮 发送</samp>
+</h3>
+
+<p align="center">
+  <samp>手指不离开键盘。想说的话，一秒都别等。</samp>
+</p>
+
+<p align="center">
+  <a href="https://github.com/l1veIn/kotone/releases"><img src="https://img.shields.io/github/v/release/l1veIn/kotone?style=flat-square&label=release&color=00E5FF" alt="release"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011%20x64-1A1A2E?style=flat-square" alt="platform">
+  <img src="https://img.shields.io/badge/Tauri%202-Rust%20workspace-FF2D78?style=flat-square" alt="tauri">
+  <img src="https://img.shields.io/badge/STT-100%25%20local-7B2FFF?style=flat-square" alt="local stt">
 </p>
 
 <p align="center">
   <samp>
-    <a href="#-what-is-kotone">About</a> ·
-    <a href="#-features">Features</a> ·
-    <a href="#-screenshots">Screenshots</a> ·
-    <a href="#-the-mascot">Mascot</a> ·
-    <a href="#-tech-stack">Tech Stack</a>
+    <a href="#-为什么需要-kotone">为什么</a> ·
+    <a href="#-三步上手">上手</a> ·
+    <a href="#-功能速览">功能</a> ·
+    <a href="#-界面">界面</a> ·
+    <a href="#-角色卡">角色卡</a> ·
+    <a href="#-技术栈">技术栈</a> ·
+    <a href="#-开发">开发</a>
   </samp>
 </p>
 
-<br>
+## 🥊 为什么需要 Kotone
 
-<h3 align="center">
-  <samp>🎤 voice → ⚡ text → 🎮 game chat</samp>
-</h3>
-
-<p align="center">
-  <samp>说你想说的。剩下的交给琴音。</samp>
-</p>
-
-<br>
-
----
-
-## 🎮 What is Kotone?
-
-**Kotone** 是一个专为游戏玩家打造的桌面语音输入工具。
-
-你在打团、对线、操作角色——这时队友需要你报点。现有方案要求你停下来、打开聊天框、打字、回车——整个过程你的角色站着不动。**Kotone 让你的手指不离开键盘**：说出的话实时转成文字，一键发送到游戏聊天框。
-
-> *“想说的话，一秒都别等。”* — 琴音
+<table>
+  <tr>
+    <td width="50%">
+      <h4>😰 以前的你</h4>
+      <sub>打团打到一半，队友 ping 你报点。<br>你停下操作 → 打开聊天框 → 打字 → 回车。<br>抬起头，你的角色已经站在原地三秒了。</sub>
+    </td>
+    <td width="50%">
+      <h4>😎 现在的你</h4>
+      <sub>按住热键，说一句「打野在下路」。<br>松开热键，文字已经发送。<br>你的手指，从头到尾没离开过键盘。</sub>
+    </td>
+  </tr>
+</table>
 
 <br>
 
-## 📥 下载
+**Kotone** 是一款专为游戏玩家打造的 Windows 桌面语音输入工具：按住热键说话，语音在**本机**实时流式转成文字，松开热键一键送进游戏聊天框。识别全程本地完成，录音不出你的电脑。
 
-Kotone 当前支持 **Windows 10 / Windows 11（x64）**。
-
-1. 前往 [GitHub Releases](https://github.com/l1veIn/kotone/releases) 下载最新的 `Kotone_*_x64-setup.exe`。
-2. 安装并启动，首次运行会自动进入设置向导。
-3. 选择「英雄联盟」或「通用输入」，下载本地语音模型，设置热键并完成一次发送测试。
-
-> 首个公开版本暂未接入 Windows 代码签名，系统可能显示 SmartScreen 提示。请只从本仓库的 GitHub Release 下载，并核对 Release 中公布的 SHA-256。
+> <i>“想说的话，一秒都别等。”</i> — 琴音
 
 <br>
+
+## 🚀 三步上手
 
 <p align="center">
   <table>
     <tr>
       <td align="center" width="33%">
-        <samp>🎤 VOICE</samp><br>
-        <sub>实时语音识别<br>边说边转</sub>
+        <samp>STEP 01</samp>
+        <h3>📥 装</h3>
+        <sub>从 <a href="https://github.com/l1veIn/kotone/releases">Releases</a> 下载 <code>Kotone_*_x64-setup.exe</code><br>支持 Windows 10 / 11（x64）<br>安装器自带简体中文界面</sub>
       </td>
       <td align="center" width="33%">
-        <samp>⚡ INSTANT</samp><br>
-        <sub>话音未落字已出<br>200+ WPM</sub>
+        <samp>STEP 02</samp>
+        <h3>🧭 配</h3>
+        <sub>首次启动向导一条龙：<br>选「英雄联盟」或「通用输入」<br>→ 下载本地模型 → 设热键 → 真实发送测试</sub>
       </td>
       <td align="center" width="33%">
-        <samp>🎮 GAME-READY</samp><br>
-        <sub>一键发送到游戏<br>不中断操作</sub>
+        <samp>STEP 03</samp>
+        <h3>🎤 说</h3>
+        <sub>之后的一切交给热键。<br>内置自动更新，<br>新版本发布自动提醒。</sub>
       </td>
     </tr>
   </table>
 </p>
 
-<br>
-
-## ✨ Features
-
-```
-┌─────────────────────────────────────────────────┐
-│  🎤  实时语音转文字                               │
-│     说出的话瞬间变成聊天框里的文字                    │
-│                                                  │
-│  ⚡  一键发送到游戏                                │
-│     适配 LOL · Valorant · Apex · 原神 等           │
-│                                                  │
-│  ⌨️  快捷键绑定                                    │
-│     自定义发送快捷键，配合你的操作习惯                 │
-│                                                  │
-│  🎮  多游戏配置                                    │
-│     英雄联盟术语热词 + 通用输入配置                   │
-│                                                  │
-│  🌙  深色电竞UI                                   │
-│     固定位置 · 可拖动 · 鼠标点击穿透                 │
-│                                                  │
-│  🔒  本地优先                                      │
-│     语音模型在本机运行，不上传录音                    │
-└─────────────────────────────────────────────────┘
-```
+> 暂未接入 Windows 代码签名，系统可能显示 SmartScreen 提示。请只从本仓库的 GitHub Release 下载，并核对 Release 中公布的 SHA-256。
 
 <br>
 
-## 📱 Screenshots
+## ✨ 功能速览
+
+- 🎤 **流式语音转写** — 默认 X-ASR 中英标点模型，边说边出字；识别全程在本机完成，VAD 判停组件已打包进应用本体，随启动自动就绪。
+- ⌨️ **全局热键** — 按住说话 / 点按切换两种模式，任意键自定义；提示驻留期内再按热键，直接开始下一句。
+- 🎮 **游戏术语热词** — 内置 100 个英雄联盟术语热词；版本更新的新词条自动并入，你的自定义与删除永不丢失。
+- 🌙 **电竞悬浮窗** — 卡片 / 胶囊两种样式，整面可拖动并记忆位置，鼠标点击穿透；流式引擎实时出字，非流式引擎显示声波动画。
+- 🕘 **历史与回放** — 每条识别记录可回放原始音频，带声波动画；空转录不误发送、不留痕。
+- 🔒 **本地优先** — 模型全部本机运行，不上传任何录音；托盘常驻、自动更新、管理员权限一键重启。
+
+<br>
+
+## 📸 界面
 
 <p align="center">
-  <picture>
-    <img src="assets/screenshot-voice.png" alt="语音输入界面" width="80%">
-  </picture>
-</p>
-
-<p align="center">
+  <img src="assets/screenshot-voice.webp" alt="语音输入悬浮窗" width="82%">
+  <br>
   <samp>🎤 语音输入悬浮窗 — 说出的话实时转成文字，一键发送</samp>
 </p>
 
 <br>
 
-<p align="center">
-  <picture>
-    <img src="assets/screenshot-config.png" alt="游戏适配设置" width="80%">
-  </picture>
-</p>
-
-<p align="center">
-  <samp>⚙️ 游戏适配设置 — 多游戏独立配置，快捷键自定义</samp>
-</p>
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <img src="assets/screenshot-config.webp" alt="游戏适配设置" width="95%">
+      <br>
+      <samp>⚙️ 游戏适配设置</samp>
+    </td>
+    <td width="50%" align="center">
+      <img src="assets/screenshot-send.webp" alt="发送成功界面" width="95%">
+      <br>
+      <samp>✅ 发送成功，操作不中断</samp>
+    </td>
+  </tr>
+</table>
 
 <br>
 
-<p align="center">
-  <picture>
-    <img src="assets/screenshot-send.png" alt="发送成功界面" width="80%">
-  </picture>
-</p>
+---
+
+<br>
+
+## 🎭 角色卡
+
+<table>
+  <tr>
+    <td width="34%" align="center">
+      <img src="assets/kotone-cutout.webp" alt="琴音立绘" width="270">
+    </td>
+    <td width="66%">
+      <h3>琴音 · Kotone <sub>ことね</sub></h3>
+      <p>
+        <samp>AGE&nbsp;&nbsp;&nbsp;&nbsp;18</samp><br>
+        <samp>JOB&nbsp;&nbsp;&nbsp;&nbsp;游戏主播 —「打字比打游戏快」</samp><br>
+        <samp>FANS&nbsp;&nbsp;&nbsp;键盘侠（她起的，说要亲手平反）</samp><br>
+        <samp>BASE&nbsp;&nbsp;&nbsp;中继站 · 被 RGB 霓虹和粉丝手写信包围的直播间</samp><br>
+        <samp>MOTTO&nbsp;&nbsp;想说的话，一秒都别等</samp>
+      </p>
+      <p>观众来看她打游戏，留下来看她边打团边秒回弹幕——弹幕说她是<b>「人形语音输入法」</b>。她曾尝试用语音输入回弹幕，结果「谢谢老板」被识别成「谢谢老伴」，那面贴满翻车记录的「社死墙」至今还在直播间里。</p>
+      <p><samp>「收到，已发送！✨」</samp></p>
+    </td>
+  </tr>
+</table>
+
 
 <p align="center">
-  <samp>✅ 发送成功 — 消息直达游戏聊天框，操作不中断</samp>
+  <img src="https://img.shields.io/badge/%E9%9C%93%E8%99%B9%E9%9D%92-%2300E5FF-00E5FF?style=flat-square" alt="霓虹青 #00E5FF">
+  <img src="https://img.shields.io/badge/%E6%B7%B1%E9%82%83%E8%93%9D%E9%BB%91-%231A1A2E-1A1A2E?style=flat-square" alt="深邃蓝黑 #1A1A2E">
+  <img src="https://img.shields.io/badge/%E5%93%81%E7%BA%A2%E8%83%BD%E9%87%8F-%23FF2D78-FF2D78?style=flat-square" alt="品红能量 #FF2D78">
+  <img src="https://img.shields.io/badge/%E7%B4%AB%E7%94%B5-%237B2FFF-7B2FFF?style=flat-square" alt="紫电 #7B2FFF">
 </p>
 
 <br>
 
 ---
 
-## 🎭 The Mascot
+<br>
+
+## 🔧 技术栈
 
 <p align="center">
-  <picture>
-    <img src="assets/kotone-foundation.png" alt="Kotone 基础设定页" width="60%">
-  </picture>
+  <img src="https://img.shields.io/badge/Tauri_2-24C8DB?style=for-the-badge&logo=tauri&logoColor=white" alt="Tauri 2">
+  <img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/badge/Svelte_5-FF3E00?style=for-the-badge&logo=svelte&logoColor=white" alt="Svelte 5">
+  <img src="https://img.shields.io/badge/Tailwind_CSS-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white" alt="Tailwind CSS">
+  <img src="https://img.shields.io/badge/sherpa--onnx-7B2FFF?style=for-the-badge" alt="sherpa-onnx">
 </p>
 
-<blockquote align="center">
-  <p>
-    <b>琴音 · Kotone</b><br>
-    <sub>18岁 · 游戏主播 · 打字比打游戏快</sub>
-  </p>
-</blockquote>
+<samp>
 
-<p align="center">
-  <samp>「收到，已发送！✨」</samp>
-</p>
+- **Desktop** — Tauri 2 + Rust workspace：`kotone-core`（会话编排 / 配置 / 历史）、`kotone-stt`（引擎抽象 + sherpa-onnx）、`kotone-platform-windows`（热键 / 注入 / 提权）、`kotone-cli`（无 Tauri 命令行前端，见 [`docs/cli.md`](docs/cli.md)）
+- **Voice** — sherpa-onnx · X-ASR 流式模型 · Silero VAD，全部本地运行
+- **UI** — Svelte 5 + Tailwind CSS，深色电竞主题
 
-琴音是 Kotone 的品牌灵魂——一个以超快打字速度闻名的游戏主播。她的观众来看她打游戏，留下来看她边打团边秒回弹幕。弹幕说她是**「人形语音输入法」**。
-
-她曾是游戏网吧里帮客人打字传话的女孩，现在运营着**「中继站」**——一间被 RGB 霓虹灯和粉丝手写信包围的城市公寓直播间。
+</samp>
 
 <br>
 
-<p align="center">
-  <picture>
-    <img src="assets/kotone-stickers.png" alt="Kotone 表情贴纸包" width="40%">
-  </picture>
-</p>
+## 📂 仓库结构
 
-<p align="center">
-  <samp>😄 3×3 表情贴纸包 — 社媒 · 聊天 · 直播间</samp>
-</p>
-
-<br>
-
-<p align="center">
-  <picture>
-    <img src="assets/kotone-poster.png" alt="Kotone Glitch 海报" width="75%">
-  </picture>
-</p>
+```
+apps/desktop            Tauri 桌面应用（Svelte 5 前端 + Rust 后端）
+crates/kotone-core      会话编排、配置、历史、profile 的领域核心
+crates/kotone-stt       语音识别引擎抽象与 sherpa-onnx 实现
+crates/kotone-platform-windows  全局热键、窗口注入、提权等 Windows 平台能力
+crates/kotone-cli       命令行前端（自动化测试与无人值守入口）
+docs/                   ADR、CLI 参考、发布检查单、评测手册
+```
 
 <br>
 
-| 🎨 | 色值 | 用途 |
-|---|---|---|
-| 霓虹青 | `#00E5FF` | 主色调 · 交互高亮 |
-| 深邃蓝黑 | `#1A1A2E` | 背景 · 暗色主题 |
-| 品红能量 | `#FF2D78` | 强调 · 行动按钮 |
-| 紫电 | `#7B2FFF` | 点缀 · 层级区分 |
+## 🚀 开发
 
-<br>
-
----
-
-## 🔧 Tech Stack
-
-<p align="center">
-  <samp>
-    <b>Desktop</b> &nbsp; Tauri 2 / Rust &nbsp;·&nbsp;
-    <b>Voice</b> &nbsp; sherpa-onnx / X-ASR &nbsp;·&nbsp;
-    <b>UI</b> &nbsp; Svelte 5 / Tailwind CSS &nbsp;·&nbsp;
-    <b>Design</b> &nbsp; Cel-shaded + Neon Pop
-  </samp>
-</p>
-
-<br>
-
----
-
-## 🚀 Getting Started
+<details open>
+<summary><b>快速开始</b></summary>
 
 ```bash
-# 克隆仓库
 git clone https://github.com/l1veIn/kotone.git
 cd kotone
-
-# 安装依赖
 pnpm install --frozen-lockfile
+pnpm dev          # 需要 Rust 与 Windows C++ Build Tools
+```
 
-# 启动 Tauri 开发模式（需要 Rust 与 Windows C++ Build Tools）
-pnpm dev
+</details>
 
-# 运行发布门禁
+<details>
+<summary><b>质量门禁与构建</b></summary>
+
+```bash
 pnpm check
 pnpm -C apps/desktop test:e2e
 cargo test --workspace --locked
-
-# 构建 Windows NSIS 安装包
-pnpm build
+pnpm build        # NSIS 安装包输出到 target/release/bundle/nsis/
 ```
 
-安装包输出到 `target/release/bundle/nsis/`。发布检查项见 [`docs/release-checklist.md`](docs/release-checklist.md)。
+发布检查项见 [`docs/release-checklist.md`](docs/release-checklist.md)。
 
-隐私与第三方模型信息见 [`PRIVACY.md`](PRIVACY.md) 和 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+</details>
+
+隐私与第三方模型信息见 [`PRIVACY.md`](PRIVACY.md) 和 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)，变更历史见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 <br>
 
 ---
 
-## 📖 品牌故事
-
-Kotone 的品牌由 **[RepoChan](https://github.com/l1veIn/repochan-mono)** 人设流水线一站式产出：
-
-| 环节 | 产出 |
-|---|---|
-| 🕵️ 分析师 | 项目信号提取 → 品牌定位报告 |
-| 🎭 创意团队 | Kotone 角色人设 · 世界观 · 性格 |
-| 🎬 艺术指导 | 7 份资产订单（基础设定页 / 表情 / 海报 / 横幅 / 纹理） |
-| 🎨 画师 | 10 张视觉资产 · AI 图像生成 |
-| 🌐 页面设计 | 双语网站 · Astro Starter 组装 |
-
 <br>
 
 <p align="center">
-  <picture>
-    <img src="assets/kotone-poster.png" alt="" width="100%">
-  </picture>
+  <img src="assets/kotone-poster.webp" alt="Kotone Risograph 海报" width="100%">
 </p>
 
 <p align="center">
-  <samp>
-    made with 💖 by RepoChan &nbsp;·&nbsp;
-    <a href="https://github.com/l1veIn/repochan-mono">source</a>
-  </samp>
+  <samp>品牌由 <a href="https://github.com/l1veIn/repochan-mono"><b>RepoChan</b></a> 人设流水线一站式产出 — 分析 → 人设 → 艺术指导 → 画师 → 页面</samp>
+  <br>
+  <samp>made with 💖 by RepoChan</samp>
 </p>

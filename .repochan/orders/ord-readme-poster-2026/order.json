@@ -1,0 +1,53 @@
+{
+  "orderId": "ord-readme-poster-2026",
+  "status": "delivered",
+  "requestType": "new_asset",
+  "assetType": "poster",
+  "templateId": "official/poster-risograph-pop",
+  "references": [
+    {
+      "type": "order",
+      "orderId": "ord-foundation-001",
+      "role": "character"
+    }
+  ],
+  "brief": {
+    "intent": "README 页脚主视觉海报——替换旧 Glitch 风格海报（用户不满意）。改用 Risograph 孔版印刷波普风：半调网点、套色错位、复古杂志排版，与 Cel-shaded 主视觉形成质感反差。选板理由：persona 的 Cel-shaded + Neon Pop 本身就是高饱和撞色平面色块，risograph-pop 是其复古印刷变体，气质连贯且新鲜。",
+    "mustInclude": [
+      "Kotone 半身形象简化为大胆的重叠色块平面造型，保持可辨识度（渐变侧马尾、球衣、耳机）",
+      "Riso 油墨质感：粗半调网点、套色错位、纸张颗粒；油墨色用品牌色青 #00E5FF / 品红 #FF2D78 / 紫 #7B2FFF 印在米白纸上",
+      "品牌母题作为重复波普符号：声波波形、聊天气泡、机械键轴十字",
+      "标题文字「KOTONE」超大字体，副标题「琴音 · Kotone」",
+      "复古杂志编辑排版，亲和的社区氛围"
+    ],
+    "avoid": [
+      "除标题/副标题外的任何文字、URL、徽章",
+      "写实渲染、3D 质感",
+      "暗黑背景（riso 应印在浅色纸面上）"
+    ],
+    "creativeFreedom": [
+      "色块重叠与套色错位的具体处理",
+      "母题符号的排布节奏"
+    ]
+  },
+  "acceptanceCriteria": [
+    "一眼可辨是 Kotone（渐变侧马尾 + 球衣 + 耳机）",
+    "明显的 risograph 半调网点与套色错位质感",
+    "仅 KOTONE / 琴音 · Kotone 两处文字，无乱码",
+    "适合作为 README 页脚全宽展示"
+  ],
+  "deliverables": [
+    {
+      "name": "readme_footer_poster",
+      "format": "png",
+      "width": 1536,
+      "height": 1024
+    }
+  ],
+  "priority": "high",
+  "createdAt": "2026-07-28T09:34:42.648Z",
+  "updatedAt": "2026-07-28T09:40:58.506Z",
+  "candidateVersions": [],
+  "schemaVersion": "repochan.asset-order.v1",
+  "currentVersion": "v2026-07-28T09-40-58-492Z"
+}

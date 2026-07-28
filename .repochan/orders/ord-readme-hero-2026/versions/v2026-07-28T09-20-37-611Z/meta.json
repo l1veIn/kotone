@@ -1,0 +1,15 @@
+{
+  "versionId": "v2026-07-28T09-20-37-611Z",
+  "createdAt": "2026-07-28T09:20:37.619Z",
+  "tool": "repochan",
+  "files": [
+    "generated-2026-07-28T09-14-14.png"
+  ],
+  "promptBrief": "中继站深夜直播间 README 主视觉：左侧麦克风声波→发光聊天气泡→右侧琴音竖拇指，仅 KOTONE logotype",
+  "generationPrompt": "Cel-shaded anime key visual, Neon Pop style, wide landscape composition for a GitHub README hero banner. Scene: a cozy late-night game streaming room 'The Relay Station' bathed in deep blue-black (#1A1A2E) darkness with neon cyan (#00E5FF) and magenta (#FF2D78) RGB glow. Character (match reference image exactly): 18-year-old anime girl, shoulder-length black hair fading to cyan-to-magenta neon gradient at the tips, loose side ponytail with a tiny LED hair band, bright cyan eyes with starburst cross highlights, oversized black gaming jersey with cyan and magenta geometric stripes, white cropped tank top, black-and-cyan gaming headset around her neck, black fingerless gloves. She sits at her streaming desk in the right third of the frame, three-quarter upper body, turning toward the viewer with a bright energetic smile, one hand giving a thumbs up. From a desktop microphone on the far left, glowing sound-wave ripples travel rightward across the frame, mid-air the waves transform into a trail of glowing neon-outlined chat bubbles flying up toward her — a visual metaphor of voice becoming text. Background: multiple monitors with softly blurred scrolling chat, faint wall of fan letters, warm rim lighting, depth of field. Left half of the frame: large calm dark low-detail negative space with only faint sound-wave texture, suitable for overlaying bright title text. The ONLY text in the image: a neon-glow logotype 'KOTONE' in the center-left, white fill with cyan neon outline, clean bold italic lettering. No other text, no URLs, no badges, no UI, no watermark. Clean anime lineart, flat cel shading with layered neon glow accents.",
+  "notes": "验收通过：角色与基础设定页一致（渐变侧马尾/球衣/颈挂耳机/无指手套）；左半部暗色留白充足；全图仅 KOTONE 一处文字；深蓝黑基调。参考图：ord-foundation-001 v2026-07-23T09-07-43-324Z。",
+  "provenance": {
+    "tool": "repochan",
+    "action": "order.create_result"
+  }
+}

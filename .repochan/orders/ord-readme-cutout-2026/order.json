@@ -1,0 +1,51 @@
+{
+  "orderId": "ord-readme-cutout-2026",
+  "status": "delivered",
+  "requestType": "new_asset",
+  "assetType": "character_cutout",
+  "templateId": "official/character-cutout",
+  "references": [
+    {
+      "type": "order",
+      "orderId": "ord-foundation-001",
+      "role": "character"
+    }
+  ],
+  "brief": {
+    "intent": "README「角色卡」区块使用的全身抠图立绘——替代旧版（旧版左手只有四根手指，作废）。新姿势采用单手聚焦策略降低手部解剖风险。",
+    "mustInclude": [
+      "Kotone 全身立绘，保持基础设定页外观（黑发尾青→品红渐变侧马尾、青色星芒眼、oversized 黑色游戏球衣、白色短背心、黑色运动短裤、颈挂耳机、无指手套、腿环、厚底运动鞋）",
+      "姿势：身体四分之三侧向观众，右手在胸前竖起大拇指——五根手指清晰可辨、自然分开；左手背在身后（单手聚焦，避免双手同时入镜的手指错误）",
+      "纯平 #00FF00 绿幕背景，角色四边留白充足，任何部位不触碰画布边缘"
+    ],
+    "avoid": [
+      "左手入镜或可见",
+      "任何道具、家具、场景元素",
+      "文字、水印、阴影、渐变背景"
+    ],
+    "creativeFreedom": [
+      "头部倾斜角度与表情细节",
+      "右脚重心腿的微姿态"
+    ]
+  },
+  "acceptanceCriteria": [
+    "右手五根手指完整、数量正确、关节自然",
+    "角色形象与基础设定页一致",
+    "绿幕纯平无渐变，chroma-key 后边缘干净",
+    "全身完整入镜，四边有留白"
+  ],
+  "deliverables": [
+    {
+      "name": "kotone_cutout_v2",
+      "format": "png",
+      "width": 1024,
+      "height": 1024
+    }
+  ],
+  "priority": "high",
+  "createdAt": "2026-07-28T09:34:42.648Z",
+  "updatedAt": "2026-07-28T09:39:00.417Z",
+  "candidateVersions": [],
+  "schemaVersion": "repochan.asset-order.v1",
+  "currentVersion": "v2026-07-28T09-39-00-409Z"
+}

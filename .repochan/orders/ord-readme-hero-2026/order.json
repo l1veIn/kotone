@@ -1,0 +1,55 @@
+{
+  "orderId": "ord-readme-hero-2026",
+  "status": "delivered",
+  "requestType": "new_asset",
+  "assetType": "readme_banner",
+  "templateId": "official/readme-banner-21x9",
+  "references": [
+    {
+      "type": "order",
+      "orderId": "ord-foundation-001",
+      "role": "character"
+    }
+  ],
+  "brief": {
+    "intent": "2026 新版 GitHub README 主视觉横幅——「中继站」深夜直播间场景，为仓库首页定调。信号传输概念：声波从左侧麦克风发出，转化为发光聊天气泡飞向右侧。",
+    "mustInclude": [
+      "Kotone 半身形象位于画面右侧三分之一处，保持基础设定页外观（黑发尾青→品红渐变侧马尾、青色星芒眼、黑色游戏球衣、颈挂耳机）",
+      "场景：深夜直播间「中继站」——深蓝黑 #1A1A2E 基调，RGB 霓虹青 #00E5FF 与品红 #FF2D78 光晕，多屏显示器与滚动弹幕的微光背景",
+      "品牌叙事元素：左侧一只桌面麦克风发出声波波纹，波纹在空间中断续转化为发光的聊天气泡，气泡向右上方飞向角色（声→字→发送的品牌链路）",
+      "画面左半部保留大面积低细节暗色区域，供 HTML 排版叠加标题文字",
+      "唯一允许的文字：画面中央偏左的「KOTONE」logotype，霓虹发光字体，青色描边白色填充"
+    ],
+    "avoid": [
+      "除 KOTONE 外的任何文字、URL、徽章、按钮、水印",
+      "角色占据整个画面或被画面边缘裁切",
+      "明亮背景、白天场景",
+      "照片写实风格"
+    ],
+    "creativeFreedom": [
+      "声波→气泡转化过程的具体视觉表现",
+      "背景显示器与弹幕的密度和景深",
+      "logotype 的具体字形设计"
+    ]
+  },
+  "acceptanceCriteria": [
+    "角色形象与基础设定页一致（发型渐变、球衣、耳机）",
+    "画面左侧暗色留白区域足够叠加亮色标题文字",
+    "除 KOTONE logotype 外无任何文字",
+    "整体为深蓝黑暗色基调，GitHub 深色/浅色模式下均有良好对比"
+  ],
+  "deliverables": [
+    {
+      "name": "readme_hero_banner",
+      "format": "png",
+      "width": 1536,
+      "height": 1024
+    }
+  ],
+  "priority": "high",
+  "createdAt": "2026-07-28T09:13:11.664Z",
+  "updatedAt": "2026-07-28T09:20:37.619Z",
+  "candidateVersions": [],
+  "schemaVersion": "repochan.asset-order.v1",
+  "currentVersion": "v2026-07-28T09-20-37-611Z"
+}
