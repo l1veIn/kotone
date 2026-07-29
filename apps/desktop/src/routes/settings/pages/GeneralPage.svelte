@@ -280,12 +280,6 @@
     <!-- 热键 -->
     <section class="kotone-panel mt-4 p-4">
       <h2 class="text-sm font-semibold text-kotone-cyan/90">热键</h2>
-      {#if $runtimeStore && $runtimeStore.phase !== "running"}
-        <p class="mt-2 rounded-lg bg-white/5 px-2.5 py-1.5 text-[11px] text-white/50 ring-1 ring-white/10">
-          运行时已停止：热键未注册（按键无反应），点标题栏「启动」后按当前配置生效；
-          这里的录入与保存会立即写入配置。
-        </p>
-      {/if}
       <div class="mt-3 flex items-center gap-2">
         <input
           id="hotkey-input"

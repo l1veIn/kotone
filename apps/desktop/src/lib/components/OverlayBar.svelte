@@ -14,7 +14,7 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { appState, engineStreaming, initEngineStreaming } from "../stores/state";
+  import { appState } from "../stores/state";
   import {
     confirmSend,
     cancelSession,
@@ -60,8 +60,6 @@
   }
 
   onMount(async () => {
-    // 悬浮窗是独立 webview：自行初始化流式检测（决定 listening 显示文本还是声波）
-    void initEngineStreaming();
     try {
       const s = await getSettings();
       hotkeyLabel = s.hotkey.key;
@@ -200,14 +198,14 @@
       style:width="fit-content"
     >
       {#if $appState.state === "listening"}
-        <!-- 录音中：呼吸点 +（流式引擎：partial 文本 / 非流式引擎：声波） -->
+        <!-- 收到真实 partial 后立即上屏；尚无 partial（含非流式引擎）时显示声波。 -->
         <span class="mic-breath h-2.5 w-2.5 shrink-0 rounded-full bg-kotone-cyan"></span>
-        {#if $engineStreaming}
+        {#if $appState.partialText}
           <p
             class="ellipsis-head max-w-[340px] truncate text-sm text-white"
             in:fade={{ duration: 150 }}
           >
-            {$appState.partialText || "聆听中…"}&#x200E;
+            {$appState.partialText}&#x200E;
           </p>
         {:else}
           <Waveform level={$appState.level} bars={12} />
@@ -289,30 +287,26 @@
     class="flex w-full items-center gap-3 rounded-2xl bg-kotone-deep/96 px-4 py-2 ring-1 ring-inset ring-kotone-cyan/40"
   >
     {#if $appState.state === "listening"}
-      <!-- 聆听：麦克风呼吸光晕 +（流式引擎：partial 上屏 / 非流式引擎：渐变声波） -->
+      <!-- 收到真实 partial 后立即上屏；尚无 partial（含非流式引擎）时显示声波。 -->
       <span class="mic-breath flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-kotone-cyan/12" in:fade={{ duration: 150 }}>
         <svg viewBox="0 0 24 24" fill="none" stroke="#00e5ff" stroke-width="2" class="h-4.5 w-4.5">
           <rect x="9" y="2" width="6" height="12" rx="3" />
           <path d="M5 10a7 7 0 0 0 14 0M12 19v3" stroke-linecap="round" />
         </svg>
       </span>
-      {#if $engineStreaming}
+      {#if $appState.partialText}
         <div class="min-w-0 flex-1">
           <p class="text-[11px] leading-tight text-kotone-cyan/80">{stateLabel.listening}</p>
           <div bind:this={textScrollEl} class="kotone-scroll mt-0.5 max-h-14 overflow-y-auto pr-1">
-            {#if $appState.partialText}
-              {#key $appState.partialText}
-                <p class="text-sm leading-snug break-all text-white" in:fade={{ duration: 180 }}>
-                  {$appState.partialText}
-                </p>
-              {/key}
-            {:else}
-              <p class="text-sm text-white/45">聆听中…</p>
-            {/if}
+            {#key $appState.partialText}
+              <p class="text-sm leading-snug break-all text-white" in:fade={{ duration: 180 }}>
+                {$appState.partialText}
+              </p>
+            {/key}
           </div>
         </div>
       {:else}
-        <!-- 非流式引擎没有 partial：只显示声波 -->
+        <!-- 第一条 partial 到达前保持声波；非流式引擎会始终停留在这里。 -->
         <div class="flex min-w-0 flex-1 items-center justify-center" in:fade={{ duration: 150 }}>
           <Waveform level={$appState.level} />
         </div>

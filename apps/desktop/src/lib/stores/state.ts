@@ -10,13 +10,7 @@
  */
 
 import { writable } from "svelte/store";
-import {
-  getSettings,
-  isTauri,
-  listSttEngines,
-  type EngineInfo,
-  type RuntimeStatus,
-} from "../ipc";
+import { isTauri } from "../ipc";
 
 export type KotoneState =
   | "idle"
@@ -141,52 +135,4 @@ export async function initStateListeners(): Promise<() => void> {
     unlistenAll = null;
   };
   return unlistenAll;
-}
-
-// ---------- 当前引擎是否流式（悬浮窗据此二选一渲染 partial 文本 / 声波） ----------
-
-/** 当前 STT 引擎是否支持流式 partial（读取失败兜底 false = 按非流式渲染） */
-export const engineStreaming = writable(false);
-
-let streamingUnlisten: (() => void) | null = null;
-
-/**
- * 初始化流式检测：拉取引擎清单 + 设置算出当前引擎的 streaming 能力，
- * 并监听 kotone://runtime（含 engineId）在引擎变化时重算。
- * 重复调用安全（只初始化一次）；返回取消函数。
- */
-export async function initEngineStreaming(): Promise<() => void> {
-  if (streamingUnlisten) return streamingUnlisten;
-
-  let engines: EngineInfo[] = [];
-  const apply = (engineId: string | null) => {
-    engineStreaming.set(
-      engines.find((e) => e.id === engineId)?.capabilities.streaming ?? false,
-    );
-  };
-
-  try {
-    const [list, settings] = await Promise.all([listSttEngines(), getSettings()]);
-    engines = list;
-    apply(settings.sttEngine);
-  } catch {
-    /* 读取失败保持 false（按非流式渲染） */
-  }
-
-  if (!isTauri) {
-    streamingUnlisten = () => {
-      streamingUnlisten = null;
-    };
-    return streamingUnlisten;
-  }
-
-  const { listen } = await import("@tauri-apps/api/event");
-  const un = await listen<RuntimeStatus>("kotone://runtime", (e) => {
-    if (e.payload.engineId) apply(e.payload.engineId);
-  });
-  streamingUnlisten = () => {
-    un();
-    streamingUnlisten = null;
-  };
-  return streamingUnlisten;
 }

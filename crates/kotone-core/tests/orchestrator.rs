@@ -1048,7 +1048,7 @@ async fn one_shot_without_vad_factory_begin_fails() {
 
 // ---------- 模式 4「独奏模式」（solo：A2 + B3 + C1 + 连续，发完不停机） ----------
 
-/// solo 全链路：VAD 判停 → 直发 → Success → 不停机自动回到 Listening 等下一句
+/// solo 全链路：VAD 判停 → 直发 → 不显示 Success、不等待 toast，立即回到 Listening
 #[tokio::test]
 async fn solo_send_returns_to_listening() {
     let (orch, emitter, sent) = make_vad_mode_orchestrator(
@@ -1059,18 +1059,26 @@ async fn solo_send_returns_to_listening() {
     orch.on_hotkey_toggle().await; // A2：点按开始持续收音
     assert_eq!(orch.state(), OrchestratorState::Listening);
 
-    // B3 判停 → C1 直发 → Success（与 one-shot 相同的前半段）
-    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(5)).await;
+    // B3 判停 → C1 直发；发送成功后直接续听，不经过会阻塞下一句话的 Success toast。
+    let start = std::time::Instant::now();
+    while sent.lock().unwrap().is_empty() {
+        assert!(start.elapsed() < Duration::from_secs(5), "等待 solo 注入超时");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     assert_eq!(sent.lock().unwrap().as_slice(), ["对面打野在下路"]);
 
-    // 与 one-shot 的唯一区别：发送完成不停机——toast 后自动 begin 下一段，
-    // 状态回到 Listening 而非停在 Idle/stopped（续段拿恒静音 VAD，不再判停）
+    // 续段拿恒静音 VAD，不再判停；状态序列也不应闪过 Success。
     wait_state(&orch, OrchestratorState::Listening, Duration::from_secs(5)).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(
         orch.state(),
         OrchestratorState::Listening,
         "solo 发送完成后应持续监听：{:?}",
+        emitter.state_sequence()
+    );
+    assert!(
+        !emitter.state_sequence().contains(&"success".to_string()),
+        "solo 不应闪过 Success toast：{:?}",
         emitter.state_sequence()
     );
     assert_eq!(

@@ -3,12 +3,14 @@
 //! 端口（AudioBackend trait / AudioHandle / AudioDevice）在 kotone-core；
 //! 本模块是 cpal 生产实现。采集线程内部完成：
 //!   设备打开（默认/指定）→ 原生格式转 f32 → 混成 mono → 线性重采样到 16kHz
-//!   → 每 800 采样（50ms）一个 chunk 推入 pcm 通道，同时计算 RMS 推入 level 通道。
+//!   → 每 800 采样（50ms）一个 chunk 推入 pcm 通道；停止时再排出不足 50ms 的尾块。
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use tokio::sync::mpsc;
 
-use kotone_core::audio::{AudioBackend, AudioDevice, AudioHandle, CHUNK_SAMPLES, TARGET_SAMPLE_RATE};
+use kotone_core::audio::{
+    AudioBackend, AudioDevice, AudioHandle, CHUNK_SAMPLES, TARGET_SAMPLE_RATE,
+};
 
 /// 枚举可用输入设备；首条为 "default" 伪设备（跟随系统默认）
 pub fn list_devices() -> Vec<AudioDevice> {
@@ -75,11 +77,11 @@ impl AudioBackend for CpalBackend {
         let device_id = device_id.to_string();
         let thread = std::thread::spawn(move || {
             match open_stream(&device_id, pcm_tx, level_tx) {
-                Ok(stream) => {
+                Ok(input) => {
                     let _ = open_tx.send(Ok(()));
                     // 流存活期间阻塞等待停止信号；stream 随作用域结束释放
                     let _ = stop_rx.recv();
-                    drop(stream);
+                    input.stop_and_flush();
                 }
                 Err(e) => {
                     let _ = open_tx.send(Err(e));
@@ -101,12 +103,31 @@ impl AudioBackend for CpalBackend {
     }
 }
 
+struct OpenedInput {
+    stream: cpal::Stream,
+    state: std::sync::Arc<std::sync::Mutex<CaptureState>>,
+    pcm_tx: mpsc::UnboundedSender<Vec<f32>>,
+    level_tx: mpsc::UnboundedSender<f32>,
+}
+
+impl OpenedInput {
+    /// 先停回调，再把不足 50ms 的尾音作为最后一个短 chunk 送出。
+    fn stop_and_flush(self) {
+        let _ = self.stream.pause();
+        drop(self.stream);
+        self.state
+            .lock()
+            .unwrap()
+            .flush(&self.pcm_tx, &self.level_tx);
+    }
+}
+
 /// 在线程内打开设备并构建输入流
 fn open_stream(
     device_id: &str,
     pcm_tx: mpsc::UnboundedSender<Vec<f32>>,
     level_tx: mpsc::UnboundedSender<f32>,
-) -> Result<cpal::Stream, String> {
+) -> Result<OpenedInput, String> {
     let host = cpal::default_host();
     let device = if device_id == "default" || device_id.is_empty() {
         host.default_input_device()
@@ -126,21 +147,31 @@ fn open_stream(
     let sample_rate = config.sample_rate().0;
     let channels = config.channels() as usize;
     let stream_config: cpal::StreamConfig = config.clone().into();
+    let state = std::sync::Arc::new(std::sync::Mutex::new(CaptureState::new(sample_rate)));
 
     let err_fn = |e| eprintln!("[kotone audio] 采集错误: {e}");
 
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => {
-            let mut state = CaptureState::new(sample_rate);
+            let state = state.clone();
+            let pcm_tx = pcm_tx.clone();
+            let level_tx = level_tx.clone();
             device.build_input_stream(
                 &stream_config,
-                move |data: &[f32], _| state.push_interleaved(data, channels, &pcm_tx, &level_tx),
+                move |data: &[f32], _| {
+                    state
+                        .lock()
+                        .unwrap()
+                        .push_interleaved(data, channels, &pcm_tx, &level_tx)
+                },
                 err_fn,
                 None,
             )
         }
         cpal::SampleFormat::I16 => {
-            let mut state = CaptureState::new(sample_rate);
+            let state = state.clone();
+            let pcm_tx = pcm_tx.clone();
+            let level_tx = level_tx.clone();
             device.build_input_stream(
                 &stream_config,
                 move |data: &[i16], _| {
@@ -148,14 +179,19 @@ fn open_stream(
                         .iter()
                         .map(|s| cpal::Sample::to_sample::<f32>(*s))
                         .collect();
-                    state.push_interleaved(&f, channels, &pcm_tx, &level_tx);
+                    state
+                        .lock()
+                        .unwrap()
+                        .push_interleaved(&f, channels, &pcm_tx, &level_tx);
                 },
                 err_fn,
                 None,
             )
         }
         cpal::SampleFormat::U16 => {
-            let mut state = CaptureState::new(sample_rate);
+            let state = state.clone();
+            let pcm_tx = pcm_tx.clone();
+            let level_tx = level_tx.clone();
             device.build_input_stream(
                 &stream_config,
                 move |data: &[u16], _| {
@@ -163,7 +199,10 @@ fn open_stream(
                         .iter()
                         .map(|s| cpal::Sample::to_sample::<f32>(*s))
                         .collect();
-                    state.push_interleaved(&f, channels, &pcm_tx, &level_tx);
+                    state
+                        .lock()
+                        .unwrap()
+                        .push_interleaved(&f, channels, &pcm_tx, &level_tx);
                 },
                 err_fn,
                 None,
@@ -176,7 +215,12 @@ fn open_stream(
     stream
         .play()
         .map_err(|e| format!("启动设备「{device_name}」采集失败: {e}"))?;
-    Ok(stream)
+    Ok(OpenedInput {
+        stream,
+        state,
+        pcm_tx,
+        level_tx,
+    })
 }
 
 /// 采集状态：mono 混合 + 重采样 + 按 chunk 推送
@@ -216,6 +260,21 @@ impl CaptureState {
             let _ = pcm_tx.send(chunk);
             let _ = level_tx.send(rms);
         }
+    }
+
+    /// 停止采集时排出最后一个不足 50ms 的短块，避免松键丢失句末音素。
+    fn flush(
+        &mut self,
+        pcm_tx: &mpsc::UnboundedSender<Vec<f32>>,
+        level_tx: &mpsc::UnboundedSender<f32>,
+    ) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let chunk = std::mem::take(&mut self.pending);
+        let rms = (chunk.iter().map(|s| s * s).sum::<f32>() / chunk.len() as f32).sqrt();
+        let _ = pcm_tx.send(chunk);
+        let _ = level_tx.send(rms);
     }
 }
 
@@ -310,5 +369,23 @@ mod tests {
             levels += 1;
         }
         assert_eq!(levels, 20);
+    }
+
+    #[test]
+    fn capture_state_flushes_short_tail_on_stop() {
+        let (pcm_tx, mut pcm_rx) = mpsc::unbounded_channel::<Vec<f32>>();
+        let (level_tx, mut level_rx) = mpsc::unbounded_channel::<f32>();
+        let mut st = CaptureState::new(16000);
+
+        // 25ms 不足一个常规 50ms chunk：旧实现会在输入流销毁时直接丢弃。
+        st.push_interleaved(&vec![0.25f32; 400], 1, &pcm_tx, &level_tx);
+        assert!(pcm_rx.try_recv().is_err());
+
+        st.flush(&pcm_tx, &level_tx);
+        let tail = pcm_rx.try_recv().expect("停止时应排出短尾音");
+        assert_eq!(tail.len(), 400);
+        assert!(tail.iter().all(|&s| (s - 0.25).abs() < 1e-6));
+        assert!((level_rx.try_recv().unwrap() - 0.25).abs() < 1e-6);
+        assert!(st.pending.is_empty());
     }
 }

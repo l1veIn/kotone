@@ -93,68 +93,32 @@
 
 ## 📸 界面
 
-<p align="center">
-  <img src="assets/screenshot-voice.webp" alt="Kotone 通用设置主界面" width="82%">
-  <br>
-  <samp>🎤 Kotone 通用设置 — 麦克风、热键与交互模式一站配置</samp>
-</p>
-
-<br>
-
 <table>
   <tr>
     <td width="50%" align="center">
-      <img src="assets/screenshot-config.webp" alt="游戏适配设置" width="95%">
+      <img src="assets/screenshot-welcome.webp" alt="Kotone 首次启动向导" width="95%" style="border-radius: 8px; border: 1px solid #30363d;">
+      <br>
+      <samp>🚀 首次启动向导</samp>
+    </td>
+    <td width="50%" align="center">
+      <img src="assets/screenshot-voice.webp" alt="Kotone 通用设置主界面" width="95%" style="border-radius: 8px; border: 1px solid #30363d;">
+      <br>
+      <samp>🎤 通用设置</samp>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="assets/screenshot-config.webp" alt="游戏适配设置" width="95%" style="border-radius: 8px; border: 1px solid #30363d;">
       <br>
       <samp>⚙️ 游戏适配设置</samp>
     </td>
     <td width="50%" align="center">
-      <img src="assets/screenshot-send.webp" alt="Kotone 角色档案" width="95%">
+      <img src="assets/screenshot-history.webp" alt="历史记录与回放" width="95%" style="border-radius: 8px; border: 1px solid #30363d;">
       <br>
-      <samp>✨ 琴音角色档案</samp>
+      <samp>🕘 历史记录与回放</samp>
     </td>
   </tr>
 </table>
-
-<br>
-
----
-
-<br>
-
-## 🎭 角色卡
-
-<table>
-  <tr>
-    <td width="34%" align="center">
-      <img src="assets/kotone-cutout.webp" alt="琴音立绘" width="270">
-    </td>
-    <td width="66%">
-      <h3>琴音 · Kotone <sub>ことね</sub></h3>
-      <p>
-        <samp>AGE&nbsp;&nbsp;&nbsp;&nbsp;18</samp><br>
-        <samp>JOB&nbsp;&nbsp;&nbsp;&nbsp;游戏主播 —「打字比打游戏快」</samp><br>
-        <samp>FANS&nbsp;&nbsp;&nbsp;键盘侠（她起的，说要亲手平反）</samp><br>
-        <samp>BASE&nbsp;&nbsp;&nbsp;中继站 · 被 RGB 霓虹和粉丝手写信包围的直播间</samp><br>
-        <samp>MOTTO&nbsp;&nbsp;想说的话，一秒都别等</samp>
-      </p>
-      <p>观众来看她打游戏，留下来看她边打团边秒回弹幕——弹幕说她是<b>「人形语音输入法」</b>。她曾尝试用语音输入回弹幕，结果「谢谢老板」被识别成「谢谢老伴」，那面贴满翻车记录的「社死墙」至今还在直播间里。</p>
-      <p><samp>「收到，已发送！✨」</samp></p>
-    </td>
-  </tr>
-</table>
-
-
-<p align="center">
-  <img src="https://img.shields.io/badge/%E9%9C%93%E8%99%B9%E9%9D%92-%2300E5FF-00E5FF?style=flat-square" alt="霓虹青 #00E5FF">
-  <img src="https://img.shields.io/badge/%E6%B7%B1%E9%82%83%E8%93%9D%E9%BB%91-%231A1A2E-1A1A2E?style=flat-square" alt="深邃蓝黑 #1A1A2E">
-  <img src="https://img.shields.io/badge/%E5%93%81%E7%BA%A2%E8%83%BD%E9%87%8F-%23FF2D78-FF2D78?style=flat-square" alt="品红能量 #FF2D78">
-  <img src="https://img.shields.io/badge/%E7%B4%AB%E7%94%B5-%237B2FFF-7B2FFF?style=flat-square" alt="紫电 #7B2FFF">
-</p>
-
-<br>
-
----
 
 <br>
 
@@ -220,6 +184,42 @@ pnpm build        # NSIS 安装包输出到 target/release/bundle/nsis/
 </details>
 
 隐私与第三方模型信息见 [`PRIVACY.md`](PRIVACY.md) 和 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)，变更历史见 [`CHANGELOG.md`](CHANGELOG.md)。
+
+<br>
+
+---
+
+<br>
+
+## 🎭 角色卡
+
+<table>
+  <tr>
+    <td width="34%" align="center">
+      <img src="assets/kotone-cutout.webp" alt="琴音立绘" width="270">
+    </td>
+    <td width="66%">
+      <h3>琴音 · Kotone <sub>ことね</sub></h3>
+      <p>
+        <samp>AGE&nbsp;&nbsp;&nbsp;&nbsp;18</samp><br>
+        <samp>JOB&nbsp;&nbsp;&nbsp;&nbsp;游戏主播 —「打字比打游戏快」</samp><br>
+        <samp>FANS&nbsp;&nbsp;&nbsp;键盘侠（她起的，说要亲手平反）</samp><br>
+        <samp>BASE&nbsp;&nbsp;&nbsp;中继站 · 被 RGB 霓虹和粉丝手写信包围的直播间</samp><br>
+        <samp>MOTTO&nbsp;&nbsp;想说的话，一秒都别等</samp>
+      </p>
+      <p>观众来看她打游戏，留下来看她边打团边秒回弹幕——弹幕说她是<b>「人形语音输入法」</b>。她曾尝试用语音输入回弹幕，结果「谢谢老板」被识别成「谢谢老伴」，那面贴满翻车记录的「社死墙」至今还在直播间里。</p>
+      <p><samp>「收到，已发送！✨」</samp></p>
+    </td>
+  </tr>
+</table>
+
+
+<p align="center">
+  <img src="https://img.shields.io/badge/%E9%9C%93%E8%99%B9%E9%9D%92-%2300E5FF-00E5FF?style=flat-square" alt="霓虹青 #00E5FF">
+  <img src="https://img.shields.io/badge/%E6%B7%B1%E9%82%83%E8%93%9D%E9%BB%91-%231A1A2E-1A1A2E?style=flat-square" alt="深邃蓝黑 #1A1A2E">
+  <img src="https://img.shields.io/badge/%E5%93%81%E7%BA%A2%E8%83%BD%E9%87%8F-%23FF2D78-FF2D78?style=flat-square" alt="品红能量 #FF2D78">
+  <img src="https://img.shields.io/badge/%E7%B4%AB%E7%94%B5-%237B2FFF-7B2FFF?style=flat-square" alt="紫电 #7B2FFF">
+</p>
 
 <br>
 

@@ -8,18 +8,32 @@
   import { onMount } from "svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { isTauri } from "../../../lib/ipc";
+  import { checkForUpdates, type UpdateCheckResult } from "../../../lib/updater";
   import stickerProud from "../../../assets/brand/stickers/proud.png";
 
   /** 角色详情页入口回调：由 Settings 切换至 CharacterPage 全屏档案视图 */
   let { onOpenCharacter }: { onOpenCharacter: () => void } = $props();
 
   /** 静态兜底版本（与 package.json 同步）；桌面端启动后替换为真实版本 */
-  let version = $state("0.1.1");
+  let version = $state("0.1.2");
+  let checkingUpdate = $state(false);
+  let updateResult = $state<UpdateCheckResult | null>(null);
 
   onMount(async () => {
     if (!isTauri) return;
     version = await getVersion().catch(() => version);
   });
+
+  async function checkUpdates() {
+    if (checkingUpdate) return;
+    checkingUpdate = true;
+    updateResult = null;
+    try {
+      updateResult = await checkForUpdates();
+    } finally {
+      checkingUpdate = false;
+    }
+  }
 </script>
 
 <div class="px-6 py-5">
@@ -73,6 +87,34 @@
             <path d="M9 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
         </button>
+        <button
+          data-testid="check-updates"
+          class="inline-flex items-center gap-1.5 rounded-lg bg-kotone-pink/12 px-2.5 py-1.5 text-[11px] font-semibold text-kotone-pink ring-1 ring-kotone-pink/35 transition hover:brightness-125 disabled:cursor-wait disabled:opacity-60"
+          disabled={checkingUpdate}
+          onclick={() => void checkUpdates()}
+        >
+          {#if checkingUpdate}
+            <span class="spinner inline-block h-3 w-3 rounded-full"></span>
+            正在检查…
+          {:else}
+            检查更新
+          {/if}
+        </button>
+      </div>
+      <div class="mt-2 min-h-4 text-[11px]" aria-live="polite">
+        {#if checkingUpdate}
+          <p class="text-white/45">正在连接更新服务器…</p>
+        {:else if updateResult?.status === "up-to-date"}
+          <p class="text-emerald-300">✓ 已是最新版本（v{version}）</p>
+        {:else if updateResult?.status === "available"}
+          <p class="text-kotone-pink">发现新版本 v{updateResult.version}，尚未安装</p>
+        {:else if updateResult?.status === "downloaded"}
+          <p class="text-kotone-cyan">v{updateResult.version} 已下载，重启后生效</p>
+        {:else if updateResult?.status === "error"}
+          <p class="break-all text-red-300">检查更新失败：{updateResult.message}</p>
+        {:else}
+          <p class="text-white/35">支持启动时自动检查，也可以随时手动检查</p>
+        {/if}
       </div>
     </div>
   </section>

@@ -252,8 +252,6 @@
         throw new Error(status.error ?? "热键未成功注册");
       }
       runtimeReady = true;
-      await tick();
-      trainingInput?.focus();
     } catch (e) {
       runtimeReady = false;
       hotkeyReady = false;
@@ -315,6 +313,12 @@
     if ($appState.state === "error" && $appState.errorMessage) {
       testError = $appState.errorMessage;
     }
+  });
+
+  $effect(() => {
+    if (!runtimeReady || $appState.state !== "listening") return;
+    // 首次热键按下前不抢输入焦点，避免输入法先消费按键；开始收音后再把注入目标放进聊天框。
+    void tick().then(() => trainingInput?.focus({ preventScroll: true }));
   });
 
   let finishing = $state(false);
@@ -655,7 +659,7 @@
                 bind:value={testInput}
                 data-testid="training-input"
                 class="w-full rounded-lg bg-kotone-deep/80 px-3 py-3 text-sm ring-1 ring-white/15 outline-none placeholder:text-white/35 focus:ring-2 focus:ring-kotone-cyan"
-                placeholder={testArmed ? "正在接收琴音发送的文字…" : "点击这里保持焦点，然后按热键说话"}
+                placeholder={testArmed ? "正在接收琴音发送的文字…" : "按热键开始说话，收音后会自动聚焦这里"}
                 autocomplete="off"
                 spellcheck="false"
                 onkeydown={handleTrainingKeydown}

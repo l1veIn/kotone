@@ -810,78 +810,96 @@ impl Orchestrator {
         let result =
             tokio::task::spawn_blocking(move || injector.send(&send_text, &profile, token)).await;
 
-        let _op = self.op.lock().await;
-        let mut inner = self.inner.lock().unwrap();
-        if inner.gen != gen {
-            return;
-        }
-        inner.send_cancel = None;
-        // history 终态（锁外落账，见下方 write_history 调用；三个分支各自赋值一次）
-        let history_write: (crate::history::HistoryOutcome, Option<String>);
-        match result {
-            Ok(Ok(())) => {
-                inner.preview_text = None;
-                inner.state = OrchestratorState::Success;
-                drop(inner);
-                self.emit_state(OrchestratorState::Success, Some(json!({ "text": text })));
-                self.emit_process(
-                    "injection_succeeded",
-                    json!({
-                        "outcome": "success",
-                        "durationMs": injection_started_at.elapsed().as_millis() as u64
-                    }),
-                );
-                history_write = (crate::history::HistoryOutcome::Sent, None);
+        let (history_write, resume_continuous) = {
+            let _op = self.op.lock().await;
+            let mut inner = self.inner.lock().unwrap();
+            if inner.gen != gen {
+                return;
             }
-            Ok(Err(e)) => {
-                // Error 保留文本（preview_text 承载），前端/confirm_send 可重试（§4.1）；
-                // needsElevation 透传 UIPI 提权信号（§10 R-1）
-                inner.preview_text = Some(text.clone());
-                inner.state = OrchestratorState::Error;
-                drop(inner);
-                self.emit_state(
-                    OrchestratorState::Error,
-                    Some(json!({ "message": e.message, "needsElevation": e.needs_elevation, "text": text })),
-                );
-                self.emit_process(
-                    "injection_failed",
-                    json!({
-                        "outcome": "error",
-                        "errorCode": if e.needs_elevation {
-                            "INJECTION_ELEVATION_REQUIRED"
-                        } else {
-                            "INJECTION_FAILED"
-                        },
-                        "durationMs": injection_started_at.elapsed().as_millis() as u64
-                    }),
-                );
-                history_write = (crate::history::HistoryOutcome::Error, Some(e.message));
+            inner.send_cancel = None;
+            // history 终态（锁外落账，见下方 write_history 调用；三个分支各自赋值一次）
+            let history_write: (crate::history::HistoryOutcome, Option<String>);
+            let mut resume_continuous = false;
+            match result {
+                Ok(Ok(())) => {
+                    inner.preview_text = None;
+                    resume_continuous = self.policy().continuous;
+                    inner.state = if resume_continuous {
+                        OrchestratorState::Idle
+                    } else {
+                        OrchestratorState::Success
+                    };
+                    drop(inner);
+                    if !resume_continuous {
+                        self.emit_state(
+                            OrchestratorState::Success,
+                            Some(json!({ "text": text })),
+                        );
+                    }
+                    self.emit_process(
+                        "injection_succeeded",
+                        json!({
+                            "outcome": "success",
+                            "durationMs": injection_started_at.elapsed().as_millis() as u64
+                        }),
+                    );
+                    history_write = (crate::history::HistoryOutcome::Sent, None);
+                }
+                Ok(Err(e)) => {
+                    // Error 保留文本（preview_text 承载），前端/confirm_send 可重试（§4.1）；
+                    // needsElevation 透传 UIPI 提权信号（§10 R-1）
+                    inner.preview_text = Some(text.clone());
+                    inner.state = OrchestratorState::Error;
+                    drop(inner);
+                    self.emit_state(
+                        OrchestratorState::Error,
+                        Some(json!({ "message": e.message, "needsElevation": e.needs_elevation, "text": text })),
+                    );
+                    self.emit_process(
+                        "injection_failed",
+                        json!({
+                            "outcome": "error",
+                            "errorCode": if e.needs_elevation {
+                                "INJECTION_ELEVATION_REQUIRED"
+                            } else {
+                                "INJECTION_FAILED"
+                            },
+                            "durationMs": injection_started_at.elapsed().as_millis() as u64
+                        }),
+                    );
+                    history_write = (crate::history::HistoryOutcome::Error, Some(e.message));
+                }
+                Err(_) => {
+                    inner.preview_text = Some(text.clone());
+                    inner.state = OrchestratorState::Error;
+                    drop(inner);
+                    self.emit_state(
+                        OrchestratorState::Error,
+                        Some(json!({ "message": "发送线程异常", "text": text })),
+                    );
+                    self.emit_process(
+                        "injection_failed",
+                        json!({
+                            "outcome": "error",
+                            "errorCode": "INJECTION_THREAD_FAILED",
+                            "durationMs": injection_started_at.elapsed().as_millis() as u64
+                        }),
+                    );
+                    history_write = (
+                        crate::history::HistoryOutcome::Error,
+                        Some("发送线程异常".to_string()),
+                    );
+                }
             }
-            Err(_) => {
-                inner.preview_text = Some(text.clone());
-                inner.state = OrchestratorState::Error;
-                drop(inner);
-                self.emit_state(
-                    OrchestratorState::Error,
-                    Some(json!({ "message": "发送线程异常", "text": text })),
-                );
-                self.emit_process(
-                    "injection_failed",
-                    json!({
-                        "outcome": "error",
-                        "errorCode": "INJECTION_THREAD_FAILED",
-                        "durationMs": injection_started_at.elapsed().as_millis() as u64
-                    }),
-                );
-                history_write = (
-                    crate::history::HistoryOutcome::Error,
-                    Some("发送线程异常".to_string()),
-                );
-            }
-        }
-        drop(_op);
+            (history_write, resume_continuous)
+        };
         self.write_history(history_write.0, history_write.1);
-        self.schedule_idle(gen);
+        if resume_continuous {
+            // solo 不显示 Success toast，也不等待 toast_dwell：发送落账后立即开始下一段。
+            let _ = self.begin().await;
+        } else {
+            self.schedule_idle(gen);
+        }
     }
 
     /// 开始失败等场景：Error toast → 自动回 Idle（无文本，不可重试）
@@ -997,44 +1015,24 @@ impl Orchestrator {
 
     /// toast_dwell 后自动回 Idle（期间有新会话/取消则不动作）。
     /// 带文本的 Error 不自动回 Idle：保留待重试文本，等用户重试或取消（§4.1）。
-    /// solo 连续模式：发送成功（Success）不停机——置回 Idle 后立即 begin 下一段，
-    /// 状态经 Success 回到 Listening 而非 stopped；begin 失败走 Error toast 自行收尾。
     fn schedule_idle(&self, gen: u64) {
         let dwell = self.toast_dwell;
         let inner = self.inner.clone();
         let emitter = self.emitter.clone();
-        let settings = self.settings.clone();
-        let me = self.me.read().unwrap().clone();
         tokio::spawn(async move {
             tokio::time::sleep(dwell).await;
-            let continuous =
-                InteractionPolicy::from_settings(&settings.read().unwrap()).continuous;
-            // 块作用域收窄 MutexGuard（绝不跨 await 持锁）
-            let resume = {
+            let should_idle = {
                 let mut g = inner.lock().unwrap();
-                let success = g.state == OrchestratorState::Success;
                 let should_idle = g.gen == gen
-                    && (success
+                    && (g.state == OrchestratorState::Success
                         || (g.state == OrchestratorState::Error && g.preview_text.is_none()));
                 if should_idle {
                     g.state = OrchestratorState::Idle;
-                    Some(success)
-                } else {
-                    None
                 }
+                should_idle
             };
-            let success = match resume {
-                Some(s) => s,
-                None => return,
-            };
-            if continuous && success {
-                // solo：立即开下一段（每个 VAD 切分段 = 完整会话周期，
-                // 采音/会话/录档/history 全部按段独立，甩尾修复逻辑段内生效）
-                if let Some(orch) = me.as_ref().and_then(|w| w.upgrade()) {
-                    let _ = orch.begin().await;
-                    // begin 成功已 emit Listening；失败走 toast_error → 自行回 Idle
-                    return;
-                }
+            if !should_idle {
+                return;
             }
             emitter.emit(
                 "kotone://state",
