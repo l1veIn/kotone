@@ -3,7 +3,7 @@
    * Kotone 自绘退出确认弹窗。只负责视觉与动作分发，
    * 具体的进程退出 / 隐藏到托盘由 Titlebar 执行。
    */
-  import stickerRelax from "../../assets/brand/stickers/relax.png";
+  import stickerRelax from "../../assets/brand/stickers/relax.webp";
 
   let {
     busy = false,

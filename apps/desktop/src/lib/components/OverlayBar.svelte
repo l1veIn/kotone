@@ -25,8 +25,8 @@
     type OverlayConfig,
   } from "../ipc";
   import Waveform from "./Waveform.svelte";
-  import stickerProud from "../../assets/brand/stickers/proud.png";
-  import stickerAmazed from "../../assets/brand/stickers/amazed.png";
+  import stickerProud from "../../assets/brand/stickers/proud.webp";
+  import stickerAmazed from "../../assets/brand/stickers/amazed.webp";
 
   const stateLabel: Record<string, string> = {
     idle: "Kotone 待机",

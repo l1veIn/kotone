@@ -15,7 +15,7 @@
   import { settingsStore, toast, errText } from "../../lib/stores/ui";
   import ExitPrompt from "../../lib/components/ExitPrompt.svelte";
   import RuntimeButton from "../../lib/components/RuntimeButton.svelte";
-  import iconSrc from "../../assets/brand/icon-src.png";
+  import iconSrc from "../../assets/brand/icon-src.webp";
 
   let { onOpenAdvanced }: { onOpenAdvanced: () => void } = $props();
 

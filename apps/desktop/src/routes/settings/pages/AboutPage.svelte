@@ -9,7 +9,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { isTauri } from "../../../lib/ipc";
   import { checkForUpdates, type UpdateCheckResult } from "../../../lib/updater";
-  import stickerProud from "../../../assets/brand/stickers/proud.png";
+  import stickerProud from "../../../assets/brand/stickers/proud.webp";
 
   /** 角色详情页入口回调：由 Settings 切换至 CharacterPage 全屏档案视图 */
   let { onOpenCharacter }: { onOpenCharacter: () => void } = $props();

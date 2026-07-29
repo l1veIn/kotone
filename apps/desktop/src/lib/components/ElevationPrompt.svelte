@@ -6,7 +6,7 @@
    */
   import { updateSettings, restartAsAdmin } from "../ipc";
   import { settingsStore, toast, errText } from "../stores/ui";
-  import stickerPointing from "../../assets/brand/stickers/pointing.png";
+  import stickerPointing from "../../assets/brand/stickers/pointing.webp";
 
   let { onClose }: { onClose: () => void } = $props();
 

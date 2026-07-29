@@ -29,10 +29,10 @@
     toastWarn,
   } from "../../lib/stores/ui";
   import heroOnboarding from "../../assets/brand/hero-onboarding.webp";
-  import stickerHello from "../../assets/brand/stickers/hello.png";
-  import stickerThinking from "../../assets/brand/stickers/thinking.png";
-  import stickerCheering from "../../assets/brand/stickers/cheering.png";
-  import stickerProud from "../../assets/brand/stickers/proud.png";
+  import stickerHello from "../../assets/brand/stickers/hello.webp";
+  import stickerThinking from "../../assets/brand/stickers/thinking.webp";
+  import stickerCheering from "../../assets/brand/stickers/cheering.webp";
+  import stickerProud from "../../assets/brand/stickers/proud.webp";
 
   let { onDone }: { onDone: () => void } = $props();
 

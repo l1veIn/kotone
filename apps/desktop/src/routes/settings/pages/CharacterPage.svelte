@@ -21,17 +21,17 @@
     voiceLines,
     danmaku,
   } from "../../../lib/data/persona";
-  import cutout from "../../../assets/brand/kotone-cutout.png";
-  import relayRoom from "../../../assets/brand/relay-room-bg.png";
-  import stickerHello from "../../../assets/brand/stickers/hello.png";
-  import stickerCheering from "../../../assets/brand/stickers/cheering.png";
-  import stickerProud from "../../../assets/brand/stickers/proud.png";
-  import stickerRelax from "../../../assets/brand/stickers/relax.png";
-  import stickerAmazed from "../../../assets/brand/stickers/amazed.png";
-  import stickerCurious from "../../../assets/brand/stickers/curious.png";
-  import stickerPointing from "../../../assets/brand/stickers/pointing.png";
-  import stickerThinking from "../../../assets/brand/stickers/thinking.png";
-  import stickerSleepy from "../../../assets/brand/stickers/sleepy.png";
+  import cutout from "../../../assets/brand/kotone-cutout.webp";
+  import relayRoom from "../../../assets/brand/relay-room-bg.webp";
+  import stickerHello from "../../../assets/brand/stickers/hello.webp";
+  import stickerCheering from "../../../assets/brand/stickers/cheering.webp";
+  import stickerProud from "../../../assets/brand/stickers/proud.webp";
+  import stickerRelax from "../../../assets/brand/stickers/relax.webp";
+  import stickerAmazed from "../../../assets/brand/stickers/amazed.webp";
+  import stickerCurious from "../../../assets/brand/stickers/curious.webp";
+  import stickerPointing from "../../../assets/brand/stickers/pointing.webp";
+  import stickerThinking from "../../../assets/brand/stickers/thinking.webp";
+  import stickerSleepy from "../../../assets/brand/stickers/sleepy.webp";
   import propKeycap from "../../../assets/brand/props/keycap.webp";
   import propKeyboard from "../../../assets/brand/props/keyboard.webp";
   import propHeadset from "../../../assets/brand/props/headset.webp";
@@ -46,9 +46,9 @@
   import hero2026 from "../../../assets/brand/posters/hero-2026.webp";
   import poster2026 from "../../../assets/brand/posters/poster-2026.webp";
 
-  import patternBubble from "../../../assets/brand/patterns/bubble.png";
-  import patternSwitch from "../../../assets/brand/patterns/switch.png";
-  import patternWave from "../../../assets/brand/patterns/wave.png";
+  import patternBubble from "../../../assets/brand/patterns/bubble.webp";
+  import patternSwitch from "../../../assets/brand/patterns/switch.webp";
+  import patternWave from "../../../assets/brand/patterns/wave.webp";
   let { onBack }: { onBack: () => void } = $props();
 
   /** 滚动进入视口时淡入上移（一次性，与关于页同一模式） */

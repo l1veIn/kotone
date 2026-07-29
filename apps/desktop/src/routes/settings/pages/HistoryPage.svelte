@@ -17,7 +17,7 @@
   } from "../../../lib/ipc";
   import { settingsStore, toast, errText } from "../../../lib/stores/ui";
   import Toggle from "../../../lib/components/Toggle.svelte";
-  import stickerSleepy from "../../../assets/brand/stickers/sleepy.png";
+  import stickerSleepy from "../../../assets/brand/stickers/sleepy.webp";
 
   let records = $state<HistoryRecord[] | null>(null);
   /** 清空二次确认：点一次进入确认态，3s 内再点执行 */

@@ -37,7 +37,7 @@
   import { runtimeStore } from "../../../lib/stores/runtime";
   import { spotlight } from "../../../lib/actions/spotlight";
   import Toggle from "../../../lib/components/Toggle.svelte";
-  import stickerCurious from "../../../assets/brand/stickers/curious.png";
+  import stickerCurious from "../../../assets/brand/stickers/curious.webp";
 
   /** 设置助手入口：由 Settings 打开首启向导（自「通用」页迁入） */
   let { onOpenOnboarding }: { onOpenOnboarding: () => void } = $props();

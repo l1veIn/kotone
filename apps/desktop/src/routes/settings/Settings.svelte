@@ -19,7 +19,7 @@
   import HistoryPage from "./pages/HistoryPage.svelte";
   import AboutPage from "./pages/AboutPage.svelte";
   import CharacterPage from "./pages/CharacterPage.svelte";
-  import patternSwitch from "../../assets/brand/patterns/switch.png";
+  import patternSwitch from "../../assets/brand/patterns/switch.webp";
 
   type PageId = "general" | "game" | "history" | "advanced" | "about" | "character";
 
