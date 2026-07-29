@@ -18,13 +18,16 @@ test("forced onboarding completes the full guided setup and can be reopened", as
 
   await expect(page.getByTestId("onboarding-hotkey")).toBeVisible();
   await page.getByTestId("mode-push-to-talk").click();
+  await page.getByRole("button", { name: "重新录入", exact: true }).click();
+  await page.keyboard.press("F9");
+  await expect(page.getByTestId("onboarding-hotkey").getByText("F9", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "去测试", exact: true }).click();
 
   await expect(page.getByTestId("onboarding-test")).toBeVisible();
   await page.getByRole("button", { name: "▶ 启动琴音", exact: true }).click();
   await expect(page.getByTestId("training-input")).not.toBeFocused();
   await expect(
-    page.getByTestId("onboarding-test").getByText("✓ CapsLock 已注册", { exact: true }),
+    page.getByTestId("onboarding-test").getByText("✓ F9 已注册", { exact: true }),
   ).toBeVisible();
 
   await page.getByRole("button", { name: "只测试文字发送", exact: true }).click();

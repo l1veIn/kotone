@@ -59,7 +59,8 @@ fn replay_fixture_across_ready_engines() {
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "—".into()),
                 r.final_ms,
-                r.cer.map(|c| format!("{c:.3}"))
+                r.cer
+                    .map(|c| format!("{c:.3}"))
                     .unwrap_or_else(|| "—".into()),
                 r.final_text
             ),

@@ -14,11 +14,11 @@
 
 use clap::{Parser, Subcommand};
 
+#[cfg(windows)]
+use kotone_core::hotkey::HotkeySource;
 use kotone_core::profile::{self, GameProfile};
 use kotone_core::settings::{self, HotkeyBackend, Settings};
 use kotone_core::stt::EngineRegistry;
-#[cfg(windows)]
-use kotone_core::hotkey::HotkeySource;
 
 /// wav 直灌会话模式的注入器（ADR-007）：不碰真实窗口——
 /// one-shot（C1 直发）在无人值守测试里也绝不能触发真实注入，
@@ -160,9 +160,7 @@ enum ConfigCommand {
     /// 打印当前完整配置（JSON，含默认值合并结果）
     Show,
     /// 读取单个配置项（点路径，如 hotkey.key / autoSend）
-    Get {
-        key: String,
-    },
+    Get { key: String },
     /// 写入配置项（点路径；支持 hotkey.key / hotkey.mode / hotkeyBackend /
     /// sttEngine / activeProfileId / autoSend / audioDeviceId / language /
     /// evalRecording / runAsAdminOnStart / interactionMode / vadSilenceMs /
@@ -257,15 +255,19 @@ async fn main() {
         Command::Config { action } => match action {
             ConfigCommand::Show => cmd_config_show(),
             ConfigCommand::Get { key } => cmd_config_get(&key),
-            ConfigCommand::Set { key, value, capture } => {
-                cmd_config_set(&key, value.as_deref(), capture)
-            }
+            ConfigCommand::Set {
+                key,
+                value,
+                capture,
+            } => cmd_config_set(&key, value.as_deref(), capture),
         },
         Command::Devices => cmd_devices(),
         Command::Play { wav, device } => cmd_play(&wav, device),
         Command::Eval { action } => match action {
             EvalCommand::List => cmd_eval_list(),
-            EvalCommand::Replay { session_id, engine } => cmd_eval_replay(&session_id, engine).await,
+            EvalCommand::Replay { session_id, engine } => {
+                cmd_eval_replay(&session_id, engine).await
+            }
             EvalCommand::Label { session_id, text } => cmd_eval_label(&session_id, &text),
             EvalCommand::Report => cmd_eval_report().await,
         },
@@ -431,8 +433,11 @@ async fn cmd_listen_session(
                     return 1;
                 }
             };
-            // wav 模式非 one-shot 时强制预览收尾（auto_send=false）；
-            // one-shot 预设的 C1 直发由 NullInjector 安全承接（JSONL 打印）
+            // wav 回归模式必须与用户当前桌面预设隔离：如果本机配置恰好是 solo，
+            // VAD 会自动开启下一段，测试会一直循环并错误退出。统一强制为
+            // toggle + preview 收尾；NullInjector 继续保证不会触碰真实窗口。
+            settings.interaction_mode = None;
+            settings.hotkey.mode = kotone_core::hotkey::HotkeyMode::Toggle;
             settings.auto_send = false;
             let auto_wait = if speed > 0.0 {
                 (audio_ms as f64 / speed) as u64 + 500
@@ -673,7 +678,10 @@ async fn cmd_listen_hotkey(
     };
 
     let _ = tokio::signal::ctrl_c().await;
-    println!("{}", serde_json::json!({ "event": "cli", "payload": { "message": "退出（中断）" } }));
+    println!(
+        "{}",
+        serde_json::json!({ "event": "cli", "payload": { "message": "退出（中断）" } })
+    );
     pump.abort();
     hotkey.shutdown();
     orchestrator.cancel().await;
@@ -690,7 +698,10 @@ struct JsonlEmitter {
 #[cfg(windows)]
 impl kotone_core::orchestrator::Emitter for JsonlEmitter {
     fn emit(&self, event: &str, payload: serde_json::Value) {
-        println!("{}", serde_json::json!({ "event": event, "payload": payload }));
+        println!(
+            "{}",
+            serde_json::json!({ "event": event, "payload": payload })
+        );
         if let Some(hotkey) = &self.hotkey {
             if event == "kotone://state" {
                 let state = payload.get("state").and_then(|s| s.as_str()).unwrap_or("");
@@ -971,20 +982,12 @@ fn apply_config_set(current: &Settings, key: &str, raw: &str) -> Result<Settings
         // 数值键（VAD 判停阈值，范围对齐 core vad::SILENCE_MS_RANGE）
         "vadSilenceMs" => match raw.parse::<u32>() {
             Ok(v) if (200..=5_000).contains(&v) => serde_json::Value::Number(v.into()),
-            _ => {
-                return Err(format!(
-                    "{key} 只接受 200-5000 的整数毫秒（收到「{raw}」）"
-                ))
-            }
+            _ => return Err(format!("{key} 只接受 200-5000 的整数毫秒（收到「{raw}」）")),
         },
         // 数值键（history capped 容量上限）
         "history.maxRecords" => match raw.parse::<u32>() {
             Ok(v) if (1..=100_000).contains(&v) => serde_json::Value::Number(v.into()),
-            _ => {
-                return Err(format!(
-                    "{key} 只接受 1-100000 的整数条数（收到「{raw}」）"
-                ))
-            }
+            _ => return Err(format!("{key} 只接受 1-100000 的整数条数（收到「{raw}」）")),
         },
         // 字符串与枚举键：原样写入，枚举由 Settings 反序列化校验
         _ => serde_json::Value::String(raw.to_string()),
@@ -1001,8 +1004,7 @@ fn apply_config_set(current: &Settings, key: &str, raw: &str) -> Result<Settings
 
 /// 点路径读取（只读，允许任意存在的路径）
 fn config_get_value(settings: &Settings, key: &str) -> Result<serde_json::Value, String> {
-    let root =
-        serde_json::to_value(settings).map_err(|e| format!("序列化配置失败: {e}"))?;
+    let root = serde_json::to_value(settings).map_err(|e| format!("序列化配置失败: {e}"))?;
     let mut cur = &root;
     for part in key.split('.') {
         cur = cur
@@ -1193,7 +1195,10 @@ fn cmd_doctor() -> i32 {
         println!("✓ 音频输入设备：{} 个（默认：{default}）", inputs.len());
     }
     for d in inputs.iter().filter(|d| looks_virtual(&d.name)) {
-        println!("  ⚠ 虚拟声卡：{}（自动化测试路径二可用，日常采集别选它）", d.name);
+        println!(
+            "  ⚠ 虚拟声卡：{}（自动化测试路径二可用，日常采集别选它）",
+            d.name
+        );
     }
 
     // 2. STT 引擎就绪
@@ -1279,19 +1284,32 @@ fn cmd_doctor() -> i32 {
     if kotone_stt::model::vad_model_ready() {
         println!("✓ VAD 模型就绪（one-shot 静音判停可用）");
     } else {
-        println!("⚠ VAD 模型未就绪：one-shot / solo 模式不可用（push-to-talk / dictation 不受影响）");
+        println!(
+            "⚠ VAD 模型未就绪：one-shot / solo 模式不可用（push-to-talk / dictation 不受影响）"
+        );
     }
 
     // 6. 录档与历史配置摘要
     println!(
         "{} evalRecording：{}（评测录档 → kotone-cli eval list）",
-        if settings.eval_recording { "✓" } else { "⚠" },
-        if settings.eval_recording { "开" } else { "关" }
+        if settings.eval_recording {
+            "✓"
+        } else {
+            "⚠"
+        },
+        if settings.eval_recording {
+            "开"
+        } else {
+            "关"
+        }
     );
     let dl = &settings.download;
     let dl_desc = match dl.source {
         settings::DownloadSource::Auto => {
-            format!("auto（镜像优先 hf-mirror.com + {}，失败回退官方）", dl.gh_proxy)
+            format!(
+                "auto（镜像优先 hf-mirror.com + {}，失败回退官方）",
+                dl.gh_proxy
+            )
         }
         settings::DownloadSource::Official => "official（huggingface.co / github.com 直连）".into(),
         settings::DownloadSource::Mirror => {
@@ -1442,7 +1460,10 @@ fn cmd_log_list(limit: usize, json: bool) -> i32 {
             truncate_chars(&r.final_text, 20)
         );
     }
-    println!("\n共 {} 条（显示前 {limit} 条，--json 输出完整字段）", records.len());
+    println!(
+        "\n共 {} 条（显示前 {limit} 条，--json 输出完整字段）",
+        records.len()
+    );
     0
 }
 
@@ -1595,14 +1616,18 @@ mod tests {
         .unwrap();
         match cli.command {
             Command::Elevate { args } => {
-                assert_eq!(args, ["listen", "--engine", "mock-stream", "--profile", "lol oce"])
+                assert_eq!(
+                    args,
+                    ["listen", "--engine", "mock-stream", "--profile", "lol oce"]
+                )
             }
             _ => panic!("expect Elevate"),
         }
     }
 
     #[test]
-    fn config_set_history_keys() {        use kotone_core::history::HistoryMode;
+    fn config_set_history_keys() {
+        use kotone_core::history::HistoryMode;
         // mode：字符串键，枚举值由 Settings 反序列化校验
         let s = apply_config_set(&Settings::default(), "history.mode", "keep-all").unwrap();
         assert_eq!(s.history.mode, HistoryMode::KeepAll);
@@ -1634,7 +1659,10 @@ mod tests {
             config_get_value(&s, "hotkey.key").unwrap(),
             serde_json::json!("CapsLock")
         );
-        assert_eq!(config_get_value(&s, "autoSend").unwrap(), serde_json::json!(false));
+        assert_eq!(
+            config_get_value(&s, "autoSend").unwrap(),
+            serde_json::json!(false)
+        );
         assert_eq!(
             config_get_value(&s, "hotkey.mode").unwrap(),
             serde_json::json!("toggle")

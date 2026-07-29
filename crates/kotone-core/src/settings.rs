@@ -191,16 +191,16 @@ impl OverlayConfig {
 }
 
 /// 下载源选择（config.json `download.source`）。
-/// 模型文件托管在 HuggingFace / GitHub，国内直连常超时，镜像可显著提速。
+/// 大模型优先使用 ModelScope 国内镜像，其他资源仍可使用 HF / GitHub 镜像。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DownloadSource {
-    /// 镜像优先，失败后自动回退官方源重试一次（默认）
+    /// ModelScope / 其他镜像优先，失败后自动回退官方源（默认）
     #[default]
     Auto,
     /// 只用官方源（huggingface.co / github.com）
     Official,
-    /// 只用镜像（hf-mirror.com / ghProxy 代理），不回退
+    /// 只用镜像（ModelScope / hf-mirror.com / ghProxy），不回退
     Mirror,
 }
 
@@ -326,8 +326,8 @@ pub fn save_to(path: &PathBuf, settings: &Settings) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {e}"))?;
     }
-    let json = serde_json::to_string_pretty(settings)
-        .map_err(|e| format!("序列化配置失败: {e}"))?;
+    let json =
+        serde_json::to_string_pretty(settings).map_err(|e| format!("序列化配置失败: {e}"))?;
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, json).map_err(|e| format!("写入配置失败: {e}"))?;
     std::fs::rename(&tmp, path).map_err(|e| format!("落盘配置失败: {e}"))?;
@@ -375,7 +375,10 @@ mod tests {
         assert!(!s.history.include_audio);
         assert!(!s.ui.first_run_completed);
         assert!(!s.ui.auto_start);
-        assert!(s.models.dir.is_empty(), "默认模型目录为空 = ~/.kotone/models");
+        assert!(
+            s.models.dir.is_empty(),
+            "默认模型目录为空 = ~/.kotone/models"
+        );
         assert_eq!(s.download.source, DownloadSource::Auto);
         assert_eq!(s.download.gh_proxy, "https://ghfast.top/");
         assert_eq!(s.overlay.visibility, OverlayVisibility::OnDemand);
@@ -427,7 +430,11 @@ mod tests {
         assert_eq!(s.language, "en");
         assert_eq!(s.stt_engine, "sherpa-onnx-x-asr-zh-en");
         assert!(!s.eval_recording);
-        assert_eq!(s.download.source, DownloadSource::Auto, "老配置缺 download 段合并默认");
+        assert_eq!(
+            s.download.source,
+            DownloadSource::Auto,
+            "老配置缺 download 段合并默认"
+        );
         assert_eq!(s.download.gh_proxy, "https://ghfast.top/");
         assert!(!s.ui.first_run_completed, "老配置缺 ui 段合并默认 = 未完成");
         assert_eq!(s.overlay.position, OverlayPosition::Auto);

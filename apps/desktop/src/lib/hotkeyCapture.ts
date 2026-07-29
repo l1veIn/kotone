@@ -12,6 +12,7 @@ import {
   startHotkeyCapture,
   type HotkeyCaptureEvent,
 } from "./ipc";
+import { keyboardEventCombo } from "./hotkeyCombo";
 
 export type CaptureResult =
   | { kind: "combo"; combo: string }
@@ -38,18 +39,39 @@ export function isHotkeyCaptureActive(): boolean {
 export async function captureHotkey(
   onResult: (r: CaptureResult) => void,
 ): Promise<() => void> {
-  if (!isTauri) {
-    onResult({ kind: "error", message: "浏览器调试环境不支持热键录入" });
-    return () => {};
-  }
   let unlisten: (() => void) | undefined;
   let settled = false;
+  let backendStarted = false;
+  let pendingWebviewResult: CaptureResult | null = null;
+  const finishFromWebview = (result: CaptureResult) => {
+    // 用户可能在 start_hotkey_capture IPC 重装底层 hook 的几毫秒内就按键。
+    // 先记住结果，等后端确实进入 capture 后再结算并取消，避免留下一个无人监听、
+    // 仍会吞键 10 秒的孤儿捕获会话。
+    if (!backendStarted) {
+      pendingWebviewResult = result;
+      return;
+    }
+    settle(result);
+    void cancelHotkeyCapture();
+  };
   const blockWebviewKey = (event: KeyboardEvent) => {
     // 修饰键仍允许浏览器维护 modifier 状态；真正被录入的主键（含 Esc）不得
     // 触发 Tab 换焦点、Space 点击按钮或 Enter 提交等页面默认行为。
     if (["Control", "Alt", "Shift", "Meta"].includes(event.key)) return;
     event.preventDefault();
     event.stopImmediatePropagation();
+    if (event.type !== "keydown" || event.repeat) return;
+
+    // WH_KEYBOARD_LL 可能被 Windows 静默移除；此时按键仍会到达获得焦点的
+    // WebView。直接用同一套组合键规范完成录入，避免按钮无反应后等待 10 秒超时。
+    if (event.key === "Escape") {
+      finishFromWebview({ kind: "cancelled" });
+      return;
+    }
+    const combo = keyboardEventCombo(event);
+    if (combo) {
+      finishFromWebview({ kind: "combo", combo });
+    }
   };
   captureActive = true;
   window.addEventListener("keydown", blockWebviewKey, { capture: true });
@@ -67,6 +89,16 @@ export async function captureHotkey(
     cleanupWebview();
     onResult(r);
   };
+  if (!isTauri) {
+    // dev:web / E2E 直接使用 WebView 键盘兜底，既便于回归向导流程，也与
+    // Windows 底层 hook 失活时的用户可见行为保持一致。
+    backendStarted = true;
+    return () => {
+      if (settled) return;
+      settled = true;
+      cleanupWebview();
+    };
+  }
   try {
     unlisten = await listen<HotkeyCaptureEvent>("kotone://hotkey-capture", (ev) => {
       const p = ev.payload;
@@ -75,6 +107,13 @@ export async function captureHotkey(
       else settle({ kind: "timeout" });
     });
     await startHotkeyCapture();
+    backendStarted = true;
+    if (pendingWebviewResult) {
+      const result = pendingWebviewResult;
+      pendingWebviewResult = null;
+      settle(result);
+      void cancelHotkeyCapture();
+    }
   } catch (e) {
     settle({ kind: "error", message: `无法启动热键录入：${errText(e)}` });
   }

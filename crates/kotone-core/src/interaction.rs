@@ -140,7 +140,12 @@ impl InteractionPolicy {
         } else {
             PostFinalize::PreviewConfirm
         };
-        Self { begin, end, post, continuous: false }
+        Self {
+            begin,
+            end,
+            post,
+            continuous: false,
+        }
     }
 
     /// 当前策略命中的预设（混合组合为 None，设置页可显示「自定义」）
@@ -207,7 +212,10 @@ mod tests {
         let mut s = settings_with(HotkeyMode::Toggle, false);
         s.interaction_mode = Some(InteractionMode::PushToTalk);
         let p = InteractionPolicy::from_settings(&s);
-        assert_eq!(p, InteractionPolicy::from_preset(InteractionMode::PushToTalk));
+        assert_eq!(
+            p,
+            InteractionPolicy::from_preset(InteractionMode::PushToTalk)
+        );
     }
 
     #[test]

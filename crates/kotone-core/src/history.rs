@@ -172,8 +172,7 @@ pub fn list_in(dir: &Path) -> Result<Vec<HistoryRecord>, String> {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let raw =
-        std::fs::read_to_string(&path).map_err(|e| format!("读取历史文件失败: {e}"))?;
+    let raw = std::fs::read_to_string(&path).map_err(|e| format!("读取历史文件失败: {e}"))?;
     let mut records: Vec<HistoryRecord> = raw
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -271,8 +270,12 @@ mod tests {
     #[test]
     fn append_and_list_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        append_in(dir.path(), &rec("s1", HistoryOutcome::Sent), &cfg(HistoryMode::Capped, 10))
-            .unwrap();
+        append_in(
+            dir.path(),
+            &rec("s1", HistoryOutcome::Sent),
+            &cfg(HistoryMode::Capped, 10),
+        )
+        .unwrap();
         append_in(
             dir.path(),
             &rec("s2", HistoryOutcome::Cancelled),
@@ -293,8 +296,12 @@ mod tests {
     #[test]
     fn off_mode_skips_io() {
         let dir = tempfile::tempdir().unwrap();
-        append_in(dir.path(), &rec("s1", HistoryOutcome::Sent), &cfg(HistoryMode::Off, 10))
-            .unwrap();
+        append_in(
+            dir.path(),
+            &rec("s1", HistoryOutcome::Sent),
+            &cfg(HistoryMode::Off, 10),
+        )
+        .unwrap();
         assert!(!jsonl_path(dir.path()).exists(), "off 模式不应产生任何 IO");
         assert!(list_in(dir.path()).unwrap().is_empty());
     }
@@ -338,10 +345,18 @@ mod tests {
         let mut r0 = rec("s0", HistoryOutcome::Sent);
         r0.audio_file = Some("s0.wav".to_string());
         append_in(dir.path(), &r0, &cfg(HistoryMode::Capped, 2)).unwrap();
-        append_in(dir.path(), &rec("s1", HistoryOutcome::Sent), &cfg(HistoryMode::Capped, 2))
-            .unwrap();
-        append_in(dir.path(), &rec("s2", HistoryOutcome::Error), &cfg(HistoryMode::Capped, 2))
-            .unwrap();
+        append_in(
+            dir.path(),
+            &rec("s1", HistoryOutcome::Sent),
+            &cfg(HistoryMode::Capped, 2),
+        )
+        .unwrap();
+        append_in(
+            dir.path(),
+            &rec("s2", HistoryOutcome::Error),
+            &cfg(HistoryMode::Capped, 2),
+        )
+        .unwrap();
         let records = list_in(dir.path()).unwrap();
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].session_id, "s2");
@@ -374,8 +389,12 @@ mod tests {
     #[test]
     fn list_skips_corrupt_lines() {
         let dir = tempfile::tempdir().unwrap();
-        append_in(dir.path(), &rec("s1", HistoryOutcome::Sent), &cfg(HistoryMode::Capped, 10))
-            .unwrap();
+        append_in(
+            dir.path(),
+            &rec("s1", HistoryOutcome::Sent),
+            &cfg(HistoryMode::Capped, 10),
+        )
+        .unwrap();
         // 手工追加坏行（并发写交错的最坏情况）
         use std::io::Write as _;
         let mut f = std::fs::OpenOptions::new()
@@ -383,8 +402,12 @@ mod tests {
             .open(jsonl_path(dir.path()))
             .unwrap();
         writeln!(f, "not json {{{{").unwrap();
-        append_in(dir.path(), &rec("s2", HistoryOutcome::Sent), &cfg(HistoryMode::Capped, 10))
-            .unwrap();
+        append_in(
+            dir.path(),
+            &rec("s2", HistoryOutcome::Sent),
+            &cfg(HistoryMode::Capped, 10),
+        )
+        .unwrap();
         let records = list_in(dir.path()).unwrap();
         assert_eq!(records.len(), 2, "坏行应跳过: {records:?}");
         assert_eq!(records[0].session_id, "s2");

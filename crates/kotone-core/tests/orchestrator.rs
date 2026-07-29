@@ -341,9 +341,7 @@ async fn preview_flow_full_transitions() {
     orch.end().await.unwrap();
     assert_eq!(orch.state(), OrchestratorState::Preview);
     // 最终文本上屏
-    assert!(emitter
-        .partials()
-        .contains(&"对面打野在下路".to_string()));
+    assert!(emitter.partials().contains(&"对面打野在下路".to_string()));
 
     orch.confirm_send().await.unwrap();
     assert_eq!(orch.state(), OrchestratorState::Success);
@@ -364,7 +362,10 @@ async fn preview_flow_full_transitions() {
         "success",
         "idle",
     ] {
-        assert!(seq.contains(&expected.to_string()), "缺状态 {expected}: {seq:?}");
+        assert!(
+            seq.contains(&expected.to_string()),
+            "缺状态 {expected}: {seq:?}"
+        );
     }
 }
 
@@ -382,7 +383,10 @@ async fn auto_send_flow_skips_preview() {
         &["对面打野在下路".to_string()]
     );
     let seq = emitter.state_sequence();
-    assert!(!seq.contains(&"preview".to_string()), "autoSend 不应进 Preview");
+    assert!(
+        !seq.contains(&"preview".to_string()),
+        "autoSend 不应进 Preview"
+    );
     assert!(seq.contains(&"sending".to_string()));
 }
 
@@ -561,8 +565,7 @@ async fn cancel_from_error_clears_retry_text() {
 #[tokio::test]
 async fn target_window_captured_on_begin_and_restored_before_send() {
     let log = Arc::new(Mutex::new(Vec::new()));
-    let focus: Arc<dyn FocusBackend> =
-        Arc::new(MockFocusBackend::new(log.clone(), 0xBEEF, true));
+    let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(log.clone(), 0xBEEF, true));
     let injector: Arc<dyn Injector> = Arc::new(LoggingInjector { log: log.clone() });
     let (orch, _emitter) = make_orchestrator_full(false, injector, focus);
 
@@ -574,7 +577,11 @@ async fn target_window_captured_on_begin_and_restored_before_send() {
     assert_eq!(orch.state(), OrchestratorState::Success);
 
     let ops = log.lock().unwrap().clone();
-    assert_eq!(ops.first().map(String::as_str), Some("capture"), "begin 应捕获前台窗口");
+    assert_eq!(
+        ops.first().map(String::as_str),
+        Some("capture"),
+        "begin 应捕获前台窗口"
+    );
     let restore_pos = ops.iter().position(|s| s == "restore:48879"); // 0xBEEF
     let send_pos = ops.iter().position(|s| s.starts_with("send:"));
     assert!(restore_pos.is_some(), "发送前应恢复记录的 hwnd: {ops:?}");
@@ -615,7 +622,11 @@ async fn hotkey_toggle_in_preview_confirms_send() {
     assert_eq!(orch.state(), OrchestratorState::Preview);
 
     orch.on_hotkey_toggle().await; // Preview → 确认发送
-    assert_eq!(orch.state(), OrchestratorState::Success, "Preview 态热键应确认发送而非取消");
+    assert_eq!(
+        orch.state(),
+        OrchestratorState::Success,
+        "Preview 态热键应确认发送而非取消"
+    );
     assert_eq!(
         sent.lock().unwrap().as_slice(),
         &["对面打野在下路".to_string()]
@@ -644,8 +655,7 @@ async fn hotkey_toggle_during_sending_cancels() {
         }
     }
 
-    let (orch, _emitter) =
-        make_orchestrator_with(false, Arc::new(SlowInjector));
+    let (orch, _emitter) = make_orchestrator_with(false, Arc::new(SlowInjector));
     orch.begin().await.unwrap();
     tokio::time::sleep(Duration::from_millis(30)).await;
     orch.end().await.unwrap();
@@ -663,10 +673,18 @@ async fn hotkey_toggle_during_sending_cancels() {
     assert_eq!(orch.state(), OrchestratorState::Sending);
 
     orch.on_hotkey_toggle().await;
-    assert_eq!(orch.state(), OrchestratorState::Idle, "Sending 态热键应取消");
+    assert_eq!(
+        orch.state(),
+        OrchestratorState::Idle,
+        "Sending 态热键应取消"
+    );
     let _ = handle.await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(orch.state(), OrchestratorState::Idle, "取消后不应被过期结果改写");
+    assert_eq!(
+        orch.state(),
+        OrchestratorState::Idle,
+        "取消后不应被过期结果改写"
+    );
 }
 
 /// hold 模式：非 Idle 态的按下事件忽略（不弹错误 toast 冲掉预览文本）
@@ -679,7 +697,11 @@ async fn hotkey_hold_press_in_preview_is_ignored() {
     assert_eq!(orch.state(), OrchestratorState::Preview);
 
     orch.on_hotkey_hold(true).await;
-    assert_eq!(orch.state(), OrchestratorState::Preview, "Preview 态按下事件应被忽略");
+    assert_eq!(
+        orch.state(),
+        OrchestratorState::Preview,
+        "Preview 态按下事件应被忽略"
+    );
     assert!(sent.lock().unwrap().is_empty());
 
     // 之后仍可正常确认发送
@@ -768,12 +790,17 @@ async fn empty_finalize_returns_idle_silently() {
             "空转录不应经过 {unexpected}: {seq:?}"
         );
     }
-    assert!(seq.contains(&"idle".to_string()), "应发出 idle 状态事件: {seq:?}");
+    assert!(
+        seq.contains(&"idle".to_string()),
+        "应发出 idle 状态事件: {seq:?}"
+    );
     // 注入器未被调用（空文本不该敲出两个回车）
     assert!(sent.lock().unwrap().is_empty(), "空转录不应触发注入");
     // 不写 history 记录
     assert!(
-        kotone_core::history::list_in(dir.path()).unwrap().is_empty(),
+        kotone_core::history::list_in(dir.path())
+            .unwrap()
+            .is_empty(),
         "空转录不应落 history 记录"
     );
     // 之后可正常开始新会话
@@ -841,8 +868,13 @@ async fn eval_recording_written_on_finalize() {
     assert_eq!(s.final_text, "对面打野在下路");
     assert_eq!(s.human_label, None);
     assert!(dir.path().join(format!("{}.wav", s.session_id)).exists());
-    let pcm = kotone_core::eval::read_wav(&dir.path().join(format!("{}.wav", s.session_id))).unwrap();
-    assert_eq!(pcm.len() as u64, s.audio_ms * 16, "wav 采样数应与 audioMs 一致");
+    let pcm =
+        kotone_core::eval::read_wav(&dir.path().join(format!("{}.wav", s.session_id))).unwrap();
+    assert_eq!(
+        pcm.len() as u64,
+        s.audio_ms * 16,
+        "wav 采样数应与 audioMs 一致"
+    );
 }
 
 /// eval 录档：取消的会话不录（目录保持为空）
@@ -856,7 +888,9 @@ async fn eval_recording_discarded_on_cancel() {
     orch.cancel().await;
 
     assert!(
-        kotone_core::eval::list_sessions_at(dir.path()).unwrap().is_empty(),
+        kotone_core::eval::list_sessions_at(dir.path())
+            .unwrap()
+            .is_empty(),
         "取消的会话不应录档"
     );
 }
@@ -874,7 +908,9 @@ async fn eval_recording_off_writes_nothing() {
     tokio::time::sleep(Duration::from_millis(60)).await;
     orch.end().await.unwrap();
     assert!(
-        kotone_core::eval::list_sessions_at(dir.path()).unwrap().is_empty(),
+        kotone_core::eval::list_sessions_at(dir.path())
+            .unwrap()
+            .is_empty(),
         "evalRecording 关闭时不应录档"
     );
 }
@@ -959,8 +995,12 @@ fn make_vad_mode_orchestrator(
     orch.focus_restore_delay = Duration::ZERO;
     let vad = std::sync::Mutex::new(Some(vad));
     orch.vad_factory = Some(Arc::new(move || {
-        Ok(Box::new(vad.lock().unwrap().take().unwrap_or_else(ScriptVad::all_silence))
-            as Box<dyn kotone_core::vad::Vad>)
+        Ok(Box::new(
+            vad.lock()
+                .unwrap()
+                .take()
+                .unwrap_or_else(ScriptVad::all_silence),
+        ) as Box<dyn kotone_core::vad::Vad>)
     }));
     (orch.into_arc(), emitter, sent)
 }
@@ -982,8 +1022,7 @@ async fn wait_state(orch: &Orchestrator, want: OrchestratorState, timeout: Durat
 #[tokio::test]
 async fn one_shot_vad_stop_auto_sends() {
     // 剧本：30 帧语音（900ms > 最短保护 500ms）后恒静音 → 210ms 阈值判停
-    let (orch, emitter, sent) =
-        make_one_shot_orchestrator(ScriptVad::speech_then_silence(30));
+    let (orch, emitter, sent) = make_one_shot_orchestrator(ScriptVad::speech_then_silence(30));
 
     orch.on_hotkey_toggle().await; // A2：点按开始
     assert_eq!(orch.state(), OrchestratorState::Listening);
@@ -1062,7 +1101,10 @@ async fn solo_send_returns_to_listening() {
     // B3 判停 → C1 直发；发送成功后直接续听，不经过会阻塞下一句话的 Success toast。
     let start = std::time::Instant::now();
     while sent.lock().unwrap().is_empty() {
-        assert!(start.elapsed() < Duration::from_secs(5), "等待 solo 注入超时");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "等待 solo 注入超时"
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert_eq!(sent.lock().unwrap().as_slice(), ["对面打野在下路"]);
@@ -1081,11 +1123,7 @@ async fn solo_send_returns_to_listening() {
         "solo 不应闪过 Success toast：{:?}",
         emitter.state_sequence()
     );
-    assert_eq!(
-        sent.lock().unwrap().len(),
-        1,
-        "续段无语音不应重复发送"
-    );
+    assert_eq!(sent.lock().unwrap().len(), 1, "续段无语音不应重复发送");
 
     // 停止：再点按热键 → Idle
     orch.on_hotkey_toggle().await;
@@ -1202,7 +1240,10 @@ async fn history_cancel_during_listening_records_cancelled() {
 
     let records = kotone_core::history::list_in(dir.path()).unwrap();
     assert_eq!(records.len(), 1, "records: {records:?}");
-    assert_eq!(records[0].outcome, kotone_core::history::HistoryOutcome::Cancelled);
+    assert_eq!(
+        records[0].outcome,
+        kotone_core::history::HistoryOutcome::Cancelled
+    );
     assert!(records[0].final_text.is_empty());
     assert!(records[0].finalize_latency_ms.is_none());
 }
@@ -1229,9 +1270,18 @@ async fn history_error_retry_writes_two_entries_same_session() {
     let records = kotone_core::history::list_in(dir.path()).unwrap();
     assert_eq!(records.len(), 2, "records: {records:?}");
     // list 新→旧：sent 在前，error 在后
-    assert_eq!(records[0].outcome, kotone_core::history::HistoryOutcome::Sent);
-    assert_eq!(records[1].outcome, kotone_core::history::HistoryOutcome::Error);
-    assert_eq!(records[0].session_id, records[1].session_id, "同会话重试应同 sessionId");
+    assert_eq!(
+        records[0].outcome,
+        kotone_core::history::HistoryOutcome::Sent
+    );
+    assert_eq!(
+        records[1].outcome,
+        kotone_core::history::HistoryOutcome::Error
+    );
+    assert_eq!(
+        records[0].session_id, records[1].session_id,
+        "同会话重试应同 sessionId"
+    );
     assert!(records[1].error.is_some(), "error 记录应带错误信息");
     assert_eq!(records[0].final_text, "对面打野在下路");
 }
@@ -1256,7 +1306,10 @@ async fn history_error_then_cancel_does_not_double_record() {
 
     let records = kotone_core::history::list_in(dir.path()).unwrap();
     assert_eq!(records.len(), 1, "error 后的 cancel 不应双记: {records:?}");
-    assert_eq!(records[0].outcome, kotone_core::history::HistoryOutcome::Error);
+    assert_eq!(
+        records[0].outcome,
+        kotone_core::history::HistoryOutcome::Error
+    );
 }
 
 /// mode=off：完整走一遍 sent 流程，零记录零文件
@@ -1273,8 +1326,13 @@ async fn history_off_mode_writes_nothing() {
     orch.end().await.unwrap();
     assert_eq!(orch.state(), OrchestratorState::Success);
 
-    assert!(kotone_core::history::list_in(dir.path()).unwrap().is_empty());
-    assert!(!dir.path().join("history.jsonl").exists(), "off 模式不应产生文件");
+    assert!(kotone_core::history::list_in(dir.path())
+        .unwrap()
+        .is_empty());
+    assert!(
+        !dir.path().join("history.jsonl").exists(),
+        "off 模式不应产生文件"
+    );
 }
 
 /// includeAudio：即使 evalRecording 关闭，sent 也独立写入 history/audio/。

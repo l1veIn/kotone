@@ -30,8 +30,7 @@ pub(crate) const SPEC: OnlineTransducerSpec = OnlineTransducerSpec {
     joiner_file: "joiner.int8.onnx",
     modeling_unit: "bpe",
     bpe_vocab_file: Some("bpe.vocab"), // SentencePiece 文本词表（可由 bpe.model 导出）
-    not_ready_hint:
-        "X-ASR 模型未下载。请在设置页下载，或运行 kotone-cli download x-asr",
+    not_ready_hint: "X-ASR 模型未下载。请在高级页下载",
 };
 
 /// X-ASR 流式引擎 = 在线 transducer 骨架的 X-ASR 实例
@@ -131,7 +130,9 @@ mod tests {
         let tmp2 = tempfile::tempdir().unwrap();
         std::fs::write(
             tmp2.path().join("bpe.vocab"),
-            [0x0a, 0x0e, 0x0a, 0x05, b'<', b'b', b'l', b'k', b'>', 0x00, 0x00],
+            [
+                0x0a, 0x0e, 0x0a, 0x05, b'<', b'b', b'l', b'k', b'>', 0x00, 0x00,
+            ],
         )
         .unwrap();
         assert_eq!(gated_bpe_vocab(&SPEC, tmp2.path()), None);
@@ -178,7 +179,11 @@ mod tests {
         use crate::online_transducer::imp::{
             silence_tail, MAX_FINALIZE_DECODE_ROUNDS, TAIL_PADDING_MS,
         };
-        assert_eq!(silence_tail().len(), TAIL_PADDING_MS * 16, "16kHz 每秒 16000 采样");
+        assert_eq!(
+            silence_tail().len(),
+            TAIL_PADDING_MS * 16,
+            "16kHz 每秒 16000 采样"
+        );
         assert!(
             TAIL_PADDING_MS >= 480,
             "尾帧须覆盖 X-ASR 480ms chunk 的 lookahead：{TAIL_PADDING_MS}"
@@ -234,7 +239,9 @@ mod tests {
             options: serde_json::Value::Null,
         };
         let (tx, _rx) = mpsc::unbounded_channel();
-        let mut session = e.start_session(&cfg, tx).expect("创建带热词的 X-ASR stream 失败");
+        let mut session = e
+            .start_session(&cfg, tx)
+            .expect("创建带热词的 X-ASR stream 失败");
         if let Ok(wav) = std::env::var("KOTONE_TEST_HOTWORD_WAV") {
             let pcm = kotone_core::eval::read_wav(std::path::Path::new(&wav))
                 .expect("读取 KOTONE_TEST_HOTWORD_WAV 失败");

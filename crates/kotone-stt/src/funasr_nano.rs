@@ -27,7 +27,7 @@ pub(crate) const SPEC: OfflineSpec = OfflineSpec {
     languages: &["zh", "en", "ja"],
     hotwords: true, // 模型级 hotwords 字段
     not_ready_hint:
-        "FunASR-Nano 模型未下载。请在设置页下载，或运行 kotone-cli download funasr-nano",
+        "FunASR-Nano 模型未下载。请在高级页下载",
 };
 
 /// 填充 FunASR-Nano 模型家族字段（骨架已设 num_threads/provider）

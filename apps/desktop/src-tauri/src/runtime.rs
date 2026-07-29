@@ -94,13 +94,17 @@ impl RuntimeManager {
         RuntimeStatus {
             phase: phase.as_str().to_string(),
             restart_needed,
-            engine_name: engines.get(&engine_id).map(|e| e.display_name().to_string()),
+            engine_name: engines
+                .get(&engine_id)
+                .map(|e| e.display_name().to_string()),
             engine_id: Some(engine_id),
             model_id: Some(model_id),
-            interaction_mode: settings
-                .interaction_mode
-                .as_ref()
-                .map(|m| serde_json::to_string(m).unwrap_or_default().trim_matches('"').to_string()),
+            interaction_mode: settings.interaction_mode.as_ref().map(|m| {
+                serde_json::to_string(m)
+                    .unwrap_or_default()
+                    .trim_matches('"')
+                    .to_string()
+            }),
             stage,
         }
     }
@@ -155,7 +159,16 @@ pub async fn start(app: &AppHandle) -> Result<RuntimeStatus, String> {
             }
         }
         p if runtime::can_start(p) => {}
-        p => return Err(format!("运行时正在{}，请稍候", if p == RuntimePhase::Starting { "启动" } else { "停止" })),
+        p => {
+            return Err(format!(
+                "运行时正在{}，请稍候",
+                if p == RuntimePhase::Starting {
+                    "启动"
+                } else {
+                    "停止"
+                }
+            ))
+        }
     }
 
     rt.transit(runtime::begin_start)?;
@@ -197,7 +210,9 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
         )
     };
     if state.engines.get(&engine_id).is_none() {
-        return Err(format!("未注册的 STT 引擎: {engine_id}（请在「引擎与模型」页重新选择）"));
+        return Err(format!(
+            "未注册的 STT 引擎: {engine_id}（请在「引擎与模型」页重新选择）"
+        ));
     }
 
     // 阶段 1：warmup（模型入内存；sherpa 百毫秒级，放阻塞线程不卡 UI）
@@ -280,7 +295,10 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
         }
     }
 
-    rt.set_started(Some(StartedSnapshot { engine_id, model_id }));
+    rt.set_started(Some(StartedSnapshot {
+        engine_id,
+        model_id,
+    }));
     rt.transit(runtime::finish_start)?;
     kotone_core::log::log("runtime started");
     crate::record_process_event(
@@ -303,7 +321,16 @@ pub async fn stop(app: &AppHandle) -> Result<RuntimeStatus, String> {
             return snapshot_and_emit(app, None).ok_or_else(|| "运行时状态未初始化".to_string())
         }
         p if runtime::can_stop(p) => {}
-        p => return Err(format!("运行时正在{}，请稍候", if p == RuntimePhase::Starting { "启动" } else { "停止" })),
+        p => {
+            return Err(format!(
+                "运行时正在{}，请稍候",
+                if p == RuntimePhase::Starting {
+                    "启动"
+                } else {
+                    "停止"
+                }
+            ))
+        }
     }
     rt.transit(runtime::begin_stop)?;
     snapshot_and_emit(app, Some("unload".into()));

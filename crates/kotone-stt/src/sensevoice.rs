@@ -26,8 +26,7 @@ pub(crate) const SPEC: OfflineSpec = OfflineSpec {
     display_name: "sherpa-onnx SenseVoice 多语言",
     languages: &["zh", "en", "ja", "ko", "yue"],
     hotwords: false, // SenseVoice 不支持热词注入
-    not_ready_hint:
-        "SenseVoice 模型未下载。请在设置页下载，或运行 kotone-cli download sense-voice",
+    not_ready_hint: "SenseVoice 模型未下载。请在高级页下载",
 };
 
 /// SessionConfig.language → SenseVoice language（支持 zh/en/ja/ko/yue/auto；

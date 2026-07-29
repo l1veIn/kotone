@@ -3,15 +3,18 @@
 //! 供 model.rs 的模型下载使用。blocking 实现（reqwest blocking），
 //! 调用方负责放到阻塞线程（Tauri 命令用 spawn_blocking，CLI 直接调用亦可）。
 //!
-//! 下载源（settings.download）：模型托管在 HuggingFace / GitHub，国内直连
-//! 常超时。auto（默认）先走镜像（hf-mirror.com / ghProxy 前缀），失败回退
-//! 官方源一次；official 只走官方；mirror 只走镜像。
+//! 下载源（settings.download）：模型优先使用清单内固定 revision 的 ModelScope
+//! 镜像；其他 HuggingFace / GitHub 资源按配置改写。auto（默认）镜像失败后
+//! 回退官方；official 只走官方；mirror 只走镜像。
 
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::Path;
+use std::time::Duration;
 
 use kotone_core::settings::{DownloadConfig, DownloadSource};
+use reqwest::header::{ACCEPT_ENCODING, CONTENT_RANGE, RANGE};
+use reqwest::StatusCode;
 use sha2::{Digest, Sha256};
 
 /// 进度回调：（已下载字节数，总字节数（未知为 None））
@@ -19,6 +22,9 @@ pub type Progress<'a> = &'a dyn Fn(u64, Option<u64>);
 
 /// 单块读取大小（256KB：进度足够平滑，syscall 又不至于太密）
 const CHUNK: usize = 256 * 1024;
+/// ModelScope 的 LFS CDN 会拒绝没有 User-Agent 的匿名请求（403）。
+/// 使用固定、可识别的应用标识；公开模型下载不需要用户 Token。
+const USER_AGENT: &str = concat!("Kotone/", env!("CARGO_PKG_VERSION"), " model-downloader");
 
 /// 计算文件的 SHA256（小写 hex）
 pub fn sha256_file(path: &Path) -> Result<String, String> {
@@ -53,12 +59,8 @@ pub fn download_file(
     fs::create_dir_all(parent).map_err(|e| format!("无法创建目录 {}：{e}", parent.display()))?;
 
     let tmp = dest.with_extension("part");
-    // 失败时尽量清掉临时文件
-    let result = download_to_tmp(url, &tmp, progress);
-    if let Err(e) = result {
-        let _ = fs::remove_file(&tmp);
-        return Err(e);
-    }
+    // 网络中断时保留临时文件，下次从已有字节继续；内容校验失败仍会删除。
+    download_to_tmp(url, &tmp, progress)?;
 
     if let Some(expected) = expected_sha256 {
         let actual = sha256_file(&tmp)?;
@@ -73,26 +75,76 @@ pub fn download_file(
     if dest.exists() {
         fs::remove_file(dest).map_err(|e| format!("无法替换旧文件 {}：{e}", dest.display()))?;
     }
-    fs::rename(&tmp, dest).map_err(|e| {
-        format!(
-            "落盘失败（{} → {}）：{e}",
-            tmp.display(),
-            dest.display()
-        )
-    })?;
+    fs::rename(&tmp, dest)
+        .map_err(|e| format!("落盘失败（{} → {}）：{e}", tmp.display(), dest.display()))?;
     Ok(())
 }
 
 fn download_to_tmp(url: &str, tmp: &Path, progress: Progress<'_>) -> Result<(), String> {
-    let resp = reqwest::blocking::get(url)
-        .and_then(|r| r.error_for_status())
-        .map_err(|e| format!("下载失败（{url}）：{e}"))?;
-    let total = resp.content_length();
-    let mut resp = resp;
-    let mut out = File::create(tmp)
-        .map_err(|e| format!("无法创建临时文件 {}：{e}", tmp.display()))?;
+    let existing = fs::metadata(tmp).map(|md| md.len()).unwrap_or(0);
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .user_agent(USER_AGENT)
+        .build()
+        .map_err(|e| format!("无法初始化下载器：{e}"))?;
+    let mut request = client.get(url).header(ACCEPT_ENCODING, "identity");
+    if existing > 0 {
+        request = request.header(RANGE, format!("bytes={existing}-"));
+    }
+    let mut resp = request
+        .send()
+        // 重定向后的 ModelScope CDN URL 带短期 auth_key；错误日志不应把它输出。
+        .map_err(|e| format!("下载失败（{url}）：{}", e.without_url()))?;
 
-    let mut downloaded: u64 = 0;
+    if resp.status() == StatusCode::RANGE_NOT_SATISFIABLE && existing > 0 {
+        let total = resp
+            .headers()
+            .get(CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(content_range_total);
+        if total == Some(existing) {
+            progress(existing, total);
+            return Ok(());
+        }
+        return Err(format!(
+            "下载源拒绝续传：本地已有 {existing} 字节，远端总大小为 {}",
+            total.map_or_else(|| "未知".into(), |n| n.to_string())
+        ));
+    }
+    if !resp.status().is_success() {
+        return Err(format!("下载失败（{url}）：HTTP {}", resp.status()));
+    }
+
+    let resumed = existing > 0 && resp.status() == StatusCode::PARTIAL_CONTENT;
+    let (start, total) = if resumed {
+        let range = resp
+            .headers()
+            .get(CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| format!("下载源返回 206 但缺少 Content-Range（{url}）"))?;
+        let (range_start, total) = parse_content_range(range)
+            .ok_or_else(|| format!("下载源返回了无效 Content-Range：{range}"))?;
+        if range_start != existing {
+            return Err(format!(
+                "下载源续传位置不符：请求从 {existing} 开始，实际从 {range_start} 开始"
+            ));
+        }
+        (existing, Some(total))
+    } else {
+        // 服务器忽略 Range 并返回 200 时安全地从头覆盖，不能把完整文件追加到 part。
+        (0, resp.content_length())
+    };
+    let mut out = if resumed {
+        OpenOptions::new()
+            .append(true)
+            .open(tmp)
+            .map_err(|e| format!("无法继续写入临时文件 {}：{e}", tmp.display()))?
+    } else {
+        File::create(tmp).map_err(|e| format!("无法创建临时文件 {}：{e}", tmp.display()))?
+    };
+
+    let mut downloaded = start;
+    progress(downloaded, total);
     let mut buf = vec![0u8; CHUNK];
     loop {
         let n = resp.read(&mut buf).map_err(|e| format!("下载中断：{e}"))?;
@@ -104,7 +156,8 @@ fn download_to_tmp(url: &str, tmp: &Path, progress: Progress<'_>) -> Result<(), 
         downloaded += n as u64;
         progress(downloaded, total);
     }
-    out.flush().map_err(|e| format!("写入 {} 失败：{e}", tmp.display()))?;
+    out.flush()
+        .map_err(|e| format!("写入 {} 失败：{e}", tmp.display()))?;
     if let Some(t) = total {
         if downloaded != t {
             return Err(io::Error::new(
@@ -115,6 +168,17 @@ fn download_to_tmp(url: &str, tmp: &Path, progress: Progress<'_>) -> Result<(), 
         }
     }
     Ok(())
+}
+
+fn parse_content_range(value: &str) -> Option<(u64, u64)> {
+    let value = value.strip_prefix("bytes ")?;
+    let (range, total) = value.split_once('/')?;
+    let (start, _) = range.split_once('-')?;
+    Some((start.parse().ok()?, total.parse().ok()?))
+}
+
+fn content_range_total(value: &str) -> Option<u64> {
+    value.rsplit_once('/')?.1.parse().ok()
 }
 
 /// bytes → 小写 hex（不引 hex crate，几行的事）
@@ -226,13 +290,49 @@ mod tests {
             let (mut conn, _) = listener.accept().unwrap();
             // 读完请求头（到空行）
             let mut buf = [0u8; 1024];
-            let _ = conn.read(&mut buf);
+            let n = conn.read(&mut buf).unwrap();
+            let request = String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase();
+            assert!(
+                request.contains("user-agent: kotone/"),
+                "下载请求必须携带 Kotone User-Agent：{request}"
+            );
             let head = format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
             );
             conn.write_all(head.as_bytes()).unwrap();
             conn.write_all(body).unwrap();
+        });
+        format!("http://127.0.0.1:{port}/file.bin")
+    }
+
+    /// 返回一次标准 206，顺便断言客户端确实从 expected_start 续传。
+    fn serve_range_once(body: &'static [u8], expected_start: usize) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 2048];
+            let n = conn.read(&mut buf).unwrap();
+            let request = String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase();
+            assert!(
+                request.contains("user-agent: kotone/"),
+                "续传请求必须携带 Kotone User-Agent：{request}"
+            );
+            assert!(
+                request.contains(&format!("range: bytes={expected_start}-")),
+                "缺少正确的 Range 请求头：{request}"
+            );
+            let suffix = &body[expected_start..];
+            let head = format!(
+                "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nConnection: close\r\n\r\n",
+                suffix.len(),
+                expected_start,
+                body.len() - 1,
+                body.len()
+            );
+            conn.write_all(head.as_bytes()).unwrap();
+            conn.write_all(suffix).unwrap();
         });
         format!("http://127.0.0.1:{port}/file.bin")
     }
@@ -266,11 +366,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("out.bin");
 
-        let err = download_file(&url, &dest, Some("00".repeat(32).as_str()), &|_, _| {})
-            .unwrap_err();
+        let err =
+            download_file(&url, &dest, Some("00".repeat(32).as_str()), &|_, _| {}).unwrap_err();
         assert!(err.contains("SHA256 校验失败"), "err: {err}");
         assert!(!dest.exists());
-        assert!(!dir.path().join("out.part").exists(), "校验失败应删除临时文件");
+        assert!(
+            !dir.path().join("out.part").exists(),
+            "校验失败应删除临时文件"
+        );
     }
 
     #[test]
@@ -287,6 +390,41 @@ mod tests {
         )
         .unwrap();
         assert_eq!(fs::read(&dest).unwrap(), BODY);
+    }
+
+    #[test]
+    fn download_resumes_existing_part_with_range() {
+        static BODY: &[u8] = b"kotone resumable model";
+        let split = 7;
+        let url = serve_range_once(BODY, split);
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("out.bin");
+        fs::write(dir.path().join("out.part"), &BODY[..split]).unwrap();
+
+        download_file(&url, &dest, None, &|_, _| {}).unwrap();
+
+        assert_eq!(fs::read(&dest).unwrap(), BODY);
+        assert!(!dir.path().join("out.part").exists());
+    }
+
+    #[test]
+    fn download_overwrites_part_when_server_ignores_range() {
+        static BODY: &[u8] = b"complete response";
+        let url = serve_once(BODY);
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("out.bin");
+        fs::write(dir.path().join("out.part"), b"stale prefix").unwrap();
+
+        download_file(&url, &dest, None, &|_, _| {}).unwrap();
+
+        assert_eq!(fs::read(&dest).unwrap(), BODY);
+    }
+
+    #[test]
+    fn parses_content_range_headers() {
+        assert_eq!(parse_content_range("bytes 7-20/21"), Some((7, 21)));
+        assert_eq!(content_range_total("bytes */21"), Some(21));
+        assert_eq!(parse_content_range("invalid"), None);
     }
 
     // ---------- 下载源镜像（纯函数，不打网络） ----------
@@ -331,7 +469,10 @@ mod tests {
     #[test]
     fn candidates_official_only_original() {
         let url = "https://huggingface.co/a/b.onnx";
-        assert_eq!(candidate_urls(url, &cfg(DownloadSource::Official)), vec![url]);
+        assert_eq!(
+            candidate_urls(url, &cfg(DownloadSource::Official)),
+            vec![url]
+        );
     }
 
     #[test]
@@ -377,7 +518,34 @@ mod tests {
 
         static BODY: &[u8] = b"resolved ok";
         let good = serve_once(BODY);
-        download_resolved(&good, &dest, None, &|_, _| {}, &cfg(DownloadSource::Official)).unwrap();
+        download_resolved(
+            &good,
+            &dest,
+            None,
+            &|_, _| {},
+            &cfg(DownloadSource::Official),
+        )
+        .unwrap();
         assert_eq!(fs::read(&dest).unwrap(), BODY);
+    }
+
+    /// 真实网络兼容性探针：公开 ModelScope LFS 文件应可匿名下载。
+    ///
+    /// 手动运行：
+    /// cargo test -p kotone-stt modelscope_public_file_downloads_without_token -- --ignored
+    #[test]
+    #[ignore = "依赖 ModelScope 公网；发布前手动运行"]
+    fn modelscope_public_file_downloads_without_token() {
+        let url = "https://www.modelscope.cn/models/yangchen1258/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05/resolve/aa50faf0a9e45f6ea8913762151d47679ba468d7/tokens.txt";
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("tokens.txt");
+        download_file(
+            url,
+            &dest,
+            Some("b818a60878b9aae978cbb8ad594acbd403d76d1af2e31ef4197c84e2dbdba27c"),
+            &|_, _| {},
+        )
+        .unwrap();
+        assert_eq!(fs::metadata(dest).unwrap().len(), 58_806);
     }
 }

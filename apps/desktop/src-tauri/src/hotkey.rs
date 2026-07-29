@@ -109,7 +109,9 @@ impl HotkeySource for PluginHotkeySource {
                     }
                 }
             })
-            .map_err(|e| format!("注册热键「{key}」失败: {e}（键位可能被其他程序或其他 Kotone 实例占用）"))?;
+            .map_err(|e| {
+                format!("注册热键「{key}」失败: {e}（键位可能被其他程序或其他 Kotone 实例占用）")
+            })?;
 
         *self.current.lock().unwrap() = Some(shortcut);
         Ok(())
@@ -164,9 +166,7 @@ impl HotkeySource for PluginHotkeySource {
 
 /// LL 钩子事件 → orchestrator（spawn 进 Tauri 的 tokio runtime）
 #[cfg(windows)]
-fn make_llhook_sink(
-    orch: Arc<Orchestrator>,
-) -> kotone_platform_windows::hotkey_ll::HookSink {
+fn make_llhook_sink(orch: Arc<Orchestrator>) -> kotone_platform_windows::hotkey_ll::HookSink {
     Box::new(move |ev| {
         let orch = orch.clone();
         match ev {
@@ -417,7 +417,9 @@ pub fn detect_conflicts(key: &str) -> Vec<String> {
         "Enter", "Shift", "Control", "Alt",
     ];
     if common_game_keys.iter().any(|k| k.eq_ignore_ascii_case(key)) {
-        vec![format!("「{key}」是常见游戏/系统键位，可能与游戏内操作冲突")]
+        vec![format!(
+            "「{key}」是常见游戏/系统键位，可能与游戏内操作冲突"
+        )]
     } else {
         Vec::new()
     }

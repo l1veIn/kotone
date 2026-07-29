@@ -87,7 +87,10 @@ fn quote_arg(arg: &str) -> String {
 
 /// 参数列表 → lpParameters 串（空格分隔；纯逻辑可单测）
 fn build_params(args: &[String]) -> String {
-    args.iter().map(|a| quote_arg(a)).collect::<Vec<_>>().join(" ")
+    args.iter()
+        .map(|a| quote_arg(a))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// 「激活 profile → 目标游戏 pid」纯逻辑链路（进程枚举注入，可单测）。
@@ -132,7 +135,9 @@ mod win {
     use windows::Win32::Foundation::{
         CloseHandle, GetLastError, ERROR_ACCESS_DENIED, ERROR_CANCELLED, HANDLE, HWND,
     };
-    use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    use windows::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
     use windows::Win32::System::Threading::{
         GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
     };
@@ -316,7 +321,10 @@ mod tests {
 
     #[test]
     fn interpret_probe_mapping() {
-        assert_eq!(interpret_probe(ElevationProbe::TokenElevated(true)), Some(true));
+        assert_eq!(
+            interpret_probe(ElevationProbe::TokenElevated(true)),
+            Some(true)
+        );
         assert_eq!(
             interpret_probe(ElevationProbe::TokenElevated(false)),
             Some(false)
@@ -357,7 +365,10 @@ mod tests {
         // 普通反斜杠不转义
         assert_eq!(quote_arg("C:\\tmp\\a b"), "\"C:\\tmp\\a b\"");
         // 紧邻收尾引号的反斜杠翻倍
-        assert_eq!(quote_arg("C:\\Program Files\\"), "\"C:\\Program Files\\\\\"");
+        assert_eq!(
+            quote_arg("C:\\Program Files\\"),
+            "\"C:\\Program Files\\\\\""
+        );
         // 引号前的反斜杠翻倍 + 引号自身转义
         assert_eq!(quote_arg("a\\\""), "\"a\\\\\\\"\"");
     }
@@ -378,7 +389,8 @@ mod tests {
     }
 
     #[test]
-    fn should_auto_elevate_truth_table() {        // 开启 + 未提权 + 无标记 → 发起 runas
+    fn should_auto_elevate_truth_table() {
+        // 开启 + 未提权 + 无标记 → 发起 runas
         assert!(should_auto_elevate(true, false, false));
         // 未开启 → 不动
         assert!(!should_auto_elevate(false, false, false));

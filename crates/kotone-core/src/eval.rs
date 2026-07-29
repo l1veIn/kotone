@@ -128,7 +128,15 @@ fn utc_now_parts() -> (i64, u32, u32, u32, u32, u32, u32) {
     let days = (now.as_secs() / 86400) as i64;
     let secs = (now.as_secs() % 86400) as u32;
     let (y, m, d) = civil_from_days(days);
-    (y, m, d, secs / 3600, secs % 3600 / 60, secs % 60, now.subsec_millis())
+    (
+        y,
+        m,
+        d,
+        secs / 3600,
+        secs % 3600 / 60,
+        secs % 60,
+        now.subsec_millis(),
+    )
 }
 
 /// ISO 8601 UTC（简化：不带本地时区偏移）
@@ -251,8 +259,7 @@ pub fn record_session_at(dir: &Path, session: &EvalSession, pcm: &[f32]) -> Resu
 
 fn write_session_json(dir: &Path, session: &EvalSession) -> Result<(), String> {
     let path = session_json_path(dir, &session.session_id);
-    let json =
-        serde_json::to_string_pretty(session).map_err(|e| format!("序列化录档失败: {e}"))?;
+    let json = serde_json::to_string_pretty(session).map_err(|e| format!("序列化录档失败: {e}"))?;
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, json).map_err(|e| format!("写入录档失败: {e}"))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("落盘录档失败: {e}"))?;
@@ -375,8 +382,7 @@ pub fn replay_at(
     let mut stt = engine.start_session(&SessionConfig::default(), tx)?;
     let started = Instant::now();
     let mut partials: Vec<PartialRecord> = Vec::new();
-    let drain = |rx: &mut mpsc::UnboundedReceiver<SttEvent>,
-                     partials: &mut Vec<PartialRecord>| {
+    let drain = |rx: &mut mpsc::UnboundedReceiver<SttEvent>, partials: &mut Vec<PartialRecord>| {
         while let Ok(ev) = rx.try_recv() {
             if let SttEvent::Partial { text } = ev {
                 partials.push(PartialRecord {
@@ -411,8 +417,11 @@ fn save_replay_at(dir: &Path, result: &EvalResult) -> Result<(), String> {
     let rp = replays_dir(dir);
     std::fs::create_dir_all(&rp).map_err(|e| format!("创建回放目录失败: {e}"))?;
     let json = serde_json::to_string_pretty(result).map_err(|e| format!("序列化回放失败: {e}"))?;
-    std::fs::write(replay_path(dir, &result.session_id, &result.engine_id), json)
-        .map_err(|e| format!("写入回放结果失败: {e}"))?;
+    std::fs::write(
+        replay_path(dir, &result.session_id, &result.engine_id),
+        json,
+    )
+    .map_err(|e| format!("写入回放结果失败: {e}"))?;
     Ok(())
 }
 
@@ -520,8 +529,7 @@ pub fn export_at(dir: &Path) -> Result<String, String> {
     let sessions = list_sessions_at(dir)?;
     let mut jsonl = String::new();
     for s in &sessions {
-        let line =
-            serde_json::to_string(s).map_err(|e| format!("序列化索引导出失败: {e}"))?;
+        let line = serde_json::to_string(s).map_err(|e| format!("序列化索引导出失败: {e}"))?;
         jsonl.push_str(&line);
         jsonl.push('\n');
         for p in [
@@ -534,8 +542,7 @@ pub fn export_at(dir: &Path) -> Result<String, String> {
             }
         }
     }
-    std::fs::write(dest.join("sessions.jsonl"), jsonl)
-        .map_err(|e| format!("写入索引失败: {e}"))?;
+    std::fs::write(dest.join("sessions.jsonl"), jsonl).map_err(|e| format!("写入索引失败: {e}"))?;
 
     // 回放缓存整个子目录复制
     let rp = replays_dir(dir);
@@ -546,8 +553,9 @@ pub fn export_at(dir: &Path) -> Result<String, String> {
             .map_err(|e| format!("读取回放目录失败: {e}"))?
             .flatten()
         {
-            std::fs::copy(entry.path(), dest_rp.join(entry.file_name()))
-                .map_err(|e| format!("复制回放 {} 失败: {e}", entry.file_name().to_string_lossy()))?;
+            std::fs::copy(entry.path(), dest_rp.join(entry.file_name())).map_err(|e| {
+                format!("复制回放 {} 失败: {e}", entry.file_name().to_string_lossy())
+            })?;
         }
     }
     Ok(dest.to_string_lossy().into_owned())
@@ -619,8 +627,7 @@ pub fn write_wav(path: &Path, pcm: &[f32]) -> std::io::Result<()> {
 
 /// 读取 16bit PCM mono wav → f32 PCM（-1..1）
 pub fn read_wav(path: &Path) -> Result<Vec<f32>, String> {
-    let data =
-        std::fs::read(path).map_err(|e| format!("读取 wav 失败 {}: {e}", path.display()))?;
+    let data = std::fs::read(path).map_err(|e| format!("读取 wav 失败 {}: {e}", path.display()))?;
     if data.len() < 12 || &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
         return Err(format!("不是有效的 RIFF/WAVE 文件：{}", path.display()));
     }
@@ -703,10 +710,7 @@ mod tests {
             _cfg: &SessionConfig,
             events: mpsc::UnboundedSender<SttEvent>,
         ) -> Result<Box<dyn SttSession>, String> {
-            Ok(Box::new(FakeSession {
-                events,
-                pushes: 0,
-            }))
+            Ok(Box::new(FakeSession { events, pushes: 0 }))
         }
     }
 
@@ -822,14 +826,22 @@ mod tests {
     #[test]
     fn list_sessions_newest_first() {
         let dir = tempfile::tempdir().unwrap();
-        for id in ["20260725-120000-001", "20260725-120000-003", "20260725-120000-002"] {
+        for id in [
+            "20260725-120000-001",
+            "20260725-120000-003",
+            "20260725-120000-002",
+        ] {
             record_session_at(dir.path(), &sample_session(id), &[]).unwrap();
         }
         let sessions = list_sessions_at(dir.path()).unwrap();
         let ids: Vec<&str> = sessions.iter().map(|s| s.session_id.as_str()).collect();
         assert_eq!(
             ids,
-            ["20260725-120000-003", "20260725-120000-002", "20260725-120000-001"]
+            [
+                "20260725-120000-003",
+                "20260725-120000-002",
+                "20260725-120000-001"
+            ]
         );
     }
 
@@ -852,8 +864,14 @@ mod tests {
         // 最旧 5 个（000..004）应连同 wav 一起被删
         for i in 0..5 {
             let id = format!("20260725-000000-{i:03}");
-            assert!(!session_json_path(dir.path(), &id).exists(), "{id} 应被清理");
-            assert!(!session_wav_path(dir.path(), &id).exists(), "{id}.wav 应被清理");
+            assert!(
+                !session_json_path(dir.path(), &id).exists(),
+                "{id} 应被清理"
+            );
+            assert!(
+                !session_wav_path(dir.path(), &id).exists(),
+                "{id}.wav 应被清理"
+            );
         }
         assert!(
             !rp.join("20260725-000000-000__fake-stream.json").exists(),
@@ -1001,7 +1019,12 @@ mod tests {
         assert_eq!(
             std::fs::read_dir(&dest)
                 .unwrap()
-                .filter(|e| e.as_ref().unwrap().path().extension().is_some_and(|x| x == "json"))
+                .filter(|e| e
+                    .as_ref()
+                    .unwrap()
+                    .path()
+                    .extension()
+                    .is_some_and(|x| x == "json"))
                 .count(),
             3
         );
@@ -1027,7 +1050,10 @@ mod tests {
         assert_eq!(session.audio_ms, 1500);
         assert_eq!(session.final_ms, 321);
         assert_eq!(session.partials.len(), 1);
-        assert_eq!(session.first_partial_ms, session.partials.first().map(|p| p.t));
+        assert_eq!(
+            session.first_partial_ms,
+            session.partials.first().map(|p| p.t)
+        );
         assert_eq!(session.human_label, None);
         assert!(session_json_path(dir.path(), &session.session_id).exists());
         assert!(session_wav_path(dir.path(), &session.session_id).exists());

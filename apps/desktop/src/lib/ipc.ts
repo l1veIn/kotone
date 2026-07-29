@@ -66,7 +66,7 @@ export interface Settings {
   history: HistoryConfig;
   ui: UiConfig;
   models: ModelsConfig;
-  /** 模型下载源配置（auto 默认：镜像优先失败回退官方） */
+  /** 模型下载源配置（auto 默认：ModelScope/镜像优先，失败回退官方） */
   download: DownloadConfig;
   /** 悬浮窗配置 */
   overlay: OverlayConfig;
@@ -99,7 +99,7 @@ export interface OverlayConfig {
 
 /** 模型下载配置（config.json `download` 段） */
 export interface DownloadConfig {
-  /** 下载源：auto（镜像优先+回退）/ official（仅官方）/ mirror（仅镜像） */
+  /** 下载源：auto（魔搭/镜像优先+回退）/ official（仅官方）/ mirror（仅镜像） */
   source: "auto" | "official" | "mirror";
   /** GitHub 加速代理前缀（公益代理不稳定，做成可配置） */
   ghProxy: string;

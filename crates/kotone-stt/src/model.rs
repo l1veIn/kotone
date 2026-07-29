@@ -66,6 +66,13 @@ pub struct ArchiveSource {
     pub size_bytes: u64,
 }
 
+/// 与官方整包内容一致的逐文件镜像。revision 固定到不可变提交，避免 master
+/// 后续变化影响已经发布的客户端；每个文件仍按清单 SHA256 独立校验。
+pub struct FileMirrorSource {
+    pub base_url: &'static str,
+    pub revision: &'static str,
+}
+
 /// 多文件模型清单条目（下载为 ~/.kotone/models/<dir>/<files>）
 pub struct MultiFileModel {
     pub id: &'static str,
@@ -75,6 +82,8 @@ pub struct MultiFileModel {
     pub files: &'static [ModelFile],
     /// Some = 整包下载解压（files 的 url 置空）；None = 逐文件直下
     pub archive: Option<ArchiveSource>,
+    /// 逐文件镜像（按优先级）；auto/mirror 依次尝试，auto 最后回退官方整包
+    pub file_mirrors: &'static [FileMirrorSource],
 }
 
 /// sherpa-onnx 模型清单（ADR-004）。默认引擎 X-ASR（六引擎评测冠军：CER 0.008、
@@ -82,9 +91,10 @@ pub struct MultiFileModel {
 /// SHA256 取自 HuggingFace LFS oid 或本地实算（各条目注释注明）；git 内小文件
 /// 无 LFS oid，仅按大小校验。
 pub const SHERPA_MODELS: &[MultiFileModel] = &[
-    // X-ASR（流式 zipformer transducer，中英+标点）：仅在 k2-fsa GitHub releases
-    // 以整包 tar.bz2 发布，无逐文件镜像 → 走 archive 整包下载解压。
-    // 整包及各文件 SHA256 均为本地从官方 tar 实算（2026-07 核对）。
+    // X-ASR（流式 zipformer transducer，中英+标点）：官方在 k2-fsa GitHub
+    // releases 发布 tar.bz2；Kotone 的 ModelScope 仓库提供内容完全一致的逐文件
+    // 国内镜像。auto 默认走 ModelScope，失败后回退官方整包。
+    // 整包及各文件 SHA256 均与官方发布资产核对（2026-07）。
     MultiFileModel {
         id: "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05",
         engine_id: "sherpa-onnx-x-asr-zh-en",
@@ -127,6 +137,18 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
             sha256: "fa5f63d618e5a01526e275a358bb7772e403f84808a4769fba52cffd8160bf74",
             size_bytes: 133_895_136,
         }),
+        file_mirrors: &[
+            // Kotone 项目方控制的主镜像
+            FileMirrorSource {
+                base_url: "https://www.modelscope.cn/models/yangchen1258/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05",
+                revision: "aa50faf0a9e45f6ea8913762151d47679ba468d7",
+            },
+            // 社区备用镜像；内容 SHA256 与官方及主镜像完全一致
+            FileMirrorSource {
+                base_url: "https://www.modelscope.cn/models/bujidc/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05",
+                revision: "57f0a27e56d43b36f350be2ecc4a2200232d13e7",
+            },
+        ],
     },
     // SenseVoice（非流式、多语言）：model.int8.onnx 的 SHA256 取自 HF resolve
     // 头 X-Linked-ETag（LFS sha256，2025-01 核对）；tokens.txt 为 git 内小文件，
@@ -151,6 +173,7 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
             },
         ],
         archive: None,
+        file_mirrors: &[],
     },
     // FunASR-Nano（非流式，encoder_adaptor + LLM + embedding）：HF 逐文件直下。
     // SHA256 取自 HF resolve 响应头 X-Linked-ETag（LFS sha256，2026-07 核对）；
@@ -200,6 +223,7 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
             },
         ],
         archive: None,
+        file_mirrors: &[],
     },
 ];
 
@@ -346,7 +370,18 @@ pub fn list() -> Result<Vec<ModelInfo>, String> {
             engine_id: m.engine_id.into(),
             display_name: m.display_name.into(),
             size_bytes: m.files.iter().map(|f| f.size_bytes).sum(),
-            download_url: m.files.first().map(|f| f.url.into()).unwrap_or_default(),
+            download_url: m
+                .file_mirrors
+                .first()
+                .map(|mirror| mirror.base_url.into())
+                .or_else(|| {
+                    m.files
+                        .iter()
+                        .find(|f| !f.url.is_empty())
+                        .map(|f| f.url.into())
+                })
+                .or_else(|| m.archive.as_ref().map(|a| a.url.into()))
+                .unwrap_or_default(),
             sha256: String::new(), // 多文件条目逐文件校验，聚合字段留空
             downloaded: multi_model_ready(m.id),
         })
@@ -363,7 +398,13 @@ pub fn download(id: &str, progress: Progress<'_>) -> Result<(), String> {
     let cfg = settings::load().download;
     if id == VAD_MODEL_ID {
         let dest = vad_model_path();
-        return download::download_resolved(VAD_MODEL_URL, &dest, Some(VAD_MODEL_SHA256), progress, &cfg);
+        return download::download_resolved(
+            VAD_MODEL_URL,
+            &dest,
+            Some(VAD_MODEL_SHA256),
+            progress,
+            &cfg,
+        );
     }
     if let Some(m) = SHERPA_MODELS.iter().find(|m| m.id == id) {
         let result = download_multi(m, progress, &cfg);
@@ -385,8 +426,41 @@ fn download_multi(
     cfg: &settings::DownloadConfig,
 ) -> Result<(), String> {
     if let Some(archive) = &m.archive {
-        return download_archive(m, archive, progress, cfg);
+        return match cfg.source {
+            settings::DownloadSource::Official => download_archive(m, archive, progress, cfg),
+            settings::DownloadSource::Mirror if !m.file_mirrors.is_empty() => {
+                download_file_mirrors(m, progress)
+            }
+            settings::DownloadSource::Auto if !m.file_mirrors.is_empty() => {
+                match download_file_mirrors(m, progress) {
+                    Ok(()) => Ok(()),
+                    Err(mirror_err) => {
+                        eprintln!("[download] ModelScope 镜像均失败，回退官方整包：{mirror_err}");
+                        let official_cfg = settings::DownloadConfig {
+                            source: settings::DownloadSource::Official,
+                            gh_proxy: cfg.gh_proxy.clone(),
+                        };
+                        download_archive(m, archive, progress, &official_cfg).map_err(
+                            |official_err| {
+                                format!(
+                                "ModelScope 镜像失败：{mirror_err}；官方源也失败：{official_err}"
+                            )
+                            },
+                        )
+                    }
+                }
+            }
+            _ => download_archive(m, archive, progress, cfg),
+        };
     }
+    download_manifest_files(m, progress, cfg)
+}
+
+fn download_manifest_files(
+    m: &MultiFileModel,
+    progress: Progress<'_>,
+    cfg: &settings::DownloadConfig,
+) -> Result<(), String> {
     let dir = models_dir().join(m.dir);
     fs::create_dir_all(&dir).map_err(|e| format!("无法创建目录 {}：{e}", dir.display()))?;
     let total: u64 = m.files.iter().map(|f| f.size_bytes).sum();
@@ -394,25 +468,90 @@ fn download_multi(
     for f in m.files {
         let dest = dir.join(f.name);
         // 已存在且大小匹配 → 跳过（重跑时天然续传）
-        if fs::metadata(&dest).map(|md| md.len() == f.size_bytes).unwrap_or(false) {
+        if fs::metadata(&dest)
+            .map(|md| md.len() == f.size_bytes)
+            .unwrap_or(false)
+        {
             done += f.size_bytes;
             progress(done, Some(total));
             continue;
         }
         let base = done;
-        download::download_resolved(f.url, &dest, f.sha256, &|d, t| {
-            // 单文件 total 不可靠时仍保证聚合 total 准确
-            let _ = t;
-            progress(base + d, Some(total));
-        }, cfg)?;
+        download::download_resolved(
+            f.url,
+            &dest,
+            f.sha256,
+            &|d, t| {
+                // 单文件 total 不可靠时仍保证聚合 total 准确
+                let _ = t;
+                progress(base + d, Some(total));
+            },
+            cfg,
+        )?;
         done += f.size_bytes;
         progress(done, Some(total));
     }
     Ok(())
 }
 
+/// 依次尝试固定 revision 的逐文件镜像。镜像之间文件内容相同，因此前一源
+/// 中断留下的 `.part` 可以直接在后一源通过 HTTP Range 续传。
+fn download_file_mirrors(m: &MultiFileModel, progress: Progress<'_>) -> Result<(), String> {
+    let mut errors = Vec::new();
+    for (index, mirror) in m.file_mirrors.iter().enumerate() {
+        if index > 0 {
+            eprintln!("[download] 主 ModelScope 镜像失败，尝试备用镜像");
+        }
+        match download_file_mirror(m, mirror, progress) {
+            Ok(()) => return Ok(()),
+            Err(err) => errors.push(err),
+        }
+    }
+    Err(errors.join("；"))
+}
+
+fn download_file_mirror(
+    m: &MultiFileModel,
+    mirror: &FileMirrorSource,
+    progress: Progress<'_>,
+) -> Result<(), String> {
+    let dir = models_dir().join(m.dir);
+    fs::create_dir_all(&dir).map_err(|e| format!("无法创建目录 {}：{e}", dir.display()))?;
+    let total: u64 = m.files.iter().map(|f| f.size_bytes).sum();
+    let mut done = 0u64;
+    for f in m.files {
+        let dest = dir.join(f.name);
+        if fs::metadata(&dest)
+            .map(|md| md.len() == f.size_bytes)
+            .unwrap_or(false)
+        {
+            done += f.size_bytes;
+            progress(done, Some(total));
+            continue;
+        }
+        let base = done;
+        let url = file_mirror_url(mirror, f.name);
+        download::download_file(&url, &dest, f.sha256, &|d, _| {
+            progress(base + d, Some(total));
+        })
+        .map_err(|e| format!("{} 下载 {} 失败：{e}", mirror.base_url, f.name))?;
+        done += f.size_bytes;
+        progress(done, Some(total));
+    }
+    Ok(())
+}
+
+fn file_mirror_url(mirror: &FileMirrorSource, name: &str) -> String {
+    format!(
+        "{}/resolve/{}/{}",
+        mirror.base_url.trim_end_matches('/'),
+        mirror.revision,
+        name
+    )
+}
+
 /// 整包模型（tar.bz2）：下载整包校验后，只按 files 白名单提取到模型目录，
-/// 再逐文件校验大小 + SHA256，最后删除整包（失败同样清理，不留半成品）。
+/// 再逐文件校验大小 + SHA256，最后删除完整整包；网络中断的 `.part` 保留续传。
 fn download_archive(
     m: &MultiFileModel,
     archive: &ArchiveSource,
@@ -489,8 +628,7 @@ fn download_archive_inner(
     // 逐文件校验（大小 + SHA256）：整包校验只保证包本身，提取后逐文件再核一遍
     for f in m.files {
         let out = dir.join(f.name);
-        let md = fs::metadata(&out)
-            .map_err(|e| format!("解压后缺少 {}：{e}", out.display()))?;
+        let md = fs::metadata(&out).map_err(|e| format!("解压后缺少 {}：{e}", out.display()))?;
         if md.len() != f.size_bytes {
             return Err(format!(
                 "文件 {} 大小不符：期望 {}，实际 {}",
@@ -528,9 +666,11 @@ fn model_ids() -> Vec<&'static str> {
 /// 只依赖 protobuf wire format（pieces=field 1；Piece.piece=field 1 string，
 /// Piece.score=field 2 fixed32 float），不引 sentencepiece 依赖。
 /// 返回词片数。
-pub fn export_bpe_vocab(bpe_model: &std::path::Path, out: &std::path::Path) -> Result<usize, String> {
-    let data = fs::read(bpe_model)
-        .map_err(|e| format!("无法读取 {}：{e}", bpe_model.display()))?;
+pub fn export_bpe_vocab(
+    bpe_model: &std::path::Path,
+    out: &std::path::Path,
+) -> Result<usize, String> {
+    let data = fs::read(bpe_model).map_err(|e| format!("无法读取 {}：{e}", bpe_model.display()))?;
     let mut pieces: Vec<(String, f32)> = Vec::new();
     let mut i = 0usize;
     while i < data.len() {
@@ -616,14 +756,8 @@ pub fn resolve_bpe_vocab(dir: &std::path::Path, vocab_name: &str) -> Option<Path
         return Some(vocab);
     }
     let model = dir.join("bpe.model");
-    if model.is_file()
-        && export_bpe_vocab(&model, &vocab).is_ok()
-        && is_valid_bpe_vocab(&vocab)
-    {
-        kotone_core::log::log(&format!(
-            "已从 bpe.model 导出热词词表 {}",
-            vocab.display()
-        ));
+    if model.is_file() && export_bpe_vocab(&model, &vocab).is_ok() && is_valid_bpe_vocab(&vocab) {
+        kotone_core::log::log(&format!("已从 bpe.model 导出热词词表 {}", vocab.display()));
         return Some(vocab);
     }
     None
@@ -637,10 +771,7 @@ fn maybe_export_bpe_vocab(dir: &std::path::Path) {
         return;
     }
     match export_bpe_vocab(&model, &vocab) {
-        Ok(n) => kotone_core::log::log(&format!(
-            "已导出热词词表 {}（{n} 词片）",
-            vocab.display()
-        )),
+        Ok(n) => kotone_core::log::log(&format!("已导出热词词表 {}（{n} 词片）", vocab.display())),
         Err(e) => kotone_core::log::log(&format!("导出 bpe.vocab 失败（热词降级）：{e}")),
     }
 }
@@ -740,7 +871,8 @@ pub fn migrate_dir_contents(src: &PathBuf, dst: &PathBuf) -> Result<MigrateRepor
     }
     fs::create_dir_all(dst).map_err(|e| format!("无法创建目录 {}：{e}", dst.display()))?;
     let mut report = MigrateReport::default();
-    for entry in fs::read_dir(src).map_err(|e| format!("读取目录 {} 失败：{e}", src.display()))? {
+    for entry in fs::read_dir(src).map_err(|e| format!("读取目录 {} 失败：{e}", src.display()))?
+    {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name().to_string_lossy().into_owned();
         let target = dst.join(&name);
@@ -757,7 +889,9 @@ pub fn migrate_dir_contents(src: &PathBuf, dst: &PathBuf) -> Result<MigrateRepor
             Ok(()) => report.moved.push(name),
             Err(_) => {
                 // 跨卷等情况：复制 + 删除
-                if copy_entry(&entry.path(), &target).and_then(|_| remove_entry(&entry.path())).is_ok()
+                if copy_entry(&entry.path(), &target)
+                    .and_then(|_| remove_entry(&entry.path()))
+                    .is_ok()
                 {
                     report.moved.push(name);
                 } else {
@@ -839,7 +973,8 @@ fn delete_files_in(models: &PathBuf, id: &str) -> Result<(), String> {
     if let Some(m) = SHERPA_MODELS.iter().find(|m| m.id == id) {
         let dir = models.join(m.dir);
         if dir.exists() {
-            fs::remove_dir_all(&dir).map_err(|e| format!("删除目录 {} 失败：{e}", dir.display()))?;
+            fs::remove_dir_all(&dir)
+                .map_err(|e| format!("删除目录 {} 失败：{e}", dir.display()))?;
         }
         return Ok(());
     }
@@ -911,7 +1046,11 @@ mod tests {
         assert_eq!(x.engine_id, "sherpa-onnx-x-asr-zh-en");
         assert_eq!(
             x.size_bytes,
-            SHERPA_MODELS[0].files.iter().map(|f| f.size_bytes).sum::<u64>()
+            SHERPA_MODELS[0]
+                .files
+                .iter()
+                .map(|f| f.size_bytes)
+                .sum::<u64>()
         );
     }
 
@@ -954,7 +1093,10 @@ mod tests {
         let written = fs::read(&dest).unwrap();
         assert_eq!(written.len() as u64, VAD_MODEL_SIZE);
         assert_eq!(written, VAD_BUNDLED_BYTES, "落盘内容应与内嵌字节一致");
-        assert!(!models.join(format!("{VAD_MODEL_FILE}.tmp")).exists(), "临时文件应已 rename");
+        assert!(
+            !models.join(format!("{VAD_MODEL_FILE}.tmp")).exists(),
+            "临时文件应已 rename"
+        );
 
         // 幂等：已就绪不再写
         assert_eq!(ensure_vad_model_in(&models), Ok(false));
@@ -969,7 +1111,10 @@ mod tests {
         let dest = models.join(VAD_MODEL_FILE);
         fs::write(&dest, vec![0xABu8; VAD_MODEL_SIZE as usize]).unwrap();
         assert_eq!(ensure_vad_model_in(&models), Ok(false));
-        assert_eq!(fs::read(&dest).unwrap(), vec![0xABu8; VAD_MODEL_SIZE as usize]);
+        assert_eq!(
+            fs::read(&dest).unwrap(),
+            vec![0xABu8; VAD_MODEL_SIZE as usize]
+        );
 
         // 大小不符（残缺文件）→ 重新解包覆盖
         fs::write(&dest, b"truncated").unwrap();
@@ -1003,6 +1148,21 @@ mod tests {
                 assert_eq!(a.sha256.len(), 64, "{} 整包 sha256 应 64 hex", m.id);
                 assert!(a.sha256.chars().all(|c| c.is_ascii_hexdigit()), "{}", m.id);
                 assert!(a.size_bytes > 0, "{}", m.id);
+            }
+            for mirror in m.file_mirrors {
+                assert!(
+                    mirror
+                        .base_url
+                        .starts_with("https://www.modelscope.cn/models/"),
+                    "{} 镜像必须是 ModelScope 模型地址",
+                    m.id
+                );
+                assert_eq!(mirror.revision.len(), 40, "{} 镜像必须固定 commit", m.id);
+                assert!(
+                    mirror.revision.chars().all(|c| c.is_ascii_hexdigit()),
+                    "{} 镜像 revision 必须是 hex",
+                    m.id
+                );
             }
             for f in m.files {
                 if m.archive.is_none() {
@@ -1041,12 +1201,19 @@ mod tests {
 
     #[test]
     fn new_engines_manifest_entries() {
-        // X-ASR：整包发布（archive），含 encoder/decoder/joiner/tokens/bpe.model
+        // X-ASR：官方整包 + 两个固定 revision 的 ModelScope 逐文件镜像
         let x = SHERPA_MODELS
             .iter()
             .find(|m| m.engine_id == "sherpa-onnx-x-asr-zh-en")
             .expect("X-ASR 模型清单缺失");
         assert!(x.archive.is_some(), "X-ASR 应走整包下载");
+        assert_eq!(x.file_mirrors.len(), 2, "X-ASR 应有主、备两个国内镜像");
+        for mirror in x.file_mirrors {
+            let url = file_mirror_url(mirror, "encoder.int8.onnx");
+            assert!(url.contains("/resolve/"));
+            assert!(url.contains(mirror.revision));
+            assert!(url.ends_with("/encoder.int8.onnx"));
+        }
         let x_names: Vec<_> = x.files.iter().map(|f| f.name).collect();
         for need in [
             "encoder.int8.onnx",
@@ -1057,7 +1224,10 @@ mod tests {
         ] {
             assert!(x_names.contains(&need), "X-ASR 缺少 {need}");
         }
-        assert_eq!(multi_file_default_model("sherpa-onnx-x-asr-zh-en"), Some(x.id));
+        assert_eq!(
+            multi_file_default_model("sherpa-onnx-x-asr-zh-en"),
+            Some(x.id)
+        );
 
         // FunASR-Nano：encoder_adaptor/llm/embedding + Qwen3-0.6B tokenizer 目录
         let fun = SHERPA_MODELS
@@ -1087,7 +1257,11 @@ mod tests {
         for engine in ["sherpa-onnx-x-asr-zh-en", "sherpa-onnx-funasr-nano"] {
             let default = multi_file_default_model(engine).unwrap();
             let s = settings::Settings::default();
-            assert_eq!(active_model_from(&s, engine), default, "{engine} 未配置兜底");
+            assert_eq!(
+                active_model_from(&s, engine),
+                default,
+                "{engine} 未配置兜底"
+            );
 
             let mut s2 = settings::Settings::default();
             s2.engine_options[engine]["model"] = serde_json::json!(default);
@@ -1175,7 +1349,10 @@ mod tests {
         .unwrap();
         let n = export_bpe_vocab(&model, &vocab).unwrap();
         assert_eq!(n, 3);
-        assert_eq!(fs::read_to_string(&vocab).unwrap(), "<blk>\t0\n▁HEL\t-1.5\nLOW\t-2\n");
+        assert_eq!(
+            fs::read_to_string(&vocab).unwrap(),
+            "<blk>\t0\n▁HEL\t-1.5\nLOW\t-2\n"
+        );
         assert!(is_valid_bpe_vocab(&vocab), "导出的 vocab 应通过格式探测");
     }
 
@@ -1198,7 +1375,9 @@ mod tests {
         let bin = tmp.path().join("bin.vocab");
         fs::write(
             &bin,
-            [0x0a, 0x0e, 0x0a, 0x05, b'<', b'b', b'l', b'k', b'>', 0x15, 0, 0, 0, 0],
+            [
+                0x0a, 0x0e, 0x0a, 0x05, b'<', b'b', b'l', b'k', b'>', 0x15, 0, 0, 0, 0,
+            ],
         )
         .unwrap();
         assert!(!is_valid_bpe_vocab(&bin), "二进制不得通过探测");
@@ -1283,7 +1462,10 @@ mod tests {
         assert_eq!(report.failed.len(), 0, "report: {report:?}");
         assert_eq!(report.moved.len(), 2);
         assert_eq!(fs::read(dst.join("model.bin")).unwrap(), b"model");
-        assert_eq!(fs::read(dst.join("sherpa-dir/tokens.txt")).unwrap(), b"tokens");
+        assert_eq!(
+            fs::read(dst.join("sherpa-dir/tokens.txt")).unwrap(),
+            b"tokens"
+        );
         assert!(!src.join("model.bin").exists(), "源文件应已移走");
     }
 

@@ -19,7 +19,11 @@ pub struct TrayState {
 /// 任何相位变化（启动/停止完成、失败回滚）都应调用，保证文案始终正确。
 pub fn sync_toggle_label(app: &AppHandle, running: bool) {
     if let Some(tray) = app.try_state::<TrayState>() {
-        let text = if running { "停止引擎" } else { "启动引擎" };
+        let text = if running {
+            "停止引擎"
+        } else {
+            "启动引擎"
+        };
         let _ = tray.toggle_item.set_text(text);
     }
 }

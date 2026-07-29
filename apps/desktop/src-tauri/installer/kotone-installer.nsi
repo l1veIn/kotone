@@ -165,6 +165,11 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 !define MUI_BGCOLOR "0B0E20"
 !define MUI_TEXTCOLOR "EDEFF7"
 !define MUI_INSTFILESPAGE_COLORS "EDEFF7 0B0E20"
+; MUI2 only disables the native checkbox theme in high-contrast mode by
+; default. Native themed checkboxes ignore SetCtlColors and keep black text.
+; This built-in switch makes MUI2 disable the theme for the finish-page
+; checkboxes unconditionally, so its own MUI_TEXTCOLOR is actually applied.
+!define MUI_FORCECLASSICCONTROLS
 
 ; Define registry key to store installer language
 !define MUI_LANGDLL_REGISTRY_ROOT "HKCU"
@@ -425,21 +430,7 @@ Var AppStartMenuFolder
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_FUNCTION RunMainBinary
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
-!define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishPageShow
 !insertmacro MUI_PAGE_FINISH
-
-; Themed Windows checkboxes ignore MUI_TEXTCOLOR and render black labels on
-; Kotone's dark finish page. Disable the native theme for these two controls,
-; then apply the palette explicitly. Keep the workaround scoped to this page.
-Function FinishPageShow
-  GetDlgItem $0 $MUI_HWND 1203
-  System::Call 'UXTHEME::SetWindowTheme(p r0,w" ",w" ")'
-  SetCtlColors $0 "${MUI_TEXTCOLOR}" "${MUI_BGCOLOR}"
-
-  GetDlgItem $0 $MUI_HWND 1204
-  System::Call 'UXTHEME::SetWindowTheme(p r0,w" ",w" ")'
-  SetCtlColors $0 "${MUI_TEXTCOLOR}" "${MUI_BGCOLOR}"
-FunctionEnd
 
 Function RunMainBinary
   nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" ""

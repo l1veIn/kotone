@@ -137,11 +137,7 @@ fn ensure_not_cancelled(cancel: &CancelToken) -> Result<(), InjectError> {
 
 /// sleep 前后各检查一次取消令牌（§6：取消则安全中止）。
 /// 注意：本函数被调用时不可能有「按下一半」的键——key_down_up 是原子 down/up。
-fn cancellable_sleep(
-    ops: &dyn SendOps,
-    ms: u32,
-    cancel: &CancelToken,
-) -> Result<(), InjectError> {
+fn cancellable_sleep(ops: &dyn SendOps, ms: u32, cancel: &CancelToken) -> Result<(), InjectError> {
     ensure_not_cancelled(cancel)?;
     if ms > 0 {
         ops.sleep_ms(u64::from(ms));
@@ -301,7 +297,13 @@ mod tests {
         send_sequence("hi", &profile, &cancel, &ops).unwrap();
         assert_eq!(
             ops.log(),
-            vec!["key:Enter", "sleep:55", "unicode:hi", "sleep:77", "key:Enter"]
+            vec![
+                "key:Enter",
+                "sleep:55",
+                "unicode:hi",
+                "sleep:77",
+                "key:Enter"
+            ]
         );
     }
 

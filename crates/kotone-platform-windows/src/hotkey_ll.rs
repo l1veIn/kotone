@@ -23,8 +23,8 @@ use std::time::Duration;
 use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
-    HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT,
+    CallNextHookEx, GetMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx, HHOOK,
+    KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT,
     WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
@@ -127,6 +127,11 @@ impl LlHookSource {
             if let Some(shared) = SHARED.get() {
                 shared.matcher.lock().unwrap().set_enabled(false);
             }
+        } else {
+            // Windows 会在低级钩子回调超时等情况下静默移除 hook，原线程与
+            // state.started 仍可能看起来正常。录入是低频操作，开始前主动重装，
+            // 避免进入 capture 状态后永远收不到物理按键、最终只能超时。
+            self.restart_hook_thread()?;
         }
 
         let shared = SHARED.get().ok_or("LL 钩子未启动".to_string())?;
@@ -166,6 +171,29 @@ impl LlHookSource {
             }
         }
     }
+
+    /// 在保持共享 matcher / 事件消费者不变的前提下重建 WH_KEYBOARD_LL。
+    ///
+    /// 先确认新 hook 安装成功，再通知旧消息循环退出，因此重建失败不会把仍可用
+    /// 的旧 hook 一并拆掉。短暂重叠期间 matcher 的按下态会自然去重事件。
+    fn restart_hook_thread(&self) -> Result<(), String> {
+        let old_tid = self.state.lock().unwrap().hook_thread_id;
+        let new_tid = spawn_hook_thread()?;
+        {
+            let mut state = self.state.lock().unwrap();
+            state.started = true;
+            state.hook_thread_id = Some(new_tid);
+        }
+        if let Some(tid) = old_tid {
+            if tid != new_tid {
+                unsafe {
+                    let _ = PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0));
+                }
+            }
+        }
+        kotone_core::log::log("WH_KEYBOARD_LL hook refreshed");
+        Ok(())
+    }
 }
 
 impl HotkeySource for LlHookSource {
@@ -182,6 +210,8 @@ impl HotkeySource for LlHookSource {
             }
             state.armed = true;
             kotone_core::log::log(&format!("llhook reconfigured: {key} ({mode:?})"));
+            drop(state);
+            self.restart_hook_thread()?;
             return Ok(());
         }
 
@@ -196,17 +226,7 @@ impl HotkeySource for LlHookSource {
             .set(shared)
             .map_err(|_| "LL 钩子共享状态已初始化（内部错误）".to_string())?;
 
-        let (boot_tx, boot_rx) = mpsc::channel::<Result<u32, String>>();
-        std::thread::Builder::new()
-            .name("kotone-llhook".into())
-            .spawn(move || hook_thread_main(boot_tx))
-            .map_err(|e| format!("启动钩子线程失败: {e}"))?;
-
-        let thread_id = match boot_rx.recv() {
-            Ok(Ok(tid)) => tid,
-            Ok(Err(e)) => return Err(format!("安装 WH_KEYBOARD_LL 钩子失败: {e}")),
-            Err(_) => return Err("钩子线程启动后异常退出".into()),
-        };
+        let thread_id = spawn_hook_thread()?;
 
         let sink = self.sink.clone();
         std::thread::Builder::new()
@@ -235,6 +255,20 @@ impl HotkeySource for LlHookSource {
         if let Some(shared) = SHARED.get() {
             shared.matcher.lock().unwrap().set_session_active(active);
         }
+    }
+}
+
+fn spawn_hook_thread() -> Result<u32, String> {
+    let (boot_tx, boot_rx) = mpsc::channel::<Result<u32, String>>();
+    std::thread::Builder::new()
+        .name("kotone-llhook".into())
+        .spawn(move || hook_thread_main(boot_tx))
+        .map_err(|e| format!("启动钩子线程失败: {e}"))?;
+
+    match boot_rx.recv() {
+        Ok(Ok(tid)) => Ok(tid),
+        Ok(Err(e)) => Err(format!("安装 WH_KEYBOARD_LL 钩子失败: {e}")),
+        Err(_) => Err("钩子线程启动后异常退出".into()),
     }
 }
 

@@ -630,10 +630,17 @@ mod tests {
         // Alt+V hold：按住 Alt → 按 V（开始）→ 松开 Alt → 松开 V（仍必须结束会话）
         let mut m = matcher("Alt+V", HotkeyMode::Hold);
         down(&mut m, VK_LMENU);
-        assert_eq!(down(&mut m, u32::from(b'V')).event, Some(HookEvent::HoldPressed));
+        assert_eq!(
+            down(&mut m, u32::from(b'V')).event,
+            Some(HookEvent::HoldPressed)
+        );
         up(&mut m, VK_LMENU); // Alt 中途松开
         let r = up(&mut m, u32::from(b'V'));
-        assert_eq!(r.event, Some(HookEvent::HoldReleased), "hold 已开始就必须补释放");
+        assert_eq!(
+            r.event,
+            Some(HookEvent::HoldReleased),
+            "hold 已开始就必须补释放"
+        );
         assert!(r.swallow);
     }
 
@@ -698,7 +705,16 @@ mod tests {
             );
         }
         // 未知 VK 码兜底 VK0x..（不可 parse 但不丢信息）
-        assert_eq!(HotkeySpec { vk: 0xFF, ctrl: false, alt: false, shift: false }.combo_name(), "VK0xFF");
+        assert_eq!(
+            HotkeySpec {
+                vk: 0xFF,
+                ctrl: false,
+                alt: false,
+                shift: false
+            }
+            .combo_name(),
+            "VK0xFF"
+        );
     }
 
     #[test]

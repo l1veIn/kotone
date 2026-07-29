@@ -136,10 +136,8 @@ pub mod imp {
             if self.spec.bpe_vocab_file.is_some() {
                 match gated_bpe_vocab(self.spec, &dir) {
                     Some(vocab) => {
-                        config.model_config.modeling_unit =
-                            Some(self.spec.modeling_unit.into());
-                        config.model_config.bpe_vocab =
-                            Some(vocab.to_string_lossy().into_owned());
+                        config.model_config.modeling_unit = Some(self.spec.modeling_unit.into());
+                        config.model_config.bpe_vocab = Some(vocab.to_string_lossy().into_owned());
                     }
                     None => {
                         kotone_core::log::log(&format!(
@@ -293,9 +291,7 @@ pub mod imp {
                 rounds += 1;
             }
             if rounds >= MAX_FINALIZE_DECODE_ROUNDS {
-                kotone_core::log::log(
-                    "流式收尾 decode 达到轮数上限（模型异常？），按当前结果收尾",
-                );
+                kotone_core::log::log("流式收尾 decode 达到轮数上限（模型异常？），按当前结果收尾");
             }
             let text = self
                 .recognizer
@@ -430,13 +426,20 @@ mod tests {
     /// 热词参数（短语以 `/` 分隔，create_stream_with_hotwords 的输入格式）
     #[test]
     fn hotwords_format_for_sherpa_stream() {
-        let words = vec!["打野".to_string(), "gank".to_string(), "盲僧 R 闪".to_string()];
+        let words = vec![
+            "打野".to_string(),
+            "gank".to_string(),
+            "盲僧 R 闪".to_string(),
+        ];
         assert_eq!(imp::format_hotwords(&words), "打 野/gank/盲 僧 R 闪");
         assert_eq!(
             imp::format_hotwords(&["悠米".into(), "红buff".into(), " ADC ".into()]),
             "悠 米/红 buff/ADC"
         );
-        assert_eq!(imp::format_hotwords(&["海克斯/强化".into()]), "海 克 斯 强 化");
+        assert_eq!(
+            imp::format_hotwords(&["海克斯/强化".into()]),
+            "海 克 斯 强 化"
+        );
         assert_eq!(imp::format_hotwords(&[]), "");
     }
 }

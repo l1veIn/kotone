@@ -689,12 +689,12 @@
 
     <section class="kotone-panel mt-4 p-4">
       <h2 class="text-sm font-semibold text-kotone-cyan/90">下载网络</h2>
-      <p class="mt-1 text-[11px] text-white/45">仅在模型下载持续失败时调整。</p>
+      <p class="mt-1 text-[11px] text-white/45">默认优先使用魔搭国内镜像，失败后自动回退官方源。</p>
       <div class="mt-3 grid grid-cols-3 gap-2">
         {#each [
-          { id: "auto", name: "自动", desc: "镜像失败后回退官方" },
+          { id: "auto", name: "自动", desc: "魔搭优先，回退官方" },
           { id: "official", name: "仅官方", desc: "Hugging Face / GitHub" },
-          { id: "mirror", name: "仅镜像", desc: "适合官方源不可达时" },
+          { id: "mirror", name: "仅镜像", desc: "魔搭 / HF 镜像" },
         ] as option}
           {@const selected = $settingsStore.download.source === option.id}
           <button
@@ -710,7 +710,7 @@
         {/each}
       </div>
       <label class="mt-3 block">
-        <span class="text-[11px] text-white/50">GitHub 镜像代理</span>
+        <span class="text-[11px] text-white/50">GitHub 备用代理（可选）</span>
         <div class="mt-1 flex gap-2">
           <input
             bind:value={downloadProxyDraft}

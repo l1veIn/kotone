@@ -56,8 +56,7 @@ impl AudioBackend for WavFileBackend {
                 if stop_rx.try_recv().is_ok() {
                     return; // 会话取消/提前结束
                 }
-                let rms =
-                    (chunk.iter().map(|s| s * s).sum::<f32>() / chunk.len() as f32).sqrt();
+                let rms = (chunk.iter().map(|s| s * s).sum::<f32>() / chunk.len() as f32).sqrt();
                 if pcm_tx.send(chunk.to_vec()).is_err() {
                     return; // 接收端已关闭
                 }
@@ -80,7 +79,9 @@ mod tests {
     /// 造一个临时 wav（1 秒渐变信号）
     fn make_wav(dir: &tempfile::TempDir, samples: usize) -> PathBuf {
         let path = dir.path().join("t.wav");
-        let pcm: Vec<f32> = (0..samples).map(|i| (i as f32 / samples as f32) - 0.5).collect();
+        let pcm: Vec<f32> = (0..samples)
+            .map(|i| (i as f32 / samples as f32) - 0.5)
+            .collect();
         kotone_core::eval::write_wav(&path, &pcm).unwrap();
         path
     }
@@ -136,7 +137,11 @@ mod tests {
         while let Some(c) = rx.blocking_recv() {
             total += c.len();
         }
-        assert_eq!(total, CHUNK_SAMPLES + 100, "尾部不足一个 chunk 的样本也要喂出");
+        assert_eq!(
+            total,
+            CHUNK_SAMPLES + 100,
+            "尾部不足一个 chunk 的样本也要喂出"
+        );
     }
 
     #[test]

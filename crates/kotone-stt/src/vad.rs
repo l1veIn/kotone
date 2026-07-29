@@ -26,9 +26,7 @@ mod imp {
     impl SileroVad {
         pub fn new() -> Result<Self, String> {
             if !crate::model::vad_model_ready() {
-                return Err(
-                    "silero VAD 模型未下载。请运行 kotone-cli download silero-vad".into()
-                );
+                return Err("silero VAD 模型未下载。请运行 kotone-cli download silero-vad".into());
             }
             let model = crate::model::vad_model_path();
             let mut config = VadModelConfig::default();

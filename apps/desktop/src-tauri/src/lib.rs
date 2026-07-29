@@ -168,7 +168,10 @@ impl Emitter for TauriEmitter {
                     .try_state::<SharedState>()
                     .map(|s| {
                         let g = s.settings.read().unwrap();
-                        (g.overlay.visibility, InteractionPolicy::from_settings(&g).continuous)
+                        (
+                            g.overlay.visibility,
+                            InteractionPolicy::from_settings(&g).continuous,
+                        )
                     })
                     .unwrap_or((OverlayVisibility::Always, false));
                 let gen = self
@@ -228,8 +231,7 @@ fn record_process_event(app: &AppHandle, payload: &serde_json::Value) {
     if let Some(state) = app.try_state::<SharedState>() {
         let settings = state.settings.read().unwrap();
         event.context.engine_id = Some(settings.stt_engine.clone());
-        event.context.model_id =
-            Some(model::active_model_from(&settings, &settings.stt_engine));
+        event.context.model_id = Some(model::active_model_from(&settings, &settings.stt_engine));
         event.context.profile_id = settings.active_profile_id.clone();
         event.context.interaction_mode = settings.interaction_mode.as_ref().map(|mode| {
             serde_json::to_string(mode)
@@ -358,15 +360,14 @@ fn layout_overlay_window<R: tauri::Runtime>(
     win: &tauri::WebviewWindow<R>,
     overlay: &OverlayConfig,
 ) {
+    use windows::Win32::Foundation::POINT;
     use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, MONITORINFO,
-        MONITOR_DEFAULTTONEAREST,
+        GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     };
     use windows::Win32::UI::HiDpi::GetDpiForWindow;
     use windows::Win32::UI::WindowsAndMessaging::{
         SetWindowPos, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_NOZORDER,
     };
-    use windows::Win32::Foundation::POINT;
     let Ok(hwnd) = win.hwnd() else { return };
     unsafe {
         let dpi = GetDpiForWindow(hwnd);
@@ -376,11 +377,7 @@ fn layout_overlay_window<R: tauri::Runtime>(
             OverlayStyle::Card => (scale(CARD_LOGICAL_W), scale(CARD_LOGICAL_H)),
             OverlayStyle::Capsule => (scale(CAPSULE_LOGICAL_W), scale(CAPSULE_LOGICAL_H)),
         };
-        let custom = match (
-            overlay.position,
-            overlay.custom_x,
-            overlay.custom_y,
-        ) {
+        let custom = match (overlay.position, overlay.custom_x, overlay.custom_y) {
             (OverlayPosition::Custom, Some(x), Some(y)) => Some((x, y)),
             _ => None,
         };
@@ -411,10 +408,7 @@ fn layout_overlay_window<R: tauri::Runtime>(
         let (x, y) = match overlay.position {
             OverlayPosition::Auto => match overlay.style {
                 OverlayStyle::Card => (center_x, center_y),
-                OverlayStyle::Capsule => (
-                    center_x,
-                    wa.bottom - h - scale(CAPSULE_BOTTOM_GAP),
-                ),
+                OverlayStyle::Capsule => (center_x, wa.bottom - h - scale(CAPSULE_BOTTOM_GAP)),
             },
             OverlayPosition::TopLeft => (left, top),
             OverlayPosition::TopCenter => (center_x, top),
@@ -639,7 +633,11 @@ fn list_stt_engines(state: tauri::State<SharedState>) -> Vec<EngineInfo> {
 }
 
 #[tauri::command]
-fn set_stt_engine(app: AppHandle, state: tauri::State<SharedState>, id: String) -> Result<(), String> {
+fn set_stt_engine(
+    app: AppHandle,
+    state: tauri::State<SharedState>,
+    id: String,
+) -> Result<(), String> {
     if state.engines.get(&id).is_none() {
         return Err(format!("未注册的 STT 引擎: {id}"));
     }
@@ -734,10 +732,7 @@ fn get_elevation_status(state: tauri::State<SharedState>) -> ElevationStatus {
     let active_game_elevated = {
         let guard = state.settings.read().unwrap();
         let mut available = profile::list();
-        for b in [
-            GameProfile::builtin_lol(),
-            GameProfile::builtin_generic(),
-        ] {
+        for b in [GameProfile::builtin_lol(), GameProfile::builtin_generic()] {
             if !available.iter().any(|p| p.id == b.id) {
                 available.push(b);
             }
@@ -918,7 +913,9 @@ pub struct ModelsDirInfo {
 fn get_models_dir(state: tauri::State<SharedState>) -> ModelsDirInfo {
     let settings = state.settings.read().unwrap();
     ModelsDirInfo {
-        dir: model::models_dir_from(&settings).to_string_lossy().into_owned(),
+        dir: model::models_dir_from(&settings)
+            .to_string_lossy()
+            .into_owned(),
         is_default: settings.models.dir.trim().is_empty(),
     }
 }
@@ -1112,9 +1109,7 @@ fn simulate_send(
         .as_deref()
         .and_then(profile::get)
         .unwrap_or_else(GameProfile::builtin_generic);
-    state
-        .injector
-        .send(&text, &profile, CancelToken::default())
+    state.injector.send(&text, &profile, CancelToken::default())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1162,8 +1157,7 @@ pub fn run() {
             log::log(&format!(
                 "startup: version={} elevated={} arch={}",
                 env!("CARGO_PKG_VERSION"),
-                elevation::is_elevated()
-                ,
+                elevation::is_elevated(),
                 std::env::consts::ARCH
             ));
             tray::setup_tray(app.handle())?;

@@ -39,10 +39,7 @@ impl GameProfile {
         static PROFILE: OnceLock<GameProfile> = OnceLock::new();
         PROFILE
             .get_or_init(|| {
-                parse_builtin_profile(
-                    "lol",
-                    include_str!("../resources/profiles/lol.json"),
-                )
+                parse_builtin_profile("lol", include_str!("../resources/profiles/lol.json"))
             })
             .clone()
     }
@@ -64,10 +61,7 @@ impl GameProfile {
 fn parse_builtin_profile(expected_id: &str, json: &str) -> GameProfile {
     let profile: GameProfile = serde_json::from_str(json)
         .unwrap_or_else(|e| panic!("内置 profile {expected_id}.json 格式错误: {e}"));
-    assert_eq!(
-        profile.id, expected_id,
-        "内置 profile 文件名与 id 不一致"
-    );
+    assert_eq!(profile.id, expected_id, "内置 profile 文件名与 id 不一致");
     profile
 }
 
@@ -118,16 +112,14 @@ pub fn ensure_builtin_in(dir: &Path) -> Result<(), String> {
 fn merge_builtin_hotwords_in(dir: &Path, builtin: &GameProfile) {
     let result = (|| -> Result<(), String> {
         let path = profile_path_in(dir, &builtin.id);
-        let raw = std::fs::read_to_string(&path)
-            .map_err(|e| format!("读取内置 profile 失败: {e}"))?;
+        let raw =
+            std::fs::read_to_string(&path).map_err(|e| format!("读取内置 profile 失败: {e}"))?;
         let mut file: GameProfile =
             serde_json::from_str(&raw).map_err(|e| format!("解析内置 profile 失败: {e}"))?;
         let missing: Vec<String> = builtin
             .hotwords
             .iter()
-            .filter(|w| {
-                !file.hotwords.contains(w) && !file.removed_builtin_hotwords.contains(w)
-            })
+            .filter(|w| !file.hotwords.contains(w) && !file.removed_builtin_hotwords.contains(w))
             .cloned()
             .collect();
         if missing.is_empty() {
@@ -280,7 +272,10 @@ pub struct HotwordMergeReport {
 
 /// 合并导入：incoming 中与 existing 重复（精确匹配）的跳过，
 /// 新增追加在末尾（保持现有顺序不变）。
-pub fn merge_hotwords(existing: &[String], incoming: &[String]) -> (Vec<String>, HotwordMergeReport) {
+pub fn merge_hotwords(
+    existing: &[String],
+    incoming: &[String],
+) -> (Vec<String>, HotwordMergeReport) {
     let mut merged = existing.to_vec();
     let mut report = HotwordMergeReport {
         total: 0,
@@ -444,9 +439,15 @@ mod tests {
 
         ensure_builtin_in(&dir).unwrap();
         let lol = get_in(&dir, "lol").unwrap();
-        assert!(!lol.hotwords.contains(&"提莫".to_string()), "删除的词条不应复活");
+        assert!(
+            !lol.hotwords.contains(&"提莫".to_string()),
+            "删除的词条不应复活"
+        );
         assert!(!lol.hotwords.contains(&"悠米".to_string()));
-        assert!(lol.hotwords.contains(&"亚索".to_string()), "其余新词条照常合并");
+        assert!(
+            lol.hotwords.contains(&"亚索".to_string()),
+            "其余新词条照常合并"
+        );
     }
 
     #[test]
@@ -470,7 +471,11 @@ mod tests {
 
     #[test]
     fn hotwords_export_one_per_line() {
-        let words = vec!["打野".to_string(), "gank".to_string(), "Blind Monk".to_string()];
+        let words = vec![
+            "打野".to_string(),
+            "gank".to_string(),
+            "Blind Monk".to_string(),
+        ];
         assert_eq!(format_hotwords_export(&words), "打野\ngank\nBlind Monk\n");
         assert_eq!(format_hotwords_export(&[]), "", "空表导出空文件");
     }

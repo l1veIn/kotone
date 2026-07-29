@@ -219,9 +219,7 @@ impl Orchestrator {
                 self.cancel().await;
                 let _ = self.begin().await;
             }
-            OrchestratorState::Error
-                if self.inner.lock().unwrap().preview_text.is_none() =>
-            {
+            OrchestratorState::Error if self.inner.lock().unwrap().preview_text.is_none() => {
                 self.cancel().await;
                 let _ = self.begin().await;
             }
@@ -243,9 +241,7 @@ impl Orchestrator {
                     self.cancel().await;
                     let _ = self.begin().await;
                 }
-                OrchestratorState::Error
-                    if self.inner.lock().unwrap().preview_text.is_none() =>
-                {
+                OrchestratorState::Error if self.inner.lock().unwrap().preview_text.is_none() => {
                     self.cancel().await;
                     let _ = self.begin().await;
                 }
@@ -367,9 +363,10 @@ impl Orchestrator {
                     .to_string()
             })?;
             let vad = factory()?;
-            let silence_ms = settings
-                .vad_silence_ms
-                .clamp(*crate::vad::SILENCE_MS_RANGE.start(), *crate::vad::SILENCE_MS_RANGE.end());
+            let silence_ms = settings.vad_silence_ms.clamp(
+                *crate::vad::SILENCE_MS_RANGE.start(),
+                *crate::vad::SILENCE_MS_RANGE.end(),
+            );
             Some((
                 vad,
                 crate::vad::FrameSplitter::new(),
@@ -754,10 +751,7 @@ impl Orchestrator {
             // session_rx 随 ActiveSession drop：pump 收尾时 session.cancel() 后发送失败即释放
         }
         self.emit_state(OrchestratorState::Idle, None);
-        self.emit_process(
-            "session_cancelled",
-            json!({ "outcome": "cancelled" }),
-        );
+        self.emit_process("session_cancelled", json!({ "outcome": "cancelled" }));
         // error 已落账过的草稿跳过（Error 后的 Esc 是清理动作，不双记 cancelled）
         self.write_history(crate::history::HistoryOutcome::Cancelled, None);
     }
@@ -831,10 +825,7 @@ impl Orchestrator {
                     };
                     drop(inner);
                     if !resume_continuous {
-                        self.emit_state(
-                            OrchestratorState::Success,
-                            Some(json!({ "text": text })),
-                        );
+                        self.emit_state(OrchestratorState::Success, Some(json!({ "text": text })));
                     }
                     self.emit_process(
                         "injection_succeeded",
@@ -930,7 +921,10 @@ impl Orchestrator {
             OrchestratorState::Error,
             Some(json!({ "message": message, "text": text })),
         );
-        self.write_history(crate::history::HistoryOutcome::Error, Some(message.to_string()));
+        self.write_history(
+            crate::history::HistoryOutcome::Error,
+            Some(message.to_string()),
+        );
         self.schedule_idle(gen);
     }
 
@@ -1098,8 +1092,7 @@ mod tests {
     #[test]
     fn session_config_options_fallback_null() {
         let mut settings = Settings::default();
-        settings.engine_options["sherpa-onnx-x-asr-zh-en"]["provider"] =
-            serde_json::json!("cpu");
+        settings.engine_options["sherpa-onnx-x-asr-zh-en"]["provider"] = serde_json::json!("cpu");
         let generic = GameProfile::builtin_generic();
         let cfg = build_session_config(&settings, "sherpa-onnx-x-asr-zh-en", &generic);
         assert_eq!(cfg.options["provider"], "cpu");
