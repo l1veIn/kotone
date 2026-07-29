@@ -11,7 +11,7 @@ test("the check-for-updates button is always visible and reports the latest vers
   await expect(checkUpdates).toBeEnabled();
 
   await checkUpdates.click();
-  await expect(page.getByText("✓ 已是最新版本（v0.1.2）", { exact: true })).toBeVisible();
+  await expect(page.getByText("✓ 已是最新版本（v0.1.3）", { exact: true })).toBeVisible();
   await expect(checkUpdates).toBeVisible();
   await expect(checkUpdates).toBeEnabled();
 });

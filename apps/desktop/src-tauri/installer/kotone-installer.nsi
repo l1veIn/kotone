@@ -425,7 +425,21 @@ Var AppStartMenuFolder
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_FUNCTION RunMainBinary
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishPageShow
 !insertmacro MUI_PAGE_FINISH
+
+; Themed Windows checkboxes ignore MUI_TEXTCOLOR and render black labels on
+; Kotone's dark finish page. Disable the native theme for these two controls,
+; then apply the palette explicitly. Keep the workaround scoped to this page.
+Function FinishPageShow
+  GetDlgItem $0 $MUI_HWND 1203
+  System::Call 'UXTHEME::SetWindowTheme(p r0,w" ",w" ")'
+  SetCtlColors $0 "${MUI_TEXTCOLOR}" "${MUI_BGCOLOR}"
+
+  GetDlgItem $0 $MUI_HWND 1204
+  System::Call 'UXTHEME::SetWindowTheme(p r0,w" ",w" ")'
+  SetCtlColors $0 "${MUI_TEXTCOLOR}" "${MUI_BGCOLOR}"
+FunctionEnd
 
 Function RunMainBinary
   nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" ""

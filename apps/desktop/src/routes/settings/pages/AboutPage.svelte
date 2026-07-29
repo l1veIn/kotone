@@ -15,7 +15,7 @@
   let { onOpenCharacter }: { onOpenCharacter: () => void } = $props();
 
   /** 静态兜底版本（与 package.json 同步）；桌面端启动后替换为真实版本 */
-  let version = $state("0.1.2");
+  let version = $state("0.1.3");
   let checkingUpdate = $state(false);
   let updateResult = $state<UpdateCheckResult | null>(null);
 

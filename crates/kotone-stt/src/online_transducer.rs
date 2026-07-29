@@ -12,7 +12,7 @@
 //! 文本有变化即发 SttEvent::Partial；finalize 时 input_finished + 收尾 decode →
 //! SttEvent::Final（latency_ms = 松手到最终文本的耗时）。
 //!
-//! 热词：`create_stream_with_hotwords`（per-stream，每行一个短语），profile
+//! 热词：`create_stream_with_hotwords`（per-stream，短语之间用 `/` 分隔），profile
 //! hotwords 直接注入，capabilities.hotwords = true。
 
 use tokio::sync::mpsc;
@@ -66,6 +66,11 @@ pub mod imp {
 
     /// 默认推理线程数（engineOptions["threads"] 可覆盖）
     const DEFAULT_THREADS: u32 = 2;
+
+    /// 每个命中 token 的热词加分。1.5 对 X-ASR 的中文同音词偏置不足，
+    /// 实测「悠米/优米」「璐璐/露露」仍保持基础模型结果；3.5 是 Sherpa
+    /// 官方示例支持的常用强度，并且仍只在声学候选路径已出现时加分。
+    pub const HOTWORDS_SCORE: f32 = 3.5;
 
     /// 流式收尾静音尾帧时长（毫秒）：sherpa-onnx 官方在线流式示例在
     /// input_finished 前补 ~0.8s 静音，触发模型吐出 lookahead（右上下文）
@@ -148,8 +153,10 @@ pub mod imp {
             // 解码器；greedy_search 遇到带热词的 stream 会 SHERPA_ONNX_EXIT
             // （online-transducer-decoder.h Decode 基类分支）
             config.decoding_method = Some("modified_beam_search".into());
-            config.max_active_paths = 4;
-            config.hotwords_score = 1.5;
+            // 4/8 条路径会在热词加分前过早剪掉罕见同音字候选（实测
+            // 「悠米」只剩「优米」）；16 条可保留候选供 context graph 重排。
+            config.max_active_paths = 16;
+            config.hotwords_score = HOTWORDS_SCORE;
             // push-to-talk 自己管理语句边界，不用内置端点检测
             config.enable_endpoint = false;
 
@@ -208,19 +215,13 @@ pub mod imp {
             events: mpsc::UnboundedSender<SttEvent>,
         ) -> Result<Box<dyn SttSession>, String> {
             let recognizer = self.recognizer(cfg)?;
-            // per-stream 热词：每行一个短语
+            // per-stream 动态热词接口与 hotwords_file 的格式不同：
+            // 多个短语必须以 `/` 分隔，不能用换行。换行会让整份 profile
+            // 被当成一个超长短语，表面创建成功、实际几乎不可能命中。
             let stream = if cfg.hotwords.is_empty() {
                 recognizer.create_stream()
             } else {
-                let stream =
-                    recognizer.create_stream_with_hotwords(&format_hotwords(&cfg.hotwords));
-                kotone_core::log::log(&format!(
-                    "{}: 已向本次会话提交 {} 条热词（modeling_unit={}）",
-                    self.spec.engine_id,
-                    cfg.hotwords.len(),
-                    self.spec.modeling_unit
-                ));
-                stream
+                recognizer.create_stream_with_hotwords(&format_hotwords(&cfg.hotwords))
             };
             Ok(Box::new(OnlineTransducerSession {
                 recognizer,
@@ -317,9 +318,54 @@ pub mod imp {
         }
     }
 
-    /// profile hotwords → sherpa 格式（每行一个短语）
+    fn is_cjk(ch: char) -> bool {
+        matches!(
+            ch,
+            '\u{3400}'..='\u{4DBF}'
+                | '\u{4E00}'..='\u{9FFF}'
+                | '\u{F900}'..='\u{FAFF}'
+                | '\u{20000}'..='\u{2FA1F}'
+        )
+    }
+
+    /// X-ASR 的 SentencePiece 词表以「带词首标记的单个汉字」为单位。
+    /// 因此中文连续文本要先拆成独立词元；ASCII 连续串保留为一个词元：
+    /// `悠米` → `悠 米`，`红buff` → `红 buff`。
+    fn format_hotword_phrase(hotword: &str) -> String {
+        let mut units = Vec::new();
+        let mut non_cjk = String::new();
+        let flush_non_cjk = |units: &mut Vec<String>, buf: &mut String| {
+            if !buf.is_empty() {
+                units.push(std::mem::take(buf));
+            }
+        };
+
+        for ch in hotword.trim().chars() {
+            if is_cjk(ch) {
+                flush_non_cjk(&mut units, &mut non_cjk);
+                units.push(ch.to_string());
+            } else if ch.is_whitespace() || ch == '/' {
+                flush_non_cjk(&mut units, &mut non_cjk);
+            } else {
+                non_cjk.push(ch);
+            }
+        }
+        flush_non_cjk(&mut units, &mut non_cjk);
+        units.join(" ")
+    }
+
+    /// profile hotwords → sherpa per-stream 格式（短语之间以 `/` 分隔）。
+    ///
+    /// 注意：`hotwords_file` 才是每行一个短语；`create_stream_with_hotwords`
+    /// 的字符串参数使用 `/`，两者不能混用。中文还必须先按字拆分，
+    /// 否则 X-ASR 的 BPE 会把第二个字编码成 `<unk>` 并丢弃整条热词。
     pub(crate) fn format_hotwords(hotwords: &[String]) -> String {
-        hotwords.join("\n")
+        hotwords
+            .iter()
+            .map(|word| format_hotword_phrase(word))
+            .filter(|word| !word.is_empty())
+            .collect::<Vec<_>>()
+            .join("/")
     }
 }
 
@@ -381,11 +427,16 @@ mod tests {
     use super::imp;
 
     /// 热词端到端链路的引擎段：SessionConfig.hotwords → sherpa per-stream
-    /// 热词参数（每行一个短语，create_stream_with_hotwords 的输入格式）
+    /// 热词参数（短语以 `/` 分隔，create_stream_with_hotwords 的输入格式）
     #[test]
     fn hotwords_format_for_sherpa_stream() {
         let words = vec!["打野".to_string(), "gank".to_string(), "盲僧 R 闪".to_string()];
-        assert_eq!(imp::format_hotwords(&words), "打野\ngank\n盲僧 R 闪");
+        assert_eq!(imp::format_hotwords(&words), "打 野/gank/盲 僧 R 闪");
+        assert_eq!(
+            imp::format_hotwords(&["悠米".into(), "红buff".into(), " ADC ".into()]),
+            "悠 米/红 buff/ADC"
+        );
+        assert_eq!(imp::format_hotwords(&["海克斯/强化".into()]), "海 克 斯 强 化");
         assert_eq!(imp::format_hotwords(&[]), "");
     }
 }

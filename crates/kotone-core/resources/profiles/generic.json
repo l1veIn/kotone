@@ -1,0 +1,13 @@
+{
+  "id": "generic",
+  "displayName": "通用（任意前台窗口）",
+  "processNames": [],
+  "windowTitlePatterns": [],
+  "openChatKey": "Enter",
+  "sendKey": "Enter",
+  "preOpenDelayMs": 20,
+  "prePasteDelayMs": 20,
+  "preSendDelayMs": 20,
+  "preferClipboardPaste": false,
+  "hotwords": []
+}

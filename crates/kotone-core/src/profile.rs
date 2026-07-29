@@ -1,11 +1,12 @@
 //! 游戏 profile：CRUD + 前台进程匹配（docs/development.md §5.1、§5.4）
 //! 存储：~/.kotone/profiles/<id>.json
 //!
-//! 首次运行落盘两个内置 profile：
+//! 内置模板存放在 `resources/profiles/*.json`；首次运行落盘两个 profile：
 //! - `lol`：League of Legends（§5.4 示例值，delay 20/20/20，Unicode 逐字）
 //! - `generic`：通用，匹配任意前台窗口（processNames 为空 = 通配）
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::settings::kotone_dir;
 
@@ -32,79 +33,49 @@ pub struct GameProfile {
 }
 
 impl GameProfile {
-    /// 内置 LOL profile（docs/development.md §5.4 示例值）
+    /// 内置 LOL profile。内容由 resources/profiles/lol.json 维护，
+    /// Rust 代码只负责解析与返回副本。
     pub fn builtin_lol() -> Self {
-        Self {
-            id: "lol".into(),
-            display_name: "League of Legends".into(),
-            process_names: vec!["League of Legends.exe".into()],
-            window_title_patterns: vec![".*League of Legends.*".into()],
-            open_chat_key: "Enter".into(),
-            send_key: "Enter".into(),
-            pre_open_delay_ms: 20,
-            pre_paste_delay_ms: 20,
-            pre_send_delay_ms: 20,
-            prefer_clipboard_paste: false,
-            // 内置热词（大致按：召唤师技能 → 位置/角色 → 地图资源 → 视野 →
-            // 战术 → 战斗数据 → 兵线建筑 → 对局模式 → 热门英雄 →
-            // 海克斯大乱斗（强化/装备黑话））
-            hotwords: [
-                "闪现", "点燃", "传送", "治疗术", "惩戒", "虚弱", "屏障", "净化", "疾跑",
-                "打野", "上单", "中单", "下路", "辅助", "ADC", "刺客", "坦克", "战士",
-                "大龙", "小龙", "纳什男爵", "远古巨龙", "峡谷先锋", "虚空巢虫",
-                "红buff", "蓝buff", "河蟹",
-                "真眼", "假眼", "控制守卫", "扫描", "视野", "排眼", "插眼",
-                "gank", "反野", "反蹲", "越塔", "推塔", "守塔", "换线", "分带", "抱团",
-                "开团", "反手", "拉扯", "风筝", "抢龙", "偷家", "一波", "回城",
-                "出装", "神装", "破甲", "法穿", "攻速", "暴击", "冷却缩减",
-                "一血", "双杀", "三杀", "四杀", "五杀", "超神", "团灭",
-                "兵线", "炮车", "超级兵", "水晶", "高地", "门牙塔",
-                "召唤师峡谷", "大乱斗", "排位",
-                "亚索", "永恩", "盲僧", "劫", "阿卡丽", "阿狸", "金克丝", "卡莎",
-                "卢锡安", "伊泽瑞尔", "薇恩", "盖伦", "德莱厄斯", "剑姬", "杰斯",
-                "辛德拉", "乐芙兰", "拉克丝", "提莫", "墨菲特", "塞恩", "雷克顿",
-                "贾克斯", "赵信", "嘉文四世", "瑟庄妮", "烬", "霞", "洛", "锤石",
-                "璐璐", "悠米",
-                // 海克斯大乱斗：模式与海克斯强化
-                "海克斯大乱斗", "海克斯", "海克斯强化", "强化符文", "棱彩阶",
-                "锻造器", "锻体", "法爆", "回归基本功", "升级无尽",
-                "珠光护手", "利刃华尔兹", "秘术冲拳", "战争交响乐",
-                // 海克斯大乱斗：热门装备黑话与正式名
-                "残疫", "影焰", "法穿棒", "虚空之杖", "大穿", "多米尼克领主的致意",
-                "重伤穿", "凡性的提醒", "赛瑞尔达的怨恨", "收集者", "狂妄",
-                "心之钢", "无终恨意", "璀璨回响", "放血者的诅咒", "风暴狂涌",
-            ]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
-            removed_builtin_hotwords: vec![],
-        }
+        static PROFILE: OnceLock<GameProfile> = OnceLock::new();
+        PROFILE
+            .get_or_init(|| {
+                parse_builtin_profile(
+                    "lol",
+                    include_str!("../resources/profiles/lol.json"),
+                )
+            })
+            .clone()
     }
 
-    /// 内置通用 profile：processNames 为空，匹配任意前台窗口
+    /// 内置通用 profile。内容由 resources/profiles/generic.json 维护。
     pub fn builtin_generic() -> Self {
-        Self {
-            id: "generic".into(),
-            display_name: "通用（任意前台窗口）".into(),
-            process_names: vec![],
-            window_title_patterns: vec![],
-            open_chat_key: "Enter".into(),
-            send_key: "Enter".into(),
-            pre_open_delay_ms: 20,
-            pre_paste_delay_ms: 20,
-            pre_send_delay_ms: 20,
-            prefer_clipboard_paste: false,
-            hotwords: vec![],
-            removed_builtin_hotwords: vec![],
-        }
+        static PROFILE: OnceLock<GameProfile> = OnceLock::new();
+        PROFILE
+            .get_or_init(|| {
+                parse_builtin_profile(
+                    "generic",
+                    include_str!("../resources/profiles/generic.json"),
+                )
+            })
+            .clone()
     }
+}
+
+fn parse_builtin_profile(expected_id: &str, json: &str) -> GameProfile {
+    let profile: GameProfile = serde_json::from_str(json)
+        .unwrap_or_else(|e| panic!("内置 profile {expected_id}.json 格式错误: {e}"));
+    assert_eq!(
+        profile.id, expected_id,
+        "内置 profile 文件名与 id 不一致"
+    );
+    profile
 }
 
 fn profiles_dir() -> PathBuf {
     kotone_dir().join("profiles")
 }
 
-fn profile_path_in(dir: &PathBuf, id: &str) -> PathBuf {
+fn profile_path_in(dir: &Path, id: &str) -> PathBuf {
     // id 只保留文件安全字符，防路径穿越
     let safe: String = id
         .chars()
@@ -126,7 +97,7 @@ pub fn ensure_builtin() -> Result<(), String> {
     ensure_builtin_in(&profiles_dir())
 }
 
-pub fn ensure_builtin_in(dir: &PathBuf) -> Result<(), String> {
+pub fn ensure_builtin_in(dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("创建 profiles 目录失败: {e}"))?;
     for p in [GameProfile::builtin_lol(), GameProfile::builtin_generic()] {
         let path = profile_path_in(dir, &p.id);
@@ -144,7 +115,7 @@ pub fn ensure_builtin_in(dir: &PathBuf) -> Result<(), String> {
 /// 版本更新合并：已有内置 profile 文件补上新版新增的内置词条。
 /// missing = 内置词条 - 文件现有热词 - 用户显式删除的内置词条，追加到末尾
 /// （用户自定义词条与其余字段原样保留）。合并失败只记日志，不阻断启动流程。
-fn merge_builtin_hotwords_in(dir: &PathBuf, builtin: &GameProfile) {
+fn merge_builtin_hotwords_in(dir: &Path, builtin: &GameProfile) {
     let result = (|| -> Result<(), String> {
         let path = profile_path_in(dir, &builtin.id);
         let raw = std::fs::read_to_string(&path)
@@ -175,7 +146,7 @@ pub fn list() -> Vec<GameProfile> {
     list_in(&profiles_dir())
 }
 
-pub fn list_in(dir: &PathBuf) -> Vec<GameProfile> {
+pub fn list_in(dir: &Path) -> Vec<GameProfile> {
     let mut out = Vec::new();
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -201,7 +172,7 @@ pub fn get(id: &str) -> Option<GameProfile> {
     get_in(&profiles_dir(), id)
 }
 
-pub fn get_in(dir: &PathBuf, id: &str) -> Option<GameProfile> {
+pub fn get_in(dir: &Path, id: &str) -> Option<GameProfile> {
     let path = profile_path_in(dir, id);
     let raw = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
@@ -212,7 +183,7 @@ pub fn save(profile: &GameProfile) -> Result<(), String> {
     save_in(&profiles_dir(), profile)
 }
 
-pub fn save_in(dir: &PathBuf, profile: &GameProfile) -> Result<(), String> {
+pub fn save_in(dir: &Path, profile: &GameProfile) -> Result<(), String> {
     if profile.id.trim().is_empty() {
         return Err("profile id 不能为空".into());
     }

@@ -195,6 +195,8 @@ mod tests {
     ///   xasr::tests::local_model_accepts_lol_hotwords -- --ignored --nocapture
     ///
     /// 成功标准：测试通过，且 stderr 不出现 Cannot find ID / Encode hotwords failed。
+    /// 如设置 `KOTONE_TEST_HOTWORD_WAV`，会额外重放该 WAV；可用
+    /// `KOTONE_TEST_EXPECTED` 指定最终文本必须包含的词。
     #[cfg(feature = "engine-sherpa")]
     #[test]
     #[ignore = "依赖本机已下载的 X-ASR 真模型"]
@@ -205,20 +207,51 @@ mod tests {
             return;
         }
         e.warmup().expect("X-ASR 预热失败");
+        let hotwords = std::env::var("KOTONE_TEST_HOTWORDS")
+            .ok()
+            .map(|value| {
+                value
+                    .split('|')
+                    .filter(|word| !word.trim().is_empty())
+                    .map(|word| word.trim().to_string())
+                    .collect()
+            })
+            .unwrap_or_else(|| {
+                vec![
+                    "闪现".into(),
+                    "大龙".into(),
+                    "gank".into(),
+                    "打野".into(),
+                    "悠米".into(),
+                    "璐璐".into(),
+                    "残影".into(),
+                    "无尽".into(),
+                ]
+            });
         let cfg = SessionConfig {
             language: "zh".into(),
-            hotwords: vec![
-                "闪现".into(),
-                "大龙".into(),
-                "gank".into(),
-                "打野".into(),
-                "悠米".into(),
-                "璐璐".into(),
-            ],
+            hotwords,
             options: serde_json::Value::Null,
         };
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut session = e.start_session(&cfg, tx).expect("创建带热词的 X-ASR stream 失败");
-        session.cancel();
+        if let Ok(wav) = std::env::var("KOTONE_TEST_HOTWORD_WAV") {
+            let pcm = kotone_core::eval::read_wav(std::path::Path::new(&wav))
+                .expect("读取 KOTONE_TEST_HOTWORD_WAV 失败");
+            for chunk in pcm.chunks(800) {
+                session.push_audio(chunk).expect("推送测试音频失败");
+            }
+            let transcript = session.finalize().expect("测试音频收尾失败");
+            eprintln!("热词 WAV 识别结果：{}", transcript.text);
+            if let Ok(expected) = std::env::var("KOTONE_TEST_EXPECTED") {
+                assert!(
+                    transcript.text.contains(&expected),
+                    "识别结果未包含期望热词「{expected}」：{}",
+                    transcript.text
+                );
+            }
+        } else {
+            session.cancel();
+        }
     }
 }
