@@ -43,8 +43,10 @@ pub struct Settings {
     /// 评测录档开关（默认关；需要留语料复现时手动开）
     pub eval_recording: bool,
     /// 交互模式预设（ADR-006）：push-to-talk / dictation / one-shot / solo；
-    /// 缺省 None = 由 hotkey.mode + autoSend 旧字段推导（兼容混合组合）
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// 默认「对讲机」（0.1.5 起，修复跳过引导后无模式的问题：老配置缺键时
+    /// 由 load_from 合并默认值自动迁移）。显式 null = 自定义兼容路径，
+    /// 由 hotkey.mode + autoSend 旧字段推导（见 InteractionPolicy::from_settings）
+    #[serde(default)]
     pub interaction_mode: Option<crate::interaction::InteractionMode>,
     /// VAD 静音判停阈值（ms，ADR-007；one-shot 模式生效，默认 700，
     /// 使用时 clamp 到 vad::SILENCE_MS_RANGE）
@@ -52,9 +54,17 @@ pub struct Settings {
     pub vad_silence_ms: u32,
     /// 启动时自动以管理员重启自身（默认关；防循环逻辑见 elevation::should_auto_elevate）
     pub run_as_admin_on_start: bool,
+    /// 频道切换热键（ADR-008；默认 Shift+CapsLock）。按声明顺序循环切换当前
+    /// profile 的聊天频道；与录制热键冲突时后端拒绝注册并在状态里给出错误。
+    #[serde(default = "default_channel_cycle_hotkey")]
+    pub channel_cycle_hotkey: String,
     /// 「以管理员权限重启」启动提示：用户勾选「不再提示」后置 true，不再弹窗（默认 false）
     #[serde(default)]
     pub admin_prompt_dismissed: bool,
+    /// 提权重启成功后的「启动时自动请求管理员权限」询问：用户勾选「不再提醒」
+    /// 后置 true，不再弹窗（默认 false；与 admin_prompt_dismissed 独立，两段式提示各记各的）
+    #[serde(default)]
+    pub auto_admin_prompt_dismissed: bool,
     /// 识别历史记录（默认 capped/1000 条/不含音频；off = 零开销不记录）
     #[serde(default)]
     pub history: crate::history::HistoryConfig,
@@ -260,10 +270,12 @@ impl Default for Settings {
             active_profile_id: Some("lol".into()),
             language: "zh".into(),
             eval_recording: false,
-            interaction_mode: None,
+            interaction_mode: Some(crate::interaction::InteractionMode::PushToTalk),
             vad_silence_ms: default_vad_silence_ms(),
             run_as_admin_on_start: false,
+            channel_cycle_hotkey: default_channel_cycle_hotkey(),
             admin_prompt_dismissed: false,
+            auto_admin_prompt_dismissed: false,
             history: crate::history::HistoryConfig::default(),
             ui: UiConfig::default(),
             models: ModelsConfig::default(),
@@ -275,6 +287,11 @@ impl Default for Settings {
 
 fn default_vad_silence_ms() -> u32 {
     crate::vad::DEFAULT_SILENCE_MS
+}
+
+/// 频道切换热键默认值（ADR-008）
+fn default_channel_cycle_hotkey() -> String {
+    "Shift+CapsLock".into()
 }
 
 /// Kotone 用户数据目录：~/.kotone/
@@ -356,6 +373,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_config_without_interaction_mode_defaults_to_push_to_talk() {
+        // 0.1.5 迁移：老配置缺 interactionMode 键 → 合并默认值得到「对讲机」；
+        // 显式 null（自定义兼容路径）则原样保留
+        let dir = std::env::temp_dir().join(format!("kotone-cfg-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "{}").unwrap();
+        let s = load_from(&path);
+        assert_eq!(
+            s.interaction_mode,
+            Some(crate::interaction::InteractionMode::PushToTalk)
+        );
+        std::fs::write(&path, r#"{"interactionMode": null}"#).unwrap();
+        let s = load_from(&path);
+        assert_eq!(s.interaction_mode, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn default_values_match_doc() {
         let s = Settings::default();
         assert_eq!(s.hotkey.key, "CapsLock");
@@ -370,6 +406,9 @@ mod tests {
         assert_eq!(s.vad_silence_ms, 700);
         assert!(s.engine_options["sherpa-onnx-x-asr-zh-en"]["provider"] == "cpu");
         assert!(!s.run_as_admin_on_start);
+        assert_eq!(s.channel_cycle_hotkey, "Shift+CapsLock");
+        assert!(!s.admin_prompt_dismissed);
+        assert!(!s.auto_admin_prompt_dismissed);
         assert_eq!(s.history.mode, crate::history::HistoryMode::Capped);
         assert_eq!(s.history.max_records, 1000);
         assert!(!s.history.include_audio);

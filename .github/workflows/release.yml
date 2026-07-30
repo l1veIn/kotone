@@ -79,6 +79,30 @@ jobs:
           releaseDraft: true
           generateReleaseNotes: true
 
+      - name: Generate and upload updater manifests with mirror fallbacks
+        # tauri-action 会上传自己的 latest.json（api.github.com 临时 asset 地址）；
+        # 这里用 scripts/make-updater-jsons.mjs 重建为稳定的 releases/download 直链，
+        # 并生成四个镜像变体（updater endpoints 多镜像回退链所需的 latest-cn-*.json），
+        # 以 --clobber 覆盖同名附件。
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem $env:GITHUB_WORKSPACE -Recurse -File -Filter "*-setup.exe" |
+            Where-Object { $_.FullName -match "\\bundle\\nsis\\" } | Select-Object -First 1
+          if (-not $installer) {
+            throw "No NSIS installer was produced."
+          }
+          node scripts/make-updater-jsons.mjs --exe $installer.FullName --sig "$($installer.FullName).sig" --tag "${{ github.ref_name }}"
+          $dir = $installer.DirectoryName
+          gh release upload "${{ github.ref_name }}" `
+            (Join-Path $dir "latest.json") `
+            (Join-Path $dir "latest-cn-ghfast.json") `
+            (Join-Path $dir "latest-cn-ghproxy.json") `
+            (Join-Path $dir "latest-cn-ghproxynet.json") `
+            (Join-Path $dir "latest-cn-llkk.json") `
+            --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Generate and upload SHA-256 checksums
         shell: pwsh
         run: |

@@ -76,6 +76,10 @@ struct Inner {
     /// history 草稿（history.mode != off 时 begin 创建；不放 ActiveSession——
     /// end() 会 take 走 active，而 Sending/Error 态的终态落账仍需要草稿）
     history: Option<Arc<Mutex<HistoryDraft>>>,
+    /// 当前聊天频道（ADR-008）：(profile_id, channel_id)，sticky——
+    /// 切换后保持到下次切换；profile_id 与当前激活 profile 不符时视为默认频道
+    /// （用户切了游戏适配，旧频道选择自动失效）。None = 默认频道。
+    channel: Option<(String, String)>,
 }
 
 /// history 草稿：会话期间累计指标，终态（sent/cancelled/error）时落账一条记录
@@ -149,6 +153,7 @@ impl Orchestrator {
                 target_window: None,
                 process_case_id: None,
                 history: None,
+                channel: None,
             })),
             op: tokio::sync::Mutex::new(()),
             settings,
@@ -252,6 +257,45 @@ impl Orchestrator {
         {
             let _ = self.end().await;
         }
+    }
+
+    // ---------- 频道切换（ADR-008：sticky 频道态，句间动作） ----------
+
+    /// 频道切换键：按声明顺序循环当前激活 profile 的频道，悬浮窗提示新频道。
+    /// sticky：切换后保持到下次切换；频道在发送时刻读取，因此 toggle/one-shot/
+    /// solo 模式会话进行中按下自然作用于当前这句（hold 模式该组合物理上按不出）。
+    /// 单频道 profile 无操作。任意状态都接受（频道与会话状态正交）。
+    pub async fn on_cycle_channel(&self) {
+        let settings = self.settings.read().unwrap().clone();
+        let profile = settings
+            .active_profile_id
+            .as_deref()
+            .and_then(profile::get)
+            .unwrap_or_else(GameProfile::builtin_generic);
+        let current = { self.inner.lock().unwrap().channel.clone() };
+        // profile 不符（切了游戏适配）的残留视为「位于默认频道」
+        let current_id = current
+            .filter(|(pid, _)| *pid == profile.id)
+            .map(|(_, cid)| cid);
+        let Some(next_id) = profile.next_channel_id(current_id.as_deref()) else {
+            return; // 单频道：切换键无操作
+        };
+        let strategy = profile.channel_strategy(Some(&next_id));
+        {
+            self.inner.lock().unwrap().channel = Some((profile.id.clone(), next_id.clone()));
+        }
+        self.emitter.emit(
+            "kotone://channel",
+            json!({
+                "channelId": strategy.id,
+                "displayName": strategy.display_name,
+                "isDefault": strategy.is_default,
+            }),
+        );
+        self.emit_process(
+            "channel_switched",
+            json!({ "channelId": strategy.id, "profileId": profile.id }),
+        );
     }
 
     // ---------- 状态机操作 ----------
@@ -761,11 +805,16 @@ impl Orchestrator {
     /// Sending → Success/Error（§6 发送时序下半段；inject 实现负责按键细节）
     async fn do_send(&self, text: String, gen: u64) {
         let injection_started_at = std::time::Instant::now();
+        // ADR-008：频道在发送时刻读取（会话中进行中的切换作用于当前这句）
+        let channel_sel = { self.inner.lock().unwrap().channel.clone() };
         self.emit_process(
             "injection_started",
-            json!({ "textChars": text.chars().count() as u64 }),
+            json!({
+                "textChars": text.chars().count() as u64,
+                "channelId": channel_sel.as_ref().map(|(_, cid)| cid.clone()),
+            }),
         );
-        let (profile, token, target) = {
+        let (profile, token, target, channel) = {
             let _op = self.op.lock().await;
             let mut inner = self.inner.lock().unwrap();
             if inner.gen != gen {
@@ -775,6 +824,7 @@ impl Orchestrator {
             let token = CancelToken::default();
             inner.send_cancel = Some(token.clone());
             let target = inner.target_window;
+            let channel = inner.channel.clone();
             drop(inner);
             self.emit_state(OrchestratorState::Sending, Some(json!({ "text": text })));
             let settings = self.settings.read().unwrap().clone();
@@ -783,7 +833,18 @@ impl Orchestrator {
                 .as_deref()
                 .and_then(profile::get)
                 .unwrap_or_else(GameProfile::builtin_generic);
-            (profile, token, target)
+            (profile, token, target, channel)
+        };
+
+        // ADR-008 频道策略：克隆 profile 换开框键、文本加前缀——
+        // 用户原文（预览/历史/重试）不受频道前缀污染。
+        let strategy = resolve_send_strategy(&profile, &channel);
+        let mut wire_profile = profile.clone();
+        wire_profile.open_chat_key = strategy.open_chat_key.clone();
+        let wire_text = if strategy.text_prefix.is_empty() {
+            text.clone()
+        } else {
+            format!("{}{text}", strategy.text_prefix)
         };
 
         // 焦点恢复：preview 交互（点击悬浮条/热键确认）可能已把焦点带离目标窗口，
@@ -800,9 +861,9 @@ impl Orchestrator {
         }
 
         let injector = self.injector.clone();
-        let send_text = text.clone();
         let result =
-            tokio::task::spawn_blocking(move || injector.send(&send_text, &profile, token)).await;
+            tokio::task::spawn_blocking(move || injector.send(&wire_text, &wire_profile, token))
+                .await;
 
         let (history_write, resume_continuous) = {
             let _op = self.op.lock().await;
@@ -1055,6 +1116,18 @@ impl Orchestrator {
     }
 }
 
+/// ADR-008 发送频道解析（纯函数，可单测）：频道选择与当前 profile 不符
+/// （用户切了游戏适配，旧频道残留）时回落默认频道；否则按选择解析策略。
+fn resolve_send_strategy(
+    profile: &GameProfile,
+    channel: &Option<(String, String)>,
+) -> crate::profile::ChannelStrategy {
+    match channel {
+        Some((pid, cid)) if *pid == profile.id => profile.channel_strategy(Some(cid)),
+        _ => profile.channel_strategy(None),
+    }
+}
+
 /// 会话配置组装（纯函数，可单测）：profile 热词 → SessionConfig.hotwords，
 /// 引擎专有配置取 engineOptions[engine_id]（缺省 Null）
 fn build_session_config(
@@ -1100,5 +1173,33 @@ mod tests {
         // 未配置的引擎 → Null
         let cfg2 = build_session_config(&settings, "mock-stream", &generic);
         assert!(cfg2.options.is_null());
+    }
+
+    // ---------- 发送频道解析（ADR-008） ----------
+
+    #[test]
+    fn resolve_send_strategy_uses_selected_channel() {
+        let lol = GameProfile::builtin_lol();
+        let sel = Some(("lol".to_string(), "all".to_string()));
+        let s = resolve_send_strategy(&lol, &sel);
+        assert_eq!(s.id, "all");
+        assert_eq!(s.open_chat_key, "Shift+Enter");
+    }
+
+    #[test]
+    fn resolve_send_strategy_falls_back_when_profile_switched() {
+        // 频道残留属于 lol，但当前 profile 已是 generic → 默认频道
+        let generic = GameProfile::builtin_generic();
+        let sel = Some(("lol".to_string(), "all".to_string()));
+        let s = resolve_send_strategy(&generic, &sel);
+        assert!(s.is_default);
+        assert_eq!(s.open_chat_key, generic.open_chat_key);
+        // 未选择（None）同样回落默认
+        let s2 = resolve_send_strategy(&lol_clone(), &None);
+        assert_eq!(s2.id, "team");
+    }
+
+    fn lol_clone() -> GameProfile {
+        GameProfile::builtin_lol()
     }
 }

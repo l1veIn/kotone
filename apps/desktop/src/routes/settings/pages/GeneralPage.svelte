@@ -17,6 +17,7 @@
     type InteractionMode,
   } from "../../../lib/ipc";
   import { captureHotkey } from "../../../lib/hotkeyCapture";
+  import { combosConflict } from "../../../lib/hotkeyCombo";
   import { settingsStore, toast, errText } from "../../../lib/stores/ui";
   import { runtimeStore } from "../../../lib/stores/runtime";
   import Toggle from "../../../lib/components/Toggle.svelte";
@@ -124,6 +125,16 @@
     }
   });
 
+  /** hero 弹幕装饰：漂浮的游戏沟通短句（reduced-motion 下隐藏） */
+  const danmakuLines = [
+    { text: "中路 MISS！", top: 10, duration: 17, delay: 0 },
+    { text: "nice 啊这波", top: 28, duration: 21, delay: 3.5 },
+    { text: "打野来上了", top: 48, duration: 14, delay: 7 },
+    { text: "稳住，我们能赢", top: 66, duration: 19, delay: 1.5 },
+    { text: "大龙集合 大龙集合", top: 20, duration: 23, delay: 10 },
+    { text: "666", top: 58, duration: 12, delay: 12 },
+  ];
+
   const modes: { id: InteractionMode; name: string; desc: string }[] = [
     { id: "push-to-talk", name: "对讲机", desc: "按住说话，松开发送" },
     { id: "dictation", name: "录音笔", desc: "点按开始，再点停止" },
@@ -168,6 +179,12 @@
     const key = hotkeyDraft.trim();
     if (!key) {
       toast(false, "热键不能为空");
+      return;
+    }
+    // 双向冲突校验（ADR-008）：录制键与频道切换键不能相同
+    const cycleKey = $settingsStore?.channelCycleHotkey ?? "";
+    if (cycleKey && combosConflict(key, cycleKey)) {
+      toast(false, `录制热键与频道切换热键（${cycleKey}）冲突，请换一个或到「高级」页调整`);
       return;
     }
     try {
@@ -224,6 +241,17 @@
     <!-- 左侧压暗渐变：保证标题与芯片可读 -->
     <div class="absolute inset-0 bg-gradient-to-r from-kotone-deep/92 via-kotone-deep/55 to-transparent"></div>
     <div class="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-kotone-deep/80 to-transparent"></div>
+    <!-- 弹幕装饰层：游戏沟通短句从右向左飘过（reduced-motion 自动隐藏） -->
+    <div class="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+      {#each danmakuLines as line}
+        <span
+          class="danmaku-item"
+          style:top="{line.top}%"
+          style:animation-duration="{line.duration}s"
+          style:animation-delay="{line.delay}s"
+        >{line.text}</span>
+      {/each}
+    </div>
     <div class="relative flex min-h-64 flex-col justify-between gap-8 px-6 py-6">
       <div>
         <h1 class="text-[26px] leading-tight font-bold">
@@ -474,3 +502,32 @@
 
   {/if}
 </div>
+
+<style>
+  /* hero 弹幕：从右缘外匀速漂到左缘外，无限循环；透明度克制不抢主体 */
+  .danmaku-item {
+    position: absolute;
+    left: 100%;
+    white-space: nowrap;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.32);
+    text-shadow: 0 0 8px rgba(0, 229, 255, 0.35);
+    animation-name: kotone-danmaku;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+  }
+  @keyframes kotone-danmaku {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      /* 自身宽度 + 约 56rem 容器行程，保证完全漂出左缘 */
+      transform: translateX(calc(-100% - 56rem));
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .danmaku-item {
+      display: none;
+    }
+  }
+</style>

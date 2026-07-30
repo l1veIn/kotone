@@ -214,6 +214,36 @@ impl Emitter for TauriEmitter {
                     },
                 }
             }
+        } else if event == "kotone://channel" {
+            // 频道切换（ADR-008）：on_demand 模式下悬浮窗平时隐藏，
+            // 切换瞬间需要「露个脸」让用户看到频道徽标，~1.2s 后自动收回；
+            // always 模式运行期间本就常显，无需处理。vis_gen 代际防止
+            // 紧随其后的新会话被这次延迟隐藏误伤。
+            let on_demand = self
+                .app
+                .try_state::<SharedState>()
+                .map(|s| s.settings.read().unwrap().overlay.visibility == OverlayVisibility::OnDemand)
+                .unwrap_or(false);
+            if on_demand {
+                if let Some(win) = self.app.get_webview_window("overlay") {
+                    show_window_no_focus(&win);
+                    let app = self.app.clone();
+                    let vis_gen = self.vis_gen.clone();
+                    let gen = self
+                        .vis_gen
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                        + 1;
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+                        if vis_gen.load(std::sync::atomic::Ordering::SeqCst) != gen {
+                            return; // 期间已有新状态事件（新会话/再切换），不藏
+                        }
+                        if let Some(win) = app.get_webview_window("overlay") {
+                            hide_window(&win);
+                        }
+                    });
+                }
+            }
         } else if event == "kotone://process" {
             record_process_event(&self.app, &payload);
         }
@@ -540,6 +570,7 @@ fn update_settings(
             guard.hotkey.key.clone(),
             effective_hotkey_mode(&guard),
             guard.hotkey_backend,
+            guard.channel_cycle_hotkey.clone(),
         );
         let old_overlay = guard.overlay.clone();
         let mut merged =
@@ -569,7 +600,9 @@ fn update_settings(
     let next_mode = effective_hotkey_mode(&updated);
     let hotkey_changed = old_hotkey.0 != updated.hotkey.key
         || old_hotkey.1 != next_mode
-        || old_hotkey.2 != updated.hotkey_backend;
+        || old_hotkey.2 != updated.hotkey_backend
+        // 频道切换热键（ADR-008）变化也要重注册（HotkeyManager 注册时一并应用）
+        || old_hotkey.3 != updated.channel_cycle_hotkey;
     let running = app
         .try_state::<RuntimeManager>()
         .map(|rt| rt.phase() == RuntimePhase::Running)
@@ -999,6 +1032,21 @@ fn open_models_dir(state: tauri::State<SharedState>) -> Result<(), String> {
     open_in_file_manager(&dir)
 }
 
+/// 在系统默认浏览器中打开外部链接（关于页 GitHub 等）。
+/// webview 内 target=_blank 不会调起系统浏览器；rundll32 方案零新增依赖，
+/// 白名单只允许 http/https，避免被当成任意协议执行入口。
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err("仅支持打开 http/https 链接".into());
+    }
+    std::process::Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", &url])
+        .spawn()
+        .map_err(|e| format!("打开浏览器失败：{e}"))?;
+    Ok(())
+}
+
 #[cfg(windows)]
 fn open_in_file_manager(dir: &std::path::Path) -> Result<(), String> {
     std::process::Command::new("explorer.exe")
@@ -1112,8 +1160,41 @@ fn simulate_send(
     state.injector.send(&text, &profile, CancelToken::default())
 }
 
+/// 自启动提权（§10 R-1）：设置开启且当前未提权时，runas 重启自身并立即退出。
+///
+/// 必须在 Tauri Builder 初始化之前执行：单实例插件在插件初始化阶段创建
+/// 命名互斥锁，若在 setup() 里才 runas，未提权父进程已持有该锁——提权子进程
+/// 会把自己当成「第二实例」，把参数转发给正在退出的父进程后自杀，父进程随后
+/// 也退出，表现为「双击后没有任何窗口」（0.1.4 用户反馈）。在这里提前判定并
+/// std::process::exit，父进程从不触碰单实例锁 / WebView2，子进程是唯一实例。
+///
+/// 防循环：子进程带 ELEVATED_RETRY_ARG 标记；用户取消 UAC 时 ShellExecuteExW
+/// 直接返回错误，本进程按普通权限继续启动（不退出）。
+#[cfg(windows)]
+fn auto_elevate_before_tauri_init() {
+    let settings = settings::load();
+    if !elevation::should_auto_elevate(
+        settings.run_as_admin_on_start,
+        elevation::is_elevated(),
+        elevation::retry_marker_present(),
+    ) {
+        return;
+    }
+    match elevation::restart_for_auto_elevate() {
+        Ok(()) => {
+            // 提权副本已拉起：立刻退出，不做任何 Tauri/WebView2 初始化。
+            std::process::exit(0);
+        }
+        Err(e) => eprintln!("[kotone] 自动提权重启失败: {e}"),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 见函数注释：自启动提权必须先于单实例插件的互斥锁创建。
+    #[cfg(windows)]
+    auto_elevate_before_tauri_init();
+
     let startup_options = StartupOptions {
         onboarding: parse_onboarding_launch_mode(std::env::args()),
     };
@@ -1175,28 +1256,9 @@ pub fn run() {
             app_started.context.elevated = Some(elevation::is_elevated());
             let _ = process_log::record(app_started);
 
-            // 自启动提权（§10 R-1）：设置开启且当前未提权时 runas 重启自身。
-            // 防循环：重启子进程带 ELEVATED_RETRY_ARG 标记，若用户取消 UAC
-            // （子进程仍未提权）则本次会话放弃重试。成功拉起后本进程直接退出。
-            #[cfg(windows)]
-            if elevation::should_auto_elevate(
-                settings.run_as_admin_on_start,
-                elevation::is_elevated(),
-                elevation::retry_marker_present(),
-            ) {
-                log::log("auto-elevate: attempting runas restart");
-                match elevation::restart_for_auto_elevate() {
-                    Ok(()) => {
-                        log::log("auto-elevate: spawned elevated copy, exiting this process");
-                        app.handle().exit(0);
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        log::log(&format!("auto-elevate failed: {e}"));
-                        eprintln!("[kotone] 自动提权重启失败: {e}");
-                    }
-                }
-            }
+            // 自启动提权已前移到 run() 顶部（auto_elevate_before_tauri_init）：
+            // 单实例插件初始化早于 setup，父进程若在此才 runas 退出，提权子进程
+            // 会被单实例锁误判为第二实例而自杀，导致「双击无反应」。
 
             if let Err(e) = profile::ensure_builtin() {
                 eprintln!("[kotone] 内置 profile 落盘失败: {e}");
@@ -1318,6 +1380,7 @@ pub fn run() {
             set_models_dir,
             delete_model,
             open_models_dir,
+            open_external,
             get_history,
             clear_history,
             read_history_audio,

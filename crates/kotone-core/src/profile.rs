@@ -10,6 +10,38 @@ use std::sync::OnceLock;
 
 use crate::settings::kotone_dir;
 
+/// 聊天频道（ADR-008）：一个游戏可有多个聊天频道，各有独立发送策略。
+/// 频道切换热键按声明顺序循环；`default` 标记默认频道（缺省取第一个）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileChannel {
+    /// 语义 id（如 "team" / "all"）：跨游戏复用，切换热键与悬浮窗都按 id 工作
+    pub id: String,
+    /// 悬浮窗展示名（如「队伍」「所有人」；措辞由 profile 定，不硬编码）
+    pub display_name: String,
+    /// 按键策略：该频道专属的开聊天框键（如 Shift+Enter）；
+    /// None = 沿用 profile 默认 openChatKey
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_chat_key: Option<String>,
+    /// 前缀策略：发送文本前拼接的前缀（如 "/all "）；与 openChatKey 独立，
+    /// 两者可同时设置（先按专属键开框、再发带前缀文本）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_prefix: Option<String>,
+    /// 默认频道标记；多个标记时取第一个，全无标记时取列表首项
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub default: bool,
+}
+
+/// 频道发送策略（解析结果）：开框键 + 文本前缀，全部落定无 Option
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelStrategy {
+    pub id: String,
+    pub display_name: String,
+    pub open_chat_key: String,
+    pub text_prefix: String,
+    pub is_default: bool,
+}
+
 /// 游戏 profile（默认值对齐 LeagueAkari 实测：delay 20/20/20）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,6 +58,10 @@ pub struct GameProfile {
     /// false = Unicode 逐字（不污染剪贴板）；true = 剪贴板粘贴
     pub prefer_clipboard_paste: bool,
     pub hotwords: Vec<String>,
+    /// 聊天频道列表（ADR-008；空 = 单频道游戏，从 openChatKey 合成默认频道，
+    /// 行为与频道功能引入前完全一致）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<ProfileChannel>,
     /// 用户在内置 profile 里显式删除的内置词条：版本更新合并内置热词时
     /// 尊重删除、不复活（见 ensure_builtin_in）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -55,6 +91,69 @@ impl GameProfile {
                 )
             })
             .clone()
+    }
+
+    /// 有效频道列表（ADR-008）：channels 为空时从 openChatKey 合成单个
+    /// 默认频道（单频道游戏行为零变化）；返回顺序 = 声明顺序（循环切换顺序）。
+    pub fn channels_effective(&self) -> Vec<ChannelStrategy> {
+        if self.channels.is_empty() {
+            return vec![ChannelStrategy {
+                id: "default".into(),
+                display_name: self.display_name.clone(),
+                open_chat_key: self.open_chat_key.clone(),
+                text_prefix: String::new(),
+                is_default: true,
+            }];
+        }
+        let default_idx = self
+            .channels
+            .iter()
+            .position(|c| c.default)
+            .unwrap_or(0);
+        self.channels
+            .iter()
+            .enumerate()
+            .map(|(i, c)| ChannelStrategy {
+                id: c.id.clone(),
+                display_name: c.display_name.clone(),
+                open_chat_key: c
+                    .open_chat_key
+                    .clone()
+                    .unwrap_or_else(|| self.open_chat_key.clone()),
+                text_prefix: c.text_prefix.clone().unwrap_or_default(),
+                is_default: i == default_idx,
+            })
+            .collect()
+    }
+
+    /// 按 id 解析频道策略；None / 未知 id → 默认频道（发送路径的兜底）
+    pub fn channel_strategy(&self, id: Option<&str>) -> ChannelStrategy {
+        let channels = self.channels_effective();
+        if let Some(id) = id {
+            if let Some(s) = channels.iter().find(|c| c.id == id) {
+                return s.clone();
+            }
+        }
+        channels
+            .into_iter()
+            .find(|c| c.is_default)
+            .expect("channels_effective 至少含一个默认频道")
+    }
+
+    /// 循环切换的下一个频道 id（ADR-008：按声明顺序循环，从默认频道的下一个开始）。
+    /// 当前 id 缺失/未知（如切换了 profile 后的残留）→ 默认频道的下一个。
+    /// 单频道返回 None（调用方据此让切换键无操作）。
+    pub fn next_channel_id(&self, current: Option<&str>) -> Option<String> {
+        let channels = self.channels_effective();
+        if channels.len() < 2 {
+            return None;
+        }
+        let cur_idx = current.and_then(|id| channels.iter().position(|c| c.id == id));
+        let base = match cur_idx {
+            Some(i) => i,
+            None => channels.iter().position(|c| c.is_default).unwrap_or(0),
+        };
+        Some(channels[(base + 1) % channels.len()].id.clone())
     }
 }
 
@@ -106,9 +205,12 @@ pub fn ensure_builtin_in(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// 版本更新合并：已有内置 profile 文件补上新版新增的内置词条。
-/// missing = 内置词条 - 文件现有热词 - 用户显式删除的内置词条，追加到末尾
-/// （用户自定义词条与其余字段原样保留）。合并失败只记日志，不阻断启动流程。
+/// 版本更新合并：已有内置 profile 文件补上新版新增内容——
+/// 1) 内置热词：内置词条 - 文件现有热词 - 用户显式删除的内置词条，追加到末尾
+///   （用户自定义词条与其余字段原样保留）；
+/// 2) 聊天频道（ADR-008）：文件缺 channels 且内置声明了频道时整体补入
+///   （只补缺失，不覆盖用户已有频道定义）。
+/// 合并失败只记日志，不阻断启动流程。
 fn merge_builtin_hotwords_in(dir: &Path, builtin: &GameProfile) {
     let result = (|| -> Result<(), String> {
         let path = profile_path_in(dir, &builtin.id);
@@ -116,20 +218,28 @@ fn merge_builtin_hotwords_in(dir: &Path, builtin: &GameProfile) {
             std::fs::read_to_string(&path).map_err(|e| format!("读取内置 profile 失败: {e}"))?;
         let mut file: GameProfile =
             serde_json::from_str(&raw).map_err(|e| format!("解析内置 profile 失败: {e}"))?;
+        let mut changed = false;
         let missing: Vec<String> = builtin
             .hotwords
             .iter()
             .filter(|w| !file.hotwords.contains(w) && !file.removed_builtin_hotwords.contains(w))
             .cloned()
             .collect();
-        if missing.is_empty() {
-            return Ok(());
+        if !missing.is_empty() {
+            file.hotwords.extend(missing);
+            changed = true;
         }
-        file.hotwords.extend(missing);
-        save_in(dir, &file)
+        if file.channels.is_empty() && !builtin.channels.is_empty() {
+            file.channels = builtin.channels.clone();
+            changed = true;
+        }
+        if changed {
+            save_in(dir, &file)?;
+        }
+        Ok(())
     })();
     if let Err(e) = result {
-        eprintln!("合并内置热词失败（{}，忽略）: {e}", builtin.id);
+        eprintln!("合并内置 profile 失败（{}，忽略）: {e}", builtin.id);
     }
 }
 
@@ -514,5 +624,98 @@ mod tests {
         let words = GameProfile::builtin_lol().hotwords;
         let text = format_hotwords_export(&words);
         assert_eq!(parse_hotwords_import(&text), words);
+    }
+
+    // ---------- 聊天频道（ADR-008） ----------
+
+    #[test]
+    fn channels_effective_empty_channels_synthesizes_default() {
+        let g = GameProfile::builtin_generic();
+        let ch = g.channels_effective();
+        assert_eq!(ch.len(), 1);
+        assert!(ch[0].is_default);
+        assert_eq!(ch[0].open_chat_key, g.open_chat_key);
+        assert_eq!(ch[0].text_prefix, "");
+        assert_eq!(g.next_channel_id(None), None, "单频道游戏不可切换");
+    }
+
+    #[test]
+    fn lol_builtin_declares_team_and_all_channels() {
+        let lol = GameProfile::builtin_lol();
+        let ch = lol.channels_effective();
+        assert_eq!(ch.len(), 2);
+        assert_eq!(ch[0].id, "team");
+        assert!(ch[0].is_default);
+        assert_eq!(ch[0].open_chat_key, "Enter", "默认频道沿用 profile 开框键");
+        assert_eq!(ch[1].id, "all");
+        assert_eq!(ch[1].display_name, "所有人");
+        assert_eq!(ch[1].open_chat_key, "Shift+Enter");
+    }
+
+    #[test]
+    fn channel_strategy_falls_back_to_default() {
+        let lol = GameProfile::builtin_lol();
+        assert_eq!(lol.channel_strategy(None).id, "team");
+        assert_eq!(lol.channel_strategy(Some("ghost")).id, "team", "未知 id 回落默认");
+        assert_eq!(lol.channel_strategy(Some("all")).open_chat_key, "Shift+Enter");
+    }
+
+    #[test]
+    fn next_channel_cycles_in_declaration_order() {
+        let lol = GameProfile::builtin_lol();
+        // 无当前频道（= 位于默认）→ 默认的下一个
+        assert_eq!(lol.next_channel_id(None).as_deref(), Some("all"));
+        assert_eq!(lol.next_channel_id(Some("all")).as_deref(), Some("team"));
+        assert_eq!(lol.next_channel_id(Some("team")).as_deref(), Some("all"));
+        // 未知 id（切 profile 后的残留）→ 默认的下一个
+        assert_eq!(lol.next_channel_id(Some("ghost")).as_deref(), Some("all"));
+    }
+
+    #[test]
+    fn channel_prefix_strategy_uses_default_open_key() {
+        // 前缀策略：未声明 openChatKey 的频道沿用 profile 默认开框键
+        let mut p = GameProfile::builtin_generic();
+        p.channels = vec![
+            ProfileChannel {
+                id: "team".into(),
+                display_name: "队伍".into(),
+                open_chat_key: None,
+                text_prefix: None,
+                default: true,
+            },
+            ProfileChannel {
+                id: "all".into(),
+                display_name: "所有人".into(),
+                open_chat_key: None,
+                text_prefix: Some("/all ".into()),
+                default: false,
+            },
+        ];
+        let s = p.channel_strategy(Some("all"));
+        assert_eq!(s.open_chat_key, p.open_chat_key);
+        assert_eq!(s.text_prefix, "/all ");
+        assert!(!s.is_default);
+    }
+
+    #[test]
+    fn ensure_builtin_backfills_channels_into_legacy_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path().to_path_buf();
+        // 真·旧版文件：无 channels（序列化时整个字段被跳过）
+        let mut legacy = GameProfile::builtin_lol();
+        legacy.channels.clear();
+        save_in(&dir, &legacy).unwrap();
+        ensure_builtin_in(&dir).unwrap();
+        let lol = get_in(&dir, "lol").unwrap();
+        assert_eq!(lol.channels.len(), 2, "缺 channels 的旧文件应补入内置频道");
+        // 幂等 + 尊重用户后续编辑：已有频道不被覆盖
+        let mut edited = lol.clone();
+        edited.channels[1].display_name = "全体（自定义）".into();
+        save_in(&dir, &edited).unwrap();
+        ensure_builtin_in(&dir).unwrap();
+        assert_eq!(
+            get_in(&dir, "lol").unwrap().channels[1].display_name,
+            "全体（自定义）"
+        );
     }
 }

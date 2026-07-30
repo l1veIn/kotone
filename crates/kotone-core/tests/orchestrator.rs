@@ -295,6 +295,9 @@ fn make_orchestrator_full(
     focus: Arc<dyn FocusBackend>,
 ) -> (Arc<Orchestrator>, Arc<VecEmitter>) {
     let mut settings = Settings::default();
+    // 0.1.5 起默认交互模式为「对讲机」（hold 直发）；本测试族沿用旧的
+    // toggle + autoSend 推导行为，显式置 None 走自定义兼容路径
+    settings.interaction_mode = None;
     settings.stt_engine = "mock-stream".into();
     settings.auto_send = auto_send;
     settings.active_profile_id = None; // 测试不依赖真实 ~/.kotone
@@ -1168,6 +1171,8 @@ fn make_history_orchestrator(
     eval_dir: Option<std::path::PathBuf>,
 ) -> Arc<Orchestrator> {
     let mut settings = Settings::default();
+    // 同 make_orchestrator_full：沿用 toggle + autoSend 推导，显式置 None
+    settings.interaction_mode = None;
     settings.stt_engine = "mock-stream".into();
     settings.auto_send = auto_send;
     settings.active_profile_id = Some("lol".into()); // 验证 profileId 落账

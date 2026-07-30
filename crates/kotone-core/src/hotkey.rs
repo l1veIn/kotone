@@ -32,6 +32,12 @@ pub trait HotkeySource: Send + Sync {
     fn unregister(&self);
     /// 会话激活开关：active=true 期间 Esc 取消使能
     fn set_cancel_active(&self, active: bool);
+    /// 频道切换热键（ADR-008；可选）：None 或解析失败 = 关闭频道切换。
+    /// 默认无操作（不支持切换键的实现安全忽略）。
+    fn set_cycle_key(&self, key: Option<&str>) -> Result<(), String> {
+        let _ = key;
+        Ok(())
+    }
 }
 
 // ---------- VK 码（Win32 常量值；定义为 u32 常量以便跨平台编译与测试） ----------
@@ -241,6 +247,16 @@ pub enum HookEvent {
     Toggle,
     /// 会话激活期间 Esc 取消
     Cancel,
+    /// 频道切换键按下（ADR-008；tap 语义，按住不重复触发）
+    CycleChannel,
+}
+
+/// 两个热键组合是否冲突（解析后 spec 相等；解析失败不视为冲突，由注册路径报错）
+pub fn combos_conflict(a: &str, b: &str) -> bool {
+    match (parse_hotkey(a), parse_hotkey(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
 }
 
 /// 一次按键的判定结果
@@ -264,6 +280,9 @@ pub struct HookMatcher {
     spec: HotkeySpec,
     mode: HotkeyMode,
     enabled: bool,
+    /// 频道切换键（ADR-008；可选）：与主键同构的严格修饰键匹配，tap 语义。
+    /// 与主键同 vk 不同修饰键时互不干扰（如主键 CapsLock / 切换 Shift+CapsLock）。
+    cycle_spec: Option<HotkeySpec>,
     // 修饰键实时按下态
     ctrl: bool,
     alt: bool,
@@ -274,6 +293,8 @@ pub struct HookMatcher {
     main_matched: bool,
     /// hold 模式已发出 HoldPressed（修饰键中途松开也必须补 HoldReleased）
     hold_fired: bool,
+    // 切换键按下态（重复 down 过滤 + 成对吞键；命中才置位，未命中落回主键分支）
+    cycle_down: bool,
     esc_down: bool,
     esc_matched: bool,
     /// 会话激活（state != idle）：Esc 取消使能
@@ -291,12 +312,14 @@ impl HookMatcher {
             spec,
             mode,
             enabled: true,
+            cycle_spec: None,
             ctrl: false,
             alt: false,
             shift: false,
             main_down: false,
             main_matched: false,
             hold_fired: false,
+            cycle_down: false,
             esc_down: false,
             esc_matched: false,
             session_active: false,
@@ -305,9 +328,18 @@ impl HookMatcher {
         }
     }
 
-    /// 运行时改键/改模式：重置全部按下态
+    /// 运行时改键/改模式：重置全部按下态（保留频道切换键配置——
+    /// 切换键由独立设置项驱动，主键改键不应顺手清掉它）
     pub fn set_config(&mut self, spec: HotkeySpec, mode: HotkeyMode) {
+        let cycle_spec = self.cycle_spec;
         *self = Self::new(spec, mode);
+        self.cycle_spec = cycle_spec;
+    }
+
+    /// 配置/清除频道切换键（None = 关闭频道切换；ADR-008）
+    pub fn set_cycle_spec(&mut self, spec: Option<HotkeySpec>) {
+        self.cycle_spec = spec;
+        self.cycle_down = false;
     }
 
     pub fn set_enabled(&mut self, enabled: bool) {
@@ -316,6 +348,7 @@ impl HookMatcher {
             self.main_down = false;
             self.main_matched = false;
             self.hold_fired = false;
+            self.cycle_down = false;
             self.esc_down = false;
             self.esc_matched = false;
         }
@@ -391,6 +424,43 @@ impl HookMatcher {
 
         if !self.enabled {
             return PASS;
+        }
+
+        // 频道切换键（ADR-008）：先于主键判定，但只在确实命中时接管事件——
+        // 两者 vk 可相同（如主键 CapsLock、切换 Shift+CapsLock），切换键未命中
+        // 必须落回主键分支，否则裸主键（无修饰键的录制键）会被短路吞掉。
+        if let Some(cs) = self.cycle_spec {
+            if vk == cs.vk {
+                if down {
+                    if self.cycle_down {
+                        // 已命中按住的重复 down：吞但不重复触发
+                        return MatchOutcome {
+                            swallow: true,
+                            event: None,
+                            captured: None,
+                        };
+                    }
+                    let matched =
+                        self.ctrl == cs.ctrl && self.alt == cs.alt && self.shift == cs.shift;
+                    if matched {
+                        self.cycle_down = true;
+                        return MatchOutcome {
+                            swallow: true,
+                            event: Some(HookEvent::CycleChannel),
+                            captured: None,
+                        };
+                    }
+                    // 未命中：落到主键分支（同 vk 不同修饰键场景）
+                } else if self.cycle_down {
+                    self.cycle_down = false;
+                    return MatchOutcome {
+                        swallow: true,
+                        event: None,
+                        captured: None,
+                    };
+                }
+                // 非切换键按下的 up：落到主键分支
+            }
         }
 
         // 主键
@@ -784,5 +854,84 @@ mod tests {
         m.set_capture_active(true);
         let r = down(&mut m, u32::from(b'G'));
         assert_eq!(r.captured.unwrap().combo_name(), "G");
+    }
+
+    // ---------- 频道切换键（ADR-008） ----------
+
+    #[test]
+    fn cycle_key_fires_with_strict_modifiers() {
+        let mut m = matcher("CapsLock", HotkeyMode::Toggle);
+        m.set_cycle_spec(parse_hotkey("Shift+CapsLock"));
+        // 无 Shift：命中主键而非切换键
+        let r = down(&mut m, VK_CAPITAL);
+        assert_eq!(r.event, Some(HookEvent::Toggle));
+        assert!(r.swallow);
+        up(&mut m, VK_CAPITAL);
+        // Shift+CapsLock：命中切换键，不触发录制
+        down(&mut m, VK_LSHIFT);
+        let r = down(&mut m, VK_CAPITAL);
+        assert_eq!(r.event, Some(HookEvent::CycleChannel));
+        assert!(r.swallow);
+        // 重复 down 不重复触发
+        assert_eq!(down(&mut m, VK_CAPITAL).event, None);
+        // up 吞键、无事件
+        let r = up(&mut m, VK_CAPITAL);
+        assert!(r.swallow);
+        assert_eq!(r.event, None);
+        up(&mut m, VK_LSHIFT);
+        // Shift 本身永不吞（放行给游戏）
+    }
+
+    #[test]
+    fn cycle_key_rejects_extra_modifiers() {
+        let mut m = matcher("F8", HotkeyMode::Toggle);
+        m.set_cycle_spec(parse_hotkey("Shift+F9"));
+        // Ctrl+Shift+F9：修饰键不严格相等，不命中
+        down(&mut m, VK_LCONTROL);
+        down(&mut m, VK_LSHIFT);
+        let r = down(&mut m, VK_F1 + 8);
+        assert_eq!(r, PASS);
+        up(&mut m, VK_F1 + 8);
+        up(&mut m, VK_LSHIFT);
+        up(&mut m, VK_LCONTROL);
+    }
+
+    #[test]
+    fn cycle_spec_survives_main_rekey_and_clears_on_none() {
+        let mut m = matcher("CapsLock", HotkeyMode::Toggle);
+        m.set_cycle_spec(parse_hotkey("Shift+CapsLock"));
+        // 主键改键不清掉切换键
+        m.set_config(parse_hotkey("F8").unwrap(), HotkeyMode::Toggle);
+        down(&mut m, VK_LSHIFT);
+        assert_eq!(down(&mut m, VK_CAPITAL).event, Some(HookEvent::CycleChannel));
+        up(&mut m, VK_CAPITAL);
+        up(&mut m, VK_LSHIFT);
+        // 清除后不再触发
+        m.set_cycle_spec(None);
+        down(&mut m, VK_LSHIFT);
+        assert_eq!(down(&mut m, VK_CAPITAL), PASS);
+        up(&mut m, VK_CAPITAL);
+        up(&mut m, VK_LSHIFT);
+    }
+
+    #[test]
+    fn cycle_key_disabled_with_matcher() {
+        let mut m = matcher("CapsLock", HotkeyMode::Toggle);
+        m.set_cycle_spec(parse_hotkey("Shift+CapsLock"));
+        m.set_enabled(false);
+        down(&mut m, VK_LSHIFT);
+        assert_eq!(down(&mut m, VK_CAPITAL), PASS, "运行时停止后切换键也放行");
+        up(&mut m, VK_CAPITAL);
+        up(&mut m, VK_LSHIFT);
+    }
+
+    #[test]
+    fn combos_conflict_detects_same_spec() {
+        assert!(combos_conflict("Shift+CapsLock", "shift + capslock"));
+        assert!(combos_conflict("Ctrl+Shift+F7", "Shift+Ctrl+F7"));
+        assert!(!combos_conflict("CapsLock", "Shift+CapsLock"));
+        assert!(!combos_conflict("F8", "F9"));
+        // 解析失败不视为冲突（注册路径会单独报错）
+        assert!(!combos_conflict("NotAKey", "F8"));
     }
 }

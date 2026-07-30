@@ -58,6 +58,13 @@ export function toast(ok: boolean, text: string): void {
 export const toastInfo = (text: string): number => pushToast("info", text);
 export const toastWarn = (text: string): number => pushToast("warning", text);
 
+/**
+ * 两段式提权提示的接力标记（localStorage）：
+ * 第一段「以管理员权限重启」点击后写入，提权重启成功的新进程由
+ * Settings.svelte 读取并弹出第二段「启动时自动请求管理员权限」询问。
+ */
+export const AUTO_ADMIN_PROMPT_FLAG = "kotone:auto-admin-prompt";
+
 export function errText(e: unknown): string {
   return typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
 }

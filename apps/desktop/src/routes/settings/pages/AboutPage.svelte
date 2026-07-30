@@ -7,7 +7,8 @@
    */
   import { onMount } from "svelte";
   import { getVersion } from "@tauri-apps/api/app";
-  import { isTauri } from "../../../lib/ipc";
+  import { isTauri, openExternal } from "../../../lib/ipc";
+  import { toast, errText } from "../../../lib/stores/ui";
   import { checkForUpdates, type UpdateCheckResult } from "../../../lib/updater";
   import stickerProud from "../../../assets/brand/stickers/proud.webp";
 
@@ -15,7 +16,7 @@
   let { onOpenCharacter }: { onOpenCharacter: () => void } = $props();
 
   /** 静态兜底版本（与 package.json 同步）；桌面端启动后替换为真实版本 */
-  let version = $state("0.1.4");
+  let version = $state("0.1.5");
   let checkingUpdate = $state(false);
   let updateResult = $state<UpdateCheckResult | null>(null);
 
@@ -23,6 +24,18 @@
     if (!isTauri) return;
     version = await getVersion().catch(() => version);
   });
+
+  const GITHUB_URL = "https://github.com/l1veIn/kotone";
+
+  /** webview 内 target=_blank 不会调起系统浏览器，走后端 open_external */
+  async function openGitHub(e: MouseEvent) {
+    e.preventDefault();
+    try {
+      await openExternal(GITHUB_URL);
+    } catch (err) {
+      toast(false, `打开链接失败：${errText(err)}`);
+    }
+  }
 
   async function checkUpdates() {
     if (checkingUpdate) return;
@@ -60,9 +73,10 @@
       <div class="mt-2.5 flex flex-wrap items-center gap-2">
         <a
           class="inline-flex items-center gap-1.5 rounded-lg bg-white/8 px-2.5 py-1.5 text-[11px] text-white/70 ring-1 ring-white/12 transition hover:bg-white/15 hover:text-kotone-cyan"
-          href="https://github.com/l1veIn/kotone"
+          href={GITHUB_URL}
           target="_blank"
           rel="noreferrer"
+          onclick={(e) => void openGitHub(e)}
         >
           <svg viewBox="0 0 24 24" fill="currentColor" class="h-3.5 w-3.5" aria-hidden="true">
             <path

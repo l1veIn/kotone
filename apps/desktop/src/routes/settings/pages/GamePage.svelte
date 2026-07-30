@@ -282,6 +282,30 @@
           {/if}
         </div>
 
+        {#if p.channels && p.channels.length > 1}
+          <!-- 多频道声明（ADR-008）：写清当前适配支持哪些频道、按什么键切换 -->
+          <div class="mt-3 flex flex-wrap items-center gap-1.5 border-t border-white/8 pt-3">
+            <span class="text-[10px] text-white/40">聊天频道</span>
+            {#each p.channels as ch}
+              <span
+                class="rounded px-1.5 py-0.5 text-[10px] {ch.default
+                  ? 'bg-kotone-cyan/15 text-kotone-cyan'
+                  : 'bg-white/8 text-white/60'}"
+                title={ch.textPrefix
+                  ? `发送前缀 ${ch.textPrefix}`
+                  : ch.openChatKey
+                    ? `开聊天框按 ${ch.openChatKey}`
+                    : "沿用默认开聊天框按键"}
+              >
+                {ch.displayName}{ch.default ? "（默认）" : ""}
+              </span>
+            {/each}
+            <span class="text-[10px] text-white/35">
+              · 按 {$settingsStore?.channelCycleHotkey ?? "Shift+CapsLock"} 循环切换（「高级」页可改）
+            </span>
+          </div>
+        {/if}
+
         {#if editing && draft}
           <!-- 普通用户只编辑热词；聊天键和注入策略收进高级输入设置。 -->
           <div class="mt-4 border-t border-white/8 pt-4">

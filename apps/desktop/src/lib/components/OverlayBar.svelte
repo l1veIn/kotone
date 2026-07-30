@@ -197,6 +197,17 @@
       class="flex max-w-full items-center gap-2.5 rounded-full bg-kotone-deep/96 py-2 pr-4 pl-3.5 ring-1 ring-kotone-cyan/35"
       style:width="fit-content"
     >
+      {#if $appState.channel}
+        <!-- 当前发送频道徽标（仅非默认频道显示）；id 变化时重放弹跳动画提示「已切换」 -->
+        {#key $appState.channel.id}
+          <span
+            class="channel-badge shrink-0 rounded-full bg-kotone-violet/30 px-2 py-0.5 text-[10px] leading-tight font-semibold whitespace-nowrap text-kotone-violet ring-1 ring-kotone-violet/50"
+            title="当前发送频道：{$appState.channel.displayName}"
+          >
+            {$appState.channel.displayName}
+          </span>
+        {/key}
+      {/if}
       {#if $appState.state === "listening"}
         <!-- 收到真实 partial 后立即上屏；尚无 partial（含非流式引擎）时显示声波。 -->
         <span class="mic-breath h-2.5 w-2.5 shrink-0 rounded-full bg-kotone-cyan"></span>
@@ -286,6 +297,16 @@
   <div
     class="flex w-full items-center gap-3 rounded-2xl bg-kotone-deep/96 px-4 py-2 ring-1 ring-inset ring-kotone-cyan/40"
   >
+    {#if $appState.channel}
+      {#key $appState.channel.id}
+        <span
+          class="channel-badge shrink-0 rounded-full bg-kotone-violet/30 px-2 py-1 text-[10px] leading-tight font-semibold whitespace-nowrap text-kotone-violet ring-1 ring-kotone-violet/50"
+          title="当前发送频道：{$appState.channel.displayName}"
+        >
+          {$appState.channel.displayName}
+        </span>
+      {/key}
+    {/if}
     {#if $appState.state === "listening"}
       <!-- 收到真实 partial 后立即上屏；尚无 partial（含非流式引擎）时显示声波。 -->
       <span class="mic-breath flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-kotone-cyan/12" in:fade={{ duration: 150 }}>
@@ -446,6 +467,21 @@
     border-right: 1px solid rgba(0, 229, 255, 0.45);
     border-bottom: 1px solid rgba(0, 229, 255, 0.45);
     transform: rotate(45deg);
+  }
+
+  /* 频道徽标：切换瞬间弹跳提示 */
+  .channel-badge {
+    animation: kotone-badge-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  @keyframes kotone-badge-pop {
+    0% {
+      transform: scale(0.5);
+      opacity: 0;
+    }
+    100% {
+      transform: scale(1);
+      opacity: 1;
+    }
   }
 
   /* 麦克风呼吸光晕 */

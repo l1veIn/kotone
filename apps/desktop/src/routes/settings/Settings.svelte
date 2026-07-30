@@ -6,11 +6,12 @@
    */
   import { onMount } from "svelte";
   import { getSettings, getStartupOptions, getElevationStatus, isTauri } from "../../lib/ipc";
-  import { settingsStore, toast, errText } from "../../lib/stores/ui";
+  import { settingsStore, toast, errText, AUTO_ADMIN_PROMPT_FLAG } from "../../lib/stores/ui";
   import { initRuntime } from "../../lib/stores/runtime";
   import { checkForUpdates } from "../../lib/updater";
   import Toasts from "../../lib/components/Toasts.svelte";
   import ElevationPrompt from "../../lib/components/ElevationPrompt.svelte";
+  import AutoAdminPrompt from "../../lib/components/AutoAdminPrompt.svelte";
   import Onboarding from "./Onboarding.svelte";
   import Titlebar from "./Titlebar.svelte";
   import GeneralPage from "./pages/GeneralPage.svelte";
@@ -41,8 +42,10 @@
   let loading = $state(true);
   /** 首启向导：ui.firstRunCompleted === false 时弹出（完成/跳过后置 true） */
   let showOnboarding = $state(false);
-  /** 管理员提权提示（仅 Windows 未提权且用户未表态时弹一次） */
+  /** 管理员提权提示 · 第一段（仅 Windows 未提权且用户未表态时弹一次） */
   let showElevationPrompt = $state(false);
+  /** 管理员提权提示 · 第二段（第一段「以管理员权限重启」成功后弹一次） */
+  let showAutoAdminPrompt = $state(false);
 
   onMount(async () => {
     // runtime store 独立初始化（kotone://runtime 事件订阅 + 初始拉取）
@@ -53,7 +56,9 @@
       showOnboarding =
         startup.onboarding === "always" ||
         (startup.onboarding === "auto" && !s.ui.firstRunCompleted);
-      // 未提权且用户未勾选「不再提示」/「默认提权启动」时，弹一次提权提示
+      // 两段式提权提示：
+      // 第一段（未提权）：未勾选「不再提示」/「默认提权启动」时，询问是否以管理员身份重启；
+      // 第二段（提权）：第一段的重启成功后（localStorage 接力标记），询问是否启动时自动请求。
       if (isTauri) {
         const st = await getElevationStatus().catch(() => null);
         showElevationPrompt =
@@ -62,6 +67,10 @@
           !st.elevated &&
           !s.adminPromptDismissed &&
           !s.runAsAdminOnStart;
+        if (st?.supported && st.elevated && localStorage.getItem(AUTO_ADMIN_PROMPT_FLAG)) {
+          localStorage.removeItem(AUTO_ADMIN_PROMPT_FLAG);
+          showAutoAdminPrompt = !s.runAsAdminOnStart && !s.autoAdminPromptDismissed;
+        }
       }
     } catch (e) {
       toast(false, `加载配置失败：${errText(e)}`);
@@ -165,9 +174,14 @@
     <Onboarding onDone={() => (showOnboarding = false)} />
   {/if}
 
-  <!-- 管理员提权提示（Windows 未提权且用户未表态时弹一次） -->
+  <!-- 管理员提权提示 · 第一段（Windows 未提权且用户未表态时弹一次） -->
   {#if showElevationPrompt && !loading}
     <ElevationPrompt onClose={() => (showElevationPrompt = false)} />
+  {/if}
+
+  <!-- 管理员提权提示 · 第二段（第一段的重启成功后弹一次） -->
+  {#if showAutoAdminPrompt && !loading}
+    <AutoAdminPrompt onClose={() => (showAutoAdminPrompt = false)} />
   {/if}
   </div>
 

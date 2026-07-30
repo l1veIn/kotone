@@ -1,53 +1,60 @@
 <script lang="ts">
   /*
-   * 管理员提权提示弹窗（仅 Windows 未提权时由 Settings.svelte 弹出）：
-   * 部分游戏（如 League of Legends）以管理员运行时，普通权限进程无法向其注入文字。
-   * 「暂不」与「以管理员权限重启」都会先持久化勾选状态（合并成一次 patch）。
+   * 管理员提权提示 · 第一段（仅 Windows 未提权时由 Settings.svelte 弹出）：
+   * 部分程序（如 League of Legends）以管理员权限运行时，普通权限进程无法
+   * 向其注入文字。本弹窗只回答一个问题：「是否以管理员身份重启？」
+   * 唯一的勾选项是「不再提示」；勾选并跳过后 toast 告知高级页逃生通道。
+   * 「启动时自动请求管理员权限」是第二段，在提权重启成功后由
+   * AutoAdminPrompt.svelte 单独询问（AUTO_ADMIN_PROMPT_FLAG 接力）。
    */
   import { updateSettings, restartAsAdmin } from "../ipc";
-  import { settingsStore, toast, errText } from "../stores/ui";
+  import {
+    settingsStore,
+    toast,
+    toastInfo,
+    errText,
+    AUTO_ADMIN_PROMPT_FLAG,
+  } from "../stores/ui";
   import stickerPointing from "../../assets/brand/stickers/pointing.webp";
 
   let { onClose }: { onClose: () => void } = $props();
 
   /** 勾选：不再提示 */
   let neverAsk = $state(false);
-  /** 勾选：以后默认以管理员权限启动 */
-  let alwaysAdmin = $state(false);
   let busy = $state(false);
 
-  /** 勾选状态合并成一次 patch 写盘（两个都勾也只写一次） */
-  async function persistChoices() {
-    const patch: Record<string, unknown> = {};
-    if (alwaysAdmin) {
-      patch.runAsAdminOnStart = true;
-      patch.adminPromptDismissed = true;
-    } else if (neverAsk) {
-      patch.adminPromptDismissed = true;
-    }
-    if (Object.keys(patch).length === 0) return;
-    settingsStore.set(await updateSettings(patch));
+  /** 「不再提示」勾选状态写盘（未勾选则不动设置） */
+  async function persistDismissed() {
+    if (!neverAsk) return;
+    settingsStore.set(await updateSettings({ adminPromptDismissed: true }));
   }
 
-  /** 主按钮：持久化勾选后弹 UAC 重启（成功后当前进程退出，无需处理返回值） */
+  /** 主按钮：写盘 + 挂上第二段接力标记后弹 UAC 重启（成功后当前进程退出） */
   async function onRestart() {
     if (busy) return;
     busy = true;
+    // 提权副本启动后凭此标记弹第二段「启动时自动请求管理员权限」；
+    // UAC 被取消时 restartAsAdmin 抛错，catch 里撤掉标记。
+    localStorage.setItem(AUTO_ADMIN_PROMPT_FLAG, "1");
     try {
-      await persistChoices();
+      await persistDismissed();
       await restartAsAdmin();
     } catch (e) {
+      localStorage.removeItem(AUTO_ADMIN_PROMPT_FLAG);
       busy = false;
       toast(false, errText(e));
     }
   }
 
-  /** 次按钮：持久化勾选后仅关闭弹窗 */
+  /** 次按钮：跳过；勾选「不再提示」时告知高级页逃生通道 */
   async function onLater() {
     if (busy) return;
     busy = true;
     try {
-      await persistChoices();
+      await persistDismissed();
+      if (neverAsk) {
+        toastInfo("好的，以后可以随时在 设置 → 高级 页面以管理员身份重启");
+      }
     } catch (e) {
       toast(false, `保存设置失败：${errText(e)}`);
     }
@@ -62,8 +69,9 @@
       <div class="min-w-0">
         <h2 class="text-base font-bold">需要管理员权限</h2>
         <p class="mt-1.5 text-[13px] leading-relaxed text-white/65">
-          当前未以管理员权限运行，部分游戏（如 League of Legends）内可能无法注入文字。
-          可以仅本次以管理员权限重启，也可以让 Kotone 以后每次启动都自动发起 Windows UAC 请求。
+          Kotone 当前以普通权限运行。当目标程序（如 League of
+          Legends）以管理员权限运行时，Windows 会拦截普通权限进程发送的文字，
+          导致软件内发送失效。是否现在以管理员身份重启？
         </p>
       </div>
     </div>
@@ -76,28 +84,10 @@
           class="h-3.5 w-3.5 accent-kotone-cyan"
           onchange={(event) => {
             neverAsk = (event.target as HTMLInputElement).checked;
-            if (neverAsk) alwaysAdmin = false;
           }}
         />
         不再提示
       </label>
-      <label class="flex cursor-pointer items-center gap-2 text-xs text-white/70">
-        <input
-          type="checkbox"
-          checked={alwaysAdmin}
-          class="h-3.5 w-3.5 accent-kotone-cyan"
-          onchange={(event) => {
-            alwaysAdmin = (event.target as HTMLInputElement).checked;
-            if (alwaysAdmin) neverAsk = false;
-          }}
-        />
-        以后每次启动自动请求管理员权限
-      </label>
-      {#if alwaysAdmin}
-        <p class="pl-5.5 text-[11px] leading-relaxed text-white/40">
-          Windows 仍会显示 UAC 确认；普通桌面应用不能静默获得管理员权限。
-        </p>
-      {/if}
     </div>
 
     <div class="mt-5 flex items-center justify-end gap-3">

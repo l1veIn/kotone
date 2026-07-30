@@ -494,10 +494,12 @@ LangString kotoneWelcomeTitle ${LANG_SIMPCHINESE} "建立连接"
 LangString kotoneWelcomeText ${LANG_SIMPCHINESE} "把 Kotone 安放到这台电脑。$\r$\n$\r$\n本地语音输入 · 游戏中继站"
 LangString kotoneFinishTitle ${LANG_SIMPCHINESE} "连接已建立"
 LangString kotoneFinishText ${LANG_SIMPCHINESE} "Kotone 已经准备好与你见面。"
+LangString kotoneAppRunningBlock ${LANG_SIMPCHINESE} "检测到 Kotone 正在运行（可能是管理员身份运行的实例）。$\r$\n$\r$\n请先在系统托盘右键退出 Kotone，再重新运行安装程序。"
 LangString kotoneWelcomeTitle ${LANG_ENGLISH} "Establish connection"
 LangString kotoneWelcomeText ${LANG_ENGLISH} "Bring Kotone to this PC.$\r$\n$\r$\nLocal voice input · Game relay station"
 LangString kotoneFinishTitle ${LANG_ENGLISH} "Connection established"
 LangString kotoneFinishText ${LANG_ENGLISH} "Kotone is ready to meet you."
+LangString kotoneAppRunningBlock ${LANG_ENGLISH} "Kotone is currently running (possibly an elevated instance).$\r$\n$\r$\nPlease quit Kotone from the system tray, then run this installer again."
 
 Function .onInit
   ${GetOptions} $CMDLINE "/P" $PassiveMode
@@ -669,6 +671,18 @@ Section Install
 
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
 
+  ; 兜底再查一次：nsis_tauri_utils 的 FindProcessCurrentUser 可能漏掉以管理员
+  ; 身份运行的实例（权限差异），漏检时 File 覆盖被锁定的 exe 只会报原始写错误。
+  ; tasklist 不受此限——仍有残留进程时给出明确指引并中止，而不是半截安装。
+  nsExec::ExecToStack 'tasklist /FI "IMAGENAME eq ${MAINBINARYNAME}.exe" /NH'
+  Pop $R9 ; exit code
+  Pop $R8 ; output
+  ${WordFind} $R8 "${MAINBINARYNAME}.exe" "#" $R7
+  ${If} $R7 > 0
+    MessageBox MB_OK|MB_ICONEXCLAMATION "$(kotoneAppRunningBlock)"
+    Abort
+  ${EndIf}
+
   ; Copy main executable
   File "${MAINBINARYSRCPATH}"
 
@@ -805,6 +819,16 @@ Section Uninstall
   !endif
 
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+
+  ; 同 Install 段的兜底：tasklist 复查残留进程（含管理员实例），有则提示并中止
+  nsExec::ExecToStack 'tasklist /FI "IMAGENAME eq ${MAINBINARYNAME}.exe" /NH'
+  Pop $R9
+  Pop $R8
+  ${WordFind} $R8 "${MAINBINARYNAME}.exe" "#" $R7
+  ${If} $R7 > 0
+    MessageBox MB_OK|MB_ICONEXCLAMATION "$(kotoneAppRunningBlock)"
+    Abort
+  ${EndIf}
 
   ; Delete the app directory and its content from disk
   ; Copy main executable

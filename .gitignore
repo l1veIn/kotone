@@ -15,3 +15,4 @@ apps/desktop/src-tauri/gen/
 .tools/qa/
 .tools/ref-bcm/
 .repochan/
+.env

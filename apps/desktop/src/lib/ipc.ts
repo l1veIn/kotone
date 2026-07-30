@@ -59,6 +59,10 @@ export interface Settings {
   runAsAdminOnStart: boolean;
   /** 「建议以管理员运行」提示已被用户关闭（不再重复提示） */
   adminPromptDismissed: boolean;
+  /** 提权重启成功后的「启动时自动请求管理员权限」询问已被用户关闭（不再提醒） */
+  autoAdminPromptDismissed: boolean;
+  /** 频道切换热键（默认 Shift+CapsLock；按声明顺序循环当前 profile 的聊天频道） */
+  channelCycleHotkey: string;
   /** 交互模式预设（null = 旧字段推导） */
   interactionMode: InteractionMode | null;
   /** VAD 静音判停阈值 ms（one-shot 生效，200-5000） */
@@ -170,6 +174,18 @@ export interface EngineInfo {
 }
 
 // ---------- 游戏 profile ----------
+/** 聊天频道声明（ADR-008）：按键策略与前缀策略正交，可同时设置 */
+export interface ProfileChannel {
+  id: string;
+  displayName: string;
+  /** 该频道专属的开聊天框按键（缺省沿用 profile.openChatKey） */
+  openChatKey?: string;
+  /** 发送时拼在文本前的前缀（如 "/all "；不污染用户原文） */
+  textPrefix?: string;
+  /** 默认频道（每 profile 恰好一个；缺省取第一个） */
+  default?: boolean;
+}
+
 export interface GameProfile {
   id: string;
   displayName: string;
@@ -184,6 +200,8 @@ export interface GameProfile {
   hotwords: string[];
   /** 用户从内置热词中移除的词条（保留内置集，仅记录差集；可选） */
   removedBuiltinHotwords?: string[];
+  /** 聊天频道列表（ADR-008；缺省/空 = 单频道，行为与旧版一致） */
+  channels?: ProfileChannel[];
 }
 
 // ---------- 模型 ----------
@@ -243,6 +261,10 @@ export interface HotkeyStatus {
   error: string | null;
   /** 当前生效后端：llhook（低级键盘钩子）/ register（RegisterHotKey）/ none */
   backend: string;
+  /** 已生效的频道切换热键（未配置/未生效为 null） */
+  cycleKey: string | null;
+  /** 频道切换热键最近一次失败信息（如与录制热键冲突） */
+  cycleError: string | null;
 }
 
 // ================================================================
@@ -273,7 +295,9 @@ const mock: MockStore = {
     evalRecording: false,
     runAsAdminOnStart: false,
     adminPromptDismissed: false,
-    interactionMode: null,
+    autoAdminPromptDismissed: false,
+    channelCycleHotkey: "Shift+CapsLock",
+    interactionMode: "push-to-talk",
     vadSilenceMs: 700,
     history: { mode: "capped", maxRecords: 1000, includeAudio: false },
     ui: { firstRunCompleted: true, autoStart: false },
@@ -343,6 +367,10 @@ const mock: MockStore = {
       preSendDelayMs: 20,
       preferClipboardPaste: false,
       hotwords: ["闪现", "大龙", "gank", "打野", "推塔", "回城"],
+      channels: [
+        { id: "team", displayName: "队伍", default: true },
+        { id: "all", displayName: "所有人", openChatKey: "Shift+Enter" },
+      ],
     },
   ],
   models: [
@@ -587,7 +615,14 @@ export async function restartAsAdmin(): Promise<void> {
 /** 热键注册状态（registered/key/error/backend），设置页热键分区展示占用冲突 */
 export async function getHotkeyStatus(): Promise<HotkeyStatus> {
   if (!isTauri)
-    return { registered: true, key: mock.settings.hotkey.key, error: null, backend: "llhook" };
+    return {
+      registered: true,
+      key: mock.settings.hotkey.key,
+      error: null,
+      backend: "llhook",
+      cycleKey: mock.settings.channelCycleHotkey,
+      cycleError: null,
+    };
   return invoke<HotkeyStatus>("get_hotkey_status");
 }
 
@@ -763,6 +798,15 @@ export async function openModelsDir(): Promise<void> {
     return;
   }
   return invoke<void>("open_models_dir");
+}
+
+/** 在系统默认浏览器打开外部链接（dev:web 直接 window.open 新标签页） */
+export async function openExternal(url: string): Promise<void> {
+  if (!isTauri) {
+    window.open(url, "_blank", "noreferrer");
+    return;
+  }
+  return invoke<void>("open_external", { url });
 }
 
 // ---------- 模型下载（引擎与模型页） ----------

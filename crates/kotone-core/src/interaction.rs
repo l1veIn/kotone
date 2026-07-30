@@ -125,8 +125,8 @@ impl InteractionPolicy {
         }
     }
 
-    /// 从配置推导：interactionMode 预设优先；缺省由 hotkey.mode + autoSend
-    /// 旧字段推导（混合组合保持既有行为）
+    /// 从配置推导：interactionMode 预设优先；显式 null（自定义兼容路径）
+    /// 由 hotkey.mode + autoSend 旧字段推导（混合组合保持既有行为）
     pub fn from_settings(settings: &Settings) -> Self {
         if let Some(mode) = settings.interaction_mode {
             return Self::from_preset(mode);
@@ -253,10 +253,23 @@ mod tests {
     }
 
     #[test]
-    fn default_config_is_dictation_compatible() {
-        // Settings::default()（toggle + autoSend=false）推导 = 录音笔
+    fn default_config_is_push_to_talk() {
+        // Settings::default()（0.1.5 起默认对讲机）推导 = push-to-talk；
+        // 老配置缺 interactionMode 键时由 load_from 合并默认值自动迁移
         let p = InteractionPolicy::from_settings(&Settings::default());
-        assert_eq!(p.preset(), Some(InteractionMode::Dictation));
+        assert_eq!(p.preset(), Some(InteractionMode::PushToTalk));
+    }
+
+    #[test]
+    fn explicit_null_interaction_mode_uses_legacy_fields() {
+        // 显式 null（自定义兼容路径）：仍由 hotkey.mode + autoSend 旧字段推导
+        let mut s = Settings::default();
+        s.interaction_mode = None;
+        // toggle + autoSend=false → 录音笔
+        assert_eq!(
+            InteractionPolicy::from_settings(&s).preset(),
+            Some(InteractionMode::Dictation)
+        );
     }
 
     #[test]

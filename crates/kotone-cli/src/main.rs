@@ -635,6 +635,8 @@ async fn cmd_listen_hotkey(
     let emitter: Arc<dyn Emitter> = Arc::new(JsonlEmitter {
         hotkey: Some(hotkey.clone()),
     });
+    // settings 随后移交给 orchestrator，频道切换热键先取出备用（ADR-008）
+    let cycle_hotkey = settings.read().unwrap().channel_cycle_hotkey.clone();
     let orchestrator = wire_vad(Orchestrator::new(
         settings,
         Arc::new(registry),
@@ -647,6 +649,14 @@ async fn cmd_listen_hotkey(
     if let Err(e) = hotkey.register(&hotkey_key, hotkey_mode) {
         eprintln!("注册热键失败: {e}");
         return 1;
+    }
+    // 频道切换热键（ADR-008）：与录制热键冲突时忽略并告警，不影响主流程
+    if !cycle_hotkey.trim().is_empty() {
+        if kotone_core::hotkey::combos_conflict(&cycle_hotkey, &hotkey_key) {
+            eprintln!("频道切换热键「{cycle_hotkey}」与录制热键冲突，已忽略");
+        } else if let Err(e) = hotkey.set_cycle_key(Some(&cycle_hotkey)) {
+            eprintln!("注册频道切换热键失败: {e}");
+        }
     }
     println!(
         "{}",
@@ -672,6 +682,7 @@ async fn cmd_listen_hotkey(
                     HookEvent::HoldReleased => orch.on_hotkey_hold(false).await,
                     HookEvent::Toggle => orch.on_hotkey_toggle().await,
                     HookEvent::Cancel => orch.cancel().await,
+                    HookEvent::CycleChannel => orch.on_cycle_channel().await,
                 }
             }
         })

@@ -54,6 +54,10 @@ pub struct HotkeyStatus {
     pub error: Option<String>,
     /// 当前生效后端：llhook / register / none
     pub backend: String,
+    /// 已生效的频道切换热键（ADR-008；未配置/未生效为 null）
+    pub cycle_key: Option<String>,
+    /// 频道切换热键最近一次失败信息（如与录制热键冲突；成功/未配置为 null）
+    pub cycle_error: Option<String>,
 }
 
 /// RegisterHotKey 热键源（tauri-plugin-global-shortcut）：依赖 AppHandle，留在壳内。
@@ -64,6 +68,8 @@ pub struct PluginHotkeySource {
     current: Mutex<Option<Shortcut>>,
     /// 会话激活期间临时注册的 Esc 取消键
     cancel: Mutex<Option<Shortcut>>,
+    /// 频道切换键（ADR-008）
+    cycle: Mutex<Option<Shortcut>>,
 }
 
 impl PluginHotkeySource {
@@ -73,6 +79,15 @@ impl PluginHotkeySource {
             orch,
             current: Mutex::new(None),
             cancel: Mutex::new(None),
+            cycle: Mutex::new(None),
+        }
+    }
+
+    fn unregister_cycle(&self) {
+        if let Some(sc) = self.cycle.lock().unwrap().take() {
+            if let Err(e) = self.app.global_shortcut().unregister(sc) {
+                kotone_core::log::log(&format!("注销频道切换热键失败: {e}"));
+            }
         }
     }
 }
@@ -123,6 +138,32 @@ impl HotkeySource for PluginHotkeySource {
                 kotone_core::log::log(&format!("注销热键失败: {e}"));
             }
         }
+        self.unregister_cycle();
+    }
+
+    /// 频道切换键（ADR-008）：注册第二个全局快捷键，按下即循环切换频道
+    fn set_cycle_key(&self, key: Option<&str>) -> Result<(), String> {
+        self.unregister_cycle();
+        let Some(key) = key.filter(|k| !k.trim().is_empty()) else {
+            return Ok(());
+        };
+        let shortcut: Shortcut = key
+            .parse()
+            .map_err(|e| format!("无法解析频道切换热键「{key}」: {e}"))?;
+        let orch = self.orch.clone();
+        self.app
+            .global_shortcut()
+            .on_shortcut(shortcut.clone(), move |_app, _sc, event| {
+                if event.state() == ShortcutState::Pressed {
+                    let orch = orch.clone();
+                    tauri::async_runtime::spawn(async move {
+                        orch.on_cycle_channel().await;
+                    });
+                }
+            })
+            .map_err(|e| format!("注册频道切换热键「{key}」失败: {e}（键位可能被其他程序占用）"))?;
+        *self.cycle.lock().unwrap() = Some(shortcut);
+        Ok(())
     }
 
     /// 会话激活期间临时注册 Esc 全局取消键；会话结束注销。
@@ -190,6 +231,11 @@ fn make_llhook_sink(orch: Arc<Orchestrator>) -> kotone_platform_windows::hotkey_
                     orch.cancel().await;
                 });
             }
+            HookEvent::CycleChannel => {
+                tauri::async_runtime::spawn(async move {
+                    orch.on_cycle_channel().await;
+                });
+            }
         }
     })
 }
@@ -213,6 +259,10 @@ pub struct HotkeyManager {
     local_tx: mpsc::UnboundedSender<HookEvent>,
     /// 最近一次注册失败信息（设置页提示「可能被其他程序/实例占用」）
     last_error: Mutex<Option<String>>,
+    /// 已生效的频道切换热键（ADR-008）
+    cycle_key: Mutex<Option<String>>,
+    /// 频道切换热键最近一次失败信息（冲突/注册失败）
+    cycle_error: Mutex<Option<String>>,
 }
 
 impl HotkeyManager {
@@ -226,6 +276,8 @@ impl HotkeyManager {
                     HookEvent::HoldReleased => local_orch.on_hotkey_hold(false).await,
                     HookEvent::Toggle => local_orch.on_hotkey_toggle().await,
                     HookEvent::Cancel => local_orch.cancel().await,
+                    // WebView 兜底只复刻录制热键语义；频道切换键不经过此通道
+                    HookEvent::CycleChannel => {}
                 }
             }
         });
@@ -239,6 +291,8 @@ impl HotkeyManager {
             local_down: Mutex::new(false),
             local_tx,
             last_error: Mutex::new(None),
+            cycle_key: Mutex::new(None),
+            cycle_error: Mutex::new(None),
         }
     }
 
@@ -259,6 +313,7 @@ impl HotkeyManager {
                     *self.registered_key.lock().unwrap() = Some(key.to_string());
                     *self.registered_mode.lock().unwrap() = Some(mode);
                     *self.last_error.lock().unwrap() = None;
+                    self.apply_cycle_key(app, key);
                     return Ok(());
                 }
                 Err(e) => {
@@ -276,6 +331,7 @@ impl HotkeyManager {
                 *self.registered_key.lock().unwrap() = Some(key.to_string());
                 *self.registered_mode.lock().unwrap() = Some(mode);
                 *self.last_error.lock().unwrap() = None;
+                self.apply_cycle_key(app, key);
                 Ok(())
             }
             Err(msg) => {
@@ -289,13 +345,65 @@ impl HotkeyManager {
     /// 注销当前热键（两个后端都停）
     pub fn unregister(&self, _app: &AppHandle) -> Result<(), String> {
         #[cfg(windows)]
-        self.llhook.unregister();
+        {
+            self.llhook.unregister();
+            let _ = self.llhook.set_cycle_key(None);
+        }
         self.plugin.unregister();
         *self.backend.lock().unwrap() = ActiveBackend::None;
         *self.registered_key.lock().unwrap() = None;
         *self.registered_mode.lock().unwrap() = None;
         *self.local_down.lock().unwrap() = false;
+        *self.cycle_key.lock().unwrap() = None;
+        *self.cycle_error.lock().unwrap() = None;
         Ok(())
+    }
+
+    /// 注册频道切换热键（ADR-008）：主热键注册成功后按当前生效后端应用。
+    /// 与录制热键同组合时拒绝注册并记入 cycle_error（设置页展示）。
+    fn apply_cycle_key(&self, app: &AppHandle, main_key: &str) {
+        let cycle = app
+            .try_state::<SharedState>()
+            .map(|s| s.settings.read().unwrap().channel_cycle_hotkey.clone())
+            .unwrap_or_default();
+        let backend = *self.backend.lock().unwrap();
+        let mut applied: Option<String> = None;
+        let mut error: Option<String> = None;
+        if !cycle.trim().is_empty() {
+            if kotone_core::hotkey::combos_conflict(&cycle, main_key) {
+                let msg = format!("频道切换热键「{cycle}」与录制热键冲突，未注册");
+                kotone_core::log::log(&msg);
+                error = Some(msg);
+            } else {
+                let res = {
+                    #[cfg(windows)]
+                    {
+                        if backend == ActiveBackend::LlHook {
+                            self.llhook.set_cycle_key(Some(&cycle))
+                        } else {
+                            self.plugin.set_cycle_key(Some(&cycle))
+                        }
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        let _ = backend;
+                        self.plugin.set_cycle_key(Some(&cycle))
+                    }
+                };
+                match res {
+                    Ok(()) => {
+                        kotone_core::log::log(&format!("cycle hotkey registered: {cycle}"));
+                        applied = Some(cycle.clone());
+                    }
+                    Err(e) => {
+                        kotone_core::log::log(&format!("cycle hotkey register FAILED: {e}"));
+                        error = Some(e);
+                    }
+                }
+            }
+        }
+        *self.cycle_key.lock().unwrap() = applied;
+        *self.cycle_error.lock().unwrap() = error;
     }
 
     /// 会话激活期间的 Esc 取消：按当前生效后端路由
@@ -318,6 +426,8 @@ impl HotkeyManager {
             key,
             error,
             backend: backend.label().to_string(),
+            cycle_key: self.cycle_key.lock().unwrap().clone(),
+            cycle_error: self.cycle_error.lock().unwrap().clone(),
         }
     }
 

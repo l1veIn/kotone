@@ -13,6 +13,18 @@
   "prePasteDelayMs": 20,
   "preSendDelayMs": 20,
   "preferClipboardPaste": false,
+  "channels": [
+    {
+      "id": "team",
+      "displayName": "队伍",
+      "default": true
+    },
+    {
+      "id": "all",
+      "displayName": "所有人",
+      "openChatKey": "Shift+Enter"
+    }
+  ],
   "hotwords": [
     "15投",
     "ADC",

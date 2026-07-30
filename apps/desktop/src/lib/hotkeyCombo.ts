@@ -55,6 +55,19 @@ export function normalizeHotkeyCombo(combo: string): string {
     .join("+");
 }
 
+/**
+ * 与 Rust 侧 combos_conflict 同语义：修饰键集合 + 主键完全相同即冲突。
+ * 用于录制键与频道切换键的双向冲突预检（后端注册时仍有双保险）。
+ */
+export function combosConflict(a: string, b: string): boolean {
+  const norm = (c: string): string => {
+    const parts = normalizeHotkeyCombo(c).split("+").filter(Boolean);
+    const main = parts.pop() ?? "";
+    return [...parts.sort(), main].join("+");
+  };
+  return norm(a) === norm(b);
+}
+
 /** 已按下组合中的主键或修饰键松开时，都应结束一次 hold。 */
 export function releasesHotkey(event: KeyboardEvent, activeCombo: string): boolean {
   const activeParts = normalizeHotkeyCombo(activeCombo).split("+");

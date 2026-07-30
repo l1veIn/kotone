@@ -326,12 +326,19 @@
     if (finishing || (!testSucceeded && !skipped)) return;
     finishing = true;
     try {
-      settingsStore.set(
-        await updateSettings({
-          activeProfileId: selectedProfileId,
-          ui: { firstRunCompleted: true },
-        }),
-      );
+      const patchObj: Record<string, unknown> = {
+        activeProfileId: selectedProfileId,
+        ui: { firstRunCompleted: true },
+      };
+      if (skipped) {
+        // 跳过向导也要留下明确的交互模式（默认对讲机），避免「无模式」空状态
+        patchObj.interactionMode = selectedMode;
+        patchObj.hotkey = {
+          key: currentKey,
+          mode: selectedMode === "push-to-talk" ? "hold" : "toggle",
+        };
+      }
+      settingsStore.set(await updateSettings(patchObj));
     } catch (e) {
       toast(false, `保存向导状态失败：${errText(e)}`);
       finishing = false;

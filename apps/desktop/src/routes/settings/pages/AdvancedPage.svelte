@@ -1,19 +1,18 @@
 <script lang="ts">
   /*
-   * 高级页（原引擎与模型页收纳）：
-   * - 默认展开：摘要面板仍可手动收起；
-   * - restartNeeded 黄条常显（收起时也提示，与标题栏「重启生效」联动）；
-   * - 展开后：模型存储位置（更改[迁移]/打开目录）→ 按引擎分组的完整模型清单
-   *   （下载进度/删除二次确认/设为 active）；
+   * 高级页：
+   * - 模型存储位置（更改[迁移]/打开目录）→ 完整模型清单（下载进度/删除二次确认/设为 active）；
+   *   产品只内置一套 sherpa 识别方案，不再向用户暴露「引擎」概念；
+   * - restartNeeded 黄条常显（与标题栏「重启生效」联动）；
+   * - 语言（i18n 伏笔，当前仅中文）、频道切换热键（ADR-008）、运行时、Windows 兼容性等进阶设置；
    * - mock 联调引擎与 VAD 组件不在此页出现（VAD 已随应用本体分发，无需下载）。
    */
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { save as saveDialog } from "@tauri-apps/plugin-dialog";
   import {
     listSttEngines,
     exportDiagnostics,
-    setSttEngine,
     listModels,
     downloadModel,
     setActiveModel,
@@ -37,6 +36,8 @@
   import { runtimeStore } from "../../../lib/stores/runtime";
   import { spotlight } from "../../../lib/actions/spotlight";
   import Toggle from "../../../lib/components/Toggle.svelte";
+  import { captureHotkey } from "../../../lib/hotkeyCapture";
+  import { combosConflict } from "../../../lib/hotkeyCombo";
   import stickerCurious from "../../../assets/brand/stickers/curious.webp";
 
   /** 设置助手入口：由 Settings 打开首启向导（自「通用」页迁入） */
@@ -56,14 +57,16 @@
   let editingDir = $state(false);
   let dirDraft = $state("");
   let migrating = $state(false);
-  /** 高级区默认展开；用户仍可通过摘要面板临时收起。 */
-  let expanded = $state(true);
   let elevation = $state<ElevationStatus | null>(null);
   let hotkeyStatus = $state<HotkeyStatus | null>(null);
   let restartingAsAdmin = $state(false);
   /** 诊断包导出中（从「关于」页迁入：排障入口归高级页） */
   let exportingDiagnostics = $state(false);
   let downloadProxyDraft = $state("");
+  /** 频道切换热键（ADR-008）：编辑草稿 + 录入捕获态 */
+  let cycleDraft = $state("Shift+CapsLock");
+  let cycleCapturing = $state(false);
+  let cycleCleanup: (() => void) | null = null;
 
   const ADMIN_RESTART_FLAG = "kotone:admin-restart-pending";
 
@@ -78,6 +81,7 @@
         getHotkeyStatus().catch(() => null),
       ]);
       downloadProxyDraft = $settingsStore?.download.ghProxy ?? "";
+      cycleDraft = $settingsStore?.channelCycleHotkey ?? "Shift+CapsLock";
       if (localStorage.getItem(ADMIN_RESTART_FLAG)) {
         localStorage.removeItem(ADMIN_RESTART_FLAG);
         if (elevation?.elevated) toast(true, "已通过管理员权限运行");
@@ -95,7 +99,7 @@
   });
 
   /** 三项独立加载：单项失败只 toast + console.error，不拖垮整页（曾因 Promise.all
-   *  任一失败把 engines 清空，整页显示「还没有可用引擎」掩盖真实错误） */
+   *  任一失败把 engines 清空，整页显示「还没有可用模型」掩盖真实错误） */
   async function reload() {
     const [en, mo, di] = await Promise.all([
       listSttEngines().catch((e) => {
@@ -119,11 +123,7 @@
       engines = [];
       return;
     }
-    if (en !== null) {
-      engines = en;
-      const configuredEngine = en.find((engine) => engine.id === $settingsStore?.sttEngine);
-      if (configuredEngine && !configuredEngine.isReady) expanded = true;
-    }
+    if (en !== null) engines = en;
     if (mo !== null) models = mo;
     if (di !== null) dirInfo = di;
   }
@@ -158,22 +158,7 @@
     }
   }
 
-  // ---------- 引擎 / 模型操作 ----------
-
-  async function onEngineSwitch(id: string) {
-    try {
-      await setSttEngine(id);
-      settingsStore.update((s) => (s ? { ...s, sttEngine: id } : s));
-      const name = engines?.find((en) => en.id === id)?.displayName ?? id;
-      if ($runtimeStore?.phase === "running") {
-        toastWarn(`已切换到引擎：${name}，重启后生效`);
-      } else {
-        toast(true, `已切换到引擎：${name}`);
-      }
-    } catch (e) {
-      toast(false, `切换引擎失败：${errText(e)}`);
-    }
-  }
+  // ---------- 模型操作 ----------
 
   async function onDownload(id: string) {
     if (downloadingAny) return;
@@ -243,15 +228,6 @@
 
   // ---------- 展示辅助 ----------
 
-  function engineTags(en: EngineInfo): { text: string; cls: string }[] {
-    const tags: { text: string; cls: string }[] = [];
-    if (en.capabilities.streaming) tags.push({ text: "流式", cls: "bg-kotone-cyan/15 text-kotone-cyan" });
-    if (en.capabilities.offline) tags.push({ text: "离线", cls: "bg-kotone-violet/15 text-kotone-violet" });
-    if (en.capabilities.hotwords) tags.push({ text: "热词", cls: "bg-yellow-400/15 text-yellow-300" });
-    if (!en.isReady) tags.push({ text: "未就绪", cls: "bg-kotone-pink/15 text-kotone-pink" });
-    return tags;
-  }
-
   function formatSize(bytes: number): string {
     if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1)} GB`;
     return `${Math.round(bytes / 1_000_000)} MB`;
@@ -285,22 +261,11 @@
       .sort((a, b) => (engineOrder[a.id] ?? 99) - (engineOrder[b.id] ?? 99)),
   );
 
-  // ---------- 收起态摘要 ----------
-
-  const currentEngine = $derived(engines?.find((e) => e.id === $settingsStore?.sttEngine) ?? null);
-  const summaryEngine = $derived(
-    engines === null ? "读取中…" : (currentEngine?.displayName ?? "未选择引擎"),
-  );
-  const summaryModel = $derived(currentEngine ? activeModelOf(currentEngine.id) : "—");
-  const summaryStatus = $derived(
-    engines === null
-      ? "正在清点引擎"
-      : currentEngine == null
-        ? "未选择引擎"
-        : currentEngine.isReady
-          ? "就绪"
-          : "未就绪（模型未下载）",
-  );
+  /** 主力引擎：只恒显 X-ASR；SenseVoice / FunASR 收进「备用」折叠区 */
+  const PRIMARY_ENGINE_ID = "sherpa-onnx-x-asr-zh-en";
+  const primaryEngines = $derived(orderedEngines.filter((e) => e.id === PRIMARY_ENGINE_ID));
+  const otherEngines = $derived(orderedEngines.filter((e) => e.id !== PRIMARY_ENGINE_ID));
+  let showOtherEngines = $state(false);
 
   /** 通用局部配置更新。 */
   async function patch(patchObj: Record<string, unknown>, okText: string) {
@@ -324,6 +289,53 @@
       "下载代理地址已保存",
     );
   }
+
+  /** 保存频道切换热键：先与录制热键做前端冲突预检（后端注册仍有双保险） */
+  async function saveCycleHotkey() {
+    const key = cycleDraft.trim();
+    if (!key) {
+      toast(false, "频道切换热键不能为空");
+      return;
+    }
+    const recordKey = $settingsStore?.hotkey.key ?? "";
+    if (recordKey && combosConflict(key, recordKey)) {
+      toast(false, `频道切换热键与录制热键（${recordKey}）冲突，请换一个`);
+      return;
+    }
+    try {
+      settingsStore.set(await updateSettings({ channelCycleHotkey: key }));
+      cycleDraft = $settingsStore?.channelCycleHotkey ?? key;
+      toast(true, `频道切换热键已保存并生效：${cycleDraft}`);
+    } catch (e) {
+      toast(false, `保存频道切换热键失败：${errText(e)}`);
+    } finally {
+      hotkeyStatus = await getHotkeyStatus().catch(() => hotkeyStatus);
+    }
+  }
+
+  /** 「点击录入」：与通用页录制热键共用 LL 钩子捕获 helper */
+  async function startCycleCapture() {
+    if (cycleCapturing) return;
+    cycleCapturing = true;
+    cycleCleanup = await captureHotkey((r) => {
+      cycleCapturing = false;
+      cycleCleanup = null;
+      if (r.kind === "combo") {
+        cycleDraft = r.combo;
+        void saveCycleHotkey();
+      } else if (r.kind === "cancelled") {
+        toast(false, "已取消录入");
+      } else if (r.kind === "timeout") {
+        toast(false, "录入超时，请重试");
+      } else {
+        toast(false, r.message);
+      }
+    });
+  }
+
+  onDestroy(() => {
+    cycleCleanup?.();
+  });
 
   /** 导出诊断包（不含录音、识别文本和热词），可安全发给测试群管理员 */
   async function onExportDiagnostics() {
@@ -363,40 +375,36 @@
 
 <div class="px-6 py-5">
   <h1 class="text-lg font-bold">高级</h1>
-  <p class="mt-0.5 text-[11px] text-white/45">引擎、模型与 Windows 兼容性设置</p>
+  <p class="mt-0.5 text-[11px] text-white/45">模型、频道与 Windows 兼容性设置</p>
 
-  <!-- 摘要面板：默认展开，也可临时收起。 -->
-  <section class="kotone-panel mt-4 p-4">
-    <button class="flex w-full items-center gap-3 text-left" onclick={() => (expanded = !expanded)}>
-      <div class="min-w-0 flex-1">
-        <p class="truncate text-sm font-medium">{summaryEngine} · {summaryModel}</p>
-        <p
-          class="mt-0.5 text-[11px] {summaryStatus === '就绪'
-            ? 'text-kotone-cyan/80'
-            : 'text-white/40'}"
-        >
-          {summaryStatus}
-        </p>
-      </div>
-      <span
-        class="shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/85 ring-1 ring-white/15 transition hover:bg-white/20"
-      >
-        {expanded ? "收起" : "展开"}
-      </span>
-    </button>
-  </section>
-
-  <!-- restartNeeded 提示（与标题栏联动，收起时也常显） -->
+  <!-- restartNeeded 提示（与标题栏联动） -->
   {#if $runtimeStore?.restartNeeded}
     <div class="mt-4 flex items-center gap-2 rounded-lg bg-yellow-400/10 px-3 py-2 ring-1 ring-yellow-400/40">
       <span class="h-2 w-2 shrink-0 rounded-full bg-yellow-400"></span>
       <p class="text-[11px] text-yellow-200/90">
-        引擎 / 活动模型已变更，运行中的实例仍用旧配置——点标题栏「重启生效」后按新配置运行。
+        活动模型已变更，运行中的实例仍用旧配置——点标题栏「重启生效」后按新配置运行。
       </p>
     </div>
   {/if}
 
-  {#if expanded}
+  {#if $settingsStore}
+    <!-- 语言（i18n 伏笔：当前仅中文，后续接入界面文案多语言） -->
+    <section class="kotone-panel mt-4 flex items-center justify-between gap-4 p-4">
+      <div>
+        <h2 class="text-sm font-semibold text-kotone-cyan/90">语言</h2>
+        <p class="mt-1 text-[11px] leading-relaxed text-white/50">界面语言。更多语言即将到来。</p>
+      </div>
+      <select
+        class="shrink-0 rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60 [&>option]:bg-kotone-deep"
+        value={$settingsStore.language}
+        onchange={(e) =>
+          void patch({ language: (e.target as HTMLSelectElement).value }, "语言已切换")}
+      >
+        <option value="zh">中文</option>
+      </select>
+    </section>
+  {/if}
+
   <!-- 模型存储位置 -->
   <section class="kotone-panel mt-4 p-4">
     <h2 class="text-sm font-semibold text-kotone-cyan/90">模型存储位置</h2>
@@ -452,53 +460,20 @@
   {#if engines === null}
     <div class="mt-10 flex flex-col items-center gap-3">
       <img src={stickerCurious} alt="加载中" class="h-24 w-24 object-contain" />
-      <p class="text-sm text-white/50">Kotone 正在清点引擎…</p>
+      <p class="text-sm text-white/50">Kotone 正在清点模型…</p>
     </div>
   {:else if engines.length === 0}
     <div class="mt-10 flex flex-col items-center gap-3">
       <img src={stickerCurious} alt="空空如也" class="h-24 w-24 object-contain" />
-      <p class="text-sm text-white/50">还没有可用引擎</p>
+      <p class="text-sm text-white/50">还没有可用模型</p>
     </div>
   {:else}
-    <div class="mt-4 flex flex-col gap-3">
-      {#each orderedEngines as en}
-        {@const active = $settingsStore?.sttEngine === en.id}
+    {#snippet engineCard(en: EngineInfo, showName: boolean)}
         {@const enModels = modelsOf(en.id)}
-        <div
-          use:spotlight
-          class="kotone-card kotone-spotlight p-4 {active ? 'border-kotone-cyan/50 shadow-glow-cyan' : ''}"
-        >
-          <div class="flex items-center gap-3">
-            <div class="min-w-0 flex-1">
-              <p class="flex items-center gap-2 text-sm font-medium">
-                <span class="truncate">{en.displayName}</span>
-                {#if active}
-                  <span class="shrink-0 rounded bg-kotone-cyan/20 px-1.5 py-0.5 text-[10px] text-kotone-cyan">
-                    使用中
-                  </span>
-                {/if}
-              </p>
-              <p class="mt-1.5 flex flex-wrap gap-1">
-                {#each engineTags(en) as tag}
-                  <span class="rounded px-1.5 py-0.5 text-[10px] {tag.cls}">{tag.text}</span>
-                {/each}
-                <span class="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/40">
-                  {en.capabilities.languages.join(" / ")}
-                </span>
-              </p>
-            </div>
-            {#if !active}
-              <button
-                class="shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold transition active:scale-95 {en.isReady
-                  ? 'bg-kotone-cyan text-kotone-deep hover:shadow-glow-cyan hover:brightness-110'
-                  : 'bg-white/10 text-white/60 hover:bg-white/20'}"
-                onclick={() => void onEngineSwitch(en.id)}
-              >
-                {en.isReady ? "切换" : "仍切换"}
-              </button>
-            {/if}
-          </div>
-
+        <div use:spotlight class="kotone-card kotone-spotlight p-4">
+          {#if showName}
+            <p class="mb-2 text-[11px] font-semibold text-white/55">{en.displayName}</p>
+          {/if}
           <!-- 模型：恒显完整清单（含未下载）——已下载行 radio 可选，未下载行置灰 + 行尾下载 -->
           {#if enModels.length > 0}
             <p class="mt-3 text-[10px] font-semibold tracking-wide text-white/40">
@@ -628,10 +603,33 @@
           {/if}
 
         </div>
+    {/snippet}
+
+    <!-- 主力模型：X-ASR 恒显 -->
+    <div class="mt-4 flex flex-col gap-3">
+      {#each primaryEngines as en}
+        {@render engineCard(en, false)}
       {/each}
     </div>
+
+    <!-- 备用识别模型：默认折叠，避免干扰（单引擎产品策略） -->
+    {#if otherEngines.length > 0}
+      <button
+        class="mt-3 self-start rounded-lg bg-white/6 px-3 py-1.5 text-[11px] text-white/55 ring-1 ring-white/12 transition hover:bg-white/12 hover:text-white/85"
+        onclick={() => (showOtherEngines = !showOtherEngines)}
+      >
+        {showOtherEngines ? "收起备用识别模型" : `其他识别模型（${otherEngines.length} 套备用，通常不需要）`}
+      </button>
+      {#if showOtherEngines}
+        <div class="mt-3 flex flex-col gap-3">
+          {#each otherEngines as en}
+            {@render engineCard(en, true)}
+          {/each}
+        </div>
+      {/if}
+    {/if}
     <p class="mt-3 text-[11px] text-white/40">
-      未就绪的引擎（模型未下载）「启动」时会报出具体缺失项；切换引擎 / 活动模型后如已「启动」，需点标题栏「重启生效」。
+      模型未下载时「启动」会报出具体缺失项；切换活动模型后如已「启动」，需点标题栏「重启生效」。
     </p>
   {/if}
 
@@ -642,10 +640,47 @@
       <Toggle
         checked={$settingsStore.ui.autoStart}
         label="启动 Kotone 后自动开始运行"
-        desc="自动加载识别引擎、注册热键并显示悬浮窗；关闭时需手动点「启动」"
+        desc="自动加载识别模型、注册热键并显示悬浮窗；关闭时需手动点「启动」"
         onchange={(v) =>
           void patch({ ui: { autoStart: v } }, v ? "已开启自动启动" : "已关闭自动启动，需手动点「启动」")}
       />
+    </section>
+
+    <!-- 频道切换热键（ADR-008）：循环切换当前游戏适配声明的聊天频道 -->
+    <section class="kotone-panel mt-4 p-4">
+      <h2 class="text-sm font-semibold text-kotone-cyan/90">频道切换热键</h2>
+      <p class="mt-1 text-[11px] leading-relaxed text-white/45">
+        支持多频道的游戏适配（如英雄联盟的「队伍 / 所有人」）按声明顺序循环切换，悬浮窗会显示当前频道。
+      </p>
+      <div class="mt-3 flex items-center gap-2">
+        <input
+          bind:value={cycleDraft}
+          disabled={cycleCapturing}
+          class="w-40 rounded-lg bg-white/8 px-2.5 py-1.5 text-sm ring-1 ring-white/15 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/60 disabled:opacity-50"
+          placeholder="如 Shift+CapsLock"
+          spellcheck="false"
+          onkeydown={(e) => {
+            if (e.key === "Enter" && !cycleCapturing) void saveCycleHotkey();
+          }}
+        />
+        <button
+          class="rounded-lg px-3 py-1.5 text-xs font-semibold ring-1 transition active:scale-95 disabled:opacity-70 {cycleCapturing
+            ? 'animate-pulse bg-kotone-violet/25 text-kotone-violet ring-kotone-violet/60'
+            : 'bg-white/10 text-white/85 ring-white/15 hover:bg-white/20'}"
+          disabled={cycleCapturing}
+          onclick={() => void startCycleCapture()}
+        >
+          {cycleCapturing ? "请按下热键组合…（Esc 取消）" : "点击录入"}
+        </button>
+      </div>
+      {#if hotkeyStatus?.cycleError}
+        <p class="mt-2 text-[11px] leading-relaxed text-kotone-pink">{hotkeyStatus.cycleError}</p>
+      {:else if hotkeyStatus?.cycleKey}
+        <p class="mt-2 text-[11px] text-white/40">当前生效：{hotkeyStatus.cycleKey}</p>
+      {/if}
+      <p class="mt-1.5 text-[10px] leading-relaxed text-white/35">
+        不能与「通用」页的录制热键相同；当前游戏适配只有一个频道时该键不生效。
+      </p>
     </section>
 
     <!-- 设置助手（自「通用」页迁入） -->
@@ -774,12 +809,12 @@
           <Toggle
             checked={$settingsStore.runAsAdminOnStart}
             label="启动时自动请求管理员权限"
-            desc="与启动提示中的“以后每次启动自动请求管理员权限”是同一设置；每次启动都会出现 Windows UAC 确认"
+            desc="开启后每次启动都会自动发起 Windows UAC 确认；普通桌面应用不能静默获得管理员权限"
             onchange={(value) =>
               void patch(
                 {
                   runAsAdminOnStart: value,
-                  ...(value ? { adminPromptDismissed: true } : {}),
+                  ...(value ? { adminPromptDismissed: true, autoAdminPromptDismissed: true } : {}),
                 },
                 value ? "已开启启动时自动权限请求" : "已关闭启动时自动权限请求",
               )}
@@ -808,6 +843,4 @@
       {exportingDiagnostics ? "正在生成…" : "导出诊断包"}
     </button>
   </section>
-
-  {/if}
 </div>

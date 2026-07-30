@@ -145,19 +145,20 @@
       : 'bg-kotone-pink/8'}"
   ></div>
 
-  <!-- 左：品牌 + 状态信息（h-12 下两行压缩排布：行距 gap-px + leading 收紧） -->
-  <div class="relative flex min-w-0 flex-1 items-center gap-2.5 px-4">
-    <img
-      src={iconSrc}
-      alt=""
-      class="h-8 w-8 shrink-0 rounded-full ring-1 ring-kotone-cyan/70 shadow-glow-cyan object-cover"
-    />
-    <p class="shrink-0 text-xs font-bold tracking-wide">
-      Kotone <span class="font-medium text-white/55">琴音</span>
-    </p>
-    <div class="h-5 w-px shrink-0 bg-white/12"></div>
-    <!-- 状态区两行：上行 = 状态灯 + 相位文字；下行 = 引擎 · 模型 · 交互模式 -->
-    <div class="flex min-w-0 flex-col justify-center gap-px">
+  <!-- 左：品牌区（固定 w-50，与下方侧边栏宽度对齐）+ 状态信息 -->
+  <div class="relative flex min-w-0 flex-1 items-center self-stretch">
+    <div class="flex w-50 shrink-0 items-center gap-2.5 self-stretch border-r border-white/8 px-4">
+      <img
+        src={iconSrc}
+        alt=""
+        class="h-8 w-8 shrink-0 rounded-full ring-1 ring-kotone-cyan/70 shadow-glow-cyan object-cover"
+      />
+      <p class="shrink-0 text-xs font-bold tracking-wide">
+        Kotone <span class="font-medium text-white/55">琴音</span>
+      </p>
+    </div>
+    <!-- 状态区两行：上行 = 状态灯 + 相位文字；下行 = 快捷键 · 运行状态 -->
+    <div class="flex min-w-0 flex-col justify-center gap-px px-4">
       <div class="flex items-center gap-2 leading-none">
         <span class="relative flex h-2 w-2 shrink-0">
           <span

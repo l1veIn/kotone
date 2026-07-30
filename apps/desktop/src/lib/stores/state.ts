@@ -21,6 +21,12 @@ export type KotoneState =
   | "success"
   | "error";
 
+export interface ChannelInfo {
+  id: string;
+  displayName: string;
+  isDefault: boolean;
+}
+
 export interface AppState {
   state: KotoneState;
   /** 流式引擎的 partial 文本（录音中实时上屏；非流式引擎为空） */
@@ -33,6 +39,8 @@ export interface AppState {
   errorMessage: string | null;
   /** error 状态保留的文本（发送失败可重试；可能为空） */
   errorText: string | null;
+  /** 当前聊天频道（多频道 profile 才有值；切回默认时为 null 让悬浮窗隐藏徽标） */
+  channel: ChannelInfo | null;
 }
 
 const initial: AppState = {
@@ -42,6 +50,7 @@ const initial: AppState = {
   level: 0,
   errorMessage: null,
   errorText: null,
+  channel: null,
 };
 
 export const appState = writable<AppState>({ ...initial });
@@ -127,6 +136,13 @@ export async function initStateListeners(): Promise<() => void> {
     }),
     listen<LevelEventPayload>("kotone://level", (e) => {
       appState.update((s) => ({ ...s, level: e.payload.rms }));
+    }),
+    listen<ChannelInfo>("kotone://channel", (e) => {
+      // 默认频道不挂徽标：存 null
+      appState.update((s) => ({
+        ...s,
+        channel: e.payload.isDefault ? null : e.payload,
+      }));
     }),
   ]);
 
