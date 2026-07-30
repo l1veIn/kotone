@@ -25,7 +25,8 @@
     <a href="#-界面">界面</a> ·
     <a href="#-角色卡">角色卡</a> ·
     <a href="#-技术栈">技术栈</a> ·
-    <a href="#-开发">开发</a>
+    <a href="#-开发">开发</a> ·
+    <a href="#-鸣谢">鸣谢</a>
   </samp>
 </p>
 
@@ -220,6 +221,26 @@ pnpm build        # NSIS 安装包输出到 target/release/bundle/nsis/
   <img src="https://img.shields.io/badge/%E5%93%81%E7%BA%A2%E8%83%BD%E9%87%8F-%23FF2D78-FF2D78?style=flat-square" alt="品红能量 #FF2D78">
   <img src="https://img.shields.io/badge/%E7%B4%AB%E7%94%B5-%237B2FFF-7B2FFF?style=flat-square" alt="紫电 #7B2FFF">
 </p>
+
+<br>
+
+## 🙏 鸣谢
+
+Kotone 站在许多优秀开源项目与模型的肩膀上。特别感谢：
+
+| 项目 | 角色 |
+| --- | --- |
+| [**sherpa-onnx**](https://github.com/k2-fsa/sherpa-onnx) | 本地语音推理运行时与 Rust 绑定，流式 / 非流式引擎的基础设施 |
+| [**X-ASR**](https://huggingface.co/GilgameshWind/X-ASR-zh-en) | 默认中英流式标点模型（Zipformer2 transducer），边说边出字的核心 |
+| [**FunASR**](https://github.com/modelscope/FunASR) | 中文 ASR 工业级生态；SenseVoice、FunASR-Nano 等模型的上游 |
+| [**SenseVoice**](https://github.com/FunAudioLLM/SenseVoice) | 可选多语非流式识别模型（中英日韩粤等） |
+| [**FunASR-Nano**](https://github.com/modelscope/FunASR) · [ONNX 导出](https://github.com/Wasser1462/FunASR-nano-onnx) | 可选高质量非流式档位 |
+| [**Silero VAD**](https://github.com/snakers4/silero-vad) | 语音活动检测，一句话判停与端点切分 |
+| [**LeagueAkari**](https://github.com/LeagueAkari/LeagueAkari) | 英雄联盟游戏内文本注入与发送流程的参考实现 |
+| [**Tauri**](https://github.com/tauri-apps/tauri) · [**Svelte**](https://github.com/sveltejs/svelte) | 桌面壳与前端框架 |
+| [**RepoChan**](https://github.com/l1veIn/repochan-mono) | 人设 / 视觉 / 品牌资产流水线（分析 → 人设 → 艺术指导 → 画师 → 页面） |
+
+许可证与模型归属细节见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。若有遗漏，欢迎提 PR 补全。
 
 <br>
 
