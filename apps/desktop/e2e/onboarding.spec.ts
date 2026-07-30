@@ -58,7 +58,8 @@ test("starting without a model routes the user to a recoverable download state",
   await page.getByRole("button", { name: "▶ 启动", exact: true }).click();
 
   await expect(page.getByRole("heading", { name: "高级", exact: true })).toBeVisible();
-  await expect(page.getByText("未就绪（模型未下载）", { exact: true })).toBeVisible();
+  // 0.1.5 起高级页只恒显 X-ASR 模型卡：未下载时展示模型行 + 下载按钮（可恢复状态）
+  await expect(page.getByText("X-ASR 流式中英标点（int8，480ms 低延迟）", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "下载", exact: true }).first()).toBeVisible();
 });
 
