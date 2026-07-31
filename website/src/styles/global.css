@@ -398,8 +398,12 @@ button {
   position: absolute;
   inset: 0;
   z-index: -1;
-  background: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 3px);
+  /* 水平扫描线 + RGB 荧光粉竖纹（显像管子像素） */
+  background:
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 3px),
+    repeating-linear-gradient(90deg, rgba(255, 0, 0, 0.05) 0 1px, rgba(0, 255, 0, 0.02) 1px 2px, rgba(0, 0, 255, 0.05) 2px 3px);
   pointer-events: none;
+  animation: hg-wobble 0.4s steps(2) infinite;
 }
 .hero__content {
   width: 100%;
@@ -1351,6 +1355,25 @@ button {
   background:
     radial-gradient(118% 96% at 50% 50%, transparent 50%, rgba(8, 8, 16, 0.42) 84%, rgba(4, 4, 10, 0.92) 100%),
     radial-gradient(ellipse at 50% 44%, transparent 58%, rgba(0, 0, 0, 0.3) 100%);
+  animation: hg-wobble 0.4s steps(2) infinite;
+}
+
+/* 雪花噪点：整屏持续的微弱颗粒（老电视底噪） */
+.hero__snow {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 140px 140px;
+  opacity: 0.05;
+  animation: snowFlicker 0.22s steps(2) infinite;
+}
+@keyframes snowFlicker {
+  0% { background-position: 0 0; opacity: 0.04; }
+  50% { background-position: -28px 14px; opacity: 0.08; }
+  100% { background-position: 14px -21px; opacity: 0.04; }
 }
 
 /* 信号丢失：故障时闪出色块 / 雪花横条 */
@@ -1360,6 +1383,26 @@ button {
   z-index: 0;
   pointer-events: none;
   opacity: 0;
+}
+
+/* VCR 追踪线：故障时闪出横向噪点带 */
+.hero__vcr {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 120px 120px;
+}
+.hero.is-glitching .hero__vcr {
+  animation: vcrFlash 0.3s steps(3) infinite;
+}
+@keyframes vcrFlash {
+  0% { opacity: 0; mask-image: none; }
+  30% { opacity: 0.5; mask-image: repeating-linear-gradient(0deg, transparent 0 5px, #000 5px 8px); }
+  60% { opacity: 0.22; mask-image: repeating-linear-gradient(0deg, #000 0 2px, transparent 2px 4px); }
+  100% { opacity: 0.45; mask-image: repeating-linear-gradient(0deg, transparent 0 8px, #000 8px 11px); }
 }
 
 /* 开机动画：屏幕像老电视一样点亮（一次性） */
@@ -1399,6 +1442,22 @@ button {
 }
 .hero.is-glitching-2 .hero__content {
   animation: hg-jolt 0.13s steps(2) 1;
+}
+/* 整屏横向 skew 撕裂（信号失步感） */
+.hero.is-glitching .hero__content {
+  animation: hg-skew 0.32s steps(3) 1;
+}
+/* 显像管微抖动 */
+@keyframes hg-wobble {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(1px, 0.5px); }
+}
+@keyframes hg-skew {
+  0% { transform: none; }
+  30% { transform: skewX(18deg) scaleY(1.02); opacity: 0.9; }
+  55% { transform: skewX(-12deg); }
+  75% { transform: skewX(7deg); opacity: 1; }
+  100% { transform: none; }
 }
 
 @keyframes hg-jitter {

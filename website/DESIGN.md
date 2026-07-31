@@ -12,7 +12,7 @@
 - **Hero 母版**：`ord-web-hero-scoreboard`（Kotone 选手卡居右 + 记分板面板居左）
 - 复用生产资产：`ord-app-kotone-cutout-v2`（透明 cutout）、真实截图、
   switch-cross 共享纹理（live CSS）
-- 内容骨架与 i18n 与 `website/` 完全一致（同源 locale 文件）
+- 内容骨架与 i18n 自洽（本目录即官网，同源 locale 文件）
 
 ## 视觉语法
 
