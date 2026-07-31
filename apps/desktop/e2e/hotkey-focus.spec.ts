@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("a configured Tab hotkey does not move focus inside Kotone", async ({ page }) => {
+test("a configured Tab hotkey does not install a browser-local listener", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
 
   const input = page.locator("#hotkey-input");
@@ -12,5 +12,5 @@ test("a configured Tab hotkey does not move focus inside Kotone", async ({ page 
   await save.focus();
   await expect(save).toBeFocused();
   await page.keyboard.press("Tab");
-  await expect(save).toBeFocused();
+  await expect(save).not.toBeFocused();
 });

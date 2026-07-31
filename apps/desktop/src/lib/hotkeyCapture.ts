@@ -9,6 +9,7 @@ import { listen } from "@tauri-apps/api/event";
 import {
   cancelHotkeyCapture,
   isTauri,
+  logFrontendError,
   startHotkeyCapture,
   type HotkeyCaptureEvent,
 } from "./ipc";
@@ -42,17 +43,17 @@ export async function captureHotkey(
   let unlisten: (() => void) | undefined;
   let settled = false;
   let backendStarted = false;
-  let pendingWebviewResult: CaptureResult | null = null;
   const finishFromWebview = (result: CaptureResult) => {
-    // 用户可能在 start_hotkey_capture IPC 重装底层 hook 的几毫秒内就按键。
-    // 先记住结果，等后端确实进入 capture 后再结算并取消，避免留下一个无人监听、
-    // 仍会吞键 10 秒的孤儿捕获会话。
-    if (!backendStarted) {
-      pendingWebviewResult = result;
-      return;
-    }
-    settle(result);
-    void cancelHotkeyCapture();
+    if (!backendStarted || settled) return;
+    // 先停止监听并标记结算，避免 cancel 产生的后端 Cancelled 事件覆盖窗口兜底结果；
+    // 等后端确实退出 capture 后再通知调用页保存热键，避免保存触发的 hook 重注册
+    // 与尚未清理的 capture 槽发生竞态。
+    settled = true;
+    unlisten?.();
+    cleanupWebview();
+    void cancelHotkeyCapture()
+      .catch(() => {})
+      .finally(() => onResult(result));
   };
   const blockWebviewKey = (event: KeyboardEvent) => {
     // 修饰键仍允许浏览器维护 modifier 状态；真正被录入的主键（含 Esc）不得
@@ -62,14 +63,26 @@ export async function captureHotkey(
     event.stopImmediatePropagation();
     if (event.type !== "keydown" || event.repeat) return;
 
-    // WH_KEYBOARD_LL 可能被 Windows 静默移除；此时按键仍会到达获得焦点的
-    // WebView。直接用同一套组合键规范完成录入，避免按钮无反应后等待 10 秒超时。
+    // 后端安装/刷新钩子和执行合成 F24 预检期间不接受用户输入；否则用户在这
+    // 250ms 内抢按会绕过尚未开启的 capture 槽，造成“钩子不可用”的假阳性。
+    if (isTauri && !backendStarted) return;
+
     if (event.key === "Escape") {
       finishFromWebview({ kind: "cancelled" });
       return;
     }
     const combo = keyboardEventCombo(event);
     if (combo) {
+      if (isTauri) {
+        // 到达 WebView 只能证明这一事件没有被 LL capture 吞掉，不能单凭一次事件
+        // 归因于安全软件：hook 线程刚刷新、键盘重映射产生 injected 事件等也会如此。
+        // 保留窗口内兜底完成录入，并把事实写进诊断日志；真正的拦截预警由独立
+        // SendInput 环境自检负责。
+        void logFrontendError(
+          "hotkey-capture-fallback",
+          `低级键盘钩子未捕获本次按键，已通过设置窗口兜底录入：${combo}`,
+        ).catch(() => {});
+      }
       finishFromWebview({ kind: "combo", combo });
     }
   };
@@ -108,12 +121,6 @@ export async function captureHotkey(
     });
     await startHotkeyCapture();
     backendStarted = true;
-    if (pendingWebviewResult) {
-      const result = pendingWebviewResult;
-      pendingWebviewResult = null;
-      settle(result);
-      void cancelHotkeyCapture();
-    }
   } catch (e) {
     settle({ kind: "error", message: `无法启动热键录入：${errText(e)}` });
   }

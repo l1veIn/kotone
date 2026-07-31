@@ -249,6 +249,10 @@ pub enum HookEvent {
     Cancel,
     /// 频道切换键按下（ADR-008；tap 语义，按住不重复触发）
     CycleChannel,
+    /// 诊断：主键按下但严格修饰键匹配失败（未吞键、不触发业务）。
+    /// 「钩子活着但主键被放行」只能靠它区分于「钩子被 Windows 静默摘除」——
+    /// 0.1.6 第四步排障：webview 聚焦时 CapsLock 落进 DOM 无钩子上报。
+    MainKeyMissed { ctrl: bool, alt: bool, shift: bool },
 }
 
 /// 两个热键组合是否冲突（解析后 spec 相等；解析失败不视为冲突，由注册路径报错）
@@ -363,6 +367,18 @@ impl HookMatcher {
     /// 捕获优先于 enabled：未注册热键时也能用（CLI/首次设置录入）。
     pub fn set_capture_active(&mut self, active: bool) {
         self.capture_active = active;
+    }
+
+    /// 修饰键状态物理同步（LL 钩子回调每个事件前调用，值为 GetAsyncKeyState）。
+    /// 修饰键我们从不吞键，物理状态永远准确——以它为准可自愈一切「修饰键
+    /// down 收到、up 丢失」（安全桌面 / UAC / 钩链异常）造成的修饰键卡死，
+    /// 否则主键会因严格修饰键匹配失败被永久放行（0.1.6 第四步排障发现）。
+    /// 只同步修饰键；主键/切换键按下态仍由事件流驱动（主键命中后被吞，
+    /// 物理状态无法区分「按住未命中」与「已松开」，不能盲信）。
+    pub fn sync_modifiers(&mut self, ctrl: bool, alt: bool, shift: bool) {
+        self.ctrl = ctrl;
+        self.alt = alt;
+        self.shift = shift;
     }
 
     fn mods_match(&self) -> bool {
@@ -491,7 +507,18 @@ impl HookMatcher {
                             captured: None,
                         }
                     } else {
-                        PASS
+                        // 严格修饰键匹配失败：不吞键、不触发业务，但上报诊断事件。
+                        // 钩子存活但主键被放行（webview 收到 DOM keydown）的唯一
+                        // 解释就是修饰键状态卡住，日志据此与「钩子被静默摘除」区分
+                        MatchOutcome {
+                            swallow: false,
+                            event: Some(HookEvent::MainKeyMissed {
+                                ctrl: self.ctrl,
+                                alt: self.alt,
+                                shift: self.shift,
+                            }),
+                            captured: None,
+                        }
                     }
                 }
             } else {
@@ -662,17 +689,33 @@ mod tests {
     #[test]
     fn modifier_must_match_strictly() {
         let mut m = matcher("F8", HotkeyMode::Toggle);
-        // 配置无修饰键：Ctrl+F8 不命中、不吞
+        // 配置无修饰键：Ctrl+F8 不命中、不吞；上报 MainKeyMissed 诊断事件
         down(&mut m, VK_LCONTROL);
         let r = down(&mut m, 0x77);
-        assert_eq!(r, PASS);
+        assert!(!r.swallow);
+        assert_eq!(
+            r.event,
+            Some(HookEvent::MainKeyMissed {
+                ctrl: true,
+                alt: false,
+                shift: false
+            })
+        );
         up(&mut m, 0x77);
         up(&mut m, VK_LCONTROL);
 
-        // 配置 Alt+V：先按 Alt 再按 V 才命中
+        // 配置 Alt+V：先按 Alt 再按 V 才命中；未按 Alt 不命中、不吞 + 诊断事件
         let mut m = matcher("Alt+V", HotkeyMode::Toggle);
         let r = down(&mut m, u32::from(b'V'));
-        assert_eq!(r, PASS, "未按 Alt 时不命中");
+        assert!(!r.swallow, "未按 Alt 时不命中");
+        assert_eq!(
+            r.event,
+            Some(HookEvent::MainKeyMissed {
+                ctrl: false,
+                alt: false,
+                shift: false
+            })
+        );
         up(&mut m, u32::from(b'V'));
         down(&mut m, VK_LMENU);
         let r = down(&mut m, u32::from(b'V'));
@@ -903,7 +946,10 @@ mod tests {
         // 主键改键不清掉切换键
         m.set_config(parse_hotkey("F8").unwrap(), HotkeyMode::Toggle);
         down(&mut m, VK_LSHIFT);
-        assert_eq!(down(&mut m, VK_CAPITAL).event, Some(HookEvent::CycleChannel));
+        assert_eq!(
+            down(&mut m, VK_CAPITAL).event,
+            Some(HookEvent::CycleChannel)
+        );
         up(&mut m, VK_CAPITAL);
         up(&mut m, VK_LSHIFT);
         // 清除后不再触发

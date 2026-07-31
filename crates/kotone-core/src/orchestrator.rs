@@ -29,6 +29,13 @@ const DEFAULT_FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_TOAST_DWELL: Duration = Duration::from_millis(1500);
 /// 发送前焦点恢复后的等待：给系统完成前台切换与目标窗口激活的时间
 const DEFAULT_FOCUS_RESTORE_DELAY: Duration = Duration::from_millis(30);
+/// 对讲机松手宽限期：松手不立刻停采集，继续收音这一小段再结束。
+/// 0.1.6 真机实验实锤：松手即停会丢掉仍在传输链路上（采集驱动/回调队列）
+/// 与「还在空气中」（人边说边松，句尾音素晚于松手）的句尾音频，稳定丢
+/// 最后 1-2 字；录音笔/一句话模式天然带 0.5-2s 人类反应尾音，无此问题。
+/// 宽限期内再次按下 = 收回结束、继续说话（对讲机直觉）。多补的尾音是
+/// 环境声/静音，finalize 本就再补静音尾帧，对识别无副作用。
+const DEFAULT_RELEASE_GRACE: Duration = Duration::from_millis(500);
 
 /// 核心状态机（§4.1）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -80,6 +87,9 @@ struct Inner {
     /// 切换后保持到下次切换；profile_id 与当前激活 profile 不符时视为默认频道
     /// （用户切了游戏适配，旧频道选择自动失效）。None = 默认频道。
     channel: Option<(String, String)>,
+    /// 松手宽限期的延迟结束任务（见 DEFAULT_RELEASE_GRACE）；
+    /// 再次按下 / cancel / 状态变迁时 abort
+    release_grace_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// history 草稿：会话期间累计指标，终态（sent/cancelled/error）时落账一条记录
@@ -126,6 +136,8 @@ pub struct Orchestrator {
     pub eval_dir: Option<std::path::PathBuf>,
     /// history 目录覆盖（None = ~/.kotone/history/；测试指向临时目录）
     pub history_dir: Option<std::path::PathBuf>,
+    /// 松手宽限期（测试可调小；0 = 旧行为：松手即停）
+    pub release_grace: Duration,
     /// VAD 工厂（ADR-007，B3 静音判停；None = 未接入——VAD 策略下 begin 报清晰错误）。
     /// 构造后注入（壳/CLI 按 feature 与模型就绪情况接线）
     pub vad_factory: Option<crate::vad::VadFactory>,
@@ -154,6 +166,7 @@ impl Orchestrator {
                 process_case_id: None,
                 history: None,
                 channel: None,
+                release_grace_task: None,
             })),
             op: tokio::sync::Mutex::new(()),
             settings,
@@ -168,6 +181,7 @@ impl Orchestrator {
             focus_restore_delay: DEFAULT_FOCUS_RESTORE_DELAY,
             eval_dir: None,
             history_dir: None,
+            release_grace: DEFAULT_RELEASE_GRACE,
             vad_factory: None,
         }
     }
@@ -234,10 +248,14 @@ impl Orchestrator {
 
     /// hold 触发键（A1）：按下开始。Idle 直接 begin；Success / 无文本 Error 的
     /// toast 驻留期内按下 = 立即开始下一句（先 cancel 再 begin，「第一次按没反应」
-    /// 修复）；其余非 Idle 态按下忽略（Preview / 带文本 Error 保留确认与重试入口，
-    /// 不让 begin 失败的 Error toast 冲掉预览文本）。松开在 Listening 态结束（B1）。
+    /// 修复）；带文本的 Error（发送失败待重试）按下 = 重试发送——hold 模式没有
+    /// 独立的确认键，悬浮窗重试按钮要动鼠标，不修复的话用户只能重启 runtime
+    /// （0.1.5 用户反馈：注入失败后按热键全部无响应）；Preview 保留确认入口。
+    /// 松开在 Listening 态结束（B1）。
     pub async fn on_hotkey_hold(&self, pressed: bool) {
         if pressed {
+            // 宽限期内再次按下 = 收回「结束」，当前这句继续说（对讲机直觉）
+            self.abort_release_grace();
             match self.state() {
                 OrchestratorState::Idle => {
                     let _ = self.begin().await;
@@ -246,16 +264,61 @@ impl Orchestrator {
                     self.cancel().await;
                     let _ = self.begin().await;
                 }
-                OrchestratorState::Error if self.inner.lock().unwrap().preview_text.is_none() => {
-                    self.cancel().await;
-                    let _ = self.begin().await;
+                OrchestratorState::Error => {
+                    if self.inner.lock().unwrap().preview_text.is_some() {
+                        // 带文本 Error = 发送失败待重试：按下即重发（confirm_send
+                        // 从 Error 态重新进入 Sending）
+                        let _ = self.confirm_send().await;
+                    } else {
+                        self.cancel().await;
+                        let _ = self.begin().await;
+                    }
                 }
                 _ => {}
             }
         } else if self.policy().end == EndTrigger::HotkeyRelease
             && self.state() == OrchestratorState::Listening
         {
-            let _ = self.end().await;
+            // 松手 ≠ 立刻结束：进入宽限期继续收音，倒计时到点才 finalize
+            // （句尾音素与传输链路上的在途音频不再被切掉，见 DEFAULT_RELEASE_GRACE）
+            self.schedule_release_end();
+        }
+    }
+
+    /// 松手宽限期编排：延迟 release_grace 后结束会话；期间 gen/状态变化则作废。
+    /// 宽限期内 pump 照常把 PCM 灌进 session——多录的是环境尾音，
+    /// 与录音笔模式人类反应延迟天然产生的尾音等效。
+    fn schedule_release_end(&self) {
+        // 防御：理论上一句只松手一次，重复松手（双通道事件）以前一个倒计时为准
+        if self.inner.lock().unwrap().release_grace_task.is_some() {
+            return;
+        }
+        let gen = self.inner.lock().unwrap().gen;
+        let grace = self.release_grace;
+        let me_weak = self.me.read().unwrap().clone();
+        let handle = tokio::spawn(async move {
+            tokio::time::sleep(grace).await;
+            let Some(me) = me_weak.as_ref().and_then(|w| w.upgrade()) else {
+                return;
+            };
+            {
+                let mut inner = me.inner.lock().unwrap();
+                // 期间取消/重按/状态变迁 → 放弃这次结束（重按已 abort 本任务，
+                // 走到这里即任务有效；gen 防御弱引用复活窗口）
+                if inner.gen != gen || inner.state != OrchestratorState::Listening {
+                    return;
+                }
+                inner.release_grace_task = None;
+            }
+            let _ = me.end().await;
+        });
+        self.inner.lock().unwrap().release_grace_task = Some(handle);
+    }
+
+    /// 收回宽限期（再次按下/取消/停止 runtime 时调用；无待结束任务则无事发生）
+    fn abort_release_grace(&self) {
+        if let Some(t) = self.inner.lock().unwrap().release_grace_task.take() {
+            t.abort();
         }
     }
 
@@ -770,6 +833,8 @@ impl Orchestrator {
 
     /// 任意状态取消：回到 Idle（session cancel；发送中置取消令牌）
     pub async fn cancel(&self) {
+        // 宽限期倒计时一并收回（Esc / 停止 runtime / 状态变迁兜底）
+        self.abort_release_grace();
         let _op = self.op.lock().await;
         let mut inner = self.inner.lock().unwrap();
         if inner.state == OrchestratorState::Idle {
@@ -899,19 +964,22 @@ impl Orchestrator {
                 }
                 Ok(Err(e)) => {
                     // Error 保留文本（preview_text 承载），前端/confirm_send 可重试（§4.1）；
-                    // needsElevation 透传 UIPI 提权信号（§10 R-1）
+                    // needsElevation 透传 UIPI 提权信号（§10 R-1）；
+                    // inputBlocked 透传「系统级拦截」信号（安全软件/反作弊），前端弹窗引导排查
                     inner.preview_text = Some(text.clone());
                     inner.state = OrchestratorState::Error;
                     drop(inner);
                     self.emit_state(
                         OrchestratorState::Error,
-                        Some(json!({ "message": e.message, "needsElevation": e.needs_elevation, "text": text })),
+                        Some(json!({ "message": e.message, "needsElevation": e.needs_elevation, "inputBlocked": e.input_blocked, "text": text })),
                     );
                     self.emit_process(
                         "injection_failed",
                         json!({
                             "outcome": "error",
-                            "errorCode": if e.needs_elevation {
+                            "errorCode": if e.input_blocked {
+                                "INJECTION_BLOCKED"
+                            } else if e.needs_elevation {
                                 "INJECTION_ELEVATION_REQUIRED"
                             } else {
                                 "INJECTION_FAILED"

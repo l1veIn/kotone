@@ -12,6 +12,8 @@
   import Toasts from "../../lib/components/Toasts.svelte";
   import ElevationPrompt from "../../lib/components/ElevationPrompt.svelte";
   import AutoAdminPrompt from "../../lib/components/AutoAdminPrompt.svelte";
+  import InjectionBlockedDialog from "../../lib/components/InjectionBlockedDialog.svelte";
+  import { appState } from "../../lib/stores/state";
   import Onboarding from "./Onboarding.svelte";
   import Titlebar from "./Titlebar.svelte";
   import GeneralPage from "./pages/GeneralPage.svelte";
@@ -46,6 +48,22 @@
   let showElevationPrompt = $state(false);
   /** 管理员提权提示 · 第二段（第一段「以管理员权限重启」成功后弹一次） */
   let showAutoAdminPrompt = $state(false);
+  /** 模拟输入被系统拦截的排查引导弹窗（SendInput 0/N 时弹出；同一错误只弹一次） */
+  let showBlockedDialog = $state(false);
+  let blockedDismissedFor = $state<string | null>(null);
+
+  $effect(() => {
+    if ($appState.state === "error" && $appState.inputBlocked) {
+      if (blockedDismissedFor !== ($appState.errorMessage ?? "")) {
+        showBlockedDialog = true;
+      }
+    }
+  });
+
+  function closeBlockedDialog() {
+    blockedDismissedFor = $appState.errorMessage ?? "";
+    showBlockedDialog = false;
+  }
 
   onMount(async () => {
     // runtime store 独立初始化（kotone://runtime 事件订阅 + 初始拉取）
@@ -182,6 +200,11 @@
   <!-- 管理员提权提示 · 第二段（第一段的重启成功后弹一次） -->
   {#if showAutoAdminPrompt && !loading}
     <AutoAdminPrompt onClose={() => (showAutoAdminPrompt = false)} />
+  {/if}
+
+  <!-- 模拟输入被系统拦截的排查引导（注入 0/N 落地时弹出，同一错误不重复打扰） -->
+  {#if showBlockedDialog && !loading}
+    <InjectionBlockedDialog onClose={closeBlockedDialog} />
   {/if}
   </div>
 

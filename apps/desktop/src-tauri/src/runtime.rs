@@ -215,6 +215,40 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
         ));
     }
 
+    // 就绪预检（warmup 前的快速布尔检查）：失败时先记录明细（缺哪个文件）并做
+    // 短重试，吸收杀软扫描/文件锁造成的瞬时误判——0.1.5 用户遇到运行中
+    // stop/start 后误报「模型未下载」，被迫重新下载，布尔检查无法定位原因。
+    let engine_ready = || {
+        state
+            .engines
+            .get(&engine_id)
+            .map(|e| e.is_ready())
+            .unwrap_or(false)
+    };
+    if !engine_ready() {
+        let missing = kotone_stt::model::multi_model_missing(&model_id);
+        kotone_core::log::log(&format!(
+            "runtime start: 模型就绪检查未通过（{model_id}）：{}；重试中",
+            missing.join("、")
+        ));
+        let mut ready = false;
+        for _ in 0..3 {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            if engine_ready() {
+                ready = true;
+                break;
+            }
+        }
+        if !ready {
+            let missing = kotone_stt::model::multi_model_missing(&model_id);
+            return Err(format!(
+                "模型「{model_id}」文件不齐备：{}。请在「设置 → 高级」重新下载",
+                missing.join("、")
+            ));
+        }
+        kotone_core::log::log("runtime start: 模型就绪检查重试后通过（前次为瞬时误判）");
+    }
+
     // 阶段 1：warmup（模型入内存；sherpa 百毫秒级，放阻塞线程不卡 UI）
     crate::record_process_event(
         app,

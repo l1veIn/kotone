@@ -26,8 +26,7 @@ pub(crate) const SPEC: OfflineSpec = OfflineSpec {
     display_name: "FunASR-Nano 中英日",
     languages: &["zh", "en", "ja"],
     hotwords: true, // 模型级 hotwords 字段
-    not_ready_hint:
-        "FunASR-Nano 模型未下载。请在高级页下载",
+    not_ready_hint: "FunASR-Nano 模型未下载。请在高级页下载",
 };
 
 /// 填充 FunASR-Nano 模型家族字段（骨架已设 num_threads/provider）

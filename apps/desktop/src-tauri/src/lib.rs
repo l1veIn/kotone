@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use tauri::{AppHandle, Emitter as TauriEventEmitter, Manager};
 
-use hotkey::{HotkeyManager, HotkeyStatus};
+use hotkey::{HotkeyManager, HotkeyStatus, InputEnvironmentCheck};
 use kotone_core::audio::AudioDevice;
 use kotone_core::inject::{CancelToken, FocusBackend, InjectError, Injector};
 use kotone_core::interaction::{effective_hotkey_mode, InteractionPolicy};
@@ -790,22 +790,36 @@ fn get_hotkey_status(app: AppHandle) -> HotkeyStatus {
     app.state::<HotkeyManager>().status()
 }
 
+/// 主动检测低级键盘钩子与 SendInput 环境；不要求先开始录入或启动运行时。
+#[tauri::command]
+async fn check_input_environment(app: AppHandle) -> Result<InputEnvironmentCheck, String> {
+    let worker_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        worker_app
+            .state::<HotkeyManager>()
+            .check_input_environment()
+    })
+    .await
+    .map_err(|e| format!("输入环境自检任务失败：{e}"))
+}
+
 /// 开始热键捕获（设置页「点击录入」）：结果经 `kotone://hotkey-capture` 事件推送
 #[tauri::command]
-fn start_hotkey_capture(app: AppHandle) -> Result<(), String> {
-    app.state::<HotkeyManager>().start_capture(app.clone())
+async fn start_hotkey_capture(app: AppHandle) -> Result<(), String> {
+    let worker_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        worker_app
+            .state::<HotkeyManager>()
+            .start_capture(worker_app.clone())
+    })
+    .await
+    .map_err(|e| format!("启动热键自检任务失败：{e}"))?
 }
 
 /// 取消进行中的热键捕获
 #[tauri::command]
 fn cancel_hotkey_capture(app: AppHandle) {
     app.state::<HotkeyManager>().cancel_capture();
-}
-
-/// WebView 内收到已配置热键时的兜底。正常 LL 钩子已吞键时 DOM 不会调用到这里。
-#[tauri::command]
-fn trigger_local_hotkey(app: AppHandle, combo: String, pressed: bool) -> bool {
-    app.state::<HotkeyManager>().trigger_local(&combo, pressed)
 }
 
 /// 一键管理员重启：ShellExecuteExW "runas" 拉起新进程后退出当前进程。
@@ -1244,6 +1258,16 @@ pub fn run() {
             tray::setup_tray(app.handle())?;
             app.manage(startup_options.clone());
 
+            // 开发调试：`pnpm tauri dev -- --console` 启动后自动打开 webview 控制台
+            // （WebView2 生产运行时不给右键检查入口，排障需要显式 open_devtools）
+            if std::env::args().any(|a| a == "--console") {
+                for label in ["main", "overlay"] {
+                    if let Some(win) = app.get_webview_window(label) {
+                        win.open_devtools();
+                    }
+                }
+            }
+
             // 首次运行：默认配置 + 内置 profile 落盘（~/.kotone/）
             let settings = settings::load();
             let _ = settings::save(&settings);
@@ -1366,9 +1390,9 @@ pub fn run() {
             save_overlay_position,
             get_elevation_status,
             get_hotkey_status,
+            check_input_environment,
             start_hotkey_capture,
             cancel_hotkey_capture,
-            trigger_local_hotkey,
             restart_as_admin,
             list_models,
             download_model,

@@ -39,6 +39,8 @@ export interface AppState {
   errorMessage: string | null;
   /** error 状态保留的文本（发送失败可重试；可能为空） */
   errorText: string | null;
+  /** error 是否为「模拟输入被系统拦截」（安全软件/反作弊）；true 时弹排查引导弹窗 */
+  inputBlocked: boolean;
   /** 当前聊天频道（多频道 profile 才有值；切回默认时为 null 让悬浮窗隐藏徽标） */
   channel: ChannelInfo | null;
 }
@@ -50,6 +52,7 @@ const initial: AppState = {
   level: 0,
   errorMessage: null,
   errorText: null,
+  inputBlocked: false,
   channel: null,
 };
 
@@ -59,7 +62,11 @@ export const appState = writable<AppState>({ ...initial });
 
 interface StateEventPayload {
   state: KotoneState;
-  payload?: { text?: string | null; message?: string | null } | null;
+  payload?: {
+    text?: string | null;
+    message?: string | null;
+    inputBlocked?: boolean | null;
+  } | null;
 }
 
 interface PartialEventPayload {
@@ -86,6 +93,7 @@ function applyStateEvent(ev: StateEventPayload): void {
         next.level = 0;
         next.errorMessage = null;
         next.errorText = null;
+        next.inputBlocked = false;
         break;
       case "listening":
         // 新会话开始：清空上一轮残留
@@ -93,6 +101,7 @@ function applyStateEvent(ev: StateEventPayload): void {
         next.finalText = "";
         next.errorMessage = null;
         next.errorText = null;
+        next.inputBlocked = false;
         break;
       case "transcribing":
         // 保留 partial 上屏内容，等待最终文本
@@ -108,6 +117,7 @@ function applyStateEvent(ev: StateEventPayload): void {
         break;
       case "error":
         next.errorMessage = message ?? "未知错误";
+        next.inputBlocked = ev.payload?.inputBlocked === true;
         if (text) next.errorText = text;
         break;
     }

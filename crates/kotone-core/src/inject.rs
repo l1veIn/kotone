@@ -18,6 +18,11 @@ pub struct InjectError {
     /// true = 目标进程权限高于 Kotone（UIPI），提示前端引导管理员重启（§10 R-1）
     #[serde(default)]
     pub needs_elevation: bool,
+    /// true = 合成输入被系统整体拦截（SendInput 0/N 落地），
+    /// 通常是安全软件（电脑管家/360/火绒主动防御）或游戏反作弊在内核层
+    /// 拦截注入输入；提示前端弹窗引导排查，而不是当成普通失败
+    #[serde(default)]
+    pub input_blocked: bool,
 }
 
 impl InjectError {
@@ -25,6 +30,7 @@ impl InjectError {
         Self {
             message: message.into(),
             needs_elevation: false,
+            input_blocked: false,
         }
     }
 
@@ -33,6 +39,17 @@ impl InjectError {
         Self {
             message: message.into(),
             needs_elevation: true,
+            input_blocked: false,
+        }
+    }
+
+    /// 标记「输入被系统拦截」的错误（0/N 全部未落地；
+    /// 与 needs_elevation 互斥——提权无法解决内核层拦截）
+    pub fn with_input_blocked(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            needs_elevation: false,
+            input_blocked: true,
         }
     }
 }

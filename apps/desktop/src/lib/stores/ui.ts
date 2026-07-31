@@ -66,5 +66,19 @@ export const toastWarn = (text: string): number => pushToast("warning", text);
 export const AUTO_ADMIN_PROMPT_FLAG = "kotone:auto-admin-prompt";
 
 export function errText(e: unknown): string {
-  return typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message;
+  // Tauri 命令以结构化错误 reject 时（如 InjectError { message, needsElevation,
+  // inputBlocked }），reject 值是普通对象而非 Error 实例——直接 String(e) 会得到
+  // "[object Object]"（0.1.5 引导页「测试没有完成 [object Object]」用户反馈）。
+  if (e !== null && typeof e === "object") {
+    const msg = (e as { message?: unknown }).message;
+    if (typeof msg === "string" && msg) return msg;
+    try {
+      return JSON.stringify(e);
+    } catch {
+      /* fall through */
+    }
+  }
+  return String(e);
 }

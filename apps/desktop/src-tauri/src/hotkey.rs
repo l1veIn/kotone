@@ -9,12 +9,11 @@
 //! 对上层（TauriEmitter / IPC）签名不变：register/unregister/set_cancel_enabled/status。
 
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc;
 
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
-use kotone_core::hotkey::{parse_hotkey, HookEvent, HotkeySource};
+use kotone_core::hotkey::{HookEvent, HotkeySource};
 use kotone_core::orchestrator::Orchestrator;
 use kotone_core::settings::HotkeyBackend;
 
@@ -58,6 +57,21 @@ pub struct HotkeyStatus {
     pub cycle_key: Option<String>,
     /// 频道切换热键最近一次失败信息（如与录制热键冲突；成功/未配置为 null）
     pub cycle_error: Option<String>,
+}
+
+/// 录入/启动前的输入环境自检结果。
+///
+/// `available=true` 表示 Win32 已接受探测输入，可以继续进入热键录入；
+/// `hook_verified=false` 只表示合成事件未能闭环确认，随后仍由真实物理按键兜底验证，
+/// 不能据此把正常环境误报为安全软件拦截。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputEnvironmentCheck {
+    pub available: bool,
+    pub hook_verified: bool,
+    pub observed: usize,
+    pub expected: usize,
+    pub detail: Option<String>,
 }
 
 /// RegisterHotKey 热键源（tauri-plugin-global-shortcut）：依赖 AppHandle，留在壳内。
@@ -236,6 +250,8 @@ fn make_llhook_sink(orch: Arc<Orchestrator>) -> kotone_platform_windows::hotkey_
                     orch.on_cycle_channel().await;
                 });
             }
+            // 诊断事件（修饰键失配）：consumer 已记日志，业务不处理
+            HookEvent::MainKeyMissed { .. } => {}
         }
     })
 }
@@ -251,12 +267,6 @@ pub struct HotkeyManager {
     backend: Mutex<ActiveBackend>,
     /// 当前注册的热键名（两个后端通用）
     registered_key: Mutex<Option<String>>,
-    /// 当前注册模式，供 WebView 内按键兜底复用与全局钩子一致的语义。
-    registered_mode: Mutex<Option<HotkeyMode>>,
-    /// WebView 兜底按下态：过滤浏览器 keydown repeat，并保证 hold 成对释放。
-    local_down: Mutex<bool>,
-    /// WebView 兜底事件必须 FIFO：快速 tap 时不能让 release 抢在 press 业务完成前执行。
-    local_tx: mpsc::UnboundedSender<HookEvent>,
     /// 最近一次注册失败信息（设置页提示「可能被其他程序/实例占用」）
     last_error: Mutex<Option<String>>,
     /// 已生效的频道切换热键（ADR-008）
@@ -267,29 +277,12 @@ pub struct HotkeyManager {
 
 impl HotkeyManager {
     pub fn new(app: &AppHandle, orch: Arc<Orchestrator>) -> Self {
-        let (local_tx, mut local_rx) = mpsc::unbounded_channel::<HookEvent>();
-        let local_orch = orch.clone();
-        tauri::async_runtime::spawn(async move {
-            while let Some(event) = local_rx.recv().await {
-                match event {
-                    HookEvent::HoldPressed => local_orch.on_hotkey_hold(true).await,
-                    HookEvent::HoldReleased => local_orch.on_hotkey_hold(false).await,
-                    HookEvent::Toggle => local_orch.on_hotkey_toggle().await,
-                    HookEvent::Cancel => local_orch.cancel().await,
-                    // WebView 兜底只复刻录制热键语义；频道切换键不经过此通道
-                    HookEvent::CycleChannel => {}
-                }
-            }
-        });
         Self {
             plugin: PluginHotkeySource::new(app, orch.clone()),
             #[cfg(windows)]
             llhook: kotone_platform_windows::hotkey_ll::LlHookSource::new(make_llhook_sink(orch)),
             backend: Mutex::new(ActiveBackend::None),
             registered_key: Mutex::new(None),
-            registered_mode: Mutex::new(None),
-            local_down: Mutex::new(false),
-            local_tx,
             last_error: Mutex::new(None),
             cycle_key: Mutex::new(None),
             cycle_error: Mutex::new(None),
@@ -311,7 +304,6 @@ impl HotkeyManager {
                     ));
                     *self.backend.lock().unwrap() = ActiveBackend::LlHook;
                     *self.registered_key.lock().unwrap() = Some(key.to_string());
-                    *self.registered_mode.lock().unwrap() = Some(mode);
                     *self.last_error.lock().unwrap() = None;
                     self.apply_cycle_key(app, key);
                     return Ok(());
@@ -329,7 +321,6 @@ impl HotkeyManager {
                 ));
                 *self.backend.lock().unwrap() = ActiveBackend::Plugin;
                 *self.registered_key.lock().unwrap() = Some(key.to_string());
-                *self.registered_mode.lock().unwrap() = Some(mode);
                 *self.last_error.lock().unwrap() = None;
                 self.apply_cycle_key(app, key);
                 Ok(())
@@ -352,8 +343,6 @@ impl HotkeyManager {
         self.plugin.unregister();
         *self.backend.lock().unwrap() = ActiveBackend::None;
         *self.registered_key.lock().unwrap() = None;
-        *self.registered_mode.lock().unwrap() = None;
-        *self.local_down.lock().unwrap() = false;
         *self.cycle_key.lock().unwrap() = None;
         *self.cycle_error.lock().unwrap() = None;
         Ok(())
@@ -431,50 +420,63 @@ impl HotkeyManager {
         }
     }
 
-    /// WebView 获得焦点时的兜底入口。
+    /// 独立输入环境自检：可由首启向导等流程主动调用，不要求用户先点击热键录入。
     ///
-    /// 正常情况下 LL 钩子会在 DOM 收到按键前吞掉命中的热键；只有钩子没有拦住、
-    /// 按键实际落进 WebView 时前端才会调用这里，因此不会与正常钩子双触发。
-    /// RegisterHotKey 后端不走此兜底，避免与系统 WM_HOTKEY 回调重复。
-    pub fn trigger_local(&self, combo: &str, pressed: bool) -> bool {
-        if *self.backend.lock().unwrap() != ActiveBackend::LlHook {
-            return false;
-        }
-        let registered = self.registered_key.lock().unwrap().clone();
-        let Some(registered) = registered else {
-            return false;
-        };
-        if parse_hotkey(combo) != parse_hotkey(&registered) {
-            return false;
-        }
-        let Some(mode) = *self.registered_mode.lock().unwrap() else {
-            return false;
-        };
+    /// 明确的 hook 安装失败或 SendInput 少发事件返回 `available=false`，供前端提前
+    /// 提示 360/火绒信任区；合成事件未回环属于不确定结果，不能硬拦，真实物理键
+    /// 会在 capture 阶段继续验证。
+    pub fn check_input_environment(&self) -> InputEnvironmentCheck {
+        #[cfg(windows)]
+        {
+            use kotone_platform_windows::hotkey_ll::ProbeOutcome;
 
-        let mut local_down = self.local_down.lock().unwrap();
-        if pressed {
-            if *local_down {
-                return true;
-            }
-            *local_down = true;
-            kotone_core::log::log(&format!(
-                "webview hotkey fallback: {combo} ({mode:?}) pressed"
-            ));
-            let event = match mode {
-                HotkeyMode::Hold => HookEvent::HoldPressed,
-                HotkeyMode::Toggle => HookEvent::Toggle,
+            let result = match self
+                .llhook
+                .probe_available(std::time::Duration::from_millis(750))
+            {
+                Ok(ProbeOutcome::Verified) => InputEnvironmentCheck {
+                    available: true,
+                    hook_verified: true,
+                    observed: 2,
+                    expected: 2,
+                    detail: None,
+                },
+                Ok(ProbeOutcome::Inconclusive { observed, expected }) => InputEnvironmentCheck {
+                    available: true,
+                    hook_verified: false,
+                    observed,
+                    expected,
+                    detail: Some(format!(
+                        "SendInput 已发出，但低级键盘钩子只收到 {observed}/{expected} 个探测事件；\
+                             将在实际录入按键时继续验证"
+                    )),
+                },
+                Err(detail) => InputEnvironmentCheck {
+                    available: false,
+                    hook_verified: false,
+                    observed: 0,
+                    expected: 2,
+                    detail: Some(detail),
+                },
             };
-            let _ = self.local_tx.send(event);
-        } else if *local_down {
-            *local_down = false;
-            if mode == HotkeyMode::Hold {
-                kotone_core::log::log(&format!(
-                    "webview hotkey fallback: {combo} ({mode:?}) released"
-                ));
-                let _ = self.local_tx.send(HookEvent::HoldReleased);
-            }
+            kotone_core::log::log(&format!(
+                "input environment preflight: available={} hook_verified={} observed={}/{} detail={}",
+                result.available,
+                result.hook_verified,
+                result.observed,
+                result.expected,
+                result.detail.as_deref().unwrap_or("none")
+            ));
+            return result;
         }
-        true
+        #[cfg(not(windows))]
+        InputEnvironmentCheck {
+            available: false,
+            hook_verified: false,
+            observed: 0,
+            expected: 0,
+            detail: Some("当前平台暂不支持低级键盘钩子与 SendInput 自检".into()),
+        }
     }
 
     /// 开始热键捕获（设置页「点击录入」）：LL 钩子捕获下一个按键组合，
@@ -498,7 +500,14 @@ impl HotkeyManager {
             });
             return self
                 .llhook
-                .capture_next(cb, std::time::Duration::from_secs(10));
+                .capture_next(cb, std::time::Duration::from_secs(10))
+                .map_err(|detail| {
+                    format!(
+                        "低级键盘钩子自检未通过，暂时无法录入快捷键。\
+                         可能是 360、火绒等安全软件拦截了键盘钩子或模拟输入；\
+                         请将 Kotone 加入信任区后重试。检测详情：{detail}"
+                    )
+                });
         }
         #[cfg(not(windows))]
         Err("当前平台不支持热键录入捕获".into())

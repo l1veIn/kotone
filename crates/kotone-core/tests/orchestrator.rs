@@ -239,7 +239,6 @@ impl kotone_core::stt::SttSession for StubFinalSession {
 /// 恒未就绪的占位引擎：模拟「引擎未就绪」路径（不能再用 sherpa 占位——
 /// CLI 默认 feature 带 sherpa 后，workspace 构建下 sherpa 在真机是就绪的）
 struct NeverReadyEngine;
-
 impl kotone_core::stt::SttEngine for NeverReadyEngine {
     fn id(&self) -> &'static str {
         "never-ready"
@@ -321,6 +320,7 @@ fn make_orchestrator_full(
     orch.toast_dwell = Duration::from_millis(10);
     orch.finalize_timeout = Duration::from_secs(2);
     orch.focus_restore_delay = Duration::ZERO;
+    orch.release_grace = Duration::from_millis(10); // 测试用小宽限期
     (orch.into_arc(), emitter)
 }
 
@@ -690,6 +690,58 @@ async fn hotkey_toggle_during_sending_cancels() {
     );
 }
 
+/// hold 模式：松手不立刻结束——宽限期内保持 Listening 继续收音，
+/// 倒计时到点才 finalize 发送（0.1.6 修复：松手即停会丢掉仍在
+/// 传输链路上与「还在空气中」的句尾音频，稳定丢最后 1-2 字）
+#[tokio::test]
+async fn hotkey_hold_release_waits_grace_before_sending() {
+    let (orch, _emitter, sent) = make_orchestrator(true);
+    orch.settings().write().unwrap().hotkey.mode = kotone_core::hotkey::HotkeyMode::Hold;
+
+    orch.on_hotkey_hold(true).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    tokio::time::sleep(Duration::from_millis(60)).await;
+
+    orch.on_hotkey_hold(false).await;
+    // 松手后不立刻结束：宽限期（测试值 10ms）内仍是 Listening
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    assert!(sent.lock().unwrap().is_empty());
+
+    // 宽限期到点 → finalize → 直发（测试 toast_dwell 同为 10ms，
+    // Success 可能已自动回 Idle，以实际发送为准）
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert_eq!(
+        sent.lock().unwrap().as_slice(),
+        &["对面打野在下路".to_string()]
+    );
+    assert_ne!(orch.state(), OrchestratorState::Listening);
+}
+
+/// 宽限期内再次按下 = 收回结束、继续这句（对讲机直觉）；
+/// 随后正常松手仍能完整结束发送
+#[tokio::test]
+async fn hotkey_hold_press_during_grace_cancels_pending_end() {
+    let (orch, _emitter, sent) = make_orchestrator(true);
+    orch.settings().write().unwrap().hotkey.mode = kotone_core::hotkey::HotkeyMode::Hold;
+
+    orch.on_hotkey_hold(true).await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    orch.on_hotkey_hold(false).await; // 松手 → 宽限倒计时开始（10ms）
+    orch.on_hotkey_hold(true).await; // 立刻重按 → 收回结束
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert_eq!(
+        orch.state(),
+        OrchestratorState::Listening,
+        "宽限期内重按应收回结束、继续收音"
+    );
+    assert!(sent.lock().unwrap().is_empty());
+
+    // 继续说，再次松手 → 这次走完宽限期正常发送
+    orch.on_hotkey_hold(false).await;
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert_eq!(sent.lock().unwrap().len(), 1, "只发送一次");
+}
+
 /// hold 模式：非 Idle 态的按下事件忽略（不弹错误 toast 冲掉预览文本）
 #[tokio::test]
 async fn hotkey_hold_press_in_preview_is_ignored() {
@@ -727,6 +779,41 @@ async fn hotkey_hold_press_during_success_starts_next_session() {
     assert_eq!(sent.lock().unwrap().len(), 1, "上一句只发送一次");
 
     orch.cancel().await;
+}
+
+/// hold 模式：注入失败（带文本 Error）后按下热键 = 重试发送
+/// （0.1.5 回归：hold 模式带文本 Error 时按下被忽略，llhook 捕获正常但状态机
+/// 不再迁移，用户只能重启 runtime——真实用户诊断包实锤）
+#[tokio::test]
+async fn hotkey_hold_press_in_error_with_text_retries_send() {
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(FlakyInjector {
+        attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        sent: sent.clone(),
+    });
+    let (orch, _emitter) = make_orchestrator_with(true, injector);
+
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.end().await.unwrap();
+    assert_eq!(
+        orch.state(),
+        OrchestratorState::Error,
+        "首次注入失败应停在带文本 Error"
+    );
+
+    // 按下热键 = 重试发送（FlakyInjector 第二次成功）
+    orch.on_hotkey_hold(true).await;
+    assert_eq!(
+        orch.state(),
+        OrchestratorState::Success,
+        "带文本 Error 态按下热键应重试发送，而不是忽略"
+    );
+    assert_eq!(
+        sent.lock().unwrap().as_slice(),
+        &["对面打野在下路".to_string()],
+        "重试应发出保留的原文"
+    );
 }
 
 /// toggle 模式：Success 驻留期内点按同样立即开始下一句（与 hold 同语义）
@@ -1439,5 +1526,123 @@ async fn end_drains_buffered_pcm_before_finalize() {
     assert_eq!(
         records[0].audio_ms, 300,
         "松手时通道里缓冲的 PCM 必须全部灌进 session（6 × 50ms = 300ms）"
+    );
+}
+
+// ---------- 真机回归：对讲机「说完立刻松手」丢句尾（0.1.6 用户反馈） ----------
+
+/// 按真实节奏（每 50ms 一个 chunk）推送 16k wav 的采集后端；
+/// 推完后保持通道敞开（模拟真实设备不会主动断流）。
+struct WavPacedBackend {
+    pcm: Vec<f32>,
+}
+
+impl AudioBackend for WavPacedBackend {
+    fn start(&self, _device_id: &str) -> Result<AudioHandle, String> {
+        let (pcm_tx, pcm_rx) = mpsc::unbounded_channel::<Vec<f32>>();
+        let (level_tx, level_rx) = mpsc::unbounded_channel::<f32>();
+        let pcm = self.pcm.clone();
+        tokio::spawn(async move {
+            for chunk in pcm.chunks(kotone_core::audio::CHUNK_SAMPLES) {
+                if pcm_tx.send(chunk.to_vec()).is_err() {
+                    return;
+                }
+                let _ = level_tx.send(0.1f32);
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            // 推完保持 sender 存活：通道不断开，模拟真实采集常驻
+            tokio::time::sleep(Duration::from_secs(120)).await;
+        });
+        Ok(AudioHandle::detached(pcm_rx, level_rx))
+    }
+}
+
+/// 真 X-ASR + 异步全链路：音频一推完立刻 end()（= 说完立刻松手的最坏时序），
+/// 断言注入文本包含句尾。KOTONE_TEST_WAV / KOTONE_TEST_EXPECTED 指定语料与句尾。
+/// 手动跑：
+///   KOTONE_TEST_WAV=path.wav KOTONE_TEST_EXPECTED=句尾 \
+///   cargo test -p kotone-core --features kotone-stt/engine-sherpa \
+///     --test orchestrator hold_release_right_after_speech -- --ignored --nocapture
+#[tokio::test]
+#[ignore = "依赖真机 X-ASR 模型与测试 wav，手动跑"]
+async fn hold_release_right_after_speech_keeps_sentence_tail() {
+    let wav = std::env::var("KOTONE_TEST_WAV").expect("KOTONE_TEST_WAV 未设置");
+    let expected = std::env::var("KOTONE_TEST_EXPECTED").expect("KOTONE_TEST_EXPECTED 未设置");
+    let pcm = kotone_core::eval::read_wav(std::path::Path::new(&wav)).expect("读取测试 wav 失败");
+    let audio_ms = pcm.len() as u64 * 1000 / kotone_core::eval::SAMPLE_RATE as u64;
+
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
+    let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(
+        Arc::new(Mutex::new(Vec::new())),
+        42,
+        true,
+    ));
+
+    let mut settings = Settings::default();
+    settings.interaction_mode = None;
+    settings.hotkey.mode = kotone_core::hotkey::HotkeyMode::Hold; // B1 松手结束
+    settings.stt_engine = "sherpa-onnx-x-asr-zh-en".into();
+    settings.auto_send = true; // hold 直发
+    settings.active_profile_id = None;
+    settings.eval_recording = false;
+    settings.history.mode = kotone_core::history::HistoryMode::Capped;
+    let settings = Arc::new(RwLock::new(settings));
+
+    let mut registry = EngineRegistry::new();
+    kotone_stt::register_builtin(&mut registry);
+    assert!(
+        registry
+            .get("sherpa-onnx-x-asr-zh-en")
+            .map(|e| e.is_ready())
+            .unwrap_or(false),
+        "X-ASR 模型未就绪（kotone-cli download x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05）"
+    );
+
+    let emitter = Arc::new(VecEmitter::default());
+    let mut orch = Orchestrator::new(
+        settings,
+        Arc::new(registry),
+        Arc::new(WavPacedBackend { pcm }),
+        injector,
+        focus,
+        emitter.clone(),
+    );
+    orch.toast_dwell = Duration::from_millis(10);
+    orch.finalize_timeout = Duration::from_secs(10);
+    orch.focus_restore_delay = Duration::ZERO;
+    let hist_dir = tempfile::tempdir().unwrap();
+    orch.history_dir = Some(hist_dir.path().to_path_buf());
+    let orch = orch.into_arc();
+
+    orch.begin().await.unwrap();
+    // 等音频按真实节奏全部推完，立刻松手（最坏时序：不留任何自然尾音）；
+    // 松手走生产同款宽限期路径（release_grace = 500ms 生产默认值），
+    // 宽限期继续收音把仍在传输链路上的句尾接进 session，倒计时到点才结束
+    tokio::time::sleep(Duration::from_millis(audio_ms + 150)).await;
+    orch.on_hotkey_hold(false).await;
+    assert_eq!(
+        orch.state(),
+        OrchestratorState::Listening,
+        "松手后宽限期内应保持 Listening 继续收音"
+    );
+    // 宽限期 500ms + finalize + 发送（Success 经 toast_dwell 已自动回 Idle，以发送为准）
+    tokio::time::sleep(Duration::from_millis(3000)).await;
+    assert_ne!(orch.state(), OrchestratorState::Listening);
+
+    let sent = sent.lock().unwrap();
+    assert_eq!(sent.len(), 1, "应发送一次: {sent:?}");
+    let final_text = &sent[0];
+    eprintln!("全链路最终发送文本：{final_text}");
+    let records = kotone_core::history::list_in(hist_dir.path()).unwrap();
+    for r in &records {
+        eprintln!(
+            "history: audio_ms={} text={:?} outcome={:?}",
+            r.audio_ms, r.final_text, r.outcome
+        );
+    }
+    assert!(
+        final_text.contains(&expected),
+        "句尾「{expected}」丢失！最终文本：{final_text}"
     );
 }

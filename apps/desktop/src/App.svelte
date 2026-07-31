@@ -3,16 +3,13 @@
   import Overlay from "./routes/overlay/Overlay.svelte";
   import Settings from "./routes/settings/Settings.svelte";
   import { initStateListeners } from "./lib/stores/state";
-  import { installLocalHotkeyBridge } from "./lib/localHotkeyBridge";
 
   // 订阅 Rust 侧 kotone:// 事件（浏览器环境下为 no-op）
   onMount(() => {
     let cleanup: (() => void) | undefined;
-    const cleanupLocalHotkey = installLocalHotkeyBridge();
     void initStateListeners().then((u) => (cleanup = u));
     return () => {
       cleanup?.();
-      cleanupLocalHotkey();
     };
   });
 

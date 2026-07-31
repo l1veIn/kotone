@@ -267,6 +267,18 @@ export interface HotkeyStatus {
   cycleError: string | null;
 }
 
+/** 录入/启动前的低级键盘钩子与 SendInput 环境自检结果。 */
+export interface InputEnvironmentCheck {
+  /** false = hook 安装失败或 SendInput 明确少发事件，应提前提示安全软件信任区。 */
+  available: boolean;
+  /** 合成探测事件是否完整回到本进程的 WH_KEYBOARD_LL。 */
+  hookVerified: boolean;
+  observed: number;
+  expected: number;
+  /** 诊断细节；可用但未闭环时也可能存在。 */
+  detail: string | null;
+}
+
 // ================================================================
 // 浏览器 mock：内存态，模拟后端行为（仅 dev:web 使用）
 // ================================================================
@@ -626,6 +638,28 @@ export async function getHotkeyStatus(): Promise<HotkeyStatus> {
   return invoke<HotkeyStatus>("get_hotkey_status");
 }
 
+/** 主动输入环境自检；可在引导页到达热键步骤时调用，不要求先启动录入。 */
+export async function checkInputEnvironment(): Promise<InputEnvironmentCheck> {
+  if (!isTauri) {
+    if (mockQuery("mockInputEnvironment") === "blocked")
+      return {
+        available: false,
+        hookVerified: false,
+        observed: 0,
+        expected: 2,
+        detail: "SendInput 探测事件被系统拦截（0/2 成功）",
+      };
+    return {
+      available: true,
+      hookVerified: true,
+      observed: 2,
+      expected: 2,
+      detail: null,
+    };
+  }
+  return invoke<InputEnvironmentCheck>("check_input_environment");
+}
+
 // ---------- 资源占用（标题栏运行中展示） ----------
 
 /** get_resource_usage 返回值（camelCase 对齐 serde） */
@@ -696,11 +730,6 @@ export async function cancelHotkeyCapture(): Promise<void> {
   return invoke<void>("cancel_hotkey_capture");
 }
 
-/** Kotone 窗口内的热键兜底；仅 LL 钩子后端且组合键确实匹配时会触发。 */
-export async function triggerLocalHotkey(combo: string, pressed: boolean): Promise<boolean> {
-  if (!isTauri) return false;
-  return invoke<boolean>("trigger_local_hotkey", { combo, pressed });
-}
 
 // ---------- 运行时「启动」开关 ----------
 

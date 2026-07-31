@@ -312,15 +312,33 @@ pub fn multi_model_dir(model_id: &str) -> Option<PathBuf> {
 
 /// 多文件模型是否齐备（全部文件存在且大小匹配）
 pub fn multi_model_ready(model_id: &str) -> bool {
+    multi_model_missing(model_id).is_empty()
+}
+
+/// 多文件模型齐备性检查的明细：返回缺失/大小不符的文件描述列表（空 = 齐备）。
+/// 用于启动失败时把「到底缺哪个文件」写进日志与错误消息——0.1.5 曾出现
+/// 运行中 stop/start 后误报「模型未下载」，布尔检查无法定位原因。
+pub fn multi_model_missing(model_id: &str) -> Vec<String> {
     let Some(m) = SHERPA_MODELS.iter().find(|m| m.id == model_id) else {
-        return false;
+        return vec![format!("未知模型 id: {model_id}")];
     };
     let dir = models_dir().join(m.dir);
-    m.files.iter().all(|f| {
-        fs::metadata(dir.join(f.name))
-            .map(|md| md.len() == f.size_bytes)
-            .unwrap_or(false)
-    })
+    m.files
+        .iter()
+        .filter_map(|f| {
+            let path = dir.join(f.name);
+            match fs::metadata(&path) {
+                Ok(md) if md.len() == f.size_bytes => None,
+                Ok(md) => Some(format!(
+                    "{}（大小不符：期望 {} 字节，实际 {} 字节）",
+                    f.name,
+                    f.size_bytes,
+                    md.len()
+                )),
+                Err(_) => Some(format!("{}（缺失）", f.name)),
+            }
+        })
+        .collect()
 }
 
 /// 引擎当前活动模型 ID（读 config.json 的 engineOptions；

@@ -185,6 +185,15 @@ mod windows_imp {
             Ok(())
         } else {
             let err = windows::core::Error::from_win32();
+            // 0/N 全部未落地 = 系统级拦截（安全软件主动防御 / 游戏反作弊在内核层
+            // 丢弃合成输入），与目标窗口无关——连记事本都会失败。单独标记让前端
+            // 弹窗引导排查；部分落地（N>0）仍是普通失败（时序/焦点干扰）。
+            if sent == 0 {
+                return Err(InjectError::with_input_blocked(format!(
+                    "SendInput 被系统拦截（0/{} 成功），通常是安全软件或游戏反作弊拦截了模拟输入: {err}",
+                    inputs.len()
+                )));
+            }
             Err(InjectError::new(format!(
                 "SendInput 被系统拦截（{}/{} 成功）: {err}",
                 sent,

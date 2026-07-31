@@ -18,14 +18,19 @@
 
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
+    KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VIRTUAL_KEY, VK_CONTROL, VK_MENU,
+    VK_SHIFT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx, HHOOK,
-    KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT,
-    WM_SYSKEYDOWN, WM_SYSKEYUP,
+    CallNextHookEx, GetMessageW, PeekMessageW, PostThreadMessageW, SetWindowsHookExW,
+    UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG, PM_NOREMOVE, WH_KEYBOARD_LL,
+    WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 use kotone_core::hotkey::{
@@ -53,21 +58,44 @@ pub enum CaptureResult {
     Timeout,
 }
 
+/// 合成输入预检结论。钩子安装失败或 `SendInput` 明确少发事件时返回 `Err`；
+/// 安全软件可能只过滤 F24/标记事件，因此“未回环”不能直接证明真实链路不可用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeOutcome {
+    Verified,
+    Inconclusive { observed: usize, expected: usize },
+}
+
 /// 钩子回调共享状态：匹配器 + 事件出口（OnceLock：回调必须是静态 fn）
 struct HookShared {
     matcher: Mutex<HookMatcher>,
     tx: mpsc::Sender<HookEvent>,
     /// 捕获模式出口：Some 期间按键组合/Esc 走此通道而非正常事件流
     capture: Mutex<Option<mpsc::Sender<CaptureMsg>>>,
+    /// 可用性探测出口：带专用 dwExtraInfo 的 F24 被钩子观察到时通知等待方。
+    probe: Mutex<Option<ProbeRequest>>,
+}
+
+struct ProbeRequest {
+    /// 只接受刚安装/刷新的 hook 线程回执，避免旧 hook 在退出竞态中造成假阳性。
+    hook_thread_id: u32,
+    tx: mpsc::Sender<()>,
 }
 
 static SHARED: OnceLock<HookShared> = OnceLock::new();
+
+/// `SendInput` 探测事件的专用标记（ASCII "KTNP"）。优先用于标识探测来源；
+/// 兼容会清除 flags/extraInfo 的输入过滤器时，短暂 probe 槽内也接受 F24 键码。
+const PROBE_EXTRA_INFO: usize = 0x4B54_4E50;
+const PROBE_VK: VIRTUAL_KEY = VIRTUAL_KEY(0x87); // VK_F24
 
 /// LL 钩子热键源：首次 register 时启动钩子线程与消费者线程，
 /// 之后改键/改模式只更新共享匹配器配置，不重建线程。
 pub struct LlHookSource {
     sink: Arc<HookSink>,
     state: Mutex<LlHookState>,
+    /// 覆盖“刷新 hook → 安装 probe 槽 → SendInput → 等回执”的完整临界区。
+    probe_lock: Mutex<()>,
 }
 
 #[derive(Default)]
@@ -84,6 +112,7 @@ impl LlHookSource {
         Self {
             sink: Arc::new(sink),
             state: Mutex::new(LlHookState::default()),
+            probe_lock: Mutex::new(()),
         }
     }
 
@@ -94,6 +123,94 @@ impl LlHookSource {
             unsafe {
                 let _ = PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0));
             }
+        }
+    }
+
+    /// 闭环检测低级键盘钩子是否真正可用。
+    ///
+    /// 仅 `SetWindowsHookExW` 成功并不足以证明钩子未被安全软件静默拦截。本探测
+    /// 通过 `SendInput` 发送一组带专用标记的 F24 down/up，并等待本钩子回调确认；
+    /// 回调会吞掉探测事件，避免传给当前前台窗口。完整回环返回 `Verified`；
+    /// `SendInput` 已接受但未回环属于 `Inconclusive`，后续由用户的真实物理按键
+    /// 完成判定，避免把“只过滤探测 F24”的环境误报成整个输入链路不可用。
+    pub fn probe_available(&self, timeout: Duration) -> Result<ProbeOutcome, String> {
+        let _probe_guard = self
+            .probe_lock
+            .try_lock()
+            .map_err(|_| "低级键盘钩子自检已在进行中".to_string())?;
+        if let Some(shared) = SHARED.get() {
+            if shared.capture.lock().unwrap().is_some() {
+                return Err("热键录入进行中，暂时无法执行钩子自检".into());
+            }
+        }
+
+        let was_started = self.state.lock().unwrap().started;
+        if !was_started {
+            // 用禁用的 F24 占位 matcher 启动基础设施；探测结束后仍保持未注册状态。
+            self.register("F24", HotkeyMode::Toggle)?;
+            self.state.lock().unwrap().armed = false;
+            if let Some(shared) = SHARED.get() {
+                shared.matcher.lock().unwrap().set_enabled(false);
+            }
+        } else {
+            // Windows 可能静默移除超时钩子；每次探测前先换成新 hook。
+            self.restart_hook_thread()?;
+        }
+
+        let shared = SHARED.get().ok_or("LL 钩子未启动".to_string())?;
+        let hook_thread_id = self
+            .state
+            .lock()
+            .unwrap()
+            .hook_thread_id
+            .ok_or("LL 钩子线程未就绪".to_string())?;
+        let (tx, rx) = mpsc::channel::<()>();
+        {
+            let mut slot = shared.probe.lock().unwrap();
+            if slot.is_some() {
+                return Err("低级键盘钩子自检已在进行中".into());
+            }
+            *slot = Some(ProbeRequest { hook_thread_id, tx });
+        }
+
+        let inputs = [probe_input(false), probe_input(true)];
+        let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+        if sent as usize != inputs.len() {
+            // 若只落地了 down，尽力补一个 up，避免残留悬键。
+            if sent == 1 {
+                let _ =
+                    unsafe { SendInput(&[probe_input(true)], std::mem::size_of::<INPUT>() as i32) };
+            }
+            *shared.probe.lock().unwrap() = None;
+            let error = windows::core::Error::from_win32();
+            return Err(format!(
+                "SendInput 探测事件被系统拦截（{sent}/{} 成功）：{error}",
+                inputs.len()
+            ));
+        }
+
+        // down/up 都必须由同一个新 hook 收到后才算通过；这样清理 probe 槽时不会
+        // 把尚未处理的 F24 key-up 泄漏给前台窗口。
+        let deadline = Instant::now() + timeout;
+        let mut observed = 0;
+        while observed < inputs.len() {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                break;
+            };
+            if rx.recv_timeout(remaining).is_err() {
+                break;
+            }
+            observed += 1;
+        }
+        *shared.probe.lock().unwrap() = None;
+        if observed == inputs.len() {
+            kotone_core::log::log("WH_KEYBOARD_LL availability probe passed");
+            Ok(ProbeOutcome::Verified)
+        } else {
+            Ok(ProbeOutcome::Inconclusive {
+                observed,
+                expected: inputs.len(),
+            })
         }
     }
 
@@ -114,29 +231,27 @@ impl LlHookSource {
             }
         }
 
-        let (was_started, was_armed) = {
-            let state = self.state.lock().unwrap();
-            (state.started, state.armed)
-        };
-
-        if !was_started {
-            // 未注册过：用占位热键启动钩子线程（capture 模式优先于 enabled/匹配，
-            // 不产生 HookEvent；捕获到的主键会被吞掉，结束后恢复禁用）
-            self.register("F24", HotkeyMode::Toggle)?;
-            self.state.lock().unwrap().armed = false;
-            if let Some(shared) = SHARED.get() {
-                shared.matcher.lock().unwrap().set_enabled(false);
-            }
-        } else {
-            // Windows 会在低级钩子回调超时等情况下静默移除 hook，原线程与
-            // state.started 仍可能看起来正常。录入是低频操作，开始前主动重装，
-            // 避免进入 capture 状态后永远收不到物理按键、最终只能超时。
-            self.restart_hook_thread()?;
+        // SendInput 明确少发事件时立即失败；合成 F24 未回环只记诊断，
+        // 随后的真实物理按键才是 LL Hook 可用性的最终判据。
+        if let ProbeOutcome::Inconclusive { observed, expected } =
+            self.probe_available(Duration::from_millis(250))?
+        {
+            kotone_core::log::log(&format!(
+                "WH_KEYBOARD_LL synthetic probe inconclusive ({observed}/{expected}); \
+                 continuing with physical-key capture"
+            ));
         }
+        let was_armed = self.state.lock().unwrap().armed;
 
         let shared = SHARED.get().ok_or("LL 钩子未启动".to_string())?;
         let (tx, rx) = mpsc::channel::<CaptureMsg>();
-        *shared.capture.lock().unwrap() = Some(tx);
+        {
+            let mut slot = shared.capture.lock().unwrap();
+            if slot.is_some() {
+                return Err("已有热键捕获进行中".into());
+            }
+            *slot = Some(tx);
+        }
         shared.matcher.lock().unwrap().set_capture_active(true);
         kotone_core::log::log("llhook capture started");
 
@@ -221,6 +336,7 @@ impl HotkeySource for LlHookSource {
             matcher: Mutex::new(HookMatcher::new(spec, mode)),
             tx,
             capture: Mutex::new(None),
+            probe: Mutex::new(None),
         };
         SHARED
             .set(shared)
@@ -260,10 +376,9 @@ impl HotkeySource for LlHookSource {
     /// 频道切换键（ADR-008）：更新匹配器的切换 spec；None/解析失败 = 关闭
     fn set_cycle_key(&self, key: Option<&str>) -> Result<(), String> {
         let spec = match key {
-            Some(k) if !k.trim().is_empty() => Some(
-                parse_hotkey(k)
-                    .ok_or_else(|| format!("无法解析频道切换热键「{k}」（LL 钩子后端不支持该键名）"))?,
-            ),
+            Some(k) if !k.trim().is_empty() => Some(parse_hotkey(k).ok_or_else(|| {
+                format!("无法解析频道切换热键「{k}」（LL 钩子后端不支持该键名）")
+            })?),
             _ => None,
         };
         if let Some(shared) = SHARED.get() {
@@ -299,6 +414,10 @@ impl Drop for LlHookSource {
 fn hook_thread_main(boot: mpsc::Sender<Result<u32, String>>) {
     unsafe {
         let tid = GetCurrentThreadId();
+        // WH_KEYBOARD_LL 的回调通过安装线程的消息泵分发。先显式创建消息队列，
+        // 避免调用方收到 ready 后立即发送探测/用户立即按键，而线程尚无消息队列。
+        let mut msg = MSG::default();
+        let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
         let hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), None::<HINSTANCE>, 0) {
             Ok(h) => h,
             Err(e) => {
@@ -306,10 +425,11 @@ fn hook_thread_main(boot: mpsc::Sender<Result<u32, String>>) {
                 return;
             }
         };
-        let _ = boot.send(Ok(tid));
+        // ready 之前完成日志等可能阻塞的工作；收到 ready 后线程下一步立即进入
+        // GetMessageW，不能留出“hook 已返回成功但消息泵尚未工作”的竞态窗口。
         kotone_core::log::log("WH_KEYBOARD_LL hook installed");
+        let _ = boot.send(Ok(tid));
 
-        let mut msg = MSG::default();
         // GetMessageW 返回 false = 收到 WM_QUIT
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {}
 
@@ -318,12 +438,47 @@ fn hook_thread_main(boot: mpsc::Sender<Result<u32, String>>) {
     }
 }
 
+fn probe_input(up: bool) -> INPUT {
+    let mut input = INPUT::default();
+    input.r#type = INPUT_KEYBOARD;
+    let scan = unsafe { MapVirtualKeyW(u32::from(PROBE_VK.0), MAPVK_VK_TO_VSC) } as u16;
+    input.Anonymous = INPUT_0 {
+        ki: KEYBDINPUT {
+            wVk: PROBE_VK,
+            wScan: scan,
+            dwFlags: if up {
+                KEYEVENTF_KEYUP
+            } else {
+                KEYBD_EVENT_FLAGS(0)
+            },
+            time: 0,
+            dwExtraInfo: PROBE_EXTRA_INFO,
+        },
+    };
+    input
+}
+
 /// 钩子回调：只做翻译（Win32 事件 → HookMatcher）与吞键判定。
 /// 红线：禁止日志/IO/重活；事件经 channel 发给消费者线程。
 unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 {
         if let Some(shared) = SHARED.get() {
             let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+            // 闭环探测事件优先处理：确认收到后吞掉，不进入正常热键匹配，也不传给前台。
+            // 某些输入过滤软件会清除 LLKHF_INJECTED 或 dwExtraInfo，但仍把事件
+            // 交给钩子。probe 槽只开放 250ms，期间按 F24 键码识别比强依赖标记
+            // 更兼容；线程 id 约束仍确保回执来自刚安装的新 hook。
+            if kb.vkCode == u32::from(PROBE_VK.0) {
+                if let Ok(slot) = shared.probe.lock() {
+                    if let Some(probe) = slot.as_ref() {
+                        if probe.hook_thread_id == unsafe { GetCurrentThreadId() } {
+                            let _ = probe.tx.send(());
+                            return LRESULT(1);
+                        }
+                    }
+                }
+                return unsafe { CallNextHookEx(None::<HHOOK>, code, wparam, lparam) };
+            }
             // 跳过合成输入（如我们自己的 SendInput），避免自我触发
             if !kb.flags.contains(LLKHF_INJECTED) {
                 let action = match wparam.0 as u32 {
@@ -334,6 +489,14 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
                 if let Some(action) = action {
                     // 锁中毒（理论上的 panic 路径）也不能在 FFI 边界 unwrap：放行按键
                     if let Ok(mut matcher) = shared.matcher.lock() {
+                        // 修饰键以物理状态为准（我们从不吞修饰键，状态恒准确），
+                        // 自愈「修饰键 up 丢失」造成的匹配失配——三次 Win32 调用
+                        // 开销可忽略，仍在回调红线内（无日志/无 IO）
+                        matcher.sync_modifiers(
+                            unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } < 0,
+                            unsafe { GetAsyncKeyState(VK_MENU.0 as i32) } < 0,
+                            unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) } < 0,
+                        );
                         let outcome = matcher.on_key(kb.vkCode, action);
                         drop(matcher);
                         // 捕获模式（热键录入）：组合键 / Esc 取消走 capture 通道
@@ -363,5 +526,20 @@ fn consumer_main(rx: mpsc::Receiver<HookEvent>, sink: Arc<HookSink>) {
     for ev in rx {
         kotone_core::log::log(&format!("llhook captured: {ev:?}"));
         (sink)(ev);
+    }
+}
+
+#[cfg(test)]
+mod probe_smoke_test {
+    use super::*;
+
+    #[test]
+    #[ignore = "manual Windows desktop integration smoke test"]
+    fn send_input_round_trip_reaches_fresh_ll_hook() {
+        let source = LlHookSource::new(Box::new(|_| {}));
+        source
+            .probe_available(Duration::from_secs(1))
+            .map(|outcome| assert_eq!(outcome, ProbeOutcome::Verified))
+            .expect("SendInput → WH_KEYBOARD_LL round trip should pass");
     }
 }

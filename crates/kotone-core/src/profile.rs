@@ -105,11 +105,7 @@ impl GameProfile {
                 is_default: true,
             }];
         }
-        let default_idx = self
-            .channels
-            .iter()
-            .position(|c| c.default)
-            .unwrap_or(0);
+        let default_idx = self.channels.iter().position(|c| c.default).unwrap_or(0);
         self.channels
             .iter()
             .enumerate()
@@ -656,8 +652,15 @@ mod tests {
     fn channel_strategy_falls_back_to_default() {
         let lol = GameProfile::builtin_lol();
         assert_eq!(lol.channel_strategy(None).id, "team");
-        assert_eq!(lol.channel_strategy(Some("ghost")).id, "team", "未知 id 回落默认");
-        assert_eq!(lol.channel_strategy(Some("all")).open_chat_key, "Shift+Enter");
+        assert_eq!(
+            lol.channel_strategy(Some("ghost")).id,
+            "team",
+            "未知 id 回落默认"
+        );
+        assert_eq!(
+            lol.channel_strategy(Some("all")).open_chat_key,
+            "Shift+Enter"
+        );
     }
 
     #[test]

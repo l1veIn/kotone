@@ -683,6 +683,8 @@ async fn cmd_listen_hotkey(
                     HookEvent::Toggle => orch.on_hotkey_toggle().await,
                     HookEvent::Cancel => orch.cancel().await,
                     HookEvent::CycleChannel => orch.on_cycle_channel().await,
+                    // 诊断事件（修饰键失配）：consumer 已记日志，业务不处理
+                    HookEvent::MainKeyMissed { .. } => {}
                 }
             }
         })

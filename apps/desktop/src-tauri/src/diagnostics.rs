@@ -309,7 +309,14 @@ fn serde_label<T: serde::Serialize>(value: &T) -> String {
 
 fn classify_error(error: &str) -> String {
     let lower = error.to_ascii_lowercase();
-    if error.contains("管理员") || error.contains("提权") || lower.contains("elevation") {
+    // 「拦截」要最先判：SendInput 被系统拦截的消息里同时可能带「注入」字样，
+    // 统一归到 INJECTION_BLOCKED，与 events.csv 的 errorCode 保持一致
+    // （0.1.5 诊断包曾出现 events.csv=INJECTION_FAILED 而 history-metadata
+    // =UNKNOWN_ERROR 的不一致——旧消息「SendInput 被系统拦截」不含任何关键字）
+    if error.contains("拦截") || lower.contains("sendinput") || lower.contains("blocked") {
+        "INJECTION_BLOCKED"
+    } else if error.contains("管理员") || error.contains("提权") || lower.contains("elevation")
+    {
         "ELEVATION_REQUIRED"
     } else if error.contains("热键") || lower.contains("hotkey") {
         "HOTKEY_FAILED"
@@ -335,6 +342,21 @@ mod tests {
         let redacted = redact_log_line(line);
         assert_eq!(redacted, "[1.000] state -> sending [payload redacted]");
         assert!(!redacted.contains("秘密文本"));
+    }
+
+    #[test]
+    fn classify_error_maps_blocked_sendinput() {
+        // 0.1.5 不一致回归：SendInput 拦截消息旧分类落 UNKNOWN_ERROR，
+        // 与 events.csv 的 INJECTION_FAILED 矛盾；0.1.6 统一为 INJECTION_BLOCKED
+        assert_eq!(
+            classify_error("SendInput 被系统拦截（0/10 成功）: 操作成功完成。"),
+            "INJECTION_BLOCKED"
+        );
+        assert_eq!(
+            classify_error("发送失败：目标窗口已关闭"),
+            "INJECTION_FAILED"
+        );
+        assert_eq!(classify_error("未知异常"), "UNKNOWN_ERROR");
     }
 
     #[test]

@@ -1,26 +1,23 @@
 <script lang="ts">
-  import { onDestroy, onMount, tick } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import {
+    checkInputEnvironment,
     downloadModel,
-    getHotkeyStatus,
     isTauri,
     listAudioDevices,
     listModels,
     listProfiles,
     setAudioDevice,
-    simulateSend,
-    startRuntime,
     updateSettings,
     type AudioDevice,
     type DownloadProgress,
     type GameProfile,
+    type InputEnvironmentCheck,
     type InteractionMode,
     type ModelInfo,
   } from "../../lib/ipc";
   import { captureHotkey } from "../../lib/hotkeyCapture";
-  import { appState } from "../../lib/stores/state";
-  import { runtimeStore } from "../../lib/stores/runtime";
   import {
     errText,
     settingsStore,
@@ -32,11 +29,9 @@
   import stickerHello from "../../assets/brand/stickers/hello.webp";
   import stickerThinking from "../../assets/brand/stickers/thinking.webp";
   import stickerCheering from "../../assets/brand/stickers/cheering.webp";
-  import stickerProud from "../../assets/brand/stickers/proud.webp";
 
   let { onDone }: { onDone: () => void } = $props();
 
-  const LAST_STEP = 4;
   let step = $state(0);
   let loadingResources = $state(true);
   let resourceError = $state("");
@@ -65,13 +60,6 @@
 
   const selectedProfile = $derived(
     profiles.find((p) => p.id === selectedProfileId) ?? null,
-  );
-  const modeInstruction = $derived(
-    selectedMode === "push-to-talk"
-      ? `按住 ${currentKey} 说话，松开后会直接发送`
-      : selectedMode === "dictation"
-        ? `按 ${currentKey} 开始，再按一次停止；预览出现后再按一次发送`
-        : `按 ${currentKey} 开始，说完停顿片刻后自动发送`,
   );
 
   onMount(async () => {
@@ -182,9 +170,42 @@
 
   let capturing = $state(false);
   let captureCleanup: (() => void) | null = null;
+  let checkingInputEnvironment = $state(false);
+  let inputEnvironment = $state<InputEnvironmentCheck | null>(null);
+
+  async function runInputEnvironmentCheck() {
+    if (checkingInputEnvironment) return;
+    checkingInputEnvironment = true;
+    try {
+      inputEnvironment = await checkInputEnvironment();
+      if (!inputEnvironment.available) {
+        toast(
+          false,
+          "检测到键盘钩子或模拟输入被系统拦截，请先将 Kotone 加入 360、火绒等安全软件的信任区。",
+        );
+      }
+    } catch (e) {
+      inputEnvironment = {
+        available: false,
+        hookVerified: false,
+        observed: 0,
+        expected: 0,
+        detail: errText(e),
+      };
+      toast(false, `输入环境检测失败：${errText(e)}`);
+    } finally {
+      checkingInputEnvironment = false;
+    }
+  }
+
+  function enterHotkeyStep() {
+    step = 3;
+    // 第三步一出现就主动检测，不要求用户先点击「重新录入」或启动运行时。
+    void runInputEnvironmentCheck();
+  }
 
   async function startCapture() {
-    if (capturing) return;
+    if (capturing || checkingInputEnvironment || inputEnvironment?.available === false) return;
     capturing = true;
     captureCleanup = await captureHotkey((result) => {
       capturing = false;
@@ -203,127 +224,30 @@
   }
 
   async function saveInteractionAndContinue() {
+    if (finishing) return;
+    finishing = true;
     try {
       const mode = selectedMode === "push-to-talk" ? "hold" : "toggle";
       settingsStore.set(
         await updateSettings({
-          interactionMode: selectedMode,
-          hotkey: { key: currentKey, mode },
-        }),
-      );
-      step = LAST_STEP;
-    } catch (e) {
-      toast(false, `保存说话方式失败：${errText(e)}`);
-    }
-  }
-
-  let starting = $state(false);
-  let runtimeReady = $state(false);
-  let hotkeyReady = $state(false);
-  let testError = $state("");
-  let testArmed = $state(false);
-  let testInput = $state("");
-  let testReceived = $state("");
-  let testSucceeded = $state(false);
-  let trainingInput: HTMLInputElement | undefined = $state();
-
-  async function startForTest() {
-    if (starting) return;
-    if (!primaryReady) {
-      testError = "请先下载推荐识别模型";
-      return;
-    }
-    starting = true;
-    testError = "";
-    try {
-      // VAD 判停组件已随应用本体分发，one-shot 无需额外下载
-      const hotkeyMode = selectedMode === "push-to-talk" ? "hold" : "toggle";
-      settingsStore.set(
-        await updateSettings({
           activeProfileId: selectedProfileId,
           interactionMode: selectedMode,
-          hotkey: { key: currentKey, mode: hotkeyMode },
+          hotkey: { key: currentKey, mode },
+          ui: { firstRunCompleted: true },
         }),
       );
-      runtimeStore.set(await startRuntime());
-      const status = await getHotkeyStatus();
-      hotkeyReady = status.registered;
-      if (!status.registered) {
-        throw new Error(status.error ?? "热键未成功注册");
-      }
-      runtimeReady = true;
     } catch (e) {
-      runtimeReady = false;
-      hotkeyReady = false;
-      testError = errText(e);
-      toast(false, `启动失败：${testError}`);
-    } finally {
-      starting = false;
-    }
-  }
-
-  function acceptTrainingMessage() {
-    const text = testInput.trim();
-    if (!text) return;
-    testReceived = text;
-    testSucceeded = true;
-    testArmed = false;
-    toast(true, "完整发送测试通过 ✨");
-  }
-
-  function handleTrainingKeydown(event: KeyboardEvent) {
-    if (event.key !== "Enter" || !runtimeReady) return;
-    event.preventDefault();
-    if (!testArmed) {
-      testArmed = true;
-      testInput = "";
-      testReceived = "";
-      testSucceeded = false;
+      toast(false, `保存说话方式失败：${errText(e)}`);
+      finishing = false;
       return;
     }
-    acceptTrainingMessage();
+    onDone();
   }
 
-  async function runTextInjectionTest() {
-    if (!runtimeReady) return;
-    testArmed = false;
-    testInput = "";
-    testReceived = "";
-    testSucceeded = false;
-    testError = "";
-    await tick();
-    trainingInput?.focus();
-    try {
-      await new Promise<void>((resolve) => setTimeout(resolve, 80));
-      if (isTauri) {
-        await simulateSend("琴音测试发送", selectedProfileId);
-      } else {
-        // dev:web 的可重复 E2E：生产环境不会显示或执行这条模拟分支。
-        testArmed = true;
-        testInput = "琴音测试发送";
-        acceptTrainingMessage();
-      }
-    } catch (e) {
-      testError = errText(e);
-      toast(false, `文字注入测试失败：${testError}`);
-    }
-  }
-
-  $effect(() => {
-    if ($appState.state === "error" && $appState.errorMessage) {
-      testError = $appState.errorMessage;
-    }
-  });
-
-  $effect(() => {
-    if (!runtimeReady || $appState.state !== "listening") return;
-    // 首次热键按下前不抢输入焦点，避免输入法先消费按键；开始收音后再把注入目标放进聊天框。
-    void tick().then(() => trainingInput?.focus({ preventScroll: true }));
-  });
 
   let finishing = $state(false);
   async function finish(skipped = false) {
-    if (finishing || (!testSucceeded && !skipped)) return;
+    if (finishing) return;
     finishing = true;
     try {
       const patchObj: Record<string, unknown> = {
@@ -378,7 +302,7 @@
           </h1>
           <p class="mt-2 text-sm leading-relaxed text-white/65">
             游戏里不动手，说话就能发消息。<br />
-            接下来会选游戏配置、准备本地模型、设置热键，并完成一次真实发送测试。
+            接下来会选游戏配置、准备本地模型、设置热键，完成后直接进入主页。
           </p>
           <div class="mt-6 flex items-center gap-3">
             <button
@@ -401,7 +325,7 @@
         <div class="flex items-start gap-4">
           <img src={stickerCheering} alt="" class="h-11 w-11 shrink-0" />
           <div>
-            <p class="text-[11px] font-semibold tracking-wide text-kotone-cyan">第 1 步 / 4</p>
+            <p class="text-[11px] font-semibold tracking-wide text-kotone-cyan">第 1 步 / 3</p>
             <h2 class="mt-0.5 text-lg font-bold">选择游戏配置</h2>
             <p class="mt-1 text-xs leading-relaxed text-white/55">
               Profile 只决定聊天键、输入方式和术语词库，不会限制你向哪个前台窗口发送。
@@ -464,7 +388,7 @@
         <div class="flex items-start gap-4">
           <img src={stickerThinking} alt="" class="h-11 w-11 shrink-0" />
           <div>
-            <p class="text-[11px] font-semibold tracking-wide text-kotone-cyan">第 2 步 / 4</p>
+            <p class="text-[11px] font-semibold tracking-wide text-kotone-cyan">第 2 步 / 3</p>
             <h2 class="mt-0.5 text-lg font-bold">准备识别模型与麦克风</h2>
             <p class="mt-1 text-xs leading-relaxed text-white/55">
               识别完全在本地运行。推荐模型只需下载一次，不会上传你的语音。
@@ -540,7 +464,7 @@
           <button
             class="rounded-lg bg-kotone-cyan px-5 py-2 text-sm font-semibold text-kotone-deep transition hover:brightness-110 disabled:opacity-50"
             disabled={!primaryReady || downloadTargetId !== null}
-            onclick={() => (step = 3)}
+            onclick={enterHotkeyStep}
           >
             下一步
           </button>
@@ -551,10 +475,10 @@
         <div class="flex items-start gap-4">
           <img src={stickerCheering} alt="" class="h-11 w-11 shrink-0" />
           <div>
-            <p class="text-[11px] font-semibold tracking-wide text-kotone-cyan">第 3 步 / 4</p>
+            <p class="text-[11px] font-semibold tracking-wide text-kotone-cyan">第 3 步 / 3</p>
             <h2 class="mt-0.5 text-lg font-bold">设置说话方式与热键</h2>
             <p class="mt-1 text-xs leading-relaxed text-white/55">
-              选择最顺手的操作方式。最后一步会让你现场按一次，确认游戏中真的可用。
+              选择最顺手的操作方式，点「完成」进入主页后即可开始使用。
             </p>
           </div>
         </div>
@@ -576,6 +500,52 @@
           {/each}
         </div>
 
+        {#if checkingInputEnvironment}
+          <div
+            class="mt-4 rounded-xl bg-kotone-cyan/8 p-4 ring-1 ring-kotone-cyan/30"
+            data-testid="input-environment-checking"
+          >
+            <p class="text-sm font-semibold text-kotone-cyan">正在检测键盘输入环境…</p>
+            <p class="mt-1 text-[11px] leading-relaxed text-white/50">
+              正在验证低级键盘钩子与 Windows 模拟输入，无需按下任何按键。
+            </p>
+          </div>
+        {:else if inputEnvironment && !inputEnvironment.available}
+          <div
+            class="mt-4 rounded-xl bg-kotone-pink/10 p-4 ring-1 ring-kotone-pink/45"
+            data-testid="input-environment-blocked"
+          >
+            <p class="text-sm font-semibold text-kotone-pink">检测到键盘输入被拦截</p>
+            <p class="mt-1 text-xs leading-relaxed text-white/65">
+              Kotone 暂时无法可靠监听热键或发送文字。请将 Kotone 可执行文件加入
+              360、火绒等安全软件的信任区，然后重新检测。
+            </p>
+            {#if inputEnvironment.detail}
+              <p class="mt-2 break-all text-[10px] leading-relaxed text-white/35">
+                检测详情：{inputEnvironment.detail}
+              </p>
+            {/if}
+            <button
+              class="mt-3 rounded-lg bg-kotone-pink/18 px-3 py-1.5 text-xs font-semibold text-kotone-pink ring-1 ring-kotone-pink/35 hover:bg-kotone-pink/25"
+              onclick={() => void runInputEnvironmentCheck()}
+            >
+              已加入信任区，重新检测
+            </button>
+          </div>
+        {:else if inputEnvironment}
+          <div
+            class="mt-4 rounded-xl bg-kotone-cyan/8 p-3 ring-1 ring-kotone-cyan/25"
+            data-testid="input-environment-ready"
+          >
+            <p class="text-xs font-semibold text-kotone-cyan">✓ 键盘输入环境可用</p>
+            {#if !inputEnvironment.hookVerified}
+              <p class="mt-1 text-[10px] leading-relaxed text-white/40">
+                Windows 已接受模拟输入；低级钩子将在你实际录入按键时继续验证。
+              </p>
+            {/if}
+          </div>
+        {/if}
+
         <div class="kotone-card mt-4 flex items-center gap-3 p-4">
           <div class="min-w-0 flex-1">
             <p class="text-xs text-white/50">当前热键</p>
@@ -583,7 +553,7 @@
           </div>
           <button
             class="rounded-lg bg-white/10 px-3 py-2 text-xs font-semibold text-white/85 ring-1 ring-white/15 hover:bg-white/20 disabled:opacity-60"
-            disabled={capturing}
+            disabled={capturing || checkingInputEnvironment || inputEnvironment?.available === false}
             onclick={() => void startCapture()}
           >
             {capturing ? "请按下组合键…（Esc 取消）" : "重新录入"}
@@ -596,144 +566,17 @@
           </button>
           <button
             class="rounded-lg bg-kotone-cyan px-5 py-2 text-sm font-semibold text-kotone-deep transition hover:brightness-110 disabled:opacity-50"
-            disabled={capturing}
+            disabled={capturing || checkingInputEnvironment || inputEnvironment?.available === false}
             onclick={() => void saveInteractionAndContinue()}
           >
-            去测试
+            完成
           </button>
-        </div>
-      </div>
-    {:else}
-      <div class="relative p-7" data-testid="onboarding-test">
-        <div class="flex items-start gap-4">
-          <img src={testSucceeded ? stickerProud : stickerCheering} alt="" class="h-11 w-11 shrink-0" />
-          <div class="min-w-0 flex-1">
-            <p class="text-[11px] font-semibold tracking-wide text-kotone-cyan">第 4 步 / 4</p>
-            <h2 class="mt-0.5 text-lg font-bold">
-              {testSucceeded ? "测试通过，可以开玩！" : "启动并发送第一条消息"}
-            </h2>
-            <p class="mt-1 text-xs leading-relaxed text-white/55">
-              这一步会验证模型、麦克风、全局热键、{selectedProfile?.displayName ?? "当前"} Profile
-              和文字注入的完整链路。
-            </p>
-          </div>
-        </div>
-
-        <div class="mt-4 grid grid-cols-3 gap-2 text-[11px]">
-          <div class="rounded-lg bg-white/5 px-3 py-2 ring-1 ring-white/10">
-            <p class="text-white/45">Profile</p>
-            <p class="mt-0.5 truncate font-semibold">{selectedProfile?.displayName ?? selectedProfileId}</p>
-          </div>
-          <div class="rounded-lg bg-white/5 px-3 py-2 ring-1 ring-white/10">
-            <p class="text-white/45">识别模型</p>
-            <p class="mt-0.5 font-semibold text-kotone-cyan">✓ 已就绪</p>
-          </div>
-          <div class="rounded-lg bg-white/5 px-3 py-2 ring-1 ring-white/10">
-            <p class="text-white/45">全局热键</p>
-            <p class="mt-0.5 font-semibold {hotkeyReady ? 'text-kotone-cyan' : ''}">
-              {hotkeyReady ? `✓ ${currentKey} 已注册` : currentKey}
-            </p>
-          </div>
-        </div>
-
-        {#if !runtimeReady}
-          <div class="mt-4 rounded-xl bg-kotone-card/60 p-5 text-center ring-1 ring-white/10">
-            <p class="text-sm font-semibold">先启动琴音，加载模型并注册全局热键</p>
-            <button
-              class="mt-4 rounded-lg bg-kotone-pink px-5 py-2 text-sm font-bold text-white shadow-glow-pink transition hover:brightness-110 disabled:opacity-60"
-              disabled={starting || downloadTargetId !== null}
-              onclick={() => void startForTest()}
-            >
-              {starting ? "启动中…" : "▶ 启动琴音"}
-            </button>
-          </div>
-        {:else}
-          <div class="mt-4 rounded-xl bg-kotone-card/60 p-4 ring-1 ring-kotone-cyan/35">
-            <div class="flex items-start justify-between gap-4">
-              <div>
-                <p class="text-sm font-semibold text-kotone-cyan">训练聊天框已就绪</p>
-                <p class="mt-1 text-[11px] leading-relaxed text-white/55">{modeInstruction}</p>
-              </div>
-              <span class="shrink-0 rounded bg-kotone-cyan/15 px-2 py-1 text-[10px] font-semibold text-kotone-cyan">
-                运行中
-              </span>
-            </div>
-
-            <label class="mt-3 block">
-              <span class="sr-only">训练聊天输入框</span>
-              <input
-                bind:this={trainingInput}
-                bind:value={testInput}
-                data-testid="training-input"
-                class="w-full rounded-lg bg-kotone-deep/80 px-3 py-3 text-sm ring-1 ring-white/15 outline-none placeholder:text-white/35 focus:ring-2 focus:ring-kotone-cyan"
-                placeholder={testArmed ? "正在接收琴音发送的文字…" : "按热键开始说话，收音后会自动聚焦这里"}
-                autocomplete="off"
-                spellcheck="false"
-                onkeydown={handleTrainingKeydown}
-              />
-            </label>
-            <div class="mt-3 flex items-center justify-between gap-3">
-              <p class="text-[11px] text-white/45">
-                识别状态：{$appState.state === "idle" ? "等待热键" : $appState.state}
-                {#if $appState.partialText}
-                  · {$appState.partialText}
-                {/if}
-              </p>
-              <button
-                class="shrink-0 text-[11px] text-white/55 underline underline-offset-2 hover:text-white"
-                onclick={() => void runTextInjectionTest()}
-              >
-                只测试文字发送
-              </button>
-            </div>
-          </div>
-        {/if}
-
-        {#if testSucceeded}
-          <div
-            class="mt-4 rounded-xl bg-kotone-cyan/10 p-4 ring-1 ring-kotone-cyan/50"
-            data-testid="test-success"
-            role="status"
-          >
-            <p class="text-sm font-semibold text-kotone-cyan">✓ 完整发送测试通过</p>
-            <p class="mt-1 break-all text-sm text-white">“{testReceived}”</p>
-          </div>
-        {:else if testError}
-          <div class="mt-4 rounded-xl bg-kotone-pink/10 p-3 ring-1 ring-kotone-pink/45">
-            <p class="text-xs font-semibold text-kotone-pink">测试没有完成</p>
-            <p class="mt-1 break-all text-[11px] text-white/60">{testError}</p>
-            <p class="mt-1 text-[11px] text-white/45">修复后可以留在这里直接重试。</p>
-          </div>
-        {/if}
-
-        <div class="mt-6 flex items-center justify-between">
-          <button class="text-xs text-white/50 hover:text-white/80" onclick={() => (step = 3)}>
-            ← 上一步
-          </button>
-          <div class="flex items-center gap-3">
-            {#if !testSucceeded}
-              <button
-                class="text-xs text-white/50 underline-offset-2 hover:text-white/80 hover:underline"
-                onclick={() => void finish(true)}
-              >
-                跳过测试并完成
-              </button>
-            {/if}
-            <button
-              class="rounded-lg bg-kotone-cyan px-5 py-2 text-sm font-semibold text-kotone-deep transition hover:brightness-110 disabled:opacity-40"
-              data-testid="finish-onboarding"
-              disabled={!testSucceeded || finishing}
-              onclick={() => void finish(false)}
-            >
-              {finishing ? "保存中…" : "测试成功，开始使用"}
-            </button>
-          </div>
         </div>
       </div>
     {/if}
 
     <div class="relative flex justify-center gap-1.5 pb-4">
-      {#each [0, 1, 2, 3, 4] as i}
+      {#each [0, 1, 2, 3] as i}
         <span
           class="h-1.5 rounded-full transition-all {i === step
             ? 'w-5 bg-kotone-cyan shadow-glow-cyan'

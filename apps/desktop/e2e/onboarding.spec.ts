@@ -17,30 +17,38 @@ test("forced onboarding completes the full guided setup and can be reopened", as
   await page.getByRole("button", { name: "下一步", exact: true }).click();
 
   await expect(page.getByTestId("onboarding-hotkey")).toBeVisible();
+  // 到达第三步即主动检测，不依赖用户先点击「重新录入」。
+  await expect(page.getByTestId("input-environment-ready")).toBeVisible();
   await page.getByTestId("mode-push-to-talk").click();
   await page.getByRole("button", { name: "重新录入", exact: true }).click();
   await page.keyboard.press("F9");
   await expect(page.getByTestId("onboarding-hotkey").getByText("F9", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "去测试", exact: true }).click();
-
-  await expect(page.getByTestId("onboarding-test")).toBeVisible();
-  await page.getByRole("button", { name: "▶ 启动琴音", exact: true }).click();
-  await expect(page.getByTestId("training-input")).not.toBeFocused();
-  await expect(
-    page.getByTestId("onboarding-test").getByText("✓ F9 已注册", { exact: true }),
-  ).toBeVisible();
-
-  await page.getByRole("button", { name: "只测试文字发送", exact: true }).click();
-  await expect(page.getByTestId("test-success")).toContainText("琴音测试发送");
-
-  const finish = page.getByTestId("finish-onboarding");
-  await expect(finish).toBeEnabled();
-  await finish.click();
+  // 0.1.6 起引导为 3 步：第三步「完成」保存配置并直接进入主页（发送测试暂缓）
+  await page.getByRole("button", { name: "完成", exact: true }).click();
   await expect(onboarding).toBeHidden();
 
   await page.getByRole("button", { name: "高级", exact: true }).click();
   await page.getByRole("button", { name: "重新运行向导", exact: true }).click();
   await expect(onboarding).toBeVisible();
+});
+
+test("the hotkey step proactively blocks setup when the input environment is rejected", async ({
+  page,
+}) => {
+  await page.goto("/#/settings?onboarding=always&mockInputEnvironment=blocked");
+
+  await page.getByRole("button", { name: "开始设置", exact: true }).click();
+  await page.getByRole("button", { name: "下一步", exact: true }).click();
+  await page.getByRole("button", { name: "下载推荐模型", exact: true }).click();
+  await expect(page.getByText("✓ 已就绪", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "下一步", exact: true }).click();
+
+  await expect(page.getByTestId("input-environment-blocked")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "已加入信任区，重新检测", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "重新录入", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "完成", exact: true })).toBeDisabled();
 });
 
 test("auto and never modes respect the persisted completed state", async ({ page }) => {
