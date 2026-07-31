@@ -1,0 +1,64 @@
+---
+import { t as i18n } from "../i18n";
+import cutoutImg from "../assets/kotone-cutout.png";
+import Icon from "./Icon.astro";
+
+const t = i18n(Astro.url.pathname);
+const modes = t.modes;
+const iconNames = ["radio", "mic", "zap", "music"];
+---
+
+<section class="section workflow" id="workflow">
+  <div class="container">
+    <div class="section-head" data-reveal>
+      <span class="kicker">{modes.kicker}</span>
+      <h2>{modes.title}</h2>
+      <p class="section-sub">{modes.sub}</p>
+    </div>
+
+    <div class="modes__grid">
+      {modes.items.map((mode, i) => {
+        const featured = Boolean(mode.badge);
+        return (
+          <article
+            class={`mode-card${featured ? " mode-card--solo" : ""}`}
+            data-reveal
+            style={`--rd:${i * 80}ms`}
+          >
+            {featured && <span class="mode-card__badge">{mode.badge}</span>}
+            <div class="mode-card__icon"><Icon name={iconNames[i]} /></div>
+            <span class="mode-card__tag">{mode.tag}</span>
+            <h3>{mode.name}</h3>
+            <p class="mode-card__desc">{mode.desc}</p>
+            <p class="mode-card__detail">{mode.detail}</p>
+          </article>
+        );
+      })}
+    </div>
+
+    <div class="signal" data-reveal style="--rd:120ms">
+      <div class="signal__body">
+        <div>
+          <div class="signal__title">{modes.signalTitle}</div>
+          <div class="signal__chain" aria-hidden="false">
+            {modes.signal.map((node, i) => (
+              <>
+                <span
+                  class={`signal__node${i === modes.signal.length - 1 ? " signal__node--send" : ""}`}
+                  style={`--i:${i}`}
+                >
+                  {node}
+                </span>
+                {i < modes.signal.length - 1 && <span class="signal__arrow">➜</span>}
+              </>
+            ))}
+          </div>
+          <p class="signal__note">{modes.signalNote}</p>
+        </div>
+        <div class="signal__cutout">
+          <img src={cutoutImg.src} alt="" loading="lazy" />
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

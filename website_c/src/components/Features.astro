@@ -1,0 +1,28 @@
+---
+import { t as i18n } from "../i18n";
+import Icon from "./Icon.astro";
+
+const t = i18n(Astro.url.pathname);
+const features = t.features;
+const iconNames = ["wave", "switch", "bubble", "overlay", "replay", "shield"];
+---
+
+<section class="section features" id="features">
+  <div class="container">
+    <div class="section-head" data-reveal>
+      <span class="kicker">{features.kicker}</span>
+      <h2>{features.title}</h2>
+      <p class="section-sub">{features.sub}</p>
+    </div>
+
+    <div class="features__grid">
+      {features.items.map((item, i) => (
+        <article class="feature-card" data-reveal style={`--rd:${i * 70}ms`}>
+          <div class="feature-card__icon"><Icon name={iconNames[i]} /></div>
+          <h3>{item.title}</h3>
+          <p>{item.text}</p>
+        </article>
+      ))}
+    </div>
+  </div>
+</section>

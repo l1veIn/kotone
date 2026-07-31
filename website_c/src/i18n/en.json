@@ -1,0 +1,144 @@
+{
+  "meta": {
+    "title": "Kotone · Voice-to-text for gamers",
+    "description": "A Windows desktop voice-input tool built for gamers: hold a hotkey, speak, and your words are transcribed on-device in real time — release to send straight into the game chat. 100% local. Your audio never leaves your PC."
+  },
+  "nav": {
+    "features": "Features",
+    "how": "Get started",
+    "gallery": "Gallery",
+    "privacy": "Privacy",
+    "download": "Download",
+    "lang": "中文"
+  },
+  "hero": {
+    "eyebrow": "KOTONE · THE RELAY STATION",
+    "line1": "Speak. ",
+    "line2": "It's sent.",
+    "loop": "🎤 Speak → ⚡ Transcribe → 🎮 Send",
+    "sub": "Your fingers never leave the keyboard. Say it — don't wait a second.",
+    "ctaDownload": "Download Kotone",
+    "ctaFeatures": "See features",
+    "platform": "Windows 10 / 11 · x64",
+    "stats": [
+      { "value": "100% local", "label": "On-device · 0 uploads" },
+      { "value": "Live streaming", "label": "Words as you speak" },
+      { "value": "v0.1.6", "label": "Released · auto-updates" }
+    ]
+  },
+  "why": {
+    "kicker": "Why Kotone",
+    "title": "Mid-teamfight, your teammate pings you to call out. That's the moment.",
+    "beforeTitle": "Before",
+    "before": "Stop playing → open chat → type → hit enter. You look up — your champion has been standing still for three seconds.",
+    "afterTitle": "After",
+    "after": "Hold a hotkey, say “jungler bot side”. Release, and the words are already sent. Your fingers never left the keyboard.",
+    "beforeState": "+3s · standing still, getting hit",
+    "afterState": "✅ Received, sent ✨",
+    "tagline": "Kotone is communication that never interrupts — input inside the flow of the game, not outside of it."
+  },
+  "features": {
+    "kicker": "Features",
+    "title": "Every tool on the streaming desk, sharpened",
+    "sub": "Six pieces, all crafted around one rule: keep your hands on the keyboard.",
+    "items": [
+      { "title": "Streaming transcription", "text": "Default X-ASR bilingual model with punctuation, words appear as you speak; VAD voice-activity detection ships in the app and is ready at launch." },
+      { "title": "Global hotkeys", "text": "Hold-to-talk or tap-to-toggle, bind any key; press again while the hint is showing to start the next line instantly." },
+      { "title": "Gaming glossary", "text": "100 League of Legends terms built in; new entries merge on update, your customizations and deletions never get lost." },
+      { "title": "Esports overlay", "text": "Card or capsule styles, fully draggable with saved position, click-through to the game; streaming engines render text live." },
+      { "title": "History & replay", "text": "Every recognized line can replay its original audio with a waveform; empty transcriptions never send and leave no trace." },
+      { "title": "Local-first privacy", "text": "All models run on your machine, nothing is uploaded; tray resident, auto-update, and one-click admin restart." }
+    ]
+  },
+  "modes": {
+    "kicker": "Interaction modes",
+    "title": "Four modes for every kind of teamfight",
+    "sub": "From hold-to-talk to one-shot to never-stopping — one of these is your rhythm.",
+    "items": [
+      {
+        "name": "Walkie-talkie",
+        "tag": "HOLD TO TALK",
+        "desc": "Hold to talk, release to send.",
+        "detail": "As direct as a radio: hold the hotkey, speak, release — it sends. No hesitation."
+      },
+      {
+        "name": "Voice recorder",
+        "tag": "DICTATION",
+        "desc": "Tap to start, tap to stop.",
+        "detail": "Tap to start recording, tap again when you're done — the whole take sends in one piece."
+      },
+      {
+        "name": "One-shot",
+        "tag": "ONE-SHOT",
+        "desc": "Auto-stops and auto-sends when you're done.",
+        "detail": "A natural pause transcribes and sends on its own — no hotkey needed."
+      },
+      {
+        "name": "Solo mode",
+        "tag": "SOLO · CONTINUOUS",
+        "desc": "Continuous listening — one phrase, one send, tap again to stop.",
+        "detail": "Tap to start continuous listening. VAD marks each sentence, sends it instantly, never stops. Casting, reading chat, calling shots — one flow. Tap again to stop.",
+        "badge": "The gem"
+      }
+    ],
+    "signalTitle": "No matter the mode, the signal chain underneath is always the same",
+    "signal": ["Hold hotkey", "Speak", "Transcribe on-device", "Release", "Sent"],
+    "signalNote": "Everything happens locally — your audio and text never leave your PC."
+  },
+  "proof": {
+    "kicker": "Gallery",
+    "title": "What you see is what you use · real app screenshots",
+    "items": [
+      { "img": "screenshot-welcome.webp", "label": "🚀 First-run wizard" },
+      { "img": "screenshot-voice.webp", "label": "🎤 General settings" },
+      { "img": "screenshot-config.webp", "label": "⚙️ Game adaptation" },
+      { "img": "screenshot-history.webp", "label": "🕘 History & replay" }
+    ],
+    "note": "Windows 10 / 11 · Kotone v0.1.6"
+  },
+  "privacy": {
+    "kicker": "Privacy",
+    "title": "Your audio never leaves your PC.",
+    "items": [
+      { "title": "Fully on-device", "text": "All models run locally. No network required, no cloud transcription." },
+      { "title": "Audio, then gone", "text": "Audio exists only briefly while the hotkey is held, for live transcription. Not stored." },
+      { "title": "Open & auditable", "text": "Models, glossary, and privacy policy are all public and inspectable." }
+    ],
+    "links": ["Privacy policy PRIVACY.md", "Third-party models THIRD_PARTY_NOTICES.md"]
+  },
+  "cta": {
+    "title": "Say it — send it, in one second.",
+    "sub": "Free · Open source · v0.1.6 released · Windows 10 / 11 x64",
+    "button": "Download Kotone",
+    "release": "See release notes",
+    "github": "Browse GitHub",
+    "bubble": "Received, sent ✨"
+  },
+  "footer": {
+    "tagline": "Say it. Don't wait a second.",
+    "cols": [
+      {
+        "title": "Product",
+        "links": [
+          { "label": "Features", "href": "#features" },
+          { "label": "Get started", "href": "#workflow" },
+          { "label": "Gallery", "href": "#proof" },
+          { "label": "Privacy", "href": "#privacy" }
+        ]
+      },
+      {
+        "title": "Resources",
+        "links": [
+          { "label": "GitHub repo", "href": "https://github.com/l1veIn/kotone" },
+          { "label": "Releases", "href": "https://github.com/l1veIn/kotone/releases" },
+          { "label": "Changelog", "href": "https://github.com/l1veIn/kotone/blob/main/CHANGELOG.md" },
+          { "label": "Privacy policy", "href": "https://github.com/l1veIn/kotone/blob/main/PRIVACY.md" },
+          { "label": "Third-party notices", "href": "https://github.com/l1veIn/kotone/blob/main/THIRD_PARTY_NOTICES.md" }
+        ]
+      }
+    ],
+    "credits": "Local speech engines & models: sherpa-onnx · X-ASR · Silero VAD · upstream: FunASR / SenseVoice",
+    "brand": "Character & visuals by the RepoChan persona pipeline",
+    "copyright": "© 2026 Kotone · l1veIn"
+  }
+}

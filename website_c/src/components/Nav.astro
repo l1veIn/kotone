@@ -1,0 +1,82 @@
+---
+import { t as i18n, resolveLocale } from "../i18n";
+import avatar from "../assets/kotone-avatar.webp";
+
+const locale = resolveLocale(Astro.url.pathname);
+const isEn = locale === "en";
+const t = i18n(Astro.url.pathname);
+const nav = t.nav;
+
+const links = [
+  { key: "features", href: "#features" },
+  { key: "how", href: "#workflow" },
+  { key: "gallery", href: "#proof" },
+  { key: "privacy", href: "#privacy" },
+];
+const releaseUrl = "https://github.com/l1veIn/kotone/releases";
+---
+
+<script>
+  const nav = document.getElementById("site-nav");
+  const toggle = document.getElementById("nav-toggle");
+  const mobile = document.getElementById("nav-mobile");
+  const closeBtn = document.getElementById("nav-mobile-close");
+  const setScrolled = () => {
+    nav?.classList.toggle("nav--scrolled", window.scrollY > 12);
+  };
+  window.addEventListener("scroll", setScrolled, { passive: true });
+  setScrolled();
+
+  const openMenu = () => mobile?.classList.add("is-open");
+  const closeMenu = () => mobile?.classList.remove("is-open");
+  toggle?.addEventListener("click", openMenu);
+  closeBtn?.addEventListener("click", closeMenu);
+  mobile?.querySelectorAll("a").forEach((a) => a.addEventListener("click", closeMenu));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeMenu();
+  });
+</script>
+
+<header class="nav" id="site-nav">
+  <div class="container nav__inner">
+    <a class="nav__logo" href="/" aria-label="Kotone">
+      <img class="nav__avatar" src={avatar.src} alt="" width="30" height="30" />
+      <span class="k-tag">KOTONE</span><span class="k-ja">琴音</span>
+    </a>
+
+    <nav aria-label="main">
+      <ul class="nav__links">
+        {links.map((l) => (
+          <li>
+            <a class="nav__link" href={l.href}>{nav[l.key]}</a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+
+    <div class="nav__actions">
+      <a class="lang-switch" href={isEn ? "/" : "/en/"}>{nav.lang}</a>
+      <a class="btn btn--primary nav__cta" href={releaseUrl} target="_blank" rel="noopener">
+        {nav.download}
+      </a>
+      <button id="nav-toggle" class="nav__toggle" aria-label="menu" aria-expanded="false">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M4 7h16M4 12h16M4 17h16" />
+        </svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="nav__mobile" id="nav-mobile">
+  <button id="nav-mobile-close" class="nav__mobile-close" aria-label="close">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M6 6l12 12M18 6L6 18" />
+    </svg>
+  </button>
+  {links.map((l) => (
+    <a class="nav__link" href={l.href}>{nav[l.key]}</a>
+  ))}
+  <a class="btn btn--primary" href={releaseUrl} target="_blank" rel="noopener">{nav.download}</a>
+  <a class="lang-switch" href={isEn ? "/" : "/en/"}>{nav.lang}</a>
+</div>

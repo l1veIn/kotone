@@ -1,0 +1,40 @@
+---
+import { t as i18n } from "../i18n";
+import footerSig from "../assets/footer-sig.webp";
+const t = i18n(Astro.url.pathname);
+const footer = t.footer;
+---
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer__inner">
+      <div class="footer__brand">
+        <a class="nav__logo" href="/" aria-label="Kotone">
+          <span class="k-tag">KOTONE</span><span class="k-ja">琴音</span>
+        </a>
+        <p class="footer__tagline">{footer.tagline}</p>
+        <img class="footer__sig" src={footerSig.src} alt="琴音签名贴纸" width="52" loading="lazy" data-reveal />
+      </div>
+
+      {footer.cols.map((col) => (
+        <nav class="footer__col" aria-label={col.title}>
+          <h4>{col.title}</h4>
+          <ul>
+            {col.links.map((link) => {
+              const external = link.href.startsWith("http");
+              return (
+                <li><a href={link.href} {...(external ? { target: "_blank", rel: "noopener" } : {})}>{link.label}</a></li>
+              );
+            })}
+          </ul>
+        </nav>
+      ))}
+    </div>
+
+    <div class="footer__bottom">
+      <span>{footer.credits}</span>
+      <span>{footer.brand}</span>
+      <span>{footer.copyright}</span>
+    </div>
+  </div>
+</footer>

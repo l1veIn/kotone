@@ -1,0 +1,29 @@
+---
+import { t as i18n } from "../i18n";
+import ctaBg from "../assets/cta-bg.webp";
+import ctaCutout from "../assets/cta-cutout.png";
+
+const t = i18n(Astro.url.pathname);
+const cta = t.cta;
+const releaseUrl = "https://github.com/l1veIn/kotone/releases";
+const repoUrl = "https://github.com/l1veIn/kotone";
+---
+
+<section class="cta">
+  <div class="cta__bg" style={`background-image:url("${ctaBg.src}")`} aria-hidden="true"></div>
+  <div class="container">
+    <div class="cta__cutout" data-reveal>
+      <span class="cta__bubble" aria-hidden="true">{cta.bubble}</span>
+      <img src={ctaCutout.src} alt="" width="300" loading="lazy" />
+    </div>
+    <h2 data-reveal style="--rd:100ms">{cta.title}</h2>
+    <p class="cta__sub" data-reveal style="--rd:180ms">{cta.sub}</p>
+    <div class="cta__actions" data-reveal style="--rd:260ms">
+      <a class="btn btn--primary btn--lg" href={releaseUrl} target="_blank" rel="noopener">{cta.button}</a>
+      <a class="btn btn--ghost btn--lg" href={repoUrl} target="_blank" rel="noopener">{cta.github}</a>
+    </div>
+    <div class="cta__links" data-reveal style="--rd:340ms">
+      <a href={releaseUrl} target="_blank" rel="noopener">{cta.release}</a>
+    </div>
+  </div>
+</section>

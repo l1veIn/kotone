@@ -1,0 +1,50 @@
+---
+import { t as i18n } from "../i18n";
+import reactPain from "../assets/react-pain.png";
+import reactWin from "../assets/react-win.png";
+const t = i18n(Astro.url.pathname);
+const why = t.why;
+const painSrc = reactPain ? reactPain.src : "";
+const winSrc = reactWin ? reactWin.src : "";
+---
+
+<section class="section why" id="why">
+  <div class="container">
+    <div class="section-head" data-reveal>
+      <span class="kicker">{why.kicker}</span>
+      <h2>{why.title}</h2>
+    </div>
+
+    <div class="why__grid">
+      <article class="why-card why-card--before" data-reveal>
+        <div class="why-card__body">
+          <span class="why-card__tag">BEFORE</span>
+          <h3>{why.beforeTitle}</h3>
+          <p>{why.before}</p>
+          <div class="why-card__state">{why.beforeState}</div>
+        </div>
+        {painSrc && (
+          <div class="why-card__cut" aria-hidden="true">
+            <img src={painSrc} alt="" width="170" loading="lazy" />
+          </div>
+        )}
+      </article>
+
+      <article class="why-card why-card--after" data-reveal style="--rd:120ms">
+        <div class="why-card__body">
+          <span class="why-card__tag">AFTER</span>
+          <h3>{why.afterTitle}</h3>
+          <p>{why.after}</p>
+          <div class="why-card__state">{why.afterState}</div>
+        </div>
+        {winSrc && (
+          <div class="why-card__cut" aria-hidden="true">
+            <img src={winSrc} alt="" width="170" loading="lazy" />
+          </div>
+        )}
+      </article>
+    </div>
+
+    <p class="why__tagline" data-reveal>{why.tagline}</p>
+  </div>
+</section>

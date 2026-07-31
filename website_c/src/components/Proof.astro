@@ -1,0 +1,83 @@
+---
+import { t as i18n } from "../i18n";
+import shotWelcome from "../assets/screenshot-welcome.webp";
+import shotVoice from "../assets/screenshot-voice.webp";
+import shotConfig from "../assets/screenshot-config.webp";
+import shotHistory from "../assets/screenshot-history.webp";
+
+const t = i18n(Astro.url.pathname);
+const proof = t.proof;
+const shots = {
+  "screenshot-welcome.webp": shotWelcome,
+  "screenshot-voice.webp": shotVoice,
+  "screenshot-config.webp": shotConfig,
+  "screenshot-history.webp": shotHistory,
+};
+const ids = proof.items.map((it) => it.img);
+---
+
+<script>
+  const overlay = document.getElementById("lightbox");
+  const img = document.getElementById("lightbox-img");
+  const closeBtn = document.getElementById("lightbox-close");
+  let lastFocus = null;
+
+  document.querySelectorAll(".shot-card").forEach((card) => {
+    card.addEventListener("click", () => {
+      const src = card.getAttribute("data-full");
+      const alt = card.getAttribute("data-label");
+      lastFocus = card;
+      img.setAttribute("src", src);
+      img.setAttribute("alt", alt);
+      overlay.classList.add("is-open");
+      closeBtn.focus();
+    });
+  });
+  const close = () => {
+    overlay.classList.remove("is-open");
+    lastFocus?.focus();
+  };
+  closeBtn.addEventListener("click", close);
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && overlay.classList.contains("is-open")) close();
+  });
+</script>
+
+<section class="section proof" id="proof">
+  <div class="container">
+    <div class="section-head" data-reveal>
+      <span class="kicker">{proof.kicker}</span>
+      <h2>{proof.title}</h2>
+    </div>
+
+    <div class="proof__grid">
+      {proof.items.map((item, i) => {
+        const src = shots[item.img];
+        return (
+          <figure
+            class="shot-card"
+            data-full={src.src}
+            data-label={item.label}
+            tabindex="0"
+            role="button"
+            data-reveal
+            style={`--rd:${(i % 2) * 90}ms`}
+          >
+            <div class="shot-card__img"><img src={src.src} alt={item.label} loading="lazy" /></div>
+            <figcaption class="shot-card__cap">{item.label}</figcaption>
+          </figure>
+        );
+      })}
+    </div>
+
+    <p class="proof__note">{proof.note}</p>
+  </div>
+</section>
+
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="preview">
+  <button id="lightbox-close" class="lightbox__close" aria-label="close">✕</button>
+  <img id="lightbox-img" src="" alt="" />
+</div>

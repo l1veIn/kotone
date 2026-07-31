@@ -1,0 +1,31 @@
+---
+import { t as i18n } from "../i18n";
+const t = i18n(Astro.url.pathname);
+const privacy = t.privacy;
+const hrefs = [
+  "https://github.com/l1veIn/kotone/blob/main/PRIVACY.md",
+  "https://github.com/l1veIn/kotone/blob/main/THIRD_PARTY_NOTICES.md",
+];
+---
+
+<section class="section privacy" id="privacy">
+  <div class="container">
+    <span class="kicker">{privacy.kicker}</span>
+    <h2 class="grad">{privacy.title}</h2>
+
+    <div class="privacy__grid">
+      {privacy.items.map((item, i) => (
+        <article class="privacy-item" data-reveal style={`--rd:${i * 90}ms`}>
+          <h3>{item.title}</h3>
+          <p>{item.text}</p>
+        </article>
+      ))}
+    </div>
+
+    <div class="privacy__links" data-reveal>
+      {privacy.links.map((label, i) => (
+        <a href={hrefs[i]} target="_blank" rel="noopener">{label}</a>
+      ))}
+    </div>
+  </div>
+</section>

@@ -1,0 +1,43 @@
+---
+interface Props {
+  name:
+    | "wave"
+    | "switch"
+    | "bubble"
+    | "overlay"
+    | "replay"
+    | "shield"
+    | "radio"
+    | "mic"
+    | "zap"
+    | "music";
+}
+const { name } = Astro.props;
+
+const inner: Record<string, string> = {
+  wave: `<path d="M3 12h1.6M6.8 7v10M10.4 3.5v17M14 7.5v9M17.6 5.5v13M21 12h0" />`,
+  switch: `<path d="M12 2.5v6.5M12 15v6.5M2.5 12H9M15 12h6.5" /><rect x="9.4" y="9.4" width="5.2" height="5.2" rx="1" />`,
+  bubble: `<path d="M20.5 11.6a8 8 0 0 1-11.6 7.1L4 20l1.3-4.9a8 8 0 1 1 15.2-3.5Z" /><path d="M8.5 10.5h7M8.5 13.5h4.5" />`,
+  overlay: `<rect x="3" y="4.5" width="18" height="15" rx="2.5" /><path d="M3 9.5h18" /><rect x="14" y="12.5" width="6" height="4.5" rx="1" />`,
+  replay: `<circle cx="12" cy="12" r="9" /><path d="M10.2 8.2 15 12l-4.8 3.8Z" fill="currentColor" stroke="none" />`,
+  shield: `<path d="M12 3 19 5.8V11c0 4.6-3 7.8-7 9.4-4-1.6-7-4.8-7-9.4V5.8Z" /><path d="M8.8 12 11 14.2l4.2-4.4" />`,
+  radio: `<rect x="5" y="6.5" width="12" height="11" rx="2" /><path d="M9 6.5V4h6v2.5" /><path d="M8.5 11h1.6M8.5 14h1.6M12 11h1.6M12 14h1.6M16.6 10.5h2.2M16.6 13.5h2.2" />`,
+  mic: `<rect x="9" y="2.5" width="6" height="11" rx="3" /><path d="M5.5 11a6.5 6.5 0 0 0 13 0" /><path d="M12 17.5V20M8.5 20h7" />`,
+  zap: `<path d="M13 2.5 4.5 13.5H11l-1.2 8L18.5 10.5H12z" />`,
+  music: `<path d="M9 18V5l10-2v13" /><circle cx="6.5" cy="18" r="2.5" /><circle cx="16.5" cy="16" r="2.5" />`,
+};
+---
+
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="1.8"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  aria-hidden="true"
+  set:html={inner[name] ?? ""}
+></svg>

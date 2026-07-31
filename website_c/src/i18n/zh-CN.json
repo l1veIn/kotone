@@ -1,0 +1,144 @@
+{
+  "meta": {
+    "title": "Kotone 琴音 · 游戏玩家的语音输入中继站",
+    "description": "专为游戏玩家打造的 Windows 桌面语音输入工具：按住热键说话，语音在本机实时流式转成文字，松开热键一键送进游戏聊天框。识别全程本地完成，录音不出你的电脑。"
+  },
+  "nav": {
+    "features": "功能",
+    "how": "上手",
+    "gallery": "界面",
+    "privacy": "隐私",
+    "download": "下载",
+    "lang": "EN"
+  },
+  "hero": {
+    "eyebrow": "KOTONE · 语音输入中继站",
+    "line1": "说出口，",
+    "line2": "就发送。",
+    "loop": "🎤 说话 → ⚡ 成字 → 🎮 发送",
+    "sub": "手指不离开键盘。想说的话，一秒都别等。",
+    "ctaDownload": "下载 Kotone",
+    "ctaFeatures": "查看功能",
+    "platform": "Windows 10 / 11 · x64",
+    "stats": [
+      { "value": "100% 本地", "label": "识别不出本机 · 0 上传" },
+      { "value": "实时流式", "label": "边说边出字" },
+      { "value": "v0.1.6", "label": "已发布 · 自动更新" }
+    ]
+  },
+  "why": {
+    "kicker": "为什么需要 Kotone",
+    "title": "打团打到一半，队友 ping 你报点。",
+    "beforeTitle": "以前的你",
+    "before": "停下操作 → 打开聊天框 → 打字 → 回车。抬起头，你的角色已经站在原地三秒了。",
+    "afterTitle": "现在的你",
+    "after": "按住热键，说一句「打野在下路」。松开热键，文字已经发送。你的手指，从头到尾没离开过键盘。",
+    "beforeState": "+3s · 站在原地挨打",
+    "afterState": "✅ 收到，已发送 ✨",
+    "tagline": "Kotone 是「不打断」的沟通方式——在游戏流体验之内完成输入，而不是跳出游戏之外。"
+  },
+  "features": {
+    "kicker": "功能速览",
+    "title": "直播间里的每一件趁手工具",
+    "sub": "六件套，全部围绕「手不离开键盘」打磨。",
+    "items": [
+      { "title": "流式语音转写", "text": "默认 X-ASR 中英标点模型，边说边出字；VAD 判停组件打包进应用，随启动自动就绪。" },
+      { "title": "全局热键", "text": "按住说话 / 点按切换两种模式，任意键自定义；提示驻留期内再按热键，直接开始下一句。" },
+      { "title": "游戏术语热词", "text": "内置 100 个英雄联盟术语热词；版本新词条自动并入，你的自定义与删除永不丢失。" },
+      { "title": "电竞悬浮窗", "text": "卡片 / 胶囊两种样式，整面可拖动并记忆位置，鼠标点击穿透；流式引擎实时出字。" },
+      { "title": "历史与回放", "text": "每条识别记录可回放原始音频，带声波动画；空转录不误发送、不留痕。" },
+      { "title": "本地优先 · 隐私", "text": "模型全部本机运行，不上传任何录音；托盘常驻、自动更新、管理员权限一键重启。" }
+    ]
+  },
+  "modes": {
+    "kicker": "交互模式",
+    "title": "四种模式，适配每种开黑节奏",
+    "sub": "从按住就说，到一句一发，再到完全不停——总有一种，是你的节奏。",
+    "items": [
+      {
+        "name": "对讲机",
+        "tag": "HOLD TO TALK",
+        "desc": "按住说话，松开发送。",
+        "detail": "像对讲机一样干脆：按住热键开口，松开即发送，一句都不含糊。"
+      },
+      {
+        "name": "录音笔",
+        "tag": "DICTATION",
+        "desc": "点按开始，再点停止。",
+        "detail": "点一下开始收音，说完再点一下停止，整段一次性发出去。"
+      },
+      {
+        "name": "说一句就走",
+        "tag": "ONE-SHOT",
+        "desc": "说完自动停、自动发。",
+        "detail": "停顿即自动转写发送，全程不用碰热键。"
+      },
+      {
+        "name": "独奏模式",
+        "tag": "SOLO · CONTINUOUS",
+        "desc": "持续收音，说一句发一句，再点停止。",
+        "detail": "点按开始持续收音，VAD 每判停一句 → 直发 → 不停机；连麦解说、念弹幕、指挥复盘一气呵成，想停再点一下。",
+        "badge": "精髓"
+      }
+    ],
+    "signalTitle": "无论哪种模式，底层的信号链路始终如一",
+    "signal": ["按住热键", "开口说话", "本机实时转字", "松开热键", "一键发送"],
+    "signalNote": "全程本机处理，录音与文本都不离开你的电脑。"
+  },
+  "proof": {
+    "kicker": "界面",
+    "title": "所见即所用 · 真实应用截图",
+    "items": [
+      { "img": "screenshot-welcome.webp", "label": "🚀 首次启动向导" },
+      { "img": "screenshot-voice.webp", "label": "🎤 通用设置" },
+      { "img": "screenshot-config.webp", "label": "⚙️ 游戏适配" },
+      { "img": "screenshot-history.webp", "label": "🕘 历史记录与回放" }
+    ],
+    "note": "Windows 10 / 11 · Kotone v0.1.6"
+  },
+  "privacy": {
+    "kicker": "隐私承诺",
+    "title": "录音不出你的电脑。",
+    "items": [
+      { "title": "全程本机识别", "text": "模型全部本地运行，无需联网，也没有云端转录。" },
+      { "title": "音频随说随弃", "text": "只在按住热键时短暂存在，用于实时转写，不留存。" },
+      { "title": "透明可审计", "text": "模型、术语表、隐私政策全部公开，随时可查。" }
+    ],
+    "links": ["隐私政策 PRIVACY.md", "第三方模型 THIRD_PARTY_NOTICES.md"]
+  },
+  "cta": {
+    "title": "现在就把想说的话，一秒发出去。",
+    "sub": "免费 · 开源 · 已发布 v0.1.6 · 支持 Windows 10 / 11 x64",
+    "button": "下载 Kotone",
+    "release": "查看 Release 说明",
+    "github": "到 GitHub 逛逛",
+    "bubble": "收到，已发送 ✨"
+  },
+  "footer": {
+    "tagline": "想说的话，一秒都别等",
+    "cols": [
+      {
+        "title": "产品",
+        "links": [
+          { "label": "功能", "href": "#features" },
+          { "label": "上手", "href": "#workflow" },
+          { "label": "界面", "href": "#proof" },
+          { "label": "隐私", "href": "#privacy" }
+        ]
+      },
+      {
+        "title": "资源",
+        "links": [
+          { "label": "GitHub 仓库", "href": "https://github.com/l1veIn/kotone" },
+          { "label": "Releases", "href": "https://github.com/l1veIn/kotone/releases" },
+          { "label": "更新日志", "href": "https://github.com/l1veIn/kotone/blob/main/CHANGELOG.md" },
+          { "label": "隐私政策", "href": "https://github.com/l1veIn/kotone/blob/main/PRIVACY.md" },
+          { "label": "第三方声明", "href": "https://github.com/l1veIn/kotone/blob/main/THIRD_PARTY_NOTICES.md" }
+        ]
+      }
+    ],
+    "credits": "本地语音识别引擎与模型：sherpa-onnx · X-ASR · Silero VAD；多语引擎上游：FunASR / SenseVoice",
+    "brand": "角色与视觉由 RepoChan 人设流水线产出",
+    "copyright": "© 2026 Kotone · l1veIn"
+  }
+}

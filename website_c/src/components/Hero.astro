@@ -1,0 +1,124 @@
+---
+import { t as i18n } from "../i18n";
+import heroImg from "../assets/hero.webp";
+
+const t = i18n(Astro.url.pathname);
+const hero = t.hero;
+const releaseUrl = "https://github.com/l1veIn/kotone/releases";
+const loop = hero.loop.split("→");
+const bgUrl = heroImg.src;
+---
+
+<script>
+  // CRT 故障爆发：随机间隔触发一次短暂的屏幕干扰
+  const heroEl = document.querySelector(".hero");
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // 开机动画：屏幕像老电视一样点亮（一次性）
+  if (!reduce && heroEl) {
+    heroEl.classList.add("is-poweron");
+    window.setTimeout(() => heroEl.classList.remove("is-poweron"), 3300);
+  }
+
+  const fireGlitch = () => {
+    if (!heroEl || reduce) return;
+    heroEl.classList.add("is-glitching");
+    const burst = 320 + Math.random() * 280; // 320–600ms
+    window.setTimeout(() => heroEl.classList.remove("is-glitching"), burst);
+    // 爆发期间可能再来 1 次小抖动
+    if (Math.random() > 0.5) {
+      window.setTimeout(() => {
+        if (heroEl.classList.contains("is-glitching")) {
+          heroEl.classList.add("is-glitching-2");
+          window.setTimeout(() => heroEl.classList.remove("is-glitching-2"), 120);
+        }
+      }, 90);
+    }
+  };
+
+  const schedule = () => {
+    const wait = 7000 + Math.random() * 7000; // 7–14s
+    window.setTimeout(() => {
+      fireGlitch();
+      schedule();
+    }, wait);
+  };
+  schedule();
+
+  // CRT 故障线：随机间隔、随机方向（上↔下），快速扫过整个 Hero
+  const bars = Array.from(document.querySelectorAll(".hero__scanbar"));
+  const fireScan = () => {
+    if (!bars.length || reduce) return;
+    // 随机：单条或两条一起
+    const picks = Math.random() > 0.45 ? bars : [bars[Math.floor(Math.random() * bars.length)]];
+    picks.forEach((b, i) => {
+      const up = Math.random() > 0.5;
+      b.classList.remove("is-down", "is-up");
+      void b.offsetWidth; // 重置动画
+      b.classList.add(up ? "is-up" : "is-down");
+      b.style.animationDelay = `${i * 110}ms`;
+    });
+    window.setTimeout(() => picks.forEach((b) => b.classList.remove("is-down", "is-up")), 1300);
+    scheduleScan();
+  };
+  const scheduleScan = () => {
+    const wait = 3200 + Math.random() * 5200; // 3.2–8.4s 随机
+    window.setTimeout(fireScan, wait);
+  };
+  scheduleScan();
+</script>
+
+<section class="hero" aria-label={hero.line1 + hero.line2}>
+  <div class="hero__bg" style={`background-image:url("${bgUrl}")`}></div>
+  <!-- CRT 故障层：RGB 分离 + 噪点 -->
+  <div class="hero__split hero__split--c" style={`background-image:url("${bgUrl}")`} aria-hidden="true"></div>
+  <div class="hero__split hero__split--r" style={`background-image:url("${bgUrl}")`} aria-hidden="true"></div>
+  <div class="hero__static" aria-hidden="true"></div>
+  <div class="hero__sweep" aria-hidden="true"></div>
+  <div class="hero__veil" aria-hidden="true"></div>
+  <!-- CRT 曲面晕影：边缘压暗弯曲，像显像管 -->
+  <div class="hero__crt" aria-hidden="true"></div>
+  <!-- 信号丢失：故障时闪出色块 -->
+  <div class="hero__dropout" aria-hidden="true"></div>
+  <!-- CRT 扫描线：一两条亮线偶尔扫过（老旧电视机感） -->
+  <div class="hero__scanbar hero__scanbar--1" aria-hidden="true"></div>
+  <div class="hero__scanbar hero__scanbar--2" aria-hidden="true"></div>
+
+  <div class="container">
+    <div class="hero__content">
+      <p class="hero__eyebrow">{hero.eyebrow}</p>
+      <h1 class="hero__title">
+        <span>{hero.line1}</span><br />
+        <span class="grad">{hero.line2}</span>
+      </h1>
+
+      <div class="hero__loop" aria-hidden="true">
+        {loop.map((part, i) => (
+          <>
+            <span class="chip">{part.trim()}</span>
+            {i < loop.length - 1 && <span class="arrow">➜</span>}
+          </>
+        ))}
+      </div>
+
+      <p class="hero__sub">{hero.sub}</p>
+
+      <div class="hero__actions">
+        <a class="btn btn--primary btn--lg" href={releaseUrl} target="_blank" rel="noopener">
+          {hero.ctaDownload}
+        </a>
+        <a class="btn btn--ghost btn--lg" href="#features">{hero.ctaFeatures}</a>
+      </div>
+      <span class="hero__platform">{hero.platform}</span>
+
+      <div class="hero__stats">
+        {hero.stats.map((s) => (
+          <div class="stat">
+            <div class="stat__value">{s.value}</div>
+            <div class="stat__label">{s.label}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  </div>
+</section>

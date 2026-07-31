@@ -10,7 +10,10 @@
     "release:verify": "node scripts/verify-release-version.mjs",
     "tauri": "pnpm -C apps/desktop tauri",
     "build:rust": "cargo build --workspace",
-    "test:rust": "cargo test --workspace"
+    "test:rust": "cargo test --workspace",
+    "site:dev": "pnpm --dir website_c dev",
+    "site:build": "pnpm --dir website_c build",
+    "site:preview": "pnpm --dir website_c preview"
   },
   "packageManager": "pnpm@11.16.0"
 }
