@@ -222,7 +222,9 @@ impl Emitter for TauriEmitter {
             let on_demand = self
                 .app
                 .try_state::<SharedState>()
-                .map(|s| s.settings.read().unwrap().overlay.visibility == OverlayVisibility::OnDemand)
+                .map(|s| {
+                    s.settings.read().unwrap().overlay.visibility == OverlayVisibility::OnDemand
+                })
                 .unwrap_or(false);
             if on_demand {
                 if let Some(win) = self.app.get_webview_window("overlay") {
@@ -1258,12 +1260,15 @@ pub fn run() {
             tray::setup_tray(app.handle())?;
             app.manage(startup_options.clone());
 
-            // 开发调试：`pnpm tauri dev -- --console` 启动后自动打开 webview 控制台
-            // （WebView2 生产运行时不给右键检查入口，排障需要显式 open_devtools）
-            if std::env::args().any(|a| a == "--console") {
-                for label in ["main", "overlay"] {
-                    if let Some(win) = app.get_webview_window(label) {
-                        win.open_devtools();
+            // 开发调试：`pnpm tauri dev -- --console` 启动后自动打开 webview 控制台。
+            // `open_devtools` 只在 Tauri 的开发构建中可用，必须从 release 编译中移除。
+            #[cfg(debug_assertions)]
+            {
+                if std::env::args().any(|a| a == "--console") {
+                    for label in ["main", "overlay"] {
+                        if let Some(win) = app.get_webview_window(label) {
+                            win.open_devtools();
+                        }
                     }
                 }
             }
