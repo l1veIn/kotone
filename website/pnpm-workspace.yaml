@@ -1,0 +1,8 @@
+# 独立站点工作区：允许 esbuild / sharp 运行构建脚本。
+# 否则 `install --frozen-lockfile` 会因 ERR_PNPM_IGNORED_BUILDS 以非零退出。
+allowBuilds:
+  esbuild: true
+  sharp: true
+onlyBuiltDependencies:
+  - esbuild
+  - sharp

@@ -33,7 +33,7 @@ jobs:
           cache: pnpm
 
       - name: Install website dependencies
-        run: pnpm --dir website install --ignore-workspace --frozen-lockfile
+        run: pnpm --dir website install --frozen-lockfile
 
       - name: Build website
         run: pnpm --dir website build
