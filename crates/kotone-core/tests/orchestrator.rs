@@ -293,6 +293,16 @@ fn make_orchestrator_full(
     injector: Arc<dyn Injector>,
     focus: Arc<dyn FocusBackend>,
 ) -> (Arc<Orchestrator>, Arc<VecEmitter>) {
+    make_orchestrator_tuned(auto_send, injector, focus, |_| {})
+}
+
+/// 同 make_orchestrator_full，但允许在 into_arc 前调整超时等字段（测试用）
+fn make_orchestrator_tuned(
+    auto_send: bool,
+    injector: Arc<dyn Injector>,
+    focus: Arc<dyn FocusBackend>,
+    tune: impl FnOnce(&mut Orchestrator),
+) -> (Arc<Orchestrator>, Arc<VecEmitter>) {
     let mut settings = Settings::default();
     // 0.1.5 起默认交互模式为「对讲机」（hold 直发）；本测试族沿用旧的
     // toggle + autoSend 推导行为，显式置 None 走自定义兼容路径
@@ -321,6 +331,7 @@ fn make_orchestrator_full(
     orch.finalize_timeout = Duration::from_secs(2);
     orch.focus_restore_delay = Duration::ZERO;
     orch.release_grace = Duration::from_millis(10); // 测试用小宽限期
+    tune(&mut orch);
     (orch.into_arc(), emitter)
 }
 
@@ -454,6 +465,27 @@ async fn begin_with_unready_engine_toasts_error() {
     assert!(emitter.state_sequence().contains(&"error".to_string()));
 }
 
+/// 发送挂起模拟（SendInput 被安全软件钩住不返回）：首次调用阻塞 hang_ms，
+/// 之后立即成功（验证 inject_timeout 超时兜底回 Error 态 + 重试可恢复，P0）。
+struct HangingInjector {
+    hang_ms: u64,
+    hung: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Injector for HangingInjector {
+    fn send(
+        &self,
+        _text: &str,
+        _profile: &GameProfile,
+        _cancel: CancelToken,
+    ) -> Result<(), InjectError> {
+        if self.hung.swap(false, Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(self.hang_ms));
+        }
+        Ok(())
+    }
+}
+
 /// §4.1：Error 保留文本可重试——confirm_send 在 Error 状态重新进入 Sending
 #[tokio::test]
 async fn error_state_retains_text_and_confirm_send_retries() {
@@ -496,6 +528,61 @@ async fn error_state_retains_text_and_confirm_send_retries() {
     // Success 仍按 toast 节奏自动回 Idle
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert_eq!(orch.state(), OrchestratorState::Idle);
+}
+
+/// P0：SendInput 挂起（被安全软件钩住不返回）时，inject_timeout 兜底回 Error 态。
+/// 状态机不能永久卡在 Sending；Error 保留文本，后续可重试。
+#[tokio::test]
+async fn inject_timeout_falls_back_to_error_state_and_retry() {
+    let injector: Arc<dyn Injector> = Arc::new(HangingInjector {
+        hang_ms: 300,
+        hung: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+    });
+    let focus: Arc<dyn FocusBackend> =
+        Arc::new(MockFocusBackend::new(Arc::new(Mutex::new(Vec::new())), 42, true));
+    let (orch, emitter) = make_orchestrator_tuned(false, injector, focus, |o| {
+        o.inject_timeout = Duration::from_millis(50); // 挂起 300ms >> 超时 50ms
+    });
+
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.end().await.unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Preview);
+
+    orch.confirm_send().await.unwrap();
+    // 超时兜底：状态必须离开 Sending，进入 Error（保留文本）
+    assert_eq!(orch.state(), OrchestratorState::Error);
+    let seq = emitter.state_sequence();
+    assert_eq!(
+        seq.last().map(String::as_str),
+        Some("error"),
+        "注入超时应回 Error 态而非永久卡 Sending: {seq:?}"
+    );
+    let err_msg = emitter
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|(e, p)| e == "kotone://state" && p["state"] == "error")
+        .and_then(|(_, p)| p["payload"]["message"].as_str().map(String::from))
+        .unwrap_or_default();
+    assert!(err_msg.contains("超时"), "错误信息应含超时提示: {err_msg}");
+    assert!(
+        emitter
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(e, p)| e == "kotone://state"
+                && p["state"] == "error"
+                && p["payload"]["text"] == "对面打野在下路"),
+        "Error 态应保留文本供重试"
+    );
+
+    // 重试：第二次发送不再挂起，Error 态 confirm_send 重新进入 Sending 并成功
+    orch.confirm_send().await.unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Success);
 }
 
 /// Error 状态下可带编辑后文本重试

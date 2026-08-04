@@ -17,7 +17,7 @@ use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::audio::{AudioBackend, AudioHandle};
-use crate::inject::{CancelToken, FocusBackend, Injector, TargetWindow};
+use crate::inject::{CancelToken, FocusBackend, InjectError, Injector, TargetWindow};
 use crate::interaction::{EndTrigger, InteractionPolicy, PostFinalize};
 use crate::profile::{self, GameProfile};
 use crate::settings::Settings;
@@ -25,6 +25,11 @@ use crate::stt::{EngineRegistry, SessionConfig, SttEvent, SttSession};
 
 /// finalize 超时（docs/development.md §6：finalize 设置 10s 超时）
 const DEFAULT_FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
+/// 注入发送超时：SendInput 被安全软件/反作弊钩住时可能不返回（挂起而非立即 0/N
+/// 失败），没有超时会让状态机永久卡在 Sending、取消也无法打断阻塞线程（用户反馈
+/// 「SendInput 被 360 拦截后软件卡死」）。超时后阻塞线程无法回收，但状态机得以
+/// 回到 Error 态提示用户，避免整机/会话冻结。
+const DEFAULT_INJECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Success/Error toast 停留时长，之后自动回 Idle
 const DEFAULT_TOAST_DWELL: Duration = Duration::from_millis(1500);
 /// 发送前焦点恢复后的等待：给系统完成前台切换与目标窗口激活的时间
@@ -128,6 +133,8 @@ pub struct Orchestrator {
     me: RwLock<Option<std::sync::Weak<Orchestrator>>>,
     /// finalize 超时（测试可调小）
     pub finalize_timeout: Duration,
+    /// 注入发送超时（测试可调小）：SendInput 挂起时兜底回到 Error 态
+    pub inject_timeout: Duration,
     /// Success/Error 停留时长（测试可设为 0）
     pub toast_dwell: Duration,
     /// 发送前焦点恢复后的等待（测试可设为 0）
@@ -177,6 +184,7 @@ impl Orchestrator {
             emitter,
             me: RwLock::new(None),
             finalize_timeout: DEFAULT_FINALIZE_TIMEOUT,
+            inject_timeout: DEFAULT_INJECT_TIMEOUT,
             toast_dwell: DEFAULT_TOAST_DWELL,
             focus_restore_delay: DEFAULT_FOCUS_RESTORE_DELAY,
             eval_dir: None,
@@ -925,10 +933,28 @@ impl Orchestrator {
             }
         }
 
+        // 注入超时保护（P0，用户反馈「SendInput 被拦截后卡死」）：SendInput 被
+        // 安全软件/反作弊钩住时可能不返回（挂起而非立即 0/N 失败），无超时则
+        // 状态机永久卡 Sending、cancel 无法打断阻塞线程。超时后状态机回 Error
+        // 态（保留文本可重试）；阻塞线程理论上无法回收，靠重启 runtime 清理。
         let injector = self.injector.clone();
-        let result =
-            tokio::task::spawn_blocking(move || injector.send(&wire_text, &wire_profile, token))
-                .await;
+        let send_task =
+            tokio::task::spawn_blocking(move || injector.send(&wire_text, &wire_profile, token));
+        let result = match tokio::time::timeout(self.inject_timeout, send_task).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(_)) => Err(InjectError::new("发送线程异常".to_string())),
+            Err(_) => {
+                crate::log::log(&format!(
+                    "inject send timeout after {}s (SendInput 可能被拦截挂起)",
+                    self.inject_timeout.as_secs()
+                ));
+                Err(InjectError::new(format!(
+                    "发送超时（{}s）：模拟输入未在限时内完成，通常是被安全软件或游戏反作弊拦截。\
+                     可点击重试，或重启引擎后再次尝试",
+                    self.inject_timeout.as_secs()
+                )))
+            }
+        };
 
         let (history_write, resume_continuous) = {
             let _op = self.op.lock().await;
@@ -941,7 +967,7 @@ impl Orchestrator {
             let history_write: (crate::history::HistoryOutcome, Option<String>);
             let mut resume_continuous = false;
             match result {
-                Ok(Ok(())) => {
+                Ok(()) => {
                     inner.preview_text = None;
                     resume_continuous = self.policy().continuous;
                     inner.state = if resume_continuous {
@@ -962,10 +988,11 @@ impl Orchestrator {
                     );
                     history_write = (crate::history::HistoryOutcome::Sent, None);
                 }
-                Ok(Err(e)) => {
+                Err(e) => {
                     // Error 保留文本（preview_text 承载），前端/confirm_send 可重试（§4.1）；
                     // needsElevation 透传 UIPI 提权信号（§10 R-1）；
-                    // inputBlocked 透传「系统级拦截」信号（安全软件/反作弊），前端弹窗引导排查
+                    // inputBlocked 透传「系统级拦截」信号（安全软件/反作弊），前端弹窗引导排查；
+                    // 注入超时（inject_timeout）也落此分支，message 含超时提示
                     inner.preview_text = Some(text.clone());
                     inner.state = OrchestratorState::Error;
                     drop(inner);
@@ -988,27 +1015,6 @@ impl Orchestrator {
                         }),
                     );
                     history_write = (crate::history::HistoryOutcome::Error, Some(e.message));
-                }
-                Err(_) => {
-                    inner.preview_text = Some(text.clone());
-                    inner.state = OrchestratorState::Error;
-                    drop(inner);
-                    self.emit_state(
-                        OrchestratorState::Error,
-                        Some(json!({ "message": "发送线程异常", "text": text })),
-                    );
-                    self.emit_process(
-                        "injection_failed",
-                        json!({
-                            "outcome": "error",
-                            "errorCode": "INJECTION_THREAD_FAILED",
-                            "durationMs": injection_started_at.elapsed().as_millis() as u64
-                        }),
-                    );
-                    history_write = (
-                        crate::history::HistoryOutcome::Error,
-                        Some("发送线程异常".to_string()),
-                    );
                 }
             }
             (history_write, resume_continuous)
