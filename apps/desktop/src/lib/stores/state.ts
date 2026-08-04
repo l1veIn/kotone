@@ -41,6 +41,8 @@ export interface AppState {
   errorText: string | null;
   /** error 是否为「模拟输入被系统拦截」（安全软件/反作弊）；true 时弹排查引导弹窗 */
   inputBlocked: boolean;
+  /** error 是否为 UIPI 提权问题（目标程序以更高权限运行）；true 时提示管理员运行 */
+  needsElevation: boolean;
   /** 当前聊天频道（多频道 profile 才有值；切回默认时为 null 让悬浮窗隐藏徽标） */
   channel: ChannelInfo | null;
 }
@@ -53,6 +55,7 @@ const initial: AppState = {
   errorMessage: null,
   errorText: null,
   inputBlocked: false,
+  needsElevation: false,
   channel: null,
 };
 
@@ -66,6 +69,7 @@ interface StateEventPayload {
     text?: string | null;
     message?: string | null;
     inputBlocked?: boolean | null;
+    needsElevation?: boolean | null;
   } | null;
 }
 
@@ -94,6 +98,7 @@ function applyStateEvent(ev: StateEventPayload): void {
         next.errorMessage = null;
         next.errorText = null;
         next.inputBlocked = false;
+        next.needsElevation = false;
         break;
       case "listening":
         // 新会话开始：清空上一轮残留
@@ -102,6 +107,7 @@ function applyStateEvent(ev: StateEventPayload): void {
         next.errorMessage = null;
         next.errorText = null;
         next.inputBlocked = false;
+        next.needsElevation = false;
         break;
       case "transcribing":
         // 保留 partial 上屏内容，等待最终文本
@@ -118,6 +124,7 @@ function applyStateEvent(ev: StateEventPayload): void {
       case "error":
         next.errorMessage = message ?? "未知错误";
         next.inputBlocked = ev.payload?.inputBlocked === true;
+        next.needsElevation = ev.payload?.needsElevation === true;
         if (text) next.errorText = text;
         break;
     }
