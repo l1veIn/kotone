@@ -236,6 +236,8 @@
   let captureCleanup: (() => void) | null = null;
   let checkingInputEnvironment = $state(false);
   let inputEnvironment = $state<InputEnvironmentCheck | null>(null);
+  /** 拦截逃生门：探针判定拦截时用户仍可选择「仍然继续」（风险自担），不被卡在向导里 */
+  let inputBlockedOverridden = $state(false);
 
   async function runInputEnvironmentCheck() {
     if (checkingInputEnvironment) return;
@@ -632,6 +634,15 @@
             >
               已加入信任区，重新检测
             </button>
+            <button
+              class="mt-3 rounded-lg bg-white/10 px-3 py-1.5 text-xs text-white/70 ring-1 ring-white/15 transition hover:bg-white/20"
+              onclick={() => {
+                inputBlockedOverridden = true;
+                toastWarn("已跳过输入环境检测：如后续发送无反应，请回此步重新检测");
+              }}
+            >
+              仍然继续（风险自担）
+            </button>
           </div>
         {:else if inputEnvironment}
           <div
@@ -654,7 +665,7 @@
           </div>
           <button
             class="rounded-lg bg-white/10 px-3 py-2 text-xs font-semibold text-white/85 ring-1 ring-white/15 hover:bg-white/20 disabled:opacity-60"
-            disabled={capturing || checkingInputEnvironment || inputEnvironment?.available === false}
+            disabled={capturing || checkingInputEnvironment || (inputEnvironment?.available === false && !inputBlockedOverridden)}
             onclick={() => void startCapture()}
           >
             {capturing ? "请按下组合键…（Esc 取消）" : "重新录入"}
@@ -667,7 +678,7 @@
           </button>
           <button
             class="rounded-lg bg-kotone-cyan px-5 py-2 text-sm font-semibold text-kotone-deep transition hover:brightness-110 disabled:opacity-50"
-            disabled={capturing || checkingInputEnvironment || inputEnvironment?.available === false}
+            disabled={capturing || checkingInputEnvironment || (inputEnvironment?.available === false && !inputBlockedOverridden)}
             onclick={() => void saveInteractionAndContinue()}
           >
             完成
