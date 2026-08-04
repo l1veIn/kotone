@@ -408,6 +408,11 @@
         {:else if $appState.errorText}
           <p class="mt-0.5 truncate text-[11px] text-white/50">保留文本：{$appState.errorText}</p>
         {/if}
+        {#if $appState.needsElevation}
+          <p class="mt-0.5 text-[11px] text-kotone-cyan/85">
+            目标程序权限更高：请以管理员身份运行 Kotone 后重试
+          </p>
+        {/if}
       </div>
       <div class="flex shrink-0 gap-1.5">
         {#if $appState.errorText}

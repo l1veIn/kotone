@@ -185,10 +185,23 @@ mod windows_imp {
             Ok(())
         } else {
             let err = windows::core::Error::from_win32();
-            // 0/N 全部未落地 = 系统级拦截（安全软件主动防御 / 游戏反作弊在内核层
-            // 丢弃合成输入），与目标窗口无关——连记事本都会失败。单独标记让前端
-            // 弹窗引导排查；部分落地（N>0）仍是普通失败（时序/焦点干扰）。
+            // 0/N 全部未落地 = 系统级拦截。两类成因需要不同指引：
+            // 1) UIPI：目标进程完整性级别更高（如管理员运行的游戏），SendInput 被
+            //    拒绝——Win32 文档明示返回值与 GetLastError 均不保证指示 UIPI，但
+            //    ERROR_ACCESS_DENIED 出现时优先归因提权场景（提权可解）；
+            // 2) 安全软件主动防御 / 反作弊内核层拦截——与目标窗口无关，连记事本都
+            //    会失败，单独标记让前端弹窗引导排查（提权无法解决）。
+            // 部分落地（N>0）仍是普通失败（时序/焦点干扰）。
             if sent == 0 {
+                use windows::Win32::Foundation::ERROR_ACCESS_DENIED;
+                if err.code().0 as u32 == ERROR_ACCESS_DENIED.0 {
+                    return Err(InjectError::with_needs_elevation(format!(
+                        "SendInput 被拒绝（0/{} 成功）：目标程序可能以更高权限运行\
+                         （如管理员模式启动的游戏）。请以管理员身份运行 Kotone，\
+                         或将目标程序改为普通权限: {err}",
+                        inputs.len()
+                    )));
+                }
                 return Err(InjectError::with_input_blocked(format!(
                     "SendInput 被系统拦截（0/{} 成功），通常是安全软件或游戏反作弊拦截了模拟输入: {err}",
                     inputs.len()
