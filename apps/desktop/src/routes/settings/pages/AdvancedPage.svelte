@@ -20,6 +20,7 @@
     getModelsDir,
     setModelsDir,
     openModelsDir,
+    cancelDownload,
     updateSettings,
     getElevationStatus,
     getHotkeyStatus,
@@ -181,6 +182,15 @@
       toast(false, "下载失败，可在模型卡片中重试或调整下载源");
     } finally {
       delete dlProgress[id];
+    }
+  }
+
+  /** 取消进行中的下载（.part 保留可续传；P2-⑦） */
+  async function onCancelDownload(id: string) {
+    try {
+      await cancelDownload();
+    } catch (e) {
+      toast(false, `取消失败：${errText(e)}`);
     }
   }
 
@@ -584,15 +594,23 @@
                       </button>
                     </div>
                     {#if m.id in dlProgress}
-                      <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
-                        {#if dlProgress[m.id] !== null}
-                          <div
-                            class="h-full rounded-full bg-kotone-violet transition-[width]"
-                            style:width="{dlProgress[m.id]}%"
-                          ></div>
-                        {:else}
-                          <div class="h-full w-1/3 animate-pulse rounded-full bg-kotone-violet/70"></div>
-                        {/if}
+                      <div class="mt-2 flex items-center gap-2">
+                        <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-white/10">
+                          {#if dlProgress[m.id] !== null}
+                            <div
+                              class="h-full rounded-full bg-kotone-violet transition-[width]"
+                              style:width="{dlProgress[m.id]}%"
+                            ></div>
+                          {:else}
+                            <div class="h-full w-1/3 animate-pulse rounded-full bg-kotone-violet/70"></div>
+                          {/if}
+                        </div>
+                        <button
+                          class="shrink-0 rounded-lg bg-white/10 px-2.5 py-1 text-[11px] text-white/70 ring-1 ring-white/15 transition hover:bg-white/20"
+                          onclick={() => void onCancelDownload(m.id)}
+                        >
+                          取消
+                        </button>
                       </div>
                     {/if}
                     {#if dlErrors[m.id]}

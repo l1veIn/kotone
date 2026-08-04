@@ -870,6 +870,15 @@ export async function downloadModel(id: string): Promise<void> {
   return invoke<void>("download_model", { id });
 }
 
+/** 取消进行中的模型下载（幂等；已下载部分保留可续传） */
+export async function cancelDownload(): Promise<void> {
+  if (!isTauri) {
+    console.info("[mock] cancel_download");
+    return;
+  }
+  return invoke<void>("cancel_download");
+}
+
 /** 切换引擎的活动模型（Running 时置 restartNeeded，不自动重启） */
 export async function setActiveModel(engineId: string, modelId: string): Promise<void> {
   if (!isTauri) {

@@ -843,8 +843,29 @@ fn list_models() -> Result<Vec<model::ModelInfo>, String> {
 /// 下载模型（id = 清单内任意模型 / silero-vad；镜像策略见 settings.download）。
 /// 进度经 "kotone://download" 事件外发：{ id, downloaded, total }。
 /// async 命令 + spawn_blocking：大模型下载不阻塞 UI 线程；IPC 签名不变。
+/// 下载前做磁盘空间预检（P2-⑦）：目标目录所在卷剩余空间不足时直接拒绝，
+/// 避免下载到一半才发现 C 盘/目标盘已满。
 #[tauri::command]
-async fn download_model(app: AppHandle, id: String) -> Result<(), String> {
+async fn download_model(
+    app: AppHandle,
+    state: tauri::State<'_, SharedState>,
+    id: String,
+) -> Result<(), String> {
+    // 磁盘空间预检：模型体积 vs 模型目录所在卷可用空间
+    if let (Some(need), Some(dir)) = (model::model_size_bytes(&id), Some(model_dir_now(&state))) {
+        if let Some(avail) = disk_available_space(&dir) {
+            if avail < need {
+                let mb = |b: u64| b / 1_000_000;
+                return Err(format!(
+                    "磁盘空间不足：模型需要约 {} MB，但「{}」所在磁盘仅剩 {} MB。\
+                     请清理磁盘或在设置中更换模型存储位置",
+                    mb(need),
+                    dir.display(),
+                    mb(avail)
+                ));
+            }
+        }
+    }
     let case_id = format!(
         "model-download-{}-{}",
         id,
@@ -899,6 +920,31 @@ async fn download_model(app: AppHandle, id: String) -> Result<(), String> {
         }),
     );
     result
+}
+
+/// 当前生效模型目录（磁盘预检用）
+fn model_dir_now(state: &tauri::State<'_, SharedState>) -> std::path::PathBuf {
+    let settings = state.settings.read().unwrap();
+    model::models_dir_from(&settings)
+}
+
+/// 路径所在卷的可用空间（sysinfo Disks；取最长挂载前缀匹配；失败返回 None 不阻断下载）
+fn disk_available_space(path: &std::path::Path) -> Option<u64> {
+    use sysinfo::Disks;
+    let disks = Disks::new_with_refreshed_list();
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    disks
+        .iter()
+        .filter(|d| canonical.starts_with(d.mount_point()))
+        .max_by_key(|d| d.mount_point().as_os_str().len())
+        .map(|d| d.available_space())
+}
+
+/// 请求取消进行中的模型下载（幂等；.part 保留可续传）
+#[tauri::command]
+fn cancel_download() {
+    model::cancel_download();
+    log::log("download cancel requested");
 }
 
 #[tauri::command]
@@ -1417,6 +1463,7 @@ pub fn run() {
             restart_as_admin,
             list_models,
             download_model,
+            cancel_download,
             set_active_model,
             get_runtime_status,
             start_runtime,
