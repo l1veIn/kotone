@@ -538,8 +538,11 @@ async fn inject_timeout_falls_back_to_error_state_and_retry() {
         hang_ms: 300,
         hung: Arc::new(std::sync::atomic::AtomicBool::new(true)),
     });
-    let focus: Arc<dyn FocusBackend> =
-        Arc::new(MockFocusBackend::new(Arc::new(Mutex::new(Vec::new())), 42, true));
+    let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(
+        Arc::new(Mutex::new(Vec::new())),
+        42,
+        true,
+    ));
     let (orch, emitter) = make_orchestrator_tuned(false, injector, focus, |o| {
         o.inject_timeout = Duration::from_millis(50); // 挂起 300ms >> 超时 50ms
     });

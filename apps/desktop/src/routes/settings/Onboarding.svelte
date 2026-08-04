@@ -282,7 +282,11 @@
   }
 
   async function startCapture() {
-    if (capturing || checkingInputEnvironment || inputEnvironment?.available === false) return;
+    if (
+      capturing ||
+      checkingInputEnvironment ||
+      (inputEnvironment?.available === false && !inputBlockedOverridden)
+    ) return;
     capturing = true;
     captureCleanup = await captureHotkey((result) => {
       capturing = false;

@@ -92,7 +92,9 @@ impl AudioBackend for CpalBackend {
         });
 
         match open_rx.recv() {
-            Ok(Ok(())) => Ok(AudioHandle::with_thread(pcm_rx, level_rx, error_rx, stop_tx, thread)),
+            Ok(Ok(())) => Ok(AudioHandle::with_thread(
+                pcm_rx, level_rx, error_rx, stop_tx, thread,
+            )),
             Ok(Err(e)) => {
                 let _ = thread.join();
                 Err(e)
