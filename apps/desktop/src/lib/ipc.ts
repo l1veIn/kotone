@@ -42,6 +42,8 @@ export interface HistoryConfig {
   maxRecords: number;
   /** 是否随记录独立保存音频（不依赖评测录档） */
   includeAudio: boolean;
+  /** 自定义历史目录（含音频）；空 = 默认 ~/.kotone/history */
+  dir: string;
 }
 
 export interface Settings {
@@ -311,7 +313,7 @@ const mock: MockStore = {
     channelCycleHotkey: "Shift+CapsLock",
     interactionMode: "push-to-talk",
     vadSilenceMs: 700,
-    history: { mode: "capped", maxRecords: 1000, includeAudio: false },
+    history: { mode: "capped", maxRecords: 1000, includeAudio: false, dir: "" },
     ui: { firstRunCompleted: true, autoStart: false },
     models: { dir: "" },
     download: { source: "auto", ghProxy: "https://ghfast.top/" },
@@ -827,6 +829,15 @@ export async function openModelsDir(): Promise<void> {
     return;
   }
   return invoke<void>("open_models_dir");
+}
+
+/** 在系统文件管理器中打开历史记录目录（P2-⑨） */
+export async function openHistoryDir(): Promise<void> {
+  if (!isTauri) {
+    console.info("[mock] open_history_dir");
+    return;
+  }
+  return invoke<void>("open_history_dir");
 }
 
 /** 在系统默认浏览器打开外部链接（dev:web 直接 window.open 新标签页） */

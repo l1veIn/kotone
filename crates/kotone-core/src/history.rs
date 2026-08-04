@@ -32,6 +32,10 @@ pub struct HistoryConfig {
     pub max_records: u32,
     /// 是否随记录独立保存音频到 history/audio/（不依赖评测录档）
     pub include_audio: bool,
+    /// 自定义历史目录（含音频）；空 = 默认 ~/.kotone/history（P2-⑨：与模型
+    /// 目录同理，历史音频也可能占用大量空间）
+    #[serde(default)]
+    pub dir: String,
 }
 
 impl Default for HistoryConfig {
@@ -40,6 +44,7 @@ impl Default for HistoryConfig {
             mode: HistoryMode::Capped,
             max_records: 1000,
             include_audio: false,
+            dir: String::new(),
         }
     }
 }
@@ -76,9 +81,15 @@ pub struct HistoryRecord {
 
 // ---------- 路径 ----------
 
-/// 历史数据目录：~/.kotone/history/
+/// 历史数据目录：自定义（settings.history.dir）或默认 ~/.kotone/history/
 pub fn history_dir() -> PathBuf {
-    crate::settings::kotone_dir().join("history")
+    let settings = crate::settings::load();
+    let dir = settings.history.dir.trim();
+    if dir.is_empty() {
+        crate::settings::kotone_dir().join("history")
+    } else {
+        PathBuf::from(dir)
+    }
 }
 
 fn jsonl_path(dir: &Path) -> PathBuf {
@@ -243,6 +254,7 @@ mod tests {
             mode,
             max_records: max,
             include_audio: false,
+            dir: String::new(),
         }
     }
 
@@ -252,6 +264,7 @@ mod tests {
         assert_eq!(c.mode, HistoryMode::Capped);
         assert_eq!(c.max_records, 1000);
         assert!(!c.include_audio);
+        assert!(c.dir.is_empty(), "默认历史目录为空 = ~/.kotone/history");
         // serde 形态：kebab-case 枚举 + camelCase 字段
         let j = serde_json::to_value(&c).unwrap();
         assert_eq!(j["mode"], "capped");
