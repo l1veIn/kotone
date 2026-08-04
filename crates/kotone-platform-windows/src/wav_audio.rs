@@ -68,7 +68,13 @@ impl AudioBackend for WavFileBackend {
             // 文件喂完：tx 随线程结束 drop，通道关闭 → pump 收尾
         });
 
-        Ok(AudioHandle::with_thread(pcm_rx, level_rx, stop_tx, thread))
+        Ok(AudioHandle::with_thread(
+            pcm_rx,
+            level_rx,
+            mpsc::unbounded_channel::<String>().1,
+            stop_tx,
+            thread,
+        ))
     }
 }
 

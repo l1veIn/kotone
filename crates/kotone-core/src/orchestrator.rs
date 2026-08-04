@@ -430,6 +430,7 @@ impl Orchestrator {
         };
         let pcm_rx = handle.pcm_rx.take().expect("audio handle pcm channel");
         let level_rx = handle.level_rx.take().expect("audio handle level channel");
+        let audio_err_rx = handle.error_rx.take();
 
         let (stop_tx, stop_rx) = oneshot::channel::<()>();
         let (session_tx, session_rx) = oneshot::channel::<Box<dyn SttSession>>();
@@ -505,6 +506,7 @@ impl Orchestrator {
             let mut stop_rx = stop_rx;
             let mut pcm_rx = pcm_rx;
             let mut stt_rx = stt_rx;
+            let mut audio_err_rx = audio_err_rx;
             let mut vad_state = vad_state;
             // 松手收尾：end() 先停采集再发停止信号，pump 收到信号后把通道里
             // 已缓冲未消费的 PCM 全部灌进 session（松手丢字 P0：采音侧排空）；
@@ -590,6 +592,38 @@ impl Orchestrator {
                             }
                             None => break, // 采集结束
                         }
+                    }
+                    err = async {
+                        match &mut audio_err_rx {
+                            Some(rx) => rx.recv().await,
+                            // 无错误通道（mock/测试）：分支永不完成，不影响原有 select
+                            None => std::future::pending::<Option<String>>().await,
+                        }
+                    } => {
+                        if let Some(msg) = err {
+                            // 录音设备中途故障（拔麦克风/驱动错误）：中止会话并 toast，
+                            // 避免状态机永久停在 Listening 无感知（P1-⑤）
+                            emitter.emit(
+                                "kotone://process",
+                                json!({
+                                    "caseId": pump_case_id.clone(),
+                                    "activity": "session_aborted",
+                                    "data": { "outcome": "error", "errorCode": "AUDIO_DEVICE_ERROR" }
+                                }),
+                            );
+                            if let Some(me) = me_weak.as_ref().and_then(|w| w.upgrade()) {
+                                let msg2 = msg.clone();
+                                tokio::spawn(async move {
+                                    me.abort_with_message(&format!(
+                                        "{msg2}（本次会话已中止，请检查麦克风后重试）"
+                                    ))
+                                    .await;
+                                });
+                            }
+                            break;
+                        }
+                        // 通道关闭 = 采集线程正常退出（pcm 分支会收尾）；停用该分支防 busy 循环
+                        audio_err_rx = None;
                     }
                     ev = stt_rx.recv() => {
                         match ev {
@@ -837,6 +871,50 @@ impl Orchestrator {
         };
         self.do_send(final_text, gen).await;
         Ok(())
+    }
+
+    /// 录音设备故障等会话中止：与 cancel 相同清理，但以 Error toast 告知原因
+    /// （P1-⑤：拔麦克风/驱动错误不再永久卡 Listening）。
+    /// 无文本 Error → toast 后自动回 Idle（schedule_idle）。
+    pub async fn abort_with_message(&self, message: &str) {
+        // 宽限期倒计时一并收回
+        self.abort_release_grace();
+        let _op = self.op.lock().await;
+        let gen;
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.state == OrchestratorState::Idle {
+                return;
+            }
+            inner.gen += 1;
+            gen = inner.gen;
+            let mut active = inner.active.take();
+            inner.preview_text = None;
+            if let Some(token) = inner.send_cancel.take() {
+                token.cancel();
+            }
+            inner.state = OrchestratorState::Error;
+            drop(inner);
+            if let Some(a) = active.as_mut() {
+                a.cancelled_flag.store(true, Ordering::SeqCst);
+                if let Some(tx) = a.stop_tx.take() {
+                    let _ = tx.send(());
+                }
+                drop(a.guard.take());
+                a.pump.abort();
+                a.level_task.abort();
+            }
+        }
+        self.emit_state(
+            OrchestratorState::Error,
+            Some(json!({ "message": message })),
+        );
+        self.emit_process(
+            "session_aborted",
+            json!({ "outcome": "error", "errorCode": "AUDIO_DEVICE_ERROR" }),
+        );
+        self.write_history(crate::history::HistoryOutcome::Cancelled, None);
+        self.schedule_idle(gen);
     }
 
     /// 任意状态取消：回到 Idle（session cancel；发送中置取消令牌）
