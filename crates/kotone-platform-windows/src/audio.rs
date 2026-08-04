@@ -70,13 +70,15 @@ impl AudioBackend for CpalBackend {
     fn start(&self, device_id: &str) -> Result<AudioHandle, String> {
         let (pcm_tx, pcm_rx) = mpsc::unbounded_channel::<Vec<f32>>();
         let (level_tx, level_rx) = mpsc::unbounded_channel::<f32>();
+        // 采集中途故障（拔设备/驱动错误）经此上报 orchestrator，避免永久 Listening
+        let (error_tx, error_rx) = mpsc::unbounded_channel::<String>();
         let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
         // 设备打开结果回传：start 同步返回清晰错误，而不是等回调失败
         let (open_tx, open_rx) = std::sync::mpsc::channel::<Result<(), String>>();
 
         let device_id = device_id.to_string();
         let thread = std::thread::spawn(move || {
-            match open_stream(&device_id, pcm_tx, level_tx) {
+            match open_stream(&device_id, pcm_tx, level_tx, error_tx) {
                 Ok(input) => {
                     let _ = open_tx.send(Ok(()));
                     // 流存活期间阻塞等待停止信号；stream 随作用域结束释放
@@ -90,7 +92,7 @@ impl AudioBackend for CpalBackend {
         });
 
         match open_rx.recv() {
-            Ok(Ok(())) => Ok(AudioHandle::with_thread(pcm_rx, level_rx, stop_tx, thread)),
+            Ok(Ok(())) => Ok(AudioHandle::with_thread(pcm_rx, level_rx, error_rx, stop_tx, thread)),
             Ok(Err(e)) => {
                 let _ = thread.join();
                 Err(e)
@@ -127,6 +129,7 @@ fn open_stream(
     device_id: &str,
     pcm_tx: mpsc::UnboundedSender<Vec<f32>>,
     level_tx: mpsc::UnboundedSender<f32>,
+    error_tx: mpsc::UnboundedSender<String>,
 ) -> Result<OpenedInput, String> {
     let host = cpal::default_host();
     let device = if device_id == "default" || device_id.is_empty() {
@@ -149,22 +152,25 @@ fn open_stream(
     let stream_config: cpal::StreamConfig = config.clone().into();
     let state = std::sync::Arc::new(std::sync::Mutex::new(CaptureState::new(sample_rate)));
 
-    let err_fn = |e| eprintln!("[kotone audio] 采集错误: {e}");
-
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => {
             let state = state.clone();
             let pcm_tx = pcm_tx.clone();
             let level_tx = level_tx.clone();
+            let error_tx = error_tx.clone();
             device.build_input_stream(
                 &stream_config,
                 move |data: &[f32], _| {
                     state
                         .lock()
-                        .unwrap()
+                        .unwrap_or_else(|p| p.into_inner())
                         .push_interleaved(data, channels, &pcm_tx, &level_tx)
                 },
-                err_fn,
+                move |e| {
+                    eprintln!("[kotone audio] 采集错误: {e}");
+                    // 上报 orchestrator：中止会话并提示（避免永久 Listening 无感知）
+                    let _ = error_tx.send(format!("录音设备出错：{e}"));
+                },
                 None,
             )
         }
@@ -172,6 +178,7 @@ fn open_stream(
             let state = state.clone();
             let pcm_tx = pcm_tx.clone();
             let level_tx = level_tx.clone();
+            let error_tx = error_tx.clone();
             device.build_input_stream(
                 &stream_config,
                 move |data: &[i16], _| {
@@ -181,10 +188,13 @@ fn open_stream(
                         .collect();
                     state
                         .lock()
-                        .unwrap()
+                        .unwrap_or_else(|p| p.into_inner())
                         .push_interleaved(&f, channels, &pcm_tx, &level_tx);
                 },
-                err_fn,
+                move |e| {
+                    eprintln!("[kotone audio] 采集错误: {e}");
+                    let _ = error_tx.send(format!("录音设备出错：{e}"));
+                },
                 None,
             )
         }
@@ -192,6 +202,7 @@ fn open_stream(
             let state = state.clone();
             let pcm_tx = pcm_tx.clone();
             let level_tx = level_tx.clone();
+            let error_tx = error_tx.clone();
             device.build_input_stream(
                 &stream_config,
                 move |data: &[u16], _| {
@@ -201,10 +212,13 @@ fn open_stream(
                         .collect();
                     state
                         .lock()
-                        .unwrap()
+                        .unwrap_or_else(|p| p.into_inner())
                         .push_interleaved(&f, channels, &pcm_tx, &level_tx);
                 },
-                err_fn,
+                move |e| {
+                    eprintln!("[kotone audio] 采集错误: {e}");
+                    let _ = error_tx.send(format!("录音设备出错：{e}"));
+                },
                 None,
             )
         }

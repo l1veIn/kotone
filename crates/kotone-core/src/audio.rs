@@ -23,6 +23,9 @@ pub struct AudioHandle {
     /// Option 包裹便于 orchestrator take 走通道所有权
     pub pcm_rx: Option<mpsc::UnboundedReceiver<Vec<f32>>>,
     pub level_rx: Option<mpsc::UnboundedReceiver<f32>>,
+    /// 采集中途故障（设备被拔出/驱动错误等）：生产实现经此上报错误消息，
+    /// orchestrator 据此中止会话，避免状态机永久停在 Listening
+    pub error_rx: Option<mpsc::UnboundedReceiver<String>>,
     stop_tx: Option<std::sync::mpsc::Sender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -36,6 +39,7 @@ impl AudioHandle {
         Self {
             pcm_rx: Some(pcm_rx),
             level_rx: Some(level_rx),
+            error_rx: None,
             stop_tx: None,
             thread: None,
         }
@@ -45,12 +49,14 @@ impl AudioHandle {
     pub fn with_thread(
         pcm_rx: mpsc::UnboundedReceiver<Vec<f32>>,
         level_rx: mpsc::UnboundedReceiver<f32>,
+        error_rx: mpsc::UnboundedReceiver<String>,
         stop_tx: std::sync::mpsc::Sender<()>,
         thread: std::thread::JoinHandle<()>,
     ) -> Self {
         Self {
             pcm_rx: Some(pcm_rx),
             level_rx: Some(level_rx),
+            error_rx: Some(error_rx),
             stop_tx: Some(stop_tx),
             thread: Some(thread),
         }
