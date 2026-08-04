@@ -4,11 +4,14 @@
   import {
     checkInputEnvironment,
     downloadModel,
+    getModelsDir,
     isTauri,
     listAudioDevices,
     listModels,
     listProfiles,
+    openModelsDir,
     setAudioDevice,
+    setModelsDir,
     updateSettings,
     type AudioDevice,
     type DownloadProgress,
@@ -16,7 +19,9 @@
     type InputEnvironmentCheck,
     type InteractionMode,
     type ModelInfo,
+    type ModelsDirInfo,
   } from "../../lib/ipc";
+  import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { captureHotkey } from "../../lib/hotkeyCapture";
   import {
     errText,
@@ -39,6 +44,9 @@
   let profiles = $state<GameProfile[]>([]);
   let devices = $state<AudioDevice[]>([]);
   let downloadedIds = $state<string[]>([]);
+  /** 模型存储位置（用户反馈：下载模型应支持选择路径，而不是默认 C 盘） */
+  let dirInfo = $state<ModelsDirInfo | null>(null);
+  let changingDir = $state(false);
 
   const primaryModel = $derived(
     models.find((m) => m.engineId === "sherpa-onnx-x-asr-zh-en") ?? null,
@@ -83,12 +91,68 @@
       selectedDeviceId = settings?.audioDeviceId ?? devices[0]?.id ?? "default";
       selectedMode = settings?.interactionMode ?? "push-to-talk";
       currentKey = settings?.hotkey.key ?? "CapsLock";
+      getModelsDir()
+        .then((d) => (dirInfo = d))
+        .catch((e) => console.error("[onboarding] get_models_dir 失败：", e));
     } catch (e) {
       resourceError = errText(e);
     } finally {
       loadingResources = false;
     }
   });
+
+  /** 选择自定义模型存储目录（下载前可先迁移，避免模型落到 C 盘） */
+  async function pickModelsDir() {
+    if (changingDir) return;
+    let picked: string | null = null;
+    if (isTauri) {
+      const sel = await openDialog({ directory: true, title: "选择模型存储位置" }).catch(
+        () => null,
+      );
+      if (!sel) return; // 用户取消
+      picked = sel;
+    } else {
+      picked = window.prompt("模型存储目录（开发预览模式）", dirInfo?.dir ?? "");
+      if (!picked) return;
+    }
+    changingDir = true;
+    try {
+      const report = await setModelsDir(picked);
+      if (report.failed.length > 0) {
+        toastWarn(
+          `目录已切换，但 ${report.failed.length} 项迁移失败（需重新下载）：${report.failed.join(", ")}`,
+        );
+      } else {
+        toast(
+          true,
+          report.moved.length > 0 ? `模型目录已切换，迁移 ${report.moved.length} 项` : "模型目录已切换",
+        );
+      }
+      dirInfo = await getModelsDir();
+    } catch (e) {
+      toast(false, `切换模型目录失败：${errText(e)}`);
+    } finally {
+      changingDir = false;
+    }
+  }
+
+  /** 恢复默认目录（~/.kotone/models） */
+  async function resetModelsDir() {
+    if (changingDir) return;
+    changingDir = true;
+    try {
+      const report = await setModelsDir("");
+      toast(
+        true,
+        report.moved.length > 0 ? `已恢复默认目录，迁移 ${report.moved.length} 项` : "已恢复默认目录",
+      );
+      dirInfo = await getModelsDir();
+    } catch (e) {
+      toast(false, `恢复默认目录失败：${errText(e)}`);
+    } finally {
+      changingDir = false;
+    }
+  }
 
   async function reloadResources() {
     loadingResources = true;
@@ -436,6 +500,43 @@
             <p class="text-xs text-kotone-pink">未找到推荐模型，请重试读取资源。</p>
           {/if}
         </div>
+
+        <!-- 模型存储位置（用户反馈：下载模型应支持选择路径而非默认 C 盘） -->
+        <label class="kotone-card mt-3 block p-4">
+          <span class="text-sm font-semibold text-kotone-cyan/90">模型存储位置</span>
+          <span class="mt-2 block text-[11px] text-white/45">
+            模型体积较大（推荐模型约 134 MB），建议放到空间充足的磁盘。切换后已下载的模型会一并迁移。
+          </span>
+          <span
+            class="mt-2 block truncate rounded-lg bg-white/5 px-2.5 py-1.5 text-xs text-white/70 ring-1 ring-white/10"
+          >
+            {dirInfo?.dir ?? "读取中…"}{dirInfo?.isDefault ? "（默认）" : ""}
+          </span>
+          <div class="mt-2 flex items-center gap-2">
+            <button
+              class="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/85 ring-1 ring-white/15 transition hover:bg-white/20 disabled:opacity-50"
+              disabled={changingDir || dirInfo === null}
+              onclick={() => void pickModelsDir()}
+            >
+              {changingDir ? "切换中…" : "选择位置"}
+            </button>
+            {#if dirInfo && !dirInfo.isDefault}
+              <button
+                class="rounded-lg bg-white/10 px-3 py-1.5 text-xs text-white/70 ring-1 ring-white/15 transition hover:bg-white/20 disabled:opacity-50"
+                disabled={changingDir}
+                onclick={() => void resetModelsDir()}
+              >
+                恢复默认
+              </button>
+            {/if}
+            <button
+              class="ml-auto rounded-lg bg-white/10 px-3 py-1.5 text-xs text-white/70 ring-1 ring-white/15 transition hover:bg-white/20"
+              onclick={() => void openModelsDir()}
+            >
+              打开目录
+            </button>
+          </div>
+        </label>
 
         <label class="kotone-card mt-3 block p-4">
           <span class="text-sm font-semibold text-kotone-cyan/90">麦克风</span>

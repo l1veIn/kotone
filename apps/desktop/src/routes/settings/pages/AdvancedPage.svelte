@@ -9,7 +9,7 @@
    */
   import { onDestroy, onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+  import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
   import {
     listSttEngines,
     exportDiagnostics,
@@ -156,6 +156,13 @@
     } catch (e) {
       toast(false, `打开目录失败：${errText(e)}`);
     }
+  }
+
+  /** 文件夹选择器（用户反馈：模型路径应支持可视化选择而非手输） */
+  async function onBrowseDir() {
+    const sel = await openDialog({ directory: true, title: "选择模型存储位置" }).catch(() => null);
+    if (!sel) return; // 用户取消
+    dirDraft = sel;
   }
 
   // ---------- 模型操作 ----------
@@ -416,6 +423,12 @@
           spellcheck="false"
           class="min-w-0 flex-1 rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/60"
         />
+        <button
+          class="shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-xs text-white/75 ring-1 ring-white/15 transition hover:bg-white/20"
+          onclick={() => void onBrowseDir()}
+        >
+          浏览…
+        </button>
         <button
           class="shrink-0 rounded-lg bg-kotone-cyan px-3 py-1.5 text-xs font-semibold text-kotone-deep transition hover:brightness-110 active:scale-95 disabled:opacity-50"
           disabled={migrating}
