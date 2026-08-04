@@ -412,7 +412,31 @@ pub fn list() -> Result<Vec<ModelInfo>, String> {
 /// 下载模型（id = 清单内任意模型 / silero-vad），进度经回调外发
 /// （多文件模型聚合进度）。阻塞实现：调用方放阻塞线程。
 /// 下载源策略（镜像 / 回退）取 settings.download，见 download.rs。
+/// 全局互斥 + 取消标记（P2-⑦）：并发重复下载被拒绝；cancel_download 可中断。
 pub fn download(id: &str, progress: Progress<'_>) -> Result<(), String> {
+    download::begin_download().map_err(|e| e.to_string())?;
+    let result = download_inner(id, progress);
+    download::end_download();
+    result
+}
+
+/// 请求取消当前下载（幂等；Tauri IPC 用）
+pub fn cancel_download() {
+    download::request_cancel();
+}
+
+/// 模型清单内模型的总大小（磁盘空间预检用；未知返回 None）
+pub fn model_size_bytes(id: &str) -> Option<u64> {
+    if id == VAD_MODEL_ID {
+        return Some(VAD_MODEL_SIZE);
+    }
+    SHERPA_MODELS
+        .iter()
+        .find(|m| m.id == id)
+        .map(|m| m.files.iter().map(|f| f.size_bytes).sum())
+}
+
+fn download_inner(id: &str, progress: Progress<'_>) -> Result<(), String> {
     let cfg = settings::load().download;
     if id == VAD_MODEL_ID {
         let dest = vad_model_path();

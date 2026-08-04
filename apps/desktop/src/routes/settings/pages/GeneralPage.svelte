@@ -13,6 +13,7 @@
     getHotkeyStatus,
     listModels,
     downloadModel,
+    cancelDownload,
     type AudioDevice,
     type DownloadProgress,
     type ElevationStatus,
@@ -77,6 +78,15 @@
       downloading = false;
       unlistenDl?.();
       unlistenDl = undefined;
+    }
+  }
+
+  /** 取消下载（.part 保留，可续传；P2-⑦） */
+  async function cancelPrimaryDownload() {
+    try {
+      await cancelDownload();
+    } catch (e) {
+      toast(false, `取消失败：${errText(e)}`);
     }
   }
 
@@ -335,11 +345,19 @@
           {primaryModel ? Math.round(primaryModel.sizeBytes / 1_000_000) : 0} MB）
         </p>
         {#if dlPercent !== null}
-          <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
-            <div
-              class="h-full rounded-full bg-kotone-cyan transition-[width]"
-              style:width="{dlPercent}%"
-            ></div>
+          <div class="mt-2 flex items-center gap-2">
+            <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-white/10">
+              <div
+                class="h-full rounded-full bg-kotone-cyan transition-[width]"
+                style:width="{dlPercent}%"
+              ></div>
+            </div>
+            <button
+              class="shrink-0 rounded-lg bg-white/10 px-2.5 py-1 text-[11px] text-white/70 ring-1 ring-white/15 transition hover:bg-white/20"
+              onclick={() => void cancelPrimaryDownload()}
+            >
+              取消
+            </button>
           </div>
         {/if}
       </div>

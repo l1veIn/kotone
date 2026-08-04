@@ -10,6 +10,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use kotone_core::settings::{DownloadConfig, DownloadSource};
@@ -22,6 +23,39 @@ pub type Progress<'a> = &'a dyn Fn(u64, Option<u64>);
 
 /// 单块读取大小（256KB：进度足够平滑，syscall 又不至于太密）
 const CHUNK: usize = 256 * 1024;
+
+// ---------- 下载取消与并发互斥（P2-⑦） ----------
+
+/// 全局取消标记：IPC `cancel_download` 置位；下载循环每块检查。
+/// 取消不删除 `.part` 临时文件（下次启动自动断点续传）。
+static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// 下载互斥：GUI 与 CLI 共用同一实现，防并发重复下载同一模型
+static DOWNLOAD_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// 请求取消当前下载（幂等）
+pub fn request_cancel() {
+    CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+/// 下载循环是否应中止（每块读/每次候选回退前检查）
+pub fn cancel_requested() -> bool {
+    CANCEL_REQUESTED.load(Ordering::SeqCst)
+}
+
+/// 进入下载临界区：已有下载进行中时拒绝（IPC 并发防重入）
+pub fn begin_download() -> Result<(), String> {
+    if DOWNLOAD_ACTIVE.swap(true, Ordering::SeqCst) {
+        return Err("已有模型下载进行中，请等待完成或先取消".to_string());
+    }
+    CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+    Ok(())
+}
+
+/// 退出下载临界区（无论成败）：释放互斥并复位取消标记
+pub fn end_download() {
+    DOWNLOAD_ACTIVE.store(false, Ordering::SeqCst);
+    CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+}
 /// ModelScope 的 LFS CDN 会拒绝没有 User-Agent 的匿名请求（403）。
 /// 使用固定、可识别的应用标识；公开模型下载不需要用户 Token。
 const USER_AGENT: &str = concat!("Kotone/", env!("CARGO_PKG_VERSION"), " model-downloader");
@@ -147,6 +181,10 @@ fn download_to_tmp(url: &str, tmp: &Path, progress: Progress<'_>) -> Result<(), 
     progress(downloaded, total);
     let mut buf = vec![0u8; CHUNK];
     loop {
+        if cancel_requested() {
+            // 取消：保留 .part 供续传（与网络中断同语义，不删临时文件）
+            return Err("下载已取消（临时文件已保留，可随时续传）".to_string());
+        }
         let n = resp.read(&mut buf).map_err(|e| format!("下载中断：{e}"))?;
         if n == 0 {
             break;
@@ -245,6 +283,9 @@ pub fn download_resolved(
     let candidates = candidate_urls(url, cfg);
     let mut last_err = String::new();
     for (i, cand) in candidates.iter().enumerate() {
+        if cancel_requested() {
+            return Err("下载已取消（临时文件已保留，可随时续传）".to_string());
+        }
         if i > 0 {
             log(&format!("镜像失败，回退重试：{cand}"));
         }

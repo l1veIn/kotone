@@ -3,6 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import {
     checkInputEnvironment,
+    cancelDownload,
     downloadModel,
     getModelsDir,
     isTauri,
@@ -229,6 +230,15 @@
       downloadTargetId = null;
       unlistenDl?.();
       unlistenDl = undefined;
+    }
+  }
+
+  /** 取消下载（.part 保留，可续传；P2-⑦） */
+  async function cancelDownloadById() {
+    try {
+      await cancelDownload();
+    } catch (e) {
+      toast(false, `取消失败：${errText(e)}`);
     }
   }
 
@@ -486,13 +496,21 @@
               {/if}
             </div>
             {#if downloadTargetId === primaryModel.id}
-              <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
-                <div
-                  class="h-full rounded-full bg-kotone-cyan transition-[width] {dlPercent === null
-                    ? 'w-1/3 animate-pulse'
-                    : ''}"
-                  style:width={dlPercent === null ? undefined : `${dlPercent}%`}
-                ></div>
+              <div class="mt-3 flex items-center gap-2">
+                <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-white/10">
+                  <div
+                    class="h-full rounded-full bg-kotone-cyan transition-[width] {dlPercent === null
+                      ? 'w-1/3 animate-pulse'
+                      : ''}"
+                    style:width={dlPercent === null ? undefined : `${dlPercent}%`}
+                  ></div>
+                </div>
+                <button
+                  class="shrink-0 rounded-lg bg-white/10 px-2.5 py-1 text-[11px] text-white/70 ring-1 ring-white/15 transition hover:bg-white/20"
+                  onclick={() => void cancelDownloadById()}
+                >
+                  取消
+                </button>
               </div>
               <p class="mt-1.5 text-[11px] text-white/45">
                 {dlPercent === null ? "建立连接中…" : `${dlPercent}%`}
