@@ -4,6 +4,7 @@
   import {
     checkInputEnvironment,
     cancelDownload,
+    detectHotkeyConflicts,
     downloadModel,
     getModelsDir,
     isTauri,
@@ -289,6 +290,7 @@
       if (result.kind === "combo") {
         currentKey = result.combo;
         toast(true, `已录入热键：${result.combo}`);
+        void checkHotkeyConflicts(result.combo);
       } else if (result.kind === "cancelled") {
         toastInfo("已取消录入");
       } else if (result.kind === "timeout") {
@@ -297,6 +299,16 @@
         toast(false, result.message);
       }
     });
+  }
+
+  /** 键位冲突静态提示（P2-⑩：录入后展示常见游戏键位冲突） */
+  let hotkeyWarnings = $state<string[]>([]);
+  async function checkHotkeyConflicts(key: string) {
+    try {
+      hotkeyWarnings = await detectHotkeyConflicts(key);
+    } catch {
+      hotkeyWarnings = [];
+    }
   }
 
   async function saveInteractionAndContinue() {
@@ -689,6 +701,15 @@
             {capturing ? "请按下组合键…（Esc 取消）" : "重新录入"}
           </button>
         </div>
+
+        {#if hotkeyWarnings.length > 0}
+          <div class="mt-3 rounded-xl bg-kotone-pink/10 p-3 ring-1 ring-kotone-pink/35">
+            <p class="text-xs font-semibold text-kotone-pink">键位冲突提示</p>
+            {#each hotkeyWarnings as w}
+              <p class="mt-1 text-[11px] leading-relaxed text-white/65">⚠ {w}</p>
+            {/each}
+          </div>
+        {/if}
 
         <div class="mt-6 flex items-center justify-between">
           <button class="text-xs text-white/50 hover:text-white/80" onclick={() => (step = 2)}>
