@@ -805,6 +805,12 @@ async fn check_input_environment(app: AppHandle) -> Result<InputEnvironmentCheck
     .map_err(|e| format!("输入环境自检任务失败：{e}"))
 }
 
+/// 静态键位冲突提示（P2-⑩：向导热键步骤录入后展示；常见游戏键位表）
+#[tauri::command]
+fn detect_hotkey_conflicts(key: String) -> Vec<String> {
+    crate::hotkey::detect_conflicts(&key)
+}
+
 /// 开始热键捕获（设置页「点击录入」）：结果经 `kotone://hotkey-capture` 事件推送
 #[tauri::command]
 async fn start_hotkey_capture(app: AppHandle) -> Result<(), String> {
@@ -1475,6 +1481,7 @@ pub fn run() {
             get_elevation_status,
             get_hotkey_status,
             check_input_environment,
+            detect_hotkey_conflicts,
             start_hotkey_capture,
             cancel_hotkey_capture,
             restart_as_admin,

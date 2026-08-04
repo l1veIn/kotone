@@ -720,6 +720,12 @@ export interface HotkeyCaptureEvent {
   timeout?: boolean;
 }
 
+/** 静态键位冲突提示（向导热键步骤；常见游戏键位表） */
+export async function detectHotkeyConflicts(key: string): Promise<string[]> {
+  if (!isTauri) return [];
+  return invoke<string[]>("detect_hotkey_conflicts", { key });
+}
+
 /** 开始热键捕获（设置页「点击录入」）；结果经 kotone://hotkey-capture 事件推送 */
 export async function startHotkeyCapture(): Promise<void> {
   if (!isTauri) throw new Error("浏览器调试环境不支持热键录入");

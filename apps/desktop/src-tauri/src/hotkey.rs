@@ -527,9 +527,8 @@ fn backend_preference(app: &AppHandle) -> HotkeyBackend {
         .unwrap_or_default()
 }
 
-/// 检测与常见游戏键位的冲突（首次启动引导用）。
+/// 检测与常见游戏键位的冲突（首次启动引导用，P2-⑩ 已接入向导热键步骤）。
 /// TODO(后续)：与常见游戏默认键位表对比 + 尝试注册探测占用情况。当前仅做静态提示。
-#[allow(dead_code)] // 供首次启动引导 UI 调用（前端子代理接入）
 pub fn detect_conflicts(key: &str) -> Vec<String> {
     let common_game_keys = [
         "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F9", "F10", "F11", "F12", "Tab", "Space",
