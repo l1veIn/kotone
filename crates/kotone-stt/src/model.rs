@@ -919,9 +919,43 @@ pub fn migrate_dir_contents(src: &PathBuf, dst: &PathBuf) -> Result<MigrateRepor
         let name = entry.file_name().to_string_lossy().into_owned();
         let target = dst.join(&name);
         if target.exists() {
-            // 目标已有同名条目：视为已迁移（保留目标，删除源以完成合并）
-            if remove_entry(&entry.path()).is_ok() {
-                report.moved.push(name);
+            // 目标已有同名条目（重复迁移/目标目录本有内容）。不能盲目删源：
+            // - 同名同大小文件：视为已迁移（保留目标，删除源完成合并）；
+            // - 同名不同内容文件：删源会静默丢数据——源改名为 conflict 副本保留；
+            // - 同名目录：保守处理，不合并不删除，记 failed 交用户处理。
+            let src_is_file = entry.path().is_file();
+            let same_size = src_is_file
+                && fs::metadata(&entry.path())
+                    .and_then(|s| fs::metadata(&target).map(|t| (s.len(), t.len())))
+                    .map(|(a, b)| a == b)
+                    .unwrap_or(false);
+            if same_size {
+                if remove_entry(&entry.path()).is_ok() {
+                    report.moved.push(name);
+                } else {
+                    report.failed.push(name);
+                }
+            } else if src_is_file {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let conflict = dst.join(format!("{name}.conflict-{ts}"));
+                match fs::rename(&entry.path(), &conflict) {
+                    Ok(()) => {
+                        kotone_core::log::log(&format!(
+                            "模型迁移：目标已有同名不同内容文件，源保留为 {}",
+                            conflict.display()
+                        ));
+                        report.moved.push(name);
+                    }
+                    Err(e) => {
+                        kotone_core::log::log(&format!(
+                            "模型迁移：同名冲突文件改名失败（{name}）: {e}"
+                        ));
+                        report.failed.push(name);
+                    }
+                }
             } else {
                 report.failed.push(name);
             }
@@ -1521,6 +1555,52 @@ mod tests {
         let report = migrate_dir_contents(&p, &dst).unwrap();
         assert!(report.moved.is_empty() && report.failed.is_empty());
         assert!(dst.exists());
+    }
+
+    /// P2-⑧：目标已有同名条目时不得静默删源——
+    /// 同大小文件视为已迁移；不同内容文件保留为 conflict 副本；同名目录记 failed。
+    #[test]
+    fn migrate_preserves_conflicting_same_name_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("old");
+        let dst = tmp.path().join("new");
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&dst).unwrap();
+
+        // 1) 同名同大小文件：视为已迁移，源删除
+        fs::write(src.join("same.bin"), b"abc").unwrap();
+        fs::write(dst.join("same.bin"), b"abc").unwrap();
+        // 2) 同名不同内容文件：源保留为 conflict 副本，不丢数据
+        fs::write(src.join("diff.bin"), b"old-content").unwrap();
+        fs::write(dst.join("diff.bin"), b"new-content-longer").unwrap();
+        // 3) 同名目录：保守记 failed，源目录原样保留
+        fs::create_dir_all(src.join("dir")).unwrap();
+        fs::create_dir_all(dst.join("dir")).unwrap();
+
+        let report = migrate_dir_contents(&src, &dst).unwrap();
+        assert!(
+            report.moved.contains(&"same.bin".to_string()),
+            "同大小文件应视为已迁移: {report:?}"
+        );
+        assert!(
+            report.moved.contains(&"diff.bin".to_string()),
+            "冲突文件应改名保留并计入 moved: {report:?}"
+        );
+        assert!(report.failed.contains(&"dir".to_string()), "{report:?}");
+
+        assert!(!src.join("same.bin").exists(), "同大小源应删除");
+        assert_eq!(fs::read(dst.join("diff.bin")).unwrap(), b"new-content-longer");
+        let conflicts = fs::read_dir(&dst)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("diff.bin.conflict-"))
+            .count();
+        assert_eq!(conflicts, 1, "冲突源应保留为 conflict 副本");
+        assert!(
+            src.join("dir").is_dir(),
+            "同名目录冲突时源目录不应被删除"
+        );
     }
 
     // ---------- 删除 ----------

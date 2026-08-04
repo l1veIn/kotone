@@ -1027,12 +1027,21 @@ pub struct ModelsDirMigration {
 /// 切换模型存储目录：先把旧目录内容移动到新目录（跨卷回退复制），
 /// 迁移完成后才写配置——迁移失败过半也不丢配置一致性（failed 条目需重新下载）。
 /// 传空字符串 = 恢复默认 ~/.kotone/models。
+/// 运行时 Running 期间拒绝迁移：模型文件被引擎占用（Windows 文件锁），
+/// 迁移必然失败且产生困惑的 failed 列表（P2-⑧）。
 #[tauri::command]
 fn set_models_dir(
     app: AppHandle,
     state: tauri::State<SharedState>,
     dir: String,
 ) -> Result<ModelsDirMigration, String> {
+    let running = app
+        .try_state::<RuntimeManager>()
+        .map(|rt| rt.phase() == RuntimePhase::Running)
+        .unwrap_or(false);
+    if running {
+        return Err("引擎正在运行，请先停止引擎再迁移模型目录（设置页或托盘「停止引擎」）".into());
+    }
     let (old_dir, new_dir) = {
         let settings = state.settings.read().unwrap();
         let old = model::models_dir_from(&settings);
