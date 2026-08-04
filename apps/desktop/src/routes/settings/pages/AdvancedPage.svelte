@@ -20,6 +20,7 @@
     getModelsDir,
     setModelsDir,
     openModelsDir,
+    openHistoryDir,
     cancelDownload,
     updateSettings,
     getElevationStatus,
@@ -164,6 +165,28 @@
     const sel = await openDialog({ directory: true, title: "选择模型存储位置" }).catch(() => null);
     if (!sel) return; // 用户取消
     dirDraft = sel;
+  }
+
+  // ---------- 历史记录位置（P2-⑨） ----------
+
+  /** 当前历史目录（自定义或默认路径拼接；仅展示用） */
+  const historyDirLabel = $derived(
+    $settingsStore?.history.dir.trim() || "~/.kotone/history",
+  );
+  const historyDirCustom = $derived(Boolean($settingsStore?.history.dir.trim()));
+
+  async function onChangeHistoryDir() {
+    const sel = await openDialog({ directory: true, title: "选择历史记录位置" }).catch(() => null);
+    if (!sel) return; // 用户取消
+    await patch({ history: { dir: sel } }, "历史目录已切换");
+  }
+
+  async function onOpenHistoryDir() {
+    try {
+      await openHistoryDir();
+    } catch (e) {
+      toast(false, `打开目录失败：${errText(e)}`);
+    }
   }
 
   // ---------- 模型操作 ----------
@@ -478,6 +501,39 @@
         </button>
       </div>
     {/if}
+  </section>
+
+  <!-- 历史记录位置（P2-⑨：历史音频也可能占大量空间，支持自定义目录） -->
+  <section class="kotone-panel mt-4 p-4">
+    <h2 class="text-sm font-semibold text-kotone-cyan/90">历史记录位置</h2>
+    <div class="mt-3 flex items-center gap-2">
+      <span class="min-w-0 flex-1 truncate rounded-lg bg-white/5 px-2.5 py-1.5 text-xs text-white/70 ring-1 ring-white/10">
+        {historyDirLabel}{historyDirCustom ? "" : "（默认）"}
+      </span>
+      <button
+        class="shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/85 ring-1 ring-white/15 transition hover:bg-white/20"
+        onclick={() => void onChangeHistoryDir()}
+      >
+        更改
+      </button>
+      {#if historyDirCustom}
+        <button
+          class="shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-xs text-white/70 ring-1 ring-white/15 transition hover:bg-white/20"
+          onclick={() => void patch({ history: { dir: "" } }, "已恢复默认历史目录")}
+        >
+          恢复默认
+        </button>
+      {/if}
+      <button
+        class="shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/85 ring-1 ring-white/15 transition hover:bg-white/20"
+        onclick={() => void onOpenHistoryDir()}
+      >
+        打开目录
+      </button>
+    </div>
+    <p class="mt-2 text-[11px] text-white/40">
+      历史记录与回放音频保存位置；新记录写入新目录，旧目录内容不自动迁移。
+    </p>
   </section>
 
   {#if engines === null}

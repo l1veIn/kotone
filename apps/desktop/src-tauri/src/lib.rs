@@ -1092,6 +1092,14 @@ fn delete_model(
     Ok(outcome)
 }
 
+/// 在系统文件管理器中打开历史记录目录（P2-⑨：历史目录可自定义后仍需可视入口）
+#[tauri::command]
+fn open_history_dir() -> Result<(), String> {
+    let dir = kotone_core::history::history_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建目录 {}：{e}", dir.display()))?;
+    open_in_file_manager(&dir)
+}
+
 /// 在系统文件管理器中打开模型目录
 #[tauri::command]
 fn open_models_dir(state: tauri::State<SharedState>) -> Result<(), String> {
@@ -1481,6 +1489,7 @@ pub fn run() {
             set_models_dir,
             delete_model,
             open_models_dir,
+            open_history_dir,
             open_external,
             get_history,
             clear_history,
