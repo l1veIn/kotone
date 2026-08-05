@@ -45,10 +45,10 @@
   let fileInput = $state<HTMLInputElement | null>(null);
   let importTargetId = $state<string | null>(null);
   let showTechnical = $state(false);
-  /** 整包导入（.kprofile）与删除 */
+  /** 整包导入（.zip 配置包）与删除 */
   let importingPackage = $state(false);
   let deletingId = $state<string | null>(null);
-  /** dev:web 导入 .kprofile 的隐藏文件选择器 */
+  /** dev:web 导入 .zip 配置包的隐藏文件选择器 */
   let pkgFileInput = $state<HTMLInputElement | null>(null);
   /** profile 图标 blob URL 缓存（profile id → URL；空串 = 无图标） */
   const iconUrls = $state<Record<string, string>>({});
@@ -64,7 +64,8 @@
     return p.id === "lol" || p.id === "generic";
   }
 
-  /** 加载 profile 图标字节 → blob URL（按扩展名推断 mime；无图标/失败 → 占位） */
+  /** 加载 profile 图标字节 → data URL（按扩展名推断 mime；无图标/失败 → 占位）。
+   *  用 data: 而非 blob:——CSP img-src 只放行 'self' data: asset:，blob: 会被拦截不显示。 */
   async function ensureIcon(p: GameProfile) {
     if (!p.icon || iconUrls[p.id] !== undefined || loadingIcons.has(p.id)) return;
     loadingIcons.add(p.id);
@@ -77,12 +78,19 @@
       const ext = (p.icon.split(".").pop() ?? "webp").toLowerCase();
       const mime =
         ext === "png" ? "image/png" : ext === "jpg" || ext === "jpeg" ? "image/jpeg" : "image/webp";
-      iconUrls[p.id] = URL.createObjectURL(new Blob([bytes], { type: mime }));
+      iconUrls[p.id] = `data:${mime};base64,${bytesToBase64(bytes)}`;
     } catch {
       iconUrls[p.id] = "";
     } finally {
       loadingIcons.delete(p.id);
     }
+  }
+
+  /** Uint8Array → base64（图标 ≤ 数十 KB，直接逐字节拼即可） */
+  function bytesToBase64(bytes: Uint8Array): string {
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
   }
 
   /** 拉取 profile 列表并顺带加载各图标 */
@@ -264,18 +272,18 @@
     }
   }
 
-  // ---------- 整包导入导出（.kprofile：profile.json + icon） ----------
+  // ---------- 整包导入导出（.zip：profile.json + icon） ----------
 
   /** 导出整包：含 icon，供分享/编辑成别的游戏再导入 */
   async function onExportPackage(p: GameProfile) {
     if (!isTauri) {
-      toastWarn("dev:web 环境不支持 .kprofile 导出，请在 Tauri 应用中验证");
+      toastWarn("dev:web 环境不支持 .zip 导出，请在 Tauri 应用中验证");
       return;
     }
     try {
       const path = await saveDialog({
-        defaultPath: `${p.displayName}.kprofile`,
-        filters: [{ name: "Kotone Profile 包", extensions: ["kprofile"] }],
+        defaultPath: `${p.displayName}.zip`,
+        filters: [{ name: "Kotone 配置包", extensions: ["zip"] }],
       });
       if (!path) return; // 用户取消
       await exportProfile(p.id, path);
@@ -295,7 +303,7 @@
     try {
       const sel = await openDialog({
         multiple: false,
-        filters: [{ name: "Kotone Profile 包", extensions: ["kprofile"] }],
+        filters: [{ name: "Kotone 配置包", extensions: ["zip"] }],
       });
       if (!sel || typeof sel !== "string") return; // 用户取消
       importingPackage = true;
@@ -309,7 +317,7 @@
     }
   }
 
-  /** dev:web 导入 .kprofile：读文件名 → mock importProfile（无法解析真实 zip） */
+  /** dev:web 导入 .zip：读文件名 → mock importProfile（无法解析真实 zip） */
   async function onImportPkgFile(e: Event) {
     const input = e.target as HTMLInputElement;
     const file = input.files?.[0];
@@ -359,7 +367,7 @@
 
   <div class="mt-3 flex items-center justify-between gap-3">
     <p class="min-w-0 text-[11px] text-white/40">
-      把分享来的 .kprofile 配置包导进来，或导出自己的去分享
+      把分享来的 .zip 配置包导进来，或导出自己的去分享
     </p>
     <button
       class="shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:bg-white/20 active:scale-95 disabled:opacity-50"
@@ -416,7 +424,7 @@
           </button>
           <button
             class="shrink-0 rounded-lg bg-white/8 px-2.5 py-1.5 text-[11px] text-white/55 ring-1 ring-white/12 transition hover:bg-white/15 hover:text-white/85 active:scale-95"
-            title="导出 .kprofile 配置包（可编辑成别的游戏后重新导入）"
+            title="导出 .zip 配置包（可编辑成别的游戏后重新导入）"
             onclick={() => void onExportPackage(p)}
           >
             导出
@@ -578,11 +586,11 @@
     class="hidden"
     onchange={(e) => void onImportFile(e)}
   />
-  <!-- dev:web 导入 .kprofile 用隐藏文件选择器 -->
+  <!-- dev:web 导入 .zip 配置包用隐藏文件选择器 -->
   <input
     bind:this={pkgFileInput}
     type="file"
-    accept=".kprofile,application/zip"
+    accept=".zip,application/zip"
     class="hidden"
     onchange={(e) => void onImportPkgFile(e)}
   />

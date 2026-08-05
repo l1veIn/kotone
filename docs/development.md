@@ -484,11 +484,11 @@ simulate_send(text, profileId) -> Result<(), InjectError>   // v3：走真实发
 
 > 注：相对预研报告中的示例 profile，此处将三个 delay 默认值从 50/40/30 修正为 20/20/20（预研 §5.0 已用 LeagueAkari 实测数据修正过假设），并将 `preferClipboardPaste` 默认改为 `false`（Unicode 优先）。
 
-### 5.4.1 配置包交换格式（`.kprofile`，ZIP）
+### 5.4.1 配置包交换格式（`.zip`）
 
 游戏适配支持整包导入/导出（`export_profile` / `import_profile` / `delete_profile` / `get_profile_icon`），供分享或"导出 → 手工改成别的游戏 → 导入"。
 
-- **包格式**：`.kprofile` = ZIP，含 `profile.json`（GameProfile 序列化，不含用户本地状态 `removedBuiltinHotwords`）+ `icon.<ext>`（可选图标）。
+- **包格式**：`.zip`（标准 ZIP），含 `profile.json`（GameProfile 序列化，不含用户本地状态 `removedBuiltinHotwords`）+ `icon.<ext>`（可选图标）。
 - **导入语义**：后端生成**新随机 id**（`p<utc>-<n>`），用 `displayName` 区分，永不与内置/既有 profile 冲突；`icon.*` 条目写入 `profiles/icons/<新id>.<ext>`。
 - **删除语义**：内置（lol / generic）= 恢复出厂（用编译期内置覆盖）；导入的 = 永久删除（含 icon）。
 - **内置来源**：`resources/profiles/*.json` + `resources/profiles/icons/*` 编译期打入，首次运行物化到 `~/.kotone/profiles/`（`ensure_builtin`）；老安装升级自动补 `icon` 字段。

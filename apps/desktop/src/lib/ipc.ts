@@ -630,7 +630,7 @@ export async function importHotwords(profileId: string, path: string): Promise<H
   return invoke<HotwordMergeReport>("import_hotwords", { profileId, path });
 }
 
-/** 导出整包 profile 为 .kprofile ZIP（profile.json + icon.*） */
+/** 导出整包 profile 为 .zip 配置包（profile.json + icon.*） */
 export async function exportProfile(profileId: string, path: string): Promise<void> {
   if (!isTauri) {
     console.info(`[mock] export_profile: ${profileId} → ${path}`);
@@ -639,14 +639,14 @@ export async function exportProfile(profileId: string, path: string): Promise<vo
   return invoke<void>("export_profile", { profileId, path });
 }
 
-/** 导入 .kprofile ZIP 包：后端生成新随机 id 落盘，返回导入后的 profile */
+/** 导入 .zip 配置包：后端生成新随机 id 落盘，返回导入后的 profile */
 export async function importProfile(path: string): Promise<GameProfile> {
   if (!isTauri) {
     // dev:web 模拟：从文件名造一条带随机 id 的 profile
-    const name = path.split(/[\\/]/).pop() ?? "imported.kprofile";
+    const name = path.split(/[\\/]/).pop() ?? "imported.zip";
     const profile: GameProfile = {
       id: `p-mock-${Math.floor(Math.random() * 1e9)}`,
-      displayName: name.replace(/\.kprofile$/i, "") || "导入的 profile",
+      displayName: name.replace(/\.zip$/i, "") || "导入的 profile",
       processNames: [],
       windowTitlePatterns: [],
       openChatKey: "Enter",
