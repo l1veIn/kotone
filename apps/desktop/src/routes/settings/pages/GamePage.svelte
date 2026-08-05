@@ -18,13 +18,16 @@
     saveProfile,
     exportHotwords,
     importHotwords,
+    exportProfile,
+    importProfile,
+    deleteProfile,
+    getProfileIcon,
     isTauri,
     type GameProfile,
   } from "../../../lib/ipc";
-  import { settingsStore, toast, errText } from "../../../lib/stores/ui";
+  import { settingsStore, toast, toastWarn, errText } from "../../../lib/stores/ui";
   import { spotlight } from "../../../lib/actions/spotlight";
   import Toggle from "../../../lib/components/Toggle.svelte";
-  import lolIcon from "../../../assets/games/lol-kotone.webp";
 
   let profiles = $state<GameProfile[]>([]);
 
@@ -42,15 +45,55 @@
   let fileInput = $state<HTMLInputElement | null>(null);
   let importTargetId = $state<string | null>(null);
   let showTechnical = $state(false);
+  /** 整包导入（.kprofile）与删除 */
+  let importingPackage = $state(false);
+  let deletingId = $state<string | null>(null);
+  /** dev:web 导入 .kprofile 的隐藏文件选择器 */
+  let pkgFileInput = $state<HTMLInputElement | null>(null);
+  /** profile 图标 blob URL 缓存（profile id → URL；空串 = 无图标） */
+  const iconUrls = $state<Record<string, string>>({});
+  const loadingIcons = $state<Set<string>>(new Set());
 
   /** 实时词条数：非空 trim 行数（不去重——去重在保存时做并提示） */
   const hotwordCount = $derived(
     hotwordsText.split(/\r?\n/).filter((l) => l.trim() !== "").length,
   );
 
+  /** 内置 profile（删除语义 = 恢复出厂）；当前内置集仍为 lol / generic */
+  function isBuiltin(p: GameProfile): boolean {
+    return p.id === "lol" || p.id === "generic";
+  }
+
+  /** 加载 profile 图标字节 → blob URL（按扩展名推断 mime；无图标/失败 → 占位） */
+  async function ensureIcon(p: GameProfile) {
+    if (!p.icon || iconUrls[p.id] !== undefined || loadingIcons.has(p.id)) return;
+    loadingIcons.add(p.id);
+    try {
+      const bytes = await getProfileIcon(p.id);
+      if (bytes.length === 0) {
+        iconUrls[p.id] = "";
+        return;
+      }
+      const ext = (p.icon.split(".").pop() ?? "webp").toLowerCase();
+      const mime =
+        ext === "png" ? "image/png" : ext === "jpg" || ext === "jpeg" ? "image/jpeg" : "image/webp";
+      iconUrls[p.id] = URL.createObjectURL(new Blob([bytes], { type: mime }));
+    } catch {
+      iconUrls[p.id] = "";
+    } finally {
+      loadingIcons.delete(p.id);
+    }
+  }
+
+  /** 拉取 profile 列表并顺带加载各图标 */
+  async function loadProfiles() {
+    profiles = await listProfiles();
+    for (const p of profiles) void ensureIcon(p);
+  }
+
   onMount(async () => {
     try {
-      profiles = await listProfiles();
+      await loadProfiles();
     } catch (e) {
       toast(false, `加载游戏配置失败：${errText(e)}`);
     }
@@ -142,7 +185,7 @@
 
   /** 导入后刷新 profile 列表；若编辑器开着同一 profile，同步编辑器里的热词文本 */
   async function refreshAfterImport(profileId: string) {
-    profiles = await listProfiles();
+    await loadProfiles();
     if (editingId === profileId && draft) {
       const fresh = profiles.find((p) => p.id === profileId);
       if (fresh) hotwordsText = fresh.hotwords.join("\n");
@@ -220,6 +263,92 @@
       importing = false;
     }
   }
+
+  // ---------- 整包导入导出（.kprofile：profile.json + icon） ----------
+
+  /** 导出整包：含 icon，供分享/编辑成别的游戏再导入 */
+  async function onExportPackage(p: GameProfile) {
+    if (!isTauri) {
+      toastWarn("dev:web 环境不支持 .kprofile 导出，请在 Tauri 应用中验证");
+      return;
+    }
+    try {
+      const path = await saveDialog({
+        defaultPath: `${p.displayName}.kprofile`,
+        filters: [{ name: "Kotone Profile 包", extensions: ["kprofile"] }],
+      });
+      if (!path) return; // 用户取消
+      await exportProfile(p.id, path);
+      toast(true, `已导出配置包 → ${path}`);
+    } catch (e) {
+      toast(false, `导出失败：${errText(e)}`);
+    }
+  }
+
+  /** 导入整包（生成新 id，用包名区分），成功后刷新列表 */
+  async function onImportPackage() {
+    if (!isTauri) {
+      pkgFileInput?.click();
+      return;
+    }
+    if (importingPackage) return;
+    try {
+      const sel = await openDialog({
+        multiple: false,
+        filters: [{ name: "Kotone Profile 包", extensions: ["kprofile"] }],
+      });
+      if (!sel || typeof sel !== "string") return; // 用户取消
+      importingPackage = true;
+      const imported = await importProfile(sel);
+      await loadProfiles();
+      toast(true, `已导入「${imported.displayName}」`);
+    } catch (e) {
+      toast(false, `导入失败：${errText(e)}`);
+    } finally {
+      importingPackage = false;
+    }
+  }
+
+  /** dev:web 导入 .kprofile：读文件名 → mock importProfile（无法解析真实 zip） */
+  async function onImportPkgFile(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = ""; // 允许重复选同一文件
+    if (!file) return;
+    try {
+      const imported = await importProfile(file.name);
+      await loadProfiles();
+      toast(true, `已导入「${imported.displayName}」（dev:web 模拟）`);
+    } catch (err) {
+      toast(false, `导入失败：${errText(err)}`);
+    }
+  }
+
+  /** 删除/恢复：内置 = 恢复出厂；导入的 = 永久删除。二次点击确认（3s 超时取消） */
+  async function onDeleteProfile(p: GameProfile) {
+    if (deletingId !== p.id) {
+      deletingId = p.id;
+      setTimeout(() => {
+        if (deletingId === p.id) deletingId = null;
+      }, 3000);
+      return;
+    }
+    deletingId = null;
+    try {
+      const kind = await deleteProfile(p.id);
+      // 删除的是当前激活 profile → 清 activeProfileId（orchestrator 兜底 generic）
+      if ($settingsStore?.activeProfileId === p.id) {
+        settingsStore.set(await updateSettings({ activeProfileId: null }));
+      }
+      await loadProfiles();
+      toast(
+        true,
+        kind === "reset" ? `「${p.displayName}」已恢复默认配置` : `已删除「${p.displayName}」`,
+      );
+    } catch (e) {
+      toast(false, `操作失败：${errText(e)}`);
+    }
+  }
 </script>
 
 <div class="px-6 py-5">
@@ -228,7 +357,20 @@
   </h1>
   <p class="mt-0.5 text-[11px] text-white/45">每个游戏一套打法：聊天键、词表、节奏</p>
 
-  <div class="mt-4 flex flex-col gap-3">
+  <div class="mt-3 flex items-center justify-between gap-3">
+    <p class="min-w-0 text-[11px] text-white/40">
+      把分享来的 .kprofile 配置包导进来，或导出自己的去分享
+    </p>
+    <button
+      class="shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:bg-white/20 active:scale-95 disabled:opacity-50"
+      disabled={importingPackage}
+      onclick={() => void onImportPackage()}
+    >
+      {importingPackage ? "导入中…" : "导入配置包"}
+    </button>
+  </div>
+
+  <div class="mt-3 flex flex-col gap-3">
     {#each profiles as p}
       {@const active = $settingsStore?.activeProfileId === p.id}
       {@const editing = editingId === p.id && draft !== null}
@@ -237,13 +379,13 @@
         class="kotone-card kotone-spotlight p-4 {active ? 'border-kotone-cyan/50 shadow-glow-cyan' : ''}"
       >
         <div class="flex items-center gap-3">
-          <!-- 游戏图标：LOL 用生成的琴音徽章，通用配置用 lucide 地球 -->
+          <!-- 游戏图标：有 icon 用 profile 图标（IPC 加载 blob URL），否则用占位 -->
           <span
             class="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl
               {active ? 'bg-kotone-cyan/15' : 'bg-white/8'}"
           >
-            {#if p.id === "lol"}
-              <img src={lolIcon} alt="英雄联盟 · 琴音徽章" class="h-full w-full object-contain" />
+            {#if p.icon && iconUrls[p.id]}
+              <img src={iconUrls[p.id]} alt={p.displayName} class="h-full w-full object-contain" />
             {:else if p.processNames.length === 0}
               <!-- lucide: globe -->
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5 text-white/60"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
@@ -260,7 +402,7 @@
               {/if}
             </p>
             <p class="mt-0.5 truncate text-[11px] text-white/45">
-              {p.id === "lol" ? "英雄联盟输入方式与术语库" : "适用于所有窗口"}
+              {p.processNames.length > 0 ? `适配 ${p.processNames.length} 个进程` : "适用于所有窗口"}
               · 热词 {p.hotwords.length} 个
             </p>
           </div>
@@ -272,6 +414,13 @@
           >
             {editing ? "收起" : "编辑"}
           </button>
+          <button
+            class="shrink-0 rounded-lg bg-white/8 px-2.5 py-1.5 text-[11px] text-white/55 ring-1 ring-white/12 transition hover:bg-white/15 hover:text-white/85 active:scale-95"
+            title="导出 .kprofile 配置包（可编辑成别的游戏后重新导入）"
+            onclick={() => void onExportPackage(p)}
+          >
+            导出
+          </button>
           {#if !active}
             <button
               class="shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:bg-white/20 active:scale-95"
@@ -280,6 +429,22 @@
               激活
             </button>
           {/if}
+          <button
+            class="shrink-0 rounded-lg px-2.5 py-1.5 text-[11px] ring-1 transition active:scale-95 {deletingId ===
+            p.id
+              ? 'bg-kotone-pink/20 text-kotone-pink ring-kotone-pink/50'
+              : 'bg-white/8 text-white/55 ring-white/12 hover:bg-white/15 hover:text-white/85'}"
+            title={isBuiltin(p) ? "恢复默认配置（还原内置热词与图标）" : "删除该配置"}
+            onclick={() => void onDeleteProfile(p)}
+          >
+            {deletingId === p.id
+              ? isBuiltin(p)
+                ? "再点确认重置"
+                : "再点确认删除"
+              : isBuiltin(p)
+                ? "重置"
+                : "删除"}
+          </button>
         </div>
 
         {#if p.channels && p.channels.length > 1}
@@ -412,5 +577,13 @@
     accept=".txt,text/plain"
     class="hidden"
     onchange={(e) => void onImportFile(e)}
+  />
+  <!-- dev:web 导入 .kprofile 用隐藏文件选择器 -->
+  <input
+    bind:this={pkgFileInput}
+    type="file"
+    accept=".kprofile,application/zip"
+    class="hidden"
+    onchange={(e) => void onImportPkgFile(e)}
   />
 </div>

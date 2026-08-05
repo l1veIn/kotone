@@ -13,6 +13,7 @@
   "prePasteDelayMs": 20,
   "preSendDelayMs": 20,
   "preferClipboardPaste": false,
+  "icon": "lol-kotone.webp",
   "channels": [
     {
       "id": "team",

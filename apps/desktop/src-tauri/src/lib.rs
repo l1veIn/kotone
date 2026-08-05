@@ -17,7 +17,7 @@ use kotone_core::interaction::{effective_hotkey_mode, InteractionPolicy};
 use kotone_core::orchestrator::{Emitter, Orchestrator};
 use kotone_core::profile::{
     self, format_hotwords_export, merge_hotwords, parse_hotwords_import, GameProfile,
-    HotwordMergeReport,
+    HotwordMergeReport, ProfileDeleteOutcome,
 };
 use kotone_core::runtime::RuntimePhase;
 use kotone_core::settings::{
@@ -744,6 +744,30 @@ fn import_hotwords(profile_id: String, path: String) -> Result<HotwordMergeRepor
     p.hotwords = merged;
     profile::save(&p)?;
     Ok(report)
+}
+
+/// 导出整包 profile 为 .kprofile ZIP（profile.json + icon.*）。
+#[tauri::command]
+fn export_profile(profile_id: String, path: String) -> Result<(), String> {
+    profile::export_profile(&profile_id, std::path::Path::new(&path))
+}
+
+/// 导入 .kprofile ZIP 包：生成新随机 id 落盘，返回导入后的 profile。
+#[tauri::command]
+fn import_profile(path: String) -> Result<GameProfile, String> {
+    profile::import_profile(std::path::Path::new(&path))
+}
+
+/// 删除 profile：内置 = 恢复出厂；导入的 = 永久删除（含 icon）。
+#[tauri::command]
+fn delete_profile(profile_id: String) -> Result<ProfileDeleteOutcome, String> {
+    profile::delete_profile(&profile_id)
+}
+
+/// 读取 profile 图标字节（无图标 → None）。前端按扩展名推断 mime 建 Blob URL。
+#[tauri::command]
+fn get_profile_icon(profile_id: String) -> Result<Option<Vec<u8>>, String> {
+    Ok(profile::profile_icon_bytes(&profile_id))
 }
 
 // ---------- 提权（UIPI 方案，§10 R-1） ----------
@@ -1477,6 +1501,10 @@ pub fn run() {
             save_profile,
             export_hotwords,
             import_hotwords,
+            export_profile,
+            import_profile,
+            delete_profile,
+            get_profile_icon,
             save_overlay_position,
             get_elevation_status,
             get_hotkey_status,

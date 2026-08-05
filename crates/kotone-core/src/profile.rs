@@ -57,6 +57,9 @@ pub struct GameProfile {
     pub pre_send_delay_ms: u32,
     /// false = Unicode 逐字（不污染剪贴板）；true = 剪贴板粘贴
     pub prefer_clipboard_paste: bool,
+    /// 图标文件名（相对 profiles/icons/ 目录；None = 无图标，UI 用占位）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     pub hotwords: Vec<String>,
     /// 聊天频道列表（ADR-008；空 = 单频道游戏，从 openChatKey 合成默认频道，
     /// 行为与频道功能引入前完全一致）
@@ -160,6 +163,18 @@ fn parse_builtin_profile(expected_id: &str, json: &str) -> GameProfile {
     profile
 }
 
+/// 内置 profile 的图标（字节 + 文件名；None = 该内置无图标）。
+/// 图标随本体编译打入，`ensure_builtin` 首次运行时物化到 profiles/icons/。
+fn builtin_icon(id: &str) -> Option<(&'static [u8], &'static str)> {
+    match id {
+        "lol" => Some((
+            include_bytes!("../resources/profiles/icons/lol-kotone.webp"),
+            "lol-kotone.webp",
+        )),
+        _ => None,
+    }
+}
+
 fn profiles_dir() -> PathBuf {
     kotone_dir().join("profiles")
 }
@@ -179,6 +194,52 @@ fn profile_path_in(dir: &Path, id: &str) -> PathBuf {
     dir.join(format!("{safe}.json"))
 }
 
+// ---------- profile 图标（profiles/icons/ 目录，仿 history::write_audio_in） ----------
+
+/// profile 图标目录（dir 下的 icons/ 子目录）
+fn icons_dir_in(dir: &Path) -> PathBuf {
+    dir.join("icons")
+}
+
+/// icon 文件名安全化（防路径穿越）：只允许字母数字/点/下划线/连字符，
+/// 禁空、禁 `..`、禁分隔符。非法返回 None。
+fn sanitize_icon_name(name: &str) -> Option<String> {
+    if name.is_empty()
+        || name.len() > 64
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains("..")
+        || !name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == '_')
+    {
+        return None;
+    }
+    Some(name.to_string())
+}
+
+/// 写入 profile 图标（相对 icons/ 目录）
+pub fn write_profile_icon_in(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
+    let safe =
+        sanitize_icon_name(name).ok_or_else(|| format!("非法图标文件名：{name}"))?;
+    let idir = icons_dir_in(dir);
+    std::fs::create_dir_all(&idir).map_err(|e| format!("创建图标目录失败: {e}"))?;
+    std::fs::write(idir.join(&safe), bytes).map_err(|e| format!("写入图标失败: {e}"))
+}
+
+/// 读取 profile 图标字节（文件名非法/文件不存在 → None）
+pub fn read_profile_icon_in(dir: &Path, name: &str) -> Option<Vec<u8>> {
+    let safe = sanitize_icon_name(name)?;
+    std::fs::read(icons_dir_in(dir).join(safe)).ok()
+}
+
+/// 读取指定 profile 的图标字节（无图标/读取失败 → None），默认目录版
+pub fn profile_icon_bytes(id: &str) -> Option<Vec<u8>> {
+    let profile = get(id)?;
+    let name = profile.icon.as_deref()?;
+    read_profile_icon_in(&profiles_dir(), name)
+}
+
 /// 确保内置 profile 已落盘（首次运行调用；不覆盖用户已有文件）。
 /// 文件已存在时做「版本更新合并」：把新版扩充的内置词条追加到用户文件末尾
 /// （尊重 removedBuiltinHotwords 里用户显式删除的词条，不复活）。
@@ -196,6 +257,12 @@ pub fn ensure_builtin_in(dir: &Path) -> Result<(), String> {
             std::fs::write(&path, json).map_err(|e| format!("写入内置 profile 失败: {e}"))?;
         } else {
             merge_builtin_hotwords_in(dir, &p);
+        }
+        // 物化内置图标（已存在则不动）
+        if let Some((bytes, name)) = builtin_icon(&p.id) {
+            if read_profile_icon_in(dir, name).is_none() {
+                write_profile_icon_in(dir, name, bytes)?;
+            }
         }
     }
     Ok(())
@@ -227,6 +294,12 @@ fn merge_builtin_hotwords_in(dir: &Path, builtin: &GameProfile) {
         }
         if file.channels.is_empty() && !builtin.channels.is_empty() {
             file.channels = builtin.channels.clone();
+            changed = true;
+        }
+        if file.icon.is_none() && builtin.icon.is_some() {
+            // 老安装升级：内置新增 icon 时补入（用户显式清空 icon 无法表达，
+            // 视为从未设置，补默认即可）
+            file.icon = builtin.icon.clone();
             changed = true;
         }
         if changed {
@@ -398,6 +471,162 @@ pub fn merge_hotwords(
     }
     report.total = merged.len();
     (merged, report)
+}
+
+// ---------- 整包导入导出（.kprofile = ZIP：profile.json + icon.<ext>） ----------
+
+/// 导出为 .kprofile ZIP 包：profile.json（清空 removed_builtin_hotwords——
+/// 用户本地删除状态不进分享包）+ icon.<ext>（若有图标）。
+pub fn export_profile(id: &str, out_path: &Path) -> Result<(), String> {
+    export_profile_in(&profiles_dir(), id, out_path)
+}
+
+pub fn export_profile_in(dir: &Path, id: &str, out_path: &Path) -> Result<(), String> {
+    use std::io::Write as _;
+
+    let mut profile = get_in(dir, id).ok_or_else(|| format!("profile 不存在：{id}"))?;
+    profile.removed_builtin_hotwords = Vec::new();
+
+    let file = std::fs::File::create(out_path).map_err(|e| format!("创建导出文件失败: {e}"))?;
+    let mut zip = zip::ZipWriter::new(file);
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    let json = serde_json::to_string_pretty(&profile)
+        .map_err(|e| format!("序列化 profile 失败: {e}"))?;
+    zip.start_file("profile.json", opts)
+        .map_err(|e| format!("写入 profile.json 失败: {e}"))?;
+    zip.write_all(json.as_bytes())
+        .map_err(|e| format!("写入 profile.json 失败: {e}"))?;
+
+    if let Some(name) = &profile.icon {
+        if let Some(bytes) = read_profile_icon_in(dir, name) {
+            let ext = Path::new(name)
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("png");
+            let entry = format!("icon.{ext}");
+            zip.start_file(&entry, opts)
+                .map_err(|e| format!("写入 {entry} 失败: {e}"))?;
+            zip.write_all(&bytes)
+                .map_err(|e| format!("写入 {entry} 失败: {e}"))?;
+        }
+    }
+    zip.finish().map_err(|e| format!("收尾导出文件失败: {e}"))?;
+    Ok(())
+}
+
+/// 导入 .kprofile ZIP 包：解析 profile.json，**生成新随机 id**（用包名
+/// displayName 区分，永不与内置/既有 profile 冲突），icon.* 条目写入
+/// icons 目录。返回导入后的 profile。
+pub fn import_profile(zip_path: &Path) -> Result<GameProfile, String> {
+    import_profile_in(&profiles_dir(), zip_path)
+}
+
+pub fn import_profile_in(dir: &Path, zip_path: &Path) -> Result<GameProfile, String> {
+    use std::io::Read as _;
+
+    let file = std::fs::File::open(zip_path)
+        .map_err(|e| format!("打开 profile 包失败: {e}"))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("不是合法的 .kprofile 包: {e}"))?;
+
+    let mut json_str = String::new();
+    {
+        let mut entry = archive
+            .by_name("profile.json")
+            .map_err(|_| "profile 包缺少 profile.json".to_string())?;
+        entry
+            .read_to_string(&mut json_str)
+            .map_err(|e| format!("读取 profile.json 失败: {e}"))?;
+    }
+    let mut profile: GameProfile = serde_json::from_str(&json_str)
+        .map_err(|e| format!("解析 profile.json 失败（缺必需字段或格式错误）: {e}"))?;
+
+    // 新随机 id + 清本地删除状态
+    profile.id = new_profile_id();
+    profile.removed_builtin_hotwords = Vec::new();
+
+    // icon.* 条目（若有）→ 写入 icons 目录，文件名用新 id
+    let icon_entry = archive
+        .file_names()
+        .find(|n| n.starts_with("icon."))
+        .map(|s| s.to_string());
+    if let Some(entry_name) = icon_entry {
+        let ext = Path::new(&entry_name)
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("png");
+        let icon_name = format!("{}.{}", profile.id, ext);
+        let mut buf = Vec::new();
+        {
+            let mut entry = archive
+                .by_name(&entry_name)
+                .map_err(|e| format!("读取 {} 失败: {e}", entry_name))?;
+            entry
+                .read_to_end(&mut buf)
+                .map_err(|e| format!("读取 {} 失败: {e}", entry_name))?;
+        }
+        write_profile_icon_in(dir, &icon_name, &buf)?;
+        profile.icon = Some(icon_name);
+    }
+
+    save_in(dir, &profile)?;
+    Ok(profile)
+}
+
+/// 导入用新 id：时间戳（复用 eval::new_session_id 的 utc 方案）+ 进程内
+/// 自增计数——时间戳保证跨进程唯一，计数保证同进程同毫秒多次导入不撞。
+/// 不引入 uuid/rand 依赖。
+fn new_profile_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("p{}-{n}", crate::eval::new_session_id())
+}
+
+/// 删除结果
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum ProfileDeleteOutcome {
+    /// 内置 profile：恢复出厂（用 bundled 覆盖磁盘文件并重写 icon）
+    Reset,
+    /// 导入的自定义 profile：永久删除
+    Deleted,
+}
+
+/// 删除 profile：内置 = 恢复出厂；导入的 = 删文件与 icon
+pub fn delete_profile(id: &str) -> Result<ProfileDeleteOutcome, String> {
+    delete_profile_in(&profiles_dir(), id)
+}
+
+pub fn delete_profile_in(dir: &Path, id: &str) -> Result<ProfileDeleteOutcome, String> {
+    let builtin = match id {
+        "lol" => Some(GameProfile::builtin_lol()),
+        "generic" => Some(GameProfile::builtin_generic()),
+        _ => None,
+    };
+    if let Some(builtin) = builtin {
+        // 恢复出厂：覆盖磁盘文件（清空 removed_builtin_hotwords 等本地改动）+ 物化 icon
+        save_in(dir, &builtin)?;
+        if let Some((bytes, name)) = builtin_icon(&builtin.id) {
+            write_profile_icon_in(dir, name, bytes)?;
+        }
+        Ok(ProfileDeleteOutcome::Reset)
+    } else {
+        let path = profile_path_in(dir, id);
+        if !path.exists() {
+            return Err(format!("profile 不存在：{id}"));
+        }
+        let icon = get_in(dir, id).and_then(|p| p.icon);
+        std::fs::remove_file(&path).map_err(|e| format!("删除 profile 失败: {e}"))?;
+        if let Some(icon) = icon {
+            if let Some(safe) = sanitize_icon_name(&icon) {
+                let _ = std::fs::remove_file(icons_dir_in(dir).join(safe));
+            }
+        }
+        Ok(ProfileDeleteOutcome::Deleted)
+    }
 }
 
 #[cfg(test)]
@@ -720,5 +949,186 @@ mod tests {
             get_in(&dir, "lol").unwrap().channels[1].display_name,
             "全体（自定义）"
         );
+    }
+
+    // ---------- 整包导入导出（.kprofile ZIP） ----------
+
+    #[test]
+    fn export_import_roundtrip_in_temp_dir() {
+        use std::io::Read as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path().to_path_buf();
+        let pkg = dir.join("lol.kprofile");
+
+        // 源 profile：带 icon + removed_builtin_hotwords（导出应剥离本地删除状态）
+        let mut src = GameProfile::builtin_lol();
+        src.removed_builtin_hotwords = vec!["提莫".into()];
+        save_in(&dir, &src).unwrap();
+        let icon = builtin_icon("lol").unwrap();
+        write_profile_icon_in(&dir, icon.1, icon.0).unwrap();
+
+        export_profile_in(&dir, "lol", &pkg).unwrap();
+
+        // 包内 profile.json 不应含 removedBuiltinHotwords，但含 icon
+        let mut zipfile = std::fs::File::open(&pkg).unwrap();
+        let mut archive = zip::ZipArchive::new(&mut zipfile).unwrap();
+        let mut json_str = String::new();
+        archive
+            .by_name("profile.json")
+            .unwrap()
+            .read_to_string(&mut json_str)
+            .unwrap();
+        assert!(
+            !json_str.contains("removedBuiltinHotwords"),
+            "导出剥离用户本地删除状态"
+        );
+        assert!(json_str.contains("\"icon\": \"lol-kotone.webp\""));
+        let icon_entry = archive
+            .file_names()
+            .find(|n| n.starts_with("icon."))
+            .unwrap()
+            .to_string();
+        let mut icon_bytes = Vec::new();
+        archive
+            .by_name(&icon_entry)
+            .unwrap()
+            .read_to_end(&mut icon_bytes)
+            .unwrap();
+        assert_eq!(icon_bytes, icon.0, "包内 icon 字节与源一致");
+
+        // 导入到空目录 → 新 id、内容保留、icon 落盘
+        let dir2 = tempfile::tempdir().unwrap();
+        let dir2 = dir2.path().to_path_buf();
+        let imported = import_profile_in(&dir2, &pkg).unwrap();
+        assert_ne!(imported.id, "lol", "导入生成新 id");
+        assert!(imported.id.starts_with('p'));
+        assert_eq!(imported.display_name, src.display_name);
+        assert_eq!(imported.process_names, src.process_names);
+        assert_eq!(imported.hotwords, src.hotwords);
+        assert!(imported.removed_builtin_hotwords.is_empty());
+        let icon_name = imported.icon.as_deref().unwrap();
+        assert_eq!(read_profile_icon_in(&dir2, icon_name).unwrap(), icon.0);
+        assert!(get_in(&dir2, &imported.id).is_some(), "导入后落盘可读回");
+    }
+
+    #[test]
+    fn import_assigns_fresh_id_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path().to_path_buf();
+        save_in(&dir, &GameProfile::builtin_lol()).unwrap();
+        let pkg = dir.join("lol.kprofile");
+        export_profile_in(&dir, "lol", &pkg).unwrap();
+        let dir2 = tempfile::tempdir().unwrap();
+        let dir2 = dir2.path().to_path_buf();
+        let a = import_profile_in(&dir2, &pkg).unwrap();
+        let b = import_profile_in(&dir2, &pkg).unwrap();
+        assert_ne!(a.id, b.id, "同进程连续两次导入 id 也不同（计数兜底）");
+        assert_ne!(a.id, "lol");
+        assert_ne!(b.id, "lol");
+    }
+
+    #[test]
+    fn import_rejects_malformed_package() {
+        use std::io::Write as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path().to_path_buf();
+        // 不是 zip
+        let not_zip = dir.join("bad.kprofile");
+        std::fs::write(&not_zip, b"not a zip").unwrap();
+        assert!(import_profile_in(&dir, &not_zip).is_err());
+        // 是 zip 但缺 profile.json
+        let no_json = dir.join("nojson.kprofile");
+        let f = std::fs::File::create(&no_json).unwrap();
+        let mut z = zip::ZipWriter::new(f);
+        z.start_file("something.txt", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        z.write_all(b"x").unwrap();
+        z.finish().unwrap();
+        assert!(import_profile_in(&dir, &no_json).is_err());
+    }
+
+    #[test]
+    fn icon_write_read_roundtrip_and_traversal_guard() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path().to_path_buf();
+        write_profile_icon_in(&dir, "lol-kotone.webp", b"WEBPBYTES").unwrap();
+        assert_eq!(
+            read_profile_icon_in(&dir, "lol-kotone.webp").unwrap(),
+            b"WEBPBYTES"
+        );
+        assert!(write_profile_icon_in(&dir, "../evil.png", b"x").is_err());
+        assert!(write_profile_icon_in(&dir, "a/b.png", b"x").is_err());
+        assert!(write_profile_icon_in(&dir, "", b"x").is_err());
+        assert!(read_profile_icon_in(&dir, "../evil.png").is_none());
+    }
+
+    #[test]
+    fn delete_removes_imported_profile_and_icon() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path().to_path_buf();
+        save_in(&dir, &GameProfile::builtin_lol()).unwrap();
+        let (bytes, name) = builtin_icon("lol").unwrap();
+        write_profile_icon_in(&dir, name, bytes).unwrap();
+        let pkg = dir.join("lol.kprofile");
+        export_profile_in(&dir, "lol", &pkg).unwrap();
+        let dir2 = tempfile::tempdir().unwrap();
+        let dir2 = dir2.path().to_path_buf();
+        let imported = import_profile_in(&dir2, &pkg).unwrap();
+        let icon = imported.icon.clone().unwrap();
+        assert!(get_in(&dir2, &imported.id).is_some());
+        let outcome = delete_profile_in(&dir2, &imported.id).unwrap();
+        assert_eq!(outcome, ProfileDeleteOutcome::Deleted);
+        assert!(get_in(&dir2, &imported.id).is_none());
+        assert!(read_profile_icon_in(&dir2, &icon).is_none(), "icon 一并删除");
+    }
+
+    #[test]
+    fn reset_builtin_restores_factory() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path().to_path_buf();
+        save_in(&dir, &GameProfile::builtin_lol()).unwrap();
+        // 用户改坏：删热词、清 icon、留删除标记
+        let mut corrupted = GameProfile::builtin_lol();
+        corrupted.hotwords = vec!["闪现".into()];
+        corrupted.removed_builtin_hotwords = vec!["ADC".into()];
+        corrupted.icon = None;
+        save_in(&dir, &corrupted).unwrap();
+        let outcome = delete_profile_in(&dir, "lol").unwrap();
+        assert_eq!(outcome, ProfileDeleteOutcome::Reset);
+        let restored = get_in(&dir, "lol").unwrap();
+        assert_eq!(restored.hotwords, GameProfile::builtin_lol().hotwords);
+        assert!(restored.removed_builtin_hotwords.is_empty());
+        assert_eq!(restored.icon, GameProfile::builtin_lol().icon);
+        assert!(
+            read_profile_icon_in(&dir, "lol-kotone.webp").is_some(),
+            "恢复出厂重新物化 icon"
+        );
+    }
+
+    #[test]
+    fn ensure_builtin_materializes_icons_and_backfills_legacy() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path().to_path_buf();
+        // 老文件：无 icon 字段
+        let mut legacy = GameProfile::builtin_lol();
+        legacy.icon = None;
+        save_in(&dir, &legacy).unwrap();
+        ensure_builtin_in(&dir).unwrap();
+        let lol = get_in(&dir, "lol").unwrap();
+        assert_eq!(lol.icon.as_deref(), Some("lol-kotone.webp"), "升级补 icon 字段");
+        assert!(
+            read_profile_icon_in(&dir, "lol-kotone.webp").is_some(),
+            "内置 icon 已物化"
+        );
+    }
+
+    #[test]
+    fn builtin_lol_has_icon_field() {
+        let lol = GameProfile::builtin_lol();
+        assert_eq!(lol.icon.as_deref(), Some("lol-kotone.webp"));
+        assert!(builtin_icon("lol").is_some());
+        assert!(builtin_icon("generic").is_none());
     }
 }

@@ -213,6 +213,8 @@ export interface GameProfile {
   prePasteDelayMs: number;
   preSendDelayMs: number;
   preferClipboardPaste: boolean;
+  /** 图标文件名（相对 ~/.kotone/profiles/icons/；null = 无图标，UI 用占位） */
+  icon?: string | null;
   hotwords: string[];
   /** 用户从内置热词中移除的词条（保留内置集，仅记录差集；可选） */
   removedBuiltinHotwords?: string[];
@@ -396,6 +398,7 @@ const mock: MockStore = {
       prePasteDelayMs: 20,
       preSendDelayMs: 20,
       preferClipboardPaste: false,
+      icon: "lol-kotone.webp",
       hotwords: ["闪现", "大龙", "gank", "打野", "推塔", "回城"],
       channels: [
         { id: "team", displayName: "队伍", default: true },
@@ -625,6 +628,58 @@ export async function exportHotwords(profileId: string, path: string): Promise<n
 export async function importHotwords(profileId: string, path: string): Promise<HotwordMergeReport> {
   if (!isTauri) return { added: 0, duplicates: 0, total: 0 };
   return invoke<HotwordMergeReport>("import_hotwords", { profileId, path });
+}
+
+/** 导出整包 profile 为 .kprofile ZIP（profile.json + icon.*） */
+export async function exportProfile(profileId: string, path: string): Promise<void> {
+  if (!isTauri) {
+    console.info(`[mock] export_profile: ${profileId} → ${path}`);
+    return;
+  }
+  return invoke<void>("export_profile", { profileId, path });
+}
+
+/** 导入 .kprofile ZIP 包：后端生成新随机 id 落盘，返回导入后的 profile */
+export async function importProfile(path: string): Promise<GameProfile> {
+  if (!isTauri) {
+    // dev:web 模拟：从文件名造一条带随机 id 的 profile
+    const name = path.split(/[\\/]/).pop() ?? "imported.kprofile";
+    const profile: GameProfile = {
+      id: `p-mock-${Math.floor(Math.random() * 1e9)}`,
+      displayName: name.replace(/\.kprofile$/i, "") || "导入的 profile",
+      processNames: [],
+      windowTitlePatterns: [],
+      openChatKey: "Enter",
+      sendKey: "Enter",
+      preOpenDelayMs: 20,
+      prePasteDelayMs: 20,
+      preSendDelayMs: 20,
+      preferClipboardPaste: false,
+      icon: null,
+      hotwords: [],
+    };
+    mock.profiles.push(clone(profile));
+    return profile;
+  }
+  return invoke<GameProfile>("import_profile", { path });
+}
+
+/** 删除 profile：内置 = 恢复出厂；导入的 = 永久删除。返回动作类型 */
+export async function deleteProfile(profileId: string): Promise<"reset" | "deleted"> {
+  if (!isTauri) {
+    const i = mock.profiles.findIndex((p) => p.id === profileId);
+    if (i >= 0) mock.profiles.splice(i, 1);
+    return "deleted";
+  }
+  const out = await invoke<{ kind: "reset" | "deleted" }>("delete_profile", { profileId });
+  return out.kind;
+}
+
+/** 读取 profile 图标字节（无图标 → 空）；前端按 icon 扩展名推断 mime 建 Blob URL */
+export async function getProfileIcon(profileId: string): Promise<Uint8Array> {
+  if (!isTauri) return new Uint8Array(0);
+  const bytes = await invoke<number[]>("get_profile_icon", { profileId });
+  return new Uint8Array(bytes);
 }
 
 /** 提权状态：自身是否提权 + 激活 profile 的游戏进程是否提权 */
