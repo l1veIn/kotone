@@ -959,6 +959,10 @@ const CONFIG_SETTABLE_KEYS: &[&str] = &[
     "runAsAdminOnStart",
     "interactionMode",
     "vadSilenceMs",
+    "hotwordsScore",
+    "vad.threshold",
+    "vad.minSpeechMs",
+    "vad.minSilenceMs",
     "history.mode",
     "history.maxRecords",
     "history.includeAudio",
@@ -1001,6 +1005,25 @@ fn apply_config_set(current: &Settings, key: &str, raw: &str) -> Result<Settings
         "history.maxRecords" => match raw.parse::<u32>() {
             Ok(v) if (1..=100_000).contains(&v) => serde_json::Value::Number(v.into()),
             _ => return Err(format!("{key} 只接受 1-100000 的整数条数（收到「{raw}」）")),
+        },
+        // 数值键（热词命中加分，范围对齐高级页滑块 0-10）
+        "hotwordsScore" => match raw.parse::<f32>() {
+            Ok(v) if (0.0..=10.0).contains(&v) => {
+                serde_json::Value::Number(serde_json::Number::from_f64(v as f64).unwrap())
+            }
+            _ => return Err(format!("{key} 只接受 0-10 的数值（收到「{raw}」）")),
+        },
+        // 数值键（silero VAD 判定阈值，范围对齐高级页滑块 0.1-0.9）
+        "vad.threshold" => match raw.parse::<f32>() {
+            Ok(v) if (0.1..=0.9).contains(&v) => {
+                serde_json::Value::Number(serde_json::Number::from_f64(v as f64).unwrap())
+            }
+            _ => return Err(format!("{key} 只接受 0.1-0.9 的数值（收到「{raw}」）")),
+        },
+        // 数值键（silero VAD 最短语音/静音，范围对齐高级页滑块 20-500）
+        "vad.minSpeechMs" | "vad.minSilenceMs" => match raw.parse::<u32>() {
+            Ok(v) if (20..=500).contains(&v) => serde_json::Value::Number(v.into()),
+            _ => return Err(format!("{key} 只接受 20-500 的整数毫秒（收到「{raw}」）")),
         },
         // 字符串与枚举键：原样写入，枚举由 Settings 反序列化校验
         _ => serde_json::Value::String(raw.to_string()),
@@ -1599,6 +1622,25 @@ mod tests {
         assert!(apply_config_set(&Settings::default(), "vadSilenceMs", "abc").is_err());
         assert!(apply_config_set(&Settings::default(), "vadSilenceMs", "50").is_err());
         assert!(apply_config_set(&Settings::default(), "vadSilenceMs", "99999").is_err());
+    }
+
+    #[test]
+    fn config_set_hotwords_score_and_vad() {
+        let s = apply_config_set(&Settings::default(), "hotwordsScore", "2").unwrap();
+        assert_eq!(s.hotwords_score, 2.0);
+        assert!(apply_config_set(&Settings::default(), "hotwordsScore", "-1").is_err());
+        assert!(apply_config_set(&Settings::default(), "hotwordsScore", "11").is_err());
+        assert!(apply_config_set(&Settings::default(), "hotwordsScore", "abc").is_err());
+
+        let s = apply_config_set(&Settings::default(), "vad.threshold", "0.7").unwrap();
+        assert_eq!(s.vad.threshold, 0.7);
+        assert!(apply_config_set(&Settings::default(), "vad.threshold", "1.0").is_err());
+        assert!(apply_config_set(&Settings::default(), "vad.threshold", "NaN").is_err());
+
+        let s = apply_config_set(&Settings::default(), "vad.minSpeechMs", "120").unwrap();
+        assert_eq!(s.vad.min_speech_ms, 120);
+        assert_eq!(s.vad.min_silence_ms, 50, "兄弟键不受影响");
+        assert!(apply_config_set(&Settings::default(), "vad.minSpeechMs", "10").is_err());
     }
 
     // ---------- elevate sudo 式参数解析 ----------

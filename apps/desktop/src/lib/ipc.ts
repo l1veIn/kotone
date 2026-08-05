@@ -69,6 +69,10 @@ export interface Settings {
   interactionMode: InteractionMode | null;
   /** VAD 静音判停阈值 ms（one-shot 生效，200-5000） */
   vadSilenceMs: number;
+  /** silero VAD 内部参数（与 vadSilenceMs 判停阈值独立；one-shot/solo 生效） */
+  vad: VadConfig;
+  /** 热词命中加分（默认 3.5；越高越易命中热词，也越易把噪声识别成热词） */
+  hotwordsScore: number;
   history: HistoryConfig;
   ui: UiConfig;
   models: ModelsConfig;
@@ -109,6 +113,16 @@ export interface DownloadConfig {
   source: "auto" | "official" | "mirror";
   /** GitHub 加速代理前缀（公益代理不稳定，做成可配置） */
   ghProxy: string;
+}
+
+/** silero VAD 内部参数（config.json `vad` 段；与 vadSilenceMs 判停阈值独立） */
+export interface VadConfig {
+  /** 语音判定阈值（0.1-0.9，默认 0.5）；调高 → 噪声更难被误判成语音 */
+  threshold: number;
+  /** 最短语音时长 ms（20-500，默认 50）；拉长可过滤短促噪声突发 */
+  minSpeechMs: number;
+  /** 最短静音时长 ms（20-500，默认 50） */
+  minSilenceMs: number;
 }
 
 // ---------- 运行时「启动」开关 ----------
@@ -313,6 +327,8 @@ const mock: MockStore = {
     channelCycleHotkey: "Shift+CapsLock",
     interactionMode: "push-to-talk",
     vadSilenceMs: 700,
+    vad: { threshold: 0.5, minSpeechMs: 50, minSilenceMs: 50 },
+    hotwordsScore: 3.5,
     history: { mode: "capped", maxRecords: 1000, includeAudio: false, dir: "" },
     ui: { firstRunCompleted: true, autoStart: false },
     models: { dir: "" },

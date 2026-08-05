@@ -237,6 +237,7 @@ mod tests {
             language: "zh".into(),
             hotwords,
             options: serde_json::Value::Null,
+            ..Default::default()
         };
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut session = e

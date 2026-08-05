@@ -450,6 +450,13 @@ simulate_send(text, profileId) -> Result<(), InjectError>   // v3：走真实发
   "activeProfileId": "lol",
   "language": "zh",
   "evalRecording": false,          // 内部评测录档开关（默认关；不在用户设置页展示）
+  "vadSilenceMs": 700,             // VAD 静音判停阈值（ms；one-shot/solo 生效）
+  "hotwordsScore": 3.5,            // 热词命中加分（越高越易命中热词，也越易噪声幻觉成热词；改后「停止→启动」生效）
+  "vad": {                         // silero VAD 内部参数（one-shot/solo 生效；与 vadSilenceMs 判停阈值独立）
+    "threshold": 0.5,              // 语音判定阈值 0.1-0.9
+    "minSpeechMs": 50,             // 最短语音 ms 20-500
+    "minSilenceMs": 50             // 最短静音 ms 20-500
+  },
   "download": {                    // v15 模型下载源
     "source": "auto",              // auto（镜像优先+回退）| official | mirror
     "ghProxy": "https://ghfast.top/" // GitHub 加速代理前缀（公益服务不稳定，失效可换）

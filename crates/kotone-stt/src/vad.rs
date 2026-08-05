@@ -6,9 +6,20 @@
 //! 编译时只链接一次）。feature `vad-silero` 控制编译（默认关），
 //! 默认构建零原生依赖。
 //!
-//! sherpa 的 VAD 是 segment 级检测器；本实现把内部平滑参数调到最小
+//! sherpa 的 VAD 是 segment 级检测器；本实现默认把内部平滑参数调到最小
 //! （min_speech/min_silence = 50ms ≈ 帧级原始判定），判停阈值与最短会话
-//! 保护全部在 core 的 `SilenceStopTracker`（纯逻辑可单测）。
+//! 保护全部在 core 的 `SilenceStopTracker`（纯逻辑可单测）。帧级判定参数
+//! （threshold / min_speech / min_silence）可从 settings.vad 覆盖，默认即原值。
+
+/// settings.vad → silero 参数（threshold, min_speech_sec, min_silence_sec），
+/// 带防御性 clamp（与 UI 滑块范围一致）。纯函数，便于不加载 ONNX 模型单测。
+pub(crate) fn silero_params(v: &kotone_core::settings::VadConfig) -> (f32, f32, f32) {
+    (
+        v.threshold.clamp(0.1, 0.9),
+        v.min_speech_ms.clamp(20, 500) as f32 / 1000.0,
+        v.min_silence_ms.clamp(20, 500) as f32 / 1000.0,
+    )
+}
 
 #[cfg(feature = "vad-silero")]
 mod imp {
@@ -17,6 +28,8 @@ mod imp {
     use sherpa_onnx::{VadModelConfig, VoiceActivityDetector};
 
     use kotone_core::vad::{Vad, VadFactory};
+
+    use super::silero_params;
 
     /// silero VAD：每会话一个实例（orchestrator 经工厂创建）
     pub struct SileroVad {
@@ -31,10 +44,13 @@ mod imp {
             let model = crate::model::vad_model_path();
             let mut config = VadModelConfig::default();
             config.silero_vad.model = Some(model.to_string_lossy().into_owned());
-            config.silero_vad.threshold = 0.5;
-            // 近帧级原始判定：内部平滑最小化，判停逻辑归 core tracker
-            config.silero_vad.min_silence_duration = 0.05;
-            config.silero_vad.min_speech_duration = 0.05;
+            // 帧级判定参数来自 settings.vad（每会话新建实例时读取，改动即时生效）；
+            // 判停逻辑仍归 core tracker（vad_silence_ms）
+            let (threshold, min_speech_sec, min_silence_sec) =
+                silero_params(&kotone_core::settings::load().vad);
+            config.silero_vad.threshold = threshold;
+            config.silero_vad.min_speech_duration = min_speech_sec;
+            config.silero_vad.min_silence_duration = min_silence_sec;
             config.silero_vad.window_size = 512; // silero 16kHz 标准窗口（32ms）
             config.sample_rate = 16000;
             config.num_threads = 1;
@@ -95,5 +111,45 @@ mod tests {
             let speech = vad.push_frame(&vec![0.0f32; 480]).unwrap();
             assert!(!speech, "纯静音不应判定为语音");
         }
+    }
+}
+
+#[cfg(test)]
+mod param_tests {
+    use super::*;
+    use kotone_core::settings::VadConfig;
+
+    #[test]
+    fn defaults_pass_through() {
+        let (t, sp, si) = silero_params(&VadConfig::default());
+        assert_eq!(t, 0.5);
+        assert_eq!(sp, 0.05);
+        assert_eq!(si, 0.05);
+    }
+
+    #[test]
+    fn clamps_to_allowed_ranges() {
+        let v = VadConfig {
+            threshold: 9.0,
+            min_speech_ms: 1,
+            min_silence_ms: 9999,
+        };
+        let (t, sp, si) = silero_params(&v);
+        assert_eq!(t, 0.9);
+        assert_eq!(sp, 0.02);
+        assert_eq!(si, 0.5);
+    }
+
+    #[test]
+    fn ms_converted_to_seconds() {
+        let v = VadConfig {
+            threshold: 0.3,
+            min_speech_ms: 120,
+            min_silence_ms: 250,
+        };
+        let (t, sp, si) = silero_params(&v);
+        assert_eq!(t, 0.3);
+        assert_eq!(sp, 0.12);
+        assert_eq!(si, 0.25);
     }
 }

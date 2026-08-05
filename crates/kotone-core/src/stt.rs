@@ -40,6 +40,11 @@ pub struct EngineInfo {
 pub struct SessionConfig {
     pub language: String,
     pub hotwords: Vec<String>,
+    /// 热词命中加分（X-ASR 等引擎 recognizer 级配置；默认 3.5，
+    /// 真源在 settings::default_hotwords_score）。越高热词越易命中，
+    /// 也越容易把背景噪声识别成热词。
+    #[serde(default = "crate::settings::default_hotwords_score")]
+    pub hotwords_score: f32,
     /// 引擎专有配置项（如推理线程数 threads、provider）
     #[serde(default)]
     pub options: serde_json::Value,
@@ -50,6 +55,7 @@ impl Default for SessionConfig {
         Self {
             language: "zh".into(),
             hotwords: Vec::new(),
+            hotwords_score: crate::settings::default_hotwords_score(),
             options: serde_json::Value::Null,
         }
     }

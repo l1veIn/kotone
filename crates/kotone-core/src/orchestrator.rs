@@ -1290,6 +1290,7 @@ fn build_session_config(
     SessionConfig {
         language: settings.language.clone(),
         hotwords: active_profile.hotwords.clone(),
+        hotwords_score: settings.hotwords_score,
         options: settings
             .engine_options
             .get(engine_id)
@@ -1312,6 +1313,16 @@ mod tests {
         assert_eq!(cfg.hotwords, profile.hotwords);
         assert!(cfg.hotwords.contains(&"打野".to_string()));
         assert_eq!(cfg.language, "zh");
+        assert_eq!(cfg.hotwords_score, settings.hotwords_score, "热词权重原样携带");
+    }
+
+    #[test]
+    fn session_config_carries_custom_hotwords_score() {
+        let mut settings = Settings::default();
+        settings.hotwords_score = 1.5;
+        let generic = GameProfile::builtin_generic();
+        let cfg = build_session_config(&settings, "sherpa-onnx-x-asr-zh-en", &generic);
+        assert_eq!(cfg.hotwords_score, 1.5);
     }
 
     #[test]

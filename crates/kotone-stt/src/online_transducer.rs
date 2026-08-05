@@ -67,11 +67,6 @@ pub mod imp {
     /// 默认推理线程数（engineOptions["threads"] 可覆盖）
     const DEFAULT_THREADS: u32 = 2;
 
-    /// 每个命中 token 的热词加分。1.5 对 X-ASR 的中文同音词偏置不足，
-    /// 实测「悠米/优米」「璐璐/露露」仍保持基础模型结果；3.5 是 Sherpa
-    /// 官方示例支持的常用强度，并且仍只在声学候选路径已出现时加分。
-    pub const HOTWORDS_SCORE: f32 = 3.5;
-
     /// 流式收尾静音尾帧时长（毫秒）：sherpa-onnx 官方在线流式示例在
     /// input_finished 前补 ~0.8s 静音，触发模型吐出 lookahead（右上下文）
     /// 中的最后 token——不补则松手即 finalize 会丢句尾（P0 实锤：X-ASR
@@ -154,7 +149,9 @@ pub mod imp {
             // 4/8 条路径会在热词加分前过早剪掉罕见同音字候选（实测
             // 「悠米」只剩「优米」）；16 条可保留候选供 context graph 重排。
             config.max_active_paths = 16;
-            config.hotwords_score = HOTWORDS_SCORE;
+            // 热词加分来自 SessionConfig（orchestrator 由 settings.hotwordsScore 填充；
+            // 越高热词越易命中，也越容易把背景噪声识别成热词）。默认 3.5（core/settings.rs）
+            config.hotwords_score = cfg.hotwords_score;
             // push-to-talk 自己管理语句边界，不用内置端点检测
             config.enable_endpoint = false;
 
@@ -198,8 +195,12 @@ pub mod imp {
         /// 预热：显式创建共享 recognizer（模型入内存）；随后 start_session 直接复用
         fn warmup(&self) -> Result<(), String> {
             // 与懒加载同一路径；engineOptions 的 threads 只在创建时生效，
-            // 预热用默认线程数（SessionConfig::default 无 options）
-            self.recognizer(&SessionConfig::default()).map(|_| ())
+            // 预热用默认线程数（SessionConfig::default 无 options）。
+            // hotwords_score 是 recognizer 级配置：预热必须读取当前设置，
+            // 否则「启动」预建的共享 recognizer 会锁死默认 3.5，改配置永不生效
+            let mut cfg = SessionConfig::default();
+            cfg.hotwords_score = kotone_core::settings::load().hotwords_score;
+            self.recognizer(&cfg).map(|_| ())
         }
 
         /// 卸载：释放共享 recognizer（重新「启动」或下次会话时重建）

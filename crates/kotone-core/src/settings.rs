@@ -80,6 +80,15 @@ pub struct Settings {
     /// 悬浮窗配置（显示模式等，见 OverlayConfig）
     #[serde(default)]
     pub overlay: OverlayConfig,
+    /// silero VAD 内部参数（ADR-007；one-shot/solo 生效）。
+    /// 与 `vad_silence_ms`（判停阈值，SilenceStopTracker 用）独立——
+    /// 这里控制 silero 模型的帧级判定灵敏度。默认对齐 kotone-stt vad.rs 原硬编码值。
+    #[serde(default)]
+    pub vad: VadConfig,
+    /// 热词命中加分（默认 3.5；越高热词越易命中，也越容易把背景噪声
+    /// 识别成热词。X-ASR 等引擎 recognizer 级配置，改后需「停止→启动」重建）
+    #[serde(default = "default_hotwords_score")]
+    pub hotwords_score: f32,
 }
 
 /// 桌面壳 UI 状态（config.json `ui` 段）
@@ -200,6 +209,52 @@ impl OverlayConfig {
     }
 }
 
+/// silero VAD 内部参数（config.json `vad` 段；ADR-007）。
+/// 与 `vad_silence_ms`（判停阈值，SilenceStopTracker 用）独立。
+/// 默认值 = kotone-stt vad.rs 原硬编码值。
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VadConfig {
+    /// 语音判定阈值（0.1–0.9，默认 0.5）。调高 → 更严格（背景噪声更难
+    /// 被判成语音）；调低 → 更宽松、更容易误判。
+    #[serde(default = "default_vad_threshold")]
+    pub threshold: f32,
+    /// 最短语音时长 ms（20–500，默认 50）。拉长可过滤短促噪声突发。
+    #[serde(default = "default_vad_min_speech_ms")]
+    pub min_speech_ms: u32,
+    /// 最短静音时长 ms（20–500，默认 50）。
+    #[serde(default = "default_vad_min_silence_ms")]
+    pub min_silence_ms: u32,
+}
+
+impl Default for VadConfig {
+    fn default() -> Self {
+        Self {
+            threshold: default_vad_threshold(),
+            min_speech_ms: default_vad_min_speech_ms(),
+            min_silence_ms: default_vad_min_silence_ms(),
+        }
+    }
+}
+
+fn default_vad_threshold() -> f32 {
+    0.5
+}
+
+fn default_vad_min_speech_ms() -> u32 {
+    50
+}
+
+fn default_vad_min_silence_ms() -> u32 {
+    50
+}
+
+/// 热词命中加分默认值（Sherpa 官方示例常用强度；SessionConfig 与
+/// settings.hotwords_score 的共同真源，改动需两侧同步）
+pub fn default_hotwords_score() -> f32 {
+    3.5
+}
+
 /// 下载源选择（config.json `download.source`）。
 /// 大模型优先使用 ModelScope 国内镜像，其他资源仍可使用 HF / GitHub 镜像。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -281,6 +336,8 @@ impl Default for Settings {
             models: ModelsConfig::default(),
             download: DownloadConfig::default(),
             overlay: OverlayConfig::default(),
+            vad: VadConfig::default(),
+            hotwords_score: default_hotwords_score(),
         }
     }
 }
@@ -404,6 +461,10 @@ mod tests {
         assert_eq!(s.language, "zh");
         assert!(!s.eval_recording);
         assert_eq!(s.vad_silence_ms, 700);
+        assert_eq!(s.vad.threshold, 0.5);
+        assert_eq!(s.vad.min_speech_ms, 50);
+        assert_eq!(s.vad.min_silence_ms, 50);
+        assert_eq!(s.hotwords_score, 3.5);
         assert!(s.engine_options["sherpa-onnx-x-asr-zh-en"]["provider"] == "cpu");
         assert!(!s.run_as_admin_on_start);
         assert_eq!(s.channel_cycle_hotkey, "Shift+CapsLock");
@@ -479,6 +540,39 @@ mod tests {
         assert_eq!(s.overlay.position, OverlayPosition::Auto);
         assert!(s.overlay.draggable, "老配置升级后默认允许拖动");
         assert!(!s.overlay.click_through);
+        assert_eq!(s.vad.threshold, 0.5, "老配置缺 vad 段合并默认");
+        assert_eq!(s.vad.min_speech_ms, 50);
+        assert_eq!(s.vad.min_silence_ms, 50);
+        assert_eq!(s.hotwords_score, 3.5, "老配置缺 hotwordsScore 合并默认");
+    }
+
+    #[test]
+    fn vad_partial_patch_preserves_siblings() {
+        // 高级页滑块只 patch vad 段里的单个键：merge_json 嵌套合并应保留兄弟键
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // 手写一段含 vad 段的 JSON，模拟用户已改过阈值
+        std::fs::write(
+            &path,
+            r#"{ "vad": { "threshold": 0.7 }, "hotwordsScore": 6 }"#,
+        )
+        .unwrap();
+        let mut s = load_from(&path);
+        assert_eq!(s.vad.threshold, 0.7);
+        assert_eq!(s.vad.min_speech_ms, 50, "兄弟键保留默认");
+        assert_eq!(s.vad.min_silence_ms, 50);
+        assert_eq!(s.hotwords_score, 6.0);
+
+        // 模拟前端 patch 只带一个子键：vad.threshold 覆盖，其余不动
+        let mut merged = serde_json::to_value(&s).unwrap();
+        merge_json(
+            &mut merged,
+            &serde_json::json!({ "vad": { "minSpeechMs": 120 } }),
+        );
+        let patched: Settings = serde_json::from_value(merged).unwrap();
+        assert_eq!(patched.vad.threshold, 0.7, "未 patch 的键保留");
+        assert_eq!(patched.vad.min_speech_ms, 120);
+        assert_eq!(patched.vad.min_silence_ms, 50);
     }
 
     #[test]
