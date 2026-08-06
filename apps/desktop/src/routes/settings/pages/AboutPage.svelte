@@ -15,8 +15,8 @@
   /** 角色详情页入口回调：由 Settings 切换至 CharacterPage 全屏档案视图 */
   let { onOpenCharacter }: { onOpenCharacter: () => void } = $props();
 
-  /** 静态兜底版本（与 package.json 同步）；桌面端启动后替换为真实版本 */
-  let version = $state("0.1.5");
+  /** 兜底为 build-time 注入的 package.json 版本；桌面端启动后替换为运行时真实版本 */
+  let version = $state(__APP_VERSION__);
   let checkingUpdate = $state(false);
   let updateResult = $state<UpdateCheckResult | null>(null);
 

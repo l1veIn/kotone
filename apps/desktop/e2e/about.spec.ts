@@ -1,4 +1,9 @@
 import { expect, test } from "@playwright/test";
+import { readFileSync } from "node:fs";
+/** dev:web 下关于页显示的版本来自 package.json（单一来源），断言与其保持一致 */
+const pkg = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+) as { version: string };
 
 test("the check-for-updates button is always visible and reports the latest version", async ({
   page,
@@ -11,7 +16,9 @@ test("the check-for-updates button is always visible and reports the latest vers
   await expect(checkUpdates).toBeEnabled();
 
   await checkUpdates.click();
-  await expect(page.getByText("✓ 已是最新版本（v0.1.5）", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(`✓ 已是最新版本（v${pkg.version}）`, { exact: true }),
+  ).toBeVisible();
   await expect(checkUpdates).toBeVisible();
   await expect(checkUpdates).toBeEnabled();
 });
