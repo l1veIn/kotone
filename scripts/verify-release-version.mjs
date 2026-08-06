@@ -15,11 +15,16 @@ const cargoToml = await readFile(
 const cargoVersion = cargoToml.match(
   /^\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m,
 )?.[1];
+const cargoLock = await readFile(resolve(root, "Cargo.lock"), "utf8");
+const cargoLockVersion = cargoLock.match(
+  /^\[\[package\]\]\nname = "kotone-tauri"\nversion\s*=\s*"([^"]+)"/m,
+)?.[1];
 
 const versions = {
   "apps/desktop/package.json": desktopPackage.version,
   "apps/desktop/src-tauri/tauri.conf.json": tauriConfig.version,
   "apps/desktop/src-tauri/Cargo.toml": cargoVersion,
+  "Cargo.lock (kotone-tauri)": cargoLockVersion,
 };
 const unique = new Set(Object.values(versions));
 if (unique.size !== 1 || unique.has(undefined)) {

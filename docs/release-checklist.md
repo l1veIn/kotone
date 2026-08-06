@@ -2,7 +2,7 @@
 
 ## 自动门禁
 
-- `pnpm release:verify`：桌面包、Tauri 配置和 Rust crate 版本一致，Tag 必须为 `v<version>`。
+- `pnpm release:verify`：桌面包、Tauri 配置、Rust crate 与 Cargo.lock 版本一致，Tag 必须为 `v<version>`。
 - `pnpm check`：Svelte/TypeScript 静态检查无错误和警告。
 - `pnpm -C apps/desktop test:e2e`：首次向导、跳过策略、缺失模型与下载失败恢复。
 - `cargo test --workspace --locked`：核心状态机、模型下载、注入、热键和 Tauri 启动参数。
@@ -24,8 +24,9 @@
 
 ## 发布流程
 
-1. `pnpm release:bump <版本号>`（或 `--rc` / `--patch` / `--minor` / `--major`）同步三处
-   版本号并预置 `CHANGELOG.md` 小节标题；随后在标题下补充变更摘要。
+1. `pnpm release:bump <版本号>`（或 `--rc` / `--patch` / `--minor` / `--major`）同步四处
+   版本号（package.json / tauri.conf.json / Cargo.toml / Cargo.lock）并预置
+   `CHANGELOG.md` 小节标题；随后在标题下补充变更摘要。
 2. 本机执行全部自动门禁并构建 NSIS 安装包。
 3. 在干净 Windows 用户环境完成安装/首次向导/卸载冒烟测试。
 4. 推送 `v<version>` Tag；`Release Windows` 工作流创建 GitHub Draft Release。

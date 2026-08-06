@@ -3,10 +3,11 @@
  * 版本提升脚本：一次调用同步全部版本来源 + 预置 CHANGELOG 小节 + 兜底校验。
  *
  * 版本单一来源原则：以 apps/desktop/package.json 的 version 为当前版本，
- * 目标版本由显式入参或提升模式计算，随后写入全部三处来源：
+ * 目标版本由显式入参或提升模式计算，随后写入全部四处来源：
  *   - apps/desktop/package.json
  *   - apps/desktop/src-tauri/tauri.conf.json
  *   - apps/desktop/src-tauri/Cargo.toml（[package] 块）
+ *   - Cargo.lock（kotone-tauri 包版本）
  * 最后调用 scripts/verify-release-version.mjs 兜底校验一致性（含 tag 命名）。
  * 只替换版本行本身，不触碰文件其余格式，保证 diff 最小。
  *
@@ -28,7 +29,25 @@ const FILES = {
   "apps/desktop/package.json": resolve(root, "apps/desktop/package.json"),
   "apps/desktop/src-tauri/tauri.conf.json": resolve(root, "apps/desktop/src-tauri/tauri.conf.json"),
   "apps/desktop/src-tauri/Cargo.toml": resolve(root, "apps/desktop/src-tauri/Cargo.toml"),
+  "Cargo.lock": resolve(root, "Cargo.lock"),
 };
+
+/** 从各版本源提取当前版本（JSON：version 字段；Cargo.toml：[package] 块；Cargo.lock：kotone-tauri 包） */
+function extractVersion(key, text) {
+  if (key.endsWith("Cargo.toml"))
+    return text.match(/^\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m)?.[1];
+  if (key.endsWith("Cargo.lock"))
+    return text.match(/^\[\[package\]\]\nname = "kotone-tauri"\nversion\s*=\s*"([^"]+)"/m)?.[1];
+  return JSON.parse(text).version;
+}
+/** 只替换版本行本身，保持其余字节不变 */
+function replaceVersion(key, text, old, target) {
+  if (key.endsWith("Cargo.toml"))
+    return text.replace(/^(\[package\][\s\S]*?^version\s*=\s*)"[^"]*"/m, `$1"${target}"`);
+  if (key.endsWith("Cargo.lock"))
+    return text.replace(/^(\[\[package\]\]\nname = "kotone-tauri"\nversion\s*=\s*)"[^"]*"/m, `$1"${target}"`);
+  return text.replace(`"version": "${old}"`, `"version": "${target}"`);
+}
 const CHANGELOG = resolve(root, "CHANGELOG.md");
 const VERIFY_SCRIPT = resolve(root, "scripts/verify-release-version.mjs");
 
@@ -116,9 +135,7 @@ if (dryRun) {
 const entries = [];
 for (const [key, path] of Object.entries(FILES)) {
   const text = await readFile(path, "utf8");
-  const old = key.endsWith("Cargo.toml")
-    ? text.match(/^\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m)?.[1]
-    : JSON.parse(text).version;
+  const old = extractVersion(key, text);
   if (old === undefined) {
     console.error(`无法从 ${key} 提取当前版本，请检查文件。`);
     process.exit(1);
@@ -132,9 +149,7 @@ for (const [key, path] of Object.entries(FILES)) {
 
 // ---------- 写盘（仅替换版本行） ----------
 for (const { key, path, text, old } of entries) {
-  const next = path.endsWith("Cargo.toml")
-    ? text.replace(/^(\[package\][\s\S]*?^version\s*=\s*)"[^"]*"/m, `$1"${target}"`)
-    : text.replace(`"version": "${old}"`, `"version": "${target}"`);
+  const next = replaceVersion(key, text, old, target);
   if (next === text) {
     console.error(`未能在 ${path} 替换版本 "${old}"，请检查文件。`);
     process.exit(1);
