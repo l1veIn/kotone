@@ -37,15 +37,15 @@ function extractVersion(key, text) {
   if (key.endsWith("Cargo.toml"))
     return text.match(/^\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m)?.[1];
   if (key.endsWith("Cargo.lock"))
-    return text.match(/^\[\[package\]\]\nname = "kotone-tauri"\nversion\s*=\s*"([^"]+)"/m)?.[1];
+    return text.match(/^\[\[package\]\]\r?\nname = "kotone-tauri"\r?\nversion\s*=\s*"([^"]+)"/m)?.[1];
   return JSON.parse(text).version;
 }
-/** 只替换版本行本身，保持其余字节不变 */
+/** 只替换版本行本身，保持其余字节不变（\r?\n 容忍 git autocrlf 的 CRLF 工作区） */
 function replaceVersion(key, text, old, target) {
   if (key.endsWith("Cargo.toml"))
     return text.replace(/^(\[package\][\s\S]*?^version\s*=\s*)"[^"]*"/m, `$1"${target}"`);
   if (key.endsWith("Cargo.lock"))
-    return text.replace(/^(\[\[package\]\]\nname = "kotone-tauri"\nversion\s*=\s*)"[^"]*"/m, `$1"${target}"`);
+    return text.replace(/^(\[\[package\]\]\r?\nname = "kotone-tauri"\r?\nversion\s*=\s*)"[^"]*"/m, `$1"${target}"`);
   return text.replace(`"version": "${old}"`, `"version": "${target}"`);
 }
 const CHANGELOG = resolve(root, "CHANGELOG.md");

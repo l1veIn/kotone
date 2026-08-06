@@ -17,7 +17,7 @@ const cargoVersion = cargoToml.match(
 )?.[1];
 const cargoLock = await readFile(resolve(root, "Cargo.lock"), "utf8");
 const cargoLockVersion = cargoLock.match(
-  /^\[\[package\]\]\nname = "kotone-tauri"\nversion\s*=\s*"([^"]+)"/m,
+  /^\[\[package\]\]\r?\nname = "kotone-tauri"\r?\nversion\s*=\s*"([^"]+)"/m,
 )?.[1];
 
 const versions = {
