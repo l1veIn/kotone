@@ -151,10 +151,12 @@ if (!noChangelog) {
   } else if (!text.startsWith("# Changelog")) {
     console.warn(`⚠ CHANGELOG.md 开头不是 "# Changelog"，跳过自动插入`);
   } else {
-    const insertAt =
-      text.indexOf("\n\n") >= 0 ? text.indexOf("\n\n") + 2 : text.indexOf("\n") + 1;
-    const block = `## ${target} — ${todayLocal()}\n\n（待补充：本次发布变更摘要）\n\n`;
-    await writeFile(CHANGELOG, text.slice(0, insertAt) + block + text.slice(insertAt));
+    // 按行插入，兼容 LF / CRLF（git autocrlf 会改变工作区换行符，不能用 indexOf 定位）
+    const eol = text.includes("\r\n") ? "\r\n" : "\n";
+    const lines = text.split(/\r?\n/);
+    const headerLen = lines[1]?.trim() === "" ? 2 : 1; // "# Changelog" 标题行 + 其后的空行
+    const blockLines = [`## ${target} — ${todayLocal()}`, "", "（待补充：本次发布变更摘要）", ""];
+    await writeFile(CHANGELOG, [...lines.slice(0, headerLen), ...blockLines, ...lines.slice(headerLen)].join(eol));
     console.log(`  ✔ CHANGELOG.md：已插入 "## ${target} —" 小节标题（摘要留待补充）`);
   }
 }
