@@ -11,18 +11,11 @@
     getElevationStatus,
     restartAsAdmin,
     getHotkeyStatus,
-    listModels,
-    downloadModel,
-    cancelDownload,
     type AudioDevice,
-    type DownloadProgress,
     type ElevationStatus,
     type HotkeyStatus,
     type InteractionMode,
-    type ModelInfo,
   } from "../../../lib/ipc";
-  import { listen } from "@tauri-apps/api/event";
-  import { isTauri } from "../../../lib/ipc";
   import { captureHotkey } from "../../../lib/hotkeyCapture";
   import { combosConflict } from "../../../lib/hotkeyCombo";
   import { settingsStore, toast, errText } from "../../../lib/stores/ui";
@@ -37,63 +30,6 @@
   let elevation = $state<ElevationStatus | null>(null);
   let restarting = $state(false);
 
-  // ---------- 模型未下载时的主页直达下载入口（P2-⑥：向导跳过后的补救路径） ----------
-  let models = $state<ModelInfo[]>([]);
-  let downloading = $state(false);
-  let dlProgress = $state<{ downloaded: number; total: number } | null>(null);
-  let unlistenDl: (() => void) | undefined;
-
-  const primaryModel = $derived(
-    models.find((m) => m.engineId === "sherpa-onnx-x-asr-zh-en") ?? null,
-  );
-  /** 推荐模型缺失 = 需要下载（向导被跳过或模型被删除） */
-  const modelMissing = $derived(primaryModel !== null && !primaryModel.downloaded);
-  const dlPercent = $derived(
-    dlProgress && dlProgress.total > 0
-      ? Math.min(100, Math.round((dlProgress.downloaded / dlProgress.total) * 100))
-      : null,
-  );
-
-  async function downloadPrimaryModel() {
-    if (downloading || !primaryModel) return;
-    downloading = true;
-    dlProgress = null;
-    try {
-      if (isTauri) {
-        unlistenDl = await listen<DownloadProgress>("kotone://download", (ev) => {
-          if (ev.payload.id === primaryModel.id) {
-            dlProgress = {
-              downloaded: ev.payload.downloaded,
-              total: ev.payload.total,
-            };
-          }
-        });
-      }
-      await downloadModel(primaryModel.id);
-      models = models.map((m) => (m.id === primaryModel.id ? { ...m, downloaded: true } : m));
-      toast(true, "模型下载完成，可以启动引擎了");
-    } catch (e) {
-      toast(false, `模型下载失败：${errText(e)}`);
-    } finally {
-      downloading = false;
-      unlistenDl?.();
-      unlistenDl = undefined;
-    }
-  }
-
-  /** 取消下载（.part 保留，可续传；P2-⑦） */
-  async function cancelPrimaryDownload() {
-    try {
-      await cancelDownload();
-    } catch (e) {
-      toast(false, `取消失败：${errText(e)}`);
-    }
-  }
-
-  onDestroy(() => {
-    unlistenDl?.();
-  });
-
   /** 提权重启接力标记：旧进程退出前落 localStorage，新进程检测到已提权后 toast 并清除 */
   const ADMIN_RESTART_FLAG = "kotone:admin-restart-pending";
 
@@ -106,11 +42,6 @@
       }
     } catch (e) {
       toast(false, `加载设备信息失败：${errText(e)}`);
-    }
-    try {
-      models = await listModels();
-    } catch (e) {
-      console.error("[general] list_models 失败：", e);
     }
   });
 
@@ -333,43 +264,6 @@
       <RuntimeButton variant="hero" {onOpenAdvanced} />
     </div>
   </section>
-
-  <!-- 模型未下载直达下载（P2-⑥：跳过向导/删除模型后的补救入口） -->
-  {#if modelMissing}
-    <section class="kotone-panel mt-4 flex items-center gap-3 p-4 ring-1 ring-kotone-pink/35">
-      <span class="text-xl">📥</span>
-      <div class="min-w-0 flex-1">
-        <p class="text-sm font-semibold text-white/90">还没有可用的识别模型</p>
-        <p class="mt-0.5 text-[11px] text-white/50">
-          下载后即可启动引擎（{primaryModel?.displayName}，约{" "}
-          {primaryModel ? Math.round(primaryModel.sizeBytes / 1_000_000) : 0} MB）
-        </p>
-        {#if dlPercent !== null}
-          <div class="mt-2 flex items-center gap-2">
-            <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-white/10">
-              <div
-                class="h-full rounded-full bg-kotone-cyan transition-[width]"
-                style:width="{dlPercent}%"
-              ></div>
-            </div>
-            <button
-              class="shrink-0 rounded-lg bg-white/10 px-2.5 py-1 text-[11px] text-white/70 ring-1 ring-white/15 transition hover:bg-white/20"
-              onclick={() => void cancelPrimaryDownload()}
-            >
-              取消
-            </button>
-          </div>
-        {/if}
-      </div>
-      <button
-        class="shrink-0 rounded-lg bg-kotone-cyan px-3.5 py-1.5 text-xs font-semibold text-kotone-deep transition hover:brightness-110 active:scale-95 disabled:opacity-60"
-        disabled={downloading}
-        onclick={() => void downloadPrimaryModel()}
-      >
-        {downloading ? "下载中…" : "下载模型"}
-      </button>
-    </section>
-  {/if}
 
   {#if $settingsStore}
     <!-- 麦克风 -->

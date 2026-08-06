@@ -38,7 +38,7 @@
     } catch (e) {
       const message = errText(e);
       toast(false, message);
-      if (/模型.*未下载|未就绪|模型文件|recognizer 创建失败/.test(message)) {
+      if (/模型.*(未下载|不齐备)|未就绪|模型文件|recognizer 创建失败/.test(message)) {
         onOpenAdvanced?.();
       }
     } finally {
