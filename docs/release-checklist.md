@@ -24,7 +24,8 @@
 
 ## 发布流程
 
-1. 更新三个版本号与 `CHANGELOG.md`。
+1. `pnpm release:bump <版本号>`（或 `--rc` / `--patch` / `--minor` / `--major`）同步三处
+   版本号并预置 `CHANGELOG.md` 小节标题；随后在标题下补充变更摘要。
 2. 本机执行全部自动门禁并构建 NSIS 安装包。
 3. 在干净 Windows 用户环境完成安装/首次向导/卸载冒烟测试。
 4. 推送 `v<version>` Tag；`Release Windows` 工作流创建 GitHub Draft Release。
