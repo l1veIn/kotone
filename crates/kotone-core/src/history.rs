@@ -2,6 +2,10 @@
 //!
 //! 设计要点：
 //! - 追加式 JSONL：每次会话终态（sent / cancelled / error）追加一行，零索引成本；
+//!   cancelled 仅当会话有可验证的语音产出（流式引擎出过识别 partial，或
+//!   finalize 产出过文本）时落账——没开口就取消（如结束独奏模式时刚开出的
+//!   空段）、以及非流式引擎（不发 partial）的取消，都不写记录，
+//!   与空转录「无事发生」语义一致；
 //! - sessionId 与 eval 录档共用（orchestrator 生成一次 id 同时喂两边），可互查；
 //! - includeAudio 开启时独立把会话 PCM 写到 history/audio/<sessionId>.wav，
 //!   不依赖评测录档；记录里的 audioFile 存相对文件名；
@@ -196,6 +200,58 @@ pub fn list_in(dir: &Path) -> Result<Vec<HistoryRecord>, String> {
 /// 清空默认目录（jsonl + audio/ 下全部 wav）
 pub fn clear() -> Result<(), String> {
     clear_in(&history_dir())
+}
+
+/// 删除一条记录（按 sessionId + ts 精确匹配；未找到 = 静默成功，幂等）。
+/// 该记录带录音时，若对应 wav 不再被任何保留记录引用则一并删除——
+/// error → retry 会共享同 sessionId 的音频，不能误删仍被引用的 WAV。
+pub fn delete(session_id: &str, ts: &str) -> Result<(), String> {
+    delete_in(&history_dir(), session_id, ts)
+}
+
+/// 删除指定目录中的一条记录：全读 → 过滤目标行 → 原子重写（同 trim_in 模式），
+/// 再按引用保护清理音频。记录不存在时直接返回成功（幂等，无 IO 副作用）。
+pub fn delete_in(dir: &Path, session_id: &str, ts: &str) -> Result<(), String> {
+    let path = jsonl_path(dir);
+    if !path.exists() {
+        return Ok(());
+    }
+    let raw = std::fs::read_to_string(&path).map_err(|e| format!("读取历史文件失败: {e}"))?;
+    let mut kept: Vec<String> = Vec::new();
+    let mut removed_audio: Option<String> = None;
+    let mut matched = false;
+    for line in raw.lines().filter(|l| !l.trim().is_empty()) {
+        if let Ok(rec) = serde_json::from_str::<HistoryRecord>(line) {
+            if rec.session_id == session_id && rec.ts == ts {
+                matched = true;
+                removed_audio = rec.audio_file;
+                continue; // 丢弃目标行
+            }
+        }
+        kept.push(line.to_string());
+    }
+    if !matched {
+        return Ok(());
+    }
+    let mut out = kept.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    let tmp = path.with_extension("jsonl.tmp");
+    std::fs::write(&tmp, out).map_err(|e| format!("删除历史记录失败: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("落盘历史删除失败: {e}"))?;
+    // 音频清理：仅当该 wav 不再被保留记录引用（error→retry 共享音频保护）
+    if let Some(file) = removed_audio {
+        let still_referenced = kept.iter().any(|line| {
+            serde_json::from_str::<HistoryRecord>(line)
+                .ok()
+                .is_some_and(|r| r.audio_file.as_deref() == Some(file.as_str()))
+        });
+        if !still_referenced {
+            let _ = std::fs::remove_file(audio_dir(dir).join(&file));
+        }
+    }
+    Ok(())
 }
 
 /// 清空指定目录（jsonl + audio/ 目录整体删除）
@@ -451,5 +507,134 @@ mod tests {
         let written = crate::eval::read_wav(&audio_dir(dir.path()).join("s1.wav")).unwrap();
         assert_eq!(written.len(), pcm.len());
         assert!(write_audio_in(dir.path(), "../escape", &pcm).is_none());
+    }
+
+    // ---------- 单条删除（delete_in） ----------
+
+    fn rec_with_audio(session_id: &str, ts: &str, audio: Option<&str>) -> HistoryRecord {
+        let mut r = rec(session_id, HistoryOutcome::Sent);
+        r.ts = ts.to_string();
+        r.audio_file = audio.map(String::from);
+        r
+    }
+
+    fn write_audio_file(dir: &Path, name: &str) {
+        let adir = audio_dir(dir);
+        std::fs::create_dir_all(&adir).unwrap();
+        std::fs::write(adir.join(name), b"RIFF-fake").unwrap();
+    }
+
+    #[test]
+    fn delete_removes_record_and_its_audio_only() {
+        let dir = tempfile::tempdir().unwrap();
+        write_audio_file(dir.path(), "a.wav");
+        write_audio_file(dir.path(), "b.wav");
+        append_in(
+            dir.path(),
+            &rec_with_audio("a", "t1", Some("a.wav")),
+            &cfg(HistoryMode::KeepAll, 10),
+        )
+        .unwrap();
+        append_in(
+            dir.path(),
+            &rec_with_audio("b", "t2", Some("b.wav")),
+            &cfg(HistoryMode::KeepAll, 10),
+        )
+        .unwrap();
+        append_in(
+            dir.path(),
+            &rec_with_audio("c", "t3", None),
+            &cfg(HistoryMode::KeepAll, 10),
+        )
+        .unwrap();
+
+        delete_in(dir.path(), "a", "t1").unwrap();
+        let records = list_in(dir.path()).unwrap();
+        assert_eq!(records.len(), 2, "records: {records:?}");
+        assert!(!records.iter().any(|r| r.session_id == "a"));
+        assert!(
+            !audio_dir(dir.path()).join("a.wav").exists(),
+            "被删记录的音频应一并删除"
+        );
+        assert!(
+            audio_dir(dir.path()).join("b.wav").exists(),
+            "其他记录的音频不受影响"
+        );
+    }
+
+    #[test]
+    fn delete_keeps_audio_still_referenced_by_retry_record() {
+        let dir = tempfile::tempdir().unwrap();
+        write_audio_file(dir.path(), "shared.wav");
+        // error → retry 两条同 sessionId、不同 ts，共享同一音频
+        let mut failed = rec_with_audio("s1", "t1", Some("shared.wav"));
+        failed.outcome = HistoryOutcome::Error;
+        failed.error = Some("注入失败".into());
+        append_in(dir.path(), &failed, &cfg(HistoryMode::KeepAll, 10)).unwrap();
+        append_in(
+            dir.path(),
+            &rec_with_audio("s1", "t2", Some("shared.wav")),
+            &cfg(HistoryMode::KeepAll, 10),
+        )
+        .unwrap();
+
+        // 删 error 那条：记录消失，但 wav 仍被 retry 记录引用，不能删
+        delete_in(dir.path(), "s1", "t1").unwrap();
+        let records = list_in(dir.path()).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].ts, "t2");
+        assert!(
+            audio_dir(dir.path()).join("shared.wav").exists(),
+            "仍被保留记录引用的音频不能删除"
+        );
+
+        // 删最后一条（retry）：wav 不再被引用，一并删除
+        delete_in(dir.path(), "s1", "t2").unwrap();
+        assert!(list_in(dir.path()).unwrap().is_empty());
+        assert!(!audio_dir(dir.path()).join("shared.wav").exists());
+    }
+
+    #[test]
+    fn delete_missing_record_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        append_in(
+            dir.path(),
+            &rec_with_audio("a", "t1", None),
+            &cfg(HistoryMode::KeepAll, 10),
+        )
+        .unwrap();
+        // 不存在的记录：静默成功，文件不变
+        delete_in(dir.path(), "a", "tX").unwrap();
+        delete_in(dir.path(), "nope", "t1").unwrap();
+        let records = list_in(dir.path()).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].session_id, "a");
+        // 空目录/不存在文件：幂等成功
+        let empty = tempfile::tempdir().unwrap();
+        delete_in(empty.path(), "a", "t1").unwrap();
+    }
+
+    #[test]
+    fn delete_last_record_leaves_valid_empty_file() {
+        let dir = tempfile::tempdir().unwrap();
+        write_audio_file(dir.path(), "a.wav");
+        append_in(
+            dir.path(),
+            &rec_with_audio("a", "t1", Some("a.wav")),
+            &cfg(HistoryMode::KeepAll, 10),
+        )
+        .unwrap();
+        delete_in(dir.path(), "a", "t1").unwrap();
+        assert!(list_in(dir.path()).unwrap().is_empty());
+        assert!(jsonl_path(dir.path()).exists(), "jsonl 保留为空文件（append 可继续）");
+        assert!(!audio_dir(dir.path()).join("a.wav").exists());
+        // 删除后仍可继续追加
+        append_in(
+            dir.path(),
+            &rec_with_audio("b", "t2", None),
+            &cfg(HistoryMode::KeepAll, 10),
+        )
+        .unwrap();
+        assert_eq!(list_in(dir.path()).unwrap().len(), 1);
     }
 }

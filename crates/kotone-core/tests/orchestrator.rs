@@ -1144,6 +1144,16 @@ fn make_vad_mode_orchestrator(
     vad: ScriptVad,
     mode: kotone_core::interaction::InteractionMode,
 ) -> (Arc<Orchestrator>, Arc<VecEmitter>, Arc<Mutex<Vec<String>>>) {
+    make_vad_mode_orchestrator_in(vad, mode, None)
+}
+
+/// 同 make_vad_mode_orchestrator，但 history_dir 给出时开启历史记录
+/// （capped/1000，写入临时目录），验证 solo 停止与历史落账的交互。
+fn make_vad_mode_orchestrator_in(
+    vad: ScriptVad,
+    mode: kotone_core::interaction::InteractionMode,
+    history_dir: Option<std::path::PathBuf>,
+) -> (Arc<Orchestrator>, Arc<VecEmitter>, Arc<Mutex<Vec<String>>>) {
     let sent = Arc::new(Mutex::new(Vec::new()));
     let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
     let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(
@@ -1155,7 +1165,11 @@ fn make_vad_mode_orchestrator(
     settings.stt_engine = "mock-stream".into();
     settings.active_profile_id = None;
     settings.eval_recording = false;
-    settings.history.mode = kotone_core::history::HistoryMode::Off; // 不写真实 ~/.kotone/history
+    settings.history.mode = if history_dir.is_some() {
+        kotone_core::history::HistoryMode::Capped
+    } else {
+        kotone_core::history::HistoryMode::Off // 不写真实 ~/.kotone/history
+    };
     settings.interaction_mode = Some(mode);
     settings.vad_silence_ms = 210; // 7 帧静音即判停（测试快进）
     let settings = Arc::new(RwLock::new(settings));
@@ -1173,6 +1187,7 @@ fn make_vad_mode_orchestrator(
     orch.toast_dwell = Duration::from_millis(10);
     orch.finalize_timeout = Duration::from_secs(2);
     orch.focus_restore_delay = Duration::ZERO;
+    orch.history_dir = history_dir;
     let vad = std::sync::Mutex::new(Some(vad));
     orch.vad_factory = Some(Arc::new(move || {
         Ok(Box::new(
@@ -1337,6 +1352,51 @@ async fn solo_toggle_stops_without_sending() {
     );
 }
 
+/// solo 全链路 + 历史：发完的句子正常落账 sent；结束独奏时刚开出的
+/// 空段（从未出过 partial）不再产生「未说完成取消」记录（P2 用户反馈）。
+#[tokio::test]
+async fn solo_stop_does_not_leave_empty_cancelled_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let (orch, _emitter, sent) = make_vad_mode_orchestrator_in(
+        ScriptVad::speech_then_silence(30),
+        kotone_core::interaction::InteractionMode::Solo,
+        Some(dir.path().to_path_buf()),
+    );
+    orch.on_hotkey_toggle().await; // A2：点按开始持续收音
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+
+    // 等第一句发送落账 sent（同步 mock 注入，很快；细粒度轮询保证
+    // 随后停止时新段存在时间远小于 mock-stream 的 partial 阈值，
+    // Windows timer 粒度下约 156ms）
+    let start = std::time::Instant::now();
+    loop {
+        if !kotone_core::history::list_in(dir.path()).unwrap().is_empty() {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "等待 solo 发送落账超时"
+        );
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    assert_eq!(sent.lock().unwrap().as_slice(), ["对面打野在下路"]);
+
+    // 连续模式：发送后立即开新段（回到 Listening）
+    wait_state(&orch, OrchestratorState::Listening, Duration::from_secs(5)).await;
+
+    // 立刻停止：新段刚开出、未及产出 partial → 无产出取消不落账
+    orch.on_hotkey_toggle().await;
+    wait_state(&orch, OrchestratorState::Idle, Duration::from_secs(2)).await;
+
+    let records = kotone_core::history::list_in(dir.path()).unwrap();
+    assert_eq!(records.len(), 1, "records: {records:?}");
+    assert_eq!(
+        records[0].outcome,
+        kotone_core::history::HistoryOutcome::Sent,
+        "结束独奏不应产生空 cancelled 记录: {records:?}"
+    );
+}
+
 // ---------- history：终态落账（HistoryDraft → history.jsonl） ----------
 
 /// 带 history 的 orchestrator：history_dir 指向临时目录；
@@ -1408,7 +1468,9 @@ async fn history_sent_records_one_entry() {
     assert!(!r.session_id.is_empty() && !r.ts.is_empty());
 }
 
-/// cancelled 终态：Listening 中取消，记一条 cancelled（无最终文本）
+/// cancelled 终态：已有语音产出（出过 partial）时取消，记一条 cancelled
+/// （无最终文本，因为没走到 finalize）。无产出取消不落账见
+/// history_cancel_without_partial_writes_nothing。
 #[tokio::test]
 async fn history_cancel_during_listening_records_cancelled() {
     let dir = tempfile::tempdir().unwrap();
@@ -1417,7 +1479,9 @@ async fn history_cancel_during_listening_records_cancelled() {
     let orch = make_history_orchestrator(false, injector, dir.path().to_path_buf(), None);
 
     orch.begin().await.unwrap();
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // 等 mock-stream 出 partial：MockAudioBackend 每帧 800 采样、8000 采样
+    // 一条 partial，Windows timer 粒度 ~15.6ms 下需 ~160ms；500ms 保证已产出
+    tokio::time::sleep(Duration::from_millis(500)).await;
     orch.cancel().await;
 
     let records = kotone_core::history::list_in(dir.path()).unwrap();
@@ -1428,6 +1492,203 @@ async fn history_cancel_during_listening_records_cancelled() {
     );
     assert!(records[0].final_text.is_empty());
     assert!(records[0].finalize_latency_ms.is_none());
+}
+
+/// cancelled 终态：取消时从未出过 partial（无任何语音产出）→ 不落账，
+/// 且草稿终结无残留（后续正常会话只落自己的 sent，不混入旧记录）。
+/// 覆盖「没开口就取消」与 solo 结束独奏时刚开出的空段。
+#[tokio::test]
+async fn history_cancel_without_partial_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent });
+    let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(
+        Arc::new(Mutex::new(Vec::new())),
+        42,
+        true,
+    ));
+    let (orch, emitter) = make_orchestrator_tuned(false, injector, focus, |o| {
+        o.settings().write().unwrap().history.mode =
+            kotone_core::history::HistoryMode::Capped;
+        o.history_dir = Some(dir.path().to_path_buf());
+    });
+
+    orch.begin().await.unwrap();
+    // MockAudioBackend 以 ~15.6ms（Windows timer 粒度）/帧喂 800 采样，
+    // mock-stream 需累计 8000 采样才发第一条 partial（约 156ms）；
+    // 20ms 内取消 = 无 partial，先显式断言再取消（确定性验证，不赌时序）
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(
+        emitter.partials().is_empty(),
+        "20ms 内不应出 partial: {:?}",
+        emitter.partials()
+    );
+    orch.cancel().await;
+
+    let records = kotone_core::history::list_in(dir.path()).unwrap();
+    assert!(records.is_empty(), "无产出取消不应落账: {records:?}");
+
+    // 草稿已终结：后续正常会话不受残留影响，只落一条 sent
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(600)).await; // 等出 partial
+    orch.end().await.unwrap();
+    orch.confirm_send().await.unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Success);
+    let records = kotone_core::history::list_in(dir.path()).unwrap();
+    assert_eq!(records.len(), 1, "records: {records:?}");
+    assert_eq!(
+        records[0].outcome,
+        kotone_core::history::HistoryOutcome::Sent
+    );
+}
+
+// ---------- 重发最近一条（resend_last） ----------
+
+/// Idle 时 resend_last：把历史最新一条 sent 文本重新注入（用当前配置直发）
+#[tokio::test]
+async fn resend_last_sends_latest_history_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
+    let orch = make_history_orchestrator(true, injector, dir.path().to_path_buf(), None);
+
+    // 先正常说一句并发送成功（落账 sent + 注入一次）
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(600)).await; // 等出 partial
+    orch.end().await.unwrap();
+    let start = std::time::Instant::now();
+    loop {
+        if sent.lock().unwrap().len() == 1 {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "等待首次发送超时");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // 等回 Idle（Success toast 驻留后）
+    wait_state(&orch, OrchestratorState::Idle, Duration::from_secs(2)).await;
+    assert_eq!(sent.lock().unwrap().as_slice(), ["对面打野在下路"]);
+
+    // Idle 时重发：注入同一条文本（重发不新建会话草稿，不产生新 history 记录）
+    orch.resend_last().await;
+    let start = std::time::Instant::now();
+    loop {
+        if sent.lock().unwrap().len() == 2 {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "等待重发超时");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(
+        sent.lock().unwrap().as_slice(),
+        ["对面打野在下路", "对面打野在下路"]
+    );
+    assert_eq!(
+        kotone_core::history::list_in(dir.path()).unwrap().len(),
+        1,
+        "重发不应产生新的历史记录（无会话草稿）"
+    );
+}
+
+/// 非 Idle 状态（Listening）按下 resend：静默忽略，不打断当前输入
+#[tokio::test]
+async fn resend_last_ignored_when_not_idle() {
+    let dir = tempfile::tempdir().unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
+    let orch = make_history_orchestrator(true, injector, dir.path().to_path_buf(), None);
+
+    orch.begin().await.unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    orch.resend_last().await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        sent.lock().unwrap().is_empty(),
+        "会话进行中不应重发: {:?}",
+        sent.lock().unwrap()
+    );
+    orch.cancel().await;
+}
+
+/// 无历史记录（或历史里没有 sent 文本）时 resend：静默 no-op，不 panic
+#[tokio::test]
+async fn resend_last_noop_without_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
+    let orch = make_history_orchestrator(true, injector, dir.path().to_path_buf(), None);
+
+    orch.resend_last().await;
+    assert!(sent.lock().unwrap().is_empty());
+}
+
+/// 落账后发 kotone://history-updated：历史记录页据此即时刷新（无需切页）。
+/// 无产出取消不落账 → 不发该事件。
+#[tokio::test]
+async fn history_write_emits_history_updated_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent });
+    let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(
+        Arc::new(Mutex::new(Vec::new())),
+        42,
+        true,
+    ));
+    let (orch, emitter) = make_orchestrator_tuned(false, injector, focus, |o| {
+        o.settings().write().unwrap().history.mode =
+            kotone_core::history::HistoryMode::Capped;
+        o.history_dir = Some(dir.path().to_path_buf());
+    });
+
+    // 正常说一句并发送成功 → sent 落账 → 应发 history-updated（outcome=sent）
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(600)).await; // 等出 partial
+    orch.end().await.unwrap();
+    orch.confirm_send().await.unwrap();
+    let start = std::time::Instant::now();
+    loop {
+        let has = emitter
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(e, _)| e == "kotone://history-updated");
+        if has {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "等待 history-updated 事件超时: {:?}",
+            emitter.events.lock().unwrap()
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let payload = emitter
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(e, _)| e == "kotone://history-updated")
+        .map(|(_, p)| p.clone())
+        .unwrap();
+    assert_eq!(payload["outcome"], "sent");
+
+    // 无产出取消：不落账 → 不再发 history-updated
+    emitter.events.lock().unwrap().clear();
+    wait_state(&orch, OrchestratorState::Idle, Duration::from_secs(2)).await;
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await; // 无 partial
+    orch.cancel().await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !emitter
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(e, _)| e == "kotone://history-updated"),
+        "无产出取消不应发 history-updated: {:?}",
+        emitter.events.lock().unwrap()
+    );
 }
 
 /// error → 重试成功：同 sessionId 写 error + sent 两条（刻意的失败→重试叙事）

@@ -8,11 +8,14 @@
    * 波形用 canvas 手绘（峰值柱 + 进度高亮），点击可 seek。
    */
   import { onDestroy, onMount, tick } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import {
     updateSettings,
     getHistory,
     clearHistory,
+    deleteHistoryRecord,
     readHistoryAudio,
+    isTauri,
     type HistoryRecord,
   } from "../../../lib/ipc";
   import { settingsStore, toast, errText } from "../../../lib/stores/ui";
@@ -26,6 +29,8 @@
   let playingId = $state<string | null>(null);
   /** 正在加载音频的记录 id（防止加载期间重复点击） */
   let loadingId = $state<string | null>(null);
+  /** 正在删除的记录 id（防止重复点击） */
+  let deletingId = $state<string | null>(null);
   /** 共享 AudioContext（懒创建；纯 Web Audio 播放，绕开 WebView2 <audio> 管线） */
   let ac: AudioContext | null = null;
   let src: AudioBufferSourceNode | null = null;
@@ -39,11 +44,28 @@
   /** 行内波形画布（仅播放中的行渲染） */
   let waveCanvas: HTMLCanvasElement | undefined = $state();
 
+  /** 运行中新增记录的即时刷新订阅（Rust 落账后发 kotone://history-updated） */
+  let unlistenHistory: (() => void) | null = null;
+  /** 组件已销毁标志（listen await 完成前被销毁时撤销订阅，防泄漏） */
+  let disposed = false;
+  /** 刷新序号：并发 refresh 只保留最后一次结果（旧快照不覆盖新快照） */
+  let refreshSeq = 0;
+
   onMount(async () => {
     await refresh();
+    if (!isTauri) return;
+    // 会话终态落账后即时刷新：历史页停留期间新记录自动出现，无需切页再切回
+    unlistenHistory = await listen("kotone://history-updated", () => void refresh());
+    if (disposed) {
+      // 订阅建立前组件已被销毁：立即撤销，避免泄漏
+      unlistenHistory?.();
+      unlistenHistory = null;
+    }
   });
 
   onDestroy(() => {
+    disposed = true;
+    unlistenHistory?.();
     stopPlayback();
     void ac?.close();
     ac = null;
@@ -198,11 +220,33 @@
   }
 
   async function refresh() {
+    const seq = ++refreshSeq;
     try {
-      records = await getHistory();
+      const next = await getHistory();
+      if (seq !== refreshSeq) return; // 已有更新的刷新在途，丢弃过期结果
+      records = next;
     } catch (e) {
+      if (seq !== refreshSeq) return;
       toast(false, `读取历史失败：${errText(e)}`);
       records = [];
+    }
+  }
+
+  /** 删除单条记录（带录音且不再被其他记录引用时一并删除 wav） */
+  async function onDelete(r: HistoryRecord) {
+    const id = recordId(r);
+    if (deletingId === id) return;
+    deletingId = id;
+    try {
+      await deleteHistoryRecord(r.sessionId, r.ts);
+      // 正在播/正在加载这条时先停（wav 可能已物理删除，加载完成会播放空数据）
+      if (playingId === id || loadingId === id) stopPlayback();
+      toast(true, `已删除该条记录${r.audioFile ? "（含录音）" : ""}`);
+      await refresh();
+    } catch (e) {
+      toast(false, `删除失败：${errText(e)}`);
+    } finally {
+      deletingId = null;
     }
   }
 
@@ -344,6 +388,15 @@
           <span class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold {meta.cls}">
             {meta.text}
           </span>
+          <button
+            class="flex h-6 w-6 items-center justify-center rounded-full bg-kotone-pink/15 text-[10px] text-kotone-pink ring-1 ring-kotone-pink/40 transition hover:bg-kotone-pink/25 active:scale-95 disabled:opacity-50"
+            title="删除该条记录（含录音）"
+            aria-label="删除该条记录"
+            disabled={deletingId === id}
+            onclick={() => void onDelete(r)}
+          >
+            {deletingId === id ? "…" : "✕"}
+          </button>
           </div>
           {#if playingId === id}
             <!-- 行内波形（canvas 手绘峰值柱，点击可 seek） -->

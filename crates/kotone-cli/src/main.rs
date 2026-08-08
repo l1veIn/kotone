@@ -229,6 +229,18 @@ enum LogCommand {
         #[arg(long)]
         yes: bool,
     },
+    /// 删除单条历史记录（按 sessionId + ts，见 `log list --json`）
+    Delete {
+        /// 会话 id（log list --json 的 sessionId 字段）
+        #[arg(long)]
+        session_id: String,
+        /// 终态落账时间（log list --json 的 ts 字段，ISO 8601）
+        #[arg(long)]
+        ts: String,
+        /// 跳过确认提示
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[tokio::main]
@@ -281,6 +293,11 @@ async fn main() {
         Command::Log { action } => match action {
             LogCommand::List { limit, json } => cmd_log_list(limit, json),
             LogCommand::Clear { yes } => cmd_log_clear(yes),
+            LogCommand::Delete {
+                session_id,
+                ts,
+                yes,
+            } => cmd_log_delete(&session_id, &ts, yes),
         },
     };
     std::process::exit(code);
@@ -637,6 +654,7 @@ async fn cmd_listen_hotkey(
     });
     // settings 随后移交给 orchestrator，频道切换热键先取出备用（ADR-008）
     let cycle_hotkey = settings.read().unwrap().channel_cycle_hotkey.clone();
+    let resend_hotkey = settings.read().unwrap().resend_last_hotkey.clone();
     let orchestrator = wire_vad(Orchestrator::new(
         settings,
         Arc::new(registry),
@@ -656,6 +674,16 @@ async fn cmd_listen_hotkey(
             eprintln!("频道切换热键「{cycle_hotkey}」与录制热键冲突，已忽略");
         } else if let Err(e) = hotkey.set_cycle_key(Some(&cycle_hotkey)) {
             eprintln!("注册频道切换热键失败: {e}");
+        }
+    }
+    // 重发最近一条热键：与录制/频道切换热键冲突时忽略并告警，不影响主流程
+    if !resend_hotkey.trim().is_empty() {
+        if kotone_core::hotkey::combos_conflict(&resend_hotkey, &hotkey_key) {
+            eprintln!("重发热键「{resend_hotkey}」与录制热键冲突，已忽略");
+        } else if kotone_core::hotkey::combos_conflict(&resend_hotkey, &cycle_hotkey) {
+            eprintln!("重发热键「{resend_hotkey}」与频道切换热键冲突，已忽略");
+        } else if let Err(e) = hotkey.set_resend_key(Some(&resend_hotkey)) {
+            eprintln!("注册重发热键失败: {e}");
         }
     }
     println!(
@@ -683,6 +711,7 @@ async fn cmd_listen_hotkey(
                     HookEvent::Toggle => orch.on_hotkey_toggle().await,
                     HookEvent::Cancel => orch.cancel().await,
                     HookEvent::CycleChannel => orch.on_cycle_channel().await,
+                    HookEvent::ResendLast => orch.resend_last().await,
                     // 诊断事件（修饰键失配）：consumer 已记日志，业务不处理
                     HookEvent::MainKeyMissed { .. } => {}
                 }
@@ -1523,6 +1552,36 @@ fn cmd_log_clear(yes: bool) -> i32 {
         }
         Err(e) => {
             eprintln!("清空失败: {e}");
+            1
+        }
+    }
+}
+
+/// log delete：删除单条历史记录（带录音且不再被其他记录引用时一并删除 wav）
+fn cmd_log_delete(session_id: &str, ts: &str, yes: bool) -> i32 {
+    if session_id.is_empty() || ts.is_empty() {
+        eprintln!("sessionId 与 ts 不能为空（参数见 `kotone-cli log list --json`）");
+        return 2;
+    }
+    if !yes {
+        eprint!("确认删除该条识别历史（含录音）？[y/N] ");
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() {
+            eprintln!("\n读取确认失败，已取消");
+            return 2;
+        }
+        if !matches!(line.trim().to_lowercase().as_str(), "y" | "yes") {
+            println!("已取消");
+            return 0;
+        }
+    }
+    match kotone_core::history::delete(session_id, ts) {
+        Ok(()) => {
+            println!("已删除该条识别历史（sessionId={session_id} ts={ts}）");
+            0
+        }
+        Err(e) => {
+            eprintln!("删除失败: {e}");
             1
         }
     }

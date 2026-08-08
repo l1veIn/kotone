@@ -58,6 +58,10 @@ pub struct Settings {
     /// profile 的聊天频道；与录制热键冲突时后端拒绝注册并在状态里给出错误。
     #[serde(default = "default_channel_cycle_hotkey")]
     pub channel_cycle_hotkey: String,
+    /// 重发最近一条热键（默认空 = 关闭）。Idle 时按下把历史最新一条发送成功的
+    /// 文本重新注入到当前前台窗口；与录制/频道切换热键冲突时拒绝注册。
+    #[serde(default)]
+    pub resend_last_hotkey: String,
     /// 「以管理员权限重启」启动提示：用户勾选「不再提示」后置 true，不再弹窗（默认 false）
     #[serde(default)]
     pub admin_prompt_dismissed: bool,
@@ -329,6 +333,7 @@ impl Default for Settings {
             vad_silence_ms: default_vad_silence_ms(),
             run_as_admin_on_start: false,
             channel_cycle_hotkey: default_channel_cycle_hotkey(),
+            resend_last_hotkey: String::new(), // 默认关闭（设置里录入）
             admin_prompt_dismissed: false,
             auto_admin_prompt_dismissed: false,
             history: crate::history::HistoryConfig::default(),

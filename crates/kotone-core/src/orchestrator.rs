@@ -696,6 +696,48 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// 重发最近一条：把历史里最新一条「发送成功」的文本重新注入（快捷键入口）。
+    /// 语义（与用户确认）：
+    /// - 仅 Idle 生效：会话进行中（录音/发送/预览等）按下静默忽略，不打断当前输入；
+    /// - 用当前 profile + 当前 sticky 频道（与普通发送同一条 do_send 路径，
+    ///   ADR-008 频道在发送时刻读取）；历史里的 profileId 不参与；
+    /// - 无历史记录或文本为空 → 静默忽略（记日志）。
+    pub async fn resend_last(&self) {
+        if self.state() != OrchestratorState::Idle {
+            return;
+        }
+        let dir = self
+            .history_dir
+            .clone()
+            .unwrap_or_else(crate::history::history_dir);
+        let text = match crate::history::list_in(&dir) {
+            Ok(records) => records
+                .iter()
+                .find(|r| {
+                    r.outcome == crate::history::HistoryOutcome::Sent
+                        && !r.final_text.trim().is_empty()
+                })
+                .map(|r| r.final_text.clone()),
+            Err(e) => {
+                crate::log::log(&format!("重发最近一条：读取历史失败（忽略）: {e}"));
+                return;
+            }
+        };
+        let Some(text) = text else {
+            crate::log::log("重发最近一条：历史中无发送成功的文本，忽略");
+            return;
+        };
+        // 重发直发当前前台窗口：不沿用上次会话记录的注入目标（Idle 时
+        // target_window 残留，若用户已切窗口，restore 会把焦点抢回旧窗口
+        // 导致文本打进旧窗口）；target=None 时 do_send 跳过焦点恢复直发前台。
+        let gen = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.target_window = None;
+            inner.gen
+        };
+        self.do_send(text, gen).await;
+    }
+
     /// 结束会话：finalize → autoSend 分流（§6 发送时序上半段）
     pub async fn end(&self) -> Result<(), String> {
         let (gen, mut active) = {
@@ -1159,10 +1201,23 @@ impl Orchestrator {
         }
         let record = {
             let mut g = draft.lock().unwrap();
-            if outcome == crate::history::HistoryOutcome::Cancelled && g.reported {
-                return;
-            }
-            if outcome != crate::history::HistoryOutcome::Cancelled {
+            if outcome == crate::history::HistoryOutcome::Cancelled {
+                if g.reported {
+                    // error 已落账过的草稿跳过（Error 后的 Esc 是清理动作，不双记 cancelled）
+                    return;
+                }
+                if g.first_partial_ms.is_none() && g.final_text.trim().is_empty() {
+                    // 取消时没有任何可验证的语音产出 → 不落账：
+                    // solo 结束独奏时刚开出的空段、或没开口就取消，都不是
+                    // 「放弃了这句话」，与空转录「无事发生」语义一致（P2 用户反馈
+                    // 「结束独奏总有一条未说完成取消」）。草稿一并终结防残留。
+                    // 注意边界：非流式引擎（FunASR-Nano/SenseVoice 等）不发 partial，
+                    // 取消时无法确认是否开口，同样按无产出处理不落账。
+                    drop(g);
+                    self.inner.lock().unwrap().history = None;
+                    return;
+                }
+            } else {
                 g.reported = true;
             }
             crate::history::HistoryRecord {
@@ -1185,6 +1240,13 @@ impl Orchestrator {
             .unwrap_or_else(crate::history::history_dir);
         if let Err(e) = crate::history::append_in(&dir, &record, &cfg) {
             crate::log::log(&format!("history 落账失败（忽略）: {e}"));
+        } else {
+            // 历史已更新：通知前端（历史记录页挂载期间据此即时刷新，无需切页）
+            // 未落账的路径（off / 无草稿 / 无产出取消）不会走到这里。
+            self.emitter.emit(
+                "kotone://history-updated",
+                serde_json::json!({ "outcome": outcome }),
+            );
         }
         if outcome != crate::history::HistoryOutcome::Error {
             self.inner.lock().unwrap().history = None;

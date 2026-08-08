@@ -21,7 +21,7 @@
 | `doctor` | 环境自检：设备/引擎/profile/提权/VAD/history 逐项 ✓/⚠/✗ + 修复建议（有 ✗ 退出码 1） |
 | `elevate <command> [args...]` | sudo 式提权：以管理员权限在新控制台执行子命令（典型 `elevate listen`；裸 elevate 报用法错误） |
 | `profile list / use <id> / detect` | 游戏 profile 列表 / 激活 / 前台进程匹配检测 |
-| `log list [--limit N] [--json] / clear [--yes]` | 识别历史查看 / 清空（~/.kotone/history/） |
+| `log list [--limit N] [--json] / clear [--yes] / delete --session-id <id> --ts <ts> [--yes]` | 识别历史查看 / 清空 / 单条删除（~/.kotone/history/） |
 
 ### config set 支持的键
 
@@ -39,9 +39,15 @@ history.mode 非 off 时，每次会话终态自动追加一条 JSONL 到
 `~/.kotone/history/history.jsonl`：`sent`（发送成功）/ `cancelled`（Esc 取消）/
 `error`（注入或转写失败）。error 后重试成功会同 sessionId 再记一条 sent
 （刻意的「失败→重试」叙事）；error 后的 Esc 是清理动作，不双记 cancelled。
+取消时没有任何可验证的语音产出（流式引擎从未出过识别 partial，如结束
+独奏模式时刚开出的空段；非流式引擎不发 partial，取消一律不落账）的会话
+不记录——与空转录「无事发生」同理，只记真正放弃过的一句话。
 sessionId 与 eval 录档一致时仍可互查；`history.includeAudio` 开启时会独立把
 会话音频写到 `history/audio/<sessionId>.wav`，不要求开启 `evalRecording`。
-capped 模式超上限自动裁剪最旧记录（联动删除其音频）。
+capped 模式超上限自动裁剪最旧记录（联动删除其音频）。`log delete
+--session-id <id> --ts <ts>` 按 `log list --json` 输出的 sessionId + ts 精确
+删除单条记录；该记录带录音且不再被其他记录引用时（error→retry 会共享
+同 sessionId 音频）一并删除对应 wav，记录不存在时幂等成功。
 
 ### doctor 与提权（elevate）
 

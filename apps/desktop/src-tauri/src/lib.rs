@@ -573,6 +573,7 @@ fn update_settings(
             effective_hotkey_mode(&guard),
             guard.hotkey_backend,
             guard.channel_cycle_hotkey.clone(),
+            guard.resend_last_hotkey.clone(),
         );
         let old_overlay = guard.overlay.clone();
         let mut merged =
@@ -604,7 +605,9 @@ fn update_settings(
         || old_hotkey.1 != next_mode
         || old_hotkey.2 != updated.hotkey_backend
         // 频道切换热键（ADR-008）变化也要重注册（HotkeyManager 注册时一并应用）
-        || old_hotkey.3 != updated.channel_cycle_hotkey;
+        || old_hotkey.3 != updated.channel_cycle_hotkey
+        // 重发最近一条热键变化也要重注册
+        || old_hotkey.4 != updated.resend_last_hotkey;
     let running = app
         .try_state::<RuntimeManager>()
         .map(|rt| rt.phase() == RuntimePhase::Running)
@@ -1188,6 +1191,13 @@ fn clear_history() -> Result<(), String> {
     kotone_core::history::clear()
 }
 
+/// 删除单条识别历史（按 sessionId + ts 精确匹配；带录音且不再被其他记录
+/// 引用时一并删除对应 wav；记录不存在 = 静默成功，幂等）
+#[tauri::command]
+fn delete_history_record(session_id: String, ts: String) -> Result<(), String> {
+    kotone_core::history::delete(&session_id, &ts)
+}
+
 /// 读取历史记录的音频文件字节（~/.kotone/history/audio/<file_name>）。
 /// file_name 只允许纯文件名：含 /、\\、.. 或为空直接拒绝（防路径穿越）。
 #[tauri::command]
@@ -1528,6 +1538,7 @@ pub fn run() {
             open_external,
             get_history,
             clear_history,
+            delete_history_record,
             read_history_audio,
             get_resource_usage,
             confirm_send,

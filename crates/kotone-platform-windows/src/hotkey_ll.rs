@@ -387,6 +387,21 @@ impl HotkeySource for LlHookSource {
         kotone_core::log::log(&format!("llhook cycle key: {spec:?}"));
         Ok(())
     }
+
+    /// 重发最近一条热键：更新匹配器的重发 spec；None/解析失败 = 关闭
+    fn set_resend_key(&self, key: Option<&str>) -> Result<(), String> {
+        let spec = match key {
+            Some(k) if !k.trim().is_empty() => Some(parse_hotkey(k).ok_or_else(|| {
+                format!("无法解析重发热键「{k}」（LL 钩子后端不支持该键名）")
+            })?),
+            _ => None,
+        };
+        if let Some(shared) = SHARED.get() {
+            shared.matcher.lock().unwrap().set_resend_spec(spec);
+        }
+        kotone_core::log::log(&format!("llhook resend key: {spec:?}"));
+        Ok(())
+    }
 }
 
 fn spawn_hook_thread() -> Result<u32, String> {

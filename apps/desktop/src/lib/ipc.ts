@@ -65,6 +65,8 @@ export interface Settings {
   autoAdminPromptDismissed: boolean;
   /** 频道切换热键（默认 Shift+CapsLock；按声明顺序循环当前 profile 的聊天频道） */
   channelCycleHotkey: string;
+  /** 重发最近一条热键（默认空 = 关闭；Idle 时重发历史最新一条发送文本） */
+  resendLastHotkey: string;
   /** 交互模式预设（null = 旧字段推导） */
   interactionMode: InteractionMode | null;
   /** VAD 静音判停阈值 ms（one-shot 生效，200-5000） */
@@ -283,6 +285,10 @@ export interface HotkeyStatus {
   cycleKey: string | null;
   /** 频道切换热键最近一次失败信息（如与录制热键冲突） */
   cycleError: string | null;
+  /** 已生效的重发最近一条热键（未配置/未生效为 null） */
+  resendKey: string | null;
+  /** 重发热键最近一次失败信息（如与录制/频道切换热键冲突） */
+  resendError: string | null;
 }
 
 /** 录入/启动前的低级键盘钩子与 SendInput 环境自检结果。 */
@@ -327,6 +333,7 @@ const mock: MockStore = {
     adminPromptDismissed: false,
     autoAdminPromptDismissed: false,
     channelCycleHotkey: "Shift+CapsLock",
+    resendLastHotkey: "",
     interactionMode: "push-to-talk",
     vadSilenceMs: 700,
     vad: { threshold: 0.5, minSpeechMs: 50, minSilenceMs: 50 },
@@ -707,6 +714,8 @@ export async function getHotkeyStatus(): Promise<HotkeyStatus> {
       backend: "llhook",
       cycleKey: mock.settings.channelCycleHotkey,
       cycleError: null,
+      resendKey: mock.settings.resendLastHotkey || null,
+      resendError: null,
     };
   return invoke<HotkeyStatus>("get_hotkey_status");
 }
@@ -992,6 +1001,16 @@ export async function clearHistory(): Promise<void> {
     return;
   }
   return invoke<void>("clear_history");
+}
+
+/** 删除单条历史记录（带录音且不再被其他记录引用时一并删除对应 wav；记录不存在幂等） */
+export async function deleteHistoryRecord(sessionId: string, ts: string): Promise<void> {
+  if (!isTauri) {
+    const i = mock.history.findIndex((h) => h.sessionId === sessionId && h.ts === ts);
+    if (i >= 0) mock.history.splice(i, 1);
+    return;
+  }
+  return invoke<void>("delete_history_record", { sessionId, ts });
 }
 
 /** 读取历史记录随附的音频（相对 history/audio/ 的文件名 → wav 字节） */

@@ -187,6 +187,12 @@
       toast(false, `录制热键与频道切换热键（${cycleKey}）冲突，请换一个或到「高级」页调整`);
       return;
     }
+    // 录制键与重发最近一条热键也不能相同
+    const resendKey = $settingsStore?.resendLastHotkey ?? "";
+    if (resendKey && combosConflict(key, resendKey)) {
+      toast(false, `录制热键与重发热键（${resendKey}）冲突，请换一个或到「高级」页调整`);
+      return;
+    }
     try {
       // 热键变更后端自动重注册（lib.rs update_settings）；模式沿用当前值
       settingsStore.set(
