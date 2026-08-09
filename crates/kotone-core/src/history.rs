@@ -2,9 +2,9 @@
 //!
 //! 设计要点：
 //! - 追加式 JSONL：每次会话终态（sent / cancelled / error）追加一行，零索引成本；
-//!   cancelled 仅当会话有可验证的语音产出（流式引擎出过识别 partial，或
-//!   finalize 产出过文本）时落账——没开口就取消（如结束独奏模式时刚开出的
-//!   空段）、以及非流式引擎（不发 partial）的取消，都不写记录，
+//!   cancelled 仅当会话有可验证的语音产出（VAD 判定过语音，或流式引擎出过
+//!   识别 partial，或 finalize 产出过文本）时落账——没开口就取消（如结束独奏
+//!   模式时刚开出的空段）、以及非流式引擎（不发 partial）的取消，都不写记录，
 //!   与空转录「无事发生」语义一致；
 //! - sessionId 与 eval 录档共用（orchestrator 生成一次 id 同时喂两边），可互查；
 //! - includeAudio 开启时独立把会话 PCM 写到 history/audio/<sessionId>.wav，

@@ -104,7 +104,8 @@ struct HistoryDraft {
     started: std::time::Instant,
     engine_id: String,
     profile_id: Option<String>,
-    /// 已喂入的采样数（落账时按 eval::SAMPLE_RATE 换算 ms）
+    /// 已喂入的采样数（落账时按 eval::SAMPLE_RATE 换算 ms；persist 裁剪后
+    /// 重算为实际语音时长，与保存的 wav 一致）
     audio_samples: u64,
     /// 历史音频独立缓冲；仅 history.includeAudio 开启时分配，
     /// 不依赖 evalRecording，也不会写入 ~/.kotone/eval。
@@ -117,6 +118,53 @@ struct HistoryDraft {
     /// error 终态已落账（Error 态保留文本供重试：重试成功仍写 sent；
     /// error 后的 cancel 是清理动作，不再双记 cancelled）
     reported: bool,
+    /// VAD 判定过语音（one-shot/solo 模式；取消时据此判断「是否真的开过口」，
+    /// 比 STT partial 可靠——噪音也会让流式引擎出 partial，但 silero 判定 speech
+    /// 才是「疑似说话」。非 VAD 模式恒 false，判据退化到 first_partial_ms）
+    vad_speech_seen: bool,
+    /// VAD 判定为语音的采样区间（半开 [start, end)，采样号相对 audio_pcm 起点；
+    /// 相邻段间隙 < SPEECH_GAP_SAMPLES 时合并保留句间短停顿）。
+    /// 仅 VAD 模式填充；persist 时按区间拼接裁剪掉段首/段尾静音。
+    speech_segments: Vec<(usize, usize)>,
+}
+
+/// 语音区间合并间隙：相邻语音段间 ≤ 此采样数视为句间停顿（保留），
+/// 超过则断开（300ms @16kHz）。句内换气/短语停顿一般 < 300ms。
+const SPEECH_GAP_SAMPLES: usize = 480 * 10; // 300ms
+
+impl HistoryDraft {
+    /// 追加一段语音区间（按 VAD 帧判定逐步喂入）：与上一段间隙小则合并。
+    fn push_speech_range(&mut self, start: usize, end: usize) {
+        if start >= end {
+            return;
+        }
+        if let Some(last) = self.speech_segments.last_mut() {
+            if start <= last.1 + SPEECH_GAP_SAMPLES {
+                last.1 = last.1.max(end);
+                return;
+            }
+        }
+        self.speech_segments.push((start, end));
+    }
+
+    #[cfg(test)]
+    fn speech_harness() -> Self {
+        HistoryDraft {
+            session_id: "test".to_string(),
+            started: std::time::Instant::now(),
+            engine_id: "test".to_string(),
+            profile_id: None,
+            audio_samples: 0,
+            audio_pcm: None,
+            audio_file: None,
+            first_partial_ms: None,
+            final_text: String::new(),
+            finalize_latency_ms: None,
+            reported: false,
+            vad_speech_seen: false,
+            speech_segments: Vec::new(),
+        }
+    }
 }
 
 pub struct Orchestrator {
@@ -467,6 +515,8 @@ impl Orchestrator {
                 final_text: String::new(),
                 finalize_latency_ms: None,
                 reported: false,
+                vad_speech_seen: false,
+                speech_segments: Vec::new(),
             }))
         });
 
@@ -500,6 +550,9 @@ impl Orchestrator {
         let pump_history = history_draft.clone();
         let pump_case_id = process_case_id.clone();
         let mut pump_first_partial_seen = false;
+        // VAD 帧的累计采样偏移（相对 audio_pcm 起点；帧在流中连续，
+        // 与 chunk 边界无关，每切出一帧 +VAD_FRAME_SAMPLES）
+        let mut vad_frame_pos = 0usize;
         let me_weak = self.me.read().unwrap().clone();
         let pump = tokio::spawn(async move {
             let mut session = session;
@@ -557,6 +610,19 @@ impl Orchestrator {
                                     for frame in splitter.push(&c) {
                                         match vad.push_frame(&frame) {
                                             Ok(speech) => {
+                                                if speech {
+                                                    // 语音判定：标记「开过口」（取消判据）
+                                                    // 并记录语音区间（历史音频裁剪用）
+                                                    if let Some(h) = &pump_history {
+                                                        let mut g = h.lock().unwrap();
+                                                        g.vad_speech_seen = true;
+                                                        g.push_speech_range(
+                                                            vad_frame_pos,
+                                                            vad_frame_pos
+                                                                + crate::vad::VAD_FRAME_SAMPLES,
+                                                        );
+                                                    }
+                                                }
                                                 decision = tracker.push(speech);
                                                 if decision == crate::vad::StopDecision::Stop {
                                                     break;
@@ -567,6 +633,7 @@ impl Orchestrator {
                                                 break;
                                             }
                                         }
+                                        vad_frame_pos += crate::vad::VAD_FRAME_SAMPLES;
                                     }
                                     if let Some(e) = failed {
                                         crate::log::log(&format!(
@@ -1206,12 +1273,18 @@ impl Orchestrator {
                     // error 已落账过的草稿跳过（Error 后的 Esc 是清理动作，不双记 cancelled）
                     return;
                 }
-                if g.first_partial_ms.is_none() && g.final_text.trim().is_empty() {
+                if g.first_partial_ms.is_none()
+                    && !g.vad_speech_seen
+                    && g.final_text.trim().is_empty()
+                {
                     // 取消时没有任何可验证的语音产出 → 不落账：
                     // solo 结束独奏时刚开出的空段、或没开口就取消，都不是
                     // 「放弃了这句话」，与空转录「无事发生」语义一致（P2 用户反馈
                     // 「结束独奏总有一条未说完成取消」）。草稿一并终结防残留。
-                    // 注意边界：非流式引擎（FunASR-Nano/SenseVoice 等）不发 partial，
+                    // 判据说明：VAD 模式以 vad_speech_seen（silero 判定过语音）为主，
+                    // STT partial 只作非 VAD 模式兜底——流式引擎对持续环境音/背景
+                    // 噪音也会出 partial，单靠 partial 会把沉默段误判为「开过口」；
+                    // 非流式引擎（FunASR-Nano/SenseVoice 等）不发 partial 且无 VAD，
                     // 取消时无法确认是否开口，同样按无产出处理不落账。
                     drop(g);
                     self.inner.lock().unwrap().history = None;
@@ -1253,8 +1326,11 @@ impl Orchestrator {
         }
     }
 
-    /// finalize 成功后把历史音频缓冲直接写入 history/audio。
+    /// finalize 成功后把历史音频缓冲写入 history/audio。
     /// 关闭评测录档不影响该路径；取消/空转录不会调用，因此不留下无效音频。
+    /// VAD 模式（one-shot/solo）下按语音区间裁剪：段首思考静音与段尾判停
+    /// 尾音不再进保存的 wav（用户反馈「独奏历史音频很长、含大量沉默」）；
+    /// 非 VAD 模式无语音区间标记，原样保存。
     fn persist_history_audio(&self) {
         let cfg = self.settings.read().unwrap().history.clone();
         if cfg.mode == crate::history::HistoryMode::Off || !cfg.include_audio {
@@ -1264,18 +1340,30 @@ impl Orchestrator {
             Some(d) => d,
             None => return,
         };
-        let (session_id, pcm) = {
+        let (session_id, pcm, segments) = {
             let mut g = draft.lock().unwrap();
-            (g.session_id.clone(), g.audio_pcm.take())
+            (
+                g.session_id.clone(),
+                g.audio_pcm.take(),
+                g.speech_segments.clone(),
+            )
         };
         let Some(pcm) = pcm else {
             return;
         };
+        // 按语音区间裁剪（VAD 模式有区间；非 VAD 模式 segments 空 → 原样）
+        let trimmed = trim_speech_pcm(&pcm, &segments);
+        if trimmed.is_empty() {
+            crate::log::log("history 音频裁剪后为空（忽略保存）");
+            return;
+        }
+        // 实际语音时长写回草稿：记录 audio_ms 与保存的 wav 一致
+        draft.lock().unwrap().audio_samples = trimmed.len() as u64;
         let dir = self
             .history_dir
             .clone()
             .unwrap_or_else(crate::history::history_dir);
-        let audio_file = crate::history::write_audio_in(&dir, &session_id, &pcm);
+        let audio_file = crate::history::write_audio_in(&dir, &session_id, &trimmed);
         if audio_file.is_none() {
             crate::log::log("history 音频落盘失败（忽略）");
         }
@@ -1328,6 +1416,29 @@ impl Orchestrator {
             json!({ "caseId": case_id, "activity": activity, "data": data }),
         );
     }
+}
+
+/// 按语音区间裁剪历史音频 PCM（纯函数，可单测）。
+/// 区间为半开 [start, end)，采样号相对 pcm 起点，越界 clamp；
+/// segments 空 = 非 VAD 模式（无裁剪标记）→ 返回原样。
+fn trim_speech_pcm(pcm: &[f32], segments: &[(usize, usize)]) -> Vec<f32> {
+    if segments.is_empty() {
+        return pcm.to_vec();
+    }
+    let n = pcm.len();
+    let cap = segments
+        .iter()
+        .map(|&(s, e)| e.min(n).saturating_sub(s.min(n)))
+        .sum();
+    let mut out = Vec::with_capacity(cap);
+    for &(s, e) in segments {
+        let s = s.min(n);
+        let e = e.min(n);
+        if s < e {
+            out.extend_from_slice(&pcm[s..e]);
+        }
+    }
+    out
 }
 
 /// ADR-008 发送频道解析（纯函数，可单测）：频道选择与当前 profile 不符
@@ -1426,5 +1537,54 @@ mod tests {
 
     fn lol_clone() -> GameProfile {
         GameProfile::builtin_lol()
+    }
+
+    // ---------- 历史音频 VAD 裁剪（trim_speech_pcm / push_speech_range） ----------
+
+    #[test]
+    fn trim_speech_pcm_no_segments_returns_original() {
+        let pcm = vec![0.5f32; 1000];
+        let out = trim_speech_pcm(&pcm, &[]);
+        assert_eq!(out, pcm, "非 VAD 模式（无区间）应原样保存");
+    }
+
+    #[test]
+    fn trim_speech_pcm_keeps_only_segments() {
+        let pcm: Vec<f32> = (0..100).map(|i| i as f32).collect();
+        // 语音在 [10,20) 与 [50,60)，两段之间的静音应被裁掉
+        let out = trim_speech_pcm(&pcm, &[(10, 20), (50, 60)]);
+        assert_eq!(out.len(), 20);
+        assert_eq!(out[..10], pcm[10..20]);
+        assert_eq!(out[10..], pcm[50..60]);
+    }
+
+    #[test]
+    fn trim_speech_pcm_clamps_out_of_bounds() {
+        let pcm: Vec<f32> = (0..50).map(|i| i as f32).collect();
+        // 区间越界：clamp 到 pcm 边界，不 panic
+        let out = trim_speech_pcm(&pcm, &[(40, 100), (200, 300)]);
+        assert_eq!(out, pcm[40..]);
+    }
+
+    #[test]
+    fn push_speech_range_merges_close_segments() {
+        let mut g = HistoryDraft::speech_harness();
+        // 帧 0-10 语音，停顿 100ms（1600 采样 < 300ms 合并阈值）后又语音
+        g.push_speech_range(0, 4800);
+        g.push_speech_range(6400, 9600); // 间隙 1600 采样 = 100ms → 合并
+        assert_eq!(g.speech_segments, vec![(0, 9600)]);
+        // 长停顿（> 300ms）后断开
+        g.push_speech_range(19200, 24000); // 距 9600 差 9600 采样 = 600ms → 新段
+        assert_eq!(g.speech_segments, vec![(0, 9600), (19200, 24000)]);
+        // 无效区间忽略
+        g.push_speech_range(50000, 50000);
+        assert_eq!(g.speech_segments.len(), 2);
+    }
+
+    #[test]
+    fn vad_speech_seen_defaults_false() {
+        let g = HistoryDraft::speech_harness();
+        assert!(!g.vad_speech_seen);
+        assert!(g.speech_segments.is_empty());
     }
 }

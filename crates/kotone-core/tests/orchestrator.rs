@@ -1144,15 +1144,17 @@ fn make_vad_mode_orchestrator(
     vad: ScriptVad,
     mode: kotone_core::interaction::InteractionMode,
 ) -> (Arc<Orchestrator>, Arc<VecEmitter>, Arc<Mutex<Vec<String>>>) {
-    make_vad_mode_orchestrator_in(vad, mode, None)
+    make_vad_mode_orchestrator_in(vad, mode, None, false)
 }
 
 /// 同 make_vad_mode_orchestrator，但 history_dir 给出时开启历史记录
-/// （capped/1000，写入临时目录），验证 solo 停止与历史落账的交互。
+/// （capped/1000，写入临时目录），include_audio 开启历史音频落盘。
+/// 验证 solo 停止与历史落账、音频裁剪的交互。
 fn make_vad_mode_orchestrator_in(
     vad: ScriptVad,
     mode: kotone_core::interaction::InteractionMode,
     history_dir: Option<std::path::PathBuf>,
+    include_audio: bool,
 ) -> (Arc<Orchestrator>, Arc<VecEmitter>, Arc<Mutex<Vec<String>>>) {
     let sent = Arc::new(Mutex::new(Vec::new()));
     let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
@@ -1170,6 +1172,7 @@ fn make_vad_mode_orchestrator_in(
     } else {
         kotone_core::history::HistoryMode::Off // 不写真实 ~/.kotone/history
     };
+    settings.history.include_audio = include_audio;
     settings.interaction_mode = Some(mode);
     settings.vad_silence_ms = 210; // 7 帧静音即判停（测试快进）
     let settings = Arc::new(RwLock::new(settings));
@@ -1352,8 +1355,84 @@ async fn solo_toggle_stops_without_sending() {
     );
 }
 
-/// solo 全链路 + 历史：发完的句子正常落账 sent；结束独奏时刚开出的
-/// 空段（从未出过 partial）不再产生「未说完成取消」记录（P2 用户反馈）。
+/// solo + 历史音频：sent 音频按 VAD 语音区间裁剪——段首思考静音与段尾
+/// 判停尾音不再进保存的 wav（用户反馈「独奏历史音频很长、含大量沉默」）。
+#[tokio::test]
+async fn solo_history_audio_is_trimmed_to_speech() {
+    let dir = tempfile::tempdir().unwrap();
+    // speech_then_silence(30)：前 30 帧（30×480=14400 采样 = 900ms）语音，
+    // 之后全静音。MockAudioBackend 持续喂采样，若不加裁剪整段都进 wav。
+    let (orch, _emitter, sent) = make_vad_mode_orchestrator_in(
+        ScriptVad::speech_then_silence(30),
+        kotone_core::interaction::InteractionMode::Solo,
+        Some(dir.path().to_path_buf()),
+        true, // includeAudio
+    );
+
+    orch.on_hotkey_toggle().await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+
+    // 等第一句发送成功且音频已落盘（同步 mock，很快；细粒度轮询）
+    let start = std::time::Instant::now();
+    loop {
+        let records = kotone_core::history::list_in(dir.path()).unwrap();
+        if records
+            .first()
+            .is_some_and(|r| r.outcome == kotone_core::history::HistoryOutcome::Sent && r.audio_file.is_some())
+        {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "等待 sent 音频落账超时");
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    assert_eq!(sent.lock().unwrap().as_slice(), ["对面打野在下路"]);
+
+    let records = kotone_core::history::list_in(dir.path()).unwrap();
+    let r = records.first().unwrap();
+    let wav_path = dir
+        .path()
+        .join("audio")
+        .join(r.audio_file.as_deref().unwrap());
+    let samples = kotone_core::eval::read_wav(&wav_path).unwrap();
+    // 语音 30 帧 = 14400 采样；裁剪后应≈语音长度（允许帧边界 ± 1 帧 + 300ms 合并缓冲），
+    // 绝不能接近全量 PCM（判停 7 帧静音 + finalize 排空会远超 14400）
+    assert!(
+        samples.len() >= 14400 - 480 && samples.len() <= 14400 + 4800,
+        "裁剪后应≈900ms 语音（14400 采样），实际 {} 采样",
+        samples.len()
+    );
+    // 记录音频时长与 wav 一致（已按裁剪后重算）
+    let expect_ms = samples.len() * 1000 / kotone_core::eval::SAMPLE_RATE as usize;
+    assert_eq!(r.audio_ms, expect_ms as u64, "audio_ms 应反映裁剪后实际语音时长");
+}
+
+/// VAD 判定过语音但 STT 未出 partial 的取消 → 落账 cancelled（判据以
+/// vad_speech_seen 为主：silero 判定 speech 才算「开过口」；STT partial
+/// 只是非 VAD 模式兜底）。纯沉默段不落账见 solo_stop 测试。
+#[tokio::test]
+async fn vad_speech_seen_records_cancelled_without_partial() {
+    let dir = tempfile::tempdir().unwrap();
+    // speech_then_silence(2)：2 帧（60ms）语音后静音——VAD 判定过 speech，
+    // 但 80ms 内累计采样远小于 mock-stream partial 阈值（Windows ~156ms）
+    let (orch, _emitter, _sent) = make_vad_mode_orchestrator_in(
+        ScriptVad::speech_then_silence(2),
+        kotone_core::interaction::InteractionMode::Solo,
+        Some(dir.path().to_path_buf()),
+        false,
+    );
+
+    orch.on_hotkey_toggle().await;
+    // 等 VAD 已判定过语音（2 帧 ≈ 12ms）且未到判停（需 7 帧静音），再取消
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    orch.cancel().await;
+
+    let records = kotone_core::history::list_in(dir.path()).unwrap();
+    assert_eq!(records.len(), 1, "VAD 判定过语音的取消应落账: {records:?}");
+    assert_eq!(
+        records[0].outcome,
+        kotone_core::history::HistoryOutcome::Cancelled
+    );
+}
 #[tokio::test]
 async fn solo_stop_does_not_leave_empty_cancelled_record() {
     let dir = tempfile::tempdir().unwrap();
@@ -1361,6 +1440,7 @@ async fn solo_stop_does_not_leave_empty_cancelled_record() {
         ScriptVad::speech_then_silence(30),
         kotone_core::interaction::InteractionMode::Solo,
         Some(dir.path().to_path_buf()),
+        false,
     );
     orch.on_hotkey_toggle().await; // A2：点按开始持续收音
     assert_eq!(orch.state(), OrchestratorState::Listening);
