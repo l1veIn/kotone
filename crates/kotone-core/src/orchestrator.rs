@@ -30,7 +30,7 @@ const DEFAULT_FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 /// 「SendInput 被 360 拦截后软件卡死」）。超时后阻塞线程无法回收，但状态机得以
 /// 回到 Error 态提示用户，避免整机/会话冻结。
 const DEFAULT_INJECT_TIMEOUT: Duration = Duration::from_secs(10);
-/// Success/Error toast 停留时长，之后自动回 Idle
+/// Success toast 停留时长，之后自动回 Idle；Error 必须由用户关闭或重试
 const DEFAULT_TOAST_DWELL: Duration = Duration::from_millis(1500);
 /// 发送前焦点恢复后的等待：给系统完成前台切换与目标窗口激活的时间
 const DEFAULT_FOCUS_RESTORE_DELAY: Duration = Duration::from_millis(30);
@@ -183,7 +183,7 @@ pub struct Orchestrator {
     pub finalize_timeout: Duration,
     /// 注入发送超时（测试可调小）：SendInput 挂起时兜底回到 Error 态
     pub inject_timeout: Duration,
-    /// Success/Error 停留时长（测试可设为 0）
+    /// Success 停留时长（测试可设为 0）；Error 不自动消失
     pub toast_dwell: Duration,
     /// 发送前焦点恢复后的等待（测试可设为 0）
     pub focus_restore_delay: Duration,
@@ -432,7 +432,7 @@ impl Orchestrator {
         match self.begin_locked() {
             Ok(()) => Ok(()),
             Err(e) => {
-                // 开始失败（如引擎未就绪）：Error toast 提示后自动回 Idle
+                // 开始失败（如引擎/麦克风未就绪）：Error 保持到用户关闭或重试
                 self.emit_process(
                     "session_failed",
                     json!({ "outcome": "error", "errorCode": "SESSION_BEGIN_FAILED" }),
@@ -984,7 +984,7 @@ impl Orchestrator {
 
     /// 录音设备故障等会话中止：与 cancel 相同清理，但以 Error toast 告知原因
     /// （P1-⑤：拔麦克风/驱动错误不再永久卡 Listening）。
-    /// 无文本 Error → toast 后自动回 Idle（schedule_idle）。
+    /// Error 保持到用户关闭/重试，确保按需悬浮窗也能让用户看到核心链路故障。
     pub async fn abort_with_message(&self, message: &str) {
         // 宽限期倒计时一并收回
         self.abort_release_grace();
@@ -1215,7 +1215,7 @@ impl Orchestrator {
         }
     }
 
-    /// 开始失败等场景：Error toast → 自动回 Idle（无文本，不可重试）
+    /// 开始失败等场景：Error 保持到用户关闭/重试（无文本，不可发送重试）
     fn toast_error(&self, message: &str) {
         let gen = {
             let mut inner = self.inner.lock().unwrap();
@@ -1370,8 +1370,8 @@ impl Orchestrator {
         draft.lock().unwrap().audio_file = audio_file;
     }
 
-    /// toast_dwell 后自动回 Idle（期间有新会话/取消则不动作）。
-    /// 带文本的 Error 不自动回 Idle：保留待重试文本，等用户重试或取消（§4.1）。
+    /// Success 在 toast_dwell 后自动回 Idle（期间有新会话/取消则不动作）。
+    /// Error 一律保持到用户关闭/重试，确保核心链路失败不会在用户读到前消失。
     fn schedule_idle(&self, gen: u64) {
         let dwell = self.toast_dwell;
         let inner = self.inner.clone();
@@ -1380,9 +1380,7 @@ impl Orchestrator {
             tokio::time::sleep(dwell).await;
             let should_idle = {
                 let mut g = inner.lock().unwrap();
-                let should_idle = g.gen == gen
-                    && (g.state == OrchestratorState::Success
-                        || (g.state == OrchestratorState::Error && g.preview_text.is_none()));
+                let should_idle = g.gen == gen && g.state == OrchestratorState::Success;
                 if should_idle {
                     g.state = OrchestratorState::Idle;
                 }

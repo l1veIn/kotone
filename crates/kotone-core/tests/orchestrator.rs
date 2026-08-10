@@ -450,7 +450,7 @@ async fn double_begin_rejected() {
 }
 
 #[tokio::test]
-async fn begin_with_unready_engine_toasts_error() {
+async fn begin_with_unready_engine_keeps_error_visible_until_acknowledged() {
     let (orch, emitter, _s) = {
         let (o, e, s) = make_orchestrator(false);
         // NeverReadyEngine 恒未就绪（X-ASR 真机已就绪，不能再用它模拟）
@@ -459,10 +459,12 @@ async fn begin_with_unready_engine_toasts_error() {
     };
     let r = orch.begin().await;
     assert!(r.is_err(), "未就绪引擎应开始失败");
-    // Error toast 已发出，dwell 后自动回 Idle
+    // Error 已发出；即使超过 dwell 也必须保留，直到用户明确关闭。
     tokio::time::sleep(Duration::from_millis(40)).await;
-    assert_eq!(orch.state(), OrchestratorState::Idle);
+    assert_eq!(orch.state(), OrchestratorState::Error);
     assert!(emitter.state_sequence().contains(&"error".to_string()));
+    orch.cancel().await;
+    assert_eq!(orch.state(), OrchestratorState::Idle);
 }
 
 /// 发送挂起模拟（SendInput 被安全软件钩住不返回）：首次调用阻塞 hang_ms，
@@ -614,9 +616,9 @@ async fn error_state_retry_sends_retained_text() {
     );
 }
 
-/// 无文本的 Error（如引擎未就绪）不可重试，且仍自动回 Idle
+/// 无文本的 Error（如引擎未就绪）不可重试，并保持到用户明确关闭
 #[tokio::test]
-async fn error_without_text_rejects_retry_and_auto_idles() {
+async fn error_without_text_rejects_retry_and_waits_for_acknowledgement() {
     let (orch, emitter, _s) = {
         let (o, e, s) = make_orchestrator(false);
         // NeverReadyEngine 恒未就绪（X-ASR 真机已就绪，不能再用它模拟）
@@ -627,10 +629,12 @@ async fn error_without_text_rejects_retry_and_auto_idles() {
     assert_eq!(orch.state(), OrchestratorState::Error);
     // 无待发送文本：confirm_send 拒绝
     assert!(orch.confirm_send().await.is_err());
-    // dwell 后自动回 Idle
+    // 超过 dwell 后仍保持 Error，避免按需悬浮窗在用户读到前消失。
     tokio::time::sleep(Duration::from_millis(40)).await;
-    assert_eq!(orch.state(), OrchestratorState::Idle);
+    assert_eq!(orch.state(), OrchestratorState::Error);
     assert!(emitter.state_sequence().contains(&"error".to_string()));
+    orch.cancel().await;
+    assert_eq!(orch.state(), OrchestratorState::Idle);
 }
 
 /// Error 状态取消：清空保留文本并回 Idle，之后不可再重试
@@ -1268,7 +1272,7 @@ async fn one_shot_hotkey_force_end_when_vad_never_stops() {
     assert_eq!(sent.lock().unwrap().as_slice(), ["对面打野在下路"]);
 }
 
-/// 模式 3 未接入 VAD 工厂：begin 报清晰错误（Error toast 后自动回 Idle）
+/// 模式 3 未接入 VAD 工厂：begin 报清晰错误并保持到用户确认
 #[tokio::test]
 async fn one_shot_without_vad_factory_begin_fails() {
     let (orch, _emitter, sent) = make_orchestrator(true);
@@ -1278,9 +1282,11 @@ async fn one_shot_without_vad_factory_begin_fails() {
 
     let err = orch.begin().await.unwrap_err();
     assert!(err.contains("VAD"), "错误应指明 VAD 未接入: {err}");
-    // begin 失败走 Error toast → 自动回 Idle；不产生任何发送
-    wait_state(&orch, OrchestratorState::Idle, Duration::from_secs(2)).await;
+    // begin 失败走 Error，并保持到用户确认；不产生任何发送
+    assert_eq!(orch.state(), OrchestratorState::Error);
     assert!(sent.lock().unwrap().is_empty());
+    orch.cancel().await;
+    assert_eq!(orch.state(), OrchestratorState::Idle);
 }
 
 // ---------- 模式 4「独奏模式」（solo：A2 + B3 + C1 + 连续，发完不停机） ----------

@@ -86,6 +86,7 @@ impl AudioBackend for CpalBackend {
                     input.stop_and_flush();
                 }
                 Err(e) => {
+                    kotone_core::log::log(&format!("audio capture open failed: {e}"));
                     let _ = open_tx.send(Err(e));
                 }
             }
@@ -126,6 +127,20 @@ impl OpenedInput {
     }
 }
 
+/// Windows 音频端点的默认格式属性损坏/不被驱动接受时，WASAPI 会返回
+/// AUDCLNT_E_UNSUPPORTED_FORMAT。把难以理解的 CPAL/Win32 原始错误换成可执行提示。
+fn default_config_error_message(device_name: &str, detail: &str) -> String {
+    if detail.contains("-2004287480")
+        || detail.contains("0x88890008")
+        || detail.contains("88890008")
+    {
+        return format!(
+            "麦克风格式异常，请打开 Windows 声音设置并重设默认格式。设备「{device_name}」返回 0x88890008；若仍失败，请关闭音频增强、重新插拔或重装设备"
+        );
+    }
+    format!("读取设备「{device_name}」默认输入配置失败: {detail}")
+}
+
 /// 在线程内打开设备并构建输入流
 fn open_stream(
     device_id: &str,
@@ -145,9 +160,10 @@ fn open_stream(
     };
 
     let device_name = device.name().unwrap_or_else(|_| device_id.into());
-    let config = device
-        .default_input_config()
-        .map_err(|e| format!("读取设备「{device_name}」默认输入配置失败: {e}"))?;
+    let config = device.default_input_config().map_err(|e| {
+        let detail = e.to_string();
+        default_config_error_message(&device_name, &detail)
+    })?;
 
     let sample_rate = config.sample_rate().0;
     let channels = config.channels() as usize;
@@ -332,6 +348,26 @@ impl Resampler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsupported_windows_mix_format_has_actionable_message() {
+        let message = default_config_error_message(
+            "麦克风 (PD200X Podcast Microphone)",
+            "Failed to get mix format: OS Error -2004287480",
+        );
+        assert!(message.starts_with("麦克风格式异常"));
+        assert!(message.contains("Windows 声音设置"));
+        assert!(message.contains("0x88890008"));
+    }
+
+    #[test]
+    fn other_default_config_errors_keep_backend_detail() {
+        let message = default_config_error_message("测试设备", "device unavailable");
+        assert_eq!(
+            message,
+            "读取设备「测试设备」默认输入配置失败: device unavailable"
+        );
+    }
 
     #[test]
     fn resampler_identity_when_rates_equal() {

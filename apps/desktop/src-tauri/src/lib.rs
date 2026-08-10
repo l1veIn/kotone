@@ -127,12 +127,49 @@ mod startup_options_tests {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnDemandOverlayAction {
+    Show,
+    Hide,
+    HideSuccessAfterDwell,
+    Keep,
+}
+
+fn on_demand_overlay_action(state: &str, continuous: bool) -> OnDemandOverlayAction {
+    match state {
+        "listening" | "transcribing" | "preview" | "sending" | "error" => {
+            OnDemandOverlayAction::Show
+        }
+        "success" if !continuous => OnDemandOverlayAction::HideSuccessAfterDwell,
+        "idle" => OnDemandOverlayAction::Hide,
+        _ => OnDemandOverlayAction::Keep,
+    }
+}
+
+#[cfg(test)]
+mod overlay_visibility_tests {
+    use super::{on_demand_overlay_action, OnDemandOverlayAction};
+
+    #[test]
+    fn on_demand_error_is_always_shown() {
+        assert_eq!(
+            on_demand_overlay_action("error", false),
+            OnDemandOverlayAction::Show
+        );
+        assert_eq!(
+            on_demand_overlay_action("error", true),
+            OnDemandOverlayAction::Show
+        );
+    }
+}
+
 /// 生产事件出口：转发为 Tauri 事件；联动 Esc 取消键注册与 overlay 窗口显隐。
 /// overlay 显隐规则（后端驱动，幂等，与前端逻辑不冲突）按 `overlay.visibility` 分档：
 /// - always（常驻，默认）：会话态（Listening/…/Error）→ show；Running 期间 idle 不隐藏
 ///   （悬浮窗兼作运行指示）；Stopped 由 stop_runtime 显式隐藏。
 /// - on_demand（用时浮现）：平时隐藏；Listening/Transcribing/Preview/Sending → show；
-///   Success/Error（发送完成）延迟 ~600ms 自动隐藏（vis_gen 代际防新会话误藏）；
+///   Success 延迟 ~600ms 自动隐藏（vis_gen 代际防新会话误藏）；
+///   Error 无条件显示并保持到用户关闭/重试，避免核心链路失败只进日志；
 ///   solo 连续模式保持显示直到会话停止（idle → hide）。
 struct TauriEmitter {
     app: AppHandle,
@@ -191,27 +228,31 @@ impl Emitter for TauriEmitter {
                             show_window_no_focus(&win);
                         }
                     }
-                    OverlayVisibility::OnDemand => match state {
-                        "listening" | "transcribing" | "preview" | "sending" => {
-                            show_window_no_focus(&win);
+                    OverlayVisibility::OnDemand => {
+                        match on_demand_overlay_action(state, continuous) {
+                            OnDemandOverlayAction::Show => {
+                                // Error 可能从 Idle 直接到达（例如音频设备打开失败），不能
+                                // 假设 Listening 已经显示过窗口；它会保持到用户明确确认。
+                                show_window_no_focus(&win);
+                            }
+                            OnDemandOverlayAction::HideSuccessAfterDwell => {
+                                let app = self.app.clone();
+                                let vis_gen = self.vis_gen.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                                    if vis_gen.load(std::sync::atomic::Ordering::SeqCst) != gen {
+                                        return; // 600ms 内已有新状态事件（新会话/停止），不藏
+                                    }
+                                    if let Some(win) = app.get_webview_window("overlay") {
+                                        hide_window(&win);
+                                    }
+                                });
+                            }
+                            OnDemandOverlayAction::Hide => hide_window(&win),
+                            // continuous（solo）的 success：会话未停，保持显示
+                            OnDemandOverlayAction::Keep => {}
                         }
-                        "success" | "error" if !continuous => {
-                            let app = self.app.clone();
-                            let vis_gen = self.vis_gen.clone();
-                            tauri::async_runtime::spawn(async move {
-                                tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-                                if vis_gen.load(std::sync::atomic::Ordering::SeqCst) != gen {
-                                    return; // 600ms 内已有新状态事件（新会话/停止），不藏
-                                }
-                                if let Some(win) = app.get_webview_window("overlay") {
-                                    hide_window(&win);
-                                }
-                            });
-                        }
-                        "idle" => hide_window(&win),
-                        // continuous（solo）的 success/error：会话未停，保持显示
-                        _ => {}
-                    },
+                    }
                 }
             }
         } else if event == "kotone://channel" {
