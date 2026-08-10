@@ -1416,22 +1416,42 @@ impl Orchestrator {
     }
 }
 
+/// 语音区间前导缓冲：silero 判定到 speech 时语音已实际开始（判定延迟约
+/// 1-数帧），段首保留判定点之前的一段 PCM，避免字头/辅音被裁掉
+/// （用户反馈「录制语音听不到第一个字」）。150ms @16kHz = 2400 采样。
+const PRE_ROLL_SAMPLES: usize = 2400;
+/// 语音区间尾随缓冲：保留尾音/气息，避免句尾被切。
+const POST_ROLL_SAMPLES: usize = 2400;
+
 /// 按语音区间裁剪历史音频 PCM（纯函数，可单测）。
-/// 区间为半开 [start, end)，采样号相对 pcm 起点，越界 clamp；
+/// 区间为半开 [start, end)，采样号相对 pcm 起点；每个区间向前/向后各扩展
+/// PRE/POST_ROLL_SAMPLES 缓冲后拼接，扩展后重叠的段合并（段间停顿
+/// < 300ms 自然连成一段），整体 clamp 到 pcm 长度。
 /// segments 空 = 非 VAD 模式（无裁剪标记）→ 返回原样。
 fn trim_speech_pcm(pcm: &[f32], segments: &[(usize, usize)]) -> Vec<f32> {
     if segments.is_empty() {
         return pcm.to_vec();
     }
     let n = pcm.len();
-    let cap = segments
-        .iter()
-        .map(|&(s, e)| e.min(n).saturating_sub(s.min(n)))
-        .sum();
-    let mut out = Vec::with_capacity(cap);
+    let mut expanded: Vec<(usize, usize)> = Vec::with_capacity(segments.len());
+    // 合并阈值 = PRE_ROLL + POST_ROLL = 4800 采样（300ms），与
+    // SPEECH_GAP_SAMPLES（push 阶段的句间合并）数值恰好相等，但语义独立：
+    // 这里是「缓冲扩展后重叠即合并」的防御性冗余，改其一无需同步另一处。
     for &(s, e) in segments {
-        let s = s.min(n);
-        let e = e.min(n);
+        let ns = s.saturating_sub(PRE_ROLL_SAMPLES);
+        let ne = (e + POST_ROLL_SAMPLES).min(n);
+        if let Some(last) = expanded.last_mut() {
+            if ns <= last.1 {
+                // 与前段重叠/相接（缓冲覆盖了段间停顿）：合并
+                last.1 = last.1.max(ne);
+                continue;
+            }
+        }
+        expanded.push((ns, ne));
+    }
+    let cap = expanded.iter().map(|&(s, e)| e.saturating_sub(s)).sum();
+    let mut out = Vec::with_capacity(cap);
+    for &(s, e) in &expanded {
         if s < e {
             out.extend_from_slice(&pcm[s..e]);
         }
@@ -1547,21 +1567,38 @@ mod tests {
     }
 
     #[test]
-    fn trim_speech_pcm_keeps_only_segments() {
-        let pcm: Vec<f32> = (0..100).map(|i| i as f32).collect();
-        // 语音在 [10,20) 与 [50,60)，两段之间的静音应被裁掉
-        let out = trim_speech_pcm(&pcm, &[(10, 20), (50, 60)]);
-        assert_eq!(out.len(), 20);
-        assert_eq!(out[..10], pcm[10..20]);
-        assert_eq!(out[10..], pcm[50..60]);
+    fn trim_speech_pcm_single_segment_with_prepost_roll() {
+        let pcm: Vec<f32> = (0..10000).map(|i| i as f32).collect();
+        // 段 [1000,2000)：前导缓冲取到 0（PRE 2400 超出开头），尾随缓冲到 4400
+        let out = trim_speech_pcm(&pcm, &[(1000, 2000)]);
+        assert_eq!(out, pcm[0..4400]);
+        // 段 [9000,9500)：尾随缓冲 clamp 到 pcm 末尾；前导取到 6600
+        let out2 = trim_speech_pcm(&pcm, &[(9000, 9500)]);
+        assert_eq!(out2, pcm[6600..10000]);
+        // 段 [500,1500)：前后都 clamp 到界内
+        let out3 = trim_speech_pcm(&pcm, &[(500, 1500)]);
+        assert_eq!(out3, pcm[0..3900]);
+    }
+
+    #[test]
+    fn trim_speech_pcm_merges_close_segments_after_roll() {
+        let pcm: Vec<f32> = (0..10000).map(|i| i as f32).collect();
+        // 两段间隙 2000 采样（125ms）< 缓冲覆盖（PRE+POST=4800）→ 合并成一段
+        let out = trim_speech_pcm(&pcm, &[(1000, 2000), (4000, 5000)]);
+        assert_eq!(out, pcm[0..7400]);
+        // 长停顿（间隙 6000 采样 = 375ms > 4800）→ 断开，中间静音裁掉
+        let out2 = trim_speech_pcm(&pcm, &[(1000, 2000), (8000, 9000)]);
+        assert_eq!(out2.len(), 4400 + 4400);
+        assert_eq!(out2[..4400], pcm[0..4400]);
+        assert_eq!(out2[4400..], pcm[5600..10000]);
     }
 
     #[test]
     fn trim_speech_pcm_clamps_out_of_bounds() {
         let pcm: Vec<f32> = (0..50).map(|i| i as f32).collect();
-        // 区间越界：clamp 到 pcm 边界，不 panic
+        // 短 PCM + 越界区间：全部扩展后重叠合并、clamp 到 pcm 边界，不 panic
         let out = trim_speech_pcm(&pcm, &[(40, 100), (200, 300)]);
-        assert_eq!(out, pcm[40..]);
+        assert_eq!(out, pcm, "区间越界时应整体 clamp 到 pcm 长度");
     }
 
     #[test]

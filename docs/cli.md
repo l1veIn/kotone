@@ -46,7 +46,8 @@ sessionId 与 eval 录档一致时仍可互查；`history.includeAudio` 开启�
 会话音频写到 `history/audio/<sessionId>.wav`，不要求开启 `evalRecording`。
 one-shot / solo（VAD 模式）下音频按语音区间裁剪后再落盘：段首思考静音
 与段尾判停尾音不进 wav，音频时长即实际说话时长（silero 判定语音，
-300ms 以内的句间停顿保留）。
+300ms 以内的句间停顿保留；每个语音段首/尾各保留 150ms 缓冲，避免 VAD
+判定延迟把字头/尾音裁掉）。
 capped 模式超上限自动裁剪最旧记录（联动删除其音频）。`log delete
 --session-id <id> --ts <ts>` 按 `log list --json` 输出的 sessionId + ts 精确
 删除单条记录；该记录带录音且不再被其他记录引用时（error→retry 会共享

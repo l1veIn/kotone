@@ -1400,11 +1400,13 @@ async fn solo_history_audio_is_trimmed_to_speech() {
         .join("audio")
         .join(r.audio_file.as_deref().unwrap());
     let samples = kotone_core::eval::read_wav(&wav_path).unwrap();
-    // 语音 30 帧 = 14400 采样；裁剪后应≈语音长度（允许帧边界 ± 1 帧 + 300ms 合并缓冲），
-    // 绝不能接近全量 PCM（判停 7 帧静音 + finalize 排空会远超 14400）
+    // 语音 30 帧 = 14400 采样：段首不再被裁（≥14400——前导缓冲覆盖 VAD
+    // 判定延迟，第一个字保留；此段从流首开始，前导取到 0 无静音代价），
+    // 段尾只加 150ms 尾随缓冲 + VAD 判停判定延迟约 1 帧（≤ 14400+2400+480，
+    // 不允许接近全量 PCM）
     assert!(
-        samples.len() >= 14400 - 480 && samples.len() <= 14400 + 4800,
-        "裁剪后应≈900ms 语音（14400 采样），实际 {} 采样",
+        samples.len() >= 14400 && samples.len() <= 14400 + 2400 + 480,
+        "裁剪后应≈900ms 语音（14400 采样）±150ms 尾随缓冲，实际 {} 采样",
         samples.len()
     );
     // 记录音频时长与 wav 一致（已按裁剪后重算）
