@@ -26,7 +26,9 @@ use kotone_core::settings::{
 use kotone_core::stt::{EngineInfo, EngineRegistry};
 use kotone_core::{log, process_log};
 use kotone_platform_windows::inject::{WinFocusBackend, WindowsInjector};
-use kotone_platform_windows::{audio as platform_audio, elevation, inject as platform_inject};
+use kotone_platform_windows::{
+    audio as platform_audio, elevation, fullscreen, inject as platform_inject,
+};
 use kotone_stt::model;
 use runtime::{RuntimeManager, RuntimeStatus};
 
@@ -146,9 +148,32 @@ fn on_demand_overlay_action(state: &str, continuous: bool) -> OnDemandOverlayAct
     }
 }
 
+fn overlay_window_action(
+    visibility: OverlayVisibility,
+    state: &str,
+    continuous: bool,
+    runtime_running: bool,
+) -> OnDemandOverlayAction {
+    match visibility {
+        OverlayVisibility::Never => OnDemandOverlayAction::Hide,
+        OverlayVisibility::Always => {
+            if state == "idle" && !runtime_running {
+                OnDemandOverlayAction::Hide
+            } else if state != "idle" {
+                OnDemandOverlayAction::Show
+            } else {
+                OnDemandOverlayAction::Keep
+            }
+        }
+        OverlayVisibility::OnDemand => on_demand_overlay_action(state, continuous),
+    }
+}
+
 #[cfg(test)]
 mod overlay_visibility_tests {
-    use super::{on_demand_overlay_action, OnDemandOverlayAction};
+    use super::{
+        on_demand_overlay_action, overlay_window_action, OnDemandOverlayAction, OverlayVisibility,
+    };
 
     #[test]
     fn on_demand_error_is_always_shown() {
@@ -161,16 +186,36 @@ mod overlay_visibility_tests {
             OnDemandOverlayAction::Show
         );
     }
+
+    #[test]
+    fn never_mode_hides_for_every_session_state() {
+        for state in [
+            "idle",
+            "listening",
+            "transcribing",
+            "preview",
+            "sending",
+            "success",
+            "error",
+        ] {
+            assert_eq!(
+                overlay_window_action(OverlayVisibility::Never, state, false, true),
+                OnDemandOverlayAction::Hide,
+                "state={state}"
+            );
+        }
+    }
 }
 
 /// 生产事件出口：转发为 Tauri 事件；联动 Esc 取消键注册与 overlay 窗口显隐。
 /// overlay 显隐规则（后端驱动，幂等，与前端逻辑不冲突）按 `overlay.visibility` 分档：
-/// - always（常驻，默认）：会话态（Listening/…/Error）→ show；Running 期间 idle 不隐藏
+/// - always（常驻）：会话态（Listening/…/Error）→ show；Running 期间 idle 不隐藏
 ///   （悬浮窗兼作运行指示）；Stopped 由 stop_runtime 显式隐藏。
 /// - on_demand（用时浮现）：平时隐藏；Listening/Transcribing/Preview/Sending → show；
 ///   Success 延迟 ~600ms 自动隐藏（vis_gen 代际防新会话误藏）；
 ///   Error 无条件显示并保持到用户关闭/重试，避免核心链路失败只进日志；
 ///   solo 连续模式保持显示直到会话停止（idle → hide）。
+/// - never（不显示）：所有状态都强制隐藏；热键与语音输入流程不受影响。
 struct TauriEmitter {
     app: AppHandle,
     /// overlay 显隐代际：每个状态事件 +1；延迟隐藏任务只认调度时的代际
@@ -215,50 +260,39 @@ impl Emitter for TauriEmitter {
                     .vis_gen
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
                     + 1;
-                match visibility {
-                    OverlayVisibility::Always => {
-                        let running = self
-                            .app
-                            .try_state::<RuntimeManager>()
-                            .map(|rt| rt.phase() == RuntimePhase::Running)
-                            .unwrap_or(false);
-                        if state == "idle" && !running {
-                            hide_window(&win);
-                        } else if state != "idle" {
-                            show_window_no_focus(&win);
-                        }
+                let running = self
+                    .app
+                    .try_state::<RuntimeManager>()
+                    .map(|rt| rt.phase() == RuntimePhase::Running)
+                    .unwrap_or(false);
+                match overlay_window_action(visibility, state, continuous, running) {
+                    OnDemandOverlayAction::Show => {
+                        // Error 可能从 Idle 直接到达（例如音频设备打开失败），不能
+                        // 假设 Listening 已经显示过窗口；它会保持到用户明确确认。
+                        show_window_no_focus(&win);
                     }
-                    OverlayVisibility::OnDemand => {
-                        match on_demand_overlay_action(state, continuous) {
-                            OnDemandOverlayAction::Show => {
-                                // Error 可能从 Idle 直接到达（例如音频设备打开失败），不能
-                                // 假设 Listening 已经显示过窗口；它会保持到用户明确确认。
-                                show_window_no_focus(&win);
+                    OnDemandOverlayAction::HideSuccessAfterDwell => {
+                        let app = self.app.clone();
+                        let vis_gen = self.vis_gen.clone();
+                        tauri::async_runtime::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                            if vis_gen.load(std::sync::atomic::Ordering::SeqCst) != gen {
+                                return; // 600ms 内已有新状态事件（新会话/停止），不藏
                             }
-                            OnDemandOverlayAction::HideSuccessAfterDwell => {
-                                let app = self.app.clone();
-                                let vis_gen = self.vis_gen.clone();
-                                tauri::async_runtime::spawn(async move {
-                                    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-                                    if vis_gen.load(std::sync::atomic::Ordering::SeqCst) != gen {
-                                        return; // 600ms 内已有新状态事件（新会话/停止），不藏
-                                    }
-                                    if let Some(win) = app.get_webview_window("overlay") {
-                                        hide_window(&win);
-                                    }
-                                });
+                            if let Some(win) = app.get_webview_window("overlay") {
+                                hide_window(&win);
                             }
-                            OnDemandOverlayAction::Hide => hide_window(&win),
-                            // continuous（solo）的 success：会话未停，保持显示
-                            OnDemandOverlayAction::Keep => {}
-                        }
+                        });
                     }
+                    OnDemandOverlayAction::Hide => hide_window(&win),
+                    // always + Running + idle，以及 continuous（solo）的 success：保持现状。
+                    OnDemandOverlayAction::Keep => {}
                 }
             }
         } else if event == "kotone://channel" {
             // 频道切换（ADR-008）：on_demand 模式下悬浮窗平时隐藏，
             // 切换瞬间需要「露个脸」让用户看到频道徽标，~1.2s 后自动收回；
-            // always 模式运行期间本就常显，无需处理。vis_gen 代际防止
+            // always 模式运行期间本就常显、never 模式始终隐藏，均无需处理。vis_gen 代际防止
             // 紧随其后的新会话被这次延迟隐藏误伤。
             let on_demand = self
                 .app
@@ -628,10 +662,22 @@ fn update_settings(
     };
     settings::save(&updated)?;
 
-    // overlay 配置变化 → 立即重排几何/点击穿透 + 通知前端（无需重启）
+    // overlay 配置变化 → 立即重排几何/点击穿透/显隐 + 通知前端（无需重启）
     if old_overlay != updated.overlay {
         if let Some(win) = app.get_webview_window("overlay") {
             apply_overlay_window_config(&win, &updated.overlay);
+            if old_overlay.visibility != updated.overlay.visibility {
+                let running = app
+                    .try_state::<RuntimeManager>()
+                    .map(|rt| rt.phase() == RuntimePhase::Running)
+                    .unwrap_or(false);
+                match updated.overlay.visibility {
+                    OverlayVisibility::Never => hide_window(&win),
+                    OverlayVisibility::Always if running => show_window_no_focus(&win),
+                    OverlayVisibility::OnDemand => hide_window(&win),
+                    OverlayVisibility::Always => {}
+                }
+            }
         }
         use tauri::Emitter as _;
         let _ = app.emit("kotone://overlay-config", &updated.overlay);
@@ -816,12 +862,14 @@ fn get_profile_icon(profile_id: String) -> Result<Option<Vec<u8>>, String> {
 
 // ---------- 提权（UIPI 方案，§10 R-1） ----------
 
-/// 提权状态：自身是否提权 + 当前激活 profile 的游戏进程是否提权（null = 无法判断）
+/// 游戏兼容状态：提权链路 + 当前激活 profile 是否处于独占全屏。
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ElevationStatus {
     pub elevated: bool,
     pub active_game_elevated: Option<bool>,
+    /// 当前游戏是否处于独占全屏；无活动游戏或系统调用失败时为 null。
+    pub active_game_fullscreen: Option<bool>,
     /// 当前平台是否支持提权语义（仅 Windows；其他平台前端据此不弹提权提示）
     pub supported: bool,
 }
@@ -832,7 +880,7 @@ fn get_elevation_status(state: tauri::State<SharedState>) -> ElevationStatus {
     // 激活 profile 的进程名 → 运行中的 pid → TokenElevation
     // 链路修复（resolve_active_game_pid）：profile 文件缺失时回退内置 profile，
     // 可用列表 = 磁盘 profile + 未覆盖的内置 profile
-    let active_game_elevated = {
+    let active_game_pid = {
         let guard = state.settings.read().unwrap();
         let mut available = profile::list();
         for b in [GameProfile::builtin_lol(), GameProfile::builtin_generic()] {
@@ -845,11 +893,21 @@ fn get_elevation_status(state: tauri::State<SharedState>) -> ElevationStatus {
             &available,
             &mut |name| platform_inject::find_pid_by_name(name),
         )
-        .and_then(elevation::is_process_elevated)
     };
+    let active_game_elevated = active_game_pid.and_then(elevation::is_process_elevated);
+    // Shell 状态是桌面级信号；同时要求活动 profile 的 PID 正处于前台，避免把
+    // 后台运行的游戏与另一个独占全屏 Direct3D 应用拼成误报。
+    let active_game_fullscreen = active_game_pid.and_then(|pid| {
+        if platform_inject::foreground_pid() == Some(pid) {
+            fullscreen::is_exclusive_fullscreen_active()
+        } else {
+            Some(false)
+        }
+    });
     ElevationStatus {
         elevated,
         active_game_elevated,
+        active_game_fullscreen,
         supported: cfg!(windows),
     }
 }

@@ -126,6 +126,8 @@ pub enum OverlayVisibility {
     /// 延迟 ~600ms 自动隐藏；solo 连续模式保持显示直到会话停止
     #[default]
     OnDemand,
+    /// 完全不显示：热键和语音输入照常工作，所有悬浮窗唤起事件均被忽略
+    Never,
 }
 
 /// 悬浮窗样式（config.json `overlay.style`）
@@ -162,7 +164,7 @@ pub enum OverlayPosition {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayConfig {
-    /// 显示模式：on_demand 用时浮现（默认）/ always 常驻
+    /// 显示模式：on_demand 用时浮现（默认）/ always 常驻 / never 完全隐藏
     #[serde(default)]
     pub visibility: OverlayVisibility,
     /// 样式：capsule 胶囊（默认）/ card 卡片
@@ -493,6 +495,17 @@ mod tests {
         assert!(!s.overlay.click_through);
         assert_eq!(s.overlay.custom_x, None);
         assert_eq!(s.overlay.custom_y, None);
+    }
+
+    #[test]
+    fn overlay_visibility_never_roundtrips() {
+        let raw = serde_json::json!({ "visibility": "never" });
+        let overlay: OverlayConfig = serde_json::from_value(raw).unwrap();
+        assert_eq!(overlay.visibility, OverlayVisibility::Never);
+        assert_eq!(
+            serde_json::to_value(&overlay).unwrap()["visibility"],
+            "never"
+        );
     }
 
     #[test]

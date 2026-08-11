@@ -263,12 +263,12 @@ enum SttEvent {
 - 主悬浮条：`always_on_top` + `decorations: false` + `transparent: true` + `skip_taskbar`。录音时弹出紧凑条（波形 + 流式文本），idle 时隐藏或收缩为小圆点。
 - 设置窗口：独立窗口，从托盘菜单唤起。
 - 点击穿透：MVP 不做（Phase 2，`set_ignore_cursor_events` 空闲时穿透）。
-- **独占全屏不保证**：设置页检测全屏状态并提示用户切换无边框/窗口化，文档中明示。
+- **独占全屏不保证**：设置页用 `SHQueryUserNotificationState` 检测当前活动 profile 的前台进程是否处于 Direct3D 独占全屏，并提示用户切换无边框/窗口化；只认独占全屏系统状态，不用铺满屏幕的窗口尺寸启发式误报无边框模式。
 
 **v3 实现细节**：
 
 - **窗口显隐由后端驱动**（v3 变更）：orchestrator 状态事件 → 非 Idle 时 `SW_SHOWNA` 显示 overlay（**不抢焦点**，否则注入会打错窗口）、Idle 时隐藏；与前端显隐调用幂等共存。
-- **显示模式 `overlay.visibility`**（两档，通用页可选）：`on_demand` 用时浮现（默认；平时隐藏，Listening/Transcribing/Preview/Sending 浮现；一次发送完成——成功或失败——延迟 ~600ms 自动隐藏，显隐代际防 600ms 内新会话误藏；solo 连续模式保持显示直到会话停止）/ `always` 常驻（启动即显示、停止才隐藏）。显隐一律走原始 Win32 `SW_SHOWNA`/`SW_HIDE` 路径（tao `set_visible` 缓存 diff 短路坑），由 TauriEmitter 会话事件驱动，前端不轮询。
+- **显示模式 `overlay.visibility`**（三档，通用页可选）：`on_demand` 用时浮现（默认；平时隐藏，Listening/Transcribing/Preview/Sending 浮现；一次发送完成——成功或失败——延迟 ~600ms 自动隐藏，显隐代际防 600ms 内新会话误藏；solo 连续模式保持显示直到会话停止）/ `always` 常驻（启动即显示、停止才隐藏）/ `never` 完全隐藏（热键和语音输入照常工作，所有会话与频道事件都不会唤起悬浮窗）。显隐一律走原始 Win32 `SW_SHOWNA`/`SW_HIDE` 路径（tao `set_visible` 缓存 diff 短路坑），由 TauriEmitter 会话事件驱动，前端不轮询。
 - **样式 `overlay.style`**（两档，通用页可选，切换即时生效）：`capsule` 胶囊（默认；Win11 语音输入条风格——窗口 520×64，原始 Win32 `SetWindowPos` 按当前显示器工作区水平居中、底部留 48px，`GetDpiForWindow` 换算物理像素；前端胶囊本体 `fit-content` 宽度随文字伸缩）/ `card` 卡片（480×120 屏幕中央圆角面板）。设置页切换时后端立即重排窗口几何并广播配置事件。
 - **关窗不退出**：main/overlay 的 CloseRequested 均拦截转为 hide，仅托盘「退出」真正结束（托盘常驻语义）。
 - 窗口路由：单 SPA + hash 路由（`index.html#/overlay`、`index.html#/settings`）。

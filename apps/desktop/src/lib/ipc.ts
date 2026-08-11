@@ -86,8 +86,8 @@ export interface Settings {
 
 /** 悬浮窗配置（config.json `overlay` 段） */
 export interface OverlayConfig {
-  /** 显示模式：always 常驻（启动即显示）/ on_demand 用时浮现（说话时出现，发完自动隐藏） */
-  visibility: "always" | "on_demand";
+  /** 显示模式：always 常驻 / on_demand 用时浮现 / never 完全不显示 */
+  visibility: "always" | "on_demand" | "never";
   /** 样式：capsule 胶囊（默认）/ card 卡片 */
   style: "card" | "capsule";
   /** 固定位置；custom 为用户拖动后保存的位置。 */
@@ -267,6 +267,8 @@ export interface ElevationStatus {
   elevated: boolean;
   /** 当前激活 profile 的游戏进程是否提权；null = 无法判断 */
   activeGameElevated: boolean | null;
+  /** 当前激活 profile 的游戏是否处于独占全屏；null = 未运行或无法判断 */
+  activeGameFullscreen: boolean | null;
   /** 当前平台是否支持提权方案（非 Windows 为 false） */
   supported: boolean;
 }
@@ -689,9 +691,16 @@ export async function getProfileIcon(profileId: string): Promise<Uint8Array> {
   return new Uint8Array(bytes);
 }
 
-/** 提权状态：自身是否提权 + 激活 profile 的游戏进程是否提权 */
+/** 游戏兼容状态：自身/游戏提权状态 + 激活 profile 的独占全屏状态 */
 export async function getElevationStatus(): Promise<ElevationStatus> {
-  if (!isTauri) return { elevated: false, activeGameElevated: null, supported: false };
+  if (!isTauri) {
+    return {
+      elevated: false,
+      activeGameElevated: null,
+      activeGameFullscreen: null,
+      supported: false,
+    };
+  }
   return invoke<ElevationStatus>("get_elevation_status");
 }
 

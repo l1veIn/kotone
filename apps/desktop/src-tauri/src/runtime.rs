@@ -306,16 +306,13 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
     }
 
     // 阶段 3：显示悬浮窗（不抢焦点；会话态显隐仍由 TauriEmitter 驱动）。
-    // on_demand（用时浮现）档位启动时不显示——平时隐藏，收音/转写时由
-    // TauriEmitter 的状态事件浮现；always（常驻）维持启动即显示。
+    // on_demand（用时浮现）与 never（完全隐藏）档位启动时不显示；前者在
+    // 收音/转写时由 TauriEmitter 浮现，后者始终保持隐藏；always 启动即显示。
     // 每次启动重新应用尺寸、固定/自定义位置与点击穿透（显示器/DPI 可能已变）。
     snapshot_and_emit(app, Some("overlay".into()));
-    let (overlay_on_demand, overlay_config) = {
+    let overlay_config = {
         let g = state.settings.read().unwrap();
-        (
-            g.overlay.visibility == kotone_core::settings::OverlayVisibility::OnDemand,
-            g.overlay.clone(),
-        )
+        g.overlay.clone()
     };
     if let Some(win) = app.get_webview_window("overlay") {
         crate::apply_overlay_window_config(&win, &overlay_config);
@@ -323,9 +320,11 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
     // overlay WebView 启动时可能早于前端读取配置；运行态启动时重发一次全量配置，
     // 保证样式、拖动和点击穿透与后端已应用的窗口几何保持一致。
     let _ = app.emit("kotone://overlay-config", &overlay_config);
-    if !overlay_on_demand {
-        if let Some(win) = app.get_webview_window("overlay") {
-            show_window_no_focus(&win);
+    if let Some(win) = app.get_webview_window("overlay") {
+        match overlay_config.visibility {
+            kotone_core::settings::OverlayVisibility::Always => show_window_no_focus(&win),
+            kotone_core::settings::OverlayVisibility::OnDemand
+            | kotone_core::settings::OverlayVisibility::Never => hide_window(&win),
         }
     }
 

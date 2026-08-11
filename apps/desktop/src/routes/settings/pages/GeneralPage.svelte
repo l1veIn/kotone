@@ -28,14 +28,26 @@
 
   let devices = $state<AudioDevice[]>([]);
   let elevation = $state<ElevationStatus | null>(null);
+  /** 独占全屏检测到后保持提示，避免切回设置页导致游戏最小化、状态瞬间消失。 */
+  let fullscreenWarning = $state(false);
   let restarting = $state(false);
+
+  function applyGameCompatibilityStatus(status: ElevationStatus) {
+    elevation = status;
+    if (status.activeGameFullscreen === true) fullscreenWarning = true;
+  }
 
   /** 提权重启接力标记：旧进程退出前落 localStorage，新进程检测到已提权后 toast 并清除 */
   const ADMIN_RESTART_FLAG = "kotone:admin-restart-pending";
 
   onMount(async () => {
     try {
-      [devices, elevation] = await Promise.all([listAudioDevices(), getElevationStatus()]);
+      const [nextDevices, nextElevation] = await Promise.all([
+        listAudioDevices(),
+        getElevationStatus(),
+      ]);
+      devices = nextDevices;
+      applyGameCompatibilityStatus(nextElevation);
       if (localStorage.getItem(ADMIN_RESTART_FLAG)) {
         localStorage.removeItem(ADMIN_RESTART_FLAG);
         if (elevation?.elevated) toast(true, "已通过管理员权限运行 ✨");
@@ -50,7 +62,7 @@
     let timer: ReturnType<typeof setInterval> | null = null;
     const refresh = async () => {
       try {
-        elevation = await getElevationStatus();
+        applyGameCompatibilityStatus(await getElevationStatus());
       } catch {
         /* 轮询失败不打扰，下轮再试 */
       }
@@ -311,6 +323,23 @@
       </section>
     {/if}
 
+    {#if fullscreenWarning}
+      <section class="mt-4 flex items-center gap-3 rounded-xl bg-amber-400/10 p-4 ring-1 ring-amber-300/40">
+        <div class="min-w-0 flex-1">
+          <p class="text-sm font-semibold text-amber-200">检测到游戏正在使用全屏模式</p>
+          <p class="mt-1 text-[11px] leading-relaxed text-white/55">
+            全屏模式下唤起悬浮窗可能导致游戏最小化。请在游戏的视频设置中切换为无边框或窗口模式。
+          </p>
+        </div>
+        <button
+          class="shrink-0 rounded-lg bg-white/10 px-3 py-2 text-xs font-semibold text-white/75 ring-1 ring-white/15 transition hover:bg-white/20"
+          onclick={() => (fullscreenWarning = false)}
+        >
+          知道了
+        </button>
+      </section>
+    {/if}
+
     <!-- 热键 -->
     <section class="kotone-panel mt-4 p-4">
       <h2 class="text-sm font-semibold text-kotone-cyan/90">热键</h2>
@@ -433,10 +462,11 @@
     <section class="kotone-panel mt-4 p-4">
       <h2 class="text-sm font-semibold text-kotone-cyan/90">悬浮窗</h2>
       <p class="mt-2 text-[10px] font-semibold tracking-wide text-white/40">什么时候出现</p>
-      <div class="mt-1.5 grid grid-cols-2 gap-2">
+      <div class="mt-1.5 grid grid-cols-3 gap-2">
         {#each [
           { id: "on_demand", name: "用时浮现", desc: "平时隐藏，说话时出现，发完自动隐藏" },
           { id: "always", name: "常驻", desc: "启动即显示，停止才隐藏" },
+          { id: "never", name: "不显示", desc: "完全隐藏悬浮窗，全凭感觉操作" },
         ] as opt}
           {@const selected = ($settingsStore.overlay?.visibility ?? "on_demand") === opt.id}
           <button
@@ -447,7 +477,7 @@
             onclick={() =>
               void patch(
                 { overlay: { visibility: opt.id } },
-                opt.id === "always" ? "悬浮窗已切换：常驻" : "悬浮窗已切换：用时浮现",
+                `悬浮窗已切换：${opt.name}`,
               )}
           >
             <p class="text-sm font-semibold {selected ? 'text-kotone-cyan' : ''}">{opt.name}</p>
