@@ -10,6 +10,19 @@ use std::sync::OnceLock;
 
 use crate::settings::kotone_dir;
 
+/// Profile 与导入文件的资源上限。所有限制同时用于普通保存与 `.kprofile`
+/// 导入，避免绕过 UI 直接调用 IPC 时写入异常大的配置。
+pub const MAX_PROFILE_JSON_BYTES: u64 = 1024 * 1024;
+pub const MAX_PROFILE_PACKAGE_BYTES: u64 = 4 * 1024 * 1024;
+pub const MAX_PROFILE_ARCHIVE_ENTRIES: usize = 4;
+pub const MAX_PROFILE_ICON_BYTES: u64 = 2 * 1024 * 1024;
+pub const MAX_PROFILE_ICON_DIMENSION: u32 = 2048;
+pub const MAX_HOTWORDS_FILE_BYTES: u64 = 1024 * 1024;
+pub const MAX_HOTWORDS: usize = 4096;
+pub const MAX_HOTWORD_CHARS: usize = 128;
+pub const MAX_PROFILE_CHANNELS: usize = 32;
+pub const MAX_PROFILE_DELAY_MS: u32 = 5_000;
+
 /// 聊天频道（ADR-008）：一个游戏可有多个聊天频道，各有独立发送策略。
 /// 频道切换热键按声明顺序循环；`default` 标记默认频道（缺省取第一个）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -220,8 +233,7 @@ fn sanitize_icon_name(name: &str) -> Option<String> {
 
 /// 写入 profile 图标（相对 icons/ 目录）
 pub fn write_profile_icon_in(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
-    let safe =
-        sanitize_icon_name(name).ok_or_else(|| format!("非法图标文件名：{name}"))?;
+    let safe = sanitize_icon_name(name).ok_or_else(|| format!("非法图标文件名：{name}"))?;
     let idir = icons_dir_in(dir);
     std::fs::create_dir_all(&idir).map_err(|e| format!("创建图标目录失败: {e}"))?;
     std::fs::write(idir.join(&safe), bytes).map_err(|e| format!("写入图标失败: {e}"))
@@ -270,9 +282,10 @@ pub fn ensure_builtin_in(dir: &Path) -> Result<(), String> {
 
 /// 版本更新合并：已有内置 profile 文件补上新版新增内容——
 /// 1) 内置热词：内置词条 - 文件现有热词 - 用户显式删除的内置词条，追加到末尾
-///   （用户自定义词条与其余字段原样保留）；
+///    （用户自定义词条与其余字段原样保留）；
 /// 2) 聊天频道（ADR-008）：文件缺 channels 且内置声明了频道时整体补入
-///   （只补缺失，不覆盖用户已有频道定义）。
+///    （只补缺失，不覆盖用户已有频道定义）。
+///
 /// 合并失败只记日志，不阻断启动流程。
 fn merge_builtin_hotwords_in(dir: &Path, builtin: &GameProfile) {
     let result = (|| -> Result<(), String> {
@@ -354,13 +367,195 @@ pub fn save(profile: &GameProfile) -> Result<(), String> {
     save_in(&profiles_dir(), profile)
 }
 
-pub fn save_in(dir: &Path, profile: &GameProfile) -> Result<(), String> {
-    if profile.id.trim().is_empty() {
-        return Err("profile id 不能为空".into());
+/// 校验 profile 的业务字段与资源上限。该函数是持久化的权威边界，导入包与
+/// 前端普通保存均必须经过这里，不能只依赖 UI 的输入控件。
+pub fn validate_profile(profile: &GameProfile) -> Result<(), String> {
+    fn bounded(
+        label: &str,
+        value: &str,
+        max_chars: usize,
+        allow_empty: bool,
+    ) -> Result<(), String> {
+        let chars = value.chars().count();
+        if (!allow_empty && value.trim().is_empty()) || chars > max_chars {
+            return Err(format!(
+                "{label} 长度无效：应为 {}..={max_chars} 个字符，实际 {chars}",
+                if allow_empty { 0 } else { 1 }
+            ));
+        }
+        Ok(())
     }
+
+    fn valid_injection_key(value: &str) -> bool {
+        if value.len() > 32 || value.split('+').any(|part| part.trim().is_empty()) {
+            return false;
+        }
+        let parts: Vec<&str> = value.split('+').map(str::trim).collect();
+        let Some((main, modifiers)) = parts.split_last() else {
+            return false;
+        };
+        if modifiers.len() > 3
+            || !modifiers.iter().all(|part| {
+                matches!(
+                    part.to_ascii_lowercase().as_str(),
+                    "ctrl" | "control" | "alt" | "shift"
+                )
+            })
+        {
+            return false;
+        }
+        let main = main.to_ascii_lowercase();
+        (main.len() == 1
+            && main
+                .bytes()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric()))
+            || matches!(
+                main.as_str(),
+                "enter"
+                    | "return"
+                    | "esc"
+                    | "escape"
+                    | "tab"
+                    | "space"
+                    | "backspace"
+                    | "delete"
+                    | "del"
+                    | "up"
+                    | "down"
+                    | "left"
+                    | "right"
+                    | "home"
+                    | "end"
+                    | "f1"
+                    | "f2"
+                    | "f3"
+                    | "f4"
+                    | "f5"
+                    | "f6"
+                    | "f7"
+                    | "f8"
+                    | "f9"
+                    | "f10"
+                    | "f11"
+                    | "f12"
+            )
+    }
+
+    bounded("profile id", &profile.id, 64, false)?;
+    if !profile
+        .id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err("profile id 只能包含 ASCII 字母、数字、连字符和下划线".into());
+    }
+    bounded("profile 显示名", &profile.display_name, 128, false)?;
+    if profile.process_names.len() > 64 {
+        return Err("进程名不能超过 64 个".into());
+    }
+    for value in &profile.process_names {
+        bounded("进程名", value, 260, false)?;
+    }
+    if profile.window_title_patterns.len() > 64 {
+        return Err("窗口标题规则不能超过 64 个".into());
+    }
+    for value in &profile.window_title_patterns {
+        bounded("窗口标题规则", value, 512, false)?;
+    }
+    for (label, key) in [
+        ("打开聊天框按键", profile.open_chat_key.as_str()),
+        ("发送按键", profile.send_key.as_str()),
+    ] {
+        if !valid_injection_key(key) {
+            return Err(format!("{label}格式无效：{key}"));
+        }
+    }
+    for (label, delay) in [
+        ("打开前延时", profile.pre_open_delay_ms),
+        ("粘贴前延时", profile.pre_paste_delay_ms),
+        ("发送前延时", profile.pre_send_delay_ms),
+    ] {
+        if delay > MAX_PROFILE_DELAY_MS {
+            return Err(format!("{label}不能超过 {MAX_PROFILE_DELAY_MS}ms"));
+        }
+    }
+    if let Some(icon) = &profile.icon {
+        sanitize_icon_name(icon).ok_or_else(|| format!("非法图标文件名：{icon}"))?;
+        let extension = Path::new(icon)
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase);
+        if !matches!(extension.as_deref(), Some("png" | "jpg" | "jpeg" | "webp")) {
+            return Err("profile 图标只支持 PNG、JPEG 或 WebP".into());
+        }
+    }
+
+    fn validate_words(label: &str, words: &[String]) -> Result<(), String> {
+        if words.len() > MAX_HOTWORDS {
+            return Err(format!("{label}不能超过 {MAX_HOTWORDS} 条"));
+        }
+        for word in words {
+            let chars = word.chars().count();
+            if word.trim().is_empty() || chars > MAX_HOTWORD_CHARS {
+                return Err(format!(
+                    "{label}包含空词条或超过 {MAX_HOTWORD_CHARS} 个字符的词条"
+                ));
+            }
+        }
+        Ok(())
+    }
+    validate_words("热词", &profile.hotwords)?;
+    validate_words("已删除的内置热词", &profile.removed_builtin_hotwords)?;
+
+    if profile.channels.len() > MAX_PROFILE_CHANNELS {
+        return Err(format!("聊天频道不能超过 {MAX_PROFILE_CHANNELS} 个"));
+    }
+    let mut channel_ids = std::collections::HashSet::new();
+    let mut defaults = 0usize;
+    for channel in &profile.channels {
+        bounded("频道 id", &channel.id, 64, false)?;
+        if !channel
+            .id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(format!("频道 id 格式无效：{}", channel.id));
+        }
+        if !channel_ids.insert(channel.id.as_str()) {
+            return Err(format!("频道 id 重复：{}", channel.id));
+        }
+        bounded("频道显示名", &channel.display_name, 128, false)?;
+        if let Some(key) = &channel.open_chat_key {
+            if !valid_injection_key(key) {
+                return Err(format!(
+                    "频道 {} 的打开聊天框按键格式无效：{key}",
+                    channel.id
+                ));
+            }
+        }
+        if let Some(prefix) = &channel.text_prefix {
+            bounded("频道文字前缀", prefix, 512, true)?;
+        }
+        defaults += usize::from(channel.default);
+    }
+    if defaults > 1 {
+        return Err("最多只能有一个默认聊天频道".into());
+    }
+    Ok(())
+}
+
+pub fn save_in(dir: &Path, profile: &GameProfile) -> Result<(), String> {
+    validate_profile(profile)?;
     std::fs::create_dir_all(dir).map_err(|e| format!("创建 profiles 目录失败: {e}"))?;
     let json =
         serde_json::to_string_pretty(profile).map_err(|e| format!("序列化 profile 失败: {e}"))?;
+    if json.len() as u64 > MAX_PROFILE_JSON_BYTES {
+        return Err(format!(
+            "profile JSON 不能超过 {}KB",
+            MAX_PROFILE_JSON_BYTES / 1024
+        ));
+    }
     let path = profile_path_in(dir, &profile.id);
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, json).map_err(|e| format!("写入 profile 失败: {e}"))?;
@@ -437,6 +632,74 @@ pub fn parse_hotwords_import(text: &str) -> Vec<String> {
     out
 }
 
+/// 解析不受信任的热词文本并执行资源上限校验。
+pub fn parse_hotwords_import_checked(text: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for line in text.lines() {
+        let word = line.trim();
+        if word.is_empty() || !seen.insert(word) {
+            continue;
+        }
+        if word.chars().count() > MAX_HOTWORD_CHARS {
+            return Err(format!("热词不能超过 {MAX_HOTWORD_CHARS} 个字符"));
+        }
+        if out.len() >= MAX_HOTWORDS {
+            return Err(format!("热词文件不能超过 {MAX_HOTWORDS} 条非重复词条"));
+        }
+        out.push(word.to_string());
+    }
+    Ok(out)
+}
+
+/// 从文件导入热词的权威后端入口。先对打开后的文件执行大小限制，再解析、
+/// 合并并通过 `save_in` 的完整 profile 校验。
+pub fn import_hotwords_from_file(
+    profile_id: &str,
+    path: &Path,
+) -> Result<HotwordMergeReport, String> {
+    import_hotwords_from_file_in(&profiles_dir(), profile_id, path)
+}
+
+pub fn import_hotwords_from_file_in(
+    dir: &Path,
+    profile_id: &str,
+    path: &Path,
+) -> Result<HotwordMergeReport, String> {
+    use std::io::Read as _;
+
+    let file =
+        std::fs::File::open(path).map_err(|e| format!("读取 {} 失败：{e}", path.display()))?;
+    let size = file
+        .metadata()
+        .map_err(|e| format!("读取 {} 元数据失败：{e}", path.display()))?
+        .len();
+    if size > MAX_HOTWORDS_FILE_BYTES {
+        return Err(format!(
+            "热词文件不能超过 {}KB",
+            MAX_HOTWORDS_FILE_BYTES / 1024
+        ));
+    }
+    let mut bytes = Vec::with_capacity(size as usize);
+    file.take(MAX_HOTWORDS_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("读取 {} 失败：{e}", path.display()))?;
+    if bytes.len() as u64 > MAX_HOTWORDS_FILE_BYTES {
+        return Err(format!(
+            "热词文件不能超过 {}KB",
+            MAX_HOTWORDS_FILE_BYTES / 1024
+        ));
+    }
+    let text = String::from_utf8(bytes).map_err(|_| "热词文件必须是 UTF-8 文本".to_string())?;
+    let incoming = parse_hotwords_import_checked(&text)?;
+    let mut profile =
+        get_in(dir, profile_id).ok_or_else(|| format!("profile 不存在：{profile_id}"))?;
+    let (merged, report) = merge_hotwords(&profile.hotwords, &incoming);
+    profile.hotwords = merged;
+    save_in(dir, &profile)?;
+    Ok(report)
+}
+
 /// 热词合并导入报告
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -492,8 +755,8 @@ pub fn export_profile_in(dir: &Path, id: &str, out_path: &Path) -> Result<(), St
     let opts = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
 
-    let json = serde_json::to_string_pretty(&profile)
-        .map_err(|e| format!("序列化 profile 失败: {e}"))?;
+    let json =
+        serde_json::to_string_pretty(&profile).map_err(|e| format!("序列化 profile 失败: {e}"))?;
     zip.start_file("profile.json", opts)
         .map_err(|e| format!("写入 profile.json 失败: {e}"))?;
     zip.write_all(json.as_bytes())
@@ -516,6 +779,145 @@ pub fn export_profile_in(dir: &Path, id: &str, out_path: &Path) -> Result<(), St
     Ok(())
 }
 
+fn read_zip_entry_limited<R: std::io::Read>(
+    reader: R,
+    limit: u64,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+
+    let mut bytes = Vec::with_capacity(limit.min(64 * 1024) as usize);
+    reader
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("读取 {label} 失败: {e}"))?;
+    if bytes.len() as u64 > limit {
+        return Err(format!("{label} 解压后超过 {}KB", limit / 1024));
+    }
+    Ok(bytes)
+}
+
+fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if !bytes.starts_with(&[0xff, 0xd8]) {
+        return None;
+    }
+    let mut i = 2usize;
+    while i + 1 < bytes.len() {
+        if bytes[i] != 0xff {
+            i += 1;
+            continue;
+        }
+        while i < bytes.len() && bytes[i] == 0xff {
+            i += 1;
+        }
+        let marker = *bytes.get(i)?;
+        i += 1;
+        if marker == 0xd8 || marker == 0xd9 || marker == 0x01 || (0xd0..=0xd7).contains(&marker) {
+            continue;
+        }
+        let length = u16::from_be_bytes([*bytes.get(i)?, *bytes.get(i + 1)?]) as usize;
+        if length < 2 || i.checked_add(length)? > bytes.len() {
+            return None;
+        }
+        if matches!(
+            marker,
+            0xc0 | 0xc1
+                | 0xc2
+                | 0xc3
+                | 0xc5
+                | 0xc6
+                | 0xc7
+                | 0xc9
+                | 0xca
+                | 0xcb
+                | 0xcd
+                | 0xce
+                | 0xcf
+        ) {
+            if length < 7 {
+                return None;
+            }
+            let height = u16::from_be_bytes([bytes[i + 3], bytes[i + 4]]) as u32;
+            let width = u16::from_be_bytes([bytes[i + 5], bytes[i + 6]]) as u32;
+            return Some((width, height));
+        }
+        i += length;
+    }
+    None
+}
+
+fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 30 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WEBP" {
+        return None;
+    }
+    match &bytes[12..16] {
+        b"VP8X" => {
+            let width = 1 + u32::from_le_bytes([bytes[24], bytes[25], bytes[26], 0]);
+            let height = 1 + u32::from_le_bytes([bytes[27], bytes[28], bytes[29], 0]);
+            Some((width, height))
+        }
+        b"VP8L" if bytes[20] == 0x2f => {
+            let bits = u32::from_le_bytes([bytes[21], bytes[22], bytes[23], bytes[24]]);
+            Some(((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1))
+        }
+        b"VP8 " if bytes[23..26] == [0x9d, 0x01, 0x2a] => Some((
+            u16::from_le_bytes([bytes[26], bytes[27]]) as u32 & 0x3fff,
+            u16::from_le_bytes([bytes[28], bytes[29]]) as u32 & 0x3fff,
+        )),
+        _ => None,
+    }
+}
+
+/// 校验实际图片格式与扩展名，并只读取轻量文件头得到像素尺寸。浏览器最终仍
+/// 负责解码，但畸形文件不会被作为 profile 图标持久化。
+fn validate_profile_icon(entry_name: &str, bytes: &[u8]) -> Result<&'static str, String> {
+    let extension = Path::new(entry_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| "图标缺少扩展名".to_string())?;
+    let (actual_extension, dimensions) = if bytes.len() >= 24
+        && bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        && &bytes[12..16] == b"IHDR"
+    {
+        (
+            "png",
+            Some((
+                u32::from_be_bytes(bytes[16..20].try_into().ok().unwrap()),
+                u32::from_be_bytes(bytes[20..24].try_into().ok().unwrap()),
+            )),
+        )
+    } else if let Some(dimensions) = jpeg_dimensions(bytes) {
+        ("jpg", Some(dimensions))
+    } else if let Some(dimensions) = webp_dimensions(bytes) {
+        ("webp", Some(dimensions))
+    } else {
+        return Err("图标必须是有效的 PNG、JPEG 或 WebP 图片".into());
+    };
+    let extension_matches = match actual_extension {
+        "jpg" => extension == "jpg" || extension == "jpeg",
+        other => extension == other,
+    };
+    if !extension_matches {
+        return Err(format!(
+            "图标扩展名 .{extension} 与实际 {actual_extension} 格式不符"
+        ));
+    }
+    let (width, height) = dimensions.expect("已识别的图片格式必须包含尺寸");
+    if width == 0
+        || height == 0
+        || width > MAX_PROFILE_ICON_DIMENSION
+        || height > MAX_PROFILE_ICON_DIMENSION
+        || u64::from(width) * u64::from(height)
+            > u64::from(MAX_PROFILE_ICON_DIMENSION) * u64::from(MAX_PROFILE_ICON_DIMENSION)
+    {
+        return Err(format!(
+            "图标尺寸必须在 1x1 到 {MAX_PROFILE_ICON_DIMENSION}x{MAX_PROFILE_ICON_DIMENSION} 之间，实际 {width}x{height}"
+        ));
+    }
+    Ok(actual_extension)
+}
+
 /// 导入 .kprofile ZIP 包：解析 profile.json，**生成新随机 id**（用包名
 /// displayName 区分，永不与内置/既有 profile 冲突），icon.* 条目写入
 /// icons 目录。返回导入后的 profile。
@@ -524,51 +926,100 @@ pub fn import_profile(zip_path: &Path) -> Result<GameProfile, String> {
 }
 
 pub fn import_profile_in(dir: &Path, zip_path: &Path) -> Result<GameProfile, String> {
-    use std::io::Read as _;
-
-    let file = std::fs::File::open(zip_path)
-        .map_err(|e| format!("打开 profile 包失败: {e}"))?;
+    let file = std::fs::File::open(zip_path).map_err(|e| format!("打开 profile 包失败: {e}"))?;
+    let package_size = file
+        .metadata()
+        .map_err(|e| format!("读取 profile 包元数据失败: {e}"))?
+        .len();
+    if package_size > MAX_PROFILE_PACKAGE_BYTES {
+        return Err(format!(
+            "profile 包不能超过 {}MB",
+            MAX_PROFILE_PACKAGE_BYTES / 1024 / 1024
+        ));
+    }
     let mut archive =
         zip::ZipArchive::new(file).map_err(|e| format!("不是合法的 .kprofile 包: {e}"))?;
 
-    let mut json_str = String::new();
-    {
-        let mut entry = archive
-            .by_name("profile.json")
-            .map_err(|_| "profile 包缺少 profile.json".to_string())?;
-        entry
-            .read_to_string(&mut json_str)
-            .map_err(|e| format!("读取 profile.json 失败: {e}"))?;
+    if archive.len() > MAX_PROFILE_ARCHIVE_ENTRIES {
+        return Err(format!(
+            "profile 包条目不能超过 {MAX_PROFILE_ARCHIVE_ENTRIES} 个"
+        ));
     }
+    let mut profile_entries = 0usize;
+    let mut icon_entry = None;
+    for index in 0..archive.len() {
+        let entry = archive
+            .by_index(index)
+            .map_err(|e| format!("读取 profile 包目录失败: {e}"))?;
+        let name = entry.name().to_string();
+        if entry.is_dir() || entry.enclosed_name().is_none() || name.contains(['/', '\\']) {
+            return Err(format!("profile 包含非法条目：{name}"));
+        }
+        match name.as_str() {
+            "profile.json" => {
+                profile_entries += 1;
+                if entry.size() > MAX_PROFILE_JSON_BYTES {
+                    return Err(format!(
+                        "profile.json 解压后不能超过 {}KB",
+                        MAX_PROFILE_JSON_BYTES / 1024
+                    ));
+                }
+            }
+            _ if name.starts_with("icon.") => {
+                if icon_entry.replace(name.clone()).is_some() {
+                    return Err("profile 包最多只能包含一个图标".into());
+                }
+                if entry.size() > MAX_PROFILE_ICON_BYTES {
+                    return Err(format!(
+                        "profile 图标解压后不能超过 {}KB",
+                        MAX_PROFILE_ICON_BYTES / 1024
+                    ));
+                }
+            }
+            _ => return Err(format!("profile 包包含不支持的条目：{name}")),
+        }
+    }
+    if profile_entries != 1 {
+        return Err("profile 包必须且只能包含一个 profile.json".into());
+    }
+
+    let json_bytes = read_zip_entry_limited(
+        archive
+            .by_name("profile.json")
+            .map_err(|_| "profile 包缺少 profile.json".to_string())?,
+        MAX_PROFILE_JSON_BYTES,
+        "profile.json",
+    )?;
+    let json_str =
+        String::from_utf8(json_bytes).map_err(|_| "profile.json 必须是 UTF-8 文本".to_string())?;
     let mut profile: GameProfile = serde_json::from_str(&json_str)
         .map_err(|e| format!("解析 profile.json 失败（缺必需字段或格式错误）: {e}"))?;
 
     // 新随机 id + 清本地删除状态
     profile.id = new_profile_id();
     profile.removed_builtin_hotwords = Vec::new();
+    // 包内 JSON 的 icon 文件名不可信；只有实际随包且验证通过的图片才会写回。
+    profile.icon = None;
 
     // icon.* 条目（若有）→ 写入 icons 目录，文件名用新 id
-    let icon_entry = archive
-        .file_names()
-        .find(|n| n.starts_with("icon."))
-        .map(|s| s.to_string());
     if let Some(entry_name) = icon_entry {
-        let ext = Path::new(&entry_name)
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("png");
-        let icon_name = format!("{}.{}", profile.id, ext);
-        let mut buf = Vec::new();
-        {
-            let mut entry = archive
+        let buf = read_zip_entry_limited(
+            archive
                 .by_name(&entry_name)
-                .map_err(|e| format!("读取 {} 失败: {e}", entry_name))?;
-            entry
-                .read_to_end(&mut buf)
-                .map_err(|e| format!("读取 {} 失败: {e}", entry_name))?;
-        }
+                .map_err(|e| format!("读取 {entry_name} 失败: {e}"))?,
+            MAX_PROFILE_ICON_BYTES,
+            &entry_name,
+        )?;
+        let ext = validate_profile_icon(&entry_name, &buf)?;
+        let icon_name = format!("{}.{}", profile.id, ext);
+        profile.icon = Some(icon_name.clone());
+        validate_profile(&profile)?;
         write_profile_icon_in(dir, &icon_name, &buf)?;
-        profile.icon = Some(icon_name);
+        if let Err(error) = save_in(dir, &profile) {
+            let _ = std::fs::remove_file(icons_dir_in(dir).join(&icon_name));
+            return Err(error);
+        }
+        return Ok(profile);
     }
 
     save_in(dir, &profile)?;
@@ -739,7 +1190,7 @@ mod tests {
     // ---------- 内置热词版本更新合并 ----------
 
     /// 模拟一份「旧版本」lol 文件：内置词条的子集 + 一个用户自定义词条
-    fn write_legacy_lol(dir: &PathBuf, hotwords: &[&str], removed: &[&str]) {
+    fn write_legacy_lol(dir: &Path, hotwords: &[&str], removed: &[&str]) {
         let mut legacy = GameProfile::builtin_lol();
         legacy.hotwords = hotwords.iter().map(|s| s.to_string()).collect();
         legacy.removed_builtin_hotwords = removed.iter().map(|s| s.to_string()).collect();
@@ -1049,6 +1500,173 @@ mod tests {
         assert!(import_profile_in(&dir, &no_json).is_err());
     }
 
+    fn write_test_package(path: &Path, profile: &GameProfile, extra: &[(&str, &[u8])]) {
+        use std::io::Write as _;
+
+        let file = std::fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("profile.json", options).unwrap();
+        zip.write_all(serde_json::to_string(profile).unwrap().as_bytes())
+            .unwrap();
+        for (name, bytes) in extra {
+            zip.start_file(*name, options).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn save_rejects_unbounded_or_invalid_profile_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut profile = GameProfile::builtin_generic();
+
+        profile.pre_send_delay_ms = MAX_PROFILE_DELAY_MS + 1;
+        assert!(save_in(dir.path(), &profile)
+            .unwrap_err()
+            .contains("发送前延时"));
+
+        profile.pre_send_delay_ms = 20;
+        profile.open_chat_key = "Ctrl+NotAKey".into();
+        assert!(save_in(dir.path(), &profile)
+            .unwrap_err()
+            .contains("按键格式无效"));
+
+        profile.open_chat_key = "Enter".into();
+        profile.hotwords = (0..=MAX_HOTWORDS).map(|i| format!("word-{i}")).collect();
+        assert!(save_in(dir.path(), &profile)
+            .unwrap_err()
+            .contains("不能超过"));
+
+        profile.hotwords.clear();
+        profile.display_name = "x".repeat(129);
+        assert!(save_in(dir.path(), &profile)
+            .unwrap_err()
+            .contains("显示名"));
+
+        profile.display_name = "generic".into();
+        profile.channels = (0..=MAX_PROFILE_CHANNELS)
+            .map(|i| ProfileChannel {
+                id: format!("channel-{i}"),
+                display_name: format!("Channel {i}"),
+                open_chat_key: None,
+                text_prefix: None,
+                default: false,
+            })
+            .collect();
+        assert!(save_in(dir.path(), &profile)
+            .unwrap_err()
+            .contains("频道不能超过"));
+    }
+
+    #[test]
+    fn hotword_file_import_enforces_size_count_and_word_length() {
+        let dir = tempfile::tempdir().unwrap();
+        save_in(dir.path(), &GameProfile::builtin_generic()).unwrap();
+
+        let too_large = dir.path().join("too-large.txt");
+        std::fs::write(&too_large, vec![b'x'; MAX_HOTWORDS_FILE_BYTES as usize + 1]).unwrap();
+        assert!(
+            import_hotwords_from_file_in(dir.path(), "generic", &too_large)
+                .unwrap_err()
+                .contains("不能超过")
+        );
+
+        let too_many = (0..=MAX_HOTWORDS)
+            .map(|i| format!("word-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(parse_hotwords_import_checked(&too_many)
+            .unwrap_err()
+            .contains("不能超过"));
+        assert!(
+            parse_hotwords_import_checked(&"x".repeat(MAX_HOTWORD_CHARS + 1))
+                .unwrap_err()
+                .contains("不能超过")
+        );
+    }
+
+    #[test]
+    fn import_rejects_too_many_archive_entries_and_multiple_icons() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = GameProfile::builtin_generic();
+
+        let too_many = dir.path().join("too-many.kprofile");
+        write_test_package(
+            &too_many,
+            &profile,
+            &[("a", b"x"), ("b", b"x"), ("c", b"x"), ("d", b"x")],
+        );
+        assert!(import_profile_in(dir.path(), &too_many)
+            .unwrap_err()
+            .contains("条目不能超过"));
+
+        let two_icons = dir.path().join("two-icons.kprofile");
+        write_test_package(
+            &two_icons,
+            &profile,
+            &[("icon.png", b"bad"), ("icon.webp", b"bad")],
+        );
+        assert!(import_profile_in(dir.path(), &two_icons)
+            .unwrap_err()
+            .contains("一个图标"));
+    }
+
+    #[test]
+    fn import_rejects_compressed_oversized_json_entry() {
+        use std::io::Write as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("json-bomb.kprofile");
+        let file = std::fs::File::create(&package).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("profile.json", options).unwrap();
+        zip.write_all(&vec![b' '; MAX_PROFILE_JSON_BYTES as usize + 1])
+            .unwrap();
+        zip.finish().unwrap();
+
+        assert!(std::fs::metadata(&package).unwrap().len() < MAX_PROFILE_PACKAGE_BYTES);
+        assert!(import_profile_in(dir.path(), &package)
+            .unwrap_err()
+            .contains("解压后"));
+    }
+
+    #[test]
+    fn import_validates_icon_extension_format_and_dimensions() {
+        // 足够供轻量头校验使用的 1x1 PNG IHDR。
+        let mut png = vec![0u8; 24];
+        png[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        png[12..16].copy_from_slice(b"IHDR");
+        png[16..20].copy_from_slice(&1u32.to_be_bytes());
+        png[20..24].copy_from_slice(&1u32.to_be_bytes());
+
+        assert_eq!(validate_profile_icon("icon.png", &png), Ok("png"));
+        assert!(validate_profile_icon("icon.jpg", &png)
+            .unwrap_err()
+            .contains("扩展名"));
+
+        png[16..20].copy_from_slice(&(MAX_PROFILE_ICON_DIMENSION + 1).to_be_bytes());
+        assert!(validate_profile_icon("icon.png", &png)
+            .unwrap_err()
+            .contains("尺寸"));
+        assert!(validate_profile_icon("icon.exe", b"not an image").is_err());
+    }
+
+    #[test]
+    fn import_ignores_json_icon_without_verified_archive_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("stale-icon.kprofile");
+        let mut profile = GameProfile::builtin_generic();
+        profile.icon = Some("missing.png".into());
+        write_test_package(&package, &profile, &[]);
+
+        let imported = import_profile_in(dir.path(), &package).unwrap();
+        assert!(imported.icon.is_none());
+    }
+
     #[test]
     fn icon_write_read_roundtrip_and_traversal_guard() {
         let dir = tempfile::tempdir().unwrap();
@@ -1081,7 +1699,10 @@ mod tests {
         let outcome = delete_profile_in(&dir2, &imported.id).unwrap();
         assert_eq!(outcome, ProfileDeleteOutcome::Deleted);
         assert!(get_in(&dir2, &imported.id).is_none());
-        assert!(read_profile_icon_in(&dir2, &icon).is_none(), "icon 一并删除");
+        assert!(
+            read_profile_icon_in(&dir2, &icon).is_none(),
+            "icon 一并删除"
+        );
     }
 
     #[test]
@@ -1117,7 +1738,11 @@ mod tests {
         save_in(&dir, &legacy).unwrap();
         ensure_builtin_in(&dir).unwrap();
         let lol = get_in(&dir, "lol").unwrap();
-        assert_eq!(lol.icon.as_deref(), Some("lol-kotone.webp"), "升级补 icon 字段");
+        assert_eq!(
+            lol.icon.as_deref(),
+            Some("lol-kotone.webp"),
+            "升级补 icon 字段"
+        );
         assert!(
             read_profile_icon_in(&dir, "lol-kotone.webp").is_some(),
             "内置 icon 已物化"

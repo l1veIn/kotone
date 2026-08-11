@@ -391,9 +391,10 @@ impl HotkeySource for LlHookSource {
     /// 重发最近一条热键：更新匹配器的重发 spec；None/解析失败 = 关闭
     fn set_resend_key(&self, key: Option<&str>) -> Result<(), String> {
         let spec = match key {
-            Some(k) if !k.trim().is_empty() => Some(parse_hotkey(k).ok_or_else(|| {
-                format!("无法解析重发热键「{k}」（LL 钩子后端不支持该键名）")
-            })?),
+            Some(k) if !k.trim().is_empty() => Some(
+                parse_hotkey(k)
+                    .ok_or_else(|| format!("无法解析重发热键「{k}」（LL 钩子后端不支持该键名）"))?,
+            ),
             _ => None,
         };
         if let Some(shared) = SHARED.get() {
@@ -454,23 +455,23 @@ fn hook_thread_main(boot: mpsc::Sender<Result<u32, String>>) {
 }
 
 fn probe_input(up: bool) -> INPUT {
-    let mut input = INPUT::default();
-    input.r#type = INPUT_KEYBOARD;
     let scan = unsafe { MapVirtualKeyW(u32::from(PROBE_VK.0), MAPVK_VK_TO_VSC) } as u16;
-    input.Anonymous = INPUT_0 {
-        ki: KEYBDINPUT {
-            wVk: PROBE_VK,
-            wScan: scan,
-            dwFlags: if up {
-                KEYEVENTF_KEYUP
-            } else {
-                KEYBD_EVENT_FLAGS(0)
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: PROBE_VK,
+                wScan: scan,
+                dwFlags: if up {
+                    KEYEVENTF_KEYUP
+                } else {
+                    KEYBD_EVENT_FLAGS(0)
+                },
+                time: 0,
+                dwExtraInfo: PROBE_EXTRA_INFO,
             },
-            time: 0,
-            dwExtraInfo: PROBE_EXTRA_INFO,
         },
-    };
-    input
+    }
 }
 
 /// 钩子回调：只做翻译（Win32 事件 → HookMatcher）与吞键判定。

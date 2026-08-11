@@ -263,8 +263,10 @@ mod tests {
     #[test]
     fn explicit_null_interaction_mode_uses_legacy_fields() {
         // 显式 null（自定义兼容路径）：仍由 hotkey.mode + autoSend 旧字段推导
-        let mut s = Settings::default();
-        s.interaction_mode = None;
+        let s = Settings {
+            interaction_mode: None,
+            ..Settings::default()
+        };
         // toggle + autoSend=false → 录音笔
         assert_eq!(
             InteractionPolicy::from_settings(&s).preset(),

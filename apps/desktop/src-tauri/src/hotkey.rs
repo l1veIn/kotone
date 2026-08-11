@@ -131,7 +131,7 @@ impl HotkeySource for PluginHotkeySource {
         let orch = self.orch.clone();
         self.app
             .global_shortcut()
-            .on_shortcut(shortcut.clone(), move |_app, _sc, event| {
+            .on_shortcut(shortcut, move |_app, _sc, event| {
                 kotone_core::log::log(&format!(
                     "hotkey fired: mode={mode:?} state={:?}",
                     event.state()
@@ -183,7 +183,7 @@ impl HotkeySource for PluginHotkeySource {
         let orch = self.orch.clone();
         self.app
             .global_shortcut()
-            .on_shortcut(shortcut.clone(), move |_app, _sc, event| {
+            .on_shortcut(shortcut, move |_app, _sc, event| {
                 if event.state() == ShortcutState::Pressed {
                     let orch = orch.clone();
                     tauri::async_runtime::spawn(async move {
@@ -208,7 +208,7 @@ impl HotkeySource for PluginHotkeySource {
         let orch = self.orch.clone();
         self.app
             .global_shortcut()
-            .on_shortcut(shortcut.clone(), move |_app, _sc, event| {
+            .on_shortcut(shortcut, move |_app, _sc, event| {
                 if event.state() == ShortcutState::Pressed {
                     let orch = orch.clone();
                     tauri::async_runtime::spawn(async move {
@@ -232,17 +232,17 @@ impl HotkeySource for PluginHotkeySource {
                     Err(_) => return,
                 };
                 let orch = self.orch.clone();
-                let registered = self.app.global_shortcut().on_shortcut(
-                    shortcut.clone(),
-                    move |_app, _sc, event| {
-                        if event.state() == ShortcutState::Pressed {
-                            let orch = orch.clone();
-                            tauri::async_runtime::spawn(async move {
-                                orch.cancel().await;
-                            });
-                        }
-                    },
-                );
+                let registered =
+                    self.app
+                        .global_shortcut()
+                        .on_shortcut(shortcut, move |_app, _sc, event| {
+                            if event.state() == ShortcutState::Pressed {
+                                let orch = orch.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    orch.cancel().await;
+                                });
+                            }
+                        });
                 match registered {
                     Ok(()) => *guard = Some(shortcut),
                     Err(e) => kotone_core::log::log(&format!("注册 Esc 取消键失败（不致命）: {e}")),
@@ -344,8 +344,24 @@ impl HotkeyManager {
     /// 注册全局热键（已注册则先注销，实现运行时改键/改模式/改后端）。
     /// Windows 上按配置优先 LL 钩子，安装失败回退 RegisterHotKey 并记录日志。
     pub fn register(&self, app: &AppHandle, key: &str, mode: HotkeyMode) -> Result<(), String> {
+        let settings = app
+            .try_state::<SharedState>()
+            .map(|state| state.settings.read().unwrap().clone())
+            .unwrap_or_default();
+        self.register_with_settings(app, key, mode, &settings)
+    }
+
+    /// 用显式配置注册热键。设置事务在内存发布 next 之前调用此方法，避免注册过程
+    /// 再从 SharedState 读到 old，导致主热键与频道/重发热键来自不同配置版本。
+    pub fn register_with_settings(
+        &self,
+        app: &AppHandle,
+        key: &str,
+        mode: HotkeyMode,
+        settings: &kotone_core::settings::Settings,
+    ) -> Result<(), String> {
         self.unregister(app)?;
-        let pref = backend_preference(app);
+        let pref = settings.hotkey_backend;
 
         #[cfg(windows)]
         if pref != HotkeyBackend::Register {
@@ -357,8 +373,12 @@ impl HotkeyManager {
                     *self.backend.lock().unwrap() = ActiveBackend::LlHook;
                     *self.registered_key.lock().unwrap() = Some(key.to_string());
                     *self.last_error.lock().unwrap() = None;
-                    self.apply_cycle_key(app, key);
-                    self.apply_resend_key(app, key);
+                    self.apply_cycle_key(key, &settings.channel_cycle_hotkey);
+                    self.apply_resend_key(
+                        key,
+                        &settings.channel_cycle_hotkey,
+                        &settings.resend_last_hotkey,
+                    );
                     return Ok(());
                 }
                 Err(e) => {
@@ -375,8 +395,12 @@ impl HotkeyManager {
                 *self.backend.lock().unwrap() = ActiveBackend::Plugin;
                 *self.registered_key.lock().unwrap() = Some(key.to_string());
                 *self.last_error.lock().unwrap() = None;
-                self.apply_cycle_key(app, key);
-                self.apply_resend_key(app, key);
+                self.apply_cycle_key(key, &settings.channel_cycle_hotkey);
+                self.apply_resend_key(
+                    key,
+                    &settings.channel_cycle_hotkey,
+                    &settings.resend_last_hotkey,
+                );
                 Ok(())
             }
             Err(msg) => {
@@ -407,16 +431,12 @@ impl HotkeyManager {
 
     /// 注册频道切换热键（ADR-008）：主热键注册成功后按当前生效后端应用。
     /// 与录制热键同组合时拒绝注册并记入 cycle_error（设置页展示）。
-    fn apply_cycle_key(&self, app: &AppHandle, main_key: &str) {
-        let cycle = app
-            .try_state::<SharedState>()
-            .map(|s| s.settings.read().unwrap().channel_cycle_hotkey.clone())
-            .unwrap_or_default();
+    fn apply_cycle_key(&self, main_key: &str, cycle: &str) {
         let backend = *self.backend.lock().unwrap();
         let mut applied: Option<String> = None;
         let mut error: Option<String> = None;
         if !cycle.trim().is_empty() {
-            if kotone_core::hotkey::combos_conflict(&cycle, main_key) {
+            if kotone_core::hotkey::combos_conflict(cycle, main_key) {
                 let msg = format!("频道切换热键「{cycle}」与录制热键冲突，未注册");
                 kotone_core::log::log(&msg);
                 error = Some(msg);
@@ -425,21 +445,21 @@ impl HotkeyManager {
                     #[cfg(windows)]
                     {
                         if backend == ActiveBackend::LlHook {
-                            self.llhook.set_cycle_key(Some(&cycle))
+                            self.llhook.set_cycle_key(Some(cycle))
                         } else {
-                            self.plugin.set_cycle_key(Some(&cycle))
+                            self.plugin.set_cycle_key(Some(cycle))
                         }
                     }
                     #[cfg(not(windows))]
                     {
                         let _ = backend;
-                        self.plugin.set_cycle_key(Some(&cycle))
+                        self.plugin.set_cycle_key(Some(cycle))
                     }
                 };
                 match res {
                     Ok(()) => {
                         kotone_core::log::log(&format!("cycle hotkey registered: {cycle}"));
-                        applied = Some(cycle.clone());
+                        applied = Some(cycle.to_string());
                     }
                     Err(e) => {
                         kotone_core::log::log(&format!("cycle hotkey register FAILED: {e}"));
@@ -454,24 +474,16 @@ impl HotkeyManager {
 
     /// 注册重发最近一条热键：主热键注册成功后按当前生效后端应用。
     /// 与录制热键或频道切换热键同组合时拒绝注册并记入 resend_error（设置页展示）。
-    fn apply_resend_key(&self, app: &AppHandle, main_key: &str) {
-        let resend = app
-            .try_state::<SharedState>()
-            .map(|s| s.settings.read().unwrap().resend_last_hotkey.clone())
-            .unwrap_or_default();
-        let cycle = app
-            .try_state::<SharedState>()
-            .map(|s| s.settings.read().unwrap().channel_cycle_hotkey.clone())
-            .unwrap_or_default();
+    fn apply_resend_key(&self, main_key: &str, cycle: &str, resend: &str) {
         let backend = *self.backend.lock().unwrap();
         let mut applied: Option<String> = None;
         let mut error: Option<String> = None;
         if !resend.trim().is_empty() {
-            if kotone_core::hotkey::combos_conflict(&resend, main_key) {
+            if kotone_core::hotkey::combos_conflict(resend, main_key) {
                 let msg = format!("重发热键「{resend}」与录制热键冲突，未注册");
                 kotone_core::log::log(&msg);
                 error = Some(msg);
-            } else if kotone_core::hotkey::combos_conflict(&resend, &cycle) {
+            } else if kotone_core::hotkey::combos_conflict(resend, cycle) {
                 let msg = format!("重发热键「{resend}」与频道切换热键冲突，未注册");
                 kotone_core::log::log(&msg);
                 error = Some(msg);
@@ -480,21 +492,21 @@ impl HotkeyManager {
                     #[cfg(windows)]
                     {
                         if backend == ActiveBackend::LlHook {
-                            self.llhook.set_resend_key(Some(&resend))
+                            self.llhook.set_resend_key(Some(resend))
                         } else {
-                            self.plugin.set_resend_key(Some(&resend))
+                            self.plugin.set_resend_key(Some(resend))
                         }
                     }
                     #[cfg(not(windows))]
                     {
                         let _ = backend;
-                        self.plugin.set_resend_key(Some(&resend))
+                        self.plugin.set_resend_key(Some(resend))
                     }
                 };
                 match res {
                     Ok(()) => {
                         kotone_core::log::log(&format!("resend hotkey registered: {resend}"));
-                        applied = Some(resend.clone());
+                        applied = Some(resend.to_string());
                     }
                     Err(e) => {
                         kotone_core::log::log(&format!("resend hotkey register FAILED: {e}"));
@@ -581,7 +593,7 @@ impl HotkeyManager {
                 result.expected,
                 result.detail.as_deref().unwrap_or("none")
             ));
-            return result;
+            result
         }
         #[cfg(not(windows))]
         InputEnvironmentCheck {
@@ -612,8 +624,7 @@ impl HotkeyManager {
                     kotone_core::log::log(&format!("hotkey-capture 事件推送失败: {e}"));
                 }
             });
-            return self
-                .llhook
+            self.llhook
                 .capture_next(cb, std::time::Duration::from_secs(10))
                 .map_err(|detail| {
                     format!(
@@ -621,7 +632,7 @@ impl HotkeyManager {
                          可能是 360、火绒等安全软件拦截了键盘钩子或模拟输入；\
                          请将 Kotone 加入信任区后重试。检测详情：{detail}"
                     )
-                });
+                })
         }
         #[cfg(not(windows))]
         Err("当前平台不支持热键录入捕获".into())
@@ -632,13 +643,6 @@ impl HotkeyManager {
         #[cfg(windows)]
         self.llhook.cancel_capture();
     }
-}
-
-/// 从共享设置读取后端偏好；设置未就绪（启动早期）按 auto 处理
-fn backend_preference(app: &AppHandle) -> HotkeyBackend {
-    app.try_state::<SharedState>()
-        .map(|s| s.settings.read().unwrap().hotkey_backend)
-        .unwrap_or_default()
 }
 
 /// 检测与常见游戏键位的冲突（首次启动引导用，P2-⑩ 已接入向导热键步骤）。

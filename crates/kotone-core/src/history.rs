@@ -9,11 +9,30 @@
 //! - sessionId 与 eval 录档共用（orchestrator 生成一次 id 同时喂两边），可互查；
 //! - includeAudio 开启时独立把会话 PCM 写到 history/audio/<sessionId>.wav，
 //!   不依赖评测录档；记录里的 audioFile 存相对文件名；
-//! - 并发取舍：单机单用户 best-effort——append 用单次 write 追加，
-//!   capped 裁剪（全读 → 保留尾部 → 原子重写）极少发生，不加文件锁；
-//!   最坏情况是并发写交错出一行坏 JSON，list 会跳过坏行，不致命。
+//! - 同一历史目录的 append / trim / delete / clear / audio 写入在进程内串行，
+//!   避免原子重写与追加竞争造成记录丢失；每个目录缓存非空行数，只有 capped
+//!   真正超限时才读取并裁剪完整 JSONL。
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+
+#[derive(Default)]
+struct DirectoryState {
+    /// 当前进程首次访问时按需统计；之后随写操作维护。
+    record_count: Option<usize>,
+}
+
+fn directory_state(dir: &Path) -> Arc<Mutex<DirectoryState>> {
+    static STATES: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<DirectoryState>>>>> = OnceLock::new();
+    let states = STATES.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = dir.to_path_buf();
+    let mut states = states.lock().unwrap();
+    states
+        .entry(key)
+        .or_insert_with(|| Arc::new(Mutex::new(DirectoryState::default())))
+        .clone()
+}
 
 /// 历史记录模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -118,6 +137,17 @@ pub fn append_in(dir: &Path, record: &HistoryRecord, cfg: &HistoryConfig) -> Res
     if cfg.mode == HistoryMode::Off {
         return Ok(());
     }
+    let state = directory_state(dir);
+    let mut state = state.lock().unwrap();
+    append_unlocked(dir, record, cfg, &mut state)
+}
+
+fn append_unlocked(
+    dir: &Path,
+    record: &HistoryRecord,
+    cfg: &HistoryConfig,
+    state: &mut DirectoryState,
+) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("创建历史目录失败: {e}"))?;
     let line = serde_json::to_string(record).map_err(|e| format!("序列化历史记录失败: {e}"))?;
     let path = jsonl_path(dir);
@@ -131,22 +161,31 @@ pub fn append_in(dir: &Path, record: &HistoryRecord, cfg: &HistoryConfig) -> Res
         writeln!(f, "{line}").map_err(|e| format!("写入历史记录失败: {e}"))?;
     }
     if cfg.mode == HistoryMode::Capped {
-        trim_in(dir, cfg.max_records)?;
+        let count = match state.record_count {
+            Some(count) => count.saturating_add(1),
+            None => count_nonempty_lines(&path)?,
+        };
+        state.record_count = Some(count);
+        if count > cfg.max_records as usize {
+            state.record_count = Some(trim_unlocked(dir, cfg.max_records)?);
+        }
+    } else if let Some(count) = state.record_count.as_mut() {
+        *count = count.saturating_add(1);
     }
     Ok(())
 }
 
 /// capped 裁剪：超出 max 时保留尾部 N 条原子重写，并清理被裁记录的音频
-fn trim_in(dir: &Path, max: u32) -> Result<(), String> {
+fn trim_unlocked(dir: &Path, max: u32) -> Result<usize, String> {
     let path = jsonl_path(dir);
     let raw = match std::fs::read_to_string(&path) {
         Ok(s) => s,
-        Err(_) => return Ok(()), // 刚写完读不到是异常情况；不致命，下次再裁
+        Err(_) => return Ok(0), // 刚写完读不到是异常情况；不致命，下次再裁
     };
     let lines: Vec<&str> = raw.lines().filter(|l| !l.trim().is_empty()).collect();
     let max = max as usize;
     if lines.len() <= max {
-        return Ok(());
+        return Ok(lines.len());
     }
     let (dropped, kept) = lines.split_at(lines.len() - max);
     let kept_audio: std::collections::HashSet<String> = kept
@@ -171,7 +210,17 @@ fn trim_in(dir: &Path, max: u32) -> Result<(), String> {
     let tmp = path.with_extension("jsonl.tmp");
     std::fs::write(&tmp, out).map_err(|e| format!("裁剪历史失败: {e}"))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("落盘历史裁剪失败: {e}"))?;
-    Ok(())
+    Ok(kept.len())
+}
+
+fn count_nonempty_lines(path: &Path) -> Result<usize, String> {
+    use std::io::BufRead as _;
+    let file = std::fs::File::open(path).map_err(|e| format!("读取历史记录数失败: {e}"))?;
+    let reader = std::io::BufReader::new(file);
+    reader.lines().try_fold(0usize, |count, line| {
+        let line = line.map_err(|e| format!("读取历史记录数失败: {e}"))?;
+        Ok(count + usize::from(!line.trim().is_empty()))
+    })
 }
 
 // ---------- 读取 / 清空 ----------
@@ -183,6 +232,12 @@ pub fn list() -> Result<Vec<HistoryRecord>, String> {
 
 /// 读取指定目录的全部记录（新→旧；坏行跳过不致命）
 pub fn list_in(dir: &Path) -> Result<Vec<HistoryRecord>, String> {
+    let state = directory_state(dir);
+    let _state = state.lock().unwrap();
+    list_unlocked(dir)
+}
+
+fn list_unlocked(dir: &Path) -> Result<Vec<HistoryRecord>, String> {
     let path = jsonl_path(dir);
     if !path.exists() {
         return Ok(Vec::new());
@@ -212,26 +267,38 @@ pub fn delete(session_id: &str, ts: &str) -> Result<(), String> {
 /// 删除指定目录中的一条记录：全读 → 过滤目标行 → 原子重写（同 trim_in 模式），
 /// 再按引用保护清理音频。记录不存在时直接返回成功（幂等，无 IO 副作用）。
 pub fn delete_in(dir: &Path, session_id: &str, ts: &str) -> Result<(), String> {
+    let state = directory_state(dir);
+    let mut state = state.lock().unwrap();
+    let removed = delete_unlocked(dir, session_id, ts)?;
+    if removed > 0 {
+        if let Some(count) = state.record_count.as_mut() {
+            *count = count.saturating_sub(removed);
+        }
+    }
+    Ok(())
+}
+
+fn delete_unlocked(dir: &Path, session_id: &str, ts: &str) -> Result<usize, String> {
     let path = jsonl_path(dir);
     if !path.exists() {
-        return Ok(());
+        return Ok(0);
     }
     let raw = std::fs::read_to_string(&path).map_err(|e| format!("读取历史文件失败: {e}"))?;
     let mut kept: Vec<String> = Vec::new();
     let mut removed_audio: Option<String> = None;
-    let mut matched = false;
+    let mut removed_count = 0usize;
     for line in raw.lines().filter(|l| !l.trim().is_empty()) {
         if let Ok(rec) = serde_json::from_str::<HistoryRecord>(line) {
             if rec.session_id == session_id && rec.ts == ts {
-                matched = true;
+                removed_count += 1;
                 removed_audio = rec.audio_file;
                 continue; // 丢弃目标行
             }
         }
         kept.push(line.to_string());
     }
-    if !matched {
-        return Ok(());
+    if removed_count == 0 {
+        return Ok(0);
     }
     let mut out = kept.join("\n");
     if !out.is_empty() {
@@ -251,11 +318,15 @@ pub fn delete_in(dir: &Path, session_id: &str, ts: &str) -> Result<(), String> {
             let _ = std::fs::remove_file(audio_dir(dir).join(&file));
         }
     }
-    Ok(())
+    Ok(removed_count)
 }
 
 /// 清空指定目录（jsonl + audio/ 目录整体删除）
 pub fn clear_in(dir: &Path) -> Result<(), String> {
+    let state = directory_state(dir);
+    let mut state = state.lock().unwrap();
+    // 任一步骤失败都让下次 append 从磁盘重新统计，避免部分清理后的缓存过期。
+    state.record_count = None;
     let path = jsonl_path(dir);
     if path.exists() {
         std::fs::remove_file(&path).map_err(|e| format!("删除历史文件失败: {e}"))?;
@@ -264,6 +335,7 @@ pub fn clear_in(dir: &Path) -> Result<(), String> {
     if adir.exists() {
         std::fs::remove_dir_all(&adir).map_err(|e| format!("删除历史音频目录失败: {e}"))?;
     }
+    state.record_count = Some(0);
     Ok(())
 }
 
@@ -278,6 +350,8 @@ pub fn write_audio_in(dir: &Path, session_id: &str, pcm: &[f32]) -> Option<Strin
     {
         return None;
     }
+    let state = directory_state(dir);
+    let _state = state.lock().unwrap();
     let adir = audio_dir(dir);
     std::fs::create_dir_all(&adir).ok()?;
     let name = format!("{session_id}.wav");
@@ -626,7 +700,10 @@ mod tests {
         .unwrap();
         delete_in(dir.path(), "a", "t1").unwrap();
         assert!(list_in(dir.path()).unwrap().is_empty());
-        assert!(jsonl_path(dir.path()).exists(), "jsonl 保留为空文件（append 可继续）");
+        assert!(
+            jsonl_path(dir.path()).exists(),
+            "jsonl 保留为空文件（append 可继续）"
+        );
         assert!(!audio_dir(dir.path()).join("a.wav").exists());
         // 删除后仍可继续追加
         append_in(
@@ -636,5 +713,89 @@ mod tests {
         )
         .unwrap();
         assert_eq!(list_in(dir.path()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn concurrent_appends_do_not_lose_or_corrupt_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Arc::new(dir.path().to_path_buf());
+        let barrier = Arc::new(std::sync::Barrier::new(33));
+        let mut workers = Vec::new();
+        for index in 0..32 {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                append_in(
+                    &path,
+                    &rec(&format!("concurrent-{index}"), HistoryOutcome::Sent),
+                    &cfg(HistoryMode::Capped, 100),
+                )
+            }));
+        }
+        barrier.wait();
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+
+        let records = list_in(&path).unwrap();
+        assert_eq!(records.len(), 32);
+        let ids: std::collections::HashSet<_> = records
+            .iter()
+            .map(|record| record.session_id.as_str())
+            .collect();
+        assert_eq!(ids.len(), 32);
+    }
+
+    #[test]
+    fn concurrent_delete_and_append_preserve_all_unrelated_records() {
+        let dir = tempfile::tempdir().unwrap();
+        for index in 0..20 {
+            append_in(
+                dir.path(),
+                &rec(&format!("old-{index}"), HistoryOutcome::Sent),
+                &cfg(HistoryMode::KeepAll, 100),
+            )
+            .unwrap();
+        }
+
+        let path = Arc::new(dir.path().to_path_buf());
+        let barrier = Arc::new(std::sync::Barrier::new(21));
+        let mut workers = Vec::new();
+        for index in 0..10 {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                delete_in(&path, &format!("old-{index}"), "2026-05-20T12:00:00Z")
+            }));
+        }
+        for index in 0..10 {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                append_in(
+                    &path,
+                    &rec(&format!("new-{index}"), HistoryOutcome::Sent),
+                    &cfg(HistoryMode::KeepAll, 100),
+                )
+            }));
+        }
+        barrier.wait();
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+
+        let records = list_in(&path).unwrap();
+        assert_eq!(records.len(), 20);
+        for index in 0..10 {
+            assert!(records
+                .iter()
+                .any(|record| record.session_id == format!("new-{index}")));
+            assert!(!records
+                .iter()
+                .any(|record| record.session_id == format!("old-{index}")));
+        }
     }
 }

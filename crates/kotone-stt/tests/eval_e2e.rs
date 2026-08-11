@@ -47,8 +47,8 @@ fn replay_fixture_across_ready_engines() {
     );
 
     println!(
-        "\n{:<26} {:>8} {:>8} {:>8}  {}",
-        "引擎", "首字 ms", "最终 ms", "CER", "最终文本"
+        "\n{:<26} {:>8} {:>8} {:>8}  最终文本",
+        "引擎", "首字 ms", "最终 ms", "CER"
     );
     for info in &ready {
         match eval::replay_at(dir.path(), &session.session_id, &info.id, &registry) {

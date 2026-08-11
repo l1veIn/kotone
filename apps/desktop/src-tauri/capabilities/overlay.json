@@ -1,0 +1,11 @@
+{
+  "identifier": "overlay",
+  "description": "Kotone 浮窗最小权限集：仅事件、窗口信息与用户拖动",
+  "windows": ["overlay"],
+  "permissions": [
+    "core:default",
+    "core:window:default",
+    "core:window:allow-start-dragging",
+    "core:event:default"
+  ]
+}

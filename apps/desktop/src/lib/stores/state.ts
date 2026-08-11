@@ -10,6 +10,7 @@
  */
 
 import { writable } from "svelte/store";
+import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "../ipc";
 
 export type KotoneState =
@@ -145,7 +146,6 @@ export async function initStateListeners(): Promise<() => void> {
   if (!isTauri) return () => {};
   if (unlistenAll) return unlistenAll;
 
-  const { listen } = await import("@tauri-apps/api/event");
   const unlisteners = await Promise.all([
     listen<StateEventPayload>("kotone://state", (e) => applyStateEvent(e.payload)),
     listen<PartialEventPayload>("kotone://partial", (e) => {

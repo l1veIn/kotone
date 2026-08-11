@@ -36,7 +36,7 @@ pub struct EngineInfo {
 }
 
 /// 会话配置（采样率固定 16kHz mono f32，另有热词、引擎专有选项等）
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionConfig {
     pub language: String,
     pub hotwords: Vec<String>,
@@ -85,8 +85,9 @@ pub trait SttEngine: Send + Sync {
     /// 模型是否已下载/可用
     fn is_ready(&self) -> bool;
     /// 预热（运行时「启动」调用）：把模型加载进内存 / 做完备性检查。
-    /// 默认空实现——无驻留状态的引擎（如 sidecar 每次识别才拉起子进程）无需实现。
-    fn warmup(&self) -> Result<(), String> {
+    /// 必须使用与后续会话相同的配置，否则共享 recognizer 会在预热时
+    /// 锁死默认语言、线程数或热词参数。无驻留状态的引擎可保持默认空实现。
+    fn warmup(&self, _cfg: &SessionConfig) -> Result<(), String> {
         Ok(())
     }
     /// 卸载（运行时「停止」调用）：释放模型内存。默认空实现。

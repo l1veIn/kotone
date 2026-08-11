@@ -66,10 +66,16 @@ pub fn list_output_devices() -> Vec<AudioDevice> {
 /// 生产实现：cpal
 pub struct CpalBackend;
 
+/// 最多缓存 2 秒 PCM。正常流式推理应远低于此延迟；超过时继续堆积只会造成
+/// 失控内存和越来越旧的识别结果，因此立即中止本次会话并提示用户。
+const PCM_QUEUE_CAPACITY: usize = 40;
+/// 电平只用于动画，保留极少量最新采样即可。
+const LEVEL_QUEUE_CAPACITY: usize = 4;
+
 impl AudioBackend for CpalBackend {
     fn start(&self, device_id: &str) -> Result<AudioHandle, String> {
-        let (pcm_tx, pcm_rx) = mpsc::unbounded_channel::<Vec<f32>>();
-        let (level_tx, level_rx) = mpsc::unbounded_channel::<f32>();
+        let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<f32>>(PCM_QUEUE_CAPACITY);
+        let (level_tx, level_rx) = mpsc::channel::<f32>(LEVEL_QUEUE_CAPACITY);
         // 采集中途故障（拔设备/驱动错误）经此上报 orchestrator，避免永久 Listening
         let (error_tx, error_rx) = mpsc::unbounded_channel::<String>();
         let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
@@ -93,7 +99,7 @@ impl AudioBackend for CpalBackend {
         });
 
         match open_rx.recv() {
-            Ok(Ok(())) => Ok(AudioHandle::with_thread(
+            Ok(Ok(())) => Ok(AudioHandle::with_bounded_thread(
                 pcm_rx, level_rx, error_rx, stop_tx, thread,
             )),
             Ok(Err(e)) => {
@@ -111,8 +117,9 @@ impl AudioBackend for CpalBackend {
 struct OpenedInput {
     stream: cpal::Stream,
     state: std::sync::Arc<std::sync::Mutex<CaptureState>>,
-    pcm_tx: mpsc::UnboundedSender<Vec<f32>>,
-    level_tx: mpsc::UnboundedSender<f32>,
+    pcm_tx: mpsc::Sender<Vec<f32>>,
+    level_tx: mpsc::Sender<f32>,
+    error_tx: mpsc::UnboundedSender<String>,
 }
 
 impl OpenedInput {
@@ -123,7 +130,7 @@ impl OpenedInput {
         self.state
             .lock()
             .unwrap()
-            .flush(&self.pcm_tx, &self.level_tx);
+            .flush(&self.pcm_tx, &self.level_tx, &self.error_tx);
     }
 }
 
@@ -144,8 +151,8 @@ fn default_config_error_message(device_name: &str, detail: &str) -> String {
 /// 在线程内打开设备并构建输入流
 fn open_stream(
     device_id: &str,
-    pcm_tx: mpsc::UnboundedSender<Vec<f32>>,
-    level_tx: mpsc::UnboundedSender<f32>,
+    pcm_tx: mpsc::Sender<Vec<f32>>,
+    level_tx: mpsc::Sender<f32>,
     error_tx: mpsc::UnboundedSender<String>,
 ) -> Result<OpenedInput, String> {
     let host = cpal::default_host();
@@ -175,19 +182,20 @@ fn open_stream(
             let state = state.clone();
             let pcm_tx = pcm_tx.clone();
             let level_tx = level_tx.clone();
-            let error_tx = error_tx.clone();
+            let data_error_tx = error_tx.clone();
+            let stream_error_tx = error_tx.clone();
             device.build_input_stream(
                 &stream_config,
                 move |data: &[f32], _| {
                     state
                         .lock()
                         .unwrap_or_else(|p| p.into_inner())
-                        .push_interleaved(data, channels, &pcm_tx, &level_tx)
+                        .push_interleaved(data, channels, &pcm_tx, &level_tx, &data_error_tx)
                 },
                 move |e| {
                     eprintln!("[kotone audio] 采集错误: {e}");
                     // 上报 orchestrator：中止会话并提示（避免永久 Listening 无感知）
-                    let _ = error_tx.send(format!("录音设备出错：{e}"));
+                    let _ = stream_error_tx.send(format!("录音设备出错：{e}"));
                 },
                 None,
             )
@@ -196,7 +204,8 @@ fn open_stream(
             let state = state.clone();
             let pcm_tx = pcm_tx.clone();
             let level_tx = level_tx.clone();
-            let error_tx = error_tx.clone();
+            let data_error_tx = error_tx.clone();
+            let stream_error_tx = error_tx.clone();
             device.build_input_stream(
                 &stream_config,
                 move |data: &[i16], _| {
@@ -207,11 +216,11 @@ fn open_stream(
                     state
                         .lock()
                         .unwrap_or_else(|p| p.into_inner())
-                        .push_interleaved(&f, channels, &pcm_tx, &level_tx);
+                        .push_interleaved(&f, channels, &pcm_tx, &level_tx, &data_error_tx);
                 },
                 move |e| {
                     eprintln!("[kotone audio] 采集错误: {e}");
-                    let _ = error_tx.send(format!("录音设备出错：{e}"));
+                    let _ = stream_error_tx.send(format!("录音设备出错：{e}"));
                 },
                 None,
             )
@@ -220,7 +229,8 @@ fn open_stream(
             let state = state.clone();
             let pcm_tx = pcm_tx.clone();
             let level_tx = level_tx.clone();
-            let error_tx = error_tx.clone();
+            let data_error_tx = error_tx.clone();
+            let stream_error_tx = error_tx.clone();
             device.build_input_stream(
                 &stream_config,
                 move |data: &[u16], _| {
@@ -231,11 +241,11 @@ fn open_stream(
                     state
                         .lock()
                         .unwrap_or_else(|p| p.into_inner())
-                        .push_interleaved(&f, channels, &pcm_tx, &level_tx);
+                        .push_interleaved(&f, channels, &pcm_tx, &level_tx, &data_error_tx);
                 },
                 move |e| {
                     eprintln!("[kotone audio] 采集错误: {e}");
-                    let _ = error_tx.send(format!("录音设备出错：{e}"));
+                    let _ = stream_error_tx.send(format!("录音设备出错：{e}"));
                 },
                 None,
             )
@@ -252,6 +262,7 @@ fn open_stream(
         state,
         pcm_tx,
         level_tx,
+        error_tx,
     })
 }
 
@@ -259,6 +270,7 @@ fn open_stream(
 struct CaptureState {
     resampler: Resampler,
     pending: Vec<f32>,
+    overrun_reported: bool,
 }
 
 impl CaptureState {
@@ -266,6 +278,7 @@ impl CaptureState {
         Self {
             resampler: Resampler::new(src_rate, TARGET_SAMPLE_RATE),
             pending: Vec::with_capacity(CHUNK_SAMPLES * 2),
+            overrun_reported: false,
         }
     }
 
@@ -274,8 +287,9 @@ impl CaptureState {
         &mut self,
         data: &[f32],
         channels: usize,
-        pcm_tx: &mpsc::UnboundedSender<Vec<f32>>,
-        level_tx: &mpsc::UnboundedSender<f32>,
+        pcm_tx: &mpsc::Sender<Vec<f32>>,
+        level_tx: &mpsc::Sender<f32>,
+        error_tx: &mpsc::UnboundedSender<String>,
     ) {
         let ch = channels.max(1);
         let mono: Vec<f32> = data
@@ -288,25 +302,53 @@ impl CaptureState {
         while self.pending.len() >= CHUNK_SAMPLES {
             let chunk: Vec<f32> = self.pending.drain(..CHUNK_SAMPLES).collect();
             let rms = (chunk.iter().map(|s| s * s).sum::<f32>() / chunk.len() as f32).sqrt();
-            // 接收端已关闭（会话结束）时静默丢弃
-            let _ = pcm_tx.send(chunk);
-            let _ = level_tx.send(rms);
+            // 音频回调线程不能等待异步消费者。队列满表示识别已落后至少 2 秒，
+            // 继续缓存只会造成无界延迟；只上报一次并由 orchestrator 中止会话。
+            match pcm_tx.try_send(chunk) {
+                Ok(()) => {
+                    let _ = level_tx.try_send(rms);
+                }
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    if !self.overrun_reported {
+                        self.overrun_reported = true;
+                        let _ = error_tx.send(
+                            "语音识别处理速度跟不上录音，本次会话已中止。请关闭占用 CPU 的程序后重试"
+                                .into(),
+                        );
+                    }
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => return,
+            }
         }
     }
 
     /// 停止采集时排出最后一个不足 50ms 的短块，避免松键丢失句末音素。
     fn flush(
         &mut self,
-        pcm_tx: &mpsc::UnboundedSender<Vec<f32>>,
-        level_tx: &mpsc::UnboundedSender<f32>,
+        pcm_tx: &mpsc::Sender<Vec<f32>>,
+        level_tx: &mpsc::Sender<f32>,
+        error_tx: &mpsc::UnboundedSender<String>,
     ) {
         if self.pending.is_empty() {
             return;
         }
         let chunk = std::mem::take(&mut self.pending);
         let rms = (chunk.iter().map(|s| s * s).sum::<f32>() / chunk.len() as f32).sqrt();
-        let _ = pcm_tx.send(chunk);
-        let _ = level_tx.send(rms);
+        match pcm_tx.try_send(chunk) {
+            Ok(()) => {
+                let _ = level_tx.try_send(rms);
+            }
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                if !self.overrun_reported {
+                    self.overrun_reported = true;
+                    let _ = error_tx.send(
+                        "语音识别处理速度跟不上录音，本次会话已中止。请关闭占用 CPU 的程序后重试"
+                            .into(),
+                    );
+                }
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {}
+        }
     }
 }
 
@@ -403,12 +445,13 @@ mod tests {
 
     #[test]
     fn capture_state_chunks_and_rms() {
-        let (pcm_tx, mut pcm_rx) = mpsc::unbounded_channel::<Vec<f32>>();
-        let (level_tx, mut level_rx) = mpsc::unbounded_channel::<f32>();
+        let (pcm_tx, mut pcm_rx) = mpsc::channel::<Vec<f32>>(32);
+        let (level_tx, mut level_rx) = mpsc::channel::<f32>(32);
+        let (error_tx, mut error_rx) = mpsc::unbounded_channel::<String>();
         let mut st = CaptureState::new(16000);
         // 推 1 秒满幅 mono（双声道交错）
         let stereo: Vec<f32> = (0..16000).flat_map(|_| [1.0f32, 1.0f32]).collect();
-        st.push_interleaved(&stereo, 2, &pcm_tx, &level_tx);
+        st.push_interleaved(&stereo, 2, &pcm_tx, &level_tx, &error_tx);
         let mut chunks = 0;
         while let Ok(c) = pcm_rx.try_recv() {
             assert_eq!(c.len(), CHUNK_SAMPLES);
@@ -421,23 +464,50 @@ mod tests {
             levels += 1;
         }
         assert_eq!(levels, 20);
+        assert!(error_rx.try_recv().is_err());
     }
 
     #[test]
     fn capture_state_flushes_short_tail_on_stop() {
-        let (pcm_tx, mut pcm_rx) = mpsc::unbounded_channel::<Vec<f32>>();
-        let (level_tx, mut level_rx) = mpsc::unbounded_channel::<f32>();
+        let (pcm_tx, mut pcm_rx) = mpsc::channel::<Vec<f32>>(4);
+        let (level_tx, mut level_rx) = mpsc::channel::<f32>(4);
+        let (error_tx, mut error_rx) = mpsc::unbounded_channel::<String>();
         let mut st = CaptureState::new(16000);
 
         // 25ms 不足一个常规 50ms chunk：旧实现会在输入流销毁时直接丢弃。
-        st.push_interleaved(&vec![0.25f32; 400], 1, &pcm_tx, &level_tx);
+        st.push_interleaved(&vec![0.25f32; 400], 1, &pcm_tx, &level_tx, &error_tx);
         assert!(pcm_rx.try_recv().is_err());
 
-        st.flush(&pcm_tx, &level_tx);
+        st.flush(&pcm_tx, &level_tx, &error_tx);
         let tail = pcm_rx.try_recv().expect("停止时应排出短尾音");
         assert_eq!(tail.len(), 400);
         assert!(tail.iter().all(|&s| (s - 0.25).abs() < 1e-6));
         assert!((level_rx.try_recv().unwrap() - 0.25).abs() < 1e-6);
         assert!(st.pending.is_empty());
+        assert!(error_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn capture_queue_overrun_is_bounded_and_reported_once() {
+        let (pcm_tx, mut pcm_rx) = mpsc::channel::<Vec<f32>>(1);
+        let (level_tx, _level_rx) = mpsc::channel::<f32>(1);
+        let (error_tx, mut error_rx) = mpsc::unbounded_channel::<String>();
+        let mut st = CaptureState::new(16000);
+
+        st.push_interleaved(
+            &vec![0.5; CHUNK_SAMPLES * 4],
+            1,
+            &pcm_tx,
+            &level_tx,
+            &error_tx,
+        );
+
+        assert!(pcm_rx.try_recv().is_ok(), "队列只保留容量内的 PCM");
+        assert!(pcm_rx.try_recv().is_err());
+        assert!(error_rx
+            .try_recv()
+            .expect("队列满必须上报")
+            .contains("处理速度"));
+        assert!(error_rx.try_recv().is_err(), "同一会话只报告一次 overrun");
     }
 }

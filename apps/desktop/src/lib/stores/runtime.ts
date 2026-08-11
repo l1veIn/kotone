@@ -7,6 +7,7 @@
  */
 
 import { writable } from "svelte/store";
+import { listen } from "@tauri-apps/api/event";
 import { getRuntimeStatus, isTauri, type RuntimeStatus } from "../ipc";
 
 export const runtimeStore = writable<RuntimeStatus | null>(null);
@@ -25,7 +26,6 @@ export async function initRuntime(): Promise<() => void> {
   }
   if (!isTauri) return () => {};
   if (unlisten) return unlisten;
-  const { listen } = await import("@tauri-apps/api/event");
   const un = await listen<RuntimeStatus>("kotone://runtime", (e) => {
     runtimeStore.set(e.payload);
   });

@@ -7,7 +7,7 @@
 //! - `is_elevated()`：OpenProcessToken + GetTokenInformation(TokenElevation)
 //! - `is_process_elevated(pid)`：OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)
 //!   + TokenElevation；OpenProcess 被拒（ERROR_ACCESS_DENIED）视为
-//!   「目标权限高于我们」的信号 → Some(true)
+//!     「目标权限高于我们」的信号 → Some(true)
 //! - `restart_as_admin()`：ShellExecuteExW "runas" 重启自身 exe（带当前参数，GUI 用）
 //! - `run_elevated(args)`：sudo 式——runas 重启自身但参数完全由调用方给定
 //!   （替换语义，CLI elevate <command> 用）

@@ -9,10 +9,15 @@
  */
 
 import { writable } from "svelte/store";
-import { logFrontendError } from "../ipc";
+import { logFrontendError, updateSettings } from "../ipc";
 import type { Settings } from "../ipc";
 
 export const settingsStore = writable<Settings | null>(null);
+/**
+ * 本进程曾检测到游戏处于独占全屏。放在设置页共享 store 中，
+ * 即使当时正在其它分页或窗口隐藏，回到通用页也不会丢失提示。
+ */
+export const fullscreenWarningStore = writable(false);
 
 export type ToastKind = "success" | "info" | "warning" | "error";
 
@@ -53,6 +58,21 @@ export function dismissToast(id: number): void {
 /** 旧布尔签名兼容：true → success（青），false → error（品红） */
 export function toast(ok: boolean, text: string): void {
   pushToast(ok ? "success" : "error", text);
+}
+
+/** 设置页通用的事务更新 + store 发布 + 用户反馈。 */
+export async function patchSettings(
+  patch: Record<string, unknown>,
+  successMessage: string,
+): Promise<boolean> {
+  try {
+    settingsStore.set(await updateSettings(patch));
+    toast(true, successMessage);
+    return true;
+  } catch (error) {
+    toast(false, `保存失败：${errText(error)}`);
+    return false;
+  }
 }
 
 export const toastInfo = (text: string): number => pushToast("info", text);

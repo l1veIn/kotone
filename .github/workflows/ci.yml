@@ -32,6 +32,8 @@ jobs:
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -53,6 +55,12 @@ jobs:
 
       - name: Verify release metadata
         run: pnpm release:verify
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint Rust workspace
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Check desktop UI
         run: pnpm check

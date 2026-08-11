@@ -165,18 +165,18 @@ mod windows_imp {
     }
 
     fn keyboard_input(vk: VIRTUAL_KEY, scan: u16, flags: KEYBD_EVENT_FLAGS) -> INPUT {
-        let mut input = INPUT::default();
-        input.r#type = INPUT_KEYBOARD;
-        input.Anonymous = INPUT_0 {
-            ki: KEYBDINPUT {
-                wVk: vk,
-                wScan: scan,
-                dwFlags: flags,
-                time: 0,
-                dwExtraInfo: 0,
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: scan,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
             },
-        };
-        input
+        }
     }
 
     fn send_inputs(inputs: &[INPUT]) -> Result<(), InjectError> {
@@ -323,8 +323,10 @@ mod windows_imp {
         unsafe {
             let snapshot: HANDLE = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
             let result = (|| {
-                let mut entry = PROCESSENTRY32W::default();
-                entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+                let mut entry = PROCESSENTRY32W {
+                    dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+                    ..Default::default()
+                };
                 Process32FirstW(snapshot, &mut entry).ok()?;
                 loop {
                     if entry.th32ProcessID == pid {
@@ -405,8 +407,10 @@ mod windows_imp {
         unsafe {
             let snapshot: HANDLE = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
             let result = (|| {
-                let mut entry = PROCESSENTRY32W::default();
-                entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+                let mut entry = PROCESSENTRY32W {
+                    dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+                    ..Default::default()
+                };
                 Process32FirstW(snapshot, &mut entry).ok()?;
                 loop {
                     let len = entry

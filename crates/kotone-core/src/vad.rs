@@ -37,7 +37,8 @@ pub trait Vad: Send {
 
 /// VAD 实例工厂（每会话一个实例，避免跨会话状态泄漏）；
 /// 模型未下载/未编译时返回清晰错误
-pub type VadFactory = Arc<dyn Fn() -> Result<Box<dyn Vad>, String> + Send + Sync>;
+pub type VadFactory =
+    Arc<dyn Fn(&crate::settings::VadConfig) -> Result<Box<dyn Vad>, String> + Send + Sync>;
 
 /// 任意长度 PCM → 定长帧切分（残留不足一帧的尾巴留到下次喂入时补齐）
 #[derive(Default)]
@@ -138,7 +139,7 @@ mod tests {
         // 再喂 800：160 + 800 = 960 → 2 帧，无残留
         let frames = s.push(&vec![0.1; 800]);
         assert_eq!(frames.len(), 2);
-        let frames = s.push(&vec![0.1; 1]);
+        let frames = s.push(&[0.1; 1]);
         assert!(frames.is_empty(), "不足一帧不出帧");
     }
 

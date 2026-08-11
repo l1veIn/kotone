@@ -193,14 +193,10 @@ pub mod imp {
         }
 
         /// 预热：显式创建共享 recognizer（模型入内存）；随后 start_session 直接复用
-        fn warmup(&self) -> Result<(), String> {
-            // 与懒加载同一路径；engineOptions 的 threads 只在创建时生效，
-            // 预热用默认线程数（SessionConfig::default 无 options）。
-            // hotwords_score 是 recognizer 级配置：预热必须读取当前设置，
-            // 否则「启动」预建的共享 recognizer 会锁死默认 3.5，改配置永不生效
-            let mut cfg = SessionConfig::default();
-            cfg.hotwords_score = kotone_core::settings::load().hotwords_score;
-            self.recognizer(&cfg).map(|_| ())
+        fn warmup(&self, cfg: &SessionConfig) -> Result<(), String> {
+            // 与懒加载同一路径；threads 与 hotwords_score 都是
+            // recognizer 级配置，必须由运行时启动快照传入。
+            self.recognizer(cfg).map(|_| ())
         }
 
         /// 卸载：释放共享 recognizer（重新「启动」或下次会话时重建）

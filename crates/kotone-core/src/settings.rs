@@ -2,7 +2,9 @@
 //!
 //! 首次运行生成默认配置；缺失字段用默认值合并，保证向前兼容。
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use crate::hotkey::HotkeyMode;
 
@@ -369,10 +371,98 @@ fn config_path() -> PathBuf {
     kotone_dir().join("config.json")
 }
 
+/// 配置加载结果。损坏配置会被移动到 `.corrupt` 备份，并通过 `warning`
+/// 交给桌面端显示；调用方不能再无声地用默认值覆盖原文件。
+#[derive(Debug)]
+pub struct SettingsLoadResult {
+    pub settings: Settings,
+    pub warning: Option<String>,
+}
+
+/// 串行化单进程内的配置修改，并保证磁盘写入、外部资源切换与内存发布按事务执行。
+///
+/// 外部资源（例如全局热键）无法和文件系统组成真正的原子事务，因此失败时会同时
+/// 尝试恢复旧资源和旧配置；内存快照只会在全部步骤成功后发布。
+pub struct SettingsRepository {
+    current: Arc<RwLock<Settings>>,
+    path: PathBuf,
+    transaction: Mutex<()>,
+}
+
+impl SettingsRepository {
+    pub fn new(current: Arc<RwLock<Settings>>) -> Self {
+        Self::new_at(current, config_path())
+    }
+
+    pub fn new_at(current: Arc<RwLock<Settings>>, path: PathBuf) -> Self {
+        Self {
+            current,
+            path,
+            transaction: Mutex::new(()),
+        }
+    }
+
+    /// 仅修改配置的常用事务。
+    pub fn update<M>(&self, mutate: M) -> Result<Settings, String>
+    where
+        M: FnOnce(&mut Settings) -> Result<(), String>,
+    {
+        self.update_with(mutate, |_, _| Ok(()), |_, _| Ok(()))
+            .map(|(_, next, ())| next)
+    }
+
+    /// 带外部资源切换的配置事务。
+    ///
+    /// 顺序为：从最新内存快照构造 next → 写盘 next → apply → 发布 next。
+    /// apply 失败时调用 rollback，并把磁盘恢复为 old；返回值同时携带 old/next，
+    /// 便于调用方在提交后更新窗口等非关键 UI 副作用。
+    pub fn update_with<M, A, R, T>(
+        &self,
+        mutate: M,
+        apply: A,
+        rollback: R,
+    ) -> Result<(Settings, Settings, T), String>
+    where
+        M: FnOnce(&mut Settings) -> Result<(), String>,
+        A: FnOnce(&Settings, &Settings) -> Result<T, String>,
+        R: FnOnce(&Settings, &Settings) -> Result<(), String>,
+    {
+        let _transaction = self.transaction.lock().unwrap();
+        let old = self.current.read().unwrap().clone();
+        let mut next = old.clone();
+        mutate(&mut next)?;
+        save_to(&self.path, &next)?;
+
+        let applied = match apply(&old, &next) {
+            Ok(value) => value,
+            Err(apply_error) => {
+                let rollback_resource_error = rollback(&old, &next).err();
+                let rollback_file_error = save_to(&self.path, &old).err();
+                let mut message = format!("应用配置失败，已回滚: {apply_error}");
+                if let Some(error) = rollback_resource_error {
+                    message.push_str(&format!("；恢复外部资源失败: {error}"));
+                }
+                if let Some(error) = rollback_file_error {
+                    message.push_str(&format!("；恢复配置文件失败: {error}"));
+                }
+                return Err(message);
+            }
+        };
+
+        *self.current.write().unwrap() = next.clone();
+        Ok((old, next, applied))
+    }
+}
+
 /// 读取配置：文件不存在时生成默认配置并落盘（首次运行）；
 /// 已存在时按默认值合并缺失字段（老版本配置向前兼容）。
 pub fn load() -> Settings {
-    load_from(&config_path())
+    load_with_diagnostic().settings
+}
+
+/// 桌面端启动使用：除配置外返回可直接展示给用户的恢复诊断。
+pub fn load_with_diagnostic() -> SettingsLoadResult {
+    load_from_with_diagnostic(&config_path())
 }
 
 /// 保存配置（原子写入：先写临时文件再重命名）
@@ -381,29 +471,85 @@ pub fn save(settings: &Settings) -> Result<(), String> {
 }
 
 /// 从指定路径读取配置（测试可用临时目录）
-pub fn load_from(path: &PathBuf) -> Settings {
+pub fn load_from(path: &Path) -> Settings {
+    load_from_with_diagnostic(path).settings
+}
+
+pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
     if !path.exists() {
         let defaults = Settings::default();
         // 首次运行落盘默认配置；失败不致命，下次启动再试
         let _ = save_to(path, &defaults);
-        return defaults;
+        return SettingsLoadResult {
+            settings: defaults,
+            warning: None,
+        };
     }
     let raw = match std::fs::read_to_string(path) {
         Ok(s) => s,
-        Err(_) => return Settings::default(),
+        Err(error) => return recover_invalid_config(path, format!("读取失败: {error}")),
     };
     // 以默认值为底、用户配置覆盖，实现缺失字段合并
     let mut merged = serde_json::to_value(Settings::default()).unwrap_or_default();
-    if let Ok(user) = serde_json::from_str::<serde_json::Value>(&raw) {
-        merge_json(&mut merged, &user);
-    }
-    let mut settings: Settings = serde_json::from_value(merged).unwrap_or_default();
+    let user = match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(user) => user,
+        Err(error) => return recover_invalid_config(path, format!("JSON 解析失败: {error}")),
+    };
+    merge_json(&mut merged, &user);
+    let mut settings: Settings = match serde_json::from_value(merged) {
+        Ok(settings) => settings,
+        Err(error) => return recover_invalid_config(path, format!("配置项不合法: {error}")),
+    };
     settings.overlay.normalize_interaction();
-    settings
+    SettingsLoadResult {
+        settings,
+        warning: None,
+    }
+}
+
+fn recover_invalid_config(path: &Path, reason: String) -> SettingsLoadResult {
+    let backup = next_corrupt_path(path);
+    let defaults = Settings::default();
+    let warning = match std::fs::rename(path, &backup) {
+        Ok(()) => {
+            let save_note = save_to(path, &defaults)
+                .err()
+                .map(|error| format!("；默认配置写入失败: {error}"))
+                .unwrap_or_default();
+            format!(
+                "配置文件损坏，已恢复默认配置。原文件已保留为 {}（{reason}）{save_note}",
+                backup.display()
+            )
+        }
+        Err(backup_error) => format!(
+            "配置文件无法读取，已在本次运行中使用默认配置，但未覆盖原文件（{reason}；备份失败: {backup_error}）"
+        ),
+    };
+    crate::log::log(&format!("settings recovery: {warning}"));
+    SettingsLoadResult {
+        settings: defaults,
+        warning: Some(warning),
+    }
+}
+
+fn next_corrupt_path(path: &Path) -> PathBuf {
+    let first = path.with_extension("json.corrupt");
+    if !first.exists() {
+        return first;
+    }
+    for index in 1..=9999 {
+        let candidate = path.with_extension(format!("json.corrupt.{index}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    path.with_extension(format!("json.corrupt.{}", std::process::id()))
 }
 
 /// 写入指定路径（原子写入）
-pub fn save_to(path: &PathBuf, settings: &Settings) -> Result<(), String> {
+pub fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
+    let save_lock = settings_file_lock(path);
+    let _save = save_lock.lock().unwrap();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {e}"))?;
     }
@@ -413,6 +559,17 @@ pub fn save_to(path: &PathBuf, settings: &Settings) -> Result<(), String> {
     std::fs::write(&tmp, json).map_err(|e| format!("写入配置失败: {e}"))?;
     std::fs::rename(&tmp, path).map_err(|e| format!("落盘配置失败: {e}"))?;
     Ok(())
+}
+
+fn settings_file_lock(path: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+    let locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    locks
+        .lock()
+        .unwrap()
+        .entry(path.to_path_buf())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
 }
 
 /// 浅层递归合并：patch 中的对象键覆盖 base，其余类型整体替换
@@ -575,7 +732,7 @@ mod tests {
             r#"{ "vad": { "threshold": 0.7 }, "hotwordsScore": 6 }"#,
         )
         .unwrap();
-        let mut s = load_from(&path);
+        let s = load_from(&path);
         assert_eq!(s.vad.threshold, 0.7);
         assert_eq!(s.vad.min_speech_ms, 50, "兄弟键保留默认");
         assert_eq!(s.vad.min_silence_ms, 50);
@@ -678,7 +835,173 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         std::fs::write(&path, "not json {{{").unwrap();
-        let s = load_from(&path);
-        assert_eq!(s.hotkey.key, "CapsLock");
+        let loaded = load_from_with_diagnostic(&path);
+        assert_eq!(loaded.settings.hotkey.key, "CapsLock");
+        assert!(loaded.warning.is_some());
+        let backup = path.with_extension("json.corrupt");
+        assert_eq!(std::fs::read_to_string(backup).unwrap(), "not json {{{");
+        assert!(path.exists(), "恢复后应写入一份新的默认配置");
+    }
+
+    #[test]
+    fn corrupt_backup_never_overwrites_an_existing_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(path.with_extension("json.corrupt"), "older broken config").unwrap();
+        std::fs::write(&path, "new broken config").unwrap();
+
+        let loaded = load_from_with_diagnostic(&path);
+        assert!(loaded.warning.is_some());
+        assert_eq!(
+            std::fs::read_to_string(path.with_extension("json.corrupt")).unwrap(),
+            "older broken config"
+        );
+        assert_eq!(
+            std::fs::read_to_string(path.with_extension("json.corrupt.1")).unwrap(),
+            "new broken config"
+        );
+    }
+
+    #[test]
+    fn unreadable_config_is_preserved_before_default_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("original"), "keep me").unwrap();
+
+        let loaded = load_from_with_diagnostic(&path);
+
+        assert!(loaded.warning.is_some());
+        assert!(path.is_file(), "恢复后的 config.json 应为默认配置文件");
+        assert_eq!(
+            std::fs::read_to_string(path.with_extension("json.corrupt").join("original")).unwrap(),
+            "keep me"
+        );
+    }
+
+    #[test]
+    fn repository_does_not_publish_or_persist_failed_external_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let old = Settings::default();
+        save_to(&path, &old).unwrap();
+        let shared = Arc::new(RwLock::new(old.clone()));
+        let repository = SettingsRepository::new_at(shared.clone(), path.clone());
+
+        let error = repository
+            .update_with(
+                |next| {
+                    next.hotkey.key = "Alt+V".into();
+                    Ok(())
+                },
+                |_, _| Err::<(), _>("模拟热键注册冲突".into()),
+                |_, _| Ok(()),
+            )
+            .unwrap_err();
+
+        assert!(error.contains("模拟热键注册冲突"));
+        assert_eq!(shared.read().unwrap().hotkey.key, "CapsLock");
+        assert_eq!(load_from(&path).hotkey.key, "CapsLock");
+    }
+
+    #[test]
+    fn repository_merges_each_serial_update_from_latest_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let old = Settings::default();
+        save_to(&path, &old).unwrap();
+        let shared = Arc::new(RwLock::new(old));
+        let repository = SettingsRepository::new_at(shared.clone(), path.clone());
+
+        repository
+            .update(|next| {
+                next.language = "en".into();
+                Ok(())
+            })
+            .unwrap();
+        repository
+            .update(|next| {
+                next.audio_device_id = "mic-2".into();
+                Ok(())
+            })
+            .unwrap();
+
+        let memory = shared.read().unwrap().clone();
+        let disk = load_from(&path);
+        assert_eq!(memory.language, "en");
+        assert_eq!(memory.audio_device_id, "mic-2");
+        assert_eq!(disk.language, memory.language);
+        assert_eq!(disk.audio_device_id, memory.audio_device_id);
+    }
+
+    #[test]
+    fn repository_does_not_publish_when_config_save_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::create_dir(&path).unwrap(); // rename(tmp, directory) 必然失败
+        let shared = Arc::new(RwLock::new(Settings::default()));
+        let repository = SettingsRepository::new_at(shared.clone(), path);
+
+        let result = repository.update(|next| {
+            next.language = "en".into();
+            Ok(())
+        });
+
+        assert!(result.is_err());
+        assert_eq!(shared.read().unwrap().language, "zh");
+    }
+
+    #[test]
+    fn repository_serializes_concurrent_mutations() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let initial = Settings::default();
+        save_to(&path, &initial).unwrap();
+        let shared = Arc::new(RwLock::new(initial));
+        let repository = Arc::new(SettingsRepository::new_at(shared.clone(), path.clone()));
+        let mut workers = Vec::new();
+        for _ in 0..16 {
+            let repository = repository.clone();
+            workers.push(std::thread::spawn(move || {
+                repository.update(|next| {
+                    next.history.max_records += 1;
+                    Ok(())
+                })
+            }));
+        }
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+
+        assert_eq!(shared.read().unwrap().history.max_records, 1016);
+        assert_eq!(load_from(&path).history.max_records, 1016);
+    }
+
+    #[test]
+    fn save_to_serializes_the_shared_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Arc::new(dir.path().join("config.json"));
+        let barrier = Arc::new(std::sync::Barrier::new(17));
+        let mut workers = Vec::new();
+        for index in 0..16 {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            workers.push(std::thread::spawn(move || {
+                let settings = Settings {
+                    language: format!("lang-{index}"),
+                    ..Settings::default()
+                };
+                barrier.wait();
+                save_to(&path, &settings)
+            }));
+        }
+        barrier.wait();
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+
+        let loaded = load_from(&path);
+        assert!(loaded.language.starts_with("lang-"));
+        assert!(!path.with_extension("json.tmp").exists());
     }
 }

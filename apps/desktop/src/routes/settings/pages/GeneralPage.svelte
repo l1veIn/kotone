@@ -18,7 +18,13 @@
   } from "../../../lib/ipc";
   import { captureHotkey } from "../../../lib/hotkeyCapture";
   import { combosConflict } from "../../../lib/hotkeyCombo";
-  import { settingsStore, toast, errText } from "../../../lib/stores/ui";
+  import {
+    settingsStore,
+    fullscreenWarningStore,
+    patchSettings,
+    toast,
+    errText,
+  } from "../../../lib/stores/ui";
   import { runtimeStore } from "../../../lib/stores/runtime";
   import Toggle from "../../../lib/components/Toggle.svelte";
   import RuntimeButton from "../../../lib/components/RuntimeButton.svelte";
@@ -28,13 +34,11 @@
 
   let devices = $state<AudioDevice[]>([]);
   let elevation = $state<ElevationStatus | null>(null);
-  /** 独占全屏检测到后保持提示，避免切回设置页导致游戏最小化、状态瞬间消失。 */
-  let fullscreenWarning = $state(false);
   let restarting = $state(false);
 
   function applyGameCompatibilityStatus(status: ElevationStatus) {
     elevation = status;
-    if (status.activeGameFullscreen === true) fullscreenWarning = true;
+    if (status.activeGameFullscreen === true) fullscreenWarningStore.set(true);
   }
 
   /** 提权重启接力标记：旧进程退出前落 localStorage，新进程检测到已提权后 toast 并清除 */
@@ -95,15 +99,6 @@
   const needsElevation = $derived(
     elevation !== null && !elevation.elevated && elevation.activeGameElevated === true,
   );
-
-  async function patch(patchObj: Record<string, unknown>, okText: string) {
-    try {
-      settingsStore.set(await updateSettings(patchObj));
-      toast(true, okText);
-    } catch (e) {
-      toast(false, `保存失败：${errText(e)}`);
-    }
-  }
 
   async function onRestartAsAdmin() {
     restarting = true;
@@ -323,7 +318,7 @@
       </section>
     {/if}
 
-    {#if fullscreenWarning}
+    {#if $fullscreenWarningStore}
       <section class="mt-4 flex items-center gap-3 rounded-xl bg-amber-400/10 p-4 ring-1 ring-amber-300/40">
         <div class="min-w-0 flex-1">
           <p class="text-sm font-semibold text-amber-200">检测到游戏正在使用全屏模式</p>
@@ -333,7 +328,7 @@
         </div>
         <button
           class="shrink-0 rounded-lg bg-white/10 px-3 py-2 text-xs font-semibold text-white/75 ring-1 ring-white/15 transition hover:bg-white/20"
-          onclick={() => (fullscreenWarning = false)}
+          onclick={() => fullscreenWarningStore.set(false)}
         >
           知道了
         </button>
@@ -475,7 +470,7 @@
               ? 'bg-kotone-cyan/12 ring-kotone-cyan/60 shadow-glow-cyan'
               : 'bg-kotone-card/60 ring-white/10 hover:bg-kotone-card'}"
             onclick={() =>
-              void patch(
+              void patchSettings(
                 { overlay: { visibility: opt.id } },
                 `悬浮窗已切换：${opt.name}`,
               )}
@@ -505,7 +500,7 @@
               ? 'bg-kotone-cyan/12 text-kotone-cyan ring-kotone-cyan/60'
               : 'bg-white/5 text-white/60 ring-white/10 hover:bg-white/10'}"
             onclick={() =>
-              void patch(
+              void patchSettings(
                 { overlay: { position: opt.id } },
                 `悬浮窗位置已切换：${opt.name}`,
               )}
@@ -524,7 +519,7 @@
           label="允许鼠标操作和拖动悬浮窗"
           desc="开启时可拖动并操作按钮；关闭后自动锁定位置，鼠标会穿透到游戏"
           onchange={(v) =>
-            void patch(
+            void patchSettings(
               { overlay: { draggable: v, clickThrough: !v } },
               v ? "悬浮窗已允许操作和拖动" : "悬浮窗已锁定并开启鼠标穿透",
             )}

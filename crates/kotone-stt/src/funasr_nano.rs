@@ -72,6 +72,12 @@ impl FunAsrNanoEngine {
     }
 }
 
+impl Default for FunAsrNanoEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SttEngine for FunAsrNanoEngine {
     fn id(&self) -> &'static str {
         self.0.id()
@@ -89,8 +95,8 @@ impl SttEngine for FunAsrNanoEngine {
         self.0.is_ready()
     }
 
-    fn warmup(&self) -> Result<(), String> {
-        self.0.warmup()
+    fn warmup(&self, cfg: &SessionConfig) -> Result<(), String> {
+        self.0.warmup(cfg)
     }
 
     fn unload(&self) {

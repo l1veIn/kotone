@@ -1,6 +1,7 @@
 //! Kotone Rust 核心：模块组装、共享状态与 IPC 命令。
 //! 职责划分见 docs/development.md §5.1；IPC 契约见 §5.3（类型对齐 src/lib/ipc.ts）。
 
+mod compatibility;
 mod diagnostics;
 mod hotkey;
 mod runtime;
@@ -16,25 +17,25 @@ use kotone_core::inject::{CancelToken, FocusBackend, InjectError, Injector};
 use kotone_core::interaction::{effective_hotkey_mode, InteractionPolicy};
 use kotone_core::orchestrator::{Emitter, Orchestrator};
 use kotone_core::profile::{
-    self, format_hotwords_export, merge_hotwords, parse_hotwords_import, GameProfile,
-    HotwordMergeReport, ProfileDeleteOutcome,
+    self, format_hotwords_export, GameProfile, HotwordMergeReport, ProfileDeleteOutcome,
 };
 use kotone_core::runtime::RuntimePhase;
 use kotone_core::settings::{
     self, OverlayConfig, OverlayPosition, OverlayStyle, OverlayVisibility, Settings,
+    SettingsRepository,
 };
 use kotone_core::stt::{EngineInfo, EngineRegistry};
 use kotone_core::{log, process_log};
 use kotone_platform_windows::inject::{WinFocusBackend, WindowsInjector};
-use kotone_platform_windows::{
-    audio as platform_audio, elevation, fullscreen, inject as platform_inject,
-};
+use kotone_platform_windows::{audio as platform_audio, elevation, fullscreen};
 use kotone_stt::model;
 use runtime::{RuntimeManager, RuntimeStatus};
 
 /// 全局共享状态：settings 双端共享，orchestrator 是唯一业务状态所有者
 pub struct SharedState {
     pub settings: Arc<RwLock<Settings>>,
+    settings_repository: SettingsRepository,
+    settings_load_warning: Mutex<Option<String>>,
     pub orchestrator: Arc<Orchestrator>,
     pub engines: Arc<EngineRegistry>,
     pub injector: Arc<dyn Injector>,
@@ -265,28 +266,43 @@ impl Emitter for TauriEmitter {
                     .try_state::<RuntimeManager>()
                     .map(|rt| rt.phase() == RuntimePhase::Running)
                     .unwrap_or(false);
-                match overlay_window_action(visibility, state, continuous, running) {
-                    OnDemandOverlayAction::Show => {
-                        // Error 可能从 Idle 直接到达（例如音频设备打开失败），不能
-                        // 假设 Listening 已经显示过窗口；它会保持到用户明确确认。
-                        show_window_no_focus(&win);
+                let action = overlay_window_action(visibility, state, continuous, running);
+                // 独占全屏下激活置顶浮窗可能使 Direct3D 游戏最小化。
+                // 会话可继续全程靠热键/声音操作，但对本次 Show 做安全拦截，
+                // 并让设置根页记住提示（即使当时窗口隐藏/不在通用页）。
+                let block_for_fullscreen = action == OnDemandOverlayAction::Show
+                    && fullscreen::is_exclusive_fullscreen_active() == Some(true);
+                if block_for_fullscreen {
+                    hide_window(&win);
+                    let _ = self.app.emit(
+                        "kotone://fullscreen-warning",
+                        serde_json::json!({ "exclusiveFullscreen": true }),
+                    );
+                    log::log("overlay show blocked: exclusive fullscreen game is active");
+                } else {
+                    match action {
+                        OnDemandOverlayAction::Show => {
+                            // Error 可能从 Idle 直接到达（例如音频设备打开失败），不能
+                            // 假设 Listening 已经显示过窗口；它会保持到用户明确确认。
+                            show_window_no_focus(&win);
+                        }
+                        OnDemandOverlayAction::HideSuccessAfterDwell => {
+                            let app = self.app.clone();
+                            let vis_gen = self.vis_gen.clone();
+                            tauri::async_runtime::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                                if vis_gen.load(std::sync::atomic::Ordering::SeqCst) != gen {
+                                    return; // 600ms 内已有新状态事件（新会话/停止），不藏
+                                }
+                                if let Some(win) = app.get_webview_window("overlay") {
+                                    hide_window(&win);
+                                }
+                            });
+                        }
+                        OnDemandOverlayAction::Hide => hide_window(&win),
+                        // always + Running + idle，以及 continuous（solo）的 success：保持现状。
+                        OnDemandOverlayAction::Keep => {}
                     }
-                    OnDemandOverlayAction::HideSuccessAfterDwell => {
-                        let app = self.app.clone();
-                        let vis_gen = self.vis_gen.clone();
-                        tauri::async_runtime::spawn(async move {
-                            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-                            if vis_gen.load(std::sync::atomic::Ordering::SeqCst) != gen {
-                                return; // 600ms 内已有新状态事件（新会话/停止），不藏
-                            }
-                            if let Some(win) = app.get_webview_window("overlay") {
-                                hide_window(&win);
-                            }
-                        });
-                    }
-                    OnDemandOverlayAction::Hide => hide_window(&win),
-                    // always + Running + idle，以及 continuous（solo）的 success：保持现状。
-                    OnDemandOverlayAction::Keep => {}
                 }
             }
         } else if event == "kotone://channel" {
@@ -499,8 +515,10 @@ fn layout_overlay_window<R: tauri::Runtime>(
         } else {
             MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
         };
-        let mut mi = MONITORINFO::default();
-        mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        let mut mi = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
         if !GetMonitorInfoW(monitor, &mut mi).as_bool() {
             return;
         }
@@ -623,7 +641,7 @@ fn log_frontend_error(context: String, message: String) {
         .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
         .take(64)
         .collect();
-    let message = diagnostics::redact_home(&message.replace('\r', " ").replace('\n', " "));
+    let message = diagnostics::redact_home(&message.replace(['\r', '\n'], " "));
     log::log(&format!("frontend error [{context}]: {message}"));
 }
 
@@ -634,6 +652,20 @@ fn get_settings(state: tauri::State<SharedState>) -> Settings {
     state.settings.read().unwrap().clone()
 }
 
+/// 启动时配置恢复诊断；主设置页读取后以 toast 明确告知用户备份路径。
+#[tauri::command]
+fn get_settings_load_warning(state: tauri::State<SharedState>) -> Option<String> {
+    state.settings_load_warning.lock().unwrap().take()
+}
+
+fn hotkey_registration_changed(old: &Settings, next: &Settings) -> bool {
+    old.hotkey.key != next.hotkey.key
+        || effective_hotkey_mode(old) != effective_hotkey_mode(next)
+        || old.hotkey_backend != next.hotkey_backend
+        || old.channel_cycle_hotkey != next.channel_cycle_hotkey
+        || old.resend_last_hotkey != next.resend_last_hotkey
+}
+
 /// 局部更新配置；热键变化时触发重注册
 #[tauri::command]
 fn update_settings(
@@ -641,26 +673,48 @@ fn update_settings(
     state: tauri::State<SharedState>,
     patch: serde_json::Value,
 ) -> Result<Settings, String> {
-    let (old_hotkey, old_overlay, updated) = {
-        let mut guard = state.settings.write().unwrap();
-        let old_hotkey = (
-            guard.hotkey.key.clone(),
-            effective_hotkey_mode(&guard),
-            guard.hotkey_backend,
-            guard.channel_cycle_hotkey.clone(),
-            guard.resend_last_hotkey.clone(),
-        );
-        let old_overlay = guard.overlay.clone();
-        let mut merged =
-            serde_json::to_value(&*guard).map_err(|e| format!("序列化配置失败: {e}"))?;
-        settings::merge_json(&mut merged, &patch);
-        let mut next: Settings =
-            serde_json::from_value(merged).map_err(|e| format!("配置项不合法: {e}"))?;
-        next.overlay.normalize_interaction();
-        *guard = next.clone();
-        (old_hotkey, old_overlay, next)
-    };
-    settings::save(&updated)?;
+    let running = app
+        .try_state::<RuntimeManager>()
+        .map(|rt| rt.phase() == RuntimePhase::Running)
+        .unwrap_or(false);
+    let manager = app.try_state::<HotkeyManager>();
+    let (old, updated, ()) = state.settings_repository.update_with(
+        |next| {
+            let mut merged =
+                serde_json::to_value(&*next).map_err(|e| format!("序列化配置失败: {e}"))?;
+            settings::merge_json(&mut merged, &patch);
+            *next = serde_json::from_value(merged).map_err(|e| format!("配置项不合法: {e}"))?;
+            next.overlay.normalize_interaction();
+            Ok(())
+        },
+        |old, next| {
+            if running && hotkey_registration_changed(old, next) {
+                if let Some(manager) = manager.as_ref() {
+                    manager.register_with_settings(
+                        &app,
+                        &next.hotkey.key,
+                        effective_hotkey_mode(next),
+                        next,
+                    )?;
+                }
+            }
+            Ok(())
+        },
+        |old, next| {
+            if running && hotkey_registration_changed(old, next) {
+                if let Some(manager) = manager.as_ref() {
+                    manager.register_with_settings(
+                        &app,
+                        &old.hotkey.key,
+                        effective_hotkey_mode(old),
+                        old,
+                    )?;
+                }
+            }
+            Ok(())
+        },
+    )?;
+    let old_overlay = old.overlay;
 
     // overlay 配置变化 → 立即重排几何/点击穿透/显隐 + 通知前端（无需重启）
     if old_overlay != updated.overlay {
@@ -683,27 +737,6 @@ fn update_settings(
         let _ = app.emit("kotone://overlay-config", &updated.overlay);
     }
 
-    // 热键键位/生效模式/后端变化 → 重注册。生效模式由 interactionMode 预设推导
-    // （effective_hotkey_mode），所以切预设（如 push-to-talk）也会走到这里。
-    // 仅 Running 时注册热键：Stopped 语义就是「按热键无反应」，
-    // 配置变更会在下次 start_runtime 时生效。
-    let next_mode = effective_hotkey_mode(&updated);
-    let hotkey_changed = old_hotkey.0 != updated.hotkey.key
-        || old_hotkey.1 != next_mode
-        || old_hotkey.2 != updated.hotkey_backend
-        // 频道切换热键（ADR-008）变化也要重注册（HotkeyManager 注册时一并应用）
-        || old_hotkey.3 != updated.channel_cycle_hotkey
-        // 重发最近一条热键变化也要重注册
-        || old_hotkey.4 != updated.resend_last_hotkey;
-    let running = app
-        .try_state::<RuntimeManager>()
-        .map(|rt| rt.phase() == RuntimePhase::Running)
-        .unwrap_or(false);
-    if hotkey_changed && running {
-        if let Some(mgr) = app.try_state::<HotkeyManager>() {
-            mgr.register(&app, &updated.hotkey.key, next_mode)?;
-        }
-    }
     // 引擎/模型/模式可能经 patch 变更 → restartNeeded 推导依赖最新配置，推送全量状态
     runtime::snapshot_and_emit(&app, None);
     Ok(updated)
@@ -721,15 +754,12 @@ fn save_overlay_position(
     let position = win
         .outer_position()
         .map_err(|e| format!("读取悬浮窗位置失败: {e}"))?;
-    let updated = {
-        let mut guard = state.settings.write().unwrap();
-        guard.overlay.position = OverlayPosition::Custom;
-        guard.overlay.custom_x = Some(position.x);
-        guard.overlay.custom_y = Some(position.y);
-        let updated = guard.clone();
-        settings::save(&updated)?;
-        updated
-    };
+    let updated = state.settings_repository.update(|next| {
+        next.overlay.position = OverlayPosition::Custom;
+        next.overlay.custom_x = Some(position.x);
+        next.overlay.custom_y = Some(position.y);
+        Ok(())
+    })?;
     use tauri::Emitter as _;
     let _ = app.emit("kotone://overlay-config", &updated.overlay);
     Ok(updated)
@@ -742,12 +772,13 @@ fn list_audio_devices() -> Vec<AudioDevice> {
 
 #[tauri::command]
 fn set_audio_device(state: tauri::State<SharedState>, id: String) -> Result<(), String> {
-    let updated = {
-        let mut guard = state.settings.write().unwrap();
-        guard.audio_device_id = id;
-        guard.clone()
-    };
-    settings::save(&updated)
+    state
+        .settings_repository
+        .update(|next| {
+            next.audio_device_id = id;
+            Ok(())
+        })
+        .map(|_| ())
 }
 
 // ---------- STT 引擎（§5.3） ----------
@@ -766,12 +797,10 @@ fn set_stt_engine(
     if state.engines.get(&id).is_none() {
         return Err(format!("未注册的 STT 引擎: {id}"));
     }
-    let updated = {
-        let mut guard = state.settings.write().unwrap();
-        guard.stt_engine = id;
-        guard.clone()
-    };
-    settings::save(&updated)?;
+    state.settings_repository.update(|next| {
+        next.stt_engine = id;
+        Ok(())
+    })?;
     // Running 期间换引擎 → restartNeeded 推导变化，推送全量状态
     runtime::snapshot_and_emit(&app, None);
     Ok(())
@@ -827,13 +856,7 @@ fn export_hotwords(profile_id: String, path: String) -> Result<u32, String> {
 /// 从 UTF-8 文本导入热词（合并去重，追加到现有列表末尾），返回合并报告。
 #[tauri::command]
 fn import_hotwords(profile_id: String, path: String) -> Result<HotwordMergeReport, String> {
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("读取 {path} 失败：{e}"))?;
-    let mut p = profile::get(&profile_id).ok_or_else(|| format!("profile 不存在：{profile_id}"))?;
-    let incoming = parse_hotwords_import(&text);
-    let (merged, report) = merge_hotwords(&p.hotwords, &incoming);
-    p.hotwords = merged;
-    profile::save(&p)?;
-    Ok(report)
+    profile::import_hotwords_from_file(&profile_id, std::path::Path::new(&path))
 }
 
 /// 导出整包 profile 为 .kprofile ZIP（profile.json + icon.*）。
@@ -862,54 +885,9 @@ fn get_profile_icon(profile_id: String) -> Result<Option<Vec<u8>>, String> {
 
 // ---------- 提权（UIPI 方案，§10 R-1） ----------
 
-/// 游戏兼容状态：提权链路 + 当前激活 profile 是否处于独占全屏。
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ElevationStatus {
-    pub elevated: bool,
-    pub active_game_elevated: Option<bool>,
-    /// 当前游戏是否处于独占全屏；无活动游戏或系统调用失败时为 null。
-    pub active_game_fullscreen: Option<bool>,
-    /// 当前平台是否支持提权语义（仅 Windows；其他平台前端据此不弹提权提示）
-    pub supported: bool,
-}
-
 #[tauri::command]
-fn get_elevation_status(state: tauri::State<SharedState>) -> ElevationStatus {
-    let elevated = elevation::is_elevated();
-    // 激活 profile 的进程名 → 运行中的 pid → TokenElevation
-    // 链路修复（resolve_active_game_pid）：profile 文件缺失时回退内置 profile，
-    // 可用列表 = 磁盘 profile + 未覆盖的内置 profile
-    let active_game_pid = {
-        let guard = state.settings.read().unwrap();
-        let mut available = profile::list();
-        for b in [GameProfile::builtin_lol(), GameProfile::builtin_generic()] {
-            if !available.iter().any(|p| p.id == b.id) {
-                available.push(b);
-            }
-        }
-        elevation::resolve_active_game_pid(
-            guard.active_profile_id.as_deref(),
-            &available,
-            &mut |name| platform_inject::find_pid_by_name(name),
-        )
-    };
-    let active_game_elevated = active_game_pid.and_then(elevation::is_process_elevated);
-    // Shell 状态是桌面级信号；同时要求活动 profile 的 PID 正处于前台，避免把
-    // 后台运行的游戏与另一个独占全屏 Direct3D 应用拼成误报。
-    let active_game_fullscreen = active_game_pid.and_then(|pid| {
-        if platform_inject::foreground_pid() == Some(pid) {
-            fullscreen::is_exclusive_fullscreen_active()
-        } else {
-            Some(false)
-        }
-    });
-    ElevationStatus {
-        elevated,
-        active_game_elevated,
-        active_game_fullscreen,
-        supported: cfg!(windows),
-    }
+fn get_elevation_status(state: tauri::State<SharedState>) -> compatibility::ElevationStatus {
+    compatibility::elevation_status(&state)
 }
 
 /// 热键注册状态：设置页热键分区展示「注册失败，可能被其他程序/其他 Kotone 实例占用」
@@ -1086,18 +1064,9 @@ fn set_active_model(
     engine_id: String,
     model_id: String,
 ) -> Result<(), String> {
-    model::set_active(&engine_id, &model_id)?;
-    // model::set_active 直接读写 config.json；同步 SharedState 内存副本，
-    // restartNeeded 推导（快照 vs 当前配置）以内存为准
-    {
-        let mut guard = state.settings.write().unwrap();
-        if let Some(opts) = guard.engine_options.as_object_mut() {
-            let entry = opts
-                .entry(engine_id.clone())
-                .or_insert_with(|| serde_json::json!({}));
-            entry["model"] = serde_json::Value::String(model_id);
-        }
-    }
+    state
+        .settings_repository
+        .update(|next| model::set_active_in(next, &engine_id, &model_id))?;
     // Running 期间换活动模型 → restartNeeded = true（不自动重启，用户显式重启生效）
     runtime::snapshot_and_emit(&app, None);
     Ok(())
@@ -1174,24 +1143,23 @@ fn set_models_dir(
     if running {
         return Err("引擎正在运行，请先停止引擎再迁移模型目录（设置页或托盘「停止引擎」）".into());
     }
-    let (old_dir, new_dir) = {
-        let settings = state.settings.read().unwrap();
-        let old = model::models_dir_from(&settings);
-        let mut next = settings.clone();
-        next.models.dir = dir.trim().to_string();
-        (old, model::models_dir_from(&next))
-    };
-    if old_dir == new_dir {
-        return Err("新目录与当前目录相同".into());
-    }
-    let report = model::migrate_dir_contents(&old_dir, &new_dir)?;
-
-    let updated = {
-        let mut guard = state.settings.write().unwrap();
-        guard.models.dir = dir.trim().to_string();
-        guard.clone()
-    };
-    settings::save(&updated)?;
+    let requested_dir = dir.trim().to_string();
+    let (_, updated, report) = state.settings_repository.update_with(
+        |next| {
+            next.models.dir = requested_dir;
+            Ok(())
+        },
+        |old, next| {
+            let old_dir = model::models_dir_from(old);
+            let new_dir = model::models_dir_from(next);
+            if old_dir == new_dir {
+                return Err("新目录与当前目录相同".into());
+            }
+            model::migrate_dir_contents(&old_dir, &new_dir)
+        },
+        |_, _| Ok(()),
+    )?;
+    let new_dir = model::models_dir_from(&updated);
     // 模型路径变化影响就绪判断与 restartNeeded 推导，推送状态
     runtime::snapshot_and_emit(&app, None);
     Ok(ModelsDirMigration {
@@ -1208,18 +1176,18 @@ fn delete_model(
     state: tauri::State<SharedState>,
     id: String,
 ) -> Result<model::DeleteOutcome, String> {
-    let outcome = model::delete(&id)?;
-    if outcome.was_active {
-        // model::delete 清了磁盘配置的 engineOptions[engine].model；同步内存副本
-        let mut guard = state.settings.write().unwrap();
-        if let Some(opts) = guard.engine_options.as_object_mut() {
-            for entry in opts.values_mut().filter_map(|e| e.as_object_mut()) {
-                if entry.get("model").and_then(|m| m.as_str()) == Some(id.as_str()) {
-                    entry.remove("model");
-                }
-            }
-        }
-    }
+    let was_active = std::cell::Cell::new(false);
+    state.settings_repository.update_with(
+        |next| {
+            was_active.set(model::clear_active_model(next, &id)?);
+            Ok(())
+        },
+        |_, next| model::delete_files_from(next, &id),
+        |_, _| Ok(()),
+    )?;
+    let outcome = model::DeleteOutcome {
+        was_active: was_active.get(),
+    };
     runtime::snapshot_and_emit(&app, None);
     Ok(outcome)
 }
@@ -1492,8 +1460,9 @@ pub fn run() {
             }
 
             // 首次运行：默认配置 + 内置 profile 落盘（~/.kotone/）
-            let settings = settings::load();
-            let _ = settings::save(&settings);
+            let loaded_settings = settings::load_with_diagnostic();
+            let settings_load_warning = loaded_settings.warning;
+            let settings = loaded_settings.settings;
             let mut app_started =
                 process_log::ProcessEvent::new(process_log::app_session_id(), "app_started");
             app_started.context.engine_id = Some(settings.stt_engine.clone());
@@ -1523,6 +1492,7 @@ pub fn run() {
             }
 
             let settings = Arc::new(RwLock::new(settings));
+            let settings_repository = SettingsRepository::new(settings.clone());
             let mut registry = EngineRegistry::new();
             kotone_stt::register_builtin(&mut registry);
             let engines = Arc::new(registry);
@@ -1554,6 +1524,8 @@ pub fn run() {
 
             app.manage(SharedState {
                 settings: settings.clone(),
+                settings_repository,
+                settings_load_warning: Mutex::new(settings_load_warning),
                 orchestrator: orchestrator.clone(),
                 engines,
                 injector,
@@ -1561,6 +1533,7 @@ pub fn run() {
             app.manage(HotkeyManager::new(app.handle(), orchestrator.clone()));
             app.manage(RuntimeManager::new());
             app.manage(ResourceMonitor(Mutex::new(sysinfo::System::new())));
+            compatibility::start_fullscreen_monitor(app.handle().clone());
 
             for label in ["main", "overlay"] {
                 if let Some(win) = app.get_webview_window(label) {
@@ -1600,6 +1573,7 @@ pub fn run() {
             log_frontend_error,
             get_startup_options,
             get_settings,
+            get_settings_load_warning,
             update_settings,
             list_audio_devices,
             set_audio_device,

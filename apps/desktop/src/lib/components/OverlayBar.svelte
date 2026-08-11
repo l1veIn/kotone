@@ -18,7 +18,6 @@
   import {
     confirmSend,
     cancelSession,
-    simulateSend,
     getSettings,
     isTauri,
     saveOverlayPosition,
@@ -42,6 +41,8 @@
   let actionError = $state("");
   /** 重试后的本地提示 */
   let actionHint = $state("");
+  /** IPC 往返期间立即锁住发送入口；后端状态事件到达前也不能重复提交。 */
+  let sendPending = $state(false);
   /** preview 提示中的热键名（动态读配置，读取失败回退 CapsLock） */
   let hotkeyLabel = $state("CapsLock");
   /** overlay.style：true = 胶囊布局（窗口几何由后端 SetWindowPos 居中靠下重排） */
@@ -138,11 +139,15 @@
   });
 
   async function onConfirm() {
+    if (sendPending) return;
+    sendPending = true;
     actionError = "";
     try {
       await confirmSend();
     } catch (e) {
       actionError = String(e);
+    } finally {
+      sendPending = false;
     }
   }
 
@@ -155,8 +160,9 @@
     }
   }
 
-  /** 错误重试：发送中失败的文本走 simulate_send 重发，然后回待机 */
+  /** 错误重试：沿用 orchestrator 保留的文本、profile、频道与目标窗口。 */
   async function onRetry() {
+    if (sendPending) return;
     actionError = "";
     actionHint = "";
     const text = $appState.errorText ?? $appState.finalText;
@@ -164,12 +170,14 @@
       await onCancel();
       return;
     }
+    sendPending = true;
     try {
-      await simulateSend(text);
+      await confirmSend();
       actionHint = "已重试发送";
-      await cancelSession();
     } catch (e) {
       actionError = String(e);
+    } finally {
+      sendPending = false;
     }
   }
 
@@ -242,6 +250,7 @@
         <button
           class="shrink-0 rounded-full bg-kotone-pink px-2.5 py-0.5 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95"
           onclick={() => void onConfirm()}
+          disabled={sendPending}
         >
           发送
         </button>
@@ -271,6 +280,7 @@
           <button
             class="shrink-0 rounded-full bg-kotone-pink/80 px-2.5 py-0.5 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95"
             onclick={() => void onRetry()}
+            disabled={sendPending}
           >
             重试
           </button>
@@ -359,6 +369,7 @@
         <button
           class="rounded-lg bg-kotone-pink px-3 py-1 text-xs font-semibold text-white shadow-glow-pink transition hover:brightness-110 active:scale-95"
           onclick={() => void onConfirm()}
+          disabled={sendPending}
         >
           发送 ⏎
         </button>
@@ -419,6 +430,7 @@
           <button
             class="rounded-lg bg-kotone-pink/80 px-2.5 py-1 text-xs font-semibold text-white transition hover:brightness-110 active:scale-95"
             onclick={() => void onRetry()}
+            disabled={sendPending}
           >
             重试
           </button>

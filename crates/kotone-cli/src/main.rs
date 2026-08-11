@@ -797,8 +797,8 @@ fn cmd_eval_list() -> i32 {
                 return 0;
             }
             println!(
-                "{:<20} {:<26} {:>7} {:>9} {:>8} {:<4} {}",
-                "会话 ID", "引擎", "音频 s", "partials", "最终 ms", "标注", "最终文本"
+                "{:<20} {:<26} {:>7} {:>9} {:>8} {:<4} 最终文本",
+                "会话 ID", "引擎", "音频 s", "partials", "最终 ms", "标注"
             );
             for s in &sessions {
                 let audio_s = format!("{:.1}", s.audio_ms as f64 / 1000.0);
@@ -886,8 +886,8 @@ async fn cmd_eval_replay(session_id: &str, engine: Option<String>) -> i32 {
                 return 1;
             }
             println!(
-                "{:<26} {:>8} {:>8} {:>8}  {}",
-                "引擎", "首字 ms", "最终 ms", "CER", "最终文本"
+                "{:<26} {:>8} {:>8} {:>8}  最终文本",
+                "引擎", "首字 ms", "最终 ms", "CER"
             );
             let mut failed = 0;
             for info in &ready {
@@ -1507,8 +1507,8 @@ fn cmd_log_list(limit: usize, json: bool) -> i32 {
         return 0;
     }
     println!(
-        "{:<22} {:<26} {:>7} {:<10} {}",
-        "时间", "引擎", "音频 s", "结局", "最终文本"
+        "{:<22} {:<26} {:>7} {:<10} 最终文本",
+        "时间", "引擎", "音频 s", "结局"
     );
     for r in records.iter().take(limit) {
         let outcome = match r.outcome {

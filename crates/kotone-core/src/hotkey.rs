@@ -1065,10 +1065,7 @@ mod tests {
         up(&mut m, VK_LMENU);
         // 松开后再次按：再次触发
         down(&mut m, VK_LMENU);
-        assert_eq!(
-            down(&mut m, VK_F1 + 8).event,
-            Some(HookEvent::ResendLast)
-        );
+        assert_eq!(down(&mut m, VK_F1 + 8).event, Some(HookEvent::ResendLast));
         up(&mut m, VK_F1 + 8);
         up(&mut m, VK_LMENU);
     }
@@ -1118,10 +1115,7 @@ mod tests {
         // 主键改键不清掉重发键
         m.set_config(parse_hotkey("F8").unwrap(), HotkeyMode::Toggle);
         down(&mut m, VK_LMENU);
-        assert_eq!(
-            down(&mut m, VK_F1 + 8).event,
-            Some(HookEvent::ResendLast)
-        );
+        assert_eq!(down(&mut m, VK_F1 + 8).event, Some(HookEvent::ResendLast));
         up(&mut m, VK_F1 + 8);
         up(&mut m, VK_LMENU);
         // 清除后不再触发

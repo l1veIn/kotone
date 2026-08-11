@@ -42,6 +42,12 @@ impl XAsrEngine {
     }
 }
 
+impl Default for XAsrEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SttEngine for XAsrEngine {
     fn id(&self) -> &'static str {
         self.0.id()
@@ -59,8 +65,8 @@ impl SttEngine for XAsrEngine {
         self.0.is_ready()
     }
 
-    fn warmup(&self) -> Result<(), String> {
-        self.0.warmup()
+    fn warmup(&self, cfg: &SessionConfig) -> Result<(), String> {
+        self.0.warmup(cfg)
     }
 
     fn unload(&self) {
@@ -184,8 +190,9 @@ mod tests {
             TAIL_PADDING_MS * 16,
             "16kHz 每秒 16000 采样"
         );
+        let tail_padding_ms = TAIL_PADDING_MS;
         assert!(
-            TAIL_PADDING_MS >= 480,
+            tail_padding_ms >= 480,
             "尾帧须覆盖 X-ASR 480ms chunk 的 lookahead：{TAIL_PADDING_MS}"
         );
         assert!(
@@ -211,7 +218,7 @@ mod tests {
             eprintln!("X-ASR 模型未下载，跳过真机热词冒烟");
             return;
         }
-        e.warmup().expect("X-ASR 预热失败");
+        e.warmup(&SessionConfig::default()).expect("X-ASR 预热失败");
         let hotwords = std::env::var("KOTONE_TEST_HOTWORDS")
             .ok()
             .map(|value| {

@@ -37,17 +37,17 @@ mod imp {
     }
 
     impl SileroVad {
-        pub fn new() -> Result<Self, String> {
+        pub fn new(vad_settings: &kotone_core::settings::VadConfig) -> Result<Self, String> {
             if !crate::model::vad_model_ready() {
                 return Err("silero VAD 模型未下载。请运行 kotone-cli download silero-vad".into());
             }
             let model = crate::model::vad_model_path();
             let mut config = VadModelConfig::default();
             config.silero_vad.model = Some(model.to_string_lossy().into_owned());
-            // 帧级判定参数来自 settings.vad（每会话新建实例时读取，改动即时生效）；
+            // 帧级判定参数来自 orchestrator 的 SharedState 快照；
+            // 每会话新建实例，改动即时生效，且不产生额外磁盘读取。
             // 判停逻辑仍归 core tracker（vad_silence_ms）
-            let (threshold, min_speech_sec, min_silence_sec) =
-                silero_params(&kotone_core::settings::load().vad);
+            let (threshold, min_speech_sec, min_silence_sec) = silero_params(vad_settings);
             config.silero_vad.threshold = threshold;
             config.silero_vad.min_speech_duration = min_speech_sec;
             config.silero_vad.min_silence_duration = min_silence_sec;
@@ -83,7 +83,7 @@ mod imp {
 
     /// orchestrator 注入用工厂（每会话一个 SileroVad 实例）
     pub fn silero_factory() -> VadFactory {
-        Arc::new(|| Ok(Box::new(SileroVad::new()?) as Box<dyn Vad>))
+        Arc::new(|settings| Ok(Box::new(SileroVad::new(settings)?) as Box<dyn Vad>))
     }
 }
 
@@ -106,7 +106,7 @@ mod tests {
         if !crate::model::vad_model_ready() {
             return;
         }
-        let mut vad = SileroVad::new().unwrap();
+        let mut vad = SileroVad::new(&kotone_core::settings::VadConfig::default()).unwrap();
         for _ in 0..20 {
             let speech = vad.push_frame(&vec![0.0f32; 480]).unwrap();
             assert!(!speech, "纯静音不应判定为语音");

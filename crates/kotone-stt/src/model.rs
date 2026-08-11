@@ -11,7 +11,9 @@
 //! `silero-vad` 分支作 CLI 兜底与旧文件清理。
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
 use kotone_core::settings;
 
@@ -151,8 +153,7 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
         ],
     },
     // SenseVoice（非流式、多语言）：model.int8.onnx 的 SHA256 取自 HF resolve
-    // 头 X-Linked-ETag（LFS sha256，2025-01 核对）；tokens.txt 为 git 内小文件，
-    // 无 LFS oid，仅按大小校验（同 zipformer tokens.txt 惯例）
+    // 固定到不可变提交 2365bae...；tokens.txt SHA256 由该提交内容实算。
     MultiFileModel {
         id: "sense-voice-zh-en-ja-ko-yue-2024-07-17",
         engine_id: "sherpa-onnx-sensevoice",
@@ -161,14 +162,14 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
         files: &[
             ModelFile {
                 name: "model.int8.onnx",
-                url: "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/model.int8.onnx",
                 sha256: Some("c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"),
                 size_bytes: 239_233_841,
             },
             ModelFile {
                 name: "tokens.txt",
-                url: "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/tokens.txt",
-                sha256: None,
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/tokens.txt",
+                sha256: Some("f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"),
                 size_bytes: 315_894,
             },
         ],
@@ -176,8 +177,8 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
         file_mirrors: &[],
     },
     // FunASR-Nano（非流式，encoder_adaptor + LLM + embedding）：HF 逐文件直下。
-    // SHA256 取自 HF resolve 响应头 X-Linked-ETag（LFS sha256，2026-07 核对）；
-    // merges.txt 为 git 内小文件（git sha1），仅按大小校验。tokenizer 传 Qwen3-0.6B 目录。
+    // 固定到不可变提交 6f16bd3...；merges.txt SHA256 由该提交内容实算。
+    // tokenizer 传 Qwen3-0.6B 目录。
     // 许可证：FunASR 系自定义 Model License（见 HF 仓库 LICENSE）。
     MultiFileModel {
         id: "funasr-nano-int8-2025-12-30",
@@ -187,37 +188,37 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
         files: &[
             ModelFile {
                 name: "encoder_adaptor.int8.onnx",
-                url: "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/main/encoder_adaptor.int8.onnx",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/6f16bd378457e13f36ccf3910df9017f96c346fb/encoder_adaptor.int8.onnx",
                 sha256: Some("f36dea2e30fbc33b5db1d7a7265cc976c5e5586c77b042d5adb1ad27c72db422"),
                 size_bytes: 237_792_748,
             },
             ModelFile {
                 name: "llm.int8.onnx",
-                url: "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/main/llm.int8.onnx",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/6f16bd378457e13f36ccf3910df9017f96c346fb/llm.int8.onnx",
                 sha256: Some("dfbf9aa3be41bccc257587f151e15c63fbe1b549f2b517f5ccd5bdce3bf4322a"),
                 size_bytes: 600_356_593,
             },
             ModelFile {
                 name: "embedding.int8.onnx",
-                url: "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/main/embedding.int8.onnx",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/6f16bd378457e13f36ccf3910df9017f96c346fb/embedding.int8.onnx",
                 sha256: Some("95e61cd0c9c3b9543339a4cf973c95c116815e745ccc1e0285cbd81f76d18644"),
                 size_bytes: 155_584_380,
             },
             ModelFile {
                 name: "Qwen3-0.6B/merges.txt",
-                url: "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/main/Qwen3-0.6B/merges.txt",
-                sha256: None,
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/6f16bd378457e13f36ccf3910df9017f96c346fb/Qwen3-0.6B/merges.txt",
+                sha256: Some("8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"),
                 size_bytes: 1_671_853,
             },
             ModelFile {
                 name: "Qwen3-0.6B/tokenizer.json",
-                url: "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/main/Qwen3-0.6B/tokenizer.json",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/6f16bd378457e13f36ccf3910df9017f96c346fb/Qwen3-0.6B/tokenizer.json",
                 sha256: Some("aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"),
                 size_bytes: 11_422_654,
             },
             ModelFile {
                 name: "Qwen3-0.6B/vocab.json",
-                url: "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/main/Qwen3-0.6B/vocab.json",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/6f16bd378457e13f36ccf3910df9017f96c346fb/Qwen3-0.6B/vocab.json",
                 sha256: Some("ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"),
                 size_bytes: 2_776_833,
             },
@@ -226,6 +227,79 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
         file_mirrors: &[],
     },
 ];
+
+#[derive(Clone)]
+struct IntegrityCacheEntry {
+    len: u64,
+    modified: Option<SystemTime>,
+    sha256: String,
+}
+
+static INTEGRITY_CACHE: OnceLock<Mutex<std::collections::HashMap<PathBuf, IntegrityCacheEntry>>> =
+    OnceLock::new();
+
+fn integrity_cache() -> &'static Mutex<std::collections::HashMap<PathBuf, IntegrityCacheEntry>> {
+    INTEGRITY_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+fn invalidate_integrity_cache(path: &std::path::Path) {
+    integrity_cache().lock().unwrap().remove(path);
+}
+
+/// 同一进程内避免设置页反复列举模型时重复哈希数百 MB 的 ONNX 文件。首次
+/// 检查（以及长度/mtime 变化后）仍会读取完整文件；缓存不落盘，重启必定复核。
+fn sha256_file_cached(path: &std::path::Path) -> Result<String, String> {
+    let before = fs::metadata(path).map_err(|e| format!("无法读取 {}：{e}", path.display()))?;
+    let modified = before.modified().ok();
+    let cache = integrity_cache();
+    if let Some(entry) = cache.lock().unwrap().get(path) {
+        if entry.len == before.len() && entry.modified == modified {
+            return Ok(entry.sha256.clone());
+        }
+    }
+
+    let sha256 = download::sha256_file(path)?;
+    let after = fs::metadata(path).map_err(|e| format!("无法读取 {}：{e}", path.display()))?;
+    if before.len() != after.len() || modified != after.modified().ok() {
+        return Err(format!("校验期间文件发生变化：{}", path.display()));
+    }
+    cache.lock().unwrap().insert(
+        path.to_path_buf(),
+        IntegrityCacheEntry {
+            len: after.len(),
+            modified,
+            sha256: sha256.clone(),
+        },
+    );
+    Ok(sha256)
+}
+
+fn verify_file_integrity(
+    path: &std::path::Path,
+    expected_size: u64,
+    expected_sha256: &str,
+) -> Result<(), String> {
+    let actual_size = fs::metadata(path).map_err(|_| "缺失".to_string())?.len();
+    if actual_size != expected_size {
+        return Err(format!(
+            "大小不符：期望 {expected_size} 字节，实际 {actual_size} 字节"
+        ));
+    }
+    let actual = sha256_file_cached(path)?;
+    if !actual.eq_ignore_ascii_case(expected_sha256) {
+        return Err(format!(
+            "SHA256 不符：期望 {expected_sha256}，实际 {actual}"
+        ));
+    }
+    Ok(())
+}
+
+fn verify_model_file(path: &std::path::Path, file: &ModelFile) -> Result<(), String> {
+    let expected = file
+        .sha256
+        .ok_or_else(|| "模型清单缺少 SHA256".to_string())?;
+    verify_file_integrity(path, file.size_bytes, expected)
+}
 
 /// 指定 sherpa 系引擎清单中的默认模型（该引擎清单首条；无清单时 None）
 pub fn multi_file_default_model(engine_id: &str) -> Option<&'static str> {
@@ -263,11 +337,9 @@ pub fn vad_model_path() -> PathBuf {
     models_dir().join(VAD_MODEL_FILE)
 }
 
-/// silero VAD 模型就绪（存在且大小匹配）
+/// silero VAD 模型就绪（存在且大小、SHA256 均匹配）
 pub fn vad_model_ready() -> bool {
-    fs::metadata(vad_model_path())
-        .map(|md| md.len() == VAD_MODEL_SIZE)
-        .unwrap_or(false)
+    verify_file_integrity(&vad_model_path(), VAD_MODEL_SIZE, VAD_MODEL_SHA256).is_ok()
 }
 
 /// 确保 VAD 模型已落盘（本体分发兜底：应用启动/切到 VAD 模式时调用）。
@@ -279,10 +351,7 @@ pub fn ensure_vad_model() -> Result<bool, String> {
 /// 可传 models 目录的内部实现（models_dir 依赖全局配置，测试注入临时目录隔离）
 fn ensure_vad_model_in(models: &PathBuf) -> Result<bool, String> {
     let dest = models.join(VAD_MODEL_FILE);
-    if fs::metadata(&dest)
-        .map(|md| md.len() == VAD_MODEL_SIZE)
-        .unwrap_or(false)
-    {
+    if verify_file_integrity(&dest, VAD_MODEL_SIZE, VAD_MODEL_SHA256).is_ok() {
         return Ok(false);
     }
     fs::create_dir_all(models).map_err(|e| format!("无法创建目录 {}：{e}", models.display()))?;
@@ -290,15 +359,10 @@ fn ensure_vad_model_in(models: &PathBuf) -> Result<bool, String> {
     let tmp = models.join(format!("{VAD_MODEL_FILE}.tmp"));
     fs::write(&tmp, VAD_BUNDLED_BYTES)
         .map_err(|e| format!("写入 VAD 模型失败 {}：{e}", tmp.display()))?;
+    invalidate_integrity_cache(&dest);
     fs::rename(&tmp, &dest).map_err(|e| format!("落盘 VAD 模型失败 {}：{e}", dest.display()))?;
-    let size = fs::metadata(&dest)
-        .map_err(|e| format!("读取 VAD 模型失败 {}：{e}", dest.display()))?
-        .len();
-    if size != VAD_MODEL_SIZE {
-        return Err(format!(
-            "VAD 模型大小不符：期望 {VAD_MODEL_SIZE}，实际 {size}"
-        ));
-    }
+    verify_file_integrity(&dest, VAD_MODEL_SIZE, VAD_MODEL_SHA256)
+        .map_err(|e| format!("VAD 模型校验失败：{e}"))?;
     Ok(true)
 }
 
@@ -310,33 +374,35 @@ pub fn multi_model_dir(model_id: &str) -> Option<PathBuf> {
         .map(|m| models_dir().join(m.dir))
 }
 
-/// 多文件模型是否齐备（全部文件存在且大小匹配）
+/// 多文件模型是否齐备（全部文件存在且大小、SHA256 均匹配）
 pub fn multi_model_ready(model_id: &str) -> bool {
     multi_model_missing(model_id).is_empty()
 }
 
-/// 多文件模型齐备性检查的明细：返回缺失/大小不符的文件描述列表（空 = 齐备）。
+/// 按给定配置中的模型目录检查齐备性，避免设置事务期间再次从磁盘读取另一版本配置。
+pub fn multi_model_ready_from(s: &settings::Settings, model_id: &str) -> bool {
+    multi_model_missing_in(&models_dir_from(s), model_id).is_empty()
+}
+
+/// 多文件模型齐备性检查的明细：返回缺失/完整性不符的文件描述列表（空 = 齐备）。
 /// 用于启动失败时把「到底缺哪个文件」写进日志与错误消息——0.1.5 曾出现
 /// 运行中 stop/start 后误报「模型未下载」，布尔检查无法定位原因。
 pub fn multi_model_missing(model_id: &str) -> Vec<String> {
+    multi_model_missing_in(&models_dir(), model_id)
+}
+
+fn multi_model_missing_in(models: &Path, model_id: &str) -> Vec<String> {
     let Some(m) = SHERPA_MODELS.iter().find(|m| m.id == model_id) else {
         return vec![format!("未知模型 id: {model_id}")];
     };
-    let dir = models_dir().join(m.dir);
+    let dir = models.join(m.dir);
     m.files
         .iter()
-        .filter_map(|f| {
-            let path = dir.join(f.name);
-            match fs::metadata(&path) {
-                Ok(md) if md.len() == f.size_bytes => None,
-                Ok(md) => Some(format!(
-                    "{}（大小不符：期望 {} 字节，实际 {} 字节）",
-                    f.name,
-                    f.size_bytes,
-                    md.len()
-                )),
-                Err(_) => Some(format!("{}（缺失）", f.name)),
-            }
+        .filter_map(|file| {
+            let path = dir.join(file.name);
+            verify_model_file(&path, file)
+                .err()
+                .map(|error| format!("{}（{error}）", file.name))
         })
         .collect()
 }
@@ -414,10 +480,8 @@ pub fn list() -> Result<Vec<ModelInfo>, String> {
 /// 下载源策略（镜像 / 回退）取 settings.download，见 download.rs。
 /// 全局互斥 + 取消标记（P2-⑦）：并发重复下载被拒绝；cancel_download 可中断。
 pub fn download(id: &str, progress: Progress<'_>) -> Result<(), String> {
-    download::begin_download().map_err(|e| e.to_string())?;
-    let result = download_inner(id, progress);
-    download::end_download();
-    result
+    let _download_guard = download::begin_download()?;
+    download_inner(id, progress)
 }
 
 /// 请求取消当前下载（幂等；Tauri IPC 用）
@@ -509,11 +573,8 @@ fn download_manifest_files(
     let mut done: u64 = 0;
     for f in m.files {
         let dest = dir.join(f.name);
-        // 已存在且大小匹配 → 跳过（重跑时天然续传）
-        if fs::metadata(&dest)
-            .map(|md| md.len() == f.size_bytes)
-            .unwrap_or(false)
-        {
+        // 只有完整 SHA256 匹配才跳过；同大小损坏/被替换的文件必须重下。
+        if verify_model_file(&dest, f).is_ok() {
             done += f.size_bytes;
             progress(done, Some(total));
             continue;
@@ -530,6 +591,7 @@ fn download_manifest_files(
             },
             cfg,
         )?;
+        invalidate_integrity_cache(&dest);
         done += f.size_bytes;
         progress(done, Some(total));
     }
@@ -563,10 +625,7 @@ fn download_file_mirror(
     let mut done = 0u64;
     for f in m.files {
         let dest = dir.join(f.name);
-        if fs::metadata(&dest)
-            .map(|md| md.len() == f.size_bytes)
-            .unwrap_or(false)
-        {
+        if verify_model_file(&dest, f).is_ok() {
             done += f.size_bytes;
             progress(done, Some(total));
             continue;
@@ -577,6 +636,7 @@ fn download_file_mirror(
             progress(base + d, Some(total));
         })
         .map_err(|e| format!("{} 下载 {} 失败：{e}", mirror.base_url, f.name))?;
+        invalidate_integrity_cache(&dest);
         done += f.size_bytes;
         progress(done, Some(total));
     }
@@ -618,8 +678,8 @@ fn download_archive(
 fn download_archive_inner(
     m: &MultiFileModel,
     archive: &ArchiveSource,
-    tar_path: &PathBuf,
-    dir: &PathBuf,
+    tar_path: &Path,
+    dir: &Path,
     progress: Progress<'_>,
     cfg: &settings::DownloadConfig,
 ) -> Result<(), String> {
@@ -655,6 +715,7 @@ fn download_archive_inner(
             fs::create_dir_all(parent)
                 .map_err(|e| format!("无法创建目录 {}：{e}", parent.display()))?;
         }
+        invalidate_integrity_cache(&out);
         entry
             .unpack(&out)
             .map_err(|e| format!("解压 {} 失败：{e}", f.name))?;
@@ -679,15 +740,7 @@ fn download_archive_inner(
                 md.len()
             ));
         }
-        if let Some(expected) = f.sha256 {
-            let actual = download::sha256_file(&out)?;
-            if !actual.eq_ignore_ascii_case(expected) {
-                return Err(format!(
-                    "文件 {} SHA256 校验失败：期望 {expected}，实际 {actual}",
-                    f.name
-                ));
-            }
-        }
+        verify_model_file(&out, f).map_err(|error| format!("文件 {} 校验失败：{error}", f.name))?;
     }
     Ok(())
 }
@@ -925,7 +978,7 @@ pub fn migrate_dir_contents(src: &PathBuf, dst: &PathBuf) -> Result<MigrateRepor
             // - 同名目录：保守处理，不合并不删除，记 failed 交用户处理。
             let src_is_file = entry.path().is_file();
             let same_content = src_is_file
-                && fs::metadata(&entry.path())
+                && fs::metadata(entry.path())
                     .and_then(|s| fs::metadata(&target).map(|t| (s.len(), t.len())))
                     .map(|(a, b)| a == b)
                     .unwrap_or(false)
@@ -946,7 +999,7 @@ pub fn migrate_dir_contents(src: &PathBuf, dst: &PathBuf) -> Result<MigrateRepor
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
                 let conflict = dst.join(format!("{name}.conflict-{ts}"));
-                match fs::rename(&entry.path(), &conflict) {
+                match fs::rename(entry.path(), &conflict) {
                     Ok(()) => {
                         kotone_core::log::log(&format!(
                             "模型迁移：目标已有同名不同内容文件，源保留为 {}",
@@ -1016,22 +1069,36 @@ pub struct DeleteOutcome {
 /// 多文件模型删整个目录；active 模型被删时清 engineOptions 的 active 标记
 /// （回退引擎默认模型）。
 pub fn delete(id: &str) -> Result<DeleteOutcome, String> {
-    delete_files_in(&models_dir(), id)?;
-
-    // active 标记清除：被删模型恰是该引擎当前活动模型时
-    let engine_id = engine_of(id).ok_or_else(|| format!("未知模型：{id}"))?;
-    let mut outcome = DeleteOutcome::default();
-    if id != VAD_MODEL_ID && active_model(engine_id) == id {
-        let mut s = settings::load();
-        if let Some(opts) = s.engine_options.as_object_mut() {
-            if let Some(entry) = opts.get_mut(engine_id).and_then(|e| e.as_object_mut()) {
-                entry.remove("model");
-            }
-        }
+    let mut s = settings::load();
+    let was_active = clear_active_model(&mut s, id)?;
+    delete_files_from(&s, id)?;
+    if was_active {
         settings::save(&s)?;
-        outcome.was_active = true;
     }
+    let outcome = DeleteOutcome { was_active };
     Ok(outcome)
+}
+
+/// 只删除给定配置所指模型目录中的文件，不读写 config.json。
+pub fn delete_files_from(s: &settings::Settings, id: &str) -> Result<(), String> {
+    delete_files_in(&models_dir_from(s), id)
+}
+
+/// 若 id 是当前活动模型，则从配置快照移除 active 标记。返回是否发生修改。
+pub fn clear_active_model(s: &mut settings::Settings, id: &str) -> Result<bool, String> {
+    let engine_id = engine_of(id).ok_or_else(|| format!("未知模型：{id}"))?;
+    if id == VAD_MODEL_ID || active_model_from(s, engine_id) != id {
+        return Ok(false);
+    }
+    if let Some(opts) = s.engine_options.as_object_mut() {
+        if let Some(entry) = opts
+            .get_mut(engine_id)
+            .and_then(|entry| entry.as_object_mut())
+        {
+            entry.remove("model");
+        }
+    }
+    Ok(true)
 }
 
 /// 模型所属引擎（VAD 返回其伪引擎 ID）
@@ -1046,7 +1113,7 @@ fn engine_of(id: &str) -> Option<&'static str> {
 }
 
 /// 只删文件不动配置（models 基目录注入，便于测试）
-fn delete_files_in(models: &PathBuf, id: &str) -> Result<(), String> {
+fn delete_files_in(models: &Path, id: &str) -> Result<(), String> {
     if id == VAD_MODEL_ID {
         remove_if_exists(&models.join(VAD_MODEL_FILE))?;
         return Ok(());
@@ -1075,6 +1142,17 @@ fn remove_if_exists(p: &PathBuf) -> Result<bool, String> {
 /// 切换引擎的活动模型：写入 config.json 的 engineOptions[engine_id].model。
 /// 模型文件须已下载（否则切了也用不了）。
 pub fn set_active(engine_id: &str, model_id: &str) -> Result<(), String> {
+    let mut s = settings::load();
+    set_active_in(&mut s, engine_id, model_id)?;
+    settings::save(&s)
+}
+
+/// 在调用方提供的配置快照上切换活动模型，不自行读写 config.json。
+pub fn set_active_in(
+    s: &mut settings::Settings,
+    engine_id: &str,
+    model_id: &str,
+) -> Result<(), String> {
     if SHERPA_MODELS.iter().any(|m| m.engine_id == engine_id) {
         if !SHERPA_MODELS
             .iter()
@@ -1085,14 +1163,13 @@ pub fn set_active(engine_id: &str, model_id: &str) -> Result<(), String> {
                 model_ids().join(", ")
             ));
         }
-        if !multi_model_ready(model_id) {
+        if !multi_model_ready_from(s, model_id) {
             return Err(format!("模型 {model_id} 尚未下载，请先下载再切换"));
         }
     } else {
         return Err(format!("引擎 {engine_id} 暂不支持模型切换"));
     }
 
-    let mut s = settings::load();
     let opts = s
         .engine_options
         .as_object_mut()
@@ -1101,7 +1178,7 @@ pub fn set_active(engine_id: &str, model_id: &str) -> Result<(), String> {
         .entry(engine_id.to_string())
         .or_insert_with(|| serde_json::json!({}));
     entry["model"] = serde_json::Value::String(model_id.to_string());
-    settings::save(&s)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1156,9 +1233,29 @@ mod tests {
         assert!(VAD_MODEL_SHA256.chars().all(|c| c.is_ascii_hexdigit()));
         assert!(VAD_MODEL_URL.starts_with("https://"));
         assert!(VAD_MODEL_URL.ends_with(VAD_MODEL_FILE));
-        assert!(VAD_MODEL_SIZE > 100_000);
+        let expected_size = VAD_MODEL_SIZE;
+        assert!(expected_size > 100_000);
         // 内嵌字节与清单一致（本体分发的就是清单钉死的那个文件）
         assert_eq!(VAD_BUNDLED_BYTES.len() as u64, VAD_MODEL_SIZE);
+    }
+
+    #[test]
+    fn manifest_integrity_rejects_same_size_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tokens.txt");
+        fs::write(&path, b"hello kotone").unwrap();
+        let file = ModelFile {
+            name: "tokens.txt",
+            url: "https://example.invalid/tokens.txt",
+            sha256: Some("5ea673601ae0ff62c361e4ef7c54faeefd3462fec6d90f2b295ba0758762e772"),
+            size_bytes: 12,
+        };
+        assert!(verify_model_file(&path, &file).is_ok());
+
+        fs::write(&path, b"HELLO KOTONE").unwrap();
+        invalidate_integrity_cache(&path);
+        let error = verify_model_file(&path, &file).unwrap_err();
+        assert!(error.contains("SHA256 不符"), "error: {error}");
     }
 
     // ---------- VAD 本体分发：ensure_vad_model ----------
@@ -1184,18 +1281,15 @@ mod tests {
     }
 
     #[test]
-    fn ensure_vad_model_keeps_existing_ready_file() {
+    fn ensure_vad_model_replaces_same_size_corruption() {
         let tmp = tempfile::tempdir().unwrap();
         let models = tmp.path().join("models");
         fs::create_dir_all(&models).unwrap();
-        // 已有文件大小匹配（如下载版）→ 视为就绪，不覆盖
+        // 同大小但哈希不符也必须覆盖，不能把损坏文件误判为就绪。
         let dest = models.join(VAD_MODEL_FILE);
         fs::write(&dest, vec![0xABu8; VAD_MODEL_SIZE as usize]).unwrap();
-        assert_eq!(ensure_vad_model_in(&models), Ok(false));
-        assert_eq!(
-            fs::read(&dest).unwrap(),
-            vec![0xABu8; VAD_MODEL_SIZE as usize]
-        );
+        assert_eq!(ensure_vad_model_in(&models), Ok(true));
+        assert_eq!(fs::read(&dest).unwrap(), VAD_BUNDLED_BYTES);
 
         // 大小不符（残缺文件）→ 重新解包覆盖
         fs::write(&dest, b"truncated").unwrap();
@@ -1255,10 +1349,14 @@ mod tests {
                 assert!(f.size_bytes > 0, "{}", f.name);
                 // 文件名不得含路径穿越
                 assert!(!f.name.contains(".."), "{} 文件名不得含 ..", f.name);
-                if let Some(s) = f.sha256 {
-                    assert_eq!(s.len(), 64, "{} sha256 应 64 hex", f.name);
-                    assert!(s.chars().all(|c| c.is_ascii_hexdigit()), "{}", f.name);
-                }
+                let sha256 = f.sha256.expect("每个模型文件都必须固定 SHA256");
+                assert_eq!(sha256.len(), 64, "{} sha256 应 64 hex", f.name);
+                assert!(sha256.chars().all(|c| c.is_ascii_hexdigit()), "{}", f.name);
+                assert!(
+                    !f.url.contains("/resolve/main/"),
+                    "{} URL 不得跟随 main",
+                    f.name
+                );
             }
         }
         // 关键文件齐备：encoder/decoder/joiner/tokens

@@ -4,6 +4,7 @@
 //! 存储布局（~/.kotone/eval/）：
 //! - `<sessionId>.json` + `<sessionId>.wav`：录档（wav 固定 16kHz/16bit/mono）
 //! - `replays/<sessionId>__<engineId>.json`：回放结果缓存（report 优先复用）
+//!
 //! 容量：只保留最近 200 个会话，超出连同 wav/replay 缓存一起清理。
 //!
 //! 依赖纪律：core 不认识 kotone-stt，回放所需引擎实例经 `EngineRegistry`

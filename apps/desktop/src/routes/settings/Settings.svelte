@@ -5,8 +5,22 @@
    * 共享 settingsStore / toast（lib/stores/ui.ts）；IPC 全部走 lib/ipc.ts。
    */
   import { onMount } from "svelte";
-  import { getSettings, getStartupOptions, getElevationStatus, isTauri } from "../../lib/ipc";
-  import { settingsStore, toast, errText, AUTO_ADMIN_PROMPT_FLAG } from "../../lib/stores/ui";
+  import { listen } from "@tauri-apps/api/event";
+  import {
+    getSettings,
+    getSettingsLoadWarning,
+    getStartupOptions,
+    getElevationStatus,
+    isTauri,
+  } from "../../lib/ipc";
+  import {
+    settingsStore,
+    fullscreenWarningStore,
+    toast,
+    toastWarn,
+    errText,
+    AUTO_ADMIN_PROMPT_FLAG,
+  } from "../../lib/stores/ui";
   import { initRuntime } from "../../lib/stores/runtime";
   import { checkForUpdates } from "../../lib/updater";
   import Toasts from "../../lib/components/Toasts.svelte";
@@ -69,8 +83,13 @@
     // runtime store 独立初始化（kotone://runtime 事件订阅 + 初始拉取）
     void initRuntime();
     try {
-      const [s, startup] = await Promise.all([getSettings(), getStartupOptions()]);
+      const [s, startup, settingsWarning] = await Promise.all([
+        getSettings(),
+        getStartupOptions(),
+        getSettingsLoadWarning(),
+      ]);
       settingsStore.set(s);
+      if (settingsWarning) toastWarn(settingsWarning);
       showOnboarding =
         startup.onboarding === "always" ||
         (startup.onboarding === "auto" && !s.ui.firstRunCompleted);
@@ -79,6 +98,7 @@
       // 第二段（提权）：第一段的重启成功后（localStorage 接力标记），询问是否启动时自动请求。
       if (isTauri) {
         const st = await getElevationStatus().catch(() => null);
+        if (st?.activeGameFullscreen === true) fullscreenWarningStore.set(true);
         showElevationPrompt =
           st !== null &&
           st.supported &&
@@ -104,13 +124,24 @@
     // 启动后静默检测一次更新（离线/无 release 不打扰用户）
     const updateTimer = setTimeout(() => void checkForUpdates(), 3000);
     let unlisten: (() => void) | undefined;
-    void import("@tauri-apps/api/event")
-      .then(({ listen }) => listen("kotone://open-onboarding", () => (showOnboarding = true)))
-      .then((un) => (unlisten = un));
+    void listen("kotone://open-onboarding", () => (showOnboarding = true)).then(
+      (un) => (unlisten = un),
+    );
     return () => {
       clearTimeout(updateTimer);
       unlisten?.();
     };
+  });
+
+  // 独占全屏下后端会拦截浮窗显示，并发送持久到共享 store 的提示事件。
+  // 监听放在设置根组件，不依赖用户当时是否停留在「通用」分页。
+  onMount(() => {
+    if (!isTauri) return;
+    let unlisten: (() => void) | undefined;
+    void listen("kotone://fullscreen-warning", () => fullscreenWarningStore.set(true)).then(
+      (un) => (unlisten = un),
+    );
+    return () => unlisten?.();
   });
 </script>
 

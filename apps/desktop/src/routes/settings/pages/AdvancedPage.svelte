@@ -34,7 +34,13 @@
     type ModelInfo,
     type ModelsDirInfo,
   } from "../../../lib/ipc";
-  import { settingsStore, toast, toastWarn, errText } from "../../../lib/stores/ui";
+  import {
+    settingsStore,
+    patchSettings,
+    toast,
+    toastWarn,
+    errText,
+  } from "../../../lib/stores/ui";
   import { runtimeStore } from "../../../lib/stores/runtime";
   import { spotlight } from "../../../lib/actions/spotlight";
   import Toggle from "../../../lib/components/Toggle.svelte";
@@ -183,7 +189,7 @@
   async function onChangeHistoryDir() {
     const sel = await openDialog({ directory: true, title: "选择历史记录位置" }).catch(() => null);
     if (!sel) return; // 用户取消
-    await patch({ history: { dir: sel } }, "历史目录已切换");
+    await patchSettings({ history: { dir: sel } }, "历史目录已切换");
   }
 
   async function onOpenHistoryDir() {
@@ -315,24 +321,14 @@
   /** 高级调参区（VAD 帧级判定 + 热词权重）：默认折叠，避免干扰 */
   let showAdvancedTuning = $state(false);
 
-  /** 通用局部配置更新。 */
-  async function patch(patchObj: Record<string, unknown>, okText: string) {
-    try {
-      settingsStore.set(await updateSettings(patchObj));
-      toast(true, okText);
-    } catch (e) {
-      toast(false, `保存失败：${errText(e)}`);
-    }
-  }
-
   async function onHotkeyBackendChange(e: Event) {
     const hotkeyBackend = (e.target as HTMLSelectElement).value;
-    await patch({ hotkeyBackend }, "热键兼容模式已更新");
+    await patchSettings({ hotkeyBackend }, "热键兼容模式已更新");
     hotkeyStatus = await getHotkeyStatus().catch(() => hotkeyStatus);
   }
 
   async function saveDownloadProxy() {
-    await patch(
+    await patchSettings(
       { download: { ghProxy: downloadProxyDraft.trim() } },
       "下载代理地址已保存",
     );
@@ -508,7 +504,7 @@
         class="shrink-0 rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60 [&>option]:bg-kotone-deep"
         value={$settingsStore.language}
         onchange={(e) =>
-          void patch({ language: (e.target as HTMLSelectElement).value }, "语言已切换")}
+          void patchSettings({ language: (e.target as HTMLSelectElement).value }, "语言已切换")}
       >
         <option value="zh">中文</option>
       </select>
@@ -564,7 +560,7 @@
               step="0.05"
               value={$settingsStore.vad.threshold}
               onchange={(e) =>
-                void patch(
+                void patchSettings(
                   { vad: { threshold: Number((e.target as HTMLInputElement).value) } },
                   "VAD 阈值已保存",
                 )}
@@ -585,7 +581,7 @@
               step="10"
               value={$settingsStore.vad.minSpeechMs}
               onchange={(e) =>
-                void patch(
+                void patchSettings(
                   { vad: { minSpeechMs: Number((e.target as HTMLInputElement).value) } },
                   "最短语音已保存",
                 )}
@@ -606,7 +602,7 @@
               step="10"
               value={$settingsStore.vad.minSilenceMs}
               onchange={(e) =>
-                void patch(
+                void patchSettings(
                   { vad: { minSilenceMs: Number((e.target as HTMLInputElement).value) } },
                   "最短静音已保存",
                 )}
@@ -640,7 +636,7 @@
               step="0.5"
               value={$settingsStore.hotwordsScore}
               onchange={(e) =>
-                void patch(
+                void patchSettings(
                   { hotwordsScore: Number((e.target as HTMLInputElement).value) },
                   "热词权重已保存",
                 )}
@@ -729,7 +725,7 @@
       {#if historyDirCustom}
         <button
           class="shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-xs text-white/70 ring-1 ring-white/15 transition hover:bg-white/20"
-          onclick={() => void patch({ history: { dir: "" } }, "已恢复默认历史目录")}
+          onclick={() => void patchSettings({ history: { dir: "" } }, "已恢复默认历史目录")}
         >
           恢复默认
         </button>
@@ -939,7 +935,7 @@
         label="启动 Kotone 后自动开始运行"
         desc="自动加载识别模型、注册热键并显示悬浮窗；关闭时需手动点「启动」"
         onchange={(v) =>
-          void patch({ ui: { autoStart: v } }, v ? "已开启自动启动" : "已关闭自动启动，需手动点「启动」")}
+          void patchSettings({ ui: { autoStart: v } }, v ? "已开启自动启动" : "已关闭自动启动，需手动点「启动」")}
       />
     </section>
 
@@ -1058,7 +1054,7 @@
               ? 'bg-kotone-violet/15 ring-kotone-violet/60'
               : 'bg-white/5 ring-white/10 hover:bg-white/10'}"
             onclick={() =>
-              void patch({ overlay: { style: option.id } }, `悬浮窗外观已切换：${option.name}`)}
+              void patchSettings({ overlay: { style: option.id } }, `悬浮窗外观已切换：${option.name}`)}
           >
             <p class="text-sm font-semibold {selected ? 'text-kotone-violet' : ''}">{option.name}</p>
             <p class="mt-0.5 text-[11px] text-white/45">{option.desc}</p>
@@ -1082,7 +1078,7 @@
               ? 'bg-kotone-cyan/12 ring-kotone-cyan/60'
               : 'bg-white/5 ring-white/10 hover:bg-white/10'}"
             onclick={() =>
-              void patch({ download: { source: option.id } }, `下载源已切换：${option.name}`)}
+              void patchSettings({ download: { source: option.id } }, `下载源已切换：${option.name}`)}
           >
             <p class="text-xs font-semibold {selected ? 'text-kotone-cyan' : ''}">{option.name}</p>
             <p class="mt-0.5 text-[10px] leading-relaxed text-white/40">{option.desc}</p>
@@ -1156,7 +1152,7 @@
             label="启动时自动请求管理员权限"
             desc="开启后每次启动都会自动发起 Windows UAC 确认；普通桌面应用不能静默获得管理员权限"
             onchange={(value) =>
-              void patch(
+              void patchSettings(
                 {
                   runAsAdminOnStart: value,
                   ...(value ? { adminPromptDismissed: true, autoAdminPromptDismissed: true } : {}),

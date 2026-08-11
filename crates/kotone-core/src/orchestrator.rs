@@ -25,6 +25,9 @@ use crate::stt::{EngineRegistry, SessionConfig, SttEvent, SttSession};
 
 /// finalize 超时（docs/development.md §6：finalize 设置 10s 超时）
 const DEFAULT_FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
+/// 单次持续收音硬上限。除了避免误触后长时间占用麦克风，也给
+/// 离线引擎、评测录档与可选历史音频缓冲设置明确的内存上界。
+const DEFAULT_MAX_SESSION_DURATION: Duration = Duration::from_secs(10 * 60);
 /// 注入发送超时：SendInput 被安全软件/反作弊钩住时可能不返回（挂起而非立即 0/N
 /// 失败），没有超时会让状态机永久卡在 Sending、取消也无法打断阻塞线程（用户反馈
 /// 「SendInput 被 360 拦截后软件卡死」）。超时后阻塞线程无法回收，但状态机得以
@@ -72,6 +75,18 @@ struct ActiveSession {
     level_task: tokio::task::JoinHandle<()>,
     /// eval 录档句柄（仅 evalRecording 开启时存在；历史音频使用独立缓冲）
     recorder: Option<crate::eval::SessionRecorder>,
+}
+
+/// 已在状态机内原子占用发送权的任务快照。
+///
+/// `Sending` 状态与取消令牌必须在任何异步焦点恢复/注入工作开始前一次性写入，
+/// 否则按钮双击或热键与按钮并发会启动两次注入，并让后一次覆盖前一次的令牌。
+struct SendClaim {
+    text: String,
+    gen: u64,
+    token: CancelToken,
+    target: Option<TargetWindow>,
+    channel: Option<(String, String)>,
 }
 
 struct Inner {
@@ -172,6 +187,10 @@ pub struct Orchestrator {
     inner: Arc<Mutex<Inner>>,
     op: tokio::sync::Mutex<()>,
     settings: Arc<RwLock<Settings>>,
+    /// 桌面运行时成功预热时的 STT 配置快照。设置页在 Running 期间
+    /// 仍可编辑下次启动的引擎/模型/参数，但本轮会话必须继续使用
+    /// 已预热配置。None 用于 CLI/测试，保持原有「现场读设置」语义。
+    runtime_stt_settings: RwLock<Option<Settings>>,
     engines: Arc<EngineRegistry>,
     audio: Arc<dyn AudioBackend>,
     injector: Arc<dyn Injector>,
@@ -181,6 +200,8 @@ pub struct Orchestrator {
     me: RwLock<Option<std::sync::Weak<Orchestrator>>>,
     /// finalize 超时（测试可调小）
     pub finalize_timeout: Duration,
+    /// 单次收音最长时间（测试可调小）。
+    pub max_session_duration: Duration,
     /// 注入发送超时（测试可调小）：SendInput 挂起时兜底回到 Error 态
     pub inject_timeout: Duration,
     /// Success 停留时长（测试可设为 0）；Error 不自动消失
@@ -225,6 +246,7 @@ impl Orchestrator {
             })),
             op: tokio::sync::Mutex::new(()),
             settings,
+            runtime_stt_settings: RwLock::new(None),
             engines,
             audio,
             injector,
@@ -232,6 +254,7 @@ impl Orchestrator {
             emitter,
             me: RwLock::new(None),
             finalize_timeout: DEFAULT_FINALIZE_TIMEOUT,
+            max_session_duration: DEFAULT_MAX_SESSION_DURATION,
             inject_timeout: DEFAULT_INJECT_TIMEOUT,
             toast_dwell: DEFAULT_TOAST_DWELL,
             focus_restore_delay: DEFAULT_FOCUS_RESTORE_DELAY,
@@ -256,6 +279,16 @@ impl Orchestrator {
     /// settings 句柄（集成测试与壳需要改写引擎选择等运行时配置）
     pub fn settings(&self) -> &Arc<RwLock<Settings>> {
         &self.settings
+    }
+
+    /// 桌面壳在 warmup 成功后锁定本轮运行时的 STT 配置。
+    pub fn activate_runtime_settings(&self, settings: Settings) {
+        *self.runtime_stt_settings.write().unwrap() = Some(settings);
+    }
+
+    /// 桌面壳停止运行时后解除快照；CLI/测试默认一直是未锁定。
+    pub fn deactivate_runtime_settings(&self) {
+        *self.runtime_stt_settings.write().unwrap() = None;
     }
 
     // ---------- 热键入口（hotkey 模块调用；ADR-006 单键语义表 + 策略路由） ----------
@@ -445,7 +478,13 @@ impl Orchestrator {
 
     fn begin_locked(&self) -> Result<(), String> {
         let settings = self.settings.read().unwrap().clone();
-        let engine_id = settings.stt_engine.clone();
+        let stt_settings = self
+            .runtime_stt_settings
+            .read()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| settings.clone());
+        let engine_id = stt_settings.stt_engine.clone();
         let engine = self
             .engines
             .get(&engine_id)
@@ -462,7 +501,7 @@ impl Orchestrator {
             .as_deref()
             .and_then(profile::get)
             .unwrap_or_else(GameProfile::builtin_generic);
-        let cfg = build_session_config(&settings, &engine_id, &active_profile);
+        let cfg = build_session_config(&stt_settings, &engine_id, &active_profile);
 
         let (stt_tx, stt_rx) = mpsc::unbounded_channel::<SttEvent>();
         let session = engine.start_session(&cfg, stt_tx)?;
@@ -528,7 +567,9 @@ impl Orchestrator {
                 "one-shot / solo 模式需要 VAD，但当前构建未接入（vad-silero feature 未编译）"
                     .to_string()
             })?;
-            let vad = factory()?;
+            // 使用 SharedState 的同一内存快照，不在 STT 实现里再次读盘；
+            // 避免设置事务刚提交时 VAD 偶发拿到旧参数。
+            let vad = factory(&settings.vad)?;
             let silence_ms = settings.vad_silence_ms.clamp(
                 *crate::vad::SILENCE_MS_RANGE.start(),
                 *crate::vad::SILENCE_MS_RANGE.end(),
@@ -549,6 +590,7 @@ impl Orchestrator {
         let pump_recorder = recorder.clone();
         let pump_history = history_draft.clone();
         let pump_case_id = process_case_id.clone();
+        let max_session_duration = self.max_session_duration;
         let mut pump_first_partial_seen = false;
         // VAD 帧的累计采样偏移（相对 audio_pcm 起点；帧在流中连续，
         // 与 chunk 边界无关，每切出一帧 +VAD_FRAME_SAMPLES）
@@ -561,12 +603,27 @@ impl Orchestrator {
             let mut stt_rx = stt_rx;
             let mut audio_err_rx = audio_err_rx;
             let mut vad_state = vad_state;
+            let mut stt_push_error = None;
+            let session_deadline = tokio::time::sleep(max_session_duration);
+            tokio::pin!(session_deadline);
             // 松手收尾：end() 先停采集再发停止信号，pump 收到信号后把通道里
             // 已缓冲未消费的 PCM 全部灌进 session（松手丢字 P0：采音侧排空）；
             // 取消（pump_flag）则立即停，音频丢弃
             loop {
                 tokio::select! {
                     biased;
+                    _ = &mut session_deadline => {
+                        if let Some(me) = me_weak.as_ref().and_then(|weak| weak.upgrade()) {
+                            tokio::spawn(async move {
+                                me.abort_with_code(
+                                    "单次录音已达 10 分钟上限，本次会话已中止，请重新开始",
+                                    "SESSION_DURATION_LIMIT",
+                                )
+                                .await;
+                            });
+                        }
+                        break;
+                    }
                     r = &mut stop_rx => {
                         let _ = r;
                         if !pump_flag.load(Ordering::SeqCst) {
@@ -583,7 +640,10 @@ impl Orchestrator {
                                         pcm.extend_from_slice(&c);
                                     }
                                 }
-                                if session.push_audio(&c).is_err() { break; }
+                                if let Err(e) = session.push_audio(&c) {
+                                    stt_push_error = Some(e);
+                                    break;
+                                }
                             }
                         }
                         break;
@@ -601,7 +661,10 @@ impl Orchestrator {
                                         pcm.extend_from_slice(&c);
                                     }
                                 }
-                                if session.push_audio(&c).is_err() { break; }
+                                if let Err(e) = session.push_audio(&c) {
+                                    stt_push_error = Some(e);
+                                    break;
+                                }
                                 // VAD 帧判定与 STT 并行（同一 PCM 流）；
                                 // 推理失败只禁用判停（热键强制结束兜底），不断会话
                                 if let Some((vad, splitter, tracker)) = &mut vad_state {
@@ -670,14 +733,6 @@ impl Orchestrator {
                         if let Some(msg) = err {
                             // 录音设备中途故障（拔麦克风/驱动错误）：中止会话并 toast，
                             // 避免状态机永久停在 Listening 无感知（P1-⑤）
-                            emitter.emit(
-                                "kotone://process",
-                                json!({
-                                    "caseId": pump_case_id.clone(),
-                                    "activity": "session_aborted",
-                                    "data": { "outcome": "error", "errorCode": "AUDIO_DEVICE_ERROR" }
-                                }),
-                            );
                             if let Some(me) = me_weak.as_ref().and_then(|w| w.upgrade()) {
                                 let msg2 = msg.clone();
                                 tokio::spawn(async move {
@@ -724,6 +779,18 @@ impl Orchestrator {
                     }
                 }
             }
+            if let Some(error) = stt_push_error {
+                session.cancel();
+                drop(session);
+                if let Some(me) = me_weak.as_ref().and_then(|w| w.upgrade()) {
+                    me.abort_with_code(
+                        &format!("语音识别处理音频失败：{error}（本次会话已中止，请重试）"),
+                        "STT_AUDIO_PUSH_FAILED",
+                    )
+                    .await;
+                }
+                return;
+            }
             if pump_flag.load(Ordering::SeqCst) {
                 session.cancel();
             }
@@ -766,7 +833,7 @@ impl Orchestrator {
     /// 重发最近一条：把历史里最新一条「发送成功」的文本重新注入（快捷键入口）。
     /// 语义（与用户确认）：
     /// - 仅 Idle 生效：会话进行中（录音/发送/预览等）按下静默忽略，不打断当前输入；
-    /// - 用当前 profile + 当前 sticky 频道（与普通发送同一条 do_send 路径，
+    /// - 用当前 profile + 当前 sticky 频道（与普通发送同一条 run_send 路径，
     ///   ADR-008 频道在发送时刻读取）；历史里的 profileId 不参与；
     /// - 无历史记录或文本为空 → 静默忽略（记日志）。
     pub async fn resend_last(&self) {
@@ -796,13 +863,15 @@ impl Orchestrator {
         };
         // 重发直发当前前台窗口：不沿用上次会话记录的注入目标（Idle 时
         // target_window 残留，若用户已切窗口，restore 会把焦点抢回旧窗口
-        // 导致文本打进旧窗口）；target=None 时 do_send 跳过焦点恢复直发前台。
-        let gen = {
-            let mut inner = self.inner.lock().unwrap();
-            inner.target_window = None;
-            inner.gen
-        };
-        self.do_send(text, gen).await;
+        // 导致文本打进旧窗口）；target=None 时 run_send 跳过焦点恢复直发前台。
+        // 历史读取期间可能有新会话开始；发送权必须在 op 锁内重新校验并占用。
+        // 状态已经变化时保持原有语义：静默忽略，不打断当前输入。
+        if let Ok(Some(claim)) = self
+            .claim_send(Some(text), None, &[OrchestratorState::Idle], true)
+            .await
+        {
+            self.run_send(claim).await;
+        }
     }
 
     /// 结束会话：finalize → autoSend 分流（§6 发送时序上半段）
@@ -931,7 +1000,17 @@ impl Orchestrator {
                 // PostFinalize 策略（ADR-006）：C1 直接发送 / C2 预览确认
                 match self.policy().post {
                     PostFinalize::SendDirect => {
-                        self.do_send(t.text, gen).await;
+                        if let Ok(Some(claim)) = self
+                            .claim_send(
+                                Some(t.text),
+                                Some(gen),
+                                &[OrchestratorState::Transcribing],
+                                false,
+                            )
+                            .await
+                        {
+                            self.run_send(claim).await;
+                        }
                     }
                     PostFinalize::PreviewConfirm => {
                         let _op = self.op.lock().await;
@@ -965,20 +1044,16 @@ impl Orchestrator {
     /// 重新进入 Sending 实现重试（docs/development.md §4.1「Error 保留文本可重试」）。
     /// ADR-006 预览只读化：不再接受编辑文本，一律发送已定的 preview_text。
     pub async fn confirm_send(&self) -> Result<(), String> {
-        let (gen, final_text) = {
-            let _op = self.op.lock().await;
-            let inner = self.inner.lock().unwrap();
-            match inner.state {
-                OrchestratorState::Preview | OrchestratorState::Error => {}
-                s => return Err(format!("当前状态 {s:?} 不能确认发送")),
-            }
-            let t = inner
-                .preview_text
-                .clone()
-                .ok_or_else(|| "无待发送文本".to_string())?;
-            (inner.gen, t)
-        };
-        self.do_send(final_text, gen).await;
+        let claim = self
+            .claim_send(
+                None,
+                None,
+                &[OrchestratorState::Preview, OrchestratorState::Error],
+                false,
+            )
+            .await?
+            .ok_or_else(|| "待发送内容已失效".to_string())?;
+        self.run_send(claim).await;
         Ok(())
     }
 
@@ -986,6 +1061,11 @@ impl Orchestrator {
     /// （P1-⑤：拔麦克风/驱动错误不再永久卡 Listening）。
     /// Error 保持到用户关闭/重试，确保按需悬浮窗也能让用户看到核心链路故障。
     pub async fn abort_with_message(&self, message: &str) {
+        self.abort_with_code(message, "AUDIO_DEVICE_ERROR").await;
+    }
+
+    /// 会话泵的致命错误统一中止入口：清理录音/STT/发送句柄并转入可见 Error。
+    async fn abort_with_code(&self, message: &str, error_code: &str) {
         // 宽限期倒计时一并收回
         self.abort_release_grace();
         let _op = self.op.lock().await;
@@ -1020,7 +1100,7 @@ impl Orchestrator {
         );
         self.emit_process(
             "session_aborted",
-            json!({ "outcome": "error", "errorCode": "AUDIO_DEVICE_ERROR" }),
+            json!({ "outcome": "error", "errorCode": error_code }),
         );
         self.write_history(crate::history::HistoryOutcome::Cancelled, None);
         self.schedule_idle(gen);
@@ -1062,39 +1142,77 @@ impl Orchestrator {
 
     // ---------- 内部 ----------
 
-    /// Sending → Success/Error（§6 发送时序下半段；inject 实现负责按键细节）
-    async fn do_send(&self, text: String, gen: u64) {
+    /// 在 `op` 锁内校验来源状态并原子进入 Sending，保证每个状态只能产生一个发送任务。
+    /// `text=None` 用于 Preview/Error 重试：文本也在同一临界区内从 preview_text 取出。
+    async fn claim_send(
+        &self,
+        text: Option<String>,
+        expected_gen: Option<u64>,
+        expected_states: &[OrchestratorState],
+        clear_target: bool,
+    ) -> Result<Option<SendClaim>, String> {
+        let _op = self.op.lock().await;
+        let claim = {
+            let mut inner = self.inner.lock().unwrap();
+            if expected_gen.is_some_and(|gen| inner.gen != gen) {
+                return Ok(None);
+            }
+            if !expected_states.contains(&inner.state) {
+                return Err(format!("当前状态 {:?} 不能发送", inner.state));
+            }
+            let text = match text {
+                Some(text) => text,
+                None => inner
+                    .preview_text
+                    .clone()
+                    .ok_or_else(|| "无待发送文本".to_string())?,
+            };
+            if clear_target {
+                inner.target_window = None;
+            }
+            debug_assert!(inner.send_cancel.is_none());
+            let token = CancelToken::default();
+            inner.state = OrchestratorState::Sending;
+            inner.send_cancel = Some(token.clone());
+            SendClaim {
+                text,
+                gen: inner.gen,
+                token,
+                target: inner.target_window,
+                channel: inner.channel.clone(),
+            }
+        };
+        self.emit_state(
+            OrchestratorState::Sending,
+            Some(json!({ "text": claim.text })),
+        );
+        Ok(Some(claim))
+    }
+
+    /// Sending → Success/Error（§6 发送时序下半段；inject 实现负责按键细节）。
+    /// 仅接受 `claim_send` 产生的已占用发送任务，不再改写状态或取消令牌。
+    async fn run_send(&self, claim: SendClaim) {
+        let SendClaim {
+            text,
+            gen,
+            token,
+            target,
+            channel,
+        } = claim;
         let injection_started_at = std::time::Instant::now();
-        // ADR-008：频道在发送时刻读取（会话中进行中的切换作用于当前这句）
-        let channel_sel = { self.inner.lock().unwrap().channel.clone() };
         self.emit_process(
             "injection_started",
             json!({
                 "textChars": text.chars().count() as u64,
-                "channelId": channel_sel.as_ref().map(|(_, cid)| cid.clone()),
+                "channelId": channel.as_ref().map(|(_, cid)| cid.clone()),
             }),
         );
-        let (profile, token, target, channel) = {
-            let _op = self.op.lock().await;
-            let mut inner = self.inner.lock().unwrap();
-            if inner.gen != gen {
-                return;
-            }
-            inner.state = OrchestratorState::Sending;
-            let token = CancelToken::default();
-            inner.send_cancel = Some(token.clone());
-            let target = inner.target_window;
-            let channel = inner.channel.clone();
-            drop(inner);
-            self.emit_state(OrchestratorState::Sending, Some(json!({ "text": text })));
-            let settings = self.settings.read().unwrap().clone();
-            let profile = settings
-                .active_profile_id
-                .as_deref()
-                .and_then(profile::get)
-                .unwrap_or_else(GameProfile::builtin_generic);
-            (profile, token, target, channel)
-        };
+        let settings = self.settings.read().unwrap().clone();
+        let profile = settings
+            .active_profile_id
+            .as_deref()
+            .and_then(profile::get)
+            .unwrap_or_else(GameProfile::builtin_generic);
 
         // ADR-008 频道策略：克隆 profile 换开框键、文本加前缀——
         // 用户原文（预览/历史/重试）不受频道前缀污染。
@@ -1146,7 +1264,7 @@ impl Orchestrator {
         let (history_write, resume_continuous) = {
             let _op = self.op.lock().await;
             let mut inner = self.inner.lock().unwrap();
-            if inner.gen != gen {
+            if inner.gen != gen || inner.state != OrchestratorState::Sending {
                 return;
             }
             inner.send_cancel = None;
@@ -1504,13 +1622,18 @@ mod tests {
         assert_eq!(cfg.hotwords, profile.hotwords);
         assert!(cfg.hotwords.contains(&"打野".to_string()));
         assert_eq!(cfg.language, "zh");
-        assert_eq!(cfg.hotwords_score, settings.hotwords_score, "热词权重原样携带");
+        assert_eq!(
+            cfg.hotwords_score, settings.hotwords_score,
+            "热词权重原样携带"
+        );
     }
 
     #[test]
     fn session_config_carries_custom_hotwords_score() {
-        let mut settings = Settings::default();
-        settings.hotwords_score = 1.5;
+        let settings = Settings {
+            hotwords_score: 1.5,
+            ..Settings::default()
+        };
         let generic = GameProfile::builtin_generic();
         let cfg = build_session_config(&settings, "sherpa-onnx-x-asr-zh-en", &generic);
         assert_eq!(cfg.hotwords_score, 1.5);

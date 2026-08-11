@@ -23,6 +23,11 @@ pub type Progress<'a> = &'a dyn Fn(u64, Option<u64>);
 
 /// 单块读取大小（256KB：进度足够平滑，syscall 又不至于太密）
 const CHUNK: usize = 256 * 1024;
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// 单次网络读取最长等待时间；取消请求最迟会在该时间后重新获得执行机会。
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// 防止服务端持续滴流却永不完成。模型较大，给正常慢速下载保留四小时。
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
 
 // ---------- 下载取消与并发互斥（P2-⑦） ----------
 
@@ -42,19 +47,23 @@ pub fn cancel_requested() -> bool {
     CANCEL_REQUESTED.load(Ordering::SeqCst)
 }
 
+/// 下载临界区守卫。离开作用域（包括错误返回和 panic 展开）时自动释放全局状态。
+pub struct DownloadGuard;
+
+impl Drop for DownloadGuard {
+    fn drop(&mut self) {
+        DOWNLOAD_ACTIVE.store(false, Ordering::SeqCst);
+        CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+    }
+}
+
 /// 进入下载临界区：已有下载进行中时拒绝（IPC 并发防重入）
-pub fn begin_download() -> Result<(), String> {
+pub fn begin_download() -> Result<DownloadGuard, String> {
     if DOWNLOAD_ACTIVE.swap(true, Ordering::SeqCst) {
         return Err("已有模型下载进行中，请等待完成或先取消".to_string());
     }
     CANCEL_REQUESTED.store(false, Ordering::SeqCst);
-    Ok(())
-}
-
-/// 退出下载临界区（无论成败）：释放互斥并复位取消标记
-pub fn end_download() {
-    DOWNLOAD_ACTIVE.store(false, Ordering::SeqCst);
-    CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+    Ok(DownloadGuard)
 }
 /// ModelScope 的 LFS CDN 会拒绝没有 User-Agent 的匿名请求（403）。
 /// 使用固定、可识别的应用标识；公开模型下载不需要用户 Token。
@@ -115,97 +124,128 @@ pub fn download_file(
 }
 
 fn download_to_tmp(url: &str, tmp: &Path, progress: Progress<'_>) -> Result<(), String> {
-    let existing = fs::metadata(tmp).map(|md| md.len()).unwrap_or(0);
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .user_agent(USER_AGENT)
+    download_to_tmp_with_timeouts(
+        url,
+        tmp,
+        progress,
+        CONNECT_TIMEOUT,
+        READ_TIMEOUT,
+        REQUEST_TIMEOUT,
+    )
+}
+
+fn download_to_tmp_with_timeouts(
+    url: &str,
+    tmp: &Path,
+    progress: Progress<'_>,
+    connect_timeout: Duration,
+    read_timeout: Duration,
+    request_timeout: Duration,
+) -> Result<(), String> {
+    // blocking ClientBuilder 没有暴露逐次读取超时。这里在当前阻塞线程内运行
+    // 单线程异步 client，外部同步 API 不变，同时获得 read_timeout 与总超时。
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
         .build()
-        .map_err(|e| format!("无法初始化下载器：{e}"))?;
-    let mut request = client.get(url).header(ACCEPT_ENCODING, "identity");
-    if existing > 0 {
-        request = request.header(RANGE, format!("bytes={existing}-"));
-    }
-    let mut resp = request
-        .send()
-        // 重定向后的 ModelScope CDN URL 带短期 auth_key；错误日志不应把它输出。
-        .map_err(|e| format!("下载失败（{url}）：{}", e.without_url()))?;
-
-    if resp.status() == StatusCode::RANGE_NOT_SATISFIABLE && existing > 0 {
-        let total = resp
-            .headers()
-            .get(CONTENT_RANGE)
-            .and_then(|v| v.to_str().ok())
-            .and_then(content_range_total);
-        if total == Some(existing) {
-            progress(existing, total);
-            return Ok(());
+        .map_err(|e| format!("无法初始化下载运行时：{e}"))?;
+    runtime.block_on(async {
+        let existing = fs::metadata(tmp).map(|md| md.len()).unwrap_or(0);
+        let client = reqwest::Client::builder()
+            .connect_timeout(connect_timeout)
+            .read_timeout(read_timeout)
+            .timeout(request_timeout)
+            .user_agent(USER_AGENT)
+            .build()
+            .map_err(|e| format!("无法初始化下载器：{e}"))?;
+        let mut request = client.get(url).header(ACCEPT_ENCODING, "identity");
+        if existing > 0 {
+            request = request.header(RANGE, format!("bytes={existing}-"));
         }
-        return Err(format!(
-            "下载源拒绝续传：本地已有 {existing} 字节，远端总大小为 {}",
-            total.map_or_else(|| "未知".into(), |n| n.to_string())
-        ));
-    }
-    if !resp.status().is_success() {
-        return Err(format!("下载失败（{url}）：HTTP {}", resp.status()));
-    }
+        let mut resp = request
+            .send()
+            .await
+            // 重定向后的 ModelScope CDN URL 带短期 auth_key；错误日志不应把它输出。
+            .map_err(|e| format!("下载失败（{url}）：{}", e.without_url()))?;
 
-    let resumed = existing > 0 && resp.status() == StatusCode::PARTIAL_CONTENT;
-    let (start, total) = if resumed {
-        let range = resp
-            .headers()
-            .get(CONTENT_RANGE)
-            .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| format!("下载源返回 206 但缺少 Content-Range（{url}）"))?;
-        let (range_start, total) = parse_content_range(range)
-            .ok_or_else(|| format!("下载源返回了无效 Content-Range：{range}"))?;
-        if range_start != existing {
+        if resp.status() == StatusCode::RANGE_NOT_SATISFIABLE && existing > 0 {
+            let total = resp
+                .headers()
+                .get(CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(content_range_total);
+            if total == Some(existing) {
+                progress(existing, total);
+                return Ok(());
+            }
             return Err(format!(
-                "下载源续传位置不符：请求从 {existing} 开始，实际从 {range_start} 开始"
+                "下载源拒绝续传：本地已有 {existing} 字节，远端总大小为 {}",
+                total.map_or_else(|| "未知".into(), |n| n.to_string())
             ));
         }
-        (existing, Some(total))
-    } else {
-        // 服务器忽略 Range 并返回 200 时安全地从头覆盖，不能把完整文件追加到 part。
-        (0, resp.content_length())
-    };
-    let mut out = if resumed {
-        OpenOptions::new()
-            .append(true)
-            .open(tmp)
-            .map_err(|e| format!("无法继续写入临时文件 {}：{e}", tmp.display()))?
-    } else {
-        File::create(tmp).map_err(|e| format!("无法创建临时文件 {}：{e}", tmp.display()))?
-    };
+        if !resp.status().is_success() {
+            return Err(format!("下载失败（{url}）：HTTP {}", resp.status()));
+        }
 
-    let mut downloaded = start;
-    progress(downloaded, total);
-    let mut buf = vec![0u8; CHUNK];
-    loop {
-        if cancel_requested() {
-            // 取消：保留 .part 供续传（与网络中断同语义，不删临时文件）
-            return Err("下载已取消（临时文件已保留，可随时续传）".to_string());
-        }
-        let n = resp.read(&mut buf).map_err(|e| format!("下载中断：{e}"))?;
-        if n == 0 {
-            break;
-        }
-        out.write_all(&buf[..n])
-            .map_err(|e| format!("写入 {} 失败：{e}", tmp.display()))?;
-        downloaded += n as u64;
+        let resumed = existing > 0 && resp.status() == StatusCode::PARTIAL_CONTENT;
+        let (start, total) = if resumed {
+            let range = resp
+                .headers()
+                .get(CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| format!("下载源返回 206 但缺少 Content-Range（{url}）"))?;
+            let (range_start, total) = parse_content_range(range)
+                .ok_or_else(|| format!("下载源返回了无效 Content-Range：{range}"))?;
+            if range_start != existing {
+                return Err(format!(
+                    "下载源续传位置不符：请求从 {existing} 开始，实际从 {range_start} 开始"
+                ));
+            }
+            (existing, Some(total))
+        } else {
+            // 服务器忽略 Range 并返回 200 时安全地从头覆盖，不能把完整文件追加到 part。
+            (0, resp.content_length())
+        };
+        let mut out = if resumed {
+            OpenOptions::new()
+                .append(true)
+                .open(tmp)
+                .map_err(|e| format!("无法继续写入临时文件 {}：{e}", tmp.display()))?
+        } else {
+            File::create(tmp).map_err(|e| format!("无法创建临时文件 {}：{e}", tmp.display()))?
+        };
+
+        let mut downloaded = start;
         progress(downloaded, total);
-    }
-    out.flush()
-        .map_err(|e| format!("写入 {} 失败：{e}", tmp.display()))?;
-    if let Some(t) = total {
-        if downloaded != t {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                format!("下载不完整：{downloaded}/{t} 字节"),
-            )
-            .to_string());
+        loop {
+            if cancel_requested() {
+                // 取消：保留 .part 供续传（与网络中断同语义，不删临时文件）
+                return Err("下载已取消（临时文件已保留，可随时续传）".to_string());
+            }
+            let Some(chunk) = resp
+                .chunk()
+                .await
+                .map_err(|e| format!("下载中断：{}", e.without_url()))?
+            else {
+                break;
+            };
+            out.write_all(&chunk)
+                .map_err(|e| format!("写入 {} 失败：{e}", tmp.display()))?;
+            downloaded += chunk.len() as u64;
+            progress(downloaded, total);
         }
-    }
-    Ok(())
+        out.flush()
+            .map_err(|e| format!("写入 {} 失败：{e}", tmp.display()))?;
+        if let Some(t) = total {
+            if downloaded != t {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!("下载不完整：{downloaded}/{t} 字节"),
+                )
+                .to_string());
+            }
+        }
+        Ok(())
+    })
 }
 
 fn parse_content_range(value: &str) -> Option<(u64, u64)> {
@@ -321,6 +361,45 @@ mod tests {
     #[test]
     fn hex_lower_works() {
         assert_eq!(hex_lower(&[0x00, 0xff, 0x1a]), "00ff1a");
+    }
+
+    #[test]
+    fn download_guard_releases_active_state_on_unwind() {
+        let unwind = std::panic::catch_unwind(|| {
+            let _guard = begin_download().unwrap();
+            assert!(begin_download().is_err(), "守卫存活期间必须拒绝第二个下载");
+            panic!("exercise Drop during unwind");
+        });
+        assert!(unwind.is_err());
+        let guard = begin_download().expect("panic 展开后应自动释放下载状态");
+        drop(guard);
+    }
+
+    #[test]
+    fn stalled_response_hits_read_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut request = [0u8; 1024];
+            let _ = conn.read(&mut request);
+            conn.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            conn.flush().unwrap();
+            std::thread::sleep(Duration::from_secs(1));
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let error = download_to_tmp_with_timeouts(
+            &format!("http://127.0.0.1:{port}/stalled.bin"),
+            &dir.path().join("stalled.part"),
+            &|_, _| {},
+            Duration::from_millis(200),
+            Duration::from_millis(100),
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert!(error.contains("下载中断"), "error: {error}");
     }
 
     /// 极简一次性 HTTP 服务器：返回固定 body

@@ -534,6 +534,12 @@ export async function getSettings(): Promise<Settings> {
   return invoke<Settings>("get_settings");
 }
 
+/** 启动时损坏配置的恢复提示；只返回一次，浏览器演示模式恒为 null。 */
+export async function getSettingsLoadWarning(): Promise<string | null> {
+  if (!isTauri) return null;
+  return invoke<string | null>("get_settings_load_warning");
+}
+
 export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
   if (!isTauri) {
     const merged = clone(mock.settings) as unknown as Record<string, unknown>;

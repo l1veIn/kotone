@@ -7,6 +7,8 @@
 //! EngineRegistry 等类型互不兼容（E0308）。集成测试与 kotone-stt
 //! 链接同一个 rlib，类型一致。
 
+#![allow(clippy::field_reassign_with_default)] // 测试用例按场景逐项改写 Settings 更易读
+
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -1196,7 +1198,7 @@ fn make_vad_mode_orchestrator_in(
     orch.focus_restore_delay = Duration::ZERO;
     orch.history_dir = history_dir;
     let vad = std::sync::Mutex::new(Some(vad));
-    orch.vad_factory = Some(Arc::new(move || {
+    orch.vad_factory = Some(Arc::new(move |_| {
         Ok(Box::new(
             vad.lock()
                 .unwrap()
@@ -1287,6 +1289,214 @@ async fn one_shot_without_vad_factory_begin_fails() {
     assert!(sent.lock().unwrap().is_empty());
     orch.cancel().await;
     assert_eq!(orch.state(), OrchestratorState::Idle);
+}
+
+#[tokio::test]
+async fn push_audio_failure_aborts_session_with_visible_error() {
+    let mut settings = Settings::default();
+    settings.interaction_mode = None;
+    settings.stt_engine = "push-fail".into();
+    settings.active_profile_id = None;
+    settings.history.mode = kotone_core::history::HistoryMode::Off;
+    let mut registry = EngineRegistry::new();
+    registry.register(Box::new(PushFailEngine));
+    let emitter = Arc::new(VecEmitter::default());
+    let mut orch = Orchestrator::new(
+        Arc::new(RwLock::new(settings)),
+        Arc::new(registry),
+        Arc::new(MockAudioBackend),
+        Arc::new(RecordingInjector {
+            sent: Arc::new(Mutex::new(Vec::new())),
+        }),
+        Arc::new(MockFocusBackend::new(
+            Arc::new(Mutex::new(Vec::new())),
+            42,
+            true,
+        )),
+        emitter.clone(),
+    );
+    orch.toast_dwell = Duration::from_millis(10);
+    orch.focus_restore_delay = Duration::ZERO;
+    let orch = orch.into_arc();
+
+    orch.begin().await.unwrap();
+    wait_state(&orch, OrchestratorState::Error, Duration::from_secs(2)).await;
+
+    let events = emitter.events.lock().unwrap();
+    assert!(events.iter().any(|(event, payload)| {
+        event == "kotone://state"
+            && payload["state"] == "error"
+            && payload["payload"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("测试推流故障"))
+    }));
+    assert!(events.iter().any(|(event, payload)| {
+        event == "kotone://process"
+            && payload["activity"] == "session_aborted"
+            && payload["data"]["errorCode"] == "STT_AUDIO_PUSH_FAILED"
+    }));
+}
+
+#[tokio::test]
+async fn session_duration_limit_aborts_and_reports_visible_error() {
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent });
+    let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(
+        Arc::new(Mutex::new(Vec::new())),
+        42,
+        true,
+    ));
+    let (orch, emitter) = make_orchestrator_tuned(false, injector, focus, |orchestrator| {
+        orchestrator.max_session_duration = Duration::from_millis(30);
+    });
+
+    orch.begin().await.unwrap();
+    wait_state(&orch, OrchestratorState::Error, Duration::from_secs(2)).await;
+
+    let events = emitter.events.lock().unwrap();
+    assert!(events.iter().any(|(event, payload)| {
+        event == "kotone://process"
+            && payload["activity"] == "session_aborted"
+            && payload["data"]["errorCode"] == "SESSION_DURATION_LIMIT"
+    }));
+    assert!(events.iter().any(|(event, payload)| {
+        event == "kotone://state"
+            && payload["state"] == "error"
+            && payload["payload"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("10 分钟"))
+    }));
+}
+
+#[tokio::test]
+async fn running_runtime_keeps_started_engine_settings_until_deactivated() {
+    let (orch, _emitter, _sent) = make_orchestrator(false);
+    let started_settings = orch.settings().read().unwrap().clone();
+    orch.activate_runtime_settings(started_settings);
+    // 模拟 Running 期间在设置页选中了尚未就绪的新引擎。
+    orch.settings().write().unwrap().stt_engine = "never-ready".into();
+
+    orch.begin()
+        .await
+        .expect("本轮运行时应继续使用启动快照里的 mock-stream");
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    orch.cancel().await;
+
+    orch.deactivate_runtime_settings();
+    let error = orch
+        .begin()
+        .await
+        .expect_err("停止后应重新使用当前设置的 never-ready");
+    assert!(error.contains("未就绪"));
+    orch.cancel().await;
+}
+
+/// 第一帧音频即失败的引擎：验证 pump 错误不会静默退出并把状态留在 Listening。
+struct PushFailEngine;
+
+impl kotone_core::stt::SttEngine for PushFailEngine {
+    fn id(&self) -> &'static str {
+        "push-fail"
+    }
+    fn display_name(&self) -> &str {
+        "Push 失败测试引擎"
+    }
+    fn capabilities(&self) -> kotone_core::stt::EngineCapabilities {
+        kotone_core::stt::EngineCapabilities {
+            streaming: true,
+            hotwords: false,
+            gpu: false,
+            offline: true,
+            languages: vec!["zh".into()],
+        }
+    }
+    fn is_ready(&self) -> bool {
+        true
+    }
+    fn start_session(
+        &self,
+        _cfg: &kotone_core::stt::SessionConfig,
+        _events: mpsc::UnboundedSender<kotone_core::stt::SttEvent>,
+    ) -> Result<Box<dyn kotone_core::stt::SttSession>, String> {
+        Ok(Box::new(PushFailSession))
+    }
+}
+
+struct PushFailSession;
+
+impl kotone_core::stt::SttSession for PushFailSession {
+    fn push_audio(&mut self, _pcm: &[f32]) -> Result<(), String> {
+        Err("测试推流故障".into())
+    }
+    fn finalize(self: Box<Self>) -> Result<kotone_core::stt::Transcript, String> {
+        unreachable!("push_audio 失败后不应 finalize")
+    }
+    fn cancel(&mut self) {}
+}
+
+/// 两个确认入口并发时只能有一个原子占用 Preview → Sending，不能重复注入或覆盖取消令牌。
+#[tokio::test]
+async fn concurrent_confirm_send_injects_exactly_once() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(GateInjector {
+        calls: calls.clone(),
+        entered: entered.clone(),
+        release: release.clone(),
+        sent: sent.clone(),
+    });
+    let (orch, _emitter) = make_orchestrator_with(false, injector);
+
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    orch.end().await.unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Preview);
+
+    let first_orch = orch.clone();
+    let first = tokio::spawn(async move { first_orch.confirm_send().await });
+    let start = std::time::Instant::now();
+    while !entered.load(Ordering::SeqCst) {
+        assert!(start.elapsed() < Duration::from_secs(2), "首次注入未开始");
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    assert_eq!(orch.state(), OrchestratorState::Sending);
+
+    let second = tokio::time::timeout(Duration::from_millis(200), orch.confirm_send())
+        .await
+        .expect("第二次确认不应等待首个注入完成");
+    assert!(second.is_err(), "Sending 状态必须拒绝第二次确认");
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "注入器只能启动一次");
+
+    release.store(true, Ordering::SeqCst);
+    first.await.unwrap().unwrap();
+    assert_eq!(sent.lock().unwrap().as_slice(), ["对面打野在下路"]);
+}
+
+/// 可控阻塞注入器：用于在 Sending 持续期间确定性地发起第二次确认。
+struct GateInjector {
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+    entered: Arc<std::sync::atomic::AtomicBool>,
+    release: Arc<std::sync::atomic::AtomicBool>,
+    sent: Arc<Mutex<Vec<String>>>,
+}
+
+impl Injector for GateInjector {
+    fn send(
+        &self,
+        text: &str,
+        _profile: &GameProfile,
+        _cancel: CancelToken,
+    ) -> Result<(), InjectError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.entered.store(true, Ordering::SeqCst);
+        while !self.release.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        self.sent.lock().unwrap().push(text.to_string());
+        Ok(())
+    }
 }
 
 // ---------- 模式 4「独奏模式」（solo：A2 + B3 + C1 + 连续，发完不停机） ----------
@@ -1382,13 +1592,15 @@ async fn solo_history_audio_is_trimmed_to_speech() {
     let start = std::time::Instant::now();
     loop {
         let records = kotone_core::history::list_in(dir.path()).unwrap();
-        if records
-            .first()
-            .is_some_and(|r| r.outcome == kotone_core::history::HistoryOutcome::Sent && r.audio_file.is_some())
-        {
+        if records.first().is_some_and(|r| {
+            r.outcome == kotone_core::history::HistoryOutcome::Sent && r.audio_file.is_some()
+        }) {
             break;
         }
-        assert!(start.elapsed() < Duration::from_secs(5), "等待 sent 音频落账超时");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "等待 sent 音频落账超时"
+        );
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
     assert_eq!(sent.lock().unwrap().as_slice(), ["对面打野在下路"]);
@@ -1411,7 +1623,10 @@ async fn solo_history_audio_is_trimmed_to_speech() {
     );
     // 记录音频时长与 wav 一致（已按裁剪后重算）
     let expect_ms = samples.len() * 1000 / kotone_core::eval::SAMPLE_RATE as usize;
-    assert_eq!(r.audio_ms, expect_ms as u64, "audio_ms 应反映裁剪后实际语音时长");
+    assert_eq!(
+        r.audio_ms, expect_ms as u64,
+        "audio_ms 应反映裁剪后实际语音时长"
+    );
 }
 
 /// VAD 判定过语音但 STT 未出 partial 的取消 → 落账 cancelled（判据以
@@ -1458,7 +1673,10 @@ async fn solo_stop_does_not_leave_empty_cancelled_record() {
     // Windows timer 粒度下约 156ms）
     let start = std::time::Instant::now();
     loop {
-        if !kotone_core::history::list_in(dir.path()).unwrap().is_empty() {
+        if !kotone_core::history::list_in(dir.path())
+            .unwrap()
+            .is_empty()
+        {
             break;
         }
         assert!(
@@ -1596,8 +1814,7 @@ async fn history_cancel_without_partial_writes_nothing() {
         true,
     ));
     let (orch, emitter) = make_orchestrator_tuned(false, injector, focus, |o| {
-        o.settings().write().unwrap().history.mode =
-            kotone_core::history::HistoryMode::Capped;
+        o.settings().write().unwrap().history.mode = kotone_core::history::HistoryMode::Capped;
         o.history_dir = Some(dir.path().to_path_buf());
     });
 
@@ -1697,6 +1914,52 @@ async fn resend_last_ignored_when_not_idle() {
     orch.cancel().await;
 }
 
+/// begin 与 resend 同时争用 Idle 时必须互斥：要么开始录音，要么重发，不能让重发覆盖 Listening。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_begin_and_resend_claim_idle_exclusively() {
+    let dir = tempfile::tempdir().unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
+    let orch = make_history_orchestrator(true, injector, dir.path().to_path_buf(), None);
+
+    // 先产生一条可重发的 sent 历史。
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    orch.end().await.unwrap();
+    wait_state(&orch, OrchestratorState::Idle, Duration::from_secs(2)).await;
+    assert_eq!(sent.lock().unwrap().len(), 1);
+
+    let barrier = Arc::new(tokio::sync::Barrier::new(3));
+    let begin_orch = orch.clone();
+    let begin_barrier = barrier.clone();
+    let begin = tokio::spawn(async move {
+        begin_barrier.wait().await;
+        begin_orch.begin().await
+    });
+    let resend_orch = orch.clone();
+    let resend_barrier = barrier.clone();
+    let resend = tokio::spawn(async move {
+        resend_barrier.wait().await;
+        resend_orch.resend_last().await;
+    });
+    barrier.wait().await;
+
+    let begin_result = begin.await.unwrap();
+    resend.await.unwrap();
+    let resend_happened = sent.lock().unwrap().len() == 2;
+    assert_ne!(
+        begin_result.is_ok(),
+        resend_happened,
+        "Idle 只能被 begin 或 resend 其中之一占用（state={:?}, sent={:?}）",
+        orch.state(),
+        sent.lock().unwrap()
+    );
+    if begin_result.is_ok() {
+        assert_eq!(orch.state(), OrchestratorState::Listening);
+        orch.cancel().await;
+    }
+}
+
 /// 无历史记录（或历史里没有 sent 文本）时 resend：静默 no-op，不 panic
 #[tokio::test]
 async fn resend_last_noop_without_history() {
@@ -1722,8 +1985,7 @@ async fn history_write_emits_history_updated_event() {
         true,
     ));
     let (orch, emitter) = make_orchestrator_tuned(false, injector, focus, |o| {
-        o.settings().write().unwrap().history.mode =
-            kotone_core::history::HistoryMode::Capped;
+        o.settings().write().unwrap().history.mode = kotone_core::history::HistoryMode::Capped;
         o.history_dir = Some(dir.path().to_path_buf());
     });
 

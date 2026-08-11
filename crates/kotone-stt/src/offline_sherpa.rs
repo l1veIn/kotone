@@ -126,8 +126,8 @@ pub mod imp {
         }
 
         /// 预热：显式创建共享 recognizer（模型入内存）；随后 start_session 直接复用
-        fn warmup(&self) -> Result<(), String> {
-            self.recognizer(&SessionConfig::default()).map(|_| ())
+        fn warmup(&self, cfg: &SessionConfig) -> Result<(), String> {
+            self.recognizer(cfg).map(|_| ())
         }
 
         /// 卸载：释放共享 recognizer（重新「启动」或下次会话时重建）

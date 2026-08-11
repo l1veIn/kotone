@@ -1,7 +1,7 @@
 {
   "identifier": "default",
-  "description": "Kotone 默认权限集：覆盖全部窗口",
-  "windows": ["main", "overlay"],
+  "description": "Kotone 设置主窗口权限集",
+  "windows": ["main"],
   "permissions": [
     "core:default",
     "core:window:default",

@@ -9,9 +9,10 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
 use kotone_core::interaction::effective_hotkey_mode;
+use kotone_core::profile::GameProfile;
 use kotone_core::runtime::{self, RuntimePhase};
 use kotone_core::settings::Settings;
-use kotone_core::stt::EngineRegistry;
+use kotone_core::stt::{EngineRegistry, SessionConfig};
 
 use crate::hotkey::HotkeyManager;
 use crate::{hide_window, show_window_no_focus, SharedState};
@@ -21,6 +22,27 @@ use crate::{hide_window, show_window_no_focus, SharedState};
 pub struct StartedSnapshot {
     pub engine_id: String,
     pub model_id: String,
+    /// 真正用于预热共享 recognizer 的配置。Running 期间不可偷换；
+    /// 当前设置与它不同时由 restartNeeded 提示重启。
+    pub session_config: SessionConfig,
+}
+
+fn session_config_from(settings: &Settings, engine_id: &str) -> SessionConfig {
+    let active_profile = settings
+        .active_profile_id
+        .as_deref()
+        .and_then(kotone_core::profile::get)
+        .unwrap_or_else(GameProfile::builtin_generic);
+    SessionConfig {
+        language: settings.language.clone(),
+        hotwords: active_profile.hotwords,
+        hotwords_score: settings.hotwords_score,
+        options: settings
+            .engine_options
+            .get(engine_id)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    }
 }
 
 /// IPC/事件用运行时状态（kotone://runtime 全量推送）
@@ -84,13 +106,18 @@ impl RuntimeManager {
         let engine_id = settings.stt_engine.clone();
         let model_id = kotone_stt::model::active_model_from(settings, &engine_id);
         let started = self.started();
-        let restart_needed = runtime::restart_needed(
+        let engine_or_model_changed = runtime::restart_needed(
             phase,
             started
                 .as_ref()
                 .map(|s| (s.engine_id.as_str(), s.model_id.as_str())),
             (&engine_id, &model_id),
         );
+        let session_config_changed = phase == RuntimePhase::Running
+            && started.as_ref().is_some_and(|snapshot| {
+                snapshot.session_config != session_config_from(settings, &engine_id)
+            });
+        let restart_needed = engine_or_model_changed || session_config_changed;
         RuntimeStatus {
             phase: phase.as_str().to_string(),
             restart_needed,
@@ -200,13 +227,16 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<SharedState>();
     let rt = app.state::<RuntimeManager>();
 
-    let (engine_id, model_id, key, mode) = {
+    let (settings_snapshot, engine_id, model_id, key, mode, session_config) = {
         let settings = state.settings.read().unwrap();
+        let engine_id = settings.stt_engine.clone();
         (
-            settings.stt_engine.clone(),
-            kotone_stt::model::active_model_from(&settings, &settings.stt_engine),
+            settings.clone(),
+            engine_id.clone(),
+            kotone_stt::model::active_model_from(&settings, &engine_id),
             settings.hotkey.key.clone(),
             effective_hotkey_mode(&settings),
+            session_config_from(&settings, &engine_id),
         )
     };
     if state.engines.get(&engine_id).is_none() {
@@ -261,11 +291,12 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
     let warmup_started = std::time::Instant::now();
     let engines: Arc<EngineRegistry> = state.engines.clone();
     let warm_engine = engine_id.clone();
+    let warm_config = session_config.clone();
     tauri::async_runtime::spawn_blocking(move || {
         engines
             .get(&warm_engine)
             .ok_or_else(|| format!("未注册的 STT 引擎: {warm_engine}"))?
-            .warmup()
+            .warmup(&warm_config)
     })
     .await
     .map_err(|e| format!("warmup 任务异常：{e}"))??;
@@ -292,8 +323,14 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
             "data": {}
         }),
     );
+    // 注册热键前先锁定已预热快照，消除「热键已可用但 begin 读到
+    // 设置页新值」的竞态窗口。注册失败时与引擎一起回滚。
+    state
+        .orchestrator
+        .activate_runtime_settings(settings_snapshot);
     let mgr = app.state::<HotkeyManager>();
     if let Err(e) = mgr.register(app, &key, mode) {
+        state.orchestrator.deactivate_runtime_settings();
         let engines = state.engines.clone();
         let unload_engine = engine_id.clone();
         let _ = tauri::async_runtime::spawn_blocking(move || {
@@ -322,6 +359,18 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
     let _ = app.emit("kotone://overlay-config", &overlay_config);
     if let Some(win) = app.get_webview_window("overlay") {
         match overlay_config.visibility {
+            kotone_core::settings::OverlayVisibility::Always
+                if kotone_platform_windows::fullscreen::is_exclusive_fullscreen_active()
+                    == Some(true) =>
+            {
+                // 启动时游戏已在独占全屏：不激活置顶浮窗，否则可能
+                // 直接将游戏最小化。设置页会持久记住该提示。
+                hide_window(&win);
+                let _ = app.emit(
+                    "kotone://fullscreen-warning",
+                    serde_json::json!({ "exclusiveFullscreen": true }),
+                );
+            }
             kotone_core::settings::OverlayVisibility::Always => show_window_no_focus(&win),
             kotone_core::settings::OverlayVisibility::OnDemand
             | kotone_core::settings::OverlayVisibility::Never => hide_window(&win),
@@ -331,6 +380,7 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
     rt.set_started(Some(StartedSnapshot {
         engine_id,
         model_id,
+        session_config,
     }));
     rt.transit(runtime::finish_start)?;
     kotone_core::log::log("runtime started");
@@ -385,7 +435,12 @@ pub async fn stop(app: &AppHandle) -> Result<RuntimeStatus, String> {
 
     // 卸载引擎（释放模型内存）
     let engines = state.engines.clone();
-    let engine_id = state.settings.read().unwrap().stt_engine.clone();
+    // 设置页可在 Running 期间先选中另一引擎。停止时必须卸载
+    // 真正已预热的快照引擎，不能卸载尚未启动的「当前选择」。
+    let engine_id = rt
+        .started()
+        .map(|snapshot| snapshot.engine_id)
+        .unwrap_or_else(|| state.settings.read().unwrap().stt_engine.clone());
     let _ = tauri::async_runtime::spawn_blocking(move || {
         if let Some(en) = engines.get(&engine_id) {
             en.unload();
@@ -393,6 +448,7 @@ pub async fn stop(app: &AppHandle) -> Result<RuntimeStatus, String> {
     })
     .await;
 
+    state.orchestrator.deactivate_runtime_settings();
     rt.set_started(None);
     rt.transit(runtime::finish_stop)?;
     kotone_core::log::log("runtime stopped");
