@@ -205,7 +205,8 @@
   );
 
   async function downloadById(id: string) {
-    if (downloadTargetId) return;
+    // 下载目录必须先加载完成，且目录迁移和模型下载不能并发进行。
+    if (downloadTargetId || changingDir || dirInfo === null) return;
     downloadTargetId = id;
     dlProgress = null;
     dlError = "";
@@ -476,7 +477,7 @@
         </div>
       </div>
     {:else if step === 2}
-      <div class="relative p-7" data-testid="onboarding-model">
+      <div class="relative p-6" data-testid="onboarding-model">
         <div class="flex items-start gap-4">
           <img src={stickerThinking} alt="" class="h-11 w-11 shrink-0" />
           <div>
@@ -488,31 +489,82 @@
           </div>
         </div>
 
-        <div class="kotone-card mt-5 p-4">
-          {#if primaryModel}
-            <div class="flex items-center justify-between gap-4">
-              <div class="min-w-0">
-                <p class="text-sm font-semibold">{primaryModel.displayName}</p>
-                <p class="mt-1 text-[11px] text-white/45">
-                  约 {Math.round(primaryModel.sizeBytes / 1_000_000)} MB · 中英流式识别
+        <!-- 先确认存储位置，再下载模型；两项属于同一准备流程。 -->
+        <div class="kotone-card mt-4 overflow-hidden" data-testid="model-setup-section">
+          <div class="border-b border-white/10 p-3.5" data-testid="model-storage-section">
+            <div class="flex items-center gap-3">
+              <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-kotone-cyan/15 text-[11px] font-bold text-kotone-cyan">
+                1
+              </span>
+              <div class="min-w-0 flex-1">
+                <p class="text-sm font-semibold">先确认模型存储位置</p>
+                <p
+                  class="mt-0.5 truncate text-[11px] text-white/45"
+                  title={dirInfo?.dir ?? "正在读取模型存储位置"}
+                  data-testid="models-dir-path"
+                >
+                  {dirInfo?.dir ?? "正在读取…"}{dirInfo?.isDefault ? "（默认）" : ""}
                 </p>
               </div>
-              {#if primaryReady}
-                <span class="shrink-0 rounded bg-kotone-cyan/15 px-3 py-1.5 text-xs font-semibold text-kotone-cyan">
-                  ✓ 已就绪
-                </span>
-              {:else}
+              <div class="flex shrink-0 items-center gap-1.5">
+                {#if dirInfo && !dirInfo.isDefault}
+                  <button
+                    class="rounded-lg bg-white/8 px-2.5 py-1.5 text-[11px] text-white/65 ring-1 ring-white/12 transition hover:bg-white/15 disabled:opacity-50"
+                    disabled={changingDir || downloadTargetId !== null}
+                    onclick={() => void resetModelsDir()}
+                  >
+                    恢复默认
+                  </button>
+                {/if}
                 <button
-                  class="shrink-0 rounded-lg bg-kotone-cyan px-3.5 py-1.5 text-xs font-semibold text-kotone-deep disabled:opacity-60"
-                  disabled={downloadTargetId !== null}
-                  onclick={() => primaryModel && void downloadById(primaryModel.id)}
+                  class="rounded-lg bg-white/10 px-2.5 py-1.5 text-[11px] font-semibold text-white/85 ring-1 ring-white/15 transition hover:bg-white/20 disabled:opacity-50"
+                  disabled={changingDir || downloadTargetId !== null || dirInfo === null}
+                  onclick={() => void pickModelsDir()}
                 >
-                  {downloadTargetId === primaryModel.id ? "下载中…" : dlError ? "重试下载" : "下载推荐模型"}
+                  {changingDir ? "切换中…" : "选择位置"}
                 </button>
+                <button
+                  class="rounded-lg bg-white/8 px-2.5 py-1.5 text-[11px] text-white/65 ring-1 ring-white/12 transition hover:bg-white/15 disabled:opacity-50"
+                  disabled={dirInfo === null}
+                  onclick={() => void openModelsDir()}
+                >
+                  打开
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="p-3.5" data-testid="model-download-section">
+            <div class="flex items-center gap-3">
+              <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-kotone-violet/18 text-[11px] font-bold text-kotone-violet">
+                2
+              </span>
+              {#if primaryModel}
+                <div class="min-w-0 flex-1">
+                  <p class="truncate text-sm font-semibold">再下载 {primaryModel.displayName}</p>
+                  <p class="mt-0.5 text-[11px] text-white/45">
+                    约 {Math.round(primaryModel.sizeBytes / 1_000_000)} MB · 中英流式识别
+                  </p>
+                </div>
+                {#if primaryReady}
+                  <span class="shrink-0 rounded bg-kotone-cyan/15 px-3 py-1.5 text-xs font-semibold text-kotone-cyan">
+                    ✓ 已就绪
+                  </span>
+                {:else}
+                  <button
+                    class="shrink-0 rounded-lg bg-kotone-cyan px-3.5 py-1.5 text-xs font-semibold text-kotone-deep disabled:opacity-50"
+                    disabled={downloadTargetId !== null || changingDir || dirInfo === null}
+                    onclick={() => void downloadById(primaryModel.id)}
+                  >
+                    {downloadTargetId === primaryModel.id ? "下载中…" : dlError ? "重试下载" : "下载推荐模型"}
+                  </button>
+                {/if}
+              {:else}
+                <p class="text-xs text-kotone-pink">未找到推荐模型，请重试读取资源。</p>
               {/if}
             </div>
-            {#if downloadTargetId === primaryModel.id}
-              <div class="mt-3 flex items-center gap-2">
+            {#if primaryModel && downloadTargetId === primaryModel.id}
+              <div class="mt-2.5 flex items-center gap-2 pl-9">
                 <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-white/10">
                   <div
                     class="h-full rounded-full bg-kotone-cyan transition-[width] {dlPercent === null
@@ -521,6 +573,9 @@
                     style:width={dlPercent === null ? undefined : `${dlPercent}%`}
                   ></div>
                 </div>
+                <span class="w-9 text-right text-[10px] text-white/45">
+                  {dlPercent === null ? "连接" : `${dlPercent}%`}
+                </span>
                 <button
                   class="shrink-0 rounded-lg bg-white/10 px-2.5 py-1 text-[11px] text-white/70 ring-1 ring-white/15 transition hover:bg-white/20"
                   onclick={() => void cancelDownloadById()}
@@ -528,73 +583,29 @@
                   取消
                 </button>
               </div>
-              <p class="mt-1.5 text-[11px] text-white/45">
-                {dlPercent === null ? "建立连接中…" : `${dlPercent}%`}
-              </p>
             {/if}
-          {:else}
-            <p class="text-xs text-kotone-pink">未找到推荐模型，请重试读取资源。</p>
-          {/if}
+            {#if dlError}
+              <p class="mt-2 pl-9 text-[11px] text-kotone-pink">{dlError}</p>
+            {/if}
+          </div>
         </div>
 
-        <!-- 模型存储位置（用户反馈：下载模型应支持选择路径而非默认 C 盘） -->
-        <label class="kotone-card mt-3 block p-4">
-          <span class="text-sm font-semibold text-kotone-cyan/90">模型存储位置</span>
-          <span class="mt-2 block text-[11px] text-white/45">
-            模型体积较大（推荐模型约 134 MB），建议放到空间充足的磁盘。切换后已下载的模型会一并迁移。
-          </span>
-          <span
-            class="mt-2 block truncate rounded-lg bg-white/5 px-2.5 py-1.5 text-xs text-white/70 ring-1 ring-white/10"
-          >
-            {dirInfo?.dir ?? "读取中…"}{dirInfo?.isDefault ? "（默认）" : ""}
-          </span>
-          <div class="mt-2 flex items-center gap-2">
-            <button
-              class="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/85 ring-1 ring-white/15 transition hover:bg-white/20 disabled:opacity-50"
-              disabled={changingDir || dirInfo === null}
-              onclick={() => void pickModelsDir()}
-            >
-              {changingDir ? "切换中…" : "选择位置"}
-            </button>
-            {#if dirInfo && !dirInfo.isDefault}
-              <button
-                class="rounded-lg bg-white/10 px-3 py-1.5 text-xs text-white/70 ring-1 ring-white/15 transition hover:bg-white/20 disabled:opacity-50"
-                disabled={changingDir}
-                onclick={() => void resetModelsDir()}
-              >
-                恢复默认
-              </button>
-            {/if}
-            <button
-              class="ml-auto rounded-lg bg-white/10 px-3 py-1.5 text-xs text-white/70 ring-1 ring-white/15 transition hover:bg-white/20"
-              onclick={() => void openModelsDir()}
-            >
-              打开目录
-            </button>
-          </div>
-        </label>
-
-        <label class="kotone-card mt-3 block p-4">
-          <span class="text-sm font-semibold text-kotone-cyan/90">麦克风</span>
+        <label class="kotone-card mt-3 flex items-center gap-3 p-3">
+          <span class="shrink-0 text-sm font-semibold text-kotone-cyan/90">麦克风</span>
           <select
-            class="mt-3 w-full rounded-lg bg-white/8 px-2.5 py-2 text-sm ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60 [&>option]:bg-kotone-deep"
+            class="min-w-0 flex-1 rounded-lg bg-white/8 px-2.5 py-1.5 text-sm ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60 [&>option]:bg-kotone-deep"
             value={selectedDeviceId}
+            aria-label="麦克风"
             onchange={(e) => void chooseDevice((e.target as HTMLSelectElement).value)}
           >
             {#each devices as device}
               <option value={device.id}>{device.name}</option>
             {/each}
           </select>
-          <span class="mt-2 block text-[11px] text-white/45">
-            最后一步启动后会通过真实录音验证这个设备。
-          </span>
+          <span class="shrink-0 text-[10px] text-white/40">下一步会验证</span>
         </label>
 
-        {#if dlError}
-          <p class="mt-3 text-xs text-kotone-pink">{dlError}</p>
-        {/if}
-
-        <div class="mt-6 flex items-center justify-between">
+        <div class="mt-4 flex items-center justify-between" data-testid="onboarding-model-footer">
           <button class="text-xs text-white/50 hover:text-white/80" onclick={() => (step = 1)}>
             ← 上一步
           </button>

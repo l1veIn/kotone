@@ -32,6 +32,29 @@ test("forced onboarding completes the full guided setup and can be reopened", as
   await expect(onboarding).toBeVisible();
 });
 
+test("model setup confirms storage before download and keeps navigation in view", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await page.goto("/#/settings?onboarding=always");
+
+  await page.getByRole("button", { name: "开始设置", exact: true }).click();
+  await page.getByRole("button", { name: "下一步", exact: true }).click();
+
+  const setup = page.getByTestId("model-setup-section");
+  await expect(setup).toBeVisible();
+  await expect(setup.getByTestId("model-storage-section")).toBeVisible();
+  await expect(setup.getByTestId("model-download-section")).toBeVisible();
+  await expect(setup.locator(":scope > div")).toHaveCount(2);
+  await expect(setup.locator(":scope > div").first()).toHaveAttribute(
+    "data-testid",
+    "model-storage-section",
+  );
+
+  await expect(page.getByTestId("onboarding-model-footer")).toBeInViewport();
+  await expect(page.getByRole("button", { name: "下一步", exact: true })).toBeInViewport();
+});
+
 test("the hotkey step proactively blocks setup when the input environment is rejected", async ({
   page,
 }) => {

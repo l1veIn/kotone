@@ -1,7 +1,7 @@
 {
   "name": "kotone-desktop",
   "private": true,
-  "version": "0.1.7-rc.7",
+  "version": "0.1.7-rc.8",
   "description": "Kotone（琴音）— 游戏语音输入工具：按住热键说话，文字直达游戏聊天框",
   "type": "module",
   "scripts": {

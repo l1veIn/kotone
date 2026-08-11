@@ -2405,7 +2405,7 @@ dependencies = [
 
 [[package]]
 name = "kotone-tauri"
-version = "0.1.7-rc.7"
+version = "0.1.7-rc.8"
 dependencies = [
  "dirs",
  "kotone-core",
