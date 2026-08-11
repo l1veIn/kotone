@@ -1,6 +1,6 @@
 [package]
 name = "kotone-tauri"
-version = "0.1.7-rc.8"
+version = "0.1.7"
 description = "Kotone（琴音）— 游戏语音输入工具（Tauri 壳）"
 edition = "2021"
 rust-version = "1.77.2"
