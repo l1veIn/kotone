@@ -237,6 +237,16 @@ export interface PostProcessorInfo {
   category: "writing" | "translation" | "utility";
   developerOnly: boolean;
   networkAccess: "none" | "local" | "internet";
+  configFields: PostProcessorConfigField[];
+}
+
+export interface PostProcessorConfigField {
+  key: string;
+  displayName: string;
+  description: string;
+  kind: "text" | "file";
+  required: boolean;
+  fileExtensions: string[];
 }
 
 // ---------- 游戏 profile ----------
@@ -587,12 +597,32 @@ export async function listPostProcessors(): Promise<PostProcessorInfo[]> {
   if (!isTauri) {
     return [
       {
+        id: "builtin.blocklist-filter",
+        displayName: "屏蔽词过滤",
+        description: "按本地 CSV 表替换屏蔽词；替换词留空时使用等长星号。",
+        category: "utility",
+        developerOnly: false,
+        networkAccess: "local",
+        configFields: [
+          {
+            key: "csvPath",
+            displayName: "屏蔽词 CSV",
+            description:
+              "UTF-8 CSV，每行“屏蔽词,替换词”；第二列可留空，例如：坏蛋, 或 菜鸟,萌新。",
+            kind: "file",
+            required: true,
+            fileExtensions: ["csv"],
+          },
+        ],
+      },
+      {
         id: "mock.append-exclamation",
         displayName: "Mock · 句尾叹号",
         description: "在文本末尾追加一个全角叹号，用于验证后处理链路。",
         category: "utility",
         developerOnly: true,
         networkAccess: "none",
+        configFields: [],
       },
       {
         id: "mock.wrap-brackets",
@@ -601,6 +631,7 @@ export async function listPostProcessors(): Promise<PostProcessorInfo[]> {
         category: "utility",
         developerOnly: true,
         networkAccess: "none",
+        configFields: [],
       },
     ];
   }

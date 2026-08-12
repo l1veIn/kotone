@@ -35,7 +35,9 @@ impl ProcessorFactory for BlocklistFilterFactory {
             config_fields: vec![ProcessorConfigField {
                 key: "csvPath".into(),
                 display_name: "屏蔽词 CSV".into(),
-                description: "UTF-8 CSV：第一列屏蔽词，第二列替换词（可留空），无需表头。".into(),
+                description:
+                    "UTF-8 CSV，每行“屏蔽词,替换词”；第二列可留空，例如：坏蛋, 或 菜鸟,萌新。"
+                        .into(),
                 kind: ProcessorConfigFieldKind::File,
                 required: true,
                 file_extensions: vec!["csv".into()],
@@ -308,5 +310,8 @@ mod tests {
         assert_eq!(descriptor.config_fields.len(), 1);
         assert_eq!(descriptor.config_fields[0].key, "csvPath");
         assert!(descriptor.config_fields[0].required);
+        let value = serde_json::to_value(descriptor).unwrap();
+        assert_eq!(value["configFields"][0]["kind"], "file");
+        assert_eq!(value["configFields"][0]["fileExtensions"][0], "csv");
     }
 }

@@ -2,11 +2,14 @@
   /*
    * 文字处理设置页：后端注册表负责模块发现，前端只编辑线性 pipeline 配置。
    * 所有变更仍走 updateSettings 的事务入口，并以返回的完整 Settings 更新共享 store。
-   */
+  */
   import { onMount } from "svelte";
+  import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import {
+    isTauri,
     listPostProcessors,
     testPostProcessing,
+    type PostProcessorConfigField,
     type PostProcessorInfo,
     type PostProcessingConfig,
     type PostProcessingTestResult,
@@ -59,7 +62,7 @@
 
   function accessLabel(access: PostProcessorInfo["networkAccess"]): string {
     if (access === "internet") return "需要联网";
-    if (access === "local") return "访问本地服务";
+    if (access === "local") return "访问本地资源";
     return "完全离线";
   }
 
@@ -70,6 +73,31 @@
     const ids = new Set(pipeline.map((step) => step.id));
     while (ids.has(id)) id = `${base}-${++index}`;
     return id;
+  }
+
+  function configRecord(config: unknown): Record<string, unknown> {
+    return config !== null && typeof config === "object" && !Array.isArray(config)
+      ? (config as Record<string, unknown>)
+      : {};
+  }
+
+  function configValue(config: unknown, key: string): string {
+    const value = configRecord(config)[key];
+    return typeof value === "string" ? value : "";
+  }
+
+  function requiredConfigComplete(
+    processor: PostProcessorInfo | undefined,
+    config: unknown,
+  ): boolean {
+    if (!processor) return false;
+    const values = configRecord(config);
+    return processor.configFields
+      .filter((field) => field.required)
+      .every((field) => {
+        const value = values[field.key];
+        return typeof value === "string" && value.trim() !== "";
+      });
   }
 
   async function savePostProcessing(
@@ -104,17 +132,21 @@
   }
 
   async function addProcessor(processor: PostProcessorInfo) {
+    const needsConfiguration = processor.configFields.some((field) => field.required);
     const step: PostProcessStepConfig = {
       id: nextStepId(processor.id),
       processorId: processor.id,
-      enabled: true,
-      config: null,
+      enabled: !needsConfiguration,
+      config: {},
       timeoutMs: 5_000,
       onError: "required",
     };
     const next = configWithSteps([...pipeline, step]);
     next.enabled = true;
-    if (await savePostProcessing(next, `已添加：${processor.displayName}`)) adding = false;
+    const message = needsConfiguration
+      ? `已添加：${processor.displayName}，请完成必填配置`
+      : `已添加：${processor.displayName}`;
+    if (await savePostProcessing(next, message)) adding = false;
   }
 
   async function updateStep(index: number, patch: Partial<PostProcessStepConfig>, message: string) {
@@ -122,6 +154,45 @@
       stepIndex === index ? { ...step, ...patch } : { ...step },
     );
     await savePostProcessing(configWithSteps(steps), message);
+  }
+
+  async function setStepEnabled(index: number, nextEnabled: boolean) {
+    const step = pipeline[index];
+    const processor = descriptor(step.processorId);
+    if (nextEnabled && !requiredConfigComplete(processor, step.config)) {
+      toast(false, "请先完成这个步骤的必填配置");
+      return;
+    }
+    await updateStep(index, { enabled: nextEnabled }, nextEnabled ? "步骤已启用" : "步骤已停用");
+  }
+
+  async function updateConfigField(index: number, field: PostProcessorConfigField, value: string) {
+    const step = pipeline[index];
+    const config = { ...configRecord(step.config), [field.key]: value };
+    const processor = descriptor(step.processorId);
+    const wasComplete = requiredConfigComplete(processor, step.config);
+    const complete = requiredConfigComplete(processor, config);
+    await updateStep(
+      index,
+      { config, enabled: complete ? step.enabled || !wasComplete : false },
+      complete && !wasComplete ? "处理步骤配置已更新并启用" : "处理步骤配置已更新",
+    );
+  }
+
+  async function chooseConfigFile(index: number, field: PostProcessorConfigField) {
+    if (!isTauri) return;
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        title: `选择${field.displayName}`,
+        filters: field.fileExtensions.length
+          ? [{ name: field.displayName, extensions: field.fileExtensions }]
+          : undefined,
+      });
+      if (typeof selected === "string") await updateConfigField(index, field, selected);
+    } catch (error) {
+      toast(false, `选择文件失败：${errText(error)}`);
+    }
   }
 
   async function removeStep(index: number) {
@@ -231,7 +302,7 @@
             {@const processor = descriptor(step.processorId)}
             <article
               data-testid={`postprocess-step-${step.processorId}`}
-              class="kotone-panel p-4 transition {step.enabled ? '' : 'opacity-55'}"
+              class="kotone-panel p-4 transition {step.enabled ? '' : 'opacity-75'}"
             >
               <div class="flex items-start gap-3">
                 <div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-kotone-cyan/12 text-xs font-bold text-kotone-cyan ring-1 ring-kotone-cyan/25">
@@ -254,10 +325,57 @@
                   checked={step.enabled}
                   label=""
                   ariaLabel={`启用${processor?.displayName ?? step.processorId}`}
-                  onchange={(value) =>
-                    void updateStep(index, { enabled: value }, value ? "步骤已启用" : "步骤已停用")}
+                  onchange={(value) => void setStepEnabled(index, value)}
                 />
               </div>
+
+              {#if processor && processor.configFields.length > 0}
+                <div class="mt-3 rounded-lg bg-white/4 p-3 ring-1 ring-white/10">
+                  {#each processor.configFields as field (field.key)}
+                    <div>
+                      <div class="flex items-center gap-1.5 text-[11px] font-medium text-white/65">
+                        <span>{field.displayName}</span>
+                        {#if field.required}
+                          <span class="text-kotone-pink/80">必填</span>
+                        {/if}
+                      </div>
+                      <div class="mt-1.5 flex gap-2">
+                        <input
+                          data-testid={`postprocess-config-${step.id}-${field.key}`}
+                          aria-label={field.displayName}
+                          class="min-w-0 flex-1 rounded-md bg-white/6 px-2.5 py-1.5 text-[11px] text-white/80 ring-1 ring-white/12 outline-none transition placeholder:text-white/25 focus:ring-kotone-cyan/45 disabled:opacity-50"
+                          placeholder={field.kind === "file"
+                            ? `选择或输入${field.displayName}路径`
+                            : `输入${field.displayName}`}
+                          value={configValue(step.config, field.key)}
+                          disabled={saving}
+                          onchange={(event) =>
+                            void updateConfigField(
+                              index,
+                              field,
+                              (event.target as HTMLInputElement).value.trim(),
+                            )}
+                        />
+                        {#if field.kind === "file" && isTauri}
+                          <button
+                            class="shrink-0 rounded-md bg-white/9 px-2.5 py-1.5 text-[11px] text-white/70 ring-1 ring-white/12 transition hover:bg-white/15 disabled:opacity-50"
+                            disabled={saving}
+                            onclick={() => void chooseConfigFile(index, field)}
+                          >选择文件</button>
+                        {/if}
+                      </div>
+                      <p class="mt-1.5 text-[10px] leading-relaxed text-white/35">
+                        {field.description}
+                      </p>
+                    </div>
+                  {/each}
+                  {#if !requiredConfigComplete(processor, step.config)}
+                    <p class="mt-2 text-[10px] text-kotone-pink/75">
+                      完成必填配置后，这个步骤会自动启用。
+                    </p>
+                  {/if}
+                </div>
+              {/if}
 
               <div class="mt-3 flex items-center justify-between gap-3 border-t border-white/8 pt-3">
                 <label class="flex items-center gap-2 text-[11px] text-white/45">

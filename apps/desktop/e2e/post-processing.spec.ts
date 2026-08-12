@@ -40,3 +40,27 @@ test("registered post-processors can be composed, tried out and edited", async (
   await expect(steps).toHaveCount(1);
   await expect(steps.nth(0)).toContainText("方括号包裹");
 });
+
+test("a discovered blocklist processor requires and saves its CSV path", async ({ page }) => {
+  await page.goto("/#/settings?onboarding=never");
+  await page.getByTestId("settings-nav-processing").click();
+
+  await page.getByTestId("add-postprocess-step").click();
+  const option = page.getByTestId("processor-option-builtin.blocklist-filter");
+  await expect(option).toContainText("屏蔽词过滤");
+  await expect(option).toContainText("访问本地资源");
+  await option.click();
+
+  const step = page.getByTestId("postprocess-step-builtin.blocklist-filter");
+  const toggle = step.getByRole("checkbox", { name: "启用屏蔽词过滤" });
+  await expect(toggle).not.toBeChecked();
+  await expect(step).toContainText("完成必填配置后，这个步骤会自动启用");
+
+  const csvPath = step.getByRole("textbox", { name: "屏蔽词 CSV" });
+  await csvPath.fill("C:\\Kotone\\blocklist.csv");
+  await csvPath.blur();
+
+  await expect(csvPath).toHaveValue("C:\\Kotone\\blocklist.csv");
+  await expect(toggle).toBeChecked();
+  await expect(step).not.toContainText("完成必填配置后，这个步骤会自动启用");
+});
