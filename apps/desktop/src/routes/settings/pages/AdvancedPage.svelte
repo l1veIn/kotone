@@ -14,6 +14,7 @@
     listSttEngines,
     exportDiagnostics,
     listModels,
+    modelsDirPathError,
     downloadModel,
     setActiveModel,
     deleteModel,
@@ -83,6 +84,10 @@
   const ADMIN_RESTART_FLAG = "kotone:admin-restart-pending";
 
   const downloadingAny = $derived(Object.keys(dlProgress).length > 0);
+  const dirDraftError = $derived(modelsDirPathError(dirDraft.trim()));
+  const currentModelsDirError = $derived(
+    dirInfo ? modelsDirPathError(dirInfo.dir) : null,
+  );
 
   onMount(() => {
     let un: (() => void) | undefined;
@@ -145,8 +150,12 @@
 
   async function onChangeDir() {
     const dir = dirDraft.trim();
-    editingDir = false;
     if (migrating || dir === (dirInfo?.isDefault ? "" : dirInfo?.dir)) return;
+    const pathError = modelsDirPathError(dir);
+    if (pathError) {
+      toast(false, pathError);
+      return;
+    }
     migrating = true;
     try {
       const report = await setModelsDir(dir);
@@ -155,6 +164,7 @@
       } else {
         toast(true, report.moved.length > 0 ? `模型目录已切换，迁移 ${report.moved.length} 项` : "模型目录已切换");
       }
+      editingDir = false;
       await reload();
     } catch (e) {
       toast(false, `切换模型目录失败：${errText(e)}`);
@@ -175,6 +185,11 @@
   async function onBrowseDir() {
     const sel = await openDialog({ directory: true, title: "选择模型存储位置" }).catch(() => null);
     if (!sel) return; // 用户取消
+    const pathError = modelsDirPathError(sel);
+    if (pathError) {
+      toast(false, pathError);
+      return;
+    }
     dirDraft = sel;
   }
 
@@ -670,7 +685,7 @@
         </button>
         <button
           class="shrink-0 rounded-lg bg-kotone-cyan px-3 py-1.5 text-xs font-semibold text-kotone-deep transition hover:brightness-110 active:scale-95 disabled:opacity-50"
-          disabled={migrating}
+          disabled={migrating || dirDraftError !== null}
           onclick={() => void onChangeDir()}
         >
           {migrating ? "迁移中…" : "确认并迁移"}
@@ -682,9 +697,13 @@
           取消
         </button>
       </div>
-      <p class="mt-2 text-[11px] text-white/40">
-        已下载的模型会移动到新目录（迁移失败的条目需重新下载）。
-      </p>
+      {#if dirDraftError}
+        <p class="mt-2 text-[11px] text-kotone-pink">{dirDraftError}</p>
+      {:else}
+        <p class="mt-2 text-[11px] text-white/40">
+          仅支持纯英文路径；已下载的模型会移动到新目录（迁移失败的条目需重新下载）。
+        </p>
+      {/if}
     {:else}
       <div class="mt-3 flex items-center gap-2">
         <span class="min-w-0 flex-1 truncate rounded-lg bg-white/5 px-2.5 py-1.5 text-xs text-white/70 ring-1 ring-white/10">
@@ -706,6 +725,15 @@
           打开目录
         </button>
       </div>
+      {#if currentModelsDirError}
+        <p class="mt-2 text-[11px] text-kotone-pink">
+          {currentModelsDirError}。请点击“更改”选择新目录。
+        </p>
+      {:else}
+        <p class="mt-2 text-[11px] text-white/40">
+          模型路径需要使用纯英文，例如 D:\KotoneModels。
+        </p>
+      {/if}
     {/if}
   </section>
 

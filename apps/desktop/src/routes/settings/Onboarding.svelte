@@ -11,6 +11,7 @@
     listAudioDevices,
     listModels,
     listProfiles,
+    modelsDirPathError,
     openModelsDir,
     setAudioDevice,
     setModelsDir,
@@ -55,7 +56,12 @@
   );
   const isDownloaded = (m: ModelInfo | null) =>
     m !== null && (m.downloaded || downloadedIds.includes(m.id));
-  const primaryReady = $derived(isDownloaded(primaryModel));
+  const currentModelsDirError = $derived(
+    dirInfo ? modelsDirPathError(dirInfo.dir) : null,
+  );
+  const primaryReady = $derived(
+    isDownloaded(primaryModel) && currentModelsDirError === null,
+  );
 
   let selectedProfileId = $state("lol");
   let selectedDeviceId = $state("default");
@@ -116,6 +122,11 @@
     } else {
       picked = window.prompt("模型存储目录（开发预览模式）", dirInfo?.dir ?? "");
       if (!picked) return;
+    }
+    const pathError = modelsDirPathError(picked);
+    if (pathError) {
+      toast(false, pathError);
+      return;
     }
     changingDir = true;
     try {
@@ -207,6 +218,10 @@
   async function downloadById(id: string) {
     // 下载目录必须先加载完成，且目录迁移和模型下载不能并发进行。
     if (downloadTargetId || changingDir || dirInfo === null) return;
+    if (currentModelsDirError) {
+      toast(false, currentModelsDirError);
+      return;
+    }
     downloadTargetId = id;
     dlProgress = null;
     dlError = "";
@@ -532,6 +547,15 @@
                 </button>
               </div>
             </div>
+            {#if currentModelsDirError}
+              <p class="mt-2 text-[11px] text-kotone-pink" data-testid="models-dir-error">
+                {currentModelsDirError}。请先点击“选择位置”。
+              </p>
+            {:else}
+              <p class="mt-2 text-[11px] text-white/40">
+                模型路径需要使用纯英文，例如 D:\KotoneModels。
+              </p>
+            {/if}
           </div>
 
           <div class="p-3.5" data-testid="model-download-section">
@@ -553,7 +577,7 @@
                 {:else}
                   <button
                     class="shrink-0 rounded-lg bg-kotone-cyan px-3.5 py-1.5 text-xs font-semibold text-kotone-deep disabled:opacity-50"
-                    disabled={downloadTargetId !== null || changingDir || dirInfo === null}
+                    disabled={downloadTargetId !== null || changingDir || dirInfo === null || currentModelsDirError !== null}
                     onclick={() => void downloadById(primaryModel.id)}
                   >
                     {downloadTargetId === primaryModel.id ? "下载中…" : dlError ? "重试下载" : "下载推荐模型"}

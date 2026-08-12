@@ -1177,7 +1177,7 @@ fn set_models_dir(
     let (_, updated, report) = state.settings_repository.update_with(
         |next| {
             next.models.dir = requested_dir;
-            Ok(())
+            model::validate_models_dir_path(&model::models_dir_from(next))
         },
         |old, next| {
             let old_dir = model::models_dir_from(old);

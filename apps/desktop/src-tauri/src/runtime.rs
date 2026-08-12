@@ -239,6 +239,11 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
             session_config_from(&settings, &engine_id),
         )
     };
+    // 兼容旧配置或手工修改 config.json 的场景：在进入任何 sherpa 原生代码前
+    // 拒绝非 ASCII 模型路径，避免词表读取失败后直接终止整个桌面进程。
+    kotone_stt::model::validate_models_dir_path(&kotone_stt::model::models_dir_from(
+        &settings_snapshot,
+    ))?;
     if state.engines.get(&engine_id).is_none() {
         return Err(format!(
             "未注册的 STT 引擎: {engine_id}（请在「引擎与模型」页重新选择）"

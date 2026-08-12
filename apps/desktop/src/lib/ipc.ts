@@ -1082,6 +1082,12 @@ export async function stopRuntime(): Promise<RuntimeStatus> {
 
 // ---------- 模型目录管理 ----------
 
+export function modelsDirPathError(dir: string): string | null {
+  return /[^\x00-\x7F]/.test(dir)
+    ? "模型存储路径必须使用纯英文路径（可包含英文字母、数字、空格和英文符号），例如 D:\\KotoneModels"
+    : null;
+}
+
 export async function getModelsDir(): Promise<ModelsDirInfo> {
   if (!isTauri) {
     const dir = mock.settings.models.dir.trim();
@@ -1092,6 +1098,8 @@ export async function getModelsDir(): Promise<ModelsDirInfo> {
 
 /** 切换模型目录（后端先迁移旧目录内容再写配置；空串 = 恢复默认） */
 export async function setModelsDir(dir: string): Promise<ModelsDirMigration> {
+  const pathError = modelsDirPathError(dir.trim());
+  if (pathError) throw new Error(pathError);
   if (!isTauri) {
     mock.settings.models.dir = dir;
     return { dir: dir || "~/.kotone/models (mock)", moved: [], failed: [] };

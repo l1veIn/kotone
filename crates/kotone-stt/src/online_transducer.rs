@@ -108,6 +108,7 @@ pub mod imp {
                 return Err(self.spec.not_ready_hint.into());
             }
             let dir = crate::model::multi_model_dir(&id).unwrap();
+            crate::model::validate_models_dir_path(&dir)?;
 
             let threads = cfg
                 .options

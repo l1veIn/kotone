@@ -49,6 +49,20 @@ pub fn models_dir_from(s: &settings::Settings) -> PathBuf {
     }
 }
 
+/// sherpa-onnx 的部分原生词表读取器在 Windows 上无法安全打开非 ASCII 路径，
+/// 并会直接终止宿主进程。模型目录因此统一要求使用纯英文（ASCII）路径。
+pub fn validate_models_dir_path(path: &Path) -> Result<(), String> {
+    if path.as_os_str().to_string_lossy().is_ascii() {
+        Ok(())
+    } else {
+        Err(format!(
+            "模型存储路径必须使用纯英文路径（可包含英文字母、数字、空格和英文符号），\
+             例如 D:\\KotoneModels。当前路径：{}",
+            path.display()
+        ))
+    }
+}
+
 // ---------- sherpa-onnx 多文件模型 ----------
 
 /// 多文件模型中的单个文件（sha256 可选：git 内小文件无 LFS oid，用 size 兜底校验）
@@ -480,6 +494,7 @@ pub fn list() -> Result<Vec<ModelInfo>, String> {
 /// 下载源策略（镜像 / 回退）取 settings.download，见 download.rs。
 /// 全局互斥 + 取消标记（P2-⑦）：并发重复下载被拒绝；cancel_download 可中断。
 pub fn download(id: &str, progress: Progress<'_>) -> Result<(), String> {
+    validate_models_dir_path(&models_dir())?;
     let _download_guard = download::begin_download()?;
     download_inner(id, progress)
 }
@@ -1609,6 +1624,14 @@ mod tests {
         assert_eq!(models_dir_from(&s), settings::kotone_dir().join("models"));
         s.models.dir = "D:\\models".into();
         assert_eq!(models_dir_from(&s), PathBuf::from("D:\\models"));
+    }
+
+    #[test]
+    fn models_dir_path_requires_ascii() {
+        assert!(validate_models_dir_path(Path::new("D:\\Kotone Models\\v1")).is_ok());
+        let err = validate_models_dir_path(Path::new("E:\\琴音模型")).unwrap_err();
+        assert!(err.contains("纯英文路径"));
+        assert!(err.contains("D:\\KotoneModels"));
     }
 
     #[test]
