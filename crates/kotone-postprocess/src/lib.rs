@@ -1,16 +1,18 @@
 //! Kotone 后处理器实现 crate。
 //!
-//! 当前先提供零依赖 mock，用于验证注册发现和有序 pipeline；
-//! 后续 AI 润色、翻译及在线/本地 API 适配器继续沿用同一注册入口。
+//! 内置本地工具与开发态 mock 共用同一注册入口；后续 AI 润色、翻译及在线/本地 API
+//! 适配器继续沿用这套发现与配置字段契约。
 
 use std::sync::Arc;
 
 use kotone_core::postprocess::{ProcessorFactory, ProcessorRegistry};
 
+pub mod blocklist;
 pub mod mock;
 
 pub fn builtin_processors() -> Vec<Arc<dyn ProcessorFactory>> {
     vec![
+        Arc::new(blocklist::BlocklistFilterFactory),
         Arc::new(mock::AppendExclamationFactory),
         Arc::new(mock::WrapBracketsFactory),
     ]
@@ -57,6 +59,7 @@ mod tests {
                 category: ProcessorCategory::Utility,
                 developer_only: true,
                 network_access: NetworkAccess::None,
+                config_fields: Vec::new(),
             }
         }
 
@@ -89,6 +92,7 @@ mod tests {
                 category: ProcessorCategory::Utility,
                 developer_only: true,
                 network_access: NetworkAccess::None,
+                config_fields: Vec::new(),
             }
         }
 
@@ -138,6 +142,7 @@ mod tests {
         assert_eq!(
             ids,
             vec![
+                "builtin.blocklist-filter".to_string(),
                 "mock.append-exclamation".to_string(),
                 "mock.wrap-brackets".to_string(),
             ]

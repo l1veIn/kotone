@@ -19,6 +19,7 @@ impl ProcessorFactory for AppendExclamationFactory {
             category: ProcessorCategory::Utility,
             developer_only: true,
             network_access: NetworkAccess::None,
+            config_fields: Vec::new(),
         }
     }
 
@@ -57,6 +58,7 @@ impl ProcessorFactory for WrapBracketsFactory {
             category: ProcessorCategory::Utility,
             developer_only: true,
             network_access: NetworkAccess::None,
+            config_fields: Vec::new(),
         }
     }
 

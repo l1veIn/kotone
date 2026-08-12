@@ -125,6 +125,26 @@ pub struct ProcessorDescriptor {
     pub category: ProcessorCategory,
     pub developer_only: bool,
     pub network_access: NetworkAccess,
+    pub config_fields: Vec<ProcessorConfigField>,
+}
+
+/// 处理器自行声明的简单配置字段。设置页据此生成通用表单，不需要认识具体模块 ID。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessorConfigField {
+    pub key: String,
+    pub display_name: String,
+    pub description: String,
+    pub kind: ProcessorConfigFieldKind,
+    pub required: bool,
+    pub file_extensions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProcessorConfigFieldKind {
+    Text,
+    File,
 }
 
 /// 设置页用于分组展示处理器的稳定领域分类。
