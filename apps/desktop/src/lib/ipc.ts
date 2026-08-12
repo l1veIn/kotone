@@ -216,6 +216,10 @@ export interface EngineInfo {
 export interface PostProcessorInfo {
   id: string;
   displayName: string;
+  description: string;
+  category: "writing" | "translation" | "utility";
+  developerOnly: boolean;
+  networkAccess: "none" | "local" | "internet";
 }
 
 // ---------- 游戏 profile ----------
@@ -565,8 +569,22 @@ export async function getSettings(): Promise<Settings> {
 export async function listPostProcessors(): Promise<PostProcessorInfo[]> {
   if (!isTauri) {
     return [
-      { id: "mock.append-exclamation", displayName: "Mock · 句尾叹号" },
-      { id: "mock.wrap-brackets", displayName: "Mock · 方括号包裹" },
+      {
+        id: "mock.append-exclamation",
+        displayName: "Mock · 句尾叹号",
+        description: "在文本末尾追加一个全角叹号，用于验证后处理链路。",
+        category: "utility",
+        developerOnly: true,
+        networkAccess: "none",
+      },
+      {
+        id: "mock.wrap-brackets",
+        displayName: "Mock · 方括号包裹",
+        description: "用全角方括号包裹文本，用于验证多步骤顺序。",
+        category: "utility",
+        developerOnly: true,
+        networkAccess: "none",
+      },
     ];
   }
   return invoke<PostProcessorInfo[]>("list_post_processors");

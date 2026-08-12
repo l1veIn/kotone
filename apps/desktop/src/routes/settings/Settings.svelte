@@ -1,7 +1,7 @@
 <script lang="ts">
   /*
    * 设置窗口视图（index.html#/settings）——方向 B「中继站」：
-   * 左侧导航（头像 + 六项）+ 右侧页面。页面组件在 ./pages/ 下，
+   * 左侧导航 + 右侧页面。页面组件在 ./pages/ 下，
    * 共享 settingsStore / toast（lib/stores/ui.ts）；IPC 全部走 lib/ipc.ts。
    */
   import { onMount } from "svelte";
@@ -31,6 +31,7 @@
   import Onboarding from "./Onboarding.svelte";
   import Titlebar from "./Titlebar.svelte";
   import GeneralPage from "./pages/GeneralPage.svelte";
+  import TextProcessingPage from "./pages/TextProcessingPage.svelte";
   import AdvancedPage from "./pages/AdvancedPage.svelte";
   import GamePage from "./pages/GamePage.svelte";
   import HistoryPage from "./pages/HistoryPage.svelte";
@@ -38,10 +39,18 @@
   import CharacterPage from "./pages/CharacterPage.svelte";
   import patternSwitch from "../../assets/brand/patterns/switch.webp";
 
-  type PageId = "general" | "game" | "history" | "advanced" | "about" | "character";
+  type PageId =
+    | "general"
+    | "processing"
+    | "game"
+    | "history"
+    | "advanced"
+    | "about"
+    | "character";
 
   const navItems: { id: PageId; label: string; icon: string }[] = [
     { id: "general", label: "通用", icon: "home" },
+    { id: "processing", label: "文字处理", icon: "sparkles" },
     { id: "game", label: "游戏适配", icon: "gamepad" },
     { id: "history", label: "历史记录", icon: "clock" },
     { id: "advanced", label: "高级", icon: "sliders" },
@@ -162,6 +171,7 @@
       {#each navItems as item}
         {@const active = page === item.id || (page === "character" && item.id === "about")}
         <button
+          data-testid={`settings-nav-${item.id}`}
           class="group relative flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition
             {active
             ? 'bg-kotone-cyan/12 text-kotone-cyan shadow-glow-cyan'
@@ -176,6 +186,8 @@
           <span class="inline-flex h-4.5 w-4.5 items-center justify-center" aria-hidden="true">
             {#if item.icon === "home"}
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M3 10.5 12 3l9 7.5M5 9.5V21h14V9.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            {:else if item.icon === "sparkles"}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="m12 3 1.2 3.8L17 8l-3.8 1.2L12 13l-1.2-3.8L7 8l3.8-1.2L12 3ZM18.5 14l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2ZM5 12l.8 2.2L8 15l-2.2.8L5 18l-.8-2.2L2 15l2.2-.8L5 12Z" stroke-linecap="round" stroke-linejoin="round"/></svg>
             {:else if item.icon === "sliders"}
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" stroke-linecap="round"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
             {:else if item.icon === "gamepad"}
@@ -204,6 +216,8 @@
       <GeneralPage onOpenAdvanced={() => (page = "advanced")} />
     {:else if page === "advanced"}
       <AdvancedPage onOpenOnboarding={() => (showOnboarding = true)} />
+    {:else if page === "processing"}
+      <TextProcessingPage />
     {:else if page === "game"}
       <GamePage />
     {:else if page === "history"}
