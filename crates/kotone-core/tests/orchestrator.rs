@@ -16,6 +16,7 @@ use std::time::Duration;
 use kotone_core::audio::{AudioBackend, AudioHandle};
 use kotone_core::inject::{CancelToken, FocusBackend, InjectError, Injector, TargetWindow};
 use kotone_core::orchestrator::{Emitter, Orchestrator, OrchestratorState};
+use kotone_core::postprocess::{PipelineStepConfig, StepFailurePolicy};
 use kotone_core::profile::GameProfile;
 use kotone_core::settings::Settings;
 use kotone_core::stt::EngineRegistry;
@@ -321,6 +322,8 @@ fn make_orchestrator_tuned(
     registry.register(Box::new(NeverReadyEngine));
     let engines = Arc::new(registry);
     let emitter = Arc::new(VecEmitter::default());
+    let mut processors = kotone_core::postprocess::ProcessorRegistry::new();
+    kotone_postprocess::register_builtin(&mut processors).unwrap();
     let mut orch = Orchestrator::new(
         settings,
         engines,
@@ -328,7 +331,8 @@ fn make_orchestrator_tuned(
         injector,
         focus,
         emitter.clone(),
-    );
+    )
+    .with_processors(Arc::new(processors));
     orch.toast_dwell = Duration::from_millis(10);
     orch.finalize_timeout = Duration::from_secs(2);
     orch.focus_restore_delay = Duration::ZERO;
@@ -404,6 +408,36 @@ async fn auto_send_flow_skips_preview() {
         "autoSend 不应进 Preview"
     );
     assert!(seq.contains(&"sending".to_string()));
+}
+
+#[tokio::test]
+async fn single_mock_postprocessor_changes_deliverable_text() {
+    let (orch, emitter, sent) = make_orchestrator(true);
+    {
+        let mut settings = orch.settings().write().unwrap();
+        settings.post_processing.enabled = true;
+        settings.post_processing.pipeline.steps = vec![PipelineStepConfig {
+            id: "punctuation".into(),
+            processor_id: "mock.append-exclamation".into(),
+            enabled: true,
+            config: serde_json::Value::Null,
+            timeout_ms: 1_000,
+            on_error: StepFailurePolicy::Required,
+        }];
+    }
+
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.end().await.unwrap();
+
+    assert_eq!(orch.state(), OrchestratorState::Success);
+    assert_eq!(
+        sent.lock().unwrap().as_slice(),
+        &["对面打野在下路！".to_string()]
+    );
+    let sequence = emitter.state_sequence();
+    assert!(sequence.contains(&"processing".to_string()));
+    assert!(emitter.partials().contains(&"对面打野在下路！".to_string()));
 }
 
 /// ADR-006 预览只读化：confirm_send 无文本参数，一律发送 preview_text

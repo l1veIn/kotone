@@ -19,6 +19,10 @@ use tokio::sync::{mpsc, oneshot};
 use crate::audio::{AudioBackend, AudioHandle};
 use crate::inject::{CancelToken, FocusBackend, InjectError, Injector, TargetWindow};
 use crate::interaction::{EndTrigger, InteractionPolicy, PostFinalize};
+use crate::postprocess::{
+    PostProcessPipeline, PostProcessingConfig, ProcessErrorKind, ProcessingCancelToken,
+    ProcessingContext, ProcessorRegistry,
+};
 use crate::profile::{self, GameProfile};
 use crate::settings::Settings;
 use crate::stt::{EngineRegistry, SessionConfig, SttEvent, SttSession};
@@ -52,6 +56,7 @@ pub enum OrchestratorState {
     Idle,
     Listening,
     Transcribing,
+    Processing,
     Preview,
     Sending,
     Success,
@@ -107,17 +112,34 @@ impl ReadyText {
     }
 }
 
+/// STT 已完成、但尚未完成后处理的文本与本轮不可变 pipeline/context 快照。
+#[derive(Clone)]
+struct RecognizedText {
+    source_text: String,
+    pipeline: PostProcessingConfig,
+    context: ProcessingContext,
+}
+
 /// 状态机中待用户/系统继续处置的类型化文本，替代语义过载的 `preview_text`。
 /// 后续处理阶段可以增加 Recognized 变体，而预览与注入只接受 Ready。
 #[derive(Clone)]
 enum PendingText {
+    Recognized(RecognizedText),
     Ready(ReadyText),
 }
 
 impl PendingText {
-    fn ready(&self) -> &ReadyText {
+    fn ready(&self) -> Option<&ReadyText> {
         match self {
-            Self::Ready(ready) => ready,
+            Self::Recognized(_) => None,
+            Self::Ready(ready) => Some(ready),
+        }
+    }
+
+    fn recognized(&self) -> Option<&RecognizedText> {
+        match self {
+            Self::Recognized(recognized) => Some(recognized),
+            Self::Ready(_) => None,
         }
     }
 }
@@ -129,6 +151,8 @@ struct Inner {
     pending_text: Option<PendingText>,
     /// Sending 状态的取消令牌
     send_cancel: Option<CancelToken>,
+    /// Processing 状态的取消令牌；Esc/cancel 可立即打断异步处理器 future。
+    processing_cancel: Option<ProcessingCancelToken>,
     /// begin 时记录的前台窗口 = 注入目标（发送前把焦点还给它）
     target_window: Option<TargetWindow>,
     /// 本地诊断流程的 case id；无论 history 是否关闭，每次 begin 都生成。
@@ -225,6 +249,7 @@ pub struct Orchestrator {
     /// 已预热配置。None 用于 CLI/测试，保持原有「现场读设置」语义。
     runtime_stt_settings: RwLock<Option<Settings>>,
     engines: Arc<EngineRegistry>,
+    processors: Arc<ProcessorRegistry>,
     audio: Arc<dyn AudioBackend>,
     injector: Arc<dyn Injector>,
     focus: Arc<dyn FocusBackend>,
@@ -271,6 +296,7 @@ impl Orchestrator {
                 active: None,
                 pending_text: None,
                 send_cancel: None,
+                processing_cancel: None,
                 target_window: None,
                 process_case_id: None,
                 history: None,
@@ -281,6 +307,7 @@ impl Orchestrator {
             settings,
             runtime_stt_settings: RwLock::new(None),
             engines,
+            processors: Arc::new(ProcessorRegistry::new()),
             audio,
             injector,
             focus,
@@ -844,6 +871,7 @@ impl Orchestrator {
         inner.gen += 1;
         inner.state = OrchestratorState::Listening;
         inner.pending_text = None;
+        inner.processing_cancel = None;
         // 目标窗口记忆：用户按下热键说话前所在的前台窗口 = 注入目标，
         // 发送前（do_send）会把焦点还给它，避免 preview 交互抢焦点导致注入打错窗口
         inner.target_window = self.focus.foreground_window();
@@ -1031,9 +1059,10 @@ impl Orchestrator {
                         Err(e) => crate::log::log(&format!("eval 录档失败（忽略）: {e}")),
                     }
                 }
-                // 从这里起只流转 ReadyText：后续加入后处理时，end() 仍只负责 STT
-                // finalize/eval，处理完成后的预览与发送复用同一个稳定出口。
-                self.deliver_ready_text(gen, ReadyText::unchanged(t.text))
+                // STT 产物与可交付文本从此分离。pipeline 关闭/为空时 runner 走零步骤
+                // 透传，不产生 Processing 状态，保证旧配置行为与事件序列不变。
+                let recognized = self.snapshot_recognized_text(t.text);
+                self.run_postprocessing(gen, recognized, &[OrchestratorState::Transcribing])
                     .await?;
             }
             Err(e) => {
@@ -1046,6 +1075,161 @@ impl Orchestrator {
             }
         }
         Ok(())
+    }
+
+    /// 注入可发现的后处理器注册表；与 STT 引擎一样由外层实现 crate 负责注册。
+    pub fn with_processors(mut self, processors: Arc<ProcessorRegistry>) -> Self {
+        self.processors = processors;
+        self
+    }
+
+    fn snapshot_recognized_text(&self, source_text: String) -> RecognizedText {
+        let settings = self.settings.read().unwrap().clone();
+        let inner = self.inner.lock().unwrap();
+        RecognizedText {
+            source_text,
+            pipeline: settings.post_processing,
+            context: ProcessingContext {
+                session_id: inner.process_case_id.clone().unwrap_or_default(),
+                profile_id: settings.active_profile_id,
+                channel_id: inner.channel.as_ref().map(|(_, id)| id.clone()),
+            },
+        }
+    }
+
+    /// 编译并运行一份会话级 pipeline 快照。只有非空 pipeline 才进入 Processing；
+    /// Required 错误保留 RecognizedText，confirm_send 会重新运行处理而不会绕过。
+    async fn run_postprocessing(
+        &self,
+        gen: u64,
+        recognized: RecognizedText,
+        expected_states: &[OrchestratorState],
+    ) -> Result<(), String> {
+        let pipeline = match PostProcessPipeline::compile(&recognized.pipeline, &self.processors) {
+            Ok(pipeline) => pipeline,
+            Err(error) => {
+                self.finish_processing_error(gen, recognized, &error, expected_states)
+                    .await;
+                return Err(error);
+            }
+        };
+
+        if pipeline.is_empty() {
+            return self
+                .deliver_ready_text(gen, ReadyText::unchanged(recognized.source_text))
+                .await;
+        }
+
+        let cancel = ProcessingCancelToken::default();
+        {
+            let _op = self.op.lock().await;
+            let mut inner = self.inner.lock().unwrap();
+            if inner.gen != gen || !expected_states.contains(&inner.state) {
+                return Ok(());
+            }
+            inner.state = OrchestratorState::Processing;
+            inner.pending_text = Some(PendingText::Recognized(recognized.clone()));
+            inner.processing_cancel = Some(cancel.clone());
+        }
+        self.emit_state(
+            OrchestratorState::Processing,
+            Some(json!({
+                "text": recognized.source_text,
+                "pipelineId": recognized.pipeline.pipeline.id,
+                "stepCount": pipeline.len(),
+            })),
+        );
+        self.emit_process(
+            "postprocess_started",
+            json!({
+                "pipelineId": recognized.pipeline.pipeline.id,
+                "stepCount": pipeline.len() as u64,
+            }),
+        );
+
+        let started = std::time::Instant::now();
+        let result = pipeline
+            .run(recognized.source_text.clone(), &recognized.context, cancel)
+            .await;
+
+        {
+            let _op = self.op.lock().await;
+            let mut inner = self.inner.lock().unwrap();
+            if inner.gen != gen || inner.state != OrchestratorState::Processing {
+                return Ok(());
+            }
+            inner.processing_cancel = None;
+        }
+
+        match result {
+            Ok(result) => {
+                self.emit_process(
+                    "postprocess_completed",
+                    json!({
+                        "pipelineId": result.pipeline_id,
+                        "stepCount": result.trace.len() as u64,
+                        "durationMs": started.elapsed().as_millis() as u64,
+                        "sourceChars": result.source_text.chars().count() as u64,
+                        "finalChars": result.final_text.chars().count() as u64,
+                    }),
+                );
+                self.deliver_ready_text(
+                    gen,
+                    ReadyText {
+                        source_text: result.source_text,
+                        text: result.final_text,
+                    },
+                )
+                .await
+            }
+            Err(error) if error.kind == ProcessErrorKind::Cancelled => Ok(()),
+            Err(error) => {
+                let message = format!("后处理步骤「{}」失败：{}", error.step_id, error.message);
+                self.finish_processing_error(
+                    gen,
+                    recognized,
+                    &message,
+                    &[OrchestratorState::Processing],
+                )
+                .await;
+                Err(message)
+            }
+        }
+    }
+
+    async fn finish_processing_error(
+        &self,
+        gen: u64,
+        recognized: RecognizedText,
+        message: &str,
+        expected_states: &[OrchestratorState],
+    ) {
+        {
+            let _op = self.op.lock().await;
+            let mut inner = self.inner.lock().unwrap();
+            if inner.gen != gen || !expected_states.contains(&inner.state) {
+                return;
+            }
+            inner.processing_cancel = None;
+            inner.pending_text = Some(PendingText::Recognized(recognized.clone()));
+            inner.state = OrchestratorState::Error;
+        }
+        self.emit_state(
+            OrchestratorState::Error,
+            Some(json!({
+                "message": message,
+                "text": recognized.source_text,
+                "retryStage": "processing",
+            })),
+        );
+        self.emit_process(
+            "postprocess_failed",
+            json!({ "outcome": "error", "errorCode": "POSTPROCESS_FAILED" }),
+        );
+        self.write_history(
+            crate::history::HistoryOutcome::Error,
+            Some(message.to_string()),
+        );
     }
 
     /// 所有可交付文本的唯一出口：更新 UI/history 后，按交互策略进入预览或发送。
@@ -1068,7 +1252,10 @@ impl Orchestrator {
                     .claim_send(
                         Some(ready),
                         Some(gen),
-                        &[OrchestratorState::Transcribing],
+                        &[
+                            OrchestratorState::Transcribing,
+                            OrchestratorState::Processing,
+                        ],
                         false,
                     )
                     .await?
@@ -1079,7 +1266,13 @@ impl Orchestrator {
             PostFinalize::PreviewConfirm => {
                 let _op = self.op.lock().await;
                 let mut inner = self.inner.lock().unwrap();
-                if inner.gen != gen {
+                if inner.gen != gen
+                    || ![
+                        OrchestratorState::Transcribing,
+                        OrchestratorState::Processing,
+                    ]
+                    .contains(&inner.state)
+                {
                     return Ok(());
                 }
                 let text = ready.text.clone();
@@ -1096,6 +1289,25 @@ impl Orchestrator {
     /// 重新进入 Sending 实现重试（docs/development.md §4.1「Error 保留文本可重试」）。
     /// ADR-006 预览只读化：不再接受编辑文本，一律发送已定的 ReadyText。
     pub async fn confirm_send(&self) -> Result<(), String> {
+        let retry_processing = {
+            let inner = self.inner.lock().unwrap();
+            if inner.state == OrchestratorState::Error {
+                inner
+                    .pending_text
+                    .as_ref()
+                    .and_then(PendingText::recognized)
+                    .cloned()
+                    .map(|recognized| (inner.gen, recognized))
+            } else {
+                None
+            }
+        };
+        if let Some((gen, recognized)) = retry_processing {
+            return self
+                .run_postprocessing(gen, recognized, &[OrchestratorState::Error])
+                .await;
+        }
+
         let claim = self
             .claim_send(
                 None,
@@ -1132,6 +1344,9 @@ impl Orchestrator {
             let mut active = inner.active.take();
             inner.pending_text = None;
             if let Some(token) = inner.send_cancel.take() {
+                token.cancel();
+            }
+            if let Some(token) = inner.processing_cancel.take() {
                 token.cancel();
             }
             inner.state = OrchestratorState::Error;
@@ -1171,6 +1386,9 @@ impl Orchestrator {
         let mut active = inner.active.take();
         inner.pending_text = None;
         if let Some(token) = inner.send_cancel.take() {
+            token.cancel();
+        }
+        if let Some(token) = inner.processing_cancel.take() {
             token.cancel();
         }
         inner.state = OrchestratorState::Idle;
@@ -1217,7 +1435,7 @@ impl Orchestrator {
                 None => inner
                     .pending_text
                     .as_ref()
-                    .map(PendingText::ready)
+                    .and_then(PendingText::ready)
                     .cloned()
                     .ok_or_else(|| "无待发送文本".to_string())?,
             };
@@ -1396,6 +1614,7 @@ impl Orchestrator {
         let gen = {
             let mut inner = self.inner.lock().unwrap();
             inner.pending_text = None;
+            inner.processing_cancel = None;
             inner.state = OrchestratorState::Error;
             inner.gen
         };
@@ -1416,6 +1635,7 @@ impl Orchestrator {
             .clone()
             .map(ReadyText::unchanged)
             .map(PendingText::Ready);
+        inner.processing_cancel = None;
         inner.state = OrchestratorState::Error;
         drop(inner);
         self.emit_state(

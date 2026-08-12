@@ -21,6 +21,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # 三个内部 crate：core（域模型/ports/状态机/配置）、stt（引擎）、platform（Windows 适配器）
 kotone-core.workspace = true
+kotone-postprocess.workspace = true
 kotone-stt.workspace = true
 kotone-platform-windows.workspace = true
 

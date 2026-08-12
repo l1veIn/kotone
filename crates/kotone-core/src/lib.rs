@@ -7,6 +7,7 @@
 //! - `audio`：AudioBackend 端口 + AudioHandle/AudioDevice
 //! - `inject`：Injector/FocusBackend/SendOps 端口 + 发送时序编排（send_sequence）
 //! - `hotkey`：HotkeySource 端口 + 键名解析/匹配状态机（纯逻辑）
+//! - `postprocess`：TextProcessor/ProcessorFactory 端口 + 注册表 + 有序 pipeline runner
 //! - `stt`：SttEngine/SttSession 端口 + EngineRegistry 容器（引擎实例由 kotone-stt 注入）
 //! - `orchestrator`：唯一状态所有者（状态机）
 //! - `settings`/`profile`/`eval`/`log`：配置 schema 与存储（唯一写入口）、游戏 profile、评测、文件日志
@@ -19,6 +20,7 @@ pub mod inject;
 pub mod interaction;
 pub mod log;
 pub mod orchestrator;
+pub mod postprocess;
 pub mod process_log;
 pub mod profile;
 pub mod runtime;

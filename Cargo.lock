@@ -2357,6 +2357,7 @@ dependencies = [
  "clap",
  "kotone-core",
  "kotone-platform-windows",
+ "kotone-postprocess",
  "kotone-stt",
  "serde_json",
  "tokio",
@@ -2367,6 +2368,7 @@ name = "kotone-core"
 version = "0.1.1"
 dependencies = [
  "dirs",
+ "kotone-postprocess",
  "kotone-stt",
  "serde",
  "serde_json",
@@ -2385,6 +2387,14 @@ dependencies = [
  "tempfile",
  "tokio",
  "windows 0.61.3",
+]
+
+[[package]]
+name = "kotone-postprocess"
+version = "0.1.0"
+dependencies = [
+ "kotone-core",
+ "serde_json",
 ]
 
 [[package]]
@@ -2410,6 +2420,7 @@ dependencies = [
  "dirs",
  "kotone-core",
  "kotone-platform-windows",
+ "kotone-postprocess",
  "kotone-stt",
  "serde",
  "serde_json",

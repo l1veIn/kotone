@@ -140,7 +140,7 @@ enum OnDemandOverlayAction {
 
 fn on_demand_overlay_action(state: &str, continuous: bool) -> OnDemandOverlayAction {
     match state {
-        "listening" | "transcribing" | "preview" | "sending" | "error" => {
+        "listening" | "transcribing" | "processing" | "preview" | "sending" | "error" => {
             OnDemandOverlayAction::Show
         }
         "success" if !continuous => OnDemandOverlayAction::HideSuccessAfterDwell,
@@ -194,6 +194,7 @@ mod overlay_visibility_tests {
             "idle",
             "listening",
             "transcribing",
+            "processing",
             "preview",
             "sending",
             "success",
@@ -1496,6 +1497,11 @@ pub fn run() {
             let mut registry = EngineRegistry::new();
             kotone_stt::register_builtin(&mut registry);
             let engines = Arc::new(registry);
+            let mut processor_registry = kotone_core::postprocess::ProcessorRegistry::new();
+            if let Err(error) = kotone_postprocess::register_builtin(&mut processor_registry) {
+                return Err(Box::<dyn std::error::Error>::from(error));
+            }
+            let processors = Arc::new(processor_registry);
             let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter {
                 app: app.handle().clone(),
                 vis_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -1513,7 +1519,8 @@ pub fn run() {
                 injector.clone(),
                 focus,
                 emitter,
-            );
+            )
+            .with_processors(processors);
             // VAD 接线（ADR-007）：vad-silero feature 开启时注入 silero 工厂；
             // 默认构建不接入——one-shot 模式 begin 会报清晰错误
             #[cfg(feature = "vad-silero")]

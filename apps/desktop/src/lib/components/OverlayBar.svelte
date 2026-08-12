@@ -5,6 +5,7 @@
    *
    *   listening    麦克风呼吸光晕 + 流式引擎 partial 上屏 / 非流式引擎青→品红渐变声波
    *   transcribing 「转写中…」
+   *   processing   「后处理中…」+ 识别原文
    *   preview      聊天气泡（青色描边 + 小尾巴）+「再按一次发送 · Esc 重说」
    *   sending      品红光晕脉冲
    *   success      Kotone 贴纸弹出 + 气泡「收到，已发送！✨」
@@ -31,6 +32,7 @@
     idle: "Kotone 待机",
     listening: "语音输入中…",
     transcribing: "转写中",
+    processing: "后处理中",
     preview: "预览确认",
     sending: "发送中",
     success: "已发送",
@@ -237,6 +239,14 @@
         >
           {$appState.partialText || "转写中…"}&#x200E;
         </p>
+      {:else if $appState.state === "processing"}
+        <span class="spinner inline-block h-3.5 w-3.5 shrink-0 rounded-full"></span>
+        <p
+          class="ellipsis-head max-w-[380px] truncate text-sm text-kotone-cyan"
+          in:fade={{ duration: 150 }}
+        >
+          {$appState.partialText || "后处理中…"}&#x200E;
+        </p>
       {:else if $appState.state === "preview"}
         <p
           class="ellipsis-head max-w-[260px] truncate text-sm text-white"
@@ -347,6 +357,16 @@
         <p class="flex items-center gap-2 text-sm text-kotone-violet">
           <span class="spinner inline-block h-3.5 w-3.5 rounded-full"></span>
           转写中…
+        </p>
+        {#if $appState.partialText}
+          <p class="mt-0.5 truncate text-xs text-white/50">{$appState.partialText}</p>
+        {/if}
+      </div>
+    {:else if $appState.state === "processing"}
+      <div class="min-w-0 flex-1" in:fade={{ duration: 150 }}>
+        <p class="flex items-center gap-2 text-sm text-kotone-cyan">
+          <span class="spinner inline-block h-3.5 w-3.5 rounded-full"></span>
+          后处理中…
         </p>
         {#if $appState.partialText}
           <p class="mt-0.5 truncate text-xs text-white/50">{$appState.partialText}</p>

@@ -17,6 +17,7 @@ export type KotoneState =
   | "idle"
   | "listening"
   | "transcribing"
+  | "processing"
   | "preview"
   | "sending"
   | "success"
@@ -113,6 +114,11 @@ function applyStateEvent(ev: StateEventPayload): void {
       case "transcribing":
         // 保留 partial 上屏内容，等待最终文本
         next.level = 0;
+        break;
+      case "processing":
+        // 后处理展示识别原文；完成后 Preview/Sending 的 payload 会替换为可交付文本。
+        next.level = 0;
+        if (text) next.partialText = text;
         break;
       case "preview":
       case "sending":

@@ -1,0 +1,417 @@
+//! 文本后处理端口与有序 pipeline runner。
+//!
+//! `kotone-core` 只定义领域契约、注册表和编排语义；具体处理器由外部 crate
+//! 通过 `ProcessorFactory` 注册，依赖方向与 STT 的 EngineRegistry 保持一致。
+
+use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use serde_json::Value;
+use tokio::sync::Notify;
+
+pub const DEFAULT_STEP_TIMEOUT_MS: u64 = 5_000;
+
+fn default_pipeline_id() -> String {
+    "default".into()
+}
+
+fn default_step_timeout_ms() -> u64 {
+    DEFAULT_STEP_TIMEOUT_MS
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+/// 用户配置中的后处理总开关与当前有序 pipeline。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostProcessingConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub pipeline: PipelineConfig,
+}
+
+impl Default for PostProcessingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            pipeline: PipelineConfig::default(),
+        }
+    }
+}
+
+/// 一条线性 pipeline；step 数组顺序就是执行顺序。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PipelineConfig {
+    #[serde(default = "default_pipeline_id")]
+    pub id: String,
+    #[serde(default)]
+    pub steps: Vec<PipelineStepConfig>,
+}
+
+impl Default for PipelineConfig {
+    fn default() -> Self {
+        Self {
+            id: default_pipeline_id(),
+            steps: Vec::new(),
+        }
+    }
+}
+
+/// 单个处理步骤。`processor_id` 指向注册表中的 factory，`config` 由 factory
+/// 自行反序列化并校验，core 不需要认识不同模块的专有字段。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PipelineStepConfig {
+    pub id: String,
+    pub processor_id: String,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub config: Value,
+    #[serde(default = "default_step_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default)]
+    pub on_error: StepFailurePolicy,
+}
+
+/// Required 保证语义不被静默绕过；BestEffort 失败时保留上一步文本继续。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StepFailurePolicy {
+    #[default]
+    Required,
+    BestEffort,
+}
+
+/// pipeline 内部同时保留不可变识别原文与逐步演进的当前文本。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextDocument {
+    pub source_text: String,
+    pub text: String,
+}
+
+impl TextDocument {
+    pub fn recognized(text: impl Into<String>) -> Self {
+        let text = text.into();
+        Self {
+            source_text: text.clone(),
+            text,
+        }
+    }
+}
+
+/// 每次 pipeline 的稳定上下文快照；处理器不能反向读取可变全局设置。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProcessingContext {
+    pub session_id: String,
+    pub profile_id: Option<String>,
+    pub channel_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessorDescriptor {
+    pub id: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessErrorKind {
+    Cancelled,
+    Failed,
+    InvalidOutput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessError {
+    pub kind: ProcessErrorKind,
+    pub message: String,
+}
+
+impl ProcessError {
+    pub fn failed(message: impl Into<String>) -> Self {
+        Self {
+            kind: ProcessErrorKind::Failed,
+            message: message.into(),
+        }
+    }
+}
+
+pub type ProcessFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<TextDocument, ProcessError>> + Send + 'a>>;
+
+/// 一个已按配置构造完成、可执行的文本处理器实例。
+pub trait TextProcessor: Send + Sync {
+    fn process<'a>(
+        &'a self,
+        input: TextDocument,
+        context: &'a ProcessingContext,
+        cancel: ProcessingCancelToken,
+    ) -> ProcessFuture<'a>;
+}
+
+/// 注册与发现的最小单元。一个 factory 可由不同 step config 构造多个实例。
+pub trait ProcessorFactory: Send + Sync {
+    fn descriptor(&self) -> ProcessorDescriptor;
+    fn create(&self, config: &Value) -> Result<Arc<dyn TextProcessor>, String>;
+}
+
+#[derive(Default)]
+pub struct ProcessorRegistry {
+    factories: BTreeMap<String, Arc<dyn ProcessorFactory>>,
+}
+
+impl ProcessorRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 重复 ID 直接拒绝，防止注册顺序悄悄改变实际实现。
+    pub fn register(&mut self, factory: Arc<dyn ProcessorFactory>) -> Result<(), String> {
+        let descriptor = factory.descriptor();
+        if descriptor.id.trim().is_empty() {
+            return Err("后处理器 ID 不能为空".into());
+        }
+        if self.factories.contains_key(&descriptor.id) {
+            return Err(format!("重复注册后处理器: {}", descriptor.id));
+        }
+        self.factories.insert(descriptor.id, factory);
+        Ok(())
+    }
+
+    pub fn get(&self, id: &str) -> Option<&Arc<dyn ProcessorFactory>> {
+        self.factories.get(id)
+    }
+
+    /// 稳定按 ID 排序，供设置页发现可用模块。
+    pub fn list_info(&self) -> Vec<ProcessorDescriptor> {
+        self.factories.values().map(|f| f.descriptor()).collect()
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct ProcessingCancelToken {
+    inner: Arc<ProcessingCancelInner>,
+}
+
+#[derive(Default)]
+struct ProcessingCancelInner {
+    cancelled: AtomicBool,
+    notify: Notify,
+}
+
+impl ProcessingCancelToken {
+    pub fn cancel(&self) {
+        if !self.inner.cancelled.swap(true, Ordering::SeqCst) {
+            self.inner.notify.notify_waiters();
+        }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.inner.cancelled.load(Ordering::SeqCst)
+    }
+
+    pub async fn cancelled(&self) {
+        if self.is_cancelled() {
+            return;
+        }
+        self.inner.notify.notified().await;
+    }
+}
+
+struct CompiledStep {
+    config: PipelineStepConfig,
+    processor: Arc<dyn TextProcessor>,
+}
+
+/// 配置在执行前一次性编译为处理器实例快照；运行中修改设置不会偷换本轮实现。
+pub struct PostProcessPipeline {
+    id: String,
+    steps: Vec<CompiledStep>,
+}
+
+impl PostProcessPipeline {
+    pub fn compile(
+        config: &PostProcessingConfig,
+        registry: &ProcessorRegistry,
+    ) -> Result<Self, String> {
+        let mut steps = Vec::new();
+        if config.enabled {
+            for step in config.pipeline.steps.iter().filter(|step| step.enabled) {
+                if step.id.trim().is_empty() {
+                    return Err("后处理 step ID 不能为空".into());
+                }
+                let factory = registry
+                    .get(&step.processor_id)
+                    .ok_or_else(|| format!("未注册的后处理器: {}", step.processor_id))?;
+                let processor = factory
+                    .create(&step.config)
+                    .map_err(|error| format!("后处理步骤「{}」配置无效: {error}", step.id))?;
+                steps.push(CompiledStep {
+                    config: step.clone(),
+                    processor,
+                });
+            }
+        }
+        Ok(Self {
+            id: config.pipeline.id.clone(),
+            steps,
+        })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.steps.len()
+    }
+
+    pub async fn run(
+        &self,
+        source_text: String,
+        context: &ProcessingContext,
+        cancel: ProcessingCancelToken,
+    ) -> Result<PipelineResult, PipelineError> {
+        let mut document = TextDocument::recognized(source_text);
+        let mut trace = Vec::with_capacity(self.steps.len());
+
+        for step in &self.steps {
+            if cancel.is_cancelled() {
+                return Err(PipelineError::cancelled(&step.config, trace));
+            }
+            let started = Instant::now();
+            let step_cancel = cancel.clone();
+            let run = step
+                .processor
+                .process(document.clone(), context, step_cancel);
+            let timeout = Duration::from_millis(step.config.timeout_ms.max(1));
+            let outcome = tokio::select! {
+                _ = cancel.cancelled() => Err(ProcessError {
+                    kind: ProcessErrorKind::Cancelled,
+                    message: "后处理已取消".into(),
+                }),
+                result = tokio::time::timeout(timeout, run) => match result {
+                    Ok(result) => result,
+                    Err(_) => Err(ProcessError::failed(format!(
+                        "处理超时（{}ms）",
+                        step.config.timeout_ms.max(1)
+                    ))),
+                },
+            };
+
+            match outcome {
+                Ok(next) if !next.text.trim().is_empty() => {
+                    document = next;
+                    trace.push(PipelineStepTrace {
+                        step_id: step.config.id.clone(),
+                        processor_id: step.config.processor_id.clone(),
+                        duration_ms: started.elapsed().as_millis() as u64,
+                        outcome: PipelineStepOutcome::Succeeded,
+                        error: None,
+                    });
+                }
+                Ok(_) => {
+                    let error = ProcessError {
+                        kind: ProcessErrorKind::InvalidOutput,
+                        message: "处理器返回了空文本".into(),
+                    };
+                    if let Some(error) = handle_step_error(&step.config, error, started, &mut trace)
+                    {
+                        return Err(error);
+                    }
+                }
+                Err(error) => {
+                    if error.kind == ProcessErrorKind::Cancelled {
+                        return Err(PipelineError::cancelled(&step.config, trace));
+                    }
+                    if let Some(error) = handle_step_error(&step.config, error, started, &mut trace)
+                    {
+                        return Err(error);
+                    }
+                }
+            }
+        }
+
+        Ok(PipelineResult {
+            pipeline_id: self.id.clone(),
+            source_text: document.source_text,
+            final_text: document.text,
+            trace,
+        })
+    }
+}
+
+fn handle_step_error(
+    step: &PipelineStepConfig,
+    error: ProcessError,
+    started: Instant,
+    trace: &mut Vec<PipelineStepTrace>,
+) -> Option<PipelineError> {
+    trace.push(PipelineStepTrace {
+        step_id: step.id.clone(),
+        processor_id: step.processor_id.clone(),
+        duration_ms: started.elapsed().as_millis() as u64,
+        outcome: PipelineStepOutcome::Failed,
+        error: Some(error.message.clone()),
+    });
+    (step.on_error == StepFailurePolicy::Required).then(|| PipelineError {
+        step_id: step.id.clone(),
+        processor_id: step.processor_id.clone(),
+        kind: error.kind,
+        message: error.message,
+        trace: trace.clone(),
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PipelineResult {
+    pub pipeline_id: String,
+    pub source_text: String,
+    pub final_text: String,
+    pub trace: Vec<PipelineStepTrace>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PipelineError {
+    pub step_id: String,
+    pub processor_id: String,
+    pub kind: ProcessErrorKind,
+    pub message: String,
+    pub trace: Vec<PipelineStepTrace>,
+}
+
+impl PipelineError {
+    fn cancelled(step: &PipelineStepConfig, trace: Vec<PipelineStepTrace>) -> Self {
+        Self {
+            step_id: step.id.clone(),
+            processor_id: step.processor_id.clone(),
+            kind: ProcessErrorKind::Cancelled,
+            message: "后处理已取消".into(),
+            trace,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PipelineStepTrace {
+    pub step_id: String,
+    pub processor_id: String,
+    pub duration_ms: u64,
+    pub outcome: PipelineStepOutcome,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipelineStepOutcome {
+    Succeeded,
+    Failed,
+}

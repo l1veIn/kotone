@@ -18,3 +18,4 @@ tempfile.workspace = true
 # orchestrator 测试需要 mock-stream 引擎（dev 依赖环是 Cargo 允许的：
 # kotone-stt 正常依赖 kotone-core，kotone-core 仅测试依赖 kotone-stt）
 kotone-stt.workspace = true
+kotone-postprocess.workspace = true

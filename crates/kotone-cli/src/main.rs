@@ -488,14 +488,22 @@ async fn cmd_listen_session(
     }
 
     let emitter: Arc<dyn Emitter> = Arc::new(JsonlEmitter { hotkey: None });
-    let orchestrator = wire_vad(Orchestrator::new(
-        settings,
-        Arc::new(registry),
-        audio_backend,
-        injector,
-        Arc::new(WinFocusBackend),
-        emitter,
-    ));
+    let mut processor_registry = kotone_core::postprocess::ProcessorRegistry::new();
+    if let Err(error) = kotone_postprocess::register_builtin(&mut processor_registry) {
+        eprintln!("注册后处理器失败: {error}");
+        return 2;
+    }
+    let orchestrator = wire_vad(
+        Orchestrator::new(
+            settings,
+            Arc::new(registry),
+            audio_backend,
+            injector,
+            Arc::new(WinFocusBackend),
+            emitter,
+        )
+        .with_processors(Arc::new(processor_registry)),
+    );
 
     if let Err(e) = orchestrator.begin().await {
         println!(
@@ -522,7 +530,9 @@ async fn cmd_listen_session(
                             break;
                         }
                     }
-                    OrchestratorState::Transcribing | OrchestratorState::Sending => {
+                    OrchestratorState::Transcribing
+                    | OrchestratorState::Processing
+                    | OrchestratorState::Sending => {
                         if tokio::time::Instant::now() >= final_deadline {
                             break; // 异常兜底（core finalize 超时会落 Error）
                         }
@@ -558,7 +568,9 @@ async fn cmd_listen_session(
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
     while matches!(
         orchestrator.state(),
-        OrchestratorState::Transcribing | OrchestratorState::Sending
+        OrchestratorState::Transcribing
+            | OrchestratorState::Processing
+            | OrchestratorState::Sending
     ) && tokio::time::Instant::now() < deadline
     {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -655,14 +667,22 @@ async fn cmd_listen_hotkey(
     // settings 随后移交给 orchestrator，频道切换热键先取出备用（ADR-008）
     let cycle_hotkey = settings.read().unwrap().channel_cycle_hotkey.clone();
     let resend_hotkey = settings.read().unwrap().resend_last_hotkey.clone();
-    let orchestrator = wire_vad(Orchestrator::new(
-        settings,
-        Arc::new(registry),
-        Arc::new(CpalBackend),
-        Arc::new(WindowsInjector),
-        Arc::new(WinFocusBackend),
-        emitter,
-    ));
+    let mut processor_registry = kotone_core::postprocess::ProcessorRegistry::new();
+    if let Err(error) = kotone_postprocess::register_builtin(&mut processor_registry) {
+        eprintln!("注册后处理器失败: {error}");
+        return 2;
+    }
+    let orchestrator = wire_vad(
+        Orchestrator::new(
+            settings,
+            Arc::new(registry),
+            Arc::new(CpalBackend),
+            Arc::new(WindowsInjector),
+            Arc::new(WinFocusBackend),
+            emitter,
+        )
+        .with_processors(Arc::new(processor_registry)),
+    );
 
     if let Err(e) = hotkey.register(&hotkey_key, hotkey_mode) {
         eprintln!("注册热键失败: {e}");

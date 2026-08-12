@@ -95,6 +95,9 @@ pub struct Settings {
     /// 识别成热词。X-ASR 等引擎 recognizer 级配置，改后需「停止→启动」重建）
     #[serde(default = "default_hotwords_score")]
     pub hotwords_score: f32,
+    /// STT 最终文本与预览/发送之间的有序后处理 pipeline；默认关闭，旧配置零行为变化。
+    #[serde(default)]
+    pub post_processing: crate::postprocess::PostProcessingConfig,
 }
 
 /// 桌面壳 UI 状态（config.json `ui` 段）
@@ -347,6 +350,7 @@ impl Default for Settings {
             overlay: OverlayConfig::default(),
             vad: VadConfig::default(),
             hotwords_score: default_hotwords_score(),
+            post_processing: crate::postprocess::PostProcessingConfig::default(),
         }
     }
 }
