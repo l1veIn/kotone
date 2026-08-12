@@ -6,8 +6,10 @@
   import { onMount } from "svelte";
   import {
     listPostProcessors,
+    testPostProcessing,
     type PostProcessorInfo,
     type PostProcessingConfig,
+    type PostProcessingTestResult,
     type PostProcessStepConfig,
   } from "../../../lib/ipc";
   import Toggle from "../../../lib/components/Toggle.svelte";
@@ -17,9 +19,13 @@
   let loadingProcessors = $state(true);
   let saving = $state(false);
   let adding = $state(false);
+  let testInput = $state("对面打野在下路");
+  let testing = $state(false);
+  let tryoutResult = $state<PostProcessingTestResult | null>(null);
 
   const pipeline = $derived($settingsStore?.postProcessing.pipeline.steps ?? []);
   const enabled = $derived($settingsStore?.postProcessing.enabled ?? false);
+  const activeStepCount = $derived(pipeline.filter((step) => step.enabled).length);
   const visibleProcessors = $derived(
     processors.filter((processor) => !processor.developerOnly || import.meta.env.DEV),
   );
@@ -72,6 +78,7 @@
   ): Promise<boolean> {
     if (saving) return false;
     saving = true;
+    tryoutResult = null;
     try {
       return await patchSettings({ postProcessing: next }, successMessage);
     } finally {
@@ -129,6 +136,22 @@
     const steps = pipeline.map((step) => ({ ...step }));
     [steps[index], steps[target]] = [steps[target], steps[index]];
     await savePostProcessing(configWithSteps(steps), "处理顺序已更新");
+  }
+
+  async function runTryout() {
+    if (testing || !testInput.trim() || activeStepCount === 0 || !$settingsStore) return;
+    testing = true;
+    tryoutResult = null;
+    try {
+      tryoutResult = await testPostProcessing(
+        testInput,
+        $settingsStore.postProcessing.pipeline,
+      );
+    } catch (error) {
+      toast(false, `试跑失败：${errText(error)}`);
+    } finally {
+      testing = false;
+    }
   }
 </script>
 
@@ -284,6 +307,71 @@
               <div class="-my-1 text-center text-xs text-kotone-cyan/35">↓</div>
             {/if}
           {/each}
+        </div>
+      {/if}
+    </section>
+
+    <section class="kotone-panel mt-4 p-4">
+      <div class="flex items-start justify-between gap-4">
+        <div>
+          <h2 class="text-sm font-semibold text-kotone-cyan/90">试跑</h2>
+          <p class="mt-1 text-[11px] text-white/45">
+            只预览处理结果，不写入历史，也不会发送到当前窗口。
+          </p>
+        </div>
+        <span class="rounded-full bg-white/6 px-2 py-1 text-[10px] text-white/45 ring-1 ring-white/10">
+          {activeStepCount} 个启用步骤
+        </span>
+      </div>
+
+      <label class="mt-3 block">
+        <span class="text-[11px] text-white/55">输入一段文本</span>
+        <textarea
+          data-testid="postprocess-tryout-input"
+          class="kotone-scroll mt-1.5 min-h-20 w-full resize-y rounded-lg bg-white/5 px-3 py-2 text-sm leading-relaxed text-white/85 ring-1 ring-white/12 outline-none transition placeholder:text-white/25 focus:ring-kotone-cyan/45"
+          placeholder="输入用于验证流程的文字"
+          bind:value={testInput}
+        ></textarea>
+      </label>
+
+      <div class="mt-3 flex items-center justify-between gap-3">
+        <p class="text-[10px] text-white/35">
+          总开关关闭时仍可试跑，方便先调好流程再启用。
+        </p>
+        <button
+          data-testid="postprocess-tryout-run"
+          class="rounded-lg bg-kotone-cyan px-4 py-1.5 text-xs font-bold text-kotone-deep transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+          disabled={testing || !testInput.trim() || activeStepCount === 0}
+          onclick={() => void runTryout()}
+        >
+          {testing ? "处理中…" : "运行试跑"}
+        </button>
+      </div>
+
+      {#if tryoutResult}
+        <div
+          data-testid="postprocess-tryout-result"
+          class="mt-4 rounded-xl bg-kotone-cyan/6 p-3 ring-1 ring-kotone-cyan/20"
+        >
+          <div class="flex items-center justify-between gap-3">
+            <span class="text-[11px] font-semibold text-kotone-cyan/80">处理结果</span>
+            <span class="text-[10px] text-white/35">{tryoutResult.durationMs} ms</span>
+          </div>
+          <p class="mt-2 break-all text-sm leading-relaxed text-white/90">
+            {tryoutResult.finalText}
+          </p>
+          <div class="mt-3 flex flex-wrap gap-1.5 border-t border-white/8 pt-3">
+            {#each tryoutResult.steps as step, index (step.stepId)}
+              <span
+                class="rounded-full px-2 py-1 text-[10px] ring-1 {step.outcome === 'succeeded'
+                  ? 'bg-kotone-cyan/8 text-kotone-cyan/75 ring-kotone-cyan/20'
+                  : 'bg-kotone-pink/8 text-kotone-pink/80 ring-kotone-pink/20'}"
+                title={step.error ?? `${step.durationMs} ms`}
+              >
+                {index + 1}. {step.displayName} · {step.outcome === "succeeded" ? "完成" : "已跳过"}
+              </span>
+            {/each}
+          </div>
         </div>
       {/if}
     </section>

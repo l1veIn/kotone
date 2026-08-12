@@ -184,6 +184,11 @@
   }
 
   const displayError = $derived(actionError || $appState.errorMessage || "未知错误");
+  const processingLabel = $derived(
+    $appState.processingStep
+      ? `${$appState.processingStep.displayName} · ${$appState.processingStep.index}/${$appState.processingStep.total}`
+      : "后处理中…",
+  );
 </script>
 
 <!--
@@ -245,7 +250,7 @@
           class="ellipsis-head max-w-[380px] truncate text-sm text-kotone-cyan"
           in:fade={{ duration: 150 }}
         >
-          {$appState.partialText || "后处理中…"}&#x200E;
+          {processingLabel}&#x200E;
         </p>
       {:else if $appState.state === "preview"}
         <p
@@ -366,7 +371,7 @@
       <div class="min-w-0 flex-1" in:fade={{ duration: 150 }}>
         <p class="flex items-center gap-2 text-sm text-kotone-cyan">
           <span class="spinner inline-block h-3.5 w-3.5 rounded-full"></span>
-          后处理中…
+          {processingLabel}
         </p>
         {#if $appState.partialText}
           <p class="mt-0.5 truncate text-xs text-white/50">{$appState.partialText}</p>

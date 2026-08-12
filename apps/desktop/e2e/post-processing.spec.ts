@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("registered post-processors can be added, reordered, disabled and removed", async ({
+test("registered post-processors can be composed, tried out and edited", async ({
   page,
 }) => {
   await page.goto("/#/settings?onboarding=never");
@@ -21,6 +21,11 @@ test("registered post-processors can be added, reordered, disabled and removed",
   await expect(steps).toHaveCount(2);
   await expect(steps.nth(0)).toContainText("句尾叹号");
   await expect(steps.nth(1)).toContainText("方括号包裹");
+
+  await page.getByTestId("postprocess-tryout-run").click();
+  await expect(page.getByTestId("postprocess-tryout-result")).toContainText(
+    "【对面打野在下路！】",
+  );
 
   await steps.nth(0).getByTitle("下移").click();
   await expect(steps.nth(0)).toContainText("方括号包裹");

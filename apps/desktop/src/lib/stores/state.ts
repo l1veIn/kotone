@@ -29,6 +29,14 @@ export interface ChannelInfo {
   isDefault: boolean;
 }
 
+export interface ProcessingStepInfo {
+  stepId: string;
+  processorId: string;
+  displayName: string;
+  index: number;
+  total: number;
+}
+
 export interface AppState {
   state: KotoneState;
   /** 流式引擎的 partial 文本（录音中实时上屏；非流式引擎为空） */
@@ -47,6 +55,8 @@ export interface AppState {
   needsElevation: boolean;
   /** 当前聊天频道（多频道 profile 才有值；切回默认时为 null 让悬浮窗隐藏徽标） */
   channel: ChannelInfo | null;
+  /** Processing 状态下正在执行的后处理步骤；尚未进入具体步骤时为 null。 */
+  processingStep: ProcessingStepInfo | null;
 }
 
 const initial: AppState = {
@@ -59,6 +69,7 @@ const initial: AppState = {
   inputBlocked: false,
   needsElevation: false,
   channel: null,
+  processingStep: null,
 };
 
 export const appState = writable<AppState>({ ...initial });
@@ -72,6 +83,11 @@ interface StateEventPayload {
     message?: string | null;
     inputBlocked?: boolean | null;
     needsElevation?: boolean | null;
+    stepId?: string | null;
+    processorId?: string | null;
+    displayName?: string | null;
+    index?: number | null;
+    total?: number | null;
   } | null;
 }
 
@@ -90,6 +106,7 @@ function applyStateEvent(ev: StateEventPayload): void {
     const next: AppState = { ...s, state: ev.state };
     const text = ev.payload?.text ?? null;
     const message = ev.payload?.message ?? null;
+    if (ev.state !== "processing") next.processingStep = null;
 
     switch (ev.state) {
       case "idle":
@@ -119,6 +136,20 @@ function applyStateEvent(ev: StateEventPayload): void {
         // 后处理展示识别原文；完成后 Preview/Sending 的 payload 会替换为可交付文本。
         next.level = 0;
         if (text) next.partialText = text;
+        next.processingStep =
+          ev.payload?.stepId &&
+          ev.payload.processorId &&
+          ev.payload.displayName &&
+          typeof ev.payload.index === "number" &&
+          typeof ev.payload.total === "number"
+            ? {
+                stepId: ev.payload.stepId,
+                processorId: ev.payload.processorId,
+                displayName: ev.payload.displayName,
+                index: ev.payload.index,
+                total: ev.payload.total,
+              }
+            : null;
         break;
       case "preview":
       case "sending":

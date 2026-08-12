@@ -65,6 +65,23 @@ export interface PostProcessingConfig {
   };
 }
 
+export interface PostProcessingTestStep {
+  stepId: string;
+  processorId: string;
+  displayName: string;
+  durationMs: number;
+  outcome: "succeeded" | "failed";
+  error?: string;
+}
+
+export interface PostProcessingTestResult {
+  sourceText: string;
+  finalText: string;
+  pipelineId: string;
+  durationMs: number;
+  steps: PostProcessingTestStep[];
+}
+
 export interface Settings {
   hotkey: HotkeyConfig;
   /** 热键后端：auto（Windows 优先 LL 钩子）/ llhook / register */
@@ -588,6 +605,48 @@ export async function listPostProcessors(): Promise<PostProcessorInfo[]> {
     ];
   }
   return invoke<PostProcessorInfo[]>("list_post_processors");
+}
+
+/**
+ * 独立试跑一条 pipeline，不写历史、不触发输入注入，也不受总开关影响。
+ * 显式传入 pipeline 可保证结果对应设置页当前展示的步骤快照。
+ */
+export async function testPostProcessing(
+  text: string,
+  pipeline?: PostProcessingConfig["pipeline"],
+): Promise<PostProcessingTestResult> {
+  if (!isTauri) {
+    const selected = pipeline ?? mock.settings.postProcessing.pipeline;
+    const descriptors = await listPostProcessors();
+    const started = performance.now();
+    let current = text;
+    const steps: PostProcessingTestStep[] = [];
+
+    for (const step of selected.steps.filter((item) => item.enabled)) {
+      const descriptor = descriptors.find((item) => item.id === step.processorId);
+      if (!descriptor) throw new Error(`未注册后处理模块：${step.processorId}`);
+      const stepStarted = performance.now();
+      if (step.processorId === "mock.append-exclamation") current += "！";
+      else if (step.processorId === "mock.wrap-brackets") current = `【${current}】`;
+      else throw new Error(`浏览器试跑暂不支持：${step.processorId}`);
+      steps.push({
+        stepId: step.id,
+        processorId: step.processorId,
+        displayName: descriptor.displayName,
+        durationMs: Math.round(performance.now() - stepStarted),
+        outcome: "succeeded",
+      });
+    }
+
+    return {
+      sourceText: text,
+      finalText: current,
+      pipelineId: selected.id,
+      durationMs: Math.round(performance.now() - started),
+      steps,
+    };
+  }
+  return invoke<PostProcessingTestResult>("test_post_processing", { text, pipeline });
 }
 
 /** 启动时损坏配置的恢复提示；只返回一次，浏览器演示模式恒为 null。 */
