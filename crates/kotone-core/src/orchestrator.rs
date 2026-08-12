@@ -82,18 +82,51 @@ struct ActiveSession {
 /// `Sending` 状态与取消令牌必须在任何异步焦点恢复/注入工作开始前一次性写入，
 /// 否则按钮双击或热键与按钮并发会启动两次注入，并让后一次覆盖前一次的令牌。
 struct SendClaim {
-    text: String,
+    ready: ReadyText,
     gen: u64,
     token: CancelToken,
     target: Option<TargetWindow>,
     channel: Option<(String, String)>,
 }
 
+/// 已完成全部文本生产步骤、可安全进入预览或注入的文本。
+/// `source_text` 与 `text` 当前相同；提前建立双文本边界，后处理接入后前者
+/// 保留识别原文，后者承载处理完成的可交付文本。
+#[derive(Clone)]
+struct ReadyText {
+    source_text: String,
+    text: String,
+}
+
+impl ReadyText {
+    fn unchanged(text: String) -> Self {
+        Self {
+            source_text: text.clone(),
+            text,
+        }
+    }
+}
+
+/// 状态机中待用户/系统继续处置的类型化文本，替代语义过载的 `preview_text`。
+/// 后续处理阶段可以增加 Recognized 变体，而预览与注入只接受 Ready。
+#[derive(Clone)]
+enum PendingText {
+    Ready(ReadyText),
+}
+
+impl PendingText {
+    fn ready(&self) -> &ReadyText {
+        match self {
+            Self::Ready(ready) => ready,
+        }
+    }
+}
+
 struct Inner {
     state: OrchestratorState,
     gen: u64,
     active: Option<ActiveSession>,
-    preview_text: Option<String>,
+    pending_text: Option<PendingText>,
     /// Sending 状态的取消令牌
     send_cancel: Option<CancelToken>,
     /// begin 时记录的前台窗口 = 注入目标（发送前把焦点还给它）
@@ -236,7 +269,7 @@ impl Orchestrator {
                 state: OrchestratorState::Idle,
                 gen: 0,
                 active: None,
-                preview_text: None,
+                pending_text: None,
                 send_cancel: None,
                 target_window: None,
                 process_case_id: None,
@@ -327,7 +360,7 @@ impl Orchestrator {
                 self.cancel().await;
                 let _ = self.begin().await;
             }
-            OrchestratorState::Error if self.inner.lock().unwrap().preview_text.is_none() => {
+            OrchestratorState::Error if self.inner.lock().unwrap().pending_text.is_none() => {
                 self.cancel().await;
                 let _ = self.begin().await;
             }
@@ -354,7 +387,7 @@ impl Orchestrator {
                     let _ = self.begin().await;
                 }
                 OrchestratorState::Error => {
-                    if self.inner.lock().unwrap().preview_text.is_some() {
+                    if self.inner.lock().unwrap().pending_text.is_some() {
                         // 带文本 Error = 发送失败待重试：按下即重发（confirm_send
                         // 从 Error 态重新进入 Sending）
                         let _ = self.confirm_send().await;
@@ -810,7 +843,7 @@ impl Orchestrator {
         let mut inner = self.inner.lock().unwrap();
         inner.gen += 1;
         inner.state = OrchestratorState::Listening;
-        inner.preview_text = None;
+        inner.pending_text = None;
         // 目标窗口记忆：用户按下热键说话前所在的前台窗口 = 注入目标，
         // 发送前（do_send）会把焦点还给它，避免 preview 交互抢焦点导致注入打错窗口
         inner.target_window = self.focus.foreground_window();
@@ -867,7 +900,12 @@ impl Orchestrator {
         // 历史读取期间可能有新会话开始；发送权必须在 op 锁内重新校验并占用。
         // 状态已经变化时保持原有语义：静默忽略，不打断当前输入。
         if let Ok(Some(claim)) = self
-            .claim_send(Some(text), None, &[OrchestratorState::Idle], true)
+            .claim_send(
+                Some(ReadyText::unchanged(text)),
+                None,
+                &[OrchestratorState::Idle],
+                true,
+            )
             .await
         {
             self.run_send(claim).await;
@@ -977,13 +1015,9 @@ impl Orchestrator {
                         "textChars": t.text.chars().count() as u64
                     }),
                 );
-                // 最终文本上屏（替换 partial）
-                self.emitter
-                    .emit("kotone://partial", json!({ "text": t.text }));
                 // history 草稿补齐 finalize 产物（终态落账时写入记录）
                 if let Some(h) = &self.inner.lock().unwrap().history {
                     let mut g = h.lock().unwrap();
-                    g.final_text = t.text.clone();
                     g.finalize_latency_ms = Some(t.latency_ms as u64);
                 }
                 // 历史音频独立落盘：即使 evalRecording 关闭也能保存与播放。
@@ -997,36 +1031,10 @@ impl Orchestrator {
                         Err(e) => crate::log::log(&format!("eval 录档失败（忽略）: {e}")),
                     }
                 }
-                // PostFinalize 策略（ADR-006）：C1 直接发送 / C2 预览确认
-                match self.policy().post {
-                    PostFinalize::SendDirect => {
-                        if let Ok(Some(claim)) = self
-                            .claim_send(
-                                Some(t.text),
-                                Some(gen),
-                                &[OrchestratorState::Transcribing],
-                                false,
-                            )
-                            .await
-                        {
-                            self.run_send(claim).await;
-                        }
-                    }
-                    PostFinalize::PreviewConfirm => {
-                        let _op = self.op.lock().await;
-                        let mut inner = self.inner.lock().unwrap();
-                        if inner.gen != gen {
-                            return Ok(());
-                        }
-                        inner.preview_text = Some(t.text.clone());
-                        inner.state = OrchestratorState::Preview;
-                        drop(inner);
-                        self.emit_state(
-                            OrchestratorState::Preview,
-                            Some(json!({ "text": t.text })),
-                        );
-                    }
-                }
+                // 从这里起只流转 ReadyText：后续加入后处理时，end() 仍只负责 STT
+                // finalize/eval，处理完成后的预览与发送复用同一个稳定出口。
+                self.deliver_ready_text(gen, ReadyText::unchanged(t.text))
+                    .await?;
             }
             Err(e) => {
                 self.emit_process(
@@ -1040,9 +1048,53 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// 所有可交付文本的唯一出口：更新 UI/history 后，按交互策略进入预览或发送。
+    /// STT、未来后处理和处理失败重试都必须先产出 ReadyText，再调用本方法；
+    /// injector 与 Preview 因而永远不会接触「尚未处理完成」的识别原文。
+    async fn deliver_ready_text(&self, gen: u64, ready: ReadyText) -> Result<(), String> {
+        if self.inner.lock().unwrap().gen != gen {
+            return Ok(());
+        }
+
+        self.emitter
+            .emit("kotone://partial", json!({ "text": ready.text }));
+        if let Some(history) = &self.inner.lock().unwrap().history {
+            history.lock().unwrap().final_text = ready.text.clone();
+        }
+
+        match self.policy().post {
+            PostFinalize::SendDirect => {
+                if let Some(claim) = self
+                    .claim_send(
+                        Some(ready),
+                        Some(gen),
+                        &[OrchestratorState::Transcribing],
+                        false,
+                    )
+                    .await?
+                {
+                    self.run_send(claim).await;
+                }
+            }
+            PostFinalize::PreviewConfirm => {
+                let _op = self.op.lock().await;
+                let mut inner = self.inner.lock().unwrap();
+                if inner.gen != gen {
+                    return Ok(());
+                }
+                let text = ready.text.clone();
+                inner.pending_text = Some(PendingText::Ready(ready));
+                inner.state = OrchestratorState::Preview;
+                drop(inner);
+                self.emit_state(OrchestratorState::Preview, Some(json!({ "text": text })));
+            }
+        }
+        Ok(())
+    }
+
     /// Preview 状态下用户确认发送；Error 状态（payload 带文本）也接受，
     /// 重新进入 Sending 实现重试（docs/development.md §4.1「Error 保留文本可重试」）。
-    /// ADR-006 预览只读化：不再接受编辑文本，一律发送已定的 preview_text。
+    /// ADR-006 预览只读化：不再接受编辑文本，一律发送已定的 ReadyText。
     pub async fn confirm_send(&self) -> Result<(), String> {
         let claim = self
             .claim_send(
@@ -1078,7 +1130,7 @@ impl Orchestrator {
             inner.gen += 1;
             gen = inner.gen;
             let mut active = inner.active.take();
-            inner.preview_text = None;
+            inner.pending_text = None;
             if let Some(token) = inner.send_cancel.take() {
                 token.cancel();
             }
@@ -1117,7 +1169,7 @@ impl Orchestrator {
         }
         inner.gen += 1;
         let mut active = inner.active.take();
-        inner.preview_text = None;
+        inner.pending_text = None;
         if let Some(token) = inner.send_cancel.take() {
             token.cancel();
         }
@@ -1143,10 +1195,10 @@ impl Orchestrator {
     // ---------- 内部 ----------
 
     /// 在 `op` 锁内校验来源状态并原子进入 Sending，保证每个状态只能产生一个发送任务。
-    /// `text=None` 用于 Preview/Error 重试：文本也在同一临界区内从 preview_text 取出。
+    /// `ready=None` 用于 Preview/Error 重试：文本也在同一临界区内从 pending_text 取出。
     async fn claim_send(
         &self,
-        text: Option<String>,
+        ready: Option<ReadyText>,
         expected_gen: Option<u64>,
         expected_states: &[OrchestratorState],
         clear_target: bool,
@@ -1160,11 +1212,13 @@ impl Orchestrator {
             if !expected_states.contains(&inner.state) {
                 return Err(format!("当前状态 {:?} 不能发送", inner.state));
             }
-            let text = match text {
-                Some(text) => text,
+            let ready = match ready {
+                Some(ready) => ready,
                 None => inner
-                    .preview_text
-                    .clone()
+                    .pending_text
+                    .as_ref()
+                    .map(PendingText::ready)
+                    .cloned()
                     .ok_or_else(|| "无待发送文本".to_string())?,
             };
             if clear_target {
@@ -1175,7 +1229,7 @@ impl Orchestrator {
             inner.state = OrchestratorState::Sending;
             inner.send_cancel = Some(token.clone());
             SendClaim {
-                text,
+                ready,
                 gen: inner.gen,
                 token,
                 target: inner.target_window,
@@ -1184,7 +1238,7 @@ impl Orchestrator {
         };
         self.emit_state(
             OrchestratorState::Sending,
-            Some(json!({ "text": claim.text })),
+            Some(json!({ "text": claim.ready.text })),
         );
         Ok(Some(claim))
     }
@@ -1193,12 +1247,13 @@ impl Orchestrator {
     /// 仅接受 `claim_send` 产生的已占用发送任务，不再改写状态或取消令牌。
     async fn run_send(&self, claim: SendClaim) {
         let SendClaim {
-            text,
+            ready,
             gen,
             token,
             target,
             channel,
         } = claim;
+        let ReadyText { source_text, text } = ready;
         let injection_started_at = std::time::Instant::now();
         self.emit_process(
             "injection_started",
@@ -1273,7 +1328,7 @@ impl Orchestrator {
             let mut resume_continuous = false;
             match result {
                 Ok(()) => {
-                    inner.preview_text = None;
+                    inner.pending_text = None;
                     resume_continuous = self.policy().continuous;
                     inner.state = if resume_continuous {
                         OrchestratorState::Idle
@@ -1294,11 +1349,14 @@ impl Orchestrator {
                     history_write = (crate::history::HistoryOutcome::Sent, None);
                 }
                 Err(e) => {
-                    // Error 保留文本（preview_text 承载），前端/confirm_send 可重试（§4.1）；
+                    // Error 保留 ReadyText，前端/confirm_send 可重试（§4.1）；
                     // needsElevation 透传 UIPI 提权信号（§10 R-1）；
                     // inputBlocked 透传「系统级拦截」信号（安全软件/反作弊），前端弹窗引导排查；
                     // 注入超时（inject_timeout）也落此分支，message 含超时提示
-                    inner.preview_text = Some(text.clone());
+                    inner.pending_text = Some(PendingText::Ready(ReadyText {
+                        source_text,
+                        text: text.clone(),
+                    }));
                     inner.state = OrchestratorState::Error;
                     drop(inner);
                     self.emit_state(
@@ -1337,7 +1395,7 @@ impl Orchestrator {
     fn toast_error(&self, message: &str) {
         let gen = {
             let mut inner = self.inner.lock().unwrap();
-            inner.preview_text = None;
+            inner.pending_text = None;
             inner.state = OrchestratorState::Error;
             inner.gen
         };
@@ -1354,7 +1412,10 @@ impl Orchestrator {
         if inner.gen != gen {
             return;
         }
-        inner.preview_text = text.clone();
+        inner.pending_text = text
+            .clone()
+            .map(ReadyText::unchanged)
+            .map(PendingText::Ready);
         inner.state = OrchestratorState::Error;
         drop(inner);
         self.emit_state(
