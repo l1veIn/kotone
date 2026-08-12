@@ -7,6 +7,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import defaultLolBlocklistCsv from "../../../../crates/kotone-postprocess/assets/lol-zh-cn-starter.csv?raw";
 
 /** 是否运行在 Tauri WebView 中（否则为纯浏览器调试） */
 export const isTauri: boolean =
@@ -550,6 +551,40 @@ function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
 }
 
+const mockDefaultBlocklistRules = defaultLolBlocklistCsv
+  .replace(/^\uFEFF/, "")
+  .split(/\r?\n/)
+  .slice(1)
+  .filter(Boolean)
+  .map((row) => {
+    const separator = row.indexOf(",");
+    const pattern = separator < 0 ? row : row.slice(0, separator);
+    const replacement = separator < 0 ? "" : row.slice(separator + 1);
+    return {
+      pattern,
+      replacement: replacement || "*".repeat(Array.from(pattern).length),
+    };
+  })
+  .sort((left, right) => Array.from(right.pattern).length - Array.from(left.pattern).length);
+
+function applyMockDefaultBlocklist(text: string): string {
+  let result = "";
+  for (let cursor = 0; cursor < text.length; ) {
+    const rule = mockDefaultBlocklistRules.find(({ pattern }) => text.startsWith(pattern, cursor));
+    if (rule) {
+      result += rule.replacement;
+      cursor += rule.pattern.length;
+    } else {
+      const codePoint = text.codePointAt(cursor);
+      if (codePoint === undefined) break;
+      const value = String.fromCodePoint(codePoint);
+      result += value;
+      cursor += value.length;
+    }
+  }
+  return result;
+}
+
 function mockQuery(name: string): string | null {
   if (typeof window === "undefined") return null;
   const searchValue = new URLSearchParams(window.location.search).get(name);
@@ -599,18 +634,17 @@ export async function listPostProcessors(): Promise<PostProcessorInfo[]> {
       {
         id: "builtin.blocklist-filter",
         displayName: "屏蔽词过滤",
-        description: "按本地 CSV 表替换屏蔽词；替换词留空时使用等长星号。",
+        description: "过滤国服对局常见辱骂；可选择自定义 CSV 完整覆盖内置词表。",
         category: "utility",
         developerOnly: false,
         networkAccess: "local",
         configFields: [
           {
             key: "csvPath",
-            displayName: "屏蔽词 CSV",
-            description:
-              "UTF-8 CSV，每行“屏蔽词,替换词”；第二列可留空，例如：坏蛋, 或 菜鸟,萌新。",
+            displayName: "自定义屏蔽词 CSV",
+            description: "可选。UTF-8 CSV，每行“屏蔽词,替换词”；第二列留空时替换为等长星号。",
             kind: "file",
-            required: true,
+            required: false,
             fileExtensions: ["csv"],
           },
         ],
@@ -657,7 +691,13 @@ export async function testPostProcessing(
       const descriptor = descriptors.find((item) => item.id === step.processorId);
       if (!descriptor) throw new Error(`未注册后处理模块：${step.processorId}`);
       const stepStarted = performance.now();
-      if (step.processorId === "mock.append-exclamation") current += "！";
+      if (step.processorId === "builtin.blocklist-filter") {
+        const config = step.config as Record<string, unknown> | null;
+        if (typeof config?.csvPath === "string" && config.csvPath.trim()) {
+          throw new Error("浏览器试跑无法读取本地 CSV，请在桌面应用中试跑自定义词表");
+        }
+        current = applyMockDefaultBlocklist(current);
+      } else if (step.processorId === "mock.append-exclamation") current += "！";
       else if (step.processorId === "mock.wrap-brackets") current = `【${current}】`;
       else throw new Error(`浏览器试跑暂不支持：${step.processorId}`);
       steps.push({

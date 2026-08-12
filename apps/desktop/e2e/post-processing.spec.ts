@@ -41,7 +41,9 @@ test("registered post-processors can be composed, tried out and edited", async (
   await expect(steps.nth(0)).toContainText("方括号包裹");
 });
 
-test("a discovered blocklist processor requires and saves its CSV path", async ({ page }) => {
+test("a discovered blocklist processor works by default and saves a custom CSV path", async ({
+  page,
+}) => {
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-processing").click();
 
@@ -53,14 +55,20 @@ test("a discovered blocklist processor requires and saves its CSV path", async (
 
   const step = page.getByTestId("postprocess-step-builtin.blocklist-filter");
   const toggle = step.getByRole("checkbox", { name: "启用屏蔽词过滤" });
-  await expect(toggle).not.toBeChecked();
-  await expect(step).toContainText("完成必填配置后，这个步骤会自动启用");
+  await expect(toggle).toBeChecked();
+  await expect(step).toContainText("可选择自定义 CSV 完整覆盖内置词表");
 
-  const csvPath = step.getByRole("textbox", { name: "屏蔽词 CSV" });
+  const tryoutInput = page.getByTestId("postprocess-tryout-input");
+  await tryoutInput.fill("你真傻逼，这波牛逼");
+  await page.getByTestId("postprocess-tryout-run").click();
+  await expect(page.getByTestId("postprocess-tryout-result")).toContainText(
+    "你真**，这波厉害",
+  );
+
+  const csvPath = step.getByRole("textbox", { name: "自定义屏蔽词 CSV" });
   await csvPath.fill("C:\\Kotone\\blocklist.csv");
   await csvPath.blur();
 
   await expect(csvPath).toHaveValue("C:\\Kotone\\blocklist.csv");
   await expect(toggle).toBeChecked();
-  await expect(step).not.toContainText("完成必填配置后，这个步骤会自动启用");
 });

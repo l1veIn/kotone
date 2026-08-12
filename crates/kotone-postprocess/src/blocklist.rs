@@ -18,6 +18,7 @@ use serde_json::Value;
 const MAX_CSV_BYTES: u64 = 1024 * 1024;
 const MAX_RULES: usize = 10_000;
 const MAX_PATTERN_CHARS: usize = 256;
+const DEFAULT_RULES_CSV: &str = include_str!("../assets/lol-zh-cn-starter.csv");
 
 pub const PROCESSOR_ID: &str = "builtin.blocklist-filter";
 
@@ -28,18 +29,17 @@ impl ProcessorFactory for BlocklistFilterFactory {
         ProcessorDescriptor {
             id: PROCESSOR_ID.into(),
             display_name: "屏蔽词过滤".into(),
-            description: "按本地 CSV 表替换屏蔽词；替换词留空时使用等长星号。".into(),
+            description: "过滤国服对局常见辱骂；可选择自定义 CSV 完整覆盖内置词表。".into(),
             category: ProcessorCategory::Utility,
             developer_only: false,
             network_access: NetworkAccess::Local,
             config_fields: vec![ProcessorConfigField {
                 key: "csvPath".into(),
-                display_name: "屏蔽词 CSV".into(),
-                description:
-                    "UTF-8 CSV，每行“屏蔽词,替换词”；第二列可留空，例如：坏蛋, 或 菜鸟,萌新。"
-                        .into(),
+                display_name: "自定义屏蔽词 CSV".into(),
+                description: "可选。UTF-8 CSV，每行“屏蔽词,替换词”；第二列留空时替换为等长星号。"
+                    .into(),
                 kind: ProcessorConfigFieldKind::File,
-                required: true,
+                required: false,
                 file_extensions: vec!["csv".into()],
             }],
         }
@@ -50,9 +50,12 @@ impl ProcessorFactory for BlocklistFilterFactory {
             .get("csvPath")
             .and_then(Value::as_str)
             .map(str::trim)
-            .filter(|path| !path.is_empty())
-            .ok_or_else(|| "屏蔽词过滤器尚未配置 CSV 文件".to_string())?;
-        let rules = load_rules(Path::new(path))?;
+            .filter(|path| !path.is_empty());
+        let rules = match path {
+            Some(path) => load_rules(Path::new(path))?,
+            None => parse_rules(DEFAULT_RULES_CSV)
+                .map_err(|error| format!("内置屏蔽词表无效：{error}"))?,
+        };
         Ok(Arc::new(BlocklistFilter { rules }))
     }
 }
@@ -301,15 +304,32 @@ mod tests {
         assert_eq!(result.final_text, "好人和萌新说 *** ***");
     }
 
+    #[tokio::test]
+    async fn processor_uses_builtin_lol_starter_rules_without_custom_path() {
+        let processor = BlocklistFilterFactory
+            .create(&serde_json::json!({}))
+            .unwrap();
+        let result = processor
+            .process(
+                TextDocument::recognized("你真傻逼，这波牛逼"),
+                &ProcessingContext::default(),
+                ProcessingCancelToken::default(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.text, "你真**，这波厉害");
+    }
+
     #[test]
-    fn descriptor_declares_a_required_local_csv_field() {
+    fn descriptor_declares_an_optional_local_csv_override() {
         let descriptor = BlocklistFilterFactory.descriptor();
         assert_eq!(descriptor.id, PROCESSOR_ID);
         assert!(!descriptor.developer_only);
         assert_eq!(descriptor.network_access, NetworkAccess::Local);
         assert_eq!(descriptor.config_fields.len(), 1);
         assert_eq!(descriptor.config_fields[0].key, "csvPath");
-        assert!(descriptor.config_fields[0].required);
+        assert!(!descriptor.config_fields[0].required);
         let value = serde_json::to_value(descriptor).unwrap();
         assert_eq!(value["configFields"][0]["kind"], "file");
         assert_eq!(value["configFields"][0]["fileExtensions"][0], "csv");
