@@ -400,6 +400,10 @@ mod windows_imp {
                 ok
             }
         }
+
+        fn foreground_process_name(&self) -> Option<String> {
+            foreground_process_name()
+        }
     }
 
     /// Toolhelp 快照按可执行文件名（大小写不敏感）查 PID；取首个匹配

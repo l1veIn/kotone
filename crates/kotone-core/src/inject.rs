@@ -105,6 +105,11 @@ pub trait FocusBackend: Send + Sync {
     fn foreground_window(&self) -> Option<TargetWindow>;
     /// 发送前把焦点还给目标窗口；false = 窗口已关闭/失效（仍直发当前前台，不阻塞）
     fn restore(&self, target: TargetWindow) -> bool;
+    /// 当前前台窗口所属进程的可执行文件名（诊断「发送后游戏失焦」用；
+    /// 平台无关实现默认 None，Windows 生产实现覆盖返回真实进程名）。
+    fn foreground_process_name(&self) -> Option<String> {
+        None
+    }
 }
 
 /// 占位实现：什么都不做直接成功。非 Windows 平台兜底（Windows 上由 `WindowsInjector` 接管）。

@@ -1530,6 +1530,21 @@ impl Orchestrator {
             }
         }
 
+        // 注入前后前台进程对照（诊断「发送后游戏失焦」；纯观测，不改窗口状态）：
+        // before 在注入前一刻采集，after 延迟 500ms 采集（等安全软件重放/失焦发生）。
+        // 两者一致说明注入未扰动焦点；after 变为桌面/其他进程即可定位失焦瞬间。
+        let fg_before = self.focus.foreground_process_name();
+        let focus = self.focus.clone();
+        tokio::task::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let fg_after = focus.foreground_process_name();
+            crate::log::log(&format!(
+                "inject focus probe: before={} after500ms={}",
+                fg_before.as_deref().unwrap_or("(none)"),
+                fg_after.as_deref().unwrap_or("(none)")
+            ));
+        });
+
         // 注入超时保护（P0，用户反馈「SendInput 被拦截后卡死」）：SendInput 被
         // 安全软件/反作弊钩住时可能不返回（挂起而非立即 0/N 失败），无超时则
         // 状态机永久卡 Sending、cancel 无法打断阻塞线程。超时后状态机回 Error
