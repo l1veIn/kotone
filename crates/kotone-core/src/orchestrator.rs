@@ -1148,8 +1148,27 @@ impl Orchestrator {
         );
 
         let started = std::time::Instant::now();
+        let progress_observer = |progress: crate::postprocess::PipelineStepProgress| {
+            self.emit_state(
+                OrchestratorState::Processing,
+                Some(json!({
+                    "text": recognized.source_text,
+                    "pipelineId": recognized.pipeline.pipeline.id,
+                    "stepId": progress.step_id,
+                    "processorId": progress.processor_id,
+                    "displayName": progress.display_name,
+                    "index": progress.index,
+                    "total": progress.total,
+                })),
+            );
+        };
         let result = pipeline
-            .run(recognized.source_text.clone(), &recognized.context, cancel)
+            .run_with_progress(
+                recognized.source_text.clone(),
+                &recognized.context,
+                cancel,
+                Some(&progress_observer),
+            )
             .await;
 
         {

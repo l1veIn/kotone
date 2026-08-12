@@ -29,9 +29,10 @@ mod tests {
     use std::time::Duration;
 
     use kotone_core::postprocess::{
-        PipelineConfig, PipelineStepConfig, PostProcessPipeline, PostProcessingConfig,
-        ProcessError, ProcessFuture, ProcessingCancelToken, ProcessingContext, ProcessorDescriptor,
-        StepFailurePolicy, TextDocument, TextProcessor,
+        test_post_processing, NetworkAccess, PipelineConfig, PipelineStepConfig,
+        PipelineStepProgress, PostProcessPipeline, PostProcessingConfig, ProcessError,
+        ProcessFuture, ProcessingCancelToken, ProcessingContext, ProcessorCategory,
+        ProcessorDescriptor, StepFailurePolicy, TextDocument, TextProcessor,
     };
 
     fn step(id: &str, processor_id: &str) -> PipelineStepConfig {
@@ -52,6 +53,10 @@ mod tests {
             ProcessorDescriptor {
                 id: "test.always-fail".into(),
                 display_name: "Test · 恒失败".into(),
+                description: "测试失败策略".into(),
+                category: ProcessorCategory::Utility,
+                developer_only: true,
+                network_access: NetworkAccess::None,
             }
         }
 
@@ -80,6 +85,10 @@ mod tests {
             ProcessorDescriptor {
                 id: "test.slow".into(),
                 display_name: "Test · 慢处理".into(),
+                description: "测试超时与取消".into(),
+                category: ProcessorCategory::Utility,
+                developer_only: true,
+                network_access: NetworkAccess::None,
             }
         }
 
@@ -136,6 +145,17 @@ mod tests {
     }
 
     #[test]
+    fn descriptors_expose_ui_metadata_with_camel_case_fields() {
+        let descriptor = mock::AppendExclamationFactory.descriptor();
+        let value = serde_json::to_value(descriptor).unwrap();
+        assert_eq!(value["displayName"], "Mock · 句尾叹号");
+        assert_eq!(value["category"], "utility");
+        assert_eq!(value["developerOnly"], true);
+        assert_eq!(value["networkAccess"], "none");
+        assert!(value.get("display_name").is_none());
+    }
+
+    #[test]
     fn duplicate_registration_is_rejected_instead_of_overwriting() {
         let mut registry = ProcessorRegistry::new();
         registry
@@ -182,6 +202,64 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["mock.append-exclamation", "mock.wrap-brackets"]
         );
+    }
+
+    #[tokio::test]
+    async fn progress_observer_reports_each_step_before_execution() {
+        let mut registry = ProcessorRegistry::new();
+        register_builtin(&mut registry).unwrap();
+        let pipeline = pipeline_with(
+            vec![
+                step("punctuation", "mock.append-exclamation"),
+                step("wrapper", "mock.wrap-brackets"),
+            ],
+            &registry,
+        );
+        let observed = std::sync::Mutex::new(Vec::<PipelineStepProgress>::new());
+        let observer = |progress| observed.lock().unwrap().push(progress);
+
+        pipeline
+            .run_with_progress(
+                "你好".into(),
+                &ProcessingContext::default(),
+                ProcessingCancelToken::default(),
+                Some(&observer),
+            )
+            .await
+            .unwrap();
+
+        let observed = observed.into_inner().unwrap();
+        assert_eq!(observed.len(), 2);
+        assert_eq!(observed[0].display_name, "Mock · 句尾叹号");
+        assert_eq!((observed[0].index, observed[0].total), (1, 2));
+        assert_eq!(observed[1].step_id, "wrapper");
+        assert_eq!((observed[1].index, observed[1].total), (2, 2));
+    }
+
+    #[tokio::test]
+    async fn test_api_runs_pipeline_without_runtime_side_effects() {
+        let mut registry = ProcessorRegistry::new();
+        register_builtin(&mut registry).unwrap();
+        let pipeline = PipelineConfig {
+            id: "tryout".into(),
+            steps: vec![
+                step("punctuation", "mock.append-exclamation"),
+                step("wrapper", "mock.wrap-brackets"),
+            ],
+        };
+
+        let result = test_post_processing("你好".into(), pipeline, &registry)
+            .await
+            .unwrap();
+
+        assert_eq!(result.source_text, "你好");
+        assert_eq!(result.final_text, "【你好！】");
+        assert_eq!(result.pipeline_id, "tryout");
+        assert_eq!(result.steps.len(), 2);
+        let value = serde_json::to_value(result).unwrap();
+        assert_eq!(value["steps"][0]["displayName"], "Mock · 句尾叹号");
+        assert_eq!(value["steps"][0]["outcome"], "succeeded");
+        assert!(value["steps"][0].get("error").is_none());
     }
 
     #[tokio::test]

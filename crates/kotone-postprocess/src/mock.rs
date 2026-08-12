@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use kotone_core::postprocess::{
-    ProcessError, ProcessFuture, ProcessingCancelToken, ProcessingContext, ProcessorDescriptor,
-    ProcessorFactory, TextDocument, TextProcessor,
+    NetworkAccess, ProcessError, ProcessFuture, ProcessingCancelToken, ProcessingContext,
+    ProcessorCategory, ProcessorDescriptor, ProcessorFactory, TextDocument, TextProcessor,
 };
 use serde_json::Value;
 
@@ -15,6 +15,10 @@ impl ProcessorFactory for AppendExclamationFactory {
         ProcessorDescriptor {
             id: "mock.append-exclamation".into(),
             display_name: "Mock · 句尾叹号".into(),
+            description: "在文本句尾追加一个全角叹号，用于验证后处理流程。".into(),
+            category: ProcessorCategory::Utility,
+            developer_only: true,
+            network_access: NetworkAccess::None,
         }
     }
 
@@ -49,6 +53,10 @@ impl ProcessorFactory for WrapBracketsFactory {
         ProcessorDescriptor {
             id: "mock.wrap-brackets".into(),
             display_name: "Mock · 方括号包裹".into(),
+            description: "使用全角方括号包裹文本，用于验证多步骤编排。".into(),
+            category: ProcessorCategory::Utility,
+            developer_only: true,
+            network_access: NetworkAccess::None,
         }
     }
 

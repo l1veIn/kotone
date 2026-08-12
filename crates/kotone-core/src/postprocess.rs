@@ -121,6 +121,28 @@ pub struct ProcessingContext {
 pub struct ProcessorDescriptor {
     pub id: String,
     pub display_name: String,
+    pub description: String,
+    pub category: ProcessorCategory,
+    pub developer_only: bool,
+    pub network_access: NetworkAccess,
+}
+
+/// 设置页用于分组展示处理器的稳定领域分类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProcessorCategory {
+    Writing,
+    Translation,
+    Utility,
+}
+
+/// 模块处理文本时可能触达的最远网络边界，供 UI 做隐私提示。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NetworkAccess {
+    None,
+    Local,
+    Internet,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,6 +251,7 @@ impl ProcessingCancelToken {
 
 struct CompiledStep {
     config: PipelineStepConfig,
+    descriptor: ProcessorDescriptor,
     processor: Arc<dyn TextProcessor>,
 }
 
@@ -252,11 +275,13 @@ impl PostProcessPipeline {
                 let factory = registry
                     .get(&step.processor_id)
                     .ok_or_else(|| format!("未注册的后处理器: {}", step.processor_id))?;
+                let descriptor = factory.descriptor();
                 let processor = factory
                     .create(&step.config)
                     .map_err(|error| format!("后处理步骤「{}」配置无效: {error}", step.id))?;
                 steps.push(CompiledStep {
                     config: step.clone(),
+                    descriptor,
                     processor,
                 });
             }
@@ -281,12 +306,36 @@ impl PostProcessPipeline {
         context: &ProcessingContext,
         cancel: ProcessingCancelToken,
     ) -> Result<PipelineResult, PipelineError> {
+        self.run_with_progress(source_text, context, cancel, None)
+            .await
+    }
+
+    /// 运行 pipeline，并在每个步骤开始前同步通知观察者。
+    ///
+    /// observer 只观察会话级执行快照，不拥有 runner，也不能改变步骤结果；调用方
+    /// 可据此发出 UI 进度事件。同步回调保证事件顺序与实际步骤顺序严格一致。
+    pub async fn run_with_progress(
+        &self,
+        source_text: String,
+        context: &ProcessingContext,
+        cancel: ProcessingCancelToken,
+        observer: Option<&PipelineProgressObserver<'_>>,
+    ) -> Result<PipelineResult, PipelineError> {
         let mut document = TextDocument::recognized(source_text);
         let mut trace = Vec::with_capacity(self.steps.len());
 
-        for step in &self.steps {
+        for (step_index, step) in self.steps.iter().enumerate() {
             if cancel.is_cancelled() {
                 return Err(PipelineError::cancelled(&step.config, trace));
+            }
+            if let Some(observer) = observer {
+                observer(PipelineStepProgress {
+                    step_id: step.config.id.clone(),
+                    processor_id: step.config.processor_id.clone(),
+                    display_name: step.descriptor.display_name.clone(),
+                    index: step_index + 1,
+                    total: self.steps.len(),
+                });
             }
             let started = Instant::now();
             let step_cancel = cancel.clone();
@@ -314,6 +363,7 @@ impl PostProcessPipeline {
                     trace.push(PipelineStepTrace {
                         step_id: step.config.id.clone(),
                         processor_id: step.config.processor_id.clone(),
+                        display_name: step.descriptor.display_name.clone(),
                         duration_ms: started.elapsed().as_millis() as u64,
                         outcome: PipelineStepOutcome::Succeeded,
                         error: None,
@@ -324,8 +374,7 @@ impl PostProcessPipeline {
                         kind: ProcessErrorKind::InvalidOutput,
                         message: "处理器返回了空文本".into(),
                     };
-                    if let Some(error) = handle_step_error(&step.config, error, started, &mut trace)
-                    {
+                    if let Some(error) = handle_step_error(step, error, started, &mut trace) {
                         return Err(error);
                     }
                 }
@@ -333,8 +382,7 @@ impl PostProcessPipeline {
                     if error.kind == ProcessErrorKind::Cancelled {
                         return Err(PipelineError::cancelled(&step.config, trace));
                     }
-                    if let Some(error) = handle_step_error(&step.config, error, started, &mut trace)
-                    {
+                    if let Some(error) = handle_step_error(step, error, started, &mut trace) {
                         return Err(error);
                     }
                 }
@@ -351,26 +399,41 @@ impl PostProcessPipeline {
 }
 
 fn handle_step_error(
-    step: &PipelineStepConfig,
+    step: &CompiledStep,
     error: ProcessError,
     started: Instant,
     trace: &mut Vec<PipelineStepTrace>,
 ) -> Option<PipelineError> {
     trace.push(PipelineStepTrace {
-        step_id: step.id.clone(),
-        processor_id: step.processor_id.clone(),
+        step_id: step.config.id.clone(),
+        processor_id: step.config.processor_id.clone(),
+        display_name: step.descriptor.display_name.clone(),
         duration_ms: started.elapsed().as_millis() as u64,
         outcome: PipelineStepOutcome::Failed,
         error: Some(error.message.clone()),
     });
-    (step.on_error == StepFailurePolicy::Required).then(|| PipelineError {
-        step_id: step.id.clone(),
-        processor_id: step.processor_id.clone(),
+    (step.config.on_error == StepFailurePolicy::Required).then(|| PipelineError {
+        step_id: step.config.id.clone(),
+        processor_id: step.config.processor_id.clone(),
         kind: error.kind,
         message: error.message,
         trace: trace.clone(),
     })
 }
+
+/// pipeline 开始执行某一步时发出的只读进度快照。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PipelineStepProgress {
+    pub step_id: String,
+    pub processor_id: String,
+    pub display_name: String,
+    /// 从 1 开始，适合直接展示为“第 n 步”。
+    pub index: usize,
+    pub total: usize,
+}
+
+pub type PipelineProgressObserver<'a> = dyn Fn(PipelineStepProgress) + Send + Sync + 'a;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PipelineResult {
@@ -401,17 +464,63 @@ impl PipelineError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PipelineStepTrace {
     pub step_id: String,
     pub processor_id: String,
+    pub display_name: String,
     pub duration_ms: u64,
     pub outcome: PipelineStepOutcome,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum PipelineStepOutcome {
     Succeeded,
     Failed,
+}
+
+/// 设置页“试跑”返回值。该路径只编译并执行给定 pipeline，不接触 orchestrator、
+/// history 或 injector。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostProcessingTestResult {
+    pub source_text: String,
+    pub final_text: String,
+    pub pipeline_id: String,
+    pub duration_ms: u64,
+    pub steps: Vec<PipelineStepTrace>,
+}
+
+pub async fn test_post_processing(
+    text: String,
+    pipeline: PipelineConfig,
+    registry: &ProcessorRegistry,
+) -> Result<PostProcessingTestResult, String> {
+    let compiled = PostProcessPipeline::compile(
+        &PostProcessingConfig {
+            enabled: true,
+            pipeline,
+        },
+        registry,
+    )?;
+    let started = Instant::now();
+    let result = compiled
+        .run(
+            text,
+            &ProcessingContext::default(),
+            ProcessingCancelToken::default(),
+        )
+        .await
+        .map_err(|error| format!("后处理步骤「{}」失败：{}", error.step_id, error.message))?;
+    Ok(PostProcessingTestResult {
+        source_text: result.source_text,
+        final_text: result.final_text,
+        pipeline_id: result.pipeline_id,
+        duration_ms: started.elapsed().as_millis() as u64,
+        steps: result.trace,
+    })
 }

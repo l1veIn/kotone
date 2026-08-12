@@ -662,6 +662,26 @@ fn list_post_processors(
     state.processors.list_info()
 }
 
+/// 独立试跑一条后处理 pipeline；不经过 orchestrator，因此不会写历史或触发注入。
+/// 未传 pipeline 时使用当前设置的 pipeline 快照，即使总开关关闭也会执行其步骤。
+#[tauri::command]
+async fn test_post_processing(
+    state: tauri::State<'_, SharedState>,
+    text: String,
+    pipeline: Option<kotone_core::postprocess::PipelineConfig>,
+) -> Result<kotone_core::postprocess::PostProcessingTestResult, String> {
+    let pipeline = pipeline.unwrap_or_else(|| {
+        state
+            .settings
+            .read()
+            .unwrap()
+            .post_processing
+            .pipeline
+            .clone()
+    });
+    kotone_core::postprocess::test_post_processing(text, pipeline, &state.processors).await
+}
+
 /// 启动时配置恢复诊断；主设置页读取后以 toast 明确告知用户备份路径。
 #[tauri::command]
 fn get_settings_load_warning(state: tauri::State<SharedState>) -> Option<String> {
@@ -1591,6 +1611,7 @@ pub fn run() {
             get_startup_options,
             get_settings,
             list_post_processors,
+            test_post_processing,
             get_settings_load_warning,
             update_settings,
             list_audio_devices,

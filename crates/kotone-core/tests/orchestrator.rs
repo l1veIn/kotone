@@ -470,6 +470,29 @@ async fn multiple_registered_postprocessors_run_in_declared_order() {
         "第二步必须消费第一步输出"
     );
     let process_events = emitter.events.lock().unwrap();
+    let progress: Vec<&serde_json::Value> = process_events
+        .iter()
+        .filter_map(|(event, payload)| {
+            (event == "kotone://state"
+                && payload.get("state").and_then(|v| v.as_str()) == Some("processing")
+                && payload
+                    .pointer("/payload/stepId")
+                    .and_then(|v| v.as_str())
+                    .is_some())
+            .then_some(payload)
+        })
+        .collect();
+    assert_eq!(progress.len(), 2);
+    assert_eq!(
+        progress[0].pointer("/payload/displayName").unwrap(),
+        "Mock · 句尾叹号"
+    );
+    assert_eq!(progress[0].pointer("/payload/index").unwrap(), 1);
+    assert_eq!(progress[0].pointer("/payload/total").unwrap(), 2);
+    assert_eq!(
+        progress[1].pointer("/payload/processorId").unwrap(),
+        "mock.wrap-brackets"
+    );
     let completed = process_events
         .iter()
         .find(|(event, payload)| {
