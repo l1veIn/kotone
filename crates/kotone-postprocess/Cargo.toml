@@ -9,3 +9,5 @@ rust-version = "1.77.2"
 kotone-core.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+tokio.workspace = true

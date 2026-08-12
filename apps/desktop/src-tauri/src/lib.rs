@@ -38,6 +38,7 @@ pub struct SharedState {
     settings_load_warning: Mutex<Option<String>>,
     pub orchestrator: Arc<Orchestrator>,
     pub engines: Arc<EngineRegistry>,
+    pub processors: Arc<kotone_core::postprocess::ProcessorRegistry>,
     pub injector: Arc<dyn Injector>,
 }
 
@@ -651,6 +652,14 @@ fn log_frontend_error(context: String, message: String) {
 #[tauri::command]
 fn get_settings(state: tauri::State<SharedState>) -> Settings {
     state.settings.read().unwrap().clone()
+}
+
+/// 已注册后处理模块的只读发现接口；设置页不维护硬编码模块清单。
+#[tauri::command]
+fn list_post_processors(
+    state: tauri::State<SharedState>,
+) -> Vec<kotone_core::postprocess::ProcessorDescriptor> {
+    state.processors.list_info()
 }
 
 /// 启动时配置恢复诊断；主设置页读取后以 toast 明确告知用户备份路径。
@@ -1520,7 +1529,7 @@ pub fn run() {
                 focus,
                 emitter,
             )
-            .with_processors(processors);
+            .with_processors(processors.clone());
             // VAD 接线（ADR-007）：vad-silero feature 开启时注入 silero 工厂；
             // 默认构建不接入——one-shot 模式 begin 会报清晰错误
             #[cfg(feature = "vad-silero")]
@@ -1535,6 +1544,7 @@ pub fn run() {
                 settings_load_warning: Mutex::new(settings_load_warning),
                 orchestrator: orchestrator.clone(),
                 engines,
+                processors,
                 injector,
             });
             app.manage(HotkeyManager::new(app.handle(), orchestrator.clone()));
@@ -1580,6 +1590,7 @@ pub fn run() {
             log_frontend_error,
             get_startup_options,
             get_settings,
+            list_post_processors,
             get_settings_load_warning,
             update_settings,
             list_audio_devices,

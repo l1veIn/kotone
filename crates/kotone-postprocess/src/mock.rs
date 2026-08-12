@@ -41,3 +41,37 @@ impl TextProcessor for AppendExclamation {
         })
     }
 }
+
+pub struct WrapBracketsFactory;
+
+impl ProcessorFactory for WrapBracketsFactory {
+    fn descriptor(&self) -> ProcessorDescriptor {
+        ProcessorDescriptor {
+            id: "mock.wrap-brackets".into(),
+            display_name: "Mock · 方括号包裹".into(),
+        }
+    }
+
+    fn create(&self, _config: &Value) -> Result<Arc<dyn TextProcessor>, String> {
+        Ok(Arc::new(WrapBrackets))
+    }
+}
+
+struct WrapBrackets;
+
+impl TextProcessor for WrapBrackets {
+    fn process<'a>(
+        &'a self,
+        mut input: TextDocument,
+        _context: &'a ProcessingContext,
+        cancel: ProcessingCancelToken,
+    ) -> ProcessFuture<'a> {
+        Box::pin(async move {
+            if cancel.is_cancelled() {
+                return Err(ProcessError::failed("后处理已取消"));
+            }
+            input.text = format!("【{}】", input.text);
+            Ok(input)
+        })
+    }
+}

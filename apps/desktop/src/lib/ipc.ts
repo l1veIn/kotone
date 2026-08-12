@@ -46,6 +46,25 @@ export interface HistoryConfig {
   dir: string;
 }
 
+export type PostProcessFailurePolicy = "required" | "best-effort";
+
+export interface PostProcessStepConfig {
+  id: string;
+  processorId: string;
+  enabled: boolean;
+  config: unknown;
+  timeoutMs: number;
+  onError: PostProcessFailurePolicy;
+}
+
+export interface PostProcessingConfig {
+  enabled: boolean;
+  pipeline: {
+    id: string;
+    steps: PostProcessStepConfig[];
+  };
+}
+
 export interface Settings {
   hotkey: HotkeyConfig;
   /** 热键后端：auto（Windows 优先 LL 钩子）/ llhook / register */
@@ -75,6 +94,8 @@ export interface Settings {
   vad: VadConfig;
   /** 热词命中加分（默认 3.5；越高越易命中热词，也越易把噪声识别成热词） */
   hotwordsScore: number;
+  /** STT final 与预览/发送之间的有序后处理 pipeline。 */
+  postProcessing: PostProcessingConfig;
   history: HistoryConfig;
   ui: UiConfig;
   models: ModelsConfig;
@@ -189,6 +210,12 @@ export interface EngineInfo {
   displayName: string;
   capabilities: EngineCapabilities;
   isReady: boolean;
+}
+
+/** 后端注册表发现到的后处理模块；设置页不应硬编码此列表。 */
+export interface PostProcessorInfo {
+  id: string;
+  displayName: string;
 }
 
 // ---------- 游戏 profile ----------
@@ -340,6 +367,7 @@ const mock: MockStore = {
     vadSilenceMs: 700,
     vad: { threshold: 0.5, minSpeechMs: 50, minSilenceMs: 50 },
     hotwordsScore: 3.5,
+    postProcessing: { enabled: false, pipeline: { id: "default", steps: [] } },
     history: { mode: "capped", maxRecords: 1000, includeAudio: false, dir: "" },
     ui: { firstRunCompleted: true, autoStart: false },
     models: { dir: "" },
@@ -532,6 +560,16 @@ export async function getStartupOptions(): Promise<StartupOptions> {
 export async function getSettings(): Promise<Settings> {
   if (!isTauri) return clone(mock.settings);
   return invoke<Settings>("get_settings");
+}
+
+export async function listPostProcessors(): Promise<PostProcessorInfo[]> {
+  if (!isTauri) {
+    return [
+      { id: "mock.append-exclamation", displayName: "Mock · 句尾叹号" },
+      { id: "mock.wrap-brackets", displayName: "Mock · 方括号包裹" },
+    ];
+  }
+  return invoke<PostProcessorInfo[]>("list_post_processors");
 }
 
 /** 启动时损坏配置的恢复提示；只返回一次，浏览器演示模式恒为 null。 */

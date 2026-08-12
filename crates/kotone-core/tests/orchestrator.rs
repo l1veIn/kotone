@@ -279,6 +279,17 @@ fn make_orchestrator(
     (orch, emitter, sent)
 }
 
+fn required_postprocess_step(id: &str, processor_id: &str) -> PipelineStepConfig {
+    PipelineStepConfig {
+        id: id.into(),
+        processor_id: processor_id.into(),
+        enabled: true,
+        config: serde_json::Value::Null,
+        timeout_ms: 1_000,
+        on_error: StepFailurePolicy::Required,
+    }
+}
+
 fn make_orchestrator_with(
     auto_send: bool,
     injector: Arc<dyn Injector>,
@@ -416,14 +427,10 @@ async fn single_mock_postprocessor_changes_deliverable_text() {
     {
         let mut settings = orch.settings().write().unwrap();
         settings.post_processing.enabled = true;
-        settings.post_processing.pipeline.steps = vec![PipelineStepConfig {
-            id: "punctuation".into(),
-            processor_id: "mock.append-exclamation".into(),
-            enabled: true,
-            config: serde_json::Value::Null,
-            timeout_ms: 1_000,
-            on_error: StepFailurePolicy::Required,
-        }];
+        settings.post_processing.pipeline.steps = vec![required_postprocess_step(
+            "punctuation",
+            "mock.append-exclamation",
+        )];
     }
 
     orch.begin().await.unwrap();
@@ -438,6 +445,40 @@ async fn single_mock_postprocessor_changes_deliverable_text() {
     let sequence = emitter.state_sequence();
     assert!(sequence.contains(&"processing".to_string()));
     assert!(emitter.partials().contains(&"对面打野在下路！".to_string()));
+}
+
+#[tokio::test]
+async fn multiple_registered_postprocessors_run_in_declared_order() {
+    let (orch, emitter, sent) = make_orchestrator(true);
+    {
+        let mut settings = orch.settings().write().unwrap();
+        settings.post_processing.enabled = true;
+        settings.post_processing.pipeline.id = "mock-chain".into();
+        settings.post_processing.pipeline.steps = vec![
+            required_postprocess_step("punctuation", "mock.append-exclamation"),
+            required_postprocess_step("wrapper", "mock.wrap-brackets"),
+        ];
+    }
+
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.end().await.unwrap();
+
+    assert_eq!(
+        sent.lock().unwrap().as_slice(),
+        &["【对面打野在下路！】".to_string()],
+        "第二步必须消费第一步输出"
+    );
+    let process_events = emitter.events.lock().unwrap();
+    let completed = process_events
+        .iter()
+        .find(|(event, payload)| {
+            event == "kotone://process"
+                && payload.get("activity").and_then(|v| v.as_str()) == Some("postprocess_completed")
+        })
+        .map(|(_, payload)| payload.clone());
+    drop(process_events);
+    assert!(completed.is_some(), "应产出 pipeline 完成诊断事件");
 }
 
 /// ADR-006 预览只读化：confirm_send 无文本参数，一律发送 preview_text
@@ -1764,6 +1805,8 @@ fn make_history_orchestrator(
         42,
         true,
     ));
+    let mut processors = kotone_core::postprocess::ProcessorRegistry::new();
+    kotone_postprocess::register_builtin(&mut processors).unwrap();
     let mut orch = Orchestrator::new(
         settings,
         Arc::new(registry),
@@ -1771,7 +1814,8 @@ fn make_history_orchestrator(
         injector,
         focus,
         Arc::new(VecEmitter::default()),
-    );
+    )
+    .with_processors(Arc::new(processors));
     orch.toast_dwell = Duration::from_millis(10);
     orch.finalize_timeout = Duration::from_secs(2);
     orch.focus_restore_delay = Duration::ZERO;
@@ -1806,6 +1850,31 @@ async fn history_sent_records_one_entry() {
     assert!(r.error.is_none());
     assert!(r.audio_file.is_none(), "includeAudio 默认关闭");
     assert!(!r.session_id.is_empty() && !r.ts.is_empty());
+}
+
+#[tokio::test]
+async fn history_records_the_processed_deliverable_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
+    let orch = make_history_orchestrator(true, injector, dir.path().to_path_buf(), None);
+    {
+        let mut settings = orch.settings().write().unwrap();
+        settings.post_processing.enabled = true;
+        settings.post_processing.pipeline.steps = vec![
+            required_postprocess_step("punctuation", "mock.append-exclamation"),
+            required_postprocess_step("wrapper", "mock.wrap-brackets"),
+        ];
+    }
+
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.end().await.unwrap();
+
+    let records = kotone_core::history::list_in(dir.path()).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].final_text, "【对面打野在下路！】");
+    assert_eq!(sent.lock().unwrap().as_slice(), ["【对面打野在下路！】"]);
 }
 
 /// cancelled 终态：已有语音产出（出过 partial）时取消，记一条 cancelled
