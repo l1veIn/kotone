@@ -18,7 +18,9 @@ use clap::{Parser, Subcommand};
 use kotone_core::hotkey::HotkeySource;
 use kotone_core::profile::{self, GameProfile};
 use kotone_core::settings::{self, HotkeyBackend, Settings};
+use kotone_core::connection::ConnectionResolver;
 use kotone_core::stt::EngineRegistry;
+use kotone_core::postprocess::ProcessorRegistry;
 
 /// wav 直灌会话模式的注入器（ADR-007）：不碰真实窗口——
 /// one-shot（C1 直发）在无人值守测试里也绝不能触发真实注入，
@@ -488,11 +490,13 @@ async fn cmd_listen_session(
     }
 
     let emitter: Arc<dyn Emitter> = Arc::new(JsonlEmitter { hotkey: None });
-    let mut processor_registry = kotone_core::postprocess::ProcessorRegistry::new();
-    if let Err(error) = kotone_postprocess::register_builtin(&mut processor_registry) {
-        eprintln!("注册后处理器失败: {error}");
-        return 2;
-    }
+    let processor_registry = match register_processors(settings.clone()) {
+        Ok(registry) => registry,
+        Err(error) => {
+            eprintln!("注册后处理器失败: {error}");
+            return 2;
+        }
+    };
     let orchestrator = wire_vad(
         Orchestrator::new(
             settings,
@@ -502,7 +506,7 @@ async fn cmd_listen_session(
             Arc::new(WinFocusBackend),
             emitter,
         )
-        .with_processors(Arc::new(processor_registry)),
+        .with_processors(processor_registry),
     );
 
     if let Err(e) = orchestrator.begin().await {
@@ -667,11 +671,13 @@ async fn cmd_listen_hotkey(
     // settings 随后移交给 orchestrator，频道切换热键先取出备用（ADR-008）
     let cycle_hotkey = settings.read().unwrap().channel_cycle_hotkey.clone();
     let resend_hotkey = settings.read().unwrap().resend_last_hotkey.clone();
-    let mut processor_registry = kotone_core::postprocess::ProcessorRegistry::new();
-    if let Err(error) = kotone_postprocess::register_builtin(&mut processor_registry) {
-        eprintln!("注册后处理器失败: {error}");
-        return 2;
-    }
+    let processor_registry = match register_processors(settings.clone()) {
+        Ok(registry) => registry,
+        Err(error) => {
+            eprintln!("注册后处理器失败: {error}");
+            return 2;
+        }
+    };
     let orchestrator = wire_vad(
         Orchestrator::new(
             settings,
@@ -681,7 +687,7 @@ async fn cmd_listen_hotkey(
             Arc::new(WinFocusBackend),
             emitter,
         )
-        .with_processors(Arc::new(processor_registry)),
+        .with_processors(processor_registry),
     );
 
     if let Err(e) = hotkey.register(&hotkey_key, hotkey_mode) {
@@ -790,6 +796,19 @@ async fn cmd_listen(
 }
 
 // ---------- eval：录档列表 / 语料回放 / 人工标注 / 对比报告 ----------
+
+fn register_processors(
+    settings: std::sync::Arc<std::sync::RwLock<Settings>>,
+) -> Result<std::sync::Arc<ProcessorRegistry>, String> {
+    let secrets: std::sync::Arc<dyn kotone_core::connection::SecretStore> =
+        std::sync::Arc::new(kotone_postprocess::secrets::KeyringSecretStore);
+    let connections: std::sync::Arc<dyn ConnectionResolver> = std::sync::Arc::new(
+        kotone_postprocess::secrets::SecretBackedResolver::new(settings, secrets),
+    );
+    let mut registry = ProcessorRegistry::new();
+    kotone_postprocess::register_with_connections(&mut registry, connections)?;
+    Ok(std::sync::Arc::new(registry))
+}
 
 /// 评测用引擎注册表（注入全部内置引擎；回放是 core 的无 GUI 消费场景）
 fn eval_registry() -> std::sync::Arc<EngineRegistry> {

@@ -8,9 +8,12 @@ rust-version = "1.77.2"
 [dependencies]
 kotone-core.workspace = true
 keyring = "3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
 tempfile.workspace = true
+wiremock = "0.6"

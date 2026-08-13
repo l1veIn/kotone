@@ -658,6 +658,50 @@ export async function listPostProcessors(): Promise<PostProcessorInfo[]> {
   if (!isTauri) {
     return [
       {
+        id: "writing.openai-compat",
+        displayName: "AI 润色",
+        description: "用在线大模型去掉口癖、修正口误，并尽量保持原意和游戏术语。",
+        category: "writing",
+        developerOnly: false,
+        networkAccess: "internet",
+        configFields: [
+          {
+            key: "connectionId",
+            displayName: "API 连接",
+            description: "使用「API 连接」里已保存的在线接口。",
+            kind: "connection",
+            required: true,
+            fileExtensions: [],
+          },
+        ],
+      },
+      {
+        id: "translation.qwen-mt",
+        displayName: "翻译（Qwen-MT）",
+        description: "用通义 Qwen-MT 把识别文本译成目标语言，并尽量保住游戏术语。",
+        category: "translation",
+        developerOnly: false,
+        networkAccess: "internet",
+        configFields: [
+          {
+            key: "connectionId",
+            displayName: "API 连接",
+            description: "请使用通义兼容端点；模型建议 qwen-mt-lite。",
+            kind: "connection",
+            required: true,
+            fileExtensions: [],
+          },
+          {
+            key: "targetLang",
+            displayName: "目标语言",
+            description: "例如 English、Japanese、Korean。",
+            kind: "text",
+            required: true,
+            fileExtensions: [],
+          },
+        ],
+      },
+      {
         id: "builtin.blocklist-filter",
         displayName: "屏蔽词过滤",
         description: "过滤国服对局常见辱骂；可选择自定义 CSV 完整覆盖内置词表。",

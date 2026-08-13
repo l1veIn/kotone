@@ -5,11 +5,15 @@
 
 use std::sync::Arc;
 
+use kotone_core::connection::ConnectionResolver;
 use kotone_core::postprocess::{ProcessorFactory, ProcessorRegistry};
 
 pub mod blocklist;
+pub mod client;
 pub mod connections;
 pub mod mock;
+pub mod openai_compat;
+pub mod qwen_mt;
 pub mod secrets;
 
 pub fn builtin_processors() -> Vec<Arc<dyn ProcessorFactory>> {
@@ -24,6 +28,18 @@ pub fn register_builtin(registry: &mut ProcessorRegistry) -> Result<(), String> 
     for processor in builtin_processors() {
         registry.register(processor)?;
     }
+    Ok(())
+}
+
+pub fn register_with_connections(
+    registry: &mut ProcessorRegistry,
+    connections: Arc<dyn ConnectionResolver>,
+) -> Result<(), String> {
+    register_builtin(registry)?;
+    registry.register(Arc::new(openai_compat::OpenAiCompatFactory {
+        connections: connections.clone(),
+    }))?;
+    registry.register(Arc::new(qwen_mt::QwenMtFactory { connections }))?;
     Ok(())
 }
 

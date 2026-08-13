@@ -1586,10 +1586,6 @@ pub fn run() {
             kotone_stt::register_builtin(&mut registry);
             let engines = Arc::new(registry);
             let mut processor_registry = kotone_core::postprocess::ProcessorRegistry::new();
-            if let Err(error) = kotone_postprocess::register_builtin(&mut processor_registry) {
-                return Err(Box::<dyn std::error::Error>::from(error));
-            }
-            let processors = Arc::new(processor_registry);
             let secrets: Arc<dyn SecretStore> =
                 Arc::new(kotone_postprocess::secrets::KeyringSecretStore);
             let connections: Arc<dyn ConnectionResolver> = Arc::new(
@@ -1598,6 +1594,12 @@ pub fn run() {
                     secrets.clone(),
                 ),
             );
+            if let Err(error) =
+                kotone_postprocess::register_with_connections(&mut processor_registry, connections.clone())
+            {
+                return Err(Box::<dyn std::error::Error>::from(error));
+            }
+            let processors = Arc::new(processor_registry);
             let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter {
                 app: app.handle().clone(),
                 vis_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
