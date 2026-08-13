@@ -16,6 +16,17 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - name: Refuse to rebuild an already published release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $json = gh release view $env:GITHUB_REF_NAME `
+            --repo $env:GITHUB_REPOSITORY --json isDraft 2>$null
+          if ($LASTEXITCODE -eq 0 -and -not ($json | ConvertFrom-Json).isDraft) {
+            throw "Release $env:GITHUB_REF_NAME is already published; refusing to overwrite its assets."
+          }
+
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 11.16.0
@@ -80,6 +91,7 @@ jobs:
 
             完整变更与安装说明见仓库中的 CHANGELOG 与 README。
           releaseDraft: true
+          prerelease: ${{ contains(github.ref_name, '-rc.') }}
           generateReleaseNotes: true
 
       - name: Generate and upload updater manifests
@@ -127,3 +139,25 @@ jobs:
           gh release upload "${{ github.ref_name }}" $checksumPath --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish stable GitHub release and trigger COS
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ($env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+$') {
+            Write-Host "Prerelease tag remains a draft and will not enter the COS stable channel."
+            exit 0
+          }
+          gh release edit $env:GITHUB_REF_NAME `
+            --repo $env:GITHUB_REPOSITORY `
+            --draft=false --prerelease=false --latest
+          if ($LASTEXITCODE -ne 0) { throw "Failed to publish stable GitHub Release." }
+
+  publish-cos:
+    needs: build-windows
+    if: ${{ !contains(github.ref_name, '-') }}
+    uses: ./.github/workflows/publish-cos.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets: inherit

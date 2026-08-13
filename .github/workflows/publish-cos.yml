@@ -1,13 +1,12 @@
 name: Publish Release to Tencent COS
 
 on:
-  # Temporary one-shot trigger for the v0.1.7 production-path smoke test.
-  # Removed after the workflow succeeds, before enabling the tag release call.
-  push:
-    branches:
-      - "codex/cos-ci-smoke"
-    paths:
-      - ".github/workflows/publish-cos.yml"
+  workflow_call:
+    inputs:
+      tag:
+        description: "Stable release tag produced by the caller"
+        required: true
+        type: string
   release:
     types: [published]
   workflow_dispatch:
@@ -26,11 +25,11 @@ concurrency:
 
 jobs:
   publish-cos:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.release.prerelease == false
+    if: github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
     runs-on: windows-latest
     timeout-minutes: 20
     env:
-      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag || 'v0.1.7' }}
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
       COS_BUCKET: kotone-1258931230
       COS_ENDPOINT: cos.ap-guangzhou.myqcloud.com
       COS_PUBLIC_BASE: https://kotone-1258931230.cos.ap-guangzhou.myqcloud.com/releases
