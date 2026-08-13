@@ -196,13 +196,14 @@
 
   async function addProcessor(processor: PostProcessorInfo) {
     const needsConfiguration = processor.configFields.some((field) => field.required);
+    const internet = processor.networkAccess === "internet";
     const step: PostProcessStepConfig = {
       id: nextStepId(processor.id),
       processorId: processor.id,
       enabled: !needsConfiguration,
-      config: {},
-      timeoutMs: 5_000,
-      onError: "required",
+      config: processor.id === "translation.qwen-mt" ? { targetLang: "English" } : {},
+      timeoutMs: internet ? 800 : 5_000,
+      onError: internet ? "best-effort" : "required",
     };
     const next = configWithSteps([...pipeline, step]);
     next.enabled = true;
@@ -399,6 +400,7 @@
             <input
               type="password"
               autocomplete="off"
+              data-testid="connection-api-key"
               class="mt-1 w-full rounded-md bg-white/6 px-2.5 py-1.5 text-[12px] text-white/85 ring-1 ring-white/12 outline-none focus:ring-kotone-cyan/45"
               placeholder={connections.some((item) => item.id === editingConnection?.id && item.hasApiKey)
                 ? "已保存，留空则不修改"
@@ -523,22 +525,45 @@
                         {/if}
                       </div>
                       <div class="mt-1.5 flex gap-2">
-                        <input
-                          data-testid={`postprocess-config-${step.id}-${field.key}`}
-                          aria-label={field.displayName}
-                          class="min-w-0 flex-1 rounded-md bg-white/6 px-2.5 py-1.5 text-[11px] text-white/80 ring-1 ring-white/12 outline-none transition placeholder:text-white/25 focus:ring-kotone-cyan/45 disabled:opacity-50"
-                          placeholder={field.kind === "file"
-                            ? `选择或输入${field.displayName}路径`
-                            : `输入${field.displayName}`}
-                          value={configValue(step.config, field.key)}
-                          disabled={saving}
-                          onchange={(event) =>
-                            void updateConfigField(
-                              index,
-                              field,
-                              (event.target as HTMLInputElement).value.trim(),
-                            )}
-                        />
+                        {#if field.kind === "connection"}
+                          <select
+                            data-testid={`postprocess-config-${step.id}-${field.key}`}
+                            aria-label={field.displayName}
+                            class="min-w-0 flex-1 rounded-md bg-white/6 px-2.5 py-1.5 text-[11px] text-white/80 ring-1 ring-white/12 outline-none focus:ring-kotone-cyan/45 disabled:opacity-50 [&>option]:bg-kotone-deep"
+                            value={configValue(step.config, field.key)}
+                            disabled={saving}
+                            onchange={(event) =>
+                              void updateConfigField(
+                                index,
+                                field,
+                                (event.target as HTMLSelectElement).value.trim(),
+                              )}
+                          >
+                            <option value="">选择连接</option>
+                            {#each connections as connection}
+                              <option value={connection.id}>
+                                {connection.displayName}{connection.hasApiKey ? "" : "（缺密钥）"}
+                              </option>
+                            {/each}
+                          </select>
+                        {:else}
+                          <input
+                            data-testid={`postprocess-config-${step.id}-${field.key}`}
+                            aria-label={field.displayName}
+                            class="min-w-0 flex-1 rounded-md bg-white/6 px-2.5 py-1.5 text-[11px] text-white/80 ring-1 ring-white/12 outline-none transition placeholder:text-white/25 focus:ring-kotone-cyan/45 disabled:opacity-50"
+                            placeholder={field.kind === "file"
+                              ? `选择或输入${field.displayName}路径`
+                              : `输入${field.displayName}`}
+                            value={configValue(step.config, field.key)}
+                            disabled={saving}
+                            onchange={(event) =>
+                              void updateConfigField(
+                                index,
+                                field,
+                                (event.target as HTMLInputElement).value.trim(),
+                              )}
+                          />
+                        {/if}
                         {#if field.kind === "file" && isTauri}
                           <button
                             class="shrink-0 rounded-md bg-white/9 px-2.5 py-1.5 text-[11px] text-white/70 ring-1 ring-white/12 transition hover:bg-white/15 disabled:opacity-50"
@@ -548,7 +573,9 @@
                         {/if}
                       </div>
                       <p class="mt-1.5 text-[10px] leading-relaxed text-white/35">
-                        {field.description}
+                        {field.kind === "connection" && connections.length === 0
+                          ? "请先在上方添加一条 API 连接。"
+                          : field.description}
                       </p>
                     </div>
                   {/each}
@@ -564,6 +591,7 @@
                 <label class="flex items-center gap-2 text-[11px] text-white/45">
                   失败时
                   <select
+                    data-testid={`postprocess-on-error-${step.id}`}
                     class="rounded-md bg-white/7 px-2 py-1 text-[11px] text-white/75 ring-1 ring-white/12 outline-none focus:ring-kotone-cyan/50 [&>option]:bg-kotone-deep"
                     value={step.onError}
                     onchange={(event) => {

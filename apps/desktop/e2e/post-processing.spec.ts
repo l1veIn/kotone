@@ -72,3 +72,28 @@ test("a discovered blocklist processor works by default and saves a custom CSV p
   await expect(csvPath).toHaveValue("C:\\Kotone\\blocklist.csv");
   await expect(toggle).toBeChecked();
 });
+
+test("online polish is added best-effort after a saved connection", async ({ page }) => {
+  await page.goto("/#/settings?onboarding=never");
+  await page.getByTestId("settings-nav-processing").click();
+
+  await page.getByTestId("connection-preset-dashscope").click();
+  await expect(page.getByTestId("connection-editor")).toBeVisible();
+  await page.getByTestId("connection-api-key").fill("sk-test");
+  await page.getByTestId("connection-save").click();
+  await expect(page.getByText("已保存密钥")).toBeVisible();
+
+  await page.getByTestId("add-postprocess-step").click();
+  const polish = page.getByTestId("processor-option-writing.openai-compat");
+  await expect(polish).toContainText("AI 润色");
+  await expect(polish).toContainText("需要联网");
+  await polish.click();
+
+  const step = page.getByTestId("postprocess-step-writing.openai-compat");
+  await expect(step.getByRole("checkbox", { name: "启用AI 润色" })).not.toBeChecked();
+  await expect(step.locator('[data-testid^="postprocess-on-error-"]')).toHaveValue("best-effort");
+
+  const connectionSelect = step.getByLabel("API 连接");
+  await connectionSelect.selectOption({ index: 1 });
+  await expect(step.getByRole("checkbox", { name: "启用AI 润色" })).toBeChecked();
+});
