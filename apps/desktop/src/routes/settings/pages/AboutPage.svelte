@@ -122,8 +122,14 @@
           <p class="text-emerald-300">✓ 已是最新版本（v{version}）</p>
         {:else if updateResult?.status === "available"}
           <p class="text-kotone-pink">发现新版本 v{updateResult.version}，尚未安装</p>
+          {#if updateResult.notes}
+            <p class="mt-1 whitespace-pre-wrap break-words text-white/55">{updateResult.notes}</p>
+          {/if}
         {:else if updateResult?.status === "downloaded"}
           <p class="text-kotone-cyan">v{updateResult.version} 已下载，重启后生效</p>
+          {#if updateResult.notes}
+            <p class="mt-1 whitespace-pre-wrap break-words text-white/55">{updateResult.notes}</p>
+          {/if}
         {:else if updateResult?.status === "error"}
           <p class="break-all text-red-300">检查更新失败：{updateResult.message}</p>
         {:else}

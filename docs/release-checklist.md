@@ -3,6 +3,7 @@
 ## 自动门禁
 
 - `pnpm release:verify`：桌面包、Tauri 配置、Rust crate 与 Cargo.lock 版本一致，Tag 必须为 `v<version>`。
+- `pnpm release:test`：更新说明提取、Unreleased 归档与缺失说明门禁通过。
 - `pnpm check`：Svelte/TypeScript 静态检查无错误和警告。
 - `pnpm -C apps/desktop test:e2e`：首次向导、跳过策略、缺失模型与下载失败恢复。
 - `cargo test --workspace --locked`：核心状态机、模型下载、注入、热键和 Tauri 启动参数。
@@ -31,16 +32,21 @@
 3. 在干净 Windows 用户环境完成安装/首次向导/卸载冒烟测试。
 4. 推送 `v<version>` Tag；`Release Windows` 工作流创建 GitHub Draft Release。
 5. 下载工作流产物，核对 SHA-256，并做一次安装包回归。
-6. 将 Draft Release 发布为正式版本。
+6. 将 Draft Release 发布为正式版本；`Publish Release to Tencent COS` 工作流随后上传
+   版本化安装包、签名和校验文件，并在最后更新 COS `releases/latest.json`。
+7. 确认 COS 发布工作流成功，且“检查更新”能看到版本号与 CHANGELOG 更新说明。
 
 ## 签名与更新策略
 
-- 当前直接分发渠道为 GitHub Release + NSIS（按用户安装，不要求管理员权限）。
+- 当前直接分发渠道为腾讯云 COS（中国大陆首选）与 GitHub Release（兜底）+ NSIS
+  （按用户安装，不要求管理员权限）。
 - Windows 代码签名证书接入后再启用签名门禁；未签名构建可能触发 SmartScreen。
-- 自动更新（Tauri updater）已接入：`tauri.conf.json` 的 `plugins.updater` 指向
-  `https://github.com/l1veIn/kotone/releases/latest/download/latest.json`，
-  `bundle.createUpdaterArtifacts` 已开启，`Release Windows` 工作流会随 Release
-  自动上传签名后的更新包与 `latest.json`。
+- 自动更新（Tauri updater）已接入：`tauri.conf.json` 的 `plugins.updater` 首先读取
+  COS `releases/latest.json`，GitHub 官方地址作为兜底。`bundle.createUpdaterArtifacts`
+  已开启；Tag 构建只创建 Draft，正式发布 Release 后才会更新 COS，避免草稿版本提前推送。
+- COS 发版子账号的对象读写只限 `kotone-1258931230/releases/*`；另有 `coscli cp`
+  所需的桶级元数据权限 `HeadBucket / GetBucket / ListMultipartUploads`。仓库 Secrets 为
+  `TENCENT_COS_SECRET_ID` / `TENCENT_COS_SECRET_KEY`；不授予删除对象或修改桶配置权限。
 - updater 私钥与密码只保管在 GitHub Secrets（`TAURI_SIGNING_PRIVATE_KEY` /
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）；公钥写在 `tauri.conf.json`。
   **私钥或密码丢失 = 更新通道报废**（已装客户端将永远无法校验后续更新），

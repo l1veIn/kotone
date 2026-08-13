@@ -14,21 +14,21 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 11.16.0
           run_install: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: pnpm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: .
 
@@ -51,6 +51,9 @@ jobs:
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}
 
+      - name: Test release tooling
+        run: pnpm release:test
+
       - name: Check desktop UI
         run: pnpm check
 
@@ -61,7 +64,7 @@ jobs:
         run: cargo test --workspace --locked
 
       - name: Build draft GitHub release
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Tauri updater 签名（私钥与密码保管在仓库 Secrets；
@@ -79,10 +82,9 @@ jobs:
           releaseDraft: true
           generateReleaseNotes: true
 
-      - name: Generate and upload updater manifests with mirror fallbacks
+      - name: Generate and upload updater manifests
         # tauri-action 会上传自己的 latest.json（api.github.com 临时 asset 地址）；
-        # 这里用 scripts/make-updater-jsons.mjs 重建为稳定的 releases/download 直链，
-        # 并生成四个镜像变体（updater endpoints 多镜像回退链所需的 latest-cn-*.json），
+        # 这里重建 GitHub/COS 清单，并保留旧客户端所需的四个第三方镜像变体，
         # 以 --clobber 覆盖同名附件。
         shell: pwsh
         run: |
@@ -91,10 +93,15 @@ jobs:
           if (-not $installer) {
             throw "No NSIS installer was produced."
           }
-          node scripts/make-updater-jsons.mjs --exe $installer.FullName --sig "$($installer.FullName).sig" --tag "${{ github.ref_name }}"
+          node scripts/make-updater-jsons.mjs `
+            --exe $installer.FullName `
+            --sig "$($installer.FullName).sig" `
+            --tag "${{ github.ref_name }}" `
+            --cos-base-url "https://kotone-1258931230.cos.ap-guangzhou.myqcloud.com/releases"
           $dir = $installer.DirectoryName
           gh release upload "${{ github.ref_name }}" `
             (Join-Path $dir "latest.json") `
+            (Join-Path $dir "latest-cos.json") `
             (Join-Path $dir "latest-cn-ghfast.json") `
             (Join-Path $dir "latest-cn-ghproxy.json") `
             (Join-Path $dir "latest-cn-ghproxynet.json") `

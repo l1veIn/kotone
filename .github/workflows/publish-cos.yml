@@ -1,0 +1,263 @@
+name: Publish Release to Tencent COS
+
+on:
+  # Temporary one-shot trigger for the v0.1.7 production-path smoke test.
+  # Removed after the workflow succeeds, before enabling the tag release call.
+  push:
+    branches:
+      - "codex/cos-ci-smoke"
+    paths:
+      - ".github/workflows/publish-cos.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Published stable release tag, for example v0.1.8"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-release-to-tencent-cos
+  cancel-in-progress: false
+
+jobs:
+  publish-cos:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.release.prerelease == false
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag || 'v0.1.7' }}
+      COS_BUCKET: kotone-1258931230
+      COS_ENDPOINT: cos.ap-guangzhou.myqcloud.com
+      COS_PUBLIC_BASE: https://kotone-1258931230.cos.ap-guangzhou.myqcloud.com/releases
+
+    steps:
+      - name: Validate published stable release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Stable COS channel only accepts vX.Y.Z tags: $env:RELEASE_TAG"
+          }
+          $release = gh release view $env:RELEASE_TAG `
+            --repo $env:GITHUB_REPOSITORY `
+            --json tagName,isDraft,isPrerelease,publishedAt | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "Cannot read release $env:RELEASE_TAG." }
+          if ($release.tagName -ne $env:RELEASE_TAG -or $release.isDraft -or
+              $release.isPrerelease -or [string]::IsNullOrWhiteSpace($release.publishedAt)) {
+            throw "COS stable channel requires a published, non-prerelease GitHub Release."
+          }
+
+      - name: Download published release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $assetDir = Join-Path $env:RUNNER_TEMP "kotone-release-assets"
+          New-Item -ItemType Directory -Path $assetDir -Force | Out-Null
+          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --dir $assetDir
+
+      - name: Prepare COS updater manifest
+        shell: pwsh
+        run: |
+          $assetDir = Join-Path $env:RUNNER_TEMP "kotone-release-assets"
+          $cosManifest = Join-Path $assetDir "latest-cos.json"
+          if (Test-Path -LiteralPath $cosManifest) {
+            Write-Host "Using latest-cos.json from the release."
+            exit 0
+          }
+
+          # Releases created before COS support only contain latest.json. Rebuild its
+          # installer URLs so an existing stable release can exercise/backfill COS.
+          $githubManifest = Join-Path $assetDir "latest.json"
+          $installer = Get-ChildItem -LiteralPath $assetDir -File -Filter "*-setup.exe" |
+            Select-Object -First 1
+          if (-not $installer -or -not (Test-Path -LiteralPath $githubManifest)) {
+            throw "Cannot reconstruct latest-cos.json from this legacy release."
+          }
+          $manifestDoc = Get-Content -LiteralPath $githubManifest -Encoding utf8 -Raw |
+            ConvertFrom-Json
+          $cosUrl = "$env:COS_PUBLIC_BASE/$env:RELEASE_TAG/$($installer.Name)"
+          foreach ($platform in $manifestDoc.platforms.PSObject.Properties) {
+            $platform.Value.url = $cosUrl
+          }
+          $manifestDoc | ConvertTo-Json -Depth 10 |
+            Set-Content -LiteralPath $cosManifest -Encoding utf8
+          Write-Host "Reconstructed latest-cos.json for legacy release $env:RELEASE_TAG."
+
+      - name: Validate updater assets
+        shell: pwsh
+        run: |
+          $assetDir = Join-Path $env:RUNNER_TEMP "kotone-release-assets"
+          $installer = Get-ChildItem -LiteralPath $assetDir -File -Filter "*-setup.exe" |
+            Select-Object -First 1
+          if (-not $installer) { throw "Release has no NSIS setup executable." }
+          $signature = Get-Item -LiteralPath "$($installer.FullName).sig" -ErrorAction Stop
+          $manifest = Get-Item -LiteralPath (Join-Path $assetDir "latest-cos.json") -ErrorAction Stop
+          $checksums = Get-Item -LiteralPath (Join-Path $assetDir "SHA256SUMS.txt") -ErrorAction Stop
+
+          $expectedVersion = $env:RELEASE_TAG.TrimStart('v')
+          $expectedUrl = "$env:COS_PUBLIC_BASE/$env:RELEASE_TAG/$($installer.Name)"
+          $manifestDoc = Get-Content -LiteralPath $manifest.FullName -Encoding utf8 -Raw |
+            ConvertFrom-Json
+          if ($manifestDoc.version -ne $expectedVersion) {
+            throw "latest-cos.json reports $($manifestDoc.version), expected $expectedVersion"
+          }
+          $signatureText = (Get-Content -LiteralPath $signature.FullName -Encoding utf8 -Raw).Trim()
+          foreach ($platformName in @('windows-x86_64', 'windows-x86_64-nsis')) {
+            $platform = $manifestDoc.platforms.$platformName
+            if ($null -eq $platform -or $platform.url -ne $expectedUrl -or
+                $platform.signature -ne $signatureText) {
+              throw "latest-cos.json has invalid data for $platformName."
+            }
+          }
+
+          $escapedName = [regex]::Escape($installer.Name)
+          $checksumLine = Get-Content -LiteralPath $checksums.FullName -Encoding ascii |
+            Where-Object { $_ -match "^([0-9a-fA-F]{64})\s+\*?$escapedName$" } |
+            Select-Object -First 1
+          if (-not $checksumLine) { throw "SHA256SUMS.txt does not cover $($installer.Name)." }
+          $expectedHash = ([regex]::Match($checksumLine, '^([0-9a-fA-F]{64})')).Groups[1].Value
+          $actualHash = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash
+          if ($actualHash -ne $expectedHash) { throw "Installer SHA-256 does not match SHA256SUMS.txt." }
+
+      - name: Install pinned Tencent COS CLI
+        shell: pwsh
+        run: |
+          $coscli = Join-Path $env:RUNNER_TEMP "coscli.exe"
+          Invoke-WebRequest `
+            -Uri "https://github.com/tencentyun/coscli/releases/download/v1.0.8/coscli-windows-amd64.exe" `
+            -OutFile $coscli
+          $expected = "74F3B5EBBE89BE2C013F9D3B2D8968691372801F2671BB31548EAB4476FE9179"
+          $actual = (Get-FileHash -LiteralPath $coscli -Algorithm SHA256).Hash
+          if ($actual -ne $expected) { throw "coscli checksum mismatch: $actual" }
+
+      - name: Upload immutable assets and promote latest manifest
+        shell: pwsh
+        env:
+          COS_SECRET_ID: ${{ secrets.TENCENT_COS_SECRET_ID }}
+          COS_SECRET_KEY: ${{ secrets.TENCENT_COS_SECRET_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:COS_SECRET_ID) -or
+              [string]::IsNullOrWhiteSpace($env:COS_SECRET_KEY)) {
+            throw "Tencent COS repository secrets are missing."
+          }
+          $assetDir = Join-Path $env:RUNNER_TEMP "kotone-release-assets"
+          $coscli = Join-Path $env:RUNNER_TEMP "coscli.exe"
+          $installer = Get-ChildItem -LiteralPath $assetDir -File -Filter "*-setup.exe" |
+            Select-Object -First 1
+          $signature = Get-Item -LiteralPath "$($installer.FullName).sig" -ErrorAction Stop
+          $manifest = Get-Item -LiteralPath (Join-Path $assetDir "latest-cos.json") -ErrorAction Stop
+          $checksums = Get-Item -LiteralPath (Join-Path $assetDir "SHA256SUMS.txt") -ErrorAction Stop
+          $expectedVersion = $env:RELEASE_TAG.TrimStart('v')
+
+          function Get-PublicObject([string]$relativePath, [string]$destination) {
+            $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            $uri = '{0}/{1}?verify={2}' -f $env:COS_PUBLIC_BASE.TrimEnd('/'), $relativePath, $stamp
+            try {
+              $null = Invoke-WebRequest -Uri $uri -OutFile $destination -ErrorAction Stop
+              return $true
+            } catch {
+              $response = $_.Exception.Response
+              if ($null -ne $response -and [int]$response.StatusCode -eq 404) { return $false }
+              throw
+            }
+          }
+
+          function Assert-SameFile([string]$expected, [string]$actual, [string]$label) {
+            $expectedHash = (Get-FileHash -LiteralPath $expected -Algorithm SHA256).Hash
+            $actualHash = (Get-FileHash -LiteralPath $actual -Algorithm SHA256).Hash
+            if ($expectedHash -ne $actualHash) { throw "$label already exists with different content." }
+          }
+
+          function Send-CosObject(
+            [string]$source,
+            [string]$key,
+            [string]$meta,
+            [switch]$ForbidOverwrite
+          ) {
+            $arguments = @(
+              'cp', $source, "cos://$env:COS_BUCKET/$key",
+              '--init-skip', '--disable-log', '--bucket-type', 'COS',
+              '-e', $env:COS_ENDPOINT, '-i', $env:COS_SECRET_ID, '-k', $env:COS_SECRET_KEY,
+              '--meta', $meta
+            )
+            if ($ForbidOverwrite) { $arguments += '--forbid-overwrite' }
+            & $coscli @arguments
+            if ($LASTEXITCODE -ne 0) { throw "COS upload failed: $key" }
+          }
+
+          function Publish-Immutable(
+            [string]$source,
+            [string]$relativePath,
+            [string]$meta
+          ) {
+            $probe = Join-Path $env:RUNNER_TEMP ([guid]::NewGuid().ToString('N'))
+            if (Get-PublicObject $relativePath $probe) {
+              Assert-SameFile $source $probe $relativePath
+              Write-Host "Already published unchanged: $relativePath"
+              return
+            }
+            Send-CosObject $source "releases/$relativePath" $meta -ForbidOverwrite
+            if (-not (Get-PublicObject $relativePath $probe)) {
+              throw "Uploaded object is not publicly readable: $relativePath"
+            }
+            Assert-SameFile $source $probe $relativePath
+          }
+
+          # 先做稳定版本单调性检查，旧 tag 不能把 latest.json 回退。
+          $remoteLatest = Join-Path $env:RUNNER_TEMP "remote-latest.json"
+          $promoteLatest = $true
+          if (Get-PublicObject 'latest.json' $remoteLatest) {
+            $online = Get-Content -LiteralPath $remoteLatest -Encoding utf8 -Raw | ConvertFrom-Json
+            if ($online.version -notmatch '^\d+\.\d+\.\d+$') {
+              throw "Online latest.json has an invalid stable version: $($online.version)"
+            }
+            $onlineVersion = [version]$online.version
+            $candidateVersion = [version]$expectedVersion
+            if ($onlineVersion -gt $candidateVersion) {
+              throw "Refusing to downgrade COS latest.json from $onlineVersion to $candidateVersion."
+            }
+            if ($onlineVersion -eq $candidateVersion) {
+              Assert-SameFile $manifest.FullName $remoteLatest 'releases/latest.json'
+              $promoteLatest = $false
+            }
+          }
+
+          $prefix = "$env:RELEASE_TAG"
+          $immutable = "Cache-Control:public,max-age=31536000,immutable"
+          Publish-Immutable $installer.FullName "$prefix/$($installer.Name)" $immutable
+          Publish-Immutable $signature.FullName "$prefix/$($signature.Name)" $immutable
+          Publish-Immutable $checksums.FullName "$prefix/$($checksums.Name)" $immutable
+          Publish-Immutable $manifest.FullName "$prefix/latest.json" "$immutable#Content-Type:application/json"
+
+          # latest.json 最后更新：版本资源已验证公开可读后，客户端才会发现新版。
+          if ($promoteLatest) {
+            Send-CosObject $manifest.FullName "releases/latest.json" `
+              "Cache-Control:no-store,no-cache,must-revalidate#Content-Type:application/json"
+          }
+          $publishedLatest = Join-Path $env:RUNNER_TEMP "published-latest.json"
+          if (-not (Get-PublicObject 'latest.json' $publishedLatest)) {
+            throw "COS latest.json is not publicly readable."
+          }
+          Assert-SameFile $manifest.FullName $publishedLatest 'releases/latest.json'
+
+      - name: Verify public updater manifest
+        shell: pwsh
+        run: |
+          $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+          $manifest = Invoke-RestMethod -Uri "$env:COS_PUBLIC_BASE/latest.json?verify=$stamp"
+          $expected = $env:RELEASE_TAG.TrimStart('v')
+          if ($manifest.version -ne $expected) {
+            throw "COS latest.json reports $($manifest.version), expected $expected"
+          }
+          $installerUrl = $manifest.platforms.'windows-x86_64-nsis'.url
+          if (-not $installerUrl.StartsWith("$env:COS_PUBLIC_BASE/$env:RELEASE_TAG/")) {
+            throw "COS latest.json has an unexpected installer URL."
+          }
+          Write-Host "Tencent COS updater manifest is live for $env:RELEASE_TAG."

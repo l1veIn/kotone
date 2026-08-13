@@ -56,6 +56,9 @@ jobs:
       - name: Verify release metadata
         run: pnpm release:verify
 
+      - name: Test release tooling
+        run: pnpm release:test
+
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
 

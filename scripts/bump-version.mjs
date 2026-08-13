@@ -23,6 +23,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
+import { prepareChangelogVersion } from "./release-notes.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const FILES = {
@@ -131,6 +132,25 @@ if (dryRun) {
   process.exit(0);
 }
 
+// 先计算 CHANGELOG 变更；有冲突时必须在修改版本文件之前失败，避免半更新状态。
+let nextChangelog = null;
+let changelogMessage = null;
+if (!noChangelog) {
+  const text = await readFile(CHANGELOG, "utf8");
+  try {
+    const plan = prepareChangelogVersion(text, target, todayLocal());
+    if (plan.kind !== "unchanged") nextChangelog = plan.text;
+    changelogMessage = plan.kind === "archived"
+      ? `  ✔ CHANGELOG.md：已将 Unreleased 归档为 "## ${target} —"`
+      : plan.kind === "inserted"
+        ? `  ✔ CHANGELOG.md：已插入 "## ${target} —" 小节标题（摘要留待补充）`
+        : `ℹ CHANGELOG.md 已有 ${target} 小节，跳过插入`;
+  } catch (error) {
+    console.error(`${error.message} 已停止版本提升。`);
+    process.exit(1);
+  }
+}
+
 // ---------- 读取各文件当前版本（独立提取，不假设三处已一致） ----------
 const entries = [];
 for (const [key, path] of Object.entries(FILES)) {
@@ -158,23 +178,9 @@ for (const { key, path, text, old } of entries) {
   console.log(`  ✔ ${key}：${old} → ${target}`);
 }
 
-// ---------- CHANGELOG：插入小节标题（幂等：已有则跳过） ----------
-if (!noChangelog) {
-  const text = await readFile(CHANGELOG, "utf8");
-  if (text.includes(`\n## ${target} —`)) {
-    console.log(`ℹ CHANGELOG.md 已有 ${target} 小节，跳过插入`);
-  } else if (!text.startsWith("# Changelog")) {
-    console.warn(`⚠ CHANGELOG.md 开头不是 "# Changelog"，跳过自动插入`);
-  } else {
-    // 按行插入，兼容 LF / CRLF（git autocrlf 会改变工作区换行符，不能用 indexOf 定位）
-    const eol = text.includes("\r\n") ? "\r\n" : "\n";
-    const lines = text.split(/\r?\n/);
-    const headerLen = lines[1]?.trim() === "" ? 2 : 1; // "# Changelog" 标题行 + 其后的空行
-    const blockLines = [`## ${target} — ${todayLocal()}`, "", "（待补充：本次发布变更摘要）", ""];
-    await writeFile(CHANGELOG, [...lines.slice(0, headerLen), ...blockLines, ...lines.slice(headerLen)].join(eol));
-    console.log(`  ✔ CHANGELOG.md：已插入 "## ${target} —" 小节标题（摘要留待补充）`);
-  }
-}
+// ---------- CHANGELOG：应用预先校验过的变更 ----------
+if (nextChangelog !== null) await writeFile(CHANGELOG, nextChangelog);
+if (changelogMessage) console.log(changelogMessage);
 
 // ---------- 兜底校验（复用 release:verify，含 tag 命名核对） ----------
 console.log("运行 release:verify 兜底校验…");
@@ -189,8 +195,8 @@ if (res.status !== 0) {
 
 console.log(`
 版本已提升到 v${target}。接下来：
-  1. 编辑 CHANGELOG.md，在 "## ${target} —" 标题下补充本次变更摘要
-  2. git add apps/desktop CHANGELOG.md
+  1. 检查 CHANGELOG.md 的 "## ${target} —" 发布摘要
+  2. git add apps/desktop Cargo.lock CHANGELOG.md
      git commit -m "release: prepare Kotone v${target}"
   3. git tag v${target}
      git push origin main --tags   # 触发 .github/workflows/release.yml 的 Release Windows

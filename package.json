@@ -8,6 +8,7 @@
     "build:web": "pnpm -C apps/desktop build:web",
     "check": "pnpm -C apps/desktop check",
     "release:verify": "node scripts/verify-release-version.mjs",
+    "release:test": "node --test scripts/*.test.mjs",
     "release:bump": "node scripts/bump-version.mjs",
     "tauri": "pnpm -C apps/desktop tauri",
     "build:rust": "cargo build --workspace",

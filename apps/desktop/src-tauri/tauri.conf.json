@@ -80,10 +80,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUzMkM2QzM4RTQ4NkNERApSV1RkYkVpT3c4WXlEbnBTNnFzeHdBclNsTG9BTldma1pnZCthUHdSaTlGQi9pNFNibWp4Tk4yawo=",
       "endpoints": [
-        "https://ghfast.top/https://github.com/l1veIn/kotone/releases/latest/download/latest-cn-ghfast.json",
-        "https://gh-proxy.com/https://github.com/l1veIn/kotone/releases/latest/download/latest-cn-ghproxy.json",
-        "https://ghproxy.net/https://github.com/l1veIn/kotone/releases/latest/download/latest-cn-ghproxynet.json",
-        "https://gh.llkk.cc/https://github.com/l1veIn/kotone/releases/latest/download/latest-cn-llkk.json",
+        "https://kotone-1258931230.cos.ap-guangzhou.myqcloud.com/releases/latest.json",
         "https://github.com/l1veIn/kotone/releases/latest/download/latest.json"
       ]
     }
