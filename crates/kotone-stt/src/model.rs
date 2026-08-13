@@ -98,8 +98,10 @@ pub struct MultiFileModel {
     pub files: &'static [ModelFile],
     /// Some = 整包下载解压（files 的 url 置空）；None = 逐文件直下
     pub archive: Option<ArchiveSource>,
-    /// 逐文件镜像（按优先级）；auto/mirror 依次尝试，auto 最后回退官方整包
+    /// 逐文件镜像（按优先级）；auto/mirror 依次尝试，auto 最后回退官方
     pub file_mirrors: &'static [FileMirrorSource],
+    /// 国内整包镜像（tar.bz2）。官方仍走 files / archive；auto/mirror 优先尝试这里。
+    pub archive_mirrors: &'static [ArchiveSource],
 }
 
 /// sherpa-onnx 模型清单（ADR-004）。默认引擎 X-ASR（六引擎评测冠军：CER 0.008、
@@ -165,6 +167,7 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
                 revision: "57f0a27e56d43b36f350be2ecc4a2200232d13e7",
             },
         ],
+        archive_mirrors: &[],
     },
     // SenseVoice（非流式、多语言）：model.int8.onnx 的 SHA256 取自 HF resolve
     // 固定到不可变提交 2365bae...；tokens.txt SHA256 由该提交内容实算。
@@ -188,7 +191,14 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
             },
         ],
         archive: None,
-        file_mirrors: &[],
+        file_mirrors: &[
+            // 社区镜像；model.int8.onnx / tokens.txt SHA256 与官方 HF 提交 2365bae 一致
+            FileMirrorSource {
+                base_url: "https://www.modelscope.cn/models/fengge2024/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
+                revision: "9bd9398d89294cbf1964af126ff13e6890394cbc",
+            },
+        ],
+        archive_mirrors: &[],
     },
     // FunASR-Nano（非流式，encoder_adaptor + LLM + embedding）：HF 逐文件直下。
     // 固定到不可变提交 6f16bd3...；merges.txt SHA256 由该提交内容实算。
@@ -239,6 +249,12 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
         ],
         archive: None,
         file_mirrors: &[],
+        // 社区整包镜像（仓库只提供 tar.bz2，无逐文件）。auto 优先下这个，失败回退 HF 逐文件。
+        archive_mirrors: &[ArchiveSource {
+            url: "https://www.modelscope.cn/models/fuyuantech/fuyuan-sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/dee60339b88f7b4694544407a2d9d8e19697f4d0/sherpa-onnx-funasr-nano-int8-2025-12-30.tar.bz2",
+            sha256: "eb43d7ccc2e86b243f6a03b7df361033dda66db9523d1a92bf6aca2b50c9476b",
+            size_bytes: 841_730_611,
+        }],
     },
 ];
 
@@ -546,35 +562,76 @@ fn download_multi(
     progress: Progress<'_>,
     cfg: &settings::DownloadConfig,
 ) -> Result<(), String> {
-    if let Some(archive) = &m.archive {
-        return match cfg.source {
-            settings::DownloadSource::Official => download_archive(m, archive, progress, cfg),
-            settings::DownloadSource::Mirror if !m.file_mirrors.is_empty() => {
-                download_file_mirrors(m, progress)
+    match cfg.source {
+        settings::DownloadSource::Official => download_official(m, progress, cfg),
+        settings::DownloadSource::Mirror => download_mirrors_only(m, progress),
+        settings::DownloadSource::Auto => match download_preferred_mirrors(m, progress) {
+            Ok(true) => Ok(()),
+            Ok(false) => download_official(m, progress, cfg),
+            Err(mirror_err) => {
+                eprintln!("[download] ModelScope 镜像均失败，回退官方源：{mirror_err}");
+                let official_cfg = settings::DownloadConfig {
+                    source: settings::DownloadSource::Official,
+                    gh_proxy: cfg.gh_proxy.clone(),
+                };
+                download_official(m, progress, &official_cfg).map_err(|official_err| {
+                    format!("ModelScope 镜像失败：{mirror_err}；官方源也失败：{official_err}")
+                })
             }
-            settings::DownloadSource::Auto if !m.file_mirrors.is_empty() => {
-                match download_file_mirrors(m, progress) {
-                    Ok(()) => Ok(()),
-                    Err(mirror_err) => {
-                        eprintln!("[download] ModelScope 镜像均失败，回退官方整包：{mirror_err}");
-                        let official_cfg = settings::DownloadConfig {
-                            source: settings::DownloadSource::Official,
-                            gh_proxy: cfg.gh_proxy.clone(),
-                        };
-                        download_archive(m, archive, progress, &official_cfg).map_err(
-                            |official_err| {
-                                format!(
-                                "ModelScope 镜像失败：{mirror_err}；官方源也失败：{official_err}"
-                            )
-                            },
-                        )
-                    }
-                }
-            }
-            _ => download_archive(m, archive, progress, cfg),
-        };
+        },
     }
-    download_manifest_files(m, progress, cfg)
+}
+
+fn download_official(
+    m: &MultiFileModel,
+    progress: Progress<'_>,
+    cfg: &settings::DownloadConfig,
+) -> Result<(), String> {
+    if let Some(archive) = &m.archive {
+        download_archive(m, archive, progress, cfg)
+    } else {
+        download_manifest_files(m, progress, cfg)
+    }
+}
+
+/// `Ok(true)` = 已走镜像成功；`Ok(false)` = 没有镜像，调用方应走官方。
+fn download_preferred_mirrors(
+    m: &MultiFileModel,
+    progress: Progress<'_>,
+) -> Result<bool, String> {
+    if !m.file_mirrors.is_empty() {
+        download_file_mirrors(m, progress)?;
+        return Ok(true);
+    }
+    if !m.archive_mirrors.is_empty() {
+        download_archive_mirrors(m, progress)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn download_mirrors_only(m: &MultiFileModel, progress: Progress<'_>) -> Result<(), String> {
+    match download_preferred_mirrors(m, progress)? {
+        true => Ok(()),
+        false => Err(format!("{} 没有国内镜像，请将下载源改为自动或仅官方", m.id)),
+    }
+}
+
+fn download_archive_mirrors(m: &MultiFileModel, progress: Progress<'_>) -> Result<(), String> {
+    let mut errors = Vec::new();
+    let official_cfg = settings::DownloadConfig {
+        source: settings::DownloadSource::Official,
+        gh_proxy: String::new(),
+    };
+    for (index, archive) in m.archive_mirrors.iter().enumerate() {
+        match download_archive(m, archive, progress, &official_cfg) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                errors.push(format!("镜像 {}/{}：{error}", index + 1, m.archive_mirrors.len()));
+            }
+        }
+    }
+    Err(errors.join("；"))
 }
 
 fn download_manifest_files(
@@ -1354,6 +1411,17 @@ mod tests {
                     m.id
                 );
             }
+            for archive in m.archive_mirrors {
+                assert!(
+                    archive
+                        .url
+                        .starts_with("https://www.modelscope.cn/models/"),
+                    "{} 整包镜像必须是 ModelScope 地址",
+                    m.id
+                );
+                assert_eq!(archive.sha256.len(), 64, "{} 整包镜像 sha256 应 64 hex", m.id);
+                assert!(archive.size_bytes > 0, "{}", m.id);
+            }
             for f in m.files {
                 if m.archive.is_none() {
                     assert!(f.url.starts_with("https://"), "{}", f.name);
@@ -1443,6 +1511,23 @@ mod tests {
             multi_file_default_model("sherpa-onnx-funasr-nano"),
             Some(fun.id)
         );
+        assert!(
+            fun.file_mirrors.is_empty(),
+            "FunASR-Nano 社区仓只有 tar.bz2，不走逐文件镜像"
+        );
+        assert_eq!(fun.archive_mirrors.len(), 1);
+        assert!(fun.archive_mirrors[0]
+            .url
+            .contains("fuyuan-sherpa-onnx-funasr-nano-int8-2025-12-30"));
+
+        let sv = SHERPA_MODELS
+            .iter()
+            .find(|m| m.engine_id == "sherpa-onnx-sensevoice")
+            .expect("SenseVoice 模型清单缺失");
+        assert_eq!(sv.file_mirrors.len(), 1);
+        assert!(sv.file_mirrors[0]
+            .base_url
+            .contains("fengge2024/sherpa-onnx-sense-voice"));
     }
 
     #[test]

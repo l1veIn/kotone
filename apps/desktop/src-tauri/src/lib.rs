@@ -873,8 +873,13 @@ fn set_audio_device(state: tauri::State<SharedState>, id: String) -> Result<(), 
 // ---------- STT 引擎（§5.3） ----------
 
 #[tauri::command]
-fn list_stt_engines(state: tauri::State<SharedState>) -> Vec<EngineInfo> {
-    state.engines.list_info()
+async fn list_stt_engines(
+    state: tauri::State<'_, SharedState>,
+) -> Result<Vec<EngineInfo>, String> {
+    let engines = state.engines.clone();
+    tauri::async_runtime::spawn_blocking(move || engines.list_info())
+        .await
+        .map_err(|error| format!("列举引擎失败：{error}"))
 }
 
 #[tauri::command]
@@ -1035,8 +1040,10 @@ fn restart_as_admin(app: AppHandle) -> Result<(), String> {
 // ---------- 模型 / 评测 ----------
 
 #[tauri::command]
-fn list_models() -> Result<Vec<model::ModelInfo>, String> {
-    model::list()
+async fn list_models() -> Result<Vec<model::ModelInfo>, String> {
+    tauri::async_runtime::spawn_blocking(model::list)
+        .await
+        .map_err(|error| format!("列举模型失败：{error}"))?
 }
 
 /// 下载模型（id = 清单内任意模型 / silero-vad；镜像策略见 settings.download）。

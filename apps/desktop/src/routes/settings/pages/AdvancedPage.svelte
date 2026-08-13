@@ -50,15 +50,17 @@
   </nav>
 
   <div class="mt-4">
-    {#if section === "models"}
+    <!-- 模型清单会校验已下载 ONNX，保持挂载避免切 tab 重复哈希；其它页按需创建 -->
+    <div class:hidden={section !== "models"}>
       <ModelsSection />
-    {:else if section === "connections"}
+    </div>
+    {#if section === "connections"}
       <ConnectionsSection />
     {:else if section === "hotkeys"}
       <HotkeysSection />
     {:else if section === "tuning"}
       <TuningSection />
-    {:else}
+    {:else if section === "system"}
       <SystemSection {onOpenOnboarding} />
     {/if}
   </div>
