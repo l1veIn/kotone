@@ -13,6 +13,7 @@
 //! - `settings`/`profile`/`eval`/`log`：配置 schema 与存储（唯一写入口）、游戏 profile、评测、文件日志
 
 pub mod audio;
+pub mod connection;
 pub mod eval;
 pub mod history;
 pub mod hotkey;

@@ -136,6 +136,8 @@ pub struct ProcessorConfigField {
 pub enum ProcessorConfigFieldKind {
     Text,
     File,
+    /// 引用 Settings.connections 里的一条连接，step JSON 只存 connectionId。
+    Connection,
 }
 
 /// 设置页用于分组展示处理器的稳定领域分类。

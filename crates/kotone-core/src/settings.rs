@@ -99,6 +99,9 @@ pub struct Settings {
     /// STT 最终文本与预览/发送之间的有序后处理 pipeline；默认关闭，旧配置零行为变化。
     #[serde(default)]
     pub post_processing: crate::postprocess::PostProcessingConfig,
+    /// 后处理在线连接目录（不含 API key）。缺省空列表，旧配置零行为变化。
+    #[serde(default)]
+    pub connections: Vec<crate::connection::Connection>,
 }
 
 /// 桌面壳 UI 状态（config.json `ui` 段）
@@ -352,7 +355,36 @@ impl Default for Settings {
             vad: VadConfig::default(),
             hotwords_score: default_hotwords_score(),
             post_processing: crate::postprocess::PostProcessingConfig::default(),
+            connections: Vec::new(),
         }
+    }
+}
+
+/// 从当前 Settings 快照解析连接公开字段。密钥由后续凭据层补上。
+pub struct SettingsConnectionResolver {
+    settings: Arc<RwLock<Settings>>,
+}
+
+impl SettingsConnectionResolver {
+    pub fn new(settings: Arc<RwLock<Settings>>) -> Self {
+        Self { settings }
+    }
+}
+
+impl crate::connection::ConnectionResolver for SettingsConnectionResolver {
+    fn resolve(&self, connection_id: &str) -> Result<crate::connection::ResolvedConnection, String> {
+        let id = connection_id.trim();
+        if id.is_empty() {
+            return Err("连接 ID 不能为空".into());
+        }
+        let settings = self.settings.read().unwrap();
+        let found = settings
+            .connections
+            .iter()
+            .find(|connection| connection.id == id)
+            .ok_or_else(|| format!("未找到连接：{id}"))?;
+        found.validate()?;
+        Ok(crate::connection::ResolvedConnection::from_public(found))
     }
 }
 
@@ -1008,5 +1040,34 @@ mod tests {
         let loaded = load_from(&path);
         assert!(loaded.language.starts_with("lang-"));
         assert!(!path.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn legacy_config_without_connections_defaults_to_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, "{}").unwrap();
+        let settings = load_from(&path);
+        assert!(settings.connections.is_empty());
+    }
+
+    #[test]
+    fn settings_connection_resolver_reads_public_fields_only() {
+        use crate::connection::{Connection, ConnectionKind, ConnectionResolver};
+
+        let mut settings = Settings::default();
+        settings.connections.push(Connection {
+            id: "dashscope-main".into(),
+            display_name: "通义".into(),
+            kind: ConnectionKind::Remote,
+            provider: "dashscope".into(),
+            base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1".into(),
+            model: "qwen-turbo".into(),
+        });
+        let resolver = SettingsConnectionResolver::new(Arc::new(RwLock::new(settings)));
+        let resolved = resolver.resolve("dashscope-main").unwrap();
+        assert_eq!(resolved.model, "qwen-turbo");
+        assert!(resolved.api_key.is_none());
+        assert!(resolver.resolve("missing").unwrap_err().contains("未找到连接"));
     }
 }

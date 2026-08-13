@@ -114,6 +114,8 @@ export interface Settings {
   hotwordsScore: number;
   /** STT final 与预览/发送之间的有序后处理 pipeline。 */
   postProcessing: PostProcessingConfig;
+  /** 后处理在线连接目录（不含 API key）。 */
+  connections: Connection[];
   history: HistoryConfig;
   ui: UiConfig;
   models: ModelsConfig;
@@ -245,9 +247,21 @@ export interface PostProcessorConfigField {
   key: string;
   displayName: string;
   description: string;
-  kind: "text" | "file";
+  kind: "text" | "file" | "connection";
   required: boolean;
   fileExtensions: string[];
+}
+
+export type ConnectionKind = "remote" | "attach" | "managed";
+
+/** 可持久化的连接公开记录；API key 不在此结构里。 */
+export interface Connection {
+  id: string;
+  displayName: string;
+  kind: ConnectionKind;
+  provider: string;
+  baseUrl: string;
+  model: string;
 }
 
 // ---------- 游戏 profile ----------
@@ -400,6 +414,7 @@ const mock: MockStore = {
     vad: { threshold: 0.5, minSpeechMs: 50, minSilenceMs: 50 },
     hotwordsScore: 3.5,
     postProcessing: { enabled: false, pipeline: { id: "default", steps: [] } },
+    connections: [],
     history: { mode: "capped", maxRecords: 1000, includeAudio: false, dir: "" },
     ui: { firstRunCompleted: true, autoStart: false },
     models: { dir: "" },

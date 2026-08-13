@@ -20,9 +20,10 @@ use kotone_core::profile::{
     self, format_hotwords_export, GameProfile, HotwordMergeReport, ProfileDeleteOutcome,
 };
 use kotone_core::runtime::RuntimePhase;
+use kotone_core::connection::ConnectionResolver;
 use kotone_core::settings::{
     self, OverlayConfig, OverlayPosition, OverlayStyle, OverlayVisibility, Settings,
-    SettingsRepository,
+    SettingsConnectionResolver, SettingsRepository,
 };
 use kotone_core::stt::{EngineInfo, EngineRegistry};
 use kotone_core::{log, process_log};
@@ -39,6 +40,7 @@ pub struct SharedState {
     pub orchestrator: Arc<Orchestrator>,
     pub engines: Arc<EngineRegistry>,
     pub processors: Arc<kotone_core::postprocess::ProcessorRegistry>,
+    pub connections: Arc<dyn ConnectionResolver>,
     pub injector: Arc<dyn Injector>,
 }
 
@@ -1531,6 +1533,8 @@ pub fn run() {
                 return Err(Box::<dyn std::error::Error>::from(error));
             }
             let processors = Arc::new(processor_registry);
+            let connections: Arc<dyn ConnectionResolver> =
+                Arc::new(SettingsConnectionResolver::new(settings.clone()));
             let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter {
                 app: app.handle().clone(),
                 vis_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -1565,6 +1569,7 @@ pub fn run() {
                 orchestrator: orchestrator.clone(),
                 engines,
                 processors,
+                connections,
                 injector,
             });
             app.manage(HotkeyManager::new(app.handle(), orchestrator.clone()));
