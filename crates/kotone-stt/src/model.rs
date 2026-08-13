@@ -276,8 +276,8 @@ fn invalidate_integrity_cache(path: &std::path::Path) {
     integrity_cache().lock().unwrap().remove(path);
 }
 
-/// 同一进程内避免设置页反复列举模型时重复哈希数百 MB 的 ONNX 文件。首次
-/// 检查（以及长度/mtime 变化后）仍会读取完整文件；缓存不落盘，重启必定复核。
+/// 下载/解压后的完整性校验缓存。同一进程内重复点「下载」时跳过已核过的文件。
+/// 长度/mtime 变化后重算；缓存不落盘。设置页列举不走这条路径。
 fn sha256_file_cached(path: &std::path::Path) -> Result<String, String> {
     let before = fs::metadata(path).map_err(|e| format!("无法读取 {}：{e}", path.display()))?;
     let modified = before.modified().ok();
@@ -329,6 +329,19 @@ fn verify_model_file(path: &std::path::Path, file: &ModelFile) -> Result<(), Str
         .sha256
         .ok_or_else(|| "模型清单缺少 SHA256".to_string())?;
     verify_file_integrity(path, file.size_bytes, expected)
+}
+
+/// 设置页列举 / is_ready / 启动缺文件提示：只看存在和大小。
+/// SHA256 留给下载完成后的校验；打开设置不该扫数百 MB。
+fn model_file_present(path: &std::path::Path, file: &ModelFile) -> Result<(), String> {
+    let actual_size = fs::metadata(path).map_err(|_| "缺失".to_string())?.len();
+    if actual_size != file.size_bytes {
+        return Err(format!(
+            "大小不符：期望 {} 字节，实际 {actual_size} 字节",
+            file.size_bytes
+        ));
+    }
+    Ok(())
 }
 
 /// 指定 sherpa 系引擎清单中的默认模型（该引擎清单首条；无清单时 None）
@@ -404,7 +417,7 @@ pub fn multi_model_dir(model_id: &str) -> Option<PathBuf> {
         .map(|m| models_dir().join(m.dir))
 }
 
-/// 多文件模型是否齐备（全部文件存在且大小、SHA256 均匹配）
+/// 多文件模型是否齐备（全部文件存在且大小匹配）。不扫 SHA256。
 pub fn multi_model_ready(model_id: &str) -> bool {
     multi_model_missing(model_id).is_empty()
 }
@@ -414,7 +427,8 @@ pub fn multi_model_ready_from(s: &settings::Settings, model_id: &str) -> bool {
     multi_model_missing_in(&models_dir_from(s), model_id).is_empty()
 }
 
-/// 多文件模型齐备性检查的明细：返回缺失/完整性不符的文件描述列表（空 = 齐备）。
+/// 多文件模型齐备性检查的明细：返回缺失/大小不符的文件描述列表（空 = 齐备）。
+/// 不计算 SHA256——设置页列举和引擎 is_ready 只需要知道文件在不在。
 /// 用于启动失败时把「到底缺哪个文件」写进日志与错误消息——0.1.5 曾出现
 /// 运行中 stop/start 后误报「模型未下载」，布尔检查无法定位原因。
 pub fn multi_model_missing(model_id: &str) -> Vec<String> {
@@ -430,11 +444,23 @@ fn multi_model_missing_in(models: &Path, model_id: &str) -> Vec<String> {
         .iter()
         .filter_map(|file| {
             let path = dir.join(file.name);
-            verify_model_file(&path, file)
+            model_file_present(&path, file)
                 .err()
                 .map(|error| format!("{}（{error}）", file.name))
         })
         .collect()
+}
+
+/// 下载跳过判定：文件必须存在、大小匹配且 SHA256 匹配。
+/// 仅用于下载路径，避免把同大小损坏文件当成已完成。
+fn multi_model_verified(model_id: &str) -> bool {
+    let Some(m) = SHERPA_MODELS.iter().find(|m| m.id == model_id) else {
+        return false;
+    };
+    let dir = models_dir().join(m.dir);
+    m.files
+        .iter()
+        .all(|file| verify_model_file(&dir.join(file.name), file).is_ok())
 }
 
 /// 引擎当前活动模型 ID（读 config.json 的 engineOptions；
@@ -732,8 +758,8 @@ fn download_archive(
     progress: Progress<'_>,
     cfg: &settings::DownloadConfig,
 ) -> Result<(), String> {
-    // 已齐备 → 幂等直接完成
-    if multi_model_ready(m.id) {
+    // 已校验通过 → 幂等直接完成（必须过 SHA256，不能只看大小）
+    if multi_model_verified(m.id) {
         progress(archive.size_bytes, Some(archive.size_bytes));
         return Ok(());
     }
@@ -1323,11 +1349,18 @@ mod tests {
             size_bytes: 12,
         };
         assert!(verify_model_file(&path, &file).is_ok());
+        assert!(model_file_present(&path, &file).is_ok());
 
         fs::write(&path, b"HELLO KOTONE").unwrap();
         invalidate_integrity_cache(&path);
         let error = verify_model_file(&path, &file).unwrap_err();
         assert!(error.contains("SHA256 不符"), "error: {error}");
+        // 列举/就绪只看大小：同大小损坏仍算「已下载」，哈希留给下载路径
+        assert!(model_file_present(&path, &file).is_ok());
+
+        fs::write(&path, b"short").unwrap();
+        let present_err = model_file_present(&path, &file).unwrap_err();
+        assert!(present_err.contains("大小不符"), "error: {present_err}");
     }
 
     // ---------- VAD 本体分发：ensure_vad_model ----------
