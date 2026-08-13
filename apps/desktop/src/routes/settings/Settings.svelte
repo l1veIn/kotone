@@ -27,6 +27,7 @@
   import ElevationPrompt from "../../lib/components/ElevationPrompt.svelte";
   import AutoAdminPrompt from "../../lib/components/AutoAdminPrompt.svelte";
   import InjectionBlockedDialog from "../../lib/components/InjectionBlockedDialog.svelte";
+  import UpdateDialog from "../../lib/components/UpdateDialog.svelte";
   import { appState } from "../../lib/stores/state";
   import Onboarding from "./Onboarding.svelte";
   import Titlebar from "./Titlebar.svelte";
@@ -255,4 +256,5 @@
 
   <!-- 右上角 toast 堆叠（fixed 定位，z 高于向导） -->
   <Toasts />
+  <UpdateDialog />
 </div>
