@@ -1,10 +1,11 @@
-//! Windows 低级键盘钩子（WH_KEYBOARD_LL）热键源：core `HotkeySource` 端口的实现。
+//! Windows 低级键鼠钩子（WH_KEYBOARD_LL + WH_MOUSE_LL）热键源：
+//! core `HotkeySource` 端口的实现。
 //!
 //! 背景：RegisterHotKey 在 LOL 等游戏前台不投递热键事件（实测日志实证）；
 //! LeagueAkari 等游戏工具均用 LL 钩子解决。
 //!
 //! 线程模型：
-//! - 钩子线程：SetWindowsHookExW(WH_KEYBOARD_LL) + GetMessageW 消息循环
+//! - 钩子线程：安装 WH_KEYBOARD_LL / WH_MOUSE_LL + GetMessageW 消息循环
 //!   （LL 钩子回调跑在安装线程上，该线程必须有消息循环）；
 //!   退出时 UnhookWindowsHookEx（PostThreadMessageW(WM_QUIT) 触发）。
 //! - 回调红线：只做「过滤 + channel 发送」，绝不写日志/做 IO/调业务；
@@ -29,13 +30,14 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, PeekMessageW, PostThreadMessageW, SetWindowsHookExW,
-    UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG, PM_NOREMOVE, WH_KEYBOARD_LL,
-    WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LLMHF_INJECTED, MSG,
+    MSLLHOOKSTRUCT, PM_NOREMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, XBUTTON1, XBUTTON2,
 };
 
 use kotone_core::hotkey::{
     parse_hotkey, HookEvent, HookMatcher, HotkeyMode, HotkeySource, HotkeySpec, KeyAction,
-    VK_ESCAPE,
+    VK_ESCAPE, VK_XBUTTON1, VK_XBUTTON2,
 };
 
 /// 事件出口：构造 LlHookSource 时注入（Tauri 壳 spawn 进 runtime，CLI 送进自己的通道）
@@ -287,7 +289,7 @@ impl LlHookSource {
         }
     }
 
-    /// 在保持共享 matcher / 事件消费者不变的前提下重建 WH_KEYBOARD_LL。
+    /// 在保持共享 matcher / 事件消费者不变的前提下重建键盘与鼠标 LL 钩子。
     ///
     /// 先确认新 hook 安装成功，再通知旧消息循环退出，因此重建失败不会把仍可用
     /// 的旧 hook 一并拆掉。短暂重叠期间 matcher 的按下态会自然去重事件。
@@ -306,7 +308,7 @@ impl LlHookSource {
                 }
             }
         }
-        kotone_core::log::log("WH_KEYBOARD_LL hook refreshed");
+        kotone_core::log::log("WH_KEYBOARD_LL + WH_MOUSE_LL hooks refreshed");
         Ok(())
     }
 }
@@ -414,7 +416,7 @@ fn spawn_hook_thread() -> Result<u32, String> {
 
     match boot_rx.recv() {
         Ok(Ok(tid)) => Ok(tid),
-        Ok(Err(e)) => Err(format!("安装 WH_KEYBOARD_LL 钩子失败: {e}")),
+        Ok(Err(e)) => Err(format!("安装低层键鼠钩子失败: {e}")),
         Err(_) => Err("钩子线程启动后异常退出".into()),
     }
 }
@@ -426,7 +428,7 @@ impl Drop for LlHookSource {
     }
 }
 
-/// 钩子线程主体：安装钩子 → 消息循环 → 退出时卸钩
+/// 钩子线程主体：安装键盘/鼠标钩子 → 消息循环 → 退出时卸钩
 fn hook_thread_main(boot: mpsc::Sender<Result<u32, String>>) {
     unsafe {
         let tid = GetCurrentThreadId();
@@ -434,23 +436,34 @@ fn hook_thread_main(boot: mpsc::Sender<Result<u32, String>>) {
         // 避免调用方收到 ready 后立即发送探测/用户立即按键，而线程尚无消息队列。
         let mut msg = MSG::default();
         let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
-        let hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), None::<HINSTANCE>, 0) {
-            Ok(h) => h,
-            Err(e) => {
-                let _ = boot.send(Err(format!("SetWindowsHookExW: {e}")));
-                return;
-            }
-        };
+        let keyboard_hook =
+            match SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), None::<HINSTANCE>, 0) {
+                Ok(h) => h,
+                Err(e) => {
+                    let _ = boot.send(Err(format!("SetWindowsHookExW(WH_KEYBOARD_LL): {e}")));
+                    return;
+                }
+            };
+        let mouse_hook =
+            match SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook_proc), None::<HINSTANCE>, 0) {
+                Ok(h) => h,
+                Err(e) => {
+                    let _ = UnhookWindowsHookEx(keyboard_hook);
+                    let _ = boot.send(Err(format!("SetWindowsHookExW(WH_MOUSE_LL): {e}")));
+                    return;
+                }
+            };
         // ready 之前完成日志等可能阻塞的工作；收到 ready 后线程下一步立即进入
         // GetMessageW，不能留出“hook 已返回成功但消息泵尚未工作”的竞态窗口。
-        kotone_core::log::log("WH_KEYBOARD_LL hook installed");
+        kotone_core::log::log("WH_KEYBOARD_LL + WH_MOUSE_LL hooks installed");
         let _ = boot.send(Ok(tid));
 
         // GetMessageW 返回 false = 收到 WM_QUIT
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {}
 
-        let _ = UnhookWindowsHookEx(hook);
-        kotone_core::log::log("WH_KEYBOARD_LL hook uninstalled");
+        let _ = UnhookWindowsHookEx(mouse_hook);
+        let _ = UnhookWindowsHookEx(keyboard_hook);
+        kotone_core::log::log("WH_KEYBOARD_LL + WH_MOUSE_LL hooks uninstalled");
     }
 }
 
@@ -471,6 +484,49 @@ fn probe_input(up: bool) -> INPUT {
                 dwExtraInfo: PROBE_EXTRA_INFO,
             },
         },
+    }
+}
+
+/// 把一个物理键盘/鼠标主键事件交给共享匹配器，并投递捕获或业务事件。
+/// 返回 true 表示该事件应由钩子吞掉。
+fn dispatch_key_event(shared: &HookShared, vk: u32, action: KeyAction) -> bool {
+    let outcome = {
+        // 锁中毒（理论上的 panic 路径）也不能在 FFI 边界 unwrap：放行输入。
+        let Ok(mut matcher) = shared.matcher.lock() else {
+            return false;
+        };
+        // 修饰键以物理状态为准，键盘与鼠标回调共用这条同步路径。
+        matcher.sync_modifiers(
+            unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } < 0,
+            unsafe { GetAsyncKeyState(VK_MENU.0 as i32) } < 0,
+            unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) } < 0,
+        );
+        matcher.on_key(vk, action)
+    };
+
+    let capture_tx = shared
+        .capture
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().cloned());
+    if let Some(tx) = capture_tx {
+        if let Some(spec) = outcome.captured {
+            let _ = tx.send(CaptureMsg::Combo(spec));
+        } else if action == KeyAction::Down && vk == VK_ESCAPE {
+            let _ = tx.send(CaptureMsg::Cancel);
+        }
+    } else if let Some(ev) = outcome.event {
+        let _ = shared.tx.send(ev);
+    }
+    outcome.swallow
+}
+
+/// MSLLHOOKSTRUCT.mouseData 高位字 → core 使用的侧键 VK 码。
+fn xbutton_vk(mouse_data: u32) -> Option<u32> {
+    match (mouse_data >> 16) as u16 {
+        XBUTTON1 => Some(VK_XBUTTON1),
+        XBUTTON2 => Some(VK_XBUTTON2),
+        _ => None,
     }
 }
 
@@ -503,32 +559,30 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
                     _ => None,
                 };
                 if let Some(action) = action {
-                    // 锁中毒（理论上的 panic 路径）也不能在 FFI 边界 unwrap：放行按键
-                    if let Ok(mut matcher) = shared.matcher.lock() {
-                        // 修饰键以物理状态为准（我们从不吞修饰键，状态恒准确），
-                        // 自愈「修饰键 up 丢失」造成的匹配失配——三次 Win32 调用
-                        // 开销可忽略，仍在回调红线内（无日志/无 IO）
-                        matcher.sync_modifiers(
-                            unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } < 0,
-                            unsafe { GetAsyncKeyState(VK_MENU.0 as i32) } < 0,
-                            unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) } < 0,
-                        );
-                        let outcome = matcher.on_key(kb.vkCode, action);
-                        drop(matcher);
-                        // 捕获模式（热键录入）：组合键 / Esc 取消走 capture 通道
-                        let capture_tx = shared.capture.lock().unwrap().clone();
-                        if let Some(tx) = capture_tx {
-                            if let Some(spec) = outcome.captured {
-                                let _ = tx.send(CaptureMsg::Combo(spec));
-                            } else if action == KeyAction::Down && kb.vkCode == VK_ESCAPE {
-                                let _ = tx.send(CaptureMsg::Cancel);
-                            }
-                        } else if let Some(ev) = outcome.event {
-                            let _ = shared.tx.send(ev);
-                        }
-                        if outcome.swallow {
-                            return LRESULT(1);
-                        }
+                    if dispatch_key_event(shared, kb.vkCode, action) {
+                        return LRESULT(1);
+                    }
+                }
+            }
+        }
+    }
+    unsafe { CallNextHookEx(None::<HHOOK>, code, wparam, lparam) }
+}
+
+/// 低层鼠标钩子：只翻译 XBUTTON1/XBUTTON2，其他鼠标操作完全放行。
+unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code >= 0 {
+        if let Some(shared) = SHARED.get() {
+            let mouse = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+            if mouse.flags & LLMHF_INJECTED == 0 {
+                let action = match wparam.0 as u32 {
+                    WM_XBUTTONDOWN => Some(KeyAction::Down),
+                    WM_XBUTTONUP => Some(KeyAction::Up),
+                    _ => None,
+                };
+                if let (Some(vk), Some(action)) = (xbutton_vk(mouse.mouseData), action) {
+                    if dispatch_key_event(shared, vk, action) {
+                        return LRESULT(1);
                     }
                 }
             }
@@ -546,8 +600,15 @@ fn consumer_main(rx: mpsc::Receiver<HookEvent>, sink: Arc<HookSink>) {
 }
 
 #[cfg(test)]
-mod probe_smoke_test {
+mod tests {
     use super::*;
+
+    #[test]
+    fn xbutton_mouse_data_maps_to_hotkey_codes() {
+        assert_eq!(xbutton_vk(u32::from(XBUTTON1) << 16), Some(VK_XBUTTON1));
+        assert_eq!(xbutton_vk(u32::from(XBUTTON2) << 16), Some(VK_XBUTTON2));
+        assert_eq!(xbutton_vk(0), None);
+    }
 
     #[test]
     #[ignore = "manual Windows desktop integration smoke test"]

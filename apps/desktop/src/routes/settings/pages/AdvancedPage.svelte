@@ -991,7 +991,7 @@
           disabled={cycleCapturing}
           onclick={() => void startCycleCapture()}
         >
-          {cycleCapturing ? "请按下热键组合…（Esc 取消）" : "点击录入"}
+          {cycleCapturing ? "请按下键盘组合或鼠标侧键…（Esc 取消）" : "点击录入"}
         </button>
       </div>
       {#if hotkeyStatus?.cycleError}
@@ -1029,7 +1029,7 @@
           disabled={resendCapturing}
           onclick={() => void startResendCapture()}
         >
-          {resendCapturing ? "请按下热键组合…（Esc 取消）" : "点击录入"}
+          {resendCapturing ? "请按下键盘组合或鼠标侧键…（Esc 取消）" : "点击录入"}
         </button>
         {#if resendDraft}
           <button
@@ -1143,7 +1143,7 @@
           onchange={(event) => void onHotkeyBackendChange(event)}
         >
           <option value="auto">自动（推荐）</option>
-          <option value="llhook">低层键盘钩子</option>
+          <option value="llhook">低层键鼠钩子</option>
           <option value="register">系统热键</option>
         </select>
         <span class="text-[11px] text-white/40">

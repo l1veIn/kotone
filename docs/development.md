@@ -250,7 +250,7 @@ enum SttEvent {
 
 ### 3.6 热键与悬浮窗
 
-**热键：WH_KEYBOARD_LL 低级键盘钩子（Windows 默认）+ tauri-plugin-global-shortcut（回退/非 Windows）。**（v6 变更）
+**热键：WH_KEYBOARD_LL + WH_MOUSE_LL 低级键鼠钩子（Windows 默认，支持 Mouse4/Mouse5）+ tauri-plugin-global-shortcut（普通键回退/非 Windows）。**（v6 变更）
 
 - **变更原因（实测实证）**：RegisterHotKey 在 LOL 前台时完全不投递热键事件（`~/.kotone/kotone.log` 实证：记事本前台事件正常，游戏前台零事件，换多个键位均如此）。游戏工具（AutoHotkey、LeagueAkari）均用 LL 钩子正是为此。
 - 实现：`hotkey_ll.rs` 独立钩子线程（SetWindowsHookExW + 消息循环）+ mpsc 事件通道 + 消费者线程调 orchestrator；回调内零 IO、跳过 LLKHF_INJECTED（防自我触发）。

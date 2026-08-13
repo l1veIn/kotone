@@ -737,7 +737,7 @@
             disabled={capturing || checkingInputEnvironment || (inputEnvironment?.available === false && !inputBlockedOverridden)}
             onclick={() => void startCapture()}
           >
-            {capturing ? "请按下组合键…（Esc 取消）" : "重新录入"}
+            {capturing ? "请按下键盘组合或鼠标侧键…（Esc 取消）" : "重新录入"}
           </button>
         </div>
 

@@ -47,6 +47,19 @@ export function keyboardEventCombo(event: KeyboardEvent): string | null {
   return parts.join("+");
 }
 
+/** MouseEvent 侧键 → 与 Rust parse_hotkey 一致的 Mouse4 / Mouse5 组合名。 */
+export function mouseEventCombo(event: MouseEvent): string | null {
+  const main = event.button === 3 ? "Mouse4" : event.button === 4 ? "Mouse5" : null;
+  if (!main) return null;
+
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push("Ctrl");
+  if (event.altKey) parts.push("Alt");
+  if (event.shiftKey) parts.push("Shift");
+  parts.push(main);
+  return parts.join("+");
+}
+
 export function normalizeHotkeyCombo(combo: string): string {
   return combo
     .split("+")

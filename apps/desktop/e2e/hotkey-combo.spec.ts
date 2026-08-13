@@ -4,7 +4,9 @@ test("WebView hotkey fallback recognizes combos and paired releases", async ({ p
   await page.goto("/#/settings?onboarding=never");
 
   const result = await page.evaluate(async () => {
-    const { keyboardEventCombo, releasesHotkey } = await import("/src/lib/hotkeyCombo.ts");
+    const { keyboardEventCombo, mouseEventCombo, releasesHotkey } = await import(
+      "/src/lib/hotkeyCombo.ts"
+    );
     return {
       combo: keyboardEventCombo(
         new KeyboardEvent("keydown", {
@@ -26,6 +28,11 @@ test("WebView hotkey fallback recognizes combos and paired releases", async ({ p
         new KeyboardEvent("keyup", { code: "KeyX", key: "x" }),
         "Ctrl+Alt+V",
       ),
+      mouse4: mouseEventCombo(new MouseEvent("mousedown", { button: 3 })),
+      modifiedMouse5: mouseEventCombo(
+        new MouseEvent("mousedown", { button: 4, ctrlKey: true, shiftKey: true }),
+      ),
+      ordinaryMouseButton: mouseEventCombo(new MouseEvent("mousedown", { button: 0 })),
     };
   });
 
@@ -34,5 +41,8 @@ test("WebView hotkey fallback recognizes combos and paired releases", async ({ p
     mainReleasedAfterModifiers: true,
     modifierReleasedFirst: true,
     unrelatedRelease: false,
+    mouse4: "Mouse4",
+    modifiedMouse5: "Ctrl+Shift+Mouse5",
+    ordinaryMouseButton: null,
   });
 });

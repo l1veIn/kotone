@@ -21,7 +21,7 @@ pub enum HotkeyMode {
     Toggle,
 }
 
-/// 热键事件源端口（core）：WH_KEYBOARD_LL 钩子与 RegisterHotKey 是两种实现。
+/// 热键事件源端口（core）：Windows 低层键鼠钩子与 RegisterHotKey 是两种实现。
 ///
 /// 实现负责平台线程与按键捕获；事件经构造时注入的 sink 外发（HookEvent），
 /// 本端口只定义注册/注销/会话激活开关。register 失败时调用方负责回退。
@@ -49,6 +49,8 @@ pub trait HotkeySource: Send + Sync {
 // ---------- VK 码（Win32 常量值；定义为 u32 常量以便跨平台编译与测试） ----------
 
 pub const VK_BACK: u32 = 0x08;
+pub const VK_XBUTTON1: u32 = 0x05;
+pub const VK_XBUTTON2: u32 = 0x06;
 pub const VK_TAB: u32 = 0x09;
 pub const VK_RETURN: u32 = 0x0D;
 pub const VK_SHIFT: u32 = 0x10;
@@ -103,6 +105,12 @@ impl HotkeySpec {
         parts.push(vk_name(self.vk));
         parts.join("+")
     }
+
+    /// 是否为鼠标侧键。侧键只能由 Windows 低层鼠标钩子接收，
+    /// RegisterHotKey / tauri-plugin-global-shortcut 不支持。
+    pub fn is_mouse_button(&self) -> bool {
+        matches!(self.vk, VK_XBUTTON1 | VK_XBUTTON2)
+    }
 }
 
 /// VK 码 → 键名（`vk_from_name` 的反查；未知码兜底 "VK0x.."，不丢信息）
@@ -120,6 +128,8 @@ fn vk_name(vk: u32) -> String {
         return format!("F{}", vk - VK_F1 + 1);
     }
     let name = match vk {
+        VK_XBUTTON1 => "Mouse4",
+        VK_XBUTTON2 => "Mouse5",
         VK_SPACE => "Space",
         VK_TAB => "Tab",
         VK_RETURN => "Enter",
@@ -164,6 +174,8 @@ fn vk_from_name(name: &str) -> Option<u32> {
         }
     }
     let vk = match lower.as_str() {
+        "mouse4" | "xbutton1" => VK_XBUTTON1,
+        "mouse5" | "xbutton2" => VK_XBUTTON2,
         "space" => VK_SPACE,
         "tab" => VK_TAB,
         "enter" | "return" => VK_RETURN,
@@ -204,7 +216,7 @@ enum Modifier {
     Shift,
 }
 
-/// 解析热键配置串："F8"、"Alt+V"、"Ctrl+Shift+F7"、"Escape"。
+/// 解析热键配置串："F8"、"Alt+V"、"Ctrl+Shift+F7"、"Mouse4"、"Escape"。
 /// 主键必须是最后一个分量且不能是修饰键；修饰键顺序无关、重复无害。
 pub fn parse_hotkey(key: &str) -> Option<HotkeySpec> {
     let parts: Vec<&str> = key
@@ -705,6 +717,21 @@ mod tests {
     }
 
     #[test]
+    fn parse_mouse_side_buttons_and_aliases() {
+        let mouse4 = parse_hotkey("Mouse4").unwrap();
+        assert_eq!(mouse4.vk, VK_XBUTTON1);
+        assert!(mouse4.is_mouse_button());
+        assert_eq!(mouse4.combo_name(), "Mouse4");
+
+        let mouse5 = parse_hotkey("Ctrl+XButton2").unwrap();
+        assert_eq!(mouse5.vk, VK_XBUTTON2);
+        assert!(mouse5.ctrl && mouse5.is_mouse_button());
+        assert_eq!(mouse5.combo_name(), "Ctrl+Mouse5");
+        assert_eq!(parse_hotkey("xbutton1"), parse_hotkey("mouse4"));
+        assert!(combos_conflict("Alt+XButton2", "Alt+Mouse5"));
+    }
+
+    #[test]
     fn parse_rejects_invalid() {
         assert!(parse_hotkey("").is_none());
         assert!(parse_hotkey("NotAKey").is_none());
@@ -796,6 +823,25 @@ mod tests {
         // 第二轮
         assert_eq!(down(&mut m, 0x77).event, Some(HookEvent::HoldPressed));
         assert_eq!(up(&mut m, 0x77).event, Some(HookEvent::HoldReleased));
+    }
+
+    #[test]
+    fn mouse_side_button_supports_toggle_and_hold() {
+        let mut toggle = matcher("Mouse4", HotkeyMode::Toggle);
+        let down_result = down(&mut toggle, VK_XBUTTON1);
+        assert!(down_result.swallow);
+        assert_eq!(down_result.event, Some(HookEvent::Toggle));
+        assert!(up(&mut toggle, VK_XBUTTON1).swallow);
+
+        let mut hold = matcher("Mouse5", HotkeyMode::Hold);
+        assert_eq!(
+            down(&mut hold, VK_XBUTTON2).event,
+            Some(HookEvent::HoldPressed)
+        );
+        assert_eq!(
+            up(&mut hold, VK_XBUTTON2).event,
+            Some(HookEvent::HoldReleased)
+        );
     }
 
     #[test]

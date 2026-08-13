@@ -9,14 +9,15 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use crate::hotkey::HotkeyMode;
 
 /// 热键后端选择（docs/development.md §3.6）。
-/// Windows 上 RegisterHotKey 在部分游戏前台不投递事件，LL 钩子（WH_KEYBOARD_LL）是主路径。
+/// Windows 上 RegisterHotKey 在部分游戏前台不投递事件且不支持鼠标侧键，
+/// LL 键鼠钩子（WH_KEYBOARD_LL + WH_MOUSE_LL）是主路径。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HotkeyBackend {
     /// Windows 优先 LL 钩子，安装失败回退 RegisterHotKey；非 Windows 恒 RegisterHotKey
     #[default]
     Auto,
-    /// 强制 LL 钩子（失败仍回退并记录日志）
+    /// 强制 LL 键鼠钩子（普通键失败仍回退并记录日志）
     Llhook,
     /// 强制 RegisterHotKey（tauri-plugin-global-shortcut）
     Register,

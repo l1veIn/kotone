@@ -1130,7 +1130,7 @@ fn cmd_config_get(key: &str) -> i32 {
     }
 }
 
-/// 按键录入（--capture）：LL 钩子捕获下一个组合键，返回配置串（如 "Ctrl+Alt+V"）
+/// 热键录入（--capture）：LL 钩子捕获下一个键盘组合或鼠标侧键，返回配置串。
 #[cfg(windows)]
 fn capture_hotkey_combo() -> Result<String, String> {
     use kotone_platform_windows::hotkey_ll::{CaptureResult, LlHookSource};
@@ -1143,7 +1143,7 @@ fn capture_hotkey_combo() -> Result<String, String> {
         }),
         std::time::Duration::from_secs(30),
     )?;
-    eprintln!("请按下热键组合…（Esc 取消，30 秒超时）");
+    eprintln!("请按下键盘组合或鼠标侧键…（Esc 取消，30 秒超时）");
     match rx.recv().map_err(|_| "捕获通道异常断开".to_string())? {
         CaptureResult::Captured(spec) => Ok(spec.combo_name()),
         CaptureResult::Cancelled => Err("已取消录入".into()),

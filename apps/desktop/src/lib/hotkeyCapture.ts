@@ -1,6 +1,6 @@
 /*
  * 全局热键录入捕获的共享 helper（ADR-006）。
- * HotkeyPage 与首启向导共用：LL 钩子捕获下一个按键组合，结果经
+ * HotkeyPage 与首启向导共用：LL 钩子捕获下一个键盘组合或鼠标侧键，结果经
  * kotone://hotkey-capture 事件推送；捕获期间全局热键匹配暂停，
  * Esc 由钩子层转成取消信号（不走 DOM keydown）。
  */
@@ -13,7 +13,7 @@ import {
   startHotkeyCapture,
   type HotkeyCaptureEvent,
 } from "./ipc";
-import { keyboardEventCombo } from "./hotkeyCombo";
+import { keyboardEventCombo, mouseEventCombo } from "./hotkeyCombo";
 
 export type CaptureResult =
   | { kind: "combo"; combo: string }
@@ -86,14 +86,30 @@ export async function captureHotkey(
       finishFromWebview({ kind: "combo", combo });
     }
   };
+  const blockWebviewMouse = (event: MouseEvent) => {
+    const combo = mouseEventCombo(event);
+    if (!combo) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (isTauri && !backendStarted) return;
+    if (isTauri) {
+      void logFrontendError(
+        "hotkey-capture-fallback",
+        `低级鼠标钩子未捕获本次侧键，已通过设置窗口兜底录入：${combo}`,
+      ).catch(() => {});
+    }
+    finishFromWebview({ kind: "combo", combo });
+  };
   captureActive = true;
   window.addEventListener("keydown", blockWebviewKey, { capture: true });
   window.addEventListener("keyup", blockWebviewKey, { capture: true });
+  window.addEventListener("mousedown", blockWebviewMouse, { capture: true });
 
   const cleanupWebview = () => {
     captureActive = false;
     window.removeEventListener("keydown", blockWebviewKey, { capture: true });
     window.removeEventListener("keyup", blockWebviewKey, { capture: true });
+    window.removeEventListener("mousedown", blockWebviewMouse, { capture: true });
   };
   const settle = (r: CaptureResult) => {
     if (settled) return;

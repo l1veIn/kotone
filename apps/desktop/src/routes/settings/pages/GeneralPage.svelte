@@ -354,7 +354,7 @@
           disabled={capturing}
           onclick={() => void startCapture()}
         >
-          {capturing ? "请按下热键组合…（Esc 取消）" : "点击录入"}
+          {capturing ? "请按下键盘组合或鼠标侧键…（Esc 取消）" : "点击录入"}
         </button>
         <button
           class="rounded-lg bg-kotone-cyan px-3 py-1.5 text-xs font-semibold text-kotone-deep transition hover:shadow-glow-cyan hover:brightness-110 active:scale-95 disabled:opacity-50"
@@ -365,6 +365,9 @@
         </button>
         <span class="text-[11px] text-white/40">当前：{$settingsStore?.hotkey.key ?? "…"}</span>
       </div>
+      <p class="mt-2 text-[11px] text-white/40">
+        支持键盘组合以及鼠标侧键 Mouse4 / Mouse5；鼠标侧键会自动使用低层键鼠钩子。
+      </p>
       {#if hotkeyStatus?.error}
         <div class="mt-3 rounded-lg bg-kotone-pink/15 p-2.5 ring-1 ring-kotone-pink/50">
           <p class="text-xs font-medium text-kotone-pink">

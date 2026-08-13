@@ -1,7 +1,7 @@
 //! 全局热键（Tauri 壳）：后端选择/回退/状态暴露（docs/development.md §3.6、§5.1）
 //!
 //! 端口在 core（`HotkeySource`）；两种实现：
-//! - **LL 钩子**（kotone-platform-windows，Windows 默认）：WH_KEYBOARD_LL，
+//! - **LL 钩子**（kotone-platform-windows，Windows 默认）：WH_KEYBOARD_LL + WH_MOUSE_LL，
 //!   解决 RegisterHotKey 在 LOL 等游戏前台不投递事件的问题；
 //! - **RegisterHotKey**（tauri-plugin-global-shortcut，本文件 `PluginHotkeySource`）：
 //!   依赖 AppHandle 故留在壳内；LL 钩子安装失败时回退，也是非 Windows 唯一实现。
@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
-use kotone_core::hotkey::{HookEvent, HotkeySource};
+use kotone_core::hotkey::{parse_hotkey, HookEvent, HotkeySource};
 use kotone_core::orchestrator::Orchestrator;
 use kotone_core::settings::HotkeyBackend;
 
@@ -25,10 +25,18 @@ pub use kotone_core::hotkey::HotkeyMode;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveBackend {
     None,
-    /// WH_KEYBOARD_LL 低级键盘钩子
+    /// WH_KEYBOARD_LL + WH_MOUSE_LL 低级键鼠钩子
     LlHook,
     /// RegisterHotKey（tauri-plugin-global-shortcut）
     Plugin,
+}
+
+fn uses_mouse_button(key: &str) -> bool {
+    parse_hotkey(key).is_some_and(|spec| spec.is_mouse_button())
+}
+
+fn any_mouse_hotkey(main: &str, cycle: &str, resend: &str) -> bool {
+    [main, cycle, resend].into_iter().any(uses_mouse_button)
 }
 
 impl ActiveBackend {
@@ -364,7 +372,17 @@ impl HotkeyManager {
         let pref = settings.hotkey_backend;
 
         #[cfg(windows)]
-        if pref != HotkeyBackend::Register {
+        let requires_llhook = any_mouse_hotkey(
+            key,
+            &settings.channel_cycle_hotkey,
+            &settings.resend_last_hotkey,
+        );
+
+        #[cfg(windows)]
+        if pref != HotkeyBackend::Register || requires_llhook {
+            if requires_llhook && pref == HotkeyBackend::Register {
+                kotone_core::log::log("鼠标侧键不受 RegisterHotKey 支持，已强制使用低层键鼠钩子");
+            }
             match self.llhook.register(key, mode) {
                 Ok(()) => {
                     kotone_core::log::log(&format!(
@@ -382,6 +400,15 @@ impl HotkeyManager {
                     return Ok(());
                 }
                 Err(e) => {
+                    if requires_llhook {
+                        let msg = format!(
+                            "鼠标侧键热键需要低层键鼠钩子，但钩子注册失败：{e}。\
+                             请将 Kotone 加入安全软件信任区后重试"
+                        );
+                        kotone_core::log::log(&format!("hotkey register FAILED: {msg}"));
+                        *self.last_error.lock().unwrap() = Some(msg.clone());
+                        return Err(msg);
+                    }
                     kotone_core::log::log(&format!("llhook 后端不可用，回退 RegisterHotKey: {e}"));
                 }
             }
@@ -605,7 +632,7 @@ impl HotkeyManager {
         }
     }
 
-    /// 开始热键捕获（设置页「点击录入」）：LL 钩子捕获下一个按键组合，
+    /// 开始热键捕获（设置页「点击录入」）：LL 钩子捕获下一个键盘组合或鼠标侧键，
     /// 结果经 `kotone://hotkey-capture` 事件推送（{combo} / {cancelled} / {timeout}）。
     /// 捕获期间正常热键匹配暂停（matcher 吞掉录入主键、不产生会话事件）。
     pub fn start_capture(&self, app: AppHandle) -> Result<(), String> {
@@ -628,8 +655,8 @@ impl HotkeyManager {
                 .capture_next(cb, std::time::Duration::from_secs(10))
                 .map_err(|detail| {
                     format!(
-                        "低级键盘钩子自检未通过，暂时无法录入快捷键。\
-                         可能是 360、火绒等安全软件拦截了键盘钩子或模拟输入；\
+                        "低级键鼠钩子自检未通过，暂时无法录入快捷键。\
+                         可能是 360、火绒等安全软件拦截了输入钩子或模拟输入；\
                          请将 Kotone 加入信任区后重试。检测详情：{detail}"
                     )
                 })
@@ -658,5 +685,18 @@ pub fn detect_conflicts(key: &str) -> Vec<String> {
         )]
     } else {
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mouse_button_in_any_hotkey_requires_llhook() {
+        assert!(any_mouse_hotkey("Mouse4", "", ""));
+        assert!(any_mouse_hotkey("F8", "Ctrl+Mouse5", ""));
+        assert!(any_mouse_hotkey("F8", "Shift+F9", "XButton1"));
+        assert!(!any_mouse_hotkey("F8", "Shift+F9", "Alt+V"));
     }
 }
