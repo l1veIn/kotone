@@ -131,7 +131,7 @@ jobs:
         run: |
           $coscli = Join-Path $env:RUNNER_TEMP "coscli.exe"
           Invoke-WebRequest `
-            -Uri "https://github.com/tencentyun/coscli/releases/download/v1.0.8/coscli-windows-amd64.exe" `
+            -Uri "https://github.com/tencentyun/coscli/releases/download/v1.0.8/coscli-v1.0.8-windows-amd64.exe" `
             -OutFile $coscli
           $expected = "74F3B5EBBE89BE2C013F9D3B2D8968691372801F2671BB31548EAB4476FE9179"
           $actual = (Get-FileHash -LiteralPath $coscli -Algorithm SHA256).Hash
