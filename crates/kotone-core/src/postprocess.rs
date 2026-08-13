@@ -28,22 +28,13 @@ fn default_enabled() -> bool {
 }
 
 /// 用户配置中的后处理总开关与当前有序 pipeline。
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PostProcessingConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
     pub pipeline: PipelineConfig,
-}
-
-impl Default for PostProcessingConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            pipeline: PipelineConfig::default(),
-        }
-    }
 }
 
 /// 一条线性 pipeline；step 数组顺序就是执行顺序。
