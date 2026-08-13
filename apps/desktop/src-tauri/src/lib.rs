@@ -20,10 +20,10 @@ use kotone_core::profile::{
     self, format_hotwords_export, GameProfile, HotwordMergeReport, ProfileDeleteOutcome,
 };
 use kotone_core::runtime::RuntimePhase;
-use kotone_core::connection::ConnectionResolver;
+use kotone_core::connection::{Connection, ConnectionResolver, SecretStore};
 use kotone_core::settings::{
     self, OverlayConfig, OverlayPosition, OverlayStyle, OverlayVisibility, Settings,
-    SettingsConnectionResolver, SettingsRepository,
+    SettingsRepository,
 };
 use kotone_core::stt::{EngineInfo, EngineRegistry};
 use kotone_core::{log, process_log};
@@ -41,6 +41,7 @@ pub struct SharedState {
     pub engines: Arc<EngineRegistry>,
     pub processors: Arc<kotone_core::postprocess::ProcessorRegistry>,
     pub connections: Arc<dyn ConnectionResolver>,
+    pub secrets: Arc<dyn SecretStore>,
     pub injector: Arc<dyn Injector>,
 }
 
@@ -664,6 +665,59 @@ fn list_post_processors(
     state.processors.list_info()
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConnectionPresetInfo {
+    id: String,
+    display_name: String,
+    default_base_url: String,
+    default_model: String,
+}
+
+#[tauri::command]
+fn list_connection_presets() -> Vec<ConnectionPresetInfo> {
+    kotone_core::connection::CONNECTION_PRESETS
+        .iter()
+        .map(|preset| ConnectionPresetInfo {
+            id: preset.id.into(),
+            display_name: preset.display_name.into(),
+            default_base_url: preset.default_base_url.into(),
+            default_model: preset.default_model.into(),
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn list_connections(
+    state: tauri::State<SharedState>,
+) -> Result<Vec<kotone_postprocess::connections::ConnectionInfo>, String> {
+    let settings = state.settings.read().unwrap();
+    kotone_postprocess::connections::list_connection_info(&settings, state.secrets.as_ref())
+}
+
+#[tauri::command]
+fn upsert_connection(
+    state: tauri::State<SharedState>,
+    connection: Connection,
+    api_key: Option<String>,
+) -> Result<Settings, String> {
+    kotone_postprocess::connections::upsert_connection(
+        &state.settings_repository,
+        state.secrets.as_ref(),
+        connection,
+        api_key,
+    )
+}
+
+#[tauri::command]
+fn delete_connection(state: tauri::State<SharedState>, id: String) -> Result<Settings, String> {
+    kotone_postprocess::connections::delete_connection(
+        &state.settings_repository,
+        state.secrets.as_ref(),
+        &id,
+    )
+}
+
 /// 独立试跑一条后处理 pipeline；不经过 orchestrator，因此不会写历史或触发注入。
 /// 未传 pipeline 时使用当前设置的 pipeline 快照，即使总开关关闭也会执行其步骤。
 #[tauri::command]
@@ -710,6 +764,9 @@ fn update_settings(
         .map(|rt| rt.phase() == RuntimePhase::Running)
         .unwrap_or(false);
     let manager = app.try_state::<HotkeyManager>();
+    if patch.get("connections").is_some() {
+        return Err("连接请使用专用接口保存，不能写入通用设置".into());
+    }
     let (old, updated, ()) = state.settings_repository.update_with(
         |next| {
             let mut merged =
@@ -1533,8 +1590,14 @@ pub fn run() {
                 return Err(Box::<dyn std::error::Error>::from(error));
             }
             let processors = Arc::new(processor_registry);
-            let connections: Arc<dyn ConnectionResolver> =
-                Arc::new(SettingsConnectionResolver::new(settings.clone()));
+            let secrets: Arc<dyn SecretStore> =
+                Arc::new(kotone_postprocess::secrets::KeyringSecretStore);
+            let connections: Arc<dyn ConnectionResolver> = Arc::new(
+                kotone_postprocess::secrets::SecretBackedResolver::new(
+                    settings.clone(),
+                    secrets.clone(),
+                ),
+            );
             let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter {
                 app: app.handle().clone(),
                 vis_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -1570,6 +1633,7 @@ pub fn run() {
                 engines,
                 processors,
                 connections,
+                secrets,
                 injector,
             });
             app.manage(HotkeyManager::new(app.handle(), orchestrator.clone()));
@@ -1616,6 +1680,10 @@ pub fn run() {
             get_startup_options,
             get_settings,
             list_post_processors,
+            list_connection_presets,
+            list_connections,
+            upsert_connection,
+            delete_connection,
             test_post_processing,
             get_settings_load_warning,
             update_settings,

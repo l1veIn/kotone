@@ -8,7 +8,9 @@ use std::sync::Arc;
 use kotone_core::postprocess::{ProcessorFactory, ProcessorRegistry};
 
 pub mod blocklist;
+pub mod connections;
 pub mod mock;
+pub mod secrets;
 
 pub fn builtin_processors() -> Vec<Arc<dyn ProcessorFactory>> {
     vec![

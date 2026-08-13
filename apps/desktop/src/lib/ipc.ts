@@ -264,6 +264,17 @@ export interface Connection {
   model: string;
 }
 
+export interface ConnectionInfo extends Connection {
+  hasApiKey: boolean;
+}
+
+export interface ConnectionPreset {
+  id: string;
+  displayName: string;
+  defaultBaseUrl: string;
+  defaultModel: string;
+}
+
 // ---------- 游戏 profile ----------
 /** 聊天频道声明（ADR-008）：按键策略与前缀策略正交，可同时设置 */
 export interface ProfileChannel {
@@ -685,6 +696,68 @@ export async function listPostProcessors(): Promise<PostProcessorInfo[]> {
     ];
   }
   return invoke<PostProcessorInfo[]>("list_post_processors");
+}
+
+const mockConnectionPresets: ConnectionPreset[] = [
+  {
+    id: "dashscope",
+    displayName: "通义千问（北京）",
+    defaultBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    defaultModel: "qwen-turbo",
+  },
+  {
+    id: "custom",
+    displayName: "自定义 OpenAI 兼容",
+    defaultBaseUrl: "",
+    defaultModel: "",
+  },
+];
+
+const mockConnectionSecrets = new Map<string, string>();
+
+export async function listConnectionPresets(): Promise<ConnectionPreset[]> {
+  if (!isTauri) return mockConnectionPresets.map((item) => ({ ...item }));
+  return invoke<ConnectionPreset[]>("list_connection_presets");
+}
+
+export async function listConnections(): Promise<ConnectionInfo[]> {
+  if (!isTauri) {
+    return mock.settings.connections.map((connection) => ({
+      ...clone(connection),
+      hasApiKey: mockConnectionSecrets.has(connection.id),
+    }));
+  }
+  return invoke<ConnectionInfo[]>("list_connections");
+}
+
+export async function upsertConnection(
+  connection: Connection,
+  apiKey?: string,
+): Promise<Settings> {
+  if (!isTauri) {
+    if (!connection.id.trim() || !connection.displayName.trim() || !connection.baseUrl.trim()) {
+      throw new Error("连接名称和接口地址不能为空");
+    }
+    const existed = mock.settings.connections.some((item) => item.id === connection.id);
+    const secret = apiKey?.trim();
+    if (!existed && !secret) throw new Error("新建连接必须填写 API key");
+    if (secret) mockConnectionSecrets.set(connection.id, secret);
+    const next = clone(connection);
+    const index = mock.settings.connections.findIndex((item) => item.id === next.id);
+    if (index >= 0) mock.settings.connections[index] = next;
+    else mock.settings.connections.push(next);
+    return clone(mock.settings);
+  }
+  return invoke<Settings>("upsert_connection", { connection, apiKey: apiKey ?? null });
+}
+
+export async function deleteConnection(id: string): Promise<Settings> {
+  if (!isTauri) {
+    mock.settings.connections = mock.settings.connections.filter((item) => item.id !== id);
+    mockConnectionSecrets.delete(id);
+    return clone(mock.settings);
+  }
+  return invoke<Settings>("delete_connection", { id });
 }
 
 /**

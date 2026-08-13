@@ -439,6 +439,10 @@ impl SettingsRepository {
         }
     }
 
+    pub fn snapshot(&self) -> Settings {
+        self.current.read().unwrap().clone()
+    }
+
     /// 仅修改配置的常用事务。
     pub fn update<M>(&self, mutate: M) -> Result<Settings, String>
     where

@@ -96,6 +96,13 @@ pub trait ConnectionResolver: Send + Sync {
     fn resolve(&self, connection_id: &str) -> Result<ResolvedConnection, String>;
 }
 
+/// 按 connection id 存取 API key。实现不得把密钥写入 Settings / 日志。
+pub trait SecretStore: Send + Sync {
+    fn get(&self, connection_id: &str) -> Result<Option<String>, String>;
+    fn set(&self, connection_id: &str, secret: &str) -> Result<(), String>;
+    fn delete(&self, connection_id: &str) -> Result<(), String>;
+}
+
 /// 设置页「新建连接」用的厂商预设。不是处理器，也不进 pipeline JSON。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConnectionProviderPreset {
