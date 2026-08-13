@@ -28,6 +28,7 @@ test("forced onboarding completes the full guided setup and can be reopened", as
   await expect(onboarding).toBeHidden();
 
   await page.getByRole("button", { name: "高级", exact: true }).click();
+  await page.getByTestId("advanced-nav-system").click();
   await page.getByRole("button", { name: "重新运行向导", exact: true }).click();
   await expect(onboarding).toBeVisible();
 });

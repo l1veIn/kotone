@@ -76,6 +76,8 @@ test("a discovered blocklist processor works by default and saves a custom CSV p
 test("online polish is added best-effort after a saved connection", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-processing").click();
+  await page.getByTestId("open-advanced-connections").click();
+  await expect(page.getByTestId("advanced-nav-connections")).toHaveClass(/bg-kotone-cyan/);
 
   await page.getByTestId("connection-preset-dashscope").click();
   await expect(page.getByTestId("connection-editor")).toBeVisible();
@@ -83,6 +85,7 @@ test("online polish is added best-effort after a saved connection", async ({ pag
   await page.getByTestId("connection-save").click();
   await expect(page.getByText("已保存密钥")).toBeVisible();
 
+  await page.getByTestId("settings-nav-processing").click();
   await page.getByTestId("add-postprocess-step").click();
   const polish = page.getByTestId("processor-option-writing.openai-compat");
   await expect(polish).toContainText("AI 润色");

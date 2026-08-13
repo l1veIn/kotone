@@ -6,6 +6,7 @@ test("exports a privacy-safe diagnostic package from the advanced page", async (
   await page.goto("/#/settings?onboarding=never");
 
   await page.getByRole("button", { name: "高级", exact: true }).click();
+  await page.getByTestId("advanced-nav-system").click();
 
   await expect(
     page.getByText("不包含录音、识别文本和热词，可安全分享给测试群管理员"),

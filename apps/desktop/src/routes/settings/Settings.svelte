@@ -34,6 +34,7 @@
   import GeneralPage from "./pages/GeneralPage.svelte";
   import TextProcessingPage from "./pages/TextProcessingPage.svelte";
   import AdvancedPage from "./pages/AdvancedPage.svelte";
+  import type { AdvancedSection } from "./pages/advanced/types";
   import GamePage from "./pages/GamePage.svelte";
   import HistoryPage from "./pages/HistoryPage.svelte";
   import AboutPage from "./pages/AboutPage.svelte";
@@ -59,6 +60,12 @@
   ];
 
   let page = $state<PageId>("general");
+  let advancedSection = $state<AdvancedSection>("models");
+
+  function openAdvanced(section: AdvancedSection = "models") {
+    advancedSection = section;
+    page = "advanced";
+  }
   /** 右侧滚动容器：切页时复位到顶部（角色详情页是长滚动页） */
   let mainEl = $state<HTMLElement>();
   $effect(() => {
@@ -157,7 +164,7 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-kotone-deep text-white">
   <!-- 自绘标题栏（decorations:false）：拖拽区 + 运行状态 + 启动/停止 + 窗口控制 -->
-  <Titlebar onOpenAdvanced={() => (page = "advanced")} />
+  <Titlebar onOpenAdvanced={() => openAdvanced("models")} />
   <div class="relative flex min-h-0 flex-1 overflow-hidden">
   <!-- 窗口底纹理：switch 无缝 tile，极低透明度 -->
   <div
@@ -214,11 +221,15 @@
     {#if loading}
       <p class="px-8 py-10 text-sm text-white/50">加载配置中…</p>
     {:else if page === "general"}
-      <GeneralPage onOpenAdvanced={() => (page = "advanced")} />
+      <GeneralPage onOpenAdvanced={() => openAdvanced("models")} />
     {:else if page === "advanced"}
-      <AdvancedPage onOpenOnboarding={() => (showOnboarding = true)} />
+      <AdvancedPage
+        section={advancedSection}
+        onSectionChange={(next) => (advancedSection = next)}
+        onOpenOnboarding={() => (showOnboarding = true)}
+      />
     {:else if page === "processing"}
-      <TextProcessingPage />
+      <TextProcessingPage onOpenConnections={() => openAdvanced("connections")} />
     {:else if page === "game"}
       <GamePage />
     {:else if page === "history"}

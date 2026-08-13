@@ -7,15 +7,10 @@
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import {
     isTauri,
-    deleteConnection,
-    listConnectionPresets,
     listConnections,
     listPostProcessors,
     testPostProcessing,
-    upsertConnection,
-    type Connection,
     type ConnectionInfo,
-    type ConnectionPreset,
     type PostProcessorConfigField,
     type PostProcessorInfo,
     type PostProcessingConfig,
@@ -25,13 +20,11 @@
   import Toggle from "../../../lib/components/Toggle.svelte";
   import { errText, patchSettings, settingsStore, toast } from "../../../lib/stores/ui";
 
+  let { onOpenConnections }: { onOpenConnections?: () => void } = $props();
+
   let processors = $state<PostProcessorInfo[]>([]);
   let loadingProcessors = $state(true);
   let connections = $state<ConnectionInfo[]>([]);
-  let presets = $state<ConnectionPreset[]>([]);
-  let editingConnection = $state<Connection | null>(null);
-  let editingApiKey = $state("");
-  let savingConnection = $state(false);
   let saving = $state(false);
   let adding = $state(false);
   let testInput = $state("对面打野在下路");
@@ -47,64 +40,13 @@
 
   onMount(async () => {
     try {
-      [processors, connections, presets] = await Promise.all([
-        listPostProcessors(),
-        listConnections(),
-        listConnectionPresets(),
-      ]);
+      [processors, connections] = await Promise.all([listPostProcessors(), listConnections()]);
     } catch (error) {
       toast(false, `加载文字处理模块失败：${errText(error)}`);
     } finally {
       loadingProcessors = false;
     }
   });
-
-  function newConnectionDraft(preset: ConnectionPreset): Connection {
-    return {
-      id: `${preset.id}-${Date.now().toString(36)}`,
-      displayName: preset.displayName,
-      kind: "remote",
-      provider: preset.id,
-      baseUrl: preset.defaultBaseUrl,
-      model: preset.defaultModel,
-    };
-  }
-
-  async function saveConnection() {
-    if (!editingConnection || savingConnection) return;
-    savingConnection = true;
-    try {
-      const next = await upsertConnection(editingConnection, editingApiKey || undefined);
-      settingsStore.set(next);
-      connections = await listConnections();
-      editingConnection = null;
-      editingApiKey = "";
-      toast(true, "连接已保存，密钥不会写入配置文件");
-    } catch (error) {
-      toast(false, `保存连接失败：${errText(error)}`);
-    } finally {
-      savingConnection = false;
-    }
-  }
-
-  async function removeConnection(id: string) {
-    if (savingConnection) return;
-    savingConnection = true;
-    try {
-      const next = await deleteConnection(id);
-      settingsStore.set(next);
-      connections = await listConnections();
-      if (editingConnection?.id === id) {
-        editingConnection = null;
-        editingApiKey = "";
-      }
-      toast(true, "连接已删除");
-    } catch (error) {
-      toast(false, `删除连接失败：${errText(error)}`);
-    } finally {
-      savingConnection = false;
-    }
-  }
 
   function descriptor(processorId: string): PostProcessorInfo | undefined {
     return processors.find((processor) => processor.id === processorId);
@@ -309,130 +251,19 @@
     <section class="mt-4">
       <div class="flex items-end justify-between gap-4">
         <div>
-          <h2 class="text-sm font-semibold text-kotone-cyan/90">API 连接</h2>
-          <p class="mt-1 text-[11px] text-white/45">
-            润色和翻译引用这里的连接。API key 进系统凭据库，不会写入 config.json。
-          </p>
-        </div>
-      </div>
-
-      <div class="mt-3 flex flex-wrap gap-2">
-        {#each presets as preset}
-          <button
-            data-testid={`connection-preset-${preset.id}`}
-            class="rounded-lg bg-white/6 px-2.5 py-1.5 text-[11px] text-white/70 ring-1 ring-white/12 transition hover:bg-white/12 disabled:opacity-50"
-            disabled={savingConnection}
-            onclick={() => {
-              editingConnection = newConnectionDraft(preset);
-              editingApiKey = "";
-            }}
-          >
-            + {preset.displayName}
-          </button>
-        {/each}
-      </div>
-
-      {#if connections.length === 0 && !editingConnection}
-        <p class="mt-3 rounded-xl border border-dashed border-white/15 px-4 py-6 text-center text-[11px] text-white/40">
-          还没有连接。先添加一条在线接口，再把它绑到处理步骤上。
-        </p>
-      {/if}
-
-      {#if connections.length > 0}
-        <div class="mt-3 flex flex-col gap-2">
-          {#each connections as connection (connection.id)}
-            <article
-              data-testid={`connection-card-${connection.id}`}
-              class="rounded-xl bg-white/4 px-3 py-2.5 ring-1 ring-white/10"
-            >
-              <div class="flex items-start justify-between gap-3">
-                <div class="min-w-0">
-                  <p class="truncate text-xs font-semibold text-white/85">{connection.displayName}</p>
-                  <p class="mt-0.5 truncate text-[10px] text-white/40">
-                    {connection.model} · {connection.hasApiKey ? "已保存密钥" : "缺少密钥"}
-                  </p>
-                </div>
-                <div class="flex shrink-0 gap-1">
-                  <button
-                    class="rounded-md bg-white/7 px-2 py-1 text-[11px] text-white/65 ring-1 ring-white/10 hover:bg-white/12"
-                    onclick={() => {
-                      editingConnection = { ...connection };
-                      editingApiKey = "";
-                    }}
-                  >编辑</button>
-                  <button
-                    class="rounded-md bg-kotone-pink/8 px-2 py-1 text-[11px] text-kotone-pink/80 ring-1 ring-kotone-pink/15 hover:bg-kotone-pink/16"
-                    disabled={savingConnection}
-                    onclick={() => void removeConnection(connection.id)}
-                  >删除</button>
-                </div>
-              </div>
-            </article>
-          {/each}
-        </div>
-      {/if}
-
-      {#if editingConnection}
-        <div class="kotone-panel mt-3 space-y-2.5 p-4" data-testid="connection-editor">
-          <label class="block">
-            <span class="text-[11px] text-white/55">显示名称</span>
-            <input
-              class="mt-1 w-full rounded-md bg-white/6 px-2.5 py-1.5 text-[12px] text-white/85 ring-1 ring-white/12 outline-none focus:ring-kotone-cyan/45"
-              bind:value={editingConnection.displayName}
-            />
-          </label>
-          <label class="block">
-            <span class="text-[11px] text-white/55">接口地址</span>
-            <input
-              class="mt-1 w-full rounded-md bg-white/6 px-2.5 py-1.5 text-[12px] text-white/85 ring-1 ring-white/12 outline-none focus:ring-kotone-cyan/45"
-              bind:value={editingConnection.baseUrl}
-            />
-          </label>
-          <label class="block">
-            <span class="text-[11px] text-white/55">模型</span>
-            <input
-              class="mt-1 w-full rounded-md bg-white/6 px-2.5 py-1.5 text-[12px] text-white/85 ring-1 ring-white/12 outline-none focus:ring-kotone-cyan/45"
-              bind:value={editingConnection.model}
-            />
-          </label>
-          <label class="block">
-            <span class="text-[11px] text-white/55">API key</span>
-            <input
-              type="password"
-              autocomplete="off"
-              data-testid="connection-api-key"
-              class="mt-1 w-full rounded-md bg-white/6 px-2.5 py-1.5 text-[12px] text-white/85 ring-1 ring-white/12 outline-none focus:ring-kotone-cyan/45"
-              placeholder={connections.some((item) => item.id === editingConnection?.id && item.hasApiKey)
-                ? "已保存，留空则不修改"
-                : "不会写入配置文件"}
-              bind:value={editingApiKey}
-            />
-          </label>
-          <div class="flex justify-end gap-2 pt-1">
-            <button
-              class="rounded-md bg-white/7 px-3 py-1.5 text-[11px] text-white/65 ring-1 ring-white/12"
-              onclick={() => {
-                editingConnection = null;
-                editingApiKey = "";
-              }}
-            >取消</button>
-            <button
-              data-testid="connection-save"
-              class="rounded-md bg-kotone-cyan px-3 py-1.5 text-[11px] font-semibold text-kotone-deep disabled:opacity-40"
-              disabled={savingConnection}
-              onclick={() => void saveConnection()}
-            >保存连接</button>
-          </div>
-        </div>
-      {/if}
-    </section>
-
-    <section class="mt-4">
-      <div class="flex items-end justify-between gap-4">
-        <div>
           <h2 class="text-sm font-semibold text-kotone-cyan/90">处理流程</h2>
           <p class="mt-1 text-[11px] text-white/45">从上到下依次执行，后一步会接收前一步的结果。</p>
         </div>
+        <div class="flex items-center gap-2">
+        {#if onOpenConnections}
+          <button
+            data-testid="open-advanced-connections"
+            class="rounded-lg bg-white/6 px-3 py-1.5 text-[11px] text-white/60 ring-1 ring-white/10 transition hover:bg-white/10"
+            onclick={onOpenConnections}
+          >
+            管理 API 连接
+          </button>
+        {/if}
         <button
           data-testid="add-postprocess-step"
           class="rounded-lg bg-kotone-cyan/15 px-3 py-1.5 text-xs font-semibold text-kotone-cyan ring-1 ring-kotone-cyan/35 transition hover:bg-kotone-cyan/25 active:scale-95 disabled:opacity-50"
@@ -441,6 +272,7 @@
         >
           {adding ? "收起" : "+ 添加步骤"}
         </button>
+        </div>
       </div>
 
       {#if adding}
@@ -574,7 +406,7 @@
                       </div>
                       <p class="mt-1.5 text-[10px] leading-relaxed text-white/35">
                         {field.kind === "connection" && connections.length === 0
-                          ? "请先在上方添加一条 API 连接。"
+                          ? "请先到「高级 → API 连接」添加一条接口。"
                           : field.description}
                       </p>
                     </div>
