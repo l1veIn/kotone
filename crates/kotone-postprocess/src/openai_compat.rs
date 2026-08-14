@@ -6,7 +6,7 @@ use kotone_core::connection::ConnectionResolver;
 use kotone_core::postprocess::{
     NetworkAccess, ProcessError, ProcessFuture, ProcessingCancelToken, ProcessingContext,
     ProcessorCategory, ProcessorConfigField, ProcessorConfigFieldKind, ProcessorDescriptor,
-    ProcessorFactory, TextDocument, TextProcessor,
+    ProcessorFactory, ProcessorFieldPreset, TextDocument, TextProcessor,
 };
 use serde_json::{json, Value};
 
@@ -15,10 +15,10 @@ use crate::client::{chat_completion, validate_output, ChatMessage, ChatRequest};
 pub const PROCESSOR_ID: &str = "writing.openai-compat";
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = "\
-只输出清理后的游戏聊天短句。
+只输出清理后的短句。
 删除口癖（那个/就是/嗯/啊），修正明显识别错误。
-不要改变意思，不要变正式，不要解释。
-保留游戏术语原文：闪现、大龙、小龙、gank、flash、baron。";
+不要改变意思，不要添词，不要变正式，不要解释。
+原文里已有的专有名词保持原样。";
 
 pub struct OpenAiCompatFactory {
     pub connections: Arc<dyn ConnectionResolver>,
@@ -41,14 +41,20 @@ impl ProcessorFactory for OpenAiCompatFactory {
                     kind: ProcessorConfigFieldKind::Connection,
                     required: true,
                     file_extensions: Vec::new(),
+                    placeholder: String::new(),
+                    presets: Vec::new(),
+                    compatible_providers: Vec::new(),
                 },
                 ProcessorConfigField {
                     key: "systemPrompt".into(),
-                    display_name: "系统提示（可选）".into(),
-                    description: "留空则使用默认的少改、去口癖提示。".into(),
+                    display_name: "系统提示".into(),
+                    description: "留空则使用默认的少改、去口癖提示。点下方模板可一键填入。".into(),
                     kind: ProcessorConfigFieldKind::Text,
                     required: false,
                     file_extensions: Vec::new(),
+                    placeholder: DEFAULT_SYSTEM_PROMPT.into(),
+                    presets: writing_prompt_presets(),
+                    compatible_providers: Vec::new(),
                 },
             ],
         }
@@ -119,7 +125,7 @@ impl TextProcessor for OpenAiCompatProcessor {
                     ],
                     temperature: 0.2,
                     max_tokens: self.max_tokens,
-                    extra_body: json!({ "enable_thinking": false }),
+                    extra_body: extra_body_for(&self.connection.provider),
                 },
                 &cancel,
             )
@@ -136,6 +142,73 @@ impl TextProcessor for OpenAiCompatProcessor {
                 text,
             })
         })
+    }
+}
+
+fn writing_prompt_presets() -> Vec<ProcessorFieldPreset> {
+    let keep_terms = "不要添加原文没有的词。专有名词保持原样。不要解释。";
+    vec![
+        ProcessorFieldPreset {
+            id: "default".into(),
+            display_name: "少改去口癖".into(),
+            value: DEFAULT_SYSTEM_PROMPT.into(),
+        },
+        ProcessorFieldPreset {
+            id: "teammate".into(),
+            display_name: "队友短讯".into(),
+            value: format!(
+                "把口语收成能直接发进游戏聊天的一句短话。删口癖，不扩写。{keep_terms}"
+            ),
+        },
+        ProcessorFieldPreset {
+            id: "cute".into(),
+            display_name: "猫娘可爱".into(),
+            value: format!(
+                "改写成可爱、带一点猫娘口吻的短句，但意思不变。{keep_terms}"
+            ),
+        },
+        ProcessorFieldPreset {
+            id: "poet".into(),
+            display_name: "诗人".into(),
+            value: format!("改写成简短诗意的一句，不堆砌辞藻。{keep_terms}"),
+        },
+        ProcessorFieldPreset {
+            id: "academic".into(),
+            display_name: "严谨学术".into(),
+            value: format!("改写成简洁、克制的书面短句。{keep_terms}"),
+        },
+        ProcessorFieldPreset {
+            id: "business".into(),
+            display_name: "商务正式".into(),
+            value: format!("改写成礼貌、正式的短句。{keep_terms}"),
+        },
+        ProcessorFieldPreset {
+            id: "humor".into(),
+            display_name: "幽默段子".into(),
+            value: format!("改写成俏皮短句，不要变成段子长文。{keep_terms}"),
+        },
+        ProcessorFieldPreset {
+            id: "english".into(),
+            display_name: "改写成英文".into(),
+            value: format!(
+                "改写成一句简短英文游戏聊天。专有名词保持原文。这是润色，不是机器翻译。{keep_terms}"
+            ),
+        },
+        ProcessorFieldPreset {
+            id: "fix-only".into(),
+            display_name: "只纠错".into(),
+            value: format!(
+                "只修正明显识别错误，不改语气、不删口癖、不润色。{keep_terms}"
+            ),
+        },
+    ]
+}
+
+fn extra_body_for(provider: &str) -> Value {
+    // enable_thinking 是通义 Qwen3 的字段。发给 Gemini / OpenAI / Groq 会被 400。
+    match provider {
+        "dashscope" | "dashscope-intl" => json!({ "enable_thinking": false }),
+        _ => json!({}),
     }
 }
 
@@ -207,5 +280,31 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(output.text, "闪现交了");
+    }
+
+    #[test]
+    fn extra_body_is_qwen_only() {
+        assert_eq!(
+            extra_body_for("dashscope"),
+            json!({ "enable_thinking": false })
+        );
+        assert_eq!(extra_body_for("gemini"), json!({}));
+        assert_eq!(extra_body_for("openai"), json!({}));
+    }
+
+    #[test]
+    fn writing_prompt_exposes_default_and_templates() {
+        let field = OpenAiCompatFactory {
+            connections: Arc::new(StaticResolver(resolved("https://example.test/v1".into()))),
+        }
+        .descriptor()
+        .config_fields
+        .into_iter()
+        .find(|field| field.key == "systemPrompt")
+        .unwrap();
+        assert!(field.placeholder.contains("删除口癖"));
+        assert_eq!(field.presets.len(), 9);
+        assert_eq!(field.presets[0].id, "default");
+        assert_eq!(field.presets[0].value, DEFAULT_SYSTEM_PROMPT);
     }
 }

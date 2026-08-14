@@ -110,6 +110,8 @@ pub struct ConnectionProviderPreset {
     pub display_name: &'static str,
     pub default_base_url: &'static str,
     pub default_model: &'static str,
+    /// 厂商控制台里创建 API key 的页面；`None` = 自定义端点，不展示跳转。
+    pub api_key_url: Option<&'static str>,
 }
 
 pub const CONNECTION_PRESETS: &[ConnectionProviderPreset] = &[
@@ -118,42 +120,49 @@ pub const CONNECTION_PRESETS: &[ConnectionProviderPreset] = &[
         display_name: "通义千问（北京）",
         default_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
         default_model: "qwen-turbo",
+        api_key_url: Some("https://bailian.console.aliyun.com/?apiKey=1#/api-key"),
     },
     ConnectionProviderPreset {
         id: "dashscope-intl",
         display_name: "通义千问（国际）",
         default_base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         default_model: "qwen-turbo",
+        api_key_url: Some("https://modelstudio.console.alibabacloud.com/?tab=dashboard#/api-key"),
     },
     ConnectionProviderPreset {
         id: "groq",
         display_name: "Groq",
         default_base_url: "https://api.groq.com/openai/v1",
         default_model: "llama-3.1-8b-instant",
+        api_key_url: Some("https://console.groq.com/keys"),
     },
     ConnectionProviderPreset {
         id: "gemini",
         display_name: "Gemini",
         default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai/",
         default_model: "gemini-2.5-flash-lite",
+        api_key_url: Some("https://aistudio.google.com/apikey"),
     },
     ConnectionProviderPreset {
         id: "xai",
         display_name: "xAI Grok",
         default_base_url: "https://api.x.ai/v1",
         default_model: "grok-4-fast",
+        api_key_url: Some("https://console.x.ai/"),
     },
     ConnectionProviderPreset {
         id: "openai",
         display_name: "OpenAI",
         default_base_url: "https://api.openai.com/v1",
         default_model: "gpt-4.1-mini",
+        api_key_url: Some("https://platform.openai.com/api-keys"),
     },
     ConnectionProviderPreset {
         id: "custom",
         display_name: "自定义 OpenAI 兼容",
         default_base_url: "",
         default_model: "",
+        api_key_url: None,
     },
 ];
 
@@ -185,6 +194,22 @@ mod tests {
             model: "qwen".into(),
         };
         assert!(connection.validate().unwrap_err().contains("尚未实现"));
+    }
+
+    #[test]
+    fn named_presets_have_https_api_key_pages() {
+        for preset in CONNECTION_PRESETS {
+            if preset.id == "custom" {
+                assert!(preset.api_key_url.is_none());
+                continue;
+            }
+            let url = preset.api_key_url.expect(preset.id);
+            assert!(
+                url.starts_with("https://"),
+                "{} 的 API key 页必须是 https：{url}",
+                preset.id
+            );
+        }
     }
 
     #[test]

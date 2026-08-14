@@ -672,6 +672,7 @@ struct ConnectionPresetInfo {
     display_name: String,
     default_base_url: String,
     default_model: String,
+    api_key_url: Option<String>,
 }
 
 #[tauri::command]
@@ -683,6 +684,7 @@ fn list_connection_presets() -> Vec<ConnectionPresetInfo> {
             display_name: preset.display_name.into(),
             default_base_url: preset.default_base_url.into(),
             default_model: preset.default_model.into(),
+            api_key_url: preset.api_key_url.map(str::to_string),
         })
         .collect()
 }

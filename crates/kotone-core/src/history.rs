@@ -93,6 +93,12 @@ pub struct HistoryRecord {
     pub profile_id: Option<String>,
     /// 最终文本（无产出为空串）
     pub final_text: String,
+    /// STT 识别原文；旧记录或缺省为 None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_text: Option<String>,
+    /// 后处理墙钟耗时；未跑 pipeline 或旧记录为 None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_duration_ms: Option<u64>,
     pub audio_ms: u64,
     pub first_partial_ms: Option<u64>,
     pub finalize_latency_ms: Option<u64>,
@@ -370,6 +376,8 @@ mod tests {
             engine_id: "mock-stream".to_string(),
             profile_id: Some("lol".to_string()),
             final_text: format!("文本-{session_id}"),
+            source_text: None,
+            process_duration_ms: None,
             audio_ms: 1500,
             first_partial_ms: Some(300),
             finalize_latency_ms: Some(120),

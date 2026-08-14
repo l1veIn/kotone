@@ -186,6 +186,8 @@ struct HistoryDraft {
     audio_file: Option<String>,
     first_partial_ms: Option<u64>,
     final_text: String,
+    source_text: Option<String>,
+    process_duration_ms: Option<u64>,
     finalize_latency_ms: Option<u64>,
     /// error 终态已落账（Error 态保留文本供重试：重试成功仍写 sent；
     /// error 后的 cancel 是清理动作，不再双记 cancelled）
@@ -231,6 +233,8 @@ impl HistoryDraft {
             audio_file: None,
             first_partial_ms: None,
             final_text: String::new(),
+            source_text: None,
+            process_duration_ms: None,
             finalize_latency_ms: None,
             reported: false,
             vad_speech_seen: false,
@@ -612,6 +616,8 @@ impl Orchestrator {
                 audio_file: None,
                 first_partial_ms: None,
                 final_text: String::new(),
+                source_text: None,
+                process_duration_ms: None,
                 finalize_latency_ms: None,
                 reported: false,
                 vad_speech_seen: false,
@@ -1062,6 +1068,9 @@ impl Orchestrator {
                 // STT 产物与可交付文本从此分离。pipeline 关闭/为空时 runner 走零步骤
                 // 透传，不产生 Processing 状态，保证旧配置行为与事件序列不变。
                 let recognized = self.snapshot_recognized_text(t.text);
+                if let Some(h) = &self.inner.lock().unwrap().history {
+                    h.lock().unwrap().source_text = Some(recognized.source_text.clone());
+                }
                 self.run_postprocessing(gen, recognized, &[OrchestratorState::Transcribing])
                     .await?;
             }
@@ -1182,12 +1191,16 @@ impl Orchestrator {
 
         match result {
             Ok(result) => {
+                let duration_ms = started.elapsed().as_millis() as u64;
+                if let Some(h) = &self.inner.lock().unwrap().history {
+                    h.lock().unwrap().process_duration_ms = Some(duration_ms);
+                }
                 self.emit_process(
                     "postprocess_completed",
                     json!({
                         "pipelineId": result.pipeline_id,
                         "stepCount": result.trace.len() as u64,
-                        "durationMs": started.elapsed().as_millis() as u64,
+                        "durationMs": duration_ms,
                         "sourceChars": result.source_text.chars().count() as u64,
                         "finalChars": result.final_text.chars().count() as u64,
                     }),
@@ -1732,6 +1745,8 @@ impl Orchestrator {
                 engine_id: g.engine_id.clone(),
                 profile_id: g.profile_id.clone(),
                 final_text: g.final_text.clone(),
+                source_text: g.source_text.clone(),
+                process_duration_ms: g.process_duration_ms,
                 audio_ms: g.audio_samples * 1000 / crate::eval::SAMPLE_RATE as u64,
                 first_partial_ms: g.first_partial_ms,
                 finalize_latency_ms: g.finalize_latency_ms,

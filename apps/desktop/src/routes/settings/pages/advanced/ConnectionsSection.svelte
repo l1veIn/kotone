@@ -4,6 +4,7 @@
     deleteConnection,
     listConnectionPresets,
     listConnections,
+    openExternal,
     upsertConnection,
     type Connection,
     type ConnectionInfo,
@@ -17,6 +18,12 @@
   let editingApiKey = $state("");
   let savingConnection = $state(false);
   let loading = $state(true);
+
+  const editingApiKeyUrl = $derived.by(() => {
+    const current = editingConnection;
+    if (!current) return "";
+    return presets.find((preset) => preset.id === current.provider)?.apiKeyUrl ?? "";
+  });
 
   onMount(async () => {
     try {
@@ -72,6 +79,14 @@
       toast(false, `删除连接失败：${errText(error)}`);
     } finally {
       savingConnection = false;
+    }
+  }
+
+  async function openApiKeyPage(url: string) {
+    try {
+      await openExternal(url);
+    } catch (error) {
+      toast(false, `打开 API key 页面失败：${errText(error)}`);
     }
   }
 </script>
@@ -164,7 +179,18 @@
           />
         </label>
         <label class="block">
-          <span class="text-[11px] text-white/55">API key</span>
+          <span class="flex items-center justify-between gap-2 text-[11px] text-white/55">
+            <span>API key</span>
+            {#if editingApiKeyUrl}
+              <button
+                type="button"
+                class="text-[11px] font-semibold text-kotone-cyan hover:underline"
+                onclick={() => void openApiKeyPage(editingApiKeyUrl)}
+              >
+                获取 API key
+              </button>
+            {/if}
+          </span>
           <input
             type="password"
             autocomplete="off"

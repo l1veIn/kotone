@@ -1897,6 +1897,11 @@ async fn history_records_the_processed_deliverable_text() {
     let records = kotone_core::history::list_in(dir.path()).unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].final_text, "【对面打野在下路！】");
+    assert_eq!(
+        records[0].source_text.as_deref(),
+        Some("对面打野在下路")
+    );
+    assert!(records[0].process_duration_ms.is_some());
     assert_eq!(sent.lock().unwrap().as_slice(), ["【对面打野在下路！】"]);
 }
 

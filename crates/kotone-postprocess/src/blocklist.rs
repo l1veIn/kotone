@@ -41,6 +41,9 @@ impl ProcessorFactory for BlocklistFilterFactory {
                 kind: ProcessorConfigFieldKind::File,
                 required: false,
                 file_extensions: vec!["csv".into()],
+                placeholder: String::new(),
+                presets: Vec::new(),
+                compatible_providers: Vec::new(),
             }],
         }
     }

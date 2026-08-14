@@ -91,6 +91,12 @@
     return typeof value === "string" ? value : "";
   }
 
+  function connectionsForField(field: PostProcessorConfigField): ConnectionInfo[] {
+    const allowed = field.compatibleProviders ?? [];
+    if (allowed.length === 0) return connections;
+    return connections.filter((connection) => allowed.includes(connection.provider));
+  }
+
   function requiredConfigComplete(
     processor: PostProcessorInfo | undefined,
     config: unknown,
@@ -144,7 +150,7 @@
       processorId: processor.id,
       enabled: !needsConfiguration,
       config: processor.id === "translation.qwen-mt" ? { targetLang: "English" } : {},
-      timeoutMs: internet ? 800 : 5_000,
+      timeoutMs: internet ? 1_500 : 5_000,
       onError: internet ? "best-effort" : "required",
     };
     const next = configWithSteps([...pipeline, step]);
@@ -349,7 +355,13 @@
               {#if processor && processor.configFields.length > 0}
                 <div class="mt-3 rounded-lg bg-white/4 p-3 ring-1 ring-white/10">
                   {#each processor.configFields as field (field.key)}
-                    <div>
+                    {@const currentValue = configValue(step.config, field.key)}
+                    {@const fieldPlaceholder =
+                      field.placeholder ||
+                      (field.kind === "file" ? `选择或输入${field.displayName}路径` : `输入${field.displayName}`)}
+                    {@const multiline =
+                      field.placeholder?.includes("\n") || (field.placeholder?.length ?? 0) > 48}
+                    <div class="mt-3 first:mt-0">
                       <div class="flex items-center gap-1.5 text-[11px] font-medium text-white/65">
                         <span>{field.displayName}</span>
                         {#if field.required}
@@ -362,7 +374,7 @@
                             data-testid={`postprocess-config-${step.id}-${field.key}`}
                             aria-label={field.displayName}
                             class="min-w-0 flex-1 rounded-md bg-white/6 px-2.5 py-1.5 text-[11px] text-white/80 ring-1 ring-white/12 outline-none focus:ring-kotone-cyan/45 disabled:opacity-50 [&>option]:bg-kotone-deep"
-                            value={configValue(step.config, field.key)}
+                            value={currentValue}
                             disabled={saving}
                             onchange={(event) =>
                               void updateConfigField(
@@ -372,21 +384,35 @@
                               )}
                           >
                             <option value="">选择连接</option>
-                            {#each connections as connection}
+                            {#each connectionsForField(field) as connection}
                               <option value={connection.id}>
                                 {connection.displayName}{connection.hasApiKey ? "" : "（缺密钥）"}
                               </option>
                             {/each}
                           </select>
+                        {:else if multiline}
+                          <textarea
+                            data-testid={`postprocess-config-${step.id}-${field.key}`}
+                            aria-label={field.displayName}
+                            rows="4"
+                            class="min-h-[5.5rem] min-w-0 flex-1 resize-y rounded-md bg-white/6 px-2.5 py-1.5 text-[11px] leading-relaxed text-white/80 ring-1 ring-white/12 outline-none transition placeholder:text-white/25 focus:ring-kotone-cyan/45 disabled:opacity-50"
+                            placeholder={fieldPlaceholder}
+                            value={currentValue}
+                            disabled={saving}
+                            onchange={(event) =>
+                              void updateConfigField(
+                                index,
+                                field,
+                                (event.target as HTMLTextAreaElement).value.trim(),
+                              )}
+                          ></textarea>
                         {:else}
                           <input
                             data-testid={`postprocess-config-${step.id}-${field.key}`}
                             aria-label={field.displayName}
                             class="min-w-0 flex-1 rounded-md bg-white/6 px-2.5 py-1.5 text-[11px] text-white/80 ring-1 ring-white/12 outline-none transition placeholder:text-white/25 focus:ring-kotone-cyan/45 disabled:opacity-50"
-                            placeholder={field.kind === "file"
-                              ? `选择或输入${field.displayName}路径`
-                              : `输入${field.displayName}`}
-                            value={configValue(step.config, field.key)}
+                            placeholder={fieldPlaceholder}
+                            value={currentValue}
                             disabled={saving}
                             onchange={(event) =>
                               void updateConfigField(
@@ -404,9 +430,28 @@
                           >选择文件</button>
                         {/if}
                       </div>
+                      {#if field.presets && field.presets.length > 0}
+                        <div class="mt-1.5 flex flex-wrap gap-1">
+                          {#each field.presets as preset}
+                            {@const selected = currentValue === preset.value}
+                            <button
+                              type="button"
+                              class="rounded-full px-2 py-0.5 text-[10px] ring-1 transition {selected
+                                ? 'bg-kotone-cyan/12 text-kotone-cyan ring-kotone-cyan/40'
+                                : 'bg-white/5 text-white/55 ring-white/10 hover:bg-white/10 hover:text-white/80'}"
+                              disabled={saving}
+                              onclick={() => void updateConfigField(index, field, preset.value)}
+                            >
+                              {preset.displayName}
+                            </button>
+                          {/each}
+                        </div>
+                      {/if}
                       <p class="mt-1.5 text-[10px] leading-relaxed text-white/35">
-                        {field.kind === "connection" && connections.length === 0
-                          ? "请先到「高级 → API 连接」添加一条接口。"
+                        {field.kind === "connection" && connectionsForField(field).length === 0
+                          ? field.compatibleProviders?.length
+                            ? "没有匹配的连接。翻译需要通义千问，请到「高级 → API 连接」添加。"
+                            : "请先到「高级 → API 连接」添加一条接口。"
                           : field.description}
                       </p>
                     </div>
@@ -521,16 +566,21 @@
           <p class="mt-2 break-all text-sm leading-relaxed text-white/90">
             {tryoutResult.finalText}
           </p>
-          <div class="mt-3 flex flex-wrap gap-1.5 border-t border-white/8 pt-3">
+          <div class="mt-3 flex flex-col gap-1.5 border-t border-white/8 pt-3">
             {#each tryoutResult.steps as step, index (step.stepId)}
-              <span
-                class="rounded-full px-2 py-1 text-[10px] ring-1 {step.outcome === 'succeeded'
-                  ? 'bg-kotone-cyan/8 text-kotone-cyan/75 ring-kotone-cyan/20'
-                  : 'bg-kotone-pink/8 text-kotone-pink/80 ring-kotone-pink/20'}"
-                title={step.error ?? `${step.durationMs} ms`}
-              >
-                {index + 1}. {step.displayName} · {step.outcome === "succeeded" ? "完成" : "已跳过"}
-              </span>
+              <div>
+                <span
+                  class="inline-flex rounded-full px-2 py-1 text-[10px] ring-1 {step.outcome === 'succeeded'
+                    ? 'bg-kotone-cyan/8 text-kotone-cyan/75 ring-kotone-cyan/20'
+                    : 'bg-kotone-pink/8 text-kotone-pink/80 ring-kotone-pink/20'}"
+                  title={`${step.durationMs} ms`}
+                >
+                  {index + 1}. {step.displayName} · {step.outcome === "succeeded" ? "完成" : "已跳过"}
+                </span>
+                {#if step.error}
+                  <p class="mt-1 text-[10px] leading-relaxed text-kotone-pink/75">{step.error}</p>
+                {/if}
+              </div>
             {/each}
           </div>
         </div>

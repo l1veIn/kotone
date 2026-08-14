@@ -250,6 +250,9 @@ export interface PostProcessorConfigField {
   kind: "text" | "file" | "connection";
   required: boolean;
   fileExtensions: string[];
+  placeholder?: string;
+  presets?: { id: string; displayName: string; value: string }[];
+  compatibleProviders?: string[];
 }
 
 export type ConnectionKind = "remote" | "attach" | "managed";
@@ -273,6 +276,7 @@ export interface ConnectionPreset {
   displayName: string;
   defaultBaseUrl: string;
   defaultModel: string;
+  apiKeyUrl?: string | null;
 }
 
 // ---------- 游戏 profile ----------
@@ -327,6 +331,8 @@ export interface HistoryRecord {
   engineId: string;
   profileId: string | null;
   finalText: string;
+  sourceText?: string | null;
+  processDurationMs?: number | null;
   audioMs: number;
   firstPartialMs: number | null;
   finalizeLatencyMs: number | null;
@@ -748,12 +754,14 @@ const mockConnectionPresets: ConnectionPreset[] = [
     displayName: "通义千问（北京）",
     defaultBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     defaultModel: "qwen-turbo",
+    apiKeyUrl: "https://bailian.console.aliyun.com/?apiKey=1#/api-key",
   },
   {
     id: "custom",
     displayName: "自定义 OpenAI 兼容",
     defaultBaseUrl: "",
     defaultModel: "",
+    apiKeyUrl: null,
   },
 ];
 

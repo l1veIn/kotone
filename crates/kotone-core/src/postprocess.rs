@@ -129,6 +129,23 @@ pub struct ProcessorConfigField {
     pub kind: ProcessorConfigFieldKind,
     pub required: bool,
     pub file_extensions: Vec<String>,
+    /// 输入框占位；留空时设置页用通用文案。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub placeholder: String,
+    /// 一键填入的预设值；空 = 不展示模板选择。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub presets: Vec<ProcessorFieldPreset>,
+    /// 连接字段可选用的 provider id；空 = 不限。翻译只应列出通义。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compatible_providers: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessorFieldPreset {
+    pub id: String,
+    pub display_name: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]

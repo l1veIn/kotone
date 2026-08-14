@@ -8,6 +8,7 @@
     modelsDirPathError,
     downloadModel,
     setActiveModel,
+    setSttEngine,
     deleteModel,
     getModelsDir,
     setModelsDir,
@@ -216,10 +217,13 @@
 
   async function onSetActive(engineId: string, modelId: string) {
     try {
+      // 点模型行同时切 sttEngine；否则每套引擎的默认模型都会各自标 active。
+      await setSttEngine(engineId);
       await setActiveModel(engineId, modelId);
       settingsStore.update((s) => {
         if (!s) return s;
         const next = structuredClone(s);
+        next.sttEngine = engineId;
         ((next.engineOptions[engineId] ??= {}) as Record<string, unknown>).model = modelId;
         return next;
       });
@@ -253,6 +257,11 @@
     if (engineId === "sherpa-onnx-sensevoice") return "sense-voice-zh-en-ja-ko-yue-2024-07-17";
     if (engineId === "sherpa-onnx-funasr-nano") return "funasr-nano-int8-2025-12-30";
     return "default";
+  }
+
+  /** 全页只有当前 sttEngine + 该引擎选中模型算 active。 */
+  function isCurrentModel(engineId: string, modelId: string): boolean {
+    return $settingsStore?.sttEngine === engineId && activeModelOf(engineId) === modelId;
   }
 
   function modelsOf(engineId: string): ModelInfo[] {
@@ -394,7 +403,7 @@
         </p>
         <div class="mt-1.5 flex flex-col gap-1.5" role="radiogroup" aria-label="{en.displayName} 模型选择">
           {#each enModels as m}
-            {@const isActive = activeModelOf(en.id) === m.id}
+            {@const isActive = isCurrentModel(en.id, m.id)}
             {#if m.downloaded}
               <div
                 role="radio"

@@ -6,13 +6,21 @@ use kotone_core::connection::ConnectionResolver;
 use kotone_core::postprocess::{
     NetworkAccess, ProcessError, ProcessFuture, ProcessingCancelToken, ProcessingContext,
     ProcessorCategory, ProcessorConfigField, ProcessorConfigFieldKind, ProcessorDescriptor,
-    ProcessorFactory, TextDocument, TextProcessor,
+    ProcessorFactory, ProcessorFieldPreset, TextDocument, TextProcessor,
 };
 use serde_json::{json, Value};
 
 use crate::client::{chat_completion, validate_output, ChatMessage, ChatRequest};
 
 pub const PROCESSOR_ID: &str = "translation.qwen-mt";
+
+fn preset(id: &str, display_name: &str, value: &str) -> ProcessorFieldPreset {
+    ProcessorFieldPreset {
+        id: id.into(),
+        display_name: display_name.into(),
+        value: value.into(),
+    }
+}
 
 pub struct QwenMtFactory {
     pub connections: Arc<dyn ConnectionResolver>,
@@ -31,10 +39,13 @@ impl ProcessorFactory for QwenMtFactory {
                 ProcessorConfigField {
                     key: "connectionId".into(),
                     display_name: "API 连接".into(),
-                    description: "请使用通义兼容端点；模型建议 qwen-mt-lite。".into(),
+                    description: "仅通义连接可用。请用 qwen-mt-lite，不要选 Gemini / OpenAI。".into(),
                     kind: ProcessorConfigFieldKind::Connection,
                     required: true,
                     file_extensions: Vec::new(),
+                    placeholder: String::new(),
+                    presets: Vec::new(),
+                    compatible_providers: vec!["dashscope".into(), "dashscope-intl".into()],
                 },
                 ProcessorConfigField {
                     key: "targetLang".into(),
@@ -43,6 +54,13 @@ impl ProcessorFactory for QwenMtFactory {
                     kind: ProcessorConfigFieldKind::Text,
                     required: true,
                     file_extensions: Vec::new(),
+                    placeholder: "English".into(),
+                    presets: vec![
+                        preset("en", "英语", "English"),
+                        preset("ja", "日语", "Japanese"),
+                        preset("ko", "韩语", "Korean"),
+                    ],
+                    compatible_providers: Vec::new(),
                 },
                 ProcessorConfigField {
                     key: "sourceLang".into(),
@@ -51,6 +69,9 @@ impl ProcessorFactory for QwenMtFactory {
                     kind: ProcessorConfigFieldKind::Text,
                     required: false,
                     file_extensions: Vec::new(),
+                    placeholder: "auto".into(),
+                    presets: Vec::new(),
+                    compatible_providers: Vec::new(),
                 },
             ],
         }
@@ -91,7 +112,10 @@ impl ProcessorFactory for QwenMtFactory {
             .filter(|lang| !lang.is_empty())
             .unwrap_or("auto")
             .to_string();
-        let terms = config.get("terms").cloned().unwrap_or(Value::Array(vec![]));
+        let terms = merge_terms(
+            &target_lang,
+            config.get("terms").cloned().unwrap_or(Value::Array(vec![])),
+        );
         Ok(Arc::new(QwenMtProcessor {
             client: reqwest::Client::new(),
             connection,
@@ -108,6 +132,65 @@ struct QwenMtProcessor {
     source_lang: String,
     target_lang: String,
     terms: Value,
+}
+
+/// 中→英起步术语。用户 config.terms 同 source 时覆盖。
+const ZH_EN_TERMS: &[(&str, &str)] = &[
+    ("闪现", "Flash"),
+    ("传送", "Teleport"),
+    ("点燃", "Ignite"),
+    ("惩戒", "Smite"),
+    ("治疗", "Heal"),
+    ("屏障", "Barrier"),
+    ("净化", "Cleanse"),
+    ("虚弱", "Exhaust"),
+    ("上单", "top"),
+    ("中单", "mid"),
+    ("打野", "jungle"),
+    ("辅助", "support"),
+    ("下路", "bot"),
+    ("上路", "top"),
+    ("中路", "mid"),
+    ("大龙", "Baron"),
+    ("小龙", "dragon"),
+    ("先锋", "Herald"),
+    ("一血", "first blood"),
+    ("团战", "teamfight"),
+    ("野区", "jungle"),
+    ("gank", "gank"),
+];
+
+fn is_english_target(lang: &str) -> bool {
+    let lang = lang.trim().to_ascii_lowercase();
+    lang == "en" || lang == "english" || lang.starts_with("en-")
+}
+
+fn merge_terms(target_lang: &str, user: Value) -> Value {
+    let mut map = std::collections::BTreeMap::<String, String>::new();
+    if is_english_target(target_lang) {
+        for (source, target) in ZH_EN_TERMS {
+            map.insert((*source).into(), (*target).into());
+        }
+    }
+    if let Value::Array(items) = user {
+        for item in items {
+            let Some(source) = item.get("source").and_then(Value::as_str).map(str::trim) else {
+                continue;
+            };
+            let Some(target) = item.get("target").and_then(Value::as_str).map(str::trim) else {
+                continue;
+            };
+            if source.is_empty() || target.is_empty() {
+                continue;
+            }
+            map.insert(source.into(), target.into());
+        }
+    }
+    Value::Array(
+        map.into_iter()
+            .map(|(source, target)| json!({ "source": source, "target": target }))
+            .collect(),
+    )
 }
 
 impl TextProcessor for QwenMtProcessor {
@@ -177,6 +260,19 @@ mod tests {
         fn resolve(&self, _: &str) -> Result<ResolvedConnection, String> {
             Ok(self.0.clone())
         }
+    }
+
+    #[test]
+    fn english_target_gets_builtin_terms_and_user_overrides() {
+        let merged = merge_terms(
+            "English",
+            json!([{ "source": "闪现", "target": "FLASH" }]),
+        );
+        let terms = merged.as_array().unwrap();
+        let flash = terms.iter().find(|item| item["source"] == "闪现").unwrap();
+        assert_eq!(flash["target"], "FLASH");
+        assert!(terms.iter().any(|item| item["source"] == "上单"));
+        assert!(merge_terms("Japanese", json!([])).as_array().unwrap().is_empty());
     }
 
     #[tokio::test]

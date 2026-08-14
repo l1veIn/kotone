@@ -7,7 +7,9 @@ rust-version = "1.77.2"
 
 [dependencies]
 kotone-core.workspace = true
-keyring = "3"
+# keyring 3 没有默认 feature；不开 windows-native 时走进程内 mock，
+# set/get 各建一条空条目，保存后立刻「缺少密钥」，重启更没有。
+keyring = { version = "3", features = ["windows-native"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde.workspace = true
 serde_json.workspace = true

@@ -31,6 +31,7 @@
   let loadingId = $state<string | null>(null);
   /** 正在删除的记录 id（防止重复点击） */
   let deletingId = $state<string | null>(null);
+  let detail = $state<HistoryRecord | null>(null);
   /** 共享 AudioContext（懒创建；纯 Web Audio 播放，绕开 WebView2 <audio> 管线） */
   let ac: AudioContext | null = null;
   let src: AudioBufferSourceNode | null = null;
@@ -368,7 +369,6 @@
             </p>
             <p class="mt-0.5 text-[10px] text-white/35">
               语音时长 {(r.audioMs / 1000).toFixed(1)} 秒
-              {#if r.error}· <span class="text-kotone-pink/80">{r.error}</span>{/if}
             </p>
           </div>
           {#if r.audioFile}
@@ -385,6 +385,12 @@
               </button>
             </div>
           {/if}
+          <button
+            class="shrink-0 rounded bg-white/8 px-1.5 py-0.5 text-[10px] text-white/70 ring-1 ring-white/12 transition hover:bg-white/14"
+            onclick={() => (detail = r)}
+          >
+            详情
+          </button>
           <span class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold {meta.cls}">
             {meta.text}
           </span>
@@ -410,5 +416,55 @@
       {/each}
     </div>
     <p class="mt-3 text-[11px] text-white/35">共 {records.length} 条（新→旧）</p>
+  {/if}
+
+  {#if detail}
+    {@const meta = outcomeMeta[detail.outcome] ?? outcomeMeta.cancelled}
+    <div
+      class="fixed inset-0 z-40 flex items-center justify-center bg-black/55 p-4"
+      onclick={() => (detail = null)}
+      onkeydown={(event) => event.key === "Escape" && (detail = null)}
+      role="presentation"
+    >
+      <div
+        class="kotone-card max-h-[80vh] w-full max-w-lg overflow-y-auto p-4"
+        onclick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="历史详情"
+      >
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <p class="text-sm font-semibold text-white/90">记录详情</p>
+            <p class="mt-0.5 text-[11px] text-white/40">{fmtTime(detail.ts)} · {meta.text}</p>
+          </div>
+          <button
+            class="rounded-md bg-white/8 px-2 py-1 text-[11px] text-white/70 ring-1 ring-white/12"
+            onclick={() => (detail = null)}
+          >
+            关闭
+          </button>
+        </div>
+        <dl class="mt-3 space-y-2 text-[12px]">
+          <div>
+            <dt class="text-[10px] text-white/40">发出</dt>
+            <dd class="mt-0.5 break-all text-white/90">{detail.finalText || "（无文本）"}</dd>
+          </div>
+          <div>
+            <dt class="text-[10px] text-white/40">识别原文</dt>
+            <dd class="mt-0.5 break-all text-white/75">{detail.sourceText || "（旧记录无原文）"}</dd>
+          </div>
+          <div class="grid grid-cols-2 gap-2 text-[11px] text-white/65">
+            <div>引擎 {detail.engineId}</div>
+            <div>语音 {(detail.audioMs / 1000).toFixed(1)} 秒</div>
+            <div>处理 {detail.processDurationMs != null ? `${detail.processDurationMs} ms` : "—"}</div>
+            <div>识别收尾 {detail.finalizeLatencyMs != null ? `${detail.finalizeLatencyMs} ms` : "—"}</div>
+          </div>
+          {#if detail.error}
+            <p class="text-[11px] text-kotone-pink/80">{detail.error}</p>
+          {/if}
+        </dl>
+      </div>
+    </div>
   {/if}
 </div>

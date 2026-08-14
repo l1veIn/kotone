@@ -34,7 +34,15 @@ impl SecretStore for KeyringSecretStore {
             .map_err(|error| format!("打开凭据项失败：{error}"))?;
         entry
             .set_password(secret)
-            .map_err(|error| format!("写入凭据失败：{error}"))
+            .map_err(|error| format!("写入凭据失败：{error}"))?;
+        match self.get(connection_id)? {
+            Some(stored) if stored == secret => Ok(()),
+            Some(_) => Err("凭据已写入，但回读内容不一致".into()),
+            None => Err(
+                "凭据未能写入系统凭据库（回读为空）。请确认应用有权限访问 Windows 凭据管理器。"
+                    .into(),
+            ),
+        }
     }
 
     fn delete(&self, connection_id: &str) -> Result<(), String> {
