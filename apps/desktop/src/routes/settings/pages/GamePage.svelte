@@ -554,6 +554,52 @@
                     onchange={(v) => (draft!.preferClipboardPaste = v)}
                   />
                 </div>
+                <p class="mt-4 text-[10px] font-semibold tracking-wide text-white/40">发送时序</p>
+                <p class="mt-1 text-[10px] leading-relaxed text-white/35">
+                  聊天框还没打开就开始打字时，把「打开聊天后等待」调到 50–100ms。
+                </p>
+                <label class="mt-3 block">
+                  <div class="flex items-center justify-between">
+                    <span class="text-[11px] text-white/55">打开聊天后等待</span>
+                    <span class="text-[11px] text-white/45">{draft.preOpenDelayMs} ms</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="300"
+                    step="10"
+                    bind:value={draft.preOpenDelayMs}
+                    class="mt-1.5 w-full accent-kotone-cyan"
+                  />
+                </label>
+                <label class="mt-3 block">
+                  <div class="flex items-center justify-between">
+                    <span class="text-[11px] text-white/55">粘贴前等待</span>
+                    <span class="text-[11px] text-white/45">{draft.prePasteDelayMs} ms</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="300"
+                    step="10"
+                    bind:value={draft.prePasteDelayMs}
+                    class="mt-1.5 w-full accent-kotone-cyan"
+                  />
+                </label>
+                <label class="mt-3 block">
+                  <div class="flex items-center justify-between">
+                    <span class="text-[11px] text-white/55">发送前等待</span>
+                    <span class="text-[11px] text-white/45">{draft.preSendDelayMs} ms</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="300"
+                    step="10"
+                    bind:value={draft.preSendDelayMs}
+                    class="mt-1.5 w-full accent-kotone-cyan"
+                  />
+                </label>
               </div>
             {/if}
 

@@ -190,9 +190,17 @@ fn writing_prompt_presets() -> Vec<ProcessorFieldPreset> {
         ProcessorFieldPreset {
             id: "english".into(),
             display_name: "改写成英文".into(),
-            value: format!(
-                "改写成一句简短英文游戏聊天。专有名词保持原文。这是润色，不是机器翻译。{keep_terms}"
-            ),
+            value: rewrite_chat_prompt("英文"),
+        },
+        ProcessorFieldPreset {
+            id: "japanese".into(),
+            display_name: "改写成日文".into(),
+            value: rewrite_chat_prompt("日语"),
+        },
+        ProcessorFieldPreset {
+            id: "korean".into(),
+            display_name: "改写成韩文".into(),
+            value: rewrite_chat_prompt("韩语"),
         },
         ProcessorFieldPreset {
             id: "fix-only".into(),
@@ -202,6 +210,12 @@ fn writing_prompt_presets() -> Vec<ProcessorFieldPreset> {
             ),
         },
     ]
+}
+
+fn rewrite_chat_prompt(language: &str) -> String {
+    format!(
+        "改写成一句简短{language}游戏聊天。专有名词保持原文。这是润色，不是机器翻译。不要添加原文没有的词。专有名词保持原样。不要解释。要地道一点。"
+    )
 }
 
 fn extra_body_for(provider: &str) -> Value {
@@ -303,8 +317,18 @@ mod tests {
         .find(|field| field.key == "systemPrompt")
         .unwrap();
         assert!(field.placeholder.contains("删除口癖"));
-        assert_eq!(field.presets.len(), 9);
+        assert_eq!(field.presets.len(), 11);
         assert_eq!(field.presets[0].id, "default");
         assert_eq!(field.presets[0].value, DEFAULT_SYSTEM_PROMPT);
+        assert!(field.presets.iter().any(|preset| preset.id == "cute"));
+        assert_eq!(
+            field
+                .presets
+                .iter()
+                .find(|preset| preset.id == "korean")
+                .unwrap()
+                .value,
+            "改写成一句简短韩语游戏聊天。专有名词保持原文。这是润色，不是机器翻译。不要添加原文没有的词。专有名词保持原样。不要解释。要地道一点。"
+        );
     }
 }
