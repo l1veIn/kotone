@@ -109,9 +109,7 @@ pub mod imp {
             }
             if let Some(recipe) = crate::model::recipe_of(&id) {
                 if recipe != crate::model::ModelRecipe::ZipformerTransducer {
-                    return Err(format!(
-                        "模型 {id} 的配方 {recipe:?} 不能走流式 transducer"
-                    ));
+                    return Err(format!("模型 {id} 的配方 {recipe:?} 不能走流式 transducer"));
                 }
             }
             let dir = crate::model::multi_model_dir(&id).unwrap();

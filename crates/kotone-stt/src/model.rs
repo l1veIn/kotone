@@ -699,17 +699,26 @@ pub fn active_model_from(s: &settings::Settings, engine_id: &str) -> String {
             return selected.to_string();
         }
     }
-    let configured = s
-        .engine_options
-        .get(engine_id)
-        .and_then(|o| o.get("model"))
-        .and_then(|m| m.as_str())
-        .map(str::to_string);
+    let canonical = kotone_core::stt::canonical_stt_engine(engine_id);
+    let mut option_keys = vec![engine_id];
+    // 统一 I/O 运行时查询活动模型时，旧配置的 sttEngine 仍是家族 id；优先读取
+    // 用户实际选择的那个家族，不能在 SenseVoice/FunASR 之间随意取一个。
+    if engine_id == canonical
+        && s.stt_engine != engine_id
+        && kotone_core::stt::canonical_stt_engine(&s.stt_engine) == canonical
+    {
+        option_keys.push(&s.stt_engine);
+    }
+    if canonical != engine_id {
+        option_keys.push(canonical);
+    }
+    let configured = option_keys.into_iter().find_map(|key| {
+        let id = s.engine_options.get(key)?.get("model")?.as_str()?.trim();
+        (!is_sherpa_engine(engine_id) || model_belongs_to_engine(id, key)).then(|| id.to_string())
+    });
     if is_sherpa_engine(engine_id) {
         if let Some(id) = configured {
-            if model_belongs_to_engine(&id, engine_id) {
-                return id;
-            }
+            return id;
         }
         return multi_file_default_model(engine_id)
             .expect("sherpa 系引擎模型清单缺失")
@@ -805,7 +814,10 @@ pub fn engine_id_of(id: &str) -> Option<&'static str> {
     if id == REMOTE_OPENAI_STT_ID {
         return Some(REMOTE_OPENAI_ENGINE_ID);
     }
-    SHERPA_MODELS.iter().find(|m| m.id == id).map(|m| m.engine_id)
+    SHERPA_MODELS
+        .iter()
+        .find(|m| m.id == id)
+        .map(|m| m.engine_id)
 }
 
 pub fn is_remote_model(id: &str) -> bool {
@@ -1010,10 +1022,7 @@ fn download_official(
 }
 
 /// `Ok(true)` = 已走镜像成功；`Ok(false)` = 没有镜像，调用方应走官方。
-fn download_preferred_mirrors(
-    m: &MultiFileModel,
-    progress: Progress<'_>,
-) -> Result<bool, String> {
+fn download_preferred_mirrors(m: &MultiFileModel, progress: Progress<'_>) -> Result<bool, String> {
     if !m.file_mirrors.is_empty() {
         download_file_mirrors(m, progress)?;
         return Ok(true);
@@ -1043,7 +1052,11 @@ fn download_archive_mirrors(m: &MultiFileModel, progress: Progress<'_>) -> Resul
             Ok(()) => return Ok(()),
             Err(error) if download::is_cancelled(&error) => return Err(error),
             Err(error) => {
-                errors.push(format!("镜像 {}/{}：{error}", index + 1, m.archive_mirrors.len()));
+                errors.push(format!(
+                    "镜像 {}/{}：{error}",
+                    index + 1,
+                    m.archive_mirrors.len()
+                ));
             }
         }
     }
@@ -1747,23 +1760,22 @@ mod tests {
         let guide = install_guide("funasr-nano-int8-2025-12-30").unwrap();
         assert_eq!(guide.id, "funasr-nano-int8-2025-12-30");
         assert_eq!(guide.dest_subdir, "sherpa-onnx-funasr-nano-int8-2025-12-30");
-        assert!(guide.dest_dir.replace('\\', "/").ends_with(&guide.dest_subdir));
+        assert!(guide
+            .dest_dir
+            .replace('\\', "/")
+            .ends_with(&guide.dest_subdir));
         assert_eq!(
             guide.page_url,
             "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30"
         );
-        assert!(
-            guide
-                .files
-                .iter()
-                .any(|f| f.name == "encoder_adaptor.int8.onnx" && f.size_bytes == 237_792_748)
-        );
-        assert!(
-            guide
-                .files
-                .iter()
-                .any(|f| f.name == "Qwen3-0.6B/merges.txt" && !f.url.is_empty())
-        );
+        assert!(guide
+            .files
+            .iter()
+            .any(|f| f.name == "encoder_adaptor.int8.onnx" && f.size_bytes == 237_792_748));
+        assert!(guide
+            .files
+            .iter()
+            .any(|f| f.name == "Qwen3-0.6B/merges.txt" && !f.url.is_empty()));
 
         let json = serde_json::to_value(&guide).unwrap();
         let obj = json.as_object().unwrap();
@@ -1922,8 +1934,7 @@ mod tests {
 
     #[test]
     fn sherpa_manifest_wellformed() {
-        const REGISTERED_ENGINES: &[&str] =
-            &[SHERPA_STREAMING_ENGINE_ID, SHERPA_OFFLINE_ENGINE_ID];
+        const REGISTERED_ENGINES: &[&str] = &[SHERPA_STREAMING_ENGINE_ID, SHERPA_OFFLINE_ENGINE_ID];
         let mut ids: Vec<_> = SHERPA_MODELS.iter().map(|m| m.id).collect();
         let n = ids.len();
         ids.sort();
@@ -1961,13 +1972,16 @@ mod tests {
             }
             for archive in m.archive_mirrors {
                 assert!(
-                    archive
-                        .url
-                        .starts_with("https://www.modelscope.cn/models/"),
+                    archive.url.starts_with("https://www.modelscope.cn/models/"),
                     "{} 整包镜像必须是 ModelScope 地址",
                     m.id
                 );
-                assert_eq!(archive.sha256.len(), 64, "{} 整包镜像 sha256 应 64 hex", m.id);
+                assert_eq!(
+                    archive.sha256.len(),
+                    64,
+                    "{} 整包镜像 sha256 应 64 hex",
+                    m.id
+                );
                 assert!(archive.size_bytes > 0, "{}", m.id);
             }
             for f in m.files {
@@ -2164,8 +2178,10 @@ mod tests {
 
     #[test]
     fn active_model_respects_io_engine_and_ignores_other_loop() {
-        let mut s = settings::Settings::default();
-        s.active_model_id = "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05".into();
+        let mut s = settings::Settings {
+            active_model_id: "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05".into(),
+            ..settings::Settings::default()
+        };
         assert_eq!(
             active_model_from(&s, SHERPA_STREAMING_ENGINE_ID),
             "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05"
@@ -2188,6 +2204,32 @@ mod tests {
         assert_eq!(
             active_model_from(&s, SHERPA_STREAMING_ENGINE_ID),
             multi_file_default_model(SHERPA_STREAMING_ENGINE_ID).unwrap()
+        );
+    }
+
+    #[test]
+    fn canonical_offline_runtime_uses_selected_legacy_family_model() {
+        let s = settings::Settings {
+            active_model_id: String::new(),
+            stt_engine: "sherpa-onnx-funasr-nano".into(),
+            engine_options: serde_json::json!({
+                "sherpa-onnx-sensevoice": {
+                    "model": "sense-voice-zh-en-ja-ko-yue-2024-07-17"
+                },
+                "sherpa-onnx-funasr-nano": {
+                    "model": "funasr-nano-int8-2025-12-30"
+                }
+            }),
+            ..settings::Settings::default()
+        };
+
+        assert_eq!(
+            active_model_from(&s, SHERPA_OFFLINE_ENGINE_ID),
+            "funasr-nano-int8-2025-12-30"
+        );
+        assert_eq!(
+            active_model_from(&s, "sherpa-onnx-funasr-nano"),
+            "funasr-nano-int8-2025-12-30"
         );
     }
 

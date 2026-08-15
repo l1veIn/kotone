@@ -435,7 +435,10 @@ impl SettingsConnectionResolver {
 }
 
 impl crate::connection::ConnectionResolver for SettingsConnectionResolver {
-    fn resolve(&self, connection_id: &str) -> Result<crate::connection::ResolvedConnection, String> {
+    fn resolve(
+        &self,
+        connection_id: &str,
+    ) -> Result<crate::connection::ResolvedConnection, String> {
         let id = connection_id.trim();
         if id.is_empty() {
             return Err("连接 ID 不能为空".into());
@@ -737,7 +740,10 @@ mod tests {
         assert_eq!(s.hotwords_score, 3.5);
         assert!(s.engine_options["sherpa-onnx-x-asr-zh-en"]["provider"] == "cpu");
         assert_eq!(s.session_options("sherpa-streaming")["provider"], "cpu");
-        assert_eq!(s.session_options("sherpa-onnx-x-asr-zh-en")["provider"], "cpu");
+        assert_eq!(
+            s.session_options("sherpa-onnx-x-asr-zh-en")["provider"],
+            "cpu"
+        );
         assert!(!s.run_as_admin_on_start);
         assert_eq!(s.channel_cycle_hotkey, "Shift+CapsLock");
         assert!(!s.admin_prompt_dismissed);
@@ -793,12 +799,14 @@ mod tests {
 
     #[test]
     fn session_options_merge_family_and_io_keys() {
-        let mut s = Settings::default();
-        s.engine_options = serde_json::json!({
-            "sherpa-onnx-sensevoice": { "threads": 2 },
-            "sherpa-offline": { "model": "sense-voice-zh-en-ja-ko-yue-2024-07-17" }
-        });
-        s.active_model_id = "sense-voice-zh-en-ja-ko-yue-2024-07-17".into();
+        let mut s = Settings {
+            engine_options: serde_json::json!({
+                "sherpa-onnx-sensevoice": { "threads": 2 },
+                "sherpa-offline": { "model": "sense-voice-zh-en-ja-ko-yue-2024-07-17" }
+            }),
+            active_model_id: "sense-voice-zh-en-ja-ko-yue-2024-07-17".into(),
+            ..Settings::default()
+        };
         s.model_configs.insert(
             "sense-voice-zh-en-ja-ko-yue-2024-07-17".into(),
             serde_json::json!({ "language": "yue" }),
@@ -810,6 +818,35 @@ mod tests {
         let via_io = s.session_options("sherpa-offline");
         assert_eq!(via_io["language"], "yue");
         assert_eq!(via_io["model"], "sense-voice-zh-en-ja-ko-yue-2024-07-17");
+    }
+
+    #[test]
+    fn session_options_do_not_mix_legacy_offline_families() {
+        let s = Settings {
+            active_model_id: String::new(),
+            engine_options: serde_json::json!({
+                "sherpa-onnx-sensevoice": {
+                    "model": "sense-voice-zh-en-ja-ko-yue-2024-07-17",
+                    "language": "yue"
+                },
+                "sherpa-onnx-funasr-nano": {
+                    "model": "funasr-nano-int8-2025-12-30",
+                    "language": "ja"
+                }
+            }),
+            ..Settings::default()
+        };
+
+        let sensevoice = s.session_options("sherpa-onnx-sensevoice");
+        assert_eq!(
+            sensevoice["model"],
+            "sense-voice-zh-en-ja-ko-yue-2024-07-17"
+        );
+        assert_eq!(sensevoice["language"], "yue");
+
+        let funasr = s.session_options("sherpa-onnx-funasr-nano");
+        assert_eq!(funasr["model"], "funasr-nano-int8-2025-12-30");
+        assert_eq!(funasr["language"], "ja");
     }
 
     #[test]
@@ -1160,6 +1197,9 @@ mod tests {
         let resolved = resolver.resolve("dashscope-main").unwrap();
         assert_eq!(resolved.model, "qwen-turbo");
         assert!(resolved.api_key.is_none());
-        assert!(resolver.resolve("missing").unwrap_err().contains("未找到连接"));
+        assert!(resolver
+            .resolve("missing")
+            .unwrap_err()
+            .contains("未找到连接"));
     }
 }

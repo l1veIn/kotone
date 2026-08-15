@@ -7,9 +7,7 @@ use tokio::sync::mpsc;
 
 use kotone_core::stt::{EngineCapabilities, SessionConfig, SttEngine, SttEvent, SttSession};
 
-use crate::model::{
-    ModelRecipe, SHERPA_OFFLINE_ENGINE_ID, SHERPA_STREAMING_ENGINE_ID, recipe_of,
-};
+use crate::model::{recipe_of, ModelRecipe, SHERPA_OFFLINE_ENGINE_ID, SHERPA_STREAMING_ENGINE_ID};
 use crate::offline_sherpa::{OfflineEngine, OfflineSpec};
 use crate::online_transducer::{OnlineTransducerEngine, OnlineTransducerSpec};
 
@@ -140,7 +138,10 @@ impl SttEngine for SherpaOfflineEngine {
                 hotwords: true,
                 gpu: false,
                 offline: true,
-                languages: ["zh", "en", "ja"].iter().map(|s| (*s).to_string()).collect(),
+                languages: ["zh", "en", "ja"]
+                    .iter()
+                    .map(|s| (*s).to_string())
+                    .collect(),
             },
             _ => EngineCapabilities {
                 streaming: false,

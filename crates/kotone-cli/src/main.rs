@@ -14,13 +14,13 @@
 
 use clap::{Parser, Subcommand};
 
+use kotone_core::connection::ConnectionResolver;
 #[cfg(windows)]
 use kotone_core::hotkey::HotkeySource;
+use kotone_core::postprocess::ProcessorRegistry;
 use kotone_core::profile::{self, GameProfile};
 use kotone_core::settings::{self, HotkeyBackend, Settings};
-use kotone_core::connection::ConnectionResolver;
 use kotone_core::stt::EngineRegistry;
-use kotone_core::postprocess::ProcessorRegistry;
 
 /// wav 直灌会话模式的注入器（ADR-007）：不碰真实窗口——
 /// one-shot（C1 直发）在无人值守测试里也绝不能触发真实注入，

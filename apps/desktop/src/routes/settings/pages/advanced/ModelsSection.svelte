@@ -288,15 +288,15 @@
     const configured = ($settingsStore?.engineOptions?.[engineId] as Record<string, unknown> | undefined)
       ?.model as string | undefined;
     if (configured) return configured === modelId;
-    const ioEngine =
-      engineId === "sherpa-onnx-x-asr-zh-en" || engineId === "sherpa-streaming"
-        ? "sherpa-streaming"
-        : engineId === "sherpa-onnx-sensevoice" ||
-            engineId === "sherpa-onnx-funasr-nano" ||
-            engineId === "sherpa-offline"
-          ? "sherpa-offline"
-          : engineId;
-    return models.find((m) => m.engineId === ioEngine)?.id === modelId;
+    const defaultModel =
+      engineId === "sherpa-onnx-x-asr-zh-en"
+        ? models.find((m) => m.recipe === "zipformer-transducer")
+        : engineId === "sherpa-onnx-sensevoice"
+          ? models.find((m) => m.recipe === "sense-voice")
+          : engineId === "sherpa-onnx-funasr-nano"
+            ? models.find((m) => m.recipe === "funasr-nano")
+            : models.find((m) => m.engineId === engineId);
+    return defaultModel?.id === modelId;
   }
 
   function fieldValue(modelId: string, key: string, fallback: string): string {

@@ -168,13 +168,13 @@ pub fn canonical_stt_engine(id: &str) -> &str {
 
 /// 合并 session options 时要读的 engineOptions 键：旧家族 id 在前，I/O id 在后。
 pub fn stt_engine_option_keys(id: &str) -> &'static [&'static str] {
-    match canonical_stt_engine(id) {
-        "sherpa-streaming" => &["sherpa-onnx-x-asr-zh-en", "sherpa-streaming"],
-        "sherpa-offline" => &[
-            "sherpa-onnx-sensevoice",
-            "sherpa-onnx-funasr-nano",
-            "sherpa-offline",
-        ],
+    match id {
+        "sherpa-onnx-x-asr-zh-en" | "sherpa-streaming" => {
+            &["sherpa-onnx-x-asr-zh-en", "sherpa-streaming"]
+        }
+        "sherpa-onnx-sensevoice" => &["sherpa-onnx-sensevoice", "sherpa-offline"],
+        "sherpa-onnx-funasr-nano" => &["sherpa-onnx-funasr-nano", "sherpa-offline"],
+        "sherpa-offline" => &["sherpa-offline"],
         _ => &[],
     }
 }
@@ -185,9 +185,18 @@ mod tests {
 
     #[test]
     fn family_ids_map_to_io_runtimes() {
-        assert_eq!(canonical_stt_engine("sherpa-onnx-x-asr-zh-en"), "sherpa-streaming");
-        assert_eq!(canonical_stt_engine("sherpa-onnx-sensevoice"), "sherpa-offline");
-        assert_eq!(canonical_stt_engine("sherpa-onnx-funasr-nano"), "sherpa-offline");
+        assert_eq!(
+            canonical_stt_engine("sherpa-onnx-x-asr-zh-en"),
+            "sherpa-streaming"
+        );
+        assert_eq!(
+            canonical_stt_engine("sherpa-onnx-sensevoice"),
+            "sherpa-offline"
+        );
+        assert_eq!(
+            canonical_stt_engine("sherpa-onnx-funasr-nano"),
+            "sherpa-offline"
+        );
         assert_eq!(canonical_stt_engine("sherpa-streaming"), "sherpa-streaming");
         assert_eq!(canonical_stt_engine("mock-stream"), "mock-stream");
     }

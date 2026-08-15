@@ -79,9 +79,7 @@ pub mod imp {
                     crate::model::ModelRecipe::SenseVoice | crate::model::ModelRecipe::FunasrNano,
                 ) => {}
                 other => {
-                    return Err(format!(
-                        "模型 {id} 的配方 {other:?} 不能走非流式 sherpa"
-                    ));
+                    return Err(format!("模型 {id} 的配方 {other:?} 不能走非流式 sherpa"));
                 }
             }
             let dir = crate::model::multi_model_dir(&id).unwrap();

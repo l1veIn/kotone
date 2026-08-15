@@ -2008,8 +2008,10 @@ mod tests {
 
     #[test]
     fn session_config_merges_model_schema_values() {
-        let mut settings = Settings::default();
-        settings.active_model_id = "sense-voice-zh-en-ja-ko-yue-2024-07-17".into();
+        let mut settings = Settings {
+            active_model_id: "sense-voice-zh-en-ja-ko-yue-2024-07-17".into(),
+            ..Settings::default()
+        };
         settings.model_configs.insert(
             "sense-voice-zh-en-ja-ko-yue-2024-07-17".into(),
             serde_json::json!({ "language": "yue" }),

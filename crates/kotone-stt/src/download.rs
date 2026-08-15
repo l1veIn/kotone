@@ -395,7 +395,9 @@ mod tests {
     fn cancelled_error_is_recognized() {
         assert!(is_cancelled(CANCELLED_MSG));
         assert!(is_cancelled("下载已取消（临时文件已保留，可随时续传）"));
-        assert!(!is_cancelled("下载失败（https://example）：error sending request"));
+        assert!(!is_cancelled(
+            "下载失败（https://example）：error sending request"
+        ));
         assert!(!is_cancelled("大小不符：期望 1，实际 2"));
     }
 

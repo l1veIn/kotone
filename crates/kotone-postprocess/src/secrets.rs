@@ -3,11 +3,9 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, RwLock};
 
-use kotone_core::connection::{
-    ConnectionResolver, ResolvedConnection, SecretStore,
-};
-use kotone_core::settings::{Settings, SettingsConnectionResolver};
 use keyring::Entry;
+use kotone_core::connection::{ConnectionResolver, ResolvedConnection, SecretStore};
+use kotone_core::settings::{Settings, SettingsConnectionResolver};
 
 const SERVICE: &str = "kotone";
 

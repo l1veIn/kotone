@@ -39,7 +39,11 @@ pub fn completions_url(base_url: &str) -> String {
     format!("{}/chat/completions", base_url.trim().trim_end_matches('/'))
 }
 
-pub fn validate_output(source: &str, output: &str, max_ratio: usize) -> Result<String, ProcessError> {
+pub fn validate_output(
+    source: &str,
+    output: &str,
+    max_ratio: usize,
+) -> Result<String, ProcessError> {
     let text = output.trim();
     if text.is_empty() {
         return Err(ProcessError {
