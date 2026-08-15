@@ -370,18 +370,27 @@ impl Default for Settings {
 
 impl Settings {
     /// 引擎专有项 + 当前活动模型的 configSchema 值。
+    /// 旧家族 id 与新 I/O 引擎 id 的 engineOptions 会合并；活动模型 id 写入 `model`。
     pub fn session_options(&self, engine_id: &str) -> serde_json::Value {
-        let mut opts = self
-            .engine_options
-            .get(engine_id)
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({}));
+        let canonical = crate::stt::canonical_stt_engine(engine_id);
+        let mut opts = serde_json::json!({});
+        for key in crate::stt::stt_engine_option_keys(engine_id)
+            .iter()
+            .copied()
+            .chain(std::iter::once(engine_id))
+            .chain(std::iter::once(canonical))
+        {
+            if let Some(extra) = self.engine_options.get(key) {
+                merge_json_objects(&mut opts, extra);
+            }
+        }
+        if !opts.is_object() {
+            opts = serde_json::json!({});
+        }
         let model_id = if !self.active_model_id.trim().is_empty() {
             self.active_model_id.clone()
         } else {
-            self.engine_options
-                .get(engine_id)
-                .and_then(|o| o.get("model"))
+            opts.get("model")
                 .and_then(|m| m.as_str())
                 .unwrap_or("")
                 .to_string()
@@ -393,7 +402,24 @@ impl Settings {
                 }
             }
         }
+        if !model_id.is_empty() {
+            if let Some(base) = opts.as_object_mut() {
+                base.insert("model".into(), serde_json::json!(model_id));
+            }
+        }
         opts
+    }
+}
+
+fn merge_json_objects(base: &mut serde_json::Value, extra: &serde_json::Value) {
+    match (base.as_object_mut(), extra.as_object()) {
+        (Some(dst), Some(src)) => {
+            for (k, v) in src {
+                dst.insert(k.clone(), v.clone());
+            }
+        }
+        (None, Some(_)) => *base = extra.clone(),
+        _ => {}
     }
 }
 
@@ -710,6 +736,8 @@ mod tests {
         assert_eq!(s.vad.min_silence_ms, 50);
         assert_eq!(s.hotwords_score, 3.5);
         assert!(s.engine_options["sherpa-onnx-x-asr-zh-en"]["provider"] == "cpu");
+        assert_eq!(s.session_options("sherpa-streaming")["provider"], "cpu");
+        assert_eq!(s.session_options("sherpa-onnx-x-asr-zh-en")["provider"], "cpu");
         assert!(!s.run_as_admin_on_start);
         assert_eq!(s.channel_cycle_hotkey, "Shift+CapsLock");
         assert!(!s.admin_prompt_dismissed);
@@ -761,6 +789,27 @@ mod tests {
         assert_eq!(loaded.hotkey.mode, HotkeyMode::Hold);
         assert!(loaded.auto_send);
         assert_eq!(loaded.stt_engine, "mock-stream");
+    }
+
+    #[test]
+    fn session_options_merge_family_and_io_keys() {
+        let mut s = Settings::default();
+        s.engine_options = serde_json::json!({
+            "sherpa-onnx-sensevoice": { "threads": 2 },
+            "sherpa-offline": { "model": "sense-voice-zh-en-ja-ko-yue-2024-07-17" }
+        });
+        s.active_model_id = "sense-voice-zh-en-ja-ko-yue-2024-07-17".into();
+        s.model_configs.insert(
+            "sense-voice-zh-en-ja-ko-yue-2024-07-17".into(),
+            serde_json::json!({ "language": "yue" }),
+        );
+        let opts = s.session_options("sherpa-onnx-sensevoice");
+        assert_eq!(opts["threads"], 2);
+        assert_eq!(opts["language"], "yue");
+        assert_eq!(opts["model"], "sense-voice-zh-en-ja-ko-yue-2024-07-17");
+        let via_io = s.session_options("sherpa-offline");
+        assert_eq!(via_io["language"], "yue");
+        assert_eq!(via_io["model"], "sense-voice-zh-en-ja-ko-yue-2024-07-17");
     }
 
     #[test]

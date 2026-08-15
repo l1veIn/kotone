@@ -287,7 +287,16 @@
     if (!engineId) return false;
     const configured = ($settingsStore?.engineOptions?.[engineId] as Record<string, unknown> | undefined)
       ?.model as string | undefined;
-    return configured === modelId;
+    if (configured) return configured === modelId;
+    const ioEngine =
+      engineId === "sherpa-onnx-x-asr-zh-en" || engineId === "sherpa-streaming"
+        ? "sherpa-streaming"
+        : engineId === "sherpa-onnx-sensevoice" ||
+            engineId === "sherpa-onnx-funasr-nano" ||
+            engineId === "sherpa-offline"
+          ? "sherpa-offline"
+          : engineId;
+    return models.find((m) => m.engineId === ioEngine)?.id === modelId;
   }
 
   function fieldValue(modelId: string, key: string, fallback: string): string {

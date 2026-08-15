@@ -56,7 +56,7 @@
   let changingDir = $state(false);
 
   const primaryModel = $derived(
-    models.find((m) => m.engineId === "sherpa-onnx-x-asr-zh-en") ?? null,
+    models.find((m) => m.engineId === "sherpa-streaming") ?? null,
   );
   const isDownloaded = (m: ModelInfo | null) =>
     m !== null && (m.downloaded || downloadedIds.includes(m.id));

@@ -508,21 +508,15 @@ const mock: MockStore = {
       isReady: true,
     },
     {
-      id: "sherpa-onnx-x-asr-zh-en",
-      displayName: "sherpa-onnx X-ASR 流式中英标点",
+      id: "sherpa-streaming",
+      displayName: "sherpa 流式",
       capabilities: { streaming: true, hotwords: true, gpu: false, offline: true, languages: ["zh", "en"] },
       isReady: false,
     },
     {
-      id: "sherpa-onnx-sensevoice",
-      displayName: "sherpa-onnx SenseVoice 多语言",
-      capabilities: { streaming: false, hotwords: false, gpu: false, offline: true, languages: ["zh", "en", "ja", "ko", "yue"] },
-      isReady: false,
-    },
-    {
-      id: "sherpa-onnx-funasr-nano",
-      displayName: "sherpa-onnx FunASR-Nano 中英日",
-      capabilities: { streaming: false, hotwords: true, gpu: false, offline: true, languages: ["zh", "en", "ja"] },
+      id: "sherpa-offline",
+      displayName: "sherpa 非流式",
+      capabilities: { streaming: false, hotwords: true, gpu: false, offline: true, languages: ["zh", "en", "ja", "ko", "yue"] },
       isReady: false,
     },
   ],
@@ -562,7 +556,7 @@ const mock: MockStore = {
   models: [
     {
       id: "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05",
-      engineId: "sherpa-onnx-x-asr-zh-en",
+      engineId: "sherpa-streaming",
       displayName: "X-ASR 流式中英标点（int8，480ms 低延迟）",
       sizeBytes: 169_000_000,
       downloaded: false,
@@ -573,7 +567,7 @@ const mock: MockStore = {
     },
     {
       id: "sense-voice-zh-en-ja-ko-yue-2024-07-17",
-      engineId: "sherpa-onnx-sensevoice",
+      engineId: "sherpa-offline",
       displayName: "sherpa SenseVoice 多语言（int8，非流式高准）",
       sizeBytes: 240_000_000,
       downloaded: false,
@@ -600,7 +594,7 @@ const mock: MockStore = {
     },
     {
       id: "funasr-nano-int8-2025-12-30",
-      engineId: "sherpa-onnx-funasr-nano",
+      engineId: "sherpa-offline",
       displayName: "FunASR-Nano 中英日（官方 Hugging Face，非流式）",
       sizeBytes: 1_010_000_000,
       downloaded: false,
@@ -611,7 +605,7 @@ const mock: MockStore = {
     },
     {
       id: "funasr-nano-int8-modelscope",
-      engineId: "sherpa-onnx-funasr-nano",
+      engineId: "sherpa-offline",
       displayName: "FunASR-Nano 中英日（魔搭社区，国内直下）",
       sizeBytes: 1_010_000_000,
       downloaded: false,
@@ -1283,7 +1277,7 @@ function mockRuntimeStatus(stage: string | null = null): RuntimeStatus {
   const engineId = s.sttEngine;
   const modelId =
     (s.engineOptions[engineId] as Record<string, unknown> | undefined)?.model as string ??
-    (engineId === "sherpa-onnx-x-asr-zh-en"
+    (engineId === "sherpa-onnx-x-asr-zh-en" || engineId === "sherpa-streaming"
       ? "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05"
       : "default");
   const restartNeeded =

@@ -16,6 +16,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
 
 use kotone_core::settings;
+use kotone_core::stt::SessionConfig;
 
 use crate::download::{self, Progress};
 
@@ -196,6 +197,8 @@ const REMOTE_CONNECTION_SCHEMA: &[StaticConfigField] = &[StaticConfigField {
 
 pub const REMOTE_OPENAI_STT_ID: &str = "openai-compat-stt";
 pub const REMOTE_OPENAI_ENGINE_ID: &str = "remote-openai-compat";
+pub const SHERPA_STREAMING_ENGINE_ID: &str = "sherpa-streaming";
+pub const SHERPA_OFFLINE_ENGINE_ID: &str = "sherpa-offline";
 
 /// sherpa-onnx 模型清单（ADR-004）。默认引擎 X-ASR（六引擎评测冠军：CER 0.008、
 /// 首字 71ms、162MB；见 docs/development.md §11 v15），其模型走 archive 整包下载。
@@ -208,7 +211,7 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
     // 整包及各文件 SHA256 均与官方发布资产核对（2026-07）。
     MultiFileModel {
         id: "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05",
-        engine_id: "sherpa-onnx-x-asr-zh-en",
+        engine_id: SHERPA_STREAMING_ENGINE_ID,
         display_name: "X-ASR 流式中英标点（int8，480ms 低延迟）",
         dir: "sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05",
         files: &[
@@ -271,7 +274,7 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
     // 固定到不可变提交 2365bae...；tokens.txt SHA256 由该提交内容实算。
     MultiFileModel {
         id: "sense-voice-zh-en-ja-ko-yue-2024-07-17",
-        engine_id: "sherpa-onnx-sensevoice",
+        engine_id: SHERPA_OFFLINE_ENGINE_ID,
         display_name: "sherpa SenseVoice 多语言（int8，非流式高准）",
         dir: "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
         files: &[
@@ -309,7 +312,7 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
     // 许可证：FunASR 系自定义 Model License（见 HF 仓库 LICENSE）。
     MultiFileModel {
         id: "funasr-nano-int8-2025-12-30",
-        engine_id: "sherpa-onnx-funasr-nano",
+        engine_id: SHERPA_OFFLINE_ENGINE_ID,
         display_name: "FunASR-Nano 中英日（官方 Hugging Face，非流式）",
         dir: "sherpa-onnx-funasr-nano-int8-2025-12-30",
         files: &[
@@ -369,7 +372,7 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
     // revision 钉在 8d423385…（其后只改了 README）。
     MultiFileModel {
         id: "funasr-nano-int8-modelscope",
-        engine_id: "sherpa-onnx-funasr-nano",
+        engine_id: SHERPA_OFFLINE_ENGINE_ID,
         display_name: "FunASR-Nano 中英日（魔搭社区，国内直下）",
         dir: "sherpa-onnx-funasr-nano-int8-modelscope",
         files: &[
@@ -510,8 +513,40 @@ fn model_file_present(path: &std::path::Path, file: &ModelFile) -> Result<(), St
     Ok(())
 }
 
+/// 旧家族引擎 id 对应的打开配方（兼容 engineOptions / CLI）。
+pub fn family_recipe(engine_id: &str) -> Option<ModelRecipe> {
+    match engine_id {
+        "sherpa-onnx-x-asr-zh-en" => Some(ModelRecipe::ZipformerTransducer),
+        "sherpa-onnx-sensevoice" => Some(ModelRecipe::SenseVoice),
+        "sherpa-onnx-funasr-nano" => Some(ModelRecipe::FunasrNano),
+        _ => None,
+    }
+}
+
+pub fn is_sherpa_engine(engine_id: &str) -> bool {
+    engine_id == SHERPA_STREAMING_ENGINE_ID
+        || engine_id == SHERPA_OFFLINE_ENGINE_ID
+        || family_recipe(engine_id).is_some()
+}
+
+pub fn model_belongs_to_engine(model_id: &str, engine_id: &str) -> bool {
+    let Some(m) = SHERPA_MODELS.iter().find(|m| m.id == model_id) else {
+        return false;
+    };
+    if m.engine_id == engine_id {
+        return true;
+    }
+    family_recipe(engine_id).is_some_and(|recipe| m.recipe == recipe)
+}
+
 /// 指定 sherpa 系引擎清单中的默认模型（该引擎清单首条；无清单时 None）
 pub fn multi_file_default_model(engine_id: &str) -> Option<&'static str> {
+    if let Some(recipe) = family_recipe(engine_id) {
+        return SHERPA_MODELS
+            .iter()
+            .find(|m| m.recipe == recipe)
+            .map(|m| m.id);
+    }
     SHERPA_MODELS
         .iter()
         .find(|m| m.engine_id == engine_id)
@@ -635,15 +670,32 @@ pub fn active_model(engine_id: &str) -> String {
     active_model_from(&settings::load(), engine_id)
 }
 
+/// 会话配置里的 `model`（由 session_options 注入）优先，否则回退磁盘配置。
+pub fn model_id_from_cfg(cfg: &SessionConfig, engine_id: &str) -> String {
+    if let Some(id) = cfg
+        .options
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if is_remote_model(id) || model_belongs_to_engine(id, engine_id) {
+            return id.to_string();
+        }
+    }
+    active_model(engine_id)
+}
+
 /// 从给定配置推导活动模型 ID（纯函数：壳侧用 SharedState 推导 restartNeeded，
 /// 避免磁盘/内存双读不一致）
 pub fn active_model_from(s: &settings::Settings, engine_id: &str) -> String {
     let selected = s.active_model_id.trim();
     if !selected.is_empty() {
         if is_remote_model(selected) {
-            return selected.to_string();
-        }
-        if SHERPA_MODELS.iter().any(|m| m.id == selected) {
+            if engine_id == REMOTE_OPENAI_ENGINE_ID || !is_sherpa_engine(engine_id) {
+                return selected.to_string();
+            }
+        } else if model_belongs_to_engine(selected, engine_id) {
             return selected.to_string();
         }
     }
@@ -653,20 +705,19 @@ pub fn active_model_from(s: &settings::Settings, engine_id: &str) -> String {
         .and_then(|o| o.get("model"))
         .and_then(|m| m.as_str())
         .map(str::to_string);
-    let is_multi = SHERPA_MODELS.iter().any(|m| m.engine_id == engine_id);
-    match (is_multi, configured) {
-        (true, Some(id))
-            if SHERPA_MODELS
-                .iter()
-                .any(|m| m.id == id && m.engine_id == engine_id) =>
-        {
-            id
+    if is_sherpa_engine(engine_id) {
+        if let Some(id) = configured {
+            if model_belongs_to_engine(&id, engine_id) {
+                return id;
+            }
         }
-        (true, _) => multi_file_default_model(engine_id)
+        return multi_file_default_model(engine_id)
             .expect("sherpa 系引擎模型清单缺失")
-            .to_string(),
-        (false, Some(id)) => id,
-        (false, None) => "default".to_string(),
+            .to_string();
+    }
+    match configured {
+        Some(id) => id,
+        None => "default".to_string(),
     }
 }
 
@@ -1656,7 +1707,7 @@ mod tests {
             .iter()
             .find(|i| i.id == "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05")
             .unwrap();
-        assert_eq!(x.engine_id, "sherpa-onnx-x-asr-zh-en");
+        assert_eq!(x.engine_id, SHERPA_STREAMING_ENGINE_ID);
         assert_eq!(
             x.size_bytes,
             SHERPA_MODELS[0]
@@ -1871,11 +1922,8 @@ mod tests {
 
     #[test]
     fn sherpa_manifest_wellformed() {
-        const REGISTERED_ENGINES: &[&str] = &[
-            "sherpa-onnx-x-asr-zh-en",
-            "sherpa-onnx-sensevoice",
-            "sherpa-onnx-funasr-nano",
-        ];
+        const REGISTERED_ENGINES: &[&str] =
+            &[SHERPA_STREAMING_ENGINE_ID, SHERPA_OFFLINE_ENGINE_ID];
         let mut ids: Vec<_> = SHERPA_MODELS.iter().map(|m| m.id).collect();
         let n = ids.len();
         ids.sort();
@@ -1953,7 +2001,7 @@ mod tests {
         // SenseVoice 条目：模型 + tokens 两文件，且默认模型解析到该条目
         let sv = SHERPA_MODELS
             .iter()
-            .find(|m| m.engine_id == "sherpa-onnx-sensevoice")
+            .find(|m| m.recipe == ModelRecipe::SenseVoice)
             .expect("SenseVoice 模型清单缺失");
         let sv_names: Vec<_> = sv.files.iter().map(|f| f.name).collect();
         assert!(sv_names.contains(&"model.int8.onnx"));
@@ -1966,7 +2014,7 @@ mod tests {
         // X-ASR：官方整包 + 两个固定 revision 的 ModelScope 逐文件镜像
         let x = SHERPA_MODELS
             .iter()
-            .find(|m| m.engine_id == "sherpa-onnx-x-asr-zh-en")
+            .find(|m| m.recipe == ModelRecipe::ZipformerTransducer)
             .expect("X-ASR 模型清单缺失");
         assert!(x.archive.is_some(), "X-ASR 应走整包下载");
         assert_eq!(x.file_mirrors.len(), 2, "X-ASR 应有主、备两个国内镜像");
@@ -1994,7 +2042,7 @@ mod tests {
         // FunASR-Nano：encoder_adaptor/llm/embedding + Qwen3-0.6B tokenizer 目录
         let fun = SHERPA_MODELS
             .iter()
-            .find(|m| m.engine_id == "sherpa-onnx-funasr-nano")
+            .find(|m| m.id == "funasr-nano-int8-2025-12-30")
             .expect("FunASR-Nano 模型清单缺失");
         let fun_names: Vec<_> = fun.files.iter().map(|f| f.name).collect();
         for need in [
@@ -2022,7 +2070,7 @@ mod tests {
             .iter()
             .find(|m| m.id == "funasr-nano-int8-modelscope")
             .expect("缺少 FunASR-Nano 魔搭社区条目");
-        assert_eq!(fun_ms.engine_id, "sherpa-onnx-funasr-nano");
+        assert_eq!(fun_ms.engine_id, SHERPA_OFFLINE_ENGINE_ID);
         assert_eq!(fun_ms.file_mirrors.len(), 1);
         assert!(fun_ms.file_mirrors[0]
             .base_url
@@ -2044,7 +2092,7 @@ mod tests {
 
         let sv = SHERPA_MODELS
             .iter()
-            .find(|m| m.engine_id == "sherpa-onnx-sensevoice")
+            .find(|m| m.recipe == ModelRecipe::SenseVoice)
             .expect("SenseVoice 模型清单缺失");
         assert_eq!(sv.file_mirrors.len(), 1);
         assert!(sv.file_mirrors[0]
@@ -2111,6 +2159,54 @@ mod tests {
         assert!(
             SHERPA_MODELS.iter().any(|m| m.id == x),
             "X-ASR 默认模型应在清单内：{x}"
+        );
+    }
+
+    #[test]
+    fn active_model_respects_io_engine_and_ignores_other_loop() {
+        let mut s = settings::Settings::default();
+        s.active_model_id = "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05".into();
+        assert_eq!(
+            active_model_from(&s, SHERPA_STREAMING_ENGINE_ID),
+            "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05"
+        );
+        assert_eq!(
+            active_model_from(&s, "sherpa-onnx-x-asr-zh-en"),
+            "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05"
+        );
+        assert_eq!(
+            active_model_from(&s, SHERPA_OFFLINE_ENGINE_ID),
+            sensevoice_default_model(),
+            "流式活动模型不应污染非流式循环"
+        );
+
+        s.active_model_id = "sense-voice-zh-en-ja-ko-yue-2024-07-17".into();
+        assert_eq!(
+            active_model_from(&s, SHERPA_OFFLINE_ENGINE_ID),
+            "sense-voice-zh-en-ja-ko-yue-2024-07-17"
+        );
+        assert_eq!(
+            active_model_from(&s, SHERPA_STREAMING_ENGINE_ID),
+            multi_file_default_model(SHERPA_STREAMING_ENGINE_ID).unwrap()
+        );
+    }
+
+    #[test]
+    fn model_id_from_cfg_prefers_session_options() {
+        let cfg = SessionConfig {
+            options: serde_json::json!({
+                "model": "funasr-nano-int8-2025-12-30"
+            }),
+            ..SessionConfig::default()
+        };
+        assert_eq!(
+            model_id_from_cfg(&cfg, SHERPA_OFFLINE_ENGINE_ID),
+            "funasr-nano-int8-2025-12-30"
+        );
+        assert_eq!(
+            model_id_from_cfg(&cfg, SHERPA_STREAMING_ENGINE_ID),
+            multi_file_default_model(SHERPA_STREAMING_ENGINE_ID).unwrap(),
+            "跨循环的 options.model 应被忽略"
         );
     }
 

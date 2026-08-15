@@ -41,7 +41,7 @@ pub(crate) fn map_language(lang: &str) -> String {
 
 /// 填充 SenseVoice 模型家族字段（骨架已设 num_threads/provider）
 #[cfg(feature = "engine-sherpa")]
-fn configure(
+pub(crate) fn configure(
     cfg: &SessionConfig,
     dir: &std::path::Path,
     config: &mut sherpa_onnx::OfflineRecognizerConfig,

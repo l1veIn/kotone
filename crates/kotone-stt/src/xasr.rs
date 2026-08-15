@@ -106,10 +106,9 @@ mod tests {
             "X-ASR tokens 使用 ▁ 前缀的 SentencePiece piece；cjkchar+bpe 会把中文拆成词表中不存在的裸字"
         );
         assert_eq!(SPEC.bpe_vocab_file, Some("bpe.vocab"));
-        // X-ASR 与 zipformer 清单条目各归各的引擎
         let m = crate::model::SHERPA_MODELS
             .iter()
-            .find(|m| m.engine_id == ENGINE_ID)
+            .find(|m| m.recipe == crate::model::ModelRecipe::ZipformerTransducer)
             .expect("X-ASR 模型清单缺失");
         let names: Vec<_> = m.files.iter().map(|f| f.name).collect();
         for need in [SPEC.encoder_file, SPEC.decoder_file, SPEC.joiner_file] {
