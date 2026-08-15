@@ -39,7 +39,8 @@ impl ProcessorFactory for QwenMtFactory {
                 ProcessorConfigField {
                     key: "connectionId".into(),
                     display_name: "API 连接".into(),
-                    description: "仅通义连接可用。请用 qwen-mt-lite，不要选 Gemini / OpenAI。".into(),
+                    description: "仅通义连接可用。请用 qwen-mt-lite，不要选 Gemini / OpenAI。"
+                        .into(),
                     kind: ProcessorConfigFieldKind::Connection,
                     required: true,
                     file_extensions: Vec::new(),
@@ -85,7 +86,13 @@ impl ProcessorFactory for QwenMtFactory {
             .filter(|id| !id.is_empty())
             .ok_or_else(|| "请选择 API 连接".to_string())?;
         let mut connection = self.connections.resolve(connection_id)?;
-        if connection.api_key.as_deref().unwrap_or("").trim().is_empty() {
+        if connection
+            .api_key
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        {
             return Err(format!("连接「{}」还没有 API key", connection.display_name));
         }
         if let Some(model) = config
@@ -264,15 +271,15 @@ mod tests {
 
     #[test]
     fn english_target_gets_builtin_terms_and_user_overrides() {
-        let merged = merge_terms(
-            "English",
-            json!([{ "source": "闪现", "target": "FLASH" }]),
-        );
+        let merged = merge_terms("English", json!([{ "source": "闪现", "target": "FLASH" }]));
         let terms = merged.as_array().unwrap();
         let flash = terms.iter().find(|item| item["source"] == "闪现").unwrap();
         assert_eq!(flash["target"], "FLASH");
         assert!(terms.iter().any(|item| item["source"] == "上单"));
-        assert!(merge_terms("Japanese", json!([])).as_array().unwrap().is_empty());
+        assert!(merge_terms("Japanese", json!([]))
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

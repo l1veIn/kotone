@@ -70,9 +70,17 @@ pub mod imp {
             if let Some(r) = guard.as_ref() {
                 return Ok(r.clone());
             }
-            let id = crate::model::active_model(self.spec.engine_id);
+            let id = crate::model::model_id_from_cfg(cfg, self.spec.engine_id);
             if !crate::model::multi_model_ready(&id) {
                 return Err(self.spec.not_ready_hint.into());
+            }
+            match crate::model::recipe_of(&id) {
+                Some(
+                    crate::model::ModelRecipe::SenseVoice | crate::model::ModelRecipe::FunasrNano,
+                ) => {}
+                other => {
+                    return Err(format!("模型 {id} 的配方 {other:?} 不能走非流式 sherpa"));
+                }
             }
             let dir = crate::model::multi_model_dir(&id).unwrap();
 

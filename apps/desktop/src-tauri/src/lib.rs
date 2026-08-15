@@ -13,6 +13,7 @@ use tauri::{AppHandle, Emitter as TauriEventEmitter, Manager};
 
 use hotkey::{HotkeyManager, HotkeyStatus, InputEnvironmentCheck};
 use kotone_core::audio::AudioDevice;
+use kotone_core::connection::{Connection, ConnectionResolver, SecretStore};
 use kotone_core::inject::{CancelToken, FocusBackend, InjectError, Injector};
 use kotone_core::interaction::{effective_hotkey_mode, InteractionPolicy};
 use kotone_core::orchestrator::{Emitter, Orchestrator};
@@ -20,7 +21,6 @@ use kotone_core::profile::{
     self, format_hotwords_export, GameProfile, HotwordMergeReport, ProfileDeleteOutcome,
 };
 use kotone_core::runtime::RuntimePhase;
-use kotone_core::connection::{Connection, ConnectionResolver, SecretStore};
 use kotone_core::settings::{
     self, OverlayConfig, OverlayPosition, OverlayStyle, OverlayVisibility, Settings,
     SettingsRepository,
@@ -875,9 +875,7 @@ fn set_audio_device(state: tauri::State<SharedState>, id: String) -> Result<(), 
 // ---------- STT 引擎（§5.3） ----------
 
 #[tauri::command]
-async fn list_stt_engines(
-    state: tauri::State<'_, SharedState>,
-) -> Result<Vec<EngineInfo>, String> {
+async fn list_stt_engines(state: tauri::State<'_, SharedState>) -> Result<Vec<EngineInfo>, String> {
     let engines = state.engines.clone();
     tauri::async_runtime::spawn_blocking(move || engines.list_info())
         .await
@@ -1611,15 +1609,15 @@ pub fn run() {
             let mut processor_registry = kotone_core::postprocess::ProcessorRegistry::new();
             let secrets: Arc<dyn SecretStore> =
                 Arc::new(kotone_postprocess::secrets::KeyringSecretStore);
-            let connections: Arc<dyn ConnectionResolver> = Arc::new(
-                kotone_postprocess::secrets::SecretBackedResolver::new(
+            let connections: Arc<dyn ConnectionResolver> =
+                Arc::new(kotone_postprocess::secrets::SecretBackedResolver::new(
                     settings.clone(),
                     secrets.clone(),
-                ),
-            );
-            if let Err(error) =
-                kotone_postprocess::register_with_connections(&mut processor_registry, connections.clone())
-            {
+                ));
+            if let Err(error) = kotone_postprocess::register_with_connections(
+                &mut processor_registry,
+                connections.clone(),
+            ) {
                 return Err(Box::<dyn std::error::Error>::from(error));
             }
             let processors = Arc::new(processor_registry);

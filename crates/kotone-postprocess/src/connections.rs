@@ -70,9 +70,9 @@ pub fn upsert_connection(
         secrets.set(&id, secret)?;
     }
 
-    match repository.update(|next| {
-        upsert_connection_record(&mut next.connections, connection.clone())
-    }) {
+    match repository
+        .update(|next| upsert_connection_record(&mut next.connections, connection.clone()))
+    {
         Ok(settings) => Ok(settings),
         Err(error) => {
             if !existed {
@@ -108,10 +108,7 @@ fn upsert_connection_record(
     connections: &mut Vec<Connection>,
     connection: Connection,
 ) -> Result<(), String> {
-    if let Some(existing) = connections
-        .iter_mut()
-        .find(|item| item.id == connection.id)
-    {
+    if let Some(existing) = connections.iter_mut().find(|item| item.id == connection.id) {
         *existing = connection;
         return Ok(());
     }
@@ -152,13 +149,7 @@ mod tests {
         let error = upsert_connection(&repository, &secrets, sample("ds"), None).unwrap_err();
         assert!(error.contains("必须填写"));
 
-        upsert_connection(
-            &repository,
-            &secrets,
-            sample("ds"),
-            Some(" sk-one ".into()),
-        )
-        .unwrap();
+        upsert_connection(&repository, &secrets, sample("ds"), Some(" sk-one ".into())).unwrap();
         assert_eq!(secrets.get("ds").unwrap().as_deref(), Some("sk-one"));
 
         let mut renamed = sample("ds");

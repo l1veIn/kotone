@@ -131,8 +131,9 @@ impl EngineRegistry {
         self.engines.sort_by(|a, b| a.id().cmp(b.id()));
     }
 
-    /// 按 ID 取引擎实例引用
+    /// 按 ID 取引擎实例引用。旧的 sherpa 家族 id 会映射到流式/离线运行时。
     pub fn get(&self, id: &str) -> Option<&dyn SttEngine> {
+        let id = canonical_stt_engine(id);
         self.engines.iter().find(|e| e.id() == id).map(|e| &**e)
     }
 
@@ -153,5 +154,50 @@ impl EngineRegistry {
 impl Default for EngineRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// 旧配置里的 sherpa 家族 id → 运行时 I/O 引擎。
+pub fn canonical_stt_engine(id: &str) -> &str {
+    match id {
+        "sherpa-onnx-x-asr-zh-en" => "sherpa-streaming",
+        "sherpa-onnx-sensevoice" | "sherpa-onnx-funasr-nano" => "sherpa-offline",
+        id => id,
+    }
+}
+
+/// 合并 session options 时要读的 engineOptions 键：旧家族 id 在前，I/O id 在后。
+pub fn stt_engine_option_keys(id: &str) -> &'static [&'static str] {
+    match id {
+        "sherpa-onnx-x-asr-zh-en" | "sherpa-streaming" => {
+            &["sherpa-onnx-x-asr-zh-en", "sherpa-streaming"]
+        }
+        "sherpa-onnx-sensevoice" => &["sherpa-onnx-sensevoice", "sherpa-offline"],
+        "sherpa-onnx-funasr-nano" => &["sherpa-onnx-funasr-nano", "sherpa-offline"],
+        "sherpa-offline" => &["sherpa-offline"],
+        _ => &[],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn family_ids_map_to_io_runtimes() {
+        assert_eq!(
+            canonical_stt_engine("sherpa-onnx-x-asr-zh-en"),
+            "sherpa-streaming"
+        );
+        assert_eq!(
+            canonical_stt_engine("sherpa-onnx-sensevoice"),
+            "sherpa-offline"
+        );
+        assert_eq!(
+            canonical_stt_engine("sherpa-onnx-funasr-nano"),
+            "sherpa-offline"
+        );
+        assert_eq!(canonical_stt_engine("sherpa-streaming"), "sherpa-streaming");
+        assert_eq!(canonical_stt_engine("mock-stream"), "mock-stream");
     }
 }

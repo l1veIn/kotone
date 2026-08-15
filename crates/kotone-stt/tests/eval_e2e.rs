@@ -42,7 +42,7 @@ fn replay_fixture_across_ready_engines() {
         .filter(|i| i.is_ready)
         .collect();
     assert!(
-        ready.iter().any(|i| i.id == "sherpa-onnx-x-asr-zh-en"),
+        ready.iter().any(|i| i.id == "sherpa-streaming"),
         "E2E 前提：X-ASR 模型已安装（kotone-cli download x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05）"
     );
 
@@ -72,7 +72,7 @@ fn replay_fixture_across_ready_engines() {
     let x = eval::replay_at(
         dir.path(),
         &session.session_id,
-        "sherpa-onnx-x-asr-zh-en",
+        "sherpa-streaming",
         &registry,
     )
     .expect("X-ASR 回放应成功");

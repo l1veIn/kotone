@@ -139,10 +139,7 @@ fn transcribe(
     language: &str,
     wav: &[u8],
 ) -> Result<String, String> {
-    let endpoint = format!(
-        "{}/audio/transcriptions",
-        base_url.trim_end_matches('/')
-    );
+    let endpoint = format!("{}/audio/transcriptions", base_url.trim_end_matches('/'));
     let boundary = "----kotoneSpeechBoundary";
     let mut body = Vec::new();
     fn push_field(body: &mut Vec<u8>, boundary: &str, name: &str, value: &str) {
@@ -230,5 +227,4 @@ mod tests {
         assert_eq!(&wav[8..12], b"WAVE");
         assert_eq!(wav.len(), 44 + 6);
     }
-
 }

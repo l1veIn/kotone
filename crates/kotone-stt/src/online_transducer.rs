@@ -103,9 +103,14 @@ pub mod imp {
             if let Some(r) = guard.as_ref() {
                 return Ok(r.clone());
             }
-            let id = crate::model::active_model(self.spec.engine_id);
+            let id = crate::model::model_id_from_cfg(cfg, self.spec.engine_id);
             if !crate::model::multi_model_ready(&id) {
                 return Err(self.spec.not_ready_hint.into());
+            }
+            if let Some(recipe) = crate::model::recipe_of(&id) {
+                if recipe != crate::model::ModelRecipe::ZipformerTransducer {
+                    return Err(format!("模型 {id} 的配方 {recipe:?} 不能走流式 transducer"));
+                }
             }
             let dir = crate::model::multi_model_dir(&id).unwrap();
             crate::model::validate_models_dir_path(&dir)?;

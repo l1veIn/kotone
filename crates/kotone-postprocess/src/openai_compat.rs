@@ -68,7 +68,13 @@ impl ProcessorFactory for OpenAiCompatFactory {
             .filter(|id| !id.is_empty())
             .ok_or_else(|| "请选择 API 连接".to_string())?;
         let connection = self.connections.resolve(connection_id)?;
-        if connection.api_key.as_deref().unwrap_or("").trim().is_empty() {
+        if connection
+            .api_key
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        {
             return Err(format!("连接「{}」还没有 API key", connection.display_name));
         }
         let system_prompt = config
@@ -156,16 +162,12 @@ fn writing_prompt_presets() -> Vec<ProcessorFieldPreset> {
         ProcessorFieldPreset {
             id: "teammate".into(),
             display_name: "队友短讯".into(),
-            value: format!(
-                "把口语收成能直接发进游戏聊天的一句短话。删口癖，不扩写。{keep_terms}"
-            ),
+            value: format!("把口语收成能直接发进游戏聊天的一句短话。删口癖，不扩写。{keep_terms}"),
         },
         ProcessorFieldPreset {
             id: "cute".into(),
             display_name: "猫娘可爱".into(),
-            value: format!(
-                "改写成可爱、带一点猫娘口吻的短句，但意思不变。{keep_terms}"
-            ),
+            value: format!("改写成可爱、带一点猫娘口吻的短句，但意思不变。{keep_terms}"),
         },
         ProcessorFieldPreset {
             id: "poet".into(),
@@ -205,9 +207,7 @@ fn writing_prompt_presets() -> Vec<ProcessorFieldPreset> {
         ProcessorFieldPreset {
             id: "fix-only".into(),
             display_name: "只纠错".into(),
-            value: format!(
-                "只修正明显识别错误，不改语气、不删口癖、不润色。{keep_terms}"
-            ),
+            value: format!("只修正明显识别错误，不改语气、不删口癖、不润色。{keep_terms}"),
         },
     ]
 }
