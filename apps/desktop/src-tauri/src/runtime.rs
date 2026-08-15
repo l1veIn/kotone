@@ -37,11 +37,7 @@ fn session_config_from(settings: &Settings, engine_id: &str) -> SessionConfig {
         language: settings.language.clone(),
         hotwords: active_profile.hotwords,
         hotwords_score: settings.hotwords_score,
-        options: settings
-            .engine_options
-            .get(engine_id)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null),
+        options: settings.session_options(engine_id),
     }
 }
 

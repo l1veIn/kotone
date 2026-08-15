@@ -37,6 +37,9 @@ static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// 下载互斥：GUI 与 CLI 共用同一实现，防并发重复下载同一模型
 static DOWNLOAD_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+/// 取消时返回的稳定前缀（前端靠它区分「取消」和真正的下载失败）。
+pub const CANCELLED_MSG: &str = "下载已取消（临时文件已保留，可随时续传）";
+
 /// 请求取消当前下载（幂等）
 pub fn request_cancel() {
     CANCEL_REQUESTED.store(true, Ordering::SeqCst);
@@ -45,6 +48,24 @@ pub fn request_cancel() {
 /// 下载循环是否应中止（每块读/每次候选回退前检查）
 pub fn cancel_requested() -> bool {
     CANCEL_REQUESTED.load(Ordering::SeqCst)
+}
+
+pub fn cancelled_err() -> String {
+    CANCELLED_MSG.to_string()
+}
+
+/// 该错误是否表示用户取消（回退源时必须立刻停，不能当成镜像失败）。
+pub fn is_cancelled(err: &str) -> bool {
+    err.starts_with("下载已取消")
+}
+
+async fn wait_until_cancelled() {
+    loop {
+        if cancel_requested() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 }
 
 /// 下载临界区守卫。离开作用域（包括错误返回和 panic 展开）时自动释放全局状态。
@@ -161,11 +182,14 @@ fn download_to_tmp_with_timeouts(
         if existing > 0 {
             request = request.header(RANGE, format!("bytes={existing}-"));
         }
-        let mut resp = request
-            .send()
-            .await
-            // 重定向后的 ModelScope CDN URL 带短期 auth_key；错误日志不应把它输出。
-            .map_err(|e| format!("下载失败（{url}）：{}", e.without_url()))?;
+        let mut resp = tokio::select! {
+            biased;
+            _ = wait_until_cancelled() => return Err(cancelled_err()),
+            resp = request.send() => {
+                // 重定向后的 ModelScope CDN URL 带短期 auth_key；错误日志不应把它输出。
+                resp.map_err(|e| format!("下载失败（{url}）：{}", e.without_url()))?
+            }
+        };
 
         if resp.status() == StatusCode::RANGE_NOT_SATISFIABLE && existing > 0 {
             let total = resp
@@ -219,13 +243,16 @@ fn download_to_tmp_with_timeouts(
         loop {
             if cancel_requested() {
                 // 取消：保留 .part 供续传（与网络中断同语义，不删临时文件）
-                return Err("下载已取消（临时文件已保留，可随时续传）".to_string());
+                return Err(cancelled_err());
             }
-            let Some(chunk) = resp
-                .chunk()
-                .await
-                .map_err(|e| format!("下载中断：{}", e.without_url()))?
-            else {
+            let chunk = tokio::select! {
+                biased;
+                _ = wait_until_cancelled() => return Err(cancelled_err()),
+                chunk = resp.chunk() => {
+                    chunk.map_err(|e| format!("下载中断：{}", e.without_url()))?
+                }
+            };
+            let Some(chunk) = chunk else {
                 break;
             };
             out.write_all(&chunk)
@@ -324,13 +351,14 @@ pub fn download_resolved(
     let mut last_err = String::new();
     for (i, cand) in candidates.iter().enumerate() {
         if cancel_requested() {
-            return Err("下载已取消（临时文件已保留，可随时续传）".to_string());
+            return Err(cancelled_err());
         }
         if i > 0 {
             log(&format!("镜像失败，回退重试：{cand}"));
         }
         match download_file(cand, dest, expected_sha256, progress) {
             Ok(()) => return Ok(()),
+            Err(e) if is_cancelled(&e) => return Err(e),
             Err(e) => last_err = e,
         }
     }
@@ -361,6 +389,14 @@ mod tests {
     #[test]
     fn hex_lower_works() {
         assert_eq!(hex_lower(&[0x00, 0xff, 0x1a]), "00ff1a");
+    }
+
+    #[test]
+    fn cancelled_error_is_recognized() {
+        assert!(is_cancelled(CANCELLED_MSG));
+        assert!(is_cancelled("下载已取消（临时文件已保留，可随时续传）"));
+        assert!(!is_cancelled("下载失败（https://example）：error sending request"));
+        assert!(!is_cancelled("大小不符：期望 1，实际 2"));
     }
 
     #[test]
@@ -656,16 +692,23 @@ mod tests {
     #[test]
     #[ignore = "依赖 ModelScope 公网；发布前手动运行"]
     fn modelscope_public_file_downloads_without_token() {
-        let url = "https://www.modelscope.cn/models/yangchen1258/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05/resolve/aa50faf0a9e45f6ea8913762151d47679ba468d7/tokens.txt";
+        let cases = [
+            (
+                "https://www.modelscope.cn/models/yangchen1258/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05/resolve/aa50faf0a9e45f6ea8913762151d47679ba468d7/tokens.txt",
+                "b818a60878b9aae978cbb8ad594acbd403d76d1af2e31ef4197c84e2dbdba27c",
+                58_806u64,
+            ),
+            (
+                "https://www.modelscope.cn/models/fengge2024/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/9bd9398d89294cbf1964af126ff13e6890394cbc/tokens.txt",
+                "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc",
+                315_894u64,
+            ),
+        ];
         let dir = tempfile::tempdir().unwrap();
-        let dest = dir.path().join("tokens.txt");
-        download_file(
-            url,
-            &dest,
-            Some("b818a60878b9aae978cbb8ad594acbd403d76d1af2e31ef4197c84e2dbdba27c"),
-            &|_, _| {},
-        )
-        .unwrap();
-        assert_eq!(fs::metadata(dest).unwrap().len(), 58_806);
+        for (i, (url, sha, size)) in cases.iter().enumerate() {
+            let dest = dir.path().join(format!("file-{i}.bin"));
+            download_file(url, &dest, Some(sha), &|_, _| {}).unwrap();
+            assert_eq!(fs::metadata(&dest).unwrap().len(), *size, "url={url}");
+        }
     }
 }

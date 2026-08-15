@@ -47,9 +47,15 @@ fn configure(
     config: &mut sherpa_onnx::OfflineRecognizerConfig,
 ) {
     let f = |name: &str| dir.join(name).to_string_lossy().into_owned();
+    let language = cfg
+        .options
+        .get("language")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .unwrap_or(&cfg.language);
     config.model_config.sense_voice = sherpa_onnx::OfflineSenseVoiceModelConfig {
         model: Some(f("model.int8.onnx")),
-        language: Some(map_language(&cfg.language)),
+        language: Some(map_language(language)),
         use_itn: true, // 逆文本正则（数字/标点落形），聊天场景更自然
     };
     config.model_config.tokens = Some(f("tokens.txt"));

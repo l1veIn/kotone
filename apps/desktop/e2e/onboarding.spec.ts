@@ -100,6 +100,12 @@ test("a failed model download keeps an inline error and retry action", async ({ 
   await page.getByRole("button", { name: "高级", exact: true }).click();
   await page.getByRole("button", { name: "下载", exact: true }).first().click();
 
+  const guide = page.getByTestId("manual-download-dialog");
+  await expect(guide).toBeVisible();
+  await expect(guide.getByText(/网络连接失败/)).toBeVisible();
+  await guide.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(page.getByTestId("manual-download-dialog")).toHaveCount(0);
   await expect(page.getByText(/下载失败：网络连接失败/)).toBeVisible();
   await expect(page.getByRole("button", { name: "重试", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "手动下载", exact: true }).first()).toBeVisible();
 });

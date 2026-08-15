@@ -16,7 +16,10 @@
     setAudioDevice,
     setModelsDir,
     updateSettings,
+    getModelInstallGuide,
+    isDownloadCancelled,
     type AudioDevice,
+    type ModelInstallGuide,
     type DownloadProgress,
     type GameProfile,
     type InputEnvironmentCheck,
@@ -37,6 +40,7 @@
   import stickerHello from "../../assets/brand/stickers/hello.webp";
   import stickerThinking from "../../assets/brand/stickers/thinking.webp";
   import stickerCheering from "../../assets/brand/stickers/cheering.webp";
+  import ManualDownloadDialog from "../../lib/components/ManualDownloadDialog.svelte";
 
   let { onDone }: { onDone: () => void } = $props();
 
@@ -208,6 +212,8 @@
   let dlProgress = $state<{ downloaded: number; total: number } | null>(null);
   let dlError = $state("");
   let unlistenDl: (() => void) | undefined;
+  let cancellingDownload = $state(false);
+  let manualGuide = $state<ModelInstallGuide | null>(null);
 
   const dlPercent = $derived(
     dlProgress && dlProgress.total > 0
@@ -241,10 +247,16 @@
       models = models.map((m) => (m.id === id ? { ...m, downloaded: true } : m));
       toast(true, "模型下载完成，可以继续");
     } catch (e) {
-      dlError = errText(e);
-      toast(false, `模型下载失败：${dlError}`);
+      if (isDownloadCancelled(e)) {
+        toastInfo("已取消下载，可随时继续");
+      } else {
+        dlError = errText(e);
+        toast(false, `模型下载失败：${dlError}`);
+        await openManualGuide(id);
+      }
     } finally {
       downloadTargetId = null;
+      cancellingDownload = false;
       unlistenDl?.();
       unlistenDl = undefined;
     }
@@ -252,10 +264,38 @@
 
   /** 取消下载（.part 保留，可续传；P2-⑦） */
   async function cancelDownloadById() {
+    if (cancellingDownload) return;
+    cancellingDownload = true;
     try {
       await cancelDownload();
     } catch (e) {
+      cancellingDownload = false;
       toast(false, `取消失败：${errText(e)}`);
+    }
+  }
+
+  async function openManualGuide(id: string) {
+    try {
+      manualGuide = await getModelInstallGuide(id);
+    } catch (e) {
+      toast(false, `无法加载手动安装指引：${errText(e)}`);
+    }
+  }
+
+  async function recheckAfterManualInstall() {
+    const id = manualGuide?.id;
+    try {
+      models = await listModels();
+    } catch (e) {
+      toast(false, `重新检测失败：${errText(e)}`);
+      return;
+    }
+    if (id && isDownloaded(models.find((m) => m.id === id) ?? null)) {
+      dlError = "";
+      manualGuide = null;
+      toast(true, "已检测到模型文件");
+    } else {
+      toastWarn("还没检测到完整模型，请确认文件名和目录后重试");
     }
   }
 
@@ -601,15 +641,26 @@
                   {dlPercent === null ? "连接" : `${dlPercent}%`}
                 </span>
                 <button
-                  class="shrink-0 rounded-lg bg-white/10 px-2.5 py-1 text-[11px] text-white/70 ring-1 ring-white/15 transition hover:bg-white/20"
+                  class="shrink-0 rounded-lg bg-white/10 px-2.5 py-1 text-[11px] text-white/70 ring-1 ring-white/15 transition hover:bg-white/20 disabled:opacity-50"
+                  disabled={cancellingDownload}
                   onclick={() => void cancelDownloadById()}
                 >
-                  取消
+                  {cancellingDownload ? "正在取消…" : "取消"}
                 </button>
               </div>
             {/if}
             {#if dlError}
-              <p class="mt-2 pl-9 text-[11px] text-kotone-pink">{dlError}</p>
+              <div class="mt-2 flex items-start gap-2 pl-9">
+                <p class="min-w-0 flex-1 text-[11px] text-kotone-pink">{dlError}</p>
+                {#if primaryModel}
+                  <button
+                    class="shrink-0 text-[11px] text-white/60 underline-offset-2 hover:text-white/85 hover:underline"
+                    onclick={() => void openManualGuide(primaryModel.id)}
+                  >
+                    手动下载
+                  </button>
+                {/if}
+              </div>
             {/if}
           </div>
         </div>
@@ -776,3 +827,17 @@
     </div>
   </div>
 </div>
+
+{#if manualGuide}
+  <ManualDownloadDialog
+    guide={manualGuide}
+    error={dlError}
+    onClose={() => (manualGuide = null)}
+    onRetry={() => {
+      const id = manualGuide?.id;
+      manualGuide = null;
+      if (id) void downloadById(id);
+    }}
+    onRecheck={() => void recheckAfterManualInstall()}
+  />
+{/if}

@@ -19,7 +19,53 @@ use kotone_core::settings;
 
 use crate::download::{self, Progress};
 
-/// 模型信息（跨引擎统一列出：已下载/可下载）
+/// 输出形态：Kotone 运行时只区分这两种循环。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModelIo {
+    Streaming,
+    Offline,
+}
+
+/// 权重从哪来：本机 sherpa，或远程 HTTP。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModelBackend {
+    Sherpa,
+    Remote,
+}
+
+/// sherpa / 远程后端的打开配方。加新家族只加一个配方，不注册新引擎。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModelRecipe {
+    ZipformerTransducer,
+    SenseVoice,
+    FunasrNano,
+    OpenaiCompat,
+}
+
+/// 模型自己声明的可配项（语言、连接、密钥等）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelConfigField {
+    pub key: String,
+    pub label: String,
+    /// string / enum / secret / connection
+    pub kind: String,
+    pub default: String,
+    pub options: Vec<ModelConfigOption>,
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelConfigOption {
+    pub value: String,
+    pub label: String,
+}
+
+/// 模型信息（跨后端统一列出：已下载/可下载）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
@@ -30,6 +76,10 @@ pub struct ModelInfo {
     pub download_url: String,
     pub sha256: String,
     pub downloaded: bool,
+    pub io: ModelIo,
+    pub backend: ModelBackend,
+    pub recipe: ModelRecipe,
+    pub config_schema: Vec<ModelConfigField>,
 }
 
 // ---------- 路径 ----------
@@ -102,7 +152,50 @@ pub struct MultiFileModel {
     pub file_mirrors: &'static [FileMirrorSource],
     /// 国内整包镜像（tar.bz2）。官方仍走 files / archive；auto/mirror 优先尝试这里。
     pub archive_mirrors: &'static [ArchiveSource],
+    /// dest 文件名 → 镜像仓相对路径；空片 = 与 dest 同名
+    pub remote_names: &'static [(&'static str, &'static str)],
+    pub io: ModelIo,
+    pub backend: ModelBackend,
+    pub recipe: ModelRecipe,
+    pub config_schema: &'static [StaticConfigField],
 }
+
+pub struct StaticConfigField {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub kind: &'static str,
+    pub default: &'static str,
+    pub options: &'static [(&'static str, &'static str)],
+    pub required: bool,
+}
+
+const SENSEVOICE_LANGUAGE_SCHEMA: &[StaticConfigField] = &[StaticConfigField {
+    key: "language",
+    label: "识别语言",
+    kind: "enum",
+    default: "auto",
+    options: &[
+        ("auto", "自动"),
+        ("zh", "中文"),
+        ("en", "英语"),
+        ("ja", "日语"),
+        ("ko", "韩语"),
+        ("yue", "粤语"),
+    ],
+    required: false,
+}];
+
+const REMOTE_CONNECTION_SCHEMA: &[StaticConfigField] = &[StaticConfigField {
+    key: "connectionId",
+    label: "API 连接",
+    kind: "connection",
+    default: "",
+    options: &[],
+    required: true,
+}];
+
+pub const REMOTE_OPENAI_STT_ID: &str = "openai-compat-stt";
+pub const REMOTE_OPENAI_ENGINE_ID: &str = "remote-openai-compat";
 
 /// sherpa-onnx 模型清单（ADR-004）。默认引擎 X-ASR（六引擎评测冠军：CER 0.008、
 /// 首字 71ms、162MB；见 docs/development.md §11 v15），其模型走 archive 整包下载。
@@ -168,6 +261,11 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
             },
         ],
         archive_mirrors: &[],
+        remote_names: &[],
+        io: ModelIo::Streaming,
+        backend: ModelBackend::Sherpa,
+        recipe: ModelRecipe::ZipformerTransducer,
+        config_schema: &[],
     },
     // SenseVoice（非流式、多语言）：model.int8.onnx 的 SHA256 取自 HF resolve
     // 固定到不可变提交 2365bae...；tokens.txt SHA256 由该提交内容实算。
@@ -199,6 +297,11 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
             },
         ],
         archive_mirrors: &[],
+        remote_names: &[],
+        io: ModelIo::Offline,
+        backend: ModelBackend::Sherpa,
+        recipe: ModelRecipe::SenseVoice,
+        config_schema: SENSEVOICE_LANGUAGE_SCHEMA,
     },
     // FunASR-Nano（非流式，encoder_adaptor + LLM + embedding）：HF 逐文件直下。
     // 固定到不可变提交 6f16bd3...；merges.txt SHA256 由该提交内容实算。
@@ -207,7 +310,7 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
     MultiFileModel {
         id: "funasr-nano-int8-2025-12-30",
         engine_id: "sherpa-onnx-funasr-nano",
-        display_name: "FunASR-Nano 中英日（int8，非流式）",
+        display_name: "FunASR-Nano 中英日（官方 Hugging Face，非流式）",
         dir: "sherpa-onnx-funasr-nano-int8-2025-12-30",
         files: &[
             ModelFile {
@@ -249,12 +352,75 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
         ],
         archive: None,
         file_mirrors: &[],
-        // 社区整包镜像（仓库只提供 tar.bz2，无逐文件）。auto 优先下这个，失败回退 HF 逐文件。
-        archive_mirrors: &[ArchiveSource {
-            url: "https://www.modelscope.cn/models/fuyuantech/fuyuan-sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/dee60339b88f7b4694544407a2d9d8e19697f4d0/sherpa-onnx-funasr-nano-int8-2025-12-30.tar.bz2",
-            sha256: "eb43d7ccc2e86b243f6a03b7df361033dda66db9523d1a92bf6aca2b50c9476b",
-            size_bytes: 841_730_611,
+        // 不要接 fuyuantech 那个 tar.bz2：包是按魔搭原版 zengshuishui/FunASR-nano-onnx
+        // 打的（encoder_adaptor.int8.onnx = 238277200），和 sherpa-onnx 官方 HF
+        // csukuangfj 提交 6f16bd3（237792748）不是同一份文件。整包 SHA256 能过，
+        // 解压后按官方体积校验必失败，用户等于白下 800MB+。
+        archive_mirrors: &[],
+        remote_names: &[],
+        io: ModelIo::Offline,
+        backend: ModelBackend::Sherpa,
+        recipe: ModelRecipe::FunasrNano,
+        config_schema: &[],
+    },
+    // FunASR-Nano 魔搭社区版：同一套 sherpa-onnx FunASR-Nano 引擎，权重来自
+    // zengshuishui/FunASR-nano-onnx（国内直下）。文件布局按 sherpa 约定落盘
+    // （llm.int8.onnx 在模型根目录），镜像仓里对应 llm_int8/llm.int8.onnx。
+    // revision 钉在 8d423385…（其后只改了 README）。
+    MultiFileModel {
+        id: "funasr-nano-int8-modelscope",
+        engine_id: "sherpa-onnx-funasr-nano",
+        display_name: "FunASR-Nano 中英日（魔搭社区，国内直下）",
+        dir: "sherpa-onnx-funasr-nano-int8-modelscope",
+        files: &[
+            ModelFile {
+                name: "encoder_adaptor.int8.onnx",
+                url: "https://www.modelscope.cn/models/zengshuishui/FunASR-nano-onnx/resolve/8d423385704f584e94cd66a76dd08493a55456e2/encoder_adaptor.int8.onnx",
+                sha256: Some("d0246c823f2c34133ae0efee395d8a189c8f92643e3432f866939ee34d34492c"),
+                size_bytes: 238_277_200,
+            },
+            ModelFile {
+                name: "llm.int8.onnx",
+                url: "https://www.modelscope.cn/models/zengshuishui/FunASR-nano-onnx/resolve/8d423385704f584e94cd66a76dd08493a55456e2/llm_int8/llm.int8.onnx",
+                sha256: Some("80a8f9734595f5e0769ff866775f55965fb9ea68125d6af7b62eba2a70ad24ff"),
+                size_bytes: 600_025_527,
+            },
+            ModelFile {
+                name: "embedding.int8.onnx",
+                url: "https://www.modelscope.cn/models/zengshuishui/FunASR-nano-onnx/resolve/8d423385704f584e94cd66a76dd08493a55456e2/embedding.int8.onnx",
+                sha256: Some("a05d2816e284fcca29a5dccb2c14b9edeb638fd983a84cd4a447248889b6a408"),
+                size_bytes: 155_583_106,
+            },
+            ModelFile {
+                name: "Qwen3-0.6B/merges.txt",
+                url: "https://www.modelscope.cn/models/zengshuishui/FunASR-nano-onnx/resolve/8d423385704f584e94cd66a76dd08493a55456e2/Qwen3-0.6B/merges.txt",
+                sha256: Some("8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"),
+                size_bytes: 1_671_853,
+            },
+            ModelFile {
+                name: "Qwen3-0.6B/tokenizer.json",
+                url: "https://www.modelscope.cn/models/zengshuishui/FunASR-nano-onnx/resolve/8d423385704f584e94cd66a76dd08493a55456e2/Qwen3-0.6B/tokenizer.json",
+                sha256: Some("aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"),
+                size_bytes: 11_422_654,
+            },
+            ModelFile {
+                name: "Qwen3-0.6B/vocab.json",
+                url: "https://www.modelscope.cn/models/zengshuishui/FunASR-nano-onnx/resolve/8d423385704f584e94cd66a76dd08493a55456e2/Qwen3-0.6B/vocab.json",
+                sha256: Some("ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"),
+                size_bytes: 2_776_833,
+            },
+        ],
+        archive: None,
+        file_mirrors: &[FileMirrorSource {
+            base_url: "https://www.modelscope.cn/models/zengshuishui/FunASR-nano-onnx",
+            revision: "8d423385704f584e94cd66a76dd08493a55456e2",
         }],
+        archive_mirrors: &[],
+        remote_names: &[("llm.int8.onnx", "llm_int8/llm.int8.onnx")],
+        io: ModelIo::Offline,
+        backend: ModelBackend::Sherpa,
+        recipe: ModelRecipe::FunasrNano,
+        config_schema: &[],
     },
 ];
 
@@ -472,6 +638,15 @@ pub fn active_model(engine_id: &str) -> String {
 /// 从给定配置推导活动模型 ID（纯函数：壳侧用 SharedState 推导 restartNeeded，
 /// 避免磁盘/内存双读不一致）
 pub fn active_model_from(s: &settings::Settings, engine_id: &str) -> String {
+    let selected = s.active_model_id.trim();
+    if !selected.is_empty() {
+        if is_remote_model(selected) {
+            return selected.to_string();
+        }
+        if SHERPA_MODELS.iter().any(|m| m.id == selected) {
+            return selected.to_string();
+        }
+    }
     let configured = s
         .engine_options
         .get(engine_id)
@@ -480,8 +655,6 @@ pub fn active_model_from(s: &settings::Settings, engine_id: &str) -> String {
         .map(str::to_string);
     let is_multi = SHERPA_MODELS.iter().any(|m| m.engine_id == engine_id);
     match (is_multi, configured) {
-        // sherpa 系：配置的 id 必须属于该引擎自己的清单（跨引擎 id 不认），否则
-        // 兜底该引擎清单默认
         (true, Some(id))
             if SHERPA_MODELS
                 .iter()
@@ -492,8 +665,6 @@ pub fn active_model_from(s: &settings::Settings, engine_id: &str) -> String {
         (true, _) => multi_file_default_model(engine_id)
             .expect("sherpa 系引擎模型清单缺失")
             .to_string(),
-        // 无清单引擎（mock 等）：配置的 id 原样透传，未配置给占位串
-        // （这类引擎不读模型 id，仅为 restart 检测等调用方返回稳定值）
         (false, Some(id)) => id,
         (false, None) => "default".to_string(),
     }
@@ -501,32 +672,194 @@ pub fn active_model_from(s: &settings::Settings, engine_id: &str) -> String {
 
 // ---------- 清单查询 ----------
 
-/// 列出全部用户可管理模型（sherpa 多文件；silero VAD 随本体分发，不在清单内）
-pub fn list() -> Result<Vec<ModelInfo>, String> {
-    let out: Vec<ModelInfo> = SHERPA_MODELS
+fn schema_of(fields: &'static [StaticConfigField]) -> Vec<ModelConfigField> {
+    fields
         .iter()
-        .map(|m| ModelInfo {
-            id: m.id.into(),
-            engine_id: m.engine_id.into(),
-            display_name: m.display_name.into(),
-            size_bytes: m.files.iter().map(|f| f.size_bytes).sum(),
-            download_url: m
-                .file_mirrors
-                .first()
-                .map(|mirror| mirror.base_url.into())
-                .or_else(|| {
-                    m.files
-                        .iter()
-                        .find(|f| !f.url.is_empty())
-                        .map(|f| f.url.into())
+        .map(|f| ModelConfigField {
+            key: f.key.into(),
+            label: f.label.into(),
+            kind: f.kind.into(),
+            default: f.default.into(),
+            options: f
+                .options
+                .iter()
+                .map(|(value, label)| ModelConfigOption {
+                    value: (*value).into(),
+                    label: (*label).into(),
                 })
-                .or_else(|| m.archive.as_ref().map(|a| a.url.into()))
-                .unwrap_or_default(),
-            sha256: String::new(), // 多文件条目逐文件校验，聚合字段留空
-            downloaded: multi_model_ready(m.id),
+                .collect(),
+            required: f.required,
         })
-        .collect();
+        .collect()
+}
+
+fn sherpa_info(m: &MultiFileModel) -> ModelInfo {
+    ModelInfo {
+        id: m.id.into(),
+        engine_id: m.engine_id.into(),
+        display_name: m.display_name.into(),
+        size_bytes: m.files.iter().map(|f| f.size_bytes).sum(),
+        download_url: m
+            .file_mirrors
+            .first()
+            .map(|mirror| mirror.base_url.into())
+            .or_else(|| {
+                m.files
+                    .iter()
+                    .find(|f| !f.url.is_empty())
+                    .map(|f| f.url.into())
+            })
+            .or_else(|| m.archive.as_ref().map(|a| a.url.into()))
+            .unwrap_or_default(),
+        sha256: String::new(),
+        downloaded: multi_model_ready(m.id),
+        io: m.io,
+        backend: m.backend,
+        recipe: m.recipe,
+        config_schema: schema_of(m.config_schema),
+    }
+}
+
+fn remote_openai_info() -> ModelInfo {
+    ModelInfo {
+        id: REMOTE_OPENAI_STT_ID.into(),
+        engine_id: REMOTE_OPENAI_ENGINE_ID.into(),
+        display_name: "在线识别（OpenAI 兼容）".into(),
+        size_bytes: 0,
+        download_url: String::new(),
+        sha256: String::new(),
+        downloaded: true,
+        io: ModelIo::Offline,
+        backend: ModelBackend::Remote,
+        recipe: ModelRecipe::OpenaiCompat,
+        config_schema: schema_of(REMOTE_CONNECTION_SCHEMA),
+    }
+}
+
+/// 列出全部用户可管理模型（sherpa 多文件 + 远程条目；silero VAD 不在清单内）
+pub fn list() -> Result<Vec<ModelInfo>, String> {
+    let mut out: Vec<ModelInfo> = SHERPA_MODELS.iter().map(sherpa_info).collect();
+    out.push(remote_openai_info());
     Ok(out)
+}
+
+pub fn recipe_of(id: &str) -> Option<ModelRecipe> {
+    if id == REMOTE_OPENAI_STT_ID {
+        return Some(ModelRecipe::OpenaiCompat);
+    }
+    SHERPA_MODELS.iter().find(|m| m.id == id).map(|m| m.recipe)
+}
+
+pub fn engine_id_of(id: &str) -> Option<&'static str> {
+    if id == REMOTE_OPENAI_STT_ID {
+        return Some(REMOTE_OPENAI_ENGINE_ID);
+    }
+    SHERPA_MODELS.iter().find(|m| m.id == id).map(|m| m.engine_id)
+}
+
+pub fn is_remote_model(id: &str) -> bool {
+    id == REMOTE_OPENAI_STT_ID
+}
+
+/// 手动安装指引：官方页 + 目标目录 + 应放置的文件清单。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInstallFile {
+    pub name: String,
+    pub url: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInstallGuide {
+    pub id: String,
+    pub display_name: String,
+    pub dest_dir: String,
+    pub dest_subdir: String,
+    pub page_url: String,
+    pub files: Vec<ModelInstallFile>,
+}
+
+/// 自动下载失败后的兜底：告诉用户去哪下、放到哪。
+pub fn install_guide(id: &str) -> Result<ModelInstallGuide, String> {
+    let m = SHERPA_MODELS
+        .iter()
+        .find(|m| m.id == id)
+        .ok_or_else(|| format!("未知模型：{id}"))?;
+    let dest_dir = models_dir().join(m.dir);
+    Ok(ModelInstallGuide {
+        id: m.id.into(),
+        display_name: m.display_name.into(),
+        dest_dir: dest_dir.to_string_lossy().into_owned(),
+        dest_subdir: m.dir.into(),
+        page_url: official_page_url(m),
+        files: m
+            .files
+            .iter()
+            .map(|f| ModelInstallFile {
+                name: f.name.into(),
+                url: f.url.into(),
+                size_bytes: f.size_bytes,
+            })
+            .collect(),
+    })
+}
+
+fn official_page_url(m: &MultiFileModel) -> String {
+    if let Some(file) = m
+        .files
+        .iter()
+        .find(|f| f.url.starts_with("https://huggingface.co/"))
+    {
+        if let Some(page) = huggingface_repo_page(file.url) {
+            return page;
+        }
+    }
+    if let Some(mirror) = m.file_mirrors.first() {
+        return mirror.base_url.to_string();
+    }
+    if let Some(file) = m
+        .files
+        .iter()
+        .find(|f| f.url.contains("modelscope.cn/models/"))
+    {
+        if let Some(page) = modelscope_repo_page(file.url) {
+            return page;
+        }
+    }
+    if let Some(archive) = &m.archive {
+        return archive.url.to_string();
+    }
+    if let Some(archive) = m.archive_mirrors.first() {
+        return archive.url.to_string();
+    }
+    m.file_mirrors
+        .first()
+        .map(|mirror| mirror.base_url.to_string())
+        .unwrap_or_default()
+}
+
+fn huggingface_repo_page(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://huggingface.co/")?;
+    let mut parts = rest.split('/');
+    let ns = parts.next()?;
+    let repo = parts.next()?;
+    if ns.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some(format!("https://huggingface.co/{ns}/{repo}"))
+}
+
+fn modelscope_repo_page(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://www.modelscope.cn/models/")?;
+    let mut parts = rest.split('/');
+    let ns = parts.next()?;
+    let repo = parts.next()?;
+    if ns.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some(format!("https://www.modelscope.cn/models/{ns}/{repo}"))
 }
 
 // ---------- 下载 ----------
@@ -594,6 +927,7 @@ fn download_multi(
         settings::DownloadSource::Auto => match download_preferred_mirrors(m, progress) {
             Ok(true) => Ok(()),
             Ok(false) => download_official(m, progress, cfg),
+            Err(mirror_err) if download::is_cancelled(&mirror_err) => Err(mirror_err),
             Err(mirror_err) => {
                 eprintln!("[download] ModelScope 镜像均失败，回退官方源：{mirror_err}");
                 let official_cfg = settings::DownloadConfig {
@@ -601,7 +935,11 @@ fn download_multi(
                     gh_proxy: cfg.gh_proxy.clone(),
                 };
                 download_official(m, progress, &official_cfg).map_err(|official_err| {
-                    format!("ModelScope 镜像失败：{mirror_err}；官方源也失败：{official_err}")
+                    if download::is_cancelled(&official_err) {
+                        official_err
+                    } else {
+                        format!("ModelScope 镜像失败：{mirror_err}；官方源也失败：{official_err}")
+                    }
                 })
             }
         },
@@ -652,6 +990,7 @@ fn download_archive_mirrors(m: &MultiFileModel, progress: Progress<'_>) -> Resul
     for (index, archive) in m.archive_mirrors.iter().enumerate() {
         match download_archive(m, archive, progress, &official_cfg) {
             Ok(()) => return Ok(()),
+            Err(error) if download::is_cancelled(&error) => return Err(error),
             Err(error) => {
                 errors.push(format!("镜像 {}/{}：{error}", index + 1, m.archive_mirrors.len()));
             }
@@ -706,6 +1045,7 @@ fn download_file_mirrors(m: &MultiFileModel, progress: Progress<'_>) -> Result<(
         }
         match download_file_mirror(m, mirror, progress) {
             Ok(()) => return Ok(()),
+            Err(err) if download::is_cancelled(&err) => return Err(err),
             Err(err) => errors.push(err),
         }
     }
@@ -729,7 +1069,7 @@ fn download_file_mirror(
             continue;
         }
         let base = done;
-        let url = file_mirror_url(mirror, f.name);
+        let url = file_mirror_url(mirror, remote_path(m, f.name));
         download::download_file(&url, &dest, f.sha256, &|d, _| {
             progress(base + d, Some(total));
         })
@@ -748,6 +1088,14 @@ fn file_mirror_url(mirror: &FileMirrorSource, name: &str) -> String {
         mirror.revision,
         name
     )
+}
+
+fn remote_path(m: &MultiFileModel, name: &'static str) -> &'static str {
+    m.remote_names
+        .iter()
+        .find(|(dest, _)| *dest == name)
+        .map(|(_, remote)| *remote)
+        .unwrap_or(name)
 }
 
 /// 整包模型（tar.bz2）：下载整包校验后，只按 files 白名单提取到模型目录，
@@ -1251,13 +1599,19 @@ pub fn set_active_in(
     engine_id: &str,
     model_id: &str,
 ) -> Result<(), String> {
-    if SHERPA_MODELS.iter().any(|m| m.engine_id == engine_id) {
+    let resolved_engine = engine_id_of(model_id).unwrap_or(engine_id);
+    if is_remote_model(model_id) {
+        s.active_model_id = model_id.to_string();
+        s.stt_engine = REMOTE_OPENAI_ENGINE_ID.to_string();
+        return Ok(());
+    }
+    if SHERPA_MODELS.iter().any(|m| m.engine_id == resolved_engine) {
         if !SHERPA_MODELS
             .iter()
-            .any(|m| m.id == model_id && m.engine_id == engine_id)
+            .any(|m| m.id == model_id && m.engine_id == resolved_engine)
         {
             return Err(format!(
-                "引擎 {engine_id} 没有模型 {model_id}（可选：{}）",
+                "没有模型 {model_id}（可选：{}）",
                 model_ids().join(", ")
             ));
         }
@@ -1265,15 +1619,17 @@ pub fn set_active_in(
             return Err(format!("模型 {model_id} 尚未下载，请先下载再切换"));
         }
     } else {
-        return Err(format!("引擎 {engine_id} 暂不支持模型切换"));
+        return Err(format!("引擎 {resolved_engine} 暂不支持模型切换"));
     }
 
+    s.active_model_id = model_id.to_string();
+    s.stt_engine = resolved_engine.to_string();
     let opts = s
         .engine_options
         .as_object_mut()
         .ok_or_else(|| "config.json 的 engineOptions 不是对象".to_string())?;
     let entry = opts
-        .entry(engine_id.to_string())
+        .entry(resolved_engine.to_string())
         .or_insert_with(|| serde_json::json!({}));
     entry["model"] = serde_json::Value::String(model_id.to_string());
     Ok(())
@@ -1288,9 +1644,10 @@ mod tests {
         let items = list().unwrap();
         assert_eq!(
             items.len(),
-            SHERPA_MODELS.len(),
-            "VAD 随本体分发，不应出现在用户可管理的模型清单"
+            SHERPA_MODELS.len() + 1,
+            "VAD 随本体分发；远程 OpenAI 兼容条目应出现在清单末尾"
         );
+        assert!(items.iter().any(|i| i.id == REMOTE_OPENAI_STT_ID));
         assert!(
             items.iter().all(|i| i.id != VAD_MODEL_ID),
             "清单不应包含 silero-vad 伪条目"
@@ -1317,12 +1674,122 @@ mod tests {
         let items = list().unwrap();
         let json = serde_json::to_value(&items[0]).unwrap();
         let obj = json.as_object().unwrap();
-        for key in ["engineId", "displayName", "sizeBytes", "downloadUrl"] {
+        for key in [
+            "engineId",
+            "displayName",
+            "sizeBytes",
+            "downloadUrl",
+            "io",
+            "backend",
+            "recipe",
+            "configSchema",
+        ] {
             assert!(obj.contains_key(key), "缺少 camelCase 键 {key}：{json}");
         }
         for key in ["engine_id", "display_name", "size_bytes", "download_url"] {
             assert!(!obj.contains_key(key), "不应出现 snake_case 键 {key}");
         }
+    }
+
+    #[test]
+    fn install_guide_exposes_dest_and_official_page() {
+        let guide = install_guide("funasr-nano-int8-2025-12-30").unwrap();
+        assert_eq!(guide.id, "funasr-nano-int8-2025-12-30");
+        assert_eq!(guide.dest_subdir, "sherpa-onnx-funasr-nano-int8-2025-12-30");
+        assert!(guide.dest_dir.replace('\\', "/").ends_with(&guide.dest_subdir));
+        assert_eq!(
+            guide.page_url,
+            "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30"
+        );
+        assert!(
+            guide
+                .files
+                .iter()
+                .any(|f| f.name == "encoder_adaptor.int8.onnx" && f.size_bytes == 237_792_748)
+        );
+        assert!(
+            guide
+                .files
+                .iter()
+                .any(|f| f.name == "Qwen3-0.6B/merges.txt" && !f.url.is_empty())
+        );
+
+        let json = serde_json::to_value(&guide).unwrap();
+        let obj = json.as_object().unwrap();
+        for key in ["displayName", "destDir", "destSubdir", "pageUrl"] {
+            assert!(obj.contains_key(key), "缺少 camelCase 键 {key}：{json}");
+        }
+    }
+
+    #[test]
+    fn huggingface_repo_page_keeps_owner_and_repo() {
+        assert_eq!(
+            huggingface_repo_page(
+                "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/abc/encoder_adaptor.int8.onnx"
+            )
+            .as_deref(),
+            Some("https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30")
+        );
+        assert_eq!(huggingface_repo_page("https://example.com/x"), None);
+    }
+
+    #[test]
+    fn install_guide_modelscope_funasr_points_at_community_repo() {
+        let guide = install_guide("funasr-nano-int8-modelscope").unwrap();
+        assert_eq!(
+            guide.page_url,
+            "https://www.modelscope.cn/models/zengshuishui/FunASR-nano-onnx"
+        );
+        assert_eq!(guide.dest_subdir, "sherpa-onnx-funasr-nano-int8-modelscope");
+        assert!(guide.files.iter().any(|f| f.name == "llm.int8.onnx"));
+    }
+
+    #[test]
+    fn set_active_writes_model_id_and_derived_engine() {
+        let mut s = settings::Settings::default();
+        s.active_model_id.clear();
+        set_active_in(&mut s, "ignored", REMOTE_OPENAI_STT_ID).unwrap();
+        assert_eq!(s.active_model_id, REMOTE_OPENAI_STT_ID);
+        assert_eq!(s.stt_engine, REMOTE_OPENAI_ENGINE_ID);
+    }
+
+    #[test]
+    fn install_guide_unknown_model_errors() {
+        let err = install_guide("no-such-model").unwrap_err();
+        assert!(err.contains("未知模型"), "err: {err}");
+    }
+
+    #[test]
+    fn funasr_has_no_modelscope_archive_until_files_match_official_hf() {
+        let funasr = SHERPA_MODELS
+            .iter()
+            .find(|m| m.id == "funasr-nano-int8-2025-12-30")
+            .unwrap();
+        assert!(
+            funasr.archive_mirrors.is_empty(),
+            "魔搭 FunASR 整包与官方 HF 体积不一致（238277200 vs 237792748），不能再挂 archive_mirrors"
+        );
+        assert!(
+            funasr.file_mirrors.is_empty() && funasr.archive_mirrors.is_empty(),
+            "官方 FunASR 条目不能再挂和 HF 体积不一致的魔搭整包"
+        );
+        let community = SHERPA_MODELS
+            .iter()
+            .find(|m| m.id == "funasr-nano-int8-modelscope")
+            .unwrap();
+        assert!(
+            !community.file_mirrors.is_empty(),
+            "魔搭社区版应走 zengshuishui 逐文件"
+        );
+        let encoder = funasr
+            .files
+            .iter()
+            .find(|f| f.name == "encoder_adaptor.int8.onnx")
+            .unwrap();
+        assert_eq!(
+            encoder.size_bytes, 237_792_748,
+            "官方 HF encoder 体积被改了的话，先核对魔搭原版 238277200 是不是又混进来了"
+        );
     }
 
     #[test]
@@ -1542,16 +2009,38 @@ mod tests {
         }
         assert_eq!(
             multi_file_default_model("sherpa-onnx-funasr-nano"),
-            Some(fun.id)
+            Some(fun.id),
+            "默认仍是官方 HF 条目（清单里该引擎第一条）"
         );
         assert!(
             fun.file_mirrors.is_empty(),
-            "FunASR-Nano 社区仓只有 tar.bz2，不走逐文件镜像"
+            "官方 FunASR-Nano 走 HF 逐文件，不挂魔搭镜像"
         );
-        assert_eq!(fun.archive_mirrors.len(), 1);
-        assert!(fun.archive_mirrors[0]
-            .url
-            .contains("fuyuan-sherpa-onnx-funasr-nano-int8-2025-12-30"));
+        assert!(fun.archive_mirrors.is_empty());
+
+        let fun_ms = SHERPA_MODELS
+            .iter()
+            .find(|m| m.id == "funasr-nano-int8-modelscope")
+            .expect("缺少 FunASR-Nano 魔搭社区条目");
+        assert_eq!(fun_ms.engine_id, "sherpa-onnx-funasr-nano");
+        assert_eq!(fun_ms.file_mirrors.len(), 1);
+        assert!(fun_ms.file_mirrors[0]
+            .base_url
+            .contains("zengshuishui/FunASR-nano-onnx"));
+        assert_eq!(
+            remote_path(fun_ms, "llm.int8.onnx"),
+            "llm_int8/llm.int8.onnx"
+        );
+        assert_eq!(
+            remote_path(fun_ms, "encoder_adaptor.int8.onnx"),
+            "encoder_adaptor.int8.onnx"
+        );
+        let encoder = fun_ms
+            .files
+            .iter()
+            .find(|f| f.name == "encoder_adaptor.int8.onnx")
+            .unwrap();
+        assert_eq!(encoder.size_bytes, 238_277_200);
 
         let sv = SHERPA_MODELS
             .iter()

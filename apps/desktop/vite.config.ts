@@ -15,7 +15,8 @@ export default defineConfig({
   },
   clearScreen: false,
   server: {
-    port: 1420,
+    // 不用 create-tauri-app 默认的 1420，避免和本机其它 Tauri 项目抢端口
+    port: 17420,
     strictPort: true,
     // Tauri 需要监听本机地址
     host: "127.0.0.1",

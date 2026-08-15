@@ -11,7 +11,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 # 模型下载（blocking：调用方自行放 spawn_blocking；天然对齐 shell/CLI 两侧）
-reqwest = { version = "0.12", features = ["blocking"] }
+reqwest = { version = "0.12", features = ["blocking", "json"] }
 sha2 = "0.10"
 # X-ASR 等模型只以 tar.bz2 整包发布（k2-fsa GitHub releases）：
 # tar 解包 + bzip2 解压（bzip2-sys 自带 C 源码，Windows MSVC 可直接编译）

@@ -14,6 +14,7 @@ pub mod funasr_nano;
 pub mod mock;
 pub mod model;
 pub mod offline_sherpa;
+pub mod remote_openai;
 pub mod online_transducer;
 pub mod sensevoice;
 pub mod vad;
@@ -29,6 +30,7 @@ pub fn builtin_engines() -> Vec<Box<dyn SttEngine>> {
         Box::new(xasr::XAsrEngine::new()),
         Box::new(sensevoice::SenseVoiceEngine::new()),
         Box::new(funasr_nano::FunAsrNanoEngine::new()),
+        Box::new(remote_openai::RemoteOpenaiEngine),
     ]
 }
 
@@ -52,6 +54,7 @@ mod tests {
         assert!(ids.contains(&"sherpa-onnx-x-asr-zh-en".to_string()));
         assert!(ids.contains(&"sherpa-onnx-sensevoice".to_string()));
         assert!(ids.contains(&"sherpa-onnx-funasr-nano".to_string()));
+        assert!(ids.contains(&"remote-openai-compat".to_string()));
     }
 
     #[test]

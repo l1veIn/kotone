@@ -32,8 +32,14 @@ pub struct Settings {
     #[serde(default)]
     pub hotkey_backend: HotkeyBackend,
     pub audio_device_id: String,
-    /// 当前 STT 引擎 ID，设置页可切换
+    /// 当前 STT 引擎 ID（由活动模型推导后回写，兼容旧配置/CLI）
     pub stt_engine: String,
+    /// 当前活动模型 ID。空 = 仍按 sttEngine + engineOptions.model 推导。
+    #[serde(default)]
+    pub active_model_id: String,
+    /// 按模型 id 存放的 configSchema 值（语言、连接 id 等）。密钥不进这里。
+    #[serde(default)]
+    pub model_configs: std::collections::HashMap<String, serde_json::Value>,
     /// 引擎专有配置项
     pub engine_options: serde_json::Value,
     /// 【deprecated（UI 已撤）】true: 转写完直接发；false: 先预览确认。
@@ -333,6 +339,8 @@ impl Default for Settings {
             hotkey_backend: HotkeyBackend::Auto,
             audio_device_id: "default".into(),
             stt_engine: "sherpa-onnx-x-asr-zh-en".into(),
+            active_model_id: String::new(),
+            model_configs: HashMap::new(),
             engine_options: serde_json::json!({
                 "sherpa-onnx-x-asr-zh-en": { "provider": "cpu" }
             }),
@@ -357,6 +365,35 @@ impl Default for Settings {
             post_processing: crate::postprocess::PostProcessingConfig::default(),
             connections: Vec::new(),
         }
+    }
+}
+
+impl Settings {
+    /// 引擎专有项 + 当前活动模型的 configSchema 值。
+    pub fn session_options(&self, engine_id: &str) -> serde_json::Value {
+        let mut opts = self
+            .engine_options
+            .get(engine_id)
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        let model_id = if !self.active_model_id.trim().is_empty() {
+            self.active_model_id.clone()
+        } else {
+            self.engine_options
+                .get(engine_id)
+                .and_then(|o| o.get("model"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+        if let Some(cfg) = self.model_configs.get(&model_id) {
+            if let (Some(base), Some(extra)) = (opts.as_object_mut(), cfg.as_object()) {
+                for (k, v) in extra {
+                    base.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        opts
     }
 }
 
@@ -661,6 +698,8 @@ mod tests {
         assert_eq!(s.hotkey_backend, HotkeyBackend::Auto);
         assert_eq!(s.audio_device_id, "default");
         assert_eq!(s.stt_engine, "sherpa-onnx-x-asr-zh-en");
+        assert!(s.active_model_id.is_empty());
+        assert!(s.model_configs.is_empty());
         assert!(!s.auto_send);
         assert_eq!(s.active_profile_id.as_deref(), Some("lol"));
         assert_eq!(s.language, "zh");

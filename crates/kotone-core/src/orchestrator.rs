@@ -276,6 +276,7 @@ pub struct Orchestrator {
     pub history_dir: Option<std::path::PathBuf>,
     /// 松手宽限期（测试可调小；0 = 旧行为：松手即停）
     pub release_grace: Duration,
+    secrets: Option<std::sync::Arc<dyn crate::connection::SecretStore>>,
     /// VAD 工厂（ADR-007，B3 静音判停；None = 未接入——VAD 策略下 begin 报清晰错误）。
     /// 构造后注入（壳/CLI 按 feature 与模型就绪情况接线）
     pub vad_factory: Option<crate::vad::VadFactory>,
@@ -325,8 +326,14 @@ impl Orchestrator {
             eval_dir: None,
             history_dir: None,
             release_grace: DEFAULT_RELEASE_GRACE,
+            secrets: None,
             vad_factory: None,
         }
+    }
+
+    pub fn with_secrets(mut self, store: Arc<dyn crate::connection::SecretStore>) -> Self {
+        self.secrets = Some(store);
+        self
     }
 
     /// 包装为 Arc 并接线 Weak 自引用（VAD 判停 → end() 的回调通道）
@@ -565,7 +572,8 @@ impl Orchestrator {
             .as_deref()
             .and_then(profile::get)
             .unwrap_or_else(GameProfile::builtin_generic);
-        let cfg = build_session_config(&stt_settings, &engine_id, &active_profile);
+        let mut cfg = build_session_config(&stt_settings, &engine_id, &active_profile);
+        enrich_remote_connection(&stt_settings, &mut cfg, self.secrets.as_deref());
 
         let (stt_tx, stt_rx) = mpsc::unbounded_channel::<SttEvent>();
         let session = engine.start_session(&cfg, stt_tx)?;
@@ -1930,11 +1938,40 @@ fn build_session_config(
         language: settings.language.clone(),
         hotwords: active_profile.hotwords.clone(),
         hotwords_score: settings.hotwords_score,
-        options: settings
-            .engine_options
-            .get(engine_id)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null),
+        options: settings.session_options(engine_id),
+    }
+}
+
+fn enrich_remote_connection(
+    settings: &Settings,
+    cfg: &mut SessionConfig,
+    secrets: Option<&dyn crate::connection::SecretStore>,
+) {
+    let Some(connection_id) = cfg
+        .options
+        .get("connectionId")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let Some(connection) = settings
+        .connections
+        .iter()
+        .find(|item| item.id == connection_id)
+    else {
+        return;
+    };
+    if let Some(opts) = cfg.options.as_object_mut() {
+        opts.insert("baseUrl".into(), serde_json::json!(connection.base_url));
+        opts.insert("remoteModel".into(), serde_json::json!(connection.model));
+        if let Some(store) = secrets {
+            if let Ok(Some(key)) = store.get(&connection_id) {
+                opts.insert("apiKey".into(), serde_json::json!(key));
+            }
+        }
     }
 }
 
@@ -1970,6 +2007,22 @@ mod tests {
     }
 
     #[test]
+    fn session_config_merges_model_schema_values() {
+        let mut settings = Settings::default();
+        settings.active_model_id = "sense-voice-zh-en-ja-ko-yue-2024-07-17".into();
+        settings.model_configs.insert(
+            "sense-voice-zh-en-ja-ko-yue-2024-07-17".into(),
+            serde_json::json!({ "language": "yue" }),
+        );
+        let cfg = build_session_config(
+            &settings,
+            "sherpa-onnx-sensevoice",
+            &GameProfile::builtin_generic(),
+        );
+        assert_eq!(cfg.options["language"], "yue");
+    }
+
+    #[test]
     fn session_config_options_fallback_null() {
         let mut settings = Settings::default();
         settings.engine_options["sherpa-onnx-x-asr-zh-en"]["provider"] = serde_json::json!("cpu");
@@ -1977,9 +2030,9 @@ mod tests {
         let cfg = build_session_config(&settings, "sherpa-onnx-x-asr-zh-en", &generic);
         assert_eq!(cfg.options["provider"], "cpu");
         assert!(cfg.hotwords.is_empty(), "generic 无热词");
-        // 未配置的引擎 → Null
+        // 未配置的引擎 → 空对象（可再合并模型 configSchema）
         let cfg2 = build_session_config(&settings, "mock-stream", &generic);
-        assert!(cfg2.options.is_null());
+        assert!(cfg2.options.as_object().is_some_and(|o| o.is_empty()));
     }
 
     // ---------- 发送频道解析（ADR-008） ----------

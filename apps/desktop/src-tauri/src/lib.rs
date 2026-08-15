@@ -1155,6 +1155,20 @@ fn cancel_download() {
     log::log("download cancel requested");
 }
 
+/// 自动下载失败后的手动安装指引（官方页 + 目标目录 + 文件清单）
+#[tauri::command]
+fn get_model_install_guide(id: String) -> Result<model::ModelInstallGuide, String> {
+    model::install_guide(&id)
+}
+
+/// 打开某个模型的目标目录（自动创建），方便用户把手动下载的文件放进去
+#[tauri::command]
+fn open_model_dest_dir(id: String) -> Result<(), String> {
+    let dir = model::multi_model_dir(&id).ok_or_else(|| format!("未知模型：{id}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建目录 {}：{e}", dir.display()))?;
+    open_in_file_manager(&dir)
+}
+
 #[tauri::command]
 fn set_active_model(
     app: AppHandle,
@@ -1627,7 +1641,8 @@ pub fn run() {
                 focus,
                 emitter,
             )
-            .with_processors(processors.clone());
+            .with_processors(processors.clone())
+            .with_secrets(secrets.clone());
             // VAD 接线（ADR-007）：vad-silero feature 开启时注入 silero 工厂；
             // 默认构建不接入——one-shot 模式 begin 会报清晰错误
             #[cfg(feature = "vad-silero")]
@@ -1722,6 +1737,8 @@ pub fn run() {
             list_models,
             download_model,
             cancel_download,
+            get_model_install_guide,
+            open_model_dest_dir,
             set_active_model,
             get_runtime_status,
             start_runtime,

@@ -6,14 +6,14 @@ export default defineConfig({
   workers: 1,
   reporter: "list",
   use: {
-    baseURL: "http://127.0.0.1:1420",
+    baseURL: "http://127.0.0.1:17420",
     channel: "chrome",
     headless: true,
     viewport: { width: 900, height: 700 },
   },
   webServer: {
     command: "pnpm dev:web",
-    url: "http://127.0.0.1:1420",
+    url: "http://127.0.0.1:17420",
     reuseExistingServer: true,
     timeout: 30_000,
   },

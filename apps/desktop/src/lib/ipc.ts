@@ -89,6 +89,10 @@ export interface Settings {
   hotkeyBackend: "auto" | "llhook" | "register";
   audioDeviceId: string;
   sttEngine: string;
+  /** 当前活动模型；空则按 sttEngine + engineOptions.model 推导 */
+  activeModelId: string;
+  /** 各模型 configSchema 的用户值（密钥不进这里） */
+  modelConfigs: Record<string, Record<string, unknown>>;
   engineOptions: Record<string, unknown>;
   autoSend: boolean;
   activeProfileId: string | null;
@@ -313,6 +317,20 @@ export interface GameProfile {
 }
 
 // ---------- 模型 ----------
+export interface ModelConfigOption {
+  value: string;
+  label: string;
+}
+
+export interface ModelConfigField {
+  key: string;
+  label: string;
+  kind: "string" | "enum" | "secret" | "connection" | string;
+  default: string;
+  options: ModelConfigOption[];
+  required: boolean;
+}
+
 export interface ModelInfo {
   id: string;
   engineId: string;
@@ -320,6 +338,38 @@ export interface ModelInfo {
   displayName: string;
   sizeBytes: number;
   downloaded: boolean;
+  io: "streaming" | "offline";
+  backend: "sherpa" | "remote";
+  recipe: string;
+  configSchema: ModelConfigField[];
+}
+
+/** 自动下载失败后的手动安装指引 */
+export interface ModelInstallFile {
+  name: string;
+  url: string;
+  sizeBytes: number;
+}
+
+export interface ModelInstallGuide {
+  id: string;
+  displayName: string;
+  destDir: string;
+  destSubdir: string;
+  pageUrl: string;
+  files: ModelInstallFile[];
+}
+
+export function isDownloadCancelled(error: unknown): boolean {
+  const text =
+    typeof error === "string"
+      ? error
+      : error instanceof Error
+        ? error.message
+        : error !== null && typeof error === "object" && "message" in error
+          ? String((error as { message?: unknown }).message ?? "")
+          : String(error);
+  return text.includes("下载已取消");
 }
 
 // ---------- 识别历史（core history 模块，camelCase 对齐 serde） ----------
@@ -414,6 +464,8 @@ const mock: MockStore = {
     hotkeyBackend: "auto",
     audioDeviceId: "default",
     sttEngine: "sherpa-onnx-x-asr-zh-en",
+    activeModelId: "",
+    modelConfigs: {},
     engineOptions: {
       "sherpa-onnx-x-asr-zh-en": { provider: "cpu" },
     },
@@ -514,6 +566,10 @@ const mock: MockStore = {
       displayName: "X-ASR 流式中英标点（int8，480ms 低延迟）",
       sizeBytes: 169_000_000,
       downloaded: false,
+      io: "streaming",
+      backend: "sherpa",
+      recipe: "zipformer-transducer",
+      configSchema: [],
     },
     {
       id: "sense-voice-zh-en-ja-ko-yue-2024-07-17",
@@ -521,13 +577,68 @@ const mock: MockStore = {
       displayName: "sherpa SenseVoice 多语言（int8，非流式高准）",
       sizeBytes: 240_000_000,
       downloaded: false,
+      io: "offline",
+      backend: "sherpa",
+      recipe: "sense-voice",
+      configSchema: [
+        {
+          key: "language",
+          label: "识别语言",
+          kind: "enum",
+          default: "auto",
+          options: [
+            { value: "auto", label: "自动" },
+            { value: "zh", label: "中文" },
+            { value: "en", label: "英语" },
+            { value: "ja", label: "日语" },
+            { value: "ko", label: "韩语" },
+            { value: "yue", label: "粤语" },
+          ],
+          required: false,
+        },
+      ],
     },
     {
       id: "funasr-nano-int8-2025-12-30",
       engineId: "sherpa-onnx-funasr-nano",
-      displayName: "FunASR-Nano 中英日（int8，非流式）",
+      displayName: "FunASR-Nano 中英日（官方 Hugging Face，非流式）",
       sizeBytes: 1_010_000_000,
       downloaded: false,
+      io: "offline",
+      backend: "sherpa",
+      recipe: "funasr-nano",
+      configSchema: [],
+    },
+    {
+      id: "funasr-nano-int8-modelscope",
+      engineId: "sherpa-onnx-funasr-nano",
+      displayName: "FunASR-Nano 中英日（魔搭社区，国内直下）",
+      sizeBytes: 1_010_000_000,
+      downloaded: false,
+      io: "offline",
+      backend: "sherpa",
+      recipe: "funasr-nano",
+      configSchema: [],
+    },
+    {
+      id: "openai-compat-stt",
+      engineId: "remote-openai-compat",
+      displayName: "在线识别（OpenAI 兼容）",
+      sizeBytes: 0,
+      downloaded: true,
+      io: "offline",
+      backend: "remote",
+      recipe: "openai-compat",
+      configSchema: [
+        {
+          key: "connectionId",
+          label: "API 连接",
+          kind: "connection",
+          default: "",
+          options: [],
+          required: true,
+        },
+      ],
     },
   ],
   history: [
@@ -1325,11 +1436,64 @@ export async function cancelDownload(): Promise<void> {
   return invoke<void>("cancel_download");
 }
 
+function mockInstallGuide(id: string): ModelInstallGuide {
+  const m = mock.models.find((x) => x.id === id);
+  if (!m) throw new Error(`未知模型：${id}`);
+  const destSubdir =
+    m.id === "funasr-nano-int8-modelscope"
+      ? "sherpa-onnx-funasr-nano-int8-modelscope"
+      : m.id === "funasr-nano-int8-2025-12-30"
+        ? "sherpa-onnx-funasr-nano-int8-2025-12-30"
+        : m.id === "sense-voice-zh-en-ja-ko-yue-2024-07-17"
+          ? "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
+          : "sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05";
+  const pageUrl = m.id === "funasr-nano-int8-modelscope"
+    ? "https://www.modelscope.cn/models/zengshuishui/FunASR-nano-onnx"
+    : m.id.includes("funasr")
+      ? "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30"
+      : m.id.includes("sense")
+        ? "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
+        : "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05.tar.bz2";
+  return {
+    id: m.id,
+    displayName: m.displayName,
+    destDir: `C:\\Users\\mock\\.kotone\\models\\${destSubdir}`,
+    destSubdir,
+    pageUrl,
+    files: [
+      {
+        name: m.id.includes("funasr") ? "encoder_adaptor.int8.onnx" : "encoder.int8.onnx",
+        url: pageUrl,
+        sizeBytes: m.sizeBytes,
+      },
+    ],
+  };
+}
+
+/** 自动下载失败后的手动安装指引（官方页 + 目标目录 + 文件清单） */
+export async function getModelInstallGuide(id: string): Promise<ModelInstallGuide> {
+  if (!isTauri) return mockInstallGuide(id);
+  return invoke<ModelInstallGuide>("get_model_install_guide", { id });
+}
+
+/** 在资源管理器中打开该模型应放置的目录 */
+export async function openModelDestDir(id: string): Promise<void> {
+  if (!isTauri) {
+    console.info("[mock] open_model_dest_dir", id);
+    return;
+  }
+  return invoke<void>("open_model_dest_dir", { id });
+}
+
 /** 切换引擎的活动模型（Running 时置 restartNeeded，不自动重启） */
 export async function setActiveModel(engineId: string, modelId: string): Promise<void> {
   if (!isTauri) {
-    const opts = (mock.settings.engineOptions[engineId] ??= {}) as Record<string, unknown>;
+    const spec = mock.models.find((item) => item.id === modelId);
+    const resolvedEngine = spec?.engineId ?? engineId;
+    const opts = (mock.settings.engineOptions[resolvedEngine] ??= {}) as Record<string, unknown>;
     opts.model = modelId;
+    mock.settings.activeModelId = modelId;
+    mock.settings.sttEngine = resolvedEngine;
     return;
   }
   return invoke<void>("set_active_model", { engineId, modelId });
