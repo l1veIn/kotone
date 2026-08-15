@@ -9,7 +9,7 @@
 //! - `gen` 代际计数：每次 begin/cancel 自增，async 空隙后（finalize、发送）校验 gen，
 //!   期间被取消则丢弃过期结果，保证「任意状态 Esc 取消 → Idle」不错乱。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -61,6 +61,22 @@ pub enum OrchestratorState {
     Sending,
     Success,
     Error,
+}
+
+const VAD_FALLBACK_WARNING: &str = "自动静音检测暂时不可用；本次录音请再按一次热键结束并发送";
+
+struct SessionBeginError {
+    code: &'static str,
+    message: String,
+}
+
+impl SessionBeginError {
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
 }
 
 /// Rust → UI 事件出口（生产实现发 Tauri 事件，测试用 Vec 收集）
@@ -167,6 +183,9 @@ struct Inner {
     /// 松手宽限期的延迟结束任务（见 DEFAULT_RELEASE_GRACE）；
     /// 再次按下 / cancel / 状态变迁时 abort
     release_grace_task: Option<tokio::task::JoinHandle<()>>,
+    /// 本轮会话是否按 solo 连续策略运行。VAD 初始化/推理失败时会降级为 false，
+    /// 让第二次热键结束并发送当前句，而不是丢弃在途音频或自动续段。
+    continuous_session: bool,
 }
 
 /// history 草稿：会话期间累计指标，终态（sent/cancelled/error）时落账一条记录
@@ -307,6 +326,7 @@ impl Orchestrator {
                 history: None,
                 channel: None,
                 release_grace_task: None,
+                continuous_session: false,
             })),
             op: tokio::sync::Mutex::new(()),
             settings,
@@ -347,6 +367,11 @@ impl Orchestrator {
         self.inner.lock().unwrap().state
     }
 
+    /// 当前会话是否实际采用连续模式；与设置值不同，VAD 降级时会返回 false。
+    pub fn continuous_session(&self) -> bool {
+        self.inner.lock().unwrap().continuous_session
+    }
+
     /// settings 句柄（集成测试与壳需要改写引擎选择等运行时配置）
     pub fn settings(&self) -> &Arc<RwLock<Settings>> {
         &self.settings
@@ -380,7 +405,7 @@ impl Orchestrator {
             OrchestratorState::Listening => {
                 // B1（松手结束）策略下不会产生 toggle 事件；B2/B3 均为按下结束
                 let policy = self.policy();
-                if policy.continuous {
+                if self.continuous_session() {
                     // solo：再点按 = 停止会话（发送完成不停机由 schedule_idle 负责；
                     // 这里丢弃在途段——用户的意图是「停」，不是「把这句发出去」）
                     self.cancel().await;
@@ -539,15 +564,15 @@ impl Orchestrator {
                 // 开始失败（如引擎/麦克风未就绪）：Error 保持到用户关闭或重试
                 self.emit_process(
                     "session_failed",
-                    json!({ "outcome": "error", "errorCode": "SESSION_BEGIN_FAILED" }),
+                    json!({ "outcome": "error", "errorCode": e.code }),
                 );
-                self.toast_error(&e);
-                Err(e)
+                self.toast_error(&e.message);
+                Err(e.message)
             }
         }
     }
 
-    fn begin_locked(&self) -> Result<(), String> {
+    fn begin_locked(&self) -> Result<(), SessionBeginError> {
         let settings = self.settings.read().unwrap().clone();
         let stt_settings = self
             .runtime_stt_settings
@@ -556,14 +581,19 @@ impl Orchestrator {
             .clone()
             .unwrap_or_else(|| settings.clone());
         let engine_id = stt_settings.stt_engine.clone();
-        let engine = self
-            .engines
-            .get(&engine_id)
-            .ok_or_else(|| format!("未注册的 STT 引擎: {engine_id}"))?;
+        let engine = self.engines.get(&engine_id).ok_or_else(|| {
+            SessionBeginError::new(
+                "STT_ENGINE_NOT_REGISTERED",
+                format!("未注册的 STT 引擎: {engine_id}"),
+            )
+        })?;
         if !engine.is_ready() {
-            return Err(format!(
-                "引擎「{}」未就绪（模型未下载），请到「设置 → 高级」下载模型",
-                engine.display_name()
+            return Err(SessionBeginError::new(
+                "STT_ENGINE_NOT_READY",
+                format!(
+                    "引擎「{}」未就绪（模型未下载），请到「设置 → 高级」下载模型",
+                    engine.display_name()
+                ),
             ));
         }
 
@@ -576,7 +606,9 @@ impl Orchestrator {
         enrich_remote_connection(&stt_settings, &mut cfg, self.secrets.as_deref());
 
         let (stt_tx, stt_rx) = mpsc::unbounded_channel::<SttEvent>();
-        let session = engine.start_session(&cfg, stt_tx)?;
+        let session = engine
+            .start_session(&cfg, stt_tx)
+            .map_err(|error| SessionBeginError::new("STT_SESSION_START_FAILED", error))?;
 
         // 开录音失败要有清晰错误；已建的 session 取消掉
         let mut handle = match self.audio.start(&settings.audio_device_id) {
@@ -584,7 +616,7 @@ impl Orchestrator {
             Err(e) => {
                 let mut session = session;
                 session.cancel();
-                return Err(e);
+                return Err(SessionBeginError::new("AUDIO_CAPTURE_START_FAILED", e));
             }
         };
         let pcm_rx = handle.pcm_rx.take().expect("audio handle pcm channel");
@@ -633,29 +665,52 @@ impl Orchestrator {
             }))
         });
 
-        // B3（VAD 静音判停，ADR-007）：策略要求 VAD 时每会话建一个实例。
-        // 未接入工厂 / 模型未就绪 → begin 直接失败（清晰错误，不开半截会话）
-        let use_vad = self.policy().end == EndTrigger::VadSilence;
-        let vad_state = if use_vad {
-            let factory = self.vad_factory.clone().ok_or_else(|| {
-                "one-shot / solo 模式需要 VAD，但当前构建未接入（vad-silero feature 未编译）"
-                    .to_string()
-            })?;
-            // 使用 SharedState 的同一内存快照，不在 STT 实现里再次读盘；
-            // 避免设置事务刚提交时 VAD 偶发拿到旧参数。
-            let vad = factory(&settings.vad)?;
-            let silence_ms = settings.vad_silence_ms.clamp(
-                *crate::vad::SILENCE_MS_RANGE.start(),
-                *crate::vad::SILENCE_MS_RANGE.end(),
-            );
-            Some((
-                vad,
-                crate::vad::FrameSplitter::new(),
-                crate::vad::SilenceStopTracker::new(silence_ms, crate::vad::MIN_SESSION_MS),
-            ))
+        // B3（VAD 静音判停，ADR-007）：初始化失败不能让整个输入模式失效。
+        // 降级后本轮按普通 toggle 会话运行：再次按热键即可结束并发送；solo
+        // 暂停自动续段，避免第二次热键按原语义把在途音频直接丢弃。
+        let policy = self.policy();
+        let use_vad = policy.end == EndTrigger::VadSilence;
+        let (vad_state, vad_warning_code) = if use_vad {
+            match self.vad_factory.as_ref() {
+                Some(factory) => match factory(&settings.vad) {
+                    Ok(vad) => {
+                        let silence_ms = settings.vad_silence_ms.clamp(
+                            *crate::vad::SILENCE_MS_RANGE.start(),
+                            *crate::vad::SILENCE_MS_RANGE.end(),
+                        );
+                        (
+                            Some((
+                                vad,
+                                crate::vad::FrameSplitter::new(),
+                                crate::vad::SilenceStopTracker::new(
+                                    silence_ms,
+                                    crate::vad::MIN_SESSION_MS,
+                                ),
+                            )),
+                            None,
+                        )
+                    }
+                    Err(error) => {
+                        crate::log::log(&format!(
+                            "VAD 初始化失败，本次会话降级为热键结束: {error}"
+                        ));
+                        (None, Some("VAD_INIT_FAILED"))
+                    }
+                },
+                None => {
+                    crate::log::log("VAD 工厂未接入，本次会话降级为热键结束");
+                    (None, Some("VAD_NOT_CONFIGURED"))
+                }
+            }
         } else {
-            None
+            (None, None)
         };
+        let continuous_session = policy.continuous && vad_state.is_some();
+        // 0 = 正常，1 = 推理失败但尚未上报，2 = 已上报。PCM pump 可能在
+        // Listening 首个状态事件之前就拿到音频，这两个原子量保证降级不会漏报、
+        // 不会重复上报，也不会被随后发出的普通 Listening 事件覆盖。
+        let vad_inference_status = Arc::new(AtomicU8::new(0));
+        let listening_state_emitted = Arc::new(AtomicBool::new(false));
 
         // PCM pump：录音 → session.push_audio（VAD 策略下并行喂 VAD）；
         // STT partial → kotone://partial；VAD 判停 → 触发 end()（与热键结束同路径）
@@ -664,6 +719,8 @@ impl Orchestrator {
         let pump_recorder = recorder.clone();
         let pump_history = history_draft.clone();
         let pump_case_id = process_case_id.clone();
+        let pump_vad_inference_status = vad_inference_status.clone();
+        let pump_listening_state_emitted = listening_state_emitted.clone();
         let max_session_duration = self.max_session_duration;
         let mut pump_first_partial_seen = false;
         // VAD 帧的累计采样偏移（相对 audio_pcm 起点；帧在流中连续，
@@ -776,6 +833,58 @@ impl Orchestrator {
                                         crate::log::log(&format!(
                                             "VAD 推理失败，本次会话禁用静音判停（热键仍可结束）: {e}"
                                         ));
+                                        pump_vad_inference_status.store(1, Ordering::SeqCst);
+                                        if pump_listening_state_emitted.load(Ordering::SeqCst)
+                                            && pump_vad_inference_status
+                                                .compare_exchange(
+                                                    1,
+                                                    2,
+                                                    Ordering::SeqCst,
+                                                    Ordering::SeqCst,
+                                                )
+                                                .is_ok()
+                                        {
+                                            let me = me_weak
+                                                .as_ref()
+                                                .and_then(|weak| weak.upgrade());
+                                            let listening = {
+                                                if let Some(me) = &me {
+                                                    let mut inner = me.inner.lock().unwrap();
+                                                    if inner.state
+                                                        == OrchestratorState::Listening
+                                                    {
+                                                        inner.continuous_session = false;
+                                                        true
+                                                    } else {
+                                                        false
+                                                    }
+                                                } else {
+                                                    false
+                                                }
+                                            };
+                                            if let Some(me) = me {
+                                                if listening {
+                                                    me.emit_state(
+                                                        OrchestratorState::Listening,
+                                                        Some(json!({
+                                                            "warning": VAD_FALLBACK_WARNING,
+                                                            "manualStop": true,
+                                                            "preserveText": true
+                                                        })),
+                                                    );
+                                                }
+                                                // 即使用户恰好已结束录音，也保留稳定错误码，
+                                                // 但不把状态倒退回 Listening。
+                                                me.emit_process(
+                                                    "vad_degraded",
+                                                    json!({
+                                                        "outcome": "warning",
+                                                        "errorCode": "VAD_INFERENCE_FAILED",
+                                                        "fallback": "hotkey_stop"
+                                                    }),
+                                                );
+                                            }
+                                        }
                                         vad_state = None;
                                     } else if decision == crate::vad::StopDecision::Stop {
                                         emitter.emit(
@@ -890,6 +999,8 @@ impl Orchestrator {
         // 发送前（do_send）会把焦点还给它，避免 preview 交互抢焦点导致注入打错窗口
         inner.target_window = self.focus.foreground_window();
         inner.history = history_draft;
+        inner.continuous_session =
+            continuous_session && vad_inference_status.load(Ordering::SeqCst) == 0;
         inner.active = Some(ActiveSession {
             stop_tx: Some(stop_tx),
             session_rx: Some(session_rx),
@@ -900,7 +1011,56 @@ impl Orchestrator {
             recorder,
         });
         drop(inner);
-        self.emit_state(OrchestratorState::Listening, None);
+        let listening_payload = vad_warning_code.map(|_| {
+            json!({
+                "warning": VAD_FALLBACK_WARNING,
+                "manualStop": true
+            })
+        });
+        self.emit_state(OrchestratorState::Listening, listening_payload);
+        listening_state_emitted.store(true, Ordering::SeqCst);
+        if let Some(error_code) = vad_warning_code {
+            self.emit_process(
+                "vad_degraded",
+                json!({
+                    "outcome": "warning",
+                    "errorCode": error_code,
+                    "fallback": "hotkey_stop"
+                }),
+            );
+        }
+        if vad_inference_status
+            .compare_exchange(1, 2, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            let listening = {
+                let mut inner = self.inner.lock().unwrap();
+                if inner.state == OrchestratorState::Listening {
+                    inner.continuous_session = false;
+                    true
+                } else {
+                    false
+                }
+            };
+            if listening {
+                self.emit_state(
+                    OrchestratorState::Listening,
+                    Some(json!({
+                        "warning": VAD_FALLBACK_WARNING,
+                        "manualStop": true,
+                        "preserveText": true
+                    })),
+                );
+            }
+            self.emit_process(
+                "vad_degraded",
+                json!({
+                    "outcome": "warning",
+                    "errorCode": "VAD_INFERENCE_FAILED",
+                    "fallback": "hotkey_stop"
+                }),
+            );
+        }
         self.emit_process("capture_started", json!({}));
         Ok(())
     }
@@ -1030,7 +1190,7 @@ impl Orchestrator {
                     );
                     // 录档句柄直接 drop（不落盘）；history 草稿清掉不写记录
                     drop(active.recorder.take());
-                    let continuous = self.policy().continuous;
+                    let continuous = self.continuous_session();
                     // 块作用域收窄 MutexGuard（绝不跨 await 持锁）
                     {
                         let _op = self.op.lock().await;
@@ -1602,7 +1762,7 @@ impl Orchestrator {
             match result {
                 Ok(()) => {
                     inner.pending_text = None;
-                    resume_continuous = self.policy().continuous;
+                    resume_continuous = inner.continuous_session;
                     inner.state = if resume_continuous {
                         OrchestratorState::Idle
                     } else {

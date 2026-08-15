@@ -563,6 +563,16 @@ async fn begin_with_unready_engine_keeps_error_visible_until_acknowledged() {
     tokio::time::sleep(Duration::from_millis(40)).await;
     assert_eq!(orch.state(), OrchestratorState::Error);
     assert!(emitter.state_sequence().contains(&"error".to_string()));
+    assert!(emitter
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(event, payload)| {
+            event == "kotone://process"
+                && payload["activity"] == "session_failed"
+                && payload["data"]["errorCode"] == "STT_ENGINE_NOT_READY"
+        }));
     orch.cancel().await;
     assert_eq!(orch.state(), OrchestratorState::Idle);
 }
@@ -1235,6 +1245,16 @@ impl kotone_core::vad::Vad for ScriptVad {
     }
 }
 
+struct FailingVad;
+
+impl kotone_core::vad::Vad for FailingVad {
+    fn push_frame(&mut self, _frame: &[f32]) -> Result<bool, String> {
+        Err("native VAD inference failed".to_string())
+    }
+
+    fn reset(&mut self) {}
+}
+
 /// one-shot 测试架：预设 interactionMode=one-shot + 快阈值（210ms）+ 脚本 VAD
 fn make_one_shot_orchestrator(
     vad: ScriptVad,
@@ -1372,21 +1392,149 @@ async fn one_shot_hotkey_force_end_when_vad_never_stops() {
     assert_eq!(sent.lock().unwrap().as_slice(), ["对面打野在下路"]);
 }
 
-/// 模式 3 未接入 VAD 工厂：begin 报清晰错误并保持到用户确认
+/// 模式 3 未接入 VAD 工厂：仍开始收音，提示降级并允许再次点按结束发送。
 #[tokio::test]
-async fn one_shot_without_vad_factory_begin_fails() {
-    let (orch, _emitter, sent) = make_orchestrator(true);
+async fn one_shot_without_vad_factory_falls_back_to_manual_stop() {
+    let (orch, emitter, sent) = make_orchestrator(true);
     orch.settings().write().unwrap().interaction_mode =
         Some(kotone_core::interaction::InteractionMode::OneShot);
     // vad_factory 保持 None（未接入）
 
-    let err = orch.begin().await.unwrap_err();
-    assert!(err.contains("VAD"), "错误应指明 VAD 未接入: {err}");
-    // begin 失败走 Error，并保持到用户确认；不产生任何发送
-    assert_eq!(orch.state(), OrchestratorState::Error);
-    assert!(sent.lock().unwrap().is_empty());
-    orch.cancel().await;
-    assert_eq!(orch.state(), OrchestratorState::Idle);
+    orch.on_hotkey_toggle().await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    let events = emitter.events.lock().unwrap().clone();
+    assert!(events.iter().any(|(event, payload)| {
+        event == "kotone://state"
+            && payload["state"] == "listening"
+            && payload["payload"]["warning"]
+                .as_str()
+                .is_some_and(|warning| warning.contains("再按一次热键"))
+    }));
+    assert!(events.iter().any(|(event, payload)| {
+        event == "kotone://process"
+            && payload["activity"] == "vad_degraded"
+            && payload["data"]["errorCode"] == "VAD_NOT_CONFIGURED"
+    }));
+
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.on_hotkey_toggle().await;
+    assert_eq!(sent.lock().unwrap().as_slice(), ["对面打野在下路"]);
+}
+
+/// VAD 原生初始化失败与未接入走同一条可恢复路径，并留下稳定诊断码。
+#[tokio::test]
+async fn one_shot_vad_init_failure_falls_back_and_records_code() {
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
+    let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(
+        Arc::new(Mutex::new(Vec::new())),
+        7,
+        true,
+    ));
+    let (orch, emitter) = make_orchestrator_tuned(true, injector, focus, |orch| {
+        orch.vad_factory = Some(Arc::new(|_| Err("native VAD init failed".to_string())));
+    });
+    orch.settings().write().unwrap().interaction_mode =
+        Some(kotone_core::interaction::InteractionMode::OneShot);
+
+    orch.on_hotkey_toggle().await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    assert!(emitter
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(event, payload)| {
+            event == "kotone://process"
+                && payload["activity"] == "vad_degraded"
+                && payload["data"]["errorCode"] == "VAD_INIT_FAILED"
+        }));
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.on_hotkey_toggle().await;
+    assert!(!sent.lock().unwrap().is_empty());
+}
+
+/// 首帧推理失败可能与 Listening 状态建立并发发生；降级必须只上报一次，
+/// 且 solo 本轮要变为“再次点按结束并发送”。
+#[tokio::test]
+async fn solo_vad_inference_failure_falls_back_without_startup_race() {
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
+    let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(
+        Arc::new(Mutex::new(Vec::new())),
+        7,
+        true,
+    ));
+    let (orch, emitter) = make_orchestrator_tuned(true, injector, focus, |orch| {
+        orch.vad_factory = Some(Arc::new(|_| {
+            Ok(Box::new(FailingVad) as Box<dyn kotone_core::vad::Vad>)
+        }));
+    });
+    orch.settings().write().unwrap().interaction_mode =
+        Some(kotone_core::interaction::InteractionMode::Solo);
+
+    orch.on_hotkey_toggle().await;
+    for _ in 0..50 {
+        let degraded = emitter
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(event, payload)| {
+                event == "kotone://process"
+                    && payload["activity"] == "vad_degraded"
+                    && payload["data"]["errorCode"] == "VAD_INFERENCE_FAILED"
+            });
+        if degraded {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    assert!(!orch.continuous_session());
+    let events = emitter.events.lock().unwrap().clone();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|(event, payload)| {
+                event == "kotone://process"
+                    && payload["activity"] == "vad_degraded"
+                    && payload["data"]["errorCode"] == "VAD_INFERENCE_FAILED"
+            })
+            .count(),
+        1
+    );
+    assert!(events.iter().any(|(event, payload)| {
+        event == "kotone://state"
+            && payload["state"] == "listening"
+            && payload["payload"]["warning"].is_string()
+    }));
+
+    orch.on_hotkey_toggle().await;
+    assert_eq!(sent.lock().unwrap().as_slice(), ["对面打野在下路"]);
+    assert_ne!(orch.state(), OrchestratorState::Listening);
+}
+
+/// solo 缺少 VAD 时本轮降级为一次性手动结束，不把第二次点按解释为“丢弃并停止”。
+#[tokio::test]
+async fn solo_without_vad_factory_manual_stop_sends_and_does_not_resume() {
+    let (orch, _emitter, sent) = make_orchestrator(true);
+    orch.settings().write().unwrap().interaction_mode =
+        Some(kotone_core::interaction::InteractionMode::Solo);
+
+    orch.on_hotkey_toggle().await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    assert!(!orch.continuous_session());
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.on_hotkey_toggle().await;
+
+    assert_eq!(sent.lock().unwrap().as_slice(), ["对面打野在下路"]);
+    assert_ne!(
+        orch.state(),
+        OrchestratorState::Listening,
+        "VAD 降级后不应按 solo 自动续段"
+    );
 }
 
 #[tokio::test]

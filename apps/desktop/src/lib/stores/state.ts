@@ -45,6 +45,8 @@ export interface AppState {
   finalText: string;
   /** 录音 RMS 电平（0..1），驱动波形 */
   level: number;
+  /** listening 状态的可恢复降级提示（例如 VAD 不可用时改为手动结束） */
+  warningMessage: string | null;
   /** error 状态的消息 */
   errorMessage: string | null;
   /** error 状态保留的文本（发送失败可重试；可能为空） */
@@ -64,6 +66,7 @@ const initial: AppState = {
   partialText: "",
   finalText: "",
   level: 0,
+  warningMessage: null,
   errorMessage: null,
   errorText: null,
   inputBlocked: false,
@@ -81,6 +84,8 @@ interface StateEventPayload {
   payload?: {
     text?: string | null;
     message?: string | null;
+    warning?: string | null;
+    preserveText?: boolean | null;
     inputBlocked?: boolean | null;
     needsElevation?: boolean | null;
     stepId?: string | null;
@@ -106,7 +111,9 @@ function applyStateEvent(ev: StateEventPayload): void {
     const next: AppState = { ...s, state: ev.state };
     const text = ev.payload?.text ?? null;
     const message = ev.payload?.message ?? null;
+    const warning = ev.payload?.warning ?? null;
     if (ev.state !== "processing") next.processingStep = null;
+    if (ev.state !== "listening") next.warningMessage = null;
 
     switch (ev.state) {
       case "idle":
@@ -114,6 +121,7 @@ function applyStateEvent(ev: StateEventPayload): void {
         next.partialText = "";
         next.finalText = "";
         next.level = 0;
+        next.warningMessage = null;
         next.errorMessage = null;
         next.errorText = null;
         next.inputBlocked = false;
@@ -121,8 +129,9 @@ function applyStateEvent(ev: StateEventPayload): void {
         break;
       case "listening":
         // 新会话开始：清空上一轮残留
-        next.partialText = text ?? "";
+        next.partialText = text ?? (ev.payload?.preserveText === true ? s.partialText : "");
         next.finalText = "";
+        next.warningMessage = warning;
         next.errorMessage = null;
         next.errorText = null;
         next.inputBlocked = false;

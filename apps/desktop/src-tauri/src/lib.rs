@@ -15,7 +15,7 @@ use hotkey::{HotkeyManager, HotkeyStatus, InputEnvironmentCheck};
 use kotone_core::audio::AudioDevice;
 use kotone_core::connection::{Connection, ConnectionResolver, SecretStore};
 use kotone_core::inject::{CancelToken, FocusBackend, InjectError, Injector};
-use kotone_core::interaction::{effective_hotkey_mode, InteractionPolicy};
+use kotone_core::interaction::effective_hotkey_mode;
 use kotone_core::orchestrator::{Emitter, Orchestrator};
 use kotone_core::profile::{
     self, format_hotwords_export, GameProfile, HotwordMergeReport, ProfileDeleteOutcome,
@@ -255,11 +255,8 @@ impl Emitter for TauriEmitter {
                     .app
                     .try_state::<SharedState>()
                     .map(|s| {
-                        let g = s.settings.read().unwrap();
-                        (
-                            g.overlay.visibility,
-                            InteractionPolicy::from_settings(&g).continuous,
-                        )
+                        let visibility = s.settings.read().unwrap().overlay.visibility;
+                        (visibility, s.orchestrator.continuous_session())
                     })
                     .unwrap_or((OverlayVisibility::Always, false));
                 let gen = self

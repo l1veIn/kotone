@@ -14,7 +14,7 @@ use crate::hotkey::HotkeyManager;
 use crate::runtime::RuntimeManager;
 use crate::SharedState;
 
-const PACKAGE_SCHEMA_VERSION: u32 = 1;
+const PACKAGE_SCHEMA_VERSION: u32 = 2;
 const MAX_PROCESS_EVENTS: usize = 20_000;
 const MAX_HISTORY_RECORDS: usize = 50;
 const MAX_LOG_BYTES: usize = 1024 * 1024;
@@ -55,6 +55,8 @@ struct Environment {
 struct RuntimeSnapshot {
     phase: String,
     restart_needed: bool,
+    orchestrator_state: String,
+    continuous_session: bool,
     engine_id: Option<String>,
     engine_name: Option<String>,
     model_id: Option<String>,
@@ -72,6 +74,8 @@ struct RuntimeSnapshot {
     history_include_audio: bool,
     overlay_visibility: String,
     overlay_style: String,
+    vad_compiled: bool,
+    vad_model_ready: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -120,6 +124,8 @@ pub fn export(app: &AppHandle, requested_path: &Path) -> Result<DiagnosticExport
     let runtime_snapshot = RuntimeSnapshot {
         phase: runtime.phase,
         restart_needed: runtime.restart_needed,
+        orchestrator_state: serde_label(&shared.orchestrator.state()),
+        continuous_session: shared.orchestrator.continuous_session(),
         engine_id: runtime.engine_id,
         engine_name: runtime.engine_name,
         model_id: runtime.model_id,
@@ -137,6 +143,8 @@ pub fn export(app: &AppHandle, requested_path: &Path) -> Result<DiagnosticExport
         history_include_audio: settings.history.include_audio,
         overlay_visibility: serde_label(&settings.overlay.visibility),
         overlay_style: serde_label(&settings.overlay.style),
+        vad_compiled: kotone_stt::vad::compiled(),
+        vad_model_ready: kotone_stt::model::vad_model_ready(),
     };
 
     let environment = Environment {
@@ -256,6 +264,7 @@ fn package_readme(report_id: &str) -> String {
          报告编号：{report_id}\n\n\
          本包不包含录音、识别文本或热词内容。\n\
          history-metadata.json 只保留耗时、结果、错误码和文本长度。\n\
+         runtime.json 包含 VAD 编译、模型就绪和当前会话降级状态。\n\
          events.csv 可由 PM4Py 直接读取；前三列分别为 case id、activity、timestamp。\n"
     )
 }
@@ -275,6 +284,17 @@ fn read_sanitized_log() -> String {
 
 pub(crate) fn redact_log_line(line: &str) -> String {
     let mut redacted = redact_home(line);
+    for marker in ["VAD 初始化失败", "VAD 推理失败"] {
+        let Some(marker_index) = redacted.find(marker) else {
+            continue;
+        };
+        let Some(detail_offset) = redacted[marker_index..].find(": ") else {
+            continue;
+        };
+        redacted.truncate(marker_index + detail_offset);
+        redacted.push_str(": [details redacted]");
+        break;
+    }
     if let Some(index) = redacted.find("state -> ") {
         let prefix = &redacted[..index];
         let state = redacted[index + "state -> ".len()..]
@@ -322,6 +342,8 @@ fn classify_error(error: &str) -> String {
         "HOTKEY_FAILED"
     } else if error.contains("麦克风") || error.contains("录音") || lower.contains("audio") {
         "AUDIO_FAILED"
+    } else if lower.contains("vad") || error.contains("静音检测") {
+        "VAD_FAILED"
     } else if error.contains("模型") || error.contains("引擎") || lower.contains("model") {
         "MODEL_OR_ENGINE_FAILED"
     } else if error.contains("发送") || error.contains("注入") || lower.contains("inject") {
@@ -342,6 +364,19 @@ mod tests {
         let redacted = redact_log_line(line);
         assert_eq!(redacted, "[1.000] state -> sending [payload redacted]");
         assert!(!redacted.contains("秘密文本"));
+    }
+
+    #[test]
+    fn vad_native_details_are_redacted_but_failure_stage_remains() {
+        let line =
+            r#"[1.000] VAD 初始化失败，本次会话降级为热键结束: 模型路径 D:\\Private\\silero.onnx"#;
+        let redacted = redact_log_line(line);
+        assert_eq!(
+            redacted,
+            "[1.000] VAD 初始化失败，本次会话降级为热键结束: [details redacted]"
+        );
+        assert!(!redacted.contains("Private"));
+        assert_eq!(classify_error("VAD 初始化失败"), "VAD_FAILED");
     }
 
     #[test]
