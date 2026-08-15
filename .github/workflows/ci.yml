@@ -38,6 +38,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
+          # sherpa-onnx-sys downloads native .lib files outside Cargo's normal
+          # dependency artifacts. Keep them explicitly; rust-cache otherwise
+          # prunes the files but leaves the directory, which fools its build.rs.
+          cache-directories: target/sherpa-onnx-prebuilt
+          prefix-key: v1-rust
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

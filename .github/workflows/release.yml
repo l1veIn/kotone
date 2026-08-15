@@ -42,6 +42,9 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: .
+          # Keep sherpa-onnx-sys native libraries alongside Cargo artifacts.
+          cache-directories: target/sherpa-onnx-prebuilt
+          prefix-key: v1-rust
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
