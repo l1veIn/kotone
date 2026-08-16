@@ -511,8 +511,24 @@ fn iflytek_transcribe_ws(
         url_encode(&authorization),
         url_encode(&date),
     );
-    let (mut socket, _) = tungstenite::connect(url)
-        .map_err(|e| format!("科大讯飞 WebSocket 连接失败：{e}"))?;
+    let (mut socket, _) = match tungstenite::connect(url) {
+        Ok(connected) => connected,
+        Err(e) => {
+            let detail = match &e {
+                tungstenite::Error::Http(resp) => {
+                    let body = resp
+                        .body()
+                        .as_deref()
+                        .map(|b| String::from_utf8_lossy(b).to_string())
+                        .unwrap_or_default();
+                    format!("HTTP {}: {body}", resp.status())
+                }
+                _ => e.to_string(),
+            };
+            kotone_core::log::log(&format!("iflytek asr connect error: {detail}"));
+            return Err(format!("科大讯飞 WebSocket 连接失败：{detail}"));
+        }
+    };
 
     let mut text = String::new();
     let mut sent = 0usize;
