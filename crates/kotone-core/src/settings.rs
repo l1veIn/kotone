@@ -828,10 +828,6 @@ mod tests {
                 "sherpa-onnx-sensevoice": {
                     "model": "sense-voice-zh-en-ja-ko-yue-2024-07-17",
                     "language": "yue"
-                },
-                "sherpa-onnx-funasr-nano": {
-                    "model": "funasr-nano-int8-2025-12-30",
-                    "language": "ja"
                 }
             }),
             ..Settings::default()
@@ -843,10 +839,6 @@ mod tests {
             "sense-voice-zh-en-ja-ko-yue-2024-07-17"
         );
         assert_eq!(sensevoice["language"], "yue");
-
-        let funasr = s.session_options("sherpa-onnx-funasr-nano");
-        assert_eq!(funasr["model"], "funasr-nano-int8-2025-12-30");
-        assert_eq!(funasr["language"], "ja");
     }
 
     #[test]

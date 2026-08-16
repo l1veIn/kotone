@@ -30,6 +30,7 @@ const OFFLINE_SPEC: OfflineSpec = OfflineSpec {
     languages: &["zh", "en", "ja", "ko", "yue"],
     hotwords: true,
     not_ready_hint: "非流式模型未下载。请在高级页下载",
+    max_audio_seconds: None,
 };
 
 /// 按活动模型 recipe 填充 OfflineRecognizer 家族字段。

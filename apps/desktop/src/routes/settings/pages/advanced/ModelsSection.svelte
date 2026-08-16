@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { slide } from "svelte/transition";
   import { listen } from "@tauri-apps/api/event";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import {
@@ -14,6 +15,7 @@
     setModelsDir,
     openModelsDir,
     openHistoryDir,
+    openExternal,
     cancelDownload,
     getModelInstallGuide,
     isDownloadCancelled,
@@ -587,59 +589,70 @@
             {/if}
           </div>
         {/if}
+        {#if isActive && m.configSchema.length > 0}
+          <div
+            class="mt-1.5 rounded-lg bg-white/4 p-3 ring-1 ring-white/10"
+            transition:slide|local={{ duration: 140 }}
+          >
+            <div class="flex items-center justify-between gap-2">
+              <p class="text-[11px] font-semibold text-white/70">模型配置</p>
+              {#if m.apiKeyUrl}
+                <button
+                  type="button"
+                  class="text-[11px] font-semibold text-kotone-cyan hover:underline"
+                  onclick={() => void openExternal(m.apiKeyUrl!)}
+                >
+                  获取 API Key
+                </button>
+              {/if}
+            </div>
+            <div class="mt-2 flex flex-col gap-2.5">
+              {#each m.configSchema as field}
+                <label class="block">
+                  <span class="text-[11px] text-white/50">{field.label}</span>
+                  {#if field.kind === "enum"}
+                    <select
+                      class="mt-1 w-full rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60 [&>option]:bg-kotone-deep"
+                      value={fieldValue(m.id, field.key, field.default)}
+                      onchange={(e) =>
+                        void saveField(m.id, field.key, (e.target as HTMLSelectElement).value)}
+                    >
+                      {#each field.options as option}
+                        <option value={option.value}>{option.label}</option>
+                      {/each}
+                    </select>
+                  {:else if field.kind === "connection"}
+                    <select
+                      class="mt-1 w-full rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60 [&>option]:bg-kotone-deep"
+                      value={fieldValue(m.id, field.key, field.default)}
+                      onchange={(e) =>
+                        void saveField(m.id, field.key, (e.target as HTMLSelectElement).value)}
+                    >
+                      <option value="">请选择 API 连接</option>
+                      {#each connections as connection}
+                        <option value={connection.id}>
+                          {connection.displayName}{connection.hasApiKey ? "" : "（未填密钥）"}
+                        </option>
+                      {/each}
+                    </select>
+                    <p class="mt-1 text-[10px] text-white/35">
+                      地址和 API key 在「高级 → API 连接」里保存，不会写入配置文件。
+                    </p>
+                  {:else}
+                    <input
+                      class="mt-1 w-full rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60"
+                      value={fieldValue(m.id, field.key, field.default)}
+                      onchange={(e) =>
+                        void saveField(m.id, field.key, (e.target as HTMLInputElement).value)}
+                    />
+                  {/if}
+                </label>
+              {/each}
+            </div>
+          </div>
+        {/if}
       {/each}
     </div>
-    {#if $settingsStore}
-      {@const active = visibleModels.find((item) => isCurrentModel(item.id))}
-      {#if active && active.configSchema.length > 0}
-        <div class="mt-3 rounded-lg bg-white/4 p-3 ring-1 ring-white/10">
-          <p class="text-[11px] font-semibold text-white/70">模型配置</p>
-          <div class="mt-2 flex flex-col gap-2">
-            {#each active.configSchema as field}
-              <label class="block">
-                <span class="text-[11px] text-white/50">{field.label}</span>
-                {#if field.kind === "enum"}
-                  <select
-                    class="mt-1 w-full rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60 [&>option]:bg-kotone-deep"
-                    value={fieldValue(active.id, field.key, field.default)}
-                    onchange={(e) =>
-                      void saveField(active.id, field.key, (e.target as HTMLSelectElement).value)}
-                  >
-                    {#each field.options as option}
-                      <option value={option.value}>{option.label}</option>
-                    {/each}
-                  </select>
-                {:else if field.kind === "connection"}
-                  <select
-                    class="mt-1 w-full rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60 [&>option]:bg-kotone-deep"
-                    value={fieldValue(active.id, field.key, field.default)}
-                    onchange={(e) =>
-                      void saveField(active.id, field.key, (e.target as HTMLSelectElement).value)}
-                  >
-                    <option value="">请选择 API 连接</option>
-                    {#each connections as connection}
-                      <option value={connection.id}>
-                        {connection.displayName}{connection.hasApiKey ? "" : "（未填密钥）"}
-                      </option>
-                    {/each}
-                  </select>
-                  <p class="mt-1 text-[10px] text-white/35">
-                    地址和 API key 在「高级 → API 连接」里保存，不会写入配置文件。
-                  </p>
-                {:else}
-                  <input
-                    class="mt-1 w-full rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60"
-                    value={fieldValue(active.id, field.key, field.default)}
-                    onchange={(e) =>
-                      void saveField(active.id, field.key, (e.target as HTMLInputElement).value)}
-                  />
-                {/if}
-              </label>
-            {/each}
-          </div>
-        </div>
-      {/if}
-    {/if}
     <p class="mt-3 text-[11px] text-white/40">
       本机模型未下载时「启动」会提示缺失项；切换后如已「启动」，需点标题栏「重启生效」。
     </p>

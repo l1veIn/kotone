@@ -342,6 +342,8 @@ export interface ModelInfo {
   backend: "sherpa" | "remote";
   recipe: string;
   configSchema: ModelConfigField[];
+  /** 获取 API key 的控制台页面（在线模型） */
+  apiKeyUrl?: string | null;
 }
 
 /** 自动下载失败后的手动安装指引 */
@@ -595,7 +597,7 @@ const mock: MockStore = {
     {
       id: "funasr-nano-int8-2025-12-30",
       engineId: "sherpa-offline",
-      displayName: "FunASR-Nano 中英日（官方 Hugging Face，非流式）",
+      displayName: "FunASR-Nano 中英日（官方 Hugging Face，非流式，不支持热词）",
       sizeBytes: 1_010_000_000,
       downloaded: false,
       io: "offline",
@@ -606,7 +608,7 @@ const mock: MockStore = {
     {
       id: "funasr-nano-int8-modelscope",
       engineId: "sherpa-offline",
-      displayName: "FunASR-Nano 中英日（魔搭社区，国内直下）",
+      displayName: "FunASR-Nano 中英日（魔搭社区，国内直下，不支持热词）",
       sizeBytes: 1_010_000_000,
       downloaded: false,
       io: "offline",
@@ -615,23 +617,34 @@ const mock: MockStore = {
       configSchema: [],
     },
     {
-      id: "openai-compat-stt",
-      engineId: "remote-openai-compat",
-      displayName: "在线识别（OpenAI 兼容）",
+      id: "volcano-asr",
+      engineId: "online-asr",
+      displayName: "火山引擎语音识别（在线）",
       sizeBytes: 0,
       downloaded: true,
       io: "offline",
       backend: "remote",
-      recipe: "openai-compat",
+      recipe: "volcano-asr",
+      apiKeyUrl: "https://console.volcengine.com/speech/service/15",
       configSchema: [
-        {
-          key: "connectionId",
-          label: "API 连接",
-          kind: "connection",
-          default: "",
-          options: [],
-          required: true,
-        },
+        { key: "appId", label: "App ID", kind: "string", default: "", options: [], required: true },
+        { key: "accessToken", label: "Access Token", kind: "secret", default: "", options: [], required: true },
+      ],
+    },
+    {
+      id: "iflytek-asr",
+      engineId: "online-asr",
+      displayName: "科大讯飞语音听写（在线）",
+      sizeBytes: 0,
+      downloaded: true,
+      io: "offline",
+      backend: "remote",
+      recipe: "iflytek-asr",
+      apiKeyUrl: "https://console.xfyun.cn/services/iat",
+      configSchema: [
+        { key: "appId", label: "APPID", kind: "string", default: "", options: [], required: true },
+        { key: "apiKey", label: "APIKey", kind: "string", default: "", options: [], required: true },
+        { key: "apiSecret", label: "APISecret", kind: "secret", default: "", options: [], required: true },
       ],
     },
   ],
@@ -823,7 +836,7 @@ export async function listPostProcessors(): Promise<PostProcessorInfo[]> {
           {
             key: "csvPath",
             displayName: "自定义屏蔽词 CSV",
-            description: "可选。UTF-8 CSV，每行“屏蔽词,替换词”；第二列留空时替换为等长星号。",
+            description: "可选。CSV 每行“屏蔽词,替换词”；第二列留空时替换为等长星号。支持 UTF-8 / GBK / UTF-16，推荐 UTF-8。",
             kind: "file",
             required: false,
             fileExtensions: ["csv"],
@@ -1068,6 +1081,24 @@ export async function exportHotwords(profileId: string, path: string): Promise<n
     return p?.hotwords.length ?? 0;
   }
   return invoke<number>("export_hotwords", { profileId, path });
+}
+
+/** 导出内置屏蔽词表到 UTF-8 CSV（两列：屏蔽词,替换词），返回规则条数。 */
+export async function exportBuiltinBlocklist(path: string): Promise<number> {
+  if (!isTauri) {
+    console.info(`[mock] export_builtin_blocklist → ${path}`);
+    return builtinBlocklistCsv()
+      .replace(/^\uFEFF/, "")
+      .split(/\r?\n/)
+      .slice(1)
+      .filter((row) => row.trim() !== "").length;
+  }
+  return invoke<number>("export_builtin_blocklist", { path });
+}
+
+/** 内置屏蔽词表 CSV 原文（用于浏览器端 mock 下载导出）。 */
+export function builtinBlocklistCsv(): string {
+  return defaultLolBlocklistCsv;
 }
 
 /** 从 UTF-8 文本导入热词（合并去重），返回合并报告 */
@@ -1434,20 +1465,12 @@ function mockInstallGuide(id: string): ModelInstallGuide {
   const m = mock.models.find((x) => x.id === id);
   if (!m) throw new Error(`未知模型：${id}`);
   const destSubdir =
-    m.id === "funasr-nano-int8-modelscope"
-      ? "sherpa-onnx-funasr-nano-int8-modelscope"
-      : m.id === "funasr-nano-int8-2025-12-30"
-        ? "sherpa-onnx-funasr-nano-int8-2025-12-30"
-        : m.id === "sense-voice-zh-en-ja-ko-yue-2024-07-17"
-          ? "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
-          : "sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05";
-  const pageUrl = m.id === "funasr-nano-int8-modelscope"
-    ? "https://www.modelscope.cn/models/zengshuishui/FunASR-nano-onnx"
-    : m.id.includes("funasr")
-      ? "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30"
-      : m.id.includes("sense")
-        ? "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
-        : "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05.tar.bz2";
+    m.id === "sense-voice-zh-en-ja-ko-yue-2024-07-17"
+      ? "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
+      : "sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05";
+  const pageUrl = m.id.includes("sense")
+    ? "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
+    : "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05.tar.bz2";
   return {
     id: m.id,
     displayName: m.displayName,
@@ -1456,7 +1479,7 @@ function mockInstallGuide(id: string): ModelInstallGuide {
     pageUrl,
     files: [
       {
-        name: m.id.includes("funasr") ? "encoder_adaptor.int8.onnx" : "encoder.int8.onnx",
+        name: m.id.includes("sense") ? "model.int8.onnx" : "encoder.int8.onnx",
         url: pageUrl,
         sizeBytes: m.sizeBytes,
       },

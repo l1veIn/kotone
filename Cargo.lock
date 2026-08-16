@@ -2488,6 +2488,7 @@ dependencies = [
 name = "kotone-postprocess"
 version = "0.1.0"
 dependencies = [
+ "encoding_rs",
  "keyring",
  "kotone-core",
  "reqwest 0.12.28",
@@ -2502,6 +2503,7 @@ dependencies = [
 name = "kotone-stt"
 version = "0.1.1"
 dependencies = [
+ "base64 0.22.1",
  "bzip2",
  "kotone-core",
  "reqwest 0.12.28",
@@ -2516,7 +2518,7 @@ dependencies = [
 
 [[package]]
 name = "kotone-tauri"
-version = "0.1.8-rc.1"
+version = "0.1.8-rc.2"
 dependencies = [
  "dirs",
  "kotone-core",
@@ -4261,9 +4263,9 @@ dependencies = [
 
 [[package]]
 name = "sherpa-onnx"
-version = "1.13.4"
+version = "1.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b142d3f255cb4e4b7808ea25869db6f5714e0a3550da355234483b4db552055"
+checksum = "352a5dbbd9623e800be27e77de514e87fcfe2120256acc4434e6ea87a56bc885"
 dependencies = [
  "serde",
  "serde_json",
@@ -4272,9 +4274,9 @@ dependencies = [
 
 [[package]]
 name = "sherpa-onnx-sys"
-version = "1.13.4"
+version = "1.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffc951af03dc0653c0622158ca8a585a6f2bc43b7b06048cf0e5b5020005c227"
+checksum = "c1541926ecf70b3d806467a2f100d3d879eef7fd34f8b307028bb074871d7493"
 dependencies = [
  "bzip2",
  "tar",

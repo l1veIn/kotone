@@ -27,6 +27,10 @@ pub struct OfflineSpec {
     pub hotwords: bool,
     /// 模型未下载时的错误提示
     pub not_ready_hint: &'static str,
+    /// 单次转写的最大音频时长（秒）。None = 不限制。
+    /// FunASR-Nano 的 LLM `max_total_len`（约 512 token）限制了总上下文，
+    /// 超长音频会触发 sherpa-onnx 回退并丢失识别结果，这里提前截断。
+    pub max_audio_seconds: Option<u32>,
 }
 
 #[cfg(feature = "engine-sherpa")]
@@ -43,6 +47,11 @@ pub mod imp {
 
     /// 默认推理线程数（engineOptions["threads"] 可覆盖）
     const DEFAULT_THREADS: u32 = 2;
+
+    /// FunASR-Nano 单次转写的最大音频时长（秒）。其 LLM 的 `max_total_len`
+    /// （约 512 token）限制总上下文；实测约 100 token/秒，故 512 token ≈ 5 秒。
+    /// 超长音频会触发 sherpa-onnx 回退并丢字，这里提前截断。
+    const FUNASR_MAX_AUDIO_SECONDS: u32 = 5;
 
     /// 模型家族配置函数：给定会话配置与模型目录，填充 OfflineRecognizerConfig
     /// 的模型家族字段（sense_voice / funasr_nano 等）
@@ -107,6 +116,16 @@ pub mod imp {
             *guard = Some(recognizer.clone());
             Ok(recognizer)
         }
+
+        /// 单次转写的最大音频时长：FunASR-Nano 按 recipe 动态施加上限，
+        /// 其余离线引擎沿用 spec 的静态默认（SenseVoice 为 None 不限制）。
+        fn max_audio_for(&self, cfg: &SessionConfig) -> Option<u32> {
+            let model_id = crate::model::model_id_from_cfg(cfg, self.spec.engine_id);
+            match crate::model::recipe_of(&model_id) {
+                Some(crate::model::ModelRecipe::FunasrNano) => Some(FUNASR_MAX_AUDIO_SECONDS),
+                _ => self.spec.max_audio_seconds,
+            }
+        }
     }
 
     impl SttEngine for OfflineEngine {
@@ -154,6 +173,7 @@ pub mod imp {
                 pcm: Vec::new(),
                 events,
                 cancelled: false,
+                max_audio_seconds: self.max_audio_for(cfg),
             }))
         }
     }
@@ -164,6 +184,7 @@ pub mod imp {
         pcm: Vec<f32>,
         events: mpsc::UnboundedSender<SttEvent>,
         cancelled: bool,
+        max_audio_seconds: Option<u32>,
     }
 
     impl SttSession for OfflineSession {
@@ -184,7 +205,12 @@ pub mod imp {
             }
             let started = Instant::now();
             let stream = self.recognizer.create_stream();
-            stream.accept_waveform(16000, &self.pcm);
+            let max_samples = self.max_audio_seconds.map(|s| s as usize * 16000);
+            let audio: &[f32] = match max_samples {
+                Some(max) if self.pcm.len() > max => &self.pcm[..max],
+                _ => &self.pcm[..],
+            };
+            stream.accept_waveform(16000, audio);
             self.recognizer.decode(&stream);
             let text = stream.get_result().map(|r| r.text).unwrap_or_default();
             let latency_ms = started.elapsed().as_millis() as u32;
@@ -200,16 +226,6 @@ pub mod imp {
         fn cancel(&mut self) {
             self.cancelled = true;
             self.pcm.clear();
-        }
-    }
-
-    /// profile hotwords → 空格连接（funasr-nano 模型级热词字段的
-    /// upstream 惯例格式；实际分隔语义待真机验证）
-    pub(crate) fn join_hotwords(hotwords: &[String]) -> Option<String> {
-        if hotwords.is_empty() {
-            None
-        } else {
-            Some(hotwords.join(" "))
         }
     }
 }

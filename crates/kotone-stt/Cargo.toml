@@ -13,6 +13,7 @@ tokio.workspace = true
 # 模型下载（blocking：调用方自行放 spawn_blocking；天然对齐 shell/CLI 两侧）
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 sha2 = "0.10"
+base64 = "0.22"
 # X-ASR 等模型只以 tar.bz2 整包发布（k2-fsa GitHub releases）：
 # tar 解包 + bzip2 解压（bzip2-sys 自带 C 源码，Windows MSVC 可直接编译）
 tar = "0.4"
@@ -20,7 +21,7 @@ bzip2 = "0.4"
 # sherpa-onnx 官方 Rust 绑定（ADR-004）：静态链接，build script 自动下载
 # 预编译原生库——体量大（~50MB 原生包 + 链接体积），故仅 engine-sherpa
 # feature 开启时才拉取编译，默认构建零原生依赖
-sherpa-onnx = { version = "1.13.4", optional = true }
+sherpa-onnx = { version = "1.13.5", optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

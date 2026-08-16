@@ -4,8 +4,10 @@
    * 所有变更仍走 updateSettings 的事务入口，并以返回的完整 Settings 更新共享 store。
   */
   import { onMount } from "svelte";
-  import { open as openDialog } from "@tauri-apps/plugin-dialog";
+  import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
   import {
+    builtinBlocklistCsv,
+    exportBuiltinBlocklist,
     isTauri,
     listConnections,
     listPostProcessors,
@@ -204,6 +206,31 @@
       if (typeof selected === "string") await updateConfigField(index, field, selected);
     } catch (error) {
       toast(false, `选择文件失败：${errText(error)}`);
+    }
+  }
+
+  async function onExportBlocklist() {
+    try {
+      if (isTauri) {
+        const path = await saveDialog({
+          defaultPath: "kotone-blocklist.csv",
+          filters: [{ name: "屏蔽词表", extensions: ["csv"] }],
+        });
+        if (!path) return;
+        const count = await exportBuiltinBlocklist(path);
+        toast(true, `已导出 ${count} 条屏蔽词 → ${path}`);
+      } else {
+        const blob = new Blob([builtinBlocklistCsv()], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = "kotone-blocklist.csv";
+        anchor.click();
+        URL.revokeObjectURL(url);
+        toast(true, "已导出内置屏蔽词库");
+      }
+    } catch (error) {
+      toast(false, `导出屏蔽词库失败：${errText(error)}`);
     }
   }
 
@@ -456,6 +483,21 @@
                       </p>
                     </div>
                   {/each}
+                  {#if processor.id === "builtin.blocklist-filter"}
+                    <div class="mt-3 border-t border-white/8 pt-3">
+                      <p class="text-[10px] leading-relaxed text-white/35">
+                        内置词库为两列 CSV：<span class="text-white/55">屏蔽词,替换词</span>；替换词留空则打码为等长星号。导出一份即可参照同格式自定义，再填入上方路径（会完整覆盖内置词库）。编辑后请保存为 UTF-8 或 GBK 编码。
+                      </p>
+                      <button
+                        data-testid="postprocess-export-blocklist"
+                        class="mt-2 rounded-md bg-white/9 px-2.5 py-1.5 text-[11px] text-white/70 ring-1 ring-white/12 transition hover:bg-white/15 disabled:opacity-50"
+                        disabled={saving}
+                        onclick={() => void onExportBlocklist()}
+                      >
+                        导出内置词库
+                      </button>
+                    </div>
+                  {/if}
                   {#if !requiredConfigComplete(processor, step.config)}
                     <p class="mt-2 text-[10px] text-kotone-pink/75">
                       完成必填配置后，这个步骤会自动启用。

@@ -25,8 +25,11 @@ pub(crate) const SPEC: OfflineSpec = OfflineSpec {
     engine_id: ENGINE_ID,
     display_name: "FunASR-Nano 中英日",
     languages: &["zh", "en", "ja"],
-    hotwords: true, // 模型级 hotwords 字段
+    hotwords: false, // FunASR-Nano 的热词会挤占 max_total_len（约 512 token），
+    // LOL 百条热词必然回退，故禁用并在 UI 提示不支持热词
     not_ready_hint: "FunASR-Nano 模型未下载。请在高级页下载",
+    // FunASR-Nano 的时长上限由 offline_sherpa 按 recipe 动态施加（FUNASR_MAX_AUDIO_SECONDS）
+    max_audio_seconds: None,
 };
 
 /// 填充 FunASR-Nano 模型家族字段（骨架已设 num_threads/provider）
@@ -51,9 +54,8 @@ pub(crate) fn configure(
         seed: 42,
         language: None, // 空 = auto 自动判别
         itn: 1,         // 逆文本正则（数字/标点落形），官方默认 itn=True
-        // 模型级热词：recognizer 首建绑定，修改需重启生效；
-        // 空格连接为 upstream 惯例格式，实际分隔语义待真机验证
-        hotwords: crate::offline_sherpa::imp::join_hotwords(&cfg.hotwords),
+        // 禁用热词：LOL 百条热词挤占 max_total_len 会导致回退丢字
+        hotwords: None,
     };
 }
 
@@ -122,22 +124,11 @@ mod tests {
         assert_eq!(e.id(), "sherpa-onnx-funasr-nano");
         let caps = e.capabilities();
         assert!(!caps.streaming, "FunASR-Nano 必须是非流式引擎");
-        assert!(caps.hotwords, "FunASR-Nano 支持模型级热词");
+        assert!(!caps.hotwords, "FunASR-Nano 热词会挤占 max_total_len，已禁用");
         assert!(caps.offline);
         for lang in ["zh", "en", "ja"] {
             assert!(caps.languages.iter().any(|l| l == lang), "缺语言 {lang}");
         }
-    }
-
-    #[cfg(feature = "engine-sherpa")]
-    #[test]
-    fn hotwords_join_space_separated() {
-        use crate::offline_sherpa::imp::join_hotwords;
-        assert_eq!(
-            join_hotwords(&["闪现".into(), "大龙".into()]).as_deref(),
-            Some("闪现 大龙")
-        );
-        assert_eq!(join_hotwords(&[]), None, "空热词应传 None 而非空串");
     }
 
     #[test]

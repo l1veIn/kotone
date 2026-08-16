@@ -14,6 +14,7 @@ pub mod funasr_nano;
 pub mod mock;
 pub mod model;
 pub mod offline_sherpa;
+pub mod online_asr;
 pub mod online_transducer;
 pub mod remote_openai;
 pub mod sensevoice;
@@ -30,6 +31,7 @@ pub fn builtin_engines() -> Vec<Box<dyn SttEngine>> {
         Box::new(sherpa_runtime::SherpaStreamingEngine::new()),
         Box::new(sherpa_runtime::SherpaOfflineEngine::new()),
         Box::new(remote_openai::RemoteOpenaiEngine),
+        Box::new(online_asr::OnlineAsrEngine),
     ]
 }
 
@@ -53,6 +55,7 @@ mod tests {
         assert!(ids.contains(&"sherpa-streaming".to_string()));
         assert!(ids.contains(&"sherpa-offline".to_string()));
         assert!(ids.contains(&"remote-openai-compat".to_string()));
+        assert!(ids.contains(&"online-asr".to_string()));
         assert!(
             !ids.iter().any(|id| id.starts_with("sherpa-onnx-")),
             "家族引擎不应再注册：{ids:?}"

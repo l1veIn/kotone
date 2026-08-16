@@ -447,8 +447,14 @@ fn harden_webview<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
         let result = (|| -> windows::core::Result<()> {
             let core = webview.controller().CoreWebView2()?;
             let settings = core.Settings()?;
-            settings.SetAreDefaultContextMenusEnabled(false)?;
-            settings.SetAreDevToolsEnabled(false)?;
+            if cfg!(debug_assertions) {
+                // 开发构建保留右键菜单与开发者工具，便于查看报错
+                settings.SetAreDefaultContextMenusEnabled(true)?;
+                settings.SetAreDevToolsEnabled(true)?;
+            } else {
+                settings.SetAreDefaultContextMenusEnabled(false)?;
+                settings.SetAreDevToolsEnabled(false)?;
+            }
             let settings3: ICoreWebView2Settings3 = settings.cast()?;
             settings3.SetAreBrowserAcceleratorKeysEnabled(false)?;
             Ok(())
@@ -942,6 +948,14 @@ fn export_hotwords(profile_id: String, path: String) -> Result<u32, String> {
     let text = format_hotwords_export(&p.hotwords);
     std::fs::write(&path, text).map_err(|e| format!("写入 {path} 失败：{e}"))?;
     Ok(p.hotwords.len() as u32)
+}
+
+/// 导出内置屏蔽词表到 UTF-8 CSV（两列：屏蔽词,替换词），返回规则条数。
+#[tauri::command]
+fn export_builtin_blocklist(path: String) -> Result<usize, String> {
+    std::fs::write(&path, kotone_postprocess::blocklist::builtin_csv())
+        .map_err(|error| format!("写入 {path} 失败：{error}"))?;
+    Ok(kotone_postprocess::blocklist::builtin_rule_count())
 }
 
 /// 从 UTF-8 文本导入热词（合并去重，追加到现有列表末尾），返回合并报告。
@@ -1716,6 +1730,7 @@ pub fn run() {
             list_profiles,
             save_profile,
             export_hotwords,
+            export_builtin_blocklist,
             import_hotwords,
             export_profile,
             import_profile,
