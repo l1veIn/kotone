@@ -226,7 +226,11 @@
       {#if $appState.state === "listening"}
         <!-- 收到真实 partial 后立即上屏；尚无 partial（含非流式引擎）时显示声波。 -->
         <span class="mic-breath h-2.5 w-2.5 shrink-0 rounded-full bg-kotone-cyan"></span>
-        {#if $appState.partialText}
+        {#if $appState.warningMessage}
+          <p class="max-w-[360px] truncate text-xs text-amber-300" in:fade={{ duration: 150 }}>
+            {$appState.warningMessage}
+          </p>
+        {:else if $appState.partialText}
           <p
             class="ellipsis-head max-w-[340px] truncate text-sm text-white"
             in:fade={{ duration: 150 }}
@@ -340,7 +344,12 @@
           <path d="M5 10a7 7 0 0 0 14 0M12 19v3" stroke-linecap="round" />
         </svg>
       </span>
-      {#if $appState.partialText}
+      {#if $appState.warningMessage}
+        <div class="min-w-0 flex-1" in:fade={{ duration: 150 }}>
+          <p class="text-[11px] leading-tight font-semibold text-amber-300">已切换为手动结束</p>
+          <p class="mt-0.5 truncate text-xs text-white/65">{$appState.warningMessage}</p>
+        </div>
+      {:else if $appState.partialText}
         <div class="min-w-0 flex-1">
           <p class="text-[11px] leading-tight text-kotone-cyan/80">{stateLabel.listening}</p>
           <div bind:this={textScrollEl} class="kotone-scroll mt-0.5 max-h-14 overflow-y-auto pr-1">

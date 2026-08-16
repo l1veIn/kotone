@@ -338,11 +338,11 @@ impl Default for Settings {
             },
             hotkey_backend: HotkeyBackend::Auto,
             audio_device_id: "default".into(),
-            stt_engine: "sherpa-onnx-x-asr-zh-en".into(),
+            stt_engine: "sherpa-streaming".into(),
             active_model_id: String::new(),
             model_configs: HashMap::new(),
             engine_options: serde_json::json!({
-                "sherpa-onnx-x-asr-zh-en": { "provider": "cpu" }
+                "sherpa-streaming": { "provider": "cpu" }
             }),
             auto_send: false,
             active_profile_id: Some("lol".into()),
@@ -608,10 +608,69 @@ pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
         Err(error) => return recover_invalid_config(path, format!("配置项不合法: {error}")),
     };
     settings.overlay.normalize_interaction();
+    migrate_legacy_engine_ids(&mut settings);
     SettingsLoadResult {
         settings,
         warning: None,
     }
+}
+
+/// 旧家族引擎 id / `online-asr` 伞：加载时改写成现在的引擎 id，并把旧键选项抄到新键。
+fn migrate_legacy_engine_ids(s: &mut Settings) {
+    let from = s.stt_engine.clone();
+    let to = match from.as_str() {
+        "sherpa-onnx-x-asr-zh-en" => "sherpa-streaming",
+        "sherpa-onnx-sensevoice" | "sherpa-onnx-funasr-nano" => "sherpa-offline",
+        "online-asr" => {
+            let hinted = s
+                .engine_options
+                .get("online-asr")
+                .and_then(|v| v.get("model"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if s.active_model_id == "volcano-asr" || hinted == "volcano-asr" {
+                "volcano-asr"
+            } else if s.active_model_id == "iflytek-asr" || hinted == "iflytek-asr" {
+                "iflytek-asr"
+            } else {
+                "volcano-asr"
+            }
+        }
+        _ => return,
+    };
+    copy_engine_options_key(&mut s.engine_options, &from, to);
+    if s.active_model_id.trim().is_empty() {
+        if let Some(model) = s
+            .engine_options
+            .get(&from)
+            .and_then(|v| v.get("model"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        {
+            s.active_model_id = model.to_string();
+        }
+    }
+    s.stt_engine = to.to_string();
+}
+
+fn copy_engine_options_key(opts: &mut serde_json::Value, from: &str, to: &str) {
+    let Some(src) = opts.get(from).cloned() else {
+        return;
+    };
+    if from == to {
+        return;
+    }
+    if !opts.is_object() {
+        *opts = serde_json::json!({});
+    }
+    let Some(base) = opts.as_object_mut() else {
+        return;
+    };
+    let dest = base
+        .entry(to.to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    merge_json_objects(dest, &src);
 }
 
 fn recover_invalid_config(path: &Path, reason: String) -> SettingsLoadResult {
@@ -726,7 +785,7 @@ mod tests {
         assert_eq!(s.hotkey.mode, HotkeyMode::Toggle);
         assert_eq!(s.hotkey_backend, HotkeyBackend::Auto);
         assert_eq!(s.audio_device_id, "default");
-        assert_eq!(s.stt_engine, "sherpa-onnx-x-asr-zh-en");
+        assert_eq!(s.stt_engine, "sherpa-streaming");
         assert!(s.active_model_id.is_empty());
         assert!(s.model_configs.is_empty());
         assert!(!s.auto_send);
@@ -738,7 +797,7 @@ mod tests {
         assert_eq!(s.vad.min_speech_ms, 50);
         assert_eq!(s.vad.min_silence_ms, 50);
         assert_eq!(s.hotwords_score, 3.5);
-        assert!(s.engine_options["sherpa-onnx-x-asr-zh-en"]["provider"] == "cpu");
+        assert!(s.engine_options["sherpa-streaming"]["provider"] == "cpu");
         assert_eq!(s.session_options("sherpa-streaming")["provider"], "cpu");
         assert_eq!(
             s.session_options("sherpa-onnx-x-asr-zh-en")["provider"],
@@ -828,10 +887,6 @@ mod tests {
                 "sherpa-onnx-sensevoice": {
                     "model": "sense-voice-zh-en-ja-ko-yue-2024-07-17",
                     "language": "yue"
-                },
-                "sherpa-onnx-funasr-nano": {
-                    "model": "funasr-nano-int8-2025-12-30",
-                    "language": "ja"
                 }
             }),
             ..Settings::default()
@@ -843,10 +898,54 @@ mod tests {
             "sense-voice-zh-en-ja-ko-yue-2024-07-17"
         );
         assert_eq!(sensevoice["language"], "yue");
+    }
 
-        let funasr = s.session_options("sherpa-onnx-funasr-nano");
-        assert_eq!(funasr["model"], "funasr-nano-int8-2025-12-30");
-        assert_eq!(funasr["language"], "ja");
+    #[test]
+    fn load_rewrites_legacy_online_asr_engine() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{ "sttEngine": "online-asr", "activeModelId": "iflytek-asr" }"#,
+        )
+        .unwrap();
+        let s = load_from(&path);
+        assert_eq!(s.stt_engine, "iflytek-asr");
+
+        std::fs::write(
+            &path,
+            r#"{ "sttEngine": "online-asr", "engineOptions": { "online-asr": { "model": "volcano-asr" } } }"#,
+        )
+        .unwrap();
+        let s = load_from(&path);
+        assert_eq!(s.stt_engine, "volcano-asr");
+    }
+
+    #[test]
+    fn load_rewrites_legacy_sherpa_family_engine() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "sttEngine": "sherpa-onnx-x-asr-zh-en",
+                "engineOptions": {
+                    "sherpa-onnx-x-asr-zh-en": { "provider": "cpu", "model": "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05" }
+                }
+            }"#,
+        )
+        .unwrap();
+        let s = load_from(&path);
+        assert_eq!(s.stt_engine, "sherpa-streaming");
+        assert_eq!(
+            s.active_model_id,
+            "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05"
+        );
+        assert_eq!(s.engine_options["sherpa-streaming"]["provider"], "cpu");
+
+        std::fs::write(&path, r#"{ "sttEngine": "sherpa-onnx-sensevoice" }"#).unwrap();
+        let s = load_from(&path);
+        assert_eq!(s.stt_engine, "sherpa-offline");
     }
 
     #[test]
@@ -869,7 +968,7 @@ mod tests {
         assert_eq!(s.hotkey.key, "F9");
         assert_eq!(s.hotkey.mode, HotkeyMode::Toggle, "缺失字段用默认值合并");
         assert_eq!(s.language, "en");
-        assert_eq!(s.stt_engine, "sherpa-onnx-x-asr-zh-en");
+        assert_eq!(s.stt_engine, "sherpa-streaming");
         assert!(!s.eval_recording);
         assert_eq!(
             s.download.source,

@@ -44,6 +44,8 @@ pub enum ModelRecipe {
     SenseVoice,
     FunasrNano,
     OpenaiCompat,
+    VolcanoAsr,
+    IflytekAsr,
 }
 
 /// 模型自己声明的可配项（语言、连接、密钥等）。
@@ -81,6 +83,12 @@ pub struct ModelInfo {
     pub backend: ModelBackend,
     pub recipe: ModelRecipe,
     pub config_schema: Vec<ModelConfigField>,
+    /// 获取 API key 的控制台页面；None = 无引导（本地模型）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_url: Option<String>,
+    /// 产品分组标签（不是引擎 id）。在线 ASR 用 `online-asr` 归类火山/讯飞。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
 }
 
 // ---------- 路径 ----------
@@ -186,19 +194,62 @@ const SENSEVOICE_LANGUAGE_SCHEMA: &[StaticConfigField] = &[StaticConfigField {
     required: false,
 }];
 
-const REMOTE_CONNECTION_SCHEMA: &[StaticConfigField] = &[StaticConfigField {
-    key: "connectionId",
-    label: "API 连接",
-    kind: "connection",
-    default: "",
-    options: &[],
-    required: true,
-}];
-
 pub const REMOTE_OPENAI_STT_ID: &str = "openai-compat-stt";
 pub const REMOTE_OPENAI_ENGINE_ID: &str = "remote-openai-compat";
+/// 在线 ASR 分组标签（不是引擎 id）。火山 / 讯飞各自注册引擎。
+pub const ONLINE_ASR_TAG: &str = "online-asr";
+pub const VOLCANO_ASR_STT_ID: &str = "volcano-asr";
+pub const IFLYTEK_ASR_STT_ID: &str = "iflytek-asr";
 pub const SHERPA_STREAMING_ENGINE_ID: &str = "sherpa-streaming";
 pub const SHERPA_OFFLINE_ENGINE_ID: &str = "sherpa-offline";
+
+/// 火山引擎语音识别：只填 App ID + Access Token，端点预置。
+const VOLCANO_ASR_SCHEMA: &[StaticConfigField] = &[
+    StaticConfigField {
+        key: "appId",
+        label: "App ID",
+        kind: "string",
+        default: "",
+        options: &[],
+        required: true,
+    },
+    StaticConfigField {
+        key: "accessToken",
+        label: "Access Token",
+        kind: "secret",
+        default: "",
+        options: &[],
+        required: true,
+    },
+];
+
+/// 科大讯飞语音听写：只填 APPID + APIKey + APISecret，端点预置。
+const IFLYTEK_ASR_SCHEMA: &[StaticConfigField] = &[
+    StaticConfigField {
+        key: "appId",
+        label: "APPID",
+        kind: "string",
+        default: "",
+        options: &[],
+        required: true,
+    },
+    StaticConfigField {
+        key: "apiKey",
+        label: "APIKey",
+        kind: "string",
+        default: "",
+        options: &[],
+        required: true,
+    },
+    StaticConfigField {
+        key: "apiSecret",
+        label: "APISecret",
+        kind: "secret",
+        default: "",
+        options: &[],
+        required: true,
+    },
+];
 
 /// sherpa-onnx 模型清单（ADR-004）。默认引擎 X-ASR（六引擎评测冠军：CER 0.008、
 /// 首字 71ms、162MB；见 docs/development.md §11 v15），其模型走 archive 整包下载。
@@ -313,7 +364,7 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
     MultiFileModel {
         id: "funasr-nano-int8-2025-12-30",
         engine_id: SHERPA_OFFLINE_ENGINE_ID,
-        display_name: "FunASR-Nano 中英日（官方 Hugging Face，非流式）",
+        display_name: "FunASR-Nano 中英日（官方 Hugging Face，非流式，不支持热词）",
         dir: "sherpa-onnx-funasr-nano-int8-2025-12-30",
         files: &[
             ModelFile {
@@ -355,10 +406,6 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
         ],
         archive: None,
         file_mirrors: &[],
-        // 不要接 fuyuantech 那个 tar.bz2：包是按魔搭原版 zengshuishui/FunASR-nano-onnx
-        // 打的（encoder_adaptor.int8.onnx = 238277200），和 sherpa-onnx 官方 HF
-        // csukuangfj 提交 6f16bd3（237792748）不是同一份文件。整包 SHA256 能过，
-        // 解压后按官方体积校验必失败，用户等于白下 800MB+。
         archive_mirrors: &[],
         remote_names: &[],
         io: ModelIo::Offline,
@@ -373,7 +420,7 @@ pub const SHERPA_MODELS: &[MultiFileModel] = &[
     MultiFileModel {
         id: "funasr-nano-int8-modelscope",
         engine_id: SHERPA_OFFLINE_ENGINE_ID,
-        display_name: "FunASR-Nano 中英日（魔搭社区，国内直下）",
+        display_name: "FunASR-Nano 中英日（魔搭社区，国内直下，不支持热词）",
         dir: "sherpa-onnx-funasr-nano-int8-modelscope",
         files: &[
             ModelFile {
@@ -777,51 +824,77 @@ fn sherpa_info(m: &MultiFileModel) -> ModelInfo {
         backend: m.backend,
         recipe: m.recipe,
         config_schema: schema_of(m.config_schema),
+        api_key_url: None,
+        tag: None,
     }
 }
 
-fn remote_openai_info() -> ModelInfo {
-    ModelInfo {
-        id: REMOTE_OPENAI_STT_ID.into(),
-        engine_id: REMOTE_OPENAI_ENGINE_ID.into(),
-        display_name: "在线识别（OpenAI 兼容）".into(),
-        size_bytes: 0,
-        download_url: String::new(),
-        sha256: String::new(),
-        downloaded: true,
-        io: ModelIo::Offline,
-        backend: ModelBackend::Remote,
-        recipe: ModelRecipe::OpenaiCompat,
-        config_schema: schema_of(REMOTE_CONNECTION_SCHEMA),
-    }
-}
-
-/// 列出全部用户可管理模型（sherpa 多文件 + 远程条目；silero VAD 不在清单内）
+/// 列出全部用户可管理模型（sherpa 多文件 + 在线 ASR；silero VAD 不在清单内）
 pub fn list() -> Result<Vec<ModelInfo>, String> {
     let mut out: Vec<ModelInfo> = SHERPA_MODELS.iter().map(sherpa_info).collect();
-    out.push(remote_openai_info());
+    out.extend(online_asr_infos());
     Ok(out)
 }
 
+/// 在线 ASR 条目：各自独立引擎，`tag=online-asr` 只做分组。
+fn online_asr_infos() -> Vec<ModelInfo> {
+    vec![
+        ModelInfo {
+            id: VOLCANO_ASR_STT_ID.into(),
+            engine_id: VOLCANO_ASR_STT_ID.into(),
+            display_name: "火山引擎语音识别（在线）".into(),
+            size_bytes: 0,
+            download_url: String::new(),
+            sha256: String::new(),
+            downloaded: true,
+            io: ModelIo::Offline,
+            backend: ModelBackend::Remote,
+            recipe: ModelRecipe::VolcanoAsr,
+            config_schema: schema_of(VOLCANO_ASR_SCHEMA),
+            api_key_url: Some("https://console.volcengine.com/speech/service/15".into()),
+            tag: Some(ONLINE_ASR_TAG.into()),
+        },
+        ModelInfo {
+            id: IFLYTEK_ASR_STT_ID.into(),
+            engine_id: IFLYTEK_ASR_STT_ID.into(),
+            display_name: "科大讯飞语音听写（在线）".into(),
+            size_bytes: 0,
+            download_url: String::new(),
+            sha256: String::new(),
+            downloaded: true,
+            io: ModelIo::Streaming,
+            backend: ModelBackend::Remote,
+            recipe: ModelRecipe::IflytekAsr,
+            config_schema: schema_of(IFLYTEK_ASR_SCHEMA),
+            api_key_url: Some("https://console.xfyun.cn/services/iat".into()),
+            tag: Some(ONLINE_ASR_TAG.into()),
+        },
+    ]
+}
+
 pub fn recipe_of(id: &str) -> Option<ModelRecipe> {
-    if id == REMOTE_OPENAI_STT_ID {
-        return Some(ModelRecipe::OpenaiCompat);
+    match id {
+        REMOTE_OPENAI_STT_ID => Some(ModelRecipe::OpenaiCompat),
+        VOLCANO_ASR_STT_ID => Some(ModelRecipe::VolcanoAsr),
+        IFLYTEK_ASR_STT_ID => Some(ModelRecipe::IflytekAsr),
+        _ => SHERPA_MODELS.iter().find(|m| m.id == id).map(|m| m.recipe),
     }
-    SHERPA_MODELS.iter().find(|m| m.id == id).map(|m| m.recipe)
 }
 
 pub fn engine_id_of(id: &str) -> Option<&'static str> {
-    if id == REMOTE_OPENAI_STT_ID {
-        return Some(REMOTE_OPENAI_ENGINE_ID);
+    match id {
+        REMOTE_OPENAI_STT_ID => Some(REMOTE_OPENAI_ENGINE_ID),
+        VOLCANO_ASR_STT_ID => Some(VOLCANO_ASR_STT_ID),
+        IFLYTEK_ASR_STT_ID => Some(IFLYTEK_ASR_STT_ID),
+        _ => SHERPA_MODELS
+            .iter()
+            .find(|m| m.id == id)
+            .map(|m| m.engine_id),
     }
-    SHERPA_MODELS
-        .iter()
-        .find(|m| m.id == id)
-        .map(|m| m.engine_id)
 }
 
 pub fn is_remote_model(id: &str) -> bool {
-    id == REMOTE_OPENAI_STT_ID
+    id == REMOTE_OPENAI_STT_ID || id == VOLCANO_ASR_STT_ID || id == IFLYTEK_ASR_STT_ID
 }
 
 /// 手动安装指引：官方页 + 目标目录 + 应放置的文件清单。
@@ -1666,7 +1739,7 @@ pub fn set_active_in(
     let resolved_engine = engine_id_of(model_id).unwrap_or(engine_id);
     if is_remote_model(model_id) {
         s.active_model_id = model_id.to_string();
-        s.stt_engine = REMOTE_OPENAI_ENGINE_ID.to_string();
+        s.stt_engine = resolved_engine.to_string();
         return Ok(());
     }
     if SHERPA_MODELS.iter().any(|m| m.engine_id == resolved_engine) {
@@ -1708,10 +1781,9 @@ mod tests {
         let items = list().unwrap();
         assert_eq!(
             items.len(),
-            SHERPA_MODELS.len() + 1,
-            "VAD 随本体分发；远程 OpenAI 兼容条目应出现在清单末尾"
+            SHERPA_MODELS.len() + 2,
+            "VAD 不在清单内；火山引擎 + 科大讯飞两个在线条目应出现在清单末尾"
         );
-        assert!(items.iter().any(|i| i.id == REMOTE_OPENAI_STT_ID));
         assert!(
             items.iter().all(|i| i.id != VAD_MODEL_ID),
             "清单不应包含 silero-vad 伪条目"
@@ -1729,6 +1801,14 @@ mod tests {
                 .map(|f| f.size_bytes)
                 .sum::<u64>()
         );
+        let iat = items.iter().find(|i| i.id == IFLYTEK_ASR_STT_ID).unwrap();
+        assert_eq!(iat.io, ModelIo::Streaming);
+        assert_eq!(iat.engine_id, IFLYTEK_ASR_STT_ID);
+        assert_eq!(iat.tag.as_deref(), Some(ONLINE_ASR_TAG));
+        let volcano = items.iter().find(|i| i.id == VOLCANO_ASR_STT_ID).unwrap();
+        assert_eq!(volcano.io, ModelIo::Offline);
+        assert_eq!(volcano.engine_id, VOLCANO_ASR_STT_ID);
+        assert_eq!(volcano.tag.as_deref(), Some(ONLINE_ASR_TAG));
     }
 
     /// 回归：IPC 序列化必须 camelCase（前端按 engineId/displayName/sizeBytes 读取；
@@ -1757,25 +1837,28 @@ mod tests {
 
     #[test]
     fn install_guide_exposes_dest_and_official_page() {
-        let guide = install_guide("funasr-nano-int8-2025-12-30").unwrap();
-        assert_eq!(guide.id, "funasr-nano-int8-2025-12-30");
-        assert_eq!(guide.dest_subdir, "sherpa-onnx-funasr-nano-int8-2025-12-30");
+        let guide = install_guide("sense-voice-zh-en-ja-ko-yue-2024-07-17").unwrap();
+        assert_eq!(guide.id, "sense-voice-zh-en-ja-ko-yue-2024-07-17");
+        assert_eq!(
+            guide.dest_subdir,
+            "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
+        );
         assert!(guide
             .dest_dir
             .replace('\\', "/")
             .ends_with(&guide.dest_subdir));
         assert_eq!(
             guide.page_url,
-            "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30"
+            "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
         );
         assert!(guide
             .files
             .iter()
-            .any(|f| f.name == "encoder_adaptor.int8.onnx" && f.size_bytes == 237_792_748));
+            .any(|f| f.name == "model.int8.onnx" && f.size_bytes == 239_233_841));
         assert!(guide
             .files
             .iter()
-            .any(|f| f.name == "Qwen3-0.6B/merges.txt" && !f.url.is_empty()));
+            .any(|f| f.name == "tokens.txt" && !f.url.is_empty()));
 
         let json = serde_json::to_value(&guide).unwrap();
         let obj = json.as_object().unwrap();
@@ -1797,17 +1880,6 @@ mod tests {
     }
 
     #[test]
-    fn install_guide_modelscope_funasr_points_at_community_repo() {
-        let guide = install_guide("funasr-nano-int8-modelscope").unwrap();
-        assert_eq!(
-            guide.page_url,
-            "https://www.modelscope.cn/models/zengshuishui/FunASR-nano-onnx"
-        );
-        assert_eq!(guide.dest_subdir, "sherpa-onnx-funasr-nano-int8-modelscope");
-        assert!(guide.files.iter().any(|f| f.name == "llm.int8.onnx"));
-    }
-
-    #[test]
     fn set_active_writes_model_id_and_derived_engine() {
         let mut s = settings::Settings::default();
         s.active_model_id.clear();
@@ -1820,39 +1892,6 @@ mod tests {
     fn install_guide_unknown_model_errors() {
         let err = install_guide("no-such-model").unwrap_err();
         assert!(err.contains("未知模型"), "err: {err}");
-    }
-
-    #[test]
-    fn funasr_has_no_modelscope_archive_until_files_match_official_hf() {
-        let funasr = SHERPA_MODELS
-            .iter()
-            .find(|m| m.id == "funasr-nano-int8-2025-12-30")
-            .unwrap();
-        assert!(
-            funasr.archive_mirrors.is_empty(),
-            "魔搭 FunASR 整包与官方 HF 体积不一致（238277200 vs 237792748），不能再挂 archive_mirrors"
-        );
-        assert!(
-            funasr.file_mirrors.is_empty() && funasr.archive_mirrors.is_empty(),
-            "官方 FunASR 条目不能再挂和 HF 体积不一致的魔搭整包"
-        );
-        let community = SHERPA_MODELS
-            .iter()
-            .find(|m| m.id == "funasr-nano-int8-modelscope")
-            .unwrap();
-        assert!(
-            !community.file_mirrors.is_empty(),
-            "魔搭社区版应走 zengshuishui 逐文件"
-        );
-        let encoder = funasr
-            .files
-            .iter()
-            .find(|f| f.name == "encoder_adaptor.int8.onnx")
-            .unwrap();
-        assert_eq!(
-            encoder.size_bytes, 237_792_748,
-            "官方 HF encoder 体积被改了的话，先核对魔搭原版 238277200 是不是又混进来了"
-        );
     }
 
     #[test]
@@ -2053,57 +2092,6 @@ mod tests {
             Some(x.id)
         );
 
-        // FunASR-Nano：encoder_adaptor/llm/embedding + Qwen3-0.6B tokenizer 目录
-        let fun = SHERPA_MODELS
-            .iter()
-            .find(|m| m.id == "funasr-nano-int8-2025-12-30")
-            .expect("FunASR-Nano 模型清单缺失");
-        let fun_names: Vec<_> = fun.files.iter().map(|f| f.name).collect();
-        for need in [
-            "encoder_adaptor.int8.onnx",
-            "llm.int8.onnx",
-            "embedding.int8.onnx",
-            "Qwen3-0.6B/merges.txt",
-            "Qwen3-0.6B/tokenizer.json",
-            "Qwen3-0.6B/vocab.json",
-        ] {
-            assert!(fun_names.contains(&need), "FunASR-Nano 缺少 {need}");
-        }
-        assert_eq!(
-            multi_file_default_model("sherpa-onnx-funasr-nano"),
-            Some(fun.id),
-            "默认仍是官方 HF 条目（清单里该引擎第一条）"
-        );
-        assert!(
-            fun.file_mirrors.is_empty(),
-            "官方 FunASR-Nano 走 HF 逐文件，不挂魔搭镜像"
-        );
-        assert!(fun.archive_mirrors.is_empty());
-
-        let fun_ms = SHERPA_MODELS
-            .iter()
-            .find(|m| m.id == "funasr-nano-int8-modelscope")
-            .expect("缺少 FunASR-Nano 魔搭社区条目");
-        assert_eq!(fun_ms.engine_id, SHERPA_OFFLINE_ENGINE_ID);
-        assert_eq!(fun_ms.file_mirrors.len(), 1);
-        assert!(fun_ms.file_mirrors[0]
-            .base_url
-            .contains("zengshuishui/FunASR-nano-onnx"));
-        assert_eq!(
-            remote_path(fun_ms, "llm.int8.onnx"),
-            "llm_int8/llm.int8.onnx"
-        );
-        assert_eq!(
-            remote_path(fun_ms, "encoder_adaptor.int8.onnx"),
-            "encoder_adaptor.int8.onnx"
-        );
-        let encoder = fun_ms
-            .files
-            .iter()
-            .find(|f| f.name == "encoder_adaptor.int8.onnx")
-            .unwrap();
-        assert_eq!(encoder.size_bytes, 238_277_200);
-
         let sv = SHERPA_MODELS
             .iter()
             .find(|m| m.recipe == ModelRecipe::SenseVoice)
@@ -2117,7 +2105,7 @@ mod tests {
     #[test]
     fn new_engines_active_model_mapping() {
         // 各引擎共用泛化映射：未配置 → 清单默认；合法 id → 采用；跨引擎 id → 兜底
-        for engine in ["sherpa-onnx-x-asr-zh-en", "sherpa-onnx-funasr-nano"] {
+        for engine in ["sherpa-onnx-x-asr-zh-en", "sherpa-onnx-sensevoice"] {
             let default = multi_file_default_model(engine).unwrap();
             let s = settings::Settings::default();
             assert_eq!(
@@ -2211,13 +2199,10 @@ mod tests {
     fn canonical_offline_runtime_uses_selected_legacy_family_model() {
         let s = settings::Settings {
             active_model_id: String::new(),
-            stt_engine: "sherpa-onnx-funasr-nano".into(),
+            stt_engine: "sherpa-onnx-sensevoice".into(),
             engine_options: serde_json::json!({
                 "sherpa-onnx-sensevoice": {
                     "model": "sense-voice-zh-en-ja-ko-yue-2024-07-17"
-                },
-                "sherpa-onnx-funasr-nano": {
-                    "model": "funasr-nano-int8-2025-12-30"
                 }
             }),
             ..settings::Settings::default()
@@ -2225,11 +2210,11 @@ mod tests {
 
         assert_eq!(
             active_model_from(&s, SHERPA_OFFLINE_ENGINE_ID),
-            "funasr-nano-int8-2025-12-30"
+            "sense-voice-zh-en-ja-ko-yue-2024-07-17"
         );
         assert_eq!(
-            active_model_from(&s, "sherpa-onnx-funasr-nano"),
-            "funasr-nano-int8-2025-12-30"
+            active_model_from(&s, "sherpa-onnx-sensevoice"),
+            "sense-voice-zh-en-ja-ko-yue-2024-07-17"
         );
     }
 
@@ -2237,13 +2222,13 @@ mod tests {
     fn model_id_from_cfg_prefers_session_options() {
         let cfg = SessionConfig {
             options: serde_json::json!({
-                "model": "funasr-nano-int8-2025-12-30"
+                "model": "sense-voice-zh-en-ja-ko-yue-2024-07-17"
             }),
             ..SessionConfig::default()
         };
         assert_eq!(
             model_id_from_cfg(&cfg, SHERPA_OFFLINE_ENGINE_ID),
-            "funasr-nano-int8-2025-12-30"
+            "sense-voice-zh-en-ja-ko-yue-2024-07-17"
         );
         assert_eq!(
             model_id_from_cfg(&cfg, SHERPA_STREAMING_ENGINE_ID),

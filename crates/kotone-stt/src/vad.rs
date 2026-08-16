@@ -13,6 +13,7 @@
 
 /// settings.vad → silero 参数（threshold, min_speech_sec, min_silence_sec），
 /// 带防御性 clamp（与 UI 滑块范围一致）。纯函数，便于不加载 ONNX 模型单测。
+#[cfg_attr(not(feature = "vad-silero"), allow(dead_code))]
 pub(crate) fn silero_params(v: &kotone_core::settings::VadConfig) -> (f32, f32, f32) {
     (
         v.threshold.clamp(0.1, 0.9),

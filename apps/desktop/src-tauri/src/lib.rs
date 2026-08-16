@@ -15,7 +15,7 @@ use hotkey::{HotkeyManager, HotkeyStatus, InputEnvironmentCheck};
 use kotone_core::audio::AudioDevice;
 use kotone_core::connection::{Connection, ConnectionResolver, SecretStore};
 use kotone_core::inject::{CancelToken, FocusBackend, InjectError, Injector};
-use kotone_core::interaction::{effective_hotkey_mode, InteractionPolicy};
+use kotone_core::interaction::effective_hotkey_mode;
 use kotone_core::orchestrator::{Emitter, Orchestrator};
 use kotone_core::profile::{
     self, format_hotwords_export, GameProfile, HotwordMergeReport, ProfileDeleteOutcome,
@@ -255,11 +255,8 @@ impl Emitter for TauriEmitter {
                     .app
                     .try_state::<SharedState>()
                     .map(|s| {
-                        let g = s.settings.read().unwrap();
-                        (
-                            g.overlay.visibility,
-                            InteractionPolicy::from_settings(&g).continuous,
-                        )
+                        let visibility = s.settings.read().unwrap().overlay.visibility;
+                        (visibility, s.orchestrator.continuous_session())
                     })
                     .unwrap_or((OverlayVisibility::Always, false));
                 let gen = self
@@ -450,8 +447,14 @@ fn harden_webview<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
         let result = (|| -> windows::core::Result<()> {
             let core = webview.controller().CoreWebView2()?;
             let settings = core.Settings()?;
-            settings.SetAreDefaultContextMenusEnabled(false)?;
-            settings.SetAreDevToolsEnabled(false)?;
+            if cfg!(debug_assertions) {
+                // 开发构建保留右键菜单与开发者工具，便于查看报错
+                settings.SetAreDefaultContextMenusEnabled(true)?;
+                settings.SetAreDevToolsEnabled(true)?;
+            } else {
+                settings.SetAreDefaultContextMenusEnabled(false)?;
+                settings.SetAreDevToolsEnabled(false)?;
+            }
             let settings3: ICoreWebView2Settings3 = settings.cast()?;
             settings3.SetAreBrowserAcceleratorKeysEnabled(false)?;
             Ok(())
@@ -891,8 +894,9 @@ fn set_stt_engine(
     if state.engines.get(&id).is_none() {
         return Err(format!("未注册的 STT 引擎: {id}"));
     }
+    let canonical = kotone_core::stt::canonical_stt_engine(&id).to_string();
     state.settings_repository.update(|next| {
-        next.stt_engine = id;
+        next.stt_engine = canonical;
         Ok(())
     })?;
     // Running 期间换引擎 → restartNeeded 推导变化，推送全量状态
@@ -945,6 +949,14 @@ fn export_hotwords(profile_id: String, path: String) -> Result<u32, String> {
     let text = format_hotwords_export(&p.hotwords);
     std::fs::write(&path, text).map_err(|e| format!("写入 {path} 失败：{e}"))?;
     Ok(p.hotwords.len() as u32)
+}
+
+/// 导出内置屏蔽词表到 UTF-8 CSV（两列：屏蔽词,替换词），返回规则条数。
+#[tauri::command]
+fn export_builtin_blocklist(path: String) -> Result<usize, String> {
+    std::fs::write(&path, kotone_postprocess::blocklist::builtin_csv())
+        .map_err(|error| format!("写入 {path} 失败：{error}"))?;
+    Ok(kotone_postprocess::blocklist::builtin_rule_count())
 }
 
 /// 从 UTF-8 文本导入热词（合并去重，追加到现有列表末尾），返回合并报告。
@@ -1719,6 +1731,7 @@ pub fn run() {
             list_profiles,
             save_profile,
             export_hotwords,
+            export_builtin_blocklist,
             import_hotwords,
             export_profile,
             import_profile,

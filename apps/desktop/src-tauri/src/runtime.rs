@@ -257,6 +257,11 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
             .unwrap_or(false)
     };
     if !engine_ready() {
+        if kotone_stt::model::is_remote_model(&model_id) {
+            return Err(format!(
+                "在线模型「{model_id}」未就绪：请在「模型切换」里填写 API 凭据（App ID / Token 等）后重试"
+            ));
+        }
         let missing = kotone_stt::model::multi_model_missing(&model_id);
         kotone_core::log::log(&format!(
             "runtime start: 模型就绪检查未通过（{model_id}）：{}；重试中",

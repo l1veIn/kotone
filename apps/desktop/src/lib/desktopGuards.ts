@@ -8,6 +8,8 @@ import { isTauri } from "./ipc";
  */
 export function installDesktopGuards() {
   if (!isTauri) return;
+  // 开发构建（pnpm dev）保留右键菜单与开发者工具，便于调试报错
+  if (import.meta.env.DEV) return;
 
   window.addEventListener(
     "contextmenu",

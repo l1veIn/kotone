@@ -78,7 +78,7 @@ pub enum SttEvent {
 
 /// 一个引擎 = 一种 STT 策略（含其模型管理）
 pub trait SttEngine: Send + Sync {
-    /// 如 "sherpa-onnx-x-asr-zh-en"
+    /// 如 "sherpa-streaming"
     fn id(&self) -> &'static str;
     fn display_name(&self) -> &str;
     fn capabilities(&self) -> EngineCapabilities;
@@ -175,6 +175,8 @@ pub fn stt_engine_option_keys(id: &str) -> &'static [&'static str] {
         "sherpa-onnx-sensevoice" => &["sherpa-onnx-sensevoice", "sherpa-offline"],
         "sherpa-onnx-funasr-nano" => &["sherpa-onnx-funasr-nano", "sherpa-offline"],
         "sherpa-offline" => &["sherpa-offline"],
+        "volcano-asr" => &["online-asr", "volcano-asr"],
+        "iflytek-asr" => &["online-asr", "iflytek-asr"],
         _ => &[],
     }
 }
