@@ -464,6 +464,20 @@ fn iflytek_auth(api_key: &str, api_secret: &str) -> (String, String) {
     (authorization, date)
 }
 
+/// 百分号编码（RFC 3986 unreserved 之外的字节都编码），用于鉴权参数进 query。
+fn url_encode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 /// 讯飞语音听写音频帧：第一帧带 common/business，末帧 status=2。
 fn iflytek_audio_frame(app_id: &str, status: u8, audio_b64: &str) -> serde_json::Value {
     let data = serde_json::json!({
@@ -491,8 +505,11 @@ fn iflytek_transcribe_ws(
     pcm16: &[u8],
 ) -> Result<String, String> {
     let (authorization, date) = iflytek_auth(api_key, api_secret);
+    // authorization 与 date 含 base64/逗号/空格，必须做百分号编码才能放进 query。
     let url = format!(
-        "wss://{IFLYTEK_WS_HOST}{IFLYTEK_WS_PATH}?authorization={authorization}&date={date}&host={IFLYTEK_WS_HOST}"
+        "wss://{IFLYTEK_WS_HOST}{IFLYTEK_WS_PATH}?authorization={}&date={}&host={IFLYTEK_WS_HOST}",
+        url_encode(&authorization),
+        url_encode(&date),
     );
     let (mut socket, _) = tungstenite::connect(url)
         .map_err(|e| format!("科大讯飞 WebSocket 连接失败：{e}"))?;
