@@ -1,5 +1,5 @@
-//! 非流式 sherpa-onnx 引擎骨架（ADR-004）：sensevoice.rs / funasr_nano.rs
-//! 共用的 recognizer/session 实现。
+//! 非流式 sherpa-onnx 引擎骨架（ADR-004）：SenseVoice / FunASR-Nano
+//! 配方共用的 recognizer/session 实现。
 //!
 //! 差异全部收敛到 [`OfflineSpec] + 一个 `configure` 函数（填充
 //! OfflineRecognizerConfig 的模型家族字段）。骨架负责：recognizer 懒加载、

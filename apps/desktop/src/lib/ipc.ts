@@ -344,6 +344,8 @@ export interface ModelInfo {
   configSchema: ModelConfigField[];
   /** 获取 API key 的控制台页面（在线模型） */
   apiKeyUrl?: string | null;
+  /** 产品分组标签（不是引擎 id），例如 online-asr */
+  tag?: string | null;
 }
 
 /** 自动下载失败后的手动安装指引 */
@@ -465,11 +467,11 @@ const mock: MockStore = {
     hotkey: { key: "CapsLock", mode: "toggle" },
     hotkeyBackend: "auto",
     audioDeviceId: "default",
-    sttEngine: "sherpa-onnx-x-asr-zh-en",
+    sttEngine: "sherpa-streaming",
     activeModelId: "",
     modelConfigs: {},
     engineOptions: {
-      "sherpa-onnx-x-asr-zh-en": { provider: "cpu" },
+      "sherpa-streaming": { provider: "cpu" },
     },
     autoSend: false,
     activeProfileId: "lol",
@@ -519,6 +521,18 @@ const mock: MockStore = {
       id: "sherpa-offline",
       displayName: "sherpa 非流式",
       capabilities: { streaming: false, hotwords: true, gpu: false, offline: true, languages: ["zh", "en", "ja", "ko", "yue"] },
+      isReady: false,
+    },
+    {
+      id: "volcano-asr",
+      displayName: "火山引擎一句话识别",
+      capabilities: { streaming: false, hotwords: false, gpu: false, offline: false, languages: ["zh"] },
+      isReady: false,
+    },
+    {
+      id: "iflytek-asr",
+      displayName: "科大讯飞语音听写",
+      capabilities: { streaming: true, hotwords: false, gpu: false, offline: false, languages: ["zh"] },
       isReady: false,
     },
   ],
@@ -618,13 +632,14 @@ const mock: MockStore = {
     },
     {
       id: "volcano-asr",
-      engineId: "online-asr",
+      engineId: "volcano-asr",
       displayName: "火山引擎语音识别（在线）",
       sizeBytes: 0,
       downloaded: true,
       io: "offline",
       backend: "remote",
       recipe: "volcano-asr",
+      tag: "online-asr",
       apiKeyUrl: "https://console.volcengine.com/speech/service/15",
       configSchema: [
         { key: "appId", label: "App ID", kind: "string", default: "", options: [], required: true },
@@ -633,13 +648,14 @@ const mock: MockStore = {
     },
     {
       id: "iflytek-asr",
-      engineId: "online-asr",
+      engineId: "iflytek-asr",
       displayName: "科大讯飞语音听写（在线）",
       sizeBytes: 0,
       downloaded: true,
-      io: "offline",
+      io: "streaming",
       backend: "remote",
       recipe: "iflytek-asr",
+      tag: "online-asr",
       apiKeyUrl: "https://console.xfyun.cn/services/iat",
       configSchema: [
         { key: "appId", label: "APPID", kind: "string", default: "", options: [], required: true },
@@ -1308,7 +1324,7 @@ function mockRuntimeStatus(stage: string | null = null): RuntimeStatus {
   const engineId = s.sttEngine;
   const modelId =
     (s.engineOptions[engineId] as Record<string, unknown> | undefined)?.model as string ??
-    (engineId === "sherpa-onnx-x-asr-zh-en" || engineId === "sherpa-streaming"
+    (engineId === "sherpa-streaming"
       ? "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05"
       : "default");
   const restartNeeded =

@@ -368,7 +368,7 @@ enum SttEvent {
 | `audio` | `audio.rs` | `AudioBackend` trait + `CpalBackend`：设备枚举、16kHz mono 重采样、PCM 流推送、50ms RMS 事件；设备打开失败即报中文错误 | ✅ |
 | `stt` | `stt/mod.rs` | `SttEngine` / `SttSession` trait、引擎注册表、当前引擎路由 | ✅ |
 | `stt::mock` | `stt/mock.rs` | mock-stream：每 0.5s 音频发 partial，finalize 返回固定文本 + 实测延迟 | ✅ |
-| `stt::xasr` / `stt::sensevoice` / `stt::funasr_nano` | `kotone-stt/src/` | sherpa-onnx 三引擎：X-ASR 流式（在线 transducer 骨架）+ SenseVoice/FunASR-Nano 非流式（离线骨架）；feature `engine-sherpa` 门控 | ✅（v15 保留集合） |
+| `stt::sherpa_runtime` | `kotone-stt/src/sherpa_runtime.rs` | sherpa 流式 / 非流式两个 I/O 循环；X-ASR、SenseVoice、FunASR-Nano 只是模型配方 | ✅ |
 | `eval` | `eval.rs` | 会话录档（wav + 指标 JSONL）、语料回放、多引擎对比 | 签名就位 |
 | `inject` | `inject/mod.rs`, `inject/windows.rs` | `send_unicode` / `key_down_up` / `is_process_foreground` + `send_sequence` 时序编排（SendOps trait 解耦可测） | ✅（LOL 真机待测） |
 | `orchestrator` | `orchestrator.rs` | 状态机，串联 hotkey→audio→stt→inject，partial 转发，取消与超时，gen 代际防过期 | ✅ |
@@ -442,9 +442,9 @@ simulate_send(text, profileId) -> Result<(), InjectError>   // v3：走真实发
 {
   "hotkey": { "key": "CapsLock", "mode": "toggle" }, // toggle | hold（用户可选，默认 toggle 引导时确认）
   "audioDeviceId": "default",
-  "sttEngine": "sherpa-onnx-x-asr-zh-en",        // 当前引擎（v15 默认 X-ASR），设置页可切换
+  "sttEngine": "sherpa-streaming",               // 当前引擎（默认 X-ASR 流式循环），设置页选模型时回写
   "engineOptions": {                              // 引擎专有配置
-    "sherpa-onnx-x-asr-zh-en": { "provider": "cpu" }
+    "sherpa-streaming": { "provider": "cpu" }
   },
   "autoSend": false,               // true: 转写完直接发；false: 先预览确认
   "activeProfileId": "lol",

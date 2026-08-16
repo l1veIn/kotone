@@ -1,5 +1,4 @@
-//! 在线 transducer 流式引擎骨架（ADR-004）：sherpa.rs（zipformer 中英双语）与
-//! xasr.rs（X-ASR 流式中英标点）共用的 recognizer/session 实现。
+//! 在线 transducer 流式引擎骨架（ADR-004）：`sherpa_runtime` 的流式循环共用。
 //!
 //! 差异全部收敛到 [`OnlineTransducerSpec]：引擎 id / 展示名 / 语言 / 三个模型
 //! 文件名 / 热词建模单元 / 可选 bpe_vocab。model_type 不显式设置——encoder.onnx 元数据自带

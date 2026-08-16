@@ -2,7 +2,7 @@
 //!
 //! - 引擎实现：mock（恒在，全链路联调用）、sherpa 流式 / 非流式两个 I/O 循环
 //!   （按模型 `recipe` 打开；engine-sherpa feature 关闭时为占位注册）、
-//!   以及远程 OpenAI 兼容 STT；
+//!   远程 OpenAI 兼容 STT、火山一句话识别、科大讯飞流式听写；
 //! - `register_builtin`：把内置引擎注入 core 的 EngineRegistry 容器
 //!   （依赖方向：kotone-stt → kotone-core，core 不认识任何具体引擎）；
 //! - `model`：模型清单与下载管理（ADR-003，自管理于 ~/.kotone；
@@ -10,17 +10,18 @@
 //! - `download`：通用下载器（流式 + SHA256 校验 + 原子落盘 + 镜像回退）。
 
 pub mod download;
-pub mod funasr_nano;
+mod funasr_nano;
+mod iflytek;
 pub mod mock;
 pub mod model;
 pub mod offline_sherpa;
-pub mod online_asr;
 pub mod online_transducer;
+mod pcm;
 pub mod remote_openai;
-pub mod sensevoice;
+mod sensevoice;
 pub mod sherpa_runtime;
 pub mod vad;
-pub mod xasr;
+mod volcano;
 
 use kotone_core::stt::{EngineRegistry, SttEngine};
 
@@ -31,7 +32,8 @@ pub fn builtin_engines() -> Vec<Box<dyn SttEngine>> {
         Box::new(sherpa_runtime::SherpaStreamingEngine::new()),
         Box::new(sherpa_runtime::SherpaOfflineEngine::new()),
         Box::new(remote_openai::RemoteOpenaiEngine),
-        Box::new(online_asr::OnlineAsrEngine),
+        Box::new(volcano::VolcanoAsrEngine),
+        Box::new(iflytek::IflytekAsrEngine),
     ]
 }
 
@@ -55,7 +57,12 @@ mod tests {
         assert!(ids.contains(&"sherpa-streaming".to_string()));
         assert!(ids.contains(&"sherpa-offline".to_string()));
         assert!(ids.contains(&"remote-openai-compat".to_string()));
-        assert!(ids.contains(&"online-asr".to_string()));
+        assert!(ids.contains(&"volcano-asr".to_string()));
+        assert!(ids.contains(&"iflytek-asr".to_string()));
+        assert!(
+            !ids.iter().any(|id| id == "online-asr"),
+            "online-asr 只是分组标签，不应注册为引擎：{ids:?}"
+        );
         assert!(
             !ids.iter().any(|id| id.starts_with("sherpa-onnx-")),
             "家族引擎不应再注册：{ids:?}"

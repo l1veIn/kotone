@@ -894,8 +894,9 @@ fn set_stt_engine(
     if state.engines.get(&id).is_none() {
         return Err(format!("未注册的 STT 引擎: {id}"));
     }
+    let canonical = kotone_core::stt::canonical_stt_engine(&id).to_string();
     state.settings_repository.update(|next| {
-        next.stt_engine = id;
+        next.stt_engine = canonical;
         Ok(())
     })?;
     // Running 期间换引擎 → restartNeeded 推导变化，推送全量状态

@@ -290,14 +290,7 @@
     const configured = ($settingsStore?.engineOptions?.[engineId] as Record<string, unknown> | undefined)
       ?.model as string | undefined;
     if (configured) return configured === modelId;
-    const defaultModel =
-      engineId === "sherpa-onnx-x-asr-zh-en"
-        ? models.find((m) => m.recipe === "zipformer-transducer")
-        : engineId === "sherpa-onnx-sensevoice"
-          ? models.find((m) => m.recipe === "sense-voice")
-          : engineId === "sherpa-onnx-funasr-nano"
-            ? models.find((m) => m.recipe === "funasr-nano")
-            : models.find((m) => m.engineId === engineId);
+    const defaultModel = models.find((m) => m.engineId === engineId);
     return defaultModel?.id === modelId;
   }
 

@@ -430,7 +430,7 @@ async fn cmd_listen_session(
     kotone_core::log::init();
 
     let mut settings = settings::load();
-    settings.stt_engine = engine.to_string();
+    settings.stt_engine = kotone_core::stt::canonical_stt_engine(engine).to_string();
     if let Some(profile_id) = profile_id {
         settings.active_profile_id = Some(profile_id);
     }
@@ -617,7 +617,7 @@ async fn cmd_listen_hotkey(
 
     // 配置值注入：schema/存储在 core，这里只读值并覆盖命令行参数
     let mut settings = settings::load();
-    settings.stt_engine = engine.to_string();
+    settings.stt_engine = kotone_core::stt::canonical_stt_engine(engine).to_string();
     if let Some(p) = profile_id {
         settings.active_profile_id = Some(p);
     }
@@ -1200,7 +1200,7 @@ fn cmd_config_set(key: &str, value: Option<&str>, capture: bool) -> i32 {
         }
     };
     let current = settings::load();
-    let next = match apply_config_set(&current, key, value) {
+    let mut next = match apply_config_set(&current, key, value) {
         Ok(n) => n,
         Err(e) => {
             eprintln!("{e}");
@@ -1215,6 +1215,7 @@ fn cmd_config_set(key: &str, value: Option<&str>, capture: bool) -> i32 {
             eprintln!("未注册的 STT 引擎: {}（未写入）", next.stt_engine);
             return 2;
         }
+        next.stt_engine = kotone_core::stt::canonical_stt_engine(&next.stt_engine).to_string();
     }
     match settings::save(&next) {
         Ok(()) => {

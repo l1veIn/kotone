@@ -86,6 +86,9 @@ pub struct ModelInfo {
     /// 获取 API key 的控制台页面；None = 无引导（本地模型）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key_url: Option<String>,
+    /// 产品分组标签（不是引擎 id）。在线 ASR 用 `online-asr` 归类火山/讯飞。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
 }
 
 // ---------- 路径 ----------
@@ -193,8 +196,8 @@ const SENSEVOICE_LANGUAGE_SCHEMA: &[StaticConfigField] = &[StaticConfigField {
 
 pub const REMOTE_OPENAI_STT_ID: &str = "openai-compat-stt";
 pub const REMOTE_OPENAI_ENGINE_ID: &str = "remote-openai-compat";
-/// 在线 ASR 平台引擎（火山引擎 + 科大讯飞，后续可扩展）。
-pub const ONLINE_ASR_ENGINE_ID: &str = "online-asr";
+/// 在线 ASR 分组标签（不是引擎 id）。火山 / 讯飞各自注册引擎。
+pub const ONLINE_ASR_TAG: &str = "online-asr";
 pub const VOLCANO_ASR_STT_ID: &str = "volcano-asr";
 pub const IFLYTEK_ASR_STT_ID: &str = "iflytek-asr";
 pub const SHERPA_STREAMING_ENGINE_ID: &str = "sherpa-streaming";
@@ -822,22 +825,23 @@ fn sherpa_info(m: &MultiFileModel) -> ModelInfo {
         recipe: m.recipe,
         config_schema: schema_of(m.config_schema),
         api_key_url: None,
+        tag: None,
     }
 }
 
-/// 列出全部用户可管理模型（sherpa 多文件 + 在线 ASR 平台；silero VAD 不在清单内）
+/// 列出全部用户可管理模型（sherpa 多文件 + 在线 ASR；silero VAD 不在清单内）
 pub fn list() -> Result<Vec<ModelInfo>, String> {
     let mut out: Vec<ModelInfo> = SHERPA_MODELS.iter().map(sherpa_info).collect();
     out.extend(online_asr_infos());
     Ok(out)
 }
 
-/// 在线 ASR 平台条目（火山引擎 + 科大讯飞）：只填 Key，端点预置。
+/// 在线 ASR 条目：各自独立引擎，`tag=online-asr` 只做分组。
 fn online_asr_infos() -> Vec<ModelInfo> {
     vec![
         ModelInfo {
             id: VOLCANO_ASR_STT_ID.into(),
-            engine_id: ONLINE_ASR_ENGINE_ID.into(),
+            engine_id: VOLCANO_ASR_STT_ID.into(),
             display_name: "火山引擎语音识别（在线）".into(),
             size_bytes: 0,
             download_url: String::new(),
@@ -848,20 +852,22 @@ fn online_asr_infos() -> Vec<ModelInfo> {
             recipe: ModelRecipe::VolcanoAsr,
             config_schema: schema_of(VOLCANO_ASR_SCHEMA),
             api_key_url: Some("https://console.volcengine.com/speech/service/15".into()),
+            tag: Some(ONLINE_ASR_TAG.into()),
         },
         ModelInfo {
             id: IFLYTEK_ASR_STT_ID.into(),
-            engine_id: ONLINE_ASR_ENGINE_ID.into(),
+            engine_id: IFLYTEK_ASR_STT_ID.into(),
             display_name: "科大讯飞语音听写（在线）".into(),
             size_bytes: 0,
             download_url: String::new(),
             sha256: String::new(),
             downloaded: true,
-            io: ModelIo::Offline,
+            io: ModelIo::Streaming,
             backend: ModelBackend::Remote,
             recipe: ModelRecipe::IflytekAsr,
             config_schema: schema_of(IFLYTEK_ASR_SCHEMA),
             api_key_url: Some("https://console.xfyun.cn/services/iat".into()),
+            tag: Some(ONLINE_ASR_TAG.into()),
         },
     ]
 }
@@ -878,7 +884,8 @@ pub fn recipe_of(id: &str) -> Option<ModelRecipe> {
 pub fn engine_id_of(id: &str) -> Option<&'static str> {
     match id {
         REMOTE_OPENAI_STT_ID => Some(REMOTE_OPENAI_ENGINE_ID),
-        VOLCANO_ASR_STT_ID | IFLYTEK_ASR_STT_ID => Some(ONLINE_ASR_ENGINE_ID),
+        VOLCANO_ASR_STT_ID => Some(VOLCANO_ASR_STT_ID),
+        IFLYTEK_ASR_STT_ID => Some(IFLYTEK_ASR_STT_ID),
         _ => SHERPA_MODELS
             .iter()
             .find(|m| m.id == id)
@@ -1794,6 +1801,14 @@ mod tests {
                 .map(|f| f.size_bytes)
                 .sum::<u64>()
         );
+        let iat = items.iter().find(|i| i.id == IFLYTEK_ASR_STT_ID).unwrap();
+        assert_eq!(iat.io, ModelIo::Streaming);
+        assert_eq!(iat.engine_id, IFLYTEK_ASR_STT_ID);
+        assert_eq!(iat.tag.as_deref(), Some(ONLINE_ASR_TAG));
+        let volcano = items.iter().find(|i| i.id == VOLCANO_ASR_STT_ID).unwrap();
+        assert_eq!(volcano.io, ModelIo::Offline);
+        assert_eq!(volcano.engine_id, VOLCANO_ASR_STT_ID);
+        assert_eq!(volcano.tag.as_deref(), Some(ONLINE_ASR_TAG));
     }
 
     /// 回归：IPC 序列化必须 camelCase（前端按 engineId/displayName/sizeBytes 读取；
