@@ -21,10 +21,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Windows runner 上 pwsh 会把原生命令非 0 当成步骤失败。
+          # 首次发版时 gh release view 本来就会 404，必须先关掉再看 LASTEXITCODE。
+          $PSNativeCommandUseErrorActionPreference = $false
           $json = gh release view $env:GITHUB_REF_NAME `
             --repo $env:GITHUB_REPOSITORY --json isDraft 2>$null
-          if ($LASTEXITCODE -eq 0 -and -not ($json | ConvertFrom-Json).isDraft) {
-            throw "Release $env:GITHUB_REF_NAME is already published; refusing to overwrite its assets."
+          if ($LASTEXITCODE -eq 0) {
+            $release = $json | ConvertFrom-Json
+            if (-not $release.isDraft) {
+              throw "Release $env:GITHUB_REF_NAME is already published; refusing to overwrite its assets."
+            }
           }
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
