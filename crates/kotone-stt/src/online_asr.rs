@@ -545,12 +545,35 @@ fn iflytek_transcribe_ws(
             .map_err(|e| format!("科大讯飞音频发送失败：{e}"))?;
         sent += take;
 
-        let resp = socket.read().map_err(|e| format!("科大讯飞识别响应失败：{e}"))?;
-        if let Message::Text(t) = resp {
+        // 读响应并累积文本（服务端流式分段返回）。
+        if let Ok(Message::Text(t)) = socket.read() {
             let extracted = iflytek_extract_text(&t);
             if !extracted.is_empty() {
                 text = extracted;
             }
+        }
+
+        // 讯飞要求每帧间隔约 40ms，模拟实时流，避免一次性灌入导致 VAD 异常。
+        if !last {
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        }
+    }
+
+    // 最后一帧后，VAD 判停 + 识别需要时间：循环读响应直到最终结果或超时。
+    let deadline = Instant::now() + std::time::Duration::from_secs(10);
+    while Instant::now() < deadline {
+        match socket.read() {
+            Ok(Message::Text(t)) => {
+                let extracted = iflytek_extract_text(&t);
+                if !extracted.is_empty() {
+                    text = extracted;
+                }
+                if iflytek_is_final(&t) {
+                    break;
+                }
+            }
+            Ok(_) => {}
+            Err(_) => break,
         }
     }
     socket.close(None).ok();
@@ -558,6 +581,16 @@ fn iflytek_transcribe_ws(
         return Err("科大讯飞语音听写没有返回文本".into());
     }
     Ok(text.trim().to_string())
+}
+
+/// 判断讯飞响应是否为最终结果（data.status == 2）。
+fn iflytek_is_final(payload: &str) -> bool {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) else {
+        return false;
+    };
+    json.pointer("/data/status")
+        .and_then(|v| v.as_u64())
+        .is_some_and(|s| s == 2)
 }
 
 /// 从讯飞响应 JSON 里提取 data.result.ws[].cw[].w 拼接文本。
