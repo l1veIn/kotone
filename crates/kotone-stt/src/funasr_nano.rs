@@ -35,7 +35,7 @@ pub(crate) const SPEC: OfflineSpec = OfflineSpec {
 /// 填充 FunASR-Nano 模型家族字段（骨架已设 num_threads/provider）
 #[cfg(feature = "engine-sherpa")]
 pub(crate) fn configure(
-    cfg: &SessionConfig,
+    _cfg: &SessionConfig,
     dir: &std::path::Path,
     config: &mut sherpa_onnx::OfflineRecognizerConfig,
 ) {
