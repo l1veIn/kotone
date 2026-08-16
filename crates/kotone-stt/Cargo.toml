@@ -14,6 +14,12 @@ tokio.workspace = true
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 sha2 = "0.10"
 base64 = "0.22"
+# 在线 ASR WebSocket（火山引擎一句话识别 / 科大讯飞语音听写）
+tungstenite = { version = "0.21", features = ["rustls-tls-native-roots"] }
+flate2 = "1.0"
+# 科大讯飞语音听写 HMAC-SHA256 鉴权签名
+hmac = "0.12"
+chrono = "0.4"
 # X-ASR 等模型只以 tar.bz2 整包发布（k2-fsa GitHub releases）：
 # tar 解包 + bzip2 解压（bzip2-sys 自带 C 源码，Windows MSVC 可直接编译）
 tar = "0.4"
