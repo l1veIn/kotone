@@ -98,6 +98,7 @@ test("starting without a model routes the user to a recoverable download state",
 test("a failed model download keeps an inline error and retry action", async ({ page }) => {
   await page.goto("/#/settings?mockDownload=fail");
   await page.getByRole("button", { name: "高级", exact: true }).click();
+  await page.getByTestId("advanced-nav-models").click();
   await page.getByRole("button", { name: "下载", exact: true }).first().click();
 
   const guide = page.getByTestId("manual-download-dialog");

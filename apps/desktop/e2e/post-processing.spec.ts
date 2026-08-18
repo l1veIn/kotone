@@ -34,7 +34,7 @@ test("registered post-processors can be composed, tried out and edited", async (
   await expect(page.getByTestId("postprocess-tryout-result")).toContainText(
     "对面那个**打野太NB了",
   );
-  await page.getByRole("button", { name: "关闭" }).click();
+  await page.getByTestId("postprocess-tryout-close").click();
 
   await steps.nth(0).getByTitle("下移").click();
   await expect(steps.nth(0)).toContainText("AI 润色");
@@ -73,7 +73,7 @@ test("a discovered blocklist processor works by default and saves a custom CSV p
   await expect(page.getByTestId("postprocess-tryout-result")).toContainText(
     "你真**，这波NB",
   );
-  await page.getByRole("button", { name: "关闭" }).click();
+  await page.getByTestId("postprocess-tryout-close").click();
 
   const csvPath = step.getByRole("textbox", { name: "自己的词库" });
   await csvPath.fill("C:\\Kotone\\blocklist.csv");

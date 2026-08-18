@@ -890,6 +890,7 @@
             <p class="mt-1 text-[11px] text-white/45">输入一段测试文本查看文字处理效果，不会发送到游戏。</p>
           </div>
           <button
+            data-testid="postprocess-tryout-close"
             class="rounded-md bg-white/8 px-2 py-1 text-[11px] text-white/70 ring-1 ring-white/12 hover:bg-white/15"
             onclick={() => (tryingOut = false)}
           >
