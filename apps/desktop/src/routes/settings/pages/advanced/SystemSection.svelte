@@ -12,6 +12,7 @@
   } from "../../../../lib/ipc";
   import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
   import Toggle from "../../../../lib/components/Toggle.svelte";
+  import Select from "../../../../lib/components/Select.svelte";
 
   let { onOpenOnboarding }: { onOpenOnboarding: () => void } = $props();
 
@@ -33,8 +34,7 @@
     }
   });
 
-  async function onHotkeyBackendChange(e: Event) {
-    const hotkeyBackend = (e.target as HTMLSelectElement).value;
+  async function onHotkeyBackendChange(hotkeyBackend: string) {
     await patchSettings({ hotkeyBackend }, "热键兼容模式已更新");
     hotkeyStatus = await getHotkeyStatus().catch(() => hotkeyStatus);
   }
@@ -80,14 +80,14 @@
       <h2 class="text-sm font-semibold text-kotone-cyan/90">语言</h2>
       <p class="mt-1 text-[11px] leading-relaxed text-white/50">界面语言。更多语言即将到来。</p>
     </div>
-    <select
-      class="shrink-0 rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60 [&>option]:bg-kotone-deep"
-      value={$settingsStore.language}
-      onchange={(e) =>
-        void patchSettings({ language: (e.target as HTMLSelectElement).value }, "语言已切换")}
-    >
-      <option value="zh">中文</option>
-    </select>
+    <div class="w-28 shrink-0">
+      <Select
+        ariaLabel="语言"
+        value={$settingsStore.language}
+        options={[{ value: "zh", label: "中文" }]}
+        onchange={(language) => void patchSettings({ language }, "语言已切换")}
+      />
+    </div>
   </section>
 
   <section class="kotone-panel mt-3 flex flex-col gap-4 p-4">
@@ -143,16 +143,19 @@
     <h2 class="text-sm font-semibold text-kotone-cyan/90">Windows 兼容性</h2>
     <div class="mt-3 flex items-center gap-2">
       <label class="text-xs text-white/60" for="advanced-hotkey-backend">热键实现</label>
-      <select
-        id="advanced-hotkey-backend"
-        class="rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60 [&>option]:bg-kotone-deep"
-        value={$settingsStore.hotkeyBackend}
-        onchange={(event) => void onHotkeyBackendChange(event)}
-      >
-        <option value="auto">自动（推荐）</option>
-        <option value="llhook">低层键鼠钩子</option>
-        <option value="register">系统热键</option>
-      </select>
+      <div class="w-40">
+        <Select
+          id="advanced-hotkey-backend"
+          ariaLabel="热键实现"
+          value={$settingsStore.hotkeyBackend}
+          options={[
+            { value: "auto", label: "自动（推荐）" },
+            { value: "llhook", label: "低层键鼠钩子" },
+            { value: "register", label: "系统热键" },
+          ]}
+          onchange={(backend) => void onHotkeyBackendChange(backend)}
+        />
+      </div>
       <span class="text-[11px] text-white/40">
         当前：{hotkeyStatus?.backend === "llhook"
           ? "低层钩子"

@@ -102,7 +102,7 @@ pub struct Settings {
     /// 识别成热词。X-ASR 等引擎 recognizer 级配置，改后需「停止→启动」重建）
     #[serde(default = "default_hotwords_score")]
     pub hotwords_score: f32,
-    /// STT 最终文本与预览/发送之间的有序后处理 pipeline；默认关闭，旧配置零行为变化。
+    /// STT 最终文本与预览/发送之间的后处理；默认开启内置「屏蔽词」流程。
     #[serde(default)]
     pub post_processing: crate::postprocess::PostProcessingConfig,
     /// 后处理在线连接目录（不含 API key）。缺省空列表，旧配置零行为变化。
@@ -602,6 +602,8 @@ pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
         Ok(user) => user,
         Err(error) => return recover_invalid_config(path, format!("JSON 解析失败: {error}")),
     };
+    let mut user = user;
+    migrate_legacy_post_processing_json(&mut user);
     merge_json(&mut merged, &user);
     let mut settings: Settings = match serde_json::from_value(merged) {
         Ok(settings) => settings,
@@ -609,9 +611,42 @@ pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
     };
     settings.overlay.normalize_interaction();
     migrate_legacy_engine_ids(&mut settings);
+    settings.post_processing.normalize_active_id();
     SettingsLoadResult {
         settings,
         warning: None,
+    }
+}
+
+/// 旧配置只有单条 `pipeline`：空流程改种默认屏蔽词；有步骤则收成一条可切换流程。
+fn migrate_legacy_post_processing_json(user: &mut serde_json::Value) {
+    let Some(post) = user.get("postProcessing") else {
+        return;
+    };
+    if post.get("pipelines").is_some() {
+        return;
+    }
+    let enabled = post.get("enabled").and_then(|value| value.as_bool());
+    let legacy = post
+        .get("pipeline")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<crate::postprocess::PipelineConfig>(value).ok());
+    match legacy {
+        Some(pipeline) if !pipeline.steps.is_empty() => {
+            if let Some(post) = user.get_mut("postProcessing") {
+                *post =
+                    serde_json::to_value(crate::postprocess::PostProcessingConfig::with_pipeline(
+                        enabled.unwrap_or(true),
+                        pipeline,
+                    ))
+                    .unwrap_or_else(|_| serde_json::json!({}));
+            }
+        }
+        _ => {
+            if let Some(object) = user.as_object_mut() {
+                object.remove("postProcessing");
+            }
+        }
     }
 }
 
@@ -825,6 +860,60 @@ mod tests {
         assert!(!s.overlay.click_through);
         assert_eq!(s.overlay.custom_x, None);
         assert_eq!(s.overlay.custom_y, None);
+        assert!(s.post_processing.enabled);
+        assert_eq!(s.post_processing.active_pipeline_id, "blocklist");
+        assert_eq!(s.post_processing.pipelines.len(), 1);
+        assert_eq!(s.post_processing.pipelines[0].display_name, "屏蔽词");
+        assert_eq!(
+            s.post_processing.pipelines[0].steps[0].processor_id,
+            "builtin.blocklist-filter"
+        );
+    }
+
+    #[test]
+    fn load_seeds_default_blocklist_pipeline_from_legacy_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"postProcessing":{"enabled":false,"pipeline":{"id":"default","steps":[]}}}"#,
+        )
+        .unwrap();
+        let settings = load_from(&path);
+        assert!(settings.post_processing.enabled);
+        assert_eq!(settings.post_processing.active_pipeline_id, "blocklist");
+        assert_eq!(
+            settings.post_processing.pipelines[0].steps[0].processor_id,
+            "builtin.blocklist-filter"
+        );
+    }
+
+    #[test]
+    fn load_wraps_legacy_custom_pipeline() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{
+              "postProcessing":{
+                "enabled":true,
+                "pipeline":{
+                  "id":"mine",
+                  "steps":[{"id":"s1","processorId":"mock.append-exclamation","enabled":true}]
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+        let settings = load_from(&path);
+        assert!(settings.post_processing.enabled);
+        assert_eq!(settings.post_processing.active_pipeline_id, "mine");
+        assert_eq!(settings.post_processing.pipelines.len(), 1);
+        assert_eq!(settings.post_processing.pipelines[0].display_name, "mine");
+        assert_eq!(
+            settings.post_processing.pipelines[0].steps[0].processor_id,
+            "mock.append-exclamation"
+        );
     }
 
     #[test]

@@ -21,11 +21,11 @@
   } = $props();
 
   const tabs: { id: AdvancedSection; label: string }[] = [
+    { id: "system", label: "系统" },
     { id: "models", label: "模型" },
     { id: "connections", label: "API 连接" },
     { id: "hotkeys", label: "热键" },
     { id: "tuning", label: "调参" },
-    { id: "system", label: "系统" },
   ];
 </script>
 

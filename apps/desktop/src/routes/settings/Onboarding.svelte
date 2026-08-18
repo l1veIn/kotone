@@ -41,6 +41,7 @@
   import stickerThinking from "../../assets/brand/stickers/thinking.webp";
   import stickerCheering from "../../assets/brand/stickers/cheering.webp";
   import ManualDownloadDialog from "../../lib/components/ManualDownloadDialog.svelte";
+  import Select from "../../lib/components/Select.svelte";
 
   let { onDone }: { onDone: () => void } = $props();
 
@@ -667,16 +668,15 @@
 
         <label class="kotone-card mt-3 flex items-center gap-3 p-3">
           <span class="shrink-0 text-sm font-semibold text-kotone-cyan/90">麦克风</span>
-          <select
-            class="min-w-0 flex-1 rounded-lg bg-white/8 px-2.5 py-1.5 text-sm ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60 [&>option]:bg-kotone-deep"
-            value={selectedDeviceId}
-            aria-label="麦克风"
-            onchange={(e) => void chooseDevice((e.target as HTMLSelectElement).value)}
-          >
-            {#each devices as device}
-              <option value={device.id}>{device.name}</option>
-            {/each}
-          </select>
+          <div class="min-w-0 flex-1">
+            <Select
+              size="md"
+              ariaLabel="麦克风"
+              value={selectedDeviceId}
+              options={devices.map((device) => ({ value: device.id, label: device.name }))}
+              onchange={(id) => void chooseDevice(id)}
+            />
+          </div>
           <span class="shrink-0 text-[10px] text-white/40">下一步会验证</span>
         </label>
 

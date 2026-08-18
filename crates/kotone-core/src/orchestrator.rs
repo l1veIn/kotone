@@ -1312,14 +1312,14 @@ impl Orchestrator {
             OrchestratorState::Processing,
             Some(json!({
                 "text": recognized.source_text,
-                "pipelineId": recognized.pipeline.pipeline.id,
+                "pipelineId": recognized.pipeline.active_pipeline().map(|p| p.id.clone()).unwrap_or_default(),
                 "stepCount": pipeline.len(),
             })),
         );
         self.emit_process(
             "postprocess_started",
             json!({
-                "pipelineId": recognized.pipeline.pipeline.id,
+                "pipelineId": recognized.pipeline.active_pipeline().map(|p| p.id.clone()).unwrap_or_default(),
                 "stepCount": pipeline.len() as u64,
             }),
         );
@@ -1330,7 +1330,7 @@ impl Orchestrator {
                 OrchestratorState::Processing,
                 Some(json!({
                     "text": recognized.source_text,
-                    "pipelineId": recognized.pipeline.pipeline.id,
+                    "pipelineId": recognized.pipeline.active_pipeline().map(|p| p.id.clone()).unwrap_or_default(),
                     "stepId": progress.step_id,
                     "processorId": progress.processor_id,
                     "displayName": progress.display_name,

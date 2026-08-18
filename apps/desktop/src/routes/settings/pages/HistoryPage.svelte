@@ -8,6 +8,7 @@
    * 波形用 canvas 手绘（峰值柱 + 进度高亮），点击可 seek。
    */
   import { onDestroy, onMount, tick } from "svelte";
+  import Select from "../../../lib/components/Select.svelte";
   import { listen } from "@tauri-apps/api/event";
   import {
     updateSettings,
@@ -251,8 +252,7 @@
     }
   }
 
-  async function onModeChange(e: Event) {
-    const mode = (e.target as HTMLSelectElement).value;
+  async function onModeChange(mode: string) {
     try {
       settingsStore.set(await updateSettings({ history: { mode } }));
       toast(true, "历史记录模式已保存");
@@ -315,16 +315,19 @@
   <section class="kotone-panel mt-4 flex items-center gap-4 p-4">
     <div class="flex items-center gap-2">
       <label class="text-xs text-white/60" for="history-mode">记录模式</label>
-      <select
-        id="history-mode"
-        class="rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60 [&>option]:bg-kotone-deep"
-        value={$settingsStore?.history.mode ?? "capped"}
-        onchange={(e) => void onModeChange(e)}
-      >
-        <option value="capped">保留最近 {$settingsStore?.history.maxRecords ?? 1000} 条</option>
-        <option value="keep-all">全部保留</option>
-        <option value="off">不记录</option>
-      </select>
+      <div class="w-52">
+        <Select
+          id="history-mode"
+          ariaLabel="记录模式"
+          value={$settingsStore?.history.mode ?? "capped"}
+          options={[
+            { value: "capped", label: `保留最近 ${$settingsStore?.history.maxRecords ?? 1000} 条` },
+            { value: "keep-all", label: "全部保留" },
+            { value: "off", label: "不记录" },
+          ]}
+          onchange={(mode) => void onModeChange(mode)}
+        />
+      </div>
     </div>
     <div class="flex-1"></div>
     <button

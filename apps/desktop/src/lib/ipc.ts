@@ -58,11 +58,38 @@ export interface PostProcessStepConfig {
   onError: PostProcessFailurePolicy;
 }
 
+export interface PipelineConfig {
+  id: string;
+  displayName: string;
+  steps: PostProcessStepConfig[];
+}
+
 export interface PostProcessingConfig {
   enabled: boolean;
-  pipeline: {
-    id: string;
-    steps: PostProcessStepConfig[];
+  activePipelineId: string;
+  pipelines: PipelineConfig[];
+}
+
+export function defaultPostProcessing(): PostProcessingConfig {
+  return {
+    enabled: true,
+    activePipelineId: "blocklist",
+    pipelines: [
+      {
+        id: "blocklist",
+        displayName: "屏蔽词",
+        steps: [
+          {
+            id: "blocklist-1",
+            processorId: "builtin.blocklist-filter",
+            enabled: true,
+            config: {},
+            timeoutMs: 5000,
+            onError: "required",
+          },
+        ],
+      },
+    ],
   };
 }
 
@@ -486,7 +513,7 @@ const mock: MockStore = {
     vadSilenceMs: 700,
     vad: { threshold: 0.5, minSpeechMs: 50, minSilenceMs: 50 },
     hotwordsScore: 3.5,
-    postProcessing: { enabled: false, pipeline: { id: "default", steps: [] } },
+    postProcessing: defaultPostProcessing(),
     connections: [],
     history: { mode: "capped", maxRecords: 1000, includeAudio: false, dir: "" },
     ui: { firstRunCompleted: true, autoStart: false },
@@ -844,15 +871,15 @@ export async function listPostProcessors(): Promise<PostProcessorInfo[]> {
       {
         id: "builtin.blocklist-filter",
         displayName: "屏蔽词过滤",
-        description: "过滤国服对局常见辱骂；可选择自定义 CSV 完整覆盖内置词表。",
+        description: "用词库把脏话换成能发的词。自带一份默认词库，也可以换成自己的。",
         category: "utility",
         developerOnly: false,
         networkAccess: "local",
         configFields: [
           {
             key: "csvPath",
-            displayName: "自定义屏蔽词 CSV",
-            description: "可选。CSV 每行“屏蔽词,替换词”；第二列留空时替换为等长星号。支持 UTF-8 / GBK / UTF-16，推荐 UTF-8。",
+            displayName: "自己的词库",
+            description: "不选就用默认词库。选了文件就改用你的。",
             kind: "file",
             required: false,
             fileExtensions: ["csv"],
@@ -952,10 +979,16 @@ export async function deleteConnection(id: string): Promise<Settings> {
  */
 export async function testPostProcessing(
   text: string,
-  pipeline?: PostProcessingConfig["pipeline"],
+  pipeline?: PipelineConfig,
 ): Promise<PostProcessingTestResult> {
   if (!isTauri) {
-    const selected = pipeline ?? mock.settings.postProcessing.pipeline;
+    const selected =
+      pipeline ??
+      mock.settings.postProcessing.pipelines.find(
+        (item) => item.id === mock.settings.postProcessing.activePipelineId,
+      ) ??
+      mock.settings.postProcessing.pipelines[0];
+    if (!selected) throw new Error("没有可试跑的处理流程");
     const descriptors = await listPostProcessors();
     const started = performance.now();
     let current = text;

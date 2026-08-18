@@ -31,6 +31,7 @@
   import { runtimeStore } from "../../../../lib/stores/runtime";
   import { spotlight } from "../../../../lib/actions/spotlight";
   import ManualDownloadDialog from "../../../../lib/components/ManualDownloadDialog.svelte";
+  import Select from "../../../../lib/components/Select.svelte";
   import stickerCurious from "../../../../assets/brand/stickers/curious.webp";
 
   let engines = $state<EngineInfo[] | null>(null);
@@ -604,30 +605,33 @@
                 <label class="block">
                   <span class="text-[11px] text-white/50">{field.label}</span>
                   {#if field.kind === "enum"}
-                    <select
-                      class="mt-1 w-full rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60 [&>option]:bg-kotone-deep"
-                      value={fieldValue(m.id, field.key, field.default)}
-                      onchange={(e) =>
-                        void saveField(m.id, field.key, (e.target as HTMLSelectElement).value)}
-                    >
-                      {#each field.options as option}
-                        <option value={option.value}>{option.label}</option>
-                      {/each}
-                    </select>
+                    <div class="mt-1">
+                      <Select
+                        ariaLabel={field.label}
+                        value={fieldValue(m.id, field.key, field.default)}
+                        options={field.options.map((option) => ({
+                          value: option.value,
+                          label: option.label,
+                        }))}
+                        onchange={(next) => void saveField(m.id, field.key, next)}
+                      />
+                    </div>
                   {:else if field.kind === "connection"}
-                    <select
-                      class="mt-1 w-full rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60 [&>option]:bg-kotone-deep"
-                      value={fieldValue(m.id, field.key, field.default)}
-                      onchange={(e) =>
-                        void saveField(m.id, field.key, (e.target as HTMLSelectElement).value)}
-                    >
-                      <option value="">请选择 API 连接</option>
-                      {#each connections as connection}
-                        <option value={connection.id}>
-                          {connection.displayName}{connection.hasApiKey ? "" : "（未填密钥）"}
-                        </option>
-                      {/each}
-                    </select>
+                    <div class="mt-1">
+                      <Select
+                        ariaLabel={field.label}
+                        placeholder="请选择 API 连接"
+                        value={fieldValue(m.id, field.key, field.default)}
+                        options={[
+                          { value: "", label: "请选择 API 连接" },
+                          ...connections.map((connection) => ({
+                            value: connection.id,
+                            label: `${connection.displayName}${connection.hasApiKey ? "" : "（未填密钥）"}`,
+                          })),
+                        ]}
+                        onchange={(next) => void saveField(m.id, field.key, next)}
+                      />
+                    </div>
                     <p class="mt-1 text-[10px] text-white/35">
                       地址和 API key 在「高级 → API 连接」里保存，不会写入配置文件。
                     </p>

@@ -14,9 +14,15 @@ use serde_json::Value;
 use tokio::sync::Notify;
 
 pub const DEFAULT_STEP_TIMEOUT_MS: u64 = 5_000;
+pub const BUILTIN_BLOCKLIST_PIPELINE_ID: &str = "blocklist";
+pub const BUILTIN_BLOCKLIST_PROCESSOR_ID: &str = "builtin.blocklist-filter";
 
 fn default_pipeline_id() -> String {
     "default".into()
+}
+
+fn default_active_pipeline_id() -> String {
+    BUILTIN_BLOCKLIST_PIPELINE_ID.into()
 }
 
 fn default_step_timeout_ms() -> u64 {
@@ -27,14 +33,20 @@ fn default_enabled() -> bool {
     true
 }
 
-/// 用户配置中的后处理总开关与当前有序 pipeline。
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+fn default_post_processing_enabled() -> bool {
+    true
+}
+
+/// 用户配置中的后处理总开关、当前流程，以及可切换的多条流程。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PostProcessingConfig {
-    #[serde(default)]
+    #[serde(default = "default_post_processing_enabled")]
     pub enabled: bool,
-    #[serde(default)]
-    pub pipeline: PipelineConfig,
+    #[serde(default = "default_active_pipeline_id")]
+    pub active_pipeline_id: String,
+    #[serde(default = "default_pipelines")]
+    pub pipelines: Vec<PipelineConfig>,
 }
 
 /// 一条线性 pipeline；step 数组顺序就是执行顺序。
@@ -44,6 +56,8 @@ pub struct PipelineConfig {
     #[serde(default = "default_pipeline_id")]
     pub id: String,
     #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
     pub steps: Vec<PipelineStepConfig>,
 }
 
@@ -51,7 +65,98 @@ impl Default for PipelineConfig {
     fn default() -> Self {
         Self {
             id: default_pipeline_id(),
+            display_name: String::new(),
             steps: Vec::new(),
+        }
+    }
+}
+
+impl PipelineConfig {
+    pub fn display_label(&self) -> String {
+        let name = self.display_name.trim();
+        if !name.is_empty() {
+            return name.to_string();
+        }
+        if self.id == BUILTIN_BLOCKLIST_PIPELINE_ID {
+            return "屏蔽词".into();
+        }
+        if self.id == "default" {
+            return "自定义".into();
+        }
+        self.id.clone()
+    }
+}
+
+pub fn builtin_blocklist_pipeline() -> PipelineConfig {
+    PipelineConfig {
+        id: BUILTIN_BLOCKLIST_PIPELINE_ID.into(),
+        display_name: "屏蔽词".into(),
+        steps: vec![PipelineStepConfig {
+            id: "blocklist-1".into(),
+            processor_id: BUILTIN_BLOCKLIST_PROCESSOR_ID.into(),
+            enabled: true,
+            config: serde_json::json!({}),
+            timeout_ms: DEFAULT_STEP_TIMEOUT_MS,
+            on_error: StepFailurePolicy::Required,
+        }],
+    }
+}
+
+fn default_pipelines() -> Vec<PipelineConfig> {
+    vec![builtin_blocklist_pipeline()]
+}
+
+impl Default for PostProcessingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            active_pipeline_id: default_active_pipeline_id(),
+            pipelines: default_pipelines(),
+        }
+    }
+}
+
+impl PostProcessingConfig {
+    /// 测试与旧调用点：把单条 pipeline 包成当前唯一流程。
+    pub fn with_pipeline(enabled: bool, pipeline: PipelineConfig) -> Self {
+        let mut pipeline = pipeline;
+        if pipeline.display_name.trim().is_empty() {
+            pipeline.display_name = pipeline.display_label();
+        }
+        Self {
+            enabled,
+            active_pipeline_id: pipeline.id.clone(),
+            pipelines: vec![pipeline],
+        }
+    }
+
+    pub fn active_pipeline(&self) -> Option<&PipelineConfig> {
+        self.pipelines
+            .iter()
+            .find(|pipeline| pipeline.id == self.active_pipeline_id)
+            .or(self.pipelines.first())
+    }
+
+    pub fn active_pipeline_mut(&mut self) -> Option<&mut PipelineConfig> {
+        let id = self.active_pipeline()?.id.clone();
+        self.pipelines.iter_mut().find(|pipeline| pipeline.id == id)
+    }
+
+    pub fn normalize_active_id(&mut self) {
+        if self
+            .pipelines
+            .iter()
+            .any(|pipeline| pipeline.id == self.active_pipeline_id)
+        {
+            return;
+        }
+        self.active_pipeline_id = self
+            .pipelines
+            .first()
+            .map(|pipeline| pipeline.id.clone())
+            .unwrap_or_else(default_active_pipeline_id);
+        if self.pipelines.is_empty() {
+            *self = Self::default();
         }
     }
 }
@@ -296,9 +401,10 @@ impl PostProcessPipeline {
         config: &PostProcessingConfig,
         registry: &ProcessorRegistry,
     ) -> Result<Self, String> {
+        let pipeline = config.active_pipeline().cloned().unwrap_or_default();
         let mut steps = Vec::new();
         if config.enabled {
-            for step in config.pipeline.steps.iter().filter(|step| step.enabled) {
+            for step in pipeline.steps.iter().filter(|step| step.enabled) {
                 if step.id.trim().is_empty() {
                     return Err("后处理 step ID 不能为空".into());
                 }
@@ -317,7 +423,7 @@ impl PostProcessPipeline {
             }
         }
         Ok(Self {
-            id: config.pipeline.id.clone(),
+            id: pipeline.id,
             steps,
         })
     }
@@ -531,10 +637,7 @@ pub async fn test_post_processing(
     registry: &ProcessorRegistry,
 ) -> Result<PostProcessingTestResult, String> {
     let compiled = PostProcessPipeline::compile(
-        &PostProcessingConfig {
-            enabled: true,
-            pipeline,
-        },
+        &PostProcessingConfig::with_pipeline(true, pipeline),
         registry,
     )?;
     let started = Instant::now();
@@ -553,4 +656,86 @@ pub async fn test_post_processing(
         duration_ms: started.elapsed().as_millis() as u64,
         steps: result.trace,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_is_enabled_blocklist_pipeline() {
+        let config = PostProcessingConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.active_pipeline_id, BUILTIN_BLOCKLIST_PIPELINE_ID);
+        let pipeline = config.active_pipeline().unwrap();
+        assert_eq!(pipeline.display_name, "屏蔽词");
+        assert_eq!(
+            pipeline.steps[0].processor_id,
+            BUILTIN_BLOCKLIST_PROCESSOR_ID
+        );
+    }
+
+    #[test]
+    fn compile_uses_the_active_pipeline_not_the_first() {
+        let mut registry = ProcessorRegistry::new();
+        registry.register(Arc::new(NoopFactory)).unwrap();
+        let config = PostProcessingConfig {
+            enabled: true,
+            active_pipeline_id: "second".into(),
+            pipelines: vec![
+                PipelineConfig {
+                    id: "first".into(),
+                    display_name: "一".into(),
+                    steps: vec![],
+                },
+                PipelineConfig {
+                    id: "second".into(),
+                    display_name: "二".into(),
+                    steps: vec![PipelineStepConfig {
+                        id: "n1".into(),
+                        processor_id: "test.noop".into(),
+                        enabled: true,
+                        config: Value::Null,
+                        timeout_ms: 1_000,
+                        on_error: StepFailurePolicy::Required,
+                    }],
+                },
+            ],
+        };
+        let compiled = PostProcessPipeline::compile(&config, &registry).unwrap();
+        assert_eq!(compiled.len(), 1);
+    }
+
+    struct NoopFactory;
+
+    impl ProcessorFactory for NoopFactory {
+        fn descriptor(&self) -> ProcessorDescriptor {
+            ProcessorDescriptor {
+                id: "test.noop".into(),
+                display_name: "Noop".into(),
+                description: String::new(),
+                category: ProcessorCategory::Utility,
+                developer_only: true,
+                network_access: NetworkAccess::None,
+                config_fields: Vec::new(),
+            }
+        }
+
+        fn create(&self, _config: &Value) -> Result<Arc<dyn TextProcessor>, String> {
+            Ok(Arc::new(Noop))
+        }
+    }
+
+    struct Noop;
+
+    impl TextProcessor for Noop {
+        fn process<'a>(
+            &'a self,
+            input: TextDocument,
+            _context: &'a ProcessingContext,
+            _cancel: ProcessingCancelToken,
+        ) -> ProcessFuture<'a> {
+            Box::pin(async move { Ok(input) })
+        }
+    }
 }

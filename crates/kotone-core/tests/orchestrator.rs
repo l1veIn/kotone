@@ -426,11 +426,17 @@ async fn single_mock_postprocessor_changes_deliverable_text() {
     let (orch, emitter, sent) = make_orchestrator(true);
     {
         let mut settings = orch.settings().write().unwrap();
-        settings.post_processing.enabled = true;
-        settings.post_processing.pipeline.steps = vec![required_postprocess_step(
-            "punctuation",
-            "mock.append-exclamation",
-        )];
+        settings.post_processing = kotone_core::postprocess::PostProcessingConfig::with_pipeline(
+            true,
+            kotone_core::postprocess::PipelineConfig {
+                id: "punctuation".into(),
+                display_name: "标点".into(),
+                steps: vec![required_postprocess_step(
+                    "punctuation",
+                    "mock.append-exclamation",
+                )],
+            },
+        );
     }
 
     orch.begin().await.unwrap();
@@ -452,12 +458,17 @@ async fn multiple_registered_postprocessors_run_in_declared_order() {
     let (orch, emitter, sent) = make_orchestrator(true);
     {
         let mut settings = orch.settings().write().unwrap();
-        settings.post_processing.enabled = true;
-        settings.post_processing.pipeline.id = "mock-chain".into();
-        settings.post_processing.pipeline.steps = vec![
-            required_postprocess_step("punctuation", "mock.append-exclamation"),
-            required_postprocess_step("wrapper", "mock.wrap-brackets"),
-        ];
+        settings.post_processing = kotone_core::postprocess::PostProcessingConfig::with_pipeline(
+            true,
+            kotone_core::postprocess::PipelineConfig {
+                id: "mock-chain".into(),
+                display_name: "测试链".into(),
+                steps: vec![
+                    required_postprocess_step("punctuation", "mock.append-exclamation"),
+                    required_postprocess_step("wrapper", "mock.wrap-brackets"),
+                ],
+            },
+        );
     }
 
     orch.begin().await.unwrap();
@@ -2031,11 +2042,17 @@ async fn history_records_the_processed_deliverable_text() {
     let orch = make_history_orchestrator(true, injector, dir.path().to_path_buf(), None);
     {
         let mut settings = orch.settings().write().unwrap();
-        settings.post_processing.enabled = true;
-        settings.post_processing.pipeline.steps = vec![
-            required_postprocess_step("punctuation", "mock.append-exclamation"),
-            required_postprocess_step("wrapper", "mock.wrap-brackets"),
-        ];
+        settings.post_processing = kotone_core::postprocess::PostProcessingConfig::with_pipeline(
+            true,
+            kotone_core::postprocess::PipelineConfig {
+                id: "history-chain".into(),
+                display_name: "历史链".into(),
+                steps: vec![
+                    required_postprocess_step("punctuation", "mock.append-exclamation"),
+                    required_postprocess_step("wrapper", "mock.wrap-brackets"),
+                ],
+            },
+        );
     }
 
     orch.begin().await.unwrap();
