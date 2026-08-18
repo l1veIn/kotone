@@ -17,35 +17,37 @@ test("registered post-processors can be composed, tried out and edited", async (
   await expect(page.getByText("还没有处理步骤", { exact: true })).toBeVisible();
 
   await page.getByTestId("add-postprocess-step").click();
-  await expect(page.getByTestId("processor-option-mock.append-exclamation")).toBeVisible();
-  await expect(page.getByTestId("processor-option-mock.wrap-brackets")).toBeVisible();
-  await page.getByTestId("processor-option-mock.append-exclamation").click();
+  await expect(page.getByTestId("processor-option-builtin.blocklist-filter")).toBeVisible();
+  await expect(page.getByTestId("processor-option-writing.openai-compat")).toBeVisible();
+  await page.getByTestId("processor-option-builtin.blocklist-filter").click();
 
   await page.getByTestId("add-postprocess-step").click();
-  await page.getByTestId("processor-option-mock.wrap-brackets").click();
+  await page.getByTestId("processor-option-writing.openai-compat").click();
 
   const steps = page.locator('[data-testid^="postprocess-step-"]');
   await expect(steps).toHaveCount(2);
-  await expect(steps.nth(0)).toContainText("句尾叹号");
-  await expect(steps.nth(1)).toContainText("方括号包裹");
+  await expect(steps.nth(0)).toContainText("屏蔽词过滤");
+  await expect(steps.nth(1)).toContainText("AI 润色");
 
+  await page.getByTestId("open-postprocess-tryout").click();
   await page.getByTestId("postprocess-tryout-run").click();
   await expect(page.getByTestId("postprocess-tryout-result")).toContainText(
-    "【对面那个傻逼打野太牛逼了！】",
+    "对面那个**打野太NB了",
   );
+  await page.getByRole("button", { name: "关闭" }).click();
 
   await steps.nth(0).getByTitle("下移").click();
-  await expect(steps.nth(0)).toContainText("方括号包裹");
-  await expect(steps.nth(1)).toContainText("句尾叹号");
+  await expect(steps.nth(0)).toContainText("AI 润色");
+  await expect(steps.nth(1)).toContainText("屏蔽词过滤");
 
-  const secondToggle = steps.nth(1).getByRole("checkbox", { name: /启用.*句尾叹号/ });
+  const secondToggle = steps.nth(1).getByRole("checkbox", { name: /启用.*屏蔽词过滤/ });
   await expect(secondToggle).toBeChecked();
   await secondToggle.uncheck({ force: true });
   await expect(secondToggle).not.toBeChecked();
 
   await steps.nth(1).getByRole("button", { name: "移除" }).click();
   await expect(steps).toHaveCount(1);
-  await expect(steps.nth(0)).toContainText("方括号包裹");
+  await expect(steps.nth(0)).toContainText("AI 润色");
 });
 
 test("a discovered blocklist processor works by default and saves a custom CSV path", async ({
@@ -64,12 +66,14 @@ test("a discovered blocklist processor works by default and saves a custom CSV p
   await expect(toggle).toBeChecked();
   await expect(step).toContainText("自带一份默认词库");
 
+  await page.getByTestId("open-postprocess-tryout").click();
   const tryoutInput = page.getByTestId("postprocess-tryout-input");
   await tryoutInput.fill("你真傻逼，这波牛逼");
   await page.getByTestId("postprocess-tryout-run").click();
   await expect(page.getByTestId("postprocess-tryout-result")).toContainText(
     "你真**，这波NB",
   );
+  await page.getByRole("button", { name: "关闭" }).click();
 
   const csvPath = step.getByRole("textbox", { name: "自己的词库" });
   await csvPath.fill("C:\\Kotone\\blocklist.csv");

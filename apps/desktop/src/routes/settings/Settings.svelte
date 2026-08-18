@@ -60,9 +60,9 @@
   ];
 
   let page = $state<PageId>("general");
-  let advancedSection = $state<AdvancedSection>("models");
+  let advancedSection = $state<AdvancedSection>("system");
 
-  function openAdvanced(section: AdvancedSection = "models") {
+  function openAdvanced(section: AdvancedSection = "system") {
     advancedSection = section;
     page = "advanced";
   }

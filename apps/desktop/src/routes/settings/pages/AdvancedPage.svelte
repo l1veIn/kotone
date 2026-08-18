@@ -11,7 +11,7 @@
   import type { AdvancedSection } from "./advanced/types";
 
   let {
-    section = "models",
+    section = "system",
     onSectionChange,
     onOpenOnboarding,
   }: {
@@ -24,7 +24,7 @@
     { id: "system", label: "系统" },
     { id: "models", label: "模型" },
     { id: "connections", label: "API 连接" },
-    { id: "hotkeys", label: "热键" },
+    { id: "hotkeys", label: "其他热键" },
     { id: "tuning", label: "调参" },
   ];
 </script>

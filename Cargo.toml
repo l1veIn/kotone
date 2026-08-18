@@ -21,3 +21,11 @@ zip = { version = "4", default-features = false, features = ["deflate"] }
 
 # 测试
 tempfile = "3"
+
+[profile.dev]
+# 降低 debuginfo 为 line-tables-only，大幅缩减 MSVC PDB 和链接器内存
+debug = 1
+
+[profile.test]
+# 避免多个测试二进制并行生成超大 PDB 引起内存溢出与 STATUS_STACK_BUFFER_OVERRUN
+debug = 1

@@ -7,6 +7,7 @@
     detectHotkeyConflicts,
     downloadModel,
     getModelsDir,
+    getProfileIcon,
     isTauri,
     listAudioDevices,
     listModels,
@@ -72,12 +73,41 @@
   let selectedDeviceId = $state("default");
   let selectedMode = $state<InteractionMode>("push-to-talk");
   let currentKey = $state("CapsLock");
+  let iconUrls = $state<Record<string, string>>({});
+  const loadingIcons = $state<Set<string>>(new Set());
 
-  const modes: { id: InteractionMode; name: string; desc: string; icon: string }[] = [
-    { id: "push-to-talk", name: "对讲机", desc: "按住说话，松开发送", icon: "🎙️" },
-    { id: "dictation", name: "录音笔", desc: "按一下开始，再按停止，确认后发送", icon: "⏺️" },
-    { id: "one-shot", name: "说一句就走", desc: "按一下，说完自动发送", icon: "🚀" },
+  const modes: { id: InteractionMode; name: string; desc: string }[] = [
+    { id: "push-to-talk", name: "对讲机", desc: "按住说话，松开发送" },
+    { id: "dictation", name: "录音笔", desc: "按一下开始，再按停止，确认后发送" },
+    { id: "one-shot", name: "说一句就走", desc: "按一下，说完自动发送" },
   ];
+
+  /** 加载 profile 图标字节 → data URL（按扩展名推断 mime；无图标/失败 → 占位） */
+  async function ensureIcon(p: GameProfile) {
+    if (!p.icon || iconUrls[p.id] !== undefined || loadingIcons.has(p.id)) return;
+    loadingIcons.add(p.id);
+    try {
+      const bytes = await getProfileIcon(p.id);
+      if (bytes.length === 0) {
+        iconUrls[p.id] = "";
+        return;
+      }
+      const ext = (p.icon.split(".").pop() ?? "webp").toLowerCase();
+      const mime =
+        ext === "png" ? "image/png" : ext === "jpg" || ext === "jpeg" ? "image/jpeg" : "image/webp";
+      iconUrls[p.id] = `data:${mime};base64,${bytesToBase64(bytes)}`;
+    } catch {
+      iconUrls[p.id] = "";
+    } finally {
+      loadingIcons.delete(p.id);
+    }
+  }
+
+  function bytesToBase64(bytes: Uint8Array): string {
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  }
 
   const selectedProfile = $derived(
     profiles.find((p) => p.id === selectedProfileId) ?? null,
@@ -90,6 +120,7 @@
         listProfiles(),
         listAudioDevices(),
       ]);
+      for (const p of profiles) void ensureIcon(p);
       const settings = $settingsStore;
       const lolAvailable = profiles.some((p) => p.id === "lol");
       const activeProfileAvailable =
@@ -181,6 +212,7 @@
         listProfiles(),
         listAudioDevices(),
       ]);
+      for (const p of profiles) void ensureIcon(p);
     } catch (e) {
       resourceError = errText(e);
     } finally {
@@ -507,7 +539,19 @@
                     推荐
                   </span>
                 {/if}
-                <span class="text-xl">{profile.id === "lol" ? "🎮" : "🌐"}</span>
+                <span
+                  class="flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl {active ? 'bg-kotone-cyan/15' : 'bg-white/8'}"
+                >
+                  {#if profile.icon && iconUrls[profile.id]}
+                    <img src={iconUrls[profile.id]} alt={profile.displayName} class="h-full w-full object-contain" />
+                  {:else if profile.processNames.length === 0}
+                    <!-- lucide: globe -->
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5 {active ? 'text-kotone-cyan' : 'text-white/60'}"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+                  {:else}
+                    <!-- lucide: gamepad-2 -->
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5 {active ? 'text-kotone-cyan' : 'text-white/60'}"><line x1="6" x2="10" y1="11" y2="11"/><line x1="8" x2="8" y1="9" y2="13"/><line x1="15" x2="15.01" y1="12" y2="12"/><line x1="18" x2="18.01" y1="10" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/></svg>
+                  {/if}
+                </span>
                 <p class="mt-2 text-sm font-semibold {active ? 'text-kotone-cyan' : ''}">
                   {profile.displayName}
                 </p>
@@ -716,7 +760,21 @@
               data-testid="mode-{mode.id}"
               onclick={() => (selectedMode = mode.id)}
             >
-              <span class="text-lg">{mode.icon}</span>
+              <span
+                class="inline-flex h-5 w-5 items-center justify-center {active ? 'text-kotone-cyan' : 'text-white/60'}"
+                aria-hidden="true"
+              >
+                {#if mode.id === "push-to-talk"}
+                  <!-- lucide: mic -->
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4.5 w-4.5"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+                {:else if mode.id === "dictation"}
+                  <!-- lucide: circle-dot（录音） -->
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4.5 w-4.5"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>
+                {:else if mode.id === "one-shot"}
+                  <!-- lucide: rocket -->
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4.5 w-4.5"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
+                {/if}
+              </span>
               <p class="mt-1 text-sm font-semibold {active ? 'text-kotone-cyan' : ''}">{mode.name}</p>
               <p class="mt-1 text-[11px] leading-relaxed text-white/50">{mode.desc}</p>
             </button>

@@ -172,7 +172,7 @@ fn writing_prompt_presets() -> Vec<ProcessorFieldPreset> {
         ProcessorFieldPreset {
             id: "poet".into(),
             display_name: "诗人".into(),
-            value: format!("改写成简短诗意的一句，不堆砌辞藻。{keep_terms}"),
+            value: format!("把用户的意思改写为一首短小精炼的五言或七言绝句小诗，准确表达原意，朗朗上口，不附带多余解释或无关文字。{keep_terms}"),
         },
         ProcessorFieldPreset {
             id: "academic".into(),

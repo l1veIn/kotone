@@ -47,8 +47,9 @@
   let renaming = $state(false);
   let renameDraft = $state("");
   let managing = $state(false);
+  let tryingOut = $state(false);
   const visibleProcessors = $derived(
-    processors.filter((processor) => !processor.developerOnly || import.meta.env.DEV),
+    processors.filter((processor) => !processor.developerOnly),
   );
 
   onMount(async () => {
@@ -411,6 +412,14 @@
         </div>
         <button
           type="button"
+          data-testid="open-postprocess-tryout"
+          class="shrink-0 rounded-lg bg-kotone-cyan/12 px-3 py-2 text-[11px] font-semibold text-kotone-cyan ring-1 ring-kotone-cyan/30 transition hover:bg-kotone-cyan/20"
+          onclick={() => (tryingOut = true)}
+        >
+          试跑流程
+        </button>
+        <button
+          type="button"
           data-testid="manage-postprocess-pipelines"
           class="shrink-0 rounded-lg bg-white/6 px-3 py-2 text-[11px] text-white/65 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white"
           onclick={() => (managing = true)}
@@ -647,7 +656,7 @@
         </div>
       {/if}
 
-      <div class="mt-3 flex justify-start">
+      <div class="mt-3 flex items-center gap-2">
         <button
           data-testid="add-postprocess-step"
           class="rounded-lg bg-kotone-cyan/15 px-3 py-1.5 text-xs font-semibold text-kotone-cyan ring-1 ring-kotone-cyan/35 transition hover:bg-kotone-cyan/25 active:scale-95 disabled:opacity-50"
@@ -656,72 +665,16 @@
         >
           + 添加步骤
         </button>
-      </div>
-    </section>
-
-    <section class="kotone-panel mt-6 p-5">
-      <div class="flex items-start justify-between gap-4">
-        <div>
-          <h2 class="text-sm font-semibold text-kotone-cyan/90">试跑</h2>
-          <p class="mt-1 text-[11px] text-white/45">先看效果，不发到游戏。</p>
-        </div>
-        <span class="rounded-full bg-white/6 px-2 py-1 text-[10px] text-white/45 ring-1 ring-white/10">
-          {activeStepCount} 个启用步骤
-        </span>
-      </div>
-
-      <label class="mt-3 block">
-        <span class="text-[11px] text-white/55">输入一段文本</span>
-        <textarea
-          data-testid="postprocess-tryout-input"
-          class="kotone-scroll mt-1.5 min-h-20 w-full resize-y rounded-lg bg-white/5 px-3 py-2 text-sm leading-relaxed text-white/85 ring-1 ring-white/12 outline-none transition placeholder:text-white/25 focus:ring-kotone-cyan/45"
-          placeholder="输入用于验证流程的文字"
-          bind:value={testInput}
-        ></textarea>
-      </label>
-
-      <div class="mt-3 flex justify-end">
         <button
-          data-testid="postprocess-tryout-run"
-          class="rounded-lg bg-kotone-cyan px-4 py-1.5 text-xs font-bold text-kotone-deep transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
-          disabled={testing || !testInput.trim() || activeStepCount === 0}
-          onclick={() => void runTryout()}
+          type="button"
+          data-testid="open-postprocess-tryout-bottom"
+          class="rounded-lg bg-white/8 px-3 py-1.5 text-xs font-semibold text-white/75 ring-1 ring-white/12 transition hover:bg-white/15 hover:text-white active:scale-95 disabled:opacity-50"
+          disabled={saving || activeStepCount === 0}
+          onclick={() => (tryingOut = true)}
         >
-          {testing ? "处理中…" : "运行试跑"}
+          试跑效果
         </button>
       </div>
-
-      {#if tryoutResult}
-        <div
-          data-testid="postprocess-tryout-result"
-          class="mt-4 rounded-xl bg-kotone-cyan/6 p-3 ring-1 ring-kotone-cyan/20"
-        >
-          <div class="flex items-center justify-between gap-3">
-            <span class="text-[11px] font-semibold text-kotone-cyan/80">处理结果</span>
-            <span class="text-[10px] text-white/35">{tryoutResult.durationMs} ms</span>
-          </div>
-          <p class="mt-2 break-all text-sm leading-relaxed text-white/90">
-            {tryoutResult.finalText}
-          </p>
-          <div class="mt-3 flex flex-col gap-1.5 border-t border-white/8 pt-3">
-            {#each tryoutResult.steps as step, index (step.stepId)}
-              <div>
-                <span
-                  class="inline-flex rounded-full px-2 py-1 text-[10px] ring-1 {step.outcome === 'succeeded'
-                    ? 'bg-kotone-cyan/8 text-kotone-cyan/75 ring-kotone-cyan/20'
-                    : 'bg-kotone-pink/8 text-kotone-pink/80 ring-kotone-pink/20'}"
-                  title={`${step.durationMs} ms`}
-                >
-                  {index + 1}. {step.displayName} · {step.outcome === "succeeded" ? "完成" : "已跳过"}
-                </span>
-                {#if step.error}
-                  <p class="mt-1 text-[10px] leading-relaxed text-kotone-pink/75">{step.error}</p>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        </div>
-      {/if}
     </section>
     {/if}
   {/if}
@@ -909,6 +862,93 @@
         >
           + 新建流程
         </button>
+      </div>
+    </div>
+  {/if}
+
+  {#if tryingOut}
+    <div
+      class="fixed inset-0 z-[80] flex items-center justify-center bg-kotone-deep/85 p-6 backdrop-blur-sm"
+      role="presentation"
+      onclick={() => (tryingOut = false)}
+    >
+      <div
+        class="kotone-panel max-h-[85vh] w-full max-w-lg overflow-y-auto p-5 shadow-glow-cyan-lg"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="tryout-dialog-title"
+        onclick={(event) => event.stopPropagation()}
+      >
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <div class="flex items-center gap-2">
+              <h2 id="tryout-dialog-title" class="text-base font-bold">试跑「{pipelineLabel(activePipeline)}」</h2>
+              <span class="rounded-full bg-white/6 px-2 py-0.5 text-[10px] text-white/45 ring-1 ring-white/10">
+                {activeStepCount} 个启用步骤
+              </span>
+            </div>
+            <p class="mt-1 text-[11px] text-white/45">输入一段测试文本查看文字处理效果，不会发送到游戏。</p>
+          </div>
+          <button
+            class="rounded-md bg-white/8 px-2 py-1 text-[11px] text-white/70 ring-1 ring-white/12 hover:bg-white/15"
+            onclick={() => (tryingOut = false)}
+          >
+            关闭
+          </button>
+        </div>
+
+        <label class="mt-4 block">
+          <span class="text-[11px] text-white/55">输入测试文本</span>
+          <textarea
+            data-testid="postprocess-tryout-input"
+            class="kotone-scroll mt-1.5 min-h-24 w-full resize-y rounded-lg bg-white/5 px-3 py-2 text-sm leading-relaxed text-white/85 ring-1 ring-white/12 outline-none transition placeholder:text-white/25 focus:ring-kotone-cyan/45"
+            placeholder="输入用于验证流程的文字"
+            bind:value={testInput}
+          ></textarea>
+        </label>
+
+        <div class="mt-3 flex justify-end">
+          <button
+            data-testid="postprocess-tryout-run"
+            class="rounded-lg bg-kotone-cyan px-4 py-1.5 text-xs font-bold text-kotone-deep transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={testing || !testInput.trim() || activeStepCount === 0}
+            onclick={() => void runTryout()}
+          >
+            {testing ? "处理中…" : "运行试跑"}
+          </button>
+        </div>
+
+        {#if tryoutResult}
+          <div
+            data-testid="postprocess-tryout-result"
+            class="mt-4 rounded-xl bg-kotone-cyan/6 p-3.5 ring-1 ring-kotone-cyan/20"
+          >
+            <div class="flex items-center justify-between gap-3">
+              <span class="text-[11px] font-semibold text-kotone-cyan/90">处理结果</span>
+              <span class="text-[10px] text-white/40">{tryoutResult.durationMs} ms</span>
+            </div>
+            <p class="mt-2 break-all text-sm leading-relaxed text-white/90">
+              {tryoutResult.finalText}
+            </p>
+            <div class="mt-3 flex flex-col gap-1.5 border-t border-white/8 pt-3">
+              {#each tryoutResult.steps as step, index (step.stepId)}
+                <div>
+                  <span
+                    class="inline-flex rounded-full px-2 py-0.5 text-[10px] ring-1 {step.outcome === 'succeeded'
+                      ? 'bg-kotone-cyan/8 text-kotone-cyan/75 ring-kotone-cyan/20'
+                      : 'bg-kotone-pink/8 text-kotone-pink/80 ring-kotone-pink/20'}"
+                    title={`${step.durationMs} ms`}
+                  >
+                    {index + 1}. {step.displayName} · {step.outcome === "succeeded" ? "完成" : "已跳过"}
+                  </span>
+                  {#if step.error}
+                    <p class="mt-1 text-[10px] leading-relaxed text-kotone-pink/75">{step.error}</p>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
       </div>
     </div>
   {/if}
