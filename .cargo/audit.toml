@@ -1,0 +1,10 @@
+[advisories]
+# rustls 0.22 / rustls-webpki 0.102 只由 kotone-stt 的 tungstenite 0.21 引入，
+# 用来连固定厂商 WebSocket（讯飞 / 火山）。这些公告针对 CRL 匹配与证书
+# name constraint，不影响当前用法。升级 tungstenite 会改握手 API，另开。
+ignore = [
+  "RUSTSEC-2026-0049",
+  "RUSTSEC-2026-0098",
+  "RUSTSEC-2026-0099",
+  "RUSTSEC-2026-0104",
+]
