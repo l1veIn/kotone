@@ -310,6 +310,13 @@ fn make_orchestrator_full(
     make_orchestrator_tuned(auto_send, injector, focus, |_| {})
 }
 
+/// 编排器测试默认关掉屏蔽词：产品默认已开启，但多数夹具不注册该处理器。
+fn test_settings() -> Settings {
+    let mut settings = Settings::default();
+    settings.post_processing.enabled = false;
+    settings
+}
+
 /// 同 make_orchestrator_full，但允许在 into_arc 前调整超时等字段（测试用）
 fn make_orchestrator_tuned(
     auto_send: bool,
@@ -317,7 +324,7 @@ fn make_orchestrator_tuned(
     focus: Arc<dyn FocusBackend>,
     tune: impl FnOnce(&mut Orchestrator),
 ) -> (Arc<Orchestrator>, Arc<VecEmitter>) {
-    let mut settings = Settings::default();
+    let mut settings = test_settings();
     // 0.1.5 起默认交互模式为「对讲机」（hold 直发）；本测试族沿用旧的
     // toggle + autoSend 推导行为，显式置 None 走自定义兼容路径
     settings.interaction_mode = None;
@@ -1058,7 +1065,7 @@ async fn empty_finalize_returns_idle_silently() {
         42,
         true,
     ));
-    let mut settings = Settings::default();
+    let mut settings = test_settings();
     settings.stt_engine = "stub-final".into();
     settings.auto_send = true; // C1 直发模式：空文本也不应触发注入器敲回车
     settings.active_profile_id = None;
@@ -1125,7 +1132,7 @@ fn make_orchestrator_with_eval(
         42,
         true,
     ));
-    let mut settings = Settings::default();
+    let mut settings = test_settings();
     settings.stt_engine = "mock-stream".into();
     settings.active_profile_id = None;
     settings.eval_recording = true;
@@ -1298,7 +1305,7 @@ fn make_vad_mode_orchestrator_in(
         42,
         true,
     ));
-    let mut settings = Settings::default();
+    let mut settings = test_settings();
     settings.stt_engine = "mock-stream".into();
     settings.active_profile_id = None;
     settings.eval_recording = false;
@@ -1550,7 +1557,7 @@ async fn solo_without_vad_factory_manual_stop_sends_and_does_not_resume() {
 
 #[tokio::test]
 async fn push_audio_failure_aborts_session_with_visible_error() {
-    let mut settings = Settings::default();
+    let mut settings = test_settings();
     settings.interaction_mode = None;
     settings.stt_engine = "push-fail".into();
     settings.active_profile_id = None;
@@ -1970,7 +1977,7 @@ fn make_history_orchestrator(
     history_dir: std::path::PathBuf,
     eval_dir: Option<std::path::PathBuf>,
 ) -> Arc<Orchestrator> {
-    let mut settings = Settings::default();
+    let mut settings = test_settings();
     // 同 make_orchestrator_full：沿用 toggle + autoSend 推导，显式置 None
     settings.interaction_mode = None;
     settings.stt_engine = "mock-stream".into();
@@ -2486,7 +2493,7 @@ async fn end_drains_buffered_pcm_before_finalize() {
         42,
         true,
     ));
-    let mut settings = Settings::default();
+    let mut settings = test_settings();
     settings.stt_engine = "mock-stream".into();
     settings.auto_send = true;
     settings.active_profile_id = None;
@@ -2573,7 +2580,7 @@ async fn hold_release_right_after_speech_keeps_sentence_tail() {
         true,
     ));
 
-    let mut settings = Settings::default();
+    let mut settings = test_settings();
     settings.interaction_mode = None;
     settings.hotkey.mode = kotone_core::hotkey::HotkeyMode::Hold; // B1 松手结束
     settings.stt_engine = "sherpa-onnx-x-asr-zh-en".into();
