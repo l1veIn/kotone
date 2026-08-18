@@ -1,0 +1,5 @@
+[advisories]
+ignore = [
+    # glib 0.18 is a transitive Linux-only dependency pulled in by Tauri/GTK in Cargo.lock, not compiled on Windows
+    "RUSTSEC-2024-0429",
+]

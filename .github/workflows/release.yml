@@ -71,7 +71,7 @@ jobs:
       - name: Audit Rust dependencies
         run: |
           cargo install cargo-audit --locked
-          cargo audit
+          cargo audit --ignore RUSTSEC-2024-0429
 
       - name: Verify tag and application version
         run: pnpm release:verify
