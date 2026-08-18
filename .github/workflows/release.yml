@@ -21,17 +21,24 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Windows runner 上 pwsh 会把原生命令非 0 当成步骤失败。
-          # 首次发版时 gh release view 本来就会 404，必须先关掉再看 LASTEXITCODE。
+          # Windows runner 上 pwsh 默认 ErrorActionPreference=Stop，且步骤退出码
+          # 会继承最后一条原生命令。首次打 tag 时 gh release view 404 必须吞掉，
+          # 再显式 exit 0，否则守卫自己把发版打断。
+          $ErrorActionPreference = 'Continue'
           $PSNativeCommandUseErrorActionPreference = $false
           $json = gh release view $env:GITHUB_REF_NAME `
             --repo $env:GITHUB_REPOSITORY --json isDraft 2>$null
-          if ($LASTEXITCODE -eq 0) {
+          $viewExit = $LASTEXITCODE
+          if ($viewExit -eq 0 -and $json) {
             $release = $json | ConvertFrom-Json
             if (-not $release.isDraft) {
               throw "Release $env:GITHUB_REF_NAME is already published; refusing to overwrite its assets."
             }
+            Write-Host "Existing draft release found; build may update its assets."
+          } else {
+            Write-Host "No GitHub Release for $env:GITHUB_REF_NAME yet (exit $viewExit); continuing."
           }
+          exit 0
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
