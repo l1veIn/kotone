@@ -49,8 +49,7 @@ impl ProcessorFactory for BlocklistFilterFactory {
             config_fields: vec![ProcessorConfigField {
                 key: "csvPath".into(),
                 display_name: "自己的词库".into(),
-                description: "不选就用默认词库。选了文件就改用你的。"
-                    .into(),
+                description: "不选就用默认词库。选了文件就改用你的。".into(),
                 kind: ProcessorConfigFieldKind::File,
                 required: false,
                 file_extensions: vec!["csv".into()],
