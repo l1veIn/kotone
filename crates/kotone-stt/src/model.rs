@@ -223,7 +223,7 @@ const VOLCANO_ASR_SCHEMA: &[StaticConfigField] = &[
     },
 ];
 
-/// 科大讯飞语音听写：只填 APPID + APIKey + APISecret，端点预置。
+/// 科大讯飞语音听写：只填 APPID + APISecret + APIKey，端点预置。
 const IFLYTEK_ASR_SCHEMA: &[StaticConfigField] = &[
     StaticConfigField {
         key: "appId",
@@ -234,17 +234,17 @@ const IFLYTEK_ASR_SCHEMA: &[StaticConfigField] = &[
         required: true,
     },
     StaticConfigField {
-        key: "apiKey",
-        label: "APIKey",
-        kind: "string",
+        key: "apiSecret",
+        label: "APISecret",
+        kind: "secret",
         default: "",
         options: &[],
         required: true,
     },
     StaticConfigField {
-        key: "apiSecret",
-        label: "APISecret",
-        kind: "secret",
+        key: "apiKey",
+        label: "APIKey",
+        kind: "string",
         default: "",
         options: &[],
         required: true,

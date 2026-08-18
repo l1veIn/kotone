@@ -523,8 +523,8 @@ const mock: MockStore = {
       visibility: "on_demand",
       style: "capsule",
       position: "auto",
-      draggable: true,
-      clickThrough: false,
+      draggable: false,
+      clickThrough: true,
     },
   },
   devices: [
@@ -686,8 +686,8 @@ const mock: MockStore = {
       apiKeyUrl: "https://console.xfyun.cn/services/iat",
       configSchema: [
         { key: "appId", label: "APPID", kind: "string", default: "", options: [], required: true },
-        { key: "apiKey", label: "APIKey", kind: "string", default: "", options: [], required: true },
         { key: "apiSecret", label: "APISecret", kind: "secret", default: "", options: [], required: true },
+        { key: "apiKey", label: "APIKey", kind: "string", default: "", options: [], required: true },
       ],
     },
   ],
@@ -847,7 +847,7 @@ export async function listPostProcessors(): Promise<PostProcessorInfo[]> {
         displayName: "翻译（Qwen-MT）",
         description: "用通义 Qwen-MT 把识别文本译成目标语言，并尽量保住游戏术语。",
         category: "translation",
-        developerOnly: false,
+        developerOnly: true,
         networkAccess: "internet",
         configFields: [
           {
@@ -914,7 +914,7 @@ const mockConnectionPresets: ConnectionPreset[] = [
     id: "dashscope",
     displayName: "通义千问（北京）",
     defaultBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    defaultModel: "qwen-turbo",
+    defaultModel: "qwen3-30b-a3b-instruct-2507",
     apiKeyUrl: "https://bailian.console.aliyun.com/?apiKey=1#/api-key",
   },
   {

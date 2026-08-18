@@ -33,7 +33,7 @@ impl ProcessorFactory for QwenMtFactory {
             display_name: "翻译（Qwen-MT）".into(),
             description: "用通义 Qwen-MT 把识别文本译成目标语言，并尽量保住游戏术语。".into(),
             category: ProcessorCategory::Translation,
-            developer_only: false,
+            developer_only: true,
             network_access: NetworkAccess::Internet,
             config_fields: vec![
                 ProcessorConfigField {

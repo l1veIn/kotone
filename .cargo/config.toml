@@ -1,0 +1,6 @@
+# Cargo 构建与并发保护配置
+# 防止大型 C++ 静态库（sherpa-onnx / onnxruntime）并发链接导致内存爆满与系统冻结
+
+[build]
+# 限制最大并行编译与链接任务数，防止多个 MSVC link.exe 同时链接超大静态库耗尽物理内存
+jobs = 2

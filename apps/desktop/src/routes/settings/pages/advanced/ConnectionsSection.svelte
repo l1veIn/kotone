@@ -156,66 +156,103 @@
     {/if}
 
     {#if editingConnection}
-      <div class="kotone-panel mt-3 space-y-2.5 p-4" data-testid="connection-editor">
-        <label class="block">
-          <span class="text-[11px] text-white/55">显示名称</span>
-          <input
-            class="mt-1 w-full rounded-md bg-white/6 px-2.5 py-1.5 text-[12px] text-white/85 ring-1 ring-white/12 outline-none focus:ring-kotone-cyan/45"
-            bind:value={editingConnection.displayName}
-          />
-        </label>
-        <label class="block">
-          <span class="text-[11px] text-white/55">接口地址</span>
-          <input
-            class="mt-1 w-full rounded-md bg-white/6 px-2.5 py-1.5 text-[12px] text-white/85 ring-1 ring-white/12 outline-none focus:ring-kotone-cyan/45"
-            bind:value={editingConnection.baseUrl}
-          />
-        </label>
-        <label class="block">
-          <span class="text-[11px] text-white/55">模型</span>
-          <input
-            class="mt-1 w-full rounded-md bg-white/6 px-2.5 py-1.5 text-[12px] text-white/85 ring-1 ring-white/12 outline-none focus:ring-kotone-cyan/45"
-            bind:value={editingConnection.model}
-          />
-        </label>
-        <label class="block">
-          <span class="flex items-center justify-between gap-2 text-[11px] text-white/55">
-            <span>API key</span>
-            {#if editingApiKeyUrl}
-              <button
-                type="button"
-                class="text-[11px] font-semibold text-kotone-cyan hover:underline"
-                onclick={() => void openApiKeyPage(editingApiKeyUrl)}
-              >
-                获取 API key
-              </button>
-            {/if}
-          </span>
-          <input
-            type="password"
-            autocomplete="off"
-            data-testid="connection-api-key"
-            class="mt-1 w-full rounded-md bg-white/6 px-2.5 py-1.5 text-[12px] text-white/85 ring-1 ring-white/12 outline-none focus:ring-kotone-cyan/45"
-            placeholder={connections.some((item) => item.id === editingConnection?.id && item.hasApiKey)
-              ? "已保存，留空则不修改"
-              : "不会写入配置文件"}
-            bind:value={editingApiKey}
-          />
-        </label>
-        <div class="flex justify-end gap-2 pt-1">
-          <button
-            class="rounded-md bg-white/7 px-3 py-1.5 text-[11px] text-white/65 ring-1 ring-white/12"
-            onclick={() => {
-              editingConnection = null;
-              editingApiKey = "";
-            }}
-          >取消</button>
-          <button
-            data-testid="connection-save"
-            class="rounded-md bg-kotone-cyan px-3 py-1.5 text-[11px] font-semibold text-kotone-deep disabled:opacity-40"
-            disabled={savingConnection}
-            onclick={() => void saveConnection()}
-          >保存连接</button>
+      <div
+        class="fixed inset-0 z-[80] flex items-center justify-center bg-kotone-deep/85 p-6 backdrop-blur-sm"
+        role="presentation"
+        onclick={() => {
+          editingConnection = null;
+          editingApiKey = "";
+        }}
+      >
+        <div
+          class="kotone-panel max-h-[85vh] w-full max-w-lg overflow-y-auto p-5 shadow-glow-cyan-lg"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="connection-editor-title"
+          data-testid="connection-editor"
+          onclick={(event) => event.stopPropagation()}
+        >
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <h2 id="connection-editor-title" class="text-base font-bold">
+                {connections.some((item) => item.id === editingConnection?.id) ? "编辑 API 连接" : "添加 API 连接"}
+              </h2>
+              <p class="mt-1 text-[11px] text-white/45">API key 保存到系统凭据库，不会写入配置文件。</p>
+            </div>
+            <button
+              class="rounded-md bg-white/8 px-2 py-1 text-[11px] text-white/70 ring-1 ring-white/12 hover:bg-white/15"
+              onclick={() => {
+                editingConnection = null;
+                editingApiKey = "";
+              }}
+            >
+              取消
+            </button>
+          </div>
+
+          <div class="mt-4 space-y-3">
+            <label class="block">
+              <span class="text-[11px] text-white/55">显示名称</span>
+              <input
+                class="mt-1 w-full rounded-md bg-white/6 px-2.5 py-1.5 text-[12px] text-white/85 ring-1 ring-white/12 outline-none focus:ring-kotone-cyan/45"
+                bind:value={editingConnection.displayName}
+              />
+            </label>
+            <label class="block">
+              <span class="text-[11px] text-white/55">接口地址</span>
+              <input
+                class="mt-1 w-full rounded-md bg-white/6 px-2.5 py-1.5 text-[12px] text-white/85 ring-1 ring-white/12 outline-none focus:ring-kotone-cyan/45"
+                bind:value={editingConnection.baseUrl}
+              />
+            </label>
+            <label class="block">
+              <span class="text-[11px] text-white/55">模型</span>
+              <input
+                class="mt-1 w-full rounded-md bg-white/6 px-2.5 py-1.5 text-[12px] text-white/85 ring-1 ring-white/12 outline-none focus:ring-kotone-cyan/45"
+                bind:value={editingConnection.model}
+              />
+            </label>
+            <label class="block">
+              <span class="flex items-center justify-between gap-2 text-[11px] text-white/55">
+                <span>API key</span>
+                {#if editingApiKeyUrl}
+                  <button
+                    type="button"
+                    class="text-[11px] font-semibold text-kotone-cyan hover:underline"
+                    onclick={() => void openApiKeyPage(editingApiKeyUrl)}
+                  >
+                    获取 API key
+                  </button>
+                {/if}
+              </span>
+              <input
+                type="password"
+                autocomplete="off"
+                data-testid="connection-api-key"
+                class="mt-1 w-full rounded-md bg-white/6 px-2.5 py-1.5 text-[12px] text-white/85 ring-1 ring-white/12 outline-none focus:ring-kotone-cyan/45"
+                placeholder={connections.some((item) => item.id === editingConnection?.id && item.hasApiKey)
+                  ? "已保存，留空则不修改"
+                  : "不会写入配置文件"}
+                bind:value={editingApiKey}
+              />
+            </label>
+          </div>
+
+          <div class="mt-5 flex justify-end gap-2">
+            <button
+              class="rounded-md bg-white/7 px-3 py-1.5 text-[11px] text-white/65 ring-1 ring-white/12 hover:bg-white/12"
+              onclick={() => {
+                editingConnection = null;
+                editingApiKey = "";
+              }}
+            >取消</button>
+            <button
+              data-testid="connection-save"
+              class="rounded-md bg-kotone-cyan px-3.5 py-1.5 text-[11px] font-semibold text-kotone-deep transition hover:brightness-110 active:scale-95 disabled:opacity-40"
+              disabled={savingConnection}
+              onclick={() => void saveConnection()}
+            >保存连接</button>
+          </div>
         </div>
       </div>
     {/if}

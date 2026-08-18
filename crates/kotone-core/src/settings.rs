@@ -189,10 +189,10 @@ pub struct OverlayConfig {
     #[serde(default)]
     pub position: OverlayPosition,
     /// 是否允许直接拖动悬浮窗。
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub draggable: bool,
     /// 鼠标点击穿透到游戏；开启时悬浮窗自身按钮和拖动不可用。
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub click_through: bool,
     /// custom 位置的物理屏幕坐标（支持多显示器负坐标）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -207,8 +207,8 @@ impl Default for OverlayConfig {
             visibility: OverlayVisibility::default(),
             style: OverlayStyle::default(),
             position: OverlayPosition::default(),
-            draggable: true,
-            click_through: false,
+            draggable: false,
+            click_through: true,
             custom_x: None,
             custom_y: None,
         }
@@ -856,8 +856,8 @@ mod tests {
         assert_eq!(s.overlay.visibility, OverlayVisibility::OnDemand);
         assert_eq!(s.overlay.style, OverlayStyle::Capsule);
         assert_eq!(s.overlay.position, OverlayPosition::Auto);
-        assert!(s.overlay.draggable);
-        assert!(!s.overlay.click_through);
+        assert!(!s.overlay.draggable);
+        assert!(s.overlay.click_through);
         assert_eq!(s.overlay.custom_x, None);
         assert_eq!(s.overlay.custom_y, None);
         assert!(s.post_processing.enabled);
@@ -1067,8 +1067,8 @@ mod tests {
         assert_eq!(s.download.gh_proxy, "https://ghfast.top/");
         assert!(!s.ui.first_run_completed, "老配置缺 ui 段合并默认 = 未完成");
         assert_eq!(s.overlay.position, OverlayPosition::Auto);
-        assert!(s.overlay.draggable, "老配置升级后默认允许拖动");
-        assert!(!s.overlay.click_through);
+        assert!(!s.overlay.draggable, "老配置升级后默认关闭拖动");
+        assert!(s.overlay.click_through);
         assert_eq!(s.vad.threshold, 0.5, "老配置缺 vad 段合并默认");
         assert_eq!(s.vad.min_speech_ms, 50);
         assert_eq!(s.vad.min_silence_ms, 50);

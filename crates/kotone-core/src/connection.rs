@@ -119,14 +119,14 @@ pub const CONNECTION_PRESETS: &[ConnectionProviderPreset] = &[
         id: "dashscope",
         display_name: "通义千问（北京）",
         default_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        default_model: "qwen-turbo",
+        default_model: "qwen3-30b-a3b-instruct-2507",
         api_key_url: Some("https://bailian.console.aliyun.com/?apiKey=1#/api-key"),
     },
     ConnectionProviderPreset {
         id: "dashscope-intl",
         display_name: "通义千问（国际）",
         default_base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-        default_model: "qwen-turbo",
+        default_model: "qwen3-30b-a3b-instruct-2507",
         api_key_url: Some("https://modelstudio.console.alibabacloud.com/?tab=dashboard#/api-key"),
     },
     ConnectionProviderPreset {
