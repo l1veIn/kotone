@@ -42,14 +42,14 @@ impl ProcessorFactory for BlocklistFilterFactory {
         ProcessorDescriptor {
             id: PROCESSOR_ID.into(),
             display_name: "屏蔽词过滤".into(),
-            description: "过滤国服对局常见辱骂；可选择自定义 CSV 完整覆盖内置词表。".into(),
+            description: "用词库把脏话换成能发的词。自带一份默认词库，也可以换成自己的。".into(),
             category: ProcessorCategory::Utility,
             developer_only: false,
             network_access: NetworkAccess::Local,
             config_fields: vec![ProcessorConfigField {
                 key: "csvPath".into(),
-                display_name: "自定义屏蔽词 CSV".into(),
-                description: "可选。CSV 每行“屏蔽词,替换词”；第二列留空时替换为等长星号。支持 UTF-8 / GBK / UTF-16，推荐 UTF-8。"
+                display_name: "自己的词库".into(),
+                description: "不选就用默认词库。选了文件就改用你的。"
                     .into(),
                 kind: ProcessorConfigFieldKind::File,
                 required: false,
@@ -318,7 +318,11 @@ mod tests {
 
         // GBK（Windows 中文 ANSI）：你=C4E3，好=BAC3
         let gbk_path = dir.path().join("gbk.csv");
-        fs::write(&gbk_path, [0xC4u8, 0xE3, 0xBA, 0xC3, 0x2C, 0x68, 0x69, 0x0A]).unwrap();
+        fs::write(
+            &gbk_path,
+            [0xC4u8, 0xE3, 0xBA, 0xC3, 0x2C, 0x68, 0x69, 0x0A],
+        )
+        .unwrap();
         let rules = load_rules(&gbk_path).unwrap();
         assert_eq!(rules[0].pattern, "你好");
         assert_eq!(rules[0].replacement, "hi");
@@ -354,10 +358,11 @@ mod tests {
         let mut registry = kotone_core::postprocess::ProcessorRegistry::new();
         registry.register(Arc::new(BlocklistFilterFactory)).unwrap();
         let pipeline = PostProcessPipeline::compile(
-            &PostProcessingConfig {
-                enabled: true,
-                pipeline: PipelineConfig {
+            &PostProcessingConfig::with_pipeline(
+                true,
+                PipelineConfig {
                     id: "blocklist-test".into(),
+                    display_name: "屏蔽词测试".into(),
                     steps: vec![PipelineStepConfig {
                         id: "filter".into(),
                         processor_id: PROCESSOR_ID.into(),
@@ -367,7 +372,7 @@ mod tests {
                         on_error: StepFailurePolicy::Required,
                     }],
                 },
-            },
+            ),
             &registry,
         )
         .unwrap();
@@ -398,7 +403,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.text, "你真**，这波厉害");
+        assert_eq!(result.text, "你真**，这波NB");
     }
 
     #[test]

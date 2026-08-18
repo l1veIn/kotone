@@ -140,13 +140,14 @@ mod tests {
         registry: &ProcessorRegistry,
     ) -> PostProcessPipeline {
         PostProcessPipeline::compile(
-            &PostProcessingConfig {
-                enabled: true,
-                pipeline: PipelineConfig {
+            &PostProcessingConfig::with_pipeline(
+                true,
+                PipelineConfig {
                     id: "test".into(),
+                    display_name: "测试".into(),
                     steps,
                 },
-            },
+            ),
             registry,
         )
         .unwrap()
@@ -194,16 +195,17 @@ mod tests {
     async fn pipeline_resolves_registered_processors_and_preserves_step_order() {
         let mut registry = ProcessorRegistry::new();
         register_builtin(&mut registry).unwrap();
-        let config = PostProcessingConfig {
-            enabled: true,
-            pipeline: PipelineConfig {
+        let config = PostProcessingConfig::with_pipeline(
+            true,
+            PipelineConfig {
                 id: "ordered".into(),
+                display_name: "顺序".into(),
                 steps: vec![
                     step("punctuation", "mock.append-exclamation"),
                     step("wrapper", "mock.wrap-brackets"),
                 ],
             },
-        };
+        );
         let pipeline = PostProcessPipeline::compile(&config, &registry).unwrap();
 
         let result = pipeline
@@ -265,6 +267,7 @@ mod tests {
         register_builtin(&mut registry).unwrap();
         let pipeline = PipelineConfig {
             id: "tryout".into(),
+            display_name: "试跑".into(),
             steps: vec![
                 step("punctuation", "mock.append-exclamation"),
                 step("wrapper", "mock.wrap-brackets"),

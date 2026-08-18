@@ -737,8 +737,9 @@ async fn test_post_processing(
             .read()
             .unwrap()
             .post_processing
-            .pipeline
-            .clone()
+            .active_pipeline()
+            .cloned()
+            .unwrap_or_default()
     });
     kotone_core::postprocess::test_post_processing(text, pipeline, &state.processors).await
 }

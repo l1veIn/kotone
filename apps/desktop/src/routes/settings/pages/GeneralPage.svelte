@@ -17,6 +17,7 @@
     type InteractionMode,
   } from "../../../lib/ipc";
   import { captureHotkey } from "../../../lib/hotkeyCapture";
+  import Select from "../../../lib/components/Select.svelte";
   import { combosConflict } from "../../../lib/hotkeyCombo";
   import {
     settingsStore,
@@ -282,24 +283,23 @@
     <!-- 麦克风 -->
     <section class="kotone-panel mt-4 p-4">
       <h2 class="text-sm font-semibold text-kotone-cyan/90">麦克风</h2>
-      <select
-        class="mt-3 w-full rounded-lg bg-white/8 px-2.5 py-2 text-sm ring-1 ring-white/15 outline-none focus:ring-kotone-cyan/60 [&>option]:bg-kotone-deep"
-        value={$settingsStore.audioDeviceId}
-        onchange={async (e) => {
-          const id = (e.target as HTMLSelectElement).value;
-          try {
-            await setAudioDevice(id);
-            settingsStore.update((s) => (s ? { ...s, audioDeviceId: id } : s));
-            toast(true, "麦克风已切换");
-          } catch (err) {
-            toast(false, `切换麦克风失败：${errText(err)}`);
-          }
-        }}
-      >
-        {#each devices as d}
-          <option value={d.id}>{d.name}</option>
-        {/each}
-      </select>
+      <div class="mt-3">
+        <Select
+          size="md"
+          ariaLabel="麦克风"
+          value={$settingsStore.audioDeviceId}
+          options={devices.map((device) => ({ value: device.id, label: device.name }))}
+          onchange={async (id) => {
+            try {
+              await setAudioDevice(id);
+              settingsStore.update((s) => (s ? { ...s, audioDeviceId: id } : s));
+              toast(true, "麦克风已切换");
+            } catch (err) {
+              toast(false, `切换麦克风失败：${errText(err)}`);
+            }
+          }}
+        />
+      </div>
     </section>
 
     {#if needsElevation}

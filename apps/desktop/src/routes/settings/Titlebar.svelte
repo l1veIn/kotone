@@ -1,7 +1,7 @@
 <script lang="ts">
   /*
    * 标准标题栏（main 窗 decorations:false，方向 B 富化，高 48px）：
-   * - 左：Kotone 小圆图标（青光晕）+ 名称 + 状态区两行（上行：状态灯 + 相位文字；
+   * - 左：Kotone 圆角图标（青光晕）+ 名称 + 状态区两行（上行：状态灯 + 相位文字；
    *   下行：引擎 · 模型 · 交互模式）；
    * - 右：运行中显示 CPU/内存占用（2s 轮询）+ 启动/停止/重启生效按钮
    *   + 标准窗口控制两键（min / close，最右上角；conf 已设 maximizable:false）；
@@ -151,7 +151,7 @@
       <img
         src={iconSrc}
         alt=""
-        class="h-8 w-8 shrink-0 rounded-full ring-1 ring-kotone-cyan/70 shadow-glow-cyan object-cover"
+        class="h-8 w-8 shrink-0 rounded-[22%] ring-1 ring-kotone-cyan/70 shadow-glow-cyan object-cover"
       />
       <p class="shrink-0 text-xs font-bold tracking-wide">
         Kotone <span class="font-medium text-white/55">琴音</span>
