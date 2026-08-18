@@ -268,13 +268,11 @@ mod tests {
             TAIL_PADDING_MS * 16,
             "16kHz 每秒 16000 采样"
         );
-        assert!(
-            TAIL_PADDING_MS >= 480,
-            "尾帧须覆盖 X-ASR 480ms chunk 的 lookahead：{TAIL_PADDING_MS}"
-        );
-        assert!(
-            (64..=4096).contains(&MAX_FINALIZE_DECODE_ROUNDS),
-            "防挂死上限应在合理区间：{MAX_FINALIZE_DECODE_ROUNDS}"
+        // 编译期合同：常量比较不要写成运行时 assert!（clippy::assertions_on_constants）
+        const _: () = assert!(TAIL_PADDING_MS >= 480, "尾帧须覆盖 X-ASR 480ms lookahead");
+        const _: () = assert!(
+            MAX_FINALIZE_DECODE_ROUNDS >= 64 && MAX_FINALIZE_DECODE_ROUNDS <= 4096,
+            "防挂死上限应在 64..=4096"
         );
     }
 
