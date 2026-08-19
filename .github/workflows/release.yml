@@ -57,7 +57,7 @@ jobs:
           workspaces: .
           # Keep sherpa-onnx-sys native libraries alongside Cargo artifacts.
           cache-directories: target/sherpa-onnx-prebuilt
-          prefix-key: v1-rust
+          prefix-key: v2-rust
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

@@ -42,7 +42,7 @@ jobs:
           # dependency artifacts. Keep them explicitly; rust-cache otherwise
           # prunes the files but leaves the directory, which fools its build.rs.
           cache-directories: target/sherpa-onnx-prebuilt
-          prefix-key: v1-rust
+          prefix-key: v2-rust
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
