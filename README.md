@@ -17,6 +17,16 @@
   <img src="https://img.shields.io/badge/STT-100%25%20local-7B2FFF?style=flat-square" alt="local stt">
 </p>
 
+<div align="center">
+
+https://github.com/user-attachments/assets/b0b9a55f-9d74-4bdc-ba55-de02883a8d7f
+
+</div>
+
+<p align="center">
+  <samp>按住热键说话，松手进游戏聊天框。</samp>
+</p>
+
 <p align="center">
   <samp>
     <a href="#-为什么需要-kotone">为什么</a> ·
