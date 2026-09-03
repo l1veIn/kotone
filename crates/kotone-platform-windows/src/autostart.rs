@@ -47,8 +47,7 @@ pub fn autostart_enabled() -> bool {
             None,
             None,
         )
-        .0
-            == 0;
+        .0 == 0;
         let _ = RegCloseKey(hkey);
         present
     }
@@ -82,7 +81,10 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
             Some(&mut disposition),
         );
         if opened.0 != 0 {
-            return Err(format!("打开启动项注册表失败: win32 error 0x{:08X}", opened.0));
+            return Err(format!(
+                "打开启动项注册表失败: win32 error 0x{:08X}",
+                opened.0
+            ));
         }
 
         let result = if enabled {
@@ -104,7 +106,10 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
         if result.0 == 0 || result.0 == ERROR_FILE_NOT_FOUND.0 {
             Ok(())
         } else {
-            Err(format!("更新开机启动项失败: win32 error 0x{:08X}", result.0))
+            Err(format!(
+                "更新开机启动项失败: win32 error 0x{:08X}",
+                result.0
+            ))
         }
     }
 }

@@ -1071,10 +1071,7 @@ impl Orchestrator {
                 }),
             );
         }
-        self.emit_process(
-            "capture_started",
-            json!({ "resumed": resumed }),
-        );
+        self.emit_process("capture_started", json!({ "resumed": resumed }));
         Ok(())
     }
 

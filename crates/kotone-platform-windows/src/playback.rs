@@ -334,7 +334,10 @@ mod tests {
             assert!(peak_of(&pcm) <= 0.85 + 1e-4, "{id:?} 峰值超界");
             // 多段音（叮咚/啁啾/叩）应含 ≥5ms 静音分隔（80 个零样本）
             let has_gap = pcm.windows(80).any(|w| w.iter().all(|s| *s == 0.0));
-            if matches!(id, SfxId::DingUp | SfxId::ChirpUp | SfxId::Knock | SfxId::DingDown) {
+            if matches!(
+                id,
+                SfxId::DingUp | SfxId::ChirpUp | SfxId::Knock | SfxId::DingDown
+            ) {
                 assert!(has_gap, "{id:?} 应有段间静音");
                 zeroed_seen = true;
             }

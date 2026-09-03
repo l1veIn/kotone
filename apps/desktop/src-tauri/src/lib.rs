@@ -28,7 +28,9 @@ use kotone_core::settings::{
 use kotone_core::stt::{EngineInfo, EngineRegistry};
 use kotone_core::{log, process_log};
 use kotone_platform_windows::inject::{WinFocusBackend, WindowsInjector};
-use kotone_platform_windows::{audio as platform_audio, autostart, elevation, fullscreen, playback};
+use kotone_platform_windows::{
+    audio as platform_audio, autostart, elevation, fullscreen, playback,
+};
 use kotone_stt::model;
 use runtime::{RuntimeManager, RuntimeStatus};
 
