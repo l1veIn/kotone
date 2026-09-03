@@ -3,10 +3,12 @@
   import { save as saveDialog } from "@tauri-apps/plugin-dialog";
   import {
     exportDiagnostics,
+    getAutostartEnabled,
     getElevationStatus,
     getHotkeyStatus,
     isTauri,
     restartAsAdmin,
+    setAutostartEnabled,
     type ElevationStatus,
     type HotkeyStatus,
   } from "../../../../lib/ipc";
@@ -22,17 +24,32 @@
   let hotkeyStatus = $state<HotkeyStatus | null>(null);
   let restartingAsAdmin = $state(false);
   let exportingDiagnostics = $state(false);
+  /** 开机自启真实状态（注册表）；null = 读取中 */
+  let autostartEnabled = $state<boolean | null>(null);
 
   onMount(async () => {
-    [elevation, hotkeyStatus] = await Promise.all([
+    [elevation, hotkeyStatus, autostartEnabled] = await Promise.all([
       getElevationStatus().catch(() => null),
       getHotkeyStatus().catch(() => null),
+      getAutostartEnabled().catch(() => null),
     ]);
     if (localStorage.getItem(ADMIN_RESTART_FLAG)) {
       localStorage.removeItem(ADMIN_RESTART_FLAG);
       if (elevation?.elevated) toast(true, "已通过管理员权限运行");
     }
   });
+
+  /** 开机自启开关：写注册表后回读真值（用户在任务管理器禁用后开关也会回到关闭） */
+  async function onAutostartChange(enabled: boolean) {
+    try {
+      await setAutostartEnabled(enabled);
+      autostartEnabled = await getAutostartEnabled().catch(() => enabled);
+      toast(true, enabled ? "已开启开机自动启动" : "已关闭开机自动启动");
+    } catch (error) {
+      autostartEnabled = await getAutostartEnabled().catch(() => autostartEnabled ?? false);
+      toast(false, `开机自启设置失败：${errText(error)}`);
+    }
+  }
 
   async function onHotkeyBackendChange(hotkeyBackend: string) {
     await patchSettings({ hotkeyBackend }, "热键兼容模式已更新");
@@ -92,6 +109,13 @@
 
   <section class="kotone-panel mt-3 flex flex-col gap-4 p-4">
     <h2 class="text-sm font-semibold text-kotone-cyan/90">运行时</h2>
+    <Toggle
+      checked={autostartEnabled ?? false}
+      disabled={autostartEnabled === null}
+      label="开机自动启动"
+      desc="登录 Windows 后自动打开 Kotone（仅当前用户）· 与系统启动项实时同步"
+      onchange={(v) => void onAutostartChange(v)}
+    />
     <Toggle
       checked={$settingsStore.ui.autoStart}
       label="启动 Kotone 后自动开始运行"

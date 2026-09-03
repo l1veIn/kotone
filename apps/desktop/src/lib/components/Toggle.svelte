@@ -8,9 +8,10 @@
     label: string;
     desc?: string;
     ariaLabel?: string;
+    disabled?: boolean;
     onchange: (checked: boolean) => void;
   }
-  let { checked, label, desc = "", ariaLabel = label, onchange }: Props = $props();
+  let { checked, label, desc = "", ariaLabel = label, disabled = false, onchange }: Props = $props();
 </script>
 
 <label class="flex cursor-pointer items-center justify-between gap-4">
@@ -25,6 +26,7 @@
     aria-label={ariaLabel}
     class="peer sr-only"
     {checked}
+    {disabled}
     onchange={(e) => onchange((e.target as HTMLInputElement).checked)}
   />
   <span

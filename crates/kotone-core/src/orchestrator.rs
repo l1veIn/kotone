@@ -550,6 +550,16 @@ impl Orchestrator {
 
     /// 开始一次「按下到松手」的会话：建 STT session → 开录音 → Listening
     pub async fn begin(&self) -> Result<(), String> {
+        self.begin_inner(false).await
+    }
+
+    /// solo 连续模式逐句续录：与 begin 同路径，但「录制音」提示由壳做区分
+    /// （capture_started 事件带 resumed=true，不播录制音效，只保留逐句发送音）。
+    async fn begin_resumed(&self) -> Result<(), String> {
+        self.begin_inner(true).await
+    }
+
+    async fn begin_inner(&self, resumed: bool) -> Result<(), String> {
         let _op = self.op.lock().await;
         {
             let mut inner = self.inner.lock().unwrap();
@@ -558,7 +568,7 @@ impl Orchestrator {
             }
             inner.process_case_id = Some(format!("session-{}", crate::eval::new_session_id()));
         }
-        match self.begin_locked() {
+        match self.begin_locked(resumed) {
             Ok(()) => Ok(()),
             Err(e) => {
                 // 开始失败（如引擎/麦克风未就绪）：Error 保持到用户关闭或重试
@@ -572,7 +582,7 @@ impl Orchestrator {
         }
     }
 
-    fn begin_locked(&self) -> Result<(), SessionBeginError> {
+    fn begin_locked(&self, resumed: bool) -> Result<(), SessionBeginError> {
         let settings = self.settings.read().unwrap().clone();
         let stt_settings = self
             .runtime_stt_settings
@@ -1061,7 +1071,10 @@ impl Orchestrator {
                 }),
             );
         }
-        self.emit_process("capture_started", json!({}));
+        self.emit_process(
+            "capture_started",
+            json!({ "resumed": resumed }),
+        );
         Ok(())
     }
 
@@ -1203,9 +1216,9 @@ impl Orchestrator {
                     }
                     self.emit_state(OrchestratorState::Idle, None);
                     // solo 连续模式：立即开下一段（同 schedule_idle 的 continuous 处理；
-                    // begin 失败走自身 toast_error 收尾）
+                    // begin 失败走自身 toast_error 收尾；续录不重复播「录制音」
                     if continuous {
-                        let _ = self.begin().await;
+                        let _ = self.begin_resumed().await;
                     }
                     return Ok(());
                 }
@@ -1818,7 +1831,8 @@ impl Orchestrator {
         self.write_history(history_write.0, history_write.1);
         if resume_continuous {
             // solo 不显示 Success toast，也不等待 toast_dwell：发送落账后立即开始下一段。
-            let _ = self.begin().await;
+            // 续录不重复播「录制音」（capture_started resumed=true）。
+            let _ = self.begin_resumed().await;
         } else {
             self.schedule_idle(gen);
         }

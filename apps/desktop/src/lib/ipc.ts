@@ -154,6 +154,26 @@ export interface Settings {
   download: DownloadConfig;
   /** 悬浮窗配置 */
   overlay: OverlayConfig;
+  /** 录音/发送音效提示 */
+  soundFeedback: SoundFeedbackConfig;
+}
+
+/** 音效提示配置（config.json `soundFeedback` 段） */
+export interface SoundFeedbackConfig {
+  /** 录制音：按下热键开始录音时播放 */
+  record: SoundFeedbackItem;
+  /** 发送音：消息注入游戏成功时播放 */
+  send: SoundFeedbackItem;
+}
+
+/** 单个音效（录制/发送）配置 */
+export interface SoundFeedbackItem {
+  /** 是否启用（默认 true） */
+  enabled: boolean;
+  /** 音量百分比 0-100（默认 60） */
+  volume: number;
+  /** 内置音效 id：record 用 rise/ding-up/chirp-up；send 用 fall/knock/ding-down */
+  soundId: string;
 }
 
 /** 悬浮窗配置（config.json `overlay` 段） */
@@ -525,6 +545,10 @@ const mock: MockStore = {
       position: "auto",
       draggable: false,
       clickThrough: true,
+    },
+    soundFeedback: {
+      record: { enabled: true, volume: 60, soundId: "rise" },
+      send: { enabled: true, volume: 60, soundId: "fall" },
     },
   },
   devices: [
@@ -1228,6 +1252,34 @@ export async function restartAsAdmin(): Promise<void> {
     return;
   }
   return invoke<void>("restart_as_admin");
+}
+
+/** [mock] 浏览器模式下的开机自启状态（内存态，保证设置页行为与 e2e 表现一致） */
+let mockAutostartEnabled = false;
+
+/** 读取「开机自动启动」系统真实状态（HKCU Run 键 Kotone 值是否存在） */
+export async function getAutostartEnabled(): Promise<boolean> {
+  if (!isTauri) return mockAutostartEnabled;
+  return invoke<boolean>("get_autostart_enabled");
+}
+
+/** 设置「开机自动启动」：写入 / 删除 HKCU Run 键（值名与 NSIS 卸载清理一致） */
+export async function setAutostartEnabled(enabled: boolean): Promise<void> {
+  if (!isTauri) {
+    mockAutostartEnabled = enabled;
+    console.info(`[mock] set_autostart_enabled ${enabled}`);
+    return;
+  }
+  await invoke<void>("set_autostart_enabled", { enabled });
+}
+
+/** 试听内置提示音（设置页「音效」tab）：record/send + 音效 id（缺省按事件默认） */
+export async function previewSfx(kind: "record" | "send", soundId?: string): Promise<void> {
+  if (!isTauri) {
+    console.info(`[mock] preview_sfx ${kind} ${soundId ?? ""}`);
+    return;
+  }
+  await invoke<void>("preview_sfx", { kind, soundId: soundId ?? null });
 }
 
 /** 热键注册状态（registered/key/error/backend），设置页热键分区展示占用冲突 */

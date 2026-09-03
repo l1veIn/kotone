@@ -6,6 +6,7 @@
   import ConnectionsSection from "./advanced/ConnectionsSection.svelte";
   import HotkeysSection from "./advanced/HotkeysSection.svelte";
   import ModelsSection from "./advanced/ModelsSection.svelte";
+  import SoundSection from "./advanced/SoundSection.svelte";
   import SystemSection from "./advanced/SystemSection.svelte";
   import TuningSection from "./advanced/TuningSection.svelte";
   import type { AdvancedSection } from "./advanced/types";
@@ -25,6 +26,7 @@
     { id: "models", label: "模型" },
     { id: "connections", label: "API 连接" },
     { id: "hotkeys", label: "其他热键" },
+    { id: "sound", label: "音效" },
     { id: "tuning", label: "调参" },
   ];
 </script>
@@ -58,6 +60,8 @@
       <ConnectionsSection />
     {:else if section === "hotkeys"}
       <HotkeysSection />
+    {:else if section === "sound"}
+      <SoundSection />
     {:else if section === "tuning"}
       <TuningSection />
     {:else if section === "system"}

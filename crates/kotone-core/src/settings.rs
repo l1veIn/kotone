@@ -93,6 +93,9 @@ pub struct Settings {
     /// 悬浮窗配置（显示模式等，见 OverlayConfig）
     #[serde(default)]
     pub overlay: OverlayConfig,
+    /// 录音/发送音效提示（见 SoundFeedbackConfig；默认开启，音量 60）
+    #[serde(default)]
+    pub sound_feedback: SoundFeedbackConfig,
     /// silero VAD 内部参数（ADR-007；one-shot/solo 生效）。
     /// 与 `vad_silence_ms`（判停阈值，SilenceStopTracker 用）独立——
     /// 这里控制 silero 模型的帧级判定灵敏度。默认对齐 kotone-stt vad.rs 原硬编码值。
@@ -120,6 +123,65 @@ pub struct UiConfig {
     /// app 启动后自动进入 Running（warmup 引擎 + 注册热键 + 显示悬浮窗）；默认 false
     #[serde(default)]
     pub auto_start: bool,
+}
+
+/// 录音/发送音效提示（config.json `soundFeedback` 段）。
+///
+/// 面向不开悬浮窗/全屏游戏场景：开始监听时播放「录制音」（上扬），
+/// 消息发送成功时播放「发送音」（下沉）。录制音与发送音独立开关、
+/// 独立音量、各自从 3 个内置音效中选择（soundId），未来各自支持自定义上传。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SoundFeedbackConfig {
+    #[serde(default)]
+    pub record: SoundFeedbackItemConfig,
+    #[serde(default)]
+    pub send: SoundFeedbackItemConfig,
+}
+
+impl Default for SoundFeedbackConfig {
+    fn default() -> Self {
+        Self {
+            record: SoundFeedbackItemConfig::default(),
+            send: SoundFeedbackItemConfig {
+                sound_id: "fall".into(),
+                ..SoundFeedbackItemConfig::default()
+            },
+        }
+    }
+}
+
+/// 单个音效（录制/发送）配置
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SoundFeedbackItemConfig {
+    /// 是否启用（默认 true）
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// 音量百分比 0-100（默认 60；使用时 clamp 后转增益）
+    #[serde(default = "default_sound_feedback_volume")]
+    pub volume: u8,
+    /// 内置音效 id（rise/ding-up/chirp-up | fall/knock/ding-down；默认 rise）
+    #[serde(default = "default_record_sound_id")]
+    pub sound_id: String,
+}
+
+impl Default for SoundFeedbackItemConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            volume: 60,
+            sound_id: "rise".into(),
+        }
+    }
+}
+
+fn default_sound_feedback_volume() -> u8 {
+    SoundFeedbackItemConfig::default().volume
+}
+
+fn default_record_sound_id() -> String {
+    SoundFeedbackItemConfig::default().sound_id
 }
 
 /// 模型存储配置（config.json `models` 段）
@@ -360,6 +422,7 @@ impl Default for Settings {
             models: ModelsConfig::default(),
             download: DownloadConfig::default(),
             overlay: OverlayConfig::default(),
+            sound_feedback: SoundFeedbackConfig::default(),
             vad: VadConfig::default(),
             hotwords_score: default_hotwords_score(),
             post_processing: crate::postprocess::PostProcessingConfig::default(),
@@ -1073,6 +1136,47 @@ mod tests {
         assert_eq!(s.vad.min_speech_ms, 50);
         assert_eq!(s.vad.min_silence_ms, 50);
         assert_eq!(s.hotwords_score, 3.5, "老配置缺 hotwordsScore 合并默认");
+        assert!(
+            s.sound_feedback.record.enabled && s.sound_feedback.send.enabled,
+            "老配置缺 soundFeedback 段合并默认 = 两者开启"
+        );
+        assert_eq!(s.sound_feedback.record.volume, 60);
+        assert_eq!(s.sound_feedback.send.volume, 60);
+        assert_eq!(s.sound_feedback.record.sound_id, "rise", "录制音默认上扬");
+        assert_eq!(s.sound_feedback.send.sound_id, "fall", "发送音默认下沉");
+    }
+
+    #[test]
+    fn sound_feedback_partial_patch_preserves_siblings() {
+        // 音效卡片只 patch 单项的某个键：其余键与另一项全部保留
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{ "soundFeedback": { "record": { "enabled": false, "soundId": "chirp-up" }, "send": { "volume": 40 } } }"#,
+        )
+        .unwrap();
+        let s = load_from(&path);
+        assert!(!s.sound_feedback.record.enabled);
+        assert_eq!(s.sound_feedback.record.sound_id, "chirp-up");
+        assert_eq!(s.sound_feedback.record.volume, 60);
+        assert_eq!(s.sound_feedback.send.volume, 40);
+        assert_eq!(s.sound_feedback.send.sound_id, "fall");
+        assert!(s.sound_feedback.send.enabled);
+
+        let mut merged = serde_json::to_value(&s).unwrap();
+        merge_json(
+            &mut merged,
+            &serde_json::json!({ "soundFeedback": { "record": { "volume": 25 } } }),
+        );
+        let patched: Settings = serde_json::from_value(merged).unwrap();
+        assert!(
+            !patched.sound_feedback.record.enabled,
+            "未 patch 的 enabled 保留"
+        );
+        assert_eq!(patched.sound_feedback.record.sound_id, "chirp-up");
+        assert_eq!(patched.sound_feedback.record.volume, 25);
+        assert_eq!(patched.sound_feedback.send.volume, 40, "另一项不受影响");
     }
 
     #[test]

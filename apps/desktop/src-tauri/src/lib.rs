@@ -28,7 +28,7 @@ use kotone_core::settings::{
 use kotone_core::stt::{EngineInfo, EngineRegistry};
 use kotone_core::{log, process_log};
 use kotone_platform_windows::inject::{WinFocusBackend, WindowsInjector};
-use kotone_platform_windows::{audio as platform_audio, elevation, fullscreen};
+use kotone_platform_windows::{audio as platform_audio, autostart, elevation, fullscreen, playback};
 use kotone_stt::model;
 use runtime::{RuntimeManager, RuntimeStatus};
 
@@ -341,8 +341,39 @@ impl Emitter for TauriEmitter {
             }
         } else if event == "kotone://process" {
             record_process_event(&self.app, &payload);
+            maybe_play_feedback_sfx(&self.app, &payload);
         }
     }
+}
+
+/// 热键音效反馈：开始监听 → 录制音（soundFeedback.record）；消息注入成功 → 发送音
+/// （soundFeedback.send）。两者独立开关/音量/音效选择；solo 逐句续录不重复播录制音。
+/// 播放非阻塞、失败只记 stderr，不影响语音链路。
+fn maybe_play_feedback_sfx(app: &AppHandle, payload: &serde_json::Value) {
+    let Some(activity) = payload.get("activity").and_then(|v| v.as_str()) else {
+        return;
+    };
+    let Some(state) = app.try_state::<SharedState>() else {
+        return;
+    };
+    let sfx = state.settings.read().unwrap().sound_feedback.clone();
+    let (item, is_record) = match activity {
+        "capture_started" => {
+            if payload.pointer("/data/resumed").and_then(|v| v.as_bool()) == Some(true) {
+                return; // solo 逐句续录：只留发送音
+            }
+            (sfx.record, true)
+        }
+        "injection_succeeded" => (sfx.send, false),
+        _ => return,
+    };
+    if !item.enabled || item.volume == 0 {
+        return;
+    }
+    let id = playback::SfxId::from_id(&item.sound_id)
+        .unwrap_or_else(|| playback::SfxId::default_for(is_record));
+    let gain = (item.volume as f32).clamp(0.0, 100.0) / 100.0;
+    playback::play_sfx(id, gain);
 }
 
 fn record_process_event(app: &AppHandle, payload: &serde_json::Value) {
@@ -1050,6 +1081,35 @@ fn restart_as_admin(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// ---------- 开机自启 ----------
+
+/// 读取「开机自动启动」系统真实状态（HKCU Run 键 Kotone 值是否存在）。
+/// 用户在任务管理器「启动」里禁用后这里返回 false，设置页据此与系统同步。
+#[tauri::command]
+fn get_autostart_enabled() -> bool {
+    autostart::autostart_enabled()
+}
+
+/// 设置「开机自动启动」：写入 / 删除 HKCU Run 键（无参数启动；
+/// 值名与 NSIS 卸载清理共用，卸载时自动移除）。
+#[tauri::command]
+fn set_autostart_enabled(enabled: bool) -> Result<(), String> {
+    autostart::set_autostart(enabled)
+}
+
+// ---------- 音效提示 ----------
+
+/// 试听内置提示音（设置页「音效」tab）：kind = record/send；soundId 缺失时按事件默认。
+#[tauri::command]
+fn preview_sfx(kind: String, sound_id: Option<String>) {
+    let is_record = kind != "send";
+    let id = sound_id
+        .as_deref()
+        .and_then(playback::SfxId::from_id)
+        .unwrap_or_else(|| playback::SfxId::default_for(is_record));
+    playback::play_sfx(id, 0.8);
+}
+
 // ---------- 模型 / 评测 ----------
 
 #[tauri::command]
@@ -1746,6 +1806,9 @@ pub fn run() {
             start_hotkey_capture,
             cancel_hotkey_capture,
             restart_as_admin,
+            get_autostart_enabled,
+            set_autostart_enabled,
+            preview_sfx,
             list_models,
             download_model,
             cancel_download,

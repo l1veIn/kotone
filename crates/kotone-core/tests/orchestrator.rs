@@ -1803,6 +1803,30 @@ async fn solo_send_returns_to_listening() {
     );
     assert_eq!(sent.lock().unwrap().len(), 1, "续段无语音不应重复发送");
 
+    // ADR-010：自动续录的 capture_started 必须带 resumed=true（壳据此不重复播录制音）
+    let starts: Vec<serde_json::Value> = {
+        let events = emitter.events.lock().unwrap();
+        events
+            .iter()
+            .filter(|(e, p)| {
+                e == "kotone://process"
+                    && p.get("activity").and_then(|a| a.as_str()) == Some("capture_started")
+            })
+            .map(|(_, p)| p.get("data").cloned().unwrap_or_default())
+            .collect()
+    };
+    assert_eq!(starts.len(), 2, "首段 + 自动续录应各一次 capture_started");
+    assert_eq!(
+        starts[0].get("resumed").and_then(|v| v.as_bool()),
+        Some(false),
+        "用户按下的首段不是 resumed"
+    );
+    assert_eq!(
+        starts[1].get("resumed").and_then(|v| v.as_bool()),
+        Some(true),
+        "solo 自动续录应标记 resumed=true"
+    );
+
     // 停止：再点按热键 → Idle
     orch.on_hotkey_toggle().await;
     wait_state(&orch, OrchestratorState::Idle, Duration::from_secs(2)).await;

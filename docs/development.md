@@ -460,6 +460,18 @@ simulate_send(text, profileId) -> Result<(), InjectError>   // v3：走真实发
   "download": {                    // v15 模型下载源
     "source": "auto",              // auto（镜像优先+回退）| official | mirror
     "ghProxy": "https://ghfast.top/" // GitHub 加速代理前缀（公益服务不稳定，失效可换）
+  },
+  "soundFeedback": {               // 热键音效提示（ADR-010）
+    "record": {                    // 录制音：按下热键开始录音时播放
+      "enabled": true,
+      "volume": 60,                // 音量百分比 0-100（各自独立）
+      "soundId": "rise"            // rise | ding-up | chirp-up
+    },
+    "send": {                      // 发送音：消息注入游戏成功时播放
+      "enabled": true,
+      "volume": 60,
+      "soundId": "fall"            // fall | knock | ding-down
+    }
   }
 }
 ```

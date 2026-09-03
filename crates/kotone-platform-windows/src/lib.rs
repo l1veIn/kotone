@@ -9,6 +9,7 @@
 //!   （实现 core 的 HotkeySource 端口）
 
 pub mod audio;
+pub mod autostart;
 pub mod elevation;
 pub mod fullscreen;
 #[cfg(windows)]
