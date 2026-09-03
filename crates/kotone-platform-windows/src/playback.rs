@@ -212,10 +212,10 @@ fn play_pcm_blocking(device: &cpal::Device, pcm: &[f32]) -> Result<(), String> {
     let stream_config: cpal::StreamConfig = config.clone().into();
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => {
-            build_output_stream::<f32>(&device, &stream_config, shared.clone(), pos.clone())
+            build_output_stream::<f32>(device, &stream_config, shared.clone(), pos.clone())
         }
         cpal::SampleFormat::I16 => {
-            build_output_stream::<i16>(&device, &stream_config, shared.clone(), pos.clone())
+            build_output_stream::<i16>(device, &stream_config, shared.clone(), pos.clone())
         }
         fmt => return Err(format!("设备「{device_name}」输出采样格式不支持: {fmt:?}")),
     }

@@ -1766,20 +1766,20 @@ impl Orchestrator {
                 return;
             }
             inner.send_cancel = None;
-            // history 终态（锁外落账，见下方 write_history 调用；三个分支各自赋值一次）
-            let history_write: (crate::history::HistoryOutcome, Option<String>);
-            let mut resume_continuous = false;
+            // history 终态（锁外落账，见下方 write_history 调用；两个分支各自产出
+            // (outcome, 错误信息, 是否持续续录)，直接用 match 表达式——新 clippy
+            // `unneeded late initialization` 会拒绝「先声明再在两个分支赋值」的写法。
             match result {
                 Ok(()) => {
                     inner.pending_text = None;
-                    resume_continuous = inner.continuous_session;
-                    inner.state = if resume_continuous {
+                    let resuming = inner.continuous_session;
+                    inner.state = if resuming {
                         OrchestratorState::Idle
                     } else {
                         OrchestratorState::Success
                     };
                     drop(inner);
-                    if !resume_continuous {
+                    if !resuming {
                         self.emit_state(OrchestratorState::Success, Some(json!({ "text": text })));
                     }
                     self.emit_process(
@@ -1789,7 +1789,7 @@ impl Orchestrator {
                             "durationMs": injection_started_at.elapsed().as_millis() as u64
                         }),
                     );
-                    history_write = (crate::history::HistoryOutcome::Sent, None);
+                    ((crate::history::HistoryOutcome::Sent, None), resuming)
                 }
                 Err(e) => {
                     // Error 保留 ReadyText，前端/confirm_send 可重试（§4.1）；
@@ -1820,10 +1820,12 @@ impl Orchestrator {
                             "durationMs": injection_started_at.elapsed().as_millis() as u64
                         }),
                     );
-                    history_write = (crate::history::HistoryOutcome::Error, Some(e.message));
+                    (
+                        (crate::history::HistoryOutcome::Error, Some(e.message)),
+                        false,
+                    )
                 }
             }
-            (history_write, resume_continuous)
         };
         self.write_history(history_write.0, history_write.1);
         if resume_continuous {
