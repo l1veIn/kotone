@@ -16,7 +16,7 @@ use kotone_core::audio::AudioDevice;
 use kotone_core::connection::{Connection, ConnectionResolver, SecretStore};
 use kotone_core::inject::{CancelToken, FocusBackend, InjectError, Injector};
 use kotone_core::interaction::effective_hotkey_mode;
-use kotone_core::orchestrator::{Emitter, Orchestrator};
+use kotone_core::orchestrator::{Emitter, Orchestrator, OrchestratorState};
 use kotone_core::profile::{
     self, format_hotwords_export, GameProfile, HotwordMergeReport, ProfileDeleteOutcome,
 };
@@ -37,7 +37,7 @@ use runtime::{RuntimeManager, RuntimeStatus};
 /// 全局共享状态：settings 双端共享，orchestrator 是唯一业务状态所有者
 pub struct SharedState {
     pub settings: Arc<RwLock<Settings>>,
-    settings_repository: SettingsRepository,
+    settings_repository: Arc<SettingsRepository>,
     settings_load_warning: Mutex<Option<String>>,
     pub orchestrator: Arc<Orchestrator>,
     pub engines: Arc<EngineRegistry>,
@@ -176,10 +176,111 @@ fn overlay_window_action(
     }
 }
 
+fn orchestrator_state_label(state: OrchestratorState) -> &'static str {
+    match state {
+        OrchestratorState::Idle => "idle",
+        OrchestratorState::Listening => "listening",
+        OrchestratorState::Transcribing => "transcribing",
+        OrchestratorState::Processing => "processing",
+        OrchestratorState::Preview => "preview",
+        OrchestratorState::Sending => "sending",
+        OrchestratorState::Success => "success",
+        OrchestratorState::Error => "error",
+    }
+}
+
+/// OnDemand 瞬时提示只在窗口本就会藏时 peek；Show/Keep 时 peek 会 vis_gen 误藏会话 UI。
+fn should_peek_on_demand_notice(action: OnDemandOverlayAction) -> bool {
+    matches!(
+        action,
+        OnDemandOverlayAction::Hide | OnDemandOverlayAction::HideSuccessAfterDwell
+    )
+}
+
+fn current_overlay_action(app: &AppHandle) -> Option<(OverlayVisibility, OnDemandOverlayAction)> {
+    let shared = app.try_state::<SharedState>()?;
+    let visibility = shared.settings.read().unwrap().overlay.visibility;
+    let continuous = shared.orchestrator.continuous_session();
+    let state = orchestrator_state_label(shared.orchestrator.state());
+    let running = app
+        .try_state::<RuntimeManager>()
+        .map(|rt| rt.phase() == RuntimePhase::Running)
+        .unwrap_or(false);
+    Some((
+        visibility,
+        overlay_window_action(visibility, state, continuous, running),
+    ))
+}
+
+fn record_overlay_event(activity: &str, reason: &str, fullscreen: Option<bool>) {
+    let fs = match fullscreen {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "unknown",
+    };
+    process_log::record_activity(
+        activity,
+        process_log::EventData {
+            detail: Some(format!("reason={reason} fullscreen={fs}")),
+            ..Default::default()
+        },
+    );
+}
+
+fn peek_on_demand_overlay(
+    app: &AppHandle,
+    vis_gen: &Arc<std::sync::atomic::AtomicU64>,
+    reason: &'static str,
+    hide_after_ms: u64,
+) {
+    let Some((visibility, action)) = current_overlay_action(app) else {
+        return;
+    };
+    if visibility != OverlayVisibility::OnDemand || !should_peek_on_demand_notice(action) {
+        return;
+    }
+    let fullscreen = fullscreen::is_exclusive_fullscreen_active();
+    if fullscreen == Some(true) {
+        log::log(&format!(
+            "{reason} overlay peek skipped: exclusive fullscreen game is active"
+        ));
+        record_overlay_event("fullscreen_state", reason, Some(true));
+        return;
+    }
+    if let Some(win) = app.get_webview_window("overlay") {
+        show_window_no_focus(&win);
+        record_overlay_event("overlay_show", reason, fullscreen);
+        let app = app.clone();
+        let vis_gen = vis_gen.clone();
+        let gen = vis_gen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(hide_after_ms)).await;
+            if vis_gen.load(std::sync::atomic::Ordering::SeqCst) != gen {
+                return;
+            }
+            let still_peek = current_overlay_action(&app)
+                .map(|(_, action)| should_peek_on_demand_notice(action))
+                .unwrap_or(true);
+            if !still_peek {
+                return;
+            }
+            if let Some(win) = app.get_webview_window("overlay") {
+                hide_window(&win);
+                record_overlay_event(
+                    "overlay_hide",
+                    reason,
+                    fullscreen::is_exclusive_fullscreen_active(),
+                );
+            }
+        });
+    }
+}
+
 #[cfg(test)]
 mod overlay_visibility_tests {
     use super::{
-        on_demand_overlay_action, overlay_window_action, OnDemandOverlayAction, OverlayVisibility,
+        on_demand_overlay_action, orchestrator_state_label, overlay_window_action,
+        should_peek_on_demand_notice, OnDemandOverlayAction, OrchestratorState, OverlayVisibility,
     };
 
     #[test]
@@ -212,6 +313,35 @@ mod overlay_visibility_tests {
                 "state={state}"
             );
         }
+    }
+
+    #[test]
+    fn pp_status_peeks_only_when_overlay_would_hide() {
+        assert!(should_peek_on_demand_notice(OnDemandOverlayAction::Hide));
+        assert!(should_peek_on_demand_notice(
+            OnDemandOverlayAction::HideSuccessAfterDwell
+        ));
+        assert!(!should_peek_on_demand_notice(OnDemandOverlayAction::Show));
+        assert!(!should_peek_on_demand_notice(OnDemandOverlayAction::Keep));
+    }
+
+    #[test]
+    fn orchestrator_state_label_matches_overlay_keys() {
+        assert_eq!(orchestrator_state_label(OrchestratorState::Idle), "idle");
+        assert_eq!(
+            orchestrator_state_label(OrchestratorState::Listening),
+            "listening"
+        );
+        assert_eq!(orchestrator_state_label(OrchestratorState::Error), "error");
+        assert_eq!(
+            overlay_window_action(
+                OverlayVisibility::OnDemand,
+                orchestrator_state_label(OrchestratorState::Listening),
+                false,
+                true
+            ),
+            OnDemandOverlayAction::Show
+        );
     }
 }
 
@@ -278,6 +408,7 @@ impl Emitter for TauriEmitter {
                     && fullscreen::is_exclusive_fullscreen_active() == Some(true);
                 if block_for_fullscreen {
                     hide_window(&win);
+                    record_overlay_event("fullscreen_state", "state", Some(true));
                     let _ = self.app.emit(
                         "kotone://fullscreen-warning",
                         serde_json::json!({ "exclusiveFullscreen": true }),
@@ -289,6 +420,7 @@ impl Emitter for TauriEmitter {
                             // Error 可能从 Idle 直接到达（例如音频设备打开失败），不能
                             // 假设 Listening 已经显示过窗口；它会保持到用户明确确认。
                             show_window_no_focus(&win);
+                            record_overlay_event("overlay_show", "state", Some(false));
                         }
                         OnDemandOverlayAction::HideSuccessAfterDwell => {
                             let app = self.app.clone();
@@ -300,47 +432,27 @@ impl Emitter for TauriEmitter {
                                 }
                                 if let Some(win) = app.get_webview_window("overlay") {
                                     hide_window(&win);
+                                    record_overlay_event(
+                                        "overlay_hide",
+                                        "success-dwell",
+                                        fullscreen::is_exclusive_fullscreen_active(),
+                                    );
                                 }
                             });
                         }
-                        OnDemandOverlayAction::Hide => hide_window(&win),
+                        OnDemandOverlayAction::Hide => {
+                            hide_window(&win);
+                            record_overlay_event("overlay_hide", "state", Some(false));
+                        }
                         // always + Running + idle，以及 continuous（solo）的 success：保持现状。
                         OnDemandOverlayAction::Keep => {}
                     }
                 }
             }
         } else if event == "kotone://channel" {
-            // 频道切换（ADR-008）：on_demand 模式下悬浮窗平时隐藏，
-            // 切换瞬间需要「露个脸」让用户看到频道徽标，~1.2s 后自动收回；
-            // always 模式运行期间本就常显、never 模式始终隐藏，均无需处理。vis_gen 代际防止
-            // 紧随其后的新会话被这次延迟隐藏误伤。
-            let on_demand = self
-                .app
-                .try_state::<SharedState>()
-                .map(|s| {
-                    s.settings.read().unwrap().overlay.visibility == OverlayVisibility::OnDemand
-                })
-                .unwrap_or(false);
-            if on_demand {
-                if let Some(win) = self.app.get_webview_window("overlay") {
-                    show_window_no_focus(&win);
-                    let app = self.app.clone();
-                    let vis_gen = self.vis_gen.clone();
-                    let gen = self
-                        .vis_gen
-                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-                        + 1;
-                    tauri::async_runtime::spawn(async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
-                        if vis_gen.load(std::sync::atomic::Ordering::SeqCst) != gen {
-                            return; // 期间已有新状态事件（新会话/再切换），不藏
-                        }
-                        if let Some(win) = app.get_webview_window("overlay") {
-                            hide_window(&win);
-                        }
-                    });
-                }
-            }
+            peek_on_demand_overlay(&self.app, &self.vis_gen, "channel", 1200);
+        } else if event == "kotone://pp-status" {
+            peek_on_demand_overlay(&self.app, &self.vis_gen, "pp-status", 2000);
         } else if event == "kotone://process" {
             record_process_event(&self.app, &payload);
             maybe_play_feedback_sfx(&self.app, &payload);
@@ -665,13 +777,21 @@ fn ping() -> &'static str {
     "pong"
 }
 
-/// 导出不含识别文本、音频和热词的诊断 ZIP。
+/// 导出不含识别文本、音频和热词的诊断 ZIP。`window`：24h / 7d / all。
 #[tauri::command]
 fn export_diagnostics(
     app: AppHandle,
     path: String,
+    window: Option<String>,
 ) -> Result<diagnostics::DiagnosticExportResult, String> {
-    diagnostics::export(&app, std::path::Path::new(&path))
+    let window = diagnostics::DiagnosticWindow::parse(window.as_deref().unwrap_or("all"));
+    diagnostics::export(&app, std::path::Path::new(&path), window)
+}
+
+/// 清除本地流程事件与 kotone.log。`stopRecording=true` 时同时关闭后续记录。
+#[tauri::command]
+fn clear_diagnostics(app: AppHandle, stop_recording: bool) -> Result<(), String> {
+    diagnostics::clear(&app, stop_recording)
 }
 
 /// 前端全局异常与更新器错误落入持久日志。消息先做主目录脱敏并限制长度。
@@ -789,6 +909,8 @@ fn hotkey_registration_changed(old: &Settings, next: &Settings) -> bool {
         || old.hotkey_backend != next.hotkey_backend
         || old.channel_cycle_hotkey != next.channel_cycle_hotkey
         || old.resend_last_hotkey != next.resend_last_hotkey
+        || old.toggle_post_processing_hotkey != next.toggle_post_processing_hotkey
+        || old.cycle_post_processing_hotkey != next.cycle_post_processing_hotkey
 }
 
 /// 局部更新配置；热键变化时触发重注册
@@ -842,6 +964,7 @@ fn update_settings(
             Ok(())
         },
     )?;
+    process_log::set_recording_enabled(updated.diagnostics.recording);
     let old_overlay = old.overlay;
 
     // overlay 配置变化 → 立即重排几何/点击穿透/显隐 + 通知前端（无需重启）
@@ -1648,6 +1771,7 @@ pub fn run() {
             let loaded_settings = settings::load_with_diagnostic();
             let settings_load_warning = loaded_settings.warning;
             let settings = loaded_settings.settings;
+            process_log::set_recording_enabled(settings.diagnostics.recording);
             let mut app_started =
                 process_log::ProcessEvent::new(process_log::app_session_id(), "app_started");
             app_started.context.engine_id = Some(settings.stt_engine.clone());
@@ -1677,7 +1801,7 @@ pub fn run() {
             }
 
             let settings = Arc::new(RwLock::new(settings));
-            let settings_repository = SettingsRepository::new(settings.clone());
+            let settings_repository = Arc::new(SettingsRepository::new(settings.clone()));
             let mut registry = EngineRegistry::new();
             kotone_stt::register_builtin(&mut registry);
             let engines = Arc::new(registry);
@@ -1715,7 +1839,8 @@ pub fn run() {
                 emitter,
             )
             .with_processors(processors.clone())
-            .with_secrets(secrets.clone());
+            .with_secrets(secrets.clone())
+            .with_settings_repository(settings_repository.clone());
             // VAD 接线（ADR-007）：vad-silero feature 开启时注入 silero 工厂；
             // 默认构建不接入——one-shot 模式 begin 会报清晰错误
             #[cfg(feature = "vad-silero")]
@@ -1775,6 +1900,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ping,
             export_diagnostics,
+            clear_diagnostics,
             log_frontend_error,
             get_startup_options,
             get_settings,

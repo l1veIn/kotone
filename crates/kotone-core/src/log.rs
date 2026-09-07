@@ -50,6 +50,24 @@ pub fn init() {
     }
 }
 
+/// 清空诊断日志文件并重新打开，便于用户清除本地诊断信息。
+pub fn clear() {
+    let path = crate::settings::kotone_dir().join("kotone.log");
+    {
+        let mut guard = FILE.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = None;
+    }
+    let _ = std::fs::write(&path, b"");
+    if let Ok(f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        *FILE.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
+        log("===== diagnostics cleared =====");
+    }
+}
+
 /// 追加一行日志（带本地时间戳）。任何失败都静默忽略，绝不 panic。
 pub fn log(msg: &str) {
     let ts = timestamp();

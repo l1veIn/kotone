@@ -8,12 +8,16 @@
 //!
 //! 对上层（TauriEmitter / IPC）签名不变：register/unregister/set_cancel_enabled/status。
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
-use kotone_core::hotkey::{parse_hotkey, HookEvent, HotkeySource};
+use kotone_core::hotkey::{
+    parse_hotkey, HookEvent, HotkeySource, HK_CHANNEL_CYCLE, HK_PP_CYCLE, HK_PP_TOGGLE,
+    HK_RESEND_LAST,
+};
 use kotone_core::orchestrator::Orchestrator;
 use kotone_core::settings::HotkeyBackend;
 
@@ -35,8 +39,8 @@ fn uses_mouse_button(key: &str) -> bool {
     parse_hotkey(key).is_some_and(|spec| spec.is_mouse_button())
 }
 
-fn any_mouse_hotkey(main: &str, cycle: &str, resend: &str) -> bool {
-    [main, cycle, resend].into_iter().any(uses_mouse_button)
+fn any_mouse_hotkey(combos: &[&str]) -> bool {
+    combos.iter().any(|combo| uses_mouse_button(combo))
 }
 
 impl ActiveBackend {
@@ -47,6 +51,18 @@ impl ActiveBackend {
             ActiveBackend::Plugin => "register",
         }
     }
+}
+
+/// 单个具名辅助热键的注册状态（设置页展示；未配置 / 未生效字段为 null）
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NamedHotkeyStatus {
+    /// 具名热键稳定 id（见 core HK_* 常量）
+    pub id: String,
+    /// 已生效组合；未配置 / 未生效为 null
+    pub key: Option<String>,
+    /// 最近一次失败信息（如与录制/其他具名热键冲突；成功/未配置为 null）
+    pub error: Option<String>,
 }
 
 /// 热键注册状态（设置页展示用）：注册失败时暴露错误原因与当前后端
@@ -61,14 +77,8 @@ pub struct HotkeyStatus {
     pub error: Option<String>,
     /// 当前生效后端：llhook / register / none
     pub backend: String,
-    /// 已生效的频道切换热键（ADR-008；未配置/未生效为 null）
-    pub cycle_key: Option<String>,
-    /// 频道切换热键最近一次失败信息（如与录制热键冲突；成功/未配置为 null）
-    pub cycle_error: Option<String>,
-    /// 已生效的重发最近一条热键（未配置/未生效为 null）
-    pub resend_key: Option<String>,
-    /// 重发热键最近一次失败信息（如与录制/频道切换热键冲突；成功/未配置为 null）
-    pub resend_error: Option<String>,
+    /// 具名辅助热键状态（含未配置项；按声明顺序稳定输出）
+    pub named: Vec<NamedHotkeyStatus>,
 }
 
 /// 录入/启动前的输入环境自检结果。
@@ -94,10 +104,8 @@ pub struct PluginHotkeySource {
     current: Mutex<Option<Shortcut>>,
     /// 会话激活期间临时注册的 Esc 取消键
     cancel: Mutex<Option<Shortcut>>,
-    /// 频道切换键（ADR-008）
-    cycle: Mutex<Option<Shortcut>>,
-    /// 重发最近一条热键
-    resend: Mutex<Option<Shortcut>>,
+    /// 已注册的具名辅助热键：id → 全局快捷键
+    named: Mutex<HashMap<String, Shortcut>>,
 }
 
 impl PluginHotkeySource {
@@ -107,24 +115,7 @@ impl PluginHotkeySource {
             orch,
             current: Mutex::new(None),
             cancel: Mutex::new(None),
-            cycle: Mutex::new(None),
-            resend: Mutex::new(None),
-        }
-    }
-
-    fn unregister_cycle(&self) {
-        if let Some(sc) = self.cycle.lock().unwrap().take() {
-            if let Err(e) = self.app.global_shortcut().unregister(sc) {
-                kotone_core::log::log(&format!("注销频道切换热键失败: {e}"));
-            }
-        }
-    }
-
-    fn unregister_resend(&self) {
-        if let Some(sc) = self.resend.lock().unwrap().take() {
-            if let Err(e) = self.app.global_shortcut().unregister(sc) {
-                kotone_core::log::log(&format!("注销重发热键失败: {e}"));
-            }
+            named: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -175,58 +166,44 @@ impl HotkeySource for PluginHotkeySource {
                 kotone_core::log::log(&format!("注销热键失败: {e}"));
             }
         }
-        self.unregister_cycle();
-        self.unregister_resend();
+        self.clear_named_hotkeys();
     }
 
-    /// 频道切换键（ADR-008）：注册第二个全局快捷键，按下即循环切换频道
-    fn set_cycle_key(&self, key: Option<&str>) -> Result<(), String> {
-        self.unregister_cycle();
-        let Some(key) = key.filter(|k| !k.trim().is_empty()) else {
+    /// 注册/更新/注销一个具名辅助热键（RegisterHotKey 后端）：同 id 幂等
+    fn set_named_hotkey(&self, id: &str, combo: Option<&str>) -> Result<(), String> {
+        if let Some(sc) = self.named.lock().unwrap().remove(id) {
+            if let Err(e) = self.app.global_shortcut().unregister(sc) {
+                kotone_core::log::log(&format!("注销具名热键失败: {e}"));
+            }
+        }
+        let Some(combo) = combo.filter(|k| !k.trim().is_empty()) else {
             return Ok(());
         };
-        let shortcut: Shortcut = key
+        let shortcut: Shortcut = combo
             .parse()
-            .map_err(|e| format!("无法解析频道切换热键「{key}」: {e}"))?;
+            .map_err(|e| format!("无法解析具名热键「{combo}」: {e}"))?;
         let orch = self.orch.clone();
+        let id_owned = id.to_string();
         self.app
             .global_shortcut()
             .on_shortcut(shortcut, move |_app, _sc, event| {
                 if event.state() == ShortcutState::Pressed {
-                    let orch = orch.clone();
-                    tauri::async_runtime::spawn(async move {
-                        orch.on_cycle_channel().await;
-                    });
+                    route_named_hotkey(&orch, &id_owned);
                 }
             })
-            .map_err(|e| format!("注册频道切换热键「{key}」失败: {e}（键位可能被其他程序占用）"))?;
-        *self.cycle.lock().unwrap() = Some(shortcut);
+            .map_err(|e| format!("注册具名热键「{combo}」失败: {e}（键位可能被其他程序占用）"))?;
+        self.named.lock().unwrap().insert(id.to_string(), shortcut);
         Ok(())
     }
 
-    /// 重发最近一条热键：注册第三个全局快捷键，按下即重发历史最新一条
-    fn set_resend_key(&self, key: Option<&str>) -> Result<(), String> {
-        self.unregister_resend();
-        let Some(key) = key.filter(|k| !k.trim().is_empty()) else {
-            return Ok(());
-        };
-        let shortcut: Shortcut = key
-            .parse()
-            .map_err(|e| format!("无法解析重发热键「{key}」: {e}"))?;
-        let orch = self.orch.clone();
-        self.app
-            .global_shortcut()
-            .on_shortcut(shortcut, move |_app, _sc, event| {
-                if event.state() == ShortcutState::Pressed {
-                    let orch = orch.clone();
-                    tauri::async_runtime::spawn(async move {
-                        orch.resend_last().await;
-                    });
-                }
-            })
-            .map_err(|e| format!("注册重发热键「{key}」失败: {e}（键位可能被其他程序占用）"))?;
-        *self.resend.lock().unwrap() = Some(shortcut);
-        Ok(())
+    /// 注销全部具名热键（主热键与 Esc 取消不受影响）
+    fn clear_named_hotkeys(&self) {
+        let mut named = self.named.lock().unwrap();
+        for (_, sc) in named.drain() {
+            if let Err(e) = self.app.global_shortcut().unregister(sc) {
+                kotone_core::log::log(&format!("注销具名热键失败: {e}"));
+            }
+        }
     }
 
     /// 会话激活期间临时注册 Esc 全局取消键；会话结束注销。
@@ -294,20 +271,40 @@ fn make_llhook_sink(orch: Arc<Orchestrator>) -> kotone_platform_windows::hotkey_
                     orch.cancel().await;
                 });
             }
-            HookEvent::CycleChannel => {
-                tauri::async_runtime::spawn(async move {
-                    orch.on_cycle_channel().await;
-                });
-            }
-            HookEvent::ResendLast => {
-                tauri::async_runtime::spawn(async move {
-                    orch.resend_last().await;
-                });
-            }
+            HookEvent::NamedHotkey { id } => route_named_hotkey(&orch, &id),
             // 诊断事件（修饰键失配）：consumer 已记日志，业务不处理
             HookEvent::MainKeyMissed { .. } => {}
         }
     })
+}
+
+/// 具名热键 id → orchestrator 动作（id 由 core HK_* 常量声明；增量 = 加一个 arm）。
+/// 两个后端（LL 钩子 sink 与 RegisterHotKey 回调）共用同一路由。
+fn route_named_hotkey(orch: &Arc<Orchestrator>, id: &str) {
+    let orch = orch.clone();
+    let id = id.to_string();
+    tauri::async_runtime::spawn(async move {
+        match id.as_str() {
+            HK_CHANNEL_CYCLE => orch.on_cycle_channel().await,
+            HK_RESEND_LAST => orch.resend_last().await,
+            HK_PP_TOGGLE => orch.on_post_processing_toggle().await,
+            HK_PP_CYCLE => orch.on_post_processing_cycle().await,
+            _ => kotone_core::log::log(&format!("未知具名热键: {id}")),
+        }
+    });
+}
+
+/// 已知具名热键的稳定声明顺序（设置页展示顺序；新增具名热键加入此清单即出现在 UI）。
+const KNOWN_NAMED_HOTKEYS: &[&str] = &[HK_CHANNEL_CYCLE, HK_RESEND_LAST, HK_PP_TOGGLE, HK_PP_CYCLE];
+
+/// 从配置取出当前要应用的全部具名热键（id, combo）；声明顺序即冲突/优先级顺序。
+fn named_list_from(settings: &kotone_core::settings::Settings) -> Vec<(&'static str, String)> {
+    vec![
+        (HK_CHANNEL_CYCLE, settings.channel_cycle_hotkey.clone()),
+        (HK_RESEND_LAST, settings.resend_last_hotkey.clone()),
+        (HK_PP_TOGGLE, settings.toggle_post_processing_hotkey.clone()),
+        (HK_PP_CYCLE, settings.cycle_post_processing_hotkey.clone()),
+    ]
 }
 
 /// 热键管理器：后端选择/回退 + 状态暴露；对上层签名不变
@@ -323,14 +320,10 @@ pub struct HotkeyManager {
     registered_key: Mutex<Option<String>>,
     /// 最近一次注册失败信息（设置页提示「可能被其他程序/实例占用」）
     last_error: Mutex<Option<String>>,
-    /// 已生效的频道切换热键（ADR-008）
-    cycle_key: Mutex<Option<String>>,
-    /// 频道切换热键最近一次失败信息（冲突/注册失败）
-    cycle_error: Mutex<Option<String>>,
-    /// 已生效的重发最近一条热键
-    resend_key: Mutex<Option<String>>,
-    /// 重发热键最近一次失败信息（冲突/注册失败）
-    resend_error: Mutex<Option<String>>,
+    /// 已生效的具名辅助热键：id → 已注册组合（空串 = 未配置）
+    named: Mutex<HashMap<String, Option<String>>>,
+    /// 具名热键最近一次失败信息：id → 错误（冲突/注册失败；成功/未配置为 None）
+    named_errors: Mutex<HashMap<String, Option<String>>>,
 }
 
 impl HotkeyManager {
@@ -342,10 +335,8 @@ impl HotkeyManager {
             backend: Mutex::new(ActiveBackend::None),
             registered_key: Mutex::new(None),
             last_error: Mutex::new(None),
-            cycle_key: Mutex::new(None),
-            cycle_error: Mutex::new(None),
-            resend_key: Mutex::new(None),
-            resend_error: Mutex::new(None),
+            named: Mutex::new(HashMap::new()),
+            named_errors: Mutex::new(HashMap::new()),
         }
     }
 
@@ -372,11 +363,13 @@ impl HotkeyManager {
         let pref = settings.hotkey_backend;
 
         #[cfg(windows)]
-        let requires_llhook = any_mouse_hotkey(
+        let requires_llhook = any_mouse_hotkey(&[
             key,
             &settings.channel_cycle_hotkey,
             &settings.resend_last_hotkey,
-        );
+            &settings.toggle_post_processing_hotkey,
+            &settings.cycle_post_processing_hotkey,
+        ]);
 
         #[cfg(windows)]
         if pref != HotkeyBackend::Register || requires_llhook {
@@ -391,12 +384,7 @@ impl HotkeyManager {
                     *self.backend.lock().unwrap() = ActiveBackend::LlHook;
                     *self.registered_key.lock().unwrap() = Some(key.to_string());
                     *self.last_error.lock().unwrap() = None;
-                    self.apply_cycle_key(key, &settings.channel_cycle_hotkey);
-                    self.apply_resend_key(
-                        key,
-                        &settings.channel_cycle_hotkey,
-                        &settings.resend_last_hotkey,
-                    );
+                    self.apply_named(key, &named_list_from(settings));
                     return Ok(());
                 }
                 Err(e) => {
@@ -422,12 +410,7 @@ impl HotkeyManager {
                 *self.backend.lock().unwrap() = ActiveBackend::Plugin;
                 *self.registered_key.lock().unwrap() = Some(key.to_string());
                 *self.last_error.lock().unwrap() = None;
-                self.apply_cycle_key(key, &settings.channel_cycle_hotkey);
-                self.apply_resend_key(
-                    key,
-                    &settings.channel_cycle_hotkey,
-                    &settings.resend_last_hotkey,
-                );
+                self.apply_named(key, &named_list_from(settings));
                 Ok(())
             }
             Err(msg) => {
@@ -443,107 +426,87 @@ impl HotkeyManager {
         #[cfg(windows)]
         {
             self.llhook.unregister();
-            let _ = self.llhook.set_cycle_key(None);
-            let _ = self.llhook.set_resend_key(None);
+            self.llhook.clear_named_hotkeys();
         }
         self.plugin.unregister();
         *self.backend.lock().unwrap() = ActiveBackend::None;
         *self.registered_key.lock().unwrap() = None;
-        *self.cycle_key.lock().unwrap() = None;
-        *self.cycle_error.lock().unwrap() = None;
-        *self.resend_key.lock().unwrap() = None;
-        *self.resend_error.lock().unwrap() = None;
+        self.named.lock().unwrap().clear();
+        self.named_errors.lock().unwrap().clear();
         Ok(())
     }
 
-    /// 注册频道切换热键（ADR-008）：主热键注册成功后按当前生效后端应用。
-    /// 与录制热键同组合时拒绝注册并记入 cycle_error（设置页展示）。
-    fn apply_cycle_key(&self, main_key: &str, cycle: &str) {
+    /// 应用全部具名辅助热键：主热键注册成功后按当前生效后端应用。
+    /// 声明顺序即冲突优先级：每个新键与「主键 + 前面所有非空具名组合」做
+    /// `combos_conflict`，冲突拒绝注册并记入对应 id 的 error（设置页展示）。
+    /// 非空配置组合无论注册成功与否都计入后续冲突检测（与旧 cycle/resend 语义一致）。
+    fn apply_named(&self, main_key: &str, named: &[(&'static str, String)]) {
         let backend = *self.backend.lock().unwrap();
-        let mut applied: Option<String> = None;
-        let mut error: Option<String> = None;
-        if !cycle.trim().is_empty() {
-            if kotone_core::hotkey::combos_conflict(cycle, main_key) {
-                let msg = format!("频道切换热键「{cycle}」与录制热键冲突，未注册");
+        let mut applied: HashMap<String, Option<String>> = HashMap::new();
+        let mut errors: HashMap<String, Option<String>> = HashMap::new();
+        // 先清空后端全部具名热键，再按新清单重放（幂等重注册）
+        {
+            #[cfg(windows)]
+            {
+                if backend == ActiveBackend::LlHook {
+                    self.llhook.clear_named_hotkeys();
+                } else {
+                    self.plugin.clear_named_hotkeys();
+                }
+            }
+            #[cfg(not(windows))]
+            self.plugin.clear_named_hotkeys();
+        }
+        // 已接受的组合（含主键），用于后续冲突检测
+        let mut taken: Vec<String> = vec![main_key.to_string()];
+        for (id, combo) in named {
+            let combo = combo.trim().to_string();
+            if combo.is_empty() {
+                applied.insert(id.to_string(), None);
+                errors.insert(id.to_string(), None);
+                continue;
+            }
+            let conflict = taken
+                .iter()
+                .find(|prior| kotone_core::hotkey::combos_conflict(&combo, prior))
+                .cloned();
+            if let Some(prior) = conflict {
+                let msg = format!("热键「{combo}」与已注册热键「{prior}」冲突，未注册");
                 kotone_core::log::log(&msg);
-                error = Some(msg);
-            } else {
-                let res = {
-                    #[cfg(windows)]
-                    {
-                        if backend == ActiveBackend::LlHook {
-                            self.llhook.set_cycle_key(Some(cycle))
-                        } else {
-                            self.plugin.set_cycle_key(Some(cycle))
-                        }
+                errors.insert(id.to_string(), Some(msg));
+                taken.push(combo); // 配置值仍参与后续冲突检测
+                continue;
+            }
+            let res = {
+                #[cfg(windows)]
+                {
+                    if backend == ActiveBackend::LlHook {
+                        self.llhook.set_named_hotkey(id, Some(&combo))
+                    } else {
+                        self.plugin.set_named_hotkey(id, Some(&combo))
                     }
-                    #[cfg(not(windows))]
-                    {
-                        let _ = backend;
-                        self.plugin.set_cycle_key(Some(cycle))
-                    }
-                };
-                match res {
-                    Ok(()) => {
-                        kotone_core::log::log(&format!("cycle hotkey registered: {cycle}"));
-                        applied = Some(cycle.to_string());
-                    }
-                    Err(e) => {
-                        kotone_core::log::log(&format!("cycle hotkey register FAILED: {e}"));
-                        error = Some(e);
-                    }
+                }
+                #[cfg(not(windows))]
+                {
+                    let _ = backend;
+                    self.plugin.set_named_hotkey(id, Some(&combo))
+                }
+            };
+            match res {
+                Ok(()) => {
+                    kotone_core::log::log(&format!("named hotkey {id} registered: {combo}"));
+                    applied.insert(id.to_string(), Some(combo.clone()));
+                    taken.push(combo);
+                }
+                Err(e) => {
+                    kotone_core::log::log(&format!("named hotkey {id} register FAILED: {e}"));
+                    errors.insert(id.to_string(), Some(e));
+                    taken.push(combo);
                 }
             }
         }
-        *self.cycle_key.lock().unwrap() = applied;
-        *self.cycle_error.lock().unwrap() = error;
-    }
-
-    /// 注册重发最近一条热键：主热键注册成功后按当前生效后端应用。
-    /// 与录制热键或频道切换热键同组合时拒绝注册并记入 resend_error（设置页展示）。
-    fn apply_resend_key(&self, main_key: &str, cycle: &str, resend: &str) {
-        let backend = *self.backend.lock().unwrap();
-        let mut applied: Option<String> = None;
-        let mut error: Option<String> = None;
-        if !resend.trim().is_empty() {
-            if kotone_core::hotkey::combos_conflict(resend, main_key) {
-                let msg = format!("重发热键「{resend}」与录制热键冲突，未注册");
-                kotone_core::log::log(&msg);
-                error = Some(msg);
-            } else if kotone_core::hotkey::combos_conflict(resend, cycle) {
-                let msg = format!("重发热键「{resend}」与频道切换热键冲突，未注册");
-                kotone_core::log::log(&msg);
-                error = Some(msg);
-            } else {
-                let res = {
-                    #[cfg(windows)]
-                    {
-                        if backend == ActiveBackend::LlHook {
-                            self.llhook.set_resend_key(Some(resend))
-                        } else {
-                            self.plugin.set_resend_key(Some(resend))
-                        }
-                    }
-                    #[cfg(not(windows))]
-                    {
-                        let _ = backend;
-                        self.plugin.set_resend_key(Some(resend))
-                    }
-                };
-                match res {
-                    Ok(()) => {
-                        kotone_core::log::log(&format!("resend hotkey registered: {resend}"));
-                        applied = Some(resend.to_string());
-                    }
-                    Err(e) => {
-                        kotone_core::log::log(&format!("resend hotkey register FAILED: {e}"));
-                        error = Some(e);
-                    }
-                }
-            }
-        }
-        *self.resend_key.lock().unwrap() = applied;
-        *self.resend_error.lock().unwrap() = error;
+        *self.named.lock().unwrap() = applied;
+        *self.named_errors.lock().unwrap() = errors;
     }
 
     /// 会话激活期间的 Esc 取消：按当前生效后端路由
@@ -561,15 +524,24 @@ impl HotkeyManager {
         let backend = *self.backend.lock().unwrap();
         let key = self.registered_key.lock().unwrap().clone();
         let error = self.last_error.lock().unwrap().clone();
+        let named_status = {
+            let named = self.named.lock().unwrap();
+            let errors = self.named_errors.lock().unwrap();
+            KNOWN_NAMED_HOTKEYS
+                .iter()
+                .map(|id| NamedHotkeyStatus {
+                    id: (*id).to_string(),
+                    key: named.get(*id).cloned().flatten(),
+                    error: errors.get(*id).cloned().flatten(),
+                })
+                .collect()
+        };
         HotkeyStatus {
             registered: backend != ActiveBackend::None,
             key,
             error,
             backend: backend.label().to_string(),
-            cycle_key: self.cycle_key.lock().unwrap().clone(),
-            cycle_error: self.cycle_error.lock().unwrap().clone(),
-            resend_key: self.resend_key.lock().unwrap().clone(),
-            resend_error: self.resend_error.lock().unwrap().clone(),
+            named: named_status,
         }
     }
 
@@ -694,9 +666,9 @@ mod tests {
 
     #[test]
     fn mouse_button_in_any_hotkey_requires_llhook() {
-        assert!(any_mouse_hotkey("Mouse4", "", ""));
-        assert!(any_mouse_hotkey("F8", "Ctrl+Mouse5", ""));
-        assert!(any_mouse_hotkey("F8", "Shift+F9", "XButton1"));
-        assert!(!any_mouse_hotkey("F8", "Shift+F9", "Alt+V"));
+        assert!(any_mouse_hotkey(&["Mouse4", "", ""]));
+        assert!(any_mouse_hotkey(&["F8", "Ctrl+Mouse5", ""]));
+        assert!(any_mouse_hotkey(&["F8", "Shift+F9", "XButton1"]));
+        assert!(!any_mouse_hotkey(&["F8", "Shift+F9", "Alt+V"]));
     }
 }

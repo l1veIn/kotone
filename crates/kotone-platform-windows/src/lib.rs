@@ -15,5 +15,6 @@ pub mod fullscreen;
 #[cfg(windows)]
 pub mod hotkey_ll;
 pub mod inject;
+pub mod keyboard;
 pub mod playback;
 pub mod wav_audio;

@@ -12,6 +12,7 @@
 import { writable } from "svelte/store";
 import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "../ipc";
+import { settingsStore } from "./ui";
 
 export type KotoneState =
   | "idle"
@@ -59,6 +60,8 @@ export interface AppState {
   channel: ChannelInfo | null;
   /** Processing 状态下正在执行的后处理步骤；尚未进入具体步骤时为 null。 */
   processingStep: ProcessingStepInfo | null;
+  /** 文字处理开关/切流程热键触发的瞬时提示（悬浮窗短暂显示后自动清除；null = 无） */
+  ppNotice: { id: number; text: string } | null;
 }
 
 const initial: AppState = {
@@ -73,6 +76,7 @@ const initial: AppState = {
   needsElevation: false,
   channel: null,
   processingStep: null,
+  ppNotice: null,
 };
 
 export const appState = writable<AppState>({ ...initial });
@@ -102,6 +106,15 @@ interface PartialEventPayload {
 
 interface LevelEventPayload {
   rms: number;
+}
+
+/** 文字处理开关/切流程热键的状态广播（kotone://pp-status） */
+interface PpStatusEventPayload {
+  /** toggle = 开关热键；cycle = 切换流程热键 */
+  action: "toggle" | "cycle";
+  enabled: boolean;
+  pipelineId: string;
+  displayName: string;
 }
 
 // ---------- 状态事件 → store 映射 ----------
@@ -182,6 +195,9 @@ function applyStateEvent(ev: StateEventPayload): void {
 // ---------- 事件订阅（Tauri 环境才启用） ----------
 
 let unlistenAll: (() => void) | null = null;
+/** pp-status 瞬时提示的序号与自动清除计时器 */
+let ppNoticeSeq = 0;
+let ppNoticeTimer: ReturnType<typeof setTimeout> | undefined;
 
 /**
  * 订阅 Rust 侧三类事件；返回取消函数。
@@ -206,6 +222,43 @@ export async function initStateListeners(): Promise<() => void> {
         ...s,
         channel: e.payload.isDefault ? null : e.payload,
       }));
+    }),
+    listen<PpStatusEventPayload>("kotone://pp-status", (e) => {
+      const p = e.payload;
+      let text: string;
+      if (p.action === "toggle") {
+        text = p.enabled ? "文字处理已开启" : "文字处理已关闭";
+      } else {
+        const name =
+          p.displayName.trim() ||
+          (p.pipelineId === "blocklist" ? "屏蔽词" : p.pipelineId);
+        text = `处理流程：${name}`;
+      }
+      const seq = ++ppNoticeSeq;
+      appState.update((s) => ({ ...s, ppNotice: { id: seq, text } }));
+      if (ppNoticeTimer) clearTimeout(ppNoticeTimer);
+      ppNoticeTimer = setTimeout(() => {
+        appState.update((s) =>
+          s.ppNotice?.id === seq ? { ...s, ppNotice: null } : s,
+        );
+      }, 2200);
+      settingsStore.update((s) => {
+        if (
+          !s ||
+          (s.postProcessing.enabled === p.enabled &&
+            s.postProcessing.activePipelineId === p.pipelineId)
+        ) {
+          return s;
+        }
+        return {
+          ...s,
+          postProcessing: {
+            ...s.postProcessing,
+            enabled: p.enabled,
+            activePipelineId: p.pipelineId,
+          },
+        };
+      });
     }),
   ]);
 

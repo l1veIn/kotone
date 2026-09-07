@@ -5,7 +5,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 const SCHEMA_VERSION: u32 = 1;
@@ -15,6 +15,7 @@ const TRIM_AT_BYTES: u64 = 4 * 1024 * 1024;
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 static APP_SESSION_ID: OnceLock<String> = OnceLock::new();
 static EVENT_INDEX: AtomicU64 = AtomicU64::new(0);
+static RECORDING: AtomicBool = AtomicBool::new(true);
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +45,9 @@ pub struct EventData {
     pub audio_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_chars: Option<u64>,
+    /// 短白名单细节（VK 名、overlay 原因、SendInput 计数）。不得写入识别文本。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -91,9 +95,28 @@ pub fn app_session_id() -> &'static str {
         .as_str()
 }
 
+pub fn set_recording_enabled(enabled: bool) {
+    RECORDING.store(enabled, Ordering::Relaxed);
+}
+
+pub fn recording_enabled() -> bool {
+    RECORDING.load(Ordering::Relaxed)
+}
+
 /// 追加一条事件。失败返回错误给调用方决定是否降级；业务流程不应依赖该函数成功。
+/// 用户关闭诊断记录时直接成功返回，不落盘。
 pub fn record(event: ProcessEvent) -> Result<(), String> {
+    if !recording_enabled() {
+        return Ok(());
+    }
     record_in(&events_path(), event)
+}
+
+/// 不依赖语音会话的诊断事件（热键/悬浮窗/注入），case id 用 app session。
+pub fn record_activity(activity: impl Into<String>, data: EventData) {
+    let mut event = ProcessEvent::new(app_session_id(), activity);
+    event.data = data;
+    let _ = record(event);
 }
 
 pub fn record_in(path: &Path, event: ProcessEvent) -> Result<(), String> {
@@ -137,6 +160,14 @@ pub fn list_recent(max: usize) -> Vec<ProcessEvent> {
 }
 
 pub fn list_recent_in(path: &Path, max: usize) -> Vec<ProcessEvent> {
+    list_since_in(path, None, max)
+}
+
+pub fn list_since(cutoff_iso: Option<&str>, max: usize) -> Vec<ProcessEvent> {
+    list_since_in(&events_path(), cutoff_iso, max)
+}
+
+pub fn list_since_in(path: &Path, cutoff_iso: Option<&str>, max: usize) -> Vec<ProcessEvent> {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
@@ -144,16 +175,47 @@ pub fn list_recent_in(path: &Path, max: usize) -> Vec<ProcessEvent> {
         .lines()
         .filter_map(|line| serde_json::from_str(line).ok())
         .collect();
+    if let Some(cutoff) = cutoff_iso {
+        let cutoff = normalize_iso(cutoff);
+        events.retain(|event| normalize_iso(&event.timestamp) >= cutoff);
+    }
     if events.len() > max {
         events.drain(..events.len() - max);
     }
     events
 }
 
+pub fn clear() -> Result<(), String> {
+    clear_in(&events_path())
+}
+
+pub fn clear_in(path: &Path) -> Result<(), String> {
+    let _guard = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if path.exists() {
+        std::fs::remove_file(path).map_err(|e| format!("删除诊断事件失败: {e}"))?;
+    }
+    let tmp = path.with_extension("jsonl.tmp");
+    if tmp.exists() {
+        let _ = std::fs::remove_file(tmp);
+    }
+    Ok(())
+}
+
+pub fn normalize_iso(ts: &str) -> String {
+    let ts = ts.trim();
+    if ts.len() >= 24 {
+        return ts.to_string();
+    }
+    if ts.ends_with('Z') && ts.len() == 20 {
+        return format!("{}.000Z", &ts[..19]);
+    }
+    ts.to_string()
+}
+
 /// 导出 PM4Py 兼容 CSV。前三列使用 PM4Py 约定字段名，其余均为低敏白名单属性。
 pub fn to_pm4py_csv(events: &[ProcessEvent], app_version: &str) -> String {
     let mut out = String::from(
-        "case:concept:name,concept:name,time:timestamp,eventIndex,appSessionId,appVersion,engineId,modelId,profileId,interactionMode,elevated,outcome,errorCode,durationMs,audioMs,textChars\n",
+        "case:concept:name,concept:name,time:timestamp,eventIndex,appSessionId,appVersion,engineId,modelId,profileId,interactionMode,elevated,outcome,errorCode,durationMs,audioMs,textChars,detail\n",
     );
     for event in events {
         let elevated = event
@@ -194,6 +256,7 @@ pub fn to_pm4py_csv(events: &[ProcessEvent], app_version: &str) -> String {
             duration_ms.as_str(),
             audio_ms.as_str(),
             text_chars.as_str(),
+            event.data.detail.as_deref().unwrap_or(""),
         ];
         out.push_str(
             &fields
@@ -235,6 +298,7 @@ mod tests {
         assert!(csv.starts_with("case:concept:name,concept:name,time:timestamp"));
         assert!(csv.contains("session-1,capture_started,2026-07-28T12:00:00Z"));
         assert!(csv.contains(",x-asr,"));
+        assert!(csv.contains(",detail"));
         assert!(!csv.contains("finalText"));
     }
 
@@ -243,5 +307,54 @@ mod tests {
         assert_eq!(csv_escape("a,b"), "\"a,b\"");
         assert_eq!(csv_escape("a\"b"), "\"a\"\"b\"");
         assert_eq!(csv_escape("plain"), "plain");
+    }
+
+    #[test]
+    fn recording_flag_skips_public_record() {
+        set_recording_enabled(false);
+        record(ProcessEvent::new("s", "hotkey_fired")).unwrap();
+        set_recording_enabled(true);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        record_in(&path, ProcessEvent::new("s", "hotkey_fired")).unwrap();
+        assert_eq!(list_recent_in(&path, 10).len(), 1);
+    }
+
+    #[test]
+    fn list_since_keeps_events_on_or_after_cutoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let mut old = ProcessEvent::new("s", "old");
+        old.timestamp = "2026-01-01T00:00:00Z".into();
+        let mut recent = ProcessEvent::new("s", "recent");
+        recent.timestamp = "2026-09-07T12:00:00.000Z".into();
+        record_in(&path, old).unwrap();
+        record_in(&path, recent).unwrap();
+        let kept = list_since_in(&path, Some("2026-09-01T00:00:00Z"), 50);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].activity, "recent");
+    }
+
+    #[test]
+    fn clear_removes_events_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        record_in(&path, ProcessEvent::new("s", "x")).unwrap();
+        assert!(path.exists());
+        clear_in(&path).unwrap();
+        assert!(!path.exists());
+        clear_in(&path).unwrap();
+    }
+
+    #[test]
+    fn normalize_iso_pads_second_precision() {
+        assert_eq!(
+            normalize_iso("2026-09-07T12:00:00Z"),
+            "2026-09-07T12:00:00.000Z"
+        );
+        assert_eq!(
+            normalize_iso("2026-09-07T12:00:00.123Z"),
+            "2026-09-07T12:00:00.123Z"
+        );
     }
 }

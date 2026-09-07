@@ -267,6 +267,9 @@ pub struct Orchestrator {
     inner: Arc<Mutex<Inner>>,
     op: tokio::sync::Mutex<()>,
     settings: Arc<RwLock<Settings>>,
+    /// 配置仓库（桌面壳注入）：热键类动作（切换文字处理开关/流程）经它原子写盘并
+    /// 更新共享内存快照。None = 未注入（CLI/测试），此类动作直接忽略并记日志。
+    settings_repository: Option<Arc<crate::settings::SettingsRepository>>,
     /// 桌面运行时成功预热时的 STT 配置快照。设置页在 Running 期间
     /// 仍可编辑下次启动的引擎/模型/参数，但本轮会话必须继续使用
     /// 已预热配置。None 用于 CLI/测试，保持原有「现场读设置」语义。
@@ -330,6 +333,7 @@ impl Orchestrator {
             })),
             op: tokio::sync::Mutex::new(()),
             settings,
+            settings_repository: None,
             runtime_stt_settings: RwLock::new(None),
             engines,
             processors: Arc::new(ProcessorRegistry::new()),
@@ -353,6 +357,16 @@ impl Orchestrator {
 
     pub fn with_secrets(mut self, store: Arc<dyn crate::connection::SecretStore>) -> Self {
         self.secrets = Some(store);
+        self
+    }
+
+    /// 注入配置仓库（桌面壳）：热键类动作（切换文字处理开关/流程）经它原子落盘，
+    /// 并同步更新共享内存快照（设置页与运行时读同一个 Arc）。
+    pub fn with_settings_repository(
+        mut self,
+        repo: Arc<crate::settings::SettingsRepository>,
+    ) -> Self {
+        self.settings_repository = Some(repo);
         self
     }
 
@@ -543,6 +557,84 @@ impl Orchestrator {
         self.emit_process(
             "channel_switched",
             json!({ "channelId": strategy.id, "profileId": profile.id }),
+        );
+    }
+
+    // ---------- 文字处理热键（开关 / 切换流程） ----------
+
+    /// 文字处理启用开关热键：切换 `postProcessing.enabled` 并持久化，悬浮窗显示状态。
+    /// 与设置页改配置一致，下一句识别按快照生效；任意状态都可切换（与会话正交）。
+    pub async fn on_post_processing_toggle(&self) {
+        let Some(repo) = self.settings_repository.clone() else {
+            crate::log::log("post-processing toggle: 未注入配置仓库，忽略");
+            return;
+        };
+        let next = match repo.update(|settings| {
+            settings.post_processing.enabled = !settings.post_processing.enabled;
+            Ok(())
+        }) {
+            Ok(next) => next,
+            Err(e) => {
+                crate::log::log(&format!("post-processing toggle 保存失败: {e}"));
+                return;
+            }
+        };
+        self.emit_pp_status(
+            "toggle",
+            next.post_processing.enabled,
+            next.post_processing.active_pipeline_id,
+        );
+    }
+
+    /// 切换文字处理流程热键：按声明顺序把 `active_pipeline_id` 前进到下一个流程并
+    /// 持久化；不足两条流程时无操作。悬浮窗显示切换到的新流程名。
+    pub async fn on_post_processing_cycle(&self) {
+        let Some(repo) = self.settings_repository.clone() else {
+            crate::log::log("post-processing cycle: 未注入配置仓库，忽略");
+            return;
+        };
+        if repo.snapshot().post_processing.pipelines.len() < 2 {
+            // 单流程甚至无流程：切换键无操作（记日志便于排障）
+            crate::log::log("post-processing cycle: 流程不足两条，忽略");
+            return;
+        }
+        let next = match repo.update(|settings| {
+            let pipelines = &settings.post_processing.pipelines;
+            let active = settings.post_processing.active_pipeline_id.clone();
+            let cur = pipelines.iter().position(|p| p.id == active).unwrap_or(0);
+            let next_id = pipelines[(cur + 1) % pipelines.len()].id.clone();
+            settings.post_processing.active_pipeline_id = next_id;
+            Ok(())
+        }) {
+            Ok(next) => next,
+            Err(e) => {
+                crate::log::log(&format!("post-processing cycle 保存失败: {e}"));
+                return;
+            }
+        };
+        self.emit_pp_status(
+            "cycle",
+            next.post_processing.enabled,
+            next.post_processing.active_pipeline_id,
+        );
+    }
+
+    /// 向悬浮窗广播一次文字处理状态变化（开灯 / 切换流程；`action` 供前端区分文案）。
+    fn emit_pp_status(&self, action: &str, enabled: bool, active_pipeline_id: String) {
+        let settings = self.settings.read().unwrap().clone();
+        let display_name = settings
+            .post_processing
+            .active_pipeline()
+            .map(|p| p.display_name.clone())
+            .unwrap_or_default();
+        self.emitter.emit(
+            "kotone://pp-status",
+            json!({
+                "action": action,
+                "enabled": enabled,
+                "pipelineId": active_pipeline_id,
+                "displayName": display_name,
+            }),
         );
     }
 
@@ -1671,6 +1763,42 @@ impl Orchestrator {
         Ok(Some(claim))
     }
 
+    async fn wait_for_modifiers_up(&self) {
+        const MAX_WAIT: Duration = Duration::from_millis(1000);
+        const POLL: Duration = Duration::from_millis(10);
+        let started = std::time::Instant::now();
+        if !self.focus.modifier_keys_down() {
+            return;
+        }
+        crate::log::log("inject: waiting for Ctrl/Alt/Shift/Win to release");
+        loop {
+            if !self.focus.modifier_keys_down() {
+                crate::process_log::record_activity(
+                    "inject_wait_modifiers",
+                    crate::process_log::EventData {
+                        detail: Some(format!("waitedMs={}", started.elapsed().as_millis())),
+                        outcome: Some("ok".into()),
+                        ..Default::default()
+                    },
+                );
+                return;
+            }
+            if started.elapsed() >= MAX_WAIT {
+                crate::log::log("inject: modifiers still down after 1000ms, sending anyway");
+                crate::process_log::record_activity(
+                    "inject_wait_modifiers",
+                    crate::process_log::EventData {
+                        detail: Some("timeoutMs=1000".into()),
+                        outcome: Some("timeout".into()),
+                        ..Default::default()
+                    },
+                );
+                return;
+            }
+            tokio::time::sleep(POLL).await;
+        }
+    }
+
     /// Sending → Success/Error（§6 发送时序下半段；inject 实现负责按键细节）。
     /// 仅接受 `claim_send` 产生的已占用发送任务，不再改写状态或取消令牌。
     async fn run_send(&self, claim: SendClaim) {
@@ -1707,6 +1835,10 @@ impl Orchestrator {
         } else {
             format!("{}{text}", strategy.text_prefix)
         };
+
+        // Alt+F6 等组合热键在主键 down 时就触发；修饰键从不吞键，此时 Alt
+        // 仍按着。立刻开框/打字会变成 Alt+Enter，游戏里看不到消息，注入却成功。
+        self.wait_for_modifiers_up().await;
 
         // 焦点恢复：preview 交互（点击悬浮条/热键确认）可能已把焦点带离目标窗口，
         // 先把焦点还给 begin 时记录的注入目标，再交由注入器注入。

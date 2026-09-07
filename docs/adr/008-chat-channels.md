@@ -45,8 +45,9 @@ LOL 存在「队伍 / 所有人」两个聊天频道，且游戏原生支持两�
   按住 Shift 再按录制键会物理触发录制，边界情况太多。
 - **冲突校验是双向的**：前端保存录制键 / 切换键时都用
   `combosConflict`（与 Rust `combos_conflict` 同语义：修饰键集合 + 主键
-  完全相同）预检并拒绝；后端 `HotkeyManager.apply_cycle_key` 注册时
-  再校验一次，冲突则不注册并写入 `HotkeyStatus.cycle_error` 展示。
+  完全相同）预检并拒绝；后端 `HotkeyManager.apply_named` 注册时
+  再校验一次，冲突则不注册并写入 `HotkeyStatus.named[].error`
+  （id `channel-cycle`）展示。
 - 匹配器严格修饰键相等，因此 `Shift+CapsLock`（切换）与裸 `CapsLock`
   （录制）互不误触。**关键实现细节**：切换键分支未命中修饰键时必须
   落回主键分支重判，否则同 vk 的裸 CapsLock 录制会被短路。
@@ -76,5 +77,6 @@ LOL 存在「队伍 / 所有人」两个聊天频道，且游戏原生支持两�
 
 - 新增游戏适配时只需在 profile JSON 里声明 `channels[]`，发送链路、
   热键、UI 全部复用；单频道游戏什么也不用写。
-- 切换键与录制键、Esc 取消键、LL 钩子 / 系统热键两种后端完全解耦，
-  `HotkeySource::set_cycle_key` 默认空实现，CLI 与壳各自接线。
+- 切换键经通用具名热键机制注册（`HotkeySource::set_named_hotkey(id, combo)`，
+  `channel-cycle` 为其中一个稳定 id）；LL 钩子 / RegisterHotKey 两种后端与
+  冲突检测完全解耦，CLI 与壳在事件路由层各自接线。

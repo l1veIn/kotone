@@ -698,7 +698,9 @@ async fn cmd_listen_hotkey(
     if !cycle_hotkey.trim().is_empty() {
         if kotone_core::hotkey::combos_conflict(&cycle_hotkey, &hotkey_key) {
             eprintln!("频道切换热键「{cycle_hotkey}」与录制热键冲突，已忽略");
-        } else if let Err(e) = hotkey.set_cycle_key(Some(&cycle_hotkey)) {
+        } else if let Err(e) =
+            hotkey.set_named_hotkey(kotone_core::hotkey::HK_CHANNEL_CYCLE, Some(&cycle_hotkey))
+        {
             eprintln!("注册频道切换热键失败: {e}");
         }
     }
@@ -708,7 +710,9 @@ async fn cmd_listen_hotkey(
             eprintln!("重发热键「{resend_hotkey}」与录制热键冲突，已忽略");
         } else if kotone_core::hotkey::combos_conflict(&resend_hotkey, &cycle_hotkey) {
             eprintln!("重发热键「{resend_hotkey}」与频道切换热键冲突，已忽略");
-        } else if let Err(e) = hotkey.set_resend_key(Some(&resend_hotkey)) {
+        } else if let Err(e) =
+            hotkey.set_named_hotkey(kotone_core::hotkey::HK_RESEND_LAST, Some(&resend_hotkey))
+        {
             eprintln!("注册重发热键失败: {e}");
         }
     }
@@ -736,8 +740,11 @@ async fn cmd_listen_hotkey(
                     HookEvent::HoldReleased => orch.on_hotkey_hold(false).await,
                     HookEvent::Toggle => orch.on_hotkey_toggle().await,
                     HookEvent::Cancel => orch.cancel().await,
-                    HookEvent::CycleChannel => orch.on_cycle_channel().await,
-                    HookEvent::ResendLast => orch.resend_last().await,
+                    HookEvent::NamedHotkey { id } => match id.as_str() {
+                        kotone_core::hotkey::HK_CHANNEL_CYCLE => orch.on_cycle_channel().await,
+                        kotone_core::hotkey::HK_RESEND_LAST => orch.resend_last().await,
+                        _ => {}
+                    },
                     // 诊断事件（修饰键失配）：consumer 已记日志，业务不处理
                     HookEvent::MainKeyMissed { .. } => {}
                 }

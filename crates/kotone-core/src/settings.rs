@@ -71,6 +71,14 @@ pub struct Settings {
     /// 文本重新注入到当前前台窗口；与录制/频道切换热键冲突时拒绝注册。
     #[serde(default)]
     pub resend_last_hotkey: String,
+    /// 文字处理启用开关热键（默认空 = 关闭）。按下切换 `postProcessing.enabled`
+    /// （总开关：屏蔽词 + AI 润色一并启用/停用）；与其它热键冲突时拒绝注册。
+    #[serde(default)]
+    pub toggle_post_processing_hotkey: String,
+    /// 切换文字处理流程热键（默认空 = 关闭）。按下按声明顺序循环切换当前激活的
+    /// 后处理流程（不足两条流程时无操作）；与其它热键冲突时拒绝注册。
+    #[serde(default)]
+    pub cycle_post_processing_hotkey: String,
     /// 「以管理员权限重启」启动提示：用户勾选「不再提示」后置 true，不再弹窗（默认 false）
     #[serde(default)]
     pub admin_prompt_dismissed: bool,
@@ -111,6 +119,24 @@ pub struct Settings {
     /// 后处理在线连接目录（不含 API key）。缺省空列表，旧配置零行为变化。
     #[serde(default)]
     pub connections: Vec<crate::connection::Connection>,
+    /// 诊断记录（流程事件）；默认开启。关闭后不再写入 events.jsonl。
+    #[serde(default)]
+    pub diagnostics: DiagnosticsConfig,
+}
+
+/// 诊断记录开关（config.json `diagnostics` 段）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsConfig {
+    /// 是否写入流程事件。默认 true。
+    #[serde(default = "default_true")]
+    pub recording: bool,
+}
+
+impl Default for DiagnosticsConfig {
+    fn default() -> Self {
+        Self { recording: true }
+    }
 }
 
 /// 桌面壳 UI 状态（config.json `ui` 段）
@@ -415,6 +441,8 @@ impl Default for Settings {
             run_as_admin_on_start: false,
             channel_cycle_hotkey: default_channel_cycle_hotkey(),
             resend_last_hotkey: String::new(), // 默认关闭（设置里录入）
+            toggle_post_processing_hotkey: String::new(), // 默认关闭（设置里录入）
+            cycle_post_processing_hotkey: String::new(), // 默认关闭（设置里录入）
             admin_prompt_dismissed: false,
             auto_admin_prompt_dismissed: false,
             history: crate::history::HistoryConfig::default(),
@@ -427,6 +455,7 @@ impl Default for Settings {
             hotwords_score: default_hotwords_score(),
             post_processing: crate::postprocess::PostProcessingConfig::default(),
             connections: Vec::new(),
+            diagnostics: DiagnosticsConfig::default(),
         }
     }
 }
@@ -923,6 +952,7 @@ mod tests {
         assert!(s.overlay.click_through);
         assert_eq!(s.overlay.custom_x, None);
         assert_eq!(s.overlay.custom_y, None);
+        assert!(s.diagnostics.recording);
         assert!(s.post_processing.enabled);
         assert_eq!(s.post_processing.active_pipeline_id, "blocklist");
         assert_eq!(s.post_processing.pipelines.len(), 1);

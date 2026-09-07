@@ -135,6 +135,10 @@ export interface Settings {
   channelCycleHotkey: string;
   /** 重发最近一条热键（默认空 = 关闭；Idle 时重发历史最新一条发送文本） */
   resendLastHotkey: string;
+  /** 文字处理启用开关热键（默认空 = 关闭；按下切换 postProcessing.enabled） */
+  togglePostProcessingHotkey: string;
+  /** 切换文字处理流程热键（默认空 = 关闭；按下按声明顺序循环流程） */
+  cyclePostProcessingHotkey: string;
   /** 交互模式预设（null = 旧字段推导） */
   interactionMode: InteractionMode | null;
   /** VAD 静音判停阈值 ms（one-shot 生效，200-5000） */
@@ -156,6 +160,13 @@ export interface Settings {
   overlay: OverlayConfig;
   /** 录音/发送音效提示 */
   soundFeedback: SoundFeedbackConfig;
+  /** 诊断记录（流程事件）；默认开启 */
+  diagnostics: DiagnosticsConfig;
+}
+
+export interface DiagnosticsConfig {
+  /** 是否写入流程事件。默认 true */
+  recording: boolean;
 }
 
 /** 音效提示配置（config.json `soundFeedback` 段） */
@@ -464,6 +475,16 @@ export interface ElevationStatus {
   supported: boolean;
 }
 
+/** 单个具名辅助热键的注册状态（未配置 / 未生效字段为 null） */
+export interface NamedHotkeyStatus {
+  /** 具名热键稳定 id（与设置页各分区对应） */
+  id: string;
+  /** 已生效组合；未配置 / 未生效为 null */
+  key: string | null;
+  /** 最近一次失败信息（如与录制/其他具名热键冲突；成功/未配置为 null） */
+  error: string | null;
+}
+
 /** get_hotkey_status 返回值：热键注册状态（多实例/占用冲突诊断） */
 export interface HotkeyStatus {
   /** 当前是否处于已注册状态 */
@@ -474,14 +495,8 @@ export interface HotkeyStatus {
   error: string | null;
   /** 当前生效后端：llhook（低级键盘钩子）/ register（RegisterHotKey）/ none */
   backend: string;
-  /** 已生效的频道切换热键（未配置/未生效为 null） */
-  cycleKey: string | null;
-  /** 频道切换热键最近一次失败信息（如与录制热键冲突） */
-  cycleError: string | null;
-  /** 已生效的重发最近一条热键（未配置/未生效为 null） */
-  resendKey: string | null;
-  /** 重发热键最近一次失败信息（如与录制/频道切换热键冲突） */
-  resendError: string | null;
+  /** 具名辅助热键状态（含未配置项；按声明顺序稳定输出） */
+  named: NamedHotkeyStatus[];
 }
 
 /** 录入/启动前的低级键盘钩子与 SendInput 环境自检结果。 */
@@ -529,6 +544,8 @@ const mock: MockStore = {
     autoAdminPromptDismissed: false,
     channelCycleHotkey: "Shift+CapsLock",
     resendLastHotkey: "",
+    togglePostProcessingHotkey: "",
+    cyclePostProcessingHotkey: "",
     interactionMode: "push-to-talk",
     vadSilenceMs: 700,
     vad: { threshold: 0.5, minSpeechMs: 50, minSilenceMs: 50 },
@@ -550,6 +567,7 @@ const mock: MockStore = {
       record: { enabled: true, volume: 60, soundId: "rise" },
       send: { enabled: true, volume: 60, soundId: "fall" },
     },
+    diagnostics: { recording: true },
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },
@@ -1282,7 +1300,7 @@ export async function previewSfx(kind: "record" | "send", soundId?: string): Pro
   await invoke<void>("preview_sfx", { kind, soundId: soundId ?? null });
 }
 
-/** 热键注册状态（registered/key/error/backend），设置页热键分区展示占用冲突 */
+/** 热键注册状态（registered/key/error/backend + 具名辅助热键），设置页热键分区展示占用冲突 */
 export async function getHotkeyStatus(): Promise<HotkeyStatus> {
   if (!isTauri)
     return {
@@ -1290,10 +1308,20 @@ export async function getHotkeyStatus(): Promise<HotkeyStatus> {
       key: mock.settings.hotkey.key,
       error: null,
       backend: "llhook",
-      cycleKey: mock.settings.channelCycleHotkey,
-      cycleError: null,
-      resendKey: mock.settings.resendLastHotkey || null,
-      resendError: null,
+      named: [
+        { id: "channel-cycle", key: mock.settings.channelCycleHotkey, error: null },
+        { id: "resend-last", key: mock.settings.resendLastHotkey || null, error: null },
+        {
+          id: "post-process-toggle",
+          key: mock.settings.togglePostProcessingHotkey || null,
+          error: null,
+        },
+        {
+          id: "post-process-cycle",
+          key: mock.settings.cyclePostProcessingHotkey || null,
+          error: null,
+        },
+      ],
     };
   return invoke<HotkeyStatus>("get_hotkey_status");
 }
@@ -1336,7 +1364,10 @@ export interface DiagnosticExportResult {
   path: string;
   eventCount: number;
   historyCount: number;
+  window: "24h" | "7d" | "all";
 }
+
+export type DiagnosticWindow = "24h" | "7d" | "all";
 
 /** 当前进程的 CPU / 内存占用（调用方按 ~2s 间隔轮询） */
 export async function getResourceUsage(): Promise<ResourceUsage> {
@@ -1345,16 +1376,31 @@ export async function getResourceUsage(): Promise<ResourceUsage> {
 }
 
 /** 导出诊断 ZIP；包内不含录音、识别文本或热词。 */
-export async function exportDiagnostics(path: string): Promise<DiagnosticExportResult> {
+export async function exportDiagnostics(
+  path: string,
+  window: DiagnosticWindow = "all",
+): Promise<DiagnosticExportResult> {
   if (!isTauri) {
     return {
       reportId: "KT-MOCK",
       path: path.endsWith(".zip") ? path : `${path}.zip`,
       eventCount: 0,
       historyCount: mock.history.length,
+      window,
     };
   }
-  return invoke<DiagnosticExportResult>("export_diagnostics", { path });
+  return invoke<DiagnosticExportResult>("export_diagnostics", { path, window });
+}
+
+/** 清除本地流程事件与 kotone.log。stopRecording 时同时关闭后续记录。 */
+export async function clearDiagnostics(stopRecording: boolean): Promise<void> {
+  if (!isTauri) {
+    mock.settings.diagnostics.recording = stopRecording
+      ? false
+      : mock.settings.diagnostics.recording;
+    return;
+  }
+  await invoke<void>("clear_diagnostics", { stopRecording });
 }
 
 /** 将前端已处理/未处理异常写入后端持久日志；后端负责脱敏和截断。 */

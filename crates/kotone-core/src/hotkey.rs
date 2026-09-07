@@ -21,6 +21,12 @@ pub enum HotkeyMode {
     Toggle,
 }
 
+/// 具名辅助热键的稳定 id。上层声明集合与路由；交通层对清单保持开放。
+pub const HK_CHANNEL_CYCLE: &str = "channel-cycle";
+pub const HK_RESEND_LAST: &str = "resend-last";
+pub const HK_PP_TOGGLE: &str = "post-process-toggle";
+pub const HK_PP_CYCLE: &str = "post-process-cycle";
+
 /// 热键事件源端口（core）：Windows 低层键鼠钩子与 RegisterHotKey 是两种实现。
 ///
 /// 实现负责平台线程与按键捕获；事件经构造时注入的 sink 外发（HookEvent），
@@ -32,18 +38,15 @@ pub trait HotkeySource: Send + Sync {
     fn unregister(&self);
     /// 会话激活开关：active=true 期间 Esc 取消使能
     fn set_cancel_active(&self, active: bool);
-    /// 频道切换热键（ADR-008；可选）：None 或解析失败 = 关闭频道切换。
-    /// 默认无操作（不支持切换键的实现安全忽略）。
-    fn set_cycle_key(&self, key: Option<&str>) -> Result<(), String> {
-        let _ = key;
+    /// 注册/更新/注销一个具名辅助热键（tap 语义）。`id` 由上层声明（见上）；
+    /// `combo` 为空 / None = 注销该 id。默认无操作（不支持时安全忽略）。
+    fn set_named_hotkey(&self, id: &str, combo: Option<&str>) -> Result<(), String> {
+        let _ = (id, combo);
         Ok(())
     }
 
-    /// 重发最近一条热键（可选）：None 或解析失败 = 关闭。默认无操作。
-    fn set_resend_key(&self, key: Option<&str>) -> Result<(), String> {
-        let _ = key;
-        Ok(())
-    }
+    /// 注销全部具名辅助热键（主热键与 Esc 取消不受影响）。默认无操作。
+    fn clear_named_hotkeys(&self) {}
 }
 
 // ---------- VK 码（Win32 常量值；定义为 u32 常量以便跨平台编译与测试） ----------
@@ -255,7 +258,7 @@ pub enum KeyAction {
 }
 
 /// 命中后产生的事件（发给 orchestrator）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookEvent {
     /// hold 模式：目标键按下
     HoldPressed,
@@ -265,10 +268,8 @@ pub enum HookEvent {
     Toggle,
     /// 会话激活期间 Esc 取消
     Cancel,
-    /// 频道切换键按下（ADR-008；tap 语义，按住不重复触发）
-    CycleChannel,
-    /// 重发最近一条热键按下（可选；tap 语义，按住不重复触发）
-    ResendLast,
+    /// 具名辅助热键按下（tap 语义，按住不重复触发）；id 由上层声明。
+    NamedHotkey { id: String },
     /// 诊断：主键按下但严格修饰键匹配失败（未吞键、不触发业务）。
     /// 「钩子活着但主键被放行」只能靠它区分于「钩子被 Windows 静默摘除」——
     /// 0.1.6 第四步排障：webview 聚焦时 CapsLock 落进 DOM 无钩子上报。
@@ -284,7 +285,7 @@ pub fn combos_conflict(a: &str, b: &str) -> bool {
 }
 
 /// 一次按键的判定结果
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchOutcome {
     /// true = 吞掉该键（不 CallNextHookEx，游戏收不到）
     pub swallow: bool,
@@ -304,11 +305,11 @@ pub struct HookMatcher {
     spec: HotkeySpec,
     mode: HotkeyMode,
     enabled: bool,
-    /// 频道切换键（ADR-008；可选）：与主键同构的严格修饰键匹配，tap 语义。
-    /// 与主键同 vk 不同修饰键时互不干扰（如主键 CapsLock / 切换 Shift+CapsLock）。
-    cycle_spec: Option<HotkeySpec>,
-    /// 重发最近一条热键（可选）：与频道切换键同构，tap 语义。
-    resend_spec: Option<HotkeySpec>,
+    /// 具名辅助热键（tap 语义）：稳定 id → 严格修饰键匹配 spec。声明顺序即
+    /// 优先级（与主键同 vk 不同修饰键时互不干扰，未命中的具名键落回主键分支）。
+    named_specs: Vec<(String, HotkeySpec)>,
+    /// 当前被按住（已吞 down 未 up）的具名热键 id，用于重复 down 过滤与成对吞 up
+    named_down: Vec<String>,
     // 修饰键实时按下态
     ctrl: bool,
     alt: bool,
@@ -319,10 +320,6 @@ pub struct HookMatcher {
     main_matched: bool,
     /// hold 模式已发出 HoldPressed（修饰键中途松开也必须补 HoldReleased）
     hold_fired: bool,
-    // 切换键按下态（重复 down 过滤 + 成对吞键；命中才置位，未命中落回主键分支）
-    cycle_down: bool,
-    /// 重发键按下态（与 cycle_down 同构）
-    resend_down: bool,
     esc_down: bool,
     esc_matched: bool,
     /// 会话激活（state != idle）：Esc 取消使能
@@ -340,16 +337,14 @@ impl HookMatcher {
             spec,
             mode,
             enabled: true,
-            cycle_spec: None,
-            resend_spec: None,
+            named_specs: Vec::new(),
+            named_down: Vec::new(),
             ctrl: false,
             alt: false,
             shift: false,
             main_down: false,
             main_matched: false,
             hold_fired: false,
-            cycle_down: false,
-            resend_down: false,
             esc_down: false,
             esc_matched: false,
             session_active: false,
@@ -358,26 +353,38 @@ impl HookMatcher {
         }
     }
 
-    /// 运行时改键/改模式：重置全部按下态（保留频道切换键与重发键配置——
-    /// 两者由独立设置项驱动，主键改键不应顺手清掉它们）
+    /// 运行时改键/改模式：重置全部按下态（保留具名热键配置——它们由独立设置项
+    /// 驱动，主键改键不应顺手清掉它们）
     pub fn set_config(&mut self, spec: HotkeySpec, mode: HotkeyMode) {
-        let cycle_spec = self.cycle_spec;
-        let resend_spec = self.resend_spec;
+        let named_specs = std::mem::take(&mut self.named_specs);
         *self = Self::new(spec, mode);
-        self.cycle_spec = cycle_spec;
-        self.resend_spec = resend_spec;
+        self.named_specs = named_specs;
     }
 
-    /// 配置/清除频道切换键（None = 关闭频道切换；ADR-008）
-    pub fn set_cycle_spec(&mut self, spec: Option<HotkeySpec>) {
-        self.cycle_spec = spec;
-        self.cycle_down = false;
+    /// 配置/更新/清除一个具名热键（None = 关闭该 id）。同 id 已存在时原位更新
+    /// （保持声明顺序），否则追加到末尾。
+    pub fn set_named_spec(&mut self, id: &str, spec: Option<HotkeySpec>) {
+        self.named_down.retain(|existing| existing != id);
+        match spec {
+            Some(spec) => {
+                if let Some(entry) = self
+                    .named_specs
+                    .iter_mut()
+                    .find(|(existing, _)| existing == id)
+                {
+                    entry.1 = spec;
+                } else {
+                    self.named_specs.push((id.to_string(), spec));
+                }
+            }
+            None => self.named_specs.retain(|(existing, _)| existing != id),
+        }
     }
 
-    /// 配置/清除重发最近一条热键（None = 关闭）
-    pub fn set_resend_spec(&mut self, spec: Option<HotkeySpec>) {
-        self.resend_spec = spec;
-        self.resend_down = false;
+    /// 注销全部具名热键（主键与 Esc 取消不受影响）
+    pub fn clear_named_specs(&mut self) {
+        self.named_specs.clear();
+        self.named_down.clear();
     }
 
     pub fn set_enabled(&mut self, enabled: bool) {
@@ -386,8 +393,7 @@ impl HookMatcher {
             self.main_down = false;
             self.main_matched = false;
             self.hold_fired = false;
-            self.cycle_down = false;
-            self.resend_down = false;
+            self.named_down.clear();
             self.esc_down = false;
             self.esc_matched = false;
         }
@@ -477,78 +483,43 @@ impl HookMatcher {
             return PASS;
         }
 
-        // 频道切换键（ADR-008）：先于主键判定，但只在确实命中时接管事件——
-        // 两者 vk 可相同（如主键 CapsLock、切换 Shift+CapsLock），切换键未命中
-        // 必须落回主键分支，否则裸主键（无修饰键的录制键）会被短路吞掉。
-        if let Some(cs) = self.cycle_spec {
-            if vk == cs.vk {
-                if down {
-                    if self.cycle_down {
-                        // 已命中按住的重复 down：吞但不重复触发
-                        return MatchOutcome {
-                            swallow: true,
-                            event: None,
-                            captured: None,
-                        };
-                    }
-                    let matched =
-                        self.ctrl == cs.ctrl && self.alt == cs.alt && self.shift == cs.shift;
-                    if matched {
-                        self.cycle_down = true;
-                        return MatchOutcome {
-                            swallow: true,
-                            event: Some(HookEvent::CycleChannel),
-                            captured: None,
-                        };
-                    }
-                    // 未命中：落到主键分支（同 vk 不同修饰键场景）
-                } else if self.cycle_down {
-                    self.cycle_down = false;
+        // 具名辅助热键：先于主键判定，但只在确实命中时接管事件——
+        // 它们可与主键同 vk 不同修饰键（如主键 CapsLock、具名 Shift+CapsLock），
+        // 未命中时必须落回主键分支，否则裸主键（无修饰键的录制键）会被短路吞掉。
+        // 声明顺序即优先级；不同具名键也可同 vk 不同修饰键，先声明者先匹配。
+        for i in 0..self.named_specs.len() {
+            let (id, ns) = &self.named_specs[i];
+            if vk != ns.vk {
+                continue;
+            }
+            if down {
+                if self.named_down.iter().any(|existing| existing == id) {
+                    // 已命中按住的重复 down：吞但不重复触发
                     return MatchOutcome {
                         swallow: true,
                         event: None,
                         captured: None,
                     };
                 }
-                // 非切换键按下的 up：落到主键分支
-            }
-        }
-
-        // 重发最近一条热键：与频道切换键同构（可选；严格修饰键匹配，tap 语义）。
-        // 两个辅助键 vk 可相同（如切换 Shift+CapsLock、重发 Alt+CapsLock），
-        // 未命中时同样落回主键分支。
-        if let Some(rs) = self.resend_spec {
-            if vk == rs.vk {
-                if down {
-                    if self.resend_down {
-                        // 已命中按住的重复 down：吞但不重复触发
-                        return MatchOutcome {
-                            swallow: true,
-                            event: None,
-                            captured: None,
-                        };
-                    }
-                    let matched =
-                        self.ctrl == rs.ctrl && self.alt == rs.alt && self.shift == rs.shift;
-                    if matched {
-                        self.resend_down = true;
-                        return MatchOutcome {
-                            swallow: true,
-                            event: Some(HookEvent::ResendLast),
-                            captured: None,
-                        };
-                    }
-                    // 未命中：落到主键分支（同 vk 不同修饰键场景）
-                } else if self.resend_down {
-                    self.resend_down = false;
+                let matched = self.ctrl == ns.ctrl && self.alt == ns.alt && self.shift == ns.shift;
+                if matched {
+                    self.named_down.push(id.clone());
                     return MatchOutcome {
                         swallow: true,
-                        event: None,
+                        event: Some(HookEvent::NamedHotkey { id: id.clone() }),
                         captured: None,
                     };
                 }
-                // 非重发键按下的 up：落到主键分支
+                // 未命中：落到后续具名键 / 主键分支（同 vk 不同修饰键场景）
+            } else if self.named_down.iter().any(|existing| existing == id) {
+                self.named_down.retain(|existing| existing != id);
+                return MatchOutcome {
+                    swallow: true,
+                    event: None,
+                    captured: None,
+                };
             }
+            // 非本键按下的 up：落到后续具名键 / 主键分支
         }
 
         // 主键
@@ -1005,21 +976,26 @@ mod tests {
         assert_eq!(r.captured.unwrap().combo_name(), "G");
     }
 
-    // ---------- 频道切换键（ADR-008） ----------
+    // ---------- 具名辅助热键（channel-cycle / resend-last 及其余） ----------
 
     #[test]
-    fn cycle_key_fires_with_strict_modifiers() {
+    fn named_hotkey_fires_with_strict_modifiers() {
         let mut m = matcher("CapsLock", HotkeyMode::Toggle);
-        m.set_cycle_spec(parse_hotkey("Shift+CapsLock"));
-        // 无 Shift：命中主键而非切换键
+        m.set_named_spec(HK_CHANNEL_CYCLE, parse_hotkey("Shift+CapsLock"));
+        // 无 Shift：命中主键而非具名热键
         let r = down(&mut m, VK_CAPITAL);
         assert_eq!(r.event, Some(HookEvent::Toggle));
         assert!(r.swallow);
         up(&mut m, VK_CAPITAL);
-        // Shift+CapsLock：命中切换键，不触发录制
+        // Shift+CapsLock：命中具名热键，不触发录制
         down(&mut m, VK_LSHIFT);
         let r = down(&mut m, VK_CAPITAL);
-        assert_eq!(r.event, Some(HookEvent::CycleChannel));
+        assert_eq!(
+            r.event,
+            Some(HookEvent::NamedHotkey {
+                id: HK_CHANNEL_CYCLE.into()
+            })
+        );
         assert!(r.swallow);
         // 重复 down 不重复触发
         assert_eq!(down(&mut m, VK_CAPITAL).event, None);
@@ -1032,9 +1008,9 @@ mod tests {
     }
 
     #[test]
-    fn cycle_key_rejects_extra_modifiers() {
+    fn named_hotkey_rejects_extra_modifiers() {
         let mut m = matcher("F8", HotkeyMode::Toggle);
-        m.set_cycle_spec(parse_hotkey("Shift+F9"));
+        m.set_named_spec(HK_CHANNEL_CYCLE, parse_hotkey("Shift+F9"));
         // Ctrl+Shift+F9：修饰键不严格相等，不命中
         down(&mut m, VK_LCONTROL);
         down(&mut m, VK_LSHIFT);
@@ -1046,20 +1022,22 @@ mod tests {
     }
 
     #[test]
-    fn cycle_spec_survives_main_rekey_and_clears_on_none() {
+    fn named_spec_survives_main_rekey_and_clears_on_none() {
         let mut m = matcher("CapsLock", HotkeyMode::Toggle);
-        m.set_cycle_spec(parse_hotkey("Shift+CapsLock"));
-        // 主键改键不清掉切换键
+        m.set_named_spec(HK_CHANNEL_CYCLE, parse_hotkey("Shift+CapsLock"));
+        // 主键改键不清掉具名热键
         m.set_config(parse_hotkey("F8").unwrap(), HotkeyMode::Toggle);
         down(&mut m, VK_LSHIFT);
         assert_eq!(
             down(&mut m, VK_CAPITAL).event,
-            Some(HookEvent::CycleChannel)
+            Some(HookEvent::NamedHotkey {
+                id: HK_CHANNEL_CYCLE.into()
+            })
         );
         up(&mut m, VK_CAPITAL);
         up(&mut m, VK_LSHIFT);
         // 清除后不再触发
-        m.set_cycle_spec(None);
+        m.set_named_spec(HK_CHANNEL_CYCLE, None);
         down(&mut m, VK_LSHIFT);
         assert_eq!(down(&mut m, VK_CAPITAL), PASS);
         up(&mut m, VK_CAPITAL);
@@ -1067,12 +1045,12 @@ mod tests {
     }
 
     #[test]
-    fn cycle_key_disabled_with_matcher() {
+    fn named_hotkey_disabled_with_matcher() {
         let mut m = matcher("CapsLock", HotkeyMode::Toggle);
-        m.set_cycle_spec(parse_hotkey("Shift+CapsLock"));
+        m.set_named_spec(HK_CHANNEL_CYCLE, parse_hotkey("Shift+CapsLock"));
         m.set_enabled(false);
         down(&mut m, VK_LSHIFT);
-        assert_eq!(down(&mut m, VK_CAPITAL), PASS, "运行时停止后切换键也放行");
+        assert_eq!(down(&mut m, VK_CAPITAL), PASS, "运行时停止后具名热键也放行");
         up(&mut m, VK_CAPITAL);
         up(&mut m, VK_LSHIFT);
     }
@@ -1087,12 +1065,10 @@ mod tests {
         assert!(!combos_conflict("NotAKey", "F8"));
     }
 
-    // ---------- 重发最近一条热键 ----------
-
     #[test]
-    fn resend_key_fires_with_strict_modifiers() {
+    fn resend_named_hotkey_fires_with_strict_modifiers() {
         let mut m = matcher("F8", HotkeyMode::Toggle);
-        m.set_resend_spec(parse_hotkey("Alt+F9"));
+        m.set_named_spec(HK_RESEND_LAST, parse_hotkey("Alt+F9"));
         // 无 Alt：不命中、不吞（F9 非主键 → 整体放行）
         let r = down(&mut m, VK_F1 + 8);
         assert_eq!(r, PASS);
@@ -1100,7 +1076,12 @@ mod tests {
         // Alt+F9：命中重发键
         down(&mut m, VK_LMENU);
         let r = down(&mut m, VK_F1 + 8);
-        assert_eq!(r.event, Some(HookEvent::ResendLast));
+        assert_eq!(
+            r.event,
+            Some(HookEvent::NamedHotkey {
+                id: HK_RESEND_LAST.into()
+            })
+        );
         assert!(r.swallow);
         // 重复 down 不重复触发
         assert_eq!(down(&mut m, VK_F1 + 8).event, None);
@@ -1111,15 +1092,20 @@ mod tests {
         up(&mut m, VK_LMENU);
         // 松开后再次按：再次触发
         down(&mut m, VK_LMENU);
-        assert_eq!(down(&mut m, VK_F1 + 8).event, Some(HookEvent::ResendLast));
+        assert_eq!(
+            down(&mut m, VK_F1 + 8).event,
+            Some(HookEvent::NamedHotkey {
+                id: HK_RESEND_LAST.into()
+            })
+        );
         up(&mut m, VK_F1 + 8);
         up(&mut m, VK_LMENU);
     }
 
     #[test]
-    fn resend_key_rejects_extra_modifiers() {
+    fn resend_named_hotkey_rejects_extra_modifiers() {
         let mut m = matcher("F8", HotkeyMode::Toggle);
-        m.set_resend_spec(parse_hotkey("Alt+F9"));
+        m.set_named_spec(HK_RESEND_LAST, parse_hotkey("Alt+F9"));
         // Ctrl+Alt+F9：修饰键不严格相等，不命中
         down(&mut m, VK_LCONTROL);
         down(&mut m, VK_LMENU);
@@ -1131,41 +1117,56 @@ mod tests {
     }
 
     #[test]
-    fn resend_and_cycle_same_vk_different_modifiers() {
-        // 主键 CapsLock、切换 Shift+CapsLock、重发 Alt+CapsLock：三者互不干扰
+    fn two_named_same_vk_different_modifiers() {
+        // 主键 CapsLock、具名 Shift+CapsLock、具名 Alt+CapsLock：三者互不干扰
         let mut m = matcher("CapsLock", HotkeyMode::Toggle);
-        m.set_cycle_spec(parse_hotkey("Shift+CapsLock"));
-        m.set_resend_spec(parse_hotkey("Alt+CapsLock"));
+        m.set_named_spec(HK_CHANNEL_CYCLE, parse_hotkey("Shift+CapsLock"));
+        m.set_named_spec(HK_RESEND_LAST, parse_hotkey("Alt+CapsLock"));
         // 裸 CapsLock：主键
         let r = down(&mut m, VK_CAPITAL);
         assert_eq!(r.event, Some(HookEvent::Toggle));
         up(&mut m, VK_CAPITAL);
-        // Shift+CapsLock：切换键
+        // Shift+CapsLock：第一个具名热键
         down(&mut m, VK_LSHIFT);
         let r = down(&mut m, VK_CAPITAL);
-        assert_eq!(r.event, Some(HookEvent::CycleChannel));
+        assert_eq!(
+            r.event,
+            Some(HookEvent::NamedHotkey {
+                id: HK_CHANNEL_CYCLE.into()
+            })
+        );
         up(&mut m, VK_CAPITAL);
         up(&mut m, VK_LSHIFT);
-        // Alt+CapsLock：重发键
+        // Alt+CapsLock：第二个具名热键
         down(&mut m, VK_LMENU);
         let r = down(&mut m, VK_CAPITAL);
-        assert_eq!(r.event, Some(HookEvent::ResendLast));
+        assert_eq!(
+            r.event,
+            Some(HookEvent::NamedHotkey {
+                id: HK_RESEND_LAST.into()
+            })
+        );
         up(&mut m, VK_CAPITAL);
         up(&mut m, VK_LMENU);
     }
 
     #[test]
-    fn resend_spec_survives_main_rekey_and_clears_on_none() {
+    fn named_spec_survives_main_rekey_and_clears_on_none_resend() {
         let mut m = matcher("CapsLock", HotkeyMode::Toggle);
-        m.set_resend_spec(parse_hotkey("Alt+F9"));
-        // 主键改键不清掉重发键
+        m.set_named_spec(HK_RESEND_LAST, parse_hotkey("Alt+F9"));
+        // 主键改键不清掉具名热键
         m.set_config(parse_hotkey("F8").unwrap(), HotkeyMode::Toggle);
         down(&mut m, VK_LMENU);
-        assert_eq!(down(&mut m, VK_F1 + 8).event, Some(HookEvent::ResendLast));
+        assert_eq!(
+            down(&mut m, VK_F1 + 8).event,
+            Some(HookEvent::NamedHotkey {
+                id: HK_RESEND_LAST.into()
+            })
+        );
         up(&mut m, VK_F1 + 8);
         up(&mut m, VK_LMENU);
         // 清除后不再触发
-        m.set_resend_spec(None);
+        m.set_named_spec(HK_RESEND_LAST, None);
         down(&mut m, VK_LMENU);
         assert_eq!(down(&mut m, VK_F1 + 8), PASS);
         up(&mut m, VK_F1 + 8);
@@ -1173,13 +1174,18 @@ mod tests {
     }
 
     #[test]
-    fn resend_key_disabled_with_matcher() {
+    fn named_specs_clear_all_and_replace_in_place() {
         let mut m = matcher("F8", HotkeyMode::Toggle);
-        m.set_resend_spec(parse_hotkey("Alt+F9"));
-        m.set_enabled(false);
-        down(&mut m, VK_LMENU);
-        assert_eq!(down(&mut m, VK_F1 + 8), PASS, "运行时停止后重发键也放行");
-        up(&mut m, VK_F1 + 8);
-        up(&mut m, VK_LMENU);
+        m.set_named_spec(HK_CHANNEL_CYCLE, parse_hotkey("Shift+CapsLock"));
+        m.set_named_spec(HK_RESEND_LAST, parse_hotkey("Alt+F9"));
+        assert_eq!(m.named_specs.len(), 2);
+        // 同 id 原位更新保持顺序
+        m.set_named_spec(HK_CHANNEL_CYCLE, parse_hotkey("Ctrl+F6"));
+        assert_eq!(m.named_specs.len(), 2);
+        assert_eq!(m.named_specs[0].1, parse_hotkey("Ctrl+F6").unwrap());
+        // 全部清除
+        m.clear_named_specs();
+        assert!(m.named_specs.is_empty());
+        assert!(m.named_down.is_empty());
     }
 }

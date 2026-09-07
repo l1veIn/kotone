@@ -223,6 +223,16 @@
           </span>
         {/key}
       {/if}
+      {#if $appState.ppNotice && $appState.state !== "idle"}
+        {#key $appState.ppNotice.id}
+          <span
+            class="pp-notice shrink-0 rounded-full bg-kotone-cyan/15 px-2.5 py-0.5 text-[10px] leading-tight font-semibold whitespace-nowrap text-kotone-cyan ring-1 ring-kotone-cyan/40"
+            in:fade={{ duration: 120 }}
+          >
+            {$appState.ppNotice.text}
+          </span>
+        {/key}
+      {/if}
       {#if $appState.state === "listening"}
         <!-- 收到真实 partial 后立即上屏；尚无 partial（含非流式引擎）时显示声波。 -->
         <span class="mic-breath h-2.5 w-2.5 shrink-0 rounded-full bg-kotone-cyan"></span>
@@ -311,9 +321,15 @@
           关闭
         </button>
       {:else}
-        <!-- idle（托盘手动唤起时可见） -->
-        <span class="h-2 w-2 shrink-0 rounded-full bg-kotone-cyan/60"></span>
-        <p class="shrink-0 text-sm whitespace-nowrap text-white/70">Kotone 待机 · 按热键说话</p>
+        <!-- idle：热键切换文字处理时短暂显示提示（托盘手动唤起时显示待机文案） -->
+        {#if $appState.ppNotice}
+          <p class="shrink-0 text-sm whitespace-nowrap text-kotone-cyan">
+            {$appState.ppNotice.text}
+          </p>
+        {:else}
+          <span class="h-2 w-2 shrink-0 rounded-full bg-kotone-cyan/60"></span>
+          <p class="shrink-0 text-sm whitespace-nowrap text-white/70">Kotone 待机 · 按热键说话</p>
+        {/if}
       {/if}
     </div>
   </div>
@@ -333,6 +349,16 @@
           title="当前发送频道：{$appState.channel.displayName}"
         >
           {$appState.channel.displayName}
+        </span>
+      {/key}
+    {/if}
+    {#if $appState.ppNotice && $appState.state !== "idle"}
+      {#key $appState.ppNotice.id}
+        <span
+          class="pp-notice shrink-0 rounded-full bg-kotone-cyan/15 px-2.5 py-1 text-[10px] leading-tight font-semibold whitespace-nowrap text-kotone-cyan ring-1 ring-kotone-cyan/40"
+          in:fade={{ duration: 120 }}
+        >
+          {$appState.ppNotice.text}
         </span>
       {/key}
     {/if}
@@ -478,10 +504,17 @@
       </div>
     {:else}
       <!-- idle（托盘手动唤起悬浮条时可见；正常流程会自动隐藏窗口） -->
-      <div class="min-w-0 flex-1" in:fade={{ duration: 150 }}>
-        <p class="text-sm font-medium text-white/80">Kotone 琴音</p>
-        <p class="text-[11px] text-white/40">待机中 · 按热键开始说话</p>
-      </div>
+      {#if $appState.ppNotice}
+        <div class="min-w-0 flex-1" in:fade={{ duration: 150 }}>
+          <p class="text-sm font-semibold text-kotone-cyan">{$appState.ppNotice.text}</p>
+          <p class="text-[11px] text-white/40">文字处理状态已更新</p>
+        </div>
+      {:else}
+        <div class="min-w-0 flex-1" in:fade={{ duration: 150 }}>
+          <p class="text-sm font-medium text-white/80">Kotone 琴音</p>
+          <p class="text-[11px] text-white/40">待机中 · 按热键开始说话</p>
+        </div>
+      {/if}
     {/if}
   </div>
 </div>

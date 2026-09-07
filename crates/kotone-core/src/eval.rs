@@ -152,6 +152,24 @@ pub fn utc_now_iso_millis() -> String {
     format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}.{ms:03}Z")
 }
 
+/// 当前时刻往前推 `hours` 小时的 UTC 毫秒时间戳（诊断包时间窗）。
+pub fn utc_iso_millis_ago(hours: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let then = now.saturating_sub(std::time::Duration::from_secs(hours.saturating_mul(3600)));
+    let days = (then.as_secs() / 86400) as i64;
+    let secs = (then.as_secs() % 86400) as u32;
+    let (y, m, d) = civil_from_days(days);
+    format!(
+        "{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}.{ms:03}Z",
+        hh = secs / 3600,
+        mm = secs % 3600 / 60,
+        ss = secs % 60,
+        ms = then.subsec_millis()
+    )
+}
+
 fn utc_compact() -> String {
     let (y, m, d, hh, mm, ss, _) = utc_now_parts();
     format!("{y:04}{m:02}{d:02}-{hh:02}{mm:02}{ss:02}")

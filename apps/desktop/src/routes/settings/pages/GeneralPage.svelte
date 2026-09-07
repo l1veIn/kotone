@@ -201,6 +201,17 @@
       toast(false, `录制热键与重发热键（${resendKey}）冲突，请换一个或到「高级」页调整`);
       return;
     }
+    // 录制键与文字处理开关/切流程热键也不能相同
+    const ppToggleKey = $settingsStore?.togglePostProcessingHotkey ?? "";
+    if (ppToggleKey && combosConflict(key, ppToggleKey)) {
+      toast(false, `录制热键与文字处理开关热键（${ppToggleKey}）冲突，请换一个或到「高级」页调整`);
+      return;
+    }
+    const ppCycleKey = $settingsStore?.cyclePostProcessingHotkey ?? "";
+    if (ppCycleKey && combosConflict(key, ppCycleKey)) {
+      toast(false, `录制热键与切换文字处理流程热键（${ppCycleKey}）冲突，请换一个或到「高级」页调整`);
+      return;
+    }
     try {
       // 热键变更后端自动重注册（lib.rs update_settings）；模式沿用当前值
       settingsStore.set(

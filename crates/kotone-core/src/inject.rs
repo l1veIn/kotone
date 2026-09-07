@@ -110,6 +110,12 @@ pub trait FocusBackend: Send + Sync {
     fn foreground_process_name(&self) -> Option<String> {
         None
     }
+
+    /// Ctrl/Alt/Shift/Win 是否仍物理按下。Alt+F6 这类具名热键在 keydown
+    /// 触发时修饰键还按着，立刻 SendInput 会变成 Alt+Enter。默认 false。
+    fn modifier_keys_down(&self) -> bool {
+        false
+    }
 }
 
 /// 占位实现：什么都不做直接成功。非 Windows 平台兜底（Windows 上由 `WindowsInjector` 接管）。

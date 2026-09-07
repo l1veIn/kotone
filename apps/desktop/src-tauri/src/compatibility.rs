@@ -25,6 +25,10 @@ pub(crate) struct ElevationStatus {
 
 /// 从当前激活 profile 解析正在运行的游戏 PID。提权检查与
 /// 独占全屏监控共用这一真源，避免一边回退内置 profile、另一边漏掉。
+pub(crate) fn active_game_pid(state: &SharedState) -> Option<u32> {
+    resolve_active_game_pid(state)
+}
+
 fn resolve_active_game_pid(state: &SharedState) -> Option<u32> {
     let guard = state.settings.read().unwrap();
     let mut available = profile::list();

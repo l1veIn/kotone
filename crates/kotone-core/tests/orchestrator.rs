@@ -134,6 +134,7 @@ struct MockFocusBackend {
     /// 模拟的前台窗口
     foreground: TargetWindow,
     restore_ok: bool,
+    modifiers_down_remaining: Mutex<u32>,
 }
 
 impl MockFocusBackend {
@@ -142,7 +143,13 @@ impl MockFocusBackend {
             log,
             foreground: TargetWindow(foreground),
             restore_ok,
+            modifiers_down_remaining: Mutex::new(0),
         }
+    }
+
+    fn with_modifier_polls(self, n: u32) -> Self {
+        *self.modifiers_down_remaining.lock().unwrap() = n;
+        self
     }
 }
 
@@ -157,6 +164,15 @@ impl FocusBackend for MockFocusBackend {
             .unwrap()
             .push(format!("restore:{}", target.0));
         self.restore_ok
+    }
+    fn modifier_keys_down(&self) -> bool {
+        let mut remaining = self.modifiers_down_remaining.lock().unwrap();
+        if *remaining == 0 {
+            false
+        } else {
+            *remaining -= 1;
+            true
+        }
     }
 }
 
@@ -1121,6 +1137,121 @@ async fn empty_finalize_returns_idle_silently() {
     orch.cancel().await;
 }
 
+/// 文字处理开关/切流程热键：toggle 翻转 `postProcessing.enabled`、cycle 按声明顺序
+/// 循环 `active_pipeline_id`，均经 SettingsRepository 持久化并广播 `kotone://pp-status`。
+#[tokio::test]
+async fn post_processing_hotkeys_toggle_and_cycle_persist_and_emit() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.json");
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
+    let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(
+        Arc::new(Mutex::new(Vec::new())),
+        42,
+        true,
+    ));
+
+    let mut settings = Settings::default();
+    settings.post_processing.enabled = false; // 默认测试关掉屏蔽词；这里显式验证翻转
+    settings.post_processing.pipelines = vec![
+        kotone_core::postprocess::PipelineConfig {
+            id: "blocklist".into(),
+            display_name: "屏蔽词".into(),
+            steps: vec![required_postprocess_step("b1", "builtin.blocklist-filter")],
+        },
+        kotone_core::postprocess::PipelineConfig {
+            id: "custom".into(),
+            display_name: "我的流程".into(),
+            steps: Vec::new(),
+        },
+    ];
+    settings.post_processing.active_pipeline_id = "blocklist".into();
+    let settings_arc = Arc::new(RwLock::new(settings));
+    let repo = Arc::new(kotone_core::settings::SettingsRepository::new_at(
+        settings_arc.clone(),
+        config_path.clone(),
+    ));
+
+    let mut registry = EngineRegistry::new();
+    kotone_stt::register_builtin(&mut registry);
+    let emitter = Arc::new(VecEmitter::default());
+    let orch = Arc::new(
+        Orchestrator::new(
+            settings_arc.clone(),
+            Arc::new(registry),
+            Arc::new(MockAudioBackend),
+            injector,
+            focus,
+            emitter.clone(),
+        )
+        .with_settings_repository(repo.clone()),
+    );
+
+    let pp_events = |action: &str| {
+        emitter
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(e, _)| e == "kotone://pp-status")
+            .filter(|(_, p)| p.get("action").and_then(|v| v.as_str()) == Some(action))
+            .count()
+    };
+
+    // 开关：false → true，广播 toggle；并真正落盘
+    orch.on_post_processing_toggle().await;
+    assert!(settings_arc.read().unwrap().post_processing.enabled);
+    assert!(
+        kotone_core::settings::load_from(&config_path)
+            .post_processing
+            .enabled,
+        "toggle 应写盘持久化"
+    );
+    assert_eq!(pp_events("toggle"), 1);
+
+    // 再开关：true → false
+    orch.on_post_processing_toggle().await;
+    assert!(!settings_arc.read().unwrap().post_processing.enabled);
+    assert_eq!(pp_events("toggle"), 2);
+
+    // 切流程：blocklist → custom → blocklist（声明顺序循环），并落盘
+    orch.on_post_processing_cycle().await;
+    assert_eq!(
+        settings_arc
+            .read()
+            .unwrap()
+            .post_processing
+            .active_pipeline_id,
+        "custom"
+    );
+    assert_eq!(pp_events("cycle"), 1);
+    orch.on_post_processing_cycle().await;
+    assert_eq!(
+        settings_arc
+            .read()
+            .unwrap()
+            .post_processing
+            .active_pipeline_id,
+        "blocklist"
+    );
+    assert_eq!(pp_events("cycle"), 2);
+    assert_eq!(
+        kotone_core::settings::load_from(&config_path)
+            .post_processing
+            .active_pipeline_id,
+        "blocklist"
+    );
+
+    // 单流程时切流程热键无操作（不写盘、不广播）
+    {
+        let mut s = settings_arc.write().unwrap();
+        s.post_processing.pipelines.truncate(1);
+    }
+    let before = pp_events("cycle");
+    orch.on_post_processing_cycle().await;
+    assert_eq!(pp_events("cycle"), before, "单流程时切流程应无操作");
+}
+
 /// 带 eval 录档的 orchestrator：录档目录指向临时目录（不污染真实 ~/.kotone/eval）
 fn make_orchestrator_with_eval(
     eval_dir: std::path::PathBuf,
@@ -2001,6 +2132,16 @@ fn make_history_orchestrator(
     history_dir: std::path::PathBuf,
     eval_dir: Option<std::path::PathBuf>,
 ) -> Arc<Orchestrator> {
+    make_history_orchestrator_focus(auto_send, injector, history_dir, eval_dir, None)
+}
+
+fn make_history_orchestrator_focus(
+    auto_send: bool,
+    injector: Arc<dyn Injector>,
+    history_dir: std::path::PathBuf,
+    eval_dir: Option<std::path::PathBuf>,
+    focus: Option<Arc<dyn FocusBackend>>,
+) -> Arc<Orchestrator> {
     let mut settings = test_settings();
     // 同 make_orchestrator_full：沿用 toggle + autoSend 推导，显式置 None
     settings.interaction_mode = None;
@@ -2013,11 +2154,13 @@ fn make_history_orchestrator(
     let mut registry = EngineRegistry::new();
     kotone_stt::register_builtin(&mut registry);
     registry.register(Box::new(NeverReadyEngine));
-    let focus: Arc<dyn FocusBackend> = Arc::new(MockFocusBackend::new(
-        Arc::new(Mutex::new(Vec::new())),
-        42,
-        true,
-    ));
+    let focus: Arc<dyn FocusBackend> = focus.unwrap_or_else(|| {
+        Arc::new(MockFocusBackend::new(
+            Arc::new(Mutex::new(Vec::new())),
+            42,
+            true,
+        ))
+    });
     let mut processors = kotone_core::postprocess::ProcessorRegistry::new();
     kotone_postprocess::register_builtin(&mut processors).unwrap();
     let mut orch = Orchestrator::new(
@@ -2216,6 +2359,34 @@ async fn resend_last_sends_latest_history_text() {
         1,
         "重发不应产生新的历史记录（无会话草稿）"
     );
+}
+
+/// 重发在修饰键仍按下时不得立刻注入（Alt+F6 会变成游戏里的 Alt+Enter）。
+#[tokio::test]
+async fn resend_last_waits_until_modifiers_release() {
+    let dir = tempfile::tempdir().unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
+    let focus: Arc<dyn FocusBackend> = Arc::new(
+        MockFocusBackend::new(Arc::new(Mutex::new(Vec::new())), 42, true).with_modifier_polls(3),
+    );
+    let orch = make_history_orchestrator_focus(
+        true,
+        injector,
+        dir.path().to_path_buf(),
+        None,
+        Some(focus),
+    );
+
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    orch.end().await.unwrap();
+    wait_state(&orch, OrchestratorState::Idle, Duration::from_secs(2)).await;
+    assert_eq!(sent.lock().unwrap().len(), 1);
+
+    orch.resend_last().await;
+    wait_state(&orch, OrchestratorState::Idle, Duration::from_secs(2)).await;
+    assert_eq!(sent.lock().unwrap().len(), 2, "修饰键松开后应完成重发");
 }
 
 /// 非 Idle 状态（Listening）按下 resend：静默忽略，不打断当前输入

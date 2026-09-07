@@ -15,8 +15,6 @@
 //! 吞键策略：完整命中（主键 + 修饰键严格匹配）才 return 1 吞掉；
 //! 其余按键一律 CallNextHookEx 放行。
 
-#![cfg(windows)]
-
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -375,35 +373,28 @@ impl HotkeySource for LlHookSource {
         }
     }
 
-    /// 频道切换键（ADR-008）：更新匹配器的切换 spec；None/解析失败 = 关闭
-    fn set_cycle_key(&self, key: Option<&str>) -> Result<(), String> {
-        let spec = match key {
-            Some(k) if !k.trim().is_empty() => Some(parse_hotkey(k).ok_or_else(|| {
-                format!("无法解析频道切换热键「{k}」（LL 钩子后端不支持该键名）")
-            })?),
-            _ => None,
-        };
-        if let Some(shared) = SHARED.get() {
-            shared.matcher.lock().unwrap().set_cycle_spec(spec);
-        }
-        kotone_core::log::log(&format!("llhook cycle key: {spec:?}"));
-        Ok(())
-    }
-
-    /// 重发最近一条热键：更新匹配器的重发 spec；None/解析失败 = 关闭
-    fn set_resend_key(&self, key: Option<&str>) -> Result<(), String> {
-        let spec = match key {
+    /// 注册/更新/注销一个具名辅助热键：更新匹配器的对应 spec；空/None = 注销
+    fn set_named_hotkey(&self, id: &str, combo: Option<&str>) -> Result<(), String> {
+        let spec = match combo {
             Some(k) if !k.trim().is_empty() => Some(
                 parse_hotkey(k)
-                    .ok_or_else(|| format!("无法解析重发热键「{k}」（LL 钩子后端不支持该键名）"))?,
+                    .ok_or_else(|| format!("无法解析具名热键「{k}」（LL 钩子后端不支持该键名）"))?,
             ),
             _ => None,
         };
         if let Some(shared) = SHARED.get() {
-            shared.matcher.lock().unwrap().set_resend_spec(spec);
+            shared.matcher.lock().unwrap().set_named_spec(id, spec);
         }
-        kotone_core::log::log(&format!("llhook resend key: {spec:?}"));
+        kotone_core::log::log(&format!("llhook named hotkey {id}: {spec:?}"));
         Ok(())
+    }
+
+    /// 注销全部具名热键（主热键与 Esc 取消不受影响）
+    fn clear_named_hotkeys(&self) {
+        if let Some(shared) = SHARED.get() {
+            shared.matcher.lock().unwrap().clear_named_specs();
+        }
+        kotone_core::log::log("llhook cleared all named hotkeys");
     }
 }
 
@@ -594,7 +585,13 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
 /// 消费者线程：钩子事件 → 构造时注入的 sink（调用方决定如何调度到业务层）
 fn consumer_main(rx: mpsc::Receiver<HookEvent>, sink: Arc<HookSink>) {
     for ev in rx {
-        kotone_core::log::log(&format!("llhook captured: {ev:?}"));
+        kotone_core::process_log::record_activity(
+            "hotkey_fired",
+            kotone_core::process_log::EventData {
+                detail: Some(format!("{ev:?}")),
+                ..Default::default()
+            },
+        );
         (sink)(ev);
     }
 }

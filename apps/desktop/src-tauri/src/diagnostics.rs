@@ -14,7 +14,7 @@ use crate::hotkey::HotkeyManager;
 use crate::runtime::RuntimeManager;
 use crate::SharedState;
 
-const PACKAGE_SCHEMA_VERSION: u32 = 2;
+const PACKAGE_SCHEMA_VERSION: u32 = 3;
 const MAX_PROCESS_EVENTS: usize = 20_000;
 const MAX_HISTORY_RECORDS: usize = 50;
 const MAX_LOG_BYTES: usize = 1024 * 1024;
@@ -26,6 +26,55 @@ pub struct DiagnosticExportResult {
     pub path: String,
     pub event_count: usize,
     pub history_count: usize,
+    pub window: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+pub enum DiagnosticWindow {
+    #[serde(rename = "24h")]
+    Hours24,
+    #[serde(rename = "7d")]
+    Days7,
+    #[serde(rename = "all")]
+    All,
+}
+
+impl DiagnosticWindow {
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "24h" => Self::Hours24,
+            "7d" => Self::Days7,
+            _ => Self::All,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Hours24 => "24h",
+            Self::Days7 => "7d",
+            Self::All => "all",
+        }
+    }
+
+    fn cutoff_iso(self) -> Option<String> {
+        match self {
+            Self::Hours24 => Some(kotone_core::eval::utc_iso_millis_ago(24)),
+            Self::Days7 => Some(kotone_core::eval::utc_iso_millis_ago(24 * 7)),
+            Self::All => None,
+        }
+    }
+
+    fn cutoff_unix_secs(self) -> Option<u64> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        match self {
+            Self::Hours24 => Some(now.saturating_sub(24 * 3600)),
+            Self::Days7 => Some(now.saturating_sub(7 * 24 * 3600)),
+            Self::All => None,
+        }
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -76,6 +125,44 @@ struct RuntimeSnapshot {
     overlay_style: String,
     vad_compiled: bool,
     vad_model_ready: bool,
+    diagnostics_recording: bool,
+    exclusive_fullscreen: Option<bool>,
+    foreground_pid: Option<u32>,
+    game_pid: Option<u32>,
+    named_hotkeys: Vec<NamedHotkeySnapshot>,
+    stuck_keys: StuckKeys,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StuckKeys {
+    shift: bool,
+    ctrl: bool,
+    alt: bool,
+    win: bool,
+    caps_lock_down: bool,
+    caps_lock_toggled: bool,
+}
+
+impl From<kotone_platform_windows::keyboard::ModifierSnapshot> for StuckKeys {
+    fn from(snap: kotone_platform_windows::keyboard::ModifierSnapshot) -> Self {
+        Self {
+            shift: snap.shift,
+            ctrl: snap.ctrl,
+            alt: snap.alt,
+            win: snap.win,
+            caps_lock_down: snap.caps_lock_down,
+            caps_lock_toggled: snap.caps_lock_toggled,
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NamedHotkeySnapshot {
+    id: String,
+    key: Option<String>,
+    error_code: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -104,7 +191,11 @@ struct HistoryMetadata {
     had_audio: bool,
 }
 
-pub fn export(app: &AppHandle, requested_path: &Path) -> Result<DiagnosticExportResult, String> {
+pub fn export(
+    app: &AppHandle,
+    requested_path: &Path,
+    window: DiagnosticWindow,
+) -> Result<DiagnosticExportResult, String> {
     let path = with_zip_extension(requested_path);
     let app_version = app.package_info().version.to_string();
     let report_id = format!("KT-{}", kotone_core::eval::new_session_id());
@@ -120,6 +211,16 @@ pub fn export(app: &AppHandle, requested_path: &Path) -> Result<DiagnosticExport
         .into_iter()
         .find(|device| device.id == settings.audio_device_id)
         .map(|device| device.name);
+    let game_pid = crate::compatibility::active_game_pid(&shared);
+    let named_hotkeys = hotkey
+        .named
+        .into_iter()
+        .map(|item| NamedHotkeySnapshot {
+            id: item.id,
+            key: item.key,
+            error_code: item.error.as_deref().map(classify_error),
+        })
+        .collect();
 
     let runtime_snapshot = RuntimeSnapshot {
         phase: runtime.phase,
@@ -145,6 +246,12 @@ pub fn export(app: &AppHandle, requested_path: &Path) -> Result<DiagnosticExport
         overlay_style: serde_label(&settings.overlay.style),
         vad_compiled: kotone_stt::vad::compiled(),
         vad_model_ready: kotone_stt::model::vad_model_ready(),
+        diagnostics_recording: settings.diagnostics.recording,
+        exclusive_fullscreen: kotone_platform_windows::fullscreen::is_exclusive_fullscreen_active(),
+        foreground_pid: kotone_platform_windows::inject::foreground_pid(),
+        game_pid,
+        named_hotkeys,
+        stuck_keys: kotone_platform_windows::keyboard::modifier_snapshot().into(),
     };
 
     let environment = Environment {
@@ -166,9 +273,18 @@ pub fn export(app: &AppHandle, requested_path: &Path) -> Result<DiagnosticExport
         })
         .collect();
 
+    let cutoff_iso = window.cutoff_iso();
+    let cutoff_iso_hist = cutoff_iso.clone();
     let history: Vec<HistoryMetadata> = kotone_core::history::list()
         .unwrap_or_default()
         .into_iter()
+        .filter(|record| match cutoff_iso_hist.as_deref() {
+            Some(cutoff) => {
+                kotone_core::process_log::normalize_iso(&record.ts)
+                    >= kotone_core::process_log::normalize_iso(cutoff)
+            }
+            None => true,
+        })
         .take(MAX_HISTORY_RECORDS)
         .map(|record| HistoryMetadata {
             session_id: record.session_id,
@@ -186,9 +302,10 @@ pub fn export(app: &AppHandle, requested_path: &Path) -> Result<DiagnosticExport
         })
         .collect();
 
-    let process_events = kotone_core::process_log::list_recent(MAX_PROCESS_EVENTS);
+    let process_events =
+        kotone_core::process_log::list_since(cutoff_iso.as_deref(), MAX_PROCESS_EVENTS);
     let events_csv = kotone_core::process_log::to_pm4py_csv(&process_events, &app_version);
-    let sanitized_log = read_sanitized_log();
+    let sanitized_log = read_sanitized_log(window.cutoff_unix_secs());
     let manifest = Manifest {
         schema_version: PACKAGE_SCHEMA_VERSION,
         report_id: &report_id,
@@ -227,7 +344,22 @@ pub fn export(app: &AppHandle, requested_path: &Path) -> Result<DiagnosticExport
         path: path.to_string_lossy().into_owned(),
         event_count: process_events.len(),
         history_count: history.len(),
+        window: window.as_str().to_string(),
     })
+}
+
+pub fn clear(app: &AppHandle, stop_recording: bool) -> Result<(), String> {
+    kotone_core::process_log::clear()?;
+    kotone_core::log::clear();
+    if stop_recording {
+        let shared = app.state::<SharedState>();
+        let updated = shared.settings_repository.update(|settings| {
+            settings.diagnostics.recording = false;
+            Ok(())
+        })?;
+        kotone_core::process_log::set_recording_enabled(updated.diagnostics.recording);
+    }
+    Ok(())
 }
 
 fn write_zip(path: &Path, entries: &[(&str, String)]) -> Result<(), String> {
@@ -264,12 +396,14 @@ fn package_readme(report_id: &str) -> String {
          报告编号：{report_id}\n\n\
          本包不包含录音、识别文本或热词内容。\n\
          history-metadata.json 只保留耗时、结果、错误码和文本长度。\n\
-         runtime.json 包含 VAD 编译、模型就绪和当前会话降级状态。\n\
-         events.csv 可由 PM4Py 直接读取；前三列分别为 case id、activity、timestamp。\n"
+         runtime.json 包含 VAD 编译、模型就绪、独占全屏、前台/游戏 PID、\n\
+         具名热键和修饰键/CapsLock 快照。\n\
+         events.csv 可由 PM4Py 直接读取；前三列分别为 case id、activity、timestamp。\n\
+         末列 detail 只含 VK 名、overlay 原因、SendInput 计数，不含识别文本。\n"
     )
 }
 
-fn read_sanitized_log() -> String {
+fn read_sanitized_log(cutoff_unix_secs: Option<u64>) -> String {
     let path = kotone_core::settings::kotone_dir().join("kotone.log");
     let Ok(bytes) = std::fs::read(path) else {
         return String::new();
@@ -277,9 +411,21 @@ fn read_sanitized_log() -> String {
     let start = bytes.len().saturating_sub(MAX_LOG_BYTES);
     let raw = String::from_utf8_lossy(&bytes[start..]);
     raw.lines()
+        .filter(|line| match cutoff_unix_secs {
+            Some(cutoff) => log_epoch_secs(line)
+                .map(|secs| secs >= cutoff)
+                .unwrap_or(true),
+            None => true,
+        })
         .map(redact_log_line)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn log_epoch_secs(line: &str) -> Option<u64> {
+    let rest = line.strip_prefix('[')?;
+    let ts = rest.split(']').next()?;
+    ts.split('.').next()?.parse().ok()
 }
 
 pub(crate) fn redact_log_line(line: &str) -> String {
@@ -392,6 +538,15 @@ mod tests {
             "INJECTION_FAILED"
         );
         assert_eq!(classify_error("未知异常"), "UNKNOWN_ERROR");
+    }
+
+    #[test]
+    fn log_epoch_is_parsed_from_bracket_prefix() {
+        assert_eq!(
+            log_epoch_secs("[1757230000.123] overlay show"),
+            Some(1757230000)
+        );
+        assert_eq!(log_epoch_secs("not a log line"), None);
     }
 
     #[test]

@@ -98,15 +98,19 @@ mod windows_imp {
             return Ok(());
         }
         let units: Vec<u16> = text.encode_utf16().collect();
-        for chunk in units.chunks(UNICODE_CHUNK_UNITS) {
-            let mut inputs: Vec<INPUT> = Vec::with_capacity(chunk.len() * 2);
-            for &unit in chunk {
-                inputs.push(unicode_input(unit, false));
-                inputs.push(unicode_input(unit, true));
+        let result = (|| {
+            for chunk in units.chunks(UNICODE_CHUNK_UNITS) {
+                let mut inputs: Vec<INPUT> = Vec::with_capacity(chunk.len() * 2);
+                for &unit in chunk {
+                    inputs.push(unicode_input(unit, false));
+                    inputs.push(unicode_input(unit, true));
+                }
+                send_inputs(&inputs)?;
             }
-            send_inputs(&inputs)?;
-        }
-        Ok(())
+            Ok(())
+        })();
+        record_inject("inject_unicode", format!("units={}", units.len()), &result);
+        result
     }
 
     fn unicode_input(unit: u16, up: bool) -> INPUT {
@@ -137,7 +141,9 @@ mod windows_imp {
             for &vk in mods.iter().rev() {
                 let _ = vk_event(vk, false);
             }
-            return Err(e);
+            let result = Err(e);
+            record_inject("inject_keys", format!("spec={spec}"), &result);
+            return result;
         }
         std::thread::sleep(Duration::from_millis(KEY_HOLD_MS));
         if let Err(e) = vk_event(main, false) {
@@ -148,10 +154,32 @@ mod windows_imp {
                 first_err.get_or_insert(e);
             }
         }
-        match first_err {
+        let result = match first_err {
             Some(e) => Err(e),
             None => Ok(()),
-        }
+        };
+        record_inject("inject_keys", format!("spec={spec}"), &result);
+        result
+    }
+
+    fn record_inject(activity: &str, detail: String, result: &Result<(), InjectError>) {
+        let (outcome, error_code) = match result {
+            Ok(()) => (Some("ok".into()), None),
+            Err(e) if e.input_blocked => (Some("blocked".into()), Some("INJECTION_BLOCKED".into())),
+            Err(e) if e.needs_elevation => {
+                (Some("error".into()), Some("ELEVATION_REQUIRED".into()))
+            }
+            Err(_) => (Some("error".into()), Some("INJECTION_FAILED".into())),
+        };
+        kotone_core::process_log::record_activity(
+            activity,
+            kotone_core::process_log::EventData {
+                detail: Some(detail),
+                outcome,
+                error_code,
+                ..Default::default()
+            },
+        );
     }
 
     fn vk_event(vk: VIRTUAL_KEY, down: bool) -> Result<(), InjectError> {
@@ -361,6 +389,11 @@ mod windows_imp {
             } else {
                 Some(TargetWindow(hwnd.0 as usize))
             }
+        }
+
+        fn modifier_keys_down(&self) -> bool {
+            let snap = crate::keyboard::modifier_snapshot();
+            snap.shift || snap.ctrl || snap.alt || snap.win
         }
 
         fn restore(&self, target: TargetWindow) -> bool {
