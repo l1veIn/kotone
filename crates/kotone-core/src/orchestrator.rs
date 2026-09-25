@@ -1278,22 +1278,28 @@ impl Orchestrator {
 
         match result {
             Ok(t) => {
-                // 空转录「无事发生」：不发送、不进预览、不落 history/eval 录档、
-                // 不发 toast，状态直接回 Idle（空文本还会触发注入器敲两个回车，
-                // openChatKey/sendKey 都是 Enter 时表现为莫名换行）
+                // 空转录绝不能继续注入（空文本会导致只敲聊天键），并保留足够的
+                // 脱敏指标供诊断。普通模式进入 Error 告知用户；solo 连续模式仍
+                // 直接续录，避免把一句静音打断变成必须手动恢复的错误状态。
                 if t.text.trim().is_empty() {
+                    let audio_ms = self.inner.lock().unwrap().history.as_ref().map(|draft| {
+                        let draft = draft.lock().unwrap();
+                        draft.audio_samples * 1000 / crate::eval::SAMPLE_RATE as u64
+                    });
                     self.emit_process(
                         "transcript_empty",
                         json!({
                             "outcome": "empty",
                             "durationMs": t.latency_ms as u64,
+                            "audioMs": audio_ms,
                             "textChars": 0
                         }),
                     );
                     // 录档句柄直接 drop（不落盘）；history 草稿清掉不写记录
                     drop(active.recorder.take());
                     let continuous = self.continuous_session();
-                    // 块作用域收窄 MutexGuard（绝不跨 await 持锁）
+                    // 块作用域收窄 MutexGuard（绝不跨 await 持锁）。非连续模式保留
+                    // Error，让用户明确知道这次没有识别到可发送文字。
                     {
                         let _op = self.op.lock().await;
                         let mut inner = self.inner.lock().unwrap();
@@ -1301,13 +1307,25 @@ impl Orchestrator {
                             return Ok(());
                         }
                         inner.history = None;
-                        inner.state = OrchestratorState::Idle;
+                        inner.state = if continuous {
+                            OrchestratorState::Idle
+                        } else {
+                            OrchestratorState::Error
+                        };
                     }
-                    self.emit_state(OrchestratorState::Idle, None);
-                    // solo 连续模式：立即开下一段（同 schedule_idle 的 continuous 处理；
-                    // begin 失败走自身 toast_error 收尾；续录不重复播「录制音」
                     if continuous {
+                        self.emit_state(OrchestratorState::Idle, None);
+                        // solo 连续模式：立即开下一段（同 schedule_idle 的 continuous 处理；
+                        // begin 失败走自身 toast_error 收尾；续录不重复播「录制音」
                         let _ = self.begin_resumed().await;
+                    } else {
+                        self.emit_state(
+                            OrchestratorState::Error,
+                            Some(json!({
+                                "message": "未识别到语音，请按住热键后再说一遍",
+                                "audioMs": audio_ms
+                            })),
+                        );
                     }
                     return Ok(());
                 }
@@ -1763,12 +1781,12 @@ impl Orchestrator {
         Ok(Some(claim))
     }
 
-    async fn wait_for_modifiers_up(&self) {
+    async fn wait_for_modifiers_up(&self) -> Result<(), InjectError> {
         const MAX_WAIT: Duration = Duration::from_millis(1000);
         const POLL: Duration = Duration::from_millis(10);
         let started = std::time::Instant::now();
         if !self.focus.modifier_keys_down() {
-            return;
+            return Ok(());
         }
         crate::log::log("inject: waiting for Ctrl/Alt/Shift/Win to release");
         loop {
@@ -1781,10 +1799,12 @@ impl Orchestrator {
                         ..Default::default()
                     },
                 );
-                return;
+                return Ok(());
             }
             if started.elapsed() >= MAX_WAIT {
-                crate::log::log("inject: modifiers still down after 1000ms, sending anyway");
+                crate::log::log(
+                    "inject: modifiers still down after 1000ms; preserving text instead of sending",
+                );
                 crate::process_log::record_activity(
                     "inject_wait_modifiers",
                     crate::process_log::EventData {
@@ -1793,7 +1813,9 @@ impl Orchestrator {
                         ..Default::default()
                     },
                 );
-                return;
+                return Err(InjectError::new(
+                    "发送前 Ctrl、Alt、Shift 或 Win 仍未松开；已保留文字，请松开按键后重试",
+                ));
             }
             tokio::time::sleep(POLL).await;
         }
@@ -1838,7 +1860,18 @@ impl Orchestrator {
 
         // Alt+F6 等组合热键在主键 down 时就触发；修饰键从不吞键，此时 Alt
         // 仍按着。立刻开框/打字会变成 Alt+Enter，游戏里看不到消息，注入却成功。
-        self.wait_for_modifiers_up().await;
+        if let Err(error) = self.wait_for_modifiers_up().await {
+            self.emit_process(
+                "injection_failed",
+                json!({
+                    "outcome": "error",
+                    "errorCode": "MODIFIERS_STILL_DOWN",
+                    "durationMs": injection_started_at.elapsed().as_millis() as u64
+                }),
+            );
+            self.fail(gen, &error.message, Some(text.clone()));
+            return;
+        }
 
         // 焦点恢复：preview 交互（点击悬浮条/热键确认）可能已把焦点带离目标窗口，
         // 先把焦点还给 begin 时记录的注入目标，再交由注入器注入。

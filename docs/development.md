@@ -485,9 +485,9 @@ simulate_send(text, profileId) -> Result<(), InjectError>   // v3：走真实发
   "windowTitlePatterns": [".*League of Legends.*"],
   "openChatKey": "Enter",
   "sendKey": "Enter",
-  "preOpenDelayMs": 20,          // 对齐 LeagueAkari：固定 20ms 足够
+  "preOpenDelayMs": 20,
   "prePasteDelayMs": 20,
-  "preSendDelayMs": 20,
+  "preSendDelayMs": 100,
   "preferClipboardPaste": false, // LOL 默认 Unicode 逐字，不污染剪贴板
   "icon": "lol-kotone.webp",     // 图标文件名（相对 profiles/icons/；null/缺省 = 占位）
   "hotwords": ["闪现", "大龙", "gank", "打野", "推塔", "回城"]

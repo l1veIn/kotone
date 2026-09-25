@@ -1070,9 +1070,9 @@ async fn hotkey_toggle_during_success_starts_next_session() {
     orch.cancel().await;
 }
 
-/// 空转录「无事发生」：finalize 空文本 → 不发送、不写 history、直接回 Idle
+/// 空转录应明确提示用户重试：不发送、不写 history，但保留可操作的错误状态。
 #[tokio::test]
-async fn empty_finalize_returns_idle_silently() {
+async fn empty_finalize_shows_actionable_error() {
     let dir = tempfile::tempdir().unwrap();
     let sent = Arc::new(Mutex::new(Vec::new()));
     let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
@@ -1109,18 +1109,18 @@ async fn empty_finalize_returns_idle_silently() {
     tokio::time::sleep(Duration::from_millis(30)).await;
     orch.end().await.unwrap();
 
-    // 状态直接回 Idle：不经 Preview/Sending/Success，也不发 Error toast
-    assert_eq!(orch.state(), OrchestratorState::Idle);
+    // 不经 Preview/Sending/Success，但要以 Error 状态给出可操作的反馈。
+    assert_eq!(orch.state(), OrchestratorState::Error);
     let seq = emitter.state_sequence();
-    for unexpected in ["preview", "sending", "success", "error"] {
+    for unexpected in ["preview", "sending", "success"] {
         assert!(
             !seq.contains(&unexpected.to_string()),
             "空转录不应经过 {unexpected}: {seq:?}"
         );
     }
     assert!(
-        seq.contains(&"idle".to_string()),
-        "应发出 idle 状态事件: {seq:?}"
+        seq.contains(&"error".to_string()),
+        "应发出 error 状态事件: {seq:?}"
     );
     // 注入器未被调用（空文本不该敲出两个回车）
     assert!(sent.lock().unwrap().is_empty(), "空转录不应触发注入");
@@ -1131,7 +1131,9 @@ async fn empty_finalize_returns_idle_silently() {
             .is_empty(),
         "空转录不应落 history 记录"
     );
-    // 之后可正常开始新会话
+    // 确认提示后可正常开始新会话。
+    orch.cancel().await;
+    assert_eq!(orch.state(), OrchestratorState::Idle);
     orch.begin().await.unwrap();
     assert_eq!(orch.state(), OrchestratorState::Listening);
     orch.cancel().await;

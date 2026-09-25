@@ -39,8 +39,8 @@ mod windows_imp {
     };
     use kotone_core::profile::GameProfile;
 
-    /// LeagueAkari pressEnter 实测值：sendKey(down) → sleep(20) → sendKey(up)
-    const KEY_HOLD_MS: u64 = 20;
+    /// 游戏可能在低帧率下迟于输入流处理按键；50ms 保持让最终 Enter 更可靠。
+    const KEY_HOLD_MS: u64 = 50;
     /// 单次 SendInput 批量的 UTF-16 code unit 上限（每单元 2 个事件）
     const UNICODE_CHUNK_UNITS: usize = 64;
 

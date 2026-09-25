@@ -10,7 +10,7 @@
    * - 已删除：前台检测（detect_foreground_game IPC 已连删）、测试发送按钮
    *   （simulate_send IPC 保留——悬浮条错误重试在用）。
    */
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
   import {
     updateSettings,
@@ -27,6 +27,7 @@
   } from "../../../lib/ipc";
   import { settingsStore, toast, toastWarn, errText } from "../../../lib/stores/ui";
   import { spotlight } from "../../../lib/actions/spotlight";
+  import { captureHotkey } from "../../../lib/hotkeyCapture";
   import Toggle from "../../../lib/components/Toggle.svelte";
 
   let profiles = $state<GameProfile[]>([]);
@@ -45,6 +46,10 @@
   let fileInput = $state<HTMLInputElement | null>(null);
   let importTargetId = $state<string | null>(null);
   let showTechnical = $state(false);
+  type ProfileKeyField = "openChatKey" | "sendKey";
+  /** 当前正在录入的聊天键；全页共用底层捕获槽，不能同时录两个。 */
+  let capturingKey = $state<ProfileKeyField | null>(null);
+  let captureCleanup: (() => void) | null = null;
   /** 整包导入（.zip 配置包）与删除 */
   let importingPackage = $state(false);
   let deletingId = $state<string | null>(null);
@@ -121,16 +126,50 @@
   function openEditor(p: GameProfile) {
     editingId = p.id;
     draft = $state.snapshot(p);
+    // 旧配置可能仍保留早于最小安全值的发送等待时间；打开编辑器时同步显示实际生效的下限。
+    draft.preSendDelayMs = Math.max(draft.preSendDelayMs, 100);
     hotwordsText = p.hotwords.join("\n");
     showTechnical = false;
   }
 
   function closeEditor() {
+    captureCleanup?.();
+    captureCleanup = null;
+    capturingKey = null;
     editingId = null;
     draft = null;
     hotwordsText = "";
     showTechnical = false;
   }
+
+  async function captureProfileKey(field: ProfileKeyField) {
+    if (!draft || capturingKey) return;
+    capturingKey = field;
+    const cleanup = await captureHotkey((result) => {
+      captureCleanup = null;
+      capturingKey = null;
+      if (result.kind === "combo" && draft) {
+        draft[field] = result.combo;
+      } else if (result.kind === "timeout") {
+        toastWarn("按键录入超时，请重试");
+      } else if (result.kind === "error") {
+        toast(false, result.message);
+      }
+    });
+    // 录入初始化期间编辑器可能已被关闭；此时立刻释放底层捕获槽，避免页面外残留监听。
+    if (capturingKey !== field || !draft) {
+      cleanup();
+      return;
+    }
+    captureCleanup = cleanup;
+  }
+
+  function clearProfileKey(field: ProfileKeyField) {
+    if (capturingKey || !draft) return;
+    draft[field] = "";
+  }
+
+  onDestroy(() => captureCleanup?.());
 
   async function onSave() {
     if (!draft || saving) return;
@@ -527,25 +566,46 @@
               <div class="mt-3 rounded-lg bg-white/4 p-3 ring-1 ring-white/8">
                 <p class="text-[10px] font-semibold tracking-wide text-white/40">聊天键</p>
                 <div class="mt-2 grid grid-cols-2 gap-2">
-                  <label class="block">
+                  <div class="block">
                     <span class="text-[11px] text-white/55">打开聊天框</span>
-                    <input
-                      bind:value={draft.openChatKey}
-                      placeholder="如 Enter"
-                      spellcheck="false"
-                      class="mt-1 w-full rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/60"
-                    />
-                  </label>
-                  <label class="block">
+                    <div class="mt-1 flex gap-1.5">
+                      <button
+                        class="min-w-0 flex-1 truncate rounded-lg bg-white/8 px-2.5 py-1.5 text-left text-xs ring-1 ring-white/15 transition hover:bg-white/12 focus:ring-kotone-cyan/60 disabled:opacity-50"
+                        disabled={capturingKey !== null}
+                        onclick={() => void captureProfileKey("openChatKey")}
+                      >
+                        {capturingKey === "openChatKey" ? "请按下按键…" : draft.openChatKey || "不打开聊天框"}
+                      </button>
+                      <button
+                        class="rounded-lg bg-white/8 px-2 py-1.5 text-[11px] text-white/55 ring-1 ring-white/12 transition hover:bg-white/15 hover:text-white/85 disabled:opacity-40"
+                        disabled={capturingKey !== null || !draft.openChatKey}
+                        title="清空：发送时不按打开聊天框键"
+                        onclick={() => clearProfileKey("openChatKey")}
+                      >清空</button>
+                    </div>
+                  </div>
+                  <div class="block">
                     <span class="text-[11px] text-white/55">发送消息</span>
-                    <input
-                      bind:value={draft.sendKey}
-                      placeholder="如 Enter"
-                      spellcheck="false"
-                      class="mt-1 w-full rounded-lg bg-white/8 px-2.5 py-1.5 text-xs ring-1 ring-white/15 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/60"
-                    />
-                  </label>
+                    <div class="mt-1 flex gap-1.5">
+                      <button
+                        class="min-w-0 flex-1 truncate rounded-lg bg-white/8 px-2.5 py-1.5 text-left text-xs ring-1 ring-white/15 transition hover:bg-white/12 focus:ring-kotone-cyan/60 disabled:opacity-50"
+                        disabled={capturingKey !== null}
+                        onclick={() => void captureProfileKey("sendKey")}
+                      >
+                        {capturingKey === "sendKey" ? "请按下按键…" : draft.sendKey || "不发送消息"}
+                      </button>
+                      <button
+                        class="rounded-lg bg-white/8 px-2 py-1.5 text-[11px] text-white/55 ring-1 ring-white/12 transition hover:bg-white/15 hover:text-white/85 disabled:opacity-40"
+                        disabled={capturingKey !== null || !draft.sendKey}
+                        title="清空：发送时不按发送键"
+                        onclick={() => clearProfileKey("sendKey")}
+                      >清空</button>
+                    </div>
+                  </div>
                 </div>
+                <p class="mt-2 text-[10px] leading-relaxed text-white/35">
+                  点击按键名称后直接录入键盘组合或鼠标侧键；清空表示跳过该阶段。
+                </p>
                 <div class="mt-4">
                   <Toggle
                     checked={draft.preferClipboardPaste}
@@ -556,7 +616,7 @@
                 </div>
                 <p class="mt-4 text-[10px] font-semibold tracking-wide text-white/40">发送时序</p>
                 <p class="mt-1 text-[10px] leading-relaxed text-white/35">
-                  聊天框还没打开就开始打字时，把「打开聊天后等待」调到 50–100ms。
+                  文字输入完成后至少等待 100ms 再发送；聊天框还没打开就开始打字时，把「打开聊天后等待」调到 50–100ms。
                 </p>
                 <label class="mt-3 block">
                   <div class="flex items-center justify-between">
@@ -593,7 +653,7 @@
                   </div>
                   <input
                     type="range"
-                    min="0"
+                    min="100"
                     max="300"
                     step="10"
                     bind:value={draft.preSendDelayMs}

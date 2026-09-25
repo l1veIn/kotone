@@ -55,7 +55,7 @@ pub struct ChannelStrategy {
     pub is_default: bool,
 }
 
-/// 游戏 profile（默认值对齐 LeagueAkari 实测：delay 20/20/20）
+/// 游戏 profile。空的开聊天框键或发送键表示跳过对应注入阶段。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GameProfile {
@@ -387,6 +387,9 @@ pub fn validate_profile(profile: &GameProfile) -> Result<(), String> {
     }
 
     fn valid_injection_key(value: &str) -> bool {
+        if value.trim().is_empty() {
+            return true;
+        }
         if value.len() > 32 || value.split('+').any(|part| part.trim().is_empty()) {
             return false;
         }
@@ -1135,7 +1138,7 @@ mod tests {
         let lol = GameProfile::builtin_lol();
         assert_eq!(lol.pre_open_delay_ms, 20);
         assert_eq!(lol.pre_paste_delay_ms, 20);
-        assert_eq!(lol.pre_send_delay_ms, 20);
+        assert_eq!(lol.pre_send_delay_ms, 100);
         assert!(!lol.prefer_clipboard_paste);
         assert_eq!(lol.open_chat_key, "Enter");
         assert_eq!(lol.send_key, "Enter");
@@ -1250,7 +1253,7 @@ mod tests {
         );
         // 其他字段不被合并改动
         assert_eq!(lol.open_chat_key, "Enter");
-        assert_eq!(lol.pre_send_delay_ms, 20);
+        assert_eq!(lol.pre_send_delay_ms, 100);
     }
 
     // ---------- 热词导入导出 ----------
@@ -1558,6 +1561,14 @@ mod tests {
         assert!(save_in(dir.path(), &profile)
             .unwrap_err()
             .contains("频道不能超过"));
+    }
+
+    #[test]
+    fn profile_allows_empty_optional_injection_keys() {
+        let mut profile = GameProfile::builtin_generic();
+        profile.open_chat_key.clear();
+        profile.send_key.clear();
+        assert!(validate_profile(&profile).is_ok());
     }
 
     #[test]

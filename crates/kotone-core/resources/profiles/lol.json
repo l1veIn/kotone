@@ -11,7 +11,7 @@
   "sendKey": "Enter",
   "preOpenDelayMs": 20,
   "prePasteDelayMs": 20,
-  "preSendDelayMs": 20,
+  "preSendDelayMs": 100,
   "preferClipboardPaste": false,
   "icon": "lol-kotone.webp",
   "channels": [

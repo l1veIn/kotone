@@ -154,6 +154,9 @@ pub trait SendOps {
 
 /// 剪贴板粘贴后、恢复原内容前的等待：给目标应用消息循环处理粘贴的时间
 const CLIPBOARD_RESTORE_DELAY_MS: u32 = 100;
+/// 文本写入目标窗口后，至少留出这段时间再发送。部分游戏的聊天控件会先异步处理
+/// Unicode 输入；20ms 后立即 Enter 会出现文字已上屏但消息没有提交的情况。
+const MIN_PRE_SEND_DELAY_MS: u32 = 100;
 
 fn ensure_not_cancelled(cancel: &CancelToken) -> Result<(), InjectError> {
     if cancel.is_cancelled() {
@@ -174,9 +177,10 @@ fn cancellable_sleep(ops: &dyn SendOps, ms: u32, cancel: &CancelToken) -> Result
 }
 
 /// §6 发送时序（直发当前前台窗口，无前台守卫）：
-/// key_down_up(openChatKey) → sleep(preOpenDelayMs)
+/// [key_down_up(openChatKey) → sleep(preOpenDelayMs)]
 /// → preferClipboardPaste ? 剪贴板+Ctrl+V : send_unicode
-/// → sleep(preSendDelayMs) → key_down_up(sendKey)。
+/// → sleep(max(preSendDelayMs, 100ms)) → [key_down_up(sendKey)]。
+/// 空的开聊天框键或发送键表示跳过对应阶段。
 /// 每个 sleep 前后检查取消令牌；取消则安全中止（无悬键，剪贴板尽量恢复）。
 pub fn send_sequence(
     text: &str,
@@ -185,15 +189,23 @@ pub fn send_sequence(
     ops: &dyn SendOps,
 ) -> Result<(), InjectError> {
     ensure_not_cancelled(cancel)?;
-    ops.key_down_up(&profile.open_chat_key)?;
-    cancellable_sleep(ops, profile.pre_open_delay_ms, cancel)?;
+    if !profile.open_chat_key.trim().is_empty() {
+        ops.key_down_up(&profile.open_chat_key)?;
+        cancellable_sleep(ops, profile.pre_open_delay_ms, cancel)?;
+    }
     if profile.prefer_clipboard_paste {
         send_clipboard_path(text, profile, cancel, ops)?;
     } else {
         ops.send_unicode(text)?;
     }
-    cancellable_sleep(ops, profile.pre_send_delay_ms, cancel)?;
-    ops.key_down_up(&profile.send_key)?;
+    if !profile.send_key.trim().is_empty() {
+        cancellable_sleep(
+            ops,
+            profile.pre_send_delay_ms.max(MIN_PRE_SEND_DELAY_MS),
+            cancel,
+        )?;
+        ops.key_down_up(&profile.send_key)?;
+    }
     Ok(())
 }
 
@@ -309,7 +321,7 @@ mod tests {
                 "key:Enter",
                 "sleep:20",
                 "unicode:对面打野在下路",
-                "sleep:20",
+                "sleep:100",
                 "key:Enter",
             ]
         );
@@ -329,7 +341,7 @@ mod tests {
                 "key:Enter",
                 "sleep:55",
                 "unicode:hi",
-                "sleep:77",
+                "sleep:100",
                 "key:Enter"
             ]
         );
@@ -353,7 +365,7 @@ mod tests {
                 "key:Ctrl+V",
                 "sleep:100", // 粘贴处理后恢复前的等待
                 "clip_write:用户原文",
-                "sleep:20",
+                "sleep:100",
                 "key:Enter",
             ]
         );
@@ -393,7 +405,7 @@ mod tests {
         // 文本已上屏但发送键未按 → 游戏聊天框里留着草稿，用户可手动处理
         assert_eq!(
             ops.log(),
-            vec!["key:Enter", "sleep:20", "unicode:hi", "sleep:20"]
+            vec!["key:Enter", "sleep:20", "unicode:hi", "sleep:100"]
         );
     }
 
@@ -428,6 +440,22 @@ mod tests {
         profile.pre_open_delay_ms = 0;
         profile.pre_send_delay_ms = 0;
         send_sequence("hi", &profile, &cancel, &ops).unwrap();
-        assert_eq!(ops.log(), vec!["key:Enter", "unicode:hi", "key:Enter"]);
+        assert_eq!(
+            ops.log(),
+            vec!["key:Enter", "unicode:hi", "sleep:100", "key:Enter"]
+        );
+    }
+
+    #[test]
+    fn empty_stage_keys_skip_the_corresponding_injection() {
+        let ops = MockOps::new();
+        let cancel = CancelToken::default();
+        let mut profile = test_profile();
+        profile.open_chat_key.clear();
+        profile.send_key.clear();
+
+        send_sequence("hi", &profile, &cancel, &ops).unwrap();
+
+        assert_eq!(ops.log(), vec!["unicode:hi"]);
     }
 }
