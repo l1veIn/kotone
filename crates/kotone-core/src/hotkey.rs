@@ -26,6 +26,9 @@ pub const HK_CHANNEL_CYCLE: &str = "channel-cycle";
 pub const HK_RESEND_LAST: &str = "resend-last";
 pub const HK_PP_TOGGLE: &str = "post-process-toggle";
 pub const HK_PP_CYCLE: &str = "post-process-cycle";
+/// 应用级热键：启动 / 停止 Kotone 运行时。与其它具名热键不同，它在 runtime
+/// 未运行（主热键未注册）时也必须生效——否则「启动」永远按不到。
+pub const HK_RUNTIME_TOGGLE: &str = "runtime-toggle";
 
 /// 热键事件源端口（core）：Windows 低层键鼠钩子与 RegisterHotKey 是两种实现。
 ///
@@ -479,13 +482,9 @@ impl HookMatcher {
             return PASS;
         }
 
-        if !self.enabled {
-            return PASS;
-        }
-
-        // 具名辅助热键：先于主键判定，但只在确实命中时接管事件——
-        // 它们可与主键同 vk 不同修饰键（如主键 CapsLock、具名 Shift+CapsLock），
-        // 未命中时必须落回主键分支，否则裸主键（无修饰键的录制键）会被短路吞掉。
+        // 具名辅助热键：先于 enabled 判定。它们由独立设置项驱动，其中应用级热键
+        // （如「启动 / 停止 Kotone」）必须在主热键未注册时（runtime 未运行）也能用，
+        // 因此不受 `enabled`（主键使能）约束；未命中时落回主键分支。
         // 声明顺序即优先级；不同具名键也可同 vk 不同修饰键，先声明者先匹配。
         for i in 0..self.named_specs.len() {
             let (id, ns) = &self.named_specs[i];
@@ -522,7 +521,10 @@ impl HookMatcher {
             // 非本键按下的 up：落到后续具名键 / 主键分支
         }
 
-        // 主键
+        // 主键（enabled=false = 未注册主热键：全部放行，仅上面的具名热键仍然生效）
+        if !self.enabled {
+            return PASS;
+        }
         if vk == self.spec.vk {
             return if down {
                 if self.main_down {
@@ -1045,14 +1047,26 @@ mod tests {
     }
 
     #[test]
-    fn named_hotkey_disabled_with_matcher() {
+    fn named_hotkey_fires_while_main_key_disabled() {
+        // 具名热键不受主键使能约束：应用级热键（启动/停止 Kotone）必须在
+        // runtime 未运行、主热键未注册时依然能触发。
         let mut m = matcher("CapsLock", HotkeyMode::Toggle);
-        m.set_named_spec(HK_CHANNEL_CYCLE, parse_hotkey("Shift+CapsLock"));
+        m.set_named_spec(HK_RUNTIME_TOGGLE, parse_hotkey("Shift+CapsLock"));
         m.set_enabled(false);
         down(&mut m, VK_LSHIFT);
-        assert_eq!(down(&mut m, VK_CAPITAL), PASS, "运行时停止后具名热键也放行");
+        let r = down(&mut m, VK_CAPITAL);
+        assert_eq!(
+            r.event,
+            Some(HookEvent::NamedHotkey {
+                id: HK_RUNTIME_TOGGLE.into()
+            })
+        );
+        assert!(r.swallow);
         up(&mut m, VK_CAPITAL);
         up(&mut m, VK_LSHIFT);
+        // 未注册的主键本身仍然放行
+        assert_eq!(down(&mut m, VK_CAPITAL), PASS, "主键未注册时必须放行");
+        up(&mut m, VK_CAPITAL);
     }
 
     #[test]

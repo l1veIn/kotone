@@ -16,7 +16,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use kotone_core::hotkey::{
     parse_hotkey, HookEvent, HotkeySource, HK_CHANNEL_CYCLE, HK_PP_CYCLE, HK_PP_TOGGLE,
-    HK_RESEND_LAST,
+    HK_RESEND_LAST, HK_RUNTIME_TOGGLE,
 };
 use kotone_core::orchestrator::Orchestrator;
 use kotone_core::settings::HotkeyBackend;
@@ -186,9 +186,9 @@ impl HotkeySource for PluginHotkeySource {
         let id_owned = id.to_string();
         self.app
             .global_shortcut()
-            .on_shortcut(shortcut, move |_app, _sc, event| {
+            .on_shortcut(shortcut, move |app, _sc, event| {
                 if event.state() == ShortcutState::Pressed {
-                    route_named_hotkey(&orch, &id_owned);
+                    route_named_hotkey(app, &orch, &id_owned);
                 }
             })
             .map_err(|e| format!("注册具名热键「{combo}」失败: {e}（键位可能被其他程序占用）"))?;
@@ -247,7 +247,10 @@ impl HotkeySource for PluginHotkeySource {
 
 /// LL 钩子事件 → orchestrator（spawn 进 Tauri 的 tokio runtime）
 #[cfg(windows)]
-fn make_llhook_sink(orch: Arc<Orchestrator>) -> kotone_platform_windows::hotkey_ll::HookSink {
+fn make_llhook_sink(
+    app: AppHandle,
+    orch: Arc<Orchestrator>,
+) -> kotone_platform_windows::hotkey_ll::HookSink {
     Box::new(move |ev| {
         let orch = orch.clone();
         match ev {
@@ -271,16 +274,33 @@ fn make_llhook_sink(orch: Arc<Orchestrator>) -> kotone_platform_windows::hotkey_
                     orch.cancel().await;
                 });
             }
-            HookEvent::NamedHotkey { id } => route_named_hotkey(&orch, &id),
+            HookEvent::NamedHotkey { id } => route_named_hotkey(&app, &orch, &id),
             // 诊断事件（修饰键失配）：consumer 已记日志，业务不处理
             HookEvent::MainKeyMissed { .. } => {}
         }
     })
 }
 
-/// 具名热键 id → orchestrator 动作（id 由 core HK_* 常量声明；增量 = 加一个 arm）。
+/// 具名热键 id → 动作（id 由 core HK_* 常量声明；增量 = 加一个 arm）。
 /// 两个后端（LL 钩子 sink 与 RegisterHotKey 回调）共用同一路由。
-fn route_named_hotkey(orch: &Arc<Orchestrator>, id: &str) {
+fn route_named_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, id: &str) {
+    // 每个具名热键都留一行日志：热键「配置了但按下没反应」时，
+    // 这行决定问题在输入链路（无日志）还是在业务侧（有日志没效果）。
+    kotone_core::log::log(&format!("named hotkey fired: {id}"));
+    // 应用级热键需要 AppHandle 才能启停运行时，故与其它热键分开走：
+    // 它不依赖 runtime 生命周期的 orchestrator 状态。
+    if id == HK_RUNTIME_TOGGLE {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            match crate::runtime::toggle(&app).await {
+                Ok(status) => {
+                    kotone_core::log::log(&format!("runtime toggle hotkey: -> {}", status.phase))
+                }
+                Err(e) => kotone_core::log::log(&format!("runtime toggle hotkey: {e}")),
+            }
+        });
+        return;
+    }
     let orch = orch.clone();
     let id = id.to_string();
     tauri::async_runtime::spawn(async move {
@@ -294,8 +314,17 @@ fn route_named_hotkey(orch: &Arc<Orchestrator>, id: &str) {
     });
 }
 
+/// 应用级具名热键：runtime 未运行时也保持注册（只随配置变化重注册）。
+const APP_NAMED_HOTKEYS: &[&str] = &[HK_RUNTIME_TOGGLE];
+
 /// 已知具名热键的稳定声明顺序（设置页展示顺序；新增具名热键加入此清单即出现在 UI）。
-const KNOWN_NAMED_HOTKEYS: &[&str] = &[HK_CHANNEL_CYCLE, HK_RESEND_LAST, HK_PP_TOGGLE, HK_PP_CYCLE];
+const KNOWN_NAMED_HOTKEYS: &[&str] = &[
+    HK_CHANNEL_CYCLE,
+    HK_RESEND_LAST,
+    HK_PP_TOGGLE,
+    HK_PP_CYCLE,
+    HK_RUNTIME_TOGGLE,
+];
 
 /// 从配置取出当前要应用的全部具名热键（id, combo）；声明顺序即冲突/优先级顺序。
 fn named_list_from(settings: &kotone_core::settings::Settings) -> Vec<(&'static str, String)> {
@@ -305,6 +334,11 @@ fn named_list_from(settings: &kotone_core::settings::Settings) -> Vec<(&'static 
         (HK_PP_TOGGLE, settings.toggle_post_processing_hotkey.clone()),
         (HK_PP_CYCLE, settings.cycle_post_processing_hotkey.clone()),
     ]
+}
+
+/// 从配置取出应用级具名热键（独立于 runtime 生命周期）。
+fn app_named_list_from(settings: &kotone_core::settings::Settings) -> Vec<(&'static str, String)> {
+    vec![(HK_RUNTIME_TOGGLE, settings.runtime_toggle_hotkey.clone())]
 }
 
 /// 热键管理器：后端选择/回退 + 状态暴露；对上层签名不变
@@ -324,6 +358,10 @@ pub struct HotkeyManager {
     named: Mutex<HashMap<String, Option<String>>>,
     /// 具名热键最近一次失败信息：id → 错误（冲突/注册失败；成功/未配置为 None）
     named_errors: Mutex<HashMap<String, Option<String>>>,
+    /// 应用级具名热键（runtime 未运行也生效）：id → 已生效组合
+    app_named: Mutex<HashMap<String, Option<String>>>,
+    /// 应用级具名热键的失败信息（冲突/钩子与插件都注册失败）
+    app_named_errors: Mutex<HashMap<String, Option<String>>>,
 }
 
 impl HotkeyManager {
@@ -331,12 +369,17 @@ impl HotkeyManager {
         Self {
             plugin: PluginHotkeySource::new(app, orch.clone()),
             #[cfg(windows)]
-            llhook: kotone_platform_windows::hotkey_ll::LlHookSource::new(make_llhook_sink(orch)),
+            llhook: kotone_platform_windows::hotkey_ll::LlHookSource::new(make_llhook_sink(
+                app.clone(),
+                orch,
+            )),
             backend: Mutex::new(ActiveBackend::None),
             registered_key: Mutex::new(None),
             last_error: Mutex::new(None),
             named: Mutex::new(HashMap::new()),
             named_errors: Mutex::new(HashMap::new()),
+            app_named: Mutex::new(HashMap::new()),
+            app_named_errors: Mutex::new(HashMap::new()),
         }
     }
 
@@ -360,6 +403,9 @@ impl HotkeyManager {
         settings: &kotone_core::settings::Settings,
     ) -> Result<(), String> {
         self.unregister(app)?;
+        // 主键与已生效的应用级热键冲突时以主键为准：否则具名分支会先命中，
+        // 录制热键静默失效（前端也会拦这种组合，这里是后端兜底）。
+        self.yield_app_hotkey_on_conflict(key);
         let pref = settings.hotkey_backend;
 
         #[cfg(windows)]
@@ -369,6 +415,7 @@ impl HotkeyManager {
             &settings.resend_last_hotkey,
             &settings.toggle_post_processing_hotkey,
             &settings.cycle_post_processing_hotkey,
+            &settings.runtime_toggle_hotkey,
         ]);
 
         #[cfg(windows)]
@@ -421,7 +468,8 @@ impl HotkeyManager {
         }
     }
 
-    /// 注销当前热键（两个后端都停）
+    /// 注销当前热键（两个后端都停）。应用级热键不在此列：runtime 停止后
+    /// 仍要能用「启动 / 停止」热键把 Kotone 拉起来，故末尾重新落回后端。
     pub fn unregister(&self, _app: &AppHandle) -> Result<(), String> {
         #[cfg(windows)]
         {
@@ -433,7 +481,156 @@ impl HotkeyManager {
         *self.registered_key.lock().unwrap() = None;
         self.named.lock().unwrap().clear();
         self.named_errors.lock().unwrap().clear();
+        self.reapply_app_named();
         Ok(())
+    }
+
+    // ---------- 应用级具名热键（runtime 未运行也生效） ----------
+
+    /// 应用配置里的应用级热键（见 `APP_NAMED_HOTKEYS`）。与运行期具名热键不同，
+    /// 它由设置事务直接驱动，不参与 `apply_named` 的清单重放。
+    ///
+    /// 注册失败不回滚配置（与具名热键一致）：错误记入状态由设置页展示，
+    /// 用户可据此换键，而不是连保存都做不到。
+    pub fn apply_app_hotkeys(&self, settings: &kotone_core::settings::Settings) {
+        let list = app_named_list_from(settings);
+        let mut applied: HashMap<String, Option<String>> = HashMap::new();
+        let mut errors: HashMap<String, Option<String>> = HashMap::new();
+        for (id, combo) in list {
+            let combo = combo.trim().to_string();
+            if combo.is_empty() {
+                self.clear_app_hotkey(id);
+                applied.insert(id.to_string(), None);
+                errors.insert(id.to_string(), None);
+                continue;
+            }
+            match self.register_app_hotkey(id, &combo) {
+                Ok(()) => {
+                    applied.insert(id.to_string(), Some(combo));
+                    errors.insert(id.to_string(), None);
+                }
+                Err(e) => {
+                    kotone_core::log::log(&format!("app hotkey {id} register FAILED: {e}"));
+                    applied.insert(id.to_string(), None);
+                    errors.insert(id.to_string(), Some(e));
+                }
+            }
+        }
+        *self.app_named.lock().unwrap() = applied;
+        *self.app_named_errors.lock().unwrap() = errors;
+    }
+
+    /// 注册单个应用级热键：优先低层钩子（游戏前台也能收到——本热键的主要用途
+    /// 正是「在游戏里启动 / 停止 Kotone」），钩子不可用时回退 RegisterHotKey。
+    fn register_app_hotkey(&self, id: &str, combo: &str) -> Result<(), String> {
+        if let Some(main) = self.registered_key.lock().unwrap().clone() {
+            if kotone_core::hotkey::combos_conflict(combo, &main) {
+                return Err(format!("热键「{combo}」与录制热键「{main}」冲突，未注册"));
+            }
+        }
+        let runtime_combos: Vec<String> = self
+            .named
+            .lock()
+            .unwrap()
+            .values()
+            .flatten()
+            .cloned()
+            .collect();
+        if let Some(other) = runtime_combos
+            .iter()
+            .find(|other| kotone_core::hotkey::combos_conflict(combo, other))
+        {
+            return Err(format!(
+                "热键「{combo}」与已注册热键「{other}」冲突，未注册"
+            ));
+        }
+
+        #[cfg(windows)]
+        {
+            match self.llhook.ensure_hook_ready() {
+                Ok(()) => match self.llhook.set_named_hotkey(id, Some(combo)) {
+                    Ok(()) => {
+                        // 摘掉插件后端可能残留的同 id 注册，避免同一键在两个后端各触发一次
+                        let _ = self.plugin.set_named_hotkey(id, None);
+                        kotone_core::log::log(&format!(
+                            "app hotkey {id} registered on llhook: {combo}"
+                        ));
+                        return Ok(());
+                    }
+                    Err(e) => kotone_core::log::log(&format!(
+                        "app hotkey {id} llhook failed: {e}；回退 RegisterHotKey"
+                    )),
+                },
+                Err(e) => kotone_core::log::log(&format!(
+                    "llhook 不可用（{e}），应用级热键回退 RegisterHotKey"
+                )),
+            }
+            // 回退路径先把钩子侧的残留摘干净（双后端同时命中 = 触发两次 = 白按）
+            let _ = self.llhook.set_named_hotkey(id, None);
+        }
+        self.plugin
+            .set_named_hotkey(id, Some(combo))
+            .map_err(|e| format!("注册热键「{combo}」失败: {e}（键位可能被其他程序占用）"))
+    }
+
+    /// 从两个后端都摘掉一个应用级热键（不关心它当初落在哪个后端）
+    fn clear_app_hotkey(&self, id: &str) {
+        #[cfg(windows)]
+        let _ = self.llhook.set_named_hotkey(id, None);
+        let _ = self.plugin.set_named_hotkey(id, None);
+    }
+
+    /// 把已生效的应用级热键重新落到后端：清空具名热键 / 注销主热键之后调用
+    /// （`clear_named_hotkeys` 会把它们一并清掉）。
+    fn reapply_app_named(&self) {
+        let combos: Vec<(String, String)> = self
+            .app_named
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(id, combo)| combo.as_ref().map(|c| (id.clone(), c.clone())))
+            .collect();
+        if combos.is_empty() {
+            return;
+        }
+        for (id, combo) in combos {
+            if let Err(e) = self.register_app_hotkey(&id, &combo) {
+                kotone_core::log::log(&format!("app hotkey {id} re-register FAILED: {e}"));
+                self.app_named.lock().unwrap().insert(id.clone(), None);
+                self.app_named_errors.lock().unwrap().insert(id, Some(e));
+            }
+        }
+    }
+
+    /// 主键与应用级热键冲突时的让位：清掉应用级热键并记录错误（设置页可见）。
+    fn yield_app_hotkey_on_conflict(&self, main_key: &str) {
+        let conflicting: Vec<String> = self
+            .app_named
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, combo)| {
+                combo
+                    .as_deref()
+                    .is_some_and(|c| kotone_core::hotkey::combos_conflict(c, main_key))
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in conflicting {
+            let combo = self
+                .app_named
+                .lock()
+                .unwrap()
+                .get(&id)
+                .cloned()
+                .flatten()
+                .unwrap_or_default();
+            let msg = format!("热键「{combo}」与录制热键「{main_key}」冲突，未注册");
+            kotone_core::log::log(&msg);
+            self.clear_app_hotkey(&id);
+            self.app_named.lock().unwrap().insert(id.clone(), None);
+            self.app_named_errors.lock().unwrap().insert(id, Some(msg));
+        }
     }
 
     /// 应用全部具名辅助热键：主热键注册成功后按当前生效后端应用。
@@ -459,6 +656,16 @@ impl HotkeyManager {
         }
         // 已接受的组合（含主键），用于后续冲突检测
         let mut taken: Vec<String> = vec![main_key.to_string()];
+        // 应用级热键已占用键位：运行期具名热键与它撞车时拒绝注册（避免静默互相遮蔽）
+        taken.extend(
+            self.app_named
+                .lock()
+                .unwrap()
+                .values()
+                .flatten()
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
         for (id, combo) in named {
             let combo = combo.trim().to_string();
             if combo.is_empty() {
@@ -507,6 +714,8 @@ impl HotkeyManager {
         }
         *self.named.lock().unwrap() = applied;
         *self.named_errors.lock().unwrap() = errors;
+        // 上面的 clear_named_hotkeys 会把应用级热键一并清掉，这里补回去
+        self.reapply_app_named();
     }
 
     /// 会话激活期间的 Esc 取消：按当前生效后端路由
@@ -527,12 +736,22 @@ impl HotkeyManager {
         let named_status = {
             let named = self.named.lock().unwrap();
             let errors = self.named_errors.lock().unwrap();
+            let app_named = self.app_named.lock().unwrap();
+            let app_errors = self.app_named_errors.lock().unwrap();
             KNOWN_NAMED_HOTKEYS
                 .iter()
-                .map(|id| NamedHotkeyStatus {
-                    id: (*id).to_string(),
-                    key: named.get(*id).cloned().flatten(),
-                    error: errors.get(*id).cloned().flatten(),
+                .map(|id| {
+                    // 应用级热键单独存放（不随 runtime 注销），状态合并输出给设置页
+                    let (keys, errs) = if APP_NAMED_HOTKEYS.contains(id) {
+                        (&app_named, &app_errors)
+                    } else {
+                        (&named, &errors)
+                    };
+                    NamedHotkeyStatus {
+                        id: (*id).to_string(),
+                        key: keys.get(*id).cloned().flatten(),
+                        error: errs.get(*id).cloned().flatten(),
+                    }
                 })
                 .collect()
         };
@@ -670,5 +889,24 @@ mod tests {
         assert!(any_mouse_hotkey(&["F8", "Ctrl+Mouse5", ""]));
         assert!(any_mouse_hotkey(&["F8", "Shift+F9", "XButton1"]));
         assert!(!any_mouse_hotkey(&["F8", "Shift+F9", "Alt+V"]));
+    }
+
+    /// 声明清单、配置清单与状态清单必须一致：设置页按 id 查注册状态，
+    /// 漏一个就会出现「配置了但看不到状态」的静默失效。
+    #[test]
+    fn hotkey_lists_stay_in_sync() {
+        let settings = kotone_core::settings::Settings::default();
+        let runtime_ids: Vec<&str> = named_list_from(&settings)
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
+        let app_ids: Vec<&str> = app_named_list_from(&settings)
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
+        assert_eq!(app_ids, APP_NAMED_HOTKEYS);
+        // 状态清单 = 运行期具名热键 + 应用级热键（顺序即设置页展示顺序）
+        let expected: Vec<&str> = runtime_ids.iter().copied().chain(app_ids).collect();
+        assert_eq!(KNOWN_NAMED_HOTKEYS, expected.as_slice());
     }
 }

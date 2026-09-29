@@ -154,6 +154,30 @@ pub fn snapshot_and_emit(app: &AppHandle, stage: Option<String>) -> Option<Runti
     Some(status)
 }
 
+/// 热键触发的启动 / 停止切换（「启动 / 停止 Kotone」热键）。
+/// 语义与标题栏 / Hero 的主按钮一致：Stopped → start；Running → stop；
+/// Running + restartNeeded → start（壳内做 stop + start 重启）；过渡态忽略，
+/// 避免热键连按把状态机推到非法相位。
+pub async fn toggle(app: &AppHandle) -> Result<RuntimeStatus, String> {
+    let rt = app.state::<RuntimeManager>();
+    match rt.phase() {
+        RuntimePhase::Stopped => start(app).await,
+        RuntimePhase::Running => {
+            let state = app.state::<SharedState>();
+            let restart_needed = {
+                let settings = state.settings.read().unwrap();
+                rt.status(&settings, &state.engines, None).restart_needed
+            };
+            if restart_needed {
+                start(app).await // 与按钮一致：重启生效
+            } else {
+                stop(app).await
+            }
+        }
+        p => Err(format!("运行时正在{}，请稍候", p.as_str())),
+    }
+}
+
 /// 启动：warmup 当前引擎 → 注册热键 → 显示悬浮窗。
 /// Running + restartNeeded 时等价于 stop + start（用户显式点「重启」走这里）。
 pub async fn start(app: &AppHandle) -> Result<RuntimeStatus, String> {

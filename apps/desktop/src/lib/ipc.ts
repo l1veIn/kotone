@@ -139,6 +139,8 @@ export interface Settings {
   togglePostProcessingHotkey: string;
   /** 切换文字处理流程热键（默认空 = 关闭；按下按声明顺序循环流程） */
   cyclePostProcessingHotkey: string;
+  /** 启动 / 停止 Kotone 热键（默认空 = 关闭；应用级热键，runtime 停止时也生效） */
+  runtimeToggleHotkey: string;
   /** 交互模式预设（null = 旧字段推导） */
   interactionMode: InteractionMode | null;
   /** VAD 静音判停阈值 ms（one-shot 生效，200-5000） */
@@ -546,6 +548,7 @@ const mock: MockStore = {
     resendLastHotkey: "",
     togglePostProcessingHotkey: "",
     cyclePostProcessingHotkey: "",
+    runtimeToggleHotkey: "",
     interactionMode: "push-to-talk",
     vadSilenceMs: 700,
     vad: { threshold: 0.5, minSpeechMs: 50, minSilenceMs: 50 },
@@ -1319,6 +1322,11 @@ export async function getHotkeyStatus(): Promise<HotkeyStatus> {
         {
           id: "post-process-cycle",
           key: mock.settings.cyclePostProcessingHotkey || null,
+          error: null,
+        },
+        {
+          id: "runtime-toggle",
+          key: mock.settings.runtimeToggleHotkey || null,
           error: null,
         },
       ],

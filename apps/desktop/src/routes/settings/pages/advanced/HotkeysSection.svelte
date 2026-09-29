@@ -14,7 +14,8 @@
       | "channelCycleHotkey"
       | "resendLastHotkey"
       | "togglePostProcessingHotkey"
-      | "cyclePostProcessingHotkey";
+      | "cyclePostProcessingHotkey"
+      | "runtimeToggleHotkey";
     placeholder: string;
   }
 
@@ -52,6 +53,14 @@
       settingsKey: "cyclePostProcessingHotkey",
       placeholder: "如 Alt+F8",
     },
+    {
+      id: "runtime-toggle",
+      title: "启动 / 停止 Kotone 热键",
+      desc: "按下等同于标题栏与首页的「启动 / 停止 Kotone」按钮：停止时按下启动（加载模型需要几秒，设置页会显示「启动中」），运行中按下停止并注销其他热键。",
+      help: "与其它热键不同，这个热键在 Kotone 停止后依然有效——它正是用来在游戏里把 Kotone 拉起来的；留空 = 关闭。保存后立即生效、不需要重启；若按下无反应，先确认没有其它软件（录屏、游戏悬浮层、输入法）占用同一组合，并看本行是否显示「当前生效」。",
+      settingsKey: "runtimeToggleHotkey",
+      placeholder: "如 Alt+F10",
+    },
   ];
 
   let hotkeyStatus = $state<HotkeyStatus | null>(null);
@@ -87,6 +96,14 @@
     return null;
   }
 
+  /** 保存后以刚刷新到的注册状态收尾：注册失败时报错，绝不谎报「已生效」。 */
+  function settleSave(id: string, key: string) {
+    const section = sectionOf(id);
+    const error = statusOf(id)?.error;
+    if (error) toast(false, `${section.title}未生效：${error}`);
+    else toast(true, `${section.title}已保存并生效：${key}`);
+  }
+
   async function saveNamedHotkey(id: string) {
     const section = sectionOf(id);
     const key = (drafts[id] ?? "").trim();
@@ -102,10 +119,10 @@
     try {
       settingsStore.set(await updateSettings({ [section.settingsKey]: key }));
       drafts[id] = key;
-      toast(true, `${section.title}已保存并生效：${key}`);
+      hotkeyStatus = await getHotkeyStatus().catch(() => hotkeyStatus);
+      settleSave(id, key);
     } catch (e) {
       toast(false, `保存${section.title}失败：${errText(e)}`);
-    } finally {
       hotkeyStatus = await getHotkeyStatus().catch(() => hotkeyStatus);
     }
   }

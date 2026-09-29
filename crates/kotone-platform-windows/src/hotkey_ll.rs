@@ -89,6 +89,11 @@ static SHARED: OnceLock<HookShared> = OnceLock::new();
 const PROBE_EXTRA_INFO: usize = 0x4B54_4E50;
 const PROBE_VK: VIRTUAL_KEY = VIRTUAL_KEY(0x87); // VK_F24
 
+/// 占位主键：需要拉起钩子基础设施但又不该注册任何真实主热键时使用
+/// （可用性探测、热键录入、以及 runtime 未运行时的应用级具名热键）。
+/// F24 在普通键盘上不存在，且占位期间匹配器处于禁用态，主键路径不会触发。
+const SENTINEL_MAIN_KEY: &str = "F24";
+
 /// LL 钩子热键源：首次 register 时启动钩子线程与消费者线程，
 /// 之后改键/改模式只更新共享匹配器配置，不重建线程。
 pub struct LlHookSource {
@@ -147,7 +152,7 @@ impl LlHookSource {
         let was_started = self.state.lock().unwrap().started;
         if !was_started {
             // 用禁用的 F24 占位 matcher 启动基础设施；探测结束后仍保持未注册状态。
-            self.register("F24", HotkeyMode::Toggle)?;
+            self.register(SENTINEL_MAIN_KEY, HotkeyMode::Toggle)?;
             self.state.lock().unwrap().armed = false;
             if let Some(shared) = SHARED.get() {
                 shared.matcher.lock().unwrap().set_enabled(false);
@@ -309,6 +314,25 @@ impl LlHookSource {
         kotone_core::log::log("WH_KEYBOARD_LL + WH_MOUSE_LL hooks refreshed");
         Ok(())
     }
+
+    /// 为「应用级具名热键」准备钩子基础设施（runtime 未运行时的常驻热键）。
+    ///
+    /// 从未注册过热键时用占位主键（F24）拉起钩子线程，并把匹配器置为禁用：
+    /// 只剩具名热键参与匹配（见 core `HookMatcher::on_key` 的顺序），其余按键
+    /// 全部放行。已启动过则什么都不做——主热键配置与使能状态保持原样。
+    pub fn ensure_hook_ready(&self) -> Result<(), String> {
+        if self.state.lock().unwrap().started {
+            return Ok(());
+        }
+        self.register(SENTINEL_MAIN_KEY, HotkeyMode::Toggle)?;
+        // 占位主键不参与匹配：与 probe / capture 的占位语义一致
+        self.state.lock().unwrap().armed = false;
+        if let Some(shared) = SHARED.get() {
+            shared.matcher.lock().unwrap().set_enabled(false);
+        }
+        kotone_core::log::log("llhook infrastructure ready for app-level hotkeys");
+        Ok(())
+    }
 }
 
 impl HotkeySource for LlHookSource {
@@ -382,9 +406,12 @@ impl HotkeySource for LlHookSource {
             ),
             _ => None,
         };
-        if let Some(shared) = SHARED.get() {
-            shared.matcher.lock().unwrap().set_named_spec(id, spec);
-        }
+        // 钩子没装上时静默接受 = 记一条「已注册」的假日志、实际永远不触发
+        // （用户侧表现：配置完不生效，重启才好）。返回 Err 让调用方回退插件后端。
+        let Some(shared) = SHARED.get() else {
+            return Err("低级键盘钩子尚未安装，具名热键无法注册".into());
+        };
+        shared.matcher.lock().unwrap().set_named_spec(id, spec);
         kotone_core::log::log(&format!("llhook named hotkey {id}: {spec:?}"));
         Ok(())
     }

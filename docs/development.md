@@ -256,6 +256,8 @@ enum SttEvent {
 - 实现：`hotkey_ll.rs` 独立钩子线程（SetWindowsHookExW + 消息循环）+ mpsc 事件通道 + 消费者线程调 orchestrator；回调内零 IO、跳过 LLKHF_INJECTED（防自我触发）。
 - 吞键策略：仅「主键+修饰键严格匹配」时吞掉（防触发游戏内同键绑定），其余键立即放行；Esc 会话激活期吞掉作取消。
 - 回退：`hotkeyBackend: "auto" | "llhook" | "register"`（默认 auto = Windows 优先 llhook，失败回退插件）；设置页显示当前生效后端。
+- 具名辅助热键（设置 → 高级 → 其他热键）：频道切换 / 重发最近一条 / 文字处理开关 / 切换文字处理流程 / **启动·停止 Kotone**；除频道切换（默认 `Shift+CapsLock`）外默认空 = 关闭，与录制热键或彼此冲突时拒绝注册并在设置页给出错误。
+- **启动·停止 Kotone 是应用级热键**（core `HK_RUNTIME_TOGGLE`）：其余热键随 runtime 启停注册/注销，而它必须能在 runtime 停止时按下把 Kotone 拉起来，因此注册在 runtime 生命周期之外——钩子以占位主键（`F24`）+ 匹配器禁用态驻留，只保留该具名键（core `HookMatcher` 中具名热键的判定先于主键使能开关）。语义与标题栏 / 首页主按钮一致：停止 → 启动，运行中 → 停止，Running + restartNeeded → 重启。
 - 默认键位：`CapsLock`（toggle）；首次启动引导可重新录入并检测冲突。
 
 **悬浮窗：Tauri 多窗口。**
@@ -364,7 +366,7 @@ enum SttEvent {
 
 | 模块 | 文件 | 职责 | 状态（v3） |
 |------|------|------|------------|
-| `hotkey` | `hotkey.rs` | 注册/注销全局热键，hold/toggle 两种触发模式，冲突检测；Esc 仅 Listening 期临时注册 | ✅ |
+| `hotkey` | `hotkey.rs` | 注册/注销全局热键，hold/toggle 两种触发模式，冲突检测；具名辅助热键（含应用级「启动·停止」）路由；Esc 在会话激活期（非 Idle）注册 | ✅ |
 | `audio` | `audio.rs` | `AudioBackend` trait + `CpalBackend`：设备枚举、16kHz mono 重采样、PCM 流推送、50ms RMS 事件；设备打开失败即报中文错误 | ✅ |
 | `stt` | `stt/mod.rs` | `SttEngine` / `SttSession` trait、引擎注册表、当前引擎路由 | ✅ |
 | `stt::mock` | `stt/mock.rs` | mock-stream：每 0.5s 音频发 partial，finalize 返回固定文本 + 实测延迟 | ✅ |
@@ -441,6 +443,12 @@ simulate_send(text, profileId) -> Result<(), InjectError>   // v3：走真实发
 // ~/.kotone/config.json
 {
   "hotkey": { "key": "CapsLock", "mode": "toggle" }, // toggle | hold（用户可选，默认 toggle 引导时确认）
+  "hotkeyBackend": "auto",         // auto | llhook | register（Windows 默认优先低级键鼠钩子）
+  "channelCycleHotkey": "Shift+CapsLock", // 具名辅助热键：频道切换（见 §3.6）
+  "resendLastHotkey": "",          // 重发最近一条（默认空 = 关闭）
+  "togglePostProcessingHotkey": "", // 文字处理总开关（默认空 = 关闭）
+  "cyclePostProcessingHotkey": "",  // 切换文字处理流程（默认空 = 关闭）
+  "runtimeToggleHotkey": "",       // 启动 / 停止 Kotone（默认空 = 关闭；应用级热键，停止时也生效）
   "audioDeviceId": "default",
   "sttEngine": "sherpa-streaming",               // 当前引擎（默认 X-ASR 流式循环），设置页选模型时回写
   "engineOptions": {                              // 引擎专有配置

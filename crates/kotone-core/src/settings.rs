@@ -79,6 +79,11 @@ pub struct Settings {
     /// 后处理流程（不足两条流程时无操作）；与其它热键冲突时拒绝注册。
     #[serde(default)]
     pub cycle_post_processing_hotkey: String,
+    /// 启动 / 停止 Kotone 热键（默认空 = 关闭）。**应用级**热键：runtime 未运行时
+    /// 也保持注册（其余热键随 runtime 启停），因此它是唯一能在停止状态下把
+    /// Kotone 拉起来的热键；与其它热键冲突时拒绝注册。
+    #[serde(default)]
+    pub runtime_toggle_hotkey: String,
     /// 「以管理员权限重启」启动提示：用户勾选「不再提示」后置 true，不再弹窗（默认 false）
     #[serde(default)]
     pub admin_prompt_dismissed: bool,
@@ -443,6 +448,7 @@ impl Default for Settings {
             resend_last_hotkey: String::new(), // 默认关闭（设置里录入）
             toggle_post_processing_hotkey: String::new(), // 默认关闭（设置里录入）
             cycle_post_processing_hotkey: String::new(), // 默认关闭（设置里录入）
+            runtime_toggle_hotkey: String::new(), // 默认关闭（设置里录入）
             admin_prompt_dismissed: false,
             auto_admin_prompt_dismissed: false,
             history: crate::history::HistoryConfig::default(),

@@ -5,20 +5,23 @@ test("named hotkey rows render with defaults and can be configured/cleared", asy
   await page.getByTestId("settings-nav-advanced").click();
   await page.getByTestId("advanced-nav-hotkeys").click();
 
-  // 四个具名热键行都在：频道切换（默认生效）/ 重发 / 文字处理开关 / 切换流程
+  // 五个具名热键行都在：频道切换（默认生效）/ 重发 / 文字处理开关 / 切换流程 /
+  // 启动停止 Kotone（应用级热键，停止时也生效）
   await expect(page.getByText("频道切换热键", { exact: true })).toBeVisible();
   await expect(page.getByText("重发最近一条热键", { exact: true })).toBeVisible();
   await expect(page.getByText("文字处理开关热键", { exact: true })).toBeVisible();
   await expect(page.getByText("切换文字处理流程热键", { exact: true })).toBeVisible();
+  await expect(page.getByText("启动 / 停止 Kotone 热键", { exact: true })).toBeVisible();
 
-  // 默认：开关与切流程均为「未设置」，频道切换沿用默认 Shift+CapsLock
+  // 默认：开关、切流程与启动停止均为「未设置」，频道切换沿用默认 Shift+CapsLock
   const toggleInput = page.getByTestId("hotkey-input-post-process-toggle");
   const cycleInput = page.getByTestId("hotkey-input-post-process-cycle");
   await expect(toggleInput).toHaveValue("");
   await expect(cycleInput).toHaveValue("");
+  await expect(page.getByTestId("hotkey-input-runtime-toggle")).toHaveValue("");
   await expect(
     page.getByText("未设置（默认关闭，不会误触发）", { exact: true }),
-  ).toHaveCount(3);
+  ).toHaveCount(4);
 
   // 录入文字处理开关热键
   await toggleInput.fill("F9");

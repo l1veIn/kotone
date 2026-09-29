@@ -345,6 +345,26 @@ mod overlay_visibility_tests {
     }
 }
 
+#[cfg(test)]
+mod hotkey_settings_tests {
+    use super::{app_hotkey_changed, hotkey_registration_changed};
+    use kotone_core::settings::Settings;
+
+    /// 启动 / 停止热键是应用级热键：它变化时不该触发 runtime 作用域的重注册，
+    /// 但仍必须被识别为「需要重新落键」。
+    #[test]
+    fn runtime_toggle_hotkey_tracked_separately_from_runtime_hotkeys() {
+        let old = Settings::default();
+        let mut next = old.clone();
+        next.runtime_toggle_hotkey = "Alt+F10".into();
+        assert!(app_hotkey_changed(&old, &next));
+        assert!(!hotkey_registration_changed(&old, &next));
+
+        next.hotkey.key = "F9".into();
+        assert!(hotkey_registration_changed(&old, &next));
+    }
+}
+
 /// 生产事件出口：转发为 Tauri 事件；联动 Esc 取消键注册与 overlay 窗口显隐。
 /// overlay 显隐规则（后端驱动，幂等，与前端逻辑不冲突）按 `overlay.visibility` 分档：
 /// - always（常驻）：会话态（Listening/…/Error）→ show；Running 期间 idle 不隐藏
@@ -913,6 +933,11 @@ fn hotkey_registration_changed(old: &Settings, next: &Settings) -> bool {
         || old.cycle_post_processing_hotkey != next.cycle_post_processing_hotkey
 }
 
+/// 应用级热键（启动 / 停止 Kotone）变化：与 runtime 是否运行无关，必须重注册。
+fn app_hotkey_changed(old: &Settings, next: &Settings) -> bool {
+    old.runtime_toggle_hotkey != next.runtime_toggle_hotkey
+}
+
 /// 局部更新配置；热键变化时触发重注册
 #[tauri::command]
 fn update_settings(
@@ -948,6 +973,12 @@ fn update_settings(
                     )?;
                 }
             }
+            // 应用级热键不受 running 限制：runtime 停止时也必须能一键启动
+            if app_hotkey_changed(old, next) {
+                if let Some(manager) = manager.as_ref() {
+                    manager.apply_app_hotkeys(next);
+                }
+            }
             Ok(())
         },
         |old, next| {
@@ -959,6 +990,11 @@ fn update_settings(
                         effective_hotkey_mode(old),
                         old,
                     )?;
+                }
+            }
+            if app_hotkey_changed(old, next) {
+                if let Some(manager) = manager.as_ref() {
+                    manager.apply_app_hotkeys(old);
                 }
             }
             Ok(())
@@ -1873,6 +1909,14 @@ pub fn run() {
             if let Some(win) = app.get_webview_window("overlay") {
                 let overlay = settings.read().unwrap().overlay.clone();
                 apply_overlay_window_config(&win, &overlay);
+            }
+
+            // 应用级热键（启动 / 停止 Kotone）：runtime 未运行时也必须生效，
+            // 故在启动阶段就落到低级钩子上（未配置时空操作，不安装钩子）。
+            {
+                let manager = app.state::<HotkeyManager>();
+                let app_hotkeys = settings.read().unwrap().clone();
+                manager.apply_app_hotkeys(&app_hotkeys);
             }
 
             // 「启动」开关（core runtime 状态机）：默认 Stopped——不注册热键、

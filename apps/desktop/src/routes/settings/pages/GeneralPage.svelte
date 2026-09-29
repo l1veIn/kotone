@@ -212,6 +212,12 @@
       toast(false, `录制热键与切换文字处理流程热键（${ppCycleKey}）冲突，请换一个或到「高级」页调整`);
       return;
     }
+    // 录制键与启动/停止 Kotone 热键也不能相同（后端会以录制键为准让位应用级热键）
+    const runtimeToggleKey = $settingsStore?.runtimeToggleHotkey ?? "";
+    if (runtimeToggleKey && combosConflict(key, runtimeToggleKey)) {
+      toast(false, `录制热键与启动 / 停止 Kotone 热键（${runtimeToggleKey}）冲突，请换一个或到「高级」页调整`);
+      return;
+    }
     try {
       // 热键变更后端自动重注册（lib.rs update_settings）；模式沿用当前值
       settingsStore.set(
