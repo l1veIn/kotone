@@ -2,7 +2,7 @@
 //! 存储：~/.kotone/profiles/<id>.json
 //!
 //! 内置模板存放在 `resources/profiles/*.json`；首次运行落盘两个 profile：
-//! - `lol`：League of Legends（§5.4 示例值，delay 20/20/20，Unicode 逐字）
+//! - `lol`：League of Legends（§5.4 示例值，delay 20/20/100，Unicode 逐字）
 //! - `generic`：通用，匹配任意前台窗口（processNames 为空 = 通配）
 
 use std::path::{Path, PathBuf};

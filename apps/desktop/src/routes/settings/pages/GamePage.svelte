@@ -126,8 +126,6 @@
   function openEditor(p: GameProfile) {
     editingId = p.id;
     draft = $state.snapshot(p);
-    // 旧配置可能仍保留早于最小安全值的发送等待时间；打开编辑器时同步显示实际生效的下限。
-    draft.preSendDelayMs = Math.max(draft.preSendDelayMs, 100);
     hotwordsText = p.hotwords.join("\n");
     showTechnical = false;
   }
@@ -616,7 +614,7 @@
                 </div>
                 <p class="mt-4 text-[10px] font-semibold tracking-wide text-white/40">发送时序</p>
                 <p class="mt-1 text-[10px] leading-relaxed text-white/35">
-                  文字输入完成后至少等待 100ms 再发送；聊天框还没打开就开始打字时，把「打开聊天后等待」调到 50–100ms。
+                  聊天框还没打开就开始打字时，把「打开聊天后等待」调到 50–100ms。
                 </p>
                 <label class="mt-3 block">
                   <div class="flex items-center justify-between">
@@ -653,7 +651,7 @@
                   </div>
                   <input
                     type="range"
-                    min="100"
+                    min="0"
                     max="300"
                     step="10"
                     bind:value={draft.preSendDelayMs}
