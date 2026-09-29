@@ -184,6 +184,12 @@
   }
 
   const displayError = $derived(actionError || $appState.errorMessage || "未知错误");
+  /** 鼠标模式：穿透（默认）时 overlay 窗口收不到任何鼠标事件，鼠标按钮只会误导用户。 */
+  const mouseInteractive = $derived(!clickThrough);
+  /** Error 态热键语义：保留文本 = 重试发送；无文本（如空转录）= 重说。 */
+  const errorAction = $derived($appState.errorText ? "重试发送" : "重说");
+  /** Esc 出口：带文本时按下等于丢弃保留的文本（放弃），否则只是收起提示。 */
+  const errorEscAction = $derived($appState.errorText ? "放弃" : "关闭");
   const processingLabel = $derived(
     $appState.processingStep
       ? `${$appState.processingStep.displayName} · ${$appState.processingStep.index}/${$appState.processingStep.total}`
@@ -276,13 +282,15 @@
         <span class="shrink-0 text-[10px] whitespace-nowrap text-white/40">
           {hotkeyLabel} 发送 · Esc 重说
         </span>
-        <button
-          class="shrink-0 rounded-full bg-kotone-pink px-2.5 py-0.5 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95"
-          onclick={() => void onConfirm()}
-          disabled={sendPending}
-        >
-          发送
-        </button>
+        {#if mouseInteractive}
+          <button
+            class="shrink-0 rounded-full bg-kotone-pink px-2.5 py-0.5 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95"
+            onclick={() => void onConfirm()}
+            disabled={sendPending}
+          >
+            发送
+          </button>
+        {/if}
       {:else if $appState.state === "sending"}
         <span class="send-pulse inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-kotone-pink"></span>
         <p
@@ -305,7 +313,7 @@
         <p class="max-w-[220px] truncate text-sm text-kotone-pink" title={displayError}>
           {displayError}
         </p>
-        {#if $appState.errorText}
+        {#if mouseInteractive && $appState.errorText}
           <button
             class="shrink-0 rounded-full bg-kotone-pink/80 px-2.5 py-0.5 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95"
             onclick={() => void onRetry()}
@@ -314,12 +322,10 @@
             重试
           </button>
         {/if}
-        <button
-          class="shrink-0 rounded-full bg-white/10 px-2.5 py-0.5 text-[11px] text-white/75 transition hover:bg-white/20 active:scale-95"
-          onclick={() => void onCancel()}
-        >
-          关闭
-        </button>
+        <!-- Error 的退出一律走键盘：无文本时没有任何鼠标可做的事，不给按钮 -->
+        <span class="shrink-0 text-[10px] whitespace-nowrap text-white/40">
+          {hotkeyLabel} {errorAction} · Esc {errorEscAction}
+        </span>
       {:else}
         <!-- idle：热键切换文字处理时短暂显示提示（托盘手动唤起时显示待机文案） -->
         {#if $appState.ppNotice}
@@ -425,21 +431,23 @@
           <p class="truncate text-[11px] text-kotone-pink">{actionError}</p>
         {/if}
       </div>
-      <div class="flex shrink-0 flex-col gap-1.5">
-        <button
-          class="rounded-lg bg-kotone-pink px-3 py-1 text-xs font-semibold text-white shadow-glow-pink transition hover:brightness-110 active:scale-95"
-          onclick={() => void onConfirm()}
-          disabled={sendPending}
-        >
-          发送 ⏎
-        </button>
-        <button
-          class="rounded-lg bg-white/10 px-3 py-1 text-xs text-white/75 transition hover:bg-white/20 active:scale-95"
-          onclick={() => void onCancel()}
-        >
-          取消 Esc
-        </button>
-      </div>
+      {#if mouseInteractive}
+        <div class="flex shrink-0 flex-col gap-1.5">
+          <button
+            class="rounded-lg bg-kotone-pink px-3 py-1 text-xs font-semibold text-white shadow-glow-pink transition hover:brightness-110 active:scale-95"
+            onclick={() => void onConfirm()}
+            disabled={sendPending}
+          >
+            发送 ⏎
+          </button>
+          <button
+            class="rounded-lg bg-white/10 px-3 py-1 text-xs text-white/75 transition hover:bg-white/20 active:scale-95"
+            onclick={() => void onCancel()}
+          >
+            取消 Esc
+          </button>
+        </div>
+      {/if}
     {:else if $appState.state === "sending"}
       <div class="min-w-0 flex-1" in:fade={{ duration: 150 }}>
         <p class="flex items-center gap-2 text-sm font-semibold text-kotone-pink">
@@ -485,8 +493,8 @@
           </p>
         {/if}
       </div>
-      <div class="flex shrink-0 gap-1.5">
-        {#if $appState.errorText}
+      <div class="flex shrink-0 flex-col items-end gap-1">
+        {#if mouseInteractive && $appState.errorText}
           <button
             class="rounded-lg bg-kotone-pink/80 px-2.5 py-1 text-xs font-semibold text-white transition hover:brightness-110 active:scale-95"
             onclick={() => void onRetry()}
@@ -495,12 +503,10 @@
             重试
           </button>
         {/if}
-        <button
-          class="rounded-lg bg-white/10 px-2.5 py-1 text-xs text-white/75 transition hover:bg-white/20 active:scale-95"
-          onclick={() => void onCancel()}
-        >
-          关闭
-        </button>
+        <!-- Error 的退出一律走键盘：无文本时没有任何鼠标可做的事，不给按钮 -->
+        <span class="text-[11px] whitespace-nowrap text-white/45">
+          再按 {hotkeyLabel} {errorAction} · Esc {errorEscAction}
+        </span>
       </div>
     {:else}
       <!-- idle（托盘手动唤起悬浮条时可见；正常流程会自动隐藏窗口） -->
