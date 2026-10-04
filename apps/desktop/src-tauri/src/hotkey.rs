@@ -15,13 +15,11 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use kotone_core::hotkey::{
-    parse_hotkey, HookEvent, HotkeySource, HK_CHANNEL_CYCLE, HK_PP_CYCLE, HK_PP_TOGGLE,
-    HK_RESEND_LAST, HK_RUNTIME_TOGGLE,
+    parse_hotkey, HookEvent, HotkeySource, HK_ASSISTANT, HK_CHANNEL_CYCLE, HK_PP_CYCLE,
+    HK_PP_TOGGLE, HK_RESEND_LAST, HK_RUNTIME_TOGGLE,
 };
 use kotone_core::orchestrator::Orchestrator;
 use kotone_core::settings::HotkeyBackend;
-
-use crate::SharedState;
 
 pub use kotone_core::hotkey::HotkeyMode;
 
@@ -130,7 +128,7 @@ impl HotkeySource for PluginHotkeySource {
         let orch = self.orch.clone();
         self.app
             .global_shortcut()
-            .on_shortcut(shortcut, move |_app, _sc, event| {
+            .on_shortcut(shortcut, move |app, _sc, event| {
                 kotone_core::log::log(&format!(
                     "hotkey fired: mode={mode:?} state={:?}",
                     event.state()
@@ -139,15 +137,19 @@ impl HotkeySource for PluginHotkeySource {
                 match mode {
                     HotkeyMode::Hold => {
                         let pressed = event.state() == ShortcutState::Pressed;
-                        tauri::async_runtime::spawn(async move {
-                            orch.on_hotkey_hold(pressed).await;
-                        });
+                        dispatch_runtime_hotkey(
+                            app,
+                            &orch,
+                            if pressed {
+                                HookEvent::HoldPressed
+                            } else {
+                                HookEvent::HoldReleased
+                            },
+                        );
                     }
                     HotkeyMode::Toggle => {
                         if event.state() == ShortcutState::Pressed {
-                            tauri::async_runtime::spawn(async move {
-                                orch.on_hotkey_toggle().await;
-                            });
+                            dispatch_runtime_hotkey(app, &orch, HookEvent::Toggle);
                         }
                     }
                 }
@@ -171,6 +173,15 @@ impl HotkeySource for PluginHotkeySource {
 
     /// 注册/更新/注销一个具名辅助热键（RegisterHotKey 后端）：同 id 幂等
     fn set_named_hotkey(&self, id: &str, combo: Option<&str>) -> Result<(), String> {
+        self.set_named_hotkey_mode(id, combo, HotkeyMode::Toggle)
+    }
+
+    fn set_named_hotkey_mode(
+        &self,
+        id: &str,
+        combo: Option<&str>,
+        mode: HotkeyMode,
+    ) -> Result<(), String> {
         if let Some(sc) = self.named.lock().unwrap().remove(id) {
             if let Err(e) = self.app.global_shortcut().unregister(sc) {
                 kotone_core::log::log(&format!("注销具名热键失败: {e}"));
@@ -187,7 +198,16 @@ impl HotkeySource for PluginHotkeySource {
         self.app
             .global_shortcut()
             .on_shortcut(shortcut, move |app, _sc, event| {
-                if event.state() == ShortcutState::Pressed {
+                if mode == HotkeyMode::Hold {
+                    dispatch_runtime_hotkey(
+                        app,
+                        &orch,
+                        HookEvent::NamedHold {
+                            id: id_owned.clone(),
+                            pressed: event.state() == ShortcutState::Pressed,
+                        },
+                    );
+                } else if event.state() == ShortcutState::Pressed {
                     route_named_hotkey(app, &orch, &id_owned);
                 }
             })
@@ -220,12 +240,10 @@ impl HotkeySource for PluginHotkeySource {
                 let registered =
                     self.app
                         .global_shortcut()
-                        .on_shortcut(shortcut, move |_app, _sc, event| {
+                        .on_shortcut(shortcut, move |app, _sc, event| {
                             if event.state() == ShortcutState::Pressed {
                                 let orch = orch.clone();
-                                tauri::async_runtime::spawn(async move {
-                                    orch.cancel().await;
-                                });
+                                dispatch_runtime_hotkey(app, &orch, HookEvent::Cancel);
                             }
                         });
                 match registered {
@@ -254,29 +272,10 @@ fn make_llhook_sink(
     Box::new(move |ev| {
         let orch = orch.clone();
         match ev {
-            HookEvent::HoldPressed => {
-                tauri::async_runtime::spawn(async move {
-                    orch.on_hotkey_hold(true).await;
-                });
-            }
-            HookEvent::HoldReleased => {
-                tauri::async_runtime::spawn(async move {
-                    orch.on_hotkey_hold(false).await;
-                });
-            }
-            HookEvent::Toggle => {
-                tauri::async_runtime::spawn(async move {
-                    orch.on_hotkey_toggle().await;
-                });
-            }
-            HookEvent::Cancel => {
-                tauri::async_runtime::spawn(async move {
-                    orch.cancel().await;
-                });
-            }
             HookEvent::NamedHotkey { id } => route_named_hotkey(&app, &orch, &id),
             // 诊断事件（修饰键失配）：consumer 已记日志，业务不处理
             HookEvent::MainKeyMissed { .. } => {}
+            event => dispatch_runtime_hotkey(&app, &orch, event),
         }
     })
 }
@@ -301,17 +300,81 @@ fn route_named_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, id: &str) {
         });
         return;
     }
+    dispatch_runtime_hotkey(app, orch, HookEvent::NamedHotkey { id: id.to_string() });
+}
+
+/// 事件到达时记录运行时与核心入场票据；启停、取消和重注册后拒绝旧输入。
+fn dispatch_runtime_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, event: HookEvent) {
+    let Some(runtime) = app.try_state::<crate::runtime::RuntimeManager>() else {
+        return;
+    };
+    if event == HookEvent::Cancel {
+        // Esc invalidates queued presses immediately. Keep admission paused until
+        // cancel reaches the core, so a newer press cannot overtake that cancel.
+        // This path never waits for the edge queue or an AI request to finish.
+        if runtime.phase() != kotone_core::runtime::RuntimePhase::Running {
+            return;
+        }
+        let pause = runtime.pause_inputs();
+        orch.invalidate_hotkey_inputs();
+        let orch = orch.clone();
+        tauri::async_runtime::spawn(async move {
+            let _pause = pause;
+            orch.cancel().await;
+        });
+        return;
+    }
+    let Some(runtime_ticket) = runtime.input_ticket() else {
+        return;
+    };
+    let ticket = HotkeyInputTicket {
+        runtime: runtime_ticket,
+        core: orch.hotkey_input_ticket(),
+    };
+    // Press/release must reach the core in physical order. Spawning each edge
+    // separately can schedule release first, leaving a short press recording.
+    // Other actions (especially Esc) stay independent so they can cancel input.
+    if let HookEvent::NamedHold { id, pressed } = &event {
+        if id == HK_ASSISTANT {
+            let _ = app
+                .state::<HotkeyManager>()
+                .assistant_edges
+                .send((ticket, *pressed));
+        }
+        return;
+    }
+    let app = app.clone();
     let orch = orch.clone();
-    let id = id.to_string();
     tauri::async_runtime::spawn(async move {
-        match id.as_str() {
-            HK_CHANNEL_CYCLE => orch.on_cycle_channel().await,
-            HK_RESEND_LAST => orch.resend_last().await,
-            HK_PP_TOGGLE => orch.on_post_processing_toggle().await,
-            HK_PP_CYCLE => orch.on_post_processing_cycle().await,
-            _ => kotone_core::log::log(&format!("未知具名热键: {id}")),
+        if !app
+            .state::<crate::runtime::RuntimeManager>()
+            .accepts_input(ticket.runtime)
+        {
+            return;
+        }
+        match event {
+            HookEvent::NamedHold { .. } => unreachable!("hold edges use the ordered dispatcher"),
+            HookEvent::HoldPressed => orch.on_hotkey_hold_with_ticket(true, ticket.core).await,
+            HookEvent::HoldReleased => orch.on_hotkey_hold_with_ticket(false, ticket.core).await,
+            HookEvent::Toggle => orch.on_hotkey_toggle_with_ticket(ticket.core).await,
+            HookEvent::Cancel => unreachable!("cancel bypasses queued input"),
+            HookEvent::NamedHotkey { id } => match id.as_str() {
+                HK_CHANNEL_CYCLE => orch.on_cycle_channel().await,
+                HK_RESEND_LAST => orch.resend_last().await,
+                HK_PP_TOGGLE => orch.on_post_processing_toggle().await,
+                HK_PP_CYCLE => orch.on_post_processing_cycle().await,
+                HK_ASSISTANT => orch.on_assistant_hotkey_with_ticket(ticket.core).await,
+                _ => kotone_core::log::log(&format!("未知具名热键: {id}")),
+            },
+            HookEvent::MainKeyMissed { .. } => {}
         }
     });
+}
+
+#[derive(Clone, Copy)]
+struct HotkeyInputTicket {
+    runtime: u64,
+    core: u64,
 }
 
 /// 应用级具名热键：runtime 未运行时也保持注册（只随配置变化重注册）。
@@ -319,6 +382,7 @@ const APP_NAMED_HOTKEYS: &[&str] = &[HK_RUNTIME_TOGGLE];
 
 /// 已知具名热键的稳定声明顺序（设置页展示顺序；新增具名热键加入此清单即出现在 UI）。
 const KNOWN_NAMED_HOTKEYS: &[&str] = &[
+    HK_ASSISTANT,
     HK_CHANNEL_CYCLE,
     HK_RESEND_LAST,
     HK_PP_TOGGLE,
@@ -327,12 +391,42 @@ const KNOWN_NAMED_HOTKEYS: &[&str] = &[
 ];
 
 /// 从配置取出当前要应用的全部具名热键（id, combo）；声明顺序即冲突/优先级顺序。
-fn named_list_from(settings: &kotone_core::settings::Settings) -> Vec<(&'static str, String)> {
+fn named_list_from(
+    settings: &kotone_core::settings::Settings,
+) -> Vec<(&'static str, String, HotkeyMode)> {
+    let assistant_mode = if settings.assistant.interaction_mode
+        == kotone_core::assistant::AssistantInteractionMode::PushToTalk
+    {
+        HotkeyMode::Hold
+    } else {
+        HotkeyMode::Toggle
+    };
     vec![
-        (HK_CHANNEL_CYCLE, settings.channel_cycle_hotkey.clone()),
-        (HK_RESEND_LAST, settings.resend_last_hotkey.clone()),
-        (HK_PP_TOGGLE, settings.toggle_post_processing_hotkey.clone()),
-        (HK_PP_CYCLE, settings.cycle_post_processing_hotkey.clone()),
+        (
+            HK_ASSISTANT,
+            settings.assistant.hotkey.clone(),
+            assistant_mode,
+        ),
+        (
+            HK_CHANNEL_CYCLE,
+            settings.channel_cycle_hotkey.clone(),
+            HotkeyMode::Toggle,
+        ),
+        (
+            HK_RESEND_LAST,
+            settings.resend_last_hotkey.clone(),
+            HotkeyMode::Toggle,
+        ),
+        (
+            HK_PP_TOGGLE,
+            settings.toggle_post_processing_hotkey.clone(),
+            HotkeyMode::Toggle,
+        ),
+        (
+            HK_PP_CYCLE,
+            settings.cycle_post_processing_hotkey.clone(),
+            HotkeyMode::Toggle,
+        ),
     ]
 }
 
@@ -343,6 +437,7 @@ fn app_named_list_from(settings: &kotone_core::settings::Settings) -> Vec<(&'sta
 
 /// 热键管理器：后端选择/回退 + 状态暴露；对上层签名不变
 pub struct HotkeyManager {
+    assistant_edges: tokio::sync::mpsc::UnboundedSender<(HotkeyInputTicket, bool)>,
     /// RegisterHotKey 热键源（回退路径 + 非 Windows）
     plugin: PluginHotkeySource,
     /// LL 钩子热键源（Windows 默认）
@@ -366,7 +461,24 @@ pub struct HotkeyManager {
 
 impl HotkeyManager {
     pub fn new(app: &AppHandle, orch: Arc<Orchestrator>) -> Self {
+        let (assistant_edges, mut edges) =
+            tokio::sync::mpsc::unbounded_channel::<(HotkeyInputTicket, bool)>();
+        let edge_app = app.clone();
+        let edge_orch = orch.clone();
+        tauri::async_runtime::spawn(async move {
+            while let Some((ticket, pressed)) = edges.recv().await {
+                if edge_app
+                    .state::<crate::runtime::RuntimeManager>()
+                    .accepts_input(ticket.runtime)
+                {
+                    edge_orch
+                        .on_assistant_hotkey_hold_with_ticket(pressed, ticket.core)
+                        .await;
+                }
+            }
+        });
         Self {
+            assistant_edges,
             plugin: PluginHotkeySource::new(app, orch.clone()),
             #[cfg(windows)]
             llhook: kotone_platform_windows::hotkey_ll::LlHookSource::new(make_llhook_sink(
@@ -381,16 +493,6 @@ impl HotkeyManager {
             app_named: Mutex::new(HashMap::new()),
             app_named_errors: Mutex::new(HashMap::new()),
         }
-    }
-
-    /// 注册全局热键（已注册则先注销，实现运行时改键/改模式/改后端）。
-    /// Windows 上按配置优先 LL 钩子，安装失败回退 RegisterHotKey 并记录日志。
-    pub fn register(&self, app: &AppHandle, key: &str, mode: HotkeyMode) -> Result<(), String> {
-        let settings = app
-            .try_state::<SharedState>()
-            .map(|state| state.settings.read().unwrap().clone())
-            .unwrap_or_default();
-        self.register_with_settings(app, key, mode, &settings)
     }
 
     /// 用显式配置注册热键。设置事务在内存发布 next 之前调用此方法，避免注册过程
@@ -416,6 +518,7 @@ impl HotkeyManager {
             &settings.toggle_post_processing_hotkey,
             &settings.cycle_post_processing_hotkey,
             &settings.runtime_toggle_hotkey,
+            &settings.assistant.hotkey,
         ]);
 
         #[cfg(windows)]
@@ -637,7 +740,7 @@ impl HotkeyManager {
     /// 声明顺序即冲突优先级：每个新键与「主键 + 前面所有非空具名组合」做
     /// `combos_conflict`，冲突拒绝注册并记入对应 id 的 error（设置页展示）。
     /// 非空配置组合无论注册成功与否都计入后续冲突检测（与旧 cycle/resend 语义一致）。
-    fn apply_named(&self, main_key: &str, named: &[(&'static str, String)]) {
+    fn apply_named(&self, main_key: &str, named: &[(&'static str, String, HotkeyMode)]) {
         let backend = *self.backend.lock().unwrap();
         let mut applied: HashMap<String, Option<String>> = HashMap::new();
         let mut errors: HashMap<String, Option<String>> = HashMap::new();
@@ -666,7 +769,7 @@ impl HotkeyManager {
                 .cloned()
                 .collect::<Vec<_>>(),
         );
-        for (id, combo) in named {
+        for (id, combo, mode) in named {
             let combo = combo.trim().to_string();
             if combo.is_empty() {
                 applied.insert(id.to_string(), None);
@@ -688,15 +791,15 @@ impl HotkeyManager {
                 #[cfg(windows)]
                 {
                     if backend == ActiveBackend::LlHook {
-                        self.llhook.set_named_hotkey(id, Some(&combo))
+                        self.llhook.set_named_hotkey_mode(id, Some(&combo), *mode)
                     } else {
-                        self.plugin.set_named_hotkey(id, Some(&combo))
+                        self.plugin.set_named_hotkey_mode(id, Some(&combo), *mode)
                     }
                 }
                 #[cfg(not(windows))]
                 {
                     let _ = backend;
-                    self.plugin.set_named_hotkey(id, Some(&combo))
+                    self.plugin.set_named_hotkey_mode(id, Some(&combo), *mode)
                 }
             };
             match res {
@@ -898,7 +1001,7 @@ mod tests {
         let settings = kotone_core::settings::Settings::default();
         let runtime_ids: Vec<&str> = named_list_from(&settings)
             .iter()
-            .map(|(id, _)| *id)
+            .map(|(id, _, _)| *id)
             .collect();
         let app_ids: Vec<&str> = app_named_list_from(&settings)
             .iter()
@@ -908,5 +1011,22 @@ mod tests {
         // 状态清单 = 运行期具名热键 + 应用级热键（顺序即设置页展示顺序）
         let expected: Vec<&str> = runtime_ids.iter().copied().chain(app_ids).collect();
         assert_eq!(KNOWN_NAMED_HOTKEYS, expected.as_slice());
+    }
+
+    #[test]
+    fn assistant_hold_mode_is_registered_independently_of_dictation() {
+        use kotone_core::interaction::InteractionMode;
+        let mut settings = kotone_core::settings::Settings {
+            interaction_mode: Some(InteractionMode::Dictation),
+            ..Default::default()
+        };
+        assert_eq!(named_list_from(&settings)[0].2, HotkeyMode::Hold);
+        settings.assistant.interaction_mode =
+            kotone_core::assistant::AssistantInteractionMode::OneShot;
+        assert_eq!(named_list_from(&settings)[0].2, HotkeyMode::Toggle);
+        assert!(named_list_from(&settings)
+            .iter()
+            .skip(1)
+            .all(|(_, _, mode)| *mode == HotkeyMode::Toggle));
     }
 }

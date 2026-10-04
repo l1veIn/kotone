@@ -1,9 +1,9 @@
 //! kotone-eval：引擎评测工具 —— 会话录档、语料回放、多引擎对比
-//! （docs/development.md §3.3「评测工具」、§5.4 eval json；取舍见 docs/adr/005）
+//! （当前契约见 docs/eval-playbook.md，身份与缓存决策见 docs/adr/011）
 //!
 //! 存储布局（~/.kotone/eval/）：
 //! - `<sessionId>.json` + `<sessionId>.wav`：录档（wav 固定 16kHz/16bit/mono）
-//! - `replays/<sessionId>__<engineId>.json`：回放结果缓存（report 优先复用）
+//! - `replays/<sessionId>__<targetFingerprint>.json`：带模型/配置与语料指纹的回放缓存
 //!
 //! 容量：只保留最近 200 个会话，超出连同 wav/replay 缓存一起清理。
 //!
@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
 use crate::stt::{EngineRegistry, SessionConfig, SttEvent};
@@ -26,6 +27,59 @@ pub const MAX_SESSIONS: usize = 200;
 pub const SAMPLE_RATE: u32 = 16000;
 /// 回放时的喂入块大小（100ms）；第一版全量灌，不按原始节奏（ADR-005）
 const REPLAY_CHUNK_SAMPLES: usize = 16000 / 10;
+const REPLAY_CACHE_VERSION: u32 = 2;
+
+/// 一次评测的明确目标。模型清单/旧引擎别名的解析由调用方完成，core 不依赖 STT 实现。
+/// `session_config.options.model` 必须与 `model_id` 一致，禁止回退到运行中的活动模型。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalTarget {
+    pub engine_id: String,
+    pub model_id: String,
+    pub session_config: SessionConfig,
+}
+
+impl EvalTarget {
+    pub fn new(
+        engine_id: impl Into<String>,
+        model_id: impl Into<String>,
+        mut session_config: SessionConfig,
+    ) -> Self {
+        let model_id = model_id.into();
+        if !session_config.options.is_object() {
+            session_config.options = serde_json::json!({});
+        }
+        session_config.options["model"] = serde_json::json!(model_id);
+        Self {
+            engine_id: engine_id.into(),
+            model_id,
+            session_config,
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.engine_id.trim().is_empty() || self.model_id.trim().is_empty() {
+            return Err("评测目标必须指定引擎与模型".into());
+        }
+        if self
+            .session_config
+            .options
+            .get("model")
+            .and_then(|v| v.as_str())
+            != Some(self.model_id.as_str())
+        {
+            return Err("评测目标的模型与会话配置不一致".into());
+        }
+        Ok(())
+    }
+
+    /// 包含引擎、模型和实际传给 start_session 的完整配置；JSON 对象键由 serde_json 排序。
+    pub fn fingerprint(&self) -> Result<String, String> {
+        self.validate()?;
+        let bytes = serde_json::to_vec(self).map_err(|e| format!("评测目标序列化失败: {e}"))?;
+        Ok(format!("{:x}", Sha256::digest(bytes)))
+    }
+}
 
 /// 一条 partial 时间线记录
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -36,7 +90,7 @@ pub struct PartialRecord {
     pub text: String,
 }
 
-/// 评测会话录档（字段与 docs/development.md §5.4 eval json 对应）
+/// 评测会话录档（camelCase JSON；旧录档保持读取兼容）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EvalSession {
@@ -53,13 +107,22 @@ pub struct EvalSession {
     pub human_label: Option<String>,
 }
 
-/// 一次回放的结果（docs/development.md §5.3 eval_replay -> EvalResult）
+/// 一次回放结果；身份字段可缺省以读取旧结果，但旧格式不能命中当前缓存。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EvalResult {
     pub session_id: String,
     /// 回放所用引擎（可与录档引擎不同——这正是多引擎对比的意义）
     pub engine_id: String,
+    /// 旧缓存没有目标字段，仍允许读取/导出，但不允许用作当前评测结果。
+    #[serde(default)]
+    pub target: Option<EvalTarget>,
+    #[serde(default)]
+    pub target_fingerprint: Option<String>,
+    #[serde(default)]
+    pub source_fingerprint: Option<String>,
+    #[serde(default)]
+    pub cache_version: u32,
     pub replayed_at: String,
     /// 全速灌入下首条 partial 的纯计算延迟；非流式引擎为 None
     pub first_partial_ms: Option<u64>,
@@ -347,9 +410,15 @@ pub fn list_sessions_at(dir: &Path) -> Result<Vec<EvalSession>, String> {
 }
 
 fn load_session_at(dir: &Path, session_id: &str) -> Result<EvalSession, String> {
+    validate_session_id(session_id)?;
     let raw = std::fs::read_to_string(session_json_path(dir, session_id))
         .map_err(|e| format!("读取录档 {session_id} 失败: {e}"))?;
-    serde_json::from_str(&raw).map_err(|e| format!("解析录档 {session_id} 失败: {e}"))
+    let session: EvalSession =
+        serde_json::from_str(&raw).map_err(|e| format!("解析录档 {session_id} 失败: {e}"))?;
+    if session.session_id != session_id {
+        return Err(format!("录档 {session_id} 的内部会话 ID 与文件名不一致"));
+    }
+    Ok(session)
 }
 
 /// 回填人工标注（正确文本），供 CER 计算
@@ -367,13 +436,13 @@ pub fn label_at(dir: &Path, session_id: &str, text: &str) -> Result<EvalSession,
 
 // ---------- 回放 ----------
 
-/// 语料回放：录档 wav 对任意已安装引擎离线重放（默认目录）
+/// 使用专供评测的 registry 回放指定本地目标。不得传入应用正在使用的引擎实例。
 pub fn replay(
     session_id: &str,
-    engine_id: &str,
+    target: &EvalTarget,
     registry: &EngineRegistry,
 ) -> Result<EvalResult, String> {
-    replay_at(&eval_dir(), session_id, engine_id, registry)
+    replay_at(&eval_dir(), session_id, target, registry)
 }
 
 /// 回放到指定目录中的会话。第一版全速灌入（100ms 块连续推，不按原始节奏），
@@ -381,24 +450,37 @@ pub fn replay(
 pub fn replay_at(
     dir: &Path,
     session_id: &str,
-    engine_id: &str,
+    target: &EvalTarget,
     registry: &EngineRegistry,
 ) -> Result<EvalResult, String> {
     validate_session_id(session_id)?;
+    let target_fingerprint = target.fingerprint()?;
     let session = load_session_at(dir, session_id)?;
     let pcm = read_wav(&session_wav_path(dir, session_id))?;
+    let source_fingerprint = source_fingerprint(&session, &pcm);
     let engine = registry
-        .get(engine_id)
-        .ok_or_else(|| format!("未注册的 STT 引擎: {engine_id}"))?;
-    if !engine.is_ready() {
-        return Err(format!(
-            "引擎「{}」未就绪（模型未下载或未启用）",
-            engine.display_name()
-        ));
+        .get(&target.engine_id)
+        .ok_or_else(|| format!("未注册的 STT 引擎: {}", target.engine_id))?;
+    if engine.id() != target.engine_id {
+        return Err("评测目标必须使用规范运行时引擎 ID，不能使用未解析的模型族别名".into());
     }
+    if !engine.capabilities().offline {
+        return Err("评测仅支持本地引擎；不会向在线服务上传录档语料".into());
+    }
+    // 后端可能缓存上一模型的 recognizer。先卸载再按目标预热，并在所有退出路径清理。
+    // 因此 registry 必须由评测调用者独占，不能复用桌面正在进行识别的 registry。
+    engine.unload();
+    struct UnloadOnDrop<'a>(&'a dyn crate::stt::SttEngine);
+    impl Drop for UnloadOnDrop<'_> {
+        fn drop(&mut self) {
+            self.0.unload();
+        }
+    }
+    let _unload = UnloadOnDrop(engine);
+    engine.warmup(&target.session_config)?;
 
     let (tx, mut rx) = mpsc::unbounded_channel::<SttEvent>();
-    let mut stt = engine.start_session(&SessionConfig::default(), tx)?;
+    let mut stt = engine.start_session(&target.session_config, tx)?;
     let started = Instant::now();
     let mut partials: Vec<PartialRecord> = Vec::new();
     let drain = |rx: &mut mpsc::UnboundedReceiver<SttEvent>, partials: &mut Vec<PartialRecord>| {
@@ -420,7 +502,11 @@ pub fn replay_at(
 
     let result = EvalResult {
         session_id: session.session_id.clone(),
-        engine_id: engine_id.to_string(),
+        engine_id: engine.id().to_string(),
+        target: Some(target.clone()),
+        target_fingerprint: Some(target_fingerprint),
+        source_fingerprint: Some(source_fingerprint),
+        cache_version: REPLAY_CACHE_VERSION,
         replayed_at: utc_now_iso(),
         first_partial_ms: partials.first().map(|p| p.t),
         final_ms: t.latency_ms as u64,
@@ -437,32 +523,75 @@ fn save_replay_at(dir: &Path, result: &EvalResult) -> Result<(), String> {
     std::fs::create_dir_all(&rp).map_err(|e| format!("创建回放目录失败: {e}"))?;
     let json = serde_json::to_string_pretty(result).map_err(|e| format!("序列化回放失败: {e}"))?;
     std::fs::write(
-        replay_path(dir, &result.session_id, &result.engine_id),
+        replay_path(
+            dir,
+            &result.session_id,
+            result
+                .target_fingerprint
+                .as_deref()
+                .ok_or("回放缺少目标指纹")?,
+        ),
         json,
     )
     .map_err(|e| format!("写入回放结果失败: {e}"))?;
     Ok(())
 }
 
-/// 读取已存回放结果（report 优先复用，避免重复跑引擎）
+/// 读取旧版以引擎 ID 命名的结果，仅用于展示或迁移，不能作为新版评测缓存。
 pub fn stored_replay(session_id: &str, engine_id: &str) -> Option<EvalResult> {
     stored_replay_at(&eval_dir(), session_id, engine_id)
 }
 
 pub fn stored_replay_at(dir: &Path, session_id: &str, engine_id: &str) -> Option<EvalResult> {
+    validate_session_id(session_id).ok()?;
+    validate_session_id(engine_id).ok()?;
     let raw = std::fs::read_to_string(replay_path(dir, session_id, engine_id)).ok()?;
     serde_json::from_str(&raw).ok()
 }
 
-// ---------- 报告 ----------
-
-/// 多引擎对比报告（Markdown）：已人工标注的会话 × 全部就绪引擎，
-/// 各引擎 CER 与延迟均值。优先复用已存回放，缺失的现场跑（并落缓存）。
-pub fn report(registry: &EngineRegistry) -> Result<String, String> {
-    report_at(&eval_dir(), registry)
+fn source_fingerprint(session: &EvalSession, pcm: &[f32]) -> String {
+    let mut hash = Sha256::new();
+    hash.update((pcm.len() as u64).to_le_bytes());
+    for sample in pcm {
+        hash.update(sample.to_le_bytes());
+    }
+    // 明确区分未标注与空标注；CER 必须与当前标注同时失效。
+    hash.update(serde_json::to_vec(&session.human_label).expect("字符串序列化不会失败"));
+    format!("{:x}", hash.finalize())
 }
 
-pub fn report_at(dir: &Path, registry: &EngineRegistry) -> Result<String, String> {
+/// 仅复用同时匹配目标、配置、语料及标注的新版回放结果。
+pub fn cached_replay_at(dir: &Path, session_id: &str, target: &EvalTarget) -> Option<EvalResult> {
+    validate_session_id(session_id).ok()?;
+    let fingerprint = target.fingerprint().ok()?;
+    let raw = std::fs::read_to_string(replay_path(dir, session_id, &fingerprint)).ok()?;
+    let result: EvalResult = serde_json::from_str(&raw).ok()?;
+    if result.cache_version != REPLAY_CACHE_VERSION
+        || result.session_id != session_id
+        || result.engine_id != target.engine_id
+        || result.target.as_ref() != Some(target)
+        || result.target_fingerprint.as_deref() != Some(fingerprint.as_str())
+    {
+        return None;
+    }
+    let session = load_session_at(dir, session_id).ok()?;
+    let pcm = read_wav(&session_wav_path(dir, session_id)).ok()?;
+    (result.source_fingerprint.as_deref() == Some(source_fingerprint(&session, &pcm).as_str()))
+        .then_some(result)
+}
+
+// ---------- 报告 ----------
+
+/// 已标注会话 × 调用者显式列出的本地模型目标。registry 必须专供评测使用。
+pub fn report(targets: &[EvalTarget], registry: &EngineRegistry) -> Result<String, String> {
+    report_at(&eval_dir(), targets, registry)
+}
+
+pub fn report_at(
+    dir: &Path,
+    targets: &[EvalTarget],
+    registry: &EngineRegistry,
+) -> Result<String, String> {
     let sessions: Vec<EvalSession> = list_sessions_at(dir)?
         .into_iter()
         .filter(|s| s.human_label.is_some())
@@ -470,29 +599,35 @@ pub fn report_at(dir: &Path, registry: &EngineRegistry) -> Result<String, String
     if sessions.is_empty() {
         return Err("暂无人工标注的会话（先用 eval label <id> --text <正确文本> 标注）".into());
     }
-    let engines: Vec<_> = registry
-        .list_info()
-        .into_iter()
-        .filter(|i| i.is_ready)
-        .collect();
-    if engines.is_empty() {
-        return Err("没有就绪的引擎（需至少一款已安装模型的引擎）".into());
+    if targets.is_empty() {
+        return Err("没有可用的本地模型（需至少一款已安装模型）".into());
     }
 
     let mut out = format!("# Kotone 引擎评测报告（{} 条标注语料）\n\n", sessions.len());
-    out.push_str("| 引擎 | 样本数 | 平均 CER | 平均首字延迟 ms | 平均最终延迟 ms |\n");
-    out.push_str("|------|-------:|---------:|----------------:|----------------:|\n");
-    for info in &engines {
+    out.push_str(
+        "| 引擎 | 模型 | 配置指纹 | 样本数 | 平均 CER | 平均首字延迟 ms | 平均最终延迟 ms |\n",
+    );
+    out.push_str(
+        "|------|------|----------|-------:|---------:|----------------:|----------------:|\n",
+    );
+    for target in targets {
+        let fingerprint = target.fingerprint()?;
+        let identity = format!(
+            "{} | {} | {}",
+            target.engine_id,
+            target.model_id,
+            &fingerprint[..12]
+        );
         let mut results = Vec::new();
         for s in &sessions {
-            let r = match stored_replay_at(dir, &s.session_id, &info.id) {
+            let r = match cached_replay_at(dir, &s.session_id, target) {
                 Some(r) => Some(r),
-                None => match replay_at(dir, &s.session_id, &info.id, registry) {
+                None => match replay_at(dir, &s.session_id, target, registry) {
                     Ok(r) => Some(r),
                     Err(e) => {
                         crate::log::log(&format!(
                             "eval 报告：{} × {} 回放失败（跳过）: {e}",
-                            s.session_id, info.id
+                            s.session_id, target.model_id
                         ));
                         None
                     }
@@ -503,7 +638,7 @@ pub fn report_at(dir: &Path, registry: &EngineRegistry) -> Result<String, String
             }
         }
         if results.is_empty() {
-            out.push_str(&format!("| {} | 0 | — | — | — |\n", info.id));
+            out.push_str(&format!("| {identity} | 0 | — | — | — |\n"));
             continue;
         }
         let n = results.len();
@@ -521,8 +656,7 @@ pub fn report_at(dir: &Path, registry: &EngineRegistry) -> Result<String, String
         };
         let mean_final = results.iter().map(|r| r.final_ms).sum::<u64>() / n as u64;
         out.push_str(&format!(
-            "| {} | {n} | {mean_cer} | {mean_first} | {mean_final} |\n",
-            info.id
+            "| {identity} | {n} | {mean_cer} | {mean_first} | {mean_final} |\n"
         ));
     }
     out.push_str(
@@ -703,6 +837,8 @@ mod tests {
     /// 假流式引擎：每收到一块音频发一条 partial，finalize 返回固定文本 + 固定延迟
     struct FakeStreamEngine {
         ready: bool,
+        local: bool,
+        loaded: Arc<Mutex<Option<SessionConfig>>>,
     }
 
     impl SttEngine for FakeStreamEngine {
@@ -717,18 +853,35 @@ mod tests {
                 streaming: true,
                 hotwords: false,
                 gpu: false,
-                offline: true,
+                offline: self.local,
                 languages: vec!["zh".into()],
             }
         }
         fn is_ready(&self) -> bool {
             self.ready
         }
+        fn warmup(&self, cfg: &SessionConfig) -> Result<(), String> {
+            assert!(cfg.options.get("model").is_some());
+            // 模拟 sherpa recognizer：未卸载时只保留第一次 warmup 的配置。
+            self.loaded
+                .lock()
+                .unwrap()
+                .get_or_insert_with(|| cfg.clone());
+            if self.ready {
+                Ok(())
+            } else {
+                Err("未就绪".into())
+            }
+        }
+        fn unload(&self) {
+            *self.loaded.lock().unwrap() = None;
+        }
         fn start_session(
             &self,
-            _cfg: &SessionConfig,
+            cfg: &SessionConfig,
             events: mpsc::UnboundedSender<SttEvent>,
         ) -> Result<Box<dyn SttSession>, String> {
+            assert_eq!(self.loaded.lock().unwrap().as_ref(), Some(cfg));
             Ok(Box::new(FakeSession { events, pushes: 0 }))
         }
     }
@@ -759,8 +912,16 @@ mod tests {
 
     fn fake_registry(ready: bool) -> EngineRegistry {
         let mut reg = EngineRegistry::new();
-        reg.register(Box::new(FakeStreamEngine { ready }));
+        reg.register(Box::new(FakeStreamEngine {
+            ready,
+            local: true,
+            loaded: Arc::default(),
+        }));
         reg
+    }
+
+    fn fake_target() -> EvalTarget {
+        EvalTarget::new("fake-stream", "fake-model", SessionConfig::default())
     }
 
     fn sample_session(id: &str) -> EvalSession {
@@ -940,7 +1101,7 @@ mod tests {
         record_session_at(dir.path(), &session, &pcm).unwrap();
 
         let reg = fake_registry(true);
-        let r = replay_at(dir.path(), &session.session_id, "fake-stream", &reg).unwrap();
+        let r = replay_at(dir.path(), &session.session_id, &fake_target(), &reg).unwrap();
         assert_eq!(r.session_id, session.session_id);
         assert_eq!(r.engine_id, "fake-stream");
         assert_eq!(r.final_text, "对面打野在下路");
@@ -950,7 +1111,7 @@ mod tests {
         assert_eq!(r.first_partial_ms, r.partials.first().map(|p| p.t));
         assert_eq!(r.cer, Some(0.0), "标注与回放文本一致时 CER 应为 0");
         // 回放结果落缓存
-        let cached = stored_replay_at(dir.path(), &session.session_id, "fake-stream");
+        let cached = cached_replay_at(dir.path(), &session.session_id, &fake_target());
         assert!(cached.is_some());
         assert_eq!(cached.unwrap().final_text, "对面打野在下路");
     }
@@ -961,7 +1122,8 @@ mod tests {
         let session = sample_session("20260725-130000-002");
         record_session_at(dir.path(), &session, &[0.0; 160]).unwrap();
         let reg = fake_registry(true);
-        assert!(replay_at(dir.path(), &session.session_id, "no-such", &reg).is_err());
+        let target = EvalTarget::new("no-such", "model", SessionConfig::default());
+        assert!(replay_at(dir.path(), &session.session_id, &target, &reg).is_err());
     }
 
     #[test]
@@ -970,7 +1132,7 @@ mod tests {
         let session = sample_session("20260725-130000-003");
         record_session_at(dir.path(), &session, &[0.0; 160]).unwrap();
         let reg = fake_registry(false);
-        let e = replay_at(dir.path(), &session.session_id, "fake-stream", &reg).unwrap_err();
+        let e = replay_at(dir.path(), &session.session_id, &fake_target(), &reg).unwrap_err();
         assert!(e.contains("未就绪"), "{e}");
     }
 
@@ -978,7 +1140,150 @@ mod tests {
     fn replay_rejects_traversal_session_id() {
         let dir = tempfile::tempdir().unwrap();
         let reg = fake_registry(true);
-        assert!(replay_at(dir.path(), "../evil", "fake-stream", &reg).is_err());
+        assert!(replay_at(dir.path(), "../evil", &fake_target(), &reg).is_err());
+    }
+
+    #[test]
+    fn target_switch_resets_cached_recognizer_and_releases_it_on_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = sample_session("target-switch");
+        record_session_at(dir.path(), &session, &[0.1; 160]).unwrap();
+        let loaded = Arc::new(Mutex::new(Some(SessionConfig::default())));
+        let mut reg = EngineRegistry::new();
+        reg.register(Box::new(FakeStreamEngine {
+            ready: true,
+            local: true,
+            loaded: loaded.clone(),
+        }));
+        for model in ["model-a", "model-b"] {
+            let target = EvalTarget::new("fake-stream", model, SessionConfig::default());
+            let result = replay_at(dir.path(), &session.session_id, &target, &reg).unwrap();
+            assert_eq!(result.target, Some(target));
+            assert!(loaded.lock().unwrap().is_none());
+        }
+        let mut failing = EngineRegistry::new();
+        failing.register(Box::new(FakeStreamEngine {
+            ready: false,
+            local: true,
+            loaded: loaded.clone(),
+        }));
+        assert!(replay_at(dir.path(), &session.session_id, &fake_target(), &failing).is_err());
+        assert!(loaded.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn cache_requires_same_model_config_audio_and_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = sample_session("cache-identity");
+        record_session_at(dir.path(), &session, &[0.1; 160]).unwrap();
+        label_at(dir.path(), &session.session_id, "对面打野在下路").unwrap();
+        let reg = fake_registry(true);
+        let target = fake_target();
+        replay_at(dir.path(), &session.session_id, &target, &reg).unwrap();
+        let cached = || cached_replay_at(dir.path(), &session.session_id, &target);
+        assert_eq!(cached().unwrap().cer, Some(0.0));
+
+        let other_model = EvalTarget::new("fake-stream", "other-model", SessionConfig::default());
+        assert!(cached_replay_at(dir.path(), &session.session_id, &other_model).is_none());
+        let mut other_config = target.clone();
+        other_config.session_config.options["threads"] = serde_json::json!(4);
+        assert!(cached_replay_at(dir.path(), &session.session_id, &other_config).is_none());
+
+        label_at(dir.path(), &session.session_id, "不同标注").unwrap();
+        assert!(cached().is_none());
+        report_at(dir.path(), std::slice::from_ref(&target), &reg).unwrap();
+        assert!(cached().unwrap().cer.unwrap() > 0.0);
+        write_wav(
+            &session_wav_path(dir.path(), &session.session_id),
+            &[0.2; 160],
+        )
+        .unwrap();
+        assert!(cached().is_none(), "同长度音频内容变化也必须失效");
+    }
+
+    #[test]
+    fn legacy_results_remain_readable_but_never_reusable() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = sample_session("legacy-cache");
+        record_session_at(dir.path(), &session, &[0.0; 160]).unwrap();
+        let target = fake_target();
+        let result = replay_at(
+            dir.path(),
+            &session.session_id,
+            &target,
+            &fake_registry(true),
+        )
+        .unwrap();
+        let mut legacy = serde_json::to_value(&result).unwrap();
+        for key in [
+            "target",
+            "targetFingerprint",
+            "sourceFingerprint",
+            "cacheVersion",
+        ] {
+            legacy.as_object_mut().unwrap().remove(key);
+        }
+        let raw = serde_json::to_string(&legacy).unwrap();
+        std::fs::write(
+            replay_path(dir.path(), &session.session_id, "fake-stream"),
+            &raw,
+        )
+        .unwrap();
+        let old = stored_replay_at(dir.path(), &session.session_id, "fake-stream").unwrap();
+        assert_eq!(old.final_text, result.final_text);
+        assert!(old.target.is_none());
+        std::fs::write(
+            replay_path(
+                dir.path(),
+                &session.session_id,
+                &target.fingerprint().unwrap(),
+            ),
+            raw,
+        )
+        .unwrap();
+        assert!(cached_replay_at(dir.path(), &session.session_id, &target).is_none());
+    }
+
+    #[test]
+    fn mismatched_target_and_session_model_is_rejected() {
+        let mut target = fake_target();
+        target.session_config.options["model"] = serde_json::json!("another-model");
+        assert!(target.fingerprint().is_err());
+    }
+
+    #[test]
+    fn replay_rejects_remote_engine_before_warmup() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = sample_session("remote-rejected");
+        record_session_at(dir.path(), &session, &[0.0; 160]).unwrap();
+        let loaded = Arc::new(Mutex::new(None));
+        let mut registry = EngineRegistry::new();
+        registry.register(Box::new(FakeStreamEngine {
+            ready: true,
+            local: false,
+            loaded: loaded.clone(),
+        }));
+        let error =
+            replay_at(dir.path(), &session.session_id, &fake_target(), &registry).unwrap_err();
+        assert!(error.contains("仅支持本地"));
+        assert!(loaded.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn label_rejects_metadata_pointing_to_another_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = sample_session("safe-id");
+        record_session_at(dir.path(), &session, &[]).unwrap();
+        let mut forged = session.clone();
+        forged.session_id = "../outside".into();
+        std::fs::write(
+            session_json_path(dir.path(), &session.session_id),
+            serde_json::to_vec(&forged).unwrap(),
+        )
+        .unwrap();
+        assert!(label_at(dir.path(), &session.session_id, "label")
+            .unwrap_err()
+            .contains("不一致"));
     }
 
     // ---------- 标注 ----------
@@ -1005,14 +1310,14 @@ mod tests {
             record_session_at(dir.path(), &s, &[0.0f32; 1600]).unwrap();
         }
         let reg = fake_registry(true);
-        let md = report_at(dir.path(), &reg).unwrap();
+        let md = report_at(dir.path(), &[fake_target()], &reg).unwrap();
         assert!(md.contains("fake-stream"), "{md}");
         assert!(md.contains("| 引擎 |"), "{md}");
         assert!(md.contains("2 条标注语料"), "{md}");
         // 回放结果已缓存：第二条语料文本与假引擎输出不同 → CER > 0
-        let r1 = stored_replay_at(dir.path(), "20260725-150000-000", "fake-stream").unwrap();
+        let r1 = cached_replay_at(dir.path(), "20260725-150000-000", &fake_target()).unwrap();
         assert_eq!(r1.cer, Some(0.0));
-        let r2 = stored_replay_at(dir.path(), "20260725-150000-001", "fake-stream").unwrap();
+        let r2 = cached_replay_at(dir.path(), "20260725-150000-001", &fake_target()).unwrap();
         assert!(r2.cer.unwrap() > 0.0);
     }
 
@@ -1021,7 +1326,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         record_session_at(dir.path(), &sample_session("20260725-150100-000"), &[]).unwrap();
         let reg = fake_registry(true);
-        assert!(report_at(dir.path(), &reg).is_err());
+        assert!(report_at(dir.path(), &[fake_target()], &reg).is_err());
     }
 
     // ---------- 导出 ----------

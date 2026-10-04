@@ -1,107 +1,58 @@
-# Kotone 引擎评测手册（已收官：六引擎 → 三引擎）
+# Kotone 本地模型评测手册
 
-目标：同语料、同机器，对全部引擎做「速度 + 精度」对比，砍差留优，拍板默认引擎。
+评测单位是明确的 `EvalTarget = engineId + modelId + sessionConfig`，不是运行时引擎名称。默认对所有已安装的本地模型回放；在线 ASR 不进入评测，mock 仅在显式选择时运行。模型和配置不再从日常活动模型隐式回退。
 
-> **v15 收官结论（2026-07-26）**：默认引擎定为 **X-ASR**（`sherpa-onnx-x-asr-zh-en`）。
-> whisper.cpp sidecar / 老 zipformer / Qwen3-ASR 已砍（理由见 docs/development.md §11 v15）。
-> 本手册保留为三引擎时代的复测流程。
+早期“六引擎砍留”的成绩与取舍保存在 [开发历史 §11](archive/development-history.md#11-决策变更记录)。它们来自当时十条语料和机器环境，没有新版目标/配置指纹，不能作为当前模型版本的可复现基准或性能保证。当前模型列表由 `kotone-stt/src/model.rs` 维护。
 
-## 选手一览（保留）
+## 准备模型与语料
 
-| 引擎 id | 模型 id | 体积 | 流式 | 热词 | 备注 |
-|---|---|---|---|---|---|
-| sherpa-onnx-x-asr-zh-en | x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05 | 162MB | 是 | 是 | **默认引擎**，自带标点 |
-| sherpa-onnx-sensevoice | sense-voice-zh-en-ja-ko-yue-2024-07-17 | 239MB | 否 | 否 | 中英日韩粤，非流式质量备选 |
-| sherpa-onnx-funasr-nano | funasr-nano-int8-2025-12-30 | 948MB | 否 | 是 | 热词最强，峰值内存 ~2.5GB |
-
-已砍（清单与代码同步移除）：whisper-cpp-sidecar（非流式 + spawn 架构性延迟）、
-sherpa-onnx-zipformer-zh（2023 老模型无标点，能力被 X-ASR 覆盖）、
-sherpa-onnx-qwen3-asr（938MB 非流式，精度与 FunASR-Nano 同档无差异化优势）。
-
-## 收官成绩（10 条标注语料，游戏黑话/中英混说/甩尾场景）
-
-| 引擎 | 平均 CER | 平均首字延迟 | 平均最终延迟 | 体积 |
-|---|---:|---:|---:|---:|
-| **sherpa-onnx-x-asr-zh-en** | **0.008** | **70ms** | **31ms** | **162MB** |
-| sherpa-onnx-funasr-nano | 0.008 | —（非流式） | 1305ms | 948MB |
-| sherpa-onnx-sensevoice | 0.062 | —（非流式） | 121ms | 239MB |
-
-X-ASR 精度与 FunASR-Nano 并列第一，最终延迟 31ms vs 1305ms、体积 1/6，且是唯一的
-流式冠军（悬浮窗实时回显是核心体验）——默认引擎无悬念。
-
-## 第 0 步：下载模型
-
-CLI（任选需要的，已下载的会秒过；镜像策略见 `config set download.source`）：
-
-```bash
+```powershell
 cargo run -p kotone-cli -- download x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05
 cargo run -p kotone-cli -- download sense-voice-zh-en-ja-ko-yue-2024-07-17
-cargo run -p kotone-cli -- download funasr-nano-int8-2025-12-30
 ```
 
-或在 GUI「引擎与模型」页逐个点下载。下完 `cargo run -p kotone-cli -- doctor` 确认引擎就绪。
+也可在「设置 → 高级 → 模型」下载。评测录档默认关闭；需要采集语料时在高级模型页打开，或执行：
 
-## 第 1 步：录语料（打开录档后正常使用即录）
-
-`eval_recording` **默认关闭**（v15 起）——先在 GUI 通用页「评测录档」打开，或
-`cargo run -p kotone-cli -- config set evalRecording true`。之后 GUI「启动」正常说话，
-或 `cargo run -p kotone-cli -- listen`，每个会话自动录到 `~/.kotone/eval/`
-（wav + 指标 json，容量循环）。
-
-建议录 8-12 条，覆盖这些场景（每条 2-8 秒）：
-
-1. 短指令：「中路 miss」「打龙打龙」「撤撤撤」
-2. 标准长句：「对面打野在下路草丛，准备来抓」
-3. 中英混说：「这波 teamfight 等我 ult 好了再打」
-4. 游戏黑话：「盲僧在下路 gank，寒冰没闪」
-5. 句尾轻读 + 快速松手（考甩尾）：「能听到我说话吗」
-6. 数字与装备名：「出破败王者之刃，二十分钟三百刀」
-7. 情绪化/快语速：模仿真实团战报点
-
-## 第 2 步：回放对比
-
-```bash
-cargo run -p kotone-cli -- eval list                       # 查所有录档会话 id
-cargo run -p kotone-cli -- eval replay <sessionId>          # 全部就绪引擎同语料对比
-cargo run -p kotone-cli -- eval replay <sessionId> --engine sherpa-onnx-x-asr-zh-en   # 单引擎
+```powershell
+cargo run -p kotone-cli -- config set evalRecording true
 ```
 
-不指定 `--engine` 就是就绪引擎同题对比（未下载模型的引擎自动跳过）。看：partial 节奏
-（流式引擎）+ 最终文本 + 延迟 ms。
+随后正常使用 GUI/CLI 识别，录档保存在 `~/.kotone/eval/<sessionId>.json` 与同名 WAV（16 kHz、16-bit、mono），只保留最近 200 条。完成采集后可关闭开关。录档含音频与原文，导出目录不等于脱敏诊断包。
 
-## 第 3 步：人工标注（CER 的前提）
+选择固定语料覆盖短指令、标准长句、中英混说、游戏专名、轻读句尾、数字和快语速。不同模型使用相同 WAV 与人工标注；记录机器、软件版本和模型来源。
 
-听原音（wav 在 `~/.kotone/eval/<sessionId>.wav`），回填正确文本：
+## 回放和标注
 
-```bash
-cargo run -p kotone-cli -- eval label <sessionId> "对面打野在下路草丛准备来抓"
-```
-
-CER 计算会自动去标点/空白、统一小写——照实写即可。
-
-## 第 4 步：出报告
-
-```bash
+```powershell
+cargo run -p kotone-cli -- eval list
+cargo run -p kotone-cli -- eval replay <sessionId>
+cargo run -p kotone-cli -- eval replay <sessionId> --model sense-voice-zh-en-ja-ko-yue-2024-07-17
+cargo run -p kotone-cli -- eval replay <sessionId> --engine sherpa-offline --model funasr-nano-int8-2025-12-30
+cargo run -p kotone-cli -- eval label <sessionId> --text "对面打野在下路草丛准备来抓"
 cargo run -p kotone-cli -- eval report
 ```
 
-输出「已标注会话 × 就绪引擎」的 Markdown 表：CER（字错误率，越低越好）+ 延迟。
+`--engine` 与 `--model` 同时提供时必须匹配。旧模型族 ID（例如 `sherpa-onnx-sensevoice`）会固定解析为该家族默认模型，再记录规范引擎 ID `sherpa-offline`；绝不会因当前活动模型是 FunASR-Nano 而改跑另一个模型。仅给规范 `--engine` 时选择该引擎清单的默认模型，建议用 `--model` 消除歧义。无参数的 replay/report 按已安装模型枚举，两个共用后端的模型仍分别运行。mock 调试用 `--engine mock-stream`。
 
-## 第 5 步：决策矩阵（复测时砍谁留谁）
+基线评测不加入当前游戏热词，使用目标模型的本地 `threads`/`language` 配置和全局语言/热词分数；实际输入快照写入结果。需要热词 A/B 时使用 [CLI 手册](cli.md) 中的固定 WAV/profile 路径，不要把无热词基线当成热词能力结论。
 
-| 维度 | 权重 | 看什么 |
-|---|---|---|
-| CER | ★★★ | report 表，游戏黑话语料重点看 |
-| 延迟 | ★★★ | 流式看首字（partial 出现速度），非流式看最终 ms |
-| 体积/内存 | ★★ | 常驻桌面应用，948MB 的要有明显质量优势才留 |
-| 热词 | ★★ | 游戏词表场景，report 里黑话条目见分晓 |
-| 流式 | ★ | 悬浮窗实时回显体验 |
+## 结果身份与缓存
 
-## FAQ
+新结果位于 `replays/<sessionId>__<targetFingerprint>.json`，包含：
 
-- **回放时报「未就绪」**：该引擎模型没下载，回第 0 步。
-- **X-ASR 热词**：bpe.vocab 在首次启动/下载时自动从 bpe.model 导出，无需手工处理。
-- **句尾丢字**：7fcbacd 已修（800ms 静音尾帧），如果还有个案，录进语料里标注出来。
-- **录档存太多**：eval 录档有容量上限自动循环；历史记录另有 `kotone-cli log list/clear`。
-- **下载慢/超时**：默认 auto 镜像优先（hf-mirror.com + ghProxy），失败自动回退官方一次；
-  镜像失效时 `config set download.source official` 直连，或 `config set download.ghProxy <新前缀>`。
+- 规范 `engineId` 与完整 `target`（模型、会话配置）；
+- SHA-256 `targetFingerprint`；
+- 对实际解码 PCM 与人工标注计算的 `sourceFingerprint`；
+- 缓存版本、识别原文、partial 时间线、延迟和 CER。
+
+报告只复用目标/配置/语料/标注均相同的新结果。改标注后旧 CER 自动失效；替换同长度 WAV 同样失效。旧 `<sessionId>__<engineId>.json` 仍可读、可导出，但无足够身份信息，不能复用。旧缓存不必人工删除。
+
+评测使用独立 registry，目标开始前卸载旧识别器并按当前配置预热，结束或失败时释放。不与桌面正在识别的引擎实例共享缓存。
+
+## 指标含义
+
+CER = 字符级编辑距离 / 参考字符数；双方去标点和空白、统一小写。参考为空且识别也为空为 0，否则为 1。数值越低越好，但样本少、只选成功录音或不同标注规范都会影响结论。
+
+回放每次推入 100 ms 的 PCM，连续全速运行，不模拟真实说话节奏。首字延迟从喂入开始计时；最终延迟使用引擎返回的 finalize 耗时；模型预热不计入这两个数。不要用该表直接声称游戏内端到端响应速度。
+
+同时检查内存、磁盘体积、流式回显、语言与热词需求。模型缺失时先下载；下载源和代理在设置中调整，重试无需录新语料。所有真实模型测试均需要本机已安装模型；普通单元测试用假引擎和临时目录，不联网推理。

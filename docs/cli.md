@@ -17,7 +17,10 @@
 | `config set <key> <value>` | 写配置项（点路径，原子写入，枚举值校验） |
 | `devices` | 枚举音频输入/输出设备，标出默认与虚拟声卡 |
 | `play <wav> [--device "<名称子串>"]` | 播放 16kHz wav 到输出设备（自动重采样） |
-| `eval list / replay / label / report` | 引擎评测（ADR-005） |
+| `eval list` | 列出本地评测录档 |
+| `eval replay <id> [--engine <id>] [--model <id>]` | 回放指定本地模型；缺省对比所有已安装本地模型 |
+| `eval label <id> --text <正确文本>` | 回填标注；旧 CER 缓存自动失效 |
+| `eval report` | 已标注录档 × 已安装本地模型，含目标身份及配置指纹 |
 | `doctor` | 环境自检：设备/引擎/profile/提权/VAD/history 逐项 ✓/⚠/✗ + 修复建议（有 ✗ 退出码 1） |
 | `elevate <command> [args...]` | sudo 式提权：以管理员权限在新控制台执行子命令（典型 `elevate listen`；裸 elevate 报用法错误） |
 | `profile list / use <id> / detect` | 游戏 profile 列表 / 激活 / 前台进程匹配检测 |
@@ -28,10 +31,16 @@
 `hotkey.key`、`hotkey.mode`(hold/toggle)、`hotkeyBackend`(auto/llhook/register)、
 `sttEngine`（校验已注册）、`activeProfileId`、`autoSend`(true/false)、
 `audioDeviceId`、`language`、`evalRecording`、`runAsAdminOnStart`、
-`interactionMode`(push-to-talk/dictation/one-shot)、`vadSilenceMs`(200-5000)、
+`interactionMode`(push-to-talk/dictation/one-shot/solo)、`vadSilenceMs`(200-5000)、
+`hotwordsScore`、`vad.threshold`、`vad.minSpeechMs`、`vad.minSilenceMs`、
 `history.mode`(capped/keep-all/off)、`history.maxRecords`(1-100000)、
 `history.includeAudio`(true/false)、`download.source`(auto/official/mirror)、
-`download.ghProxy`（GitHub 加速代理前缀，默认 `https://ghfast.top/`，失效可换）
+`download.ghProxy`（GitHub 加速代理前缀，默认 `https://ghfast.top/`，失效可换）、
+`overlay.visibility`(always/on_demand/never)、`overlay.style`(card/capsule)、
+`overlay.position`、`overlay.draggable`、`overlay.clickThrough`。
+
+`config get` 可读取存在的配置路径，`config set` 仅支持上述白名单，不等于全部设置字段。
+评测参数、旧模型族别名与缓存规则见 [评测手册](eval-playbook.md)。提醒助手当前通过桌面页和独立热键使用，不是 `eval` 或 `listen` 的隐藏模式。
 
 ### 识别历史（log 命令）
 
@@ -41,7 +50,7 @@ history.mode 非 off 时，每次会话终态自动追加一条 JSONL 到
 （刻意的「失败→重试」叙事）；error 后的 Esc 是清理动作，不双记 cancelled。
 取消时没有任何可验证的语音产出（流式引擎从未出过识别 partial，如结束
 独奏模式时刚开出的空段；非流式引擎不发 partial，取消一律不落账）的会话
-不记录——与空转录「无事发生」同理，只记真正放弃过的一句话。
+不记录，只记真正放弃过的一句话。空转写不会注入目标窗口，并显示错误提示；不能据此假定所有失败都不留历史。
 sessionId 与 eval 录档一致时仍可互查；`history.includeAudio` 开启时会独立把
 会话音频写到 `history/audio/<sessionId>.wav`，不要求开启 `evalRecording`。
 one-shot / solo（VAD 模式）下音频按语音区间裁剪后再落盘：段首思考静音

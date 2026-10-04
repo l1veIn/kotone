@@ -1,6 +1,8 @@
 # ADR 001：Cargo workspace 五 crate 布局
 
-- 状态：已采纳（2025-01，随 workspace 拆分重构落地）
+> 当前状态（2026-10 梳理）：Amended / 已修订：依赖倒置原则保留；目录以 ADR-002 为准，crate 数量随 postprocess / AI / TTS 能力扩展。当前职责见 [架构](../architecture.md)。原正文记录首次拆分。
+
+- 原始状态：已采纳（2025-01，随 workspace 拆分重构落地）
 - 上下文：Kotone 原为 `src-tauri` 单 crate（`kotone_lib` + `kotone` bin），所有域逻辑、
   STT 引擎、Windows 平台适配、Tauri 壳混在一个编译单元里。
 

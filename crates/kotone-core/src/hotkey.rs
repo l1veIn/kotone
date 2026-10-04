@@ -26,6 +26,8 @@ pub const HK_CHANNEL_CYCLE: &str = "channel-cycle";
 pub const HK_RESEND_LAST: &str = "resend-last";
 pub const HK_PP_TOGGLE: &str = "post-process-toggle";
 pub const HK_PP_CYCLE: &str = "post-process-cycle";
+/// 独立语音助手入口，不向游戏注入助手命令。
+pub const HK_ASSISTANT: &str = "assistant";
 /// 应用级热键：启动 / 停止 Kotone 运行时。与其它具名热键不同，它在 runtime
 /// 未运行（主热键未注册）时也必须生效——否则「启动」永远按不到。
 pub const HK_RUNTIME_TOGGLE: &str = "runtime-toggle";
@@ -46,6 +48,20 @@ pub trait HotkeySource: Send + Sync {
     fn set_named_hotkey(&self, id: &str, combo: Option<&str>) -> Result<(), String> {
         let _ = (id, combo);
         Ok(())
+    }
+
+    /// A named recording action may need both press and release edges. Legacy
+    /// sources keep tap support and explicitly reject unsupported hold semantics.
+    fn set_named_hotkey_mode(
+        &self,
+        id: &str,
+        combo: Option<&str>,
+        mode: HotkeyMode,
+    ) -> Result<(), String> {
+        if mode == HotkeyMode::Hold && combo.is_some_and(|value| !value.trim().is_empty()) {
+            return Err("当前热键后端不支持具名按住模式".into());
+        }
+        self.set_named_hotkey(id, combo)
     }
 
     /// 注销全部具名辅助热键（主热键与 Esc 取消不受影响）。默认无操作。
@@ -273,6 +289,8 @@ pub enum HookEvent {
     Cancel,
     /// 具名辅助热键按下（tap 语义，按住不重复触发）；id 由上层声明。
     NamedHotkey { id: String },
+    /// A named hold action, with physical edges preserved independently of the main key.
+    NamedHold { id: String, pressed: bool },
     /// 诊断：主键按下但严格修饰键匹配失败（未吞键、不触发业务）。
     /// 「钩子活着但主键被放行」只能靠它区分于「钩子被 Windows 静默摘除」——
     /// 0.1.6 第四步排障：webview 聚焦时 CapsLock 落进 DOM 无钩子上报。
@@ -308,9 +326,9 @@ pub struct HookMatcher {
     spec: HotkeySpec,
     mode: HotkeyMode,
     enabled: bool,
-    /// 具名辅助热键（tap 语义）：稳定 id → 严格修饰键匹配 spec。声明顺序即
+    /// 具名辅助热键：稳定 id、严格修饰键匹配 spec 和触发模式。声明顺序即
     /// 优先级（与主键同 vk 不同修饰键时互不干扰，未命中的具名键落回主键分支）。
-    named_specs: Vec<(String, HotkeySpec)>,
+    named_specs: Vec<(String, HotkeySpec, HotkeyMode)>,
     /// 当前被按住（已吞 down 未 up）的具名热键 id，用于重复 down 过滤与成对吞 up
     named_down: Vec<String>,
     // 修饰键实时按下态
@@ -367,20 +385,25 @@ impl HookMatcher {
     /// 配置/更新/清除一个具名热键（None = 关闭该 id）。同 id 已存在时原位更新
     /// （保持声明顺序），否则追加到末尾。
     pub fn set_named_spec(&mut self, id: &str, spec: Option<HotkeySpec>) {
+        self.set_named_spec_mode(id, spec, HotkeyMode::Toggle);
+    }
+
+    pub fn set_named_spec_mode(&mut self, id: &str, spec: Option<HotkeySpec>, mode: HotkeyMode) {
         self.named_down.retain(|existing| existing != id);
         match spec {
             Some(spec) => {
                 if let Some(entry) = self
                     .named_specs
                     .iter_mut()
-                    .find(|(existing, _)| existing == id)
+                    .find(|(existing, _, _)| existing == id)
                 {
                     entry.1 = spec;
+                    entry.2 = mode;
                 } else {
-                    self.named_specs.push((id.to_string(), spec));
+                    self.named_specs.push((id.to_string(), spec, mode));
                 }
             }
-            None => self.named_specs.retain(|(existing, _)| existing != id),
+            None => self.named_specs.retain(|(existing, _, _)| existing != id),
         }
     }
 
@@ -487,7 +510,7 @@ impl HookMatcher {
         // 因此不受 `enabled`（主键使能）约束；未命中时落回主键分支。
         // 声明顺序即优先级；不同具名键也可同 vk 不同修饰键，先声明者先匹配。
         for i in 0..self.named_specs.len() {
-            let (id, ns) = &self.named_specs[i];
+            let (id, ns, mode) = &self.named_specs[i];
             if vk != ns.vk {
                 continue;
             }
@@ -505,7 +528,13 @@ impl HookMatcher {
                     self.named_down.push(id.clone());
                     return MatchOutcome {
                         swallow: true,
-                        event: Some(HookEvent::NamedHotkey { id: id.clone() }),
+                        event: Some(match mode {
+                            HotkeyMode::Toggle => HookEvent::NamedHotkey { id: id.clone() },
+                            HotkeyMode::Hold => HookEvent::NamedHold {
+                                id: id.clone(),
+                                pressed: true,
+                            },
+                        }),
                         captured: None,
                     };
                 }
@@ -514,7 +543,10 @@ impl HookMatcher {
                 self.named_down.retain(|existing| existing != id);
                 return MatchOutcome {
                     swallow: true,
-                    event: None,
+                    event: (*mode == HotkeyMode::Hold).then(|| HookEvent::NamedHold {
+                        id: id.clone(),
+                        pressed: false,
+                    }),
                     captured: None,
                 };
             }
@@ -1201,5 +1233,59 @@ mod tests {
         m.clear_named_specs();
         assert!(m.named_specs.is_empty());
         assert!(m.named_down.is_empty());
+    }
+
+    #[test]
+    fn named_hold_preserves_release_after_modifiers_change_and_filters_repeat() {
+        for combo in ["Ctrl+F9", "Ctrl+Mouse4"] {
+            let mut m = matcher("F8", HotkeyMode::Toggle);
+            let spec = parse_hotkey(combo).unwrap();
+            m.set_named_spec_mode(HK_ASSISTANT, Some(spec), HotkeyMode::Hold);
+            down(&mut m, VK_CONTROL);
+            let pressed = down(&mut m, spec.vk);
+            assert!(pressed.swallow);
+            assert_eq!(
+                pressed.event,
+                Some(HookEvent::NamedHold {
+                    id: HK_ASSISTANT.into(),
+                    pressed: true
+                })
+            );
+            assert_eq!(down(&mut m, spec.vk).event, None);
+            up(&mut m, VK_CONTROL);
+            let released = up(&mut m, spec.vk);
+            assert!(released.swallow);
+            assert_eq!(
+                released.event,
+                Some(HookEvent::NamedHold {
+                    id: HK_ASSISTANT.into(),
+                    pressed: false
+                })
+            );
+            assert_eq!(up(&mut m, spec.vk), PASS);
+            assert_eq!(down(&mut m, VK_F1 + 7).event, Some(HookEvent::Toggle));
+        }
+    }
+
+    #[test]
+    fn named_mode_change_keeps_tap_actions_and_release_pairs_independent() {
+        let mut m = matcher("F8", HotkeyMode::Hold);
+        m.set_named_spec_mode(HK_ASSISTANT, parse_hotkey("F9"), HotkeyMode::Hold);
+        m.set_named_spec(HK_CHANNEL_CYCLE, parse_hotkey("F10"));
+        assert_eq!(
+            down(&mut m, VK_F1 + 9).event,
+            Some(HookEvent::NamedHotkey {
+                id: HK_CHANNEL_CYCLE.into()
+            })
+        );
+        assert_eq!(up(&mut m, VK_F1 + 9).event, None);
+        m.set_named_spec_mode(HK_ASSISTANT, parse_hotkey("F9"), HotkeyMode::Toggle);
+        assert_eq!(
+            down(&mut m, VK_F1 + 8).event,
+            Some(HookEvent::NamedHotkey {
+                id: HK_ASSISTANT.into()
+            })
+        );
+        assert_eq!(up(&mut m, VK_F1 + 8).event, None);
     }
 }

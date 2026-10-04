@@ -35,7 +35,8 @@ mod windows_imp {
     };
 
     use kotone_core::inject::{
-        send_sequence, CancelToken, FocusBackend, InjectError, Injector, SendOps, TargetWindow,
+        send_sequence, CancelToken, ClipboardTransaction, FocusBackend, InjectError, Injector,
+        SendOps, TargetWindow,
     };
     use kotone_core::profile::GameProfile;
 
@@ -74,18 +75,104 @@ mod windows_imp {
         fn send_unicode(&self, text: &str) -> Result<(), InjectError> {
             send_unicode(text)
         }
-        fn clipboard_read(&self) -> Option<String> {
-            let mut cb = arboard::Clipboard::new().ok()?;
-            cb.get_text().ok()
-        }
-        fn clipboard_write(&self, text: &str) -> Result<(), InjectError> {
-            let mut cb = arboard::Clipboard::new()
-                .map_err(|e| InjectError::new(format!("打开剪贴板失败: {e}")))?;
-            cb.set_text(text)
-                .map_err(|e| InjectError::new(format!("写入剪贴板失败: {e}")))
+        fn clipboard_transaction(
+            &self,
+            text: &str,
+        ) -> Result<Box<dyn ClipboardTransaction + '_>, InjectError> {
+            Ok(Box::new(WindowsClipboardTransaction::begin(text)?))
         }
         fn sleep_ms(&self, ms: u64) {
             std::thread::sleep(Duration::from_millis(ms));
+        }
+    }
+
+    /// 持锁读取全部可复制格式；不支持的句柄格式在修改前失败。
+    /// 检查序号和恢复也持同一个系统剪贴板锁，避免 check-then-write 竞态。
+    struct WindowsClipboardTransaction {
+        formats: Vec<(u32, Vec<u8>)>,
+        written_sequence: u32,
+        restored: bool,
+    }
+
+    fn clipboard_error(error: impl std::fmt::Display) -> InjectError {
+        InjectError::new(format!("剪贴板操作失败: {error}"))
+    }
+
+    fn restorable_format(format: u32) -> bool {
+        // CF_TEXT/OEMTEXT/UNICODETEXT/LOCALE, DIB/DIBV5, HDROP, registered HGLOBAL formats.
+        matches!(format, 1 | 7 | 8 | 13 | 15 | 16 | 17 | 0xc000..=0xffff)
+    }
+
+    impl WindowsClipboardTransaction {
+        fn begin(text: &str) -> Result<Self, InjectError> {
+            use clipboard_win::{raw, Clipboard};
+            let _clipboard = Clipboard::new_attempts(10).map_err(clipboard_error)?;
+            let available: Vec<_> = raw::EnumFormats::new().collect();
+            let has_dib = available.iter().any(|format| matches!(format, 8 | 17));
+            let mut formats = Vec::new();
+            let mut total = 0usize;
+            for format in available {
+                // CF_BITMAP 可由保留的 DIB 重新合成；不能把 HBITMAP 当 HGLOBAL 复制。
+                if format == 2 && has_dib {
+                    continue;
+                }
+                if !restorable_format(format) {
+                    return Err(InjectError::new("当前剪贴板含无法安全备份的内容。请先保存剪贴板内容，或关闭游戏适配的「剪贴板粘贴」后重试"));
+                }
+                let size = raw::size(format)
+                    .map(|n| n.get())
+                    .ok_or_else(|| clipboard_error("无法读取原内容大小"))?;
+                total = total.saturating_add(size);
+                if total > 64 * 1024 * 1024 {
+                    return Err(clipboard_error(
+                        "原内容超过 64 MiB，请先保存内容或关闭剪贴板粘贴",
+                    ));
+                }
+                let mut bytes = Vec::new();
+                raw::get_vec(format, &mut bytes).map_err(clipboard_error)?;
+                formats.push((format, bytes));
+            }
+            if let Err(error) = raw::set_string(text) {
+                let _ = Self::restore_formats(&formats);
+                return Err(clipboard_error(error));
+            }
+            let Some(sequence) = raw::seq_num() else {
+                let _ = Self::restore_formats(&formats);
+                return Err(clipboard_error("无法记录剪贴板版本"));
+            };
+            Ok(Self {
+                formats,
+                written_sequence: sequence.get(),
+                restored: false,
+            })
+        }
+
+        fn restore_formats(formats: &[(u32, Vec<u8>)]) -> Result<(), InjectError> {
+            clipboard_win::raw::empty().map_err(clipboard_error)?;
+            for (format, bytes) in formats {
+                clipboard_win::raw::set_without_clear(*format, bytes).map_err(clipboard_error)?;
+            }
+            Ok(())
+        }
+    }
+
+    impl ClipboardTransaction for WindowsClipboardTransaction {
+        fn restore(&mut self) -> Result<(), InjectError> {
+            if self.restored {
+                return Ok(());
+            }
+            let _clipboard = clipboard_win::Clipboard::new_attempts(10).map_err(clipboard_error)?;
+            self.restored = true;
+            if clipboard_win::raw::seq_num().map(|n| n.get()) != Some(self.written_sequence) {
+                return Ok(()); // 用户或其它程序已经复制新内容，保留它。
+            }
+            Self::restore_formats(&self.formats)
+        }
+    }
+
+    impl Drop for WindowsClipboardTransaction {
+        fn drop(&mut self) {
+            let _ = self.restore();
         }
     }
 
@@ -221,8 +308,7 @@ mod windows_imp {
             //    会失败，单独标记让前端弹窗引导排查（提权无法解决）。
             // 部分落地（N>0）仍是普通失败（时序/焦点干扰）。
             if sent == 0 {
-                use windows::Win32::Foundation::ERROR_ACCESS_DENIED;
-                if err.code().0 as u32 == ERROR_ACCESS_DENIED.0 {
+                if is_access_denied(&err) {
                     return Err(InjectError::with_needs_elevation(format!(
                         "SendInput 被拒绝（0/{} 成功）：目标程序可能以更高权限运行\
                          （如管理员模式启动的游戏）。请以管理员身份运行 Kotone，\
@@ -241,6 +327,10 @@ mod windows_imp {
                 inputs.len()
             )))
         }
+    }
+
+    fn is_access_denied(error: &windows::core::Error) -> bool {
+        error.code() == windows::Win32::Foundation::ERROR_ACCESS_DENIED.to_hresult()
     }
 
     // ---------- 键名解析（纯逻辑，可单测） ----------
@@ -472,6 +562,26 @@ mod windows_imp {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn access_denied_uses_hresult_not_raw_win32_code() {
+            let denied = windows::core::Error::from_hresult(windows::core::HRESULT::from_win32(5));
+            assert!(is_access_denied(&denied));
+            assert!(!is_access_denied(&windows::core::Error::from_hresult(
+                windows::core::HRESULT::from_win32(87)
+            )));
+        }
+
+        #[test]
+        fn clipboard_backup_rejects_noncopyable_handle_formats() {
+            assert!(restorable_format(13)); // Unicode
+            assert!(restorable_format(15)); // Files
+            assert!(restorable_format(17)); // DIBV5
+            assert!(restorable_format(0xc001)); // Registered HGLOBAL
+            assert!(!restorable_format(2)); // HBITMAP
+            assert!(!restorable_format(14)); // HENHMETAFILE
+            assert!(!restorable_format(0x200)); // Private handle ownership
+        }
 
         #[test]
         fn vk_from_name_common_keys() {

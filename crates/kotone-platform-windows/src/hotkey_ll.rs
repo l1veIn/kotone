@@ -15,6 +15,7 @@
 //! 吞键策略：完整命中（主键 + 修饰键严格匹配）才 return 1 吞掉；
 //! 其余按键一律 CallNextHookEx 放行。
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -69,11 +70,31 @@ pub enum ProbeOutcome {
 /// 钩子回调共享状态：匹配器 + 事件出口（OnceLock：回调必须是静态 fn）
 struct HookShared {
     matcher: Mutex<HookMatcher>,
-    tx: mpsc::Sender<HookEvent>,
+    tx: mpsc::Sender<(u64, HookEvent)>,
+    rx: Arc<Mutex<mpsc::Receiver<(u64, HookEvent)>>>,
+    consumer_started: Mutex<bool>,
+    generation: AtomicU64,
     /// 捕获模式出口：Some 期间按键组合/Esc 走此通道而非正常事件流
-    capture: Mutex<Option<mpsc::Sender<CaptureMsg>>>,
+    capture: Mutex<Option<(u64, mpsc::Sender<CaptureMsg>)>>,
+    capture_generation: AtomicU64,
     /// 可用性探测出口：带专用 dwExtraInfo 的 F24 被钩子观察到时通知等待方。
     probe: Mutex<Option<ProbeRequest>>,
+}
+
+impl HookShared {
+    fn new(spec: HotkeySpec, mode: HotkeyMode) -> Self {
+        let (tx, rx) = mpsc::channel();
+        Self {
+            matcher: Mutex::new(HookMatcher::new(spec, mode)),
+            tx,
+            rx: Arc::new(Mutex::new(rx)),
+            consumer_started: Mutex::new(false),
+            generation: AtomicU64::new(0),
+            capture: Mutex::new(None),
+            capture_generation: AtomicU64::new(0),
+            probe: Mutex::new(None),
+        }
+    }
 }
 
 struct ProbeRequest {
@@ -107,9 +128,6 @@ pub struct LlHookSource {
 struct LlHookState {
     started: bool,
     hook_thread_id: Option<u32>,
-    /// 已正式注册热键（register 置 true、unregister 置 false）；
-    /// 捕获模式用它区分「占位启动」与「真实注册」，捕获结束后据此恢复禁用
-    armed: bool,
 }
 
 impl LlHookSource {
@@ -153,13 +171,15 @@ impl LlHookSource {
         if !was_started {
             // 用禁用的 F24 占位 matcher 启动基础设施；探测结束后仍保持未注册状态。
             self.register(SENTINEL_MAIN_KEY, HotkeyMode::Toggle)?;
-            self.state.lock().unwrap().armed = false;
             if let Some(shared) = SHARED.get() {
                 shared.matcher.lock().unwrap().set_enabled(false);
             }
         } else {
             // Windows 可能静默移除超时钩子；每次探测前先换成新 hook。
-            self.restart_hook_thread()?;
+            if let Err(error) = self.restart_hook_thread() {
+                self.unregister();
+                return Err(error);
+            }
         }
 
         let shared = SHARED.get().ok_or("LL 钩子未启动".to_string())?;
@@ -246,18 +266,17 @@ impl LlHookSource {
                  continuing with physical-key capture"
             ));
         }
-        let was_armed = self.state.lock().unwrap().armed;
-
         let shared = SHARED.get().ok_or("LL 钩子未启动".to_string())?;
         let (tx, rx) = mpsc::channel::<CaptureMsg>();
+        let capture_id = shared.capture_generation.fetch_add(1, Ordering::SeqCst);
         {
             let mut slot = shared.capture.lock().unwrap();
             if slot.is_some() {
                 return Err("已有热键捕获进行中".into());
             }
-            *slot = Some(tx);
+            *slot = Some((capture_id, tx));
+            shared.matcher.lock().unwrap().set_capture_active(true);
         }
-        shared.matcher.lock().unwrap().set_capture_active(true);
         kotone_core::log::log("llhook capture started");
 
         std::thread::Builder::new()
@@ -268,25 +287,26 @@ impl LlHookSource {
                     Ok(CaptureMsg::Cancel) => CaptureResult::Cancelled,
                     Err(_) => CaptureResult::Timeout,
                 };
-                // 清理：关捕获模式 + 清槽；未正式注册过则恢复禁用
+                // 仅清理自己拥有的捕获；旧 waiter 不能关闭取消后新建的捕获。
                 if let Some(shared) = SHARED.get() {
-                    shared.matcher.lock().unwrap().set_capture_active(false);
-                    *shared.capture.lock().unwrap() = None;
-                    if !was_armed {
-                        shared.matcher.lock().unwrap().set_enabled(false);
-                    }
+                    clear_capture(shared, capture_id);
                 }
                 kotone_core::log::log(&format!("llhook capture ended: {result:?}"));
                 (cb)(result);
             })
-            .map_err(|e| format!("启动捕获线程失败: {e}"))?;
+            .map_err(|e| {
+                clear_capture(shared, capture_id);
+                format!("启动捕获线程失败: {e}")
+            })?;
         Ok(())
     }
 
     /// 取消进行中的捕获（设置页关闭/超时兜底）：waiter 将收到 Cancelled
     pub fn cancel_capture(&self) {
         if let Some(shared) = SHARED.get() {
-            if let Some(tx) = shared.capture.lock().unwrap().take() {
+            let mut capture = shared.capture.lock().unwrap();
+            if let Some((_, tx)) = capture.take() {
+                shared.matcher.lock().unwrap().set_capture_active(false);
                 let _ = tx.send(CaptureMsg::Cancel);
             }
         }
@@ -326,7 +346,6 @@ impl LlHookSource {
         }
         self.register(SENTINEL_MAIN_KEY, HotkeyMode::Toggle)?;
         // 占位主键不参与匹配：与 probe / capture 的占位语义一致
-        self.state.lock().unwrap().armed = false;
         if let Some(shared) = SHARED.get() {
             shared.matcher.lock().unwrap().set_enabled(false);
         }
@@ -347,35 +366,38 @@ impl HotkeySource for LlHookSource {
             if let Some(shared) = SHARED.get() {
                 shared.matcher.lock().unwrap().set_config(spec, mode);
             }
-            state.armed = true;
             kotone_core::log::log(&format!("llhook reconfigured: {key} ({mode:?})"));
             drop(state);
-            self.restart_hook_thread()?;
+            if let Err(error) = self.restart_hook_thread() {
+                self.unregister();
+                return Err(error);
+            }
             return Ok(());
         }
 
-        // 首次启动：事件通道 + 钩子线程 + 消费者线程
-        let (tx, rx) = mpsc::channel::<HookEvent>();
-        let shared = HookShared {
-            matcher: Mutex::new(HookMatcher::new(spec, mode)),
-            tx,
-            capture: Mutex::new(None),
-            probe: Mutex::new(None),
+        // 分配共享状态与成功安装钩子是两个步骤：失败重试复用通道，不再重复 set OnceLock。
+        let shared = SHARED.get_or_init(|| HookShared::new(spec, mode));
+        shared.matcher.lock().unwrap().set_config(spec, mode);
+        let mut consumer_started = shared.consumer_started.lock().unwrap();
+        if !*consumer_started {
+            let sink = self.sink.clone();
+            let rx = shared.rx.clone();
+            std::thread::Builder::new()
+                .name("kotone-llhook-events".into())
+                .spawn(move || consumer_main(rx, sink))
+                .map_err(|e| format!("启动钩子事件线程失败: {e}"))?;
+            *consumer_started = true;
+        }
+        drop(consumer_started);
+        let thread_id = match spawn_hook_thread() {
+            Ok(id) => id,
+            Err(error) => {
+                shared.matcher.lock().unwrap().set_enabled(false);
+                return Err(error);
+            }
         };
-        SHARED
-            .set(shared)
-            .map_err(|_| "LL 钩子共享状态已初始化（内部错误）".to_string())?;
-
-        let thread_id = spawn_hook_thread()?;
-
-        let sink = self.sink.clone();
-        std::thread::Builder::new()
-            .name("kotone-llhook-events".into())
-            .spawn(move || consumer_main(rx, sink))
-            .map_err(|e| format!("启动钩子事件线程失败: {e}"))?;
 
         state.started = true;
-        state.armed = true;
         state.hook_thread_id = Some(thread_id);
         kotone_core::log::log(&format!("llhook backend started: {key} ({mode:?})"));
         Ok(())
@@ -383,9 +405,10 @@ impl HotkeySource for LlHookSource {
 
     /// 注销：匹配器置为禁用（全部按键放行），钩子线程保留以便快速重注册
     fn unregister(&self) {
-        self.state.lock().unwrap().armed = false;
         if let Some(shared) = SHARED.get() {
-            shared.matcher.lock().unwrap().set_enabled(false);
+            let mut matcher = shared.matcher.lock().unwrap();
+            shared.generation.fetch_add(1, Ordering::SeqCst);
+            matcher.set_enabled(false);
             kotone_core::log::log("llhook unregistered (matcher disabled)");
         }
     }
@@ -399,6 +422,15 @@ impl HotkeySource for LlHookSource {
 
     /// 注册/更新/注销一个具名辅助热键：更新匹配器的对应 spec；空/None = 注销
     fn set_named_hotkey(&self, id: &str, combo: Option<&str>) -> Result<(), String> {
+        self.set_named_hotkey_mode(id, combo, HotkeyMode::Toggle)
+    }
+
+    fn set_named_hotkey_mode(
+        &self,
+        id: &str,
+        combo: Option<&str>,
+        mode: HotkeyMode,
+    ) -> Result<(), String> {
         let spec = match combo {
             Some(k) if !k.trim().is_empty() => Some(
                 parse_hotkey(k)
@@ -411,7 +443,11 @@ impl HotkeySource for LlHookSource {
         let Some(shared) = SHARED.get() else {
             return Err("低级键盘钩子尚未安装，具名热键无法注册".into());
         };
-        shared.matcher.lock().unwrap().set_named_spec(id, spec);
+        shared
+            .matcher
+            .lock()
+            .unwrap()
+            .set_named_spec_mode(id, spec, mode);
         kotone_core::log::log(&format!("llhook named hotkey {id}: {spec:?}"));
         Ok(())
     }
@@ -508,7 +544,7 @@ fn probe_input(up: bool) -> INPUT {
 /// 把一个物理键盘/鼠标主键事件交给共享匹配器，并投递捕获或业务事件。
 /// 返回 true 表示该事件应由钩子吞掉。
 fn dispatch_key_event(shared: &HookShared, vk: u32, action: KeyAction) -> bool {
-    let outcome = {
+    let (outcome, generation) = {
         // 锁中毒（理论上的 panic 路径）也不能在 FFI 边界 unwrap：放行输入。
         let Ok(mut matcher) = shared.matcher.lock() else {
             return false;
@@ -519,14 +555,17 @@ fn dispatch_key_event(shared: &HookShared, vk: u32, action: KeyAction) -> bool {
             unsafe { GetAsyncKeyState(VK_MENU.0 as i32) } < 0,
             unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) } < 0,
         );
-        matcher.on_key(vk, action)
+        (
+            matcher.on_key(vk, action),
+            shared.generation.load(Ordering::SeqCst),
+        )
     };
 
     let capture_tx = shared
         .capture
         .lock()
         .ok()
-        .and_then(|slot| slot.as_ref().cloned());
+        .and_then(|slot| slot.as_ref().map(|(_, tx)| tx.clone()));
     if let Some(tx) = capture_tx {
         if let Some(spec) = outcome.captured {
             let _ = tx.send(CaptureMsg::Combo(spec));
@@ -534,7 +573,7 @@ fn dispatch_key_event(shared: &HookShared, vk: u32, action: KeyAction) -> bool {
             let _ = tx.send(CaptureMsg::Cancel);
         }
     } else if let Some(ev) = outcome.event {
-        let _ = shared.tx.send(ev);
+        let _ = shared.tx.send((generation, ev));
     }
     outcome.swallow
 }
@@ -558,16 +597,8 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
             // 某些输入过滤软件会清除 LLKHF_INJECTED 或 dwExtraInfo，但仍把事件
             // 交给钩子。probe 槽只开放 250ms，期间按 F24 键码识别比强依赖标记
             // 更兼容；线程 id 约束仍确保回执来自刚安装的新 hook。
-            if kb.vkCode == u32::from(PROBE_VK.0) {
-                if let Ok(slot) = shared.probe.lock() {
-                    if let Some(probe) = slot.as_ref() {
-                        if probe.hook_thread_id == unsafe { GetCurrentThreadId() } {
-                            let _ = probe.tx.send(());
-                            return LRESULT(1);
-                        }
-                    }
-                }
-                return unsafe { CallNextHookEx(None::<HHOOK>, code, wparam, lparam) };
+            if acknowledge_probe(shared, kb.vkCode, unsafe { GetCurrentThreadId() }) {
+                return LRESULT(1);
             }
             // 跳过合成输入（如我们自己的 SendInput），避免自我触发
             if !kb.flags.contains(LLKHF_INJECTED) {
@@ -585,6 +616,31 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
         }
     }
     unsafe { CallNextHookEx(None::<HHOOK>, code, wparam, lparam) }
+}
+
+fn clear_capture(shared: &HookShared, id: u64) {
+    let mut slot = shared.capture.lock().unwrap();
+    if slot.as_ref().is_some_and(|(current, _)| *current == id) {
+        shared.matcher.lock().unwrap().set_capture_active(false);
+        *slot = None;
+    }
+}
+
+fn acknowledge_probe(shared: &HookShared, vk: u32, thread_id: u32) -> bool {
+    if vk != u32::from(PROBE_VK.0) {
+        return false;
+    }
+    let Ok(slot) = shared.probe.lock() else {
+        return false;
+    };
+    if let Some(probe) = slot
+        .as_ref()
+        .filter(|probe| probe.hook_thread_id == thread_id)
+    {
+        let _ = probe.tx.send(());
+        return true;
+    }
+    false // 无探测槽时，物理 F24 仍进入正常匹配和热键录入。
 }
 
 /// 低层鼠标钩子：只翻译 XBUTTON1/XBUTTON2，其他鼠标操作完全放行。
@@ -610,8 +666,14 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
 }
 
 /// 消费者线程：钩子事件 → 构造时注入的 sink（调用方决定如何调度到业务层）
-fn consumer_main(rx: mpsc::Receiver<HookEvent>, sink: Arc<HookSink>) {
-    for ev in rx {
+fn consumer_main(rx: Arc<Mutex<mpsc::Receiver<(u64, HookEvent)>>>, sink: Arc<HookSink>) {
+    while let Ok((generation, ev)) = rx.lock().unwrap().recv() {
+        if SHARED
+            .get()
+            .is_some_and(|shared| shared.generation.load(Ordering::SeqCst) != generation)
+        {
+            continue;
+        }
         kotone_core::process_log::record_activity(
             "hotkey_fired",
             kotone_core::process_log::EventData {
@@ -627,6 +689,39 @@ fn consumer_main(rx: mpsc::Receiver<HookEvent>, sink: Arc<HookSink>) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn physical_f24_is_not_a_probe_without_an_active_request() {
+        let shared = HookShared::new(parse_hotkey("F24").unwrap(), HotkeyMode::Toggle);
+        assert!(!acknowledge_probe(&shared, 0x87, 42));
+        assert_eq!(
+            shared
+                .matcher
+                .lock()
+                .unwrap()
+                .on_key(0x87, KeyAction::Down)
+                .event,
+            Some(HookEvent::Toggle)
+        );
+        let (tx, rx) = mpsc::channel();
+        *shared.probe.lock().unwrap() = Some(ProbeRequest {
+            hook_thread_id: 42,
+            tx,
+        });
+        assert!(!acknowledge_probe(&shared, 0x87, 41));
+        assert!(acknowledge_probe(&shared, 0x87, 42));
+        assert!(rx.try_recv().is_ok());
+    }
+
+    #[test]
+    fn stale_capture_cleanup_does_not_clear_a_new_capture() {
+        let shared = HookShared::new(parse_hotkey("F8").unwrap(), HotkeyMode::Toggle);
+        let (tx, _rx) = mpsc::channel();
+        *shared.capture.lock().unwrap() = Some((2, tx));
+        clear_capture(&shared, 1);
+        assert!(shared.capture.lock().unwrap().is_some());
+        clear_capture(&shared, 2);
+        assert!(shared.capture.lock().unwrap().is_none());
+    }
     #[test]
     fn xbutton_mouse_data_maps_to_hotkey_codes() {
         assert_eq!(xbutton_vk(u32::from(XBUTTON1) << 16), Some(VK_XBUTTON1));

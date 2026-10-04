@@ -139,15 +139,21 @@ impl Injector for StubInjector {
 // ---------- 发送时序编排（§6；与平台无关，可单测） ----------
 
 /// 时序原语抽象：真实实现发 Win32 事件；单测注入 mock（不真睡、不真发键）。
+/// 临时占用剪贴板的事务。恢复必须保留事务期间其他程序的新复制内容。
+pub trait ClipboardTransaction {
+    fn restore(&mut self) -> Result<(), InjectError>;
+}
+
 pub trait SendOps {
     /// 单键 / 组合键 down+up（如 "Enter"、"Ctrl+V"），实现内部保证按下的键一定补 up
     fn key_down_up(&self, key: &str) -> Result<(), InjectError>;
     /// Unicode 逐字输入（encode_utf16 逐单元 down+up）
     fn send_unicode(&self, text: &str) -> Result<(), InjectError>;
-    /// 读取当前剪贴板文本（用于粘贴后恢复用户原内容；读不到返回 None）
-    fn clipboard_read(&self) -> Option<String>;
-    /// 写入剪贴板文本（CF_UNICODETEXT）
-    fn clipboard_write(&self, text: &str) -> Result<(), InjectError>;
+    /// 备份并写入临时文本；无法安全备份时必须在修改前失败。
+    fn clipboard_transaction(
+        &self,
+        text: &str,
+    ) -> Result<Box<dyn ClipboardTransaction + '_>, InjectError>;
     /// 阻塞睡眠（毫秒）
     fn sleep_ms(&self, ms: u64);
 }
@@ -210,28 +216,18 @@ fn send_clipboard_path(
     cancel: &CancelToken,
     ops: &dyn SendOps,
 ) -> Result<(), InjectError> {
-    let backup = ops.clipboard_read();
-    let restore = |ops: &dyn SendOps| {
-        if let Some(old) = backup.as_deref() {
-            let _ = ops.clipboard_write(old);
-        }
-    };
-    if let Err(e) = ops.clipboard_write(text) {
-        restore(ops);
-        return Err(e);
+    let mut clipboard = ops.clipboard_transaction(text)?;
+    let result = (|| {
+        cancellable_sleep(ops, profile.pre_paste_delay_ms, cancel)?;
+        ops.key_down_up("Ctrl+V")?;
+        // 粘贴已经发出，仍给目标消息循环留出读取时间，再恢复内容。
+        ops.sleep_ms(u64::from(CLIPBOARD_RESTORE_DELAY_MS));
+        ensure_not_cancelled(cancel)
+    })();
+    if let Err(error) = clipboard.restore() {
+        crate::log::log(&format!("剪贴板恢复失败: {error}"));
     }
-    if let Err(e) = cancellable_sleep(ops, profile.pre_paste_delay_ms, cancel) {
-        restore(ops);
-        return Err(e);
-    }
-    if let Err(e) = ops.key_down_up("Ctrl+V") {
-        restore(ops);
-        return Err(e);
-    }
-    // 给目标应用处理粘贴留出时间；即使期间被取消也要先恢复剪贴板
-    let _ = cancellable_sleep(ops, CLIPBOARD_RESTORE_DELAY_MS, cancel);
-    restore(ops);
-    Ok(())
+    result
 }
 
 // ---------- 时序编排单测（mock ops：不真睡、不真发键） ----------
@@ -249,6 +245,7 @@ mod tests {
         /// 第几次 sleep_ms 调用时置位取消令牌（1-based）；None = 不触发
         cancel_on_sleep: Mutex<Option<usize>>,
         sleep_calls: Mutex<usize>,
+        copy_on_sleep: Mutex<Option<(usize, String)>>,
     }
 
     impl MockOps {
@@ -259,6 +256,7 @@ mod tests {
                 cancel: CancelToken::default(),
                 cancel_on_sleep: Mutex::new(None),
                 sleep_calls: Mutex::new(0),
+                copy_on_sleep: Mutex::new(None),
             }
         }
         fn cancel_on(self, nth_sleep: usize) -> Self {
@@ -279,13 +277,18 @@ mod tests {
             self.log.lock().unwrap().push(format!("unicode:{text}"));
             Ok(())
         }
-        fn clipboard_read(&self) -> Option<String> {
-            self.clipboard.lock().unwrap().clone()
-        }
-        fn clipboard_write(&self, text: &str) -> Result<(), InjectError> {
+        fn clipboard_transaction(
+            &self,
+            text: &str,
+        ) -> Result<Box<dyn ClipboardTransaction + '_>, InjectError> {
+            let old = self.clipboard.lock().unwrap().clone();
             *self.clipboard.lock().unwrap() = Some(text.to_string());
             self.log.lock().unwrap().push(format!("clip_write:{text}"));
-            Ok(())
+            Ok(Box::new(MockClipboard {
+                ops: self,
+                old,
+                temporary: text.to_string(),
+            }))
         }
         fn sleep_ms(&self, ms: u64) {
             let mut calls = self.sleep_calls.lock().unwrap();
@@ -296,6 +299,33 @@ mod tests {
             if *self.cancel_on_sleep.lock().unwrap() == Some(nth) {
                 self.cancel.cancel();
             }
+            if let Some((at, text)) = self.copy_on_sleep.lock().unwrap().as_ref() {
+                if *at == nth {
+                    *self.clipboard.lock().unwrap() = Some(text.clone());
+                }
+            }
+        }
+    }
+
+    struct MockClipboard<'a> {
+        ops: &'a MockOps,
+        old: Option<String>,
+        temporary: String,
+    }
+    impl ClipboardTransaction for MockClipboard<'_> {
+        fn restore(&mut self) -> Result<(), InjectError> {
+            let mut current = self.ops.clipboard.lock().unwrap();
+            if current.as_deref() == Some(self.temporary.as_str()) {
+                *current = self.old.clone();
+                if let Some(old) = &self.old {
+                    self.ops
+                        .log
+                        .lock()
+                        .unwrap()
+                        .push(format!("clip_write:{old}"));
+                }
+            }
+            Ok(())
         }
     }
 
@@ -377,6 +407,34 @@ mod tests {
         let err = send_sequence("hi", &test_profile(), &cancel, &ops).unwrap_err();
         assert!(err.message.contains("取消"));
         assert!(ops.log().is_empty(), "取消后不应发出任何按键");
+    }
+
+    #[test]
+    fn clipboard_transaction_preserves_copy_during_paste() {
+        let ops = MockOps::new();
+        *ops.clipboard.lock().unwrap() = Some("old".into());
+        *ops.copy_on_sleep.lock().unwrap() = Some((3, "new copy".into()));
+        let mut profile = test_profile();
+        profile.prefer_clipboard_paste = true;
+        send_sequence("speech", &profile, &ops.cancel, &ops).unwrap();
+        assert_eq!(ops.clipboard.lock().unwrap().as_deref(), Some("new copy"));
+    }
+
+    #[test]
+    fn cancelled_after_paste_restores_and_does_not_send() {
+        let ops = MockOps::new().cancel_on(3);
+        *ops.clipboard.lock().unwrap() = Some("old".into());
+        let mut profile = test_profile();
+        profile.prefer_clipboard_paste = true;
+        assert!(send_sequence("speech", &profile, &ops.cancel, &ops).is_err());
+        assert_eq!(ops.clipboard.lock().unwrap().as_deref(), Some("old"));
+        assert_eq!(
+            ops.log()
+                .iter()
+                .filter(|s| s.as_str() == "key:Enter")
+                .count(),
+            1
+        );
     }
 
     #[test]

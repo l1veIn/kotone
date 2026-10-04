@@ -6,12 +6,10 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use tokio::sync::Notify;
 
 pub const DEFAULT_STEP_TIMEOUT_MS: u64 = 5_000;
 pub const BUILTIN_BLOCKLIST_PIPELINE_ID: &str = "blocklist";
@@ -354,35 +352,7 @@ impl ProcessorRegistry {
     }
 }
 
-#[derive(Clone, Default)]
-pub struct ProcessingCancelToken {
-    inner: Arc<ProcessingCancelInner>,
-}
-
-#[derive(Default)]
-struct ProcessingCancelInner {
-    cancelled: AtomicBool,
-    notify: Notify,
-}
-
-impl ProcessingCancelToken {
-    pub fn cancel(&self) {
-        if !self.inner.cancelled.swap(true, Ordering::SeqCst) {
-            self.inner.notify.notify_waiters();
-        }
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.inner.cancelled.load(Ordering::SeqCst)
-    }
-
-    pub async fn cancelled(&self) {
-        if self.is_cancelled() {
-            return;
-        }
-        self.inner.notify.notified().await;
-    }
-}
+pub use crate::cancel::CancellationToken as ProcessingCancelToken;
 
 struct CompiledStep {
     config: PipelineStepConfig,

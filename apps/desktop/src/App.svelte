@@ -2,13 +2,16 @@
   import { onMount } from "svelte";
   import Overlay from "./routes/overlay/Overlay.svelte";
   import Settings from "./routes/settings/Settings.svelte";
+  import Danmaku from "./routes/danmaku/Danmaku.svelte";
   import { initStateListeners } from "./lib/stores/state";
 
   // 订阅 Rust 侧 kotone:// 事件（浏览器环境下为 no-op）
   onMount(() => {
     let cleanup: (() => void) | undefined;
-    void initStateListeners().then((u) => (cleanup = u));
+    let disposed = false;
+    void initStateListeners().then((u) => { if (disposed) u(); else cleanup = u; });
     return () => {
+      disposed = true;
       cleanup?.();
     };
   });
@@ -33,6 +36,8 @@
 
 {#if view === "overlay"}
   <Overlay />
+{:else if view === "danmaku"}
+  <Danmaku />
 {:else}
   <!-- 默认渲染设置视图（含 #/settings 与空 hash，便于纯浏览器开发预览） -->
   <Settings />

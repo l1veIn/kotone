@@ -181,13 +181,16 @@ enum ConfigCommand {
 enum EvalCommand {
     /// 列出 ~/.kotone/eval 中的录档会话
     List,
-    /// 回放会话：指定引擎跑单引擎；不指定则全部就绪引擎对比
+    /// 回放会话：指定本地模型；不指定则对比全部已安装本地模型
     Replay {
         /// 录档会话 ID（eval list 可查）
         session_id: String,
-        /// 目标引擎 id（缺省 = 全部 is_ready 引擎）
+        /// 本地引擎或旧模型族 ID（未指定 model 时取该族默认模型）
         #[arg(long)]
         engine: Option<String>,
+        /// 具体本地模型 ID（不支持在线引擎，避免上传录档）
+        #[arg(long)]
+        model: Option<String>,
     },
     /// 回填人工标注（正确文本），供 CER 计算
     Label {
@@ -197,7 +200,7 @@ enum EvalCommand {
         #[arg(long)]
         text: String,
     },
-    /// 已标注会话 × 就绪引擎的 CER / 延迟报告（Markdown 表）
+    /// 已标注会话 × 已安装本地模型的 CER / 延迟报告（Markdown 表）
     Report,
 }
 
@@ -279,9 +282,11 @@ async fn main() {
         Command::Play { wav, device } => cmd_play(&wav, device),
         Command::Eval { action } => match action {
             EvalCommand::List => cmd_eval_list(),
-            EvalCommand::Replay { session_id, engine } => {
-                cmd_eval_replay(&session_id, engine).await
-            }
+            EvalCommand::Replay {
+                session_id,
+                engine,
+                model,
+            } => cmd_eval_replay(&session_id, engine, model).await,
             EvalCommand::Label { session_id, text } => cmd_eval_label(&session_id, &text),
             EvalCommand::Report => cmd_eval_report().await,
         },
@@ -746,7 +751,7 @@ async fn cmd_listen_hotkey(
                         _ => {}
                     },
                     // 诊断事件（修饰键失配）：consumer 已记日志，业务不处理
-                    HookEvent::MainKeyMissed { .. } => {}
+                    HookEvent::MainKeyMissed { .. } | HookEvent::NamedHold { .. } => {}
                 }
             }
         })
@@ -876,6 +881,13 @@ fn cmd_eval_list() -> i32 {
 
 fn print_replay_detail(r: &kotone_core::eval::EvalResult) {
     println!("回放完成：{} × {}", r.session_id, r.engine_id);
+    if let Some(target) = &r.target {
+        println!(
+            "模型：{}   目标指纹：{}",
+            target.model_id,
+            r.target_fingerprint.as_deref().unwrap_or("—")
+        );
+    }
     println!(
         "首字延迟：{}   最终延迟：{}ms   CER：{}",
         r.first_partial_ms
@@ -895,89 +907,47 @@ fn print_replay_detail(r: &kotone_core::eval::EvalResult) {
     }
 }
 
-/// eval replay：指定引擎单跑；缺省对全部就绪引擎跑对比表
-async fn cmd_eval_replay(session_id: &str, engine: Option<String>) -> i32 {
+/// eval replay：只回放显式解析的本地模型，缺省枚举已安装本地模型。
+async fn cmd_eval_replay(session_id: &str, engine: Option<String>, model: Option<String>) -> i32 {
     let registry = eval_registry();
-    match engine {
-        Some(engine_id) => {
-            let reg = registry.clone();
-            let sid = session_id.to_string();
-            let r = tokio::task::spawn_blocking(move || {
-                kotone_core::eval::replay(&sid, &engine_id, &reg)
-            })
-            .await;
-            match r {
-                Ok(Ok(result)) => {
-                    print_replay_detail(&result);
-                    0
-                }
-                Ok(Err(e)) => {
-                    eprintln!("回放失败: {e}");
-                    1
-                }
-                Err(e) => {
-                    eprintln!("回放任务异常: {e}");
-                    1
-                }
-            }
-        }
-        None => {
-            let ready: Vec<_> = registry
-                .list_info()
-                .into_iter()
-                .filter(|i| i.is_ready)
-                .collect();
-            if ready.is_empty() {
-                eprintln!("没有就绪的引擎（先 kotone-cli download 安装模型）");
+    let settings = settings::load();
+    let targets = if engine.is_some() || model.is_some() {
+        match kotone_stt::eval::resolve_local_target(&settings, engine.as_deref(), model.as_deref())
+        {
+            Ok(target) => vec![target],
+            Err(error) => {
+                eprintln!("评测目标无效: {error}");
                 return 1;
             }
-            println!(
-                "{:<26} {:>8} {:>8} {:>8}  最终文本",
-                "引擎", "首字 ms", "最终 ms", "CER"
-            );
-            let mut failed = 0;
-            for info in &ready {
-                let reg = registry.clone();
-                let sid = session_id.to_string();
-                let eid = info.id.clone();
-                let r = tokio::task::spawn_blocking(move || {
-                    kotone_core::eval::replay(&sid, &eid, &reg)
-                })
+        }
+    } else {
+        kotone_stt::eval::available_local_targets(&settings)
+    };
+    if targets.is_empty() {
+        eprintln!("没有可用的本地模型（先 kotone-cli download 安装模型）");
+        return 1;
+    }
+    let mut failed = false;
+    for target in targets {
+        let reg = registry.clone();
+        let sid = session_id.to_string();
+        let model_id = target.model_id.clone();
+        let result =
+            tokio::task::spawn_blocking(move || kotone_core::eval::replay(&sid, &target, &reg))
                 .await;
-                match r {
-                    Ok(Ok(result)) => {
-                        println!(
-                            "{:<26} {:>8} {:>8} {:>8}  {}",
-                            info.id,
-                            result
-                                .first_partial_ms
-                                .map(|v| v.to_string())
-                                .unwrap_or_else(|| "—".into()),
-                            result.final_ms,
-                            result
-                                .cer
-                                .map(|c| format!("{c:.3}"))
-                                .unwrap_or_else(|| "—".into()),
-                            truncate_chars(&result.final_text, 24)
-                        );
-                    }
-                    Ok(Err(e)) => {
-                        println!("{:<26}  回放失败: {e}", info.id);
-                        failed += 1;
-                    }
-                    Err(e) => {
-                        println!("{:<26}  回放任务异常: {e}", info.id);
-                        failed += 1;
-                    }
-                }
+        match result {
+            Ok(Ok(result)) => print_replay_detail(&result),
+            Ok(Err(error)) => {
+                eprintln!("{model_id} 回放失败: {error}");
+                failed = true;
             }
-            if failed == ready.len() as i32 {
-                1
-            } else {
-                0
+            Err(error) => {
+                eprintln!("{model_id} 回放任务异常: {error}");
+                failed = true;
             }
         }
     }
+    i32::from(failed)
 }
 
 /// eval label：回填人工标注（正确文本），供 CER 计算
@@ -998,10 +968,12 @@ fn cmd_eval_label(session_id: &str, text: &str) -> i32 {
     }
 }
 
-/// eval report：已标注会话 × 就绪引擎的 CER / 延迟 Markdown 报告
+/// eval report：已标注会话 × 已安装本地模型的 CER / 延迟 Markdown 报告
 async fn cmd_eval_report() -> i32 {
     let registry = eval_registry();
-    let r = tokio::task::spawn_blocking(move || kotone_core::eval::report(&registry)).await;
+    let targets = kotone_stt::eval::available_local_targets(&settings::load());
+    let r =
+        tokio::task::spawn_blocking(move || kotone_core::eval::report(&targets, &registry)).await;
     match r {
         Ok(Ok(md)) => {
             println!("{md}");
@@ -1637,6 +1609,32 @@ fn cmd_log_delete(session_id: &str, ts: &str, yes: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eval_replay_accepts_explicit_model_and_engine() {
+        let cli = Cli::try_parse_from([
+            "kotone-cli",
+            "eval",
+            "replay",
+            "fixture",
+            "--engine",
+            "sherpa-offline",
+            "--model",
+            "sense-voice-zh-en-ja-ko-yue-2024-07-17",
+        ])
+        .unwrap();
+        let Command::Eval {
+            action: EvalCommand::Replay { engine, model, .. },
+        } = cli.command
+        else {
+            panic!("expected eval replay");
+        };
+        assert_eq!(engine.as_deref(), Some("sherpa-offline"));
+        assert_eq!(
+            model.as_deref(),
+            Some("sense-voice-zh-en-ja-ko-yue-2024-07-17")
+        );
+    }
 
     // ---------- config 点路径 ----------
 

@@ -12,26 +12,44 @@ import { getRuntimeStatus, isTauri, type RuntimeStatus } from "../ipc";
 
 export const runtimeStore = writable<RuntimeStatus | null>(null);
 
-let unlisten: (() => void) | null = null;
+let initialization: Promise<() => void> | null = null;
 
 /**
  * 初始化 runtime store：拉取当前状态 + 订阅 kotone://runtime。
  * 重复调用安全（只订阅一次）；返回取消函数。
  */
-export async function initRuntime(): Promise<() => void> {
+export function initRuntime(): Promise<() => void> {
+  if (!initialization) {
+    initialization = subscribeRuntime().catch((error) => {
+      initialization = null;
+      throw error;
+    });
+  }
+  return initialization;
+}
+
+async function subscribeRuntime(): Promise<() => void> {
+  let revision = 0;
+  let active = true;
+  let unlisten: (() => void) | undefined;
+  if (isTauri) {
+    unlisten = await listen<RuntimeStatus>("kotone://runtime", (e) => {
+      if (!active) return;
+      revision++;
+      runtimeStore.set(e.payload);
+    });
+  }
+  const snapshotRevision = revision;
   try {
-    runtimeStore.set(await getRuntimeStatus());
+    const snapshot = await getRuntimeStatus();
+    if (revision === snapshotRevision) runtimeStore.set(snapshot);
   } catch {
     /* 状态拉取失败保持 null，UI 按「未知」展示 */
   }
-  if (!isTauri) return () => {};
-  if (unlisten) return unlisten;
-  const un = await listen<RuntimeStatus>("kotone://runtime", (e) => {
-    runtimeStore.set(e.payload);
-  });
-  unlisten = () => {
-    un();
-    unlisten = null;
+  return () => {
+    if (!active) return;
+    active = false;
+    unlisten?.();
+    initialization = null;
   };
-  return unlisten;
 }

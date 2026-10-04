@@ -14,7 +14,7 @@
   <a href="https://github.com/l1veIn/kotone/releases"><img src="https://img.shields.io/github/v/release/l1veIn/kotone?style=flat-square&label=release&color=00E5FF" alt="release"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011%20x64-1A1A2E?style=flat-square" alt="platform">
   <img src="https://img.shields.io/badge/Tauri%202-Rust%20workspace-FF2D78?style=flat-square" alt="tauri">
-  <img src="https://img.shields.io/badge/STT-100%25%20local-7B2FFF?style=flat-square" alt="local stt">
+  <img src="https://img.shields.io/badge/STT-local%20by%20default-7B2FFF?style=flat-square" alt="local by default stt">
 </p>
 
 <div align="center">
@@ -57,7 +57,7 @@ https://github.com/user-attachments/assets/b0b9a55f-9d74-4bdc-ba55-de02883a8d7f
 
 <br>
 
-**Kotone** 是一款专为游戏玩家打造的 Windows 桌面语音输入工具：按住热键说话，语音在**本机**实时流式转成文字，松开热键一键送进游戏聊天框。识别全程本地完成，录音不出你的电脑。
+**Kotone** 是一款专为游戏玩家打造的 Windows 桌面语音输入工具：默认用本机 X-ASR 实时转写，对讲机模式下按住热键说话、松开发送到游戏聊天框。也可选择在线识别、AI 润色/翻译或语音提醒；在线识别会发送音频，AI 功能会发送相应文本到你配置的服务，详见 [隐私政策](PRIVACY.md)。
 
 > <i>“想说的话，一秒都别等。”</i> — 琴音
 
@@ -93,12 +93,13 @@ https://github.com/user-attachments/assets/b0b9a55f-9d74-4bdc-ba55-de02883a8d7f
 
 ## ✨ 功能速览
 
-- 🎤 **流式语音转写** — 默认 X-ASR 中英标点模型，边说边出字；识别全程在本机完成，VAD 判停组件已打包进应用本体，随启动自动就绪。
+- 🎤 **语音转写** — 默认 X-ASR 中英标点模型在本机边说边出字；可选本地非流式模型和在线 ASR。VAD 判停组件随应用分发。
 - ⌨️ **全局热键** — 按住说话 / 点按切换两种模式，任意键自定义；提示驻留期内再按热键，直接开始下一句。
 - 🎮 **游戏术语热词** — 内置 100 个英雄联盟术语热词；版本更新的新词条自动并入，你的自定义与删除永不丢失。
 - 🌙 **电竞悬浮窗** — 卡片 / 胶囊两种样式，整面可拖动并记忆位置，鼠标点击穿透；流式引擎实时出字，非流式引擎显示声波动画。
-- 🕘 **历史与回放** — 每条识别记录可回放原始音频，带声波动画；空转录不误发送、不留痕。
-- 🔒 **本地优先** — 模型全部本机运行，不上传任何录音；托盘常驻、自动更新、管理员权限一键重启。
+- 🕘 **历史与回放** — 历史可关闭或清理；开启“保存录音”后，新记录可回放原始音频。空转写不发送，并给出提示。
+- 🔒 **本地优先** — 默认本地识别，录音保存默认关闭；可选网络服务的数据边界公开，诊断包由你主动导出分享。
+- ⏰ **提醒助手** — 到时提醒屏幕前的你，例如“该打小龙了”。启动后用独立助手热键说话，交互模式独立配置、默认对讲机；也可直接输入文字。默认 Windows 系统语音，无需下载 TTS 模型；Kokoro 中文语音为可选项，首次手动下载约 147 MB。另有可调速度、字号、颜色与琴音表情的右向左滚动弹幕。使用方法见 [提醒助手](docs/assistant.md)。
 
 <br>
 
@@ -145,8 +146,8 @@ https://github.com/user-attachments/assets/b0b9a55f-9d74-4bdc-ba55-de02883a8d7f
 
 <samp>
 
-- **Desktop** — Tauri 2 + Rust workspace：`kotone-core`（会话编排 / 配置 / 历史）、`kotone-stt`（引擎抽象 + sherpa-onnx）、`kotone-platform-windows`（热键 / 注入 / 提权）、`kotone-cli`（无 Tauri 命令行前端，见 [`docs/cli.md`](docs/cli.md)）
-- **Voice** — sherpa-onnx · X-ASR 流式模型 · Silero VAD，全部本地运行
+- **Desktop** — Tauri 2 + Rust workspace：`kotone-core`（领域与端口）、`kotone-stt`（识别适配器与模型）、`kotone-ai`（共享 AI 连接与凭据）、`kotone-tts`（本地神经语音合成与播放）、`kotone-postprocess`（文本处理器）、`kotone-platform-windows`（热键 / 注入 / 系统语音）、`kotone-cli`（[命令行前端](docs/cli.md)）
+- **Voice** — 默认 sherpa-onnx · X-ASR · Silero VAD 本地识别链路；在线 ASR 按需选择；播报默认系统 SAPI，可选 Kokoro INT8 复用 sherpa-onnx
 - **UI** — Svelte 5 + Tailwind CSS，深色电竞主题
 
 </samp>
@@ -158,7 +159,10 @@ https://github.com/user-attachments/assets/b0b9a55f-9d74-4bdc-ba55-de02883a8d7f
 ```
 apps/desktop            Tauri 桌面应用（Svelte 5 前端 + Rust 后端）
 crates/kotone-core      会话编排、配置、历史、profile 的领域核心
-crates/kotone-stt       语音识别引擎抽象与 sherpa-onnx 实现
+crates/kotone-stt       识别适配器、模型清单与下载
+crates/kotone-tts       可选 Kokoro 本地语音合成与播放
+crates/kotone-ai        AI 连接、凭据、HTTP 与助手工具调用
+crates/kotone-postprocess  文本过滤、润色、翻译处理器
 crates/kotone-platform-windows  全局热键、窗口注入、提权等 Windows 平台能力
 crates/kotone-cli       命令行前端（自动化测试与无人值守入口）
 docs/                   ADR、CLI 参考、发布检查单、评测手册
@@ -184,13 +188,15 @@ pnpm dev          # 需要 Rust 与 Windows C++ Build Tools
 <summary><b>质量门禁与构建</b></summary>
 
 ```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
 pnpm check
 pnpm -C apps/desktop test:e2e
 cargo test --workspace --locked
 pnpm build        # NSIS 安装包输出到 target/release/bundle/nsis/
 ```
 
-发布检查项见 [`docs/release-checklist.md`](docs/release-checklist.md)。
+开发入口见 [文档索引](docs/README.md)、[架构](docs/architecture.md)、[术语表](docs/glossary.md) 和 [开发指南](docs/development.md)。完整门禁与发布检查项见 [发布清单](docs/release-checklist.md)。
 
 </details>
 

@@ -1,0 +1,14 @@
+[package]
+name = "kotone-tts"
+version = "0.1.0"
+description = "Kotone local neural speech: sherpa-onnx Kokoro and cancellable PCM output"
+edition = "2021"
+rust-version = "1.77.2"
+
+[dependencies]
+kotone-core.workspace = true
+sherpa-onnx = "1.13.5"
+cpal = "0.15"
+
+[dev-dependencies]
+tempfile.workspace = true

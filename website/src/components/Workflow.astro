@@ -5,7 +5,7 @@ import Icon from "./Icon.astro";
 
 const t = i18n(Astro.url.pathname);
 const modes = t.modes;
-const iconNames = ["radio", "mic", "zap", "music"];
+const iconNames = ["radio", "mic", "zap", "music"] as const;
 ---
 
 <section class="section workflow" id="workflow">

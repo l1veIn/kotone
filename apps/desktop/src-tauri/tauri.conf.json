@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kotone",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "identifier": "com.l1vein.kotone",
   "build": {
     "beforeDevCommand": "pnpm dev:web",
@@ -11,6 +11,22 @@
   },
   "app": {
     "windows": [
+      {
+        "label": "danmaku",
+        "title": "Kotone 提醒",
+        "url": "index.html#/danmaku",
+        "width": 800,
+        "height": 600,
+        "transparent": true,
+        "decorations": false,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "focus": false,
+        "focusable": false,
+        "visible": false
+      },
       {
         "label": "overlay",
         "title": "Kotone Overlay",
@@ -51,7 +67,7 @@
     "publisher": "l1veIn",
     "category": "Utility",
     "shortDescription": "面向游戏玩家的本地语音输入工具",
-    "longDescription": "Kotone（琴音）通过全局热键把语音转换为文字，并发送到游戏聊天框。识别在本机完成，支持英雄联盟术语热词与通用输入配置。",
+    "longDescription": "Kotone（琴音）通过全局热键把语音转换为文字，并发送到游戏聊天框。支持本地或可选在线识别、文字处理与语音提醒；本地模式支持英雄联盟术语热词与通用输入配置。",
     "copyright": "Copyright © 2026 l1veIn",
     "icon": [
       "icons/32x32.png",

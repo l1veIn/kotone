@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { modalFocus } from "../../../lib/actions/modalFocus";
   /*
    * 历史记录页（新 IPC：get_history / clear_history）：
    * 顶部 history.mode 三态 + 独立音频保留开关 + 清空（二次确认）；
@@ -253,6 +254,7 @@
   }
 
   async function onModeChange(mode: string) {
+    if (mode !== "capped" && mode !== "keep-all" && mode !== "off") return;
     try {
       settingsStore.set(await updateSettings({ history: { mode } }));
       toast(true, "历史记录模式已保存");
@@ -435,6 +437,9 @@
         role="dialog"
         aria-modal="true"
         aria-label="历史详情"
+        tabindex="-1"
+        use:modalFocus
+        onkeydown={(event) => { if (event.key === "Escape") { event.stopPropagation(); detail = null; } }}
       >
         <div class="flex items-start justify-between gap-3">
           <div>

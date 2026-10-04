@@ -1,0 +1,6 @@
+{
+  "identifier": "danmaku",
+  "description": "提醒窗口仅接收展示事件，不获取输入焦点",
+  "windows": ["danmaku"],
+  "permissions": ["core:event:default"]
+}

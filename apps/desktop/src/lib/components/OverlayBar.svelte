@@ -23,6 +23,7 @@
     isTauri,
     saveOverlayPosition,
     type OverlayConfig,
+    type AssistantInteractionMode,
   } from "../ipc";
   import Waveform from "./Waveform.svelte";
   import stickerProud from "../../assets/brand/stickers/proud.webp";
@@ -47,6 +48,17 @@
   let sendPending = $state(false);
   /** preview 提示中的热键名（动态读配置，读取失败回退 CapsLock） */
   let hotkeyLabel = $state("CapsLock");
+  let assistantHotkeyLabel = $state("助手热键");
+  let assistantMode = $state<AssistantInteractionMode>("push-to-talk");
+  const buttonAssistant = $derived($appState.purpose === "assistant" && $appState.inputSource === "button");
+  const assistantListeningHint = $derived({
+    "push-to-talk": buttonAssistant ? "助手收音中 · 松开按钮提交" : "助手收音中 · 松开助手热键提交",
+    dictation: buttonAssistant ? "助手收音中 · 点击结束录音后预览" : "助手收音中 · 再按助手热键预览",
+    "one-shot": "助手收音中 · 停顿后提交",
+  }[assistantMode]);
+  const confirmLabel = $derived($appState.purpose === "assistant" ? "提交助手" : "发送");
+  const confirmHotkey = $derived($appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel);
+  const previewHint = $derived(buttonAssistant ? "请回到提醒助手确认 · Esc 取消" : `${confirmHotkey} ${confirmLabel} · Esc 重说`);
   /** overlay.style：true = 胶囊布局（窗口几何由后端 SetWindowPos 居中靠下重排） */
   let capsule = $state(false);
   let draggable = $state(true);
@@ -62,14 +74,33 @@
     clickThrough = config.clickThrough;
   }
 
-  onMount(async () => {
-    try {
+  onMount(() => {
+    let disposed = false;
+    let revision = 0;
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      if (isTauri) {
+        const cleanup = await listen<{hotkey: string; assistantHotkey: string; assistantMode: AssistantInteractionMode}>("kotone://input-config", ({payload}) => {
+          if (disposed) return;
+          revision++;
+          hotkeyLabel = payload.hotkey;
+          assistantHotkeyLabel = payload.assistantHotkey || "助手热键";
+          assistantMode = payload.assistantMode;
+        });
+        if (disposed) { cleanup(); return; }
+        unlisten = cleanup;
+      }
+      const snapshotRevision = revision;
       const s = await getSettings();
-      hotkeyLabel = s.hotkey.key;
+      if (disposed) return;
+      if (revision === snapshotRevision) {
+        hotkeyLabel = s.hotkey.key;
+        assistantHotkeyLabel = s.assistant.hotkey || "助手热键";
+        assistantMode = s.assistant.interactionMode;
+      }
       applyOverlayConfig(s.overlay);
-    } catch {
-      /* 读取失败保留默认值 */
-    }
+    })().catch(() => { /* Keep useful defaults if the initial snapshot fails. */ });
+    return () => { disposed = true; unlisten?.(); };
   });
 
   // 设置页切换 overlay 配置 → 后端应用几何/点击穿透，并广播给前端更新交互。
@@ -141,7 +172,7 @@
   });
 
   async function onConfirm() {
-    if (sendPending) return;
+    if (sendPending || buttonAssistant) return;
     sendPending = true;
     actionError = "";
     try {
@@ -164,7 +195,7 @@
 
   /** 错误重试：沿用 orchestrator 保留的文本、profile、频道与目标窗口。 */
   async function onRetry() {
-    if (sendPending) return;
+    if (sendPending || buttonAssistant) return;
     actionError = "";
     actionHint = "";
     const text = $appState.errorText ?? $appState.finalText;
@@ -175,7 +206,7 @@
     sendPending = true;
     try {
       await confirmSend();
-      actionHint = "已重试发送";
+      actionHint = $appState.purpose === "assistant" ? "已重新提交助手" : "已重试发送";
     } catch (e) {
       actionError = String(e);
     } finally {
@@ -187,11 +218,11 @@
   /** 鼠标模式：穿透（默认）时 overlay 窗口收不到任何鼠标事件，鼠标按钮只会误导用户。 */
   const mouseInteractive = $derived(!clickThrough);
   /** Error 态热键语义：保留文本 = 重试发送；无文本（如空转录）= 重说。 */
-  const errorAction = $derived($appState.errorText ? "重试发送" : "重说");
+  const errorAction = $derived($appState.errorText ? ($appState.purpose === "assistant" ? "重新提交" : "重试发送") : "重说");
   /** Esc 出口：带文本时按下等于丢弃保留的文本（放弃），否则只是收起提示。 */
   const errorEscAction = $derived($appState.errorText ? "放弃" : "关闭");
   const processingLabel = $derived(
-    $appState.processingStep
+    $appState.purpose === "assistant" ? "正在理解提醒请求…" : $appState.processingStep
       ? `${$appState.processingStep.displayName} · ${$appState.processingStep.index}/${$appState.processingStep.total}`
       : "后处理中…",
   );
@@ -255,6 +286,9 @@
           </p>
         {:else}
           <Waveform level={$appState.level} bars={12} />
+          {#if $appState.purpose === "assistant"}
+            <span class="truncate text-xs text-kotone-cyan">{assistantListeningHint}</span>
+          {/if}
         {/if}
       {:else if $appState.state === "transcribing"}
         <span class="spinner inline-block h-3.5 w-3.5 shrink-0 rounded-full"></span>
@@ -280,15 +314,15 @@
           {$appState.finalText}&#x200E;
         </p>
         <span class="shrink-0 text-[10px] whitespace-nowrap text-white/40">
-          {hotkeyLabel} 发送 · Esc 重说
+          {previewHint}
         </span>
-        {#if mouseInteractive}
+        {#if mouseInteractive && !buttonAssistant}
           <button
             class="shrink-0 rounded-full bg-kotone-pink px-2.5 py-0.5 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95"
             onclick={() => void onConfirm()}
             disabled={sendPending}
           >
-            发送
+            {confirmLabel}
           </button>
         {/if}
       {:else if $appState.state === "sending"}
@@ -306,14 +340,14 @@
           class="ellipsis-head max-w-[380px] truncate text-sm text-white"
           in:fade={{ duration: 150 }}
         >
-          已发送 · {$appState.finalText}&#x200E;
+          {$appState.purpose === "assistant" ? "助手" : "已发送"} · {$appState.finalText}&#x200E;
         </p>
       {:else if $appState.state === "error"}
         <span class="shrink-0 text-sm font-bold text-kotone-pink">✗</span>
         <p class="max-w-[220px] truncate text-sm text-kotone-pink" title={displayError}>
           {displayError}
         </p>
-        {#if mouseInteractive && $appState.errorText}
+        {#if mouseInteractive && $appState.errorText && !buttonAssistant}
           <button
             class="shrink-0 rounded-full bg-kotone-pink/80 px-2.5 py-0.5 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95"
             onclick={() => void onRetry()}
@@ -324,7 +358,7 @@
         {/if}
         <!-- Error 的退出一律走键盘：无文本时没有任何鼠标可做的事，不给按钮 -->
         <span class="shrink-0 text-[10px] whitespace-nowrap text-white/40">
-          {hotkeyLabel} {errorAction} · Esc {errorEscAction}
+          {#if buttonAssistant}请回到提醒助手重试 · Esc {errorEscAction}{:else}{$appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel} {errorAction} · Esc {errorEscAction}{/if}
         </span>
       {:else}
         <!-- idle：热键切换文字处理时短暂显示提示（托盘手动唤起时显示待机文案） -->
@@ -383,7 +417,7 @@
         </div>
       {:else if $appState.partialText}
         <div class="min-w-0 flex-1">
-          <p class="text-[11px] leading-tight text-kotone-cyan/80">{stateLabel.listening}</p>
+          <p class="text-[11px] leading-tight text-kotone-cyan/80">{$appState.purpose === "assistant" ? assistantListeningHint : stateLabel.listening}</p>
           <div bind:this={textScrollEl} class="kotone-scroll mt-0.5 max-h-14 overflow-y-auto pr-1">
             {#key $appState.partialText}
               <p class="text-sm leading-snug break-all text-white" in:fade={{ duration: 180 }}>
@@ -394,8 +428,11 @@
         </div>
       {:else}
         <!-- 第一条 partial 到达前保持声波；非流式引擎会始终停留在这里。 -->
-        <div class="flex min-w-0 flex-1 items-center justify-center" in:fade={{ duration: 150 }}>
+        <div class="flex min-w-0 flex-1 items-center justify-center {$appState.purpose === 'assistant' ? 'flex-col gap-1' : ''}" in:fade={{ duration: 150 }}>
           <Waveform level={$appState.level} />
+          {#if $appState.purpose === "assistant"}
+            <p class="text-[11px] leading-tight text-kotone-cyan/80">{assistantListeningHint}</p>
+          {/if}
         </div>
       {/if}
     {:else if $appState.state === "transcribing"}
@@ -425,20 +462,20 @@
           <p class="text-sm leading-snug break-all text-white">{$appState.finalText}</p>
         </div>
         <p class="text-[11px] leading-tight text-white/45">
-          再按 {hotkeyLabel} 发送 · Esc 重说
+          {buttonAssistant ? previewHint : `再按 ${previewHint}`}
         </p>
         {#if actionError}
           <p class="truncate text-[11px] text-kotone-pink">{actionError}</p>
         {/if}
       </div>
-      {#if mouseInteractive}
+      {#if mouseInteractive && !buttonAssistant}
         <div class="flex shrink-0 flex-col gap-1.5">
           <button
             class="rounded-lg bg-kotone-pink px-3 py-1 text-xs font-semibold text-white shadow-glow-pink transition hover:brightness-110 active:scale-95"
             onclick={() => void onConfirm()}
             disabled={sendPending}
           >
-            发送 ⏎
+            {confirmLabel} ⏎
           </button>
           <button
             class="rounded-lg bg-white/10 px-3 py-1 text-xs text-white/75 transition hover:bg-white/20 active:scale-95"
@@ -466,7 +503,7 @@
       />
       <div class="min-w-0 flex-1" in:fly={{ y: 6, duration: 200 }}>
         <div class="bubble inline-block max-w-full px-3 py-1.5">
-          <p class="text-sm font-semibold text-white">收到，已发送！✨</p>
+          <p class="text-sm font-semibold text-white">{$appState.purpose === "assistant" ? "提醒助手" : "收到，已发送！✨"}</p>
         </div>
         <p class="mt-1 truncate text-xs text-white/55">{$appState.finalText}</p>
       </div>
@@ -494,7 +531,7 @@
         {/if}
       </div>
       <div class="flex shrink-0 flex-col items-end gap-1">
-        {#if mouseInteractive && $appState.errorText}
+        {#if mouseInteractive && $appState.errorText && !buttonAssistant}
           <button
             class="rounded-lg bg-kotone-pink/80 px-2.5 py-1 text-xs font-semibold text-white transition hover:brightness-110 active:scale-95"
             onclick={() => void onRetry()}
@@ -505,7 +542,7 @@
         {/if}
         <!-- Error 的退出一律走键盘：无文本时没有任何鼠标可做的事，不给按钮 -->
         <span class="text-[11px] whitespace-nowrap text-white/45">
-          再按 {hotkeyLabel} {errorAction} · Esc {errorEscAction}
+          {#if buttonAssistant}请回到提醒助手重试 · Esc {errorEscAction}{:else}再按 {$appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel} {errorAction} · Esc {errorEscAction}{/if}
         </span>
       </div>
     {:else}

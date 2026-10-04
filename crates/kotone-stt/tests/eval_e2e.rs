@@ -1,4 +1,4 @@
-//! eval 回放 E2E：SAPI fixture 造假录档 → 全部就绪真实引擎回放 → 对比表。
+//! eval 回放 E2E：SAPI fixture 造假录档 → 全部已安装本地模型回放 → 对比表。
 //!
 //! `#[ignore]`：依赖真机模型安装情况（X-ASR 模型），手动跑：
 //! ```text
@@ -36,13 +36,10 @@ fn replay_fixture_across_ready_engines() {
 
     let mut registry = EngineRegistry::new();
     kotone_stt::register_builtin(&mut registry);
-    let ready: Vec<_> = registry
-        .list_info()
-        .into_iter()
-        .filter(|i| i.is_ready)
-        .collect();
+    let settings = kotone_core::settings::load();
+    let ready = kotone_stt::eval::available_local_targets(&settings);
     assert!(
-        ready.iter().any(|i| i.id == "sherpa-streaming"),
+        ready.iter().any(|i| i.engine_id == "sherpa-streaming"),
         "E2E 前提：X-ASR 模型已安装（kotone-cli download x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05）"
     );
 
@@ -51,10 +48,10 @@ fn replay_fixture_across_ready_engines() {
         "引擎", "首字 ms", "最终 ms", "CER"
     );
     for info in &ready {
-        match eval::replay_at(dir.path(), &session.session_id, &info.id, &registry) {
+        match eval::replay_at(dir.path(), &session.session_id, info, &registry) {
             Ok(r) => println!(
                 "{:<26} {:>8} {:>8} {:>8}  {}",
-                info.id,
+                info.model_id,
                 r.first_partial_ms
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "—".into()),
@@ -64,7 +61,7 @@ fn replay_fixture_across_ready_engines() {
                     .unwrap_or_else(|| "—".into()),
                 r.final_text
             ),
-            Err(e) => println!("{:<26}  回放失败: {e}", info.id),
+            Err(e) => println!("{:<26}  回放失败: {e}", info.model_id),
         }
     }
 
@@ -72,7 +69,7 @@ fn replay_fixture_across_ready_engines() {
     let x = eval::replay_at(
         dir.path(),
         &session.session_id,
-        "sherpa-streaming",
+        &kotone_stt::eval::resolve_local_target(&settings, Some("sherpa-streaming"), None).unwrap(),
         &registry,
     )
     .expect("X-ASR 回放应成功");
@@ -83,7 +80,9 @@ fn replay_fixture_across_ready_engines() {
     );
 
     // mock 回放固定文本，与标注一致 → CER = 0
-    let m = eval::replay_at(dir.path(), &session.session_id, "mock-stream", &registry)
+    let mock =
+        kotone_stt::eval::resolve_local_target(&settings, Some("mock-stream"), None).unwrap();
+    let m = eval::replay_at(dir.path(), &session.session_id, &mock, &registry)
         .expect("mock 回放应成功");
     assert_eq!(m.final_text, "对面打野在下路");
     assert_eq!(m.cer, Some(0.0));

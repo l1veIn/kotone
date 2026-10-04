@@ -18,7 +18,7 @@
   } from "../../../lib/ipc";
   import { captureHotkey } from "../../../lib/hotkeyCapture";
   import Select from "../../../lib/components/Select.svelte";
-  import { combosConflict } from "../../../lib/hotkeyCombo";
+  import { findHotkeyConflict } from "../../../lib/hotkeyCombo";
   import {
     settingsStore,
     fullscreenWarningStore,
@@ -189,33 +189,9 @@
       toast(false, "热键不能为空");
       return;
     }
-    // 双向冲突校验（ADR-008）：录制键与频道切换键不能相同
-    const cycleKey = $settingsStore?.channelCycleHotkey ?? "";
-    if (cycleKey && combosConflict(key, cycleKey)) {
-      toast(false, `录制热键与频道切换热键（${cycleKey}）冲突，请换一个或到「高级」页调整`);
-      return;
-    }
-    // 录制键与重发最近一条热键也不能相同
-    const resendKey = $settingsStore?.resendLastHotkey ?? "";
-    if (resendKey && combosConflict(key, resendKey)) {
-      toast(false, `录制热键与重发热键（${resendKey}）冲突，请换一个或到「高级」页调整`);
-      return;
-    }
-    // 录制键与文字处理开关/切流程热键也不能相同
-    const ppToggleKey = $settingsStore?.togglePostProcessingHotkey ?? "";
-    if (ppToggleKey && combosConflict(key, ppToggleKey)) {
-      toast(false, `录制热键与文字处理开关热键（${ppToggleKey}）冲突，请换一个或到「高级」页调整`);
-      return;
-    }
-    const ppCycleKey = $settingsStore?.cyclePostProcessingHotkey ?? "";
-    if (ppCycleKey && combosConflict(key, ppCycleKey)) {
-      toast(false, `录制热键与切换文字处理流程热键（${ppCycleKey}）冲突，请换一个或到「高级」页调整`);
-      return;
-    }
-    // 录制键与启动/停止 Kotone 热键也不能相同（后端会以录制键为准让位应用级热键）
-    const runtimeToggleKey = $settingsStore?.runtimeToggleHotkey ?? "";
-    if (runtimeToggleKey && combosConflict(key, runtimeToggleKey)) {
-      toast(false, `录制热键与启动 / 停止 Kotone 热键（${runtimeToggleKey}）冲突，请换一个或到「高级」页调整`);
+    const conflict = findHotkeyConflict($settingsStore, "record", key);
+    if (conflict) {
+      toast(false, `录制热键与${conflict}冲突，请换一个组合`);
       return;
     }
     try {
@@ -224,7 +200,9 @@
         await updateSettings({ hotkey: { key, mode: $settingsStore?.hotkey.mode ?? "toggle" } }),
       );
       hotkeyDraft = $settingsStore?.hotkey.key ?? key;
-      toast(true, `热键已保存并生效：${$settingsStore?.hotkey.key}`);
+      hotkeyStatus = await getHotkeyStatus().catch(() => null);
+      if (hotkeyStatus?.error) toast(false, `热键已保存，但未生效：${hotkeyStatus.error}`);
+      else toast(true, hotkeyStatus?.registered ? `热键已保存并生效：${key}` : `热键已保存，启动 Kotone 后生效：${key}`);
     } catch (e) {
       toast(false, `保存热键失败：${errText(e)}`);
     } finally {
@@ -482,7 +460,7 @@
           { id: "on_demand", name: "用时浮现", desc: "平时隐藏，说话时出现，发完自动隐藏" },
           { id: "always", name: "常驻", desc: "启动即显示，停止才隐藏" },
           { id: "never", name: "不显示", desc: "完全隐藏悬浮窗，全凭感觉操作" },
-        ] as opt}
+        ] as const as opt}
           {@const selected = ($settingsStore.overlay?.visibility ?? "on_demand") === opt.id}
           <button
             class="rounded-[var(--radius-kotone-card)] px-3 py-2.5 text-left ring-1 transition
@@ -512,7 +490,7 @@
           { id: "bottom_left", name: "左下" },
           { id: "bottom_center", name: "底部" },
           { id: "bottom_right", name: "右下" },
-        ] as opt}
+        ] as const as opt}
           {@const selected = ($settingsStore.overlay.position ?? "auto") === opt.id}
           <button
             class="rounded-lg px-2 py-2 text-center text-xs font-semibold ring-1 transition

@@ -1,7 +1,7 @@
 //! OpenAI-compatible chat completions 薄客户端。
 
 use kotone_core::postprocess::{ProcessError, ProcessingCancelToken};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
 
 #[derive(Debug, Clone, Serialize)]
@@ -20,24 +20,7 @@ pub struct ChatRequest {
     pub extra_body: Value,
 }
 
-#[derive(Debug, Deserialize)]
-struct ChatResponse {
-    choices: Vec<ChatChoice>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatChoice {
-    message: ChatResponseMessage,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatResponseMessage {
-    content: Option<String>,
-}
-
-pub fn completions_url(base_url: &str) -> String {
-    format!("{}/chat/completions", base_url.trim().trim_end_matches('/'))
-}
+pub use kotone_ai::transport::completions_url;
 
 pub fn validate_output(
     source: &str,
@@ -66,10 +49,6 @@ pub async fn chat_completion(
     request: ChatRequest,
     cancel: &ProcessingCancelToken,
 ) -> Result<String, ProcessError> {
-    if cancel.is_cancelled() {
-        return Err(cancelled());
-    }
-    let url = completions_url(&request.base_url);
     let mut body = json!({
         "model": request.model,
         "messages": request.messages,
@@ -84,41 +63,23 @@ pub async fn chat_completion(
         }
     }
 
-    let mut builder = client.post(url).json(&body);
-    if let Some(api_key) = request
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|key| !key.is_empty())
-    {
-        builder = builder.bearer_auth(api_key);
-    }
-
-    let response = tokio::select! {
-        _ = cancel.cancelled() => return Err(cancelled()),
-        result = builder.send() => result.map_err(|error| ProcessError::failed(format!("请求失败：{error}")))?,
-    };
-    let status = response.status();
-    let bytes = tokio::select! {
-        _ = cancel.cancelled() => return Err(cancelled()),
-        result = response.bytes() => result.map_err(|error| ProcessError::failed(format!("读取响应失败：{error}")))?,
-    };
-    if !status.is_success() {
-        let snippet = String::from_utf8_lossy(&bytes);
-        let snippet = snippet.chars().take(180).collect::<String>();
-        return Err(ProcessError::failed(format!(
-            "接口返回 {status}：{snippet}"
-        )));
-    }
-    let parsed: ChatResponse = serde_json::from_slice(&bytes)
-        .map_err(|error| ProcessError::failed(format!("响应无法解析：{error}")))?;
-    let content = parsed
-        .choices
-        .into_iter()
-        .next()
-        .and_then(|choice| choice.message.content)
-        .unwrap_or_default();
-    Ok(content)
+    let parsed = kotone_ai::transport::chat_json(
+        client,
+        &request.base_url,
+        request.api_key.as_deref(),
+        body,
+        cancel,
+    )
+    .await
+    .map_err(|error| match error {
+        kotone_ai::transport::AiError::Cancelled => cancelled(),
+        kotone_ai::transport::AiError::Failed(message) => ProcessError::failed(message),
+    })?;
+    Ok(parsed
+        .pointer("/choices/0/message/content")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string())
 }
 
 fn cancelled() -> ProcessError {

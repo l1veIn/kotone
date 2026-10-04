@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Kotone · Voice-to-text for gamers",
-    "description": "A Windows desktop voice-input tool built for gamers: hold a hotkey, speak, and your words are transcribed on-device in real time — release to send straight into the game chat. 100% local. Your audio never leaves your PC."
+    "description": "A Windows voice-input tool for gamers, with local transcription by default, optional online ASR, AI text processing, and reminders. Hold a hotkey, speak, and release to send to game chat."
   },
   "nav": {
     "features": "Features",
@@ -21,9 +21,9 @@
     "ctaFeatures": "See features",
     "platform": "Windows 10 / 11 · x64",
     "stats": [
-      { "value": "100% local", "label": "On-device · 0 uploads" },
+      { "value": "Local by default", "label": "Online features are your choice" },
       { "value": "Live streaming", "label": "Words as you speak" },
-      { "value": "v0.1.6", "label": "Released · auto-updates" }
+      { "value": "Actively updated", "label": "Released · auto-updates" }
     ]
   },
   "why": {
@@ -42,12 +42,12 @@
     "title": "Every tool on the streaming desk, sharpened",
     "sub": "Six pieces, all crafted around one rule: keep your hands on the keyboard.",
     "items": [
-      { "title": "Streaming transcription", "text": "Default X-ASR bilingual model with punctuation, words appear as you speak; VAD voice-activity detection ships in the app and is ready at launch." },
+      { "title": "Streaming transcription", "text": "Default X-ASR runs locally with bilingual punctuation as you speak; VAD voice-activity detection ships with the app." },
       { "title": "Global hotkeys", "text": "Hold-to-talk or tap-to-toggle, bind any key; press again while the hint is showing to start the next line instantly." },
       { "title": "Gaming glossary", "text": "100 League of Legends terms built in; new entries merge on update, your customizations and deletions never get lost." },
       { "title": "Esports overlay", "text": "Card or capsule styles, fully draggable with saved position, click-through to the game; streaming engines render text live." },
-      { "title": "History & replay", "text": "Every recognized line can replay its original audio with a waveform; empty transcriptions never send and leave no trace." },
-      { "title": "Local-first privacy", "text": "All models run on your machine, nothing is uploaded; tray resident, auto-update, and one-click admin restart." }
+      { "title": "History & replay", "text": "Disable or clear history anytime. Enable audio saving to replay new recordings. Empty transcriptions are not sent and show a helpful message." },
+      { "title": "Local-first privacy", "text": "Recognition is local by default. Optional online ASR sends audio; AI processing sends relevant text to your chosen service. Audio saving is off by default." }
     ]
   },
   "modes": {
@@ -65,13 +65,13 @@
         "name": "Voice recorder",
         "tag": "DICTATION",
         "desc": "Tap to start, tap to stop.",
-        "detail": "Tap to start recording, tap again when you're done — the whole take sends in one piece."
+        "detail": "Tap to start, tap again to stop, then confirm the read-only preview to send the whole take."
       },
       {
         "name": "One-shot",
         "tag": "ONE-SHOT",
         "desc": "Auto-stops and auto-sends when you're done.",
-        "detail": "A natural pause transcribes and sends on its own — no hotkey needed."
+        "detail": "Tap the hotkey to start. A natural pause ends transcription and sends; tap again if you need to end manually."
       },
       {
         "name": "Solo mode",
@@ -82,8 +82,8 @@
       }
     ],
     "signalTitle": "No matter the mode, the signal chain underneath is always the same",
-    "signal": ["Hold hotkey", "Speak", "Transcribe on-device", "Release", "Sent"],
-    "signalNote": "Everything happens locally — your audio and text never leave your PC."
+    "signal": ["Start recording", "Speak", "Transcribe", "End by mode", "Confirm or send"],
+    "signalNote": "Recognition is local by default. Online ASR or AI processing sends the relevant audio or text to the service you select."
   },
   "proof": {
     "kicker": "Gallery",
@@ -94,21 +94,21 @@
       { "img": "screenshot-config.webp", "label": "⚙️ Game adaptation" },
       { "img": "screenshot-history.webp", "label": "🕘 History & replay" }
     ],
-    "note": "Windows 10 / 11 · Kotone v0.1.6"
+    "note": "Windows 10 / 11 · Interface evolves with releases"
   },
   "privacy": {
     "kicker": "Privacy",
-    "title": "Your audio never leaves your PC.",
+    "title": "Local by default. Online by choice.",
     "items": [
-      { "title": "Fully on-device", "text": "All models run locally. No network required, no cloud transcription." },
-      { "title": "Audio, then gone", "text": "Audio exists only briefly while the hotkey is held, for live transcription. Not stored." },
+      { "title": "Clear network boundaries", "text": "Default X-ASR runs locally. Optional online ASR sends audio; AI text processing and reminder creation send relevant text to your selected service." },
+      { "title": "Save only when enabled", "text": "Evaluation recordings and history audio are off by default. Text history can be disabled or cleared. Diagnostic packages are never uploaded automatically." },
       { "title": "Open & auditable", "text": "Models, glossary, and privacy policy are all public and inspectable." }
     ],
     "links": ["Privacy policy PRIVACY.md", "Third-party models THIRD_PARTY_NOTICES.md"]
   },
   "cta": {
     "title": "Say it — send it, in one second.",
-    "sub": "Free · Open source · v0.1.6 released · Windows 10 / 11 x64",
+    "sub": "Free · Open source · Actively updated · Windows 10 / 11 x64",
     "button": "Download Kotone",
     "release": "See release notes",
     "github": "Browse GitHub",
@@ -132,6 +132,7 @@
           { "label": "GitHub repo", "href": "https://github.com/l1veIn/kotone" },
           { "label": "Releases", "href": "https://github.com/l1veIn/kotone/releases" },
           { "label": "Changelog", "href": "https://github.com/l1veIn/kotone/blob/main/CHANGELOG.md" },
+          { "label": "Docs & glossary", "href": "https://github.com/l1veIn/kotone/blob/main/docs/README.md" },
           { "label": "Privacy policy", "href": "https://github.com/l1veIn/kotone/blob/main/PRIVACY.md" },
           { "label": "Third-party notices", "href": "https://github.com/l1veIn/kotone/blob/main/THIRD_PARTY_NOTICES.md" }
         ]

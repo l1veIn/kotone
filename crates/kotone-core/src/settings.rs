@@ -127,6 +127,9 @@ pub struct Settings {
     /// 诊断记录（流程事件）；默认开启。关闭后不再写入 events.jsonl。
     #[serde(default)]
     pub diagnostics: DiagnosticsConfig,
+    /// 独立语音助手入口、AI 连接和提醒呈现偏好。
+    #[serde(default)]
+    pub assistant: crate::assistant::AssistantConfig,
 }
 
 /// 诊断记录开关（config.json `diagnostics` 段）。
@@ -462,6 +465,7 @@ impl Default for Settings {
             post_processing: crate::postprocess::PostProcessingConfig::default(),
             connections: Vec::new(),
             diagnostics: DiagnosticsConfig::default(),
+            assistant: crate::assistant::AssistantConfig::default(),
         }
     }
 }
@@ -914,6 +918,14 @@ mod tests {
     #[test]
     fn default_values_match_doc() {
         let s = Settings::default();
+        assert_eq!(
+            s.assistant.interaction_mode,
+            crate::assistant::AssistantInteractionMode::PushToTalk
+        );
+        assert_eq!(
+            s.assistant.speech_engine,
+            crate::assistant::SpeechEngine::System
+        );
         assert_eq!(s.hotkey.key, "CapsLock");
         assert_eq!(s.hotkey.mode, HotkeyMode::Toggle);
         assert_eq!(s.hotkey_backend, HotkeyBackend::Auto);

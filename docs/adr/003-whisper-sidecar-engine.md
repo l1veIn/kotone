@@ -1,6 +1,8 @@
 # ADR 003：whisper.cpp sidecar 引擎与模型/二进制自管理
 
-- 状态：已采纳（真实 STT 引擎 #1 落地）
+> 当前状态（2026-10 梳理）：Superseded / 已替代：whisper.cpp sidecar 及相关模型已从当前实现移除。本页仅为历史决策，当前识别架构见 [architecture.md](../architecture.md)，历史取舍见 [开发历史](../archive/development-history.md)。
+
+- 原始状态：已采纳（真实 STT 引擎 #1 落地）
 - 上下文：kotone-stt 的 whisper_sidecar 原为占位（is_ready=false）。MVP 需要一个
   可用的离线中文引擎；docs v9 已确定 whisper-cli 由 kotone-stt 自管理而非
   Tauri externalBin。

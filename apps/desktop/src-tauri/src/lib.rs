@@ -1,10 +1,13 @@
 //! Kotone Rust 核心：模块组装、共享状态与 IPC 命令。
 //! 职责划分见 docs/development.md §5.1；IPC 契约见 §5.3（类型对齐 src/lib/ipc.ts）。
 
+mod assistant;
+mod assistant_input;
 mod compatibility;
 mod diagnostics;
 mod hotkey;
 mod runtime;
+mod speech_models;
 mod tray;
 
 use std::sync::{Arc, Mutex, RwLock};
@@ -363,6 +366,18 @@ mod hotkey_settings_tests {
         next.hotkey.key = "F9".into();
         assert!(hotkey_registration_changed(&old, &next));
     }
+
+    #[test]
+    fn changing_assistant_input_mode_requires_registration_but_not_voice_settings() {
+        let old = Settings::default();
+        let mut next = old.clone();
+        next.assistant.speech_volume = 30;
+        assert!(!hotkey_registration_changed(&old, &next));
+        next.assistant.interaction_mode =
+            kotone_core::assistant::AssistantInteractionMode::Dictation;
+        assert!(hotkey_registration_changed(&old, &next));
+        assert!(!app_hotkey_changed(&old, &next));
+    }
 }
 
 /// 生产事件出口：转发为 Tauri 事件；联动 Esc 取消键注册与 overlay 窗口显隐。
@@ -493,6 +508,7 @@ fn maybe_play_feedback_sfx(app: &AppHandle, payload: &serde_json::Value) {
     let sfx = state.settings.read().unwrap().sound_feedback.clone();
     let (item, is_record) = match activity {
         "capture_started" => {
+            assistant::silence(app);
             if payload.pointer("/data/resumed").and_then(|v| v.as_bool()) == Some(true) {
                 return; // solo 逐句续录：只留发送音
             }
@@ -868,9 +884,9 @@ fn list_connection_presets() -> Vec<ConnectionPresetInfo> {
 #[tauri::command]
 fn list_connections(
     state: tauri::State<SharedState>,
-) -> Result<Vec<kotone_postprocess::connections::ConnectionInfo>, String> {
+) -> Result<Vec<kotone_ai::connections::ConnectionInfo>, String> {
     let settings = state.settings.read().unwrap();
-    kotone_postprocess::connections::list_connection_info(&settings, state.secrets.as_ref())
+    kotone_ai::connections::list_connection_info(&settings, state.secrets.as_ref())
 }
 
 #[tauri::command]
@@ -879,7 +895,7 @@ fn upsert_connection(
     connection: Connection,
     api_key: Option<String>,
 ) -> Result<Settings, String> {
-    kotone_postprocess::connections::upsert_connection(
+    kotone_ai::connections::upsert_connection(
         &state.settings_repository,
         state.secrets.as_ref(),
         connection,
@@ -889,7 +905,7 @@ fn upsert_connection(
 
 #[tauri::command]
 fn delete_connection(state: tauri::State<SharedState>, id: String) -> Result<Settings, String> {
-    kotone_postprocess::connections::delete_connection(
+    kotone_ai::connections::delete_connection(
         &state.settings_repository,
         state.secrets.as_ref(),
         &id,
@@ -931,6 +947,8 @@ fn hotkey_registration_changed(old: &Settings, next: &Settings) -> bool {
         || old.resend_last_hotkey != next.resend_last_hotkey
         || old.toggle_post_processing_hotkey != next.toggle_post_processing_hotkey
         || old.cycle_post_processing_hotkey != next.cycle_post_processing_hotkey
+        || old.assistant.hotkey != next.assistant.hotkey
+        || old.assistant.interaction_mode != next.assistant.interaction_mode
 }
 
 /// 应用级热键（启动 / 停止 Kotone）变化：与 runtime 是否运行无关，必须重注册。
@@ -945,21 +963,40 @@ fn update_settings(
     state: tauri::State<SharedState>,
     patch: serde_json::Value,
 ) -> Result<Settings, String> {
-    let running = app
-        .try_state::<RuntimeManager>()
-        .map(|rt| rt.phase() == RuntimePhase::Running)
-        .unwrap_or(false);
+    let runtime_manager = app.try_state::<RuntimeManager>();
+    let configuration_guard = runtime_manager.as_ref().map(|rt| rt.configuration_guard());
+    let running = runtime_manager
+        .as_ref()
+        .is_some_and(|rt| rt.phase() == RuntimePhase::Running);
     let manager = app.try_state::<HotkeyManager>();
     if patch.get("connections").is_some() {
         return Err("连接请使用专用接口保存，不能写入通用设置".into());
     }
+    if patch
+        .get("models")
+        .and_then(|models| models.get("dir"))
+        .is_some()
+    {
+        return Err("模型目录请使用目录迁移接口修改".into());
+    }
+    // Drop the core admission lock before accepting fresh source events, including
+    // error/rollback exits. The runtime pause owns no mutex and may outlive apply.
+    let mut input_pause = None;
+    let mut input_configuration = None;
     let (old, updated, ()) = state.settings_repository.update_with(
         |next| {
+            let previous = next.clone();
             let mut merged =
                 serde_json::to_value(&*next).map_err(|e| format!("序列化配置失败: {e}"))?;
             settings::merge_json(&mut merged, &patch);
             *next = serde_json::from_value(merged).map_err(|e| format!("配置项不合法: {e}"))?;
             next.overlay.normalize_interaction();
+            next.assistant.validate()?;
+            if running && hotkey_registration_changed(&previous, next) {
+                input_configuration = Some(state.orchestrator.try_input_configuration_guard()?);
+                input_pause = runtime_manager.as_ref().map(|rt| rt.pause_inputs());
+                state.orchestrator.invalidate_hotkey_inputs();
+            }
             Ok(())
         },
         |old, next| {
@@ -1000,6 +1037,20 @@ fn update_settings(
             Ok(())
         },
     )?;
+    drop(input_configuration);
+    drop(input_pause);
+    drop(configuration_guard);
+    if hotkey_registration_changed(&old, &updated) {
+        use tauri::Emitter as _;
+        let _ = app.emit(
+            "kotone://input-config",
+            serde_json::json!({
+                "hotkey": updated.hotkey.key,
+                "assistantHotkey": updated.assistant.hotkey,
+                "assistantMode": updated.assistant.interaction_mode,
+            }),
+        );
+    }
     process_log::set_recording_enabled(updated.diagnostics.recording);
     let old_overlay = old.overlay;
 
@@ -1480,13 +1531,20 @@ fn set_models_dir(
     state: tauri::State<SharedState>,
     dir: String,
 ) -> Result<ModelsDirMigration, String> {
-    let running = app
-        .try_state::<RuntimeManager>()
-        .map(|rt| rt.phase() == RuntimePhase::Running)
-        .unwrap_or(false);
+    let runtime_manager = app.state::<RuntimeManager>();
+    let _configuration = runtime_manager.configuration_guard();
+    let running = runtime_manager.phase() != RuntimePhase::Stopped;
     if running {
         return Err("引擎正在运行，请先停止引擎再迁移模型目录（设置页或托盘「停止引擎」）".into());
     }
+    if app
+        .state::<speech_models::SpeechModelManager>()
+        .is_downloading()
+    {
+        return Err("语音模型正在下载，请等待完成或取消后再迁移目录".into());
+    }
+    let assistant_state = app.state::<assistant::AssistantRuntime>();
+    let _output = assistant::prepare_model_migration(&assistant_state)?;
     let requested_dir = dir.trim().to_string();
     let (_, updated, report) = state.settings_repository.update_with(
         |next| {
@@ -1842,13 +1900,10 @@ pub fn run() {
             kotone_stt::register_builtin(&mut registry);
             let engines = Arc::new(registry);
             let mut processor_registry = kotone_core::postprocess::ProcessorRegistry::new();
-            let secrets: Arc<dyn SecretStore> =
-                Arc::new(kotone_postprocess::secrets::KeyringSecretStore);
-            let connections: Arc<dyn ConnectionResolver> =
-                Arc::new(kotone_postprocess::secrets::SecretBackedResolver::new(
-                    settings.clone(),
-                    secrets.clone(),
-                ));
+            let secrets: Arc<dyn SecretStore> = Arc::new(kotone_ai::secrets::KeyringSecretStore);
+            let connections: Arc<dyn ConnectionResolver> = Arc::new(
+                kotone_ai::secrets::SecretBackedResolver::new(settings.clone(), secrets.clone()),
+            );
             if let Err(error) = kotone_postprocess::register_with_connections(
                 &mut processor_registry,
                 connections.clone(),
@@ -1864,6 +1919,8 @@ pub fn run() {
             let focus: Arc<dyn FocusBackend> = Arc::new(WinFocusBackend);
             let audio_backend: Arc<dyn kotone_core::audio::AudioBackend> =
                 Arc::new(platform_audio::CpalBackend);
+            let assistant_runtime =
+                assistant::initialize(app.handle(), settings.clone(), connections.clone());
 
             #[allow(unused_mut)] // vad-silero feature 关闭时无可变接线
             let mut orchestrator = Orchestrator::new(
@@ -1877,6 +1934,16 @@ pub fn run() {
             .with_processors(processors.clone())
             .with_secrets(secrets.clone())
             .with_settings_repository(settings_repository.clone());
+            if let Ok(scheduler) = &assistant_runtime.scheduler {
+                orchestrator = orchestrator
+                    .with_assistant(assistant_runtime.handler.clone(), scheduler.clone());
+            }
+            let capture_app = app.handle().clone();
+            orchestrator = orchestrator
+                .with_before_capture(Arc::new(move || assistant::before_capture(&capture_app)));
+            let capture_app = app.handle().clone();
+            orchestrator = orchestrator
+                .with_after_capture(Arc::new(move || assistant::after_capture(&capture_app)));
             // VAD 接线（ADR-007）：vad-silero feature 开启时注入 silero 工厂；
             // 默认构建不接入——one-shot 模式 begin 会报清晰错误
             #[cfg(feature = "vad-silero")]
@@ -1884,6 +1951,7 @@ pub fn run() {
                 orchestrator.vad_factory = Some(kotone_stt::vad::silero_factory());
             }
             let orchestrator = orchestrator.into_arc();
+            orchestrator.suspend_runtime_inputs();
 
             app.manage(SharedState {
                 settings: settings.clone(),
@@ -1899,9 +1967,12 @@ pub fn run() {
             app.manage(HotkeyManager::new(app.handle(), orchestrator.clone()));
             app.manage(RuntimeManager::new());
             app.manage(ResourceMonitor(Mutex::new(sysinfo::System::new())));
+            app.manage(assistant_runtime);
+            app.manage(speech_models::SpeechModelManager::default());
+            assistant::start(app.handle());
             compatibility::start_fullscreen_monitor(app.handle().clone());
 
-            for label in ["main", "overlay"] {
+            for label in ["main", "overlay", "danmaku"] {
                 if let Some(win) = app.get_webview_window(label) {
                     harden_webview(&win);
                 }
@@ -2004,7 +2075,28 @@ pub fn run() {
             confirm_send,
             cancel_session,
             simulate_send,
+            assistant::list_reminders,
+            assistant::cancel_reminder,
+            assistant::assistant_submit_text,
+            assistant::cancel_assistant_request,
+            assistant_input::assistant_voice_begin,
+            assistant_input::assistant_voice_end,
+            assistant_input::assistant_voice_confirm,
+            assistant_input::assistant_voice_cancel,
+            assistant::list_speech_voices,
+            assistant::preview_reminder,
+            assistant::stop_speech,
+            assistant::get_danmaku,
+            assistant::finish_danmaku,
+            speech_models::get_speech_model_status,
+            speech_models::download_speech_model,
+            speech_models::cancel_speech_model_download,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Kotone application");
+        .build(tauri::generate_context!())
+        .expect("error while building Kotone application")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                assistant::shutdown(app);
+            }
+        });
 }

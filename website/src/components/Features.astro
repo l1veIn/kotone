@@ -4,7 +4,7 @@ import Icon from "./Icon.astro";
 
 const t = i18n(Astro.url.pathname);
 const features = t.features;
-const iconNames = ["wave", "switch", "bubble", "overlay", "replay", "shield"];
+const iconNames = ["wave", "switch", "bubble", "overlay", "replay", "shield"] as const;
 ---
 
 <section class="section features" id="features">

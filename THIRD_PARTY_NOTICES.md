@@ -41,4 +41,25 @@ The optional voice activity detection model is distributed through sherpa-onnx:
 
 - Download source: https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
 
+## Kokoro v1.1-zh
+
+The optional local speech output uses the INT8 ONNX conversion of Kokoro v1.1-zh. The model is downloaded separately; its included `LICENSE` must be retained.
+
+- Original model and model card: https://huggingface.co/hexgrad/Kokoro-82M-v1.1-zh
+- Conversion: https://huggingface.co/csukuangfj/kokoro-int8-multi-lang-v1_1
+- Download: https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_1.tar.bz2
+- Model license: Apache License 2.0
+- Voice presets used by Kotone: upstream Chinese female voices `zf_001`, `zf_003`, and `zf_017`; these are not custom voice clones.
+
+## eSpeak NG frontend and data
+
+The Kokoro model package also contains `espeak-ng-data`. Model licensing does not replace the licenses of the text frontend, its data, or the native inference dependencies.
+
+- Project: https://github.com/espeak-ng/espeak-ng
+- sherpa-onnx 1.13.5 integration: https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.5/cmake/espeak-ng-for-piper.cmake
+- Pinned fork source: https://github.com/csukuangfj/espeak-ng/tree/ed530aa113046142eb5115cf2fc9157854d0ffe1
+- GPL version 3 license text in that revision: https://github.com/csukuangfj/espeak-ng/blob/ed530aa113046142eb5115cf2fc9157854d0ffe1/COPYING
+
+Redistribution must account for the actual native runtime and frontend/data licenses, including applicable notice and corresponding-source requirements. Do not describe the complete TTS dependency chain as Apache-only merely because the model weights use Apache-2.0. See `docs/research-tts.md` for the verified package identity and implementation notes.
+
 These notices describe third-party components and models; they do not grant a license to Kotone itself.

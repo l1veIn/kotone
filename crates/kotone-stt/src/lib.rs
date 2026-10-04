@@ -10,6 +10,7 @@
 //! - `download`：通用下载器（流式 + SHA256 校验 + 原子落盘 + 镜像回退）。
 
 pub mod download;
+pub mod eval;
 mod funasr_nano;
 mod iflytek;
 pub mod mock;

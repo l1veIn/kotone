@@ -7,43 +7,59 @@ import shotHistory from "../assets/screenshot-history.webp";
 
 const t = i18n(Astro.url.pathname);
 const proof = t.proof;
-const shots = {
-  "screenshot-welcome.webp": shotWelcome,
-  "screenshot-voice.webp": shotVoice,
-  "screenshot-config.webp": shotConfig,
-  "screenshot-history.webp": shotHistory,
-};
-const ids = proof.items.map((it) => it.img);
+const shots = new Map([
+  ["screenshot-welcome.webp", shotWelcome],
+  ["screenshot-voice.webp", shotVoice],
+  ["screenshot-config.webp", shotConfig],
+  ["screenshot-history.webp", shotHistory],
+]);
 ---
 
 <script>
   const overlay = document.getElementById("lightbox");
-  const img = document.getElementById("lightbox-img");
+  const img = document.querySelector<HTMLImageElement>("#lightbox-img");
   const closeBtn = document.getElementById("lightbox-close");
-  let lastFocus = null;
-
-  document.querySelectorAll(".shot-card").forEach((card) => {
-    card.addEventListener("click", () => {
-      const src = card.getAttribute("data-full");
-      const alt = card.getAttribute("data-label");
-      lastFocus = card;
-      img.setAttribute("src", src);
-      img.setAttribute("alt", alt);
-      overlay.classList.add("is-open");
-      closeBtn.focus();
+  if (overlay && img && closeBtn) {
+    let lastFocus: HTMLElement | null = null;
+    document.querySelectorAll<HTMLElement>(".shot-card").forEach((card) => {
+      const open = () => {
+        const src = card.dataset.full;
+        if (!src) return;
+        lastFocus = card;
+        img.src = src;
+        img.alt = card.dataset.label ?? "";
+        overlay.inert = false;
+        overlay.setAttribute("aria-hidden", "false");
+        overlay.classList.add("is-open");
+        closeBtn.focus();
+      };
+      card.addEventListener("click", open);
+      card.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          open();
+        }
+      });
     });
-  });
-  const close = () => {
-    overlay.classList.remove("is-open");
-    lastFocus?.focus();
-  };
-  closeBtn.addEventListener("click", close);
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) close();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && overlay.classList.contains("is-open")) close();
-  });
+    const close = () => {
+      overlay.classList.remove("is-open");
+      lastFocus?.focus();
+      overlay.inert = true;
+      overlay.setAttribute("aria-hidden", "true");
+    };
+    closeBtn.addEventListener("click", close);
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) close();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (!overlay.classList.contains("is-open")) return;
+      if (event.key === "Escape") close();
+      if (event.key === "Tab") {
+        event.preventDefault();
+        closeBtn.focus();
+      }
+    });
+  }
 </script>
 
 <section class="section proof" id="proof">
@@ -55,7 +71,8 @@ const ids = proof.items.map((it) => it.img);
 
     <div class="proof__grid">
       {proof.items.map((item, i) => {
-        const src = shots[item.img];
+        const src = shots.get(item.img);
+        if (!src) throw new Error(`Unknown gallery image: ${item.img}`);
         return (
           <figure
             class="shot-card"
@@ -77,7 +94,7 @@ const ids = proof.items.map((it) => it.img);
   </div>
 </section>
 
-<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="preview">
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="preview" aria-hidden="true" inert>
   <button id="lightbox-close" class="lightbox__close" aria-label="close">✕</button>
   <img id="lightbox-img" src="" alt="" />
 </div>

@@ -39,21 +39,53 @@ export function isHotkeyCaptureActive(): boolean {
  */
 export async function captureHotkey(
   onResult: (r: CaptureResult) => void,
+  options: { signal?: AbortSignal } = {},
 ): Promise<() => void> {
+  if (options.signal?.aborted) return () => {};
+  if (captureActive) {
+    onResult({ kind: "error", message: "已有热键录入进行中，请先完成或按 Esc 取消" });
+    return () => {};
+  }
+  captureActive = true;
   let unlisten: (() => void) | undefined;
   let settled = false;
   let backendStarted = false;
+  let backendRequested = false;
+  let startup: Promise<void> = Promise.resolve();
+  let finishing: Promise<void> | undefined;
+  const abort = () => { void finish(undefined, true); };
+  const cleanupWebview = () => {
+    window.removeEventListener("keydown", blockWebviewKey, { capture: true });
+    window.removeEventListener("keyup", blockWebviewKey, { capture: true });
+    window.removeEventListener("mousedown", blockWebviewMouse, { capture: true });
+    options.signal?.removeEventListener("abort", abort);
+  };
+  const finish = (result: CaptureResult | undefined, stopBackend: boolean): Promise<void> => {
+    if (finishing) return finishing;
+    settled = true;
+    unlisten?.();
+    cleanupWebview();
+    // 安装中的录入也必须完成清理后才能让下一位取得所有权，否则旧 cancel
+    // 可能关闭新页面的捕获。AbortSignal 可在 listen/start 尚未返回时取消。
+    finishing = (async () => {
+      await startup;
+      if (stopBackend && backendRequested) {
+        try { await cancelHotkeyCapture(); }
+        catch (error) {
+          if (result) result = { kind: "error", message: `结束热键录入失败：${errText(error)}` };
+        }
+      }
+      captureActive = false;
+      if (result && !options.signal?.aborted) onResult(result);
+    })();
+    return finishing;
+  };
   const finishFromWebview = (result: CaptureResult) => {
     if (!backendStarted || settled) return;
     // 先停止监听并标记结算，避免 cancel 产生的后端 Cancelled 事件覆盖窗口兜底结果；
     // 等后端确实退出 capture 后再通知调用页保存热键，避免保存触发的 hook 重注册
     // 与尚未清理的 capture 槽发生竞态。
-    settled = true;
-    unlisten?.();
-    cleanupWebview();
-    void cancelHotkeyCapture()
-      .catch(() => {})
-      .finally(() => onResult(result));
+    void finish(result, true);
   };
   const blockWebviewKey = (event: KeyboardEvent) => {
     // 修饰键仍允许浏览器维护 modifier 状态；真正被录入的主键（含 Esc）不得
@@ -100,51 +132,33 @@ export async function captureHotkey(
     }
     finishFromWebview({ kind: "combo", combo });
   };
-  captureActive = true;
   window.addEventListener("keydown", blockWebviewKey, { capture: true });
   window.addEventListener("keyup", blockWebviewKey, { capture: true });
   window.addEventListener("mousedown", blockWebviewMouse, { capture: true });
-
-  const cleanupWebview = () => {
-    captureActive = false;
-    window.removeEventListener("keydown", blockWebviewKey, { capture: true });
-    window.removeEventListener("keyup", blockWebviewKey, { capture: true });
-    window.removeEventListener("mousedown", blockWebviewMouse, { capture: true });
-  };
-  const settle = (r: CaptureResult) => {
-    if (settled) return;
-    settled = true;
-    unlisten?.();
-    cleanupWebview();
-    onResult(r);
-  };
+  options.signal?.addEventListener("abort", abort, { once: true });
   if (!isTauri) {
     // dev:web / E2E 直接使用 WebView 键盘兜底，既便于回归向导流程，也与
     // Windows 底层 hook 失活时的用户可见行为保持一致。
     backendStarted = true;
-    return () => {
-      if (settled) return;
-      settled = true;
-      cleanupWebview();
-    };
+    return abort;
   }
-  try {
-    unlisten = await listen<HotkeyCaptureEvent>("kotone://hotkey-capture", (ev) => {
-      const p = ev.payload;
-      if (p.combo) settle({ kind: "combo", combo: p.combo });
-      else if (p.cancelled) settle({ kind: "cancelled" });
-      else settle({ kind: "timeout" });
-    });
-    await startHotkeyCapture();
-    backendStarted = true;
-  } catch (e) {
-    settle({ kind: "error", message: `无法启动热键录入：${errText(e)}` });
-  }
-  return () => {
-    if (settled) return;
-    settled = true;
-    unlisten?.();
-    cleanupWebview();
-    void cancelHotkeyCapture();
-  };
+  startup = (async () => {
+    try {
+      unlisten = await listen<HotkeyCaptureEvent>("kotone://hotkey-capture", (ev) => {
+        const p = ev.payload;
+        const result: CaptureResult = p.combo ? { kind: "combo", combo: p.combo }
+          : p.cancelled ? { kind: "cancelled" } : { kind: "timeout" };
+        void finish(result, false);
+      });
+      if (settled) { unlisten(); return; }
+      backendRequested = true;
+      await startHotkeyCapture();
+      backendStarted = true;
+    } catch (error) {
+      void finish({ kind: "error", message: `无法启动热键录入：${errText(error)}` }, backendRequested);
+    }
+  })();
+  await startup;
+  if (settled) await finishing;
+  return abort;
 }

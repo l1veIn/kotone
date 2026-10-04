@@ -1,6 +1,8 @@
 # ADR 009：文本后处理 —— 双文本边界、注册发现与有序 Pipeline
 
-- 状态：已采纳（Phase 1：领域骨架与 mock 编排）
+> 当前状态（2026-10 梳理）：Amended / 已修订：有序流水线和双文本边界保留；连接/凭据、descriptor schema、网络处理器和历史双文本已实现。共享 HTTP/连接/凭据抽至 kotone-ai，后处理与提醒助手共用服务层。下文 Phase 1/后续列表是初版计划；现行职责见 [架构](../architecture.md)。
+
+- 原始状态：已采纳（Phase 1：领域骨架与 mock 编排）
 - 主题：STT final 与 Preview/Injector 之间的可扩展文本处理阶段
 
 ## 上下文

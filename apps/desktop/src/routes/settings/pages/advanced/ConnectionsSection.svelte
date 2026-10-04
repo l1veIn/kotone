@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { modalFocus } from "../../../../lib/actions/modalFocus";
   import { onMount } from "svelte";
   import {
     deleteConnection,
@@ -169,6 +170,9 @@
           role="dialog"
           aria-modal="true"
           aria-labelledby="connection-editor-title"
+          tabindex="-1"
+          use:modalFocus
+          onkeydown={(event) => { if (event.key === "Escape") { event.stopPropagation(); editingConnection = null; editingApiKey = ""; } }}
           data-testid="connection-editor"
           onclick={(event) => event.stopPropagation()}
         >

@@ -59,6 +59,7 @@
   }
 
   async function onHotkeyBackendChange(hotkeyBackend: string) {
+    if (hotkeyBackend !== "auto" && hotkeyBackend !== "llhook" && hotkeyBackend !== "register") return;
     await patchSettings({ hotkeyBackend }, "热键兼容模式已更新");
     hotkeyStatus = await getHotkeyStatus().catch(() => hotkeyStatus);
   }
@@ -174,7 +175,7 @@
       {#each [
         { id: "capsule", name: "胶囊", desc: "更轻巧，减少遮挡" },
         { id: "card", name: "卡片", desc: "信息完整，适合首次使用" },
-      ] as option}
+      ] as const as option}
         {@const selected = $settingsStore.overlay.style === option.id}
         <button
           class="rounded-lg px-3 py-2.5 text-left ring-1 transition {selected

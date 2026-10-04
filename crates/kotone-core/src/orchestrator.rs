@@ -9,13 +9,14 @@
 //! - `gen` 代际计数：每次 begin/cancel 自增，async 空隙后（finalize、发送）校验 gen，
 //!   期间被取消则丢弃过期结果，保证「任意状态 Esc 取消 → Idle」不错乱。
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::assistant::{AssistantHandler, AssistantRequest, AssistantVoiceSession, SessionPurpose};
 use crate::audio::{AudioBackend, AudioHandle};
 use crate::inject::{CancelToken, FocusBackend, InjectError, Injector, TargetWindow};
 use crate::interaction::{EndTrigger, InteractionPolicy, PostFinalize};
@@ -24,11 +25,14 @@ use crate::postprocess::{
     ProcessingContext, ProcessorRegistry,
 };
 use crate::profile::{self, GameProfile};
+use crate::reminders::ReminderScheduler;
 use crate::settings::Settings;
 use crate::stt::{EngineRegistry, SessionConfig, SttEvent, SttSession};
 
 /// finalize 超时（docs/development.md §6：finalize 设置 10s 超时）
 const DEFAULT_FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
+/// 时间戳仅用于可读性；同一毫秒内取消/重开也必须获得不同的操作凭证。
+static NEXT_PROCESS_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 /// 单次持续收音硬上限。除了避免误触后长时间占用麦克风，也给
 /// 离线引擎、评测录档与可选历史音频缓冲设置明确的内存上界。
 const DEFAULT_MAX_SESSION_DURATION: Duration = Duration::from_secs(10 * 60);
@@ -86,16 +90,40 @@ pub trait Emitter: Send + Sync {
 
 /// 进行中的会话句柄
 struct ActiveSession {
+    purpose: SessionPurpose,
     stop_tx: Option<oneshot::Sender<()>>,
     session_rx: Option<oneshot::Receiver<Box<dyn SttSession>>>,
     /// pump 线程据此决定收尾时 session.cancel() 还是交还 session
     cancelled_flag: Arc<AtomicBool>,
     /// 录音采集 guard：drop 即停止采集线程
-    guard: Option<AudioHandle>,
+    guard: Option<CaptureGuard>,
     pump: tokio::task::JoinHandle<()>,
     level_task: tokio::task::JoinHandle<()>,
     /// eval 录档句柄（仅 evalRecording 开启时存在；历史音频使用独立缓冲）
     recorder: Option<crate::eval::SessionRecorder>,
+}
+
+/// The release callback belongs to the actual microphone handle, not a UI state.
+/// AudioHandle::drop joins the capture thread before admission is released.
+struct CaptureGuard {
+    audio: Option<AudioHandle>,
+    _completion: CaptureCompletion,
+}
+
+impl Drop for CaptureGuard {
+    fn drop(&mut self) {
+        drop(self.audio.take());
+    }
+}
+
+struct CaptureCompletion(Option<Arc<dyn Fn() + Send + Sync>>);
+
+impl Drop for CaptureCompletion {
+    fn drop(&mut self) {
+        if let Some(finished) = &self.0 {
+            finished();
+        }
+    }
 }
 
 /// 已在状态机内原子占用发送权的任务快照。
@@ -105,14 +133,65 @@ struct ActiveSession {
 struct SendClaim {
     ready: ReadyText,
     gen: u64,
-    token: CancelToken,
+    operation: SendOperation,
+    completion: SendCompletion,
     target: Option<TargetWindow>,
     channel: Option<(String, String)>,
 }
 
+/// 一次发送从准备到最后一个阻塞调用返回始终占用同一份操作权。
+/// 取消/超时只发出停止请求，不能伪装成 Win32 调用已经结束。
+#[derive(Clone)]
+struct SendOperation(Arc<SendOperationInner>);
+
+struct SendOperationInner {
+    cancel: CancelToken,
+    finished: AtomicBool,
+}
+
+impl SendOperation {
+    fn new() -> (Self, SendCompletion) {
+        let operation = Self(Arc::new(SendOperationInner {
+            cancel: CancelToken::default(),
+            finished: AtomicBool::new(false),
+        }));
+        let completion = SendCompletion {
+            operation: operation.clone(),
+        };
+        (operation, completion)
+    }
+
+    fn cancel(&self) {
+        self.0.cancel.cancel();
+    }
+
+    fn is_finished(&self) -> bool {
+        self.0.finished.load(Ordering::SeqCst)
+    }
+
+    fn same_operation(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// 唯一完成凭据：准备阶段由 async 调用持有，进入阻塞阶段后移交给该线程。
+/// 即使调用方取消或等待超时，也只有阻塞线程真正退出后才释放发送权。
+struct SendCompletion {
+    operation: SendOperation,
+}
+
+impl Drop for SendCompletion {
+    fn drop(&mut self) {
+        self.operation.cancel();
+        self.operation.0.finished.store(true, Ordering::SeqCst);
+    }
+}
+
+const SEND_STILL_RUNNING: &str =
+    "上一次发送仍在结束中，暂时不能开始新的发送；请稍后重试。若持续无响应，请退出并重新打开应用";
+
 /// 已完成全部文本生产步骤、可安全进入预览或注入的文本。
-/// `source_text` 与 `text` 当前相同；提前建立双文本边界，后处理接入后前者
-/// 保留识别原文，后者承载处理完成的可交付文本。
+/// `source_text` 保留识别原文，`text` 承载后处理完成的可交付文本。
 #[derive(Clone)]
 struct ReadyText {
     source_text: String,
@@ -137,17 +216,19 @@ struct RecognizedText {
 }
 
 /// 状态机中待用户/系统继续处置的类型化文本，替代语义过载的 `preview_text`。
-/// 后续处理阶段可以增加 Recognized 变体，而预览与注入只接受 Ready。
+/// Recognized 只能重试处理，预览与注入只接受 Ready。
 #[derive(Clone)]
 enum PendingText {
     Recognized(RecognizedText),
     Ready(ReadyText),
+    /// 助手预览保留识别完成时间，只能提交 AI，不能转换为可注入文本。
+    Assistant(AssistantRequest),
 }
 
 impl PendingText {
     fn ready(&self) -> Option<&ReadyText> {
         match self {
-            Self::Recognized(_) => None,
+            Self::Recognized(_) | Self::Assistant(_) => None,
             Self::Ready(ready) => Some(ready),
         }
     }
@@ -155,24 +236,29 @@ impl PendingText {
     fn recognized(&self) -> Option<&RecognizedText> {
         match self {
             Self::Recognized(recognized) => Some(recognized),
-            Self::Ready(_) => None,
+            Self::Ready(_) | Self::Assistant(_) => None,
         }
     }
 }
 
 struct Inner {
     state: OrchestratorState,
+    purpose: SessionPurpose,
+    /// 开始时固定采集/收尾规则，设置热更新从下一会话生效。
+    session_policy: Option<InteractionPolicy>,
     gen: u64,
     active: Option<ActiveSession>,
     pending_text: Option<PendingText>,
-    /// Sending 状态的取消令牌
-    send_cancel: Option<CancelToken>,
+    /// 正在准备或执行的发送。取消/超时后仍保留，直到阻塞调用真正退出。
+    send_operation: Option<SendOperation>,
     /// Processing 状态的取消令牌；Esc/cancel 可立即打断异步处理器 future。
     processing_cancel: Option<ProcessingCancelToken>,
     /// begin 时记录的前台窗口 = 注入目标（发送前把焦点还给它）
     target_window: Option<TargetWindow>,
     /// 本地诊断流程的 case id；无论 history 是否关闭，每次 begin 都生成。
     process_case_id: Option<String>,
+    /// 仅面板按钮创建的会话接受带 ID 的面板结束/确认/取消命令。
+    assistant_voice_owner: bool,
     /// history 草稿（history.mode != off 时 begin 创建；不放 ActiveSession——
     /// end() 会 take 走 active，而 Sending/Error 态的终态落账仍需要草稿）
     history: Option<Arc<Mutex<HistoryDraft>>>,
@@ -186,6 +272,19 @@ struct Inner {
     /// 本轮会话是否按 solo 连续策略运行。VAD 初始化/推理失败时会降级为 false，
     /// 让第二次热键结束并发送当前句，而不是丢弃在途音频或自动续段。
     continuous_session: bool,
+}
+
+impl Inner {
+    fn send_is_running(&mut self) -> bool {
+        if self
+            .send_operation
+            .as_ref()
+            .is_some_and(SendOperation::is_finished)
+        {
+            self.send_operation = None;
+        }
+        self.send_operation.is_some()
+    }
 }
 
 /// history 草稿：会话期间累计指标，终态（sent/cancelled/error）时落账一条记录
@@ -266,6 +365,10 @@ pub struct Orchestrator {
     /// Arc：schedule_idle 的延迟任务需要共享访问
     inner: Arc<Mutex<Inner>>,
     op: tokio::sync::Mutex<()>,
+    /// 按住输入的 down/up 串行化；down 等待开麦时不能丢掉已到达的 up。
+    hold_input: tokio::sync::Mutex<()>,
+    /// 热键队列代际独立于逐句会话代际；Esc / 重注册同步废弃旧票据。
+    hotkey_epoch: AtomicU64,
     settings: Arc<RwLock<Settings>>,
     /// 配置仓库（桌面壳注入）：热键类动作（切换文字处理开关/流程）经它原子写盘并
     /// 更新共享内存快照。None = 未注入（CLI/测试），此类动作直接忽略并记日志。
@@ -274,9 +377,14 @@ pub struct Orchestrator {
     /// 仍可编辑下次启动的引擎/模型/参数，但本轮会话必须继续使用
     /// 已预热配置。None 用于 CLI/测试，保持原有「现场读设置」语义。
     runtime_stt_settings: RwLock<Option<Settings>>,
+    /// 桌面停止前同步关闭入口；CLI 默认开放。必须在 op 临界区再次核验。
+    runtime_inputs_enabled: AtomicBool,
     engines: Arc<EngineRegistry>,
     processors: Arc<ProcessorRegistry>,
+    assistant: Option<(Arc<dyn AssistantHandler>, Arc<ReminderScheduler>)>,
     audio: Arc<dyn AudioBackend>,
+    before_capture: Option<Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
+    after_capture: Option<Arc<dyn Fn() + Send + Sync>>,
     injector: Arc<dyn Injector>,
     focus: Arc<dyn FocusBackend>,
     emitter: Arc<dyn Emitter>,
@@ -319,25 +427,34 @@ impl Orchestrator {
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 state: OrchestratorState::Idle,
+                purpose: SessionPurpose::Dictation,
+                session_policy: None,
                 gen: 0,
                 active: None,
                 pending_text: None,
-                send_cancel: None,
+                send_operation: None,
                 processing_cancel: None,
                 target_window: None,
                 process_case_id: None,
+                assistant_voice_owner: false,
                 history: None,
                 channel: None,
                 release_grace_task: None,
                 continuous_session: false,
             })),
             op: tokio::sync::Mutex::new(()),
+            hold_input: tokio::sync::Mutex::new(()),
+            hotkey_epoch: AtomicU64::new(0),
             settings,
             settings_repository: None,
             runtime_stt_settings: RwLock::new(None),
+            runtime_inputs_enabled: AtomicBool::new(true),
             engines,
             processors: Arc::new(ProcessorRegistry::new()),
+            assistant: None,
             audio,
+            before_capture: None,
+            after_capture: None,
             injector,
             focus,
             emitter,
@@ -357,6 +474,31 @@ impl Orchestrator {
 
     pub fn with_secrets(mut self, store: Arc<dyn crate::connection::SecretStore>) -> Self {
         self.secrets = Some(store);
+        self
+    }
+
+    pub fn with_assistant(
+        mut self,
+        handler: Arc<dyn AssistantHandler>,
+        reminders: Arc<ReminderScheduler>,
+    ) -> Self {
+        self.assistant = Some((handler, reminders));
+        self
+    }
+
+    /// 同步准备开麦：壳先停止并确认本机播报，失败时保持麦克风关闭。
+    pub fn with_before_capture(
+        mut self,
+        callback: Arc<dyn Fn() -> Result<(), String> + Send + Sync>,
+    ) -> Self {
+        self.before_capture = Some(callback);
+        self
+    }
+
+    /// 与 before_capture 配对：准备/开麦失败或采集线程完全停止后恰好调用一次。
+    /// 不依赖状态事件，因此 Transcribing、迟到的 UI 事件不会提前放行播报。
+    pub fn with_after_capture(mut self, callback: Arc<dyn Fn() + Send + Sync>) -> Self {
+        self.after_capture = Some(callback);
         self
     }
 
@@ -391,30 +533,121 @@ impl Orchestrator {
         &self.settings
     }
 
+    /// 壳在同步重注册热键与发布配置期间持有，避免配置检查后又有会话入场。
+    /// 活跃会话必须先完成或取消；此方法不等待，不会阻塞 Esc。
+    pub fn try_input_configuration_guard(&self) -> Result<tokio::sync::MutexGuard<'_, ()>, String> {
+        let guard = self
+            .op
+            .try_lock()
+            .map_err(|_| "会话正在切换，请稍后修改热键或交互模式".to_string())?;
+        let mut inner = self.inner.lock().unwrap();
+        if !matches!(
+            inner.state,
+            OrchestratorState::Idle | OrchestratorState::Success | OrchestratorState::Error
+        ) || inner.send_is_running()
+        {
+            return Err("请先完成或取消当前会话，再修改热键或交互模式".into());
+        }
+        Ok(guard)
+    }
+
     /// 桌面壳在 warmup 成功后锁定本轮运行时的 STT 配置。
     pub fn activate_runtime_settings(&self, settings: Settings) {
         *self.runtime_stt_settings.write().unwrap() = Some(settings);
+        self.runtime_inputs_enabled.store(true, Ordering::SeqCst);
     }
 
-    /// 桌面壳停止运行时后解除快照；CLI/测试默认一直是未锁定。
+    /// 桌面停止的第一个同步动作；阻止已经排队的 begin/发送在 cancel 后重新入场。
+    pub fn suspend_runtime_inputs(&self) {
+        self.runtime_inputs_enabled.store(false, Ordering::SeqCst);
+        self.invalidate_hotkey_inputs();
+    }
+
+    pub fn hotkey_input_ticket(&self) -> u64 {
+        self.hotkey_epoch.load(Ordering::SeqCst)
+    }
+
+    pub fn invalidate_hotkey_inputs(&self) {
+        self.hotkey_epoch.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn input_ticket_is_current(&self, ticket: Option<u64>) -> bool {
+        ticket.map_or(true, |ticket| ticket == self.hotkey_input_ticket())
+    }
+
+    /// 桌面壳停止运行时后解除快照并保持入口关闭；CLI/测试默认一直开放。
     pub fn deactivate_runtime_settings(&self) {
+        self.suspend_runtime_inputs();
         *self.runtime_stt_settings.write().unwrap() = None;
     }
 
     // ---------- 热键入口（hotkey 模块调用；ADR-006 单键语义表 + 策略路由） ----------
 
-    /// 当前配置推导的交互策略（每次事件现场组装：settings 热更新即生效，无需失效处理）
+    /// 进行中的会话使用开始时的策略；热更新不偷换一次按住/松开配对的语义。
     fn policy(&self) -> InteractionPolicy {
-        InteractionPolicy::from_settings(&self.settings.read().unwrap())
+        let inner = self.inner.lock().unwrap();
+        if let Some(policy) = inner
+            .session_policy
+            .filter(|_| inner.state != OrchestratorState::Idle)
+        {
+            return policy;
+        }
+        let purpose = inner.purpose;
+        drop(inner);
+        let settings = self.settings.read().unwrap();
+        Self::configured_policy(&settings, purpose)
+    }
+
+    fn configured_policy(settings: &Settings, purpose: SessionPurpose) -> InteractionPolicy {
+        match purpose {
+            SessionPurpose::Dictation => InteractionPolicy::from_settings(settings),
+            SessionPurpose::Assistant => {
+                InteractionPolicy::from_preset(settings.assistant.interaction_mode.into())
+            }
+        }
+    }
+
+    fn hotkey_session_snapshot(&self) -> (OrchestratorState, SessionPurpose, u64) {
+        let inner = self.inner.lock().unwrap();
+        (inner.state, inner.purpose, inner.gen)
     }
 
     /// toggle 触发键（A2 点按事件）按状态路由：
     /// Idle 开始 / Listening 结束（B2；B3 接入后兜底强制结束；solo 连续模式 = 停止会话，
     /// 不发送在途段）/ Preview 确认发送（C2 的主交互，全程不碰鼠标不抢焦点）/ 其余状态中止。
     pub async fn on_hotkey_toggle(&self) {
-        match self.state() {
+        self.on_hotkey_toggle_with_ticket(self.hotkey_input_ticket())
+            .await;
+    }
+
+    pub async fn on_hotkey_toggle_with_ticket(&self, ticket: u64) {
+        self.on_purpose_hotkey_toggle(SessionPurpose::Dictation, ticket)
+            .await;
+    }
+
+    async fn on_purpose_hotkey_toggle(&self, purpose: SessionPurpose, ticket: u64) {
+        if !self.input_ticket_is_current(Some(ticket)) {
+            return;
+        }
+        // 另一用途的热键只能取消旧会话，不结束它、确认它或把结果交给另一条管线。
+        let (state, active_purpose, gen) = self.hotkey_session_snapshot();
+        if self.inner.lock().unwrap().assistant_voice_owner
+            && !matches!(
+                state,
+                OrchestratorState::Idle | OrchestratorState::Success | OrchestratorState::Error
+            )
+        {
+            return;
+        }
+        if state != OrchestratorState::Idle && active_purpose != purpose {
+            self.cancel_inner(Some(ticket), Some(gen)).await;
+            return;
+        }
+        match state {
             OrchestratorState::Idle => {
-                let _ = self.begin().await;
+                let _ = self
+                    .begin_inner(false, purpose, Some(gen), Some(ticket))
+                    .await;
             }
             OrchestratorState::Listening => {
                 // B1（松手结束）策略下不会产生 toggle 事件；B2/B3 均为按下结束
@@ -422,26 +655,30 @@ impl Orchestrator {
                 if self.continuous_session() {
                     // solo：再点按 = 停止会话（发送完成不停机由 schedule_idle 负责；
                     // 这里丢弃在途段——用户的意图是「停」，不是「把这句发出去」）
-                    self.cancel().await;
+                    self.cancel_inner(Some(ticket), Some(gen)).await;
                 } else if policy.end != EndTrigger::HotkeyRelease {
-                    let _ = self.end().await;
+                    let _ = self.end_inner(Some(gen), Some(ticket)).await;
                 }
             }
             OrchestratorState::Preview => {
-                let _ = self.confirm_send().await;
+                let _ = self.confirm_send_inner(Some(ticket), Some(gen)).await;
             }
             // Success / 无文本 Error 的 toast 驻留期：点按 = 立即开始下一句
             // （先 cancel 清理 toast 再 begin，「第一次按没反应」修复）。
             // 带文本的 Error（发送失败待重试）保持只取消，不吞掉重试入口。
             OrchestratorState::Success => {
-                self.cancel().await;
-                let _ = self.begin().await;
+                self.cancel_inner(Some(ticket), Some(gen)).await;
+                let _ = self
+                    .begin_inner(false, purpose, Some(gen + 1), Some(ticket))
+                    .await;
             }
             OrchestratorState::Error if self.inner.lock().unwrap().pending_text.is_none() => {
-                self.cancel().await;
-                let _ = self.begin().await;
+                self.cancel_inner(Some(ticket), Some(gen)).await;
+                let _ = self
+                    .begin_inner(false, purpose, Some(gen + 1), Some(ticket))
+                    .await;
             }
-            _ => self.cancel().await,
+            _ => self.cancel_inner(Some(ticket), Some(gen)).await,
         }
     }
 
@@ -452,25 +689,68 @@ impl Orchestrator {
     /// （0.1.5 用户反馈：注入失败后按热键全部无响应）；Preview 保留确认入口。
     /// 松开在 Listening 态结束（B1）。
     pub async fn on_hotkey_hold(&self, pressed: bool) {
+        self.on_hotkey_hold_with_ticket(pressed, self.hotkey_input_ticket())
+            .await;
+    }
+
+    pub async fn on_hotkey_hold_with_ticket(&self, pressed: bool, ticket: u64) {
+        self.on_purpose_hotkey_hold(SessionPurpose::Dictation, pressed, ticket)
+            .await;
+    }
+
+    async fn on_purpose_hotkey_hold(&self, purpose: SessionPurpose, pressed: bool, ticket: u64) {
+        let _input = self.hold_input.lock().await;
+        if !self.input_ticket_is_current(Some(ticket)) {
+            return;
+        }
+        let (state, active_purpose, gen) = self.hotkey_session_snapshot();
+        if self.inner.lock().unwrap().assistant_voice_owner
+            && !matches!(
+                state,
+                OrchestratorState::Idle | OrchestratorState::Success | OrchestratorState::Error
+            )
+        {
+            return;
+        }
+        if state != OrchestratorState::Idle && active_purpose != purpose {
+            if pressed {
+                self.cancel_inner(Some(ticket), Some(gen)).await;
+            }
+            return;
+        }
         if pressed {
             // 宽限期内再次按下 = 收回「结束」，当前这句继续说（对讲机直觉）
-            self.abort_release_grace();
-            match self.state() {
+            {
+                let mut inner = self.inner.lock().unwrap();
+                if inner.gen != gen || !self.input_ticket_is_current(Some(ticket)) {
+                    return;
+                }
+                if let Some(task) = inner.release_grace_task.take() {
+                    task.abort();
+                }
+            }
+            match state {
                 OrchestratorState::Idle => {
-                    let _ = self.begin().await;
+                    let _ = self
+                        .begin_inner(false, purpose, Some(gen), Some(ticket))
+                        .await;
                 }
                 OrchestratorState::Success => {
-                    self.cancel().await;
-                    let _ = self.begin().await;
+                    self.cancel_inner(Some(ticket), Some(gen)).await;
+                    let _ = self
+                        .begin_inner(false, purpose, Some(gen + 1), Some(ticket))
+                        .await;
                 }
                 OrchestratorState::Error => {
                     if self.inner.lock().unwrap().pending_text.is_some() {
                         // 带文本 Error = 发送失败待重试：按下即重发（confirm_send
                         // 从 Error 态重新进入 Sending）
-                        let _ = self.confirm_send().await;
+                        let _ = self.confirm_send_inner(Some(ticket), Some(gen)).await;
                     } else {
-                        self.cancel().await;
-                        let _ = self.begin().await;
+                        self.cancel_inner(Some(ticket), Some(gen)).await;
+                        let _ = self
+                            .begin_inner(false, purpose, Some(gen + 1), Some(ticket))
+                            .await;
                     }
                 }
                 _ => {}
@@ -480,19 +760,23 @@ impl Orchestrator {
         {
             // 松手 ≠ 立刻结束：进入宽限期继续收音，倒计时到点才 finalize
             // （句尾音素与传输链路上的在途音频不再被切掉，见 DEFAULT_RELEASE_GRACE）
-            self.schedule_release_end();
+            self.schedule_release_end(gen, ticket);
         }
     }
 
     /// 松手宽限期编排：延迟 release_grace 后结束会话；期间 gen/状态变化则作废。
     /// 宽限期内 pump 照常把 PCM 灌进 session——多录的是环境尾音，
     /// 与录音笔模式人类反应延迟天然产生的尾音等效。
-    fn schedule_release_end(&self) {
+    fn schedule_release_end(&self, gen: u64, ticket: u64) {
         // 防御：理论上一句只松手一次，重复松手（双通道事件）以前一个倒计时为准
-        if self.inner.lock().unwrap().release_grace_task.is_some() {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.gen != gen
+            || inner.state != OrchestratorState::Listening
+            || !self.input_ticket_is_current(Some(ticket))
+            || inner.release_grace_task.is_some()
+        {
             return;
         }
-        let gen = self.inner.lock().unwrap().gen;
         let grace = self.release_grace;
         let me_weak = self.me.read().unwrap().clone();
         let handle = tokio::spawn(async move {
@@ -500,18 +784,10 @@ impl Orchestrator {
             let Some(me) = me_weak.as_ref().and_then(|w| w.upgrade()) else {
                 return;
             };
-            {
-                let mut inner = me.inner.lock().unwrap();
-                // 期间取消/重按/状态变迁 → 放弃这次结束（重按已 abort 本任务，
-                // 走到这里即任务有效；gen 防御弱引用复活窗口）
-                if inner.gen != gen || inner.state != OrchestratorState::Listening {
-                    return;
-                }
-                inner.release_grace_task = None;
-            }
-            let _ = me.end().await;
+            // 保留任务句柄直到原子进入 Transcribing，等待 op 期间重按仍可 abort。
+            let _ = me.end_inner(Some(gen), Some(ticket)).await;
         });
-        self.inner.lock().unwrap().release_grace_task = Some(handle);
+        inner.release_grace_task = Some(handle);
     }
 
     /// 收回宽限期（再次按下/取消/停止 runtime 时调用；无待结束任务则无事发生）
@@ -642,25 +918,179 @@ impl Orchestrator {
 
     /// 开始一次「按下到松手」的会话：建 STT session → 开录音 → Listening
     pub async fn begin(&self) -> Result<(), String> {
-        self.begin_inner(false).await
+        self.begin_inner(false, SessionPurpose::Dictation, None, None)
+            .await
+    }
+
+    /// 助手使用同一个音频/STT端口，但用途在开始时固定，识别结果绝不进入游戏注入。
+    pub async fn begin_assistant(&self) -> Result<(), String> {
+        self.begin_inner(false, SessionPurpose::Assistant, None, None)
+            .await
+    }
+
+    /// 独立助手键的点按入口，按助手自己的预设路由。
+    pub async fn on_assistant_hotkey(&self) {
+        self.on_assistant_hotkey_with_ticket(self.hotkey_input_ticket())
+            .await;
+    }
+
+    pub async fn on_assistant_hotkey_with_ticket(&self, ticket: u64) {
+        self.on_purpose_hotkey_toggle(SessionPurpose::Assistant, ticket)
+            .await;
+    }
+
+    /// 对讲机必须由壳传入真实 down/up；松开沿用尾音宽限与重按撤回机制。
+    pub async fn on_assistant_hotkey_hold(&self, pressed: bool) {
+        self.on_assistant_hotkey_hold_with_ticket(pressed, self.hotkey_input_ticket())
+            .await;
+    }
+
+    pub async fn on_assistant_hotkey_hold_with_ticket(&self, pressed: bool, ticket: u64) {
+        self.on_purpose_hotkey_hold(SessionPurpose::Assistant, pressed, ticket)
+            .await;
+    }
+
+    /// 面板语音按钮专用入口。会话 ID 在同一入场临界区内生成和返回，
+    /// 迟到的按钮命令不能接管热键会话，也不能操作下一次录音。
+    pub async fn start_assistant_voice_input(
+        &self,
+        input_ticket: u64,
+    ) -> Result<AssistantVoiceSession, String> {
+        let _op = self.op.lock().await;
+        if !self.input_ticket_is_current(Some(input_ticket)) {
+            return Err("语音输入操作已失效，请重试".into());
+        }
+        let clear_terminal = {
+            let inner = self.inner.lock().unwrap();
+            match inner.state {
+                OrchestratorState::Idle => false,
+                OrchestratorState::Success | OrchestratorState::Error
+                    if inner.purpose == SessionPurpose::Assistant =>
+                {
+                    true
+                }
+                _ => return Err("已有语音会话正在进行，请先结束或取消".into()),
+            }
+        };
+        if clear_terminal {
+            self.cancel_locked();
+        }
+        self.begin_admitted(false, SessionPurpose::Assistant, None, true)?;
+        let session_id = self
+            .inner
+            .lock()
+            .unwrap()
+            .process_case_id
+            .clone()
+            .expect("begin assigned session ID");
+        // begin_admitted 持有 op；配置发布也使用 op，故这里读取与开麦相同的模式。
+        let interaction_mode = self.settings.read().unwrap().assistant.interaction_mode;
+        Ok(AssistantVoiceSession {
+            session_id,
+            interaction_mode,
+        })
+    }
+
+    fn assistant_voice_generation(&self, session_id: &str) -> Option<u64> {
+        let inner = self.inner.lock().unwrap();
+        (inner.assistant_voice_owner
+            && inner.purpose == SessionPurpose::Assistant
+            && inner.process_case_id.as_deref() == Some(session_id))
+        .then_some(inner.gen)
+    }
+
+    pub async fn finish_assistant_voice_input(&self, session_id: &str) -> Result<(), String> {
+        let op = self.op.lock().await;
+        let Some(gen) = self.assistant_voice_generation(session_id) else {
+            return Ok(());
+        };
+        if self.state() != OrchestratorState::Listening {
+            return Ok(());
+        }
+        if self.policy().end == EndTrigger::HotkeyRelease {
+            self.schedule_release_end(gen, self.hotkey_input_ticket());
+            return Ok(());
+        }
+        drop(op);
+        self.end_inner(Some(gen), None).await
+    }
+
+    pub async fn confirm_assistant_voice_input(&self, session_id: &str) -> Result<(), String> {
+        let Some(gen) = self.assistant_voice_generation(session_id) else {
+            return Ok(());
+        };
+        self.confirm_send_inner(None, Some(gen)).await
+    }
+
+    pub async fn cancel_assistant_voice_input(&self, session_id: &str) -> Result<(), String> {
+        let _op = self.op.lock().await;
+        if self.assistant_voice_generation(session_id).is_some() {
+            self.cancel_locked();
+        }
+        Ok(())
     }
 
     /// solo 连续模式逐句续录：与 begin 同路径，但「录制音」提示由壳做区分
     /// （capture_started 事件带 resumed=true，不播录制音效，只保留逐句发送音）。
-    async fn begin_resumed(&self) -> Result<(), String> {
-        self.begin_inner(true).await
+    async fn begin_resumed(&self, purpose: SessionPurpose, gen: u64) -> Result<(), String> {
+        self.begin_inner(true, purpose, Some(gen), None).await
     }
 
-    async fn begin_inner(&self, resumed: bool) -> Result<(), String> {
+    async fn begin_inner(
+        &self,
+        resumed: bool,
+        purpose: SessionPurpose,
+        expected_gen: Option<u64>,
+        input_ticket: Option<u64>,
+    ) -> Result<(), String> {
         let _op = self.op.lock().await;
+        if !self.input_ticket_is_current(input_ticket) {
+            return Ok(());
+        }
+        self.begin_admitted(resumed, purpose, expected_gen, false)
+    }
+
+    /// 调用方持有 op；所有来源共享录音入场和失败收尾，owner 只限制操作权限。
+    fn begin_admitted(
+        &self,
+        resumed: bool,
+        purpose: SessionPurpose,
+        expected_gen: Option<u64>,
+        assistant_voice_owner: bool,
+    ) -> Result<(), String> {
+        if !self.runtime_inputs_enabled.load(Ordering::SeqCst) {
+            return Err("运行时已停止，不能开始新会话".into());
+        }
+        let settings = self.settings.read().unwrap().clone();
+        let policy = Self::configured_policy(&settings, purpose);
         {
             let mut inner = self.inner.lock().unwrap();
+            if expected_gen.is_some_and(|gen| inner.gen != gen) {
+                return Ok(());
+            }
             if inner.state != OrchestratorState::Idle {
                 return Err(format!("当前状态 {:?} 不能开始新会话", inner.state));
             }
-            inner.process_case_id = Some(format!("session-{}", crate::eval::new_session_id()));
+            if inner.send_is_running() {
+                return Err(SEND_STILL_RUNNING.into());
+            }
+            if resumed && !policy.continuous {
+                // 本段沿用旧策略完成，下一段若已改成按键触发则等待真实按键。
+                // 不能因旧段的 continuous=true 自动开启新的对讲机会话。
+                inner.continuous_session = false;
+                drop(inner);
+                self.emit_state(OrchestratorState::Idle, None);
+                return Ok(());
+            }
+            inner.purpose = purpose;
+            inner.process_case_id = Some(format!(
+                "session-{}-{}",
+                crate::eval::new_session_id(),
+                NEXT_PROCESS_SESSION_ID.fetch_add(1, Ordering::Relaxed),
+            ));
+            inner.assistant_voice_owner = assistant_voice_owner;
         }
-        match self.begin_locked(resumed) {
+        match self.begin_locked(resumed, purpose, settings, policy) {
             Ok(()) => Ok(()),
             Err(e) => {
                 // 开始失败（如引擎/麦克风未就绪）：Error 保持到用户关闭或重试
@@ -674,8 +1104,19 @@ impl Orchestrator {
         }
     }
 
-    fn begin_locked(&self, resumed: bool) -> Result<(), SessionBeginError> {
-        let settings = self.settings.read().unwrap().clone();
+    fn begin_locked(
+        &self,
+        resumed: bool,
+        purpose: SessionPurpose,
+        settings: Settings,
+        policy: InteractionPolicy,
+    ) -> Result<(), SessionBeginError> {
+        if purpose == SessionPurpose::Assistant && self.assistant.is_none() {
+            return Err(SessionBeginError::new(
+                "ASSISTANT_NOT_CONFIGURED",
+                "助手尚未配置，请先设置助手连接",
+            ));
+        }
         let stt_settings = self
             .runtime_stt_settings
             .read()
@@ -712,6 +1153,18 @@ impl Orchestrator {
             .start_session(&cfg, stt_tx)
             .map_err(|error| SessionBeginError::new("STT_SESSION_START_FAILED", error))?;
 
+        let capture_completion = CaptureCompletion(self.after_capture.clone());
+        if let Some(before_capture) = &self.before_capture {
+            if let Err(error) = before_capture() {
+                let mut session = session;
+                session.cancel();
+                return Err(SessionBeginError::new(
+                    "AUDIO_CAPTURE_PREPARATION_FAILED",
+                    error,
+                ));
+            }
+        }
+
         // 开录音失败要有清晰错误；已建的 session 取消掉
         let mut handle = match self.audio.start(&settings.audio_device_id) {
             Ok(h) => h,
@@ -734,7 +1187,8 @@ impl Orchestrator {
         // history 音频使用自己的 PCM 缓冲，与评测录档完全解耦。
         // process case id 在 begin 入口生成；history/eval 开启时复用同一 id，
         // 便于诊断包里的 events.csv 与 history/eval 互查。
-        let history_on = settings.history.mode != crate::history::HistoryMode::Off;
+        let history_on = purpose == SessionPurpose::Dictation
+            && settings.history.mode != crate::history::HistoryMode::Off;
         let process_case_id = self
             .inner
             .lock()
@@ -743,10 +1197,11 @@ impl Orchestrator {
             .clone()
             .unwrap_or_else(|| format!("session-{}", crate::eval::new_session_id()));
         let session_id = history_on.then(|| process_case_id.clone());
-        let recorder = settings.eval_recording.then(|| {
-            let dir = self.eval_dir.clone().unwrap_or_else(crate::eval::eval_dir);
-            crate::eval::SessionRecorder::new_with_id(dir, &engine_id, process_case_id.clone())
-        });
+        let recorder =
+            (purpose == SessionPurpose::Dictation && settings.eval_recording).then(|| {
+                let dir = self.eval_dir.clone().unwrap_or_else(crate::eval::eval_dir);
+                crate::eval::SessionRecorder::new_with_id(dir, &engine_id, process_case_id.clone())
+            });
         let history_draft = session_id.map(|sid| {
             Arc::new(Mutex::new(HistoryDraft {
                 session_id: sid,
@@ -770,7 +1225,6 @@ impl Orchestrator {
         // B3（VAD 静音判停，ADR-007）：初始化失败不能让整个输入模式失效。
         // 降级后本轮按普通 toggle 会话运行：再次按热键即可结束并发送；solo
         // 暂停自动续段，避免第二次热键按原语义把在途音频直接丢弃。
-        let policy = self.policy();
         let use_vad = policy.end == EndTrigger::VadSilence;
         let (vad_state, vad_warning_code) = if use_vad {
             match self.vad_factory.as_ref() {
@@ -829,6 +1283,8 @@ impl Orchestrator {
         // 与 chunk 边界无关，每切出一帧 +VAD_FRAME_SAMPLES）
         let mut vad_frame_pos = 0usize;
         let me_weak = self.me.read().unwrap().clone();
+        // begin 持有 op；所有异步结束回调必须携带本次即将发布的会话代际。
+        let capture_gen = self.inner.lock().unwrap().gen + 1;
         let pump = tokio::spawn(async move {
             let mut session = session;
             let mut stop_rx = stop_rx;
@@ -969,7 +1425,7 @@ impl Orchestrator {
                                                     me.emit_state(
                                                         OrchestratorState::Listening,
                                                         Some(json!({
-                                                            "warning": VAD_FALLBACK_WARNING,
+                                                            "warning": me.vad_fallback_warning(),
                                                             "manualStop": true,
                                                             "preserveText": true
                                                         })),
@@ -997,7 +1453,7 @@ impl Orchestrator {
                                             me_weak.as_ref().and_then(|w| w.upgrade())
                                         {
                                             tokio::spawn(async move {
-                                                let _ = me.end().await;
+                                                let _ = me.end_inner(Some(capture_gen), None).await;
                                             });
                                         }
                                         // 立刻交出 session：end() 正在等 session_rx
@@ -1095,6 +1551,7 @@ impl Orchestrator {
         let mut inner = self.inner.lock().unwrap();
         inner.gen += 1;
         inner.state = OrchestratorState::Listening;
+        inner.session_policy = Some(policy);
         inner.pending_text = None;
         inner.processing_cancel = None;
         // 目标窗口记忆：用户按下热键说话前所在的前台窗口 = 注入目标，
@@ -1104,10 +1561,14 @@ impl Orchestrator {
         inner.continuous_session =
             continuous_session && vad_inference_status.load(Ordering::SeqCst) == 0;
         inner.active = Some(ActiveSession {
+            purpose,
             stop_tx: Some(stop_tx),
             session_rx: Some(session_rx),
             cancelled_flag,
-            guard: Some(handle),
+            guard: Some(CaptureGuard {
+                audio: Some(handle),
+                _completion: capture_completion,
+            }),
             pump,
             level_task,
             recorder,
@@ -1115,7 +1576,7 @@ impl Orchestrator {
         drop(inner);
         let listening_payload = vad_warning_code.map(|_| {
             json!({
-                "warning": VAD_FALLBACK_WARNING,
+                "warning": self.vad_fallback_warning(),
                 "manualStop": true
             })
         });
@@ -1148,7 +1609,7 @@ impl Orchestrator {
                 self.emit_state(
                     OrchestratorState::Listening,
                     Some(json!({
-                        "warning": VAD_FALLBACK_WARNING,
+                        "warning": self.vad_fallback_warning(),
                         "manualStop": true,
                         "preserveText": true
                     })),
@@ -1209,6 +1670,7 @@ impl Orchestrator {
                 None,
                 &[OrchestratorState::Idle],
                 true,
+                None,
             )
             .await
         {
@@ -1218,9 +1680,24 @@ impl Orchestrator {
 
     /// 结束会话：finalize → autoSend 分流（§6 发送时序上半段）
     pub async fn end(&self) -> Result<(), String> {
+        self.end_inner(None, None).await
+    }
+
+    /// 自动结束的代际校验与 Listening -> Transcribing 必须在同一 op 临界区。
+    async fn end_inner(
+        &self,
+        expected_gen: Option<u64>,
+        input_ticket: Option<u64>,
+    ) -> Result<(), String> {
         let (gen, mut active) = {
             let _op = self.op.lock().await;
+            if !self.input_ticket_is_current(input_ticket) {
+                return Ok(());
+            }
             let mut inner = self.inner.lock().unwrap();
+            if expected_gen.is_some_and(|gen| inner.gen != gen) {
+                return Ok(());
+            }
             if inner.state != OrchestratorState::Listening {
                 return Err(format!("当前状态 {:?} 不能结束会话", inner.state));
             }
@@ -1230,6 +1707,8 @@ impl Orchestrator {
                 .take()
                 .ok_or_else(|| "会话句柄缺失（内部错误）".to_string())?;
             inner.state = OrchestratorState::Transcribing;
+            // 当前任务可能就是宽限任务；取走句柄不 abort，避免中途丢掉 finalize。
+            inner.release_grace_task = None;
             let gen = inner.gen;
             drop(inner);
             self.emit_state(OrchestratorState::Transcribing, None);
@@ -1317,7 +1796,7 @@ impl Orchestrator {
                         self.emit_state(OrchestratorState::Idle, None);
                         // solo 连续模式：立即开下一段（同 schedule_idle 的 continuous 处理；
                         // begin 失败走自身 toast_error 收尾；续录不重复播「录制音」
-                        let _ = self.begin_resumed().await;
+                        let _ = self.begin_resumed(active.purpose, gen).await;
                     } else {
                         self.emit_state(
                             OrchestratorState::Error,
@@ -1328,6 +1807,37 @@ impl Orchestrator {
                         );
                     }
                     return Ok(());
+                }
+                if active.purpose == SessionPurpose::Assistant {
+                    let received_at_ms = crate::reminders::now_ms();
+                    let request = {
+                        let _op = self.op.lock().await;
+                        let mut inner = self.inner.lock().unwrap();
+                        if inner.gen != gen || inner.state != OrchestratorState::Transcribing {
+                            return Ok(());
+                        }
+                        let request = AssistantRequest {
+                            session_id: inner.process_case_id.clone().unwrap_or_default(),
+                            text: t.text,
+                            received_at_ms,
+                        };
+                        if inner
+                            .session_policy
+                            .is_some_and(|policy| policy.post == PostFinalize::PreviewConfirm)
+                        {
+                            let text = request.text.clone();
+                            inner.pending_text = Some(PendingText::Assistant(request));
+                            inner.state = OrchestratorState::Preview;
+                            drop(inner);
+                            self.emit_state(
+                                OrchestratorState::Preview,
+                                Some(json!({ "text": text })),
+                            );
+                            return Ok(());
+                        }
+                        request
+                    };
+                    return self.run_assistant(gen, request).await;
                 }
                 self.emit_process(
                     "transcript_ready",
@@ -1378,6 +1888,90 @@ impl Orchestrator {
     pub fn with_processors(mut self, processors: Arc<ProcessorRegistry>) -> Self {
         self.processors = processors;
         self
+    }
+
+    async fn run_assistant(&self, gen: u64, request: AssistantRequest) -> Result<(), String> {
+        let Some((handler, reminders)) = &self.assistant else {
+            self.fail(gen, "助手尚未配置", None);
+            return Err("助手尚未配置".into());
+        };
+        let received_at_ms = request.received_at_ms;
+        let text = request.text.clone();
+        let session_id = request.session_id.clone();
+        let cancel = crate::cancel::CancellationToken::default();
+        {
+            let _op = self.op.lock().await;
+            let mut inner = self.inner.lock().unwrap();
+            if inner.gen != gen || inner.state != OrchestratorState::Transcribing {
+                return Ok(());
+            }
+            inner.state = OrchestratorState::Processing;
+            inner.processing_cancel = Some(cancel.clone());
+        }
+        self.emit_state(
+            OrchestratorState::Processing,
+            Some(json!({
+                "purpose": "assistant", "text": text, "displayName": "正在理解提醒请求"
+            })),
+        );
+        let result = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Ok(()),
+            result = tokio::time::timeout(Duration::from_secs(45), handler.handle(request, cancel.clone())) => {
+                match result {
+                    Ok(result) => result,
+                    Err(_) => { cancel.cancel(); Err("助手请求超时，请稍后重试".into()) }
+                }
+            },
+        };
+        // 提交与取消共用 op 临界区；即使处理器忽略取消并迟到返回，也不能写入提醒。
+        let _op = self.op.lock().await;
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.gen != gen || inner.state != OrchestratorState::Processing {
+                return Ok(());
+            }
+            inner.processing_cancel = None;
+        }
+        let plan = match result {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.fail(gen, &error, None);
+                return Err(error);
+            }
+        };
+        let Some(scheduled) = cancel.run_if_active(|| {
+            reminders.schedule_batch(&session_id, received_at_ms, &plan.reminders)
+        }) else {
+            return Ok(());
+        };
+        let scheduled = match scheduled {
+            Ok(scheduled) => scheduled,
+            Err(error) => {
+                self.fail(gen, &error, None);
+                return Err(error);
+            }
+        };
+        let message = if !plan.message.trim().is_empty() {
+            plan.message.trim().chars().take(300).collect::<String>()
+        } else if scheduled.is_empty() {
+            "没有创建提醒，请说明提醒时间和内容".into()
+        } else {
+            format!("已设置 {} 条提醒", scheduled.len())
+        };
+        self.inner.lock().unwrap().state = OrchestratorState::Success;
+        self.emitter.emit(
+            "kotone://assistant",
+            json!({
+                "sessionId": session_id, "text": text, "message": message, "reminders": scheduled,
+            }),
+        );
+        self.emit_state(
+            OrchestratorState::Success,
+            Some(json!({ "purpose": "assistant", "text": message })),
+        );
+        self.schedule_idle(gen);
+        Ok(())
     }
 
     fn snapshot_recognized_text(&self, source_text: String) -> RecognizedText {
@@ -1577,6 +2171,7 @@ impl Orchestrator {
                             OrchestratorState::Processing,
                         ],
                         false,
+                        None,
                     )
                     .await?
                 {
@@ -1609,9 +2204,47 @@ impl Orchestrator {
     /// 重新进入 Sending 实现重试（docs/development.md §4.1「Error 保留文本可重试」）。
     /// ADR-006 预览只读化：不再接受编辑文本，一律发送已定的 ReadyText。
     pub async fn confirm_send(&self) -> Result<(), String> {
+        self.confirm_send_inner(None, None).await
+    }
+
+    async fn confirm_send_inner(
+        &self,
+        input_ticket: Option<u64>,
+        expected_gen: Option<u64>,
+    ) -> Result<(), String> {
+        let (assistant_preview, confirmation_gen) = {
+            let _op = self.op.lock().await;
+            if !self.input_ticket_is_current(input_ticket) {
+                return Ok(());
+            }
+            let mut inner = self.inner.lock().unwrap();
+            if expected_gen.is_some_and(|gen| inner.gen != gen) {
+                return Ok(());
+            }
+            let gen = inner.gen;
+            let preview = if inner.purpose == SessionPurpose::Assistant {
+                if !self.runtime_inputs_enabled.load(Ordering::SeqCst) {
+                    return Err("运行时已停止，不能提交助手请求".into());
+                }
+                if inner.state != OrchestratorState::Preview {
+                    return Err("当前没有待确认的助手请求".into());
+                }
+                let Some(PendingText::Assistant(request)) = inner.pending_text.take() else {
+                    return Err("待确认的助手请求已失效".into());
+                };
+                inner.state = OrchestratorState::Transcribing;
+                Some((inner.gen, request))
+            } else {
+                None
+            };
+            (preview, gen)
+        };
+        if let Some((gen, request)) = assistant_preview {
+            return self.run_assistant(gen, request).await;
+        }
         let retry_processing = {
             let inner = self.inner.lock().unwrap();
-            if inner.state == OrchestratorState::Error {
+            if inner.gen == confirmation_gen && inner.state == OrchestratorState::Error {
                 inner
                     .pending_text
                     .as_ref()
@@ -1631,9 +2264,10 @@ impl Orchestrator {
         let claim = self
             .claim_send(
                 None,
-                None,
+                Some(confirmation_gen),
                 &[OrchestratorState::Preview, OrchestratorState::Error],
                 false,
+                input_ticket,
             )
             .await?
             .ok_or_else(|| "待发送内容已失效".to_string())?;
@@ -1663,8 +2297,8 @@ impl Orchestrator {
             gen = inner.gen;
             let mut active = inner.active.take();
             inner.pending_text = None;
-            if let Some(token) = inner.send_cancel.take() {
-                token.cancel();
+            if let Some(operation) = &inner.send_operation {
+                operation.cancel();
             }
             if let Some(token) = inner.processing_cancel.take() {
                 token.cancel();
@@ -1695,18 +2329,36 @@ impl Orchestrator {
 
     /// 任意状态取消：回到 Idle（session cancel；发送中置取消令牌）
     pub async fn cancel(&self) {
+        self.cancel_inner(None, None).await;
+    }
+
+    async fn cancel_inner(&self, input_ticket: Option<u64>, expected_gen: Option<u64>) {
+        let _op = self.op.lock().await;
+        if !self.input_ticket_is_current(input_ticket) {
+            return;
+        }
+        if expected_gen.is_some_and(|gen| self.inner.lock().unwrap().gen != gen) {
+            return;
+        }
+        self.cancel_locked();
+    }
+
+    /// 调用方持有 op；按钮取消在核验归属后同一临界区内立即取消 AI。
+    fn cancel_locked(&self) {
         // 宽限期倒计时一并收回（Esc / 停止 runtime / 状态变迁兜底）
         self.abort_release_grace();
-        let _op = self.op.lock().await;
         let mut inner = self.inner.lock().unwrap();
+        inner.assistant_voice_owner = false;
         if inner.state == OrchestratorState::Idle {
+            // 逐句模式两段之间的 Idle 窗口也必须撤销尚未入场的续录。
+            inner.gen += 1;
             return;
         }
         inner.gen += 1;
         let mut active = inner.active.take();
         inner.pending_text = None;
-        if let Some(token) = inner.send_cancel.take() {
-            token.cancel();
+        if let Some(operation) = &inner.send_operation {
+            operation.cancel();
         }
         if let Some(token) = inner.processing_cancel.take() {
             token.cancel();
@@ -1740,8 +2392,15 @@ impl Orchestrator {
         expected_gen: Option<u64>,
         expected_states: &[OrchestratorState],
         clear_target: bool,
+        input_ticket: Option<u64>,
     ) -> Result<Option<SendClaim>, String> {
         let _op = self.op.lock().await;
+        if !self.input_ticket_is_current(input_ticket) {
+            return Ok(None);
+        }
+        if !self.runtime_inputs_enabled.load(Ordering::SeqCst) {
+            return Err("运行时已停止，不能发送".into());
+        }
         let claim = {
             let mut inner = self.inner.lock().unwrap();
             if expected_gen.is_some_and(|gen| inner.gen != gen) {
@@ -1749,6 +2408,16 @@ impl Orchestrator {
             }
             if !expected_states.contains(&inner.state) {
                 return Err(format!("当前状态 {:?} 不能发送", inner.state));
+            }
+            if clear_target && inner.state == OrchestratorState::Idle {
+                // 历史重发是显式的听写操作，不沿用上一次助手会话的用途。
+                inner.purpose = SessionPurpose::Dictation;
+                inner.session_policy = None;
+            } else if inner.purpose == SessionPurpose::Assistant {
+                return Err("助手请求不能进入游戏发送管线".into());
+            }
+            if inner.send_is_running() {
+                return Err(SEND_STILL_RUNNING.into());
             }
             let ready = match ready {
                 Some(ready) => ready,
@@ -1762,14 +2431,14 @@ impl Orchestrator {
             if clear_target {
                 inner.target_window = None;
             }
-            debug_assert!(inner.send_cancel.is_none());
-            let token = CancelToken::default();
+            let (operation, completion) = SendOperation::new();
             inner.state = OrchestratorState::Sending;
-            inner.send_cancel = Some(token.clone());
+            inner.send_operation = Some(operation.clone());
             SendClaim {
                 ready,
                 gen: inner.gen,
-                token,
+                operation,
+                completion,
                 target: inner.target_window,
                 channel: inner.channel.clone(),
             }
@@ -1781,15 +2450,21 @@ impl Orchestrator {
         Ok(Some(claim))
     }
 
-    async fn wait_for_modifiers_up(&self) -> Result<(), InjectError> {
+    async fn wait_for_modifiers_up(&self, token: &CancelToken) -> Result<(), InjectError> {
         const MAX_WAIT: Duration = Duration::from_millis(1000);
         const POLL: Duration = Duration::from_millis(10);
         let started = std::time::Instant::now();
+        if token.is_cancelled() {
+            return Err(InjectError::new("发送已取消"));
+        }
         if !self.focus.modifier_keys_down() {
             return Ok(());
         }
         crate::log::log("inject: waiting for Ctrl/Alt/Shift/Win to release");
         loop {
+            if token.is_cancelled() {
+                return Err(InjectError::new("发送已取消"));
+            }
             if !self.focus.modifier_keys_down() {
                 crate::process_log::record_activity(
                     "inject_wait_modifiers",
@@ -1821,16 +2496,81 @@ impl Orchestrator {
         }
     }
 
+    /// 焦点恢复和输入注入共享同一个阻塞任务/完成凭据，超时也不能另开并行任务。
+    async fn execute_send(
+        &self,
+        completion: SendCompletion,
+        token: CancelToken,
+        target: Option<TargetWindow>,
+        text: String,
+        profile: GameProfile,
+    ) -> Result<(), InjectError> {
+        let injector = self.injector.clone();
+        let focus = self.focus.clone();
+        let restore_delay = self.focus_restore_delay;
+        let worker_token = token.clone();
+        let mut task = tokio::task::spawn_blocking(move || {
+            let _completion = completion;
+            if worker_token.is_cancelled() {
+                return Err(InjectError::new("发送已取消"));
+            }
+            // 检查放在阻塞线程内，覆盖任务排队期间的取消。已经进入的系统调用
+            // 无法强制中断；完成凭据会一直保留到它返回，阻止后续发送与之重叠。
+            if let Some(target) = target {
+                if focus.restore(target) && restore_delay > Duration::ZERO {
+                    std::thread::sleep(restore_delay);
+                }
+            }
+            if worker_token.is_cancelled() {
+                return Err(InjectError::new("发送已取消"));
+            }
+            let fg_before = focus.foreground_process_name();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let fg_after = focus.foreground_process_name();
+                crate::log::log(&format!(
+                    "inject focus probe: before={} after500ms={}",
+                    fg_before.as_deref().unwrap_or("(none)"),
+                    fg_after.as_deref().unwrap_or("(none)")
+                ));
+            });
+            injector.send(&text, &profile, worker_token)
+        });
+        match tokio::time::timeout(self.inject_timeout, &mut task).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(InjectError::new("发送线程异常")),
+            Err(_) => {
+                token.cancel();
+                // 保留并观察 JoinHandle；状态可返回 Error，但发送权由工作线程的
+                // SendCompletion 持有，不能靠重启 runtime 绕过仍未结束的系统调用。
+                tokio::spawn(async move {
+                    if let Err(error) = task.await {
+                        crate::log::log(&format!(
+                            "timed-out send worker ended abnormally: {error}"
+                        ));
+                    }
+                });
+                Err(InjectError::new(format!(
+                    "发送超时（{}s），已请求取消。目标窗口可能已有部分输入，请先检查；\
+                     上一次发送结束前无法重试，若持续无响应，请退出并重新打开应用",
+                    self.inject_timeout.as_secs()
+                )))
+            }
+        }
+    }
+
     /// Sending → Success/Error（§6 发送时序下半段；inject 实现负责按键细节）。
     /// 仅接受 `claim_send` 产生的已占用发送任务，不再改写状态或取消令牌。
     async fn run_send(&self, claim: SendClaim) {
         let SendClaim {
             ready,
             gen,
-            token,
+            operation,
+            completion,
             target,
             channel,
         } = claim;
+        let token = operation.0.cancel.clone();
         let ReadyText { source_text, text } = ready;
         let injection_started_at = std::time::Instant::now();
         self.emit_process(
@@ -1860,77 +2600,33 @@ impl Orchestrator {
 
         // Alt+F6 等组合热键在主键 down 时就触发；修饰键从不吞键，此时 Alt
         // 仍按着。立刻开框/打字会变成 Alt+Enter，游戏里看不到消息，注入却成功。
-        if let Err(error) = self.wait_for_modifiers_up().await {
-            self.emit_process(
-                "injection_failed",
-                json!({
-                    "outcome": "error",
-                    "errorCode": "MODIFIERS_STILL_DOWN",
-                    "durationMs": injection_started_at.elapsed().as_millis() as u64
-                }),
-            );
-            self.fail(gen, &error.message, Some(text.clone()));
-            return;
-        }
-
-        // 焦点恢复：preview 交互（点击悬浮条/热键确认）可能已把焦点带离目标窗口，
-        // 先把焦点还给 begin 时记录的注入目标，再交由注入器注入。
-        // 恢复失败（窗口已关闭）不致命：前台守卫已移除，仍直发当前前台窗口。
-        if let Some(t) = target {
-            let focus = self.focus.clone();
-            let restored = tokio::task::spawn_blocking(move || focus.restore(t))
-                .await
-                .unwrap_or(false);
-            if restored && self.focus_restore_delay > Duration::ZERO {
-                tokio::time::sleep(self.focus_restore_delay).await;
+        let modifier_result = self.wait_for_modifiers_up(&token).await;
+        let modifiers_failed = modifier_result.is_err() && !token.is_cancelled();
+        let result = match modifier_result {
+            Err(error) => {
+                // 准备阶段也走下面唯一的发送收尾出口，清理操作权并保留 ReadyText。
+                drop(completion);
+                Err(error)
             }
-        }
-
-        // 注入前后前台进程对照（诊断「发送后游戏失焦」；纯观测，不改窗口状态）：
-        // before 在注入前一刻采集，after 延迟 500ms 采集（等安全软件重放/失焦发生）。
-        // 两者一致说明注入未扰动焦点；after 变为桌面/其他进程即可定位失焦瞬间。
-        let fg_before = self.focus.foreground_process_name();
-        let focus = self.focus.clone();
-        tokio::task::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            let fg_after = focus.foreground_process_name();
-            crate::log::log(&format!(
-                "inject focus probe: before={} after500ms={}",
-                fg_before.as_deref().unwrap_or("(none)"),
-                fg_after.as_deref().unwrap_or("(none)")
-            ));
-        });
-
-        // 注入超时保护（P0，用户反馈「SendInput 被拦截后卡死」）：SendInput 被
-        // 安全软件/反作弊钩住时可能不返回（挂起而非立即 0/N 失败），无超时则
-        // 状态机永久卡 Sending、cancel 无法打断阻塞线程。超时后状态机回 Error
-        // 态（保留文本可重试）；阻塞线程理论上无法回收，靠重启 runtime 清理。
-        let injector = self.injector.clone();
-        let send_task =
-            tokio::task::spawn_blocking(move || injector.send(&wire_text, &wire_profile, token));
-        let result = match tokio::time::timeout(self.inject_timeout, send_task).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(_)) => Err(InjectError::new("发送线程异常".to_string())),
-            Err(_) => {
-                crate::log::log(&format!(
-                    "inject send timeout after {}s (SendInput 可能被拦截挂起)",
-                    self.inject_timeout.as_secs()
-                ));
-                Err(InjectError::new(format!(
-                    "发送超时（{}s）：模拟输入未在限时内完成，通常是被安全软件或游戏反作弊拦截。\
-                     可点击重试，或重启引擎后再次尝试",
-                    self.inject_timeout.as_secs()
-                )))
+            Ok(()) => {
+                self.execute_send(completion, token, target, wire_text, wire_profile)
+                    .await
             }
         };
 
         let (history_write, resume_continuous) = {
             let _op = self.op.lock().await;
             let mut inner = self.inner.lock().unwrap();
+            if inner
+                .send_operation
+                .as_ref()
+                .is_some_and(|current| current.same_operation(&operation) && current.is_finished())
+            {
+                inner.send_operation = None;
+            }
             if inner.gen != gen || inner.state != OrchestratorState::Sending {
                 return;
             }
-            inner.send_cancel = None;
             // history 终态（锁外落账，见下方 write_history 调用；两个分支各自产出
             // (outcome, 错误信息, 是否持续续录)，直接用 match 表达式——新 clippy
             // `unneeded late initialization` 会拒绝「先声明再在两个分支赋值」的写法。
@@ -1975,7 +2671,9 @@ impl Orchestrator {
                         "injection_failed",
                         json!({
                             "outcome": "error",
-                            "errorCode": if e.input_blocked {
+                            "errorCode": if modifiers_failed {
+                                "MODIFIERS_STILL_DOWN"
+                            } else if e.input_blocked {
                                 "INJECTION_BLOCKED"
                             } else if e.needs_elevation {
                                 "INJECTION_ELEVATION_REQUIRED"
@@ -1996,7 +2694,7 @@ impl Orchestrator {
         if resume_continuous {
             // solo 不显示 Success toast，也不等待 toast_dwell：发送落账后立即开始下一段。
             // 续录不重复播「录制音」（capture_started resumed=true）。
-            let _ = self.begin_resumed().await;
+            let _ = self.begin_resumed(SessionPurpose::Dictation, gen).await;
         } else {
             self.schedule_idle(gen);
         }
@@ -2043,7 +2741,7 @@ impl Orchestrator {
     }
 
     /// history 终态落账：取草稿快照 → 组记录 → 追加到 history.jsonl。
-    /// - mode=off / 无草稿（begin 失败等）→ 直接返回（off 零开销在 begin 已保证，这里兜底热更新）；
+    /// - mode=off / 无草稿 → 不落盘；已结束的会话仍终结草稿，避免重新启用后补写旧记录；
     /// - error：落账但保留草稿（Error 态可重试，重试成功同 sessionId 再写一条 sent，
     ///   两条记录是刻意的「失败→重试成功」叙事）；
     /// - cancelled：草稿已被 error 落账过则跳过（Error 后的 Esc 是清理动作，不双记）；
@@ -2056,6 +2754,18 @@ impl Orchestrator {
         };
         let cfg = self.settings.read().unwrap().history.clone();
         if cfg.mode == crate::history::HistoryMode::Off {
+            if outcome != crate::history::HistoryOutcome::Error {
+                // Off 只禁止持久化，不延长已取消/发送会话的草稿生命周期。
+                // Error 仍保留草稿，允许同一次听写失败后重试。
+                let mut inner = self.inner.lock().unwrap();
+                if inner
+                    .history
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &draft))
+                {
+                    inner.history = None;
+                }
+            }
             return;
         }
         let record = {
@@ -2190,8 +2900,41 @@ impl Orchestrator {
         });
     }
 
-    fn emit_state(&self, state: OrchestratorState, payload: Option<serde_json::Value>) {
-        let case_id = self.inner.lock().unwrap().process_case_id.clone();
+    fn vad_fallback_warning(&self) -> &'static str {
+        if self.inner.lock().unwrap().assistant_voice_owner {
+            "自动静音检测暂时不可用；请点击语音按钮结束并提交本次请求"
+        } else {
+            VAD_FALLBACK_WARNING
+        }
+    }
+
+    fn emit_state(&self, state: OrchestratorState, mut payload: Option<serde_json::Value>) {
+        let (case_id, purpose, button_owned) = {
+            let inner = self.inner.lock().unwrap();
+            (
+                inner.process_case_id.clone(),
+                inner.purpose,
+                inner.assistant_voice_owner,
+            )
+        };
+        if state != OrchestratorState::Idle {
+            let data = payload.get_or_insert_with(|| json!({}));
+            if let Some(data) = data.as_object_mut() {
+                data.insert(
+                    "purpose".into(),
+                    json!(match purpose {
+                        SessionPurpose::Assistant => "assistant",
+                        SessionPurpose::Dictation => "dictation",
+                    }),
+                );
+                if purpose == SessionPurpose::Assistant {
+                    data.insert(
+                        "inputSource".into(),
+                        json!(if button_owned { "button" } else { "hotkey" }),
+                    );
+                }
+            }
+        }
         self.emitter.emit(
             "kotone://state",
             json!({ "state": state, "payload": payload, "caseId": case_id }),
@@ -2316,6 +3059,146 @@ fn enrich_remote_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct NoopPorts;
+
+    impl AudioBackend for NoopPorts {
+        fn start(&self, _: &str) -> Result<crate::audio::AudioHandle, String> {
+            Err("audio must not open in an admission test".into())
+        }
+    }
+
+    impl FocusBackend for NoopPorts {
+        fn foreground_window(&self) -> Option<TargetWindow> {
+            None
+        }
+        fn restore(&self, _: TargetWindow) -> bool {
+            false
+        }
+    }
+
+    impl Emitter for NoopPorts {
+        fn emit(&self, _: &str, _: serde_json::Value) {}
+    }
+
+    fn admission_test_orchestrator() -> Arc<Orchestrator> {
+        let mut orch = Orchestrator::new(
+            Arc::new(RwLock::new(Settings::default())),
+            Arc::new(EngineRegistry::new()),
+            Arc::new(NoopPorts),
+            Arc::new(crate::inject::StubInjector),
+            Arc::new(NoopPorts),
+            Arc::new(NoopPorts),
+        );
+        orch.release_grace = Duration::from_millis(1);
+        orch.into_arc()
+    }
+
+    #[tokio::test]
+    async fn automatic_end_rechecks_generation_after_waiting_for_state_lock() {
+        let orch = admission_test_orchestrator();
+        {
+            let mut inner = orch.inner.lock().unwrap();
+            inner.gen = 4;
+            inner.state = OrchestratorState::Listening;
+        }
+        let guard = orch.op.lock().await;
+        let old = orch.clone();
+        let ending = tokio::spawn(async move { old.end_inner(Some(4), None).await });
+        tokio::task::yield_now().await;
+        assert!(!ending.is_finished());
+        // Model cancel + a new capture winning the lock before an old VAD/release callback.
+        {
+            let mut inner = orch.inner.lock().unwrap();
+            inner.gen = 6;
+            inner.purpose = SessionPurpose::Assistant;
+        }
+        drop(guard);
+        ending.await.unwrap().unwrap();
+        assert_eq!(orch.state(), OrchestratorState::Listening);
+        assert_eq!(orch.inner.lock().unwrap().gen, 6);
+    }
+
+    #[tokio::test]
+    async fn expired_release_timer_remains_abortable_while_waiting_for_state_lock() {
+        let orch = admission_test_orchestrator();
+        orch.inner.lock().unwrap().state = OrchestratorState::Listening;
+        let guard = orch.op.lock().await;
+        orch.schedule_release_end(0, orch.hotkey_input_ticket());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(orch.inner.lock().unwrap().release_grace_task.is_some());
+        orch.abort_release_grace();
+        drop(guard);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(orch.state(), OrchestratorState::Listening);
+    }
+
+    #[tokio::test]
+    async fn queued_old_hotkey_actions_cannot_end_cancel_or_confirm_a_new_session() {
+        for action in 0..3 {
+            let orch = admission_test_orchestrator();
+            {
+                let mut inner = orch.inner.lock().unwrap();
+                inner.gen = 4;
+                inner.state = OrchestratorState::Preview;
+            }
+            let ticket = orch.hotkey_input_ticket();
+            let guard = orch.op.lock().await;
+            let old = orch.clone();
+            let task = tokio::spawn(async move {
+                match action {
+                    0 => old.cancel_inner(Some(ticket), Some(4)).await,
+                    1 => {
+                        old.end_inner(Some(4), Some(ticket)).await.unwrap();
+                    }
+                    _ => {
+                        old.confirm_send_inner(Some(ticket), Some(4)).await.unwrap();
+                    }
+                }
+            });
+            tokio::task::yield_now().await;
+            assert!(!task.is_finished());
+            orch.invalidate_hotkey_inputs();
+            {
+                let mut inner = orch.inner.lock().unwrap();
+                inner.gen = 6;
+                inner.state = OrchestratorState::Listening;
+                inner.purpose = SessionPurpose::Assistant;
+            }
+            drop(guard);
+            task.await.unwrap();
+            assert_eq!(orch.state(), OrchestratorState::Listening);
+            assert_eq!(orch.inner.lock().unwrap().gen, 6);
+        }
+    }
+
+    #[test]
+    fn input_configuration_guard_rejects_all_active_phases_and_unfinished_send() {
+        let orch = admission_test_orchestrator();
+        for state in [
+            OrchestratorState::Listening,
+            OrchestratorState::Transcribing,
+            OrchestratorState::Processing,
+            OrchestratorState::Preview,
+            OrchestratorState::Sending,
+        ] {
+            orch.inner.lock().unwrap().state = state;
+            assert!(orch.try_input_configuration_guard().is_err());
+        }
+        for state in [
+            OrchestratorState::Idle,
+            OrchestratorState::Success,
+            OrchestratorState::Error,
+        ] {
+            orch.inner.lock().unwrap().state = state;
+            let guard = orch.try_input_configuration_guard().unwrap();
+            assert!(orch.op.try_lock().is_err());
+            drop(guard);
+        }
+        let (operation, _completion) = SendOperation::new();
+        orch.inner.lock().unwrap().send_operation = Some(operation);
+        assert!(orch.try_input_configuration_guard().is_err());
+    }
 
     /// 热词端到端链路的 core 段：profile.hotwords 原样进 SessionConfig
     /// （stt 段见 online_transducer 的 format_hotwords 测试）

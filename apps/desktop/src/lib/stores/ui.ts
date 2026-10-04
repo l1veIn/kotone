@@ -10,7 +10,7 @@
 
 import { writable } from "svelte/store";
 import { logFrontendError, updateSettings } from "../ipc";
-import type { Settings } from "../ipc";
+import type { Settings, SettingsPatch } from "../ipc";
 
 export const settingsStore = writable<Settings | null>(null);
 /**
@@ -62,7 +62,7 @@ export function toast(ok: boolean, text: string): void {
 
 /** 设置页通用的事务更新 + store 发布 + 用户反馈。 */
 export async function patchSettings(
-  patch: Record<string, unknown>,
+  patch: SettingsPatch,
   successMessage: string,
 ): Promise<boolean> {
   try {

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { modalFocus } from "../../../lib/actions/modalFocus";
   /*
    * 文字处理设置页：后端注册表负责模块发现，前端只编辑线性 pipeline 配置。
    * 所有变更仍走 updateSettings 的事务入口，并以返回的完整 Settings 更新共享 store。
@@ -690,6 +691,9 @@
         role="dialog"
         aria-modal="true"
         aria-labelledby="add-step-title"
+        tabindex="-1"
+        use:modalFocus
+        onkeydown={(event) => { if (event.key === "Escape") { event.stopPropagation(); adding = false; } }}
         onclick={(event) => event.stopPropagation()}
       >
         <div class="flex items-start justify-between gap-3">
@@ -767,6 +771,9 @@
         role="dialog"
         aria-modal="true"
         aria-labelledby="pipeline-manager-title"
+        tabindex="-1"
+        use:modalFocus
+        onkeydown={(event) => { if (event.key === "Escape") { event.stopPropagation(); managing = false; } }}
         onclick={(event) => event.stopPropagation()}
       >
         <div class="flex items-start justify-between gap-3">
@@ -877,6 +884,9 @@
         role="dialog"
         aria-modal="true"
         aria-labelledby="tryout-dialog-title"
+        tabindex="-1"
+        use:modalFocus
+        onkeydown={(event) => { if (event.key === "Escape") { event.stopPropagation(); tryingOut = false; } }}
         onclick={(event) => event.stopPropagation()}
       >
         <div class="flex items-start justify-between gap-3">

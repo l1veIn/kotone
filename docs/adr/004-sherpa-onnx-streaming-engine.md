@@ -1,6 +1,8 @@
 # ADR 004：sherpa-onnx 流式引擎（官方 Rust 绑定，feature 默认关）
 
-- 状态：已采纳（真实 STT 引擎 #2 落地）
+> 当前状态（2026-10 梳理）：Amended / 已修订：官方 sherpa 绑定继续使用，桌面和 CLI 默认启用 sherpa + VAD；默认模型为 X-ASR。旧模型族 ID 已归并为 streaming/offline 运行时，具体模型由 recipe 决定。现行定义见 [术语表](../glossary.md) 和 [架构](../architecture.md)。
+
+- 原始状态：已采纳（真实 STT 引擎 #2 落地）
 - 上下文：whisper.cpp（ADR-003）是非流式兜底；partial 流式上屏链路已在
   mock 引擎验证，需要一个真实流式中文引擎。sherpa.rs 原为占位。
 

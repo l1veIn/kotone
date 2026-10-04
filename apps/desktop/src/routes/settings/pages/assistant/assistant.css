@@ -1,0 +1,17 @@
+.assistant-page .panel { margin-bottom: 1rem; border: 1px solid rgb(255 255 255 / 0.08); border-radius: 1rem; background: rgb(255 255 255 / 0.025); padding: 1.1rem; }
+.assistant-page h2 { color: rgb(255 255 255 / 0.9); font-size: 0.9rem; font-weight: 600; }
+.assistant-page h3 { color: rgb(255 255 255 / 0.85); font-size: 0.8rem; }
+.assistant-page .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-top: 1rem; }
+.assistant-page .setting-row p { color: rgb(255 255 255 / 0.45); font-size: 0.72rem; line-height: 1.6; margin-top: 0.25rem; max-width: 25rem; }
+.assistant-page .primary, .assistant-page .secondary { border-radius: 0.5rem; padding: 0.45rem 0.75rem; font-size: 0.75rem; transition: background 120ms; }
+.assistant-page .primary { background: rgb(0 229 255 / 0.16); color: #00e5ff; border: 1px solid rgb(0 229 255 / 0.3); }
+.assistant-page .secondary { background: rgb(255 255 255 / 0.06); color: rgb(255 255 255 / 0.75); border: 1px solid rgb(255 255 255 / 0.1); }
+.assistant-page button:hover:not(:disabled) { filter: brightness(1.2); }
+.assistant-page button:focus-visible { outline: 2px solid #00e5ff; outline-offset: 3px; }
+.assistant-page button:disabled { opacity: 0.45; cursor: not-allowed; }
+.assistant-page .notice { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.8rem; font-size: 0.75rem; line-height: 1.7; color: rgb(255 255 255 / 0.65); }
+.assistant-page .notice.text-kotone-pink { color: #ff2d78; }
+.assistant-page .notice.text-kotone-cyan { color: #00e5ff; }
+.assistant-page .empty { padding: 2rem 0.5rem; text-align: center; color: rgb(255 255 255 / 0.35); font-size: 0.8rem; }
+.assistant-page .reminder-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border-radius: 0.65rem; padding: 0.8rem; background: rgb(0 0 0 / 0.12); }
+@media (max-width: 780px) { .assistant-page .setting-row, .assistant-page .reminder-row { flex-wrap: wrap; } }

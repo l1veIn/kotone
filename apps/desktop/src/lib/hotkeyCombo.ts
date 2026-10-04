@@ -1,3 +1,5 @@
+import type { Settings } from "./ipc";
+
 const NAMED_CODES: Record<string, string> = {
   Space: "Space",
   Tab: "Tab",
@@ -79,6 +81,21 @@ export function combosConflict(a: string, b: string): boolean {
     return [...parts.sort(), main].join("+");
   };
   return norm(a) === norm(b);
+}
+
+/** One binding catalog for every settings editor, including the onboarding record key. */
+export function findHotkeyConflict(settings: Settings | null, selfId: string, key: string): string | null {
+  if (!settings || !key.trim()) return null;
+  const bindings: [string, string, string][] = [
+    ["record", "录制热键", settings.hotkey.key],
+    ["assistant", "提醒助手热键", settings.assistant.hotkey],
+    ["channel-cycle", "频道切换热键", settings.channelCycleHotkey],
+    ["resend-last", "重发最近一条热键", settings.resendLastHotkey],
+    ["post-process-toggle", "文字处理开关热键", settings.togglePostProcessingHotkey],
+    ["post-process-cycle", "切换文字处理流程热键", settings.cyclePostProcessingHotkey],
+    ["runtime-toggle", "启动 / 停止 Kotone 热键", settings.runtimeToggleHotkey],
+  ];
+  return bindings.find(([id, , combo]) => id !== selfId && combo && combosConflict(key, combo))?.[1] ?? null;
 }
 
 /** 已按下组合中的主键或修饰键松开时，都应结束一次 hold。 */

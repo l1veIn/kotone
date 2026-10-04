@@ -46,7 +46,7 @@ const bgUrl = heroImg.src;
   schedule();
 
   // CRT 故障线：随机间隔、随机方向（上↔下），快速扫过整个 Hero
-  const bars = Array.from(document.querySelectorAll(".hero__scanbar"));
+  const bars = Array.from(document.querySelectorAll<HTMLElement>(".hero__scanbar"));
   const fireScan = () => {
     if (!bars.length || reduce) return;
     // 随机：单条或两条一起

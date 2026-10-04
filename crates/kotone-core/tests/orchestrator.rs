@@ -729,7 +729,12 @@ async fn inject_timeout_falls_back_to_error_state_and_retry() {
         "Error 态应保留文本供重试"
     );
 
-    // 重试：第二次发送不再挂起，Error 态 confirm_send 重新进入 Sending 并成功
+    // 阻塞调用尚未返回时不允许重试；取消令牌不能强制中断不合作的系统调用。
+    let retry_error = orch.confirm_send().await.unwrap_err();
+    assert!(retry_error.contains("仍在结束中"));
+    assert_eq!(orch.state(), OrchestratorState::Error);
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    // 上一个调用已真正结束，Error 态才可重新进入 Sending。
     orch.confirm_send().await.unwrap();
     assert_eq!(orch.state(), OrchestratorState::Success);
 }
@@ -1780,10 +1785,14 @@ async fn running_runtime_keeps_started_engine_settings_until_deactivated() {
     orch.cancel().await;
 
     orch.deactivate_runtime_settings();
+    assert!(orch.begin().await.unwrap_err().contains("运行时已停止"));
+    // 模拟下一次启动，重新锁定当前设置。停止本身不再退化为 CLI 的开放入口。
+    let next_settings = orch.settings().read().unwrap().clone();
+    orch.activate_runtime_settings(next_settings);
     let error = orch
         .begin()
         .await
-        .expect_err("停止后应重新使用当前设置的 never-ready");
+        .expect_err("重新启动后应使用当前设置的 never-ready");
     assert!(error.contains("未就绪"));
     orch.cancel().await;
 }
@@ -2391,6 +2400,936 @@ async fn resend_last_waits_until_modifiers_release() {
     assert_eq!(sent.lock().unwrap().len(), 2, "修饰键松开后应完成重发");
 }
 
+#[tokio::test]
+async fn modifier_timeout_releases_send_operation_for_retry() {
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let focus = Arc::new(
+        MockFocusBackend::new(Arc::new(Mutex::new(Vec::new())), 42, true)
+            .with_modifier_polls(u32::MAX),
+    );
+    let (orch, _) = make_orchestrator_full(
+        false,
+        Arc::new(RecordingInjector { sent: sent.clone() }),
+        focus.clone(),
+    );
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.end().await.unwrap();
+    orch.confirm_send().await.unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Error);
+    assert!(sent.lock().unwrap().is_empty());
+    *focus.modifiers_down_remaining.lock().unwrap() = 0;
+    orch.confirm_send().await.unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Success);
+    assert_eq!(sent.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn cancelling_during_modifier_wait_does_not_restore_focus() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let focus =
+        Arc::new(MockFocusBackend::new(log.clone(), 42, true).with_modifier_polls(u32::MAX));
+    let (orch, _) = make_orchestrator_full(
+        false,
+        Arc::new(LoggingInjector { log: log.clone() }),
+        focus.clone(),
+    );
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.end().await.unwrap();
+    let sending_orch = orch.clone();
+    let sending = tokio::spawn(async move { sending_orch.confirm_send().await });
+    wait_state(&orch, OrchestratorState::Sending, Duration::from_secs(1)).await;
+    orch.cancel().await;
+    *focus.modifiers_down_remaining.lock().unwrap() = 0;
+    tokio::time::timeout(Duration::from_millis(250), sending)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Idle);
+    assert_eq!(*log.lock().unwrap(), vec!["capture".to_string()]);
+}
+
+struct CancelAwareBlockedInjector {
+    release: Arc<(Mutex<bool>, std::sync::Condvar)>,
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+    sent: Arc<Mutex<Vec<String>>>,
+}
+
+impl Injector for CancelAwareBlockedInjector {
+    fn send(&self, text: &str, _: &GameProfile, token: CancelToken) -> Result<(), InjectError> {
+        let (released, changed) = &*self.release;
+        let mut ready = released.lock().unwrap();
+        while !*ready {
+            ready = changed.wait(ready).unwrap();
+        }
+        if token.is_cancelled() {
+            self.cancelled.store(true, Ordering::SeqCst);
+            return Err(InjectError::new("发送已取消"));
+        }
+        self.sent.lock().unwrap().push(text.into());
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn timeout_cancels_worker_and_cancel_does_not_allow_overlapping_new_session() {
+    let release = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let injector = Arc::new(CancelAwareBlockedInjector {
+        release: release.clone(),
+        cancelled: cancelled.clone(),
+        sent: sent.clone(),
+    });
+    let focus = Arc::new(MockFocusBackend::new(
+        Arc::new(Mutex::new(Vec::new())),
+        42,
+        true,
+    ));
+    let (orch, _) = make_orchestrator_tuned(false, injector, focus, |o| {
+        o.inject_timeout = Duration::from_millis(30);
+    });
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.end().await.unwrap();
+    orch.confirm_send().await.unwrap();
+    let retry = orch.confirm_send().await;
+    orch.cancel().await;
+    let begin = orch.begin().await;
+    // Always unblock the worker before asserting, so a regression cannot hang runtime teardown.
+    *release.0.lock().unwrap() = true;
+    release.1.notify_all();
+    assert!(retry.unwrap_err().contains("仍在结束中"));
+    assert!(begin.unwrap_err().contains("仍在结束中"));
+    let started = std::time::Instant::now();
+    loop {
+        if orch.begin().await.is_ok() {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(1));
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(cancelled.load(Ordering::SeqCst));
+    assert!(sent.lock().unwrap().is_empty());
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.end().await.unwrap();
+    orch.confirm_send().await.unwrap();
+    assert_eq!(sent.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn suspended_runtime_rejects_queued_hotkey_and_direct_send() {
+    let (orch, _, sent) = make_orchestrator(false);
+    orch.suspend_runtime_inputs();
+    orch.on_hotkey_hold(true).await;
+    orch.on_hotkey_toggle().await;
+    assert_eq!(orch.state(), OrchestratorState::Idle);
+    assert!(orch
+        .confirm_send()
+        .await
+        .unwrap_err()
+        .contains("运行时已停止"));
+    let settings = orch.settings().read().unwrap().clone();
+    orch.activate_runtime_settings(settings);
+    orch.begin().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.end().await.unwrap();
+    orch.suspend_runtime_inputs();
+    assert!(orch
+        .confirm_send()
+        .await
+        .unwrap_err()
+        .contains("运行时已停止"));
+    assert!(sent.lock().unwrap().is_empty());
+    orch.cancel().await;
+}
+
+struct ReminderTestDelivery;
+impl kotone_core::reminders::ReminderDelivery for ReminderTestDelivery {
+    fn deliver<'a>(
+        &'a self,
+        _: &'a kotone_core::reminders::Reminder,
+        _: kotone_core::cancel::CancellationToken,
+    ) -> kotone_core::reminders::DeliveryFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+struct AssistantTestHandler {
+    entered: Arc<tokio::sync::Notify>,
+    release: Option<Arc<tokio::sync::Notify>>,
+    requests: Arc<Mutex<Vec<kotone_core::assistant::AssistantRequest>>>,
+}
+
+impl kotone_core::assistant::AssistantHandler for AssistantTestHandler {
+    fn handle<'a>(
+        &'a self,
+        request: kotone_core::assistant::AssistantRequest,
+        _: kotone_core::cancel::CancellationToken,
+    ) -> kotone_core::assistant::AssistantFuture<'a> {
+        Box::pin(async move {
+            self.requests.lock().unwrap().push(request);
+            self.entered.notify_one();
+            if let Some(release) = &self.release {
+                release.notified().await; // deliberately ignores token; owner must reject late results
+            }
+            Ok(kotone_core::assistant::AssistantPlan {
+                message: "已安排喝水提醒".into(),
+                reminders: vec![kotone_core::reminders::ReminderIntent {
+                    delay_seconds: 300,
+                    text: "喝水".into(),
+                    delivery: vec![kotone_core::reminders::DeliveryKind::Voice],
+                }],
+            })
+        })
+    }
+}
+
+fn assistant_orchestrator(
+    handler: Arc<dyn kotone_core::assistant::AssistantHandler>,
+    reminders: Arc<kotone_core::reminders::ReminderScheduler>,
+    sent: Arc<Mutex<Vec<String>>>,
+    emitter: Arc<VecEmitter>,
+) -> Arc<Orchestrator> {
+    assistant_orchestrator_builder(handler, reminders, sent, emitter).into_arc()
+}
+
+fn assistant_orchestrator_builder(
+    handler: Arc<dyn kotone_core::assistant::AssistantHandler>,
+    reminders: Arc<kotone_core::reminders::ReminderScheduler>,
+    sent: Arc<Mutex<Vec<String>>>,
+    emitter: Arc<VecEmitter>,
+) -> Orchestrator {
+    let mut settings = test_settings();
+    settings.stt_engine = "mock-stream".into();
+    settings.active_profile_id = None;
+    settings.history.mode = kotone_core::history::HistoryMode::Off;
+    settings.post_processing = kotone_core::postprocess::PostProcessingConfig::with_pipeline(
+        true,
+        kotone_core::postprocess::PipelineConfig {
+            id: "must-not-run".into(),
+            display_name: "must-not-run".into(),
+            steps: vec![required_postprocess_step("missing", "not-registered")],
+        },
+    );
+    let mut engines = EngineRegistry::new();
+    kotone_stt::register_builtin(&mut engines);
+    let mut orch = Orchestrator::new(
+        Arc::new(RwLock::new(settings)),
+        Arc::new(engines),
+        Arc::new(MockAudioBackend),
+        Arc::new(RecordingInjector { sent }),
+        Arc::new(MockFocusBackend::new(
+            Arc::new(Mutex::new(Vec::new())),
+            42,
+            true,
+        )),
+        emitter,
+    )
+    .with_assistant(handler, reminders);
+    orch.toast_dwell = Duration::from_secs(10);
+    orch.release_grace = Duration::from_millis(20);
+    orch
+}
+
+#[tokio::test]
+async fn history_disabled_cancel_does_not_leak_into_failed_assistant_capture() {
+    use kotone_core::history::HistoryMode;
+
+    let directory = tempfile::tempdir().unwrap();
+    let history_dir = directory.path().join("history");
+    let reminders = kotone_core::reminders::ReminderScheduler::open(
+        directory.path().join("reminders.json"),
+        Arc::new(ReminderTestDelivery),
+    )
+    .unwrap();
+    let capture_fails = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let prepare_capture_fails = capture_fails.clone();
+    let emitter = Arc::new(VecEmitter::default());
+    let mut builder = assistant_orchestrator_builder(
+        Arc::new(AssistantTestHandler {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: None,
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }),
+        reminders,
+        Arc::new(Mutex::new(Vec::new())),
+        emitter.clone(),
+    )
+    .with_before_capture(Arc::new(move || {
+        if prepare_capture_fails.load(Ordering::SeqCst) {
+            Err("capture preparation failed".into())
+        } else {
+            Ok(())
+        }
+    }));
+    builder.history_dir = Some(history_dir.clone());
+    builder.settings().write().unwrap().history.mode = HistoryMode::Capped;
+    let orch = builder.into_arc();
+
+    orch.begin().await.unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let has_partial = emitter
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(event, _)| event == "kotone://partial");
+        if has_partial {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "dictation did not produce partial text"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    orch.settings().write().unwrap().history.mode = HistoryMode::Off;
+    orch.cancel().await;
+    assert!(kotone_core::history::list_in(&history_dir)
+        .unwrap()
+        .is_empty());
+
+    // Fail before begin_locked can replace inner.history with the assistant's
+    // empty draft. Cancelling this Error must not resurrect the prior dictation.
+    orch.settings().write().unwrap().history.mode = HistoryMode::Capped;
+    capture_fails.store(true, Ordering::SeqCst);
+    assert_eq!(
+        orch.begin_assistant().await.unwrap_err(),
+        "capture preparation failed"
+    );
+    assert_eq!(orch.state(), OrchestratorState::Error);
+    orch.cancel().await;
+    let records = kotone_core::history::list_in(&history_dir).unwrap();
+    assert!(
+        records.is_empty(),
+        "old dictation leaked into assistant cancellation: {records:?}"
+    );
+    assert!(!emitter
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(event, _)| event == "kotone://history-updated"));
+}
+
+#[tokio::test]
+async fn assistant_recognition_schedules_without_postprocessing_or_injecting() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = kotone_core::reminders::ReminderScheduler::open(
+        dir.path().join("reminders.json"),
+        Arc::new(ReminderTestDelivery),
+    )
+    .unwrap();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let handler = Arc::new(AssistantTestHandler {
+        entered: Arc::new(tokio::sync::Notify::new()),
+        release: None,
+        requests: requests.clone(),
+    });
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let emitter = Arc::new(VecEmitter::default());
+    let orch = assistant_orchestrator(handler, queue.clone(), sent.clone(), emitter.clone());
+    orch.on_assistant_hotkey_hold(true).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    assert!(emitter
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(event, payload)| {
+            event == "kotone://state"
+                && payload["state"] == "listening"
+                && payload["payload"]["purpose"] == "assistant"
+        }));
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.on_assistant_hotkey_hold(false).await;
+    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(2)).await;
+    assert_eq!(orch.state(), OrchestratorState::Success);
+    let reminders = queue.list();
+    assert_eq!(reminders.len(), 1);
+    let requests = requests.lock().unwrap();
+    assert_eq!(reminders[0].due_at_ms, requests[0].received_at_ms + 300_000);
+    assert_eq!(reminders[0].session_id, requests[0].session_id);
+    assert!(sent.lock().unwrap().is_empty());
+    assert!(emitter
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(event, _)| event == "kotone://assistant"));
+    assert!(!emitter
+        .state_sequence()
+        .iter()
+        .any(|state| state == "sending" || state == "preview"));
+}
+
+#[tokio::test]
+async fn assistant_hold_release_is_independent_and_repress_preserves_the_sentence() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = kotone_core::reminders::ReminderScheduler::open(
+        dir.path().join("reminders.json"),
+        Arc::new(ReminderTestDelivery),
+    )
+    .unwrap();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let mut builder = assistant_orchestrator_builder(
+        Arc::new(AssistantTestHandler {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: None,
+            requests: requests.clone(),
+        }),
+        queue.clone(),
+        sent.clone(),
+        Arc::new(VecEmitter::default()),
+    );
+    builder.release_grace = Duration::from_millis(80);
+    builder.settings().write().unwrap().interaction_mode =
+        Some(kotone_core::interaction::InteractionMode::OneShot);
+    let orch = builder.into_arc();
+    orch.on_assistant_hotkey_hold(true).await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    assert!(requests.lock().unwrap().is_empty());
+    // A main-input key release must not finish the assistant recording.
+    orch.on_hotkey_hold(false).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    orch.on_assistant_hotkey_hold(false).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    orch.on_assistant_hotkey_hold(true).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    // Settings changes apply to the next sentence, not this down/up pair.
+    orch.settings().write().unwrap().assistant.interaction_mode =
+        kotone_core::assistant::AssistantInteractionMode::Dictation;
+    orch.on_assistant_hotkey_hold(false).await;
+    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(2)).await;
+    assert_eq!(requests.lock().unwrap().len(), 1);
+    assert_eq!(queue.list().len(), 1);
+    assert!(sent.lock().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn assistant_short_hold_release_waits_for_capture_to_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = kotone_core::reminders::ReminderScheduler::open(
+        dir.path().join("reminders.json"),
+        Arc::new(ReminderTestDelivery),
+    )
+    .unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let capture_entered = entered.clone();
+    let (release, can_open) = std::sync::mpsc::sync_channel(1);
+    let can_open = Mutex::new(can_open);
+    let builder = assistant_orchestrator_builder(
+        Arc::new(AssistantTestHandler {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: None,
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }),
+        queue.clone(),
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(VecEmitter::default()),
+    )
+    .with_before_capture(Arc::new(move || {
+        capture_entered.notify_one();
+        can_open
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap();
+        Ok(())
+    }));
+    let orch = builder.into_arc();
+    let pressed_orch = orch.clone();
+    let pressed = tokio::spawn(async move { pressed_orch.on_assistant_hotkey_hold(true).await });
+    tokio::time::timeout(Duration::from_secs(1), entered.notified())
+        .await
+        .unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Idle);
+    let release_entered = Arc::new(tokio::sync::Notify::new());
+    let release_signal = release_entered.clone();
+    let released_orch = orch.clone();
+    let released = tokio::spawn(async move {
+        release_signal.notify_one();
+        released_orch.on_assistant_hotkey_hold(false).await;
+    });
+    release_entered.notified().await;
+    tokio::task::yield_now().await;
+    assert!(
+        !released.is_finished(),
+        "up must wait while down is opening capture"
+    );
+    release.send(()).unwrap();
+    pressed.await.unwrap();
+    released.await.unwrap();
+    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(2)).await;
+    assert_eq!(queue.list().len(), 1);
+}
+
+#[tokio::test]
+async fn assistant_dictation_preview_confirms_to_ai_with_original_timer_origin() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = kotone_core::reminders::ReminderScheduler::open(
+        dir.path().join("reminders.json"),
+        Arc::new(ReminderTestDelivery),
+    )
+    .unwrap();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let emitter = Arc::new(VecEmitter::default());
+    let orch = assistant_orchestrator(
+        Arc::new(AssistantTestHandler {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: None,
+            requests: requests.clone(),
+        }),
+        queue.clone(),
+        sent.clone(),
+        emitter.clone(),
+    );
+    orch.settings().write().unwrap().assistant.interaction_mode =
+        kotone_core::assistant::AssistantInteractionMode::Dictation;
+    orch.on_assistant_hotkey().await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.on_assistant_hotkey().await;
+    assert_eq!(orch.state(), OrchestratorState::Preview);
+    let preview_started_at = kotone_core::reminders::now_ms();
+    assert!(requests.lock().unwrap().is_empty());
+    assert!(queue.list().is_empty());
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    orch.on_assistant_hotkey().await;
+    assert_eq!(orch.state(), OrchestratorState::Success);
+    assert!(orch.confirm_send().await.is_err());
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].received_at_ms <= preview_started_at);
+    assert_eq!(
+        queue.list()[0].due_at_ms,
+        requests[0].received_at_ms + 300_000
+    );
+    assert!(!emitter.state_sequence().contains(&"sending".into()));
+    assert!(sent.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn assistant_one_shot_finishes_without_resuming() {
+    use kotone_core::assistant::AssistantInteractionMode;
+    let mode = AssistantInteractionMode::OneShot;
+    let dir = tempfile::tempdir().unwrap();
+    let queue = kotone_core::reminders::ReminderScheduler::open(
+        dir.path().join("reminders.json"),
+        Arc::new(ReminderTestDelivery),
+    )
+    .unwrap();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let emitter = Arc::new(VecEmitter::default());
+    let mut builder = assistant_orchestrator_builder(
+        Arc::new(AssistantTestHandler {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: None,
+            requests: requests.clone(),
+        }),
+        queue.clone(),
+        sent.clone(),
+        emitter.clone(),
+    );
+    {
+        let mut settings = builder.settings().write().unwrap();
+        settings.interaction_mode = Some(kotone_core::interaction::InteractionMode::Dictation);
+        settings.assistant.interaction_mode = mode;
+        settings.vad_silence_ms = 210;
+    }
+    let first_vad = Mutex::new(Some(ScriptVad::speech_then_silence(30)));
+    builder.vad_factory = Some(Arc::new(move |_| {
+        Ok(Box::new(
+            first_vad
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap_or_else(ScriptVad::all_silence),
+        ))
+    }));
+    let orch = builder.into_arc();
+    orch.on_assistant_hotkey().await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while queue.list().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "assistant VAD did not schedule"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(orch.state(), OrchestratorState::Success);
+    assert_eq!(
+        emitter
+            .state_sequence()
+            .iter()
+            .filter(|state| *state == "listening")
+            .count(),
+        1
+    );
+    assert_eq!(requests.lock().unwrap().len(), 1);
+    assert!(sent.lock().unwrap().is_empty());
+    assert!(!emitter
+        .state_sequence()
+        .iter()
+        .any(|state| state == "sending" || state == "preview"));
+}
+
+#[tokio::test]
+async fn assistant_one_shot_without_vad_can_finish_manually_without_resuming() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = kotone_core::reminders::ReminderScheduler::open(
+        dir.path().join("reminders.json"),
+        Arc::new(ReminderTestDelivery),
+    )
+    .unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let orch = assistant_orchestrator(
+        Arc::new(AssistantTestHandler {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: None,
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }),
+        queue.clone(),
+        sent.clone(),
+        Arc::new(VecEmitter::default()),
+    );
+    orch.settings().write().unwrap().assistant.interaction_mode =
+        kotone_core::assistant::AssistantInteractionMode::OneShot;
+    orch.on_assistant_hotkey().await;
+    assert!(!orch.continuous_session());
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.on_assistant_hotkey().await;
+    assert_eq!(orch.state(), OrchestratorState::Success);
+    assert_eq!(queue.list().len(), 1);
+    assert!(sent.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn assistant_mode_change_during_processing_does_not_start_another_capture() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = kotone_core::reminders::ReminderScheduler::open(
+        dir.path().join("reminders.json"),
+        Arc::new(ReminderTestDelivery),
+    )
+    .unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let emitter = Arc::new(VecEmitter::default());
+    let mut builder = assistant_orchestrator_builder(
+        Arc::new(AssistantTestHandler {
+            entered: entered.clone(),
+            release: Some(release.clone()),
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }),
+        queue.clone(),
+        Arc::new(Mutex::new(Vec::new())),
+        emitter.clone(),
+    );
+    builder
+        .settings()
+        .write()
+        .unwrap()
+        .assistant
+        .interaction_mode = kotone_core::assistant::AssistantInteractionMode::OneShot;
+    builder.settings().write().unwrap().vad_silence_ms = 210;
+    builder.vad_factory = Some(Arc::new(|_| {
+        Ok(Box::new(ScriptVad::speech_then_silence(30)))
+    }));
+    let orch = builder.into_arc();
+    orch.on_assistant_hotkey().await;
+    tokio::time::timeout(Duration::from_secs(2), entered.notified())
+        .await
+        .unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Processing);
+    assert!(orch.try_input_configuration_guard().is_err());
+    // The desktop rejects this update while active; core must also remain safe
+    // for direct settings users such as CLI and future configuration sources.
+    orch.settings().write().unwrap().assistant.interaction_mode =
+        kotone_core::assistant::AssistantInteractionMode::PushToTalk;
+    release.notify_one();
+    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert_eq!(queue.list().len(), 1);
+    assert!(!orch.continuous_session());
+    assert_eq!(
+        emitter
+            .state_sequence()
+            .iter()
+            .filter(|state| *state == "listening")
+            .count(),
+        1
+    );
+    orch.on_assistant_hotkey_hold(true).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    orch.cancel().await;
+}
+
+#[tokio::test]
+async fn assistant_old_input_waiting_for_configuration_cannot_start_or_affect_new_capture() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = kotone_core::reminders::ReminderScheduler::open(
+        dir.path().join("reminders.json"),
+        Arc::new(ReminderTestDelivery),
+    )
+    .unwrap();
+    let orch = assistant_orchestrator(
+        Arc::new(AssistantTestHandler {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: None,
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }),
+        queue,
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(VecEmitter::default()),
+    );
+    let ticket = orch.hotkey_input_ticket();
+    let guard = orch.try_input_configuration_guard().unwrap();
+    let queued_orch = orch.clone();
+    let queued = tokio::spawn(async move {
+        queued_orch
+            .on_assistant_hotkey_hold_with_ticket(true, ticket)
+            .await
+    });
+    tokio::task::yield_now().await;
+    assert!(!queued.is_finished());
+    orch.invalidate_hotkey_inputs();
+    drop(guard);
+    queued.await.unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Idle);
+    let fresh = orch.hotkey_input_ticket();
+    orch.on_assistant_hotkey_hold_with_ticket(true, fresh).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    orch.on_assistant_hotkey_hold_with_ticket(false, ticket)
+        .await;
+    orch.on_hotkey_toggle_with_ticket(ticket).await;
+    orch.on_hotkey_hold_with_ticket(true, ticket).await;
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    assert!(orch.try_input_configuration_guard().is_err());
+    orch.cancel().await;
+}
+
+#[tokio::test]
+async fn cancelled_assistant_cannot_commit_or_change_a_new_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = kotone_core::reminders::ReminderScheduler::open(
+        dir.path().join("reminders.json"),
+        Arc::new(ReminderTestDelivery),
+    )
+    .unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let handler = Arc::new(AssistantTestHandler {
+        entered: entered.clone(),
+        release: Some(release.clone()),
+        requests: Arc::new(Mutex::new(Vec::new())),
+    });
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let emitter = Arc::new(VecEmitter::default());
+    let orch = assistant_orchestrator(handler, queue.clone(), sent.clone(), emitter.clone());
+    orch.begin_assistant().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let ending_orch = orch.clone();
+    let ending = tokio::spawn(async move { ending_orch.end().await });
+    tokio::time::timeout(Duration::from_secs(1), entered.notified())
+        .await
+        .unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Processing);
+    orch.cancel().await;
+    orch.begin().await.unwrap();
+    release.notify_one();
+    tokio::time::timeout(Duration::from_secs(1), ending)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    assert!(queue.list().is_empty());
+    assert!(sent.lock().unwrap().is_empty());
+    assert!(!emitter
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(event, _)| event == "kotone://assistant"));
+    orch.cancel().await;
+}
+
+struct CountingAudio(Arc<std::sync::atomic::AtomicUsize>);
+
+impl AudioBackend for CountingAudio {
+    fn start(&self, device_id: &str) -> Result<AudioHandle, String> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        MockAudioBackend.start(device_id)
+    }
+}
+
+#[tokio::test]
+async fn failed_speech_stop_prevents_microphone_capture() {
+    let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let releases = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let release_count = releases.clone();
+    let mut settings = test_settings();
+    settings.stt_engine = "mock-stream".into();
+    settings.active_profile_id = None;
+    settings.history.mode = kotone_core::history::HistoryMode::Off;
+    let mut engines = EngineRegistry::new();
+    kotone_stt::register_builtin(&mut engines);
+    let orch = Orchestrator::new(
+        Arc::new(RwLock::new(settings)),
+        Arc::new(engines),
+        Arc::new(CountingAudio(starts.clone())),
+        Arc::new(RecordingInjector {
+            sent: Arc::new(Mutex::new(Vec::new())),
+        }),
+        Arc::new(MockFocusBackend::new(
+            Arc::new(Mutex::new(Vec::new())),
+            42,
+            true,
+        )),
+        Arc::new(VecEmitter::default()),
+    )
+    .with_before_capture(Arc::new(|| Err("语音尚未停止".into())))
+    .with_after_capture(Arc::new(move || {
+        release_count.fetch_add(1, Ordering::SeqCst);
+    }))
+    .into_arc();
+    assert!(orch.begin().await.unwrap_err().contains("语音尚未停止"));
+    assert_eq!(starts.load(Ordering::SeqCst), 0);
+    assert_eq!(orch.state(), OrchestratorState::Error);
+    orch.cancel().await;
+    assert_eq!(releases.load(Ordering::SeqCst), 1);
+}
+
+struct ControlledStopAudio {
+    stopping: Arc<tokio::sync::Notify>,
+    release: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+}
+
+impl AudioBackend for ControlledStopAudio {
+    fn start(&self, _: &str) -> Result<AudioHandle, String> {
+        let (pcm_tx, pcm_rx) = mpsc::unbounded_channel();
+        let (level_tx, level_rx) = mpsc::unbounded_channel();
+        let (error_tx, error_rx) = mpsc::unbounded_channel();
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+        let release = self.release.lock().unwrap().take().unwrap();
+        let stopping = self.stopping.clone();
+        let thread = std::thread::spawn(move || {
+            let _channels = (pcm_tx, level_tx, error_tx);
+            let _ = stop_rx.recv_timeout(Duration::from_secs(3));
+            stopping.notify_one();
+            // Keep the hardware lease alive until the test acknowledges shutdown.
+            let _ = release.recv_timeout(Duration::from_secs(3));
+        });
+        Ok(AudioHandle::with_thread(
+            pcm_rx, level_rx, error_rx, stop_tx, thread,
+        ))
+    }
+}
+
+fn capture_lifecycle_orchestrator(
+    audio: Arc<dyn AudioBackend>,
+    captures: Arc<std::sync::atomic::AtomicUsize>,
+) -> Arc<Orchestrator> {
+    let mut settings = test_settings();
+    settings.stt_engine = "stub-final".into();
+    settings.active_profile_id = None;
+    settings.auto_send = false;
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(StubFinalEngine {
+        final_text: "提醒"
+    }));
+    let admission = captures.clone();
+    Orchestrator::new(
+        Arc::new(RwLock::new(settings)),
+        Arc::new(engines),
+        audio,
+        Arc::new(RecordingInjector {
+            sent: Arc::new(Mutex::new(Vec::new())),
+        }),
+        Arc::new(MockFocusBackend::new(
+            Arc::new(Mutex::new(Vec::new())),
+            42,
+            true,
+        )),
+        Arc::new(VecEmitter::default()),
+    )
+    .with_before_capture(Arc::new(move || {
+        admission.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }))
+    .with_after_capture(Arc::new(move || {
+        assert!(captures.fetch_sub(1, Ordering::SeqCst) > 0);
+    }))
+    .into_arc()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn capture_admission_is_held_until_audio_thread_joins_on_end_cancel_and_drop() {
+    for action in ["end", "cancel", "drop"] {
+        let captures = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let stopping = Arc::new(tokio::sync::Notify::new());
+        let (release, receiver) = std::sync::mpsc::channel();
+        let orch = capture_lifecycle_orchestrator(
+            Arc::new(ControlledStopAudio {
+                stopping: stopping.clone(),
+                release: Mutex::new(Some(receiver)),
+            }),
+            captures.clone(),
+        );
+        orch.begin().await.unwrap();
+        let work = tokio::spawn(async move {
+            match action {
+                "end" => {
+                    orch.end().await.unwrap();
+                }
+                "cancel" => orch.cancel().await,
+                _ => drop(orch),
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(1), stopping.notified())
+            .await
+            .unwrap();
+        assert_eq!(
+            captures.load(Ordering::SeqCst),
+            1,
+            "{action}: stop is not complete"
+        );
+        release.send(()).unwrap();
+        work.await.unwrap();
+        assert_eq!(
+            captures.load(Ordering::SeqCst),
+            0,
+            "{action}: lease must release once"
+        );
+    }
+}
+
+#[tokio::test]
+async fn audio_start_failure_releases_capture_admission() {
+    struct FailingAudio;
+    impl AudioBackend for FailingAudio {
+        fn start(&self, _: &str) -> Result<AudioHandle, String> {
+            Err("开麦失败".into())
+        }
+    }
+    let captures = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let orch = capture_lifecycle_orchestrator(Arc::new(FailingAudio), captures.clone());
+    assert!(orch.begin().await.unwrap_err().contains("开麦失败"));
+    assert_eq!(captures.load(Ordering::SeqCst), 0);
+    orch.cancel().await;
+    assert_eq!(captures.load(Ordering::SeqCst), 0);
+}
+
 /// 非 Idle 状态（Listening）按下 resend：静默忽略，不打断当前输入
 #[tokio::test]
 async fn resend_last_ignored_when_not_idle() {
@@ -2843,4 +3782,320 @@ async fn hold_release_right_after_speech_keeps_sentence_tail() {
         final_text.contains(&expected),
         "句尾「{expected}」丢失！最终文本：{final_text}"
     );
+}
+
+#[tokio::test]
+async fn assistant_voice_button_uses_each_supported_policy_without_injection() {
+    use kotone_core::assistant::AssistantInteractionMode;
+    for mode in [
+        AssistantInteractionMode::PushToTalk,
+        AssistantInteractionMode::Dictation,
+        AssistantInteractionMode::OneShot,
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = kotone_core::reminders::ReminderScheduler::open(
+            dir.path().join("reminders.json"),
+            Arc::new(ReminderTestDelivery),
+        )
+        .unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let emitter = Arc::new(VecEmitter::default());
+        let mut builder = assistant_orchestrator_builder(
+            Arc::new(AssistantTestHandler {
+                entered: Arc::new(tokio::sync::Notify::new()),
+                release: None,
+                requests: requests.clone(),
+            }),
+            queue.clone(),
+            sent.clone(),
+            emitter.clone(),
+        );
+        builder
+            .settings()
+            .write()
+            .unwrap()
+            .assistant
+            .interaction_mode = mode;
+        builder.settings().write().unwrap().vad_silence_ms = 210;
+        builder.vad_factory = Some(Arc::new(|_| {
+            Ok(Box::new(ScriptVad::speech_then_silence(30)))
+        }));
+        let orch = builder.into_arc();
+        let session = orch
+            .start_assistant_voice_input(orch.hotkey_input_ticket())
+            .await
+            .unwrap();
+        assert_eq!(session.interaction_mode, mode);
+        assert!(!orch.continuous_session());
+        assert!(emitter
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(name, payload)| name == "kotone://state"
+                && payload["state"] == "listening"
+                && payload["payload"]["inputSource"] == "button"));
+        if mode != AssistantInteractionMode::OneShot {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            orch.finish_assistant_voice_input(&session.session_id)
+                .await
+                .unwrap();
+        }
+        if mode == AssistantInteractionMode::Dictation {
+            assert_eq!(orch.state(), OrchestratorState::Preview);
+            assert!(queue.list().is_empty());
+            assert!(requests.lock().unwrap().is_empty());
+            orch.confirm_assistant_voice_input(&session.session_id)
+                .await
+                .unwrap();
+        }
+        wait_state(&orch, OrchestratorState::Success, Duration::from_secs(2)).await;
+        assert_eq!(queue.list().len(), 1);
+        assert_eq!(requests.lock().unwrap()[0].session_id, session.session_id);
+        assert!(sent.lock().unwrap().is_empty());
+        assert_eq!(
+            emitter
+                .state_sequence()
+                .iter()
+                .filter(|state| *state == "listening")
+                .count(),
+            1
+        );
+        // Success need not wait for its toast before starting the next button request.
+        let next = orch
+            .start_assistant_voice_input(orch.hotkey_input_ticket())
+            .await
+            .unwrap();
+        assert_ne!(next.session_id, session.session_id);
+        orch.cancel_assistant_voice_input(&next.session_id)
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn assistant_voice_stale_commands_and_hotkey_release_cannot_touch_new_capture() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = kotone_core::reminders::ReminderScheduler::open(
+        dir.path().join("reminders.json"),
+        Arc::new(ReminderTestDelivery),
+    )
+    .unwrap();
+    let orch = assistant_orchestrator(
+        Arc::new(AssistantTestHandler {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: None,
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }),
+        queue.clone(),
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(VecEmitter::default()),
+    );
+    let old = orch
+        .start_assistant_voice_input(orch.hotkey_input_ticket())
+        .await
+        .unwrap();
+    orch.finish_assistant_voice_input(&old.session_id)
+        .await
+        .unwrap();
+    orch.cancel_assistant_voice_input(&old.session_id)
+        .await
+        .unwrap();
+    let current = orch
+        .start_assistant_voice_input(orch.hotkey_input_ticket())
+        .await
+        .unwrap();
+    assert_ne!(current.session_id, old.session_id);
+    orch.finish_assistant_voice_input(&old.session_id)
+        .await
+        .unwrap();
+    orch.confirm_assistant_voice_input(&old.session_id)
+        .await
+        .unwrap();
+    orch.cancel_assistant_voice_input(&old.session_id)
+        .await
+        .unwrap();
+    // A physical release left over from a previous hotkey session cannot finish UI capture.
+    orch.on_assistant_hotkey_hold(false).await;
+    orch.on_assistant_hotkey().await;
+    orch.on_hotkey_toggle().await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    assert!(queue.list().is_empty());
+    assert!(orch
+        .start_assistant_voice_input(orch.hotkey_input_ticket())
+        .await
+        .is_err());
+    orch.cancel_assistant_voice_input(&current.session_id)
+        .await
+        .unwrap();
+    orch.begin().await.unwrap();
+    assert!(orch
+        .start_assistant_voice_input(orch.hotkey_input_ticket())
+        .await
+        .is_err());
+    orch.finish_assistant_voice_input(&current.session_id)
+        .await
+        .unwrap();
+    orch.cancel_assistant_voice_input(&current.session_id)
+        .await
+        .unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    orch.cancel().await;
+}
+
+#[tokio::test]
+async fn assistant_voice_cancel_interrupts_ai_but_cannot_claim_a_hotkey_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = kotone_core::reminders::ReminderScheduler::open(
+        dir.path().join("reminders.json"),
+        Arc::new(ReminderTestDelivery),
+    )
+    .unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let orch = assistant_orchestrator(
+        Arc::new(AssistantTestHandler {
+            entered: entered.clone(),
+            release: Some(release.clone()),
+            requests: requests.clone(),
+        }),
+        queue.clone(),
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(VecEmitter::default()),
+    );
+    let session = orch
+        .start_assistant_voice_input(orch.hotkey_input_ticket())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.finish_assistant_voice_input(&session.session_id)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), entered.notified())
+        .await
+        .unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Processing);
+    tokio::time::timeout(
+        Duration::from_millis(200),
+        orch.cancel_assistant_voice_input(&session.session_id),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Idle);
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(queue.list().is_empty());
+    // Knowing a hotkey session's case ID does not grant the button ownership.
+    orch.on_assistant_hotkey_hold(true).await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.on_assistant_hotkey_hold(false).await;
+    tokio::time::timeout(Duration::from_secs(2), entered.notified())
+        .await
+        .unwrap();
+    let hotkey_id = requests.lock().unwrap().last().unwrap().session_id.clone();
+    orch.cancel_assistant_voice_input(&hotkey_id).await.unwrap();
+    orch.finish_assistant_voice_input(&hotkey_id).await.unwrap();
+    orch.confirm_assistant_voice_input(&hotkey_id)
+        .await
+        .unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Processing);
+    orch.cancel().await;
+    assert!(queue.list().is_empty());
+}
+
+#[tokio::test]
+async fn assistant_voice_start_rejects_a_ticket_invalidated_while_waiting_for_admission() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = kotone_core::reminders::ReminderScheduler::open(
+        dir.path().join("reminders.json"),
+        Arc::new(ReminderTestDelivery),
+    )
+    .unwrap();
+    let orch = assistant_orchestrator(
+        Arc::new(AssistantTestHandler {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: None,
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }),
+        queue,
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(VecEmitter::default()),
+    );
+    let ticket = orch.hotkey_input_ticket();
+    let guard = orch.try_input_configuration_guard().unwrap();
+    let queued = orch.clone();
+    let start = tokio::spawn(async move { queued.start_assistant_voice_input(ticket).await });
+    tokio::task::yield_now().await;
+    assert!(!start.is_finished());
+    orch.invalidate_hotkey_inputs();
+    drop(guard);
+    assert!(start.await.unwrap().is_err());
+    assert_eq!(orch.state(), OrchestratorState::Idle);
+    let session = orch
+        .start_assistant_voice_input(orch.hotkey_input_ticket())
+        .await
+        .unwrap();
+    orch.cancel_assistant_voice_input(&session.session_id)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn assistant_legacy_solo_configuration_records_only_on_press_and_release() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = kotone_core::reminders::ReminderScheduler::open(
+        dir.path().join("reminders.json"),
+        Arc::new(ReminderTestDelivery),
+    )
+    .unwrap();
+    let emitter = Arc::new(VecEmitter::default());
+    let mut builder = assistant_orchestrator_builder(
+        Arc::new(AssistantTestHandler {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: None,
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }),
+        queue.clone(),
+        Arc::new(Mutex::new(Vec::new())),
+        emitter.clone(),
+    );
+    {
+        let mut settings = builder.settings().write().unwrap();
+        settings.assistant =
+            serde_json::from_value(serde_json::json!({"interactionMode":"solo"})).unwrap();
+        settings.interaction_mode = Some(kotone_core::interaction::InteractionMode::Solo);
+        assert_eq!(
+            settings.interaction_mode,
+            Some(kotone_core::interaction::InteractionMode::Solo)
+        );
+    }
+    // Legacy assistant solo must not initialize VAD or start continuous capture.
+    builder.vad_factory = Some(Arc::new(|_| panic!("assistant solo must migrate to PTT")));
+    let orch = builder.into_arc();
+    orch.on_assistant_hotkey_hold(true).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    assert!(!orch.continuous_session());
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.on_assistant_hotkey_hold(false).await;
+    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(2)).await;
+    assert_eq!(queue.list().len(), 1);
+    assert_eq!(
+        emitter
+            .state_sequence()
+            .iter()
+            .filter(|state| *state == "listening")
+            .count(),
+        1
+    );
+    assert!(emitter
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(name, payload)| name == "kotone://state"
+            && payload["state"] == "listening"
+            && payload["payload"]["inputSource"] == "hotkey"));
 }

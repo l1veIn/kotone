@@ -29,6 +29,7 @@
     type ModelsDirInfo,
   } from "../../lib/ipc";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
+  import { findHotkeyConflict } from "../../lib/hotkeyCombo";
   import { captureHotkey } from "../../lib/hotkeyCapture";
   import {
     errText,
@@ -406,6 +407,8 @@
 
   async function saveInteractionAndContinue() {
     if (finishing) return;
+    const conflict = findHotkeyConflict($settingsStore, "record", currentKey);
+    if (conflict) { toast(false, `录制热键与${conflict}冲突，请重新录入`); return; }
     finishing = true;
     try {
       const mode = selectedMode === "push-to-talk" ? "hold" : "toggle";
@@ -429,6 +432,8 @@
   let finishing = $state(false);
   async function finish(skipped = false) {
     if (finishing) return;
+    const conflict = skipped ? findHotkeyConflict($settingsStore, "record", currentKey) : null;
+    if (conflict) { toast(false, `录制热键与${conflict}冲突，请重新录入`); return; }
     finishing = true;
     try {
       const patchObj: Record<string, unknown> = {

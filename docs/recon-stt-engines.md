@@ -1,3 +1,5 @@
+> 历史研究/审计快照：保留当时结论，不作为当前功能清单、默认配置或性能承诺。现行规范见 [文档索引](README.md)、[架构](architecture.md) 与 [术语表](glossary.md)。
+
 # Kotone STT 引擎侦察报告（2026 年中核实版）
 
 > 任务：核实调研文档候选模型真伪与接入成本。结论先行：**最重要的发现是 sherpa-onnx v1.13.4 并非 2025 年中版本，而是 2026 年的近期版本**（v1.13.3 ≈ 2026-02-25，v1.13.4 在其后），它已原生支持 X-ASR、多语 Nemotron-3.5 流式、FunASR Nano、Qwen3-ASR、Moonshine v2、FireRedASR、Dolphin、Cohere Transcribe 等——**首选路径（sherpa-onnx 配置级接入）覆盖面比预想大得多，Python sidecar 基本不再需要**。

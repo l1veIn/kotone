@@ -4,7 +4,8 @@
 //!
 //! 迁移合法性由 core `kotone_core::runtime` 纯函数裁决；本模块只做编排。
 
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -62,6 +63,18 @@ pub struct RuntimeStatus {
 pub struct RuntimeManager {
     phase: Mutex<RuntimePhase>,
     started: Mutex<Option<StartedSnapshot>>,
+    configuration: Mutex<()>,
+    input_epoch: AtomicU64,
+    input_pauses: Arc<AtomicUsize>,
+}
+
+/// Pause only input admission; no mutex is held while asynchronous cancellation runs.
+pub struct RuntimeInputPause(Arc<AtomicUsize>);
+
+impl Drop for RuntimeInputPause {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl RuntimeManager {
@@ -69,11 +82,38 @@ impl RuntimeManager {
         Self {
             phase: Mutex::new(RuntimePhase::Stopped),
             started: Mutex::new(None),
+            configuration: Mutex::new(()),
+            input_epoch: AtomicU64::new(0),
+            input_pauses: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     pub fn phase(&self) -> RuntimePhase {
         *self.phase.lock().unwrap()
+    }
+
+    /// 设置提交与启动的最后一段资源注册共用此锁；不跨异步预热持有。
+    pub fn configuration_guard(&self) -> MutexGuard<'_, ()> {
+        self.configuration.lock().unwrap()
+    }
+
+    pub fn input_ticket(&self) -> Option<u64> {
+        let phase = self.phase.lock().unwrap();
+        (*phase == RuntimePhase::Running && self.input_pauses.load(Ordering::SeqCst) == 0)
+            .then(|| self.input_epoch.load(Ordering::SeqCst))
+    }
+
+    pub fn accepts_input(&self, ticket: u64) -> bool {
+        self.input_ticket() == Some(ticket)
+    }
+
+    /// Discard queued input and refuse new tickets until the last pause ends.
+    /// Taking the phase lock makes ticket capture atomic with this transition.
+    pub fn pause_inputs(&self) -> RuntimeInputPause {
+        let _phase = self.phase.lock().unwrap();
+        self.input_pauses.fetch_add(1, Ordering::SeqCst);
+        self.input_epoch.fetch_add(1, Ordering::SeqCst);
+        RuntimeInputPause(self.input_pauses.clone())
     }
 
     /// 迁移相位（core 纯函数裁决；非法迁移返回 Err）
@@ -245,17 +285,14 @@ pub async fn start(app: &AppHandle) -> Result<RuntimeStatus, String> {
 
 async fn start_inner(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<SharedState>();
-    let rt = app.state::<RuntimeManager>();
 
-    let (settings_snapshot, engine_id, model_id, key, mode, session_config) = {
+    let (settings_snapshot, engine_id, model_id, session_config) = {
         let settings = state.settings.read().unwrap();
         let engine_id = settings.stt_engine.clone();
         (
             settings.clone(),
             engine_id.clone(),
             kotone_stt::model::active_model_from(&settings, &engine_id),
-            settings.hotkey.key.clone(),
-            effective_hotkey_mode(&settings),
             session_config_from(&settings, &engine_id),
         )
     };
@@ -343,6 +380,37 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
         }),
     );
 
+    let result = finish_start(
+        app,
+        settings_snapshot,
+        engine_id.clone(),
+        model_id,
+        session_config,
+    );
+    if result.is_err() {
+        let engines = state.engines.clone();
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            if let Some(engine) = engines.get(&engine_id) {
+                engine.unload();
+            }
+        })
+        .await;
+    }
+    result
+}
+
+/// 此段无 await：与配置事务串行提交最新热键及运行态，避免注册旧的启动快照。
+fn finish_start(
+    app: &AppHandle,
+    settings_snapshot: Settings,
+    engine_id: String,
+    model_id: String,
+    session_config: SessionConfig,
+) -> Result<(), String> {
+    let state = app.state::<SharedState>();
+    let rt = app.state::<RuntimeManager>();
+    let _configuration = rt.configuration_guard();
+    let current_settings = state.settings.read().unwrap().clone();
     // 阶段 2：注册全局热键（失败回滚：卸载引擎，不半截启动）
     snapshot_and_emit(app, Some("hotkey".into()));
     crate::record_process_event(
@@ -359,16 +427,13 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
         .orchestrator
         .activate_runtime_settings(settings_snapshot);
     let mgr = app.state::<HotkeyManager>();
-    if let Err(e) = mgr.register(app, &key, mode) {
+    if let Err(e) = mgr.register_with_settings(
+        app,
+        &current_settings.hotkey.key,
+        effective_hotkey_mode(&current_settings),
+        &current_settings,
+    ) {
         state.orchestrator.deactivate_runtime_settings();
-        let engines = state.engines.clone();
-        let unload_engine = engine_id.clone();
-        let _ = tauri::async_runtime::spawn_blocking(move || {
-            if let Some(en) = engines.get(&unload_engine) {
-                en.unload();
-            }
-        })
-        .await;
         return Err(e);
     }
 
@@ -412,6 +477,7 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
         model_id,
         session_config,
     }));
+    rt.input_epoch.fetch_add(1, Ordering::SeqCst);
     rt.transit(runtime::finish_start)?;
     kotone_core::log::log("runtime started");
     crate::record_process_event(
@@ -445,17 +511,20 @@ pub async fn stop(app: &AppHandle) -> Result<RuntimeStatus, String> {
             ))
         }
     }
-    rt.transit(runtime::begin_stop)?;
-    snapshot_and_emit(app, Some("unload".into()));
-
     let state = app.state::<SharedState>();
+
+    {
+        let _configuration = rt.configuration_guard();
+        rt.transit(runtime::begin_stop)?;
+        rt.input_epoch.fetch_add(1, Ordering::SeqCst);
+        // 在首次 await 前关闭 admission 并注销来源；已排队的异步热键凭票据失效。
+        state.orchestrator.suspend_runtime_inputs();
+        app.state::<HotkeyManager>().unregister(app)?;
+    }
+    snapshot_and_emit(app, Some("unload".into()));
 
     // 进行中的会话先取消（orchestrator 是幂等的：Idle 时 cancel 无效果）
     state.orchestrator.cancel().await;
-
-    // 注销热键（两个后端都停；LL 钩子 matcher 置禁用，按键全放行）
-    let mgr = app.state::<HotkeyManager>();
-    mgr.unregister(app)?;
 
     // 隐藏悬浮窗（原始 SW_HIDE 路径——Tauri hide() 与我们的 SW_SHOWNA 显示
     // 不对称，会因 tao 可见性缓存 diff 为空被短路，详见 lib.rs hide_window）
@@ -491,4 +560,64 @@ pub async fn stop(app: &AppHandle) -> Result<RuntimeStatus, String> {
         }),
     );
     snapshot_and_emit(app, None).ok_or_else(|| "运行时状态未初始化".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn running() -> RuntimeManager {
+        let runtime = RuntimeManager::new();
+        *runtime.phase.lock().unwrap() = RuntimePhase::Running;
+        runtime
+    }
+
+    #[test]
+    fn reconfiguration_discards_queued_input_and_resumes_after_rollback() {
+        let runtime = running();
+        let queued = runtime.input_ticket().unwrap();
+        let reconfigure = || -> Result<(), ()> {
+            let _pause = runtime.pause_inputs();
+            assert!(runtime.input_ticket().is_none());
+            assert!(!runtime.accepts_input(queued));
+            Err(()) // A failed settings transaction still releases its pause.
+        };
+        assert!(reconfigure().is_err());
+        assert!(!runtime.accepts_input(queued));
+        let fresh = runtime.input_ticket().unwrap();
+        assert!(runtime.accepts_input(fresh));
+    }
+
+    #[tokio::test]
+    async fn cancellation_pause_rejects_old_and_new_edges_until_completion() {
+        let runtime = running();
+        let queued = runtime.input_ticket().unwrap();
+        let pause = runtime.pause_inputs();
+        let (done, finished) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(async move {
+            let _pause = pause;
+            let _ = finished.await;
+        });
+        assert!(!runtime.accepts_input(queued));
+        assert!(runtime.input_ticket().is_none());
+        done.send(()).unwrap();
+        task.await.unwrap();
+        assert!(!runtime.accepts_input(queued));
+        assert!(runtime.input_ticket().is_some());
+    }
+
+    #[test]
+    fn overlapping_pauses_never_reopen_input_early() {
+        let runtime = running();
+        let cancel = runtime.pause_inputs();
+        let settings = runtime.pause_inputs();
+        drop(cancel);
+        assert!(runtime.input_ticket().is_none());
+        drop(settings);
+        assert!(runtime.input_ticket().is_some());
+        let pause = runtime.pause_inputs();
+        *runtime.phase.lock().unwrap() = RuntimePhase::Stopped;
+        drop(pause);
+        assert!(runtime.input_ticket().is_none());
+    }
 }

@@ -7,11 +7,10 @@ rust-version = "1.77.2"
 
 [dependencies]
 kotone-core.workspace = true
+kotone-ai.workspace = true
 # 自定义词表可能被 WPS/Excel/记事本另存为 GBK/UTF-16，encoding_rs 负责兜底解码
 encoding_rs = "0.8"
-# keyring 3 没有默认 feature；不开 windows-native 时走进程内 mock，
-# set/get 各建一条空条目，保存后立刻「缺少密钥」，重启更没有。
-keyring = { version = "3", features = ["windows-native"] }
+# HTTP 传输与凭据事务由 kotone-ai 共享；这里保留处理器持有的客户端。
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde.workspace = true
 serde_json.workspace = true

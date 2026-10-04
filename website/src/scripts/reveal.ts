@@ -24,10 +24,16 @@ const spyIds = ["features", "workflow", "proof", "privacy"];
 const spyLinks = Array.from(
   document.querySelectorAll<HTMLElement>(".nav__link[href^='#']")
 );
-const spyMap = new Map(spyIds.map((id) => [
-  id,
-  { section: document.getElementById(id), link: spyLinks.find((a) => a.getAttribute("href") === `#${id}`) },
-]).filter(([, v]) => v.section));
+const spyMap = new Map<string, { section: HTMLElement; link?: HTMLElement }>();
+for (const id of spyIds) {
+  const section = document.getElementById(id);
+  if (section) {
+    spyMap.set(id, {
+      section,
+      link: spyLinks.find((a) => a.getAttribute("href") === `#${id}`),
+    });
+  }
+}
 
 if ("IntersectionObserver" in window && spyMap.size) {
   const spy = new IntersectionObserver(
@@ -40,5 +46,5 @@ if ("IntersectionObserver" in window && spyMap.size) {
     },
     { rootMargin: "-45% 0px -50% 0px" }
   );
-  spyMap.forEach(({ section }) => spy.observe(section!));
+  spyMap.forEach(({ section }) => spy.observe(section));
 }

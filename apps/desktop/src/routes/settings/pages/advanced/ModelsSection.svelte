@@ -683,7 +683,7 @@
         { id: "auto", name: "自动", desc: "魔搭优先，回退官方" },
         { id: "official", name: "仅官方", desc: "Hugging Face / GitHub" },
         { id: "mirror", name: "仅镜像", desc: "魔搭 / HF 镜像" },
-      ] as option}
+      ] as const as option}
         {@const selected = $settingsStore.download.source === option.id}
         <button
           class="rounded-lg px-2.5 py-2 text-left ring-1 transition {selected

@@ -12,7 +12,9 @@
 //! - `orchestrator`：唯一状态所有者（状态机）
 //! - `settings`/`profile`/`eval`/`log`：配置 schema 与存储（唯一写入口）、游戏 profile、评测、文件日志
 
+pub mod assistant;
 pub mod audio;
+pub mod cancel;
 pub mod connection;
 pub mod eval;
 pub mod history;
@@ -24,7 +26,9 @@ pub mod orchestrator;
 pub mod postprocess;
 pub mod process_log;
 pub mod profile;
+pub mod reminders;
 pub mod runtime;
 pub mod settings;
+pub mod speech;
 pub mod stt;
 pub mod vad;
