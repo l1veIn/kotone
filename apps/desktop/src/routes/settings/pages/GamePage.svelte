@@ -64,9 +64,9 @@
     hotwordsText.split(/\r?\n/).filter((l) => l.trim() !== "").length,
   );
 
-  /** 内置 profile（删除语义 = 恢复出厂）；当前内置集仍为 lol / generic */
+  /** 内置 profile（删除语义 = 恢复出厂）；当前内置集为 lol / dota2 / generic */
   function isBuiltin(p: GameProfile): boolean {
-    return p.id === "lol" || p.id === "generic";
+    return p.id === "lol" || p.id === "dota2" || p.id === "generic";
   }
 
   /** 加载 profile 图标字节 → data URL（按扩展名推断 mime；无图标/失败 → 占位）。

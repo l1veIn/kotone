@@ -1,8 +1,9 @@
 //! 游戏 profile：CRUD + 前台进程匹配（docs/development.md §5.1、§5.4）
 //! 存储：~/.kotone/profiles/<id>.json
 //!
-//! 内置模板存放在 `resources/profiles/*.json`；首次运行落盘两个 profile：
+//! 内置模板存放在 `resources/profiles/*.json`；首次运行落盘三个 profile：
 //! - `lol`：League of Legends（§5.4 示例值，delay 20/20/100，Unicode 逐字）
+//! - `dota2`：Dota 2（同上默认值；Enter 队伍频道、Shift+Enter 所有人）
 //! - `generic`：通用，匹配任意前台窗口（processNames 为空 = 通配）
 
 use std::path::{Path, PathBuf};
@@ -96,6 +97,16 @@ impl GameProfile {
             .clone()
     }
 
+    /// 内置 Dota 2 profile。内容由 resources/profiles/dota2.json 维护。
+    pub fn builtin_dota2() -> Self {
+        static PROFILE: OnceLock<GameProfile> = OnceLock::new();
+        PROFILE
+            .get_or_init(|| {
+                parse_builtin_profile("dota2", include_str!("../resources/profiles/dota2.json"))
+            })
+            .clone()
+    }
+
     /// 内置通用 profile。内容由 resources/profiles/generic.json 维护。
     pub fn builtin_generic() -> Self {
         static PROFILE: OnceLock<GameProfile> = OnceLock::new();
@@ -184,6 +195,10 @@ fn builtin_icon(id: &str) -> Option<(&'static [u8], &'static str)> {
             include_bytes!("../resources/profiles/icons/lol-kotone.webp"),
             "lol-kotone.webp",
         )),
+        "dota2" => Some((
+            include_bytes!("../resources/profiles/icons/dota2-kotone.webp"),
+            "dota2-kotone.webp",
+        )),
         _ => None,
     }
 }
@@ -261,7 +276,11 @@ pub fn ensure_builtin() -> Result<(), String> {
 
 pub fn ensure_builtin_in(dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("创建 profiles 目录失败: {e}"))?;
-    for p in [GameProfile::builtin_lol(), GameProfile::builtin_generic()] {
+    for p in [
+        GameProfile::builtin_lol(),
+        GameProfile::builtin_dota2(),
+        GameProfile::builtin_generic(),
+    ] {
         let path = profile_path_in(dir, &p.id);
         if !path.exists() {
             let json = serde_json::to_string_pretty(&p)
@@ -1057,6 +1076,7 @@ pub fn delete_profile(id: &str) -> Result<ProfileDeleteOutcome, String> {
 pub fn delete_profile_in(dir: &Path, id: &str) -> Result<ProfileDeleteOutcome, String> {
     let builtin = match id {
         "lol" => Some(GameProfile::builtin_lol()),
+        "dota2" => Some(GameProfile::builtin_dota2()),
         "generic" => Some(GameProfile::builtin_generic()),
         _ => None,
     };
@@ -1088,7 +1108,11 @@ mod tests {
     use super::*;
 
     fn sample_profiles() -> Vec<GameProfile> {
-        vec![GameProfile::builtin_generic(), GameProfile::builtin_lol()]
+        vec![
+            GameProfile::builtin_generic(),
+            GameProfile::builtin_lol(),
+            GameProfile::builtin_dota2(),
+        ]
     }
 
     #[test]
@@ -1104,6 +1128,38 @@ mod tests {
         let lol = GameProfile::builtin_lol();
         assert!(!matches_process(&lol, "notepad.exe"));
         assert!(!matches_process(&lol, "LeagueClient.exe"));
+    }
+
+    #[test]
+    fn dota2_matches_its_process_case_insensitive() {
+        let dota2 = GameProfile::builtin_dota2();
+        assert!(matches_process(&dota2, "dota2.exe"));
+        assert!(matches_process(&dota2, "DOTA2.EXE"));
+        assert!(!matches_process(&dota2, "notepad.exe"));
+        assert!(
+            !matches_process(&dota2, "League of Legends.exe"),
+            "两个游戏 profile 不应互相命中"
+        );
+    }
+
+    #[test]
+    fn dota2_builtin_values_match_doc() {
+        let dota2 = GameProfile::builtin_dota2();
+        assert_eq!(dota2.pre_open_delay_ms, 20);
+        assert_eq!(dota2.pre_paste_delay_ms, 20);
+        assert_eq!(dota2.pre_send_delay_ms, 100);
+        assert!(dota2.hotwords.contains(&"补刀".to_string()));
+        assert!(dota2.hotwords.contains(&"跳刀".to_string()));
+        // 内置热词应去重
+        let mut sorted = dota2.hotwords.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), dota2.hotwords.len(), "内置热词不应有重复");
+        // 队伍 / 所有人双频道（Enter 开框，Shift+Enter 全员）
+        let channels = dota2.channels_effective();
+        assert_eq!(channels.len(), 2);
+        assert!(channels[0].is_default);
+        assert_eq!(channels[1].open_chat_key, "Shift+Enter");
     }
 
     #[test]
@@ -1157,11 +1213,11 @@ mod tests {
 
         ensure_builtin_in(&dir).unwrap();
         let mut all = list_in(&dir);
-        assert_eq!(all.len(), 2, "首次运行落盘 lol + generic");
+        assert_eq!(all.len(), 3, "首次运行落盘 lol + dota2 + generic");
         // 再跑一遍不重复、不覆盖
         ensure_builtin_in(&dir).unwrap();
         all = list_in(&dir);
-        assert_eq!(all.len(), 2);
+        assert_eq!(all.len(), 3);
 
         let mut custom = GameProfile::builtin_lol();
         custom.id = "valorant".into();
@@ -1171,7 +1227,7 @@ mod tests {
 
         let loaded = get_in(&dir, "valorant").unwrap();
         assert_eq!(loaded.display_name, "Valorant");
-        assert_eq!(list_in(&dir).len(), 3);
+        assert_eq!(list_in(&dir).len(), 4);
     }
 
     #[test]
