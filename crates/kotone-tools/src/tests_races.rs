@@ -288,6 +288,41 @@ async fn idle_maintenance_reclaims_expired_artifacts_without_reads() {
     assert!(!service.maintenance_running(), "关闭后维护任务已退出");
 }
 
+/// 单线程运行时：`start` 返回后不让出执行权就立即 `shutdown_now`，维护任务在首次 poll
+/// 之前被 abort。被丢弃的未运行 future 也必须复位运行标志（复位守卫在 spawn 前构造）。
+#[tokio::test(flavor = "current_thread")]
+async fn maintenance_flag_resets_when_aborted_before_first_poll() {
+    let desktop = desktop();
+    let clock = ManualClock::at(10_000);
+    let host = FakeHost::new(Some(3));
+    let dir = tempfile::tempdir().unwrap();
+    let mut running = RunningToolService::start(
+        deps(&desktop, clock.clone(), ServiceLimits::default()),
+        host,
+        dir.path(),
+    )
+    .await
+    .unwrap();
+    let service = running.service().clone();
+    // 单线程运行时且未让出：维护任务尚未被 poll
+    assert!(service.maintenance_running());
+    running.shutdown_now();
+    drop(running);
+    // 让调度器处理取消并丢弃 future
+    for _ in 0..50 {
+        if !service.maintenance_running() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !service.maintenance_running(),
+        "首次 poll 前被取消也必须复位维护标志"
+    );
+    assert!(service.is_closed());
+    assert_eq!(service.resident_artifacts(), (0, 0), "存储保持为空");
+}
+
 /// 对照：没有维护任务时，观测接口本身不会清理，到期产物仍驻留——证明上一测试观察到的
 /// 是维护任务的回收，而不是读取接口的隐式清理。
 #[tokio::test(flavor = "multi_thread")]

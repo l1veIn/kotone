@@ -383,16 +383,18 @@ impl ToolService {
             .limits
             .maintenance_interval
             .max(Duration::from_millis(1));
-        let running = self.maintenance_running.clone();
-        running.store(true, Ordering::SeqCst);
-        tokio::spawn(async move {
-            struct Running(Arc<AtomicBool>);
-            impl Drop for Running {
-                fn drop(&mut self) {
-                    self.0.store(false, Ordering::SeqCst);
-                }
+        // 复位守卫在 spawn 之前构造并被 future 捕获：即使任务在首次 poll 之前就被
+        // abort / 运行时 shutdown 丢弃，守卫也会随 future 一起析构并复位标志。
+        struct Running(Arc<AtomicBool>);
+        impl Drop for Running {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::SeqCst);
             }
-            let _running = Running(running);
+        }
+        self.maintenance_running.store(true, Ordering::SeqCst);
+        let running = Running(self.maintenance_running.clone());
+        tokio::spawn(async move {
+            let _running = running;
             let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {

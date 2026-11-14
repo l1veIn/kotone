@@ -77,7 +77,7 @@
 - **提权组合**：桌面端以管理员运行、CLI 未提权（或反之）时的描述文件所有者校验与进程身份查询未实测；代码允许 Administrators 作为所有者。
 - **远程桌面/多会话隔离**：会话 ID 分离只由假宿主测试覆盖，未在真实第二会话验证。
 - **Playwright e2e**：`pnpm -C apps/desktop test:e2e` 两次都因 Vite 预构建时 esbuild.exe 无法写文件失败（`Failed to write to output file … Access is denied`）。排查：Windows 受控文件夹访问为关闭；同一会话中 node 可以写入相同目录，但 esbuild.exe（本 worktree 与原工作区的同一硬链接文件，SHA-256 相同）向 worktree 和 `%TEMP%` 写入都被拒绝，PowerShell 中同样复现，判断为本会话对该可执行文件的环境限制而非代码问题。前端改动仅为 `Settings` 类型新增 `toolService` 字段与 mock 默认值，`pnpm check` 已通过；e2e 需在正常开发环境或 CI 中补跑。
-- 既有的 `kotone-cli` 单元测试（如 `listen_session_wav_mock_engine_exits_0`）沿用仓库原有行为，会使用默认 `~/.kotone` 位置；本轮新增测试全部使用临时目录，未读取或输出用户配置、历史、录音或密钥。
+- 既有的 `kotone-cli` 单元测试（如 `listen_session_wav_mock_engine_exits_0`）在本节所述的**第一次**广泛运行（第 2 节 `cargo test --workspace --locked`）时沿用仓库原有行为，未做隔离：它们会读取默认配置/日志位置（`~/.kotone`），并可能按用户设置走可选的持久化/后处理路径。本记录不声称当时没有发生这类访问；也没有为调查而读取用户私有数据，因此无法、也不断言实际发生过外部请求或记录增删。本轮新增测试全部使用临时目录，未读取或输出用户配置、历史、录音或密钥。**该遗留限制已在第 8 节修正**（4 个 `listen_session_*` 测试改为注入隔离配置，并新增第 5 个临时目录持久化回归）。
 
 ## 6. 人工验收建议
 
@@ -132,6 +132,28 @@
 
 本轮未重新运行：`cargo test --workspace`（含会读取默认 `~/.kotone` 的遗留 CLI 测试，按要求不执行）、`pnpm check`（前端未改动，沿用第 2 节结果）、`cargo build -p kotone-tauri` 单独构建（由 workspace clippy 编译覆盖，桌面 `tool_service.rs` 未改，`shutdown_now` 新顺序由 `RunningToolService` 测试覆盖）。Playwright e2e 仍受第 5 节环境限制。
 
-工作区中 `crates/kotone-cli/src/main.rs` 出现了一处不是本轮实现的改动（遗留 `listen` 测试的配置隔离），推测来自并行的评审/修复流程；本次修正提交未包含它，保留在工作区待其所有者处理。
+工作区中 `crates/kotone-cli/src/main.rs` 出现了一处不是本轮实现的改动（遗留 `listen` 测试的配置隔离），来自并行的修复流程；本次修正提交未包含它。该改动已经批准，随第 8 节的提交一并纳入。
 
 **仍未验证**（与第 5 节相同，修正没有改变）：真实桌面 GUI 生命周期、LOL 任一显示模式、125%/150% 与混合 DPI 多显示器（本机 96 DPI 单显示器）、提权组合、多会话隔离、不默认合入分层窗口的旧系统上 CAPTUREBLT 的实际作用、CAPTUREBLT 指针闪烁是否出现。
+
+## 8. 最终小修正（第三次提交）
+
+独立评审确认第 7 节的期限/释放/关闭/TTL/时间戳/连接寿命/不覆盖发布修正有效，另外指出两个小问题，本轮按"修复 + 回归测试"处理；同时纳入已批准的 `listen` 测试隔离改动。
+
+| 评审项 | 修正 | 回归测试 |
+| --- | --- | --- |
+| 9. CLI 临时文件清理越权 | `write_output` 拆出 `write_output_via_temp`（同一实现，调用方给定临时路径）。`create_new` 打开失败（包括临时路径已存在）直接返回，不做任何清理；只有本次调用独占创建成功的临时文件，才会在写入/同步/发布失败时先关闭句柄再删除。不覆盖原子发布语义不变 | `tools::tests::preexisting_temp_path_is_never_deleted`：预先放置哨兵临时文件，`force=false/true` 都返回"创建临时文件失败"，哨兵内容保留，目标未发布；对照：自有临时文件在发布失败（目标已存在）后被删除、已有目标不变 |
+| 10. 维护标志在首次 poll 前取消时不复位 | `spawn_maintenance` 在 `tokio::spawn` **之前**构造复位守卫，由 future 捕获；未被 poll 就 abort 或运行时关闭时，守卫随 future 析构并复位 `maintenance_running`。这只影响可观测性，不影响产物保留；关闭/提交线性化未改动 | `tests_races::maintenance_flag_resets_when_aborted_before_first_poll`：current-thread 运行时，`start` 返回后不让出即 `shutdown_now`+drop，再有界 `yield_now` 让取消生效；断言标志已复位、服务已关闭、存储为 (0,0)。变异检查：把守卫移回 async 体内，该测试 FAILED；恢复后通过 |
+| 遗留测试隔离（已批准的并行改动） | `crates/kotone-cli/src/main.rs` 抽出私有 `cmd_listen_session_with_config`；生产包装仍负责日志/配置初始化。4 个遗留测试（`listen_session_no_hotkey_requires_duration`、`listen_session_missing_wav_exits_1`、`listen_session_unknown_engine_exits_2`、`listen_session_wav_mock_engine_exits_0`）改为注入 `Settings`、空处理器注册表、无活动用户 profile/Keyring，history/eval 目录位于 `TempDir`；不修改 HOME/USERPROFILE | 新增第 5 个 `listen_session_wav_recordings_use_injected_directories`：只在注入的临时目录中开启持久化，断言夹具音频/eval 实际落在注入目录、未使用的 history 目录未创建、未发送 Preview 时不写文本历史 `history.jsonl` |
+
+**本轮实际运行的命令与结果**（沿用本 worktree 已有的构建目录，未重新做冷构建）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo fmt --all -- --check` | 通过 |
+| `cargo clippy -p kotone-tools -p kotone-cli --all-targets --locked -- -D warnings` | 通过（只编译，不执行测试） |
+| `cargo test -p kotone-tools --locked` | 43 通过（第 7 节的 42 个 + 新增 1 个） |
+| `cargo test -p kotone-cli --bin kotone-cli --locked tools::` | 5 通过（含新增哨兵回归） |
+| `cargo test -p kotone-cli --bin kotone-cli --locked listen_session_` | 5 通过（4 个已隔离的遗留测试 + 1 个临时目录持久化回归）。并行修复者在格式化前也运行过同一过滤器，结果同为 5 通过（main.rs SHA-256 `7E6B2617…4522`，格式化后不变） |
+
+本轮未重新运行：`cargo test --workspace`、15 次重复的竞态测试、GUI/原生捕获测试（两个修正都不涉及捕获路径）、`pnpm check` 与 Playwright（前端未改动）。第 5 节与第 7 节记录的原生/LOL/DPI/提权/多会话/Playwright 限制保持不变。

@@ -427,6 +427,7 @@ async fn cmd_listen(
 /// 会话模式：跳过热键，begin → 等待（wav 时长或 --duration）→ end → 按终态给退出码。
 /// wav 直灌用 WavFileBackend（强制预览收尾，不触发真实注入）；
 /// --no-hotkey 无 wav 时用配置采集设备（可指向虚拟声卡 CABLE Output）。
+/// 默认用户配置/日志仅在此生产入口加载；测试通过下方 helper 注入隔离配置。
 #[cfg(windows)]
 async fn cmd_listen_session(
     engine: &str,
@@ -434,6 +435,42 @@ async fn cmd_listen_session(
     wav: Option<String>,
     duration: Option<u64>,
     speed: Option<f64>,
+) -> i32 {
+    kotone_core::log::init();
+    cmd_listen_session_with_config(
+        engine,
+        profile_id,
+        wav,
+        duration,
+        speed,
+        ListenSessionConfig {
+            settings: settings::load(),
+            processor_registry: None,
+            history_dir: None,
+            eval_dir: None,
+        },
+    )
+    .await
+}
+
+/// 会话的可注入配置；None 保留生产的凭据/目录解析，测试显式提供离线 registry
+/// 和临时目录，不能通过全局 HOME 修改影响并行测试或用户数据。
+#[cfg(windows)]
+struct ListenSessionConfig {
+    settings: Settings,
+    processor_registry: Option<std::sync::Arc<ProcessorRegistry>>,
+    history_dir: Option<std::path::PathBuf>,
+    eval_dir: Option<std::path::PathBuf>,
+}
+
+#[cfg(windows)]
+async fn cmd_listen_session_with_config(
+    engine: &str,
+    profile_id: Option<String>,
+    wav: Option<String>,
+    duration: Option<u64>,
+    speed: Option<f64>,
+    config: ListenSessionConfig,
 ) -> i32 {
     use std::sync::{Arc, RwLock};
 
@@ -443,9 +480,12 @@ async fn cmd_listen_session(
     use kotone_platform_windows::inject::{WinFocusBackend, WindowsInjector};
     use kotone_platform_windows::wav_audio::WavFileBackend;
 
-    kotone_core::log::init();
-
-    let mut settings = settings::load();
+    let ListenSessionConfig {
+        mut settings,
+        processor_registry,
+        history_dir,
+        eval_dir,
+    } = config;
     settings.stt_engine = kotone_core::stt::canonical_stt_engine(engine).to_string();
     if let Some(profile_id) = profile_id {
         settings.active_profile_id = Some(profile_id);
@@ -506,24 +546,28 @@ async fn cmd_listen_session(
     }
 
     let emitter: Arc<dyn Emitter> = Arc::new(JsonlEmitter { hotkey: None });
-    let processor_registry = match register_processors(settings.clone()) {
-        Ok(registry) => registry,
-        Err(error) => {
-            eprintln!("注册后处理器失败: {error}");
-            return 2;
-        }
+    let processor_registry = match processor_registry {
+        Some(registry) => registry,
+        None => match register_processors(settings.clone()) {
+            Ok(registry) => registry,
+            Err(error) => {
+                eprintln!("注册后处理器失败: {error}");
+                return 2;
+            }
+        },
     };
-    let orchestrator = wire_vad(
-        Orchestrator::new(
-            settings,
-            Arc::new(registry),
-            audio_backend,
-            injector,
-            Arc::new(WinFocusBackend),
-            emitter,
-        )
-        .with_processors(processor_registry),
-    );
+    let mut orchestrator = Orchestrator::new(
+        settings,
+        Arc::new(registry),
+        audio_backend,
+        injector,
+        Arc::new(WinFocusBackend),
+        emitter,
+    )
+    .with_processors(processor_registry);
+    orchestrator.history_dir = history_dir;
+    orchestrator.eval_dir = eval_dir;
+    let orchestrator = wire_vad(orchestrator);
 
     if let Err(e) = orchestrator.begin().await {
         println!(
@@ -1912,52 +1956,139 @@ mod tests {
     }
 
     #[cfg(windows)]
+    fn isolated_listen_config() -> (tempfile::TempDir, ListenSessionConfig) {
+        let directory = tempfile::tempdir().unwrap();
+        // No user profile lookup, connection/keyring resolver, online processing or
+        // persistence is allowed in the default WAV mock regression fixture.
+        let settings = Settings {
+            active_profile_id: None,
+            post_processing: kotone_core::postprocess::PostProcessingConfig {
+                enabled: false,
+                pipelines: Vec::new(),
+                ..Default::default()
+            },
+            connections: Vec::new(),
+            history: kotone_core::history::HistoryConfig {
+                mode: kotone_core::history::HistoryMode::Off,
+                include_audio: false,
+                dir: directory
+                    .path()
+                    .join("unused-history")
+                    .to_string_lossy()
+                    .into(),
+                ..Default::default()
+            },
+            eval_recording: false,
+            ..Settings::default()
+        };
+        let config = ListenSessionConfig {
+            settings,
+            processor_registry: Some(std::sync::Arc::new(ProcessorRegistry::new())),
+            history_dir: Some(directory.path().join("history")),
+            eval_dir: Some(directory.path().join("eval")),
+        };
+        (directory, config)
+    }
+
+    #[cfg(windows)]
     #[tokio::test]
     async fn listen_session_wav_mock_engine_exits_0() {
         // mock-stream：固定文本「对面打野在下路」，全速喂入 → Preview 收尾 → 0
-        let code = cmd_listen_session(
+        let (directory, config) = isolated_listen_config();
+        let code = cmd_listen_session_with_config(
             "mock-stream",
             None,
             Some(fixture_wav().to_string_lossy().into_owned()),
             None,
             Some(0.0),
+            config,
         )
         .await;
         assert_eq!(code, 0);
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn listen_session_wav_recordings_use_injected_directories() {
+        let (directory, mut config) = isolated_listen_config();
+        // Enable recording only in this owned TempDir. This exercises the same
+        // session path and proves the directory overrides are actually wired.
+        config.settings.history.mode = kotone_core::history::HistoryMode::KeepAll;
+        config.settings.history.include_audio = true;
+        config.settings.eval_recording = true;
+        let code = cmd_listen_session_with_config(
+            "mock-stream",
+            None,
+            Some(fixture_wav().to_string_lossy().into_owned()),
+            None,
+            Some(0.0),
+            config,
+        )
+        .await;
+        assert_eq!(code, 0);
+        let audio_files = std::fs::read_dir(directory.path().join("history/audio"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(audio_files.len(), 1);
+        assert_eq!(audio_files[0].extension().unwrap(), "wav");
+        let eval_files = std::fs::read_dir(directory.path().join("eval"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert!(eval_files
+            .iter()
+            .any(|path| path.extension().is_some_and(|ext| ext == "wav")));
+        assert!(eval_files
+            .iter()
+            .any(|path| path.extension().is_some_and(|ext| ext == "json")));
+        assert!(!directory.path().join("unused-history").exists());
+        // Preview has not been sent, so only audio is saved, never a text ledger.
+        assert!(!directory.path().join("history/history.jsonl").exists());
     }
 
     #[cfg(windows)]
     #[tokio::test]
     async fn listen_session_unknown_engine_exits_2() {
-        let code = cmd_listen_session(
+        let (directory, config) = isolated_listen_config();
+        let code = cmd_listen_session_with_config(
             "no-such-engine",
             None,
             Some(fixture_wav().to_string_lossy().into_owned()),
             None,
             Some(0.0),
+            config,
         )
         .await;
         assert_eq!(code, 2);
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
     }
 
     #[cfg(windows)]
     #[tokio::test]
     async fn listen_session_missing_wav_exits_1() {
-        let code = cmd_listen_session(
+        let (directory, config) = isolated_listen_config();
+        let code = cmd_listen_session_with_config(
             "mock-stream",
             None,
             Some("no/such/file.wav".into()),
             None,
             Some(0.0),
+            config,
         )
         .await;
         assert_eq!(code, 1);
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
     }
 
     #[cfg(windows)]
     #[tokio::test]
     async fn listen_session_no_hotkey_requires_duration() {
-        let code = cmd_listen_session("mock-stream", None, None, None, None).await;
+        let (directory, config) = isolated_listen_config();
+        let code =
+            cmd_listen_session_with_config("mock-stream", None, None, None, None, config).await;
         assert_eq!(code, 2);
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
     }
 }

@@ -265,9 +265,9 @@ async fn call(
 ///   目标在任何时刻已存在都会失败，不存在“检查后被他人创建再被覆盖”的竞态。
 /// - 指定 `--force`：`std::fs::rename` 原子替换已存在的文件。
 ///
-/// 任何失败路径都删除临时文件，不留下半个文件。
+/// 只有本次调用成功独占创建的临时文件才会在写入/同步/发布失败时被删除；
+/// 若临时路径已存在（独占创建失败），直接返回错误，绝不删除不属于本次调用的文件。
 fn write_output(path: &Path, bytes: &[u8], force: bool) -> Result<(), String> {
-    use std::io::Write as _;
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -291,27 +291,40 @@ fn write_output(path: &Path, bytes: &[u8], force: bool) -> Result<(), String> {
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
-    let written = std::fs::OpenOptions::new()
+    write_output_via_temp(path, &temp, bytes, force)
+}
+
+/// [`write_output`] 的实际实现：经由调用方给定的临时路径写出并发布。
+fn write_output_via_temp(
+    path: &Path,
+    temp: &Path,
+    bytes: &[u8],
+    force: bool,
+) -> Result<(), String> {
+    use std::io::Write as _;
+
+    // 独占创建失败（含临时路径已存在）：该路径不属于本次调用，不做任何清理。
+    let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&temp)
-        .and_then(|mut file| {
-            file.write_all(bytes)?;
-            file.sync_all()
-        });
+        .open(temp)
+        .map_err(|e| format!("创建临时文件失败: {e}"))?;
+    // 从这里起临时文件归本次调用所有；先关闭句柄再删除或发布。
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
     if let Err(e) = written {
-        let _ = std::fs::remove_file(&temp);
+        let _ = std::fs::remove_file(temp);
         return Err(format!("写入临时文件失败: {e}"));
     }
     let published = if force {
-        std::fs::rename(&temp, path)
+        std::fs::rename(temp, path)
     } else {
-        kotone_platform_windows::fs_publish::rename_no_replace(&temp, path)
+        kotone_platform_windows::fs_publish::rename_no_replace(temp, path)
     };
     match published {
         Ok(()) => Ok(()),
         Err(e) => {
-            let _ = std::fs::remove_file(&temp);
+            let _ = std::fs::remove_file(temp);
             if e.kind() == std::io::ErrorKind::AlreadyExists {
                 Err(format!("{} 已存在（使用 --force 覆盖）", path.display()))
             } else {
@@ -480,5 +493,31 @@ mod tests {
         write_output(&out, b"two", true).unwrap();
         assert_eq!(std::fs::read(&out).unwrap(), b"two");
         assert!(write_output(&dir.path().join("no/such/dir.png"), b"x", false).is_err());
+    }
+
+    /// 临时路径已被他人占用：独占创建失败后必须原样返回，既不删除该文件，也不发布目标。
+    #[test]
+    fn preexisting_temp_path_is_never_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("shot.png");
+        let temp = dir.path().join(".shot.png.sentinel.part");
+        std::fs::write(&temp, b"not ours").unwrap();
+        for force in [false, true] {
+            let err = write_output_via_temp(&out, &temp, b"mine", force).unwrap_err();
+            assert!(err.contains("创建临时文件失败"), "{err}");
+            assert_eq!(
+                std::fs::read(&temp).unwrap(),
+                b"not ours",
+                "不属于本次调用的临时文件必须保留"
+            );
+            assert!(!out.exists(), "未获得临时文件时不得发布");
+        }
+        // 对照：本次调用自己创建的临时文件在发布失败时被清理
+        std::fs::write(&out, b"existing").unwrap();
+        let own = dir.path().join(".shot.png.own.part");
+        assert!(write_output_via_temp(&out, &own, b"mine", false).is_err());
+        assert!(!own.exists(), "自有临时文件在发布失败后被删除");
+        assert_eq!(std::fs::read(&out).unwrap(), b"existing");
+        assert_eq!(std::fs::read(&temp).unwrap(), b"not ours");
     }
 }
