@@ -17,6 +17,8 @@
 
 ## 设计依据与历史
 
+- [游戏聊天 OCR 会话研究报告（2026-11-15）](research/2026-11-15-lol-chat-ocr-report.md) 汇总诊断、产品分工与韩服聊天实验；含39图配对对照及可提交的小型证据，不是整体准确率承诺。
+- [面向 Agent 的游戏工具演进计划](product-evolution-game-tools.md) 给出基础服务、目标暴露列表和下一轮 M1 验收范围；尚未交付的工具不是当前 API。
 - [ADR 索引](adr/README.md) 记录“为什么这样做”。已替代或修订的决策标明状态，旧正文保留用于追溯，不作为现行 API。
 - [早期开发文档](archive/development-history.md) 保存阶段计划、原始评测成绩和验收历史。
 - [技术预研](tech-research.md)、[STT 调研](recon-stt-engines.md)、[后处理调研](recon-postprocess-ai.md) 是有日期的研究材料，不能用来判断当前已支持的功能。
