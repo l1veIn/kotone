@@ -153,7 +153,30 @@ impl ReleaseOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InsertError {
     /// 单个产物就超过存储总容量。
-    TooLarge { bytes: u64, max_bytes: u64 },
+    TooLarge {
+        bytes: u64,
+        max_bytes: u64,
+    },
+    Closed,
+}
+
+/// 提交闸门拒绝变更的原因。闸门检查与变更在同一把存储锁内完成，
+/// 因此关闭（close）与提交（insert/release）之间是线性化的。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitError {
+    /// 存储已关闭（服务正在或已经退出）。
+    Closed,
+    /// 请求的绝对期限已过，迟到的结果不得发布或产生副作用。
+    DeadlineExpired,
+    TooLarge {
+        bytes: u64,
+        max_bytes: u64,
+    },
+    Lookup(LookupError),
+}
+
+fn deadline_passed(deadline: Option<std::time::Instant>) -> bool {
+    deadline.is_some_and(|d| std::time::Instant::now() >= d)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -173,6 +196,7 @@ struct Inner {
     total_bytes: u64,
     tombstones: HashMap<String, Gone>,
     tomb_order: VecDeque<String>,
+    closed: bool,
 }
 
 impl Inner {
@@ -197,16 +221,18 @@ impl Inner {
         true
     }
 
-    fn purge_expired(&mut self, now: u64) {
+    fn purge_expired(&mut self, now: u64) -> usize {
         let expired: Vec<String> = self
             .live
             .iter()
             .filter(|(_, r)| r.meta.expires_at_unix_ms <= now)
             .map(|(id, _)| id.clone())
             .collect();
+        let count = expired.len();
         for id in expired {
             self.remove(&id, Gone::Expired);
         }
+        count
     }
 }
 
@@ -233,15 +259,36 @@ impl ArtifactStore {
 
     /// 插入新产物；必要时回收最旧产物。返回被回收的 ID。
     pub fn insert(&self, record: ArtifactRecord) -> Result<Vec<String>, InsertError> {
+        match self.insert_gated(record, None) {
+            Ok(evicted) => Ok(evicted),
+            Err(CommitError::TooLarge { bytes, max_bytes }) => {
+                Err(InsertError::TooLarge { bytes, max_bytes })
+            }
+            Err(_) => Err(InsertError::Closed),
+        }
+    }
+
+    /// 经提交闸门插入：在存储锁内依次核对“未关闭”和“未超过绝对期限”，再插入。
+    pub fn insert_gated(
+        &self,
+        record: ArtifactRecord,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Vec<String>, CommitError> {
         let cost = record.cost();
         if cost > self.max_bytes {
-            return Err(InsertError::TooLarge {
+            return Err(CommitError::TooLarge {
                 bytes: cost,
                 max_bytes: self.max_bytes,
             });
         }
         let now = self.now();
         let mut inner = self.inner.lock().unwrap();
+        if inner.closed {
+            return Err(CommitError::Closed);
+        }
+        if deadline_passed(deadline) {
+            return Err(CommitError::DeadlineExpired);
+        }
         inner.purge_expired(now);
         let mut evicted = Vec::new();
         while inner.live.len() >= self.max_artifacts || inner.total_bytes + cost > self.max_bytes {
@@ -273,16 +320,48 @@ impl ArtifactStore {
 
     /// 幂等释放：重复释放或释放已过期产物返回 AlreadyGone，不报错。
     pub fn release(&self, id: &str) -> Result<ReleaseOutcome, LookupError> {
+        match self.release_gated(id, None) {
+            Ok(outcome) => Ok(outcome),
+            Err(CommitError::Lookup(error)) => Err(error),
+            Err(_) => Err(LookupError::NotFound),
+        }
+    }
+
+    /// 经提交闸门释放：与插入共用同一把锁内的关闭/期限检查。
+    pub fn release_gated(
+        &self,
+        id: &str,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<ReleaseOutcome, CommitError> {
         let now = self.now();
         let mut inner = self.inner.lock().unwrap();
+        if inner.closed {
+            return Err(CommitError::Closed);
+        }
+        if deadline_passed(deadline) {
+            return Err(CommitError::DeadlineExpired);
+        }
         inner.purge_expired(now);
         if inner.remove(id, Gone::Released) {
             return Ok(ReleaseOutcome::Released);
         }
         match inner.tombstones.get(id) {
             Some(why) => Ok(ReleaseOutcome::AlreadyGone(*why)),
-            None => Err(LookupError::NotFound),
+            None => Err(CommitError::Lookup(LookupError::NotFound)),
         }
+    }
+
+    /// 主动回收到期产物（空闲维护任务调用），返回回收数量。
+    pub fn purge_expired(&self) -> usize {
+        let now = self.now();
+        self.inner.lock().unwrap().purge_expired(now)
+    }
+
+    /// 测试观测：当前仍驻留内存的产物数与字节数（**不**触发到期清理）。
+    #[doc(hidden)]
+    pub fn resident_without_purge(&self) -> (usize, u64) {
+        let inner = self.inner.lock().unwrap();
+        (inner.live.len(), inner.total_bytes)
     }
 
     pub fn stats(&self) -> StoreStats {
@@ -297,10 +376,18 @@ impl ArtifactStore {
         }
     }
 
-    /// 服务关闭时丢弃全部产物（内存释放；产物从不落盘）。
-    pub fn clear(&self) {
+    /// 关闭并丢弃全部产物（内存释放；产物从不落盘）。与提交闸门在同一把锁内完成：
+    /// 返回后任何 insert_gated / release_gated 都只会得到 `Closed`。
+    pub fn close(&self) {
         let mut inner = self.inner.lock().unwrap();
-        *inner = Inner::default();
+        *inner = Inner {
+            closed: true,
+            ..Inner::default()
+        };
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.inner.lock().unwrap().closed
     }
 }
 
@@ -442,6 +529,45 @@ mod tests {
             store.get("short").err(),
             Some(LookupError::Gone(Gone::Expired))
         );
+    }
+
+    #[test]
+    fn commit_gate_rejects_after_close_and_after_deadline() {
+        let clock = ManualClock::at(0);
+        let store = ArtifactStore::new(clock, 8, u64::MAX);
+        store.insert(record("a", 0, 10_000, 4)).unwrap();
+        let past = std::time::Instant::now() - std::time::Duration::from_millis(1);
+        assert_eq!(
+            store.insert_gated(record("late", 0, 10_000, 4), Some(past)),
+            Err(CommitError::DeadlineExpired)
+        );
+        assert_eq!(
+            store.release_gated("a", Some(past)),
+            Err(CommitError::DeadlineExpired)
+        );
+        assert!(store.get("a").is_ok(), "期限已过的释放不得删除产物");
+        let future = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        store.close();
+        assert!(store.is_closed());
+        assert_eq!(store.resident_without_purge(), (0, 0));
+        assert_eq!(
+            store.insert_gated(record("b", 0, 10_000, 4), Some(future)),
+            Err(CommitError::Closed)
+        );
+        assert_eq!(store.release_gated("a", None), Err(CommitError::Closed));
+        assert_eq!(store.resident_without_purge(), (0, 0));
+    }
+
+    #[test]
+    fn explicit_purge_reclaims_without_reads() {
+        let clock = ManualClock::at(0);
+        let store = ArtifactStore::new(clock.clone(), 8, u64::MAX);
+        store.insert(record("a", 0, 100, 4)).unwrap();
+        store.insert(record("b", 0, 10_000, 4)).unwrap();
+        clock.advance(100);
+        assert_eq!(store.resident_without_purge().0, 2, "观测接口自身不清理");
+        assert_eq!(store.purge_expired(), 1);
+        assert_eq!(store.resident_without_purge().0, 1);
     }
 
     #[test]

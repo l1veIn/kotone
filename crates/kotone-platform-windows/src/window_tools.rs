@@ -21,11 +21,12 @@ pub const GDI_CAPTURE_METHOD: &str = "gdi-screen-foreground-client";
 /// 必须告知调用方的 GDI 捕获边界。
 pub fn gdi_capture_limitations() -> Vec<String> {
     [
-        "Copies the pixels composed on screen inside the target window's client rectangle while that window is the foreground window; topmost windows or overlays covering that rectangle are included.",
+        "Copies the pixels composed on screen inside the target window's client rectangle while that window is the foreground window (BitBlt SRCCOPY|CAPTUREBLT from the screen DC). Anything drawn above that rectangle is part of the image: topmost windows, notifications and layered overlays such as Kotone danmaku (verified natively with a test WS_EX_LAYERED window).",
+        "CAPTUREBLT may make the mouse cursor flicker briefly on some systems; the cursor itself is not drawn into the image.",
         "Hidden, occluded, minimized, cloaked or background windows are not captured and occluded content is not restored; a non-foreground target is rejected rather than focused.",
         "Exclusive-fullscreen, hardware-overlay or protected GPU content may come back black or stale; check the UNIFORM_PIXELS and EXCLUSIVE_FULLSCREEN_SUSPECTED warnings.",
         "The client area must lie entirely within one monitor; windows that are partially off-screen or span monitors are rejected instead of falling back to a desktop capture.",
-        "Coordinates are physical pixels read under a per-monitor-v2 DPI context; the service never moves, shows or focuses windows.",
+        "Coordinates are physical pixels read under a verified per-monitor DPI-aware thread context; if that context cannot be entered the call fails instead of reporting unverified coordinates. The service never moves, shows or focuses windows.",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -46,6 +47,26 @@ pub fn is_uniform_rgba(rgba: &[u8]) -> bool {
     chunks.all(|px| px == first)
 }
 
+/// DPI 作用域进入结果的判定（纯逻辑，便于测试）：只有确认当前线程处于 per-monitor
+/// DPI 感知时才允许以物理像素报告坐标；否则明确失败，绝不在未知上下文里贴“物理像素”标签。
+///
+/// - `switched`：SetThreadDpiAwarenessContext 是否成功（返回了非空的旧上下文）。
+/// - `effective_per_monitor`：切换后（或切换失败时）线程实际上下文是否为 per-monitor 感知。
+///
+/// 返回 Ok(是否需要在离开时恢复旧上下文)。
+pub fn dpi_scope_decision(
+    switched: bool,
+    effective_per_monitor: bool,
+) -> Result<bool, WindowToolError> {
+    if effective_per_monitor {
+        Ok(switched)
+    } else {
+        Err(WindowToolError::Unsupported(
+            "无法进入 per-monitor DPI 感知线程上下文，拒绝以未经验证的坐标报告物理像素".into(),
+        ))
+    }
+}
+
 /// Windows 窗口观察实现。
 #[derive(Debug, Default, Clone, Copy)]
 pub struct WindowsWindowObserver;
@@ -55,7 +76,10 @@ pub struct WindowsWindowObserver;
 pub struct GdiForegroundCapturer;
 
 #[cfg(windows)]
-pub use imp::{current_process_gdi_objects, process_started_at};
+pub use imp::{
+    current_process_gdi_objects, current_thread_per_monitor_aware, process_started_at,
+    with_verified_dpi_scope,
+};
 
 #[cfg(windows)]
 mod imp {
@@ -68,8 +92,8 @@ mod imp {
     use windows::Win32::Graphics::Gdi::{
         BitBlt, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
         GdiFlush, GetDC, GetMonitorInfoW, MonitorFromWindow, ReleaseDC, SelectObject, BITMAPINFO,
-        BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ, MONITORINFO,
-        MONITOR_DEFAULTTONULL, SRCCOPY,
+        BITMAPINFOHEADER, BI_RGB, CAPTUREBLT, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ, MONITORINFO,
+        MONITOR_DEFAULTTONULL, ROP_CODE, SRCCOPY,
     };
     use windows::Win32::System::Threading::{
         GetCurrentProcess, GetExitCodeProcess, GetGuiResources, GetProcessTimes, OpenProcess,
@@ -77,8 +101,9 @@ mod imp {
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::HiDpi::{
-        GetDpiForWindow, SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT,
-        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        GetAwarenessFromDpiAwarenessContext, GetDpiForWindow, GetThreadDpiAwarenessContext,
+        SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT,
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, DPI_AWARENESS_PER_MONITOR_AWARE,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetAncestor, GetClassNameW, GetClientRect, GetForegroundWindow,
@@ -88,25 +113,49 @@ mod imp {
 
     const STILL_ACTIVE: u32 = 259;
 
-    /// 线程级 DPI 上下文作用域：进入时切到 Per-Monitor-V2，离开时恢复原值。
-    struct DpiScope(DPI_AWARENESS_CONTEXT);
+    /// 线程级 DPI 上下文作用域：进入时切到 Per-Monitor-V2 并核实实际上下文为
+    /// per-monitor 感知，离开时恢复原值。切换失败且当前上下文也不是 per-monitor 感知时
+    /// 返回错误，调用方不得继续读取坐标。
+    pub(crate) struct DpiScope(Option<DPI_AWARENESS_CONTEXT>);
+
+    fn thread_is_per_monitor_aware() -> bool {
+        unsafe {
+            GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext())
+                == DPI_AWARENESS_PER_MONITOR_AWARE
+        }
+    }
 
     impl DpiScope {
-        fn per_monitor_v2() -> Self {
-            Self(unsafe {
-                SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
-            })
+        pub(crate) fn enter() -> Result<Self, WindowToolError> {
+            let previous =
+                unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+            let switched = !previous.0.is_null();
+            // 判定失败时 scope 被丢弃，已切换的旧上下文随之恢复
+            let scope = Self(switched.then_some(previous));
+            dpi_scope_decision(switched, thread_is_per_monitor_aware())?;
+            Ok(scope)
         }
     }
 
     impl Drop for DpiScope {
         fn drop(&mut self) {
-            if !self.0 .0.is_null() {
+            if let Some(previous) = self.0.take() {
                 unsafe {
-                    SetThreadDpiAwarenessContext(self.0);
+                    SetThreadDpiAwarenessContext(previous);
                 }
             }
         }
+    }
+
+    /// 测试用：在已验证的 DPI 作用域内执行闭包。
+    pub fn with_verified_dpi_scope<T>(f: impl FnOnce() -> T) -> Result<T, WindowToolError> {
+        let _scope = DpiScope::enter()?;
+        Ok(f())
+    }
+
+    /// 测试用：当前线程是否处于 per-monitor DPI 感知。
+    pub fn current_thread_per_monitor_aware() -> bool {
+        thread_is_per_monitor_aware()
     }
 
     /// 当前进程持有的 GDI 对象数量（测试用：核对捕获不泄漏 DC/位图）。
@@ -345,7 +394,7 @@ mod imp {
 
     impl WindowObserver for WindowsWindowObserver {
         fn list_windows(&self) -> Result<Vec<WindowInfo>, WindowToolError> {
-            let _dpi = DpiScope::per_monitor_v2();
+            let _dpi = DpiScope::enter()?;
             let mut handles: Vec<HWND> = Vec::new();
             unsafe {
                 EnumWindows(
@@ -364,7 +413,7 @@ mod imp {
         }
 
         fn foreground_window(&self) -> Result<Option<WindowInfo>, WindowToolError> {
-            let _dpi = DpiScope::per_monitor_v2();
+            let _dpi = DpiScope::enter()?;
             let Some(fg) = foreground_root() else {
                 return Ok(None);
             };
@@ -376,7 +425,7 @@ mod imp {
         }
 
         fn inspect(&self, identity: &WindowIdentity) -> Result<WindowInfo, WindowToolError> {
-            let _dpi = DpiScope::per_monitor_v2();
+            let _dpi = DpiScope::enter()?;
             inspect_in_scope(identity)
         }
     }
@@ -516,7 +565,8 @@ mod imp {
                 Some(screen.0),
                 rect.x,
                 rect.y,
-                SRCCOPY,
+                // CAPTUREBLT：把分层（WS_EX_LAYERED）窗口一并合入，使结果与能力声明一致
+                ROP_CODE(SRCCOPY.0 | CAPTUREBLT.0),
             )
             .map_err(|e| WindowToolError::Platform(format!("BitBlt: {e}")))?;
             let _ = GdiFlush();
@@ -544,7 +594,7 @@ mod imp {
             identity: &WindowIdentity,
             max_pixels: u64,
         ) -> Result<CapturedImage, WindowToolError> {
-            let _dpi = DpiScope::per_monitor_v2();
+            let _dpi = DpiScope::enter()?;
             let before = inspect_in_scope(identity)?;
             let rect = capturable_rect(&before, max_pixels)?;
             let rgba = copy_screen_rect(rect)?;
@@ -637,6 +687,35 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dpi_scope_requires_verified_per_monitor_context() {
+        assert_eq!(dpi_scope_decision(true, true), Ok(true));
+        // 切换失败但线程本来就是 per-monitor 感知：可以继续，且无需恢复
+        assert_eq!(dpi_scope_decision(false, true), Ok(false));
+        // 切换失败且上下文非 per-monitor：必须失败，而不是贴上“物理像素”标签
+        assert!(matches!(
+            dpi_scope_decision(false, false),
+            Err(WindowToolError::Unsupported(_))
+        ));
+        assert!(matches!(
+            dpi_scope_decision(true, false),
+            Err(WindowToolError::Unsupported(_))
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verified_scope_is_per_monitor_and_restores_previous_context() {
+        let before = current_thread_per_monitor_aware();
+        let inside = with_verified_dpi_scope(current_thread_per_monitor_aware).unwrap();
+        assert!(inside, "作用域内必须是 per-monitor 感知");
+        assert_eq!(
+            current_thread_per_monitor_aware(),
+            before,
+            "离开作用域恢复原上下文"
+        );
+    }
 
     #[test]
     fn uniform_detection() {

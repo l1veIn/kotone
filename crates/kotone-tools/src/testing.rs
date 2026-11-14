@@ -38,6 +38,62 @@ impl Clock for ManualClock {
     }
 }
 
+type GatePredicate = Box<dyn Fn() -> bool + Send>;
+
+struct Gate {
+    predicate: GatePredicate,
+    entered: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+/// 可在指定调用处暂停的时钟：`arm` 之后，第一个满足谓词的 `now_unix_ms` 调用会通知
+/// `entered` 并阻塞，直到测试发送 `release`。用于把同步提交确定性地停在插入之前。
+#[derive(Default)]
+pub struct GatedClock {
+    ms: AtomicU64,
+    gate: Mutex<Option<Gate>>,
+}
+
+impl GatedClock {
+    pub fn at(ms: u64) -> Arc<Self> {
+        let clock = Self::default();
+        clock.ms.store(ms, Ordering::SeqCst);
+        Arc::new(clock)
+    }
+
+    pub fn arm(
+        &self,
+        predicate: impl Fn() -> bool + Send + 'static,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        *self.gate.lock().unwrap() = Some(Gate {
+            predicate: Box::new(predicate),
+            entered: entered_tx,
+            release: release_rx,
+        });
+        (entered_rx, release_tx)
+    }
+}
+
+impl Clock for GatedClock {
+    fn now_unix_ms(&self) -> u64 {
+        let gate = {
+            let mut slot = self.gate.lock().unwrap();
+            if slot.as_ref().is_some_and(|g| (g.predicate)()) {
+                slot.take()
+            } else {
+                None
+            }
+        };
+        if let Some(gate) = gate {
+            let _ = gate.entered.send(());
+            let _ = gate.release.recv();
+        }
+        self.ms.load(Ordering::SeqCst)
+    }
+}
+
 /// 假桌面中的一个窗口。
 #[derive(Debug, Clone)]
 pub struct FakeWindow {
@@ -65,6 +121,8 @@ pub struct FakeDesktop {
     windows: Mutex<Vec<FakeWindow>>,
     capture_delay: Mutex<Duration>,
     captures: AtomicU64,
+    capture_starts: AtomicU64,
+    capture_threads: Mutex<Vec<std::thread::ThreadId>>,
     unavailable: Mutex<Option<String>>,
 }
 
@@ -157,8 +215,22 @@ impl FakeDesktop {
         *self.unavailable.lock().unwrap() = reason.map(str::to_string);
     }
 
+    /// 已完成（成功产出像素）的捕获次数。
     pub fn capture_count(&self) -> u64 {
         self.captures.load(Ordering::SeqCst)
+    }
+
+    /// 捕获调用真正开始执行的次数（包括随后失败的调用）。
+    pub fn capture_starts(&self) -> u64 {
+        self.capture_starts.load(Ordering::SeqCst)
+    }
+
+    /// 当前线程是否执行过捕获（用于区分工作线程与提交所在的运行时线程）。
+    pub fn is_capture_thread(&self) -> bool {
+        self.capture_threads
+            .lock()
+            .unwrap()
+            .contains(&std::thread::current().id())
     }
 
     fn find(&self, handle: u64) -> Option<WindowInfo> {
@@ -226,6 +298,14 @@ impl WindowCapturer for FakeDesktop {
         identity: &WindowIdentity,
         max_pixels: u64,
     ) -> Result<CapturedImage, WindowToolError> {
+        self.capture_starts.fetch_add(1, Ordering::SeqCst);
+        {
+            let mut threads = self.capture_threads.lock().unwrap();
+            let me = std::thread::current().id();
+            if !threads.contains(&me) {
+                threads.push(me);
+            }
+        }
         let delay = *self.capture_delay.lock().unwrap();
         if !delay.is_zero() {
             std::thread::sleep(delay);

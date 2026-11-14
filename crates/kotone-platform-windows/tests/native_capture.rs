@@ -31,20 +31,145 @@ use windows::Win32::UI::HiDpi::{
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetClientRect, GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, PostMessageW,
-    PostQuitMessage, RegisterClassW, SetForegroundWindow, ShowWindow, ShowWindowAsync,
-    TranslateMessage, UnregisterClassW, MSG, SW_RESTORE, SW_SHOW, SW_SHOWMINNOACTIVE,
-    SW_SHOWNOACTIVATE, WM_CLOSE, WM_DESTROY, WM_PAINT, WNDCLASSW, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    PostQuitMessage, RegisterClassW, SetForegroundWindow, SetLayeredWindowAttributes, SetWindowPos,
+    ShowWindow, ShowWindowAsync, TranslateMessage, UnregisterClassW, HWND_TOPMOST, LWA_ALPHA, MSG,
+    SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_RESTORE, SW_SHOW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE,
+    WM_CLOSE, WM_DESTROY, WM_PAINT, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 const WIDTH: i32 = 160;
 const HEIGHT: i32 = 100;
 const RED: [u8; 4] = [255, 0, 0, 255];
 const BLUE: [u8; 4] = [0, 0, 255, 255];
+const GREEN: [u8; 4] = [0, 255, 0, 255];
 
 static LEFT_BRUSH: AtomicIsize = AtomicIsize::new(0);
 static RIGHT_BRUSH: AtomicIsize = AtomicIsize::new(0);
 static CLASS_COUNTER: AtomicU32 = AtomicU32::new(0);
+static GREEN_BRUSH: AtomicIsize = AtomicIsize::new(0);
+
+unsafe extern "system" fn overlay_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_PAINT => {
+            let mut ps = PAINTSTRUCT::default();
+            let hdc = BeginPaint(hwnd, &mut ps);
+            let mut rc = RECT::default();
+            let _ = GetClientRect(hwnd, &mut rc);
+            FillRect(
+                hdc,
+                &rc,
+                HBRUSH(GREEN_BRUSH.load(Ordering::SeqCst) as *mut _),
+            );
+            let _ = EndPaint(hwnd, &ps);
+            LRESULT(0)
+        }
+        WM_CLOSE => {
+            let _ = DestroyWindow(hwnd);
+            LRESULT(0)
+        }
+        WM_DESTROY => {
+            PostQuitMessage(0);
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+/// 不激活、鼠标穿透的 WS_EX_LAYERED 置顶绿色覆盖窗口（模拟弹幕类分层叠加层）。
+struct LayeredOverlay {
+    hwnd: HWND,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl LayeredOverlay {
+    fn open(x: i32, y: i32, w: i32, h: i32) -> Self {
+        if GREEN_BRUSH.load(Ordering::SeqCst) == 0 {
+            unsafe {
+                GREEN_BRUSH.store(
+                    CreateSolidBrush(COLORREF(0x0000_FF00)).0 as isize,
+                    Ordering::SeqCst,
+                );
+            }
+        }
+        let n = CLASS_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let class = format!("KotoneCaptureOverlay{}_{n}", std::process::id());
+        let (tx, rx) = mpsc::channel::<isize>();
+        let thread = std::thread::spawn(move || unsafe {
+            SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            let class_w = wide(&class);
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(overlay_wndproc),
+                lpszClassName: PCWSTR(class_w.as_ptr()),
+                ..Default::default()
+            };
+            assert_ne!(RegisterClassW(&wc), 0, "RegisterClassW overlay");
+            let hwnd = CreateWindowExW(
+                WS_EX_LAYERED
+                    | WS_EX_TOPMOST
+                    | WS_EX_TOOLWINDOW
+                    | WS_EX_NOACTIVATE
+                    | WS_EX_TRANSPARENT,
+                PCWSTR(class_w.as_ptr()),
+                PCWSTR(class_w.as_ptr()),
+                WS_POPUP,
+                x,
+                y,
+                w,
+                h,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("CreateWindowExW overlay");
+            SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)
+                .expect("SetLayeredWindowAttributes");
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                x,
+                y,
+                w,
+                h,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
+            tx.send(hwnd.0 as isize).unwrap();
+            let mut msg = MSG::default();
+            while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            let _ = UnregisterClassW(PCWSTR(class_w.as_ptr()), None);
+        });
+        let hwnd = HWND(rx.recv().unwrap() as *mut _);
+        std::thread::sleep(Duration::from_millis(300));
+        Self {
+            hwnd,
+            thread: Some(thread),
+        }
+    }
+
+    fn close(&mut self) {
+        unsafe {
+            let _ = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+        if let Some(thread) = self.thread.take() {
+            thread.join().unwrap();
+        }
+    }
+}
+
+impl Drop for LayeredOverlay {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
@@ -382,6 +507,42 @@ fn foreground_capture_exact_pixels_full_chain_and_no_gdi_leak() {
         "成功路径不泄漏 GDI 对象"
     );
     drop(last);
+
+    // 1b) CAPTUREBLT：覆盖在目标客户区上的分层（WS_EX_LAYERED）窗口出现在图中，
+    //     且叠加层不激活、目标仍为前台。
+    let client = info.client_rect.unwrap();
+    let mut overlay = LayeredOverlay::open(client.x + 20, client.y + 20, 40, 30);
+    assert_eq!(
+        foreground(),
+        window.hwnd.0 as isize,
+        "不激活的叠加层不改变前台"
+    );
+    let image = GdiForegroundCapturer
+        .capture_foreground_client(&info.identity, 1 << 24)
+        .expect("叠加层存在时仍可捕获前台目标");
+    assert_eq!(
+        pixel(&image.rgba, image.width, 30, 30),
+        GREEN,
+        "分层叠加层被合入"
+    );
+    assert_eq!(pixel(&image.rgba, image.width, 59, 49), GREEN);
+    assert_eq!(
+        pixel(&image.rgba, image.width, 19, 30),
+        RED,
+        "叠加层外仍是目标像素"
+    );
+    assert_eq!(pixel(&image.rgba, image.width, 60, 30), RED);
+    assert_eq!(pixel(&image.rgba, image.width, WIDTH as u32 - 5, 50), BLUE);
+    overlay.close();
+    std::thread::sleep(Duration::from_millis(300));
+    let image = GdiForegroundCapturer
+        .capture_foreground_client(&info.identity, 1 << 24)
+        .expect("移除叠加层后捕获");
+    assert_eq!(
+        pixel(&image.rgba, image.width, 30, 30),
+        RED,
+        "叠加层移除后恢复目标像素"
+    );
 
     // 2) 完整链路：真实后端 → ToolService → loopback HTTP → 客户端 → crop
     let runtime = tokio::runtime::Runtime::new().unwrap();

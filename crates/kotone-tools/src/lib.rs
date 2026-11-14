@@ -26,6 +26,8 @@ pub mod service;
 pub mod testing;
 #[cfg(test)]
 mod tests_http;
+#[cfg(test)]
+mod tests_races;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -42,6 +44,7 @@ pub struct RunningToolService {
     service: Arc<ToolService>,
     server: Option<server::ServerHandle>,
     publication: Option<discovery::Publication>,
+    maintenance: Option<tokio::task::JoinHandle<()>>,
     addr: SocketAddr,
 }
 
@@ -81,10 +84,12 @@ impl RunningToolService {
                 return Err(error.to_string());
             }
         };
+        let maintenance = service.spawn_maintenance();
         Ok(Self {
             service,
             server: Some(server),
             publication: Some(publication),
+            maintenance: Some(maintenance),
             addr,
         })
     }
@@ -105,8 +110,10 @@ impl RunningToolService {
         &self.service
     }
 
-    /// 同步关闭（应用退出路径）：先删除本实例的描述文件，再停止接受连接并丢弃内存产物。
+    /// 同步关闭（应用退出路径）。顺序：先在存储锁内撤销准入/提交并丢弃产物（之后任何
+    /// 在途请求都无法再发布产物或执行释放），再删除本实例描述文件，最后停止 HTTP 与维护任务。
     pub fn shutdown_now(&mut self) {
+        self.service.close();
         if let Some(publication) = self.publication.take() {
             publication.remove_if_owned();
         }
@@ -114,18 +121,23 @@ impl RunningToolService {
             server.signal_stop();
             drop(server);
         }
-        self.service.clear_artifacts();
+        if let Some(maintenance) = self.maintenance.take() {
+            maintenance.abort();
+        }
     }
 
-    /// 异步关闭并等待接受循环退出。
+    /// 异步关闭：顺序同 [`Self::shutdown_now`]，并等待接受循环与维护任务退出。
     pub async fn shutdown(mut self) {
+        self.service.close();
         if let Some(publication) = self.publication.take() {
             publication.remove_if_owned();
         }
         if let Some(server) = self.server.take() {
             server.shutdown().await;
         }
-        self.service.clear_artifacts();
+        if let Some(maintenance) = self.maintenance.take() {
+            let _ = maintenance.await;
+        }
     }
 }
 

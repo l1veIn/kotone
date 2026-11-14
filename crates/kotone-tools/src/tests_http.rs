@@ -861,11 +861,36 @@ async fn shutdown_removes_only_owned_descriptor() {
     assert!(path.exists());
     h.running.shutdown_now();
     assert!(!path.exists(), "退出删除本实例描述文件");
-    assert_eq!(
-        h.client.status().await.unwrap_err().code,
-        "SERVICE_UNREACHABLE",
-        "退出后不再接受连接"
-    );
+    // 接受循环的中止是协作式的：关闭后短时间内仍可能有连接被接受，但任何响应都只能是
+    // SERVICE_CLOSED（或传输被中止），绝不返回结果；随后监听端口消失。
+    let mut unreachable = false;
+    for _ in 0..100 {
+        match h.client.status().await {
+            Ok(envelope) => {
+                assert!(!envelope.ok, "关闭后不得返回结果");
+                assert_eq!(envelope.error.unwrap().code, "SERVICE_CLOSED");
+            }
+            Err(error) if error.code == "SERVICE_UNREACHABLE" => {
+                unreachable = true;
+                break;
+            }
+            Err(error) => assert_eq!(error.code, "TRANSPORT_ERROR", "{error:?}"),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(unreachable, "退出后监听端口应关闭");
+    // 关闭后的服务直接调用也被拒绝
+    let env = h
+        .running
+        .service()
+        .call(ToolCallRequest {
+            request_id: None,
+            tool: "system.status".into(),
+            arguments: Value::Null,
+            timeout_ms: None,
+        })
+        .await;
+    assert_eq!(env.error.unwrap().code, "SERVICE_CLOSED");
 
     // 描述文件已被另一实例覆盖时不删除
     let h2 = Harness::new(ServiceLimits::default()).await;

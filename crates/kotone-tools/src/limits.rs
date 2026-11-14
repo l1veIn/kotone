@@ -14,10 +14,17 @@ pub struct ServiceLimits {
     pub max_connections: usize,
     pub default_timeout_ms: u64,
     pub max_timeout_ms: u64,
-    /// 读取请求头的期限（慢速连接防护）。
+    /// 读取请求头的期限（慢速连接防护；也约束 keep-alive 连接两次请求之间的空闲）。
     pub header_read_timeout: Duration,
-    /// 单个连接的总期限。
-    pub connection_timeout: Duration,
+    /// 读取请求体的期限。
+    pub body_read_timeout: Duration,
+    /// 连接寿命：到期后连接进入优雅关闭——不再接受新请求，空闲连接立即关闭，
+    /// 正在处理的请求继续完成（仍受各自工具期限约束）。
+    pub connection_lifetime: Duration,
+    /// 优雅关闭后的硬上限（应对不读取响应的客户端）。
+    pub connection_grace: Duration,
+    /// 空闲维护（回收到期产物）的周期。
+    pub maintenance_interval: Duration,
     pub default_ttl_ms: u64,
     pub min_ttl_ms: u64,
     pub max_ttl_ms: u64,
@@ -37,7 +44,11 @@ impl Default for ServiceLimits {
             default_timeout_ms: 5_000,
             max_timeout_ms: 30_000,
             header_read_timeout: Duration::from_secs(5),
-            connection_timeout: Duration::from_secs(120),
+            body_read_timeout: Duration::from_secs(10),
+            connection_lifetime: Duration::from_secs(120),
+            // 体读取 10s + 最长工具期限 30s + 写出余量
+            connection_grace: Duration::from_secs(60),
+            maintenance_interval: Duration::from_secs(5),
             default_ttl_ms: 300_000,
             min_ttl_ms: 1_000,
             max_ttl_ms: 1_800_000,

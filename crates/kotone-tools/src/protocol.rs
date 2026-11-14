@@ -143,6 +143,7 @@ pub enum ErrorCode {
     PayloadTooLarge,
     UnsupportedMediaType,
     InvalidRequest,
+    RequestTimeout,
     // ---- 工具调用 ----
     ToolNotFound,
     InvalidArguments,
@@ -151,6 +152,7 @@ pub enum ErrorCode {
     Timeout,
     Internal,
     PlatformUnsupported,
+    ServiceClosed,
     // ---- 窗口 / 捕获 ----
     WindowNotFound,
     WindowGone,
@@ -187,6 +189,7 @@ impl ErrorCode {
             Self::PayloadTooLarge => "PAYLOAD_TOO_LARGE",
             Self::UnsupportedMediaType => "UNSUPPORTED_MEDIA_TYPE",
             Self::InvalidRequest => "INVALID_REQUEST",
+            Self::RequestTimeout => "REQUEST_TIMEOUT",
             Self::ToolNotFound => "TOOL_NOT_FOUND",
             Self::InvalidArguments => "INVALID_ARGUMENTS",
             Self::UnsupportedProtocolVersion => "UNSUPPORTED_PROTOCOL_VERSION",
@@ -194,6 +197,7 @@ impl ErrorCode {
             Self::Timeout => "TIMEOUT",
             Self::Internal => "INTERNAL",
             Self::PlatformUnsupported => "PLATFORM_UNSUPPORTED",
+            Self::ServiceClosed => "SERVICE_CLOSED",
             Self::WindowNotFound => "WINDOW_NOT_FOUND",
             Self::WindowGone => "WINDOW_GONE",
             Self::WindowIdentityChanged => "WINDOW_IDENTITY_CHANGED",
@@ -223,6 +227,7 @@ impl ErrorCode {
         matches!(
             self,
             Self::Busy
+                | Self::RequestTimeout
                 | Self::Timeout
                 | Self::WindowNotForeground
                 | Self::WindowMinimized
@@ -243,6 +248,7 @@ impl ErrorCode {
         Self::PayloadTooLarge,
         Self::UnsupportedMediaType,
         Self::InvalidRequest,
+        Self::RequestTimeout,
         Self::ToolNotFound,
         Self::InvalidArguments,
         Self::UnsupportedProtocolVersion,
@@ -250,6 +256,7 @@ impl ErrorCode {
         Self::Timeout,
         Self::Internal,
         Self::PlatformUnsupported,
+        Self::ServiceClosed,
         Self::WindowNotFound,
         Self::WindowGone,
         Self::WindowIdentityChanged,

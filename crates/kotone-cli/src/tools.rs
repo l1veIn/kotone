@@ -259,11 +259,18 @@ async fn call(
     }
 }
 
-/// 原子写出：同目录临时文件 + rename，失败不留下半个文件。
+/// 原子写出：先把内容完整写入同目录的独占临时文件，再一次性发布到目标路径。
+///
+/// - 未指定 `--force`：用不覆盖的原子改名（MoveFileExW 不带 REPLACE_EXISTING）发布，
+///   目标在任何时刻已存在都会失败，不存在“检查后被他人创建再被覆盖”的竞态。
+/// - 指定 `--force`：`std::fs::rename` 原子替换已存在的文件。
+///
+/// 任何失败路径都删除临时文件，不留下半个文件。
 fn write_output(path: &Path, bytes: &[u8], force: bool) -> Result<(), String> {
-    if path.exists() && !force {
-        return Err(format!("{} 已存在（使用 --force 覆盖）", path.display()));
-    }
+    use std::io::Write as _;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -271,19 +278,47 @@ fn write_output(path: &Path, bytes: &[u8], force: bool) -> Result<(), String> {
     if !parent.is_dir() {
         return Err(format!("输出目录不存在: {}", parent.display()));
     }
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "artifact".into());
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
     let temp = parent.join(format!(
-        ".{}.{}.part",
-        path.file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "artifact".into()),
-        std::process::id()
+        ".{name}.{}.{nanos}.{}.part",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
-    let result = std::fs::write(&temp, bytes).and_then(|()| std::fs::rename(&temp, path));
-    if let Err(e) = result {
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .and_then(|mut file| {
+            file.write_all(bytes)?;
+            file.sync_all()
+        });
+    if let Err(e) = written {
         let _ = std::fs::remove_file(&temp);
-        return Err(format!("写入 {} 失败: {e}", path.display()));
+        return Err(format!("写入临时文件失败: {e}"));
     }
-    Ok(())
+    let published = if force {
+        std::fs::rename(&temp, path)
+    } else {
+        kotone_platform_windows::fs_publish::rename_no_replace(&temp, path)
+    };
+    match published {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp);
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                Err(format!("{} 已存在（使用 --force 覆盖）", path.display()))
+            } else {
+                Err(format!("写入 {} 失败: {e}", path.display()))
+            }
+        }
+    }
 }
 
 async fn artifact_get(artifact_id: String, output: PathBuf, force: bool) -> i32 {
@@ -364,6 +399,75 @@ mod tests {
         std::fs::write(&big, format!("{{\"a\":\"{}\"}}", "x".repeat(70_000))).unwrap();
         assert!(read_args(&big).unwrap_err().contains("上限"));
         assert!(read_args(&dir.path().join("missing.json")).is_err());
+    }
+
+    fn leftover_parts(dir: &Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".part"))
+            .collect()
+    }
+
+    #[test]
+    fn concurrent_exports_without_force_publish_exactly_one_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("race.png");
+        let writers = 12;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(writers));
+        let handles: Vec<_> = (0..writers)
+            .map(|i| {
+                let barrier = barrier.clone();
+                let out = out.clone();
+                std::thread::spawn(move || {
+                    let bytes = vec![i as u8; 4096 + i];
+                    barrier.wait();
+                    (i, write_output(&out, &bytes, false))
+                })
+            })
+            .collect();
+        let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let winners: Vec<usize> = results
+            .iter()
+            .filter(|(_, r)| r.is_ok())
+            .map(|(i, _)| *i)
+            .collect();
+        assert_eq!(winners.len(), 1, "恰好一个导出成功: {results:?}");
+        for (_, r) in results.iter().filter(|(_, r)| r.is_err()) {
+            assert!(r.as_ref().unwrap_err().contains("已存在"), "{r:?}");
+        }
+        let w = winners[0];
+        assert_eq!(
+            std::fs::read(&out).unwrap(),
+            vec![w as u8; 4096 + w],
+            "内容属于唯一胜者，未被替换"
+        );
+        assert!(
+            leftover_parts(dir.path()).is_empty(),
+            "失败者的临时文件已清理"
+        );
+    }
+
+    #[test]
+    fn file_created_after_any_check_is_never_replaced_without_force() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("late.png");
+        // 模拟另一个进程在我们写临时文件期间创建目标
+        std::fs::write(&out, b"someone else").unwrap();
+        assert!(write_output(&out, b"mine", false).is_err());
+        assert_eq!(std::fs::read(&out).unwrap(), b"someone else");
+        assert!(leftover_parts(dir.path()).is_empty());
+        // --force 才允许替换
+        write_output(&out, b"mine", true).unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), b"mine");
+        // 发布失败（目标是目录）时临时文件也被清理
+        let as_dir = dir.path().join("dir.png");
+        std::fs::create_dir(&as_dir).unwrap();
+        assert!(write_output(&as_dir, b"x", false).is_err());
+        assert!(write_output(&as_dir, b"x", true).is_err());
+        assert!(as_dir.is_dir());
+        assert!(leftover_parts(dir.path()).is_empty());
     }
 
     #[test]

@@ -33,6 +33,8 @@ windows = { workspace = true, features = [
     # 工具服务实例发现：会话 ID、私有描述文件 DACL（SDDL）校验
     "Win32_System_RemoteDesktop",
     "Win32_Security_Authorization",
+    # CLI 导出产物：MoveFileExW 原子不覆盖发布
+    "Win32_Storage_FileSystem",
 ] }
 arboard = "3"
 clipboard-win = "5"

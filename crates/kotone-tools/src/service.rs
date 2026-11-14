@@ -2,9 +2,14 @@
 //!
 //! 每次调用在 tokio 阻塞线程池执行（捕获、裁剪、PNG 编码、base64 都不在异步线程或任何
 //! 运行时/UI 锁上进行）。并发许可随阻塞任务一起释放，所以超时调用在后台收尾期间仍占用
-//! 名额，实际并发始终有界。产物只在期限内拿到结果后由异步侧提交，超时的迟到结果被丢弃。
+//! 名额，实际并发始终有界。
+//!
+//! 绝对期限在三处强制：取得执行名额后、工作线程真正开始时、以及最终提交闸门内。
+//! 工作线程只产出“待提交”的结果（新产物或释放请求），从不直接修改产物存储；提交闸门
+//! 与关闭（close）共用存储锁，期限已过或服务已关闭的结果一律丢弃，不产生副作用。
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -18,8 +23,8 @@ use kotone_core::tools::{
 };
 
 use crate::artifacts::{
-    ArtifactKind, ArtifactMeta, ArtifactRecord, ArtifactStore, CaptureSource, Clock, Gone,
-    InsertError, LookupError, RectJson, RootTransform, WarningJson, COORDINATE_SPACE, MIME_PNG,
+    ArtifactKind, ArtifactMeta, ArtifactRecord, ArtifactStore, CaptureSource, Clock, CommitError,
+    Gone, LookupError, RectJson, RootTransform, WarningJson, COORDINATE_SPACE, MIME_PNG,
 };
 use crate::catalog::{self, Readiness, IMPLEMENTED_TOOLS};
 use crate::ids::new_id;
@@ -111,6 +116,10 @@ enum Lineage {
 enum Prepared {
     Value(Value),
     Artifact(Box<PendingArtifact>),
+    /// 释放请求：只在提交闸门内执行，排队超时的释放不会在之后删除产物。
+    Release {
+        artifact_id: String,
+    },
 }
 
 struct Outcome {
@@ -132,6 +141,24 @@ pub struct ToolService {
     calls: Arc<Semaphore>,
     started_at_unix_ms: u64,
     started: Instant,
+    /// 关闭信号（维护任务订阅）；权威的关闭状态在存储锁内。
+    closing: tokio::sync::watch::Sender<bool>,
+    maintenance_running: Arc<AtomicBool>,
+    /// 测试缝：捕获返回之后、PNG 编码之前执行（模拟慢速处理）。
+    #[cfg(test)]
+    pub(crate) before_encode_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+}
+
+fn timeout_error(tool: &str, timeout_ms: u64, stage: &str) -> ToolError {
+    ToolError::new(
+        ErrorCode::Timeout,
+        format!("工具 {tool} 未在 {timeout_ms}ms 内完成（{stage}）；结果已丢弃"),
+    )
+    .with_details(json!({"timeoutMs": timeout_ms, "stage": stage}))
+}
+
+fn closed_error() -> ToolError {
+    ToolError::new(ErrorCode::ServiceClosed, "工具服务正在关闭或已关闭")
 }
 
 fn invalid_args(message: impl Into<String>) -> ToolError {
@@ -309,6 +336,10 @@ impl ToolService {
             windows: WindowRefs::new(),
             started_at_unix_ms,
             started: Instant::now(),
+            closing: tokio::sync::watch::channel(false).0,
+            maintenance_running: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            before_encode_hook: Mutex::new(None),
         })
     }
 
@@ -320,9 +351,70 @@ impl ToolService {
         &self.limits
     }
 
-    /// 关闭时丢弃全部内存产物。
-    pub fn clear_artifacts(&self) {
-        self.store.clear();
+    /// 关闭：在存储锁内撤销提交并丢弃全部内存产物，然后停止维护任务。
+    /// 返回后不会再有任何请求向存储发布产物或执行释放；仍在运行的原生工作线程可以
+    /// 完成自身清理，但其结果在提交闸门被拒绝。
+    pub fn close(&self) {
+        self.store.close();
+        self.closing.send_replace(true);
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.store.is_closed()
+    }
+
+    /// 测试观测：驻留内存的产物数/字节（不触发到期清理）。
+    #[doc(hidden)]
+    pub fn resident_artifacts(&self) -> (usize, u64) {
+        self.store.resident_without_purge()
+    }
+
+    /// 维护任务是否仍在运行。
+    pub fn maintenance_running(&self) -> bool {
+        self.maintenance_running.load(Ordering::SeqCst)
+    }
+
+    /// 启动有界的空闲维护：按 `limits.maintenance_interval` 回收到期产物（不依赖读请求）。
+    /// 任务只持有弱引用，服务关闭或被释放时退出。
+    pub fn spawn_maintenance(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let weak = Arc::downgrade(self);
+        let mut stop = self.closing.subscribe();
+        let period = self
+            .limits
+            .maintenance_interval
+            .max(Duration::from_millis(1));
+        let running = self.maintenance_running.clone();
+        running.store(true, Ordering::SeqCst);
+        tokio::spawn(async move {
+            struct Running(Arc<AtomicBool>);
+            impl Drop for Running {
+                fn drop(&mut self) {
+                    self.0.store(false, Ordering::SeqCst);
+                }
+            }
+            let _running = Running(running);
+            let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                if *stop.borrow() {
+                    break;
+                }
+                tokio::select! {
+                    _ = ticker.tick() => {
+                        let Some(service) = weak.upgrade() else { break };
+                        if service.store.is_closed() {
+                            break;
+                        }
+                        service.store.purge_expired();
+                    }
+                    changed = stop.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        })
     }
 
     fn capture_info(&self) -> CaptureBackendInfo {
@@ -425,6 +517,9 @@ impl ToolService {
             }
         };
         let tool = request.tool;
+        if self.store.is_closed() {
+            return self.envelope_failure(request_id, Some(tool), closed_error(), started);
+        }
         if !IMPLEMENTED_TOOLS.contains(&tool.as_str()) {
             let error = ToolError::new(
                 ErrorCode::ToolNotFound,
@@ -460,20 +555,30 @@ impl ToolService {
                     return self.envelope_failure(request_id, Some(tool), error, started);
                 }
             };
+        let deadline_std = deadline.into_std();
+        // 闸门 1：取得名额时期限可能已过（排队耗尽了时间）
+        if std::time::Instant::now() >= deadline_std {
+            drop(permit);
+            let error = timeout_error(&tool, timeout_ms, "queued");
+            return self.envelope_failure(request_id, Some(tool), error, started);
+        }
         let queue_ms = ms_since(started);
         let service = self.clone();
         let tool_name = tool.clone();
         let arguments = request.arguments;
         let work = tokio::task::spawn_blocking(move || {
             let _permit = permit;
+            // 闸门 2：阻塞线程池可能饱和，任务真正开始时再核对期限与关闭状态
+            if std::time::Instant::now() >= deadline_std {
+                return Err(timeout_error(&tool_name, timeout_ms, "not-started"));
+            }
+            if service.store.is_closed() {
+                return Err(closed_error());
+            }
             service.execute(&tool_name, arguments)
         });
         let outcome = match tokio::time::timeout_at(deadline, work).await {
-            Err(_) => Err(ToolError::new(
-                ErrorCode::Timeout,
-                format!("工具 {tool} 未在 {timeout_ms}ms 内完成；迟到结果将被丢弃"),
-            )
-            .with_details(json!({"timeoutMs": timeout_ms}))),
+            Err(_) => Err(timeout_error(&tool, timeout_ms, "running")),
             Ok(Err(join)) => Err(ToolError::new(
                 ErrorCode::Internal,
                 if join.is_panic() {
@@ -484,7 +589,10 @@ impl ToolService {
             )),
             Ok(Ok(result)) => result,
         };
-        let outcome = outcome.and_then(|outcome| self.commit(outcome));
+        // 闸门 3：timeout_at 在计时器与内部 future 同时就绪时会返回内部结果，
+        // 因此提交闸门在存储锁内重新核对绝对期限。
+        let outcome =
+            outcome.and_then(|outcome| self.commit(outcome, deadline_std, &tool, timeout_ms));
         match outcome {
             Ok((result, mut phases)) => {
                 phases.insert("queueMs".into(), queue_ms);
@@ -503,11 +611,50 @@ impl ToolService {
         }
     }
 
-    /// 在期限内拿到的结果：把待提交产物写入存储并生成结果 JSON（只做内存操作）。
-    fn commit(&self, outcome: Outcome) -> Result<(Value, BTreeMap<String, u64>), ToolError> {
+    /// 提交闸门：把待提交结果写入存储并生成结果 JSON（只做内存操作）。
+    /// 存储变更与“未关闭、未过期”检查在同一把存储锁内完成。
+    fn commit(
+        &self,
+        outcome: Outcome,
+        deadline: std::time::Instant,
+        tool: &str,
+        timeout_ms: u64,
+    ) -> Result<(Value, BTreeMap<String, u64>), ToolError> {
+        let gate_error = |error: CommitError| match error {
+            CommitError::Closed => closed_error(),
+            CommitError::DeadlineExpired => timeout_error(tool, timeout_ms, "late-result"),
+            CommitError::TooLarge { bytes, max_bytes } => ToolError::new(
+                ErrorCode::ImageTooLarge,
+                format!("产物占用 {bytes} 字节，超过存储上限 {max_bytes}"),
+            ),
+            CommitError::Lookup(error) => {
+                ToolError::new(ErrorCode::ArtifactNotFound, format!("{error:?}"))
+            }
+        };
         let Outcome { prepared, phases } = outcome;
         let pending = match prepared {
-            Prepared::Value(value) => return Ok((value, phases)),
+            Prepared::Value(value) => {
+                if self.store.is_closed() {
+                    return Err(closed_error());
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(timeout_error(tool, timeout_ms, "late-result"));
+                }
+                return Ok((value, phases));
+            }
+            Prepared::Release { artifact_id } => {
+                let outcome = self
+                    .store
+                    .release_gated(&artifact_id, Some(deadline))
+                    .map_err(|error| match error {
+                        CommitError::Lookup(lookup) => lookup_error(&artifact_id, lookup),
+                        other => gate_error(other),
+                    })?;
+                return Ok((
+                    json!({"artifactId": artifact_id, "status": outcome.as_str()}),
+                    phases,
+                ));
+            }
             Prepared::Artifact(pending) => *pending,
         };
         let artifact_id = new_id("art");
@@ -564,17 +711,15 @@ impl ToolService {
             .map_err(|e| ToolError::new(ErrorCode::Internal, format!("序列化产物失败: {e}")))?;
         let evicted = self
             .store
-            .insert(ArtifactRecord {
-                meta,
-                image: pending.image,
-                png,
-            })
-            .map_err(|InsertError::TooLarge { bytes, max_bytes }| {
-                ToolError::new(
-                    ErrorCode::ImageTooLarge,
-                    format!("产物占用 {bytes} 字节，超过存储上限 {max_bytes}"),
-                )
-            })?;
+            .insert_gated(
+                ArtifactRecord {
+                    meta,
+                    image: pending.image,
+                    png,
+                },
+                Some(deadline),
+            )
+            .map_err(gate_error)?;
         if let Some(object) = result.as_object_mut() {
             for (k, v) in pending.extra {
                 object.insert(k, v);
@@ -637,12 +782,14 @@ impl ToolService {
             catalog::TOOL_IMAGE_CROP => self.crop(parse_args(arguments)?),
             catalog::TOOL_ARTIFACT_GET => self.artifact_get(parse_args(arguments)?),
             catalog::TOOL_ARTIFACT_RELEASE => {
+                // 工作线程只解析参数；真正的释放在提交闸门内执行
                 let args: ArtifactReleaseArgs = parse_args(arguments)?;
-                let outcome = self
-                    .store
-                    .release(&args.artifact_id)
-                    .map_err(|e| lookup_error(&args.artifact_id, e))?;
-                Self::value(json!({"artifactId": args.artifact_id, "status": outcome.as_str()}))
+                Ok(Outcome {
+                    prepared: Prepared::Release {
+                        artifact_id: args.artifact_id,
+                    },
+                    phases: BTreeMap::new(),
+                })
             }
             other => Err(ToolError::new(
                 ErrorCode::ToolNotFound,
@@ -710,6 +857,8 @@ impl ToolService {
             .capturer
             .capture_foreground_client(&identity, self.limits.max_image_pixels)
             .map_err(window_error)?;
+        // 采集时刻取自后端返回的边界，早于像素校验、PNG 编码与哈希
+        let captured_at_unix_ms = self.store.now();
         let capture_ms = ms_since(capture_start);
         if u64::from(captured.width) * u64::from(captured.height) > self.limits.max_image_pixels {
             return Err(ToolError::new(
@@ -724,6 +873,13 @@ impl ToolService {
                     format!("捕获后端返回无效像素: {e}"),
                 )
             })?;
+        #[cfg(test)]
+        {
+            let hook = self.before_encode_hook.lock().unwrap().clone();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
         let encode_start = Instant::now();
         let png =
             encode_png(&image).map_err(|e| ToolError::new(ErrorCode::Internal, e.to_string()))?;
@@ -736,7 +892,7 @@ impl ToolService {
             capture_method: backend.method,
             client_rect_screen: rect_json(&captured.client_rect),
             dpi: captured.dpi,
-            captured_at_unix_ms: self.store.now(),
+            captured_at_unix_ms,
             process_name: info.process_name.clone(),
             warnings: captured
                 .warnings

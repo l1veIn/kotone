@@ -100,18 +100,30 @@ pub async fn serve(service: Arc<ToolService>, token: SecretToken) -> std::io::Re
                     let _ = stream.set_nodelay(true);
                     let context = context.clone();
                     let header_timeout = limits.header_read_timeout;
-                    let connection_timeout = limits.connection_timeout;
+                    let lifetime = limits.connection_lifetime;
+                    let grace = limits.connection_grace;
                     tasks.spawn(async move {
                         let _permit = permit;
                         let service = hyper::service::service_fn(move |req| {
                             let context = context.clone();
                             async move { Ok::<_, Infallible>(handle(context, req).await) }
                         });
+                        // header_read_timeout 覆盖请求头读取及 keep-alive 两次请求间的空闲；
+                        // 请求体读取另有期限（见 call）。
                         let conn = hyper::server::conn::http1::Builder::new()
                             .timer(TokioTimer::new())
                             .header_read_timeout(header_timeout)
                             .serve_connection(TokioIo::new(stream), service);
-                        let _ = tokio::time::timeout(connection_timeout, conn).await;
+                        tokio::pin!(conn);
+                        tokio::select! {
+                            _ = conn.as_mut() => {}
+                            _ = tokio::time::sleep(lifetime) => {
+                                // 寿命到期：优雅关闭——空闲连接立即结束，在途请求完成后再关闭，
+                                // 不截断仍在工具期限内的请求；grace 是不读响应的客户端的硬上限。
+                                conn.as_mut().graceful_shutdown();
+                                let _ = tokio::time::timeout(grace, conn.as_mut()).await;
+                            }
+                        }
                     });
                 }
                 Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
@@ -229,6 +241,17 @@ async fn handle(context: Arc<Context>, req: Request<Incoming>) -> Response<Full<
         );
     }
 
+    // 关闭后撤销准入：即使接受循环尚未被中止，所有端点也不再返回结果
+    if context.service.is_closed() {
+        return reject(
+            &context,
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::ServiceClosed,
+            "工具服务正在关闭或已关闭",
+            request_id,
+            started,
+        );
+    }
     let path = req.uri().path().to_string();
     let method = req.method().clone();
     match (method, path.as_str()) {
@@ -320,9 +343,22 @@ async fn call(
             started,
         );
     }
-    let body = match Limited::new(req.into_body(), max).collect().await {
-        Ok(collected) => collected.to_bytes(),
+    let body_timeout = context.service.limits().body_read_timeout;
+    let collected =
+        tokio::time::timeout(body_timeout, Limited::new(req.into_body(), max).collect()).await;
+    let body = match collected {
         Err(_) => {
+            return reject(
+                &context,
+                StatusCode::REQUEST_TIMEOUT,
+                ErrorCode::RequestTimeout,
+                &format!("请求体未在 {}ms 内读完", body_timeout.as_millis()),
+                request_id,
+                started,
+            );
+        }
+        Ok(Ok(collected)) => collected.to_bytes(),
+        Ok(Err(_)) => {
             return reject(
                 &context,
                 StatusCode::PAYLOAD_TOO_LARGE,
