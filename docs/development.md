@@ -27,6 +27,7 @@ pnpm dev
 | 桌面组合与 IPC | `apps/desktop/src-tauri/src`；前端 `lib/ipc.ts` 命令封装、`lib/ipc/contracts.ts` 类型、`lib/ipc/browserMock.ts` 浏览器实现、`lib/assistant.ts` 助手命令 |
 | 设置页面、悬浮窗、浏览器测试 | `apps/desktop/src/routes`、`apps/desktop/e2e` |
 | 命令行与评测目标解析 | `crates/kotone-cli/src/main.rs`、`crates/kotone-stt/src/eval.rs` |
+| 本机 Agent 工具服务 | 端口 `crates/kotone-core/src/tools.rs`；协议/存储/服务端/客户端 `crates/kotone-tools`；Windows 实现 `kotone-platform-windows/src/window_tools.rs`、`tool_host.rs`；桌面生命周期 `apps/desktop/src-tauri/src/tool_service.rs`；CLI `crates/kotone-cli/src/tools.rs` |
 
 修改接口时同时检查 Rust、IPC 类型、Svelte 消费者和浏览器 mock。新增能力通过领域端口注入；core 不能反向依赖平台、STT 或网络实现。锁保护区内避免网络/音频设备/模型加载等阻塞操作，异步结果交付前再次核对会话代际。
 
@@ -43,6 +44,8 @@ pnpm -C apps/desktop test:e2e
 pnpm release:verify
 pnpm release:test
 ```
+
+受控窗口的前台像素测试会短暂把测试窗口切到前台，默认忽略，需要交互式桌面时单独运行：`cargo test -p kotone-platform-windows --test native_capture -- --ignored --test-threads=1`。
 
 CI 还执行依赖审计与 debug NSIS 构建；精确命令以 [ci.yml](../.github/workflows/ci.yml) 和 [发布清单](release-checklist.md) 为准。`pnpm build` 生成 release NSIS 安装包；用户配置与模型不会因为构建而迁移。
 

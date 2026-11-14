@@ -156,6 +156,8 @@ export interface Settings {
   /** 诊断记录（流程事件）；默认开启 */
   diagnostics: DiagnosticsConfig;
   assistant: AssistantConfig;
+  /** 本机 Agent 工具服务开关；桌面端启动时读取，默认关闭（docs/tool-service.md） */
+  toolService: ToolServiceConfig;
 }
 
 export interface AssistantConfig {
@@ -176,6 +178,11 @@ export interface AssistantConfig {
   danmakuTopOffsetPx: number;
   danmakuColor: string;
   danmakuEmote: "none" | "hello" | "cheering" | "pointing" | "amazed";
+}
+
+/** 本机工具服务配置（config.json `toolService` 段）；修改后需重启桌面端 */
+export interface ToolServiceConfig {
+  enabled: boolean;
 }
 
 export interface DiagnosticsConfig {

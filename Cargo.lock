@@ -2481,12 +2481,16 @@ dependencies = [
 name = "kotone-cli"
 version = "0.1.1"
 dependencies = [
+ "base64 0.22.1",
  "clap",
  "kotone-core",
  "kotone-platform-windows",
  "kotone-postprocess",
  "kotone-stt",
+ "kotone-tools",
+ "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -2510,9 +2514,12 @@ name = "kotone-platform-windows"
 version = "0.1.1"
 dependencies = [
  "arboard",
+ "base64 0.22.1",
  "clipboard-win",
  "cpal",
  "kotone-core",
+ "kotone-tools",
+ "serde_json",
  "tempfile",
  "tokio",
  "windows 0.61.3",
@@ -2565,6 +2572,7 @@ dependencies = [
  "kotone-platform-windows",
  "kotone-postprocess",
  "kotone-stt",
+ "kotone-tools",
  "kotone-tts",
  "serde",
  "serde_json",
@@ -2582,6 +2590,26 @@ dependencies = [
  "webview2-com",
  "windows 0.61.3",
  "zip",
+]
+
+[[package]]
+name = "kotone-tools"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "getrandom 0.2.17",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "kotone-core",
+ "kotone-platform-windows",
+ "png 0.17.16",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

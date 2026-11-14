@@ -8,6 +8,7 @@ mod diagnostics;
 mod hotkey;
 mod runtime;
 mod speech_models;
+mod tool_service;
 mod tray;
 
 use std::sync::{Arc, Mutex, RwLock};
@@ -1970,6 +1971,9 @@ pub fn run() {
             app.manage(assistant_runtime);
             app.manage(speech_models::SpeechModelManager::default());
             assistant::start(app.handle());
+            // 可选本机工具服务：独立于 ASR 运行时，只在启动时读取开关（docs/tool-service.md）
+            let tool_service_enabled = settings.read().unwrap().tool_service.enabled;
+            tool_service::start(app.handle(), tool_service_enabled);
             compatibility::start_fullscreen_monitor(app.handle().clone());
 
             for label in ["main", "overlay", "danmaku"] {
@@ -2096,6 +2100,7 @@ pub fn run() {
         .expect("error while building Kotone application")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                tool_service::shutdown(app);
                 assistant::shutdown(app);
             }
         });

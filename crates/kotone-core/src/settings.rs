@@ -130,6 +130,20 @@ pub struct Settings {
     /// 独立语音助手入口、AI 连接和提醒呈现偏好。
     #[serde(default)]
     pub assistant: crate::assistant::AssistantConfig,
+    /// 本机 Agent 工具服务（默认关闭；修改后需重启桌面实例才生效，见 docs/tool-service.md）。
+    #[serde(default)]
+    pub tool_service: ToolServiceConfig,
+}
+
+/// 本机工具服务开关（config.json `toolService` 段）。
+///
+/// 只有显式开启时，桌面实例才在 127.0.0.1 随机端口上启动带会话凭证的工具服务。
+/// 不提供固定端口或外网监听选项。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolServiceConfig {
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 /// 诊断记录开关（config.json `diagnostics` 段）。
@@ -466,6 +480,7 @@ impl Default for Settings {
             connections: Vec::new(),
             diagnostics: DiagnosticsConfig::default(),
             assistant: crate::assistant::AssistantConfig::default(),
+            tool_service: ToolServiceConfig::default(),
         }
     }
 }
@@ -979,6 +994,40 @@ mod tests {
             s.post_processing.pipelines[0].steps[0].processor_id,
             "builtin.blocklist-filter"
         );
+        assert!(!s.tool_service.enabled, "工具服务必须默认关闭");
+    }
+
+    #[test]
+    fn tool_service_setting_defaults_off_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // 旧配置缺 toolService 段：合并默认值 = 关闭
+        std::fs::write(&path, r#"{"language":"zh"}"#).unwrap();
+        let loaded = load_from_with_diagnostic(&path);
+        assert!(loaded.warning.is_none());
+        assert!(!loaded.settings.tool_service.enabled);
+
+        std::fs::write(&path, r#"{"toolService":{"enabled":true}}"#).unwrap();
+        assert!(load_from(&path).tool_service.enabled);
+
+        let mut settings = Settings::default();
+        settings.tool_service.enabled = true;
+        save_to(&path, &settings).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(raw["toolService"]["enabled"], serde_json::json!(true));
+        assert!(load_from(&path).tool_service.enabled);
+
+        // 类型错误不被静默当成开启
+        let bad: Result<Settings, _> = serde_json::from_value({
+            let mut merged = serde_json::to_value(Settings::default()).unwrap();
+            merge_json(
+                &mut merged,
+                &serde_json::json!({"toolService":{"enabled":"yes"}}),
+            );
+            merged
+        });
+        assert!(bad.is_err());
     }
 
     #[test]

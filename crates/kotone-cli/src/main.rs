@@ -11,6 +11,9 @@
 //! - `elevate <command> [args...]`：sudo 式——以管理员权限执行子命令（UIPI 提权，§10 R-1）
 //! - `profile`：list / use / detect（游戏 profile 管理与前台匹配）
 //! - `log`：识别历史 list / clear（core history 模块的 CLI 出口）
+//! - `tools`：连接已运行桌面实例的本机工具服务（status / list / call / artifact get）
+
+mod tools;
 
 use clap::{Parser, Subcommand};
 
@@ -155,6 +158,12 @@ enum Command {
         #[command(subcommand)]
         action: LogCommand,
     },
+    /// 本机 Agent 工具服务客户端：直连已在运行的 Kotone 桌面实例
+    /// （不启动 kotone.exe、不启动 ASR；需 toolService.enabled=true 并重启桌面端，见 docs/tool-service.md）
+    Tools {
+        #[command(subcommand)]
+        action: tools::ToolsCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -166,7 +175,8 @@ enum ConfigCommand {
     /// 写入配置项（点路径；支持 hotkey.key / hotkey.mode / hotkeyBackend /
     /// sttEngine / activeProfileId / autoSend / audioDeviceId / language /
     /// evalRecording / runAsAdminOnStart / interactionMode / vadSilenceMs /
-    /// history.mode / history.maxRecords / history.includeAudio）
+    /// history.mode / history.maxRecords / history.includeAudio / toolService.enabled 等，
+    /// 完整白名单见 docs/cli.md）
     Set {
         key: String,
         /// 写入的值；--capture 模式下省略（录入结果即值）
@@ -306,6 +316,7 @@ async fn main() {
                 yes,
             } => cmd_log_delete(&session_id, &ts, yes),
         },
+        Command::Tools { action } => tools::run(action).await,
     };
     std::process::exit(code);
 }
@@ -1020,6 +1031,7 @@ const CONFIG_SETTABLE_KEYS: &[&str] = &[
     "overlay.position",
     "overlay.draggable",
     "overlay.clickThrough",
+    "toolService.enabled",
 ];
 
 /// 点路径写入：current 上套 patch → Settings 反序列化校验（枚举值在此拦截）。
@@ -1038,7 +1050,8 @@ fn apply_config_set(current: &Settings, key: &str, raw: &str) -> Result<Settings
         | "runAsAdminOnStart"
         | "history.includeAudio"
         | "overlay.draggable"
-        | "overlay.clickThrough" => match raw {
+        | "overlay.clickThrough"
+        | "toolService.enabled" => match raw {
             "true" => serde_json::Value::Bool(true),
             "false" => serde_json::Value::Bool(false),
             _ => return Err(format!("{key} 只接受 true/false（收到「{raw}」）")),
@@ -1199,6 +1212,11 @@ fn cmd_config_set(key: &str, value: Option<&str>, capture: bool) -> i32 {
     match settings::save(&next) {
         Ok(()) => {
             println!("已写入 {key} = {value}");
+            if key == "toolService.enabled" {
+                println!(
+                    "工具服务开关在桌面端启动时读取：请先从托盘退出 Kotone 再重新启动（桌面端运行时保存设置会覆盖此处的修改）"
+                );
+            }
             0
         }
         Err(e) => {
@@ -1696,6 +1714,50 @@ mod tests {
             kotone_core::settings::OverlayPosition::BottomRight
         );
         assert!(apply_config_set(&Settings::default(), "overlay.position", "outside").is_err());
+    }
+
+    #[test]
+    fn config_set_tool_service_enabled() {
+        let s = apply_config_set(&Settings::default(), "toolService.enabled", "true").unwrap();
+        assert!(s.tool_service.enabled);
+        let s = apply_config_set(&s, "toolService.enabled", "false").unwrap();
+        assert!(!s.tool_service.enabled);
+        assert!(apply_config_set(&Settings::default(), "toolService.enabled", "on").is_err());
+        assert!(apply_config_set(&Settings::default(), "toolService.port", "1234").is_err());
+    }
+
+    #[test]
+    fn tools_commands_parse() {
+        let cli = Cli::try_parse_from([
+            "kotone-cli",
+            "tools",
+            "call",
+            "image.crop",
+            "--args-file",
+            "args.json",
+            "--timeout-ms",
+            "3000",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Tools {
+                action: tools::ToolsCommand::Call { ref tool, timeout_ms: Some(3000), .. }
+            } if tool == "image.crop"
+        ));
+        let cli = Cli::try_parse_from([
+            "kotone-cli",
+            "tools",
+            "artifact",
+            "get",
+            "art_1",
+            "--output",
+            "a.png",
+        ])
+        .unwrap();
+        assert!(matches!(cli.command, Command::Tools { .. }));
+        // 凭证不是命令行参数
+        assert!(Cli::try_parse_from(["kotone-cli", "tools", "status", "--token", "x"]).is_err());
     }
 
     #[test]

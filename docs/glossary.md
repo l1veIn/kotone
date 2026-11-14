@@ -27,6 +27,18 @@
 | 语音播报 / Text to speech (TTS) | `SpeechOutput`, `SpeechRequest`, `SpeechVoice` | 文本转成可听语音，默认 Windows SAPI 声音，无需下载 Kotone TTS 模型；Kokoro 中文模型可选、手动下载。与 STT、提示音分开。 |
 | 漂浮弹幕 / Danmaku | `DeliveryKind::Danmaku`, `DanmakuPresentation`, `ReminderDelivery` | 到期时从右向左滑动的单行桌面文字，可带小表情前缀；窗口透明、无底板、点击穿透。速度以 CSS 像素/秒定义，按实际条宽计算时长；不是聊天室消息，不能保证覆盖独占全屏游戏。 |
 
+## 本机工具服务
+
+| 中文 / English | 代码名 | 含义与边界 |
+| --- | --- | --- |
+| 工具服务 / Tool service | `kotone-tools`, `ToolService`, `toolService.enabled` | 桌面实例托管、默认关闭的 loopback HTTP 服务，供 Agent 调用确定性的本机工具；独立于 ASR 运行时。不是 MCP/DSH 插件，也不自行规划任务。 |
+| 描述文件 / Descriptor | `Descriptor`, `tool-service-s<会话>.json` | 当前用户、当前 Windows 会话私有的发现文件，含协议版本、实例 ID、PID、地址与会话凭证；客户端校验权限、会话与进程身份后才连接。 |
+| 能力清单 / Capabilities | `system.capabilities`, `GET /v1/capabilities` | 本实例真实实现的工具及其输入/输出 schema、就绪状态与限制；路线图工具不在其中。 |
+| 窗口引用 / Window reference | `windowId`, `WindowIdentity` | 不透明 ID，绑定窗口句柄、PID 与进程创建时间，仅在发放它的实例内有效；捕获前重新校验。 |
+| 前台可见客户区捕获 / Foreground visible client capture | `gdi-screen-foreground-client` | 目标为前台时复制其客户区内屏幕已合成的物理像素；覆盖其上的窗口会被一并捕获，不支持后台/最小化/隐藏窗口，独占全屏可能得到黑图。 |
+| 产物 / Artifact | `artifactId`, `ArtifactStore` | 不可变的内存 PNG 图像及元数据（SHA-256、尺寸、TTL、父/根产物、到根图的变换）；裁剪生成新产物，原图不变。 |
+| 帧 / Frame | `frameId` | 一次采集的标识；同一捕获的裁剪链共享，不同帧的坐标不可混用。 |
+
 ## 四种交互模式
 
 下表描述游戏语音输入的四种模式；助手仅复用前三种的采集规则，提交对象是提醒助手。助手录音笔预览后确认创建请求，其余两种模式结束后提交。

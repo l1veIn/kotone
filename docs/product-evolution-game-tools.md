@@ -1,6 +1,6 @@
 # Kotone 产品演进：面向 Agent 的游戏场景工具基础设施
 
-状态：演进计划与下一轮实现任务书，尚非已发布 API。日期：2026-11-15。现有能力基线：`124cbf8`。本文与[本轮研究报告](research/2026-11-15-lol-chat-ocr-report.md)配套；当前行为仍以[架构](architecture.md)、[CLI 手册](cli.md)和实现为准。
+状态：演进计划。M1（桌面工具服务与视觉输入）已实现，现行协议、工具 schema 与捕获限制以[工具服务手册](tool-service.md)为准，验证记录见[M1 实现记录](research/game-tools-m1-implementation.md)；M2 及以后仍是计划，尚非 API。日期：2026-11-15。现有能力基线：`124cbf8`。本文与[本轮研究报告](research/2026-11-15-lol-chat-ocr-report.md)配套；当前行为仍以[架构](architecture.md)、[CLI 手册](cli.md)和实现为准。
 
 ## 1. 产品定位与首个场景
 
@@ -46,6 +46,8 @@ Kotone 固定定位为工具。Agent 决定何时调用、调用哪些能力、�
 | OCR/消息跟踪 | 只有研究脚本和实验数据 | 产品级后端、模型安装、观测与去重状态 |
 | 工作流/插件 | 现有内部领域流程 | 可配置触发链、执行状态、DSH 适配插件 |
 
+M1 之后，上表中“独立于 ASR 的外部工具服务”“连接正在运行的桌面实例的客户端”以及“窗口枚举、坐标、截图、图像产物服务”已由[工具服务手册](tool-service.md)覆盖；截图仅限 GDI 前台可见客户区，其余缺口不变。
+
 现有 CLI 是 core 的另一消费者，并不是桌面遥控器。新的 `tools` 命令直接连接服务；不得通过再次运行桌面 exe 发送每条命令，避免 single-instance 回调唤起设置窗口并抢走游戏焦点。
 
 ## 4. 统一契约
@@ -61,7 +63,7 @@ Kotone 固定定位为工具。Agent 决定何时调用、调用哪些能力、�
 - `GET /v1/capabilities`、`GET /v1/status`、`POST /v1/tools/call`；CLI 使用同一协议，不另写一套业务逻辑。
 - capabilities 返回实际实现的工具及 schema、版本、就绪条件、数据外发/副作用属性。路线图里的工具不冒充已实现；未知工具返回 `TOOL_NOT_FOUND`。
 
-计划中的 CLI 入口：
+M1 已实现的 CLI 入口（参数与退出码见[工具服务手册](tool-service.md#7-命令行)）：
 
 ```text
 kotone-cli tools status
@@ -70,7 +72,7 @@ kotone-cli tools call <tool-name> --args-file <json-file>
 kotone-cli tools artifact get <artifact-id> --output <png-file>
 ```
 
-这些命令在 M1 交付前均为计划。原有 `send/listen/...` 行为继续由现行手册定义。
+原有 `send/listen/...` 行为继续由现行手册定义。本节以下的契约草案保留为设计依据；实际字段（如信封中的 `protocol/protocolVersion`、产物的 `rootTransform/screenRect`）以手册和 capabilities 为准。
 
 ### 4.2 请求与结果
 
@@ -121,7 +123,7 @@ M1 为有界短请求；后续长任务使用 `jobId` 和 queued/running/succeed
 
 ## 5. 计划中的服务暴露列表
 
-工具名为 v1 目标契约；表中阶段表示计划顺序，不表示当前已经可调用。每个工具均继承统一错误、超时、来源与计时契约。
+工具名为 v1 目标契约；表中阶段表示计划顺序。M1 的 8 个工具已实现（见[工具服务手册](tool-service.md#5-已实现工具)）；M2 及以后的工具当前不可调用，也不出现在 capabilities 中。每个工具均继承统一错误、超时、来源与计时契约。
 
 ### M1：桌面工具服务与视觉输入
 
@@ -206,6 +208,8 @@ Agent 直接控制：
 ## 7. 下一轮实现：M1 的具体边界与验收
 
 交付目标：**Agent 通过 CLI 连接已运行的 Kotone 桌面实例，获取一个有效窗口的原始截图和正确裁剪的图像；ASR 停止时仍可使用，全程不抢焦点。**
+
+实现状态：已实现，手册见 [tool-service.md](tool-service.md)，命令、测试结果与未验证项见 [M1 实现记录](research/game-tools-m1-implementation.md)。受控测试窗口的原生捕获已验证；对真实 LOL 客户端/对局的捕获尚未验证，不能据自动化测试宣称可用。
 
 ### 实现范围
 

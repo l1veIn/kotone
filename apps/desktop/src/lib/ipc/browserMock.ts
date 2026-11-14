@@ -94,6 +94,7 @@ const mock: MockStore = {
     },
     diagnostics: { recording: true },
     assistant: { hotkey: "", interactionMode: "push-to-talk", connectionId: "", defaultDelivery: ["voice", "danmaku"], voiceId: "", speechEngine: "system", kokoroVoiceId: "kokoro:zf_001", speechVolume: 80, speechRate: 0, danmakuDurationMs: 8000, danmakuSpeedPxPerSec: 160, danmakuFontSize: 32, danmakuTopOffsetPx: 120, danmakuColor: "#FFFFFF", danmakuEmote: "none" },
+    toolService: { enabled: false },
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },

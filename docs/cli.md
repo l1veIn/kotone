@@ -25,6 +25,9 @@
 | `elevate <command> [args...]` | sudo 式提权：以管理员权限在新控制台执行子命令（典型 `elevate listen`；裸 elevate 报用法错误） |
 | `profile list / use <id> / detect` | 游戏 profile 列表 / 激活 / 前台进程匹配检测 |
 | `log list [--limit N] [--json] / clear [--yes] / delete --session-id <id> --ts <ts> [--yes]` | 识别历史查看 / 清空 / 单条删除（~/.kotone/history/） |
+| `tools status [--json] / list [--json]` | 连接**已运行**的桌面实例，查看工具服务状态 / 实际实现的工具与 schema |
+| `tools call <tool> [--args-file <json文件\|->] [--timeout-ms N] [--request-id ID]` | 调用工具服务的工具，输出 JSON 信封 |
+| `tools artifact get <artifact-id> --output <png> [--force]` | 下载图像产物，由客户端写入指定路径 |
 
 ### config set 支持的键
 
@@ -37,10 +40,19 @@
 `history.includeAudio`(true/false)、`download.source`(auto/official/mirror)、
 `download.ghProxy`（GitHub 加速代理前缀，默认 `https://ghfast.top/`，失效可换）、
 `overlay.visibility`(always/on_demand/never)、`overlay.style`(card/capsule)、
-`overlay.position`、`overlay.draggable`、`overlay.clickThrough`。
+`overlay.position`、`overlay.draggable`、`overlay.clickThrough`、
+`toolService.enabled`(true/false，默认 false；桌面端启动时读取——先从托盘退出 Kotone，再写入并重新启动)。
 
 `config get` 可读取存在的配置路径，`config set` 仅支持上述白名单，不等于全部设置字段。
 评测参数、旧模型族别名与缓存规则见 [评测手册](eval-playbook.md)。提醒助手当前通过桌面页和独立热键使用，不是 `eval` 或 `listen` 的隐藏模式。
+
+### 工具服务客户端（tools 命令）
+
+`tools` 子命令通过 `~/.kotone/run/` 下当前用户/会话私有的描述文件，直接连接已经运行并开启了
+`toolService.enabled` 的 Kotone 桌面实例；它不会启动 `kotone.exe`、不读取或修改配置、不启动 ASR，
+桌面 ASR 运行时处于停止状态时同样可用。会话凭证只从描述文件读取，不作为参数、也不出现在输出里。
+退出码：0 成功；1 工具返回 `ok=false`；2 本地用法/文件错误；3 未发现服务、描述文件过期/不安全或连接失败。
+协议、工具 schema、捕获限制与示例见 [工具服务手册](tool-service.md)。
 
 ### 识别历史（log 命令）
 

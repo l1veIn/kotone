@@ -26,6 +26,8 @@ kotone-tts.workspace = true
 kotone-postprocess.workspace = true
 kotone-stt.workspace = true
 kotone-platform-windows.workspace = true
+# 可选本机 Agent 工具服务（默认关闭，toolService.enabled）
+kotone-tools.workspace = true
 
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"

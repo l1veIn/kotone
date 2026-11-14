@@ -10,6 +10,7 @@
 //! - `postprocess`：TextProcessor/ProcessorFactory 端口 + 注册表 + 有序 pipeline runner
 //! - `stt`：SttEngine/SttSession 端口 + EngineRegistry 容器（引擎实例由 kotone-stt 注入）
 //! - `orchestrator`：唯一状态所有者（状态机）
+//! - `tools`：外部工具服务的窗口观察/捕获/实例发现端口（实现由平台层注入）
 //! - `settings`/`profile`/`eval`/`log`：配置 schema 与存储（唯一写入口）、游戏 profile、评测、文件日志
 
 pub mod assistant;
@@ -31,4 +32,5 @@ pub mod runtime;
 pub mod settings;
 pub mod speech;
 pub mod stt;
+pub mod tools;
 pub mod vad;
