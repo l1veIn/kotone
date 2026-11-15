@@ -18,7 +18,7 @@
 | 桌面端 | `--background` 启动参数（不显示窗口；单实例回调遇到后台参数保持静默）；`RoutingHandler` 包住提醒助手，`route=agent` 时把原文发布为 `user.request`（按会话前缀区分 `assistant-voice` / `assistant-text` / `tool`）；`DesktopHost` 实现 `AppHost`，`deliver_text` 复用 `DesktopDelivery`（输出互斥、等麦克风空闲、弹幕、失败降级）；运行时相位变化发布 `runtime.phase` |
 | 进程启动 | `kotone-platform-windows::detached::spawn_detached`：`CreateProcessW(bInheritHandles=FALSE, DETACHED_PROCESS \| CREATE_NEW_PROCESS_GROUP)`，`DetachedChild::try_wait` |
 | CLI | `app status/launch/quit`（`--exe` / `KOTONE_EXE` 显式路径不存在即报错，不悄悄换文件）；`tools events [--follow]`（JSON Lines）；`mcp`（stdio MCP：6 个静态工具 + 运行时映射的 `kotone_*` 工具，`kotone_launch` 后发 `tools/list_changed`） |
-| DSH 插件 | `integrations/dsh-kotone`：bundle 补丁挂 `@deepseek-ai/dsh-mcp-client`（`kotone-cli mcp`）与反向通道插件；插件只依赖 `sessionController`（headless 等无会话 profile 不激活，不会领走请求）；经 `kotone-cli tools events --follow` 收 `user.request`、`agent.request.claim` 领取、投进复用的「Kotone」会话（ID 记在 `<DSH_HOME>/kotone/state.json`，被删则重建）；投递失败用 `agent.reply` 告知用户；退避重连；落盘日志 `<DSH_HOME>/kotone/bridge.log` |
+| DSH 插件 | `integrations/dsh-kotone`（2026-11-15 迁出为独立仓库 `dsh-game-communicate`，消费者前缀与状态目录随之改为 `dsh-game-communicate:<pid>`、`<DSH_HOME>/game-communicate/`）：bundle 补丁挂 `@deepseek-ai/dsh-mcp-client`（`kotone-cli mcp`）与反向通道插件；插件只依赖 `sessionController`（headless 等无会话 profile 不激活，不会领走请求）；经 `kotone-cli tools events --follow` 收 `user.request`、`agent.request.claim` 领取、投进复用的「Kotone」会话（ID 记在 `<DSH_HOME>/kotone/state.json`，被删则重建）；投递失败用 `agent.reply` 告知用户；退避重连；落盘日志 `<DSH_HOME>/kotone/bridge.log` |
 | Skill | `integrations/skills/kotone/SKILL.md`：生命周期、调用、用户请求的领取与回复、看屏幕、事件、隔离 |
 | 文档 | 工具服务手册（§1、§4 端点/上限/错误码、§5 工具表、新 §10、§11 CLI、§12 隐私、§13 实现位置）、CLI、术语、架构、隐私政策、README、演进计划 §5.5 |
 

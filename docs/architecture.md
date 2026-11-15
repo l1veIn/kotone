@@ -15,7 +15,7 @@
 | `kotone-tools` | 本机 Agent 工具服务：v1 协议信封、能力目录、不可变图像产物存储、预处理、驻留 OCR 结果、聊天消息跟踪、事件总线与用户请求、loopback HTTP 服务端/客户端、实例发现 | 依赖 core 的 `tools`/`ocr` 端口与 HTTP 库，不依赖 Windows API、ONNX 或 Tauri；窗口/捕获/私有文件/OCR 后端与应用级能力（`AppHost`）由调用方注入 |
 | `kotone-ocr` | OCR 后端：本地韩文 PP-OCRv5（ONNX Runtime C API）、模型清单/安装/就绪校验、DeepSeek 在线 OCR | 实现 core 的 `ocr` 端口；本地推理（`onnx` feature）链接 sherpa-onnx 预编译包内的 ONNX Runtime，不新增原生库；在线后端只经注入的连接解析获取地址与 key |
 | `kotone-cli` | 无 Tauri 命令前端、评测、诊断、自检、工具服务客户端、应用启停（`app`）、stdio MCP 服务器（`mcp`） | 和桌面壳一样组合实现，不复制领域流程；`tools` 子命令只连接已运行的桌面实例，启动由 `app launch` 以不继承句柄的后台进程完成 |
-| `integrations/` | Agent 侧交付物：DSH 插件 `dsh-kotone`（MCP + 用户请求反向通道）、Agent Skill | 只经 `kotone-cli` 与工具服务交互，不链接 Rust crate；业务逻辑留在 Kotone |
+| `integrations/` | Agent 侧交付物：Agent Skill（DSH 插件在独立仓库 `dsh-game-communicate`，与 Kotone 的关系如同 dsh-game-daily 之于 BetterGI） | 只经 `kotone-cli` 与工具服务交互，不链接 Rust crate；业务逻辑留在 Kotone |
 | `apps/desktop/src-tauri` | 桌面运行时、IPC、窗口/托盘/更新、事件转发 | 组合核心和实现 crate，负责设备与 UI 生命周期 |
 | `apps/desktop/src` | Svelte 设置、向导、悬浮窗和历史 UI | 通过 IPC 请求操作；浏览器 mock 只供 UI 开发和测试 |
 

@@ -265,7 +265,7 @@ Kotone 侧只提供与传输无关的事件与回应协议；把事件变成 Age
 | 交付物 | 内容 |
 | --- | --- |
 | Skill | `SKILL.md` + 示例：何时用 Kotone、从 `app status/launch` 到常见流程（读聊天、翻译后播报、提醒）与失败处理；工具参考由 capabilities 生成，不手抄 schema。**初版已实现**：[`integrations/skills/kotone`](../integrations/skills/kotone/SKILL.md) |
-| 桌宠 / Agent 插件（DSH、pi 等） | 薄客户端：发现与认证、工具调用、订阅事件并转成 Agent 消息、`agent.reply` 回传；业务逻辑留在 Kotone。**DSH 已实现**：[`integrations/dsh-kotone`](../integrations/dsh-kotone/README.md)（MCP 工具 + `user.request` 投进复用会话，真机端到端通过）；pi 未做 |
+| 桌宠 / Agent 插件（DSH、pi 等） | 薄客户端：发现与认证、工具调用、订阅事件并转成 Agent 消息、`agent.reply` 回传；业务逻辑留在 Kotone。**DSH 已实现**：独立仓库 `dsh-game-communicate`（MCP 工具 + `user.request` 投进复用会话，真机端到端通过；2026-11-15 由本仓库 `integrations/dsh-kotone` 迁出）；pi 未做 |
 | MCP 适配 | `kotone-cli mcp`（stdio）把 capabilities 映射为 MCP 工具，`kotone_launch` 后发送 `tools/list_changed`。**已实现**；事件以 `kotone_events` 工具读取，尚未映射为 MCP 通知 |
 
 #### 5.5.6 建议顺序

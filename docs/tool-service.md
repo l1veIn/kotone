@@ -278,14 +278,14 @@ Agent 从“打开 exe”开始就能驱动 Kotone，并能收到用户通过 Ko
 
 **用户请求**（反向通道）。`assistant.route` 设为 `agent` 时（`kotone-cli config set assistant.route agent`，重启生效；默认 `reminders` 保持原有的提醒规划），助手热键语音与文字入口的原文不再交给 Kotone 自己的 AI 连接，而是成为一条 `user.request`：`requestId`（`areq_…`）、`text`（用户原文——对 Kotone 是数据，不是指令）、`source`（`assistant-voice` / `assistant-text` / `tool`）、`foregroundWindow`（提交时的前台窗口，可直接用于截图）、`status`（`pending` → `claimed` → `replied`，或 `expired`）、创建/过期时间、领取者与回复次数。`assistant.submit` 走与文字入口完全相同的路径，供测试和自动化。
 
-Agent 先 `agent.request.claim`（`consumer` 如 `dsh-kotone:<pid>` / `claude-code`）再处理：同一领取者重复领取幂等，其他领取者得到 `AGENT_REQUEST_CLAIMED`，过期请求得到 `AGENT_REQUEST_EXPIRED`。多个 Agent 同时在线时由此保证一条请求只被处理一次。
+Agent 先 `agent.request.claim`（`consumer` 如 `dsh-game-communicate:<pid>` / `claude-code`）再处理：同一领取者重复领取幂等，其他领取者得到 `AGENT_REQUEST_CLAIMED`，过期请求得到 `AGENT_REQUEST_EXPIRED`。多个 Agent 同时在线时由此保证一条请求只被处理一次。
 
 **回复**。`agent.reply` 复用提醒的交付路径：与其他输出互斥排队、播报前等待麦克风空闲（避免把回复当成新的语音指令）、弹幕不取焦点、语音失败时降级为弹幕。默认**受理即返回**（`status=accepted`、`deliveryId`），在后台交付，结果以 `agent.reply.delivered` / `agent.reply.failed` 事件给出——Agent 不必为一条 20 秒的弹幕或一段长语音阻塞，也不会撞上 30 秒调用上限。`wait=true` 时等交付完成再返回回执（受 `timeoutMs` 约束，到期即停止播报）。带 `requestId` 回答对应请求（可多次调用，例如先说“在查，稍等”），请求随即记为 `replied`；不带则是主动通知。服务关闭时丢弃未完成的后台交付（宿主停止播报、收起弹幕）。没有桌面宿主的实例（纯测试服务）直接返回 `HOST_ACTION_FAILED`，不先受理。
 
 **接入方式**：
 
 - **MCP**：`kotone-cli mcp` 是 stdio MCP 服务器。静态工具 `kotone_service_status`、`kotone_launch`、`kotone_quit`、`kotone_capabilities`、`kotone_call`（按 Kotone 工具名调用任意工具）、`kotone_events`；Kotone 运行时再把每个工具映射为 `kotone_<工具名，点换成下划线>`，启动后发送 `notifications/tools/list_changed`。
-- **DSH 插件**：[`integrations/dsh-kotone`](../integrations/dsh-kotone/README.md) 挂上上述 MCP 服务器，并把 `user.request` 领取后投进 DSH 里复用的「Kotone」会话。
+- **DSH 插件**：独立仓库 `dsh-game-communicate`（与 Kotone 分开发布，类似 dsh-game-daily 之于 BetterGI）挂上上述 MCP 服务器，并把 `user.request` 领取后投进 DSH 里复用的「Kotone」会话。
 - **Skill**：[`integrations/skills/kotone/SKILL.md`](../integrations/skills/kotone/SKILL.md) 供只能执行命令行的 Agent 使用。
 
 ## 11. 命令行
@@ -356,4 +356,4 @@ kotone-cli tools call chat.track.ingest --args-file ingest.json
 | `apps/desktop/src-tauri/src/tool_service.rs`（`DesktopHost`）、`assistant.rs`（`RoutingHandler`、`deliver_text`） | 宿主实现：运行时启停、退出、回复交付、助手路由 |
 | `crates/kotone-platform-windows/src/detached.rs` | 不继承句柄的脱离式进程启动 |
 | `crates/kotone-cli/src/app.rs`、`mcp.rs` | `app status/launch/quit`；stdio MCP 服务器 |
-| `integrations/dsh-kotone`、`integrations/skills/kotone` | DSH 插件（MCP + 反向通道）；Agent Skill |
+| `integrations/skills/kotone` | Agent Skill（DSH 插件在独立仓库 `dsh-game-communicate`） |
