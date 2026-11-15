@@ -328,10 +328,11 @@ async fn capabilities_list_exactly_the_implemented_tools() {
             // 本测试实例没有桌面宿主：配置类工具如实报告未就绪
             assert_eq!(tool["ready"], false, "{}", tool["name"]);
             assert!(tool["notReadyReason"].is_string());
-            let egress = if tool["name"] == "postprocess.test" {
-                "connection-dependent"
-            } else {
-                "none"
+            // 陪玩：请求与识别出的聊天发给用户的 AI 连接；读聊天取决于所选 OCR 后端
+            let egress = match tool["name"].as_str().unwrap() {
+                "postprocess.test" | "companion.ask" | "companion.check" => "connection-dependent",
+                "companion.read_chat" => "backend-dependent",
+                _ => "none",
             };
             assert_eq!(tool["dataEgress"], egress, "{}", tool["name"]);
         } else {

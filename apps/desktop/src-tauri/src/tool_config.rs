@@ -74,6 +74,23 @@ struct CategoryArgs {
     category: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CompanionAskArgs {
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    quick_message_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CompanionTypeArgs {
+    text: String,
+    #[serde(default)]
+    send: bool,
+}
+
 fn category_of(tool: &str, value: Option<&str>) -> Result<ModelCategory, HostError> {
     ModelCategory::parse(value.unwrap_or("")).ok_or_else(|| {
         HostError::InvalidArguments(format!("{tool}: category 只能是 asr、ocr 或 tts"))
@@ -543,6 +560,88 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
         c::TOOL_POSTPROCESS_TEST => {
             let PostprocessTestArgs { text, pipeline } = parse(tool, args)?;
             to_json(crate::test_post_processing(app.state(), text, pipeline).await?)
+        }
+        c::TOOL_COMPANION_STATUS => {
+            let _: NoArgs = parse(tool, args)?;
+            Ok(crate::companion::status(app))
+        }
+        c::TOOL_COMPANION_ASK => {
+            let CompanionAskArgs {
+                text,
+                quick_message_id,
+            } = parse(tool, args)?;
+            let text = match (text, quick_message_id) {
+                (Some(text), None) if !text.trim().is_empty() => text,
+                (None, Some(id)) => {
+                    crate::companion::quick_message_text(app, &id).ok_or_else(|| {
+                        HostError::InvalidArguments(format!(
+                            "没有快捷消息 {id}（见 companion.status）"
+                        ))
+                    })?
+                }
+                _ => {
+                    return Err(HostError::InvalidArguments(
+                        "companion.ask 需要 text 或 quickMessageId 之一".into(),
+                    ))
+                }
+            };
+            if crate::companion::is_busy(app) {
+                return Err(HostError::Busy("上一条陪玩请求还在处理".into()));
+            }
+            // 与热键入口相同的前置条件：没有通过自检的连接时直接拒绝，不受理。
+            crate::companion::connection_ready(
+                app,
+                &app.state::<SharedState>().settings.read().unwrap().clone(),
+            )
+            .map_err(HostError::Failed)?;
+            let job_id = kotone_tools::ids::new_id("cjob");
+            let task_app = app.clone();
+            let job = job_id.clone();
+            tauri::async_runtime::spawn(async move {
+                let started = Instant::now();
+                match crate::companion::run(&task_app, text, crate::companion::Source::Tool).await {
+                    Ok(mut receipt) => {
+                        receipt["jobId"] = json!(job);
+                        receipt["durationMs"] = json!(started.elapsed().as_millis() as u64);
+                        tool_service::publish(&task_app, "companion.finished", receipt);
+                    }
+                    Err(message) => tool_service::publish(
+                        &task_app,
+                        "companion.failed",
+                        json!({"jobId": job, "message": message, "durationMs": started.elapsed().as_millis() as u64}),
+                    ),
+                }
+            });
+            Ok(json!({"status": "started", "jobId": job_id}))
+        }
+        c::TOOL_COMPANION_READ_CHAT => {
+            let _: NoArgs = parse(tool, args)?;
+            let snapshot =
+                crate::companion::read_chat(app, "", crate::companion::Source::Tool).await?;
+            Ok(snapshot.to_json())
+        }
+        c::TOOL_COMPANION_TYPE => {
+            let CompanionTypeArgs { text, send } = parse(tool, args)?;
+            Ok(crate::companion::type_text(app, &text, send).await?)
+        }
+        c::TOOL_COMPANION_CHECK => {
+            let _: NoArgs = parse(tool, args)?;
+            let task_app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                match crate::companion::self_check(&task_app).await {
+                    Ok(check) => tool_service::publish(
+                        &task_app,
+                        "companion.check.finished",
+                        json!({"check": check}),
+                    ),
+                    Err(message) => tool_service::publish(
+                        &task_app,
+                        "companion.check.failed",
+                        json!({"message": message}),
+                    ),
+                }
+            });
+            Ok(json!({"status": "started"}))
         }
         other => Err(HostError::Failed(format!("桌面端未实现工具 {other}"))),
     }

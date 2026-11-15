@@ -345,7 +345,7 @@ Claude Code 应先阅读文档和仓库约定；存在 `.codegraph/` 时先用 C
 
 ## 10. Kotone 陪玩（2026-11-15 定稿）
 
-状态：设计定稿，实现见分支 `claude/companion`。来源：[交接文档 §4](research/2026-11-15-companion-handoff.md#4-已定设计提醒助手升级为kotone-陪玩)。本节取代 §1 原来“场景一由外部 Agent 驱动”的写法：截图、OCR、聊天跟踪先成为 Kotone 自己的功能，再整体开放给 Agent。
+状态：已实现（分支 `claude/companion`，实现与验证见[实现记录](research/2026-11-15-companion-implementation.md)；真实游戏里的整条链路尚未验证）。来源：[交接文档 §4](research/2026-11-15-companion-handoff.md#4-已定设计提醒助手升级为kotone-陪玩)。本节取代 §1 原来“场景一由外部 Agent 驱动”的写法：截图、OCR、聊天跟踪先成为 Kotone 自己的功能，再整体开放给 Agent。
 
 ### 10.1 两种入口，同一条流程
 
@@ -401,7 +401,7 @@ Claude Code 应先阅读文档和仓库约定；存在 `.codegraph/` 时先用 C
 
 ## 11. ASR / OCR / TTS 统一模型管理（2026-11-15 定稿）
 
-状态：设计定稿，实现见分支 `claude/companion`。来源：[交接文档 §5](research/2026-11-15-companion-handoff.md#5-已定设计asr--ocr--tts-统一模型管理)。
+状态：已实现（分支 `claude/companion`，见[实现记录](research/2026-11-15-companion-implementation.md)）。来源：[交接文档 §5](research/2026-11-15-companion-handoff.md#5-已定设计asr--ocr--tts-统一模型管理)。
 
 ### 11.1 形态：照搬现有 ASR 模型管理
 

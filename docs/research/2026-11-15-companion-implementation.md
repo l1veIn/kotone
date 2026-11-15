@@ -79,3 +79,11 @@
 - **设置页**：「提醒助手」更名「陪玩」；新增陪玩状态、能力自检、自动发送开关、快捷消息编辑（每条一个热键）、在线 OCR 上传截图的提示。
 - 验证：`kotone-ai` 单元测试（三种动作解析、混合动作 / 未知工具 / 换行 / 多余参数整体拒绝、不合理的聊天框忽略、数据块标注、自检判定、一次请求只带五个工具、自检两次请求，均用本地 mock 服务器）；`kotone-core`（旧路由兼容、快捷消息上限与校验、自检匹配）；桌面端（聊天框比例换算、热键清单同步）；Playwright 全量 58 个用例，含新增 `companion.spec.ts`（选连接自动自检、未通过时被拦住、快捷消息增删改、在线 OCR 上传提示）。
 - **未验证**：真实游戏里的整条链路（截图 → OCR → 真实大模型 → 打字 / 播报）及其耗时；真实模型的自检通过率；独占全屏的提示；向游戏打字被反作弊拦截时的表现；模型回报聊天框位置的准确度。
+
+## 6. 开放给 Agent
+
+- 五个委托给桌面宿主的工具（`kotone_tools::catalog_host`，桌面实现在 `tool_config.rs` → `companion.rs`，与热键同一实现）：`companion.status`、`companion.ask`（`text` 或 `quickMessageId`；受理即返回 `jobId`，结果为 `companion.finished` / `companion.failed` 事件——完整流程含大模型与播报，可能超过工具服务 30 秒的单次期限）、`companion.read_chat`（前半段，不调大模型）、`companion.type`（帮忙打字执行器，默认不发送）、`companion.check`（受理即返回，结果为 `companion.check.*` 事件）。MCP 适配从 capabilities 自动得到这五个工具，无需改动。
+- `dataEgress` 沿用协议已有取值：`companion.ask` / `companion.check` 为 `connection-dependent`，`companion.read_chat` 为 `backend-dependent`。
+- 文档：`tool-service.md` 新增“Kotone 陪玩”工具表与事件；Skill `integrations/skills/kotone/SKILL.md` 新增陪玩一节；插件仓库 `dsh-game-communicate` 的技能同步（见该仓库提交）。
+- 验证：`kotone-tools` 88 个测试（capabilities 列表与 schema、委托工具定义顺序、各工具的外发标记）；桌面端编译与单元测试。
+- **未验证**：真实实例上经 HTTP / MCP 调用这五个工具的端到端结果（需要有通过自检的真实连接与游戏窗口）。

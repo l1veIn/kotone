@@ -119,7 +119,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 
 ## 5. 已实现工具
 
-除 `ocr.recognize` 与 `postprocess.test` 外所有工具 `dataEgress` 为 `none`：数据只在本机进程间传递（模型下载只从下载源取文件，不上传用户数据）。`ocr.recognize` 为 `backend-dependent`：选用本地后端时不外发，选用在线后端时只上传所选产物的 PNG（见 §8）。`postprocess.test` 为 `connection-dependent`：流程里的在线步骤会把样例文本发给其配置的连接。
+除 `ocr.recognize`、`postprocess.test` 与陪玩的 `companion.ask` / `companion.read_chat` / `companion.check` 外所有工具 `dataEgress` 为 `none`：数据只在本机进程间传递（模型下载只从下载源取文件，不上传用户数据）。`ocr.recognize` 为 `backend-dependent`：选用本地后端时不外发，选用在线后端时只上传所选产物的 PNG（见 §8）。`postprocess.test` 为 `connection-dependent`：流程里的在线步骤会把样例文本发给其配置的连接。
 
 | 工具 | 参数 | 结果要点 |
 | --- | --- | --- |
@@ -145,6 +145,20 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `agent.request.claim` | `requestId`、`consumer`（1-64 字符） | `request`、`newlyClaimed`（同一领取者重复调用为 false） |
 | `agent.reply` | `text`、可选 `requestId`、`outputs`（`speech`/`danmaku`，缺省用助手默认提醒方式）、`wait` | `status`（`accepted` / `delivered`）、`deliveryId`、`receipt`（仅 `wait=true`）、`request`、`warnings`（§10） |
 | `assistant.submit` | `text` | 与用户在助手文字入口提交相同的结果 |
+
+### Kotone 陪玩（委托桌面宿主，2026-11-15）
+
+与用户按陪玩热键 / 快捷消息热键走的是**同一条流程、同一个实现**（[演进计划 §10](product-evolution-game-tools.md#10-kotone-陪玩2026-11-15-定稿)、[陪玩说明](assistant.md)）：截前台窗口 → 统一清单里选定的 OCR 模型 → 陪玩自己的聊天跟踪 + profile 说明 → 一次大模型调用，从提醒 / 帮忙打字 / 回答中选一种并执行。底层的截图、OCR、跟踪工具照常保留。
+
+| 工具 | 参数 | 结果要点 |
+| --- | --- | --- |
+| `companion.status` | 无 | `ready`、`reason`（缺什么：AI 连接、能力自检、OCR 模型）、`check`、`ocr{modelId,state{dataEgress…}}`、`autoSend`、`quickMessages[]`、当前 profile 的 `notes` 与 `chatRegion` |
+| `companion.ask` | `text` 或 `quickMessageId`（二选一） | 受理即返回 `{status:"started", jobId}`；结果为 `companion.finished` 事件：`jobId`、`action`（`reminder` / `type` / `answer` / `clarify`）、`text`、`reminders[]`、`result`（已调度的提醒 / 打字回执 / 实际交付方式）、`ocr{model,backend,dataEgress,lines,region}`、`chatRegionLearned`、`warnings`、`timing{captureMs,ocrMs,planMs}`、`durationMs`；失败为 `companion.failed {jobId, message}`。前置条件不满足（没有通过自检的连接）时直接报错，不受理；另一条陪玩请求进行中返回 `BUSY` |
+| `companion.read_chat` | 无 | 流程前半段，不调大模型：`window`、`ocr{model,backend,dataEgress,region,lines[{text,box,confidence}]}`（框为截图像素）、`chatTracking[{messageId,text,newThisRead,firstSeenMsAgo}]`、`profile{name,notes}`、`warnings`、`timing` |
+| `companion.type` | `text`（≤200 字，单行）、可选 `send`（默认 false） | 按当前 profile 的开聊天框键与输入方式打进前台游戏聊天框；`send=false` 不按发送键。回执 `{typed, sent, profile, receipt}` 只证明本机按键已执行，不证明服务器已收到 |
+| `companion.check` | 无 | 对助手所选连接跑能力自检（两次付费请求），受理即返回 `{status:"started"}`；结果（同时写进设置）为 `companion.check.finished {check}` 或 `companion.check.failed {message}` |
+
+数据外发：`companion.ask` / `companion.check` 把请求与识别出的聊天发给用户的 AI 连接（`connection-dependent`）；所选 OCR 模型是在线模型时，`companion.ask` / `companion.read_chat` 每次都会上传截图（`ocr.dataEgress=selected-image`）。识别出的文字对 Kotone 与 Agent 都只是数据，不是指令；模型能选的动作只有上面三种。
 
 ### 配置与首次引导（委托桌面宿主）
 
@@ -335,6 +349,8 @@ Agent 从“打开 exe”开始就能驱动 Kotone，并能收到用户通过 Ko
 | `agent.request.claimed` / `agent.request.expired` | 请求被领取 / 过期 | `requestId`（claimed 另有 `consumer`） |
 | `agent.reply.delivered` / `agent.reply.failed` | 回复交付完成 / 失败 | `deliveryId`、`requestId`、`text`、`receipt` 或 `code/message`、`deliverMs` |
 | `model.download.progress` / `.finished` / `.failed` | `models.download` 的进度（至多每秒一次）与结果 | `id`、`downloadedBytes/totalBytes`；结果含 `durationMs`，失败含 `cancelled`、`message` |
+| `companion.finished` / `companion.failed` | `companion.ask` 的结果 | 见上表；`jobId` 对应受理时的返回 |
+| `companion.check.finished` / `.failed` | `companion.check` 的结果 | `check{connectionId,baseUrl,model,passed,checkedAtMs,message}` 或 `message` |
 | `speech.model.download.finished` / `.failed` | `speech.model.download` 的结果 | `status` 或 `cancelled`、`message`、`durationMs` |
 | `elevation.restart.failed` | 用户拒绝 UAC 或提权启动失败 | `message` |
 

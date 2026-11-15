@@ -194,7 +194,6 @@ pub struct ChatSnapshot {
 }
 
 impl ChatSnapshot {
-    #[allow(dead_code)] // 工具 companion.read_chat 使用（下一个提交）
     pub fn to_json(&self) -> Value {
         json!({
             "window": {"title": self.input.window_title, "process": self.input.process_name, "width": self.window_size.0, "height": self.window_size.1},
@@ -581,6 +580,11 @@ fn tell(app: &AppHandle, text: String) {
     });
 }
 
+/// 是否有一条陪玩请求正在处理（工具入口用来提前给出“忙”的答复）。
+pub fn is_busy(app: &AppHandle) -> bool {
+    app.state::<CompanionRuntime>().busy.try_lock().is_err()
+}
+
 fn acquire(app: &AppHandle) -> Result<tokio::sync::OwnedMutexGuard<()>, String> {
     app.state::<CompanionRuntime>()
         .busy
@@ -742,7 +746,6 @@ pub fn quick(app: &AppHandle, slot: usize) {
 }
 
 /// 按 ID 找快捷消息的内容（工具 `companion.ask {quickMessageId}`）。
-#[allow(dead_code)] // 工具 companion.ask 使用（下一个提交）
 pub fn quick_message_text(app: &AppHandle, id: &str) -> Option<String> {
     settings(app)
         .assistant
