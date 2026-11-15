@@ -479,6 +479,9 @@ fn finish_start(
     }));
     rt.input_epoch.fetch_add(1, Ordering::SeqCst);
     rt.transit(runtime::finish_start)?;
+    // Creation is optional and asynchronous; reconcile again now that Always
+    // can observe Running even if its WebView was not ready during stage 3.
+    crate::overlay::reconcile(app, false);
     kotone_core::log::log("runtime started");
     crate::record_process_event(
         app,

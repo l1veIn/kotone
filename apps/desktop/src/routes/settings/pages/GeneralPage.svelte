@@ -468,7 +468,7 @@
         {#each [
           { id: "on_demand", name: "用时浮现", desc: "平时隐藏，说话时出现，发完自动隐藏" },
           { id: "always", name: "常驻", desc: "启动即显示，停止才隐藏" },
-          { id: "never", name: "不显示", desc: "完全隐藏悬浮窗，全凭感觉操作" },
+          { id: "never", name: "不显示", desc: "关闭悬浮窗，热键和语音输入照常" },
         ] as const as opt}
           {@const selected = ($settingsStore.overlay?.visibility ?? "on_demand") === opt.id}
           <button
