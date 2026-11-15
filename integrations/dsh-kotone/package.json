@@ -1,0 +1,37 @@
+{
+  "name": "dsh-kotone",
+  "version": "0.1.0",
+  "description": "DSH 插件：把 Kotone（本机语音输入 / 提醒 / 屏幕工具）接入 DeepSeek Harness——MCP 工具 + 用户语音请求转交到 DSH 会话",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "kotone",
+    "mcp"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "engines": {
+    "dsh": ">=0.2.0-rc.1",
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

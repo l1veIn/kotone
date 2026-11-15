@@ -1,0 +1,9 @@
+# dsh-kotone 端到端测试的 --patch 叠加层：挂上脚本化模型并设为默认模型（不联网、不读 API key）。
+- insert:
+    - id: kotone-fake-llm
+      name: dsh-kotone-fake-llm
+      config: {}
+- id: agent-default-model
+  config:
+    provider: kotone-fake
+    model: scripted
