@@ -32,8 +32,9 @@ pub fn sync_toggle_label(app: &AppHandle, running: bool) {
 pub fn setup_tray(app: &AppHandle<tauri::Wry>) -> tauri::Result<()> {
     let open_main = MenuItem::with_id(app, "open-main", "打开主页面", true, None::<&str>)?;
     let toggle_engine = MenuItem::with_id(app, "toggle-engine", "启动引擎", true, None::<&str>)?;
+    let stop_scripts = MenuItem::with_id(app, "stop-scripts", "停止所有脚本", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open_main, &toggle_engine, &quit])?;
+    let menu = Menu::with_items(app, &[&open_main, &toggle_engine, &stop_scripts, &quit])?;
 
     // 存句柄供 runtime 状态推送时更新文案
     app.manage(TrayState {
@@ -58,6 +59,9 @@ pub fn setup_tray(app: &AppHandle<tauri::Wry>) -> tauri::Result<()> {
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open-main" => show_window(app, "main"),
+            "stop-scripts" => {
+                crate::scripts::stop(app, None, "托盘菜单");
+            }
             "toggle-engine" => {
                 // 按当前相位异步启动/停止（避免阻塞菜单事件循环）；
                 // 文案更新统一走 runtime 状态推送（snapshot_and_emit）

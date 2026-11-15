@@ -224,9 +224,21 @@ struct ScreenText(Vec<String>);
 
 impl UserData for ScreenText {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        // 识别器常把同一句话切成几段（几个框），所以既按单行找，也按阅读顺序拼起来找；
+        // 空白一律忽略，大小写不敏感。
         methods.add_method("has", |_, this, needle: String| {
-            let needle = needle.trim().to_lowercase();
-            Ok(!needle.is_empty() && this.0.iter().any(|l| l.to_lowercase().contains(&needle)))
+            let squash = |s: &str| {
+                s.chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect::<String>()
+                    .to_lowercase()
+            };
+            let needle = squash(&needle);
+            if needle.is_empty() {
+                return Ok(false);
+            }
+            let joined: String = this.0.iter().map(|l| squash(l)).collect();
+            Ok(joined.contains(&needle))
         });
         methods.add_method("count", |_, this, ()| Ok(this.0.len()));
     }
@@ -314,6 +326,7 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
             let times: Option<u64> = opt(&opts, "times")?;
             let start = s.host.now_ms();
             let mut n = 0u64;
+            let mut next = start;
             loop {
                 s.deadline_check()?;
                 if times.is_some_and(|t| n >= t)
@@ -326,8 +339,14 @@ fn install(lua: &Lua, state: Arc<State>) -> mlua::Result<()> {
                 if keep == Value::Boolean(false) {
                     return Ok(());
                 }
-                let next = start + n * ms;
-                s.sleep(next.saturating_sub(s.host.now_ms()))?;
+                // 固定节拍，但不补拍：暂停（游戏不在前台）或回调太慢错过的节拍直接跳过，
+                // 从现在起按原间隔继续，避免恢复时连续猛按。
+                next += ms;
+                let now = s.host.now_ms();
+                if next < now {
+                    next = now + ms;
+                }
+                s.sleep(next - now)?;
             }
         })?,
     )?;

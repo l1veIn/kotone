@@ -84,6 +84,9 @@ pub struct Settings {
     /// Kotone 拉起来的热键；与其它热键冲突时拒绝注册。
     #[serde(default)]
     pub runtime_toggle_hotkey: String,
+    /// 停止全部陪玩脚本（应用级热键，runtime 未运行时也有效；默认 Ctrl+Shift+F12，留空 = 关闭）。
+    #[serde(default = "default_script_stop_hotkey")]
+    pub script_stop_hotkey: String,
     /// 「以管理员权限重启」启动提示：用户勾选「不再提示」后置 true，不再弹窗（默认 false）
     #[serde(default)]
     pub admin_prompt_dismissed: bool,
@@ -451,6 +454,10 @@ impl Default for DownloadConfig {
     }
 }
 
+fn default_script_stop_hotkey() -> String {
+    "Ctrl+Shift+F12".into()
+}
+
 fn default_gh_proxy() -> String {
     "https://ghfast.top/".into()
 }
@@ -494,6 +501,7 @@ impl Default for Settings {
             toggle_post_processing_hotkey: String::new(), // 默认关闭（设置里录入）
             cycle_post_processing_hotkey: String::new(), // 默认关闭（设置里录入）
             runtime_toggle_hotkey: String::new(), // 默认关闭（设置里录入）
+            script_stop_hotkey: default_script_stop_hotkey(),
             admin_prompt_dismissed: false,
             auto_admin_prompt_dismissed: false,
             history: crate::history::HistoryConfig::default(),

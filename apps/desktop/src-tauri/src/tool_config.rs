@@ -85,6 +85,21 @@ struct CompanionAskArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ScriptRunArgs {
+    source: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ScriptStopArgs {
+    #[serde(default)]
+    id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CompanionTypeArgs {
     text: String,
     #[serde(default)]
@@ -642,6 +657,32 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
                 }
             });
             Ok(json!({"status": "started"}))
+        }
+        c::TOOL_SCRIPT_RUN => {
+            let ScriptRunArgs { source, name } = parse(tool, args)?;
+            crate::scripts::start(app, name.as_deref().unwrap_or("Agent 脚本"), &source).map_err(
+                |e| {
+                    if e.contains("最多同时运行") {
+                        HostError::Busy(e)
+                    } else if e.contains("语法错误") || e.contains("脚本为空") {
+                        HostError::InvalidArguments(e)
+                    } else {
+                        HostError::Failed(e)
+                    }
+                },
+            )
+        }
+        c::TOOL_SCRIPT_LIST => {
+            let _: NoArgs = parse(tool, args)?;
+            Ok(crate::scripts::list(app))
+        }
+        c::TOOL_SCRIPT_STOP => {
+            let ScriptStopArgs { id } = if args.is_null() {
+                ScriptStopArgs::default()
+            } else {
+                parse(tool, args)?
+            };
+            Ok(json!({"stopped": crate::scripts::stop(app, id.as_deref(), "工具 script.stop")}))
         }
         other => Err(HostError::Failed(format!("桌面端未实现工具 {other}"))),
     }

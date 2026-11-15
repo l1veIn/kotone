@@ -146,6 +146,20 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `agent.reply` | `text`、可选 `requestId`、`outputs`（`speech`/`danmaku`，缺省用助手默认提醒方式）、`wait` | `status`（`accepted` / `delivered`）、`deliveryId`、`receipt`（仅 `wait=true`）、`request`、`warnings`（§10） |
 | `assistant.submit` | `text` | 与用户在助手文字入口提交相同的结果 |
 
+### 陪玩脚本（委托桌面宿主，2026-11-16）
+
+大模型或 Agent 写的 Luau 脚本在沙盒里对**当前前台窗口**（游戏）执行（[演进计划 §12](product-evolution-game-tools.md#12-陪玩脚本大模型写脚本沙盒执行2026-11-16-定方向)）。启动前先切到游戏。
+
+| 工具 | 参数 | 结果要点 |
+| --- | --- | --- |
+| `script.run` | `source`（Luau，≤8000 字）、可选 `name` | 先校验语法（错误为 `INVALID_ARGUMENTS`）；同时最多 3 个（否则 `BUSY`）。受理即返回 `{status:"started", id, target}`；结束发布 `script.finished`：`id`、`status`（`finished` / `stopped` / `limit` / `error`）、`message`（停止原因，如“游戏窗口已关闭”“工具 script.stop”）、`keys`、`durationMs`、`log[]` |
+| `script.list` | 无 | `running`、`maxRunning`、`runs[]`（新的在前，最多 20 条，含 `source`） |
+| `script.stop` | 可选 `id`（缺省 = 全部） | `stopped`（停止了几个）；脚本按住的键随即松开 |
+
+**白名单函数**：`key(名)` / `key_down` / `key_up`（键名如 `Q`、`Enter`、`Ctrl+Q`、`F1`）、`type_text(文字)`；`wait(ms)`、`every(ms, fn, {for_ms, times})`（固定节拍、不补拍，`fn` 返回 `false` 结束）、`wait_until(条件, {poll_ms=200, stable_frames=1, timeout_ms})` → 是否满足、`now()`；`region(x, y, w, h)`（窗口客户区比例 0..1）、`brightness(区域)`（0..255）、`color_at(x, y)` → r, g, b、`ocr(区域)` → 只能 `:has(文字)`（跨行、忽略空白与大小写）/ `:count()` 的对象（拿不到原文）；`say(文字)`（语音，等播完）、`toast(文字)`（弹幕，不等）、`log(文字)`、`game_focused()`、`stop()`。没有文件、网络、进程、配置。
+
+**护栏**：Luau 沙盒（无 `loadstring` / `require` / `io` / `os.execute`，内存 16 MB）；总时长 30 分钟、执行步数上限（死循环会被终止）、最多 10000 次按键、两次按键至少 50 ms；按键与截图只在启动时的游戏窗口处于前台时进行，切走即暂停、切回继续（不补按）；窗口关闭则结束；脚本结束（含出错、超限、停止、Kotone 退出）时松开所有按住的键。停止方式：`script.stop`、托盘「停止所有脚本」、**停止脚本热键**（`scriptStopHotkey`，应用级，默认 `Ctrl+Shift+F12`，Kotone 停止时也有效）。`say` 与 `toast` 走提醒的输出队列：一条弹幕滚完之前，后面的语音会等它。
+
 ### Kotone 陪玩（委托桌面宿主，2026-11-15）
 
 与用户按陪玩热键 / 快捷消息热键走的是**同一条流程、同一个实现**（[演进计划 §10](product-evolution-game-tools.md#10-kotone-陪玩2026-11-15-定稿)、[陪玩说明](assistant.md)）：截前台窗口 → 统一清单里选定的 OCR 模型 → 陪玩自己的聊天跟踪 + profile 说明 → 一次大模型调用，从提醒 / 帮忙打字 / 回答中选一种并执行。底层的截图、OCR、跟踪工具照常保留。
@@ -278,7 +292,7 @@ OCR 模型与 ASR、TTS 同在统一模型清单（`models.list {"category": "oc
 | 输出 | `line` 粒度、轴对齐行框（DB 检测，输入产物像素）；`confidence` 为识别器对解码字符的最大 softmax 概率均值——是识别器自报分数，**不是**语义或翻译正确率，没有解码字符时为 null |
 | 计时 | `timing.ocrMs`，冷启动另有 `modelLoadMs`（`coldStart=true`），以及 `detMs`/`recMs` |
 
-前后处理与 RapidOCR 默认参数对齐（BGR 输入、短边 736 的 32 倍数缩放、DB thresh 0.3 / box 0.5 / unclip 1.6、2×2 膨胀；识别高 48、批宽按最大宽高比、CTC 贪心解码）。已知简化：检测框为连通域的轴对齐外接矩形（适合横排聊天，倾斜文字的框偏大），不使用方向分类器。
+前后处理与 RapidOCR 默认参数对齐（BGR 输入、短边 736 的 32 倍数缩放——但相对原图**最多放大 2 倍**，避免小裁剪图里的大字被放得过大而碎成几段（2026-11-16 真机发现，见[陪玩脚本实现记录](research/2026-11-16-companion-scripts.md)）、DB thresh 0.3 / box 0.5 / unclip 1.6、2×2 膨胀；识别高 48、批宽按最大宽高比、CTC 贪心解码）。已知简化：检测框为连通域的轴对齐外接矩形（适合横排聊天，倾斜文字的框偏大），不使用方向分类器。
 
 ### 8.2 在线：`deepseek-ocr`
 
@@ -350,6 +364,7 @@ Agent 从“打开 exe”开始就能驱动 Kotone，并能收到用户通过 Ko
 | `agent.reply.delivered` / `agent.reply.failed` | 回复交付完成 / 失败 | `deliveryId`、`requestId`、`text`、`receipt` 或 `code/message`、`deliverMs` |
 | `model.download.progress` / `.finished` / `.failed` | `models.download` 的进度（至多每秒一次）与结果 | `id`、`downloadedBytes/totalBytes`；结果含 `durationMs`，失败含 `cancelled`、`message` |
 | `companion.finished` / `companion.failed` | `companion.ask` 的结果 | 见上表；`jobId` 对应受理时的返回 |
+| `script.finished` | `script.run` 启动的脚本结束 | `id`、`name`、`target`、`status`、`message`、`keys`、`durationMs`、`log` |
 | `companion.check.finished` / `.failed` | `companion.check` 的结果 | `check{connectionId,baseUrl,model,passed,checkedAtMs,message}` 或 `message` |
 | `speech.model.download.finished` / `.failed` | `speech.model.download` 的结果 | `status` 或 `cancelled`、`message`、`durationMs` |
 | `elevation.restart.failed` | 用户拒绝 UAC 或提权启动失败 | `message` |

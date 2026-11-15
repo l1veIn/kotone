@@ -44,6 +44,9 @@ pub const TOOL_COMPANION_ASK: &str = "companion.ask";
 pub const TOOL_COMPANION_READ_CHAT: &str = "companion.read_chat";
 pub const TOOL_COMPANION_TYPE: &str = "companion.type";
 pub const TOOL_COMPANION_CHECK: &str = "companion.check";
+pub const TOOL_SCRIPT_RUN: &str = "script.run";
+pub const TOOL_SCRIPT_LIST: &str = "script.list";
+pub const TOOL_SCRIPT_STOP: &str = "script.stop";
 
 /// 全部委托工具（顺序即 capabilities 中的顺序）。
 pub const HOST_TOOLS: &[&str] = &[
@@ -87,6 +90,9 @@ pub const HOST_TOOLS: &[&str] = &[
     TOOL_COMPANION_READ_CHAT,
     TOOL_COMPANION_TYPE,
     TOOL_COMPANION_CHECK,
+    TOOL_SCRIPT_RUN,
+    TOOL_SCRIPT_LIST,
+    TOOL_SCRIPT_STOP,
 ];
 
 fn none() -> Value {
@@ -452,6 +458,30 @@ fn defs() -> Vec<Def> {
             egress: "connection-dependent",
             input: none(),
             output: object(&["status"], json!({"status": {"const": "started"}})),
+        },
+        Def {
+            name: TOOL_SCRIPT_RUN,
+            description: "Run a companion script (Luau, sandboxed) against the CURRENT foreground window — switch to the game first. Whitelisted functions only: key(name) / key_down / key_up / type_text(text); wait(ms), every(ms, fn, {for_ms, times}) (fn returning false stops), wait_until(cond, {poll_ms, stable_frames, timeout_ms}) → bool, now(); region(x, y, w, h) in window-client ratios 0..1, brightness(region) 0..255, color_at(x, y) → r, g, b, ocr(region) → object with :has(text) / :count() (screen text can be tested but never copied into input); say(text), toast(text), log(text), game_focused(), stop(). No files, network or processes. Guards: 30 min max, step limit, ≥50 ms between keys, max 10000 keys, input only while that window is in front (paused otherwise), held keys released at the end, at most 3 scripts at once; stop with script.stop, the stop hotkey (default Ctrl+Shift+F12) or the tray menu. Returns at once with {status:\"started\", id, target}; the outcome arrives as a script.finished event {id, status finished/stopped/limit/error, message, keys, durationMs, log}.",
+            side_effects: &["input", "captures-screen", "may-speak"],
+            egress: "backend-dependent",
+            input: object(&["source"], json!({"source": {"type": "string", "minLength": 1, "maxLength": 8000, "description": "Luau 脚本"}, "name": {"type": "string", "maxLength": 40}})),
+            output: object(&["status", "id"], json!({"status": {"const": "started"}, "id": {"type": "string"}, "target": {"type": "string"}})),
+        },
+        Def {
+            name: TOOL_SCRIPT_LIST,
+            description: "Running and recent companion scripts (newest first, up to 20): id, name, target window, status running/finished/stopped/limit/error, message, keys pressed, duration, log, source.",
+            side_effects: &[],
+            egress: "none",
+            input: none(),
+            output: object(&["running", "runs"], json!({"running": {"type": "integer"}, "maxRunning": {"type": "integer"}, "runs": {"type": "array"}})),
+        },
+        Def {
+            name: TOOL_SCRIPT_STOP,
+            description: "Stop one running script by id, or all of them when id is omitted. Held keys are released. Returns how many were stopped.",
+            side_effects: &["stops-script"],
+            egress: "none",
+            input: json!({"type": ["object", "null"], "additionalProperties": false, "properties": {"id": id("脚本运行 ID（script.run / script.list）")}}),
+            output: object(&["stopped"], json!({"stopped": {"type": "integer"}})),
         },
     ]
 }

@@ -132,6 +132,8 @@ export interface Settings {
   cyclePostProcessingHotkey: string;
   /** 启动 / 停止 Kotone 热键（默认空 = 关闭；应用级热键，runtime 停止时也生效） */
   runtimeToggleHotkey: string;
+  /** 停止全部陪玩脚本（应用级热键；默认 Ctrl+Shift+F12，空 = 关闭） */
+  scriptStopHotkey: string;
   /** 交互模式预设（null = 旧字段推导） */
   interactionMode: InteractionMode | null;
   /** VAD 静音判停阈值 ms（one-shot 生效，200-5000） */

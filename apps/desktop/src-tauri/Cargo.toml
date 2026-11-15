@@ -28,6 +28,7 @@ kotone-stt.workspace = true
 kotone-platform-windows.workspace = true
 # 可选本机 Agent 工具服务（默认关闭，toolService.enabled）
 kotone-tools.workspace = true
+kotone-script.workspace = true
 # 工具服务 OCR 后端（M2）：本地韩文 PP-OCRv5 与 DeepSeek 在线
 kotone-ocr.workspace = true
 # `kotone.exe <子命令>`：安装版只带一个 exe，Agent / 插件用它当命令行与 stdio MCP 服务器

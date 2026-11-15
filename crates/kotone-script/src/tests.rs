@@ -139,6 +139,9 @@ fn keys_pause_while_the_game_is_not_in_front() {
         "{times:?}"
     );
     assert!(report.log.iter().any(|l| l.contains("暂停")));
+    // 恢复后不补拍：不会把暂停期间错过的按键连续补按（真机测试发现过 7 连按）
+    let gaps: Vec<u64> = times.windows(2).map(|w| w[1] - w[0]).collect();
+    assert!(gaps.iter().all(|g| *g >= 1000), "{gaps:?}");
 }
 
 #[test]
@@ -255,6 +258,23 @@ fn screen_text_can_only_be_tested_not_copied_into_input() {
         }
         assert!(host.typed.lock().unwrap().is_empty());
     }
+}
+
+#[test]
+fn screen_text_matches_across_split_lines_and_ignores_spaces() {
+    let host = Fake::with(|f| f.screen_text = vec!["找到".into(), "对 局".into(), "Accept".into()]);
+    let report = go(
+        r#"
+        local t = ocr(region(0, 0, 1, 1))
+        if t:has("找到对局") then key("A") end
+        if t:has("accept") then key("B") end
+        if t:has("拒绝") or t:has("") then key("C") end
+        "#,
+        &host,
+    );
+    assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+    let keys: Vec<String> = host.keys().into_iter().map(|k| k.2).collect();
+    assert_eq!(keys, ["A", "B"]);
 }
 
 #[test]

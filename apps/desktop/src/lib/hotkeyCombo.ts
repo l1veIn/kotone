@@ -97,6 +97,7 @@ export function findHotkeyConflict(settings: Settings | null, selfId: string, ke
     ["post-process-toggle", "文字处理开关热键", settings.togglePostProcessingHotkey],
     ["post-process-cycle", "切换文字处理流程热键", settings.cyclePostProcessingHotkey],
     ["runtime-toggle", "启动 / 停止 Kotone 热键", settings.runtimeToggleHotkey],
+    ["script-stop", "停止所有脚本热键", settings.scriptStopHotkey ?? ""],
   ];
   return bindings.find(([id, , combo]) => id !== selfId && combo && combosConflict(key, combo))?.[1] ?? null;
 }

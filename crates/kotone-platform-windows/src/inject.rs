@@ -249,6 +249,33 @@ mod windows_imp {
         result
     }
 
+    /// 只按下（脚本的 `key_down`）：先按修饰键再按主键。调用方负责之后调用 [`key_up`]。
+    pub fn key_down(spec: &str) -> Result<(), InjectError> {
+        let (mods, main) = parse_key_spec(spec)?;
+        for &vk in &mods {
+            vk_event(vk, true)?;
+        }
+        if let Err(e) = vk_event(main, true) {
+            for &vk in mods.iter().rev() {
+                let _ = vk_event(vk, false);
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// 只松开（脚本的 `key_up`）：先松主键再松修饰键；全部尝试，返回第一个错误。
+    pub fn key_up(spec: &str) -> Result<(), InjectError> {
+        let (mods, main) = parse_key_spec(spec)?;
+        let mut first_err = vk_event(main, false).err();
+        for &vk in mods.iter().rev() {
+            if let Err(e) = vk_event(vk, false) {
+                first_err.get_or_insert(e);
+            }
+        }
+        first_err.map_or(Ok(()), Err)
+    }
+
     fn record_inject(activity: &str, detail: String, result: &Result<(), InjectError>) {
         let (outcome, error_code) = match result {
             Ok(()) => (Some("ok".into()), None),
@@ -674,6 +701,14 @@ mod fallback {
         Err(InjectError::new(
             "key_down_up 仅 Windows 实现（MVP Windows-first）",
         ))
+    }
+
+    pub fn key_down(_key: &str) -> Result<(), InjectError> {
+        Err(InjectError::new("key_down 仅 Windows 实现"))
+    }
+
+    pub fn key_up(_key: &str) -> Result<(), InjectError> {
+        Err(InjectError::new("key_up 仅 Windows 实现"))
     }
 
     pub fn is_process_foreground(process_names: &[String]) -> bool {

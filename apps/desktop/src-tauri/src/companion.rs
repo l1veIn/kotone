@@ -130,7 +130,7 @@ pub fn connection_ready(
 }
 
 /// 当前 OCR 模型及其后端；没有可用模型时给出可操作的提示。
-fn ocr_backend(
+pub(crate) fn ocr_backend(
     app: &AppHandle,
     settings: &Settings,
 ) -> Result<(String, Arc<dyn OcrBackend>), String> {

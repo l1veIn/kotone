@@ -2615,6 +2615,7 @@ dependencies = [
  "kotone-ocr",
  "kotone-platform-windows",
  "kotone-postprocess",
+ "kotone-script",
  "kotone-stt",
  "kotone-tools",
  "kotone-tts",

@@ -13,7 +13,8 @@
       | "resendLastHotkey"
       | "togglePostProcessingHotkey"
       | "cyclePostProcessingHotkey"
-      | "runtimeToggleHotkey";
+      | "runtimeToggleHotkey"
+      | "scriptStopHotkey";
     placeholder: string;
   }
 
@@ -58,6 +59,14 @@
       help: "与其它热键不同，这个热键在 Kotone 停止后依然有效——它正是用来在游戏里把 Kotone 拉起来的；留空 = 关闭。保存后立即生效、不需要重启；若按下无反应，先确认没有其它软件（录屏、游戏悬浮层、输入法）占用同一组合，并看本行是否显示「当前生效」。",
       settingsKey: "runtimeToggleHotkey",
       placeholder: "如 Alt+F10",
+    },
+    {
+      id: "script-stop",
+      title: "停止所有脚本热键",
+      desc: "陪玩脚本（例如“每秒按一次 Q”）运行时，按下立即停止全部脚本，脚本按住的键会一起松开。托盘菜单「停止所有脚本」作用相同。",
+      help: "和启动 / 停止热键一样，Kotone 停止时也有效；默认 Ctrl+Shift+F12，留空 = 关闭（不建议）。",
+      settingsKey: "scriptStopHotkey",
+      placeholder: "如 Ctrl+Shift+F12",
     },
   ];
 

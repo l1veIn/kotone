@@ -5,3 +5,9 @@
 # 串行构建，避免多个 MSVC link.exe 同时链接超大静态库耗尽提交内存。
 # 并行 2 任务已复现 Windows 1455；CI 与本地保持相同的保守默认值。
 jobs = 1
+
+[env]
+# C++ 依赖统一用静态 C++ 运行时（/MT），与 sherpa-onnx 的 static-MT 预编译库一致。
+# 否则 cc 默认以 /MD 编译的 C++ 代码（如 Luau，kotone-script）会把 msvcprt 与 sherpa 的
+# libcpmt 一起拉进链接，产生 LNK2005 重复定义。只影响 C++（CXXFLAGS），不影响纯 C 依赖。
+CXXFLAGS_x86_64_pc_windows_msvc = "/MT"

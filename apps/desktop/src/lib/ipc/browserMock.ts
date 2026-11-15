@@ -78,6 +78,7 @@ const mock: MockStore = {
     togglePostProcessingHotkey: "",
     cyclePostProcessingHotkey: "",
     runtimeToggleHotkey: "",
+    scriptStopHotkey: "Ctrl+Shift+F12",
     interactionMode: "push-to-talk",
     vadSilenceMs: 700,
     vad: { threshold: 0.5, minSpeechMs: 50, minSilenceMs: 50 },
@@ -784,6 +785,11 @@ export async function getHotkeyStatus(): Promise<HotkeyStatus> {
         {
           id: "runtime-toggle",
           key: mock.settings.runtimeToggleHotkey || null,
+          error: null,
+        },
+        {
+          id: "script-stop",
+          key: mock.settings.scriptStopHotkey || null,
           error: null,
         },
       ],
