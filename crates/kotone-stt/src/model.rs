@@ -48,30 +48,16 @@ pub enum ModelRecipe {
     IflytekAsr,
 }
 
-/// 模型自己声明的可配项（语言、连接、密钥等）。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelConfigField {
-    pub key: String,
-    pub label: String,
-    /// string / enum / secret / connection
-    pub kind: String,
-    pub default: String,
-    pub options: Vec<ModelConfigOption>,
-    pub required: bool,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelConfigOption {
-    pub value: String,
-    pub label: String,
-}
+/// 模型自己声明的可配项（语言、连接、密钥等）；与 OCR / TTS 清单共用同一结构。
+pub use kotone_core::model_catalog::{ModelCategory, ModelConfigField, ModelConfigOption};
 
 /// 模型信息（跨后端统一列出：已下载/可下载）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
+    /// 统一模型清单的类别；本清单恒为 `asr`。
+    #[serde(default)]
+    pub category: ModelCategory,
     pub id: String,
     pub engine_id: String,
     pub display_name: String,
@@ -169,14 +155,7 @@ pub struct MultiFileModel {
     pub config_schema: &'static [StaticConfigField],
 }
 
-pub struct StaticConfigField {
-    pub key: &'static str,
-    pub label: &'static str,
-    pub kind: &'static str,
-    pub default: &'static str,
-    pub options: &'static [(&'static str, &'static str)],
-    pub required: bool,
-}
+pub use kotone_core::model_catalog::StaticConfigField;
 
 const SENSEVOICE_LANGUAGE_SCHEMA: &[StaticConfigField] = &[StaticConfigField {
     key: "language",
@@ -780,28 +759,12 @@ pub fn active_model_from(s: &settings::Settings, engine_id: &str) -> String {
 // ---------- 清单查询 ----------
 
 fn schema_of(fields: &'static [StaticConfigField]) -> Vec<ModelConfigField> {
-    fields
-        .iter()
-        .map(|f| ModelConfigField {
-            key: f.key.into(),
-            label: f.label.into(),
-            kind: f.kind.into(),
-            default: f.default.into(),
-            options: f
-                .options
-                .iter()
-                .map(|(value, label)| ModelConfigOption {
-                    value: (*value).into(),
-                    label: (*label).into(),
-                })
-                .collect(),
-            required: f.required,
-        })
-        .collect()
+    kotone_core::model_catalog::schema_of(fields)
 }
 
 fn sherpa_info(m: &MultiFileModel) -> ModelInfo {
     ModelInfo {
+        category: ModelCategory::Asr,
         id: m.id.into(),
         engine_id: m.engine_id.into(),
         display_name: m.display_name.into(),
@@ -840,6 +803,7 @@ pub fn list() -> Result<Vec<ModelInfo>, String> {
 fn online_asr_infos() -> Vec<ModelInfo> {
     vec![
         ModelInfo {
+            category: ModelCategory::Asr,
             id: VOLCANO_ASR_STT_ID.into(),
             engine_id: VOLCANO_ASR_STT_ID.into(),
             display_name: "火山引擎语音识别（在线）".into(),
@@ -855,6 +819,7 @@ fn online_asr_infos() -> Vec<ModelInfo> {
             tag: Some(ONLINE_ASR_TAG.into()),
         },
         ModelInfo {
+            category: ModelCategory::Asr,
             id: IFLYTEK_ASR_STT_ID.into(),
             engine_id: IFLYTEK_ASR_STT_ID.into(),
             display_name: "科大讯飞语音听写（在线）".into(),

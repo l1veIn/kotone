@@ -5,6 +5,7 @@
 //! - `deepseek`：DeepSeek 在线 OCR，复用连接目录与系统凭据库，只上传指定图像。
 //! - 两类后端互不降级：本地失败不会改走在线，在线失败也不会改走本地。
 
+pub mod catalog;
 pub mod deepseek;
 pub mod install;
 pub mod local;

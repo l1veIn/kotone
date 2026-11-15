@@ -156,13 +156,15 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `settings.update` | `patch`（部分设置，深合并） | `settings`（更新后）、`runtime`（含 `restartNeeded`）。立即生效：热键（运行时运行中重注册）、助手去向与提醒方式、悬浮窗、音效等；换引擎/模型使 `restartNeeded=true`。`connections` 与 `models.dir` 不接受（用下面的专用工具）；`toolService.*` 下次启动生效。完成首次引导：`{"ui": {"firstRunCompleted": true}}` |
 | `audio.devices` | 无 | `devices[]`（标出默认与虚拟声卡）、`selected`；选择用 `settings.update {"audioDeviceId": …}` |
 | `stt.engines` | 无 | `engines[]`（可用性）、`current` |
-| `models.list` | 无 | `models[]`（本地/在线、大小、是否已下载、配置项、API key 页面）、`dir{dir,isDefault}`、`active{engine,modelId}`、`downloading` |
-| `models.download` | `id` | 受理即返回 `status=started`；进度 `model.download.progress`（至多每秒一次），结果 `model.download.finished` / `model.download.failed`（取消时 `cancelled=true`）。镜像优先、断点续传、先查磁盘空间；全应用同时只有一个下载 |
+| `models.list` | 可选 `category`（`asr` 缺省 / `ocr` / `tts`） | `models[]`（本地/在线、大小、是否已下载、配置项、API key 页面）、`dir{dir,isDefault}`、`active`、`downloading`。`asr` 的返回与加入类别前相同（`active{engine,modelId}`）；`ocr` / `tts` 多 `category`，条目另含 `ready`/`state`/`reason`、`active`、`recommended`、`languages`、`dataEgress`（`selected-image` = 每次识别上传截图）、`files[]`，`active{modelId}` |
+| `models.download` | `id`、可选 `category` | 受理即返回 `status=started`；进度 `model.download.progress`（至多每秒一次），结果 `model.download.finished` / `model.download.failed`（取消时 `cancelled=true`；OCR / TTS 的事件带 `category`）。镜像优先、断点续传、逐文件 SHA-256、先查磁盘空间；全应用（三个类别）同时只有一个下载 |
 | `models.download.cancel` | 无 | `requested`（是否有下载在进行）；保留临时文件以便续传 |
-| `models.delete` | `id` | `wasActive`（删的是活动模型时回退默认） |
-| `models.activate` | `engineId`、`modelId` | 运行时状态（运行中会 `restartNeeded`，`runtime.start` 重启生效） |
+| `models.delete` | `id`、可选 `category` | `wasActive`（删的是活动模型时回退默认；TTS 删除 Kokoro 时改回系统语音） |
+| `models.activate` | `modelId`；`asr` 还需 `engineId`；可选 `category` | `asr`：运行时状态（运行中会 `restartNeeded`，`runtime.start` 重启生效）。`ocr`：陪玩流程与不指定后端的 `ocr.recognize` 所用模型；`tts`：播报引擎。本地模型须先下载，在线模型可先选后配；返回 `{category, activeModelId}` |
 | `models.dir.set` | `dir`（空 = 默认 `~/.kotone/models`） | `dir`、`moved[]`、`failed[]`；运行时运行中或下载中拒绝。选目录前先问用户 |
-| `models.install_guide` | `id` | 自动下载失败时的手动安装指引 |
+| `models.install_guide` | `id`、可选 `category` | 自动下载失败时的手动安装指引（OCR 包在设置页「导入」时仍逐文件校验） |
+
+在线模型的配置项（例如 DeepSeek OCR 绑定的 API 连接）用 `settings.update {"modelConfigs": {"<模型 id>": {"connection": "<连接 id>"}}}` 写入；密钥只在凭据管理器，用 `connections.upsert` 写。
 | `speech.status` | 无 | `package`（Kokoro 语音包：installed/downloading/字节/阶段/错误）、当前语音引擎的 `voices[]`、`voicesError` |
 | `speech.model.download` | 无 | `status=started`（或已安装时 `installed`）；结果 `speech.model.download.finished` / `failed`；与模型下载共用唯一名额 |
 | `connections.presets` | 无 | 内置在线连接预设 |

@@ -66,6 +66,11 @@ impl OutputCancellation {
 }
 
 impl AssistantRuntime {
+    /// 系统语音不可用时的原因（统一模型清单 TTS 条目的就绪状态）。
+    pub fn system_speech_error(&self) -> Option<String> {
+        self.system_speaker.as_ref().err().cloned()
+    }
+
     fn cancel_speech(&self) -> Result<(), String> {
         let local = self
             .local_speaker

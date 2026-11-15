@@ -20,7 +20,13 @@ pub struct ModelFile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelPackage {
     pub id: &'static str,
+    /// `ocr.backends` 里对应的后端 ID。
+    pub backend_id: &'static str,
     pub display_name: &'static str,
+    /// 设置页的一句话说明（适用语种、精度 / 速度取舍）。
+    pub description: &'static str,
+    /// 统一模型清单里的默认推荐。
+    pub recommended: bool,
     /// 人类可读的模型版本。
     pub version: &'static str,
     pub languages: &'static [&'static str],
@@ -38,7 +44,10 @@ pub const KOREAN_MOBILE_ID: &str = "ppocrv5-korean-mobile";
 /// 字符表内嵌于识别模型的 ONNX metadata（`character`），无需单独字典文件。
 pub const KOREAN_MOBILE: ModelPackage = ModelPackage {
     id: KOREAN_MOBILE_ID,
+    backend_id: "local-ppocrv5-korean",
     display_name: "PP-OCRv5 mobile Korean (local, CPU)",
+    description: "韩文聊天（韩服）。本机 CPU 推理，不上传截图",
+    recommended: false,
     version: "PP-OCRv5 mobile — det ch_PP-OCRv5_det_mobile + rec korean_PP-OCRv5_rec_mobile; ONNX export from RapidOCR v3.10.0",
     languages: &["ko"],
     license: "Apache-2.0",
@@ -62,6 +71,13 @@ pub const KOREAN_MOBILE: ModelPackage = ModelPackage {
         },
     ],
 };
+
+/// 统一模型清单里的本地 OCR 包（按推荐顺序；未选择 OCR 模型时取第一个已安装的）。
+pub const PACKAGES: &[ModelPackage] = &[KOREAN_MOBILE];
+
+pub fn package(id: &str) -> Option<&'static ModelPackage> {
+    PACKAGES.iter().find(|p| p.id == id)
+}
 
 impl ModelPackage {
     pub fn file(&self, role: &str) -> Option<&ModelFile> {

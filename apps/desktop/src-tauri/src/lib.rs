@@ -6,6 +6,7 @@ mod assistant_input;
 mod compatibility;
 mod diagnostics;
 mod hotkey;
+mod model_catalog;
 mod overlay;
 mod runtime;
 mod speech_models;
@@ -1577,6 +1578,9 @@ fn set_models_dir(
     {
         return Err("语音模型正在下载，请等待完成或取消后再迁移目录".into());
     }
+    if kotone_stt::download::is_active() {
+        return Err("有模型正在下载，请等待完成或取消后再迁移目录".into());
+    }
     let assistant_state = app.state::<assistant::AssistantRuntime>();
     let _output = assistant::prepare_model_migration(&assistant_state)?;
     let requested_dir = dir.trim().to_string();
@@ -2143,6 +2147,13 @@ pub fn run() {
             speech_models::get_speech_model_status,
             speech_models::download_speech_model,
             speech_models::cancel_speech_model_download,
+            model_catalog::list_catalog_models,
+            model_catalog::download_catalog_model,
+            model_catalog::import_catalog_model,
+            model_catalog::delete_catalog_model,
+            model_catalog::activate_catalog_model,
+            model_catalog::get_catalog_install_guide,
+            model_catalog::open_catalog_model_dir,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Kotone application")

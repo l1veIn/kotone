@@ -91,6 +91,11 @@ fn open(description: &str) -> Value {
     json!({"type": "object", "description": description})
 }
 
+/// 统一模型清单的类别参数：不传 = asr（与加入类别之前完全相同）。
+fn category() -> Value {
+    json!({"type": "string", "enum": ["asr", "ocr", "tts"], "default": "asr", "description": "模型类别：asr 语音识别（缺省）/ ocr 文字识别 / tts 语音合成"})
+}
+
 fn id(description: &str) -> Value {
     json!({"type": "string", "minLength": 1, "maxLength": 256, "description": description})
 }
@@ -140,23 +145,24 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_MODELS_LIST,
-            description: "List speech-recognition models in the catalog (local and online) with size, whether downloaded, config schema and API-key page, plus the models directory, the active engine/model and whether a download is running.",
+            description: "List models of one category in the unified catalog (local and online) with size, whether downloaded, config schema and API-key page, plus the models directory, the active model and whether a download is running. category defaults to asr (speech recognition; output unchanged: active={engine, modelId}). For ocr / tts each entry also has ready/state/reason, active, recommended, languages, dataEgress (selected-image = the screenshot is uploaded) and files; active={modelId}. Configure an online entry's fields (e.g. its connection) with settings.update {\"modelConfigs\": {\"<id>\": {...}}}.",
             side_effects: &[],
             egress: "none",
-            input: none(),
+            input: json!({"type": ["object", "null"], "additionalProperties": false, "properties": {"category": category()}}),
             output: object(&["models", "dir", "active", "downloading"], json!({
+                "category": {"type": "string"},
                 "models": {"type": "array"},
                 "dir": open("{dir, isDefault}"),
-                "active": open("{engine, modelId}"),
+                "active": open("asr: {engine, modelId}; ocr/tts: {modelId}"),
                 "downloading": {"type": "boolean"}
             })),
         },
         Def {
             name: TOOL_MODELS_DOWNLOAD,
-            description: "Start downloading a model by id (mirror-first per settings.download, resumable, disk space checked first). Returns at once with status=started; progress arrives as model.download.progress events and the outcome as model.download.finished / model.download.failed (cancelled downloads report cancelled=true). Only one download runs at a time (BUSY otherwise). After it finishes, activate it with models.activate.",
+            description: "Start downloading a local model by id and category (mirror-first per settings.download, resumable, every file SHA-256 verified, disk space checked first). Returns at once with status=started; progress arrives as model.download.progress events and the outcome as model.download.finished / model.download.failed (cancelled downloads report cancelled=true; events carry category). Only one download runs at a time across all categories (BUSY otherwise). After it finishes, activate it with models.activate.",
             side_effects: &["downloads-model", "writes-files"],
             egress: "none",
-            input: object(&["id"], json!({"id": id("模型 id（models.list）")})),
+            input: object(&["id"], json!({"id": id("模型 id（models.list）"), "category": category()})),
             output: object(&["status", "id"], json!({"status": {"const": "started"}, "id": {"type": "string"}})),
         },
         Def {
@@ -169,19 +175,19 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_MODELS_DELETE,
-            description: "Delete a downloaded model's files. If it was active, the active model falls back to the default (wasActive=true).",
+            description: "Delete a downloaded local model's files. If it was active, the selection falls back to the default (wasActive=true; for tts the speech engine falls back to the Windows system voice).",
             side_effects: &["deletes-files", "writes-settings"],
             egress: "none",
-            input: object(&["id"], json!({"id": id("模型 id")})),
+            input: object(&["id"], json!({"id": id("模型 id"), "category": category()})),
             output: open("{wasActive}"),
         },
         Def {
             name: TOOL_MODELS_ACTIVATE,
-            description: "Make a model the active speech-recognition model for an engine (also selects that engine). A running runtime reports restartNeeded; call runtime.start to restart with it.",
+            description: "Select the active model of a category. asr (default): make it the active speech-recognition model for engineId (required; also selects that engine) — a running runtime reports restartNeeded, call runtime.start to restart with it; returns the runtime status. ocr: the model the companion flow and ocr.recognize (without backend) use. tts: the speech engine for spoken answers and reminders. Local models must be downloaded first; online ones may be selected before configuring. ocr/tts return {category, activeModelId}.",
             side_effects: &["writes-settings"],
             egress: "none",
-            input: object(&["engineId", "modelId"], json!({"engineId": id("引擎 id（stt.engines / models.list 的 engineId）"), "modelId": id("模型 id")})),
-            output: open("运行时状态"),
+            input: object(&["modelId"], json!({"engineId": id("引擎 id（asr 必填；stt.engines / models.list 的 engineId）"), "modelId": id("模型 id"), "category": category()})),
+            output: open("asr：运行时状态；ocr/tts：{category, activeModelId}"),
         },
         Def {
             name: TOOL_MODELS_DIR_SET,
@@ -193,10 +199,10 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_MODELS_INSTALL_GUIDE,
-            description: "Manual installation guide for a model when automatic download fails: official page, target directory and expected files.",
+            description: "Manual installation guide for a local model when automatic download fails: official page, target directory and expected files (files are still SHA-256 verified when imported in the settings page).",
             side_effects: &[],
             egress: "none",
-            input: object(&["id"], json!({"id": id("模型 id")})),
+            input: object(&["id"], json!({"id": id("模型 id"), "category": category()})),
             output: open("安装指引"),
         },
         Def {

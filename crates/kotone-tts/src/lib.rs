@@ -2,6 +2,7 @@
 //! invalidates queued synthesis without waiting for a non-interruptible ONNX call.
 //! Microphone admission waits only for an already-open output stream to close.
 
+pub mod catalog;
 mod engine;
 mod player;
 

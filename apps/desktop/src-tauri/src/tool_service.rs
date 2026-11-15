@@ -104,14 +104,7 @@ fn ocr_backends(app: &AppHandle) -> Vec<Arc<dyn OcrBackend>> {
         let Some(shared) = source_app.try_state::<crate::SharedState>() else {
             return Err("应用状态尚未就绪".into());
         };
-        let id = shared
-            .settings
-            .read()
-            .unwrap()
-            .tool_service
-            .ocr
-            .deepseek_connection_id
-            .clone();
+        let id = kotone_ocr::catalog::deepseek_connection_id(&shared.settings.read().unwrap());
         match id {
             None => Ok(None),
             Some(id) => shared.connections.resolve(&id).map(Some),

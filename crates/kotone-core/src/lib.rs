@@ -23,6 +23,7 @@ pub mod hotkey;
 pub mod inject;
 pub mod interaction;
 pub mod log;
+pub mod model_catalog;
 pub mod ocr;
 pub mod orchestrator;
 pub mod postprocess;

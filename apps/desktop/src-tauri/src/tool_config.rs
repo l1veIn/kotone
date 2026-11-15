@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter as _, Listener as _, Manager};
 
 use kotone_core::log;
+use kotone_core::model_catalog::ModelCategory;
 use kotone_tools::catalog as c;
 use kotone_tools::host::HostError;
 
@@ -51,8 +52,32 @@ struct PatchArgs {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ActivateArgs {
-    engine_id: String,
+    #[serde(default)]
+    engine_id: Option<String>,
     model_id: String,
+    #[serde(default)]
+    category: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelIdArgs {
+    id: String,
+    #[serde(default)]
+    category: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CategoryArgs {
+    #[serde(default)]
+    category: Option<String>,
+}
+
+fn category_of(tool: &str, value: Option<&str>) -> Result<ModelCategory, HostError> {
+    ModelCategory::parse(value.unwrap_or("")).ok_or_else(|| {
+        HostError::InvalidArguments(format!("{tool}: category 只能是 asr、ocr 或 tts"))
+    })
 }
 
 #[derive(Deserialize)]
@@ -193,7 +218,28 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
             Ok(json!({"engines": engines, "current": current}))
         }
         c::TOOL_MODELS_LIST => {
-            let _: NoArgs = parse(tool, args)?;
+            let CategoryArgs { category } = if args.is_null() {
+                CategoryArgs::default()
+            } else {
+                parse(tool, args)?
+            };
+            let category = category_of(tool, category.as_deref())?;
+            if category != ModelCategory::Asr {
+                let list_app = app.clone();
+                let models = tauri::async_runtime::spawn_blocking(move || {
+                    crate::model_catalog::list_blocking(&list_app, category)
+                })
+                .await
+                .map_err(|e| HostError::Failed(e.to_string()))??;
+                let dir = crate::get_models_dir(app.state());
+                return Ok(json!({
+                    "category": category.as_str(),
+                    "models": models,
+                    "dir": dir,
+                    "active": {"modelId": crate::model_catalog::active_id(app, category)},
+                    "downloading": kotone_stt::download::is_active(),
+                }));
+            }
             let models = crate::list_models().await?;
             let dir = crate::get_models_dir(app.state());
             let (engine, model_id) = {
@@ -211,7 +257,29 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
             }))
         }
         c::TOOL_MODELS_DOWNLOAD => {
-            let IdArgs { id } = parse(tool, args)?;
+            let ModelIdArgs { id, category } = parse(tool, args)?;
+            let category = category_of(tool, category.as_deref())?;
+            if category != ModelCategory::Asr {
+                let known = list_catalog(app, category)
+                    .await?
+                    .into_iter()
+                    .find(|m| m.id == id)
+                    .ok_or_else(|| {
+                        HostError::InvalidArguments(format!("未知模型 {id}（见 models.list）"))
+                    })?;
+                if known.backend != kotone_core::model_catalog::CatalogBackend::Local
+                    || known.size_bytes == 0
+                {
+                    return Err(HostError::InvalidArguments(format!("{id} 无需下载")));
+                }
+                if kotone_stt::download::is_active() {
+                    return Err(HostError::Busy(
+                        "已有模型下载进行中；等它完成或先 models.download.cancel".into(),
+                    ));
+                }
+                start_catalog_download(app, category, id.clone());
+                return Ok(json!({"status": "started", "id": id, "category": category.as_str()}));
+            }
             if kotone_stt::model::multi_model_dir(&id).is_none()
                 && id != kotone_stt::model::VAD_MODEL_ID
             {
@@ -239,7 +307,13 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
             Ok(json!({"requested": active}))
         }
         c::TOOL_MODELS_DELETE => {
-            let IdArgs { id } = parse(tool, args)?;
+            let ModelIdArgs { id, category } = parse(tool, args)?;
+            let category = category_of(tool, category.as_deref())?;
+            if category != ModelCategory::Asr {
+                let was_active = crate::model_catalog::delete(app, category, &id)?;
+                settings_changed(app);
+                return Ok(json!({"wasActive": was_active}));
+            }
             let outcome = crate::delete_model(app.clone(), app.state(), id)?;
             settings_changed(app);
             to_json(outcome)
@@ -248,7 +322,23 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
             let ActivateArgs {
                 engine_id,
                 model_id,
+                category,
             } = parse(tool, args)?;
+            let category = category_of(tool, category.as_deref())?;
+            if category != ModelCategory::Asr {
+                let activate_app = app.clone();
+                let id = model_id.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    crate::model_catalog::activate(&activate_app, category, &id)
+                })
+                .await
+                .map_err(|e| HostError::Failed(e.to_string()))??;
+                settings_changed(app);
+                return Ok(json!({"category": category.as_str(), "activeModelId": model_id}));
+            }
+            let engine_id = engine_id.ok_or_else(|| {
+                HostError::InvalidArguments("models.activate: asr 需要 engineId".into())
+            })?;
             crate::set_active_model(app.clone(), app.state(), engine_id, model_id)?;
             settings_changed(app);
             Ok(runtime_snapshot(app))
@@ -260,7 +350,14 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
             to_json(migration)
         }
         c::TOOL_MODELS_INSTALL_GUIDE => {
-            let IdArgs { id } = parse(tool, args)?;
+            let ModelIdArgs { id, category } = parse(tool, args)?;
+            let category = category_of(tool, category.as_deref())?;
+            if category != ModelCategory::Asr {
+                return to_json(
+                    crate::model_catalog::install_guide(app, category, &id)
+                        .map_err(HostError::InvalidArguments)?,
+                );
+            }
             to_json(crate::get_model_install_guide(id).map_err(HostError::InvalidArguments)?)
         }
         c::TOOL_SPEECH_STATUS => {
@@ -491,6 +588,74 @@ fn start_model_download(app: &AppHandle, id: String) {
                     &app,
                     "model.download.failed",
                     json!({"id": id, "cancelled": cancelled, "message": error, "durationMs": ms}),
+                );
+            }
+        }
+    });
+}
+
+async fn list_catalog(
+    app: &AppHandle,
+    category: ModelCategory,
+) -> Result<Vec<kotone_core::model_catalog::CatalogModel>, HostError> {
+    let list_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::model_catalog::list_blocking(&list_app, category)
+    })
+    .await
+    .map_err(|e| HostError::Failed(e.to_string()))?
+    .map_err(HostError::Failed)
+}
+
+/// 后台下载 OCR / TTS 本地模型：进度（至多每秒一次）与结果发布到工具事件总线，事件带 category。
+fn start_catalog_download(app: &AppHandle, category: ModelCategory, id: String) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let progress_app = app.clone();
+        let progress_id = id.clone();
+        let last = std::sync::Mutex::new(Instant::now() - Duration::from_secs(1));
+        let listener = app.listen("kotone://download", move |event| {
+            let Ok(payload) = serde_json::from_str::<Value>(event.payload()) else {
+                return;
+            };
+            if payload["id"] != progress_id.as_str() {
+                return;
+            }
+            let mut last = last.lock().unwrap();
+            if last.elapsed() < Duration::from_secs(1) {
+                return;
+            }
+            *last = Instant::now();
+            tool_service::publish(
+                &progress_app,
+                "model.download.progress",
+                json!({"id": progress_id, "category": category.as_str(), "downloadedBytes": payload["downloaded"], "totalBytes": payload["total"]}),
+            );
+        });
+        let started = Instant::now();
+        let result = crate::model_catalog::download(&app, category, &id).await;
+        app.unlisten(listener);
+        let ms = started.elapsed().as_millis() as u64;
+        match result {
+            Ok(()) => {
+                log::log(&format!(
+                    "tool service: model download finished category={} id={id}",
+                    category.as_str()
+                ));
+                tool_service::publish(
+                    &app,
+                    "model.download.finished",
+                    json!({"id": id, "category": category.as_str(), "durationMs": ms}),
+                );
+                settings_changed(&app);
+            }
+            Err(error) => {
+                let cancelled =
+                    kotone_stt::download::is_cancelled(&error) || error.contains("已取消");
+                tool_service::publish(
+                    &app,
+                    "model.download.failed",
+                    json!({"id": id, "category": category.as_str(), "cancelled": cancelled, "message": error, "durationMs": ms}),
                 );
             }
         }

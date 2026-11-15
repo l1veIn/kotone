@@ -158,6 +158,12 @@ export interface Settings {
   assistant: AssistantConfig;
   /** 本机 Agent 工具服务开关；桌面端启动时读取，默认关闭（docs/tool-service.md） */
   toolService: ToolServiceConfig;
+  /** 当前 OCR 模型（统一模型清单 category=ocr；空 = 自动选第一个已安装的本地模型） */
+  ocr: OcrConfig;
+}
+
+export interface OcrConfig {
+  activeModelId: string;
 }
 
 export interface AssistantConfig {
@@ -428,7 +434,48 @@ export interface ModelConfigField {
   required: boolean;
 }
 
+/** 统一模型清单的类别：asr 语音识别 / ocr 文字识别 / tts 语音合成 */
+export type ModelCategory = "asr" | "ocr" | "tts";
+
+export interface CatalogFile {
+  name: string;
+  url: string;
+  sha256: string;
+  sizeBytes: number;
+}
+
+/** OCR / TTS 清单条目（ASR 仍用 ModelInfo） */
+export interface CatalogModel {
+  category: ModelCategory;
+  id: string;
+  engineId: string;
+  displayName: string;
+  description: string;
+  sizeBytes: number;
+  backend: "local" | "remote";
+  downloaded: boolean;
+  ready: boolean;
+  state: "ready" | "not-installed" | "invalid" | "not-configured" | "unavailable" | string;
+  reason?: string | null;
+  active: boolean;
+  recommended: boolean;
+  languages: string[];
+  /** none / selected-image（每次识别上传截图）/ text（上传文字） */
+  dataEgress: "none" | "selected-image" | "text" | string;
+  configSchema: ModelConfigField[];
+  apiKeyUrl?: string | null;
+  license: string;
+  files: CatalogFile[];
+}
+
+export interface CatalogDeleteOutcome {
+  wasActive: boolean;
+  settings: Settings;
+}
+
 export interface ModelInfo {
+  /** 统一模型清单类别；本清单恒为 asr */
+  category?: "asr";
   id: string;
   engineId: string;
   /** 展示名（清单内置文案） */

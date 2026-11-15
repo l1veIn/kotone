@@ -24,6 +24,9 @@ import type {
   GameProfile,
   ModelInfo,
   ModelInstallGuide,
+  CatalogModel,
+  CatalogDeleteOutcome,
+  ModelCategory,
   HistoryRecord,
   HotwordMergeReport,
   ElevationStatus,
@@ -97,6 +100,7 @@ const mock: MockStore = {
     diagnostics: { recording: true },
     assistant: { hotkey: "", interactionMode: "push-to-talk", connectionId: "", defaultDelivery: ["voice", "danmaku"], voiceId: "", speechEngine: "system", kokoroVoiceId: "kokoro:zf_001", speechVolume: 80, speechRate: 0, danmakuDurationMs: 8000, danmakuSpeedPxPerSec: 160, danmakuFontSize: 32, danmakuTopOffsetPx: 120, danmakuColor: "#FFFFFF", danmakuEmote: "none", route: "reminders" },
     toolService: { enabled: false },
+    ocr: { activeModelId: "" },
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },
@@ -1014,6 +1018,110 @@ export async function setActiveModel(engineId: string, modelId: string): Promise
   mock.settings.activeModelId = modelId;
   mock.settings.sttEngine = resolvedEngine;
   return;
+}
+
+// ---------- 统一模型清单：OCR / TTS ----------
+
+const mockCatalog: CatalogModel[] = [
+  {
+    category: "ocr", id: "ppocrv5-korean-mobile", engineId: "local-ppocrv5-korean",
+    displayName: "PP-OCRv5 mobile Korean (local, CPU)", description: "韩文聊天（韩服）。本机 CPU 推理，不上传截图",
+    sizeBytes: 18_308_324, backend: "local", downloaded: false, ready: false, state: "not-installed",
+    active: false, recommended: false, languages: ["ko"], dataEgress: "none", configSchema: [], license: "Apache-2.0",
+    files: [],
+  },
+  {
+    category: "ocr", id: "deepseek-ocr", engineId: "deepseek-ocr", displayName: "DeepSeek OCR（在线）",
+    description: "在线识别，多语种、版面更稳；每次识别都会把截图上传到 DeepSeek", sizeBytes: 0, backend: "remote",
+    downloaded: true, ready: false, state: "not-configured", reason: "请选择一条 DeepSeek API 连接", active: false,
+    recommended: false, languages: ["auto"], dataEgress: "selected-image",
+    configSchema: [{ key: "connection", label: "API 连接（DeepSeek）", kind: "connection", default: "", options: [], required: true }],
+    apiKeyUrl: "https://platform.deepseek.com/api_keys", license: "DeepSeek API terms", files: [],
+  },
+  {
+    category: "tts", id: "system-speech", engineId: "system", displayName: "Windows 系统语音",
+    description: "系统自带，无需下载；声音取决于系统已安装的语音包", sizeBytes: 0, backend: "local", downloaded: true,
+    ready: true, state: "ready", active: true, recommended: false, languages: ["zh"], dataEgress: "none",
+    configSchema: [], license: "Windows", files: [],
+  },
+  {
+    category: "tts", id: "kokoro-zh", engineId: "kokoro", displayName: "Kokoro 中文（本地神经语音）",
+    description: "更自然的本地中文女声，约 147 MB；本机 CPU 合成，不上传文字", sizeBytes: 147_031_220, backend: "local",
+    downloaded: false, ready: false, state: "not-installed", active: false, recommended: true, languages: ["zh"],
+    dataEgress: "none", configSchema: [], license: "Apache-2.0", files: [],
+  },
+];
+
+function refreshMockCatalog(): void {
+  const ocrActive =
+    mock.settings.ocr.activeModelId ||
+    mockCatalog.find((m) => m.category === "ocr" && m.backend === "local" && m.ready)?.id ||
+    "";
+  const ttsActive = mock.settings.assistant.speechEngine === "kokoro" ? "kokoro-zh" : "system-speech";
+  for (const m of mockCatalog) {
+    m.active = m.category === "ocr" ? m.id === ocrActive : m.id === ttsActive;
+    if (m.id === "deepseek-ocr") {
+      const connection = mock.settings.modelConfigs["deepseek-ocr"]?.connection;
+      m.ready = typeof connection === "string" && connection !== "";
+      m.state = m.ready ? "ready" : "not-configured";
+    }
+  }
+}
+
+export async function listCatalogModels(category: ModelCategory): Promise<CatalogModel[]> {
+  refreshMockCatalog();
+  return clone(mockCatalog.filter((m) => m.category === category));
+}
+
+export async function downloadCatalogModel(category: ModelCategory, id: string): Promise<void> {
+  if (mockQuery("mockDownload") === "fail") throw new Error("网络连接失败：无法连接模型下载源");
+  const m = mockCatalog.find((x) => x.category === category && x.id === id);
+  if (m) Object.assign(m, { downloaded: true, ready: true, state: "ready" });
+}
+
+export async function importCatalogModel(category: ModelCategory, id: string, _dir: string): Promise<void> {
+  return downloadCatalogModel(category, id);
+}
+
+export async function deleteCatalogModel(category: ModelCategory, id: string): Promise<CatalogDeleteOutcome> {
+  const m = mockCatalog.find((x) => x.category === category && x.id === id);
+  if (m) Object.assign(m, { downloaded: false, ready: false, state: "not-installed" });
+  let wasActive = false;
+  if (category === "ocr" && mock.settings.ocr.activeModelId === id) {
+    mock.settings.ocr.activeModelId = "";
+    wasActive = true;
+  }
+  if (category === "tts" && id === "kokoro-zh" && mock.settings.assistant.speechEngine === "kokoro") {
+    mock.settings.assistant.speechEngine = "system";
+    wasActive = true;
+  }
+  return { wasActive, settings: clone(mock.settings) };
+}
+
+export async function activateCatalogModel(category: ModelCategory, id: string): Promise<Settings> {
+  const m = mockCatalog.find((x) => x.category === category && x.id === id);
+  if (!m) throw new Error(`未知模型 ${id}`);
+  if (m.backend === "local" && !m.downloaded) throw new Error(`${m.displayName} 尚未下载，请先下载再切换`);
+  if (category === "ocr") mock.settings.ocr.activeModelId = id;
+  else mock.settings.assistant.speechEngine = id === "kokoro-zh" ? "kokoro" : "system";
+  return clone(mock.settings);
+}
+
+export async function getCatalogInstallGuide(category: ModelCategory, id: string): Promise<ModelInstallGuide> {
+  const m = mockCatalog.find((x) => x.category === category && x.id === id);
+  if (!m) throw new Error(`未知模型 ${id}`);
+  return {
+    id,
+    displayName: m.displayName,
+    destDir: `C:\\Users\\mock\\.kotone\\models\\ocr\\${id}`,
+    destSubdir: `ocr/${id}`,
+    pageUrl: "https://www.modelscope.cn/models/RapidAI/RapidOCR/files",
+    files: m.files.map((f) => ({ name: f.name, url: f.url, sizeBytes: f.sizeBytes })),
+  };
+}
+
+export async function openCatalogModelDir(category: ModelCategory, id: string): Promise<void> {
+  console.info("[mock] open_catalog_model_dir", category, id);
 }
 
 // ---------- 识别历史（历史记录页） ----------

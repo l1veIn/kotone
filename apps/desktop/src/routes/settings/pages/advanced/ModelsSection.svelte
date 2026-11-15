@@ -31,6 +31,7 @@
   import { runtimeStore } from "../../../../lib/stores/runtime";
   import { spotlight } from "../../../../lib/actions/spotlight";
   import ManualDownloadDialog from "../../../../lib/components/ManualDownloadDialog.svelte";
+  import CatalogModelList from "./CatalogModelList.svelte";
   import Select from "../../../../lib/components/Select.svelte";
   import stickerCurious from "../../../../assets/brand/stickers/curious.webp";
 
@@ -49,6 +50,13 @@
   let manualGuide = $state<ModelInstallGuide | null>(null);
   let manualGuideError = $state("");
   let connections = $state<ConnectionInfo[]>([]);
+  /** 统一模型清单按类别分栏：asr 语音识别（原有列表）/ ocr 文字识别 / tts 语音合成 */
+  let category = $state<"asr" | "ocr" | "tts">("asr");
+  const categories = [
+    { id: "asr", name: "语音识别" },
+    { id: "ocr", name: "文字识别" },
+    { id: "tts", name: "语音合成" },
+  ] as const;
 
   const downloadingAny = $derived(Object.keys(dlProgress).length > 0);
   const dirDraftError = $derived(modelsDirPathError(dirDraft.trim()));
@@ -431,7 +439,27 @@
   </p>
 </section>
 
-{#if engines === null}
+<div class="mt-3 grid grid-cols-3 gap-2" role="tablist" aria-label="模型类别">
+  {#each categories as c}
+    <button
+      role="tab"
+      aria-selected={category === c.id}
+      data-testid="model-category-{c.id}"
+      class="rounded-lg px-2.5 py-1.5 text-xs font-semibold ring-1 transition {category === c.id
+        ? 'bg-kotone-cyan/12 text-kotone-cyan ring-kotone-cyan/60'
+        : 'bg-white/5 text-white/65 ring-white/10 hover:bg-white/10'}"
+      onclick={() => (category = c.id)}
+    >
+      {c.name}
+    </button>
+  {/each}
+</div>
+
+{#if category !== "asr"}
+  {#key category}
+    <CatalogModelList {category} />
+  {/key}
+{:else if engines === null}
   <div class="mt-10 flex flex-col items-center gap-3">
     <img src={stickerCurious} alt="加载中" class="h-24 w-24 object-contain" />
     <p class="text-sm text-white/50">Kotone 正在清点模型…</p>

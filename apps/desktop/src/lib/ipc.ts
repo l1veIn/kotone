@@ -24,6 +24,9 @@ import type {
   GameProfile,
   ModelInfo,
   ModelInstallGuide,
+  CatalogModel,
+  CatalogDeleteOutcome,
+  ModelCategory,
   HistoryRecord,
   HotwordMergeReport,
   ElevationStatus,
@@ -410,6 +413,46 @@ export async function openModelDestDir(id: string): Promise<void> {
 export async function setActiveModel(engineId: string, modelId: string): Promise<void> {
   if (!isTauri) return browserMock.setActiveModel(engineId, modelId);
   return invoke<void>("set_active_model", { engineId, modelId });
+}
+
+// ---------- 统一模型清单：OCR / TTS（ASR 仍用上面的接口） ----------
+
+export async function listCatalogModels(category: ModelCategory): Promise<CatalogModel[]> {
+  if (!isTauri) return browserMock.listCatalogModels(category);
+  return invoke<CatalogModel[]>("list_catalog_models", { category });
+}
+
+/** 下载本地 OCR / TTS 模型（进度同样经 kotone://download 推送） */
+export async function downloadCatalogModel(category: ModelCategory, id: string): Promise<void> {
+  if (!isTauri) return browserMock.downloadCatalogModel(category, id);
+  return invoke<void>("download_catalog_model", { category, id });
+}
+
+/** 从本地目录导入模型文件（逐文件校验 SHA-256） */
+export async function importCatalogModel(category: ModelCategory, id: string, dir: string): Promise<void> {
+  if (!isTauri) return browserMock.importCatalogModel(category, id, dir);
+  return invoke<void>("import_catalog_model", { category, id, dir });
+}
+
+export async function deleteCatalogModel(category: ModelCategory, id: string): Promise<CatalogDeleteOutcome> {
+  if (!isTauri) return browserMock.deleteCatalogModel(category, id);
+  return invoke<CatalogDeleteOutcome>("delete_catalog_model", { category, id });
+}
+
+/** 选用某个 OCR / TTS 模型，返回更新后的设置 */
+export async function activateCatalogModel(category: ModelCategory, id: string): Promise<Settings> {
+  if (!isTauri) return browserMock.activateCatalogModel(category, id);
+  return invoke<Settings>("activate_catalog_model", { category, id });
+}
+
+export async function getCatalogInstallGuide(category: ModelCategory, id: string): Promise<ModelInstallGuide> {
+  if (!isTauri) return browserMock.getCatalogInstallGuide(category, id);
+  return invoke<ModelInstallGuide>("get_catalog_install_guide", { category, id });
+}
+
+export async function openCatalogModelDir(category: ModelCategory, id: string): Promise<void> {
+  if (!isTauri) return browserMock.openCatalogModelDir(category, id);
+  return invoke<void>("open_catalog_model_dir", { category, id });
 }
 
 // ---------- 识别历史（历史记录页） ----------

@@ -133,6 +133,19 @@ pub struct Settings {
     /// 本机 Agent 工具服务（默认关闭；修改后需重启桌面实例才生效，见 docs/tool-service.md）。
     #[serde(default)]
     pub tool_service: ToolServiceConfig,
+    /// 文字识别（统一模型清单的 OCR 类别）：当前选用的 OCR 模型。
+    #[serde(default)]
+    pub ocr: OcrConfig,
+}
+
+/// OCR 模型选择（config.json `ocr` 段）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrConfig {
+    /// 当前 OCR 模型 ID（统一模型清单 `category=ocr`）。空 = 自动：按清单推荐顺序取第一个
+    /// 已就绪的本地模型；都没有时为“未选择”。不会自动改用在线模型。
+    #[serde(default)]
+    pub active_model_id: String,
 }
 
 /// 本机工具服务开关（config.json `toolService` 段）。
@@ -496,6 +509,7 @@ impl Default for Settings {
             diagnostics: DiagnosticsConfig::default(),
             assistant: crate::assistant::AssistantConfig::default(),
             tool_service: ToolServiceConfig::default(),
+            ocr: OcrConfig::default(),
         }
     }
 }
