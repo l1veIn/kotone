@@ -19,7 +19,7 @@
 ## 设计依据与历史
 
 - [游戏聊天 OCR 会话研究报告（2026-11-15）](research/2026-11-15-lol-chat-ocr-report.md) 汇总诊断、产品分工与韩服聊天实验；含39图配对对照及可提交的小型证据，不是整体准确率承诺。
-- [面向 Agent 的游戏工具演进计划](product-evolution-game-tools.md) 给出基础服务、目标暴露列表和分阶段验收范围；M1、M2 与 §5.5 的底座第一批已按 [工具服务手册](tool-service.md) 实现，其余仍是计划，不是当前 API。§10“Kotone 陪玩”与 §11 ASR / OCR / TTS 统一模型管理已在分支 `claude/companion` 实现（先做成 Kotone 自己的功能，再以 `companion.*`、带 `category` 的 `models.*` 开放给 Agent；Edge TTS 不接入）。
+- [面向 Agent 的游戏工具演进计划](product-evolution-game-tools.md) 给出基础服务、目标暴露列表和分阶段验收范围；M1、M2 与 §5.5 的底座第一批已按 [工具服务手册](tool-service.md) 实现，其余仍是计划，不是当前 API。§10“Kotone 陪玩”与 §11 ASR / OCR / TTS 统一模型管理已在分支 `claude/companion` 实现（先做成 Kotone 自己的功能，再以 `companion.*`、带 `category` 的 `models.*` 开放给 Agent；Edge TTS 不接入）。§12“陪玩脚本”（大模型写脚本、沙盒执行，代替按键精灵式手写脚本）是 2026-11-16 定的开发方向。
 - [M1 实现与验证记录](research/game-tools-m1-implementation.md) 记录本轮命令、结果、捕获限制与未完成的人工检查。
 - [M2 实现与验证记录](research/game-tools-m2-implementation.md) 记录预处理、OCR、聊天跟踪的实现、测试、真实本地韩文 OCR 冒烟与未验证条件。
 - [Agent 底座第一批实现与验证记录](research/agent-base-batch1-implementation.md) 记录应用启停、事件总线、用户请求反向通道、MCP 与 DSH 插件的实现、真机端到端结果、发现的问题与未验证条件。
