@@ -24,6 +24,7 @@
 - [M2 实现与验证记录](research/game-tools-m2-implementation.md) 记录预处理、OCR、聊天跟踪的实现、测试、真实本地韩文 OCR 冒烟与未验证条件。
 - [Agent 底座第一批实现与验证记录](research/agent-base-batch1-implementation.md) 记录应用启停、事件总线、用户请求反向通道、MCP 与 DSH 插件的实现、真机端到端结果、发现的问题与未验证条件。
 - [Agent 底座第二批实现与验证记录](research/agent-base-batch2-implementation.md) 记录与设置页对齐的 35 个配置类工具（设置、模型、连接、profile、热键、提权、自启、历史、诊断）、委托宿主的设计、凭据隔离与真机冒烟结果。
+- [交接：Kotone 陪玩与统一模型管理（2026-11-15）](research/2026-11-15-companion-handoff.md) 记录"先有完整功能再开放给 Agent"的方向修正、已定的陪玩 / 快捷消息设计、ASR/OCR/TTS 统一模型管理方案与开工顺序；均未实现。
 - [ADR 索引](adr/README.md) 记录“为什么这样做”。已替代或修订的决策标明状态，旧正文保留用于追溯，不作为现行 API。
 - [早期开发文档](archive/development-history.md) 保存阶段计划、原始评测成绩和验收历史。
 - [技术预研](tech-research.md)、[STT 调研](recon-stt-engines.md)、[后处理调研](recon-postprocess-ai.md) 是有日期的研究材料，不能用来判断当前已支持的功能。
