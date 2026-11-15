@@ -57,7 +57,7 @@
   const navItems: { id: PageId; label: string; icon: string }[] = [
     { id: "general", label: "通用", icon: "home" },
     { id: "processing", label: "文字处理", icon: "sparkles" },
-    { id: "assistant", label: "提醒助手", icon: "bell" },
+    { id: "assistant", label: "陪玩", icon: "bell" },
     { id: "game", label: "游戏适配", icon: "gamepad" },
     { id: "history", label: "历史记录", icon: "clock" },
     { id: "advanced", label: "高级", icon: "sliders" },

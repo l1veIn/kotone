@@ -148,6 +148,11 @@ fn settings_snapshot(app: &AppHandle) -> Value {
 }
 
 /// 工具改动设置后通知设置窗口刷新（窗口未打开时无人接收）。
+/// 设置在工具或陪玩流程里被改动后通知打开着的设置窗口刷新。
+pub(crate) fn notify_settings_changed(app: &AppHandle) {
+    settings_changed(app);
+}
+
 fn settings_changed(app: &AppHandle) {
     let _ = app.emit("kotone://settings-changed", settings_snapshot(app));
 }

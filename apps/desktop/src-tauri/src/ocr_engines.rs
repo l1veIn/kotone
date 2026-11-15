@@ -70,7 +70,6 @@ impl OcrEngines {
     }
 
     /// 清单 ID 对应的后端（陪玩流程按当前设置解析）。
-    #[allow(dead_code)] // 陪玩流程接入前暂未使用
     pub fn by_model(&self, settings: &Settings, model_id: &str) -> Option<Arc<dyn OcrBackend>> {
         if model_id == kotone_ocr::catalog::DEEPSEEK_MODEL_ID {
             return Some(self.deepseek.clone());

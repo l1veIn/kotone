@@ -27,6 +27,8 @@ import type {
   CatalogModel,
   CatalogDeleteOutcome,
   ModelCategory,
+  CompanionCheck,
+  CompanionStatus,
   HistoryRecord,
   HotwordMergeReport,
   ElevationStatus,
@@ -98,7 +100,7 @@ const mock: MockStore = {
       send: { enabled: true, volume: 60, soundId: "fall" },
     },
     diagnostics: { recording: true },
-    assistant: { hotkey: "", interactionMode: "push-to-talk", connectionId: "", defaultDelivery: ["voice", "danmaku"], voiceId: "", speechEngine: "system", kokoroVoiceId: "kokoro:zf_001", speechVolume: 80, speechRate: 0, danmakuDurationMs: 8000, danmakuSpeedPxPerSec: 160, danmakuFontSize: 32, danmakuTopOffsetPx: 120, danmakuColor: "#FFFFFF", danmakuEmote: "none", route: "reminders" },
+    assistant: { hotkey: "", interactionMode: "push-to-talk", connectionId: "", defaultDelivery: ["voice", "danmaku"], voiceId: "", speechEngine: "system", kokoroVoiceId: "kokoro:zf_001", speechVolume: 80, speechRate: 0, danmakuDurationMs: 8000, danmakuSpeedPxPerSec: 160, danmakuFontSize: 32, danmakuTopOffsetPx: 120, danmakuColor: "#FFFFFF", danmakuEmote: "none", route: "companion", companion: { quickMessages: [], autoSend: false } },
     toolService: { enabled: false },
     ocr: { activeModelId: "" },
   },
@@ -1135,6 +1137,51 @@ export async function getCatalogInstallGuide(category: ModelCategory, id: string
 export async function openCatalogModelDir(category: ModelCategory, id: string): Promise<void> {
   console.info("[mock] open_catalog_model_dir", category, id);
 }
+
+// ---------- Kotone 陪玩 ----------
+
+export async function companionSelfCheck(): Promise<CompanionCheck> {
+  const assistant = mock.settings.assistant;
+  if (!assistant.connectionId) throw new Error("请先在「陪玩」里选择一条 AI 连接");
+  const connection = mock.settings.connections.find((c) => c.id === assistant.connectionId);
+  const check: CompanionCheck = {
+    connectionId: assistant.connectionId,
+    baseUrl: connection?.baseUrl ?? "",
+    model: connection?.model ?? "",
+    passed: mockQuery("mockCompanionCheck") !== "fail",
+    checkedAtMs: Date.now(),
+    message: mockQuery("mockCompanionCheck") === "fail" ? "模型的回答没有提到队友的话" : "通过：能正常调用工具，并从聊天样例里挑出了队友的话",
+  };
+  assistant.companion.check = check;
+  return clone(check);
+}
+
+export async function companionStatus(): Promise<CompanionStatus> {
+  const assistant = mock.settings.assistant;
+  const check = assistant.companion.check ?? null;
+  const ocr = mock.settings.ocr.activeModelId || null;
+  const reason = !assistant.connectionId
+    ? "陪玩需要 AI 连接：请先在「陪玩」里选择一条支持工具调用的 AI 连接"
+    : !check || check.connectionId !== assistant.connectionId
+      ? "陪玩的 AI 连接还没有做能力自检：请点「能力自检」"
+      : !check.passed
+        ? `陪玩的 AI 连接没有通过能力自检（${check.message}）`
+        : !ocr
+          ? "陪玩需要文字识别模型：请在「高级 → 模型 → 文字识别」下载并选择一个"
+          : null;
+  return {
+    ready: reason === null,
+    reason,
+    connectionId: assistant.connectionId,
+    check,
+    ocr: { modelId: ocr, state: { ready: !!ocr, dataEgress: ocr === "deepseek-ocr" ? "selected-image" : "none" } },
+    autoSend: assistant.companion.autoSend,
+    quickMessages: clone(assistant.companion.quickMessages),
+    profile: { id: mock.settings.activeProfileId ?? "generic", notes: "", chatRegion: null },
+  };
+}
+
+export async function companionClearChatRegion(): Promise<void> {}
 
 // ---------- 识别历史（历史记录页） ----------
 

@@ -1,4 +1,6 @@
-//! 助手识别边界：只将用户语音转成受限提醒计划，不直接执行输入注入或任意工具。
+//! 助手识别边界：把用户的一句话交给“Kotone 陪玩”（一次大模型调用，从提醒 / 帮忙打字 /
+//! 回答中选一种，见 docs/product-evolution-game-tools.md §10）或转交外部 Agent。
+//! 模型只能返回这三种受限动作，不能执行任意工具或修改配置。
 
 use std::{future::Future, pin::Pin};
 
@@ -31,9 +33,11 @@ impl From<AssistantInteractionMode> for InteractionMode {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AssistantRoute {
-    /// 由 Kotone 的 AI 连接规划为提醒（默认，0.1.13 行为）。
+    /// Kotone 陪玩（默认）：截图 + OCR + 聊天跟踪 + profile 说明，一次大模型调用，
+    /// 从“创建提醒 / 帮忙打字 / 直接回答”中选一种。0.1.13 的 `reminders` 读入时按此处理。
     #[default]
-    Reminders,
+    #[serde(alias = "reminders")]
+    Companion,
     /// 原文转交外部 Agent：经工具服务发布 `user.request` 事件，由 Agent 处理并用
     /// `agent.reply` 回应；需要开启工具服务。
     Agent,
@@ -66,8 +70,79 @@ pub struct AssistantConfig {
     pub danmaku_top_offset_px: u32,
     pub danmaku_color: String,
     pub danmaku_emote: String,
-    /// 请求去向：提醒规划（默认）或转交 Agent。
+    /// 请求去向：陪玩（默认）或转交 Agent。
     pub route: AssistantRoute,
+    /// 陪玩：快捷消息、帮忙打字是否自动发送、AI 连接能力自检结果。
+    pub companion: CompanionConfig,
+}
+
+/// 快捷消息最多几条（每条一个固定的具名热键槽位 `quick-message-<n>`）。
+pub const MAX_QUICK_MESSAGES: usize = 8;
+
+/// 一条快捷消息：按下热键等于替用户说了 `text`，不经过语音识别。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct QuickMessage {
+    /// 稳定 ID（工具 `companion.ask` 的 `quickMessageId`）。
+    pub id: String,
+    /// 设置页显示的名字；空 = 用 text。
+    pub label: String,
+    pub text: String,
+    /// 绑定的热键；空 = 未绑定（仍可由工具触发）。
+    pub hotkey: String,
+}
+
+/// 能力自检结果。只在连接 ID、地址与模型都未变时有效。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CompanionCheck {
+    pub connection_id: String,
+    pub base_url: String,
+    pub model: String,
+    pub passed: bool,
+    pub checked_at_ms: u64,
+    /// 结果说明（失败原因或通过时的摘要），不含密钥或模型原始输出。
+    pub message: String,
+}
+
+impl CompanionCheck {
+    pub fn matches(&self, connection_id: &str, base_url: &str, model: &str) -> bool {
+        self.connection_id == connection_id && self.base_url == base_url && self.model == model
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CompanionConfig {
+    pub quick_messages: Vec<QuickMessage>,
+    /// 帮忙打字后自动按发送键；默认 false（只打进聊天框，由用户确认后自己发）。
+    pub auto_send: bool,
+    /// 最近一次能力自检；None = 尚未自检。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub check: Option<CompanionCheck>,
+}
+
+impl CompanionConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.quick_messages.len() > MAX_QUICK_MESSAGES {
+            return Err(format!("快捷消息最多 {MAX_QUICK_MESSAGES} 条"));
+        }
+        let mut ids = std::collections::HashSet::new();
+        for message in &self.quick_messages {
+            let id = message.id.trim();
+            if id.is_empty() || id.len() > 64 || !ids.insert(id) {
+                return Err("快捷消息的 ID 不能为空、过长或重复".into());
+            }
+            let count = message.text.trim().chars().count();
+            if count == 0 || count > 200 {
+                return Err("快捷消息的内容需要 1 到 200 字".into());
+            }
+            if message.label.chars().count() > 40 {
+                return Err("快捷消息的名字不能超过 40 字".into());
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -99,7 +174,8 @@ impl Default for AssistantConfig {
             danmaku_top_offset_px: 120,
             danmaku_color: "#FFFFFF".into(),
             danmaku_emote: "none".into(),
-            route: AssistantRoute::Reminders,
+            route: AssistantRoute::Companion,
+            companion: CompanionConfig::default(),
         }
     }
 }
@@ -144,7 +220,7 @@ impl AssistantConfig {
         {
             return Err("请选择内置琴音表情".into());
         }
-        Ok(())
+        self.companion.validate()
     }
 }
 
@@ -244,6 +320,40 @@ mod tests {
             serde_json::json!({"interactionMode":"invalid"})
         )
         .is_err());
+    }
+
+    #[test]
+    fn legacy_reminders_route_becomes_companion_and_quick_messages_are_bounded() {
+        let config: AssistantConfig =
+            serde_json::from_value(serde_json::json!({"route":"reminders"})).unwrap();
+        assert_eq!(config.route, AssistantRoute::Companion);
+        assert_eq!(serde_json::to_value(&config).unwrap()["route"], "companion");
+        assert!(!config.companion.auto_send);
+        let quick = |id: &str, text: &str| QuickMessage {
+            id: id.into(),
+            text: text.into(),
+            ..Default::default()
+        };
+        let mut ok = config.clone();
+        ok.companion.quick_messages = vec![quick("q1", "帮我看看队友说了什么")];
+        ok.validate().unwrap();
+        for bad in [
+            vec![quick("q1", "")],
+            vec![quick("q1", "a"), quick("q1", "b")],
+            (0..9).map(|i| quick(&format!("q{i}"), "x")).collect(),
+        ] {
+            let mut config = config.clone();
+            config.companion.quick_messages = bad;
+            assert!(config.validate().is_err());
+        }
+        let check = CompanionCheck {
+            connection_id: "c".into(),
+            base_url: "u".into(),
+            model: "m".into(),
+            passed: true,
+            ..Default::default()
+        };
+        assert!(check.matches("c", "u", "m") && !check.matches("c", "u", "m2"));
     }
 
     #[test]

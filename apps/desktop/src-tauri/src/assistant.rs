@@ -166,12 +166,12 @@ pub fn prepare_model_migration(
     Ok(guard)
 }
 
-/// 助手入口的请求去向：默认交给提醒规划；`assistant.route = agent` 时原文转交外部 Agent
-/// （经工具服务发布 `user.request`）。热键语音与文字入口都经过这里，因此两者行为一致。
+/// 助手入口的请求去向：默认交给 Kotone 陪玩（截图 + OCR + 一次大模型调用，提醒 / 打字 /
+/// 回答三选一）；`assistant.route = agent` 时原文转交外部 Agent（经工具服务发布
+/// `user.request`）。热键语音与文字入口都经过这里，因此两者行为一致。
 struct RoutingHandler {
     app: AppHandle,
     settings: Arc<RwLock<Settings>>,
-    reminders: Arc<dyn AssistantHandler>,
 }
 
 /// 请求来源：文字入口 / 工具提交 / 热键语音（按会话 ID 前缀区分）。
@@ -193,7 +193,14 @@ impl AssistantHandler for RoutingHandler {
     ) -> kotone_core::assistant::AssistantFuture<'_> {
         let route = self.settings.read().unwrap().assistant.route;
         if route != kotone_core::assistant::AssistantRoute::Agent {
-            return self.reminders.handle(request, cancel);
+            let source = match request_source(&request.session_id) {
+                "assistant-text" => crate::companion::Source::Text,
+                "tool" => crate::companion::Source::Tool,
+                _ => crate::companion::Source::Voice,
+            };
+            return Box::pin(async move {
+                crate::companion::handle_assistant(&self.app, request.text, source, cancel).await
+            });
         }
         Box::pin(async move {
             if cancel.is_cancelled() {
@@ -213,11 +220,7 @@ impl AssistantHandler for RoutingHandler {
     }
 }
 
-pub fn initialize(
-    app: &AppHandle,
-    settings: Arc<RwLock<Settings>>,
-    connections: Arc<dyn kotone_core::connection::ConnectionResolver>,
-) -> AssistantRuntime {
+pub fn initialize(app: &AppHandle, settings: Arc<RwLock<Settings>>) -> AssistantRuntime {
     let speaker = kotone_platform_windows::speech::WindowsSpeechOutput::new()
         .map(|speaker| Arc::new(speaker) as Arc<dyn SpeechOutput>);
     let scheduler = ReminderScheduler::open(
@@ -234,11 +237,7 @@ pub fn initialize(
         scheduler,
         handler: Arc::new(RoutingHandler {
             app: app.clone(),
-            settings: settings.clone(),
-            reminders: Arc::new(kotone_ai::reminders::ReminderAssistant::new(
-                connections,
-                settings,
-            )),
+            settings,
         }),
         system_speaker: speaker,
         local_speaker: Mutex::new(None),

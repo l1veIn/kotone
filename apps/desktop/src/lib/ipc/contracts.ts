@@ -185,8 +185,53 @@ export interface AssistantConfig {
   danmakuTopOffsetPx: number;
   danmakuColor: string;
   danmakuEmote: "none" | "hello" | "cheering" | "pointing" | "amazed";
-  /** 请求去向：reminders 由 Kotone 规划提醒（默认）；agent 原文转交外部 Agent（需开启工具服务）。 */
-  route?: "reminders" | "agent";
+  /** 请求去向：companion 为 Kotone 陪玩（默认；旧值 reminders 视同 companion）；agent 原文转交外部 Agent（需开启工具服务）。 */
+  route?: "companion" | "reminders" | "agent";
+  /** 陪玩：快捷消息、帮忙打字是否自动发送、AI 连接能力自检结果 */
+  companion: CompanionConfig;
+}
+
+/** 快捷消息：按下热键等于替用户说了 text，不经过语音识别（最多 8 条） */
+export interface QuickMessage {
+  id: string;
+  label: string;
+  text: string;
+  hotkey: string;
+}
+
+export interface CompanionCheck {
+  connectionId: string;
+  baseUrl: string;
+  model: string;
+  passed: boolean;
+  checkedAtMs: number;
+  message: string;
+}
+
+export interface CompanionConfig {
+  quickMessages: QuickMessage[];
+  /** 帮忙打字后自动按发送键（默认 false，只打进聊天框） */
+  autoSend: boolean;
+  check?: CompanionCheck | null;
+}
+
+/** 陪玩是否可用（companion_status） */
+export interface CompanionStatus {
+  ready: boolean;
+  reason: string | null;
+  connectionId: string;
+  check: CompanionCheck | null;
+  ocr: { modelId: string | null; state: { ready: boolean; reason?: string | null; backend?: string; dataEgress?: string } };
+  autoSend: boolean;
+  quickMessages: QuickMessage[];
+  profile: { id: string; notes: string; chatRegion: ChatRegion | null };
+}
+
+export interface ChatRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 /** 本机工具服务配置（config.json `toolService` 段）；修改后需重启桌面端 */
@@ -418,6 +463,10 @@ export interface GameProfile {
   removedBuiltinHotwords?: string[];
   /** 聊天频道列表（ADR-008；缺省/空 = 单频道，行为与旧版一致） */
   channels?: ProfileChannel[];
+  /** 陪玩的游戏说明（可选，写进提示词），如“聊天在左下角，[队伍] 前缀是队友” */
+  companionNotes?: string;
+  /** 陪玩记录的聊天框位置（窗口客户区比例）；缺省 = 整窗识别 */
+  chatRegion?: ChatRegion | null;
 }
 
 // ---------- 模型 ----------

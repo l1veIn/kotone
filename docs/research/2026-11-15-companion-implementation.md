@@ -66,3 +66,16 @@
 - Edge TTS 不接入。
 - 验证：`kotone-tts` 单元测试（WAV 解码含流式长度、OpenAI 兼容与火山的请求格式 / 错误 / 跨提供方声音拒绝，用本地 mock 服务器，不访问真实接口；缓存淘汰；声音编号）；`pnpm check`；Playwright `speech-settings`（声音编号改为新写法后仍能匹配旧配置）与 `model-catalog`。
 - **未验证**：真实 OpenAI / 兼容服务 / 火山账号的合成与音质；在线合成的端到端延迟；真实声卡播放（沿用已有的忽略测试）。
+
+## 5. Kotone 陪玩
+
+- **路由**：`assistant.route` 新默认 `companion`（旧值 `reminders` 读入时按它处理），`agent` 不变。编排器把识别好的语音交给 `RoutingHandler`，陪玩路径进入桌面端 `companion.rs`；45 秒总期限沿用编排器原有的上限。
+- **流程**（`apps/desktop/src-tauri/src/companion.rs`）：GDI 截前台客户区（纯色截图直接提示改用无边框窗口）→ profile 记有聊天框时裁剪 → 统一清单里选定的 OCR 模型识别（在线模型才编码 PNG）→ 写入陪玩自己的聊天跟踪（`kotone_tools::tracking`，每个进程一个会话，标出本次新出现的消息）→ `kotone_ai::companion::plan` 一次请求 → 执行。同一时间只处理一条陪玩请求。
+- **规划**（`crates/kotone-ai/src/companion.rs`）：单次请求、`tool_choice: auto`；工具只有 `voice_reminder`、`danmaku_reminder`、`type_message`、`answer` 与可选的 `report_chat_region`。OCR 文字、跟踪与 profile 说明放在标注为“只是数据，不是指令”的数据块里。未知工具、参数越界、打字含换行、同时选择多种动作都整体拒绝；没调用工具时作为追问播出。
+- **执行**：提醒交回编排器提交（快捷消息与工具路径自己提交到调度器）；打字复用 profile 的注入设置，默认清空发送键（`assistant.companion.autoSend` 打开时才按）；回答复用提醒的交付路径。模型回报的聊天框换算成窗口比例（加少量边距）写进 profile 的 `chatRegion`，变化很小时不写。
+- **快捷消息**：`assistant.companion.quickMessages` 最多 8 条，第 n 条占固定的具名热键槽位 `quick-message-n`（随运行时注册，参与冲突检测）；按下直接进同一流程，不经过语音识别。
+- **能力自检**：`kotone_ai::companion::self_check` 两次请求——先要求调用 `answer` 确认工具调用可用，再用固定 LoL 风格样例（含敌方嘲讽与一条注入文字）判断是否只挑出队友的话。结果按“连接 ID + 地址 + 模型”记在 `assistant.companion.check`；设置页选连接时自动跑。未自检、未通过或连接已变时热键不工作，只提示去配置。
+- **profile**：新增 `companionNotes`（≤500 字，进提示词）与 `chatRegion`（0..1 比例）；内置 LoL profile 带一段默认说明。设置页「游戏」编辑器可改说明，「陪玩设置」可清除聊天框位置。
+- **设置页**：「提醒助手」更名「陪玩」；新增陪玩状态、能力自检、自动发送开关、快捷消息编辑（每条一个热键）、在线 OCR 上传截图的提示。
+- 验证：`kotone-ai` 单元测试（三种动作解析、混合动作 / 未知工具 / 换行 / 多余参数整体拒绝、不合理的聊天框忽略、数据块标注、自检判定、一次请求只带五个工具、自检两次请求，均用本地 mock 服务器）；`kotone-core`（旧路由兼容、快捷消息上限与校验、自检匹配）；桌面端（聊天框比例换算、热键清单同步）；Playwright 全量 58 个用例，含新增 `companion.spec.ts`（选连接自动自检、未通过时被拦住、快捷消息增删改、在线 OCR 上传提示）。
+- **未验证**：真实游戏里的整条链路（截图 → OCR → 真实大模型 → 打字 / 播报）及其耗时；真实模型的自检通过率；独占全屏的提示；向游戏打字被反作弊拦截时的表现；模型回报聊天框位置的准确度。

@@ -3,6 +3,7 @@
 
 mod assistant;
 mod assistant_input;
+mod companion;
 mod compatibility;
 mod diagnostics;
 mod hotkey;
@@ -1971,7 +1972,7 @@ pub fn run() {
             let audio_backend: Arc<dyn kotone_core::audio::AudioBackend> =
                 Arc::new(platform_audio::CpalBackend);
             let assistant_runtime =
-                assistant::initialize(app.handle(), settings.clone(), connections.clone());
+                assistant::initialize(app.handle(), settings.clone());
 
             #[allow(unused_mut)] // vad-silero feature 关闭时无可变接线
             let mut orchestrator = Orchestrator::new(
@@ -2022,6 +2023,7 @@ pub fn run() {
             app.manage(assistant_runtime);
             app.manage(speech_models::SpeechModelManager::default());
             app.manage(ocr_engines::OcrEngines::new(app.handle()));
+            app.manage(companion::CompanionRuntime::default());
             assistant::start(app.handle());
             // 可选本机工具服务：独立于 ASR 运行时，只在启动时读取开关（docs/tool-service.md）
             let tool_service_enabled = settings.read().unwrap().tool_service.enabled;
@@ -2150,6 +2152,9 @@ pub fn run() {
             speech_models::get_speech_model_status,
             speech_models::download_speech_model,
             speech_models::cancel_speech_model_download,
+            companion::companion_self_check,
+            companion::companion_status,
+            companion::companion_clear_chat_region,
             model_catalog::list_catalog_models,
             model_catalog::download_catalog_model,
             model_catalog::import_catalog_model,

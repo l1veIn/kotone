@@ -14,6 +14,7 @@
   "preSendDelayMs": 100,
   "preferClipboardPaste": false,
   "icon": "lol-kotone.webp",
+  "companionNotes": "聊天框在左下角。[队伍] / [Team] / 韩服 [팀] 前缀是队友，[全部] / [All] / 韩服 [전체] 是所有人（包括敌方）；名字后的英雄名在括号里。系统消息（击杀、龙、男爵）没有玩家名前缀。帮忙打字时默认发到队伍频道。",
   "channels": [
     {
       "id": "team",

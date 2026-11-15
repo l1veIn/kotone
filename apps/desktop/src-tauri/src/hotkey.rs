@@ -15,8 +15,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use kotone_core::hotkey::{
-    parse_hotkey, HookEvent, HotkeySource, HK_ASSISTANT, HK_CHANNEL_CYCLE, HK_PP_CYCLE,
-    HK_PP_TOGGLE, HK_RESEND_LAST, HK_RUNTIME_TOGGLE,
+    parse_hotkey, quick_message_slot, HookEvent, HotkeySource, HK_ASSISTANT, HK_CHANNEL_CYCLE,
+    HK_PP_CYCLE, HK_PP_TOGGLE, HK_QUICK_MESSAGES, HK_RESEND_LAST, HK_RUNTIME_TOGGLE,
 };
 use kotone_core::orchestrator::Orchestrator;
 use kotone_core::settings::HotkeyBackend;
@@ -364,7 +364,11 @@ fn dispatch_runtime_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, event: Hoo
                 HK_PP_TOGGLE => orch.on_post_processing_toggle().await,
                 HK_PP_CYCLE => orch.on_post_processing_cycle().await,
                 HK_ASSISTANT => orch.on_assistant_hotkey_with_ticket(ticket.core).await,
-                _ => kotone_core::log::log(&format!("未知具名热键: {id}")),
+                other => match quick_message_slot(other) {
+                    // 快捷消息：替用户说了预设的那句话，不经过语音识别，直接进陪玩流程。
+                    Some(slot) => crate::companion::quick(&app, slot),
+                    None => kotone_core::log::log(&format!("未知具名热键: {id}")),
+                },
             },
             HookEvent::MainKeyMissed { .. } => {}
         }
@@ -387,6 +391,14 @@ const KNOWN_NAMED_HOTKEYS: &[&str] = &[
     HK_RESEND_LAST,
     HK_PP_TOGGLE,
     HK_PP_CYCLE,
+    HK_QUICK_MESSAGES[0],
+    HK_QUICK_MESSAGES[1],
+    HK_QUICK_MESSAGES[2],
+    HK_QUICK_MESSAGES[3],
+    HK_QUICK_MESSAGES[4],
+    HK_QUICK_MESSAGES[5],
+    HK_QUICK_MESSAGES[6],
+    HK_QUICK_MESSAGES[7],
     HK_RUNTIME_TOGGLE,
 ];
 
@@ -401,7 +413,8 @@ fn named_list_from(
     } else {
         HotkeyMode::Toggle
     };
-    vec![
+    let quick = &settings.assistant.companion.quick_messages;
+    let mut list = vec![
         (
             HK_ASSISTANT,
             settings.assistant.hotkey.clone(),
@@ -427,7 +440,16 @@ fn named_list_from(
             settings.cycle_post_processing_hotkey.clone(),
             HotkeyMode::Toggle,
         ),
-    ]
+    ];
+    // 快捷消息：第 n 条占固定槽位 quick-message-n；没有这条或没绑热键时为空（不注册）。
+    list.extend(HK_QUICK_MESSAGES.iter().enumerate().map(|(i, id)| {
+        (
+            *id,
+            quick.get(i).map(|m| m.hotkey.clone()).unwrap_or_default(),
+            HotkeyMode::Toggle,
+        )
+    }));
+    list
 }
 
 /// 从配置取出应用级具名热键（独立于 runtime 生命周期）。

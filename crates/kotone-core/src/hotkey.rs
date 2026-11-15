@@ -31,6 +31,22 @@ pub const HK_ASSISTANT: &str = "assistant";
 /// 应用级热键：启动 / 停止 Kotone 运行时。与其它具名热键不同，它在 runtime
 /// 未运行（主热键未注册）时也必须生效——否则「启动」永远按不到。
 pub const HK_RUNTIME_TOGGLE: &str = "runtime-toggle";
+/// 陪玩快捷消息的固定槽位：第 n 条快捷消息（`assistant.companion.quickMessages[n-1]`）。
+pub const HK_QUICK_MESSAGES: [&str; crate::assistant::MAX_QUICK_MESSAGES] = [
+    "quick-message-1",
+    "quick-message-2",
+    "quick-message-3",
+    "quick-message-4",
+    "quick-message-5",
+    "quick-message-6",
+    "quick-message-7",
+    "quick-message-8",
+];
+
+/// 快捷消息槽位 id → 下标。
+pub fn quick_message_slot(id: &str) -> Option<usize> {
+    HK_QUICK_MESSAGES.iter().position(|slot| *slot == id)
+}
 
 /// 热键事件源端口（core）：Windows 低层键鼠钩子与 RegisterHotKey 是两种实现。
 ///

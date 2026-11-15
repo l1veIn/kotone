@@ -82,6 +82,38 @@ pub struct GameProfile {
     /// 尊重删除、不复活（见 ensure_builtin_in）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub removed_builtin_hotwords: Vec<String>,
+    /// 陪玩的游戏说明（可选自由文本，写进提示词），例如“LoL 聊天在左下角，[队伍] 前缀是队友”。
+    /// 游戏适配写在这里，而不是给每个游戏写死规则。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub companion_notes: String,
+    /// 聊天框在窗口客户区里的位置（0..1 的比例），由陪玩时模型回报后记录；None = 整窗识别。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_region: Option<ChatRegion>,
+}
+
+/// 窗口客户区内的相对区域（左上原点，均为 0..=1 的比例）。
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatRegion {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl ChatRegion {
+    pub fn validate(&self) -> Result<(), String> {
+        let ok = |v: f64| v.is_finite() && (0.0..=1.0).contains(&v);
+        if !(ok(self.x) && ok(self.y) && ok(self.width) && ok(self.height))
+            || self.width < 0.02
+            || self.height < 0.02
+            || self.x + self.width > 1.0001
+            || self.y + self.height > 1.0001
+        {
+            return Err("聊天框区域必须在窗口范围内（0 到 1 的比例）".into());
+        }
+        Ok(())
+    }
 }
 
 impl GameProfile {
@@ -454,6 +486,10 @@ pub fn validate_profile(profile: &GameProfile) -> Result<(), String> {
         return Err("profile id 只能包含 ASCII 字母、数字、连字符和下划线".into());
     }
     bounded("profile 显示名", &profile.display_name, 128, false)?;
+    bounded("陪玩说明", &profile.companion_notes, 500, true)?;
+    if let Some(region) = &profile.chat_region {
+        region.validate()?;
+    }
     if profile.process_names.len() > 64 {
         return Err("进程名不能超过 64 个".into());
     }

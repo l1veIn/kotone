@@ -36,7 +36,7 @@ fn models_root(settings: &Settings) -> PathBuf {
 }
 
 /// 校验结果按 (大小, 修改时间) 缓存，列清单时不必每次重算全部哈希。
-fn verifier() -> &'static Verifier {
+pub(crate) fn verifier() -> &'static Verifier {
     static VERIFIER: std::sync::OnceLock<Verifier> = std::sync::OnceLock::new();
     VERIFIER.get_or_init(Verifier::new)
 }

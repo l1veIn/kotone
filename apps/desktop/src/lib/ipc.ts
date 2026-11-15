@@ -27,6 +27,8 @@ import type {
   CatalogModel,
   CatalogDeleteOutcome,
   ModelCategory,
+  CompanionCheck,
+  CompanionStatus,
   HistoryRecord,
   HotwordMergeReport,
   ElevationStatus,
@@ -453,6 +455,26 @@ export async function getCatalogInstallGuide(category: ModelCategory, id: string
 export async function openCatalogModelDir(category: ModelCategory, id: string): Promise<void> {
   if (!isTauri) return browserMock.openCatalogModelDir(category, id);
   return invoke<void>("open_catalog_model_dir", { category, id });
+}
+
+// ---------- Kotone 陪玩 ----------
+
+/** 对陪玩所选的 AI 连接跑能力自检（两次付费请求），结果写进设置 */
+export async function companionSelfCheck(): Promise<CompanionCheck> {
+  if (!isTauri) return browserMock.companionSelfCheck();
+  return invoke<CompanionCheck>("companion_self_check");
+}
+
+/** 陪玩是否可用：AI 连接 / 自检 / OCR 模型 / 快捷消息 / profile */
+export async function companionStatus(): Promise<CompanionStatus> {
+  if (!isTauri) return browserMock.companionStatus();
+  return invoke<CompanionStatus>("companion_status");
+}
+
+/** 清除当前 profile 记录的聊天框位置（回到整窗识别） */
+export async function companionClearChatRegion(): Promise<void> {
+  if (!isTauri) return browserMock.companionClearChatRegion();
+  return invoke<void>("companion_clear_chat_region");
 }
 
 // ---------- 识别历史（历史记录页） ----------

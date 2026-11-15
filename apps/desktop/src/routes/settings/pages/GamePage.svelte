@@ -554,6 +554,21 @@
               </p>
             </div>
 
+            <div class="mt-4">
+              <p class="text-[10px] font-semibold tracking-wide text-white/40">陪玩说明（可选）</p>
+              <textarea
+                bind:value={draft.companionNotes}
+                rows={3}
+                maxlength={500}
+                data-testid="profile-companion-notes"
+                placeholder="写给琴音的这个游戏的说明，例如：聊天在左下角，[队伍] 前缀是队友，[全部] 是所有人"
+                class="kotone-scroll mt-2 w-full resize-y rounded-lg bg-white/8 px-2.5 py-2 text-xs leading-relaxed ring-1 ring-white/15 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/60"
+              ></textarea>
+              <p class="mt-1.5 text-[10px] text-white/35">
+                陪玩时会把这段说明连同聊天截图的文字一起交给 AI；游戏适配写在这里，不需要为每个游戏写规则。{draft.chatRegion ? "已记住聊天框位置，可在「陪玩设置」里改回整窗识别。" : ""}
+              </p>
+            </div>
+
             <button
               class="mt-4 text-[11px] text-white/45 underline-offset-2 transition hover:text-white/75 hover:underline"
               onclick={() => (showTechnical = !showTechnical)}

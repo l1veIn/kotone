@@ -88,7 +88,10 @@ export function findHotkeyConflict(settings: Settings | null, selfId: string, ke
   if (!settings || !key.trim()) return null;
   const bindings: [string, string, string][] = [
     ["record", "录制热键", settings.hotkey.key],
-    ["assistant", "提醒助手热键", settings.assistant.hotkey],
+    ["assistant", "陪玩热键", settings.assistant.hotkey],
+    ...(settings.assistant.companion?.quickMessages ?? []).map(
+      (message, index): [string, string, string] => [`quick-message-${index + 1}`, `快捷消息 ${index + 1} 热键`, message.hotkey],
+    ),
     ["channel-cycle", "频道切换热键", settings.channelCycleHotkey],
     ["resend-last", "重发最近一条热键", settings.resendLastHotkey],
     ["post-process-toggle", "文字处理开关热键", settings.togglePostProcessingHotkey],

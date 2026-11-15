@@ -11,7 +11,7 @@
   let connections = $state<ConnectionInfo[]>([]);
   let connectionError = $state("");
   const ready = $derived(!!connections.find((item) => item.id === $settingsStore?.assistant.connectionId)?.hasApiKey);
-  const tabs = [{ id: "tasks", label: "待办提醒" }, { id: "settings", label: "提醒设置" }] as const;
+  const tabs = [{ id: "tasks", label: "待办提醒" }, { id: "settings", label: "陪玩设置" }] as const;
 
   onMount(() => {
     let disposed = false;
@@ -22,8 +22,8 @@
 </script>
 
 <div class="assistant-page px-6 py-5" data-testid="assistant-page">
-  <h1 class="text-lg font-bold">提醒助手</h1>
-  <nav class="mt-4 flex flex-wrap gap-1.5" aria-label="提醒助手分类">
+  <h1 class="text-lg font-bold">Kotone 陪玩</h1>
+  <nav class="mt-4 flex flex-wrap gap-1.5" aria-label="陪玩分类">
     {#each tabs as tab}
       {@const active = section === tab.id}
       <button type="button" data-testid={`assistant-nav-${tab.id}`} aria-current={active ? "page" : undefined}
