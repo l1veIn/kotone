@@ -7,6 +7,7 @@ mod compatibility;
 mod diagnostics;
 mod hotkey;
 mod model_catalog;
+mod ocr_engines;
 mod overlay;
 mod runtime;
 mod speech_models;
@@ -2019,6 +2020,7 @@ pub fn run() {
             app.manage(overlay::OverlayManager::default());
             app.manage(assistant_runtime);
             app.manage(speech_models::SpeechModelManager::default());
+            app.manage(ocr_engines::OcrEngines::new(app.handle()));
             assistant::start(app.handle());
             // 可选本机工具服务：独立于 ASR 运行时，只在启动时读取开关（docs/tool-service.md）
             let tool_service_enabled = settings.read().unwrap().tool_service.enabled;

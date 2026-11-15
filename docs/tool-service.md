@@ -43,7 +43,7 @@ kotone-cli tools status
 
 `KOTONE_TOOL_SERVICE_DIR` 环境变量可覆盖运行目录，仅供自动化测试；正常使用不需要设置。
 
-在线 OCR 另有一个开关（默认未启用，见 [§8](#8-ocr-后端与安装)）：
+在线 OCR 默认未启用（见 [§8](#8-ocr-后端与安装)）。推荐在设置页「高级 → 模型 → 文字识别」给 DeepSeek OCR 选一条连接（立即生效）；旧的命令行开关仍然有效：
 
 ```powershell
 # 先从托盘退出 Kotone；连接（含 API key）需已在设置页的“连接”中添加
@@ -160,7 +160,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `models.download` | `id`、可选 `category` | 受理即返回 `status=started`；进度 `model.download.progress`（至多每秒一次），结果 `model.download.finished` / `model.download.failed`（取消时 `cancelled=true`；OCR / TTS 的事件带 `category`）。镜像优先、断点续传、逐文件 SHA-256、先查磁盘空间；全应用（三个类别）同时只有一个下载 |
 | `models.download.cancel` | 无 | `requested`（是否有下载在进行）；保留临时文件以便续传 |
 | `models.delete` | `id`、可选 `category` | `wasActive`（删的是活动模型时回退默认；TTS 删除 Kokoro 时改回系统语音） |
-| `models.activate` | `modelId`；`asr` 还需 `engineId`；可选 `category` | `asr`：运行时状态（运行中会 `restartNeeded`，`runtime.start` 重启生效）。`ocr`：陪玩流程与不指定后端的 `ocr.recognize` 所用模型；`tts`：播报引擎。本地模型须先下载，在线模型可先选后配；返回 `{category, activeModelId}` |
+| `models.activate` | `modelId`；`asr` 还需 `engineId`；可选 `category` | `asr`：运行时状态（运行中会 `restartNeeded`，`runtime.start` 重启生效）。`ocr`：陪玩流程所用模型（`ocr.recognize` 仍须显式指定后端）；`tts`：播报引擎。本地模型须先下载，在线模型可先选后配；返回 `{category, activeModelId}` |
 | `models.dir.set` | `dir`（空 = 默认 `~/.kotone/models`） | `dir`、`moved[]`、`failed[]`；运行时运行中或下载中拒绝。选目录前先问用户 |
 | `models.install_guide` | `id`、可选 `category` | 自动下载失败时的手动安装指引（OCR 包在设置页「导入」时仍逐文件校验） |
 
@@ -230,18 +230,36 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 
 ## 8. OCR 后端与安装
 
-两个后端可插拔、互不降级：调用方在 `ocr.recognize` 中必须显式选择 `backend`；本地失败不会改走在线，在线失败也不会改走本地。`ocr.backends` 返回每个后端的真实状态（会读取模型文件做哈希校验、读取凭据库判断 key 是否存在，但不返回 key）。
+OCR 模型与 ASR、TTS 同在统一模型清单（`models.list {"category": "ocr"}`，设置页「高级 → 模型 → 文字识别」）：每个本地包和 DeepSeek 在线条目各对应一个后端，清单条目的 `engineId` 就是 `ocr.backends` / `ocr.recognize` 的后端 ID。后端可插拔、互不降级：调用方在 `ocr.recognize` 中必须显式选择 `backend`；本地失败不会改走在线，在线失败也不会改走本地。`ocr.backends` 返回每个后端的真实状态（会读取模型文件做哈希校验、读取凭据库判断 key 是否存在，但不返回 key）。清单里“当前 OCR 模型”（`models.activate {"category": "ocr"}`，配置 `ocr.activeModelId`；为空时取第一个已安装的本地包，不会自动选在线）只决定陪玩流程用哪个，不改变 `ocr.recognize` 必须显式指定后端的约定。
 
-### 8.1 本地：`local-ppocrv5-korean`
+### 8.1 本地：PP-OCRv5 各语种包
+
+| 模型 ID | 后端 ID | 语言（`language`，首个为缺省） | 大小 |
+| --- | --- | --- | --- |
+| `ppocrv5-ch-mobile`（推荐） | `local-ppocrv5-ch` | `zh` `zh-Hant` `ja` `en` | 21.5 MB |
+| `ppocrv5-ch-server` | `local-ppocrv5-ch-server` | `zh` `zh-Hant` `ja` `en` | 172.7 MB |
+| `ppocrv5-korean-mobile` | `local-ppocrv5-korean` | `ko` | 18.3 MB |
+| `ppocrv5-en-mobile` | `local-ppocrv5-en` | `en` | 12.7 MB |
+| `ppocrv5-latin-mobile` | `local-ppocrv5-latin` | `en` `fr` `de` `es` | 12.7 MB |
+| `ppocrv5-cyrillic-mobile` | `local-ppocrv5-cyrillic` | `ru` `uk` | 12.9 MB |
+| `ppocrv5-eslav-mobile` | `local-ppocrv5-eslav` | `ru` `uk` | 12.7 MB |
+| `ppocrv5-th-mobile` | `local-ppocrv5-th` | `th` | 12.7 MB |
+| `ppocrv5-el-mobile` | `local-ppocrv5-el` | `el` | 12.7 MB |
+| `ppocrv5-arabic-mobile` | `local-ppocrv5-arabic` | `ar`（按从右往左的阅读顺序还原，一个词一个框） | 12.8 MB |
+| `ppocrv5-devanagari-mobile` | `local-ppocrv5-devanagari` | `hi` | 12.8 MB |
+| `ppocrv5-ta-mobile` | `local-ppocrv5-ta` | `ta` | 12.7 MB |
+| `ppocrv5-te-mobile` | `local-ppocrv5-te` | `te` | 12.7 MB |
+
+语言列只写 2026-11-15 用渲染的聊天样例实测过的语种（结果见[陪玩与统一模型管理实现记录](research/2026-11-15-companion-implementation.md)）；越南文在所有包上都识别不好，不在支持范围。
 
 | 项目 | 内容 |
 | --- | --- |
-| 模型 | PP-OCRv5 mobile：检测 `ch_PP-OCRv5_det_mobile.onnx`（4,819,576 字节，SHA-256 `4d97c44a20d30a81aad087d6a396b08f786c4635742afc391f6621f5c6ae78ae`）+ 韩文识别 `korean_PP-OCRv5_rec_mobile.onnx`（13,488,748 字节，SHA-256 `cd6e2ea50f6943ca7271eb8c56a877a5a90720b7047fe9c41a2e541a25773c9b`）；字符表内嵌于识别模型 metadata |
+| 模型 | 每个包 = 检测（`ch_PP-OCRv5_det_mobile.onnx`，server 包用 `ch_PP-OCRv5_det_server.onnx`）+ 该语种识别模型；全部文件的大小与 SHA-256 写在 `crates/kotone-ocr/src/manifest.rs`，写入前已实际下载复核。字符表内嵌于识别模型 metadata `character` |
 | 来源 / 许可 | PaddleOCR PP-OCRv5（Apache-2.0）的 ONNX 导出，RapidAI/RapidOCR v3.10.0（Apache-2.0）在 ModelScope 发布：`https://www.modelscope.cn/models/RapidAI/RapidOCR`（标签 v3.10.0） |
 | 运行时 | ONNX Runtime 1.27.1 C API（CPU，intra-op 4 线程、inter-op 1），来自 sherpa-onnx v1.13.5 静态预编译包，与 ASR 共用、**不新增 DLL 或 Python 环境**；没有该运行时的构建报告 `runtime-unavailable` |
-| 安装 | `kotone-cli ocr install`（显式下载约 18.3 MB，或 `--from-dir` 离线复制）→ `<模型根>/ocr/ppocrv5-korean-mobile/`（模型根同 ASR：`models.dir` 或 `~/.kotone/models`）。逐文件写临时文件、校验大小与 SHA-256 后原子发布；校验失败不留下任何文件 |
+| 安装 | 设置页「模型 → 文字识别」、`models.download {"category": "ocr", "id": …}`（镜像优先、断点续传，与 ASR 共用下载名额）或 `kotone-cli ocr install --model <id>`（`--from-dir` 离线复制；不带 `--model` 为韩文包）→ `<模型根>/ocr/<模型 ID>/`（模型根同 ASR：`models.dir` 或 `~/.kotone/models`）。逐文件校验大小与 SHA-256 后才发布；校验失败不留下任何文件。设置页「导入」从用户选的文件夹复制并同样校验 |
 | 就绪检查 | `kotone-cli ocr status` 与 `ocr.backends`：文件存在、大小、SHA-256（按大小+修改时间缓存）；首次识别时把模型读入内存**再校验一次同一份字节**后创建会话，并用空输入自检输出类别数与字符表一致。安装后无需重启桌面端 |
-| 语言 | 仅 `ko`（缺省）；其他语言 `OCR_LANGUAGE_UNSUPPORTED`。韩文识别模型对拉丁字母/数字的覆盖以其字符表为限 |
+| 语言 | 见上表，不传时用包的缺省语言；其他语言 `OCR_LANGUAGE_UNSUPPORTED`。各识别模型对拉丁字母 / 数字的覆盖以其字符表为限 |
 | 选项 | `minConfidence`（0–1，缺省不过滤，被丢弃的行数写入 warnings）、`detLimitSideLen`（32–1536，缺省 736）；其他键 `OCR_OPTION_UNSUPPORTED` |
 | 输出 | `line` 粒度、轴对齐行框（DB 检测，输入产物像素）；`confidence` 为识别器对解码字符的最大 softmax 概率均值——是识别器自报分数，**不是**语义或翻译正确率，没有解码字符时为 null |
 | 计时 | `timing.ocrMs`，冷启动另有 `modelLoadMs`（`coldStart=true`），以及 `detMs`/`recMs` |
@@ -252,7 +270,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 
 | 项目 | 内容 |
 | --- | --- |
-| 启用 | 默认 `not-configured`。用户执行 `config set toolService.ocr.deepseekConnectionId <连接ID>` 并重启桌面端后才可能就绪；Agent 不能通过参数改选连接或端点 |
+| 启用 | 默认 `not-configured`。在统一模型清单里给 `deepseek-ocr` 绑定一条连接（设置页「模型 → 文字识别」，或 `settings.update {"modelConfigs": {"deepseek-ocr": {"connection": "<连接ID>"}}}`）后立即可用；旧的 `toolService.ocr.deepseekConnectionId` 仍然有效（清单配置优先）。`ocr.recognize` 不能通过参数改选连接或端点 |
 | 凭据 | 复用连接目录（`base_url`）与系统凭据库（API key）；缺 key → `credentials-missing`，读取失败 → `credentials-error` |
 | 端点 | 由连接地址推导 `…/v1/tools/ocr`（去掉末尾 `/v1` 后追加）；只接受 https（测试用 loopback http 除外） |
 | 外发 | 只上传所选产物的 PNG 字节与 `purpose` 字段（multipart 两个字段）；不上传窗口标题、帧信息、聊天历史或其他图像 |

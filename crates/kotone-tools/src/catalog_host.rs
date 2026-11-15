@@ -183,7 +183,7 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_MODELS_ACTIVATE,
-            description: "Select the active model of a category. asr (default): make it the active speech-recognition model for engineId (required; also selects that engine) — a running runtime reports restartNeeded, call runtime.start to restart with it; returns the runtime status. ocr: the model the companion flow and ocr.recognize (without backend) use. tts: the speech engine for spoken answers and reminders. Local models must be downloaded first; online ones may be selected before configuring. ocr/tts return {category, activeModelId}.",
+            description: "Select the active model of a category. asr (default): make it the active speech-recognition model for engineId (required; also selects that engine) — a running runtime reports restartNeeded, call runtime.start to restart with it; returns the runtime status. ocr: the model the companion flow uses (ocr.recognize still names its backend explicitly). tts: the speech engine for spoken answers and reminders. Local models must be downloaded first; online ones may be selected before configuring. ocr/tts return {category, activeModelId}.",
             side_effects: &["writes-settings"],
             egress: "none",
             input: object(&["modelId"], json!({"engineId": id("引擎 id（asr 必填；stt.engines / models.list 的 engineId）"), "modelId": id("模型 id"), "category": category()})),

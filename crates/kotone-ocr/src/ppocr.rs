@@ -314,6 +314,23 @@ pub fn sort_boxes(boxes: &mut [DetBox]) {
     }
 }
 
+/// 从右往左书写的文字：行的划分与 [`sort_boxes`] 相同，行内按右边缘从右到左排列（阅读顺序）。
+pub fn sort_boxes_rtl(boxes: &mut [DetBox]) {
+    boxes.sort_by_key(|b| b.y0);
+    let mut line = 0u32;
+    let mut keyed: Vec<(u32, std::cmp::Reverse<u32>, DetBox)> = Vec::with_capacity(boxes.len());
+    for (i, b) in boxes.iter().enumerate() {
+        if i > 0 && b.y0.saturating_sub(boxes[i - 1].y0) >= 10 {
+            line += 1;
+        }
+        keyed.push((line, std::cmp::Reverse(b.x1), *b));
+    }
+    keyed.sort_by_key(|(l, x, _)| (*l, *x));
+    for (slot, (_, _, b)) in boxes.iter_mut().zip(keyed) {
+        *slot = b;
+    }
+}
+
 /// 识别裁剪区域（填充后图像坐标）：宽高取框边长（与透视裁剪对轴对齐框等价）。
 pub fn crop_region(b: &DetBox) -> (u32, u32, u32, u32) {
     (b.x0, b.y0, (b.x1 - b.x0).max(1), (b.y1 - b.y0).max(1))
@@ -340,6 +357,30 @@ pub fn rec_tensor(image: Rgba<'_>, regions: &[(u32, u32, u32, u32)]) -> (Vec<f32
         });
     }
     (out, width)
+}
+
+/// 从右往左书写的文字（阿拉伯字母）：识别模型按图像从左到右输出字符，需要还原为
+/// 阅读顺序。与 PaddleOCR `BaseRecLabelDecode.pred_reverse` 相同：拉丁字母、数字与常见
+/// 符号的连续片段保持原样，其余字符逐个作为片段，然后整体倒序拼接。
+pub fn reverse_rtl(text: &str) -> String {
+    let keeps = |c: char| c.is_ascii_alphanumeric() || " :*./%+-".contains(c);
+    let mut parts: Vec<String> = Vec::new();
+    let mut run = String::new();
+    for c in text.chars() {
+        if keeps(c) {
+            run.push(c);
+        } else {
+            if !run.is_empty() {
+                parts.push(std::mem::take(&mut run));
+            }
+            parts.push(c.to_string());
+        }
+    }
+    if !run.is_empty() {
+        parts.push(run);
+    }
+    parts.reverse();
+    parts.concat()
 }
 
 /// CTC 贪心解码一条序列。`probs` 为 [T, C]，`dict` 为模型字符表（不含 blank/空格）。
@@ -383,6 +424,15 @@ pub fn ctc_decode(probs: &[f32], classes: usize, dict: &[String]) -> (String, Op
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn right_to_left_text_is_restored_to_reading_order() {
+        // 模型按图像从左到右输出“التنين”的字符：نينتلا
+        assert_eq!(reverse_rtl("نينتلا"), "التنين");
+        // 数字与拉丁字母片段保持内部顺序
+        assert_eq!(reverse_rtl("ab12 ن"), "نab12 ");
+        assert_eq!(reverse_rtl(""), "");
+    }
 
     fn rgba(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 4]) -> Vec<u8> {
         let mut px = Vec::new();

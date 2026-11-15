@@ -1,4 +1,7 @@
-//! 本地韩文 OCR 后端：PP-OCRv5 mobile（检测 + 韩文识别），ONNX Runtime CPU 推理。
+//! 本地 OCR 后端：PP-OCRv5（检测 + 按语种分包的识别模型），ONNX Runtime CPU 推理。
+//!
+//! 每个模型包（[`crate::manifest::PACKAGES`]）对应一个后端实例，后端 ID 取自清单；
+//! `LocalKoreanOcr` 是韩文包的旧名字，保留兼容。
 //!
 //! - 模型按 [`crate::manifest::KOREAN_MOBILE`] 安装在用户模型目录；就绪检查逐文件核对
 //!   大小与 SHA-256，加载时对内存中的同一份字节再次校验后才创建会话。
@@ -24,6 +27,7 @@ use crate::install::{PackageState, Verifier};
 use crate::manifest::{ModelPackage, KOREAN_MOBILE};
 use crate::ppocr::{self, DetParams, Rgba};
 
+/// 韩文包的后端 ID（M2 起的旧常量，保留兼容）。
 pub const BACKEND_ID: &str = "local-ppocrv5-korean";
 const INTRA_THREADS: i32 = 4;
 const INTER_THREADS: i32 = 1;
@@ -43,7 +47,7 @@ struct Loaded {
     classes: usize,
 }
 
-pub struct LocalKoreanOcr {
+pub struct LocalPpOcr {
     dir: PathBuf,
     package: ModelPackage,
     verifier: Verifier,
@@ -60,7 +64,7 @@ struct LocalOptions {
     det_limit_side_len: u32,
 }
 
-fn parse_options(options: &Value) -> Result<LocalOptions, OcrError> {
+fn parse_options(backend_id: &str, options: &Value) -> Result<LocalOptions, OcrError> {
     let mut out = LocalOptions {
         min_confidence: None,
         det_limit_side_len: DetParams::default().limit_side_len,
@@ -99,7 +103,7 @@ fn parse_options(options: &Value) -> Result<LocalOptions, OcrError> {
                 return Err(OcrError::UnsupportedOption {
                     option: other.into(),
                     message: format!(
-                        "{BACKEND_ID} 不支持该选项（支持 minConfidence、detLimitSideLen）"
+                        "{backend_id} 不支持该选项（支持 minConfidence、detLimitSideLen）"
                     ),
                 })
             }
@@ -139,7 +143,10 @@ pub(crate) fn det_dims(width: u32, height: u32, limit: u32) -> (u32, u32) {
     (dw, dh)
 }
 
-impl LocalKoreanOcr {
+/// 旧名字：韩文包的本地后端。
+pub type LocalKoreanOcr = LocalPpOcr;
+
+impl LocalPpOcr {
     /// `dir` 为模型包目录（`<模型根>/ocr/ppocrv5-korean-mobile`）。
     pub fn new(dir: PathBuf) -> Self {
         Self::with_package(dir, KOREAN_MOBILE)
@@ -193,9 +200,14 @@ impl LocalKoreanOcr {
             reason: "invalid".into(),
             message,
         };
-        let not_installed = |message: String| OcrError::NotReady {
+        let not_installed = |message: String| {
+            OcrError::NotReady {
             reason: "not-installed".into(),
-            message: format!("{message}；请运行 `kotone-cli ocr install` 安装本地韩文 OCR 模型"),
+            message: format!(
+                "{message}；请在设置「高级 → 模型 → 文字识别」下载 {}，或运行 `kotone-cli ocr install --model {}`",
+                self.package.display_name, self.package.id
+            ),
+        }
         };
         let mut bytes = Vec::new();
         for role in ["det", "rec"] {
@@ -247,9 +259,9 @@ fn terminated(cancel: &OcrCancel, deadline: Instant, message: String) -> OcrErro
     }
 }
 
-impl OcrBackend for LocalKoreanOcr {
+impl OcrBackend for LocalPpOcr {
     fn id(&self) -> &str {
-        BACKEND_ID
+        self.package.backend_id
     }
 
     fn kind(&self) -> OcrBackendKind {
@@ -265,13 +277,17 @@ impl OcrBackend for LocalKoreanOcr {
             (Ok(_), PackageState::NotInstalled) => (
                 false,
                 "not-installed".to_string(),
-                Some("本地韩文 OCR 模型未安装；运行 `kotone-cli ocr install`".to_string()),
+                Some(format!(
+                    "本地 OCR 模型 {} 未安装；在设置「高级 → 模型 → 文字识别」下载，或运行 `kotone-cli ocr install --model {}`",
+                    self.package.display_name, self.package.id
+                )),
             ),
             (Ok(_), PackageState::Invalid(m)) => (
                 false,
                 "invalid".to_string(),
                 Some(format!(
-                    "模型文件校验失败：{m}；运行 `kotone-cli ocr install` 重新安装"
+                    "模型文件校验失败：{m}；请重新下载（设置页或 `kotone-cli ocr install --model {}`）",
+                    self.package.id
                 )),
             ),
         };
@@ -288,7 +304,7 @@ impl OcrBackend for LocalKoreanOcr {
             })
             .collect();
         OcrBackendInfo {
-            id: BACKEND_ID.into(),
+            id: self.package.backend_id.into(),
             kind: OcrBackendKind::Local,
             display_name: self.package.display_name.into(),
             ready,
@@ -300,7 +316,7 @@ impl OcrBackend for LocalKoreanOcr {
                 .iter()
                 .map(|s| s.to_string())
                 .collect(),
-            default_language: "ko".into(),
+            default_language: self.package.default_language.into(),
             data_egress: "none".into(),
             options_schema: options_schema(),
             details: json!({
@@ -328,12 +344,12 @@ impl OcrBackend for LocalKoreanOcr {
                 "granularity": ["line"],
                 "geometry": "axis-aligned line boxes from the DB detector, in input-artifact physical pixels",
                 "confidence": CONFIDENCE_SEMANTICS,
-                "install": "kotone-cli ocr install",
+                "install": format!("settings page (models → OCR) or kotone-cli ocr install --model {}", self.package.id),
                 "fallback": "none: this backend never falls back to an online backend",
                 "knownLimits": [
                     "detector boxes are axis-aligned (horizontal text); rotated text gets loose boxes",
                     "text direction classifier is not used",
-                    "Korean recognizer; Latin letters and digits are recognised only as far as the Korean model's character set covers them"
+                    format!("recognizer for {:?}; other scripts are recognised only as far as this model's character set covers them", self.package.languages)
                 ]
             }),
         }
@@ -357,7 +373,7 @@ impl OcrBackend for LocalKoreanOcr {
                     .collect(),
             });
         }
-        let options = parse_options(&params.options)?;
+        let options = parse_options(self.package.backend_id, &params.options)?;
         if input.width == 0 || input.height == 0 {
             return Err(OcrError::InvalidInput("空图像".into()));
         }
@@ -384,7 +400,7 @@ impl OcrBackend for LocalKoreanOcr {
 }
 
 #[cfg(feature = "onnx")]
-impl LocalKoreanOcr {
+impl LocalPpOcr {
     fn recognize_onnx(
         &self,
         input: &OcrInput<'_>,
@@ -438,6 +454,9 @@ impl LocalKoreanOcr {
         }
         let mut boxes =
             ppocr::db_postprocess(&out.data, dw, dh, image.width, image.height, &det_params);
+        if self.package.right_to_left {
+            ppocr::sort_boxes_rtl(&mut boxes);
+        }
         phases.push((
             "detMs".to_string(),
             det_started.elapsed().as_millis() as u64,
@@ -500,11 +519,16 @@ impl LocalKoreanOcr {
             }
             let per = out.data.len() / batch.len();
             for (n, &i) in chunk.iter().enumerate() {
-                decoded[i] = ppocr::ctc_decode(
+                let (text, conf) = ppocr::ctc_decode(
                     &out.data[n * per..(n + 1) * per],
                     model.classes,
                     &model.dict,
                 );
+                decoded[i] = if self.package.right_to_left {
+                    (ppocr::reverse_rtl(&text), conf)
+                } else {
+                    (text, conf)
+                };
             }
         }
         phases.push((
@@ -579,8 +603,17 @@ mod tests {
 
     #[test]
     fn options_are_validated_and_unknown_rejected() {
-        assert_eq!(parse_options(&Value::Null).unwrap().det_limit_side_len, 736);
-        let ok = parse_options(&json!({"minConfidence": 0.4, "detLimitSideLen": 960})).unwrap();
+        assert_eq!(
+            parse_options(BACKEND_ID, &Value::Null)
+                .unwrap()
+                .det_limit_side_len,
+            736
+        );
+        let ok = parse_options(
+            BACKEND_ID,
+            &json!({"minConfidence": 0.4, "detLimitSideLen": 960}),
+        )
+        .unwrap();
         assert_eq!(ok.det_limit_side_len, 960);
         for bad in [
             json!({"minConfidence": 2}),
@@ -589,7 +622,7 @@ mod tests {
             json!([1]),
         ] {
             assert!(matches!(
-                parse_options(&bad),
+                parse_options(BACKEND_ID, &bad),
                 Err(OcrError::UnsupportedOption { .. })
             ));
         }
@@ -686,5 +719,107 @@ mod tests {
             "{err:?}"
         );
         assert!(crate::ort::runtime_version().unwrap().starts_with("1."));
+    }
+
+    /// 多语种包的接入复核（docs/research/2026-11-15-companion-implementation.md）：
+    /// 从显式目录加载每个识别模型（字符表必须在 ONNX 元数据 `character` 里、输出类别数自检），
+    /// 再识别渲染好的聊天样例并打印结果。普通测试不运行，不下载任何东西。
+    /// `KOTONE_OCR_VERIFY_DIR`：平铺存放 15 个 .onnx；`KOTONE_OCR_VERIFY_SAMPLES`：<lang>.png + <lang>.txt。
+    #[cfg(feature = "onnx")]
+    #[test]
+    #[ignore = "requires KOTONE_OCR_VERIFY_DIR and KOTONE_OCR_VERIFY_SAMPLES"]
+    fn verify_multilingual_packages_on_rendered_samples() {
+        let models = std::path::PathBuf::from(std::env::var_os("KOTONE_OCR_VERIFY_DIR").unwrap());
+        let samples =
+            std::path::PathBuf::from(std::env::var_os("KOTONE_OCR_VERIFY_SAMPLES").unwrap());
+        let mut images = Vec::new();
+        for entry in std::fs::read_dir(&samples).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("png") {
+                continue;
+            }
+            let decoder = png::Decoder::new(std::fs::File::open(&path).unwrap());
+            let mut reader = decoder.read_info().unwrap();
+            let mut buf = vec![0; reader.output_buffer_size()];
+            let info = reader.next_frame(&mut buf).unwrap();
+            let rgba: Vec<u8> = match info.color_type {
+                png::ColorType::Rgba => buf[..info.buffer_size()].to_vec(),
+                png::ColorType::Rgb => buf[..info.buffer_size()]
+                    .chunks(3)
+                    .flat_map(|c| [c[0], c[1], c[2], 255])
+                    .collect(),
+                other => panic!("unsupported {other:?}"),
+            };
+            let name = path.file_stem().unwrap().to_string_lossy().into_owned();
+            let expected = std::fs::read_to_string(path.with_extension("txt")).unwrap();
+            images.push((name, info.width, info.height, rgba, expected));
+        }
+        images.sort_by(|a, b| a.0.cmp(&b.0));
+        let only = std::env::var("KOTONE_OCR_VERIFY_ONLY").unwrap_or_default();
+        for package in crate::manifest::PACKAGES {
+            if !only.is_empty() && !package.id.contains(only.as_str()) {
+                continue;
+            }
+            let backend = LocalPpOcr::with_package(models.clone(), *package);
+            let info = backend.info();
+            assert_eq!(info.state, "ready", "{}: {:?}", package.id, info.reason);
+            let (loaded, _, load_ms) = backend
+                .load(
+                    &OcrCancel::new(),
+                    Instant::now() + std::time::Duration::from_secs(120),
+                )
+                .unwrap_or_else(|e| panic!("{}: {e:?}", package.id));
+            println!(
+                "== {} dict={} classes={} load={}ms",
+                package.id,
+                loaded.dict.len(),
+                loaded.classes,
+                load_ms
+            );
+            for (name, width, height, rgba, expected) in &images {
+                let input = OcrInput {
+                    width: *width,
+                    height: *height,
+                    rgba,
+                    png: &[],
+                };
+                let started = Instant::now();
+                let output = backend
+                    .recognize(
+                        &input,
+                        &OcrParams {
+                            language: package.default_language.into(),
+                            options: Value::Null,
+                        },
+                        &OcrCancel::new(),
+                        Instant::now() + std::time::Duration::from_secs(120),
+                    )
+                    .unwrap();
+                let got: Vec<String> = output.observations.iter().map(|o| o.text.clone()).collect();
+                let want: Vec<char> = expected.chars().filter(|c| !c.is_whitespace()).collect();
+                let have: Vec<char> = got
+                    .concat()
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+                // 字符级编辑距离 → 字符准确率（只用于本次接入判断，不是产品准确率）
+                let mut prev: Vec<usize> = (0..=have.len()).collect();
+                for (i, a) in want.iter().enumerate() {
+                    let mut cur = vec![i + 1; have.len() + 1];
+                    for (j, b) in have.iter().enumerate() {
+                        cur[j + 1] = (prev[j] + usize::from(a != b))
+                            .min(prev[j + 1] + 1)
+                            .min(cur[j] + 1);
+                    }
+                    prev = cur;
+                }
+                let accuracy = 1.0 - prev[have.len()] as f64 / want.len().max(1) as f64;
+                println!(
+                    "  {name:<4} acc={accuracy:>5.2} {}ms {:?}",
+                    started.elapsed().as_millis(),
+                    got
+                );
+            }
+        }
     }
 }

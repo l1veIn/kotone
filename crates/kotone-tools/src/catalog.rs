@@ -715,8 +715,8 @@ fn base_tool_specs(limits: &ServiceLimits, readiness: &Readiness) -> Vec<Value> 
                 "additionalProperties": false,
                 "properties": {
                     "artifactId": artifact_id_schema(),
-                    "backend": {"type": "string", "description": "ocr.backends 返回的后端 ID，如 local-ppocrv5-korean / deepseek-ocr"},
-                    "language": {"type": "string", "description": "缺省为后端默认语言（本地 ko，在线 auto）；不支持时返回 OCR_LANGUAGE_UNSUPPORTED"},
+                    "backend": {"type": "string", "description": "ocr.backends 返回的后端 ID，如 local-ppocrv5-ch / local-ppocrv5-korean / deepseek-ocr（统一模型清单 models.list {category: ocr} 的 engineId）"},
+                    "language": {"type": "string", "description": "缺省为后端默认语言（ocr.backends 的 defaultLanguage，例如 local-ppocrv5-korean 为 ko、local-ppocrv5-ch 为 zh、在线为 auto）；不支持时返回 OCR_LANGUAGE_UNSUPPORTED"},
                     "options": {"type": ["object", "null"], "description": "后端专属选项，见 ocr.backends 的 optionsSchema；未知选项返回 OCR_OPTION_UNSUPPORTED"}
                 }
             }),

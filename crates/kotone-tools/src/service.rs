@@ -1694,10 +1694,9 @@ impl ToolService {
             .get(&args.artifact_id)
             .map_err(|e| lookup_error(&args.artifact_id, e))?;
         let kind = backend.kind();
-        let language = args.language.unwrap_or_else(|| match kind {
-            OcrBackendKind::Local => "ko".into(),
-            OcrBackendKind::Online => "auto".into(),
-        });
+        let language = args
+            .language
+            .unwrap_or_else(|| backend.info().default_language);
         let params = OcrParams {
             language: language.clone(),
             options: args.options.clone(),

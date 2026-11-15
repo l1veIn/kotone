@@ -5,10 +5,10 @@
 //!   `system.status` 只读取当前相位用于展示。
 //! - 服务从不显示、移动或聚焦窗口；CLI 直连本服务，不会再次启动 kotone.exe。
 //! - `RunEvent::Exit` 时同步删除本实例的描述文件并停止服务。日志只记录端口与实例 ID，不记录凭证。
-//! - OCR（M2）：本地韩文 PP-OCRv5 后端读取 `<模型根>/ocr/ppocrv5-korean-mobile`（由
-//!   `kotone-cli ocr install` 安装，每次调用重新校验，安装后无需重启）；DeepSeek 在线后端
-//!   只有在 `toolService.ocr.deepseekConnectionId` 指定连接时才就绪，连接与 API key 复用
-//!   连接目录与系统凭据库（桌面内存中的设置，修改后需重启桌面端）。两者互不降级。
+//! - OCR：统一模型清单里的每个本地 PP-OCRv5 包各是一个后端，读取 `<模型根>/ocr/<模型 ID>`
+//!   （设置页或 `kotone-cli ocr install --model <id>` 安装，每次调用重新校验，安装后无需重启）；
+//!   DeepSeek 在线后端在 OCR 清单里绑定连接（旧的 `toolService.ocr.deepseekConnectionId`
+//!   仍然有效）后才就绪，API key 来自系统凭据库。本地与在线互不降级。
 //! - 应用级工具（`app.*`、`runtime.*`、`agent.reply`、`assistant.submit`）经 [`DesktopHost`]
 //!   调用桌面能力；助手入口在 `assistant.route = agent` 时经 [`submit_user_request`] 把原文
 //!   转交 Agent；运行时相位变化经 [`publish`] 发布到事件总线。
@@ -92,28 +92,17 @@ pub fn start(app: &AppHandle, enabled: bool) {
     });
 }
 
-/// 组装 OCR 后端：本地（模型目录随 settings.models.dir）与在线（按设置选择连接）。
+/// 组装 OCR 后端：统一模型清单里的全部本地包（目录随启动时的 settings.models.dir）与
+/// DeepSeek 在线后端（每次识别时按当前设置解析连接）。与陪玩流程共用同一批实例。
 fn ocr_backends(app: &AppHandle) -> Vec<Arc<dyn OcrBackend>> {
-    let models_root = app
-        .try_state::<crate::SharedState>()
-        .map(|shared| kotone_stt::model::models_dir_from(&shared.settings.read().unwrap()))
-        .unwrap_or_else(kotone_stt::model::models_dir);
-    let local = kotone_ocr::LocalKoreanOcr::new(kotone_ocr::local_model_dir(&models_root));
-    let source_app = app.clone();
-    let source: kotone_ocr::deepseek::ConnectionSource = Arc::new(move || {
-        let Some(shared) = source_app.try_state::<crate::SharedState>() else {
-            return Err("应用状态尚未就绪".into());
-        };
-        let id = kotone_ocr::catalog::deepseek_connection_id(&shared.settings.read().unwrap());
-        match id {
-            None => Ok(None),
-            Some(id) => shared.connections.resolve(&id).map(Some),
-        }
-    });
-    vec![
-        Arc::new(local),
-        Arc::new(kotone_ocr::DeepSeekOcr::new(source)),
-    ]
+    let (Some(engines), Some(shared)) = (
+        app.try_state::<crate::ocr_engines::OcrEngines>(),
+        app.try_state::<crate::SharedState>(),
+    ) else {
+        return Vec::new();
+    };
+    let settings = shared.settings.read().unwrap().clone();
+    engines.all(&settings)
 }
 
 /// 桌面宿主：把应用级工具接到真实的运行时、退出、交付与助手入口。
