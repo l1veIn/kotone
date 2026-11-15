@@ -32,6 +32,7 @@ https://github.com/user-attachments/assets/b0b9a55f-9d74-4bdc-ba55-de02883a8d7f
     <a href="#-为什么需要-kotone">为什么</a> ·
     <a href="#-三步上手">上手</a> ·
     <a href="#-功能速览">功能</a> ·
+    <a href="#-为-agent-而生">Agent</a> ·
     <a href="#-界面">界面</a> ·
     <a href="#-角色卡">角色卡</a> ·
     <a href="#-技术栈">技术栈</a> ·
@@ -103,6 +104,17 @@ https://github.com/user-attachments/assets/b0b9a55f-9d74-4bdc-ba55-de02883a8d7f
 
 <br>
 
+## 🤖 为 Agent 而生
+
+> **我们的判断：任何软件想把功能做完整，最终都会变得复杂；而复杂的软件，应该交给 Agent 使用，而不是让人类去学。所以每一个软件最后都会变成基础设施——“对 Agent 友好”是当下一切软件发展的方向。**
+
+Kotone 因此不只是一个给人点的桌面应用，也是一组给 Agent 调用的本机基础服务。人类仍可以按住热键说话、在设置页里点选；同样的能力会逐步以带 schema、可发现、结果可验证的工具开放出来，由 Agent 决定何时用、怎么组合、如何向你解释。Kotone 负责把事情确定地做完并如实报告结果；理解意图、翻译、决策交给 Agent。
+
+- **现在**：可选的本机工具服务（默认关闭，`toolService.enabled`）已提供窗口与截图、裁剪与预处理、本地韩文 OCR / 在线 OCR、聊天消息跟踪，Agent 经 `kotone-cli tools` 或 loopback HTTP 调用。见 [工具服务手册](docs/tool-service.md)。
+- **接下来**：把 Kotone 的经典业务（语音识别、文本处理、游戏发送、播报与弹幕、提醒、热键、设置、模型、历史、应用启停）全部拆成基础服务，并提供从 Kotone 主动通知 Agent 的事件通道；最终配一个 Skill 或桌宠 / Agent 插件，让 Agent 从打开 Kotone 开始就能完整驱动它。路线见 [演进计划](docs/product-evolution-game-tools.md)。
+
+<br>
+
 ## 📸 界面
 
 <table>
@@ -146,7 +158,7 @@ https://github.com/user-attachments/assets/b0b9a55f-9d74-4bdc-ba55-de02883a8d7f
 
 <samp>
 
-- **Desktop** — Tauri 2 + Rust workspace：`kotone-core`（领域与端口）、`kotone-stt`（识别适配器与模型）、`kotone-ai`（共享 AI 连接与凭据）、`kotone-tts`（本地神经语音合成与播放）、`kotone-postprocess`（文本处理器）、`kotone-platform-windows`（热键 / 注入 / 系统语音）、`kotone-cli`（[命令行前端](docs/cli.md)）
+- **Desktop** — Tauri 2 + Rust workspace：`kotone-core`（领域与端口）、`kotone-stt`（识别适配器与模型）、`kotone-ai`（共享 AI 连接与凭据）、`kotone-tts`（本地神经语音合成与播放）、`kotone-postprocess`（文本处理器）、`kotone-platform-windows`（热键 / 注入 / 系统语音 / 窗口与截图）、`kotone-tools`（[Agent 工具服务](docs/tool-service.md)）、`kotone-ocr`（本地 / 在线 OCR）、`kotone-cli`（[命令行前端](docs/cli.md)）
 - **Voice** — 默认 sherpa-onnx · X-ASR · Silero VAD 本地识别链路；在线 ASR 按需选择；播报默认系统 SAPI，可选 Kokoro INT8 复用 sherpa-onnx
 - **UI** — Svelte 5 + Tailwind CSS，深色电竞主题
 
@@ -163,8 +175,10 @@ crates/kotone-stt       识别适配器、模型清单与下载
 crates/kotone-tts       可选 Kokoro 本地语音合成与播放
 crates/kotone-ai        AI 连接、凭据、HTTP 与助手工具调用
 crates/kotone-postprocess  文本过滤、润色、翻译处理器
-crates/kotone-platform-windows  全局热键、窗口注入、提权等 Windows 平台能力
-crates/kotone-cli       命令行前端（自动化测试与无人值守入口）
+crates/kotone-platform-windows  全局热键、窗口注入、提权、窗口观察与截图等 Windows 平台能力
+crates/kotone-tools     本机 Agent 工具服务：协议、产物、预处理、聊天跟踪、HTTP 服务端/客户端
+crates/kotone-ocr       OCR 后端：本地韩文 PP-OCRv5 与 DeepSeek 在线 OCR、模型安装
+crates/kotone-cli       命令行前端（自动化测试、无人值守入口、工具服务客户端）
 docs/                   ADR、CLI 参考、发布检查单、评测手册
 ```
 

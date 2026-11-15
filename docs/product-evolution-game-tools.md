@@ -4,6 +4,8 @@
 
 ## 1. 产品定位与首个场景
 
+总方向（2026-11-15 确认，见 README「为 Agent 而生」）：功能完整的软件必然复杂，复杂软件应由 Agent 使用而不是让人学习，软件最终都会成为基础设施。Kotone 的目标是让人能在界面里做的每件事，Agent 都能通过工具完成，并配套 Skill / 桌宠插件让 Agent 从启动 Kotone 开始完整驱动它。全量服务化清单见 [§5.5](#55-全量服务化清单2026-11-15-修订取代上文-m3m4-表)。
+
 Kotone 固定定位为工具。Agent 决定何时调用、调用哪些能力、采用何种模型和如何解释结果；DSH 桌宠负责用户对话、人格、意图与上下文。Kotone 提供本机资源访问、确定性执行和可追溯结果。参考 BetterGI 的[命令行入口](https://www.bettergi.com/feats/command/introduce.html)，目标是让 Agent 操作同一个 Kotone 桌面实例，而不是另造一个桌宠。
 
 优先围绕 LOL 聊天闭环：
@@ -160,6 +162,8 @@ OCR 后端可选本地与在线。实验中的 RapidOCR + 韩文 PP-OCRv5 CPU �
 
 ### M3：触发链、模型与输出
 
+> 本表与下方 M4 表保留为早期设计依据，已被 [§5.5 全量服务化清单](#55-全量服务化清单2026-11-15-修订取代上文-m3m4-表) 取代。
+
 | 工具 | 主要输入 | 主要输出 |
 | --- | --- | --- |
 | `hotkey.register` / `hotkey.unregister` | owner、chord、事件/流程绑定、租约 | bindingId、冲突/释放状态 |
@@ -188,6 +192,88 @@ OCR 后端可选本地与在线。实验中的 RapidOCR + 韩文 PP-OCRv5 CPU �
 发送前校验目标、前台与频道，发送阶段不自动重试，幂等键阻止重复发送。输入注入回执只能证明本地执行到哪一步；没有可验证聊天回显时不能声称服务器已送达。发送内容由用户请求及 Agent 决定，不从翻译结果自动延伸成回复。已有授权可持续作用于配置好的触发链，工具不要求用户每次重复确认。
 
 ASR 是可选输入基础能力，保持用途与所有权隔离，不让桌宠会话接管游戏语音会话。优先复用已有本地/在线 ASR，不以改造语音输入阻塞视觉工具交付。
+
+### 5.5 全量服务化清单（2026-11-15 修订，取代上文 M3/M4 表）
+
+状态：计划，尚非 API。工具名为目标契约，实现时以 capabilities 为准。
+
+#### 5.5.1 原则
+
+| 原则 | 含义 |
+| --- | --- |
+| 界面对等 | 设置页、托盘、热键、CLI 能做的事都有对应工具；不因“敏感”而隐藏能力 |
+| 分级授权代替隐藏 | 每个工具声明所需级别：`read`（状态）、`local`（本地副作用：播报、弹幕、提醒、启停）、`user-content`（历史原文、录音、截图）、`egress`（数据外发：在线识别/AI/OCR）、`input`（向其他窗口注入输入）、`admin`（设置、凭据、模型、提权、自启）。授权由用户一次性配置、持续生效（可选“全部授予”），capabilities 返回每个工具的级别与是否已授权，未授权返回 `PERMISSION_DENIED{level}`，不逐次弹确认 |
+| 凭据只写不读 | Agent 可以新建连接、写入或替换 API key，但任何工具都不返回 key |
+| 内容走产物，不收任意路径 | 图像、音频、文本、压缩包以产物上传/下载（新增 `artifact.put` 与音频/文件产物类型），CLI 负责读写本地文件；只有配置 Kotone 自身存储位置的 `admin` 工具（模型目录、历史目录）接受目录参数 |
+| 所有权与互斥 | 麦克风、播报、热键、悬浮窗与用户本人的语音输入共享：会话带 owner/purpose，冲突时返回明确错误或按策略排队，不抢占用户正在进行的会话 |
+| 真实回执与长任务 | 结果只报告可验证的执行阶段；下载、回放、录音、播报等使用 `jobId`、取消、截止时间与事件 |
+
+#### 5.5.2 应用生命周期（Agent 从“打开 exe”开始）
+
+工具服务只在桌面实例运行时存在，因此启动由客户端完成：
+
+| 入口 | 作用 |
+| --- | --- |
+| `kotone-cli app status` | 是否在运行、实例/版本、工具服务是否开启、描述文件是否有效 |
+| `kotone-cli app launch [--wait]` | 以后台模式启动 `kotone.exe`（只驻留托盘，不打开设置窗口、不抢焦点），等待描述文件就绪后返回实例信息；已在运行时直接返回现有实例，不唤起窗口。工具服务未开启时明确报错，或在显式 `--enable-tool-service` 时先写配置再启动 |
+| `app.quit` / `kotone-cli app quit` | 等价于托盘“退出”：优雅结束（`RunEvent::Exit`），工具服务按 M1 顺序关闭；无响应时 CLI 可按实例 PID 结束并报告 |
+| `app.restart` | 退出后以相同模式重启，返回新实例 ID（旧会话凭证随之失效） |
+| `runtime.status` / `runtime.start` / `runtime.stop` | ASR 运行时的显式启停，带期望代际，不提供 toggle |
+
+需要的配套改动：桌面端 `--background` 启动参数；单实例回调对后台参数不显示窗口；`kotone-cli` 在实例未运行时可以写配置（已有）。
+
+#### 5.5.3 反向通道：Kotone 主动通知 Agent
+
+Agent 调用 Kotone 是“拉”；很多场景需要 Kotone 先说话——用户按了绑定的热键、对 Kotone 说了一句要交给 Agent 的话、提醒到期、跟踪的聊天出现新消息、长任务完成。这是一项独立的基础服务：
+
+| 组成 | 作用 |
+| --- | --- |
+| 事件总线 | `GET /v1/events?cursor=`（SSE；不支持时长轮询）与 `event.read`：类型化事件、单调游标、有界保留、至少一次送达、事件 ID 去重；游标过期返回错误而不是静默跳过 |
+| `user.request` 事件 | 用户经 Kotone 发给 Agent 的请求：助手热键语音（如“大肥鱼，我队友在说啥？”）、文字入口、或绑定到“转交 Agent”的热键；携带原文、来源、前台窗口引用与可选截图产物，带 `requestId` |
+| `agent.reply` | Agent 对某个 `requestId` 的回应，由 Kotone 按用户偏好交付（播报/弹幕/发送前预览），并产生交付回执事件 |
+| 其他事件 | `hotkey.triggered`、`chat.track.changed`（订阅的会话出现新增/修订）、`reminder.due`、`job.*`、`delivery.*`（播报/弹幕回执）、`runtime.*`、`app.*`、`asr.partial/final` |
+| 推送接收端（可选） | `agent.sinks.register`：注册 loopback webhook 等接收端，由 Kotone 主动推送，供不方便长连接的插件使用；带租约，过期自动注销 |
+
+Kotone 侧只提供与传输无关的事件与回应协议；把事件变成 Agent 对话里的一条消息由插件完成（DSH / pi 等插件 API 的能力需在适配时核对，这里不做假设）。Agent 未运行时事件按保留上限暂存，不由 Kotone 启动 Agent。
+
+#### 5.5.4 服务清单
+
+已实现（M1/M2）：`system.capabilities/status`、`window.list/active`、`screen.capture`、`image.crop/preprocess`、`artifact.get/release`、`ocr.backends/recognize`、`chat.track.ingest/read/reset`。
+
+| 领域 | 工具 | 级别 | 复用来源 |
+| --- | --- | --- | --- |
+| 应用与系统 | `app.status` `app.quit` `app.restart`；`runtime.status/start/stop`；`system.resources`；`system.elevation.get` / `system.elevation.restart`；`system.autostart.get/set` | read / local / admin | `get_runtime_status`、`start/stop_runtime`、`get_resource_usage`、`get_elevation_status`、`restart_as_admin`、`get/set_autostart_enabled` |
+| 设置 | `settings.get`（完整、不含密钥）`settings.update`（补丁，与设置页相同的校验与即时生效/需重启标记）`settings.warnings` | read / admin | `get_settings`、`update_settings`、`get_settings_load_warning` |
+| 连接与凭据 | `connections.presets/list`、`connections.upsert`（key 只写）、`connections.delete`、`connections.test` | read / admin | `list_connection_presets`、`list_connections`、`upsert/delete_connection` |
+| 模型 | `models.list`、`models.download`（job）`models.cancel`、`models.delete`、`models.setActive`、`models.dir.get/set`；`speech.models.status/download`；`ocr.models.install`（job） | read / admin | `list_models`、`download_model`、`delete_model`、`set_active_model`、`get/set_models_dir`、speech_models、`kotone-ocr::install` |
+| 语音输入 | `audio.devices`、`audio.setDevice`；`asr.engines`、`asr.setEngine`、`asr.engineOptions`；`audio.capture`（音频产物）；`asr.transcribe`（音频产物→文本）；`asr.start/stop/cancel`（带 owner 的实时会话）；`session.confirm/cancel`（现有预览会话）；`input.checkEnvironment` | read / local / user-content / egress | `list_audio_devices`、`set_audio_device`、`list_stt_engines`、`set_stt_engine`、`get_engine_options`、Orchestrator、`confirm_send`、`cancel_session`、`check_input_environment` |
+| 文本与模型调用 | `text.processors`、`text.process`（流水线/处理器序列）、`llm.complete`（无会话） | read / egress | `list_post_processors`、`test_post_processing`、`kotone-ai` |
+| 游戏适配 | `profile.list/get/save/delete`、`profile.import/export`（JSON 内容或产物）、`profile.detect`、`profile.icon`；`hotwords.import/export`、`blocklist.export` | read / admin | `list/save/delete_profile`、`import/export_profile`、`get_profile_icon`、热词与屏蔽词导入导出、CLI `profile detect` |
+| 发送 | `chat.send`（窗口/profile/频道/文本、预览或发送、幂等键；回执只证明本地执行阶段）、`session.simulateSend` | input | `Injector`、`simulate_send` |
+| 热键 | `hotkey.status`、`hotkey.conflicts`、`hotkey.capture/cancelCapture`（录入下一次按键）、`hotkey.register/unregister`（owner + 租约，不覆盖内置绑定） | read / admin | `get_hotkey_status`、`detect_hotkey_conflicts`、`start/cancel_hotkey_capture`、`HotkeyManager` |
+| 输出 | `tts.voices`、`tts.speak/cancel`；`overlay.push/dismiss`（弹幕）；`sfx.play`；`overlay.status`（识别悬浮窗健康/状态）、`overlay.savePosition` | read / local | `list_speech_voices`、`preview_reminder`、`stop_speech`、danmaku、`preview_sfx`、`get_overlay_health/state`、`save_overlay_position` |
+| 提醒与助手 | `reminder.create`（结构化，不经 LLM）、`reminder.list/cancel`、`assistant.submit`（现有 LLM 规划路径）、`assistant.cancel` | local / egress | `kotone-core::reminders`、`list/cancel_reminder`、`assistant_submit_text`、`cancel_assistant_request` |
+| 历史 | `history.list`、`history.get`、`history.audio`（音频产物）、`history.delete`、`history.clear`、`history.dir.get` | user-content / admin | `get_history`、`read_history_audio`、`delete_history_record`、`clear_history` |
+| 诊断与评测 | `diagnostics.export`（压缩包产物）、`diagnostics.clear`；`eval.list`、`eval.replay`（job）、`eval.label`、`eval.report` | read / admin | `export/clear_diagnostics`、CLI `eval` |
+| 视觉与 OCR | 已实现（见上）；补 `artifact.put` 上传图像 | — | M1/M2 |
+| 编排与事件 | `job.get/cancel/list`、`event.read`（+ SSE）、`agent.reply`、`agent.sinks.register/unregister`、`workflow.put/run/cancel/list` | read / local | 新增 |
+
+#### 5.5.5 Agent 侧交付物
+
+| 交付物 | 内容 |
+| --- | --- |
+| Skill | `SKILL.md` + 示例：何时用 Kotone、从 `app status/launch` 到常见流程（读聊天、翻译后播报、提醒）、授权与失败处理；工具参考由 capabilities 生成，不手抄 schema |
+| 桌宠 / Agent 插件（DSH、pi 等） | 薄客户端：发现与认证、工具调用、订阅事件并转成 Agent 消息、`agent.reply` 回传；业务逻辑留在 Kotone |
+| MCP 适配（可选） | `kotone-cli mcp`（stdio）把 capabilities 映射为 MCP 工具、事件映射为通知，覆盖支持 MCP 的通用 Agent |
+
+#### 5.5.6 建议顺序
+
+1. **底座**：后台启动与 `app.*`/CLI `app` 命令；事件总线、`user.request`/`agent.reply`；`job.*`；`artifact.put` 与音频/文件产物；分级授权与 `PERMISSION_DENIED`；Skill 初版。
+2. **只读面与管理面**：设置、连接（key 只写）、模型、profile、历史、诊断、热键状态等经典业务的查询与管理。
+3. **输出与文本**：`tts.*`、`overlay.push`、`reminder.*`、`text.process`、`llm.complete`。
+4. **语音输入**：`audio.capture`、`asr.transcribe`、`asr.*` 会话（owner 隔离与麦克风互斥）。
+5. **输入与编排**：`chat.send`、`hotkey.register`、`workflow.*`。
+6. **插件**：DSH / pi 插件与 MCP 适配，接入反向通道。
 
 ## 6. 两种主动触发链
 
