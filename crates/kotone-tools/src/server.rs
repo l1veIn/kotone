@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
-use http_body_util::{BodyExt, Full, Limited};
+use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::header::{HeaderValue, AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
 use hyper::{Method, Request, Response, StatusCode};
@@ -301,6 +301,52 @@ async fn handle(context: Arc<Context>, req: Request<Incoming>) -> Response<Full<
     }
 }
 
+/// 超过上限后最多再读取并丢弃的字节数：让正常客户端发完请求体后收到 413 信封，
+/// 而不是在仍在上传时被重置连接（Windows 上表现为 10053/10054 传输错误）。
+const MAX_DRAIN_BYTES: usize = 1024 * 1024;
+
+enum BodyRead {
+    Complete(Bytes),
+    TooLarge,
+    Failed,
+}
+
+/// 读取请求体：超过 `max` 后改为丢弃，最多再丢弃 `MAX_DRAIN_BYTES`，然后报告过大。
+async fn read_body(mut body: Incoming, max: usize) -> BodyRead {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut over = false;
+    let mut drained = 0usize;
+    while let Some(frame) = body.frame().await {
+        let Ok(frame) = frame else {
+            return if over {
+                BodyRead::TooLarge
+            } else {
+                BodyRead::Failed
+            };
+        };
+        let Ok(data) = frame.into_data() else {
+            continue;
+        };
+        if over {
+            drained += data.len();
+            if drained > MAX_DRAIN_BYTES {
+                return BodyRead::TooLarge;
+            }
+        } else if buf.len() + data.len() > max {
+            over = true;
+            drained = buf.len() + data.len() - max;
+            buf = Vec::new();
+        } else {
+            buf.extend_from_slice(&data);
+        }
+    }
+    if over {
+        BodyRead::TooLarge
+    } else {
+        BodyRead::Complete(Bytes::from(buf))
+    }
+}
+
 async fn call(
     context: Arc<Context>,
     req: Request<Incoming>,
@@ -333,20 +379,23 @@ async fn call(
         .get(CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok());
-    if declared.is_some_and(|len| len > max as u64) {
-        return reject(
-            &context,
+    let too_large = |context: &Context, request_id: String| {
+        reject(
+            context,
             StatusCode::PAYLOAD_TOO_LARGE,
             ErrorCode::PayloadTooLarge,
             &format!("请求体超过 {max} 字节上限"),
             request_id,
             started,
-        );
+        )
+    };
+    // 声明长度远超上限：不读取，直接拒绝（客户端可能看到连接被重置）
+    if declared.is_some_and(|len| len > (max + MAX_DRAIN_BYTES) as u64) {
+        return too_large(&context, request_id);
     }
     let body_timeout = context.service.limits().body_read_timeout;
-    let collected =
-        tokio::time::timeout(body_timeout, Limited::new(req.into_body(), max).collect()).await;
-    let body = match collected {
+    let read = tokio::time::timeout(body_timeout, read_body(req.into_body(), max)).await;
+    let body = match read {
         Err(_) => {
             return reject(
                 &context,
@@ -357,13 +406,14 @@ async fn call(
                 started,
             );
         }
-        Ok(Ok(collected)) => collected.to_bytes(),
-        Ok(Err(_)) => {
+        Ok(BodyRead::Complete(bytes)) => bytes,
+        Ok(BodyRead::TooLarge) => return too_large(&context, request_id),
+        Ok(BodyRead::Failed) => {
             return reject(
                 &context,
-                StatusCode::PAYLOAD_TOO_LARGE,
-                ErrorCode::PayloadTooLarge,
-                &format!("请求体超过 {max} 字节上限或读取失败"),
+                StatusCode::BAD_REQUEST,
+                ErrorCode::InvalidRequest,
+                "读取请求体失败",
                 request_id,
                 started,
             );

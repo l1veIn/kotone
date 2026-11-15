@@ -45,7 +45,7 @@ M2 不包含翻译、摘要、自动回复、LLM 调用、工作流、TTS/弹幕
 | `cargo test -p kotone-cli --bin kotone-cli --locked -- config_set tools::` | 16 通过（含 `toolService.ocr.deepseekConnectionId` 白名单） |
 | `cargo test -p kotone-core --lib --locked -- ocr:: tool_service default_values_match_doc` | 4 通过 |
 | `cargo test -p kotone-platform-windows --test native_capture --locked` | 1 通过、1 忽略（仅为 `ServiceDeps` 新字段更新，捕获路径未改） |
-| 独立构建检查 | TBD_INDEPENDENT |
+| 独立构建检查 | 代码提交（当时为 `c0f0cd8`；之后 rebase 到覆盖层/热键修复 `c721448` 之上成为 `96efdb7`，代码内容不变）用 `git archive` 导出到仓库内 `target/m2-verify`（不含任何人的未提交修改，检查后删除），共享构建目录运行 `cargo clippy --workspace --all-targets --locked -- -D warnings`（含 `kotone-tauri`）通过；同一导出树中 `cargo test -p kotone-tools -p kotone-ocr` 97 通过、`-p kotone-cli --test tools_cli --test tools_cli_m2` 4 通过 1 忽略。rebase 后在合并树上重跑 clippy、kotone-tools、kotone-tauri 测试通过 |
 
 自动化覆盖要点（均经真实 HTTP 服务；CLI 部分经真实 `kotone-cli` 二进制）：
 
@@ -101,7 +101,13 @@ M2 不包含翻译、摘要、自动回复、LLM 调用、工作流、TTS/弹幕
 | 空观测清空可见集 | `tracking::tests::empty_observation_keeps_visible_set_and_cursor` | FAILED（捕获） |
 | 关闭时不取消在途 OCR | `tests_m2::shutdown_cancels_inflight_ocr_and_rejects_its_result` | FAILED（捕获） |
 
-## 6. 未执行或未验证
+## 6. 后续修正：超限请求体的连接重置
+
+rebase 后重复运行时发现 M1 的 `tests_http::request_envelope_and_body_limits_are_enforced` 偶发失败（约 1/10）：客户端上传 70 KiB 请求体时，服务端已按 `Content-Length` 回 413 并关闭连接，Windows 客户端在上传途中收到 10053（连接被中止），拿不到 413 信封。这是 M1 原有行为，对真实客户端表现为传输错误而非明确的 `PAYLOAD_TOO_LARGE`。
+
+修正：服务端超过 64 KiB 上限后改为丢弃读取，最多再读 1 MiB（仍受请求体读取期限约束）后返回 413 信封；声明长度超过上限 + 1 MiB 的请求仍立即拒绝。新增 `tests_races::oversized_body_gets_a_complete_413_envelope_instead_of_a_reset`（原始套接字，`Content-Length` 与 chunked 各 300 KiB 必须收到完整 413 信封）；把丢弃上限改为 0 的变异使其失败。修正后 kotone-tools 全套 74 个用例连续 20 次全部通过。
+
+## 7. 未执行或未验证
 
 - **真实桌面 GUI 生命周期**：未启动本分支的 `kotone.exe`（会读写真实 `~/.kotone`、可能与用户实例冲突）。桌面 `tool_service.rs` 的后端组装只有编译与 clippy 证据；`SharedState` 设置读取、`models.dir` 自定义目录、设置页保存后 `toolService.ocr` 保留需人工检查。
 - **真实 DeepSeek 在线 OCR**：普通测试只对接本地 mock，未调用付费 API、未读取 Keyring；真实接口的响应形态、坐标标记在聊天截图上的实际出现频率、计费与延迟未在本轮验证。接口行为依据 2026-11-15 抓取的官方文档。
@@ -109,5 +115,5 @@ M2 不包含翻译、摘要、自动回复、LLM 调用、工作流、TTS/弹幕
 - **长时间运行**：模型会话常驻（约 18 MB 权重 + 运行时内存）未做内存曲线；多次加载/卸载、并发压力未测。
 - **ONNX Runtime 共享**：本地 OCR 与 ASR 共用 sherpa-onnx 静态链接的同一运行时与进程级 Env；ASR 运行中同时执行 OCR 的 CPU 争用与延迟影响未测。
 - **跟踪启发式**：对齐、相似度阈值与续行/裁切判断只由确定性夹具验证；真实游戏中淡出、系统消息穿插、极快刷屏、多行换行等情况下的误合并/误拆分率未知，`uncertainty` 的覆盖面也未经实测。
-- **Playwright e2e / `pnpm check`**：前端未改动，本轮未运行（M1 记录的 esbuild 环境限制仍在）。
+- **Playwright e2e / `pnpm check`**：M2 未改前端。之后提交覆盖层修复时在沙箱外运行通过（svelte-check 0 错误；e2e 55 通过），M1 记录的 esbuild 限制只出现在沙箱内。
 - **`cargo test --workspace`**：未整体运行；按 crate 运行了与改动相关的全部测试目标。

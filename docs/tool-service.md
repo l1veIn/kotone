@@ -76,7 +76,7 @@ kotone-cli config set toolService.ocr.deepseekConnectionId <连接ID>
   "timing": { "totalMs": 12, "queueMs": 0, "cropMs": 1, "encodeMs": 9 } }
 ```
 
-失败时 `ok=false`，`error` 至少包含 `code`、`message`、`retryable`，可带 `details`。工具执行结果（含工具错误）使用 HTTP 200；认证失败 401、来源/Host 拒绝 403、未知路径 404、方法不符 405、请求体读取超时 408、请求体过大 413、媒体类型 415、信封不合法 400、服务已关闭 503（`SERVICE_CLOSED`）。`requestId` 可省略（服务生成），只接受 1-128 个字母、数字及 `-_.:`。
+失败时 `ok=false`，`error` 至少包含 `code`、`message`、`retryable`，可带 `details`。工具执行结果（含工具错误）使用 HTTP 200；认证失败 401、来源/Host 拒绝 403、未知路径 404、方法不符 405、请求体读取超时 408、请求体过大 413（超出上限后服务端最多再读取并丢弃 1 MiB 再回复，使正常客户端收到完整信封；更大的声明长度立即拒绝，客户端可能看到连接重置）、媒体类型 415、信封不合法 400、服务已关闭 503（`SERVICE_CLOSED`）。`requestId` 可省略（服务生成），只接受 1-128 个字母、数字及 `-_.:`。
 
 ### 执行上限（以 capabilities 的 `limits` 为准）
 

@@ -571,3 +571,44 @@ async fn header_and_body_read_limits_still_apply() {
     let env: Envelope = serde_json::from_str(&body).unwrap();
     assert_eq!(env.error.unwrap().code, "REQUEST_TIMEOUT");
 }
+
+/// 超限请求体：服务端先读完（有界丢弃）再回 413 信封，正常客户端不会在上传途中
+/// 被重置连接（Windows 上表现为 10053 传输错误，曾导致偶发测试失败）。
+#[tokio::test(flavor = "multi_thread")]
+async fn oversized_body_gets_a_complete_413_envelope_instead_of_a_reset() {
+    let h = http_harness(ServiceLimits::default()).await;
+    for (label, chunked) in [("content-length", false), ("chunked", true)] {
+        let padding = "x".repeat(300 * 1024);
+        let body = format!(r#"{{"tool":"system.status","arguments":{{"pad":"{padding}"}}}}"#);
+        let mut stream = tokio::net::TcpStream::connect(h.running.local_addr())
+            .await
+            .unwrap();
+        let request = if chunked {
+            let mut r = format!(
+                "POST /v1/tools/call HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n",
+                h.running.local_addr(),
+                h.token
+            );
+            for piece in body.as_bytes().chunks(16 * 1024) {
+                r.push_str(&format!("{:x}\r\n", piece.len()));
+                r.push_str(std::str::from_utf8(piece).unwrap());
+                r.push_str("\r\n");
+            }
+            r.push_str("0\r\n\r\n");
+            r
+        } else {
+            post(&h, &body)
+        };
+        let exchange = async {
+            stream.write_all(request.as_bytes()).await.ok()?;
+            read_response(&mut stream).await
+        };
+        let (status, body) = tokio::time::timeout(Duration::from_secs(5), exchange)
+            .await
+            .expect("应在期限内收到响应")
+            .unwrap_or_else(|| panic!("{label}: 连接在收到 413 前被关闭"));
+        assert_eq!(status, 413, "{label}");
+        let env: Envelope = serde_json::from_str(&body).unwrap();
+        assert_eq!(env.error.unwrap().code, "PAYLOAD_TOO_LARGE", "{label}");
+    }
+}
