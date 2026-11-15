@@ -13,6 +13,8 @@
 //! - `log`：识别历史 list / clear（core history 模块的 CLI 出口）
 //! - `tools`：连接已运行桌面实例的本机工具服务（status / list / call / artifact get）
 
+mod app;
+mod mcp;
 mod ocr;
 mod tools;
 
@@ -165,6 +167,13 @@ enum Command {
         #[command(subcommand)]
         action: tools::ToolsCommand,
     },
+    /// 桌面应用生命周期：status / launch（后台启动，等待工具服务就绪）/ quit
+    App {
+        #[command(subcommand)]
+        action: app::AppCommand,
+    },
+    /// stdio MCP 服务器：供 DSH（dsh-mcp-client）、Claude Code、Codex 等 Agent 直接使用 Kotone
+    Mcp,
     /// 本地 OCR 模型：status 就绪检查 / install 显式安装（工具服务 ocr.recognize 使用）
     Ocr {
         #[command(subcommand)]
@@ -324,6 +333,8 @@ async fn main() {
         },
         Command::Tools { action } => tools::run(action).await,
         Command::Ocr { action } => ocr::run(action).await,
+        Command::App { action } => app::run(action).await,
+        Command::Mcp => mcp::run().await,
     };
     std::process::exit(code);
 }
@@ -1084,6 +1095,7 @@ const CONFIG_SETTABLE_KEYS: &[&str] = &[
     "overlay.clickThrough",
     "toolService.enabled",
     "toolService.ocr.deepseekConnectionId",
+    "assistant.route",
 ];
 
 /// 点路径写入：current 上套 patch → Settings 反序列化校验（枚举值在此拦截）。
@@ -1280,7 +1292,7 @@ fn cmd_config_set(key: &str, value: Option<&str>, capture: bool) -> i32 {
     match settings::save(&next) {
         Ok(()) => {
             println!("已写入 {key} = {value}");
-            if key == "toolService.enabled" || key.starts_with("toolService.") {
+            if key.starts_with("toolService.") || key == "assistant.route" {
                 println!(
                     "工具服务开关在桌面端启动时读取：请先从托盘退出 Kotone 再重新启动（桌面端运行时保存设置会覆盖此处的修改）"
                 );
@@ -1811,6 +1823,13 @@ mod tests {
         assert!(s.tool_service.enabled == base.tool_service.enabled);
         let s = apply_config_set(&s, key, "").unwrap();
         assert!(s.tool_service.ocr.deepseek_connection_id.is_none());
+        // 助手请求去向：枚举值由 Settings 反序列化校验
+        let s = apply_config_set(&Settings::default(), "assistant.route", "agent").unwrap();
+        assert_eq!(
+            s.assistant.route,
+            kotone_core::assistant::AssistantRoute::Agent
+        );
+        assert!(apply_config_set(&Settings::default(), "assistant.route", "llm").is_err());
         assert!(apply_config_set(&Settings::default(), "toolService.port", "1234").is_err());
     }
 

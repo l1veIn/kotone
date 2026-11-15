@@ -109,6 +109,7 @@ async fn start(
         limits: ServiceLimits::default(),
         clock: Arc::new(SystemClock),
         ocr_backends: backends,
+        host: std::sync::Arc::new(kotone_tools::host::NoAppHost),
     };
     RunningToolService::start(deps, Arc::new(WindowsToolHost), run_dir)
         .await

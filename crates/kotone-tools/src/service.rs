@@ -47,6 +47,11 @@ use crate::tracking::{
     compact, IngestInput, IngestLine, OnSourceChange, Region, SourceTag, TrackError, Tracker,
 };
 
+/// 应用级工具（生命周期、事件、Agent 请求与回复、助手提交）。子模块可访问服务私有状态。
+#[path = "service_app.rs"]
+mod app;
+pub use app::EventReadArgs;
+
 /// 读取 ASR 运行时相位（stopped/starting/running/stopping）。工具服务不依赖它。
 pub type AsrPhaseProvider = Arc<dyn Fn() -> String + Send + Sync>;
 
@@ -61,6 +66,8 @@ pub struct ServiceDeps {
     pub clock: Arc<dyn Clock>,
     /// OCR 后端（M2）：本地与在线可插拔，按 ID 选择，互不降级。可为空。
     pub ocr_backends: Vec<Arc<dyn OcrBackend>>,
+    /// 桌面宿主：运行时启停、退出、交付回复、助手提交。没有宿主时用 `NoAppHost`。
+    pub host: Arc<dyn crate::host::AppHost>,
 }
 
 const MAX_WINDOW_REFS: usize = 4096;
@@ -149,6 +156,8 @@ enum Prepared {
         session: String,
         reason: String,
     },
+    /// 通用提交：闸门（未关闭、未过期）通过后在提交线程执行的短小状态变更。
+    Commit(app::CommitFn),
 }
 
 /// 单次调用的执行上下文。
@@ -184,6 +193,13 @@ pub struct ToolService {
     next_call: std::sync::atomic::AtomicU64,
     /// 最近一次就绪检查（后端 ID → 是否就绪）；capabilities 只读这个快照，不在异步线程上做校验。
     ocr_ready: Mutex<HashMap<String, bool>>,
+    host: Arc<dyn crate::host::AppHost>,
+    events: Arc<crate::events::EventBus>,
+    requests: crate::agent_requests::AgentRequests,
+    /// 长轮询事件读取的并发上限（不占用工具执行名额）。
+    event_waiters: Arc<Semaphore>,
+    /// 后台交付中的 Agent 回复名额。
+    reply_slots: Arc<Semaphore>,
     started_at_unix_ms: u64,
     started: Instant,
     /// 关闭信号（维护任务订阅）；权威的关闭状态在存储锁内。
@@ -625,6 +641,14 @@ impl ToolService {
             inflight: Mutex::new(HashMap::new()),
             next_call: std::sync::atomic::AtomicU64::new(1),
             ocr_ready: Mutex::new(HashMap::new()),
+            host: deps.host,
+            events: Arc::new(crate::events::EventBus::new(deps.limits.max_events)),
+            requests: crate::agent_requests::AgentRequests::new(
+                deps.limits.agent_request_ttl_ms,
+                deps.limits.max_agent_requests,
+            ),
+            event_waiters: Arc::new(Semaphore::new(deps.limits.max_event_waiters.max(1))),
+            reply_slots: Arc::new(Semaphore::new(deps.limits.max_pending_replies.max(1))),
             limits: deps.limits,
             store,
             windows: WindowRefs::new(),
@@ -649,6 +673,10 @@ impl ToolService {
     /// 返回后不会再有任何请求向存储发布产物或执行释放；仍在运行的原生工作线程可以
     /// 完成自身清理，但其结果在提交闸门被拒绝。
     pub fn close(&self) {
+        // 通知订阅者服务即将停止，然后关闭总线（唤醒长轮询）
+        self.publish_event("app.stopping", json!({"instanceId": self.instance_id}));
+        self.events.close();
+        self.requests.close();
         self.store.close();
         self.ocr_results.close();
         self.tracker.close();
@@ -728,6 +756,7 @@ impl ToolService {
                         let now = service.store.now();
                         service.ocr_results.purge(now);
                         service.tracker.purge_idle(now);
+                        service.expire_agent_requests(now);
                     }
                     changed = stop.changed() => {
                         if changed.is_err() {
@@ -780,6 +809,7 @@ impl ToolService {
                 format!("GET {PATH_CAPABILITIES}"),
                 format!("GET {PATH_STATUS}"),
                 format!("POST {PATH_TOOLS_CALL}"),
+                format!("GET {}", crate::protocol::PATH_EVENTS),
             ],
             "capture": {
                 "method": capture.method,
@@ -827,6 +857,8 @@ impl ToolService {
             "artifacts": self.store.stats(),
             "ocrResults": self.ocr_results.len(),
             "chatTrackSessions": self.tracker.session_count(),
+            "events": {"headSeq": self.events.head(), "retained": self.events.len()},
+            "agentRequests": self.requests.len(),
             "activeCalls": self.limits.max_concurrent_calls.max(1) - self.calls.available_permits(),
         })
     }
@@ -892,6 +924,13 @@ impl ToolService {
             }
         };
         let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+
+        // 事件读取（可长轮询）是纯异步内存操作：不占工具执行名额，另有等待者上限
+        if tool == catalog::TOOL_EVENT_READ {
+            return self
+                .event_read_envelope(request_id, request.arguments, timeout_ms, started)
+                .await;
+        }
 
         let permit =
             match tokio::time::timeout_at(deadline, self.calls.clone().acquire_owned()).await {
@@ -1112,6 +1151,15 @@ impl ToolService {
                     .map_err(|e| track_error(e, tool, timeout_ms))?;
                 return Ok((value, phases));
             }
+            Prepared::Commit(commit) => {
+                if self.store.is_closed() {
+                    return Err(closed_error());
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(timeout_error(tool, timeout_ms, "late-result"));
+                }
+                return Ok((commit(self)?, phases));
+            }
             Prepared::Artifact(pending) => *pending,
         };
         let artifact_id = new_id("art");
@@ -1263,6 +1311,15 @@ impl ToolService {
                     phases: BTreeMap::new(),
                 })
             }
+            catalog::TOOL_APP_STATUS
+            | catalog::TOOL_APP_QUIT
+            | catalog::TOOL_RUNTIME_STATUS
+            | catalog::TOOL_RUNTIME_START
+            | catalog::TOOL_RUNTIME_STOP
+            | catalog::TOOL_AGENT_REQUESTS
+            | catalog::TOOL_AGENT_REQUEST_CLAIM
+            | catalog::TOOL_AGENT_REPLY
+            | catalog::TOOL_ASSISTANT_SUBMIT => self.execute_app(tool, arguments, ctx, timeout_ms),
             catalog::TOOL_IMAGE_PREPROCESS => self.preprocess(parse_args(arguments)?),
             catalog::TOOL_OCR_BACKENDS => {
                 let _: NoArgs = parse_args(arguments)?;

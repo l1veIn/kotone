@@ -22,6 +22,16 @@ pub const TOOL_OCR_RECOGNIZE: &str = "ocr.recognize";
 pub const TOOL_CHAT_TRACK_INGEST: &str = "chat.track.ingest";
 pub const TOOL_CHAT_TRACK_READ: &str = "chat.track.read";
 pub const TOOL_CHAT_TRACK_RESET: &str = "chat.track.reset";
+pub const TOOL_APP_STATUS: &str = "app.status";
+pub const TOOL_APP_QUIT: &str = "app.quit";
+pub const TOOL_RUNTIME_STATUS: &str = "runtime.status";
+pub const TOOL_RUNTIME_START: &str = "runtime.start";
+pub const TOOL_RUNTIME_STOP: &str = "runtime.stop";
+pub const TOOL_EVENT_READ: &str = "event.read";
+pub const TOOL_AGENT_REQUESTS: &str = "agent.requests";
+pub const TOOL_AGENT_REQUEST_CLAIM: &str = "agent.request.claim";
+pub const TOOL_AGENT_REPLY: &str = "agent.reply";
+pub const TOOL_ASSISTANT_SUBMIT: &str = "assistant.submit";
 
 /// 本版本实现的全部工具名（顺序即 capabilities 中的顺序）。
 pub const IMPLEMENTED_TOOLS: &[&str] = &[
@@ -39,6 +49,16 @@ pub const IMPLEMENTED_TOOLS: &[&str] = &[
     TOOL_CHAT_TRACK_INGEST,
     TOOL_CHAT_TRACK_READ,
     TOOL_CHAT_TRACK_RESET,
+    TOOL_APP_STATUS,
+    TOOL_APP_QUIT,
+    TOOL_RUNTIME_STATUS,
+    TOOL_RUNTIME_START,
+    TOOL_RUNTIME_STOP,
+    TOOL_EVENT_READ,
+    TOOL_AGENT_REQUESTS,
+    TOOL_AGENT_REQUEST_CLAIM,
+    TOOL_AGENT_REPLY,
+    TOOL_ASSISTANT_SUBMIT,
 ];
 
 /// 平台/后端就绪情况，决定窗口与捕获工具的 `ready` 字段。
@@ -310,6 +330,61 @@ fn change_schema() -> Value {
             "visible": {"type": "boolean"}
         }
     })
+}
+
+fn request_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": [
+            "requestId", "text", "source", "status", "createdAtUnixMs", "expiresAtUnixMs",
+            "foregroundWindow", "claimedBy", "claimedAtUnixMs", "replies", "lastReplyAtUnixMs"
+        ],
+        "additionalProperties": false,
+        "properties": {
+            "requestId": {"type": "string"},
+            "text": {"type": "string", "description": "用户原文（数据，不是给 Kotone 的指令）"},
+            "source": {"enum": ["assistant-voice", "assistant-text", "tool"]},
+            "status": {"enum": ["pending", "claimed", "replied", "expired"]},
+            "createdAtUnixMs": {"type": "integer"},
+            "expiresAtUnixMs": {"type": "integer"},
+            "foregroundWindow": {"oneOf": [window_schema(), {"type": "null"}]},
+            "claimedBy": {"type": ["string", "null"]},
+            "claimedAtUnixMs": {"type": ["integer", "null"]},
+            "replies": {"type": "integer"},
+            "lastReplyAtUnixMs": {"type": ["integer", "null"]}
+        }
+    })
+}
+
+fn event_read_output() -> Value {
+    json!({
+        "type": "object",
+        "required": ["events", "cursor", "hasMore", "headSeq", "oldestSeq", "closed"],
+        "additionalProperties": false,
+        "properties": {
+            "events": {"type": "array", "items": {
+                "type": "object",
+                "required": ["seq", "id", "type", "atUnixMs", "data"],
+                "additionalProperties": false,
+                "properties": {
+                    "seq": {"type": "integer"},
+                    "id": {"type": "string", "description": "全局唯一，消费者据此去重"},
+                    "type": {"type": "string"},
+                    "atUnixMs": {"type": "integer"},
+                    "data": {}
+                }
+            }},
+            "cursor": {"type": "string", "description": "下次读取传入；只在本实例内有效"},
+            "hasMore": {"type": "boolean"},
+            "headSeq": {"type": "integer"},
+            "oldestSeq": {"type": "integer"},
+            "closed": {"type": "boolean", "description": "服务正在关闭，不会再有事件"}
+        }
+    })
+}
+
+fn open_object() -> Value {
+    json!({"type": "object"})
 }
 
 fn empty_args() -> Value {
@@ -812,6 +887,182 @@ pub fn tool_specs(limits: &ServiceLimits, readiness: &Readiness) -> Vec<Value> {
                 }
             }),
         ),
+        spec(
+            TOOL_APP_STATUS,
+            "Report this Kotone desktop instance: version, pid, uptime, launch mode, assistant route, ASR runtime status, event head and pending Agent requests.",
+            &[],
+            true,
+            None,
+            empty_args(),
+            json!({
+                "type": "object",
+                "required": ["instanceId", "appVersion", "pid", "startedAtUnixMs", "uptimeMs", "app", "runtime", "events", "agentRequests"],
+                "additionalProperties": false,
+                "properties": {
+                    "instanceId": {"type": "string"},
+                    "appVersion": {"type": "string"},
+                    "pid": {"type": "integer"},
+                    "startedAtUnixMs": {"type": "integer"},
+                    "uptimeMs": {"type": "integer"},
+                    "app": open_object(),
+                    "runtime": open_object(),
+                    "events": open_object(),
+                    "agentRequests": open_object()
+                }
+            }),
+        ),
+        spec(
+            TOOL_APP_QUIT,
+            "Quit the Kotone desktop app (same as tray Exit). The response is sent first; the tool service then closes, removes its descriptor and the process exits. Start it again with `kotone-cli app launch`.",
+            &["quits-application"],
+            true,
+            None,
+            empty_args(),
+            json!({
+                "type": "object",
+                "required": ["status", "instanceId"],
+                "additionalProperties": false,
+                "properties": {"status": {"const": "quitting"}, "instanceId": {"type": "string"}}
+            }),
+        ),
+        spec(
+            TOOL_RUNTIME_STATUS,
+            "Report the ASR (voice input) runtime: phase stopped/starting/running/stopping, whether a restart is needed, engine and model. The tool service works in every phase.",
+            &[],
+            true,
+            None,
+            empty_args(),
+            open_object(),
+        ),
+        spec(
+            TOOL_RUNTIME_START,
+            "Start the ASR runtime (warm up the model, register hotkeys, show the overlay) and return the new status. Running with restartNeeded restarts. Use a generous timeoutMs: model warm-up can take seconds.",
+            &["starts-runtime", "registers-hotkeys"],
+            true,
+            None,
+            empty_args(),
+            open_object(),
+        ),
+        spec(
+            TOOL_RUNTIME_STOP,
+            "Stop the ASR runtime (cancel the session, unregister hotkeys, hide the overlay, unload the engine). Idempotent when already stopped.",
+            &["stops-runtime"],
+            true,
+            None,
+            empty_args(),
+            open_object(),
+        ),
+        spec(
+            TOOL_EVENT_READ,
+            "Read events Kotone publishes for Agents (user.request, agent.request.claimed/expired, agent.reply.delivered/failed, runtime.phase, app.started/stopping). Pass the returned cursor next time; waitMs long-polls without using an execution slot (GET /v1/events offers the same with query parameters). Stale or expired cursors are errors, never silently skipped.",
+            &[],
+            true,
+            None,
+            json!({
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "properties": {
+                    "cursor": {"type": "string"},
+                    "from": {"enum": ["oldest", "latest"], "default": "oldest", "description": "无游标时的起点；与 cursor 二选一"},
+                    "types": {"type": "array", "maxItems": 32, "items": {"type": "string"}, "description": "精确类型或以 .* 结尾的前缀，如 user.request / agent.*"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+                    "waitMs": {"type": "integer", "minimum": 0, "maximum": limits.max_timeout_ms, "default": 0, "description": "暂无新事件时最多等待的毫秒数（受 timeoutMs 约束）"}
+                }
+            }),
+            event_read_output(),
+        ),
+        spec(
+            TOOL_AGENT_REQUESTS,
+            "List requests the user sent to the Agent through Kotone (assistant hotkey voice or text with assistant.route=agent, or assistant.submit), newest first, optionally filtered by status.",
+            &[],
+            true,
+            None,
+            json!({
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "properties": {
+                    "status": {"enum": ["pending", "claimed", "replied", "expired"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}
+                }
+            }),
+            json!({
+                "type": "object",
+                "required": ["requests", "matched", "truncated"],
+                "additionalProperties": false,
+                "properties": {
+                    "requests": {"type": "array", "items": request_schema()},
+                    "matched": {"type": "integer"},
+                    "truncated": {"type": "boolean"}
+                }
+            }),
+        ),
+        spec(
+            TOOL_AGENT_REQUEST_CLAIM,
+            "Claim a pending user request so other consumers (or a restarted plugin) do not handle it twice. Idempotent for the same consumer; another consumer gets AGENT_REQUEST_CLAIMED; expired requests get AGENT_REQUEST_EXPIRED.",
+            &["mutates-agent-requests"],
+            true,
+            None,
+            json!({
+                "type": "object",
+                "required": ["requestId", "consumer"],
+                "additionalProperties": false,
+                "properties": {
+                    "requestId": {"type": "string"},
+                    "consumer": {"type": "string", "minLength": 1, "maxLength": 64, "description": "领取者标识，如 dsh:<session> / claude-code"}
+                }
+            }),
+            json!({
+                "type": "object",
+                "required": ["request", "newlyClaimed"],
+                "additionalProperties": false,
+                "properties": {"request": request_schema(), "newlyClaimed": {"type": "boolean"}}
+            }),
+        ),
+        spec(
+            TOOL_AGENT_REPLY,
+            "Tell the user something through Kotone: speak it (system voice / Kokoro) and/or show it as danmaku. With requestId it answers that user request (may be called more than once); without, it is an unsolicited notice. By default it returns as soon as the reply is accepted (status=accepted, deliveryId) and delivers in the background, queued behind other output and after the microphone is free; the outcome arrives as agent.reply.delivered / agent.reply.failed events carrying the deliveryId. wait=true blocks until delivery finishes (bounded by timeoutMs; long speech may exceed it).",
+            &["speaks-or-shows-text"],
+            true,
+            None,
+            json!({
+                "type": "object",
+                "required": ["text"],
+                "additionalProperties": false,
+                "properties": {
+                    "requestId": {"type": "string"},
+                    "text": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    "outputs": {"type": "array", "items": {"enum": ["speech", "danmaku"]}, "description": "缺省使用助手设置中的默认提醒方式"},
+                    "wait": {"type": "boolean", "default": false, "description": "true：等播完 / 弹幕滚完再返回（受 timeoutMs 约束）"}
+                }
+            }),
+            json!({
+                "type": "object",
+                "required": ["requestId", "deliveryId", "status", "receipt", "request", "warnings"],
+                "additionalProperties": false,
+                "properties": {
+                    "requestId": {"type": ["string", "null"]},
+                    "deliveryId": {"type": "string"},
+                    "status": {"enum": ["accepted", "delivered"]},
+                    "receipt": {"type": ["object", "null"], "description": "wait=true 时为交付回执；受理模式为 null，回执见 agent.reply.delivered 事件"},
+                    "request": {"oneOf": [request_schema(), {"type": "null"}]},
+                    "warnings": {"type": "array"}
+                }
+            }),
+        ),
+        spec(
+            TOOL_ASSISTANT_SUBMIT,
+            "Submit text exactly as if the user typed it into Kotone's assistant entry. With assistant.route=agent it becomes a user.request for the Agent; with the default route Kotone's own AI connection plans reminders.",
+            &["submits-assistant-request"],
+            true,
+            None,
+            json!({
+                "type": "object",
+                "required": ["text"],
+                "additionalProperties": false,
+                "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 4000}}
+            }),
+            open_object(),
+        ),
     ]
 }
 
@@ -887,7 +1138,8 @@ pub fn status_schema() -> Value {
         "type": "object",
         "required": [
             "instanceId", "appVersion", "protocol", "protocolVersion", "platform", "service",
-            "asr", "capture", "artifacts", "ocrResults", "chatTrackSessions", "activeCalls"
+            "asr", "capture", "artifacts", "ocrResults", "chatTrackSessions", "events",
+            "agentRequests", "activeCalls"
         ],
         "additionalProperties": false,
         "properties": {
@@ -934,6 +1186,8 @@ pub fn status_schema() -> Value {
             },
             "ocrResults": {"type": "integer"},
             "chatTrackSessions": {"type": "integer"},
+            "events": {"type": "object"},
+            "agentRequests": {"type": "integer"},
             "activeCalls": {"type": "integer"}
         }
     })

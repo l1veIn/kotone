@@ -27,6 +27,18 @@ impl From<AssistantInteractionMode> for InteractionMode {
     }
 }
 
+/// 助手入口（热键语音 / 文字）收到的请求交给谁处理。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AssistantRoute {
+    /// 由 Kotone 的 AI 连接规划为提醒（默认，0.1.13 行为）。
+    #[default]
+    Reminders,
+    /// 原文转交外部 Agent：经工具服务发布 `user.request` 事件，由 Agent 处理并用
+    /// `agent.reply` 回应；需要开启工具服务。
+    Agent,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistantVoiceSession {
@@ -54,6 +66,8 @@ pub struct AssistantConfig {
     pub danmaku_top_offset_px: u32,
     pub danmaku_color: String,
     pub danmaku_emote: String,
+    /// 请求去向：提醒规划（默认）或转交 Agent。
+    pub route: AssistantRoute,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -81,6 +95,7 @@ impl Default for AssistantConfig {
             danmaku_top_offset_px: 120,
             danmaku_color: "#FFFFFF".into(),
             danmaku_emote: "none".into(),
+            route: AssistantRoute::Reminders,
         }
     }
 }

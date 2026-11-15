@@ -561,6 +561,7 @@ fn foreground_capture_exact_pixels_full_chain_and_no_gdi_leak() {
             limits: kotone_tools::ServiceLimits::default(),
             clock: Arc::new(kotone_tools::artifacts::SystemClock),
             ocr_backends: Vec::new(),
+            host: std::sync::Arc::new(kotone_tools::host::NoAppHost),
         };
         let running = kotone_tools::RunningToolService::start(deps, host.clone(), dir.path())
             .await

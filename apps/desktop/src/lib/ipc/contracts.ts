@@ -178,6 +178,8 @@ export interface AssistantConfig {
   danmakuTopOffsetPx: number;
   danmakuColor: string;
   danmakuEmote: "none" | "hello" | "cheering" | "pointing" | "amazed";
+  /** 请求去向：reminders 由 Kotone 规划提醒（默认）；agent 原文转交外部 Agent（需开启工具服务）。 */
+  route?: "reminders" | "agent";
 }
 
 /** 本机工具服务配置（config.json `toolService` 段）；修改后需重启桌面端 */

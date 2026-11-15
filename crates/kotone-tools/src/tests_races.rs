@@ -34,6 +34,7 @@ fn deps(desktop: &Arc<FakeDesktop>, clock: Arc<dyn Clock>, limits: ServiceLimits
         limits,
         clock,
         ocr_backends: Vec::new(),
+        host: std::sync::Arc::new(crate::host::NoAppHost),
     }
 }
 

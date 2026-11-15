@@ -21,7 +21,7 @@ use tokio::task::JoinSet;
 use crate::ids::{new_id, SecretToken};
 use crate::protocol::{
     is_valid_request_id, Envelope, ErrorCode, Timing, ToolCallRequest, ToolError, INSTANCE_HEADER,
-    PATH_CAPABILITIES, PATH_STATUS, PATH_TOOLS_CALL, REQUEST_ID_HEADER,
+    PATH_CAPABILITIES, PATH_EVENTS, PATH_STATUS, PATH_TOOLS_CALL, REQUEST_ID_HEADER,
 };
 use crate::service::ToolService;
 
@@ -282,7 +282,12 @@ async fn handle(context: Arc<Context>, req: Request<Incoming>) -> Response<Full<
             json_response(StatusCode::OK, context.service.instance_id(), &envelope)
         }
         (Method::POST, PATH_TOOLS_CALL) => call(context, req, request_id, started).await,
-        (_, PATH_CAPABILITIES | PATH_STATUS | PATH_TOOLS_CALL) => reject(
+        (Method::GET, PATH_EVENTS) => {
+            let query = req.uri().query().unwrap_or("").to_string();
+            let envelope = context.service.events_http(&query, request_id).await;
+            json_response(StatusCode::OK, context.service.instance_id(), &envelope)
+        }
+        (_, PATH_CAPABILITIES | PATH_STATUS | PATH_TOOLS_CALL | PATH_EVENTS) => reject(
             &context,
             StatusCode::METHOD_NOT_ALLOWED,
             ErrorCode::MethodNotAllowed,

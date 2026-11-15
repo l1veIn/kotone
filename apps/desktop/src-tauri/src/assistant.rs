@@ -128,6 +128,53 @@ pub fn prepare_model_migration(
     Ok(guard)
 }
 
+/// 助手入口的请求去向：默认交给提醒规划；`assistant.route = agent` 时原文转交外部 Agent
+/// （经工具服务发布 `user.request`）。热键语音与文字入口都经过这里，因此两者行为一致。
+struct RoutingHandler {
+    app: AppHandle,
+    settings: Arc<RwLock<Settings>>,
+    reminders: Arc<dyn AssistantHandler>,
+}
+
+/// 请求来源：文字入口 / 工具提交 / 热键语音（按会话 ID 前缀区分）。
+fn request_source(session_id: &str) -> &'static str {
+    if session_id.starts_with("assistant-ui-") {
+        "assistant-text"
+    } else if session_id.starts_with("assistant-tool-") {
+        "tool"
+    } else {
+        "assistant-voice"
+    }
+}
+
+impl AssistantHandler for RoutingHandler {
+    fn handle(
+        &self,
+        request: AssistantRequest,
+        cancel: CancellationToken,
+    ) -> kotone_core::assistant::AssistantFuture<'_> {
+        let route = self.settings.read().unwrap().assistant.route;
+        if route != kotone_core::assistant::AssistantRoute::Agent {
+            return self.reminders.handle(request, cancel);
+        }
+        Box::pin(async move {
+            if cancel.is_cancelled() {
+                return Err("助手指令已取消".into());
+            }
+            let submitted = crate::tool_service::submit_user_request(
+                &self.app,
+                &request.text,
+                request_source(&request.session_id),
+            )?;
+            let id = submitted["requestId"].as_str().unwrap_or_default();
+            Ok(AssistantPlan {
+                message: format!("已转交 Agent（请求 {id}）"),
+                reminders: vec![],
+            })
+        })
+    }
+}
+
 pub fn initialize(
     app: &AppHandle,
     settings: Arc<RwLock<Settings>>,
@@ -147,10 +194,14 @@ pub fn initialize(
     }
     AssistantRuntime {
         scheduler,
-        handler: Arc::new(kotone_ai::reminders::ReminderAssistant::new(
-            connections,
-            settings,
-        )),
+        handler: Arc::new(RoutingHandler {
+            app: app.clone(),
+            settings: settings.clone(),
+            reminders: Arc::new(kotone_ai::reminders::ReminderAssistant::new(
+                connections,
+                settings,
+            )),
+        }),
         system_speaker: speaker,
         local_speaker: Mutex::new(None),
         typed_request: Mutex::new(None),
@@ -553,6 +604,15 @@ pub fn cancel_reminder(state: tauri::State<AssistantRuntime>, id: String) -> Res
 
 #[tauri::command]
 pub async fn assistant_submit_text(app: AppHandle, text: String) -> Result<AssistantPlan, String> {
+    submit_text(&app, text, "assistant-ui").await
+}
+
+/// 与文字入口相同的提交路径（工具服务 `assistant.submit` 以 `assistant-tool` 前缀调用）。
+pub async fn submit_text(
+    app: &AppHandle,
+    text: String,
+    session_prefix: &str,
+) -> Result<AssistantPlan, String> {
     let state = app.state::<AssistantRuntime>();
     let scheduler = state.scheduler.as_ref().map_err(Clone::clone)?.clone();
     let cancel = CancellationToken::default();
@@ -573,7 +633,7 @@ pub async fn assistant_submit_text(app: AppHandle, text: String) -> Result<Assis
     }
     let _request_guard = RequestGuard(&state.typed_request);
     let request = AssistantRequest {
-        session_id: format!("assistant-ui-{}", kotone_core::eval::new_session_id()),
+        session_id: format!("{session_prefix}-{}", kotone_core::eval::new_session_id()),
         text,
         received_at_ms: now_ms(),
     };
@@ -590,6 +650,42 @@ pub async fn assistant_submit_text(app: AppHandle, text: String) -> Result<Assis
             Ok(plan)
         });
     result
+}
+
+/// 向用户交付一段文字（Agent 回复）：复用提醒的交付路径——输出互斥、等待麦克风释放、
+/// 语音与弹幕、失败降级。`kinds` 为空时使用助手设置中的默认提醒方式。future 被丢弃时
+/// （工具期限 / 服务关闭）随交付守卫停止播报并收起弹幕。
+pub async fn deliver_text(
+    app: &AppHandle,
+    text: String,
+    kinds: Vec<DeliveryKind>,
+) -> Result<Vec<DeliveryKind>, String> {
+    let delivery = if kinds.is_empty() {
+        app.state::<crate::SharedState>()
+            .settings
+            .read()
+            .unwrap()
+            .assistant
+            .default_delivery
+            .clone()
+    } else {
+        kinds
+    };
+    let now = now_ms();
+    let reminder = Reminder {
+        id: format!("agent-reply-{now}"),
+        session_id: "agent-reply".into(),
+        text,
+        delivery: delivery.clone(),
+        created_at_ms: now,
+        due_at_ms: now,
+        status: kotone_core::reminders::ReminderStatus::Delivering,
+        error: None,
+    };
+    DesktopDelivery { app: app.clone() }
+        .deliver(&reminder, CancellationToken::default())
+        .await?;
+    Ok(delivery)
 }
 
 #[tauri::command]

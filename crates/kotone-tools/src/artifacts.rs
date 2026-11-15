@@ -324,6 +324,10 @@ impl ArtifactStore {
         self.clock.now_unix_ms()
     }
 
+    pub fn clock(&self) -> Arc<dyn Clock> {
+        self.clock.clone()
+    }
+
     /// 插入新产物；必要时回收最旧产物。返回被回收的 ID。
     pub fn insert(&self, record: ArtifactRecord) -> Result<Vec<String>, InsertError> {
         match self.insert_gated(record, None) {

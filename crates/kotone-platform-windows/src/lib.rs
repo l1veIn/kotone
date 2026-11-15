@@ -13,6 +13,7 @@
 
 pub mod audio;
 pub mod autostart;
+pub mod detached;
 pub mod elevation;
 pub mod fs_publish;
 pub mod fullscreen;

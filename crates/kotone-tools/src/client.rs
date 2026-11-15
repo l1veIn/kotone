@@ -96,6 +96,20 @@ impl ToolClient {
         .await
     }
 
+    /// `GET /v1/events` 长轮询。`query` 为已编码的查询串（不含 `?`）；`wait_ms` 用于计算客户端超时。
+    pub async fn events(&self, query: &str, wait_ms: u64) -> Result<Envelope, ToolError> {
+        let url = if query.is_empty() {
+            self.url(crate::protocol::PATH_EVENTS)
+        } else {
+            format!("{}?{query}", self.url(crate::protocol::PATH_EVENTS))
+        };
+        self.send(
+            self.http.get(url),
+            Duration::from_millis(wait_ms) + CALL_TRANSPORT_MARGIN,
+        )
+        .await
+    }
+
     fn url(&self, path: &str) -> String {
         format!("{}{path}", self.base_url)
     }

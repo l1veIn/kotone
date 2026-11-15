@@ -13,10 +13,13 @@
 //! 窗口观察、捕获与私有文件能力通过 `kotone_core::tools` 端口注入；本 crate 不依赖
 //! Windows API 或 Tauri。权威手册见 docs/tool-service.md。
 
+pub mod agent_requests;
 pub mod artifacts;
 pub mod catalog;
 pub mod client;
 pub mod discovery;
+pub mod events;
+pub mod host;
 pub mod ids;
 pub mod image;
 pub mod limits;
@@ -28,6 +31,8 @@ pub mod service;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod testing;
+#[cfg(test)]
+mod tests_app;
 #[cfg(test)]
 mod tests_http;
 #[cfg(test)]
@@ -92,6 +97,10 @@ impl RunningToolService {
             }
         };
         let maintenance = service.spawn_maintenance();
+        service.publish_event(
+            "app.started",
+            serde_json::json!({"instanceId": service.instance_id(), "pid": pid}),
+        );
         // 后台做一次 OCR 后端就绪检查（模型哈希、凭据读取），不阻塞启动与异步线程
         let refresh = service.clone();
         tokio::task::spawn_blocking(move || {

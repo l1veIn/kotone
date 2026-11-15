@@ -20,6 +20,8 @@ pub const REQUEST_ID_HEADER: &str = "x-kotone-request-id";
 pub const PATH_CAPABILITIES: &str = "/v1/capabilities";
 pub const PATH_STATUS: &str = "/v1/status";
 pub const PATH_TOOLS_CALL: &str = "/v1/tools/call";
+/// 事件长轮询（反向通道）：`?cursor=&from=&types=&limit=&waitMs=`。
+pub const PATH_EVENTS: &str = "/v1/events";
 
 /// `POST /v1/tools/call` 请求体。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,6 +189,14 @@ pub enum ErrorCode {
     ChatTrackCursorInvalid,
     ChatTrackCursorStale,
     ChatTrackCursorExpired,
+    // ---- 事件、Agent 请求与宿主动作 ----
+    EventCursorInvalid,
+    EventCursorStale,
+    EventCursorExpired,
+    AgentRequestNotFound,
+    AgentRequestExpired,
+    AgentRequestClaimed,
+    HostActionFailed,
     // ---- 客户端发现 / 连接 ----
     ServiceNotRunning,
     DescriptorInsecure,
@@ -247,6 +257,13 @@ impl ErrorCode {
             Self::ChatTrackCursorInvalid => "CHAT_TRACK_CURSOR_INVALID",
             Self::ChatTrackCursorStale => "CHAT_TRACK_CURSOR_STALE",
             Self::ChatTrackCursorExpired => "CHAT_TRACK_CURSOR_EXPIRED",
+            Self::EventCursorInvalid => "EVENT_CURSOR_INVALID",
+            Self::EventCursorStale => "EVENT_CURSOR_STALE",
+            Self::EventCursorExpired => "EVENT_CURSOR_EXPIRED",
+            Self::AgentRequestNotFound => "AGENT_REQUEST_NOT_FOUND",
+            Self::AgentRequestExpired => "AGENT_REQUEST_EXPIRED",
+            Self::AgentRequestClaimed => "AGENT_REQUEST_CLAIMED",
+            Self::HostActionFailed => "HOST_ACTION_FAILED",
             Self::ServiceNotRunning => "SERVICE_NOT_RUNNING",
             Self::DescriptorInsecure => "DESCRIPTOR_INSECURE",
             Self::DescriptorInvalid => "DESCRIPTOR_INVALID",
@@ -324,6 +341,13 @@ impl ErrorCode {
         Self::ChatTrackCursorInvalid,
         Self::ChatTrackCursorStale,
         Self::ChatTrackCursorExpired,
+        Self::EventCursorInvalid,
+        Self::EventCursorStale,
+        Self::EventCursorExpired,
+        Self::AgentRequestNotFound,
+        Self::AgentRequestExpired,
+        Self::AgentRequestClaimed,
+        Self::HostActionFailed,
         Self::ServiceNotRunning,
         Self::DescriptorInsecure,
         Self::DescriptorInvalid,

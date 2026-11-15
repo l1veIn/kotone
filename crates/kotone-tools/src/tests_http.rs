@@ -56,6 +56,7 @@ impl Harness {
             limits,
             clock: clock.clone(),
             ocr_backends: Vec::new(),
+            host: std::sync::Arc::new(crate::host::NoAppHost),
         };
         let running = RunningToolService::start(deps, host.clone(), dir.path())
             .await
@@ -340,7 +341,7 @@ async fn capabilities_list_exactly_the_implemented_tools() {
         "overlay.push",
         "chat.send",
         "asr.start",
-        "runtime.start",
+        "settings.update",
     ] {
         assert!(!names.contains(&planned));
         let (code, retryable) = h.err(planned, json!({})).await;
@@ -927,6 +928,7 @@ async fn publish_refuses_to_replace_a_live_foreign_instance() {
         limits: ServiceLimits::default(),
         clock: Arc::new(crate::artifacts::SystemClock),
         ocr_backends: Vec::new(),
+        host: std::sync::Arc::new(crate::host::NoAppHost),
     };
     let err = RunningToolService::start(deps, h.host.clone(), h.dir.path())
         .await
@@ -945,6 +947,7 @@ async fn publish_refuses_to_replace_a_live_foreign_instance() {
         limits: ServiceLimits::default(),
         clock: Arc::new(crate::artifacts::SystemClock),
         ocr_backends: Vec::new(),
+        host: std::sync::Arc::new(crate::host::NoAppHost),
     };
     let third = RunningToolService::start(deps, h.host.clone(), h.dir.path())
         .await
@@ -975,6 +978,7 @@ async fn windows_host_writes_private_descriptor_and_client_verifies_it() {
         limits: ServiceLimits::default(),
         clock: Arc::new(crate::artifacts::SystemClock),
         ocr_backends: Vec::new(),
+        host: std::sync::Arc::new(crate::host::NoAppHost),
     };
     let running = RunningToolService::start(deps, host.clone(), &run)
         .await

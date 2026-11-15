@@ -40,6 +40,15 @@ pub struct ServiceLimits {
     pub max_ocr_results: usize,
     pub ocr_result_ttl_ms: u64,
     pub track: crate::tracking::TrackLimits,
+    /// 事件总线保留的事件数。
+    pub max_events: usize,
+    /// 同时长轮询事件的等待者上限（不占工具执行名额）。
+    pub max_event_waiters: usize,
+    /// 用户转交 Agent 的请求有效期与保留数量。
+    pub agent_request_ttl_ms: u64,
+    pub max_agent_requests: usize,
+    /// 已受理、尚未播完的 Agent 回复上限（`agent.reply` 默认不等待交付完成）。
+    pub max_pending_replies: usize,
 }
 
 impl Default for ServiceLimits {
@@ -68,6 +77,11 @@ impl Default for ServiceLimits {
             max_ocr_results: 64,
             ocr_result_ttl_ms: 600_000,
             track: crate::tracking::TrackLimits::default(),
+            max_events: 1000,
+            max_event_waiters: 8,
+            agent_request_ttl_ms: 600_000,
+            max_agent_requests: 64,
+            max_pending_replies: 8,
         }
     }
 }
@@ -92,6 +106,11 @@ impl ServiceLimits {
             "ocrResultTtlMs": self.ocr_result_ttl_ms,
             "maxPreprocessOperations": crate::preprocess::MAX_OPERATIONS,
             "chatTrack": self.track.to_json(),
+            "maxEvents": self.max_events,
+            "maxEventWaiters": self.max_event_waiters,
+            "agentRequestTtlMs": self.agent_request_ttl_ms,
+            "maxAgentRequests": self.max_agent_requests,
+            "maxPendingReplies": self.max_pending_replies,
         })
     }
 }

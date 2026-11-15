@@ -97,6 +97,7 @@ async fn start_service(run_dir: &Path) -> (RunningToolService, Arc<FakeDesktop>)
         limits: ServiceLimits::default(),
         clock: Arc::new(SystemClock),
         ocr_backends: Vec::new(),
+        host: std::sync::Arc::new(kotone_tools::host::NoAppHost),
     };
     let running = RunningToolService::start(deps, Arc::new(WindowsToolHost), run_dir)
         .await

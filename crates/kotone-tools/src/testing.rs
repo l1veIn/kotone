@@ -740,3 +740,114 @@ pub fn decode_png(bytes: &[u8]) -> (u32, u32, Vec<u8>) {
     buf.truncate(info.buffer_size());
     (info.width, info.height, buf)
 }
+
+/// 可编排的假桌面宿主：记录退出、交付与助手提交，可设置交付延迟与失败。
+#[derive(Default)]
+pub struct FakeAppHost {
+    quits: AtomicU64,
+    started: AtomicU64,
+    stopped: AtomicU64,
+    deliveries: Mutex<Vec<(String, Vec<&'static str>)>>,
+    cancelled_deliveries: AtomicU64,
+    delay: Mutex<Duration>,
+    fail: Mutex<Option<String>>,
+    submitted: Mutex<Vec<String>>,
+}
+
+impl FakeAppHost {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+    pub fn set_delay(&self, delay: Duration) {
+        *self.delay.lock().unwrap() = delay;
+    }
+    pub fn set_failure(&self, message: Option<&str>) {
+        *self.fail.lock().unwrap() = message.map(str::to_string);
+    }
+    pub fn quits(&self) -> u64 {
+        self.quits.load(Ordering::SeqCst)
+    }
+    pub fn runtime_starts(&self) -> u64 {
+        self.started.load(Ordering::SeqCst)
+    }
+    pub fn deliveries(&self) -> Vec<(String, Vec<&'static str>)> {
+        self.deliveries.lock().unwrap().clone()
+    }
+    /// 交付 future 在完成前被丢弃（期限 / 关闭）的次数。
+    pub fn cancelled_deliveries(&self) -> u64 {
+        self.cancelled_deliveries.load(Ordering::SeqCst)
+    }
+    pub fn submitted(&self) -> Vec<String> {
+        self.submitted.lock().unwrap().clone()
+    }
+}
+
+impl crate::host::AppHost for FakeAppHost {
+    fn app_info(&self) -> Value {
+        serde_json::json!({"host": "fake", "launch": "test", "assistantRoute": "agent"})
+    }
+    fn runtime_status(&self) -> Value {
+        let running = self.started.load(Ordering::SeqCst) > self.stopped.load(Ordering::SeqCst);
+        serde_json::json!({"phase": if running { "running" } else { "stopped" }})
+    }
+    fn runtime_start(&self) -> crate::host::HostFuture<'_, Value> {
+        Box::pin(async move {
+            if let Some(e) = self.fail.lock().unwrap().clone() {
+                return Err(e);
+            }
+            self.started.fetch_add(1, Ordering::SeqCst);
+            Ok(self.runtime_status())
+        })
+    }
+    fn runtime_stop(&self) -> crate::host::HostFuture<'_, Value> {
+        Box::pin(async move {
+            self.stopped
+                .store(self.started.load(Ordering::SeqCst), Ordering::SeqCst);
+            Ok(self.runtime_status())
+        })
+    }
+    fn request_quit(&self) -> Result<(), String> {
+        self.quits.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    fn deliver(
+        &self,
+        text: String,
+        outputs: Vec<crate::host::ReplyOutput>,
+    ) -> crate::host::HostFuture<'_, Value> {
+        struct Pending<'a>(&'a AtomicU64, bool);
+        impl Drop for Pending<'_> {
+            fn drop(&mut self) {
+                if !self.1 {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        }
+        Box::pin(async move {
+            let mut pending = Pending(&self.cancelled_deliveries, false);
+            let delay = *self.delay.lock().unwrap();
+            tokio::time::sleep(delay).await;
+            if let Some(e) = self.fail.lock().unwrap().clone() {
+                pending.1 = true;
+                return Err(e);
+            }
+            let outputs: Vec<&'static str> = if outputs.is_empty() {
+                vec!["speech", "danmaku"]
+            } else {
+                outputs.iter().map(|o| o.as_str()).collect()
+            };
+            self.deliveries
+                .lock()
+                .unwrap()
+                .push((text, outputs.clone()));
+            pending.1 = true;
+            Ok(serde_json::json!({"delivered": outputs, "errors": []}))
+        })
+    }
+    fn assistant_submit(&self, text: String) -> crate::host::HostFuture<'_, Value> {
+        Box::pin(async move {
+            self.submitted.lock().unwrap().push(text);
+            Ok(serde_json::json!({"route": "agent", "message": "已转交 Agent"}))
+        })
+    }
+}

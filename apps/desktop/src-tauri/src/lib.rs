@@ -69,6 +69,16 @@ enum OnboardingLaunchMode {
 #[serde(rename_all = "camelCase")]
 struct StartupOptions {
     onboarding: OnboardingLaunchMode,
+    /// `--background`：只驻留托盘，不打开设置窗口、不抢焦点（供 Agent / `kotone-cli app launch`）。
+    background: bool,
+}
+
+fn has_background_flag<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().any(|a| a.as_ref() == "--background")
 }
 
 fn parse_onboarding_launch_mode<I, S>(args: I) -> OnboardingLaunchMode
@@ -1824,11 +1834,16 @@ pub fn run() {
 
     let startup_options = StartupOptions {
         onboarding: parse_onboarding_launch_mode(std::env::args()),
+        background: has_background_flag(std::env::args()),
     };
     tauri::Builder::default()
         // 单实例：第二实例启动时唤起已有实例的设置窗口并退出自身，
         // 避免旧进程未退出导致热键「already registered」与 WebView2 类注册冲突
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // Agent 以后台方式再次启动：实例已在运行，保持静默，不唤起窗口、不抢焦点
+            if has_background_flag(args.iter().map(String::as_str)) {
+                return;
+            }
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
                 let _ = win.unminimize();
@@ -2035,9 +2050,13 @@ pub fn run() {
             // 启动即显示设置窗口：全部窗口默认隐藏时，应用看起来像「没起来」。
             // 托盘常驻语义不变——关闭此窗口只是隐藏，进程仍在托盘。
             // 自动提权重启的场合此分支在提权子进程中执行，同样弹窗，符合预期。
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.show();
-                let _ = win.set_focus();
+            // `--background`（Agent 启动）只驻留托盘，不显示窗口、不抢焦点
+            let background = app.state::<StartupOptions>().background;
+            if !background {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
             }
 
             Ok(())

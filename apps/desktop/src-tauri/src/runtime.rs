@@ -191,6 +191,10 @@ pub fn snapshot_and_emit(app: &AppHandle, stage: Option<String>) -> Option<Runti
     // 托盘「启动引擎 / 停止引擎」文案同步：启动/停止完成都会经过本推送点
     crate::tray::sync_toggle_label(app, status.phase == "running");
     emit_status(app, &status);
+    // 反向通道：Agent 可订阅运行时相位变化（工具服务未开启时为空操作）
+    if let Ok(value) = serde_json::to_value(&status) {
+        crate::tool_service::publish(app, "runtime.phase", value);
+    }
     Some(status)
 }
 

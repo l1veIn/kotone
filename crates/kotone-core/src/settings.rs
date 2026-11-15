@@ -596,10 +596,17 @@ fn default_channel_cycle_hotkey() -> String {
 }
 
 /// Kotone 用户数据目录：~/.kotone/
+/// 环境变量：覆盖 Kotone 数据目录（默认 `~/.kotone`）。供 Agent 隔离运行与自动化测试使用；
+/// 桌面端、CLI 与工具服务的描述文件目录都随之切换。
+pub const HOME_ENV: &str = "KOTONE_HOME";
+
 pub fn kotone_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".kotone")
+    match std::env::var_os(HOME_ENV) {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".kotone"),
+    }
 }
 
 fn config_path() -> PathBuf {

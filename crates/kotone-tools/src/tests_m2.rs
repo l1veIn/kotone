@@ -59,6 +59,7 @@ impl H {
             limits,
             clock: clock.clone(),
             ocr_backends: backends,
+            host: std::sync::Arc::new(crate::host::NoAppHost),
         };
         let running = RunningToolService::start(deps, host.clone(), dir.path())
             .await
@@ -1043,6 +1044,7 @@ async fn late_ingest_commit_does_not_mutate_tracking_state() {
         limits: ServiceLimits::default(),
         clock: clock.clone(),
         ocr_backends: vec![],
+        host: std::sync::Arc::new(crate::host::NoAppHost),
     });
     let req = |tool: &str, arguments: Value, timeout_ms: u64| ToolCallRequest {
         request_id: None,

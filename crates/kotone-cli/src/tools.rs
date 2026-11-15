@@ -52,6 +52,25 @@ pub enum ToolsCommand {
         #[arg(long)]
         request_id: Option<String>,
     },
+    /// 读取事件（Kotone → Agent 反向通道）：user.request、agent.*、runtime.phase、app.* 等。
+    /// 不带 --follow 时输出一个信封；--follow 时逐行输出事件 JSON（JSON Lines），持续长轮询。
+    Events {
+        /// 上次返回的游标（只在同一实例内有效）
+        #[arg(long)]
+        cursor: Option<String>,
+        /// 无游标时的起点：oldest（缺省，取回仍保留的事件）/ latest（只要之后的新事件）
+        #[arg(long)]
+        from: Option<String>,
+        /// 类型过滤，逗号分隔；支持前缀 agent.*
+        #[arg(long)]
+        types: Option<String>,
+        /// 暂无新事件时最多等待的毫秒数（0-30000）
+        #[arg(long, default_value_t = 0)]
+        wait_ms: u64,
+        /// 持续输出（每行一个事件），游标失效或服务停止时退出
+        #[arg(long)]
+        follow: bool,
+    },
     /// 产物操作
     Artifact {
         #[command(subcommand)]
@@ -73,11 +92,11 @@ pub enum ArtifactCommand {
     },
 }
 
-fn local_failure(error: ToolError) -> Envelope {
+pub(crate) fn local_failure(error: ToolError) -> Envelope {
     Envelope::failure(String::new(), None, None, error, Timing::default())
 }
 
-fn print_json(value: &impl serde::Serialize) {
+pub(crate) fn print_json(value: &impl serde::Serialize) {
     match serde_json::to_string_pretty(value) {
         Ok(text) => println!("{text}"),
         Err(e) => eprintln!("序列化输出失败: {e}"),
@@ -92,17 +111,17 @@ fn exit_for(envelope: &Envelope) -> i32 {
     }
 }
 
-fn unavailable(error: ToolError) -> i32 {
+pub(crate) fn unavailable(error: ToolError) -> i32 {
     print_json(&local_failure(error));
     EXIT_UNAVAILABLE
 }
 
-fn usage(code: ErrorCode, message: String) -> i32 {
+pub(crate) fn usage(code: ErrorCode, message: String) -> i32 {
     print_json(&local_failure(ToolError::new(code, message)));
     EXIT_USAGE
 }
 
-fn connect() -> Result<ToolClient, ToolError> {
+pub(crate) fn connect() -> Result<ToolClient, ToolError> {
     let dir = discovery::default_dir();
     ToolClient::discover(&dir, &kotone_platform_windows::tool_host::WindowsToolHost)
 }
@@ -145,6 +164,13 @@ pub async fn run(command: ToolsCommand) -> i32 {
             timeout_ms,
             request_id,
         } => call(tool, args_file, timeout_ms, request_id).await,
+        ToolsCommand::Events {
+            cursor,
+            from,
+            types,
+            wait_ms,
+            follow,
+        } => events(cursor, from, types, wait_ms, follow).await,
         ToolsCommand::Artifact {
             action:
                 ArtifactCommand::Get {
@@ -393,6 +419,70 @@ async fn artifact_get(artifact_id: String, output: PathBuf, force: bool) -> i32 
     }
     print_json(&envelope);
     EXIT_OK
+}
+
+fn encode_query(pairs: &[(&str, String)]) -> String {
+    fn enc(s: &str) -> String {
+        s.bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'*' | b',' => {
+                    (b as char).to_string()
+                }
+                _ => format!("%{b:02X}"),
+            })
+            .collect()
+    }
+    pairs
+        .iter()
+        .map(|(k, v)| format!("{k}={}", enc(v)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+async fn events(
+    cursor: Option<String>,
+    from: Option<String>,
+    types: Option<String>,
+    wait_ms: u64,
+    follow: bool,
+) -> i32 {
+    let client = match connect() {
+        Ok(c) => c,
+        Err(e) => return unavailable(e),
+    };
+    let wait = if follow { 25_000 } else { wait_ms };
+    let mut cursor = cursor;
+    let mut from = from;
+    loop {
+        let mut pairs = vec![("waitMs", wait.to_string())];
+        if let Some(c) = &cursor {
+            pairs.push(("cursor", c.clone()));
+        } else if let Some(f) = &from {
+            pairs.push(("from", f.clone()));
+        }
+        if let Some(t) = &types {
+            pairs.push(("types", t.clone()));
+        }
+        let envelope = match client.events(&encode_query(&pairs), wait).await {
+            Ok(e) => e,
+            Err(e) => return unavailable(e),
+        };
+        if !follow || !envelope.ok {
+            print_json(&envelope);
+            return exit_for(&envelope);
+        }
+        let result = envelope.result.unwrap_or_default();
+        for event in result["events"].as_array().into_iter().flatten() {
+            println!("{}", serde_json::to_string(event).unwrap_or_default());
+        }
+        use std::io::Write as _;
+        let _ = std::io::stdout().flush();
+        if result["closed"] == true {
+            return EXIT_OK;
+        }
+        cursor = result["cursor"].as_str().map(str::to_string);
+        from = None;
+    }
 }
 
 #[cfg(test)]
