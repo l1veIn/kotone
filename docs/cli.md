@@ -2,6 +2,8 @@
 
 > 无 Tauri 的命令行前端：core 的一等消费者，也是无人值守自动化测试的入口。
 > 构建：`cargo build -p kotone-cli`（默认带 sherpa 引擎，见 crates/kotone-cli/Cargo.toml）
+>
+> **两个入口，同一套命令**：安装版只带 `kotone.exe`，它的首个参数是下表的子命令时就按命令行执行（在启动应用与单实例检查之前分流），例如 `kotone.exe mcp`、`kotone.exe tools call …`、`kotone.exe app status`；其他参数（如 `--background`）照常启动桌面端。`kotone.exe` 是 GUI 程序、没有控制台：被程序经管道调用（Agent、DSH 插件、MCP 客户端）时输入输出与退出码和 `kotone-cli` 完全一致；在终端里手动使用（命令行不会等它结束、输出也不显示）以及 `elevate`、热键 `listen` 这类需要控制台的命令，请用开发构建的 `kotone-cli.exe`。
 
 ## 命令清单
 

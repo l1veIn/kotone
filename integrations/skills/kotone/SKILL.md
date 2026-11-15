@@ -5,9 +5,11 @@ description: Drive Kotone (local Windows voice-input / game-assistant app) from 
 
 # Kotone
 
-Kotone is a Windows tray app. Its local tool service is the Agent interface; `kotone-cli` talks to it (finds the running instance, authenticates, verifies the process). Every command prints JSON; exit codes: 0 ok, 1 tool failed / not running, 2 usage, 3 cannot reach Kotone.
+Kotone is a Windows tray app. Its local tool service is the Agent interface; the CLI talks to it (finds the running instance, authenticates, verifies the process). Every command prints JSON; exit codes: 0 ok, 1 tool failed / not running, 2 usage, 3 cannot reach Kotone.
 
-If the client supports MCP, prefer registering `kotone-cli mcp` (stdio) instead of shelling out — same tools, named `kotone_<tool with _>`.
+The installed app is a single `kotone.exe` (default `%LOCALAPPDATA%\Kotone\kotone.exe`): when its first argument is a CLI subcommand it acts as the CLI, so every `kotone-cli …` command below works as `kotone.exe …` when run through pipes (as an Agent does). `kotone-cli.exe` exists only in development builds. Examples use `kotone-cli`.
+
+If the client supports MCP, prefer registering `kotone.exe mcp` (stdio) instead of shelling out — same tools, named `kotone_<tool with _>`.
 
 ## Lifecycle
 
@@ -17,7 +19,7 @@ kotone-cli app launch --enable-tool-service       # background start: tray only,
 kotone-cli app quit                               # same as tray "Exit"; waits for the process to end
 ```
 
-`launch` returns when the tool service is ready (≈0.5 s). If Kotone is already running it returns the existing instance and does not show a window. Set `KOTONE_EXE` or pass `--exe` when `kotone.exe` is not next to `kotone-cli`.
+`launch` returns when the tool service is ready (≈0.5 s). If Kotone is already running it returns the existing instance and does not show a window. Run as `kotone.exe` it launches itself; from `kotone-cli`, set `KOTONE_EXE` or pass `--exe` when `kotone.exe` is not next to it.
 
 ## Calling tools
 

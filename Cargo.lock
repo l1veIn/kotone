@@ -2587,6 +2587,7 @@ dependencies = [
  "bzip2",
  "dirs",
  "kotone-ai",
+ "kotone-cli",
  "kotone-core",
  "kotone-ocr",
  "kotone-platform-windows",

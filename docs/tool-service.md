@@ -284,11 +284,13 @@ Agent 先 `agent.request.claim`（`consumer` 如 `dsh-game-communicate:<pid>` / 
 
 **接入方式**：
 
-- **MCP**：`kotone-cli mcp` 是 stdio MCP 服务器。静态工具 `kotone_service_status`、`kotone_launch`、`kotone_quit`、`kotone_capabilities`、`kotone_call`（按 Kotone 工具名调用任意工具）、`kotone_events`；Kotone 运行时再把每个工具映射为 `kotone_<工具名，点换成下划线>`，启动后发送 `notifications/tools/list_changed`。
+- **MCP**：`kotone.exe mcp`（安装版；开发时等价的 `kotone-cli mcp`）是 stdio MCP 服务器。静态工具 `kotone_service_status`、`kotone_launch`、`kotone_quit`、`kotone_capabilities`、`kotone_call`（按 Kotone 工具名调用任意工具）、`kotone_events`；Kotone 运行时再把每个工具映射为 `kotone_<工具名，点换成下划线>`，启动后发送 `notifications/tools/list_changed`。
 - **DSH 插件**：独立仓库 `dsh-game-communicate`（与 Kotone 分开发布，类似 dsh-game-daily 之于 BetterGI）挂上上述 MCP 服务器，并把 `user.request` 领取后投进 DSH 里复用的「Kotone」会话。
 - **Skill**：[`integrations/skills/kotone/SKILL.md`](../integrations/skills/kotone/SKILL.md) 供只能执行命令行的 Agent 使用。
 
 ## 11. 命令行
+
+安装版的 `kotone.exe` 接受下列全部子命令（`kotone.exe tools call …`、`kotone.exe mcp` 等），经管道调用时与 `kotone-cli` 行为一致；终端手动使用请用 `kotone-cli`。见 [CLI 参考](cli.md)。
 
 ```text
 kotone-cli tools status [--json]
