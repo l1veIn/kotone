@@ -457,11 +457,7 @@ fn speech_request(config: &kotone_core::assistant::AssistantConfig, text: &str) 
         SpeechEngine::Kokoro => config.kokoro_voice_id.trim().to_string(),
         SpeechEngine::System => {
             let id = config.voice_id.trim();
-            if id.starts_with("system/") {
-                id["system/".len()..].to_string()
-            } else {
-                id.to_string()
-            }
+            id.strip_prefix("system/").unwrap_or(id).to_string()
         }
         SpeechEngine::Openai | SpeechEngine::Volcano => String::new(),
     };

@@ -169,22 +169,23 @@ pub struct CatalogState {
     pub volcano: OnlineStatus,
 }
 
-fn online_entry(
-    id: &str,
-    engine_id: &str,
-    display_name: &str,
-    description: &str,
+/// 在线条目的固定描述。
+struct OnlineSpec {
+    id: &'static str,
+    engine_id: &'static str,
+    display_name: &'static str,
+    description: &'static str,
     schema: &'static [StaticConfigField],
-    api_key_url: &str,
-    status: &OnlineStatus,
-    active: bool,
-) -> CatalogModel {
+    api_key_url: &'static str,
+}
+
+fn online_entry(spec: &OnlineSpec, status: &OnlineStatus, active: bool) -> CatalogModel {
     CatalogModel {
         category: ModelCategory::Tts,
-        id: id.into(),
-        engine_id: engine_id.into(),
-        display_name: display_name.into(),
-        description: description.into(),
+        id: spec.id.into(),
+        engine_id: spec.engine_id.into(),
+        display_name: spec.display_name.into(),
+        description: spec.description.into(),
         size_bytes: 0,
         backend: CatalogBackend::Remote,
         downloaded: true,
@@ -200,8 +201,8 @@ fn online_entry(
         recommended: false,
         languages: vec!["zh".into()],
         data_egress: "text".into(),
-        config_schema: schema_of(schema),
-        api_key_url: Some(api_key_url.into()),
+        config_schema: schema_of(spec.schema),
+        api_key_url: Some(spec.api_key_url.into()),
         license: "服务商条款".into(),
         files: Vec::new(),
     }
@@ -264,22 +265,26 @@ pub fn entries(state: &CatalogState) -> Vec<CatalogModel> {
             files: Vec::new(),
         },
         online_entry(
-            OPENAI_MODEL_ID,
-            "openai",
-            "OpenAI 兼容语音合成（在线）",
-            "调用 /audio/speech 接口（OpenAI 或兼容服务）；每次播报都会把文字发给服务商",
-            OPENAI_SCHEMA,
-            "https://platform.openai.com/api-keys",
+            &OnlineSpec {
+                id: OPENAI_MODEL_ID,
+                engine_id: "openai",
+                display_name: "OpenAI 兼容语音合成（在线）",
+                description: "调用 /audio/speech 接口（OpenAI 或兼容服务）；每次播报都会把文字发给服务商",
+                schema: OPENAI_SCHEMA,
+                api_key_url: "https://platform.openai.com/api-keys",
+            },
             &state.openai,
             active == SpeechEngine::Openai,
         ),
         online_entry(
-            VOLCANO_MODEL_ID,
-            "volcano",
-            "火山语音合成（在线）",
-            "豆包语音 HTTP 接口；可复用语音识别里的火山 App ID 与 Access Token（需在控制台为该应用开通语音合成）；每次播报都会把文字发给火山",
-            VOLCANO_SCHEMA,
-            "https://console.volcengine.com/speech/app",
+            &OnlineSpec {
+                id: VOLCANO_MODEL_ID,
+                engine_id: "volcano",
+                display_name: "火山语音合成（在线）",
+                description: "豆包语音 HTTP 接口；可复用语音识别里的火山 App ID 与 Access Token（需在控制台为该应用开通语音合成）；每次播报都会把文字发给火山",
+                schema: VOLCANO_SCHEMA,
+                api_key_url: "https://console.volcengine.com/speech/app",
+            },
             &state.volcano,
             active == SpeechEngine::Volcano,
         ),

@@ -35,6 +35,8 @@ const INTER_THREADS: i32 = 1;
 const MAX_DET_PIXELS: u64 = 4_194_304;
 /// 检测前的长边上限（RapidOCR max_side_len）。
 const MAX_SIDE_LEN: u32 = 2000;
+/// 检测输入相对原图最多放大的倍数。
+const MAX_UPSCALE: u32 = 2;
 const MAX_LINES: usize = 256;
 
 pub const CONFIDENCE_SEMANTICS: &str = "recognizer self-reported score: mean of the per-character max softmax probability over decoded characters; NOT semantic or translation accuracy; null when nothing was decoded";
@@ -132,6 +134,11 @@ pub(crate) fn det_dims(width: u32, height: u32, limit: u32) -> (u32, u32) {
         w = ((f64::from(width) * r) as u32).max(1);
         h = ((f64::from(height) * r) as u32).max(1);
     }
+    // 放大最多 2 倍：短边远小于目标长度时（例如只识别聊天框的裁剪图），按 RapidOCR 的
+    // limit_type=min 会放大 3～5 倍，大字被放到检测器看不全，一句话碎成几段乱码
+    // （2026-11-16 真机：560×192 裁剪里 65 px 的“找到对局”放大 3.8 倍后识别成 4 个碎片，
+    // 放大 2 倍或 3 倍都能完整读出；在 17 个渲染的多语种样例上 2 倍总体略好、也更快，见 docs/research/2026-11-16-companion-scripts.md）。缩小不受影响。
+    let limit = limit.min(w.min(h).saturating_mul(MAX_UPSCALE).max(32));
     let (mut dw, mut dh) = ppocr::det_size(w, h, limit);
     let pixels = u64::from(dw) * u64::from(dh);
     if pixels > MAX_DET_PIXELS {
@@ -260,6 +267,8 @@ fn terminated(cancel: &OcrCancel, deadline: Instant, message: String) -> OcrErro
 }
 
 impl OcrBackend for LocalPpOcr {
+    // 端口的 id 是 `ocr.backends` 的后端 ID（如 local-ppocrv5-ch），不是清单里的模型 ID。
+    #[allow(clippy::misnamed_getters)]
     fn id(&self) -> &str {
         self.package.backend_id
     }
@@ -630,7 +639,12 @@ mod tests {
 
     #[test]
     fn det_dims_bounded() {
-        assert_eq!(det_dims(650, 200, 736), (2400, 736));
+        // 短边 200 → 最多放大到 400（而不是 736）
+        assert_eq!(det_dims(650, 200, 736), (1312, 416));
+        // 短边已够大时与 RapidOCR 相同
+        assert_eq!(det_dims(1280, 480, 736), (1952, 736));
+        // 裁剪图（真机 560×192）：放大 2 倍
+        assert_eq!(det_dims(560, 192, 736), (1120, 384));
         let (w, h) = det_dims(4000, 200, 736);
         assert!(u64::from(w) * u64::from(h) <= MAX_DET_PIXELS);
         assert_eq!(w % 32, 0);
