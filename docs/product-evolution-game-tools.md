@@ -432,7 +432,7 @@ Claude Code 应先阅读文档和仓库约定；存在 `.codegraph/` 时先用 C
 
 ## 12. 陪玩脚本：大模型写脚本，沙盒执行（2026-11-16 定方向）
 
-状态：方向已定，开发在分支 `claude/companion-scripts`；语言选型待第一阶段的实验确认。
+状态：开发中（分支 `claude/companion-scripts`）。第一阶段实验已完成，语言定为 Luau，结果见[陪玩脚本实现记录](research/2026-11-16-companion-scripts.md)。
 
 ### 12.1 要解决的问题
 
