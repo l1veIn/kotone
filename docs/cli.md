@@ -52,7 +52,7 @@
 `overlay.position`、`overlay.draggable`、`overlay.clickThrough`、
 `toolService.enabled`(true/false，默认 false；桌面端启动时读取——先从托盘退出 Kotone，再写入并重新启动)、
 `toolService.ocr.deepseekConnectionId`（在线 OCR 使用的已有连接 ID；空字符串清除；不存在的连接被拒绝；同样需先退出再重启桌面端）、
-`assistant.route`(reminders/agent，默认 reminders；agent 时助手热键语音与文字入口转交外部 Agent，见[工具服务手册 §10](tool-service.md#10-应用生命周期事件与用户请求agent-底座)；同样需先退出再重启桌面端)。
+`assistant.route`(reminders/agent，默认 reminders；agent 时助手热键语音与文字入口转交外部 Agent，见[工具服务手册 §10](tool-service.md#10-应用生命周期事件与用户请求agent-底座)；桌面端运行中请改用工具 `settings.update`（立即生效）——直接改配置文件会被运行中的桌面端覆盖，需先退出再重启)。
 
 环境变量 `KOTONE_HOME` 把 Kotone 数据目录（默认 `~/.kotone`：配置、日志、历史、工具服务描述文件）整体换到别处，CLI 与桌面端都读取，用于隔离运行与测试；`KOTONE_EXE` 指定 `app launch` 使用的 `kotone.exe`。
 

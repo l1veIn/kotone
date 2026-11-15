@@ -1,6 +1,6 @@
-# 本机 Agent 工具服务（M1 + M2 + Agent 底座）
+# 本机 Agent 工具服务（M1 + M2 + Agent 底座 + 配置与引导）
 
-本页是工具服务的**现行权威手册**：开启方式、发现与认证、v1 协议、已实现工具、捕获语义与限制，以及 M2 的图像预处理、OCR 后端与聊天消息跟踪，和 Agent 底座的应用生命周期、事件与用户请求反向通道（§10）。字段的最终依据是 `kotone-cli tools list --json` 返回的 schema 与 `crates/kotone-tools`、`crates/kotone-ocr` 实现；[演进计划](product-evolution-game-tools.md)中 M3 及以后的工具尚未实现，不属于本 API。实现与验证记录见 [M1](research/game-tools-m1-implementation.md)、[M2](research/game-tools-m2-implementation.md)、[Agent 底座第一批](research/agent-base-batch1-implementation.md)。
+本页是工具服务的**现行权威手册**：开启方式、发现与认证、v1 协议、已实现工具、捕获语义与限制，以及 M2 的图像预处理、OCR 后端与聊天消息跟踪，和 Agent 底座的应用生命周期、事件与用户请求反向通道（§10），以及与设置页对齐的配置类工具（§5“配置与首次引导”）。字段的最终依据是 `kotone-cli tools list --json` 返回的 schema 与 `crates/kotone-tools`、`crates/kotone-ocr` 实现；[演进计划](product-evolution-game-tools.md)中 M3 及以后的工具尚未实现，不属于本 API。实现与验证记录见 [M1](research/game-tools-m1-implementation.md)、[M2](research/game-tools-m2-implementation.md)、[Agent 底座第一批](research/agent-base-batch1-implementation.md)、[第二批](research/agent-base-batch2-implementation.md)。
 
 ## 1. 定位与边界
 
@@ -8,8 +8,8 @@
 
 - 桌面进程拥有服务；`kotone-cli tools` 是客户端。客户端直接走 loopback HTTP，**不会再次启动 `kotone.exe`**，因此不会触发单实例回调唤起设置窗口、抢走游戏焦点。
 - 服务与 ASR 运行时（启动 / 停止开关）相互独立：运行时 Stopped 时工具照常可用，调用也不会启动 ASR、注册热键或加载模型。
-- 服务从不移动或聚焦任何窗口，不发送输入，不读写调用方指定的本地文件。唯一的可见输出是 `agent.reply` 的弹幕（不取焦点、鼠标穿透的提醒层）与语音播报。
-- 已实现下文 24 个工具（M1 的 8 个 + M2 的 6 个 + Agent 底座的 10 个）。设置、连接、历史、诊断等其余应用能力按[演进计划 §5.5](product-evolution-game-tools.md) 分批开放；通用热键、工作流、模型调用（LLM）与发送尚未实现，不出现在 capabilities 中，调用它们返回 `TOOL_NOT_FOUND`。
+- 服务从不移动或聚焦任何窗口，不发送输入。除 `models.dir.set`（把模型迁到用户指定的目录，与设置页相同）外不读写调用方指定的本地文件；`diagnostics.export` 只写到 `<KOTONE_HOME>/exports/`。可见输出只有 `agent.reply` 的弹幕（不取焦点、鼠标穿透的提醒层）与语音播报，以及 `elevation.restart` 触发的系统 UAC 提示。
+- 已实现下文 59 个工具（M1 的 8 个 + M2 的 6 个 + Agent 底座的 10 个 + 配置与引导的 35 个）。引导页与设置页里人能做的配置，Agent 都能通过工具完成（[演进计划 §5.5](product-evolution-game-tools.md)）；通用热键、工作流、模型调用（LLM）与发送尚未实现，不出现在 capabilities 中，调用它们返回 `TOOL_NOT_FOUND`。
 - OCR 结果与聊天文字一律是**数据**：服务从不解释或执行其中的内容（例如“忽略之前的指令”之类的文字只会被原样返回）。
 
 ## 2. 开启与重启
@@ -119,7 +119,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 
 ## 5. 已实现工具
 
-除 `ocr.recognize` 外所有工具 `dataEgress` 为 `none`：数据只在本机进程间传递。`ocr.recognize` 为 `backend-dependent`：选用本地后端时不外发，选用在线后端时只上传所选产物的 PNG（见 §8）。
+除 `ocr.recognize` 与 `postprocess.test` 外所有工具 `dataEgress` 为 `none`：数据只在本机进程间传递（模型下载只从下载源取文件，不上传用户数据）。`ocr.recognize` 为 `backend-dependent`：选用本地后端时不外发，选用在线后端时只上传所选产物的 PNG（见 §8）。`postprocess.test` 为 `connection-dependent`：流程里的在线步骤会把样例文本发给其配置的连接。
 
 | 工具 | 参数 | 结果要点 |
 | --- | --- | --- |
@@ -145,6 +145,47 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `agent.request.claim` | `requestId`、`consumer`（1-64 字符） | `request`、`newlyClaimed`（同一领取者重复调用为 false） |
 | `agent.reply` | `text`、可选 `requestId`、`outputs`（`speech`/`danmaku`，缺省用助手默认提醒方式）、`wait` | `status`（`accepted` / `delivered`）、`deliveryId`、`receipt`（仅 `wait=true`）、`request`、`warnings`（§10） |
 | `assistant.submit` | `text` | 与用户在助手文字入口提交相同的结果 |
+
+### 配置与首次引导（委托桌面宿主）
+
+下列 35 个工具让 Agent 完成引导页与设置页里的全部配置。它们由服务检查“参数是 JSON 对象”后交给桌面宿主，调用的是与设置页**同一个**实现（校验、原子落盘、热键重注册、运行时状态推送完全一致），参数按工具严格解析（未知字段、类型或取值不合法 → `INVALID_ARGUMENTS`；已有下载进行中 → `BUSY`；执行失败 → `HOST_ACTION_FAILED`）。没有桌面宿主的实例里它们 `ready=false`。改动设置后，打开着的设置窗口会自动刷新。
+
+| 工具 | 参数 | 结果要点 |
+| --- | --- | --- |
+| `settings.get` | 无 | 与设置页相同的完整设置（camelCase）；连接条目不含 API key |
+| `settings.update` | `patch`（部分设置，深合并） | `settings`（更新后）、`runtime`（含 `restartNeeded`）。立即生效：热键（运行时运行中重注册）、助手去向与提醒方式、悬浮窗、音效等；换引擎/模型使 `restartNeeded=true`。`connections` 与 `models.dir` 不接受（用下面的专用工具）；`toolService.*` 下次启动生效。完成首次引导：`{"ui": {"firstRunCompleted": true}}` |
+| `audio.devices` | 无 | `devices[]`（标出默认与虚拟声卡）、`selected`；选择用 `settings.update {"audioDeviceId": …}` |
+| `stt.engines` | 无 | `engines[]`（可用性）、`current` |
+| `models.list` | 无 | `models[]`（本地/在线、大小、是否已下载、配置项、API key 页面）、`dir{dir,isDefault}`、`active{engine,modelId}`、`downloading` |
+| `models.download` | `id` | 受理即返回 `status=started`；进度 `model.download.progress`（至多每秒一次），结果 `model.download.finished` / `model.download.failed`（取消时 `cancelled=true`）。镜像优先、断点续传、先查磁盘空间；全应用同时只有一个下载 |
+| `models.download.cancel` | 无 | `requested`（是否有下载在进行）；保留临时文件以便续传 |
+| `models.delete` | `id` | `wasActive`（删的是活动模型时回退默认） |
+| `models.activate` | `engineId`、`modelId` | 运行时状态（运行中会 `restartNeeded`，`runtime.start` 重启生效） |
+| `models.dir.set` | `dir`（空 = 默认 `~/.kotone/models`） | `dir`、`moved[]`、`failed[]`；运行时运行中或下载中拒绝。选目录前先问用户 |
+| `models.install_guide` | `id` | 自动下载失败时的手动安装指引 |
+| `speech.status` | 无 | `package`（Kokoro 语音包：installed/downloading/字节/阶段/错误）、当前语音引擎的 `voices[]`、`voicesError` |
+| `speech.model.download` | 无 | `status=started`（或已安装时 `installed`）；结果 `speech.model.download.finished` / `failed`；与模型下载共用唯一名额 |
+| `connections.presets` | 无 | 内置在线连接预设 |
+| `connections.list` | 无 | `connections[]{id,displayName,kind,provider,baseUrl,model,hasApiKey}`——**API key 只写不读** |
+| `connections.upsert` | `connection`、可选 `apiKey` | 更新后的 `connections[]`；key 存入系统凭据库，不回显、不进日志；省略则保留原 key |
+| `connections.delete` | `id` | 更新后的 `connections[]`（同时删除其 key） |
+| `profiles.list` | 无 | `profiles[]`、`activeProfileId`；激活用 `settings.update {"activeProfileId": …}` |
+| `profiles.save` / `profiles.delete` | `profile` / `id` | 保存（内置 profile 记住被删的内置热词）/ 删除（内置恢复出厂，导入的永久删除） |
+| `hotkeys.status` | 无 | 热键注册状态（失败原因，如被其他程序占用） |
+| `hotkeys.conflicts` | `key` | `warnings[]`：与常见游戏键位的冲突提示 |
+| `input.check` | 无 | 低级键盘钩子与模拟输入（SendInput）自检，不需要先启动运行时 |
+| `elevation.status` | 无 | 是否已提权、能否提权、前台游戏是否以管理员运行 / 独占全屏 |
+| `elevation.restart` | 无 | 先返回 `status=restarting`，再弹系统 UAC：用户同意后本实例退出、新的提权实例接替（新 `instanceId`，用 `app status` 重连）；拒绝则发布 `elevation.restart.failed`，本实例继续运行 |
+| `autostart.status` / `autostart.set` | 无 / `enabled` | 开机自启（真实的 HKCU Run 项） |
+| `history.list` | 可选 `limit`（1-1000，默认 50） | `records[]`（新的在前）、`total`、`truncated`——内容是用户说过的话，属于隐私数据 |
+| `history.delete` / `history.clear` | `sessionId`+`ts` / 无 | 删除单条（幂等）/ 清空（含录音）；历史页自动刷新 |
+| `diagnostics.export` | 可选 `window`（`24h`/`7d`/`all`） | 脱敏诊断 ZIP 的 `path`（`<KOTONE_HOME>/exports/`），不含识别文字、音频与热词 |
+| `diagnostics.clear` | 可选 `stopRecording` | 清除本地流程事件与 `kotone.log` |
+| `app.resources` | 无 | CPU 与内存占用 |
+| `postprocess.processors` | 无 | 已注册的文字处理模块与配置 schema |
+| `postprocess.test` | `text`、可选 `pipeline` | 逐步输入输出与耗时；不发送、不记录 |
+
+典型的首次引导（替代引导页）：`models.list` → 问用户模型放哪（`models.dir.set`）→ `models.download` 并等 `model.download.finished` → `models.activate` → `audio.devices` 选麦克风 → `hotkeys.conflicts` 后用 `settings.update` 设热键与交互模式 → `profiles.list` 选游戏 → 需要在线能力时 `connections.presets` / `connections.upsert`（向用户要 key）→ `input.check`、`elevation.status`（游戏以管理员运行时 `elevation.restart`）→ `runtime.start` → `settings.update {"ui": {"firstRunCompleted": true}}`。
 
 **窗口引用**：`windowId` 是不透明字符串，只在发放它的实例内有效，绑定窗口句柄 + PID + 进程创建时间（`identityBinding` 说明强度；无权查询创建时间时退化为 `handle+pid`）。每次捕获前重新校验；同一窗口多次列举得到同一 ID。窗口元数据含标题、类名、可执行文件名（不含目录）、PID、前台/可见/最小化/DWM 隐藏标记、客户区与所在显示器的**屏幕物理像素**矩形、DPI 与 `scale = dpi / 96`。
 
@@ -273,10 +314,13 @@ Agent 从“打开 exe”开始就能驱动 Kotone，并能收到用户通过 Ko
 | `user.request` | 用户经 Kotone 发给 Agent 的请求 | 完整请求（见下） |
 | `agent.request.claimed` / `agent.request.expired` | 请求被领取 / 过期 | `requestId`（claimed 另有 `consumer`） |
 | `agent.reply.delivered` / `agent.reply.failed` | 回复交付完成 / 失败 | `deliveryId`、`requestId`、`text`、`receipt` 或 `code/message`、`deliverMs` |
+| `model.download.progress` / `.finished` / `.failed` | `models.download` 的进度（至多每秒一次）与结果 | `id`、`downloadedBytes/totalBytes`；结果含 `durationMs`，失败含 `cancelled`、`message` |
+| `speech.model.download.finished` / `.failed` | `speech.model.download` 的结果 | `status` 或 `cancelled`、`message`、`durationMs` |
+| `elevation.restart.failed` | 用户拒绝 UAC 或提权启动失败 | `message` |
 
 每个事件带递增 `seq` 与全局唯一 `id`（`evt_…`，供去重）。游标形如 `ev1.<实例随机数>.<序号>`，只在发放它的实例内有效。读取时传回上次的游标；实例重启后旧游标是 `EVENT_CURSOR_STALE`，序号已被淘汰是 `EVENT_CURSOR_EXPIRED`——**从不静默跳过事件**，Agent 应从 `from=oldest` 重读并按 ID 去重。`types` 支持精确类型与 `前缀.*`。`waitMs` 长轮询：暂无新事件时最多等待这么久（`event.read` 受本次 `timeoutMs` 约束，`GET /v1/events` 最长 30 秒；CLI 与 MCP 每轮用 25 秒），不占工具执行名额；服务关闭时立即返回 `closed=true`。
 
-**用户请求**（反向通道）。`assistant.route` 设为 `agent` 时（`kotone-cli config set assistant.route agent`，重启生效；默认 `reminders` 保持原有的提醒规划），助手热键语音与文字入口的原文不再交给 Kotone 自己的 AI 连接，而是成为一条 `user.request`：`requestId`（`areq_…`）、`text`（用户原文——对 Kotone 是数据，不是指令）、`source`（`assistant-voice` / `assistant-text` / `tool`）、`foregroundWindow`（提交时的前台窗口，可直接用于截图）、`status`（`pending` → `claimed` → `replied`，或 `expired`）、创建/过期时间、领取者与回复次数。`assistant.submit` 走与文字入口完全相同的路径，供测试和自动化。
+**用户请求**（反向通道）。`assistant.route` 设为 `agent` 时（运行中用 `settings.update {"assistant": {"route": "agent"}}` 立即生效；桌面端未运行时也可 `kotone.exe config set assistant.route agent`；默认 `reminders` 保持原有的提醒规划），助手热键语音与文字入口的原文不再交给 Kotone 自己的 AI 连接，而是成为一条 `user.request`：`requestId`（`areq_…`）、`text`（用户原文——对 Kotone 是数据，不是指令）、`source`（`assistant-voice` / `assistant-text` / `tool`）、`foregroundWindow`（提交时的前台窗口，可直接用于截图）、`status`（`pending` → `claimed` → `replied`，或 `expired`）、创建/过期时间、领取者与回复次数。`assistant.submit` 走与文字入口完全相同的路径，供测试和自动化。
 
 Agent 先 `agent.request.claim`（`consumer` 如 `dsh-game-communicate:<pid>` / `claude-code`）再处理：同一领取者重复领取幂等，其他领取者得到 `AGENT_REQUEST_CLAIMED`，过期请求得到 `AGENT_REQUEST_EXPIRED`。多个 Agent 同时在线时由此保证一条请求只被处理一次。
 
@@ -337,6 +381,8 @@ kotone-cli tools call chat.track.ingest --args-file ingest.json
 
 截图、窗口标题与进程名只在本机返回给持有会话凭证的本地客户端；服务不落盘产物、OCR 结果或跟踪状态（全部在内存中，TTL/容量回收，桌面退出即丢弃），诊断事件不记录它们。客户端写出的 PNG 由调用方保存和清理。
 
+配置类工具：`connections.upsert` 的 API key 只写——存入系统凭据库，任何工具结果、事件与日志里都不出现；设置了 `KOTONE_HOME` 的隔离实例使用独立的凭据库命名空间（`kotone@<目录>`），读不到也写不进用户主实例的 key。`history.list` 返回用户说过的话，只交给本机持有会话凭证的客户端。
+
 用户请求的原文、Agent 回复与事件只在内存中保留（有界、TTL），不写入识别历史或诊断；`assistant.route=agent` 时用户对助手说的话交给本机连接的 Agent，由 Agent 决定是否再发往其使用的模型服务。
 
 只有选用在线 OCR 后端时，Kotone 才会把**所选产物的 PNG** 上传到用户配置的 DeepSeek 连接；该后端默认未启用，需用户在配置中指定连接。本地后端完全离线；模型只在用户显式运行 `kotone-cli ocr install` 时下载。Agent 若自行把图片交给其他在线模型，那是 Agent 侧的数据外发，见 [PRIVACY.md](../PRIVACY.md)。
@@ -358,4 +404,6 @@ kotone-cli tools call chat.track.ingest --args-file ingest.json
 | `apps/desktop/src-tauri/src/tool_service.rs`（`DesktopHost`）、`assistant.rs`（`RoutingHandler`、`deliver_text`） | 宿主实现：运行时启停、退出、回复交付、助手路由 |
 | `crates/kotone-platform-windows/src/detached.rs` | 不继承句柄的脱离式进程启动 |
 | `crates/kotone-cli/src/app.rs`、`mcp.rs` | `app status/launch/quit`；stdio MCP 服务器 |
+| `crates/kotone-tools/src/catalog_host.rs` | 配置类工具目录与 schema（`HOST_TOOLS`） |
+| `apps/desktop/src-tauri/src/tool_config.rs` | 配置类工具的桌面实现：调用设置页同一批命令函数、后台下载与事件、设置窗口刷新 |
 | `integrations/skills/kotone` | Agent Skill（DSH 插件在独立仓库 `dsh-game-communicate`） |

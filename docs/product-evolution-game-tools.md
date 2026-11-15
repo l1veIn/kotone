@@ -195,7 +195,7 @@ ASR 是可选输入基础能力，保持用途与所有权隔离，不让桌宠�
 
 ### 5.5 全量服务化清单（2026-11-15 修订，取代上文 M3/M4 表）
 
-状态：第一批（底座可行性）已实现，其余为计划。工具名为目标契约，实现时以 capabilities 为准；已实现部分见[工具服务手册 §10](tool-service.md#10-应用生命周期事件与用户请求agent-底座)与[第一批实现记录](research/agent-base-batch1-implementation.md)。
+状态：第一批（底座可行性）与第二批（配置与首次引导对齐）已实现，其余为计划。工具名为目标契约，实现时以 capabilities 为准；已实现部分见[工具服务手册 §5、§10](tool-service.md#5-已实现工具)与实现记录（[第一批](research/agent-base-batch1-implementation.md)、[第二批](research/agent-base-batch2-implementation.md)）。
 
 #### 5.5.1 原则
 
@@ -240,7 +240,7 @@ Kotone 侧只提供与传输无关的事件与回应协议；把事件变成 Age
 
 #### 5.5.4 服务清单
 
-已实现（M1/M2）：`system.capabilities/status`、`window.list/active`、`screen.capture`、`image.crop/preprocess`、`artifact.get/release`、`ocr.backends/recognize`、`chat.track.ingest/read/reset`。已实现（底座第一批）：`app.status/quit`、`runtime.status/start/stop`、`event.read`、`agent.requests`、`agent.request.claim`、`agent.reply`、`assistant.submit`。
+已实现（M1/M2）：`system.capabilities/status`、`window.list/active`、`screen.capture`、`image.crop/preprocess`、`artifact.get/release`、`ocr.backends/recognize`、`chat.track.ingest/read/reset`。已实现（底座第一批）：`app.status/quit`、`runtime.status/start/stop`、`event.read`、`agent.requests`、`agent.request.claim`、`agent.reply`、`assistant.submit`。已实现（第二批，委托桌面宿主、与设置页同一实现）：`settings.get/update`、`audio.devices`、`stt.engines`、`models.list/download/download.cancel/delete/activate/dir.set/install_guide`、`speech.status`、`speech.model.download`、`connections.presets/list/upsert/delete`、`profiles.list/save/delete`、`hotkeys.status/conflicts`、`input.check`、`elevation.status/restart`、`autostart.status/set`、`history.list/delete/clear`、`diagnostics.export/clear`、`app.resources`、`postprocess.processors/test`。与下表命名的差异：长任务（下载）用“受理即返回 + 结果事件”而非 `jobId`；选择麦克风、引擎、profile 走 `settings.update`；`models.setActive` → `models.activate`、`system.elevation.*` → `elevation.*`、`system.autostart.*` → `autostart.*`、`system.resources` → `app.resources`、`text.processors/process` → `postprocess.processors/test`。
 
 | 领域 | 工具 | 性质 | 复用来源 |
 | --- | --- | --- | --- |
@@ -266,12 +266,12 @@ Kotone 侧只提供与传输无关的事件与回应协议；把事件变成 Age
 | --- | --- |
 | Skill | `SKILL.md` + 示例：何时用 Kotone、从 `app status/launch` 到常见流程（读聊天、翻译后播报、提醒）与失败处理；工具参考由 capabilities 生成，不手抄 schema。**初版已实现**：[`integrations/skills/kotone`](../integrations/skills/kotone/SKILL.md) |
 | 桌宠 / Agent 插件（DSH、pi 等） | 薄客户端：发现与认证、工具调用、订阅事件并转成 Agent 消息、`agent.reply` 回传；业务逻辑留在 Kotone。**DSH 已实现**：独立仓库 `dsh-game-communicate`（MCP 工具 + `user.request` 投进复用会话，真机端到端通过；2026-11-15 由本仓库 `integrations/dsh-kotone` 迁出）；pi 未做 |
-| MCP 适配 | `kotone-cli mcp`（stdio）把 capabilities 映射为 MCP 工具，`kotone_launch` 后发送 `tools/list_changed`。**已实现**；事件以 `kotone_events` 工具读取，尚未映射为 MCP 通知 |
+| MCP 适配 | `kotone.exe mcp`（安装版；开发时 `kotone-cli mcp`，stdio）把 capabilities 映射为 MCP 工具，`kotone_launch` 后发送 `tools/list_changed`。**已实现**；事件以 `kotone_events` 工具读取，尚未映射为 MCP 通知 |
 
 #### 5.5.6 建议顺序
 
 1. **底座**：后台启动与 `app.*`/CLI `app` 命令；事件总线、`user.request`/`agent.reply`；Skill 初版——**已完成（第一批，含 DSH 插件与 MCP，用于验证可行性）**。剩余：`app.restart`、`job.*`、`artifact.put` 与音频/文件产物、SSE。
-2. **只读面与管理面**：设置、连接（key 只写）、模型、profile、历史、诊断、热键状态等经典业务的查询与管理。
+2. **只读面与管理面**：设置、连接（key 只写）、模型、profile、历史、诊断、热键状态等经典业务的查询与管理——**已完成（第二批，以“引导页与设置页能做的配置 Agent 都能做”为标准）**。剩余：`settings.warnings`、`connections.test`、profile 导入导出 / `profile.detect` / 图标、热词与屏蔽词导入导出、`history.get/audio`、`eval.*`、`hotkey.capture`、`ocr.models.install`、`app.restart`。
 3. **输出与文本**：`tts.*`、`overlay.push`、`reminder.*`、`text.process`、`llm.complete`。
 4. **语音输入**：`audio.capture`、`asr.transcribe`、`asr.*` 会话（owner 隔离与麦克风互斥）。
 5. **输入与编排**：`chat.send`、`hotkey.register`、`workflow.*`。

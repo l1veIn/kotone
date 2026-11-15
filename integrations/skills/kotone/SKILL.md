@@ -1,6 +1,6 @@
 ---
 name: kotone
-description: Drive Kotone (local Windows voice-input / game-assistant app) from an Agent through kotone-cli — launch or quit it in the background, read the requests the user speaks to the Agent through Kotone, claim them, and answer by speech or danmaku; also capture and OCR game windows. Use when the user mentions Kotone, wants spoken/danmaku replies, wants you to handle requests they say into Kotone, or needs window screenshots/OCR of a game on this PC.
+description: Drive Kotone (local Windows voice-input / game-assistant app) from an Agent — launch or quit it in the background, set it up and configure it for the user (models, microphone, hotkeys, game profile, connections, elevation), read the requests the user speaks to the Agent through Kotone, claim them, and answer by speech or danmaku; also capture and OCR game windows. Use when the user mentions Kotone, wants it installed/configured, wants spoken/danmaku replies, wants you to handle requests they say into Kotone, or needs window screenshots/OCR of a game on this PC.
 ---
 
 # Kotone
@@ -32,13 +32,28 @@ echo '{"text":"已经帮你查好了"}' | kotone-cli tools call agent.reply --ar
 
 ## Requests the user sends you through Kotone
 
-With `assistant.route = agent` (set it with `kotone-cli config set assistant.route agent`, then restart Kotone), whatever the user says after the assistant hotkey becomes a `user.request` for you instead of Kotone's own reminder planner.
+With `assistant.route = agent` (while Kotone runs: `settings.update` with `{"patch":{"assistant":{"route":"agent"}}}`, effective immediately), whatever the user says after the assistant hotkey becomes a `user.request` for you instead of Kotone's own reminder planner.
 
 1. Read: `kotone-cli tools events --follow --types user.request` (JSON Lines, long-polls) or `kotone-cli tools call agent.requests` with `{"status":"pending"}`.
 2. Claim before acting: `agent.request.claim` with `{"requestId":"areq_…","consumer":"<who you are>"}`. Another consumer gets `AGENT_REQUEST_CLAIMED` — then it is not yours. Requests expire after 10 minutes.
 3. Answer: `agent.reply` with `{"requestId":"areq_…","text":"…","outputs":["speech"|"danmaku"]}`. It returns `status: accepted` immediately and delivers in the background (after other output and after the microphone is free); the outcome arrives as `agent.reply.delivered` / `agent.reply.failed` events with the same `deliveryId`. Pass `"wait": true` only when you must block until it has been spoken.
 
 Replies are heard or glanced at mid-game: one or two short spoken sentences, conclusion first. For long work, reply once briefly ("在查，稍等") and again when done — `agent.reply` may be called several times per request. Without `requestId` it is an unsolicited notice.
+
+## Setting Kotone up for the user
+
+Everything the onboarding wizard and settings window can do is a tool, using the same implementation (validated, saved, applied live; an open settings window refreshes itself). A first-time setup, instead of the wizard:
+
+1. `models.list` — pick a speech model (local ones need a download). **Ask the user where large models should go** before `models.dir.set {"dir": "D:\\Kotone\\models"}` (models can be hundreds of MB; the default is `~/.kotone/models`).
+2. `models.download {"id": "…"}` returns `started` immediately; wait for the `model.download.finished` / `model.download.failed` event (`kotone-cli tools events --follow --types model.download.*`). One download at a time (`BUSY`); `models.download.cancel` stops it. Then `models.activate {"engineId": "…", "modelId": "…"}`.
+3. `audio.devices` → `settings.update {"patch": {"audioDeviceId": "…"}}` for the microphone.
+4. Hotkey: `hotkeys.conflicts {"key": "F8"}` to check against common game bindings, then `settings.update {"patch": {"hotkey": {"key": "F8"}}}`; the assistant hotkey is `{"assistant": {"hotkey": …}}`. Confirm with `hotkeys.status`.
+5. `profiles.list` → `settings.update {"patch": {"activeProfileId": "lol"}}` (or `null` for automatic).
+6. Online features need a connection: `connections.presets` → ask the user for their API key → `connections.upsert {"connection": {...}, "apiKey": "…"}`. Keys are write-only; `connections.list` only shows `hasApiKey`. Never invent or log a key.
+7. `input.check` and `elevation.status`: if the game runs as administrator, Kotone must too — tell the user, then `elevation.restart` (Windows shows a UAC prompt; on accept Kotone restarts with a new instance id, so reconnect with `app status`; a refusal arrives as `elevation.restart.failed`).
+8. `runtime.start`, then `settings.update {"patch": {"ui": {"firstRunCompleted": true}}}` so the wizard does not appear again.
+
+`settings.get` shows everything; `settings.update` deep-merges a partial `patch` (it rejects `connections` and `models.dir` — use the dedicated tools). Also available: `speech.status` / `speech.model.download` (Kokoro voice package), `autostart.status` / `autostart.set`, `history.list` / `history.delete` / `history.clear` (what the user dictated — private), `diagnostics.export` (redacted ZIP path) / `diagnostics.clear`, `app.resources`, `postprocess.processors` / `postprocess.test`. Ask before destructive or system-level changes (clearing history, deleting models, autostart, elevation).
 
 ## Seeing the screen
 
@@ -52,4 +67,4 @@ Replies are heard or glanced at mid-game: one or two short spoken sentences, con
 
 ## Isolation
 
-`KOTONE_HOME` relocates Kotone's data directory (config, logs, tool-service descriptor) for tests or a second profile; pass the same value to `kotone-cli` and `kotone.exe`.
+`KOTONE_HOME` relocates Kotone's data directory (config, logs, tool-service descriptor) for tests or a second profile; pass the same value to `kotone-cli` and `kotone.exe`. Such an instance also gets its own credential namespace, so it never sees the main installation's API keys.
