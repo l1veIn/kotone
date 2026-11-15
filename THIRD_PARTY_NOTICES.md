@@ -2,6 +2,14 @@
 
 Kotone does not bundle speech model weights in the installer. The user chooses and downloads a model separately from within the application.
 
+## PP-OCRv5 (local OCR, optional)
+
+The optional local Korean OCR uses PP-OCRv5 mobile detection and Korean recognition models. They are not bundled; `kotone-cli ocr install` downloads the ONNX files on request and verifies their SHA-256.
+
+- Model project: PaddleOCR, https://github.com/PaddlePaddle/PaddleOCR (Apache License 2.0)
+- ONNX conversion and distribution: RapidAI/RapidOCR v3.10.0, https://github.com/RapidAI/RapidOCR (Apache License 2.0), files from https://www.modelscope.cn/models/RapidAI/RapidOCR
+- Inference uses the ONNX Runtime (MIT License) contained in the sherpa-onnx prebuilt package below; Kotone adds no separate OCR runtime.
+
 ## sherpa-onnx
 
 Kotone uses the sherpa-onnx runtime and its Rust bindings for local inference.

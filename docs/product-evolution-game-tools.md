@@ -1,6 +1,6 @@
 # Kotone 产品演进：面向 Agent 的游戏场景工具基础设施
 
-状态：演进计划。M1（桌面工具服务与视觉输入）已实现，现行协议、工具 schema 与捕获限制以[工具服务手册](tool-service.md)为准，验证记录见[M1 实现记录](research/game-tools-m1-implementation.md)；M2 及以后仍是计划，尚非 API。日期：2026-11-15。现有能力基线：`124cbf8`。本文与[本轮研究报告](research/2026-11-15-lol-chat-ocr-report.md)配套；当前行为仍以[架构](architecture.md)、[CLI 手册](cli.md)和实现为准。
+状态：演进计划。M1（桌面工具服务与视觉输入）与 M2（图像预处理、OCR、聊天消息跟踪）已实现，现行协议、工具 schema 与限制以[工具服务手册](tool-service.md)为准，验证记录见[M1 实现记录](research/game-tools-m1-implementation.md)与[M2 实现记录](research/game-tools-m2-implementation.md)；M3 及以后仍是计划，尚非 API。日期：2026-11-15。现有能力基线：`124cbf8`。本文与[本轮研究报告](research/2026-11-15-lol-chat-ocr-report.md)配套；当前行为仍以[架构](architecture.md)、[CLI 手册](cli.md)和实现为准。
 
 ## 1. 产品定位与首个场景
 
@@ -63,13 +63,14 @@ M1 之后，上表中“独立于 ASR 的外部工具服务”“连接正在运
 - `GET /v1/capabilities`、`GET /v1/status`、`POST /v1/tools/call`；CLI 使用同一协议，不另写一套业务逻辑。
 - capabilities 返回实际实现的工具及 schema、版本、就绪条件、数据外发/副作用属性。路线图里的工具不冒充已实现；未知工具返回 `TOOL_NOT_FOUND`。
 
-M1 已实现的 CLI 入口（参数与退出码见[工具服务手册](tool-service.md#7-命令行)）：
+已实现的 CLI 入口（参数与退出码见[工具服务手册](tool-service.md#10-命令行)）：
 
 ```text
 kotone-cli tools status
 kotone-cli tools list --json
 kotone-cli tools call <tool-name> --args-file <json-file>
 kotone-cli tools artifact get <artifact-id> --output <png-file>
+kotone-cli ocr status | ocr install        # M2：本地 OCR 模型就绪检查与显式安装
 ```
 
 原有 `send/listen/...` 行为继续由现行手册定义。本节以下的契约草案保留为设计依据；实际字段（如信封中的 `protocol/protocolVersion`、产物的 `rootTransform/screenRect`）以手册和 capabilities 为准。
@@ -123,7 +124,7 @@ M1 为有界短请求；后续长任务使用 `jobId` 和 queued/running/succeed
 
 ## 5. 计划中的服务暴露列表
 
-工具名为 v1 目标契约；表中阶段表示计划顺序。M1 的 8 个工具已实现（见[工具服务手册](tool-service.md#5-已实现工具)）；M2 及以后的工具当前不可调用，也不出现在 capabilities 中。每个工具均继承统一错误、超时、来源与计时契约。
+工具名为 v1 目标契约；表中阶段表示计划顺序。M1 的 8 个工具与 M2 的 6 个工具已实现（见[工具服务手册](tool-service.md#5-已实现工具)）；M3 及以后的工具当前不可调用，也不出现在 capabilities 中。每个工具均继承统一错误、超时、来源与计时契约。
 
 ### M1：桌面工具服务与视觉输入
 
@@ -139,6 +140,8 @@ M1 为有界短请求；后续长任务使用 `jobId` 和 queued/running/succeed
 | `artifact.release` | artifactId | 幂等释放回执 |
 
 ### M2：OCR、预处理与消息跟踪
+
+实现状态：已实现（[M2 实现记录](research/game-tools-m2-implementation.md)）。本地后端为不依赖 Python 的 Rust 实现（PP-OCRv5 韩文 mobile，复用 sherpa-onnx 已链接的 ONNX Runtime），模型经 `kotone-cli ocr install` 显式安装与哈希校验；在线 DeepSeek 后端需用户显式指定连接。下表与下文保留为设计依据，实际字段以手册与 capabilities 为准。
 
 | 工具 | 主要输入 | 主要输出 |
 | --- | --- | --- |

@@ -37,7 +37,15 @@
 | 窗口引用 / Window reference | `windowId`, `WindowIdentity` | 不透明 ID，绑定窗口句柄、PID 与进程创建时间，仅在发放它的实例内有效；捕获前重新校验。 |
 | 前台可见客户区捕获 / Foreground visible client capture | `gdi-screen-foreground-client` | 目标为前台时复制其客户区内屏幕已合成的物理像素；覆盖其上的窗口会被一并捕获，不支持后台/最小化/隐藏窗口，独占全屏可能得到黑图。 |
 | 产物 / Artifact | `artifactId`, `ArtifactStore` | 不可变的内存 PNG 图像及元数据（SHA-256、尺寸、TTL、父/根产物、到根图的变换）；裁剪生成新产物，原图不变。 |
-| 帧 / Frame | `frameId` | 一次采集的标识；同一捕获的裁剪链共享，不同帧的坐标不可混用。 |
+| 帧 / Frame | `frameId` | 一次采集的标识；同一捕获的裁剪/预处理链共享，不同帧的坐标不可混用。 |
+| 预处理 / Preprocess | `image.preprocess`, `preset`, `operations` | 显式的缩放/灰度/反色/自动对比度/阈值操作，生成新产物并记录实际比例；`preset=none` 不处理。不是 OCR 的强制前置步骤。 |
+| 根变换 / Root transform | `rootTransform` | `rootPoint = offset + scale × point`：把任意派生产物（含放大后再裁剪）中的像素映射回原始捕获的物理像素。 |
+| OCR 后端 / OCR backend | `OcrBackend`, `local-ppocrv5-korean`, `deepseek-ocr` | 可插拔的文字识别实现，显式选择、互不降级；本地不外发，在线只上传所选图像且需用户指定连接。 |
+| 文字观测 / Observation | `observations[]`, `granularity` | OCR 返回的一段原文及其几何：`line` 行框、`block` 整块框（块内行无坐标）、`page`/无几何；置信度可空，不是语义正确率。 |
+| 跟踪会话 / Tracking session | `chat.track.*`, `session` | 调用方命名的聊天跟踪状态：消息、事件、帧记录；有容量与空闲 TTL。 |
+| 消息 ID 与修订 / Message ID, revision | `messageId`, `revision` | 一个可视文本行在代际内的稳定身份；OCR 改字保持 ID 并 revision+1；同文重复发送可以是新 ID。 |
+| 代际 / Generation | `generation`, `chat.track.reset` | 新对局、重连、换 ROI 等边界；重置后清空消息与事件，旧游标失效。 |
+| 游标 / Cursor | `cursor`, `newSince` | 绑定会话与代际的事件位置，只用于读取其后的新增与修订；`visible` 读取与游标无关。 |
 
 ## 四种交互模式
 

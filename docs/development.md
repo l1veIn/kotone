@@ -27,7 +27,7 @@ pnpm dev
 | 桌面组合与 IPC | `apps/desktop/src-tauri/src`；前端 `lib/ipc.ts` 命令封装、`lib/ipc/contracts.ts` 类型、`lib/ipc/browserMock.ts` 浏览器实现、`lib/assistant.ts` 助手命令 |
 | 设置页面、悬浮窗、浏览器测试 | `apps/desktop/src/routes`、`apps/desktop/e2e` |
 | 命令行与评测目标解析 | `crates/kotone-cli/src/main.rs`、`crates/kotone-stt/src/eval.rs` |
-| 本机 Agent 工具服务 | 端口 `crates/kotone-core/src/tools.rs`；协议/存储/服务端/客户端 `crates/kotone-tools`；Windows 实现 `kotone-platform-windows/src/window_tools.rs`、`tool_host.rs`；桌面生命周期 `apps/desktop/src-tauri/src/tool_service.rs`；CLI `crates/kotone-cli/src/tools.rs` |
+| 本机 Agent 工具服务 | 端口 `crates/kotone-core/src/tools.rs`、`ocr.rs`；协议/存储/预处理/跟踪/服务端/客户端 `crates/kotone-tools`；OCR 后端与模型安装 `crates/kotone-ocr`；Windows 实现 `kotone-platform-windows/src/window_tools.rs`、`tool_host.rs`；桌面生命周期 `apps/desktop/src-tauri/src/tool_service.rs`；CLI `crates/kotone-cli/src/tools.rs`、`ocr.rs` |
 
 修改接口时同时检查 Rust、IPC 类型、Svelte 消费者和浏览器 mock。新增能力通过领域端口注入；core 不能反向依赖平台、STT 或网络实现。锁保护区内避免网络/音频设备/模型加载等阻塞操作，异步结果交付前再次核对会话代际。
 
