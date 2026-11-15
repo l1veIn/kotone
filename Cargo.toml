@@ -12,6 +12,7 @@ kotone-postprocess = { path = "crates/kotone-postprocess" }
 kotone-stt = { path = "crates/kotone-stt" }
 kotone-platform-windows = { path = "crates/kotone-platform-windows" }
 kotone-tools = { path = "crates/kotone-tools" }
+kotone-ocr = { path = "crates/kotone-ocr" }
 
 # 通用依赖
 serde = { version = "1", features = ["derive"] }

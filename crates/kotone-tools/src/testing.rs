@@ -124,9 +124,25 @@ pub struct FakeDesktop {
     capture_starts: AtomicU64,
     capture_threads: Mutex<Vec<std::thread::ThreadId>>,
     unavailable: Mutex<Option<String>>,
+    /// 覆盖捕获像素（宽, 高, RGBA）；为 None 时使用坐标花纹。
+    image: Mutex<Option<(u32, u32, Vec<u8>)>>,
 }
 
 impl FakeDesktop {
+    /// 让后续捕获返回指定像素（客户区尺寸随之改为图像尺寸）。用于真实 OCR 冒烟。
+    pub fn set_image(&self, handle: u64, width: u32, height: u32, rgba: Vec<u8>) {
+        assert_eq!(rgba.len(), width as usize * height as usize * 4);
+        for w in self.windows.lock().unwrap().iter_mut() {
+            if w.info.identity.handle == handle {
+                if let Some(rect) = w.info.client_rect.as_mut() {
+                    rect.width = width;
+                    rect.height = height;
+                }
+            }
+        }
+        *self.image.lock().unwrap() = Some((width, height, rgba));
+    }
+
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
@@ -330,14 +346,249 @@ impl WindowCapturer for FakeDesktop {
             });
         }
         self.captures.fetch_add(1, Ordering::SeqCst);
+        let rgba = match self.image.lock().unwrap().as_ref() {
+            Some((w, h, px)) if *w == rect.width && *h == rect.height => px.clone(),
+            _ => pattern(rect.width, rect.height),
+        };
         Ok(CapturedImage {
             width: rect.width,
             height: rect.height,
-            rgba: pattern(rect.width, rect.height),
+            rgba,
             client_rect: rect,
             dpi: info.dpi,
             warnings: vec![CaptureWarning::new("FAKE", "test double")],
         })
+    }
+}
+
+/// 可编排的假 OCR 后端：按调用顺序返回预设结果，记录调用、取消与最大并发。
+///
+/// `cooperative=false` 时模拟不响应取消的后端（工作线程在延迟结束前不会返回），
+/// 用于验证名额直到工作线程真正结束才释放。
+pub struct FakeOcr {
+    id: String,
+    kind: kotone_core::ocr::OcrBackendKind,
+    state: Mutex<FakeOcrState>,
+    calls: AtomicU64,
+    cancels: AtomicU64,
+    finished: AtomicU64,
+    active: std::sync::atomic::AtomicUsize,
+    max_active: std::sync::atomic::AtomicUsize,
+}
+
+struct FakeOcrState {
+    ready: bool,
+    languages: Vec<String>,
+    delay: Duration,
+    cooperative: bool,
+    script:
+        std::collections::VecDeque<Result<kotone_core::ocr::OcrOutput, kotone_core::ocr::OcrError>>,
+}
+
+/// 便捷构造：一行带框观测（输入图像像素）。
+pub fn ocr_line(
+    text: &str,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    confidence: Option<f32>,
+) -> kotone_core::ocr::OcrObservation {
+    kotone_core::ocr::OcrObservation {
+        text: text.into(),
+        granularity: kotone_core::ocr::OcrGranularity::Line,
+        bbox: Some(kotone_core::ocr::OcrRect {
+            x,
+            y,
+            width: w,
+            height: h,
+        }),
+        polygon: Some([[x, y], [x + w, y], [x + w, y + h], [x, y + h]]),
+        confidence,
+        label: None,
+        lines: vec![],
+    }
+}
+
+/// 便捷构造：识别结果。
+pub fn ocr_output(
+    observations: Vec<kotone_core::ocr::OcrObservation>,
+) -> kotone_core::ocr::OcrOutput {
+    kotone_core::ocr::OcrOutput {
+        observations,
+        raw_text: None,
+        truncated: false,
+        warnings: vec![],
+        model_version: "fake-model 1".into(),
+        cold_start: false,
+        phases: vec![],
+        extra: serde_json::json!({}),
+    }
+}
+
+impl FakeOcr {
+    pub fn new(id: &str, kind: kotone_core::ocr::OcrBackendKind) -> Arc<Self> {
+        Arc::new(Self {
+            id: id.into(),
+            kind,
+            state: Mutex::new(FakeOcrState {
+                ready: true,
+                languages: vec!["ko".into()],
+                delay: Duration::ZERO,
+                cooperative: true,
+                script: Default::default(),
+            }),
+            calls: AtomicU64::new(0),
+            cancels: AtomicU64::new(0),
+            finished: AtomicU64::new(0),
+            active: Default::default(),
+            max_active: Default::default(),
+        })
+    }
+
+    pub fn set_ready(&self, ready: bool) {
+        self.state.lock().unwrap().ready = ready;
+    }
+
+    pub fn set_languages(&self, languages: &[&str]) {
+        self.state.lock().unwrap().languages = languages.iter().map(|s| s.to_string()).collect();
+    }
+
+    pub fn set_delay(&self, delay: Duration, cooperative: bool) {
+        let mut state = self.state.lock().unwrap();
+        state.delay = delay;
+        state.cooperative = cooperative;
+    }
+
+    pub fn push(&self, result: Result<kotone_core::ocr::OcrOutput, kotone_core::ocr::OcrError>) {
+        self.state.lock().unwrap().script.push_back(result);
+    }
+
+    /// 真正开始执行（越过语言/选项校验）的识别次数。
+    pub fn calls(&self) -> u64 {
+        self.calls.load(Ordering::SeqCst)
+    }
+
+    pub fn cancels(&self) -> u64 {
+        self.cancels.load(Ordering::SeqCst)
+    }
+
+    /// 工作线程真正结束（返回）的识别次数。
+    pub fn finished(&self) -> u64 {
+        self.finished.load(Ordering::SeqCst)
+    }
+
+    pub fn max_active(&self) -> usize {
+        self.max_active.load(Ordering::SeqCst)
+    }
+}
+
+impl kotone_core::ocr::OcrBackend for FakeOcr {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn kind(&self) -> kotone_core::ocr::OcrBackendKind {
+        self.kind
+    }
+
+    fn info(&self) -> kotone_core::ocr::OcrBackendInfo {
+        let state = self.state.lock().unwrap();
+        kotone_core::ocr::OcrBackendInfo {
+            id: self.id.clone(),
+            kind: self.kind,
+            display_name: format!("fake {}", self.id),
+            ready: state.ready,
+            state: if state.ready {
+                "ready"
+            } else {
+                "not-installed"
+            }
+            .into(),
+            reason: (!state.ready).then(|| "fake backend not installed".to_string()),
+            languages: state.languages.clone(),
+            default_language: state.languages.first().cloned().unwrap_or_default(),
+            data_egress: if self.kind == kotone_core::ocr::OcrBackendKind::Online {
+                "selected-image"
+            } else {
+                "none"
+            }
+            .into(),
+            options_schema: serde_json::json!({"type": ["object", "null"], "additionalProperties": false, "properties": {}}),
+            details: serde_json::json!({"fake": true}),
+        }
+    }
+
+    fn recognize(
+        &self,
+        input: &kotone_core::ocr::OcrInput<'_>,
+        params: &kotone_core::ocr::OcrParams,
+        cancel: &kotone_core::ocr::OcrCancel,
+        _deadline: std::time::Instant,
+    ) -> Result<kotone_core::ocr::OcrOutput, kotone_core::ocr::OcrError> {
+        use kotone_core::ocr::OcrError;
+        let (ready, languages, delay, cooperative) = {
+            let s = self.state.lock().unwrap();
+            (s.ready, s.languages.clone(), s.delay, s.cooperative)
+        };
+        if !languages.contains(&params.language) {
+            return Err(OcrError::UnsupportedLanguage {
+                language: params.language.clone(),
+                supported: languages,
+            });
+        }
+        match &params.options {
+            Value::Null => {}
+            Value::Object(m) if m.is_empty() => {}
+            Value::Object(m) => {
+                return Err(OcrError::UnsupportedOption {
+                    option: m.keys().next().cloned().unwrap_or_default(),
+                    message: "fake backend has no options".into(),
+                })
+            }
+            _ => {
+                return Err(OcrError::UnsupportedOption {
+                    option: "options".into(),
+                    message: "must be an object".into(),
+                })
+            }
+        }
+        if !ready {
+            return Err(OcrError::NotReady {
+                reason: "not-installed".into(),
+                message: "fake backend not installed".into(),
+            });
+        }
+        assert!(input.width > 0 && !input.png.is_empty());
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let now_active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_active.fetch_max(now_active, Ordering::SeqCst);
+        struct Done<'a>(&'a FakeOcr);
+        impl Drop for Done<'_> {
+            fn drop(&mut self) {
+                self.0.active.fetch_sub(1, Ordering::SeqCst);
+                self.0.finished.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let _done = Done(self);
+        let started = std::time::Instant::now();
+        while started.elapsed() < delay {
+            // 协作模式只响应取消令牌（不自行检查期限），用于验证服务端的取消传递
+            if cooperative && cancel.is_cancelled() {
+                self.cancels.fetch_add(1, Ordering::SeqCst);
+                return Err(OcrError::Cancelled);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if cancel.is_cancelled() {
+            self.cancels.fetch_add(1, Ordering::SeqCst);
+        }
+        self.state
+            .lock()
+            .unwrap()
+            .script
+            .pop_front()
+            .unwrap_or_else(|| Ok(ocr_output(vec![])))
     }
 }
 

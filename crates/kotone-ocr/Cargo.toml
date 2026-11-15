@@ -1,0 +1,30 @@
+[package]
+name = "kotone-ocr"
+version = "0.1.0"
+description = "Kotone OCR 后端：本地韩文 PP-OCRv5（复用 sherpa-onnx 已静态链接的 ONNX Runtime）与 DeepSeek 在线 OCR；模型清单、安装与就绪校验"
+edition = "2021"
+rust-version = "1.77.2"
+
+# 依赖纪律：实现 kotone-core::ocr 端口；不依赖 Tauri / Windows / kotone-tools。
+[dependencies]
+kotone-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+sha2 = "0.10"
+getrandom = "0.2"
+# 在线 OCR 与模型下载（rustls；与 kotone-ai 相同的特性集合）
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+# 本地推理：不新增原生库。sherpa-onnx 的静态预编译包已包含 ONNX Runtime 1.27.1；
+# 依赖其 -sys crate（默认 static，与 kotone-stt 的 sherpa-onnx 同一份预编译库）以确保链接。
+sherpa-onnx-sys = { version = "1.13.5", optional = true }
+
+[features]
+default = []
+# 本地 PP-OCRv5 推理（ONNX Runtime C API）。桌面与 CLI 随 engine-sherpa 一起开启。
+onnx = ["dep:sherpa-onnx-sys"]
+
+[dev-dependencies]
+tempfile.workspace = true
+wiremock = "0.6"
+png = "0.17"

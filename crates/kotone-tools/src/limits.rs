@@ -32,6 +32,14 @@ pub struct ServiceLimits {
     /// 产物存储总字节（RGBA 像素 + PNG）。
     pub max_store_bytes: u64,
     pub max_window_list: usize,
+    /// 同时进行的本地 OCR 推理数（每次推理已使用多线程）。
+    pub local_ocr_concurrency: usize,
+    /// 同时进行的在线 OCR 请求数。
+    pub online_ocr_concurrency: usize,
+    /// 驻留的 OCR 结果（供 chat.track.ingest 引用）上限与存活时间。
+    pub max_ocr_results: usize,
+    pub ocr_result_ttl_ms: u64,
+    pub track: crate::tracking::TrackLimits,
 }
 
 impl Default for ServiceLimits {
@@ -55,6 +63,11 @@ impl Default for ServiceLimits {
             max_artifacts: 32,
             max_store_bytes: 256 * 1024 * 1024,
             max_window_list: 256,
+            local_ocr_concurrency: 1,
+            online_ocr_concurrency: 2,
+            max_ocr_results: 64,
+            ocr_result_ttl_ms: 600_000,
+            track: crate::tracking::TrackLimits::default(),
         }
     }
 }
@@ -73,6 +86,12 @@ impl ServiceLimits {
             "maxArtifacts": self.max_artifacts,
             "maxStoreBytes": self.max_store_bytes,
             "maxWindowList": self.max_window_list,
+            "localOcrConcurrency": self.local_ocr_concurrency,
+            "onlineOcrConcurrency": self.online_ocr_concurrency,
+            "maxOcrResults": self.max_ocr_results,
+            "ocrResultTtlMs": self.ocr_result_ttl_ms,
+            "maxPreprocessOperations": crate::preprocess::MAX_OPERATIONS,
+            "chatTrack": self.track.to_json(),
         })
     }
 }

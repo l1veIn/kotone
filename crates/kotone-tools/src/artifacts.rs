@@ -1,6 +1,7 @@
 //! 不可变、有界的图像产物存储。
 //!
-//! - 产物创建后不可修改；裁剪生成新产物并记录父产物、根产物与到根图的平移变换。
+//! - 产物创建后不可修改；裁剪/预处理生成新产物并记录父产物、根产物与到根图的
+//!   变换（`root = offset + scale × point`，预处理放大后 scale 可为小数）。
 //! - 每个产物有 TTL；存储按数量与总字节上限回收最旧产物。
 //! - 已释放 / 过期 / 被回收的 ID 留有限墓碑，返回可区分的错误；从未存在的 ID 为 NotFound。
 //! - 锁内只做哈希表操作；裁剪、PNG 编码、哈希均在锁外完成。
@@ -36,6 +37,7 @@ impl Clock for SystemClock {
 pub enum ArtifactKind {
     Capture,
     Crop,
+    Preprocess,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -47,14 +49,76 @@ pub struct RectJson {
     pub height: u32,
 }
 
-/// 从当前产物坐标映射回根产物：`root = offset + scale * p`。M1 只有裁剪，scale 恒为 1。
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+/// 从当前产物坐标映射回根产物：`root = offset + scale * p`（像素边界坐标）。
+/// 裁剪只平移（scale 不变）；预处理放大 N 倍后 scale 乘以 1/N。offset 为整数时以 JSON
+/// 整数输出（与 M1 兼容），否则为小数；scale 恒以小数输出。
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RootTransform {
-    pub offset_x: i64,
-    pub offset_y: i64,
+    pub offset_x: f64,
+    pub offset_y: f64,
     pub scale_x: f64,
     pub scale_y: f64,
+}
+
+impl RootTransform {
+    pub const IDENTITY: Self = Self {
+        offset_x: 0.0,
+        offset_y: 0.0,
+        scale_x: 1.0,
+        scale_y: 1.0,
+    };
+
+    /// 子产物的根变换：子产物点 p 对应父产物点 `local_offset + p / local_scale`。
+    pub fn compose(&self, local_offset: (f64, f64), local_scale: (f64, f64)) -> Self {
+        Self {
+            offset_x: self.offset_x + self.scale_x * local_offset.0,
+            offset_y: self.offset_y + self.scale_y * local_offset.1,
+            scale_x: self.scale_x / local_scale.0,
+            scale_y: self.scale_y / local_scale.1,
+        }
+    }
+
+    pub fn map_rect(&self, x: f64, y: f64, width: f64, height: f64) -> RegionJson {
+        RegionJson {
+            x: self.offset_x + self.scale_x * x,
+            y: self.offset_y + self.scale_y * y,
+            width: self.scale_x * width,
+            height: self.scale_y * height,
+        }
+    }
+}
+
+impl Serialize for RootTransform {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(4))?;
+        map.serialize_entry("offsetX", &crate::tracking::compact(self.offset_x))?;
+        map.serialize_entry("offsetY", &crate::tracking::compact(self.offset_y))?;
+        map.serialize_entry("scaleX", &self.scale_x)?;
+        map.serialize_entry("scaleY", &self.scale_y)?;
+        map.end()
+    }
+}
+
+/// 可含小数的区域（根产物或屏幕物理像素）；整数值输出为 JSON 整数。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RegionJson {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl Serialize for RegionJson {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(4))?;
+        map.serialize_entry("x", &crate::tracking::compact(self.x))?;
+        map.serialize_entry("y", &crate::tracking::compact(self.y))?;
+        map.serialize_entry("width", &crate::tracking::compact(self.width))?;
+        map.serialize_entry("height", &crate::tracking::compact(self.height))?;
+        map.end()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -99,10 +163,13 @@ pub struct ArtifactMeta {
     pub coordinate_space: &'static str,
     pub root_transform: RootTransform,
     /// 本产物在根产物中的位置。
-    pub root_rect: RectJson,
+    pub root_rect: RegionJson,
     /// 本产物在屏幕上的物理位置（采集时刻）。
-    pub screen_rect: RectJson,
+    pub screen_rect: RegionJson,
     pub source: CaptureSource,
+    /// 本产物由父产物得到的方式：捕获为 null；裁剪 `{type:"crop",rect}`；
+    /// 预处理 `{type:"preprocess",preset,operations,scaleX,scaleY}`。
+    pub derivation: serde_json::Value,
 }
 
 pub const COORDINATE_SPACE: &str = "artifact-physical-pixels";
@@ -406,6 +473,12 @@ mod tests {
             width: side,
             height: side,
         };
+        let region = RegionJson {
+            x: 0.0,
+            y: 0.0,
+            width: f64::from(side),
+            height: f64::from(side),
+        };
         ArtifactRecord {
             meta: ArtifactMeta {
                 artifact_id: id.into(),
@@ -421,14 +494,10 @@ mod tests {
                 parent_artifact_id: None,
                 root_artifact_id: id.into(),
                 coordinate_space: COORDINATE_SPACE,
-                root_transform: RootTransform {
-                    offset_x: 0,
-                    offset_y: 0,
-                    scale_x: 1.0,
-                    scale_y: 1.0,
-                },
-                root_rect: rect,
-                screen_rect: rect,
+                root_transform: RootTransform::IDENTITY,
+                root_rect: region,
+                screen_rect: region,
+                derivation: serde_json::Value::Null,
                 source: CaptureSource {
                     frame_id: "frm_test".into(),
                     window_id: "win_test".into(),
@@ -568,6 +637,38 @@ mod tests {
         assert_eq!(store.resident_without_purge().0, 2, "观测接口自身不清理");
         assert_eq!(store.purge_expired(), 1);
         assert_eq!(store.resident_without_purge().0, 1);
+    }
+
+    #[test]
+    fn transforms_compose_through_scale_and_crop() {
+        // 根 → 放大 3 倍 → 在放大图 (30, 60) 裁剪 → 再放大 2 倍
+        let up3 = RootTransform::IDENTITY.compose((0.0, 0.0), (3.0, 3.0));
+        let crop = up3.compose((30.0, 60.0), (1.0, 1.0));
+        assert_eq!((crop.offset_x, crop.offset_y), (10.0, 20.0));
+        let up2 = crop.compose((0.0, 0.0), (2.0, 2.0));
+        assert!((up2.scale_x - 1.0 / 6.0).abs() < 1e-12);
+        // 二级产物中 (60, 6) 的点 = 放大图 (30+30, 60+3) = 根 (20, 21)
+        let r = up2.map_rect(60.0, 6.0, 6.0, 12.0);
+        assert!((r.x - 20.0).abs() < 1e-9 && (r.y - 21.0).abs() < 1e-9);
+        assert!((r.width - 1.0).abs() < 1e-9 && (r.height - 2.0).abs() < 1e-9);
+        let json = serde_json::to_value(crop).unwrap();
+        assert_eq!(
+            json["offsetX"],
+            serde_json::json!(10),
+            "整数偏移保持 JSON 整数"
+        );
+        assert!(json["scaleX"].is_f64());
+        let frac = serde_json::to_value(RegionJson {
+            x: 1.5,
+            y: 2.0,
+            width: 3.0,
+            height: 0.25,
+        })
+        .unwrap();
+        assert_eq!(
+            frac,
+            serde_json::json!({"x": 1.5, "y": 2, "width": 3, "height": 0.25})
+        );
     }
 
     #[test]

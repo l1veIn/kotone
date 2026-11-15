@@ -1,8 +1,10 @@
-//! kotone-tools：面向 Agent 的本机工具服务（M1）。
+//! kotone-tools：面向 Agent 的本机工具服务（M1 视觉输入 + M2 预处理/OCR/聊天跟踪）。
 //!
 //! - `protocol`：v1 请求/结果信封、错误码、计时
 //! - `catalog`：已实现工具与 JSON Schema（只列真实可调用的工具）
 //! - `image` / `artifacts`：不可变 RGBA 图像、裁剪校验、PNG 编码与有界产物存储
+//! - `preprocess`：显式预设/操作的图像预处理与坐标比例
+//! - `ocr_results` / `tracking`：驻留 OCR 结果与聊天消息跟踪（会话、代际、游标）
 //! - `service`：调度、并发/期限、窗口引用与产物提交
 //! - `server`：127.0.0.1 随机端口 HTTP 服务，每个端点校验会话凭证
 //! - `discovery`：当前用户/会话私有的描述文件发布与校验
@@ -18,6 +20,8 @@ pub mod discovery;
 pub mod ids;
 pub mod image;
 pub mod limits;
+pub mod ocr_results;
+pub mod preprocess;
 pub mod protocol;
 pub mod server;
 pub mod service;
@@ -27,7 +31,10 @@ pub mod testing;
 #[cfg(test)]
 mod tests_http;
 #[cfg(test)]
+mod tests_m2;
+#[cfg(test)]
 mod tests_races;
+pub mod tracking;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -85,6 +92,11 @@ impl RunningToolService {
             }
         };
         let maintenance = service.spawn_maintenance();
+        // 后台做一次 OCR 后端就绪检查（模型哈希、凭据读取），不阻塞启动与异步线程
+        let refresh = service.clone();
+        tokio::task::spawn_blocking(move || {
+            refresh.refresh_ocr_readiness();
+        });
         Ok(Self {
             service,
             server: Some(server),

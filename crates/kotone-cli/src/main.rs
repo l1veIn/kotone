@@ -13,6 +13,7 @@
 //! - `log`：识别历史 list / clear（core history 模块的 CLI 出口）
 //! - `tools`：连接已运行桌面实例的本机工具服务（status / list / call / artifact get）
 
+mod ocr;
 mod tools;
 
 use clap::{Parser, Subcommand};
@@ -163,6 +164,11 @@ enum Command {
     Tools {
         #[command(subcommand)]
         action: tools::ToolsCommand,
+    },
+    /// 本地 OCR 模型：status 就绪检查 / install 显式安装（工具服务 ocr.recognize 使用）
+    Ocr {
+        #[command(subcommand)]
+        action: ocr::OcrCommand,
     },
 }
 
@@ -317,6 +323,7 @@ async fn main() {
             } => cmd_log_delete(&session_id, &ts, yes),
         },
         Command::Tools { action } => tools::run(action).await,
+        Command::Ocr { action } => ocr::run(action).await,
     };
     std::process::exit(code);
 }
@@ -1076,6 +1083,7 @@ const CONFIG_SETTABLE_KEYS: &[&str] = &[
     "overlay.draggable",
     "overlay.clickThrough",
     "toolService.enabled",
+    "toolService.ocr.deepseekConnectionId",
 ];
 
 /// 点路径写入：current 上套 patch → Settings 反序列化校验（枚举值在此拦截）。
@@ -1129,13 +1137,29 @@ fn apply_config_set(current: &Settings, key: &str, raw: &str) -> Result<Settings
             Ok(v) if (20..=500).contains(&v) => serde_json::Value::Number(v.into()),
             _ => return Err(format!("{key} 只接受 20-500 的整数毫秒（收到「{raw}」）")),
         },
+        // 在线 OCR 连接：空字符串清除（不再外发图像）；非空必须是已有连接 ID
+        "toolService.ocr.deepseekConnectionId" => {
+            let id = raw.trim();
+            if id.is_empty() {
+                serde_json::Value::Null
+            } else if current.connections.iter().any(|c| c.id == id) {
+                serde_json::Value::String(id.to_string())
+            } else {
+                return Err(format!(
+                    "未找到连接「{id}」；请先在设置页添加连接（API key 存入系统凭据库）"
+                ));
+            }
+        }
         // 字符串与枚举键：原样写入，枚举由 Settings 反序列化校验
         _ => serde_json::Value::String(raw.to_string()),
     };
-    let patch = match key.split_once('.') {
-        Some((top, sub)) => serde_json::json!({ top: { sub: value } }),
-        None => serde_json::json!({ key: value }),
-    };
+    // 点路径 → 嵌套补丁（支持多级，如 toolService.ocr.deepseekConnectionId）
+    let mut patch = value;
+    for part in key.rsplit('.') {
+        let mut object = serde_json::Map::new();
+        object.insert(part.to_string(), patch);
+        patch = serde_json::Value::Object(object);
+    }
     let mut merged =
         serde_json::to_value(current).map_err(|e| format!("序列化当前配置失败: {e}"))?;
     settings::merge_json(&mut merged, &patch);
@@ -1256,7 +1280,7 @@ fn cmd_config_set(key: &str, value: Option<&str>, capture: bool) -> i32 {
     match settings::save(&next) {
         Ok(()) => {
             println!("已写入 {key} = {value}");
-            if key == "toolService.enabled" {
+            if key == "toolService.enabled" || key.starts_with("toolService.") {
                 println!(
                     "工具服务开关在桌面端启动时读取：请先从托盘退出 Kotone 再重新启动（桌面端运行时保存设置会覆盖此处的修改）"
                 );
@@ -1767,6 +1791,26 @@ mod tests {
         let s = apply_config_set(&s, "toolService.enabled", "false").unwrap();
         assert!(!s.tool_service.enabled);
         assert!(apply_config_set(&Settings::default(), "toolService.enabled", "on").is_err());
+        // 在线 OCR 连接：必须是已有连接；空字符串清除
+        let key = "toolService.ocr.deepseekConnectionId";
+        assert!(apply_config_set(&Settings::default(), key, "ds").is_err());
+        let mut base = Settings::default();
+        base.connections.push(kotone_core::connection::Connection {
+            id: "ds".into(),
+            display_name: "DeepSeek".into(),
+            kind: kotone_core::connection::ConnectionKind::Remote,
+            provider: "custom".into(),
+            base_url: "https://api.deepseek.com".into(),
+            model: "deepseek-chat".into(),
+        });
+        let s = apply_config_set(&base, key, "ds").unwrap();
+        assert_eq!(
+            s.tool_service.ocr.deepseek_connection_id.as_deref(),
+            Some("ds")
+        );
+        assert!(s.tool_service.enabled == base.tool_service.enabled);
+        let s = apply_config_set(&s, key, "").unwrap();
+        assert!(s.tool_service.ocr.deepseek_connection_id.is_none());
         assert!(apply_config_set(&Settings::default(), "toolService.port", "1234").is_err());
     }
 

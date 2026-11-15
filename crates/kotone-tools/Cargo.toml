@@ -27,5 +27,8 @@ test-support = []
 
 [dev-dependencies]
 tempfile.workspace = true
+# M2：真实 DeepSeek 后端对接本地 mock 服务（不触网、无本地推理特性）
+kotone-ocr.workspace = true
+wiremock = "0.6"
 # 测试真实私有描述文件 ACL 与进程身份（窗口后端仍用假实现）
 kotone-platform-windows.workspace = true

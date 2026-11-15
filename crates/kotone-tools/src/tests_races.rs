@@ -33,6 +33,7 @@ fn deps(desktop: &Arc<FakeDesktop>, clock: Arc<dyn Clock>, limits: ServiceLimits
         asr_phase: Arc::new(|| "stopped".into()),
         limits,
         clock,
+        ocr_backends: Vec::new(),
     }
 }
 

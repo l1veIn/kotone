@@ -2484,10 +2484,12 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "kotone-core",
+ "kotone-ocr",
  "kotone-platform-windows",
  "kotone-postprocess",
  "kotone-stt",
  "kotone-tools",
+ "png 0.17.16",
  "serde",
  "serde_json",
  "tempfile",
@@ -2507,6 +2509,23 @@ dependencies = [
  "tempfile",
  "tokio",
  "zip",
+]
+
+[[package]]
+name = "kotone-ocr"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.2.17",
+ "kotone-core",
+ "png 0.17.16",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sherpa-onnx-sys",
+ "tempfile",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]
@@ -2569,6 +2588,7 @@ dependencies = [
  "dirs",
  "kotone-ai",
  "kotone-core",
+ "kotone-ocr",
  "kotone-platform-windows",
  "kotone-postprocess",
  "kotone-stt",
@@ -2602,6 +2622,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "kotone-core",
+ "kotone-ocr",
  "kotone-platform-windows",
  "png 0.17.16",
  "reqwest 0.12.28",
@@ -2610,6 +2631,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "wiremock",
 ]
 
 [[package]]

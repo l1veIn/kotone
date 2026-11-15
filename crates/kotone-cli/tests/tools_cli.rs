@@ -96,6 +96,7 @@ async fn start_service(run_dir: &Path) -> (RunningToolService, Arc<FakeDesktop>)
         asr_phase: Arc::new(|| "stopped".into()),
         limits: ServiceLimits::default(),
         clock: Arc::new(SystemClock),
+        ocr_backends: Vec::new(),
     };
     let running = RunningToolService::start(deps, Arc::new(WindowsToolHost), run_dir)
         .await
@@ -257,7 +258,7 @@ async fn cli_drives_a_running_service_end_to_end() {
     outputs.push(forced);
 
     // 工具错误：退出码 1，信封中带错误码
-    let planned = run!(run_dir, ["tools", "call", "ocr.recognize"]);
+    let planned = run!(run_dir, ["tools", "call", "tts.speak"]);
     assert_eq!(planned.code, 1);
     assert_eq!(planned.json()["error"]["code"], "TOOL_NOT_FOUND");
     outputs.push(planned);

@@ -144,6 +144,21 @@ pub struct Settings {
 pub struct ToolServiceConfig {
     #[serde(default)]
     pub enabled: bool,
+    /// 工具服务的 OCR 后端配置（M2）。
+    #[serde(default)]
+    pub ocr: ToolOcrConfig,
+}
+
+/// 工具服务 OCR 配置（config.json `toolService.ocr` 段）。
+///
+/// 在线 OCR 默认关闭：只有用户显式指定一条已有连接（API key 仍在系统凭据库）后，
+/// `deepseek-ocr` 后端才会就绪；Agent 不能通过参数改选其他连接或端点。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolOcrConfig {
+    /// 用于 DeepSeek 在线 OCR 的连接 ID；None = 不启用在线 OCR（不会外发图像）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deepseek_connection_id: Option<String>,
 }
 
 /// 诊断记录开关（config.json `diagnostics` 段）。
@@ -1028,6 +1043,26 @@ mod tests {
             merged
         });
         assert!(bad.is_err());
+
+        // 在线 OCR 连接默认未配置，配置后 round-trip
+        assert!(Settings::default()
+            .tool_service
+            .ocr
+            .deepseek_connection_id
+            .is_none());
+        std::fs::write(
+            &path,
+            r#"{"toolService":{"enabled":true,"ocr":{"deepseekConnectionId":"ds"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_from(&path)
+                .tool_service
+                .ocr
+                .deepseek_connection_id
+                .as_deref(),
+            Some("ds")
+        );
     }
 
     #[test]

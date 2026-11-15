@@ -28,6 +28,8 @@ kotone-stt.workspace = true
 kotone-platform-windows.workspace = true
 # 可选本机 Agent 工具服务（默认关闭，toolService.enabled）
 kotone-tools.workspace = true
+# 工具服务 OCR 后端（M2）：本地韩文 PP-OCRv5 与 DeepSeek 在线
+kotone-ocr.workspace = true
 
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
@@ -63,7 +65,9 @@ tempfile.workspace = true
 # STT 引擎 feature 转发到 kotone-stt（§3.3）
 # 默认内置 sherpa-onnx 引擎 + silero VAD（ADR-007 one-shot 静音判停开箱可用）；
 # 裁剪体积可 --no-default-features 后按需开启
-default = ["engine-sherpa", "vad-silero"]
+default = ["engine-sherpa", "vad-silero", "ocr-local"]
 engine-sherpa = ["kotone-stt/engine-sherpa"]
 # VAD（ADR-007 one-shot 静音判停）：复用 sherpa-onnx 原生依赖
 vad-silero = ["kotone-stt/vad-silero"]
+# 本地 OCR 推理：使用 sherpa-onnx 静态库内的 ONNX Runtime（不新增原生库）
+ocr-local = ["kotone-ocr/onnx"]

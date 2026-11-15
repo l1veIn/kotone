@@ -55,6 +55,7 @@ impl Harness {
             asr_phase: Arc::new(|| "stopped".to_string()),
             limits,
             clock: clock.clone(),
+            ocr_backends: Vec::new(),
         };
         let running = RunningToolService::start(deps, host.clone(), dir.path())
             .await
@@ -318,16 +319,20 @@ async fn capabilities_list_exactly_the_implemented_tools() {
     assert_eq!(names, IMPLEMENTED_TOOLS);
     for tool in caps["tools"].as_array().unwrap() {
         assert_eq!(tool["status"], "implemented");
-        assert_eq!(tool["dataEgress"], "none");
-        assert_eq!(tool["ready"], true, "{}", tool["name"]);
+        if tool["name"] == "ocr.recognize" {
+            // 数据是否外发取决于所选后端；本测试实例没有任何 OCR 后端 → 未就绪
+            assert_eq!(tool["dataEgress"], "backend-dependent");
+            assert_eq!(tool["ready"], false);
+            assert!(tool["notReadyReason"].is_string());
+        } else {
+            assert_eq!(tool["dataEgress"], "none", "{}", tool["name"]);
+            assert_eq!(tool["ready"], true, "{}", tool["name"]);
+        }
     }
     assert_eq!(caps["capture"]["method"], "fake-test-capture");
-    // 路线图工具不冒充已实现
+    assert_eq!(caps["ocr"]["fallback"], "none");
+    // 路线图工具（M3/M4）不冒充已实现
     for planned in [
-        "ocr.recognize",
-        "ocr.backends",
-        "image.preprocess",
-        "chat.track.read",
         "hotkey.register",
         "workflow.run",
         "llm.complete",
@@ -921,6 +926,7 @@ async fn publish_refuses_to_replace_a_live_foreign_instance() {
         asr_phase: Arc::new(|| "running".into()),
         limits: ServiceLimits::default(),
         clock: Arc::new(crate::artifacts::SystemClock),
+        ocr_backends: Vec::new(),
     };
     let err = RunningToolService::start(deps, h.host.clone(), h.dir.path())
         .await
@@ -938,6 +944,7 @@ async fn publish_refuses_to_replace_a_live_foreign_instance() {
         asr_phase: Arc::new(|| "running".into()),
         limits: ServiceLimits::default(),
         clock: Arc::new(crate::artifacts::SystemClock),
+        ocr_backends: Vec::new(),
     };
     let third = RunningToolService::start(deps, h.host.clone(), h.dir.path())
         .await
@@ -967,6 +974,7 @@ async fn windows_host_writes_private_descriptor_and_client_verifies_it() {
         asr_phase: Arc::new(|| "stopped".into()),
         limits: ServiceLimits::default(),
         clock: Arc::new(crate::artifacts::SystemClock),
+        ocr_backends: Vec::new(),
     };
     let running = RunningToolService::start(deps, host.clone(), &run)
         .await
