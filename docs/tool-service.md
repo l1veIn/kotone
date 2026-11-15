@@ -165,7 +165,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `models.install_guide` | `id`、可选 `category` | 自动下载失败时的手动安装指引（OCR 包在设置页「导入」时仍逐文件校验） |
 
 在线模型的配置项（例如 DeepSeek OCR 绑定的 API 连接）用 `settings.update {"modelConfigs": {"<模型 id>": {"connection": "<连接 id>"}}}` 写入；密钥只在凭据管理器，用 `connections.upsert` 写。
-| `speech.status` | 无 | `package`（Kokoro 语音包：installed/downloading/字节/阶段/错误）、当前语音引擎的 `voices[]`、`voicesError` |
+| `speech.status` | 无 | `package`（Kokoro 语音包：installed/downloading/字节/阶段/错误）、当前语音引擎的 `voices[]`（编号为 `提供方/声音`，如 `system/…`、`kokoro/zf_001`、`openai/alloy`、`volcano/BV700_streaming`）、`voicesError`。语音引擎也可用 `models.activate {"category": "tts"}` 选择（`system-speech` / `kokoro-zh` / `openai-compat-tts` / `volcano-tts`），在线引擎的连接、模型与声音写 `settings.update {"modelConfigs": {…}}` |
 | `speech.model.download` | 无 | `status=started`（或已安装时 `installed`）；结果 `speech.model.download.finished` / `failed`；与模型下载共用唯一名额 |
 | `connections.presets` | 无 | 内置在线连接预设 |
 | `connections.list` | 无 | `connections[]{id,displayName,kind,provider,baseUrl,model,hasApiKey}`——**API key 只写不读** |

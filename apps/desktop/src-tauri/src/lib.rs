@@ -14,6 +14,7 @@ mod speech_models;
 mod tool_config;
 mod tool_service;
 mod tray;
+mod tts_online;
 
 use std::sync::{Arc, Mutex, RwLock};
 

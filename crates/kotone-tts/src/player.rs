@@ -10,7 +10,7 @@ use std::{
 use crate::{Control, SynthesizedSpeech, CANCELLED};
 
 pub(crate) fn play(
-    audio: SynthesizedSpeech,
+    audio: Arc<SynthesizedSpeech>,
     volume: u16,
     control: Arc<Control>,
     ticket: u64,
@@ -80,7 +80,7 @@ pub(crate) fn play(
 }
 
 struct StreamData {
-    audio: SynthesizedSpeech,
+    audio: Arc<SynthesizedSpeech>,
     channels: usize,
     output_rate: u32,
     volume: f32,

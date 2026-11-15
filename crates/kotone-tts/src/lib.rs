@@ -1,10 +1,15 @@
-//! Local neural speech. One worker owns inference and output; cancellation
-//! invalidates queued synthesis without waiting for a non-interruptible ONNX call.
-//! Microphone admission waits only for an already-open output stream to close.
+//! Neural and online speech. One worker owns synthesis and output; cancellation
+//! invalidates queued synthesis without waiting for a non-interruptible ONNX call
+//! or HTTP request. Microphone admission waits only for an already-open output
+//! stream to close. Synthesized audio is cached by voice + rate + text.
 
+pub mod cache;
 pub mod catalog;
 mod engine;
+pub mod online;
 mod player;
+pub mod voice;
+pub mod wav;
 
 pub use engine::{
     kokoro_voices, model_ready, KokoroEngine, SynthesizedSpeech, DEFAULT_VOICE, KOKORO_MODEL_DIR,
@@ -105,23 +110,48 @@ enum WorkerCommand {
     Close,
 }
 
+/// Where the worker gets audio from.
+enum Source {
+    Kokoro(PathBuf),
+    Online(Arc<online::OnlineSynth>),
+}
+
 pub struct LocalSpeechOutput {
     commands: mpsc::SyncSender<WorkerCommand>,
     control: Arc<Control>,
+    online: Option<online::OnlineKind>,
 }
 
 impl LocalSpeechOutput {
     /// Does not download or load a model, or open the sound device. The directory
     /// is the extracted kokoro-int8-multi-lang-v1_1 directory, not its parent.
     pub fn new(model_dir: PathBuf) -> Result<Self, String> {
+        Self::spawn(Source::Kokoro(model_dir), None)
+    }
+
+    /// Online engine (OpenAI-compatible / Volcano). The resolver is called for every
+    /// utterance, so connection and voice changes apply without recreating the output.
+    pub fn online(
+        kind: online::OnlineKind,
+        resolver: online::OnlineResolver,
+    ) -> Result<Self, String> {
+        let synth = Arc::new(online::OnlineSynth::new(kind, resolver)?);
+        Self::spawn(Source::Online(synth), Some(kind))
+    }
+
+    fn spawn(source: Source, online: Option<online::OnlineKind>) -> Result<Self, String> {
         let (commands, receiver) = mpsc::sync_channel::<WorkerCommand>(2);
         let control = Arc::new(Control::default());
         let worker_control = control.clone();
         std::thread::Builder::new()
             .name("kotone-local-tts".into())
-            .spawn(move || worker(model_dir, receiver, worker_control))
-            .map_err(|error| format!("无法启动本地语音线程：{error}"))?;
-        Ok(Self { commands, control })
+            .spawn(move || worker(source, receiver, worker_control))
+            .map_err(|error| format!("无法启动语音线程：{error}"))?;
+        Ok(Self {
+            commands,
+            control,
+            online,
+        })
     }
 
     /// True once shutdown was requested, including a close that timed out.
@@ -157,7 +187,10 @@ impl LocalSpeechOutput {
 
 impl SpeechOutput for LocalSpeechOutput {
     fn voices(&self) -> Result<Vec<SpeechVoice>, String> {
-        Ok(kokoro_voices())
+        Ok(match self.online {
+            None => kokoro_voices(),
+            Some(kind) => catalog::online_voices(kind),
+        })
     }
 
     fn generation(&self) -> u64 {
@@ -212,7 +245,7 @@ impl Drop for WorkerFinished {
     }
 }
 
-fn worker(model_dir: PathBuf, receiver: mpsc::Receiver<WorkerCommand>, control: Arc<Control>) {
+fn worker(source: Source, receiver: mpsc::Receiver<WorkerCommand>, control: Arc<Control>) {
     // Created before engine so the engine is destroyed before this ack is sent.
     let _finished = WorkerFinished(control.clone());
     let mut engine: Option<KokoroEngine> = None;
@@ -231,18 +264,51 @@ fn worker(model_dir: PathBuf, receiver: mpsc::Receiver<WorkerCommand>, control: 
             if !control.current(command.ticket) {
                 return Err(CANCELLED.into());
             }
-            if engine.is_none() {
-                engine = Some(KokoroEngine::open(&model_dir)?);
-            }
-            if !control.current(command.ticket) {
-                return Err(CANCELLED.into());
-            }
-            let progress_control = control.clone();
+            command.request.validate()?;
             let ticket = command.ticket;
-            let audio = engine
-                .as_ref()
-                .unwrap()
-                .synthesize(&command.request, move || progress_control.current(ticket))?;
+            let key = match &source {
+                Source::Kokoro(_) => cache::key(
+                    &voice::qualify(
+                        voice::KOKORO,
+                        command
+                            .request
+                            .voice_id
+                            .as_deref()
+                            .filter(|v| !v.trim().is_empty())
+                            .unwrap_or(DEFAULT_VOICE),
+                    ),
+                    command.request.rate,
+                    &command.request.text,
+                ),
+                Source::Online(synth) => synth.cache_key(&command.request)?,
+            };
+            let cached = cache::global().lock().unwrap().get(&key);
+            let audio = match cached {
+                Some(audio) => audio,
+                None => {
+                    let audio = match &source {
+                        Source::Kokoro(model_dir) => {
+                            if engine.is_none() {
+                                engine = Some(KokoroEngine::open(model_dir)?);
+                            }
+                            if !control.current(ticket) {
+                                return Err(CANCELLED.into());
+                            }
+                            let progress_control = control.clone();
+                            engine
+                                .as_ref()
+                                .unwrap()
+                                .synthesize(&command.request, move || {
+                                    progress_control.current(ticket)
+                                })?
+                        }
+                        Source::Online(synth) => synth.synthesize(&command.request)?,
+                    };
+                    let audio = Arc::new(audio);
+                    cache::global().lock().unwrap().put(key, audio.clone());
+                    audio
+                }
+            };
             if !control.current(ticket) {
                 return Err(CANCELLED.into());
             }

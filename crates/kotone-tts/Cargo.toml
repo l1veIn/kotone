@@ -1,7 +1,7 @@
 [package]
 name = "kotone-tts"
 version = "0.1.0"
-description = "Kotone local neural speech: sherpa-onnx Kokoro and cancellable PCM output"
+description = "Kotone speech synthesis: Kokoro, online engines (OpenAI-compatible, Volcano), synthesis cache and cancellable PCM output"
 edition = "2021"
 rust-version = "1.77.2"
 
@@ -9,6 +9,12 @@ rust-version = "1.77.2"
 kotone-core.workspace = true
 sherpa-onnx = "1.13.5"
 cpal = "0.15"
+serde_json.workspace = true
+base64 = "0.22"
+# 在线语音合成（OpenAI 兼容 / 火山）：在推理工作线程里同步请求；与 kotone-stt 同一版本
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 [dev-dependencies]
 tempfile.workspace = true
+wiremock = "0.6"
+tokio.workspace = true

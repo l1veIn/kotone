@@ -75,6 +75,10 @@ pub struct AssistantConfig {
 pub enum SpeechEngine {
     Kokoro,
     System,
+    /// OpenAI 兼容的在线语音合成（`/audio/speech`），绑定 AI 连接。
+    Openai,
+    /// 火山语音合成（在线）。
+    Volcano,
 }
 
 impl Default for AssistantConfig {

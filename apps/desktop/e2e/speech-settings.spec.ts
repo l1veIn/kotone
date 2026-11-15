@@ -71,8 +71,8 @@ async function openNativeSettings(page: Page) {
       if (command === "list_speech_voices") {
         if (bridge.holdVoices) return new Promise((resolve) => voices.push(resolve));
         return (await browser.getSettings()).assistant.speechEngine === "system"
-          ? [{ id: "sapi:test", name: "系统测试声音" }]
-          : ["001", "003", "017"].map((id) => ({ id: `kokoro:zf_${id}`, name: `中文女声 ${id}` }));
+          ? [{ id: "system/sapi:test", name: "系统测试声音" }]
+          : ["001", "003", "017"].map((id) => ({ id: `kokoro/zf_${id}`, name: `中文女声 ${id}` }));
       }
       if (command === "list_reminders") return [];
       if (command === "get_startup_options") return { onboarding: "never" };
@@ -94,7 +94,7 @@ test("Kokoro offers three Chinese voices and switching engines preserves each vo
   await speech.getByLabel("播报声音", { exact: true }).click();
   await expect(page.getByRole("option")).toHaveText(["中文女声 001", "中文女声 003", "中文女声 017"]);
   await page.getByRole("option", { name: "中文女声 017", exact: true }).click();
-  await expect(speech.getByLabel("播报声音", { exact: true })).toHaveAttribute("data-value", "kokoro:zf_017");
+  await expect(speech.getByLabel("播报声音", { exact: true })).toHaveAttribute("data-value", "kokoro/zf_017");
   await speech.getByLabel("语音引擎", { exact: true }).click();
   await page.getByRole("option", { name: "Windows · 系统语音", exact: true }).click();
   await expect(speech.getByLabel("播报声音", { exact: true })).toHaveText("系统测试声音");
@@ -104,7 +104,7 @@ test("Kokoro offers three Chinese voices and switching engines preserves each vo
   await page.getByRole("option", { name: "Kokoro · 本地中文语音", exact: true }).click();
   await expect(speech.getByLabel("播报声音", { exact: true })).toHaveText("中文女声 017");
   const saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
-  expect(saved.assistant).toMatchObject({ speechEngine: "kokoro", kokoroVoiceId: "kokoro:zf_017", voiceId: "" });
+  expect(saved.assistant).toMatchObject({ speechEngine: "kokoro", kokoroVoiceId: "kokoro/zf_017", voiceId: "" });
 });
 
 test("browser preview clearly shows an uninstalled model, disables download and makes no external request", async ({ page }, testInfo) => {

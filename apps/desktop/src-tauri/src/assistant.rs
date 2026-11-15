@@ -21,6 +21,8 @@ pub struct AssistantRuntime {
     pub handler: Arc<dyn AssistantHandler>,
     system_speaker: Result<Arc<dyn SpeechOutput>, String>,
     local_speaker: Mutex<Option<(std::path::PathBuf, Arc<kotone_tts::LocalSpeechOutput>)>>,
+    /// 在线语音（OpenAI 兼容 / 火山）：每种一个输出线程，配置在每次播报时重新解析。
+    online_speakers: Mutex<Vec<(SpeechEngine, Arc<kotone_tts::LocalSpeechOutput>)>>,
     typed_request: Mutex<Option<CancellationToken>>,
     presentation: Mutex<Option<DanmakuPresentation>>,
     presentation_generation: AtomicU64,
@@ -86,7 +88,18 @@ impl AssistantRuntime {
             .map(|s| s.cancel())
             .unwrap_or(Ok(()));
         let local_result = local.map(|s| s.cancel()).unwrap_or(Ok(()));
-        system_result.and(local_result)
+        let online: Vec<_> = self
+            .online_speakers
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, speaker)| speaker.clone())
+            .collect();
+        let online_result = online
+            .into_iter()
+            .map(|s| s.cancel())
+            .fold(Ok(()), Result::and);
+        system_result.and(local_result).and(online_result)
     }
 }
 
@@ -95,8 +108,28 @@ fn selected_speaker(
     config: &AssistantConfig,
 ) -> Result<Arc<dyn SpeechOutput>, String> {
     let runtime = app.state::<AssistantRuntime>();
-    if config.speech_engine == SpeechEngine::System {
-        return runtime.system_speaker.clone();
+    let online_kind = match config.speech_engine {
+        SpeechEngine::System => return runtime.system_speaker.clone(),
+        SpeechEngine::Kokoro => None,
+        SpeechEngine::Openai => Some(kotone_tts::online::OnlineKind::OpenAi),
+        SpeechEngine::Volcano => Some(kotone_tts::online::OnlineKind::Volcano),
+    };
+    if let Some(kind) = online_kind {
+        let mut online = runtime.online_speakers.lock().unwrap();
+        if let Some((_, speaker)) = online
+            .iter()
+            .find(|(engine, speaker)| *engine == config.speech_engine && !speaker.is_closed())
+        {
+            return Ok(speaker.clone());
+        }
+        let resolver_app = app.clone();
+        let speaker = Arc::new(kotone_tts::LocalSpeechOutput::online(
+            kind,
+            Arc::new(move || crate::tts_online::config(&resolver_app, kind)),
+        )?);
+        online.retain(|(engine, _)| *engine != config.speech_engine);
+        online.push((config.speech_engine, speaker.clone()));
+        return Ok(speaker);
     }
     let settings = app.state::<crate::SharedState>();
     let path = kotone_stt::model::models_dir_from(&settings.settings.read().unwrap())
@@ -209,6 +242,7 @@ pub fn initialize(
         }),
         system_speaker: speaker,
         local_speaker: Mutex::new(None),
+        online_speakers: Mutex::new(Vec::new()),
         typed_request: Mutex::new(None),
         presentation: Mutex::new(None),
         presentation_generation: AtomicU64::new(0),
@@ -418,13 +452,23 @@ impl ReminderDelivery for DesktopDelivery {
 }
 
 fn speech_request(config: &kotone_core::assistant::AssistantConfig, text: &str) -> SpeechRequest {
+    // 声音编号可带提供方前缀（`system/…`、`kokoro/…`）；在线引擎的声音在模型配置里，
+    // 每次播报时由合成线程解析。属于其他提供方的声音会在合成时报错，不会换声音。
     let voice = match config.speech_engine {
-        SpeechEngine::Kokoro => &config.kokoro_voice_id,
-        SpeechEngine::System => &config.voice_id,
+        SpeechEngine::Kokoro => config.kokoro_voice_id.trim().to_string(),
+        SpeechEngine::System => {
+            let id = config.voice_id.trim();
+            if id.starts_with("system/") {
+                id["system/".len()..].to_string()
+            } else {
+                id.to_string()
+            }
+        }
+        SpeechEngine::Openai | SpeechEngine::Volcano => String::new(),
     };
     SpeechRequest {
         text: text.to_string(),
-        voice_id: (!voice.is_empty()).then(|| voice.clone()),
+        voice_id: (!voice.is_empty()).then_some(voice),
         volume: config.speech_volume,
         rate: config.speech_rate,
     }
@@ -709,13 +753,32 @@ pub async fn list_speech_voices(app: AppHandle) -> Result<Vec<SpeechVoice>, Stri
         .unwrap()
         .assistant
         .clone();
-    if config.speech_engine == SpeechEngine::Kokoro {
-        return Ok(kotone_tts::kokoro_voices());
+    match config.speech_engine {
+        SpeechEngine::Kokoro => return Ok(kotone_tts::kokoro_voices()),
+        SpeechEngine::Openai => {
+            return Ok(kotone_tts::catalog::online_voices(
+                kotone_tts::online::OnlineKind::OpenAi,
+            ))
+        }
+        SpeechEngine::Volcano => {
+            return Ok(kotone_tts::catalog::online_voices(
+                kotone_tts::online::OnlineKind::Volcano,
+            ))
+        }
+        SpeechEngine::System => {}
     }
     let speaker = selected_speaker(&app, &config)?;
-    tokio::task::spawn_blocking(move || speaker.voices())
+    let voices = tokio::task::spawn_blocking(move || speaker.voices())
         .await
-        .map_err(|_| "读取系统语音失败".to_string())?
+        .map_err(|_| "读取系统语音失败".to_string())??;
+    // 声音编号统一写成 `system/<语音 token>`；旧配置里不带前缀的值照常可用。
+    Ok(voices
+        .into_iter()
+        .map(|voice| SpeechVoice {
+            id: kotone_tts::voice::qualify(kotone_tts::voice::SYSTEM, &voice.id),
+            name: voice.name,
+        })
+        .collect())
 }
 
 #[tauri::command]

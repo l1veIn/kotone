@@ -55,3 +55,14 @@
 - CLI：`kotone-cli ocr list`，`status / install --model <id>`；不带 `--model` 时仍是韩文包。
 
 **未验证**：真实游戏截图上的效果（39 张图已用过，不能当留出集）；server 包在低配 CPU 上的耗时；PP-OCRv6。
+
+## 4. TTS：系统语音、Kokoro、OpenAI 兼容、火山与合成缓存
+
+- TTS 清单（`kotone_tts::catalog`）四个条目：`system-speech`、`kokoro-zh`（迁入同一张清单）、`openai-compat-tts`、`volcano-tts`；当前选择仍是 `assistant.speechEngine`（新增 `openai` / `volcano` 两个取值），设置页「助手 → 语音播报」与「模型 → 语音合成」改的是同一个值。
+- 在线合成（`kotone_tts::online`）整段请求 WAV、解码后走与 Kokoro 相同的播放、取消与麦克风互斥路径；配置与密钥每次播报时重新解析，改设置立即生效；错误不回显响应体，缓存键不含密钥。阻塞 HTTP 客户端在合成线程里懒创建（测试中发现在异步上下文里创建 / 销毁会 panic，已改）。
+- 火山能否复用语音识别的凭据：两者都用火山语音“应用”的 App ID + Access Token（ASR `wss://…/api/v2/asr` 与 TTS `https://openspeech.bytedance.com/api/v1/tts` 鉴权同为 `Authorization: Bearer;<token>` + `app{appid, token, cluster}`，cluster 缺省 `volcano_tts`），因此留空时复用 ASR 那一套；前提是在控制台为该应用开通语音合成。依据为 2026-11-15 检索到的公开文档与示例，**没有用真实账号验证**。
+- 声音编号统一为 `提供方/声音`，旧写法照常接受；选中的声音属于其他提供方时报错，不换声音（Windows 语音与 Kokoro 原本就在找不到时报错）。
+- 合成缓存（`kotone_tts::cache`）：内存 LRU，最多 64 条 / 约 8 分钟音频，Kokoro 与在线共用（键里带提供方、模型与端点），命中时不再推理或请求。系统语音不经过 PCM，不缓存。
+- Edge TTS 不接入。
+- 验证：`kotone-tts` 单元测试（WAV 解码含流式长度、OpenAI 兼容与火山的请求格式 / 错误 / 跨提供方声音拒绝，用本地 mock 服务器，不访问真实接口；缓存淘汰；声音编号）；`pnpm check`；Playwright `speech-settings`（声音编号改为新写法后仍能匹配旧配置）与 `model-catalog`。
+- **未验证**：真实 OpenAI / 兼容服务 / 火山账号的合成与音质；在线合成的端到端延迟；真实声卡播放（沿用已有的忽略测试）。

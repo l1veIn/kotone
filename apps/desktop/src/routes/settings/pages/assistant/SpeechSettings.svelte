@@ -22,6 +22,34 @@
     idle: "尚未下载", downloading: "正在下载", verifying: "正在校验", extracting: "正在安装",
     installed: "已就绪", error: "安装失败", cancelled: "已取消下载",
   };
+  /** 在线引擎对应的统一模型清单 ID（声音存在 modelConfigs[id].voice） */
+  const onlineModel: Record<string, string> = { openai: "openai-compat-tts", volcano: "volcano-tts" };
+  /** 声音编号统一写成「提供方/声音」；旧配置里不带前缀的值照常匹配。 */
+  function qualifiedVoice(engine: string, id: string): string {
+    const value = id.trim();
+    if (!value) return "";
+    if (value.startsWith(`${engine}/`)) return value;
+    if (engine === "kokoro" && value.startsWith("kokoro:")) return `kokoro/${value.slice(7)}`;
+    return `${engine}/${value}`;
+  }
+  const selectedVoice = $derived.by(() => {
+    if (!config) return "";
+    const engine = config.speechEngine;
+    if (engine === "kokoro") return qualifiedVoice(engine, config.kokoroVoiceId);
+    if (engine === "system") return qualifiedVoice(engine, config.voiceId);
+    const stored = $settingsStore?.modelConfigs?.[onlineModel[engine]]?.voice;
+    return qualifiedVoice(engine, typeof stored === "string" ? stored : "");
+  });
+  async function saveVoice(value: string) {
+    if (!config) return;
+    const engine = config.speechEngine;
+    if (engine === "kokoro") return save({ kokoroVoiceId: value });
+    if (engine === "system") return save({ voiceId: value });
+    const model = onlineModel[engine];
+    const current = $settingsStore?.modelConfigs?.[model] ?? {};
+    const native = value.startsWith(`${engine}/`) ? value.slice(engine.length + 1) : value;
+    await patchSettings({ modelConfigs: { [model]: { ...current, voice: native } } }, "播报声音已保存");
+  }
   const progress = $derived(model?.totalBytes ? Math.min(100, Math.round(model.downloadedBytes / model.totalBytes * 100)) : 0);
 
   $effect(() => {
@@ -92,7 +120,7 @@
     <div class="flex flex-wrap items-center justify-between gap-3">
       <h3 class="text-sm text-white/85">语音播报</h3>
       <div class="w-64"><Select ariaLabel="语音引擎" value={config.speechEngine} disabled={saving}
-        options={[{value:"system",label:"Windows · 系统语音"},{value:"kokoro",label:"Kokoro · 本地中文语音"}]}
+        options={[{value:"system",label:"Windows · 系统语音"},{value:"kokoro",label:"Kokoro · 本地中文语音"},{value:"openai",label:"在线 · OpenAI 兼容"},{value:"volcano",label:"在线 · 火山语音合成"}]}
         onchange={(value) => void save({speechEngine:value as AssistantConfig["speechEngine"]})} /></div>
     </div>
     {#if config.speechEngine === "kokoro"}
@@ -112,14 +140,18 @@
         {/if}
         {#if model?.error}<p class="mt-2 text-kotone-pink" role="alert">{model.error}</p>{/if}
       </div>
+    {:else if config.speechEngine === "openai" || config.speechEngine === "volcano"}
+      <p class="text-[11px] leading-relaxed text-white/45" data-testid="online-speech-info">
+        在线语音：每次播报都会把文字发给服务商。连接、模型与声音在「高级 → 模型 → 语音合成」里配置；相同的话会直接复用缓存，不再请求。
+      </p>
     {:else}
       <p class="text-[11px] leading-relaxed text-white/45" data-testid="system-speech-info">无需下载。</p>
     {/if}
     <div class="flex flex-wrap items-center justify-between gap-3">
       <span class="text-xs text-white/65">播报声音</span>
-      <div class="w-64"><Select ariaLabel="播报声音" value={config.speechEngine === "kokoro" ? config.kokoroVoiceId : config.voiceId} disabled={saving}
-        options={[...(config.speechEngine === "system" ? [{value:"",label:"系统默认声音"}] : []), ...voices.map((voice) => ({value:voice.id,label:voice.name}))]}
-        onchange={(value) => void save(config.speechEngine === "kokoro" ? {kokoroVoiceId:value} : {voiceId:value})} /></div>
+      <div class="w-64"><Select ariaLabel="播报声音" value={selectedVoice} disabled={saving}
+        options={[...(config.speechEngine === "system" ? [{value:"",label:"系统默认声音"}] : []), ...(selectedVoice && !voices.some((voice) => voice.id === selectedVoice) && config.speechEngine !== "system" && config.speechEngine !== "kokoro" ? [{value:selectedVoice,label:selectedVoice.split("/").slice(1).join("/")}] : []), ...voices.map((voice) => ({value:voice.id,label:voice.name}))]}
+        onchange={(value) => void saveVoice(value)} /></div>
     </div>
     {#if voiceError}<p class="text-xs text-kotone-pink" role="alert">{voiceError}</p>{/if}
     {#if error}<p class="text-xs text-kotone-pink" role="alert">{error}</p>{/if}

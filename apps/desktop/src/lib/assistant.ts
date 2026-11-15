@@ -99,7 +99,7 @@ export async function cancelAssistantRequest(): Promise<void> {
 }
 export async function listSpeechVoices(): Promise<SpeechVoice[]> {
   return isTauri ? invoke("list_speech_voices") : [
-    {id:"kokoro:zf_001",name:"中文女声 001"}, {id:"kokoro:zf_003",name:"中文女声 003"}, {id:"kokoro:zf_017",name:"中文女声 017"},
+    {id:"kokoro/zf_001",name:"中文女声 001"}, {id:"kokoro/zf_003",name:"中文女声 003"}, {id:"kokoro/zf_017",name:"中文女声 017"},
   ];
 }
 export async function previewReminder(kind: DeliveryKind): Promise<void> {

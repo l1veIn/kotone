@@ -175,7 +175,8 @@ export interface AssistantConfig {
   voiceId: string;
   speechVolume: number;
   speechRate: number;
-  speechEngine: "kokoro" | "system";
+  /** 播报引擎：system / kokoro（本地）、openai / volcano（在线，配置在模型 → 语音合成） */
+  speechEngine: "kokoro" | "system" | "openai" | "volcano";
   kokoroVoiceId: string;
   danmakuDurationMs: number;
   danmakuSpeedPxPerSec: number;

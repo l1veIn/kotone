@@ -1045,6 +1045,18 @@ const mockCatalog: CatalogModel[] = [
     configSchema: [], license: "Windows", files: [],
   },
   {
+    category: "tts", id: "openai-compat-tts", engineId: "openai", displayName: "OpenAI 兼容语音合成（在线）",
+    description: "调用 /audio/speech 接口；每次播报都会把文字发给服务商", sizeBytes: 0, backend: "remote", downloaded: true,
+    ready: false, state: "not-configured", reason: "在线语音合成还没有选择 API 连接（模型 → 语音合成）", active: false,
+    recommended: false, languages: ["zh"], dataEgress: "text",
+    configSchema: [
+      { key: "connection", label: "API 连接", kind: "connection", default: "", options: [], required: true },
+      { key: "model", label: "合成模型", kind: "string", default: "gpt-4o-mini-tts", options: [], required: false },
+      { key: "voice", label: "声音（服务商的声音名，如 alloy）", kind: "string", default: "alloy", options: [], required: true },
+    ],
+    apiKeyUrl: "https://platform.openai.com/api-keys", license: "服务商条款", files: [],
+  },
+  {
     category: "tts", id: "kokoro-zh", engineId: "kokoro", displayName: "Kokoro 中文（本地神经语音）",
     description: "更自然的本地中文女声，约 147 MB；本机 CPU 合成，不上传文字", sizeBytes: 147_031_220, backend: "local",
     downloaded: false, ready: false, state: "not-installed", active: false, recommended: true, languages: ["zh"],
@@ -1057,7 +1069,7 @@ function refreshMockCatalog(): void {
     mock.settings.ocr.activeModelId ||
     mockCatalog.find((m) => m.category === "ocr" && m.backend === "local" && m.ready)?.id ||
     "";
-  const ttsActive = mock.settings.assistant.speechEngine === "kokoro" ? "kokoro-zh" : "system-speech";
+  const ttsActive = { kokoro: "kokoro-zh", system: "system-speech", openai: "openai-compat-tts", volcano: "volcano-tts" }[mock.settings.assistant.speechEngine];
   for (const m of mockCatalog) {
     m.active = m.category === "ocr" ? m.id === ocrActive : m.id === ttsActive;
     if (m.id === "deepseek-ocr") {
@@ -1103,7 +1115,7 @@ export async function activateCatalogModel(category: ModelCategory, id: string):
   if (!m) throw new Error(`未知模型 ${id}`);
   if (m.backend === "local" && !m.downloaded) throw new Error(`${m.displayName} 尚未下载，请先下载再切换`);
   if (category === "ocr") mock.settings.ocr.activeModelId = id;
-  else mock.settings.assistant.speechEngine = id === "kokoro-zh" ? "kokoro" : "system";
+  else mock.settings.assistant.speechEngine = ({ "kokoro-zh": "kokoro", "openai-compat-tts": "openai", "volcano-tts": "volcano" } as Record<string, "kokoro" | "openai" | "volcano">)[id] ?? "system";
   return clone(mock.settings);
 }
 

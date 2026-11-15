@@ -76,9 +76,16 @@ pub fn list_blocking(
                 .state::<crate::assistant::AssistantRuntime>()
                 .system_speech_error();
             Ok(kotone_tts::catalog::entries(
-                settings.assistant.speech_engine,
-                installed,
-                system_error,
+                &kotone_tts::catalog::CatalogState {
+                    active: settings.assistant.speech_engine,
+                    kokoro_installed: installed,
+                    system_error,
+                    openai: crate::tts_online::status(app, kotone_tts::online::OnlineKind::OpenAi),
+                    volcano: crate::tts_online::status(
+                        app,
+                        kotone_tts::online::OnlineKind::Volcano,
+                    ),
+                },
             ))
         }
     }
