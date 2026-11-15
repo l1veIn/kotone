@@ -65,7 +65,7 @@ M1 之后，上表中“独立于 ASR 的外部工具服务”“连接正在运
 - `GET /v1/capabilities`、`GET /v1/status`、`POST /v1/tools/call`；CLI 使用同一协议，不另写一套业务逻辑。
 - capabilities 返回实际实现的工具及 schema、版本、就绪条件、数据外发/副作用属性。路线图里的工具不冒充已实现；未知工具返回 `TOOL_NOT_FOUND`。
 
-已实现的 CLI 入口（参数与退出码见[工具服务手册](tool-service.md#10-命令行)）：
+已实现的 CLI 入口（参数与退出码见[工具服务手册](tool-service.md#11-命令行)）：
 
 ```text
 kotone-cli tools status
@@ -195,14 +195,14 @@ ASR 是可选输入基础能力，保持用途与所有权隔离，不让桌宠�
 
 ### 5.5 全量服务化清单（2026-11-15 修订，取代上文 M3/M4 表）
 
-状态：计划，尚非 API。工具名为目标契约，实现时以 capabilities 为准。
+状态：第一批（底座可行性）已实现，其余为计划。工具名为目标契约，实现时以 capabilities 为准；已实现部分见[工具服务手册 §10](tool-service.md#10-应用生命周期事件与用户请求agent-底座)与[第一批实现记录](research/agent-base-batch1-implementation.md)。
 
 #### 5.5.1 原则
 
 | 原则 | 含义 |
 | --- | --- |
 | 界面对等 | 设置页、托盘、热键、CLI 能做的事都有对应工具；不因“敏感”而隐藏能力 |
-| 分级授权代替隐藏 | 每个工具声明所需级别：`read`（状态）、`local`（本地副作用：播报、弹幕、提醒、启停）、`user-content`（历史原文、录音、截图）、`egress`（数据外发：在线识别/AI/OCR）、`input`（向其他窗口注入输入）、`admin`（设置、凭据、模型、提权、自启）。授权由用户一次性配置、持续生效（可选“全部授予”），capabilities 返回每个工具的级别与是否已授权，未授权返回 `PERMISSION_DENIED{level}`，不逐次弹确认 |
+| 全部开放，不分级授权 | 2026-11-15 决定：Kotone 不含需要隔离的敏感内容，所有工具对持有会话凭证的本机客户端直接可用，不做授权分级、不返回 `PERMISSION_DENIED`、不逐次弹确认。下表“性质”只描述副作用与数据流向（`read` 状态、`local` 本地副作用、`user-content` 用户内容、`egress` 数据外发、`input` 向其他窗口输入、`admin` 设置/凭据/模型/提权/自启），供 Agent 自行判断，capabilities 的 `sideEffects` / `dataEgress` 同样如此 |
 | 凭据只写不读 | Agent 可以新建连接、写入或替换 API key，但任何工具都不返回 key |
 | 内容走产物，不收任意路径 | 图像、音频、文本、压缩包以产物上传/下载（新增 `artifact.put` 与音频/文件产物类型），CLI 负责读写本地文件；只有配置 Kotone 自身存储位置的 `admin` 工具（模型目录、历史目录）接受目录参数 |
 | 所有权与互斥 | 麦克风、播报、热键、悬浮窗与用户本人的语音输入共享：会话带 owner/purpose，冲突时返回明确错误或按策略排队，不抢占用户正在进行的会话 |
@@ -214,6 +214,7 @@ ASR 是可选输入基础能力，保持用途与所有权隔离，不让桌宠�
 
 | 入口 | 作用 |
 | --- | --- |
+| **已实现** | `app status/launch/quit`、`app.status`、`app.quit`、`runtime.status/start/stop`、`--background`、`KOTONE_HOME`；`app.restart` 未实现 |
 | `kotone-cli app status` | 是否在运行、实例/版本、工具服务是否开启、描述文件是否有效 |
 | `kotone-cli app launch [--wait]` | 以后台模式启动 `kotone.exe`（只驻留托盘，不打开设置窗口、不抢焦点），等待描述文件就绪后返回实例信息；已在运行时直接返回现有实例，不唤起窗口。工具服务未开启时明确报错，或在显式 `--enable-tool-service` 时先写配置再启动 |
 | `app.quit` / `kotone-cli app quit` | 等价于托盘“退出”：优雅结束（`RunEvent::Exit`），工具服务按 M1 顺序关闭；无响应时 CLI 可按实例 PID 结束并报告 |
@@ -228,6 +229,7 @@ Agent 调用 Kotone 是“拉”；很多场景需要 Kotone 先说话——用�
 
 | 组成 | 作用 |
 | --- | --- |
+| **已实现** | 事件总线（长轮询 `GET /v1/events` / `event.read`，SSE 未做）、`user.request`（`assistant.route=agent` 时助手热键语音与文字入口；携带前台窗口引用，尚不附截图产物）、`agent.request.claim`、`agent.reply`（受理即返回 + `agent.reply.delivered/failed` 回执事件）、`assistant.submit`、`runtime.phase`、`app.*`；其余事件与 `agent.sinks` 未做 |
 | 事件总线 | `GET /v1/events?cursor=`（SSE；不支持时长轮询）与 `event.read`：类型化事件、单调游标、有界保留、至少一次送达、事件 ID 去重；游标过期返回错误而不是静默跳过 |
 | `user.request` 事件 | 用户经 Kotone 发给 Agent 的请求：助手热键语音（如“大肥鱼，我队友在说啥？”）、文字入口、或绑定到“转交 Agent”的热键；携带原文、来源、前台窗口引用与可选截图产物，带 `requestId` |
 | `agent.reply` | Agent 对某个 `requestId` 的回应，由 Kotone 按用户偏好交付（播报/弹幕/发送前预览），并产生交付回执事件 |
@@ -238,9 +240,9 @@ Kotone 侧只提供与传输无关的事件与回应协议；把事件变成 Age
 
 #### 5.5.4 服务清单
 
-已实现（M1/M2）：`system.capabilities/status`、`window.list/active`、`screen.capture`、`image.crop/preprocess`、`artifact.get/release`、`ocr.backends/recognize`、`chat.track.ingest/read/reset`。
+已实现（M1/M2）：`system.capabilities/status`、`window.list/active`、`screen.capture`、`image.crop/preprocess`、`artifact.get/release`、`ocr.backends/recognize`、`chat.track.ingest/read/reset`。已实现（底座第一批）：`app.status/quit`、`runtime.status/start/stop`、`event.read`、`agent.requests`、`agent.request.claim`、`agent.reply`、`assistant.submit`。
 
-| 领域 | 工具 | 级别 | 复用来源 |
+| 领域 | 工具 | 性质 | 复用来源 |
 | --- | --- | --- | --- |
 | 应用与系统 | `app.status` `app.quit` `app.restart`；`runtime.status/start/stop`；`system.resources`；`system.elevation.get` / `system.elevation.restart`；`system.autostart.get/set` | read / local / admin | `get_runtime_status`、`start/stop_runtime`、`get_resource_usage`、`get_elevation_status`、`restart_as_admin`、`get/set_autostart_enabled` |
 | 设置 | `settings.get`（完整、不含密钥）`settings.update`（补丁，与设置页相同的校验与即时生效/需重启标记）`settings.warnings` | read / admin | `get_settings`、`update_settings`、`get_settings_load_warning` |
@@ -262,13 +264,13 @@ Kotone 侧只提供与传输无关的事件与回应协议；把事件变成 Age
 
 | 交付物 | 内容 |
 | --- | --- |
-| Skill | `SKILL.md` + 示例：何时用 Kotone、从 `app status/launch` 到常见流程（读聊天、翻译后播报、提醒）、授权与失败处理；工具参考由 capabilities 生成，不手抄 schema |
-| 桌宠 / Agent 插件（DSH、pi 等） | 薄客户端：发现与认证、工具调用、订阅事件并转成 Agent 消息、`agent.reply` 回传；业务逻辑留在 Kotone |
-| MCP 适配（可选） | `kotone-cli mcp`（stdio）把 capabilities 映射为 MCP 工具、事件映射为通知，覆盖支持 MCP 的通用 Agent |
+| Skill | `SKILL.md` + 示例：何时用 Kotone、从 `app status/launch` 到常见流程（读聊天、翻译后播报、提醒）与失败处理；工具参考由 capabilities 生成，不手抄 schema。**初版已实现**：[`integrations/skills/kotone`](../integrations/skills/kotone/SKILL.md) |
+| 桌宠 / Agent 插件（DSH、pi 等） | 薄客户端：发现与认证、工具调用、订阅事件并转成 Agent 消息、`agent.reply` 回传；业务逻辑留在 Kotone。**DSH 已实现**：[`integrations/dsh-kotone`](../integrations/dsh-kotone/README.md)（MCP 工具 + `user.request` 投进复用会话，真机端到端通过）；pi 未做 |
+| MCP 适配 | `kotone-cli mcp`（stdio）把 capabilities 映射为 MCP 工具，`kotone_launch` 后发送 `tools/list_changed`。**已实现**；事件以 `kotone_events` 工具读取，尚未映射为 MCP 通知 |
 
 #### 5.5.6 建议顺序
 
-1. **底座**：后台启动与 `app.*`/CLI `app` 命令；事件总线、`user.request`/`agent.reply`；`job.*`；`artifact.put` 与音频/文件产物；分级授权与 `PERMISSION_DENIED`；Skill 初版。
+1. **底座**：后台启动与 `app.*`/CLI `app` 命令；事件总线、`user.request`/`agent.reply`；Skill 初版——**已完成（第一批，含 DSH 插件与 MCP，用于验证可行性）**。剩余：`app.restart`、`job.*`、`artifact.put` 与音频/文件产物、SSE。
 2. **只读面与管理面**：设置、连接（key 只写）、模型、profile、历史、诊断、热键状态等经典业务的查询与管理。
 3. **输出与文本**：`tts.*`、`overlay.push`、`reminder.*`、`text.process`、`llm.complete`。
 4. **语音输入**：`audio.capture`、`asr.transcribe`、`asr.*` 会话（owner 隔离与麦克风互斥）。

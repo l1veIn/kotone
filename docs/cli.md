@@ -28,6 +28,11 @@
 | `tools status [--json] / list [--json]` | 连接**已运行**的桌面实例，查看工具服务状态 / 实际实现的工具与 schema |
 | `tools call <tool> [--args-file <json文件\|->] [--timeout-ms N] [--request-id ID]` | 调用工具服务的工具，输出 JSON 信封 |
 | `tools artifact get <artifact-id> --output <png> [--force]` | 下载图像产物，由客户端写入指定路径 |
+| `tools events [--cursor C \| --from oldest\|latest] [--types T1,T2] [--wait-ms N] [--follow]` | 读取 Kotone 发给 Agent 的事件（`user.request`、`agent.*`、`runtime.phase`、`app.*`）；`--follow` 逐行输出（JSON Lines）并持续长轮询 |
+| `app status [--json]` | 桌面端是否在运行；运行时给出实例、版本、ASR 相位、启动方式与待处理用户请求数（未运行退出码 1） |
+| `app launch [--exe <kotone.exe>] [--wait-ms N] [--enable-tool-service] [--foreground]` | 后台启动桌面端（只驻留托盘、不开窗口、不抢焦点）并等待工具服务就绪；已在运行直接返回 |
+| `app quit [--wait-ms N]` | 等同托盘“退出”，等进程真正结束才返回 |
+| `mcp` | stdio MCP 服务器：把工具服务映射为 `kotone_*` 工具，供支持 MCP 的 Agent（DSH 插件即用它） |
 | `ocr status [--model-dir <目录>] [--json]` | 本地韩文 OCR 模型就绪检查：文件、大小、SHA-256 与本构建的 ONNX Runtime（不联网、不连接桌面） |
 | `ocr install [--model-dir <目录>] [--from-dir <目录>] [--json]` | 显式安装本地韩文 OCR 模型（PP-OCRv5 mobile，约 18.3 MB）；校验通过才发布 |
 
@@ -44,15 +49,18 @@
 `overlay.visibility`(always/on_demand/never)、`overlay.style`(card/capsule)、
 `overlay.position`、`overlay.draggable`、`overlay.clickThrough`、
 `toolService.enabled`(true/false，默认 false；桌面端启动时读取——先从托盘退出 Kotone，再写入并重新启动)、
-`toolService.ocr.deepseekConnectionId`（在线 OCR 使用的已有连接 ID；空字符串清除；不存在的连接被拒绝；同样需先退出再重启桌面端）。
+`toolService.ocr.deepseekConnectionId`（在线 OCR 使用的已有连接 ID；空字符串清除；不存在的连接被拒绝；同样需先退出再重启桌面端）、
+`assistant.route`(reminders/agent，默认 reminders；agent 时助手热键语音与文字入口转交外部 Agent，见[工具服务手册 §10](tool-service.md#10-应用生命周期事件与用户请求agent-底座)；同样需先退出再重启桌面端)。
+
+环境变量 `KOTONE_HOME` 把 Kotone 数据目录（默认 `~/.kotone`：配置、日志、历史、工具服务描述文件）整体换到别处，CLI 与桌面端都读取，用于隔离运行与测试；`KOTONE_EXE` 指定 `app launch` 使用的 `kotone.exe`。
 
 `config get` 可读取存在的配置路径，`config set` 仅支持上述白名单，不等于全部设置字段。
 评测参数、旧模型族别名与缓存规则见 [评测手册](eval-playbook.md)。提醒助手当前通过桌面页和独立热键使用，不是 `eval` 或 `listen` 的隐藏模式。
 
 ### 工具服务客户端（tools 命令）
 
-`tools` 子命令通过 `~/.kotone/run/` 下当前用户/会话私有的描述文件，直接连接已经运行并开启了
-`toolService.enabled` 的 Kotone 桌面实例；它不会启动 `kotone.exe`、不读取或修改配置、不启动 ASR，
+`tools` 子命令通过 `~/.kotone/run/`（或 `$KOTONE_HOME/run/`）下当前用户/会话私有的描述文件，直接连接已经运行并开启了
+`toolService.enabled` 的 Kotone 桌面实例；它不会启动 `kotone.exe`（启动用 `app launch`）、不读取或修改配置、不启动 ASR，
 桌面 ASR 运行时处于停止状态时同样可用。会话凭证只从描述文件读取，不作为参数、也不出现在输出里。
 退出码：0 成功；1 工具返回 `ok=false`；2 本地用法/文件错误；3 未发现服务、描述文件过期/不安全或连接失败。
 协议、工具 schema、捕获限制与示例见 [工具服务手册](tool-service.md)。

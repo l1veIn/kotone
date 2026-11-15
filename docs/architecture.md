@@ -12,9 +12,10 @@
 | `kotone-platform-windows` | 采音、热键、输入注入、前台窗口与提权、系统语音能力、窗口观察与 GDI 前台客户区捕获、工具服务私有描述文件 | 实现 core 端口，Windows API 与所需 `windows` features 留在此层 |
 | `kotone-ai` | 共享 AI 连接、凭据和请求能力 | 为后处理与助手提供可复用服务边界；不承担输入注入或会话 UI |
 | `kotone-postprocess` | 过滤、润色、翻译等具体文本处理器和注册 | 依赖 core/AI 服务；不修改 STT 或 Injector 的职责 |
-| `kotone-tools` | 本机 Agent 工具服务：v1 协议信封、能力目录、不可变图像产物存储、预处理、驻留 OCR 结果、聊天消息跟踪、loopback HTTP 服务端/客户端、实例发现 | 依赖 core 的 `tools`/`ocr` 端口与 HTTP 库，不依赖 Windows API、ONNX 或 Tauri；窗口/捕获/私有文件/OCR 后端由调用方注入 |
+| `kotone-tools` | 本机 Agent 工具服务：v1 协议信封、能力目录、不可变图像产物存储、预处理、驻留 OCR 结果、聊天消息跟踪、事件总线与用户请求、loopback HTTP 服务端/客户端、实例发现 | 依赖 core 的 `tools`/`ocr` 端口与 HTTP 库，不依赖 Windows API、ONNX 或 Tauri；窗口/捕获/私有文件/OCR 后端与应用级能力（`AppHost`）由调用方注入 |
 | `kotone-ocr` | OCR 后端：本地韩文 PP-OCRv5（ONNX Runtime C API）、模型清单/安装/就绪校验、DeepSeek 在线 OCR | 实现 core 的 `ocr` 端口；本地推理（`onnx` feature）链接 sherpa-onnx 预编译包内的 ONNX Runtime，不新增原生库；在线后端只经注入的连接解析获取地址与 key |
-| `kotone-cli` | 无 Tauri 命令前端、评测、诊断、自检、工具服务客户端 | 和桌面壳一样组合实现，不复制领域流程；`tools` 子命令只连接已运行的桌面实例 |
+| `kotone-cli` | 无 Tauri 命令前端、评测、诊断、自检、工具服务客户端、应用启停（`app`）、stdio MCP 服务器（`mcp`） | 和桌面壳一样组合实现，不复制领域流程；`tools` 子命令只连接已运行的桌面实例，启动由 `app launch` 以不继承句柄的后台进程完成 |
+| `integrations/` | Agent 侧交付物：DSH 插件 `dsh-kotone`（MCP + 用户请求反向通道）、Agent Skill | 只经 `kotone-cli` 与工具服务交互，不链接 Rust crate；业务逻辑留在 Kotone |
 | `apps/desktop/src-tauri` | 桌面运行时、IPC、窗口/托盘/更新、事件转发 | 组合核心和实现 crate，负责设备与 UI 生命周期 |
 | `apps/desktop/src` | Svelte 设置、向导、悬浮窗和历史 UI | 通过 IPC 请求操作；浏览器 mock 只供 UI 开发和测试 |
 
@@ -58,6 +59,8 @@ flowchart LR
 可选的 Agent 工具服务（`toolService.enabled`，默认关闭）由桌面 `setup` 在共享状态就绪后启动，`RunEvent::Exit` 关闭；它不经过 `RuntimePhase`，ASR Stopped 时照常可用，也不会因调用而启动 ASR。服务只监听 `127.0.0.1` 随机端口，每个端点校验会话凭证；凭证与地址写入当前用户、当前 Windows 会话私有的描述文件，退出时只删除仍属于本实例的那一份。CLI `tools` 子命令直接连接该服务，不再次运行 `kotone.exe`，避免单实例回调唤起设置窗口抢焦点。
 
 M2 在同一服务内增加 `image.preprocess`、`ocr.backends`、`ocr.recognize` 与 `chat.track.*`。预处理与裁剪一样只生成新产物，`rootTransform` 以“偏移 + 比例”累积，任意放大/裁剪链与 OCR 框都映射回原始捕获的物理像素。OCR 后端经 `kotone-core::ocr` 端口注入：本地后端（模型由 `kotone-cli ocr install` 显式安装、每次加载前校验 SHA-256）与在线后端（只有用户在 `toolService.ocr` 指定连接时就绪，只上传所选产物 PNG）按 ID 显式选择、互不降级。推理在工作线程执行，另有按后端类型划分的有界名额；期限或关闭时取消令牌中断本地推理（ONNX Runtime terminate）或丢弃在线请求，名额直到工作线程真正结束才释放。OCR 结果与跟踪状态只在各自锁内的提交闸门里写入，迟到结果不发布。跟踪器把逐帧观测按位置、时序与来源对齐为稳定 ID、修订与游标事件，频道/说话者只给证据候选，文字作为数据保存，不解释或执行。
+
+Agent 底座第一批把应用本身也交给 Agent：`kotone-cli app launch` 以 `--background` 启动桌面端（只驻留托盘），`app.quit` 等同托盘退出，`runtime.*` 显式启停 ASR。服务内的有界事件总线承载 Kotone → Agent 的反向通道：`assistant.route=agent` 时，助手入口的 `RoutingHandler` 不再调用提醒规划，而是经 `AppHost` 端口把原文发布为 `user.request`；Agent 领取后用 `agent.reply`，桌面宿主复用提醒交付（输出互斥、等麦克风空闲、弹幕不取焦点）在后台完成，结果以事件回报。`kotone-tools` 只认识 `AppHost` 端口，Tauri 侧的 `DesktopHost` 实现它；交付 future 被丢弃时宿主停止播报、收起弹幕。
 
 窗口引用绑定句柄、PID 与进程创建时间，捕获前重新校验。M1 唯一的捕获后端是 GDI 前台可见客户区：只复制前台目标客户区内屏幕已合成的物理像素，拒绝非前台、最小化、隐藏、跨显示器目标，不退化为整桌面截图，也不宣称隐藏窗口或独占 GPU 内容捕获。产物不可变、只在内存中，带 SHA-256、尺寸、TTL 与到根图的变换；容量与 TTL 有界，调用期限、并发、请求体与像素数均有上限，阻塞工作在工作线程执行，不持有运行时或 UI 锁。协议与工具 schema 以 [工具服务手册](tool-service.md) 和 `capabilities` 为准。
 

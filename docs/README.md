@@ -10,7 +10,7 @@
 | 命令行用法 | [cli.md](cli.md)，参数以 `kotone-cli --help` 及子命令帮助为准 |
 | 模型评测、标注和缓存规则 | [eval-playbook.md](eval-playbook.md) |
 | 助手热键、提醒与输出限制 | [assistant.md](assistant.md) |
-| 本机 Agent 工具服务（开启、协议、工具 schema、捕获限制、OCR 与聊天跟踪） | [tool-service.md](tool-service.md) |
+| 本机 Agent 工具服务（开启、协议、工具 schema、捕获限制、OCR 与聊天跟踪、应用启停、事件与用户请求、MCP / DSH 插件） | [tool-service.md](tool-service.md) |
 | 诊断包内容与操作 | [diagnostics.md](diagnostics.md) |
 | 数据和网络边界 | [PRIVACY.md](../PRIVACY.md) |
 | 发布门禁与分发 | [release-checklist.md](release-checklist.md) |
@@ -19,9 +19,10 @@
 ## 设计依据与历史
 
 - [游戏聊天 OCR 会话研究报告（2026-11-15）](research/2026-11-15-lol-chat-ocr-report.md) 汇总诊断、产品分工与韩服聊天实验；含39图配对对照及可提交的小型证据，不是整体准确率承诺。
-- [面向 Agent 的游戏工具演进计划](product-evolution-game-tools.md) 给出基础服务、目标暴露列表和分阶段验收范围；M1、M2 已按 [工具服务手册](tool-service.md) 实现，M3 及以后仍是计划，不是当前 API。
+- [面向 Agent 的游戏工具演进计划](product-evolution-game-tools.md) 给出基础服务、目标暴露列表和分阶段验收范围；M1、M2 与 §5.5 的底座第一批已按 [工具服务手册](tool-service.md) 实现，其余仍是计划，不是当前 API。
 - [M1 实现与验证记录](research/game-tools-m1-implementation.md) 记录本轮命令、结果、捕获限制与未完成的人工检查。
 - [M2 实现与验证记录](research/game-tools-m2-implementation.md) 记录预处理、OCR、聊天跟踪的实现、测试、真实本地韩文 OCR 冒烟与未验证条件。
+- [Agent 底座第一批实现与验证记录](research/agent-base-batch1-implementation.md) 记录应用启停、事件总线、用户请求反向通道、MCP 与 DSH 插件的实现、真机端到端结果、发现的问题与未验证条件。
 - [ADR 索引](adr/README.md) 记录“为什么这样做”。已替代或修订的决策标明状态，旧正文保留用于追溯，不作为现行 API。
 - [早期开发文档](archive/development-history.md) 保存阶段计划、原始评测成绩和验收历史。
 - [技术预研](tech-research.md)、[STT 调研](recon-stt-engines.md)、[后处理调研](recon-postprocess-ai.md) 是有日期的研究材料，不能用来判断当前已支持的功能。

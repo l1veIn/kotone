@@ -46,6 +46,13 @@
 | 消息 ID 与修订 / Message ID, revision | `messageId`, `revision` | 一个可视文本行在代际内的稳定身份；OCR 改字保持 ID 并 revision+1；同文重复发送可以是新 ID。 |
 | 代际 / Generation | `generation`, `chat.track.reset` | 新对局、重连、换 ROI 等边界；重置后清空消息与事件，旧游标失效。 |
 | 游标 / Cursor | `cursor`, `newSince` | 绑定会话与代际的事件位置，只用于读取其后的新增与修订；`visible` 读取与游标无关。 |
+| 事件总线 / Event bus | `EventBus`, `event.read`, `GET /v1/events` | 工具服务内 Kotone → Agent 的有界事件流（`user.request`、`agent.*`、`runtime.phase`、`app.*`）；游标 `ev1.<实例>.<序号>` 只在本实例有效，失效报错而不跳过。与聊天跟踪的游标是两回事。 |
+| 用户请求 / User request | `user.request`, `AgentRequests`, `areq_…` | 用户经 Kotone（`assistant.route=agent` 时的助手热键语音或文字入口）发给外部 Agent 的原文；pending → claimed → replied / expired，十分钟有效。原文对 Kotone 是数据。 |
+| 助手去向 / Assistant route | `AssistantRoute`, `assistant.route` | 助手入口把请求交给谁：`reminders`（默认，Kotone 自己的 AI 连接规划提醒）或 `agent`（发布 `user.request`）。 |
+| 领取 / Claim | `agent.request.claim`, `consumer` | Agent 处理用户请求前声明归属；同一领取者幂等，其他领取者被拒绝，保证多个 Agent 在线时一条请求只处理一次。 |
+| Agent 回复 / Agent reply | `agent.reply`, `deliveryId` | Agent 经 Kotone 对用户说话（语音/弹幕），复用提醒的交付路径；默认受理即返回，交付结果以 `agent.reply.delivered/failed` 事件给出。 |
+| 桌面宿主 / App host | `AppHost`, `DesktopHost` | 工具服务调用应用级能力（启停运行时、退出、交付回复、助手提交）的端口；`kotone-tools` 不依赖 Tauri。 |
+| 后台启动 / Background launch | `--background`, `kotone-cli app launch` | 只驻留托盘、不打开设置窗口、不抢焦点的启动方式；进程不继承调用方句柄。 |
 
 ## 四种交互模式
 

@@ -1,6 +1,6 @@
-# 本机 Agent 工具服务（M1 + M2）
+# 本机 Agent 工具服务（M1 + M2 + Agent 底座）
 
-本页是工具服务的**现行权威手册**：开启方式、发现与认证、v1 协议、已实现工具、捕获语义与限制，以及 M2 的图像预处理、OCR 后端与聊天消息跟踪。字段的最终依据是 `kotone-cli tools list --json` 返回的 schema 与 `crates/kotone-tools`、`crates/kotone-ocr` 实现；[演进计划](product-evolution-game-tools.md)中 M3 及以后的工具尚未实现，不属于本 API。实现与验证记录见 [M1](research/game-tools-m1-implementation.md)、[M2](research/game-tools-m2-implementation.md)。
+本页是工具服务的**现行权威手册**：开启方式、发现与认证、v1 协议、已实现工具、捕获语义与限制，以及 M2 的图像预处理、OCR 后端与聊天消息跟踪，和 Agent 底座的应用生命周期、事件与用户请求反向通道（§10）。字段的最终依据是 `kotone-cli tools list --json` 返回的 schema 与 `crates/kotone-tools`、`crates/kotone-ocr` 实现；[演进计划](product-evolution-game-tools.md)中 M3 及以后的工具尚未实现，不属于本 API。实现与验证记录见 [M1](research/game-tools-m1-implementation.md)、[M2](research/game-tools-m2-implementation.md)、[Agent 底座第一批](research/agent-base-batch1-implementation.md)。
 
 ## 1. 定位与边界
 
@@ -8,8 +8,8 @@
 
 - 桌面进程拥有服务；`kotone-cli tools` 是客户端。客户端直接走 loopback HTTP，**不会再次启动 `kotone.exe`**，因此不会触发单实例回调唤起设置窗口、抢走游戏焦点。
 - 服务与 ASR 运行时（启动 / 停止开关）相互独立：运行时 Stopped 时工具照常可用，调用也不会启动 ASR、注册热键或加载模型。
-- 服务从不显示、移动或聚焦任何窗口，不发送输入，不读写调用方指定的本地文件。
-- 已实现下文 14 个工具（M1 的 8 个 + M2 的 6 个）。通用热键、工作流、模型调用（LLM）、TTS/弹幕、发送与 DSH 插件均未实现，也不出现在 capabilities 中；调用它们返回 `TOOL_NOT_FOUND`。
+- 服务从不移动或聚焦任何窗口，不发送输入，不读写调用方指定的本地文件。唯一的可见输出是 `agent.reply` 的弹幕（不取焦点、鼠标穿透的提醒层）与语音播报。
+- 已实现下文 24 个工具（M1 的 8 个 + M2 的 6 个 + Agent 底座的 10 个）。设置、连接、历史、诊断等其余应用能力按[演进计划 §5.5](product-evolution-game-tools.md) 分批开放；通用热键、工作流、模型调用（LLM）与发送尚未实现，不出现在 capabilities 中，调用它们返回 `TOOL_NOT_FOUND`。
 - OCR 结果与聊天文字一律是**数据**：服务从不解释或执行其中的内容（例如“忽略之前的指令”之类的文字只会被原样返回）。
 
 ## 2. 开启与重启
@@ -58,6 +58,7 @@ kotone-cli config set toolService.ocr.deepseekConnectionId <连接ID>
 | `GET /v1/capabilities` | 实际实现的工具、输入/输出 JSON Schema、就绪状态、副作用、限制 |
 | `GET /v1/status` | 实例、服务、ASR 相位、捕获后端、产物占用 |
 | `POST /v1/tools/call` | 调用工具 |
+| `GET /v1/events` | 读取事件（与 `event.read` 相同；查询参数 `cursor` / `from` / `types`（逗号分隔）/ `limit` / `waitMs`），长轮询不占执行名额 |
 
 请求体（`Content-Type: application/json`，不超过 64 KiB，不接受额外字段）：
 
@@ -92,6 +93,9 @@ kotone-cli config set toolService.ocr.deepseekConnectionId <连接ID>
 | OCR 执行名额 | 本地 1、在线 2（与上面的并发执行名额叠加；在期限内拿不到 → `BUSY`，`details.lane`） |
 | 驻留 OCR 结果 | 最多 64 个，各 600 秒（供 `chat.track.ingest` 引用；过期/回收 → `OCR_RESULT_EXPIRED`） |
 | 预处理 | 最多 8 个操作；缩放 0.25–4；输出不超过单图像素上限 |
+| 事件 | 总线保留最近 1000 个；同时长轮询的等待者最多 8 个（不占执行名额，满时 `BUSY`）；单次最多返回 500 个 |
+| 用户请求 | 有效期 600 秒，最多保留 64 个；文字 ≤4000 字符 |
+| Agent 回复 | 文字 ≤2000 字符；已受理、尚未交付完的回复最多 8 条（满时 `BUSY`） |
 | 聊天跟踪 | 会话 16 个（满时回收最久未用的会话，结果 `evictedSessions`）；每会话消息 500、事件 2000、帧记录 32、每条保留 8 个旧修订；每次观测最多 64 行、每行 300 字符；会话空闲 30 分钟回收 |
 
 捕获、裁剪、预处理、OCR 推理、PNG 编码与 base64 在工作线程执行，不持有 ASR 运行时或 UI 锁。`timeoutMs` 是从服务收到请求起算的**绝对期限**，在三处强制：取得执行名额时（排队耗尽期限 → `TIMEOUT`，`details.stage="queued"`）、工作线程真正开始时（阻塞线程池饱和导致晚开始 → 不执行工具，`not-started`）、以及提交闸门内（`running` / `late-result`）。工作线程只产出“待提交”结果——新产物或释放请求——从不直接修改存储；提交闸门在存储锁内核对“未关闭、未过期”后才插入或释放。因此即使执行器停顿使迟到结果与计时器同时就绪，迟到结果也不会发布；排队超时的 `artifact.release` 之后也不会删除产物。超时调用的工作线程在后台收尾期间仍占用并发名额。
@@ -108,6 +112,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | 产物 | `ARTIFACT_NOT_FOUND`（从未发放）`ARTIFACT_EXPIRED`（`details.reason` 为 `ttl` 或 `evicted`）`ARTIFACT_RELEASED` |
 | OCR | `OCR_BACKEND_NOT_FOUND` `OCR_BACKEND_NOT_READY`（`details.reason`：`not-installed` / `invalid` / `runtime-unavailable` / `not-configured` / `credentials-missing` / `credentials-error`）`OCR_LANGUAGE_UNSUPPORTED` `OCR_OPTION_UNSUPPORTED` `OCR_FAILED`（本地推理失败）`OCR_REMOTE_ERROR`†（远端 HTTP 错误或 HTTP 200 内的 `error` 对象；`details.httpStatus/errorType`）`OCR_TRANSPORT_ERROR`*（连接/读取失败）`OCR_RESPONSE_INVALID` `OCR_RESULT_NOT_FOUND` `OCR_RESULT_EXPIRED` |
 | 聊天跟踪 | `CHAT_TRACK_SESSION_NOT_FOUND`（`details.reason`：`unknown` / `expired`）`CHAT_TRACK_GENERATION_MISMATCH` `CHAT_TRACK_OUT_OF_ORDER` `CHAT_TRACK_SOURCE_CHANGED` `CHAT_TRACK_CURSOR_INVALID` `CHAT_TRACK_CURSOR_STALE` `CHAT_TRACK_CURSOR_EXPIRED` |
+| 事件 / 用户请求 / 宿主 | `EVENT_CURSOR_INVALID` `EVENT_CURSOR_STALE`（实例重启或事件已被淘汰）`EVENT_CURSOR_EXPIRED` `AGENT_REQUEST_NOT_FOUND` `AGENT_REQUEST_EXPIRED` `AGENT_REQUEST_CLAIMED`（`details.claimedBy`）`HOST_ACTION_FAILED`（桌面端执行失败，或本实例没有桌面宿主） |
 | 客户端发现 | `SERVICE_NOT_RUNNING` `DESCRIPTOR_INSECURE` `DESCRIPTOR_INVALID` `STALE_DESCRIPTOR` `SERVICE_UNREACHABLE`* `INSTANCE_MISMATCH` `TRANSPORT_ERROR`* `RESPONSE_INVALID` |
 
 带 * 的码 `retryable=true`；† 的 `retryable` 按远端情况逐次给出（429/500/503/504/408 与“服务暂时不可用”为 true；余额不足、文件无法处理、识别超时等为 false）。网络/连接错误不会被包装成“图像没看清”；全黑图也不等于“已经看懂聊天”；OCR 技术失败是错误，不是“没有文字”。
@@ -132,6 +137,14 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `chat.track.ingest` | `session`、`observation`（`{type:"ocrResult",ocrResultId}` 或 `{type:"external",artifactId,producer,lines[]}`）、可选 `generation`、`onSourceChange` | 可见消息集（稳定 ID、revision、证据、不确定性）、本次 `changes`、`cursor`、`warnings`（§9） |
 | `chat.track.read` | `session`、`mode`（`visible` / `newSince`）、`newSince` 可选 `cursor`、`limit` | `visible`：`messages[]`；`newSince`：`changes[]`、`hasMore`；均含新 `cursor`、`generation`、观测时间、`stale`（§9） |
 | `chat.track.reset` | `session`、`reason`（`new-match` / `reconnect` / `roi-changed` / `window-changed` / `manual`） | `previousGeneration`、`generation`、`cleared{messages,events,frames}`、新 `cursor`（§9） |
+| `app.status` | 无 | 实例、版本、PID、运行时长、`app{host,launch,assistantRoute,kotoneHome}`、ASR 运行时状态、事件头、待处理请求数（§10） |
+| `app.quit` | 无 | 先返回响应，再关闭服务、删除描述文件并退出（等同托盘“退出”） |
+| `runtime.status` / `runtime.start` / `runtime.stop` | 无 | ASR 运行时 `phase`、`restartNeeded`、引擎与模型；start 预热模型可能需数秒，给足 `timeoutMs` |
+| `event.read` | 可选 `cursor` 或 `from`（`oldest`/`latest`）、`types`、`limit`、`waitMs` | `events[]{seq,id,type,atUnixMs,data}`、新 `cursor`、`hasMore`、`headSeq`、`oldestSeq`、`closed`（§10） |
+| `agent.requests` | 可选 `status`、`limit` | `requests[]`（新的在前）、`matched`、`truncated` |
+| `agent.request.claim` | `requestId`、`consumer`（1-64 字符） | `request`、`newlyClaimed`（同一领取者重复调用为 false） |
+| `agent.reply` | `text`、可选 `requestId`、`outputs`（`speech`/`danmaku`，缺省用助手默认提醒方式）、`wait` | `status`（`accepted` / `delivered`）、`deliveryId`、`receipt`（仅 `wait=true`）、`request`、`warnings`（§10） |
+| `assistant.submit` | `text` | 与用户在助手文字入口提交相同的结果 |
 
 **窗口引用**：`windowId` 是不透明字符串，只在发放它的实例内有效，绑定窗口句柄 + PID + 进程创建时间（`identityBinding` 说明强度；无权查询创建时间时退化为 `handle+pid`）。每次捕获前重新校验；同一窗口多次列举得到同一 ID。窗口元数据含标题、类名、可执行文件名（不含目录）、PID、前台/可见/最小化/DWM 隐藏标记、客户区与所在显示器的**屏幕物理像素**矩形、DPI 与 `scale = dpi / 96`。
 
@@ -245,13 +258,48 @@ window.active → screen.capture → image.crop（聊天 ROI）→ [image.prepro
                                   或 chat.track.read{newSince, cursor}（只看新增）
 ```
 
-## 10. 命令行
+## 10. 应用生命周期、事件与用户请求（Agent 底座）
+
+Agent 从“打开 exe”开始就能驱动 Kotone，并能收到用户通过 Kotone 发给它的话。
+
+**生命周期**。`kotone-cli app launch` 以 `--background` 启动 `kotone.exe`：只驻留托盘，不打开设置窗口、不抢焦点；进程完全脱离调用方（`bInheritHandles=FALSE`、独立进程组），调用方捕获输出用的管道不会泄漏进长驻进程。等到工具服务就绪（实测约 0.5 秒）才返回；已在运行则直接返回现有实例，第二次后台启动也不会唤起窗口。工具服务未开启时 `--enable-tool-service` 先写入 `toolService.enabled=true`。`app.quit`（或 `kotone-cli app quit`）等同托盘“退出”：先送出响应，再发布 `app.stopping`、关闭服务、删除描述文件，CLI 等到进程真正退出才返回。`KOTONE_HOME` 环境变量把 Kotone 数据目录（配置、日志、描述文件）整体换到别处，供隔离运行与测试；桌面端与 CLI 都读取它。
+
+**事件**（Kotone → Agent）。服务内有一条有界事件总线：
+
+| 类型 | 何时 | `data` 要点 |
+| --- | --- | --- |
+| `app.started` / `app.stopping` | 服务启动 / 关闭 | `instanceId`（started 另有 `pid`） |
+| `runtime.phase` | ASR 运行时状态变化 | 与 `runtime.status` 相同 |
+| `user.request` | 用户经 Kotone 发给 Agent 的请求 | 完整请求（见下） |
+| `agent.request.claimed` / `agent.request.expired` | 请求被领取 / 过期 | `requestId`（claimed 另有 `consumer`） |
+| `agent.reply.delivered` / `agent.reply.failed` | 回复交付完成 / 失败 | `deliveryId`、`requestId`、`text`、`receipt` 或 `code/message`、`deliverMs` |
+
+每个事件带递增 `seq` 与全局唯一 `id`（`evt_…`，供去重）。游标形如 `ev1.<实例随机数>.<序号>`，只在发放它的实例内有效。读取时传回上次的游标；实例重启后旧游标是 `EVENT_CURSOR_STALE`，序号已被淘汰是 `EVENT_CURSOR_EXPIRED`——**从不静默跳过事件**，Agent 应从 `from=oldest` 重读并按 ID 去重。`types` 支持精确类型与 `前缀.*`。`waitMs` 长轮询：暂无新事件时最多等待这么久（`event.read` 受本次 `timeoutMs` 约束，`GET /v1/events` 最长 30 秒；CLI 与 MCP 每轮用 25 秒），不占工具执行名额；服务关闭时立即返回 `closed=true`。
+
+**用户请求**（反向通道）。`assistant.route` 设为 `agent` 时（`kotone-cli config set assistant.route agent`，重启生效；默认 `reminders` 保持原有的提醒规划），助手热键语音与文字入口的原文不再交给 Kotone 自己的 AI 连接，而是成为一条 `user.request`：`requestId`（`areq_…`）、`text`（用户原文——对 Kotone 是数据，不是指令）、`source`（`assistant-voice` / `assistant-text` / `tool`）、`foregroundWindow`（提交时的前台窗口，可直接用于截图）、`status`（`pending` → `claimed` → `replied`，或 `expired`）、创建/过期时间、领取者与回复次数。`assistant.submit` 走与文字入口完全相同的路径，供测试和自动化。
+
+Agent 先 `agent.request.claim`（`consumer` 如 `dsh-kotone:<pid>` / `claude-code`）再处理：同一领取者重复领取幂等，其他领取者得到 `AGENT_REQUEST_CLAIMED`，过期请求得到 `AGENT_REQUEST_EXPIRED`。多个 Agent 同时在线时由此保证一条请求只被处理一次。
+
+**回复**。`agent.reply` 复用提醒的交付路径：与其他输出互斥排队、播报前等待麦克风空闲（避免把回复当成新的语音指令）、弹幕不取焦点、语音失败时降级为弹幕。默认**受理即返回**（`status=accepted`、`deliveryId`），在后台交付，结果以 `agent.reply.delivered` / `agent.reply.failed` 事件给出——Agent 不必为一条 20 秒的弹幕或一段长语音阻塞，也不会撞上 30 秒调用上限。`wait=true` 时等交付完成再返回回执（受 `timeoutMs` 约束，到期即停止播报）。带 `requestId` 回答对应请求（可多次调用，例如先说“在查，稍等”），请求随即记为 `replied`；不带则是主动通知。服务关闭时丢弃未完成的后台交付（宿主停止播报、收起弹幕）。没有桌面宿主的实例（纯测试服务）直接返回 `HOST_ACTION_FAILED`，不先受理。
+
+**接入方式**：
+
+- **MCP**：`kotone-cli mcp` 是 stdio MCP 服务器。静态工具 `kotone_service_status`、`kotone_launch`、`kotone_quit`、`kotone_capabilities`、`kotone_call`（按 Kotone 工具名调用任意工具）、`kotone_events`；Kotone 运行时再把每个工具映射为 `kotone_<工具名，点换成下划线>`，启动后发送 `notifications/tools/list_changed`。
+- **DSH 插件**：[`integrations/dsh-kotone`](../integrations/dsh-kotone/README.md) 挂上上述 MCP 服务器，并把 `user.request` 领取后投进 DSH 里复用的「Kotone」会话。
+- **Skill**：[`integrations/skills/kotone/SKILL.md`](../integrations/skills/kotone/SKILL.md) 供只能执行命令行的 Agent 使用。
+
+## 11. 命令行
 
 ```text
 kotone-cli tools status [--json]
 kotone-cli tools list [--json]
 kotone-cli tools call <tool> [--args-file <json文件|->] [--timeout-ms N] [--request-id ID]
 kotone-cli tools artifact get <artifact-id> --output <png文件> [--force]
+kotone-cli tools events [--cursor C | --from oldest|latest] [--types T1,T2] [--wait-ms N] [--follow]
+kotone-cli app status [--json]
+kotone-cli app launch [--exe <kotone.exe>] [--wait-ms N] [--enable-tool-service] [--foreground]
+kotone-cli app quit [--wait-ms N]
+kotone-cli mcp
 kotone-cli ocr status [--model-dir <目录>] [--json]
 kotone-cli ocr install [--model-dir <目录>] [--from-dir <目录>] [--json]
 ```
@@ -259,6 +307,8 @@ kotone-cli ocr install [--model-dir <目录>] [--from-dir <目录>] [--json]
 - `call` 把完整信封以 JSON 打印到标准输出；`--args-file -` 从标准输入读取；参数文件必须是 JSON 对象（≤64 KiB，允许 UTF-8 BOM）。
 - `artifact get` 由客户端把 PNG 写到 `--output`：先核对长度与 SHA-256，把内容完整写入同目录的独占临时文件，再一次性发布。未加 `--force` 时用不替换的原子改名（`MoveFileExW` 不带 `REPLACE_EXISTING`），目标在任何时刻已存在都会失败——并发导出只有一个成功，不会覆盖其他进程刚创建的文件；`--force` 才原子替换已存在的文件。失败时临时文件被删除。标准输出是去掉 base64 内容、附 `output.path/bytesWritten` 的信封。
 - 退出码：`0` 成功；`1` 工具返回 `ok=false`；`2` 本地用法或文件错误；`3` 发现或连接失败（此时信封的 `instanceId` 为 null）。
+- `tools events --follow` 持续长轮询，每行输出一个事件 JSON（JSON Lines）；游标失效、服务停止或连接失败时退出（退出码同上），由调用方从 `--from oldest` 重新开始。
+- `app launch` 找 `kotone.exe` 的顺序：`--exe`、`KOTONE_EXE`、与 `kotone-cli` 同目录；显式给出的路径不存在时报错，不悄悄改用别的文件。`app status` 未运行时退出码 1；`app quit` 等进程退出才返回，超时退出码 1。
 - `ocr status` / `ocr install` 不连接桌面实例：在本地检查/安装模型（退出码 0 就绪或安装成功，1 未就绪或安装失败，2 用法错误）。`--model-dir` 指向模型包目录本身；`KOTONE_OCR_MODEL_DIR` 环境变量同样可覆盖（隔离冒烟用）。
 
 典型流程（PowerShell）：
@@ -281,13 +331,15 @@ kotone-cli tools call chat.track.ingest --args-file ingest.json
 '{"session":"lol-team","mode":"visible"}' | kotone-cli tools call chat.track.read --args-file -
 ```
 
-## 11. 隐私
+## 12. 隐私
 
 截图、窗口标题与进程名只在本机返回给持有会话凭证的本地客户端；服务不落盘产物、OCR 结果或跟踪状态（全部在内存中，TTL/容量回收，桌面退出即丢弃），诊断事件不记录它们。客户端写出的 PNG 由调用方保存和清理。
 
+用户请求的原文、Agent 回复与事件只在内存中保留（有界、TTL），不写入识别历史或诊断；`assistant.route=agent` 时用户对助手说的话交给本机连接的 Agent，由 Agent 决定是否再发往其使用的模型服务。
+
 只有选用在线 OCR 后端时，Kotone 才会把**所选产物的 PNG** 上传到用户配置的 DeepSeek 连接；该后端默认未启用，需用户在配置中指定连接。本地后端完全离线；模型只在用户显式运行 `kotone-cli ocr install` 时下载。Agent 若自行把图片交给其他在线模型，那是 Agent 侧的数据外发，见 [PRIVACY.md](../PRIVACY.md)。
 
-## 12. 实现位置
+## 13. 实现位置
 
 | 位置 | 内容 |
 | --- | --- |
@@ -300,3 +352,8 @@ kotone-cli tools call chat.track.ingest --args-file ingest.json
 | `crates/kotone-tools` | 协议、能力目录、产物存储、调度、HTTP 服务端、发现、客户端 |
 | `apps/desktop/src-tauri/src/tool_service.rs` | 桌面 setup 启动、`RunEvent::Exit` 关闭 |
 | `crates/kotone-cli/src/tools.rs`、`ocr.rs` | `tools` 子命令；`ocr status/install` |
+| `crates/kotone-tools/src/events.rs`、`agent_requests.rs`、`host.rs`、`service_app.rs` | 事件总线与游标、用户请求状态机、桌面宿主端口、应用级工具 |
+| `apps/desktop/src-tauri/src/tool_service.rs`（`DesktopHost`）、`assistant.rs`（`RoutingHandler`、`deliver_text`） | 宿主实现：运行时启停、退出、回复交付、助手路由 |
+| `crates/kotone-platform-windows/src/detached.rs` | 不继承句柄的脱离式进程启动 |
+| `crates/kotone-cli/src/app.rs`、`mcp.rs` | `app status/launch/quit`；stdio MCP 服务器 |
+| `integrations/dsh-kotone`、`integrations/skills/kotone` | DSH 插件（MCP + 反向通道）；Agent Skill |
