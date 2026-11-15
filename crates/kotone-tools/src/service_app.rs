@@ -6,12 +6,14 @@
 //!   与调用期限、服务关闭竞争；到期即丢弃宿主 future（宿主保证丢弃时停止原生工作）。
 //! - 状态变更（领取、记录回复、退出）经 `Prepared::Commit` 在提交闸门之后执行。
 //! - 事件读取不占工具执行名额：长轮询只在等待者上限内异步等待。
+//! - 配置类工具（[`catalog::HOST_TOOLS`]）只检查参数是对象，然后委托宿主 `invoke`
+//!   （与设置页同一实现），同样与期限、关闭竞争。
 
 use super::*;
 
 use crate::agent_requests::{RequestError, RequestStatus};
 use crate::events::{CursorError, ReadFrom};
-use crate::host::{HostFuture, ReplyOutput};
+use crate::host::{HostError, HostFuture, HostInvokeFuture, ReplyOutput};
 
 /// 提交闸门之后执行的短小状态变更。
 pub(super) type CommitFn = Box<dyn FnOnce(&ToolService) -> Result<Value, ToolError> + Send>;
@@ -337,6 +339,48 @@ impl ToolService {
         tool: &str,
         timeout_ms: u64,
     ) -> Result<T, ToolError> {
+        self.race_host(ctx, future, tool, timeout_ms, host_failed)
+    }
+
+    /// 委托配置类工具给宿主：参数必须是对象（缺省为空对象），宿主错误按类别映射。
+    pub(super) fn execute_host(
+        &self,
+        tool: &str,
+        arguments: Value,
+        ctx: &CallCtx,
+        timeout_ms: u64,
+    ) -> ToolResult {
+        let args = match arguments {
+            Value::Null => json!({}),
+            Value::Object(map) => Value::Object(map),
+            _ => return Err(invalid_args("参数必须是 JSON 对象")),
+        };
+        if !self.host.supports_invoke() {
+            return Err(host_failed(format!("{}（{tool}）", crate::host::NO_HOST)));
+        }
+        let started = Instant::now();
+        let future: HostInvokeFuture<'_> = self.host.invoke(tool, args);
+        let value = self.race_host(ctx, future, tool, timeout_ms, |error| match error {
+            HostError::InvalidArguments(message) => invalid_args(message),
+            HostError::Busy(message) => ToolError::new(ErrorCode::Busy, message),
+            HostError::Failed(message) => host_failed(message),
+        })?;
+        let mut phases = BTreeMap::new();
+        phases.insert("hostMs".into(), ms_since(started));
+        Ok(Outcome {
+            prepared: Prepared::Value(value),
+            phases,
+        })
+    }
+
+    fn race_host<T, E>(
+        &self,
+        ctx: &CallCtx,
+        future: std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, E>> + Send + '_>>,
+        tool: &str,
+        timeout_ms: u64,
+        map_error: impl FnOnce(E) -> ToolError,
+    ) -> Result<T, ToolError> {
         let handle = tokio::runtime::Handle::try_current()
             .map_err(|_| ToolError::new(ErrorCode::Internal, "没有可用的异步运行时"))?;
         let notify = Arc::new(tokio::sync::Notify::new());
@@ -352,7 +396,7 @@ impl ToolService {
             }
         });
         outcome.map_err(|e| match e {
-            Some(message) => host_failed(message),
+            Some(error) => map_error(error),
             None if self.store.is_closed() => closed_error(),
             None => timeout_error(tool, timeout_ms, "running"),
         })

@@ -12,6 +12,8 @@
 //! - 应用级工具（`app.*`、`runtime.*`、`agent.reply`、`assistant.submit`）经 [`DesktopHost`]
 //!   调用桌面能力；助手入口在 `assistant.route = agent` 时经 [`submit_user_request`] 把原文
 //!   转交 Agent；运行时相位变化经 [`publish`] 发布到事件总线。
+//! - 配置类工具（设置、模型、连接、profile、热键、系统、历史、诊断）经 `invoke` 交给
+//!   `tool_config`，与设置页调用同一批命令函数。
 
 use std::sync::{Arc, Mutex};
 
@@ -23,7 +25,7 @@ use kotone_core::ocr::OcrBackend;
 use kotone_platform_windows::tool_host::WindowsToolHost;
 use kotone_platform_windows::window_tools::{GdiForegroundCapturer, WindowsWindowObserver};
 use kotone_tools::artifacts::SystemClock;
-use kotone_tools::host::{AppHost, HostFuture, ReplyOutput};
+use kotone_tools::host::{AppHost, HostFuture, HostInvokeFuture, ReplyOutput};
 use kotone_tools::{discovery, RunningToolService, ServiceDeps, ServiceLimits};
 
 use crate::runtime::RuntimeManager;
@@ -208,6 +210,15 @@ impl AppHost for DesktopHost {
             let plan = crate::assistant::submit_text(&self.app, text, "assistant-tool").await?;
             serde_json::to_value(plan).map_err(|e| e.to_string())
         })
+    }
+
+    fn supports_invoke(&self) -> bool {
+        true
+    }
+
+    fn invoke(&self, tool: &str, args: Value) -> HostInvokeFuture<'_> {
+        let tool = tool.to_string();
+        Box::pin(async move { crate::tool_config::invoke(&self.app, &tool, args).await })
     }
 }
 

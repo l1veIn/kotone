@@ -33,7 +33,7 @@ use crate::artifacts::{
     Gone, LookupError, RectJson, RegionJson, RootTransform, WarningJson, COORDINATE_SPACE,
     MIME_PNG,
 };
-use crate::catalog::{self, Readiness, IMPLEMENTED_TOOLS};
+use crate::catalog::{self, Readiness};
 use crate::ids::new_id;
 use crate::image::{encode_png, sha256_hex, validate_crop, RgbaImage};
 use crate::limits::ServiceLimits;
@@ -783,6 +783,7 @@ impl ToolService {
             windows_ready: capture.available,
             capture_ready: capture.available,
             reason: capture.unavailable_reason.clone(),
+            host_tools_ready: self.host.supports_invoke(),
             ocr_ready: any_ready,
             ocr_reason: if any_ready {
                 None
@@ -904,12 +905,13 @@ impl ToolService {
         if self.store.is_closed() {
             return self.envelope_failure(request_id, Some(tool), closed_error(), started);
         }
-        if !IMPLEMENTED_TOOLS.contains(&tool.as_str()) {
+        let implemented = catalog::implemented_tools();
+        if !implemented.contains(&tool.as_str()) {
             let error = ToolError::new(
                 ErrorCode::ToolNotFound,
                 format!("工具 {tool} 未在本实例实现；可用工具见 system.capabilities"),
             )
-            .with_details(json!({"available": IMPLEMENTED_TOOLS}));
+            .with_details(json!({"available": implemented}));
             return self.envelope_failure(request_id, Some(tool), error, started);
         }
         let timeout_ms = match request.timeout_ms {
@@ -1320,6 +1322,9 @@ impl ToolService {
             | catalog::TOOL_AGENT_REQUEST_CLAIM
             | catalog::TOOL_AGENT_REPLY
             | catalog::TOOL_ASSISTANT_SUBMIT => self.execute_app(tool, arguments, ctx, timeout_ms),
+            t if catalog::HOST_TOOLS.contains(&t) => {
+                self.execute_host(tool, arguments, ctx, timeout_ms)
+            }
             catalog::TOOL_IMAGE_PREPROCESS => self.preprocess(parse_args(arguments)?),
             catalog::TOOL_OCR_BACKENDS => {
                 let _: NoArgs = parse_args(arguments)?;

@@ -752,6 +752,8 @@ pub struct FakeAppHost {
     delay: Mutex<Duration>,
     fail: Mutex<Option<String>>,
     submitted: Mutex<Vec<String>>,
+    invocations: Mutex<Vec<(String, Value)>>,
+    invoke_results: Mutex<std::collections::HashMap<String, Result<Value, crate::host::HostError>>>,
 }
 
 impl FakeAppHost {
@@ -779,6 +781,17 @@ impl FakeAppHost {
     }
     pub fn submitted(&self) -> Vec<String> {
         self.submitted.lock().unwrap().clone()
+    }
+    /// 配置类工具调用记录（工具名, 参数）。
+    pub fn invocations(&self) -> Vec<(String, Value)> {
+        self.invocations.lock().unwrap().clone()
+    }
+    /// 设定某个配置类工具的返回；未设定时回显 `{"tool", "args"}`。
+    pub fn set_invoke_result(&self, tool: &str, result: Result<Value, crate::host::HostError>) {
+        self.invoke_results
+            .lock()
+            .unwrap()
+            .insert(tool.to_string(), result);
     }
 }
 
@@ -848,6 +861,24 @@ impl crate::host::AppHost for FakeAppHost {
         Box::pin(async move {
             self.submitted.lock().unwrap().push(text);
             Ok(serde_json::json!({"route": "agent", "message": "已转交 Agent"}))
+        })
+    }
+    fn supports_invoke(&self) -> bool {
+        true
+    }
+    fn invoke(&self, tool: &str, args: Value) -> crate::host::HostInvokeFuture<'_> {
+        let tool = tool.to_string();
+        Box::pin(async move {
+            let delay = *self.delay.lock().unwrap();
+            tokio::time::sleep(delay).await;
+            self.invocations
+                .lock()
+                .unwrap()
+                .push((tool.clone(), args.clone()));
+            match self.invoke_results.lock().unwrap().get(&tool) {
+                Some(result) => result.clone(),
+                None => Ok(serde_json::json!({"tool": tool, "args": args})),
+            }
         })
     }
 }

@@ -134,7 +134,7 @@ async fn cli_drives_preprocess_ocr_and_chat_tracking() {
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(names, kotone_tools::catalog::IMPLEMENTED_TOOLS);
+    assert_eq!(names, kotone_tools::catalog::implemented_tools());
     for tool in [
         "image.preprocess",
         "ocr.backends",

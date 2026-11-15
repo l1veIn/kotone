@@ -140,7 +140,7 @@ async fn cli_drives_a_running_service_end_to_end() {
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(names, kotone_tools::catalog::IMPLEMENTED_TOOLS);
+    assert_eq!(names, kotone_tools::catalog::implemented_tools());
     outputs.push(list);
     let plain = run!(run_dir, ["tools", "list"]);
     assert!(plain.stdout.contains("screen.capture") && plain.stdout.contains("ready"));

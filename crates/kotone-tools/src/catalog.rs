@@ -8,6 +8,10 @@ use serde_json::{json, Value};
 
 use crate::limits::ServiceLimits;
 
+#[path = "catalog_host.rs"]
+mod host_tools;
+pub use host_tools::*;
+
 pub const TOOL_SYSTEM_CAPABILITIES: &str = "system.capabilities";
 pub const TOOL_SYSTEM_STATUS: &str = "system.status";
 pub const TOOL_WINDOW_LIST: &str = "window.list";
@@ -33,8 +37,8 @@ pub const TOOL_AGENT_REQUEST_CLAIM: &str = "agent.request.claim";
 pub const TOOL_AGENT_REPLY: &str = "agent.reply";
 pub const TOOL_ASSISTANT_SUBMIT: &str = "assistant.submit";
 
-/// 本版本实现的全部工具名（顺序即 capabilities 中的顺序）。
-pub const IMPLEMENTED_TOOLS: &[&str] = &[
+/// 服务自身实现的工具（不含委托给宿主的配置类工具 [`HOST_TOOLS`]）。
+pub const BASE_TOOLS: &[&str] = &[
     TOOL_SYSTEM_CAPABILITIES,
     TOOL_SYSTEM_STATUS,
     TOOL_WINDOW_LIST,
@@ -61,6 +65,11 @@ pub const IMPLEMENTED_TOOLS: &[&str] = &[
     TOOL_ASSISTANT_SUBMIT,
 ];
 
+/// 本版本实现的全部工具名（顺序即 capabilities 中的顺序）：[`BASE_TOOLS`] 之后是 [`HOST_TOOLS`]。
+pub fn implemented_tools() -> Vec<&'static str> {
+    BASE_TOOLS.iter().chain(HOST_TOOLS).copied().collect()
+}
+
 /// 平台/后端就绪情况，决定窗口与捕获工具的 `ready` 字段。
 #[derive(Debug, Clone)]
 pub struct Readiness {
@@ -70,6 +79,8 @@ pub struct Readiness {
     /// 最近一次检查中至少一个 OCR 后端就绪。
     pub ocr_ready: bool,
     pub ocr_reason: Option<String>,
+    /// 宿主实现配置类工具（[`HOST_TOOLS`]）。
+    pub host_tools_ready: bool,
 }
 
 fn nullable(schema_type: &str) -> Value {
@@ -439,6 +450,12 @@ fn spec_with_egress(
 
 /// 生成 capabilities 中的 `tools` 数组。
 pub fn tool_specs(limits: &ServiceLimits, readiness: &Readiness) -> Vec<Value> {
+    let mut specs = base_tool_specs(limits, readiness);
+    specs.extend(host_tool_specs(readiness.host_tools_ready));
+    specs
+}
+
+fn base_tool_specs(limits: &ServiceLimits, readiness: &Readiness) -> Vec<Value> {
     let reason = readiness.reason.as_ref();
     vec![
         spec(
@@ -1122,7 +1139,7 @@ pub fn capabilities_schema() -> Value {
                     "status": {"const": "implemented"},
                     "description": {"type": "string"},
                     "sideEffects": {"type": "array", "items": {"type": "string"}},
-                    "dataEgress": {"enum": ["none", "backend-dependent"]},
+                    "dataEgress": {"enum": ["none", "backend-dependent", "connection-dependent"]},
                     "ready": {"type": "boolean"},
                     "notReadyReason": {"type": nullable("string")},
                     "inputSchema": {"type": "object"},

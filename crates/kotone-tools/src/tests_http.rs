@@ -6,7 +6,6 @@ use std::time::Duration;
 use base64::Engine as _;
 use serde_json::{json, Value};
 
-use crate::catalog::IMPLEMENTED_TOOLS;
 use crate::discovery::{self, Descriptor};
 use crate::protocol::{Envelope, ToolCallRequest};
 use crate::testing::{
@@ -317,7 +316,7 @@ async fn capabilities_list_exactly_the_implemented_tools() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, IMPLEMENTED_TOOLS);
+    assert_eq!(names, crate::catalog::implemented_tools());
     for tool in caps["tools"].as_array().unwrap() {
         assert_eq!(tool["status"], "implemented");
         if tool["name"] == "ocr.recognize" {
@@ -325,6 +324,16 @@ async fn capabilities_list_exactly_the_implemented_tools() {
             assert_eq!(tool["dataEgress"], "backend-dependent");
             assert_eq!(tool["ready"], false);
             assert!(tool["notReadyReason"].is_string());
+        } else if crate::catalog::HOST_TOOLS.contains(&tool["name"].as_str().unwrap()) {
+            // 本测试实例没有桌面宿主：配置类工具如实报告未就绪
+            assert_eq!(tool["ready"], false, "{}", tool["name"]);
+            assert!(tool["notReadyReason"].is_string());
+            let egress = if tool["name"] == "postprocess.test" {
+                "connection-dependent"
+            } else {
+                "none"
+            };
+            assert_eq!(tool["dataEgress"], egress, "{}", tool["name"]);
         } else {
             assert_eq!(tool["dataEgress"], "none", "{}", tool["name"]);
             assert_eq!(tool["ready"], true, "{}", tool["name"]);
@@ -341,7 +350,6 @@ async fn capabilities_list_exactly_the_implemented_tools() {
         "overlay.push",
         "chat.send",
         "asr.start",
-        "settings.update",
     ] {
         assert!(!names.contains(&planned));
         let (code, retryable) = h.err(planned, json!({})).await;

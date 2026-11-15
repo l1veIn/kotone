@@ -12,6 +12,23 @@ use serde_json::Value;
 
 pub type HostFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>;
 
+/// 委托给宿主的配置类工具（[`AppHost::invoke`]）的错误：区分参数错误、忙与执行失败，
+/// 服务据此映射为 `INVALID_ARGUMENTS` / `BUSY` / `HOST_ACTION_FAILED`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostError {
+    InvalidArguments(String),
+    Busy(String),
+    Failed(String),
+}
+
+impl From<String> for HostError {
+    fn from(message: String) -> Self {
+        Self::Failed(message)
+    }
+}
+
+pub type HostInvokeFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, HostError>> + Send + 'a>>;
+
 /// 回复交付方式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReplyOutput {
@@ -53,6 +70,17 @@ pub trait AppHost: Send + Sync {
     }
     /// 等同于用户在助手文字入口提交（按 `assistant.route` 规划提醒或转交 Agent）。
     fn assistant_submit(&self, text: String) -> HostFuture<'_, Value>;
+    /// 宿主是否实现配置类工具（[`crate::catalog::HOST_TOOLS`]）；决定这些工具的 `ready`。
+    fn supports_invoke(&self) -> bool {
+        false
+    }
+    /// 执行一个配置类工具（设置、模型、连接、profile、热键、系统、历史、诊断……）。
+    /// `args` 已保证是 JSON 对象（缺省为空对象），由宿主按工具解析并校验；状态变更与
+    /// 设置页走同一实现。长任务（下载）应受理后立即返回，结果经事件发布。
+    fn invoke(&self, tool: &str, _args: Value) -> HostInvokeFuture<'_> {
+        let message = format!("{NO_HOST}（{tool}）");
+        Box::pin(async move { Err(HostError::Failed(message)) })
+    }
 }
 
 /// 没有桌面宿主时（例如纯 CLI 测试）：应用级工具明确不可用。

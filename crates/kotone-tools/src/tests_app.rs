@@ -557,6 +557,8 @@ async fn without_a_desktop_host_app_tools_fail_explicitly() {
         "agent.reply",
         "assistant.submit",
         "app.quit",
+        "settings.get",
+        "models.download",
     ] {
         let args = if tool == "agent.reply" || tool == "assistant.submit" {
             json!({"text": "x"})
@@ -575,4 +577,67 @@ async fn without_a_desktop_host_app_tools_fail_explicitly() {
         assert_eq!(env.error.unwrap().code, "HOST_ACTION_FAILED", "{tool}");
     }
     drop(running);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn configuration_tools_are_delegated_to_the_host() {
+    use crate::host::HostError;
+    let h = H::new(ServiceLimits::default()).await;
+    let caps = h.running.service().capabilities();
+    for name in crate::catalog::HOST_TOOLS {
+        let spec = caps["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == *name)
+            .unwrap_or_else(|| panic!("{name} missing from capabilities"));
+        assert_eq!(spec["ready"], true, "{name}");
+        assert!(!spec["inputSchema"]["type"].is_null(), "{name}");
+    }
+
+    // 缺省参数 → 空对象；参数原样交给宿主
+    h.ok("settings.get", Value::Null).await;
+    h.host.set_invoke_result(
+        "hotkeys.conflicts",
+        Ok(json!({"key": "F8", "warnings": ["F8: 某游戏默认键位"]})),
+    );
+    let r = h.ok("hotkeys.conflicts", json!({"key": "F8"})).await;
+    assert_eq!(r["warnings"][0], "F8: 某游戏默认键位");
+    assert_eq!(
+        h.host.invocations(),
+        vec![
+            ("settings.get".to_string(), json!({})),
+            ("hotkeys.conflicts".to_string(), json!({"key": "F8"})),
+        ]
+    );
+
+    // 非对象参数在服务端拒绝，不进入宿主
+    let e = h.err("settings.update", json!([1, 2])).await;
+    assert_eq!(e.code, "INVALID_ARGUMENTS");
+    assert_eq!(h.host.invocations().len(), 2);
+
+    // 宿主错误按类别映射
+    for (result, code) in [
+        (
+            HostError::InvalidArguments("patch 不合法".into()),
+            "INVALID_ARGUMENTS",
+        ),
+        (HostError::Busy("已有模型下载进行中".into()), "BUSY"),
+        (
+            HostError::Failed("磁盘空间不足".into()),
+            "HOST_ACTION_FAILED",
+        ),
+    ] {
+        h.host
+            .set_invoke_result("models.download", Err(result.clone()));
+        let e = h.err("models.download", json!({"id": "m"})).await;
+        assert_eq!(e.code, code, "{result:?}");
+    }
+
+    // 宿主动作与调用期限竞争
+    h.host.set_delay(Duration::from_millis(500));
+    let env = h.call("models.list", json!({}), Some(100)).await;
+    assert_eq!(env.error.unwrap().code, "TIMEOUT");
+    h.host.set_delay(Duration::ZERO);
+    drop(h);
 }

@@ -193,6 +193,17 @@
     };
   });
 
+  // Agent 经工具服务改了设置（settings.update / 连接 / 模型 / profile …）：
+  // 重新读取，打开着的设置页不显示过期值，也不会用旧值覆盖。
+  onMount(() => {
+    if (!isTauri) return;
+    let unlisten: (() => void) | undefined;
+    void listen("kotone://settings-changed", () => {
+      void refreshSettings().catch(() => { /* 下次打开设置页会重新读取 */ });
+    }).then((un) => (unlisten = un));
+    return () => unlisten?.();
+  });
+
   // 独占全屏下后端会拦截浮窗显示，并发送持久到共享 store 的提示事件。
   // 监听放在设置根组件，不依赖用户当时是否停留在「通用」分页。
   onMount(() => {

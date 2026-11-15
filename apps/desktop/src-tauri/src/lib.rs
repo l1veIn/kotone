@@ -9,6 +9,7 @@ mod hotkey;
 mod overlay;
 mod runtime;
 mod speech_models;
+mod tool_config;
 mod tool_service;
 mod tray;
 

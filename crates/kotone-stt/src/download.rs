@@ -78,6 +78,12 @@ impl Drop for DownloadGuard {
     }
 }
 
+/// 是否有下载正在进行（模型或语音包共用同一下载名额）。只用于提前给出“忙”的答复；
+/// 真正的互斥仍由 [`begin_download`] 保证。
+pub fn is_active() -> bool {
+    DOWNLOAD_ACTIVE.load(Ordering::SeqCst)
+}
+
 /// 进入下载临界区：已有下载进行中时拒绝（IPC 并发防重入）
 pub fn begin_download() -> Result<DownloadGuard, String> {
     if DOWNLOAD_ACTIVE.swap(true, Ordering::SeqCst) {
