@@ -233,6 +233,19 @@ export interface OverlayConfig {
   customY?: number;
 }
 
+/** 当前进程对悬浮窗显示异常采取的自动降级。 */
+export interface OverlayHealth {
+  degraded: boolean;
+  reason: string | null;
+}
+
+/** 新创建的窗口补读最近一条状态，恢复预览或错误内容。 */
+export interface OverlayStateSnapshot {
+  state: string;
+  payload: unknown;
+  caseId?: string;
+}
+
 /** 模型下载配置（config.json `download` 段） */
 export interface DownloadConfig {
   /** 下载源：auto（魔搭/镜像优先+回退）/ official（仅官方）/ mirror（仅镜像） */

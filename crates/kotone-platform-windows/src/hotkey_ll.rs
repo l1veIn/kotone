@@ -409,6 +409,8 @@ impl HotkeySource for LlHookSource {
             let mut matcher = shared.matcher.lock().unwrap();
             shared.generation.fetch_add(1, Ordering::SeqCst);
             matcher.set_enabled(false);
+            // 日志可能等待磁盘或日志锁，不能让低层钩子回调一起等待。
+            drop(matcher);
             kotone_core::log::log("llhook unregistered (matcher disabled)");
         }
     }
@@ -469,7 +471,11 @@ fn spawn_hook_thread() -> Result<u32, String> {
         .map_err(|e| format!("启动钩子线程失败: {e}"))?;
 
     match boot_rx.recv() {
-        Ok(Ok(tid)) => Ok(tid),
+        Ok(Ok(tid)) => {
+            // 日志留在调用线程，让安装线程直接进入消息泵，不阻塞全局输入。
+            kotone_core::log::log("WH_KEYBOARD_LL + WH_MOUSE_LL hooks installed");
+            Ok(tid)
+        }
         Ok(Err(e)) => Err(format!("安装低层键鼠钩子失败: {e}")),
         Err(_) => Err("钩子线程启动后异常退出".into()),
     }
@@ -507,9 +513,8 @@ fn hook_thread_main(boot: mpsc::Sender<Result<u32, String>>) {
                     return;
                 }
             };
-        // ready 之前完成日志等可能阻塞的工作；收到 ready 后线程下一步立即进入
-        // GetMessageW，不能留出“hook 已返回成功但消息泵尚未工作”的竞态窗口。
-        kotone_core::log::log("WH_KEYBOARD_LL + WH_MOUSE_LL hooks installed");
+        // hook 安装后不能做日志/IO：物理输入此时已可能等待本线程回调。
+        // ready 后立即进入消息泵，安装成功日志由调用方记录。
         let _ = boot.send(Ok(tid));
 
         // GetMessageW 返回 false = 收到 WM_QUIT

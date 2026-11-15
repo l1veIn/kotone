@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 test("overlay can be disabled completely", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
 
-  const neverButton = page.getByRole("button", { name: /不显示.*完全隐藏悬浮窗/ });
+  const neverButton = page.getByRole("button", { name: /不显示.*热键和语音输入照常/ });
   await expect(neverButton).toBeVisible();
   await neverButton.click();
 

@@ -10,12 +10,15 @@
     level?: number;
     /** 竖条数量 */
     bars?: number;
+    /** 原生窗口与 document 均可见时才跟随电平或播放静默呼吸。 */
+    active?: boolean;
   }
-  let { level = 0, bars = 18 }: Props = $props();
+  let { level = 0, bars = 18, active = true }: Props = $props();
 
   // 耳麦 RMS 常见量级 0.02~0.3，做 4 倍增益并截断
-  const norm = $derived(Math.min(1, Math.max(0, level * 4)));
-  const quiet = $derived(norm < 0.03);
+  // 隐藏时不读取 level，让后台电平事件不再引起竖条样式更新。
+  const norm = $derived(active ? Math.min(1, Math.max(0, level * 4)) : 0);
+  const quiet = $derived(active && norm < 0.03);
 
   /** 每根竖条高度（px）：底高 + 电平驱动的伪随机起伏 */
   function barHeight(i: number, n: number): number {
@@ -24,7 +27,7 @@
   }
 </script>
 
-<div class="flex h-8 items-center gap-[3px]" class:quiet aria-label="录音电平波形">
+<div class="flex h-8 items-center gap-[3px]" class:quiet class:paused={!active} aria-label="录音电平波形">
   {#each Array(bars) as _, i}
     <span
       class="bar w-[3px] rounded-full"
@@ -40,6 +43,10 @@
     background: linear-gradient(to top, #00e5ff, #ff2d78);
     opacity: 0.9;
     transition: height 90ms ease-out;
+  }
+  .paused .bar {
+    animation: none;
+    transition: none;
   }
   /* 静默时整体缓慢呼吸，表明仍在聆听 */
   .quiet .bar {

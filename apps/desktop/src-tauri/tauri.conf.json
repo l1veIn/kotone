@@ -29,6 +29,7 @@
       },
       {
         "label": "overlay",
+        "create": false,
         "title": "Kotone Overlay",
         "url": "index.html#/overlay",
         "width": 480,

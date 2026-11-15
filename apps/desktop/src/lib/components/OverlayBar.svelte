@@ -67,6 +67,40 @@
   let manualDragMoved = false;
   let dragSettleTimer: ReturnType<typeof setTimeout> | undefined;
   let dragDisarmTimer: ReturnType<typeof setTimeout> | undefined;
+  // 原生隐藏窗口不一定触发 visibilitychange，两个来源都要允许才播放动效。
+  let documentVisible = $state(false);
+  let nativeVisible = $state(!isTauri);
+  const renderActive = $derived(documentVisible && nativeVisible);
+
+  onMount(() => {
+    let disposed = false;
+    let revision = 0;
+    let unlisten: (() => void) | undefined;
+    const updateDocumentVisibility = () => {
+      documentVisible = document.visibilityState !== "hidden";
+    };
+    updateDocumentVisibility();
+    document.addEventListener("visibilitychange", updateDocumentVisibility);
+    if (isTauri) {
+      void (async () => {
+        const cleanup = await listen<boolean>("kotone://overlay-visibility", ({ payload }) => {
+          if (disposed) return;
+          revision++;
+          nativeVisible = payload;
+        });
+        if (disposed) { cleanup(); return; }
+        unlisten = cleanup;
+        const snapshotRevision = revision;
+        const visible = await getCurrentWindow().isVisible();
+        if (!disposed && revision === snapshotRevision) nativeVisible = visible;
+      })().catch(() => { /* 可见性未知时保留静态 UI，避免隐藏窗口持续渲染。 */ });
+    }
+    return () => {
+      disposed = true;
+      unlisten?.();
+      document.removeEventListener("visibilitychange", updateDocumentVisibility);
+    };
+  });
 
   function applyOverlayConfig(config: OverlayConfig) {
     capsule = config.style === "capsule";
@@ -243,6 +277,7 @@
     class="flex h-full items-center justify-center select-none {draggable && !clickThrough
       ? 'cursor-move'
       : ''}"
+    class:render-paused={!renderActive}
     onpointerdown={onDragPointerDown}
   >
     <div
@@ -285,7 +320,7 @@
             {$appState.partialText}&#x200E;
           </p>
         {:else}
-          <Waveform level={$appState.level} bars={12} />
+          <Waveform level={$appState.level} bars={12} active={renderActive} />
           {#if $appState.purpose === "assistant"}
             <span class="truncate text-xs text-kotone-cyan">{assistantListeningHint}</span>
           {/if}
@@ -377,6 +412,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="flex h-full items-stretch select-none {draggable && !clickThrough ? 'cursor-move' : ''}"
+  class:render-paused={!renderActive}
   onpointerdown={onDragPointerDown}
 >
   <div
@@ -419,17 +455,15 @@
         <div class="min-w-0 flex-1">
           <p class="text-[11px] leading-tight text-kotone-cyan/80">{$appState.purpose === "assistant" ? assistantListeningHint : stateLabel.listening}</p>
           <div bind:this={textScrollEl} class="kotone-scroll mt-0.5 max-h-14 overflow-y-auto pr-1">
-            {#key $appState.partialText}
-              <p class="text-sm leading-snug break-all text-white" in:fade={{ duration: 180 }}>
-                {$appState.partialText}
-              </p>
-            {/key}
+            <p class="text-sm leading-snug break-all text-white">
+              {$appState.partialText}
+            </p>
           </div>
         </div>
       {:else}
         <!-- 第一条 partial 到达前保持声波；非流式引擎会始终停留在这里。 -->
         <div class="flex min-w-0 flex-1 items-center justify-center {$appState.purpose === 'assistant' ? 'flex-col gap-1' : ''}" in:fade={{ duration: 150 }}>
-          <Waveform level={$appState.level} />
+          <Waveform level={$appState.level} active={renderActive} />
           {#if $appState.purpose === "assistant"}
             <p class="text-[11px] leading-tight text-kotone-cyan/80">{assistantListeningHint}</p>
           {/if}
@@ -564,6 +598,12 @@
 {/if}
 
 <style>
+  /* 窗口隐藏后仍会收到状态/电平事件，显式停掉整个子树的动画与过渡。 */
+  .render-paused :global(*) {
+    animation-play-state: paused !important;
+    transition: none !important;
+  }
+
   /*
    * 头部省略号（capsule 单行文本）：direction:rtl 让 truncate 的省略号落在行首，
    * 显示最新尾部、头部滚出；text-align:left 保持视觉左对齐。
@@ -611,33 +651,33 @@
     }
   }
 
-  /* 麦克风呼吸光晕 */
+  /* 保持小光晕静态，只改变透明度，避免每帧重绘阴影。 */
   .mic-breath {
+    box-shadow: 0 0 6px rgba(0, 229, 255, 0.35);
     animation: kotone-mic-breath 1.8s ease-in-out infinite;
   }
   @keyframes kotone-mic-breath {
     0%,
     100% {
-      box-shadow: 0 0 6px rgba(0, 229, 255, 0.25);
+      opacity: 0.65;
     }
     50% {
-      box-shadow: 0 0 18px rgba(0, 229, 255, 0.6);
+      opacity: 1;
     }
   }
 
-  /* 发送中：品红光晕脉冲 */
+  /* 发送中：静态品红光晕 + 透明度脉冲 */
   .send-pulse {
+    box-shadow: 0 0 4px rgba(255, 45, 120, 0.5);
     animation: kotone-send-pulse 0.9s ease-in-out infinite;
   }
   @keyframes kotone-send-pulse {
     0%,
     100% {
-      box-shadow: 0 0 4px rgba(255, 45, 120, 0.4);
-      transform: scale(1);
+      opacity: 0.6;
     }
     50% {
-      box-shadow: 0 0 16px rgba(255, 45, 120, 0.85);
-      transform: scale(1.15);
+      opacity: 1;
     }
   }
 

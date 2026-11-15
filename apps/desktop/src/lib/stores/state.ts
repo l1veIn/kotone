@@ -11,7 +11,7 @@
 
 import { writable } from "svelte/store";
 import { listen } from "@tauri-apps/api/event";
-import { isTauri } from "../ipc";
+import { getOverlayState, isTauri } from "../ipc";
 import { settingsStore } from "./ui";
 
 export type KotoneState =
@@ -218,9 +218,15 @@ export async function initStateListeners(): Promise<() => void> {
   if (!isTauri) return () => {};
   if (unlistenAll) return unlistenAll;
 
+  let stateRevision = 0;
+  let disposed = false;
   const unlisteners = await Promise.all([
-    listen<StateEventPayload>("kotone://state", (e) => applyStateEvent(e.payload)),
+    listen<StateEventPayload>("kotone://state", (e) => {
+      stateRevision++;
+      applyStateEvent(e.payload);
+    }),
     listen<PartialEventPayload>("kotone://partial", (e) => {
+      stateRevision++;
       appState.update((s) => ({ ...s, partialText: e.payload.text }));
     }),
     listen<LevelEventPayload>("kotone://level", (e) => {
@@ -273,8 +279,20 @@ export async function initStateListeners(): Promise<() => void> {
   ]);
 
   unlistenAll = () => {
+    disposed = true;
     for (const u of unlisteners) u();
     unlistenAll = null;
   };
+  // 动态创建的悬浮窗可能错过触发创建的那条事件。先订阅再补读，
+  // 读取期间若已有状态或 partial 更新，保留较新的事件结果。
+  const snapshotRevision = stateRevision;
+  void getOverlayState().then((snapshot) => {
+    if (disposed || stateRevision !== snapshotRevision || !snapshot) return;
+    if (!["idle", "listening", "transcribing", "processing", "preview", "sending", "success", "error"].includes(snapshot.state)) return;
+    applyStateEvent({
+      state: snapshot.state as KotoneState,
+      payload: snapshot.payload as StateEventPayload["payload"],
+    });
+  }).catch(() => { /* 快照读取失败时仍通过实时事件更新。 */ });
   return unlistenAll;
 }

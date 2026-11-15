@@ -8,10 +8,12 @@
   import { listen } from "@tauri-apps/api/event";
   import {
     getSettings,
+    getOverlayHealth,
     getSettingsLoadWarning,
     getStartupOptions,
     getElevationStatus,
     isTauri,
+    type OverlayHealth,
   } from "../../lib/ipc";
   import {
     settingsStore,
@@ -85,6 +87,15 @@
   /** 模拟输入被系统拦截的排查引导弹窗（SendInput 0/N 时弹出；同一错误只弹一次） */
   let showBlockedDialog = $state(false);
   let blockedDismissedFor = $state<string | null>(null);
+  let overlayHealth = $state<OverlayHealth>({ degraded: false, reason: null });
+  let settingsReadRevision = 0;
+
+  async function refreshSettings() {
+    const revision = ++settingsReadRevision;
+    const settings = await getSettings();
+    if (revision === settingsReadRevision) settingsStore.set(settings);
+    return settings;
+  }
 
   $effect(() => {
     if ($appState.state === "error" && $appState.inputBlocked) {
@@ -104,11 +115,10 @@
     void initRuntime();
     try {
       const [s, startup, settingsWarning] = await Promise.all([
-        getSettings(),
+        refreshSettings(),
         getStartupOptions(),
         getSettingsLoadWarning(),
       ]);
-      settingsStore.set(s);
       if (settingsWarning) toastWarn(settingsWarning);
       showOnboarding =
         startup.onboarding === "always" ||
@@ -135,6 +145,36 @@
     } finally {
       loading = false;
     }
+  });
+
+  onMount(() => {
+    if (!isTauri) return;
+    let disposed = false;
+    let revision = 0;
+    let unlisten: (() => void) | undefined;
+    const applyHealth = (health: OverlayHealth) => {
+      const wasDegraded = overlayHealth.degraded;
+      overlayHealth = health;
+      if (health.degraded) {
+        void refreshSettings().catch(() => { /* 提示不依赖配置刷新成功。 */ });
+      } else if (wasDegraded) {
+        // 用户重新启用显示时，旧降级读取不能覆盖刚保存的设置。
+        settingsReadRevision++;
+      }
+    };
+    void (async () => {
+      const cleanup = await listen<OverlayHealth>("kotone://overlay-degraded", ({ payload }) => {
+        if (disposed) return;
+        revision++;
+        applyHealth(payload);
+      });
+      if (disposed) { cleanup(); return; }
+      unlisten = cleanup;
+      const snapshotRevision = revision;
+      const health = await getOverlayHealth();
+      if (!disposed && revision === snapshotRevision) applyHealth(health);
+    })().catch(() => { /* 健康状态不可用不影响设置和语音输入。 */ });
+    return () => { disposed = true; unlisten?.(); };
   });
 
   // 单实例转发：应用已在托盘运行时，再执行
@@ -223,6 +263,11 @@
 
   <!-- 右侧内容 -->
   <main class="relative z-10 min-w-0 flex-1 overflow-y-auto" bind:this={mainEl}>
+    {#if overlayHealth.degraded}
+      <p role="status" data-testid="overlay-degraded-notice" class="mx-8 mt-5 rounded-lg border border-amber-300/20 bg-amber-300/8 px-4 py-3 text-xs leading-relaxed text-amber-100/90">
+        悬浮窗显示异常，已自动关闭。语音输入仍可使用。
+      </p>
+    {/if}
     {#if loading}
       <p class="px-8 py-10 text-sm text-white/50">加载配置中…</p>
     {:else if page === "general"}

@@ -32,6 +32,8 @@ import type {
   ResourceUsage,
   DiagnosticExportResult,
   DiagnosticWindow,
+  OverlayHealth,
+  OverlayStateSnapshot,
 } from "./contracts";
 import { defaultPostProcessing, modelsDirPathError } from "./contracts";
 
@@ -383,6 +385,14 @@ export async function getStartupOptions(): Promise<StartupOptions> {
 
 export async function getSettings(): Promise<Settings> {
   return clone(mock.settings);
+}
+
+export async function getOverlayHealth(): Promise<OverlayHealth> {
+  return { degraded: false, reason: null };
+}
+
+export async function getOverlayState(): Promise<OverlayStateSnapshot | null> {
+  return null;
 }
 
 export async function listPostProcessors(): Promise<PostProcessorInfo[]> {

@@ -6,6 +6,7 @@ mod assistant_input;
 mod compatibility;
 mod diagnostics;
 mod hotkey;
+mod overlay;
 mod runtime;
 mod speech_models;
 mod tool_service;
@@ -262,20 +263,29 @@ fn peek_on_demand_overlay(
             if vis_gen.load(std::sync::atomic::Ordering::SeqCst) != gen {
                 return;
             }
-            let still_peek = current_overlay_action(&app)
-                .map(|(_, action)| should_peek_on_demand_notice(action))
-                .unwrap_or(true);
-            if !still_peek {
-                return;
-            }
-            if let Some(win) = app.get_webview_window("overlay") {
-                hide_window(&win);
-                record_overlay_event(
-                    "overlay_hide",
-                    reason,
-                    fullscreen::is_exclusive_fullscreen_active(),
-                );
-            }
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if vis_gen.load(std::sync::atomic::Ordering::SeqCst) != gen {
+                    return;
+                }
+                let still_peek = current_overlay_action(&handle)
+                    .map(|(visibility, action)| {
+                        visibility == OverlayVisibility::OnDemand
+                            && should_peek_on_demand_notice(action)
+                    })
+                    .unwrap_or(false);
+                if !still_peek {
+                    return;
+                }
+                if let Some(win) = handle.get_webview_window("overlay") {
+                    hide_window(&win);
+                    record_overlay_event(
+                        "overlay_hide",
+                        reason,
+                        fullscreen::is_exclusive_fullscreen_active(),
+                    );
+                }
+            });
         });
     }
 }
@@ -399,6 +409,9 @@ struct TauriEmitter {
 impl Emitter for TauriEmitter {
     fn emit(&self, event: &str, payload: serde_json::Value) {
         use tauri::Emitter as _;
+        if event == "kotone://state" {
+            overlay::remember_state(&self.app, &payload);
+        }
         let _ = self.app.emit(event, payload.clone());
         if event == "kotone://state" {
             let state = payload.get("state").and_then(|s| s.as_str()).unwrap_or("");
@@ -466,14 +479,23 @@ impl Emitter for TauriEmitter {
                                 if vis_gen.load(std::sync::atomic::Ordering::SeqCst) != gen {
                                     return; // 600ms 内已有新状态事件（新会话/停止），不藏
                                 }
-                                if let Some(win) = app.get_webview_window("overlay") {
-                                    hide_window(&win);
-                                    record_overlay_event(
-                                        "overlay_hide",
-                                        "success-dwell",
-                                        fullscreen::is_exclusive_fullscreen_active(),
-                                    );
-                                }
+                                let handle = app.clone();
+                                let _ = app.run_on_main_thread(move || {
+                                    if vis_gen.load(std::sync::atomic::Ordering::SeqCst) != gen
+                                        || current_overlay_action(&handle).map(|(_, action)| action)
+                                            != Some(OnDemandOverlayAction::HideSuccessAfterDwell)
+                                    {
+                                        return;
+                                    }
+                                    if let Some(win) = handle.get_webview_window("overlay") {
+                                        hide_window(&win);
+                                        record_overlay_event(
+                                            "overlay_hide",
+                                            "success-dwell",
+                                            fullscreen::is_exclusive_fullscreen_active(),
+                                        );
+                                    }
+                                });
                             });
                         }
                         OnDemandOverlayAction::Hide => {
@@ -573,15 +595,7 @@ fn record_process_event(app: &AppHandle, payload: &serde_json::Value) {
 /// 走对称的 `hide_window`（见下），不能混用 Tauri 的 hide()/show()。
 #[cfg(windows)]
 fn show_window_no_focus<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
-    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNA};
-    match win.hwnd() {
-        Ok(hwnd) => unsafe {
-            let _ = ShowWindow(hwnd, SW_SHOWNA);
-        },
-        Err(_) => {
-            let _ = win.show();
-        }
-    }
+    overlay::set_visible(win, true);
 }
 
 /// 隐藏窗口（与 show_window_no_focus 对称的原始 Win32 路径）。
@@ -593,15 +607,7 @@ fn show_window_no_focus<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
 /// 不隐藏」的根因：显隐机制不对称，与 runtime 编排无关。
 #[cfg(windows)]
 fn hide_window<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
-    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
-    match win.hwnd() {
-        Ok(hwnd) => unsafe {
-            let _ = ShowWindow(hwnd, SW_HIDE);
-        },
-        Err(_) => {
-            let _ = win.hide();
-        }
-    }
+    overlay::set_visible(win, false);
 }
 
 #[cfg(not(windows))]
@@ -805,6 +811,17 @@ fn apply_overlay_window_config<R: tauri::Runtime>(
     overlay: &OverlayConfig,
 ) {
     layout_overlay_window(win, overlay);
+    #[cfg(windows)]
+    if let Ok(hwnd) = win.hwnd() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TRANSPARENT,
+        };
+        let click_through =
+            unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } & WS_EX_TRANSPARENT.0 as isize != 0;
+        if click_through == overlay.click_through {
+            return;
+        }
+    }
     let _ = win.set_ignore_cursor_events(overlay.click_through);
 }
 
@@ -848,6 +865,16 @@ fn log_frontend_error(context: String, message: String) {
 #[tauri::command]
 fn get_settings(state: tauri::State<SharedState>) -> Settings {
     state.settings.read().unwrap().clone()
+}
+
+#[tauri::command]
+fn get_overlay_health(app: AppHandle) -> overlay::OverlayHealth {
+    overlay::health(&app)
+}
+
+#[tauri::command]
+fn get_overlay_state(app: AppHandle) -> Option<serde_json::Value> {
+    overlay::state_snapshot(&app)
 }
 
 /// 已注册后处理模块的只读发现接口；设置页不维护硬编码模块清单。
@@ -993,6 +1020,11 @@ fn update_settings(
             *next = serde_json::from_value(merged).map_err(|e| format!("配置项不合法: {e}"))?;
             next.overlay.normalize_interaction();
             next.assistant.validate()?;
+            if previous.overlay.visibility != next.overlay.visibility
+                && next.overlay.visibility != OverlayVisibility::Never
+            {
+                overlay::prepare_enable(&app);
+            }
             if running && hotkey_registration_changed(&previous, next) {
                 input_configuration = Some(state.orchestrator.try_input_configuration_guard()?);
                 input_pause = runtime_manager.as_ref().map(|rt| rt.pause_inputs());
@@ -1057,21 +1089,11 @@ fn update_settings(
 
     // overlay 配置变化 → 立即重排几何/点击穿透/显隐 + 通知前端（无需重启）
     if old_overlay != updated.overlay {
-        if let Some(win) = app.get_webview_window("overlay") {
-            apply_overlay_window_config(&win, &updated.overlay);
-            if old_overlay.visibility != updated.overlay.visibility {
-                let running = app
-                    .try_state::<RuntimeManager>()
-                    .map(|rt| rt.phase() == RuntimePhase::Running)
-                    .unwrap_or(false);
-                match updated.overlay.visibility {
-                    OverlayVisibility::Never => hide_window(&win),
-                    OverlayVisibility::Always if running => show_window_no_focus(&win),
-                    OverlayVisibility::OnDemand => hide_window(&win),
-                    OverlayVisibility::Always => {}
-                }
-            }
-        }
+        overlay::reconcile(
+            &app,
+            old_overlay.visibility != updated.overlay.visibility
+                && updated.overlay.visibility != OverlayVisibility::Never,
+        );
         use tauri::Emitter as _;
         let _ = app.emit("kotone://overlay-config", &updated.overlay);
     }
@@ -1829,7 +1851,13 @@ pub fn run() {
         // 仅托盘菜单「退出」（app.exit）真正结束进程。
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
+                if matches!(window.label(), "overlay" | "danmaku") {
+                    if let Some(win) = window.app_handle().get_webview_window(window.label()) {
+                        hide_window(&win);
+                    }
+                } else {
+                    let _ = window.hide();
+                }
                 api.prevent_close();
             }
         })
@@ -1968,6 +1996,7 @@ pub fn run() {
             app.manage(HotkeyManager::new(app.handle(), orchestrator.clone()));
             app.manage(RuntimeManager::new());
             app.manage(ResourceMonitor(Mutex::new(sysinfo::System::new())));
+            app.manage(overlay::OverlayManager::default());
             app.manage(assistant_runtime);
             app.manage(speech_models::SpeechModelManager::default());
             assistant::start(app.handle());
@@ -1981,10 +2010,7 @@ pub fn run() {
                     harden_webview(&win);
                 }
             }
-            if let Some(win) = app.get_webview_window("overlay") {
-                let overlay = settings.read().unwrap().overlay.clone();
-                apply_overlay_window_config(&win, &overlay);
-            }
+            overlay::reconcile(app.handle(), false);
 
             // 应用级热键（启动 / 停止 Kotone）：runtime 未运行时也必须生效，
             // 故在启动阶段就落到低级钩子上（未配置时空操作，不安装钩子）。
@@ -2023,6 +2049,8 @@ pub fn run() {
             log_frontend_error,
             get_startup_options,
             get_settings,
+            get_overlay_health,
+            get_overlay_state,
             list_post_processors,
             list_connection_presets,
             list_connections,

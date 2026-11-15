@@ -32,6 +32,8 @@ import type {
   ResourceUsage,
   DiagnosticExportResult,
   DiagnosticWindow,
+  OverlayHealth,
+  OverlayStateSnapshot,
 } from "./ipc/contracts";
 import { modelsDirPathError } from "./ipc/contracts";
 
@@ -60,6 +62,16 @@ export async function getStartupOptions(): Promise<StartupOptions> {
 export async function getSettings(): Promise<Settings> {
   if (!isTauri) return browserMock.getSettings();
   return invoke<Settings>("get_settings");
+}
+
+export async function getOverlayHealth(): Promise<OverlayHealth> {
+  if (!isTauri) return browserMock.getOverlayHealth();
+  return invoke<OverlayHealth>("get_overlay_health");
+}
+
+export async function getOverlayState(): Promise<OverlayStateSnapshot | null> {
+  if (!isTauri) return browserMock.getOverlayState();
+  return invoke<OverlayStateSnapshot | null>("get_overlay_state");
 }
 
 export async function listPostProcessors(): Promise<PostProcessorInfo[]> {
