@@ -11,9 +11,10 @@ test("appearance defaults to Kotone dark and leaves old pages untouched", async 
   const panel = page.getByTestId("appearance-settings");
   await expect(panel.getByTestId("appearance-mode-dark")).toHaveAttribute("aria-pressed", "true");
   await expect(panel.getByTestId("appearance-palette-kotone")).toHaveAttribute("aria-pressed", "true");
-  // 默认外观下旧页面的颜色与改动前一致
-  const bg = await page.getByTestId("settings-nav-general").evaluate(() => getComputedStyle(document.querySelector(".bg-kotone-deep")!).backgroundColor);
-  expect(bg).toBe("rgb(26, 26, 46)");
+  // 默认外观：内容区仍是 Kotone 的蓝黑底，旧页面的卡片颜色不变
+  await expect(page.getByRole("main")).toHaveCSS("background-color", "rgb(26, 26, 46)");
+  const border = await page.evaluate(() => getComputedStyle(document.querySelector(".kotone-panel")!).borderColor);
+  expect(border).toBe("color(srgb 1 1 1 / 0.08)");
 });
 
 test("appearance switches theme, palette, zoom and font, and persists across reloads", async ({ page }, testInfo) => {

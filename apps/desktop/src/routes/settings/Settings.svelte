@@ -43,30 +43,43 @@
   import HistoryPage from "./pages/HistoryPage.svelte";
   import AboutPage from "./pages/AboutPage.svelte";
   import CharacterPage from "./pages/CharacterPage.svelte";
-  import patternSwitch from "../../assets/brand/patterns/switch.webp";
   import { initializeAppearance } from "../../lib/appearance/appearanceRuntime";
 
-  type PageId =
-    | "general"
-    | "processing"
-    | "assistant"
-    | "automation"
-    | "game"
-    | "history"
-    | "advanced"
-    | "about"
-    | "character";
+  import AppSidebar, { type PageId } from "./AppSidebar.svelte";
+  import { AgentChat } from "../../lib/agentChat/chatController.svelte";
+  import { provideAgentChat } from "../../lib/agentChat/context";
 
-  const navItems: { id: PageId; label: string; icon: string }[] = [
-    { id: "general", label: "通用", icon: "home" },
-    { id: "processing", label: "文字处理", icon: "sparkles" },
-    { id: "assistant", label: "琴音", icon: "chat" },
-    { id: "automation", label: "自动化", icon: "bolt" },
-    { id: "game", label: "游戏适配", icon: "gamepad" },
-    { id: "history", label: "历史记录", icon: "clock" },
-    { id: "advanced", label: "高级", icon: "sliders" },
-    { id: "about", label: "关于", icon: "info" },
-  ];
+  /** 侧边栏：宽窗口展开 / 图标栏（记在本机）；窄窗口（< 760px）改成抽屉。 */
+  const SIDEBAR_KEY = "kotone.sidebar.v1";
+  let rail = $state(readRail());
+  let drawerOpen = $state(false);
+  let viewportWidth = $state(typeof window === "undefined" ? 1280 : window.innerWidth);
+  const narrow = $derived(viewportWidth < 760);
+  function readRail(): boolean {
+    try { return localStorage.getItem(SIDEBAR_KEY) === "rail"; } catch { return false; }
+  }
+  function toggleSidebar() {
+    if (narrow) { drawerOpen = !drawerOpen; return; }
+    rail = !rail;
+    try { localStorage.setItem(SIDEBAR_KEY, rail ? "rail" : "expanded"); } catch { /* 只是偏好 */ }
+  }
+  function navigate(id: PageId) {
+    page = id;
+    drawerOpen = false;
+  }
+  /** 侧边栏点了对话或“新对话”：切到「琴音」的聊天分页。 */
+  let chatRequest = $state(0);
+  function openChat() {
+    navigate("assistant");
+    chatRequest++;
+  }
+
+  // 侧边栏的对话列表与聊天页共用一份状态。
+  const chat = provideAgentChat(new AgentChat());
+  onMount(() => {
+    void chat.init();
+    return () => chat.dispose();
+  });
 
   // 外观（配色、明暗、缩放、字体）只作用于设置窗口：在这里挂上，卸载时还原。
   // 在首次绘制前应用，避免先闪一下默认配色。
@@ -224,68 +237,25 @@
   });
 </script>
 
-<div class="flex h-full flex-col overflow-hidden bg-kotone-deep text-white">
-  <!-- 自绘标题栏（decorations:false）：拖拽区 + 运行状态 + 启动/停止 + 窗口控制 -->
-  <Titlebar onOpenAdvanced={() => openAdvanced("models")} />
+<svelte:window bind:innerWidth={viewportWidth} />
+<div class="flex h-full flex-col overflow-hidden bg-sidebar text-foreground" data-testid="app-frame">
+  <!-- 自绘标题栏（decorations:false）：侧边栏开关 + 运行状态 + 启动/停止 + 窗口控制 -->
+  <Titlebar onOpenAdvanced={() => openAdvanced("models")} onToggleSidebar={toggleSidebar}
+    brandWidth={narrow ? "auto" : rail ? "3.5rem" : "14.75rem"} />
   <div class="relative flex min-h-0 flex-1 overflow-hidden">
-  <!-- 窗口底纹理：switch 无缝 tile，极低透明度 -->
-  <div
-    class="pointer-events-none absolute inset-0 opacity-[0.04]"
-    style:background-image="url({patternSwitch})"
-    style:background-size="256px"
-  ></div>
-
-  <!-- 左侧导航（品牌位移交顶部操作面板，导航直接从「通用」开始） -->
-  <nav class="relative z-10 flex w-50 shrink-0 flex-col border-r border-white/8 bg-kotone-deep/60 px-3 py-4">
-    <div class="flex flex-col gap-1">
-      {#each navItems as item}
-        {@const active = page === item.id || (page === "character" && item.id === "about")}
-        <button
-          data-testid={`settings-nav-${item.id}`}
-          class="group relative flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition
-            {active
-            ? 'bg-kotone-cyan/12 text-kotone-cyan shadow-glow-cyan'
-            : 'text-white/60 hover:bg-white/8 hover:text-white/90 hover:shadow-[0_0_14px_rgba(0,229,255,0.15)]'}"
-          onclick={() => (page = item.id)}
-        >
-          <!-- 激活指示条 -->
-          <span
-            class="absolute top-1/2 left-0 h-5 w-[3px] -translate-y-1/2 rounded-full bg-kotone-cyan transition-opacity
-              {active ? 'opacity-100 shadow-glow-cyan' : 'opacity-0'}"
-          ></span>
-          <span class="inline-flex h-4.5 w-4.5 items-center justify-center" aria-hidden="true">
-            {#if item.icon === "home"}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M3 10.5 12 3l9 7.5M5 9.5V21h14V9.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            {:else if item.icon === "sparkles"}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="m12 3 1.2 3.8L17 8l-3.8 1.2L12 13l-1.2-3.8L7 8l3.8-1.2L12 3ZM18.5 14l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2ZM5 12l.8 2.2L8 15l-2.2.8L5 18l-.8-2.2L2 15l2.2-.8L5 12Z" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            {:else if item.icon === "sliders"}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" stroke-linecap="round"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
-            {:else if item.icon === "gamepad"}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M6 9h4M8 7v4M15 8h.01M18 10h.01M17.3 5H6.7a4.7 4.7 0 0 0-4.6 5.6l1 5.4A3 3 0 0 0 6 18.6c.8 0 1.6-.3 2.1-.9L9.5 16h5l1.4 1.7c.5.6 1.3.9 2.1.9a3 3 0 0 0 2.9-2.6l1-5.4A4.7 4.7 0 0 0 17.3 5Z" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            {:else if item.icon === "clock"}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            {:else if item.icon === "bolt"}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            {:else if item.icon === "chat"}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.6A8 8 0 1 1 21 12Z" stroke-linecap="round" stroke-linejoin="round"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01" stroke-linecap="round"/></svg>
-            {:else if item.icon === "bell"}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            {:else}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01" stroke-linecap="round"/></svg>
-            {/if}
-          </span>
-          {item.label}
-        </button>
-      {/each}
+  {#if !narrow}
+    <AppSidebar {page} {rail} onNavigate={navigate} onOpenChat={openChat} />
+  {:else if drawerOpen}
+    <!-- 窄窗口：侧边栏作为抽屉盖在内容上 -->
+    <button type="button" class="absolute inset-0 z-40 bg-black/40" aria-label="关闭侧边栏" onclick={() => (drawerOpen = false)}></button>
+    <div class="absolute inset-y-0 left-0 z-50 shadow-2xl" data-testid="sidebar-drawer">
+      <AppSidebar {page} onNavigate={navigate} onOpenChat={openChat} />
     </div>
+  {/if}
 
-    <p class="mt-auto px-2 pt-4 text-[10px] leading-relaxed text-white/30">
-       反馈群：1092354484
-    </p>
-  </nav>
-
-  <!-- 右侧内容 -->
-  <main class="relative z-10 min-w-0 flex-1 overflow-y-auto" bind:this={mainEl}>
+  <!-- 内容区：比侧边栏亮一档的底色，左上圆角（参照 DeepSeek Harness 的 Windows 外框） -->
+  <main class="relative z-10 min-w-0 flex-1 overflow-y-auto border-t border-hairline bg-background [scrollbar-gutter:stable]
+    {narrow ? '' : 'rounded-tl-2xl border-l'}" bind:this={mainEl}>
     {#if overlayHealth.degraded}
       <p role="status" data-testid="overlay-degraded-notice" class="mx-8 mt-5 rounded-lg border border-amber-300/20 bg-amber-300/8 px-4 py-3 text-xs leading-relaxed text-amber-100/90">
         悬浮窗显示异常，已自动关闭。语音输入仍可使用。
@@ -304,7 +274,7 @@
     {:else if page === "processing"}
       <TextProcessingPage onOpenConnections={() => openAdvanced("connections")} />
     {:else if page === "assistant"}
-      <AssistantPage onOpenConnections={() => openAdvanced("connections")} onOpenAutomation={() => (page = "automation")} />
+      <AssistantPage {chatRequest} onOpenConnections={() => openAdvanced("connections")} onOpenAutomation={() => (page = "automation")} />
     {:else if page === "automation"}
       <AutomationPage onOpenHotkeys={() => openAdvanced("hotkeys")} />
     {:else if page === "game"}
@@ -318,7 +288,7 @@
     {/if}
 
     <!-- 底部留白（反馈条已升级为右上角 toast，见 <Toasts />） -->
-    <div class="h-4"></div>
+    {#if page !== "assistant"}<div class="h-4"></div>{/if}
   </main>
 
   <!-- 首启向导覆盖层（加载完成且未完成向导时弹出） -->

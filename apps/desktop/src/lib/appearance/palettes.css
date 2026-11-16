@@ -39,6 +39,14 @@
   --warning-foreground: #2d2108;
   --info: #00e5ff;
   --brand-pink: #ff2d78;
+  --sidebar: #121226;
+  --sidebar-foreground: #c9cce6;
+  --sidebar-accent: #23233f;
+  --sidebar-accent-foreground: #f2f4ff;
+  --sidebar-border: #24243e;
+  --bubble: #27274a;
+  --composer: #202039;
+  --hairline: rgb(255 255 255 / 0.08);
 }
 
 :root[data-palette="kotone"][data-theme="light"] {
@@ -62,10 +70,18 @@
   --ring: #00a5bb;
   --success: #0f7a55;
   --success-foreground: #ffffff;
-  --warning: #f2a03d;
-  --warning-foreground: #5a3606;
+  --warning: #b45309;
+  --warning-foreground: #ffffff;
   --info: #0b6f9e;
   --brand-pink: #d0145a;
+  --sidebar: #eceef6;
+  --sidebar-foreground: #3b3d5c;
+  --sidebar-accent: #dfe2f0;
+  --sidebar-accent-foreground: #1a1a2e;
+  --sidebar-border: #dcdfeb;
+  --bubble: #e8eaf5;
+  --composer: #ffffff;
+  --hairline: rgb(26 26 46 / 0.1);
 }
 
 :root[data-palette="neutral"][data-theme="light"] {

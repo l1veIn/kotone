@@ -87,6 +87,15 @@
   --color-warning-foreground: var(--warning-foreground);
   --color-info: var(--info);
   --color-brand-pink: var(--brand-pink);
+  /* 外壳与聊天用的层级（Codeg 配色没有的用相近的变量兜底） */
+  --color-sidebar: var(--sidebar, var(--background));
+  --color-sidebar-foreground: var(--sidebar-foreground, var(--foreground));
+  --color-sidebar-accent: var(--sidebar-accent, var(--accent));
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground, var(--accent-foreground));
+  --color-sidebar-border: var(--sidebar-border, var(--border));
+  --color-bubble: var(--bubble, var(--muted));
+  --color-composer: var(--composer, var(--card));
+  --color-hairline: var(--hairline, var(--border));
 }
 
 /*
@@ -188,6 +197,21 @@ body,
 }
 .kotone-spotlight:hover::before {
   opacity: 1;
+}
+
+/* 进行中的文字微光（琴音在想 / 正在思考），参照 DeepSeek Harness 的 TextShimmer */
+.kotone-shimmer {
+  background: linear-gradient(90deg, var(--color-muted-foreground) 0%, var(--color-muted-foreground) 35%, var(--color-primary) 50%, var(--color-muted-foreground) 65%, var(--color-muted-foreground) 100%);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: kotone-shimmer 2.2s linear infinite;
+}
+@keyframes kotone-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: 0% 0; }
 }
 
 /* 细滚动条（全局，与悬浮条一致） */

@@ -63,7 +63,7 @@
   class={variant === "hero"
     ? `flex h-12 w-1/3 min-w-44 items-center justify-center gap-2 rounded-[var(--radius-kotone-card)] text-sm font-bold
        tracking-wide transition active:scale-[0.98] disabled:cursor-not-allowed ${stateClass}`
-    : `mr-2 flex h-7 items-center gap-1.5 rounded-[var(--radius-kotone-card)] px-3 text-[11px] font-bold
+    : `mr-1 flex h-7 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold
        transition active:scale-95 disabled:cursor-not-allowed ${stateClass}`}
   disabled={busy || acting || !rt}
   onclick={() => void onClick()}

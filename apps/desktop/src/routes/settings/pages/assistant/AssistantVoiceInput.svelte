@@ -111,33 +111,34 @@
   });
 </script>
 
-<div class="min-w-0 text-right" data-testid="assistant-voice-input">
-  <div class="flex flex-wrap items-center justify-end gap-2">
-    {#if own}<button type="button" class="secondary" disabled={$voice.phase === "cancelling"} onclick={cancel} aria-label="取消语音输入">取消</button>{/if}
+<!-- 放在琴音输入框的工具行里：一行内是语音按钮、快捷键与提示。 -->
+<div class="min-w-0" data-testid="assistant-voice-input">
+  <div class="flex min-w-0 items-center gap-2">
+    {#if own}<button type="button" class="h-8 shrink-0 rounded-full border border-hairline px-3 text-xs text-foreground hover:bg-muted disabled:opacity-50" disabled={$voice.phase === "cancelling"} onclick={cancel} aria-label="取消语音输入">取消</button>{/if}
     <button type="button" data-testid="assistant-voice-button" aria-label={label}
       aria-describedby="assistant-voice-hint" aria-pressed={$voice.phase === "listening"} {disabled}
-      class="inline-flex touch-none select-none items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold ring-1 transition disabled:cursor-not-allowed disabled:opacity-40
-        {own ? 'bg-kotone-pink/15 text-kotone-pink ring-kotone-pink/45' : 'bg-kotone-cyan/10 text-kotone-cyan ring-kotone-cyan/35 hover:bg-kotone-cyan/20'}"
+      class="inline-flex h-8 shrink-0 touch-none items-center gap-1.5 rounded-full px-3 text-xs font-medium transition-colors select-none disabled:cursor-not-allowed disabled:opacity-40
+        {own ? 'bg-brand-pink/15 text-brand-pink ring-1 ring-brand-pink/45' : 'bg-muted text-foreground/85 hover:bg-primary/15 hover:text-primary'}"
       onpointerdown={down} onpointerup={up} onpointercancel={cancel}
       onlostpointercapture={() => { if (pointer !== null) cancel(); }}
       onkeydown={keydown} onkeyup={keyup} onclick={click}
       onblur={() => { if (pointer !== null || heldKey !== null) cancel(); }}>
-      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" class="h-4 w-4"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></svg>
+      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="size-3.5"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></svg>
       {label}
     </button>
-  </div>
-  <div class="mt-1.5 flex items-center justify-end gap-1 whitespace-nowrap text-[11px] leading-relaxed text-white/45">
-    <button type="button" class="min-w-0 truncate hover:text-kotone-cyan" onclick={onOpenSettings} data-testid="assistant-voice-hotkey"
-      title={hotkey ? `快捷键：${hotkey}` : "设置快捷键"}>
-      {hotkey ? `快捷键：${hotkey}` : "设置快捷键"}
-    </button>
-    {#if !hideHint}<span aria-hidden="true" class="shrink-0">·</span>{/if}
-    <p id="assistant-voice-hint" class="shrink-0" class:sr-only={hideHint}>
-      {blocked || (mode === "push-to-talk" ? "按住按钮说话，松开提交；聚焦后也可用空格或 Enter" : mode === "dictation" ? "结束录音后确认" : "说完自动提交")}
-    </p>
+    <div class="flex min-w-0 items-center gap-1 text-[11px] leading-relaxed whitespace-nowrap text-muted-foreground">
+      <button type="button" class="min-w-0 truncate hover:text-primary" onclick={onOpenSettings} data-testid="assistant-voice-hotkey"
+        title={hotkey ? `快捷键：${hotkey}` : "设置快捷键"}>
+        {hotkey ? `快捷键：${hotkey}` : "设置快捷键"}
+      </button>
+      {#if !hideHint}<span aria-hidden="true" class="shrink-0">·</span>{/if}
+      <p id="assistant-voice-hint" class="m-0 min-w-0 truncate" class:sr-only={hideHint}>
+        {blocked || (mode === "push-to-talk" ? "按住按钮说话，松开提交；聚焦后也可用空格或 Enter" : mode === "dictation" ? "结束录音后确认" : "说完自动提交")}
+      </p>
+    </div>
   </div>
   {#if own && $appState.purpose === "assistant" && ($appState.finalText || $appState.partialText)}
-    <p class="mt-2 max-w-80 break-words text-xs text-kotone-cyan" data-testid="assistant-voice-transcript">{$appState.finalText || $appState.partialText}</p>
+    <p class="mt-1.5 mb-0 max-w-80 text-xs break-words text-primary" data-testid="assistant-voice-transcript">{$appState.finalText || $appState.partialText}</p>
   {/if}
-  {#if error}<p role="alert" class="mt-2 max-w-80 text-xs text-kotone-pink">{error}</p>{/if}
+  {#if error}<p role="alert" class="mt-1.5 mb-0 max-w-80 text-xs text-destructive">{error}</p>{/if}
 </div>

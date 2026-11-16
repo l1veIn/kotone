@@ -79,11 +79,11 @@
   }
 </script>
 
-<div bind:this={viewport} onscroll={onScroll} class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4" data-testid="agent-transcript" aria-label="对话内容">
+<div bind:this={viewport} onscroll={onScroll} class="min-h-0 flex-1 overflow-y-auto overscroll-contain py-6 [scrollbar-gutter:stable]" data-testid="agent-transcript" aria-label="对话内容">
   {#if turns.length === 0}
     {@render empty?.()}
   {:else}
-    <div class="mx-auto w-full max-w-3xl space-y-5" use:observeSize>
+    <div class="mx-auto w-full max-w-[808px] space-y-8 px-6" use:observeSize>
       {#if hidden}
         <div class="flex justify-center">
           <Button variant="ghost" size="sm" data-testid="agent-load-earlier" onclick={() => void revealOlder()}>显示更早的消息（还有 {hidden} 轮）</Button>

@@ -1,7 +1,8 @@
 <!-- Footer adapted from Codeg src/components/message/turn-stats.tsx at 3ebdfed1d7c0b71d71880a3d2e0f8e09545feae1, -->
 <!-- via RambleDesk apps/desktop/src/lib/agents/chat/TurnFooter.svelte. -->
 <!-- Copyright Codeg authors and contributors. SPDX-License-Identifier: Apache-2.0 -->
-<!-- Kotone: shows the token usage the provider reported for the turn (hidden when none; never estimated). -->
+<!-- Kotone: icon action + stat text after DeepSeek Harness MessageIconActions / StatsPills (MIT); shows the -->
+<!-- token usage the provider reported for the turn (hidden when none; never estimated). -->
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { Check, Copy } from "@lucide/svelte";
@@ -36,14 +37,14 @@
 </script>
 
 {#if copyText.trim() || time || usageText}
-  <footer class="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground" data-testid="agent-turn-footer">
+  <footer class="-ml-1 flex flex-wrap items-center gap-1 text-xs text-muted-foreground/80" data-testid="agent-turn-footer">
     {#if copyText.trim()}
-      <button type="button" class="rounded p-1 hover:bg-muted hover:text-foreground" aria-label={copied ? "已复制" : "复制回答"} title={copied ? "已复制" : "复制回答"} onclick={copy}>
-        {#if copied}<Check class="size-3.5" />{:else}<Copy class="size-3.5" />{/if}
+      <button type="button" class="flex size-7 items-center justify-center rounded-lg transition-colors hover:bg-muted hover:text-foreground" aria-label={copied ? "已复制" : "复制回答"} title={copied ? "已复制" : "复制回答"} onclick={copy}>
+        {#if copied}<Check class="size-3.5 text-success" />{:else}<Copy class="size-3.5" />{/if}
       </button>
     {/if}
-    {#if time}<time class="tabular-nums">{time}</time>{/if}
-    {#if usageText}<span class="tabular-nums" data-testid="agent-turn-usage">{usageText}</span>{/if}
+    {#if time}<time class="px-1 tabular-nums">{time}</time>{/if}
+    {#if usageText}<span class="rounded-full bg-muted/60 px-2 py-0.5 tabular-nums" data-testid="agent-turn-usage">{usageText}</span>{/if}
     {#if failed}<span role="alert">复制失败</span>{/if}
   </footer>
 {/if}

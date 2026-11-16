@@ -95,4 +95,19 @@ Parts of the appearance system (`apps/desktop/src/lib/appearance/palettes.css`, 
 
 RambleDesk (MIT, Copyright (c) 2026 l1veIn — the same author and license as Kotone) is the intermediate source of the components and appearance code above.
 
+### DeepSeek Harness (interface layout reference)
+
+The settings window shell and the 琴音 chat (title bar, sidebar, content frame, message flow rows, approval card, input card, settings forms) follow the layout, information hierarchy and interaction patterns of DeepSeek Harness's client UI packages. Kotone re-implements them in Svelte with its own components; no DeepSeek branding (logo, brand assets, name or brand colours) is used. Files modelled on a specific upstream component name it in their header; details are in `docs/third-party/deepseek-harness-ui.md`.
+
+- Project: https://github.com/deepseek-ai/deepseek-harness, commit `39163dd30f703a79079e2d2446545cff3c453738` (`packages/client/ui-*`)
+- Copyright (c) 2026 DeepSeek
+- License: MIT License, full text in `licenses/deepseek-harness-MIT.txt`
+
+### pi-ai (AI connection presets)
+
+The AI connection provider presets (names, groups, base URLs, model lists) are derived from pi-ai's model catalog.
+
+- Project: pi-ai (`@earendil-works/pi-ai`), Copyright Earendil Works / the pi authors (see its own LICENSE)
+- License: Apache License 2.0
+
 These notices describe third-party components and models; they do not grant a license to Kotone itself.
