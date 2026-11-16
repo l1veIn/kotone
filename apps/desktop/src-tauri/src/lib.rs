@@ -908,8 +908,12 @@ fn list_post_processors(
 struct ConnectionPresetInfo {
     id: String,
     display_name: String,
+    /// `recommended` / `china` / `global` / `aggregator` / `custom`
+    group: String,
+    description: String,
     default_base_url: String,
     default_model: String,
+    models: Vec<String>,
     api_key_url: Option<String>,
 }
 
@@ -920,8 +924,11 @@ fn list_connection_presets() -> Vec<ConnectionPresetInfo> {
         .map(|preset| ConnectionPresetInfo {
             id: preset.id.into(),
             display_name: preset.display_name.into(),
+            group: preset.group.into(),
+            description: preset.description.into(),
             default_base_url: preset.default_base_url.into(),
             default_model: preset.default_model.into(),
+            models: preset.models.iter().map(|m| m.to_string()).collect(),
             api_key_url: preset.api_key_url.map(str::to_string),
         })
         .collect()

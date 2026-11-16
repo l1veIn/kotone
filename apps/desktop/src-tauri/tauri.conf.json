@@ -46,12 +46,12 @@
         "label": "main",
         "title": "Kotone 设置",
         "url": "index.html#/settings",
-        "width": 800,
-        "height": 600,
-        "minWidth": 640,
-        "minHeight": 480,
+        "width": 1280,
+        "height": 820,
+        "minWidth": 520,
+        "minHeight": 600,
         "decorations": false,
-        "maximizable": false,
+        "maximizable": true,
         "visible": false
       }
     ],
