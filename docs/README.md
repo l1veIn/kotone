@@ -26,6 +26,8 @@
 - [Agent 底座第二批实现与验证记录](research/agent-base-batch2-implementation.md) 记录与设置页对齐的 35 个配置类工具（设置、模型、连接、profile、热键、提权、自启、历史、诊断）、委托宿主的设计、凭据隔离与真机冒烟结果。
 - [交接：Kotone 陪玩与统一模型管理（2026-11-15）](research/2026-11-15-companion-handoff.md) 记录"先有完整功能再开放给 Agent"的方向修正、已定的陪玩 / 快捷消息设计、ASR/OCR/TTS 统一模型管理方案与开工顺序；设计已正式写入演进计划 §10、§11。
 - [陪玩与统一模型管理实现记录（2026-11-15）](research/2026-11-15-companion-implementation.md) 按步骤记录统一模型清单、OCR 多语种包（哈希复核、逐包接入确认与实测语种）、TTS、陪玩与工具对齐的实现、测试与未验证条件。
+- [游戏陪玩 Agent 现状调研（2026-11-16）](research/2026-11-16-game-agent-landscape.md) 是 ADR 014（Kotone 定位为游戏场景的 Agent 运行框架）的依据。
+- [交接：内置 Agent（2026-11-16）](research/2026-11-16-agent-handoff.md) 是下一轮开发的起点。
 - [自动化实现记录（2026-11-16 起）](research/2026-11-16-companion-scripts.md) 记录 Luau 沙盒实验、护栏与各阶段验证。
 - [ADR 索引](adr/README.md) 记录“为什么这样做”。已替代或修订的决策标明状态，旧正文保留用于追溯，不作为现行 API。
 - [早期开发文档](archive/development-history.md) 保存阶段计划、原始评测成绩和验收历史。

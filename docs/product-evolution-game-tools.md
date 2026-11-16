@@ -345,6 +345,8 @@ Claude Code 应先阅读文档和仓库约定；存在 `.codegraph/` 时先用 C
 
 ## 10. Kotone 陪玩（2026-11-15 定稿）
 
+> 2026-11-16：本节“陪玩 = 一次 AI 决策、三种动作”的设计由 [ADR 014](adr/014-game-agent-harness.md) 取代——陪玩改为有聊天界面、能多轮调用全部工具的内置 Agent，原有三种动作变成它的工具。下文保留作为历史记录。
+
 状态：已实现（分支 `claude/companion`，实现与验证见[实现记录](research/2026-11-15-companion-implementation.md)；真实游戏里的整条链路尚未验证）。来源：[交接文档 §4](research/2026-11-15-companion-handoff.md#4-已定设计提醒助手升级为kotone-陪玩)。本节取代 §1 原来“场景一由外部 Agent 驱动”的写法：截图、OCR、聊天跟踪先成为 Kotone 自己的功能，再整体开放给 Agent。
 
 ### 10.1 两种入口，同一条流程
@@ -480,6 +482,6 @@ Claude Code 应先阅读文档和仓库约定；存在 `.codegraph/` 时先用 C
 3. **统一调度器**（已完成）：把提醒调度器推广为自动化调度器（ADR 013 §3）：执行记录、两种动作（播报 / 程序）、延迟与指定时刻、目标窗口绑定、导入 `reminders.json`；`automation.run`（延迟）/ `runs` / `stop`；陪玩的提醒改走它；现有提醒界面保持可用。
 4. **定义与入参**（已完成）：`automation.save / get / list / delete`，入参声明与校验，Luau 里的 `args`。
 5. **界面**（已完成）：「自动化」页（进行中 / 已保存 / 记录）、陪玩页的快捷指令（一句话或已保存自动化）、声音与弹幕移到「通用」。
-6. **陪玩接入**：第四种动作 `run_automation`、首次复述确认、区域高亮。
+6. ~~**陪玩接入**：第四种动作 `run_automation`、首次复述确认、区域高亮。~~ 由 [ADR 014](adr/014-game-agent-harness.md) 取代：陪玩改为内置 Agent，自动化是它的工具之一；后续开发顺序见 ADR 014。
 7. **框选取色与悬浮提示**：`screen.pick`、游戏内“正在运行”提示。
 8. **工具与文档**：Skill、插件技能同步。
