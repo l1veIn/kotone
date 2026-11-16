@@ -42,7 +42,7 @@
 <div class="flex flex-col {section === 'chat' ? 'h-full' : ''}" data-testid="assistant-page">
   <!-- 分页切换放在页名旁（右上角留给提示消息） -->
   <header class="sticky top-0 z-20 flex h-13 shrink-0 items-center gap-3 border-b border-hairline bg-background/85 px-5 backdrop-blur">
-    <h1 class="m-0 shrink-0 text-[15px] font-semibold text-foreground">琴音</h1>
+    <h1 class="m-0 shrink-0 text-[15px] font-semibold text-foreground">琴音陪玩</h1>
     <nav class="flex shrink-0 rounded-lg bg-muted/70 p-0.5" aria-label="琴音分类">
       {#each tabs as tab}
         {@const active = section === tab.id}

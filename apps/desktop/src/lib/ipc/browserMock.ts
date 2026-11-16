@@ -1185,7 +1185,7 @@ export async function connectionSelfCheck(id: string): Promise<CompanionCheck> {
     model: connection?.model ?? "",
     passed: mockQuery("mockCompanionCheck") !== "fail",
     checkedAtMs: Date.now(),
-    message: mockQuery("mockCompanionCheck") === "fail" ? "模型的回答没有提到队友的话" : "通过：能正常调用工具，并从聊天样例里挑出了队友的话",
+    message: mockQuery("mockCompanionCheck") === "fail" ? "模型没有按要求调用工具（需要支持 function calling / tool_choice: auto）" : "连接正常，模型支持工具调用",
   };
   if (assistant.connectionId === id) assistant.companion.check = check;
   return clone(check);

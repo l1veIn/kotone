@@ -787,7 +787,7 @@ pub fn quick_message_text(app: &AppHandle, id: &str) -> Option<String> {
 
 // ---------- 能力自检 ----------
 
-/// 对琴音当前用的连接跑能力自检，并把结果写进设置。会产生两次付费请求。
+/// 对琴音当前用的连接跑能力自检（一次付费请求），并把结果写进设置。
 pub async fn self_check(app: &AppHandle) -> Result<CompanionCheck, String> {
     let id = settings(app).assistant.connection_id.trim().to_string();
     if id.is_empty() {
@@ -796,7 +796,7 @@ pub async fn self_check(app: &AppHandle) -> Result<CompanionCheck, String> {
     check_connection(app, &id).await
 }
 
-/// 对任意一条连接跑能力自检（两次付费请求）。只有它正是琴音在用的连接时才写进设置；
+/// 对任意一条连接跑能力自检（一次付费请求）。只有它正是琴音在用的连接时才写进设置；
 /// 其他连接的结果只返回给界面，不改配置。
 pub async fn check_connection(app: &AppHandle, id: &str) -> Result<CompanionCheck, String> {
     let id = id.trim().to_string();

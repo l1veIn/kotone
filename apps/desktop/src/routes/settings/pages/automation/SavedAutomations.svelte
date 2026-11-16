@@ -82,7 +82,7 @@
   <SettingsSection
     title={`已保存的自动化 · ${automations.length}`}
     id="saved-automations-title"
-    description="保存下来的自动化直接运行，不再调用 AI。可以在「琴音 → 设置」的快捷指令里绑到热键上：在游戏里按下就运行。打开「交给琴音」的（最多 30 个）琴音也能帮你运行。"
+    description="保存下来的自动化直接运行，不再调用 AI。可以在「琴音陪玩 → 设置」的快捷指令里绑到热键上：在游戏里按下就运行。打开「交给琴音」的（最多 30 个）琴音也能帮你运行。"
     flush
   >
     {#snippet actions()}

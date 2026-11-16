@@ -87,7 +87,7 @@ test("assistant preview labels itself and never pretends to run AI", async ({ pa
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-assistant").click();
   const assistant = page.getByTestId("assistant-page");
-  await expect(assistant.getByRole("heading", { name: "琴音", exact: true })).toBeVisible();
+  await expect(assistant.getByRole("heading", { name: "琴音陪玩", exact: true })).toBeVisible();
   await expect(assistant.getByText(/界面预览/)).toBeVisible();
   await assistant.getByTestId("assistant-request").fill("五分钟后提醒我打野有闪");
   await assistant.getByTestId("agent-send").click();

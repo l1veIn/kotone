@@ -114,7 +114,7 @@
           {/if}
         </div>
       {/if}
-      <SettingsRow label="AI 能力自检" description="选择连接后会自动自检一次（两次付费请求）：先确认能调用工具，再看能否从一段固定聊天里挑出队友的话。没通过时热键不工作。">
+      <SettingsRow label="AI 能力自检" description="选择连接后会自动自检一次（一次付费请求）：确认连接能用、模型支持工具调用。没通过时热键不工作。">
         {#snippet control()}
           <Button variant="outline" size="sm" disabled={checking || !config.connectionId} onclick={() => void runCheck()}>
             {checking ? "自检中…" : "能力自检"}

@@ -459,13 +459,13 @@ export async function openCatalogModelDir(category: ModelCategory, id: string): 
 
 // ---------- Kotone 陪玩 ----------
 
-/** 对陪玩所选的 AI 连接跑能力自检（两次付费请求），结果写进设置 */
+/** 对琴音所选的 AI 连接跑能力自检（一次付费请求），结果写进设置 */
 export async function companionSelfCheck(): Promise<CompanionCheck> {
   if (!isTauri) return browserMock.companionSelfCheck();
   return invoke<CompanionCheck>("companion_self_check");
 }
 
-/** 单独测某一条连接（两次付费请求）。只有它是琴音在用的连接时，结果才写进设置。 */
+/** 单独测某一条连接（一次付费请求）。只有它是琴音在用的连接时，结果才写进设置。 */
 export async function connectionSelfCheck(id: string): Promise<CompanionCheck> {
   if (!isTauri) return browserMock.connectionSelfCheck(id);
   return invoke<CompanionCheck>("connection_self_check", { id });

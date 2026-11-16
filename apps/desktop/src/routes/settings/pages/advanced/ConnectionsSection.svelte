@@ -133,7 +133,7 @@
     }
   }
 
-  /** 设为琴音用的连接，并跑一次能力自检（两次付费请求）。 */
+  /** 设为琴音用的连接，并跑一次能力自检（一次付费请求）。 */
   async function useForAgent(id: string) {
     try {
       settingsStore.set(await updateSettings({ assistant: { connectionId: id } }));
@@ -193,7 +193,7 @@
   {#if loading}
     <p class="text-sm text-muted-foreground">正在读取连接…</p>
   {:else}
-    <SettingsSection title="你的连接" description="琴音使用其中一条；也可以在「琴音 → 设置」里切换。" flush testid="connections-list">
+    <SettingsSection title="你的连接" description="琴音使用其中一条；也可以在「琴音陪玩 → 设置」里切换。" flush testid="connections-list">
       {#if connections.length === 0}
         <div class="flex flex-col items-center gap-1 px-4 py-8 text-center">
           <KeyRound class="mb-1 size-5 text-muted-foreground" />
@@ -239,7 +239,7 @@
           {#if forAgent || ownCheck || cardChecking}
             <div class="mt-3 ml-12 flex items-start gap-2 rounded-xl bg-muted/50 px-3 py-2 text-xs" data-testid="connection-check-result">
               {#if cardChecking}
-                <LoaderCircle class="mt-0.5 size-3.5 shrink-0 animate-spin text-primary" /><span class="text-muted-foreground">正在自检：确认能调用工具，再看能否从聊天样例里挑出队友的话（两次付费请求）…</span>
+                <LoaderCircle class="mt-0.5 size-3.5 shrink-0 animate-spin text-primary" /><span class="text-muted-foreground">正在自检：发一次请求，确认连接能用、模型支持工具调用…</span>
               {:else if ownCheck}
                 {#if ownCheck.passed}<Check class="mt-0.5 size-3.5 shrink-0 text-success" />{:else}<CircleAlert class="mt-0.5 size-3.5 shrink-0 text-destructive" />{/if}
                 <span class="min-w-0">
@@ -349,7 +349,7 @@
         {#if editing.id !== agentConnectionId}
           <label class="flex items-start gap-2 rounded-xl bg-muted/50 px-3 py-2.5 text-xs">
             <input type="checkbox" class="mt-0.5 accent-[var(--color-primary)]" bind:checked={useAfterSave} data-testid="connection-use-after-save" />
-            <span><span class="font-medium text-foreground">保存后设为琴音的连接并做能力自检</span><span class="block text-muted-foreground">自检会发两次付费请求。</span></span>
+            <span><span class="font-medium text-foreground">保存后设为琴音的连接并做能力自检</span><span class="block text-muted-foreground">自检会发一次付费请求。</span></span>
           </label>
         {/if}
         <Dialog.Footer>

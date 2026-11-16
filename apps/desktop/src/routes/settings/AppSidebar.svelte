@@ -31,7 +31,7 @@
   const chat = useAgentChat();
   const mainItems: { id: PageId; label: string; icon: Component }[] = [
     { id: "general", label: "通用", icon: House },
-    { id: "assistant", label: "琴音", icon: Bot },
+    { id: "assistant", label: "琴音陪玩", icon: Bot },
     { id: "automation", label: "自动化", icon: Zap },
     { id: "processing", label: "文字处理", icon: Sparkles },
     { id: "game", label: "游戏适配", icon: Gamepad2 },

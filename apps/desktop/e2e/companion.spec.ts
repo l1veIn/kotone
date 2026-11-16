@@ -14,7 +14,7 @@ test("choosing a connection runs the self-check, and the companion stays blocked
   await page.goto("/?mockCompanionCheck=fail#/settings?onboarding=never");
   await addConnection(page);
   await page.getByTestId("settings-nav-assistant").click();
-  await expect(page.getByRole("heading", { name: "琴音", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "琴音陪玩", exact: true })).toBeVisible();
   await page.getByTestId("assistant-nav-settings").click();
   const companion = page.getByTestId("companion-settings");
   await expect(companion.getByTestId("companion-status")).toContainText("还没有给琴音选 AI 连接");
