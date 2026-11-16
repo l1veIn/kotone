@@ -51,6 +51,10 @@ pub const TOOL_AUTOMATION_SAVE: &str = "automation.save";
 pub const TOOL_AUTOMATION_GET: &str = "automation.get";
 pub const TOOL_AUTOMATION_LIST: &str = "automation.list";
 pub const TOOL_AUTOMATION_DELETE: &str = "automation.delete";
+pub const TOOL_GAME_LIST: &str = "game.list";
+pub const TOOL_GAME_FOCUS: &str = "game.focus";
+pub const TOOL_GAME_LAUNCH: &str = "game.launch";
+pub const TOOL_GAME_CLOSE: &str = "game.close";
 
 /// 全部委托工具（顺序即 capabilities 中的顺序）。
 pub const HOST_TOOLS: &[&str] = &[
@@ -101,6 +105,10 @@ pub const HOST_TOOLS: &[&str] = &[
     TOOL_AUTOMATION_GET,
     TOOL_AUTOMATION_LIST,
     TOOL_AUTOMATION_DELETE,
+    TOOL_GAME_LIST,
+    TOOL_GAME_FOCUS,
+    TOOL_GAME_LAUNCH,
+    TOOL_GAME_CLOSE,
 ];
 
 fn none() -> Value {
@@ -542,6 +550,42 @@ fn defs() -> Vec<Def> {
             egress: "none",
             input: object(&["id"], json!({"id": id("自动化 ID")})),
             output: object(&["deleted"], json!({"deleted": {"type": "boolean"}})),
+        },
+        Def {
+            name: TOOL_GAME_LIST,
+            description: "Game profiles with whether each game is running (a visible top-level window of one of its processNames) and in front: id, name, processNames, running, foreground, windows [{title, process, minimized, foreground}], allowAutomationInput (false = automation programs refuse to press keys in this game), canLaunch (a launch path is set). The generic profile matches any process and is never reported as running. Window titles come from other programs.",
+            side_effects: &[],
+            egress: "none",
+            input: none(),
+            output: object(&["games"], json!({"games": {"type": "array"}})),
+        },
+        Def {
+            name: TOOL_GAME_FOCUS,
+            description: "Bring a game window to the front (restored if minimized), so that automation.run, companion.read_chat and typing into the game chat act on it. Pick the game by profileId (its processNames), or by processName / titleContains. Never targets Kotone's own windows. Fails instead of guessing when nothing matches or Windows refuses the switch.",
+            side_effects: &["focuses-window"],
+            egress: "none",
+            input: object(&[], json!({
+                "profileId": id("游戏配置 ID（game.list）"),
+                "processName": {"type": "string", "minLength": 1, "maxLength": 260, "description": "可执行文件名，如 League of Legends.exe"},
+                "titleContains": {"type": "string", "minLength": 1, "maxLength": 200, "description": "窗口标题包含（不区分大小写）"}
+            })),
+            output: object(&["focused"], json!({"focused": {"type": "object"}})),
+        },
+        Def {
+            name: TOOL_GAME_LAUNCH,
+            description: "Open a game with the launch path the user set in its profile (a program, shortcut or launcher link such as steam://rungameid/...). Refuses when no launch path is set; does nothing when the game is already running (alreadyRunning=true). Returns at once; the game may take a while to show a window (check game.list).",
+            side_effects: &["launches-program"],
+            egress: "none",
+            input: object(&["profileId"], json!({"profileId": id("游戏配置 ID")})),
+            output: object(&["launched"], json!({"launched": {"type": "boolean"}, "alreadyRunning": {"type": "boolean"}})),
+        },
+        Def {
+            name: TOOL_GAME_CLOSE,
+            description: "Ask a running game to close: posts a normal close request to each of its windows (like clicking the window's X; the game may ask to confirm or save). Never kills the process. Requires a profile with processNames.",
+            side_effects: &["closes-program"],
+            egress: "none",
+            input: object(&["profileId"], json!({"profileId": id("游戏配置 ID")})),
+            output: object(&["requested"], json!({"requested": {"type": "integer", "description": "收到关闭请求的窗口数"}})),
         },
     ]
 }

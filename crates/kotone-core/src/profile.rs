@@ -89,6 +89,22 @@ pub struct GameProfile {
     /// 聊天框在窗口客户区里的位置（0..1 的比例），由陪玩时模型回报后记录；None = 整窗识别。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat_region: Option<ChatRegion>,
+    /// 允许 Kotone 的自动化程序对这个游戏按键、点鼠标（ADR 014 第 5 步；默认允许，
+    /// 与引入这一项之前相同）。关闭后对它的程序执行会被拒绝；玩家自己的语音打字不受影响。
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub allow_automation_input: bool,
+    /// 启动游戏用的程序、快捷方式或启动器链接（如 `steam://rungameid/…`）；空 = 不能由
+    /// Kotone 打开（工具 `game.launch`）。只由用户填写。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub launch_path: String,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 /// 窗口客户区内的相对区域（左上原点，均为 0..=1 的比例）。
@@ -487,6 +503,10 @@ pub fn validate_profile(profile: &GameProfile) -> Result<(), String> {
     }
     bounded("profile 显示名", &profile.display_name, 128, false)?;
     bounded("陪玩说明", &profile.companion_notes, 500, true)?;
+    bounded("启动路径", &profile.launch_path, 1024, true)?;
+    if profile.launch_path.contains(['\r', '\n', '\0']) {
+        return Err("启动路径不能包含换行".into());
+    }
     if let Some(region) = &profile.chat_region {
         region.validate()?;
     }
@@ -1121,6 +1141,32 @@ pub fn delete_profile_in(dir: &Path, id: &str) -> Result<ProfileDeleteOutcome, S
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn automation_input_and_launch_path_default_and_round_trip() {
+        let generic = GameProfile::builtin_generic();
+        assert!(
+            generic.allow_automation_input,
+            "allowed unless the user turns it off"
+        );
+        assert!(generic.launch_path.is_empty());
+        // 默认值不写进文件（旧版本读到的内容与以前一样）。
+        let json = serde_json::to_value(&generic).unwrap();
+        assert!(json.get("allowAutomationInput").is_none());
+        assert!(json.get("launchPath").is_none());
+
+        let mut custom = generic.clone();
+        custom.allow_automation_input = false;
+        custom.launch_path = "steam://rungameid/570".into();
+        let json = serde_json::to_value(&custom).unwrap();
+        assert_eq!(json["allowAutomationInput"], false);
+        let back: GameProfile = serde_json::from_value(json).unwrap();
+        assert!(!back.allow_automation_input);
+        assert_eq!(back.launch_path, "steam://rungameid/570");
+
+        custom.launch_path = "C:\\game.exe\n--evil".into();
+        assert!(validate_profile(&custom).is_err());
+    }
+
     use super::*;
 
     fn sample_profiles() -> Vec<GameProfile> {

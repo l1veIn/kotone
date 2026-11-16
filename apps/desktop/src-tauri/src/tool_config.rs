@@ -137,6 +137,31 @@ fn automation_error(e: String) -> HostError {
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GameFocusArgs {
+    #[serde(default)]
+    profile_id: Option<String>,
+    #[serde(default)]
+    process_name: Option<String>,
+    #[serde(default)]
+    title_contains: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GameIdArgs {
+    profile_id: String,
+}
+
+/// 游戏窗口操作会短暂阻塞（切前台要等确认），放到阻塞线程池。
+async fn blocking(work: impl FnOnce() -> Result<Value, String> + Send + 'static) -> HostResult {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|e| HostError::Failed(format!("工具线程异常：{e}")))?
+        .map_err(HostError::Failed)
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AutomationStopArgs {
     #[serde(default)]
     id: Option<String>,
@@ -803,6 +828,30 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
             Ok(
                 json!({"stopped": crate::automation::stop(app, id.as_deref(), "工具 automation.stop")}),
             )
+        }
+        c::TOOL_GAME_LIST => blocking(crate::game_tools::list).await,
+        c::TOOL_GAME_FOCUS => {
+            let a: GameFocusArgs = if args.is_null() {
+                GameFocusArgs::default()
+            } else {
+                parse(tool, args)?
+            };
+            blocking(move || {
+                crate::game_tools::focus(
+                    a.profile_id.as_deref(),
+                    a.process_name.as_deref(),
+                    a.title_contains.as_deref(),
+                )
+            })
+            .await
+        }
+        c::TOOL_GAME_LAUNCH => {
+            let a: GameIdArgs = parse(tool, args)?;
+            blocking(move || crate::game_tools::launch(&a.profile_id)).await
+        }
+        c::TOOL_GAME_CLOSE => {
+            let a: GameIdArgs = parse(tool, args)?;
+            blocking(move || crate::game_tools::close(&a.profile_id)).await
         }
         other => Err(HostError::Failed(format!("桌面端未实现工具 {other}"))),
     }

@@ -529,6 +529,10 @@ pub fn list(app: &AppHandle) -> Result<Value, String> {
 
 /// 当前前台窗口作为目标（不能是 Kotone 自己）。
 pub(crate) fn foreground_target() -> Result<RunTarget, String> {
+    foreground_target_info().map(|(target, _)| target)
+}
+
+fn foreground_target_info() -> Result<(RunTarget, WindowInfo), String> {
     let window = WindowsWindowObserver
         .foreground_window()
         .map_err(|e| format!("找不到前台窗口：{e}"))?
@@ -536,12 +540,13 @@ pub(crate) fn foreground_target() -> Result<RunTarget, String> {
     if window.identity.pid == std::process::id() {
         return Err("前台是 Kotone 自己的窗口：请先切到游戏再启动自动化".into());
     }
-    Ok(RunTarget {
+    let target = RunTarget {
         handle: window.identity.handle,
         pid: window.identity.pid,
         process_started_at: window.identity.process_started_at,
         label: target_label(&window),
-    })
+    };
+    Ok((target, window))
 }
 
 /// 要安排的一段程序（临时写的，或来自已保存的自动化）。
@@ -578,7 +583,9 @@ pub fn start(
     due_at_ms: u64,
 ) -> Result<Value, String> {
     let source = check_source(request.source)?;
-    let target = foreground_target()?;
+    let (target, window) = foreground_target_info()?;
+    // 按游戏配置的“允许自动化输入”（ADR 014 第 5 步）；到点执行时还会再查一次。
+    crate::game_tools::input_allowed(window.process_name.as_deref())?;
     let label = target.label.clone();
     let run = scheduler(app)?.schedule_program(
         session,
@@ -730,12 +737,10 @@ fn launch(app: &AppHandle, run: &Run) -> Result<(), String> {
         pid: target.pid,
         process_started_at: target.process_started_at,
     };
-    if WindowsWindowObserver.inspect(&identity).is_err() {
-        return Err(format!(
-            "游戏窗口已关闭（{}），自动化没有启动",
-            target.label
-        ));
-    }
+    let window = WindowsWindowObserver
+        .inspect(&identity)
+        .map_err(|_| format!("游戏窗口已关闭（{}），自动化没有启动", target.label))?;
+    crate::game_tools::input_allowed(window.process_name.as_deref())?;
     let id = run.id.clone();
     let cancel = Cancel::default();
     {

@@ -8,6 +8,7 @@ mod automation;
 mod companion;
 mod compatibility;
 mod diagnostics;
+mod game_tools;
 mod hotkey;
 mod model_catalog;
 mod ocr_engines;
