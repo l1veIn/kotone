@@ -1,0 +1,80 @@
+import { expect, test } from "@playwright/test";
+
+// 外观（通用 → 外观）：只作用于设置窗口，偏好存在 localStorage，读坏了回退默认。
+
+test("appearance defaults to Kotone dark and leaves old pages untouched", async ({ page }) => {
+  await page.goto("/#/settings?onboarding=never");
+  const html = page.locator("html");
+  await expect(html).toHaveAttribute("data-palette", "kotone");
+  await expect(html).toHaveAttribute("data-theme", "dark");
+  await expect(html).not.toHaveAttribute("data-bridge", /.*/);
+  const panel = page.getByTestId("appearance-settings");
+  await expect(panel.getByTestId("appearance-mode-dark")).toHaveAttribute("aria-pressed", "true");
+  await expect(panel.getByTestId("appearance-palette-kotone")).toHaveAttribute("aria-pressed", "true");
+  // 默认外观下旧页面的颜色与改动前一致
+  const bg = await page.getByTestId("settings-nav-general").evaluate(() => getComputedStyle(document.querySelector(".bg-kotone-deep")!).backgroundColor);
+  expect(bg).toBe("rgb(26, 26, 46)");
+});
+
+test("appearance switches theme, palette, zoom and font, and persists across reloads", async ({ page }, testInfo) => {
+  await page.goto("/#/settings?onboarding=never");
+  const panel = page.getByTestId("appearance-settings");
+  await panel.getByTestId("appearance-mode-light").click();
+  await panel.getByTestId("appearance-palette-green").click();
+  await panel.getByTestId("appearance-zoom").click();
+  await page.getByRole("option", { name: "110%" }).click();
+  await panel.getByTestId("appearance-font").click();
+  await page.getByRole("option", { name: "等线" }).click();
+
+  const html = page.locator("html");
+  await expect(html).toHaveAttribute("data-theme", "light");
+  await expect(html).toHaveAttribute("data-palette", "green");
+  await expect(html).toHaveAttribute("data-bridge", "on");
+  await expect(page.locator("body")).toHaveCSS("zoom", "1.1");
+  expect(await page.evaluate(() => getComputedStyle(document.body).fontFamily)).toContain("DengXian");
+  await panel.screenshot({ path: testInfo.outputPath("appearance-light-green.png") });
+
+  await page.reload();
+  await expect(html).toHaveAttribute("data-theme", "light");
+  await expect(html).toHaveAttribute("data-palette", "green");
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("kotone.appearance.v1") ?? "null")))
+    .toMatchObject({ mode: "light", palette: "green", zoom: 110, uiFont: "dengxian" });
+
+  await page.getByTestId("appearance-reset").click();
+  await expect(html).toHaveAttribute("data-theme", "dark");
+  await expect(html).toHaveAttribute("data-palette", "kotone");
+  await expect(html).not.toHaveAttribute("data-bridge", /.*/);
+  await expect(page.locator("body")).toHaveCSS("zoom", "1");
+});
+
+test("broken or unavailable appearance storage falls back to the default look", async ({ page }) => {
+  await page.goto("/#/settings?onboarding=never");
+  await page.evaluate(() => localStorage.setItem("kotone.appearance.v1", "{not json"));
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-palette", "kotone");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+  await page.evaluate(() => localStorage.setItem("kotone.appearance.v1", JSON.stringify({ palette: "nope", mode: "light", zoom: 9999, uiFont: "custom", uiCustomFont: "x;}body{color:red" })));
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-palette", "kotone");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page.locator("body")).toHaveCSS("zoom", "1.5");
+  expect(await page.evaluate(() => getComputedStyle(document.body).fontFamily)).not.toContain("red");
+
+  // 写入失败（例如存储被禁用）时，本次仍然生效并提示。
+  await page.evaluate(() => { Storage.prototype.setItem = () => { throw new Error("存储不可用"); }; });
+  await page.getByTestId("appearance-mode-dark").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.getByTestId("appearance-settings").getByRole("alert")).toContainText("存储不可用");
+});
+
+test("overlay window never picks up the settings appearance", async ({ page }) => {
+  await page.goto("/#/settings?onboarding=never");
+  await page.evaluate(() => localStorage.setItem("kotone.appearance.v1", JSON.stringify({ mode: "light", palette: "red", zoom: 125 })));
+  await page.goto("/#/overlay");
+  await page.reload();
+  const html = page.locator("html");
+  await expect(html).not.toHaveAttribute("data-theme", /.*/);
+  await expect(html).not.toHaveAttribute("data-bridge", /.*/);
+  await expect(page.locator("body")).toHaveCSS("zoom", "1");
+});

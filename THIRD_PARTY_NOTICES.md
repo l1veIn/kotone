@@ -70,4 +70,28 @@ The Kokoro model package also contains `espeak-ng-data`. Model licensing does no
 
 Redistribution must account for the actual native runtime and frontend/data licenses, including applicable notice and corresponding-source requirements. Do not describe the complete TTS dependency chain as Apache-only merely because the model weights use Apache-2.0. See `docs/research-tts.md` for the verified package identity and implementation notes.
 
+## Settings window UI (frontend)
+
+The settings window uses shadcn-svelte components copied as source, plus npm packages bundled into the frontend build. File-by-file origins and Kotone's changes are recorded in `docs/third-party/rambledesk-ports.md`.
+
+- shadcn-svelte components (`apps/desktop/src/lib/components/ui/`), via RambleDesk: https://github.com/huntabyte/shadcn-svelte, MIT License
+- bits-ui: https://github.com/huntabyte/bits-ui, MIT License
+- Lucide icons (`@lucide/svelte`): https://github.com/lucide-icons/lucide, ISC License
+- tailwind-merge: https://github.com/dcastil/tailwind-merge, MIT License
+- tailwind-variants: https://github.com/heroui-inc/tailwind-variants, MIT License
+- clsx: https://github.com/lukeed/clsx, MIT License
+- tw-animate-css: https://github.com/Wombosvideo/tw-animate-css, MIT License
+
+### Codeg (theme palettes)
+
+Parts of the appearance system (`apps/desktop/src/lib/appearance/palettes.css`, `appearanceSettings.ts`) are adapted from Codeg through RambleDesk, and keep their Apache-2.0 headers.
+
+- Project: https://github.com/xintaofei/codeg, commit `3ebdfed1d7c0b71d71880a3d2e0f8e09545feae1`
+- Copyright: Codeg authors and contributors
+- License: Apache License 2.0, full text in `licenses/codeg-APACHE-2.0.txt`
+
+### RambleDesk
+
+RambleDesk (MIT, Copyright (c) 2026 l1veIn — the same author and license as Kotone) is the intermediate source of the components and appearance code above.
+
 These notices describe third-party components and models; they do not grant a license to Kotone itself.

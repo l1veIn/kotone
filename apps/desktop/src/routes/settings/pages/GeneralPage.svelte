@@ -30,6 +30,7 @@
   import Toggle from "../../../lib/components/Toggle.svelte";
   import RuntimeButton from "../../../lib/components/RuntimeButton.svelte";
   import OutputSettings from "./assistant/OutputSettings.svelte";
+  import AppearanceSettingsPanel from "../../../lib/appearance/AppearanceSettingsPanel.svelte";
   import heroGeneral from "../../../assets/brand/hero-general.webp";
 
   let { onOpenAdvanced }: { onOpenAdvanced: () => void } = $props();
@@ -528,6 +529,12 @@
 
     <!-- 声音与弹幕：提醒、陪玩回答与自动化共用的输出（ADR 013 §8） -->
     <div class="mt-4"><OutputSettings /></div>
+
+    <!-- 外观：配色、明暗、缩放、字体（只影响设置窗口，偏好存在本机） -->
+    <section class="kotone-panel mt-4 p-4" aria-labelledby="appearance-title">
+      <h2 id="appearance-title" class="mb-3 text-sm font-semibold text-kotone-cyan/90">外观</h2>
+      <AppearanceSettingsPanel />
+    </section>
 
 
 

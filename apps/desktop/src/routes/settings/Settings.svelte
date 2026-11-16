@@ -4,7 +4,7 @@
    * 左侧导航 + 右侧页面。页面组件在 ./pages/ 下，
    * 共享 settingsStore / toast（lib/stores/ui.ts）；IPC 全部走 lib/ipc.ts。
    */
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import {
     getSettings,
@@ -44,6 +44,7 @@
   import AboutPage from "./pages/AboutPage.svelte";
   import CharacterPage from "./pages/CharacterPage.svelte";
   import patternSwitch from "../../assets/brand/patterns/switch.webp";
+  import { initializeAppearance } from "../../lib/appearance/appearanceRuntime";
 
   type PageId =
     | "general"
@@ -66,6 +67,10 @@
     { id: "advanced", label: "高级", icon: "sliders" },
     { id: "about", label: "关于", icon: "info" },
   ];
+
+  // 外观（配色、明暗、缩放、字体）只作用于设置窗口：在这里挂上，卸载时还原。
+  // 在首次绘制前应用，避免先闪一下默认配色。
+  onDestroy(initializeAppearance());
 
   let page = $state<PageId>("general");
   let advancedSection = $state<AdvancedSection>("system");
