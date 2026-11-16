@@ -31,7 +31,9 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
-tauri-plugin-updater = "2"
+# 更新包是 NSIS setup.exe（createUpdaterArtifacts = true），用不到 zip 解压；关掉 zip 特性，
+# 也不再引入有公告的 zip 4.x（RUSTSEC-2026-0367/0368/0369/0429）。
+tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls"] }
 tauri-plugin-process = "2"
 serde.workspace = true
 serde_json.workspace = true

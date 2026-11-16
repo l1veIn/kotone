@@ -173,10 +173,9 @@ fn volcano_transcribe_ws(
     });
     let handshake_bytes = serde_json::to_vec(&handshake).map_err(|e| e.to_string())?;
     socket
-        .send(Message::Binary(build_message(
-            &HEADER_FULL_CLIENT,
-            &gzip_compress(&handshake_bytes),
-        )))
+        .send(Message::Binary(
+            build_message(&HEADER_FULL_CLIENT, &gzip_compress(&handshake_bytes)).into(),
+        ))
         .map_err(|e| format!("火山引擎握手发送失败：{e}"))?;
     let mut text = String::new();
     let ack = socket
@@ -209,10 +208,9 @@ fn volcano_transcribe_ws(
             &HEADER_AUDIO_ONLY
         };
         socket
-            .send(Message::Binary(build_message(
-                header,
-                &gzip_compress(&pcm16[sent..sent + take]),
-            )))
+            .send(Message::Binary(
+                build_message(header, &gzip_compress(&pcm16[sent..sent + take])).into(),
+            ))
             .map_err(|e| format!("火山引擎音频发送失败：{e}"))?;
         sent += take;
 
