@@ -127,7 +127,7 @@ ADR 014 的“待定”一节。**2026-11-16 已确认：五项全部按下表�
 | 3 聊天界面 | **交给另一个 Agent**，随前端重构一起做 | [ADR 016](../adr/016-ui-foundation-shadcn.md)、[任务文档](2026-11-16-ui-refactor-task.md)；接口草稿 `apps/desktop/src/lib/agent.ts` |
 | 4 游戏内入口 | 大部分完成：热键 / 文字入口 / 快捷指令“一句话”走 Agent（`agent.inGame`，默认开）；快速模式（工具子集、6 步 / 60 秒、请求前读屏附上识别文字）；结果语音 / 弹幕播出；游戏内询问先播报、在窗口里确认 | 同上 |
 | 4 剩余 | 游戏内用语音回答“允许 / 拒绝”；把截图作为图片附上（需要确认模型能看图）；“记住聊天框位置”迁移 | — |
-| 5 游戏场景工具 | 未开始：打开 / 关闭游戏、切换窗口；按游戏的“允许自动化输入”开关。**在聊天窗口里让琴音运行自动化或发言会失败（前台是 Kotone），要靠这一步** | — |
+| 5 游戏场景工具 | 后端完成：`game.list` / `game.focus` / `game.launch` / `game.close`（工具服务，内外 Agent 共用；打开、关闭默认要确认）；游戏配置新字段 `allowAutomationInput`（关掉后拒绝对该游戏运行程序）与 `launchPath`；聊天窗口里系统提示要求先 `game.focus`。**前端入口（游戏适配页的两个新字段）在界面任务第三步** | `game_tools.rs`、`kotone-platform-windows::game_window`、[工具服务手册](../tool-service.md) |
 | 6 文档、Skill、插件 | 未开始 | — |
 
 验证：kotone-ai 55、kotone-agent 16（含“循环 + 本机模拟 AI 服务 + 权限 + 工具服务”的整条链路）、kotone-core 237、kotone-tools 89、桌面端 41 个测试通过；整个工作区 clippy / fmt 通过；`pnpm check` 0 错误。
