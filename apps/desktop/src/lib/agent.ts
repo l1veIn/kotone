@@ -48,6 +48,18 @@ export interface AgentState {
   permissions: Permissions;
 }
 
+/** agent_tools 的一项：琴音能用的工具、默认规则与用户设的规则（null = 按默认）。 */
+export interface AgentTool {
+  name: string;
+  group: string;
+  description: string;
+  sideEffects: string[];
+  defaultRule: "allow" | "ask";
+  rule: PermissionRule | null;
+  /** 始终提供给模型的核心工具（其余经 tools.find 启用）。 */
+  core: boolean;
+}
+
 export const PREVIEW_ERROR = "仅预览：浏览器里不会真的发给琴音。请在桌面应用中和琴音聊天。";
 
 // ---------- 浏览器预览数据（只在 isTauri = false 时使用） ----------
@@ -75,6 +87,24 @@ const preview = {
   permissions: { mode: "default", rules: {} } as Permissions,
   hidden: [] as string[],
 };
+/** 浏览器预览的工具清单（与后端分组、默认规则一致的示例）。 */
+const previewTools: Omit<AgentTool, "rule">[] = [
+  { name: "reply.say", group: "game", description: "用语音或弹幕告诉玩家一句话", sideEffects: [], defaultRule: "allow", core: true },
+  { name: "reminder.create", group: "game", description: "过一会儿提醒玩家", sideEffects: [], defaultRule: "allow", core: true },
+  { name: "game_chat.send", group: "game", description: "把一句话打进游戏聊天框并发出", sideEffects: ["input"], defaultRule: "ask", core: true },
+  { name: "companion.read_chat", group: "game", description: "截取游戏窗口，识别聊天记录", sideEffects: [], defaultRule: "allow", core: true },
+  { name: "game.list", group: "game", description: "列出已配置的游戏和它们是否在运行", sideEffects: [], defaultRule: "allow", core: true },
+  { name: "game.focus", group: "game", description: "切换到游戏窗口", sideEffects: ["window"], defaultRule: "allow", core: true },
+  { name: "game.launch", group: "game", description: "打开一个已配置启动路径的游戏", sideEffects: ["process"], defaultRule: "ask", core: false },
+  { name: "window.active", group: "screen", description: "看当前前台窗口", sideEffects: [], defaultRule: "allow", core: true },
+  { name: "ocr.recognize", group: "screen", description: "识别屏幕上一块区域的文字", sideEffects: [], defaultRule: "allow", core: false },
+  { name: "automation.list", group: "automation", description: "列出已保存的自动化", sideEffects: [], defaultRule: "allow", core: true },
+  { name: "automation.run", group: "automation", description: "运行一段自动化（会按键、点鼠标）", sideEffects: ["input"], defaultRule: "ask", core: true },
+  { name: "automation.stop", group: "automation", description: "停止正在运行的自动化", sideEffects: [], defaultRule: "allow", core: true },
+  { name: "automation.save", group: "automation", description: "保存一段自动化", sideEffects: ["write"], defaultRule: "ask", core: true },
+  { name: "settings.update", group: "settings", description: "修改 Kotone 设置", sideEffects: ["write"], defaultRule: "ask", core: false },
+];
+
 function summary(c: Conversation): ConversationSummary {
   return { id: c.id, title: c.title, createdAtMs: c.createdAtMs, updatedAtMs: c.updatedAtMs, messageCount: c.messages.length };
 }
@@ -140,6 +170,12 @@ export async function agentSetAutomationHidden(id: string, hidden: boolean): Pro
   return [...preview.hidden];
 }
 
+/** 琴音能用的全部工具（设置页按工具设规则用）。 */
+export async function agentTools(): Promise<AgentTool[]> {
+  if (isTauri) return (await invoke<{ tools: AgentTool[] }>("agent_tools")).tools;
+  return previewTools.map((tool) => ({ ...tool, rule: preview.permissions.rules[tool.name] ?? null }));
+}
+
 export async function subscribeAgent(callback: (conversationId: string, event: AgentEvent) => void): Promise<UnlistenFn> {
   if (!isTauri) return () => {};
   return listen<{ conversationId: string; event: AgentEvent }>("kotone://agent-event", (e) => callback(e.payload.conversationId, e.payload.event));
@@ -181,12 +217,19 @@ export function toolLabel(name: string): string {
   if (name.startsWith("saved.")) return "运行已保存的自动化";
   return toolLabels[name] ?? name;
 }
-/** 设置页按工具设规则时列出的工具（内置 Agent 始终提供的那些；另可出现已有规则里的其它工具）。 */
-export const ruleTools = [
-  "reply.say", "reminder.create", "game_chat.send", "companion.read_chat", "window.active",
-  "game.list", "game.focus", "automation.list", "automation.get", "automation.run",
-  "automation.runs", "automation.stop", "automation.save",
-];
+/** 工具分组的中文名（agent_tools 的 group；没有的显示原名）。 */
+export const toolGroupLabels: Record<string, string> = {
+  game: "游戏与播报",
+  automation: "自动化",
+  screen: "屏幕与窗口",
+  settings: "设置",
+  models: "模型",
+  meta: "查找工具",
+  app: "其它",
+};
+export function toolGroupLabel(group: string): string {
+  return toolGroupLabels[group] ?? group;
+}
 
 export function stopText(stop: StopReason): string | null {
   switch (stop.kind) {

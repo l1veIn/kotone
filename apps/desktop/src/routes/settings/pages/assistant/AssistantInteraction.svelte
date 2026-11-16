@@ -1,4 +1,5 @@
 <script lang="ts">
+  // 陪玩热键的输入方式（与常规语音输入的交互模式相互独立）。
   import type { AssistantInteractionMode } from "../../../../lib/ipc";
   import { patchSettings, settingsStore } from "../../../../lib/stores/ui";
 
@@ -18,17 +19,17 @@
   }
 </script>
 
-<div class="mt-5 border-t border-white/8 pt-4" data-testid="assistant-interaction">
-  <h3>输入方式</h3>
+<div class="py-3.5" data-testid="assistant-interaction">
+  <p class="m-0 text-[13px] font-medium text-foreground">输入方式</p>
+  <p class="mt-0.5 mb-0 text-xs text-muted-foreground">只影响陪玩热键，不改变常规语音输入。</p>
   <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3" aria-label="助手输入方式">
     {#each modes as item}
       {@const active = mode === item.id}
       <button type="button" data-testid={`assistant-mode-${item.id}`} aria-pressed={active} disabled={saving}
-        class="rounded-[var(--radius-kotone-card)] px-3 py-3 text-left ring-1 transition
-          {active ? 'bg-kotone-cyan/12 ring-kotone-cyan/60 shadow-glow-cyan' : 'bg-kotone-card/60 ring-white/10 hover:bg-kotone-card'}"
+        class="rounded-xl border px-3 py-2.5 text-left transition-colors hover:bg-muted/60 disabled:opacity-60 {active ? 'border-primary bg-primary/8' : 'border-hairline'}"
         onclick={() => void select(item.id)}>
-        <p class="text-sm font-semibold {active ? 'text-kotone-cyan' : ''}">{item.name}</p>
-        <p class="mt-1 text-[11px] leading-relaxed text-white/50">{item.description}</p>
+        <p class="m-0 text-[13px] font-semibold {active ? 'text-primary' : 'text-foreground'}">{item.name}</p>
+        <p class="mt-1 mb-0 text-[11px] leading-relaxed text-muted-foreground">{item.description}</p>
       </button>
     {/each}
   </div>

@@ -1,12 +1,16 @@
 <script lang="ts">
-  // 「琴音 → 设置 → 琴音 Agent」：权限（整体模式 + 按工具的规则）与游戏内入口（config.json `agent` 段）。
-  // 权限要整体替换（agent_set_permissions）；inGame 用普通设置补丁。
+  // 「琴音 → 设置 → 琴音 Agent」：游戏内入口、权限模式与按工具的规则（config.json `agent` 段）。
+  // 工具清单来自后端 agent_tools（含分组、默认规则与说明）；权限要整体替换（agent_set_permissions），
+  // inGame 用普通设置补丁。
   import { onMount } from "svelte";
-  import * as Select from "$lib/components/ui/select";
+  import { ChevronRight } from "@lucide/svelte";
+  import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
+  import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
+  import SelectField from "$lib/components/settings/SelectField.svelte";
   import { Switch } from "$lib/components/ui/switch";
   import {
-    agentSetPermissions, agentState, ruleTools, toolLabel,
-    type PermissionMode, type PermissionRule, type Permissions,
+    agentSetPermissions, agentState, agentTools, toolGroupLabel, toolLabel,
+    type AgentTool, type PermissionMode, type PermissionRule, type Permissions,
   } from "../../../../lib/agent";
   import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
 
@@ -18,10 +22,28 @@
   const ruleNames: Record<PermissionRule | "default", string> = { default: "按默认", allow: "允许", ask: "询问", deny: "禁止" };
 
   let permissions = $state<Permissions | null>(null);
+  let tools = $state<AgentTool[]>([]);
+  let toolsError = $state("");
   let saving = $state(false);
   let loadError = $state("");
   const inGame = $derived($settingsStore?.agent?.inGame ?? true);
-  const tools = $derived([...new Set([...ruleTools, ...Object.keys(permissions?.rules ?? {})])]);
+  /** 按分组排好（核心工具在前）；已有规则但清单里没有的工具也列出来，方便删掉。 */
+  const groups = $derived.by(() => {
+    const known = new Set(tools.map((tool) => tool.name));
+    const extra: AgentTool[] = Object.keys(permissions?.rules ?? {}).filter((name) => !known.has(name)).map((name) => ({
+      name, group: "app", description: "当前不可用的工具（规则仍会保留）", sideEffects: [], defaultRule: "ask", rule: null, core: false,
+    }));
+    const map = new Map<string, AgentTool[]>();
+    for (const tool of [...tools, ...extra]) {
+      const list = map.get(tool.group) ?? [];
+      list.push(tool);
+      map.set(tool.group, list);
+    }
+    return [...map.entries()].map(([group, list]) => ({
+      group, tools: list.sort((a, b) => Number(b.core) - Number(a.core) || a.name.localeCompare(b.name)),
+    }));
+  });
+  const ruleCount = $derived(Object.keys(permissions?.rules ?? {}).length);
 
   onMount(() => {
     let disposed = false;
@@ -30,6 +52,8 @@
     if (fromSettings) permissions = structuredClone(fromSettings);
     else void agentState().then((state) => { if (!disposed) permissions = state.permissions; })
       .catch((error) => { if (!disposed) loadError = `读取权限设置失败：${errText(error)}`; });
+    void agentTools().then((list) => { if (!disposed) tools = list; })
+      .catch((error) => { if (!disposed) toolsError = `读取工具清单失败：${errText(error)}`; });
     return () => { disposed = true; };
   });
 
@@ -62,53 +86,69 @@
   }
 </script>
 
-<section class="panel ui-scope" aria-labelledby="agent-settings-title" data-testid="agent-settings">
-  <h2 id="agent-settings-title">琴音 Agent</h2>
-  <p class="mt-1 text-xs leading-relaxed text-muted-foreground">琴音能用 Kotone 的全部工具。这里决定哪些事直接做、哪些先问你。</p>
+<div class="space-y-6" data-testid="agent-settings">
+  <SettingsSection title="琴音 Agent" description="琴音能用 Kotone 的全部工具。这里决定游戏里的话交给谁，以及哪些事直接做、哪些先问你。">
+    <SettingsRow label="游戏内交给琴音" description="陪玩热键与快捷指令里的“一句话”交给琴音（多步、能用全部工具）；关闭时用旧的单次陪玩。">
+      {#snippet control()}
+        <Switch data-testid="agent-in-game" bind:checked={() => inGame, (checked) => void patchSettings({ agent: { inGame: checked } }, checked ? "游戏内入口交给琴音" : "游戏内入口改用单次陪玩")} aria-label="游戏内交给琴音" />
+      {/snippet}
+    </SettingsRow>
+    {#if loadError}<p role="alert" class="my-3 text-xs text-destructive">{loadError}</p>{/if}
+    {#if permissions}
+      {@const current = permissions}
+      <SettingsRow label="权限模式" description="“禁止”的规则在任何模式下都生效。" stacked>
+        {#snippet control()}
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-3" role="group" aria-label="权限模式">
+            {#each modes as mode (mode.id)}
+              {@const active = current.mode === mode.id}
+              <button type="button" data-testid={`agent-mode-${mode.id}`} aria-pressed={active} disabled={saving}
+                class="rounded-xl border px-3 py-2.5 text-left transition-colors hover:bg-muted/60 disabled:opacity-60 {active ? 'border-primary bg-primary/8' : 'border-hairline'}"
+                onclick={() => setMode(mode.id)}>
+                <p class="m-0 text-[13px] font-semibold {active ? 'text-primary' : 'text-foreground'}">{mode.name}</p>
+                <p class="mt-1 mb-0 text-[11px] leading-relaxed text-muted-foreground">{mode.description}</p>
+              </button>
+            {/each}
+          </div>
+        {/snippet}
+      </SettingsRow>
+    {/if}
+  </SettingsSection>
 
-  <div class="setting-row">
-    <div><h3>游戏内交给琴音</h3><p>陪玩热键与快捷指令里的“一句话”交给琴音（多步、能用全部工具）；关闭时用旧的单次陪玩。</p></div>
-    <Switch data-testid="agent-in-game" checked={inGame} aria-label="游戏内交给琴音"
-      onCheckedChange={(checked) => void patchSettings({ agent: { inGame: checked } }, checked ? "游戏内入口交给琴音" : "游戏内入口改用单次陪玩")} />
-  </div>
-
-  {#if loadError}<p role="alert" class="notice text-kotone-pink">{loadError}</p>{/if}
   {#if permissions}
     {@const current = permissions}
-    <div class="mt-4">
-      <h3>权限模式</h3>
-      <div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3" role="group" aria-label="权限模式">
-        {#each modes as mode (mode.id)}
-          {@const active = current.mode === mode.id}
-          <button type="button" data-testid={`agent-mode-${mode.id}`} aria-pressed={active} disabled={saving}
-            class="rounded-lg border px-3 py-2.5 text-left transition-colors hover:bg-accent disabled:opacity-60 {active ? 'border-primary bg-primary/10' : 'border-border'}"
-            onclick={() => setMode(mode.id)}>
-            <p class="text-sm font-semibold {active ? 'text-primary' : 'text-foreground'}">{mode.name}</p>
-            <p class="mt-1 text-[11px] leading-relaxed text-muted-foreground">{mode.description}</p>
-          </button>
+    <details class="group/rules" data-testid="agent-rules">
+      <summary class="flex cursor-pointer list-none items-center gap-1.5 px-1 text-sm font-semibold text-foreground">
+        <ChevronRight class="size-4 text-muted-foreground transition-transform group-open/rules:rotate-90" />
+        按工具单独设置
+        <span class="ml-1 text-xs font-normal text-muted-foreground">（{ruleCount} 条自定义）</span>
+      </summary>
+      <p class="mt-1.5 mb-3 px-1 text-xs leading-relaxed text-muted-foreground">“按默认”由工具的副作用决定。已保存的自动化是否交给琴音，在「自动化 → 已保存」里逐个设置。</p>
+      {#if toolsError}<p role="alert" class="mb-3 px-1 text-xs text-destructive">{toolsError}</p>{/if}
+      <div class="space-y-4">
+        {#each groups as group (group.group)}
+          <SettingsSection title={toolGroupLabel(group.group)} id={`agent-tools-${group.group}`}>
+            {#each group.tools as tool (tool.name)}
+              {@const value = current.rules[tool.name] ?? "default"}
+              <div class="flex items-center justify-between gap-4 py-2.5" data-testid="agent-rule" data-tool={tool.name}>
+                <div class="min-w-0">
+                  <p class="m-0 flex flex-wrap items-baseline gap-x-2 text-[13px]">
+                    <span class="font-medium text-foreground">{toolLabel(tool.name)}</span>
+                    <span class="font-mono text-[11px] text-muted-foreground">{tool.name}</span>
+                    {#if !tool.core}<span class="rounded border border-hairline px-1 text-[10px] text-muted-foreground" title="经“查找工具”启用">按需</span>{/if}
+                  </p>
+                  {#if tool.description}<p class="mt-0.5 mb-0 line-clamp-2 text-xs text-muted-foreground">{tool.description}</p>{/if}
+                </div>
+                <div class="flex shrink-0 items-center gap-2">
+                  <span class="hidden text-[11px] text-muted-foreground sm:inline" data-testid="agent-rule-default">默认：{ruleNames[tool.defaultRule]}</span>
+                  <SelectField class="w-28" size="sm" ariaLabel={`${toolLabel(tool.name)} 的规则`} {value} disabled={saving}
+                    options={(["default", "allow", "ask", "deny"] as const).map((option) => ({ value: option, label: ruleNames[option] }))}
+                    onchange={(next) => setRule(tool.name, next)} />
+                </div>
+              </div>
+            {/each}
+          </SettingsSection>
         {/each}
       </div>
-    </div>
-
-    <details class="mt-4 group/rules" data-testid="agent-rules">
-      <summary class="cursor-pointer text-xs text-muted-foreground hover:text-foreground">按工具单独设置（{Object.keys(current.rules).length} 条）</summary>
-      <ul class="mt-2 divide-y divide-border rounded-lg border">
-        {#each tools as tool (tool)}
-          {@const value = current.rules[tool] ?? "default"}
-          <li class="flex items-center justify-between gap-3 px-3 py-1.5" data-testid="agent-rule" data-tool={tool}>
-            <span class="min-w-0 text-xs"><span class="text-foreground">{toolLabel(tool)}</span> <span class="font-mono text-[10px] text-muted-foreground">{tool}</span></span>
-            <Select.Root type="single" {value} onValueChange={(next) => setRule(tool, next)} disabled={saving}>
-              <Select.Trigger size="sm" class="w-28" aria-label={`${toolLabel(tool)} 的规则`}>{ruleNames[value]}</Select.Trigger>
-              <Select.Content>
-                {#each ["default", "allow", "ask", "deny"] as option (option)}
-                  <Select.Item value={option} label={ruleNames[option as PermissionRule | "default"]} />
-                {/each}
-              </Select.Content>
-            </Select.Root>
-          </li>
-        {/each}
-      </ul>
-      <p class="mt-1.5 text-[11px] text-muted-foreground">“按默认”由工具的副作用决定；“禁止”在任何模式下都生效。已保存的自动化是否交给琴音，在「自动化 → 已保存」里逐个设置。</p>
     </details>
   {/if}
-</section>
+</div>

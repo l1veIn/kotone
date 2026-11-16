@@ -62,13 +62,13 @@
   }
 </script>
 
-<div class="absolute inset-0 z-[60] flex items-center justify-center bg-kotone-deep/80 p-6 backdrop-blur-sm">
-  <div class="kotone-panel w-full max-w-md p-6 shadow-glow-cyan-lg">
+<div class="absolute inset-0 z-[60] flex items-center justify-center bg-black/50 p-6 backdrop-blur-sm">
+  <div class="rounded-3xl border border-hairline bg-popover text-popover-foreground shadow-2xl w-full max-w-md p-6">
     <div class="flex items-start gap-4">
       <img src={stickerPointing} alt="" class="h-14 w-14 shrink-0 object-contain" />
       <div class="min-w-0">
         <h2 class="text-base font-bold">需要管理员权限</h2>
-        <p class="mt-1.5 text-[13px] leading-relaxed text-white/65">
+        <p class="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
           Kotone 当前以普通权限运行。当目标程序（如 League of
           Legends）以管理员权限运行时，Windows 会拦截普通权限进程发送的文字，
           导致软件内发送失效。是否现在以管理员身份重启？
@@ -77,11 +77,11 @@
     </div>
 
     <div class="mt-4 flex flex-col gap-2">
-      <label class="flex cursor-pointer items-center gap-2 text-xs text-white/70">
+      <label class="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
         <input
           type="checkbox"
           checked={neverAsk}
-          class="h-3.5 w-3.5 accent-kotone-cyan"
+          class="h-3.5 w-3.5 accent-primary"
           onchange={(event) => {
             neverAsk = (event.target as HTMLInputElement).checked;
           }}
@@ -92,14 +92,14 @@
 
     <div class="mt-5 flex items-center justify-end gap-3">
       <button
-        class="rounded-lg bg-white/10 px-4 py-2 text-xs font-semibold text-white/75 ring-1 ring-white/15 transition hover:bg-white/20 disabled:opacity-50"
+        class="rounded-lg bg-muted/70 px-4 py-2 text-xs font-semibold text-foreground/90 ring-1 ring-hairline transition hover:bg-muted disabled:opacity-50"
         disabled={busy}
         onclick={() => void onLater()}
       >
         暂不
       </button>
       <button
-        class="rounded-lg bg-kotone-cyan px-4 py-2 text-xs font-semibold text-kotone-deep transition hover:brightness-110 hover:shadow-glow-cyan active:scale-95 disabled:opacity-50"
+        class="rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:brightness-110 active:scale-95 disabled:opacity-50"
         disabled={busy}
         onclick={() => void onRestart()}
       >

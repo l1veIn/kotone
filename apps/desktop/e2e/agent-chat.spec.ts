@@ -77,6 +77,11 @@ async function openChat(page: Page, options: { empty?: boolean; notReady?: strin
         }
         case "agent_stop": return true;
         case "agent_set_permissions": return (args as { permissions: unknown }).permissions;
+        case "agent_tools": return { tools: [
+          { name: "game_chat.send", group: "game", description: "把一句话打进游戏聊天框并发出", sideEffects: ["input"], defaultRule: "ask", rule: null, core: true },
+          { name: "reply.say", group: "game", description: "用语音或弹幕告诉玩家一句话", sideEffects: [], defaultRule: "allow", rule: null, core: true },
+          { name: "window.list", group: "screen", description: "列出窗口", sideEffects: [], defaultRule: "allow", rule: null, core: false },
+        ] };
         case "agent_set_automation_hidden": return (args as { hidden: boolean; id: string }).hidden ? [(args as { id: string }).id] : [];
         case "agent_answer": return true;
         case "agent_new_conversation": state.current = null; return null;
@@ -309,6 +314,10 @@ test("agent settings replace permissions as a whole and save the in-game switch"
   await settings.getByTestId("agent-mode-read-only").click();
   await expect(settings.getByTestId("agent-mode-read-only")).toHaveAttribute("aria-pressed", "true");
   await settings.getByTestId("agent-rules").locator("summary").click();
+  // 工具清单来自 agent_tools：按分组列出，显示默认规则
+  await expect(settings.getByTestId("agent-rule")).toHaveCount(3);
+  await expect(settings.locator('[data-tool="game_chat.send"]').getByTestId("agent-rule-default")).toHaveText("默认：询问");
+  await expect(settings.getByRole("heading", { name: "屏幕与窗口", exact: true })).toBeVisible();
   await settings.getByLabel("发到游戏聊天 的规则").click();
   await page.getByRole("option", { name: "禁止" }).click();
   await expect(settings.getByLabel("发到游戏聊天 的规则")).toHaveText("禁止");
