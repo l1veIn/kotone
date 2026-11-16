@@ -9,6 +9,9 @@
    *   dev:web 走 Blob 下载 / <input type=file> + 前端同款 parse/merge；
    * - 已删除：前台检测（detect_foreground_game IPC 已连删）、测试发送按钮
    *   （simulate_send IPC 保留——悬浮条错误重试在用）。
+   * - 琴音与自动化：allowAutomationInput（缺省开）、launchPath（琴音打开游戏用）；
+   *   保存时整份 profile 原样带回，新字段不会丢。
+   * - 版式：SettingsPage / SettingsSection（参照 DeepSeek Harness 设置页）。
    */
   import { onDestroy, onMount } from "svelte";
   import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -26,9 +29,13 @@
     type GameProfile,
   } from "../../../lib/ipc";
   import { settingsStore, toast, toastWarn, errText } from "../../../lib/stores/ui";
-  import { spotlight } from "../../../lib/actions/spotlight";
   import { captureHotkey } from "../../../lib/hotkeyCapture";
-  import Toggle from "../../../lib/components/Toggle.svelte";
+  import { Download, Gamepad2, Globe, Upload } from "@lucide/svelte";
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import SettingsPage from "$lib/components/settings/SettingsPage.svelte";
+  import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
+  import ToggleField from "$lib/components/settings/ToggleField.svelte";
 
   let profiles = $state<GameProfile[]>([]);
 
@@ -396,111 +403,90 @@
   }
 </script>
 
-<div class="px-6 py-5">
-  <h1 class="text-lg font-bold">
-    <span class="kotone-gradient-text">游戏适配</span>
-  </h1>
-  <p class="mt-0.5 text-[11px] text-white/45">每个游戏一套打法：聊天键、词表、节奏</p>
+{#snippet field(label: string, hint: string = "")}
+  <p class="m-0 text-xs font-medium text-foreground">{label}</p>
+  {#if hint}<p class="mt-0.5 mb-0 text-[11px] leading-relaxed text-muted-foreground">{hint}</p>{/if}
+{/snippet}
 
-  <div class="mt-3 flex items-center justify-between gap-3">
-    <p class="min-w-0 text-[11px] text-white/40">
-      把分享来的 .zip 配置包导进来，或导出自己的去分享
-    </p>
-    <button
-      class="shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:bg-white/20 active:scale-95 disabled:opacity-50"
-      disabled={importingPackage}
-      onclick={() => void onImportPackage()}
-    >
-      {importingPackage ? "导入中…" : "导入配置包"}
-    </button>
-  </div>
+{#snippet slider(label: string, key: "preOpenDelayMs" | "prePasteDelayMs" | "preSendDelayMs")}
+  {#if draft}
+    <label class="block">
+      <div class="flex items-center justify-between text-xs">
+        <span class="text-foreground/85">{label}</span>
+        <span class="text-muted-foreground tabular-nums">{draft[key]} ms</span>
+      </div>
+      <input type="range" min="0" max="300" step="10" bind:value={draft[key]} class="mt-1.5 w-full accent-primary" />
+    </label>
+  {/if}
+{/snippet}
 
-  <div class="mt-3 flex flex-col gap-3">
-    {#each profiles as p}
+<SettingsPage title="游戏适配" description="每个游戏一套打法：聊天键、词表、节奏，以及琴音能不能替你在这个游戏里按键。">
+  {#snippet actions()}
+    <Button variant="outline" size="sm" disabled={importingPackage} onclick={() => void onImportPackage()}>
+      <Upload class="size-3.5" />{importingPackage ? "导入中…" : "导入配置包"}
+    </Button>
+  {/snippet}
+
+  <SettingsSection title="游戏配置" description="把分享来的 .zip 配置包导进来，或导出自己的去分享。" flush>
+    {#each profiles as p (p.id)}
       {@const active = $settingsStore?.activeProfileId === p.id}
       {@const editing = editingId === p.id && draft !== null}
-      <div
-        use:spotlight
-        class="kotone-card kotone-spotlight p-4 {active ? 'border-kotone-cyan/50 shadow-glow-cyan' : ''}"
-      >
-        <div class="flex items-center gap-3">
-          <!-- 游戏图标：有 icon 用 profile 图标（IPC 加载 blob URL），否则用占位 -->
-          <span
-            class="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl
-              {active ? 'bg-kotone-cyan/15' : 'bg-white/8'}"
-          >
+      <div class="px-4 py-3.5" data-testid={`game-profile-${p.id}`}>
+        <div class="flex flex-wrap items-center gap-3">
+          <!-- 游戏图标：有 icon 用 profile 图标（IPC 加载 data URL），否则用占位 -->
+          <span class="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-xl {active ? 'bg-primary/12 ring-1 ring-primary/40' : 'bg-muted'}">
             {#if p.icon && iconUrls[p.id]}
               <img src={iconUrls[p.id]} alt={p.displayName} class="h-full w-full object-contain" />
             {:else if p.processNames.length === 0}
-              <!-- lucide: globe -->
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5 text-white/60"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+              <Globe class="size-5 text-muted-foreground" />
             {:else}
-              <!-- lucide: gamepad-2 -->
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5 text-white/60"><line x1="6" x2="10" y1="11" y2="11"/><line x1="8" x2="8" y1="9" y2="13"/><line x1="15" x2="15.01" y1="12" y2="12"/><line x1="18" x2="18.01" y1="10" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/></svg>
+              <Gamepad2 class="size-5 text-muted-foreground" />
             {/if}
           </span>
           <div class="min-w-0 flex-1">
-            <p class="flex items-center gap-2 text-sm font-semibold">
+            <p class="m-0 flex items-center gap-2 text-[13px] font-medium">
               <span class="truncate">{p.displayName}</span>
               {#if active}
-                <span class="shrink-0 rounded bg-kotone-cyan/20 px-1.5 py-0.5 text-[10px] text-kotone-cyan">激活中</span>
+                <span class="shrink-0 rounded-full bg-primary/12 px-2 py-0.5 text-[10px] font-medium text-primary">激活中</span>
               {/if}
             </p>
-            <p class="mt-0.5 truncate text-[11px] text-white/45">
+            <p class="mt-0.5 mb-0 truncate text-xs text-muted-foreground">
               {p.processNames.length > 0 ? `适配 ${p.processNames.length} 个进程` : "适用于所有窗口"}
-              · 热词 {p.hotwords.length} 个
+              · 热词 {p.hotwords.length} 个{p.allowAutomationInput === false ? " · 不允许自动化输入" : ""}
             </p>
           </div>
-          <button
-            class="shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold ring-1 transition active:scale-95 {editing
-              ? 'bg-kotone-cyan/15 text-kotone-cyan ring-kotone-cyan/40'
-              : 'bg-white/10 text-white/80 ring-white/10 hover:bg-white/20'}"
-            onclick={() => (editing ? closeEditor() : openEditor(p))}
-          >
-            {editing ? "收起" : "编辑"}
-          </button>
-          <button
-            class="shrink-0 rounded-lg bg-white/8 px-2.5 py-1.5 text-[11px] text-white/55 ring-1 ring-white/12 transition hover:bg-white/15 hover:text-white/85 active:scale-95"
-            title="导出 .zip 配置包（可编辑成别的游戏后重新导入）"
-            onclick={() => void onExportPackage(p)}
-          >
-            导出
-          </button>
-          {#if !active}
-            <button
-              class="shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:bg-white/20 active:scale-95"
-              onclick={() => void onActivate(p.id)}
-            >
-              激活
-            </button>
-          {/if}
-          <button
-            class="shrink-0 rounded-lg px-2.5 py-1.5 text-[11px] ring-1 transition active:scale-95 {deletingId ===
-            p.id
-              ? 'bg-kotone-pink/20 text-kotone-pink ring-kotone-pink/50'
-              : 'bg-white/8 text-white/55 ring-white/12 hover:bg-white/15 hover:text-white/85'}"
-            title={isBuiltin(p) ? "恢复默认配置（还原内置热词与图标）" : "删除该配置"}
-            onclick={() => void onDeleteProfile(p)}
-          >
-            {deletingId === p.id
-              ? isBuiltin(p)
-                ? "再点确认重置"
-                : "再点确认删除"
-              : isBuiltin(p)
-                ? "重置"
-                : "删除"}
-          </button>
+          <div class="flex shrink-0 flex-wrap items-center gap-1.5">
+            <Button size="sm" variant={editing ? "secondary" : "outline"} onclick={() => (editing ? closeEditor() : openEditor(p))}>
+              {editing ? "收起" : "编辑"}
+            </Button>
+            <Button size="sm" variant="ghost" title="导出 .zip 配置包（可编辑成别的游戏后重新导入）" onclick={() => void onExportPackage(p)}>
+              导出
+            </Button>
+            {#if !active}
+              <Button size="sm" variant="outline" onclick={() => void onActivate(p.id)}>激活</Button>
+            {/if}
+            <Button size="sm" variant={deletingId === p.id ? "destructive" : "ghost"}
+              class={deletingId === p.id ? "" : "text-muted-foreground"}
+              title={isBuiltin(p) ? "恢复默认配置（还原内置热词与图标）" : "删除该配置"}
+              onclick={() => void onDeleteProfile(p)}>
+              {deletingId === p.id
+                ? isBuiltin(p)
+                  ? "再点确认重置"
+                  : "再点确认删除"
+                : isBuiltin(p)
+                  ? "重置"
+                  : "删除"}
+            </Button>
+          </div>
         </div>
 
         {#if p.channels && p.channels.length > 1}
           <!-- 多频道声明（ADR-008）：写清当前适配支持哪些频道、按什么键切换 -->
-          <div class="mt-3 flex flex-wrap items-center gap-1.5 border-t border-white/8 pt-3">
-            <span class="text-[10px] text-white/40">聊天频道</span>
+          <div class="mt-3 flex flex-wrap items-center gap-1.5 pl-13">
+            <span class="text-[11px] text-muted-foreground">聊天频道</span>
             {#each p.channels as ch}
               <span
-                class="rounded px-1.5 py-0.5 text-[10px] {ch.default
-                  ? 'bg-kotone-cyan/15 text-kotone-cyan'
-                  : 'bg-white/8 text-white/60'}"
+                class="rounded-full px-2 py-0.5 text-[11px] {ch.default ? 'bg-primary/12 text-primary' : 'bg-muted text-foreground/75'}"
                 title={ch.textPrefix
                   ? `发送前缀 ${ch.textPrefix}`
                   : ch.openChatKey
@@ -510,7 +496,7 @@
                 {ch.displayName}{ch.default ? "（默认）" : ""}
               </span>
             {/each}
-            <span class="text-[10px] text-white/35">
+            <span class="text-[11px] text-muted-foreground">
               · 按 {$settingsStore?.channelCycleHotkey ?? "Shift+CapsLock"} 循环切换（「高级」页可改）
             </span>
           </div>
@@ -518,27 +504,13 @@
 
         {#if editing && draft}
           <!-- 普通用户只编辑热词；聊天键和注入策略收进高级输入设置。 -->
-          <div class="mt-4 border-t border-white/8 pt-4">
+          <div class="mt-4 space-y-5 rounded-xl border border-hairline bg-muted/30 p-4" data-testid="game-profile-editor">
             <div>
               <div class="flex items-center justify-between gap-2">
-                <p class="text-[10px] font-semibold tracking-wide text-white/40">
-                  自定义词汇（{hotwordCount} 个，下次识别生效）
-                </p>
+                {@render field(`自定义词汇（${hotwordCount} 个，下次识别生效）`)}
                 <div class="flex shrink-0 gap-1.5">
-                  <button
-                    class="rounded-lg bg-white/8 px-2.5 py-1 text-[11px] text-white/55 ring-1 ring-white/12 transition hover:bg-white/15 hover:text-white/85 active:scale-95 disabled:opacity-50"
-                    disabled={importing}
-                    onclick={() => void onExport(p)}
-                  >
-                    导出
-                  </button>
-                  <button
-                    class="rounded-lg bg-white/8 px-2.5 py-1 text-[11px] text-white/55 ring-1 ring-white/12 transition hover:bg-white/15 hover:text-white/85 active:scale-95 disabled:opacity-50"
-                    disabled={importing}
-                    onclick={() => void onImport(p)}
-                  >
-                    {importing ? "导入中…" : "导入"}
-                  </button>
+                  <Button size="xs" variant="outline" disabled={importing} onclick={() => void onExport(p)}><Download class="size-3" />导出</Button>
+                  <Button size="xs" variant="outline" disabled={importing} onclick={() => void onImport(p)}><Upload class="size-3" />{importing ? "导入中…" : "导入"}</Button>
                 </div>
               </div>
               <!-- 批量文本编辑：每行一个词条，与导入/导出 txt 格式同构（几百上千条可用） -->
@@ -547,155 +519,102 @@
                 rows={10}
                 placeholder={"每行一个词条，保存时自动去重\n例：\n打野\n中路MISS\n纳什男爵"}
                 spellcheck="false"
-                class="kotone-scroll mt-2 w-full resize-y rounded-lg bg-white/8 px-2.5 py-2 font-mono text-xs leading-relaxed ring-1 ring-white/15 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/60"
+                class="mt-2 w-full resize-y rounded-lg border border-input bg-background/60 px-3 py-2 font-mono text-xs leading-relaxed text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40"
               ></textarea>
-              <p class="mt-1.5 text-[10px] text-white/35">
+              <p class="mt-1.5 mb-0 text-[11px] text-muted-foreground">
                 每行一个词条，保存时自动去重；导入为合并模式（UTF-8 文本同格式，跳过空行与重复，导入立即保存）。
               </p>
             </div>
 
-            <div class="mt-4">
-              <p class="text-[10px] font-semibold tracking-wide text-white/40">陪玩说明（可选）</p>
+            <div>
+              {@render field("陪玩说明（可选）")}
               <textarea
                 bind:value={draft.companionNotes}
                 rows={3}
                 maxlength={500}
                 data-testid="profile-companion-notes"
                 placeholder="写给琴音的这个游戏的说明，例如：聊天在左下角，[队伍] 前缀是队友，[全部] 是所有人"
-                class="kotone-scroll mt-2 w-full resize-y rounded-lg bg-white/8 px-2.5 py-2 text-xs leading-relaxed ring-1 ring-white/15 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/60"
+                class="mt-2 w-full resize-y rounded-lg border border-input bg-background/60 px-3 py-2 text-xs leading-relaxed text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40"
               ></textarea>
-              <p class="mt-1.5 text-[10px] text-white/35">
+              <p class="mt-1.5 mb-0 text-[11px] text-muted-foreground">
                 陪玩时会把这段说明连同聊天截图的文字一起交给 AI；游戏适配写在这里，不需要为每个游戏写规则。{draft.chatRegion ? "已记住聊天框位置，可在「陪玩设置」里改回整窗识别。" : ""}
               </p>
             </div>
 
-            <button
-              class="mt-4 text-[11px] text-white/45 underline-offset-2 transition hover:text-white/75 hover:underline"
-              onclick={() => (showTechnical = !showTechnical)}
-            >
-              {showTechnical ? "收起高级输入设置" : "高级输入设置"}
-            </button>
-            {#if showTechnical}
-              <div class="mt-3 rounded-lg bg-white/4 p-3 ring-1 ring-white/8">
-                <p class="text-[10px] font-semibold tracking-wide text-white/40">聊天键</p>
-                <div class="mt-2 grid grid-cols-2 gap-2">
-                  <div class="block">
-                    <span class="text-[11px] text-white/55">打开聊天框</span>
-                    <div class="mt-1 flex gap-1.5">
-                      <button
-                        class="min-w-0 flex-1 truncate rounded-lg bg-white/8 px-2.5 py-1.5 text-left text-xs ring-1 ring-white/15 transition hover:bg-white/12 focus:ring-kotone-cyan/60 disabled:opacity-50"
-                        disabled={capturingKey !== null}
-                        onclick={() => void captureProfileKey("openChatKey")}
-                      >
-                        {capturingKey === "openChatKey" ? "请按下按键…" : draft.openChatKey || "不打开聊天框"}
-                      </button>
-                      <button
-                        class="rounded-lg bg-white/8 px-2 py-1.5 text-[11px] text-white/55 ring-1 ring-white/12 transition hover:bg-white/15 hover:text-white/85 disabled:opacity-40"
-                        disabled={capturingKey !== null || !draft.openChatKey}
-                        title="清空：发送时不按打开聊天框键"
-                        onclick={() => clearProfileKey("openChatKey")}
-                      >清空</button>
+            <!-- 琴音与自动化（游戏配置的新字段；保存时整份 profile 原样带回） -->
+            <div class="space-y-4 rounded-lg border border-hairline bg-background/40 p-3.5" data-testid="game-profile-agent">
+              <ToggleField
+                checked={draft.allowAutomationInput ?? true}
+                label="允许自动化输入"
+                desc="关掉后，自动化程序不会对这个游戏按键、点鼠标。"
+                testid="profile-allow-automation-input"
+                onchange={(v) => (draft!.allowAutomationInput = v)}
+              />
+              <div>
+                <label for="profile-launch-path" class="block text-xs font-medium text-foreground">启动路径</label>
+                <p class="mt-0.5 mb-0 text-[11px] leading-relaxed text-muted-foreground">程序、快捷方式或 steam:// 之类的链接；填了琴音才能替你打开这个游戏。</p>
+                <Input id="profile-launch-path" data-testid="profile-launch-path" class="mt-2 font-mono text-xs"
+                  placeholder="例如：C:\Games\Game.exe 或 steam://rungameid/570"
+                  value={draft.launchPath ?? ""}
+                  oninput={(e) => (draft!.launchPath = (e.currentTarget as HTMLInputElement).value)} />
+              </div>
+            </div>
+
+            <div>
+              <button
+                class="text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+                onclick={() => (showTechnical = !showTechnical)}
+              >
+                {showTechnical ? "收起高级输入设置" : "高级输入设置"}
+              </button>
+              {#if showTechnical}
+                <div class="mt-3 space-y-4 rounded-lg border border-hairline bg-background/40 p-3.5">
+                  <div>
+                    {@render field("聊天键", "点击按键名称后直接录入键盘组合或鼠标侧键；清空表示跳过该阶段。")}
+                    <div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {#each [{ key: "openChatKey", label: "打开聊天框", empty: "不打开聊天框", clear: "清空：发送时不按打开聊天框键" }, { key: "sendKey", label: "发送消息", empty: "不发送消息", clear: "清空：发送时不按发送键" }] as const as item}
+                        <div>
+                          <span class="text-[11px] text-muted-foreground">{item.label}</span>
+                          <div class="mt-1 flex gap-1.5">
+                            <button
+                              class="h-8 min-w-0 flex-1 truncate rounded-lg border border-input bg-background/60 px-2.5 text-left text-xs text-foreground transition-colors hover:bg-muted focus-visible:border-ring focus-visible:outline-none disabled:opacity-50"
+                              disabled={capturingKey !== null}
+                              onclick={() => void captureProfileKey(item.key)}
+                            >
+                              {capturingKey === item.key ? "请按下按键…" : draft[item.key] || item.empty}
+                            </button>
+                            <Button size="sm" variant="ghost" disabled={capturingKey !== null || !draft[item.key]} title={item.clear}
+                              onclick={() => clearProfileKey(item.key)}>清空</Button>
+                          </div>
+                        </div>
+                      {/each}
                     </div>
                   </div>
-                  <div class="block">
-                    <span class="text-[11px] text-white/55">发送消息</span>
-                    <div class="mt-1 flex gap-1.5">
-                      <button
-                        class="min-w-0 flex-1 truncate rounded-lg bg-white/8 px-2.5 py-1.5 text-left text-xs ring-1 ring-white/15 transition hover:bg-white/12 focus:ring-kotone-cyan/60 disabled:opacity-50"
-                        disabled={capturingKey !== null}
-                        onclick={() => void captureProfileKey("sendKey")}
-                      >
-                        {capturingKey === "sendKey" ? "请按下按键…" : draft.sendKey || "不发送消息"}
-                      </button>
-                      <button
-                        class="rounded-lg bg-white/8 px-2 py-1.5 text-[11px] text-white/55 ring-1 ring-white/12 transition hover:bg-white/15 hover:text-white/85 disabled:opacity-40"
-                        disabled={capturingKey !== null || !draft.sendKey}
-                        title="清空：发送时不按发送键"
-                        onclick={() => clearProfileKey("sendKey")}
-                      >清空</button>
-                    </div>
-                  </div>
-                </div>
-                <p class="mt-2 text-[10px] leading-relaxed text-white/35">
-                  点击按键名称后直接录入键盘组合或鼠标侧键；清空表示跳过该阶段。
-                </p>
-                <div class="mt-4">
-                  <Toggle
+                  <ToggleField
                     checked={draft.preferClipboardPaste}
                     label="使用剪贴板粘贴"
                     desc="仅在目标游戏无法正常接收逐字输入时开启"
                     onchange={(v) => (draft!.preferClipboardPaste = v)}
                   />
+                  <div class="space-y-3">
+                    {@render field("发送时序", "聊天框还没打开就开始打字时，把「打开聊天后等待」调到 50–100ms。")}
+                    {@render slider("打开聊天后等待", "preOpenDelayMs")}
+                    {@render slider("粘贴前等待", "prePasteDelayMs")}
+                    {@render slider("发送前等待", "preSendDelayMs")}
+                  </div>
                 </div>
-                <p class="mt-4 text-[10px] font-semibold tracking-wide text-white/40">发送时序</p>
-                <p class="mt-1 text-[10px] leading-relaxed text-white/35">
-                  聊天框还没打开就开始打字时，把「打开聊天后等待」调到 50–100ms。
-                </p>
-                <label class="mt-3 block">
-                  <div class="flex items-center justify-between">
-                    <span class="text-[11px] text-white/55">打开聊天后等待</span>
-                    <span class="text-[11px] text-white/45">{draft.preOpenDelayMs} ms</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="300"
-                    step="10"
-                    bind:value={draft.preOpenDelayMs}
-                    class="mt-1.5 w-full accent-kotone-cyan"
-                  />
-                </label>
-                <label class="mt-3 block">
-                  <div class="flex items-center justify-between">
-                    <span class="text-[11px] text-white/55">粘贴前等待</span>
-                    <span class="text-[11px] text-white/45">{draft.prePasteDelayMs} ms</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="300"
-                    step="10"
-                    bind:value={draft.prePasteDelayMs}
-                    class="mt-1.5 w-full accent-kotone-cyan"
-                  />
-                </label>
-                <label class="mt-3 block">
-                  <div class="flex items-center justify-between">
-                    <span class="text-[11px] text-white/55">发送前等待</span>
-                    <span class="text-[11px] text-white/45">{draft.preSendDelayMs} ms</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="300"
-                    step="10"
-                    bind:value={draft.preSendDelayMs}
-                    class="mt-1.5 w-full accent-kotone-cyan"
-                  />
-                </label>
-              </div>
-            {/if}
+              {/if}
+            </div>
 
-            <div class="mt-4 flex items-center justify-end gap-2">
-              <button
-                class="rounded-lg bg-white/10 px-3 py-1.5 text-xs text-white/70 transition hover:bg-white/20 active:scale-95"
-                onclick={closeEditor}
-              >
-                取消
-              </button>
-              <button
-                class="rounded-lg bg-kotone-cyan px-3 py-1.5 text-xs font-semibold text-kotone-deep transition hover:brightness-110 active:scale-95 disabled:opacity-50"
-                disabled={saving}
-                onclick={() => void onSave()}
-              >
-                {saving ? "保存中…" : "保存"}
-              </button>
+            <div class="flex items-center justify-end gap-2">
+              <Button size="sm" variant="outline" onclick={closeEditor}>取消</Button>
+              <Button size="sm" disabled={saving} onclick={() => void onSave()}>{saving ? "保存中…" : "保存"}</Button>
             </div>
           </div>
         {/if}
       </div>
     {/each}
-  </div>
+  </SettingsSection>
 
   <!-- dev:web 导入热词用隐藏文件选择器 -->
   <input
@@ -713,4 +632,4 @@
     class="hidden"
     onchange={(e) => void onImportPkgFile(e)}
   />
-</div>
+</SettingsPage>

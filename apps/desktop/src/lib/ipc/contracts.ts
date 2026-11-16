@@ -497,6 +497,10 @@ export interface GameProfile {
   companionNotes?: string;
   /** 陪玩记录的聊天框位置（窗口客户区比例）；缺省 = 整窗识别 */
   chatRegion?: ChatRegion | null;
+  /** 允许自动化程序对这个游戏按键、点鼠标（缺省 true；新字段，旧版本忽略） */
+  allowAutomationInput?: boolean;
+  /** 打开这个游戏用的程序、快捷方式或 steam:// 之类的链接（空 = 琴音不能打开它） */
+  launchPath?: string;
 }
 
 // ---------- 模型 ----------

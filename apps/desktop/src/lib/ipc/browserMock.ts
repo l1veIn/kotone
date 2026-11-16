@@ -169,6 +169,8 @@ const mock: MockStore = {
       preferClipboardPaste: false,
       icon: "lol-kotone.webp",
       hotwords: ["闪现", "大龙", "gank", "打野", "推塔", "回城"],
+      allowAutomationInput: true,
+      launchPath: "C:\\Riot Games\\Riot Client\\RiotClientServices.exe",
       channels: [
         { id: "team", displayName: "队伍", default: true },
         { id: "all", displayName: "所有人", openChatKey: "Shift+Enter" },

@@ -1,0 +1,50 @@
+import { expect, test } from "@playwright/test";
+
+// 「游戏适配」：允许自动化输入（allowAutomationInput，缺省开）与启动路径（launchPath）。
+// 保存时整份 profile 原样带回：新字段和原有字段都不能丢。
+
+test("game profile saves the automation-input switch and launch path without dropping other fields", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.goto("/#/settings?onboarding=never");
+  await page.getByTestId("settings-nav-game").click();
+  await expect(page.getByRole("heading", { name: "游戏适配" })).toBeVisible();
+
+  // 没写过这个字段的配置按“允许”显示
+  const generic = page.getByTestId("game-profile-generic");
+  await generic.getByRole("button", { name: "编辑", exact: true }).click();
+  await expect(generic.getByTestId("profile-allow-automation-input")).toHaveAttribute("aria-checked", "true");
+  await expect(generic.getByTestId("profile-launch-path")).toHaveValue("");
+  await generic.getByRole("button", { name: "收起", exact: true }).click();
+
+  const lol = page.getByTestId("game-profile-lol");
+  await lol.getByRole("button", { name: "编辑", exact: true }).click();
+  const editor = lol.getByTestId("game-profile-editor");
+  await expect(editor.getByTestId("profile-launch-path")).toHaveValue("C:\\Riot Games\\Riot Client\\RiotClientServices.exe");
+  await editor.getByTestId("profile-allow-automation-input").click();
+  await expect(editor.getByTestId("profile-allow-automation-input")).toHaveAttribute("aria-checked", "false");
+  await editor.getByTestId("profile-launch-path").fill("steam://rungameid/570");
+  await editor.getByTestId("profile-companion-notes").fill("聊天在左下角");
+  await editor.screenshot({ path: testInfo.outputPath("game-profile-editor.png") });
+  await editor.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByTestId("game-profile-editor")).toHaveCount(0);
+  await expect(lol).toContainText("不允许自动化输入");
+
+  const saved = await page.evaluate(async () =>
+    (await import("/src/lib/ipc.ts")).listProfiles().then((list) => list.find((p) => p.id === "lol")));
+  expect(saved).toMatchObject({
+    allowAutomationInput: false,
+    launchPath: "steam://rungameid/570",
+    companionNotes: "聊天在左下角",
+    openChatKey: "Enter",
+    sendKey: "Enter",
+    preSendDelayMs: 100,
+    icon: "lol-kotone.webp",
+    hotwords: ["闪现", "大龙", "gank", "打野", "推塔", "回城"],
+  });
+  expect(saved?.channels).toHaveLength(2);
+
+  // 再打开编辑器：读回的是刚保存的值
+  await lol.getByRole("button", { name: "编辑", exact: true }).click();
+  await expect(lol.getByTestId("profile-allow-automation-input")).toHaveAttribute("aria-checked", "false");
+  await expect(lol.getByTestId("profile-launch-path")).toHaveValue("steam://rungameid/570");
+});

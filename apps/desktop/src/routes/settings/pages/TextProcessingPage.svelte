@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { modalFocus } from "../../../lib/actions/modalFocus";
   /*
    * 文字处理设置页：后端注册表负责模块发现，前端只编辑线性 pipeline 配置。
    * 所有变更仍走 updateSettings 的事务入口，并以返回的完整 Settings 更新共享 store。
+   * 版式：SettingsPage / SettingsSection（参照 DeepSeek Harness 设置页），对话框用 shadcn Dialog。
   */
   import { onMount } from "svelte";
   import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -22,8 +22,14 @@
     type PostProcessingTestResult,
     type PostProcessStepConfig,
   } from "../../../lib/ipc";
-  import Toggle from "../../../lib/components/Toggle.svelte";
-  import Select from "../../../lib/components/Select.svelte";
+  import { ArrowDown, ArrowUp, FlaskConical, Plus, Settings2 } from "@lucide/svelte";
+  import { Button } from "$lib/components/ui/button";
+  import * as Dialog from "$lib/components/ui/dialog";
+  import { Switch } from "$lib/components/ui/switch";
+  import SettingsPage from "$lib/components/settings/SettingsPage.svelte";
+  import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
+  import SelectField from "$lib/components/settings/SelectField.svelte";
+  import ToggleField from "$lib/components/settings/ToggleField.svelte";
   import { errText, patchSettings, settingsStore, toast } from "../../../lib/stores/ui";
 
   let { onOpenConnections }: { onOpenConnections?: () => void } = $props();
@@ -49,6 +55,9 @@
   let renameDraft = $state("");
   let managing = $state(false);
   let tryingOut = $state(false);
+  /** 输入框统一样式（主题变量，浅色下也清楚）。 */
+  const fieldClass =
+    "min-w-0 flex-1 rounded-lg border border-input bg-background/60 px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40 disabled:opacity-50";
   const visibleProcessors = $derived(
     processors.filter((processor) => !processor.developerOnly),
   );
@@ -378,421 +387,304 @@
   }
 </script>
 
-<div class="px-6 py-5">
-  <h1 class="text-lg font-bold">文字处理</h1>
-  <p class="mt-1 text-[11px] text-white/45">识别完先处理，再发到游戏</p>
-
+<SettingsPage title="文字处理" description="识别完先处理，再发到游戏：屏蔽词、AI 润色、翻译……按流程从上到下依次处理。">
   {#if $settingsStore}
-    <section class="kotone-panel mt-6 p-5">
-      <Toggle
-        checked={enabled}
-        label="启用文字处理"
-        desc={enabled ? "下一条语音开始生效" : "关掉后原文直发"}
-        onchange={(value) => void setEnabled(value)}
-      />
-    </section>
+    <SettingsSection>
+      <div class="py-3.5">
+        <ToggleField
+          checked={enabled}
+          label="启用文字处理"
+          desc={enabled ? "下一条语音开始生效" : "关掉后原文直发"}
+          onchange={(value) => void setEnabled(value)}
+        />
+      </div>
+    </SettingsSection>
 
     {#if enabled}
-    <section class="mt-6">
-      <h2 class="text-sm font-semibold text-kotone-cyan/90">当前流程</h2>
-      <p class="mt-1 text-[11px] text-white/45">说话时只用这一套。默认的屏蔽词开箱即用。</p>
-      <div class="mt-3 flex items-center gap-2">
-        <div class="min-w-0 flex-1">
-          <Select
-            testid="postprocess-pipeline-select"
-            size="md"
-            ariaLabel="当前流程"
-            value={activePipeline?.id ?? ""}
-            disabled={saving}
-            options={pipelines.map((item) => ({
-              value: item.id,
-              label: pipelineLabel(item),
-            }))}
-            onchange={(id) => void switchPipeline(id)}
-          />
+      <SettingsSection title="当前流程" description="说话时只用这一套。默认的屏蔽词开箱即用。">
+        <div class="flex flex-wrap items-center gap-2 py-3.5">
+          <div class="min-w-48 flex-1">
+            <SelectField
+              testid="postprocess-pipeline-select"
+              size="md"
+              ariaLabel="当前流程"
+              value={activePipeline?.id ?? ""}
+              disabled={saving}
+              options={pipelines.map((item) => ({
+                value: item.id,
+                label: pipelineLabel(item),
+              }))}
+              onchange={(id) => void switchPipeline(id)}
+            />
+          </div>
+          <Button variant="outline" data-testid="open-postprocess-tryout" onclick={() => (tryingOut = true)}>
+            <FlaskConical class="size-3.5 text-primary" />试跑流程
+          </Button>
+          <Button variant="ghost" data-testid="manage-postprocess-pipelines" onclick={() => (managing = true)}>
+            <Settings2 class="size-3.5" />管理流程
+          </Button>
         </div>
-        <button
-          type="button"
-          data-testid="open-postprocess-tryout"
-          class="shrink-0 rounded-lg bg-kotone-cyan/12 px-3 py-2 text-[11px] font-semibold text-kotone-cyan ring-1 ring-kotone-cyan/30 transition hover:bg-kotone-cyan/20"
-          onclick={() => (tryingOut = true)}
-        >
-          试跑流程
-        </button>
-        <button
-          type="button"
-          data-testid="manage-postprocess-pipelines"
-          class="shrink-0 rounded-lg bg-white/6 px-3 py-2 text-[11px] text-white/65 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white"
-          onclick={() => (managing = true)}
-        >
-          管理流程
-        </button>
-      </div>
-    </section>
+      </SettingsSection>
 
-    <section class="mt-6">
-      <h2 class="text-sm font-semibold text-kotone-cyan/90">这套流程会做什么</h2>
-      <p class="mt-1 text-[11px] text-white/45">从上到下依次处理。</p>
-
-      {#if pipeline.length === 0}
-        <div class="mt-3 rounded-xl border border-dashed border-white/15 px-4 py-8 text-center">
-          <p class="text-sm text-white/65">还没有处理步骤</p>
-          <p class="mt-1 text-[11px] text-white/35">加一步之后，识别结果会先过这一套再发送。</p>
+      <section class="min-w-0" aria-labelledby="pipeline-steps-title">
+        <div class="mb-2.5 px-1">
+          <h2 id="pipeline-steps-title" class="m-0 text-sm font-semibold text-foreground">这套流程会做什么</h2>
+          <p class="mt-1 mb-0 text-xs text-muted-foreground">从上到下依次处理。</p>
         </div>
-      {:else}
-        <div class="mt-3 flex flex-col gap-2">
-          {#each pipeline as step, index (step.id)}
-            {@const processor = descriptor(step.processorId)}
-            <article
-              data-testid={`postprocess-step-${step.processorId}`}
-              class="kotone-panel p-4 transition {step.enabled ? '' : 'opacity-75'}"
-            >
-              <div class="flex items-start gap-3">
-                <div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-kotone-cyan/12 text-xs font-bold text-kotone-cyan ring-1 ring-kotone-cyan/25">
-                  {index + 1}
-                </div>
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-center gap-2">
-                    <h3 class="truncate text-sm font-semibold text-white/90">
-                      {processor?.displayName ?? step.processorId}
-                    </h3>
-                    {#if !processor}
-                      <span class="rounded bg-kotone-pink/12 px-1.5 py-0.5 text-[9px] text-kotone-pink ring-1 ring-kotone-pink/25">模块不可用</span>
-                    {/if}
+
+        {#if pipeline.length === 0}
+          <div class="rounded-2xl border border-dashed border-hairline px-4 py-8 text-center">
+            <p class="m-0 text-sm text-foreground/80">还没有处理步骤</p>
+            <p class="mt-1 mb-0 text-xs text-muted-foreground">加一步之后，识别结果会先过这一套再发送。</p>
+          </div>
+        {:else}
+          <div class="flex flex-col">
+            {#each pipeline as step, index (step.id)}
+              {@const processor = descriptor(step.processorId)}
+              <article
+                data-testid={`postprocess-step-${step.processorId}`}
+                class="rounded-2xl border border-hairline bg-card/70 p-4 transition-opacity {step.enabled ? '' : 'opacity-75'}"
+              >
+                <div class="flex items-start gap-3">
+                  <div class="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/12 text-xs font-semibold text-primary ring-1 ring-primary/25">
+                    {index + 1}
                   </div>
-                  <p class="mt-0.5 text-[11px] leading-relaxed text-white/45">
-                    {processor?.description ?? "此步骤对应的模块尚未注册；运行时会给出明确提示。"}
-                  </p>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-2">
+                      <h3 class="m-0 truncate text-[13px] font-semibold text-foreground">
+                        {processor?.displayName ?? step.processorId}
+                      </h3>
+                      {#if !processor}
+                        <span class="rounded-full bg-destructive/12 px-2 py-0.5 text-[10px] text-destructive">模块不可用</span>
+                      {/if}
+                    </div>
+                    <p class="mt-0.5 mb-0 text-xs leading-relaxed text-muted-foreground">
+                      {processor?.description ?? "此步骤对应的模块尚未注册；运行时会给出明确提示。"}
+                    </p>
+                  </div>
+                  <Switch
+                    bind:checked={() => step.enabled, (value) => void setStepEnabled(index, value)}
+                    aria-label={`启用${processor?.displayName ?? step.processorId}`}
+                  />
                 </div>
-                <Toggle
-                  checked={step.enabled}
-                  label=""
-                  ariaLabel={`启用${processor?.displayName ?? step.processorId}`}
-                  onchange={(value) => void setStepEnabled(index, value)}
-                />
-              </div>
 
-              {#if processor && processor.configFields.length > 0}
-                <div class="mt-3 rounded-lg bg-white/4 p-3 ring-1 ring-white/10">
-                  {#each processor.configFields as field (field.key)}
-                    {@const currentValue = configValue(step.config, field.key)}
-                    {@const fieldPlaceholder =
-                      field.placeholder ||
-                      (field.kind === "file" ? `选择或输入${field.displayName}路径` : `输入${field.displayName}`)}
-                    {@const multiline =
-                      field.placeholder?.includes("\n") || (field.placeholder?.length ?? 0) > 48}
-                    <div class="mt-3 first:mt-0">
-                      <div class="flex items-center gap-1.5 text-[11px] font-medium text-white/65">
-                        <span>{field.displayName}</span>
-                        {#if field.required}
-                          <span class="text-kotone-pink/80">必填</span>
-                        {/if}
-                      </div>
-                      <div class="mt-1.5 flex gap-2">
-                        {#if field.kind === "connection"}
-                          <div class="min-w-0 flex-1">
-                            <Select
-                              testid={`postprocess-config-${step.id}-${field.key}`}
-                              ariaLabel={field.displayName}
-                              placeholder="选择连接"
+                {#if processor && processor.configFields.length > 0}
+                  <div class="mt-3 space-y-3 rounded-xl border border-hairline bg-muted/30 p-3">
+                    {#each processor.configFields as field (field.key)}
+                      {@const currentValue = configValue(step.config, field.key)}
+                      {@const fieldPlaceholder =
+                        field.placeholder ||
+                        (field.kind === "file" ? `选择或输入${field.displayName}路径` : `输入${field.displayName}`)}
+                      {@const multiline =
+                        field.placeholder?.includes("\n") || (field.placeholder?.length ?? 0) > 48}
+                      <div>
+                        <div class="flex items-center gap-1.5 text-xs font-medium text-foreground/85">
+                          <span>{field.displayName}</span>
+                          {#if field.required}
+                            <span class="text-[10px] text-brand-pink">必填</span>
+                          {/if}
+                        </div>
+                        <div class="mt-1.5 flex gap-2">
+                          {#if field.kind === "connection"}
+                            <div class="min-w-0 flex-1">
+                              <SelectField
+                                testid={`postprocess-config-${step.id}-${field.key}`}
+                                ariaLabel={field.displayName}
+                                placeholder="选择连接"
+                                value={currentValue}
+                                disabled={saving}
+                                options={[
+                                  { value: "", label: "选择连接" },
+                                  ...connectionsForField(field).map((connection) => ({
+                                    value: connection.id,
+                                    label: `${connection.displayName}${connection.hasApiKey ? "" : "（缺密钥）"}`,
+                                  })),
+                                ]}
+                                onchange={(next) => void updateConfigField(index, field, next.trim())}
+                              />
+                            </div>
+                            {#if onOpenConnections}
+                              <Button size="sm" variant="outline" data-testid="open-advanced-connections" onclick={onOpenConnections}>
+                                {connectionsForField(field).length === 0 ? "去添加 API 连接" : "管理连接"}
+                              </Button>
+                            {/if}
+                          {:else if multiline}
+                            <textarea
+                              data-testid={`postprocess-config-${step.id}-${field.key}`}
+                              aria-label={field.displayName}
+                              rows="4"
+                              class="{fieldClass} min-h-[5.5rem] resize-y leading-relaxed"
+                              placeholder={fieldPlaceholder}
                               value={currentValue}
                               disabled={saving}
-                              options={[
-                                { value: "", label: "选择连接" },
-                                ...connectionsForField(field).map((connection) => ({
-                                  value: connection.id,
-                                  label: `${connection.displayName}${connection.hasApiKey ? "" : "（缺密钥）"}`,
-                                })),
-                              ]}
-                              onchange={(next) => void updateConfigField(index, field, next.trim())}
-                            />
-                          </div>
-                          {#if onOpenConnections}
-                            <button
-                              type="button"
-                              data-testid="open-advanced-connections"
-                              class="shrink-0 rounded-md bg-kotone-cyan/15 px-2.5 py-1.5 text-[11px] font-semibold text-kotone-cyan ring-1 ring-kotone-cyan/30 transition hover:bg-kotone-cyan/25"
-                              onclick={onOpenConnections}
-                            >
-                              {connectionsForField(field).length === 0 ? "去添加 API 连接" : "管理连接"}
-                            </button>
-                          {/if}
-                        {:else if multiline}
-                          <textarea
-                            data-testid={`postprocess-config-${step.id}-${field.key}`}
-                            aria-label={field.displayName}
-                            rows="4"
-                            class="min-h-[5.5rem] min-w-0 flex-1 resize-y rounded-md bg-white/6 px-2.5 py-1.5 text-[11px] leading-relaxed text-white/80 ring-1 ring-white/12 outline-none transition placeholder:text-white/25 focus:ring-kotone-cyan/45 disabled:opacity-50"
-                            placeholder={fieldPlaceholder}
-                            value={currentValue}
-                            disabled={saving}
-                            onchange={(event) =>
-                              void updateConfigField(
-                                index,
-                                field,
-                                (event.target as HTMLTextAreaElement).value.trim(),
-                              )}
-                          ></textarea>
-                        {:else}
-                          <input
-                            data-testid={`postprocess-config-${step.id}-${field.key}`}
-                            aria-label={field.displayName}
-                            class="min-w-0 flex-1 rounded-md bg-white/6 px-2.5 py-1.5 text-[11px] text-white/80 ring-1 ring-white/12 outline-none transition placeholder:text-white/25 focus:ring-kotone-cyan/45 disabled:opacity-50"
-                            placeholder={fieldPlaceholder}
-                            value={currentValue}
-                            disabled={saving}
-                            onchange={(event) =>
-                              void updateConfigField(
-                                index,
-                                field,
-                                (event.target as HTMLInputElement).value.trim(),
-                              )}
-                          />
-                        {/if}
-                        {#if field.kind === "file" && isTauri}
-                          <button
-                            class="shrink-0 rounded-md bg-white/9 px-2.5 py-1.5 text-[11px] text-white/70 ring-1 ring-white/12 transition hover:bg-white/15 disabled:opacity-50"
-                            disabled={saving}
-                            onclick={() => void chooseConfigFile(index, field)}
-                          >选择文件</button>
-                        {/if}
-                      </div>
-                      {#if field.presets && field.presets.length > 0}
-                        <div class="mt-1.5 flex flex-wrap gap-1">
-                          {#each field.presets as preset}
-                            {@const selected = currentValue === preset.value}
-                            <button
-                              type="button"
-                              class="rounded-full px-2 py-0.5 text-[10px] ring-1 transition {selected
-                                ? 'bg-kotone-cyan/12 text-kotone-cyan ring-kotone-cyan/40'
-                                : 'bg-white/5 text-white/55 ring-white/10 hover:bg-white/10 hover:text-white/80'}"
+                              onchange={(event) =>
+                                void updateConfigField(
+                                  index,
+                                  field,
+                                  (event.target as HTMLTextAreaElement).value.trim(),
+                                )}
+                            ></textarea>
+                          {:else}
+                            <input
+                              data-testid={`postprocess-config-${step.id}-${field.key}`}
+                              aria-label={field.displayName}
+                              class="{fieldClass} h-8"
+                              placeholder={fieldPlaceholder}
+                              value={currentValue}
                               disabled={saving}
-                              onclick={() => void updateConfigField(index, field, preset.value)}
-                            >
-                              {preset.displayName}
-                            </button>
-                          {/each}
+                              onchange={(event) =>
+                                void updateConfigField(
+                                  index,
+                                  field,
+                                  (event.target as HTMLInputElement).value.trim(),
+                                )}
+                            />
+                          {/if}
+                          {#if field.kind === "file" && isTauri}
+                            <Button size="sm" variant="outline" disabled={saving} onclick={() => void chooseConfigFile(index, field)}>选择文件</Button>
+                          {/if}
                         </div>
-                      {/if}
-                      <p class="mt-1.5 text-[10px] leading-relaxed text-white/35">
-                        {field.kind === "connection" && connectionsForField(field).length === 0
-                          ? "还没有可用连接。点右边按钮去添加 API key。"
-                          : field.description}
+                        {#if field.presets && field.presets.length > 0}
+                          <div class="mt-1.5 flex flex-wrap gap-1">
+                            {#each field.presets as preset}
+                              {@const selected = currentValue === preset.value}
+                              <button
+                                type="button"
+                                class="rounded-full px-2.5 py-0.5 text-[11px] ring-1 transition-colors {selected
+                                  ? 'bg-primary/12 text-primary ring-primary/40'
+                                  : 'bg-background/50 text-muted-foreground ring-hairline hover:text-foreground'}"
+                                disabled={saving}
+                                onclick={() => void updateConfigField(index, field, preset.value)}
+                              >
+                                {preset.displayName}
+                              </button>
+                            {/each}
+                          </div>
+                        {/if}
+                        <p class="mt-1.5 mb-0 text-[11px] leading-relaxed text-muted-foreground">
+                          {field.kind === "connection" && connectionsForField(field).length === 0
+                            ? "还没有可用连接。点右边按钮去添加 API key。"
+                            : field.description}
+                        </p>
+                      </div>
+                    {/each}
+                    {#if processor.id === "builtin.blocklist-filter"}
+                      <div class="border-t border-hairline pt-3">
+                        <p class="m-0 text-xs leading-relaxed text-muted-foreground">
+                          想改词？先导出默认这份当模板，改完再选回来。
+                        </p>
+                        <Button size="sm" variant="outline" class="mt-2" data-testid="postprocess-export-blocklist" disabled={saving} onclick={() => void onExportBlocklist()}>
+                          导出默认词库
+                        </Button>
+                      </div>
+                    {/if}
+                    {#if !requiredConfigComplete(processor, step.config)}
+                      <p class="m-0 text-[11px] text-brand-pink">
+                        完成必填配置后，这个步骤会自动启用。
                       </p>
-                    </div>
-                  {/each}
-                  {#if processor.id === "builtin.blocklist-filter"}
-                    <div class="mt-3 border-t border-white/8 pt-3">
-                      <p class="text-[11px] leading-relaxed text-white/45">
-                        想改词？先导出默认这份当模板，改完再选回来。
-                      </p>
-                      <button
-                        data-testid="postprocess-export-blocklist"
-                        class="mt-2 rounded-md bg-white/9 px-2.5 py-1.5 text-[11px] text-white/70 ring-1 ring-white/12 transition hover:bg-white/15 disabled:opacity-50"
-                        disabled={saving}
-                        onclick={() => void onExportBlocklist()}
-                      >
-                        导出默认词库
-                      </button>
-                    </div>
-                  {/if}
-                  {#if !requiredConfigComplete(processor, step.config)}
-                    <p class="mt-2 text-[10px] text-kotone-pink/75">
-                      完成必填配置后，这个步骤会自动启用。
-                    </p>
-                  {/if}
-                </div>
-              {/if}
-
-              <div class="mt-3 flex items-center justify-between gap-3 border-t border-white/8 pt-3">
-                <label class="flex min-w-0 items-center gap-2 text-[11px] text-white/45">
-                  失败时
-                  <div class="w-44">
-                    <Select
-                      testid={`postprocess-on-error-${step.id}`}
-                      ariaLabel="失败时"
-                      value={step.onError}
-                      options={[
-                        { value: "required", label: "停止，不发送" },
-                        { value: "best-effort", label: "继续使用上一步结果" },
-                      ]}
-                      onchange={(next) => {
-                        const onError = next as "required" | "best-effort";
-                        void updateStep(
-                          index,
-                          { onError },
-                          onError === "required" ? "失败时将停止发送" : "失败时将继续使用上一步结果",
-                        );
-                      }}
-                    />
+                    {/if}
                   </div>
-                </label>
-                <div class="flex items-center gap-1">
-                  <button
-                    class="rounded-md bg-white/6 px-2 py-1 text-xs text-white/55 ring-1 ring-white/10 transition hover:bg-white/12 hover:text-white disabled:opacity-25"
-                    aria-label="上移"
-                    title="上移"
-                    disabled={saving || index === 0}
-                    onclick={() => void moveStep(index, -1)}
-                  >↑</button>
-                  <button
-                    class="rounded-md bg-white/6 px-2 py-1 text-xs text-white/55 ring-1 ring-white/10 transition hover:bg-white/12 hover:text-white disabled:opacity-25"
-                    aria-label="下移"
-                    title="下移"
-                    disabled={saving || index === pipeline.length - 1}
-                    onclick={() => void moveStep(index, 1)}
-                  >↓</button>
-                  <button
-                    class="ml-1 rounded-md bg-kotone-pink/8 px-2 py-1 text-[11px] text-kotone-pink/80 ring-1 ring-kotone-pink/15 transition hover:bg-kotone-pink/16 hover:text-kotone-pink disabled:opacity-40"
-                    disabled={saving}
-                    onclick={() => void removeStep(index)}
-                  >移除</button>
-                </div>
-              </div>
-            </article>
-            {#if index < pipeline.length - 1}
-              <div class="-my-1 text-center text-xs text-kotone-cyan/35">↓</div>
-            {/if}
-          {/each}
-        </div>
-      {/if}
+                {/if}
 
-      <div class="mt-3 flex items-center gap-2">
-        <button
-          data-testid="add-postprocess-step"
-          class="rounded-lg bg-kotone-cyan/15 px-3 py-1.5 text-xs font-semibold text-kotone-cyan ring-1 ring-kotone-cyan/35 transition hover:bg-kotone-cyan/25 active:scale-95 disabled:opacity-50"
-          disabled={saving || loadingProcessors}
-          onclick={() => (adding = true)}
-        >
-          + 添加步骤
-        </button>
-        <button
-          type="button"
-          data-testid="open-postprocess-tryout-bottom"
-          class="rounded-lg bg-white/8 px-3 py-1.5 text-xs font-semibold text-white/75 ring-1 ring-white/12 transition hover:bg-white/15 hover:text-white active:scale-95 disabled:opacity-50"
-          disabled={saving || activeStepCount === 0}
-          onclick={() => (tryingOut = true)}
-        >
-          试跑效果
-        </button>
-      </div>
-    </section>
+                <div class="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-hairline pt-3">
+                  <div class="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                    失败时
+                    <div class="w-44">
+                      <SelectField
+                        testid={`postprocess-on-error-${step.id}`}
+                        ariaLabel="失败时"
+                        value={step.onError}
+                        options={[
+                          { value: "required", label: "停止，不发送" },
+                          { value: "best-effort", label: "继续使用上一步结果" },
+                        ]}
+                        onchange={(next) => {
+                          const onError = next as "required" | "best-effort";
+                          void updateStep(
+                            index,
+                            { onError },
+                            onError === "required" ? "失败时将停止发送" : "失败时将继续使用上一步结果",
+                          );
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-1">
+                    <Button size="icon-sm" variant="ghost" aria-label="上移" title="上移" disabled={saving || index === 0} onclick={() => void moveStep(index, -1)}>
+                      <ArrowUp class="size-3.5" />
+                    </Button>
+                    <Button size="icon-sm" variant="ghost" aria-label="下移" title="下移" disabled={saving || index === pipeline.length - 1} onclick={() => void moveStep(index, 1)}>
+                      <ArrowDown class="size-3.5" />
+                    </Button>
+                    <Button size="sm" variant="ghost" class="ml-1 text-destructive hover:bg-destructive/10 hover:text-destructive" disabled={saving} onclick={() => void removeStep(index)}>移除</Button>
+                  </div>
+                </div>
+              </article>
+              {#if index < pipeline.length - 1}
+                <div class="flex justify-center py-1 text-primary/50" aria-hidden="true"><ArrowDown class="size-3.5" /></div>
+              {/if}
+            {/each}
+          </div>
+        {/if}
+
+        <div class="mt-3 flex items-center gap-2">
+          <Button data-testid="add-postprocess-step" disabled={saving || loadingProcessors} onclick={() => (adding = true)}>
+            <Plus class="size-3.5" />添加步骤
+          </Button>
+          <Button variant="outline" data-testid="open-postprocess-tryout-bottom" disabled={saving || activeStepCount === 0} onclick={() => (tryingOut = true)}>
+            试跑效果
+          </Button>
+        </div>
+      </section>
     {/if}
   {/if}
 
-  {#if adding}
-    <div
-      class="fixed inset-0 z-[80] flex items-center justify-center bg-kotone-deep/85 p-6 backdrop-blur-sm"
-      role="presentation"
-      onclick={() => (adding = false)}
-    >
-      <div
-        class="kotone-panel w-full max-w-xl p-5 shadow-glow-cyan-lg"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="add-step-title"
-        tabindex="-1"
-        use:modalFocus
-        onkeydown={(event) => { if (event.key === "Escape") { event.stopPropagation(); adding = false; } }}
-        onclick={(event) => event.stopPropagation()}
-      >
-        <div class="flex items-start justify-between gap-3">
-          <div>
-            <h2 id="add-step-title" class="text-base font-bold">添加步骤</h2>
-            <p class="mt-1 text-[11px] text-white/45">点一行即可加到当前流程。</p>
-          </div>
-          <button
-            class="rounded-md bg-white/8 px-2 py-1 text-[11px] text-white/70 ring-1 ring-white/12"
-            onclick={() => (adding = false)}
-          >
-            取消
-          </button>
-        </div>
-        <div class="mt-4 max-h-72 overflow-y-auto pr-3">
-          {#if visibleProcessors.length === 0}
-            <p class="rounded-lg bg-white/5 px-3 py-3 text-xs text-white/45">
-              {loadingProcessors ? "正在发现模块…" : "当前没有可用的文字处理模块。"}
-            </p>
-          {:else}
-            <table class="w-full table-fixed text-left text-[12px]">
-              <colgroup>
-                <col />
-                <col class="w-24" />
-                <col class="w-16" />
-              </colgroup>
-              <thead>
-                <tr class="text-[10px] uppercase tracking-wide text-white/35">
-                  <th class="pb-2 font-medium">模块</th>
-                  <th class="pb-2 font-medium">类型</th>
-                  <th class="pb-2 text-right font-medium"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each visibleProcessors as processor}
-                  <tr class="border-t border-white/8">
-                    <td class="py-2.5 pr-3 align-top">
-                      <p class="text-white/85">{processor.displayName}</p>
-                      <p class="mt-0.5 text-[11px] leading-relaxed text-white/40">{processor.description}</p>
-                    </td>
-                    <td class="py-2.5 pr-2 align-top leading-relaxed text-white/45">
-                      {categoryLabel(processor.category)}
-                      <span class="text-white/25"> · </span>
-                      {accessLabel(processor.networkAccess)}
-                    </td>
-                    <td class="py-2.5 align-top text-right">
-                      <button
-                        type="button"
-                        data-testid={`processor-option-${processor.id}`}
-                        class="whitespace-nowrap rounded-md bg-kotone-cyan/15 px-2.5 py-1 text-[11px] font-semibold text-kotone-cyan ring-1 ring-kotone-cyan/30 transition hover:bg-kotone-cyan/25 disabled:opacity-50"
-                        disabled={saving}
-                        onclick={() => void addProcessor(processor)}
-                      >
-                        添加
-                      </button>
-                    </td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          {/if}
-        </div>
+  <Dialog.Root bind:open={adding}>
+    <Dialog.Content class="ui-scope sm:max-w-xl" showCloseButton={false}>
+      <Dialog.Header>
+        <Dialog.Title>添加步骤</Dialog.Title>
+        <Dialog.Description>点一行即可加到当前流程。</Dialog.Description>
+      </Dialog.Header>
+      <div class="max-h-80 overflow-y-auto">
+        {#if visibleProcessors.length === 0}
+          <p class="m-0 rounded-lg bg-muted/50 px-3 py-3 text-xs text-muted-foreground">
+            {loadingProcessors ? "正在发现模块…" : "当前没有可用的文字处理模块。"}
+          </p>
+        {:else}
+          <ul class="m-0 divide-y divide-hairline p-0">
+            {#each visibleProcessors as processor}
+              <li class="flex list-none items-start gap-3 py-2.5">
+                <div class="min-w-0 flex-1">
+                  <p class="m-0 text-[13px] text-foreground">{processor.displayName}</p>
+                  <p class="mt-0.5 mb-0 text-xs leading-relaxed text-muted-foreground">{processor.description}</p>
+                  <p class="mt-1 mb-0 text-[11px] text-muted-foreground/80">
+                    {categoryLabel(processor.category)} · {accessLabel(processor.networkAccess)}
+                  </p>
+                </div>
+                <Button size="sm" variant="outline" data-testid={`processor-option-${processor.id}`} disabled={saving} onclick={() => void addProcessor(processor)}>
+                  添加
+                </Button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
       </div>
-    </div>
-  {/if}
+      <Dialog.Footer>
+        <Button variant="ghost" size="sm" onclick={() => (adding = false)}>取消</Button>
+      </Dialog.Footer>
+    </Dialog.Content>
+  </Dialog.Root>
 
-  {#if managing}
-    <div
-      class="fixed inset-0 z-[80] flex items-center justify-center bg-kotone-deep/85 p-6 backdrop-blur-sm"
-      role="presentation"
-      onclick={() => (managing = false)}
-    >
-      <div
-        class="kotone-panel w-full max-w-lg p-5 shadow-glow-cyan-lg"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="pipeline-manager-title"
-        tabindex="-1"
-        use:modalFocus
-        onkeydown={(event) => { if (event.key === "Escape") { event.stopPropagation(); managing = false; } }}
-        onclick={(event) => event.stopPropagation()}
-      >
-        <div class="flex items-start justify-between gap-3">
-          <div>
-            <h2 id="pipeline-manager-title" class="text-base font-bold">管理流程</h2>
-            <p class="mt-1 text-[11px] text-white/45">新建、改名或删掉一套流程。切换请回上一页用下拉框。</p>
-          </div>
-          <button
-            class="rounded-md bg-white/8 px-2 py-1 text-[11px] text-white/70 ring-1 ring-white/12"
-            onclick={() => (managing = false)}
-          >
-            完成
-          </button>
-        </div>
-
-        <div class="mt-4 max-h-64 overflow-y-auto pr-3">
-        <table class="w-full text-left text-[12px]">
+  <Dialog.Root bind:open={managing}>
+    <Dialog.Content class="ui-scope sm:max-w-lg" showCloseButton={false}>
+      <Dialog.Header>
+        <Dialog.Title>管理流程</Dialog.Title>
+        <Dialog.Description>新建、改名或删掉一套流程。切换请回上一页用下拉框。</Dialog.Description>
+      </Dialog.Header>
+      <div class="max-h-72 overflow-y-auto">
+        <table class="w-full text-left text-xs">
           <thead>
-            <tr class="text-[10px] uppercase tracking-wide text-white/35">
+            <tr class="text-[11px] text-muted-foreground">
               <th class="pb-2 font-medium">名称</th>
               <th class="pb-2 font-medium">步骤</th>
               <th class="pb-2 font-medium">状态</th>
@@ -801,166 +693,106 @@
           </thead>
           <tbody>
             {#each pipelines as item (item.id)}
-              <tr class="border-t border-white/8">
-                <td class="py-2.5 pr-2">
+              <tr class="border-t border-hairline">
+                <td class="py-2 pr-2">
                   {#if renaming && item.id === postProcessing.activePipelineId}
                     <input
                       data-testid="postprocess-pipeline-name"
-                      class="w-full rounded-md bg-white/6 px-2 py-1 text-[11px] text-white/85 ring-1 ring-white/12 outline-none focus:ring-kotone-cyan/45"
+                      class="{fieldClass} h-7 w-full"
                       bind:value={renameDraft}
                       disabled={saving}
                       onkeydown={(event) => {
                         if (event.key === "Enter") void renamePipeline();
-                        if (event.key === "Escape") renaming = false;
+                        if (event.key === "Escape") { event.stopPropagation(); renaming = false; }
                       }}
                       onblur={() => void renamePipeline()}
                     />
                   {:else}
-                    <span class="text-white/85">{pipelineLabel(item)}</span>
+                    <span class="text-foreground">{pipelineLabel(item)}</span>
                   {/if}
                 </td>
-                <td class="py-2.5 text-white/50">{item.steps.length}</td>
-                <td class="py-2.5">
+                <td class="py-2 text-muted-foreground">{item.steps.length}</td>
+                <td class="py-2">
                   {#if item.id === postProcessing.activePipelineId}
-                    <span class="text-kotone-cyan/80">使用中</span>
+                    <span class="text-primary">使用中</span>
                   {:else}
-                    <button
-                      type="button"
-                      class="text-white/45 transition hover:text-white"
-                      disabled={saving}
-                      onclick={() => void switchPipeline(item.id)}
-                    >
+                    <button type="button" class="text-muted-foreground transition-colors hover:text-foreground" disabled={saving} onclick={() => void switchPipeline(item.id)}>
                       切换
                     </button>
                   {/if}
                 </td>
-                <td class="py-2.5 text-right">
-                  <button
-                    type="button"
-                    data-testid="rename-postprocess-pipeline"
-                    class="rounded-md px-2 py-1 text-[11px] text-white/45 transition hover:bg-white/8 hover:text-white/80 disabled:opacity-50"
-                    disabled={saving}
-                    onclick={() => void startRename(item)}
-                  >
-                    重命名
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="delete-postprocess-pipeline"
-                    class="rounded-md px-2 py-1 text-[11px] text-white/35 transition hover:bg-kotone-pink/10 hover:text-kotone-pink/80 disabled:opacity-30"
-                    disabled={saving || pipelines.length <= 1}
-                    onclick={() => void deletePipeline(item.id)}
-                  >
-                    删除
-                  </button>
+                <td class="py-2 text-right whitespace-nowrap">
+                  <Button size="xs" variant="ghost" data-testid="rename-postprocess-pipeline" disabled={saving} onclick={() => void startRename(item)}>重命名</Button>
+                  <Button size="xs" variant="ghost" class="text-destructive hover:bg-destructive/10 hover:text-destructive" data-testid="delete-postprocess-pipeline"
+                    disabled={saving || pipelines.length <= 1} onclick={() => void deletePipeline(item.id)}>删除</Button>
                 </td>
               </tr>
             {/each}
           </tbody>
         </table>
-        </div>
-
-        <button
-          type="button"
-          data-testid="add-postprocess-pipeline"
-          class="mt-4 rounded-lg bg-kotone-cyan/15 px-3 py-1.5 text-xs font-semibold text-kotone-cyan ring-1 ring-kotone-cyan/35 transition hover:bg-kotone-cyan/25 disabled:opacity-50"
-          disabled={saving}
-          onclick={() => void addPipeline()}
-        >
-          + 新建流程
-        </button>
       </div>
-    </div>
-  {/if}
+      <Dialog.Footer class="sm:justify-between">
+        <Button variant="outline" size="sm" data-testid="add-postprocess-pipeline" disabled={saving} onclick={() => void addPipeline()}>
+          <Plus class="size-3.5" />新建流程
+        </Button>
+        <Button size="sm" onclick={() => (managing = false)}>完成</Button>
+      </Dialog.Footer>
+    </Dialog.Content>
+  </Dialog.Root>
 
-  {#if tryingOut}
-    <div
-      class="fixed inset-0 z-[80] flex items-center justify-center bg-kotone-deep/85 p-6 backdrop-blur-sm"
-      role="presentation"
-      onclick={() => (tryingOut = false)}
-    >
-      <div
-        class="kotone-panel max-h-[85vh] w-full max-w-lg overflow-y-auto p-5 shadow-glow-cyan-lg"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="tryout-dialog-title"
-        tabindex="-1"
-        use:modalFocus
-        onkeydown={(event) => { if (event.key === "Escape") { event.stopPropagation(); tryingOut = false; } }}
-        onclick={(event) => event.stopPropagation()}
-      >
-        <div class="flex items-start justify-between gap-3">
-          <div>
-            <div class="flex items-center gap-2">
-              <h2 id="tryout-dialog-title" class="text-base font-bold">试跑「{pipelineLabel(activePipeline)}」</h2>
-              <span class="rounded-full bg-white/6 px-2 py-0.5 text-[10px] text-white/45 ring-1 ring-white/10">
-                {activeStepCount} 个启用步骤
-              </span>
-            </div>
-            <p class="mt-1 text-[11px] text-white/45">输入一段测试文本查看文字处理效果，不会发送到游戏。</p>
-          </div>
-          <button
-            data-testid="postprocess-tryout-close"
-            class="rounded-md bg-white/8 px-2 py-1 text-[11px] text-white/70 ring-1 ring-white/12 hover:bg-white/15"
-            onclick={() => (tryingOut = false)}
-          >
-            关闭
-          </button>
+  <Dialog.Root bind:open={tryingOut}>
+    <Dialog.Content class="ui-scope max-h-[85vh] overflow-y-auto sm:max-w-lg" showCloseButton={false}>
+      <Dialog.Header>
+        <div class="flex items-center gap-2">
+          <Dialog.Title>试跑「{pipelineLabel(activePipeline)}」</Dialog.Title>
+          <span class="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{activeStepCount} 个启用步骤</span>
         </div>
+        <Dialog.Description>输入一段测试文本查看文字处理效果，不会发送到游戏。</Dialog.Description>
+      </Dialog.Header>
 
-        <label class="mt-4 block">
-          <span class="text-[11px] text-white/55">输入测试文本</span>
-          <textarea
-            data-testid="postprocess-tryout-input"
-            class="kotone-scroll mt-1.5 min-h-24 w-full resize-y rounded-lg bg-white/5 px-3 py-2 text-sm leading-relaxed text-white/85 ring-1 ring-white/12 outline-none transition placeholder:text-white/25 focus:ring-kotone-cyan/45"
-            placeholder="输入用于验证流程的文字"
-            bind:value={testInput}
-          ></textarea>
-        </label>
+      <label class="block">
+        <span class="text-xs text-muted-foreground">输入测试文本</span>
+        <textarea
+          data-testid="postprocess-tryout-input"
+          class="{fieldClass} mt-1.5 min-h-24 w-full resize-y text-sm leading-relaxed"
+          placeholder="输入用于验证流程的文字"
+          bind:value={testInput}
+        ></textarea>
+      </label>
 
-        <div class="mt-3 flex justify-end">
-          <button
-            data-testid="postprocess-tryout-run"
-            class="rounded-lg bg-kotone-cyan px-4 py-1.5 text-xs font-bold text-kotone-deep transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
-            disabled={testing || !testInput.trim() || activeStepCount === 0}
-            onclick={() => void runTryout()}
-          >
-            {testing ? "处理中…" : "运行试跑"}
-          </button>
-        </div>
-
-        {#if tryoutResult}
-          <div
-            data-testid="postprocess-tryout-result"
-            class="mt-4 rounded-xl bg-kotone-cyan/6 p-3.5 ring-1 ring-kotone-cyan/20"
-          >
-            <div class="flex items-center justify-between gap-3">
-              <span class="text-[11px] font-semibold text-kotone-cyan/90">处理结果</span>
-              <span class="text-[10px] text-white/40">{tryoutResult.durationMs} ms</span>
-            </div>
-            <p class="mt-2 break-all text-sm leading-relaxed text-white/90">
-              {tryoutResult.finalText}
-            </p>
-            <div class="mt-3 flex flex-col gap-1.5 border-t border-white/8 pt-3">
-              {#each tryoutResult.steps as step, index (step.stepId)}
-                <div>
-                  <span
-                    class="inline-flex rounded-full px-2 py-0.5 text-[10px] ring-1 {step.outcome === 'succeeded'
-                      ? 'bg-kotone-cyan/8 text-kotone-cyan/75 ring-kotone-cyan/20'
-                      : 'bg-kotone-pink/8 text-kotone-pink/80 ring-kotone-pink/20'}"
-                    title={`${step.durationMs} ms`}
-                  >
-                    {index + 1}. {step.displayName} · {step.outcome === "succeeded" ? "完成" : "已跳过"}
-                  </span>
-                  {#if step.error}
-                    <p class="mt-1 text-[10px] leading-relaxed text-kotone-pink/75">{step.error}</p>
-                  {/if}
-                </div>
-              {/each}
-            </div>
+      {#if tryoutResult}
+        <div data-testid="postprocess-tryout-result" class="rounded-xl border border-primary/25 bg-primary/6 p-3.5">
+          <div class="flex items-center justify-between gap-3">
+            <span class="text-xs font-semibold text-primary">处理结果</span>
+            <span class="text-[11px] text-muted-foreground tabular-nums">{tryoutResult.durationMs} ms</span>
           </div>
-        {/if}
-      </div>
-    </div>
-  {/if}
-</div>
+          <p class="mt-2 mb-0 text-sm leading-relaxed break-all text-foreground">{tryoutResult.finalText}</p>
+          <div class="mt-3 flex flex-col gap-1.5 border-t border-hairline pt-3">
+            {#each tryoutResult.steps as step, index (step.stepId)}
+              <div>
+                <span
+                  class="inline-flex rounded-full px-2 py-0.5 text-[11px] {step.outcome === 'succeeded'
+                    ? 'bg-primary/10 text-primary'
+                    : 'bg-brand-pink/10 text-brand-pink'}"
+                  title={`${step.durationMs} ms`}
+                >
+                  {index + 1}. {step.displayName} · {step.outcome === "succeeded" ? "完成" : "已跳过"}
+                </span>
+                {#if step.error}
+                  <p class="mt-1 mb-0 text-[11px] leading-relaxed text-brand-pink">{step.error}</p>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      <Dialog.Footer>
+        <Button variant="ghost" size="sm" data-testid="postprocess-tryout-close" onclick={() => (tryingOut = false)}>关闭</Button>
+        <Button size="sm" data-testid="postprocess-tryout-run" disabled={testing || !testInput.trim() || activeStepCount === 0} onclick={() => void runTryout()}>
+          {testing ? "处理中…" : "运行试跑"}
+        </Button>
+      </Dialog.Footer>
+    </Dialog.Content>
+  </Dialog.Root>
+</SettingsPage>
