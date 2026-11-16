@@ -39,7 +39,9 @@ pub fn system_prompt(ctx: &PromptContext<'_>) -> String {
     );
     out.push_str(match ctx.entry {
         Entry::Chat => {
-            "当前入口：聊天窗口。玩家看得到文字，可以分点说明，但保持简短；不用 Markdown 表格。\n"
+            "当前入口：聊天窗口。玩家看得到文字，可以分点说明，但保持简短；不用 Markdown 表格。\
+此时前台是 Kotone 自己的窗口：要看游戏画面、运行自动化或替玩家在游戏里发言之前，\
+先用 game.focus 切到那个游戏（不知道是哪个就先用 game.list 看看，或问玩家）。\n"
         }
         Entry::Game => {
             "当前入口：游戏内。玩家正在玩、看不到聊天窗口，你最后的回复会被语音或弹幕播出：\

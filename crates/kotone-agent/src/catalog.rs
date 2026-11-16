@@ -44,6 +44,8 @@ pub const CORE_TOOLS: &[&str] = &[
     TOOL_GAME_CHAT,
     "companion.read_chat",
     "window.active",
+    "game.list",
+    "game.focus",
     "automation.list",
     "automation.get",
     "automation.run",
@@ -77,6 +79,8 @@ pub const UNTRUSTED_RESULTS: &[&str] = &[
     "chat.track.read",
     "window.list",
     "window.active",
+    "game.list",
+    "game.focus",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,8 +112,8 @@ pub struct ToolEntry {
 pub const GROUPS: &[(&str, &str, &str)] = &[
     (
         "game",
-        "游戏（看聊天、打字、播报、提醒）",
-        "游戏 聊天 队友 打字 发送 播报 语音 弹幕 提醒 chat type say remind",
+        "游戏（看聊天、打字、播报、提醒、打开 / 切换 / 关闭游戏）",
+        "游戏 聊天 队友 打字 发送 播报 语音 弹幕 提醒 打开 启动 切换 关闭 窗口 chat type say remind launch focus close",
     ),
     (
         "screen",
@@ -142,7 +146,7 @@ pub fn group_of(name: &str) -> &'static str {
     let prefix = name.split('.').next().unwrap_or(name);
     match prefix {
         "tools" => "meta",
-        "reply" | "reminder" | "game_chat" | "companion" | "chat" => "game",
+        "reply" | "reminder" | "game_chat" | "game" | "companion" | "chat" => "game",
         "window" | "screen" | "image" | "artifact" | "ocr" => "screen",
         "automation" | "saved" => "automation",
         "settings" | "profiles" | "hotkeys" | "connections" | "audio" | "input" | "postprocess"

@@ -296,6 +296,8 @@ fn default_rules_follow_side_effects() {
         ("game_chat.send", json!({})),
         ("saved.auto-1", json!({})),
         ("settings.get", json!({})),
+        ("game.list", json!({})),
+        ("game.focus", json!({"profileId": "lol"})),
     ];
     for (name, args) in allow {
         assert_eq!(
@@ -313,6 +315,8 @@ fn default_rules_follow_side_effects() {
         ("elevation.restart", json!({})),
         ("autostart.set", json!({})),
         ("history.clear", json!({})),
+        ("game.launch", json!({"profileId": "lol"})),
+        ("game.close", json!({"profileId": "lol"})),
     ];
     for (name, args) in ask {
         assert!(
@@ -523,6 +527,11 @@ fn prompt_mentions_entry_game_notes_and_saved_automations() {
         automations: &[],
     });
     assert!(chat.contains("聊天窗口"));
+    assert!(
+        chat.contains("game.focus"),
+        "chat entry must switch to the game first"
+    );
+    assert!(!game.contains("game.focus"));
     assert!(!chat.contains("游戏说明"));
 }
 

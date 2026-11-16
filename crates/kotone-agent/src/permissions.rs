@@ -57,6 +57,7 @@ const ALLOWED_EFFECTS: &[&str] = &[
     "stops-automation",
     "cancels-download",
     "writes-automations",
+    "focuses-window",
 ];
 
 /// 默认询问的副作用及原因。
@@ -79,6 +80,8 @@ const ASK_EFFECTS: &[(&str, &str)] = &[
     ("registers-hotkeys", "会注册热键"),
     ("may-register-hotkeys", "可能改动热键"),
     ("llm-request", "会调用付费的 AI 接口"),
+    ("launches-program", "会打开游戏"),
+    ("closes-program", "会关闭游戏"),
 ];
 
 /// 一段对话里“本段对话都允许”的记录。
