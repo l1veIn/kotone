@@ -15,7 +15,9 @@
 # 1. 嵌入前端的调试构建
 cd apps/desktop && pnpm build:web && cd ../..
 cargo build -p kotone-tauri --features tauri/custom-protocol
-# 2. 复制到仓库外：仓库根目录带“低完整性”标签，从仓库里启动的 exe 发出的模拟输入会被系统静默丢弃
+# 2. 复制到仓库外（只在仓库带“低完整性”标签时需要）：带这个标签时，从仓库里启动的 exe 以低完整性运行，
+#    发出的模拟输入会被系统静默丢弃。检查：icacls <仓库> 显示 Low Mandatory Level 即是；
+#    2026-11-16 已改为 Medium（icacls <仓库> /setintegritylevel (OI)(CI)M），Codex 的沙盒可能会再加回来。
 mkdir -p "$LOCALAPPDATA/Temp/kotone-automation-e2e" && cp target/debug/kotone.exe "$LOCALAPPDATA/Temp/kotone-automation-e2e/"
 # 3. 隔离目录：开启工具服务、跳过首启向导
 mkdir -p target/automation-e2e/home target/automation-e2e/webview target/automation-e2e/target
