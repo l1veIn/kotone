@@ -89,7 +89,17 @@ struct AutomationRunArgs {
     source: String,
     #[serde(default)]
     name: Option<String>,
+    /// 延迟几秒后开始（与 `at` 二选一；都不传 = 立即）。
+    #[serde(default)]
+    delay_seconds: Option<u64>,
+    /// 指定开始时刻（Unix 毫秒）。
+    #[serde(default)]
+    at: Option<u64>,
 }
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AutomationRunsArgs {}
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -669,21 +679,56 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
             Ok(json!({"status": "started"}))
         }
         c::TOOL_AUTOMATION_RUN => {
-            let AutomationRunArgs { source, name } = parse(tool, args)?;
-            crate::automation::start(app, name.as_deref().unwrap_or("Agent 自动化"), &source)
-                .map_err(|e| {
-                    if e.contains("最多同时运行") {
-                        HostError::Busy(e)
-                    } else if e.contains("语法错误") || e.contains("内容为空") {
-                        HostError::InvalidArguments(e)
-                    } else {
-                        HostError::Failed(e)
-                    }
-                })
+            let AutomationRunArgs {
+                source,
+                name,
+                delay_seconds,
+                at,
+            } = parse(tool, args)?;
+            let now = kotone_core::automation::now_ms();
+            let due = match (delay_seconds, at) {
+                (Some(_), Some(_)) => {
+                    return Err(HostError::InvalidArguments(
+                        "delaySeconds 与 at 只能给一个".into(),
+                    ))
+                }
+                (Some(d), None) if d > kotone_core::automation::MAX_DELAY_SECONDS => {
+                    return Err(HostError::InvalidArguments(
+                        "delaySeconds 最多 604800（7 天）".into(),
+                    ))
+                }
+                (Some(d), None) => now + d * 1_000,
+                (None, Some(at)) => at,
+                (None, None) => now,
+            };
+            crate::automation::start(
+                app,
+                "tool",
+                name.as_deref().unwrap_or("Agent 自动化"),
+                &source,
+                due,
+            )
+            .map_err(|e| {
+                if e.contains("最多同时运行") {
+                    HostError::Busy(e)
+                } else if e.contains("语法错误")
+                    || e.contains("内容为空")
+                    || e.contains("7 天")
+                    || e.contains("名字最多")
+                {
+                    HostError::InvalidArguments(e)
+                } else {
+                    HostError::Failed(e)
+                }
+            })
         }
-        c::TOOL_AUTOMATION_LIST => {
-            let _: NoArgs = parse(tool, args)?;
-            Ok(crate::automation::list(app))
+        c::TOOL_AUTOMATION_RUNS => {
+            let _: AutomationRunsArgs = if args.is_null() {
+                AutomationRunsArgs::default()
+            } else {
+                parse(tool, args)?
+            };
+            crate::automation::list(app).map_err(HostError::Failed)
         }
         c::TOOL_AUTOMATION_STOP => {
             let AutomationStopArgs { id } = if args.is_null() {

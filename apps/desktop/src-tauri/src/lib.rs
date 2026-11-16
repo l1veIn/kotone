@@ -2027,6 +2027,8 @@ pub fn run() {
             app.manage(ocr_engines::OcrEngines::new(app.handle()));
             app.manage(companion::CompanionRuntime::default());
             app.manage(automation::AutomationManager::default());
+            // 先接上程序执行端口，再启动调度器（到点的程序才有人执行）。
+            automation::attach(app.handle());
             assistant::start(app.handle());
             // 可选本机工具服务：独立于 ASR 运行时，只在启动时读取开关（docs/tool-service.md）
             let tool_service_enabled = settings.read().unwrap().tool_service.enabled;
@@ -2155,7 +2157,7 @@ pub fn run() {
             speech_models::get_speech_model_status,
             speech_models::download_speech_model,
             speech_models::cancel_speech_model_download,
-            automation::automation_list,
+            automation::automation_runs,
             automation::automation_stop,
             companion::companion_self_check,
             companion::companion_status,

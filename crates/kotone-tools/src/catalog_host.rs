@@ -45,7 +45,7 @@ pub const TOOL_COMPANION_READ_CHAT: &str = "companion.read_chat";
 pub const TOOL_COMPANION_TYPE: &str = "companion.type";
 pub const TOOL_COMPANION_CHECK: &str = "companion.check";
 pub const TOOL_AUTOMATION_RUN: &str = "automation.run";
-pub const TOOL_AUTOMATION_LIST: &str = "automation.list";
+pub const TOOL_AUTOMATION_RUNS: &str = "automation.runs";
 pub const TOOL_AUTOMATION_STOP: &str = "automation.stop";
 
 /// 全部委托工具（顺序即 capabilities 中的顺序）。
@@ -91,7 +91,7 @@ pub const HOST_TOOLS: &[&str] = &[
     TOOL_COMPANION_TYPE,
     TOOL_COMPANION_CHECK,
     TOOL_AUTOMATION_RUN,
-    TOOL_AUTOMATION_LIST,
+    TOOL_AUTOMATION_RUNS,
     TOOL_AUTOMATION_STOP,
 ];
 
@@ -461,26 +461,26 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_AUTOMATION_RUN,
-            description: "Run an automation (a short sandboxed Luau program, written by the companion or an Agent) against the CURRENT foreground window — switch to the game first. Whitelisted functions only: key(name) / key_down / key_up / type_text(text); wait(ms), every(ms, fn, {for_ms, times}) (fn returning false stops), wait_until(cond, {poll_ms, stable_frames, timeout_ms}) → bool, now(); region(x, y, w, h) in window-client ratios 0..1, brightness(region) 0..255, color_at(x, y) → r, g, b, ocr(region) → object with :has(text) / :count() (screen text can be tested but never copied into input); say(text), toast(text), log(text), game_focused(), stop(). No files, network or processes. Guards: 30 min max, step limit, ≥50 ms between keys, max 10000 keys, input only while that window is in front (paused otherwise), held keys released at the end, at most 3 automations at once; stop with automation.stop, the stop-automations hotkey (default Ctrl+Shift+F12) or the tray menu. Returns at once with {status:\"started\", id, target}; the outcome arrives as an automation.finished event {id, status finished/stopped/limit/error, message, keys, durationMs, log}.",
+            description: "Run an automation (a short sandboxed Luau program, written by the companion or an Agent) against the CURRENT foreground window — switch to the game first. The target window is bound when you call this, also for delayed runs (delaySeconds or at, up to 7 days): if that window is gone when the run is due, it fails instead of pressing keys elsewhere; a run missed by more than 120 s (Kotone closed) is recorded as missed and never run late; runs are never retried. Whitelisted functions only: key(name) / key_down / key_up / type_text(text); wait(ms), every(ms, fn, {for_ms, times}) (fn returning false stops), wait_until(cond, {poll_ms, stable_frames, timeout_ms}) → bool, now(); region(x, y, w, h) in window-client ratios 0..1, brightness(region) 0..255, color_at(x, y) → r, g, b, ocr(region) → object with :has(text) / :count() (screen text can be tested but never copied into input); say(text), toast(text), log(text), game_focused(), stop(). No files, network or processes. Guards: 30 min max, step limit, ≥50 ms between keys, max 10000 keys, input only while that window is in front (paused otherwise), held keys released at the end, at most 3 running at once (BUSY for an immediate run; a delayed run that comes due while 3 are running fails); stop with automation.stop, the stop-automations hotkey (default Ctrl+Shift+F12) or the tray menu. Returns at once with {status started/scheduled, id, target, dueAtUnixMs}; the end arrives as an automation.finished event carrying the run record (status finished/failed/cancelled/missed, message, report {outcome finished/stopped/limit/error, keys, durationMs, log}).",
             side_effects: &["input", "captures-screen", "may-speak"],
             egress: "backend-dependent",
-            input: object(&["source"], json!({"source": {"type": "string", "minLength": 1, "maxLength": 8000, "description": "Luau 程序"}, "name": {"type": "string", "maxLength": 40}})),
-            output: object(&["status", "id"], json!({"status": {"const": "started"}, "id": {"type": "string"}, "target": {"type": "string"}})),
+            input: object(&["source"], json!({"source": {"type": "string", "minLength": 1, "maxLength": 8000, "description": "Luau 程序"}, "name": {"type": "string", "maxLength": 40}, "delaySeconds": {"type": "integer", "minimum": 0, "maximum": 604800, "description": "几秒后开始（与 at 二选一；都不传 = 立即）"}, "at": {"type": "integer", "minimum": 0, "description": "开始时刻（Unix 毫秒）"}})),
+            output: object(&["status", "id"], json!({"status": {"enum": ["started", "scheduled"]}, "id": {"type": "string"}, "target": {"type": "string"}, "dueAtUnixMs": {"type": "integer"}})),
         },
         Def {
-            name: TOOL_AUTOMATION_LIST,
-            description: "Running and recent automations (newest first, up to 20): id, name, target window, status running/finished/stopped/limit/error, message, keys pressed, duration, log, source.",
+            name: TOOL_AUTOMATION_RUNS,
+            description: "Automation run records, reminders included (pending and running first by due time, then finished ones newest first; up to 50). Each run: id, sessionId, action {kind speak: text, delivery | kind program: name, source, automationId, args, target {label}}, createdAtMs, dueAtMs, startedAtMs, finishedAtMs, status pending/running/finished/failed/cancelled/missed, message, report {outcome, keys, durationMs, log}.",
             side_effects: &[],
             egress: "none",
             input: none(),
-            output: object(&["running", "runs"], json!({"running": {"type": "integer"}, "maxRunning": {"type": "integer"}, "runs": {"type": "array"}})),
+            output: object(&["running", "pending", "runs"], json!({"running": {"type": "integer"}, "pending": {"type": "integer"}, "maxRunning": {"type": "integer"}, "runs": {"type": "array"}})),
         },
         Def {
             name: TOOL_AUTOMATION_STOP,
-            description: "Stop one running automation by id, or all of them when id is omitted. Held keys are released. Returns how many were stopped.",
+            description: "Cancel a pending run or stop a running one by id (reminders too). Without id: stop every running program and cancel every pending program; pending reminders are kept. Held keys are released. Returns how many runs were affected.",
             side_effects: &["stops-automation"],
             egress: "none",
-            input: json!({"type": ["object", "null"], "additionalProperties": false, "properties": {"id": id("自动化运行 ID（automation.run / automation.list）")}}),
+            input: json!({"type": ["object", "null"], "additionalProperties": false, "properties": {"id": id("执行记录 ID（automation.run / automation.runs）")}}),
             output: object(&["stopped"], json!({"stopped": {"type": "integer"}})),
         },
     ]

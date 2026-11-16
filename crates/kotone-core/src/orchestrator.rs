@@ -18,6 +18,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::assistant::{AssistantHandler, AssistantRequest, AssistantVoiceSession, SessionPurpose};
 use crate::audio::{AudioBackend, AudioHandle};
+use crate::automation::AutomationScheduler;
 use crate::inject::{CancelToken, FocusBackend, InjectError, Injector, TargetWindow};
 use crate::interaction::{EndTrigger, InteractionPolicy, PostFinalize};
 use crate::postprocess::{
@@ -25,7 +26,6 @@ use crate::postprocess::{
     ProcessingContext, ProcessorRegistry,
 };
 use crate::profile::{self, GameProfile};
-use crate::reminders::ReminderScheduler;
 use crate::settings::Settings;
 use crate::stt::{EngineRegistry, SessionConfig, SttEvent, SttSession};
 
@@ -381,7 +381,7 @@ pub struct Orchestrator {
     runtime_inputs_enabled: AtomicBool,
     engines: Arc<EngineRegistry>,
     processors: Arc<ProcessorRegistry>,
-    assistant: Option<(Arc<dyn AssistantHandler>, Arc<ReminderScheduler>)>,
+    assistant: Option<(Arc<dyn AssistantHandler>, Arc<AutomationScheduler>)>,
     audio: Arc<dyn AudioBackend>,
     before_capture: Option<Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
     after_capture: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -480,7 +480,7 @@ impl Orchestrator {
     pub fn with_assistant(
         mut self,
         handler: Arc<dyn AssistantHandler>,
-        reminders: Arc<ReminderScheduler>,
+        reminders: Arc<AutomationScheduler>,
     ) -> Self {
         self.assistant = Some((handler, reminders));
         self

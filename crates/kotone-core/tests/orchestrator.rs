@@ -2589,7 +2589,7 @@ impl kotone_core::assistant::AssistantHandler for AssistantTestHandler {
 
 fn assistant_orchestrator(
     handler: Arc<dyn kotone_core::assistant::AssistantHandler>,
-    reminders: Arc<kotone_core::reminders::ReminderScheduler>,
+    reminders: Arc<kotone_core::automation::AutomationScheduler>,
     sent: Arc<Mutex<Vec<String>>>,
     emitter: Arc<VecEmitter>,
 ) -> Arc<Orchestrator> {
@@ -2598,7 +2598,7 @@ fn assistant_orchestrator(
 
 fn assistant_orchestrator_builder(
     handler: Arc<dyn kotone_core::assistant::AssistantHandler>,
-    reminders: Arc<kotone_core::reminders::ReminderScheduler>,
+    reminders: Arc<kotone_core::automation::AutomationScheduler>,
     sent: Arc<Mutex<Vec<String>>>,
     emitter: Arc<VecEmitter>,
 ) -> Orchestrator {
@@ -2640,8 +2640,8 @@ async fn history_disabled_cancel_does_not_leak_into_failed_assistant_capture() {
 
     let directory = tempfile::tempdir().unwrap();
     let history_dir = directory.path().join("history");
-    let reminders = kotone_core::reminders::ReminderScheduler::open(
-        directory.path().join("reminders.json"),
+    let reminders = kotone_core::automation::AutomationScheduler::open(
+        directory.path().join("automation-runs.json"),
         Arc::new(ReminderTestDelivery),
     )
     .unwrap();
@@ -2719,8 +2719,8 @@ async fn history_disabled_cancel_does_not_leak_into_failed_assistant_capture() {
 #[tokio::test]
 async fn assistant_recognition_schedules_without_postprocessing_or_injecting() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::reminders::ReminderScheduler::open(
-        dir.path().join("reminders.json"),
+    let queue = kotone_core::automation::AutomationScheduler::open(
+        dir.path().join("automation-runs.json"),
         Arc::new(ReminderTestDelivery),
     )
     .unwrap();
@@ -2770,8 +2770,8 @@ async fn assistant_recognition_schedules_without_postprocessing_or_injecting() {
 #[tokio::test]
 async fn assistant_hold_release_is_independent_and_repress_preserves_the_sentence() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::reminders::ReminderScheduler::open(
-        dir.path().join("reminders.json"),
+    let queue = kotone_core::automation::AutomationScheduler::open(
+        dir.path().join("automation-runs.json"),
         Arc::new(ReminderTestDelivery),
     )
     .unwrap();
@@ -2817,8 +2817,8 @@ async fn assistant_hold_release_is_independent_and_repress_preserves_the_sentenc
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn assistant_short_hold_release_waits_for_capture_to_start() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::reminders::ReminderScheduler::open(
-        dir.path().join("reminders.json"),
+    let queue = kotone_core::automation::AutomationScheduler::open(
+        dir.path().join("automation-runs.json"),
         Arc::new(ReminderTestDelivery),
     )
     .unwrap();
@@ -2875,8 +2875,8 @@ async fn assistant_short_hold_release_waits_for_capture_to_start() {
 #[tokio::test]
 async fn assistant_dictation_preview_confirms_to_ai_with_original_timer_origin() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::reminders::ReminderScheduler::open(
-        dir.path().join("reminders.json"),
+    let queue = kotone_core::automation::AutomationScheduler::open(
+        dir.path().join("automation-runs.json"),
         Arc::new(ReminderTestDelivery),
     )
     .unwrap();
@@ -2922,8 +2922,8 @@ async fn assistant_one_shot_finishes_without_resuming() {
     use kotone_core::assistant::AssistantInteractionMode;
     let mode = AssistantInteractionMode::OneShot;
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::reminders::ReminderScheduler::open(
-        dir.path().join("reminders.json"),
+    let queue = kotone_core::automation::AutomationScheduler::open(
+        dir.path().join("automation-runs.json"),
         Arc::new(ReminderTestDelivery),
     )
     .unwrap();
@@ -2986,8 +2986,8 @@ async fn assistant_one_shot_finishes_without_resuming() {
 #[tokio::test]
 async fn assistant_one_shot_without_vad_can_finish_manually_without_resuming() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::reminders::ReminderScheduler::open(
-        dir.path().join("reminders.json"),
+    let queue = kotone_core::automation::AutomationScheduler::open(
+        dir.path().join("automation-runs.json"),
         Arc::new(ReminderTestDelivery),
     )
     .unwrap();
@@ -3016,8 +3016,8 @@ async fn assistant_one_shot_without_vad_can_finish_manually_without_resuming() {
 #[tokio::test]
 async fn assistant_mode_change_during_processing_does_not_start_another_capture() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::reminders::ReminderScheduler::open(
-        dir.path().join("reminders.json"),
+    let queue = kotone_core::automation::AutomationScheduler::open(
+        dir.path().join("automation-runs.json"),
         Arc::new(ReminderTestDelivery),
     )
     .unwrap();
@@ -3076,8 +3076,8 @@ async fn assistant_mode_change_during_processing_does_not_start_another_capture(
 #[tokio::test]
 async fn assistant_old_input_waiting_for_configuration_cannot_start_or_affect_new_capture() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::reminders::ReminderScheduler::open(
-        dir.path().join("reminders.json"),
+    let queue = kotone_core::automation::AutomationScheduler::open(
+        dir.path().join("automation-runs.json"),
         Arc::new(ReminderTestDelivery),
     )
     .unwrap();
@@ -3121,8 +3121,8 @@ async fn assistant_old_input_waiting_for_configuration_cannot_start_or_affect_ne
 #[tokio::test]
 async fn cancelled_assistant_cannot_commit_or_change_a_new_session() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::reminders::ReminderScheduler::open(
-        dir.path().join("reminders.json"),
+    let queue = kotone_core::automation::AutomationScheduler::open(
+        dir.path().join("automation-runs.json"),
         Arc::new(ReminderTestDelivery),
     )
     .unwrap();
@@ -3793,8 +3793,8 @@ async fn assistant_voice_button_uses_each_supported_policy_without_injection() {
         AssistantInteractionMode::OneShot,
     ] {
         let dir = tempfile::tempdir().unwrap();
-        let queue = kotone_core::reminders::ReminderScheduler::open(
-            dir.path().join("reminders.json"),
+        let queue = kotone_core::automation::AutomationScheduler::open(
+            dir.path().join("automation-runs.json"),
             Arc::new(ReminderTestDelivery),
         )
         .unwrap();
@@ -3877,8 +3877,8 @@ async fn assistant_voice_button_uses_each_supported_policy_without_injection() {
 #[tokio::test]
 async fn assistant_voice_stale_commands_and_hotkey_release_cannot_touch_new_capture() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::reminders::ReminderScheduler::open(
-        dir.path().join("reminders.json"),
+    let queue = kotone_core::automation::AutomationScheduler::open(
+        dir.path().join("automation-runs.json"),
         Arc::new(ReminderTestDelivery),
     )
     .unwrap();
@@ -3948,8 +3948,8 @@ async fn assistant_voice_stale_commands_and_hotkey_release_cannot_touch_new_capt
 #[tokio::test]
 async fn assistant_voice_cancel_interrupts_ai_but_cannot_claim_a_hotkey_session() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::reminders::ReminderScheduler::open(
-        dir.path().join("reminders.json"),
+    let queue = kotone_core::automation::AutomationScheduler::open(
+        dir.path().join("automation-runs.json"),
         Arc::new(ReminderTestDelivery),
     )
     .unwrap();
@@ -4009,8 +4009,8 @@ async fn assistant_voice_cancel_interrupts_ai_but_cannot_claim_a_hotkey_session(
 #[tokio::test]
 async fn assistant_voice_start_rejects_a_ticket_invalidated_while_waiting_for_admission() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::reminders::ReminderScheduler::open(
-        dir.path().join("reminders.json"),
+    let queue = kotone_core::automation::AutomationScheduler::open(
+        dir.path().join("automation-runs.json"),
         Arc::new(ReminderTestDelivery),
     )
     .unwrap();
@@ -4046,8 +4046,8 @@ async fn assistant_voice_start_rejects_a_ticket_invalidated_while_waiting_for_ad
 #[tokio::test]
 async fn assistant_legacy_solo_configuration_records_only_on_press_and_release() {
     let dir = tempfile::tempdir().unwrap();
-    let queue = kotone_core::reminders::ReminderScheduler::open(
-        dir.path().join("reminders.json"),
+    let queue = kotone_core::automation::AutomationScheduler::open(
+        dir.path().join("automation-runs.json"),
         Arc::new(ReminderTestDelivery),
     )
     .unwrap();

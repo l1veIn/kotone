@@ -15,6 +15,7 @@
 
 pub mod assistant;
 pub mod audio;
+pub mod automation;
 pub mod cancel;
 pub mod connection;
 pub mod eval;

@@ -1,93 +1,75 @@
-//! 自动化的桌面执行器（docs/product-evolution-game-tools.md §12）。自动化 = 大模型或 Agent
-//! 写的一小段 Luau 程序，由 `kotone-script` 在沙盒里运行。
+//! 自动化的桌面执行器（docs/adr/013-automation-domain-model.md、演进计划 §12）。
 //!
-//! - 每个脚本在自己的线程里由 `kotone_script::run` 执行；宿主 [`DesktopHost`] 把白名单函数接到
+//! - 执行记录由 core 的 [`AutomationScheduler`] 管（存盘、延迟、取消、错过不补、名额）；本模块是
+//!   它的 [`ProgramLauncher`]：到点（或立即）启动一段 Luau 程序，结束时回报 `finish_program`。
+//! - 每个程序在自己的线程里由 `kotone_script::run` 执行；宿主 [`DesktopHost`] 把白名单函数接到
 //!   真实能力：按键 / 打字走 `SendInput`（与“帮忙打字”同一条输入通道），看屏幕用 GDI 截游戏
 //!   客户区，`ocr()` 用陪玩选定的 OCR 模型，`say` / `toast` 复用提醒的交付路径。
-//! - **只对启动时的游戏窗口生效**：启动脚本时记下前台窗口；按键、截图前先确认它在前台，不在
-//!   就暂停等待；窗口关闭则结束脚本。
-//! - **按住的键一定会松开**：`key_down` 记账，脚本结束（正常、出错、取消、超限）时全部 `key_up`。
-//! - 同时最多运行 [`MAX_RUNNING`] 个脚本；停止脚本热键、托盘菜单、工具 `script.stop` 与应用退出
-//!   都会立即取消。运行状态经 `kotone://scripts` 推给界面，结束经工具事件 `script.finished` 发布。
+//! - **只对下指令时的游戏窗口生效**：安排执行时记下前台窗口（[`RunTarget`]）；到点时窗口已关闭
+//!   就不启动；运行中按键、截图前先确认它在前台，不在就暂停等待；窗口关闭则结束。
+//! - **按住的键一定会松开**：`key_down` 记账，程序结束（正常、出错、取消、超限）时全部 `key_up`。
+//! - 停止自动化热键、托盘菜单与不带 id 的 `automation.stop` 停止全部程序（含等待中的程序，
+//!   不含提醒）；应用退出只停止运行中的程序，等待中的留到下次启动（过期则记为错过）。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
+use kotone_core::automation::{
+    AutomationScheduler, ProgramAction, ProgramLauncher, ProgramReport, Run, RunAction, RunStatus,
+    RunTarget, MAX_RUNNING_PROGRAMS, MAX_SOURCE_CHARS,
+};
 use kotone_core::ocr::{OcrCancel, OcrInput, OcrParams};
 use kotone_core::reminders::DeliveryKind;
 use kotone_core::tools::{WindowCapturer, WindowIdentity, WindowInfo, WindowObserver};
 use kotone_platform_windows::inject;
 use kotone_platform_windows::window_tools::{GdiForegroundCapturer, WindowsWindowObserver};
-use kotone_script::{Cancel, KeyAction, Limits, Outcome, Region, RunReport, ScriptHost};
+use kotone_script::{Cancel, KeyAction, Limits, Outcome, Region, ScriptHost};
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
-pub const MAX_RUNNING: usize = 3;
 const MAX_CAPTURE_PIXELS: u64 = 3840 * 2160;
-const MAX_SOURCE_CHARS: usize = 8_000;
+/// 工具 `automation.runs` 最多返回的条数。
+const MAX_LISTED_RUNS: usize = 50;
 
-fn unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
-/// 一次运行的记录（界面与工具展示用；不含脚本以外的用户数据）。
-#[derive(Clone)]
-struct Run {
-    id: String,
-    name: String,
-    source: String,
-    target: String,
-    started_at_ms: u64,
+/// 运行中的程序（只在内存里；执行记录在调度器）。
+struct Live {
     cancel: Cancel,
-    report: Option<RunReport>,
     end_reason: Option<String>,
-}
-
-impl Run {
-    fn to_json(&self) -> Value {
-        let (status, message) = match &self.report {
-            None => ("running", None),
-            Some(report) => match &report.outcome {
-                Outcome::Finished => ("finished", None),
-                Outcome::Cancelled => ("stopped", self.end_reason.clone()),
-                Outcome::LimitReached(m) => ("limit", Some(m.clone())),
-                Outcome::Error(m) => ("error", Some(m.clone())),
-            },
-        };
-        json!({
-            "id": self.id,
-            "name": self.name,
-            "target": self.target,
-            "status": status,
-            "message": message,
-            "startedAtUnixMs": self.started_at_ms,
-            "keys": self.report.as_ref().map(|r| r.keys),
-            "durationMs": self.report.as_ref().map(|r| r.duration_ms),
-            "log": self.report.as_ref().map(|r| r.log.clone()).unwrap_or_default(),
-            "source": self.source,
-        })
-    }
 }
 
 #[derive(Default)]
 pub struct AutomationManager {
-    runs: Mutex<Vec<Run>>,
+    live: Mutex<HashMap<String, Live>>,
 }
 
-impl AutomationManager {
-    fn running(&self) -> usize {
-        self.runs
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|r| r.report.is_none())
-            .count()
+/// 调度器的程序执行端口。
+pub struct Launcher {
+    pub app: AppHandle,
+}
+
+impl ProgramLauncher for Launcher {
+    fn launch(&self, run: &Run) -> Result<(), String> {
+        launch(&self.app, run)
     }
+
+    fn stop(&self, run_id: &str, reason: &str) {
+        let manager = self.app.state::<AutomationManager>();
+        let mut live = manager.live.lock().unwrap();
+        if let Some(live) = live.get_mut(run_id) {
+            live.cancel.cancel();
+            live.end_reason.get_or_insert_with(|| reason.to_string());
+            kotone_core::log::log(&format!("automation {run_id}: stop ({reason})"));
+        }
+    }
+}
+
+fn scheduler(app: &AppHandle) -> Result<Arc<AutomationScheduler>, String> {
+    app.try_state::<crate::assistant::AssistantRuntime>()
+        .ok_or("自动化调度器尚未就绪")?
+        .scheduler
+        .clone()
 }
 
 fn target_label(window: &WindowInfo) -> String {
@@ -313,67 +295,119 @@ impl ScriptHost for DesktopHost {
     }
 }
 
-fn emit(app: &AppHandle) {
-    let _ = app.emit("kotone://scripts", list(app));
+/// 执行记录的对外形状（工具与事件）。`with_source = false` 时省略程序源码。
+pub fn run_json(run: &Run, with_source: bool) -> Value {
+    let mut value = serde_json::to_value(run).unwrap_or(Value::Null);
+    if !with_source {
+        if let Some(action) = value.get_mut("action").and_then(Value::as_object_mut) {
+            action.remove("source");
+        }
+    }
+    value
 }
 
-/// 当前与最近的运行记录（新的在前，最多 20 条）。
-pub fn list(app: &AppHandle) -> Value {
-    let manager = app.state::<AutomationManager>();
-    let runs = manager.runs.lock().unwrap();
-    json!({
-        "running": runs.iter().filter(|r| r.report.is_none()).count(),
-        "maxRunning": MAX_RUNNING,
-        "runs": runs.iter().rev().take(20).map(Run::to_json).collect::<Vec<_>>(),
+/// 等待中、运行中与最近的执行记录（含提醒）。
+pub fn list(app: &AppHandle) -> Result<Value, String> {
+    let runs = scheduler(app)?.runs();
+    let running = runs
+        .iter()
+        .filter(|r| r.is_program() && r.status == RunStatus::Running)
+        .count();
+    let pending = runs
+        .iter()
+        .filter(|r| r.status == RunStatus::Pending)
+        .count();
+    Ok(json!({
+        "running": running,
+        "pending": pending,
+        "maxRunning": MAX_RUNNING_PROGRAMS,
+        "runs": runs.iter().take(MAX_LISTED_RUNS).map(|r| run_json(r, true)).collect::<Vec<_>>(),
+    }))
+}
+
+/// 当前前台窗口作为目标（不能是 Kotone 自己）。
+fn foreground_target() -> Result<RunTarget, String> {
+    let window = WindowsWindowObserver
+        .foreground_window()
+        .map_err(|e| format!("找不到前台窗口：{e}"))?
+        .ok_or("当前没有前台窗口：请先切到游戏再启动自动化")?;
+    if window.identity.pid == std::process::id() {
+        return Err("前台是 Kotone 自己的窗口：请先切到游戏再启动自动化".into());
+    }
+    Ok(RunTarget {
+        handle: window.identity.handle,
+        pid: window.identity.pid,
+        process_started_at: window.identity.process_started_at,
+        label: target_label(&window),
     })
 }
 
-/// 在当前前台窗口（游戏）上启动脚本，立即返回运行 ID。
-pub fn start(app: &AppHandle, name: &str, source: &str) -> Result<Value, String> {
+/// 安排一段程序：目标是**现在**的前台窗口（游戏）；`due_at_ms` 不晚于现在就立即启动。
+pub fn start(
+    app: &AppHandle,
+    session: &str,
+    name: &str,
+    source: &str,
+    due_at_ms: u64,
+) -> Result<Value, String> {
     let source = source.trim();
     if source.is_empty() || source.chars().count() > MAX_SOURCE_CHARS {
         return Err(format!("自动化内容为空或超过 {MAX_SOURCE_CHARS} 字"));
     }
     kotone_script::check_syntax(source).map_err(|e| format!("自动化语法错误：{e}"))?;
-    let manager = app.state::<AutomationManager>();
-    if manager.running() >= MAX_RUNNING {
-        return Err(format!("最多同时运行 {MAX_RUNNING} 个自动化，请先停止一个"));
-    }
-    let window = WindowsWindowObserver
-        .foreground_window()
-        .map_err(|e| format!("找不到前台窗口：{e}"))?
-        .ok_or("当前没有前台窗口：请先切到游戏再启动自动化")?;
-    let own_pid = std::process::id();
-    if window.identity.pid == own_pid {
-        return Err("前台是 Kotone 自己的窗口：请先切到游戏再启动自动化".into());
-    }
-    let id = kotone_tools::ids::new_id("auto");
-    let cancel = Cancel::default();
-    let run = Run {
-        id: id.clone(),
-        name: name.trim().chars().take(40).collect(),
-        source: source.to_string(),
-        target: target_label(&window),
-        started_at_ms: unix_ms(),
-        cancel: cancel.clone(),
-        report: None,
-        end_reason: None,
+    let target = foreground_target()?;
+    let label = target.label.clone();
+    let run = scheduler(app)?.schedule_program(
+        session,
+        ProgramAction {
+            name: name.to_string(),
+            source: source.to_string(),
+            automation_id: None,
+            args: Default::default(),
+            target: Some(target),
+        },
+        due_at_ms,
+    )?;
+    Ok(json!({
+        "status": if run.status == RunStatus::Running { "started" } else { "scheduled" },
+        "id": run.id,
+        "target": label,
+        "dueAtUnixMs": run.due_at_ms,
+    }))
+}
+
+/// 调度器到点（或立即）调用：确认目标窗口还在，然后在新线程里运行程序。
+fn launch(app: &AppHandle, run: &Run) -> Result<(), String> {
+    let RunAction::Program(program) = &run.action else {
+        return Err("不是程序".into());
     };
+    let target = program.target.as_ref().ok_or("没有记录目标窗口")?;
+    let identity = WindowIdentity {
+        handle: target.handle,
+        pid: target.pid,
+        process_started_at: target.process_started_at,
+    };
+    if WindowsWindowObserver.inspect(&identity).is_err() {
+        return Err(format!(
+            "游戏窗口已关闭（{}），自动化没有启动",
+            target.label
+        ));
+    }
+    let id = run.id.clone();
+    let cancel = Cancel::default();
     {
-        let mut runs = manager.runs.lock().unwrap();
-        runs.push(run);
-        while runs.len() > 40 {
-            match runs.iter().position(|r| r.report.is_some()) {
-                Some(i) => {
-                    runs.remove(i);
-                }
-                None => break,
-            }
-        }
+        let manager = app.state::<AutomationManager>();
+        manager.live.lock().unwrap().insert(
+            id.clone(),
+            Live {
+                cancel: cancel.clone(),
+                end_reason: None,
+            },
+        );
     }
     let host = Arc::new(DesktopHost {
         app: app.clone(),
-        target: window.identity,
+        target: identity,
         started: Instant::now(),
         held: Mutex::new(BTreeSet::new()),
         gone: AtomicBool::new(false),
@@ -382,8 +416,8 @@ pub fn start(app: &AppHandle, name: &str, source: &str) -> Result<Value, String>
     });
     let thread_app = app.clone();
     let thread_id = id.clone();
-    let code = source.to_string();
-    std::thread::Builder::new()
+    let code = program.source.clone();
+    let spawned = std::thread::Builder::new()
         .name(format!("kotone-automation-{id}"))
         .spawn(move || {
             let report = kotone_script::run(
@@ -393,64 +427,129 @@ pub fn start(app: &AppHandle, name: &str, source: &str) -> Result<Value, String>
                 cancel,
             );
             host.release_all();
-            let reason = host
-                .gone
-                .load(Ordering::SeqCst)
-                .then(|| "游戏窗口已关闭".to_string());
             kotone_core::log::log(&format!(
                 "automation {thread_id}: {:?} keys={} {}ms",
                 report.outcome, report.keys, report.duration_ms
             ));
-            let finished = {
-                let manager = thread_app.state::<AutomationManager>();
-                let mut runs = manager.runs.lock().unwrap();
-                runs.iter_mut().find(|r| r.id == thread_id).map(|run| {
-                    run.report = Some(report);
-                    if run.end_reason.is_none() {
-                        run.end_reason = reason;
-                    }
-                    run.to_json()
-                })
+            // 读停止原因时只短暂持有自己的锁，回报调度器时不持有（ProgramLauncher 的约定）；
+            // 记录写完才从 live 移除，应用退出时据此等待“键已松开、记录已写”。
+            let end_reason = thread_app
+                .state::<AutomationManager>()
+                .live
+                .lock()
+                .unwrap()
+                .get(&thread_id)
+                .and_then(|live| live.end_reason.clone());
+            let gone = host.gone.load(Ordering::SeqCst);
+            let (status, message, outcome) = match &report.outcome {
+                Outcome::Finished => (RunStatus::Finished, None, "finished"),
+                Outcome::Cancelled => (
+                    RunStatus::Cancelled,
+                    end_reason.or_else(|| gone.then(|| "游戏窗口已关闭".to_string())),
+                    "stopped",
+                ),
+                Outcome::LimitReached(m) => (RunStatus::Failed, Some(m.clone()), "limit"),
+                Outcome::Error(m) => (RunStatus::Failed, Some(m.clone()), "error"),
             };
-            if let Some(mut finished) = finished {
-                if let Some(obj) = finished.as_object_mut() {
-                    obj.remove("source");
+            let summary = ProgramReport {
+                outcome: outcome.into(),
+                keys: u32::try_from(report.keys).unwrap_or(u32::MAX),
+                duration_ms: report.duration_ms,
+                log: report.log,
+            };
+            if let Ok(scheduler) = scheduler(&thread_app) {
+                if let Err(e) = scheduler.finish_program(&thread_id, status, message, Some(summary))
+                {
+                    kotone_core::log::log(&format!("automation {thread_id}: record failed: {e}"));
                 }
-                crate::tool_service::publish(&thread_app, "automation.finished", finished);
             }
-            emit(&thread_app);
-        })
-        .map_err(|e| format!("无法启动自动化线程：{e}"))?;
-    emit(app);
-    Ok(json!({"status": "started", "id": id, "target": target_label(&window)}))
+            thread_app
+                .state::<AutomationManager>()
+                .live
+                .lock()
+                .unwrap()
+                .remove(&thread_id);
+        });
+    if let Err(e) = spawned {
+        app.state::<AutomationManager>()
+            .live
+            .lock()
+            .unwrap()
+            .remove(&id);
+        return Err(format!("无法启动自动化线程：{e}"));
+    }
+    Ok(())
 }
 
-/// 停止一个脚本；`id = None` 停止全部。返回被停止的个数。
+/// 取消 / 停止一条执行（`id`，提醒也可以）；`id = None` 停止全部程序（含等待中的，不含提醒）。
+/// 返回涉及的条数。
 pub fn stop(app: &AppHandle, id: Option<&str>, reason: &str) -> usize {
-    let Some(manager) = app.try_state::<AutomationManager>() else {
+    let Ok(scheduler) = scheduler(app) else {
         return 0;
     };
-    let mut stopped = 0;
-    for run in manager.runs.lock().unwrap().iter_mut() {
-        if run.report.is_none() && id.map_or(true, |id| run.id == id) {
-            run.cancel.cancel();
-            run.end_reason.get_or_insert_with(|| reason.to_string());
-            stopped += 1;
+    let result = match id {
+        Some(id) => scheduler.cancel_with_reason(id, reason).map(usize::from),
+        None => scheduler.stop_programs(reason),
+    };
+    match result {
+        Ok(n) => {
+            if n > 0 {
+                kotone_core::log::log(&format!("automation: stopped {n} ({reason})"));
+            }
+            n
+        }
+        Err(e) => {
+            kotone_core::log::log(&format!("automation: stop failed: {e}"));
+            0
         }
     }
-    if stopped > 0 {
-        kotone_core::log::log(&format!("automation: stopped {stopped} ({reason})"));
-    }
-    stopped
 }
 
-/// 应用退出：停止全部脚本（各脚本线程随后松开按住的键）。
+/// 接到调度器上：程序执行端口与结束事件。
+pub fn attach(app: &AppHandle) {
+    let Ok(scheduler) = scheduler(app) else {
+        return;
+    };
+    let handle = app.clone();
+    scheduler.set_on_finished(Arc::new(move |run: &Run| {
+        crate::tool_service::publish(&handle, "automation.finished", run_json(run, false));
+    }));
+    scheduler.set_launcher(Arc::new(Launcher { app: app.clone() }));
+}
+
+/// 应用退出等程序线程收尾（松开按住的键、写结束记录）的最长时间。
+const SHUTDOWN_WAIT: Duration = Duration::from_millis(1_500);
+
+/// 应用退出：只停止运行中的程序，等待中的留给下次启动（过期则记为错过）。
+/// 进程在本函数返回后就会结束，所以要等各线程松开按住的键、写完记录（有上限）。
 pub fn shutdown(app: &AppHandle) {
-    stop(app, None, "Kotone 退出");
+    let Some(manager) = app.try_state::<AutomationManager>() else {
+        return;
+    };
+    let count = {
+        let mut live = manager.live.lock().unwrap();
+        for run in live.values_mut() {
+            run.cancel.cancel();
+            run.end_reason
+                .get_or_insert_with(|| "Kotone 退出".to_string());
+        }
+        live.len()
+    };
+    if count == 0 {
+        return;
+    }
+    let deadline = Instant::now() + SHUTDOWN_WAIT;
+    while !manager.live.lock().unwrap().is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let left = manager.live.lock().unwrap().len();
+    kotone_core::log::log(&format!(
+        "automation: stopped {count} at exit, {left} did not finish in time"
+    ));
 }
 
 #[tauri::command]
-pub fn automation_list(app: AppHandle) -> Value {
+pub fn automation_runs(app: AppHandle) -> Result<Value, String> {
     list(&app)
 }
 

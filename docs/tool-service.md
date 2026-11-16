@@ -148,13 +148,17 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 
 ### 自动化（委托桌面宿主，2026-11-16）
 
-大模型或 Agent 写的一小段 Luau 程序（自动化）在沙盒里对**当前前台窗口**（游戏）执行（[演进计划 §12](product-evolution-game-tools.md#12-自动化大模型写程序沙盒执行2026-11-16-定方向)）。启动前先切到游戏。
+大模型或 Agent 写的一小段 Luau 程序（自动化）在沙盒里对游戏窗口执行（[演进计划 §12](product-evolution-game-tools.md#12-自动化大模型写程序沙盒执行2026-11-16-定方向)、[ADR 013](adr/013-automation-domain-model.md)）。调用时的**前台窗口**就是目标，先切到游戏。提醒也是自动化（“延迟 + 播报”），和程序共用一个调度器与执行记录。
 
 | 工具 | 参数 | 结果要点 |
 | --- | --- | --- |
-| `automation.run` | `source`（Luau，≤8000 字）、可选 `name` | 先校验语法（错误为 `INVALID_ARGUMENTS`）；同时最多 3 个（否则 `BUSY`）。受理即返回 `{status:"started", id, target}`；结束发布 `automation.finished`：`id`、`status`（`finished` / `stopped` / `limit` / `error`）、`message`（停止原因，如“游戏窗口已关闭”“工具 automation.stop”）、`keys`、`durationMs`、`log[]` |
-| `automation.list` | 无 | `running`、`maxRunning`、`runs[]`（新的在前，最多 20 条，含 `source`） |
-| `automation.stop` | 可选 `id`（缺省 = 全部） | `stopped`（停止了几个）；它按住的键随即松开 |
+| `automation.run` | `source`（Luau，≤8000 字）、可选 `name`、可选 `delaySeconds`（≤604800）或 `at`（Unix 毫秒） | 先校验语法（错误为 `INVALID_ARGUMENTS`）。立即运行时同时最多 3 个（否则 `BUSY`）；带延迟时存为等待中（Kotone 重启后仍在）。返回 `{status:"started"/"scheduled", id, target, dueAtUnixMs}` |
+| `automation.runs` | 无 | `running`、`pending`、`maxRunning`、`runs[]`：执行记录（含提醒），未结束的按到期时间在前，其后已结束的新的在前，最多 50 条 |
+| `automation.stop` | 可选 `id` | 有 `id`：取消等待中的或停止运行中的那一条（提醒也可以）。没有 `id`：停止全部运行中的程序并取消全部等待中的程序，**等待中的提醒保留**。返回 `stopped`（涉及条数）；按住的键随即松开 |
+
+**执行记录**：`id`、`sessionId`（发起方）、`action`（`{kind:"speak", text, delivery}` 或 `{kind:"program", name, source, automationId, args, target:{label,…}}`）、`createdAtMs`、`dueAtMs`、`startedAtMs`、`finishedAtMs`、`status`（`pending` / `running` / `finished` / `failed` / `cancelled` / `missed`）、`message`（失败、停止或错过的原因，如“游戏窗口已关闭”“停止自动化热键”）、`report`（程序：`outcome` 为 `finished` / `stopped` / `limit` / `error`，`keys`、`durationMs`、`log[]`）。每条执行进入终态时发布 `automation.finished`，内容即这条记录（省略 `source`）。
+
+**调度语义**：最多执行一次，**绝不自动重试**；到期超过 120 秒（Kotone 没开、休眠）记为 `missed`，不补执行；Kotone 退出时仍在运行的记录下次启动记为 `failed`；程序在**安排时**记下目标窗口，到点时窗口已关闭则 `failed`，不会改投当时的前台窗口；到点时已有 3 个程序在跑则这次 `failed`，不排队。
 
 **白名单函数**：`key(名)` / `key_down` / `key_up`（键名如 `Q`、`Enter`、`Ctrl+Q`、`F1`）、`type_text(文字)`；`wait(ms)`、`every(ms, fn, {for_ms, times})`（固定节拍、不补拍，`fn` 返回 `false` 结束）、`wait_until(条件, {poll_ms=200, stable_frames=1, timeout_ms})` → 是否满足、`now()`；`region(x, y, w, h)`（窗口客户区比例 0..1）、`brightness(区域)`（0..255）、`color_at(x, y)` → r, g, b、`ocr(区域)` → 只能 `:has(文字)`（跨行、忽略空白与大小写）/ `:count()` 的对象（拿不到原文）；`say(文字)`（语音，等播完）、`toast(文字)`（弹幕，不等）、`log(文字)`、`game_focused()`、`stop()`。没有文件、网络、进程、配置。
 
@@ -364,7 +368,7 @@ Agent 从“打开 exe”开始就能驱动 Kotone，并能收到用户通过 Ko
 | `agent.reply.delivered` / `agent.reply.failed` | 回复交付完成 / 失败 | `deliveryId`、`requestId`、`text`、`receipt` 或 `code/message`、`deliverMs` |
 | `model.download.progress` / `.finished` / `.failed` | `models.download` 的进度（至多每秒一次）与结果 | `id`、`downloadedBytes/totalBytes`；结果含 `durationMs`，失败含 `cancelled`、`message` |
 | `companion.finished` / `companion.failed` | `companion.ask` 的结果 | 见上表；`jobId` 对应受理时的返回 |
-| `automation.finished` | `automation.run` 启动的自动化结束 | `id`、`name`、`target`、`status`、`message`、`keys`、`durationMs`、`log` |
+| `automation.finished` | 一条执行（程序或提醒）进入终态：完成、失败、取消、错过 | 执行记录（见“自动化”，省略程序源码） |
 | `companion.check.finished` / `.failed` | `companion.check` 的结果 | `check{connectionId,baseUrl,model,passed,checkedAtMs,message}` 或 `message` |
 | `speech.model.download.finished` / `.failed` | `speech.model.download` 的结果 | `status` 或 `cancelled`、`message`、`durationMs` |
 | `elevation.restart.failed` | 用户拒绝 UAC 或提权启动失败 | `message` |

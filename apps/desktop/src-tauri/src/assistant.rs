@@ -8,16 +8,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use kotone_core::assistant::{
     AssistantConfig, AssistantHandler, AssistantPlan, AssistantRequest, TtsEngine,
 };
+use kotone_core::automation::AutomationScheduler;
 use kotone_core::cancel::CancellationToken;
-use kotone_core::reminders::{
-    DeliveryFuture, DeliveryKind, Reminder, ReminderDelivery, ReminderScheduler,
-};
+use kotone_core::reminders::{DeliveryFuture, DeliveryKind, Reminder, ReminderDelivery};
 use kotone_core::settings::Settings;
 use kotone_core::speech::{SpeechOutput, SpeechRequest, SpeechVoice};
 use tauri::{AppHandle, Emitter, Manager};
 
 pub struct AssistantRuntime {
-    pub scheduler: Result<Arc<ReminderScheduler>, String>,
+    pub scheduler: Result<Arc<AutomationScheduler>, String>,
     pub handler: Arc<dyn AssistantHandler>,
     system_speaker: Result<Arc<dyn SpeechOutput>, String>,
     local_speaker: Mutex<Option<(std::path::PathBuf, Arc<kotone_tts::LocalSpeechOutput>)>>,
@@ -224,11 +223,19 @@ impl AssistantHandler for RoutingHandler {
 pub fn initialize(app: &AppHandle, settings: Arc<RwLock<Settings>>) -> AssistantRuntime {
     let speaker = kotone_platform_windows::speech::WindowsSpeechOutput::new()
         .map(|speaker| Arc::new(speaker) as Arc<dyn SpeechOutput>);
-    let scheduler = ReminderScheduler::open(
-        kotone_core::settings::kotone_dir().join("reminders.json"),
+    // 提醒与程序共用自动化调度器（ADR 013）；旧 reminders.json 只读导入一次，不改不删。
+    let scheduler = AutomationScheduler::open(
+        kotone_core::settings::kotone_dir().join("automation-runs.json"),
         Arc::new(DesktopDelivery { app: app.clone() }),
     );
     if let Ok(scheduler) = &scheduler {
+        match scheduler
+            .import_legacy_reminders(&kotone_core::settings::kotone_dir().join("reminders.json"))
+        {
+            Ok(0) => {}
+            Ok(n) => kotone_core::log::log(&format!("automation: imported {n} pending reminders")),
+            Err(e) => kotone_core::log::log(&format!("automation: reminders import skipped: {e}")),
+        }
         let handle = app.clone();
         scheduler.set_on_changed(Arc::new(move || {
             let _ = handle.emit("kotone://reminders-updated", ());
