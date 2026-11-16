@@ -703,19 +703,39 @@ impl Asker for DesktopAsker {
             ASK_EVENT,
             json!({"askId": ask_id, "conversationId": self.conversation_id, "request": request}),
         );
-        let answer = tokio::select! {
+        // 这一轮被停止或超时时，循环会直接丢掉这个 future：由守卫在任何结束方式下
+        // 清掉登记并通知界面收起按钮。
+        let mut guard = AskGuard {
+            app: self.app.clone(),
+            ask_id,
+            conversation_id: self.conversation_id.clone(),
+            answer: Answer::Deny,
+        };
+        guard.answer = tokio::select! {
             biased;
             _ = cancel.cancelled() => Answer::Deny,
             answer = rx => answer.unwrap_or(Answer::Deny),
         };
+        guard.answer
+    }
+}
+
+struct AskGuard {
+    app: AppHandle,
+    ask_id: String,
+    conversation_id: String,
+    answer: Answer,
+}
+
+impl Drop for AskGuard {
+    fn drop(&mut self) {
         if let Ok(rt) = runtime(&self.app) {
-            rt.inner.lock().unwrap().asks.remove(&ask_id);
+            rt.inner.lock().unwrap().asks.remove(&self.ask_id);
         }
         let _ = self.app.emit(
             ASK_RESOLVED_EVENT,
-            json!({"askId": ask_id, "conversationId": self.conversation_id, "answer": answer}),
+            json!({"askId": self.ask_id, "conversationId": self.conversation_id, "answer": self.answer}),
         );
-        answer
     }
 }
 
