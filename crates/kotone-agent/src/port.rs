@@ -15,7 +15,9 @@ use kotone_tools::ToolService;
 use serde_json::{json, Value};
 
 use crate::catalog::{Catalog, Source, ToolEntry, GROUPS, TOOL_GAME_CHAT, TOOL_REMIND, TOOL_SAY};
-use crate::permissions::{self, Answer, Asker, Decision, Grants, PermissionRequest, Policy};
+use crate::permissions::{
+    self, Answer, Asker, Decide, Decision, Grants, PermissionRequest, Policy,
+};
 
 /// `tools.find` 一次最多启用几个工具。
 const MAX_FIND: usize = 12;

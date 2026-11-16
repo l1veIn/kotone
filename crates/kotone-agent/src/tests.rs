@@ -15,7 +15,7 @@ use kotone_tools::{ServiceDeps, ServiceLimits, ToolService};
 use serde_json::{json, Value};
 
 use crate::catalog::{saved_entry, Catalog, Source, CORE_TOOLS};
-use crate::permissions::{default_decision, Decision, Grants, Mode, Policy, Rule};
+use crate::permissions::{default_decision, Decide, Decision, Grants, Mode, Policy, Rule};
 use crate::prompt::{system_prompt, Entry, PromptContext};
 use crate::{Answer, Asker, BuiltinHost, KotonePort, PermissionRequest, Session};
 

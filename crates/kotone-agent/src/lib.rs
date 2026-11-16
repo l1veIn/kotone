@@ -14,7 +14,7 @@ pub mod port;
 pub mod prompt;
 
 pub use catalog::Catalog;
-pub use permissions::{Answer, Asker, Mode, PermissionRequest, Policy, Rule};
+pub use permissions::{Answer, Asker, Decide, Mode, PermissionRequest, Policy, Rule};
 pub use port::{BuiltinHost, KotonePort, Session};
 
 #[cfg(test)]

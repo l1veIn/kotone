@@ -9,7 +9,7 @@
 //!
 //! 外部 Agent 不经过这里（全部能力开放，权限由它们自己的运行框架管）。
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Mutex;
 
@@ -20,36 +20,8 @@ use sha2::{Digest, Sha256};
 
 use crate::catalog::{Source, ToolEntry};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Mode {
-    /// 读与常规游戏操作直接执行，有风险的先问。
-    #[default]
-    Default,
-    /// 全部直接执行（用户显式设为“禁止”的仍禁止）。
-    AllowAll,
-    /// 只能读状态、看屏幕和播报；其余一律禁止。
-    ReadOnly,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Rule {
-    Allow,
-    Ask,
-    Deny,
-}
-
-/// 用户的权限设置（存在桌面端设置里）。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Policy {
-    #[serde(default)]
-    pub mode: Mode,
-    /// 按工具名覆盖默认规则。
-    #[serde(default)]
-    pub rules: BTreeMap<String, Rule>,
-}
+/// 权限设置的类型在 kotone-core（随设置存盘），这里负责判定。
+pub use kotone_core::agent::{Mode, Policy, Rule};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
@@ -180,9 +152,15 @@ pub fn default_decision(entry: &ToolEntry, arguments: &Value) -> Decision {
     Decision::Allow
 }
 
-impl Policy {
+/// 判定（`Policy` 定义在 kotone-core，判定逻辑在这里）。
+pub trait Decide {
+    fn decide(&self, entry: &ToolEntry, arguments: &Value) -> Decision;
+    fn decide_with(&self, entry: &ToolEntry, arguments: &Value, grants: &Grants) -> Decision;
+}
+
+impl Decide for Policy {
     /// 这次调用该怎么处理（不含“本段对话都允许”的记录，见 [`Self::decide_with`]）。
-    pub fn decide(&self, entry: &ToolEntry, arguments: &Value) -> Decision {
+    fn decide(&self, entry: &ToolEntry, arguments: &Value) -> Decision {
         let rule = self.rules.get(&entry.name).copied();
         if rule == Some(Rule::Deny) {
             return Decision::Deny {
@@ -205,7 +183,7 @@ impl Policy {
     }
 
     /// 考虑本段对话里已经给过的授权。
-    pub fn decide_with(&self, entry: &ToolEntry, arguments: &Value, grants: &Grants) -> Decision {
+    fn decide_with(&self, entry: &ToolEntry, arguments: &Value, grants: &Grants) -> Decision {
         match self.decide(entry, arguments) {
             Decision::Ask { .. } if grants.has(&grant_key(entry, arguments)) => Decision::Allow,
             other => other,

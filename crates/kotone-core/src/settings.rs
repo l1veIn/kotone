@@ -133,6 +133,9 @@ pub struct Settings {
     /// 独立语音助手入口、AI 连接和提醒呈现偏好。
     #[serde(default)]
     pub assistant: crate::assistant::AssistantConfig,
+    /// 内置 Agent（琴音）：权限模式与规则、不交给 AI 的已保存自动化。新字段，缺省 = 默认规则。
+    #[serde(default)]
+    pub agent: crate::agent::AgentConfig,
     /// 本机 Agent 工具服务（默认关闭；修改后需重启桌面实例才生效，见 docs/tool-service.md）。
     #[serde(default)]
     pub tool_service: ToolServiceConfig,
@@ -519,6 +522,7 @@ impl Default for Settings {
             connections: Vec::new(),
             diagnostics: DiagnosticsConfig::default(),
             assistant: crate::assistant::AssistantConfig::default(),
+            agent: crate::agent::AgentConfig::default(),
             tool_service: ToolServiceConfig::default(),
             ocr: OcrConfig::default(),
         }

@@ -13,6 +13,7 @@
 //! - `tools`：外部工具服务的窗口观察/捕获/实例发现端口（实现由平台层注入）
 //! - `settings`/`profile`/`eval`/`log`：配置 schema 与存储（唯一写入口）、游戏 profile、评测、文件日志
 
+pub mod agent;
 pub mod assistant;
 pub mod audio;
 pub mod automation;
