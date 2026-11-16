@@ -305,6 +305,15 @@ impl<H: BuiltinHost, A: Asker> ToolPort for KotonePort<H, A> {
         let Some(entry) = self.catalog.get(name).filter(|e| self.offered(e, &active)) else {
             return ToolOutcome::error(format!("没有名为 {name} 的可用工具"));
         };
+        // 琴音不能改自己的权限：在询问用户之前就拒绝，不受“全部允许”影响。
+        if entry.name == "settings.update" {
+            if let Some(reason) = arguments
+                .get("patch")
+                .and_then(kotone_core::settings_guide::agent_protected_violation)
+            {
+                return ToolOutcome::error(format!("没有执行：{reason}"));
+            }
+        }
         match self
             .policy
             .decide_with(entry, &arguments, &self.session.grants)

@@ -34,6 +34,7 @@ pub mod profile;
 pub mod reminders;
 pub mod runtime;
 pub mod settings;
+pub mod settings_guide;
 pub mod speech;
 pub mod stt;
 pub mod tools;

@@ -257,6 +257,7 @@ export function sourceLabel(source: string | undefined): string | null {
 
 /** 起手提示（ADR 014“已确认”）。 */
 export const starterPrompts = [
+  { label: "帮我配置 Kotone", text: "帮我把 Kotone 配置好：先问我几个问题，再一项项帮我设置。" },
   { label: "做一个自动化", text: "帮我做一个自动化：" },
   { label: "看看队友在说什么", text: "看看队友在聊天里说了什么" },
   { label: "设个提醒", text: "5 分钟后提醒我" },

@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 
 pub const TOOL_SETTINGS_GET: &str = "settings.get";
 pub const TOOL_SETTINGS_UPDATE: &str = "settings.update";
+pub const TOOL_SETTINGS_DESCRIBE: &str = "settings.describe";
 pub const TOOL_AUDIO_DEVICES: &str = "audio.devices";
 pub const TOOL_STT_ENGINES: &str = "stt.engines";
 pub const TOOL_MODELS_LIST: &str = "models.list";
@@ -37,6 +38,7 @@ pub const TOOL_HISTORY_CLEAR: &str = "history.clear";
 pub const TOOL_DIAGNOSTICS_EXPORT: &str = "diagnostics.export";
 pub const TOOL_DIAGNOSTICS_CLEAR: &str = "diagnostics.clear";
 pub const TOOL_APP_RESOURCES: &str = "app.resources";
+pub const TOOL_APP_RESTART: &str = "app.restart";
 pub const TOOL_POSTPROCESS_PROCESSORS: &str = "postprocess.processors";
 pub const TOOL_POSTPROCESS_TEST: &str = "postprocess.test";
 pub const TOOL_COMPANION_STATUS: &str = "companion.status";
@@ -60,6 +62,7 @@ pub const TOOL_GAME_CLOSE: &str = "game.close";
 pub const HOST_TOOLS: &[&str] = &[
     TOOL_SETTINGS_GET,
     TOOL_SETTINGS_UPDATE,
+    TOOL_SETTINGS_DESCRIBE,
     TOOL_AUDIO_DEVICES,
     TOOL_STT_ENGINES,
     TOOL_MODELS_LIST,
@@ -91,6 +94,7 @@ pub const HOST_TOOLS: &[&str] = &[
     TOOL_DIAGNOSTICS_EXPORT,
     TOOL_DIAGNOSTICS_CLEAR,
     TOOL_APP_RESOURCES,
+    TOOL_APP_RESTART,
     TOOL_POSTPROCESS_PROCESSORS,
     TOOL_POSTPROCESS_TEST,
     TOOL_COMPANION_STATUS,
@@ -153,11 +157,28 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_SETTINGS_UPDATE,
-            description: "Deep-merge a partial settings patch, exactly like saving in the settings page: values are validated, saved atomically and applied immediately (hotkeys re-register while the runtime runs, overlay/assistant changes apply live; engine/model changes set runtime restartNeeded). Connections and models.dir are rejected here — use connections.upsert / models.dir.set. toolService.* takes effect after the next app start. Finish first-run setup with {\"ui\": {\"firstRunCompleted\": true}}.",
+            description: "Deep-merge a partial settings patch, exactly like saving in the settings page: values are validated, saved atomically and applied immediately (hotkeys re-register while the runtime runs, overlay/assistant changes apply live; engine/model changes set runtime restartNeeded). Connections and models.dir are rejected here — use connections.upsert / models.dir.set. toolService.* takes effect after the next app start. Finish first-run setup with {\"ui\": {\"firstRunCompleted\": true}}. Look fields up with settings.describe first. The result's effects says what changed and whether Kotone or voice recognition must restart for it to apply (tell the user).",
             side_effects: &["writes-settings", "may-register-hotkeys"],
             egress: "none",
             input: object(&["patch"], json!({"patch": {"type": "object", "description": "部分设置（camelCase，深合并），如 {\"hotkey\": {\"key\": \"F8\"}} / {\"assistant\": {\"route\": \"agent\"}}"}})),
-            output: object(&["settings", "runtime"], json!({"settings": open("更新后的完整设置"), "runtime": open("运行时状态（含 restartNeeded）")})),
+            output: object(&["settings", "runtime", "effects"], json!({"settings": open("更新后的完整设置"), "runtime": open("运行时状态（含 restartNeeded）"), "effects": object(&["changed", "restartVoice", "restartApp", "nextLaunch", "summary"], json!({
+                "changed": {"type": "array", "items": {"type": "string"}, "description": "改动了的设置路径"},
+                "restartVoice": {"type": "boolean", "description": "语音识别正在运行，要重启它（runtime.start）才生效"},
+                "restartApp": {"type": "array", "items": {"type": "string"}, "description": "要重启 Kotone（app.restart）才生效的路径"},
+                "nextLaunch": {"type": "array", "items": {"type": "string"}, "description": "下次启动生效的路径"},
+                "summary": {"type": "string", "description": "给用户的一句话"}
+            }))})),
+        },
+        Def {
+            name: TOOL_SETTINGS_DESCRIBE,
+            description: "Explain Kotone's settings: for each user-changeable field its dotted path (as used in settings.update patches), Chinese name, where it is in the settings window, meaning, allowed values and how it takes effect (immediate / restart voice recognition / restart Kotone / next launch). Filter with a keyword (Chinese or the path, e.g. \"悬浮窗\", \"hotkey\"); without a query lists all. Also lists fields that must be changed with dedicated tools.",
+            side_effects: &[],
+            egress: "none",
+            input: json!({"type": ["object", "null"], "additionalProperties": false, "properties": {"query": {"type": "string", "maxLength": 100, "description": "关键词，空格分隔任一匹配"}}}),
+            output: object(&["fields", "dedicated"], json!({
+                "fields": {"type": "array", "items": {"type": "object"}},
+                "dedicated": {"type": "array", "items": {"type": "object"}, "description": "要用专用工具改、或不能由 Agent 改的设置"}
+            })),
         },
         Def {
             name: TOOL_AUDIO_DEVICES,
@@ -415,6 +436,14 @@ fn defs() -> Vec<Def> {
             egress: "none",
             input: none(),
             output: open("资源占用"),
+        },
+        Def {
+            name: TOOL_APP_RESTART,
+            description: "Restart Kotone (same user, no UAC) so settings that need a restart take effect. The response is sent first; then this instance exits and a new one starts (new instanceId). Voice recognition is restored on start as usual.",
+            side_effects: &["restarts-application"],
+            egress: "none",
+            input: none(),
+            output: object(&["status"], json!({"status": {"const": "restarting"}})),
         },
         Def {
             name: TOOL_POSTPROCESS_PROCESSORS,

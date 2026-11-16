@@ -69,6 +69,13 @@ struct ModelIdArgs {
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DescribeArgs {
+    #[serde(default)]
+    query: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CategoryArgs {
     #[serde(default)]
     category: Option<String>,
@@ -281,6 +288,24 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
             let _: NoArgs = parse(tool, args)?;
             Ok(settings_snapshot(app))
         }
+        c::TOOL_SETTINGS_DESCRIBE => {
+            let DescribeArgs { query } = if args.is_null() {
+                DescribeArgs::default()
+            } else {
+                parse(tool, args)?
+            };
+            let fields = kotone_core::settings_guide::describe(query.as_deref());
+            let dedicated: Vec<Value> = kotone_core::settings_guide::INTERNAL
+                .iter()
+                .map(|(path, how)| json!({"path": path, "how": how}))
+                .collect();
+            Ok(json!({"fields": fields, "dedicated": dedicated}))
+        }
+        c::TOOL_APP_RESTART => {
+            let _: NoArgs = parse(tool, args)?;
+            schedule_restart(app);
+            Ok(json!({"status": "restarting"}))
+        }
         c::TOOL_SETTINGS_UPDATE => {
             let PatchArgs { patch } = parse(tool, args)?;
             if !patch.is_object() {
@@ -296,10 +321,17 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
                     "模型目录请用 models.dir.set 修改（会迁移已有模型）".into(),
                 ));
             }
+            let before = settings_snapshot(app);
             let updated =
                 crate::update_settings(app.clone(), app.state(), patch).map_err(settings_error)?;
             settings_changed(app);
-            Ok(json!({"settings": updated, "runtime": runtime_snapshot(app)}))
+            let after = serde_json::to_value(&updated).unwrap_or(Value::Null);
+            let runtime = runtime_snapshot(app);
+            let effects = kotone_core::settings_guide::effects(
+                kotone_core::settings_guide::changed_paths(&before, &after),
+                runtime["restartNeeded"] == true,
+            );
+            Ok(json!({"settings": updated, "runtime": runtime, "effects": effects}))
         }
         c::TOOL_AUDIO_DEVICES => {
             let _: NoArgs = parse(tool, args)?;
@@ -995,6 +1027,16 @@ fn start_speech_download(app: &AppHandle) {
                 json!({"cancelled": kotone_stt::download::is_cancelled(&error) || error.contains("已取消"), "message": error, "durationMs": ms}),
             ),
         }
+    });
+}
+
+/// 普通重启（`app.restart`）：先让响应送出，再走正常的退出流程（RunEvent::Exit 里收尾）后重启。
+fn schedule_restart(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        log::log("tool service: app.restart accepted, restarting");
+        app.request_restart();
     });
 }
 

@@ -52,6 +52,10 @@ pub const CORE_TOOLS: &[&str] = &[
     "automation.runs",
     "automation.stop",
     "automation.save",
+    // 帮用户配置 Kotone：先查说明，再读 / 改（改设置会先问用户）
+    "settings.describe",
+    "settings.get",
+    "settings.update",
 ];
 
 /// 不交给内置 Agent 的工具服务工具。

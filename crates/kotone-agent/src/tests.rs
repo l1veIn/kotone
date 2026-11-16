@@ -198,7 +198,7 @@ fn catalog_offers_core_tools_and_hides_external_channels() {
         );
     }
     assert!(offered.contains(&"saved.auto-1".to_string()));
-    assert!(!offered.contains(&"settings.update".to_string()));
+    assert!(!offered.contains(&"models.download".to_string()));
     // 每个工具的参数顶层都是 object。
     for def in f.port.definitions() {
         assert_eq!(def.parameters["type"], "object", "{}", def.name);
@@ -635,4 +635,24 @@ data: [DONE]
         assert_eq!(asked[0].reason, "AI 新写的程序第一次运行");
         assert!(history.iter().any(|m| matches!(m, Message::Tool { is_error: true, content, .. } if content.contains("拒绝"))));
     }
+}
+
+#[tokio::test]
+async fn the_agent_cannot_change_its_own_permissions_even_with_allow_all() {
+    let f = fixture(
+        Policy {
+            mode: Mode::AllowAll,
+            ..Default::default()
+        },
+        Answer::AllowOnce,
+    );
+    let out = call(
+        &f.port,
+        "settings.update",
+        json!({"patch": {"agent": {"permissions": {"mode": "allow-all"}}}}),
+    )
+    .await;
+    assert!(out.is_error);
+    assert!(out.content.contains("不能改自己的权限"), "{}", out.content);
+    assert!(f.asked.lock().unwrap().is_empty(), "拒绝发生在询问之前");
 }

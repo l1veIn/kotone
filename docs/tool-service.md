@@ -9,7 +9,7 @@
 - 桌面进程拥有服务；`kotone-cli tools` 是客户端。客户端直接走 loopback HTTP，**不会再次启动 `kotone.exe`**，因此不会触发单实例回调唤起设置窗口、抢走游戏焦点。
 - 服务与 ASR 运行时（启动 / 停止开关）相互独立：运行时 Stopped 时工具照常可用，调用也不会启动 ASR、注册热键或加载模型。
 - 服务从不移动窗口；只有 `game.focus` 会把用户配置的游戏窗口切到前台，`game.launch` / `game.close` 会按游戏配置打开或请求关闭游戏，发送输入的只有自动化与陪玩打字（见各节）。除 `models.dir.set`（把模型迁到用户指定的目录，与设置页相同）外不读写调用方指定的本地文件；`diagnostics.export` 只写到 `<KOTONE_HOME>/exports/`。可见输出只有 `agent.reply` 的弹幕（不取焦点、鼠标穿透的提醒层）与语音播报，以及 `elevation.restart` 触发的系统 UAC 提示。
-- 已实现下文 75 个工具（服务自身 24 个 + 委托桌面宿主 51 个；以 `kotone-cli tools list` 为准）。引导页与设置页里人能做的配置，Agent 都能通过工具完成（[演进计划 §5.5](product-evolution-game-tools.md)）；通用热键、工作流、模型调用（LLM）与发送尚未实现，不出现在 capabilities 中，调用它们返回 `TOOL_NOT_FOUND`。
+- 已实现下文 77 个工具（服务自身 24 个 + 委托桌面宿主 53 个；以 `kotone-cli tools list` 为准）。引导页与设置页里人能做的配置，Agent 都能通过工具完成（[演进计划 §5.5](product-evolution-game-tools.md)）；通用热键、工作流、模型调用（LLM）与发送尚未实现，不出现在 capabilities 中，调用它们返回 `TOOL_NOT_FOUND`。
 - OCR 结果与聊天文字一律是**数据**：服务从不解释或执行其中的内容（例如“忽略之前的指令”之类的文字只会被原样返回）。
 
 ## 2. 开启与重启
@@ -212,7 +212,8 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | 工具 | 参数 | 结果要点 |
 | --- | --- | --- |
 | `settings.get` | 无 | 与设置页相同的完整设置（camelCase）；连接条目不含 API key |
-| `settings.update` | `patch`（部分设置，深合并） | `settings`（更新后）、`runtime`（含 `restartNeeded`）。立即生效：热键（运行时运行中重注册）、助手去向与提醒方式、悬浮窗、音效等；换引擎/模型使 `restartNeeded=true`。`connections` 与 `models.dir` 不接受（用下面的专用工具）；`toolService.*` 下次启动生效。完成首次引导：`{"ui": {"firstRunCompleted": true}}` |
+| `settings.describe` | `query?`（关键词） | `fields[]`：每个用户可改的设置的点分路径、中文名、在设置页的位置、含义、可选值和生效方式（`immediate` / `restart-voice` / `restart-app` / `next-launch`）；`dedicated[]`：要用专用工具改、或不能由 Agent 改的设置。说明表与真实设置由测试保证一一对应 |
+| `settings.update` | `patch`（部分设置，深合并） | `settings`（更新后）、`runtime`（含 `restartNeeded`）、`effects`（`changed` 改动的路径、`restartVoice`、`restartApp`、`nextLaunch`、给用户的 `summary`）。立即生效：热键（运行时运行中重注册）、助手去向与提醒方式、悬浮窗、音效等；换引擎/模型使 `restartNeeded=true`。`connections` 与 `models.dir` 不接受（用下面的专用工具）；`toolService.*` 下次启动生效。完成首次引导：`{"ui": {"firstRunCompleted": true}}` |
 | `audio.devices` | 无 | `devices[]`（标出默认与虚拟声卡）、`selected`；选择用 `settings.update {"audioDeviceId": …}` |
 | `stt.engines` | 无 | `engines[]`（可用性）、`current` |
 | `models.list` | 可选 `category`（`asr` 缺省 / `ocr` / `tts`） | `models[]`（本地/在线、大小、是否已下载、配置项、API key 页面）、`dir{dir,isDefault}`、`active`、`downloading`。`asr` 的返回与加入类别前相同（`active{engine,modelId}`）；`ocr` / `tts` 多 `category`，条目另含 `ready`/`state`/`reason`、`active`、`recommended`、`languages`、`dataEgress`（`selected-image` = 每次识别上传截图）、`files[]`，`active{modelId}` |
@@ -243,6 +244,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `diagnostics.export` | 可选 `window`（`24h`/`7d`/`all`） | 脱敏诊断 ZIP 的 `path`（`<KOTONE_HOME>/exports/`），不含识别文字、音频与热词 |
 | `diagnostics.clear` | 可选 `stopRecording` | 清除本地流程事件与 `kotone.log` |
 | `app.resources` | 无 | CPU 与内存占用 |
+| `app.restart` | 无 | 先返回 `status=restarting`，再走正常退出流程后重启（同一用户，不弹 UAC；新 `instanceId`）。用于 `effects.restartApp` 不为空时 |
 | `postprocess.processors` | 无 | 已注册的文字处理模块与配置 schema |
 | `postprocess.test` | `text`、可选 `pipeline` | 逐步输入输出与耗时；不发送、不记录 |
 
