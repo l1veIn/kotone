@@ -102,8 +102,9 @@ struct ScriptStopArgs {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CompanionTypeArgs {
     text: String,
+    /// 缺省 = 跟随设置 `assistant.companion.autoSend`（与热键入口一致）。
     #[serde(default)]
-    send: bool,
+    send: Option<bool>,
 }
 
 fn category_of(tool: &str, value: Option<&str>) -> Result<ModelCategory, HostError> {
@@ -637,6 +638,15 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
         }
         c::TOOL_COMPANION_TYPE => {
             let CompanionTypeArgs { text, send } = parse(tool, args)?;
+            let send = send.unwrap_or_else(|| {
+                app.state::<SharedState>()
+                    .settings
+                    .read()
+                    .unwrap()
+                    .assistant
+                    .companion
+                    .auto_send
+            });
             Ok(crate::companion::type_text(app, &text, send).await?)
         }
         c::TOOL_COMPANION_CHECK => {

@@ -169,7 +169,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `companion.status` | 无 | `ready`、`reason`（缺什么：AI 连接、能力自检、OCR 模型）、`check`、`ocr{modelId,state{dataEgress…}}`、`autoSend`、`quickMessages[]`、当前 profile 的 `notes` 与 `chatRegion` |
 | `companion.ask` | `text` 或 `quickMessageId`（二选一） | 受理即返回 `{status:"started", jobId}`；结果为 `companion.finished` 事件：`jobId`、`action`（`reminder` / `type` / `answer` / `clarify`）、`text`、`reminders[]`、`result`（已调度的提醒 / 打字回执 / 实际交付方式）、`ocr{model,backend,dataEgress,lines,region}`、`chatRegionLearned`、`warnings`、`timing{captureMs,ocrMs,planMs}`、`durationMs`；失败为 `companion.failed {jobId, message}`。前置条件不满足（没有通过自检的连接）时直接报错，不受理；另一条陪玩请求进行中返回 `BUSY` |
 | `companion.read_chat` | 无 | 流程前半段，不调大模型：`window`、`ocr{model,backend,dataEgress,region,lines[{text,box,confidence}]}`（框为截图像素）、`chatTracking[{messageId,text,newThisRead,firstSeenMsAgo}]`、`profile{name,notes}`、`warnings`、`timing` |
-| `companion.type` | `text`（≤200 字，单行）、可选 `send`（默认 false） | 按当前 profile 的开聊天框键与输入方式打进前台游戏聊天框；`send=false` 不按发送键。回执 `{typed, sent, profile, receipt}` 只证明本机按键已执行，不证明服务器已收到 |
+| `companion.type` | `text`（≤200 字，单行）、可选 `send`（缺省跟随设置 `autoSend`，默认 true） | 按当前 profile 的开聊天框键与输入方式打进前台游戏聊天框并按发送键；`send=false` 只打进聊天框不发送。回执 `{typed, sent, profile, receipt}` 只证明本机按键已执行，不证明服务器已收到 |
 | `companion.check` | 无 | 对助手所选连接跑能力自检（两次付费请求），受理即返回 `{status:"started"}`；结果（同时写进设置）为 `companion.check.finished {check}` 或 `companion.check.failed {message}` |
 
 数据外发：`companion.ask` / `companion.check` 把请求与识别出的聊天发给用户的 AI 连接（`connection-dependent`）；所选 OCR 模型是在线模型时，`companion.ask` / `companion.read_chat` 每次都会上传截图（`ocr.dataEgress=selected-image`）。识别出的文字对 Kotone 与 Agent 都只是数据，不是指令；模型能选的动作只有上面三种。

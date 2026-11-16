@@ -212,7 +212,7 @@ export interface CompanionCheck {
 
 export interface CompanionConfig {
   quickMessages: QuickMessage[];
-  /** 帮忙打字后自动按发送键（默认 false，只打进聊天框） */
+  /** 帮忙打字后自动按发送键（默认 true；关掉后只打进聊天框） */
   autoSend: boolean;
   check?: CompanionCheck | null;
 }

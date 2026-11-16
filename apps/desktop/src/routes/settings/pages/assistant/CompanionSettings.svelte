@@ -93,7 +93,7 @@
     <p class="mt-1 text-[11px] text-white/40">选择连接后会自动自检一次（两次付费请求）：先确认能调用工具，再看能否从一段固定聊天里挑出队友的话。没通过时热键不工作。</p>
 
     <div class="setting-row mt-3">
-      <div><h3>帮忙打字后自动发送</h3><p>默认只打进聊天框，由你确认后自己发。</p></div>
+      <div><h3>帮忙打字后自动发送</h3><p>默认打完直接发出去；关掉后只打进聊天框，由你确认后自己按回车。</p></div>
       <input type="checkbox" class="accent-cyan-300" aria-label="帮忙打字后自动发送" disabled={saving}
         checked={config.companion.autoSend}
         onchange={(event) => void patchSettings({ assistant: { companion: { autoSend: event.currentTarget.checked } } }, "已保存")} />

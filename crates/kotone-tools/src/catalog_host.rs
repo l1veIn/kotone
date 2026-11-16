@@ -426,7 +426,7 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_COMPANION_ASK,
-            description: "Run the same companion flow as the user pressing the assistant hotkey and saying `text` (or pressing a quick-message hotkey: pass quickMessageId instead): capture the foreground game window, recognise it with the selected OCR model, add chat tracking and the profile notes, make ONE LLM call that picks exactly one of reminder / type into the game chat (no Enter unless autoSend) / answer by voice or danmaku, and execute it. Returns at once with status=started and a jobId; the result arrives as a companion.finished event {jobId, action, text, reminders, result, ocr, timing, warnings} or companion.failed {jobId, message}. Requires a passed self-check (companion.status). Captures the screen; with an online OCR model the screenshot is uploaded; the request and recognised chat go to the user's AI connection.",
+            description: "Run the same companion flow as the user pressing the assistant hotkey and saying `text` (or pressing a quick-message hotkey: pass quickMessageId instead): capture the foreground game window, recognise it with the selected OCR model, add chat tracking and the profile notes, make ONE LLM call that picks exactly one of reminder / type into the game chat (sent with the send key unless the user turned autoSend off) / answer by voice or danmaku, and execute it. Returns at once with status=started and a jobId; the result arrives as a companion.finished event {jobId, action, text, reminders, result, ocr, timing, warnings} or companion.failed {jobId, message}. Requires a passed self-check (companion.status). Captures the screen; with an online OCR model the screenshot is uploaded; the request and recognised chat go to the user's AI connection.",
             side_effects: &["captures-screen", "llm-request", "may-type-into-game", "may-speak", "may-create-reminders"],
             egress: "connection-dependent",
             input: json!({"type": "object", "additionalProperties": false, "properties": {
@@ -445,10 +445,10 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_COMPANION_TYPE,
-            description: "The companion's type-for-me executor: type text (≤200 chars, single line) into the foreground game's chat box using the active profile's open-chat key and input method. send=false (default) leaves it in the chat box without pressing the send key. The receipt only proves the local key presses ran, not that the server received the message.",
+            description: "The companion's type-for-me executor: type text (≤200 chars, single line) into the foreground game's chat box using the active profile's open-chat key and input method. send omitted = follow the user's autoSend setting (on by default, i.e. press the send key, same as the hotkey); send=false leaves it in the chat box. The receipt only proves the local key presses ran, not that the server received the message.",
             side_effects: &["input"],
             egress: "none",
-            input: object(&["text"], json!({"text": {"type": "string", "minLength": 1, "maxLength": 200}, "send": {"type": "boolean", "default": false}})),
+            input: object(&["text"], json!({"text": {"type": "string", "minLength": 1, "maxLength": 200}, "send": {"type": "boolean", "description": "缺省跟随设置 assistant.companion.autoSend（默认 true）"}})),
             output: open("{typed, sent, profile, receipt}"),
         },
         Def {

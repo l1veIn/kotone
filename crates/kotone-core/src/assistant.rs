@@ -111,15 +111,26 @@ impl CompanionCheck {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct CompanionConfig {
     pub quick_messages: Vec<QuickMessage>,
-    /// 帮忙打字后自动按发送键；默认 false（只打进聊天框，由用户确认后自己发）。
+    /// 帮忙打字后自动按发送键；默认 true（2026-11-16 用户决定：说“帮我跟队友说…”就是要发出去）。
+    /// 关掉后只打进聊天框，由用户确认后自己发。
     pub auto_send: bool,
     /// 最近一次能力自检；None = 尚未自检。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub check: Option<CompanionCheck>,
+}
+
+impl Default for CompanionConfig {
+    fn default() -> Self {
+        Self {
+            quick_messages: Vec::new(),
+            auto_send: true,
+            check: None,
+        }
+    }
 }
 
 impl CompanionConfig {
@@ -328,7 +339,7 @@ mod tests {
             serde_json::from_value(serde_json::json!({"route":"reminders"})).unwrap();
         assert_eq!(config.route, AssistantRoute::Companion);
         assert_eq!(serde_json::to_value(&config).unwrap()["route"], "companion");
-        assert!(!config.companion.auto_send);
+        assert!(config.companion.auto_send, "帮忙打字默认自动发送");
         let quick = |id: &str, text: &str| QuickMessage {
             id: id.into(),
             text: text.into(),
