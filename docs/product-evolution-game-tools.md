@@ -434,7 +434,7 @@ Claude Code 应先阅读文档和仓库约定；存在 `.codegraph/` 时先用 C
 
 命名：用户可见处一律叫“自动化”（2026-11-16 决定；“脚本”在游戏里有外挂的意思）。代码里的脚本引擎 crate 仍叫 `kotone-script`，因为它运行的确实是一段 Luau 程序。
 
-状态：开发中（分支 `claude/companion-scripts`）。领域模型见 [ADR 013](adr/013-automation-domain-model.md)：自动化分定义 / 触发 / 执行记录三层，提醒并入自动化（“延迟 + 播报”），共用一个调度器。第一阶段（Luau 实验）、第二阶段（桌面执行器、停止热键、真机测试）与第三阶段（统一调度器）已完成；为了做真机测试，`automation.run / list / stop` 工具提前开放。结果见[自动化实现记录](research/2026-11-16-companion-scripts.md)。
+状态：开发中（分支 `claude/companion-scripts`）。领域模型见 [ADR 013](adr/013-automation-domain-model.md)：自动化分定义 / 触发 / 执行记录三层，提醒并入自动化（“延迟 + 播报”），共用一个调度器。第一阶段（Luau 实验）、第二阶段（桌面执行器、停止热键、真机测试）、第三阶段（统一调度器）与第四阶段（定义与入参）已完成；为了做真机测试，`automation.run / list / stop` 工具提前开放。结果见[自动化实现记录](research/2026-11-16-companion-scripts.md)。
 
 ### 12.1 要解决的问题
 
@@ -477,7 +477,7 @@ Claude Code 应先阅读文档和仓库约定；存在 `.codegraph/` 时先用 C
 1. **实验**（已完成）：`crates/kotone-script` 嵌入 Luau，注册白名单函数，跑通“每秒按 Q”“左上角变黑按回车”，沙盒与上限拦住越界程序。
 2. **执行器**（已完成）：桌面端接入真实按键注入、截图与 OCR，失焦暂停、停止热键、托盘、运行状态，真机测试。
 3. **统一调度器**（已完成）：把提醒调度器推广为自动化调度器（ADR 013 §3）：执行记录、两种动作（播报 / 程序）、延迟与指定时刻、目标窗口绑定、导入 `reminders.json`；`automation.run`（延迟）/ `runs` / `stop`；陪玩的提醒改走它；现有提醒界面保持可用。
-4. **定义与入参**：`automation.save / get / list / delete`，入参声明与校验，Luau 里的 `args`。
+4. **定义与入参**（已完成）：`automation.save / get / list / delete`，入参声明与校验，Luau 里的 `args`。
 5. **界面**：「自动化」页（进行中 / 已保存 / 记录）、陪玩页的快捷指令（一句话或已保存自动化）、声音与弹幕移到「通用」。
 6. **陪玩接入**：第四种动作 `run_automation`、首次复述确认、区域高亮。
 7. **框选取色与悬浮提示**：`screen.pick`、游戏内“正在运行”提示。

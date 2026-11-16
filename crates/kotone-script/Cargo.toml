@@ -8,4 +8,5 @@ description = "Kotone companion scripts: LLM-written Luau run in a sandbox with 
 # 依赖纪律：只定义脚本运行时与宿主端口；按键注入、截图、OCR、播报由桌面端实现端口注入。
 [dependencies]
 mlua = { version = "0.10", features = ["luau", "vendored", "send"] }
+serde_json.workspace = true
 

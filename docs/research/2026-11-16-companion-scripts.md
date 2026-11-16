@@ -99,3 +99,35 @@
 
 - 弹幕与语音的实际显示 / 听感（只看了执行记录）；界面上的提醒列表在新调度器下的显示（数据接口没变，未打开界面看）。
 - Kotone 崩溃（而不是正常退出）时按住的键：进程被杀时没有机会松键，系统里这个键会保持按下状态，直到用户再按一次。
+
+## 第四阶段：定义与入参（2026-11-16）
+
+### 实现
+
+- `kotone-core::automation::library`：已保存的自动化（`~/.kotone/automations.json`，最多 200 个）：名字、说明、入参声明、动作（程序 / 播报）、创建者、时间。入参类型：数字（范围、整数）、文字（长度、不能换行）、布尔、选项、按键、区域、颜色；没有缺省值即必填。`validate_args` 在运行前校验并补上缺省值；保存时校验声明本身（参数名、范围、缺省值）。
+- `kotone-script::run_with_args`：入参在程序里是只读全局表 `args`；区域就是 `{x, y, w, h}` 表，可直接交给 `brightness` / `ocr`。
+- 调度器新增 `schedule_speak`（运行播报类自动化）；执行记录里的程序保存源码、入参与来源定义的快照。
+- 工具：`automation.save / get / list / delete`；`automation.run` 可传 `id + args`；事件 `automation.saved` / `automation.deleted`。原 `automation.list` 已在第三阶段改名为 `automation.runs`，`automation.list` 现在列定义。
+
+### 真机测试（同一隔离环境与测试窗口）
+
+| # | 场景 | 结果 |
+| --- | --- | --- |
+| 1 | 保存带 4 个参数（按键、间隔、次数、区域）的程序 | 成功，`createdBy=agent`，未给 `label` 的参数补成参数名 |
+| 2 | 保存语法错误的程序 / 缺省区域超出窗口的声明 | 都是 `INVALID_ARGUMENTS`，错误说明具体到参数 |
+| 3 | 保存播报类自动化；`list` 与 `get` | `list` 不含源码，`get` 含源码 |
+| 4 | 运行时缺必填参数、按键名不合法、多给参数、`source` 带 `args` | 都是 `INVALID_ARGUMENTS`，没有执行记录 |
+| 5 | `args {times:3, key:"E", interval:200}` | 区域亮：按了 3 次 E，间隔 196 / 199 ms；执行记录带 `automationId` 与补全缺省值后的入参 |
+| 6 | 把区域变黑后再运行 | 没有按键（程序走了 `log("dark")` 分支） |
+| 7 | 运行播报类自动化（2 秒后） | `scheduled`，不需要目标窗口，到点开始投递 |
+| 8 | 安排 4 秒后运行，随即删除定义 | 删除后再按 id 运行报“找不到自动化”；已安排的那次照常按了 2 次 H |
+| 9 | 退出后看 `automations.json` | 剩下的定义还在，编号不复用 |
+
+### 其他验证
+
+`cargo test --workspace`（709 个通过）、`cargo clippy --workspace --all-targets -D warnings`、`cargo fmt --check`、`pnpm check`、Playwright 全量。
+
+### 未验证与已知不足
+
+- 播报类自动化的执行记录没有记下来源定义（`automationId` 只在程序动作里）；界面阶段若要按定义筛选执行记录再补。
+- 第 7 项在投递中途退出了 Kotone，那条记录按规则在下次启动时记为失败；没有等它投递完成。

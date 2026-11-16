@@ -16,6 +16,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use kotone_core::automation::library::{
+    validate_args, Automation, AutomationBody, AutomationDraft, AutomationLibrary, CreatedBy,
+};
 use kotone_core::automation::{
     AutomationScheduler, ProgramAction, ProgramLauncher, ProgramReport, Run, RunAction, RunStatus,
     RunTarget, MAX_RUNNING_PROGRAMS, MAX_SOURCE_CHARS,
@@ -39,9 +42,29 @@ struct Live {
     end_reason: Option<String>,
 }
 
-#[derive(Default)]
 pub struct AutomationManager {
     live: Mutex<HashMap<String, Live>>,
+    /// 已保存的自动化（`~/.kotone/automations.json`）。
+    library: Result<Arc<AutomationLibrary>, String>,
+}
+
+impl AutomationManager {
+    pub fn open() -> Self {
+        let library =
+            AutomationLibrary::open(kotone_core::settings::kotone_dir().join("automations.json"))
+                .map(Arc::new);
+        if let Err(e) = &library {
+            kotone_core::log::log(&format!("automation library unavailable: {e}"));
+        }
+        Self {
+            live: Mutex::new(HashMap::new()),
+            library,
+        }
+    }
+}
+
+fn library(app: &AppHandle) -> Result<Arc<AutomationLibrary>, String> {
+    app.state::<AutomationManager>().library.clone()
 }
 
 /// 调度器的程序执行端口。
@@ -342,38 +365,133 @@ fn foreground_target() -> Result<RunTarget, String> {
     })
 }
 
-/// 安排一段程序：目标是**现在**的前台窗口（游戏）；`due_at_ms` 不晚于现在就立即启动。
-pub fn start(
-    app: &AppHandle,
-    session: &str,
-    name: &str,
-    source: &str,
-    due_at_ms: u64,
-) -> Result<Value, String> {
+/// 要安排的一段程序（临时写的，或来自已保存的自动化）。
+pub struct ProgramRequest<'a> {
+    pub name: &'a str,
+    pub source: &'a str,
+    pub automation_id: Option<String>,
+    pub args: serde_json::Map<String, Value>,
+}
+
+fn check_source(source: &str) -> Result<&str, String> {
     let source = source.trim();
     if source.is_empty() || source.chars().count() > MAX_SOURCE_CHARS {
         return Err(format!("自动化内容为空或超过 {MAX_SOURCE_CHARS} 字"));
     }
     kotone_script::check_syntax(source).map_err(|e| format!("自动化语法错误：{e}"))?;
+    Ok(source)
+}
+
+fn scheduled_json(run: &Run, target: Option<&str>) -> Value {
+    json!({
+        "status": if run.status == RunStatus::Running { "started" } else { "scheduled" },
+        "id": run.id,
+        "target": target,
+        "dueAtUnixMs": run.due_at_ms,
+    })
+}
+
+/// 安排一段程序：目标是**现在**的前台窗口（游戏）；`due_at_ms` 不晚于现在就立即启动。
+pub fn start(
+    app: &AppHandle,
+    session: &str,
+    request: ProgramRequest<'_>,
+    due_at_ms: u64,
+) -> Result<Value, String> {
+    let source = check_source(request.source)?;
     let target = foreground_target()?;
     let label = target.label.clone();
     let run = scheduler(app)?.schedule_program(
         session,
         ProgramAction {
-            name: name.to_string(),
+            name: request.name.to_string(),
             source: source.to_string(),
-            automation_id: None,
-            args: Default::default(),
+            automation_id: request.automation_id,
+            args: request.args,
             target: Some(target),
         },
         due_at_ms,
     )?;
+    Ok(scheduled_json(&run, Some(&label)))
+}
+
+/// 运行一个已保存的自动化：先按声明校验入参；程序以现在的前台窗口为目标，播报不需要窗口。
+pub fn run_saved(
+    app: &AppHandle,
+    session: &str,
+    id: &str,
+    args: &serde_json::Map<String, Value>,
+    due_at_ms: u64,
+) -> Result<Value, String> {
+    let automation = library(app)?
+        .get(id)
+        .ok_or_else(|| format!("找不到自动化 {id}"))?;
+    let args = validate_args(&automation.params, args)?;
+    match &automation.action {
+        AutomationBody::Program(program) => start(
+            app,
+            session,
+            ProgramRequest {
+                name: &automation.name,
+                source: &program.source,
+                automation_id: Some(automation.id.clone()),
+                args,
+            },
+            due_at_ms,
+        ),
+        AutomationBody::Speak(speak) => {
+            let run = scheduler(app)?.schedule_speak(session, speak.clone(), due_at_ms)?;
+            Ok(scheduled_json(&run, None))
+        }
+    }
+}
+
+/// 定义的对外形状；`with_source = false`（列表）时省略程序源码。
+pub fn automation_json(automation: &Automation, with_source: bool) -> Value {
+    let mut value = serde_json::to_value(automation).unwrap_or(Value::Null);
+    if !with_source {
+        if let Some(action) = value.get_mut("action").and_then(Value::as_object_mut) {
+            action.remove("source");
+        }
+    }
+    value
+}
+
+/// 保存（新建或按 id 覆盖）；程序先检查语法。
+pub fn save(app: &AppHandle, mut draft: AutomationDraft, by: CreatedBy) -> Result<Value, String> {
+    if let AutomationBody::Program(program) = &mut draft.action {
+        program.source = check_source(&program.source)?.to_string();
+    }
+    let saved = library(app)?.save(draft, by)?;
+    crate::tool_service::publish(
+        app,
+        "automation.saved",
+        json!({"id": saved.id, "name": saved.name}),
+    );
+    Ok(automation_json(&saved, true))
+}
+
+pub fn get(app: &AppHandle, id: &str) -> Result<Value, String> {
+    library(app)?
+        .get(id)
+        .map(|a| automation_json(&a, true))
+        .ok_or_else(|| format!("找不到自动化 {id}"))
+}
+
+pub fn list_saved(app: &AppHandle) -> Result<Value, String> {
+    let list = library(app)?.list();
     Ok(json!({
-        "status": if run.status == RunStatus::Running { "started" } else { "scheduled" },
-        "id": run.id,
-        "target": label,
-        "dueAtUnixMs": run.due_at_ms,
+        "automations": list.iter().map(|a| automation_json(a, false)).collect::<Vec<_>>(),
+        "max": kotone_core::automation::library::MAX_AUTOMATIONS,
     }))
+}
+
+pub fn delete(app: &AppHandle, id: &str) -> Result<bool, String> {
+    let deleted = library(app)?.delete(id)?;
+    if deleted {
+        crate::tool_service::publish(app, "automation.deleted", json!({"id": id}));
+    }
+    Ok(deleted)
 }
 
 /// 调度器到点（或立即）调用：确认目标窗口还在，然后在新线程里运行程序。
@@ -417,11 +535,13 @@ fn launch(app: &AppHandle, run: &Run) -> Result<(), String> {
     let thread_app = app.clone();
     let thread_id = id.clone();
     let code = program.source.clone();
+    let args = program.args.clone();
     let spawned = std::thread::Builder::new()
         .name(format!("kotone-automation-{id}"))
         .spawn(move || {
-            let report = kotone_script::run(
+            let report = kotone_script::run_with_args(
                 &code,
+                &args,
                 host.clone() as Arc<dyn ScriptHost>,
                 Limits::default(),
                 cancel,

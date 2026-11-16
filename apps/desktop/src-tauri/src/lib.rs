@@ -2026,7 +2026,7 @@ pub fn run() {
             app.manage(speech_models::SpeechModelManager::default());
             app.manage(ocr_engines::OcrEngines::new(app.handle()));
             app.manage(companion::CompanionRuntime::default());
-            app.manage(automation::AutomationManager::default());
+            app.manage(automation::AutomationManager::open());
             // 先接上程序执行端口，再启动调度器（到点的程序才有人执行）。
             automation::attach(app.handle());
             assistant::start(app.handle());

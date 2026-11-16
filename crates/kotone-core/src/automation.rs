@@ -34,7 +34,7 @@ pub const MAX_DELAY_SECONDS: u64 = 604_800;
 const MAX_PENDING: usize = 100;
 const MAX_BATCH: usize = 8;
 const MAX_HISTORY: usize = 1_000;
-const MAX_NAME_CHARS: usize = 40;
+pub(crate) const MAX_NAME_CHARS: usize = 40;
 const MAX_ARGS_BYTES: usize = 4_096;
 const MAX_LOG_LINES: usize = 50;
 const MAX_MESSAGE_CHARS: usize = 1_000;
@@ -563,6 +563,50 @@ impl AutomationScheduler {
         Ok(added)
     }
 
+    /// 安排一次播报（运行已保存的播报类自动化）。`due_at_ms` 不晚于现在就尽快投递。
+    pub fn schedule_speak(
+        &self,
+        session_id: &str,
+        mut action: SpeakAction,
+        due_at_ms: u64,
+    ) -> Result<Run, String> {
+        action.text = action.text.trim().to_string();
+        validate_content(&action.text, &action.delivery)?;
+        let now = now_ms();
+        if due_at_ms > now.saturating_add(MAX_DELAY_SECONDS * 1_000) {
+            return Err("最多只能安排在 7 天之内".into());
+        }
+        let run = self
+            .shutdown
+            .run_if_active(|| -> Result<Run, String> {
+                let mut state = self.state.lock().unwrap();
+                if state.stored.open_count() >= MAX_PENDING {
+                    return Err("等待中与运行中的自动化最多 100 条，请先取消一些".into());
+                }
+                let mut next = state.stored.clone();
+                let run = Run {
+                    id: next.allocate_id()?,
+                    session_id: session_id.into(),
+                    action: RunAction::Speak(action),
+                    created_at_ms: now,
+                    due_at_ms: due_at_ms.max(now),
+                    status: RunStatus::Pending,
+                    message: None,
+                    started_at_ms: None,
+                    finished_at_ms: None,
+                    report: None,
+                };
+                next.runs.push(run.clone());
+                next.trim_history()?;
+                self.persist(&next)?;
+                state.stored = next;
+                Ok(run)
+            })
+            .ok_or_else(|| "自动化调度已关闭".to_string())??;
+        self.notify_changed();
+        Ok(run)
+    }
+
     /// 安排一次程序执行。`due_at_ms` 不晚于现在就立即启动：名额已满、执行器不可用或宿主拒绝
     /// 启动时返回错误且**不留记录**；晚于现在则存为等待中。
     pub fn schedule_program(
@@ -987,20 +1031,26 @@ impl AutomationScheduler {
     }
 
     fn persist(&self, stored: &StoredRuns) -> Result<(), String> {
-        if let Some(parent) = self.path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent).map_err(|e| format!("创建自动化目录失败：{e}"))?;
-        }
-        let tmp = self.path.with_extension("tmp");
         let bytes = serde_json::to_vec(stored).map_err(|e| e.to_string())?;
-        let mut file =
-            std::fs::File::create(&tmp).map_err(|e| format!("写入自动化记录失败：{e}"))?;
-        file.write_all(&bytes)
-            .and_then(|_| file.sync_all())
-            .map_err(|e| format!("写入自动化记录失败：{e}"))?;
-        drop(file);
-        std::fs::rename(&tmp, &self.path).map_err(|e| format!("保存自动化记录失败：{e}"))
+        write_atomic(&self.path, &bytes, "自动化记录")
     }
 }
+
+/// 先写临时文件再改名，避免写到一半时崩溃留下半个文件。
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8], what: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建{what}目录失败：{e}"))?;
+    }
+    let tmp = path.with_extension("tmp");
+    let mut file = std::fs::File::create(&tmp).map_err(|e| format!("写入{what}失败：{e}"))?;
+    file.write_all(bytes)
+        .and_then(|_| file.sync_all())
+        .map_err(|e| format!("写入{what}失败：{e}"))?;
+    drop(file);
+    std::fs::rename(&tmp, path).map_err(|e| format!("保存{what}失败：{e}"))
+}
+
+pub mod library;
 
 #[cfg(test)]
 mod tests;

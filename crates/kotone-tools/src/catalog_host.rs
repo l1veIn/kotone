@@ -47,6 +47,10 @@ pub const TOOL_COMPANION_CHECK: &str = "companion.check";
 pub const TOOL_AUTOMATION_RUN: &str = "automation.run";
 pub const TOOL_AUTOMATION_RUNS: &str = "automation.runs";
 pub const TOOL_AUTOMATION_STOP: &str = "automation.stop";
+pub const TOOL_AUTOMATION_SAVE: &str = "automation.save";
+pub const TOOL_AUTOMATION_GET: &str = "automation.get";
+pub const TOOL_AUTOMATION_LIST: &str = "automation.list";
+pub const TOOL_AUTOMATION_DELETE: &str = "automation.delete";
 
 /// 全部委托工具（顺序即 capabilities 中的顺序）。
 pub const HOST_TOOLS: &[&str] = &[
@@ -93,6 +97,10 @@ pub const HOST_TOOLS: &[&str] = &[
     TOOL_AUTOMATION_RUN,
     TOOL_AUTOMATION_RUNS,
     TOOL_AUTOMATION_STOP,
+    TOOL_AUTOMATION_SAVE,
+    TOOL_AUTOMATION_GET,
+    TOOL_AUTOMATION_LIST,
+    TOOL_AUTOMATION_DELETE,
 ];
 
 fn none() -> Value {
@@ -461,10 +469,10 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_AUTOMATION_RUN,
-            description: "Run an automation (a short sandboxed Luau program, written by the companion or an Agent) against the CURRENT foreground window — switch to the game first. The target window is bound when you call this, also for delayed runs (delaySeconds or at, up to 7 days): if that window is gone when the run is due, it fails instead of pressing keys elsewhere; a run missed by more than 120 s (Kotone closed) is recorded as missed and never run late; runs are never retried. Whitelisted functions only: key(name) / key_down / key_up / type_text(text); wait(ms), every(ms, fn, {for_ms, times}) (fn returning false stops), wait_until(cond, {poll_ms, stable_frames, timeout_ms}) → bool, now(); region(x, y, w, h) in window-client ratios 0..1, brightness(region) 0..255, color_at(x, y) → r, g, b, ocr(region) → object with :has(text) / :count() (screen text can be tested but never copied into input); say(text), toast(text), log(text), game_focused(), stop(). No files, network or processes. Guards: 30 min max, step limit, ≥50 ms between keys, max 10000 keys, input only while that window is in front (paused otherwise), held keys released at the end, at most 3 running at once (BUSY for an immediate run; a delayed run that comes due while 3 are running fails); stop with automation.stop, the stop-automations hotkey (default Ctrl+Shift+F12) or the tray menu. Returns at once with {status started/scheduled, id, target, dueAtUnixMs}; the end arrives as an automation.finished event carrying the run record (status finished/failed/cancelled/missed, message, report {outcome finished/stopped/limit/error, keys, durationMs, log}).",
+            description: "Run an automation against the CURRENT foreground window: either a saved one by id (with args checked against its declared params; see automation.save) or an ad-hoc sandboxed Luau program in source (written by the companion or an Agent) — switch to the game first. The target window is bound when you call this, also for delayed runs (delaySeconds or at, up to 7 days): if that window is gone when the run is due, it fails instead of pressing keys elsewhere; a run missed by more than 120 s (Kotone closed) is recorded as missed and never run late; runs are never retried. Whitelisted functions only: key(name) / key_down / key_up / type_text(text); wait(ms), every(ms, fn, {for_ms, times}) (fn returning false stops), wait_until(cond, {poll_ms, stable_frames, timeout_ms}) → bool, now(); region(x, y, w, h) in window-client ratios 0..1, brightness(region) 0..255, color_at(x, y) → r, g, b, ocr(region) → object with :has(text) / :count() (screen text can be tested but never copied into input); say(text), toast(text), log(text), game_focused(), stop(); args is a read-only table of the call's arguments (regions are {x, y, w, h} usable with brightness/ocr, colors {r, g, b}). No files, network or processes. Guards: 30 min max, step limit, ≥50 ms between keys, max 10000 keys, input only while that window is in front (paused otherwise), held keys released at the end, at most 3 running at once (BUSY for an immediate run; a delayed run that comes due while 3 are running fails); stop with automation.stop, the stop-automations hotkey (default Ctrl+Shift+F12) or the tray menu. Returns at once with {status started/scheduled, id, target, dueAtUnixMs}; the end arrives as an automation.finished event carrying the run record (status finished/failed/cancelled/missed, message, report {outcome finished/stopped/limit/error, keys, durationMs, log}).",
             side_effects: &["input", "captures-screen", "may-speak"],
             egress: "backend-dependent",
-            input: object(&["source"], json!({"source": {"type": "string", "minLength": 1, "maxLength": 8000, "description": "Luau 程序"}, "name": {"type": "string", "maxLength": 40}, "delaySeconds": {"type": "integer", "minimum": 0, "maximum": 604800, "description": "几秒后开始（与 at 二选一；都不传 = 立即）"}, "at": {"type": "integer", "minimum": 0, "description": "开始时刻（Unix 毫秒）"}})),
+            input: object(&[], json!({"id": id("已保存自动化的 ID（与 source 二选一）"), "args": {"type": "object", "description": "已保存自动化的入参，按它声明的 params 校验；缺省值自动补上"}, "source": {"type": "string", "minLength": 1, "maxLength": 8000, "description": "临时 Luau 程序（与 id 二选一）"}, "name": {"type": "string", "maxLength": 40}, "delaySeconds": {"type": "integer", "minimum": 0, "maximum": 604800, "description": "几秒后开始（与 at 二选一；都不传 = 立即）"}, "at": {"type": "integer", "minimum": 0, "description": "开始时刻（Unix 毫秒）"}})),
             output: object(&["status", "id"], json!({"status": {"enum": ["started", "scheduled"]}, "id": {"type": "string"}, "target": {"type": "string"}, "dueAtUnixMs": {"type": "integer"}})),
         },
         Def {
@@ -482,6 +490,58 @@ fn defs() -> Vec<Def> {
             egress: "none",
             input: json!({"type": ["object", "null"], "additionalProperties": false, "properties": {"id": id("执行记录 ID（automation.run / automation.runs）")}}),
             output: object(&["stopped"], json!({"stopped": {"type": "integer"}})),
+        },
+        Def {
+            name: TOOL_AUTOMATION_SAVE,
+            description: "Save an automation for reuse (create, or overwrite by id). action is {kind: program, source: Luau} or {kind: speak, text, delivery: [voice|danmaku]}. params declare typed arguments the program reads as args.<name>: type number {min, max, integer} / text {maxLength ≤200, no newlines} / boolean / choice {options} / key (key name such as Q, Enter, Ctrl+Q) / region ({x, y, w, h} window-client ratios) / color ({r, g, b}); each has name (lowercase identifier), optional label, description and default (no default = required). Programs are syntax-checked; speak automations take no params. Saved automations run without calling a model (automation.run with id and args); runs keep a snapshot, so editing or deleting later does not change scheduled runs. Max 200.",
+            side_effects: &["writes-automations"],
+            egress: "none",
+            input: object(&["name", "action"], json!({
+                "id": id("要覆盖的自动化 ID；不传 = 新建"),
+                "name": {"type": "string", "minLength": 1, "maxLength": 40},
+                "description": {"type": "string", "maxLength": 200},
+                "params": {"type": "array", "maxItems": 16, "items": {"type": "object", "required": ["name", "type"], "properties": {
+                    "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
+                    "label": {"type": "string", "maxLength": 40},
+                    "description": {"type": "string", "maxLength": 200},
+                    "type": {"enum": ["number", "text", "boolean", "choice", "key", "region", "color"]},
+                    "min": {"type": "number"}, "max": {"type": "number"}, "integer": {"type": "boolean"},
+                    "maxLength": {"type": "integer", "minimum": 1, "maximum": 200},
+                    "options": {"type": "array", "items": {"type": "string"}, "maxItems": 16},
+                    "default": {}
+                }}},
+                "action": {"type": "object", "required": ["kind"], "properties": {
+                    "kind": {"enum": ["program", "speak"]},
+                    "source": {"type": "string", "maxLength": 8000},
+                    "text": {"type": "string", "maxLength": 300},
+                    "delivery": {"type": "array", "items": {"enum": ["voice", "danmaku"]}}
+                }}
+            })),
+            output: open("保存后的自动化：id、name、description、params（补全 label 与规范化缺省值）、action、createdBy、createdAtMs、updatedAtMs"),
+        },
+        Def {
+            name: TOOL_AUTOMATION_GET,
+            description: "One saved automation by id, including the program source.",
+            side_effects: &[],
+            egress: "none",
+            input: object(&["id"], json!({"id": id("自动化 ID")})),
+            output: open("自动化（同 automation.save 的结果）"),
+        },
+        Def {
+            name: TOOL_AUTOMATION_LIST,
+            description: "Saved automations sorted by name (program source omitted; use automation.get): id, name, description, params, action kind, createdBy, timestamps.",
+            side_effects: &[],
+            egress: "none",
+            input: none(),
+            output: object(&["automations"], json!({"automations": {"type": "array"}, "max": {"type": "integer"}})),
+        },
+        Def {
+            name: TOOL_AUTOMATION_DELETE,
+            description: "Delete a saved automation. Runs already scheduled from it keep their snapshot and still happen (cancel them with automation.stop).",
+            side_effects: &["writes-automations"],
+            egress: "none",
+            input: object(&["id"], json!({"id": id("自动化 ID")})),
+            output: object(&["deleted"], json!({"deleted": {"type": "boolean"}})),
         },
     ]
 }

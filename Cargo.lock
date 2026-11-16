@@ -2580,6 +2580,7 @@ name = "kotone-script"
 version = "0.1.0"
 dependencies = [
  "mlua",
+ "serde_json",
 ]
 
 [[package]]

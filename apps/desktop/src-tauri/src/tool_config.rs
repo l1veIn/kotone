@@ -86,7 +86,15 @@ struct CompanionAskArgs {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AutomationRunArgs {
-    source: String,
+    /// 临时程序（与 `id` 二选一）。
+    #[serde(default)]
+    source: Option<String>,
+    /// 已保存的自动化。
+    #[serde(default)]
+    id: Option<String>,
+    /// 已保存自动化的入参（按它的声明校验）。
+    #[serde(default)]
+    args: Option<serde_json::Map<String, Value>>,
     #[serde(default)]
     name: Option<String>,
     /// 延迟几秒后开始（与 `at` 二选一；都不传 = 立即）。
@@ -100,6 +108,32 @@ struct AutomationRunArgs {
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AutomationRunsArgs {}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AutomationIdArgs {
+    id: String,
+}
+
+/// 自动化相关错误的分类：名额满 = BUSY；运行环境问题（没有前台游戏、存储失败等）= FAILED；
+/// 其余是调用方给的内容不对 = INVALID_ARGUMENTS。
+fn automation_error(e: String) -> HostError {
+    if e.contains("最多同时运行") {
+        HostError::Busy(e)
+    } else if e.contains("前台")
+        || e.contains("尚未就绪")
+        || e.contains("不可用")
+        || e.contains("已关闭")
+        || e.contains("无法启动")
+        || ["写入", "保存", "创建", "读取"]
+            .iter()
+            .any(|p| e.starts_with(p))
+    {
+        HostError::Failed(e)
+    } else {
+        HostError::InvalidArguments(e)
+    }
+}
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -681,6 +715,8 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
         c::TOOL_AUTOMATION_RUN => {
             let AutomationRunArgs {
                 source,
+                id,
+                args: run_args,
                 name,
                 delay_seconds,
                 at,
@@ -701,26 +737,29 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
                 (None, Some(at)) => at,
                 (None, None) => now,
             };
-            crate::automation::start(
-                app,
-                "tool",
-                name.as_deref().unwrap_or("Agent 自动化"),
-                &source,
-                due,
-            )
-            .map_err(|e| {
-                if e.contains("最多同时运行") {
-                    HostError::Busy(e)
-                } else if e.contains("语法错误")
-                    || e.contains("内容为空")
-                    || e.contains("7 天")
-                    || e.contains("名字最多")
-                {
-                    HostError::InvalidArguments(e)
-                } else {
-                    HostError::Failed(e)
-                }
-            })
+            match (id, source) {
+                (Some(id), None) => crate::automation::run_saved(
+                    app,
+                    "tool",
+                    &id,
+                    &run_args.unwrap_or_default(),
+                    due,
+                ),
+                (None, Some(source)) if run_args.is_none() => crate::automation::start(
+                    app,
+                    "tool",
+                    crate::automation::ProgramRequest {
+                        name: name.as_deref().unwrap_or("Agent 自动化"),
+                        source: &source,
+                        automation_id: None,
+                        args: Default::default(),
+                    },
+                    due,
+                ),
+                (None, Some(_)) => Err("args 只能和 id（已保存的自动化）一起用".into()),
+                _ => Err("id 与 source 要给且只给一个".into()),
+            }
+            .map_err(automation_error)
         }
         c::TOOL_AUTOMATION_RUNS => {
             let _: AutomationRunsArgs = if args.is_null() {
@@ -729,6 +768,31 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
                 parse(tool, args)?
             };
             crate::automation::list(app).map_err(HostError::Failed)
+        }
+        c::TOOL_AUTOMATION_SAVE => {
+            let draft: kotone_core::automation::library::AutomationDraft = parse(tool, args)?;
+            crate::automation::save(
+                app,
+                draft,
+                kotone_core::automation::library::CreatedBy::Agent,
+            )
+            .map_err(automation_error)
+        }
+        c::TOOL_AUTOMATION_GET => {
+            let AutomationIdArgs { id } = parse(tool, args)?;
+            crate::automation::get(app, &id).map_err(automation_error)
+        }
+        c::TOOL_AUTOMATION_LIST => {
+            if !args.is_null() {
+                let _: NoArgs = parse(tool, args)?;
+            }
+            crate::automation::list_saved(app).map_err(automation_error)
+        }
+        c::TOOL_AUTOMATION_DELETE => {
+            let AutomationIdArgs { id } = parse(tool, args)?;
+            crate::automation::delete(app, &id)
+                .map(|deleted| json!({"deleted": deleted}))
+                .map_err(automation_error)
         }
         c::TOOL_AUTOMATION_STOP => {
             let AutomationStopArgs { id } = if args.is_null() {

@@ -278,6 +278,56 @@ fn screen_text_matches_across_split_lines_and_ignores_spaces() {
 }
 
 #[test]
+fn args_are_read_only_values_usable_as_regions_and_keys() {
+    let host = Fake::with(|f| f.dark_from = 1_000);
+    let args: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_value(serde_json::json!({
+            "key": "E",
+            "interval": 500,
+            "area": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2},
+            "color": {"r": 200, "g": 30, "b": 30},
+            "loud": true,
+        }))
+        .unwrap();
+    let report = run_with_args(
+        r#"
+        if brightness(args.area) < 50 and args.loud then
+            every(args.interval, function() key(args.key) end, { times = 2 })
+        end
+        local r, g, b = color_at(0.5, 0.5)
+        if r == args.color.r then log("same color") end
+        "#,
+        &args,
+        host.clone(),
+        Limits::default(),
+        Cancel::default(),
+    );
+    assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+    let keys = host.keys();
+    assert_eq!(keys.len(), 2);
+    assert!(keys.iter().all(|k| k.2 == "E"));
+    assert_eq!(keys[1].0 - keys[0].0, 500);
+    assert_eq!(report.log, vec!["same color".to_string()]);
+    // 入参只读：字段与里面的区域都改不了（给全局 args 赋值只在本程序自己的环境里遮蔽）
+    for write in ["args.key = 'Q'", "args.area.x = 0.9"] {
+        let report = run_with_args(
+            write,
+            &args,
+            Fake::new(),
+            Limits::default(),
+            Cancel::default(),
+        );
+        assert!(
+            matches!(report.outcome, Outcome::Error(_)),
+            "{write}: {report:?}"
+        );
+    }
+    // 没有入参时 args 是空表
+    let report = go("if args.key == nil then log('empty') end", &Fake::new());
+    assert_eq!(report.log, vec!["empty".to_string()]);
+}
+
+#[test]
 fn cancel_stops_a_running_script() {
     let host = Fake::new();
     let cancel = Cancel::default();

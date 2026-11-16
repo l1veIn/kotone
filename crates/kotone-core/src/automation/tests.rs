@@ -514,3 +514,27 @@ fn run_list_puts_open_runs_first_and_store_round_trips() {
     let (queue, _, _) = open_with_launcher(path);
     assert_eq!(queue.runs().len(), 3);
 }
+
+#[tokio::test]
+async fn a_saved_spoken_automation_is_delivered_like_a_reminder() {
+    let dir = tempfile::tempdir().unwrap();
+    let delivery = Arc::new(RecordingDelivery::default());
+    let queue =
+        AutomationScheduler::open(dir.path().join("automation-runs.json"), delivery.clone())
+            .unwrap();
+    let now = now_ms();
+    let speak = |text: &str| SpeakAction {
+        text: text.into(),
+        delivery: vec![DeliveryKind::Danmaku],
+    };
+    let run = queue.schedule_speak("tool", speak(" 买装备 "), 0).unwrap();
+    assert_eq!(run.status, RunStatus::Pending);
+    assert!(run.due_at_ms >= now);
+    assert_eq!(run.title(), "买装备");
+    queue.run_due(now_ms()).await.unwrap();
+    assert_eq!(*delivery.0.lock().unwrap(), vec![run.id.clone()]);
+    assert!(queue.schedule_speak("tool", speak(""), 0).is_err());
+    assert!(queue
+        .schedule_speak("tool", speak("x"), now + 8 * 24 * 3_600_000)
+        .is_err());
+}

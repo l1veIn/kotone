@@ -152,9 +152,15 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 
 | 工具 | 参数 | 结果要点 |
 | --- | --- | --- |
-| `automation.run` | `source`（Luau，≤8000 字）、可选 `name`、可选 `delaySeconds`（≤604800）或 `at`（Unix 毫秒） | 先校验语法（错误为 `INVALID_ARGUMENTS`）。立即运行时同时最多 3 个（否则 `BUSY`）；带延迟时存为等待中（Kotone 重启后仍在）。返回 `{status:"started"/"scheduled", id, target, dueAtUnixMs}` |
+| `automation.run` | `id` + 可选 `args`（运行已保存的自动化），或 `source`（临时 Luau，≤8000 字）+ 可选 `name`；可选 `delaySeconds`（≤604800）或 `at`（Unix 毫秒） | 先按声明校验入参、检查语法（错误为 `INVALID_ARGUMENTS`）；播报类自动化不需要前台窗口。立即运行时同时最多 3 个（否则 `BUSY`）；带延迟时存为等待中（Kotone 重启后仍在）。返回 `{status:"started"/"scheduled", id, target, dueAtUnixMs}` |
 | `automation.runs` | 无 | `running`、`pending`、`maxRunning`、`runs[]`：执行记录（含提醒），未结束的按到期时间在前，其后已结束的新的在前，最多 50 条 |
+| `automation.save` | 可选 `id`（覆盖）、`name`（≤40）、可选 `description`（≤200）、可选 `params[]`（≤16）、`action`（`{kind:"program", source}` 或 `{kind:"speak", text, delivery}`） | 保存的自动化（补全 `label`、规范化缺省值）；`createdBy` 为 `agent`。程序先检查语法；播报类不能有参数。发布 `automation.saved` |
+| `automation.get` | `id` | 一个已保存的自动化（含源码） |
+| `automation.list` | 无 | `automations[]`（按名字排序，省略源码）、`max`（200） |
+| `automation.delete` | `id` | `deleted`；已安排的执行保存的是快照，照常执行（要取消用 `automation.stop`）。发布 `automation.deleted` |
 | `automation.stop` | 可选 `id` | 有 `id`：取消等待中的或停止运行中的那一条（提醒也可以）。没有 `id`：停止全部运行中的程序并取消全部等待中的程序，**等待中的提醒保留**。返回 `stopped`（涉及条数）；按住的键随即松开 |
+
+**入参**（`params[]`）：每项 `name`（程序里的 `args.<name>`，小写字母开头，只含小写字母、数字、下划线）、可选 `label` / `description` / `default`（没有缺省值 = 必填），`type` 是 `number`（`min`、`max`、`integer`）、`text`（`maxLength` ≤200，不能换行）、`boolean`、`choice`（`options`）、`key`（键名）、`region`（`{x, y, w, h}` 窗口比例，可直接交给 `brightness` / `ocr`）、`color`（`{r, g, b}`）。运行时多给、少给、类型或范围不对都是 `INVALID_ARGUMENTS`，且不留执行记录。程序里 `args` 是只读表。已保存的自动化存在 `~/.kotone/automations.json`。
 
 **执行记录**：`id`、`sessionId`（发起方）、`action`（`{kind:"speak", text, delivery}` 或 `{kind:"program", name, source, automationId, args, target:{label,…}}`）、`createdAtMs`、`dueAtMs`、`startedAtMs`、`finishedAtMs`、`status`（`pending` / `running` / `finished` / `failed` / `cancelled` / `missed`）、`message`（失败、停止或错过的原因，如“游戏窗口已关闭”“停止自动化热键”）、`report`（程序：`outcome` 为 `finished` / `stopped` / `limit` / `error`，`keys`、`durationMs`、`log[]`）。每条执行进入终态时发布 `automation.finished`，内容即这条记录（省略 `source`）。
 
@@ -369,6 +375,7 @@ Agent 从“打开 exe”开始就能驱动 Kotone，并能收到用户通过 Ko
 | `model.download.progress` / `.finished` / `.failed` | `models.download` 的进度（至多每秒一次）与结果 | `id`、`downloadedBytes/totalBytes`；结果含 `durationMs`，失败含 `cancelled`、`message` |
 | `companion.finished` / `companion.failed` | `companion.ask` 的结果 | 见上表；`jobId` 对应受理时的返回 |
 | `automation.finished` | 一条执行（程序或提醒）进入终态：完成、失败、取消、错过 | 执行记录（见“自动化”，省略程序源码） |
+| `automation.saved` / `automation.deleted` | 保存（新建或覆盖）/ 删除一个自动化 | `id`（保存时另有 `name`） |
 | `companion.check.finished` / `.failed` | `companion.check` 的结果 | `check{connectionId,baseUrl,model,passed,checkedAtMs,message}` 或 `message` |
 | `speech.model.download.finished` / `.failed` | `speech.model.download` 的结果 | `status` 或 `cancelled`、`message`、`durationMs` |
 | `elevation.restart.failed` | 用户拒绝 UAC 或提权启动失败 | `message` |

@@ -9,6 +9,8 @@
 //!   取消标记随时生效；游戏窗口失去焦点时按键与打字先暂停等待。
 //! - **数据不是指令**：`ocr()` 返回不透明的 `ScreenText`，只能问 `:has("文字")` / `:count()`，
 //!   拿不到字符串，因此屏幕上的字无法拼进 `type_text` / `say` 的内容。
+//! - **入参**：调用时固定、已由调用方按声明校验的值，在程序里是只读全局表 `args`（区域是
+//!   `{x, y, w, h}`，颜色是 `{r, g, b}`，可直接交给 `brightness` / `ocr`）。
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -477,8 +479,54 @@ fn classify(error: &mlua::Error) -> Outcome {
     }
 }
 
+/// JSON 值 → 只读的 Luau 值（对象、数组递归转换为只读表）。
+fn lua_value(lua: &Lua, value: &serde_json::Value, depth: usize) -> mlua::Result<Value> {
+    if depth > 4 {
+        return Err(mlua::Error::runtime("入参嵌套过深"));
+    }
+    Ok(match value {
+        serde_json::Value::Null => Value::Nil,
+        serde_json::Value::Bool(b) => Value::Boolean(*b),
+        serde_json::Value::Number(n) => Value::Number(n.as_f64().unwrap_or(0.0)),
+        serde_json::Value::String(s) => Value::String(lua.create_string(s)?),
+        serde_json::Value::Array(items) => {
+            let t = lua.create_table()?;
+            for (i, item) in items.iter().enumerate() {
+                t.set(i + 1, lua_value(lua, item, depth + 1)?)?;
+            }
+            t.set_readonly(true);
+            Value::Table(t)
+        }
+        serde_json::Value::Object(map) => Value::Table(args_table(lua, map, depth + 1)?),
+    })
+}
+
+fn args_table(
+    lua: &Lua,
+    map: &serde_json::Map<String, serde_json::Value>,
+    depth: usize,
+) -> mlua::Result<Table> {
+    let t = lua.create_table()?;
+    for (k, v) in map {
+        t.set(k.as_str(), lua_value(lua, v, depth)?)?;
+    }
+    t.set_readonly(true);
+    Ok(t)
+}
+
 /// 运行一段脚本直到结束、取消或触发上限（阻塞；调用方放到专用线程）。
 pub fn run(source: &str, host: Arc<dyn ScriptHost>, limits: Limits, cancel: Cancel) -> RunReport {
+    run_with_args(source, &serde_json::Map::new(), host, limits, cancel)
+}
+
+/// 同 [`run`]，并把 `args` 作为只读全局表交给程序。
+pub fn run_with_args(
+    source: &str,
+    args: &serde_json::Map<String, serde_json::Value>,
+    host: Arc<dyn ScriptHost>,
+    limits: Limits,
+    cancel: Cancel,
+) -> RunReport {
     let started = host.now_ms();
     let state = Arc::new(State {
         host: host.clone(),
@@ -494,6 +542,7 @@ pub fn run(source: &str, host: Arc<dyn ScriptHost>, limits: Limits, cancel: Canc
         let lua = Lua::new_with(libs, LuaOptions::default())?;
         lua.set_memory_limit(limits.memory_bytes)?;
         install(&lua, state.clone())?;
+        lua.globals().set("args", args_table(&lua, args, 0)?)?;
         lua.sandbox(true)?;
         let steps = Arc::new(AtomicU64::new(0));
         let s = state.clone();
@@ -507,7 +556,7 @@ pub fn run(source: &str, host: Arc<dyn ScriptHost>, limits: Limits, cancel: Canc
             s.deadline_check()?;
             Ok(VmState::Continue)
         });
-        lua.load(source).set_name("companion-script").exec()
+        lua.load(source).set_name("automation").exec()
     })();
     let outcome = match result {
         Ok(()) => Outcome::Finished,
@@ -526,7 +575,7 @@ pub fn run(source: &str, host: Arc<dyn ScriptHost>, limits: Limits, cancel: Canc
 pub fn check_syntax(source: &str) -> Result<(), String> {
     let lua = Lua::new_with(StdLib::NONE, LuaOptions::default()).map_err(|e| e.to_string())?;
     lua.load(source)
-        .set_name("companion-script")
+        .set_name("automation")
         .into_function()
         .map(|_| ())
         .map_err(|e| {
