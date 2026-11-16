@@ -538,3 +538,41 @@ async fn a_saved_spoken_automation_is_delivered_like_a_reminder() {
         .schedule_speak("tool", speak("x"), now + 8 * 24 * 3_600_000)
         .is_err());
 }
+
+#[test]
+fn chat_records_are_kept_finished_and_never_scheduled() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("automation-runs.json");
+    let (queue, launcher, finished) = open_with_launcher(path.clone());
+    let chat = |text: &str| ChatAction {
+        text: text.into(),
+        sent: true,
+        profile: "lol".into(),
+    };
+    let ok = queue
+        .record_chat("agent:c-1", chat(" 我去下路 "), Ok(()))
+        .unwrap();
+    assert_eq!(ok.status, RunStatus::Finished);
+    assert_eq!(ok.title(), "我去下路");
+    let failed = queue
+        .record_chat("agent:c-1", chat("gg"), Err("打字超时".into()))
+        .unwrap();
+    assert_eq!(failed.status, RunStatus::Failed);
+    assert_eq!(failed.message.as_deref(), Some("打字超时"));
+    assert!(queue.record_chat("agent:c-1", chat("  "), Ok(())).is_err());
+    assert!(queue
+        .record_chat("agent:c-1", chat(&"字".repeat(201)), Ok(()))
+        .is_err());
+    // 不启动程序、不触发结束回调、不占“进行中”。
+    assert!(launcher.launched.lock().unwrap().is_empty());
+    assert!(finished.lock().unwrap().is_empty());
+    assert_eq!(queue.running_programs(), 0);
+    // 重启后还在。
+    drop(queue);
+    let reopened = AutomationScheduler::open(path, Arc::new(RecordingDelivery::default())).unwrap();
+    let runs = reopened.runs();
+    assert_eq!(runs.len(), 2);
+    assert!(runs
+        .iter()
+        .any(|r| matches!(&r.action, RunAction::Chat(c) if c.text == "我去下路" && c.sent)));
+}

@@ -68,6 +68,19 @@ pub struct SpeakAction {
     pub delivery: Vec<DeliveryKind>,
 }
 
+/// 替玩家打进游戏聊天框的一句话（内置 Agent 的“发到游戏聊天”，ADR 014 §3）。
+/// 执行时直接完成，只留一条记录，让玩家在「记录」里看到替他发了什么。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatAction {
+    pub text: String,
+    /// 是否按了发送键（否则只打进聊天框）。
+    pub sent: bool,
+    /// 用的是哪个游戏配置。
+    #[serde(default)]
+    pub profile: String,
+}
+
 /// 程序要作用的游戏窗口：在**下指令时**记录，到期时窗口已关闭则失败，不改投当时的前台窗口。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -117,6 +130,8 @@ impl ProgramAction {
 pub enum RunAction {
     Speak(SpeakAction),
     Program(ProgramAction),
+    /// 只作记录，从不等待或调度。
+    Chat(ChatAction),
 }
 
 /// 程序执行的结果摘要。
@@ -163,6 +178,7 @@ impl Run {
         match &self.action {
             RunAction::Speak(s) => &s.text,
             RunAction::Program(p) => &p.name,
+            RunAction::Chat(c) => &c.text,
         }
     }
 
@@ -194,6 +210,14 @@ impl Run {
         match &self.action {
             RunAction::Speak(s) => validate_content(&s.text, &s.delivery),
             RunAction::Program(p) => p.validate(),
+            RunAction::Chat(c) => {
+                let chars = c.text.trim().chars().count();
+                if chars == 0 || chars > 200 {
+                    Err("聊天内容为空或超过 200 字".into())
+                } else {
+                    Ok(())
+                }
+            }
         }
     }
 }
@@ -595,6 +619,53 @@ impl AutomationScheduler {
                     started_at_ms: None,
                     finished_at_ms: None,
                     report: None,
+                };
+                next.runs.push(run.clone());
+                next.trim_history()?;
+                self.persist(&next)?;
+                state.stored = next;
+                Ok(run)
+            })
+            .ok_or_else(|| "自动化调度已关闭".to_string())??;
+        self.notify_changed();
+        Ok(run)
+    }
+
+    /// 记一条“替玩家打进游戏聊天框”的执行记录（已经执行完：成功为 finished，失败为 failed）。
+    /// 不调度、不触发结束回调（发起方已经知道结果），只通知列表变化。
+    pub fn record_chat(
+        &self,
+        session_id: &str,
+        mut action: ChatAction,
+        result: Result<(), String>,
+    ) -> Result<Run, String> {
+        action.text = action.text.trim().to_string();
+        let now = now_ms();
+        let (status, message) = match result {
+            Ok(()) => (RunStatus::Finished, None),
+            Err(error) => (RunStatus::Failed, Some(error)),
+        };
+        let run = Run {
+            id: String::new(),
+            session_id: session_id.into(),
+            action: RunAction::Chat(action),
+            created_at_ms: now,
+            due_at_ms: now,
+            status,
+            message,
+            started_at_ms: Some(now),
+            finished_at_ms: Some(now),
+            report: None,
+        };
+        run.validate()?;
+        let run = self
+            .shutdown
+            .run_if_active(|| -> Result<Run, String> {
+                let mut state = self.state.lock().unwrap();
+                let mut next = state.stored.clone();
+                let run = Run {
+                    id: next.allocate_id()?,
+                    ..run
                 };
                 next.runs.push(run.clone());
                 next.trim_history()?;

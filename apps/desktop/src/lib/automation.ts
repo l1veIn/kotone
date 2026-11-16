@@ -14,7 +14,9 @@ export type RunAction =
   | {
     kind: "program"; name: string; source?: string; automationId?: string | null;
     args?: Record<string, unknown>; target?: RunTarget | null;
-  };
+  }
+  /** 琴音替玩家打进游戏聊天框的一句话（只作记录） */
+  | { kind: "chat"; text: string; sent: boolean; profile?: string };
 
 export interface ProgramReport { outcome: "finished" | "stopped" | "limit" | "error"; keys: number; durationMs: number; log: string[] }
 
@@ -87,7 +89,8 @@ export const PARAM_TYPES: { id: ParamType; label: string }[] = [
 ];
 
 export function runTitle(run: AutomationRun): string {
-  return run.action.kind === "speak" ? run.action.text : run.action.name || "自动化";
+  if (run.action.kind === "program") return run.action.name || "自动化";
+  return run.action.text;
 }
 
 // ---------- 浏览器预览数据 ----------

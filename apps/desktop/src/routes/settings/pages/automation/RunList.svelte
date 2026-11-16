@@ -23,8 +23,11 @@
     if (run.action.kind === "speak") {
       return run.action.delivery.map((kind) => (kind === "voice" ? "语音" : "弹幕")).join(" + ");
     }
+    if (run.action.kind === "chat") return run.action.sent ? "琴音替你发到游戏聊天" : "琴音打进了聊天框（未发送）";
     return run.action.target?.label ?? "";
   }
+
+  const badgeText = { speak: "提醒", program: "自动化", chat: "打字" } as const;
 
   function when(run: AutomationRun): string {
     if (run.status === "pending") {
@@ -43,7 +46,7 @@
     <li class="reminder-row" data-testid="automation-run" data-status={run.status}>
       <div class="min-w-0">
         <p class="break-words text-sm {mode === 'open' ? 'text-white/90' : 'text-white/70'}">
-          <span class="badge {run.action.kind === 'speak' ? 'speak' : 'program'}">{run.action.kind === "speak" ? "提醒" : "自动化"}</span>
+          <span class="badge {run.action.kind === 'program' ? 'program' : 'speak'}">{badgeText[run.action.kind]}</span>
           {runTitle(run)}
         </p>
         <p class="mt-1 text-xs text-white/45">{[subtitle(run), mode === "open" ? new Date(run.dueAtMs).toLocaleString() : ""].filter(Boolean).join(" · ")}</p>
