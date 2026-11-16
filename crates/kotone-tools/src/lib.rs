@@ -67,10 +67,32 @@ impl RunningToolService {
         host: Arc<dyn ToolHost>,
         dir: &Path,
     ) -> Result<Self, String> {
-        let token = ids::SecretToken::generate();
-        let app_version = deps.app_version.clone();
-        let created = deps.clock.now_unix_ms();
         let service = ToolService::new(deps);
+        let mut running = Self::serve(service, host, dir).await?;
+        let service = running.service.clone();
+        running.maintenance = Some(service.spawn_maintenance());
+        service.publish_event(
+            "app.started",
+            serde_json::json!({"instanceId": service.instance_id(), "pid": std::process::id()}),
+        );
+        // 后台做一次 OCR 后端就绪检查（模型哈希、凭据读取），不阻塞启动与异步线程
+        tokio::task::spawn_blocking(move || {
+            service.refresh_ocr_readiness();
+        });
+        Ok(running)
+    }
+
+    /// 给一个已经在进程内运行的服务挂上 HTTP 监听并发布描述文件（内置 Agent 让服务常驻，
+    /// 对外监听仍按开关决定）。维护任务、`app.started` 与 OCR 就绪检查由调用方负责。
+    /// 关闭时（[`Self::shutdown_now`]）服务也随之关闭。
+    pub async fn serve(
+        service: Arc<ToolService>,
+        host: Arc<dyn ToolHost>,
+        dir: &Path,
+    ) -> Result<Self, String> {
+        let token = ids::SecretToken::generate();
+        let app_version = service.app_version().to_string();
+        let created = service.now_unix_ms();
         let server = server::serve(service.clone(), token.clone())
             .await
             .map_err(|e| format!("绑定 127.0.0.1 失败: {e}"))?;
@@ -96,21 +118,11 @@ impl RunningToolService {
                 return Err(error.to_string());
             }
         };
-        let maintenance = service.spawn_maintenance();
-        service.publish_event(
-            "app.started",
-            serde_json::json!({"instanceId": service.instance_id(), "pid": pid}),
-        );
-        // 后台做一次 OCR 后端就绪检查（模型哈希、凭据读取），不阻塞启动与异步线程
-        let refresh = service.clone();
-        tokio::task::spawn_blocking(move || {
-            refresh.refresh_ocr_readiness();
-        });
         Ok(Self {
             service,
             server: Some(server),
             publication: Some(publication),
-            maintenance: Some(maintenance),
+            maintenance: None,
             addr,
         })
     }

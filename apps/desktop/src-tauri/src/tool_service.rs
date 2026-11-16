@@ -1,6 +1,8 @@
 //! 可选的本机 Agent 工具服务的桌面生命周期（docs/tool-service.md）。
 //!
-//! - 只在启动时读取 `toolService.enabled`；默认关闭，修改后需重启桌面端。
+//! - 服务对象**常驻**（内置 Agent 在进程内调用同一份工具实现，ADR 014 §3）；
+//!   `toolService.enabled` 只决定是否对外监听 HTTP 并发布描述文件，只在启动时读取，
+//!   默认关闭，修改后需重启桌面端。
 //! - 与 ASR 运行时互相独立：不借用 start/stop_runtime，运行时 Stopped 时照常服务；
 //!   `system.status` 只读取当前相位用于展示。
 //! - 服务从不显示、移动或聚焦窗口；CLI 直连本服务，不会再次启动 kotone.exe。
@@ -26,12 +28,16 @@ use kotone_platform_windows::tool_host::WindowsToolHost;
 use kotone_platform_windows::window_tools::{GdiForegroundCapturer, WindowsWindowObserver};
 use kotone_tools::artifacts::SystemClock;
 use kotone_tools::host::{AppHost, HostFuture, HostInvokeFuture, ReplyOutput};
-use kotone_tools::{discovery, RunningToolService, ServiceDeps, ServiceLimits};
+use kotone_tools::{discovery, RunningToolService, ServiceDeps, ServiceLimits, ToolService};
 
 use crate::runtime::RuntimeManager;
 
 #[derive(Default)]
 struct Slot {
+    /// 常驻的服务（内置 Agent 与对外监听共用）。
+    service: Option<Arc<ToolService>>,
+    maintenance: Option<tokio::task::JoinHandle<()>>,
+    /// 对外 HTTP 监听（`toolService.enabled`）。
     running: Option<RunningToolService>,
     /// 应用已进入退出流程：此后才完成启动的服务立即关闭，不留下描述文件。
     closed: bool,
@@ -40,13 +46,9 @@ struct Slot {
 #[derive(Default)]
 pub struct ToolServiceState(Mutex<Slot>);
 
-/// 在 setup 共享状态就绪后调用。未开启时只登记空状态。
+/// 在 setup 共享状态就绪后调用：创建常驻服务；`enabled` 时再对外监听。
 pub fn start(app: &AppHandle, enabled: bool) {
     app.manage(ToolServiceState::default());
-    if !enabled {
-        log::log("tool service: disabled (toolService.enabled=false)");
-        return;
-    }
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         let phase_app = handle.clone();
@@ -68,18 +70,48 @@ pub fn start(app: &AppHandle, enabled: bool) {
                 app: handle.clone(),
             }),
         };
+        let service = ToolService::new(deps);
+        let maintenance = service.spawn_maintenance();
+        service.publish_event(
+            "app.started",
+            json!({"instanceId": service.instance_id(), "pid": std::process::id()}),
+        );
+        // 后台做一次 OCR 后端就绪检查（模型哈希、凭据读取），不阻塞启动与异步线程
+        let refresh = service.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            refresh.refresh_ocr_readiness();
+        });
+        let Some(state) = handle.try_state::<ToolServiceState>() else {
+            service.close();
+            maintenance.abort();
+            return;
+        };
+        {
+            let mut slot = state.0.lock().unwrap();
+            if slot.closed {
+                service.close();
+                maintenance.abort();
+                return;
+            }
+            slot.service = Some(service.clone());
+            slot.maintenance = Some(maintenance);
+        }
+        log::log(&format!(
+            "tool service: resident instance={}",
+            service.instance_id()
+        ));
+        if !enabled {
+            log::log("tool service: not listening (toolService.enabled=false)");
+            return;
+        }
         let dir = discovery::default_dir();
-        match RunningToolService::start(deps, Arc::new(WindowsToolHost), &dir).await {
+        match RunningToolService::serve(service, Arc::new(WindowsToolHost), &dir).await {
             Ok(mut running) => {
                 log::log(&format!(
                     "tool service: listening on {} instance={}",
                     running.local_addr(),
                     running.instance_id()
                 ));
-                let Some(state) = handle.try_state::<ToolServiceState>() else {
-                    running.shutdown_now();
-                    return;
-                };
                 let mut slot = state.0.lock().unwrap();
                 if slot.closed {
                     running.shutdown_now();
@@ -87,7 +119,7 @@ pub fn start(app: &AppHandle, enabled: bool) {
                     slot.running = Some(running);
                 }
             }
-            Err(error) => log::log(&format!("tool service: failed to start: {error}")),
+            Err(error) => log::log(&format!("tool service: failed to listen: {error}")),
         }
     });
 }
@@ -204,25 +236,40 @@ impl AppHost for DesktopHost {
     }
 }
 
-fn with_service<T>(
-    app: &AppHandle,
-    f: impl FnOnce(&Arc<kotone_tools::ToolService>) -> T,
-) -> Option<T> {
+/// 常驻的服务（启动早期尚未就绪、或应用正在退出时为 None）。
+pub fn service(app: &AppHandle) -> Option<Arc<ToolService>> {
     let state = app.try_state::<ToolServiceState>()?;
     let slot = state.0.lock().unwrap();
-    slot.running.as_ref().map(|running| f(running.service()))
+    slot.service.clone()
 }
 
 /// 发布事件到工具服务事件总线（服务未运行时为空操作）。
 pub fn publish(app: &AppHandle, kind: &str, data: Value) {
-    let _ = with_service(app, |service| service.publish_event(kind, data));
+    if let Some(service) = service(app) {
+        service.publish_event(kind, data);
+    }
 }
 
-/// 把用户经助手入口说/写的话转交 Agent（`user.request`）。服务未运行时报错。
+/// 把用户经助手入口说/写的话转交外部 Agent（`user.request`）。没有对外监听时报错
+/// （外部 Agent 连不上，请求只会过期）。
 pub fn submit_user_request(app: &AppHandle, text: &str, source: &str) -> Result<Value, String> {
-    with_service(app, |service| service.submit_user_request(text, source)).unwrap_or_else(|| {
-        Err("转交 Agent 需要开启工具服务（toolService.enabled）并重启 Kotone".into())
-    })
+    let listening = {
+        let Some(state) = app.try_state::<ToolServiceState>() else {
+            return Err(not_listening());
+        };
+        let slot = state.0.lock().unwrap();
+        slot.running
+            .as_ref()
+            .map(|running| running.service().clone())
+    };
+    match listening {
+        Some(service) => service.submit_user_request(text, source),
+        None => Err(not_listening()),
+    }
+}
+
+fn not_listening() -> String {
+    "转交 Agent 需要开启工具服务（toolService.enabled）并重启 Kotone".into()
 }
 
 /// `RunEvent::Exit`：删除本实例描述文件、停止接受连接、丢弃内存产物。
@@ -230,13 +277,24 @@ pub fn shutdown(app: &AppHandle) {
     let Some(state) = app.try_state::<ToolServiceState>() else {
         return;
     };
-    let running = {
+    let (running, service, maintenance) = {
         let mut slot = state.0.lock().unwrap();
         slot.closed = true;
-        slot.running.take()
+        (
+            slot.running.take(),
+            slot.service.take(),
+            slot.maintenance.take(),
+        )
     };
+    // 先关监听（同时关闭服务、删除描述文件），再兜底关闭常驻服务与维护任务。
     if let Some(mut running) = running {
         running.shutdown_now();
-        log::log("tool service: stopped");
     }
+    if let Some(service) = service {
+        service.close();
+    }
+    if let Some(maintenance) = maintenance {
+        maintenance.abort();
+    }
+    log::log("tool service: stopped");
 }

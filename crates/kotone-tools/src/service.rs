@@ -665,6 +665,15 @@ impl ToolService {
         &self.instance_id
     }
 
+    pub fn app_version(&self) -> &str {
+        &self.app_version
+    }
+
+    /// 服务时钟的当前 Unix 毫秒（测试里是手动时钟）。
+    pub fn now_unix_ms(&self) -> u64 {
+        self.store.clock().now_unix_ms()
+    }
+
     pub fn limits(&self) -> &ServiceLimits {
         &self.limits
     }
