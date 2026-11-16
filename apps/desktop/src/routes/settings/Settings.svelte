@@ -36,6 +36,7 @@
   import GeneralPage from "./pages/GeneralPage.svelte";
   import TextProcessingPage from "./pages/TextProcessingPage.svelte";
   import AssistantPage from "./pages/AssistantPage.svelte";
+  import AutomationPage from "./pages/AutomationPage.svelte";
   import AdvancedPage from "./pages/AdvancedPage.svelte";
   import type { AdvancedSection } from "./pages/advanced/types";
   import GamePage from "./pages/GamePage.svelte";
@@ -48,6 +49,7 @@
     | "general"
     | "processing"
     | "assistant"
+    | "automation"
     | "game"
     | "history"
     | "advanced"
@@ -58,6 +60,7 @@
     { id: "general", label: "通用", icon: "home" },
     { id: "processing", label: "文字处理", icon: "sparkles" },
     { id: "assistant", label: "陪玩", icon: "bell" },
+    { id: "automation", label: "自动化", icon: "bolt" },
     { id: "game", label: "游戏适配", icon: "gamepad" },
     { id: "history", label: "历史记录", icon: "clock" },
     { id: "advanced", label: "高级", icon: "sliders" },
@@ -256,6 +259,8 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M6 9h4M8 7v4M15 8h.01M18 10h.01M17.3 5H6.7a4.7 4.7 0 0 0-4.6 5.6l1 5.4A3 3 0 0 0 6 18.6c.8 0 1.6-.3 2.1-.9L9.5 16h5l1.4 1.7c.5.6 1.3.9 2.1.9a3 3 0 0 0 2.9-2.6l1-5.4A4.7 4.7 0 0 0 17.3 5Z" stroke-linecap="round" stroke-linejoin="round"/></svg>
             {:else if item.icon === "clock"}
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            {:else if item.icon === "bolt"}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" stroke-linecap="round" stroke-linejoin="round"/></svg>
             {:else if item.icon === "bell"}
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" stroke-linecap="round" stroke-linejoin="round"/></svg>
             {:else}
@@ -292,7 +297,9 @@
     {:else if page === "processing"}
       <TextProcessingPage onOpenConnections={() => openAdvanced("connections")} />
     {:else if page === "assistant"}
-      <AssistantPage onOpenConnections={() => openAdvanced("connections")} />
+      <AssistantPage onOpenConnections={() => openAdvanced("connections")} onOpenAutomation={() => (page = "automation")} />
+    {:else if page === "automation"}
+      <AutomationPage onOpenHotkeys={() => openAdvanced("hotkeys")} />
     {:else if page === "game"}
       <GamePage />
     {:else if page === "history"}

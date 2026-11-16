@@ -1,26 +1,34 @@
 import { expect, test } from "@playwright/test";
 
-test("assistant opens on tasks, keeps drafts across sections and defaults to system speech without a download", async ({ page }, testInfo) => {
+test("assistant opens on talk, keeps drafts across sections; speech lives in General and defaults to system speech", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1040, height: 1000 });
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-assistant").click();
   await expect(page.getByTestId("assistant-nav-tasks")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("assistant-nav-tasks")).toHaveText("跟琴音说");
   await expect(page.getByTestId("assistant-tasks")).toBeVisible();
   await expect(page.getByTestId("assistant-settings")).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "待办提醒 1" })).toBeVisible();
+  // 进行中的提醒与自动化只在这里显示概况（预览数据：1 条提醒等待中、1 个自动化运行中）
+  await expect(page.getByTestId("assistant-open-summary")).toContainText("1 条提醒、1 个自动化");
   await page.getByTestId("assistant-request").fill("5 分钟后提醒我打野有闪");
   await page.screenshot({ path: testInfo.outputPath("assistant-tasks.png"), animations: "disabled" });
   await page.getByTestId("assistant-nav-settings").click();
   await expect(page.getByTestId("assistant-tasks")).not.toBeVisible();
   await expect(page.getByTestId("assistant-settings")).toBeVisible();
-  await expect(page.getByLabel("语音引擎", { exact: true })).toHaveAttribute("data-value", "system");
-  await expect(page.getByTestId("system-speech-info")).toHaveText("无需下载。");
-  await expect(page.getByRole("button", { name: "下载语音模型", exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("assistant-settings").getByTestId("speech-settings")).toHaveCount(0);
   await expect(page.getByTestId("assistant-mode-push-to-talk")).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("main").evaluate((element) => { element.scrollTop = 0; });
   await page.screenshot({ path: testInfo.outputPath("assistant-settings.png"), animations: "disabled" });
   await page.getByTestId("assistant-nav-tasks").click();
   await expect(page.getByTestId("assistant-request")).toHaveValue("5 分钟后提醒我打野有闪");
+  await page.getByTestId("assistant-open-summary").getByRole("button", { name: "在「自动化」里查看 →" }).click();
+  await expect(page.getByTestId("automation-page")).toBeVisible();
+  await page.getByTestId("settings-nav-general").click();
+  const output = page.getByTestId("output-settings");
+  await expect(output.getByLabel("语音引擎", { exact: true })).toHaveAttribute("data-value", "system");
+  await expect(output.getByTestId("system-speech-info")).toHaveText("无需下载。");
+  await expect(output.getByRole("button", { name: "下载语音模型", exact: true })).toHaveCount(0);
+  await output.screenshot({ path: testInfo.outputPath("output-settings.png") });
 });
 
 test("assistant interaction modes save independently of regular input and survive section changes", async ({ page }) => {
@@ -71,7 +79,7 @@ test("default assistant walkie-talkie overlay tells the user to release the assi
   await expect(page.getByText(/^打野有闪/)).toBeVisible();
 });
 
-test("assistant preview labels fixtures, cancels reminders and never pretends to run AI", async ({ page }, testInfo) => {
+test("assistant preview labels itself and never pretends to run AI", async ({ page }, testInfo) => {
   const externalRequests: string[] = [];
   page.on("request", (request) => {
     if (/^https?:/.test(request.url()) && !request.url().startsWith("http://127.0.0.1:17420")) externalRequests.push(request.url());
@@ -81,18 +89,9 @@ test("assistant preview labels fixtures, cancels reminders and never pretends to
   const assistant = page.getByTestId("assistant-page");
   await expect(assistant.getByRole("heading", { name: "Kotone 陪玩", exact: true })).toBeVisible();
   await expect(assistant.getByText(/界面预览/)).toBeVisible();
-  await expect(assistant.getByText("界面示例：打野有闪了")).toBeVisible();
-  await assistant.getByRole("button", { name: "添加示例提醒", exact: true }).click();
-  const fixture = assistant.getByRole("listitem").filter({ hasText: "界面示例：该打小龙了" });
-  await expect(fixture).toContainText(/分 .*秒后/);
-  await fixture.getByRole("button", { name: "取消", exact: true }).click();
-  await expect(assistant.getByRole("heading", { name: "待办提醒 1" })).toBeVisible();
-  await assistant.getByText("最近记录（1）", { exact: true }).click();
-  await expect(fixture).toContainText("已取消");
   await assistant.getByTestId("assistant-request").fill("五分钟后提醒我打野有闪");
-  await assistant.getByRole("button", { name: "创建提醒", exact: true }).click();
+  await assistant.getByRole("button", { name: "交给琴音", exact: true }).click();
   await expect(assistant.getByRole("alert")).toContainText("浏览器仅预览界面");
-  await expect(assistant.getByRole("heading", { name: "待办提醒 1" })).toBeVisible();
   expect(externalRequests).toEqual([]);
   await page.setViewportSize({ width: 1040, height: 1150 });
   await page.getByRole("main").evaluate((element) => { element.scrollTop = 0; });
@@ -123,14 +122,17 @@ test("assistant shares connections and saves voice/delivery settings with an ind
   await expect(assistant.getByTestId("hotkey-input-assistant")).toHaveValue("Ctrl+F9");
   await expect(assistant.getByTestId("hotkey-status-assistant")).toContainText("当前生效：Ctrl+F9");
 
-  await assistant.getByRole("checkbox", { name: "弹幕", exact: true }).uncheck();
-  await expect(assistant.getByRole("checkbox", { name: "弹幕", exact: true })).not.toBeChecked();
-  await assistant.getByLabel("播报音量").fill("65");
-  await assistant.getByLabel("播报音量").dispatchEvent("change");
-  await expect(assistant.getByText("65%", { exact: true })).toBeVisible();
-  await assistant.getByLabel("播报语速").fill("2");
-  await assistant.getByLabel("播报语速").dispatchEvent("change");
-  await expect(assistant.getByText("+2", { exact: true })).toBeVisible();
+  // 声音与弹幕在「通用」
+  await page.getByTestId("settings-nav-general").click();
+  const output = page.getByTestId("output-settings");
+  await output.getByRole("checkbox", { name: "弹幕", exact: true }).uncheck();
+  await expect(output.getByRole("checkbox", { name: "弹幕", exact: true })).not.toBeChecked();
+  await output.getByLabel("播报音量").fill("65");
+  await output.getByLabel("播报音量").dispatchEvent("change");
+  await expect(output.getByText("65%", { exact: true })).toBeVisible();
+  await output.getByLabel("播报语速").fill("2");
+  await output.getByLabel("播报语速").dispatchEvent("change");
+  await expect(output.getByText("+2", { exact: true })).toBeVisible();
 
   const saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
   expect(saved.assistant).toMatchObject({ hotkey: "Ctrl+F9", defaultDelivery: ["voice"], speechVolume: 65, speechRate: 2 });

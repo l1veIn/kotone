@@ -5,10 +5,14 @@
     type CompanionStatus, type QuickMessage,
   } from "../../../../lib/ipc";
   import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
+  import { listAutomations, subscribeAutomations, type Automation } from "../../../../lib/automation";
   import HotkeyField from "../../../../lib/components/HotkeyField.svelte";
+  import Select from "../../../../lib/components/Select.svelte";
+  import ArgsForm from "../automation/ArgsForm.svelte";
 
   let { checking = $bindable(false) }: { checking?: boolean } = $props();
   let status = $state<CompanionStatus | null>(null);
+  let automations = $state<Automation[]>([]);
   let saving = $state(false);
   const config = $derived($settingsStore?.assistant);
   const quick = $derived(config?.companion?.quickMessages ?? []);
@@ -19,7 +23,18 @@
     try { status = await companionStatus(); } catch (error) { toast(false, `读取陪玩状态失败：${errText(error)}`); }
   }
 
-  onMount(() => { void refresh(); });
+  async function loadAutomations() {
+    try { automations = await listAutomations(); } catch { /* 列表读不到时只是没有可选项 */ }
+  }
+
+  onMount(() => {
+    void refresh();
+    void loadAutomations();
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+    void subscribeAutomations(() => { void loadAutomations(); }).then((fn) => { if (disposed) fn(); else unlisten = fn; });
+    return () => { disposed = true; unlisten?.(); };
+  });
   $effect(() => { config?.connectionId; config?.companion; $settingsStore?.ocr?.activeModelId; void refresh(); });
 
   export async function runCheck() {
@@ -37,7 +52,7 @@
     }
   }
 
-  async function saveQuick(next: QuickMessage[], message = "快捷消息已保存") {
+  async function saveQuick(next: QuickMessage[], message = "快捷指令已保存") {
     if (saving) return;
     saving = true;
     try { await patchSettings({ assistant: { companion: { quickMessages: next } } }, message); }
@@ -47,7 +62,7 @@
   function addQuick() {
     if (quick.length >= MAX) return;
     const id = `qm-${Date.now().toString(36)}`;
-    void saveQuick([...quick, { id, label: "", text: "帮我看看队友说了什么", hotkey: "" }], "已添加快捷消息");
+    void saveQuick([...quick, { id, label: "", text: "帮我看看队友说了什么", hotkey: "" }], "已添加快捷指令");
   }
 
   function patchQuick(index: number, patch: Partial<QuickMessage>) {
@@ -55,7 +70,18 @@
   }
 
   function removeQuick(index: number) {
-    void saveQuick(quick.filter((_, i) => i !== index), "已删除快捷消息");
+    void saveQuick(quick.filter((_, i) => i !== index), "已删除快捷指令");
+  }
+
+  /** 切换“交给 AI 的一句话” / “运行自动化”。 */
+  function setKind(index: number, kind: string) {
+    const item = quick[index];
+    if (kind === "automation") {
+      if (!automations.length) { toast(false, "还没有保存的自动化：先在「自动化」页新建一个"); return; }
+      patchQuick(index, { automationId: automations[0].id, args: {} });
+    } else {
+      patchQuick(index, { automationId: "", args: {}, text: item.text.trim() || "帮我看看队友说了什么" });
+    }
   }
 
   function checkLabel(): string {
@@ -70,7 +96,7 @@
   <section class="panel" aria-labelledby="companion-title" data-testid="companion-settings">
     <h2 id="companion-title">陪玩</h2>
     <p class="mt-1 text-[11px] leading-relaxed text-white/45">
-      按住陪玩热键说一句话（或按快捷消息热键），琴音会截取游戏窗口、识别聊天、调一次 AI，然后选择：帮你设提醒、帮你打字，或直接用语音 / 弹幕回答。
+      按住陪玩热键说一句话（或按快捷指令热键），琴音会截取游戏窗口、识别聊天、调一次 AI，然后选择：帮你设提醒、帮你打字，或直接用语音 / 弹幕回答。
     </p>
 
     {#if status}
@@ -101,26 +127,43 @@
 
     <div class="mt-4">
       <div class="flex items-center justify-between">
-        <h3>快捷消息</h3>
+        <h3>快捷指令</h3>
         <button type="button" class="secondary" disabled={saving || quick.length >= MAX} onclick={addQuick}>添加</button>
       </div>
-      <p class="mt-1 text-[11px] text-white/40">提前写好一句话并绑定热键，按下就等于替你说了这句话，不经过语音识别，所以更快。最多 {MAX} 条。</p>
+      <p class="mt-1 text-[11px] text-white/40">绑定热键，在游戏里一按就执行。可以是交给 AI 的一句话（等于替你说了这句话，不经过语音识别，所以更快），也可以直接运行一个已保存的自动化（不调用 AI，在按下时的游戏窗口里运行）。最多 {MAX} 条。</p>
       <div class="mt-2 flex flex-col gap-2">
         {#each quick as item, index (item.id)}
+          {@const runsAutomation = !!item.automationId}
+          {@const target = automations.find((a) => a.id === item.automationId)}
           <div class="rounded-lg bg-white/4 p-3 ring-1 ring-white/10" data-testid="quick-message">
-            <div class="flex items-center gap-2">
-              <input class="field w-28" placeholder="名字（可选）" value={item.label} aria-label={`快捷消息 ${index + 1} 名字`}
+            <div class="flex flex-wrap items-center gap-2">
+              <input class="field w-28" placeholder="名字（可选）" value={item.label} aria-label={`快捷指令 ${index + 1} 名字`}
                 onchange={(event) => patchQuick(index, { label: event.currentTarget.value.trim() })} />
-              <input class="field min-w-0 flex-1" value={item.text} aria-label={`快捷消息 ${index + 1} 内容`} maxlength="200"
-                onchange={(event) => {
-                  const text = event.currentTarget.value.trim();
-                  if (!text) { toast(false, "快捷消息不能为空"); event.currentTarget.value = item.text; return; }
-                  patchQuick(index, { text });
-                }} />
+              <div class="w-40"><Select ariaLabel={`快捷指令 ${index + 1} 类型`} value={runsAutomation ? "automation" : "ask"} disabled={saving}
+                options={[{ value: "ask", label: "交给 AI 的一句话" }, { value: "automation", label: "运行自动化" }]}
+                onchange={(kind) => setKind(index, kind)} /></div>
+              {#if runsAutomation}
+                <div class="min-w-0 flex-1"><Select ariaLabel={`快捷指令 ${index + 1} 自动化`} value={item.automationId ?? ""} disabled={saving}
+                  options={[...(target ? [] : [{ value: item.automationId ?? "", label: "（自动化已删除）" }]), ...automations.map((a) => ({ value: a.id, label: a.name }))]}
+                  onchange={(automationId) => patchQuick(index, { automationId, args: {} })} /></div>
+              {:else}
+                <input class="field min-w-0 flex-1" value={item.text} aria-label={`快捷指令 ${index + 1} 内容`} maxlength="200"
+                  onchange={(event) => {
+                    const text = event.currentTarget.value.trim();
+                    if (!text) { toast(false, "这句话不能为空"); event.currentTarget.value = item.text; return; }
+                    patchQuick(index, { text });
+                  }} />
+              {/if}
               <button type="button" class="secondary" disabled={saving} onclick={() => removeQuick(index)}>删除</button>
             </div>
+            {#if runsAutomation && target?.params.length}
+              <div class="mt-2 rounded-md bg-black/15 p-2.5">
+                <ArgsForm params={target.params} values={item.args ?? {}} disabled={saving} prefix={`快捷指令 ${index + 1} `}
+                  onchange={(args) => patchQuick(index, { args })} />
+              </div>
+            {/if}
             <div class="mt-2">
-              <HotkeyField id={`quick-message-${index + 1}`} title={`快捷消息 ${index + 1} 热键`} value={item.hotkey} placeholder="如 Ctrl+F10" compact disabled={saving}
+              <HotkeyField id={`quick-message-${index + 1}`} title={`快捷指令 ${index + 1} 热键`} value={item.hotkey} placeholder="如 Ctrl+F10" compact disabled={saving}
                 onSave={async (hotkey) => {
                   const next = quick.map((q, i) => (i === index ? { ...q, hotkey } : q));
                   settingsStore.set(await updateSettings({ assistant: { companion: { quickMessages: next } } }));

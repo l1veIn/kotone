@@ -4,14 +4,14 @@
   import { errText, settingsStore } from "../../../lib/stores/ui";
   import ReminderTasks from "./assistant/ReminderTasks.svelte";
   import AssistantSettings from "./assistant/AssistantSettings.svelte";
-  import "./assistant/assistant.css";
+  import "./panel.css";
 
-  let { onOpenConnections }: { onOpenConnections: () => void } = $props();
+  let { onOpenConnections, onOpenAutomation }: { onOpenConnections: () => void; onOpenAutomation: () => void } = $props();
   let section = $state<"tasks" | "settings">("tasks");
   let connections = $state<ConnectionInfo[]>([]);
   let connectionError = $state("");
   const ready = $derived(!!connections.find((item) => item.id === $settingsStore?.assistant.connectionId)?.hasApiKey);
-  const tabs = [{ id: "tasks", label: "待办提醒" }, { id: "settings", label: "陪玩设置" }] as const;
+  const tabs = [{ id: "tasks", label: "跟琴音说" }, { id: "settings", label: "陪玩设置" }] as const;
 
   onMount(() => {
     let disposed = false;
@@ -21,7 +21,7 @@
   });
 </script>
 
-<div class="assistant-page px-6 py-5" data-testid="assistant-page">
+<div class="panel-page px-6 py-5" data-testid="assistant-page">
   <h1 class="text-lg font-bold">Kotone 陪玩</h1>
   <nav class="mt-4 flex flex-wrap gap-1.5" aria-label="陪玩分类">
     {#each tabs as tab}
@@ -34,9 +34,9 @@
   </nav>
   <div class="mt-4">
     {#if connectionError}<p role="alert" class="mb-3 text-xs text-kotone-pink">{connectionError}</p>{/if}
-    <!-- Keep drafts, in-flight requests and reminder subscriptions alive across sections. -->
+    <!-- Keep drafts, in-flight requests and subscriptions alive across sections. -->
     <div class:hidden={section !== "tasks"} data-testid="assistant-tasks">
-      <ReminderTasks {ready} active={section === "tasks"} onOpenSettings={() => { section = "settings"; }} />
+      <ReminderTasks {ready} active={section === "tasks"} onOpenSettings={() => { section = "settings"; }} {onOpenAutomation} />
     </div>
     {#if section === "settings"}
       <AssistantSettings {connections} {ready} {onOpenConnections} />

@@ -197,12 +197,16 @@ export interface AssistantConfig {
   companion: CompanionConfig;
 }
 
-/** 快捷消息：按下热键等于替用户说了 text，不经过语音识别（最多 8 条） */
+/** 快捷指令（字段名沿用快捷消息，最多 8 条）：按下热键，要么等于替用户说了 text（交给 AI），
+ *  要么直接运行已保存的自动化 automationId（带 args，不调用 AI）。 */
 export interface QuickMessage {
   id: string;
   label: string;
   text: string;
   hotkey: string;
+  /** 要直接运行的已保存自动化；空 / 缺省 = 交给 AI 的一句话 */
+  automationId?: string;
+  args?: Record<string, unknown>;
 }
 
 export interface CompanionCheck {

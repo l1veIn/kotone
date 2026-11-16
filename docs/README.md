@@ -9,7 +9,7 @@
 | 开发环境、验证和修改约定 | [development.md](development.md) |
 | 命令行用法 | [cli.md](cli.md)，参数以 `kotone-cli --help` 及子命令帮助为准 |
 | 模型评测、标注和缓存规则 | [eval-playbook.md](eval-playbook.md) |
-| 陪玩（助手热键、快捷消息、提醒 / 打字 / 回答）与输出限制 | [assistant.md](assistant.md) |
+| 陪玩（助手热键、快捷指令、提醒 / 打字 / 回答）与输出限制 | [assistant.md](assistant.md) |
 | 本机 Agent 工具服务（开启、协议、工具 schema、捕获限制、OCR 与聊天跟踪、应用启停、事件与用户请求、配置与首次引导、Kotone 陪玩工具、MCP / DSH 插件） | [tool-service.md](tool-service.md) |
 | 诊断包内容与操作 | [diagnostics.md](diagnostics.md) |
 | 数据和网络边界 | [PRIVACY.md](../PRIVACY.md) |

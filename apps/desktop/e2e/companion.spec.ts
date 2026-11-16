@@ -38,7 +38,7 @@ test("quick messages can be added, edited and removed, and online OCR shows the 
 
   await companion.getByRole("button", { name: "添加", exact: true }).click();
   await expect(companion.getByTestId("quick-message")).toHaveCount(1);
-  const content = companion.getByLabel("快捷消息 1 内容");
+  const content = companion.getByLabel("快捷指令 1 内容");
   await expect(content).toHaveValue("帮我看看队友说了什么");
   await content.fill("帮我跟队友说先别打龙");
   await content.blur();

@@ -29,6 +29,7 @@
   import { runtimeStore } from "../../../lib/stores/runtime";
   import Toggle from "../../../lib/components/Toggle.svelte";
   import RuntimeButton from "../../../lib/components/RuntimeButton.svelte";
+  import OutputSettings from "./assistant/OutputSettings.svelte";
   import heroGeneral from "../../../assets/brand/hero-general.webp";
 
   let { onOpenAdvanced }: { onOpenAdvanced: () => void } = $props();
@@ -524,6 +525,9 @@
         />
       </div>
     </section>
+
+    <!-- 声音与弹幕：提醒、陪玩回答与自动化共用的输出（ADR 013 §8） -->
+    <div class="mt-4"><OutputSettings /></div>
 
 
 
