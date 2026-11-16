@@ -19,6 +19,7 @@ mod tool_config;
 mod tool_service;
 mod tray;
 mod tts_online;
+mod wake;
 
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -1981,8 +1982,14 @@ pub fn run() {
             });
             let injector: Arc<dyn Injector> = Arc::new(WindowsInjector);
             let focus: Arc<dyn FocusBackend> = Arc::new(WinFocusBackend);
+            // 语音唤醒（ADR 017）：唤醒后的那次会话改用唤醒线程转来的音频，其余照常开麦克风。
+            let wake_runtime = wake::WakeRuntime::default();
             let audio_backend: Arc<dyn kotone_core::audio::AudioBackend> =
-                Arc::new(platform_audio::CpalBackend);
+                Arc::new(wake::WakeAudioBackend {
+                    inner: Arc::new(platform_audio::CpalBackend),
+                    handoff: wake_runtime.handoff(),
+                });
+            app.manage(wake_runtime);
             let assistant_runtime = assistant::initialize(app.handle(), settings.clone());
 
             #[allow(unused_mut)] // vad-silero feature 关闭时无可变接线
@@ -2167,6 +2174,8 @@ pub fn run() {
             assistant::finish_danmaku,
             speech_models::get_speech_model_status,
             speech_models::download_speech_model,
+            wake::wake_status,
+            wake::wake_download_model,
             speech_models::cancel_speech_model_download,
             automation::automation_runs,
             automation::automation_saved_list,
@@ -2205,6 +2214,7 @@ pub fn run() {
                 tool_service::shutdown(app);
                 automation::shutdown(app);
                 assistant::shutdown(app);
+                wake::shutdown(app);
             }
         });
 }

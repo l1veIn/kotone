@@ -180,7 +180,9 @@ struct RoutingHandler {
 
 /// 请求来源：设置窗口（文字入口与语音按钮）/ 工具提交 / 热键语音（按会话 ID 前缀区分）。
 fn request_source(session_id: &str) -> &'static str {
-    if session_id.starts_with("assistant-ui-") {
+    if session_id.starts_with("assistant-wake-") {
+        "wake"
+    } else if session_id.starts_with("assistant-ui-") {
         "assistant-text"
     } else if session_id.starts_with("assistant-tool-") {
         "tool"
@@ -210,6 +212,7 @@ impl AssistantHandler for RoutingHandler {
                     match request_source(&request.session_id) {
                         "assistant-text" => "assistant-text",
                         "tool" => "tool",
+                        "wake" => "wake-voice",
                         _ => "voice",
                     },
                 )?;
@@ -236,7 +239,11 @@ impl AssistantHandler for RoutingHandler {
             let submitted = crate::tool_service::submit_user_request(
                 &self.app,
                 &request.text,
-                request_source(&request.session_id),
+                // 外部 Agent 的来源只有三种：唤醒也算语音
+                match request_source(&request.session_id) {
+                    "wake" => "assistant-voice",
+                    other => other,
+                },
             )?;
             let id = submitted["requestId"].as_str().unwrap_or_default();
             Ok(AssistantPlan {
@@ -318,6 +325,25 @@ pub fn silence(app: &AppHandle) {
     if let Some(state) = app.try_state::<AssistantRuntime>() {
         let _ = state.cancel_speech();
     }
+}
+
+/// 立即用当前语音说一句短话（唤醒应答“嗯？/我在”）：先停掉正在播的，播完才返回。
+/// 阻塞，从普通线程调用；不经过提醒队列，也不改弹幕。
+pub fn speak_now(app: &AppHandle, text: &str) -> Result<(), String> {
+    let state = app.state::<AssistantRuntime>();
+    if state.active_captures.load(Ordering::SeqCst) != 0 {
+        return Err("正在录音，不播应答".into());
+    }
+    state.cancel_speech()?;
+    let config = app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .assistant
+        .clone();
+    let speaker = selected_speaker(app, &config)?;
+    speaker.speak(speech_request(&config, text))
 }
 
 pub fn before_capture(app: &AppHandle) -> Result<(), String> {

@@ -17,6 +17,14 @@ Kotone uses the sherpa-onnx runtime and its Rust bindings for local inference.
 - Project: https://github.com/k2-fsa/sherpa-onnx
 - License: Apache License 2.0
 
+## sherpa-onnx KWS zipformer WenetSpeech 3.3M (voice wake-up, optional)
+
+Used for voice wake-up detection when the user enables it. Not bundled with Kotone: the user's copy is downloaded on request from the official k2-fsa/sherpa-onnx GitHub release (`kws-models`), and only the int8 encoder/joiner, fp32 decoder and tokens are kept.
+
+- Model: https://github.com/k2-fsa/sherpa-onnx/releases/tag/kws-models (`sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01`)
+- Model license as published: Apache License 2.0
+- Training data: WenetSpeech, whose license permits non-commercial use only (https://arxiv.org/abs/2110.03370). This is why Kotone does not redistribute the model.
+
 ## X-ASR-zh-en
 
 The default X-ASR streaming Chinese/English model is attributed to the X-ASR project and is converted for sherpa-onnx deployment.

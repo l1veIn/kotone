@@ -4101,3 +4101,86 @@ async fn assistant_legacy_solo_configuration_records_only_on_press_and_release()
             && payload["state"] == "listening"
             && payload["payload"]["inputSource"] == "hotkey"));
 }
+
+type WakeFixture = (
+    Arc<Orchestrator>,
+    Arc<Mutex<Vec<kotone_core::assistant::AssistantRequest>>>,
+    Arc<VecEmitter>,
+    tempfile::TempDir,
+);
+
+fn wake_builder(vad: fn() -> ScriptVad) -> WakeFixture {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = kotone_core::automation::AutomationScheduler::open(
+        dir.path().join("automation-runs.json"),
+        Arc::new(ReminderTestDelivery),
+    )
+    .unwrap();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let emitter = Arc::new(VecEmitter::default());
+    let mut builder = assistant_orchestrator_builder(
+        Arc::new(AssistantTestHandler {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: None,
+            requests: requests.clone(),
+        }),
+        queue,
+        Arc::new(Mutex::new(Vec::new())),
+        emitter.clone(),
+    );
+    // 助手热键是对讲机：唤醒会话不看它，说完就提交。
+    builder
+        .settings()
+        .write()
+        .unwrap()
+        .assistant
+        .interaction_mode = kotone_core::assistant::AssistantInteractionMode::PushToTalk;
+    builder.settings().write().unwrap().vad_silence_ms = 210;
+    builder.vad_factory = Some(Arc::new(move |_| Ok(Box::new(vad()))));
+    (builder.into_arc(), requests, emitter, dir)
+}
+
+#[tokio::test]
+async fn wake_session_submits_when_speech_ends_regardless_of_hotkey_mode() {
+    let (orch, requests, _emitter, _dir) = wake_builder(|| ScriptVad::speech_then_silence(30));
+    orch.begin_assistant_wake(5_000).await.unwrap();
+    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(3)).await;
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0].session_id.starts_with("assistant-wake-"),
+        "{}",
+        requests[0].session_id
+    );
+}
+
+#[tokio::test]
+async fn wake_session_starts_over_a_finished_or_failed_session() {
+    let (orch, requests, _emitter, _dir) = wake_builder(|| ScriptVad::speech_then_silence(30));
+    orch.begin_assistant_wake(5_000).await.unwrap();
+    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(3)).await;
+    // 还停在“成功”的提示上：再次唤醒照样开始
+    orch.begin_assistant_wake(5_000).await.unwrap();
+    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(3)).await;
+    assert_eq!(requests.lock().unwrap().len(), 2);
+    // 停在“出错”上也一样
+    orch.abort_with_message("测试错误").await;
+    assert_eq!(orch.state(), OrchestratorState::Error);
+    orch.begin_assistant_wake(5_000).await.unwrap();
+    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(3)).await;
+    assert_eq!(requests.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn wake_session_without_speech_is_cancelled_quietly() {
+    let (orch, requests, emitter, _dir) = wake_builder(ScriptVad::all_silence);
+    orch.begin_assistant_wake(300).await.unwrap();
+    wait_state(&orch, OrchestratorState::Idle, Duration::from_secs(3)).await;
+    assert!(requests.lock().unwrap().is_empty());
+    assert!(emitter
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(name, _)| name == "kotone://vad-no-speech"));
+}

@@ -155,7 +155,7 @@ pub fn group_of(name: &str) -> &'static str {
         "automation" | "saved" => "automation",
         "settings" | "profiles" | "hotkeys" | "connections" | "audio" | "input" | "postprocess"
         | "autostart" | "elevation" => "settings",
-        "models" | "speech" | "stt" => "models",
+        "models" | "speech" | "stt" | "wake" => "models",
         _ => "app",
     }
 }

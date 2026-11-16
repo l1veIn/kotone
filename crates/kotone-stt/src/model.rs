@@ -975,6 +975,14 @@ pub fn download(id: &str, progress: Progress<'_>) -> Result<(), String> {
     download_inner(id, progress)
 }
 
+/// 下载一个不在语音识别清单里的多文件模型（如唤醒模型）：与 [`download`] 共用互斥、取消与下载源策略。
+pub fn download_model(m: &MultiFileModel, progress: Progress<'_>) -> Result<(), String> {
+    validate_models_dir_path(&models_dir())?;
+    let _download_guard = download::begin_download()?;
+    let cfg = settings::load().download;
+    download_multi(m, progress, &cfg)
+}
+
 /// 请求取消当前下载（幂等；Tauri IPC 用）
 pub fn cancel_download() {
     download::request_cancel();

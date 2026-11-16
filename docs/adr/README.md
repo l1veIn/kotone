@@ -20,3 +20,4 @@ ADR 保留当时的上下文和选择，状态决定其适用性。当前架构�
 | [014 游戏场景 Agent 运行框架](014-game-agent-harness.md) | Accepted / 已采纳 | 基础能力 → 自动化 → Agent 三层；内置 Agent（聊天窗口 + 游戏内语音），权限为允许 / 询问 / 禁止；取代陪玩“一次决策”设计 |
 | [015 内置 Agent 的完成度与技术栈](015-agent-scope-and-stack.md) | Accepted / 已采纳 | 第一版对标 pi 的精简完整度、游戏相关层做深；Rust 单进程，不带 Node；模型通信层用 rig-core，循环自己写；边界用 MCP / SKILL.md / ACP 式事件 |
 | [016 前端引入 shadcn-svelte](016-ui-foundation-shadcn.md) | Accepted / 已采纳 | 分三步：底子 → 「琴音」聊天页（复用 RambleDesk 的聊天实现）→ 其他页面逐页迁移；悬浮窗与弹幕窗不改 |
+| [017 语音唤醒与执行中的语音接话](017-voice-wake.md) | Accepted / 已采纳 | sherpa-onnx 关键词检测（“琴音琴音”），模型按需下载；唤醒后与陪玩热键同一条收音与琴音流程；应答“嗯？/我在”，玩家开口即打断；1.5 秒先接一句；默认关 |

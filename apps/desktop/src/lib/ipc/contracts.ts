@@ -185,6 +185,8 @@ export interface AssistantConfig {
   speechEngine: "kokoro" | "system";
   /** 选中的在线语音合成模型（openai-compat-tts / volcano-tts）；空 = 用 speechEngine */
   ttsModelId?: string;
+  /** 语音唤醒（ADR 017；新字段，旧配置没有）。 */
+  wake?: WakeConfig;
   kokoroVoiceId: string;
   danmakuDurationMs: number;
   danmakuSpeedPxPerSec: number;
@@ -253,6 +255,18 @@ export interface AgentConfig {
   hiddenAutomations: string[];
   /** 陪玩热键与快捷指令交给琴音（默认开；关闭时用旧的单次陪玩）。 */
   inGame: boolean;
+  /** 游戏内交给琴音后 1.5 秒还没出声，先说一句“好，我看看”（默认开）。 */
+  progressSpeech?: boolean;
+}
+
+/** 语音唤醒设置（config.json `assistant.wake`）。 */
+export interface WakeConfig {
+  enabled: boolean;
+  phrase: "qinyin-qinyin" | "nihao-qinyin";
+  sensitivity: "low" | "normal" | "high";
+  ack: "voice" | "tone" | "none";
+  /** 唤醒后一直不说话多久就结束（毫秒，2000–15000） */
+  noSpeechTimeoutMs: number;
 }
 
 /** 本机工具服务配置（config.json `toolService` 段）；修改后需重启桌面端 */

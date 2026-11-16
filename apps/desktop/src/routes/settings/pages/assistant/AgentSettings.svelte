@@ -27,6 +27,7 @@
   let saving = $state(false);
   let loadError = $state("");
   const inGame = $derived($settingsStore?.agent?.inGame ?? true);
+  const progressSpeech = $derived($settingsStore?.agent?.progressSpeech ?? true);
   /** 按分组排好（核心工具在前）；已有规则但清单里没有的工具也列出来，方便删掉。 */
   const groups = $derived.by(() => {
     const known = new Set(tools.map((tool) => tool.name));
@@ -91,6 +92,11 @@
     <SettingsRow label="游戏内交给琴音" description="陪玩热键与快捷指令里的“一句话”交给琴音（多步、能用全部工具）；关闭时用旧的单次陪玩。">
       {#snippet control()}
         <Switch data-testid="agent-in-game" bind:checked={() => inGame, (checked) => void patchSettings({ agent: { inGame: checked } }, checked ? "游戏内入口交给琴音" : "游戏内入口改用单次陪玩")} aria-label="游戏内交给琴音" />
+      {/snippet}
+    </SettingsRow>
+    <SettingsRow label="执行中先接一句" description="游戏里交给琴音后 1.5 秒还没出声，先用语音说一句“好，我看看”，免得干等。">
+      {#snippet control()}
+        <Switch data-testid="agent-progress-speech" bind:checked={() => progressSpeech, (checked) => void patchSettings({ agent: { progressSpeech: checked } }, checked ? "执行中会先接一句" : "执行中不再接话")} aria-label="执行中先接一句" />
       {/snippet}
     </SettingsRow>
     {#if loadError}<p role="alert" class="my-3 text-xs text-destructive">{loadError}</p>{/if}

@@ -81,6 +81,72 @@ pub struct AssistantConfig {
     /// 空 = 用旧字段 `speech_engine`（系统语音 / Kokoro）。在线引擎不写进 `speech_engine`，
     /// 否则旧版本读不懂这个值会把整份配置当作损坏。
     pub tts_model_id: String,
+    /// 语音唤醒（ADR 017）。新字段，缺省 = 关闭。
+    pub wake: WakeConfig,
+}
+
+/// 唤醒词（预置；第二版再考虑自定义）。不认识的值按默认处理。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WakePhrase {
+    /// “你好琴音”
+    NihaoQinyin,
+    /// “琴音琴音”
+    #[default]
+    #[serde(other)]
+    QinyinQinyin,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WakeSensitivity {
+    /// 更不容易误唤醒，可能要喊得清楚些。
+    Low,
+    /// 更容易唤醒，也更容易被别的声音误触发。
+    High,
+    #[default]
+    #[serde(other)]
+    Normal,
+}
+
+/// 唤醒后怎么应答。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WakeAck {
+    /// 只放开始录音的提示音。
+    Tone,
+    /// 不提示。
+    None,
+    /// 说一声“嗯？”/“我在”（连着往下说时不说）。
+    #[default]
+    #[serde(other)]
+    Voice,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WakeConfig {
+    /// 开启后常开麦克风，在本机检测唤醒词（默认关）。
+    pub enabled: bool,
+    pub phrase: WakePhrase,
+    pub sensitivity: WakeSensitivity,
+    pub ack: WakeAck,
+    /// 唤醒后一直不说话多久就结束（毫秒）。
+    pub no_speech_timeout_ms: u32,
+}
+
+pub const WAKE_NO_SPEECH_RANGE_MS: std::ops::RangeInclusive<u32> = 2_000..=15_000;
+
+impl Default for WakeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            phrase: WakePhrase::default(),
+            sensitivity: WakeSensitivity::default(),
+            ack: WakeAck::default(),
+            no_speech_timeout_ms: 5_000,
+        }
+    }
 }
 
 /// 实际使用的语音合成引擎（由 `speech_engine` 与 `tts_model_id` 共同决定，不直接落盘）。
@@ -230,6 +296,7 @@ impl Default for AssistantConfig {
             route: AssistantRoute::Companion,
             companion: CompanionConfig::default(),
             tts_model_id: String::new(),
+            wake: WakeConfig::default(),
         }
     }
 }
@@ -302,6 +369,9 @@ impl AssistantConfig {
             "" | OPENAI_TTS_MODEL_ID | VOLCANO_TTS_MODEL_ID
         ) {
             return Err("在线语音合成模型无效".into());
+        }
+        if !WAKE_NO_SPEECH_RANGE_MS.contains(&self.wake.no_speech_timeout_ms) {
+            return Err("唤醒后等待说话的时间必须在 2 到 15 秒之间".into());
         }
         self.companion.validate()
     }

@@ -56,6 +56,9 @@ pub struct AgentConfig {
     /// 关闭时仍用旧的单次陪玩；`assistant.route = agent`（转交外部 Agent）时不看这一项。
     #[serde(default = "default_true")]
     pub in_game: bool,
+    /// 游戏内交给琴音后，1.5 秒还没出声就先说一句“好，我看看”（ADR 017 §5，默认开）。
+    #[serde(default = "default_true")]
+    pub progress_speech: bool,
 }
 
 fn default_true() -> bool {
@@ -68,6 +71,7 @@ impl Default for AgentConfig {
             permissions: Policy::default(),
             hidden_automations: Vec::new(),
             in_game: true,
+            progress_speech: true,
         }
     }
 }

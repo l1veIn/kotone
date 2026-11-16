@@ -213,8 +213,19 @@ async fn drive(
         while let Some(user) = next.take() {
             let entry = entry_of(&user);
             let start = conversation.messages.len();
+            inbox.take_delivered();
+            let filler = (entry == Entry::Game).then(|| progress_filler(&app, &cancel));
             let stop = turn(&app, &mut conversation, user, entry, &cancel, &inbox).await;
-            if entry == Entry::Game {
+            if let Some(filler) = filler {
+                filler.cancel();
+            }
+            // 聊天窗口发起的一轮里，玩家在游戏里插了话（热键、唤醒）：回答也要播出来，
+            // 否则人在游戏里听不到。
+            let game_steered = inbox
+                .take_delivered()
+                .iter()
+                .any(|m| entry_of(m) == Entry::Game);
+            if entry == Entry::Game || game_steered {
                 speak_outcome(
                     &app,
                     &conversation.messages[start.min(conversation.messages.len())..],
@@ -487,6 +498,44 @@ fn speak_outcome(app: &AppHandle, appended: &[Message], stop: &StopReason) {
     }
 }
 
+/// 交给琴音后多久还没出声就先接一句（ADR 017 §5）。
+const FILLER_AFTER: std::time::Duration = std::time::Duration::from_millis(1_500);
+const FILLERS: &[&str] = &["好，我看看", "收到，稍等", "嗯，马上"];
+static FILLER_INDEX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// 最近一次 `reply.say` 的时间（毫秒）：这一轮里已经出过声就不再接话。
+static LAST_SAY_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 游戏内一轮开始时调用：1.5 秒后这一轮还没结束、也没出过声，就用语音说一句固定的短话
+/// （不经过模型，不占步数）。返回的令牌在这一轮结束时取消。`agent.progressSpeech` 关掉时不说。
+fn progress_filler(app: &AppHandle, turn_cancel: &CancellationToken) -> CancellationToken {
+    let done = CancellationToken::default();
+    if !settings(app).agent.progress_speech {
+        return done;
+    }
+    let started = now_ms();
+    let app = app.clone();
+    let done_wait = done.clone();
+    let turn_cancel = turn_cancel.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::select! {
+            _ = done_wait.cancelled() => return,
+            _ = turn_cancel.cancelled() => return,
+            _ = tokio::time::sleep(FILLER_AFTER) => {}
+        }
+        if LAST_SAY_MS.load(std::sync::atomic::Ordering::SeqCst) >= started {
+            return;
+        }
+        let i = FILLER_INDEX.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let text = FILLERS[i % FILLERS.len()].to_string();
+        log::log(&format!("agent: 先接一句“{text}”"));
+        if let Err(e) = crate::assistant::deliver_text(&app, text, vec![DeliveryKind::Voice]).await
+        {
+            log::log(&format!("agent: 接话未能播出：{e}"));
+        }
+    });
+    done
+}
+
 /// 游戏内这一轮要播的话（纯函数）：出错 / 被上限停下 → 原因；正常结束 → 最后的回答，
 /// 但已经用 `reply.say` 播过就不重复；玩家自己停止的不播。
 fn game_reply(appended: &[Message], stop: &StopReason) -> Option<String> {
@@ -621,6 +670,7 @@ fn delivery_names(kinds: &[DeliveryKind]) -> Vec<&'static str> {
 
 impl BuiltinHost for DesktopBuiltins {
     async fn say(&self, text: String, delivery: Vec<DeliveryKind>) -> Result<Value, String> {
+        LAST_SAY_MS.store(now_ms(), std::sync::atomic::Ordering::SeqCst);
         let delivered = crate::assistant::deliver_text(&self.app, text, delivery).await?;
         Ok(json!({"delivered": delivery_names(&delivered)}))
     }

@@ -304,6 +304,8 @@ pub struct Inbox {
 struct InboxState {
     steer: VecDeque<Message>,
     follow_up: VecDeque<Message>,
+    /// 已经在本轮里交给模型的插话（[`Inbox::take_delivered`] 取走）。
+    delivered: Vec<Message>,
 }
 
 impl Inbox {
@@ -331,6 +333,7 @@ impl Inbox {
         let n = state.steer.len() + state.follow_up.len();
         state.steer.clear();
         state.follow_up.clear();
+        state.delivered.clear();
         n
     }
 
@@ -339,7 +342,16 @@ impl Inbox {
     }
 
     fn take_steer(&self) -> Vec<Message> {
-        self.state.lock().unwrap().steer.drain(..).collect()
+        let mut state = self.state.lock().unwrap();
+        let taken: Vec<Message> = state.steer.drain(..).collect();
+        state.delivered.extend(taken.iter().cloned());
+        taken
+    }
+
+    /// 取走自上次调用以来、已经在轮内交给模型的插话。调用方据此判断这一轮的回答
+    /// 还要回应谁（例如游戏里插的话，回答要用语音播出）。
+    pub fn take_delivered(&self) -> Vec<Message> {
+        std::mem::take(&mut self.state.lock().unwrap().delivered)
     }
 }
 

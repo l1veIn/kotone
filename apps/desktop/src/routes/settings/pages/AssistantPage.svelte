@@ -8,6 +8,7 @@
   import AssistantChat from "./assistant/AssistantChat.svelte";
   import AssistantSettings from "./assistant/AssistantSettings.svelte";
   import AgentSettings from "./assistant/AgentSettings.svelte";
+  import WakeSettings from "./assistant/WakeSettings.svelte";
   import OpenRunsSummary from "./assistant/OpenRunsSummary.svelte";
 
   let { onOpenConnections, onOpenAutomation, chatRequest = 0 }: {
@@ -71,10 +72,11 @@
     <div class="ui-scope mx-auto w-full max-w-3xl space-y-6 px-6 pt-7 pb-10 text-foreground" data-testid="assistant-settings-tab">
       <div>
         <h2 class="m-0 text-xl font-semibold tracking-tight">琴音设置</h2>
-        <p class="mt-1.5 mb-0 text-[13px] leading-relaxed text-muted-foreground">AI 连接、能力自检、热键与快捷指令，以及琴音能直接做哪些事。</p>
+        <p class="mt-1.5 mb-0 text-[13px] leading-relaxed text-muted-foreground">AI 连接、能力自检、热键与快捷指令、语音唤醒，以及琴音能直接做哪些事。</p>
         <div class="mt-3 lg:hidden"><OpenRunsSummary {onOpenAutomation} /></div>
       </div>
       <AssistantSettings {connections} {ready} {onOpenConnections} />
+      <WakeSettings />
       <AgentSettings />
     </div>
   {/if}

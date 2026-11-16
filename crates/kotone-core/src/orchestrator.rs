@@ -83,6 +83,22 @@ impl SessionBeginError {
     }
 }
 
+/// 会话从哪里开始：决定会话 ID 前缀、语音按钮的操作权限与唤醒专用的收音策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionOrigin {
+    Hotkey,
+    /// 设置窗口的语音按钮（只有它能操作自己的会话）。
+    WindowVoice,
+    /// 语音唤醒（ADR 017）。
+    Wake {
+        no_speech_timeout_ms: u32,
+    },
+}
+
+fn kotone_core_assistant_one_shot() -> crate::interaction::InteractionMode {
+    crate::assistant::AssistantInteractionMode::OneShot.into()
+}
+
 /// Rust → UI 事件出口（生产实现发 Tauri 事件，测试用 Vec 收集）
 pub trait Emitter: Send + Sync {
     fn emit(&self, event: &str, payload: serde_json::Value);
@@ -928,6 +944,28 @@ impl Orchestrator {
             .await
     }
 
+    /// 语音唤醒后的收音（ADR 017）：助手会话，说完（VAD 静音）直接提交，不管助手热键的
+    /// 交互模式；一直没开口超过 `no_speech_timeout_ms` 就安静取消。会话 ID 以
+    /// `assistant-wake-` 开头，宿主据此把它记为唤醒来源。只在空闲时开始。
+    pub async fn begin_assistant_wake(&self, no_speech_timeout_ms: u32) -> Result<(), String> {
+        let _op = self.op.lock().await;
+        // 上一次会话停在“成功 / 出错”的提示上：与热键一样，新会话先清掉它。
+        if matches!(
+            self.state(),
+            OrchestratorState::Success | OrchestratorState::Error
+        ) {
+            self.cancel_locked();
+        }
+        self.begin_admitted_with(
+            false,
+            SessionPurpose::Assistant,
+            None,
+            SessionOrigin::Wake {
+                no_speech_timeout_ms,
+            },
+        )
+    }
+
     /// 独立助手键的点按入口，按助手自己的预设路由。
     pub async fn on_assistant_hotkey(&self) {
         self.on_assistant_hotkey_with_ticket(self.hotkey_input_ticket())
@@ -1058,11 +1096,37 @@ impl Orchestrator {
         expected_gen: Option<u64>,
         assistant_voice_owner: bool,
     ) -> Result<(), String> {
+        let origin = if assistant_voice_owner {
+            SessionOrigin::WindowVoice
+        } else {
+            SessionOrigin::Hotkey
+        };
+        self.begin_admitted_with(resumed, purpose, expected_gen, origin)
+    }
+
+    fn begin_admitted_with(
+        &self,
+        resumed: bool,
+        purpose: SessionPurpose,
+        expected_gen: Option<u64>,
+        origin: SessionOrigin,
+    ) -> Result<(), String> {
+        let assistant_voice_owner = origin == SessionOrigin::WindowVoice;
         if !self.runtime_inputs_enabled.load(Ordering::SeqCst) {
             return Err("运行时已停止，不能开始新会话".into());
         }
         let settings = self.settings.read().unwrap().clone();
-        let policy = Self::configured_policy(&settings, purpose);
+        let mut policy = Self::configured_policy(&settings, purpose);
+        let no_speech_timeout_ms = match origin {
+            SessionOrigin::Wake {
+                no_speech_timeout_ms,
+            } => {
+                // 唤醒后：说完即提交（与助手“一句话”预设相同），不等热键。
+                policy = InteractionPolicy::from_preset(kotone_core_assistant_one_shot());
+                Some(no_speech_timeout_ms)
+            }
+            _ => None,
+        };
         {
             let mut inner = self.inner.lock().unwrap();
             if expected_gen.is_some_and(|gen| inner.gen != gen) {
@@ -1087,17 +1151,17 @@ impl Orchestrator {
             // 窗口里的输入（琴音聊天），而不是游戏内热键。
             inner.process_case_id = Some(format!(
                 "{}-{}-{}",
-                if assistant_voice_owner {
-                    "assistant-ui-voice"
-                } else {
-                    "session"
+                match origin {
+                    SessionOrigin::WindowVoice => "assistant-ui-voice",
+                    SessionOrigin::Wake { .. } => "assistant-wake",
+                    SessionOrigin::Hotkey => "session",
                 },
                 crate::eval::new_session_id(),
                 NEXT_PROCESS_SESSION_ID.fetch_add(1, Ordering::Relaxed),
             ));
             inner.assistant_voice_owner = assistant_voice_owner;
         }
-        match self.begin_locked(resumed, purpose, settings, policy) {
+        match self.begin_locked(resumed, purpose, settings, policy, no_speech_timeout_ms) {
             Ok(()) => Ok(()),
             Err(e) => {
                 // 开始失败（如引擎/麦克风未就绪）：Error 保持到用户关闭或重试
@@ -1117,6 +1181,7 @@ impl Orchestrator {
         purpose: SessionPurpose,
         settings: Settings,
         policy: InteractionPolicy,
+        no_speech_timeout_ms: Option<u32>,
     ) -> Result<(), SessionBeginError> {
         if purpose == SessionPurpose::Assistant && self.assistant.is_none() {
             return Err(SessionBeginError::new(
@@ -1248,7 +1313,8 @@ impl Orchestrator {
                                 crate::vad::SilenceStopTracker::new(
                                     silence_ms,
                                     crate::vad::MIN_SESSION_MS,
-                                ),
+                                )
+                                .with_no_speech_timeout(no_speech_timeout_ms),
                             )),
                             None,
                         )
@@ -1383,7 +1449,7 @@ impl Orchestrator {
                                                     }
                                                 }
                                                 decision = tracker.push(speech);
-                                                if decision == crate::vad::StopDecision::Stop {
+                                                if decision != crate::vad::StopDecision::Continue {
                                                     break;
                                                 }
                                             }
@@ -1451,6 +1517,20 @@ impl Orchestrator {
                                             }
                                         }
                                         vad_state = None;
+                                    } else if decision == crate::vad::StopDecision::NoSpeech {
+                                        // 唤醒后一直没开口：安静取消，不转写、不提交
+                                        emitter.emit(
+                                            "kotone://vad-no-speech",
+                                            json!({ "elapsedMs": tracker.elapsed_ms() }),
+                                        );
+                                        if let Some(me) =
+                                            me_weak.as_ref().and_then(|w| w.upgrade())
+                                        {
+                                            tokio::spawn(async move {
+                                                me.cancel_inner(None, Some(capture_gen)).await;
+                                            });
+                                        }
+                                        break;
                                     } else if decision == crate::vad::StopDecision::Stop {
                                         emitter.emit(
                                             "kotone://vad-stop",

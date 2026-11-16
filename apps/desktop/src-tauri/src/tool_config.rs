@@ -301,6 +301,17 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
                 .collect();
             Ok(json!({"fields": fields, "dedicated": dedicated}))
         }
+        c::TOOL_WAKE_STATUS => {
+            let _: NoArgs = parse(tool, args)?;
+            Ok(serde_json::to_value(crate::wake::status(app)).unwrap_or(Value::Null))
+        }
+        c::TOOL_WAKE_MODEL_DOWNLOAD => {
+            let _: NoArgs = parse(tool, args)?;
+            crate::wake::download_model(app)
+                .await
+                .map_err(HostError::Failed)?;
+            Ok(serde_json::to_value(crate::wake::status(app)).unwrap_or(Value::Null))
+        }
         c::TOOL_APP_RESTART => {
             let _: NoArgs = parse(tool, args)?;
             schedule_restart(app);

@@ -23,6 +23,7 @@ mod sensevoice;
 pub mod sherpa_runtime;
 pub mod vad;
 mod volcano;
+pub mod wake;
 
 use kotone_core::stt::{EngineRegistry, SttEngine};
 

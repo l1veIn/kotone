@@ -1392,3 +1392,31 @@ fn store_prunes_oldest_conversations() {
     assert_eq!(store.list().len(), super::store::MAX_CONVERSATIONS);
     assert!(store.load(&first.id).unwrap().is_none());
 }
+
+#[test]
+fn inbox_reports_which_steering_messages_reached_the_turn() {
+    let user = |text: &str, source: &str| Message::User {
+        text: text.into(),
+        attachments: Vec::new(),
+        source: source.into(),
+        at_ms: 0,
+    };
+    let inbox = Inbox::default();
+    inbox.steer(user("在游戏里插一句", "voice"));
+    assert!(inbox.take_delivered().is_empty(), "还没交给模型");
+    let taken = inbox.take_steer();
+    assert_eq!(taken.len(), 1);
+    let delivered = inbox.take_delivered();
+    assert_eq!(delivered.len(), 1);
+    assert!(matches!(&delivered[0], Message::User { source, .. } if source == "voice"));
+    assert!(inbox.take_delivered().is_empty(), "取走后清空");
+    // 没来得及交给模型、轮后才取出的插话不算“已交给这一轮”
+    inbox.steer(user("晚到的", "voice"));
+    assert!(inbox.next_follow_up().is_some());
+    assert!(inbox.take_delivered().is_empty());
+    // 停止时一并清掉
+    inbox.steer(user("x", "voice"));
+    inbox.take_steer();
+    inbox.clear();
+    assert!(inbox.take_delivered().is_empty());
+}

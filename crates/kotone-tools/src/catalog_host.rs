@@ -18,6 +18,8 @@ pub const TOOL_MODELS_DIR_SET: &str = "models.dir.set";
 pub const TOOL_MODELS_INSTALL_GUIDE: &str = "models.install_guide";
 pub const TOOL_SPEECH_STATUS: &str = "speech.status";
 pub const TOOL_SPEECH_MODEL_DOWNLOAD: &str = "speech.model.download";
+pub const TOOL_WAKE_STATUS: &str = "wake.status";
+pub const TOOL_WAKE_MODEL_DOWNLOAD: &str = "wake.model.download";
 pub const TOOL_CONNECTIONS_PRESETS: &str = "connections.presets";
 pub const TOOL_CONNECTIONS_LIST: &str = "connections.list";
 pub const TOOL_CONNECTIONS_UPSERT: &str = "connections.upsert";
@@ -74,6 +76,8 @@ pub const HOST_TOOLS: &[&str] = &[
     TOOL_MODELS_INSTALL_GUIDE,
     TOOL_SPEECH_STATUS,
     TOOL_SPEECH_MODEL_DOWNLOAD,
+    TOOL_WAKE_STATUS,
+    TOOL_WAKE_MODEL_DOWNLOAD,
     TOOL_CONNECTIONS_PRESETS,
     TOOL_CONNECTIONS_LIST,
     TOOL_CONNECTIONS_UPSERT,
@@ -273,6 +277,28 @@ fn defs() -> Vec<Def> {
             egress: "none",
             input: none(),
             output: object(&["status"], json!({"status": {"enum": ["started", "installed"]}})),
+        },
+        Def {
+            name: TOOL_WAKE_STATUS,
+            description: "Voice wake-up (say \"琴音琴音\" to talk to the built-in agent without a hotkey): state off / waiting-runtime / model-missing / listening / error, whether the ~5 MB wake model is downloaded or downloading, and how many wake-ups happened since start. Turn it on with settings.update {\"assistant\": {\"wake\": {\"enabled\": true}}} after wake.model.download; it listens only while voice recognition runs. The microphone then stays open (processed locally).",
+            side_effects: &[],
+            egress: "none",
+            input: none(),
+            output: object(&["state", "modelReady", "downloading", "detections"], json!({
+                "state": {"enum": ["off", "waitingRuntime", "modelMissing", "listening", "error"]},
+                "message": {"type": "string", "description": "state=error 时的原因"},
+                "modelReady": {"type": "boolean"},
+                "downloading": {"type": "boolean"},
+                "detections": {"type": "integer", "minimum": 0}
+            })),
+        },
+        Def {
+            name: TOOL_WAKE_MODEL_DOWNLOAD,
+            description: "Download the wake-word model (sherpa-onnx KWS zipformer WenetSpeech 3.3M; the official ~33 MB archive, ~5.5 MB kept). Blocks until done or failed (use a generous timeoutMs); progress is published as wake.model.progress events. Returns wake.status.",
+            side_effects: &["downloads-model"],
+            egress: "none",
+            input: none(),
+            output: open("与 wake.status 相同"),
         },
         Def {
             name: TOOL_CONNECTIONS_PRESETS,

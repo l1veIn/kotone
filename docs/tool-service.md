@@ -9,7 +9,7 @@
 - 桌面进程拥有服务；`kotone-cli tools` 是客户端。客户端直接走 loopback HTTP，**不会再次启动 `kotone.exe`**，因此不会触发单实例回调唤起设置窗口、抢走游戏焦点。
 - 服务与 ASR 运行时（启动 / 停止开关）相互独立：运行时 Stopped 时工具照常可用，调用也不会启动 ASR、注册热键或加载模型。
 - 服务从不移动窗口；只有 `game.focus` 会把用户配置的游戏窗口切到前台，`game.launch` / `game.close` 会按游戏配置打开或请求关闭游戏，发送输入的只有自动化与陪玩打字（见各节）。除 `models.dir.set`（把模型迁到用户指定的目录，与设置页相同）外不读写调用方指定的本地文件；`diagnostics.export` 只写到 `<KOTONE_HOME>/exports/`。可见输出只有 `agent.reply` 的弹幕（不取焦点、鼠标穿透的提醒层）与语音播报，以及 `elevation.restart` 触发的系统 UAC 提示。
-- 已实现下文 77 个工具（服务自身 24 个 + 委托桌面宿主 53 个；以 `kotone-cli tools list` 为准）。引导页与设置页里人能做的配置，Agent 都能通过工具完成（[演进计划 §5.5](product-evolution-game-tools.md)）；通用热键、工作流、模型调用（LLM）与发送尚未实现，不出现在 capabilities 中，调用它们返回 `TOOL_NOT_FOUND`。
+- 已实现下文 79 个工具（服务自身 24 个 + 委托桌面宿主 55 个；以 `kotone-cli tools list` 为准）。引导页与设置页里人能做的配置，Agent 都能通过工具完成（[演进计划 §5.5](product-evolution-game-tools.md)）；通用热键、工作流、模型调用（LLM）与发送尚未实现，不出现在 capabilities 中，调用它们返回 `TOOL_NOT_FOUND`。
 - OCR 结果与聊天文字一律是**数据**：服务从不解释或执行其中的内容（例如“忽略之前的指令”之类的文字只会被原样返回）。
 
 ## 2. 开启与重启
@@ -227,6 +227,8 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 在线模型的配置项（例如 DeepSeek OCR 绑定的 API 连接）用 `settings.update {"modelConfigs": {"<模型 id>": {"connection": "<连接 id>"}}}` 写入；密钥只在凭据管理器，用 `connections.upsert` 写。
 | `speech.status` | 无 | `package`（Kokoro 语音包：installed/downloading/字节/阶段/错误）、当前语音引擎的 `voices[]`（编号为 `提供方/声音`，如 `system/…`、`kokoro/zf_001`、`openai/alloy`、`volcano/BV700_streaming`）、`voicesError`。语音引擎也可用 `models.activate {"category": "tts"}` 选择（`system-speech` / `kokoro-zh` / `openai-compat-tts` / `volcano-tts`），在线引擎的连接、模型与声音写 `settings.update {"modelConfigs": {…}}` |
 | `speech.model.download` | 无 | `status=started`（或已安装时 `installed`）；结果 `speech.model.download.finished` / `failed`；与模型下载共用唯一名额 |
+| `wake.status` | 无 | 语音唤醒：`state`（`off` / `waitingRuntime` 语音识别没在运行 / `modelMissing` / `listening` / `error`，出错带 `message`）、`modelReady`、`downloading`、`detections`（本次启动以来唤醒次数）。开关与唤醒词等写 `settings.update {"assistant": {"wake": {…}}}`（见 `settings.describe "唤醒"`）；只在语音识别运行时监听，开启后麦克风常开（本机检测） |
+| `wake.model.download` | 无 | 下载唤醒模型（官方整包约 33 MB，只保留约 5.5 MB；逐文件 SHA-256），完成或失败才返回（给足 `timeoutMs`）；进度 `wake.model.progress`（至多每秒一次）；返回同 `wake.status` |
 | `connections.presets` | 无 | 内置在线连接预设 |
 | `connections.list` | 无 | `connections[]{id,displayName,kind,provider,baseUrl,model,hasApiKey}`——**API key 只写不读** |
 | `connections.upsert` | `connection`、可选 `apiKey` | 更新后的 `connections[]`；key 存入系统凭据库，不回显、不进日志；省略则保留原 key |
@@ -396,6 +398,7 @@ Agent 从“打开 exe”开始就能驱动 Kotone，并能收到用户通过 Ko
 | `agent.request.claimed` / `agent.request.expired` | 请求被领取 / 过期 | `requestId`（claimed 另有 `consumer`） |
 | `agent.reply.delivered` / `agent.reply.failed` | 回复交付完成 / 失败 | `deliveryId`、`requestId`、`text`、`receipt` 或 `code/message`、`deliverMs` |
 | `model.download.progress` / `.finished` / `.failed` | `models.download` 的进度（至多每秒一次）与结果 | `id`、`downloadedBytes/totalBytes`；结果含 `durationMs`，失败含 `cancelled`、`message` |
+| `wake.model.progress` | `wake.model.download` 的进度（至多每秒一次） | `downloadedBytes`、`totalBytes` |
 | `companion.finished` / `companion.failed` | `companion.ask` 的结果 | 见上表；`jobId` 对应受理时的返回 |
 | `automation.finished` | 一条执行（程序或提醒）进入终态：完成、失败、取消、错过 | 执行记录（见“自动化”，省略程序源码） |
 | `automation.saved` / `automation.deleted` | 保存（新建或覆盖）/ 删除一个自动化 | `id`（保存时另有 `name`） |
