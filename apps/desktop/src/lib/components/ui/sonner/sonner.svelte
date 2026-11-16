@@ -20,6 +20,7 @@
 
 <Toaster
   position="top-right"
+  dir="ltr"
   offset={{ top: 52, right: 16 }}
   {theme}
   closeButton
