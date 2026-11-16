@@ -262,7 +262,7 @@
       </p>
     {/if}
     {#if loading}
-      <p class="px-8 py-10 text-sm text-white/50">加载配置中…</p>
+      <p class="px-8 py-10 text-sm text-muted-foreground">加载配置中…</p>
     {:else if page === "general"}
       <GeneralPage onOpenAdvanced={() => openAdvanced("models")} />
     {:else if page === "advanced"}

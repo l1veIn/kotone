@@ -107,7 +107,3 @@ export function resolveFontFamily(settings: AppearanceSettings): string {
   return `${families.map((name) => `"${name.replace(/"/g, '\\"')}"`).join(", ")}, ${SYSTEM_UI}`;
 }
 
-/** 是否就是现在的默认界面（默认时旧页面完全不受影响）。 */
-export function isDefaultLook(palette: PaletteId, theme: "dark" | "light"): boolean {
-  return palette === "kotone" && theme === "dark";
-}

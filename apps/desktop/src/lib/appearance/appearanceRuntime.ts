@@ -3,7 +3,7 @@
 // 也不注册 Ctrl +/- 快捷键（会和热键录制冲突）。
 import { writable } from "svelte/store";
 import { initializeAppearancePreferences, appearancePreferences } from "./appearancePreferences";
-import { isDefaultLook, resolveFontFamily, type AppearanceSettings } from "./appearanceSettings";
+import { resolveFontFamily, type AppearanceSettings } from "./appearanceSettings";
 
 /** 当前实际的明暗（提示组件等需要知道）。 */
 export const resolvedTheme = writable<"dark" | "light">("dark");
@@ -18,9 +18,6 @@ export function applyAppearance(root: HTMLElement, settings: AppearanceSettings,
   root.dataset.palette = settings.palette;
   root.dataset.theme = theme;
   resolvedTheme.set(theme);
-  // 非默认外观时，旧页面的固定颜色（text-white、bg-kotone-* …）改用主题变量（见 app.css）。
-  if (isDefaultLook(settings.palette, theme)) delete root.dataset.bridge;
-  else root.dataset.bridge = "on";
   root.dataset.uiFont = settings.uiFont;
   root.style.colorScheme = theme;
   root.style.setProperty("--appearance-ui-font", resolveFontFamily(settings));
@@ -39,7 +36,7 @@ export function initializeAppearance(root: HTMLElement = document.documentElemen
     unsubscribe();
     media?.removeEventListener("change", apply);
     releasePreferences();
-    for (const key of ["appearance", "palette", "theme", "bridge", "uiFont"]) delete root.dataset[key];
+    for (const key of ["appearance", "palette", "theme", "uiFont"]) delete root.dataset[key];
     root.style.removeProperty("color-scheme");
     root.style.removeProperty("--appearance-ui-font");
     document.body.style.removeProperty("zoom");

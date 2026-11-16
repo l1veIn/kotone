@@ -18,10 +18,10 @@
 | `apps/desktop/src/lib/appearance/palettes.css` | RambleDesk `src/lib/appearance/palettes.css` ← Codeg `src/app/globals.css`、`src/lib/theme-presets.ts` | **Apache-2.0**（文件头保留声明） | 保留 Codeg 的 12 套配色（neutral … violet）与 RambleDesk 加的 success / warning / info；删掉 RambleDesk 自己的 classic 配色与窗口外框变量；新增 Kotone 自己的 `kotone` 配色（深色 = 现有界面，另配浅色）。 |
 | `apps/desktop/src/lib/appearance/appearanceSettings.ts` | RambleDesk `src/lib/appearance/appearanceSettings.ts` ← Codeg `src/lib/theme-presets.ts`（配色 id 与色块） | **Apache-2.0**（文件头保留声明） | 默认 `kotone` 配色；中文名称；明暗模式并入同一份偏好；字体改为 Windows 中文字体 + 自定义；去掉代码字体、背景图片；缩放档位 80–150%。自定义字体名的校验沿用 RambleDesk。 |
 | `apps/desktop/src/lib/appearance/appearancePreferences.ts` | RambleDesk `src/lib/appearance/appearancePreferences.ts` | MIT | 只保留偏好读写（去掉背景图片 IndexedDB 存储）；键名 `kotone.appearance.v1`；读失败回退默认。 |
-| `apps/desktop/src/lib/appearance/appearanceRuntime.ts` | RambleDesk `src/lib/appearance/appearanceRuntime.ts` | MIT | 只在设置窗口调用；缩放用 CSS `zoom`（不需要额外的窗口权限）；不注册 Ctrl +/- 快捷键（会和热键录制冲突）；新增 `data-bridge`：非默认外观时让旧页面的固定颜色跟随主题（见 `src/app.css`）。 |
+| `apps/desktop/src/lib/appearance/appearanceRuntime.ts` | RambleDesk `src/lib/appearance/appearanceRuntime.ts` | MIT | 只在设置窗口调用；缩放用 CSS `zoom`（不需要额外的窗口权限）；不注册 Ctrl +/- 快捷键（会和热键录制冲突）；（曾有过渡用的 `data-bridge`，全部页面迁完后已删除。） |
 | `apps/desktop/src/lib/appearance/AppearanceSettingsPanel.svelte` | 参照 RambleDesk `src/lib/appearance/AppearanceSettingsPanel.svelte` 重写 | MIT | runes 写法；中文；去掉背景图片与代码字体部分。 |
 
-`src/app.css` 中 shadcn 设计变量与 `@theme inline` 映射的写法参照 RambleDesk `src/app.css`；Kotone 的变量值、`data-bridge` 过渡规则与作用域边框规则为 Kotone 自己的实现。
+`src/app.css` 中 shadcn 设计变量与 `@theme inline` 映射的写法参照 RambleDesk `src/app.css`；Kotone 的变量值与作用域边框规则为 Kotone 自己的实现。
 
 ## 第二步：「琴音」聊天页
 

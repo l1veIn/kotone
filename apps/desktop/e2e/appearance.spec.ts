@@ -7,7 +7,6 @@ test("appearance defaults to Kotone dark and leaves old pages untouched", async 
   const html = page.locator("html");
   await expect(html).toHaveAttribute("data-palette", "kotone");
   await expect(html).toHaveAttribute("data-theme", "dark");
-  await expect(html).not.toHaveAttribute("data-bridge", /.*/);
   const panel = page.getByTestId("appearance-settings");
   await expect(panel.getByTestId("appearance-mode-dark")).toHaveAttribute("aria-pressed", "true");
   await expect(panel.getByTestId("appearance-palette-kotone")).toHaveAttribute("aria-pressed", "true");
@@ -30,7 +29,6 @@ test("appearance switches theme, palette, zoom and font, and persists across rel
   const html = page.locator("html");
   await expect(html).toHaveAttribute("data-theme", "light");
   await expect(html).toHaveAttribute("data-palette", "green");
-  await expect(html).toHaveAttribute("data-bridge", "on");
   await expect(page.locator("body")).toHaveCSS("zoom", "1.1");
   expect(await page.evaluate(() => getComputedStyle(document.body).fontFamily)).toContain("DengXian");
   await panel.screenshot({ path: testInfo.outputPath("appearance-light-green.png") });
@@ -44,7 +42,6 @@ test("appearance switches theme, palette, zoom and font, and persists across rel
   await page.getByTestId("appearance-reset").click();
   await expect(html).toHaveAttribute("data-theme", "dark");
   await expect(html).toHaveAttribute("data-palette", "kotone");
-  await expect(html).not.toHaveAttribute("data-bridge", /.*/);
   await expect(page.locator("body")).toHaveCSS("zoom", "1");
 });
 
@@ -76,6 +73,5 @@ test("overlay window never picks up the settings appearance", async ({ page }) =
   await page.reload();
   const html = page.locator("html");
   await expect(html).not.toHaveAttribute("data-theme", /.*/);
-  await expect(html).not.toHaveAttribute("data-bridge", /.*/);
   await expect(page.locator("body")).toHaveCSS("zoom", "1");
 });

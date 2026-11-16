@@ -20,3 +20,12 @@
 | `apps/desktop/src/lib/agentChat/TurnFooter.svelte` | `ui-chat/MessageIconActions`、`StatsPills` | 图标按钮 + 统计胶囊 | 只显示服务商报告的用量 |
 | `apps/desktop/src/lib/agentChat/ChatComposer.svelte`、`routes/settings/pages/assistant/AssistantChat.svelte` | `ui-conversation/skeleton/InputBar`、`EmptyHero` | 大圆角输入卡（文字区在上、工具行在下）、贴底；空白对话时输入卡居中 | 发送按钮带文字（发送 / 插话）；语音按钮在工具行；空白页是琴音形象与起手提示 |
 | `apps/desktop/src/routes/settings/pages/AssistantPage.svelte` | 会话头部 | 页名 / 当前对话标题，右侧分页切换 | 进行中的提醒与自动化概况 |
+
+## 第二阶段：API 连接页与其余页面
+
+| Kotone 文件 | 参照的上游组件 | 采用的做法 | Kotone 的不同 |
+| --- | --- | --- | --- |
+| `apps/desktop/src/lib/components/settings/{SettingsPage,SettingsSection,SettingsRow}.svelte` | `ui-primitives/settings-form`、各设置页的 section / settings card | 居中内容列、页标题 + 一句说明；组标题在卡片外，卡片内一行一项、细分隔线 | 也用于高级页的分区切换（分段控件） |
+| `apps/desktop/src/routes/settings/pages/advanced/ConnectionsSection.svelte` | `ui-settings-models/{ModelsSection,ProviderEditor,CustomProviderCard,ApiKeyInput}` | 已有连接的卡片列表（密钥状态点、标签、行内操作）；提供商目录；编辑器里地址、模型（列表选或手填）、只写的密钥、获取密钥链接 | 按 Kotone 的分组（推荐 / 国内 / 海外 / 聚合 / 自定义）与搜索；“琴音在用”与能力自检结果放在卡片上；编辑器是对话框 |
+| 其余设置页（通用、琴音设置、自动化、文字处理、游戏适配、历史记录、高级、关于、角色、首次向导、各弹窗） | 同上 | 统一的页面骨架、设置卡与表单控件 | 保留琴音立绘、贴纸等 Kotone 形象元素 |
+| `apps/desktop/src/lib/components/ui/sonner/sonner.svelte` | `ui-primitives/Toast` | 右下角提示 | 每种提示配一张琴音贴纸 |

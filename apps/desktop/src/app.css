@@ -123,20 +123,6 @@
   }
 }
 
-/*
- * 过渡期（第三步逐页迁移完成前）：选了非默认外观（其它配色或浅色）时，旧页面里写死的
- * Kotone 颜色改用当前主题变量，浅色下 text-white / bg-white/5 等也随之变成前景色。
- * 默认外观（Kotone 深色）不设 data-bridge，旧页面保持原样。
- */
-:root[data-bridge="on"] {
-  --color-white: var(--foreground);
-  --color-kotone-deep: var(--background);
-  --color-kotone-panel: var(--card);
-  --color-kotone-card: var(--muted);
-  --color-kotone-cyan: var(--primary);
-  --color-kotone-pink: var(--brand-pink, var(--destructive));
-}
-
 /* 界面字体（外观设置）：只在设置窗口启用外观系统后生效。 */
 :root[data-appearance="enabled"] :is(body, #app) {
   font-family: var(--appearance-ui-font);
@@ -163,26 +149,6 @@ body,
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-}
-
-/* 面板 / 卡片表面（配合 bg-kotone-panel / bg-kotone-card 之外的光边） */
-.kotone-panel {
-  background: color-mix(in srgb, var(--color-kotone-panel) 88%, transparent);
-  border: 1px solid color-mix(in srgb, var(--color-white) 8%, transparent);
-  border-radius: var(--radius-kotone-panel);
-}
-.kotone-card {
-  background: color-mix(in srgb, var(--color-kotone-card) 72%, transparent);
-  border: 1px solid color-mix(in srgb, var(--color-white) 8%, transparent);
-  border-radius: var(--radius-kotone-card);
-  transition:
-    box-shadow 180ms ease,
-    border-color 180ms ease,
-    transform 180ms ease;
-}
-.kotone-card:hover {
-  border-color: rgba(0, 229, 255, 0.35);
-  box-shadow: 0 0 18px rgba(0, 229, 255, 0.18);
 }
 
 /*

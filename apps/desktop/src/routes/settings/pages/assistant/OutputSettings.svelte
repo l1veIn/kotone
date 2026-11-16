@@ -8,7 +8,6 @@
   import SettingsSection from "../../../../lib/components/settings/SettingsSection.svelte";
   import SettingsRow from "../../../../lib/components/settings/SettingsRow.svelte";
   import { Button } from "$lib/components/ui/button";
-  import "../panel.css";
 
   let saving = $state(false);
   let previewing = $state<DeliveryKind | null>(null);
@@ -50,9 +49,8 @@
           </div>
         {/snippet}
       </SettingsRow>
-      <!-- 语音与弹幕的细项（仍用旧版 panel 样式，随琴音设置一起迁移） -->
-      <div class="panel-page py-3.5"><SpeechSettings /></div>
-      <div class="panel-page py-3.5"><DanmakuSettings /></div>
+      <div class="py-3.5"><SpeechSettings /></div>
+      <div class="py-3.5"><DanmakuSettings /></div>
       <div class="py-3.5">
         <p id="danmaku-fullscreen-hint" class="m-0 text-xs leading-relaxed text-warning">弹幕不支持独占全屏，请使用无边框全屏或窗口化。</p>
         <div class="mt-3 flex flex-wrap gap-2">

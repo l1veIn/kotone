@@ -19,9 +19,9 @@
 {#snippet errorIcon()}{@render sticker(stickerAmazed)}{/snippet}
 
 <Toaster
-  position="top-right"
+  position="bottom-right"
   dir="ltr"
-  offset={{ top: 52, right: 16 }}
+  offset={{ bottom: 20, right: 20 }}
   {theme}
   closeButton
   {successIcon}
