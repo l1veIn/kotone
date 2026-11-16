@@ -15,7 +15,7 @@ reqwest = { version = "0.12", features = ["blocking", "json"] }
 sha2 = "0.10"
 base64 = "0.22"
 # 在线 ASR WebSocket（火山引擎一句话识别 / 科大讯飞语音听写）
-tungstenite = { version = "0.21", features = ["rustls-tls-native-roots"] }
+tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 flate2 = "1.0"
 # 科大讯飞语音听写 HMAC-SHA256 鉴权签名
 hmac = "0.12"

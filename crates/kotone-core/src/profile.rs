@@ -1010,7 +1010,10 @@ pub fn import_profile_in(dir: &Path, zip_path: &Path) -> Result<GameProfile, Str
         let entry = archive
             .by_index(index)
             .map_err(|e| format!("读取 profile 包目录失败: {e}"))?;
-        let name = entry.name().to_string();
+        let name = entry
+            .name()
+            .map_err(|e| format!("profile 包里有无法识别的文件名: {e}"))?
+            .to_string();
         if entry.is_dir() || entry.enclosed_name().is_none() || name.contains(['/', '\\']) {
             return Err(format!("profile 包含非法条目：{name}"));
         }
@@ -1522,9 +1525,9 @@ mod tests {
         assert!(json_str.contains("\"icon\": \"lol-kotone.webp\""));
         let icon_entry = archive
             .file_names()
+            .map(|n| n.unwrap().to_string())
             .find(|n| n.starts_with("icon."))
-            .unwrap()
-            .to_string();
+            .unwrap();
         let mut icon_bytes = Vec::new();
         archive
             .by_name(&icon_entry)
