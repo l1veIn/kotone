@@ -6,6 +6,18 @@
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 /*
+ * shadcn-svelte 组件里的状态变体（data-checked: / data-open: …）。bits-ui 2.21 只写 data-state /
+ * data-orientation，不写这些布尔属性，所以在这里把变体映射到 bits-ui 实际的属性上。
+ */
+@custom-variant data-checked (&[data-state="checked"]);
+@custom-variant data-unchecked (&[data-state="unchecked"]);
+@custom-variant data-open (&[data-state="open"]);
+@custom-variant data-closed (&[data-state="closed"]);
+@custom-variant data-active (&[data-state="active"]);
+@custom-variant data-horizontal (&[data-orientation="horizontal"]);
+@custom-variant data-vertical (&[data-orientation="vertical"]);
+
+/*
  * 方向 B「中继站」品牌 tokens（Gate 1 定案）——全应用唯一色彩来源。
  * 青 #00E5FF 主强调 / 蓝黑 #1A1A2E 基底 / 品红 #FF2D78 CTA / 紫 #7B2FFF 辅助。
  * 深色表面三档：base（窗口底）< panel（面板）< card（卡片）。
