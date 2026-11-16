@@ -165,7 +165,12 @@
 
       {#if dialog.phase === "available"}
         <div class="relative mt-6 flex items-center justify-between gap-4">
-          <p class="hidden text-[10px] text-white/35 sm:block">无需逐个版本安装</p>
+          <button
+            class="text-[11px] text-white/40 underline-offset-2 transition hover:text-white/70 hover:underline"
+            onclick={() => answerUpdateDialog("never")}
+          >
+            不再提醒
+          </button>
           <div class="ml-auto flex items-center gap-3">
             <button
               class="rounded-lg bg-white/8 px-4 py-2 text-xs font-semibold text-white/70 ring-1 ring-white/15 transition hover:bg-white/15 hover:text-white"

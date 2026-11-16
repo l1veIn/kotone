@@ -202,6 +202,9 @@ pub struct UiConfig {
     /// app 启动后自动进入 Running（warmup 引擎 + 注册热键 + 显示悬浮窗）；默认 false
     #[serde(default)]
     pub auto_start: bool,
+    /// 用户在新版本弹窗里选了「不再提醒」：启动时不再自动弹出（关于页仍可手动检查，也可重新打开）。
+    #[serde(default)]
+    pub update_prompt_disabled: bool,
 }
 
 /// 录音/发送音效提示（config.json `soundFeedback` 段）。

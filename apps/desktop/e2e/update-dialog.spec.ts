@@ -35,12 +35,21 @@ test("the branded update dialog covers confirmation, progress and restart states
   const laterButton = dialog.getByRole("button", { name: "稍后更新" });
   const updateButton = dialog.getByRole("button", { name: "立即更新" });
   await expect(laterButton).toBeVisible();
+  const neverButton = dialog.getByRole("button", { name: "不再提醒" });
   await expect(updateButton).toBeFocused();
+  // 焦点在弹窗内循环：立即更新 → 不再提醒 → 稍后更新 → 立即更新
+  await page.keyboard.press("Tab");
+  await expect(neverButton).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(laterButton).toBeFocused();
   await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Shift+Tab");
   await expect(updateButton).toBeFocused();
   await laterButton.click();
+  await expect(dialog).toBeHidden();
+
+  await showUpdateDialog(page, { phase: "available", version: "0.1.8" });
+  await dialog.getByRole("button", { name: "不再提醒" }).click();
   await expect(dialog).toBeHidden();
 
   await showUpdateDialog(page, {
@@ -58,4 +67,28 @@ test("the branded update dialog covers confirmation, progress and restart states
   await expect(dialog.getByRole("button", { name: "立即重启" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
+});
+
+test("the about page can turn the startup update reminder back on", async ({ page }) => {
+  await page.goto("/#/settings?onboarding=never");
+  await page.evaluate(async () => {
+    const { settingsStore } = await import("/src/lib/stores/ui.ts");
+    settingsStore.set(await (await import("/src/lib/ipc.ts")).updateSettings({ ui: { updatePromptDisabled: true } }));
+  });
+  await page.getByRole("button", { name: "关于", exact: true }).click();
+  const toggle = page.getByTestId("update-prompt-enabled");
+  await expect(toggle).not.toBeChecked();
+  await toggle.check();
+  await expect
+    .poll(async () => page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings().then((s) => s.ui.updatePromptDisabled)))
+    .toBe(false);
+  // 启动时的自动检查在关闭提醒后直接跳过（浏览器预览里本来就不联网）
+  const skipped = await page.evaluate(async () => {
+    const ipc = await import("/src/lib/ipc.ts");
+    const { settingsStore } = await import("/src/lib/stores/ui.ts");
+    settingsStore.set(await ipc.updateSettings({ ui: { updatePromptDisabled: true } }));
+    const { checkForUpdates } = await import("/src/lib/updater.ts");
+    return checkForUpdates({ auto: true });
+  });
+  expect(skipped.status).toBe("up-to-date");
 });

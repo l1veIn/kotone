@@ -19,6 +19,8 @@ export interface UiConfig {
   firstRunCompleted: boolean;
   /** app 启动后自动进入 Running（warmup 引擎 + 注册热键 + 显示悬浮窗） */
   autoStart: boolean;
+  /** 新版本弹窗里选了「不再提醒」：启动时不自动弹出（关于页仍可手动检查） */
+  updatePromptDisabled?: boolean;
 }
 
 /** 模型存储配置（core settings `models` 段） */

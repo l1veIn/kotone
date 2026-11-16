@@ -8,7 +8,7 @@
   import { onMount } from "svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { isTauri, openExternal } from "../../../lib/ipc";
-  import { toast, errText } from "../../../lib/stores/ui";
+  import { toast, errText, patchSettings, settingsStore } from "../../../lib/stores/ui";
   import { checkForUpdates, type UpdateCheckResult } from "../../../lib/updater";
   import stickerProud from "../../../assets/brand/stickers/proud.webp";
 
@@ -136,6 +136,22 @@
           <p class="text-white/35">支持启动时自动检查，也可以随时手动检查</p>
         {/if}
       </div>
+      {#if $settingsStore}
+        <label class="mt-2 flex items-center gap-2 text-[11px] text-white/55">
+          <input
+            type="checkbox"
+            class="accent-cyan-300"
+            data-testid="update-prompt-enabled"
+            checked={!$settingsStore.ui.updatePromptDisabled}
+            onchange={(event) =>
+              void patchSettings(
+                { ui: { updatePromptDisabled: !event.currentTarget.checked } },
+                event.currentTarget.checked ? "启动时会提醒新版本" : "启动时不再提醒新版本",
+              )}
+          />
+          启动时提醒新版本
+        </label>
+      {/if}
     </div>
   </section>
 

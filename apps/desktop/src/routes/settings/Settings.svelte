@@ -182,7 +182,7 @@
   onMount(() => {
     if (!isTauri) return;
     // 启动后静默检测一次更新（离线/无 release 不打扰用户）
-    const updateTimer = setTimeout(() => void checkForUpdates(), 3000);
+    const updateTimer = setTimeout(() => void checkForUpdates({ auto: true }), 3000);
     let unlisten: (() => void) | undefined;
     void listen("kotone://open-onboarding", () => (showOnboarding = true)).then(
       (un) => (unlisten = un),

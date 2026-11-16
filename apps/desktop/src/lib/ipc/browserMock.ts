@@ -86,7 +86,7 @@ const mock: MockStore = {
     postProcessing: defaultPostProcessing(),
     connections: [],
     history: { mode: "capped", maxRecords: 1000, includeAudio: false, dir: "" },
-    ui: { firstRunCompleted: true, autoStart: false },
+    ui: { firstRunCompleted: true, autoStart: false, updatePromptDisabled: false },
     models: { dir: "" },
     download: { source: "auto", ghProxy: "https://ghfast.top/" },
     overlay: {
