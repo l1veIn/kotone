@@ -92,6 +92,17 @@ impl EventBus {
 
     /// 发布事件，返回序号；关闭后返回 None（不再接受）。
     pub fn publish(&self, kind: &str, data: Value, now_unix_ms: u64) -> Option<u64> {
+        self.push(kind, data, now_unix_ms, false)
+    }
+
+    /// 发布最后一个事件并在同一把锁内关闭。等待者被唤醒时一定同时看到这条事件和
+    /// `closed: true`；分两步做时，长轮询可能读到事件而 `closed` 仍为 false，客户端
+    /// 随即再发一次请求，只能收到“服务已关闭”。
+    pub fn publish_last(&self, kind: &str, data: Value, now_unix_ms: u64) -> Option<u64> {
+        self.push(kind, data, now_unix_ms, true)
+    }
+
+    fn push(&self, kind: &str, data: Value, now_unix_ms: u64, last: bool) -> Option<u64> {
         let seq = {
             let mut inner = self.inner.lock().unwrap();
             if inner.closed {
@@ -109,9 +120,11 @@ impl EventBus {
             while inner.events.len() > self.max {
                 inner.events.pop_front();
             }
+            inner.closed = last;
             seq
         };
-        self.changed.send_replace(seq);
+        self.changed
+            .send_replace(if last { seq.saturating_add(1) } else { seq });
         Some(seq)
     }
 
@@ -232,6 +245,18 @@ impl EventBus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_last_event_and_closed_are_seen_together() {
+        let bus = EventBus::new(16);
+        bus.publish("a", Value::Null, 1).unwrap();
+        let seq = bus.publish_last("app.stopping", Value::Null, 2).unwrap();
+        let read = bus.read_after(seq - 1, 10, &[]);
+        assert_eq!(read["events"][0]["type"], "app.stopping");
+        assert_eq!(read["closed"], true);
+        assert!(bus.publish("late", Value::Null, 3).is_none());
+        assert!(bus.publish_last("again", Value::Null, 4).is_none());
+    }
 
     fn kinds(v: &Value) -> Vec<String> {
         v["events"]

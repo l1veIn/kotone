@@ -869,6 +869,36 @@ async fn discovery_rejects_stale_insecure_and_foreign_descriptors() {
     assert!(client.status().await.unwrap().ok);
 }
 
+/// 关闭唤醒的 HTTP 长轮询在同一个响应里带回 `app.stopping` 与 `closed: true`。
+#[tokio::test(flavor = "multi_thread")]
+async fn shutdown_lets_http_long_polls_deliver_stopping() {
+    for _ in 0..20 {
+        let mut h = Harness::new(ServiceLimits::default()).await;
+        let head = h
+            .client
+            .events("from=latest", 0)
+            .await
+            .unwrap()
+            .result
+            .unwrap()["cursor"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let client = ToolClient::discover(h.dir.path(), h.host.as_ref()).unwrap();
+        let poll = tokio::spawn(async move {
+            client
+                .events(&format!("cursor={head}&waitMs=10000"), 10_000)
+                .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        h.running.shutdown_now();
+        let envelope = poll.await.unwrap().expect("长轮询应收到完整响应");
+        let result = envelope.result.expect("ok");
+        assert_eq!(result["closed"], true);
+        assert_eq!(result["events"][0]["type"], "app.stopping");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn shutdown_removes_only_owned_descriptor() {
     let mut h = Harness::new(ServiceLimits::default()).await;

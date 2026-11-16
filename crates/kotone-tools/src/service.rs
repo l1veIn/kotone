@@ -682,8 +682,12 @@ impl ToolService {
     /// 返回后不会再有任何请求向存储发布产物或执行释放；仍在运行的原生工作线程可以
     /// 完成自身清理，但其结果在提交闸门被拒绝。
     pub fn close(&self) {
-        // 通知订阅者服务即将停止，然后关闭总线（唤醒长轮询）
-        self.publish_event("app.stopping", json!({"instanceId": self.instance_id}));
+        // 通知订阅者服务即将停止并关闭总线（同一把锁内，唤醒长轮询时 closed 已为 true）
+        self.events.publish_last(
+            "app.stopping",
+            json!({"instanceId": self.instance_id}),
+            self.store.now(),
+        );
         self.events.close();
         self.requests.close();
         self.store.close();

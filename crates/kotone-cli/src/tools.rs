@@ -103,6 +103,18 @@ pub(crate) fn print_json(value: &impl serde::Serialize) {
     }
 }
 
+/// 单行 JSON（`--follow` 的 JSON Lines 输出）。
+fn print_line(value: &impl serde::Serialize) {
+    match serde_json::to_string(value) {
+        Ok(text) => {
+            println!("{text}");
+            use std::io::Write as _;
+            let _ = std::io::stdout().flush();
+        }
+        Err(e) => eprintln!("序列化输出失败: {e}"),
+    }
+}
+
 fn exit_for(envelope: &Envelope) -> i32 {
     if envelope.ok {
         EXIT_OK
@@ -465,9 +477,18 @@ async fn events(
         }
         let envelope = match client.events(&encode_query(&pairs), wait).await {
             Ok(e) => e,
+            Err(e) if follow => {
+                // --follow 输出的是 JSON Lines：出错时也只输出一行
+                print_line(&local_failure(e));
+                return EXIT_UNAVAILABLE;
+            }
             Err(e) => return unavailable(e),
         };
-        if !follow || !envelope.ok {
+        if !envelope.ok && follow {
+            print_line(&envelope);
+            return exit_for(&envelope);
+        }
+        if !follow {
             print_json(&envelope);
             return exit_for(&envelope);
         }
