@@ -2172,6 +2172,7 @@ pub fn run() {
             agent::agent_stop,
             agent::agent_answer,
             agent::agent_state,
+            agent::agent_tools,
             agent::agent_conversation,
             agent::agent_new_conversation,
             agent::agent_select_conversation,

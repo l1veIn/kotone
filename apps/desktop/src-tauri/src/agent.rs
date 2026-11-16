@@ -762,6 +762,41 @@ fn ensure_idle(app: &AppHandle) -> Result<(), String> {
     }
 }
 
+/// 琴音能用的全部工具（设置页按工具设规则用）：名字、分组、说明、默认规则、用户规则、
+/// 是否一开始就提供（其余要经 tools.find 查到）。
+pub fn tools(app: &AppHandle) -> Result<Value, String> {
+    let settings = settings(app);
+    let service = crate::tool_service::service(app).ok_or("工具服务尚未就绪，请稍后再试")?;
+    let specs = service.capabilities()["tools"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let automations = offered_automations(app, &settings.agent.hidden_automations);
+    let catalog = Catalog::build(&specs, &automations);
+    let rules = &settings.agent.permissions.rules;
+    let tools: Vec<Value> = catalog
+        .entries()
+        .iter()
+        .map(|e| {
+            let default = match kotone_agent::permissions::default_decision(e, &Value::Null) {
+                kotone_agent::permissions::Decision::Allow => "allow",
+                _ => "ask",
+            };
+            let description: String = e.description.chars().take(200).collect();
+            json!({
+                "name": e.name,
+                "group": e.group,
+                "description": description,
+                "sideEffects": e.side_effects,
+                "defaultRule": default,
+                "rule": rules.get(&e.name),
+                "core": Catalog::is_core(e),
+            })
+        })
+        .collect();
+    Ok(json!({"tools": tools}))
+}
+
 pub fn state(app: &AppHandle) -> Result<Value, String> {
     let rt = runtime(app)?;
     let store = rt.store.clone()?;
@@ -806,6 +841,11 @@ pub fn agent_stop(app: AppHandle) -> Result<bool, String> {
 pub fn agent_answer(app: AppHandle, ask_id: String, answer: Answer) -> Result<bool, String> {
     let sender = runtime(&app)?.inner.lock().unwrap().asks.remove(&ask_id);
     Ok(sender.is_some_and(|tx| tx.send(answer).is_ok()))
+}
+
+#[tauri::command]
+pub fn agent_tools(app: AppHandle) -> Result<Value, String> {
+    tools(&app)
 }
 
 #[tauri::command]
