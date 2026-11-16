@@ -835,6 +835,50 @@ pub fn agent_select_conversation(app: AppHandle, id: String) -> Result<(), Strin
     store.set_current(Some(&id))
 }
 
+/// 整体替换权限设置（模式 + 按工具的规则）。设置补丁是递归合并的，删不掉单条规则，
+/// 所以界面改规则时走这里。
+#[tauri::command]
+pub fn agent_set_permissions(
+    app: AppHandle,
+    permissions: kotone_core::agent::Policy,
+) -> Result<kotone_core::agent::Policy, String> {
+    let updated = app
+        .state::<crate::SharedState>()
+        .settings_repository
+        .update(move |next| {
+            next.agent.permissions = permissions;
+            Ok(())
+        })?;
+    crate::tool_config::notify_settings_changed(&app);
+    Ok(updated.agent.permissions)
+}
+
+/// 某个已保存的自动化交不交给 AI（`agent.hiddenAutomations`）。返回新的隐藏列表。
+#[tauri::command]
+pub fn agent_set_automation_hidden(
+    app: AppHandle,
+    id: String,
+    hidden: bool,
+) -> Result<Vec<String>, String> {
+    let id = id.trim().to_string();
+    if id.is_empty() {
+        return Err("自动化 id 为空".into());
+    }
+    let updated = app
+        .state::<crate::SharedState>()
+        .settings_repository
+        .update(move |next| {
+            let list = &mut next.agent.hidden_automations;
+            list.retain(|x| x != &id);
+            if hidden {
+                list.push(id);
+            }
+            Ok(())
+        })?;
+    crate::tool_config::notify_settings_changed(&app);
+    Ok(updated.agent.hidden_automations)
+}
+
 #[tauri::command]
 pub fn agent_delete_conversation(app: AppHandle, id: String) -> Result<bool, String> {
     let rt = runtime(&app)?;

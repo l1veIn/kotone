@@ -4,8 +4,12 @@
 
 ## 0. 开工前
 
-- **分支**：内置 Agent 的后端在 `claude/kotone-agent`（未合入 main，未推送）。聊天界面依赖它，所以从 `claude/kotone-agent` 新建分支，比如 `claude/kotone-ui`。只在 `C:\Users\A\Desktop\kotone` 工作，不建额外 worktree。
-- **先向用户确认** ADR 016 “待定”的两项：外观（保留 Kotone 配色 / 采用 RambleDesk 外观系统），聊天组件的复用方式（复制并记录来源 / 抽共用包）。
+- **分支与分工**：用户要求只在 `C:\Users\A\Desktop\kotone` 工作、不建额外 worktree，所以前端重构**直接在 `claude/kotone-agent` 上做**，与同时进行的 Agent 后端（第 5 步）**按文件分工**：
+  - 前端只改 `apps/desktop/src/**`、`apps/desktop/e2e/**`、`apps/desktop/package.json`、前端锁文件、前端配置（`vite.config.ts`、`svelte.config.js`、`tsconfig.json`、`components.json`）、`THIRD_PARTY_NOTICES.md` 与新建的来源记录文档；
+  - **不改** Rust 代码、`Cargo.*`、`docs/adr/*` 与其他已有文档；需要后端接口时在汇报里提出；
+  - 不切换分支、不 `stash` / `reset` / `checkout -- <别人的文件>`；只暂存自己的文件；遇到 `index.lock` 稍等重试；
+  - 提交前看 `git diff --cached --stat`，确认只有自己的文件。
+- **已定**：外观参照 RambleDesk 支持切换主题、字体大小等；聊天组件暂按“复制 + 记录来源”（见 ADR 016）。
 - **约束**（同 [Agent 交接 §6](2026-11-16-agent-handoff.md)）：
   - 每个提交都能独立构建；只暂存自己的改动，不用 `git add .`；`git mv` 会立即进暂存区，提交前看 `git diff --cached --stat`；
   - 不推送、不合并、不发布，除非用户明确说；
@@ -32,7 +36,8 @@
 
 ## 2. 第一步：底子
 
-- 初始化 shadcn-svelte，加 bits-ui、tailwind-variants、tailwind-merge、clsx、`@lucide/svelte`；设计变量照 shadcn 命名，值取 Kotone 现在的配色（或按用户选的外观）；
+- 初始化 shadcn-svelte，加 bits-ui、tailwind-variants、tailwind-merge、clsx、`@lucide/svelte`；设计变量照 shadcn 命名；
+- **外观系统**：参照 RambleDesk `apps/desktop/src/lib/appearance/`（`palettes.css`、`appearancePreferences.ts`、`appearanceRuntime.ts`、`AppearanceSettingsPanel.svelte`；来源见其 `docs/CODEG_PORTS.md`“外观配置”一行），支持切换配色主题、明暗、字体大小（或窗口缩放）、界面字体；Kotone 现在的深色 + 青 / 粉是默认主题。偏好先存在前端（读写失败要能回退默认），只作用于设置窗口；需要随配置存盘时在汇报里提出，由后端加新字段；外观设置入口放在「通用」页；
 - 引入第二、三步要用的基础组件；
 - **现有页面不改动行为**，`pnpm check` 与全部 Playwright 用例照常通过；
 - 验收：依赖与版本记录在提交说明里；`pnpm build:web` 成功；比较构建前后的前端产物体积并写进汇报。
@@ -102,7 +107,10 @@
 - `hiddenAutomations`：不交给 AI 的已保存自动化 id（默认全部交给，最多 30 个）。开关建议放在「自动化 → 已保存」每一项上；
 - `inGame`：陪玩热键与快捷指令交给琴音（默认开；关闭时用旧的单次陪玩）。
 
-用 `update_settings({agent: {...}})` 修改（递归合并）。**已知缺口**：递归合并删不掉 `rules` 里的某一项（传 null 会让配置解析失败），需要在 `agent.rs` 加一个专用命令（例如整体替换 `permissions`）。这属于本任务。
+修改方式：
+- 权限：`agent_set_permissions({permissions: {mode, rules}})`，整体替换（设置补丁是递归合并的，删不掉单条规则，所以不要用 `update_settings` 改 `rules`）；
+- 隐藏某个自动化：`agent_set_automation_hidden({id, hidden})`，返回新的隐藏列表；
+- `inGame`：`update_settings({agent: {inGame}})`。
 
 ### 3.5 验收
 
@@ -111,6 +119,8 @@
 - 隔离环境下真机看一次（`KOTONE_HOME` 与 `WEBVIEW2_USER_DATA_FOLDER` 放在 `target/` 下；脚本见 `scripts/manual-e2e/`）。没有真实 AI 连接时，至少确认未就绪提示、对话列表与预览正确；有用户同意的连接时再试一次完整对话。
 
 ## 4. 第三步：其他页面逐页迁移
+
+（**先不做**：第一、二步完成并汇报、用户看过之后再开始。）
 
 - 一页一个（或几个）提交，行为不变，测试同步更新；
 - 手写组件（`Select`、`Toggle`、`Toasts` 等）换成 shadcn 对应组件后删除旧组件；`panel.css` 随最后一页迁完删除；

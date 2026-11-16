@@ -2175,6 +2175,8 @@ pub fn run() {
             agent::agent_new_conversation,
             agent::agent_select_conversation,
             agent::agent_delete_conversation,
+            agent::agent_set_permissions,
+            agent::agent_set_automation_hidden,
             companion::companion_self_check,
             companion::companion_status,
             companion::companion_clear_chat_region,
