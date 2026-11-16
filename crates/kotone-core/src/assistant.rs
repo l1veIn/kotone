@@ -53,7 +53,7 @@ pub struct AssistantVoiceSession {
     pub interaction_mode: AssistantInteractionMode,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AssistantConfig {
     pub hotkey: String,
@@ -102,17 +102,33 @@ pub const VOLCANO_TTS_MODEL_ID: &str = "volcano-tts";
 /// 快捷消息最多几条（每条一个固定的具名热键槽位 `quick-message-<n>`）。
 pub const MAX_QUICK_MESSAGES: usize = 8;
 
-/// 一条快捷消息：按下热键等于替用户说了 `text`，不经过语音识别。
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// 一条快捷指令（字段名沿用“快捷消息”）：按下热键，要么等于替用户说了 `text`（交给陪玩的 AI，
+/// 不经过语音识别），要么直接运行一个已保存的自动化（`automation_id` + `args`，不调用 AI；
+/// ADR 013 §8）。
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct QuickMessage {
     /// 稳定 ID（工具 `companion.ask` 的 `quickMessageId`）。
     pub id: String,
     /// 设置页显示的名字；空 = 用 text。
     pub label: String,
+    /// 交给 AI 的一句话（`automation_id` 为空时必填）。
     pub text: String,
     /// 绑定的热键；空 = 未绑定（仍可由工具触发）。
     pub hotkey: String,
+    /// 要直接运行的已保存自动化；空 = 这条是交给 AI 的一句话。
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub automation_id: String,
+    /// 运行自动化时的入参（按自动化的声明校验）。
+    #[serde(skip_serializing_if = "serde_json::Map::is_empty")]
+    pub args: serde_json::Map<String, serde_json::Value>,
+}
+
+impl QuickMessage {
+    /// 这条是不是“直接运行自动化”。
+    pub fn runs_automation(&self) -> bool {
+        !self.automation_id.trim().is_empty()
+    }
 }
 
 /// 能力自检结果。只在连接 ID、地址与模型都未变时有效。
@@ -134,7 +150,7 @@ impl CompanionCheck {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct CompanionConfig {
     pub quick_messages: Vec<QuickMessage>,
@@ -168,7 +184,14 @@ impl CompanionConfig {
                 return Err("快捷消息的 ID 不能为空、过长或重复".into());
             }
             let count = message.text.trim().chars().count();
-            if count == 0 || count > 200 {
+            if message.runs_automation() {
+                if message.automation_id.len() > 64 || count > 200 {
+                    return Err("快捷指令的自动化编号或说明过长".into());
+                }
+                if serde_json::to_vec(&message.args).map_or(true, |b| b.len() > 4_096) {
+                    return Err("快捷指令的入参过大".into());
+                }
+            } else if count == 0 || count > 200 {
                 return Err("快捷消息的内容需要 1 到 200 字".into());
             }
             if message.label.chars().count() > 40 {
@@ -401,6 +424,15 @@ mod tests {
         let mut ok = config.clone();
         ok.companion.quick_messages = vec![quick("q1", "帮我看看队友说了什么")];
         ok.validate().unwrap();
+        // 快捷指令可以直接运行自动化：此时不需要 text；没设置新字段时落盘不出现它们
+        let mut automation = quick("q2", "");
+        automation.automation_id = "auto-1".into();
+        automation.args.insert("key".into(), "Q".into());
+        ok.companion.quick_messages.push(automation);
+        ok.validate().unwrap();
+        let json = serde_json::to_value(&ok.companion.quick_messages).unwrap();
+        assert!(json[0].get("automationId").is_none() && json[0].get("args").is_none());
+        assert_eq!(json[1]["automationId"], "auto-1");
         for bad in [
             vec![quick("q1", "")],
             vec![quick("q1", "a"), quick("q1", "b")],

@@ -239,6 +239,7 @@ pub fn initialize(app: &AppHandle, settings: Arc<RwLock<Settings>>) -> Assistant
         let handle = app.clone();
         scheduler.set_on_changed(Arc::new(move || {
             let _ = handle.emit("kotone://reminders-updated", ());
+            let _ = handle.emit("kotone://automations-updated", ());
         }));
     }
     AssistantRuntime {

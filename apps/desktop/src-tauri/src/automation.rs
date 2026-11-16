@@ -34,7 +34,7 @@ use kotone_script::{
     TextLine,
 };
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 const MAX_CAPTURE_PIXELS: u64 = 3840 * 2160;
 /// 工具 `automation.runs` 最多返回的条数。
@@ -646,6 +646,7 @@ pub fn save(app: &AppHandle, mut draft: AutomationDraft, by: CreatedBy) -> Resul
     }
     store_draft_images(&mut draft)?;
     let saved = library(app)?.save(draft, by)?;
+    let _ = app.emit("kotone://automations-updated", ());
     crate::tool_service::publish(
         app,
         "automation.saved",
@@ -672,6 +673,7 @@ pub fn list_saved(app: &AppHandle) -> Result<Value, String> {
 pub fn delete(app: &AppHandle, id: &str) -> Result<bool, String> {
     let deleted = library(app)?.delete(id)?;
     if deleted {
+        let _ = app.emit("kotone://automations-updated", ());
         crate::tool_service::publish(app, "automation.deleted", json!({"id": id}));
     }
     Ok(deleted)
@@ -855,6 +857,69 @@ pub fn shutdown(app: &AppHandle) {
 #[tauri::command]
 pub fn automation_runs(app: AppHandle) -> Result<Value, String> {
     list(&app)
+}
+
+#[tauri::command]
+pub fn automation_saved_list(app: AppHandle) -> Result<Value, String> {
+    list_saved(&app)
+}
+
+#[tauri::command]
+pub fn automation_get(app: AppHandle, id: String) -> Result<Value, String> {
+    get(&app, &id)
+}
+
+/// 设置页保存（创建者记为用户）。
+#[tauri::command]
+pub fn automation_save(app: AppHandle, draft: AutomationDraft) -> Result<Value, String> {
+    save(&app, draft, CreatedBy::User)
+}
+
+#[tauri::command]
+pub fn automation_delete(app: AppHandle, id: String) -> Result<bool, String> {
+    delete(&app, &id)
+}
+
+/// 设置页“运行”：点按钮时前台是 Kotone 自己，所以程序类先倒数 `switch_seconds` 秒
+/// （1–30，让用户切到游戏），再以那时的前台窗口为目标运行；入参先校验，错了立即返回。
+/// 倒数后的失败（例如前台仍是 Kotone）用语音 / 弹幕告诉用户。播报类立即运行。
+#[tauri::command]
+pub fn automation_run_saved(
+    app: AppHandle,
+    id: String,
+    args: serde_json::Map<String, Value>,
+    switch_seconds: u64,
+) -> Result<Value, String> {
+    let automation = library(&app)?
+        .get(&id)
+        .ok_or_else(|| format!("找不到自动化 {id}"))?;
+    let stored = store_arg_images(&automation.params, &args)?;
+    validate_args(&automation.params, &stored)?;
+    if matches!(automation.action, AutomationBody::Speak(_)) {
+        return run_saved(&app, "ui", &id, &stored, kotone_core::automation::now_ms());
+    }
+    let seconds = switch_seconds.clamp(1, 30);
+    std::thread::Builder::new()
+        .name("kotone-automation-countdown".into())
+        .spawn(move || {
+            std::thread::sleep(Duration::from_secs(seconds));
+            if let Err(error) =
+                run_saved(&app, "ui", &id, &stored, kotone_core::automation::now_ms())
+            {
+                kotone_core::log::log(&format!("automation {id}: ui run failed: {error}"));
+                let app2 = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = crate::assistant::deliver_text(
+                        &app2,
+                        format!("自动化没能运行：{error}"),
+                        Vec::new(),
+                    )
+                    .await;
+                });
+            }
+        })
+        .map_err(|e| format!("无法开始倒数：{e}"))?;
+    Ok(json!({"status": "countdown", "seconds": seconds}))
 }
 
 #[tauri::command]

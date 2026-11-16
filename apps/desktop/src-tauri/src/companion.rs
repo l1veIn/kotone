@@ -727,12 +727,30 @@ pub async fn run(app: &AppHandle, text: String, source: Source) -> Result<Value,
     }))
 }
 
-/// 快捷消息热键：按下等于替用户说了预设的那句话，不经过语音识别。失败如实播出。
+/// 快捷指令热键：交给 AI 的一句话（等于替用户说了这句话，不经过语音识别），或直接运行一个
+/// 已保存的自动化（目标是按下热键时的前台窗口，不调用 AI）。失败如实播出。
 pub fn quick(app: &AppHandle, slot: usize) {
     let s = settings(app);
     let Some(message) = s.assistant.companion.quick_messages.get(slot).cloned() else {
         return;
     };
+    if message.runs_automation() {
+        let result = crate::automation::run_saved(
+            app,
+            "quick-command",
+            message.automation_id.trim(),
+            &message.args,
+            kotone_core::automation::now_ms(),
+        );
+        if let Err(error) = result {
+            kotone_core::log::log(&format!(
+                "companion: quick command {} failed: {error}",
+                slot + 1
+            ));
+            tell(app, format!("快捷指令没能运行：{error}"));
+        }
+        return;
+    }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(error) = run(&app, message.text.clone(), Source::QuickMessage).await {
@@ -752,7 +770,7 @@ pub fn quick_message_text(app: &AppHandle, id: &str) -> Option<String> {
         .companion
         .quick_messages
         .into_iter()
-        .find(|m| m.id == id)
+        .find(|m| m.id == id && !m.runs_automation())
         .map(|m| m.text)
 }
 
