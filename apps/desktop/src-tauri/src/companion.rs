@@ -102,7 +102,9 @@ pub fn connection_ready(
 ) -> Result<kotone_core::connection::ResolvedConnection, String> {
     let id = settings.assistant.connection_id.trim();
     if id.is_empty() {
-        return Err("陪玩需要 AI 连接：请先在「助手」里选择一条支持工具调用的 AI 连接".into());
+        return Err(
+            "还没有给琴音选 AI 连接：请在「高级 → API 连接」里添加一条，并设为琴音的连接".into(),
+        );
     }
     let connection = app.state::<SharedState>().connections.resolve(id)?;
     if connection
@@ -112,7 +114,7 @@ pub fn connection_ready(
         .trim()
         .is_empty()
     {
-        return Err("陪玩的 AI 连接还没有保存 API key，请在「高级 → API 连接」里填写".into());
+        return Err("琴音的 AI 连接还没有保存 API key，请在「高级 → API 连接」里填写".into());
     }
     match &settings.assistant.companion.check {
         Some(check) if check.matches(id, &connection.base_url, &connection.model) => {
@@ -120,12 +122,12 @@ pub fn connection_ready(
                 Ok(connection)
             } else {
                 Err(format!(
-                    "陪玩的 AI 连接没有通过能力自检（{}），请换一个更强的模型后重新自检",
+                    "琴音的 AI 连接没有通过能力自检（{}），请换一个更强的模型后重新自检",
                     check.message
                 ))
             }
         }
-        _ => Err("陪玩的 AI 连接还没有做能力自检：请在「助手」里点「能力自检」".into()),
+        _ => Err("琴音的 AI 连接还没有做能力自检：请在「高级 → API 连接」里点「能力自检」".into()),
     }
 }
 
@@ -137,7 +139,7 @@ pub(crate) fn ocr_backend(
     let root = kotone_stt::model::models_dir_from(settings);
     let model =
         kotone_ocr::catalog::resolve_active(settings, &root, crate::model_catalog::verifier())
-            .ok_or("陪玩需要文字识别模型：请在「高级 → 模型 → 文字识别」下载并选择一个")?;
+            .ok_or("看游戏聊天需要文字识别模型：请在「高级 → 模型 → 文字识别」下载并选择一个")?;
     let backend = app
         .state::<crate::ocr_engines::OcrEngines>()
         .by_model(settings, &model)
@@ -785,14 +787,32 @@ pub fn quick_message_text(app: &AppHandle, id: &str) -> Option<String> {
 
 // ---------- 能力自检 ----------
 
-/// 对助手当前选择的连接跑能力自检，并把结果写进设置。会产生两次付费请求。
+/// 对琴音当前用的连接跑能力自检，并把结果写进设置。会产生两次付费请求。
 pub async fn self_check(app: &AppHandle) -> Result<CompanionCheck, String> {
-    let s = settings(app);
-    let id = s.assistant.connection_id.trim().to_string();
+    let id = settings(app).assistant.connection_id.trim().to_string();
     if id.is_empty() {
-        return Err("请先在「助手」里选择一条 AI 连接".into());
+        return Err("还没有给琴音选 AI 连接：请在「高级 → API 连接」里设一条".into());
+    }
+    check_connection(app, &id).await
+}
+
+/// 对任意一条连接跑能力自检（两次付费请求）。只有它正是琴音在用的连接时才写进设置；
+/// 其他连接的结果只返回给界面，不改配置。
+pub async fn check_connection(app: &AppHandle, id: &str) -> Result<CompanionCheck, String> {
+    let id = id.trim().to_string();
+    if id.is_empty() {
+        return Err("缺少连接 ID".into());
     }
     let connection = app.state::<SharedState>().connections.resolve(&id)?;
+    if connection
+        .api_key
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .is_empty()
+    {
+        return Err("这条连接还没有保存 API key".into());
+    }
     let result = planner::self_check(&connection, &CancellationToken::default()).await?;
     let check = CompanionCheck {
         connection_id: id,
@@ -802,11 +822,17 @@ pub async fn self_check(app: &AppHandle) -> Result<CompanionCheck, String> {
         checked_at_ms: now_ms(),
         message: result.message,
     };
+    if settings(app).assistant.connection_id.trim() != check.connection_id {
+        return Ok(check);
+    }
     let saved = check.clone();
     app.state::<SharedState>()
         .settings_repository
         .update(move |next| {
-            next.assistant.companion.check = Some(saved);
+            // 自检期间用户可能换了琴音的连接：只在仍是同一条时写入。
+            if next.assistant.connection_id.trim() == saved.connection_id {
+                next.assistant.companion.check = Some(saved);
+            }
             Ok(())
         })?;
     crate::tool_config::notify_settings_changed(app);
@@ -816,6 +842,12 @@ pub async fn self_check(app: &AppHandle) -> Result<CompanionCheck, String> {
 #[tauri::command]
 pub async fn companion_self_check(app: AppHandle) -> Result<CompanionCheck, String> {
     self_check(&app).await
+}
+
+/// 设置页「API 连接」：单独测某一条连接，不必先设为琴音的连接。
+#[tauri::command]
+pub async fn connection_self_check(app: AppHandle, id: String) -> Result<CompanionCheck, String> {
+    check_connection(&app, &id).await
 }
 
 #[tauri::command]

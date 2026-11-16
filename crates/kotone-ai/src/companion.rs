@@ -290,7 +290,7 @@ pub async fn plan(
         .trim()
         .is_empty()
     {
-        return Err("陪玩的 AI 连接尚未保存密钥".into());
+        return Err("琴音的 AI 连接尚未保存密钥".into());
     }
     let response = request(connection, input, cancel).await?;
     if cancel.is_cancelled() {

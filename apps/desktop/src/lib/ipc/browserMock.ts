@@ -1171,17 +1171,23 @@ export async function openCatalogModelDir(category: ModelCategory, id: string): 
 
 export async function companionSelfCheck(): Promise<CompanionCheck> {
   const assistant = mock.settings.assistant;
-  if (!assistant.connectionId) throw new Error("请先在「陪玩」里选择一条 AI 连接");
-  const connection = mock.settings.connections.find((c) => c.id === assistant.connectionId);
+  if (!assistant.connectionId) throw new Error("还没有给琴音选 AI 连接：请在「高级 → API 连接」里设一条");
+  return connectionSelfCheck(assistant.connectionId);
+}
+
+export async function connectionSelfCheck(id: string): Promise<CompanionCheck> {
+  const assistant = mock.settings.assistant;
+  const connection = mock.settings.connections.find((c) => c.id === id);
+  if (!connection) throw new Error(`连接 ${id} 不存在`);
   const check: CompanionCheck = {
-    connectionId: assistant.connectionId,
+    connectionId: id,
     baseUrl: connection?.baseUrl ?? "",
     model: connection?.model ?? "",
     passed: mockQuery("mockCompanionCheck") !== "fail",
     checkedAtMs: Date.now(),
     message: mockQuery("mockCompanionCheck") === "fail" ? "模型的回答没有提到队友的话" : "通过：能正常调用工具，并从聊天样例里挑出了队友的话",
   };
-  assistant.companion.check = check;
+  if (assistant.connectionId === id) assistant.companion.check = check;
   return clone(check);
 }
 
@@ -1190,13 +1196,13 @@ export async function companionStatus(): Promise<CompanionStatus> {
   const check = assistant.companion.check ?? null;
   const ocr = mock.settings.ocr.activeModelId || null;
   const reason = !assistant.connectionId
-    ? "陪玩需要 AI 连接：请先在「陪玩」里选择一条支持工具调用的 AI 连接"
+    ? "还没有给琴音选 AI 连接：请在「高级 → API 连接」里添加一条，并设为琴音的连接"
     : !check || check.connectionId !== assistant.connectionId
-      ? "陪玩的 AI 连接还没有做能力自检：请点「能力自检」"
+      ? "琴音的 AI 连接还没有做能力自检：请在「高级 → API 连接」里点「能力自检」"
       : !check.passed
-        ? `陪玩的 AI 连接没有通过能力自检（${check.message}）`
+        ? `琴音的 AI 连接没有通过能力自检（${check.message}）`
         : !ocr
-          ? "陪玩需要文字识别模型：请在「高级 → 模型 → 文字识别」下载并选择一个"
+          ? "看游戏聊天需要文字识别模型：请在「高级 → 模型 → 文字识别」下载并选择一个"
           : null;
   return {
     ready: reason === null,

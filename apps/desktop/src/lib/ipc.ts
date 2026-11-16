@@ -465,6 +465,12 @@ export async function companionSelfCheck(): Promise<CompanionCheck> {
   return invoke<CompanionCheck>("companion_self_check");
 }
 
+/** 单独测某一条连接（两次付费请求）。只有它是琴音在用的连接时，结果才写进设置。 */
+export async function connectionSelfCheck(id: string): Promise<CompanionCheck> {
+  if (!isTauri) return browserMock.connectionSelfCheck(id);
+  return invoke<CompanionCheck>("connection_self_check", { id });
+}
+
 /** 陪玩是否可用：AI 连接 / 自检 / OCR 模型 / 快捷消息 / profile */
 export async function companionStatus(): Promise<CompanionStatus> {
   if (!isTauri) return browserMock.companionStatus();

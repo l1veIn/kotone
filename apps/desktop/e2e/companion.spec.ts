@@ -17,7 +17,7 @@ test("choosing a connection runs the self-check, and the companion stays blocked
   await expect(page.getByRole("heading", { name: "琴音", exact: true })).toBeVisible();
   await page.getByTestId("assistant-nav-settings").click();
   const companion = page.getByTestId("companion-settings");
-  await expect(companion.getByTestId("companion-status")).toContainText("陪玩需要 AI 连接");
+  await expect(companion.getByTestId("companion-status")).toContainText("还没有给琴音选 AI 连接");
   await page.getByLabel("陪玩 AI 连接").click();
   await page.getByRole("option").nth(1).click();
   await expect(companion.getByTestId("companion-check")).toContainText("未通过");

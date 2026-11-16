@@ -32,6 +32,8 @@ test("editing picks a listed model or a typed one, and the key is write-only", a
   await expect(editor.getByTestId("connection-model")).toHaveValue("deepseek-flash");
   await editor.getByRole("button", { name: "deepseek-v4-pro", exact: true }).click();
   await expect(editor.getByTestId("connection-model")).toHaveValue("deepseek-v4-pro");
+  await expect(editor.getByRole("button", { name: "deepseek-v4-pro", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(editor.getByRole("button", { name: "deepseek-flash", exact: true })).toHaveAttribute("aria-pressed", "false");
   await editor.getByTestId("connection-api-key").fill("sk-local-fixture");
   await page.screenshot({ path: testInfo.outputPath("connections-editor.png") });
   await editor.getByTestId("connection-save").click();
@@ -75,4 +77,22 @@ test("a failed self-check is shown on the card, and deleting asks first", async 
   await expect(page.getByTestId("connection-delete-dialog")).toContainText("琴音正在用它");
   await page.getByTestId("connection-delete-confirm").click();
   await expect(card).toHaveCount(0);
+});
+
+test("any saved connection can be self-checked without becoming 琴音's", async ({ page }) => {
+  await openConnections(page);
+  for (const id of ["deepseek", "zhipu"]) {
+    await page.getByTestId(`connection-preset-${id}`).click();
+    await page.getByTestId("connection-api-key").fill("sk-local-fixture");
+    if (id === "deepseek") await page.getByTestId("connection-use-after-save").check();
+    await page.getByTestId("connection-save").click();
+  }
+  const other = page.locator('[data-testid^="connection-card-zhipu-"]');
+  await expect(other).not.toContainText("琴音在用");
+  await other.getByTestId("connection-self-check").click();
+  await expect(other.getByTestId("connection-check-result")).toContainText("能力自检通过");
+  await expect(other).not.toContainText("琴音在用");
+  const settings = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
+  expect(settings.assistant.connectionId).toMatch(/^deepseek-/);
+  expect(settings.assistant.companion.check?.connectionId).toMatch(/^deepseek-/);
 });

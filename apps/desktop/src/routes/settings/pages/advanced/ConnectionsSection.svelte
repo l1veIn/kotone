@@ -14,7 +14,7 @@
   import { Input } from "$lib/components/ui/input";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import {
-    companionSelfCheck,
+    connectionSelfCheck,
     deleteConnection,
     listConnectionPresets,
     listConnections,
@@ -141,20 +141,30 @@
       toast(false, `没能设为琴音的连接：${errText(error)}`);
       return;
     }
-    if (connections.find((item) => item.id === id)?.hasApiKey) await runCheck();
+    if (connections.find((item) => item.id === id)?.hasApiKey) await runCheck(id);
   }
 
-  async function runCheck() {
+  /** 其他连接的自检结果只留在本页（不写配置）；琴音在用的那条写进设置。 */
+  let otherChecks = $state<Record<string, CompanionCheck>>({});
+  let checkingId = $state<string | null>(null);
+
+  async function runCheck(id: string) {
     if (checking) return;
     checking = true;
+    checkingId = id;
     try {
-      const result = await companionSelfCheck();
-      settingsStore.update((s) => s && { ...s, assistant: { ...s.assistant, companion: { ...s.assistant.companion, check: result } } });
+      const result = await connectionSelfCheck(id);
+      if (result.connectionId === $settingsStore?.assistant.connectionId) {
+        settingsStore.update((s) => s && { ...s, assistant: { ...s.assistant, companion: { ...s.assistant.companion, check: result } } });
+      } else {
+        otherChecks = { ...otherChecks, [id]: result };
+      }
       toast(result.passed, result.passed ? "能力自检通过" : `能力自检没通过：${result.message}`);
     } catch (error) {
       toast(false, `能力自检失败：${errText(error)}`);
     } finally {
       checking = false;
+      checkingId = null;
     }
   }
 
@@ -194,7 +204,8 @@
       {#each connections as connection (connection.id)}
         {@const forAgent = connection.id === agentConnectionId}
         {@const preset = presetOf(connection.provider)}
-        {@const ownCheck = forAgent && check && check.connectionId === connection.id ? check : null}
+        {@const ownCheck = forAgent ? (check && check.connectionId === connection.id ? check : null) : (otherChecks[connection.id] ?? null)}
+        {@const cardChecking = checking && checkingId === connection.id}
         <article class="px-4 py-3.5" data-testid={`connection-card-${connection.id}`}>
           <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
             <div class="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-sm font-semibold text-foreground/80" aria-hidden="true">
@@ -215,20 +226,19 @@
               </p>
             </div>
             <div class="flex shrink-0 items-center gap-1">
-              {#if forAgent}
-                <Button size="sm" variant="outline" data-testid="connection-self-check" disabled={checking || !connection.hasApiKey} onclick={() => void runCheck()}>
-                  {#if checking}<LoaderCircle class="size-3.5 animate-spin" />{:else}<ShieldCheck class="size-3.5" />{/if}能力自检
-                </Button>
-              {:else}
+              {#if !forAgent}
                 <Button size="sm" variant="outline" data-testid="connection-use" disabled={checking} onclick={() => void useForAgent(connection.id)}>设为琴音的连接</Button>
               {/if}
+              <Button size="sm" variant={forAgent ? "outline" : "ghost"} data-testid="connection-self-check" disabled={checking || !connection.hasApiKey} onclick={() => void runCheck(connection.id)}>
+                {#if cardChecking}<LoaderCircle class="size-3.5 animate-spin" />{:else}<ShieldCheck class="size-3.5" />{/if}能力自检
+              </Button>
               <Button size="sm" variant="ghost" onclick={() => openEdit(connection)}>编辑</Button>
               <Button size="icon-sm" variant="ghost" class="text-muted-foreground hover:text-destructive" aria-label={`删除 ${connection.displayName}`} disabled={saving} onclick={() => { confirmDelete = connection; }}><Trash2 class="size-3.5" /></Button>
             </div>
           </div>
-          {#if forAgent}
+          {#if forAgent || ownCheck || cardChecking}
             <div class="mt-3 ml-12 flex items-start gap-2 rounded-xl bg-muted/50 px-3 py-2 text-xs" data-testid="connection-check-result">
-              {#if checking}
+              {#if cardChecking}
                 <LoaderCircle class="mt-0.5 size-3.5 shrink-0 animate-spin text-primary" /><span class="text-muted-foreground">正在自检：确认能调用工具，再看能否从聊天样例里挑出队友的话（两次付费请求）…</span>
               {:else if ownCheck}
                 {#if ownCheck.passed}<Check class="mt-0.5 size-3.5 shrink-0 text-success" />{:else}<CircleAlert class="mt-0.5 size-3.5 shrink-0 text-destructive" />{/if}
@@ -237,7 +247,7 @@
                   <span class="text-muted-foreground"> · {ownCheck.message} · {checkedAt(ownCheck.checkedAtMs)}{ownCheck.model !== connection.model ? `（当时的模型：${ownCheck.model}）` : ""}</span>
                 </span>
               {:else}
-                <CircleAlert class="mt-0.5 size-3.5 shrink-0 text-warning" /><span class="text-muted-foreground">还没有做能力自检。没通过自检时，陪玩热键不会把话交给 AI。</span>
+                <CircleAlert class="mt-0.5 size-3.5 shrink-0 text-warning" /><span class="text-muted-foreground">还没有做能力自检。没通过自检时，游戏里的热键不会把话交给琴音。</span>
               {/if}
             </div>
           {/if}
