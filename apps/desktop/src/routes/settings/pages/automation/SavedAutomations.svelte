@@ -6,6 +6,9 @@
   import { agentSetAutomationHidden } from "../../../../lib/agent";
   import { errText, settingsStore, toast } from "../../../../lib/stores/ui";
   import { Switch } from "$lib/components/ui/switch";
+  import { Button } from "$lib/components/ui/button";
+  import { Play, Plus } from "@lucide/svelte";
+  import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import AutomationEditor from "./AutomationEditor.svelte";
   import ArgsForm from "./ArgsForm.svelte";
 
@@ -76,52 +79,55 @@
   <AutomationEditor automation={editing === "new" ? null : editing}
     onSaved={() => { editing = null; onChanged(); }} onCancel={() => { editing = null; }} />
 {:else}
-  <section class="panel" aria-labelledby="saved-automations-title">
-    <div class="flex items-center justify-between gap-3">
-      <h2 id="saved-automations-title">已保存的自动化 <span class="ml-1 text-kotone-cyan">{automations.length}</span></h2>
-      <button type="button" class="primary" onclick={() => { editing = "new"; }}>新建</button>
-    </div>
-    <p class="mt-2 text-xs leading-relaxed text-white/45">
-      保存下来的自动化直接运行，不再调用 AI。可以在「琴音 → 设置」的快捷指令里绑到热键上：在游戏里按下就运行。打开「交给琴音」的（最多 30 个）琴音也能帮你运行。
-    </p>
+  <SettingsSection
+    title={`已保存的自动化 · ${automations.length}`}
+    id="saved-automations-title"
+    description="保存下来的自动化直接运行，不再调用 AI。可以在「琴音 → 设置」的快捷指令里绑到热键上：在游戏里按下就运行。打开「交给琴音」的（最多 30 个）琴音也能帮你运行。"
+    flush
+  >
+    {#snippet actions()}
+      <Button size="sm" onclick={() => { editing = "new"; }}><Plus class="size-3.5" />新建</Button>
+    {/snippet}
     {#if !automations.length}
-      <p class="empty">还没有保存的自动化</p>
+      <p class="m-0 px-4 py-8 text-center text-[13px] text-muted-foreground">还没有保存的自动化</p>
     {:else}
-      <ul class="mt-4 space-y-2">
+      <ul class="m-0 list-none divide-y divide-hairline p-0">
         {#each automations as item (item.id)}
-          <li class="rounded-xl bg-black/12 p-3" data-testid="saved-automation">
+          <li class="px-4 py-3.5" data-testid="saved-automation">
             <div class="flex flex-wrap items-start justify-between gap-3">
               <div class="min-w-0">
-                <p class="text-sm text-white/90">{item.name}
-                  <span class="ml-1 text-[11px] text-white/40">{item.action.kind === "speak" ? "播报" : "程序"} · {by[item.createdBy]}创建</span></p>
-                {#if item.description}<p class="mt-1 text-xs text-white/50">{item.description}</p>{/if}
+                <p class="m-0 text-[13px] font-medium text-foreground">{item.name}
+                  <span class="ml-1.5 text-[11px] font-normal text-muted-foreground">{item.action.kind === "speak" ? "播报" : "程序"} · {by[item.createdBy]}创建</span></p>
+                {#if item.description}<p class="mt-1 mb-0 text-xs text-muted-foreground">{item.description}</p>{/if}
                 {#if item.params.length}
-                  <p class="mt-1 text-[11px] text-white/40">参数：{item.params.map((p) => p.label || p.name).join("、")}</p>
+                  <p class="mt-1 mb-0 text-[11px] text-muted-foreground">参数：{item.params.map((p) => p.label || p.name).join("、")}</p>
                 {/if}
-                <label class="mt-1.5 flex w-fit cursor-pointer items-center gap-1.5 text-[11px] text-white/55">
+                <label class="mt-2 flex w-fit cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
                   <Switch size="sm" data-testid="saved-automation-agent" checked={!hiddenFromAgent.has(item.id)} disabled={offering === item.id}
                     aria-label={`把「${item.name}」交给琴音使用`} onCheckedChange={(checked) => void setOffered(item, checked)} />
                   交给琴音
                 </label>
               </div>
-              <div class="flex shrink-0 gap-2">
-                <button type="button" class="secondary" onclick={() => openRun(item)}>运行</button>
-                <button type="button" class="secondary" onclick={() => edit(item)}>编辑</button>
-                <button type="button" class="secondary" onclick={() => remove(item)}>{confirmDelete === item.id ? "确认删除" : "删除"}</button>
+              <div class="flex shrink-0 gap-1.5">
+                <Button variant="outline" size="sm" onclick={() => openRun(item)}><Play class="size-3 fill-current" />运行</Button>
+                <Button variant="ghost" size="sm" onclick={() => edit(item)}>编辑</Button>
+                <Button variant={confirmDelete === item.id ? "destructive" : "ghost"} size="sm"
+                  class={confirmDelete === item.id ? "" : "text-muted-foreground hover:text-destructive"}
+                  onclick={() => remove(item)}>{confirmDelete === item.id ? "确认删除" : "删除"}</Button>
               </div>
             </div>
             {#if runningId === item.id}
-              <div class="mt-3 border-t border-white/8 pt-3" data-testid="automation-run-panel">
+              <div class="mt-3 rounded-xl border border-hairline bg-muted/40 p-3" data-testid="automation-run-panel">
                 <ArgsForm params={item.params} values={runArgs} prefix={`${item.name} `} onchange={(values) => { runArgs = values; }} />
                 <div class="mt-3 flex flex-wrap items-center justify-end gap-3">
                   {#if item.action.kind === "program"}
-                    <label class="flex items-center gap-1.5 text-[11px] text-white/55">
+                    <label class="flex items-center gap-1.5 text-xs text-muted-foreground">
                       点击后
-                      <input class="w-14 rounded bg-white/8 px-2 py-1 text-xs" type="number" min="1" max="30" bind:value={switchSeconds} aria-label="倒数秒数" />
+                      <input class="h-7 w-14 rounded-lg border border-input bg-background/60 px-2 text-xs text-foreground outline-none focus:border-ring" type="number" min="1" max="30" bind:value={switchSeconds} aria-label="倒数秒数" />
                       秒在当时的前台窗口（切到游戏）开始
                     </label>
                   {/if}
-                  <button type="button" class="primary" disabled={busy} onclick={() => run(item)}>{busy ? "启动中…" : "开始"}</button>
+                  <Button size="sm" disabled={busy} onclick={() => run(item)}>{busy ? "启动中…" : "开始"}</Button>
                 </div>
               </div>
             {/if}
@@ -129,5 +135,5 @@
         {/each}
       </ul>
     {/if}
-  </section>
+  </SettingsSection>
 {/if}

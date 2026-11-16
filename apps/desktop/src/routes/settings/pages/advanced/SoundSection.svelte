@@ -1,8 +1,11 @@
 <script lang="ts">
   import { patchSettings, settingsStore } from "../../../../lib/stores/ui";
   import { previewSfx } from "../../../../lib/ipc";
-  import Select from "../../../../lib/components/Select.svelte";
-  import Toggle from "../../../../lib/components/Toggle.svelte";
+  import { Play } from "@lucide/svelte";
+  import { Switch } from "$lib/components/ui/switch";
+  import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
+  import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
+  import SelectField from "$lib/components/settings/SelectField.svelte";
 
   type EventKind = "record" | "send";
 
@@ -37,100 +40,79 @@
 </script>
 
 {#if $settingsStore}
-  <section class="kotone-panel flex flex-col gap-4 p-4">
-    <div>
-      <h2 class="text-sm font-semibold text-kotone-cyan/90">音效提示</h2>
-      <p class="mt-1 text-[11px] leading-relaxed text-white/45">
-        不开悬浮窗、或全屏游戏时，也能听到录音与发送是否生效。录制音与发送音可分别开关、分别调音量、分别选音效。
-      </p>
-    </div>
+  <div class="space-y-6">
+  <p class="m-0 px-1 text-[13px] leading-relaxed text-muted-foreground">
+    不开悬浮窗、或全屏游戏时，也能听到录音与发送是否生效。录制音与发送音可分别开关、分别调音量、分别选音效。
+  </p>
 
-    {#each cards as card}
-      {@const item = $settingsStore.soundFeedback[card.kind]}
-      <div class="flex flex-col gap-3 rounded-xl bg-white/4 p-4 ring-1 ring-white/8">
-        <div>
-          <div class="flex items-center justify-between gap-4">
-            <h3 class="text-sm font-semibold">{card.title}</h3>
-            <div class="w-44 shrink-0">
-              <Toggle
-                checked={item.enabled}
-                ariaLabel={card.title}
-                label=""
-                desc=""
-                onchange={(value) =>
-                  void patchSettings(
-                    { soundFeedback: { [card.kind]: { enabled: value } } },
-                    `${card.title}已${value ? "开启" : "关闭"}`,
-                  )}
-              />
-            </div>
-          </div>
-          <p class="mt-0.5 text-[11px] text-white/40">{card.hint}</p>
-        </div>
-
-        <div class="flex items-center justify-between gap-4">
-          <div class="min-w-0">
-            <p class="text-xs text-white/70">音效</p>
-            <p class="mt-0.5 text-[11px] text-white/35">点播放键试听当前音效。</p>
-          </div>
-          <div class="flex shrink-0 items-center gap-2">
-            <div class="w-44">
-              <Select
-                ariaLabel={`${card.title}音效`}
-                value={item.soundId}
-                options={card.options}
-                onchange={(soundId) => void onPick(card.kind, soundId)}
-              />
-            </div>
+  {#each cards as card}
+    {@const item = $settingsStore.soundFeedback[card.kind]}
+    <SettingsSection title={card.title} description={card.hint}>
+      {#snippet actions()}
+        <Switch
+          aria-label={card.title}
+          bind:checked={() => item.enabled, (value) =>
+            void patchSettings(
+              { soundFeedback: { [card.kind]: { enabled: value } } },
+              `${card.title}已${value ? "开启" : "关闭"}`,
+            )}
+        />
+      {/snippet}
+      <SettingsRow label="音效" description="点播放键试听当前音效。">
+        {#snippet control()}
+          <div class="flex items-center gap-2">
+            <SelectField
+              class="w-40"
+              ariaLabel={`${card.title}音效`}
+              value={item.soundId}
+              options={card.options}
+              onchange={(soundId) => void onPick(card.kind, soundId)}
+            />
             <button
               type="button"
               aria-label={`试听${card.title}`}
-              class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-kotone-cyan/30 bg-kotone-cyan/8 text-kotone-cyan transition hover:bg-kotone-cyan/16 hover:shadow-glow-cyan"
+              class="flex size-8 shrink-0 items-center justify-center rounded-lg border border-primary/35 bg-primary/10 text-primary transition-colors hover:bg-primary/20"
               onclick={() => void previewSfx(card.kind, item.soundId)}
             >
-              <svg viewBox="0 0 24 24" fill="currentColor" class="h-4 w-4" aria-hidden="true">
-                <path d="M8 5.5v13l11-6.5-11-6.5Z" />
-              </svg>
+              <Play class="size-3.5 fill-current" />
             </button>
           </div>
-        </div>
-
-        <label class="block">
-          <div class="flex items-center justify-between">
-            <span class="text-xs text-white/70">{card.title}音量</span>
-            <span class="rounded bg-kotone-cyan/15 px-2 py-0.5 text-xs font-semibold text-kotone-cyan">
-              {item.volume}%
-            </span>
+        {/snippet}
+      </SettingsRow>
+      <SettingsRow label={`${card.title}音量`} stacked>
+        {#snippet control()}
+          <div class="flex items-center gap-3">
+            <input
+              type="range"
+              aria-label={`${card.title}音量`}
+              min="10"
+              max="100"
+              step="5"
+              value={item.volume}
+              onchange={(e) =>
+                void patchSettings(
+                  { soundFeedback: { [card.kind]: { volume: Number((e.target as HTMLInputElement).value) } } },
+                  `${card.title}音量已保存`,
+                )}
+              class="min-w-0 flex-1 accent-[var(--color-primary)]"
+            />
+            <span class="w-14 shrink-0 rounded-md bg-primary/12 px-2 py-0.5 text-center text-xs font-semibold text-primary tabular-nums">{item.volume}%</span>
           </div>
-          <input
-            type="range"
-            min="10"
-            max="100"
-            step="5"
-            value={item.volume}
-            onchange={(e) =>
-              void patchSettings(
-                { soundFeedback: { [card.kind]: { volume: Number((e.target as HTMLInputElement).value) } } },
-                `${card.title}音量已保存`,
-              )}
-            class="mt-2 w-full accent-kotone-cyan"
-          />
-        </label>
-      </div>
-    {/each}
+        {/snippet}
+      </SettingsRow>
+    </SettingsSection>
+  {/each}
 
-    <p class="text-[11px] leading-relaxed text-white/35">
-      自定义提示音（上传自己的音频，录制音与发送音可分别设置）将在后续版本支持。
-    </p>
-  </section>
-
-  <section class="kotone-panel mt-3 p-4">
-    <h2 class="text-sm font-semibold text-kotone-cyan/90">触发时机</h2>
-    <ul class="mt-2 space-y-1.5 text-[11px] leading-relaxed text-white/50">
+  <SettingsSection title="触发时机">
+    <ul class="m-0 list-none space-y-1.5 py-3.5 pl-0 text-xs leading-relaxed text-muted-foreground">
       <li>· 按下热键并成功开始录音 → 录制音</li>
       <li>· 消息注入游戏成功（松手 / 再按 / 一句话说完自动发送）→ 发送音</li>
       <li>· 独奏模式逐句连发：每句发送都有发送音，自动续录不再重复播录制音</li>
       <li>· 录音失败或发送失败不会发声（沿用界面错误提示），不会被误认为成功</li>
     </ul>
-  </section>
+  </SettingsSection>
+  <p class="m-0 px-1 text-[11px] leading-relaxed text-muted-foreground/80">
+    自定义提示音（上传自己的音频，录制音与发送音可分别设置）将在后续版本支持。
+  </p>
+  </div>
 {/if}

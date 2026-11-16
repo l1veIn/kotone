@@ -41,31 +41,31 @@
   }
 </script>
 
-<ul class="mt-3 space-y-2">
+<ul class="m-0 list-none divide-y divide-hairline p-0">
   {#each runs as run (run.id)}
-    <li class="reminder-row" data-testid="automation-run" data-status={run.status}>
-      <div class="min-w-0">
-        <p class="break-words text-sm {mode === 'open' ? 'text-white/90' : 'text-white/70'}">
-          <span class="badge {run.action.kind === 'program' ? 'program' : 'speak'}">{badgeText[run.action.kind]}</span>
+    <li class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3" data-testid="automation-run" data-status={run.status}>
+      <div class="min-w-0 flex-1">
+        <p class="m-0 text-[13px] break-words {mode === 'open' ? 'text-foreground' : 'text-foreground/80'}">
+          <span class="mr-1.5 inline-block rounded-md px-1.5 text-[11px] leading-[18px] align-[1px] {run.action.kind === 'program' ? 'bg-primary/12 text-primary' : 'bg-brand-pink/12 text-brand-pink'}">{badgeText[run.action.kind]}</span>
           {runTitle(run)}
         </p>
-        <p class="mt-1 text-xs text-white/45">{[subtitle(run), mode === "open" ? new Date(run.dueAtMs).toLocaleString() : ""].filter(Boolean).join(" · ")}</p>
+        <p class="mt-1 mb-0 text-xs text-muted-foreground">{[subtitle(run), mode === "open" ? new Date(run.dueAtMs).toLocaleString() : ""].filter(Boolean).join(" · ")}</p>
         {#if mode === "history"}
-          {#if run.message}<p class="mt-1 text-xs {run.status === 'failed' ? 'text-kotone-pink' : 'text-white/50'}">{run.message}</p>{/if}
+          {#if run.message}<p class="mt-1 mb-0 text-xs {run.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}">{run.message}</p>{/if}
           {#if run.report}
-            <p class="mt-1 text-xs text-white/40">{outcomeText[run.report.outcome] ?? run.report.outcome} · 输入 {run.report.keys} 次 · 用时 {duration(run.report.durationMs)}</p>
+            <p class="mt-1 mb-0 text-xs text-muted-foreground">{outcomeText[run.report.outcome] ?? run.report.outcome} · 输入 {run.report.keys} 次 · 用时 {duration(run.report.durationMs)}</p>
             {#if run.report.log.length}
-              <details class="mt-1"><summary class="cursor-pointer text-[11px] text-white/45">日志（{run.report.log.length}）</summary>
-                <pre class="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-black/25 p-2 text-[11px] text-white/60">{run.report.log.join("\n")}</pre>
+              <details class="mt-1"><summary class="cursor-pointer text-[11px] text-muted-foreground hover:text-foreground">日志（{run.report.log.length}）</summary>
+                <pre class="mt-1 mb-0 max-h-40 overflow-auto rounded-lg border border-hairline bg-muted/40 p-2 font-mono text-[11px] whitespace-pre-wrap text-foreground/80">{run.report.log.join("\n")}</pre>
               </details>
             {/if}
           {/if}
         {/if}
       </div>
       <div class="flex shrink-0 items-center gap-3">
-        <span class="text-xs tabular-nums {mode === 'open' ? 'text-kotone-cyan' : 'text-white/45'}">{mode === "open" ? when(run) : `${statusText[run.status]} · ${when(run)}`}</span>
+        <span class="text-xs tabular-nums {mode === 'open' ? 'text-primary' : 'text-muted-foreground'}">{mode === "open" ? when(run) : `${statusText[run.status]} · ${when(run)}`}</span>
         {#if mode === "open" && onStop}
-          <button type="button" class="secondary" disabled={busyId === run.id} onclick={() => onStop(run)}>
+          <button type="button" class="h-7 rounded-lg border border-hairline px-2.5 text-xs text-foreground transition-colors hover:bg-muted disabled:opacity-50" disabled={busyId === run.id} onclick={() => onStop(run)}>
             {run.status === "running" ? "停止" : "取消"}
           </button>
         {/if}
@@ -73,9 +73,3 @@
     </li>
   {/each}
 </ul>
-
-<style>
-  .badge { display: inline-block; margin-right: .4rem; border-radius: .35rem; padding: 0 .35rem; font-size: .65rem; line-height: 1.1rem; vertical-align: 1px; }
-  .badge.speak { background: #ff2d7826; color: #ff8fb5; }
-  .badge.program { background: #00e5ff1f; color: #6ff2ff; }
-</style>

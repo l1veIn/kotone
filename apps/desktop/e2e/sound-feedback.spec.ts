@@ -8,15 +8,15 @@ test("sound feedback cards render with defaults and per-item toggles", async ({ 
   await page.getByTestId("advanced-nav-sound").click();
 
   // 两张卡片：录制音 / 发送音，默认均开启
-  const recordToggle = page.getByRole("checkbox", { name: "录制音" });
-  const sendToggle = page.getByRole("checkbox", { name: "发送音" });
+  const recordToggle = page.getByRole("switch", { name: "录制音" });
+  const sendToggle = page.getByRole("switch", { name: "发送音" });
   await expect(recordToggle).toBeVisible();
   await expect(recordToggle).toBeChecked();
   await expect(sendToggle).toBeChecked();
 
   // 默认下拉：上扬（录制）/ 下沉（发送）
-  const recordSelect = page.getByRole("button", { name: "录制音音效" });
-  const sendSelect = page.getByRole("button", { name: "发送音音效" });
+  const recordSelect = page.getByRole("combobox", { name: "录制音音效" });
+  const sendSelect = page.getByRole("combobox", { name: "发送音音效" });
   await expect(recordSelect).toHaveText("上扬");
   await expect(sendSelect).toHaveText("下沉");
 

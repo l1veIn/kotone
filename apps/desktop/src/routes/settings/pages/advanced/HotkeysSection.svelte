@@ -2,6 +2,8 @@
   import { updateSettings } from "../../../../lib/ipc";
   import { settingsStore } from "../../../../lib/stores/ui";
   import HotkeyField from "../../../../lib/components/HotkeyField.svelte";
+  import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
+  import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
 
   interface NamedHotkeySection {
     id: string;
@@ -72,13 +74,15 @@
 
 </script>
 
-{#each NAMED_HOTKEY_SECTIONS as section, i (section.id)}
-  <section class="kotone-panel p-4 {i === 0 ? "" : "mt-3"}">
-    <h2 class="text-sm font-semibold text-kotone-cyan/90">{section.title}</h2>
-    <p class="mt-1 text-[11px] leading-relaxed text-white/45">{section.desc}</p>
-    <HotkeyField id={section.id} title={section.title}
-      value={$settingsStore?.[section.settingsKey] ?? ""} placeholder={section.placeholder}
-      onSave={async (key) => { settingsStore.set(await updateSettings({ [section.settingsKey]: key })); }} />
-    <p class="mt-1.5 text-[10px] leading-relaxed text-white/35">{section.help}</p>
-  </section>
-{/each}
+<SettingsSection title="其他热键" description="和「通用」页的录制热键一样，按下组合键录入；留空 = 关闭。">
+  {#each NAMED_HOTKEY_SECTIONS as section (section.id)}
+    <SettingsRow label={section.title} description={section.desc} stacked testid={`hotkey-section-${section.id}`}>
+      {#snippet control()}
+        <HotkeyField id={section.id} title={section.title}
+          value={$settingsStore?.[section.settingsKey] ?? ""} placeholder={section.placeholder}
+          onSave={async (key) => { settingsStore.set(await updateSettings({ [section.settingsKey]: key })); }} />
+        <p class="mt-1.5 mb-0 text-[11px] leading-relaxed text-muted-foreground/80">{section.help}</p>
+      {/snippet}
+    </SettingsRow>
+  {/each}
+</SettingsSection>

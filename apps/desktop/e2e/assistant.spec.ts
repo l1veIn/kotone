@@ -107,7 +107,7 @@ test("assistant shares connections and saves voice/delivery settings with an ind
   await page.getByTestId("assistant-nav-settings").click();
   const assistant = page.getByTestId("assistant-page");
   await assistant.getByRole("button", { name: "管理连接 →", exact: true }).click();
-  await expect(page.getByTestId("advanced-nav-connections")).toHaveClass(/bg-kotone-cyan/);
+  await expect(page.getByTestId("advanced-nav-connections")).toHaveAttribute("aria-current", "page");
   await page.getByTestId("connection-preset-dashscope").click();
   await page.getByTestId("connection-api-key").fill("sk-test-local-fixture");
   await page.getByTestId("connection-save").click();

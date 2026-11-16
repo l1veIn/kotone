@@ -1,6 +1,6 @@
 <script lang="ts">
   // 一个入参的输入控件（运行时填值、编辑器里填缺省值共用）。
-  import Select from "../../../../lib/components/Select.svelte";
+  import SelectField from "$lib/components/settings/SelectField.svelte";
   import type { Color, ParamSpec, Region } from "../../../../lib/automation";
 
   let { spec, value, label, disabled = false, onchange }: {
@@ -41,16 +41,16 @@
     value={typeof value === "string" ? value : ""}
     onchange={(event) => onchange(event.currentTarget.value.trim() === "" ? undefined : event.currentTarget.value.trim())} />
 {:else if spec.type === "boolean"}
-  <input type="checkbox" class="accent-cyan-300" aria-label={label} {disabled} checked={value === true}
+  <input type="checkbox" class="size-4 accent-[var(--color-primary)]" aria-label={label} {disabled} checked={value === true}
     onchange={(event) => onchange(event.currentTarget.checked)} />
 {:else if spec.type === "choice"}
   <div class="w-48">
-    <Select ariaLabel={label} {disabled} value={typeof value === "string" ? value : ""}
+    <SelectField ariaLabel={label} {disabled} value={typeof value === "string" ? value : ""}
       options={[{ value: "", label: "（未选）" }, ...(spec.options ?? []).map((o) => ({ value: o, label: o }))]}
       onchange={(next) => onchange(next === "" ? undefined : next)} />
   </div>
 {:else if spec.type === "region"}
-  <div class="flex flex-wrap items-center gap-1.5 text-[11px] text-white/50" role="group" aria-label={label}>
+  <div class="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground" role="group" aria-label={label}>
     {#each [["x", "左"], ["y", "上"], ["w", "宽"], ["h", "高"]] as [key, name]}
       <label class="flex items-center gap-1">{name}
         <input class="field w-16" type="number" min="0" max="1" step="0.01" {disabled} aria-label={`${label} ${name}`}
@@ -58,18 +58,20 @@
           onchange={(event) => setRegion(key as keyof Region, event.currentTarget.value)} />
       </label>
     {/each}
-    <span class="text-white/35">（窗口比例 0–1；框选工具稍后提供）</span>
+    <span class="text-muted-foreground/75">（窗口比例 0–1；框选工具稍后提供）</span>
   </div>
 {:else if spec.type === "color"}
-  <input type="color" class="h-7 w-12 cursor-pointer rounded bg-transparent" aria-label={label} {disabled} value={hex}
+  <input type="color" class="h-8 w-12 cursor-pointer rounded-lg border border-input bg-transparent p-0.5" aria-label={label} {disabled} value={hex}
     onchange={(event) => onchange(fromHex(event.currentTarget.value))} />
 {:else}
-  <span class="text-[11px] text-white/45">
+  <span class="text-xs text-muted-foreground">
     {value && typeof value === "object" && "image" in value ? "已设置图片" : "未设置：可由 Agent 截图设置（框选工具稍后提供）"}
   </span>
 {/if}
 
 <style>
-  .field { border-radius: .5rem; background: #ffffff14; padding: .35rem .6rem; font-size: .75rem; outline: none; box-shadow: inset 0 0 0 1px #ffffff26; }
-  .field:focus { box-shadow: inset 0 0 0 1px #00e5ff99; }
+  .field { height: 2rem; border-radius: .5rem; border: 1px solid var(--color-input); background: color-mix(in oklab, var(--color-background) 60%, transparent); color: var(--color-foreground); padding: 0 .6rem; font-size: 13px; outline: none; transition: border-color 120ms, box-shadow 120ms; }
+  .field::placeholder { color: var(--color-muted-foreground); }
+  .field:focus { border-color: var(--color-ring); box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-ring) 30%, transparent); }
+  .field:disabled { opacity: .5; }
 </style>

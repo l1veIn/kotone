@@ -30,16 +30,16 @@
     {#each params as spec (spec.name)}
       {@const required = spec.default === undefined || spec.default === null}
       <div class="flex flex-wrap items-center gap-3">
-        <span class="w-28 shrink-0 text-xs text-white/75">{spec.label || spec.name}{#if required}<span class="text-kotone-pink"> *</span>{/if}</span>
+        <span class="w-28 shrink-0 text-[13px] text-foreground">{spec.label || spec.name}{#if required}<span class="text-brand-pink"> *</span>{/if}</span>
         <ParamInput {spec} {disabled} label={`${prefix}${spec.label || spec.name}`}
           value={values[spec.name]} onchange={(value) => set(spec.name, value)} />
         {#if !required && values[spec.name] === undefined}
-          <span class="text-[11px] text-white/35">缺省：{describe(spec.default)}</span>
+          <span class="text-xs text-muted-foreground/80">缺省：{describe(spec.default)}</span>
         {/if}
-        {#if spec.description}<span class="text-[11px] text-white/40">{spec.description}</span>{/if}
+        {#if spec.description}<span class="text-xs text-muted-foreground">{spec.description}</span>{/if}
       </div>
     {/each}
   </div>
 {:else}
-  <p class="text-[11px] text-white/40">没有参数。</p>
+  <p class="m-0 text-xs text-muted-foreground">没有参数。</p>
 {/if}
