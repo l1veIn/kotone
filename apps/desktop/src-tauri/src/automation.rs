@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use kotone_core::automation::library::{
     validate_args, Automation, AutomationBody, AutomationDraft, AutomationLibrary, CreatedBy,
+    ParamKind,
 };
 use kotone_core::automation::{
     AutomationScheduler, ProgramAction, ProgramLauncher, ProgramReport, Run, RunAction, RunStatus,
@@ -28,7 +29,10 @@ use kotone_core::reminders::DeliveryKind;
 use kotone_core::tools::{WindowCapturer, WindowIdentity, WindowInfo, WindowObserver};
 use kotone_platform_windows::inject;
 use kotone_platform_windows::window_tools::{GdiForegroundCapturer, WindowsWindowObserver};
-use kotone_script::{Cancel, KeyAction, Limits, Outcome, Region, ScriptHost};
+use kotone_script::{
+    Cancel, KeyAction, Limits, MouseAction, MouseButton, Outcome, Pixels, Region, ScriptHost,
+    TextLine,
+};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
@@ -108,6 +112,8 @@ struct DesktopHost {
     target: WindowIdentity,
     started: Instant,
     held: Mutex<BTreeSet<String>>,
+    /// 按住的鼠标键（结束时一起松开）。
+    held_buttons: Mutex<Vec<MouseButton>>,
     /// 游戏窗口已关闭或身份变化：脚本按取消结束。
     gone: AtomicBool,
     last_inspect: AtomicU64,
@@ -157,17 +163,46 @@ impl DesktopHost {
     }
 
     fn crop(image: &kotone_tools::image::RgbaImage, r: Region) -> kotone_tools::image::RgbaImage {
+        Self::crop_with_origin(image, r).0
+    }
+
+    /// 按窗口比例裁剪；同时返回实际裁到的区域（按像素取整后，窗口比例）。
+    fn crop_with_origin(
+        image: &kotone_tools::image::RgbaImage,
+        r: Region,
+    ) -> (kotone_tools::image::RgbaImage, Region) {
         let (w, h) = (image.width(), image.height());
         let x = ((r.x * f64::from(w)).floor() as u32).min(w - 1);
         let y = ((r.y * f64::from(h)).floor() as u32).min(h - 1);
         let cw = ((r.width * f64::from(w)).ceil() as u32).clamp(1, w - x);
         let ch = ((r.height * f64::from(h)).ceil() as u32).clamp(1, h - y);
-        image.crop(kotone_tools::image::CropRect {
+        let crop = image.crop(kotone_tools::image::CropRect {
             x,
             y,
             width: cw,
             height: ch,
-        })
+        });
+        let origin = Region {
+            x: f64::from(x) / f64::from(w),
+            y: f64::from(y) / f64::from(h),
+            width: f64::from(cw) / f64::from(w),
+            height: f64::from(ch) / f64::from(h),
+        };
+        (crop, origin)
+    }
+
+    /// 窗口比例 → 屏幕物理像素（按当前客户区位置）。
+    fn screen_point(&self, x: f64, y: f64) -> Result<(i32, i32), String> {
+        let info = WindowsWindowObserver
+            .inspect(&self.target)
+            .map_err(|e| format!("游戏窗口不可用：{e}"))?;
+        let rect = info.client_rect.ok_or("拿不到游戏窗口的客户区位置")?;
+        if rect.width == 0 || rect.height == 0 {
+            return Err("游戏窗口客户区为空（可能最小化了）".into());
+        }
+        let px = rect.x + ((x * f64::from(rect.width)) as i32).min(rect.width as i32 - 1);
+        let py = rect.y + ((y * f64::from(rect.height)) as i32).min(rect.height as i32 - 1);
+        Ok((px, py))
     }
 
     fn release_all(&self) {
@@ -176,6 +211,9 @@ impl DesktopHost {
             .collect();
         for key in held.iter().rev() {
             let _ = inject::key_up(key);
+        }
+        for button in std::mem::take(&mut *self.held_buttons.lock().unwrap()) {
+            let _ = inject::mouse_button(platform_button(button), false);
         }
     }
 
@@ -194,6 +232,73 @@ impl DesktopHost {
             Ok(())
         }
     }
+}
+
+fn platform_button(button: MouseButton) -> inject::MouseButton {
+    match button {
+        MouseButton::Left => inject::MouseButton::Left,
+        MouseButton::Right => inject::MouseButton::Right,
+        MouseButton::Middle => inject::MouseButton::Middle,
+    }
+}
+
+/// 模板图片目录（内容寻址：`<sha256>.png`）。
+fn images_dir() -> std::path::PathBuf {
+    kotone_core::settings::kotone_dir().join("automation-images")
+}
+
+/// 模板图片上限：边长与文件大小。
+const MAX_IMAGE_SIDE: u32 = 512;
+const MAX_IMAGE_BYTES: usize = 512 * 1024;
+
+/// 把提交的 `{png: base64}` 存成内容寻址文件，换成 `{image: <sha256>}`；已是引用的原样返回。
+fn store_image(value: &Value) -> Result<Value, String> {
+    let Some(b64) = value.get("png").and_then(Value::as_str) else {
+        return Ok(value.clone());
+    };
+    if value.as_object().is_some_and(|o| o.len() != 1) {
+        return Err("图片只能写成 {png: base64}".into());
+    }
+    let bytes = kotone_tools::image::decode_base64(b64.trim())
+        .map_err(|e| format!("图片不是合法的 base64：{e}"))?;
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(format!("图片超过 {} KB", MAX_IMAGE_BYTES / 1024));
+    }
+    kotone_tools::image::decode_png(&bytes, MAX_IMAGE_SIDE)?;
+    let id = kotone_tools::image::sha256_hex(&bytes);
+    let path = images_dir().join(format!("{id}.png"));
+    if !path.exists() {
+        std::fs::create_dir_all(images_dir()).map_err(|e| format!("创建图片目录失败：{e}"))?;
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, &bytes).map_err(|e| format!("保存图片失败：{e}"))?;
+        std::fs::rename(&tmp, &path).map_err(|e| format!("保存图片失败：{e}"))?;
+    }
+    Ok(json!({"image": id}))
+}
+
+/// 草稿里 image 参数的缺省值、或运行入参里的图片：`{png}` → 引用。
+fn store_draft_images(draft: &mut AutomationDraft) -> Result<(), String> {
+    for spec in &mut draft.params {
+        if spec.kind == ParamKind::Image {
+            if let Some(default) = &spec.default {
+                spec.default = Some(store_image(default)?);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn store_arg_images(
+    params: &[kotone_core::automation::library::ParamSpec],
+    args: &serde_json::Map<String, Value>,
+) -> Result<serde_json::Map<String, Value>, String> {
+    let mut out = args.clone();
+    for spec in params.iter().filter(|p| p.kind == ParamKind::Image) {
+        if let Some(value) = args.get(&spec.name) {
+            out.insert(spec.name.clone(), store_image(value)?);
+        }
+    }
+    Ok(out)
 }
 
 /// 平均亮度（Rec.601 luma）。
@@ -268,7 +373,67 @@ impl ScriptHost for DesktopHost {
         Ok([r, g, b])
     }
 
-    fn ocr(&self, region: Region) -> Result<Vec<String>, String> {
+    fn pixels(&self, region: Region) -> Result<Pixels, String> {
+        let (crop, origin) = Self::crop_with_origin(&self.capture()?, region);
+        Ok(Pixels {
+            width: crop.width(),
+            height: crop.height(),
+            rgba: crop.pixels().to_vec(),
+            origin,
+        })
+    }
+
+    fn image(&self, id: &str) -> Result<Pixels, String> {
+        if !kotone_core::automation::library::is_image_id(id) {
+            return Err("图片编号不合法".into());
+        }
+        let bytes = std::fs::read(images_dir().join(format!("{id}.png")))
+            .map_err(|e| format!("找不到模板图片（{e}）"))?;
+        let image = kotone_tools::image::decode_png(&bytes, MAX_IMAGE_SIDE)?;
+        Ok(Pixels {
+            width: image.width(),
+            height: image.height(),
+            rgba: image.pixels().to_vec(),
+            origin: Region {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+        })
+    }
+
+    fn mouse(&self, action: MouseAction) -> Result<(), String> {
+        let err = |e: kotone_core::inject::InjectError| e.message;
+        match action {
+            MouseAction::Move { x, y } => {
+                let (px, py) = self.screen_point(x, y)?;
+                inject::mouse_move_to(px, py).map_err(err)
+            }
+            MouseAction::Click {
+                x,
+                y,
+                button,
+                count,
+            } => {
+                let (px, py) = self.screen_point(x, y)?;
+                inject::mouse_move_to(px, py).map_err(err)?;
+                inject::mouse_click(platform_button(button), count).map_err(err)
+            }
+            MouseAction::Down(button) => {
+                inject::mouse_button(platform_button(button), true).map_err(err)?;
+                self.held_buttons.lock().unwrap().push(button);
+                Ok(())
+            }
+            MouseAction::Up(button) => {
+                self.held_buttons.lock().unwrap().retain(|b| *b != button);
+                inject::mouse_button(platform_button(button), false).map_err(err)
+            }
+            MouseAction::Scroll(clicks) => inject::mouse_wheel(clicks).map_err(err),
+        }
+    }
+
+    fn ocr(&self, region: Region) -> Result<Vec<TextLine>, String> {
         let settings = self
             .app
             .state::<crate::SharedState>()
@@ -284,7 +449,7 @@ impl ScriptHost for DesktopHost {
                 info.reason.unwrap_or(info.state)
             ));
         }
-        let crop = Self::crop(&self.capture()?, region);
+        let (crop, origin) = Self::crop_with_origin(&self.capture()?, region);
         let png = if backend.kind() == kotone_core::ocr::OcrBackendKind::Online {
             kotone_tools::image::encode_png(&crop).map_err(|e| e.to_string())?
         } else {
@@ -306,7 +471,21 @@ impl ScriptHost for DesktopHost {
                 Instant::now() + Duration::from_secs(20),
             )
             .map_err(|e| format!("文字识别失败：{e}"))?;
-        Ok(output.observations.into_iter().map(|o| o.text).collect())
+        // 识别框是裁剪图里的像素坐标，换回窗口比例。
+        let (cw, ch) = (f64::from(crop.width()), f64::from(crop.height()));
+        Ok(output
+            .observations
+            .into_iter()
+            .map(|o| TextLine {
+                rect: o.bbox.map(|b| Region {
+                    x: origin.x + b.x / cw * origin.width,
+                    y: origin.y + b.y / ch * origin.height,
+                    width: b.width / cw * origin.width,
+                    height: b.height / ch * origin.height,
+                }),
+                text: o.text,
+            })
+            .collect())
     }
 
     fn say(&self, text: &str) -> Result<(), String> {
@@ -426,7 +605,10 @@ pub fn run_saved(
     let automation = library(app)?
         .get(id)
         .ok_or_else(|| format!("找不到自动化 {id}"))?;
-    let args = validate_args(&automation.params, args)?;
+    let args = validate_args(
+        &automation.params,
+        &store_arg_images(&automation.params, args)?,
+    )?;
     match &automation.action {
         AutomationBody::Program(program) => start(
             app,
@@ -462,6 +644,7 @@ pub fn save(app: &AppHandle, mut draft: AutomationDraft, by: CreatedBy) -> Resul
     if let AutomationBody::Program(program) = &mut draft.action {
         program.source = check_source(&program.source)?.to_string();
     }
+    store_draft_images(&mut draft)?;
     let saved = library(app)?.save(draft, by)?;
     crate::tool_service::publish(
         app,
@@ -528,6 +711,7 @@ fn launch(app: &AppHandle, run: &Run) -> Result<(), String> {
         target: identity,
         started: Instant::now(),
         held: Mutex::new(BTreeSet::new()),
+        held_buttons: Mutex::new(Vec::new()),
         gone: AtomicBool::new(false),
         last_inspect: AtomicU64::new(0),
         cancel: cancel.clone(),

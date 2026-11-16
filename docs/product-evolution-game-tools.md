@@ -456,7 +456,8 @@ Claude Code 应先阅读文档和仓库约定；存在 `.codegraph/` 时先用 C
 - **白名单函数**（初版）：
   - 按键：`key(名)`、`key_down` / `key_up`、`type_text(文字)`；
   - 等待与计时：`wait(ms)`、`every(ms, fn, 选项)`、`wait_until(条件, 选项)`（`stable_frames` 防抖）；
-  - 看屏幕：`region(x, y, w, h)`（窗口客户区比例）、`brightness(区域)`、`color_at(x, y)`、`find_color`、`ocr(区域)`（用陪玩选定的 OCR 模型）、以后补 `find_image`；
+  - 看屏幕：`region(x, y, w, h)`（窗口客户区比例）、`brightness(区域)`、`color_at(x, y)`、`ocr(区域)`（用陪玩选定的 OCR 模型）；找色 / 找图 / 找字 `find_color` / `find_image` / `find_text`（参照 AutoHotkey 的 `PixelSearch` / `ImageSearch`，2026-11-16 已实现）；
+  - 鼠标：`click`、`mouse_move`、`mouse_down` / `mouse_up`、`scroll`（2026-11-16 已实现）；
   - 告诉用户：`say(文字)`（语音）、`toast(文字)`（弹幕）；
   - 前台检查：`game_focused()`。
   - 没有文件、网络、进程、剪贴板读取、配置修改。

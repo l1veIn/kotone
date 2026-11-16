@@ -50,6 +50,14 @@ pub enum ParamKind {
     Region,
     /// 颜色 `{r, g, b}`。
     Color,
+    /// 模板图片（`find_image` 用）：`{image: "<sha256>"}`，指向 `~/.kotone/automation-images/`
+    /// 里的 PNG。提交时可以给 `{png: "<base64>"}`，由桌面端存成文件后换成引用。
+    Image,
+}
+
+/// 图片引用是否合法（64 位小写十六进制 sha256）。
+pub fn is_image_id(id: &str) -> bool {
+    id.len() == 64 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 fn default_text_max() -> u32 {
@@ -224,6 +232,17 @@ fn check_value(spec: &ParamSpec, value: &Value) -> Result<Value, String> {
                 _ => Err(format!("参数 {name} 要是颜色 {{r, g, b}}（0 到 255）")),
             }
         }
+        ParamKind::Image => match value
+            .as_object()
+            .filter(|o| o.len() == 1)
+            .and_then(|o| o.get("image"))
+            .and_then(Value::as_str)
+        {
+            Some(id) if is_image_id(id) => Ok(serde_json::json!({"image": id})),
+            _ => Err(format!(
+                "参数 {name} 要是图片（{{png: base64}}，保存后变成 {{image: <编号>}}）"
+            )),
+        },
     }
 }
 
@@ -540,6 +559,11 @@ mod tests {
         assert!(validate_args(&text, &args(json!({"msg": "你好"}))).is_ok());
         assert!(validate_args(&text, &args(json!({"msg": "你好啊朋友"}))).is_err());
         assert!(validate_args(&text, &args(json!({"msg": "a\nb"}))).is_err());
+        let image = [spec(json!({"name": "icon", "type": "image"}))];
+        let id = "ab".repeat(32);
+        assert!(validate_args(&image, &args(json!({"icon": {"image": id}}))).is_ok());
+        assert!(validate_args(&image, &args(json!({"icon": {"image": "../x"}}))).is_err());
+        assert!(validate_args(&image, &args(json!({"icon": {"png": "AAAA"}}))).is_err());
         let flag = [spec(
             json!({"name": "on", "type": "boolean", "default": false}),
         )];

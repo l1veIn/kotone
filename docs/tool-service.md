@@ -160,15 +160,23 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `automation.delete` | `id` | `deleted`；已安排的执行保存的是快照，照常执行（要取消用 `automation.stop`）。发布 `automation.deleted` |
 | `automation.stop` | 可选 `id` | 有 `id`：取消等待中的或停止运行中的那一条（提醒也可以）。没有 `id`：停止全部运行中的程序并取消全部等待中的程序，**等待中的提醒保留**。返回 `stopped`（涉及条数）；按住的键随即松开 |
 
-**入参**（`params[]`）：每项 `name`（程序里的 `args.<name>`，小写字母开头，只含小写字母、数字、下划线）、可选 `label` / `description` / `default`（没有缺省值 = 必填），`type` 是 `number`（`min`、`max`、`integer`）、`text`（`maxLength` ≤200，不能换行）、`boolean`、`choice`（`options`）、`key`（键名）、`region`（`{x, y, w, h}` 窗口比例，可直接交给 `brightness` / `ocr`）、`color`（`{r, g, b}`）。运行时多给、少给、类型或范围不对都是 `INVALID_ARGUMENTS`，且不留执行记录。程序里 `args` 是只读表。已保存的自动化存在 `~/.kotone/automations.json`。
+**入参**（`params[]`）：每项 `name`（程序里的 `args.<name>`，小写字母开头，只含小写字母、数字、下划线）、可选 `label` / `description` / `default`（没有缺省值 = 必填），`type` 是 `number`（`min`、`max`、`integer`）、`text`（`maxLength` ≤200，不能换行）、`boolean`、`choice`（`options`）、`key`（键名）、`region`（`{x, y, w, h}` 窗口比例，可直接交给 `brightness` / `ocr`）、`color`（`{r, g, b}`）、`image`（`find_image` 的模板：提交 `{png: base64}`，例如 `screen.capture` → `image.crop` → `artifact.get` 拿到的 PNG，≤512×512、≤512 KB；保存为 `~/.kotone/automation-images/<sha256>.png`，参数里换成 `{image: <sha256>}`，执行记录只存引用）。运行时多给、少给、类型或范围不对都是 `INVALID_ARGUMENTS`，且不留执行记录。程序里 `args` 是只读表。已保存的自动化存在 `~/.kotone/automations.json`。
 
 **执行记录**：`id`、`sessionId`（发起方）、`action`（`{kind:"speak", text, delivery}` 或 `{kind:"program", name, source, automationId, args, target:{label,…}}`）、`createdAtMs`、`dueAtMs`、`startedAtMs`、`finishedAtMs`、`status`（`pending` / `running` / `finished` / `failed` / `cancelled` / `missed`）、`message`（失败、停止或错过的原因，如“游戏窗口已关闭”“停止自动化热键”）、`report`（程序：`outcome` 为 `finished` / `stopped` / `limit` / `error`，`keys`、`durationMs`、`log[]`）。每条执行进入终态时发布 `automation.finished`，内容即这条记录（省略 `source`）。
 
 **调度语义**：最多执行一次，**绝不自动重试**；到期超过 120 秒（Kotone 没开、休眠）记为 `missed`，不补执行；Kotone 退出时仍在运行的记录下次启动记为 `failed`；程序在**安排时**记下目标窗口，到点时窗口已关闭则 `failed`，不会改投当时的前台窗口；到点时已有 3 个程序在跑则这次 `failed`，不排队。
 
-**白名单函数**：`key(名)` / `key_down` / `key_up`（键名如 `Q`、`Enter`、`Ctrl+Q`、`F1`）、`type_text(文字)`；`wait(ms)`、`every(ms, fn, {for_ms, times})`（固定节拍、不补拍，`fn` 返回 `false` 结束）、`wait_until(条件, {poll_ms=200, stable_frames=1, timeout_ms})` → 是否满足、`now()`；`region(x, y, w, h)`（窗口客户区比例 0..1）、`brightness(区域)`（0..255）、`color_at(x, y)` → r, g, b、`ocr(区域)` → 只能 `:has(文字)`（跨行、忽略空白与大小写）/ `:count()` 的对象（拿不到原文）；`say(文字)`（语音，等播完）、`toast(文字)`（弹幕，不等）、`log(文字)`、`game_focused()`、`stop()`。没有文件、网络、进程、配置。
+**白名单函数**（坐标一律是游戏窗口客户区比例 0..1，换分辨率仍可用）：
 
-**护栏**：Luau 沙盒（无 `loadstring` / `require` / `io` / `os.execute`，内存 16 MB）；总时长 30 分钟、执行步数上限（死循环会被终止）、最多 10000 次按键、两次按键至少 50 ms；按键与截图只在启动时的游戏窗口处于前台时进行，切走即暂停、切回继续（不补按）；窗口关闭则结束；自动化结束（含出错、超限、停止、Kotone 退出）时松开所有按住的键。停止方式：`automation.stop`、托盘「停止所有自动化」、**停止自动化热键**（`automationStopHotkey`，应用级，默认 `Ctrl+Shift+F12`，Kotone 停止时也有效）。`say` 与 `toast` 走提醒的输出队列：一条弹幕滚完之前，后面的语音会等它。
+- 键盘：`key(名)` / `key_down` / `key_up`（键名如 `Q`、`Enter`、`Ctrl+Q`、`F1`）、`type_text(文字)`；
+- 鼠标：`click(x, y, {button="left"/"right"/"middle", count=1..3})`、`mouse_move(x, y)`、`mouse_down(键)` / `mouse_up(键)`（拖动 = 移动、按下、移动、松开）、`scroll(格数)`（正数向上，±20 以内）；
+- 找色 / 找图 / 找字（参照 AutoHotkey 的 `PixelSearch` / `ImageSearch`）：
+  - `find_color(区域, 颜色, {variation=0, largest=false, min_pixels=1})` → `x, y, 像素数` 或 `nil`：每个通道与目标相差不超过 `variation`（0 = 完全相同）。缺省按从上到下、从左到右返回**第一个**匹配像素；`largest=true` 返回**最大一块相连区域**的中心，适合拿去点击。颜色写 `{r=…, g=…, b=…}` 或 `"#RRGGBB"`；
+  - `find_image(区域, args.<image 参数>, {variation=0, trans=颜色})` → 中心 `x, y`、左上 `x, y` 或 `nil`：按模板原尺寸逐像素比较（不缩放，游戏分辨率或界面缩放变了要重新截模板），`trans` 颜色的模板像素不参与比较（AHK 的 `*TransN`），返回第一个匹配。与 AHK 不同：先返回中心，便于直接 `click`；
+  - `find_text(区域, 文字)` → 文字中心 `x, y` 或 `nil`：对区域做一次 OCR（陪玩选定的模型），跨行、忽略空白与大小写；只匹配一行的一部分时按字符比例估计横向位置；
+- 其他：`wait(ms)`、`every(ms, fn, {for_ms, times})`（固定节拍、不补拍，`fn` 返回 `false` 结束）、`wait_until(条件, {poll_ms=200, stable_frames=1, timeout_ms})` → 是否满足、`now()`；`region(x, y, w, h)`（窗口客户区比例 0..1）、`brightness(区域)`（0..255）、`color_at(x, y)` → r, g, b、`ocr(区域)` → 只能 `:has(文字)` / `:count()` / `:find(文字)`（位置）的对象（拿不到原文）；`say(文字)`（语音，等播完）、`toast(文字)`（弹幕，不等）、`log(文字)`、`game_focused()`、`stop()`。没有文件、网络、进程、配置。
+
+**护栏**：Luau 沙盒（无 `loadstring` / `require` / `io` / `os.execute`，内存 16 MB）；总时长 30 分钟、执行步数上限（死循环会被终止）、最多 10000 次输入（按键与鼠标动作）、两次输入至少 50 ms；输入与截图只在启动时的游戏窗口处于前台时进行，切走即暂停、切回继续（不补按）；窗口关闭则结束；自动化结束（含出错、超限、停止、Kotone 退出）时松开所有按住的键和鼠标键。鼠标移动用 `SendInput` 的绝对坐标（游戏读原始输入也能收到），换算偏差超过 2 像素时用 `SetCursorPos` 校正。停止方式：`automation.stop`、托盘「停止所有自动化」、**停止自动化热键**（`automationStopHotkey`，应用级，默认 `Ctrl+Shift+F12`，Kotone 停止时也有效）。`say` 与 `toast` 走提醒的输出队列：一条弹幕滚完之前，后面的语音会等它。
 
 ### Kotone 陪玩（委托桌面宿主，2026-11-15）
 

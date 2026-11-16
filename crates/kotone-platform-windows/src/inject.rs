@@ -30,8 +30,16 @@ mod windows_imp {
         VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_LEFT, VK_MENU, VK_RETURN, VK_RIGHT,
         VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
     };
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+        MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
+        MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT,
+        MOUSE_EVENT_FLAGS,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowThreadProcessId, IsWindow, SetForegroundWindow,
+        GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindowThreadProcessId, IsWindow,
+        SetCursorPos, SetForegroundWindow, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+        SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
     };
 
     use kotone_core::inject::{
@@ -247,6 +255,90 @@ mod windows_imp {
         };
         record_inject("inject_keys", format!("spec={spec}"), &result);
         result
+    }
+
+    /// 鼠标键。
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum MouseButton {
+        Left,
+        Right,
+        Middle,
+    }
+
+    fn mouse_input(dx: i32, dy: i32, data: i32, flags: MOUSE_EVENT_FLAGS) -> INPUT {
+        INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx,
+                    dy,
+                    mouseData: data as _,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+
+    /// 把鼠标移到屏幕物理像素 (x, y)（自动化的 `mouse_move` / `click`）。用 SendInput 的绝对
+    /// 坐标（虚拟桌面 0..65535），游戏读原始输入也能收到这次移动；移动后核对位置，偏差超过
+    /// 2 像素（DPI 换算不一致等）时用 SetCursorPos 校正。
+    pub fn mouse_move_to(x: i32, y: i32) -> Result<(), InjectError> {
+        let (vx, vy, vw, vh) = unsafe {
+            (
+                GetSystemMetrics(SM_XVIRTUALSCREEN),
+                GetSystemMetrics(SM_YVIRTUALSCREEN),
+                GetSystemMetrics(SM_CXVIRTUALSCREEN).max(2),
+                GetSystemMetrics(SM_CYVIRTUALSCREEN).max(2),
+            )
+        };
+        let nx = ((i64::from(x - vx) * 65_535) / i64::from(vw - 1)) as i32;
+        let ny = ((i64::from(y - vy) * 65_535) / i64::from(vh - 1)) as i32;
+        send_inputs(&[mouse_input(
+            nx,
+            ny,
+            0,
+            MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+        )])?;
+        let mut at = windows::Win32::Foundation::POINT::default();
+        if unsafe { GetCursorPos(&mut at) }.is_ok()
+            && ((at.x - x).abs() > 2 || (at.y - y).abs() > 2)
+        {
+            let _ = unsafe { SetCursorPos(x, y) };
+        }
+        Ok(())
+    }
+
+    /// 在当前位置按下或松开鼠标键。
+    pub fn mouse_button(button: MouseButton, down: bool) -> Result<(), InjectError> {
+        let flags = match (button, down) {
+            (MouseButton::Left, true) => MOUSEEVENTF_LEFTDOWN,
+            (MouseButton::Left, false) => MOUSEEVENTF_LEFTUP,
+            (MouseButton::Right, true) => MOUSEEVENTF_RIGHTDOWN,
+            (MouseButton::Right, false) => MOUSEEVENTF_RIGHTUP,
+            (MouseButton::Middle, true) => MOUSEEVENTF_MIDDLEDOWN,
+            (MouseButton::Middle, false) => MOUSEEVENTF_MIDDLEUP,
+        };
+        send_inputs(&[mouse_input(0, 0, 0, flags)])
+    }
+
+    /// 在当前位置点击 `count` 次：每次按下 → 停一下 → 松开（与按键的按住时长一致）。
+    pub fn mouse_click(button: MouseButton, count: u8) -> Result<(), InjectError> {
+        for i in 0..count.max(1) {
+            if i > 0 {
+                std::thread::sleep(Duration::from_millis(KEY_HOLD_MS));
+            }
+            mouse_button(button, true)?;
+            std::thread::sleep(Duration::from_millis(KEY_HOLD_MS));
+            mouse_button(button, false)?;
+        }
+        Ok(())
+    }
+
+    /// 滚轮：正数向上（远离用户），每格 120。
+    pub fn mouse_wheel(clicks: i32) -> Result<(), InjectError> {
+        send_inputs(&[mouse_input(0, 0, clicks * 120, MOUSEEVENTF_WHEEL)])
     }
 
     /// 只按下（脚本的 `key_down`）：先按修饰键再按主键。调用方负责之后调用 [`key_up`]。
@@ -709,6 +801,29 @@ mod fallback {
 
     pub fn key_up(_key: &str) -> Result<(), InjectError> {
         Err(InjectError::new("key_up 仅 Windows 实现"))
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum MouseButton {
+        Left,
+        Right,
+        Middle,
+    }
+
+    pub fn mouse_move_to(_x: i32, _y: i32) -> Result<(), InjectError> {
+        Err(InjectError::new("鼠标仅 Windows 实现"))
+    }
+
+    pub fn mouse_button(_button: MouseButton, _down: bool) -> Result<(), InjectError> {
+        Err(InjectError::new("鼠标仅 Windows 实现"))
+    }
+
+    pub fn mouse_click(_button: MouseButton, _count: u8) -> Result<(), InjectError> {
+        Err(InjectError::new("鼠标仅 Windows 实现"))
+    }
+
+    pub fn mouse_wheel(_clicks: i32) -> Result<(), InjectError> {
+        Err(InjectError::new("鼠标仅 Windows 实现"))
     }
 
     pub fn is_process_foreground(process_names: &[String]) -> bool {

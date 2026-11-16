@@ -11,6 +11,65 @@ struct Fake {
     /// 在这段时间内游戏不在前台。
     unfocused: (u64, u64),
     screen_text: Vec<String>,
+    /// 带位置的识别结果（设置了就优先于 `screen_text`）。
+    text_lines: Vec<TextLine>,
+    mouse: Mutex<Vec<(u64, MouseAction)>>,
+}
+
+/// 100×50 的测试画面：白底；(10..15, 5..10) 一小块红、(60..80, 20..30) 一大块红；
+/// (90, 40) 一个蓝点；(30..34, 30..34) 一个 4×4 的绿框（中心白）。
+fn scene() -> Pixels {
+    let (w, h) = (100u32, 50u32);
+    let mut rgba = vec![255u8; (w * h * 4) as usize];
+    let mut put = |x: u32, y: u32, c: [u8; 3]| {
+        let i = ((y * w + x) * 4) as usize;
+        rgba[i..i + 3].copy_from_slice(&c);
+    };
+    for y in 5..10 {
+        for x in 10..15 {
+            put(x, y, [200, 30, 30]);
+        }
+    }
+    for y in 20..30 {
+        for x in 60..80 {
+            put(x, y, [204, 28, 33]);
+        }
+    }
+    put(90, 40, [20, 40, 220]);
+    for y in 30..34 {
+        for x in 30..34 {
+            if !(31..33).contains(&x) || !(31..33).contains(&y) {
+                put(x, y, [0, 160, 0]);
+            }
+        }
+    }
+    Pixels {
+        width: w,
+        height: h,
+        rgba,
+        origin: Region {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        },
+    }
+}
+
+/// 从测试画面裁一块当模板。
+fn crop(x0: u32, y0: u32, w: u32, h: u32) -> Pixels {
+    let full = scene();
+    let mut rgba = Vec::new();
+    for y in y0..y0 + h {
+        let i = ((y * full.width + x0) * 4) as usize;
+        rgba.extend_from_slice(&full.rgba[i..i + (w * 4) as usize]);
+    }
+    Pixels {
+        width: w,
+        height: h,
+        rgba,
+        origin: full.origin,
+    }
 }
 
 impl Fake {
@@ -23,6 +82,8 @@ impl Fake {
             dark_from: u64::MAX,
             unfocused: (0, 0),
             screen_text: vec![],
+            text_lines: vec![],
+            mouse: Mutex::default(),
         })
     }
     fn with(f: impl FnOnce(&mut Fake)) -> Arc<Self> {
@@ -68,8 +129,34 @@ impl ScriptHost for Fake {
     fn color_at(&self, _: f64, _: f64) -> Result<[u8; 3], String> {
         Ok([200, 30, 30])
     }
-    fn ocr(&self, _: Region) -> Result<Vec<String>, String> {
-        Ok(self.screen_text.clone())
+    fn pixels(&self, region: Region) -> Result<Pixels, String> {
+        let mut pixels = scene();
+        pixels.origin = region;
+        Ok(pixels)
+    }
+    fn ocr(&self, _: Region) -> Result<Vec<TextLine>, String> {
+        if !self.text_lines.is_empty() {
+            return Ok(self.text_lines.clone());
+        }
+        Ok(self
+            .screen_text
+            .iter()
+            .map(|t| TextLine {
+                text: t.clone(),
+                rect: None,
+            })
+            .collect())
+    }
+    fn image(&self, id: &str) -> Result<Pixels, String> {
+        match id {
+            "red-corner" => Ok(crop(58, 18, 6, 6)),
+            "green-ring" => Ok(crop(30, 30, 4, 4)),
+            _ => Err(format!("没有图片 {id}")),
+        }
+    }
+    fn mouse(&self, action: MouseAction) -> Result<(), String> {
+        self.mouse.lock().unwrap().push((self.now_ms(), action));
+        Ok(())
     }
     fn say(&self, text: &str) -> Result<(), String> {
         self.said.lock().unwrap().push(text.into());
@@ -325,6 +412,195 @@ fn args_are_read_only_values_usable_as_regions_and_keys() {
     // 没有入参时 args 是空表
     let report = go("if args.key == nil then log('empty') end", &Fake::new());
     assert_eq!(report.log, vec!["empty".to_string()]);
+}
+
+fn line(text: &str, x: f64, y: f64, w: f64, h: f64) -> TextLine {
+    TextLine {
+        text: text.into(),
+        rect: Some(Region {
+            x,
+            y,
+            width: w,
+            height: h,
+        }),
+    }
+}
+
+fn logged(source: &str, host: &Arc<Fake>) -> Vec<String> {
+    let report = go(source, host);
+    assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+    report.log
+}
+
+#[test]
+fn find_color_returns_the_first_match_like_pixel_search_or_the_largest_patch() {
+    let host = Fake::new();
+    let log = logged(
+        r##"
+        local all = region(0, 0, 1, 1)
+        local x, y, n = find_color(all, {r = 200, g = 30, b = 30})
+        log(string.format("first %.3f %.3f %d", x, y, n))
+        x, y = find_color(all, {r = 200, g = 30, b = 30}, { variation = 5, largest = true })
+        log(string.format("largest %.3f %.3f", x, y))
+        x = find_color(all, "#CC1C21")
+        log(string.format("hex %.3f", x))
+        if find_color(all, {r = 1, g = 2, b = 3}) == nil then log("none") end
+        "##,
+        &host,
+    );
+    // 第一个红像素是小块的左上角 (10, 5) 的像素中心；完全匹配时大块（204,28,33）不算
+    assert_eq!(log[0], "first 0.105 0.110 1");
+    // 容差 5 时大块也匹配，最大一块是 (60..80, 20..30)，中心 (70, 25)
+    assert_eq!(log[1], "largest 0.700 0.500");
+    assert_eq!(log[2], "hex 0.605");
+    assert_eq!(log[3], "none");
+    let report = go(
+        r##"find_color(region(0, 0, 1, 1), "#14_8DC")"##,
+        &Fake::new(),
+    );
+    assert!(matches!(report.outcome, Outcome::Error(ref m) if m.contains("颜色")));
+    // 区域换算：只看右半边时坐标仍是整个窗口的比例
+    let log = logged(
+        r#"local x = find_color(region(0.5, 0, 0.5, 1), {r = 20, g = 40, b = 220}) log(string.format("%.3f", x))"#,
+        &Fake::new(),
+    );
+    assert_eq!(log[0], format!("{:.3}", 0.5 + 90.5 / 100.0 * 0.5));
+}
+
+#[test]
+fn find_image_matches_a_template_with_variation_and_transparency() {
+    let log = logged(
+        r#"
+        local all = region(0, 0, 1, 1)
+        local cx, cy, lx, ly = find_image(all, { image = "red-corner" })
+        log(string.format("tl %.2f %.2f c %.2f %.2f", lx, ly, cx, cy))
+        cx, cy, lx, ly = find_image(all, { image = "red-corner" }, { variation = 8 })
+        log(string.format("loose %.2f %.2f", lx, ly))
+        cx, cy, lx, ly = find_image(all, { image = "green-ring" }, { trans = {r = 255, g = 255, b = 255} })
+        log(string.format("ring %.2f %.2f", lx, ly))
+        "#,
+        &Fake::new(),
+    );
+    // 模板取自大块 (204,28,33) 的左上角（带两格白边）：完全匹配只在那里
+    assert_eq!(log[0], "tl 0.58 0.36 c 0.61 0.42");
+    // 容差 8 时小块 (200,30,30) 也算匹配，按“第一个匹配”先找到更靠上的小块
+    assert_eq!(log[1], "loose 0.08 0.06");
+    // 透明色（白）不参与比较：只比较绿框本身
+    assert_eq!(log[2], "ring 0.30 0.60");
+    for bad in [
+        r#"find_image(region(0,0,1,1), { image = "missing" })"#,
+        r#"find_image(region(0,0,1,1), { png = "abc" })"#,
+    ] {
+        assert!(
+            matches!(go(bad, &Fake::new()).outcome, Outcome::Error(_)),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn find_text_returns_where_the_text_is() {
+    let host = Fake::with(|f| {
+        f.text_lines = vec![
+            line("[全部] 敌方: 投降吧", 0.1, 0.8, 0.4, 0.05),
+            line("找到", 0.40, 0.40, 0.10, 0.06),
+            line("对局", 0.52, 0.40, 0.10, 0.06),
+            line("接受 拒绝", 0.40, 0.60, 0.20, 0.06),
+        ]
+    });
+    let log = logged(
+        r#"
+        local all = region(0, 0, 1, 1)
+        local x, y = find_text(all, "找到对局")
+        log(string.format("split %.2f %.2f", x, y))
+        x, y = find_text(all, "拒绝")
+        log(string.format("part %.2f %.2f", x, y))
+        if find_text(all, "开始") == nil then log("none") end
+        local t = ocr(all)
+        x, y = t:find("接受")
+        log(string.format("method %.2f", x))
+        if t:has("投降") then log("has") end
+        "#,
+        &host,
+    );
+    // 跨两行：取两行外接框 (0.40..0.62) 的中心
+    assert_eq!(log[0], "split 0.51 0.43");
+    // 一行里的后半段：“接受拒绝”四个字里的第 3–4 个，中心在 0.40 + 0.20 × 3/4
+    assert_eq!(log[1], "part 0.55 0.63");
+    assert_eq!(log[2], "none");
+    assert_eq!(log[3], "method 0.45");
+    assert_eq!(log[4], "has");
+    // 模型不给位置时如实报错
+    let host = Fake::with(|f| f.screen_text = vec!["找到对局".into()]);
+    let report = go(r#"find_text(region(0,0,1,1), "找到")"#, &host);
+    assert!(matches!(report.outcome, Outcome::Error(ref m) if m.contains("位置")));
+}
+
+#[test]
+fn mouse_actions_use_window_ratios_and_share_the_input_guards() {
+    let host = Fake::with(|f| f.unfocused = (1_200, 2_000));
+    let report = go(
+        r#"
+        click(0.5, 0.25)
+        click(0.1, 0.9, { button = "right", count = 2 })
+        mouse_move(0.2, 0.2) mouse_down() mouse_move(0.8, 0.2) mouse_up()
+        scroll(-3)
+        "#,
+        &host,
+    );
+    assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+    let actions: Vec<MouseAction> = host.mouse.lock().unwrap().iter().map(|m| m.1).collect();
+    assert_eq!(
+        actions,
+        vec![
+            MouseAction::Click {
+                x: 0.5,
+                y: 0.25,
+                button: MouseButton::Left,
+                count: 1
+            },
+            MouseAction::Click {
+                x: 0.1,
+                y: 0.9,
+                button: MouseButton::Right,
+                count: 2
+            },
+            MouseAction::Move { x: 0.2, y: 0.2 },
+            MouseAction::Down(MouseButton::Left),
+            MouseAction::Move { x: 0.8, y: 0.2 },
+            MouseAction::Up(MouseButton::Left),
+            MouseAction::Scroll(-3),
+        ]
+    );
+    // 与按键共用：最小间隔、失焦暂停、计数
+    // mouse_up 与 key_up 一样随时可以发（不等间隔、不等前台），不在检查范围内
+    let times: Vec<u64> = host
+        .mouse
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|m| !matches!(m.1, MouseAction::Up(_)))
+        .map(|m| m.0)
+        .collect();
+    assert!(times.windows(2).all(|w| w[1] - w[0] >= 50), "{times:?}");
+    assert!(
+        times.iter().all(|t| !(1_200..2_000).contains(t)),
+        "{times:?}"
+    );
+    assert_eq!(report.keys, 6, "mouse_up 不计数");
+    for bad in [
+        "click(1.2, 0.5)",
+        "click(0.5, 0.5, { button = 'back' })",
+        "click(0.5, 0.5, { count = 5 })",
+        "scroll(0)",
+        "scroll(50)",
+        "mouse_move(0/0, 0.5)",
+    ] {
+        assert!(
+            matches!(go(bad, &Fake::new()).outcome, Outcome::Error(_)),
+            "{bad}"
+        );
+    }
 }
 
 #[test]

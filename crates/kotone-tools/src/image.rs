@@ -208,6 +208,50 @@ pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, ImageError> {
     Ok(out)
 }
 
+/// 标准 base64（带或不带填充）解码。
+pub fn decode_base64(text: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(text)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(text))
+        .map_err(|e| e.to_string())
+}
+
+/// 解码 PNG 为 RGBA8（灰度、RGB、带透明、调色板、16 位都转换成 8 位 RGBA）。
+/// `max_side` 限制宽高，防止解码超大图片。
+pub fn decode_png(bytes: &[u8], max_side: u32) -> Result<RgbaImage, String> {
+    let mut decoder = png::Decoder::new(bytes);
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder
+        .read_info()
+        .map_err(|e| format!("PNG 无法读取：{e}"))?;
+    let (width, height) = (reader.info().width, reader.info().height);
+    if width == 0 || height == 0 || width > max_side || height > max_side {
+        return Err(format!(
+            "图片尺寸 {width}×{height} 超出范围（最大 {max_side}×{max_side}）"
+        ));
+    }
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let frame = reader
+        .next_frame(&mut buf)
+        .map_err(|e| format!("PNG 无法解码：{e}"))?;
+    let data = &buf[..frame.buffer_size()];
+    let rgba: Vec<u8> = match frame.color_type {
+        png::ColorType::Rgba => data.to_vec(),
+        png::ColorType::Rgb => data
+            .chunks_exact(3)
+            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .collect(),
+        png::ColorType::GrayscaleAlpha => data
+            .chunks_exact(2)
+            .flat_map(|p| [p[0], p[0], p[0], p[1]])
+            .collect(),
+        png::ColorType::Grayscale => data.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        png::ColorType::Indexed => return Err("PNG 调色板未能展开".into()),
+    };
+    RgbaImage::new(width, height, rgba).map_err(|e| e.to_string())
+}
+
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut out = String::with_capacity(64);
@@ -232,6 +276,17 @@ pub(crate) fn coordinate_fixture(width: u32, height: u32) -> RgbaImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn png_round_trips_and_oversized_images_are_refused() {
+        let image = RgbaImage::new(3, 2, (0..24).map(|i| i as u8 * 10).collect()).unwrap();
+        let png = encode_png(&image).unwrap();
+        let back = decode_png(&png, 16).unwrap();
+        assert_eq!((back.width(), back.height()), (3, 2));
+        assert_eq!(back.pixels(), image.pixels());
+        assert!(decode_png(&png, 2).unwrap_err().contains("超出范围"));
+        assert!(decode_png(b"not a png", 16).is_err());
+    }
 
     #[test]
     fn new_rejects_bad_buffers() {
