@@ -7,6 +7,7 @@ members = ["apps/desktop/src-tauri", "crates/*"]
 # 内部 crate（路径相对 workspace 根）
 kotone-core = { path = "crates/kotone-core" }
 kotone-ai = { path = "crates/kotone-ai" }
+kotone-agent = { path = "crates/kotone-agent" }
 kotone-tts = { path = "crates/kotone-tts" }
 kotone-postprocess = { path = "crates/kotone-postprocess" }
 kotone-stt = { path = "crates/kotone-stt" }

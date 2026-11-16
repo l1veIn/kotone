@@ -142,7 +142,13 @@ impl ToolPort for FakeTools {
             .collect()
     }
 
-    async fn call(&self, name: &str, arguments: Value, _cancel: &CancellationToken) -> ToolOutcome {
+    async fn call(
+        &self,
+        _call_id: &str,
+        name: &str,
+        arguments: Value,
+        _cancel: &CancellationToken,
+    ) -> ToolOutcome {
         self.log
             .lock()
             .unwrap()

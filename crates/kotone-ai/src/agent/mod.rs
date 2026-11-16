@@ -232,10 +232,12 @@ impl ToolOutcome {
 pub trait ToolPort: Send + Sync {
     fn definitions(&self) -> Vec<ToolDef>;
 
+    /// `call_id` 是模型给的工具调用 id（询问权限时界面据此找到对应的工具卡片）；
     /// `arguments` 已确认是 JSON 对象。实现应尊重 `cancel`；循环也会在取消时
     /// 直接丢弃这个 future。
     fn call(
         &self,
+        call_id: &str,
         name: &str,
         arguments: Value,
         cancel: &CancellationToken,
@@ -826,7 +828,7 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
                                 interrupted = Some(StopReason::Cancelled);
                                 ToolOutcome::error("已停止（执行中被取消）")
                             }
-                            r = tokio::time::timeout_at(deadline, tools.call(&call.name, arguments, cancel)) => match r {
+                            r = tokio::time::timeout_at(deadline, tools.call(&call.id, &call.name, arguments, cancel)) => match r {
                                 Ok(outcome) => outcome,
                                 Err(_) => {
                                     interrupted = Some(StopReason::TimeLimit);

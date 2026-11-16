@@ -2524,6 +2524,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kotone-agent"
+version = "0.1.0"
+dependencies = [
+ "kotone-ai",
+ "kotone-core",
+ "kotone-tools",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+]
+
+[[package]]
 name = "kotone-ai"
 version = "0.1.0"
 dependencies = [
