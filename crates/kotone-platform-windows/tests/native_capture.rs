@@ -622,3 +622,49 @@ impl ForegroundTitle for WindowsWindowObserver {
         self.foreground_window().ok().flatten().map(|w| w.title)
     }
 }
+
+// ---------- 游戏场景的窗口操作（game_window，ADR 014 第 5 步） ----------
+
+#[test]
+fn game_window_close_posts_a_normal_close_request() {
+    use kotone_platform_windows::game_window;
+    let window = TestWindow::open(false);
+    let handle = window.find().identity.handle;
+    game_window::close_window(handle).expect("WM_CLOSE");
+    assert!(
+        wait_until(
+            || !WindowsWindowObserver
+                .list_windows()
+                .unwrap()
+                .iter()
+                .any(|w| w.title == window.title),
+            Duration::from_secs(3)
+        ),
+        "窗口应在收到关闭请求后消失"
+    );
+    // 已关闭的窗口：明确报错，不假装成功。
+    assert!(game_window::close_window(handle).is_err());
+    assert!(game_window::focus_window(handle).is_err());
+}
+
+#[test]
+#[ignore = "需要交互式桌面，并会短暂把受控测试窗口切到前台"]
+fn game_window_focus_restores_a_minimized_window_to_the_front() {
+    use kotone_platform_windows::game_window;
+    let window = TestWindow::open(true);
+    let previous = unsafe { GetForegroundWindow() };
+    unsafe {
+        let _ = ShowWindow(window.hwnd, SW_SHOWMINNOACTIVE);
+    }
+    assert!(wait_until(
+        || window.find().minimized,
+        Duration::from_secs(2)
+    ));
+    let result = game_window::focus_window(window.hwnd.0 as u64);
+    let focused = foreground() == window.hwnd.0 as isize;
+    let minimized = window.find().minimized;
+    restore_foreground(previous);
+    result.expect("focus_window");
+    assert!(focused, "目标窗口应在前台");
+    assert!(!minimized, "最小化的窗口应被还原");
+}
