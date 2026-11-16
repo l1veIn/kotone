@@ -22,6 +22,38 @@ pub fn completions_url(base_url: &str) -> String {
     format!("{}/chat/completions", base_url.trim().trim_end_matches('/'))
 }
 
+/// POST one chat-completions request and map transport / HTTP failures to
+/// messages that never echo the provider body or the authenticated URL. The
+/// caller reads (and bounds) the response body.
+pub(crate) async fn send(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: Option<&str>,
+    body: &Value,
+) -> Result<reqwest::Response, AiError> {
+    let mut builder = client.post(completions_url(base_url)).json(body);
+    if let Some(key) = api_key.map(str::trim).filter(|key| !key.is_empty()) {
+        builder = builder.bearer_auth(key);
+    }
+    let response = builder.send().await.map_err(|e| {
+        AiError::Failed(
+            if e.is_timeout() {
+                "AI 请求超时"
+            } else {
+                "AI 连接失败，请检查接口地址与网络"
+            }
+            .into(),
+        )
+    })?;
+    if !response.status().is_success() {
+        return Err(AiError::Failed(format!(
+            "AI 接口返回 HTTP {}，请检查连接、模型和服务商状态",
+            response.status().as_u16()
+        )));
+    }
+    Ok(response)
+}
+
 /// Request and response reads are cancellable and bounded. Never include a
 /// provider response body or authenticated URL in a persisted error message.
 pub async fn chat_json(
@@ -32,26 +64,7 @@ pub async fn chat_json(
     cancel: &CancellationToken,
 ) -> Result<Value, AiError> {
     let request = async {
-        let mut builder = client.post(completions_url(base_url)).json(&body);
-        if let Some(key) = api_key.map(str::trim).filter(|key| !key.is_empty()) {
-            builder = builder.bearer_auth(key);
-        }
-        let mut response = builder.send().await.map_err(|e| {
-            AiError::Failed(
-                if e.is_timeout() {
-                    "AI 请求超时"
-                } else {
-                    "AI 连接失败，请检查接口地址与网络"
-                }
-                .into(),
-            )
-        })?;
-        if !response.status().is_success() {
-            return Err(AiError::Failed(format!(
-                "AI 接口返回 HTTP {}，请检查连接、模型和服务商状态",
-                response.status().as_u16()
-            )));
-        }
+        let mut response = send(client, base_url, api_key, &body).await?;
         if response
             .content_length()
             .is_some_and(|n| n > MAX_RESPONSE_BYTES as u64)
