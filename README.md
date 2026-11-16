@@ -100,7 +100,8 @@ https://github.com/user-attachments/assets/b0b9a55f-9d74-4bdc-ba55-de02883a8d7f
 - 🌙 **电竞悬浮窗** — 卡片 / 胶囊两种样式，整面可拖动并记忆位置，鼠标点击穿透；流式引擎实时出字，非流式引擎显示声波动画。
 - 🕘 **历史与回放** — 历史可关闭或清理；开启“保存录音”后，新记录可回放原始音频。空转写不发送，并给出提示。
 - 🔒 **本地优先** — 默认本地识别，录音保存默认关闭；可选网络服务的数据边界公开，诊断包由你主动导出分享。
-- ⏰ **提醒助手** — 到时提醒屏幕前的你，例如“该打小龙了”。启动后用独立助手热键说话，交互模式独立配置、默认对讲机；也可直接输入文字。默认 Windows 系统语音，无需下载 TTS 模型；Kokoro 中文语音为可选项，首次手动下载约 147 MB。另有可调速度、字号、颜色与琴音表情的右向左滚动弹幕。使用方法见 [提醒助手](docs/assistant.md)。
+- 🤖 **琴音 Agent** — 内置的游戏 Agent：在聊天窗口里打字，或在游戏里按住陪玩热键说一句话，琴音会看聊天、替你在游戏里发言、设提醒、运行和编写自动化、打开或切换游戏；有风险的操作先问你。游戏内的回答用语音或弹幕播出（默认 Windows 系统语音，可选 Kokoro 本地中文语音与在线语音）。需要你自己的 AI 连接。使用方法见 [琴音](docs/assistant.md)。
+- ⚙️ **自动化** — 沙盒里的小程序替你按键、点鼠标、找色找图找字，带延迟、绑定游戏窗口、最多执行一次、随时可停；可以保存、带参数，绑到快捷指令热键上直接运行。
 
 <br>
 
@@ -110,7 +111,7 @@ https://github.com/user-attachments/assets/b0b9a55f-9d74-4bdc-ba55-de02883a8d7f
 
 Kotone 因此不只是一个给人点的桌面应用，也是一组给 Agent 调用的本机基础服务。人类仍可以按住热键说话、在设置页里点选；同样的能力会逐步以带 schema、可发现、结果可验证的工具开放出来，由 Agent 决定何时用、怎么组合、如何向你解释。Kotone 负责把事情确定地做完并如实报告结果；理解意图、翻译、决策交给 Agent。
 
-- **现在**：可选的本机工具服务（默认关闭，`toolService.enabled`）已提供窗口与截图、裁剪与预处理、本地韩文 OCR / 在线 OCR、聊天消息跟踪；Agent 能后台启动 / 退出 Kotone，并能收到你经 Kotone 说给它的话——把助手设为转交 Agent（`assistant.route agent`）后，按住助手热键说“我队友在说啥？”，Agent 就会处理并用语音或弹幕回答你。接入方式：命令行（安装版 `kotone.exe <子命令>`，与开发用 `kotone-cli` 相同）、MCP（`kotone.exe mcp`）、DSH 插件（独立仓库 `dsh-game-communicate`）、[Agent Skill](integrations/skills/kotone/SKILL.md)。见 [工具服务手册](docs/tool-service.md)。
+- **现在**：Kotone 自带一个游戏 Agent（琴音），同时把同一套 75 个工具开放给外部 Agent（工具服务默认不对外监听，`toolService.enabled` 打开）：窗口与截图、裁剪与预处理、多语种 OCR、聊天消息跟踪、自动化、打开 / 切换 / 关闭游戏、设置与模型等全部配置。外部 Agent 能后台启动 / 退出 Kotone，并能收到你经 Kotone 说给它的话——把助手设为转交 Agent（`assistant.route agent`）后，按住助手热键说“我队友在说啥？”，Agent 就会处理并用语音或弹幕回答你。接入方式：命令行（安装版 `kotone.exe <子命令>`，与开发用 `kotone-cli` 相同）、MCP（`kotone.exe mcp`）、DSH 插件（独立仓库 `dsh-game-communicate`）、[Agent Skill](integrations/skills/kotone/SKILL.md)。见 [工具服务手册](docs/tool-service.md)。
 - **接下来**：把 Kotone 其余的经典业务（语音识别、文本处理、游戏发送、播报与弹幕、提醒、热键、设置、连接、模型、历史、诊断）全部拆成基础服务，全部开放、不设授权分级。路线见 [演进计划](docs/product-evolution-game-tools.md)。
 
 <br>
@@ -173,11 +174,13 @@ apps/desktop            Tauri 桌面应用（Svelte 5 前端 + Rust 后端）
 crates/kotone-core      会话编排、配置、历史、profile 的领域核心
 crates/kotone-stt       识别适配器、模型清单与下载
 crates/kotone-tts       可选 Kokoro 本地语音合成与播放
-crates/kotone-ai        AI 连接、凭据、HTTP 与助手工具调用
+crates/kotone-ai        AI 连接、凭据、HTTP 与内置 Agent 循环（模型通信经 rig-core）
+crates/kotone-agent     内置 Agent 的工具清单、权限与系统提示
+crates/kotone-script    自动化的 Luau 沙盒运行时
 crates/kotone-postprocess  文本过滤、润色、翻译处理器
 crates/kotone-platform-windows  全局热键、窗口注入、提权、窗口观察与截图等 Windows 平台能力
 crates/kotone-tools     本机 Agent 工具服务：协议、产物、预处理、聊天跟踪、HTTP 服务端/客户端
-crates/kotone-ocr       OCR 后端：本地韩文 PP-OCRv5 与 DeepSeek 在线 OCR、模型安装
+crates/kotone-ocr       OCR 后端：本地多语种 PP-OCRv5 与 DeepSeek 在线 OCR、模型安装
 crates/kotone-cli       命令行前端（自动化测试、无人值守入口、工具服务客户端）
 docs/                   ADR、CLI 参考、发布检查单、评测手册
 ```

@@ -10,7 +10,9 @@
 | `kotone-tts` | Kokoro 模型推理、音色映射、音频播放与取消 | 实现 core 的 SpeechOutput，复用 sherpa-onnx；独立于 ASR 的 registry 和生命周期 |
 | `kotone-stt` | sherpa 流式/非流式、在线 ASR、mock、模型清单和下载、VAD | 依赖 core；模型家族通过配方接入现有运行时，避免每个模型新建引擎 |
 | `kotone-platform-windows` | 采音、热键、输入注入、前台窗口与提权、系统语音能力、窗口观察与 GDI 前台客户区捕获、工具服务私有描述文件 | 实现 core 端口，Windows API 与所需 `windows` features 留在此层 |
-| `kotone-ai` | 共享 AI 连接、凭据和请求能力 | 为后处理与助手提供可复用服务边界；不承担输入注入或会话 UI |
+| `kotone-ai` | 共享 AI 连接、凭据和请求能力；内置 Agent 循环（`agent`：多步工具调用、流式、上限与取消、插话、对话存储；模型通信经 rig-core） | 为后处理、助手与 Agent 提供可复用服务边界；循环只经 `ModelClient` / `ToolPort` 端口认识模型与工具，rig 只出现在 `agent/model.rs`；不承担输入注入或会话 UI |
+| `kotone-agent` | 内置 Agent 的 Kotone 专属层：工具清单（工具服务 + 内置动作 + 已保存自动化）、分组与 `tools.find`、权限（允许 / 询问 / 禁止、模式）、系统提示 | 依赖 core / ai / tools，不依赖 Tauri 或 Windows API；播报、提醒、打字与询问界面经 `BuiltinHost` / `Asker` 端口由桌面壳注入 |
+| `kotone-script` | 自动化的 Luau 沙盒运行时（白名单函数、步数 / 时长 / 输入上限） | 不依赖 core 或 Windows；键鼠、截图与 OCR 经宿主端口由桌面壳实现 |
 | `kotone-postprocess` | 过滤、润色、翻译等具体文本处理器和注册 | 依赖 core/AI 服务；不修改 STT 或 Injector 的职责 |
 | `kotone-tools` | 本机 Agent 工具服务：v1 协议信封、能力目录、不可变图像产物存储、预处理、驻留 OCR 结果、聊天消息跟踪、事件总线与用户请求、loopback HTTP 服务端/客户端、实例发现 | 依赖 core 的 `tools`/`ocr` 端口与 HTTP 库，不依赖 Windows API、ONNX 或 Tauri；窗口/捕获/私有文件/OCR 后端与应用级能力（`AppHost`）由调用方注入 |
 | `kotone-ocr` | OCR 后端：本地韩文 PP-OCRv5（ONNX Runtime C API）、模型清单/安装/就绪校验、DeepSeek 在线 OCR | 实现 core 的 `ocr` 端口；本地推理（`onnx` feature）链接 sherpa-onnx 预编译包内的 ONNX Runtime，不新增原生库；在线后端只经注入的连接解析获取地址与 key |
