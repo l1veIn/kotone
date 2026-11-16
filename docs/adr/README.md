@@ -15,4 +15,5 @@ ADR 保留当时的上下文和选择，状态决定其适用性。当前架构�
 | [009 后处理](009-post-processing-pipeline.md) | Amended / 已修订 | 连接、密钥、schema、在线处理与双文本已实现，共享AI层抽出 |
 | [010 提示音](010-sound-feedback.md) | Accepted / 已采纳 | 已随 0.1.9 发布；与 TTS 不是同一能力 |
 | [011 评测身份](011-eval-target-identity.md) | Accepted / 已采纳 | 明确模型与配置、源指纹和独占评测资源 |
-| [012 提醒助手](012-reminder-assistant.md) | Accepted / 已采纳 | 独立入口、受限 AI 工具、本地调度、系统语音和弹幕 |
+| [012 提醒助手](012-reminder-assistant.md) | Amended / 已修订 | 独立入口、受限 AI 工具、系统语音和弹幕保留；调度并入自动化（ADR-013） |
+| [013 自动化领域模型](013-automation-domain-model.md) | Accepted / 已采纳 | 定义 / 触发 / 执行记录三层，一个调度器，提醒 = 延迟 + 播报；最多一次、错过不补 |

@@ -1,6 +1,6 @@
 # ADR 012：独立提醒助手与本地交付
 
-- 状态：Accepted / 已采纳
+- 状态：Amended / 已修订（2026-11-16）：提醒不再有独立调度器，成为“延迟 + 播报”的自动化，见 [ADR 013](013-automation-domain-model.md)；交付、语音与弹幕规则不变
 - 参考：[Sokuji 对照研究](../research-sokuji.md)
 
 ## 问题

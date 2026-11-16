@@ -25,6 +25,8 @@
 | 助手交互模式 / Assistant interaction mode | `AssistantInteractionMode`, `assistant.interactionMode` | 与游戏输入独立的对讲机、录音笔、说一句就走三种模式，默认对讲机，热键默认未绑定；录音笔确认提交给助手，其余模式按各自结束规则提交，不走游戏发送出口。旧助手独奏配置兼容为对讲机。 |
 | 提醒 / Reminder | `ReminderIntent`, `Reminder`, `ReminderScheduler` | 一次性的内容、到期时间、输出方式和状态；输出采用简短正文，不附称呼或开场白。本机保存，应用未退出时调度，停止语音运行时不停止既有提醒；不等于系统级闹钟。 |
 | 语音播报 / Text to speech (TTS) | `SpeechOutput`, `SpeechRequest`, `SpeechVoice` | 文本转成可听语音，默认 Windows SAPI 声音，无需下载 Kotone TTS 模型；Kokoro 中文模型可选、手动下载。与 STT、提示音分开。 |
+| 自动化 / Automation | `automation.*`、`kotone-script` | 替用户持续或稍后做事：**定义**（名字、入参、动作）+ **触发**（立即 / 延迟 / 指定时刻 / 热键）+ **执行记录**。动作是“播报”或“程序”（沙盒 Luau）。提醒是“延迟 + 播报”的自动化（ADR-013）。用户可见处不叫“脚本”。 |
+| 执行记录 / Automation run | `automation.runs` | 一次执行：入参、目标窗口、到期时间、状态（等待中 / 运行中 / 完成 / 失败 / 取消 / 错过）、日志。最多执行一次，不自动重试，错过不补。 |
 | 漂浮弹幕 / Danmaku | `DeliveryKind::Danmaku`, `DanmakuPresentation`, `ReminderDelivery` | 到期时从右向左滑动的单行桌面文字，可带小表情前缀；窗口透明、无底板、点击穿透。速度以 CSS 像素/秒定义，按实际条宽计算时长；不是聊天室消息，不能保证覆盖独占全屏游戏。 |
 
 ## 本机工具服务
