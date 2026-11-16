@@ -14,7 +14,9 @@ use kotone_tools::protocol::ToolCallRequest;
 use kotone_tools::ToolService;
 use serde_json::{json, Value};
 
-use crate::catalog::{Catalog, Source, ToolEntry, GROUPS, TOOL_GAME_CHAT, TOOL_REMIND, TOOL_SAY};
+use crate::catalog::{
+    Catalog, Source, ToolEntry, GAME_TOOLS, GROUPS, TOOL_GAME_CHAT, TOOL_REMIND, TOOL_SAY,
+};
 use crate::permissions::{
     self, Answer, Asker, Decide, Decision, Grants, PermissionRequest, Policy,
 };
@@ -60,7 +62,18 @@ impl Session {
     }
 }
 
+/// 交给模型的工具范围。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Scope {
+    /// 常用工具 + 已保存的自动化 + 经 `tools.find` 启用的工具。
+    #[default]
+    Full,
+    /// 游戏内快速模式：只有 [`GAME_TOOLS`] 与已保存的自动化。
+    Game,
+}
+
 pub struct KotonePort<H, A> {
+    scope: Scope,
     service: Arc<ToolService>,
     catalog: Catalog,
     policy: Policy,
@@ -79,12 +92,28 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
         asker: A,
     ) -> Self {
         Self {
+            scope: Scope::Full,
             service,
             catalog,
             policy,
             session,
             host,
             asker,
+        }
+    }
+
+    pub fn with_scope(mut self, scope: Scope) -> Self {
+        self.scope = scope;
+        self
+    }
+
+    fn offered(&self, entry: &ToolEntry, active: &std::collections::BTreeSet<String>) -> bool {
+        match self.scope {
+            Scope::Full => Catalog::is_core(entry) || active.contains(&entry.name),
+            Scope::Game => {
+                GAME_TOOLS.contains(&entry.name.as_str())
+                    || matches!(entry.source, Source::Saved { .. })
+            }
         }
     }
 
@@ -252,7 +281,7 @@ impl<H: BuiltinHost, A: Asker> ToolPort for KotonePort<H, A> {
         self.catalog
             .entries()
             .iter()
-            .filter(|e| Catalog::is_core(e) || active.contains(&e.name))
+            .filter(|e| self.offered(e, &active))
             .filter(|e| {
                 // 只读模式 / 用户禁止的工具不交给模型，免得白白调用。
                 !matches!(self.policy.decide(e, &Value::Null), Decision::Deny { .. })
@@ -272,7 +301,8 @@ impl<H: BuiltinHost, A: Asker> ToolPort for KotonePort<H, A> {
         arguments: Value,
         cancel: &CancellationToken,
     ) -> ToolOutcome {
-        let Some(entry) = self.catalog.get(name) else {
+        let active = self.session.active.lock().unwrap().clone();
+        let Some(entry) = self.catalog.get(name).filter(|e| self.offered(e, &active)) else {
             return ToolOutcome::error(format!("没有名为 {name} 的可用工具"));
         };
         match self

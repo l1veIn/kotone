@@ -253,6 +253,29 @@ fn saved_automation_becomes_a_typed_tool() {
     assert!(saved_entry(&speak).unwrap().description.contains("播报"));
 }
 
+#[tokio::test]
+async fn game_scope_offers_only_game_tools_and_saved_automations() {
+    let f = fixture(Policy::default(), Answer::Deny);
+    // 在完整模式里先启用一个工具，游戏模式也不应该看到它。
+    call(&f.port, "tools.find", json!({"group": "models"})).await;
+    let port = f.port.with_scope(crate::Scope::Game);
+    let offered = names(&port);
+    for name in crate::catalog::GAME_TOOLS {
+        assert!(offered.contains(&name.to_string()), "{name}");
+    }
+    assert!(offered.contains(&"saved.auto-1".to_string()));
+    for hidden in [
+        "tools.find",
+        "automation.save",
+        "models.download",
+        "window.active",
+    ] {
+        assert!(!offered.contains(&hidden.to_string()), "{hidden}");
+    }
+    let out = call(&port, "models.download", json!({})).await;
+    assert!(out.is_error);
+}
+
 // ---------- 权限规则 ----------
 
 fn entry<'a>(f: &'a Fixture, name: &str) -> &'a crate::catalog::ToolEntry {
@@ -373,6 +396,8 @@ async fn read_tools_run_through_the_tool_service_without_asking() {
 #[tokio::test]
 async fn risky_tools_ask_and_respect_the_answer() {
     let f = fixture(Policy::default(), Answer::Deny);
+    // 设置类工具要先查找才可用（不在常用工具里）。
+    call(&f.port, "tools.find", json!({"query": "settings.update"})).await;
     let out = call(&f.port, "settings.update", json!({"patch": {}})).await;
     assert!(out.is_error && out.content.contains("拒绝"));
     assert!(f.host.invocations().is_empty(), "denied call must not run");
@@ -382,6 +407,7 @@ async fn risky_tools_ask_and_respect_the_answer() {
     assert_eq!(asked[0].reason, "会修改设置");
 
     let f = fixture(Policy::default(), Answer::AllowForConversation);
+    call(&f.port, "tools.find", json!({"query": "settings.update"})).await;
     call(&f.port, "settings.update", json!({"patch": {}})).await;
     call(&f.port, "settings.update", json!({"patch": {}})).await;
     assert_eq!(

@@ -166,9 +166,13 @@ pub fn prepare_model_migration(
     Ok(guard)
 }
 
-/// 助手入口的请求去向：默认交给 Kotone 陪玩（截图 + OCR + 一次大模型调用，提醒 / 打字 /
-/// 回答三选一）；`assistant.route = agent` 时原文转交外部 Agent（经工具服务发布
-/// `user.request`）。热键语音与文字入口都经过这里，因此两者行为一致。
+/// 助手入口的请求去向：
+/// - 默认交给内置琴音 Agent（`agent.inGame`，ADR 014 §4）：立即返回，结果在后台播出；
+/// - `agent.inGame = false` 时用旧的单次陪玩（截图 + OCR + 一次大模型调用，提醒 / 打字 /
+///   回答三选一）；
+/// - `assistant.route = agent` 时原文转交外部 Agent（经工具服务发布 `user.request`）。
+///
+/// 热键语音与文字入口都经过这里，因此两者行为一致。
 struct RoutingHandler {
     app: AppHandle,
     settings: Arc<RwLock<Settings>>,
@@ -191,7 +195,30 @@ impl AssistantHandler for RoutingHandler {
         request: AssistantRequest,
         cancel: CancellationToken,
     ) -> kotone_core::assistant::AssistantFuture<'_> {
-        let route = self.settings.read().unwrap().assistant.route;
+        let (route, in_game) = {
+            let settings = self.settings.read().unwrap();
+            (settings.assistant.route, settings.agent.in_game)
+        };
+        if route != kotone_core::assistant::AssistantRoute::Agent && in_game {
+            return Box::pin(async move {
+                if cancel.is_cancelled() {
+                    return Err("助手指令已取消".into());
+                }
+                let message = crate::agent::submit_from_assistant(
+                    &self.app,
+                    request.text,
+                    match request_source(&request.session_id) {
+                        "assistant-text" => "assistant-text",
+                        "tool" => "tool",
+                        _ => "voice",
+                    },
+                )?;
+                Ok(AssistantPlan {
+                    message,
+                    reminders: vec![],
+                })
+            });
+        }
         if route != kotone_core::assistant::AssistantRoute::Agent {
             let source = match request_source(&request.session_id) {
                 "assistant-text" => crate::companion::Source::Text,

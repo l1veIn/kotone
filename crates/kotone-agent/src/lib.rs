@@ -15,7 +15,7 @@ pub mod prompt;
 
 pub use catalog::Catalog;
 pub use permissions::{Answer, Asker, Decide, Mode, PermissionRequest, Policy, Rule};
-pub use port::{BuiltinHost, KotonePort, Session};
+pub use port::{BuiltinHost, KotonePort, Scope, Session};
 
 #[cfg(test)]
 mod tests;

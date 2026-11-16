@@ -751,6 +751,15 @@ pub fn quick(app: &AppHandle, slot: usize) {
         }
         return;
     }
+    if s.agent.in_game && s.assistant.route != kotone_core::assistant::AssistantRoute::Agent {
+        // “一句话”交给琴音 Agent（ADR 014 §4）；结果在后台播出。
+        if let Err(error) =
+            crate::agent::submit_from_assistant(app, message.text.clone(), "quick-command")
+        {
+            tell(app, format!("快捷指令没能交给琴音：{error}"));
+        }
+        return;
+    }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(error) = run(&app, message.text.clone(), Source::QuickMessage).await {

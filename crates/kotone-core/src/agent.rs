@@ -44,7 +44,7 @@ pub struct Policy {
     pub rules: BTreeMap<String, Rule>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentConfig {
     #[serde(default)]
@@ -52,6 +52,24 @@ pub struct AgentConfig {
     /// 不交给 AI 的已保存自动化（默认全部交给，最多 30 个；ADR 014“已确认”）。
     #[serde(default)]
     pub hidden_automations: Vec<String>,
+    /// 陪玩热键与快捷指令里的“一句话”交给琴音 Agent（ADR 014 §4，默认开）。
+    /// 关闭时仍用旧的单次陪玩；`assistant.route = agent`（转交外部 Agent）时不看这一项。
+    #[serde(default = "default_true")]
+    pub in_game: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            permissions: Policy::default(),
+            hidden_automations: Vec::new(),
+            in_game: true,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -69,6 +87,7 @@ mod tests {
         assert_eq!(config.permissions.rules["app.quit"], Rule::Deny);
         let empty: AgentConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(empty, AgentConfig::default());
+        assert!(empty.in_game, "in-game entry goes to the agent by default");
         let json = serde_json::to_value(AgentConfig::default()).unwrap();
         assert_eq!(json["permissions"]["mode"], "default");
     }

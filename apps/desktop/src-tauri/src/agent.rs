@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use kotone_agent::catalog::{saved_entry, Catalog, MAX_SAVED_TOOLS, SAVED_PREFIX};
-use kotone_agent::port::{BuiltinHost, KotonePort, Session};
+use kotone_agent::port::{BuiltinHost, KotonePort, Scope, Session};
 use kotone_agent::prompt::{system_prompt, Entry, PromptContext};
 use kotone_agent::{Answer, Asker, PermissionRequest};
 use kotone_ai::agent::model::OpenAiModel;
@@ -39,6 +39,26 @@ pub const ASK_RESOLVED_EVENT: &str = "kotone://agent-ask-resolved";
 
 /// 等待结果回到对话的执行记录最多记几条。
 const MAX_RUN_OWNERS: usize = 200;
+
+/// 游戏内快速模式的上限（ADR 014 §4：只给常用工具、限制步数，玩家在等）。
+fn game_limits() -> AgentLimits {
+    AgentLimits {
+        max_steps: 6,
+        max_duration: std::time::Duration::from_secs(60),
+        history_budget_chars: 20_000,
+        ..AgentLimits::default()
+    }
+}
+
+/// 消息来源 → 入口：聊天窗口里打的字是聊天，其余（热键语音、快捷指令、工具）都在游戏里。
+fn entry_of(message: &Message) -> Entry {
+    match message {
+        Message::User { source, .. } if source == "chat" || source == "assistant-text" => {
+            Entry::Chat
+        }
+        _ => Entry::Game,
+    }
+}
 
 struct Running {
     conversation_id: String,
@@ -126,10 +146,10 @@ fn event_json(event: &AgentEvent) -> Value {
 /// 一条要交给琴音的消息。
 pub struct Outgoing {
     pub text: String,
-    /// `chat` / `voice` / `quick-command` ……
+    /// `chat` / `assistant-text`（聊天窗口，回复看文字）；`voice` / `quick-command` / `tool`
+    /// （游戏内：快速模式，回复用语音 / 弹幕播出）。
     pub source: String,
     pub attachments: Vec<Attachment>,
-    pub entry: Entry,
 }
 
 /// 发一条消息：没有在跑就开始一轮；正在跑就作为插话。返回 `{status, conversationId}`。
@@ -174,9 +194,8 @@ pub fn send(app: &AppHandle, outgoing: Outgoing) -> Result<Value, String> {
     store.set_current(Some(&conversation.id))?;
     let id = conversation.id.clone();
     let app = app.clone();
-    let entry = outgoing.entry;
     tauri::async_runtime::spawn(async move {
-        drive(app, conversation, message, entry, cancel, inbox).await;
+        drive(app, conversation, message, cancel, inbox).await;
     });
     Ok(json!({"status": "started", "conversationId": id}))
 }
@@ -186,14 +205,22 @@ async fn drive(
     app: AppHandle,
     mut conversation: Conversation,
     first: Message,
-    entry: Entry,
     cancel: CancellationToken,
     inbox: Arc<Inbox>,
 ) {
     let mut next = Some(first);
     loop {
         while let Some(user) = next.take() {
+            let entry = entry_of(&user);
+            let start = conversation.messages.len();
             let stop = turn(&app, &mut conversation, user, entry, &cancel, &inbox).await;
+            if entry == Entry::Game {
+                speak_outcome(
+                    &app,
+                    &conversation.messages[start.min(conversation.messages.len())..],
+                    &stop,
+                );
+            }
             if stop == StopReason::Cancelled || cancel.is_cancelled() {
                 inbox.clear();
                 break;
@@ -313,6 +340,10 @@ async fn turn(
             .clone(),
         Err(_) => Arc::new(Session::default()),
     };
+    let mut user = user;
+    if entry == Entry::Game {
+        attach_screen(app, &mut user).await;
+    }
     let port = KotonePort::new(
         service,
         catalog,
@@ -325,8 +356,14 @@ async fn turn(
         DesktopAsker {
             app: app.clone(),
             conversation_id: conversation.id.clone(),
+            entry,
         },
-    );
+    )
+    .with_scope(if entry == Entry::Game {
+        Scope::Game
+    } else {
+        Scope::Full
+    });
     let profile = crate::companion::active_profile(&settings);
     let system = system_prompt(&PromptContext {
         entry,
@@ -335,7 +372,11 @@ async fn turn(
         automations: &automations,
     });
     let model = OpenAiModel::new(connection);
-    let limits = AgentLimits::default();
+    let limits = if entry == Entry::Game {
+        game_limits()
+    } else {
+        AgentLimits::default()
+    };
     let conversation_id = conversation.id.clone();
     let shared = Mutex::new(conversation.clone());
     let tool_names: Mutex<HashMap<String, String>> = Mutex::default();
@@ -385,6 +426,107 @@ async fn turn(
     .await;
     *conversation = shared.into_inner().unwrap();
     stop
+}
+
+/// 游戏内：请求前先读一次屏幕（截前台窗口、识别文字、更新聊天跟踪），作为数据附上，
+/// 模型多数时候不用再调工具（ADR 014 §4）。读不到时附上原因，不中断。
+async fn attach_screen(app: &AppHandle, user: &mut Message) {
+    let Message::User {
+        text, attachments, ..
+    } = user
+    else {
+        return;
+    };
+    if !attachments.is_empty() {
+        return;
+    }
+    let data = match crate::companion::read_chat(app, text, crate::companion::Source::Voice).await {
+        Ok(snapshot) => {
+            let input = &snapshot.input;
+            let lines: Vec<Value> = input
+                .ocr_lines
+                .iter()
+                .take(120)
+                .map(|l| json!({"text": l.text, "box": l.bbox.map(|b| [b[0].round(), b[1].round(), b[2].round(), b[3].round()])}))
+                .collect();
+            let tracked: Vec<Value> = input
+                .tracked
+                .iter()
+                .rev()
+                .take(60)
+                .rev()
+                .map(|m| json!({"text": m.text, "new": m.new, "secondsAgo": m.first_seen_ago_ms / 1000}))
+                .collect();
+            json!({
+                "window": {"title": input.window_title, "process": input.process_name,
+                           "width": input.image_size.0, "height": input.image_size.1},
+                "ocrLines": lines,
+                "chatTracking": tracked,
+                "warnings": snapshot.warnings,
+            })
+            .to_string()
+        }
+        Err(e) => format!("（没能读取画面：{e}）"),
+    };
+    attachments.push(Attachment::Data {
+        label: "按热键时的游戏画面（文字识别）与聊天跟踪".into(),
+        text: data,
+    });
+}
+
+/// 游戏内：玩家看不到窗口，这一轮的结果用语音 / 弹幕播出。
+/// Agent 已经用 `reply.say` 播过的不再重复；出错或被停下时播一句原因；玩家自己停止的不播。
+fn speak_outcome(app: &AppHandle, appended: &[Message], stop: &StopReason) {
+    if let Some(text) = game_reply(appended, stop) {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = crate::assistant::deliver_text(&app, text, Vec::new()).await {
+                log::log(&format!("agent: 回复未能播出：{e}"));
+            }
+        });
+    }
+}
+
+/// 游戏内这一轮要播的话（纯函数）：出错 / 被上限停下 → 原因；正常结束 → 最后的回答，
+/// 但已经用 `reply.say` 播过就不重复；玩家自己停止的不播。
+fn game_reply(appended: &[Message], stop: &StopReason) -> Option<String> {
+    if *stop == StopReason::Cancelled {
+        return None;
+    }
+    let said = appended.iter().any(|m| {
+        matches!(m, Message::Assistant { tool_calls, .. }
+            if tool_calls.iter().any(|c| c.name == kotone_agent::catalog::TOOL_SAY))
+    });
+    let reply = appended.iter().rev().find_map(|m| match m {
+        Message::Assistant { text, .. } if !text.trim().is_empty() => Some(text.trim().to_string()),
+        _ => None,
+    });
+    let text = match stop.notice() {
+        Some(notice) => Some(notice),
+        None if said => None,
+        None => reply,
+    };
+    text.map(|t| t.chars().take(300).collect())
+}
+
+/// 陪玩热键 / 快捷指令 / 工具入口交给琴音（`agent.inGame`）。立即返回，结果在后台播出。
+pub fn submit_from_assistant(
+    app: &AppHandle,
+    text: String,
+    source: &str,
+) -> Result<String, String> {
+    let result = send(
+        app,
+        Outgoing {
+            text,
+            source: source.to_string(),
+            attachments: Vec::new(),
+        },
+    )?;
+    Ok(match result["status"].as_str() {
+        Some("steered") => "琴音正在处理，已把这句话交给她".into(),
+        _ => "已交给琴音".into(),
+    })
 }
 
 /// `automation.run` / `saved.*` 的结果里有执行记录 id：记下它属于哪段对话。
@@ -530,6 +672,7 @@ impl BuiltinHost for DesktopBuiltins {
 struct DesktopAsker {
     app: AppHandle,
     conversation_id: String,
+    entry: Entry,
 }
 
 impl Asker for DesktopAsker {
@@ -545,6 +688,17 @@ impl Asker for DesktopAsker {
             inner.asks.insert(id.clone(), tx);
             id
         };
+        if self.entry == Entry::Game {
+            // 游戏内：先用语音 / 弹幕告诉玩家，再等窗口里的回答（语音确认以后再做）。
+            let text = format!(
+                "需要你确认：{}。{}。请到琴音窗口里点允许或拒绝。",
+                request.title, request.reason
+            );
+            let app = self.app.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = crate::assistant::deliver_text(&app, text, Vec::new()).await;
+            });
+        }
         let _ = self.app.emit(
             ASK_EVENT,
             json!({"askId": ask_id, "conversationId": self.conversation_id, "request": request}),
@@ -619,7 +773,6 @@ pub fn agent_send(app: AppHandle, text: String) -> Result<Value, String> {
             text,
             source: "chat".into(),
             attachments: Vec::new(),
-            entry: Entry::Chat,
         },
     )
 }
@@ -677,4 +830,82 @@ pub fn agent_delete_conversation(app: AppHandle, id: String) -> Result<bool, Str
     }
     rt.inner.lock().unwrap().sessions.remove(&id);
     rt.store.clone()?.delete(&id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kotone_ai::agent::ToolCall;
+
+    fn user(source: &str) -> Message {
+        Message::User {
+            text: "嗨".into(),
+            attachments: Vec::new(),
+            source: source.into(),
+            at_ms: 0,
+        }
+    }
+
+    fn assistant(text: &str, calls: &[&str]) -> Message {
+        Message::Assistant {
+            text: text.into(),
+            tool_calls: calls
+                .iter()
+                .map(|name| ToolCall {
+                    id: "c".into(),
+                    name: (*name).into(),
+                    arguments: "{}".into(),
+                })
+                .collect(),
+            reasoning: String::new(),
+            usage: None,
+            at_ms: 0,
+        }
+    }
+
+    #[test]
+    fn chat_window_text_is_chat_everything_else_is_in_game() {
+        assert_eq!(entry_of(&user("chat")), Entry::Chat);
+        assert_eq!(entry_of(&user("assistant-text")), Entry::Chat);
+        for source in ["voice", "quick-command", "tool", "automation", ""] {
+            assert_eq!(entry_of(&user(source)), Entry::Game, "{source}");
+        }
+    }
+
+    #[test]
+    fn in_game_reply_is_spoken_once_and_errors_are_spoken() {
+        let done = StopReason::Completed;
+        let turn = [
+            user("voice"),
+            assistant("", &["automation.list"]),
+            assistant("你有两个自动化", &[]),
+        ];
+        assert_eq!(game_reply(&turn, &done).as_deref(), Some("你有两个自动化"));
+        // 已经用 reply.say 播过：不重复。
+        let said = [
+            user("voice"),
+            assistant("", &["reply.say"]),
+            assistant("好了", &[]),
+        ];
+        assert_eq!(game_reply(&said, &done), None);
+        // 出错：播原因；玩家自己停止：不播。
+        let failed = StopReason::Failed {
+            message: "AI 连接失败".into(),
+        };
+        assert!(game_reply(&turn, &failed).unwrap().contains("AI 连接失败"));
+        assert_eq!(game_reply(&turn, &StopReason::Cancelled), None);
+        assert!(game_reply(&turn, &StopReason::StepLimit).is_some());
+        // 没有任何回答文字：不播空话。
+        assert_eq!(game_reply(&[user("voice")], &done), None);
+        let long = [assistant(&"字".repeat(400), &[])];
+        assert_eq!(game_reply(&long, &done).unwrap().chars().count(), 300);
+    }
+
+    #[test]
+    fn game_limits_are_tighter_than_chat() {
+        let game = game_limits();
+        let chat = AgentLimits::default();
+        assert!(game.max_steps < chat.max_steps);
+        assert!(game.max_duration < chat.max_duration);
+    }
 }

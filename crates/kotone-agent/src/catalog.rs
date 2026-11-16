@@ -23,6 +23,19 @@ pub const SAVED_PREFIX: &str = "saved.";
 /// 交给模型的已保存自动化最多几个（ADR 014“已确认”）。
 pub const MAX_SAVED_TOOLS: usize = 30;
 
+/// 游戏内快速模式只提供这些（另加已保存的自动化；不提供 tools.find），
+/// 让模型少想几步、快点出结果（ADR 014 §4）。
+pub const GAME_TOOLS: &[&str] = &[
+    TOOL_SAY,
+    TOOL_REMIND,
+    TOOL_GAME_CHAT,
+    "companion.read_chat",
+    "automation.list",
+    "automation.run",
+    "automation.runs",
+    "automation.stop",
+];
+
 /// 始终提供的工具（另加已保存的自动化）。
 pub const CORE_TOOLS: &[&str] = &[
     TOOL_FIND,
