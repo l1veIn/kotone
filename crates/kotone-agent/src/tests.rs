@@ -499,3 +499,105 @@ fn prompt_mentions_entry_game_notes_and_saved_automations() {
     assert!(chat.contains("聊天窗口"));
     assert!(!chat.contains("游戏说明"));
 }
+
+// ---------- 整条链路：循环 + rig-core 客户端（本机 wiremock）+ 端口 + 工具服务 ----------
+
+mod end_to_end {
+    use super::*;
+    use kotone_ai::agent::model::OpenAiModel;
+    use kotone_ai::agent::{run_turn, AgentLimits, Message, StopReason, Turn};
+    use kotone_core::connection::{ConnectionKind, ResolvedConnection};
+    use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+
+    fn sse(delta: Value, finish: &str) -> ResponseTemplate {
+        let chunk = json!({"id": "x", "object": "chat.completion.chunk", "created": 0, "model": "m",
+                           "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]});
+        ResponseTemplate::new(200).set_body_raw(
+            format!(
+                "data: {chunk}
+
+data: [DONE]
+
+"
+            ),
+            "text/event-stream",
+        )
+    }
+
+    fn has_tool_result(req: &Request) -> bool {
+        req.body_json::<Value>().is_ok_and(|b| {
+            b["messages"]
+                .as_array()
+                .is_some_and(|m| m.iter().any(|m| m["role"] == "tool"))
+        })
+    }
+
+    async fn turn_calling(
+        tool_wire_name: &str,
+        arguments: &str,
+        answer: Answer,
+    ) -> (StopReason, Vec<Message>, Fixture) {
+        let server = MockServer::start().await;
+        Mock::given(has_tool_result)
+            .respond_with(sse(json!({"content": "好了"}), "stop"))
+            .mount(&server)
+            .await;
+        Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(sse(
+                json!({"tool_calls": [{"index": 0, "id": "t1", "type": "function",
+                    "function": {"name": tool_wire_name, "arguments": arguments}}]}),
+                "tool_calls",
+            ))
+            .mount(&server)
+            .await;
+        let model = OpenAiModel::new(ResolvedConnection {
+            id: "c".into(),
+            display_name: "c".into(),
+            kind: ConnectionKind::Remote,
+            provider: "custom".into(),
+            base_url: format!("{}/v1", server.uri()),
+            model: "m".into(),
+            api_key: Some("sk-test".into()),
+        });
+        let f = fixture(Policy::default(), answer);
+        let mut history = Vec::new();
+        let limits = AgentLimits::default();
+        let cancel = CancellationToken::default();
+        let stop = run_turn(
+            &model,
+            &f.port,
+            &mut history,
+            Turn {
+                system: "你是琴音。",
+                user: Message::user("做点什么"),
+                limits: &limits,
+                cancel: &cancel,
+                inbox: None,
+            },
+            &|_| {},
+        )
+        .await;
+        (stop, history, f)
+    }
+
+    #[tokio::test]
+    async fn model_calls_a_service_tool_through_the_port() {
+        let (stop, history, f) = turn_calling("automation_list", "{}", Answer::Deny).await;
+        assert_eq!(stop, StopReason::Completed);
+        assert_eq!(f.host.invocations()[0].0, "automation.list");
+        assert!(matches!(history.last(), Some(Message::Assistant { text, .. }) if text == "好了"));
+    }
+
+    #[tokio::test]
+    async fn denied_permission_reaches_the_model_as_a_tool_error() {
+        let (stop, history, f) =
+            turn_calling("automation_run", r#"{"source": "key('Q')"}"#, Answer::Deny).await;
+        assert_eq!(stop, StopReason::Completed);
+        // AI 新写的程序第一次运行要先问；拒绝后没有执行。
+        assert!(f.host.invocations().is_empty());
+        let asked = f.asked.lock().unwrap().clone();
+        assert_eq!(asked[0].call_id, "t1");
+        assert_eq!(asked[0].reason, "AI 新写的程序第一次运行");
+        assert!(history.iter().any(|m| matches!(m, Message::Tool { is_error: true, content, .. } if content.contains("拒绝"))));
+    }
+}

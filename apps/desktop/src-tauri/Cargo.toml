@@ -22,6 +22,7 @@ tauri-build = { version = "2", features = [] }
 # 内部能力 crate；桌面壳负责组合 core 端口、AI、识别、播报和平台实现。
 kotone-core.workspace = true
 kotone-ai.workspace = true
+kotone-agent.workspace = true
 kotone-tts.workspace = true
 kotone-postprocess.workspace = true
 kotone-stt.workspace = true

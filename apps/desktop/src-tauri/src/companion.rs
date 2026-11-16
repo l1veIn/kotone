@@ -85,7 +85,7 @@ fn settings(app: &AppHandle) -> Settings {
     app.state::<SharedState>().settings.read().unwrap().clone()
 }
 
-fn active_profile(settings: &Settings) -> GameProfile {
+pub(crate) fn active_profile(settings: &Settings) -> GameProfile {
     settings
         .active_profile_id
         .as_deref()

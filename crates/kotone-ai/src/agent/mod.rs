@@ -315,8 +315,14 @@ impl Inbox {
         self.state.lock().unwrap().follow_up.push_back(message);
     }
 
+    /// 本轮结束后取下一条要处理的消息：先取本轮没来得及交给模型的插话
+    /// （模型给出最终回复之后才到的），再取排队的。
     pub fn next_follow_up(&self) -> Option<Message> {
-        self.state.lock().unwrap().follow_up.pop_front()
+        let mut state = self.state.lock().unwrap();
+        state
+            .steer
+            .pop_front()
+            .or_else(|| state.follow_up.pop_front())
     }
 
     /// 停止时丢弃全部未处理的消息；返回丢弃了几条。

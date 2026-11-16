@@ -768,8 +768,11 @@ async fn follow_ups_are_left_for_the_caller() {
     assert!(
         matches!(inbox.next_follow_up(), Some(Message::User { text, .. }) if text.contains("队友"))
     );
-    inbox.steer(Message::user("a"));
+    // 本轮结束后才到的插话先于排队的消息取出。
     inbox.follow_up(Message::user("b"));
+    inbox.steer(Message::user("a"));
+    assert!(matches!(inbox.next_follow_up(), Some(Message::User { text, .. }) if text == "a"));
+    inbox.steer(Message::user("c"));
     assert_eq!(inbox.clear(), 2);
 }
 

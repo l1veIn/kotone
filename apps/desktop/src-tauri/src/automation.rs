@@ -21,8 +21,8 @@ use kotone_core::automation::library::{
     ParamKind,
 };
 use kotone_core::automation::{
-    AutomationScheduler, ProgramAction, ProgramLauncher, ProgramReport, Run, RunAction, RunStatus,
-    RunTarget, MAX_RUNNING_PROGRAMS, MAX_SOURCE_CHARS,
+    AutomationScheduler, ChatAction, ProgramAction, ProgramLauncher, ProgramReport, Run, RunAction,
+    RunStatus, RunTarget, SpeakAction, MAX_RUNNING_PROGRAMS, MAX_SOURCE_CHARS,
 };
 use kotone_core::ocr::{OcrCancel, OcrInput, OcrParams};
 use kotone_core::reminders::DeliveryKind;
@@ -528,7 +528,7 @@ pub fn list(app: &AppHandle) -> Result<Value, String> {
 }
 
 /// 当前前台窗口作为目标（不能是 Kotone 自己）。
-fn foreground_target() -> Result<RunTarget, String> {
+pub(crate) fn foreground_target() -> Result<RunTarget, String> {
     let window = WindowsWindowObserver
         .foreground_window()
         .map_err(|e| format!("找不到前台窗口：{e}"))?
@@ -626,6 +626,46 @@ pub fn run_saved(
             Ok(scheduled_json(&run, None))
         }
     }
+}
+
+/// 内置 Agent 的提醒：延迟播报，进同一个调度器（ADR 013“延迟 + 播报”）。
+/// `delivery` 为空时用助手的默认方式。
+pub fn schedule_reminder(
+    app: &AppHandle,
+    session: &str,
+    text: String,
+    delivery: Vec<DeliveryKind>,
+    delay_seconds: u64,
+) -> Result<Value, String> {
+    let delivery = if delivery.is_empty() {
+        app.state::<crate::SharedState>()
+            .settings
+            .read()
+            .unwrap()
+            .assistant
+            .default_delivery
+            .clone()
+    } else {
+        delivery
+    };
+    let due = kotone_core::automation::now_ms() + delay_seconds.saturating_mul(1_000);
+    let run = scheduler(app)?.schedule_speak(session, SpeakAction { text, delivery }, due)?;
+    Ok(scheduled_json(&run, None))
+}
+
+/// 内置 Agent 的“发到游戏聊天”：记一条执行记录（ADR 014“已确认”：替玩家发了什么要看得到）。
+pub fn record_chat(
+    app: &AppHandle,
+    session: &str,
+    action: ChatAction,
+    result: Result<(), String>,
+) -> Result<Run, String> {
+    scheduler(app)?.record_chat(session, action, result)
+}
+
+/// 已保存的自动化（按名字排序；库不可用时为空）。
+pub fn saved_list(app: &AppHandle) -> Vec<Automation> {
+    library(app).map(|l| l.list()).unwrap_or_default()
 }
 
 /// 定义的对外形状；`with_source = false`（列表）时省略程序源码。
@@ -819,6 +859,7 @@ pub fn attach(app: &AppHandle) {
     let handle = app.clone();
     scheduler.set_on_finished(Arc::new(move |run: &Run| {
         crate::tool_service::publish(&handle, "automation.finished", run_json(run, false));
+        crate::agent::on_run_finished(&handle, run);
     }));
     scheduler.set_launcher(Arc::new(Launcher { app: app.clone() }));
 }

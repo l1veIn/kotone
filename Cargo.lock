@@ -2534,6 +2534,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "wiremock",
 ]
 
 [[package]]
@@ -2672,6 +2673,7 @@ version = "0.1.13"
 dependencies = [
  "bzip2",
  "dirs",
+ "kotone-agent",
  "kotone-ai",
  "kotone-cli",
  "kotone-core",

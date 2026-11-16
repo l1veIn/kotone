@@ -1,6 +1,7 @@
 //! Kotone Rust 核心：模块组装、共享状态与 IPC 命令。
 //! 职责划分见 docs/development.md §5.1；IPC 契约见 §5.3（类型对齐 src/lib/ipc.ts）。
 
+mod agent;
 mod assistant;
 mod assistant_input;
 mod automation;
@@ -2027,6 +2028,8 @@ pub fn run() {
             app.manage(ocr_engines::OcrEngines::new(app.handle()));
             app.manage(companion::CompanionRuntime::default());
             app.manage(automation::AutomationManager::open());
+            // 内置琴音 Agent：对话存储与运行状态（ADR 014 / 015）
+            app.manage(agent::AgentRuntime::open());
             // 先接上程序执行端口，再启动调度器（到点的程序才有人执行）。
             automation::attach(app.handle());
             assistant::start(app.handle());
@@ -2164,6 +2167,14 @@ pub fn run() {
             automation::automation_delete,
             automation::automation_run_saved,
             automation::automation_stop,
+            agent::agent_send,
+            agent::agent_stop,
+            agent::agent_answer,
+            agent::agent_state,
+            agent::agent_conversation,
+            agent::agent_new_conversation,
+            agent::agent_select_conversation,
+            agent::agent_delete_conversation,
             companion::companion_self_check,
             companion::companion_status,
             companion::companion_clear_chat_region,
