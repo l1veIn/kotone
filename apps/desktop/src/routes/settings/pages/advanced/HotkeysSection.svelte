@@ -14,7 +14,7 @@
       | "togglePostProcessingHotkey"
       | "cyclePostProcessingHotkey"
       | "runtimeToggleHotkey"
-      | "scriptStopHotkey";
+      | "automationStopHotkey";
     placeholder: string;
   }
 
@@ -61,11 +61,11 @@
       placeholder: "如 Alt+F10",
     },
     {
-      id: "script-stop",
-      title: "停止所有脚本热键",
-      desc: "陪玩脚本（例如“每秒按一次 Q”）运行时，按下立即停止全部脚本，脚本按住的键会一起松开。托盘菜单「停止所有脚本」作用相同。",
+      id: "automation-stop",
+      title: "停止所有自动化热键",
+      desc: "自动化（例如“每秒帮我按一次 Q”）运行时，按下立即停止全部自动化，它们按住的键会一起松开。托盘菜单「停止所有自动化」作用相同。",
       help: "和启动 / 停止热键一样，Kotone 停止时也有效；默认 Ctrl+Shift+F12，留空 = 关闭（不建议）。",
-      settingsKey: "scriptStopHotkey",
+      settingsKey: "automationStopHotkey",
       placeholder: "如 Ctrl+Shift+F12",
     },
   ];

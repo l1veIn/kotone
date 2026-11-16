@@ -49,7 +49,7 @@ pnpm release:test
 
 受控窗口的前台像素测试会短暂把测试窗口切到前台，默认忽略，需要交互式桌面时单独运行：`cargo test -p kotone-platform-windows --test native_capture -- --ignored --test-threads=1`。
 
-两条构建与真机测试的环境事实（2026-11-16 陪玩脚本真机测试时确认）：
+两条构建与真机测试的环境事实（2026-11-16 自动化真机测试时确认）：
 
 - **C++ 依赖统一用静态运行时 `/MT`**：sherpa-onnx 预编译库是 `static-MT`，`.cargo/config.toml` 的 `[env]` 因此给 MSVC 目标设了 `CXXFLAGS_x86_64_pc_windows_msvc=/MT`，否则 cc 以 `/MD` 编译的 C++（如 `kotone-script` 用的 Luau）会和 sherpa 的 `libcpmt` 冲突（LNK2005 / LNK2038）。改过这个设置后需 `cargo clean -p luau0-src -p mlua-sys -p mlua` 让 C++ 重新编译。
 - **从本仓库目录启动的 exe 以低完整性级别运行**：仓库根目录带 `Mandatory Label\Low Mandatory Level`（OI/CI 继承，供工具沙盒写入），所以 `target/debug/kotone.exe` 是 Low IL。Windows 的 UIPI 会**静默丢弃**它向普通（Medium）窗口发送的模拟输入——`SendInput` 仍返回成功。需要真实按键 / 打字的真机测试，先把 exe 复制到仓库外（例如 `%LOCALAPPDATA%\Temp\kotone-script-e2e\`）再启动；已安装的 Kotone 不受影响。不要改仓库目录的完整性标签。

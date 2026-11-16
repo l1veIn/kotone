@@ -85,7 +85,7 @@ struct CompanionAskArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ScriptRunArgs {
+struct AutomationRunArgs {
     source: String,
     #[serde(default)]
     name: Option<String>,
@@ -93,7 +93,7 @@ struct ScriptRunArgs {
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ScriptStopArgs {
+struct AutomationStopArgs {
     #[serde(default)]
     id: Option<String>,
 }
@@ -668,31 +668,32 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
             });
             Ok(json!({"status": "started"}))
         }
-        c::TOOL_SCRIPT_RUN => {
-            let ScriptRunArgs { source, name } = parse(tool, args)?;
-            crate::scripts::start(app, name.as_deref().unwrap_or("Agent 脚本"), &source).map_err(
-                |e| {
+        c::TOOL_AUTOMATION_RUN => {
+            let AutomationRunArgs { source, name } = parse(tool, args)?;
+            crate::automation::start(app, name.as_deref().unwrap_or("Agent 自动化"), &source)
+                .map_err(|e| {
                     if e.contains("最多同时运行") {
                         HostError::Busy(e)
-                    } else if e.contains("语法错误") || e.contains("脚本为空") {
+                    } else if e.contains("语法错误") || e.contains("内容为空") {
                         HostError::InvalidArguments(e)
                     } else {
                         HostError::Failed(e)
                     }
-                },
-            )
+                })
         }
-        c::TOOL_SCRIPT_LIST => {
+        c::TOOL_AUTOMATION_LIST => {
             let _: NoArgs = parse(tool, args)?;
-            Ok(crate::scripts::list(app))
+            Ok(crate::automation::list(app))
         }
-        c::TOOL_SCRIPT_STOP => {
-            let ScriptStopArgs { id } = if args.is_null() {
-                ScriptStopArgs::default()
+        c::TOOL_AUTOMATION_STOP => {
+            let AutomationStopArgs { id } = if args.is_null() {
+                AutomationStopArgs::default()
             } else {
                 parse(tool, args)?
             };
-            Ok(json!({"stopped": crate::scripts::stop(app, id.as_deref(), "工具 script.stop")}))
+            Ok(
+                json!({"stopped": crate::automation::stop(app, id.as_deref(), "工具 automation.stop")}),
+            )
         }
         other => Err(HostError::Failed(format!("桌面端未实现工具 {other}"))),
     }

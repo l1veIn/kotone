@@ -15,9 +15,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use kotone_core::hotkey::{
-    parse_hotkey, quick_message_slot, HookEvent, HotkeySource, HK_ASSISTANT, HK_CHANNEL_CYCLE,
-    HK_PP_CYCLE, HK_PP_TOGGLE, HK_QUICK_MESSAGES, HK_RESEND_LAST, HK_RUNTIME_TOGGLE,
-    HK_SCRIPT_STOP,
+    parse_hotkey, quick_message_slot, HookEvent, HotkeySource, HK_ASSISTANT, HK_AUTOMATION_STOP,
+    HK_CHANNEL_CYCLE, HK_PP_CYCLE, HK_PP_TOGGLE, HK_QUICK_MESSAGES, HK_RESEND_LAST,
+    HK_RUNTIME_TOGGLE,
 };
 use kotone_core::orchestrator::Orchestrator;
 use kotone_core::settings::HotkeyBackend;
@@ -289,8 +289,8 @@ fn route_named_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, id: &str) {
     kotone_core::log::log(&format!("named hotkey fired: {id}"));
     // 应用级热键需要 AppHandle 才能启停运行时，故与其它热键分开走：
     // 它不依赖 runtime 生命周期的 orchestrator 状态。
-    if id == HK_SCRIPT_STOP {
-        crate::scripts::stop(app, None, "停止脚本热键");
+    if id == HK_AUTOMATION_STOP {
+        crate::automation::stop(app, None, "停止自动化热键");
         return;
     }
     if id == HK_RUNTIME_TOGGLE {
@@ -387,7 +387,7 @@ struct HotkeyInputTicket {
 }
 
 /// 应用级具名热键：runtime 未运行时也保持注册（只随配置变化重注册）。
-const APP_NAMED_HOTKEYS: &[&str] = &[HK_RUNTIME_TOGGLE, HK_SCRIPT_STOP];
+const APP_NAMED_HOTKEYS: &[&str] = &[HK_RUNTIME_TOGGLE, HK_AUTOMATION_STOP];
 
 /// 已知具名热键的稳定声明顺序（设置页展示顺序；新增具名热键加入此清单即出现在 UI）。
 const KNOWN_NAMED_HOTKEYS: &[&str] = &[
@@ -405,7 +405,7 @@ const KNOWN_NAMED_HOTKEYS: &[&str] = &[
     HK_QUICK_MESSAGES[6],
     HK_QUICK_MESSAGES[7],
     HK_RUNTIME_TOGGLE,
-    HK_SCRIPT_STOP,
+    HK_AUTOMATION_STOP,
 ];
 
 /// 从配置取出当前要应用的全部具名热键（id, combo）；声明顺序即冲突/优先级顺序。
@@ -462,7 +462,7 @@ fn named_list_from(
 fn app_named_list_from(settings: &kotone_core::settings::Settings) -> Vec<(&'static str, String)> {
     vec![
         (HK_RUNTIME_TOGGLE, settings.runtime_toggle_hotkey.clone()),
-        (HK_SCRIPT_STOP, settings.script_stop_hotkey.clone()),
+        (HK_AUTOMATION_STOP, settings.automation_stop_hotkey.clone()),
     ]
 }
 
@@ -549,7 +549,7 @@ impl HotkeyManager {
             &settings.toggle_post_processing_hotkey,
             &settings.cycle_post_processing_hotkey,
             &settings.runtime_toggle_hotkey,
-            &settings.script_stop_hotkey,
+            &settings.automation_stop_hotkey,
             &settings.assistant.hotkey,
         ]);
 

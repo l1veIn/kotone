@@ -1,6 +1,8 @@
-# 陪玩脚本：实现与验证记录（2026-11-16 起）
+# 自动化（原“陪玩脚本”）：实现与验证记录（2026-11-16 起）
 
-设计见[演进计划 §12](../product-evolution-game-tools.md#12-陪玩脚本大模型写脚本沙盒执行2026-11-16-定方向)。分支 `claude/companion-scripts`，从 `main`（`90113d8`）开出。
+2026-11-16 起用户可见处统一叫“自动化”：工具 `automation.run / list / stop`、事件 `automation.finished`、设置 `automationStopHotkey`、托盘「停止所有自动化」。下文第一、二阶段的记录保留当时的名字（`script.*`、`scriptStopHotkey`），是改名前的实测。
+
+设计见[演进计划 §12](../product-evolution-game-tools.md#12-自动化大模型写程序沙盒执行2026-11-16-定方向)。分支 `claude/companion-scripts`，从 `main`（`90113d8`）开出。
 
 ## 第一阶段：语言实验（`crates/kotone-script`）
 

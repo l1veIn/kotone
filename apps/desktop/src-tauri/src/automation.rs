@@ -1,4 +1,5 @@
-//! 陪玩脚本的桌面执行器（docs/product-evolution-game-tools.md §12）。
+//! 自动化的桌面执行器（docs/product-evolution-game-tools.md §12）。自动化 = 大模型或 Agent
+//! 写的一小段 Luau 程序，由 `kotone-script` 在沙盒里运行。
 //!
 //! - 每个脚本在自己的线程里由 `kotone_script::run` 执行；宿主 [`DesktopHost`] 把白名单函数接到
 //!   真实能力：按键 / 打字走 `SendInput`（与“帮忙打字”同一条输入通道），看屏幕用 GDI 截游戏
@@ -74,11 +75,11 @@ impl Run {
 }
 
 #[derive(Default)]
-pub struct ScriptManager {
+pub struct AutomationManager {
     runs: Mutex<Vec<Run>>,
 }
 
-impl ScriptManager {
+impl AutomationManager {
     fn running(&self) -> usize {
         self.runs
             .lock()
@@ -133,7 +134,7 @@ impl DesktopHost {
     fn capture(&self) -> Result<kotone_tools::image::RgbaImage, String> {
         while !self.focused_now() {
             if !self.sleep(200, &self.cancel.clone()) {
-                return Err("脚本已停止".into());
+                return Err("自动化已停止".into());
             }
         }
         let image = GdiForegroundCapturer
@@ -318,7 +319,7 @@ fn emit(app: &AppHandle) {
 
 /// 当前与最近的运行记录（新的在前，最多 20 条）。
 pub fn list(app: &AppHandle) -> Value {
-    let manager = app.state::<ScriptManager>();
+    let manager = app.state::<AutomationManager>();
     let runs = manager.runs.lock().unwrap();
     json!({
         "running": runs.iter().filter(|r| r.report.is_none()).count(),
@@ -331,22 +332,22 @@ pub fn list(app: &AppHandle) -> Value {
 pub fn start(app: &AppHandle, name: &str, source: &str) -> Result<Value, String> {
     let source = source.trim();
     if source.is_empty() || source.chars().count() > MAX_SOURCE_CHARS {
-        return Err(format!("脚本为空或超过 {MAX_SOURCE_CHARS} 字"));
+        return Err(format!("自动化内容为空或超过 {MAX_SOURCE_CHARS} 字"));
     }
-    kotone_script::check_syntax(source).map_err(|e| format!("脚本语法错误：{e}"))?;
-    let manager = app.state::<ScriptManager>();
+    kotone_script::check_syntax(source).map_err(|e| format!("自动化语法错误：{e}"))?;
+    let manager = app.state::<AutomationManager>();
     if manager.running() >= MAX_RUNNING {
-        return Err(format!("最多同时运行 {MAX_RUNNING} 个脚本，请先停止一个"));
+        return Err(format!("最多同时运行 {MAX_RUNNING} 个自动化，请先停止一个"));
     }
     let window = WindowsWindowObserver
         .foreground_window()
         .map_err(|e| format!("找不到前台窗口：{e}"))?
-        .ok_or("当前没有前台窗口：请先切到游戏再启动脚本")?;
+        .ok_or("当前没有前台窗口：请先切到游戏再启动自动化")?;
     let own_pid = std::process::id();
     if window.identity.pid == own_pid {
-        return Err("前台是 Kotone 自己的窗口：请先切到游戏再启动脚本".into());
+        return Err("前台是 Kotone 自己的窗口：请先切到游戏再启动自动化".into());
     }
-    let id = kotone_tools::ids::new_id("scr");
+    let id = kotone_tools::ids::new_id("auto");
     let cancel = Cancel::default();
     let run = Run {
         id: id.clone(),
@@ -383,7 +384,7 @@ pub fn start(app: &AppHandle, name: &str, source: &str) -> Result<Value, String>
     let thread_id = id.clone();
     let code = source.to_string();
     std::thread::Builder::new()
-        .name(format!("kotone-script-{id}"))
+        .name(format!("kotone-automation-{id}"))
         .spawn(move || {
             let report = kotone_script::run(
                 &code,
@@ -397,11 +398,11 @@ pub fn start(app: &AppHandle, name: &str, source: &str) -> Result<Value, String>
                 .load(Ordering::SeqCst)
                 .then(|| "游戏窗口已关闭".to_string());
             kotone_core::log::log(&format!(
-                "script {thread_id}: {:?} keys={} {}ms",
+                "automation {thread_id}: {:?} keys={} {}ms",
                 report.outcome, report.keys, report.duration_ms
             ));
             let finished = {
-                let manager = thread_app.state::<ScriptManager>();
+                let manager = thread_app.state::<AutomationManager>();
                 let mut runs = manager.runs.lock().unwrap();
                 runs.iter_mut().find(|r| r.id == thread_id).map(|run| {
                     run.report = Some(report);
@@ -415,18 +416,18 @@ pub fn start(app: &AppHandle, name: &str, source: &str) -> Result<Value, String>
                 if let Some(obj) = finished.as_object_mut() {
                     obj.remove("source");
                 }
-                crate::tool_service::publish(&thread_app, "script.finished", finished);
+                crate::tool_service::publish(&thread_app, "automation.finished", finished);
             }
             emit(&thread_app);
         })
-        .map_err(|e| format!("无法启动脚本线程：{e}"))?;
+        .map_err(|e| format!("无法启动自动化线程：{e}"))?;
     emit(app);
     Ok(json!({"status": "started", "id": id, "target": target_label(&window)}))
 }
 
 /// 停止一个脚本；`id = None` 停止全部。返回被停止的个数。
 pub fn stop(app: &AppHandle, id: Option<&str>, reason: &str) -> usize {
-    let Some(manager) = app.try_state::<ScriptManager>() else {
+    let Some(manager) = app.try_state::<AutomationManager>() else {
         return 0;
     };
     let mut stopped = 0;
@@ -438,7 +439,7 @@ pub fn stop(app: &AppHandle, id: Option<&str>, reason: &str) -> usize {
         }
     }
     if stopped > 0 {
-        kotone_core::log::log(&format!("scripts: stopped {stopped} ({reason})"));
+        kotone_core::log::log(&format!("automation: stopped {stopped} ({reason})"));
     }
     stopped
 }
@@ -449,12 +450,12 @@ pub fn shutdown(app: &AppHandle) {
 }
 
 #[tauri::command]
-pub fn script_list(app: AppHandle) -> Value {
+pub fn automation_list(app: AppHandle) -> Value {
     list(&app)
 }
 
 #[tauri::command]
-pub fn script_stop(app: AppHandle, id: Option<String>) -> usize {
+pub fn automation_stop(app: AppHandle, id: Option<String>) -> usize {
     stop(&app, id.as_deref(), "用户停止")
 }
 

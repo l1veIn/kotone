@@ -31,8 +31,8 @@ pub const HK_ASSISTANT: &str = "assistant";
 /// 应用级热键：启动 / 停止 Kotone 运行时。与其它具名热键不同，它在 runtime
 /// 未运行（主热键未注册）时也必须生效——否则「启动」永远按不到。
 pub const HK_RUNTIME_TOGGLE: &str = "runtime-toggle";
-/// 应用级热键：立即停止全部陪玩脚本（脚本按住的键随之松开）。
-pub const HK_SCRIPT_STOP: &str = "script-stop";
+/// 应用级热键：立即停止全部自动化（自动化按住的键随之松开）。
+pub const HK_AUTOMATION_STOP: &str = "automation-stop";
 /// 陪玩快捷消息的固定槽位：第 n 条快捷消息（`assistant.companion.quickMessages[n-1]`）。
 pub const HK_QUICK_MESSAGES: [&str; crate::assistant::MAX_QUICK_MESSAGES] = [
     "quick-message-1",

@@ -1,4 +1,4 @@
-//! Kotone 陪玩脚本（docs/product-evolution-game-tools.md §12）：大模型写的 Luau 脚本在沙盒里运行，
+//! Kotone 自动化的脚本引擎（docs/product-evolution-game-tools.md §12）：大模型写的 Luau 程序在沙盒里运行，
 //! 只能调用这里注册的白名单函数。
 //!
 //! - **宿主端口** [`ScriptHost`]：按键、截图判断、OCR、播报、时钟都由调用方实现（桌面端接真实
@@ -469,7 +469,7 @@ fn classify(error: &mlua::Error) -> Outcome {
         Outcome::Error(
             text.lines()
                 .next()
-                .unwrap_or("脚本出错")
+                .unwrap_or("自动化出错")
                 .chars()
                 .take(300)
                 .collect(),

@@ -3,6 +3,7 @@
 
 mod assistant;
 mod assistant_input;
+mod automation;
 mod companion;
 mod compatibility;
 mod diagnostics;
@@ -11,7 +12,6 @@ mod model_catalog;
 mod ocr_engines;
 mod overlay;
 mod runtime;
-mod scripts;
 mod speech_models;
 mod tool_config;
 mod tool_service;
@@ -998,7 +998,7 @@ fn hotkey_registration_changed(old: &Settings, next: &Settings) -> bool {
 /// 应用级热键（启动 / 停止 Kotone）变化：与 runtime 是否运行无关，必须重注册。
 fn app_hotkey_changed(old: &Settings, next: &Settings) -> bool {
     old.runtime_toggle_hotkey != next.runtime_toggle_hotkey
-        || old.script_stop_hotkey != next.script_stop_hotkey
+        || old.automation_stop_hotkey != next.automation_stop_hotkey
 }
 
 /// 局部更新配置；热键变化时触发重注册
@@ -1974,8 +1974,7 @@ pub fn run() {
             let focus: Arc<dyn FocusBackend> = Arc::new(WinFocusBackend);
             let audio_backend: Arc<dyn kotone_core::audio::AudioBackend> =
                 Arc::new(platform_audio::CpalBackend);
-            let assistant_runtime =
-                assistant::initialize(app.handle(), settings.clone());
+            let assistant_runtime = assistant::initialize(app.handle(), settings.clone());
 
             #[allow(unused_mut)] // vad-silero feature 关闭时无可变接线
             let mut orchestrator = Orchestrator::new(
@@ -2027,7 +2026,7 @@ pub fn run() {
             app.manage(speech_models::SpeechModelManager::default());
             app.manage(ocr_engines::OcrEngines::new(app.handle()));
             app.manage(companion::CompanionRuntime::default());
-            app.manage(scripts::ScriptManager::default());
+            app.manage(automation::AutomationManager::default());
             assistant::start(app.handle());
             // 可选本机工具服务：独立于 ASR 运行时，只在启动时读取开关（docs/tool-service.md）
             let tool_service_enabled = settings.read().unwrap().tool_service.enabled;
@@ -2156,8 +2155,8 @@ pub fn run() {
             speech_models::get_speech_model_status,
             speech_models::download_speech_model,
             speech_models::cancel_speech_model_download,
-            scripts::script_list,
-            scripts::script_stop,
+            automation::automation_list,
+            automation::automation_stop,
             companion::companion_self_check,
             companion::companion_status,
             companion::companion_clear_chat_region,
@@ -2174,7 +2173,7 @@ pub fn run() {
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
                 tool_service::shutdown(app);
-                scripts::shutdown(app);
+                automation::shutdown(app);
                 assistant::shutdown(app);
             }
         });
