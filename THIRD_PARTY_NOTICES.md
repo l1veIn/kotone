@@ -77,6 +77,7 @@ The settings window uses shadcn-svelte components copied as source, plus npm pac
 - shadcn-svelte components (`apps/desktop/src/lib/components/ui/`), via RambleDesk: https://github.com/huntabyte/shadcn-svelte, MIT License
 - bits-ui: https://github.com/huntabyte/bits-ui, MIT License
 - Lucide icons (`@lucide/svelte`): https://github.com/lucide-icons/lucide, ISC License
+- svelte-sonner: https://github.com/wobsoriano/svelte-sonner, MIT License
 - tailwind-merge: https://github.com/dcastil/tailwind-merge, MIT License
 - tailwind-variants: https://github.com/heroui-inc/tailwind-variants, MIT License
 - clsx: https://github.com/lukeed/clsx, MIT License
