@@ -3827,6 +3827,8 @@ async fn assistant_voice_button_uses_each_supported_policy_without_injection() {
             .await
             .unwrap();
         assert_eq!(session.interaction_mode, mode);
+        // 设置窗口语音按钮的会话：宿主按前缀把它当作窗口里的输入（琴音聊天）。
+        assert!(session.session_id.starts_with("assistant-ui-voice-"));
         assert!(!orch.continuous_session());
         assert!(emitter
             .events

@@ -178,7 +178,7 @@ struct RoutingHandler {
     settings: Arc<RwLock<Settings>>,
 }
 
-/// 请求来源：文字入口 / 工具提交 / 热键语音（按会话 ID 前缀区分）。
+/// 请求来源：设置窗口（文字入口与语音按钮）/ 工具提交 / 热键语音（按会话 ID 前缀区分）。
 fn request_source(session_id: &str) -> &'static str {
     if session_id.starts_with("assistant-ui-") {
         "assistant-text"

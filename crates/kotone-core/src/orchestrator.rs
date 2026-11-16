@@ -1083,8 +1083,15 @@ impl Orchestrator {
                 return Ok(());
             }
             inner.purpose = purpose;
+            // 设置窗口语音按钮发起的助手会话带 `assistant-ui-voice-` 前缀：宿主据此把它当作
+            // 窗口里的输入（琴音聊天），而不是游戏内热键。
             inner.process_case_id = Some(format!(
-                "session-{}-{}",
+                "{}-{}-{}",
+                if assistant_voice_owner {
+                    "assistant-ui-voice"
+                } else {
+                    "session"
+                },
                 crate::eval::new_session_id(),
                 NEXT_PROCESS_SESSION_ID.fetch_add(1, Ordering::Relaxed),
             ));
