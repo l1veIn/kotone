@@ -164,6 +164,8 @@ export interface Settings {
   toolService: ToolServiceConfig;
   /** 当前 OCR 模型（统一模型清单 category=ocr；空 = 自动选第一个已安装的本地模型） */
   ocr: OcrConfig;
+  /** 内置琴音 Agent（config.json `agent` 段；旧配置没有这一段时后端按默认补齐）。 */
+  agent?: AgentConfig;
 }
 
 export interface OcrConfig {
@@ -242,6 +244,15 @@ export interface ChatRegion {
   y: number;
   width: number;
   height: number;
+}
+
+/** 内置琴音 Agent 的设置（ADR 014 / 015）。权限与隐藏列表要用专门的命令整体修改（见 lib/agent.ts）。 */
+export interface AgentConfig {
+  permissions: { mode: "default" | "allow-all" | "read-only"; rules: Record<string, "allow" | "ask" | "deny"> };
+  /** 不交给 AI 的已保存自动化 id。 */
+  hiddenAutomations: string[];
+  /** 陪玩热键与快捷指令交给琴音（默认开；关闭时用旧的单次陪玩）。 */
+  inGame: boolean;
 }
 
 /** 本机工具服务配置（config.json `toolService` 段）；修改后需重启桌面端 */

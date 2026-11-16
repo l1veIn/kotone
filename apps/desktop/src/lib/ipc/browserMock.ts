@@ -104,6 +104,7 @@ const mock: MockStore = {
     assistant: { hotkey: "", interactionMode: "push-to-talk", connectionId: "", defaultDelivery: ["voice", "danmaku"], voiceId: "", speechEngine: "system", kokoroVoiceId: "kokoro:zf_001", speechVolume: 80, speechRate: 0, danmakuDurationMs: 8000, danmakuSpeedPxPerSec: 160, danmakuFontSize: 32, danmakuTopOffsetPx: 120, danmakuColor: "#FFFFFF", danmakuEmote: "none", route: "reminders", companion: { quickMessages: [], autoSend: true }, ttsModelId: "" },
     toolService: { enabled: false },
     ocr: { activeModelId: "" },
+    agent: { permissions: { mode: "default", rules: {} }, hiddenAutomations: [], inGame: true },
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },

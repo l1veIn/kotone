@@ -4,8 +4,8 @@ test("assistant opens on talk, keeps drafts across sections; speech lives in Gen
   await page.setViewportSize({ width: 1040, height: 1000 });
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-assistant").click();
-  await expect(page.getByTestId("assistant-nav-tasks")).toHaveAttribute("aria-current", "page");
-  await expect(page.getByTestId("assistant-nav-tasks")).toHaveText("跟琴音说");
+  await expect(page.getByTestId("assistant-nav-chat")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("assistant-nav-chat")).toHaveText("聊天");
   await expect(page.getByTestId("assistant-tasks")).toBeVisible();
   await expect(page.getByTestId("assistant-settings")).toHaveCount(0);
   // 进行中的提醒与自动化只在这里显示概况（预览数据：1 条提醒等待中、1 个自动化运行中）
@@ -19,7 +19,7 @@ test("assistant opens on talk, keeps drafts across sections; speech lives in Gen
   await expect(page.getByTestId("assistant-mode-push-to-talk")).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("main").evaluate((element) => { element.scrollTop = 0; });
   await page.screenshot({ path: testInfo.outputPath("assistant-settings.png"), animations: "disabled" });
-  await page.getByTestId("assistant-nav-tasks").click();
+  await page.getByTestId("assistant-nav-chat").click();
   await expect(page.getByTestId("assistant-request")).toHaveValue("5 分钟后提醒我打野有闪");
   await page.getByTestId("assistant-open-summary").getByRole("button", { name: "在「自动化」里查看 →" }).click();
   await expect(page.getByTestId("automation-page")).toBeVisible();
@@ -47,7 +47,7 @@ test("assistant interaction modes save independently of regular input and surviv
   }
   await page.getByTestId("assistant-mode-dictation").click();
   await expect(page.getByTestId("assistant-mode-dictation")).toHaveAttribute("aria-pressed", "true");
-  await page.getByTestId("assistant-nav-tasks").click();
+  await page.getByTestId("assistant-nav-chat").click();
   await page.getByTestId("assistant-nav-settings").click();
   await expect(page.getByTestId("assistant-mode-dictation")).toHaveAttribute("aria-pressed", "true");
 });
@@ -87,11 +87,14 @@ test("assistant preview labels itself and never pretends to run AI", async ({ pa
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-assistant").click();
   const assistant = page.getByTestId("assistant-page");
-  await expect(assistant.getByRole("heading", { name: "Kotone 陪玩", exact: true })).toBeVisible();
+  await expect(assistant.getByRole("heading", { name: "琴音", exact: true })).toBeVisible();
   await expect(assistant.getByText(/界面预览/)).toBeVisible();
   await assistant.getByTestId("assistant-request").fill("五分钟后提醒我打野有闪");
-  await assistant.getByRole("button", { name: "交给琴音", exact: true }).click();
-  await expect(assistant.getByRole("alert")).toContainText("浏览器仅预览界面");
+  await assistant.getByTestId("agent-send").click();
+  await expect(assistant.getByTestId("agent-send-error")).toContainText("仅预览");
+  // 草稿留着，示例对话不变
+  await expect(assistant.getByTestId("assistant-request")).toHaveValue("五分钟后提醒我打野有闪");
+  await expect(assistant.getByTestId("agent-user-message").first()).toHaveText("帮我做一个每秒按 Q 的自动化");
   expect(externalRequests).toEqual([]);
   await page.setViewportSize({ width: 1040, height: 1150 });
   await page.getByRole("main").evaluate((element) => { element.scrollTop = 0; });

@@ -17,7 +17,8 @@
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.2",
     "@tauri-apps/plugin-process": "^2",
-    "@tauri-apps/plugin-updater": "^2"
+    "@tauri-apps/plugin-updater": "^2",
+    "marked": "17.0.6"
   },
   "devDependencies": {
     "@internationalized/date": "^3.12.4",

@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, normalizePath } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import tailwindcss from "@tailwindcss/vite";
 import { readFileSync } from "node:fs";
@@ -14,7 +14,8 @@ export default defineConfig({
   // shadcn-svelte 组件用 $lib 引用公共代码（与 tsconfig.json 的 paths 一致）
   resolve: {
     alias: {
-      $lib: fileURLToPath(new URL("./src/lib", import.meta.url)),
+      // 用正斜杠：Windows 反斜杠路径会让 Vite 以 /@fs/ 另起一份模块实例（store 不再共享）
+      $lib: normalizePath(fileURLToPath(new URL("./src/lib", import.meta.url))),
     },
   },
   define: {

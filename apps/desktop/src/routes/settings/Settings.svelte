@@ -60,7 +60,7 @@
   const navItems: { id: PageId; label: string; icon: string }[] = [
     { id: "general", label: "通用", icon: "home" },
     { id: "processing", label: "文字处理", icon: "sparkles" },
-    { id: "assistant", label: "陪玩", icon: "bell" },
+    { id: "assistant", label: "琴音", icon: "chat" },
     { id: "automation", label: "自动化", icon: "bolt" },
     { id: "game", label: "游戏适配", icon: "gamepad" },
     { id: "history", label: "历史记录", icon: "clock" },
@@ -266,6 +266,8 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             {:else if item.icon === "bolt"}
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            {:else if item.icon === "chat"}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.6A8 8 0 1 1 21 12Z" stroke-linecap="round" stroke-linejoin="round"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01" stroke-linecap="round"/></svg>
             {:else if item.icon === "bell"}
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" stroke-linecap="round" stroke-linejoin="round"/></svg>
             {:else}

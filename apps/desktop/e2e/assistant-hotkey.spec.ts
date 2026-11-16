@@ -52,12 +52,12 @@ test("leaving assistant during capture cannot save a later key or leave capture 
   expect(saved.togglePostProcessingHotkey).toBe("F10");
 });
 
-test("switching to reminder tasks cancels an in-progress assistant hotkey capture", async ({ page }) => {
+test("switching to the chat tab cancels an in-progress assistant hotkey capture", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-assistant").click();
   await page.getByTestId("assistant-nav-settings").click();
   await page.getByTestId("hotkey-capture-assistant").click();
-  await page.getByTestId("assistant-nav-tasks").click();
+  await page.getByTestId("assistant-nav-chat").click();
   await page.keyboard.press("F9");
   await page.getByTestId("assistant-nav-settings").click();
   await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("");

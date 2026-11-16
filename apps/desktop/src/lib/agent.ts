@@ -1,6 +1,6 @@
 // 内置琴音 Agent（ADR 014 / 015）：对话、事件与权限询问。
 // 事件按 ACP 的会话更新设计（消息片段、思考片段、工具调用及状态、权限请求）。
-// 浏览器预览只展示示例对话，不调用任何 AI。
+// 后端：apps/desktop/src-tauri/src/agent.rs。浏览器预览只展示示例对话，不调用任何 AI。
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { isTauri } from "./ipc";
@@ -38,17 +38,19 @@ export interface AgentAsk { askId: string; conversationId: string; request: Perm
 export type Answer = "allow-once" | "allow-for-conversation" | "deny";
 
 export type PermissionMode = "default" | "allow-all" | "read-only";
+export type PermissionRule = "allow" | "ask" | "deny";
+export interface Permissions { mode: PermissionMode; rules: Record<string, PermissionRule> }
 export interface AgentState {
   current: string | null;
   running: string | null;
   conversations: ConversationSummary[];
   notReadyReason: string | null;
-  permissions: { mode: PermissionMode; rules: Record<string, "allow" | "ask" | "deny"> };
+  permissions: Permissions;
 }
 
-export const PREVIEW_ERROR = "浏览器仅预览界面；请在桌面应用中和琴音聊天。";
+export const PREVIEW_ERROR = "仅预览：浏览器里不会真的发给琴音。请在桌面应用中和琴音聊天。";
 
-// ---------- 浏览器预览数据 ----------
+// ---------- 浏览器预览数据（只在 isTauri = false 时使用） ----------
 
 const t0 = Date.now() - 5 * 60_000;
 const previewConversation: Conversation = {
@@ -56,47 +58,86 @@ const previewConversation: Conversation = {
   messages: [
     { role: "user", text: "帮我做一个每秒按 Q 的自动化", source: "chat", atMs: t0 },
     { role: "assistant", text: "好的，我先试运行一下，确认没问题再帮你保存。", atMs: t0 + 2_000,
+      reasoning: "用户想要每秒按一次 Q。先用 automation.run 试运行，确认目标窗口正确再保存。",
       toolCalls: [{ id: "call-1", name: "automation.run", arguments: '{"name":"连按Q","source":"every(1000, function() key(\\"Q\\") end)"}' }],
       usage: { inputTokens: 1830, outputTokens: 96 } },
     { role: "tool", callId: "call-1", name: "automation.run", content: '{"status":"started","id":"run-7","target":"英雄联盟 (League of Legends.exe)"}', isError: false, untrusted: false, atMs: t0 + 9_000 },
-    { role: "assistant", text: "已经开始了：每秒按一次 Q，按 Ctrl+Shift+F12 可以随时停止。要我把它保存下来吗？", atMs: t0 + 11_000 },
+    { role: "assistant", text: "已经开始了：**每秒按一次 Q**，按 `Ctrl+Shift+F12` 可以随时停止。\n\n要我把它保存下来吗？", atMs: t0 + 11_000,
+      usage: { inputTokens: 1990, outputTokens: 41 } },
+    { role: "user", text: "（系统消息，不是玩家说的话：自动化「连按Q」已停止。执行记录见附件；需要的话告诉玩家结果。）", source: "automation", atMs: t0 + 53_000,
+      attachments: [{ kind: "data", label: "执行记录", text: '{"id":"run-7","status":"cancelled","durationMs":42000}' }] },
+    { role: "assistant", text: "连按 Q 已经停了，一共跑了 42 秒。需要的话随时叫我再开。", atMs: t0 + 55_000 },
   ],
 };
+const preview = {
+  current: previewConversation.id as string | null,
+  conversations: [previewConversation],
+  permissions: { mode: "default", rules: {} } as Permissions,
+  hidden: [] as string[],
+};
+function summary(c: Conversation): ConversationSummary {
+  return { id: c.id, title: c.title, createdAtMs: c.createdAtMs, updatedAtMs: c.updatedAtMs, messageCount: c.messages.length };
+}
 
 // ---------- 命令 ----------
 
 export async function agentState(): Promise<AgentState> {
   if (!isTauri) {
     return {
-      current: previewConversation.id, running: null, notReadyReason: null,
-      conversations: [{ id: previewConversation.id, title: previewConversation.title, createdAtMs: t0, updatedAtMs: t0 + 60_000, messageCount: previewConversation.messages.length }],
-      permissions: { mode: "default", rules: {} },
+      current: preview.current, running: null, notReadyReason: null,
+      conversations: preview.conversations.map(summary),
+      permissions: structuredClone(preview.permissions),
     };
   }
   return invoke("agent_state");
 }
 export async function agentConversation(id: string): Promise<Conversation | null> {
-  if (!isTauri) return id === previewConversation.id ? structuredClone(previewConversation) : null;
+  if (!isTauri) {
+    const found = preview.conversations.find((c) => c.id === id);
+    return found ? structuredClone(found) : null;
+  }
   return invoke("agent_conversation", { id });
 }
+/** 发一条消息；琴音正在回答时算“插话”（status = steered）。 */
 export async function agentSend(text: string): Promise<{ status: "started" | "steered"; conversationId: string }> {
   if (!isTauri) throw new Error(PREVIEW_ERROR);
   return invoke("agent_send", { text });
 }
+/** 停止当前这一轮（同时清掉没处理的插话 / 排队）。 */
 export async function agentStop(): Promise<boolean> {
   return isTauri ? invoke("agent_stop") : false;
 }
 export async function agentAnswer(askId: string, answer: Answer): Promise<boolean> {
   return isTauri ? invoke("agent_answer", { askId, answer }) : false;
 }
+/** 下一条消息开始新对话（正在回答时报错）。 */
 export async function agentNewConversation(): Promise<void> {
   if (isTauri) await invoke("agent_new_conversation");
+  else preview.current = null;
 }
 export async function agentSelectConversation(id: string): Promise<void> {
   if (isTauri) await invoke("agent_select_conversation", { id });
+  else preview.current = id;
 }
 export async function agentDeleteConversation(id: string): Promise<boolean> {
-  return isTauri ? invoke("agent_delete_conversation", { id }) : false;
+  if (isTauri) return invoke("agent_delete_conversation", { id });
+  const before = preview.conversations.length;
+  preview.conversations = preview.conversations.filter((c) => c.id !== id);
+  if (preview.current === id) preview.current = null;
+  return preview.conversations.length !== before;
+}
+/** 整体替换权限设置（设置补丁是递归合并的，删不掉单条规则，所以不用 update_settings）。 */
+export async function agentSetPermissions(permissions: Permissions): Promise<Permissions> {
+  if (isTauri) return invoke("agent_set_permissions", { permissions });
+  preview.permissions = structuredClone(permissions);
+  return structuredClone(preview.permissions);
+}
+/** 某个已保存的自动化交不交给琴音；返回新的隐藏列表。 */
+export async function agentSetAutomationHidden(id: string, hidden: boolean): Promise<string[]> {
+  if (isTauri) return invoke("agent_set_automation_hidden", { id, hidden });
+  preview.hidden = preview.hidden.filter((x) => x !== id);
+  if (hidden) preview.hidden.push(id);
+  return [...preview.hidden];
 }
 
 export async function subscribeAgent(callback: (conversationId: string, event: AgentEvent) => void): Promise<UnlistenFn> {
@@ -120,6 +161,11 @@ const toolLabels: Record<string, string> = {
   "game_chat.send": "发到游戏聊天",
   "companion.read_chat": "看游戏聊天",
   "window.active": "看当前窗口",
+  "window.list": "查看窗口",
+  "game.list": "查看游戏",
+  "game.focus": "切换到游戏",
+  "game.launch": "打开游戏",
+  "game.close": "关闭游戏",
   "automation.list": "查看已保存的自动化",
   "automation.get": "查看自动化",
   "automation.run": "运行自动化",
@@ -129,11 +175,18 @@ const toolLabels: Record<string, string> = {
   "automation.delete": "删除自动化",
   "settings.get": "读取设置",
   "settings.update": "修改设置",
+  "ocr.recognize": "识别屏幕文字",
 };
 export function toolLabel(name: string): string {
   if (name.startsWith("saved.")) return "运行已保存的自动化";
   return toolLabels[name] ?? name;
 }
+/** 设置页按工具设规则时列出的工具（内置 Agent 始终提供的那些；另可出现已有规则里的其它工具）。 */
+export const ruleTools = [
+  "reply.say", "reminder.create", "game_chat.send", "companion.read_chat", "window.active",
+  "game.list", "game.focus", "automation.list", "automation.get", "automation.run",
+  "automation.runs", "automation.stop", "automation.save",
+];
 
 export function stopText(stop: StopReason): string | null {
   switch (stop.kind) {
@@ -143,6 +196,19 @@ export function stopText(stop: StopReason): string | null {
     case "time-limit": return "用时太长，已停下";
     case "cancelled": return "已停止";
     case "failed": return `出错了：${stop.message}`;
+  }
+}
+
+/** 用户消息的来源说明；聊天窗口里打的字不显示。 */
+export function sourceLabel(source: string | undefined): string | null {
+  switch (source) {
+    case undefined: case "": case "chat": return null;
+    case "assistant-text": return "文字入口";
+    case "voice": return "游戏内 · 语音";
+    case "quick-command": return "游戏内 · 快捷指令";
+    case "tool": return "工具提交";
+    case "automation": return "自动化结果";
+    default: return source;
   }
 }
 

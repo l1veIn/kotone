@@ -3,7 +3,9 @@
   import {
     deleteAutomation, getAutomation, runAutomation, type Automation,
   } from "../../../../lib/automation";
-  import { errText, toast } from "../../../../lib/stores/ui";
+  import { agentSetAutomationHidden } from "../../../../lib/agent";
+  import { errText, settingsStore, toast } from "../../../../lib/stores/ui";
+  import { Switch } from "$lib/components/ui/switch";
   import AutomationEditor from "./AutomationEditor.svelte";
   import ArgsForm from "./ArgsForm.svelte";
 
@@ -17,6 +19,20 @@
   let confirmDelete = $state("");
 
   const by: Record<Automation["createdBy"], string> = { user: "你", companion: "陪玩", agent: "Agent" };
+  /** 不交给琴音（内置 Agent）的自动化；默认全部交给，最多 30 个（ADR 014）。 */
+  const hiddenFromAgent = $derived(new Set($settingsStore?.agent?.hiddenAutomations ?? []));
+  let offering = $state("");
+
+  async function setOffered(item: Automation, offered: boolean) {
+    if (offering) return;
+    offering = item.id;
+    try {
+      const hiddenAutomations = await agentSetAutomationHidden(item.id, !offered);
+      settingsStore.update((s) => s && { ...s, agent: { permissions: { mode: "default", rules: {} }, inGame: true, ...s.agent, hiddenAutomations } });
+      toast(true, offered ? `「${item.name}」交给琴音使用` : `「${item.name}」不再交给琴音`);
+    } catch (error) { toast(false, `保存失败：${errText(error)}`); }
+    finally { offering = ""; }
+  }
 
   async function edit(item: Automation) {
     // 列表不含源码，编辑前取完整定义
@@ -66,7 +82,7 @@
       <button type="button" class="primary" onclick={() => { editing = "new"; }}>新建</button>
     </div>
     <p class="mt-2 text-xs leading-relaxed text-white/45">
-      保存下来的自动化直接运行，不再调用 AI。可以在「陪玩」的快捷指令里绑到热键上：在游戏里按下就运行。
+      保存下来的自动化直接运行，不再调用 AI。可以在「琴音 → 设置」的快捷指令里绑到热键上：在游戏里按下就运行。打开「交给琴音」的（最多 30 个）琴音也能帮你运行。
     </p>
     {#if !automations.length}
       <p class="empty">还没有保存的自动化</p>
@@ -82,6 +98,11 @@
                 {#if item.params.length}
                   <p class="mt-1 text-[11px] text-white/40">参数：{item.params.map((p) => p.label || p.name).join("、")}</p>
                 {/if}
+                <label class="mt-1.5 flex w-fit cursor-pointer items-center gap-1.5 text-[11px] text-white/55">
+                  <Switch size="sm" data-testid="saved-automation-agent" checked={!hiddenFromAgent.has(item.id)} disabled={offering === item.id}
+                    aria-label={`把「${item.name}」交给琴音使用`} onCheckedChange={(checked) => void setOffered(item, checked)} />
+                  交给琴音
+                </label>
               </div>
               <div class="flex shrink-0 gap-2">
                 <button type="button" class="secondary" onclick={() => openRun(item)}>运行</button>

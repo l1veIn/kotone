@@ -81,10 +81,11 @@ The settings window uses shadcn-svelte components copied as source, plus npm pac
 - tailwind-variants: https://github.com/heroui-inc/tailwind-variants, MIT License
 - clsx: https://github.com/lukeed/clsx, MIT License
 - tw-animate-css: https://github.com/Wombosvideo/tw-animate-css, MIT License
+- marked (Markdown lexer for the 琴音 chat): https://github.com/markedjs/marked, MIT License
 
 ### Codeg (theme palettes)
 
-Parts of the appearance system (`apps/desktop/src/lib/appearance/palettes.css`, `appearanceSettings.ts`) are adapted from Codeg through RambleDesk, and keep their Apache-2.0 headers.
+Parts of the appearance system (`apps/desktop/src/lib/appearance/palettes.css`, `appearanceSettings.ts`) and of the 琴音 chat (`apps/desktop/src/lib/agentChat/`: keyboard / IME guard, scroll anchor, tool status, thinking block, tool card, turn footer, transcript) are adapted from Codeg through RambleDesk, and keep their Apache-2.0 headers.
 
 - Project: https://github.com/xintaofei/codeg, commit `3ebdfed1d7c0b71d71880a3d2e0f8e09545feae1`
 - Copyright: Codeg authors and contributors

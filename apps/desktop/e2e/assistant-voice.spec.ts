@@ -65,6 +65,8 @@ async function openVoice(page: Page, mode: "push-to-talk" | "dictation" | "one-s
       if (command === "get_runtime_status") return { ...runtime };
       if (command === "list_connections") return ready ? [{ id: "test-ai", displayName: "测试连接", provider: "test", kind: "remote", baseUrl: "https://example.invalid", model: "test", hasApiKey: true }] : [];
       if (command === "list_reminders") return [];
+      if (command === "agent_state") return { current: null, running: null, conversations: [], notReadyReason: null, permissions: { mode: "default", rules: {} } };
+      if (command === "automation_runs") return { runs: [] };
       if (command === "list_speech_voices") return [];
       if (command === "get_speech_model_status") return { modelId: "fixture", installed: false, downloading: false, downloadedBytes: 0, totalBytes: 0, phase: "idle", error: null, modelDir: "fixture" };
       if (command === "get_startup_options") return { onboarding: "never" };
@@ -94,7 +96,7 @@ test("voice entry sits in the create card, works without a shortcut and exposes 
   await expect(page.getByTestId("assistant-nav-settings")).toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("assistant-interaction").getByRole("button")).toHaveCount(3);
   await expect(page.getByTestId("assistant-mode-solo")).toHaveCount(0);
-  await page.getByTestId("assistant-nav-tasks").click();
+  await page.getByTestId("assistant-nav-chat").click();
   await page.evaluate(() => window.assistantVoiceTest.runtime("stopped"));
   await expect(button).toBeDisabled();
   await expect(page.getByTestId("assistant-voice-input")).toContainText("请先启动 Kotone");
@@ -118,7 +120,8 @@ test("voice entry sits in the create card, works without a shortcut and exposes 
   await expect(hotkey).toHaveAttribute("title", "快捷键：Ctrl+Alt+Shift+Meta+F12");
   const longHotkeyBox = (await hotkey.boundingBox())!;
   expect(Math.abs(longHotkeyBox.y - (await hint.boundingBox())!.y)).toBeLessThan(2);
-  expect(longHotkeyBox.x).toBeGreaterThan((await page.locator("#assistant-input-title").boundingBox())!.x + 60);
+  // 很长的快捷键在输入框里截断显示，不会挤出输入框
+  expect(longHotkeyBox.x).toBeGreaterThanOrEqual((await page.getByTestId("agent-composer").boundingBox())!.x);
   await expect(hint).toBeInViewport();
   expect(await commands(page)).toEqual([]);
 });
@@ -210,7 +213,7 @@ test("switching sections and unmounting cancel owned sessions even while an end 
   await expect(page.getByTestId("assistant-request")).toBeDisabled();
   await page.getByTestId("assistant-nav-settings").click();
   await expect.poll(() => commands(page)).toEqual(["assistant_voice_begin", "assistant_voice_cancel"]);
-  await page.getByTestId("assistant-nav-tasks").click();
+  await page.getByTestId("assistant-nav-chat").click();
   await expect(page.getByTestId("assistant-request")).toHaveValue("保留文字草稿");
   await page.evaluate(async () => { await window.assistantVoiceTest.mode("one-shot"); window.assistantVoiceTest.holdEnd = true; });
   await page.getByTestId("assistant-voice-button").click();

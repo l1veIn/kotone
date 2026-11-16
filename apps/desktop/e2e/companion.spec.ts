@@ -14,7 +14,7 @@ test("choosing a connection runs the self-check, and the companion stays blocked
   await page.goto("/?mockCompanionCheck=fail#/settings?onboarding=never");
   await addConnection(page);
   await page.getByTestId("settings-nav-assistant").click();
-  await expect(page.getByRole("heading", { name: "Kotone 陪玩", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "琴音", exact: true })).toBeVisible();
   await page.getByTestId("assistant-nav-settings").click();
   const companion = page.getByTestId("companion-settings");
   await expect(companion.getByTestId("companion-status")).toContainText("陪玩需要 AI 连接");
@@ -48,7 +48,7 @@ test("quick messages can be added, edited and removed, and online OCR shows the 
   await expect(companion.getByTestId("quick-message")).toHaveCount(0);
 
   await page.evaluate(async () => (await import("/src/lib/ipc.ts")).updateSettings({ ocr: { activeModelId: "deepseek-ocr" } }));
-  await page.getByTestId("assistant-nav-tasks").click();
+  await page.getByTestId("assistant-nav-chat").click();
   await page.getByTestId("assistant-nav-settings").click();
   await expect(page.getByTestId("companion-upload-warning")).toContainText("上传");
   await expect(page.getByTestId("companion-status")).toHaveText("陪玩已就绪。");
