@@ -29,6 +29,8 @@ pnpm dev
 | 命令行与评测目标解析 | `crates/kotone-cli/src/main.rs`、`crates/kotone-stt/src/eval.rs` |
 | 本机 Agent 工具服务 | 端口 `crates/kotone-core/src/tools.rs`、`ocr.rs`；协议/存储/预处理/跟踪/服务端/客户端 `crates/kotone-tools`；OCR 后端与模型安装 `crates/kotone-ocr`；Windows 实现 `kotone-platform-windows/src/window_tools.rs`、`tool_host.rs`；桌面生命周期 `apps/desktop/src-tauri/src/tool_service.rs`；CLI `crates/kotone-cli/src/tools.rs`、`ocr.rs` |
 
+**配置兼容（2026-11-16 起）**：用户可能不升级，或升级后又装回旧版。旧版本读到某个字段里不认识的值时，会把整份 `config.json` 当作损坏、改名备份并恢复默认（0.1.13 即如此）。因此：已有字段只写旧版本认识的值，不扩展它的取值范围、不改变写法；新能力一律用新字段（旧版本会忽略未知字段）。例如在线语音写 `assistant.ttsModelId` 而不是给 `assistant.speechEngine` 加新值；声音编号在界面与接口上是 `提供方/声音`，落盘仍是 `kokoro:zf_001` 与不带前缀的 Windows 语音；陪玩路由落盘仍是 `reminders`。代价：旧版本保存配置时会丢掉它不认识的新字段。`kotone-core` 有对应的回归测试。
+
 修改接口时同时检查 Rust、IPC 类型、Svelte 消费者和浏览器 mock。新增能力通过领域端口注入；core 不能反向依赖平台、STT 或网络实现。锁保护区内避免网络/音频设备/模型加载等阻塞操作，异步结果交付前再次核对会话代际。
 
 ## 验证

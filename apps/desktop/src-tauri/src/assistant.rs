@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use kotone_core::assistant::{
-    AssistantConfig, AssistantHandler, AssistantPlan, AssistantRequest, SpeechEngine,
+    AssistantConfig, AssistantHandler, AssistantPlan, AssistantRequest, TtsEngine,
 };
 use kotone_core::cancel::CancellationToken;
 use kotone_core::reminders::{
@@ -22,7 +22,7 @@ pub struct AssistantRuntime {
     system_speaker: Result<Arc<dyn SpeechOutput>, String>,
     local_speaker: Mutex<Option<(std::path::PathBuf, Arc<kotone_tts::LocalSpeechOutput>)>>,
     /// 在线语音（OpenAI 兼容 / 火山）：每种一个输出线程，配置在每次播报时重新解析。
-    online_speakers: Mutex<Vec<(SpeechEngine, Arc<kotone_tts::LocalSpeechOutput>)>>,
+    online_speakers: Mutex<Vec<(TtsEngine, Arc<kotone_tts::LocalSpeechOutput>)>>,
     typed_request: Mutex<Option<CancellationToken>>,
     presentation: Mutex<Option<DanmakuPresentation>>,
     presentation_generation: AtomicU64,
@@ -108,17 +108,18 @@ fn selected_speaker(
     config: &AssistantConfig,
 ) -> Result<Arc<dyn SpeechOutput>, String> {
     let runtime = app.state::<AssistantRuntime>();
-    let online_kind = match config.speech_engine {
-        SpeechEngine::System => return runtime.system_speaker.clone(),
-        SpeechEngine::Kokoro => None,
-        SpeechEngine::Openai => Some(kotone_tts::online::OnlineKind::OpenAi),
-        SpeechEngine::Volcano => Some(kotone_tts::online::OnlineKind::Volcano),
+    let engine = config.tts_engine();
+    let online_kind = match engine {
+        TtsEngine::System => return runtime.system_speaker.clone(),
+        TtsEngine::Kokoro => None,
+        TtsEngine::Openai => Some(kotone_tts::online::OnlineKind::OpenAi),
+        TtsEngine::Volcano => Some(kotone_tts::online::OnlineKind::Volcano),
     };
     if let Some(kind) = online_kind {
         let mut online = runtime.online_speakers.lock().unwrap();
         if let Some((_, speaker)) = online
             .iter()
-            .find(|(engine, speaker)| *engine == config.speech_engine && !speaker.is_closed())
+            .find(|(e, speaker)| *e == engine && !speaker.is_closed())
         {
             return Ok(speaker.clone());
         }
@@ -127,8 +128,8 @@ fn selected_speaker(
             kind,
             Arc::new(move || crate::tts_online::config(&resolver_app, kind)),
         )?);
-        online.retain(|(engine, _)| *engine != config.speech_engine);
-        online.push((config.speech_engine, speaker.clone()));
+        online.retain(|(e, _)| *e != engine);
+        online.push((engine, speaker.clone()));
         return Ok(speaker);
     }
     let settings = app.state::<crate::SharedState>();
@@ -453,13 +454,13 @@ impl ReminderDelivery for DesktopDelivery {
 fn speech_request(config: &kotone_core::assistant::AssistantConfig, text: &str) -> SpeechRequest {
     // 声音编号可带提供方前缀（`system/…`、`kokoro/…`）；在线引擎的声音在模型配置里，
     // 每次播报时由合成线程解析。属于其他提供方的声音会在合成时报错，不会换声音。
-    let voice = match config.speech_engine {
-        SpeechEngine::Kokoro => config.kokoro_voice_id.trim().to_string(),
-        SpeechEngine::System => {
+    let voice = match config.tts_engine() {
+        TtsEngine::Kokoro => config.kokoro_voice_id.trim().to_string(),
+        TtsEngine::System => {
             let id = config.voice_id.trim();
             id.strip_prefix("system/").unwrap_or(id).to_string()
         }
-        SpeechEngine::Openai | SpeechEngine::Volcano => String::new(),
+        TtsEngine::Openai | TtsEngine::Volcano => String::new(),
     };
     SpeechRequest {
         text: text.to_string(),
@@ -748,19 +749,19 @@ pub async fn list_speech_voices(app: AppHandle) -> Result<Vec<SpeechVoice>, Stri
         .unwrap()
         .assistant
         .clone();
-    match config.speech_engine {
-        SpeechEngine::Kokoro => return Ok(kotone_tts::kokoro_voices()),
-        SpeechEngine::Openai => {
+    match config.tts_engine() {
+        TtsEngine::Kokoro => return Ok(kotone_tts::kokoro_voices()),
+        TtsEngine::Openai => {
             return Ok(kotone_tts::catalog::online_voices(
                 kotone_tts::online::OnlineKind::OpenAi,
             ))
         }
-        SpeechEngine::Volcano => {
+        TtsEngine::Volcano => {
             return Ok(kotone_tts::catalog::online_voices(
                 kotone_tts::online::OnlineKind::Volcano,
             ))
         }
-        SpeechEngine::System => {}
+        TtsEngine::System => {}
     }
     let speaker = selected_speaker(&app, &config)?;
     let voices = tokio::task::spawn_blocking(move || speaker.voices())

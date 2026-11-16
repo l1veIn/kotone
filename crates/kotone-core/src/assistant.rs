@@ -34,9 +34,12 @@ impl From<AssistantInteractionMode> for InteractionMode {
 #[serde(rename_all = "kebab-case")]
 pub enum AssistantRoute {
     /// Kotone 陪玩（默认）：截图 + OCR + 聊天跟踪 + profile 说明，一次大模型调用，
-    /// 从“创建提醒 / 帮忙打字 / 直接回答”中选一种。0.1.13 的 `reminders` 读入时按此处理。
+    /// 从“创建提醒 / 帮忙打字 / 直接回答”中选一种。
+    ///
+    /// 配置里仍写作旧值 `reminders`（旧版本能读；它们把它当作提醒规划），`companion` 只作为
+    /// 读入别名。配置兼容原则：旧字段只写旧版本认识的值，新能力用新字段。
     #[default]
-    #[serde(alias = "reminders")]
+    #[serde(rename = "reminders", alias = "companion")]
     Companion,
     /// 原文转交外部 Agent：经工具服务发布 `user.request` 事件，由 Agent 处理并用
     /// `agent.reply` 回应；需要开启工具服务。
@@ -74,7 +77,27 @@ pub struct AssistantConfig {
     pub route: AssistantRoute,
     /// 陪玩：快捷消息、帮忙打字是否自动发送、AI 连接能力自检结果。
     pub companion: CompanionConfig,
+    /// 选中的在线语音合成模型（统一模型清单 TTS 类别的在线条目，如 `openai-compat-tts`）。
+    /// 空 = 用旧字段 `speech_engine`（系统语音 / Kokoro）。在线引擎不写进 `speech_engine`，
+    /// 否则旧版本读不懂这个值会把整份配置当作损坏。
+    pub tts_model_id: String,
 }
+
+/// 实际使用的语音合成引擎（由 `speech_engine` 与 `tts_model_id` 共同决定，不直接落盘）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TtsEngine {
+    System,
+    Kokoro,
+    /// OpenAI 兼容的在线语音合成（`/audio/speech`），绑定 AI 连接。
+    Openai,
+    /// 火山语音合成（在线）。
+    Volcano,
+}
+
+/// 在线语音合成的清单 ID（与 `kotone_tts::catalog` 一致）。
+pub const OPENAI_TTS_MODEL_ID: &str = "openai-compat-tts";
+pub const VOLCANO_TTS_MODEL_ID: &str = "volcano-tts";
 
 /// 快捷消息最多几条（每条一个固定的具名热键槽位 `quick-message-<n>`）。
 pub const MAX_QUICK_MESSAGES: usize = 8;
@@ -161,10 +184,6 @@ impl CompanionConfig {
 pub enum SpeechEngine {
     Kokoro,
     System,
-    /// OpenAI 兼容的在线语音合成（`/audio/speech`），绑定 AI 连接。
-    Openai,
-    /// 火山语音合成（在线）。
-    Volcano,
 }
 
 impl Default for AssistantConfig {
@@ -187,11 +206,35 @@ impl Default for AssistantConfig {
             danmaku_emote: "none".into(),
             route: AssistantRoute::Companion,
             companion: CompanionConfig::default(),
+            tts_model_id: String::new(),
         }
     }
 }
 
 impl AssistantConfig {
+    /// 实际使用的语音合成引擎。
+    pub fn tts_engine(&self) -> TtsEngine {
+        match self.tts_model_id.trim() {
+            OPENAI_TTS_MODEL_ID => TtsEngine::Openai,
+            VOLCANO_TTS_MODEL_ID => TtsEngine::Volcano,
+            _ => match self.speech_engine {
+                SpeechEngine::System => TtsEngine::System,
+                SpeechEngine::Kokoro => TtsEngine::Kokoro,
+            },
+        }
+    }
+
+    /// 声音编号在界面与接口上写成 `提供方/声音`，落盘时还原成旧写法
+    /// （`kokoro:zf_001`、不带前缀的 Windows 语音 token），旧版本才能继续使用。
+    pub fn normalize_voices(&mut self) {
+        if let Some(rest) = self.kokoro_voice_id.trim().strip_prefix("kokoro/") {
+            self.kokoro_voice_id = format!("kokoro:{rest}");
+        }
+        if let Some(rest) = self.voice_id.trim().strip_prefix("system/") {
+            self.voice_id = rest.to_string();
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.default_delivery.is_empty() || self.default_delivery.len() > 2 {
             return Err("助手默认提醒方式需选择语音、弹幕或两者".into());
@@ -230,6 +273,12 @@ impl AssistantConfig {
             .contains(&self.danmaku_emote.as_str())
         {
             return Err("请选择内置琴音表情".into());
+        }
+        if !matches!(
+            self.tts_model_id.trim(),
+            "" | OPENAI_TTS_MODEL_ID | VOLCANO_TTS_MODEL_ID
+        ) {
+            return Err("在线语音合成模型无效".into());
         }
         self.companion.validate()
     }
@@ -338,7 +387,11 @@ mod tests {
         let config: AssistantConfig =
             serde_json::from_value(serde_json::json!({"route":"reminders"})).unwrap();
         assert_eq!(config.route, AssistantRoute::Companion);
-        assert_eq!(serde_json::to_value(&config).unwrap()["route"], "companion");
+        // 落盘仍写旧值，旧版本能读
+        assert_eq!(serde_json::to_value(&config).unwrap()["route"], "reminders");
+        let alias: AssistantConfig =
+            serde_json::from_value(serde_json::json!({"route":"companion"})).unwrap();
+        assert_eq!(alias.route, AssistantRoute::Companion);
         assert!(config.companion.auto_send, "帮忙打字默认自动发送");
         let quick = |id: &str, text: &str| QuickMessage {
             id: id.into(),
@@ -365,6 +418,37 @@ mod tests {
             ..Default::default()
         };
         assert!(check.matches("c", "u", "m") && !check.matches("c", "u", "m2"));
+    }
+
+    #[test]
+    fn new_capabilities_never_write_values_old_versions_cannot_read() {
+        // 0.1.13 的 speechEngine 只认识 kokoro / system，route 只认识 reminders / agent；
+        // 读到不认识的值会把整份 config.json 当作损坏并重置。
+        let mut config = AssistantConfig {
+            tts_model_id: OPENAI_TTS_MODEL_ID.into(),
+            kokoro_voice_id: "kokoro/zf_017".into(),
+            voice_id: "system/HKEY_LOCAL_MACHINE\\TTS_MS_ZH-CN_HUIHUI_11.0".into(),
+            ..AssistantConfig::default()
+        };
+        config.normalize_voices();
+        assert_eq!(config.tts_engine(), TtsEngine::Openai);
+        let json = serde_json::to_value(&config).unwrap();
+        assert!(["kokoro", "system"].contains(&json["speechEngine"].as_str().unwrap()));
+        assert!(["reminders", "agent"].contains(&json["route"].as_str().unwrap()));
+        assert_eq!(json["kokoroVoiceId"], "kokoro:zf_017");
+        assert_eq!(
+            json["voiceId"],
+            "HKEY_LOCAL_MACHINE\\TTS_MS_ZH-CN_HUIHUI_11.0"
+        );
+        config.tts_model_id.clear();
+        config.speech_engine = SpeechEngine::Kokoro;
+        assert_eq!(config.tts_engine(), TtsEngine::Kokoro);
+        assert!(AssistantConfig {
+            tts_model_id: "edge-tts".into(),
+            ..AssistantConfig::default()
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]

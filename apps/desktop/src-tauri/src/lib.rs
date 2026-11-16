@@ -1036,6 +1036,7 @@ fn update_settings(
             settings::merge_json(&mut merged, &patch);
             *next = serde_json::from_value(merged).map_err(|e| format!("配置项不合法: {e}"))?;
             next.overlay.normalize_interaction();
+            next.assistant.normalize_voices();
             next.assistant.validate()?;
             if previous.overlay.visibility != next.overlay.visibility
                 && next.overlay.visibility != OverlayVisibility::Never

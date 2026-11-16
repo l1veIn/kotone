@@ -32,19 +32,30 @@
     if (engine === "kokoro" && value.startsWith("kokoro:")) return `kokoro/${value.slice(7)}`;
     return `${engine}/${value}`;
   }
+  /** 实际使用的引擎：在线引擎记在新字段 ttsModelId，本地引擎在旧字段 speechEngine。 */
+  const engine = $derived<"system" | "kokoro" | "openai" | "volcano" | undefined>(
+    !config ? undefined
+      : config.ttsModelId === onlineModel.openai ? "openai"
+      : config.ttsModelId === onlineModel.volcano ? "volcano"
+      : config.speechEngine,
+  );
+  function selectEngine(value: string) {
+    // 在线引擎不写旧字段（旧版本读不懂会把整份配置当作损坏）。
+    if (value === "openai" || value === "volcano") return save({ ttsModelId: onlineModel[value] });
+    return save({ speechEngine: value as AssistantConfig["speechEngine"], ttsModelId: "" });
+  }
   const selectedVoice = $derived.by(() => {
-    if (!config) return "";
-    const engine = config.speechEngine;
+    if (!config || !engine) return "";
     if (engine === "kokoro") return qualifiedVoice(engine, config.kokoroVoiceId);
     if (engine === "system") return qualifiedVoice(engine, config.voiceId);
     const stored = $settingsStore?.modelConfigs?.[onlineModel[engine]]?.voice;
     return qualifiedVoice(engine, typeof stored === "string" ? stored : "");
   });
   async function saveVoice(value: string) {
-    if (!config) return;
-    const engine = config.speechEngine;
-    if (engine === "kokoro") return save({ kokoroVoiceId: value });
-    if (engine === "system") return save({ voiceId: value });
+    if (!config || !engine) return;
+    // 落盘用旧写法（kokoro:zf_017、不带前缀的系统语音），旧版本才能继续使用。
+    if (engine === "kokoro") return save({ kokoroVoiceId: value.startsWith("kokoro/") ? `kokoro:${value.slice(7)}` : value });
+    if (engine === "system") return save({ voiceId: value.startsWith("system/") ? value.slice(7) : value });
     const model = onlineModel[engine];
     const current = $settingsStore?.modelConfigs?.[model] ?? {};
     const native = value.startsWith(`${engine}/`) ? value.slice(engine.length + 1) : value;
@@ -53,12 +64,12 @@
   const progress = $derived(model?.totalBytes ? Math.min(100, Math.round(model.downloadedBytes / model.totalBytes * 100)) : 0);
 
   $effect(() => {
-    const engine = config?.speechEngine;
+    const current = engine;
     let active = true;
     voices = [];
-    if (engine) void listSpeechVoices().then((items) => {
+    if (current) void listSpeechVoices().then((items) => {
       if (!active) return;
-      voices = !isTauri && engine === "system" ? [] : items;
+      voices = !isTauri && current === "system" ? [] : items;
       voiceError = "";
     }).catch((cause) => { if (active) voiceError = errText(cause); });
     return () => { active = false; };
@@ -119,11 +130,11 @@
   <div class="space-y-4 border-t border-white/8 pt-4" data-testid="speech-settings">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <h3 class="text-sm text-white/85">语音播报</h3>
-      <div class="w-64"><Select ariaLabel="语音引擎" value={config.speechEngine} disabled={saving}
+      <div class="w-64"><Select ariaLabel="语音引擎" value={engine ?? "system"} disabled={saving}
         options={[{value:"system",label:"Windows · 系统语音"},{value:"kokoro",label:"Kokoro · 本地中文语音"},{value:"openai",label:"在线 · OpenAI 兼容"},{value:"volcano",label:"在线 · 火山语音合成"}]}
-        onchange={(value) => void save({speechEngine:value as AssistantConfig["speechEngine"]})} /></div>
+        onchange={(value) => void selectEngine(value)} /></div>
     </div>
-    {#if config.speechEngine === "kokoro"}
+    {#if engine === "kokoro"}
       <div class="rounded-xl border border-kotone-cyan/15 bg-kotone-cyan/5 p-3 text-xs" data-testid="speech-model">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div><p class="font-semibold text-white/80">Kokoro 中文语音 <span class="ml-2 font-normal text-kotone-cyan">{model ? phases[model.phase] : "正在读取…"}</span></p>
@@ -140,7 +151,7 @@
         {/if}
         {#if model?.error}<p class="mt-2 text-kotone-pink" role="alert">{model.error}</p>{/if}
       </div>
-    {:else if config.speechEngine === "openai" || config.speechEngine === "volcano"}
+    {:else if engine === "openai" || engine === "volcano"}
       <p class="text-[11px] leading-relaxed text-white/45" data-testid="online-speech-info">
         在线语音：每次播报都会把文字发给服务商。连接、模型与声音在「高级 → 模型 → 语音合成」里配置；相同的话会直接复用缓存，不再请求。
       </p>
@@ -150,7 +161,7 @@
     <div class="flex flex-wrap items-center justify-between gap-3">
       <span class="text-xs text-white/65">播报声音</span>
       <div class="w-64"><Select ariaLabel="播报声音" value={selectedVoice} disabled={saving}
-        options={[...(config.speechEngine === "system" ? [{value:"",label:"系统默认声音"}] : []), ...(selectedVoice && !voices.some((voice) => voice.id === selectedVoice) && config.speechEngine !== "system" && config.speechEngine !== "kokoro" ? [{value:selectedVoice,label:selectedVoice.split("/").slice(1).join("/")}] : []), ...voices.map((voice) => ({value:voice.id,label:voice.name}))]}
+        options={[...(engine === "system" ? [{value:"",label:"系统默认声音"}] : []), ...(selectedVoice && !voices.some((voice) => voice.id === selectedVoice) && engine !== "system" && engine !== "kokoro" ? [{value:selectedVoice,label:selectedVoice.split("/").slice(1).join("/")}] : []), ...voices.map((voice) => ({value:voice.id,label:voice.name}))]}
         onchange={(value) => void saveVoice(value)} /></div>
     </div>
     {#if voiceError}<p class="text-xs text-kotone-pink" role="alert">{voiceError}</p>{/if}

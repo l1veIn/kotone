@@ -77,7 +77,7 @@ pub fn list_blocking(
                 .system_speech_error();
             Ok(kotone_tts::catalog::entries(
                 &kotone_tts::catalog::CatalogState {
-                    active: settings.assistant.speech_engine,
+                    active: settings.assistant.tts_engine(),
                     kokoro_installed: installed,
                     system_error,
                     openai: crate::tts_online::status(app, kotone_tts::online::OnlineKind::OpenAi),
@@ -100,7 +100,7 @@ pub fn active_id(app: &AppHandle, category: ModelCategory) -> Option<String> {
             kotone_ocr::catalog::resolve_active(&settings, &models_root(&settings), verifier())
         }
         ModelCategory::Tts => {
-            Some(kotone_tts::catalog::model_of(settings.assistant.speech_engine).to_string())
+            Some(kotone_tts::catalog::model_of(settings.assistant.tts_engine()).to_string())
         }
     }
 }
@@ -286,8 +286,8 @@ pub fn delete(app: &AppHandle, category: ModelCategory, id: &str) -> Result<bool
                 std::fs::remove_dir_all(&dir)
                     .map_err(|e| format!("删除目录 {} 失败：{e}", dir.display()))?;
             }
-            let was_active = state.settings.read().unwrap().assistant.speech_engine
-                == kotone_core::assistant::SpeechEngine::Kokoro;
+            let was_active = state.settings.read().unwrap().assistant.tts_engine()
+                == kotone_core::assistant::TtsEngine::Kokoro;
             if was_active {
                 state.settings_repository.update(|next| {
                     next.assistant.speech_engine = kotone_core::assistant::SpeechEngine::System;
@@ -336,8 +336,22 @@ pub fn activate(app: &AppHandle, category: ModelCategory, id: &str) -> Result<Se
             ModelCategory::Asr => return Err("语音识别模型请使用 set_active_model".into()),
             ModelCategory::Ocr => next.ocr.active_model_id = id.to_string(),
             ModelCategory::Tts => {
-                next.assistant.speech_engine =
-                    kotone_tts::catalog::engine_of(id).ok_or_else(|| format!("未知模型 {id}"))?;
+                // 在线引擎写新字段 ttsModelId；本地引擎写旧字段 speechEngine（旧版本能读）。
+                use kotone_core::assistant::{SpeechEngine, TtsEngine};
+                match kotone_tts::catalog::engine_of(id).ok_or_else(|| format!("未知模型 {id}"))?
+                {
+                    TtsEngine::System => {
+                        next.assistant.speech_engine = SpeechEngine::System;
+                        next.assistant.tts_model_id.clear();
+                    }
+                    TtsEngine::Kokoro => {
+                        next.assistant.speech_engine = SpeechEngine::Kokoro;
+                        next.assistant.tts_model_id.clear();
+                    }
+                    TtsEngine::Openai | TtsEngine::Volcano => {
+                        next.assistant.tts_model_id = id.to_string();
+                    }
+                }
             }
         }
         Ok(())

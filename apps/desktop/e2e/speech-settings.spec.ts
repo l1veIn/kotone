@@ -104,7 +104,8 @@ test("Kokoro offers three Chinese voices and switching engines preserves each vo
   await page.getByRole("option", { name: "Kokoro · 本地中文语音", exact: true }).click();
   await expect(speech.getByLabel("播报声音", { exact: true })).toHaveText("中文女声 017");
   const saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
-  expect(saved.assistant).toMatchObject({ speechEngine: "kokoro", kokoroVoiceId: "kokoro/zf_017", voiceId: "" });
+  // 落盘用旧写法，旧版本仍能使用这个声音
+  expect(saved.assistant).toMatchObject({ speechEngine: "kokoro", kokoroVoiceId: "kokoro:zf_017", voiceId: "" });
 });
 
 test("browser preview clearly shows an uninstalled model, disables download and makes no external request", async ({ page }, testInfo) => {

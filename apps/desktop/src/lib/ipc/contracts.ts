@@ -177,8 +177,10 @@ export interface AssistantConfig {
   voiceId: string;
   speechVolume: number;
   speechRate: number;
-  /** 播报引擎：system / kokoro（本地）、openai / volcano（在线，配置在模型 → 语音合成） */
-  speechEngine: "kokoro" | "system" | "openai" | "volcano";
+  /** 本地播报引擎（旧字段，只写旧版本认识的 system / kokoro） */
+  speechEngine: "kokoro" | "system";
+  /** 选中的在线语音合成模型（openai-compat-tts / volcano-tts）；空 = 用 speechEngine */
+  ttsModelId?: string;
   kokoroVoiceId: string;
   danmakuDurationMs: number;
   danmakuSpeedPxPerSec: number;
@@ -188,7 +190,7 @@ export interface AssistantConfig {
   danmakuColor: string;
   danmakuEmote: "none" | "hello" | "cheering" | "pointing" | "amazed";
   /** 请求去向：companion 为 Kotone 陪玩（默认；旧值 reminders 视同 companion）；agent 原文转交外部 Agent（需开启工具服务）。 */
-  route?: "companion" | "reminders" | "agent";
+  route?: "reminders" | "companion" | "agent";
   /** 陪玩：快捷消息、帮忙打字是否自动发送、AI 连接能力自检结果 */
   companion: CompanionConfig;
 }

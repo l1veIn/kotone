@@ -101,7 +101,7 @@ const mock: MockStore = {
       send: { enabled: true, volume: 60, soundId: "fall" },
     },
     diagnostics: { recording: true },
-    assistant: { hotkey: "", interactionMode: "push-to-talk", connectionId: "", defaultDelivery: ["voice", "danmaku"], voiceId: "", speechEngine: "system", kokoroVoiceId: "kokoro:zf_001", speechVolume: 80, speechRate: 0, danmakuDurationMs: 8000, danmakuSpeedPxPerSec: 160, danmakuFontSize: 32, danmakuTopOffsetPx: 120, danmakuColor: "#FFFFFF", danmakuEmote: "none", route: "companion", companion: { quickMessages: [], autoSend: true } },
+    assistant: { hotkey: "", interactionMode: "push-to-talk", connectionId: "", defaultDelivery: ["voice", "danmaku"], voiceId: "", speechEngine: "system", kokoroVoiceId: "kokoro:zf_001", speechVolume: 80, speechRate: 0, danmakuDurationMs: 8000, danmakuSpeedPxPerSec: 160, danmakuFontSize: 32, danmakuTopOffsetPx: 120, danmakuColor: "#FFFFFF", danmakuEmote: "none", route: "reminders", companion: { quickMessages: [], autoSend: true }, ttsModelId: "" },
     toolService: { enabled: false },
     ocr: { activeModelId: "" },
   },
@@ -1077,7 +1077,7 @@ function refreshMockCatalog(): void {
     mock.settings.ocr.activeModelId ||
     mockCatalog.find((m) => m.category === "ocr" && m.backend === "local" && m.ready)?.id ||
     "";
-  const ttsActive = { kokoro: "kokoro-zh", system: "system-speech", openai: "openai-compat-tts", volcano: "volcano-tts" }[mock.settings.assistant.speechEngine];
+  const ttsActive = mock.settings.assistant.ttsModelId || (mock.settings.assistant.speechEngine === "kokoro" ? "kokoro-zh" : "system-speech");
   for (const m of mockCatalog) {
     m.active = m.category === "ocr" ? m.id === ocrActive : m.id === ttsActive;
     if (m.id === "deepseek-ocr") {
@@ -1111,7 +1111,7 @@ export async function deleteCatalogModel(category: ModelCategory, id: string): P
     mock.settings.ocr.activeModelId = "";
     wasActive = true;
   }
-  if (category === "tts" && id === "kokoro-zh" && mock.settings.assistant.speechEngine === "kokoro") {
+  if (category === "tts" && id === "kokoro-zh" && !mock.settings.assistant.ttsModelId && mock.settings.assistant.speechEngine === "kokoro") {
     mock.settings.assistant.speechEngine = "system";
     wasActive = true;
   }
@@ -1123,7 +1123,11 @@ export async function activateCatalogModel(category: ModelCategory, id: string):
   if (!m) throw new Error(`未知模型 ${id}`);
   if (m.backend === "local" && !m.downloaded) throw new Error(`${m.displayName} 尚未下载，请先下载再切换`);
   if (category === "ocr") mock.settings.ocr.activeModelId = id;
-  else mock.settings.assistant.speechEngine = ({ "kokoro-zh": "kokoro", "openai-compat-tts": "openai", "volcano-tts": "volcano" } as Record<string, "kokoro" | "openai" | "volcano">)[id] ?? "system";
+  else if (id === "openai-compat-tts" || id === "volcano-tts") mock.settings.assistant.ttsModelId = id;
+  else {
+    mock.settings.assistant.speechEngine = id === "kokoro-zh" ? "kokoro" : "system";
+    mock.settings.assistant.ttsModelId = "";
+  }
   return clone(mock.settings);
 }
 

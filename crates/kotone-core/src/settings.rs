@@ -771,6 +771,7 @@ pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
         Err(error) => return recover_invalid_config(path, format!("配置项不合法: {error}")),
     };
     settings.overlay.normalize_interaction();
+    settings.assistant.normalize_voices();
     migrate_legacy_engine_ids(&mut settings);
     settings.post_processing.normalize_active_id();
     SettingsLoadResult {

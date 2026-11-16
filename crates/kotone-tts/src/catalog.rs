@@ -1,11 +1,12 @@
 //! 统一模型清单的 TTS 类别（docs/product-evolution-game-tools.md §11.3）。
 //!
-//! 当前语音合成模型由 `settings.assistant.speechEngine` 决定（与设置页「语音」一致）。
+//! 当前语音合成模型由 `assistant.speechEngine`（系统语音 / Kokoro）与新字段 `assistant.ttsModelId`
+//! （在线引擎）共同决定，见 `AssistantConfig::tts_engine`；在线引擎不写进旧字段。
 //! 声音编号写成 `提供方/声音`，例如 `system/<Windows 语音 token>`、`kokoro/zf_001`、
 //! `openai/alloy`、`volcano/BV700_streaming`。在线条目的配置（连接、模型、声音）存在
 //! `settings.modelConfigs[<模型 ID>]`，密钥只在凭据库。Edge TTS 不接入（非官方接口）。
 
-use kotone_core::assistant::SpeechEngine;
+use kotone_core::assistant::TtsEngine;
 use kotone_core::model_catalog::{
     schema_of, CatalogBackend, CatalogModel, ModelCategory, StaticConfigField,
 };
@@ -91,33 +92,33 @@ const VOLCANO_SCHEMA: &[StaticConfigField] = &[
 ];
 
 /// 清单 ID → 语音引擎。
-pub fn engine_of(id: &str) -> Option<SpeechEngine> {
+pub fn engine_of(id: &str) -> Option<TtsEngine> {
     match id {
-        SYSTEM_MODEL_ID => Some(SpeechEngine::System),
-        KOKORO_MODEL_ID => Some(SpeechEngine::Kokoro),
-        OPENAI_MODEL_ID => Some(SpeechEngine::Openai),
-        VOLCANO_MODEL_ID => Some(SpeechEngine::Volcano),
+        SYSTEM_MODEL_ID => Some(TtsEngine::System),
+        KOKORO_MODEL_ID => Some(TtsEngine::Kokoro),
+        OPENAI_MODEL_ID => Some(TtsEngine::Openai),
+        VOLCANO_MODEL_ID => Some(TtsEngine::Volcano),
         _ => None,
     }
 }
 
 /// 语音引擎 → 清单 ID。
-pub fn model_of(engine: SpeechEngine) -> &'static str {
+pub fn model_of(engine: TtsEngine) -> &'static str {
     match engine {
-        SpeechEngine::System => SYSTEM_MODEL_ID,
-        SpeechEngine::Kokoro => KOKORO_MODEL_ID,
-        SpeechEngine::Openai => OPENAI_MODEL_ID,
-        SpeechEngine::Volcano => VOLCANO_MODEL_ID,
+        TtsEngine::System => SYSTEM_MODEL_ID,
+        TtsEngine::Kokoro => KOKORO_MODEL_ID,
+        TtsEngine::Openai => OPENAI_MODEL_ID,
+        TtsEngine::Volcano => VOLCANO_MODEL_ID,
     }
 }
 
 /// 声音编号的提供方前缀。
-pub fn provider_of(engine: SpeechEngine) -> &'static str {
+pub fn provider_of(engine: TtsEngine) -> &'static str {
     match engine {
-        SpeechEngine::System => crate::voice::SYSTEM,
-        SpeechEngine::Kokoro => crate::voice::KOKORO,
-        SpeechEngine::Openai => crate::voice::OPENAI,
-        SpeechEngine::Volcano => crate::voice::VOLCANO,
+        TtsEngine::System => crate::voice::SYSTEM,
+        TtsEngine::Kokoro => crate::voice::KOKORO,
+        TtsEngine::Openai => crate::voice::OPENAI,
+        TtsEngine::Volcano => crate::voice::VOLCANO,
     }
 }
 
@@ -162,7 +163,7 @@ pub struct OnlineStatus {
 
 /// 列表所需的外部状态。
 pub struct CatalogState {
-    pub active: SpeechEngine,
+    pub active: TtsEngine,
     pub kokoro_installed: bool,
     pub system_error: Option<String>,
     pub openai: OnlineStatus,
@@ -229,7 +230,7 @@ pub fn entries(state: &CatalogState) -> Vec<CatalogModel> {
             }
             .into(),
             reason: state.system_error.clone(),
-            active: active == SpeechEngine::System,
+            active: active == TtsEngine::System,
             recommended: false,
             languages: vec!["zh".into()],
             data_egress: "none".into(),
@@ -255,7 +256,7 @@ pub fn entries(state: &CatalogState) -> Vec<CatalogModel> {
             }
             .into(),
             reason: None,
-            active: active == SpeechEngine::Kokoro,
+            active: active == TtsEngine::Kokoro,
             recommended: true,
             languages: vec!["zh".into()],
             data_egress: "none".into(),
@@ -274,7 +275,7 @@ pub fn entries(state: &CatalogState) -> Vec<CatalogModel> {
                 api_key_url: "https://platform.openai.com/api-keys",
             },
             &state.openai,
-            active == SpeechEngine::Openai,
+            active == TtsEngine::Openai,
         ),
         online_entry(
             &OnlineSpec {
@@ -286,7 +287,7 @@ pub fn entries(state: &CatalogState) -> Vec<CatalogModel> {
                 api_key_url: "https://console.volcengine.com/speech/app",
             },
             &state.volcano,
-            active == SpeechEngine::Volcano,
+            active == TtsEngine::Volcano,
         ),
     ]
 }
@@ -298,7 +299,7 @@ mod tests {
     #[test]
     fn active_entry_follows_the_speech_engine_and_online_entries_send_text() {
         let list = entries(&CatalogState {
-            active: SpeechEngine::Kokoro,
+            active: TtsEngine::Kokoro,
             kokoro_installed: false,
             system_error: None,
             openai: OnlineStatus::default(),
@@ -320,10 +321,10 @@ mod tests {
                 .ready
         );
         for engine in [
-            SpeechEngine::System,
-            SpeechEngine::Kokoro,
-            SpeechEngine::Openai,
-            SpeechEngine::Volcano,
+            TtsEngine::System,
+            TtsEngine::Kokoro,
+            TtsEngine::Openai,
+            TtsEngine::Volcano,
         ] {
             assert_eq!(engine_of(model_of(engine)), Some(engine));
         }
