@@ -1,4 +1,4 @@
-//! Agent 循环测试：假模型、假工具；OpenAI 兼容客户端用本机 wiremock；存储用临时目录。
+//! Agent 循环测试：假模型、假工具；rig-core 客户端用本机 wiremock；存储用临时目录。
 //! 不访问任何真实服务商。
 
 use std::collections::VecDeque;
@@ -9,7 +9,7 @@ use kotone_core::cancel::CancellationToken;
 use kotone_core::connection::{ConnectionKind, ResolvedConnection};
 use serde_json::{json, Value};
 
-use super::model::{OpenAiModel, StreamState};
+use super::model::OpenAiModel;
 use super::store::{ConversationStore, MAX_STORED_MESSAGES};
 use super::*;
 
@@ -28,6 +28,8 @@ struct FakeModel {
     requests: Arc<Mutex<Vec<ModelRequest>>>,
     /// 脚本用完后一直重复的回复（测步数上限）。
     repeat: Option<ModelReply>,
+    /// 回答时顺便往收件箱里插一句话（模拟“模型回答期间用户又说话了”）。
+    steer_during_reply: Option<(Arc<Inbox>, String)>,
 }
 
 impl FakeModel {
@@ -47,23 +49,30 @@ impl ModelClient for FakeModel {
     async fn complete(
         &self,
         request: &ModelRequest,
-        on_text: &(dyn Fn(&str) + Send + Sync),
+        on_delta: &(dyn Fn(Delta<'_>) + Send + Sync),
         _cancel: &CancellationToken,
     ) -> Result<ModelReply, AiError> {
+        let first = self.requests.lock().unwrap().is_empty();
         self.requests.lock().unwrap().push(request.clone());
+        if let (true, Some((inbox, text))) = (first, &self.steer_during_reply) {
+            inbox.steer(Message::user(text.clone()));
+        }
         let next = self.script.lock().unwrap().pop_front();
         match next {
             Some(Script::Reply(reply)) => {
+                if !reply.reasoning.is_empty() {
+                    on_delta(Delta::Thought(&reply.reasoning));
+                }
                 // 按两个字一段流出。
                 let chars: Vec<char> = reply.text.chars().collect();
                 for piece in chars.chunks(2) {
-                    on_text(&piece.iter().collect::<String>());
+                    on_delta(Delta::Text(&piece.iter().collect::<String>()));
                 }
                 Ok(reply)
             }
             Some(Script::Fail(message)) => Err(AiError::Failed(message)),
             Some(Script::Hang(text)) => {
-                on_text(&text);
+                on_delta(Delta::Text(&text));
                 std::future::pending().await
             }
             None => match &self.repeat {
@@ -74,13 +83,26 @@ impl ModelClient for FakeModel {
     }
 }
 
-fn text(t: &str) -> Script {
-    Script::Reply(ModelReply {
+fn reply(t: &str, calls: Vec<ToolCall>) -> ModelReply {
+    ModelReply {
         text: t.into(),
         reasoning: String::new(),
-        tool_calls: Vec::new(),
-        finish: FinishReason::Stop,
-    })
+        finish: if calls.is_empty() {
+            FinishReason::Stop
+        } else {
+            FinishReason::ToolCalls
+        },
+        tool_calls: calls,
+        usage: None,
+    }
+}
+
+fn text(t: &str) -> Script {
+    Script::Reply(reply(t, Vec::new()))
+}
+
+fn calls(t: &str, calls: Vec<ToolCall>) -> Script {
+    Script::Reply(reply(t, calls))
 }
 
 fn call(id: &str, name: &str, args: &str) -> ToolCall {
@@ -91,15 +113,6 @@ fn call(id: &str, name: &str, args: &str) -> ToolCall {
     }
 }
 
-fn calls(t: &str, calls: Vec<ToolCall>) -> ModelReply {
-    ModelReply {
-        text: t.into(),
-        reasoning: String::new(),
-        tool_calls: calls,
-        finish: FinishReason::ToolCalls,
-    }
-}
-
 // ---------- 假工具 ----------
 
 #[derive(Clone, Default)]
@@ -107,6 +120,8 @@ struct FakeTools {
     log: Arc<Mutex<Vec<(String, Value)>>>,
     /// 名为 `hang` 的工具一直不返回。
     hang_started: Arc<tokio::sync::Notify>,
+    /// 名为 `interrupt` 的工具执行时，用户往这里插一句话。
+    inbox: Option<Arc<Inbox>>,
 }
 
 impl FakeTools {
@@ -117,7 +132,7 @@ impl FakeTools {
 
 impl ToolPort for FakeTools {
     fn definitions(&self) -> Vec<ToolDef> {
-        ["automation.list", "screen.read", "hang", "big"]
+        ["automation.list", "screen.read", "hang", "big", "interrupt"]
             .iter()
             .map(|name| ToolDef {
                 name: (*name).into(),
@@ -144,6 +159,12 @@ impl ToolPort for FakeTools {
                 std::future::pending().await
             }
             "big" => ToolOutcome::ok("字".repeat(50)),
+            "interrupt" => {
+                if let Some(inbox) = &self.inbox {
+                    inbox.steer(Message::user("等等，先别按了"));
+                }
+                ToolOutcome::ok("按下了 Q")
+            }
             _ => ToolOutcome::error("unknown"),
         }
     }
@@ -157,14 +178,16 @@ struct Run {
     events: Vec<AgentEvent>,
 }
 
-async fn run_with(
+async fn run_full(
     model: &FakeModel,
     tools: &FakeTools,
-    mut history: Vec<Message>,
-    user: &str,
+    history: Vec<Message>,
+    user: Message,
     limits: AgentLimits,
     cancel: &CancellationToken,
+    inbox: Option<&Inbox>,
 ) -> Run {
+    let mut history = history;
     let events = Mutex::new(Vec::new());
     let stop = run_turn(
         model,
@@ -172,9 +195,10 @@ async fn run_with(
         &mut history,
         Turn {
             system: "你是琴音。",
-            user: Message::user(user),
+            user,
             limits: &limits,
             cancel,
+            inbox,
         },
         &|e| events.lock().unwrap().push(e),
     )
@@ -184,6 +208,26 @@ async fn run_with(
         history,
         events: events.into_inner().unwrap(),
     }
+}
+
+async fn run_with(
+    model: &FakeModel,
+    tools: &FakeTools,
+    history: Vec<Message>,
+    user: &str,
+    limits: AgentLimits,
+    cancel: &CancellationToken,
+) -> Run {
+    run_full(
+        model,
+        tools,
+        history,
+        Message::user(user),
+        limits,
+        cancel,
+        None,
+    )
+    .await
 }
 
 async fn run(model: &FakeModel, tools: &FakeTools, user: &str) -> Run {
@@ -234,6 +278,18 @@ fn notices(history: &[Message]) -> Vec<String> {
         .collect()
 }
 
+fn tool_contents(history: &[Message]) -> Vec<(String, bool)> {
+    history
+        .iter()
+        .filter_map(|m| match m {
+            Message::Tool {
+                content, is_error, ..
+            } => Some((content.clone(), *is_error)),
+            _ => None,
+        })
+        .collect()
+}
+
 // ---------- 循环 ----------
 
 #[tokio::test]
@@ -241,12 +297,13 @@ async fn plain_answer_streams_and_completes() {
     let model = FakeModel::new(vec![text("你好呀，要我做什么？")]);
     let r = run(&model, &FakeTools::default(), "你好").await;
     assert_eq!(r.stop, StopReason::Completed);
+    assert_eq!(r.stop.acp(), Some("end_turn"));
     assert_eq!(r.history.len(), 2);
     let streamed: String = r
         .events
         .iter()
         .filter_map(|e| match e {
-            AgentEvent::TextDelta { text } => Some(text.as_str()),
+            AgentEvent::MessageChunk { text } => Some(text.as_str()),
             _ => None,
         })
         .collect();
@@ -263,12 +320,12 @@ async fn plain_answer_streams_and_completes() {
 }
 
 #[tokio::test]
-async fn tool_result_goes_back_to_model() {
+async fn tool_result_goes_back_to_model_with_acp_style_events() {
     let model = FakeModel::new(vec![
-        Script::Reply(calls(
+        calls(
             "我看看。",
             vec![call("c1", "automation.list", r#"{"limit":5}"#)],
-        )),
+        ),
         text("你有一个自动化：连按Q。"),
     ]);
     let tools = FakeTools::default();
@@ -284,10 +341,24 @@ async fn tool_result_goes_back_to_model() {
         second.messages.last(),
         Some(Message::Tool { call_id, content, .. }) if call_id == "c1" && content.contains("连按Q")
     ));
-    assert!(r
+    // 事件顺序：tool_call(pending) → in_progress → completed（ACP 的 tool_call / tool_call_update）。
+    let statuses: Vec<&str> = r
         .events
         .iter()
-        .any(|e| matches!(e, AgentEvent::ToolStarted { call } if call.id == "c1")));
+        .filter_map(|e| match e {
+            AgentEvent::ToolCall { call } if call.id == "c1" => Some("pending"),
+            AgentEvent::ToolCallUpdate {
+                call_id, status, ..
+            } if call_id == "c1" => Some(match status {
+                ToolStatus::InProgress => "in_progress",
+                ToolStatus::Completed => "completed",
+                ToolStatus::Failed => "failed",
+                ToolStatus::Pending => "pending",
+            }),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(statuses, vec!["pending", "in_progress", "completed"]);
     assert!(r
         .events
         .iter()
@@ -295,9 +366,41 @@ async fn tool_result_goes_back_to_model() {
 }
 
 #[tokio::test]
+async fn reasoning_streams_as_thought_and_usage_is_kept() {
+    let mut first = reply("好的", Vec::new());
+    first.reasoning = "先想想".into();
+    first.usage = Some(TokenUsage {
+        input_tokens: Some(120),
+        output_tokens: Some(8),
+        ..Default::default()
+    });
+    let model = FakeModel::new(vec![Script::Reply(first)]);
+    let r = run(&model, &FakeTools::default(), "嗨").await;
+    assert!(r
+        .events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::ThoughtChunk { text } if text == "先想想")));
+    assert!(matches!(
+        &r.history[1],
+        Message::Assistant { usage: Some(u), reasoning, .. } if u.input_tokens == Some(120) && reasoning == "先想想"
+    ));
+    // 服务商没报用量：不存空对象。
+    let r = run(
+        &FakeModel::new(vec![text("嗯")]),
+        &FakeTools::default(),
+        "嗨",
+    )
+    .await;
+    assert!(matches!(
+        &r.history[1],
+        Message::Assistant { usage: None, .. }
+    ));
+}
+
+#[tokio::test]
 async fn step_limit_stops_with_every_call_answered() {
     let mut model = FakeModel::new(Vec::new());
-    model.repeat = Some(calls("", vec![call("c", "automation.list", "{}")]));
+    model.repeat = Some(reply("", vec![call("c", "automation.list", "{}")]));
     let tools = FakeTools::default();
     let limits = AgentLimits {
         max_steps: 3,
@@ -313,6 +416,7 @@ async fn step_limit_stops_with_every_call_answered() {
     )
     .await;
     assert_eq!(r.stop, StopReason::StepLimit);
+    assert_eq!(r.stop.acp(), Some("max_turn_requests"));
     assert_eq!(model.requests().len(), 3);
     assert_eq!(tools.log().len(), 3);
     assert_paired(&r.history);
@@ -321,13 +425,13 @@ async fn step_limit_stops_with_every_call_answered() {
 
 #[tokio::test]
 async fn cancel_during_tool_keeps_conversation_valid() {
-    let model = FakeModel::new(vec![Script::Reply(calls(
+    let model = FakeModel::new(vec![calls(
         "",
         vec![
             call("c1", "hang", "{}"),
             call("c2", "automation.list", "{}"),
         ],
-    ))]);
+    )]);
     let tools = FakeTools::default();
     let cancel = CancellationToken::default();
     let started = tools.hang_started.clone();
@@ -410,10 +514,7 @@ async fn time_limit_interrupts_hanging_model_and_tool() {
     .await;
     assert_eq!(r.stop, StopReason::TimeLimit);
 
-    let model = FakeModel::new(vec![Script::Reply(calls(
-        "",
-        vec![call("c1", "hang", "{}")],
-    ))]);
+    let model = FakeModel::new(vec![calls("", vec![call("c1", "hang", "{}")])]);
     let r = run_with(
         &model,
         &FakeTools::default(),
@@ -430,7 +531,7 @@ async fn time_limit_interrupts_hanging_model_and_tool() {
 #[tokio::test]
 async fn unknown_tools_and_bad_arguments_are_rejected_without_calling() {
     let model = FakeModel::new(vec![
-        Script::Reply(calls(
+        calls(
             "",
             vec![
                 call("c1", "settings.delete_everything", "{}"),
@@ -438,7 +539,7 @@ async fn unknown_tools_and_bad_arguments_are_rejected_without_calling() {
                 call("c3", "automation.list", "[1,2]"),
                 call("c4", "automation.list", ""),
             ],
-        )),
+        ),
         text("好的"),
     ]);
     let tools = FakeTools::default();
@@ -447,11 +548,7 @@ async fn unknown_tools_and_bad_arguments_are_rejected_without_calling() {
     // 只有空参数的那次被执行（按空对象处理）。
     assert_eq!(tools.log(), vec![("automation.list".into(), json!({}))]);
     assert_paired(&r.history);
-    let errors = r
-        .history
-        .iter()
-        .filter(|m| matches!(m, Message::Tool { is_error: true, .. }))
-        .count();
+    let errors = tool_contents(&r.history).iter().filter(|(_, e)| *e).count();
     assert_eq!(errors, 3);
 }
 
@@ -460,7 +557,7 @@ async fn calls_over_the_per_step_limit_are_not_executed() {
     let many = (0..5)
         .map(|i| call(&format!("c{i}"), "automation.list", "{}"))
         .collect();
-    let model = FakeModel::new(vec![Script::Reply(calls("", many)), text("完")]);
+    let model = FakeModel::new(vec![calls("", many), text("完")]);
     let tools = FakeTools::default();
     let limits = AgentLimits {
         max_tool_calls_per_step: 2,
@@ -481,27 +578,28 @@ async fn calls_over_the_per_step_limit_are_not_executed() {
 
 #[tokio::test]
 async fn truncated_reply_does_not_execute_tools() {
-    let mut reply = calls("", vec![call("c1", "automation.list", r#"{"lim"#)]);
-    reply.finish = FinishReason::Length;
-    let model = FakeModel::new(vec![Script::Reply(reply), text("好")]);
+    let mut cut = reply("", vec![call("c1", "automation.list", r#"{"lim"#)]);
+    cut.finish = FinishReason::Length;
+    let model = FakeModel::new(vec![Script::Reply(cut), text("好")]);
     let tools = FakeTools::default();
     let r = run(&model, &tools, "查").await;
     assert!(tools.log().is_empty());
     assert_paired(&r.history);
 
-    let mut reply = calls("很长很长", Vec::new());
-    reply.finish = FinishReason::Length;
-    let r = run(&FakeModel::new(vec![Script::Reply(reply)]), &tools, "讲").await;
+    let mut long = reply("很长很长", Vec::new());
+    long.finish = FinishReason::Length;
+    let r = run(&FakeModel::new(vec![Script::Reply(long)]), &tools, "讲").await;
     assert_eq!(r.stop, StopReason::Truncated);
+    assert_eq!(r.stop.acp(), Some("max_tokens"));
 }
 
 #[tokio::test]
 async fn tool_results_are_truncated_and_untrusted_flag_kept() {
     let model = FakeModel::new(vec![
-        Script::Reply(calls(
+        calls(
             "",
             vec![call("c1", "big", "{}"), call("c2", "screen.read", "{}")],
-        )),
+        ),
         text("好"),
     ]);
     let limits = AgentLimits {
@@ -539,6 +637,7 @@ async fn model_failure_keeps_user_message_and_reports() {
     let model = FakeModel::new(vec![Script::Fail("AI 接口返回 HTTP 401".into())]);
     let r = run(&model, &FakeTools::default(), "你好").await;
     assert!(matches!(&r.stop, StopReason::Failed { message } if message.contains("401")));
+    assert_eq!(r.stop.acp(), None);
     assert!(matches!(r.history[0], Message::User { .. }));
     assert_eq!(notices(&r.history).len(), 1);
 }
@@ -575,6 +674,166 @@ async fn second_turn_sends_history_but_not_notices() {
         .all(|m| !matches!(m, Message::Notice { .. })));
 }
 
+// ---------- 插话与排队 ----------
+
+#[tokio::test]
+async fn steering_after_a_tool_skips_the_rest_and_reaches_the_model() {
+    let inbox = Arc::new(Inbox::default());
+    let tools = FakeTools {
+        inbox: Some(inbox.clone()),
+        ..Default::default()
+    };
+    let model = FakeModel::new(vec![
+        calls(
+            "",
+            vec![
+                call("c1", "interrupt", "{}"),
+                call("c2", "automation.list", "{}"),
+            ],
+        ),
+        text("好，先停下。"),
+    ]);
+    let r = run_full(
+        &model,
+        &tools,
+        Vec::new(),
+        Message::user("每秒按 Q"),
+        AgentLimits::default(),
+        &CancellationToken::default(),
+        Some(&inbox),
+    )
+    .await;
+    assert_eq!(r.stop, StopReason::Completed);
+    // 正在执行的那个照常完成，后面的没有执行。
+    assert_eq!(tools.log().len(), 1);
+    let contents = tool_contents(&r.history);
+    assert!(contents[1].1 && contents[1].0.contains("插话"));
+    assert_paired(&r.history);
+    // 插话在下一次请求里，排在工具结果之后。
+    let second = &model.requests()[1];
+    assert!(matches!(
+        second.messages.last(),
+        Some(Message::User { text, .. }) if text == "等等，先别按了"
+    ));
+}
+
+#[tokio::test]
+async fn steering_during_the_final_reply_continues_the_turn() {
+    let inbox = Arc::new(Inbox::default());
+    let mut model = FakeModel::new(vec![text("我在。"), text("好的，提醒你。")]);
+    model.steer_during_reply = Some((inbox.clone(), "顺便五分钟后提醒我".into()));
+    let r = run_full(
+        &model,
+        &FakeTools::default(),
+        Vec::new(),
+        Message::user("在吗"),
+        AgentLimits::default(),
+        &CancellationToken::default(),
+        Some(&inbox),
+    )
+    .await;
+    assert_eq!(r.stop, StopReason::Completed);
+    assert_eq!(model.requests().len(), 2);
+    let users = r
+        .history
+        .iter()
+        .filter(|m| matches!(m, Message::User { .. }))
+        .count();
+    assert_eq!(users, 2);
+}
+
+#[tokio::test]
+async fn follow_ups_are_left_for_the_caller() {
+    let inbox = Inbox::default();
+    inbox.follow_up(Message::user("然后看看队友说了什么"));
+    let model = FakeModel::new(vec![text("好")]);
+    let r = run_full(
+        &model,
+        &FakeTools::default(),
+        Vec::new(),
+        Message::user("嗨"),
+        AgentLimits::default(),
+        &CancellationToken::default(),
+        Some(&inbox),
+    )
+    .await;
+    assert_eq!(r.stop, StopReason::Completed);
+    assert_eq!(model.requests().len(), 1);
+    assert!(
+        matches!(inbox.next_follow_up(), Some(Message::User { text, .. }) if text.contains("队友"))
+    );
+    inbox.steer(Message::user("a"));
+    inbox.follow_up(Message::user("b"));
+    assert_eq!(inbox.clear(), 2);
+}
+
+// ---------- 图片 ----------
+
+fn screenshot(label: &str) -> Attachment {
+    Attachment::Image {
+        label: label.into(),
+        mime: "image/png".into(),
+        data: "iVBORw0KGgo=".into(),
+    }
+}
+
+fn user_with_image(t: &str) -> Message {
+    Message::User {
+        text: t.into(),
+        attachments: vec![screenshot("游戏窗口截图")],
+        source: "voice".into(),
+        at_ms: 0,
+    }
+}
+
+#[tokio::test]
+async fn only_the_current_turn_carries_images() {
+    let model = FakeModel::new(vec![text("看到了"), text("又看到了")]);
+    let tools = FakeTools::default();
+    let first = run_full(
+        &model,
+        &tools,
+        Vec::new(),
+        user_with_image("看看这个"),
+        AgentLimits::default(),
+        &CancellationToken::default(),
+        None,
+    )
+    .await;
+    let _ = run_full(
+        &model,
+        &tools,
+        first.history,
+        user_with_image("现在呢"),
+        AgentLimits::default(),
+        &CancellationToken::default(),
+        None,
+    )
+    .await;
+    let request = &model.requests()[1];
+    let images: Vec<bool> = request
+        .messages
+        .iter()
+        .filter_map(|m| match m {
+            Message::User { attachments, .. } => Some(matches!(
+                &attachments[0],
+                Attachment::Image { data, .. } if !data.is_empty()
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(images, vec![false, true]);
+    assert!(render_user(
+        "看看这个",
+        &[Attachment::Image {
+            label: "截图".into(),
+            mime: "image/png".into(),
+            data: String::new()
+        }]
+    )
+    .contains("已不在上下文中"));
+}
+
 // ---------- 上下文预算 ----------
 
 fn user(t: &str) -> Message {
@@ -586,6 +845,7 @@ fn assistant(t: &str, tool_calls: Vec<ToolCall>) -> Message {
         text: t.into(),
         tool_calls,
         reasoning: String::new(),
+        usage: None,
         at_ms: 0,
     }
 }
@@ -641,7 +901,7 @@ fn context_window_drops_orphan_tool_results() {
     assert_eq!(window.len(), 1);
 }
 
-// ---------- 渲染 ----------
+// ---------- 渲染与存盘格式 ----------
 
 #[test]
 fn untrusted_data_is_fenced_and_markers_neutralized() {
@@ -667,14 +927,26 @@ fn messages_round_trip_through_json() {
     let messages = vec![
         Message::User {
             text: "嗨".into(),
-            attachments: vec![Attachment::Data {
-                label: "ocr".into(),
-                text: "x".into(),
-            }],
+            attachments: vec![
+                Attachment::Data {
+                    label: "ocr".into(),
+                    text: "x".into(),
+                },
+                screenshot("截图"),
+            ],
             source: "voice".into(),
             at_ms: 1,
         },
-        assistant("好", vec![call("c", "automation.list", "{}")]),
+        Message::Assistant {
+            text: "好".into(),
+            tool_calls: vec![call("c", "automation.list", "{}")],
+            reasoning: String::new(),
+            usage: Some(TokenUsage {
+                input_tokens: Some(3),
+                ..Default::default()
+            }),
+            at_ms: 2,
+        },
         tool("c", "[]"),
         Message::Notice {
             text: "已停止".into(),
@@ -683,220 +955,254 @@ fn messages_round_trip_through_json() {
     ];
     let json = serde_json::to_value(&messages).unwrap();
     assert_eq!(json[0]["role"], "user");
+    assert_eq!(json[0]["attachments"][1]["kind"], "image");
     assert_eq!(json[1]["toolCalls"][0]["name"], "automation.list");
+    assert_eq!(json[1]["usage"]["inputTokens"], 3);
     assert_eq!(json[2]["callId"], "c");
     let back: Vec<Message> = serde_json::from_value(json).unwrap();
     assert_eq!(back, messages);
 }
 
-// ---------- OpenAI 兼容客户端 ----------
-
-fn connection(base_url: &str) -> ResolvedConnection {
-    ResolvedConnection {
-        id: "test".into(),
-        display_name: "test".into(),
-        kind: ConnectionKind::Remote,
-        provider: "custom".into(),
-        base_url: base_url.into(),
-        model: "fake-model".into(),
-        api_key: Some("sk-test".into()),
-    }
-}
-
-fn request_with_tools() -> ModelRequest {
-    ModelRequest {
-        system: "系统".into(),
-        messages: vec![
-            user("我有哪些自动化"),
-            Message::Assistant {
-                text: String::new(),
-                tool_calls: vec![call("c0", "automation.list", "")],
-                reasoning: "想一想".into(),
-                at_ms: 0,
-            },
-            Message::Tool {
-                call_id: "c0".into(),
-                name: "automation.list".into(),
-                content: "屏幕文字".into(),
-                is_error: false,
-                untrusted: true,
-                at_ms: 0,
-            },
-            Message::Notice {
-                text: "不发".into(),
-                at_ms: 0,
-            },
-        ],
-        tools: vec![
-            ToolDef {
-                name: "automation.list".into(),
-                description: "列出".into(),
-                parameters: json!({"type": "object"}),
-            },
-            ToolDef {
-                name: "automation_list".into(),
-                description: "撞名".into(),
-                parameters: json!({"type": "object"}),
-            },
-        ],
-    }
-}
-
-#[test]
-fn request_body_maps_messages_and_encodes_tool_names() {
-    let model = OpenAiModel::new(reqwest::Client::new(), connection("http://unused"));
-    let (body, names) = model.request_body(&request_with_tools());
-    assert_eq!(body["stream"], true);
-    assert_eq!(body["tool_choice"], "auto");
-    let tool_names: Vec<&str> = body["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|t| t["function"]["name"].as_str().unwrap())
-        .collect();
-    assert_eq!(tool_names, vec!["automation_list", "automation_list_2"]);
-    assert_eq!(names.local("automation_list"), "automation.list");
-    assert_eq!(names.local("automation_list_2"), "automation_list");
-    let messages = body["messages"].as_array().unwrap();
-    assert_eq!(messages.len(), 4, "notice must not be sent");
-    assert_eq!(messages[0]["role"], "system");
-    assert_eq!(messages[2]["content"], Value::Null);
-    assert_eq!(
-        messages[2]["tool_calls"][0]["function"]["name"],
-        "automation_list"
-    );
-    assert_eq!(messages[2]["tool_calls"][0]["function"]["arguments"], "{}");
-    assert_eq!(messages[2]["reasoning_content"], "想一想");
-    assert_eq!(messages[3]["role"], "tool");
-    assert!(messages[3]["content"]
-        .as_str()
-        .unwrap()
-        .starts_with("<<<KOTONE_DATA"));
-}
-
-#[test]
-fn stream_state_assembles_text_and_fragmented_tool_calls() {
-    let chunks = [
-        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"我\"}}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{\"content\":\"看看\"}}]}\n",
-        "\ndata: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"function\":{\"name\":\"automation_list\",\"arguments\":\"{\\\"li\"}}]}}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"mit\\\":3}\"}}]}}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_b\",\"function\":{\"name\":\"screen\",\"arguments\":\"\"}}]}}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
-        "data: [DONE]\n\n",
-    ];
-    let mut state = StreamState::default();
-    let streamed = Mutex::new(String::new());
-    let on_text = |t: &str| streamed.lock().unwrap().push_str(t);
-    // 把字节切得很碎，模拟网络分包（含多字节字符被切开）。
-    let all: Vec<u8> = chunks.concat().into_bytes();
-    for piece in all.chunks(7) {
-        state.feed(piece, &on_text).unwrap();
-    }
-    let reply = state.finish(&on_text).unwrap();
-    assert_eq!(reply.text, "我看看");
-    assert_eq!(*streamed.lock().unwrap(), "我看看");
-    assert_eq!(reply.finish, FinishReason::ToolCalls);
-    assert_eq!(reply.tool_calls.len(), 2);
-    assert_eq!(reply.tool_calls[0].id, "call_a");
-    assert_eq!(reply.tool_calls[0].arguments, r#"{"limit":3}"#);
-    assert_eq!(reply.tool_calls[1].name, "screen");
-}
-
-#[test]
-fn stream_state_rejects_cut_off_or_error_streams() {
-    let mut state = StreamState::default();
-    state
-        .feed(
-            b"data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n",
-            &|_| {},
-        )
-        .unwrap();
-    assert!(
-        state.finish(&|_| {}).is_err(),
-        "no finish reason and no [DONE]"
-    );
-
-    let mut state = StreamState::default();
-    let err = state
-        .feed(
-            b"data: {\"error\":{\"message\":\"secret-detail\"}}\n\n",
-            &|_| {},
-        )
-        .unwrap_err()
-        .to_string();
-    assert!(!err.contains("secret-detail"));
-}
+// ---------- rig-core 客户端（本机 wiremock） ----------
 
 mod http {
     use super::*;
-    use wiremock::matchers::{body_partial_json, header, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
-    async fn complete(server: &MockServer, stream: bool) -> Result<ModelReply, AiError> {
-        let mut model = OpenAiModel::new(reqwest::Client::new(), connection(&server.uri()));
-        model.stream = stream;
-        model
-            .complete(
-                &request_with_tools(),
-                &|_| {},
-                &CancellationToken::default(),
-            )
-            .await
-    }
-
-    #[tokio::test]
-    async fn streamed_reply_decodes_tool_names() {
-        let server = MockServer::start().await;
-        let sse = concat!(
-            "data: {\"choices\":[{\"delta\":{\"content\":\"好\"}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"x\",\"function\":{\"name\":\"automation_list\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
-            "data: [DONE]\n\n"
-        );
-        Mock::given(method("POST"))
-            .and(path("/chat/completions"))
-            .and(header("authorization", "Bearer sk-test"))
-            .and(body_partial_json(
-                json!({"stream": true, "model": "fake-model"}),
-            ))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream"))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let reply = complete(&server, true).await.unwrap();
-        assert_eq!(reply.text, "好");
-        assert_eq!(reply.tool_calls[0].name, "automation.list");
-    }
-
-    #[tokio::test]
-    async fn json_reply_is_accepted_even_when_streaming_was_requested() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "choices": [{"finish_reason": "tool_calls", "message": {"content": null, "tool_calls": [
-                    {"id": "y", "type": "function", "function": {"name": "automation_list_2", "arguments": {"a": 1}}}
-                ]}}]
-            })))
-            .mount(&server)
-            .await;
-        for stream in [true, false] {
-            let reply = complete(&server, stream).await.unwrap();
-            assert_eq!(reply.tool_calls[0].name, "automation_list");
-            assert_eq!(reply.tool_calls[0].arguments, r#"{"a":1}"#);
-            assert_eq!(reply.finish, FinishReason::ToolCalls);
+    fn connection(base_url: &str) -> ResolvedConnection {
+        ResolvedConnection {
+            id: "test".into(),
+            display_name: "test".into(),
+            kind: ConnectionKind::Remote,
+            provider: "dashscope".into(),
+            base_url: format!("{base_url}/v1"),
+            model: "fake-model".into(),
+            api_key: Some("sk-test".into()),
         }
     }
 
+    fn sse(chunks: &[Value]) -> String {
+        let mut out: String = chunks.iter().map(|c| format!("data: {c}\n\n")).collect();
+        out.push_str("data: [DONE]\n\n");
+        out
+    }
+
+    fn chunk(delta: Value, finish: Option<&str>) -> Value {
+        json!({"id": "x", "object": "chat.completion.chunk", "created": 0, "model": "fake-model",
+               "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]})
+    }
+
+    fn request() -> ModelRequest {
+        ModelRequest {
+            system: "系统".into(),
+            messages: vec![
+                user("我有哪些自动化"),
+                Message::Assistant {
+                    text: String::new(),
+                    tool_calls: vec![call("c0", "automation.list", "")],
+                    reasoning: String::new(),
+                    usage: None,
+                    at_ms: 0,
+                },
+                Message::Tool {
+                    call_id: "c0".into(),
+                    name: "automation.list".into(),
+                    content: "屏幕文字".into(),
+                    is_error: false,
+                    untrusted: true,
+                    at_ms: 0,
+                },
+                user_with_image("现在看看画面"),
+            ],
+            tools: vec![
+                ToolDef {
+                    name: "automation.list".into(),
+                    description: "列出".into(),
+                    parameters: json!({"type": "object", "properties": {}}),
+                },
+                ToolDef {
+                    name: "automation_list".into(),
+                    description: "撞名".into(),
+                    parameters: json!({"type": "object", "properties": {}}),
+                },
+            ],
+        }
+    }
+
+    async fn mount_sse(server: &MockServer, body: String) {
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
+            .mount(server)
+            .await;
+    }
+
+    async fn complete(server: &MockServer) -> (Result<ModelReply, AiError>, Vec<String>) {
+        let model = OpenAiModel::new(connection(&server.uri()));
+        let deltas = Mutex::new(Vec::new());
+        let result = model
+            .complete(
+                &request(),
+                &|d| {
+                    deltas.lock().unwrap().push(match d {
+                        Delta::Text(t) => format!("text:{t}"),
+                        Delta::Thought(t) => format!("thought:{t}"),
+                    })
+                },
+                &CancellationToken::default(),
+            )
+            .await;
+        (result, deltas.into_inner().unwrap())
+    }
+
+    async fn sent_body(server: &MockServer) -> Value {
+        let requests: Vec<Request> = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        requests[0].body_json().unwrap()
+    }
+
     #[tokio::test]
-    async fn http_error_does_not_leak_body() {
+    async fn streamed_reply_with_tool_call_reasoning_and_usage() {
+        let server = MockServer::start().await;
+        mount_sse(
+            &server,
+            sse(&[
+                chunk(json!({"role": "assistant", "reasoning_content": "想"}), None),
+                chunk(json!({"content": "我"}), None),
+                chunk(json!({"content": "看看"}), None),
+                chunk(
+                    json!({"tool_calls": [{"index": 0, "id": "call_a", "type": "function",
+                        "function": {"name": "automation_list", "arguments": "{\"li"}}]}),
+                    None,
+                ),
+                chunk(
+                    json!({"tool_calls": [{"index": 0, "function": {"arguments": "mit\":3}"}}]}),
+                    None,
+                ),
+                chunk(json!({}), Some("tool_calls")),
+                json!({"id": "x", "object": "chat.completion.chunk", "created": 0, "model": "fake-model",
+                       "choices": [], "usage": {"prompt_tokens": 50, "completion_tokens": 7, "total_tokens": 57}}),
+            ]),
+        )
+        .await;
+        let (reply, deltas) = complete(&server).await;
+        let reply = reply.unwrap();
+        assert_eq!(reply.text, "我看看");
+        assert_eq!(reply.finish, FinishReason::ToolCalls);
+        assert_eq!(reply.tool_calls.len(), 1);
+        assert_eq!(reply.tool_calls[0].id, "call_a");
+        assert_eq!(
+            reply.tool_calls[0].name, "automation.list",
+            "wire name decoded"
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&reply.tool_calls[0].arguments).unwrap(),
+            json!({"limit": 3})
+        );
+        let usage = reply.usage.unwrap();
+        assert_eq!(usage.input_tokens, Some(50));
+        assert_eq!(usage.output_tokens, Some(7));
+        assert_eq!(deltas.iter().filter(|d| d.starts_with("text:")).count(), 2);
+        assert!(deltas.iter().any(|d| d == "thought:想"));
+    }
+
+    #[tokio::test]
+    async fn request_body_encodes_names_history_images_and_data() {
+        let server = MockServer::start().await;
+        mount_sse(
+            &server,
+            sse(&[chunk(json!({"content": "好"}), Some("stop"))]),
+        )
+        .await;
+        let (reply, _) = complete(&server).await;
+        assert_eq!(reply.unwrap().text, "好");
+        let body = sent_body(&server).await;
+        assert_eq!(body["model"], "fake-model");
+        assert_eq!(body["stream"], true);
+        assert_eq!(
+            body["enable_thinking"], false,
+            "dashscope gets thinking off"
+        );
+        let tool_names: Vec<&str> = body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["function"]["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(tool_names, vec!["automation_list", "automation_list_2"]);
+        let messages = body["messages"].as_array().unwrap();
+        let roles: Vec<&str> = messages
+            .iter()
+            .map(|m| m["role"].as_str().unwrap())
+            .collect();
+        assert_eq!(roles, vec!["system", "user", "assistant", "tool", "user"]);
+        // rig 把系统提示编码成文字片段数组（对所有 OpenAI 兼容服务商都如此）。
+        assert!(messages[0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("系统"));
+        assert_eq!(body["stream_options"]["include_usage"], true);
+        assert_eq!(
+            messages[2]["tool_calls"][0]["function"]["name"],
+            "automation_list"
+        );
+        assert_eq!(messages[3]["tool_call_id"], "c0");
+        assert!(messages[3]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("<<<KOTONE_DATA"));
+        // 最后一条用户消息：文字 + 图片。
+        let parts = messages[4]["content"].as_array().unwrap();
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[1]["type"], "image_url");
+        assert!(parts[1]["image_url"]["url"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
+    }
+
+    #[tokio::test]
+    async fn non_streaming_mode_parses_json_reply() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(500).set_body_string("secret-user-transcript"))
+            .and(header("authorization", "Bearer sk-test"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "x", "object": "chat.completion", "created": 0, "model": "fake-model",
+                "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {"role": "assistant", "content": null, "tool_calls": [
+                    {"id": "y", "type": "function", "function": {"name": "automation_list_2", "arguments": "{\"a\":1}"}}
+                ]}}],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 2, "total_tokens": 11}
+            })))
             .mount(&server)
             .await;
-        let err = complete(&server, true).await.unwrap_err().to_string();
-        assert!(err.contains("500"));
-        assert!(!err.contains("secret-user-transcript"));
+        let mut model = OpenAiModel::new(connection(&server.uri()));
+        model.stream = false;
+        let reply = model
+            .complete(&request(), &|_| {}, &CancellationToken::default())
+            .await
+            .unwrap();
+        assert_eq!(reply.tool_calls[0].name, "automation_list");
+        assert_eq!(reply.finish, FinishReason::ToolCalls);
+        assert_eq!(reply.usage.unwrap().input_tokens, Some(9));
+        assert_eq!(sent_body(&server).await["stream"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn http_errors_do_not_leak_body() {
+        for status in [500, 401] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(
+                    ResponseTemplate::new(status).set_body_string("secret-user-transcript"),
+                )
+                .mount(&server)
+                .await;
+            let (result, _) = complete(&server).await;
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains(&status.to_string()), "{err}");
+            assert!(!err.contains("secret-user-transcript"));
+        }
     }
 
     #[tokio::test]
@@ -909,13 +1215,9 @@ mod http {
             .await;
         let mut c = connection(&server.uri());
         c.api_key = None;
-        let model = OpenAiModel::new(reqwest::Client::new(), c);
+        let model = OpenAiModel::new(c);
         assert!(model
-            .complete(
-                &request_with_tools(),
-                &|_| {},
-                &CancellationToken::default()
-            )
+            .complete(&request(), &|_| {}, &CancellationToken::default())
             .await
             .is_err());
     }
@@ -925,21 +1227,29 @@ mod http {
         let server = MockServer::start().await;
         // 第二次请求（带工具结果）返回最终回答；先挂载的匹配优先。
         Mock::given(method("POST"))
-            .and(body_partial_json(json!({"messages": [{}, {}, {}, {"role": "tool", "tool_call_id": "t1"}]})))
+            .and(|req: &Request| {
+                req.body_json::<Value>().is_ok_and(|b| {
+                    b["messages"]
+                        .as_array()
+                        .is_some_and(|m| m.iter().any(|m| m["role"] == "tool"))
+                })
+            })
             .respond_with(ResponseTemplate::new(200).set_body_raw(
-                "data: {\"choices\":[{\"delta\":{\"content\":\"有一个：连按Q\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                sse(&[chunk(json!({"content": "有一个：连按Q"}), Some("stop"))]),
                 "text/event-stream",
             ))
             .mount(&server)
             .await;
-        Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(
-                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"t1\",\"function\":{\"name\":\"automation_list\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n",
-                "text/event-stream",
-            ))
-            .mount(&server)
-            .await;
-        let model = OpenAiModel::new(reqwest::Client::new(), connection(&server.uri()));
+        mount_sse(
+            &server,
+            sse(&[chunk(
+                json!({"tool_calls": [{"index": 0, "id": "t1", "type": "function",
+                    "function": {"name": "automation_list", "arguments": "{}"}}]}),
+                Some("tool_calls"),
+            )]),
+        )
+        .await;
+        let model = OpenAiModel::new(connection(&server.uri()));
         let tools = FakeTools::default();
         let mut history = Vec::new();
         let limits = AgentLimits::default();
@@ -953,6 +1263,7 @@ mod http {
                 user: Message::user("我有哪些自动化"),
                 limits: &limits,
                 cancel: &cancel,
+                inbox: None,
             },
             &|_| {},
         )
@@ -989,6 +1300,24 @@ fn store_saves_lists_loads_and_deletes() {
     assert!(!store.delete(&c.id).unwrap());
     assert!(store.load(&c.id).unwrap().is_none());
     assert_eq!(store.current(), None);
+}
+
+#[test]
+fn store_drops_image_data_but_keeps_the_callers_copy() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = ConversationStore::open(dir.path()).unwrap();
+    let mut c = store.create();
+    c.messages.push(user_with_image("看看"));
+    store.save(&mut c).unwrap();
+    assert!(matches!(
+        &c.messages[0],
+        Message::User { attachments, .. } if matches!(&attachments[0], Attachment::Image { data, .. } if !data.is_empty())
+    ));
+    let loaded = store.load(&c.id).unwrap().unwrap();
+    assert!(matches!(
+        &loaded.messages[0],
+        Message::User { attachments, .. } if matches!(&attachments[0], Attachment::Image { data, label, .. } if data.is_empty() && label == "游戏窗口截图")
+    ));
 }
 
 #[test]

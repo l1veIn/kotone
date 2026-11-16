@@ -1,41 +1,80 @@
-//! OpenAI 兼容的 [`ModelClient`]：`/chat/completions` + `tools`，默认流式（SSE）。
+//! [`ModelClient`] 的 rig-core 实现（ADR 015）：OpenAI 兼容的 `/chat/completions`，默认流式。
 //!
-//! - 服务商不支持流式、直接返回 JSON 时自动按非流式解析；
-//! - 工具名在接口里只能用 `[A-Za-z0-9_-]{1,64}`，Kotone 的工具名带点（`automation.list`），
+//! rig-core 负责：各家的流式格式与工具调用拼装、推理内容（DeepSeek 等要带回的
+//! `reasoning_content`）、图片编码、用量统计、按模型价格表估算费用。本文件只做转换：
+//! Kotone 的 [`Message`] ↔ rig 的消息，以及错误改写。rig 是 0.x，升级时只改这里。
+//!
+//! - 接口地址沿用 Kotone 连接的约定（`base_url` 含 `/v1`，请求 `{base_url}/chat/completions`），
+//!   所有连接用同一个“OpenAI 兼容网关”方言；DeepSeek 的推理字段由 rig 按地址识别；
+//! - 工具名在接口里只能用 `[A-Za-z0-9_-]`，Kotone 的工具名带点（`automation.list`），
 //!   每次请求内部建一张对照表，发出前编码、收到后还原；
-//! - 错误信息不回显服务商的响应内容与带密钥的地址（同 [`crate::transport`]）。
+//! - 错误信息不回显服务商的响应内容与带密钥的地址（rig 的错误文本会带响应体，一律改写）。
 
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use futures::StreamExt;
 use kotone_core::cancel::CancellationToken;
 use kotone_core::connection::ResolvedConnection;
+use rig_core::completion::{CompletionRequest, CompletionResponse, ToolDefinition};
+use rig_core::message::{
+    AssistantContent, AssistantMessage, CallId, ImageMediaType, Message as RigMessage, ToolName,
+    ToolResult, ToolResultContent, UserContent,
+};
+use rig_core::providers::openai::wire::{Chat, Dialect};
+use rig_core::providers::openai::OpenAIConfig;
+use rig_core::streaming::{Item, StreamEvent};
+use rig_core::{Model, ProviderError};
+use rig_reqwest::ReqwestClient;
 use serde_json::{json, Value};
 
 use super::{
-    render_tool, render_user, FinishReason, Message, ModelClient, ModelReply, ModelRequest,
-    ToolCall,
+    render_tool, render_user, Attachment, Delta, FinishReason, Message, ModelClient, ModelReply,
+    ModelRequest, TokenUsage, ToolCall,
 };
 use crate::transport::AiError;
 
-const MAX_RESPONSE_BYTES: usize = 4 * 1_048_576;
-const MAX_TOOL_CALLS: usize = 32;
-/// 两个数据块之间最长等待（首个数据块同样适用）。
+/// 所有 Kotone 连接共用的方言：OpenAI 兼容网关的基线行为，路径 `/chat/completions`。
+const COMPATIBLE: Dialect = Dialect::gateway("openai-compatible", "https://api.openai.com/v1", "");
+
+/// 流式回复两个数据块之间最长等待（首个数据块同样适用）。
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// 进程内共用的 HTTP 客户端（连接复用）。reqwest 0.13 用进程默认的 rustls 加密提供者：
+/// 这里装上 ring（已经装过别的就沿用），不引入 aws-lc。
+fn transport() -> ReqwestClient {
+    static CLIENT: OnceLock<ReqwestClient> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            match reqwest13::Client::builder().build() {
+                Ok(client) => ReqwestClient::from(client),
+                // 建不出来时，rig 会在每次发送时报告构建错误。
+                Err(_) => ReqwestClient::default(),
+            }
+        })
+        .clone()
+}
+
 pub struct OpenAiModel {
-    client: reqwest::Client,
+    model: Model<Chat, ReqwestClient>,
     connection: ResolvedConnection,
     /// 关闭时发非流式请求（个别服务商的流式工具调用有问题时用）。
     pub stream: bool,
     pub temperature: f64,
-    pub max_tokens: u32,
+    pub max_tokens: u64,
 }
 
 impl OpenAiModel {
-    pub fn new(client: reqwest::Client, connection: ResolvedConnection) -> Self {
+    pub fn new(connection: ResolvedConnection) -> Self {
+        let mut config =
+            OpenAIConfig::with_key(&COMPATIBLE, connection.api_key.clone().unwrap_or_default());
+        config.base_url = connection.base_url.trim().trim_end_matches('/').to_string();
+        let model = Model::new(config.chat(connection.model.clone()), transport())
+            .with_idle_timeout(Some(IDLE_TIMEOUT));
         Self {
-            client,
+            model,
             connection,
             stream: true,
             temperature: 0.3,
@@ -43,89 +82,197 @@ impl OpenAiModel {
         }
     }
 
-    /// 请求体（纯函数，便于测试）。返回请求体与工具名对照表。
-    pub fn request_body(&self, request: &ModelRequest) -> (Value, NameMap) {
+    /// 转成 rig 的请求（纯函数，便于测试）。返回请求与工具名对照表。
+    pub fn to_rig(&self, request: &ModelRequest) -> Result<(CompletionRequest, NameMap), AiError> {
         let names = NameMap::build(request);
-        let mut messages = vec![json!({"role": "system", "content": request.system})];
+        let mut history: Vec<RigMessage> = Vec::new();
         for message in &request.messages {
-            match message {
-                Message::User {
-                    text, attachments, ..
-                } => messages
-                    .push(json!({"role": "user", "content": render_user(text, attachments)})),
-                Message::Assistant {
-                    text,
-                    tool_calls,
-                    reasoning,
-                    ..
-                } => {
-                    let mut m = json!({
-                        "role": "assistant",
-                        "content": if text.is_empty() && !tool_calls.is_empty() { Value::Null } else { json!(text) },
-                    });
-                    if !tool_calls.is_empty() {
-                        m["tool_calls"] = tool_calls
-                            .iter()
-                            .map(|c| {
-                                json!({
-                                    "id": c.id,
-                                    "type": "function",
-                                    "function": {"name": names.wire(&c.name), "arguments": if c.arguments.trim().is_empty() { "{}" } else { &c.arguments }},
-                                })
-                            })
-                            .collect();
-                    }
-                    if !reasoning.is_empty() {
-                        m["reasoning_content"] = json!(reasoning);
-                    }
-                    messages.push(m);
-                }
-                Message::Tool {
-                    call_id,
-                    content,
-                    is_error,
-                    untrusted,
-                    ..
-                } => messages.push(json!({
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "content": render_tool(content, *is_error, *untrusted),
-                })),
-                Message::Notice { .. } => {}
+            if let Some(m) = convert_message(message, &names)? {
+                history.push(m);
             }
         }
-        let mut body = json!({
-            "model": self.connection.model,
-            "messages": messages,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-            "stream": self.stream,
-        });
-        if !request.tools.is_empty() {
-            body["tools"] = request
-                .tools
-                .iter()
-                .map(|t| {
-                    json!({
-                        "type": "function",
-                        "function": {"name": names.wire(&t.name), "description": t.description, "parameters": t.parameters},
-                    })
-                })
-                .collect();
-            body["tool_choice"] = json!("auto");
+        let prompt = history
+            .pop()
+            .ok_or_else(|| AiError::Failed("没有要发给 AI 的消息".into()))?;
+        let mut rig = CompletionRequest::new(prompt)
+            .messages(history)
+            .preamble(request.system.clone())
+            .temperature(self.temperature);
+        rig.max_tokens = Some(self.max_tokens);
+        rig.accept_unknown_finish_reasons = true;
+        for tool in &request.tools {
+            rig.tools.push(Arc::new(ToolDefinition::new(
+                tool_name(&names.wire(&tool.name))?,
+                tool.description.clone(),
+                tool.parameters.clone(),
+            )));
         }
         if self.connection.provider.starts_with("dashscope") {
-            body["enable_thinking"] = json!(false);
+            rig.additional_params = Some(json!({"enable_thinking": false}));
         }
-        (body, names)
+        Ok((rig, names))
     }
+}
+
+fn tool_name(name: &str) -> Result<ToolName, AiError> {
+    ToolName::new(name).map_err(|_| AiError::Failed("工具名为空".into()))
+}
+
+fn media_type(mime: &str) -> Option<ImageMediaType> {
+    match mime {
+        "image/png" => Some(ImageMediaType::PNG),
+        "image/jpeg" | "image/jpg" => Some(ImageMediaType::JPEG),
+        "image/webp" => Some(ImageMediaType::WEBP),
+        "image/gif" => Some(ImageMediaType::GIF),
+        _ => None,
+    }
+}
+
+fn convert_message(message: &Message, names: &NameMap) -> Result<Option<RigMessage>, AiError> {
+    Ok(Some(match message {
+        Message::User {
+            text, attachments, ..
+        } => {
+            let mut content = vec![UserContent::text(render_user(text, attachments))];
+            for attachment in attachments {
+                if let Attachment::Image { mime, data, .. } = attachment {
+                    if !data.is_empty() {
+                        content.push(UserContent::image_base64(
+                            data.clone(),
+                            media_type(mime),
+                            None,
+                        ));
+                    }
+                }
+            }
+            RigMessage::User { content }
+        }
+        Message::Assistant {
+            text,
+            tool_calls,
+            reasoning,
+            ..
+        } => {
+            let mut content = Vec::new();
+            if !reasoning.is_empty() {
+                content.push(AssistantContent::reasoning(reasoning.clone()));
+            }
+            if !text.is_empty() {
+                content.push(AssistantContent::text(text.clone()));
+            }
+            for call in tool_calls {
+                let arguments = if call.arguments.trim().is_empty() {
+                    "{}".to_string()
+                } else {
+                    call.arguments.clone()
+                };
+                content.push(AssistantContent::tool_call(
+                    call.id.clone(),
+                    tool_name(&names.wire(&call.name))?,
+                    Value::String(arguments),
+                ));
+            }
+            if content.is_empty() {
+                return Ok(None);
+            }
+            RigMessage::Assistant(AssistantMessage::new(content))
+        }
+        Message::Tool {
+            call_id,
+            name,
+            content,
+            is_error,
+            untrusted,
+            ..
+        } => RigMessage::User {
+            content: vec![UserContent::ToolResult(ToolResult {
+                call: CallId::from_wire(call_id.clone()),
+                name: tool_name(&names.wire(name))?,
+                content: vec![ToolResultContent::text(render_tool(
+                    content, *is_error, *untrusted,
+                ))],
+                is_error: *is_error,
+            })],
+        },
+        Message::Notice { .. } => return Ok(None),
+    }))
+}
+
+/// rig 的错误文本会带上服务商的响应体，这里只保留可以给用户看的部分。
+pub fn map_error(error: &ProviderError) -> AiError {
+    let status = |response: &rig_core::ProviderResponseError| {
+        response
+            .status
+            .map(|s| {
+                format!(
+                    "AI 接口返回 HTTP {}，请检查连接、模型和服务商状态",
+                    s.as_u16()
+                )
+            })
+            .unwrap_or_else(|| "AI 接口返回错误".into())
+    };
+    AiError::Failed(match error {
+        ProviderError::Http(_) => "AI 连接失败，请检查接口地址与网络".into(),
+        ProviderError::ProviderResponse(r) => status(r),
+        ProviderError::InvalidAuthentication(r) => format!("{}（密钥无效或无权限）", status(r)),
+        ProviderError::Stalled(_) => "AI 响应超时".into(),
+        ProviderError::Truncated => "AI 响应中断".into(),
+        ProviderError::Json(_) | ProviderError::Response(_) => "AI 响应格式不正确".into(),
+        ProviderError::Url(_) => "AI 接口地址无效".into(),
+        ProviderError::Request(_) | ProviderError::UnsupportedOption(_) => {
+            "AI 请求无法构建，请检查模型与参数".into()
+        }
+        _ => "AI 请求失败".into(),
+    })
+}
+
+fn convert_reply(response: &CompletionResponse, names: &NameMap) -> Result<ModelReply, AiError> {
+    if response.error.is_some() {
+        return Err(AiError::Failed("AI 接口返回错误".into()));
+    }
+    let tool_calls = response
+        .tool_calls()
+        .map(|call| ToolCall {
+            id: call.id.wire().into_owned(),
+            name: names.local(call.function.name.as_str()),
+            arguments: call.function.invalid_arguments.clone().unwrap_or_else(|| {
+                serde_json::to_string(&call.function.arguments).unwrap_or_default()
+            }),
+        })
+        .collect();
+    use rig_core::completion::FinishReason as Rig;
+    let finish = match response.finish_reason() {
+        Some(Rig::Stop) => FinishReason::Stop,
+        Some(Rig::ToolCalls) => FinishReason::ToolCalls,
+        Some(Rig::Length) => FinishReason::Length,
+        _ => FinishReason::Other,
+    };
+    let usage = &response.usage;
+    Ok(ModelReply {
+        text: response.text(),
+        reasoning: response.reasoning(),
+        tool_calls,
+        finish,
+        usage: Some(TokenUsage {
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cached_input_tokens: usage.cached_input_tokens,
+            reasoning_tokens: usage.reasoning_tokens,
+            // 价格表缺了某一部分时 total 只是下限，这种情况不报，免得低估。
+            cost_usd: usage
+                .cost
+                .as_ref()
+                .filter(|c| c.is_complete())
+                .map(|c| c.total),
+        }),
+    })
 }
 
 impl ModelClient for OpenAiModel {
     async fn complete(
         &self,
         request: &ModelRequest,
-        on_text: &(dyn Fn(&str) + Send + Sync),
+        on_delta: &(dyn Fn(Delta<'_>) + Send + Sync),
         cancel: &CancellationToken,
     ) -> Result<ModelReply, AiError> {
         if self
@@ -138,36 +285,29 @@ impl ModelClient for OpenAiModel {
         {
             return Err(AiError::Failed("AI 连接尚未保存密钥".into()));
         }
-        let (body, names) = self.request_body(request);
+        let (rig, names) = self.to_rig(request)?;
         let work = async {
-            let response = crate::transport::send(
-                &self.client,
-                &self.connection.base_url,
-                self.connection.api_key.as_deref(),
-                &body,
-            )
-            .await?;
-            let is_json = response
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .is_some_and(|v| v.contains("application/json"));
-            let mut reply = if is_json {
-                let bytes = read_bounded(response).await?;
-                let value: Value = serde_json::from_slice(&bytes)
-                    .map_err(|_| AiError::Failed("AI 响应不是有效 JSON".into()))?;
-                let reply = parse_reply(&value)?;
-                if !reply.text.is_empty() {
-                    on_text(&reply.text);
+            let response = if self.stream {
+                let mut stream = self.model.stream(rig).map_err(|e| map_error(&e))?;
+                while let Some(item) = stream.next().await {
+                    match item.map_err(|e| map_error(&e))? {
+                        Item::Event(StreamEvent::Text { text, .. }) => on_delta(Delta::Text(&text)),
+                        Item::Event(StreamEvent::Reasoning { text, .. }) => {
+                            on_delta(Delta::Thought(&text))
+                        }
+                        _ => {}
+                    }
                 }
-                reply
+                stream.finish().await.map_err(|e| map_error(&e))?
             } else {
-                read_stream(response, on_text).await?
+                let response = self.model.call(rig).await.map_err(|e| map_error(&e))?;
+                let text = response.text();
+                if !text.is_empty() {
+                    on_delta(Delta::Text(&text));
+                }
+                response
             };
-            for call in &mut reply.tool_calls {
-                call.name = names.local(&call.name);
-            }
-            Ok(reply)
+            convert_reply(&response, &names)
         };
         tokio::select! {
             biased;
@@ -175,236 +315,6 @@ impl ModelClient for OpenAiModel {
             result = work => result,
         }
     }
-}
-
-async fn next_chunk(response: &mut reqwest::Response) -> Result<Option<Vec<u8>>, AiError> {
-    match tokio::time::timeout(IDLE_TIMEOUT, response.chunk()).await {
-        Err(_) => Err(AiError::Failed("AI 响应超时".into())),
-        Ok(Err(_)) => Err(AiError::Failed("读取 AI 响应失败".into())),
-        Ok(Ok(chunk)) => Ok(chunk.map(|c| c.to_vec())),
-    }
-}
-
-async fn read_bounded(mut response: reqwest::Response) -> Result<Vec<u8>, AiError> {
-    let mut bytes = Vec::new();
-    while let Some(chunk) = next_chunk(&mut response).await? {
-        if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
-            return Err(AiError::Failed("AI 响应超出大小限制".into()));
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    Ok(bytes)
-}
-
-/// 非流式响应。
-pub fn parse_reply(value: &Value) -> Result<ModelReply, AiError> {
-    if value.get("error").is_some_and(|e| !e.is_null()) {
-        return Err(AiError::Failed("AI 接口返回错误".into()));
-    }
-    let choice = value
-        .pointer("/choices/0")
-        .ok_or_else(|| AiError::Failed("AI 没有返回结果".into()))?;
-    let message = choice
-        .get("message")
-        .ok_or_else(|| AiError::Failed("AI 没有返回消息".into()))?;
-    let text = message
-        .get("content")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let reasoning = message
-        .get("reasoning_content")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let mut tool_calls = Vec::new();
-    match message.get("tool_calls") {
-        None | Some(Value::Null) => {}
-        Some(Value::Array(calls)) => {
-            if calls.len() > MAX_TOOL_CALLS {
-                return Err(AiError::Failed("AI 一次返回的工具调用过多".into()));
-            }
-            for (index, call) in calls.iter().enumerate() {
-                let function = call
-                    .get("function")
-                    .ok_or_else(|| AiError::Failed("AI 工具调用格式不正确".into()))?;
-                let arguments = match function.get("arguments") {
-                    Some(Value::String(s)) => s.clone(),
-                    None | Some(Value::Null) => String::new(),
-                    // 个别服务商直接给对象。
-                    Some(other) => other.to_string(),
-                };
-                tool_calls.push(ToolCall {
-                    id: call
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_string)
-                        .unwrap_or_else(|| format!("call_{index}")),
-                    name: function
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                    arguments,
-                });
-            }
-        }
-        Some(_) => return Err(AiError::Failed("AI 工具调用格式不正确".into())),
-    }
-    Ok(ModelReply {
-        text,
-        reasoning,
-        tool_calls,
-        finish: finish_reason(choice.get("finish_reason")),
-    })
-}
-
-fn finish_reason(value: Option<&Value>) -> FinishReason {
-    match value.and_then(Value::as_str) {
-        Some("stop") => FinishReason::Stop,
-        Some("tool_calls") | Some("function_call") => FinishReason::ToolCalls,
-        Some("length") => FinishReason::Length,
-        _ => FinishReason::Other,
-    }
-}
-
-/// 流式响应的累积器（纯逻辑，便于测试）。
-#[derive(Default)]
-pub struct StreamState {
-    text: String,
-    reasoning: String,
-    calls: Vec<ToolCall>,
-    finish: Option<FinishReason>,
-    done: bool,
-    seen: bool,
-    buffer: Vec<u8>,
-}
-
-impl StreamState {
-    /// 喂一段原始字节；正文片段经 `on_text` 报告。
-    pub fn feed(&mut self, bytes: &[u8], on_text: &dyn Fn(&str)) -> Result<(), AiError> {
-        self.buffer.extend_from_slice(bytes);
-        while let Some(pos) = self.buffer.iter().position(|b| *b == b'\n') {
-            let line: Vec<u8> = self.buffer.drain(..=pos).collect();
-            self.line(&line, on_text)?;
-            if self.done {
-                return Ok(());
-            }
-        }
-        Ok(())
-    }
-
-    fn line(&mut self, raw: &[u8], on_text: &dyn Fn(&str)) -> Result<(), AiError> {
-        let line = String::from_utf8_lossy(raw);
-        let line = line.trim();
-        let Some(payload) = line.strip_prefix("data:") else {
-            return Ok(());
-        };
-        let payload = payload.trim();
-        if payload == "[DONE]" {
-            self.done = true;
-            return Ok(());
-        }
-        let value: Value = serde_json::from_str(payload)
-            .map_err(|_| AiError::Failed("AI 流式响应格式不正确".into()))?;
-        if value.get("error").is_some_and(|e| !e.is_null()) {
-            return Err(AiError::Failed("AI 接口返回错误".into()));
-        }
-        self.seen = true;
-        let Some(choice) = value.pointer("/choices/0") else {
-            return Ok(()); // 如只含 usage 的末尾块
-        };
-        if let Some(delta) = choice.get("delta") {
-            if let Some(text) = delta.get("content").and_then(Value::as_str) {
-                if !text.is_empty() {
-                    self.text.push_str(text);
-                    on_text(text);
-                }
-            }
-            if let Some(text) = delta.get("reasoning_content").and_then(Value::as_str) {
-                self.reasoning.push_str(text);
-            }
-            if let Some(Value::Array(parts)) = delta.get("tool_calls") {
-                for part in parts {
-                    let index = part
-                        .get("index")
-                        .and_then(Value::as_u64)
-                        .map(|i| i as usize)
-                        .unwrap_or(self.calls.len().saturating_sub(1));
-                    if index >= MAX_TOOL_CALLS {
-                        return Err(AiError::Failed("AI 一次返回的工具调用过多".into()));
-                    }
-                    while self.calls.len() <= index {
-                        let n = self.calls.len();
-                        self.calls.push(ToolCall {
-                            id: format!("call_{n}"),
-                            name: String::new(),
-                            arguments: String::new(),
-                        });
-                    }
-                    let call = &mut self.calls[index];
-                    if let Some(id) = part
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .filter(|s| !s.is_empty())
-                    {
-                        call.id = id.to_string();
-                    }
-                    if let Some(function) = part.get("function") {
-                        if let Some(name) = function.get("name").and_then(Value::as_str) {
-                            call.name.push_str(name);
-                        }
-                        if let Some(args) = function.get("arguments").and_then(Value::as_str) {
-                            call.arguments.push_str(args);
-                        }
-                    }
-                }
-            }
-        }
-        if choice.get("finish_reason").is_some_and(|f| !f.is_null()) {
-            self.finish = Some(finish_reason(choice.get("finish_reason")));
-        }
-        Ok(())
-    }
-
-    pub fn finish(mut self, on_text: &dyn Fn(&str)) -> Result<ModelReply, AiError> {
-        if !self.done && !self.buffer.is_empty() {
-            let rest = std::mem::take(&mut self.buffer);
-            self.line(&rest, on_text)?;
-        }
-        if !self.seen {
-            return Err(AiError::Failed("AI 没有返回结果".into()));
-        }
-        if !self.done && self.finish.is_none() {
-            return Err(AiError::Failed("AI 响应中断".into()));
-        }
-        Ok(ModelReply {
-            text: self.text,
-            reasoning: self.reasoning,
-            tool_calls: self.calls,
-            finish: self.finish.unwrap_or(FinishReason::Other),
-        })
-    }
-}
-
-async fn read_stream(
-    mut response: reqwest::Response,
-    on_text: &(dyn Fn(&str) + Send + Sync),
-) -> Result<ModelReply, AiError> {
-    let mut state = StreamState::default();
-    let mut total = 0usize;
-    while let Some(chunk) = next_chunk(&mut response).await? {
-        total = total.saturating_add(chunk.len());
-        if total > MAX_RESPONSE_BYTES {
-            return Err(AiError::Failed("AI 响应超出大小限制".into()));
-        }
-        state.feed(&chunk, on_text)?;
-        if state.done {
-            break;
-        }
-    }
-    state.finish(on_text)
 }
 
 /// Kotone 工具名 ↔ 接口里的函数名。
@@ -421,10 +331,14 @@ impl NameMap {
             map.insert(&tool.name);
         }
         for message in &request.messages {
-            if let Message::Assistant { tool_calls, .. } = message {
-                for call in tool_calls {
-                    map.insert(&call.name);
+            match message {
+                Message::Assistant { tool_calls, .. } => {
+                    for call in tool_calls {
+                        map.insert(&call.name);
+                    }
                 }
+                Message::Tool { name, .. } => map.insert(name),
+                _ => {}
             }
         }
         map

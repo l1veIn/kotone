@@ -227,7 +227,10 @@ impl ConversationStore {
         trim_messages(&mut conversation.messages);
         conversation.title = title_of(&conversation.messages);
         conversation.updated_at_ms = now_ms().max(conversation.created_at_ms);
-        let bytes = serde_json::to_vec(conversation).map_err(|e| e.to_string())?;
+        // 截图不存盘（很大且很快过时）；调用方手里的对话保持原样，本轮还要用。
+        let mut stored = conversation.clone();
+        stored.messages.iter_mut().for_each(super::strip_images);
+        let bytes = serde_json::to_vec(&stored).map_err(|e| e.to_string())?;
         let mut index = self.index.lock().unwrap();
         write_atomic(&self.path(&conversation.id), &bytes)?;
         index.conversations.retain(|c| c.id != conversation.id);
