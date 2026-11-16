@@ -8,5 +8,5 @@ test("overlay can be disabled completely", async ({ page }) => {
   await neverButton.click();
 
   await expect(page.getByText("悬浮窗已切换：不显示", { exact: true })).toBeVisible();
-  await expect(neverButton).toHaveClass(/ring-kotone-cyan\/60/);
+  await expect(neverButton).toHaveAttribute("aria-pressed", "true");
 });

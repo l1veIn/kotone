@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { modalFocus } from "../../../lib/actions/modalFocus";
   /*
    * 历史记录页（新 IPC：get_history / clear_history）：
    * 顶部 history.mode 三态 + 独立音频保留开关 + 清空（二次确认）；
@@ -9,7 +8,13 @@
    * 波形用 canvas 手绘（峰值柱 + 进度高亮），点击可 seek。
    */
   import { onDestroy, onMount, tick } from "svelte";
-  import Select from "../../../lib/components/Select.svelte";
+  import SelectField from "../../../lib/components/settings/SelectField.svelte";
+  import ToggleField from "../../../lib/components/settings/ToggleField.svelte";
+  import SettingsPage from "../../../lib/components/settings/SettingsPage.svelte";
+  import SettingsSection from "../../../lib/components/settings/SettingsSection.svelte";
+  import SettingsRow from "../../../lib/components/settings/SettingsRow.svelte";
+  import * as Dialog from "$lib/components/ui/dialog";
+  import { Button } from "$lib/components/ui/button";
   import { listen } from "@tauri-apps/api/event";
   import {
     updateSettings,
@@ -21,7 +26,6 @@
     type HistoryRecord,
   } from "../../../lib/ipc";
   import { settingsStore, toast, errText } from "../../../lib/stores/ui";
-  import Toggle from "../../../lib/components/Toggle.svelte";
   import stickerSleepy from "../../../assets/brand/stickers/sleepy.webp";
 
   let records = $state<HistoryRecord[] | null>(null);
@@ -194,6 +198,10 @@
     const barW = cssW / bars;
     const mid = cssH / 2;
     const played = Math.floor(bars * progress);
+    // 波形颜色跟随当前主题（深色 / 浅色、各配色都清楚）
+    const style = getComputedStyle(canvas);
+    const primary = style.getPropertyValue("--primary").trim() || "#00e5ff";
+    const pink = style.getPropertyValue("--brand-pink").trim() || style.getPropertyValue("--destructive").trim() || "#ff2d78";
     for (let i = 0; i < bars; i++) {
       const from = Math.floor((i / bars) * data.length);
       const to = Math.max(from + 1, Math.floor(((i + 1) / bars) * data.length));
@@ -203,13 +211,15 @@
         if (v > peak) peak = v;
       }
       const h = Math.max(2, peak * (cssH - 6));
-      ctx.fillStyle = i <= played ? "#00e5ff" : "rgba(0, 229, 255, 0.28)";
+      ctx.fillStyle = primary;
+      ctx.globalAlpha = i <= played ? 1 : 0.3;
       ctx.beginPath();
       ctx.roundRect(i * barW + 0.5, mid - h / 2, Math.max(1, barW - 1), h, 1.5);
       ctx.fill();
     }
+    ctx.globalAlpha = 1;
     if (progress > 0 && progress < 1) {
-      ctx.fillStyle = "#ff2d78";
+      ctx.fillStyle = pink;
       ctx.fillRect(progress * cssW - 0.5, 2, 1, cssH - 4);
     }
   }
@@ -297,9 +307,9 @@
   }
 
   const outcomeMeta: Record<string, { text: string; cls: string }> = {
-    sent: { text: "已发送", cls: "bg-kotone-cyan/15 text-kotone-cyan" },
-    cancelled: { text: "已取消", cls: "bg-white/10 text-white/55" },
-    error: { text: "失败", cls: "bg-kotone-pink/15 text-kotone-pink" },
+    sent: { text: "已发送", cls: "bg-primary/12 text-primary" },
+    cancelled: { text: "已取消", cls: "bg-muted text-muted-foreground" },
+    error: { text: "失败", cls: "bg-brand-pink/12 text-brand-pink" },
   };
 
   function fmtTime(ts: string): string {
@@ -309,78 +319,70 @@
   }
 </script>
 
-<div class="px-6 py-5">
-  <h1 class="text-lg font-bold">历史记录</h1>
-  <p class="mt-0.5 text-[11px] text-white/45">每一次开口，都有迹可循</p>
-
-  <!-- 配置条 -->
-  <section class="kotone-panel mt-4 flex items-center gap-4 p-4">
-    <div class="flex items-center gap-2">
-      <label class="text-xs text-white/60" for="history-mode">记录模式</label>
-      <div class="w-52">
-        <Select
-          id="history-mode"
-          ariaLabel="记录模式"
-          value={$settingsStore?.history.mode ?? "capped"}
-          options={[
-            { value: "capped", label: `保留最近 ${$settingsStore?.history.maxRecords ?? 1000} 条` },
-            { value: "keep-all", label: "全部保留" },
-            { value: "off", label: "不记录" },
-          ]}
-          onchange={(mode) => void onModeChange(mode)}
-        />
-      </div>
-    </div>
-    <div class="flex-1"></div>
-    <button
-      class="shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold ring-1 transition active:scale-95 {confirmingClear
-        ? 'bg-kotone-pink text-white ring-kotone-pink shadow-glow-pink'
-        : 'bg-white/8 text-white/70 ring-white/15 hover:bg-white/15'}"
-      onclick={() => void onClear()}
-    >
+<SettingsPage title="历史记录" description="每一次开口，都有迹可循。记录只存在本机。" testid="history-page">
+  {#snippet actions()}
+    <Button size="sm" variant={confirmingClear ? "destructive" : "outline"} onclick={() => void onClear()}>
       {confirmingClear ? "再点一次确认清空" : "清空历史"}
-    </button>
-  </section>
+    </Button>
+  {/snippet}
 
-  <section class="kotone-panel mt-3 p-4">
-    <Toggle
-      checked={$settingsStore?.history.includeAudio ?? false}
-      label="保存历史记录音频"
-      desc="为之后的新记录独立保存 WAV，便于在本页回听；会增加磁盘占用"
-      onchange={(value) => void onIncludeAudioChange(value)}
-    />
-  </section>
+  <SettingsSection>
+    <SettingsRow label="记录模式" description="保留多少条语音输入记录。" for="history-mode">
+      {#snippet control()}
+        <div class="w-52">
+          <SelectField
+            id="history-mode"
+            ariaLabel="记录模式"
+            value={$settingsStore?.history.mode ?? "capped"}
+            options={[
+              { value: "capped", label: `保留最近 ${$settingsStore?.history.maxRecords ?? 1000} 条` },
+              { value: "keep-all", label: "全部保留" },
+              { value: "off", label: "不记录" },
+            ]}
+            onchange={(mode) => void onModeChange(mode)}
+          />
+        </div>
+      {/snippet}
+    </SettingsRow>
+    <div class="py-3.5">
+      <ToggleField
+        checked={$settingsStore?.history.includeAudio ?? false}
+        label="保存历史记录音频"
+        desc="为之后的新记录独立保存 WAV，便于在本页回听；会增加磁盘占用"
+        onchange={(value) => void onIncludeAudioChange(value)}
+      />
+    </div>
+  </SettingsSection>
 
   <!-- 记录列表 -->
   {#if records === null}
-    <p class="mt-8 text-center text-sm text-white/50">读取中…</p>
+    <p class="py-8 text-center text-sm text-muted-foreground">读取中…</p>
   {:else if records.length === 0}
-    <div class="mt-8 flex flex-col items-center gap-3 py-6">
-      <img src={stickerSleepy} alt="空空如也" class="h-28 w-28 object-contain opacity-90" />
-      <p class="text-sm font-medium text-white/70">还没有语音记录</p>
-      <p class="text-[12px] text-white/40">你的语音输入记录将显示在这里</p>
+    <div class="flex flex-col items-center gap-2 py-8">
+      <img src={stickerSleepy} alt="空空如也" class="size-28 object-contain opacity-90" />
+      <p class="m-0 text-sm font-medium text-foreground/80">还没有语音记录</p>
+      <p class="m-0 text-xs text-muted-foreground">你的语音输入记录将显示在这里</p>
     </div>
   {:else}
-    <div class="mt-4 flex flex-col gap-2">
+    <SettingsSection title="记录" description={`共 ${records.length} 条（新→旧）`}>
       {#each records as r (r.sessionId + r.ts)}
         {@const meta = outcomeMeta[r.outcome] ?? outcomeMeta.cancelled}
         {@const id = recordId(r)}
-        <div class="kotone-card px-4 py-3">
+        <div class="py-3" data-testid="history-record">
           <div class="flex items-center gap-3">
-          <span class="shrink-0 text-[11px] text-white/40 tabular-nums">{fmtTime(r.ts)}</span>
-          <div class="min-w-0 flex-1">
-            <p class="truncate text-[13px] {r.finalText ? 'text-white/90' : 'text-white/35'}">
-              {r.finalText || (r.outcome === "cancelled" ? "（未说完成取消）" : "（无文本）")}
-            </p>
-            <p class="mt-0.5 text-[10px] text-white/35">
-              语音时长 {(r.audioMs / 1000).toFixed(1)} 秒
-            </p>
-          </div>
-          {#if r.audioFile}
-            <!-- 播放/暂停：播放中按钮旁显示简易声波动画 -->
-            <div class="flex shrink-0 items-center gap-1.5">
+            <span class="shrink-0 text-[11px] text-muted-foreground tabular-nums">{fmtTime(r.ts)}</span>
+            <div class="min-w-0 flex-1">
+              <p class="m-0 truncate text-[13px] {r.finalText ? 'text-foreground' : 'text-muted-foreground'}">
+                {r.finalText || (r.outcome === "cancelled" ? "（未说完成取消）" : "（无文本）")}
+              </p>
+              <p class="mt-0.5 mb-0 text-[11px] text-muted-foreground">
+                语音时长 {(r.audioMs / 1000).toFixed(1)} 秒
+              </p>
+            </div>
+            {#if r.audioFile}
+              <!-- 播放/暂停：播放中下方显示波形 -->
               <button
-                class="flex h-6 w-6 items-center justify-center rounded-full bg-kotone-cyan/15 text-[10px] text-kotone-cyan ring-1 ring-kotone-cyan/40 transition hover:bg-kotone-cyan/25 active:scale-95 disabled:opacity-50"
+                class="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/12 text-[11px] text-primary ring-1 ring-primary/35 transition hover:bg-primary/20 active:scale-95 disabled:opacity-50"
                 title={playingId === id ? "停止播放" : "播放录音"}
                 aria-label={playingId === id ? "停止播放" : "播放录音"}
                 disabled={loadingId === id}
@@ -388,91 +390,63 @@
               >
                 {loadingId === id ? "…" : playingId === id ? "⏸" : "▶"}
               </button>
-            </div>
-          {/if}
-          <button
-            class="shrink-0 rounded bg-white/8 px-1.5 py-0.5 text-[10px] text-white/70 ring-1 ring-white/12 transition hover:bg-white/14"
-            onclick={() => (detail = r)}
-          >
-            详情
-          </button>
-          <span class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold {meta.cls}">
-            {meta.text}
-          </span>
-          <button
-            class="flex h-6 w-6 items-center justify-center rounded-full bg-kotone-pink/15 text-[10px] text-kotone-pink ring-1 ring-kotone-pink/40 transition hover:bg-kotone-pink/25 active:scale-95 disabled:opacity-50"
-            title="删除该条记录（含录音）"
-            aria-label="删除该条记录"
-            disabled={deletingId === id}
-            onclick={() => void onDelete(r)}
-          >
-            {deletingId === id ? "…" : "✕"}
-          </button>
+            {/if}
+            <Button size="xs" variant="outline" onclick={() => (detail = r)}>详情</Button>
+            <span class="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium {meta.cls}">{meta.text}</span>
+            <button
+              class="flex size-7 shrink-0 items-center justify-center rounded-full text-[11px] text-muted-foreground transition hover:bg-destructive/12 hover:text-destructive active:scale-95 disabled:opacity-50"
+              title="删除该条记录（含录音）"
+              aria-label="删除该条记录"
+              disabled={deletingId === id}
+              onclick={() => void onDelete(r)}
+            >
+              {deletingId === id ? "…" : "✕"}
+            </button>
           </div>
           {#if playingId === id}
             <!-- 行内波形（canvas 手绘峰值柱，点击可 seek） -->
             <canvas
               bind:this={waveCanvas}
-              class="mt-2.5 h-10 w-full cursor-pointer rounded-lg bg-white/4 ring-1 ring-white/8"
+              class="mt-2.5 h-10 w-full cursor-pointer rounded-lg bg-muted/50 ring-1 ring-hairline"
               onclick={onWaveClick}
             ></canvas>
           {/if}
         </div>
       {/each}
-    </div>
-    <p class="mt-3 text-[11px] text-white/35">共 {records.length} 条（新→旧）</p>
+    </SettingsSection>
   {/if}
+</SettingsPage>
 
-  {#if detail}
-    {@const meta = outcomeMeta[detail.outcome] ?? outcomeMeta.cancelled}
-    <div
-      class="fixed inset-0 z-40 flex items-center justify-center bg-black/55 p-4"
-      onclick={() => (detail = null)}
-      onkeydown={(event) => event.key === "Escape" && (detail = null)}
-      role="presentation"
-    >
-      <div
-        class="kotone-card max-h-[80vh] w-full max-w-lg overflow-y-auto p-4"
-        onclick={(event) => event.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label="历史详情"
-        tabindex="-1"
-        use:modalFocus
-        onkeydown={(event) => { if (event.key === "Escape") { event.stopPropagation(); detail = null; } }}
-      >
-        <div class="flex items-start justify-between gap-3">
-          <div>
-            <p class="text-sm font-semibold text-white/90">记录详情</p>
-            <p class="mt-0.5 text-[11px] text-white/40">{fmtTime(detail.ts)} · {meta.text}</p>
-          </div>
-          <button
-            class="rounded-md bg-white/8 px-2 py-1 text-[11px] text-white/70 ring-1 ring-white/12"
-            onclick={() => (detail = null)}
-          >
-            关闭
-          </button>
+<Dialog.Root open={detail !== null} onOpenChange={(open) => { if (!open) detail = null; }}>
+  <Dialog.Content class="ui-scope max-h-[80vh] overflow-y-auto sm:max-w-lg" aria-label="历史详情">
+    {#if detail}
+      {@const meta = outcomeMeta[detail.outcome] ?? outcomeMeta.cancelled}
+      <Dialog.Header>
+        <Dialog.Title>记录详情</Dialog.Title>
+        <Dialog.Description>{fmtTime(detail.ts)} · {meta.text}</Dialog.Description>
+      </Dialog.Header>
+      <dl class="m-0 space-y-3 text-[13px]">
+        <div>
+          <dt class="text-[11px] text-muted-foreground">发出</dt>
+          <dd class="m-0 mt-0.5 break-all text-foreground">{detail.finalText || "（无文本）"}</dd>
         </div>
-        <dl class="mt-3 space-y-2 text-[12px]">
-          <div>
-            <dt class="text-[10px] text-white/40">发出</dt>
-            <dd class="mt-0.5 break-all text-white/90">{detail.finalText || "（无文本）"}</dd>
-          </div>
-          <div>
-            <dt class="text-[10px] text-white/40">识别原文</dt>
-            <dd class="mt-0.5 break-all text-white/75">{detail.sourceText || "（旧记录无原文）"}</dd>
-          </div>
-          <div class="grid grid-cols-2 gap-2 text-[11px] text-white/65">
-            <div>引擎 {detail.engineId}</div>
-            <div>语音 {(detail.audioMs / 1000).toFixed(1)} 秒</div>
-            <div>处理 {detail.processDurationMs != null ? `${detail.processDurationMs} ms` : "—"}</div>
-            <div>识别收尾 {detail.finalizeLatencyMs != null ? `${detail.finalizeLatencyMs} ms` : "—"}</div>
-          </div>
-          {#if detail.error}
-            <p class="text-[11px] text-kotone-pink/80">{detail.error}</p>
-          {/if}
-        </dl>
-      </div>
-    </div>
-  {/if}
-</div>
+        <div>
+          <dt class="text-[11px] text-muted-foreground">识别原文</dt>
+          <dd class="m-0 mt-0.5 break-all text-foreground/80">{detail.sourceText || "（旧记录无原文）"}</dd>
+        </div>
+        <div class="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+          <div>引擎 {detail.engineId}</div>
+          <div>语音 {(detail.audioMs / 1000).toFixed(1)} 秒</div>
+          <div>处理 {detail.processDurationMs != null ? `${detail.processDurationMs} ms` : "—"}</div>
+          <div>识别收尾 {detail.finalizeLatencyMs != null ? `${detail.finalizeLatencyMs} ms` : "—"}</div>
+        </div>
+        {#if detail.error}
+          <p class="m-0 text-xs text-destructive">{detail.error}</p>
+        {/if}
+      </dl>
+      <Dialog.Footer>
+        <Button size="sm" variant="outline" onclick={() => (detail = null)}>关闭</Button>
+      </Dialog.Footer>
+    {/if}
+  </Dialog.Content>
+</Dialog.Root>

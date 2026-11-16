@@ -30,22 +30,26 @@
   }
 </script>
 
-<div class="ui-scope space-y-5 text-foreground" data-testid="appearance-settings">
+<!-- 放在「通用 → 外观」设置卡里：每一项一行，行间细分隔（与其它设置卡一致）。 -->
+<div class="ui-scope divide-y divide-hairline text-foreground" data-testid="appearance-settings">
   {#if saveError}
-    <p role="alert" class="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+    <p role="alert" class="my-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
       外观设置没能保存（本次仍然生效，重启后恢复默认）：{saveError}
     </p>
   {/if}
 
-  <div class="space-y-2">
-    <p class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"><SunMoon class="size-3.5" />明暗</p>
-    <div class="grid grid-cols-3 gap-2" role="group" aria-label="明暗">
+  <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 py-3.5">
+    <div class="min-w-0">
+      <p class="m-0 flex items-center gap-1.5 text-[13px] font-medium"><SunMoon class="size-3.5 text-muted-foreground" />明暗</p>
+      <p class="mt-0.5 mb-0 text-xs text-muted-foreground">跟随系统时随 Windows 的深浅色切换。</p>
+    </div>
+    <div class="flex rounded-lg bg-muted/70 p-0.5" role="group" aria-label="明暗">
       {#each THEME_MODES as mode (mode.id)}
         {@const Icon = modeIcons[mode.id]}
         {@const active = $appearancePreferences.mode === mode.id}
         <button type="button" data-testid={`appearance-mode-${mode.id}`} aria-pressed={active}
-          class={["flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
-            active ? "border-primary bg-primary/10 text-primary" : "border-border text-foreground/80"]}
+          class={["flex h-7 items-center gap-1.5 rounded-md px-3 text-xs transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+            active ? "bg-background font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"]}
           onclick={() => save({ mode: mode.id as ThemeMode })}>
           <Icon class="size-3.5" />{mode.label}
         </button>
@@ -53,62 +57,71 @@
     </div>
   </div>
 
-  <div class="space-y-2">
-    <p class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"><Palette class="size-3.5" />配色</p>
+  <div class="py-3.5">
+    <p class="m-0 flex items-center gap-1.5 text-[13px] font-medium"><Palette class="size-3.5 text-muted-foreground" />配色</p>
+    <p class="mt-0.5 mb-2.5 text-xs text-muted-foreground">默认是 Kotone 深色（蓝黑底 + 青 / 粉）。</p>
     <div class="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-5" role="group" aria-label="配色">
       {#each PALETTES as palette (palette.id)}
         {@const active = $appearancePreferences.palette === palette.id}
         <button type="button" data-testid={`appearance-palette-${palette.id}`} aria-pressed={active}
-          class={["flex min-w-0 items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
-            active ? "border-primary ring-2 ring-primary/25" : "border-border"]}
+          class={["flex h-9 min-w-0 items-center gap-2 rounded-lg border px-3 text-left text-xs transition-colors hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+            active ? "border-primary bg-primary/8 ring-2 ring-primary/20" : "border-hairline"]}
           onclick={() => save({ palette: palette.id })}>
           <span class="size-4 shrink-0 rounded-full border border-foreground/15" style:background-color={palette.swatch}></span>
           <span class="truncate">{palette.label}</span>
         </button>
       {/each}
     </div>
-    <p class="text-[11px] leading-5 text-muted-foreground">只影响设置窗口；游戏里的悬浮窗与弹幕保持原样。默认是 Kotone 深色。</p>
   </div>
 
-  <div class="grid gap-4 sm:grid-cols-2">
-    <div class="space-y-2">
-      <p class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"><Scaling class="size-3.5" />界面缩放</p>
+  <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 py-3.5">
+    <div class="min-w-0">
+      <p class="m-0 flex items-center gap-1.5 text-[13px] font-medium"><Scaling class="size-3.5 text-muted-foreground" />界面缩放</p>
+      <p class="mt-0.5 mb-0 text-xs text-muted-foreground">文字与间距一起放大或缩小。</p>
+    </div>
+    <div class="w-48">
       <Select.Root type="single" value={String($appearancePreferences.zoom)} onValueChange={(value) => save({ zoom: Number(value) })}>
-        <Select.Trigger class="w-full" aria-label="界面缩放" data-testid="appearance-zoom">{$appearancePreferences.zoom}%{$appearancePreferences.zoom === 100 ? "（默认）" : ""}</Select.Trigger>
-        <Select.Content>
+        <Select.Trigger class="w-full bg-background/60 text-[13px]" aria-label="界面缩放" data-testid="appearance-zoom">{$appearancePreferences.zoom}%{$appearancePreferences.zoom === 100 ? "（默认）" : ""}</Select.Trigger>
+        <Select.Content class="ui-scope">
           {#each ZOOM_LEVELS as zoom (zoom)}
             <Select.Item value={String(zoom)} label={`${zoom}%${zoom === 100 ? "（默认）" : ""}`} />
           {/each}
         </Select.Content>
       </Select.Root>
     </div>
-    <div class="space-y-2">
-      <p class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"><Type class="size-3.5" />界面字体</p>
-      <Select.Root type="single" value={$appearancePreferences.uiFont} onValueChange={(value) => save({ uiFont: value as FontId })}>
-        <Select.Trigger class="w-full" aria-label="界面字体" data-testid="appearance-font">{UI_FONTS.find((font) => font.id === $appearancePreferences.uiFont)?.label}</Select.Trigger>
-        <Select.Content>
-          {#each UI_FONTS as font (font.id)}
-            <Select.Item value={font.id} label={font.label} />
-          {/each}
-        </Select.Content>
-      </Select.Root>
-    </div>
   </div>
 
-  {#if $appearancePreferences.uiFont === "custom"}
-    <div class="space-y-1.5">
-      <label for="appearance-custom-font" class="text-xs font-medium text-muted-foreground">自定义字体名称</label>
-      <Input id="appearance-custom-font" bind:value={customFont} placeholder="已安装的字体，例如 Microsoft YaHei" maxlength={160}
-        onchange={() => save({ uiCustomFont: customFont })} />
-      <p class="text-[11px] text-muted-foreground">使用本机已安装的字体；写错或没装时用默认字体。</p>
+  <div class="py-3.5">
+    <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+      <div class="min-w-0">
+        <p class="m-0 flex items-center gap-1.5 text-[13px] font-medium"><Type class="size-3.5 text-muted-foreground" />界面字体</p>
+        <p class="mt-0.5 mb-0 text-xs text-muted-foreground">没装的字体会用默认字体代替。</p>
+      </div>
+      <div class="w-72 max-w-full">
+        <Select.Root type="single" value={$appearancePreferences.uiFont} onValueChange={(value) => save({ uiFont: value as FontId })}>
+          <Select.Trigger class="w-full bg-background/60 text-[13px]" aria-label="界面字体" data-testid="appearance-font">{UI_FONTS.find((font) => font.id === $appearancePreferences.uiFont)?.label}</Select.Trigger>
+          <Select.Content class="ui-scope">
+            {#each UI_FONTS as font (font.id)}
+              <Select.Item value={font.id} label={font.label} />
+            {/each}
+          </Select.Content>
+        </Select.Root>
+      </div>
     </div>
-  {/if}
+    {#if $appearancePreferences.uiFont === "custom"}
+      <div class="mt-3 space-y-1.5">
+        <label for="appearance-custom-font" class="text-xs font-medium text-muted-foreground">自定义字体名称</label>
+        <Input id="appearance-custom-font" bind:value={customFont} placeholder="已安装的字体，例如 Microsoft YaHei" maxlength={160}
+          onchange={() => save({ uiCustomFont: customFont })} />
+        <p class="m-0 text-[11px] text-muted-foreground">使用本机已安装的字体；写错或没装时用默认字体。</p>
+      </div>
+    {/if}
+    <p class="mt-3 mb-0 rounded-lg border border-hairline bg-background/50 px-3 py-2 text-sm" style:font-family={fontFamily} data-testid="appearance-preview">
+      琴音在这里 · Kotone 0123456789
+    </p>
+  </div>
 
-  <p class="rounded-lg border bg-card/60 px-3 py-2 text-sm" style:font-family={fontFamily} data-testid="appearance-preview">
-    琴音在这里 · Kotone 0123456789
-  </p>
-
-  <div class="flex flex-wrap items-center gap-3">
+  <div class="flex flex-wrap items-center gap-3 py-3.5">
     <Button variant="outline" size="sm" data-testid="appearance-reset" onclick={reset}><RotateCcw class="size-3.5" />恢复默认外观</Button>
     {#if restored}<span role="status" class="text-xs text-muted-foreground">已恢复默认外观。</span>{/if}
   </div>

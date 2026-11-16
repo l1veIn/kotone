@@ -5,6 +5,9 @@
   import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
   import SpeechSettings from "./SpeechSettings.svelte";
   import DanmakuSettings from "./DanmakuSettings.svelte";
+  import SettingsSection from "../../../../lib/components/settings/SettingsSection.svelte";
+  import SettingsRow from "../../../../lib/components/settings/SettingsRow.svelte";
+  import { Button } from "$lib/components/ui/button";
   import "../panel.css";
 
   let saving = $state(false);
@@ -35,27 +38,29 @@
 </script>
 
 {#if config}
-  <div class="panel-page" data-testid="output-settings">
-    <section class="panel" aria-labelledby="assistant-delivery-title">
-      <h2 id="assistant-delivery-title">声音与弹幕</h2>
-      <p class="mt-1 text-[11px] leading-relaxed text-white/45">琴音提醒你、回答你、播报自动化结果时用的声音和弹幕。</p>
-      <div class="setting-row">
-        <div><h3>默认方式</h3><p>提醒没指定方式时用哪种。</p></div>
-        <div class="flex gap-4 text-sm text-white/80">
-          {#each [{ id: "voice", label: "语音播报" }, { id: "danmaku", label: "弹幕" }] as item}
-            <label class="flex items-center gap-2"><input type="checkbox" class="accent-cyan-300" disabled={saving}
-              checked={config.defaultDelivery.includes(item.id as DeliveryKind)} onchange={(event) => toggleDelivery(item.id as DeliveryKind, event.currentTarget.checked)} />{item.label}</label>
-          {/each}
+  <div data-testid="output-settings">
+    <SettingsSection title="声音与弹幕" description="琴音提醒你、回答你、播报自动化结果时用的声音和弹幕。" id="assistant-delivery-title">
+      <SettingsRow label="默认方式" description="提醒没指定方式时用哪种。">
+        {#snippet control()}
+          <div class="flex gap-4 text-[13px] text-foreground">
+            {#each [{ id: "voice", label: "语音播报" }, { id: "danmaku", label: "弹幕" }] as item}
+              <label class="flex items-center gap-2"><input type="checkbox" class="size-4 accent-[var(--color-primary)]" disabled={saving}
+                checked={config.defaultDelivery.includes(item.id as DeliveryKind)} onchange={(event) => toggleDelivery(item.id as DeliveryKind, event.currentTarget.checked)} />{item.label}</label>
+            {/each}
+          </div>
+        {/snippet}
+      </SettingsRow>
+      <!-- 语音与弹幕的细项（仍用旧版 panel 样式，随琴音设置一起迁移） -->
+      <div class="panel-page py-3.5"><SpeechSettings /></div>
+      <div class="panel-page py-3.5"><DanmakuSettings /></div>
+      <div class="py-3.5">
+        <p id="danmaku-fullscreen-hint" class="m-0 text-xs leading-relaxed text-warning">弹幕不支持独占全屏，请使用无边框全屏或窗口化。</p>
+        <div class="mt-3 flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" disabled={!!previewing || saving} onclick={() => preview("voice")}>{previewing === "voice" ? "播报中…" : "试听语音"}</Button>
+          <Button size="sm" variant="outline" aria-describedby="danmaku-fullscreen-hint" disabled={!!previewing || saving} onclick={() => preview("danmaku")}>测试弹幕</Button>
+          <Button size="sm" variant="ghost" onclick={() => stopSpeech().catch((error) => toast(false, errText(error)))}>停止播报 / 弹幕</Button>
         </div>
       </div>
-      <div class="mt-5"><SpeechSettings /></div>
-      <div class="mt-5"><DanmakuSettings /></div>
-      <p id="danmaku-fullscreen-hint" class="mt-3 text-[11px] leading-relaxed text-amber-200/85">弹幕不支持独占全屏，请使用无边框全屏或窗口化。</p>
-      <div class="mt-4 flex flex-wrap gap-2">
-        <button type="button" class="secondary" disabled={!!previewing || saving} onclick={() => preview("voice")}>{previewing === "voice" ? "播报中…" : "试听语音"}</button>
-        <button type="button" class="secondary" aria-describedby="danmaku-fullscreen-hint" disabled={!!previewing || saving} onclick={() => preview("danmaku")}>测试弹幕</button>
-        <button type="button" class="secondary" onclick={() => stopSpeech().catch((error) => toast(false, errText(error)))}>停止播报 / 弹幕</button>
-      </div>
-    </section>
+    </SettingsSection>
   </div>
 {/if}
