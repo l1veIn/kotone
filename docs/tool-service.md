@@ -8,8 +8,8 @@
 
 - 桌面进程拥有服务；`kotone-cli tools` 是客户端。客户端直接走 loopback HTTP，**不会再次启动 `kotone.exe`**，因此不会触发单实例回调唤起设置窗口、抢走游戏焦点。
 - 服务与 ASR 运行时（启动 / 停止开关）相互独立：运行时 Stopped 时工具照常可用，调用也不会启动 ASR、注册热键或加载模型。
-- 服务从不移动或聚焦任何窗口，不发送输入。除 `models.dir.set`（把模型迁到用户指定的目录，与设置页相同）外不读写调用方指定的本地文件；`diagnostics.export` 只写到 `<KOTONE_HOME>/exports/`。可见输出只有 `agent.reply` 的弹幕（不取焦点、鼠标穿透的提醒层）与语音播报，以及 `elevation.restart` 触发的系统 UAC 提示。
-- 已实现下文 59 个工具（M1 的 8 个 + M2 的 6 个 + Agent 底座的 10 个 + 配置与引导的 35 个）。引导页与设置页里人能做的配置，Agent 都能通过工具完成（[演进计划 §5.5](product-evolution-game-tools.md)）；通用热键、工作流、模型调用（LLM）与发送尚未实现，不出现在 capabilities 中，调用它们返回 `TOOL_NOT_FOUND`。
+- 服务从不移动窗口；只有 `game.focus` 会把用户配置的游戏窗口切到前台，`game.launch` / `game.close` 会按游戏配置打开或请求关闭游戏，发送输入的只有自动化与陪玩打字（见各节）。除 `models.dir.set`（把模型迁到用户指定的目录，与设置页相同）外不读写调用方指定的本地文件；`diagnostics.export` 只写到 `<KOTONE_HOME>/exports/`。可见输出只有 `agent.reply` 的弹幕（不取焦点、鼠标穿透的提醒层）与语音播报，以及 `elevation.restart` 触发的系统 UAC 提示。
+- 已实现下文 75 个工具（服务自身 24 个 + 委托桌面宿主 51 个；以 `kotone-cli tools list` 为准）。引导页与设置页里人能做的配置，Agent 都能通过工具完成（[演进计划 §5.5](product-evolution-game-tools.md)）；通用热键、工作流、模型调用（LLM）与发送尚未实现，不出现在 capabilities 中，调用它们返回 `TOOL_NOT_FOUND`。
 - OCR 结果与聊天文字一律是**数据**：服务从不解释或执行其中的内容（例如“忽略之前的指令”之类的文字只会被原样返回）。
 
 ## 2. 开启与重启
@@ -177,6 +177,19 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 - 其他：`wait(ms)`、`every(ms, fn, {for_ms, times})`（固定节拍、不补拍，`fn` 返回 `false` 结束）、`wait_until(条件, {poll_ms=200, stable_frames=1, timeout_ms})` → 是否满足、`now()`；`region(x, y, w, h)`（窗口客户区比例 0..1）、`brightness(区域)`（0..255）、`color_at(x, y)` → r, g, b、`ocr(区域)` → 只能 `:has(文字)` / `:count()` / `:find(文字)`（位置）的对象（拿不到原文）；`say(文字)`（语音，等播完）、`toast(文字)`（弹幕，不等）、`log(文字)`、`game_focused()`、`stop()`。没有文件、网络、进程、配置。
 
 **护栏**：Luau 沙盒（无 `loadstring` / `require` / `io` / `os.execute`，内存 16 MB）；总时长 30 分钟、执行步数上限（死循环会被终止）、最多 10000 次输入（按键与鼠标动作）、两次输入至少 50 ms；输入与截图只在启动时的游戏窗口处于前台时进行，切走即暂停、切回继续（不补按）；窗口关闭则结束；自动化结束（含出错、超限、停止、Kotone 退出）时松开所有按住的键和鼠标键。鼠标移动用 `SendInput` 的绝对坐标（游戏读原始输入也能收到），换算偏差超过 2 像素时用 `SetCursorPos` 校正。停止方式：`automation.stop`、托盘「停止所有自动化」、**停止自动化热键**（`automationStopHotkey`，应用级，默认 `Ctrl+Shift+F12`，Kotone 停止时也有效）。`say` 与 `toast` 走提醒的输出队列：一条弹幕滚完之前，后面的语音会等它。
+
+### 游戏（委托桌面宿主，2026-11-16）
+
+游戏 = 一个有 `processNames` 的游戏配置（profile）；通用配置匹配任何进程，不算“在运行”。这些工具从不操作 Kotone 自己的窗口。
+
+| 工具 | 参数 | 结果要点 |
+| --- | --- | --- |
+| `game.list` | 无 | `games[]`：`id`、`name`、`processNames`、`running`、`foreground`、`windows[]`（`title`、`process`、`minimized`、`foreground`，最多 5 个）、`allowAutomationInput`、`canLaunch`。窗口标题来自别的程序，按数据对待 |
+| `game.focus` | `profileId`，或 `processName` / `titleContains`（至少一个） | 把匹配的窗口切到前台（最小化的先还原），之后 `automation.run`、`companion.read_chat`、打字都作用于它。找不到或系统不允许切换时报错，不猜。副作用 `focuses-window` |
+| `game.launch` | `profileId` | 只用游戏配置里用户填写的**启动路径**（程序、快捷方式或 `steam://` 之类的启动器链接）打开；没填时报错；已在运行时什么都不做（`alreadyRunning: true`）。立即返回，窗口出现可能要一会儿（用 `game.list` 看）。副作用 `launches-program` |
+| `game.close` | `profileId` | 给这个游戏的每个窗口发普通的关闭请求（相当于点窗口的 ×，游戏可能弹确认），从不强制结束进程。返回收到请求的窗口数。副作用 `closes-program` |
+
+**允许自动化输入**：游戏配置的 `allowAutomationInput`（缺省允许）为 `false` 时，`automation.run` 对这个游戏的程序执行会被拒绝（安排时检查，带延迟的到点时再检查一次）；玩家自己的语音打字不受影响。启动路径存在游戏配置的 `launchPath`。
 
 ### Kotone 陪玩（委托桌面宿主，2026-11-15）
 
