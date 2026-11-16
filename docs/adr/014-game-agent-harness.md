@@ -2,6 +2,7 @@
 
 - 状态：Accepted / 已采纳（2026-11-16，方向已定；原“待定”各项已由用户确认，见“已确认”一节）
 - 修订：演进计划 §10 “陪玩 = 一次 AI 决策、三种动作”的设计，以及 §12.3 第六阶段“陪玩第四种动作 `run_automation`”的计划，由本 ADR 取代
+- 细化：[ADR 015](015-agent-scope-and-stack.md)（完成度与技术栈；各开发步骤的范围以它为准）
 - 不变：[ADR 013](013-automation-domain-model.md)（自动化的定义 / 触发 / 执行记录与调度语义）
 - 参考：[游戏陪玩 Agent 现状调研](../research/2026-11-16-game-agent-landscape.md)
 
