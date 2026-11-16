@@ -488,21 +488,37 @@ export async function listPostProcessors(): Promise<PostProcessorInfo[]> {
   ];
 }
 
+// 浏览器预览：与后端 kotone-core connection::CONNECTION_PRESETS 同一份数据（29 家，按分组排列）。
 const mockConnectionPresets: ConnectionPreset[] = [
-  {
-    id: "dashscope",
-    displayName: "通义千问（北京）",
-    defaultBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    defaultModel: "qwen3-30b-a3b-instruct-2507",
-    apiKeyUrl: "https://bailian.console.aliyun.com/?apiKey=1#/api-key",
-  },
-  {
-    id: "custom",
-    displayName: "自定义 OpenAI 兼容",
-    defaultBaseUrl: "",
-    defaultModel: "",
-    apiKeyUrl: null,
-  },
+  {id: "deepseek", displayName: "DeepSeek", group: "recommended", description: "深度求索官方接口，工具调用稳定，支持看图（V4.1 Flash）", defaultBaseUrl: "https://api.deepseek.com/v1", defaultModel: "deepseek-flash", models: ["deepseek-flash", "deepseek-v4-pro"], apiKeyUrl: "https://platform.deepseek.com/api_keys"},
+  {id: "dashscope", displayName: "通义千问（北京）", group: "recommended", description: "阿里云百炼，国内访问快", defaultBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", defaultModel: "qwen-plus", models: ["qwen-plus", "qwen-max", "qwen-flash"], apiKeyUrl: "https://bailian.console.aliyun.com/?apiKey=1#/api-key"},
+  {id: "moonshot-cn", displayName: "月之暗面 Kimi（国内）", group: "recommended", description: "Kimi 开放平台，长上下文，支持看图", defaultBaseUrl: "https://api.moonshot.cn/v1", defaultModel: "kimi-k3", models: ["kimi-k3", "kimi-k2.6", "kimi-k2.7-code"], apiKeyUrl: "https://platform.moonshot.cn/console/api-keys"},
+  {id: "zhipu", displayName: "智谱 GLM（国内）", group: "recommended", description: "智谱开放平台按量计费接口", defaultBaseUrl: "https://open.bigmodel.cn/api/paas/v4", defaultModel: "glm-5.3", models: ["glm-5.3", "glm-5.3-flash", "glm-5.2"], apiKeyUrl: "https://open.bigmodel.cn/usercenter/apikeys"},
+  {id: "minimax-cn", displayName: "MiniMax（国内）", group: "china", description: "MiniMax 开放平台（OpenAI 兼容接口）", defaultBaseUrl: "https://api.minimaxi.com/v1", defaultModel: "MiniMax-M3", models: ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"], apiKeyUrl: "https://platform.minimaxi.com/user-center/basic-information/interface-key"},
+  {id: "xiaomi", displayName: "小米 MiMo", group: "china", description: "小米 MiMo 开放平台", defaultBaseUrl: "https://api.xiaomimimo.com/v1", defaultModel: "mimo-v2.6-pro", models: ["mimo-v2.6-pro", "mimo-v2.6-flash", "mimo-v2.5"], apiKeyUrl: null},
+  {id: "zhipu-coding", displayName: "智谱 GLM Coding Plan", group: "china", description: "智谱编程套餐专用接口（需订阅套餐）", defaultBaseUrl: "https://open.bigmodel.cn/api/coding/paas/v4", defaultModel: "glm-5.3", models: ["glm-5.3", "glm-5.3-flash", "glm-4.6v"], apiKeyUrl: "https://open.bigmodel.cn/usercenter/apikeys"},
+  {id: "kimi-coding", displayName: "Kimi For Coding", group: "china", description: "Kimi 编程套餐专用接口（需订阅套餐）", defaultBaseUrl: "https://api.kimi.com/coding/v1", defaultModel: "kimi-for-coding", models: ["kimi-for-coding", "k3"], apiKeyUrl: null},
+  {id: "qwen-token-plan-cn", displayName: "百炼 Token Plan（国内）", group: "china", description: "阿里云百炼 Token Plan 套餐接口，可用多家模型", defaultBaseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", defaultModel: "deepseek-v4.1-flash", models: ["deepseek-v4.1-flash", "glm-5.3", "kimi-k2.6", "deepseek-v4-pro"], apiKeyUrl: "https://bailian.console.aliyun.com/?apiKey=1#/api-key"},
+  {id: "ant-ling", displayName: "蚂蚁百灵 Ling", group: "china", description: "蚂蚁百灵大模型", defaultBaseUrl: "https://api.ant-ling.com/v1", defaultModel: "Ling-2.6-1T", models: ["Ling-2.6-1T", "Ring-2.6-1T", "Ling-2.6-flash"], apiKeyUrl: null},
+  {id: "openai", displayName: "OpenAI", group: "global", description: "OpenAI 官方接口", defaultBaseUrl: "https://api.openai.com/v1", defaultModel: "gpt-5", models: ["gpt-5", "gpt-5-mini", "gpt-4.1"], apiKeyUrl: "https://platform.openai.com/api-keys"},
+  {id: "anthropic", displayName: "Anthropic Claude", group: "global", description: "Claude（经 Anthropic 的 OpenAI 兼容接口）", defaultBaseUrl: "https://api.anthropic.com/v1", defaultModel: "claude-sonnet-4-5", models: ["claude-sonnet-4-5", "claude-opus-5-5", "claude-haiku-5-5"], apiKeyUrl: "https://console.anthropic.com/settings/keys"},
+  {id: "gemini", displayName: "Google Gemini", group: "global", description: "Gemini（经 Google 的 OpenAI 兼容接口）", defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/", defaultModel: "gemini-3.5-flash", models: ["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-2.5-pro"], apiKeyUrl: "https://aistudio.google.com/apikey"},
+  {id: "xai", displayName: "xAI Grok", group: "global", description: "xAI 官方接口", defaultBaseUrl: "https://api.x.ai/v1", defaultModel: "grok-4.7", models: ["grok-4.7", "grok-4.6", "grok-4.3"], apiKeyUrl: "https://console.x.ai/"},
+  {id: "moonshot", displayName: "Kimi（国际）", group: "global", description: "Moonshot AI 国际站", defaultBaseUrl: "https://api.moonshot.ai/v1", defaultModel: "kimi-k3", models: ["kimi-k3", "kimi-k2.6", "kimi-k2.7-code"], apiKeyUrl: "https://platform.moonshot.ai/console/api-keys"},
+  {id: "zai", displayName: "Z.AI GLM（国际）", group: "global", description: "智谱国际站按量计费接口", defaultBaseUrl: "https://api.z.ai/api/paas/v4", defaultModel: "glm-5.3", models: ["glm-5.3", "glm-5.3-flash", "glm-5.2"], apiKeyUrl: "https://z.ai/manage-apikey/apikey-list"},
+  {id: "minimax", displayName: "MiniMax（国际）", group: "global", description: "MiniMax 国际站（OpenAI 兼容接口）", defaultBaseUrl: "https://api.minimax.io/v1", defaultModel: "MiniMax-M3", models: ["MiniMax-M3", "MiniMax-M2.7"], apiKeyUrl: null},
+  {id: "dashscope-intl", displayName: "通义千问（国际）", group: "global", description: "阿里云 Model Studio 国际站", defaultBaseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", defaultModel: "qwen-plus", models: ["qwen-plus", "qwen-max", "qwen-flash"], apiKeyUrl: "https://modelstudio.console.alibabacloud.com/?tab=dashboard#/api-key"},
+  {id: "mistral", displayName: "Mistral", group: "global", description: "Mistral 官方接口", defaultBaseUrl: "https://api.mistral.ai/v1", defaultModel: "mistral-medium-latest", models: ["mistral-medium-latest", "magistral-medium-latest", "ministral-14b-2512"], apiKeyUrl: "https://console.mistral.ai/api-keys"},
+  {id: "groq", displayName: "Groq", group: "global", description: "Groq 高速推理", defaultBaseUrl: "https://api.groq.com/openai/v1", defaultModel: "openai/gpt-oss-120b", models: ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "llama-3.3-70b-versatile"], apiKeyUrl: "https://console.groq.com/keys"},
+  {id: "cerebras", displayName: "Cerebras", group: "global", description: "Cerebras 高速推理", defaultBaseUrl: "https://api.cerebras.ai/v1", defaultModel: "gpt-oss-120b", models: ["gpt-oss-120b", "qwen-3.8-27b"], apiKeyUrl: "https://cloud.cerebras.ai/"},
+  {id: "openrouter", displayName: "OpenRouter", group: "aggregator", description: "一个密钥用多家模型", defaultBaseUrl: "https://openrouter.ai/api/v1", defaultModel: "anthropic/claude-sonnet-4.5", models: ["anthropic/claude-sonnet-4.5", "anthropic/claude-opus-5.5", "anthropic/claude-haiku-5.5"], apiKeyUrl: "https://openrouter.ai/keys"},
+  {id: "together", displayName: "Together AI", group: "aggregator", description: "开源模型推理平台", defaultBaseUrl: "https://api.together.ai/v1", defaultModel: "deepseek-ai/DeepSeek-V4.1-Flash", models: ["deepseek-ai/DeepSeek-V4.1-Flash", "moonshotai/Kimi-K3", "MiniMaxAI/MiniMax-M3", "Qwen/Qwen3.6-Plus"], apiKeyUrl: "https://api.together.ai/settings/api-keys"},
+  {id: "fireworks", displayName: "Fireworks AI", group: "aggregator", description: "开源模型推理平台", defaultBaseUrl: "https://api.fireworks.ai/inference/v1", defaultModel: "accounts/fireworks/models/kimi-k3", models: ["accounts/fireworks/models/kimi-k3", "accounts/fireworks/models/glm-5p3", "accounts/fireworks/routers/glm-latest"], apiKeyUrl: "https://fireworks.ai/account/api-keys"},
+  {id: "nvidia", displayName: "NVIDIA NIM", group: "aggregator", description: "NVIDIA 托管的模型接口", defaultBaseUrl: "https://integrate.api.nvidia.com/v1", defaultModel: "deepseek-ai/deepseek-v4.1-flash", models: ["deepseek-ai/deepseek-v4.1-flash", "moonshotai/kimi-k2.6", "nvidia/nemotron-3-ultra-550b-a55b"], apiKeyUrl: "https://build.nvidia.com/"},
+  {id: "huggingface", displayName: "Hugging Face", group: "aggregator", description: "Hugging Face 推理路由", defaultBaseUrl: "https://router.huggingface.co/v1", defaultModel: "deepseek-ai/DeepSeek-V4.1-Flash", models: ["deepseek-ai/DeepSeek-V4.1-Flash", "deepseek-ai/DeepSeek-V4-Pro"], apiKeyUrl: "https://huggingface.co/settings/tokens"},
+  {id: "baseten", displayName: "Baseten", group: "aggregator", description: "开源模型推理平台", defaultBaseUrl: "https://inference.baseten.co/v1", defaultModel: "deepseek-ai/DeepSeek-V4.1-Flash", models: ["deepseek-ai/DeepSeek-V4.1-Flash", "moonshotai/Kimi-K3", "deepseek-ai/DeepSeek-V4-Pro"], apiKeyUrl: null},
+  {id: "vercel-ai-gateway", displayName: "Vercel AI Gateway", group: "aggregator", description: "Vercel 的多模型网关", defaultBaseUrl: "https://ai-gateway.vercel.sh/v1", defaultModel: "anthropic/claude-sonnet-4.5", models: ["anthropic/claude-sonnet-4.5"], apiKeyUrl: null},
+  {id: "custom", displayName: "自定义 OpenAI 兼容", group: "custom", description: "任何兼容 OpenAI /chat/completions 的接口", defaultBaseUrl: "", defaultModel: "", models: [], apiKeyUrl: null},
 ];
 
 const mockConnectionSecrets = new Map<string, string>();

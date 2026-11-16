@@ -445,11 +445,20 @@ export interface ConnectionInfo extends Connection {
   hasApiKey: boolean;
 }
 
+/** 预置提供商的分组（界面按这个顺序展示）。 */
+export type ConnectionPresetGroup = "recommended" | "china" | "global" | "aggregator" | "custom";
+
 export interface ConnectionPreset {
   id: string;
   displayName: string;
+  group: ConnectionPresetGroup;
+  /** 一句话说明。 */
+  description: string;
   defaultBaseUrl: string;
   defaultModel: string;
+  /** 可选的模型（第一个一般就是默认模型；也可以手填）。 */
+  models: string[];
+  /** 控制台里创建 API key 的页面；null = 不确定，不显示“获取密钥”。 */
   apiKeyUrl?: string | null;
 }
 

@@ -25,7 +25,7 @@
   } from "../../lib/stores/ui";
   import { initRuntime } from "../../lib/stores/runtime";
   import { checkForUpdates } from "../../lib/updater";
-  import Toasts from "../../lib/components/Toasts.svelte";
+  import { Sonner } from "$lib/components/ui/sonner";
   import ElevationPrompt from "../../lib/components/ElevationPrompt.svelte";
   import AutoAdminPrompt from "../../lib/components/AutoAdminPrompt.svelte";
   import InjectionBlockedDialog from "../../lib/components/InjectionBlockedDialog.svelte";
@@ -43,7 +43,7 @@
   import HistoryPage from "./pages/HistoryPage.svelte";
   import AboutPage from "./pages/AboutPage.svelte";
   import CharacterPage from "./pages/CharacterPage.svelte";
-  import { initializeAppearance } from "../../lib/appearance/appearanceRuntime";
+  import { initializeAppearance, resolvedTheme } from "../../lib/appearance/appearanceRuntime";
 
   import AppSidebar, { type PageId } from "./AppSidebar.svelte";
   import { AgentChat } from "../../lib/agentChat/chatController.svelte";
@@ -287,7 +287,7 @@
       <AboutPage onOpenCharacter={() => (page = "character")} />
     {/if}
 
-    <!-- 底部留白（反馈条已升级为右上角 toast，见 <Toasts />） -->
+    <!-- 底部留白（提示在右上角，见 Sonner） -->
     {#if page !== "assistant"}<div class="h-4"></div>{/if}
   </main>
 
@@ -313,6 +313,6 @@
   </div>
 
   <!-- 右上角 toast 堆叠（fixed 定位，z 高于向导） -->
-  <Toasts />
+  <Sonner theme={$resolvedTheme} />
   <UpdateDialog />
 </div>

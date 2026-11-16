@@ -84,7 +84,7 @@ test("saved automations can be created with params, run panel validates in previ
   await panel.getByLabel("每隔一会按 E key").blur();
   await expect(panel.getByLabel("倒数秒数")).toHaveValue("3");
   await panel.getByRole("button", { name: "开始", exact: true }).click();
-  await expect(page.getByRole("status").filter({ hasText: "浏览器仅预览界面" })).toBeVisible();
+  await expect(page.locator("[data-sonner-toast]").filter({ hasText: "浏览器仅预览界面" })).toBeVisible();
 
   await saved.getByRole("button", { name: "编辑", exact: true }).click();
   await expect(editor.getByLabel("自动化名字")).toHaveValue("每隔一会按 E");

@@ -264,7 +264,7 @@ test("appearance settings persist speed, font, exact top offset, color and built
   await page.getByTestId("settings-nav-history").click();
   await page.getByTestId("settings-nav-general").click();
   await expect(topNumber).toHaveValue("345");
-  await expect(page.getByRole("status").filter({ hasText: "弹幕样式已保存" })).toHaveCount(0);
+  await expect(page.locator("[data-sonner-toast]").filter({ hasText: "弹幕样式已保存" })).toHaveCount(0);
   await settings.screenshot({ path: testInfo.outputPath("danmaku-settings.png") });
   await page.setViewportSize({ width: 1040, height: 900 });
   await page.getByRole("main").evaluate((element) => { element.scrollTop = element.scrollHeight; });
