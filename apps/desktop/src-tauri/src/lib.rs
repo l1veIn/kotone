@@ -2073,6 +2073,8 @@ pub fn run() {
             // 先接上程序执行端口，再启动调度器（到点的程序才有人执行）。
             automation::attach(app.handle());
             assistant::start(app.handle());
+            // 游戏语音（ADR 020）：设置里开着就开始转发（之后跟着设置保存启停）。
+            voice_chat::sync(app.handle());
             // 可选本机工具服务：独立于 ASR 运行时，只在启动时读取开关（docs/tool-service.md）
             let tool_service_enabled = settings.read().unwrap().tool_service.enabled;
             tool_service::start(app.handle(), tool_service_enabled);

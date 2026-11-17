@@ -404,7 +404,7 @@ pub fn test(app: &AppHandle) -> Result<Value, String> {
     let ok = peak > 0.15;
     Ok(json!({
         "ok": ok,
-        "peak": (peak * 1000.0).round() / 1000.0,
+        "peak": (f64::from(peak) * 1000.0).round() / 1000.0,
         "note": if ok {
             "通了：游戏或语音软件的麦克风选 CABLE Output，队友就能听到"
         } else {
