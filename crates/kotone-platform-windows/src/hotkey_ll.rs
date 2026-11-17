@@ -15,7 +15,7 @@
 //! 吞键策略：完整命中（主键 + 修饰键严格匹配）才 return 1 吞掉；
 //! 其余按键一律 CallNextHookEx 放行。
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -30,8 +30,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, PeekMessageW, PostThreadMessageW, SetWindowsHookExW,
     UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LLMHF_INJECTED, MSG,
-    MSLLHOOKSTRUCT, PM_NOREMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT,
-    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, XBUTTON1, XBUTTON2,
+    MSLLHOOKSTRUCT, PM_NOREMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_MOUSEMOVE,
+    WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, XBUTTON1, XBUTTON2,
 };
 
 use kotone_core::hotkey::{
@@ -104,6 +104,46 @@ struct ProbeRequest {
 }
 
 static SHARED: OnceLock<HookShared> = OnceLock::new();
+
+/// 最近一次“真人输入”的时刻（[`tick_ms`]）；0 = 钩子启动后还没有过。
+/// 真人输入 = 不带 Kotone 标记（[`crate::inject::KOTONE_INPUT_TAG`]）的键盘与鼠标事件；
+/// 别的程序注入的鼠标移动不算（光标校正等会产生这类事件），按键、点击、滚轮算。
+static LAST_HUMAN_INPUT: AtomicU64 = AtomicU64::new(0);
+/// 钩子正在运行（能察觉玩家接手）。
+static HOOKS_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// 进程内单调时钟（毫秒，从 1 开始；与 [`last_human_input_ms`] 同一个基准）。
+pub fn tick_ms() -> u64 {
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64 + 1
+}
+
+/// 最近一次真人键鼠输入的 [`tick_ms`]；钩子没运行或还没有输入时为 0。
+pub fn last_human_input_ms() -> u64 {
+    LAST_HUMAN_INPUT.load(Ordering::Relaxed)
+}
+
+/// 低级键鼠钩子在运行（`game.act` 据此知道能不能察觉玩家接手）。
+pub fn hooks_running() -> bool {
+    HOOKS_RUNNING.load(Ordering::Relaxed)
+}
+
+/// 这个事件是不是玩家本人的输入（纯逻辑，供钩子回调与测试）。
+fn is_human_input(injected: bool, extra_info: usize, mouse_move: bool) -> bool {
+    if !injected {
+        return true;
+    }
+    if extra_info == crate::inject::KOTONE_INPUT_TAG || extra_info == PROBE_EXTRA_INFO {
+        return false;
+    }
+    !mouse_move
+}
+
+fn note_input(injected: bool, extra_info: usize, mouse_move: bool) {
+    if is_human_input(injected, extra_info, mouse_move) {
+        LAST_HUMAN_INPUT.store(tick_ms(), Ordering::Relaxed);
+    }
+}
 
 /// `SendInput` 探测事件的专用标记（ASCII "KTNP"）。优先用于标识探测来源；
 /// 兼容会清除 flags/extraInfo 的输入过滤器时，短暂 probe 槽内也接受 F24 键码。
@@ -516,9 +556,11 @@ fn hook_thread_main(boot: mpsc::Sender<Result<u32, String>>) {
         // hook 安装后不能做日志/IO：物理输入此时已可能等待本线程回调。
         // ready 后立即进入消息泵，安装成功日志由调用方记录。
         let _ = boot.send(Ok(tid));
+        HOOKS_RUNNING.store(true, Ordering::Relaxed);
 
         // GetMessageW 返回 false = 收到 WM_QUIT
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {}
+        HOOKS_RUNNING.store(false, Ordering::Relaxed);
 
         let _ = UnhookWindowsHookEx(mouse_hook);
         let _ = UnhookWindowsHookEx(keyboard_hook);
@@ -598,6 +640,7 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     if code >= 0 {
         if let Some(shared) = SHARED.get() {
             let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+            note_input(kb.flags.contains(LLKHF_INJECTED), kb.dwExtraInfo, false);
             // 闭环探测事件优先处理：确认收到后吞掉，不进入正常热键匹配，也不传给前台。
             // 某些输入过滤软件会清除 LLKHF_INJECTED 或 dwExtraInfo，但仍把事件
             // 交给钩子。probe 槽只开放 250ms，期间按 F24 键码识别比强依赖标记
@@ -653,6 +696,11 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
     if code >= 0 {
         if let Some(shared) = SHARED.get() {
             let mouse = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+            note_input(
+                mouse.flags & LLMHF_INJECTED != 0,
+                mouse.dwExtraInfo,
+                wparam.0 as u32 == WM_MOUSEMOVE,
+            );
             if mouse.flags & LLMHF_INJECTED == 0 {
                 let action = match wparam.0 as u32 {
                     WM_XBUTTONDOWN => Some(KeyAction::Down),
@@ -732,6 +780,21 @@ mod tests {
         assert_eq!(xbutton_vk(u32::from(XBUTTON1) << 16), Some(VK_XBUTTON1));
         assert_eq!(xbutton_vk(u32::from(XBUTTON2) << 16), Some(VK_XBUTTON2));
         assert_eq!(xbutton_vk(0), None);
+    }
+
+    #[test]
+    fn only_untagged_input_counts_as_the_player() {
+        use crate::inject::KOTONE_INPUT_TAG;
+        // 物理键鼠
+        assert!(is_human_input(false, 0, false));
+        assert!(is_human_input(false, 0, true));
+        // Kotone 自己的模拟输入与探测
+        assert!(!is_human_input(true, KOTONE_INPUT_TAG, false));
+        assert!(!is_human_input(true, KOTONE_INPUT_TAG, true));
+        assert!(!is_human_input(true, PROBE_EXTRA_INFO, false));
+        // 别的程序注入：按键 / 点击算接手，单纯的光标移动不算
+        assert!(is_human_input(true, 0, false));
+        assert!(!is_human_input(true, 0, true));
     }
 
     #[test]

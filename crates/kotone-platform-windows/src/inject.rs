@@ -31,10 +31,10 @@ mod windows_imp {
         VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
-        MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
-        MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT,
-        MOUSE_EVENT_FLAGS,
+        INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN,
+        MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE,
+        MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL,
+        MOUSEINPUT, MOUSE_EVENT_FLAGS,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindowThreadProcessId, IsWindow,
@@ -50,6 +50,11 @@ mod windows_imp {
 
     /// 游戏可能在低帧率下迟于输入流处理按键；50ms 保持让最终 Enter 更可靠。
     const KEY_HOLD_MS: u64 = 50;
+
+    /// Kotone 发出的每个模拟输入都在 `dwExtraInfo` 里带这个标记（ASCII "KTNI"），低级钩子据此
+    /// 分清“琴音按的”和“玩家按的”：玩家一动，正在进行的 `game.act` 就停下（ADR 019 决定 7，
+    /// 照 dsh-computer-use-win 的做法）。
+    pub const KOTONE_INPUT_TAG: usize = 0x4B54_4E49;
     /// 单次 SendInput 批量的 UTF-16 code unit 上限（每单元 2 个事件）
     const UNICODE_CHUNK_UNITS: usize = 64;
 
@@ -275,10 +280,17 @@ mod windows_imp {
                     mouseData: data as _,
                     dwFlags: flags,
                     time: 0,
-                    dwExtraInfo: 0,
+                    dwExtraInfo: KOTONE_INPUT_TAG,
                 },
             },
         }
+    }
+
+    /// 相对移动鼠标 (dx, dy)（不带 ABSOLUTE）：游戏用原始输入读鼠标时，转视角只认相对移动
+    /// （照 Cradle `gui_utils.py` 的 `MOVE_BY`）。普通桌面上会受“提高指针精确度”影响，
+    /// 实际移动的像素数不保证等于 dx / dy。
+    pub fn mouse_move_by(dx: i32, dy: i32) -> Result<(), InjectError> {
+        send_inputs(&[mouse_input(dx, dy, 0, MOUSEEVENTF_MOVE)])
     }
 
     /// 把鼠标移到屏幕物理像素 (x, y)（自动化的 `mouse_move` / `click`）。用 SendInput 的绝对
@@ -339,6 +351,11 @@ mod windows_imp {
     /// 滚轮：正数向上（远离用户），每格 120。
     pub fn mouse_wheel(clicks: i32) -> Result<(), InjectError> {
         send_inputs(&[mouse_input(0, 0, clicks * 120, MOUSEEVENTF_WHEEL)])
+    }
+
+    /// 横向滚轮：正数向右，每格 120。
+    pub fn mouse_hwheel(clicks: i32) -> Result<(), InjectError> {
+        send_inputs(&[mouse_input(0, 0, clicks * 120, MOUSEEVENTF_HWHEEL)])
     }
 
     /// 只按下（脚本的 `key_down`）：先按修饰键再按主键。调用方负责之后调用 [`key_up`]。
@@ -407,7 +424,7 @@ mod windows_imp {
                     wScan: scan,
                     dwFlags: flags,
                     time: 0,
-                    dwExtraInfo: 0,
+                    dwExtraInfo: KOTONE_INPUT_TAG,
                 },
             },
         }
@@ -825,6 +842,16 @@ mod fallback {
     pub fn mouse_wheel(_clicks: i32) -> Result<(), InjectError> {
         Err(InjectError::new("鼠标仅 Windows 实现"))
     }
+
+    pub fn mouse_move_by(_dx: i32, _dy: i32) -> Result<(), InjectError> {
+        Err(InjectError::new("鼠标仅 Windows 实现"))
+    }
+
+    pub fn mouse_hwheel(_clicks: i32) -> Result<(), InjectError> {
+        Err(InjectError::new("鼠标仅 Windows 实现"))
+    }
+
+    pub const KOTONE_INPUT_TAG: usize = 0x4B54_4E49;
 
     pub fn is_process_foreground(process_names: &[String]) -> bool {
         // 空列表 = 通配任意前台进程；非 Windows 无法校验，保守按通配处理
