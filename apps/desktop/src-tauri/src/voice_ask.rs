@@ -38,6 +38,15 @@ pub fn deliver_answer(app: &AppHandle, text: &str) -> bool {
     }
 }
 
+/// 提问结束（任何方式）时气泡回到“在想”。
+struct AskBubbleGuard(AppHandle);
+
+impl Drop for AskBubbleGuard {
+    fn drop(&mut self) {
+        crate::bubble::ask_done(&self.0);
+    }
+}
+
 /// 提问结束（拿到回答、超时、或这一轮被停止）时清掉登记，晚到的回答不会被误交。
 struct PendingGuard<'a> {
     state: &'a VoiceAsk,
@@ -72,6 +81,8 @@ pub async fn ask(
     wait_seconds: u64,
 ) -> Result<Option<String>, String> {
     let state = app.try_state::<VoiceAsk>().ok_or("语音提问不可用")?;
+    crate::bubble::asking(app, question);
+    let _bubble = AskBubbleGuard(app.clone());
     // 1. 说出问题（说完才返回）
     let speak_app = app.clone();
     let text = question.to_string();
@@ -92,6 +103,7 @@ pub async fn ask(
         .await
         .map_err(|e| format!("没法开始听你回答：{e}"))?;
     log::log(&format!("voice ask: listening for {wait}s"));
+    crate::bubble::ask_listening(app, wait);
     // 4. 等回答：开口后等他说完；一直没开口、过了等待时间就算没回答
     let started = Instant::now();
     let window = Duration::from_secs(wait) + Duration::from_millis(800);

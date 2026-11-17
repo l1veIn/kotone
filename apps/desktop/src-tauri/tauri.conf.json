@@ -28,6 +28,22 @@
         "visible": false
       },
       {
+        "label": "companion",
+        "title": "琴音",
+        "url": "index.html#/companion",
+        "width": 440,
+        "height": 260,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "focusable": false,
+        "visible": false,
+        "shadow": false,
+        "resizable": false
+      },
+      {
         "label": "overlay",
         "create": false,
         "title": "Kotone Overlay",

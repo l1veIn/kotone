@@ -83,6 +83,46 @@ pub struct AssistantConfig {
     pub tts_model_id: String,
     /// 语音唤醒（ADR 017）。新字段，缺省 = 关闭。
     pub wake: WakeConfig,
+    /// 琴音的对话气泡（屏幕角落）。新字段，缺省 = 开启、右下角。
+    pub bubble: BubbleConfig,
+}
+
+/// 对话气泡放在屏幕哪个角。不认识的值按右下角处理。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BubbleCorner {
+    BottomLeft,
+    TopRight,
+    TopLeft,
+    #[default]
+    #[serde(other)]
+    BottomRight,
+}
+
+/// 琴音的对话气泡：语音入口（唤醒、陪玩热键、追问）的状态与回答显示在屏幕角落，
+/// 不再借用语音输入法的悬浮窗；回答默认不再走弹幕。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BubbleConfig {
+    pub enabled: bool,
+    pub corner: BubbleCorner,
+    /// 离屏幕上下边缘再挪开多少逻辑像素（避开小地图等）。
+    pub offset_y: u32,
+    /// 回答同时用弹幕显示。
+    pub also_danmaku: bool,
+}
+
+pub const BUBBLE_OFFSET_RANGE: std::ops::RangeInclusive<u32> = 0..=800;
+
+impl Default for BubbleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            corner: BubbleCorner::default(),
+            offset_y: 0,
+            also_danmaku: false,
+        }
+    }
 }
 
 /// 唤醒词（预置；第二版再考虑自定义）。不认识的值按默认处理。
@@ -302,6 +342,7 @@ impl Default for AssistantConfig {
             companion: CompanionConfig::default(),
             tts_model_id: String::new(),
             wake: WakeConfig::default(),
+            bubble: BubbleConfig::default(),
         }
     }
 }
@@ -393,6 +434,9 @@ impl AssistantConfig {
                 | DEEPSEEK_TTS_MODEL_ID
         ) {
             return Err("在线语音合成模型无效".into());
+        }
+        if !BUBBLE_OFFSET_RANGE.contains(&self.bubble.offset_y) {
+            return Err("对话气泡的偏移必须在 0 到 800 之间".into());
         }
         if !WAKE_NO_SPEECH_RANGE_MS.contains(&self.wake.no_speech_timeout_ms) {
             return Err("唤醒后等待说话的时间必须在 2 到 15 秒之间".into());

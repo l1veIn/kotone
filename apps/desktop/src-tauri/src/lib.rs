@@ -5,6 +5,7 @@ mod agent;
 mod assistant;
 mod assistant_input;
 mod automation;
+mod bubble;
 mod companion;
 mod compatibility;
 mod diagnostics;
@@ -433,6 +434,18 @@ impl Emitter for TauriEmitter {
             overlay::remember_state(&self.app, &payload);
         }
         let _ = self.app.emit(event, payload.clone());
+        // 琴音的语音会话改在对话气泡里显示（不再借用语音输入法的悬浮窗）。
+        let bubble_session = event == "kotone://state" && bubble::owns_session(&self.app, &payload);
+        match event {
+            "kotone://state" => bubble::on_state(&self.app, &payload),
+            "kotone://partial" => {
+                if let Some(text) = payload.get("text").and_then(|t| t.as_str()) {
+                    bubble::on_partial(&self.app, text);
+                }
+            }
+            "kotone://vad-no-speech" => bubble::on_no_speech(&self.app),
+            _ => {}
+        }
         if event == "kotone://state" {
             let state = payload.get("state").and_then(|s| s.as_str()).unwrap_or("");
             let text_chars = payload
@@ -451,7 +464,11 @@ impl Emitter for TauriEmitter {
             }
             // 后端驱动 overlay 显隐（显隐一律走原始 Win32 SW_SHOWNA/SW_HIDE 路径，
             // 不碰 tao set_visible——tao 缓存 diff 短路坑，见 hide_window 注释）
-            if let Some(win) = self.app.get_webview_window("overlay") {
+            if bubble_session {
+                if let Some(win) = self.app.get_webview_window("overlay") {
+                    hide_window(&win);
+                }
+            } else if let Some(win) = self.app.get_webview_window("overlay") {
                 let (visibility, continuous) = self
                     .app
                     .try_state::<SharedState>()
@@ -1992,6 +2009,7 @@ pub fn run() {
                 });
             app.manage(wake_runtime);
             app.manage(voice_ask::VoiceAsk::default());
+            app.manage(bubble::BubbleRuntime::default());
             let assistant_runtime = assistant::initialize(app.handle(), settings.clone());
 
             #[allow(unused_mut)] // vad-silero feature 关闭时无可变接线
@@ -2177,6 +2195,8 @@ pub fn run() {
             speech_models::get_speech_model_status,
             speech_models::download_speech_model,
             wake::wake_status,
+            bubble::bubble_snapshot,
+            bubble::bubble_preview,
             wake::wake_download_model,
             speech_models::cancel_speech_model_download,
             automation::automation_runs,

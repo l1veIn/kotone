@@ -448,6 +448,7 @@ fn listen(
                     let n = rt.detections.fetch_add(1, Ordering::SeqCst) + 1;
                     log::log(&format!("wake: detected {keyword} (#{n})"));
                     let _ = app.emit("kotone://wake", json!({"keyword": keyword}));
+                    crate::bubble::woke(app);
                     Phase::Probing {
                         until: Instant::now() + CONTINUE_PROBE,
                         chunks: Vec::new(),

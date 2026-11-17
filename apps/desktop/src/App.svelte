@@ -3,6 +3,7 @@
   import Overlay from "./routes/overlay/Overlay.svelte";
   import Settings from "./routes/settings/Settings.svelte";
   import Danmaku from "./routes/danmaku/Danmaku.svelte";
+  import Companion from "./routes/companion/Companion.svelte";
   import { initStateListeners } from "./lib/stores/state";
 
   // 订阅 Rust 侧 kotone:// 事件（浏览器环境下为 no-op）
@@ -38,6 +39,8 @@
   <Overlay />
 {:else if view === "danmaku"}
   <Danmaku />
+{:else if view === "companion"}
+  <Companion />
 {:else}
   <!-- 默认渲染设置视图（含 #/settings 与空 hash，便于纯浏览器开发预览） -->
   <Settings />

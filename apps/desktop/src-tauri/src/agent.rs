@@ -368,6 +368,7 @@ async fn turn(
         settings.agent.permissions.clone(),
         session,
         DesktopBuiltins {
+            voice: entry == Entry::Game,
             app: app.clone(),
             session: format!("agent:{}", conversation.id),
         },
@@ -407,11 +408,21 @@ async fn turn(
                     log::log(&format!("agent: save failed: {e}"));
                 }
             }
+            AgentEvent::StepStarted { .. } if entry == Entry::Game => {
+                crate::bubble::thinking(app, "在想…");
+            }
             AgentEvent::ToolCall { call } => {
                 tool_names
                     .lock()
                     .unwrap()
                     .insert(call.id.clone(), call.name.clone());
+                let narrated = [
+                    kotone_agent::catalog::TOOL_SAY,
+                    kotone_agent::catalog::TOOL_ASK,
+                ];
+                if entry == Entry::Game && !narrated.contains(&call.name.as_str()) {
+                    crate::bubble::thinking(app, crate::bubble::tool_label(&call.name));
+                }
             }
             AgentEvent::ToolCallUpdate {
                 call_id,
@@ -506,14 +517,58 @@ async fn attach_screen(app: &AppHandle, user: &mut Message) {
 /// 游戏内：玩家看不到窗口，这一轮的结果用语音 / 弹幕播出。
 /// Agent 已经用 `reply.say` 播过的不再重复；出错或被停下时播一句原因；玩家自己停止的不播。
 fn speak_outcome(app: &AppHandle, appended: &[Message], stop: &StopReason) {
-    if let Some(text) = game_reply(appended, stop) {
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Err(e) = crate::assistant::deliver_text(&app, text, Vec::new()).await {
-                log::log(&format!("agent: 回复未能播出：{e}"));
-            }
-        });
+    match game_reply(appended, stop) {
+        Some(text) => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = deliver_voice_reply(&app, text, Vec::new()).await {
+                    log::log(&format!("agent: 回复未能播出：{e}"));
+                }
+            });
+        }
+        None => crate::bubble::finished(app),
     }
+}
+
+/// 语音入口里琴音说的话：开着对话气泡时，气泡显示这句（念完再停一会儿），默认不再走弹幕
+/// （除非设置了“回答同时用弹幕”）；关着时照旧按提醒方式播报。
+async fn deliver_voice_reply(
+    app: &AppHandle,
+    text: String,
+    delivery: Vec<DeliveryKind>,
+) -> Result<Vec<DeliveryKind>, String> {
+    let (bubble, assistant) = {
+        let settings = settings(app);
+        (
+            settings.assistant.bubble.clone(),
+            settings.assistant.clone(),
+        )
+    };
+    if !bubble.enabled {
+        return crate::assistant::deliver_text(app, text, delivery).await;
+    }
+    let wanted = if delivery.is_empty() {
+        assistant.default_delivery.clone()
+    } else {
+        delivery
+    };
+    let mut kinds = Vec::new();
+    if wanted.contains(&DeliveryKind::Voice) {
+        kinds.push(DeliveryKind::Voice);
+    }
+    if bubble.also_danmaku && wanted.contains(&DeliveryKind::Danmaku) {
+        kinds.push(DeliveryKind::Danmaku);
+    }
+    let mut result = Ok(kinds.clone());
+    let speak_app = app.clone();
+    let speak_text = text.clone();
+    crate::bubble::say(app, &text, || async {
+        if !kinds.is_empty() {
+            result = crate::assistant::deliver_text(&speak_app, speak_text, kinds).await;
+        }
+    })
+    .await;
+    result
 }
 
 /// 交给琴音后多久还没出声就先接一句（ADR 017 §5）。
@@ -673,6 +728,8 @@ pub fn on_run_finished(app: &AppHandle, run: &Run) {
 
 struct DesktopBuiltins {
     app: AppHandle,
+    /// 语音入口的一轮：说的话走对话气泡。
+    voice: bool,
     /// 写进执行记录的发起方：`agent:<对话 id>`。
     session: String,
 }
@@ -698,7 +755,11 @@ impl BuiltinHost for DesktopBuiltins {
 
     async fn say(&self, text: String, delivery: Vec<DeliveryKind>) -> Result<Value, String> {
         LAST_SAY_MS.store(now_ms(), std::sync::atomic::Ordering::SeqCst);
-        let delivered = crate::assistant::deliver_text(&self.app, text, delivery).await?;
+        let delivered = if self.voice {
+            deliver_voice_reply(&self.app, text, delivery).await?
+        } else {
+            crate::assistant::deliver_text(&self.app, text, delivery).await?
+        };
         Ok(json!({"delivered": delivery_names(&delivered)}))
     }
 

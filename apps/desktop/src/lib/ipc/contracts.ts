@@ -190,6 +190,8 @@ export interface AssistantConfig {
   ttsModelId?: string;
   /** 语音唤醒（ADR 017；新字段，旧配置没有）。 */
   wake?: WakeConfig;
+  /** 琴音的对话气泡（0.2.0 新字段，旧配置没有）。 */
+  bubble?: BubbleConfig;
   kokoroVoiceId: string;
   danmakuDurationMs: number;
   danmakuSpeedPxPerSec: number;
@@ -263,6 +265,17 @@ export interface AgentConfig {
 }
 
 /** 语音唤醒设置（config.json `assistant.wake`）。 */
+export type BubbleCorner = "bottom-right" | "bottom-left" | "top-right" | "top-left";
+
+export interface BubbleConfig {
+  enabled: boolean;
+  corner: BubbleCorner;
+  /** 离屏幕上下边缘再挪开多少逻辑像素（0–800） */
+  offsetY: number;
+  /** 回答同时用弹幕 */
+  alsoDanmaku: boolean;
+}
+
 export interface WakeConfig {
   enabled: boolean;
   phrase: "qinyin-qinyin" | "nihao-qinyin";
