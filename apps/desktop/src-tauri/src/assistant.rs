@@ -350,7 +350,11 @@ pub fn before_capture(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AssistantRuntime>();
     // Set before purging: output admission sees even the interval before Listening.
     state.active_captures.fetch_add(1, Ordering::SeqCst);
-    state.cancel_speech()
+    // 停播失败（语音服务忙或已停止）不该让录音开不了：记下来，照常开始。
+    if let Err(error) = state.cancel_speech() {
+        kotone_core::log::log(&format!("录音开始前停止播报失败（继续录音）：{error}"));
+    }
+    Ok(())
 }
 
 pub fn after_capture(app: &AppHandle) {

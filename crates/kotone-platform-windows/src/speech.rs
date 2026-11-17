@@ -117,12 +117,19 @@ mod imp {
         }
 
         fn cancel(&self) -> Result<(), String> {
+            // 先让所有已领取的票据失效：这一步本身就保证旧播报不会再开始。
             self.control.epoch.fetch_add(1, Ordering::SeqCst);
+            if self.control.stopped.load(Ordering::SeqCst) {
+                return Err("语音服务已停止".into());
+            }
             let (reply, rx) = mpsc::sync_channel(1);
-            self.cancellations
-                .try_send(reply)
-                .map_err(|_| "语音取消正在处理或语音服务已停止".to_string())?;
-            Self::response(rx, Duration::from_secs(2))
+            match self.cancellations.try_send(reply) {
+                Ok(()) => Self::response(rx, Duration::from_secs(2)),
+                // 已经有一个停止请求在排队（例如唤醒应答与开始录音几乎同时停止播报）：
+                // 它会清掉正在播的内容，这次不必再排一个，也不算失败。
+                Err(mpsc::TrySendError::Full(_)) => Ok(()),
+                Err(mpsc::TrySendError::Disconnected(_)) => Err("语音服务已停止".into()),
+            }
         }
     }
 
@@ -385,6 +392,28 @@ mod imp {
             purge.join().unwrap();
             assert!(result.unwrap_err().contains("取消"));
             assert!(matches!(queued.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        }
+
+        #[test]
+        fn a_cancel_while_another_is_pending_is_not_an_error() {
+            let (commands, _queued) = mpsc::sync_channel(8);
+            let (cancellations, pending) = mpsc::sync_channel::<Reply<()>>(1);
+            let output = WindowsSpeechOutput {
+                commands,
+                cancellations,
+                control: Arc::new(Control {
+                    epoch: AtomicU64::new(0),
+                    stopped: AtomicBool::new(false),
+                }),
+                voices: vec![],
+            };
+            // 占住唯一的停止名额（工作线程还没处理）
+            let (reply, _rx) = mpsc::sync_channel(1);
+            output.cancellations.try_send(reply).unwrap();
+            let before = output.generation();
+            assert!(output.cancel().is_ok());
+            assert!(output.generation() > before, "票据照样失效");
+            drop(pending);
         }
 
         #[test]

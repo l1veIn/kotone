@@ -145,6 +145,11 @@ fn rms(samples: &[f32]) -> f32 {
     (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
 }
 
+/// 交给识别前垫多少块静音。
+const LEAD_SILENCE_CHUNKS: usize = 6;
+/// 开始唤醒会话最多等多久。
+const SESSION_START_LIMIT: Duration = Duration::from_secs(10);
+
 /// 应答期间连续多少块（50 ms 一块）明显有声算玩家开口。
 const BARGE_IN_CHUNKS: usize = 3;
 /// 应答期间最多缓存多久的音频（块数）。
@@ -379,6 +384,8 @@ fn listen(
     let handoff = rt.handoff();
     let mut noise: VecDeque<f32> = VecDeque::with_capacity(NOISE_WINDOW);
     let mut phase = Phase::Listening;
+    let mut beat = Instant::now();
+    let mut chunks_seen = 0u64;
     let mut ack_index = 0usize;
     while !stop.load(Ordering::SeqCst) {
         if let Some(rx) = errors.as_mut() {
@@ -398,6 +405,23 @@ fn listen(
             }
         };
         let level = rms(&chunk);
+        chunks_seen += 1;
+        if std::env::var_os("KOTONE_WAKE_DEBUG").is_some()
+            && beat.elapsed() >= Duration::from_secs(5)
+        {
+            beat = Instant::now();
+            let name = match &phase {
+                Phase::Listening => "listening",
+                Phase::Probing { .. } => "probing",
+                Phase::Acking { .. } => "acking",
+                Phase::Handoff { .. } => "handoff",
+                Phase::Cooldown { .. } => "cooldown",
+            };
+            log::log(&format!(
+                "wake debug: phase={name} orchestrator={:?} chunks={chunks_seen} level={level:.4}",
+                orchestrator.state()
+            ));
+        }
         phase = match phase {
             Phase::Listening => {
                 if noise.len() == NOISE_WINDOW {
@@ -481,7 +505,9 @@ fn listen(
                 if loud >= BARGE_IN_CHUNKS {
                     // 玩家没等应答说完就开口了：停掉应答，从开口前一点开始收音
                     log::log("wake: player spoke during the answer, listening now");
-                    crate::assistant::silence(app);
+                    // 停播可能要等语音服务最多 2 秒：不在这个线程上等，免得漏收音频
+                    let silence_app = app.clone();
+                    std::thread::spawn(move || crate::assistant::silence(&silence_app));
                     let levels: Vec<f32> = buffer.iter().map(|c| rms(c)).collect();
                     let start = speech_start(&levels, floor);
                     let prefill: Vec<Vec<f32>> = buffer.drain(start..).collect();
@@ -545,14 +571,35 @@ fn begin_session(
 ) -> Phase {
     let (tx, rx) = mpsc::sync_channel::<Vec<f32>>(HANDOFF_CAPACITY);
     let prefilled = prefill.len();
+    // 先垫一小段静音：流式识别第一个字更稳（话头紧贴开头时会把“我”认成“或”）
+    for _ in 0..LEAD_SILENCE_CHUNKS {
+        let _ = tx.try_send(vec![0.0; kotone_core::audio::CHUNK_SAMPLES]);
+    }
     for chunk in prefill {
         let _ = tx.try_send(chunk);
     }
     let started = Instant::now();
+    log::log(&format!(
+        "wake: starting a session (prefill {prefilled} chunks)"
+    ));
     *handoff.lock().unwrap() = Some(rx);
     let orchestrator = app.state::<SharedState>().orchestrator.clone();
     let timeout = config.no_speech_timeout_ms;
-    let result = tauri::async_runtime::block_on(orchestrator.begin_assistant_wake(timeout));
+    // 开会话不应超过几百毫秒；万一卡住（例如等不到录音状态锁），不让唤醒永远停在这里
+    let result = tauri::async_runtime::block_on(async {
+        match tokio::time::timeout(
+            SESSION_START_LIMIT,
+            orchestrator.begin_assistant_wake(timeout),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(format!(
+                "开始收音超过 {} 秒没有完成",
+                SESSION_START_LIMIT.as_secs()
+            )),
+        }
+    });
     log::log(&format!(
         "wake: session start took {} ms (prefill {prefilled} chunks)",
         started.elapsed().as_millis()
