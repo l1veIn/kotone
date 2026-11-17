@@ -7,7 +7,7 @@
 //!
 //! - 只截游戏窗口客户区，不截桌面；纯色画面（独占全屏）报错；
 //! - 编号与坐标只对最近一次 `game.look` 有效；窗口尺寸变了作废，只移动窗口不作废；
-//! - 按游戏授权：游戏配置的“允许自动化输入”“让琴音操作”、竞技对局名单（`profile.rs`）；
+//! - 按游戏授权：游戏配置的“允许自动化输入”“让琴音操作”（`profile.rs`），哪些游戏能操作由玩家判断；
 //! - 与自动化程序互斥：程序在跑时不操作，操作时程序不启动；
 //! - 停止：停止自动化热键、语音“停下”、本轮停止都会取消正在进行的操作，并不再自动重试。
 
@@ -82,7 +82,7 @@ pub fn always_allowed(app: &AppHandle) -> bool {
     };
     let process = window.process_name.unwrap_or_default();
     let game = profile::find_by_process(&profile::list(), &process);
-    profile::computer_use_verdict(game.as_ref(), &process) == profile::ComputerUseVerdict::Allowed
+    profile::computer_use_verdict(game.as_ref()) == profile::ComputerUseVerdict::Allowed
 }
 
 /// 停止正在进行的操作（停止热键、语音“停下”、本轮停止）。返回是否有操作被停下。
@@ -335,7 +335,7 @@ fn prepare(app: &AppHandle, observation_id: &str) -> Result<Prepared, String> {
     let process = window.process_name.clone().unwrap_or_default();
     let game = profile::find_by_process(&profile::list(), &process);
     if let profile::ComputerUseVerdict::Denied(reason) =
-        profile::computer_use_verdict(game.as_ref(), &process)
+        profile::computer_use_verdict(game.as_ref())
     {
         return Err(format!("没有操作：{reason}"));
     }

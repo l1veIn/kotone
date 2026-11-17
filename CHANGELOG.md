@@ -3,7 +3,7 @@
 ## Unreleased
 
 - **琴音能在游戏里一边看一边操作**（[ADR 019](docs/adr/019-game-computer-use.md)）：说“帮我找找背包里有没有 xxx”“帮我答完这几道题”，琴音截一张游戏窗口（屏幕文字框出来并编号），决定点哪里，一次点几下、按几个键，做完再看一眼有没有生效。动作清单照抄 Anthropic computer use，批量规则照抄 dsh-computer-use-win，截图编号照 UFO² / OmniParser，游戏循环与提示词照 Cradle、GameVerse、UI-TARS。新工具 `game.look`、`game.act`（外部 Agent 也能用）。
-  - 每段对话第一次在某个游戏里操作前先问你；「游戏适配」新增“让琴音操作”：先问我 / 一直允许 / 不允许。英雄联盟对局、无畏契约、CS2、PUBG、Apex、守望先锋默认不操作（反作弊可能检测模拟点击），设成一直允许才会。
+  - 每段对话第一次在某个游戏里操作前先问你；「游戏适配」新增“让琴音操作”：先问我 / 一直允许 / 不允许。哪些游戏能让她操作由你自己判断（Kotone 不替你区分竞技游戏）。
   - 操作时右下角提示“正在操作 · 按 Esc 停止”：按 Esc 立刻停下并结束这一轮（这个 Esc 不传给游戏；琴音自己按的 Esc 照常有效）；停止自动化热键 Ctrl+Shift+F12、托盘“停止自动化”和语音“停下”也一样。你自己动键盘鼠标不会打断她；按住的键一定松开；要点的地方被别的窗口盖住就不点；窗口尺寸变了先重看。
   - 气泡显示当前这一步（如“点击（2/5）”），气泡关着也显示；用上操作游戏的这一轮最多 30 步、5 分钟；截图作为图片交给模型（需要能看图的模型），上下文里只留最近 3 张。
 - **琴音替你跟队友说话**（[ADR 020](docs/adr/020-voice-into-game-chat.md)，默认关）：说“琴音，跟队友说我去拿龙了”，她的声音从游戏语音里出来。用虚拟麦克风 VB-CABLE（VB-Audio 的捐赠软件）：没装时一键自动安装（官网原版、核对哈希、Windows 授权一次）；开着时你的麦克风和琴音的声音混在一起送进 “CABLE Output”（琴音说话时你的声音压低一半），游戏里麦克风选它就行；只认 Windows 默认麦克风的游戏可以一键改成它、用完一键改回；能放测试音确认通了。这些都能交给琴音或外部 Agent（新工具 `voice_chat.status / install / default_mic / say / test`，设置 `voiceChat.*`），安装、改系统麦克风、对队友说话前先问你。照搬 Soundux（安装）、TTS Voice Wizard（送进虚拟线并给自己留一份）、cpal 的 feedback 示例（混音）、AudioDeviceCmdlets / EarTrumpet（改默认设备）。调研记录见[这里](docs/research/2026-11-17-voice-into-game-chat.md)。

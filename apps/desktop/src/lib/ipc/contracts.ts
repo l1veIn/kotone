@@ -545,7 +545,6 @@ export interface GameProfile {
   launchPath?: string;
   /**
    * 让琴音一步一步操作这个游戏（game.act，ADR 019）：ask 先问（缺省）/ allow 一直允许 / deny 不允许。
-   * 竞技对局进程（英雄联盟对局、无畏契约、CS2、PUBG、Apex、守望先锋）只有 allow 才会操作。
    */
   computerUse?: "ask" | "allow" | "deny";
 }
