@@ -9,6 +9,7 @@ mod bubble;
 mod companion;
 mod compatibility;
 mod diagnostics;
+mod game_session;
 mod game_tools;
 mod hotkey;
 mod model_catalog;

@@ -11,8 +11,7 @@
 //! - 停止自动化热键、托盘菜单与不带 id 的 `automation.stop` 停止全部程序（含等待中的程序，
 //!   不含提醒）；应用退出只停止运行中的程序，等待中的留到下次启动（过期则记为错过）。
 
-use std::collections::{BTreeSet, HashMap};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -26,9 +25,9 @@ use kotone_core::automation::{
 };
 use kotone_core::ocr::{OcrCancel, OcrInput, OcrParams};
 use kotone_core::reminders::DeliveryKind;
-use kotone_core::tools::{WindowCapturer, WindowIdentity, WindowInfo, WindowObserver};
+use kotone_core::tools::{WindowIdentity, WindowInfo, WindowObserver};
 use kotone_platform_windows::inject;
-use kotone_platform_windows::window_tools::{GdiForegroundCapturer, WindowsWindowObserver};
+use kotone_platform_windows::window_tools::WindowsWindowObserver;
 use kotone_script::{
     Cancel, KeyAction, Limits, MouseAction, MouseButton, Outcome, Pixels, Region, ScriptHost,
     TextLine,
@@ -36,7 +35,8 @@ use kotone_script::{
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
-const MAX_CAPTURE_PIXELS: u64 = 3840 * 2160;
+use crate::game_session::GameSession;
+
 /// 工具 `automation.runs` 最多返回的条数。
 const MAX_LISTED_RUNS: usize = 50;
 
@@ -106,37 +106,21 @@ fn target_label(window: &WindowInfo) -> String {
     }
 }
 
-/// 真实宿主。
+/// 真实宿主：窗口绑定、截图、坐标与按住的键都在共享的 [`GameSession`] 里（ADR 019 决定 1）。
 struct DesktopHost {
     app: AppHandle,
-    target: WindowIdentity,
-    started: Instant,
-    held: Mutex<BTreeSet<String>>,
-    /// 按住的鼠标键（结束时一起松开）。
-    held_buttons: Mutex<Vec<MouseButton>>,
-    /// 游戏窗口已关闭或身份变化：脚本按取消结束。
-    gone: AtomicBool,
-    last_inspect: AtomicU64,
+    session: GameSession,
     cancel: Cancel,
 }
 
 impl DesktopHost {
     fn focused_now(&self) -> bool {
-        matches!(
-            WindowsWindowObserver.foreground_window(),
-            Ok(Some(w)) if w.identity.handle == self.target.handle && w.identity.pid == self.target.pid
-        )
+        self.session.focused_now()
     }
 
-    /// 每 500 ms 检查一次游戏窗口是否还在；不在就取消脚本。
+    /// 节流地检查游戏窗口是否还在；不在就取消脚本。
     fn check_alive(&self) {
-        let now = self.now_ms();
-        if now.saturating_sub(self.last_inspect.load(Ordering::Relaxed)) < 500 {
-            return;
-        }
-        self.last_inspect.store(now, Ordering::Relaxed);
-        if WindowsWindowObserver.inspect(&self.target).is_err() {
-            self.gone.store(true, Ordering::SeqCst);
+        if !self.session.check_alive() {
             self.cancel.cancel();
         }
     }
@@ -148,18 +132,7 @@ impl DesktopHost {
                 return Err("自动化已停止".into());
             }
         }
-        let image = GdiForegroundCapturer
-            .capture_foreground_client(&self.target, MAX_CAPTURE_PIXELS)
-            .map_err(|e| format!("截图失败：{e}"))?;
-        if image
-            .warnings
-            .iter()
-            .any(|w| w.code == kotone_platform_windows::window_tools::WARNING_UNIFORM_PIXELS)
-        {
-            return Err("截到的是纯色画面，游戏可能是独占全屏：请改成无边框窗口".into());
-        }
-        kotone_tools::image::RgbaImage::new(image.width, image.height, image.rgba)
-            .map_err(|e| e.to_string())
+        self.session.capture()
     }
 
     fn crop(image: &kotone_tools::image::RgbaImage, r: Region) -> kotone_tools::image::RgbaImage {
@@ -191,30 +164,8 @@ impl DesktopHost {
         (crop, origin)
     }
 
-    /// 窗口比例 → 屏幕物理像素（按当前客户区位置）。
     fn screen_point(&self, x: f64, y: f64) -> Result<(i32, i32), String> {
-        let info = WindowsWindowObserver
-            .inspect(&self.target)
-            .map_err(|e| format!("游戏窗口不可用：{e}"))?;
-        let rect = info.client_rect.ok_or("拿不到游戏窗口的客户区位置")?;
-        if rect.width == 0 || rect.height == 0 {
-            return Err("游戏窗口客户区为空（可能最小化了）".into());
-        }
-        let px = rect.x + ((x * f64::from(rect.width)) as i32).min(rect.width as i32 - 1);
-        let py = rect.y + ((y * f64::from(rect.height)) as i32).min(rect.height as i32 - 1);
-        Ok((px, py))
-    }
-
-    fn release_all(&self) {
-        let held: Vec<String> = std::mem::take(&mut *self.held.lock().unwrap())
-            .into_iter()
-            .collect();
-        for key in held.iter().rev() {
-            let _ = inject::key_up(key);
-        }
-        for button in std::mem::take(&mut *self.held_buttons.lock().unwrap()) {
-            let _ = inject::mouse_button(platform_button(button), false);
-        }
+        self.session.screen_point(x, y)
     }
 
     fn deliver(&self, text: &str, kind: DeliveryKind, wait: bool) -> Result<(), String> {
@@ -316,7 +267,7 @@ pub fn mean_luma(pixels: &[u8]) -> f64 {
 
 impl ScriptHost for DesktopHost {
     fn now_ms(&self) -> u64 {
-        self.started.elapsed().as_millis() as u64
+        self.session.elapsed_ms()
     }
 
     fn sleep(&self, ms: u64, cancel: &Cancel) -> bool {
@@ -344,15 +295,8 @@ impl ScriptHost for DesktopHost {
     fn key(&self, action: KeyAction, key: &str) -> Result<(), String> {
         match action {
             KeyAction::Press => inject::key_down_up(key).map_err(|e| e.message),
-            KeyAction::Down => {
-                inject::key_down(key).map_err(|e| e.message)?;
-                self.held.lock().unwrap().insert(key.to_string());
-                Ok(())
-            }
-            KeyAction::Up => {
-                self.held.lock().unwrap().remove(key);
-                inject::key_up(key).map_err(|e| e.message)
-            }
+            KeyAction::Down => self.session.key_down(key),
+            KeyAction::Up => self.session.key_up(key),
         }
     }
 
@@ -420,15 +364,8 @@ impl ScriptHost for DesktopHost {
                 inject::mouse_move_to(px, py).map_err(err)?;
                 inject::mouse_click(platform_button(button), count).map_err(err)
             }
-            MouseAction::Down(button) => {
-                inject::mouse_button(platform_button(button), true).map_err(err)?;
-                self.held_buttons.lock().unwrap().push(button);
-                Ok(())
-            }
-            MouseAction::Up(button) => {
-                self.held_buttons.lock().unwrap().retain(|b| *b != button);
-                inject::mouse_button(platform_button(button), false).map_err(err)
-            }
+            MouseAction::Down(button) => self.session.mouse_down(platform_button(button)),
+            MouseAction::Up(button) => self.session.mouse_up(platform_button(button)),
             MouseAction::Scroll(clicks) => inject::mouse_wheel(clicks).map_err(err),
         }
     }
@@ -755,12 +692,7 @@ fn launch(app: &AppHandle, run: &Run) -> Result<(), String> {
     }
     let host = Arc::new(DesktopHost {
         app: app.clone(),
-        target: identity,
-        started: Instant::now(),
-        held: Mutex::new(BTreeSet::new()),
-        held_buttons: Mutex::new(Vec::new()),
-        gone: AtomicBool::new(false),
-        last_inspect: AtomicU64::new(0),
+        session: GameSession::new(identity),
         cancel: cancel.clone(),
     });
     let thread_app = app.clone();
@@ -777,7 +709,7 @@ fn launch(app: &AppHandle, run: &Run) -> Result<(), String> {
                 Limits::default(),
                 cancel,
             );
-            host.release_all();
+            host.session.release_all();
             kotone_core::log::log(&format!(
                 "automation {thread_id}: {:?} keys={} {}ms",
                 report.outcome, report.keys, report.duration_ms
@@ -791,7 +723,7 @@ fn launch(app: &AppHandle, run: &Run) -> Result<(), String> {
                 .unwrap()
                 .get(&thread_id)
                 .and_then(|live| live.end_reason.clone());
-            let gone = host.gone.load(Ordering::SeqCst);
+            let gone = host.session.is_gone();
             let (status, message, outcome) = match &report.outcome {
                 Outcome::Finished => (RunStatus::Finished, None, "finished"),
                 Outcome::Cancelled => (
