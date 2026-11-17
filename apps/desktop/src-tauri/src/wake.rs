@@ -342,6 +342,14 @@ enum Phase {
         loud: usize,
         floor: f32,
     },
+    /// 正在开始唤醒会话（在后台进行）：这期间照常读麦克风，音频继续交给即将开始的会话。
+    /// 不在这个线程上等：采集端只能缓存约 2 秒，等久了会报“处理不过来”并让唤醒停掉。
+    Starting {
+        tx: SyncSender<Vec<f32>>,
+        done: Receiver<Result<(), String>>,
+        started: Instant,
+        prefilled: usize,
+    },
     /// 音频转给唤醒会话；会话结束（接收端关闭）后回到监听。
     Handoff {
         tx: SyncSender<Vec<f32>>,
@@ -414,6 +422,7 @@ fn listen(
                 Phase::Listening => "listening",
                 Phase::Probing { .. } => "probing",
                 Phase::Acking { .. } => "acking",
+                Phase::Starting { .. } => "starting",
                 Phase::Handoff { .. } => "handoff",
                 Phase::Cooldown { .. } => "cooldown",
             };
@@ -528,6 +537,43 @@ fn listen(
                     }
                 }
             }
+            Phase::Starting {
+                tx,
+                done,
+                started,
+                prefilled,
+            } => {
+                // 会话还没开始也照收：它开始后会把这些一起读走
+                let _ = tx.try_send(chunk);
+                match done.try_recv() {
+                    Ok(result) => session_started(&handoff, result, tx, started, prefilled),
+                    Err(TryRecvError::Disconnected) => session_started(
+                        &handoff,
+                        Err("开始收音的任务意外结束".into()),
+                        tx,
+                        started,
+                        prefilled,
+                    ),
+                    Err(TryRecvError::Empty) if started.elapsed() >= SESSION_START_LIMIT => {
+                        session_started(
+                            &handoff,
+                            Err(format!(
+                                "开始收音超过 {} 秒没有完成",
+                                SESSION_START_LIMIT.as_secs()
+                            )),
+                            tx,
+                            started,
+                            prefilled,
+                        )
+                    }
+                    Err(TryRecvError::Empty) => Phase::Starting {
+                        tx,
+                        done,
+                        started,
+                        prefilled,
+                    },
+                }
+            }
             Phase::Handoff { tx } => match tx.try_send(chunk) {
                 Ok(()) | Err(TrySendError::Full(_)) => Phase::Handoff { tx },
                 Err(TrySendError::Disconnected(_)) => {
@@ -578,28 +624,33 @@ fn begin_session(
     for chunk in prefill {
         let _ = tx.try_send(chunk);
     }
-    let started = Instant::now();
     log::log(&format!(
         "wake: starting a session (prefill {prefilled} chunks)"
     ));
     *handoff.lock().unwrap() = Some(rx);
     let orchestrator = app.state::<SharedState>().orchestrator.clone();
     let timeout = config.no_speech_timeout_ms;
-    // 开会话不应超过几百毫秒；万一卡住（例如等不到录音状态锁），不让唤醒永远停在这里
-    let result = tauri::async_runtime::block_on(async {
-        match tokio::time::timeout(
-            SESSION_START_LIMIT,
-            orchestrator.begin_assistant_wake(timeout),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => Err(format!(
-                "开始收音超过 {} 秒没有完成",
-                SESSION_START_LIMIT.as_secs()
-            )),
-        }
+    let (done_tx, done) = mpsc::channel();
+    tauri::async_runtime::spawn(async move {
+        let _ = done_tx.send(orchestrator.begin_assistant_wake(timeout).await);
     });
+    Phase::Starting {
+        tx,
+        done,
+        started: Instant::now(),
+        prefilled,
+    }
+}
+
+/// 开始会话的结果（或超时）出来以后转到哪个阶段。
+#[cfg(feature = "engine-sherpa")]
+fn session_started(
+    handoff: &Arc<Mutex<Option<Receiver<Vec<f32>>>>>,
+    result: Result<(), String>,
+    tx: SyncSender<Vec<f32>>,
+    started: Instant,
+    prefilled: usize,
+) -> Phase {
     log::log(&format!(
         "wake: session start took {} ms (prefill {prefilled} chunks)",
         started.elapsed().as_millis()

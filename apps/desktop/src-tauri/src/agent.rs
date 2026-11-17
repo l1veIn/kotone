@@ -451,6 +451,17 @@ async fn attach_screen(app: &AppHandle, user: &mut Message) {
     if !attachments.is_empty() {
         return;
     }
+    // 前台是 Kotone 自己的窗口（例如开着设置页时用唤醒或热键）：截自己的界面没有意义，
+    // 读自己窗口的标题还要主线程配合，跳过。
+    if kotone_platform_windows::inject::foreground_pid() == Some(std::process::id()) {
+        attachments.push(Attachment::Data {
+            label: "按热键时的游戏画面（文字识别）与聊天跟踪".into(),
+            text:
+                "（前台是 Kotone 自己的窗口，没有读取游戏画面；需要看游戏时先用 game.focus 切过去）"
+                    .into(),
+        });
+        return;
+    }
     let data = match crate::companion::read_chat(app, text, crate::companion::Source::Voice).await {
         Ok(snapshot) => {
             let input = &snapshot.input;
