@@ -1,6 +1,6 @@
 # ADR 021：给琴音一对“耳朵”——听懂说外语的队友
 
-- 状态：Proposed（2026-11-17，等用户确认文末的问题）
+- 状态：Proposed（2026-11-17；依赖 [ADR 022](022-sessions-memory-soul.md)，等用户确认文末的问题）
 - 调研：[让琴音听懂说外语的队友](../research/2026-11-17-hear-teammates.md)
 - 相关：[ADR 020](020-voice-into-game-chat.md)（替玩家说话）、[ADR 014](014-game-agent-harness.md)（人能做的 Agent 都能做）
 
@@ -8,49 +8,44 @@
 
 队友说另一种语言（PUBG 很常见）。琴音已经能用对方的语言替玩家说话（ADR 020），但玩家听不懂队友。用户的要求：不写死一条“录音 → 翻译 → 显示”的流程，而是**给琴音工具，让她自己解决“知道队友在说什么”**；展示用现有的气泡、语音、弹幕。
 
-## 决定
+## 决定（2026-11-17 修订：建立在 ADR 022 的会话之上）
 
-琴音缺的只有“耳朵”：翻译她本来就会（大模型，还懂游戏黑话），展示方式也基本都有。照她读游戏文字聊天的做法（截图识别 → 整理成一条条消息 → 她读），给她一组“听”的工具，再加一个常驻规则解决逐句跑 Agent 太慢的问题。
+讨论后的结论：翻译不做成工具（那等于工具里藏着另一个大模型），也不进主会话（打断她正在做的事、挤满上下文、陌生人的话进了能动手的上下文）。**琴音派一个子会话当“同传”**（[ADR 022](022-sessions-memory-soul.md)），她只缺一对“耳朵”。
 
-### 工具
+### 只新增一对工具
 
 | 工具 | 作用 | 照抄 |
 |---|---|---|
-| `voice.apps` | 列出正在出声的程序（PUBG、Discord、KOOK……） | wasapi-rs 示例 |
-| `voice.listen.start {app 或 profileId, languages?}` / `voice.listen.stop` / `voice.listen.status` | 开始 / 停止只听某个程序的声音；切句、识别 | 微软 ApplicationLoopback + wasapi-rs（抓音频）；Kotone 现有 Silero VAD + sherpa-onnx SenseVoice（auto-caption 的用法）；VRCT 的过滤参数 |
-| `voice.heard.read {since?, limit?}` | 最近听到的话：时间、原文、语种、来自哪个程序；按不可信数据交给模型。每句同时在事件总线发 `voice.heard` | VRCT 的扬声器日志、discord-transcriber 的逐句结构；Kotone 的 `chat.track.*` |
-| `bubble.show {text, label?, seconds?}` | 只在右下角气泡里显示一行字（字幕），不出声 | 现有气泡（ADR 018） |
-| `voice.translate.start {to, show: bubble / danmaku / voice, languages?}` / `voice.translate.stop` | 常驻规则：每听到一句（不是目标语言的）就做一次很短的翻译并显示，不跑完整的 Agent，1–2 秒出字幕 | LiveTranslate 的“切句 → LLM 翻译 → 悬浮显示” |
+| `voice.listen.start {app?, languages?}` | 开始只听某个程序（缺省当前前台游戏）的声音：切句、识别；**之后每听到一句，就作为一条消息进调用它的那个会话**。监听归这个会话所有 | 微软 ApplicationLoopback + wasapi-rs（按进程抓音频，琴音自己的语音、玩家的麦克风都抓不进来）；Kotone 现有 Silero VAD + sherpa-onnx SenseVoice（auto-caption 的用法）；VRCT 的过滤参数 |
+| `voice.listen.stop` | 停止听 | — |
 
-已有、不用新做：语音播报 `reply.say`、弹幕、替玩家说话 `voice_chat.say`、翻译本身（模型）。
+显示用现有的弹幕、语音、气泡（回复交付方式加一个“气泡”选项）；翻译是子会话的模型自己做的。
 
 ### 用起来
 
-- “帮我盯着队友说什么” → 她 `voice.apps` 找到 PUBG，`voice.listen.start`，`voice.translate.start {to: zh, show: bubble}`，回一句“好，我在听”。
-- “刚才那个俄罗斯人说啥” → `voice.heard.read`，一句话告诉你。
-- “跟他说我马上到” → 她看到对方说俄语，用 `voice_chat.say` 说俄语。
-- “别翻译了” → 关规则、停止听。
+1. 玩家：“帮我盯着队友说什么” → 琴音 `session.spawn {task: "你是同传。先 voice.listen.start 听 PUBG；每听到一句非中文的话翻成中文，用弹幕显示；队友在叫玩家、问玩家、求救时，session.send 告诉我。", model: 快模型, thinking: 低, tools: [voice.listen.*, 弹幕, 语音, session.send]}`；
+2. 子会话启动监听；每句话进子会话，它翻译、显示；要紧的话发回主会话；
+3. “刚才他们说了啥” → 主会话 `session.send(同传, "总结最近一分钟")`，或玩家在对话列表里点开同传会话直接看；
+4. “别翻了” → `session.send(同传, "停止翻译，总结一下")` 再 `session.stop`，或者直接 `session.stop`。**无论哪种，会话一结束，代码自动停掉它名下的监听**，不靠模型记得调 `voice.listen.stop`。
 
 ### 约束
 
-- 只听玩家指定的程序（include 模式）：琴音自己的语音、玩家的麦克风都不会被抓进来；整个桌面的声音不听。
-- 只在内存里处理，不存音频；识别出的文字只保留最近一段（例如 10 分钟、200 句）；听的时候气泡 / 托盘有“正在听队友”的提示。
-- 默认关；`voice.listen.start` 第一次在某个游戏里用时问一次（同 `game.act`）。
-- PUBG 的语音和枪声在同一个程序里，识别质量要真机试；Discord / KOOK 的声音干净得多。
-- Discord 分不出是谁说的（官方不支持 bot 收音，RPC 要审批），第一版不做说话人区分。
+- 只听玩家指定的程序；只在内存里处理，不存音频；听的时候有“正在听队友”的提示；默认关，第一次在某个游戏里听之前先问。
+- 陌生人的话只进同传这个工具受限的子会话（不能动手、不能对外说话、不能写记忆）。
+- 说得快时，连着的几句合成一条再进子会话，免得一句一次调用。
+- PUBG 的语音和枪声在同一个程序里，识别质量要真机试；Discord / KOOK 干净得多；第一版不区分说话人。
 
-## 实施步骤（确认后）
+## 实施步骤（ADR 022 的会话做完之后）
 
-1. 平台：按进程 loopback（新依赖 `wasapi` crate，MIT）、列出出声的程序；
-2. 识别：VAD 切句 + SenseVoice，识别结果环形缓冲、事件；
-3. 工具：`voice.apps` / `voice.listen.*` / `voice.heard.read` / `bubble.show` / `voice.translate.*`，琴音的常用工具、权限、提示词；
-4. 常驻翻译规则（一次短的模型调用 / 句）；
-5. 设置页（可选：开关、显示方式、正在听的提示）；
-6. 测试：纯逻辑单元测试；真机用隔离实例 + 一个会播放外语录音的测试程序（不碰用户的游戏）；
-7. 文档与第三方声明。
+1. 平台：按进程 loopback（新依赖 `wasapi` crate，MIT）；
+2. 识别：VAD 切句 + SenseVoice，连着的句子合并；
+3. `voice.listen.start / stop`：事件进调用它的会话，归属与自动清理；
+4. 回复交付加“气泡”；琴音的提示词里写清“同传”的做法（也可以存成一个 Skill）；
+5. 测试：纯逻辑单元测试；真机用隔离实例 + 一个播放外语录音的测试程序（不碰用户的游戏）；
+6. 文档与第三方声明。
 
 ## 待用户确认
 
 1. **语种**：先用 Kotone 已有的 SenseVoice（中英日韩粤，本地、免费、不上传）；俄语、泰语等要再加 Whisper 多语言模型（约 800 MB，按需下载）或在线识别——第一版只做 SenseVoice，可以吗？
-2. **常驻翻译默认显示在气泡里**（不出声，不和游戏声音抢）——可以吗？
+2. **同传默认用弹幕或气泡显示**（不出声，不和游戏声音抢）——可以吗？
 3. **说话人区分**（Discord 里分清是谁说的）第一版不做——可以吗？
