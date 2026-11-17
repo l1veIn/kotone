@@ -76,7 +76,7 @@ def foreground_process():
 # Programs that may hold the foreground while this script runs. Anything else (a game!) aborts the test before
 # fg.ps1 taps Alt: on 2026-11-17 the player's League of Legends match was in front and received those taps.
 SAFE_FOREGROUND = {"powershell.exe", "pwsh.exe", "WindowsTerminal.exe", "OpenConsole.exe", "conhost.exe",
-                   "explorer.exe", "Code.exe", "claude.exe", "kotone.exe", "python.exe", ""}
+                   "explorer.exe", "Code.exe", "claude.exe", "kotone.exe", "python.exe", "warp.exe", ""}
 
 
 def focus(title="KotoneScriptTarget"):
@@ -153,7 +153,7 @@ def setup_ocr():
 
 def check(name, ok, detail=""):
     print(("PASS " if ok else "FAIL ") + name + (f"  ({detail})" if detail else ""))
-    return ok
+    return bool(ok)
 
 
 def run(out):
