@@ -22,3 +22,4 @@ ADR 保留当时的上下文和选择，状态决定其适用性。当前架构�
 | [016 前端引入 shadcn-svelte](016-ui-foundation-shadcn.md) | Accepted / 已采纳 | 分三步：底子 → 「琴音」聊天页（复用 RambleDesk 的聊天实现）→ 其他页面逐页迁移；悬浮窗与弹幕窗不改 |
 | [017 语音唤醒与执行中的语音接话](017-voice-wake.md) | Accepted / 已采纳 | sherpa-onnx 关键词检测（“琴音琴音”），模型按需下载；唤醒后与陪玩热键同一条收音与琴音流程；应答“嗯？/我在”，玩家开口即打断；1.5 秒先接一句；默认关 |
 | [018 琴音的对话气泡](018-companion-bubble.md) | Accepted / 已采纳 | 语音和琴音说话时用屏幕角落的独立气泡窗（头像 + 状态 + 一句话），不再借用语音输入的悬浮窗；整窗鼠标穿透、不抢焦点；回答默认不走弹幕 |
+| [019 琴音在游戏里看屏幕、动鼠标](019-game-computer-use.md) | Accepted / 已采纳（设计，待实现） | 底层与自动化共用；新增 `game.look`（截图 + 编号文字元素）与 `game.act`（批量动作）；动作清单照抄 Anthropic，批量与安全照抄 dsh-computer-use-win，编号照抄 UFO² / OmniParser，游戏循环照抄 Cradle / GameVerse / UI-TARS |
