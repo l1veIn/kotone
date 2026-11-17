@@ -131,4 +131,20 @@ The design of 琴音's "look at the screen, move the mouse" tools follows the op
 - GameVerse (key_down / key_up actions and hold-to-walk for real Windows games): MIT License
 - UI-TARS-1.5 game prompt by ByteDance (prompt clauses: record new game rules, change approach when an action has no effect, release held keys, ask the user when stuck; 100 ms settle before clicking): https://github.com/bytedance/UI-TARS, Apache License 2.0
 
+## Game voice chat (ADR 020)
+
+### VB-CABLE (not bundled)
+
+Kotone does not ship VB-CABLE. When the user asks for it, Kotone downloads the official, unmodified `VBCABLE_Driver_Pack46.zip` from https://vb-audio.com/Cable/ (SHA-256 pinned) and runs VB-Audio's own setup program; the user agrees to VB-Audio's license by installing it.
+
+- VB-CABLE, Copyright Vincent Burel / VB-Audio Software. Origin: https://vb-cable.com. **VB-CABLE is a donationware, all participations are welcome.**
+- Licensing: https://vb-audio.com/Services/licensing.htm (distribution with another application "AS IS", silent installation allowed "provided that our donationware model remains applicable"; VB-CABLE A+B / C+D are not used).
+
+### Design references (no code copied)
+
+- Soundux (GPL-3.0), https://github.com/Soundux/Soundux — downloads VB-CABLE and runs `VBCABLE_Setup_x64.exe` with `-h -i` in its installer
+- TTS Voice Wizard (MIT), https://github.com/VRCWizard/TTS-Voice-Wizard — text-to-speech played into the virtual cable while the user hears a copy
+- cpal `examples/feedback.rs` (Apache-2.0), https://github.com/RustAudio/cpal — input stream → buffer → output stream
+- AudioDeviceCmdlets (MIT) and EarTrumpet (MIT) — the `IPolicyConfig` COM interface (`SetDefaultEndpoint`) used to change the Windows default recording device
+
 These notices describe third-party components and models; they do not grant a license to Kotone itself.

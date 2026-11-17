@@ -87,6 +87,10 @@ An automation is a small sandboxed Luau program (or a delayed speak = a reminder
 - `game.launch {"profileId": …}` — open it with the launch path the user set in the profile; **ask first**. `game.close {"profileId": …}` — a normal close request (the game may ask to confirm); **ask first**.
 - Look and act step by step (screens that change every time, so no program can be written in advance): `game.look` (optional `zoom`) → numbered screenshot of the foreground game + `elements [{id, text, box}]`; then `game.act {"observationId": …, "actions": [{"action": "left_click", "element": 3}, {"action": "key", "text": "i"}, …]}` (1-20 Anthropic computer-use actions, coordinates in screenshot pixels; pass `--timeout-ms 30000`). The player can stop it with Esc (or the stop hotkey / voice): `stopReason: cancelled` — **do not retry then; wait for the user**. **Ask the user before acting in their game**; competitive match processes and games set to "不让琴音操作" refuse.
 
+## Game voice chat
+
+`voice_chat.status` → what is missing. `voice_chat.install` installs the VB-CABLE virtual mic (VB-Audio donationware; one UAC prompt; **ask first**), `settings.update {"patch": {"voiceChat": {"enabled": true}}}` starts forwarding, the user picks "CABLE Output" as the game's mic (or `voice_chat.default_mic {"use": "cable"}` / `{"use": "restore"}` for games that only use the Windows default; **ask first**), `voice_chat.test` checks it. `voice_chat.say {"text": …}` makes teammates hear a sentence — **only what the user asked you to say**.
+
 ## Seeing the screen
 
 `window.list` / `window.active` → `screen.capture` (foreground window only) → `image.crop` / `image.preprocess` → `ocr.recognize` (pick a backend from `ocr.backends` — one per OCR package, e.g. `local-ppocrv5-ch` for Chinese/English/Japanese, `local-ppocrv5-korean`; online backends upload the image). `chat.track.ingest` / `chat.track.read` turn repeated OCR frames into stable chat messages. Artifacts are referenced by ID; `kotone-cli tools artifact get <id> --output file.png` saves one locally.

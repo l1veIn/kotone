@@ -192,6 +192,18 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `game.look` | `zoom`（可选，`[x0, y0, x1, y1]`） | 看前台游戏（[ADR 019](adr/019-game-computer-use.md)）：只截游戏窗口客户区，按 Anthropic computer use 的规则缩放（长边 ≤ 1280、约 115 万像素，不放大），文字识别出的每一行框出来并编号（OmniParser 的标签样式）。返回 `observationId`、`screenshot {width, height}`（`game.act` 的坐标系）、`window {title, process, width, height}`、`elements [{id, text, box}]`、`image {mimeType: image/jpeg, base64, width, height}`；没有可用的文字识别模型时照样给截图，附 `ocr` 说明。`zoom` 是上一张完整截图里的区域，从原分辨率裁剪放大，元素和之后的坐标仍用完整截图的坐标系。前台是 Kotone 自己、独占全屏（纯色画面）时报错。结果是屏幕数据（不可信）。副作用 `captures-screen` |
 | `game.act` | `observationId`、`actions`（1–20 步） | 一步一步操作游戏。`observationId` 必须是最近一次 `game.look` 的；动作名与参数照抄 Anthropic computer use：`left_click` / `right_click` / `middle_click` / `double_click` / `triple_click`（`coordinate [x, y]` 或 `element` 编号，`text` = 点击时按住的修饰键）、`left_click_drag`（`start_coordinate`、`coordinate`）、`mouse_move`、`left_mouse_down` / `left_mouse_up`、`scroll`（`scroll_direction`、`scroll_amount`）、`type`（`text`，50 字一组）、`key`（`text` 如 `i`、`ctrl+s`、`Return`，`repeat`）、`hold_key` / `wait`（`duration` 秒 ≤ 10，一次合计 ≤ 20），游戏补充 `key_down` / `key_up`、`mouse_move_by`（`dx`、`dy` 相对移动，转视角）。规则照抄 dsh-computer-use-win `batch`：先校验整份计划；按顺序执行，第一处失败就停，后面的记 `Not executed: an earlier action failed.`；每步前检查停止（操作期间玩家按 Esc——这个 Esc 被拦下、不传给游戏；停止热键；语音“停下”；本轮停止；玩家别的键鼠输入**不**会让它停）、游戏在前台（最多等 5 秒）、窗口尺寸没变；点被别的程序窗口盖住时不点。结果 `{sent, total, results [{index, action, status sent/failed/stopped/not_executed, message}], stopReason?（cancelled / window_changed / window_closed / not_foreground / point_covered / action_failed）, hint, look}`：只说动作已发出，结尾自动再看一眼（玩家叫停时不看）。游戏配置不允许自动化输入或“让琴音操作”为不允许、竞技对局进程（没设成一直允许）、自动化程序正在运行时拒绝。期限：调用时传 `timeoutMs`（建议 30000）。副作用 `sends-game-input` |
 
+### 游戏语音（委托桌面宿主，2026-11-17，[ADR 020](adr/020-voice-into-game-chat.md)）
+
+琴音用虚拟麦克风 VB-CABLE（VB-Audio 的捐赠软件，https://vb-cable.com）替玩家在游戏语音里说话。设置在 `voiceChat.*`（`settings.update`）：`enabled`（缺省关）、`includeMic`、`micDeviceId`、`micGain`。
+
+| 工具 | 参数 | 结果要点 |
+| --- | --- | --- |
+| `voice_chat.status` | 无 | `driverInstalled`、`installing`、`devices {cableInput, cableOutput}`、`enabled` / `includeMic` / `micDeviceId` / `micGain`、`running`（转发在跑）、`error`、`windowsDefaultMic` / `windowsCommunicationsMic`、`windowsDefaultIsCable`、`canRestoreDefaultMic`、`ttsCanSpeak`（系统语音送不进游戏）、`attribution` |
+| `voice_chat.install` | 无 | 自动安装 VB-CABLE：从官网下载 `VBCABLE_Driver_Pack46.zip`（固定 SHA-256），解压到 `<KOTONE_HOME>/drivers/vbcable/`，以管理员身份静默运行 `VBCABLE_Setup_x64.exe -h -i`（Windows 弹一次授权），等设备出现。返回 `installed`、`needsReboot`；已装时 `alreadyInstalled`。副作用 `installs-driver`、`shows-uac-prompt` |
+| `voice_chat.default_mic` | `use`：`cable` / `restore` | 把 Windows 默认录音设备与默认通信设备设成 CABLE Output（先记下原来的），或改回。改的是系统设置，别的程序也会用它。副作用 `writes-system-audio` |
+| `voice_chat.say` | `text`（≤ 200 字） | 用当前语音合成一次，送进虚拟麦克风，玩家自己也听得到。要求游戏语音在运行、语音引擎不是系统语音。副作用 `speaks-to-teammates` |
+| `voice_chat.test` | 无 | 往 CABLE Input 放 1 秒 440 Hz 测试音，同时从 CABLE Output 录回来；`ok`、`peak`、`note`。在游戏语音里时队友会听到一声。副作用 `speaks-to-teammates` |
+
 **让琴音操作**：游戏配置的 `computerUse`：`ask`（缺省，内置 Agent 每段对话先问一次）/ `allow`（一直允许，竞技对局也放开）/ `deny`。竞技对局进程名单在 `kotone_core::profile::COMPETITIVE_PROCESSES`。外部 Agent 调 `game.act` 不经过询问（权限由它们自己的运行框架管），但游戏配置的拒绝同样生效。Kotone 发出的模拟输入在 `dwExtraInfo` 带标记 `0x4B544E49`（"KTNI"）：`game.act` 自己按的 Esc 照常传给游戏，只有玩家按的 Esc 才算停止。
 
 **允许自动化输入**：游戏配置的 `allowAutomationInput`（缺省允许）为 `false` 时，`automation.run` 对这个游戏的程序执行会被拒绝（安排时检查，带延迟的到点时再检查一次）；玩家自己的语音打字不受影响。启动路径存在游戏配置的 `launchPath`。
