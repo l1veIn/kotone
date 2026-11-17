@@ -7,7 +7,7 @@ test("game profile saves the automation-input switch and launch path without dro
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-game").click();
-  await expect(page.getByRole("heading", { name: "游戏适配" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "游戏", exact: true })).toBeVisible();
 
   // 没写过这个字段的配置按“允许”显示
   const generic = page.getByTestId("game-profile-generic");

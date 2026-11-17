@@ -468,7 +468,7 @@
   {/if}
 {/snippet}
 
-<SettingsPage title="游戏适配" description="每个游戏一套打法：聊天键、词表、节奏，以及琴音能不能替你在这个游戏里按键。">
+<SettingsPage title="游戏" description="每个游戏一套打法：聊天键、词表、节奏，以及琴音能不能替你在这个游戏里按键。">
   {#snippet actions()}
     <Button variant="outline" size="sm" disabled={importingPackage} onclick={() => void onImportPackage()}>
       <Upload class="size-3.5" />{importingPackage ? "导入中…" : "导入配置包"}

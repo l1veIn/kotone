@@ -93,10 +93,11 @@ test("voice entry sits in the create card, works without a shortcut and exposes 
   await expect(page.getByTestId("assistant-voice-hotkey")).toHaveText("设置快捷键");
   await page.screenshot({ path: testInfo.outputPath("assistant-voice-entry.png"), animations: "disabled" });
   await page.getByTestId("assistant-voice-hotkey").click();
-  await expect(page.getByTestId("assistant-nav-settings")).toHaveAttribute("aria-current", "page");
+  // “设置快捷键”打开「交流」（陪玩热键在那里，ADR 023）
+  await expect(page.getByTestId("talk-page")).toBeVisible();
   await expect(page.getByTestId("assistant-interaction").getByRole("button")).toHaveCount(3);
   await expect(page.getByTestId("assistant-mode-solo")).toHaveCount(0);
-  await page.getByTestId("assistant-nav-chat").click();
+  await page.getByTestId("settings-nav-assistant").click();
   await page.evaluate(() => window.assistantVoiceTest.runtime("stopped"));
   await expect(button).toBeDisabled();
   await expect(page.getByTestId("assistant-voice-input")).toContainText("请先启动 Kotone");

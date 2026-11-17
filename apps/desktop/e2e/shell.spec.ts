@@ -7,7 +7,7 @@ test("sidebar collapses to an icon rail and remembers it", async ({ page }, test
   await page.goto("/#/settings?onboarding=never");
   const sidebar = page.getByTestId("app-sidebar");
   await expect(sidebar).toHaveAttribute("data-rail", "false");
-  await expect(sidebar.getByTestId("settings-nav-general")).toHaveText("通用");
+  await expect(sidebar.getByTestId("settings-nav-general")).toHaveText("语音输入");
   await expect(sidebar.getByTestId("agent-conversations")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("shell-expanded.png"), animations: "disabled" });
 

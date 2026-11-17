@@ -2,8 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("assistant uses the same editable, captured and clearable hotkey field as advanced settings", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
-  await page.getByTestId("settings-nav-assistant").click();
-  await page.getByTestId("assistant-nav-settings").click();
+  await page.getByTestId("settings-nav-talk").click();
   const input = page.getByTestId("hotkey-input-assistant");
   const capture = page.getByTestId("hotkey-capture-assistant");
   const status = page.getByTestId("hotkey-status-assistant");
@@ -27,16 +26,14 @@ test("assistant uses the same editable, captured and clearable hotkey field as a
   await page.getByTestId("hotkey-save-assistant").click();
   await expect(status).toHaveText("当前生效：F24");
   await page.getByTestId("settings-nav-general").click();
-  await page.getByTestId("settings-nav-assistant").click();
-  await page.getByTestId("assistant-nav-settings").click();
+  await page.getByTestId("settings-nav-talk").click();
   await expect(input).toHaveValue("F24");
   await expect(status).toHaveText("当前生效：F24");
 });
 
 test("leaving assistant during capture cannot save a later key or leave capture active", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
-  await page.getByTestId("settings-nav-assistant").click();
-  await page.getByTestId("assistant-nav-settings").click();
+  await page.getByTestId("settings-nav-talk").click();
   await page.getByTestId("hotkey-capture-assistant").click();
   await page.getByTestId("settings-nav-advanced").click();
   await page.getByTestId("advanced-nav-hotkeys").click();
@@ -44,22 +41,20 @@ test("leaving assistant during capture cannot save a later key or leave capture 
   await page.getByTestId("hotkey-capture-post-process-toggle").click();
   await page.keyboard.press("F10");
   await expect(page.getByTestId("hotkey-input-post-process-toggle")).toHaveValue("F10");
-  await page.getByTestId("settings-nav-assistant").click();
-  await page.getByTestId("assistant-nav-settings").click();
+  await page.getByTestId("settings-nav-talk").click();
   await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("");
   const saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
   expect(saved.assistant.hotkey).toBe("");
   expect(saved.togglePostProcessingHotkey).toBe("F10");
 });
 
-test("switching to the chat tab cancels an in-progress assistant hotkey capture", async ({ page }) => {
+test("leaving the talk page cancels an in-progress assistant hotkey capture", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
-  await page.getByTestId("settings-nav-assistant").click();
-  await page.getByTestId("assistant-nav-settings").click();
+  await page.getByTestId("settings-nav-talk").click();
   await page.getByTestId("hotkey-capture-assistant").click();
-  await page.getByTestId("assistant-nav-chat").click();
+  await page.getByTestId("settings-nav-assistant").click();
   await page.keyboard.press("F9");
-  await page.getByTestId("assistant-nav-settings").click();
+  await page.getByTestId("settings-nav-talk").click();
   await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("");
   await page.getByTestId("hotkey-capture-assistant").click();
   await page.keyboard.press("F10");

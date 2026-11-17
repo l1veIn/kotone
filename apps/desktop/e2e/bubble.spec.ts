@@ -59,8 +59,7 @@ test.describe("对话气泡", () => {
   test("设置页有对话气泡分区：默认开启、右下角，改位置会保存", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1280, height: 820 });
     await page.goto("/#/settings?onboarding=never");
-    await page.getByTestId("settings-nav-assistant").click();
-    await page.getByTestId("assistant-nav-settings").click();
+    await page.getByTestId("settings-nav-talk").click();
     await expect(page.locator("#bubble-settings")).toContainText("对话气泡");
     await expect(page.getByTestId("bubble-enabled")).toHaveAttribute("aria-checked", "true");
     await expect(page.getByTestId("bubble-danmaku")).toHaveAttribute("aria-checked", "false");

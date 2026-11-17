@@ -5,7 +5,7 @@ test("exports a privacy-safe diagnostic package from the advanced page", async (
 }) => {
   await page.goto("/#/settings?onboarding=never");
 
-  await page.getByRole("button", { name: "高级", exact: true }).click();
+  await page.getByTestId("settings-nav-advanced").click();
   await page.getByTestId("advanced-nav-system").click();
 
   await expect(
@@ -24,7 +24,7 @@ test("clear diagnostics asks for confirmation and can stop recording", async ({
   page,
 }) => {
   await page.goto("/#/settings?onboarding=never");
-  await page.getByRole("button", { name: "高级", exact: true }).click();
+  await page.getByTestId("settings-nav-advanced").click();
   await page.getByTestId("advanced-nav-system").click();
 
   await page.getByTestId("diagnostics-clear").click();

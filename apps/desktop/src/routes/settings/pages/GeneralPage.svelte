@@ -33,11 +33,15 @@
   } from "../../../lib/stores/ui";
   import { runtimeStore } from "../../../lib/stores/runtime";
   import RuntimeButton from "../../../lib/components/RuntimeButton.svelte";
-  import OutputSettings from "./assistant/OutputSettings.svelte";
-  import AppearanceSettingsPanel from "../../../lib/appearance/AppearanceSettingsPanel.svelte";
   import heroGeneral from "../../../assets/brand/hero-general.webp";
 
-  let { onOpenAdvanced }: { onOpenAdvanced: () => void } = $props();
+  let { onOpenAdvanced, onOpenCompanion, onOpenTalk }: {
+    onOpenAdvanced: () => void;
+    /** 「试试游戏陪玩」：打开琴音的聊天。 */
+    onOpenCompanion: () => void;
+    /** 「交流」：怎么在游戏里叫琴音。 */
+    onOpenTalk: () => void;
+  } = $props();
 
   let devices = $state<AudioDevice[]>([]);
   let elevation = $state<ElevationStatus | null>(null);
@@ -249,7 +253,7 @@
 
 </script>
 
-<SettingsPage title="通用" description="录音热键、交互方式、悬浮窗，以及琴音提醒你时用的声音和弹幕。" testid="general-page">
+<SettingsPage title="语音输入" description="在游戏里按住热键说话，转成文字发进聊天：麦克风、录音热键、交互方式、悬浮窗。" testid="general-page">
   <!-- 欢迎横幅：琴音立绘（直播间合成图）+ 渐变标语 + 启动按钮 -->
   <section class="relative overflow-hidden rounded-2xl border border-hairline bg-card" data-testid="general-hero">
     <img src={heroGeneral} alt="Kotone 在中继站直播间挥手欢迎" class="absolute inset-0 h-full w-full object-cover object-[70%_28%]" />
@@ -271,6 +275,20 @@
         </p>
       </div>
       <RuntimeButton variant="hero" {onOpenAdvanced} />
+    </div>
+  </section>
+
+  <!-- 游戏陪玩入口（ADR 023）：语音输入仍是首页，这里引导用户用琴音 -->
+  <section class="flex flex-wrap items-center gap-4 rounded-2xl border border-primary/35 bg-primary/8 px-5 py-4" data-testid="companion-cta">
+    <div class="min-w-0 flex-1">
+      <p class="m-0 text-[15px] font-semibold text-foreground">试试游戏陪玩：让琴音陪你玩</p>
+      <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">
+        跟她说一句话，她能看游戏画面、帮你点鼠标按键、读队友聊天、替你用别的语言跟队友说话，还能帮你配置 Kotone。
+      </p>
+    </div>
+    <div class="flex shrink-0 items-center gap-2">
+      <Button size="sm" variant="outline" data-testid="companion-cta-talk" onclick={onOpenTalk}>怎么在游戏里叫她</Button>
+      <Button size="sm" data-testid="companion-cta-open" onclick={onOpenCompanion}>和琴音聊聊</Button>
     </div>
   </section>
 
@@ -471,12 +489,6 @@
     </SettingsSection>
 
     <!-- 声音与弹幕：提醒、陪玩回答与自动化共用的输出（ADR 013 §8） -->
-    <OutputSettings />
-
-    <!-- 外观：配色、明暗、缩放、字体（只影响设置窗口，偏好存在本机） -->
-    <SettingsSection title="外观" description="只影响设置窗口；游戏里的悬浮窗与弹幕保持原样。" id="appearance-title">
-      <AppearanceSettingsPanel />
-    </SettingsSection>
   {/if}
 </SettingsPage>
 

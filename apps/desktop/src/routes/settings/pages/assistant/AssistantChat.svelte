@@ -16,11 +16,13 @@
   import ComposerOptions from "../../../../lib/agentChat/ComposerOptions.svelte";
   import kotoneCutout from "../../../../assets/brand/kotone-cutout.webp";
 
-  let { ready, active, onOpenSettings }: {
+  let { ready, active, onOpenSettings, onOpenTalk }: {
     /** 陪玩 AI 连接已选好（语音按钮用）。 */
     ready: boolean;
     active: boolean;
     onOpenSettings: () => void;
+    /** 「交流」：陪玩热键等（ADR 023 从琴音设置搬过去）。 */
+    onOpenTalk: () => void;
   } = $props();
 
   const chat = useAgentChat();
@@ -98,7 +100,7 @@
       onstop={() => void stop()}
     >
       {#snippet tools()}
-        <AssistantVoiceInput {ready} {active} submitting={false} {onOpenSettings} onBusyChange={(busy) => { voiceBusy = busy; }} />
+        <AssistantVoiceInput {ready} {active} submitting={false} onOpenSettings={onOpenTalk} onBusyChange={(busy) => { voiceBusy = busy; }} />
       {/snippet}
       {#snippet options()}
         <ComposerOptions onchanged={() => void chat.refresh()} />

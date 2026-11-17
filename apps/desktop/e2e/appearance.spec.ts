@@ -1,9 +1,11 @@
 import { expect, test } from "@playwright/test";
 
-// 外观（通用 → 外观）：只作用于设置窗口，偏好存在 localStorage，读坏了回退默认。
+// 外观（设置 → 外观，ADR 023 从“通用”搬来）：只作用于设置窗口，偏好存在 localStorage，读坏了回退默认。
 
 test("appearance defaults to Kotone dark and leaves old pages untouched", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
+  await page.getByTestId("settings-nav-advanced").click();
+  await page.getByTestId("advanced-nav-appearance").click();
   const html = page.locator("html");
   await expect(html).toHaveAttribute("data-palette", "kotone");
   await expect(html).toHaveAttribute("data-theme", "dark");
@@ -18,6 +20,8 @@ test("appearance defaults to Kotone dark and leaves old pages untouched", async 
 
 test("appearance switches theme, palette, zoom and font, and persists across reloads", async ({ page }, testInfo) => {
   await page.goto("/#/settings?onboarding=never");
+  await page.getByTestId("settings-nav-advanced").click();
+  await page.getByTestId("advanced-nav-appearance").click();
   const panel = page.getByTestId("appearance-settings");
   await panel.getByTestId("appearance-mode-light").click();
   await panel.getByTestId("appearance-palette-green").click();
@@ -34,6 +38,8 @@ test("appearance switches theme, palette, zoom and font, and persists across rel
   await panel.screenshot({ path: testInfo.outputPath("appearance-light-green.png") });
 
   await page.reload();
+  await page.getByTestId("settings-nav-advanced").click();
+  await page.getByTestId("advanced-nav-appearance").click();
   await expect(html).toHaveAttribute("data-theme", "light");
   await expect(html).toHaveAttribute("data-palette", "green");
   expect(JSON.parse(await page.evaluate(() => localStorage.getItem("kotone.appearance.v1") ?? "null")))
@@ -47,13 +53,19 @@ test("appearance switches theme, palette, zoom and font, and persists across rel
 
 test("broken or unavailable appearance storage falls back to the default look", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
+  await page.getByTestId("settings-nav-advanced").click();
+  await page.getByTestId("advanced-nav-appearance").click();
   await page.evaluate(() => localStorage.setItem("kotone.appearance.v1", "{not json"));
   await page.reload();
+  await page.getByTestId("settings-nav-advanced").click();
+  await page.getByTestId("advanced-nav-appearance").click();
   await expect(page.locator("html")).toHaveAttribute("data-palette", "kotone");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
 
   await page.evaluate(() => localStorage.setItem("kotone.appearance.v1", JSON.stringify({ palette: "nope", mode: "light", zoom: 9999, uiFont: "custom", uiCustomFont: "x;}body{color:red" })));
   await page.reload();
+  await page.getByTestId("settings-nav-advanced").click();
+  await page.getByTestId("advanced-nav-appearance").click();
   await expect(page.locator("html")).toHaveAttribute("data-palette", "kotone");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect(page.locator("body")).toHaveCSS("zoom", "1.5");

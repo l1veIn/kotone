@@ -40,6 +40,7 @@
   import AdvancedPage from "./pages/AdvancedPage.svelte";
   import type { AdvancedSection } from "./pages/advanced/types";
   import GamePage from "./pages/GamePage.svelte";
+  import TalkPage from "./pages/TalkPage.svelte";
   import HistoryPage from "./pages/HistoryPage.svelte";
   import AboutPage from "./pages/AboutPage.svelte";
   import CharacterPage from "./pages/CharacterPage.svelte";
@@ -264,7 +265,7 @@
     {#if loading}
       <p class="px-8 py-10 text-sm text-muted-foreground">加载配置中…</p>
     {:else if page === "general"}
-      <GeneralPage onOpenAdvanced={() => openAdvanced("models")} />
+      <GeneralPage onOpenAdvanced={() => openAdvanced("models")} onOpenCompanion={openChat} onOpenTalk={() => navigate("talk")} />
     {:else if page === "advanced"}
       <AdvancedPage
         section={advancedSection}
@@ -274,9 +275,11 @@
     {:else if page === "processing"}
       <TextProcessingPage onOpenConnections={() => openAdvanced("connections")} />
     {:else if page === "assistant"}
-      <AssistantPage {chatRequest} onOpenConnections={() => openAdvanced("connections")} onOpenAutomation={() => (page = "automation")} />
+      <AssistantPage {chatRequest} onOpenConnections={() => openAdvanced("connections")} onOpenAutomation={() => (page = "automation")} onOpenTalk={() => navigate("talk")} />
     {:else if page === "automation"}
       <AutomationPage onOpenHotkeys={() => openAdvanced("hotkeys")} />
+    {:else if page === "talk"}
+      <TalkPage />
     {:else if page === "game"}
       <GamePage />
     {:else if page === "history"}

@@ -27,7 +27,7 @@ test("forced onboarding completes the full guided setup and can be reopened", as
   await page.getByRole("button", { name: "完成", exact: true }).click();
   await expect(onboarding).toBeHidden();
 
-  await page.getByRole("button", { name: "高级", exact: true }).click();
+  await page.getByTestId("settings-nav-advanced").click();
   await page.getByTestId("advanced-nav-system").click();
   await page.getByRole("button", { name: "重新运行向导", exact: true }).click();
   await expect(onboarding).toBeVisible();
@@ -89,7 +89,7 @@ test("starting without a model routes the user to a recoverable download state",
   await page.goto("/#/settings");
   await page.getByRole("button", { name: "▶ 启动", exact: true }).click();
 
-  await expect(page.getByRole("heading", { name: "高级", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "设置", exact: true })).toBeVisible();
   // 0.1.5 起高级页只恒显 X-ASR 模型卡：未下载时展示模型行 + 下载按钮（可恢复状态）
   await expect(page.getByText("X-ASR 流式中英标点（int8，480ms 低延迟）", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "下载", exact: true }).first()).toBeVisible();
@@ -97,7 +97,7 @@ test("starting without a model routes the user to a recoverable download state",
 
 test("a failed model download keeps an inline error and retry action", async ({ page }) => {
   await page.goto("/#/settings?mockDownload=fail");
-  await page.getByRole("button", { name: "高级", exact: true }).click();
+  await page.getByTestId("settings-nav-advanced").click();
   await page.getByTestId("advanced-nav-models").click();
   await page.getByRole("button", { name: "下载", exact: true }).first().click();
 

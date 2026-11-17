@@ -1,6 +1,6 @@
 <script lang="ts" module>
   export type PageId =
-    | "general" | "processing" | "assistant" | "automation" | "game"
+    | "general" | "processing" | "assistant" | "talk" | "automation" | "game"
     | "history" | "advanced" | "about" | "character";
 </script>
 
@@ -11,7 +11,7 @@
    * Kotone 的气质：当前项的青色指示条与图标高亮，底部的琴音形象卡。
    */
   import {
-    Bot, Gamepad2, History, House, Info, MessageSquarePlus, Settings2, Sparkles, Zap,
+    Bot, Gamepad2, History, Info, MessageSquarePlus, MessagesSquare, Mic, Settings2, Sparkles, Zap,
   } from "@lucide/svelte";
   import type { Component } from "svelte";
   import ConversationList from "../../lib/agentChat/ConversationList.svelte";
@@ -29,16 +29,28 @@
   } = $props();
 
   const chat = useAgentChat();
-  const mainItems: { id: PageId; label: string; icon: Component }[] = [
-    { id: "general", label: "通用", icon: House },
-    { id: "assistant", label: "琴音陪玩", icon: Bot },
-    { id: "automation", label: "自动化", icon: Zap },
-    { id: "processing", label: "文字处理", icon: Sparkles },
-    { id: "game", label: "游戏适配", icon: Gamepad2 },
-    { id: "history", label: "历史记录", icon: History },
+  // ADR 023：侧栏分两组。语音输入仍排第一（首页），游戏陪玩是第二组；页面内部标识不变。
+  const groups: { label: string; items: { id: PageId; label: string; icon: Component }[] }[] = [
+    {
+      label: "语音输入",
+      items: [
+        { id: "general", label: "语音输入", icon: Mic },
+        { id: "processing", label: "文字处理", icon: Sparkles },
+        { id: "history", label: "历史记录", icon: History },
+      ],
+    },
+    {
+      label: "游戏陪玩",
+      items: [
+        { id: "assistant", label: "琴音", icon: Bot },
+        { id: "talk", label: "交流", icon: MessagesSquare },
+        { id: "game", label: "游戏", icon: Gamepad2 },
+        { id: "automation", label: "自动化", icon: Zap },
+      ],
+    },
   ];
   const footItems: { id: PageId; label: string; icon: Component }[] = [
-    { id: "advanced", label: "高级", icon: Settings2 },
+    { id: "advanced", label: "设置", icon: Settings2 },
     { id: "about", label: "关于", icon: Info },
   ];
 
@@ -85,7 +97,14 @@
   </button>
 
   <nav class="mt-3 flex shrink-0 flex-col gap-px" aria-label="设置分类">
-    {#each mainItems as item (item.id)}{@render navItem(item)}{/each}
+    {#each groups as group, index (group.label)}
+      {#if rail}
+        {#if index > 0}<div class="mx-2 my-1.5 border-t border-hairline"></div>{/if}
+      {:else}
+        <p class="m-0 px-2.5 pb-1 {index > 0 ? 'pt-3' : ''} text-[11px] font-medium text-sidebar-foreground/50" data-testid={`sidebar-group-${index}`}>{group.label}</p>
+      {/if}
+      {#each group.items as item (item.id)}{@render navItem(item)}{/each}
+    {/each}
   </nav>
 
   {#if !rail}

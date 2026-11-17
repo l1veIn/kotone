@@ -2,19 +2,19 @@
   // 设置页的统一骨架（参照 DeepSeek Harness 设置页：居中的内容列、页标题 + 一句说明、下面是若干设置卡）。
   import type { Snippet } from "svelte";
 
-  let { title, description = "", actions, children, wide = false, testid }: {
+  let { title, description = "", actions, children, testid }: {
     title: string;
     description?: string;
     /** 标题右侧的操作（按钮等）。 */
     actions?: Snippet;
     children: Snippet;
-    /** 宽一些的内容列（表格、编辑器较多的页面）。 */
+    /** 已不用：所有设置页内容宽度一致（ADR 023）。保留参数以兼容旧调用。 */
     wide?: boolean;
     testid?: string;
   } = $props();
 </script>
 
-<div class="ui-scope mx-auto w-full px-6 pt-7 pb-10 text-foreground {wide ? 'max-w-5xl' : 'max-w-3xl'}" data-testid={testid}>
+<div class="ui-scope mx-auto w-full px-6 pt-7 pb-10 text-foreground max-w-3xl" data-testid={testid}>
   <header class="mb-6 flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
     <div class="min-w-0">
       <h1 class="m-0 text-xl font-semibold tracking-tight">{title}</h1>

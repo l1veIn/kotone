@@ -1,19 +1,15 @@
 <script lang="ts">
-  // 「琴音 → 设置」：AI 连接、陪玩热键与输入方式；下面接陪玩（能力自检、快捷指令）。
-  import { updateSettings, type AssistantConfig, type ConnectionInfo } from "../../../../lib/ipc";
+  // 「琴音 → 设置」：琴音用的 AI 连接。陪玩热键、快捷指令搬到了「交流」（ADR 023）。
+  import type { AssistantConfig, ConnectionInfo } from "../../../../lib/ipc";
   import { patchSettings, settingsStore } from "../../../../lib/stores/ui";
-  import HotkeyField from "../../../../lib/components/HotkeyField.svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
-  import AssistantInteraction from "./AssistantInteraction.svelte";
-  import CompanionSettings from "./CompanionSettings.svelte";
 
   let { connections, ready, onOpenConnections }: {
     connections: ConnectionInfo[]; ready: boolean; onOpenConnections: () => void;
   } = $props();
   let saving = $state(false);
-  let companion = $state<CompanionSettings | null>(null);
   const config = $derived($settingsStore?.assistant);
 
   async function save(patch: Partial<AssistantConfig>) {
@@ -26,8 +22,8 @@
 
 {#if config}
   <div class="space-y-6" data-testid="assistant-settings">
-    <SettingsSection title="输入设置" id="assistant-input-settings-title" description="琴音用的 AI 连接，以及在游戏里叫琴音的热键。">
-      <SettingsRow label="AI 连接" description="给琴音用的主流大模型。选好、有密钥就能用；想确认能不能连上，到「高级 → API 连接」点“测试连接”。">
+    <SettingsSection title="AI 连接" id="assistant-input-settings-title" description="琴音用的大模型。在游戏里怎么叫她，在「交流」里设置。">
+      <SettingsRow label="AI 连接" description="给琴音用的主流大模型。选好、有密钥就能用；想确认能不能连上，到「设置 → API 连接」点“测试连接”。">
         {#snippet control()}
           <div class="w-64 max-w-full">
             <SelectField ariaLabel="陪玩 AI 连接" value={config.connectionId} disabled={saving}
@@ -42,15 +38,6 @@
           </p>
         {/if}
       </SettingsRow>
-      <SettingsRow label="陪玩热键" description="在游戏里按下后说一句话，交给琴音。" stacked>
-        {#snippet control()}
-          <HotkeyField id="assistant" title="陪玩热键" value={config.hotkey} placeholder="如 Ctrl+F9" disabled={saving} compact
-            onSave={async (hotkey) => { settingsStore.set(await updateSettings({ assistant: { hotkey } })); }} />
-        {/snippet}
-      </SettingsRow>
-      <AssistantInteraction />
     </SettingsSection>
-
-    <CompanionSettings bind:this={companion} />
   </div>
 {/if}

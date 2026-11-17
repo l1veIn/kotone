@@ -99,8 +99,7 @@ test("saved automations can be created with params, run panel validates in previ
 
 test("a quick command can run a saved automation with its own args instead of asking the AI", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
-  await page.getByTestId("settings-nav-assistant").click();
-  await page.getByTestId("assistant-nav-settings").click();
+  await page.getByTestId("settings-nav-talk").click();
   const companion = page.getByTestId("companion-settings");
   await expect(companion.getByRole("heading", { name: "快捷指令", exact: true })).toBeVisible();
   await companion.getByRole("button", { name: "添加", exact: true }).click();

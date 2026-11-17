@@ -10,6 +10,8 @@
   import SoundSection from "./advanced/SoundSection.svelte";
   import SystemSection from "./advanced/SystemSection.svelte";
   import TuningSection from "./advanced/TuningSection.svelte";
+  import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
+  import AppearanceSettingsPanel from "$lib/appearance/AppearanceSettingsPanel.svelte";
   import type { AdvancedSection } from "./advanced/types";
 
   let {
@@ -29,11 +31,12 @@
     { id: "hotkeys", label: "其他热键" },
     { id: "sound", label: "音效" },
     { id: "tuning", label: "调参" },
+    { id: "appearance", label: "外观" },
   ];
 </script>
 
-<SettingsPage title="高级" description="模型、连接与系统级设置" wide={section === "models" || section === "connections"} testid="advanced-page">
-  <nav class="-mt-2 flex w-fit max-w-full flex-wrap gap-0.5 rounded-xl bg-muted/70 p-1" aria-label="高级设置分类">
+<SettingsPage title="设置" description="模型、AI 连接、外观与系统级设置" testid="advanced-page">
+  <nav class="-mt-2 flex w-fit max-w-full flex-wrap gap-0.5 rounded-xl bg-muted/70 p-1" aria-label="设置分类">
     {#each tabs as tab}
       {@const active = section === tab.id}
       <button
@@ -64,6 +67,11 @@
       <TuningSection />
     {:else if section === "system"}
       <SystemSection {onOpenOnboarding} />
+    {:else if section === "appearance"}
+      <!-- 外观：配色、明暗、缩放、字体（只影响设置窗口，偏好存在本机；ADR 023 从「通用」搬来） -->
+      <SettingsSection title="外观" description="只影响设置窗口；游戏里的悬浮窗与弹幕保持原样。" id="appearance-title">
+        <AppearanceSettingsPanel />
+      </SettingsSection>
     {/if}
   </div>
 </SettingsPage>

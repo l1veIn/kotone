@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 // 统一模型清单：ASR 原有列表不变，OCR / TTS 分栏可下载、切换并提示在线 OCR 会上传截图。
 test("model page splits ASR / OCR / TTS and keeps the ASR list unchanged", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
-  await page.getByRole("button", { name: "高级", exact: true }).click();
+  await page.getByTestId("settings-nav-advanced").click();
   await page.getByTestId("advanced-nav-models").click();
 
   await expect(page.getByTestId("model-category-asr")).toHaveAttribute("aria-selected", "true");

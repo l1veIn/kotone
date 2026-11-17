@@ -8,14 +8,13 @@
   import AssistantChat from "./assistant/AssistantChat.svelte";
   import AssistantSettings from "./assistant/AssistantSettings.svelte";
   import AgentSettings from "./assistant/AgentSettings.svelte";
-  import WakeSettings from "./assistant/WakeSettings.svelte";
-  import BubbleSettings from "./assistant/BubbleSettings.svelte";
-  import VoiceChatSettings from "./assistant/VoiceChatSettings.svelte";
   import OpenRunsSummary from "./assistant/OpenRunsSummary.svelte";
 
-  let { onOpenConnections, onOpenAutomation, chatRequest = 0 }: {
+  let { onOpenConnections, onOpenAutomation, onOpenTalk, chatRequest = 0 }: {
     onOpenConnections: () => void;
     onOpenAutomation: () => void;
+    /** 「交流」页（陪玩热键、唤醒、气泡、游戏语音）。 */
+    onOpenTalk: () => void;
     /** 侧边栏点了对话 / 新对话时递增：切回聊天分页。 */
     chatRequest?: number;
   } = $props();
@@ -45,7 +44,7 @@
 <div class="flex flex-col {section === 'chat' ? 'h-full' : ''}" data-testid="assistant-page">
   <!-- 分页切换放在页名旁（右上角留给提示消息） -->
   <header class="sticky top-0 z-20 flex h-13 shrink-0 items-center gap-3 border-b border-hairline bg-background/85 px-5 backdrop-blur">
-    <h1 class="m-0 shrink-0 text-[15px] font-semibold text-foreground">琴音陪玩</h1>
+    <h1 class="m-0 shrink-0 text-[15px] font-semibold text-foreground">琴音</h1>
     <nav class="flex shrink-0 rounded-lg bg-muted/70 p-0.5" aria-label="琴音分类">
       {#each tabs as tab}
         {@const active = section === tab.id}
@@ -68,19 +67,16 @@
   {#if connectionError}<p role="alert" class="mx-5 mt-3 text-xs text-destructive">{connectionError}</p>{/if}
   <!-- 聊天一直挂着：切到设置再回来，草稿、流式输出和事件订阅都还在。 -->
   <div class="min-h-0 flex-1" class:hidden={section !== "chat"} data-testid="assistant-tasks">
-    <AssistantChat {ready} active={section === "chat"} onOpenSettings={() => { section = "settings"; }} />
+    <AssistantChat {ready} active={section === "chat"} onOpenSettings={() => { section = "settings"; }} {onOpenTalk} />
   </div>
   {#if section === "settings"}
     <div class="ui-scope mx-auto w-full max-w-3xl space-y-6 px-6 pt-7 pb-10 text-foreground" data-testid="assistant-settings-tab">
       <div>
         <h2 class="m-0 text-xl font-semibold tracking-tight">琴音设置</h2>
-        <p class="mt-1.5 mb-0 text-[13px] leading-relaxed text-muted-foreground">AI 连接、热键与快捷指令、语音唤醒、对话气泡，以及琴音能直接做哪些事。</p>
+        <p class="mt-1.5 mb-0 text-[13px] leading-relaxed text-muted-foreground">琴音用的 AI 连接，以及她能直接做哪些事。怎么叫她、她怎么回答你，在「交流」里设置。</p>
         <div class="mt-3 lg:hidden"><OpenRunsSummary {onOpenAutomation} /></div>
       </div>
       <AssistantSettings {connections} {ready} {onOpenConnections} />
-      <WakeSettings />
-      <BubbleSettings />
-      <VoiceChatSettings />
       <AgentSettings />
     </div>
   {/if}

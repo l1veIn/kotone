@@ -16,14 +16,15 @@ test("assistant opens on talk, keeps drafts across sections; speech lives in Gen
   await expect(page.getByTestId("assistant-tasks")).not.toBeVisible();
   await expect(page.getByTestId("assistant-settings")).toBeVisible();
   await expect(page.getByTestId("assistant-settings").getByTestId("speech-settings")).toHaveCount(0);
-  await expect(page.getByTestId("assistant-mode-push-to-talk")).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("main").evaluate((element) => { element.scrollTop = 0; });
   await page.screenshot({ path: testInfo.outputPath("assistant-settings.png"), animations: "disabled" });
   await page.getByTestId("assistant-nav-chat").click();
   await expect(page.getByTestId("assistant-request")).toHaveValue("5 分钟后提醒我打野有闪");
   await page.getByTestId("assistant-open-summary").getByRole("button", { name: "在「自动化」里查看 →" }).click();
   await expect(page.getByTestId("automation-page")).toBeVisible();
-  await page.getByTestId("settings-nav-general").click();
+  // 陪玩热键的交互方式与声音、弹幕在「交流」（ADR 023）
+  await page.getByTestId("settings-nav-talk").click();
+  await expect(page.getByTestId("assistant-mode-push-to-talk")).toHaveAttribute("aria-pressed", "true");
   const output = page.getByTestId("output-settings");
   // 默认“自动”：琴音用 DeepSeek 连接时用 DeepSeek 语音，否则系统语音（预览里没有 DeepSeek 连接）
   await expect(output.getByLabel("语音引擎", { exact: true })).toHaveAttribute("data-value", "auto");
@@ -34,9 +35,8 @@ test("assistant opens on talk, keeps drafts across sections; speech lives in Gen
 
 test("assistant interaction modes save independently of regular input and survive section changes", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
-  await page.getByTestId("settings-nav-assistant").click();
   const original = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
-  await page.getByTestId("assistant-nav-settings").click();
+  await page.getByTestId("settings-nav-talk").click();
   await expect(page.getByTestId("assistant-mode-solo")).toHaveCount(0);
   for (const mode of ["dictation", "one-shot", "push-to-talk"]) {
     await page.getByTestId(`assistant-mode-${mode}`).click();
@@ -48,8 +48,8 @@ test("assistant interaction modes save independently of regular input and surviv
   }
   await page.getByTestId("assistant-mode-dictation").click();
   await expect(page.getByTestId("assistant-mode-dictation")).toHaveAttribute("aria-pressed", "true");
-  await page.getByTestId("assistant-nav-chat").click();
-  await page.getByTestId("assistant-nav-settings").click();
+  await page.getByTestId("settings-nav-general").click();
+  await page.getByTestId("settings-nav-talk").click();
   await expect(page.getByTestId("assistant-mode-dictation")).toHaveAttribute("aria-pressed", "true");
 });
 
@@ -88,7 +88,7 @@ test("assistant preview labels itself and never pretends to run AI", async ({ pa
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-assistant").click();
   const assistant = page.getByTestId("assistant-page");
-  await expect(assistant.getByRole("heading", { name: "琴音陪玩", exact: true })).toBeVisible();
+  await expect(assistant.getByRole("heading", { name: "琴音", exact: true })).toBeVisible();
   await expect(assistant.getByText(/界面预览/)).toBeVisible();
   await assistant.getByTestId("assistant-request").fill("五分钟后提醒我打野有闪");
   await assistant.getByTestId("agent-send").click();
@@ -118,16 +118,18 @@ test("assistant shares connections and saves voice/delivery settings with an ind
   await assistant.getByLabel("陪玩 AI 连接").click();
   await page.getByRole("option").nth(1).click();
   await expect(assistant.getByRole("button", { name: "管理连接 →", exact: true })).toHaveCount(0);
-  await assistant.getByTestId("hotkey-capture-assistant").click();
+  // 陪玩热键在「交流」（ADR 023）
+  await page.getByTestId("settings-nav-talk").click();
+  const talk = page.getByTestId("talk-page");
+  await talk.getByTestId("hotkey-capture-assistant").click();
   await page.keyboard.press("CapsLock");
   await expect(page.getByText("陪玩热键与录制热键（CapsLock）冲突，请换一个", { exact: true })).toBeVisible();
-  await assistant.getByTestId("hotkey-capture-assistant").click();
+  await talk.getByTestId("hotkey-capture-assistant").click();
   await page.keyboard.press("Control+F9");
-  await expect(assistant.getByTestId("hotkey-input-assistant")).toHaveValue("Ctrl+F9");
-  await expect(assistant.getByTestId("hotkey-status-assistant")).toContainText("当前生效：Ctrl+F9");
+  await expect(talk.getByTestId("hotkey-input-assistant")).toHaveValue("Ctrl+F9");
+  await expect(talk.getByTestId("hotkey-status-assistant")).toContainText("当前生效：Ctrl+F9");
 
-  // 声音与弹幕在「通用」
-  await page.getByTestId("settings-nav-general").click();
+  // 声音与弹幕也在「交流」
   const output = page.getByTestId("output-settings");
   await output.getByRole("checkbox", { name: "弹幕", exact: true }).uncheck();
   await expect(output.getByRole("checkbox", { name: "弹幕", exact: true })).not.toBeChecked();
