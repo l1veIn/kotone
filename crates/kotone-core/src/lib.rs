@@ -39,3 +39,4 @@ pub mod speech;
 pub mod stt;
 pub mod tools;
 pub mod vad;
+pub mod voice_chat;

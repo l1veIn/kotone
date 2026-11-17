@@ -229,6 +229,10 @@ pub const FIELDS: &[Field] = &[
     f("runAsAdminOnStart", "以管理员身份启动", "高级 → 系统", "部分游戏以管理员运行时需要。现在就要管理员权限用 elevation.restart。", NONE, NEXT),
     f("ui.autoStart", "开机自启", "通用", "请用 autostart.set 修改（会同时写系统启动项）。", NONE, NOW),
     f("ui.updatePromptDisabled", "不再提醒升级", "关于", "", NONE, NOW),
+    f("voiceChat.enabled", "游戏语音（琴音替你说话）", "琴音陪玩 → 设置 → 游戏语音", "开启后把你的麦克风和琴音“说给队友”的话一起转进虚拟麦克风（VB-CABLE 的 CABLE Output），游戏里的麦克风选 CABLE Output 队友就能听到。需要先装 VB-CABLE（voice_chat.install）。Kotone 没运行时队友听不到你。", NONE, NOW),
+    f("voiceChat.includeMic", "混入我的麦克风", "琴音陪玩 → 设置 → 游戏语音", "关掉后虚拟麦克风里只有琴音的声音（你自己说话要在游戏里另选麦克风）。", NONE, NOW),
+    f("voiceChat.micDeviceId", "我的麦克风", "琴音陪玩 → 设置 → 游戏语音", "设备名，用 audio.devices 查；default = 系统默认录音设备。不能选 CABLE Output。", NONE, NOW),
+    f("voiceChat.micGain", "我的麦克风音量", "琴音陪玩 → 设置 → 游戏语音", "百分比，0–400，默认 100。", NONE, NOW),
     f("toolService.enabled", "对外工具服务", "高级 → 系统", "开启后外部 Agent（命令行 / MCP / 插件）可以连接本机 Kotone；只监听本机。", NONE, APP),
 ];
 
@@ -252,6 +256,14 @@ pub const INTERNAL: &[(&str, &str)] = &[
     ("adminPromptDismissed", "界面提示状态"),
     ("autoAdminPromptDismissed", "界面提示状态"),
     ("evalRecording", "开发评测用"),
+    (
+        "voiceChat.previousDefaultMic",
+        "用 voice_chat.default_mic 改 / 改回 Windows 默认麦克风时自动记录",
+    ),
+    (
+        "voiceChat.previousCommunicationsMic",
+        "用 voice_chat.default_mic 改 / 改回 Windows 默认麦克风时自动记录",
+    ),
 ];
 
 /// 内置 Agent 改设置时不允许出现的路径（权限不能由 Agent 自己改）。

@@ -142,6 +142,9 @@ pub struct Settings {
     /// 文字识别（统一模型清单的 OCR 类别）：当前选用的 OCR 模型。
     #[serde(default)]
     pub ocr: OcrConfig,
+    /// 游戏语音（ADR 020）：琴音用虚拟麦克风替玩家在游戏语音里说话。新字段，缺省 = 关闭。
+    #[serde(default)]
+    pub voice_chat: crate::voice_chat::VoiceChatConfig,
 }
 
 /// OCR 模型选择（config.json `ocr` 段）。
@@ -525,6 +528,7 @@ impl Default for Settings {
             agent: crate::agent::AgentConfig::default(),
             tool_service: ToolServiceConfig::default(),
             ocr: OcrConfig::default(),
+            voice_chat: crate::voice_chat::VoiceChatConfig::default(),
         }
     }
 }
