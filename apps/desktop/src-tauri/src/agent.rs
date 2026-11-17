@@ -411,6 +411,7 @@ async fn turn(
         profile_name: &profile.display_name,
         profile_notes: &profile.companion_notes,
         automations: &automations,
+        workspace: None,
     });
     let model = OpenAiModel::new(connection);
     let limits = if entry == Entry::Game {

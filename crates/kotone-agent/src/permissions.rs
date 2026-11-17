@@ -58,6 +58,13 @@ const ALLOWED_EFFECTS: &[&str] = &[
     "cancels-download",
     "writes-automations",
     "focuses-window",
+    // ADR 021 / 022：记忆只由主会话写、过注入扫描；派子会话、传话、监听都在玩家开口后发生，
+    // 而且有“正在听”的提示（子会话不能问玩家，所以监听不能默认询问）。
+    "writes-memory",
+    "spawns-session",
+    "sends-session",
+    "stops-session",
+    "listens-to-game-audio",
 ];
 
 /// 默认询问的副作用及原因。
@@ -89,6 +96,8 @@ const ASK_EFFECTS: &[(&str, &str)] = &[
     ),
     ("writes-system-audio", "会修改 Windows 的默认麦克风"),
     ("speaks-to-teammates", "会用麦克风对游戏里的队友说话"),
+    ("writes-skills", "会修改 Skill"),
+    ("writes-soul", "会修改琴音的人格（SOUL.md）"),
 ];
 
 /// 一段对话里“本段对话都允许”的记录。

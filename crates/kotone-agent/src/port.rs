@@ -15,11 +15,13 @@ use kotone_tools::ToolService;
 use serde_json::{json, Value};
 
 use crate::catalog::{
-    Catalog, Source, ToolEntry, GROUPS, TOOL_ASK, TOOL_GAME_CHAT, TOOL_REMIND, TOOL_SAY,
+    Catalog, Source, ToolEntry, GROUPS, HOST_BUILTINS, TOOL_ASK, TOOL_GAME_CHAT, TOOL_MEMORY,
+    TOOL_REMIND, TOOL_SAY, TOOL_SKILL_MANAGE, TOOL_SKILL_VIEW, TOOL_SOUL_WRITE,
 };
 use crate::permissions::{
     self, Answer, Asker, Decide, Decision, Grants, PermissionRequest, Policy,
 };
+use crate::workspace::{MemoryOp, MemoryTarget, Workspace};
 
 /// `tools.find` 一次最多启用几个工具。
 const MAX_FIND: usize = 12;
@@ -54,6 +56,17 @@ pub trait BuiltinHost: Send + Sync {
         text: String,
         send: Option<bool>,
     ) -> impl Future<Output = Result<Value, String>> + Send;
+
+    /// 需要知道是哪个会话调用的内置工具（[`HOST_BUILTINS`]：`session.*`、`voice.listen.*`）。
+    /// 桌面端按调用它的会话执行；没有桌面（测试、外部宿主）时不可用。
+    fn builtin(
+        &self,
+        tool: &str,
+        _arguments: &Value,
+    ) -> impl Future<Output = Result<Value, String>> + Send {
+        let message = format!("{tool} 在这里不可用");
+        async move { Err(message) }
+    }
 
     /// 玩家已经在别处一直允许了这次调用（例如游戏配置里“让琴音操作”设为一直允许）：
     /// 权限规则是“询问”时不再问。用户设为禁止、只读模式时仍然不执行。
@@ -130,6 +143,10 @@ pub enum Scope {
 
 pub struct KotonePort<H, A> {
     scope: Scope,
+    /// 琴音的工作区（记忆、Skill、人格）；没有时这些工具报不可用。
+    workspace: Option<Workspace>,
+    /// 子会话：只能用这些工具（ADR 022）；None = 不限（主会话）。
+    tool_filter: Option<Vec<String>>,
     service: Arc<ToolService>,
     catalog: Catalog,
     policy: Policy,
@@ -149,6 +166,8 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
     ) -> Self {
         Self {
             scope: Scope::Full,
+            workspace: None,
+            tool_filter: None,
             service,
             catalog,
             policy,
@@ -163,7 +182,21 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
         self
     }
 
+    pub fn with_workspace(mut self, workspace: Workspace) -> Self {
+        self.workspace = Some(workspace);
+        self
+    }
+
+    /// 子会话的工具范围：只提供、只允许调用这些工具（ADR 022）。
+    pub fn with_tool_filter(mut self, tools: Vec<String>) -> Self {
+        self.tool_filter = Some(tools);
+        self
+    }
+
     fn offered(&self, entry: &ToolEntry, active: &std::collections::BTreeSet<String>) -> bool {
+        if let Some(filter) = &self.tool_filter {
+            return filter.iter().any(|t| t == &entry.name);
+        }
         match self.scope {
             Scope::Full => Catalog::is_core(entry) || active.contains(&entry.name),
             Scope::Game => {
@@ -310,11 +343,91 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
                 let send = arguments.get("send").and_then(Value::as_bool);
                 self.host.send_to_game_chat(text, send).await
             }
+            TOOL_MEMORY | TOOL_SKILL_VIEW | TOOL_SKILL_MANAGE | TOOL_SOUL_WRITE => {
+                self.call_workspace(name, arguments)
+            }
+            name if HOST_BUILTINS.contains(&name) => self.host.builtin(name, arguments).await,
             _ => return ToolOutcome::error(format!("没有名为 {name} 的内置动作")),
         };
         match result {
             Ok(value) => ToolOutcome::ok(value.to_string()),
             Err(message) => ToolOutcome::error(message),
+        }
+    }
+
+    /// 工作区工具（记忆、Skill、人格）：纯文件操作，照 Hermes 的 memory / skill_view / skill_manage。
+    fn call_workspace(&self, name: &str, arguments: &Value) -> Result<Value, String> {
+        let ws = self.workspace.as_ref().ok_or("这里没有琴音的工作区")?;
+        let s = |key: &str| {
+            arguments
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
+        match name {
+            TOOL_MEMORY => {
+                let target = match s("target").as_str() {
+                    "user" => MemoryTarget::User,
+                    "memory" => MemoryTarget::Memory,
+                    "game" => MemoryTarget::Game(s("game")),
+                    _ => return Err("target 只能是 user、memory 或 game".into()),
+                };
+                let ops = arguments
+                    .get("operations")
+                    .and_then(Value::as_array)
+                    .ok_or("缺少 operations")?
+                    .iter()
+                    .map(|op| {
+                        let f =
+                            |k: &str| op.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                        match op.get("op").and_then(Value::as_str) {
+                            Some("add") => Ok(MemoryOp::Add(f("text"))),
+                            Some("patch") if !f("old").is_empty() => Ok(MemoryOp::Patch {
+                                old: f("old"),
+                                new: f("new"),
+                            }),
+                            Some("remove") if !f("old").is_empty() => {
+                                Ok(MemoryOp::Remove(f("old")))
+                            }
+                            _ => Err(
+                                "每个操作要有 op：add {text} / patch {old, new} / remove {old}"
+                                    .to_string(),
+                            ),
+                        }
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let (entries, chars) = ws.apply_memory(&target, &ops)?;
+                Ok(
+                    json!({"saved": true, "entries": entries, "chars": chars, "note": "下一段对话开始时生效"}),
+                )
+            }
+            TOOL_SKILL_VIEW => {
+                let path = arguments.get("path").and_then(Value::as_str);
+                Ok(json!({"name": s("name"), "content": ws.skill_view(&s("name"), path)?}))
+            }
+            TOOL_SKILL_MANAGE => {
+                let skill = s("name");
+                match s("action").as_str() {
+                    "create" => ws.skill_create(&skill, &s("content"))?,
+                    "patch" => ws.skill_patch(&skill, &s("old"), &s("new"))?,
+                    "delete" => ws.skill_delete(&skill)?,
+                    "write_file" => ws.skill_write_file(&skill, &s("path"), &s("content"))?,
+                    "remove_file" => ws.skill_remove_file(&skill, &s("path"))?,
+                    _ => {
+                        return Err(
+                            "action 只能是 create / patch / delete / write_file / remove_file"
+                                .into(),
+                        )
+                    }
+                }
+                Ok(json!({"saved": true, "skills": ws.skills()}))
+            }
+            TOOL_SOUL_WRITE => {
+                ws.write_file(crate::workspace::SOUL, &s("content"))?;
+                Ok(json!({"saved": true, "note": "下一段对话开始时生效；告诉玩家你改了什么"}))
+            }
+            _ => Err(format!("没有名为 {name} 的工作区工具")),
         }
     }
 

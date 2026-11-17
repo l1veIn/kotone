@@ -16,5 +16,6 @@ tokio.workspace = true
 sha2 = "0.10"
 
 [dev-dependencies]
+tempfile.workspace = true
 kotone-tools = { workspace = true, features = ["test-support"] }
 wiremock = "0.6"
