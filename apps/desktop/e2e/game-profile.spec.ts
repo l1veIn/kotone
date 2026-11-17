@@ -66,3 +66,25 @@ test("auto-detect lists installed games, matching ones first, and fills the laun
   await expect(editor.getByTestId("profile-launch-path")).toHaveValue('"C:\\WeGameApps\\英雄联盟\\WeGameLauncher\\launcher.exe"');
   await expect(list).toHaveCount(0);
 });
+
+test("game profile saves who may operate the game (computer use)", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.goto("/#/settings?onboarding=never");
+  await page.getByTestId("settings-nav-game").click();
+  const lol = page.getByTestId("game-profile-lol");
+  await lol.getByRole("button", { name: "编辑", exact: true }).click();
+  const editor = lol.getByTestId("game-profile-editor");
+  // 没写过的配置按“先问我”显示
+  const select = editor.getByTestId("profile-computer-use");
+  await expect(select).toHaveAttribute("data-value", "ask");
+  await select.click();
+  await page.getByRole("option", { name: /一直允许/ }).click();
+  await expect(select).toHaveAttribute("data-value", "allow");
+  await editor.screenshot({ path: testInfo.outputPath("game-profile-computer-use.png") });
+  await editor.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(lol).toContainText("琴音可直接操作");
+  const saved = await page.evaluate(async () =>
+    (await import("/src/lib/ipc.ts")).listProfiles().then((list) => list.find((p) => p.id === "lol")));
+  expect(saved?.computerUse).toBe("allow");
+  expect(saved?.hotwords).toHaveLength(6);
+});

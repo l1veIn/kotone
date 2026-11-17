@@ -9,7 +9,8 @@
    *   dev:web 走 Blob 下载 / <input type=file> + 前端同款 parse/merge；
    * - 已删除：前台检测（detect_foreground_game IPC 已连删）、测试发送按钮
    *   （simulate_send IPC 保留——悬浮条错误重试在用）。
-   * - 琴音与自动化：allowAutomationInput（缺省开）、launchPath（琴音打开游戏用）；
+   * - 琴音与自动化：allowAutomationInput（缺省开）、computerUse（让琴音操作，缺省先问）、
+   *   launchPath（琴音打开游戏用）；
    *   保存时整份 profile 原样带回，新字段不会丢。
    * - 版式：SettingsPage / SettingsSection（参照 DeepSeek Harness 设置页）。
    */
@@ -38,6 +39,14 @@
   import SettingsPage from "$lib/components/settings/SettingsPage.svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import ToggleField from "$lib/components/settings/ToggleField.svelte";
+  import SelectField from "$lib/components/settings/SelectField.svelte";
+
+  /** 让琴音操作（game.act）的三档。 */
+  const COMPUTER_USE_OPTIONS = [
+    { value: "ask", label: "先问我", description: "每段对话第一次操作前问一次" },
+    { value: "allow", label: "一直允许", description: "不再询问；竞技对局也会操作" },
+    { value: "deny", label: "不允许", description: "琴音不在这个游戏里动鼠标键盘" },
+  ];
 
   let profiles = $state<GameProfile[]>([]);
   /** 启动路径的“自动检测”结果（null = 还没检测）。 */
@@ -491,7 +500,7 @@
             </p>
             <p class="mt-0.5 mb-0 truncate text-xs text-muted-foreground">
               {p.processNames.length > 0 ? `适配 ${p.processNames.length} 个进程` : "适用于所有窗口"}
-              · 热词 {p.hotwords.length} 个{p.allowAutomationInput === false ? " · 不允许自动化输入" : ""}
+              · 热词 {p.hotwords.length} 个{p.allowAutomationInput === false ? " · 不允许自动化输入" : ""}{p.computerUse === "allow" ? " · 琴音可直接操作" : p.computerUse === "deny" ? " · 不让琴音操作" : ""}
             </p>
           </div>
           <div class="flex shrink-0 flex-wrap items-center gap-1.5">
@@ -589,6 +598,20 @@
                 testid="profile-allow-automation-input"
                 onchange={(v) => (draft!.allowAutomationInput = v)}
               />
+              <div class="flex items-start justify-between gap-4">
+                <div class="min-w-0">
+                  <span class="block text-xs font-medium text-foreground">让琴音操作</span>
+                  <p class="mt-0.5 mb-0 text-[11px] leading-relaxed text-muted-foreground">琴音一边看画面一边点鼠标、按键（例如帮你找背包里的东西）。你一动键盘鼠标她就停；Ctrl+Shift+F12 或说“停下”也能停。竞技对局（英雄联盟对局、无畏契约、CS2、PUBG 等）默认不操作，选“一直允许”才会。</p>
+                </div>
+                <SelectField
+                  class="w-32 shrink-0"
+                  ariaLabel="让琴音操作"
+                  testid="profile-computer-use"
+                  value={draft.computerUse ?? "ask"}
+                  options={COMPUTER_USE_OPTIONS}
+                  onchange={(v) => (draft!.computerUse = v as "ask" | "allow" | "deny")}
+                />
+              </div>
               <div>
                 <div class="flex items-center justify-between gap-2">
                   <label for="profile-launch-path" class="block text-xs font-medium text-foreground">启动路径</label>
