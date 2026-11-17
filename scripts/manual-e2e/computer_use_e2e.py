@@ -12,8 +12,8 @@ usage:
   python -X utf8 -I scripts/manual-e2e/computer_use_e2e.py setup-ocr   # download + activate OCR (isolated home)
   python -X utf8 -I scripts/manual-e2e/computer_use_e2e.py run [out]   # the checks; screenshots go to <out>
 
-Never touches ~/.kotone, the credential store or a real game. The "player input" check sends one key from this
-script WITHOUT Kotone's input tag, which is what a physical key looks like to the hook.
+Never touches ~/.kotone, the credential store or a real game. The Esc check sends Esc (and an unrelated key) from
+this script WITHOUT Kotone's input tag, which is what a physical key looks like to the hook.
 """
 import base64
 import ctypes
@@ -117,7 +117,7 @@ class INPUT(ctypes.Structure):
     _fields_ = [("type", wt.DWORD), ("u", _U)]
 
 
-def player_key(vk=0x7C):  # F13: no effect in the test window, but untagged = "the player touched the keyboard"
+def player_key(vk=0x1B):  # untagged = what the hook sees from a physical key; default Esc
     for flags in (0, 2):
         i = INPUT(type=1)
         i.ki = KEYBDINPUT(vk, 0, flags, 0, 0)
@@ -219,18 +219,28 @@ def run(out):
     stale = call("game.act", {"observationId": "look-0", "actions": [{"action": "key", "text": "a"}]})
     passed &= check("an old observationId is refused", not stale.get("ok") and "game.look" in json.dumps(stale, ensure_ascii=False))
 
-    # 6. player takes over during a hold: W released, later steps not executed
+    # 6. the player's other keys do not stop it; the player's Esc does (swallowed), held keys released
     n = len(events())
     import threading
-    threading.Timer(1.0, player_key).start()
+    threading.Timer(0.6, lambda: player_key(0x7C)).start()  # F13: must NOT stop it
+    threading.Timer(1.5, player_key).start()  # Esc: stops it
     act = result(call("game.act", {"observationId": look["observationId"], "actions": [
         {"action": "hold_key", "text": "w", "duration": 4},
         {"action": "key", "text": "q"}]}))
     new = events()[n:]
-    passed &= check("player input stops the act and releases held keys",
-                    act.get("stopReason") == "player_input" and "UP W" in new and "DOWN Q" not in new
-                    and act["results"][1]["status"] == "not_executed", f"{act.get('stopReason')} {new}")
-    passed &= check("no look after the player took over", "look" not in act)
+    passed &= check("player's Esc stops the act, is not passed to the game, releases held keys",
+                    act.get("stopReason") == "cancelled" and "UP W" in new and "DOWN Q" not in new
+                    and "DOWN Escape" not in new and act["results"][1]["status"] == "not_executed",
+                    f"{act.get('stopReason')} {new}")
+    passed &= check("no look after Esc", "look" not in act)
+    # 琴音's own Esc still reaches the game
+    focus()
+    look = result(call("game.look", timeout_ms=20_000))
+    n = len(events())
+    act = result(call("game.act", {"observationId": look["observationId"], "actions": [{"action": "key", "text": "Esc"}]}))
+    passed &= check("琴音's own Esc reaches the window", "DOWN Escape" in events()[n:] and not act.get("stopReason"),
+                    f"{events()[n:]}")
+    look = act.get("look", look)
 
     # 7. a point covered by another program's window is not clicked
     focus()

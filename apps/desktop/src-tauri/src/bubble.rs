@@ -222,8 +222,8 @@ impl Model {
     }
 }
 
-/// 操作游戏时气泡的状态行（ADR 019：“正在操作：打开背包…”）。
-pub const ACTING_LABEL: &str = "正在操作";
+/// 操作游戏时气泡的状态行（ADR 019：“正在操作：打开背包…”，并提示怎么停）。
+pub const ACTING_LABEL: &str = "正在操作 · 按 Esc 停止";
 
 /// 念完后停留多久：3 秒 + 每 10 个字 1 秒，最多 10 秒（参考 VPet / dsh-pet）。
 pub fn dwell(text: &str) -> Duration {
@@ -369,11 +369,9 @@ pub fn thinking(app: &AppHandle, label: &str) {
     }
 }
 
-/// 正在操作游戏：不论从哪个入口发起都显示（玩家要看得见琴音在动键鼠）。
+/// 正在操作游戏：不论从哪个入口发起、气泡开没开都显示（玩家要看得见琴音在动键鼠、知道按 Esc 能停）。
 pub fn acting(app: &AppHandle, what: &str) {
-    if enabled(app) {
-        update(app, |m| m.acting(what).cloned());
-    }
+    update(app, |m| m.acting(what).cloned());
 }
 
 pub fn acting_done(app: &AppHandle) {

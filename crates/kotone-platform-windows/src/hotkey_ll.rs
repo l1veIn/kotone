@@ -30,8 +30,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, PeekMessageW, PostThreadMessageW, SetWindowsHookExW,
     UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LLMHF_INJECTED, MSG,
-    MSLLHOOKSTRUCT, PM_NOREMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_MOUSEMOVE,
-    WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, XBUTTON1, XBUTTON2,
+    MSLLHOOKSTRUCT, PM_NOREMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, XBUTTON1, XBUTTON2,
 };
 
 use kotone_core::hotkey::{
@@ -105,43 +105,48 @@ struct ProbeRequest {
 
 static SHARED: OnceLock<HookShared> = OnceLock::new();
 
-/// 最近一次“真人输入”的时刻（[`tick_ms`]）；0 = 钩子启动后还没有过。
-/// 真人输入 = 不带 Kotone 标记（[`crate::inject::KOTONE_INPUT_TAG`]）的键盘与鼠标事件；
-/// 别的程序注入的鼠标移动不算（光标校正等会产生这类事件），按键、点击、滚轮算。
-static LAST_HUMAN_INPUT: AtomicU64 = AtomicU64::new(0);
-/// 钩子正在运行（能察觉玩家接手）。
+/// 钩子正在运行（`game.act` 据此知道 Esc 停止能不能用）。
 static HOOKS_RUNNING: AtomicBool = AtomicBool::new(false);
 
-/// 进程内单调时钟（毫秒，从 1 开始；与 [`last_human_input_ms`] 同一个基准）。
-pub fn tick_ms() -> u64 {
-    static EPOCH: OnceLock<Instant> = OnceLock::new();
-    EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64 + 1
-}
+/// 琴音操作游戏时的 Esc 停止（ADR 019，2026-11-17 用户改为“按 Esc 退出”）：开着时，玩家按的
+/// Esc 被拦下、不传给游戏，并记一次“按了 Esc”；琴音自己发的 Esc（带 Kotone 标记）照常传给游戏。
+static ESC_STOP_ARMED: AtomicBool = AtomicBool::new(false);
+static ESC_STOP_PRESSED: AtomicBool = AtomicBool::new(false);
+/// 拦下了 Esc 的按下，对应的松开也要拦下。
+static ESC_SWALLOWING: AtomicBool = AtomicBool::new(false);
 
-/// 最近一次真人键鼠输入的 [`tick_ms`]；钩子没运行或还没有输入时为 0。
-pub fn last_human_input_ms() -> u64 {
-    LAST_HUMAN_INPUT.load(Ordering::Relaxed)
-}
-
-/// 低级键鼠钩子在运行（`game.act` 据此知道能不能察觉玩家接手）。
+/// 低级键鼠钩子在运行。
 pub fn hooks_running() -> bool {
     HOOKS_RUNNING.load(Ordering::Relaxed)
 }
 
-/// 这个事件是不是玩家本人的输入（纯逻辑，供钩子回调与测试）。
-fn is_human_input(injected: bool, extra_info: usize, mouse_move: bool) -> bool {
-    if !injected {
-        return true;
-    }
-    if extra_info == crate::inject::KOTONE_INPUT_TAG || extra_info == PROBE_EXTRA_INFO {
-        return false;
-    }
-    !mouse_move
+/// 开 / 关 Esc 停止；每次打开都清掉上一次的“按了 Esc”。
+pub fn arm_esc_stop(armed: bool) {
+    ESC_STOP_PRESSED.store(false, Ordering::SeqCst);
+    ESC_STOP_ARMED.store(armed, Ordering::SeqCst);
 }
 
-fn note_input(injected: bool, extra_info: usize, mouse_move: bool) {
-    if is_human_input(injected, extra_info, mouse_move) {
-        LAST_HUMAN_INPUT.store(tick_ms(), Ordering::Relaxed);
+/// 打开之后玩家按过 Esc。
+pub fn esc_stop_pressed() -> bool {
+    ESC_STOP_PRESSED.load(Ordering::SeqCst)
+}
+
+/// 钩子里的 Esc 停止判定；返回 true = 吞掉这个事件。
+fn esc_stop(vk: u32, down: bool, injected: bool, extra_info: usize) -> bool {
+    let ours = injected && extra_info == crate::inject::KOTONE_INPUT_TAG;
+    if vk != VK_ESCAPE || ours {
+        return false;
+    }
+    if down {
+        if ESC_STOP_ARMED.load(Ordering::SeqCst) {
+            ESC_STOP_PRESSED.store(true, Ordering::SeqCst);
+            ESC_SWALLOWING.store(true, Ordering::SeqCst);
+            return true;
+        }
+        // 按住时自动重复的按下也一并吞掉
+        ESC_SWALLOWING.load(Ordering::SeqCst)
+    } else {
+        ESC_SWALLOWING.swap(false, Ordering::SeqCst)
     }
 }
 
@@ -640,7 +645,15 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     if code >= 0 {
         if let Some(shared) = SHARED.get() {
             let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
-            note_input(kb.flags.contains(LLKHF_INJECTED), kb.dwExtraInfo, false);
+            let down = matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
+            if esc_stop(
+                kb.vkCode,
+                down,
+                kb.flags.contains(LLKHF_INJECTED),
+                kb.dwExtraInfo,
+            ) {
+                return LRESULT(1);
+            }
             // 闭环探测事件优先处理：确认收到后吞掉，不进入正常热键匹配，也不传给前台。
             // 某些输入过滤软件会清除 LLKHF_INJECTED 或 dwExtraInfo，但仍把事件
             // 交给钩子。probe 槽只开放 250ms，期间按 F24 键码识别比强依赖标记
@@ -696,11 +709,6 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
     if code >= 0 {
         if let Some(shared) = SHARED.get() {
             let mouse = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
-            note_input(
-                mouse.flags & LLMHF_INJECTED != 0,
-                mouse.dwExtraInfo,
-                wparam.0 as u32 == WM_MOUSEMOVE,
-            );
             if mouse.flags & LLMHF_INJECTED == 0 {
                 let action = match wparam.0 as u32 {
                     WM_XBUTTONDOWN => Some(KeyAction::Down),
@@ -783,18 +791,33 @@ mod tests {
     }
 
     #[test]
-    fn only_untagged_input_counts_as_the_player() {
+    fn esc_stops_only_while_armed_and_never_eats_kotones_own_esc() {
         use crate::inject::KOTONE_INPUT_TAG;
-        // 物理键鼠
-        assert!(is_human_input(false, 0, false));
-        assert!(is_human_input(false, 0, true));
-        // Kotone 自己的模拟输入与探测
-        assert!(!is_human_input(true, KOTONE_INPUT_TAG, false));
-        assert!(!is_human_input(true, KOTONE_INPUT_TAG, true));
-        assert!(!is_human_input(true, PROBE_EXTRA_INFO, false));
-        // 别的程序注入：按键 / 点击算接手，单纯的光标移动不算
-        assert!(is_human_input(true, 0, false));
-        assert!(!is_human_input(true, 0, true));
+        arm_esc_stop(false);
+        assert!(
+            !esc_stop(VK_ESCAPE, true, false, 0),
+            "not armed: Esc goes to the game"
+        );
+        assert!(!esc_stop(VK_ESCAPE, false, false, 0));
+        arm_esc_stop(true);
+        assert!(!esc_stop(0x41, true, false, 0), "other keys pass");
+        assert!(
+            !esc_stop(VK_ESCAPE, true, true, KOTONE_INPUT_TAG),
+            "琴音's own Esc passes"
+        );
+        assert!(!esc_stop(VK_ESCAPE, false, true, KOTONE_INPUT_TAG));
+        assert!(!esc_stop_pressed());
+        assert!(
+            esc_stop(VK_ESCAPE, true, false, 0),
+            "player's Esc is swallowed"
+        );
+        assert!(esc_stop_pressed());
+        arm_esc_stop(false); // 松开前操作已结束：松开照样吞掉，游戏不会只收到一个松开
+        assert!(esc_stop(VK_ESCAPE, false, false, 0));
+        assert!(!esc_stop(VK_ESCAPE, false, false, 0));
+        arm_esc_stop(true);
+        assert!(!esc_stop_pressed(), "arming clears the last press");
+        arm_esc_stop(false);
     }
 
     #[test]

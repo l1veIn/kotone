@@ -2,7 +2,8 @@
 //!
 //! - 先校验整份计划（坐标在截图内、编号存在、键名认识），有一处不对就一步都不做；
 //! - 按顺序执行，第一处失败就停，后面每一步记 `Not executed: an earlier action failed.`；
-//! - 每步之前检查：取消、玩家接手、游戏仍在前台（宿主负责等待）、窗口尺寸没变；
+//! - 每步之前检查：停止（玩家按 Esc、停止热键、语音“停下”、本轮停止）、游戏仍在前台
+//!   （宿主负责等待）、窗口尺寸没变；玩家自己动键盘鼠标**不**停（2026-11-17 用户的决定）；
 //! - 停下时已完成的步骤保留，并给出 `stopReason`；
 //! - 结果只说动作已发出（`sent`），有没有生效由模型看新的截图判断。
 //!
@@ -27,10 +28,8 @@ pub const DRAG_STEP_MS: u64 = 10;
 /// 为什么停下。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StopReason {
-    /// 停止热键、语音“停下”、本轮被取消。
+    /// 玩家按了 Esc、停止热键、语音“停下”，或本轮被取消。
     Cancelled,
-    /// 玩家动了键盘或鼠标（ADR 019 决定 7：接手 = 暂停）。
-    PlayerInput,
     /// 窗口尺寸变了，旧坐标作废（DSH `WINDOW_CHANGED`）。
     WindowChanged,
     WindowClosed,
@@ -46,7 +45,6 @@ impl StopReason {
     pub fn code(self) -> &'static str {
         match self {
             Self::Cancelled => "cancelled",
-            Self::PlayerInput => "player_input",
             Self::WindowChanged => "window_changed",
             Self::WindowClosed => "window_closed",
             Self::NotForeground => "not_foreground",
@@ -58,9 +56,8 @@ impl StopReason {
     /// 给模型的说明。
     pub fn hint(self) -> &'static str {
         match self {
-            Self::Cancelled => "玩家让你停下了：不要再自动重试，等玩家的下一句话。",
-            Self::PlayerInput => {
-                "玩家接手了（动了键盘或鼠标）：停下，问玩家要不要你继续，不要自己重试。"
+            Self::Cancelled => {
+                "玩家让你停下了（按了 Esc、停止键或说了停下）：不要再自动重试，等玩家的下一句话。"
             }
             Self::WindowChanged => "游戏窗口尺寸变了，旧坐标和编号已作废：先 game.look 再操作。",
             Self::WindowClosed => "游戏窗口已经关闭。",
@@ -90,7 +87,7 @@ impl From<String> for Halt {
 pub trait ActHost {
     /// 键名（含组合键，如 `Ctrl+S`）认不认识。
     fn key_known(&self, keys: &str) -> bool;
-    /// 每步之前：取消、玩家接手、游戏在前台（不在就等，有上限）、窗口尺寸没变。
+    /// 每步之前：停止（Esc 等）、游戏在前台（不在就等，有上限）、窗口尺寸没变。
     fn checkpoint(&self) -> Result<(), Halt>;
     /// 鼠标移到窗口比例 (x, y)；点被别的窗口盖住时 `Halt::Stop(PointCovered)`。
     fn move_to(&self, x: f64, y: f64) -> Result<(), Halt>;
@@ -102,7 +99,7 @@ pub trait ActHost {
     fn key_down(&self, keys: &str) -> Result<(), Halt>;
     fn key_up(&self, keys: &str) -> Result<(), Halt>;
     fn move_by(&self, dx: i32, dy: i32) -> Result<(), Halt>;
-    /// 等待；被取消或玩家接手时提前返回 `Halt::Stop`。
+    /// 等待；被停止时提前返回 `Halt::Stop`。
     fn sleep(&self, ms: u64) -> Result<(), Halt>;
 }
 
@@ -110,7 +107,7 @@ pub trait ActHost {
 pub enum StepStatus {
     Sent,
     Failed,
-    /// 做到一半被停下（例如按住键时玩家接手）。
+    /// 做到一半被停下（例如按住键时玩家按了 Esc）。
     Stopped,
     NotExecuted,
 }

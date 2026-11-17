@@ -2,7 +2,8 @@
 //!
 //! 纯逻辑（动作清单、缩放、编号、标签、批量规则）在 `kotone_tools::computer_use`；这里接上
 //! 真实能力：绑定前台游戏窗口（共享的 [`GameSession`]）、截图、文字识别、`SendInput`、
-//! 玩家接手检测（低级钩子记下的最近一次真人输入）、停止热键与气泡状态。
+//! 停止（操作时玩家按 Esc——钩子拦下不传给游戏、停止热键、语音“停下”）与气泡里的文字提示。
+//! 玩家自己动键盘鼠标不会让她停（2026-11-17 用户的决定，ADR 019 实施记录）。
 //!
 //! - 只截游戏窗口客户区，不截桌面；纯色画面（独占全屏）报错；
 //! - 编号与坐标只对最近一次 `game.look` 有效；窗口尺寸变了作废，只移动窗口不作废；
@@ -294,6 +295,7 @@ struct ActGuard {
 impl Drop for ActGuard {
     fn drop(&mut self) {
         self.flag.store(true, Ordering::SeqCst);
+        hotkey_ll::arm_esc_stop(false);
         if let Some(s) = self.app.try_state::<ComputerUse>() {
             let mut inner = s.inner.lock().unwrap();
             if inner
@@ -356,21 +358,12 @@ struct DesktopActHost {
     session: GameSession,
     client: (u32, u32),
     stop: Arc<AtomicBool>,
-    /// 开始时的时刻：此后有真人输入 = 玩家接手。
-    started_tick: u64,
-    /// 钩子没在运行：察觉不到玩家接手（结果里提醒）。
-    watching: bool,
 }
 
 impl DesktopActHost {
     fn interrupted(&self) -> Option<StopReason> {
-        if self.stop.load(Ordering::SeqCst) {
-            return Some(StopReason::Cancelled);
-        }
-        if self.watching && hotkey_ll::last_human_input_ms() > self.started_tick {
-            return Some(StopReason::PlayerInput);
-        }
-        None
+        (self.stop.load(Ordering::SeqCst) || hotkey_ll::esc_stop_pressed())
+            .then_some(StopReason::Cancelled)
     }
 
     fn halt_if_interrupted(&self) -> Result<(), Halt> {
@@ -517,15 +510,17 @@ pub fn act(
         session: GameSession::new(target),
         client,
         stop: flag.clone(),
-        started_tick: hotkey_ll::tick_ms(),
-        watching: hotkey_ll::hooks_running(),
     };
+    // 操作期间玩家按 Esc 就停（钩子拦下这个 Esc，不传给游戏）。
+    hotkey_ll::arm_esc_stop(true);
     batch::validate(&plan, &observation, &host)?;
     let total = plan.len();
     let on_step = |i: usize, action: &Action| {
         crate::bubble::acting(app, &format!("{}（{}/{total}）", action.describe(), i + 1));
     };
     let report = batch::execute(&plan, &observation, &host, &on_step);
+    let esc = hotkey_ll::esc_stop_pressed();
+    hotkey_ll::arm_esc_stop(false);
     host.session.release_all();
     crate::bubble::acting_done(app);
     kotone_core::log::log(&format!(
@@ -535,15 +530,21 @@ pub fn act(
         report.stop.map(StopReason::code)
     ));
     let mut out = report_json(&report);
-    if !host.watching {
-        out["warning"] = json!("键鼠钩子没有运行，察觉不到玩家接手");
+    if !hotkey_ll::hooks_running() {
+        out["warning"] = json!("键鼠钩子没有运行：按 Esc 停不下来，只能说“停下”");
     }
-    // 结尾再看一眼（dsh-computer-use-win）；玩家让停或接手了就不看。
+    // 结尾再看一眼（dsh-computer-use-win）；玩家让停了就不看。
     let look_again = !matches!(
         report.stop,
-        Some(StopReason::Cancelled | StopReason::PlayerInput | StopReason::WindowClosed)
+        Some(StopReason::Cancelled | StopReason::WindowClosed)
     );
     drop(_guard);
+    if esc {
+        // 按 Esc = 停止整件事：这一轮也结束，琴音不再接着做（与停止热键一致）。
+        kotone_core::log::log("computer use: Esc pressed, stopping the turn");
+        let _ = crate::agent::stop(app);
+        return Ok(out);
+    }
     if look_again {
         std::thread::sleep(SETTLE_BEFORE_LOOK);
         match look(app, None) {

@@ -601,7 +601,7 @@
               <div class="flex items-start justify-between gap-4">
                 <div class="min-w-0">
                   <span class="block text-xs font-medium text-foreground">让琴音操作</span>
-                  <p class="mt-0.5 mb-0 text-[11px] leading-relaxed text-muted-foreground">琴音一边看画面一边点鼠标、按键（例如帮你找背包里的东西）。你一动键盘鼠标她就停；Ctrl+Shift+F12 或说“停下”也能停。竞技对局（英雄联盟对局、无畏契约、CS2、PUBG 等）默认不操作，选“一直允许”才会。</p>
+                  <p class="mt-0.5 mb-0 text-[11px] leading-relaxed text-muted-foreground">琴音一边看画面一边点鼠标、按键（例如帮你找背包里的东西），右下角会提示“正在操作 · 按 Esc 停止”。操作时按 Esc 就停（这个 Esc 不会传给游戏）；Ctrl+Shift+F12 或说“停下”也能停。竞技对局（英雄联盟对局、无畏契约、CS2、PUBG 等）默认不操作，选“一直允许”才会。</p>
                 </div>
                 <SelectField
                   class="w-32 shrink-0"

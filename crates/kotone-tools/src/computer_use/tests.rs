@@ -226,7 +226,7 @@ struct FakeHost {
     checkpoints: RefCell<usize>,
     /// 这个键按下时失败。
     failing_key: Option<String>,
-    /// sleep 时报告停下（模拟按住键时玩家接手）。
+    /// sleep 时报告停下（模拟按住键时玩家按了 Esc）。
     stop_in_sleep: Option<StopReason>,
     covered: bool,
 }
@@ -385,9 +385,9 @@ fn first_failure_stops_and_later_steps_are_not_executed() {
 }
 
 #[test]
-fn player_input_between_steps_keeps_finished_steps() {
+fn stop_between_steps_keeps_finished_steps() {
     let host = FakeHost {
-        stop_at_checkpoint: Some((1, StopReason::PlayerInput)),
+        stop_at_checkpoint: Some((1, StopReason::Cancelled)),
         ..Default::default()
     };
     let p = plan(json!([
@@ -395,19 +395,19 @@ fn player_input_between_steps_keeps_finished_steps() {
         {"action": "key", "text": "e"}
     ]));
     let report = execute(&p, &element_obs(), &host, &|_, _| {});
-    assert_eq!(report.stop, Some(StopReason::PlayerInput));
+    assert_eq!(report.stop, Some(StopReason::Cancelled));
     assert_eq!(report.steps[0].status, StepStatus::Sent);
     assert_eq!(report.steps[1].status, StepStatus::NotExecuted);
     let json = super::report_json(&report);
-    assert_eq!(json["stopReason"], "player_input");
+    assert_eq!(json["stopReason"], "cancelled");
     assert_eq!(json["sent"], 1);
 }
 
 #[test]
 fn held_keys_are_released_when_interrupted_or_left_down() {
-    // 按住 w 时玩家接手：w 一定松开
+    // 按住 w 时玩家按了 Esc：w 一定松开
     let host = FakeHost {
-        stop_in_sleep: Some(StopReason::PlayerInput),
+        stop_in_sleep: Some(StopReason::Cancelled),
         ..Default::default()
     };
     let p = plan(json!([{"action": "hold_key", "text": "w", "duration": 3}]));
