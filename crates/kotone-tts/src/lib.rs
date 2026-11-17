@@ -401,7 +401,10 @@ mod tests {
         );
         assert!(output.speak(request()).unwrap_err().contains("尚未安装"));
         // 只合成（送进游戏语音）走同一个工作线程，同样报模型没装
-        assert!(output.synthesize(request()).unwrap_err().contains("尚未安装"));
+        assert!(output
+            .synthesize(request())
+            .unwrap_err()
+            .contains("尚未安装"));
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
         output.close().unwrap();
         assert!(output.is_closed());

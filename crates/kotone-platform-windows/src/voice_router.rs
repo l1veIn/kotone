@@ -328,6 +328,64 @@ impl Drop for VoiceRouter {
     }
 }
 
+/// 从一个录音设备录 `ms` 毫秒，返回最大振幅（0–1）。`voice_chat.test` 用它从 CABLE Output
+/// 录回测试音，确认虚拟麦克风通了。
+pub fn measure_peak(device: &str, ms: u64) -> Result<f32, String> {
+    let host = cpal::default_host();
+    let input = find_device(&host, device, true)?;
+    let config = input
+        .default_input_config()
+        .map_err(|e| format!("读取「{device}」的格式失败：{e}"))?;
+    let peak = Arc::new(Mutex::new(0f32));
+    fn build<T>(
+        input: &cpal::Device,
+        config: &cpal::StreamConfig,
+        peak: Arc<Mutex<f32>>,
+    ) -> Result<cpal::Stream, String>
+    where
+        T: cpal::SizedSample,
+        f32: cpal::FromSample<T>,
+    {
+        input
+            .build_input_stream(
+                config,
+                move |data: &[T], _| {
+                    let loudest = data
+                        .iter()
+                        .map(|s| <f32 as cpal::FromSample<T>>::from_sample_(*s).abs())
+                        .fold(0f32, f32::max);
+                    let mut p = peak.lock().unwrap();
+                    *p = p.max(loudest);
+                },
+                |_| {},
+                None,
+            )
+            .map_err(|e| format!("无法录音：{e}"))
+    }
+    let stream_config: cpal::StreamConfig = config.clone().into();
+    let stream = match config.sample_format() {
+        cpal::SampleFormat::F32 => build::<f32>(&input, &stream_config, peak.clone()),
+        cpal::SampleFormat::I16 => build::<i16>(&input, &stream_config, peak.clone()),
+        cpal::SampleFormat::U16 => build::<u16>(&input, &stream_config, peak.clone()),
+        other => Err(format!("暂不支持的录音格式 {other}")),
+    }?;
+    stream.play().map_err(|e| format!("无法录音：{e}"))?;
+    std::thread::sleep(std::time::Duration::from_millis(ms));
+    drop(stream);
+    let value = *peak.lock().unwrap();
+    Ok(value)
+}
+
+/// 测试音：`seconds` 秒 440 Hz，振幅 0.3，16 kHz。
+pub fn test_tone(seconds: f32) -> (Vec<f32>, u32) {
+    let rate = 16_000u32;
+    let n = (seconds * rate as f32) as usize;
+    let tone = (0..n)
+        .map(|i| 0.3 * (i as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin())
+        .collect();
+    (tone, rate)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

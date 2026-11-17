@@ -952,8 +952,54 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
             blocking(move || crate::computer_use::act(&app, &a.observation_id, &a.actions, &flag))
                 .await
         }
+        c::TOOL_VOICE_CHAT_STATUS => Ok(crate::voice_chat::status(app)),
+        c::TOOL_VOICE_CHAT_INSTALL => {
+            let app = app.clone();
+            blocking(move || crate::voice_chat::install(&app)).await
+        }
+        c::TOOL_VOICE_CHAT_DEFAULT_MIC => {
+            let a: VoiceChatMicArgs = parse(tool, args)?;
+            let use_cable = match a.r#use.as_str() {
+                "cable" => true,
+                "restore" => false,
+                _ => {
+                    return Err(HostError::InvalidArguments(
+                        "use 只能是 cable 或 restore".into(),
+                    ))
+                }
+            };
+            let app = app.clone();
+            blocking(move || crate::voice_chat::default_mic(&app, use_cable)).await
+        }
+        c::TOOL_VOICE_CHAT_SAY => {
+            let a: VoiceChatSayArgs = parse(tool, args)?;
+            let text = a.text.trim().to_string();
+            if text.is_empty() || text.chars().count() > 200 {
+                return Err(HostError::InvalidArguments(
+                    "text 不能为空、不超过 200 字".into(),
+                ));
+            }
+            let app = app.clone();
+            blocking(move || crate::voice_chat::say(&app, &text)).await
+        }
+        c::TOOL_VOICE_CHAT_TEST => {
+            let app = app.clone();
+            blocking(move || crate::voice_chat::test(&app)).await
+        }
         other => Err(HostError::Failed(format!("桌面端未实现工具 {other}"))),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VoiceChatMicArgs {
+    r#use: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VoiceChatSayArgs {
+    text: String,
 }
 
 #[derive(Deserialize, Default)]

@@ -356,6 +356,23 @@ pub fn speak_now(app: &AppHandle, text: &str) -> Result<(), String> {
     ))
 }
 
+/// 当前的语音引擎与一句话的合成请求（游戏语音“说给队友”用）。
+pub fn speaker_and_request(
+    app: &AppHandle,
+    text: &str,
+) -> Result<(Arc<dyn SpeechOutput>, kotone_core::speech::SpeechRequest), String> {
+    let config = app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .assistant
+        .clone();
+    let speaker = selected_speaker(app, &config)?;
+    let request = speech_request(effective_engine(app, &config), &config, text);
+    Ok((speaker, request))
+}
+
 /// 先把这些短句合成进缓存（唤醒应答“嗯？/我在”），用时立刻出声、不用现场请求在线语音。
 pub fn prefetch(app: &AppHandle, texts: &[&str]) {
     let config = app

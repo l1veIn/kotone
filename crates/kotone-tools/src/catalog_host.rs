@@ -62,6 +62,11 @@ pub const TOOL_GAME_INSTALLED: &str = "game.installed";
 pub const TOOL_GAME_CLOSE: &str = "game.close";
 pub const TOOL_GAME_LOOK: &str = "game.look";
 pub const TOOL_GAME_ACT: &str = "game.act";
+pub const TOOL_VOICE_CHAT_STATUS: &str = "voice_chat.status";
+pub const TOOL_VOICE_CHAT_INSTALL: &str = "voice_chat.install";
+pub const TOOL_VOICE_CHAT_DEFAULT_MIC: &str = "voice_chat.default_mic";
+pub const TOOL_VOICE_CHAT_SAY: &str = "voice_chat.say";
+pub const TOOL_VOICE_CHAT_TEST: &str = "voice_chat.test";
 
 /// 全部委托工具（顺序即 capabilities 中的顺序）。
 pub const HOST_TOOLS: &[&str] = &[
@@ -123,6 +128,11 @@ pub const HOST_TOOLS: &[&str] = &[
     TOOL_GAME_INSTALLED,
     TOOL_GAME_LOOK,
     TOOL_GAME_ACT,
+    TOOL_VOICE_CHAT_STATUS,
+    TOOL_VOICE_CHAT_INSTALL,
+    TOOL_VOICE_CHAT_DEFAULT_MIC,
+    TOOL_VOICE_CHAT_SAY,
+    TOOL_VOICE_CHAT_TEST,
 ];
 
 fn none() -> Value {
@@ -703,6 +713,46 @@ fn defs() -> Vec<Def> {
                 "stopReason": {"type": "string"},
                 "look": {"type": "object"}
             })),
+        },
+        Def {
+            name: TOOL_VOICE_CHAT_STATUS,
+            description: "Game voice chat (ADR 020: 琴音 speaks to teammates through a virtual mic). Returns driverInstalled (VB-CABLE, a VB-Audio donationware virtual audio cable), installing, devices {cableInput, cableOutput}, enabled / includeMic / micDeviceId / micGain (settings voiceChat.*), running (the mic + speech router is open), error, windowsDefaultMic / windowsCommunicationsMic, windowsDefaultIsCable, canRestoreDefaultMic, ttsCanSpeak (the Windows system voice cannot be sent into the game) and attribution. Setup order: voice_chat.install if not installed → settings.update voiceChat.enabled=true → in the game / voice app pick 'CABLE Output' as the microphone, or voice_chat.default_mic for games that only use the Windows default → voice_chat.test.",
+            side_effects: &[],
+            egress: "none",
+            input: none(),
+            output: object(&["driverInstalled", "enabled", "running"], json!({"driverInstalled": {"type": "boolean"}, "enabled": {"type": "boolean"}, "running": {"type": "boolean"}})),
+        },
+        Def {
+            name: TOOL_VOICE_CHAT_INSTALL,
+            description: "Install VB-CABLE automatically: downloads the official VBCABLE_Driver_Pack46.zip from vb-audio.com (SHA-256 pinned), unpacks it under KOTONE_HOME/drivers and runs the official setup silently as administrator (Windows shows one UAC prompt; the user can refuse). Blocks until setup ends (up to a few minutes). Returns installed, needsReboot (VB-Audio says a reboot may be needed before the devices appear). Does nothing when already installed. Tell the user VB-CABLE is VB-Audio's donationware (vb-cable.com).",
+            side_effects: &["installs-driver", "shows-uac-prompt"],
+            egress: "none",
+            input: none(),
+            output: object(&["installed"], json!({"installed": {"type": "boolean"}, "needsReboot": {"type": "boolean"}})),
+        },
+        Def {
+            name: TOOL_VOICE_CHAT_DEFAULT_MIC,
+            description: "Change the Windows default recording device (default + communications): use=\"cable\" makes 'CABLE Output' the default microphone (for games that only use the Windows default, e.g. PUBG; the previous devices are remembered), use=\"restore\" puts the remembered devices back. Changes a system-wide setting: other apps (Discord, meetings) will also hear the virtual mic until restored.",
+            side_effects: &["writes-system-audio"],
+            egress: "none",
+            input: object(&["use"], json!({"use": {"enum": ["cable", "restore"]}})),
+            output: object(&["defaultMic"], json!({"defaultMic": {"type": ["string", "null"]}})),
+        },
+        Def {
+            name: TOOL_VOICE_CHAT_SAY,
+            description: "Say one sentence to the player's teammates through the game's voice chat: synthesized once with the current voice, sent into the virtual mic (the player hears it too). Needs voice chat set up and enabled (see voice_chat.status) and a voice engine other than the Windows system voice. Other players hear it: keep it short and only say what the player asked you to say. Returns sent, durationMs.",
+            side_effects: &["speaks-to-teammates"],
+            egress: "none",
+            input: object(&["text"], json!({"text": {"type": "string", "minLength": 1, "maxLength": 200, "description": "要让队友听到的一句话"}})),
+            output: object(&["sent"], json!({"sent": {"type": "boolean"}, "durationMs": {"type": "integer"}})),
+        },
+        Def {
+            name: TOOL_VOICE_CHAT_TEST,
+            description: "Check the virtual mic end to end: plays a 1 s test tone into CABLE Input and records CABLE Output at the same time. Returns ok, peak (0-1), note. Teammates in voice chat may hear a short beep.",
+            side_effects: &["speaks-to-teammates"],
+            egress: "none",
+            input: none(),
+            output: object(&["ok"], json!({"ok": {"type": "boolean"}, "peak": {"type": "number"}})),
         },
     ]
 }

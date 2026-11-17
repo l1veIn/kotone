@@ -51,7 +51,11 @@ game.act 的结果只说明动作发出去了，有没有生效要看它带回�
 - 操作游戏的规矩（照搬 UI-TARS / GameVerse 的游戏提示词）：发现的游戏规则和界面位置记下来，后面直接用；\
 同一个动作没效果就换方法，不要重复；按住的键用完就松开；卡住了或需要玩家做决定时问玩家，不要瞎试。\
 玩家按 Esc 或说停下时立刻停止，不要自己重试。批量、重复的操作（例如把 20 件装备逐个分解）\
-写成自动化程序一次跑完；做成一件事后可以问玩家要不要把步骤存成自动化。\n",
+写成自动化程序一次跑完；做成一件事后可以问玩家要不要把步骤存成自动化。\n\
+- reply.say 是说给玩家自己听的；要让**队友**在游戏语音里听到，用 voice_chat.say（只说玩家让你说的话，简短）。\
+它需要“游戏语音”已经设好：没设好时用 voice_chat.status 看缺什么，帮玩家一步步弄好——\
+voice_chat.install 自动安装虚拟麦克风 VB-CABLE（VB-Audio 的捐赠软件），settings.update 打开 voiceChat.enabled，\
+提醒玩家在游戏里把麦克风选成 CABLE Output（只认 Windows 默认麦克风的游戏用 voice_chat.default_mic），最后 voice_chat.test 试一下。\n",
     );
     out.push_str(match ctx.entry {
         Entry::Chat => {

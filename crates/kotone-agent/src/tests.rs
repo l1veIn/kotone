@@ -777,3 +777,35 @@ fn prompt_teaches_the_look_think_act_loop() {
     assert!(prompt.contains("game.look") && prompt.contains("game.act"));
     assert!(prompt.contains("不要重复"));
 }
+
+// ---------- 游戏语音（ADR 020） ----------
+
+#[test]
+fn voice_chat_installs_switches_mics_and_speaks_only_after_asking() {
+    let f = fixture(Policy::default(), Answer::Deny);
+    let offered = names(&f.port);
+    assert!(offered.contains(&"voice_chat.say".to_string()));
+    assert!(offered.contains(&"voice_chat.status".to_string()));
+    assert_eq!(
+        default_decision(entry(&f, "voice_chat.status"), &json!({})),
+        Decision::Allow
+    );
+    for (tool, reason) in [
+        ("voice_chat.say", "会用麦克风对游戏里的队友说话"),
+        ("voice_chat.test", "会用麦克风对游戏里的队友说话"),
+        ("voice_chat.default_mic", "会修改 Windows 的默认麦克风"),
+    ] {
+        assert_eq!(
+            default_decision(entry(&f, tool), &json!({})),
+            Decision::Ask {
+                reason: reason.into()
+            },
+            "{tool}"
+        );
+    }
+    // 安装：第一个副作用就是“装驱动”
+    assert!(matches!(
+        default_decision(entry(&f, "voice_chat.install"), &json!({})),
+        Decision::Ask { reason } if reason.contains("VB-CABLE")
+    ));
+}

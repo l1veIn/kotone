@@ -23,6 +23,7 @@ mod tool_service;
 mod tray;
 mod tts_online;
 mod voice_ask;
+mod voice_chat;
 mod wake;
 
 use std::sync::{Arc, Mutex, RwLock};
@@ -2013,6 +2014,7 @@ pub fn run() {
             app.manage(voice_ask::VoiceAsk::default());
             app.manage(bubble::BubbleRuntime::default());
             app.manage(computer_use::ComputerUse::default());
+            app.manage(voice_chat::VoiceChat::default());
             let assistant_runtime = assistant::initialize(app.handle(), settings.clone());
 
             #[allow(unused_mut)] // vad-silero feature 关闭时无可变接线
@@ -2233,6 +2235,11 @@ pub fn run() {
             model_catalog::activate_catalog_model,
             model_catalog::get_catalog_install_guide,
             model_catalog::open_catalog_model_dir,
+            voice_chat::voice_chat_status,
+            voice_chat::voice_chat_install,
+            voice_chat::voice_chat_default_mic,
+            voice_chat::voice_chat_test,
+            voice_chat::voice_chat_say,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Kotone application")

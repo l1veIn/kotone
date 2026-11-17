@@ -947,6 +947,7 @@ fn is_stop_command(text: &str) -> bool {
 
 pub fn stop(app: &AppHandle) -> Result<bool, String> {
     crate::computer_use::stop_all(app, "停止琴音");
+    crate::voice_chat::hush(app);
     let rt = runtime(app)?;
     let inner = rt.inner.lock().unwrap();
     match &inner.running {

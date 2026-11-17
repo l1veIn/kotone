@@ -83,6 +83,12 @@ const ASK_EFFECTS: &[(&str, &str)] = &[
     ("launches-program", "会打开游戏"),
     ("closes-program", "会关闭游戏"),
     ("sends-game-input", "会在游戏里操作鼠标键盘"),
+    (
+        "installs-driver",
+        "会安装虚拟声卡 VB-CABLE（Windows 会请求管理员授权）",
+    ),
+    ("writes-system-audio", "会修改 Windows 的默认麦克风"),
+    ("speaks-to-teammates", "会用麦克风对游戏里的队友说话"),
 ];
 
 /// 一段对话里“本段对话都允许”的记录。

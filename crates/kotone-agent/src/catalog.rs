@@ -54,6 +54,9 @@ pub const CORE_TOOLS: &[&str] = &[
     // 一边看一边操作游戏（ADR 019 computer use）
     "game.look",
     "game.act",
+    // 用虚拟麦克风对队友说话（ADR 020）
+    "voice_chat.say",
+    "voice_chat.status",
 ];
 
 /// computer use 的工具：本轮用到它们时放宽步数与时长（ADR 019 决定 6）。
@@ -119,8 +122,8 @@ pub struct ToolEntry {
 pub const GROUPS: &[(&str, &str, &str)] = &[
     (
         "game",
-        "游戏（看聊天、打字、播报、提醒、打开 / 切换 / 关闭游戏）",
-        "游戏 聊天 队友 打字 发送 播报 语音 弹幕 提醒 打开 启动 切换 关闭 窗口 chat type say remind launch focus close",
+        "游戏（看聊天、打字、播报、提醒、打开 / 切换 / 关闭游戏、看画面操作、对队友说话）",
+        "游戏 聊天 队友 打字 发送 播报 语音 弹幕 提醒 打开 启动 切换 关闭 窗口 操作 麦克风 虚拟麦克风 声卡 游戏语音 chat type say remind launch focus close voice mic",
     ),
     (
         "screen",
@@ -153,7 +156,7 @@ pub fn group_of(name: &str) -> &'static str {
     let prefix = name.split('.').next().unwrap_or(name);
     match prefix {
         "tools" => "meta",
-        "reply" | "reminder" | "game_chat" | "game" | "companion" | "chat" => "game",
+        "reply" | "reminder" | "game_chat" | "game" | "companion" | "chat" | "voice_chat" => "game",
         "window" | "screen" | "image" | "artifact" | "ocr" => "screen",
         "automation" | "saved" => "automation",
         "settings" | "profiles" | "hotkeys" | "connections" | "audio" | "input" | "postprocess"
