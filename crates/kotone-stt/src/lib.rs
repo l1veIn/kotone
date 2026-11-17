@@ -21,6 +21,7 @@ mod pcm;
 pub mod remote_openai;
 mod sensevoice;
 pub mod sherpa_runtime;
+pub mod transcriber;
 pub mod vad;
 mod volcano;
 pub mod wake;
