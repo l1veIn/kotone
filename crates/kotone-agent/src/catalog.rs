@@ -18,15 +18,19 @@ pub const TOOL_FIND: &str = "tools.find";
 pub const TOOL_SAY: &str = "reply.say";
 pub const TOOL_REMIND: &str = "reminder.create";
 pub const TOOL_GAME_CHAT: &str = "game_chat.send";
+/// 用语音问玩家一句，然后免唤醒收音几秒，把回答作为结果（语音入口的多轮对话）。
+pub const TOOL_ASK: &str = "reply.ask";
 /// 已保存自动化工具名的前缀。
 pub const SAVED_PREFIX: &str = "saved.";
 /// 交给模型的已保存自动化最多几个（ADR 014“已确认”）。
 pub const MAX_SAVED_TOOLS: usize = 30;
 
-/// 游戏内快速模式只提供这些（另加已保存的自动化；不提供 tools.find），
-/// 让模型少想几步、快点出结果（ADR 014 §4）。
+/// 语音入口（唤醒、陪玩热键、快捷指令）一开始提供这些，另加已保存的自动化；
+/// 需要别的能力时用 tools.find 查（ADR 014 §4；ADR 017 后语音入口不再只限游戏操作）。
 pub const GAME_TOOLS: &[&str] = &[
+    TOOL_FIND,
     TOOL_SAY,
+    TOOL_ASK,
     TOOL_REMIND,
     TOOL_GAME_CHAT,
     "companion.read_chat",
@@ -191,6 +195,18 @@ pub fn builtin_entries() -> Vec<ToolEntry> {
             side_effects: Vec::new(),
             group: "meta",
             source: Source::Meta,
+            untrusted: false,
+        },
+        ToolEntry {
+            name: TOOL_ASK.into(),
+            description: "用语音问玩家一个问题，然后不用唤醒词直接听玩家回答几秒，返回玩家说的话（没回答时 answered=false）。需要玩家做决定、补充信息时用它接着对话，不要结束这一轮让玩家再唤醒你。问题要短，一次只问一件事。".into(),
+            parameters: json!({"type": "object", "additionalProperties": false, "required": ["question"], "properties": {
+                "question": {"type": "string", "minLength": 1, "maxLength": 120, "description": "要问的话，口语、简短"},
+                "waitSeconds": {"type": "integer", "minimum": 3, "maximum": 15, "description": "问完等玩家开口的秒数，缺省 8"}
+            }}),
+            side_effects: vec!["speaks-or-shows-text".into()],
+            group: "game",
+            source: Source::Builtin,
             untrusted: false,
         },
         ToolEntry {

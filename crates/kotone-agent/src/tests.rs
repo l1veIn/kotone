@@ -44,6 +44,14 @@ struct FakeBuiltin {
 }
 
 impl BuiltinHost for FakeBuiltin {
+    async fn ask(&self, question: String, wait_seconds: u64) -> Result<Value, String> {
+        self.calls.lock().unwrap().push((
+            "ask".into(),
+            json!({"question": question, "wait": wait_seconds}),
+        ));
+        Ok(json!({"answered": true, "answer": "可以"}))
+    }
+
     async fn say(&self, text: String, delivery: Vec<DeliveryKind>) -> Result<Value, String> {
         self.calls
             .lock()
@@ -254,26 +262,43 @@ fn saved_automation_becomes_a_typed_tool() {
 }
 
 #[tokio::test]
-async fn game_scope_offers_only_game_tools_and_saved_automations() {
+async fn voice_scope_starts_small_and_can_find_more_tools() {
     let f = fixture(Policy::default(), Answer::Deny);
-    // 在完整模式里先启用一个工具，游戏模式也不应该看到它。
-    call(&f.port, "tools.find", json!({"group": "models"})).await;
     let port = f.port.with_scope(crate::Scope::Game);
     let offered = names(&port);
     for name in crate::catalog::GAME_TOOLS {
         assert!(offered.contains(&name.to_string()), "{name}");
     }
+    assert!(offered.contains(&"tools.find".to_string()));
+    assert!(offered.contains(&"reply.ask".to_string()));
     assert!(offered.contains(&"saved.auto-1".to_string()));
-    for hidden in [
-        "tools.find",
-        "automation.save",
-        "models.download",
-        "window.active",
-    ] {
+    for hidden in ["automation.save", "models.download", "window.active"] {
         assert!(!offered.contains(&hidden.to_string()), "{hidden}");
     }
-    let out = call(&port, "models.download", json!({})).await;
-    assert!(out.is_error);
+    assert!(call(&port, "models.download", json!({})).await.is_error);
+    // 语音入口也能查找更多工具（例如帮玩家下载模型），查到的从下一步起可用
+    call(&port, "tools.find", json!({"group": "models"})).await;
+    assert!(names(&port).contains(&"models.download".to_string()));
+}
+
+#[tokio::test]
+async fn ask_tool_validates_and_reaches_the_host() {
+    let f = fixture(Policy::default(), Answer::Deny);
+    let port = f.port.with_scope(crate::Scope::Game);
+    let out = call(
+        &port,
+        "reply.ask",
+        json!({"question": "要帮你下载文字识别模型吗？"}),
+    )
+    .await;
+    assert!(!out.is_error, "{}", out.content);
+    assert!(out.content.contains("可以"));
+    assert!(
+        call(&port, "reply.ask", json!({"question": ""}))
+            .await
+            .is_error
+    );
+    assert!(f.asked.lock().unwrap().is_empty(), "提问本身不需要权限确认");
 }
 
 // ---------- 权限规则 ----------
@@ -517,7 +542,7 @@ fn prompt_mentions_entry_game_notes_and_saved_automations() {
         profile_notes: "聊天在左下角",
         automations: &automations,
     });
-    assert!(game.contains("游戏内"));
+    assert!(game.contains("语音") && game.contains("reply.ask"));
     assert!(game.contains("聊天在左下角"));
     assert!(game.contains("saved.auto-1"));
     let chat = system_prompt(&PromptContext {

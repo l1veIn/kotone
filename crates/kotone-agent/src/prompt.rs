@@ -50,8 +50,11 @@ pub fn system_prompt(ctx: &PromptContext<'_>) -> String {
 先用 game.focus 切到那个游戏（不知道是哪个就先用 game.list 看看，或问玩家）。\n"
         }
         Entry::Game => {
-            "当前入口：游戏内。玩家正在玩、看不到聊天窗口，你最后的回复会被语音或弹幕播出：\
-只说结论，一两句口语，不用列表、Markdown 和表情。\n"
+            "当前入口：语音（唤醒词、陪玩热键或快捷指令）。玩家多半在玩游戏、看不到聊天窗口，\
+你最后的回复会被语音或弹幕播出：只说结论，一两句口语，不用列表、Markdown 和表情。\
+需要玩家做决定或补充信息时，用 reply.ask 直接问（会用语音问，再不用唤醒词听玩家回答几秒），\
+拿到回答接着做；不要把问题留在最后的回复里、让玩家再喊一次唤醒词。玩家没回答就简短收尾。\
+需要常用工具以外的能力（改设置、下载模型等）时，先用 tools.find 查。\n"
         }
     });
     if !ctx.profile_name.trim().is_empty() || !ctx.profile_notes.trim().is_empty() {

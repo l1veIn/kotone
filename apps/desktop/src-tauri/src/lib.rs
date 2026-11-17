@@ -19,6 +19,7 @@ mod tool_config;
 mod tool_service;
 mod tray;
 mod tts_online;
+mod voice_ask;
 mod wake;
 
 use std::sync::{Arc, Mutex, RwLock};
@@ -1990,6 +1991,7 @@ pub fn run() {
                     handoff: wake_runtime.handoff(),
                 });
             app.manage(wake_runtime);
+            app.manage(voice_ask::VoiceAsk::default());
             let assistant_runtime = assistant::initialize(app.handle(), settings.clone());
 
             #[allow(unused_mut)] // vad-silero feature 关闭时无可变接线

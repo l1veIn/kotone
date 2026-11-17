@@ -40,11 +40,12 @@ pub const ASK_RESOLVED_EVENT: &str = "kotone://agent-ask-resolved";
 /// 等待结果回到对话的执行记录最多记几条。
 const MAX_RUN_OWNERS: usize = 200;
 
-/// 游戏内快速模式的上限（ADR 014 §4：只给常用工具、限制步数，玩家在等）。
+/// 语音入口的上限（ADR 014 §4：先给常用工具、限制步数，玩家在等）。语音入口也能查找工具、
+/// 用 reply.ask 追问玩家（等回答要时间），所以比最初的 6 步 / 60 秒宽一些。
 fn game_limits() -> AgentLimits {
     AgentLimits {
-        max_steps: 6,
-        max_duration: std::time::Duration::from_secs(60),
+        max_steps: 10,
+        max_duration: std::time::Duration::from_secs(120),
         history_budget_chars: 20_000,
         ..AgentLimits::default()
     }
@@ -157,6 +158,12 @@ pub fn send(app: &AppHandle, outgoing: Outgoing) -> Result<Value, String> {
     let text = outgoing.text.trim().to_string();
     if text.is_empty() {
         return Err("消息为空".into());
+    }
+    // 琴音刚用语音问了一句、正在等回答：这句语音就是回答，交回那次提问。
+    if matches!(outgoing.source.as_str(), "wake-voice" | "voice")
+        && crate::voice_ask::deliver_answer(app, &text)
+    {
+        return Ok(json!({"status": "answered"}));
     }
     let message = Message::User {
         text,
@@ -585,6 +592,7 @@ pub fn submit_from_assistant(
     )?;
     Ok(match result["status"].as_str() {
         Some("steered") => "琴音正在处理，已把这句话交给她".into(),
+        Some("answered") => "已回答琴音".into(),
         _ => "已交给琴音".into(),
     })
 }
@@ -680,6 +688,14 @@ fn delivery_names(kinds: &[DeliveryKind]) -> Vec<&'static str> {
 }
 
 impl BuiltinHost for DesktopBuiltins {
+    async fn ask(&self, question: String, wait_seconds: u64) -> Result<Value, String> {
+        LAST_SAY_MS.store(now_ms(), std::sync::atomic::Ordering::SeqCst);
+        match crate::voice_ask::ask(&self.app, &question, wait_seconds).await? {
+            Some(answer) => Ok(json!({"answered": true, "answer": answer})),
+            None => Ok(json!({"answered": false, "note": "玩家没有回答"})),
+        }
+    }
+
     async fn say(&self, text: String, delivery: Vec<DeliveryKind>) -> Result<Value, String> {
         LAST_SAY_MS.store(now_ms(), std::sync::atomic::Ordering::SeqCst);
         let delivered = crate::assistant::deliver_text(&self.app, text, delivery).await?;
@@ -749,17 +765,7 @@ impl Asker for DesktopAsker {
             inner.asks.insert(id.clone(), tx);
             id
         };
-        if self.entry == Entry::Game {
-            // 游戏内：先用语音 / 弹幕告诉玩家，再等窗口里的回答（语音确认以后再做）。
-            let text = format!(
-                "需要你确认：{}。{}。请到琴音窗口里点允许或拒绝。",
-                request.title, request.reason
-            );
-            let app = self.app.clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = crate::assistant::deliver_text(&app, text, Vec::new()).await;
-            });
-        }
+        let reason = request.reason.clone();
         let _ = self.app.emit(
             ASK_EVENT,
             json!({"askId": ask_id, "conversationId": self.conversation_id, "request": request}),
@@ -772,6 +778,40 @@ impl Asker for DesktopAsker {
             conversation_id: self.conversation_id.clone(),
             answer: Answer::Deny,
         };
+        let mut rx = rx;
+        if self.entry == Entry::Game {
+            // 语音入口：先用语音问，听玩家说“好 / 不要”；没听清再到窗口里点（窗口按钮一直可用）。
+            let question = crate::voice_ask::confirmation_question(&reason);
+            let voice = async {
+                match crate::voice_ask::ask(&self.app, &question, 6).await {
+                    Ok(Some(text)) => crate::voice_ask::parse_confirmation(&text),
+                    Ok(None) => None,
+                    Err(e) => {
+                        log::log(&format!("agent: 语音确认没能进行：{e}"));
+                        None
+                    }
+                }
+            };
+            let decided = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => Some(Answer::Deny),
+                answer = &mut rx => Some(answer.unwrap_or(Answer::Deny)),
+                heard = voice => heard.map(|ok| if ok { Answer::AllowOnce } else { Answer::Deny }),
+            };
+            if let Some(answer) = decided {
+                guard.answer = answer;
+                return guard.answer;
+            }
+            let app = self.app.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = crate::assistant::deliver_text(
+                    &app,
+                    "没听清，请到琴音窗口里点允许或拒绝。".into(),
+                    vec![DeliveryKind::Voice],
+                )
+                .await;
+            });
+        }
         guard.answer = tokio::select! {
             biased;
             _ = cancel.cancelled() => Answer::Deny,

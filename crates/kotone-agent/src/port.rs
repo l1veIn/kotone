@@ -15,7 +15,7 @@ use kotone_tools::ToolService;
 use serde_json::{json, Value};
 
 use crate::catalog::{
-    Catalog, Source, ToolEntry, GAME_TOOLS, GROUPS, TOOL_GAME_CHAT, TOOL_REMIND, TOOL_SAY,
+    Catalog, Source, ToolEntry, GAME_TOOLS, GROUPS, TOOL_ASK, TOOL_GAME_CHAT, TOOL_REMIND, TOOL_SAY,
 };
 use crate::permissions::{
     self, Answer, Asker, Decide, Decision, Grants, PermissionRequest, Policy,
@@ -31,6 +31,13 @@ pub trait BuiltinHost: Send + Sync {
         &self,
         text: String,
         delivery: Vec<DeliveryKind>,
+    ) -> impl Future<Output = Result<Value, String>> + Send;
+
+    /// 用语音问玩家一句，再免唤醒收音 `wait_seconds` 秒，返回 `{answered, answer}`。
+    fn ask(
+        &self,
+        question: String,
+        wait_seconds: u64,
     ) -> impl Future<Output = Result<Value, String>> + Send;
 
     /// 延迟播报（进自动化调度器，ADR 013“延迟 + 播报”）。
@@ -113,6 +120,7 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
             Scope::Game => {
                 GAME_TOOLS.contains(&entry.name.as_str())
                     || matches!(entry.source, Source::Saved { .. })
+                    || active.contains(&entry.name)
             }
         }
     }
@@ -206,6 +214,23 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
                     return ToolOutcome::error("text 为空或超过 300 字");
                 }
                 self.host.say(text, delivery).await
+            }
+            TOOL_ASK => {
+                let question = arguments
+                    .get("question")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or("")
+                    .to_string();
+                if question.is_empty() || question.chars().count() > 120 {
+                    return ToolOutcome::error("question 为空或超过 120 字");
+                }
+                let wait = arguments
+                    .get("waitSeconds")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(8)
+                    .clamp(3, 15);
+                self.host.ask(question, wait).await
             }
             TOOL_REMIND => {
                 let delay = arguments.get("delaySeconds").and_then(Value::as_u64);
