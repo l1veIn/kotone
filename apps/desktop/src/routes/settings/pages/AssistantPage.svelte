@@ -10,6 +10,7 @@
   import AgentSettings from "./assistant/AgentSettings.svelte";
   import WakeSettings from "./assistant/WakeSettings.svelte";
   import BubbleSettings from "./assistant/BubbleSettings.svelte";
+  import VoiceChatSettings from "./assistant/VoiceChatSettings.svelte";
   import OpenRunsSummary from "./assistant/OpenRunsSummary.svelte";
 
   let { onOpenConnections, onOpenAutomation, chatRequest = 0 }: {
@@ -79,6 +80,7 @@
       <AssistantSettings {connections} {ready} {onOpenConnections} />
       <WakeSettings />
       <BubbleSettings />
+      <VoiceChatSettings />
       <AgentSettings />
     </div>
   {/if}
