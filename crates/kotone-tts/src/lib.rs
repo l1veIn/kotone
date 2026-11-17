@@ -103,6 +103,8 @@ struct Command {
     request: SpeechRequest,
     ticket: u64,
     reply: mpsc::SyncSender<Result<(), String>>,
+    /// false = 只合成进缓存、不播放（预取）。
+    play: bool,
 }
 
 enum WorkerCommand {
@@ -208,6 +210,7 @@ impl SpeechOutput for LocalSpeechOutput {
                 request,
                 ticket,
                 reply,
+                play: true,
             }))
             .map_err(|_| "本地语音队列已满或服务已停止".to_string())?;
         match receiver.recv_timeout(Duration::from_secs(60)) {
@@ -223,6 +226,20 @@ impl SpeechOutput for LocalSpeechOutput {
 
     fn cancel(&self) -> Result<(), String> {
         self.control.cancel()
+    }
+
+    fn prefetch(&self, request: SpeechRequest) {
+        if request.validate().is_err() {
+            return;
+        }
+        let (reply, _) = mpsc::sync_channel(1);
+        // 队列满（正在说话）就算了：预取只是优化。
+        let _ = self.commands.try_send(WorkerCommand::Speak(Command {
+            request,
+            ticket: self.generation(),
+            reply,
+            play: false,
+        }));
     }
 }
 
@@ -261,7 +278,8 @@ fn worker(source: Source, receiver: mpsc::Receiver<WorkerCommand>, control: Arc<
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         };
         let result = (|| {
-            if !control.current(command.ticket) {
+            // 预取不看票据：开始录音时的取消不该让缓存白做。
+            if command.play && !control.current(command.ticket) {
                 return Err(CANCELLED.into());
             }
             command.request.validate()?;
@@ -283,6 +301,9 @@ fn worker(source: Source, receiver: mpsc::Receiver<WorkerCommand>, control: Arc<
                 Source::Online(synth) => synth.cache_key(&command.request)?,
             };
             let cached = cache::global().lock().unwrap().get(&key);
+            if !command.play && cached.is_some() {
+                return Ok(());
+            }
             let audio = match cached {
                 Some(audio) => audio,
                 None => {
@@ -291,24 +312,29 @@ fn worker(source: Source, receiver: mpsc::Receiver<WorkerCommand>, control: Arc<
                             if engine.is_none() {
                                 engine = Some(KokoroEngine::open(model_dir)?);
                             }
-                            if !control.current(ticket) {
+                            if command.play && !control.current(ticket) {
                                 return Err(CANCELLED.into());
                             }
                             let progress_control = control.clone();
+                            let play = command.play;
                             engine
                                 .as_ref()
                                 .unwrap()
                                 .synthesize(&command.request, move || {
-                                    progress_control.current(ticket)
+                                    !play || progress_control.current(ticket)
                                 })?
                         }
                         Source::Online(synth) => synth.synthesize(&command.request)?,
                     };
-                    let audio = Arc::new(audio);
+                    // 在线合成常在首尾带半秒静音：裁掉，短句（应答）出声更快。
+                    let audio = Arc::new(engine::trim_silence(audio));
                     cache::global().lock().unwrap().put(key, audio.clone());
                     audio
                 }
             };
+            if !command.play {
+                return Ok(());
+            }
             if !control.current(ticket) {
                 return Err(CANCELLED.into());
             }

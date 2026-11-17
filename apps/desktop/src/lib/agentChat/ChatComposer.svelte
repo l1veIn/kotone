@@ -15,6 +15,7 @@
     onsubmit,
     onstop,
     tools,
+    options,
     textarea = $bindable(),
     autofocus = false,
   }: {
@@ -30,6 +31,8 @@
     onstop: () => void;
     /** 工具行左侧（语音输入）。 */
     tools?: Snippet;
+    /** 发送按钮左边（权限、模型）。 */
+    options?: Snippet;
     textarea?: HTMLTextAreaElement;
     autofocus?: boolean;
   } = $props();
@@ -76,6 +79,7 @@
   <div class="mt-1 flex items-end justify-between gap-2">
     <div class="min-w-0 flex-1">{@render tools?.()}</div>
     <div class="flex shrink-0 items-center gap-1.5 pb-0.5">
+      {@render options?.()}
       {#if running}
         <button type="button" data-testid="agent-stop" disabled={stopping} onclick={onstop}
           class="flex h-8 items-center gap-1.5 rounded-full border border-hairline px-3 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50">

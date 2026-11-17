@@ -315,7 +315,9 @@ Kotone 的推荐：**由宿主按规则播，不让模型生成**。模型生成
 - Voice Capture DSP：https://learn.microsoft.com/en-us/windows/win32/medfound/voicecapturedmo
 - WASAPI 共享 / 独占模式：https://learn.microsoft.com/en-us/windows/win32/coreaudio/exclusive-mode-streams
 
-## 实施记录（2026-11-17）
+## 实施记录
+
+- 2026-11-17：玩家反馈唤醒后要等两秒多才应答（日志：开始应答到开始收音 2.1–2.4 秒，在线语音现场合成）。改为开始监听时预合成应答句（`SpeechOutput::prefetch`），合成结果裁掉首尾静音（各留 40 ms）。实测（模拟在线合成延迟 1.5 秒、首尾各 0.5 秒静音）：0.54 秒。（2026-11-17）
 
 **实现**
 

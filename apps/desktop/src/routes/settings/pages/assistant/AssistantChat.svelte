@@ -13,6 +13,7 @@
   import { appState } from "../../../../lib/stores/state";
   import { errText, toast } from "../../../../lib/stores/ui";
   import AssistantVoiceInput from "./AssistantVoiceInput.svelte";
+  import ComposerOptions from "../../../../lib/agentChat/ComposerOptions.svelte";
   import kotoneCutout from "../../../../assets/brand/kotone-cutout.webp";
 
   let { ready, active, onOpenSettings }: {
@@ -98,6 +99,9 @@
     >
       {#snippet tools()}
         <AssistantVoiceInput {ready} {active} submitting={false} {onOpenSettings} onBusyChange={(busy) => { voiceBusy = busy; }} />
+      {/snippet}
+      {#snippet options()}
+        <ComposerOptions onchanged={() => void chat.refresh()} />
       {/snippet}
     </ChatComposer>
   </div>

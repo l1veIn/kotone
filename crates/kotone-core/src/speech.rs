@@ -53,6 +53,9 @@ pub trait SpeechOutput: Send + Sync {
     ) -> Result<(), String>;
     /// 取消当前及已经排队的播报。识别开始前调用，避免把播报录回麦克风。
     fn cancel(&self) -> Result<(), String>;
+    /// 先在后台合成并缓存、不播放（例如唤醒应答“嗯？/我在”，用时立刻出声）。
+    /// 不等结果；不缓存的引擎（系统语音本来就即时出声）什么也不做。
+    fn prefetch(&self, _request: SpeechRequest) {}
 }
 
 #[cfg(test)]

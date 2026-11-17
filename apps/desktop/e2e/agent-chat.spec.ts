@@ -40,6 +40,7 @@ async function openChat(page: Page, options: { empty?: boolean; notReady?: strin
       conversations: [{ id: "c-old", title: old.title, createdAtMs: old.createdAtMs, updatedAtMs: old.updatedAtMs, messageCount: 2 }],
     };
     let created = 0;
+    let connectionModel = "test";
     const bridge = {
       calls: [] as { command: string; args?: Record<string, unknown> }[], state, conversations,
       async event(conversationId: string, event: unknown) {
@@ -95,7 +96,16 @@ async function openChat(page: Page, options: { empty?: boolean; notReady?: strin
         }
         case "automation_runs": return { runs: [] };
         case "get_runtime_status": return { phase: "running", restartNeeded: false, engineId: "fixture", engineName: "测试引擎", modelId: "fixture", interactionMode: "dictation", stage: null };
-        case "list_connections": return [{ id: "test-ai", displayName: "测试连接", provider: "test", kind: "remote", baseUrl: "https://example.invalid", model: "test", hasApiKey: true }];
+        case "list_connections": return [{ id: "test-ai", displayName: "测试连接", provider: "test", kind: "remote", baseUrl: "https://example.invalid", model: connectionModel, hasApiKey: true }];
+        case "list_connection_presets": return [{ id: "test", displayName: "测试", group: "custom", description: "", defaultBaseUrl: "https://example.invalid", defaultModel: "test", models: ["test", "test-pro"] }];
+        case "upsert_connection": {
+          bridge.calls.push({ command, args: args as Record<string, unknown> });
+          connectionModel = String((args as { connection: { model: string } }).connection.model);
+          return browser.getSettings();
+        }
+        case "connection_self_check":
+          bridge.calls.push({ command, args: args as Record<string, unknown> });
+          return { connectionId: "test-ai", baseUrl: "https://example.invalid", model: connectionModel, passed: true, checkedAtMs: T, message: "连接正常" };
         case "get_startup_options": return { onboarding: "never" };
         case "update_settings": return browser.updateSettings((args as { patch: never }).patch);
       }
@@ -333,4 +343,25 @@ test("agent settings replace permissions as a whole and save the in-game switch"
   await expect(settings.getByTestId("agent-in-game")).toHaveAttribute("aria-checked", "false");
   const saved = await page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings());
   expect(saved.agent?.inGame).toBe(false);
+});
+
+test("composer switches permission mode and model like DeepSeek Harness", async ({ page }, testInfo) => {
+  await openChat(page);
+  const permission = page.getByTestId("composer-permission");
+  await expect(permission).toContainText("先问我");
+  await permission.click();
+  await page.getByTestId("composer-permission-allow-all").click();
+  await expect(permission).toContainText("完全权限");
+  expect(await agentCalls(page, "agent_set_permissions")).toEqual([{ permissions: { mode: "allow-all", rules: {} } }]);
+
+  const model = page.getByTestId("composer-model");
+  await expect(model).toContainText("test");
+  await model.click();
+  await expect(page.getByTestId("composer-model-test-ai-test-pro")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("composer-model-menu.png"), animations: "disabled" });
+  await page.getByTestId("composer-model-test-ai-test-pro").click();
+  await expect(model).toContainText("test-pro");
+  const calls = await page.evaluate(() => window.agentTest.calls.filter((c) => c.command === "upsert_connection" || c.command === "connection_self_check"));
+  expect(calls.map((c) => c.command)).toEqual(["upsert_connection", "connection_self_check"]);
+  expect((calls[0].args as { connection: { model: string } }).connection.model).toBe("test-pro");
 });

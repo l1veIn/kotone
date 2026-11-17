@@ -25,21 +25,6 @@ pub const SAVED_PREFIX: &str = "saved.";
 /// 交给模型的已保存自动化最多几个（ADR 014“已确认”）。
 pub const MAX_SAVED_TOOLS: usize = 30;
 
-/// 语音入口（唤醒、陪玩热键、快捷指令）一开始提供这些，另加已保存的自动化；
-/// 需要别的能力时用 tools.find 查（ADR 014 §4；ADR 017 后语音入口不再只限游戏操作）。
-pub const GAME_TOOLS: &[&str] = &[
-    TOOL_FIND,
-    TOOL_SAY,
-    TOOL_ASK,
-    TOOL_REMIND,
-    TOOL_GAME_CHAT,
-    "companion.read_chat",
-    "automation.list",
-    "automation.run",
-    "automation.runs",
-    "automation.stop",
-];
-
 /// 始终提供的工具（另加已保存的自动化）。
 pub const CORE_TOOLS: &[&str] = &[
     TOOL_FIND,
@@ -60,6 +45,11 @@ pub const CORE_TOOLS: &[&str] = &[
     "settings.describe",
     "settings.get",
     "settings.update",
+    // 玩家最常让琴音做的事：打开游戏、下载 / 启用模型（玩家实测语音里找不到它们）
+    "game.launch",
+    "models.list",
+    "models.download",
+    "models.activate",
 ];
 
 /// 不交给内置 Agent 的工具服务工具。

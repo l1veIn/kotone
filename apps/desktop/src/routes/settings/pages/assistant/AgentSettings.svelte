@@ -15,9 +15,9 @@
   import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
 
   const modes: { id: PermissionMode; name: string; description: string }[] = [
-    { id: "default", name: "默认", description: "看状态、读聊天等直接做；有风险的（按键、发言、改设置……）先问你" },
-    { id: "allow-all", name: "全部允许", description: "全部直接执行（你设为“禁止”的仍然禁止）" },
-    { id: "read-only", name: "只读", description: "只能看状态、读屏幕和播报，其余一律禁止" },
+    { id: "default", name: "先问我", description: "看状态、读聊天等直接做；有风险的（按键、发言、改设置、下载、打开游戏……）先问你" },
+    { id: "allow-all", name: "完全权限", description: "全部直接执行，不再询问（你设为“禁止”的仍然禁止）" },
+    { id: "read-only", name: "仅可查看", description: "只能看状态、读屏幕和播报，其余一律禁止" },
   ];
   const ruleNames: Record<PermissionRule | "default", string> = { default: "按默认", allow: "允许", ask: "询问", deny: "禁止" };
 

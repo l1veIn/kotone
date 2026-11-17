@@ -387,6 +387,11 @@ fn listen(
         "wake: listening (phrase={phrase}, sensitivity={sensitivity}, device={device})"
     ));
     set_state(app, WakeState::Listening);
+    if config.ack == WakeAck::Voice {
+        // 应答先合成好：在线语音现场合成要一两秒，玩家会觉得她反应慢。
+        let prefetch_app = app.clone();
+        std::thread::spawn(move || crate::assistant::prefetch(&prefetch_app, ACKS));
+    }
     let orchestrator = app.state::<SharedState>().orchestrator.clone();
     let rt = runtime(app).ok_or("唤醒状态不可用")?;
     let handoff = rt.handoff();

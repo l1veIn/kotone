@@ -356,6 +356,24 @@ pub fn speak_now(app: &AppHandle, text: &str) -> Result<(), String> {
     ))
 }
 
+/// 先把这些短句合成进缓存（唤醒应答“嗯？/我在”），用时立刻出声、不用现场请求在线语音。
+pub fn prefetch(app: &AppHandle, texts: &[&str]) {
+    let config = app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .assistant
+        .clone();
+    let Ok(speaker) = selected_speaker(app, &config) else {
+        return;
+    };
+    let engine = effective_engine(app, &config);
+    for text in texts {
+        speaker.prefetch(speech_request(engine, &config, text));
+    }
+}
+
 pub fn before_capture(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AssistantRuntime>();
     // Set before purging: output admission sees even the interval before Listening.

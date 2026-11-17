@@ -15,7 +15,7 @@ use kotone_tools::ToolService;
 use serde_json::{json, Value};
 
 use crate::catalog::{
-    Catalog, Source, ToolEntry, GAME_TOOLS, GROUPS, TOOL_ASK, TOOL_GAME_CHAT, TOOL_REMIND, TOOL_SAY,
+    Catalog, Source, ToolEntry, GROUPS, TOOL_ASK, TOOL_GAME_CHAT, TOOL_REMIND, TOOL_SAY,
 };
 use crate::permissions::{
     self, Answer, Asker, Decide, Decision, Grants, PermissionRequest, Policy,
@@ -75,7 +75,8 @@ pub enum Scope {
     /// 常用工具 + 已保存的自动化 + 经 `tools.find` 启用的工具。
     #[default]
     Full,
-    /// 游戏内快速模式：只有 [`GAME_TOOLS`] 与已保存的自动化。
+    /// 语音入口：与聊天窗口同一套工具，另加 `reply.ask`（用语音追问玩家）。
+    /// 早先这里只给一小套“游戏常用”工具，玩家实测让琴音下载模型、打开游戏时她总说没有这个工具。
     Game,
 }
 
@@ -118,9 +119,7 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
         match self.scope {
             Scope::Full => Catalog::is_core(entry) || active.contains(&entry.name),
             Scope::Game => {
-                GAME_TOOLS.contains(&entry.name.as_str())
-                    || matches!(entry.source, Source::Saved { .. })
-                    || active.contains(&entry.name)
+                Catalog::is_core(entry) || entry.name == TOOL_ASK || active.contains(&entry.name)
             }
         }
     }

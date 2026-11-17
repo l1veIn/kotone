@@ -206,7 +206,7 @@ fn catalog_offers_core_tools_and_hides_external_channels() {
         );
     }
     assert!(offered.contains(&"saved.auto-1".to_string()));
-    assert!(!offered.contains(&"models.download".to_string()));
+    assert!(!offered.contains(&"models.delete".to_string()));
     // 每个工具的参数顶层都是 object。
     for def in f.port.definitions() {
         assert_eq!(def.parameters["type"], "object", "{}", def.name);
@@ -228,10 +228,10 @@ async fn tools_find_lists_groups_then_enables_matches() {
         offered.contains(&"hotkeys.status".to_string()),
         "{offered:?}"
     );
-    assert!(!offered.contains(&"models.download".to_string()));
+    assert!(!offered.contains(&"models.delete".to_string()));
 
     call(&f.port, "tools.find", json!({"group": "models"})).await;
-    assert!(names(&f.port).contains(&"models.download".to_string()));
+    assert!(names(&f.port).contains(&"models.delete".to_string()));
 }
 
 #[test]
@@ -262,23 +262,28 @@ fn saved_automation_becomes_a_typed_tool() {
 }
 
 #[tokio::test]
-async fn voice_scope_starts_small_and_can_find_more_tools() {
+async fn voice_scope_offers_the_chat_tools_plus_ask() {
+    let chat = names(&fixture(Policy::default(), Answer::Deny).port);
     let f = fixture(Policy::default(), Answer::Deny);
-    let port = f.port.with_scope(crate::Scope::Game);
-    let offered = names(&port);
-    for name in crate::catalog::GAME_TOOLS {
-        assert!(offered.contains(&name.to_string()), "{name}");
+    let voice = names(&f.port.with_scope(crate::Scope::Game));
+    for name in &chat {
+        assert!(voice.contains(name), "{name}");
     }
-    assert!(offered.contains(&"tools.find".to_string()));
-    assert!(offered.contains(&"reply.ask".to_string()));
-    assert!(offered.contains(&"saved.auto-1".to_string()));
-    for hidden in ["automation.save", "models.download", "window.active"] {
-        assert!(!offered.contains(&hidden.to_string()), "{hidden}");
+    // 玩家最常让琴音做的事一开始就能用（实测：语音里让她下载模型、打开游戏，她说没有这个工具）
+    for name in [
+        "game.launch",
+        "models.download",
+        "models.activate",
+        "settings.update",
+        "saved.auto-1",
+        "reply.ask",
+    ] {
+        assert!(voice.contains(&name.to_string()), "{name}");
     }
-    assert!(call(&port, "models.download", json!({})).await.is_error);
-    // 语音入口也能查找更多工具（例如帮玩家下载模型），查到的从下一步起可用
-    call(&port, "tools.find", json!({"group": "models"})).await;
-    assert!(names(&port).contains(&"models.download".to_string()));
+    assert!(
+        !chat.contains(&"reply.ask".to_string()),
+        "聊天窗口用确认卡，不用语音追问"
+    );
 }
 
 #[tokio::test]

@@ -86,6 +86,28 @@ pub struct SynthesizedSpeech {
     pub sample_rate: u32,
 }
 
+/// 低于这个幅度算静音。
+const SILENCE_LEVEL: f32 = 0.01;
+/// 裁静音后首尾各留多少（毫秒），避免切掉气声。
+const SILENCE_PAD_MS: usize = 40;
+
+/// 裁掉首尾的静音（各留 40 ms）。全是静音时原样返回。
+pub fn trim_silence(mut speech: SynthesizedSpeech) -> SynthesizedSpeech {
+    let loud = |s: &f32| s.abs() >= SILENCE_LEVEL;
+    let (Some(first), Some(last)) = (
+        speech.samples.iter().position(loud),
+        speech.samples.iter().rposition(loud),
+    ) else {
+        return speech;
+    };
+    let pad = speech.sample_rate as usize * SILENCE_PAD_MS / 1000;
+    let start = first.saturating_sub(pad);
+    let end = (last + 1 + pad).min(speech.samples.len());
+    speech.samples.truncate(end);
+    speech.samples.drain(..start);
+    speech
+}
+
 pub struct KokoroEngine(OfflineTts);
 
 impl KokoroEngine {
@@ -189,6 +211,26 @@ impl KokoroEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trim_silence_keeps_a_short_pad_around_the_voice() {
+        let rate = 1_000;
+        let mut samples = vec![0.0; 500];
+        samples.extend(vec![0.5; 100]);
+        samples.extend(vec![0.001; 400]);
+        let out = trim_silence(SynthesizedSpeech {
+            samples,
+            sample_rate: rate,
+        });
+        // 40 ms pad = 40 samples on each side of the 100 loud ones
+        assert_eq!(out.samples.len(), 180);
+        assert_eq!(out.samples[40], 0.5);
+        let quiet = trim_silence(SynthesizedSpeech {
+            samples: vec![0.0; 10],
+            sample_rate: rate,
+        });
+        assert_eq!(quiet.samples.len(), 10);
+    }
 
     #[test]
     fn stock_voice_ids_match_the_official_v11_mapping() {
