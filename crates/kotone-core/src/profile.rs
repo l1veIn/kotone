@@ -97,6 +97,77 @@ pub struct GameProfile {
     /// Kotone 打开（工具 `game.launch`）。只由用户填写。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub launch_path: String,
+    /// 让琴音在这个游戏里一步一步操作鼠标键盘（ADR 019 `game.act`）：先问（默认）/ 一直允许 /
+    /// 不允许。竞技对局进程（[`COMPETITIVE_PROCESSES`]）只有设成“一直允许”才会操作。
+    #[serde(default, skip_serializing_if = "ComputerUse::is_ask")]
+    pub computer_use: ComputerUse,
+}
+
+/// 琴音能不能在某个游戏里操作鼠标键盘（`game.act`）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ComputerUse {
+    /// 每段对话第一次操作前先问玩家。
+    #[default]
+    Ask,
+    /// 一直允许（不再问）。
+    Allow,
+    /// 不允许。
+    Deny,
+}
+
+impl ComputerUse {
+    fn is_ask(&self) -> bool {
+        *self == Self::Ask
+    }
+}
+
+/// 竞技对局的进程：反作弊可能检测模拟点击，琴音默认不在里面操作（ADR 019 决定 7），
+/// 玩家把这个游戏的“让琴音操作”设成一直允许才放开。客户端、商店等对局外的进程不在此列。
+pub const COMPETITIVE_PROCESSES: &[&str] = &[
+    "League of Legends.exe",
+    "VALORANT-Win64-Shipping.exe",
+    "cs2.exe",
+    "TslGame.exe",
+    "r5apex.exe",
+    "Overwatch.exe",
+];
+
+/// 对某个进程的判定。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ComputerUseVerdict {
+    Allowed,
+    /// 要先问玩家。
+    Ask,
+    Denied(String),
+}
+
+/// 琴音能不能在这个进程里操作：先看“允许自动化输入”，再看“让琴音操作”与竞技对局名单。
+pub fn computer_use_verdict(
+    profile: Option<&GameProfile>,
+    process_name: &str,
+) -> ComputerUseVerdict {
+    let competitive = COMPETITIVE_PROCESSES
+        .iter()
+        .any(|p| p.eq_ignore_ascii_case(process_name));
+    let name = profile.map_or("这个游戏", |p| p.display_name.as_str());
+    let setting = profile.map_or(ComputerUse::Ask, |p| p.computer_use);
+    if profile.is_some_and(|p| !p.allow_automation_input) {
+        return ComputerUseVerdict::Denied(format!(
+            "「{name}」设置为不允许自动化输入（可以在「游戏适配」里打开）"
+        ));
+    }
+    match setting {
+        ComputerUse::Deny => ComputerUseVerdict::Denied(format!(
+            "「{name}」设置为不让琴音操作（可以在「游戏适配」里改）"
+        )),
+        ComputerUse::Allow => ComputerUseVerdict::Allowed,
+        ComputerUse::Ask if competitive => ComputerUseVerdict::Denied(format!(
+            "{process_name} 是竞技对局，反作弊可能检测模拟点击，琴音默认不在对局里操作；\
+             玩家确实要放开，可以在「游戏适配」里把「{name}」的“让琴音操作”设成一直允许"
+        )),
+        ComputerUse::Ask => ComputerUseVerdict::Ask,
+    }
 }
 
 fn default_true() -> bool {
@@ -1139,6 +1210,64 @@ pub fn delete_profile_in(dir: &Path, id: &str) -> Result<ProfileDeleteOutcome, S
             }
         }
         Ok(ProfileDeleteOutcome::Deleted)
+    }
+}
+
+#[cfg(test)]
+mod computer_use_tests {
+    use super::*;
+
+    fn game(json: &str) -> GameProfile {
+        let mut p = parse_builtin_profile("lol", include_str!("../resources/profiles/lol.json"));
+        let patch: serde_json::Value = serde_json::from_str(json).unwrap();
+        let mut v = serde_json::to_value(&p).unwrap();
+        for (k, val) in patch.as_object().unwrap() {
+            v[k] = val.clone();
+        }
+        p = serde_json::from_value(v).unwrap();
+        p
+    }
+
+    #[test]
+    fn competitive_matches_need_an_explicit_allow() {
+        let ask = game("{}");
+        assert_eq!(ask.computer_use, ComputerUse::Ask);
+        assert!(matches!(
+            computer_use_verdict(Some(&ask), "League of Legends.exe"),
+            ComputerUseVerdict::Denied(m) if m.contains("竞技对局")
+        ));
+        // 客户端（对局外）可以，先问
+        assert_eq!(
+            computer_use_verdict(Some(&ask), "LeagueClientUx.exe"),
+            ComputerUseVerdict::Ask
+        );
+        let allow = game(r#"{"computerUse": "allow"}"#);
+        assert_eq!(
+            computer_use_verdict(Some(&allow), "League of Legends.exe"),
+            ComputerUseVerdict::Allowed
+        );
+        let deny = game(r#"{"computerUse": "deny"}"#);
+        assert!(matches!(
+            computer_use_verdict(Some(&deny), "LeagueClientUx.exe"),
+            ComputerUseVerdict::Denied(_)
+        ));
+        let no_input = game(r#"{"computerUse": "allow", "allowAutomationInput": false}"#);
+        assert!(matches!(
+            computer_use_verdict(Some(&no_input), "LeagueClientUx.exe"),
+            ComputerUseVerdict::Denied(m) if m.contains("自动化输入")
+        ));
+        assert_eq!(
+            computer_use_verdict(None, "notepad.exe"),
+            ComputerUseVerdict::Ask
+        );
+    }
+
+    #[test]
+    fn ask_is_not_written_to_disk() {
+        let v = serde_json::to_value(game("{}")).unwrap();
+        assert!(v.get("computerUse").is_none());
+        let v = serde_json::to_value(game(r#"{"computerUse": "deny"}"#)).unwrap();
+        assert_eq!(v["computerUse"], "deny");
     }
 }
 
