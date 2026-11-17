@@ -149,12 +149,26 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
                     .to_string(),
             );
         }
-        let found = self.catalog.find(query, group);
+        // 只列当前入口里还不能用的工具（聊天窗口常驻的设置工具，在语音入口要查了才有）。
+        let offered_now = self.session.active.lock().unwrap().clone();
+        let found: Vec<&ToolEntry> = self
+            .catalog
+            .find(query, group)
+            .into_iter()
+            .filter(|e| !self.offered(e, &offered_now))
+            .collect();
         let total = found.len();
+        // 按分组查：启用整组（分组本身就有界，最多十几个）；按关键词查：最多 MAX_FIND 个。
+        // 否则组里排在后面的工具（例如“设置”组的 settings.update）永远启用不了。
+        let limit = if query.is_none() {
+            usize::MAX
+        } else {
+            MAX_FIND
+        };
         let mut active = self.session.active.lock().unwrap();
         let tools: Vec<Value> = found
             .into_iter()
-            .take(MAX_FIND)
+            .take(limit)
             .map(|e| {
                 active.insert(e.name.clone());
                 let short: String = e.description.chars().take(160).collect();
@@ -165,7 +179,7 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
             json!({
                 "enabled": tools,
                 "matched": total,
-                "note": if total > MAX_FIND { "结果太多，只启用了前几个；换更具体的关键词" } else { "这些工具从下一步起可以调用" },
+                "note": if total > limit { "结果太多，只启用了前几个；换更具体的关键词" } else { "这些工具从下一步起可以调用" },
             })
             .to_string(),
         )

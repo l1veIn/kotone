@@ -420,9 +420,9 @@ impl Catalog {
             .split_whitespace()
             .map(str::to_lowercase)
             .collect();
+        // 不在这里排除常驻工具：常驻与否取决于入口（聊天 / 语音），由调用方按当前入口过滤。
         self.entries
             .iter()
-            .filter(|e| !Self::is_core(e))
             .filter(|e| group.is_none_or(|g| e.group == g))
             .filter(|e| {
                 let keywords = GROUPS

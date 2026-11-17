@@ -282,6 +282,17 @@ async fn voice_scope_starts_small_and_can_find_more_tools() {
 }
 
 #[tokio::test]
+async fn finding_a_group_enables_the_whole_group() {
+    let f = fixture(Policy::default(), Answer::Deny);
+    let port = f.port.with_scope(crate::Scope::Game);
+    call(&port, "tools.find", json!({"group": "settings"})).await;
+    let offered = names(&port);
+    for name in ["settings.update", "settings.describe", "settings.get"] {
+        assert!(offered.contains(&name.to_string()), "{name}");
+    }
+}
+
+#[tokio::test]
 async fn ask_tool_validates_and_reaches_the_host() {
     let f = fixture(Policy::default(), Answer::Deny);
     let port = f.port.with_scope(crate::Scope::Game);
