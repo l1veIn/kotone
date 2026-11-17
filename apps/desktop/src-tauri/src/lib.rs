@@ -26,6 +26,7 @@ mod voice_ask;
 mod voice_chat;
 mod voice_listen;
 mod wake;
+mod workspace_cmd;
 
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -2216,6 +2217,15 @@ pub fn run() {
             automation::automation_run_saved,
             automation::automation_stop,
             agent::agent_send,
+            workspace_cmd::workspace_overview,
+            workspace_cmd::workspace_read,
+            workspace_cmd::workspace_write,
+            workspace_cmd::workspace_delete_game,
+            workspace_cmd::workspace_set_avatar,
+            workspace_cmd::workspace_avatar,
+            workspace_cmd::workspace_delete_skill,
+            workspace_cmd::workspace_import_skill,
+            workspace_cmd::workspace_open_dir,
             agent::agent_stop,
             agent::agent_answer,
             agent::agent_state,

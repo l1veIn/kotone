@@ -249,8 +249,12 @@ pub fn send_message(app: &AppHandle, message: Message) -> Result<Value, String> 
             return Ok(json!({"status": "steered", "conversationId": running.conversation_id}));
         }
     }
+    // 子会话的记录只能看：玩家选着它发消息时开一段新对话（子会话由父会话驱动，ADR 022）。
     let conversation = match store.current() {
-        Some(id) => store.load(&id)?.unwrap_or_else(|| store.create()),
+        Some(id) => store
+            .load(&id)?
+            .filter(|c| c.parent.is_none())
+            .unwrap_or_else(|| store.create()),
         None => store.create(),
     };
     let cancel = CancellationToken::default();

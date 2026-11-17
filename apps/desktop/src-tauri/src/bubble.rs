@@ -70,6 +70,8 @@ pub struct Model {
     snap: Snapshot,
     /// 正在念：在想 / 工具状态不覆盖正在念的句子。
     holding: bool,
+    /// 琴音的名字（空 = 默认）。
+    name: String,
 }
 
 impl Default for Model {
@@ -86,6 +88,7 @@ impl Default for Model {
                 corner: BubbleCorner::default(),
             },
             holding: false,
+            name: String::new(),
         }
     }
 }
@@ -93,6 +96,14 @@ impl Default for Model {
 impl Model {
     pub fn snapshot(&self) -> &Snapshot {
         &self.snap
+    }
+
+    fn name(&self) -> String {
+        if self.name.is_empty() {
+            kotone_agent::workspace::DEFAULT_NAME.to_string()
+        } else {
+            self.name.clone()
+        }
     }
 
     fn set(&mut self, phase: Phase, label: &str, text: &str) -> &Snapshot {
@@ -170,9 +181,19 @@ impl Model {
             .then(|| self.set(Phase::Hidden, "", ""))
     }
 
+    /// 气泡上显示的名字（设置里改过名字就用新名字）。
+    pub fn set_name(&mut self, name: &str) {
+        self.name = if name.trim().is_empty() {
+            kotone_agent::workspace::DEFAULT_NAME.to_string()
+        } else {
+            name.trim().to_string()
+        };
+    }
+
     pub fn speaking(&mut self, text: &str) -> &Snapshot {
         self.holding = true;
-        self.set(Phase::Speaking, "琴音", text)
+        let name = self.name();
+        self.set(Phase::Speaking, &name, text)
     }
 
     /// 这句念完了：返回应停留多久后收起（序号对不上 = 已经有新内容，不收）。
@@ -210,7 +231,8 @@ impl Model {
 
     pub fn note(&mut self, text: &str) -> &Snapshot {
         self.holding = false;
-        self.set(Phase::Note, "琴音", text)
+        let name = self.name();
+        self.set(Phase::Note, &name, text)
     }
 
     pub fn error(&mut self, text: &str) -> &Snapshot {
@@ -294,7 +316,12 @@ pub fn owns_session(app: &AppHandle, payload: &Value) -> bool {
 fn update(app: &AppHandle, change: impl FnOnce(&mut Model) -> Option<Snapshot>) -> Option<u64> {
     let rt = app.try_state::<BubbleRuntime>()?;
     let snapshot = {
+        let name = app
+            .try_state::<SharedState>()
+            .map(|state| state.settings.read().unwrap().agent.identity.name.clone())
+            .unwrap_or_default();
         let mut model = rt.model.lock().unwrap();
+        model.set_name(&name);
         let mut snap = change(&mut model)?;
         snap.corner = config(app).map(|c| c.corner).unwrap_or_default();
         snap
@@ -643,6 +670,16 @@ mod tests {
         // 正在念时“结束”不收，等念完的停留
         m.speaking("好了");
         assert!(m.finished().is_none());
+    }
+
+    #[test]
+    fn the_bubble_shows_the_chosen_name() {
+        let mut m = Model::default();
+        assert_eq!(m.speaking("嗨").label, "琴音");
+        m.set_name(" 小雨 ");
+        assert_eq!(m.note("嗨").label, "小雨");
+        m.set_name("");
+        assert_eq!(m.note("嗨").label, "琴音");
     }
 
     #[test]
