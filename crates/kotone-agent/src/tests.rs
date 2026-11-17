@@ -41,9 +41,15 @@ fn service() -> (Arc<ToolService>, Arc<FakeAppHost>) {
 #[derive(Default, Clone)]
 struct FakeBuiltin {
     calls: Arc<Mutex<Vec<(String, Value)>>>,
+    /// 玩家在别处一直允许了的工具（模拟游戏配置里“让琴音操作”设为一直允许）。
+    preapproved: Arc<Mutex<Vec<String>>>,
 }
 
 impl BuiltinHost for FakeBuiltin {
+    fn preapproved(&self, tool: &str, _arguments: &Value) -> bool {
+        self.preapproved.lock().unwrap().iter().any(|t| t == tool)
+    }
+
     async fn ask(&self, question: String, wait_seconds: u64) -> Result<Value, String> {
         self.calls.lock().unwrap().push((
             "ask".into(),
@@ -696,4 +702,78 @@ async fn the_agent_cannot_change_its_own_permissions_even_with_allow_all() {
     assert!(out.is_error);
     assert!(out.content.contains("不能改自己的权限"), "{}", out.content);
     assert!(f.asked.lock().unwrap().is_empty(), "拒绝发生在询问之前");
+}
+
+// ---------- computer use（ADR 019） ----------
+
+#[tokio::test]
+async fn game_act_is_core_asks_first_and_skips_asking_when_the_game_is_allowed() {
+    let f = fixture(Policy::default(), Answer::Deny);
+    let offered = names(&f.port);
+    assert!(offered.contains(&"game.look".to_string()));
+    assert!(offered.contains(&"game.act".to_string()));
+    assert_eq!(
+        default_decision(entry(&f, "game.look"), &json!({})),
+        Decision::Allow
+    );
+    let args = json!({"observationId": "look-1", "actions": [{"action": "key", "text": "i"}]});
+    let out = call(&f.port, "game.act", args.clone()).await;
+    assert!(out.is_error && out.content.contains("拒绝"));
+    assert_eq!(f.asked.lock().unwrap()[0].reason, "会在游戏里操作鼠标键盘");
+    assert!(f.host.invocations().is_empty());
+
+    let f = fixture(Policy::default(), Answer::Deny);
+    f.builtin
+        .preapproved
+        .lock()
+        .unwrap()
+        .push("game.act".into());
+    call(&f.port, "game.act", args.clone()).await;
+    assert!(
+        f.asked.lock().unwrap().is_empty(),
+        "allowed game: no question"
+    );
+    assert_eq!(f.host.invocations().len(), 1);
+
+    // 用户把 game.act 设为禁止时，游戏里的“一直允许”也不越过它。
+    let mut policy = Policy::default();
+    policy.rules.insert("game.act".into(), Rule::Deny);
+    let f = fixture(policy, Answer::AllowOnce);
+    f.builtin
+        .preapproved
+        .lock()
+        .unwrap()
+        .push("game.act".into());
+    let out = call(&f.port, "game.act", args).await;
+    assert!(out.is_error);
+    assert!(f.host.invocations().is_empty());
+}
+
+#[test]
+fn screenshots_in_results_become_image_attachments() {
+    let mut result = json!({
+        "sent": 1,
+        "look": {"observationId": "look-2", "image": {"mimeType": "image/jpeg", "base64": "AAAA", "width": 4}},
+    });
+    let images = crate::port::take_images(&mut result);
+    assert_eq!(images.len(), 1);
+    assert!(
+        matches!(&images[0], kotone_ai::agent::Attachment::Image { mime, data, .. } if mime == "image/jpeg" && data == "AAAA")
+    );
+    assert!(result["look"]["image"].get("base64").is_none());
+    assert_eq!(result["look"]["image"]["attached"], true);
+    let mut plain = json!({"ok": true});
+    assert!(crate::port::take_images(&mut plain).is_empty());
+}
+
+#[test]
+fn prompt_teaches_the_look_think_act_loop() {
+    let prompt = system_prompt(&PromptContext {
+        entry: Entry::Game,
+        profile_name: "",
+        profile_notes: "",
+        automations: &[],
+    });
+    assert!(prompt.contains("game.look") && prompt.contains("game.act"));
+    assert!(prompt.contains("不要重复"));
 }

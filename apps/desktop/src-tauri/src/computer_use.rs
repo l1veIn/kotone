@@ -68,6 +68,22 @@ pub fn busy(app: &AppHandle) -> bool {
         .is_some_and(|s| s.inner.lock().unwrap().active.is_some())
 }
 
+/// 最近一次 look 的游戏在配置里“让琴音操作”是一直允许（内置 Agent 据此不再询问）。
+pub fn always_allowed(app: &AppHandle) -> bool {
+    let Some(target) = app
+        .try_state::<ComputerUse>()
+        .and_then(|s| s.inner.lock().unwrap().latest.as_ref().map(|l| l.target))
+    else {
+        return false;
+    };
+    let Ok(window) = WindowsWindowObserver.inspect(&target) else {
+        return false;
+    };
+    let process = window.process_name.unwrap_or_default();
+    let game = profile::find_by_process(&profile::list(), &process);
+    profile::computer_use_verdict(game.as_ref(), &process) == profile::ComputerUseVerdict::Allowed
+}
+
 /// 停止正在进行的操作（停止热键、语音“停下”、本轮停止）。返回是否有操作被停下。
 pub fn stop_all(app: &AppHandle, reason: &str) -> bool {
     let Some(s) = app.try_state::<ComputerUse>() else {

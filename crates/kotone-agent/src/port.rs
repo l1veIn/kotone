@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
-use kotone_ai::agent::{ToolDef, ToolOutcome, ToolPort};
+use kotone_ai::agent::{Attachment, ToolDef, ToolOutcome, ToolPort};
 use kotone_core::cancel::CancellationToken;
 use kotone_core::reminders::DeliveryKind;
 use kotone_tools::protocol::ToolCallRequest;
@@ -54,6 +54,54 @@ pub trait BuiltinHost: Send + Sync {
         text: String,
         send: Option<bool>,
     ) -> impl Future<Output = Result<Value, String>> + Send;
+
+    /// 玩家已经在别处一直允许了这次调用（例如游戏配置里“让琴音操作”设为一直允许）：
+    /// 权限规则是“询问”时不再问。用户设为禁止、只读模式时仍然不执行。
+    fn preapproved(&self, _tool: &str, _arguments: &Value) -> bool {
+        false
+    }
+}
+
+/// 工具服务调用的期限（毫秒）：多数用服务的默认值，一边看一边操作的要更久。
+fn service_timeout_ms(tool: &str) -> Option<u64> {
+    match tool {
+        "game.look" => Some(20_000),
+        "game.act" => Some(30_000),
+        _ => None,
+    }
+}
+
+/// 从工具结果里取出图片（`image: {mimeType, base64}`，`game.act` 的在 `look.image`），
+/// 作为图片交给模型，结果文字里只留尺寸。
+pub fn take_images(result: &mut Value) -> Vec<Attachment> {
+    let mut out = Vec::new();
+    let mut take = |holder: Option<&mut Value>, label: &str| {
+        let Some(image) = holder.and_then(|h| h.get_mut("image")) else {
+            return;
+        };
+        let mime = image
+            .get("mimeType")
+            .and_then(Value::as_str)
+            .map(String::from);
+        let data = image
+            .get("base64")
+            .and_then(Value::as_str)
+            .map(String::from);
+        if let (Some(mime), Some(data)) = (mime, data) {
+            if let Some(object) = image.as_object_mut() {
+                object.remove("base64");
+                object.insert("attached".into(), json!(true));
+            }
+            out.push(Attachment::Image {
+                label: label.to_string(),
+                mime,
+                data,
+            });
+        }
+    };
+    take(Some(result), "游戏截图");
+    take(result.get_mut("look"), "操作后的游戏截图");
+    out
 }
 
 /// 一段对话里跨轮保留的状态：经 `tools.find` 启用的工具、“本段对话都允许”的授权。
@@ -191,16 +239,15 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
                 request_id: None,
                 tool: tool.to_string(),
                 arguments,
-                timeout_ms: None,
+                timeout_ms: service_timeout_ms(tool),
             })
             .await;
         if envelope.ok {
-            ToolOutcome::ok(
-                envelope
-                    .result
-                    .map(|r| r.to_string())
-                    .unwrap_or_else(|| "{}".into()),
-            )
+            let mut result = envelope.result.unwrap_or_else(|| json!({}));
+            let images = take_images(&mut result);
+            let mut outcome = ToolOutcome::ok(result.to_string());
+            outcome.images = images;
+            outcome
         } else {
             let error = envelope
                 .error
@@ -360,6 +407,7 @@ impl<H: BuiltinHost, A: Asker> ToolPort for KotonePort<H, A> {
             Decision::Deny { reason } => {
                 return ToolOutcome::error(format!("没有执行：{reason}"));
             }
+            Decision::Ask { .. } if self.host.preapproved(&entry.name, &arguments) => {}
             Decision::Ask { reason } => {
                 let request = PermissionRequest {
                     call_id: call_id.to_string(),

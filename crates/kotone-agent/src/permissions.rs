@@ -82,6 +82,7 @@ const ASK_EFFECTS: &[(&str, &str)] = &[
     ("llm-request", "会调用付费的 AI 接口"),
     ("launches-program", "会打开游戏"),
     ("closes-program", "会关闭游戏"),
+    ("sends-game-input", "会在游戏里操作鼠标键盘"),
 ];
 
 /// 一段对话里“本段对话都允许”的记录。

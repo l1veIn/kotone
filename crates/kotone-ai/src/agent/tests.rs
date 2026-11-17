@@ -431,6 +431,31 @@ async fn step_limit_stops_with_every_call_answered() {
 }
 
 #[tokio::test]
+async fn computer_use_tools_extend_the_step_budget() {
+    let mut model = FakeModel::new(Vec::new());
+    model.repeat = Some(reply("", vec![call("c", "automation.list", "{}")]));
+    let tools = FakeTools::default();
+    let limits = AgentLimits {
+        max_steps: 3,
+        extend_on: vec!["automation.list".into()],
+        extended_steps: 5,
+        extended_duration: Duration::from_secs(600),
+        ..Default::default()
+    };
+    let r = run_with(
+        &model,
+        &tools,
+        Vec::new(),
+        "一直查",
+        limits,
+        &CancellationToken::default(),
+    )
+    .await;
+    assert_eq!(r.stop, StopReason::StepLimit);
+    assert_eq!(model.requests().len(), 5);
+}
+
+#[tokio::test]
 async fn cancel_during_tool_keeps_conversation_valid() {
     let model = FakeModel::new(vec![calls(
         "",

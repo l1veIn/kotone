@@ -51,7 +51,13 @@ pub const CORE_TOOLS: &[&str] = &[
     "models.list",
     "models.download",
     "models.activate",
+    // 一边看一边操作游戏（ADR 019 computer use）
+    "game.look",
+    "game.act",
 ];
+
+/// computer use 的工具：本轮用到它们时放宽步数与时长（ADR 019 决定 6）。
+pub const COMPUTER_USE_TOOLS: &[&str] = &["game.look", "game.act"];
 
 /// 不交给内置 Agent 的工具服务工具。
 pub const EXCLUDED: &[&str] = &[
@@ -80,6 +86,8 @@ pub const UNTRUSTED_RESULTS: &[&str] = &[
     "window.active",
     "game.list",
     "game.focus",
+    "game.look",
+    "game.act",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]

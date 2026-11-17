@@ -384,6 +384,11 @@ pub struct AgentLimits {
     pub history_budget_chars: usize,
     /// 用户一句话最多多少字。
     pub max_user_chars: usize,
+    /// 本轮调用过这些工具之后，步数与时长放宽到 `extended_steps` / `extended_duration`
+    /// （都只放宽、不收紧；ADR 019：一边看一边操作游戏要更多步）。
+    pub extend_on: Vec<String>,
+    pub extended_steps: u32,
+    pub extended_duration: Duration,
 }
 
 impl Default for AgentLimits {
@@ -395,6 +400,9 @@ impl Default for AgentLimits {
             max_tool_result_chars: 8_000,
             history_budget_chars: 60_000,
             max_user_chars: 4_000,
+            extend_on: Vec::new(),
+            extended_steps: 0,
+            extended_duration: Duration::ZERO,
         }
     }
 }
@@ -786,12 +794,14 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
         return StopReason::Failed { message };
     }
     push(history, turn.user.clone());
-    let deadline = tokio::time::Instant::now() + limits.max_duration;
+    let started = tokio::time::Instant::now();
+    let mut deadline = started + limits.max_duration;
+    let mut max_steps = limits.max_steps;
     let system = format!("{}\n\n{DATA_RULE}", system.trim());
 
     let mut step = 0u32;
     loop {
-        if step >= limits.max_steps {
+        if step >= max_steps {
             return StopReason::StepLimit;
         }
         step += 1;
@@ -867,6 +877,10 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
         }
         for call in &calls {
             on_event(AgentEvent::ToolCall { call: call.clone() });
+        }
+        if calls.iter().any(|c| limits.extend_on.contains(&c.name)) {
+            max_steps = max_steps.max(limits.extended_steps);
+            deadline = deadline.max(started + limits.extended_duration);
         }
 
         let mut interrupted: Option<StopReason> = None;

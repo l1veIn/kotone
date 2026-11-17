@@ -47,6 +47,20 @@ fn game_limits() -> AgentLimits {
         max_steps: 10,
         max_duration: std::time::Duration::from_secs(120),
         history_budget_chars: 20_000,
+        ..chat_limits()
+    }
+}
+
+/// 聊天窗口的上限；两个入口一旦用上 game.look / game.act（一边看一边操作游戏），
+/// 本轮放宽到 30 步、5 分钟（ADR 019 决定 6）。
+fn chat_limits() -> AgentLimits {
+    AgentLimits {
+        extend_on: kotone_agent::catalog::COMPUTER_USE_TOOLS
+            .iter()
+            .map(|t| t.to_string())
+            .collect(),
+        extended_steps: 30,
+        extended_duration: std::time::Duration::from_secs(300),
         ..AgentLimits::default()
     }
 }
@@ -402,7 +416,7 @@ async fn turn(
     let limits = if entry == Entry::Game {
         game_limits()
     } else {
-        AgentLimits::default()
+        chat_limits()
     };
     let conversation_id = conversation.id.clone();
     let shared = Mutex::new(conversation.clone());
@@ -753,6 +767,10 @@ fn delivery_names(kinds: &[DeliveryKind]) -> Vec<&'static str> {
 }
 
 impl BuiltinHost for DesktopBuiltins {
+    fn preapproved(&self, tool: &str, _arguments: &Value) -> bool {
+        tool == "game.act" && crate::computer_use::always_allowed(&self.app)
+    }
+
     async fn ask(&self, question: String, wait_seconds: u64) -> Result<Value, String> {
         LAST_SAY_MS.store(now_ms(), std::sync::atomic::Ordering::SeqCst);
         match crate::voice_ask::ask(&self.app, &question, wait_seconds).await? {
@@ -1212,9 +1230,18 @@ mod tests {
     }
 
     #[test]
+    fn computer_use_widens_both_entries_to_thirty_steps_and_five_minutes() {
+        for limits in [game_limits(), chat_limits()] {
+            assert!(limits.extend_on.iter().any(|t| t == "game.act"));
+            assert_eq!(limits.extended_steps, 30);
+            assert_eq!(limits.extended_duration.as_secs(), 300);
+        }
+    }
+
+    #[test]
     fn game_limits_are_tighter_than_chat() {
         let game = game_limits();
-        let chat = AgentLimits::default();
+        let chat = chat_limits();
         assert!(game.max_steps < chat.max_steps);
         assert!(game.max_duration < chat.max_duration);
     }
