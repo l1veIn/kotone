@@ -17,6 +17,7 @@ pub mod agent_requests;
 pub mod artifacts;
 pub mod catalog;
 pub mod client;
+pub mod computer_use;
 pub mod discovery;
 pub mod events;
 pub mod host;

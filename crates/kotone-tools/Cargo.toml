@@ -19,6 +19,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json"] }
 png = "0.17"
 sha2 = "0.10"
 base64 = "0.22"
+# computer use 截图：缩放与 JPEG 编码（image 已在依赖树里，只多开 jpeg 编解码）
+image_codec = { package = "image", version = "0.25", default-features = false, features = ["jpeg"] }
 getrandom = "0.2"
 
 [features]
