@@ -86,9 +86,35 @@ impl OpenAiModel {
     pub fn to_rig(&self, request: &ModelRequest) -> Result<(CompletionRequest, NameMap), AiError> {
         let names = NameMap::build(request);
         let mut history: Vec<RigMessage> = Vec::new();
-        for message in &request.messages {
+        // 工具带回的图片：OpenAI 兼容接口的工具结果只能是文字，而且一次工具调用的全部结果
+        // 必须紧挨着。所以等这一组工具结果结束后，再补一条带图片的用户消息（说明是数据）。
+        let mut pending: Vec<UserContent> = Vec::new();
+        for (i, message) in request.messages.iter().enumerate() {
             if let Some(m) = convert_message(message, &names)? {
                 history.push(m);
+            }
+            if let Message::Tool { name, images, .. } = message {
+                let note = super::render_tool_images(name, images);
+                if !note.is_empty() {
+                    pending.push(UserContent::text(note));
+                }
+                for image in images {
+                    if let Attachment::Image { mime, data, .. } = image {
+                        if !data.is_empty() {
+                            pending.push(UserContent::image_base64(
+                                data.clone(),
+                                media_type(mime),
+                                None,
+                            ));
+                        }
+                    }
+                }
+            }
+            let group_ends = !matches!(request.messages.get(i + 1), Some(Message::Tool { .. }));
+            if group_ends && !pending.is_empty() {
+                history.push(RigMessage::User {
+                    content: std::mem::take(&mut pending),
+                });
             }
         }
         let prompt = history
