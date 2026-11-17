@@ -9,6 +9,9 @@
   import AssistantSettings from "./assistant/AssistantSettings.svelte";
   import AgentSettings from "./assistant/AgentSettings.svelte";
   import OpenRunsSummary from "./assistant/OpenRunsSummary.svelte";
+  import IdentityTab from "./assistant/IdentityTab.svelte";
+  import MemoryTab from "./assistant/MemoryTab.svelte";
+  import SkillsTab from "./assistant/SkillsTab.svelte";
 
   let { onOpenConnections, onOpenAutomation, onOpenTalk, chatRequest = 0 }: {
     onOpenConnections: () => void;
@@ -19,11 +22,17 @@
     chatRequest?: number;
   } = $props();
   const chat = useAgentChat();
-  let section = $state<"chat" | "settings">("chat");
+  type Section = "chat" | "identity" | "memory" | "skills" | "settings";
+  let section = $state<Section>("chat");
   let connections = $state<ConnectionInfo[]>([]);
   let connectionError = $state("");
   const ready = $derived(!!connections.find((item) => item.id === $settingsStore?.assistant.connectionId)?.hasApiKey);
-  const tabs = [{ id: "chat", label: "聊天" }, { id: "settings", label: "设置" }] as const;
+  // ADR 023：聊天 · 她是谁 · 记忆 · 技能 · 设置
+  const tabs = [
+    { id: "chat", label: "聊天" }, { id: "identity", label: "她是谁" }, { id: "memory", label: "记忆" },
+    { id: "skills", label: "技能" }, { id: "settings", label: "设置" },
+  ] as const;
+  const name = $derived($settingsStore?.agent?.identity?.name?.trim() || "琴音");
 
   // 只在请求号变化时切换（首次挂载不算）。
   let seenRequest: number | null = null;
@@ -44,7 +53,7 @@
 <div class="flex flex-col {section === 'chat' ? 'h-full' : ''}" data-testid="assistant-page">
   <!-- 分页切换放在页名旁（右上角留给提示消息） -->
   <header class="sticky top-0 z-20 flex h-13 shrink-0 items-center gap-3 border-b border-hairline bg-background/85 px-5 backdrop-blur">
-    <h1 class="m-0 shrink-0 text-[15px] font-semibold text-foreground">琴音</h1>
+    <h1 class="m-0 shrink-0 text-[15px] font-semibold text-foreground" data-testid="assistant-page-title">{name}</h1>
     <nav class="flex shrink-0 rounded-lg bg-muted/70 p-0.5" aria-label="琴音分类">
       {#each tabs as tab}
         {@const active = section === tab.id}
@@ -69,6 +78,13 @@
   <div class="min-h-0 flex-1" class:hidden={section !== "chat"} data-testid="assistant-tasks">
     <AssistantChat {ready} active={section === "chat"} onOpenSettings={() => { section = "settings"; }} {onOpenTalk} />
   </div>
+  {#if section === "identity" || section === "memory" || section === "skills"}
+    <div class="ui-scope mx-auto w-full max-w-3xl px-6 pt-7 pb-10 text-foreground" data-testid={`assistant-${section}-tab`}>
+      {#if section === "identity"}<IdentityTab {onOpenTalk} />
+      {:else if section === "memory"}<MemoryTab />
+      {:else}<SkillsTab />{/if}
+    </div>
+  {/if}
   {#if section === "settings"}
     <div class="ui-scope mx-auto w-full max-w-3xl space-y-6 px-6 pt-7 pb-10 text-foreground" data-testid="assistant-settings-tab">
       <div>

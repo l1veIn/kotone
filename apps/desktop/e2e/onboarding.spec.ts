@@ -23,14 +23,31 @@ test("forced onboarding completes the full guided setup and can be reopened", as
   await page.getByRole("button", { name: "重新录入", exact: true }).click();
   await page.keyboard.press("F9");
   await expect(page.getByTestId("onboarding-hotkey").getByText("F9", { exact: true })).toBeVisible();
-  // 0.1.6 起引导为 3 步：第三步「完成」保存配置并直接进入主页（发送测试暂缓）
+  // 0.1.6 起引导为 3 步：第三步「完成」保存配置；0.2.0 起再介绍一下游戏陪玩（可选，ADR 023）
   await page.getByRole("button", { name: "完成", exact: true }).click();
+  await expect(page.getByTestId("onboarding-companion")).toBeVisible();
+  await page.getByTestId("onboarding-companion-skip").click();
   await expect(onboarding).toBeHidden();
+  await expect(page.getByTestId("general-page")).toBeVisible();
 
   await page.getByTestId("settings-nav-advanced").click();
   await page.getByTestId("advanced-nav-system").click();
   await page.getByRole("button", { name: "重新运行向导", exact: true }).click();
   await expect(onboarding).toBeVisible();
+});
+
+test("the last onboarding page can take the player straight to the companion", async ({ page }) => {
+  await page.goto("/#/settings?onboarding=always");
+  await page.getByRole("button", { name: "开始设置", exact: true }).click();
+  await page.getByRole("button", { name: "下一步", exact: true }).click();
+  await page.getByRole("button", { name: "下载推荐模型", exact: true }).click();
+  await expect(page.getByText("✓ 已就绪", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "下一步", exact: true }).click();
+  await expect(page.getByTestId("input-environment-ready")).toBeVisible();
+  await page.getByRole("button", { name: "完成", exact: true }).click();
+  await page.getByTestId("onboarding-companion-open").click();
+  await expect(page.getByTestId("onboarding")).toBeHidden();
+  await expect(page.getByTestId("assistant-nav-chat")).toHaveAttribute("aria-current", "page");
 });
 
 test("model setup confirms storage before download and keeps navigation in view", async ({

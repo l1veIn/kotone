@@ -296,7 +296,7 @@
 
   <!-- 首启向导覆盖层（加载完成且未完成向导时弹出） -->
   {#if showOnboarding && !loading}
-    <Onboarding onDone={() => (showOnboarding = false)} />
+    <Onboarding onDone={(next) => { showOnboarding = false; if (next === "assistant") openChat(); }} />
   {/if}
 
   <!-- 管理员提权提示 · 第一段（Windows 未提权且用户未表态时弹一次） -->

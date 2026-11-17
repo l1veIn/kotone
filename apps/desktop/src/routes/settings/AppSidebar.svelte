@@ -16,7 +16,7 @@
   import type { Component } from "svelte";
   import ConversationList from "../../lib/agentChat/ConversationList.svelte";
   import { useAgentChat } from "../../lib/agentChat/context";
-  import { toast, errText } from "../../lib/stores/ui";
+  import { toast, errText, settingsStore } from "../../lib/stores/ui";
   import iconSrc from "../../assets/brand/icon-src.webp";
 
   let { page, rail = false, onNavigate, onOpenChat }: {
@@ -30,7 +30,9 @@
 
   const chat = useAgentChat();
   // ADR 023：侧栏分两组。语音输入仍排第一（首页），游戏陪玩是第二组；页面内部标识不变。
-  const groups: { label: string; items: { id: PageId; label: string; icon: Component }[] }[] = [
+  // 「琴音」一项用她现在的名字（ADR 022：可以改名）。
+  const companionName = $derived($settingsStore?.agent?.identity?.name?.trim() || "琴音");
+  const groups: { label: string; items: { id: PageId; label: string; icon: Component }[] }[] = $derived([
     {
       label: "语音输入",
       items: [
@@ -42,13 +44,13 @@
     {
       label: "游戏陪玩",
       items: [
-        { id: "assistant", label: "琴音", icon: Bot },
+        { id: "assistant", label: companionName, icon: Bot },
         { id: "talk", label: "交流", icon: MessagesSquare },
         { id: "game", label: "游戏", icon: Gamepad2 },
         { id: "automation", label: "自动化", icon: Zap },
       ],
     },
-  ];
+  ]);
   const footItems: { id: PageId; label: string; icon: Component }[] = [
     { id: "advanced", label: "设置", icon: Settings2 },
     { id: "about", label: "关于", icon: Info },
@@ -93,7 +95,7 @@
     class="flex h-9 w-full shrink-0 items-center gap-2.5 rounded-lg border border-hairline text-[13px] text-foreground transition-colors hover:border-primary/40 hover:bg-sidebar-accent/60
       {rail ? 'justify-center' : 'px-2.5'}">
     <MessageSquarePlus class="size-4 shrink-0 text-primary" />
-    {#if !rail}<span>新对话</span><span class="ml-auto text-[11px] text-sidebar-foreground/50">琴音</span>{/if}
+    {#if !rail}<span>新对话</span><span class="ml-auto text-[11px] text-sidebar-foreground/50">{companionName}</span>{/if}
   </button>
 
   <nav class="mt-3 flex shrink-0 flex-col gap-px" aria-label="设置分类">

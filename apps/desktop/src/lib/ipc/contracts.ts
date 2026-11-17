@@ -274,6 +274,10 @@ export interface AgentConfig {
   inGame: boolean;
   /** 游戏内交给琴音后 1.5 秒还没出声，先说一句“好，我看看”（默认开）。 */
   progressSpeech?: boolean;
+  /** 名字与头像（空 = “琴音”与内置形象）。头像是工作区里的文件名，用 workspaceSetAvatar 上传。 */
+  identity?: { name: string; avatar: string };
+  /** 子会话（同传等）用的模型 id；空 = 和琴音同一个模型。 */
+  subagents?: { model: string };
 }
 
 /** 语音唤醒设置（config.json `assistant.wake`）。 */

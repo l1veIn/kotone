@@ -45,7 +45,8 @@
   import ManualDownloadDialog from "../../lib/components/ManualDownloadDialog.svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
 
-  let { onDone }: { onDone: () => void } = $props();
+  /** next = "assistant"：最后一步选了“去认识她”，进「琴音」页。 */
+  let { onDone }: { onDone: (next?: "assistant") => void } = $props();
 
   let step = $state(0);
   let loadingResources = $state(true);
@@ -425,7 +426,9 @@
       finishing = false;
       return;
     }
-    onDone();
+    // ADR 023 第 3 步：语音输入设好后，介绍一下游戏陪玩（可选，不打断只想用输入法的人）。
+    finishing = false;
+    step = 4;
   }
 
 
@@ -877,10 +880,40 @@
           </button>
         </div>
       </div>
+    {:else if step === 4}
+      <div class="relative p-7" data-testid="onboarding-companion">
+        <div class="flex items-start gap-4">
+          <img src={stickerHello} alt="" class="h-11 w-11 shrink-0" />
+          <div>
+            <p class="text-[11px] font-semibold tracking-wide text-primary">语音输入设好了 · 还有一件事（可选）</p>
+            <h2 class="mt-0.5 text-lg font-bold">让琴音陪你玩游戏</h2>
+            <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
+              连上一个 AI 之后，琴音能在游戏里听你说话、看画面、替你按键，还能帮你听懂外语队友、用麦克风替你说话。
+            </p>
+          </div>
+        </div>
+        <ul class="mt-5 space-y-2 text-xs leading-relaxed text-muted-foreground">
+          <li class="rounded-xl bg-muted/40 px-3.5 py-2.5 ring-1 ring-hairline"><span class="font-semibold text-foreground">按住陪玩热键或喊她的名字</span>，问“这把该出什么”“帮我盯着小地图”</li>
+          <li class="rounded-xl bg-muted/40 px-3.5 py-2.5 ring-1 ring-hairline"><span class="font-semibold text-foreground">她会记住你和每个游戏</span>：习惯、按键、打法，在「琴音 → 记忆」里随时能看能改</li>
+          <li class="rounded-xl bg-muted/40 px-3.5 py-2.5 ring-1 ring-hairline"><span class="font-semibold text-foreground">动键鼠前会先问你</span>，操作时按 Esc 随时停下</li>
+        </ul>
+        <div class="mt-6 flex items-center justify-between">
+          <button class="text-xs text-muted-foreground hover:text-foreground/90" data-testid="onboarding-companion-skip" onclick={() => onDone()}>
+            先只用语音输入
+          </button>
+          <button
+            class="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
+            data-testid="onboarding-companion-open"
+            onclick={() => onDone("assistant")}
+          >
+            去认识她
+          </button>
+        </div>
+      </div>
     {/if}
 
     <div class="relative flex justify-center gap-1.5 pb-4">
-      {#each [0, 1, 2, 3] as i}
+      {#each [0, 1, 2, 3, 4] as i}
         <span
           class="h-1.5 rounded-full transition-all {i === step
             ? 'w-5 bg-primary'

@@ -87,6 +87,7 @@
         {/each}
       </div>
     {/if}
+    {#if chat.conversation?.parent}<p role="note" class="m-0 px-2 text-xs text-muted-foreground" data-testid="agent-child-notice">这是琴音派出的子会话「{chat.conversation.label ?? ""}」的记录，只能查看；在这里发消息会开始一段新对话。</p>{/if}
     {#if sendError}<p role="alert" class="m-0 px-2 text-xs text-destructive" data-testid="agent-send-error">{sendError}</p>{/if}
     {#if sendNotice}<p role="status" class="m-0 px-2 text-xs text-primary" data-testid="agent-send-notice">{sendNotice}</p>{/if}
     <ChatComposer

@@ -17,8 +17,9 @@ export type AgentMessage =
   | { role: "tool"; callId: string; name: string; content: string; isError: boolean; untrusted: boolean; atMs: number }
   | { role: "notice"; text: string; atMs: number };
 
-export interface Conversation { version: number; id: string; title: string; createdAtMs: number; updatedAtMs: number; messages: AgentMessage[] }
-export interface ConversationSummary { id: string; title: string; createdAtMs: number; updatedAtMs: number; messageCount: number }
+/** `parent` / `label`：琴音派出的子会话（ADR 022），只能查看。 */
+export interface Conversation { version: number; id: string; title: string; createdAtMs: number; updatedAtMs: number; messages: AgentMessage[]; parent?: string | null; label?: string | null }
+export interface ConversationSummary { id: string; title: string; createdAtMs: number; updatedAtMs: number; messageCount: number; parent?: string | null }
 
 export type StopReason = { kind: "completed" | "truncated" | "step-limit" | "time-limit" | "cancelled" } | { kind: "failed"; message: string };
 export type ToolStatus = "pending" | "in_progress" | "completed" | "failed";
