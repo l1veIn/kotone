@@ -50,3 +50,14 @@
 1. 第一版只用 SenseVoice（中英日韩粤）；更多语种以后加。
 2. 同传默认用弹幕或气泡显示，不出声。
 3. 第一版不区分说话人（这是录音工具的属性，见“约束”）。
+
+## 实施记录（2026-11-18，分支 `claude/kotone-agent`）
+
+- 录音：`kotone-platform-windows::app_audio`，wasapi-rs 0.27 的进程回环录音（32 位浮点 48 kHz 立体声、事件驱动、自动格式转换），混成单声道、重采样到 16 kHz。
+  - **和设计的出入**：设计是“按进程树录（含子进程）”。实测这台机器上“含子进程”只覆盖直接子进程（Python 启动器 → 解释器 → 播放进程这种孙进程录不到）。改成**同名的每个进程各录一路（最多 32 个，不含子进程）**，由 `Follower` 跟着正在出声的那一路（另一路要等它安静 2 秒才能接手；跟随那一路的停顿照常交出去，切句要靠它）。限制：开始监听**之后**才启动的同名进程录不到，需要重新开始监听。
+- 识别：`kotone-stt::transcriber`，silero VAD（停顿 0.6 秒算一句、最长 15 秒）+ SenseVoice（`language = auto`、ITN 开）。sherpa-onnx 的 Rust 绑定拿不到 SenseVoice 判出的语种，按文字的书写系统粗判（ko / ja / ru / th / zh / en），只作提示。
+- 桌面：`voice_listen.rs`，监听按会话 id 登记；每一句发 `voice.heard` 事件并作为一条 `source = "heard"` 的消息交给所属会话（连着几句会合并成一条再交给模型）。会话结束、停止热键、托盘“停止自动化”、语音“停下”、Kotone 退出都会停掉；有监听时气泡显示“正在听队友”；停止时日志记一行统计（听到多少秒、峰值、几句）。
+- 测试：
+  - 单元：语种粗判、跟随规则、子会话合并消息与取回复；`transcribes_a_wav`（真模型、SAPI 合成的英语句子 → “Enemmy behind the Red house.” / “There're two of them.”）。
+  - 真机（隔离 `KOTONE_HOME`，假 AI，`scripts/manual-e2e/sessions_e2e.py`）：琴音派出“同传”子会话 → 子会话开始听 python.exe → 另一个 Python 进程播放英语句子 → 子会话收到“Enmy behind the Red house.”，弹幕显示译文并 `session.send` 回主会话 → “停止同传”后子会话与监听一起停。全部通过。
+- 没验证：真实游戏或 Discord 里的队友语音、中文以外的非英语语种（只有模型本身支持）、长时间（一局游戏）连续运行的资源占用。

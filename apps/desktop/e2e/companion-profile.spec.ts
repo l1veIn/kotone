@@ -51,6 +51,8 @@ test("rename her, edit SOUL, memory and game memory, manage skills", async ({ pa
 
   // 技能：列表与删除
   await page.getByTestId("assistant-nav-skills").click();
+  await expect(page.getByTestId("assistant-nav-skills")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("assistant-nav-memory")).not.toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("skill")).toHaveCount(1);
   await expect(page.getByTestId("skill")).toContainText("pubg-callouts");
   await page.screenshot({ path: testInfo.outputPath("skills.png"), fullPage: true });

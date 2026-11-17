@@ -87,3 +87,14 @@
 1. 子会话可以 `session.send` 给自己的父会话——可以。
 2. 首次运行不做起名仪式——可以。
 3. 放进 0.2.0（用户：以后发这些内容升级起来太麻烦）。
+
+## 实施记录（2026-11-18，分支 `claude/kotone-agent`）
+
+1. 会话：对话存储加 `parent`、`label`（旧对话照常读）；`session.spawn / send / list / history / stop` 在桌面端实现（`agent.rs`）。子会话：最多同时 5 个；每轮最多 8 步、90 秒；模型用 `agent.subagents.model`（空 = 和琴音同一个）；只能用 `CHILD_TOOLS` 里的工具；只能给父会话发消息；权限询问一律拒绝（子会话没人能回答）。子会话结束时由代码停掉它名下的监听。玩家在对话列表里选中子会话的记录时只能看，发消息会开新对话。
+2. 工作区：`kotone-agent::workspace`（`<KOTONE_HOME>/agent/workspace`），`SOUL.md` / `IDENTITY.md` / `USER.md` / `MEMORY.md` / `memory/games/<id>.md` / `skills/<name>/SKILL.md`；`memory` 工具整批原子生效、有字数上限、写入前做注入扫描；快照在每段对话第一次用时冻结。
+3. 游戏记忆：**没做 `companionNotes` 的迁移**——旧的游戏笔记照常读，这个游戏有了游戏记忆以后以游戏记忆为准。Skill：`skill.view`、`skill.manage`（新建、修改、加删文件、删除）、从文件夹导入；“导出”就是在资源管理器里打开 Skill 的文件夹拷走；**没做版本保留**。
+4. 身份：名字、头像在设置 `agent.identity`（设置优先，回退 `IDENTITY.md`，再回退“琴音”），气泡、侧栏、页标题、系统提示都用它。**唤醒词没有跟着名字改**：仍是预置的“琴音琴音 / 你好琴音”；按新名字生成拼音唤醒词需要实测准确度，留到以后。
+5. ADR 021 见那边的实施记录。
+6. 文档：CHANGELOG、THIRD_PARTY_NOTICES（OpenClaw、Hermes Agent 的 MIT 声明，wasapi-rs 等）。
+
+测试：工作区与工具的单元测试；设置页 Playwright（改名、编辑 SOUL / 记忆 / 游戏记忆、删技能、头像超限）；真机（隔离实例，经 WebView2 调试端口只发 DOM 事件）：读 SOUL、改名写进配置、SOUL 写进文件、注入文本被拒、头像经 Tauri 传进工作区并显示、USER.md 保存、游戏记忆与技能列出。没验证：真实模型下琴音自己写记忆 / 技能的效果。

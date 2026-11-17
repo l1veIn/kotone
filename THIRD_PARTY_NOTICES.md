@@ -147,4 +147,21 @@ Kotone does not ship VB-CABLE. When the user asks for it, Kotone downloads the o
 - cpal `examples/feedback.rs` (Apache-2.0), https://github.com/RustAudio/cpal — input stream → buffer → output stream
 - AudioDeviceCmdlets (MIT) and EarTrumpet (MIT) — the `IPolicyConfig` COM interface (`SetDefaultEndpoint`) used to change the Windows default recording device
 
+## Sub-sessions, memory, SOUL, skills and the ear (ADR 021 / 022)
+
+### Adapted designs (MIT; notices kept)
+
+- OpenClaw, Copyright (c) 2026 OpenClaw Foundation, MIT License, https://github.com/openclaw/openclaw — workspace files (`SOUL.md`, `IDENTITY.md` with `- **Name:**` fields, `USER.md`, `MEMORY.md`), `sessions_spawn` / `sessions_send` semantics (a child reports back to its parent; children get a minimal prompt and an allow-listed tool set), identity set from settings overriding `IDENTITY.md`.
+- Hermes Agent, Copyright (c) 2025 Nous Research, MIT License, https://github.com/NousResearch/hermes-agent — the `memory` tool (add / replace / remove on bounded `MEMORY.md` 2,200 and `USER.md` 1,375 character budgets, frozen snapshot per session, prompt-injection scan before writing) and skill management (`skill_view`, `skill_manage`).
+- Agent Skills format, https://agentskills.io — `SKILL.md` with YAML frontmatter (`name`, `description`), one folder per skill; skills are shareable packs.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+
+### Code dependencies and references
+
+- wasapi-rs (`wasapi` crate), MIT License, https://github.com/HEnquist/wasapi-rs — process loopback capture (`AudioClient::new_application_loopback_client`), following its `examples/record_application.rs`.
+- Microsoft ApplicationLoopback sample (MIT), https://github.com/microsoft/windows-classic-samples — `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK` (Windows 10 build 20348 or later).
+- auto-caption (MIT), https://github.com/HiMeditator/auto-caption — continuous captions with sherpa-onnx SenseVoice and endpoint detection (design reference; no code copied).
+- Speech recognition of heard audio uses the SenseVoice and silero VAD models listed above.
+
 These notices describe third-party components and models; they do not grant a license to Kotone itself.
