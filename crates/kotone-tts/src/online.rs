@@ -1,4 +1,5 @@
-//! 在线语音合成：OpenAI 兼容 `/audio/speech` 与火山语音合成 HTTP 接口（`/api/v1/tts`）。
+//! 在线语音合成：OpenAI 兼容 `/audio/speech`、火山语音合成 HTTP 接口（`/api/v1/tts`）与
+//! DeepSeek 官方语音合成（`/v1/tools/tts`）。
 //!
 //! - 整段合成（不流式），要求 WAV 返回，解码后交给与 Kokoro 相同的播放与取消路径。
 //! - 连接与密钥由调用方在每次合成时解析（[`OnlineResolver`]），密钥只来自凭据库，
@@ -22,6 +23,7 @@ pub const VOLCANO_DEFAULT_CLUSTER: &str = "volcano_tts";
 pub enum OnlineKind {
     OpenAi,
     Volcano,
+    Deepseek,
 }
 
 impl OnlineKind {
@@ -29,6 +31,7 @@ impl OnlineKind {
         match self {
             Self::OpenAi => voice::OPENAI,
             Self::Volcano => voice::VOLCANO,
+            Self::Deepseek => voice::DEEPSEEK,
         }
     }
 }
@@ -59,6 +62,22 @@ impl std::fmt::Debug for OnlineConfig {
 }
 
 pub type OnlineResolver = Arc<dyn Fn() -> Result<OnlineConfig, String> + Send + Sync>;
+
+/// DeepSeek 连接的地址常写成 `https://api.deepseek.com` 或 `…/v1`：语音接口在站点根下的 `/v1/tools/tts`。
+pub fn deepseek_origin(base_url: &str) -> String {
+    let base = base_url.trim().trim_end_matches('/');
+    let base = if base.is_empty() {
+        DEEPSEEK_ORIGIN
+    } else {
+        base
+    };
+    base.strip_suffix("/v1")
+        .unwrap_or(base)
+        .trim_end_matches('/')
+        .to_string()
+}
+
+pub const DEEPSEEK_ORIGIN: &str = "https://api.deepseek.com";
 
 /// 语速 -10..=10 → 倍速 0.5..=2.0（与 Kokoro 一样只改时长，不改音高）。
 pub fn speed_ratio(rate: i32) -> f32 {
@@ -111,6 +130,7 @@ impl OnlineSynth {
             return Err(match self.kind {
                 OnlineKind::OpenAi => "在线语音合成的 API 连接尚未保存密钥".into(),
                 OnlineKind::Volcano => "火山语音合成缺少 Access Token".into(),
+                OnlineKind::Deepseek => "DeepSeek 连接尚未保存 API key".into(),
             });
         }
         Ok((config, native))
@@ -136,6 +156,7 @@ impl OnlineSynth {
         let bytes = match self.kind {
             OnlineKind::OpenAi => self.openai(&config, &native, request)?,
             OnlineKind::Volcano => self.volcano(&config, &native, request)?,
+            OnlineKind::Deepseek => self.deepseek(&config, &native, request)?,
         };
         crate::wav::decode(&bytes)
     }
@@ -191,6 +212,29 @@ impl OnlineSynth {
             "voice": voice,
             "response_format": "wav",
             "speed": speed_ratio(request.rate),
+        });
+        self.send(
+            self.client()?
+                .post(url)
+                .bearer_auth(config.api_key.trim())
+                .json(&body),
+        )
+    }
+
+    /// DeepSeek 官方语音合成：`POST <站点>/v1/tools/tts`，`{text, voice_id, format: wav}`。
+    /// 接口没有语速参数（语速设置对它不生效）；按字符计费，汉字算 2 个字符。
+    fn deepseek(
+        &self,
+        config: &OnlineConfig,
+        voice: &str,
+        request: &SpeechRequest,
+    ) -> Result<Vec<u8>, String> {
+        let url = format!("{}/v1/tools/tts", deepseek_origin(&config.base_url));
+        let body = json!({
+            "text": request.text,
+            "voice_id": voice,
+            "format": "wav",
+            "filter_markdown": true,
         });
         self.send(
             self.client()?
@@ -397,6 +441,58 @@ mod tests {
         tokio::task::spawn_blocking(move || drop(synth))
             .await
             .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deepseek_request_uses_the_site_root_and_the_connection_key() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/tools/tts"))
+            .and(header("authorization", "Bearer secret-key"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(crate::wav::encode_pcm16(
+                    &[5, -5, 5, -5],
+                    24_000,
+                    None,
+                )),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        // 连接地址写成 …/v1 也能找到站点根下的语音接口
+        let synth = OnlineSynth::new(
+            OnlineKind::Deepseek,
+            resolver(format!("{}/v1", server.uri()), "deepseek/stella"),
+        )
+        .unwrap();
+        let speech = tokio::task::spawn_blocking(move || {
+            let result = synth.synthesize(&request(None));
+            drop(synth);
+            result
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(speech.samples.len(), 4);
+        let body: Value =
+            serde_json::from_slice(&server.received_requests().await.unwrap()[0].body).unwrap();
+        assert_eq!(body["text"], "队友说先别打龙");
+        assert_eq!(body["voice_id"], "stella");
+        assert_eq!(body["format"], "wav");
+        assert!(body.get("speed").is_none(), "接口没有语速参数");
+    }
+
+    #[test]
+    fn deepseek_origin_strips_the_api_version() {
+        assert_eq!(
+            deepseek_origin("https://api.deepseek.com/v1"),
+            "https://api.deepseek.com"
+        );
+        assert_eq!(
+            deepseek_origin("https://api.deepseek.com/"),
+            "https://api.deepseek.com"
+        );
+        assert_eq!(deepseek_origin(""), DEEPSEEK_ORIGIN);
     }
 
     #[test]

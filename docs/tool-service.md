@@ -225,7 +225,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `models.install_guide` | `id`、可选 `category` | 自动下载失败时的手动安装指引（OCR 包在设置页「导入」时仍逐文件校验） |
 
 在线模型的配置项（例如 DeepSeek OCR 绑定的 API 连接）用 `settings.update {"modelConfigs": {"<模型 id>": {"connection": "<连接 id>"}}}` 写入；密钥只在凭据管理器，用 `connections.upsert` 写。
-| `speech.status` | 无 | `package`（Kokoro 语音包：installed/downloading/字节/阶段/错误）、当前语音引擎的 `voices[]`（编号为 `提供方/声音`，如 `system/…`、`kokoro/zf_001`、`openai/alloy`、`volcano/BV700_streaming`）、`voicesError`。语音引擎也可用 `models.activate {"category": "tts"}` 选择（`system-speech` / `kokoro-zh` / `openai-compat-tts` / `volcano-tts`），在线引擎的连接、模型与声音写 `settings.update {"modelConfigs": {…}}` |
+| `speech.status` | 无 | `package`（Kokoro 语音包：installed/downloading/字节/阶段/错误）、当前语音引擎的 `voices[]`（编号为 `提供方/声音`，如 `system/…`、`kokoro/zf_001`、`openai/alloy`、`volcano/BV700_streaming`、`deepseek/stella`）、`voicesError`。默认“自动”：琴音的连接是 DeepSeek 时用 DeepSeek 语音（`deepseek-tts`），否则系统语音（`settings.update {"assistant": {"ttsModelId": ""}}` 回到自动）。语音引擎也可用 `models.activate {"category": "tts"}` 明确选择（`deepseek-tts` / `system-speech` / `kokoro-zh` / `openai-compat-tts` / `volcano-tts`），在线引擎的连接、模型与声音写 `settings.update {"modelConfigs": {…}}` |
 | `speech.model.download` | 无 | `status=started`（或已安装时 `installed`）；结果 `speech.model.download.finished` / `failed`；与模型下载共用唯一名额 |
 | `wake.status` | 无 | 语音唤醒：`state`（`off` / `waitingRuntime` 语音识别没在运行 / `modelMissing` / `listening` / `error`，出错带 `message`）、`modelReady`、`downloading`、`detections`（本次启动以来唤醒次数）。开关与唤醒词等写 `settings.update {"assistant": {"wake": {…}}}`（见 `settings.describe "唤醒"`）；只在语音识别运行时监听，开启后麦克风常开（本机检测） |
 | `wake.model.download` | 无 | 下载唤醒模型（官方整包约 33 MB，只保留约 5.5 MB；逐文件 SHA-256），完成或失败才返回（给足 `timeoutMs`）；进度 `wake.model.progress`（至多每秒一次）；返回同 `wake.status` |

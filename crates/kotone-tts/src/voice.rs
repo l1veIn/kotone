@@ -8,8 +8,9 @@ pub const SYSTEM: &str = "system";
 pub const KOKORO: &str = "kokoro";
 pub const OPENAI: &str = "openai";
 pub const VOLCANO: &str = "volcano";
+pub const DEEPSEEK: &str = "deepseek";
 
-const PROVIDERS: &[&str] = &[SYSTEM, KOKORO, OPENAI, VOLCANO];
+const PROVIDERS: &[&str] = &[SYSTEM, KOKORO, OPENAI, VOLCANO, DEEPSEEK];
 
 /// 加上提供方前缀（已带本提供方前缀的原样返回；旧的 `kokoro:` 写法改成 `kokoro/`）。
 pub fn qualify(provider: &str, id: &str) -> String {

@@ -159,11 +159,16 @@ pub enum TtsEngine {
     Openai,
     /// 火山语音合成（在线）。
     Volcano,
+    /// DeepSeek 官方语音合成（在线，`/v1/tools/tts`），复用 DeepSeek 连接的 API key。
+    Deepseek,
 }
 
 /// 在线语音合成的清单 ID（与 `kotone_tts::catalog` 一致）。
 pub const OPENAI_TTS_MODEL_ID: &str = "openai-compat-tts";
 pub const VOLCANO_TTS_MODEL_ID: &str = "volcano-tts";
+pub const DEEPSEEK_TTS_MODEL_ID: &str = "deepseek-tts";
+/// `ttsModelId` 写这个值 = 用户明确选了本地语音（`speechEngine`），不参与“自动”。
+pub const LOCAL_TTS_MODEL_ID: &str = "local";
 
 /// 快捷消息最多几条（每条一个固定的具名热键槽位 `quick-message-<n>`）。
 pub const MAX_QUICK_MESSAGES: usize = 8;
@@ -302,15 +307,31 @@ impl Default for AssistantConfig {
 }
 
 impl AssistantConfig {
-    /// 实际使用的语音合成引擎。
+    /// 设置里选定的语音合成引擎（不含“自动”的判断，见 [`Self::tts_engine_auto`]）。
     pub fn tts_engine(&self) -> TtsEngine {
         match self.tts_model_id.trim() {
             OPENAI_TTS_MODEL_ID => TtsEngine::Openai,
             VOLCANO_TTS_MODEL_ID => TtsEngine::Volcano,
+            DEEPSEEK_TTS_MODEL_ID => TtsEngine::Deepseek,
             _ => match self.speech_engine {
                 SpeechEngine::System => TtsEngine::System,
                 SpeechEngine::Kokoro => TtsEngine::Kokoro,
             },
+        }
+    }
+
+    /// 是不是“自动”（默认）：没有明确选过语音（`ttsModelId` 为空、本地引擎是系统语音）。
+    pub fn tts_is_auto(&self) -> bool {
+        self.tts_model_id.trim().is_empty() && self.speech_engine == SpeechEngine::System
+    }
+
+    /// 实际使用的引擎：“自动”时，能用 DeepSeek 语音（琴音的连接是 DeepSeek 且有密钥）
+    /// 就用它，否则用系统语音。`deepseek_ready` 只在“自动”时才调用（要查凭据库）。
+    pub fn tts_engine_auto(&self, deepseek_ready: impl FnOnce() -> bool) -> TtsEngine {
+        if self.tts_is_auto() && deepseek_ready() {
+            TtsEngine::Deepseek
+        } else {
+            self.tts_engine()
         }
     }
 
@@ -366,7 +387,10 @@ impl AssistantConfig {
         }
         if !matches!(
             self.tts_model_id.trim(),
-            "" | OPENAI_TTS_MODEL_ID | VOLCANO_TTS_MODEL_ID
+            "" | LOCAL_TTS_MODEL_ID
+                | OPENAI_TTS_MODEL_ID
+                | VOLCANO_TTS_MODEL_ID
+                | DEEPSEEK_TTS_MODEL_ID
         ) {
             return Err("在线语音合成模型无效".into());
         }
@@ -551,6 +575,40 @@ mod tests {
         }
         .validate()
         .is_err());
+    }
+
+    #[test]
+    fn deepseek_speech_is_the_automatic_default() {
+        let auto = AssistantConfig::default();
+        assert!(auto.tts_is_auto());
+        assert_eq!(auto.tts_engine_auto(|| true), TtsEngine::Deepseek);
+        assert_eq!(auto.tts_engine_auto(|| false), TtsEngine::System);
+        // 明确选了系统语音 / Kokoro / 别的在线引擎：不被“自动”换掉，也不去查凭据库
+        let explicit = |tts: &str, engine: SpeechEngine| AssistantConfig {
+            tts_model_id: tts.into(),
+            speech_engine: engine,
+            ..AssistantConfig::default()
+        };
+        let unused = || -> bool { panic!("不是自动时不该查 DeepSeek") };
+        assert_eq!(
+            explicit(LOCAL_TTS_MODEL_ID, SpeechEngine::System).tts_engine_auto(unused),
+            TtsEngine::System
+        );
+        assert_eq!(
+            explicit("", SpeechEngine::Kokoro).tts_engine_auto(unused),
+            TtsEngine::Kokoro
+        );
+        assert_eq!(
+            explicit(VOLCANO_TTS_MODEL_ID, SpeechEngine::System).tts_engine_auto(unused),
+            TtsEngine::Volcano
+        );
+        assert_eq!(
+            explicit(DEEPSEEK_TTS_MODEL_ID, SpeechEngine::System).tts_engine_auto(unused),
+            TtsEngine::Deepseek
+        );
+        for value in [LOCAL_TTS_MODEL_ID, DEEPSEEK_TTS_MODEL_ID] {
+            assert!(explicit(value, SpeechEngine::System).validate().is_ok());
+        }
     }
 
     #[test]

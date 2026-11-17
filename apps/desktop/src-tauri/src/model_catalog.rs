@@ -77,13 +77,17 @@ pub fn list_blocking(
                 .system_speech_error();
             Ok(kotone_tts::catalog::entries(
                 &kotone_tts::catalog::CatalogState {
-                    active: settings.assistant.tts_engine(),
+                    active: crate::assistant::effective_engine(app, &settings.assistant),
                     kokoro_installed: installed,
                     system_error,
                     openai: crate::tts_online::status(app, kotone_tts::online::OnlineKind::OpenAi),
                     volcano: crate::tts_online::status(
                         app,
                         kotone_tts::online::OnlineKind::Volcano,
+                    ),
+                    deepseek: crate::tts_online::status(
+                        app,
+                        kotone_tts::online::OnlineKind::Deepseek,
                     ),
                 },
             ))
@@ -99,9 +103,13 @@ pub fn active_id(app: &AppHandle, category: ModelCategory) -> Option<String> {
         ModelCategory::Ocr => {
             kotone_ocr::catalog::resolve_active(&settings, &models_root(&settings), verifier())
         }
-        ModelCategory::Tts => {
-            Some(kotone_tts::catalog::model_of(settings.assistant.tts_engine()).to_string())
-        }
+        ModelCategory::Tts => Some(
+            kotone_tts::catalog::model_of(crate::assistant::effective_engine(
+                app,
+                &settings.assistant,
+            ))
+            .to_string(),
+        ),
     }
 }
 
@@ -341,14 +349,16 @@ pub fn activate(app: &AppHandle, category: ModelCategory, id: &str) -> Result<Se
                 match kotone_tts::catalog::engine_of(id).ok_or_else(|| format!("未知模型 {id}"))?
                 {
                     TtsEngine::System => {
+                        // 明确选系统语音：写 "local"，不被“自动”换成 DeepSeek（新字段，旧版本不读）
                         next.assistant.speech_engine = SpeechEngine::System;
-                        next.assistant.tts_model_id.clear();
+                        next.assistant.tts_model_id =
+                            kotone_core::assistant::LOCAL_TTS_MODEL_ID.into();
                     }
                     TtsEngine::Kokoro => {
                         next.assistant.speech_engine = SpeechEngine::Kokoro;
                         next.assistant.tts_model_id.clear();
                     }
-                    TtsEngine::Openai | TtsEngine::Volcano => {
+                    TtsEngine::Openai | TtsEngine::Volcano | TtsEngine::Deepseek => {
                         next.assistant.tts_model_id = id.to_string();
                     }
                 }

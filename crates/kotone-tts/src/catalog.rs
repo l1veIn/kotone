@@ -22,6 +22,8 @@ pub const KOKORO_MODEL_ID: &str = "kokoro-zh";
 pub const OPENAI_MODEL_ID: &str = "openai-compat-tts";
 /// 火山语音合成（在线）。
 pub const VOLCANO_MODEL_ID: &str = "volcano-tts";
+/// DeepSeek 官方语音合成（在线）。
+pub const DEEPSEEK_MODEL_ID: &str = "deepseek-tts";
 /// Kokoro 包下载大小（tar.bz2）。
 pub const KOKORO_ARCHIVE_BYTES: u64 = 147_031_220;
 
@@ -48,6 +50,25 @@ const OPENAI_SCHEMA: &[StaticConfigField] = &[
         kind: "string",
         default: "alloy",
         options: &[],
+        required: true,
+    },
+];
+
+const DEEPSEEK_SCHEMA: &[StaticConfigField] = &[
+    StaticConfigField {
+        key: "connection",
+        label: "DeepSeek 连接（留空 = 用琴音正在用的 DeepSeek 连接）",
+        kind: "connection",
+        default: "",
+        options: &[],
+        required: false,
+    },
+    StaticConfigField {
+        key: "voice",
+        label: "声音",
+        kind: "enum",
+        default: "stella",
+        options: &[("stella", "海星（女声）"), ("tide", "暗潮（男声）")],
         required: true,
     },
 ];
@@ -98,6 +119,7 @@ pub fn engine_of(id: &str) -> Option<TtsEngine> {
         KOKORO_MODEL_ID => Some(TtsEngine::Kokoro),
         OPENAI_MODEL_ID => Some(TtsEngine::Openai),
         VOLCANO_MODEL_ID => Some(TtsEngine::Volcano),
+        DEEPSEEK_MODEL_ID => Some(TtsEngine::Deepseek),
         _ => None,
     }
 }
@@ -109,6 +131,7 @@ pub fn model_of(engine: TtsEngine) -> &'static str {
         TtsEngine::Kokoro => KOKORO_MODEL_ID,
         TtsEngine::Openai => OPENAI_MODEL_ID,
         TtsEngine::Volcano => VOLCANO_MODEL_ID,
+        TtsEngine::Deepseek => DEEPSEEK_MODEL_ID,
     }
 }
 
@@ -119,6 +142,7 @@ pub fn provider_of(engine: TtsEngine) -> &'static str {
         TtsEngine::Kokoro => crate::voice::KOKORO,
         TtsEngine::Openai => crate::voice::OPENAI,
         TtsEngine::Volcano => crate::voice::VOLCANO,
+        TtsEngine::Deepseek => crate::voice::DEEPSEEK,
     }
 }
 
@@ -145,6 +169,7 @@ pub fn online_voices(kind: OnlineKind) -> Vec<SpeechVoice> {
             ("BV001_streaming", "通用女声"),
             ("BV002_streaming", "通用男声"),
         ],
+        OnlineKind::Deepseek => &[("stella", "海星（女声）"), ("tide", "暗潮（男声）")],
     };
     list.iter()
         .map(|(id, name)| SpeechVoice {
@@ -168,6 +193,7 @@ pub struct CatalogState {
     pub system_error: Option<String>,
     pub openai: OnlineStatus,
     pub volcano: OnlineStatus,
+    pub deepseek: OnlineStatus,
 }
 
 /// 在线条目的固定描述。
@@ -212,7 +238,21 @@ fn online_entry(spec: &OnlineSpec, status: &OnlineStatus, active: bool) -> Catal
 /// 列出 TTS 类别的全部条目。
 pub fn entries(state: &CatalogState) -> Vec<CatalogModel> {
     let active = state.active;
-    vec![
+    let mut list = vec![
+        online_entry(
+            &OnlineSpec {
+                id: DEEPSEEK_MODEL_ID,
+                engine_id: "deepseek",
+                display_name: "DeepSeek 语音合成（在线，默认）",
+                description: "DeepSeek 官方语音，默认用琴音的 DeepSeek 连接与密钥，声音海星（女声）/暗潮（男声）；按字数计费（每万字符约 1.5–3 元，汉字算 2 个字符），每次播报都会把文字发给 DeepSeek，相同的话复用缓存；不支持调语速",
+                schema: DEEPSEEK_SCHEMA,
+                api_key_url: "https://platform.deepseek.com/api_keys",
+            },
+            &state.deepseek,
+            active == TtsEngine::Deepseek,
+        ),
+    ];
+    list.extend(vec![
         CatalogModel {
             category: ModelCategory::Tts,
             id: SYSTEM_MODEL_ID.into(),
@@ -289,7 +329,11 @@ pub fn entries(state: &CatalogState) -> Vec<CatalogModel> {
             &state.volcano,
             active == TtsEngine::Volcano,
         ),
-    ]
+    ]);
+    if let Some(deepseek) = list.first_mut() {
+        deepseek.recommended = true;
+    }
+    list
 }
 
 #[cfg(test)]
@@ -307,8 +351,13 @@ mod tests {
                 ready: true,
                 reason: None,
             },
+            deepseek: OnlineStatus::default(),
         });
-        assert_eq!(list.len(), 4);
+        assert_eq!(list.len(), 5);
+        let deepseek = list.iter().find(|m| m.id == DEEPSEEK_MODEL_ID).unwrap();
+        assert!(deepseek.recommended && deepseek.data_egress == "text" && !deepseek.active);
+        assert_eq!(engine_of(DEEPSEEK_MODEL_ID), Some(TtsEngine::Deepseek));
+        assert_eq!(model_of(TtsEngine::Deepseek), DEEPSEEK_MODEL_ID);
         let kokoro = list.iter().find(|m| m.id == KOKORO_MODEL_ID).unwrap();
         assert!(kokoro.active && !kokoro.ready && kokoro.state == "not-installed");
         let openai = list.iter().find(|m| m.id == OPENAI_MODEL_ID).unwrap();

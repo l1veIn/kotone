@@ -115,7 +115,7 @@ test("browser preview clearly shows an uninstalled model, disables download and 
   await page.setViewportSize({ width: 1040, height: 1150 });
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-general").click();
-  await expect(page.getByTestId("system-speech-info")).toBeVisible();
+  await expect(page.getByTestId("auto-speech-info")).toBeVisible();
   await page.getByLabel("语音引擎", { exact: true }).click();
   await page.getByRole("option", { name: "Kokoro · 本地中文语音", exact: true }).click();
   await expect(page.getByTestId("speech-model")).toContainText("尚未下载");
@@ -179,4 +179,27 @@ test("leaving the page discards old model and voice responses while fresh events
     window.speechTest.resolveSnapshots();
   });
   await expect(page.getByTestId("speech-model")).toContainText("正在下载 · 72%");
+});
+
+test("speech engine: automatic by default, DeepSeek or an explicit system choice are saved distinctly", async ({ page }) => {
+  await page.goto("/#/settings?onboarding=never");
+  await page.getByTestId("settings-nav-general").click();
+  const engine = page.getByLabel("语音引擎", { exact: true });
+  await expect(engine).toHaveAttribute("data-value", "auto");
+  const saved = async () => (await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings())).assistant;
+
+  await engine.click();
+  await page.getByRole("option", { name: "在线 · DeepSeek 语音", exact: true }).click();
+  await expect(page.getByTestId("online-speech-info")).toContainText("DeepSeek 语音");
+  expect((await saved()).ttsModelId).toBe("deepseek-tts");
+
+  await engine.click();
+  await page.getByRole("option", { name: "Windows · 系统语音", exact: true }).click();
+  await expect(page.getByTestId("system-speech-info")).toBeVisible();
+  expect(await saved()).toMatchObject({ ttsModelId: "local", speechEngine: "system" });
+
+  await engine.click();
+  await page.getByRole("option", { name: "自动（默认）", exact: true }).click();
+  await expect(page.getByTestId("auto-speech-info")).toBeVisible();
+  expect(await saved()).toMatchObject({ ttsModelId: "", speechEngine: "system" });
 });

@@ -25,8 +25,9 @@ test("assistant opens on talk, keeps drafts across sections; speech lives in Gen
   await expect(page.getByTestId("automation-page")).toBeVisible();
   await page.getByTestId("settings-nav-general").click();
   const output = page.getByTestId("output-settings");
-  await expect(output.getByLabel("语音引擎", { exact: true })).toHaveAttribute("data-value", "system");
-  await expect(output.getByTestId("system-speech-info")).toHaveText("无需下载。");
+  // 默认“自动”：琴音用 DeepSeek 连接时用 DeepSeek 语音，否则系统语音（预览里没有 DeepSeek 连接）
+  await expect(output.getByLabel("语音引擎", { exact: true })).toHaveAttribute("data-value", "auto");
+  await expect(output.getByTestId("auto-speech-info")).toContainText("自动用 DeepSeek 语音");
   await expect(output.getByRole("button", { name: "下载语音模型", exact: true })).toHaveCount(0);
   await output.screenshot({ path: testInfo.outputPath("output-settings.png") });
 });

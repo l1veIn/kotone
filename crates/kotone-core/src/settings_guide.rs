@@ -123,7 +123,7 @@ pub const FIELDS: &[Field] = &[
     f("assistant.route", "陪玩热键交给谁", "琴音陪玩 → 设置", "", &[("reminders", "内置（琴音 / 旧的单次陪玩）"), ("agent", "转交外部 Agent（需开启工具服务）")], NOW),
     f("assistant.defaultDelivery", "回答方式", "琴音陪玩 → 设置", "数组，元素 voice（语音）/ danmaku（弹幕），1–2 个不重复。", NONE, NOW),
     f("assistant.speechEngine", "本地语音合成", "通用 → 语音", "assistant.ttsModelId 为空时使用。", &[("system", "Windows 系统语音"), ("kokoro", "Kokoro 本地中文语音（需下载）")], NOW),
-    f("assistant.ttsModelId", "在线语音合成", "高级 → 模型 → 语音合成", "空 = 用本地；openai-compat-tts / volcano-tts 为在线（需配置）。一般用 models.activate {category: tts}。", &[("", "本地"), ("openai-compat-tts", "OpenAI 兼容在线语音"), ("volcano-tts", "火山在线语音")], NOW),
+    f("assistant.ttsModelId", "在线语音合成", "高级 → 模型 → 语音合成", "空 = 自动（默认）：琴音的 AI 连接是 DeepSeek 且有密钥时用 DeepSeek 语音，否则用本地的 assistant.speechEngine。在线语音按字数计费。一般用 models.activate {category: tts}。", &[("", "自动（默认）"), ("local", "本地（assistant.speechEngine）"), ("deepseek-tts", "DeepSeek 语音（在线）"), ("openai-compat-tts", "OpenAI 兼容在线语音"), ("volcano-tts", "火山在线语音")], NOW),
     f("assistant.voiceId", "系统语音音色", "通用 → 语音", "Windows 系统语音的音色 ID；空 = 默认。", NONE, NOW),
     f("assistant.kokoroVoiceId", "Kokoro 音色", "通用 → 语音", "如 kokoro:zf_001。", NONE, NOW),
     f("assistant.speechVolume", "语音音量", "通用 → 语音", "0–100。", NONE, NOW),

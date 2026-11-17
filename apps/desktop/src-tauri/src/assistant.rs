@@ -102,17 +102,23 @@ impl AssistantRuntime {
     }
 }
 
+/// 实际用哪个语音引擎：“自动”（默认）时，琴音的连接能用 DeepSeek 语音就用它，否则系统语音。
+pub fn effective_engine(app: &AppHandle, config: &AssistantConfig) -> TtsEngine {
+    config.tts_engine_auto(|| crate::tts_online::deepseek_ready(app))
+}
+
 fn selected_speaker(
     app: &AppHandle,
     config: &AssistantConfig,
 ) -> Result<Arc<dyn SpeechOutput>, String> {
     let runtime = app.state::<AssistantRuntime>();
-    let engine = config.tts_engine();
+    let engine = effective_engine(app, config);
     let online_kind = match engine {
         TtsEngine::System => return runtime.system_speaker.clone(),
         TtsEngine::Kokoro => None,
         TtsEngine::Openai => Some(kotone_tts::online::OnlineKind::OpenAi),
         TtsEngine::Volcano => Some(kotone_tts::online::OnlineKind::Volcano),
+        TtsEngine::Deepseek => Some(kotone_tts::online::OnlineKind::Deepseek),
     };
     if let Some(kind) = online_kind {
         let mut online = runtime.online_speakers.lock().unwrap();
@@ -343,7 +349,11 @@ pub fn speak_now(app: &AppHandle, text: &str) -> Result<(), String> {
         .assistant
         .clone();
     let speaker = selected_speaker(app, &config)?;
-    speaker.speak(speech_request(&config, text))
+    speaker.speak(speech_request(
+        effective_engine(app, &config),
+        &config,
+        text,
+    ))
 }
 
 pub fn before_capture(app: &AppHandle) -> Result<(), String> {
@@ -461,7 +471,11 @@ impl ReminderDelivery for DesktopDelivery {
                             guard.speaker = Some(speaker.clone());
                             match queue_speech(
                                 speaker.clone(),
-                                speech_request(&config, &reminder.text),
+                                speech_request(
+                                    effective_engine(&self.app, &config),
+                                    &config,
+                                    &reminder.text,
+                                ),
                                 &runtime.active_captures,
                                 &output_cancel,
                             ) {
@@ -516,16 +530,20 @@ impl ReminderDelivery for DesktopDelivery {
     }
 }
 
-fn speech_request(config: &kotone_core::assistant::AssistantConfig, text: &str) -> SpeechRequest {
+fn speech_request(
+    engine: TtsEngine,
+    config: &kotone_core::assistant::AssistantConfig,
+    text: &str,
+) -> SpeechRequest {
     // 声音编号可带提供方前缀（`system/…`、`kokoro/…`）；在线引擎的声音在模型配置里，
     // 每次播报时由合成线程解析。属于其他提供方的声音会在合成时报错，不会换声音。
-    let voice = match config.tts_engine() {
+    let voice = match engine {
         TtsEngine::Kokoro => config.kokoro_voice_id.trim().to_string(),
         TtsEngine::System => {
             let id = config.voice_id.trim();
             id.strip_prefix("system/").unwrap_or(id).to_string()
         }
-        TtsEngine::Openai | TtsEngine::Volcano => String::new(),
+        TtsEngine::Openai | TtsEngine::Volcano | TtsEngine::Deepseek => String::new(),
     };
     SpeechRequest {
         text: text.to_string(),
@@ -814,8 +832,13 @@ pub async fn list_speech_voices(app: AppHandle) -> Result<Vec<SpeechVoice>, Stri
         .unwrap()
         .assistant
         .clone();
-    match config.tts_engine() {
+    match effective_engine(&app, &config) {
         TtsEngine::Kokoro => return Ok(kotone_tts::kokoro_voices()),
+        TtsEngine::Deepseek => {
+            return Ok(kotone_tts::catalog::online_voices(
+                kotone_tts::online::OnlineKind::Deepseek,
+            ))
+        }
         TtsEngine::Openai => {
             return Ok(kotone_tts::catalog::online_voices(
                 kotone_tts::online::OnlineKind::OpenAi,
@@ -876,7 +899,11 @@ pub async fn preview_reminder(app: AppHandle, kind: String) -> Result<(), String
         guard.speaker = Some(speaker.clone());
         let result = queue_speech(
             speaker,
-            speech_request(&config, "打野有闪了。该打小龙了。"),
+            speech_request(
+                effective_engine(&app, &config),
+                &config,
+                "打野有闪了。该打小龙了。",
+            ),
             &runtime.active_captures,
             &output_cancel,
         )?
@@ -1050,7 +1077,13 @@ mod tests {
             speaker.cancel().unwrap();
         }
         let captures = AtomicUsize::new(0);
-        let request = || speech_request(&AssistantConfig::default(), "打野有闪了。");
+        let request = || {
+            speech_request(
+                TtsEngine::System,
+                &AssistantConfig::default(),
+                "打野有闪了。",
+            )
+        };
         assert!(queue_speech(speaker.clone(), request(), &captures, &current).is_err());
         assert_eq!(speaker.spoken.load(Ordering::SeqCst), 0);
         let next = outputs.begin();
@@ -1068,7 +1101,11 @@ mod tests {
         let speaker = Arc::new(TestSpeaker::default());
         let result = queue_speech(
             speaker.clone(),
-            speech_request(&AssistantConfig::default(), "打野有闪了。"),
+            speech_request(
+                TtsEngine::System,
+                &AssistantConfig::default(),
+                "打野有闪了。",
+            ),
             &AtomicUsize::new(1),
             &output,
         );

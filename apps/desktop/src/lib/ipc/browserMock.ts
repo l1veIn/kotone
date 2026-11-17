@@ -1072,6 +1072,18 @@ const mockCatalog: CatalogModel[] = [
     configSchema: [], license: "Windows", files: [],
   },
   {
+    category: "tts", id: "deepseek-tts", engineId: "deepseek", displayName: "DeepSeek 语音合成（在线，默认）",
+    description: "DeepSeek 官方语音，默认用琴音的 DeepSeek 连接与密钥，声音海星（女声）/暗潮（男声）；按字数计费，每次播报都会把文字发给 DeepSeek，相同的话复用缓存；不支持调语速",
+    sizeBytes: 0, backend: "remote", downloaded: true,
+    ready: false, state: "not-configured", reason: "还没有 DeepSeek 连接：请在「高级 → API 连接」里添加 DeepSeek", active: false,
+    recommended: true, languages: ["zh"], dataEgress: "text",
+    configSchema: [
+      { key: "connection", label: "DeepSeek 连接（留空 = 用琴音正在用的 DeepSeek 连接）", kind: "connection", default: "", options: [], required: false },
+      { key: "voice", label: "声音", kind: "enum", default: "stella", options: [{ value: "stella", label: "海星（女声）" }, { value: "tide", label: "暗潮（男声）" }], required: true },
+    ],
+    apiKeyUrl: "https://platform.deepseek.com/api_keys", license: "服务商条款", files: [],
+  },
+  {
     category: "tts", id: "openai-compat-tts", engineId: "openai", displayName: "OpenAI 兼容语音合成（在线）",
     description: "调用 /audio/speech 接口；每次播报都会把文字发给服务商", sizeBytes: 0, backend: "remote", downloaded: true,
     ready: false, state: "not-configured", reason: "在线语音合成还没有选择 API 连接（模型 → 语音合成）", active: false,
@@ -1142,10 +1154,11 @@ export async function activateCatalogModel(category: ModelCategory, id: string):
   if (!m) throw new Error(`未知模型 ${id}`);
   if (m.backend === "local" && !m.downloaded) throw new Error(`${m.displayName} 尚未下载，请先下载再切换`);
   if (category === "ocr") mock.settings.ocr.activeModelId = id;
-  else if (id === "openai-compat-tts" || id === "volcano-tts") mock.settings.assistant.ttsModelId = id;
+  else if (id === "openai-compat-tts" || id === "volcano-tts" || id === "deepseek-tts") mock.settings.assistant.ttsModelId = id;
   else {
     mock.settings.assistant.speechEngine = id === "kokoro-zh" ? "kokoro" : "system";
-    mock.settings.assistant.ttsModelId = "";
+    // 明确选系统语音写 "local"，不再参与“自动”
+    mock.settings.assistant.ttsModelId = id === "kokoro-zh" ? "" : "local";
   }
   return clone(mock.settings);
 }

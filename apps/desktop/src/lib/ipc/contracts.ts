@@ -183,7 +183,10 @@ export interface AssistantConfig {
   speechRate: number;
   /** 本地播报引擎（旧字段，只写旧版本认识的 system / kokoro） */
   speechEngine: "kokoro" | "system";
-  /** 选中的在线语音合成模型（openai-compat-tts / volcano-tts）；空 = 用 speechEngine */
+  /**
+   * 语音合成：空 = 自动（默认：琴音用 DeepSeek 连接时用 DeepSeek 语音，否则 speechEngine）；
+   * "local" = 明确用本地 speechEngine；deepseek-tts / openai-compat-tts / volcano-tts = 在线。
+   */
   ttsModelId?: string;
   /** 语音唤醒（ADR 017；新字段，旧配置没有）。 */
   wake?: WakeConfig;

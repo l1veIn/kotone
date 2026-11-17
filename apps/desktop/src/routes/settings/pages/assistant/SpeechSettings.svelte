@@ -24,7 +24,8 @@
     installed: "已就绪", error: "安装失败", cancelled: "已取消下载",
   };
   /** 在线引擎对应的统一模型清单 ID（声音存在 modelConfigs[id].voice） */
-  const onlineModel: Record<string, string> = { openai: "openai-compat-tts", volcano: "volcano-tts" };
+  const onlineModel: Record<string, string> = { openai: "openai-compat-tts", volcano: "volcano-tts", deepseek: "deepseek-tts" };
+  type Engine = "auto" | "system" | "kokoro" | "openai" | "volcano" | "deepseek";
   /** 声音编号统一写成「提供方/声音」；旧配置里不带前缀的值照常匹配。 */
   function qualifiedVoice(engine: string, id: string): string {
     const value = id.trim();
@@ -33,33 +34,52 @@
     if (engine === "kokoro" && value.startsWith("kokoro:")) return `kokoro/${value.slice(7)}`;
     return `${engine}/${value}`;
   }
-  /** 实际使用的引擎：在线引擎记在新字段 ttsModelId，本地引擎在旧字段 speechEngine。 */
-  const engine = $derived<"system" | "kokoro" | "openai" | "volcano" | undefined>(
+  /**
+   * 选中的引擎：在线引擎记在新字段 ttsModelId，本地引擎在旧字段 speechEngine。
+   * ttsModelId 为空且本地是系统语音 = “自动”（默认）：琴音用 DeepSeek 连接时用 DeepSeek 语音，否则系统语音；
+   * 明确选了系统语音写 ttsModelId = "local"。
+   */
+  const engine = $derived<Engine | undefined>(
     !config ? undefined
       : config.ttsModelId === onlineModel.openai ? "openai"
       : config.ttsModelId === onlineModel.volcano ? "volcano"
-      : config.speechEngine,
+      : config.ttsModelId === onlineModel.deepseek ? "deepseek"
+      : config.speechEngine === "kokoro" ? "kokoro"
+      : config.ttsModelId === "local" ? "system"
+      : "auto",
   );
+  /** “自动”时实际在用的声音提供方（从声音列表的前缀看出来）。 */
+  const autoProvider = $derived(engine === "auto" ? (voices[0]?.id.split("/")[0] ?? "") : "");
   function selectEngine(value: string) {
     // 在线引擎不写旧字段（旧版本读不懂会把整份配置当作损坏）。
-    if (value === "openai" || value === "volcano") return save({ ttsModelId: onlineModel[value] });
+    if (value === "openai" || value === "volcano" || value === "deepseek") return save({ ttsModelId: onlineModel[value] });
+    if (value === "auto") return save({ speechEngine: "system", ttsModelId: "" });
+    if (value === "system") return save({ speechEngine: "system", ttsModelId: "local" });
     return save({ speechEngine: value as AssistantConfig["speechEngine"], ttsModelId: "" });
   }
+  /** 声音属于哪个提供方：“自动”时看实际在用的那个。 */
+  const voiceEngine = $derived(engine === "auto" ? (autoProvider || "system") : engine);
   const selectedVoice = $derived.by(() => {
-    if (!config || !engine) return "";
-    if (engine === "kokoro") return qualifiedVoice(engine, config.kokoroVoiceId);
-    if (engine === "system") return qualifiedVoice(engine, config.voiceId);
-    const stored = $settingsStore?.modelConfigs?.[onlineModel[engine]]?.voice;
-    return qualifiedVoice(engine, typeof stored === "string" ? stored : "");
+    if (!config || !voiceEngine) return "";
+    if (voiceEngine === "kokoro") return qualifiedVoice(voiceEngine, config.kokoroVoiceId);
+    if (voiceEngine === "system") return qualifiedVoice(voiceEngine, config.voiceId);
+    const model = onlineModel[voiceEngine];
+    if (!model) return "";
+    const stored = $settingsStore?.modelConfigs?.[model]?.voice;
+    const fallback = voiceEngine === "deepseek" ? "stella" : "";
+    return qualifiedVoice(voiceEngine, typeof stored === "string" && stored ? stored : fallback);
   });
   async function saveVoice(value: string) {
-    if (!config || !engine) return;
+    if (!config) return;
+    // 按声音编号的前缀决定存哪里（“自动”时可能是 DeepSeek，也可能是系统语音）。
+    const provider = value.includes("/") ? value.split("/")[0] : (voiceEngine ?? "system");
     // 落盘用旧写法（kokoro:zf_017、不带前缀的系统语音），旧版本才能继续使用。
-    if (engine === "kokoro") return save({ kokoroVoiceId: value.startsWith("kokoro/") ? `kokoro:${value.slice(7)}` : value });
-    if (engine === "system") return save({ voiceId: value.startsWith("system/") ? value.slice(7) : value });
-    const model = onlineModel[engine];
+    if (provider === "kokoro") return save({ kokoroVoiceId: value.startsWith("kokoro/") ? `kokoro:${value.slice(7)}` : value });
+    if (provider === "system") return save({ voiceId: value.startsWith("system/") ? value.slice(7) : value });
+    const model = onlineModel[provider];
+    if (!model) return;
     const current = $settingsStore?.modelConfigs?.[model] ?? {};
-    const native = value.startsWith(`${engine}/`) ? value.slice(engine.length + 1) : value;
+    const native = value.startsWith(`${provider}/`) ? value.slice(provider.length + 1) : value;
     await patchSettings({ modelConfigs: { [model]: { ...current, voice: native } } }, "播报声音已保存");
   }
   const progress = $derived(model?.totalBytes ? Math.min(100, Math.round(model.downloadedBytes / model.totalBytes * 100)) : 0);
@@ -70,7 +90,7 @@
     voices = [];
     if (current) void listSpeechVoices().then((items) => {
       if (!active) return;
-      voices = !isTauri && current === "system" ? [] : items;
+      voices = !isTauri && (current === "system" || current === "auto") ? [] : items;
       voiceError = "";
     }).catch((cause) => { if (active) voiceError = errText(cause); });
     return () => { active = false; };
@@ -134,8 +154,8 @@
         <p class="m-0 text-[13px] font-medium text-foreground">语音播报</p>
         <p class="mt-0.5 mb-0 text-xs text-muted-foreground">提醒、回答和自动化结果用这个声音读出来。</p>
       </div>
-      <div class="w-64 max-w-full"><SelectField ariaLabel="语音引擎" value={engine ?? "system"} disabled={saving}
-        options={[{value:"system",label:"Windows · 系统语音"},{value:"kokoro",label:"Kokoro · 本地中文语音"},{value:"openai",label:"在线 · OpenAI 兼容"},{value:"volcano",label:"在线 · 火山语音合成"}]}
+      <div class="w-64 max-w-full"><SelectField ariaLabel="语音引擎" value={engine ?? "auto"} disabled={saving}
+        options={[{value:"auto",label:"自动（默认）"},{value:"deepseek",label:"在线 · DeepSeek 语音"},{value:"system",label:"Windows · 系统语音"},{value:"kokoro",label:"Kokoro · 本地中文语音"},{value:"openai",label:"在线 · OpenAI 兼容"},{value:"volcano",label:"在线 · 火山语音合成"}]}
         onchange={(value) => void selectEngine(value)} /></div>
     </div>
     {#if engine === "kokoro"}
@@ -155,6 +175,16 @@
         {/if}
         {#if model?.error}<p class="mt-2 mb-0 text-destructive" role="alert">{model.error}</p>{/if}
       </div>
+    {:else if engine === "auto"}
+      <p class="m-0 text-xs leading-relaxed text-muted-foreground" data-testid="auto-speech-info">
+        {autoProvider === "deepseek"
+          ? "正在用 DeepSeek 语音（琴音的 DeepSeek 连接）：按字数计费，每次播报都会把文字发给 DeepSeek，相同的话复用缓存；不支持调语速。"
+          : "琴音的 AI 连接是 DeepSeek（且已保存密钥）时自动用 DeepSeek 语音，否则用 Windows 系统语音。"}
+      </p>
+    {:else if engine === "deepseek"}
+      <p class="m-0 text-xs leading-relaxed text-muted-foreground" data-testid="online-speech-info">
+        DeepSeek 语音：默认用琴音的 DeepSeek 连接与密钥，按字数计费（汉字算 2 个字符），每次播报都会把文字发给 DeepSeek；相同的话复用缓存，不支持调语速。连接可在「高级 → 模型 → 语音合成」里另选。
+      </p>
     {:else if engine === "openai" || engine === "volcano"}
       <p class="m-0 text-xs leading-relaxed text-muted-foreground" data-testid="online-speech-info">
         在线语音：每次播报都会把文字发给服务商。连接、模型与声音在「高级 → 模型 → 语音合成」里配置；相同的话会直接复用缓存，不再请求。
@@ -165,7 +195,7 @@
     <div class="flex flex-wrap items-center justify-between gap-3">
       <span class="text-[13px] text-foreground/85">播报声音</span>
       <div class="w-64 max-w-full"><SelectField ariaLabel="播报声音" value={selectedVoice} disabled={saving}
-        options={[...(engine === "system" ? [{value:"",label:"系统默认声音"}] : []), ...(selectedVoice && !voices.some((voice) => voice.id === selectedVoice) && engine !== "system" && engine !== "kokoro" ? [{value:selectedVoice,label:selectedVoice.split("/").slice(1).join("/")}] : []), ...voices.map((voice) => ({value:voice.id,label:voice.name}))]}
+        options={[...(voiceEngine === "system" ? [{value:"",label:"系统默认声音"}] : []), ...(selectedVoice && !voices.some((voice) => voice.id === selectedVoice) && voiceEngine !== "system" && voiceEngine !== "kokoro" ? [{value:selectedVoice,label:selectedVoice.split("/").slice(1).join("/")}] : []), ...voices.map((voice) => ({value:voice.id,label:voice.name}))]}
         onchange={(value) => void saveVoice(value)} /></div>
     </div>
     {#if voiceError}<p class="m-0 text-xs text-destructive" role="alert">{voiceError}</p>{/if}
