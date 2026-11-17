@@ -38,6 +38,11 @@ windows = { workspace = true, features = [
     "Win32_Security_Authorization",
     # CLI 导出产物：MoveFileExW 原子不覆盖发布
     "Win32_Storage_FileSystem",
+    # 游戏语音（ADR 020）：录音设备列表与默认设备（MMDevice API、IPolicyConfig）
+    "Win32_Media_Audio",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
 ] }
 arboard = "3"
 clipboard-win = "5"
