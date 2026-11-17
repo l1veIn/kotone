@@ -86,7 +86,7 @@ mod imp {
             let tokens = model_dir.join("tokens.txt");
             if !model.exists() || !tokens.exists() {
                 return Err(
-                    "还没有下载 SenseVoice 模型（高级 → 模型 → 语音识别 → SenseVoice 多语言）"
+                    "还没有下载 SenseVoice 模型（设置 → 模型 → 语音识别 → SenseVoice 多语言）"
                         .into(),
                 );
             }
