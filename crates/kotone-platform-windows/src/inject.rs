@@ -690,6 +690,39 @@ mod windows_imp {
         }
     }
 
+    /// 全部进程：(PID, 父进程 PID, 可执行文件名)。
+    pub fn process_list() -> Vec<(u32, u32, String)> {
+        let mut out = Vec::new();
+        unsafe {
+            let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+                return out;
+            };
+            let mut entry = PROCESSENTRY32W {
+                dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+                ..Default::default()
+            };
+            if Process32FirstW(snapshot, &mut entry).is_ok() {
+                loop {
+                    let len = entry
+                        .szExeFile
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(entry.szExeFile.len());
+                    out.push((
+                        entry.th32ProcessID,
+                        entry.th32ParentProcessID,
+                        String::from_utf16_lossy(&entry.szExeFile[..len]),
+                    ));
+                    if Process32NextW(snapshot, &mut entry).is_err() {
+                        break;
+                    }
+                }
+            }
+            let _ = CloseHandle(snapshot);
+        }
+        out
+    }
+
     /// Toolhelp 快照按可执行文件名（大小写不敏感）查 PID；取首个匹配
     pub fn find_pid_by_name(name: &str) -> Option<u32> {
         unsafe {
@@ -911,6 +944,10 @@ mod fallback {
 
     pub fn find_pid_by_name(_name: &str) -> Option<u32> {
         None
+    }
+
+    pub fn process_list() -> Vec<(u32, u32, String)> {
+        Vec::new()
     }
 
     /// 非 Windows 兜底焦点后端：无法捕获/恢复，恒返回空

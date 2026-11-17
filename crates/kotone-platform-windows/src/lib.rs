@@ -9,11 +9,13 @@
 //! - `game_window`：游戏场景的窗口操作（切前台、请求关闭、打开程序）
 //! - `window_tools`：工具服务的窗口观察与 GDI 前台可见客户区捕获（实现 core 的 tools 端口）
 //! - `tool_host`：工具服务实例发现的会话/进程身份与私有文件 DACL
+//! - `app_audio`：只录某一个程序的声音（进程回环录音，ADR 021）
 //! - `voice_chat`：游戏语音（ADR 020）的 VB-CABLE 检测与安装、Windows 默认录音设备
 //! - `voice_router`：游戏语音的转发与混音（真麦克风 + 琴音的语音 → CABLE Input）
 //! - `hotkey_ll`：WH_KEYBOARD_LL + WH_MOUSE_LL 低级键鼠钩子热键源
 //!   （实现 core 的 HotkeySource 端口）
 
+pub mod app_audio;
 pub mod audio;
 pub mod autostart;
 pub mod detached;

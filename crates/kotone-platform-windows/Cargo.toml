@@ -44,6 +44,8 @@ windows = { workspace = true, features = [
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Variant",
 ] }
+# 只录某一个程序的声音（ADR 021）：进程回环录音（MIT）
+wasapi = "0.27"
 arboard = "3"
 clipboard-win = "5"
 
