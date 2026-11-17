@@ -25,12 +25,14 @@
     importProfile,
     deleteProfile,
     getProfileIcon,
+    installedGames,
     isTauri,
     type GameProfile,
+    type InstalledGame,
   } from "../../../lib/ipc";
   import { settingsStore, toast, toastWarn, errText } from "../../../lib/stores/ui";
   import { captureHotkey } from "../../../lib/hotkeyCapture";
-  import { Download, Gamepad2, Globe, Upload } from "@lucide/svelte";
+  import { Download, Gamepad2, Globe, LoaderCircle, ScanSearch, Upload } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import SettingsPage from "$lib/components/settings/SettingsPage.svelte";
@@ -38,6 +40,43 @@
   import ToggleField from "$lib/components/settings/ToggleField.svelte";
 
   let profiles = $state<GameProfile[]>([]);
+  /** 启动路径的“自动检测”结果（null = 还没检测）。 */
+  let detected = $state<InstalledGame[] | null>(null);
+  let detecting = $state(false);
+  const SOURCE_LABEL: Record<string, string> = {
+    steam: "Steam", tencent: "腾讯", riot: "Riot", hoyoplay: "米哈游", epic: "Epic", wegame: "WeGame", uninstall: "系统已安装程序",
+  };
+
+  /** 和当前游戏配置对得上的排前面：先比进程名，再比名字。 */
+  function rankDetected(games: InstalledGame[], profile: GameProfile): InstalledGame[] {
+    const norm = (s: string) => s.split(/[（(]/)[0].toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+    const procs = profile.processNames.map((p) => p.toLowerCase());
+    const name = norm(profile.displayName);
+    const score = (g: InstalledGame) =>
+      g.processNames.some((p) => procs.includes(p.toLowerCase())) ? 2
+        : name && (norm(g.name).includes(name) || name.includes(norm(g.name))) ? 1 : 0;
+    return games.filter((g) => g.launch).sort((a, b) => score(b) - score(a));
+  }
+
+  async function detectGames() {
+    if (detecting || !draft) return;
+    detecting = true;
+    try {
+      detected = rankDetected(await installedGames(), draft);
+      if (!detected.length) toast(false, "没有检测到已安装的游戏，可以手动填写启动路径");
+    } catch (error) {
+      toast(false, `检测失败：${errText(error)}`);
+    } finally {
+      detecting = false;
+    }
+  }
+
+  function useDetected(game: InstalledGame) {
+    if (!draft || !game.launch) return;
+    draft.launchPath = game.launch;
+    detected = null;
+    toast(true, `已填入「${game.name}」的启动方式，记得保存`);
+  }
 
   // ---------- 内联编辑器状态 ----------
   /** 展开编辑中的 profile id（null = 全部收起） */
@@ -551,12 +590,34 @@
                 onchange={(v) => (draft!.allowAutomationInput = v)}
               />
               <div>
-                <label for="profile-launch-path" class="block text-xs font-medium text-foreground">启动路径</label>
-                <p class="mt-0.5 mb-0 text-[11px] leading-relaxed text-muted-foreground">程序、快捷方式或 steam:// 之类的链接；填了琴音才能替你打开这个游戏。</p>
+                <div class="flex items-center justify-between gap-2">
+                  <label for="profile-launch-path" class="block text-xs font-medium text-foreground">启动路径</label>
+                  <Button size="sm" variant="outline" data-testid="profile-detect-games" disabled={detecting} onclick={() => void detectGames()}>
+                    {#if detecting}<LoaderCircle class="size-3.5 animate-spin" />{:else}<ScanSearch class="size-3.5" />{/if}自动检测
+                  </Button>
+                </div>
+                <p class="mt-0.5 mb-0 text-[11px] leading-relaxed text-muted-foreground">程序、快捷方式或 steam:// 之类的链接。点“自动检测”可以从本机装的游戏里选（Steam、英雄联盟、Riot、米哈游、Epic、WeGame）；留空时琴音也会自动找。</p>
                 <Input id="profile-launch-path" data-testid="profile-launch-path" class="mt-2 font-mono text-xs"
                   placeholder="例如：C:\Games\Game.exe 或 steam://rungameid/570"
                   value={draft.launchPath ?? ""}
                   oninput={(e) => (draft!.launchPath = (e.currentTarget as HTMLInputElement).value)} />
+                {#if detected && detected.length}
+                  <ul class="mt-2 mb-0 max-h-56 list-none space-y-1 overflow-y-auto p-0" data-testid="profile-detected-games">
+                    {#each detected as game (game.id)}
+                      <li>
+                        <button type="button" data-testid={`profile-detected-${game.id}`} onclick={() => useDetected(game)}
+                          class="flex w-full items-center gap-2 rounded-md border border-hairline px-2.5 py-1.5 text-left text-xs transition-colors hover:border-primary/45 hover:bg-primary/6">
+                          <span class="min-w-0 flex-1">
+                            <span class="block truncate font-medium text-foreground">{game.name}</span>
+                            <span class="block truncate text-[11px] text-muted-foreground">{game.installDir}</span>
+                          </span>
+                          <span class="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{SOURCE_LABEL[game.source] ?? game.source}</span>
+                          {#if game.needsAdmin}<span class="shrink-0 text-[10px] text-warning" title="启动时 Windows 会请你授权">需授权</span>{/if}
+                        </button>
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
               </div>
             </div>
 

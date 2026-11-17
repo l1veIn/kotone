@@ -471,6 +471,23 @@ export async function connectionSelfCheck(id: string): Promise<CompanionCheck> {
   return invoke<CompanionCheck>("connection_self_check", { id });
 }
 
+/** 本机检测到的游戏（注册表与启动器清单，不扫全盘）。 */
+export interface InstalledGame {
+  id: string;
+  name: string;
+  source: "steam" | "tencent" | "riot" | "hoyoplay" | "epic" | "wegame" | "uninstall" | string;
+  installDir: string;
+  /** 可以填进启动路径的命令；null = 不知道怎么启动 */
+  launch: string | null;
+  processNames: string[];
+  needsAdmin: boolean;
+}
+
+export async function installedGames(query?: string): Promise<InstalledGame[]> {
+  if (!isTauri) return browserMock.installedGames(query);
+  return invoke<InstalledGame[]>("installed_games", { query: query ?? null });
+}
+
 /** 服务商的模型列表（`GET /models`，不花 token）；supported=false 表示服务商没有列表接口。 */
 export interface ConnectionModels { supported: boolean; models: string[] }
 

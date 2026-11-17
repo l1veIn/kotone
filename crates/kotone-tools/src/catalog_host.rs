@@ -58,6 +58,7 @@ pub const TOOL_AUTOMATION_DELETE: &str = "automation.delete";
 pub const TOOL_GAME_LIST: &str = "game.list";
 pub const TOOL_GAME_FOCUS: &str = "game.focus";
 pub const TOOL_GAME_LAUNCH: &str = "game.launch";
+pub const TOOL_GAME_INSTALLED: &str = "game.installed";
 pub const TOOL_GAME_CLOSE: &str = "game.close";
 
 /// 全部委托工具（顺序即 capabilities 中的顺序）。
@@ -117,6 +118,7 @@ pub const HOST_TOOLS: &[&str] = &[
     TOOL_GAME_FOCUS,
     TOOL_GAME_LAUNCH,
     TOOL_GAME_CLOSE,
+    TOOL_GAME_INSTALLED,
 ];
 
 fn none() -> Value {
@@ -628,11 +630,14 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_GAME_LAUNCH,
-            description: "Open a game with the launch path the user set in its profile (a program, shortcut or launcher link such as steam://rungameid/...). Refuses when no launch path is set; does nothing when the game is already running (alreadyRunning=true). Returns at once; the game may take a while to show a window (check game.list).",
+            description: "Open a game. Give profileId (a game profile: uses its launch path, or, when none is set, the matching installed game found by game.installed) or installedId (an id from game.installed, e.g. steam:570, tencent:lol, hoyo:hk4e_cn). Anti-cheat games go through their platform launcher; some launchers make Windows ask the user for administrator permission. Does nothing when the profile's game is already running (alreadyRunning=true). Returns at once; the game may take a while to show a window (check game.list).",
             side_effects: &["launches-program"],
             egress: "none",
-            input: object(&["profileId"], json!({"profileId": id("游戏配置 ID")})),
-            output: object(&["launched"], json!({"launched": {"type": "boolean"}, "alreadyRunning": {"type": "boolean"}})),
+            input: object(&[], json!({
+                "profileId": id("游戏配置 ID（game.list）"),
+                "installedId": id("已安装游戏 ID（game.installed）")
+            })),
+            output: object(&["launched"], json!({"launched": {"type": "boolean"}, "alreadyRunning": {"type": "boolean"}, "game": {"type": "string"}, "via": {"type": "string"}})),
         },
         Def {
             name: TOOL_GAME_CLOSE,
@@ -641,6 +646,14 @@ fn defs() -> Vec<Def> {
             egress: "none",
             input: object(&["profileId"], json!({"profileId": id("游戏配置 ID")})),
             output: object(&["requested"], json!({"requested": {"type": "integer", "description": "收到关闭请求的窗口数"}})),
+        },
+        Def {
+            name: TOOL_GAME_INSTALLED,
+            description: "Games installed on this PC, found the way game library apps do it (registry and launcher manifests only, no disk scan; usually under 0.1 s): Steam, League of Legends (Tencent CN and Riot), Riot games (VALORANT…), HoYoPlay (Genshin, Star Rail, ZZZ), Epic, WeGame. Each: id, name, source, installDir, launch (a command usable as a profile launch path; null = unknown), processNames, needsAdmin. With query, keeps games whose name contains it and also searches the Windows uninstall list by name (may include non-games). Paths that no longer exist are dropped.",
+            side_effects: &[],
+            egress: "none",
+            input: object(&[], json!({"query": {"type": "string", "minLength": 1, "maxLength": 100, "description": "按名字筛选，同时在系统卸载列表里搜"}})),
+            output: object(&["games"], json!({"games": {"type": "array"}})),
         },
     ]
 }

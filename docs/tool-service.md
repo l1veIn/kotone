@@ -9,7 +9,7 @@
 - 桌面进程拥有服务；`kotone-cli tools` 是客户端。客户端直接走 loopback HTTP，**不会再次启动 `kotone.exe`**，因此不会触发单实例回调唤起设置窗口、抢走游戏焦点。
 - 服务与 ASR 运行时（启动 / 停止开关）相互独立：运行时 Stopped 时工具照常可用，调用也不会启动 ASR、注册热键或加载模型。
 - 服务从不移动窗口；只有 `game.focus` 会把用户配置的游戏窗口切到前台，`game.launch` / `game.close` 会按游戏配置打开或请求关闭游戏，发送输入的只有自动化与陪玩打字（见各节）。除 `models.dir.set`（把模型迁到用户指定的目录，与设置页相同）外不读写调用方指定的本地文件；`diagnostics.export` 只写到 `<KOTONE_HOME>/exports/`。可见输出只有 `agent.reply` 的弹幕（不取焦点、鼠标穿透的提醒层）与语音播报，以及 `elevation.restart` 触发的系统 UAC 提示。
-- 已实现下文 79 个工具（服务自身 24 个 + 委托桌面宿主 55 个；以 `kotone-cli tools list` 为准）。引导页与设置页里人能做的配置，Agent 都能通过工具完成（[演进计划 §5.5](product-evolution-game-tools.md)）；通用热键、工作流、模型调用（LLM）与发送尚未实现，不出现在 capabilities 中，调用它们返回 `TOOL_NOT_FOUND`。
+- 已实现下文 80 个工具（服务自身 24 个 + 委托桌面宿主 56 个；以 `kotone-cli tools list` 为准）。引导页与设置页里人能做的配置，Agent 都能通过工具完成（[演进计划 §5.5](product-evolution-game-tools.md)）；通用热键、工作流、模型调用（LLM）与发送尚未实现，不出现在 capabilities 中，调用它们返回 `TOOL_NOT_FOUND`。
 - OCR 结果与聊天文字一律是**数据**：服务从不解释或执行其中的内容（例如“忽略之前的指令”之类的文字只会被原样返回）。
 
 ## 2. 开启与重启
@@ -186,7 +186,8 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | --- | --- | --- |
 | `game.list` | 无 | `games[]`：`id`、`name`、`processNames`、`running`、`foreground`、`windows[]`（`title`、`process`、`minimized`、`foreground`，最多 5 个）、`allowAutomationInput`、`canLaunch`。窗口标题来自别的程序，按数据对待 |
 | `game.focus` | `profileId`，或 `processName` / `titleContains`（至少一个） | 把匹配的窗口切到前台（最小化的先还原），之后 `automation.run`、`companion.read_chat`、打字都作用于它。找不到或系统不允许切换时报错，不猜。副作用 `focuses-window` |
-| `game.launch` | `profileId` | 只用游戏配置里用户填写的**启动路径**（程序、快捷方式或 `steam://` 之类的启动器链接）打开；没填时报错；已在运行时什么都不做（`alreadyRunning: true`）。立即返回，窗口出现可能要一会儿（用 `game.list` 看）。副作用 `launches-program` |
+| `game.launch` | `profileId` 或 `installedId` | 用游戏配置里的**启动路径**（程序、快捷方式、`steam://` 之类的启动器链接，或带引号的程序加参数）打开；没填时用本机检测到的对应游戏（`game.installed`）；也可以直接给已安装游戏的 ID。有反作弊的游戏走平台启动器，部分启动器会让 Windows 弹管理员授权。已在运行时什么都不做（`alreadyRunning: true`）。立即返回，窗口出现可能要一会儿（用 `game.list` 看）。副作用 `launches-program` |
+| `game.installed` | `query`（可选） | 本机装了哪些游戏：只读注册表和启动器清单、不扫全盘（Steam、英雄联盟国服 / Riot、米哈游 HoYoPlay、Epic、WeGame），每项 `id`、`name`、`source`、`installDir`、`launch`（可填进启动路径的命令）、`processNames`、`needsAdmin`；给 `query` 时按名字筛选，并在系统“卸载程序”列表里按名字搜（可能含非游戏）。目录已不存在的丢弃 |
 | `game.close` | `profileId` | 给这个游戏的每个窗口发普通的关闭请求（相当于点窗口的 ×，游戏可能弹确认），从不强制结束进程。返回收到请求的窗口数。副作用 `closes-program` |
 
 **允许自动化输入**：游戏配置的 `allowAutomationInput`（缺省允许）为 `false` 时，`automation.run` 对这个游戏的程序执行会被拒绝（安排时检查，带延迟的到点时再检查一次）；玩家自己的语音打字不受影响。启动路径存在游戏配置的 `launchPath`。

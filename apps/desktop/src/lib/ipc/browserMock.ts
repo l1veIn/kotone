@@ -1188,6 +1188,15 @@ export async function companionSelfCheck(): Promise<CompanionCheck> {
   return connectionSelfCheck(assistant.connectionId);
 }
 
+export async function installedGames(query?: string): Promise<import("../ipc").InstalledGame[]> {
+  const all = [
+    { id: "tencent:lol", name: "英雄联盟（国服）", source: "tencent", installDir: "C:\\WeGameApps\\英雄联盟", launch: "\"C:\\WeGameApps\\英雄联盟\\WeGameLauncher\\launcher.exe\"", processNames: ["League of Legends.exe"], needsAdmin: true },
+    { id: "hoyo:hk4e_cn", name: "原神", source: "hoyoplay", installDir: "D:\\miHoYo Launcher\\games\\Genshin Impact Game", launch: "\"D:\\miHoYo Launcher\\games\\Genshin Impact Game\\YuanShen.exe\"", processNames: ["YuanShen.exe"], needsAdmin: true },
+    { id: "steam:570", name: "Dota 2", source: "steam", installDir: "D:\\SteamLibrary\\steamapps\\common\\dota 2 beta", launch: "steam://rungameid/570", processNames: [], needsAdmin: false },
+  ];
+  return query ? all.filter((g) => g.name.includes(query)) : all;
+}
+
 export async function connectionModels(id: string): Promise<{ supported: boolean; models: string[] }> {
   const connection = mock.settings.connections.find((c) => c.id === id);
   if (!connection) throw new Error(`连接 ${id} 不存在`);

@@ -19,6 +19,7 @@ pub mod elevation;
 pub mod fs_publish;
 pub mod fullscreen;
 pub mod game_window;
+pub mod games;
 #[cfg(windows)]
 pub mod hotkey_ll;
 pub mod inject;

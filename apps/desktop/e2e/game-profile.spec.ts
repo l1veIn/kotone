@@ -48,3 +48,21 @@ test("game profile saves the automation-input switch and launch path without dro
   await expect(lol.getByTestId("profile-allow-automation-input")).toHaveAttribute("aria-checked", "false");
   await expect(lol.getByTestId("profile-launch-path")).toHaveValue("steam://rungameid/570");
 });
+
+test("auto-detect lists installed games, matching ones first, and fills the launch path", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.goto("/#/settings?onboarding=never");
+  await page.getByTestId("settings-nav-game").click();
+  const lol = page.getByTestId("game-profile-lol");
+  await lol.getByRole("button", { name: "编辑", exact: true }).click();
+  const editor = lol.getByTestId("game-profile-editor");
+  await editor.getByTestId("profile-detect-games").click();
+  const list = editor.getByTestId("profile-detected-games");
+  // 英雄联盟的配置：进程名对得上的国服排第一
+  await expect(list.locator("button").first()).toContainText("英雄联盟（国服）");
+  await expect(list).toContainText("原神");
+  await editor.screenshot({ path: testInfo.outputPath("game-profile-detect.png") });
+  await editor.getByTestId("profile-detected-tencent:lol").click();
+  await expect(editor.getByTestId("profile-launch-path")).toHaveValue('"C:\\WeGameApps\\英雄联盟\\WeGameLauncher\\launcher.exe"');
+  await expect(list).toHaveCount(0);
+});

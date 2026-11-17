@@ -3,13 +3,14 @@
 //!
 //! - 游戏 = 一个有 `processNames` 的游戏配置；通用配置匹配任何进程，不算“在运行”；
 //! - 从不操作 Kotone 自己的窗口；关闭只发普通的关闭请求，从不强制结束进程；
-//! - 打开只用用户在游戏配置里填写的启动路径。
+//! - 打开用游戏配置里的启动路径；没填时用检测到的已安装游戏（`games.rs`：注册表与启动器清单）。
 
 use std::time::Duration;
 
 use kotone_core::profile::{self, GameProfile};
 use kotone_core::tools::{WindowInfo, WindowObserver};
 use kotone_platform_windows::game_window;
+use kotone_platform_windows::games::{self, InstalledGame};
 use kotone_platform_windows::window_tools::WindowsWindowObserver;
 use serde_json::{json, Value};
 
@@ -56,6 +57,7 @@ fn find_game(id: &str) -> Result<GameProfile, String> {
 
 pub fn list() -> Result<Value, String> {
     let all = all_windows()?;
+    let detected = games::detect(None);
     let games: Vec<Value> = profile::list()
         .iter()
         .map(|game| {
@@ -68,7 +70,8 @@ pub fn list() -> Result<Value, String> {
                 "foreground": windows.iter().any(|w| w.foreground),
                 "windows": windows.iter().take(5).map(|w| window_json(w)).collect::<Vec<_>>(),
                 "allowAutomationInput": game.allow_automation_input,
-                "canLaunch": !game.launch_path.trim().is_empty(),
+                "canLaunch": !game.launch_path.trim().is_empty()
+                    || installed_match(&detected, game).is_some(),
             })
         })
         .collect();
@@ -131,20 +134,67 @@ pub fn focus(
     Ok(json!({"focused": window_json(window)}))
 }
 
-pub fn launch(profile_id: &str) -> Result<Value, String> {
-    let game = find_game(profile_id)?;
-    if game.launch_path.trim().is_empty() {
-        return Err(format!(
-            "「{}」没有设置启动路径：请在「游戏适配」里填写",
-            game.display_name
-        ));
+/// 设置页“自动检测”：本机检测到的游戏。
+#[tauri::command]
+pub async fn installed_games(query: Option<String>) -> Result<Vec<InstalledGame>, String> {
+    tauri::async_runtime::spawn_blocking(move || games::detect(query.as_deref()))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 本机检测到的游戏（工具 `game.installed`）。
+pub fn installed(query: Option<&str>) -> Value {
+    json!({"games": games::detect(query)})
+}
+
+/// 和游戏配置对应的已安装游戏（先比进程名，再比名字）。
+fn installed_match<'a>(
+    detected: &'a [InstalledGame],
+    game: &GameProfile,
+) -> Option<&'a InstalledGame> {
+    if game.process_names.is_empty() {
+        return None;
     }
+    games::find_match(detected, &game.display_name, &game.process_names)
+}
+
+pub fn launch(profile_id: Option<&str>, installed_id: Option<&str>) -> Result<Value, String> {
+    if let Some(id) = installed_id {
+        let detected = games::detect(None);
+        let found = detected
+            .iter()
+            .find(|g| g.id == id)
+            .ok_or_else(|| format!("没有检测到 {id}：先用 game.installed 看看装了哪些游戏"))?;
+        let command = found
+            .launch
+            .as_deref()
+            .ok_or_else(|| format!("不知道怎么启动「{}」", found.name))?;
+        game_window::launch(command)?;
+        return Ok(
+            json!({"launched": true, "alreadyRunning": false, "game": found.name, "via": found.source}),
+        );
+    }
+    let profile_id = profile_id.ok_or("要给 profileId 或 installedId")?;
+    let game = find_game(profile_id)?;
     let all = all_windows()?;
     if !game_windows(&game, &all).is_empty() {
-        return Ok(json!({"launched": false, "alreadyRunning": true}));
+        return Ok(json!({"launched": false, "alreadyRunning": true, "game": game.display_name}));
     }
-    game_window::launch(&game.launch_path)?;
-    Ok(json!({"launched": true, "alreadyRunning": false}))
+    if !game.launch_path.trim().is_empty() {
+        game_window::launch(&game.launch_path)?;
+        return Ok(
+            json!({"launched": true, "alreadyRunning": false, "game": game.display_name, "via": "profile"}),
+        );
+    }
+    let detected = games::detect(None);
+    let found = installed_match(&detected, &game).ok_or_else(|| {
+        format!(
+            "「{}」没有设置启动路径，也没在本机检测到：请在「游戏适配」里填写或点“自动检测”",
+            game.display_name
+        )
+    })?;
+    game_window::launch(found.launch.as_deref().unwrap_or_default())?;
+    Ok(json!({"launched": true, "alreadyRunning": false, "game": found.name, "via": found.source}))
 }
 
 pub fn close(profile_id: &str) -> Result<Value, String> {

@@ -5,7 +5,9 @@
 //!   最后核对前台确实是目标窗口。
 //! - 关闭：只投递 `WM_CLOSE`（游戏自己决定是否弹确认、怎么存档），从不强制结束进程。
 //! - 打开：`ShellExecuteW("open")`，支持程序、快捷方式和启动器链接（如 `steam://`）；
-//!   路径只来自用户在游戏配置里填写的“启动路径”。
+//!   启动路径以引号开头时，引号里是程序、后面是参数（Riot 客户端要 `--launch-product=…`）；
+//!   工作目录设为程序所在文件夹（腾讯的启动器要求）；要管理员权限的程序由 Windows 弹授权。
+//!   路径来自用户在游戏配置里填写的“启动路径”，或检测到的已安装游戏（`games.rs`）。
 //!
 //! 非 Windows 平台编译为明确报错的兜底实现。
 
@@ -100,15 +102,25 @@ mod imp {
         if path.is_empty() {
             return Err("启动路径为空".into());
         }
-        let file = HSTRING::from(path);
+        let (program, args) = crate::games::split_command(path);
+        let directory = std::path::Path::new(&program)
+            .parent()
+            .filter(|dir| dir.is_dir())
+            .map(|dir| HSTRING::from(dir.as_os_str()));
+        let file = HSTRING::from(program.as_str());
+        let params = args.as_deref().map(HSTRING::from);
         let verb = HSTRING::from("open");
         let result = unsafe {
             ShellExecuteW(
                 None,
                 &verb,
                 &file,
-                PCWSTR::null(),
-                PCWSTR::null(),
+                params
+                    .as_ref()
+                    .map_or(PCWSTR::null(), |p| PCWSTR(p.as_ptr())),
+                directory
+                    .as_ref()
+                    .map_or(PCWSTR::null(), |d| PCWSTR(d.as_ptr())),
                 SW_SHOWNORMAL,
             )
         };

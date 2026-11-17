@@ -47,6 +47,7 @@ pub const CORE_TOOLS: &[&str] = &[
     "settings.update",
     // 玩家最常让琴音做的事：打开游戏、下载 / 启用模型（玩家实测语音里找不到它们）
     "game.launch",
+    "game.installed",
     "models.list",
     "models.download",
     "models.activate",

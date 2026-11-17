@@ -2650,6 +2650,7 @@ dependencies = [
  "cpal",
  "kotone-core",
  "kotone-tools",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

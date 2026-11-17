@@ -159,6 +159,22 @@ struct GameIdArgs {
     profile_id: String,
 }
 
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct GameLaunchArgs {
+    #[serde(default)]
+    profile_id: Option<String>,
+    #[serde(default)]
+    installed_id: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct GameInstalledArgs {
+    #[serde(default)]
+    query: Option<String>,
+}
+
 /// 游戏窗口操作会短暂阻塞（切前台要等确认），放到阻塞线程池。
 async fn blocking(work: impl FnOnce() -> Result<Value, String> + Send + 'static) -> HostResult {
     tauri::async_runtime::spawn_blocking(work)
@@ -889,8 +905,19 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
             .await
         }
         c::TOOL_GAME_LAUNCH => {
-            let a: GameIdArgs = parse(tool, args)?;
-            blocking(move || crate::game_tools::launch(&a.profile_id)).await
+            let a: GameLaunchArgs = parse(tool, args)?;
+            blocking(move || {
+                crate::game_tools::launch(a.profile_id.as_deref(), a.installed_id.as_deref())
+            })
+            .await
+        }
+        c::TOOL_GAME_INSTALLED => {
+            let a: GameInstalledArgs = if args.is_null() {
+                GameInstalledArgs::default()
+            } else {
+                parse(tool, args)?
+            };
+            blocking(move || Ok(crate::game_tools::installed(a.query.as_deref()))).await
         }
         c::TOOL_GAME_CLOSE => {
             let a: GameIdArgs = parse(tool, args)?;

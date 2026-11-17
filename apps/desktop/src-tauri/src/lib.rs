@@ -2220,6 +2220,7 @@ pub fn run() {
             companion::companion_self_check,
             companion::connection_self_check,
             companion::connection_models,
+            game_tools::installed_games,
             companion::companion_status,
             companion::companion_clear_chat_region,
             model_catalog::list_catalog_models,
