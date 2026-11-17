@@ -291,6 +291,10 @@ fn route_named_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, id: &str) {
     // 它不依赖 runtime 生命周期的 orchestrator 状态。
     if id == HK_AUTOMATION_STOP {
         crate::automation::stop(app, None, "停止自动化热键");
+        // 琴音正在一步一步操作游戏：停下这次操作，并结束这一轮（不再自动重试，ADR 019）。
+        if crate::computer_use::stop_all(app, "停止自动化热键") {
+            let _ = crate::agent::stop(app);
+        }
         return;
     }
     if id == HK_RUNTIME_TOGGLE {

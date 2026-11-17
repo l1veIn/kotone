@@ -141,6 +141,21 @@ impl Model {
         Some(self.set(Phase::Thinking, label, &said))
     }
 
+    /// 正在操作游戏（`game.act`）：状态行“正在操作”，正文是这一步在做什么。
+    /// 正在念或在等回答时不打断。
+    pub fn acting(&mut self, what: &str) -> Option<&Snapshot> {
+        if self.holding || self.snap.phase == Phase::Asking {
+            return None;
+        }
+        Some(self.set(Phase::Thinking, ACTING_LABEL, what))
+    }
+
+    /// 操作结束：还显示着“正在操作”就收起（语音入口接着会显示“在想…”）。
+    pub fn acting_done(&mut self) -> Option<&Snapshot> {
+        (self.snap.phase == Phase::Thinking && self.snap.label == ACTING_LABEL)
+            .then(|| self.set(Phase::Hidden, "", ""))
+    }
+
     pub fn speaking(&mut self, text: &str) -> &Snapshot {
         self.holding = true;
         self.set(Phase::Speaking, "琴音", text)
@@ -206,6 +221,9 @@ impl Model {
         (self.snap.revision == revision && self.snap.phase != Phase::Hidden).then(|| self.hide())
     }
 }
+
+/// 操作游戏时气泡的状态行（ADR 019：“正在操作：打开背包…”）。
+pub const ACTING_LABEL: &str = "正在操作";
 
 /// 念完后停留多久：3 秒 + 每 10 个字 1 秒，最多 10 秒（参考 VPet / dsh-pet）。
 pub fn dwell(text: &str) -> Duration {
@@ -349,6 +367,17 @@ pub fn thinking(app: &AppHandle, label: &str) {
     if enabled(app) {
         update(app, |m| m.thinking(label).cloned());
     }
+}
+
+/// 正在操作游戏：不论从哪个入口发起都显示（玩家要看得见琴音在动键鼠）。
+pub fn acting(app: &AppHandle, what: &str) {
+    if enabled(app) {
+        update(app, |m| m.acting(what).cloned());
+    }
+}
+
+pub fn acting_done(app: &AppHandle) {
+    update(app, |m| m.acting_done().cloned());
 }
 
 pub fn asking(app: &AppHandle, question: &str) {
@@ -556,6 +585,23 @@ mod tests {
         assert_eq!(m.heard("可以").unwrap().heard, "可以");
         assert_eq!(m.ask_done().unwrap().phase, Phase::Thinking);
         assert_eq!(m.snapshot().ask_seconds, None);
+    }
+
+    #[test]
+    fn acting_shows_the_step_and_does_not_cut_speech() {
+        let mut m = Model::default();
+        let snap = m.acting("按 i（1/2）").unwrap().clone();
+        assert_eq!(
+            (snap.phase, snap.label.as_str()),
+            (Phase::Thinking, ACTING_LABEL)
+        );
+        assert_eq!(snap.text, "按 i（1/2）");
+        assert_eq!(m.acting_done().unwrap().phase, Phase::Hidden);
+        // 别的“在想”不被 acting_done 收起；正在念时不打断
+        m.thinking("在想…");
+        assert!(m.acting_done().is_none());
+        m.speaking("好的");
+        assert!(m.acting("点击").is_none());
     }
 
     #[test]

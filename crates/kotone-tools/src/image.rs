@@ -208,6 +208,12 @@ pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, ImageError> {
     Ok(out)
 }
 
+/// 标准 base64（带填充）编码。
+pub fn encode_base64(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
 /// 标准 base64（带或不带填充）解码。
 pub fn decode_base64(text: &str) -> Result<Vec<u8>, String> {
     use base64::Engine;

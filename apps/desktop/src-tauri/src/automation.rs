@@ -371,56 +371,18 @@ impl ScriptHost for DesktopHost {
     }
 
     fn ocr(&self, region: Region) -> Result<Vec<TextLine>, String> {
-        let settings = self
-            .app
-            .state::<crate::SharedState>()
-            .settings
-            .read()
-            .unwrap()
-            .clone();
-        let (_, backend) = crate::companion::ocr_backend(&self.app, &settings)?;
-        let info = backend.info();
-        if !info.ready {
-            return Err(format!(
-                "文字识别模型还不能用：{}",
-                info.reason.unwrap_or(info.state)
-            ));
-        }
         let (crop, origin) = Self::crop_with_origin(&self.capture()?, region);
-        let png = if backend.kind() == kotone_core::ocr::OcrBackendKind::Online {
-            kotone_tools::image::encode_png(&crop).map_err(|e| e.to_string())?
-        } else {
-            Vec::new()
-        };
-        let output = backend
-            .recognize(
-                &OcrInput {
-                    width: crop.width(),
-                    height: crop.height(),
-                    rgba: crop.pixels(),
-                    png: &png,
-                },
-                &OcrParams {
-                    language: info.default_language,
-                    options: Value::Null,
-                },
-                &OcrCancel::new(),
-                Instant::now() + Duration::from_secs(20),
-            )
-            .map_err(|e| format!("文字识别失败：{e}"))?;
-        // 识别框是裁剪图里的像素坐标，换回窗口比例。
-        let (cw, ch) = (f64::from(crop.width()), f64::from(crop.height()));
-        Ok(output
-            .observations
+        // 识别框是裁剪图里的比例，换回窗口比例。
+        Ok(ocr_image(&self.app, &crop)?
             .into_iter()
-            .map(|o| TextLine {
-                rect: o.bbox.map(|b| Region {
-                    x: origin.x + b.x / cw * origin.width,
-                    y: origin.y + b.y / ch * origin.height,
-                    width: b.width / cw * origin.width,
-                    height: b.height / ch * origin.height,
+            .map(|(text, rect)| TextLine {
+                rect: rect.map(|[x, y, w, h]| Region {
+                    x: origin.x + x * origin.width,
+                    y: origin.y + y * origin.height,
+                    width: w * origin.width,
+                    height: h * origin.height,
                 }),
-                text: o.text,
+                text,
             })
             .collect())
     }
@@ -432,6 +394,63 @@ impl ScriptHost for DesktopHost {
     fn toast(&self, text: &str) -> Result<(), String> {
         self.deliver(text, DeliveryKind::Danmaku, false)
     }
+}
+
+/// 一行识别结果：文字与它在图里的比例框 `[x, y, w, h]`（识别器没给框时为 None）。
+pub type OcrLine = (String, Option<[f64; 4]>);
+
+/// 用陪玩选定的 OCR 模型识别一张图：返回每行文字与它在图里的比例框 `[x, y, w, h]`（0–1）。
+/// 自动化的 `ocr()` 与 `game.look` 共用。
+pub fn ocr_image(
+    app: &AppHandle,
+    image: &kotone_tools::image::RgbaImage,
+) -> Result<Vec<OcrLine>, String> {
+    let settings = app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .clone();
+    let (_, backend) = crate::companion::ocr_backend(app, &settings)?;
+    let info = backend.info();
+    if !info.ready {
+        return Err(format!(
+            "文字识别模型还不能用：{}",
+            info.reason.unwrap_or(info.state)
+        ));
+    }
+    let png = if backend.kind() == kotone_core::ocr::OcrBackendKind::Online {
+        kotone_tools::image::encode_png(image).map_err(|e| e.to_string())?
+    } else {
+        Vec::new()
+    };
+    let output = backend
+        .recognize(
+            &OcrInput {
+                width: image.width(),
+                height: image.height(),
+                rgba: image.pixels(),
+                png: &png,
+            },
+            &OcrParams {
+                language: info.default_language,
+                options: Value::Null,
+            },
+            &OcrCancel::new(),
+            Instant::now() + Duration::from_secs(20),
+        )
+        .map_err(|e| format!("文字识别失败：{e}"))?;
+    let (w, h) = (f64::from(image.width()), f64::from(image.height()));
+    Ok(output
+        .observations
+        .into_iter()
+        .map(|o| {
+            let rect = o
+                .bbox
+                .map(|b| [b.x / w, b.y / h, b.width / w, b.height / h]);
+            (o.text, rect)
+        })
+        .collect())
 }
 
 /// 执行记录的对外形状（工具与事件）。`with_source = false` 时省略程序源码。
@@ -663,11 +682,20 @@ pub fn delete(app: &AppHandle, id: &str) -> Result<bool, String> {
     Ok(deleted)
 }
 
+/// 有自动化程序正在运行（`game.act` 据此不与它同时按键，ADR 019“输入锁”）。
+pub fn program_running(app: &AppHandle) -> bool {
+    app.try_state::<AutomationManager>()
+        .is_some_and(|m| !m.live.lock().unwrap().is_empty())
+}
+
 /// 调度器到点（或立即）调用：确认目标窗口还在，然后在新线程里运行程序。
 fn launch(app: &AppHandle, run: &Run) -> Result<(), String> {
     let RunAction::Program(program) = &run.action else {
         return Err("不是程序".into());
     };
+    if crate::computer_use::busy(app) {
+        return Err("琴音正在操作游戏，自动化没有启动（不能同时按键）".into());
+    }
     let target = program.target.as_ref().ok_or("没有记录目标窗口")?;
     let identity = WindowIdentity {
         handle: target.handle,

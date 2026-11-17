@@ -165,6 +165,14 @@ pub fn send(app: &AppHandle, outgoing: Outgoing) -> Result<Value, String> {
     {
         return Ok(json!({"status": "answered"}));
     }
+    // 语音说“停下”：立刻停下正在进行的操作和这一轮（ADR 019 决定 7），不当成插话排队。
+    if matches!(outgoing.source.as_str(), "wake-voice" | "voice") && is_stop_command(&text) {
+        let acting = crate::computer_use::stop_all(app, "语音“停下”");
+        let running = stop(app)?;
+        if acting || running {
+            return Ok(json!({"status": "stopped"}));
+        }
+    }
     let message = Message::User {
         text,
         attachments: outgoing.attachments,
@@ -901,9 +909,26 @@ impl Drop for AskGuard {
     }
 }
 
+/// 玩家说的是不是“停下”（整句只有停止的意思，去掉标点与语气词）。
+fn is_stop_command(text: &str) -> bool {
+    let core: String = text
+        .chars()
+        .filter(|c| !c.is_ascii_punctuation() && !"，。！？、…~～ 　".contains(*c))
+        .collect();
+    let core = core
+        .trim_start_matches("琴音")
+        .trim_end_matches(['吧', '啊', '呀', '了', '吗'])
+        .to_lowercase();
+    matches!(
+        core.as_str(),
+        "停" | "停下" | "停下来" | "停止" | "停一下" | "快停" | "别动" | "住手" | "不要动" | "stop"
+    )
+}
+
 // ---------- 对话管理 ----------
 
 pub fn stop(app: &AppHandle) -> Result<bool, String> {
+    crate::computer_use::stop_all(app, "停止琴音");
     let rt = runtime(app)?;
     let inner = rt.inner.lock().unwrap();
     match &inner.running {
@@ -1165,6 +1190,25 @@ mod tests {
         assert_eq!(game_reply(&[user("voice")], &done), None);
         let long = [assistant(&"字".repeat(400), &[])];
         assert_eq!(game_reply(&long, &done).unwrap().chars().count(), 300);
+    }
+
+    #[test]
+    fn stop_commands_are_recognized_only_alone() {
+        for t in [
+            "停下",
+            "停下！",
+            "琴音，停下吧",
+            "别动了",
+            "Stop.",
+            "停一下",
+            "住手",
+        ] {
+            assert!(is_stop_command(t), "{t}");
+        }
+        for t in ["停下来帮我看看地图", "不要停", "帮我打开背包", "停车场在哪"]
+        {
+            assert!(!is_stop_command(t), "{t}");
+        }
     }
 
     #[test]

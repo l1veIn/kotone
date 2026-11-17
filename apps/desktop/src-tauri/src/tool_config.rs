@@ -923,8 +923,51 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
             let a: GameIdArgs = parse(tool, args)?;
             blocking(move || crate::game_tools::close(&a.profile_id)).await
         }
+        c::TOOL_GAME_LOOK => {
+            let a: GameLookArgs = if args.is_null() {
+                GameLookArgs::default()
+            } else {
+                parse(tool, args)?
+            };
+            let zoom = match a.zoom {
+                None => None,
+                Some(z) if z.len() == 4 => Some([z[0], z[1], z[2], z[3]]),
+                Some(_) => {
+                    return Err(HostError::InvalidArguments(
+                        "zoom 必须是 [x0, y0, x1, y1]".into(),
+                    ))
+                }
+            };
+            let app = app.clone();
+            blocking(move || crate::computer_use::look(&app, zoom)).await
+        }
+        c::TOOL_GAME_ACT => {
+            let a: GameActArgs = parse(tool, args)?;
+            kotone_tools::computer_use::actions::parse_plan(&a.actions)
+                .map_err(HostError::InvalidArguments)?;
+            // 调用被丢弃（本轮停止、超时）时，守卫让进行中的操作停下并松开按住的键。
+            let flag = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let _guard = crate::computer_use::CallGuard { flag: flag.clone() };
+            let app = app.clone();
+            blocking(move || crate::computer_use::act(&app, &a.observation_id, &a.actions, &flag))
+                .await
+        }
         other => Err(HostError::Failed(format!("桌面端未实现工具 {other}"))),
     }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GameLookArgs {
+    #[serde(default)]
+    zoom: Option<Vec<f64>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GameActArgs {
+    observation_id: String,
+    actions: Value,
 }
 
 /// 后台下载模型：进度（至多每秒一次）与结果发布到工具事件总线。

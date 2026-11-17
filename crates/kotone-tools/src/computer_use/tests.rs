@@ -210,6 +210,10 @@ fn a_plan_has_one_to_twenty_steps() {
     let err =
         parse_plan(&json!([{"action": "wait", "duration": 0}, {"action": "nope"}])).unwrap_err();
     assert!(err.starts_with("第 2 步"), "{err}");
+    let long: Vec<_> = (0..3)
+        .map(|_| json!({"action": "hold_key", "text": "w", "duration": 8}))
+        .collect();
+    assert!(parse_plan(&json!(long)).unwrap_err().contains("合计"));
 }
 
 // ---------- 批量执行 ----------

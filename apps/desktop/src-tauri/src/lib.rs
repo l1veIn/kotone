@@ -8,6 +8,7 @@ mod automation;
 mod bubble;
 mod companion;
 mod compatibility;
+mod computer_use;
 mod diagnostics;
 mod game_session;
 mod game_tools;
@@ -2011,6 +2012,7 @@ pub fn run() {
             app.manage(wake_runtime);
             app.manage(voice_ask::VoiceAsk::default());
             app.manage(bubble::BubbleRuntime::default());
+            app.manage(computer_use::ComputerUse::default());
             let assistant_runtime = assistant::initialize(app.handle(), settings.clone());
 
             #[allow(unused_mut)] // vad-silero feature 关闭时无可变接线

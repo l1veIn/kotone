@@ -17,6 +17,9 @@ pub const MAX_TYPE_CHARS: usize = 1_000;
 pub const MAX_REPEAT: u32 = 100;
 /// `scroll_amount` 上限（滚轮格数）。
 pub const MAX_SCROLL: u32 = 50;
+/// 一份计划里 `hold_key` 与 `wait` 合计最长多久（毫秒）：整次 `game.act` 要在工具期限
+/// （30 秒）内做完并再看一眼。
+pub const MAX_PLAN_WAIT_MS: u64 = 20_000;
 /// `mouse_move_by` 单方向上限（像素）。
 pub const MAX_MOVE_BY: i32 = 5_000;
 
@@ -381,8 +384,23 @@ pub fn parse_plan(actions: &Value) -> Result<Vec<Action>, String> {
     if list.is_empty() || list.len() > MAX_ACTIONS {
         return Err(format!("actions 要有 1–{MAX_ACTIONS} 步"));
     }
-    list.iter()
+    let plan = list
+        .iter()
         .enumerate()
         .map(|(i, v)| parse_action(v).map_err(|e| format!("第 {} 步：{e}", i + 1)))
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    let waited: u64 = plan
+        .iter()
+        .map(|a| match a {
+            Action::HoldKey { duration_ms, .. } | Action::Wait { duration_ms } => *duration_ms,
+            _ => 0,
+        })
+        .sum();
+    if waited > MAX_PLAN_WAIT_MS {
+        return Err(format!(
+            "一次 game.act 里 hold_key 和 wait 合计不能超过 {} 秒，分几次做",
+            MAX_PLAN_WAIT_MS / 1000
+        ));
+    }
+    Ok(plan)
 }
