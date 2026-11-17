@@ -119,4 +119,16 @@ The AI connection provider presets (names, groups, base URLs, model lists) are d
 - Project: pi-ai (`@earendil-works/pi-ai`), Copyright Earendil Works / the pi authors (see its own LICENSE)
 - License: Apache License 2.0
 
+## Game computer use (`game.look` / `game.act`, ADR 019)
+
+The design of 琴音's "look at the screen, move the mouse" tools follows the open-source projects below. Kotone re-implements the behaviour in Rust; no upstream source file is copied. What was taken from each project is listed in `docs/adr/019-game-computer-use.md` and in the module headers of `crates/kotone-tools/src/computer_use/` and `apps/desktop/src-tauri/src/computer_use.rs`. Copyright belongs to the respective authors as stated in each repository's license file.
+
+- Anthropic computer use (action names and parameters, screenshot scaling rule, typing groups of 50 characters with 12 ms gaps): `anthropic-quickstarts` `computer-use-demo/tools/computer.py`, https://github.com/anthropics/anthropic-quickstarts, MIT License; Anthropic computer use tool documentation
+- dsh-computer-use-win (batch rules: validate the whole plan first, stop at the first failure, "Not executed: an earlier action failed.", stopReason, only report "sent", input tag so the player's own input stops the batch, POINT_COVERED, WINDOW_CHANGED, per-app consent): https://github.com/Yu-tao-Li/dsh-computer-use-win, MIT License; and deepseek-harness `packages/experimental/cua`, MIT License
+- Microsoft UFO² (numbered element list `{id, text, box}` given to the model): https://github.com/microsoft/UFO, MIT License
+- Microsoft OmniParser (numbered label style: palette colour, black text when luminance > 160, label positions tried above / left / right / above-right): https://github.com/microsoft/OmniParser, code under Creative Commons Attribution 4.0 (CC-BY-4.0) — attribution: OmniParser, Microsoft. Its icon detection model is not used.
+- Cradle by BAAI (look → reflect → plan → act loop; relative mouse movement for camera control; "skills are code" = Kotone automations): https://github.com/BAAI-Agents/Cradle, MIT License
+- GameVerse (key_down / key_up actions and hold-to-walk for real Windows games): MIT License
+- UI-TARS-1.5 game prompt by ByteDance (prompt clauses: record new game rules, change approach when an action has no effect, release held keys, ask the user when stuck; 100 ms settle before clicking): https://github.com/bytedance/UI-TARS, Apache License 2.0
+
 These notices describe third-party components and models; they do not grant a license to Kotone itself.
