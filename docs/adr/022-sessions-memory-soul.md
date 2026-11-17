@@ -1,6 +1,6 @@
 # ADR 022：会话、记忆与 SOUL——琴音有自己的工作区
 
-- 状态：Proposed（2026-11-17，等用户确认文末的问题）
+- 状态：Accepted（2026-11-17）。用户确认：子会话可以发给自己的父会话；不做起名仪式；**全部放进 0.2.0**（以后再升级太麻烦）。用户修订：每个游戏的知识是“游戏记忆”，不是 Skill；Skill 是可以分发的通用技能包。
 - 调研：[OpenClaw 与 Hermes Agent](../research/2026-11-17-openclaw-hermes.md)（两者都是 MIT）
 - 修订：[ADR 015](015-agent-scope-and-stack.md) 第 1 节的“子 Agent：不做”“Skill：以后做”
 - 被依赖：[ADR 021](021-hear-teammates.md)（听队友）
@@ -35,47 +35,55 @@
 | `IDENTITY.md` | Name、Emoji、Avatar（OpenClaw 字段），加 Kotone 自己的 Wake（唤醒词） | 玩家（设置页）；琴音可改名（先问） | 主会话 |
 | `USER.md` | 关于玩家的稳定事实与偏好（≤ 1,375 字，Hermes） | 琴音经 `memory` 工具；玩家可直接编辑 | 主会话 |
 | `MEMORY.md` | 精选长期事实（≤ 2,200 字，Hermes） | 同上 | 主会话 |
-| `skills/<name>/SKILL.md` | 见第 4 节 | 琴音经 `skill.manage`；玩家可编辑 / 导入 | 只放目录 |
+| `memory/games/<游戏配置 id>.md` | 这个游戏的记忆：界面在哪、按什么键、报点黑话、学到的规则（见第 4 节） | 琴音经 `memory` 工具；玩家可直接编辑 | 前台是这个游戏时注入 |
+| `skills/<name>/SKILL.md` | 可以分发的通用技能包（见第 5 节） | 玩家导入；琴音经 `skill.manage`（先问） | 只放目录 |
 
 - **注入方式照 Hermes**：会话开始时把这些文件冻结成快照放进系统提示；会话中途写入立即落盘、下一段会话才生效——前缀不变，缓存稳定。
 - Kotone 的操作规则（工具怎么用、游戏规矩）仍在代码里（随工具一起变），不做成 `AGENTS.md`；`BOOTSTRAP.md` 首次运行仪式第一版不做（琴音有默认身份）。
-- 现在游戏配置里的“陪玩说明”（`companionNotes`）迁成这个游戏的 Skill。
+- 现在游戏配置里的“陪玩说明”（`companionNotes`）迁进这个游戏的记忆文件。
 
 ### 3. 记忆：照 Hermes 的工具
 
-- `memory {target: memory | user, operations: [{add | patch | remove, ...}]}`：整批原子生效；写满直接报错（让她自己整理），不悄悄丢旧条目；“学到的流程写进 Skill，不写进记忆”（Hermes 工具描述原文）。
+- `memory {target: memory | user | game, game?: 游戏配置 id, operations: [{add | patch | remove, ...}]}`：整批原子生效；写满直接报错（让她自己整理），不悄悄丢旧条目；“学到的流程写进 Skill，不写进记忆”（Hermes 工具描述原文；在 Kotone 里，某个游戏的界面和规则写进这个游戏的记忆）。
 - 写入前过注入扫描（照 Hermes `threat_patterns.py`，MIT），命中拒绝；**只有主会话能写**，子会话（里面全是陌生人的话）不能写——队友说的话种不进记忆。
-- 每日笔记 `memory/YYYY-MM-DD.md`、压缩前 memory flush、历史会话搜索（Hermes `session_search`）放到第二期。
+- 每日笔记 `memory/YYYY-MM-DD.md`、压缩前 memory flush、历史会话搜索（Hermes `session_search`）放到以后。
 
-### 4. Skill：琴音学会玩某个游戏（agentskills.io 格式）
+### 4. 游戏记忆：琴音学会玩某个游戏（用户修订）
 
-- `skills/<name>/SKILL.md`（YAML frontmatter：name ≤ 64 字、description ≤ 1024 字；Kotone 加 `games: [进程名]` 用来在前台是这个游戏时提示她），可以带附件（找图模板、自动化）。
-- 系统提示里只放目录（name、description），全文按需：`skill.view {name, path?}`（Hermes）。前台是某个游戏时，提示里标出对应的 Skill。
-- 琴音自建 / 修改：`skill.manage {create | patch | delete | write_file | remove_file}`（Hermes），**先问玩家**；每次修改保留旧版本可撤销（OpenClaw）；自建的 Skill 也过注入扫描（Hermes 默认关，我们默认开）。
-- `game.look` / `game.act` 摸清一个界面、玩家教了她什么，她就提议写进这个游戏的 Skill（ADR 019 提示词里“把新发现的规则记下来”终于有地方记了）。
+- 每个游戏一份 `memory/games/<游戏配置 id>.md`：这个游戏的界面在哪、按什么键、报点黑话、学到的规则、这个玩家在这个游戏里的习惯。它是**这个玩家自己的记忆**，不是用来分发的。
+- 前台是某个游戏时，它和 `MEMORY.md` 一起在会话开始时注入（同样冻结快照；有上限，例如 4,000 字）。
+- `game.look` / `game.act` 摸清一个界面、玩家教了她什么，她就用 `memory {target: game}` 记下来（ADR 019 提示词里“把新发现的规则记下来”终于有地方记了）。
+- 游戏配置里现在的“陪玩说明”（`companionNotes`）迁成这个文件的开头。
 
-### 5. 身份：名字、头像、唤醒词
+### 5. Skill：可以分发的通用技能包（agentskills.io 格式）
+
+- Skill 是**可以分享、可以安装的能力包**，和具体某个玩家无关：例如“同传”（怎么派子会话、怎么翻译报点）、“某游戏的日常任务一条龙”（说明 + 自动化 + 找图模板）。照 OpenClaw / Hermes：`skills/<name>/SKILL.md`（YAML frontmatter：name ≤ 64 字、description ≤ 1024 字），可以带附件（自动化、模板图片）。
+- 系统提示里只放目录（name、description），全文按需：`skill.view {name, path?}`（Hermes）。
+- 安装 / 导出：玩家在设置页导入一个 Skill 文件夹或压缩包，也能导出分享；外部 Agent 认同样的格式。
+- 琴音可以把自己摸索出的通用做法整理成 Skill：`skill.manage {create | patch | delete | write_file | remove_file}`（Hermes），**先问玩家**；每次修改保留旧版本可撤销（OpenClaw）；导入和自建的 Skill 都过注入扫描。
+
+### 6. 身份：名字、头像、唤醒词
 
 - 设置页“琴音的身份”：名字、头像（图片 ≤ 2 MB，存进工作区）、唤醒词。**设置优先，没设的回退到 `IDENTITY.md`**（OpenClaw `set-identity` 的规则）。
 - 名字出现在提示词、气泡、聊天窗口、导航栏“琴音陪玩”等处（现在写死在约 90 个文件里），统一改成读身份。
 - 唤醒词：现在是两个预置拼音串（“琴音琴音” = `q ín y īn q ín y īn`）。改名后可以把“<新名字><新名字>”转成同样的拼音音节，并检查每个音节都在唤醒模型的词表里；准确度要实测，不行就退回预置的。
 
-### 6. 安全
+### 7. 安全
 
 - 陌生人的内容（队友语音、游戏聊天）只进**工具受限的子会话**，不进能动手的主会话（OpenClaw：不可信内容交给不带工具的 reader）；子会话交回父会话的结果仍按不可信数据处理。
-- 记忆、SOUL、Skill 的写入只能由主会话做、都先问玩家、都过注入扫描。
+- 记忆、游戏记忆、SOUL、Skill 的写入只能由主会话做；SOUL、身份、Skill 先问玩家；全部过注入扫描。
 
-## 实施步骤（确认后，建议放在 0.2.0 之后的版本）
+## 实施步骤（0.2.0）
 
 1. 会话：存储加“父会话 / 模型 / 工具范围”字段（旧对话照常读）；`session.spawn / send / list / history / stop`；完成事件回父会话；归属与级联清理；子会话禁用清单。
 2. 工作区：`SOUL.md`、`IDENTITY.md`、`USER.md`、`MEMORY.md` 的读写与快照注入；`memory` 工具与注入扫描。
-3. Skill：目录、`skill.view`、`skill.manage`、版本保留；`companionNotes` 迁移。
+3. 游戏记忆（`companionNotes` 迁移）；Skill：目录、`skill.view`、`skill.manage`、导入 / 导出、版本保留。
 4. 身份：设置页（名字、头像、唤醒词），名字从代码里抽出来。
 5. ADR 021：`voice.listen.start / stop` 归属会话，“同传”用 `session.spawn` 实现。
 6. 文档与第三方声明（OpenClaw、Hermes 的 MIT 声明）。
 
-## 待用户确认
+## 已确认（2026-11-17）
 
-1. **子会话可以 `session.send` 给自己的父会话**（OpenClaw / Hermes 都禁止，Kotone 为长期运行的“同传”放开这一条）——可以吗？
-2. **首次运行不做“给琴音起名”的仪式**（OpenClaw 的 `BOOTSTRAP.md`），琴音带默认身份，想改去设置页或直接跟她说——可以吗？
-3. **放在 0.2.0 之后的版本做**（会话、记忆、SOUL、Skill、身份、听队友都在这一批）——可以吗？
+1. 子会话可以 `session.send` 给自己的父会话——可以。
+2. 首次运行不做起名仪式——可以。
+3. 放进 0.2.0（用户：以后发这些内容升级起来太麻烦）。
