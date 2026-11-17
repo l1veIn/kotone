@@ -386,7 +386,13 @@ pub fn set_visible<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>, visible: bo
             })();
             match result {
                 Ok(true) if window.label() == "overlay" => {
-                    let _ = window.emit_to("overlay", "kotone://overlay-visibility", visible);
+                    // 不能在 with_webview 回调里直接发事件：在主线程上调用时（例如成功提示停留后
+                    // 隐藏悬浮窗），回调执行期间 Tauri 一直占着这个窗口的内部锁，emit 要再拿同一把锁，
+                    // 主线程就把自己锁死了，整个应用随之卡住。换个线程发，等回调结束、锁放开后送达。
+                    let notify = window.clone();
+                    std::thread::spawn(move || {
+                        let _ = notify.emit_to("overlay", "kotone://overlay-visibility", visible);
+                    });
                 }
                 Err(_)
                     if window.label() == "overlay"
