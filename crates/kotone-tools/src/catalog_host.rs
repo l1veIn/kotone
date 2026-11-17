@@ -524,7 +524,7 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_COMPANION_CHECK,
-            description: "Run the capability self-check on the assistant's AI connection (one paid request: the connection works and the model calls tools). Returns at once with status=started; the result (also saved to settings) arrives as companion.check.finished {check} or companion.check.failed {message}.",
+            description: "Test the assistant's AI connection: reads the provider's model list (free) to confirm the address and key work and the model exists; providers without a model list get one short chat request instead. Not required before using the assistant. Returns at once with status=started; the result (also saved to settings) arrives as companion.check.finished {check} or companion.check.failed {message}.",
             side_effects: &["llm-request", "writes-settings"],
             egress: "connection-dependent",
             input: none(),

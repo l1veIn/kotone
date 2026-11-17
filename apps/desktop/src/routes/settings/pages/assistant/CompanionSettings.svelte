@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
-    companionClearChatRegion, companionSelfCheck, companionStatus, updateSettings,
+    companionClearChatRegion, companionStatus, updateSettings,
     type CompanionStatus, type QuickMessage,
   } from "../../../../lib/ipc";
   import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
@@ -16,13 +16,11 @@
   import { CircleAlert, CircleCheck, Plus, Trash2 } from "@lucide/svelte";
   import ArgsForm from "../automation/ArgsForm.svelte";
 
-  let { checking = $bindable(false) }: { checking?: boolean } = $props();
   let status = $state<CompanionStatus | null>(null);
   let automations = $state<Automation[]>([]);
   let saving = $state(false);
   const config = $derived($settingsStore?.assistant);
   const quick = $derived(config?.companion?.quickMessages ?? []);
-  const check = $derived(config?.companion?.check ?? null);
   const MAX = 8;
 
   export async function refresh() {
@@ -42,21 +40,6 @@
     return () => { disposed = true; unlisten?.(); };
   });
   $effect(() => { config?.connectionId; config?.companion; $settingsStore?.ocr?.activeModelId; void refresh(); });
-
-  export async function runCheck() {
-    if (checking) return;
-    checking = true;
-    try {
-      const result = await companionSelfCheck();
-      settingsStore.update((s) => (s ? { ...s, assistant: { ...s.assistant, companion: { ...s.assistant.companion, check: result } } } : s));
-      toast(result.passed, result.passed ? "能力自检通过" : `能力自检未通过：${result.message}`);
-    } catch (error) {
-      toast(false, `能力自检失败：${errText(error)}`);
-    } finally {
-      checking = false;
-      await refresh();
-    }
-  }
 
   async function saveQuick(next: QuickMessage[], message = "快捷指令已保存") {
     if (saving) return;
@@ -90,12 +73,6 @@
     }
   }
 
-  function checkLabel(): string {
-    if (!config?.connectionId) return "未选择 AI 连接";
-    if (!check || check.connectionId !== config.connectionId) return "尚未自检";
-    const when = new Date(check.checkedAtMs).toLocaleString();
-    return `${check.passed ? "已通过" : "未通过"}（${check.model || "未知模型"}，${when}）：${check.message}`;
-  }
 </script>
 
 {#if config}
@@ -114,14 +91,6 @@
           {/if}
         </div>
       {/if}
-      <SettingsRow label="AI 能力自检" description="选择连接后会自动自检一次（一次付费请求）：确认连接能用、模型支持工具调用。没通过时热键不工作。">
-        {#snippet control()}
-          <Button variant="outline" size="sm" disabled={checking || !config.connectionId} onclick={() => void runCheck()}>
-            {checking ? "自检中…" : "能力自检"}
-          </Button>
-        {/snippet}
-        <p class="m-0 text-xs leading-relaxed {check && check.connectionId === config.connectionId ? (check.passed ? 'text-success' : 'text-destructive') : 'text-muted-foreground'}" data-testid="companion-check">{checkLabel()}</p>
-      </SettingsRow>
       <SettingsRow label="帮忙打字后自动发送" description="默认打完直接发出去；关掉后只打进聊天框，由你确认后自己按回车。">
         {#snippet control()}
           <Switch aria-label="帮忙打字后自动发送" disabled={saving}

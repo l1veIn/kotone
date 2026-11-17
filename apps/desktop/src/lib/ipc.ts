@@ -459,7 +459,7 @@ export async function openCatalogModelDir(category: ModelCategory, id: string): 
 
 // ---------- Kotone 陪玩 ----------
 
-/** 对琴音所选的 AI 连接跑能力自检（一次付费请求），结果写进设置 */
+/** 测试琴音所选的 AI 连接（读一次模型列表，不花 token；不支持时发一次短对话），结果写进设置 */
 export async function companionSelfCheck(): Promise<CompanionCheck> {
   if (!isTauri) return browserMock.companionSelfCheck();
   return invoke<CompanionCheck>("companion_self_check");
@@ -469,6 +469,14 @@ export async function companionSelfCheck(): Promise<CompanionCheck> {
 export async function connectionSelfCheck(id: string): Promise<CompanionCheck> {
   if (!isTauri) return browserMock.connectionSelfCheck(id);
   return invoke<CompanionCheck>("connection_self_check", { id });
+}
+
+/** 服务商的模型列表（`GET /models`，不花 token）；supported=false 表示服务商没有列表接口。 */
+export interface ConnectionModels { supported: boolean; models: string[] }
+
+export async function connectionModels(id: string): Promise<ConnectionModels> {
+  if (!isTauri) return browserMock.connectionModels(id);
+  return invoke<ConnectionModels>("connection_models", { id });
 }
 
 /** 陪玩是否可用：AI 连接 / 自检 / OCR 模型 / 快捷消息 / profile */

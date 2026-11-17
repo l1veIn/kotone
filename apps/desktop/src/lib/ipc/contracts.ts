@@ -202,7 +202,7 @@ export interface AssistantConfig {
   danmakuEmote: "none" | "hello" | "cheering" | "pointing" | "amazed";
   /** 请求去向：companion 为 Kotone 陪玩（默认；旧值 reminders 视同 companion）；agent 原文转交外部 Agent（需开启工具服务）。 */
   route?: "reminders" | "companion" | "agent";
-  /** 陪玩：快捷消息、帮忙打字是否自动发送、AI 连接能力自检结果 */
+  /** 陪玩：快捷消息、帮忙打字是否自动发送、AI 连接的测试结果（只用于显示） */
   companion: CompanionConfig;
 }
 

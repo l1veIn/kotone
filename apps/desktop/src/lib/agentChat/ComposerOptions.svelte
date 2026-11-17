@@ -1,12 +1,12 @@
 <script lang="ts">
   // 输入框工具行右侧：权限模式与模型切换（参照 DeepSeek Harness 输入框的“权限 / 模型”两个下拉）。
-  // 权限写 agent.permissions.mode（整体替换，规则保留）；模型 = 选一条已保存密钥的连接 + 该连接的模型，
-  // 换了模型要重新做一次能力自检（一次请求）才能用，这里自动做。
+  // 权限写 agent.permissions.mode（整体替换，规则保留）；模型 = 选一条已保存密钥的连接 + 该连接的模型。
+  // 模型清单照 DeepSeek Harness：读服务商的模型列表（GET /models，不花 token），读不到时用预置的模型名。
   import { onMount } from "svelte";
   import { Check, ChevronDown, Cpu, LoaderCircle, Shield, ShieldCheck, ShieldEllipsis } from "@lucide/svelte";
   import * as Menu from "$lib/components/ui/dropdown-menu";
   import {
-    connectionSelfCheck, listConnectionPresets, listConnections, upsertConnection,
+    connectionModels, listConnectionPresets, listConnections, upsertConnection,
     type ConnectionInfo, type ConnectionPreset,
   } from "../ipc";
   import { agentSetPermissions, type PermissionMode, type Permissions } from "../agent";
@@ -29,9 +29,11 @@
   const current = $derived(connections.find((c) => c.id === connectionId) ?? null);
   const usable = $derived(connections.filter((c) => c.hasApiKey && c.kind === "remote"));
 
+  /** 服务商实际列出的模型（每条连接读一次，本次打开设置窗口内复用）。 */
+  let listed = $state<Record<string, string[]>>({});
+
   function modelsOf(c: ConnectionInfo): string[] {
-    const preset = presets.find((p) => p.id === c.provider);
-    const list = [...(preset?.models ?? [])];
+    const list = [...(listed[c.id]?.length ? listed[c.id] : presets.find((p) => p.id === c.provider)?.models ?? [])];
     if (c.model && !list.includes(c.model)) list.unshift(c.model);
     return list;
   }
@@ -41,6 +43,14 @@
       listConnections().catch(() => [] as ConnectionInfo[]),
       listConnectionPresets().catch(() => [] as ConnectionPreset[]),
     ]);
+  }
+
+  async function loadModels() {
+    await load();
+    await Promise.all(usable.filter((c) => !(c.id in listed)).map(async (c) => {
+      const reply = await connectionModels(c.id).catch(() => null);
+      listed = { ...listed, [c.id]: reply?.supported ? reply.models : [] };
+    }));
   }
 
   onMount(() => { void load(); });
@@ -64,16 +74,13 @@
     if (busy || (c.id === connectionId && c.model === model)) return;
     busy = "model";
     try {
-      // 先设为琴音的连接（自检结果只记在琴音的连接上），再换模型，最后自检一次。
       if (c.id !== connectionId) await patchSettings({ assistant: { connectionId: c.id } }, "");
       if (c.model !== model) {
         const { hasApiKey: _key, ...connection } = c;
         await upsertConnection({ ...connection, model });
       }
       await load();
-      const check = await connectionSelfCheck(c.id);
-      if (check.passed) toast(true, `琴音改用 ${model}`);
-      else toast(false, `${model} 没通过能力自检：${check.message}`);
+      toast(true, `琴音改用 ${model}`);
     } catch (error) {
       toast(false, `切换模型失败：${errText(error)}`);
     } finally {
@@ -104,11 +111,11 @@
     </Menu.DropdownMenuContent>
   </Menu.DropdownMenu>
 
-  <Menu.DropdownMenu onOpenChange={(open) => { if (open) void load(); }}>
+  <Menu.DropdownMenu onOpenChange={(open) => { if (open) void loadModels(); }}>
     <Menu.DropdownMenuTrigger data-testid="composer-model" disabled={!!busy}
       class="flex h-8 max-w-52 items-center gap-1 rounded-full px-2.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60">
       {#if busy === "model"}<LoaderCircle class="size-3.5 animate-spin" />{:else}<Cpu class="size-3.5 shrink-0" />{/if}
-      <span class="truncate">{busy === "model" ? "正在自检…" : current ? current.model : "选择模型"}</span><ChevronDown class="size-3 shrink-0 opacity-70" />
+      <span class="truncate">{current ? current.model : "选择模型"}</span><ChevronDown class="size-3 shrink-0 opacity-70" />
     </Menu.DropdownMenuTrigger>
     <Menu.DropdownMenuContent align="end" side="top" class="max-h-80 w-72 overflow-y-auto">
       {#if usable.length === 0}

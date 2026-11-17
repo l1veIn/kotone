@@ -10,7 +10,7 @@
 //! 5. 执行：提醒交给调度器，打字经 profile 的注入设置打进聊天框（默认按发送键，`autoSend` 关掉时不按），
 //!    回答走与提醒相同的语音 / 弹幕交付路径。模型回报的聊天框位置记进 profile。
 //!
-//! 必须有通过能力自检的 AI 连接；没有时不降级，只提示用户先去配置。失败都如实告诉用户
+//! 必须选好 AI 连接并保存密钥；没有时不降级，只提示用户先去配置。失败都如实告诉用户
 //! （热键入口用语音 / 弹幕播出，工具入口返回错误），不把失败说成“没看清”。
 
 use std::sync::Arc;
@@ -95,7 +95,7 @@ pub(crate) fn active_profile(settings: &Settings) -> GameProfile {
 
 // ---------- 就绪检查 ----------
 
-/// AI 连接是否可用于陪玩（已选、有密钥、自检通过且仍对应当前地址与模型）。
+/// AI 连接是否可用于陪玩：已选、有密钥就行（不再要求能力自检；“测试连接”只是给用户手动确认）。
 pub fn connection_ready(
     app: &AppHandle,
     settings: &Settings,
@@ -116,19 +116,7 @@ pub fn connection_ready(
     {
         return Err("琴音的 AI 连接还没有保存 API key，请在「高级 → API 连接」里填写".into());
     }
-    match &settings.assistant.companion.check {
-        Some(check) if check.matches(id, &connection.base_url, &connection.model) => {
-            if check.passed {
-                Ok(connection)
-            } else {
-                Err(format!(
-                    "琴音的 AI 连接没有通过能力自检（{}），请换一个更强的模型后重新自检",
-                    check.message
-                ))
-            }
-        }
-        _ => Err("琴音的 AI 连接还没有做能力自检：请在「高级 → API 连接」里点「能力自检」".into()),
-    }
+    Ok(connection)
 }
 
 /// 当前 OCR 模型及其后端；没有可用模型时给出可操作的提示。
@@ -785,9 +773,9 @@ pub fn quick_message_text(app: &AppHandle, id: &str) -> Option<String> {
         .map(|m| m.text)
 }
 
-// ---------- 能力自检 ----------
+// ---------- 测试连接 ----------
 
-/// 对琴音当前用的连接跑能力自检（一次付费请求），并把结果写进设置。
+/// 测试琴音当前用的连接能不能连通（一次付费请求），并把结果写进设置（只用于显示）。
 pub async fn self_check(app: &AppHandle) -> Result<CompanionCheck, String> {
     let id = settings(app).assistant.connection_id.trim().to_string();
     if id.is_empty() {
@@ -796,7 +784,7 @@ pub async fn self_check(app: &AppHandle) -> Result<CompanionCheck, String> {
     check_connection(app, &id).await
 }
 
-/// 对任意一条连接跑能力自检（一次付费请求）。只有它正是琴音在用的连接时才写进设置；
+/// 测试任意一条连接能不能连通（一次付费请求）。只有它正是琴音在用的连接时才写进设置；
 /// 其他连接的结果只返回给界面，不改配置。
 pub async fn check_connection(app: &AppHandle, id: &str) -> Result<CompanionCheck, String> {
     let id = id.trim().to_string();
@@ -848,6 +836,21 @@ pub async fn companion_self_check(app: AppHandle) -> Result<CompanionCheck, Stri
 #[tauri::command]
 pub async fn connection_self_check(app: AppHandle, id: String) -> Result<CompanionCheck, String> {
     check_connection(&app, &id).await
+}
+
+/// 读这条连接在服务商那里的模型列表（不花 token；给模型菜单用）。
+/// `supported: false` = 服务商没有列表接口，界面退回预置的模型名。
+#[tauri::command]
+pub async fn connection_models(app: AppHandle, id: String) -> Result<Value, String> {
+    let connection = app.state::<SharedState>().connections.resolve(id.trim())?;
+    match kotone_ai::model_listing::list_models(&connection, &CancellationToken::default()).await? {
+        kotone_ai::model_listing::Listing::Models(models) => {
+            Ok(json!({"supported": true, "models": models}))
+        }
+        kotone_ai::model_listing::Listing::Unsupported => {
+            Ok(json!({"supported": false, "models": []}))
+        }
+    }
 }
 
 #[tauri::command]

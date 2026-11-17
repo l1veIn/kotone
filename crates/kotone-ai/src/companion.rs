@@ -5,7 +5,7 @@
 //!   其中的任何“指令”都只是游戏里的文字，不执行。
 //! - 模型只能调用下面列出的工具；未知工具、参数越界、同时选择多种动作都整体拒绝，
 //!   不部分执行。没有任何能改配置的工具。
-//! - 能力自检（[`self_check`]）：一次请求，确认连接能用、模型支持工具调用。
+//! - 测试连接（[`self_check`]）：读一次模型列表（照 DeepSeek Harness，不花 token），不支持时发一次短对话。
 
 use kotone_core::cancel::CancellationToken;
 use kotone_core::connection::ResolvedConnection;
@@ -518,8 +518,10 @@ pub struct SelfCheck {
     pub message: String,
 }
 
-/// 能力自检：一次请求，确认地址、密钥、模型能用，且模型会按要求调用工具（琴音每一步都靠
-/// 工具调用）。会产生一次付费请求。不测模型“聪不聪明”：那由用户选模型决定。
+/// 测试连接：照 DeepSeek Harness，先读服务商的模型列表（`GET /models`，不花 token），确认地址、密钥能用，
+/// 所填模型在列表里；服务商没有列表接口时，改发一次很短的对话请求（一次付费请求）确认连通。
+/// 不判断模型会不会调用工具：现在的主流大模型都会，这项判定在用户实测里只会误报。
+/// 连接不上、密钥无效时返回 Err。
 pub async fn self_check(
     connection: &ResolvedConnection,
     cancel: &CancellationToken,
@@ -543,29 +545,26 @@ pub async fn self_check(
         ..Default::default()
     };
     ping.source = "self-check".into();
-    let response = request(connection, &ping, cancel).await?;
-    match parse_plan(&response, &ping.default_delivery, ping.image_size) {
-        Ok(CompanionPlan {
-            action: CompanionAction::Answer { .. },
-            ..
-        }) => {}
-        Ok(_) => {
+    match crate::model_listing::list_models(connection, cancel).await? {
+        crate::model_listing::Listing::Models(models) => {
+            let model = connection.model.trim();
+            if !models.is_empty() && !models.iter().any(|m| m == model) {
+                return Ok(SelfCheck {
+                    passed: false,
+                    message: format!("连得上，但服务商的模型列表里没有“{model}”，请换一个模型"),
+                });
+            }
             return Ok(SelfCheck {
-                passed: false,
-                message: "模型没有按要求调用工具（需要支持 function calling / tool_choice: auto）"
-                    .into(),
-            })
+                passed: true,
+                message: "连接正常".into(),
+            });
         }
-        Err(error) => {
-            return Ok(SelfCheck {
-                passed: false,
-                message: format!("工具调用不可用：{error}"),
-            })
-        }
+        crate::model_listing::Listing::Unsupported => {}
     }
+    request(connection, &ping, cancel).await?;
     Ok(SelfCheck {
         passed: true,
-        message: "连接正常，模型支持工具调用".into(),
+        message: "连接正常".into(),
     })
 }
 
@@ -751,6 +750,70 @@ mod tests {
             .await
             .unwrap();
         assert!(check.passed, "{}", check.message);
-        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        // 规划一次 + 测试连接时没有列表接口，退回一次对话请求
+        let posts = server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.method.as_str() == "POST")
+            .count();
+        assert_eq!(posts, 2);
+    }
+
+    #[tokio::test]
+    async fn connection_test_reads_the_model_list_without_chatting() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"data": [{"id": "test-model"}, {"id": "other"}]})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let ok = self_check(&connection(server.uri()), &CancellationToken::default())
+            .await
+            .unwrap();
+        assert!(ok.passed, "{}", ok.message);
+        let mut wrong = connection(server.uri());
+        wrong.model = "no-such-model".into();
+        let missing = self_check(&wrong, &CancellationToken::default())
+            .await
+            .unwrap();
+        assert!(!missing.passed);
+        assert!(missing.message.contains("no-such-model"));
+    }
+
+    #[tokio::test]
+    async fn connection_test_only_needs_a_reply() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        // 模型没调用工具、只回了一句话：连得上就算通过
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{"message": {"role": "assistant", "content": "好的"}, "finish_reason": "stop"}]
+            })))
+            .mount(&server)
+            .await;
+        let check = self_check(&connection(server.uri()), &CancellationToken::default())
+            .await
+            .unwrap();
+        assert!(check.passed, "{}", check.message);
+        // 连不上：报错
+        let down = self_check(
+            &connection("http://127.0.0.1:9".into()),
+            &CancellationToken::default(),
+        )
+        .await;
+        assert!(down.is_err());
     }
 }

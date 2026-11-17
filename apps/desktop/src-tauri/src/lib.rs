@@ -2219,6 +2219,7 @@ pub fn run() {
             agent::agent_set_automation_hidden,
             companion::companion_self_check,
             companion::connection_self_check,
+            companion::connection_models,
             companion::companion_status,
             companion::companion_clear_chat_region,
             model_catalog::list_catalog_models,

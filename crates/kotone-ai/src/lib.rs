@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod companion;
 pub mod connections;
+pub mod model_listing;
 pub mod reminders;
 pub mod secrets;
 pub mod transport;

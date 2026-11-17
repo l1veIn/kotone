@@ -50,7 +50,7 @@ test("editing picks a listed model or a typed one, and the key is write-only", a
   await expect(card).toContainText("已保存密钥");
 });
 
-test("a connection becomes 琴音's and runs the capability self-check", async ({ page }, testInfo) => {
+test("a connection becomes 琴音's without any check, and can be tested by hand", async ({ page }, testInfo) => {
   await openConnections(page);
   await page.getByTestId("connection-preset-dashscope").click();
   const editor = page.getByTestId("connection-editor");
@@ -59,27 +59,31 @@ test("a connection becomes 琴音's and runs the capability self-check", async (
   await editor.getByTestId("connection-save").click();
   const card = page.locator('[data-testid^="connection-card-dashscope-"]');
   await expect(card).toContainText("琴音在用");
-  await expect(card.getByTestId("connection-check-result")).toContainText("能力自检通过");
+  await expect(card.getByTestId("connection-check-result")).toHaveCount(0);
+  await card.getByTestId("connection-self-check").click();
+  await expect(card.getByTestId("connection-check-result")).toContainText("连接正常");
   await page.screenshot({ path: testInfo.outputPath("connections-check.png") });
   const settings = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
   expect(settings.assistant.connectionId).toMatch(/^dashscope-/);
 });
 
-test("a failed self-check is shown on the card, and deleting asks first", async ({ page }) => {
+test("a failed connection test is shown on the card, and deleting asks first", async ({ page }) => {
   await openConnections(page, "?mockCompanionCheck=fail");
   await page.getByTestId("connection-preset-zhipu").click();
   await page.getByTestId("connection-api-key").fill("sk-local-fixture");
   await page.getByTestId("connection-save").click();
   const card = page.locator('[data-testid^="connection-card-zhipu-"]');
   await card.getByTestId("connection-use").click();
-  await expect(card.getByTestId("connection-check-result")).toContainText("能力自检没通过");
+  await expect(card).toContainText("琴音在用");
+  await card.getByTestId("connection-self-check").click();
+  await expect(card.getByTestId("connection-check-result")).toContainText("模型列表里没有");
   await card.getByRole("button", { name: /^删除/ }).click();
   await expect(page.getByTestId("connection-delete-dialog")).toContainText("琴音正在用它");
   await page.getByTestId("connection-delete-confirm").click();
   await expect(card).toHaveCount(0);
 });
 
-test("any saved connection can be self-checked without becoming 琴音's", async ({ page }) => {
+test("any saved connection can be tested without becoming 琴音's", async ({ page }) => {
   await openConnections(page);
   for (const id of ["deepseek", "zhipu"]) {
     await page.getByTestId(`connection-preset-${id}`).click();
@@ -90,9 +94,10 @@ test("any saved connection can be self-checked without becoming 琴音's", async
   const other = page.locator('[data-testid^="connection-card-zhipu-"]');
   await expect(other).not.toContainText("琴音在用");
   await other.getByTestId("connection-self-check").click();
-  await expect(other.getByTestId("connection-check-result")).toContainText("能力自检通过");
+  await expect(other.getByTestId("connection-check-result")).toContainText("连接正常");
   await expect(other).not.toContainText("琴音在用");
   const settings = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
   expect(settings.assistant.connectionId).toMatch(/^deepseek-/);
-  expect(settings.assistant.companion.check?.connectionId).toMatch(/^deepseek-/);
+  // 测别的连接不写进琴音的设置
+  expect(settings.assistant.companion.check ?? null).toBeNull();
 });

@@ -103,9 +103,9 @@ async function openChat(page: Page, options: { empty?: boolean; notReady?: strin
           connectionModel = String((args as { connection: { model: string } }).connection.model);
           return browser.getSettings();
         }
-        case "connection_self_check":
+        case "connection_models":
           bridge.calls.push({ command, args: args as Record<string, unknown> });
-          return { connectionId: "test-ai", baseUrl: "https://example.invalid", model: connectionModel, passed: true, checkedAtMs: T, message: "连接正常" };
+          return { supported: true, models: ["test", "test-pro", "test-listed"] };
         case "get_startup_options": return { onboarding: "never" };
         case "update_settings": return browser.updateSettings((args as { patch: never }).patch);
       }
@@ -357,11 +357,13 @@ test("composer switches permission mode and model like DeepSeek Harness", async 
   const model = page.getByTestId("composer-model");
   await expect(model).toContainText("test");
   await model.click();
-  await expect(page.getByTestId("composer-model-test-ai-test-pro")).toBeVisible();
+  // 模型清单来自服务商的模型列表（照 DeepSeek Harness），不是写死的预置名
+  await expect(page.getByTestId("composer-model-test-ai-test-listed")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("composer-model-menu.png"), animations: "disabled" });
   await page.getByTestId("composer-model-test-ai-test-pro").click();
   await expect(model).toContainText("test-pro");
   const calls = await page.evaluate(() => window.agentTest.calls.filter((c) => c.command === "upsert_connection" || c.command === "connection_self_check"));
-  expect(calls.map((c) => c.command)).toEqual(["upsert_connection", "connection_self_check"]);
+  // 换模型不再自检
+  expect(calls.map((c) => c.command)).toEqual(["upsert_connection"]);
   expect((calls[0].args as { connection: { model: string } }).connection.model).toBe("test-pro");
 });

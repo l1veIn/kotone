@@ -1188,6 +1188,12 @@ export async function companionSelfCheck(): Promise<CompanionCheck> {
   return connectionSelfCheck(assistant.connectionId);
 }
 
+export async function connectionModels(id: string): Promise<{ supported: boolean; models: string[] }> {
+  const connection = mock.settings.connections.find((c) => c.id === id);
+  if (!connection) throw new Error(`连接 ${id} 不存在`);
+  return { supported: true, models: [connection.model, `${connection.model}-pro`] };
+}
+
 export async function connectionSelfCheck(id: string): Promise<CompanionCheck> {
   const assistant = mock.settings.assistant;
   const connection = mock.settings.connections.find((c) => c.id === id);
@@ -1198,7 +1204,7 @@ export async function connectionSelfCheck(id: string): Promise<CompanionCheck> {
     model: connection?.model ?? "",
     passed: mockQuery("mockCompanionCheck") !== "fail",
     checkedAtMs: Date.now(),
-    message: mockQuery("mockCompanionCheck") === "fail" ? "模型没有按要求调用工具（需要支持 function calling / tool_choice: auto）" : "连接正常，模型支持工具调用",
+    message: mockQuery("mockCompanionCheck") === "fail" ? `连得上，但服务商的模型列表里没有“${connection.model}”，请换一个模型` : "连接正常",
   };
   if (assistant.connectionId === id) assistant.companion.check = check;
   return clone(check);
@@ -1210,11 +1216,7 @@ export async function companionStatus(): Promise<CompanionStatus> {
   const ocr = mock.settings.ocr.activeModelId || null;
   const reason = !assistant.connectionId
     ? "还没有给琴音选 AI 连接：请在「高级 → API 连接」里添加一条，并设为琴音的连接"
-    : !check || check.connectionId !== assistant.connectionId
-      ? "琴音的 AI 连接还没有做能力自检：请在「高级 → API 连接」里点「能力自检」"
-      : !check.passed
-        ? `琴音的 AI 连接没有通过能力自检（${check.message}）`
-        : !ocr
+    : !ocr
           ? "看游戏聊天需要文字识别模型：请在「高级 → 模型 → 文字识别」下载并选择一个"
           : null;
   return {

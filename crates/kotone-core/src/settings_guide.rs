@@ -241,7 +241,10 @@ pub const INTERNAL: &[(&str, &str)] = &[
     ("models.dir", "用 models.dir.set（会迁移已有模型）"),
     ("modelConfigs", "用 models.activate"),
     ("agent.permissions", "琴音的权限只能由用户在设置页修改"),
-    ("assistant.companion.check", "能力自检结果，由自检写入"),
+    (
+        "assistant.companion.check",
+        "测试连接的结果，由“测试连接”写入（只用于显示）",
+    ),
     ("history.dir", "历史目录"),
     ("language", "识别语言，目前只有中文"),
     ("toolService.ocr", "旧字段，保留兼容"),

@@ -133,18 +133,17 @@
     }
   }
 
-  /** 设为琴音用的连接，并跑一次能力自检（一次付费请求）。 */
+  /** 设为琴音用的连接（不需要先测试：选好、有密钥就能用）。 */
   async function useForAgent(id: string) {
     try {
       settingsStore.set(await updateSettings({ assistant: { connectionId: id } }));
+      toast(true, "已设为琴音的连接");
     } catch (error) {
       toast(false, `没能设为琴音的连接：${errText(error)}`);
-      return;
     }
-    if (connections.find((item) => item.id === id)?.hasApiKey) await runCheck(id);
   }
 
-  /** 其他连接的自检结果只留在本页（不写配置）；琴音在用的那条写进设置。 */
+  /** 测试连接（照 DeepSeek Harness：读一次模型列表，不花 token）。其他连接的结果只留在本页；琴音在用的那条写进设置。 */
   let otherChecks = $state<Record<string, CompanionCheck>>({});
   let checkingId = $state<string | null>(null);
 
@@ -159,9 +158,12 @@
       } else {
         otherChecks = { ...otherChecks, [id]: result };
       }
-      toast(result.passed, result.passed ? "能力自检通过" : `能力自检没通过：${result.message}`);
+      toast(result.passed, result.passed ? "连接正常" : result.message);
     } catch (error) {
-      toast(false, `能力自检失败：${errText(error)}`);
+      const message = `连不上：${errText(error)}`;
+      const failed = { connectionId: id, baseUrl: "", model: "", passed: false, checkedAtMs: Date.now(), message } as CompanionCheck;
+      otherChecks = { ...otherChecks, [id]: failed };
+      toast(false, message);
     } finally {
       checking = false;
       checkingId = null;
@@ -184,7 +186,7 @@
     <div class="min-w-0 text-[13px] leading-relaxed">
       <p class="m-0 font-medium text-foreground">给琴音用的主流大模型</p>
       <p class="mt-0.5 mb-0 text-muted-foreground">
-        琴音会多步调用工具（运行自动化、看游戏聊天、设提醒……），请选能<strong class="font-medium text-foreground">稳定调用工具</strong>的模型，保存后做一次<strong class="font-medium text-foreground">能力自检</strong>。
+        选一家主流大模型、填好 API key，设为琴音的连接就能用；想确认能不能连上，点<strong class="font-medium text-foreground">测试连接</strong>（读一次服务商的模型列表，不花 token）。
         文字处理的润色、翻译也能用这里的连接。API key 存进系统凭据库，不会写入 config.json。
       </p>
     </div>
@@ -230,24 +232,22 @@
                 <Button size="sm" variant="outline" data-testid="connection-use" disabled={checking} onclick={() => void useForAgent(connection.id)}>设为琴音的连接</Button>
               {/if}
               <Button size="sm" variant={forAgent ? "outline" : "ghost"} data-testid="connection-self-check" disabled={checking || !connection.hasApiKey} onclick={() => void runCheck(connection.id)}>
-                {#if cardChecking}<LoaderCircle class="size-3.5 animate-spin" />{:else}<ShieldCheck class="size-3.5" />{/if}能力自检
+                {#if cardChecking}<LoaderCircle class="size-3.5 animate-spin" />{:else}<ShieldCheck class="size-3.5" />{/if}测试连接
               </Button>
               <Button size="sm" variant="ghost" onclick={() => openEdit(connection)}>编辑</Button>
               <Button size="icon-sm" variant="ghost" class="text-muted-foreground hover:text-destructive" aria-label={`删除 ${connection.displayName}`} disabled={saving} onclick={() => { confirmDelete = connection; }}><Trash2 class="size-3.5" /></Button>
             </div>
           </div>
-          {#if forAgent || ownCheck || cardChecking}
+          {#if ownCheck || cardChecking}
             <div class="mt-3 ml-12 flex items-start gap-2 rounded-xl bg-muted/50 px-3 py-2 text-xs" data-testid="connection-check-result">
               {#if cardChecking}
-                <LoaderCircle class="mt-0.5 size-3.5 shrink-0 animate-spin text-primary" /><span class="text-muted-foreground">正在自检：发一次请求，确认连接能用、模型支持工具调用…</span>
+                <LoaderCircle class="mt-0.5 size-3.5 shrink-0 animate-spin text-primary" /><span class="text-muted-foreground">正在测试：读一次服务商的模型列表…</span>
               {:else if ownCheck}
                 {#if ownCheck.passed}<Check class="mt-0.5 size-3.5 shrink-0 text-success" />{:else}<CircleAlert class="mt-0.5 size-3.5 shrink-0 text-destructive" />{/if}
                 <span class="min-w-0">
-                  <span class="font-medium {ownCheck.passed ? 'text-success' : 'text-destructive'}">{ownCheck.passed ? "能力自检通过" : "能力自检没通过"}</span>
-                  <span class="text-muted-foreground"> · {ownCheck.message} · {checkedAt(ownCheck.checkedAtMs)}{ownCheck.model !== connection.model ? `（当时的模型：${ownCheck.model}）` : ""}</span>
+                  <span class="font-medium {ownCheck.passed ? 'text-success' : 'text-destructive'}">{ownCheck.passed ? "连接正常" : "有问题"}</span>
+                  <span class="text-muted-foreground"> · {ownCheck.message} · {checkedAt(ownCheck.checkedAtMs)}{ownCheck.model && ownCheck.model !== connection.model ? `（当时的模型：${ownCheck.model}）` : ""}</span>
                 </span>
-              {:else}
-                <CircleAlert class="mt-0.5 size-3.5 shrink-0 text-warning" /><span class="text-muted-foreground">还没有做能力自检。没通过自检时，游戏里的热键不会把话交给琴音。</span>
               {/if}
             </div>
           {/if}
@@ -349,7 +349,7 @@
         {#if editing.id !== agentConnectionId}
           <label class="flex items-start gap-2 rounded-xl bg-muted/50 px-3 py-2.5 text-xs">
             <input type="checkbox" class="mt-0.5 accent-[var(--color-primary)]" bind:checked={useAfterSave} data-testid="connection-use-after-save" />
-            <span><span class="font-medium text-foreground">保存后设为琴音的连接并做能力自检</span><span class="block text-muted-foreground">自检会发一次付费请求。</span></span>
+            <span><span class="font-medium text-foreground">保存后设为琴音的连接</span></span>
           </label>
         {/if}
         <Dialog.Footer>

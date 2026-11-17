@@ -9,8 +9,8 @@ async function addConnection(page: import("@playwright/test").Page) {
   await expect(page.getByText("已保存密钥")).toBeVisible();
 }
 
-// 陪玩必须有通过能力自检的 AI 连接：选连接时自动自检；没通过时热键不工作，只提示用户。
-test("choosing a connection runs the self-check, and the companion stays blocked until it passes", async ({ page }) => {
+// 陪玩只要选好有密钥的 AI 连接（不再要求能力自检；测试连接只是给用户手动确认）。
+test("choosing a connection is enough: no self-check gate", async ({ page }) => {
   await page.goto("/?mockCompanionCheck=fail#/settings?onboarding=never");
   await addConnection(page);
   await page.getByTestId("settings-nav-assistant").click();
@@ -20,8 +20,9 @@ test("choosing a connection runs the self-check, and the companion stays blocked
   await expect(companion.getByTestId("companion-status")).toContainText("还没有给琴音选 AI 连接");
   await page.getByLabel("陪玩 AI 连接").click();
   await page.getByRole("option").nth(1).click();
-  await expect(companion.getByTestId("companion-check")).toContainText("未通过");
-  await expect(companion.getByTestId("companion-status")).toContainText("没有通过能力自检");
+  // 下一步缺的是文字识别模型，而不是自检
+  await expect(companion.getByTestId("companion-status")).toContainText("文字识别模型");
+  await expect(companion.getByTestId("companion-status")).not.toContainText("自检");
 });
 
 test("quick messages can be added, edited and removed, and online OCR shows the upload warning", async ({ page }) => {
@@ -32,8 +33,7 @@ test("quick messages can be added, edited and removed, and online OCR shows the 
   await page.getByLabel("陪玩 AI 连接").click();
   await page.getByRole("option").nth(1).click();
   const companion = page.getByTestId("companion-settings");
-  await expect(companion.getByTestId("companion-check")).toContainText("已通过");
-  // 自检通过但还没有文字识别模型：仍不就绪，提示去下载
+  // 还没有文字识别模型：仍不就绪，提示去下载
   await expect(companion.getByTestId("companion-status")).toContainText("文字识别模型");
 
   await companion.getByRole("button", { name: "添加", exact: true }).click();

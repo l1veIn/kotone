@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 「琴音」页（ADR 014）：聊天（默认）与设置（AI 连接、能力自检、热键、快捷指令、琴音 Agent）。
+  // 「琴音」页（ADR 014）：聊天（默认）与设置（AI 连接、热键、快捷指令、琴音 Agent）。
   // 顶栏参照 DeepSeek Harness 的会话头：页名 / 当前对话标题，右侧是进行中概况与分页切换。
   import { onMount } from "svelte";
   import { listConnections, type ConnectionInfo } from "../../../lib/ipc";
@@ -73,7 +73,7 @@
     <div class="ui-scope mx-auto w-full max-w-3xl space-y-6 px-6 pt-7 pb-10 text-foreground" data-testid="assistant-settings-tab">
       <div>
         <h2 class="m-0 text-xl font-semibold tracking-tight">琴音设置</h2>
-        <p class="mt-1.5 mb-0 text-[13px] leading-relaxed text-muted-foreground">AI 连接、能力自检、热键与快捷指令、语音唤醒、对话气泡，以及琴音能直接做哪些事。</p>
+        <p class="mt-1.5 mb-0 text-[13px] leading-relaxed text-muted-foreground">AI 连接、热键与快捷指令、语音唤醒、对话气泡，以及琴音能直接做哪些事。</p>
         <div class="mt-3 lg:hidden"><OpenRunsSummary {onOpenAutomation} /></div>
       </div>
       <AssistantSettings {connections} {ready} {onOpenConnections} />

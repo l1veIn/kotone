@@ -14,7 +14,6 @@
   } = $props();
   let saving = $state(false);
   let companion = $state<CompanionSettings | null>(null);
-  let checking = $state(false);
   const config = $derived($settingsStore?.assistant);
 
   async function save(patch: Partial<AssistantConfig>) {
@@ -28,17 +27,12 @@
 {#if config}
   <div class="space-y-6" data-testid="assistant-settings">
     <SettingsSection title="输入设置" id="assistant-input-settings-title" description="琴音用的 AI 连接，以及在游戏里叫琴音的热键。">
-      <SettingsRow label="AI 连接" description="给琴音用的主流大模型：需能稳定调用工具，水准不低于 DeepSeek V4.1 Flash。">
+      <SettingsRow label="AI 连接" description="给琴音用的主流大模型。选好、有密钥就能用；想确认能不能连上，到「高级 → API 连接」点“测试连接”。">
         {#snippet control()}
           <div class="w-64 max-w-full">
-            <SelectField ariaLabel="陪玩 AI 连接" value={config.connectionId} disabled={saving || checking}
+            <SelectField ariaLabel="陪玩 AI 连接" value={config.connectionId} disabled={saving}
               options={[{ value: "", label: "请选择连接" }, ...connections.map((item) => ({ value: item.id, label: `${item.displayName}${item.hasApiKey ? "" : "（未保存密钥）"}` }))]}
-              onchange={(connectionId) => {
-                // 选定连接时跑一次能力自检；没通过时陪玩热键不工作。
-                void save({ connectionId }).then(() => {
-                  if (connectionId && connections.find((item) => item.id === connectionId)?.hasApiKey) void companion?.runCheck();
-                });
-              }} />
+              onchange={(connectionId) => { void save({ connectionId }); }} />
           </div>
         {/snippet}
         {#if !ready}
@@ -57,6 +51,6 @@
       <AssistantInteraction />
     </SettingsSection>
 
-    <CompanionSettings bind:this={companion} bind:checking />
+    <CompanionSettings bind:this={companion} />
   </div>
 {/if}
