@@ -105,6 +105,8 @@ struct Command {
     reply: mpsc::SyncSender<Result<(), String>>,
     /// false = 只合成进缓存、不播放（预取）。
     play: bool,
+    /// 合成好以后把声音交给调用方（`synthesize`，不播放）。
+    audio_out: Option<mpsc::SyncSender<Arc<SynthesizedSpeech>>>,
 }
 
 enum WorkerCommand {
@@ -211,6 +213,7 @@ impl SpeechOutput for LocalSpeechOutput {
                 ticket,
                 reply,
                 play: true,
+                audio_out: None,
             }))
             .map_err(|_| "本地语音队列已满或服务已停止".to_string())?;
         match receiver.recv_timeout(Duration::from_secs(60)) {
@@ -239,7 +242,31 @@ impl SpeechOutput for LocalSpeechOutput {
             ticket: self.generation(),
             reply,
             play: false,
+            audio_out: None,
         }));
+    }
+
+    fn synthesize(&self, request: SpeechRequest) -> Result<(Vec<f32>, u32), String> {
+        request.validate()?;
+        let (reply, receiver) = mpsc::sync_channel(1);
+        let (audio_tx, audio_rx) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(WorkerCommand::Speak(Command {
+                request,
+                ticket: self.generation(),
+                reply,
+                play: false,
+                audio_out: Some(audio_tx),
+            }))
+            .map_err(|_| "本地语音队列已满或服务已停止".to_string())?;
+        match receiver.recv_timeout(Duration::from_secs(60)) {
+            Ok(Ok(())) => audio_rx
+                .try_recv()
+                .map(|audio| (audio.samples.clone(), audio.sample_rate))
+                .map_err(|_| "语音合成没有返回声音".to_string()),
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err("语音合成超时".into()),
+        }
     }
 }
 
@@ -301,7 +328,7 @@ fn worker(source: Source, receiver: mpsc::Receiver<WorkerCommand>, control: Arc<
                 Source::Online(synth) => synth.cache_key(&command.request)?,
             };
             let cached = cache::global().lock().unwrap().get(&key);
-            if !command.play && cached.is_some() {
+            if !command.play && command.audio_out.is_none() && cached.is_some() {
                 return Ok(());
             }
             let audio = match cached {
@@ -332,6 +359,9 @@ fn worker(source: Source, receiver: mpsc::Receiver<WorkerCommand>, control: Arc<
                     audio
                 }
             };
+            if let Some(out) = &command.audio_out {
+                let _ = out.try_send(audio.clone());
+            }
             if !command.play {
                 return Ok(());
             }
@@ -370,6 +400,8 @@ mod tests {
             CANCELLED
         );
         assert!(output.speak(request()).unwrap_err().contains("尚未安装"));
+        // 只合成（送进游戏语音）走同一个工作线程，同样报模型没装
+        assert!(output.synthesize(request()).unwrap_err().contains("尚未安装"));
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
         output.close().unwrap();
         assert!(output.is_closed());
