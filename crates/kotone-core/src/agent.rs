@@ -59,6 +59,29 @@ pub struct AgentConfig {
     /// 游戏内交给琴音后，1.5 秒还没出声就先说一句“好，我看看”（ADR 017 §5，默认开）。
     #[serde(default = "default_true")]
     pub progress_speech: bool,
+    /// 琴音的身份（ADR 022）：名字、头像。填了的优先于工作区的 IDENTITY.md。新字段。
+    #[serde(default)]
+    pub identity: IdentityConfig,
+    /// 子会话（ADR 022）：缺省模型（空 = 和琴音同一个模型）。新字段。
+    #[serde(default)]
+    pub subagents: SubagentsConfig,
+}
+
+/// 琴音的身份。空 = 用工作区 `IDENTITY.md` 或默认（“琴音”、内置头像）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct IdentityConfig {
+    pub name: String,
+    /// 工作区里的头像文件名（设置页上传，≤ 2 MB）。
+    pub avatar: String,
+}
+
+/// 子会话的缺省设置（照 OpenClaw `agents.defaults.subagents`）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SubagentsConfig {
+    /// 模型 id；空 = 和琴音同一个模型。
+    pub model: String,
 }
 
 fn default_true() -> bool {
@@ -72,6 +95,8 @@ impl Default for AgentConfig {
             hidden_automations: Vec::new(),
             in_game: true,
             progress_speech: true,
+            identity: IdentityConfig::default(),
+            subagents: SubagentsConfig::default(),
         }
     }
 }

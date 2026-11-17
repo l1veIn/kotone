@@ -229,6 +229,8 @@ pub const FIELDS: &[Field] = &[
     f("runAsAdminOnStart", "以管理员身份启动", "高级 → 系统", "部分游戏以管理员运行时需要。现在就要管理员权限用 elevation.restart。", NONE, NEXT),
     f("ui.autoStart", "开机自启", "通用", "请用 autostart.set 修改（会同时写系统启动项）。", NONE, NOW),
     f("ui.updatePromptDisabled", "不再提醒升级", "关于", "", NONE, NOW),
+    f("agent.identity.name", "琴音的名字", "琴音陪玩 → 她是谁", "空 = 默认“琴音”（或工作区 IDENTITY.md 里的名字）。改了以后她会用新名字介绍自己，界面上也跟着变；唤醒词要在语音唤醒里另外设。", NONE, NOW),
+    f("agent.subagents.model", "子会话用的模型", "琴音陪玩 → 设置", "琴音派出的子会话（例如同传）用的模型 id；空 = 和琴音同一个模型。建议填同一家服务商更快更便宜的模型。", NONE, NOW),
     f("voiceChat.enabled", "游戏语音（琴音替你说话）", "琴音陪玩 → 设置 → 游戏语音", "开启后把你的麦克风和琴音“说给队友”的话一起转进虚拟麦克风（VB-CABLE 的 CABLE Output），游戏里的麦克风选 CABLE Output 队友就能听到。需要先装 VB-CABLE（voice_chat.install）。Kotone 没运行时队友听不到你。", NONE, NOW),
     f("voiceChat.includeMic", "混入我的麦克风", "琴音陪玩 → 设置 → 游戏语音", "关掉后虚拟麦克风里只有琴音的声音（你自己说话要在游戏里另选麦克风）。", NONE, NOW),
     f("voiceChat.micDeviceId", "我的麦克风", "琴音陪玩 → 设置 → 游戏语音", "设备名，用 audio.devices 查；default = 系统默认录音设备。不能选 CABLE Output。", NONE, NOW),
@@ -245,6 +247,7 @@ pub const INTERNAL: &[(&str, &str)] = &[
     ("models.dir", "用 models.dir.set（会迁移已有模型）"),
     ("modelConfigs", "用 models.activate"),
     ("agent.permissions", "琴音的权限只能由用户在设置页修改"),
+    ("agent.identity.avatar", "头像要在设置页上传图片"),
     (
         "assistant.companion.check",
         "测试连接的结果，由“测试连接”写入（只用于显示）",

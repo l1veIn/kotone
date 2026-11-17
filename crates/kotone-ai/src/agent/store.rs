@@ -31,6 +31,12 @@ pub struct Conversation {
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
     pub messages: Vec<Message>,
+    /// 子会话（ADR 022）：派出它的会话 id；主会话为 None。旧对话没有这一项。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// 子会话的名字（如“同传”），也是它在对话列表里的标题。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 impl Conversation {
@@ -41,6 +47,7 @@ impl Conversation {
             created_at_ms: self.created_at_ms,
             updated_at_ms: self.updated_at_ms,
             message_count: self.messages.len(),
+            parent: self.parent.clone(),
         }
     }
 }
@@ -53,6 +60,9 @@ pub struct ConversationSummary {
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
     pub message_count: usize,
+    /// 子会话：派出它的会话 id（界面据此标出、只读）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -198,6 +208,8 @@ impl ConversationStore {
             created_at_ms: now,
             updated_at_ms: now,
             messages: Vec::new(),
+            parent: None,
+            label: None,
         }
     }
 
@@ -225,7 +237,10 @@ impl ConversationStore {
             return Err("对话 id 无效".into());
         }
         trim_messages(&mut conversation.messages);
-        conversation.title = title_of(&conversation.messages);
+        conversation.title = match &conversation.label {
+            Some(label) => format!("子会话：{label}"),
+            None => title_of(&conversation.messages),
+        };
         conversation.updated_at_ms = now_ms().max(conversation.created_at_ms);
         // 截图不存盘（很大且很快过时）；调用方手里的对话保持原样，本轮还要用。
         let mut stored = conversation.clone();

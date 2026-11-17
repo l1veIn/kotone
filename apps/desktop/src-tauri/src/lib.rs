@@ -24,6 +24,7 @@ mod tray;
 mod tts_online;
 mod voice_ask;
 mod voice_chat;
+mod voice_listen;
 mod wake;
 
 use std::sync::{Arc, Mutex, RwLock};
@@ -2015,6 +2016,7 @@ pub fn run() {
             app.manage(bubble::BubbleRuntime::default());
             app.manage(computer_use::ComputerUse::default());
             app.manage(voice_chat::VoiceChat::default());
+            app.manage(voice_listen::VoiceListen::default());
             let assistant_runtime = assistant::initialize(app.handle(), settings.clone());
 
             #[allow(unused_mut)] // vad-silero feature 关闭时无可变接线
@@ -2249,6 +2251,7 @@ pub fn run() {
             if matches!(event, tauri::RunEvent::Exit) {
                 tool_service::shutdown(app);
                 automation::shutdown(app);
+                voice_listen::stop_all(app);
                 assistant::shutdown(app);
                 wake::shutdown(app);
             }

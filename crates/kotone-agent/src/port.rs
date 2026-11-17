@@ -122,6 +122,8 @@ pub fn take_images(result: &mut Value) -> Vec<Attachment> {
 pub struct Session {
     active: Mutex<BTreeSet<String>>,
     pub grants: Grants,
+    /// 会话开始时冻结的工作区快照（照 Hermes：会话中途写入的记忆下一段会话才生效，前缀不变）。
+    pub snapshot: std::sync::OnceLock<crate::workspace::Snapshot>,
 }
 
 impl Session {

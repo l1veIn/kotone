@@ -150,6 +150,20 @@ impl Model {
         Some(self.set(Phase::Thinking, ACTING_LABEL, what))
     }
 
+    /// 显示一条状态（状态行 + 正文），正在念或在等回答时不打断。
+    pub fn acting_like(&mut self, label: &str, what: &str) -> Option<&Snapshot> {
+        if self.holding || self.snap.phase == Phase::Asking {
+            return None;
+        }
+        Some(self.set(Phase::Thinking, label, what))
+    }
+
+    /// 还显示着这条状态就收起。
+    pub fn label_done(&mut self, label: &str) -> Option<&Snapshot> {
+        (self.snap.phase == Phase::Thinking && self.snap.label == label)
+            .then(|| self.set(Phase::Hidden, "", ""))
+    }
+
     /// 操作结束：还显示着“正在操作”就收起（语音入口接着会显示“在想…”）。
     pub fn acting_done(&mut self) -> Option<&Snapshot> {
         (self.snap.phase == Phase::Thinking && self.snap.label == ACTING_LABEL)
@@ -221,6 +235,9 @@ impl Model {
         (self.snap.revision == revision && self.snap.phase != Phase::Hidden).then(|| self.hide())
     }
 }
+
+/// 有子会话在听队友时的状态行（ADR 021）。
+pub const LISTEN_LABEL: &str = "正在听队友";
 
 /// 操作游戏时气泡的状态行（ADR 019：“正在操作：打开背包…”，并提示怎么停）。
 pub const ACTING_LABEL: &str = "正在操作 · 按 Esc 停止";
@@ -366,6 +383,21 @@ pub fn on_no_speech(app: &AppHandle) {
 pub fn thinking(app: &AppHandle, label: &str) {
     if enabled(app) {
         update(app, |m| m.thinking(label).cloned());
+    }
+}
+
+/// 正在听某个程序（ADR 021）：气泡角落提示“正在听队友”。None = 没人在听了，收起提示。
+pub fn listening_to(app: &AppHandle, app_name: Option<&str>) {
+    match app_name {
+        Some(name) => {
+            update(app, |m| {
+                m.acting_like(LISTEN_LABEL, &format!("在听 {name} 里的声音"))
+                    .cloned()
+            });
+        }
+        None => {
+            update(app, |m| m.label_done(LISTEN_LABEL).cloned());
+        }
     }
 }
 

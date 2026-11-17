@@ -295,6 +295,8 @@ fn route_named_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, id: &str) {
         if crate::computer_use::stop_all(app, "停止自动化热键") {
             let _ = crate::agent::stop(app);
         }
+        // 琴音派出的子会话（同传等）和它们名下的监听一起停（ADR 022）。
+        crate::agent::stop_all_children(app, "停止热键");
         return;
     }
     if id == HK_RUNTIME_TOGGLE {

@@ -70,6 +70,7 @@ pub fn setup_tray(app: &AppHandle<tauri::Wry>) -> tauri::Result<()> {
                 if crate::computer_use::stop_all(app, "托盘菜单") {
                     let _ = crate::agent::stop(app);
                 }
+                crate::agent::stop_all_children(app, "托盘菜单");
             }
             "toggle-engine" => {
                 // 按当前相位异步启动/停止（避免阻塞菜单事件循环）；
