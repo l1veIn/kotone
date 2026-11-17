@@ -16,16 +16,33 @@ mod imp {
     use std::time::Duration;
 
     use windows::core::{HSTRING, PCWSTR};
-    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
     use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         keybd_event, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VK_MENU,
     };
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindow, PostMessageW,
-        SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOWNORMAL, WM_CLOSE,
+        GetAncestor, GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindow,
+        PostMessageW, SetForegroundWindow, ShowWindow, WindowFromPoint, GA_ROOT, SW_RESTORE,
+        SW_SHOWNORMAL, WM_CLOSE,
     };
+
+    /// 屏幕物理像素 (x, y) 上最上层可点的窗口属于哪个进程（顶层窗口的进程 ID）；
+    /// 鼠标穿透的窗口（如琴音的气泡）不算。查不到时为 None。
+    pub fn process_at(x: i32, y: i32) -> Option<u32> {
+        unsafe {
+            let child = WindowFromPoint(POINT { x, y });
+            if child.0.is_null() {
+                return None;
+            }
+            let root = GetAncestor(child, GA_ROOT);
+            let window = if root.0.is_null() { child } else { root };
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(window, Some(&mut pid));
+            (pid != 0).then_some(pid)
+        }
+    }
 
     fn hwnd(handle: u64) -> HWND {
         HWND(handle as usize as *mut std::ffi::c_void)
@@ -48,8 +65,10 @@ mod imp {
                 return Ok(());
             }
             // 前台锁：轻按一下 Alt，让本进程算“最近有输入”，再试。
-            keybd_event(VK_MENU.0 as u8, 0, KEYBD_EVENT_FLAGS(0), 0);
-            keybd_event(VK_MENU.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+            // 带 Kotone 的标记：钩子不把这下 Alt 当成玩家输入（ADR 019）。
+            let tag = crate::inject::KOTONE_INPUT_TAG;
+            keybd_event(VK_MENU.0 as u8, 0, KEYBD_EVENT_FLAGS(0), tag);
+            keybd_event(VK_MENU.0 as u8, 0, KEYEVENTF_KEYUP, tag);
             if SetForegroundWindow(target).as_bool() && is_foreground(target) {
                 return Ok(());
             }
@@ -138,6 +157,9 @@ mod imp {
 
 #[cfg(not(windows))]
 mod imp {
+    pub fn process_at(_x: i32, _y: i32) -> Option<u32> {
+        None
+    }
     pub fn focus_window(_handle: u64) -> Result<(), String> {
         Err("只支持 Windows".into())
     }
@@ -149,4 +171,4 @@ mod imp {
     }
 }
 
-pub use imp::{close_window, focus_window, launch};
+pub use imp::{close_window, focus_window, launch, process_at};

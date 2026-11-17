@@ -36,6 +36,10 @@ mod windows_imp {
         MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL,
         MOUSEINPUT, MOUSE_EVENT_FLAGS,
     };
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        VK_CAPITAL, VK_INSERT, VK_LWIN, VK_NEXT, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5,
+        VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
         GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindowThreadProcessId, IsWindow,
         SetCursorPos, SetForegroundWindow, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
@@ -471,6 +475,11 @@ mod windows_imp {
 
     // ---------- 键名解析（纯逻辑，可单测） ----------
 
+    /// 键名（含组合键，如 `Ctrl+S`）认不认识：`game.act` 动手前用它校验整份计划。
+    pub fn key_spec_valid(spec: &str) -> bool {
+        parse_key_spec(spec).is_ok()
+    }
+
     /// 解析 "Enter" / "Ctrl+V" 形式：返回（修饰键列表, 主键）
     fn parse_key_spec(spec: &str) -> Result<(Vec<VIRTUAL_KEY>, VIRTUAL_KEY), InjectError> {
         let parts: Vec<&str> = spec
@@ -518,6 +527,22 @@ mod windows_imp {
             "right" => VK_RIGHT,
             "home" => VK_HOME,
             "end" => VK_END,
+            "pageup" | "pgup" => VK_PRIOR,
+            "pagedown" | "pgdn" => VK_NEXT,
+            "insert" | "ins" => VK_INSERT,
+            "capslock" => VK_CAPITAL,
+            "win" | "windows" => VK_LWIN,
+            "`" | "backquote" => VK_OEM_3,
+            "-" | "minus" => VK_OEM_MINUS,
+            "=" | "equal" | "equals" => VK_OEM_PLUS,
+            "[" | "bracketleft" => VK_OEM_4,
+            "]" | "bracketright" => VK_OEM_6,
+            "\\" | "backslash" => VK_OEM_5,
+            ";" | "semicolon" => VK_OEM_1,
+            "'" | "apostrophe" | "quote" => VK_OEM_7,
+            "," | "comma" => VK_OEM_COMMA,
+            "." | "period" => VK_OEM_PERIOD,
+            "/" | "slash" => VK_OEM_2,
             "f1" => VK_F1,
             "f2" => VK_F2,
             "f3" => VK_F3,
@@ -735,6 +760,16 @@ mod windows_imp {
         }
 
         #[test]
+        fn computer_use_key_names() {
+            assert_eq!(vk_from_name("PageDown"), Some(VK_NEXT));
+            assert_eq!(vk_from_name("pageup"), Some(VK_PRIOR));
+            assert_eq!(vk_from_name("Win"), Some(VK_LWIN));
+            assert_eq!(vk_from_name("/"), Some(VK_OEM_2));
+            assert!(key_spec_valid("Ctrl+Shift+PageDown"));
+            assert!(!key_spec_valid("Ctrl+Bogus"));
+        }
+
+        #[test]
         fn vk_from_name_rejects_unknown() {
             assert_eq!(vk_from_name("NotAKey"), None);
             assert_eq!(vk_from_name("回车"), None);
@@ -849,6 +884,10 @@ mod fallback {
 
     pub fn mouse_hwheel(_clicks: i32) -> Result<(), InjectError> {
         Err(InjectError::new("鼠标仅 Windows 实现"))
+    }
+
+    pub fn key_spec_valid(_spec: &str) -> bool {
+        false
     }
 
     pub const KOTONE_INPUT_TAG: usize = 0x4B54_4E49;
