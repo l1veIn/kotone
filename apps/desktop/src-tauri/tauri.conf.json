@@ -72,7 +72,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: https://asset.localhost"
+      "csp": "default-src 'self'; connect-src 'self' http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: https://asset.localhost"
     }
   },
   "bundle": {

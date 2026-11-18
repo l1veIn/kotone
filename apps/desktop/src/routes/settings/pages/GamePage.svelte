@@ -40,6 +40,7 @@
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import ToggleField from "$lib/components/settings/ToggleField.svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
+  import InstalledGamesSection from "./InstalledGamesSection.svelte";
 
   /** 让琴音操作（game.act）的三档。 */
   const COMPUTER_USE_OPTIONS = [
@@ -468,7 +469,8 @@
   {/if}
 {/snippet}
 
-<SettingsPage title="游戏" description="每个游戏一套打法：聊天键、词表、节奏，以及琴音能不能替你在这个游戏里按键。">
+<SettingsPage title="游戏列表" description="本机装了哪些游戏；每个游戏一套打法：聊天键、词表、节奏，以及琴音能不能替你在这个游戏里按键。">
+  <InstalledGamesSection {profiles} onOpenProfile={(p) => { openEditor(p); requestAnimationFrame(() => document.querySelector(`[data-testid="game-profile-${p.id}"]`)?.scrollIntoView({ block: "start" })); }} />
   {#snippet actions()}
     <Button variant="outline" size="sm" disabled={importingPackage} onclick={() => void onImportPackage()}>
       <Upload class="size-3.5" />{importingPackage ? "导入中…" : "导入配置包"}

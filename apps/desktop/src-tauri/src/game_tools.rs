@@ -137,9 +137,53 @@ pub fn focus(
 /// 设置页“自动检测”：本机检测到的游戏。
 #[tauri::command]
 pub async fn installed_games(query: Option<String>) -> Result<Vec<InstalledGame>, String> {
-    tauri::async_runtime::spawn_blocking(move || games::detect(query.as_deref()))
+    let found = tauri::async_runtime::spawn_blocking(move || games::detect(query.as_deref()))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let mut last = shared(&LAST_DETECTED);
+    for game in &found {
+        last.insert(game.id.clone(), game.clone());
+    }
+    Ok(found)
+}
+
+/// 最近检测到的游戏（按 id；图标要找它们的主程序）。
+type Shared<T> = std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, T>>>;
+static LAST_DETECTED: Shared<InstalledGame> = std::sync::OnceLock::new();
+/// 已经取过的图标（PNG；None = 这个游戏取不到）。
+static ICONS: Shared<Option<Vec<u8>>> = std::sync::OnceLock::new();
+
+fn shared<T>(
+    cell: &'static Shared<T>,
+) -> std::sync::MutexGuard<'static, std::collections::HashMap<String, T>> {
+    cell.get_or_init(Default::default).lock().unwrap()
+}
+
+/// 游戏列表里的“打开”：用检测到的启动方式（与工具 `game.launch` 的 installedId 相同）。
+#[tauri::command]
+pub async fn launch_installed_game(id: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || launch(None, Some(&id)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 游戏列表里的图标：主程序的图标（PNG，64×64）。先调过 `installed_games` 才认得这个 id。
+#[tauri::command]
+pub async fn game_icon(id: String) -> Result<Option<Vec<u8>>, String> {
+    if let Some(cached) = shared(&ICONS).get(&id) {
+        return Ok(cached.clone());
+    }
+    let game = shared(&LAST_DETECTED).get(&id).cloned();
+    let Some(game) = game else {
+        return Ok(None);
+    };
+    let png = tauri::async_runtime::spawn_blocking(move || {
+        kotone_platform_windows::game_icon::game_icon(&game, 64)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    shared(&ICONS).insert(id, png.clone());
+    Ok(png)
 }
 
 /// 本机检测到的游戏（工具 `game.installed`）。

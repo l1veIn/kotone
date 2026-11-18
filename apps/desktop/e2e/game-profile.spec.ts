@@ -7,7 +7,7 @@ test("game profile saves the automation-input switch and launch path without dro
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-game").click();
-  await expect(page.getByRole("heading", { name: "游戏", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "游戏列表", exact: true })).toBeVisible();
 
   // 没写过这个字段的配置按“允许”显示
   const generic = page.getByTestId("game-profile-generic");
@@ -87,4 +87,21 @@ test("game profile saves who may operate the game (computer use)", async ({ page
     (await import("/src/lib/ipc.ts")).listProfiles().then((list) => list.find((p) => p.id === "lol")));
   expect(saved?.computerUse).toBe("allow");
   expect(saved?.hotwords).toHaveLength(6);
+});
+
+test("the game list detects installed games on first open, links their profiles and can re-detect", async ({ page }) => {
+  await page.goto("/#/settings?onboarding=never");
+  await page.evaluate(() => localStorage.removeItem("kotone.installedGames"));
+  await page.getByTestId("settings-nav-game").click();
+  const list = page.getByTestId("installed-games");
+  await expect(list.getByTestId("installed-game")).toHaveCount(3);
+  await expect(list.getByTestId("installed-games-elapsed")).toContainText("ms");
+  const lol = list.locator('[data-game-id="tencent:lol"]');
+  await expect(lol).toContainText("英雄联盟（国服）");
+  await expect(lol).toContainText("腾讯");
+  // 有对应的游戏配置：点“已适配”打开它的编辑
+  await lol.getByTestId("installed-game-profile").click();
+  await expect(page.getByTestId("game-profile-editor")).toBeVisible();
+  await list.getByTestId("installed-games-detect").click();
+  await expect(list.getByTestId("installed-game")).toHaveCount(3);
 });

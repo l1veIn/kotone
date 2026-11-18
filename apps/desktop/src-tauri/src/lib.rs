@@ -2229,6 +2229,8 @@ pub fn run() {
             agent::agent_send,
             workspace_cmd::workspace_overview,
             key_request::agent_submit_key,
+            game_tools::game_icon,
+            game_tools::launch_installed_game,
             workspace_cmd::workspace_read,
             workspace_cmd::workspace_write,
             workspace_cmd::workspace_delete_game,

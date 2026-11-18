@@ -45,7 +45,7 @@
       label: "游戏陪玩",
       items: [
         { id: "assistant", label: companionName, icon: Bot },
-        { id: "game", label: "游戏", icon: Gamepad2 },
+        { id: "game", label: "游戏列表", icon: Gamepad2 },
         { id: "automation", label: "自动化", icon: Zap },
       ],
     },

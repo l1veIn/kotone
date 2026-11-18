@@ -11,7 +11,7 @@ test("sidebar groups, homepage companion entry, companion settings and one conte
   await expect(sidebar.getByTestId("settings-nav-general")).toHaveText("语音输入");
   await expect(sidebar.getByTestId("settings-nav-assistant")).toHaveText("琴音");
   await expect(sidebar.getByTestId("settings-nav-talk")).toHaveCount(0);
-  await expect(sidebar.getByTestId("settings-nav-game")).toHaveText("游戏");
+  await expect(sidebar.getByTestId("settings-nav-game")).toHaveText("游戏列表");
   await expect(sidebar.getByTestId("settings-nav-advanced")).toHaveText("设置");
 
   // 首页仍是语音输入，有显眼的游戏陪玩入口

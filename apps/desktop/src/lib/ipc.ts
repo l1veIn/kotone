@@ -487,6 +487,17 @@ export async function installedGames(query?: string): Promise<InstalledGame[]> {
   if (!isTauri) return browserMock.installedGames(query);
   return invoke<InstalledGame[]>("installed_games", { query: query ?? null });
 }
+/** 游戏的图标（主程序的图标，PNG 字节）；先调过 installedGames 才认得 id。 */
+export async function gameIcon(id: string): Promise<Uint8Array | null> {
+  if (!isTauri) return null;
+  const bytes = await invoke<number[] | null>("game_icon", { id });
+  return bytes ? new Uint8Array(bytes) : null;
+}
+/** 用检测到的启动方式打开游戏。 */
+export async function launchInstalledGame(id: string): Promise<void> {
+  if (!isTauri) throw new Error("浏览器预览不能打开游戏");
+  await invoke("launch_installed_game", { id });
+}
 
 /** 服务商的模型列表（`GET /models`，不花 token）；supported=false 表示服务商没有列表接口。 */
 export interface ConnectionModels { supported: boolean; models: string[] }
