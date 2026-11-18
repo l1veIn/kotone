@@ -160,6 +160,10 @@ impl OnlineSynth {
         };
         // 用量账本（按字计费）：真的请求了才记，缓存命中走不到这里。
         kotone_core::usage::record_tts(provider, &config.model, &request.text);
+        kotone_core::log::log(&format!(
+            "speech: synthesized {} chars with {provider}/{native}",
+            request.text.chars().count()
+        ));
         crate::wav::decode(&bytes)
     }
 
