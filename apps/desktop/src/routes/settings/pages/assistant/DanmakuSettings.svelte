@@ -2,6 +2,32 @@
   import { DANMAKU_EMOTES, danmakuStyle, type DanmakuEmote } from "../../../../lib/danmaku";
   import { patchSettings, settingsStore } from "../../../../lib/stores/ui";
   import type { AssistantConfig } from "../../../../lib/ipc";
+  import relayRoom from "../../../../assets/brand/relay-room-bg.webp";
+
+  /** 预览是一块缩小的 1920 宽屏幕：字号、距顶部、速度都按同一个比例缩小，看起来和游戏里一样。 */
+  const SCREEN_WIDTH = 1920;
+  let screenWidth = $state(0);
+  const scale = $derived(screenWidth > 0 ? screenWidth / SCREEN_WIDTH : 0);
+
+  /** 让示例弹幕在预览屏幕里从右飘到左（循环），速度按比例缩小。 */
+  function scroll(node: HTMLElement, speed: number) {
+    let animation: Animation | undefined;
+    const start = (pxPerSec: number) => {
+      animation?.cancel();
+      const box = node.parentElement?.getBoundingClientRect().width ?? 0;
+      const width = node.getBoundingClientRect().width;
+      if (!box || !pxPerSec || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        node.style.transform = `translate3d(${Math.max(0, (box - width) / 2)}px,0,0)`;
+        return;
+      }
+      animation = node.animate(
+        [{ transform: `translate3d(${box}px,0,0)` }, { transform: `translate3d(${-width}px,0,0)` }],
+        { duration: ((box + width) / pxPerSec) * 1000, iterations: Infinity, easing: "linear" },
+      );
+    };
+    start(speed);
+    return { update: start, destroy: () => animation?.cancel() };
+  }
 
   type Appearance = Pick<AssistantConfig, "danmakuSpeedPxPerSec" | "danmakuFontSize" | "danmakuTopOffsetPx" | "danmakuColor" | "danmakuEmote">;
   let saving = $state(false);
@@ -111,11 +137,19 @@
       </div>
     </fieldset>
 
-    <div class="overflow-hidden rounded-xl border border-hairline bg-[#11111c] px-4 py-3">
-      <p class="mt-0 mb-2 text-[10px] text-white/50">预览</p>
-      <div class="sample" style:color={preview.color} style:font-size={`${Math.min(preview.fontSize, 36)}px`} data-testid="danmaku-style-preview">
-        {#if preview.emote.src}<img src={preview.emote.src} alt="" />{/if}
-        <span>{sample}</span>
+    <div>
+      <p class="mt-0 mb-1.5 text-xs text-muted-foreground">预览（按 1920 宽的屏幕等比缩小：大小、高度、速度和游戏里一样）</p>
+      <div class="screen" bind:clientWidth={screenWidth} style:background-image={`url(${relayRoom})`} data-testid="danmaku-screen">
+        {#if scale > 0}
+          {#key `${preview.fontSize}|${preview.emote.id}|${preview.color}`}
+            <div class="sample" use:scroll={(config.danmakuSpeedPxPerSec ?? 160) * scale}
+              style:top={`${Math.max(0, Math.min(config.danmakuTopOffsetPx * scale, screenWidth * 9 / 16 - preview.fontSize * scale * 1.4))}px`}
+              style:color={preview.color} style:font-size={`${Math.max(8, preview.fontSize * scale)}px`} data-testid="danmaku-style-preview">
+              {#if preview.emote.src}<img src={preview.emote.src} alt="" />{/if}
+              <span>{sample}</span>
+            </div>
+          {/key}
+        {/if}
       </div>
     </div>
   </section>
@@ -127,6 +161,8 @@
   .choice[aria-pressed="true"] { border-color: var(--color-primary); background-color: color-mix(in oklab, var(--color-primary) 10%, transparent); color: var(--color-foreground); }
   button:disabled { cursor: wait; opacity: .5; }
   button:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 3px; }
-  .sample { display: flex; align-items: center; gap: .2em; white-space: nowrap; font-weight: 700; line-height: 1.35; text-shadow: 1px 1px 2px #000, -1px -1px 2px #000; }
+  .screen { position: relative; width: 100%; max-width: 30rem; aspect-ratio: 16 / 9; overflow: hidden; border-radius: .75rem; border: 1px solid var(--color-hairline); background-color: #11111c; background-size: cover; background-position: center; }
+  .screen::after { content: ""; position: absolute; inset: 0; background: linear-gradient(#0006, #0003); pointer-events: none; }
+  .sample { position: absolute; left: 0; z-index: 1; display: inline-flex; align-items: center; gap: .2em; width: max-content; white-space: nowrap; font-weight: 700; line-height: 1.35; text-shadow: 1px 1px 2px #000, -1px -1px 2px #000, 0 2px 4px #0009; will-change: transform; }
   .sample img { width: 1.4em; height: 1.4em; object-fit: contain; }
 </style>

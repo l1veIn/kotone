@@ -930,20 +930,33 @@ pub async fn preview_reminder(app: AppHandle, kind: String) -> Result<(), String
         if kind != "voice" {
             return Err("未知提醒方式".into());
         }
-        let speaker = selected_speaker(&app, &config)?;
+        let engine = effective_engine(&app, &config);
+        let started = std::time::Instant::now();
+        // 试听没声音时要能查：记下用的引擎、花了多久、结果。
+        let log_result = |result: &Result<(), String>| {
+            kotone_core::log::log(&format!(
+                "speech preview: engine={engine:?} took={}ms result={}",
+                started.elapsed().as_millis(),
+                match result {
+                    Ok(()) => "played".to_string(),
+                    Err(e) => format!("error: {e}"),
+                }
+            ));
+        };
+        let speaker =
+            selected_speaker(&app, &config).inspect_err(|e| log_result(&Err(e.clone())))?;
         guard.speaker = Some(speaker.clone());
         let result = queue_speech(
             speaker,
-            speech_request(
-                effective_engine(&app, &config),
-                &config,
-                "打野有闪了。该打小龙了。",
-            ),
+            speech_request(engine, &config, "打野有闪了。该打小龙了。"),
             &runtime.active_captures,
             &output_cancel,
-        )?
+        )
+        .inspect_err(|e| log_result(&Err(e.clone())))?
         .await
-        .map_err(|_| "语音试听失败".to_string())?;
+        .map_err(|_| "语音试听失败".to_string())
+        .and_then(|r| r);
+        log_result(&result);
         guard.speaker = None;
         result
     })
