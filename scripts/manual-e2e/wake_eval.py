@@ -6,7 +6,7 @@ ordinary talk and game commentary without any wake word (negatives, all wake wor
 `cargo run -p kotone-stt --features engine-sherpa --example wake_eval` (the desktop's own WakeDetector) and prints
 hits per word / voice and false wakes per hour of negative audio.
 
-usage: python -X utf8 -I scripts/manual-e2e/wake_eval.py [--sensitivity normal] [--no-deepseek]
+usage: python -X utf8 -I scripts/manual-e2e/wake_eval.py [--sensitivity normal] [--no-deepseek] [--words 琴音琴音,小雨小雨]
 Needs the downloaded wake model (default: target/agent-smoke/home/models/wake/…, override KOTONE_KWS_DIR).
 """
 import json
@@ -97,7 +97,10 @@ def pad(data, lead=1.0, tail=1.0):
 
 
 def main():
+    global WORDS
     sensitivity = sys.argv[sys.argv.index("--sensitivity") + 1] if "--sensitivity" in sys.argv else "normal"
+    if "--words" in sys.argv:
+        WORDS = sys.argv[sys.argv.index("--words") + 1].split(",")
     os.makedirs(WORK, exist_ok=True)
     key = None if "--no-deepseek" in sys.argv else real_deepseek.read_key()
     voices = [("sapi", 0), ("sapi-fast", 3)] + ([("deepseek-stella", "stella"), ("deepseek-tide", "tide")] if key else [])
@@ -117,7 +120,7 @@ def main():
                     os.remove(raw)
                 manifest.append({"wav": name, "keyword": word, "voice": voice, "expect": 1})
     for voice, arg in voices:
-        name = f"negative-{voice}.wav"
+        name = f"negative-{voice}.wav"  # 负样本与唤醒词无关，换了唤醒词也复用
         path = os.path.join(WORK, name)
         if not os.path.exists(path):
             parts = []

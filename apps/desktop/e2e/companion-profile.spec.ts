@@ -73,8 +73,14 @@ test("roles: switch, create, wake word check, placeholder avatar", async ({ page
   await page.getByTestId("settings-nav-assistant").click();
   await page.getByTestId("assistant-nav-identity").click();
   const cards = page.getByTestId("role-card");
-  // 内置：琴音（当前）、小雨、小林
-  await expect(cards).toHaveCount(3);
+  // 内置：琴音（当前）、小雨、小林、大肥鱼、Claude大小姐
+  await expect(cards).toHaveCount(5);
+  // 自带形象（社区二创）：用自己的表情头像，编辑区写着署名和授权
+  await expect(cards.filter({ hasText: "大肥鱼" }).getByTestId("avatar-face")).toHaveCount(1);
+  await cards.filter({ hasText: "Claude大小姐" }).click({ position: { x: 8, y: 8 } });
+  await expect(page.getByTestId("role-face-credit")).toContainText("CC BY-NC-SA 4.0");
+  await expect(page.getByTestId("role-face-credit")).toContainText("与 Anthropic 无关");
+  await expect(page.getByTestId("role-wake")).toHaveValue("你好大小姐");
   await expect(cards.filter({ hasText: "琴音" }).getByTestId("role-current")).toBeVisible();
   // 小雨没有头像：显示名字的第一个字（占位，不冒用别人的形象）
   await expect(cards.filter({ hasText: "小雨" }).getByTestId("avatar-letter")).toHaveText("小");
@@ -92,7 +98,7 @@ test("roles: switch, create, wake word check, placeholder avatar", async ({ page
   // 新建角色
   await page.getByTestId("role-new-name").fill("星野");
   await page.getByTestId("role-create").click();
-  await expect(cards).toHaveCount(4);
+  await expect(cards).toHaveCount(6);
   await expect(page.getByTestId("identity-name")).toHaveValue("星野");
 
   // 唤醒词：默认是名字重复两遍；太短、不是汉字都提示
@@ -113,7 +119,7 @@ test("roles: switch, create, wake word check, placeholder avatar", async ({ page
 
   // 删掉自己建的角色；换回琴音
   await page.getByTestId("role-delete").click();
-  await expect(cards).toHaveCount(3);
+  await expect(cards).toHaveCount(5);
   await cards.filter({ hasText: "琴音" }).getByTestId("role-switch").click();
   await expect(page.getByTestId("assistant-page-title")).toHaveText("琴音");
 });

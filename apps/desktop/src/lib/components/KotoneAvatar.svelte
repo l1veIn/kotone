@@ -2,14 +2,17 @@
   // 琴音的头像：和右下角对话气泡同一个样子（圆形、贴纸里的脸、按状态换表情和光环颜色）。
   // 玩家上传了头像就用上传的（没有表情变化，光环照常）。聊天、空白对话页、「她是谁」、气泡都用它。
   import { bubbleLook, type BubblePhase } from "../bubble";
+  import type { RoleFaces } from "../roles";
 
-  let { size = 40, mood = "asking", ring = true, custom = null, letter = null, animate = false }: {
+  let { size = 40, mood = "asking", ring = true, custom = null, faces = null, letter = null, animate = false }: {
     size?: number;
     /** 表情：和气泡的状态一致（asking = 招手，speaking = 指着说话……）。 */
     mood?: Exclude<BubblePhase, "hidden">;
     ring?: boolean;
     /** 玩家上传的头像（object URL）；null = 用内置表情。 */
     custom?: string | null;
+    /** 角色自带的表情头像（大肥鱼、Claude大小姐），按状态换。 */
+    faces?: RoleFaces | null;
     /** 没有头像的其他角色：显示名字的第一个字（占位头像，不冒用别人的形象）。 */
     letter?: string | null;
     /** 光环动起来（在听 / 在想 / 在说）。 */
@@ -23,6 +26,8 @@
   <div class="face">
     {#if custom}
       <img src={custom} alt="" class="custom" />
+    {:else if faces}
+      <img src={faces[mood]} alt="" class="custom" data-testid="avatar-face" />
     {:else if letter}
       <span class="letter" style:font-size={`${Math.round(size * 0.46)}px`} data-testid="avatar-letter">{letter}</span>
     {:else}

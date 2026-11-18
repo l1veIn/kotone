@@ -297,3 +297,19 @@ pub fn roles_import(app: AppHandle, card: Value) -> Result<Value, String> {
 pub fn roles_check_wake(text: String, readings: Vec<String>) -> wake_word::WakeWordCheck {
     wake_word::check(&text, &readings)
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn builtin_default_wake_words_pass_the_model_check() {
+        for role in kotone_agent::roles::BUILTIN {
+            let text = if role.wake.is_empty() {
+                kotone_stt::wake_word::default_for_name(role.name).unwrap_or_default()
+            } else {
+                role.wake.to_string()
+            };
+            let check = kotone_stt::wake_word::check(&text, &[]);
+            assert!(check.ok, "{}「{text}」：{:?}", role.name, check.problems);
+        }
+    }
+}

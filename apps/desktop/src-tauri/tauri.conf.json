@@ -90,6 +90,8 @@
       "../../../licenses/codeg-APACHE-2.0.txt": "licenses/codeg-APACHE-2.0.txt",
       "../../../licenses/goose-APACHE-2.0.txt": "licenses/goose-APACHE-2.0.txt",
       "../../../licenses/deepseek-harness-MIT.txt": "licenses/deepseek-harness-MIT.txt",
+      "../../../licenses/CC-BY-NC-SA-4.0.txt": "licenses/CC-BY-NC-SA-4.0.txt",
+      "../src/assets/roles/README.md": "licenses/role-art.md",
       "../../../docs/third-party/rambledesk-ports.md": "licenses/rambledesk-ports.md"
     },
     "publisher": "l1veIn",

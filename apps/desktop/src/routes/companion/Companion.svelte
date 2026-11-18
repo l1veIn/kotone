@@ -6,17 +6,20 @@
   } from "../../lib/bubble";
   import { getSettings } from "../../lib/ipc";
   import { workspaceAvatar } from "../../lib/workspace";
-  import { placeholderLetter } from "../../lib/roles";
+  import { bundledFaces, placeholderLetter, type RoleFaces } from "../../lib/roles";
 
   /** 玩家上传的头像（每次气泡出现时读一次设置，换了头像下一句就生效）。 */
   let custom = $state<string | null>(null);
   /** 其他角色没有头像时的占位字。 */
   let letter = $state<string | null>(null);
+  /** 自带形象的角色（大肥鱼、Claude大小姐）：按状态换表情。 */
+  let faces = $state<RoleFaces | null>(null);
   let customName = "";
   async function refreshAvatar() {
     try {
       const agent = (await getSettings()).agent;
       letter = placeholderLetter(agent?.roleId, agent?.identity?.name, agent?.identity?.avatar);
+      faces = bundledFaces(agent?.roleId, agent?.identity?.avatar);
       const name = agent?.identity?.avatar ?? "";
       if (name === customName) return;
       customName = name;
@@ -57,6 +60,7 @@
       <div class="avatar ring-{look.ring}" aria-hidden="true">
         <div class="face">
           {#if custom}<img src={custom} alt="" class="custom" />
+          {:else if faces && snap.phase !== "hidden"}<img src={faces[snap.phase]} alt="" class="custom" />
           {:else if letter}<span class="letter">{letter}</span>
           {:else}<img src={look.face} alt="" style="margin: calc(50% - {look.fy * 170}%) 0 0 calc(50% - {look.fx * 170}%)" />{/if}
         </div>

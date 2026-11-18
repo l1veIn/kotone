@@ -11,7 +11,7 @@
   import type { Turn } from "./timeline";
   import { formatToolJson } from "./toolPresentation";
   import KotoneAvatar from "../components/KotoneAvatar.svelte";
-  import { avatarLetter, customAvatar } from "../stores/avatar";
+  import { avatarLetter, customAvatar, roleFaces } from "../stores/avatar";
   import { settingsStore } from "../stores/ui";
 
   let { turn, askFor, onAnswer }: {
@@ -60,7 +60,7 @@
   {#if turn.blocks.length || turn.active}
     <div class="min-w-0 space-y-1.5">
       <div class="flex items-center gap-2 pb-0.5 text-xs text-muted-foreground" aria-hidden="true">
-        <KotoneAvatar size={20} mood="speaking" custom={$customAvatar} letter={$avatarLetter} animate={turn.active} />
+        <KotoneAvatar size={20} mood="speaking" custom={$customAvatar} faces={$roleFaces} letter={$avatarLetter} animate={turn.active} />
         <span class="font-medium text-foreground/80">{$settingsStore?.agent?.identity?.name?.trim() || "琴音"}</span>
       </div>
       {#each turn.blocks as block (block.key)}

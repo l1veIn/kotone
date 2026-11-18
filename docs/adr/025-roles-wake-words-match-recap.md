@@ -8,7 +8,8 @@
 
 - **每个角色各一份**：名字、头像（琴音用全套立绘和表情；其他角色没传头像时显示名字的第一个字，不冒用别人的形象）、性格（SOUL.md）、声音（`provider/voice`）、唤醒词、开场白。
 - **所有角色共用**：关于玩家的记忆（USER.md）、她的笔记（MEMORY.md）、每个游戏的记忆、技能、设置。换角色不会忘掉玩家。
-- **内置**：琴音（默认）、小雨（温柔安静，DeepSeek 海星）、小林（沉稳男声，DeepSeek 暗潮）；玩家可以新建、改、删（内置的只能恢复默认）。
+- **内置**：琴音（默认）、小雨（温柔安静，DeepSeek 海星）、小林（沉稳男声，DeepSeek 暗潮）、**大肥鱼**、**Claude大小姐**；玩家可以新建、改、删（内置的只能恢复默认）。
+- **社区二创形象（玩家 2026-11-18 决定直接打包）**：大肥鱼取自 PC2005-cloud/dsh-pet 的动画帧，Claude大小姐取自 opsCar/claude-daxiaojie-assets 的大头贴；两者形象都是 CC BY-NC-SA 4.0（非商用、相同方式共享）。做法：裁成 7 种状态的头像（256×256 WebP，约 350 KB），放在 `apps/desktop/src/assets/roles/`（目录里写明出处与修改），协议全文随安装包发布，角色页显示署名；性格是 Kotone 自己写的。**这部分素材永远不能商用**：Kotone 以后收费或做商业版时要拿掉。默认唤醒词实测（`wake_eval.py --words`）：大肥鱼 8/8、你好大肥鱼 8/8、大小姐 7/8、你好大小姐 8/8，选了“你好大肥鱼”“你好大小姐”。
 - **存储**：`<workspace>/roles/<id>/role.json` 就是一张 Character Card V2（`spec: chara_card_v2`），Kotone 的字段在 `data.extensions.kotone`（头像文件、声音、唤醒词、一句话介绍）；性格在同目录的 `SOUL.md`；琴音的性格仍是工作区根目录的 `SOUL.md`，升级前的数据不用搬。原来设置里的名字和头像第一次启动时记进琴音的卡。导出时性格填进 `description`；导入 V1 / V2 / V3 JSON 时不认识的字段原样保留（V2 要求）。
 - **有意偏离 V2**：卡里的 `system_prompt` / `post_history_instructions` 不替换琴音的系统提示（里面有工具和安全规则），只原样保留在卡里。
 - **切换**：`roles.switch` 把名字和头像写进设置 `agent.identity`（气泡、聊天、侧栏都读它）、记下 `agent.roleId`、**开一段新对话**（系统提示在一段对话里不变，ADR 024）；语音合成按当前角色的声音（属于正在用的引擎时）；唤醒检测按当前角色的唤醒词重新开始。工具 `roles.list / get / switch / create / update / delete` 琴音和外部 Agent 都能用；`agent.roleId` 不能直接用 `settings.update` 改。

@@ -39,6 +39,8 @@ pub struct BuiltinRole {
     pub soul: &'static str,
     /// 推荐的声音（`provider/voice`，空 = 跟随全局）。
     pub voice: &'static str,
+    /// 默认唤醒词（空 = 名字重复两遍；琴音按「语音唤醒」里选的预置）。
+    pub wake: &'static str,
 }
 
 pub const BUILTIN: &[BuiltinRole] = &[
@@ -48,6 +50,7 @@ pub const BUILTIN: &[BuiltinRole] = &[
         summary: "温暖、轻快，像一起开黑的朋友",
         soul: DEFAULT_SOUL,
         voice: "",
+        wake: "",
     },
     BuiltinRole {
         id: "xiaoyu",
@@ -55,6 +58,7 @@ pub const BUILTIN: &[BuiltinRole] = &[
         summary: "温柔安静，话不多，耐心",
         soul: "# SOUL\n\n你是小雨，屏幕前玩家的游戏陪玩。性格温柔、安静、有耐心，说话轻声细语、简短。\n玩家打得不好时先安慰再给建议，从不催促；不确定的事如实说，不编。\n玩家在游戏里时只说结论，一两句口语。\n",
         voice: "deepseek/stella",
+        wake: "",
     },
     BuiltinRole {
         id: "xiaolin",
@@ -62,6 +66,25 @@ pub const BUILTIN: &[BuiltinRole] = &[
         summary: "沉稳冷静的男生，像靠谱的指挥",
         soul: "# SOUL\n\n你是小林，屏幕前玩家的游戏陪玩。性格沉稳、冷静，说话干脆，像一个靠谱的队伍指挥。\n先说结论和该做什么，再简单说理由；不说教、不夸张；不确定的事如实说，不编。\n玩家在游戏里时只说结论，一两句口语。\n",
         voice: "deepseek/tide",
+        wake: "",
+    },
+    // 社区二创角色（形象 CC BY-NC-SA 4.0，见 apps/desktop/src/assets/roles/README.md 与 THIRD_PARTY_NOTICES.md）。
+    // 性格是 Kotone 自己写的；唤醒词实测（wake_eval.py，2026-11-18）：“你好大肥鱼”“你好大小姐”各 8/8。
+    BuiltinRole {
+        id: "dafeiyu",
+        name: "大肥鱼",
+        summary: "蓝色鲸鱼娘女仆，贪吃软萌（社区二创，非官方）",
+        soul: "# SOUL\n\n你是大肥鱼，一只蓝色长发的鲸鱼娘女仆，屏幕前玩家的游戏陪玩（社区二创形象，不是 DeepSeek 官方）。\n性格软萌、爱吃（白饭、零食都爱），偶尔犯迷糊，但交代的事一定认真做完；说话轻快，偶尔自称“肥鱼”。\n玩家打得好就真心夸，打得不好先安慰再给建议；不确定的事如实说，不编。\n玩家在游戏里时只说结论，一两句口语。\n",
+        voice: "deepseek/stella",
+        wake: "你好大肥鱼",
+    },
+    BuiltinRole {
+        id: "claude-ojou",
+        name: "Claude大小姐",
+        summary: "傲娇优雅的大小姐，爱喝红茶（同人角色，非官方）",
+        soul: "# SOUL\n\n你是 Claude大小姐，一位橙色卷发、优雅又有点傲娇的大小姐，屏幕前玩家的游戏陪玩（同人角色，和 Anthropic 官方无关）。\n说话得体、偶尔自称“本小姐”，嘴上嫌弃，其实非常靠谱、细心；爱喝红茶、写日记。\n给建议时条理清楚、一针见血；不确定的事如实说，不编。\n玩家在游戏里时只说结论，一两句口语。\n",
+        voice: "deepseek/stella",
+        wake: "你好大小姐",
     },
 ];
 
@@ -214,7 +237,14 @@ impl Workspace {
             } else {
                 base.map(|b| b.voice.to_string()).unwrap_or_default()
             },
-            wake: ext.wake,
+            wake: if ext.wake.text.trim().is_empty() {
+                RoleWake {
+                    text: base.map(|b| b.wake.to_string()).unwrap_or_default(),
+                    readings: ext.wake.readings,
+                }
+            } else {
+                ext.wake
+            },
             greeting: text("first_mes").unwrap_or_default(),
         }
     }
@@ -600,6 +630,13 @@ mod tests {
         assert!(roles
             .iter()
             .any(|r| r.id == "xiaoyu" && r.voice == "deepseek/stella"));
+        let fish = roles.iter().find(|r| r.id == "dafeiyu").unwrap();
+        assert_eq!(fish.wake.text, "你好大肥鱼");
+        assert!(roles
+            .iter()
+            .any(|r| r.id == "claude-ojou" && r.name == "Claude大小姐"));
+        // 内置角色的 id 都合法
+        assert!(BUILTIN.iter().all(|b| valid_role_id(b.id)));
         assert_eq!(
             ws.role_soul_path(DEFAULT_ROLE).unwrap(),
             ws.dir().join(SOUL)

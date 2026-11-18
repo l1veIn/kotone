@@ -12,7 +12,7 @@
   import KotoneAvatar from "../../../../lib/components/KotoneAvatar.svelte";
   import { listSpeechVoices, type SpeechVoice } from "../../../../lib/assistant";
   import {
-    DEFAULT_ROLE, placeholderLetter, rolesCheckWake, rolesCreate, rolesDelete, rolesExport, rolesGet, rolesImport, rolesList,
+    DEFAULT_ROLE, FACE_CREDITS, bundledFaces, placeholderLetter, rolesCheckWake, rolesCreate, rolesDelete, rolesExport, rolesGet, rolesImport, rolesList,
     rolesSwitch, rolesUpdate, type RoleInfo, type WakeWordCheck,
   } from "../../../../lib/roles";
   import { workspaceAvatar, workspaceSetAvatar } from "../../../../lib/workspace";
@@ -209,13 +209,13 @@
         <div role="button" tabindex="0" data-testid="role-card" data-role={r.id} aria-pressed={r.id === selectedId}
           class="flex cursor-pointer items-center gap-3 rounded-xl border p-3 text-left transition-colors {r.id === selectedId ? 'border-primary/60 bg-primary/5' : 'border-border/80 hover:bg-muted/40'}"
           onclick={() => select(r.id)} onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(r.id); } }}>
-          <KotoneAvatar size={40} mood="asking" custom={avatars[r.id] ?? null} letter={placeholderLetter(r.id, r.name, r.avatar)} />
+          <KotoneAvatar size={40} mood="asking" custom={avatars[r.id] ?? null} faces={bundledFaces(r.id, r.avatar)} letter={placeholderLetter(r.id, r.name, r.avatar)} />
           <div class="min-w-0 flex-1">
-            <div class="flex items-center gap-1.5 text-sm font-medium">{r.name}{#if r.current}<span class="rounded-full bg-primary/15 px-1.5 text-[11px] text-primary" data-testid="role-current">当前</span>{/if}</div>
+            <div class="flex min-w-0 items-center gap-1.5 text-sm font-medium"><span class="truncate">{r.name}</span>{#if r.current}<span class="shrink-0 rounded-full bg-primary/15 px-1.5 text-[11px] text-primary" data-testid="role-current">当前</span>{/if}</div>
             <p class="m-0 truncate text-xs text-muted-foreground">{r.summary || "自己建的角色"}</p>
           </div>
           {#if !r.current}
-            <Button size="sm" variant="outline" disabled={busy} onclick={(e) => { e.stopPropagation(); void switchTo(r); }} data-testid="role-switch">换成{r.name}</Button>
+            <Button size="sm" variant="outline" class="shrink-0" disabled={busy} aria-label={`换成${r.name}`} title={`换成${r.name}`} onclick={(e) => { e.stopPropagation(); void switchTo(r); }} data-testid="role-switch">切换</Button>
           {/if}
         </div>
       {/each}
@@ -244,7 +244,7 @@
       <SettingsRow label="头像" description={cur.id === DEFAULT_ROLE ? "PNG、JPG、WebP 或 GIF，不超过 2 MB；不传就用琴音的立绘和表情" : "PNG、JPG、WebP 或 GIF，不超过 2 MB；不传就显示名字的第一个字"}>
         {#snippet control()}
           <div class="flex items-center gap-3">
-            <div data-testid="identity-avatar" data-src={avatars[cur.id] ?? ""}><KotoneAvatar size={48} mood="asking" custom={avatars[cur.id] ?? null} letter={placeholderLetter(cur.id, cur.name, cur.avatar)} /></div>
+            <div data-testid="identity-avatar" data-src={avatars[cur.id] ?? ""}><KotoneAvatar size={48} mood="asking" custom={avatars[cur.id] ?? null} faces={bundledFaces(cur.id, cur.avatar)} letter={placeholderLetter(cur.id, cur.name, cur.avatar)} /></div>
             <input bind:this={fileInput} type="file" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif" class="hidden"
               onchange={(e) => void pickAvatar(e)} data-testid="identity-avatar-input" />
             <Button size="sm" variant="outline" disabled={busy} onclick={() => fileInput?.click()}>换一张</Button>
@@ -252,6 +252,7 @@
           </div>
         {/snippet}
         {#if avatarError}<p role="alert" class="m-0 text-xs text-destructive" data-testid="identity-avatar-error">{avatarError}</p>{/if}
+        {#if FACE_CREDITS[cur.id] && !cur.avatar}<p class="m-0 text-[11px] leading-relaxed text-muted-foreground" data-testid="role-face-credit">{FACE_CREDITS[cur.id]}</p>{/if}
       </SettingsRow>
       <SettingsRow label="声音" description="她说话用的声音（属于当前语音引擎的才生效，见「回答 → 语音」）">
         {#snippet control()}

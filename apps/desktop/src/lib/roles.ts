@@ -48,6 +48,8 @@ const preview: { current: string; roles: Omit<RoleInfo, "wakeCheck" | "current">
     { id: "kotone", name: "琴音", summary: "温暖、轻快，像一起开黑的朋友", builtin: true, avatar: "", voice: "", wake: { text: "", readings: [] }, greeting: "" },
     { id: "xiaoyu", name: "小雨", summary: "温柔安静，话不多，耐心", builtin: true, avatar: "", voice: "deepseek/stella", wake: { text: "", readings: [] }, greeting: "" },
     { id: "xiaolin", name: "小林", summary: "沉稳冷静的男生，像靠谱的指挥", builtin: true, avatar: "", voice: "deepseek/tide", wake: { text: "", readings: [] }, greeting: "" },
+    { id: "dafeiyu", name: "大肥鱼", summary: "蓝色鲸鱼娘女仆，贪吃软萌（社区二创，非官方）", builtin: true, avatar: "", voice: "deepseek/stella", wake: { text: "你好大肥鱼", readings: [] }, greeting: "" },
+    { id: "claude-ojou", name: "Claude大小姐", summary: "傲娇优雅的大小姐，爱喝红茶（同人角色，非官方）", builtin: true, avatar: "", voice: "deepseek/stella", wake: { text: "你好大小姐", readings: [] }, greeting: "" },
   ],
 };
 function previewView(r: Omit<RoleInfo, "wakeCheck" | "current">): RoleInfo {
@@ -116,8 +118,50 @@ export async function rolesCheckWake(text: string, readings: string[]): Promise<
   return previewCheck(text, readings);
 }
 
-/** 没上传头像的非默认角色用的占位：名字的第一个字。琴音（默认角色）用内置立绘，返回 null。 */
+/** 没上传头像、也没有自带形象的非默认角色用的占位：名字的第一个字。琴音（默认角色）用内置立绘，返回 null。 */
 export function placeholderLetter(roleId: string | undefined, name: string | undefined, avatar: string | undefined): string | null {
-  if (avatar || !roleId || roleId === DEFAULT_ROLE) return null;
+  if (avatar || !roleId || roleId === DEFAULT_ROLE || BUNDLED_FACES[roleId]) return null;
   return [...(name?.trim() || "?")][0] ?? "?";
 }
+
+// ---------- 自带形象的内置角色（社区二创，CC BY-NC-SA 4.0；见 src/assets/roles/README.md） ----------
+import fishIdle from "../assets/roles/dafeiyu/idle.webp";
+import fishListening from "../assets/roles/dafeiyu/listening.webp";
+import fishThinking from "../assets/roles/dafeiyu/thinking.webp";
+import fishSpeaking from "../assets/roles/dafeiyu/speaking.webp";
+import fishAsking from "../assets/roles/dafeiyu/asking.webp";
+import fishNote from "../assets/roles/dafeiyu/note.webp";
+import fishError from "../assets/roles/dafeiyu/error.webp";
+import ojouIdle from "../assets/roles/claude-ojou/idle.webp";
+import ojouListening from "../assets/roles/claude-ojou/listening.webp";
+import ojouThinking from "../assets/roles/claude-ojou/thinking.webp";
+import ojouSpeaking from "../assets/roles/claude-ojou/speaking.webp";
+import ojouAsking from "../assets/roles/claude-ojou/asking.webp";
+import ojouNote from "../assets/roles/claude-ojou/note.webp";
+import ojouError from "../assets/roles/claude-ojou/error.webp";
+
+/** 气泡的几种状态（和 bubble.ts 的 BubblePhase 一致，外加 idle = 平时的头像）。 */
+export type FaceMood = "idle" | "listening" | "recognizing" | "thinking" | "speaking" | "asking" | "note" | "error";
+export type RoleFaces = Record<FaceMood, string>;
+
+const face = (idle: string, listening: string, thinking: string, speaking: string, asking: string, note: string, error: string): RoleFaces =>
+  ({ idle, listening, recognizing: listening, thinking, speaking, asking, note, error });
+
+/** 角色 id → 自带的表情头像（没有的角色：琴音用内置立绘，其他用名字首字占位）。 */
+export const BUNDLED_FACES: Record<string, RoleFaces> = {
+  dafeiyu: face(fishIdle, fishListening, fishThinking, fishSpeaking, fishAsking, fishNote, fishError),
+  "claude-ojou": face(ojouIdle, ojouListening, ojouThinking, ojouSpeaking, ojouAsking, ojouNote, ojouError),
+};
+
+/** 自带形象的署名（CC BY-NC-SA 4.0 要求署名；界面上显示）。 */
+export const FACE_CREDITS: Record<string, string> = {
+  dafeiyu: "形象：社区二创 DeepSeek「大肥鱼」（非官方）· 原型 @上善无形 · 设计 @ZipZipPipe · 素材 PC2005-cloud/dsh-pet · CC BY-NC-SA 4.0（非商用）",
+  "claude-ojou": "素材：Claude大小姐的日记本（github.com/opsCar/claude-daxiaojie-assets）· 角色设定：ZipZipPipe（胖次狐）· 设定图：lmy414/ai-chan-sheets · CC BY-NC-SA 4.0（非商用）· 同人作品，与 Anthropic 无关",
+};
+
+/** 这个角色自带的表情头像；玩家上传了头像（`avatar` 非空）时不用。 */
+export function bundledFaces(roleId: string | undefined, avatar: string | undefined): RoleFaces | null {
+  if (avatar || !roleId) return null;
+  return BUNDLED_FACES[roleId] ?? null;
+}
+

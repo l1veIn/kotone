@@ -187,4 +187,11 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 - sherpa-onnx `text2token` (`tokens_type="ppinyin"`), Apache License 2.0, https://github.com/k2-fsa/sherpa-onnx (`sherpa_onnx/utils.py`, `sherpa-onnx/csrc/utils.cc` @ `4488718d`): how a Chinese phrase becomes the keyword spotter's pinyin tokens and how a keyword line is parsed, reimplemented in `crates/kotone-stt/src/wake_word.rs`. The model's `tokens.txt` (sherpa-onnx KWS zipformer WenetSpeech 3.3M, listed above) is embedded as `crates/kotone-stt/src/wake_tokens.txt` to check wake words before the model is downloaded.
 - `pinyin` crate (rust-pinyin), MIT License, Copyright (c) 2016 mozillazg, https://github.com/mozillazg/rust-pinyin — Chinese characters to tone-marked pinyin (features `with_tone`, `heteronym`).
 
+## Built-in role art: 大肥鱼 and Claude大小姐 (CC BY-NC-SA 4.0, non-commercial)
+
+The avatar and expression images in `apps/desktop/src/assets/roles/` are **not** covered by Kotone's MIT license. They are licensed under Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (full text in `licenses/CC-BY-NC-SA-4.0.txt`, shipped with the installer): no commercial use; adaptations must use the same license. Kotone cropped them to head shots, scaled them to 256×256 and converted them to WebP (details in `apps/desktop/src/assets/roles/README.md`). The personalities (SOUL texts) are Kotone's own writing.
+
+- 大肥鱼 (`dafeiyu/`): frames from PC2005-cloud/dsh-pet (https://github.com/PC2005-cloud/dsh-pet; code MIT, Copyright (c) 2026 PC2005-cloud). Community fan character of DeepSeek's whale, **not an official DeepSeek image**; prototype 「溟月」 by @上善无形 (https://space.bilibili.com/4456176), DeepSeek maid version designed by @ZipZipPipe (https://space.bilibili.com/4168597); character license CC BY-NC-SA 4.0 (https://www.bilibili.com/opus/1247156596114456581).
+- Claude大小姐 (`claude-ojou/`): 素材：Claude大小姐的日记本（github.com/opsCar/claude-daxiaojie-assets）· 角色设定：ZipZipPipe（胖次狐）· 设定图：lmy414/ai-chan-sheets · CC BY-NC-SA 4.0. Fan work, not affiliated with Anthropic; "Claude" is a trademark of Anthropic.
+
 These notices describe third-party components and models; they do not grant a license to Kotone itself.
