@@ -489,10 +489,6 @@ pub fn list(app: &AppHandle) -> Result<Value, String> {
 }
 
 /// 当前前台窗口作为目标（不能是 Kotone 自己）。
-pub(crate) fn foreground_target() -> Result<RunTarget, String> {
-    foreground_target_info().map(|(target, _)| target)
-}
-
 pub(crate) fn foreground_target_info() -> Result<(RunTarget, WindowInfo), String> {
     let window = WindowsWindowObserver
         .foreground_window()
