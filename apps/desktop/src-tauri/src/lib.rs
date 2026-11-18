@@ -13,6 +13,7 @@ mod diagnostics;
 mod game_session;
 mod game_tools;
 mod hotkey;
+mod key_request;
 mod model_catalog;
 mod ocr_engines;
 mod overlay;
@@ -2025,6 +2026,7 @@ pub fn run() {
             app.manage(computer_use::ComputerUse::default());
             app.manage(voice_chat::VoiceChat::default());
             app.manage(voice_listen::VoiceListen::default());
+            app.manage(key_request::KeyRequests::default());
             let assistant_runtime = assistant::initialize(app.handle(), settings.clone());
 
             #[allow(unused_mut)] // vad-silero feature 关闭时无可变接线
@@ -2226,6 +2228,7 @@ pub fn run() {
             automation::automation_stop,
             agent::agent_send,
             workspace_cmd::workspace_overview,
+            key_request::agent_submit_key,
             workspace_cmd::workspace_read,
             workspace_cmd::workspace_write,
             workspace_cmd::workspace_delete_game,

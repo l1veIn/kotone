@@ -474,6 +474,13 @@ where
     }
 }
 
+/// 显示一句提示（不念），按字数停留后收起。
+pub fn note(app: &AppHandle, text: &str) {
+    if let Some(rev) = update(app, |m| Some(m.note(text).clone())) {
+        schedule_hide(app, rev, dwell(text));
+    }
+}
+
 /// 设置页“试一下”：显示一句示例，几秒后收起。
 pub fn preview(app: &AppHandle) {
     if let Some(rev) = update(app, |m| {

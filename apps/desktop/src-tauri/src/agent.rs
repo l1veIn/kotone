@@ -892,6 +892,9 @@ impl BuiltinHost for DesktopBuiltins {
                 }
                 Ok(json!({"stopped": stop_child(&self.app, id, "父会话结束了它")}))
             }
+            "connections.request_key" => {
+                crate::key_request::request(&self.app, &caller, self.voice, arguments).await
+            }
             "voice.listen.start" => crate::voice_listen::start(&self.app, &caller, arguments),
             "voice.listen.stop" => {
                 Ok(json!({"stopped": crate::voice_listen::stop_owner(&self.app, &caller)}))
