@@ -16,13 +16,13 @@
 //!   （实现 core 的 HotkeySource 端口）
 
 pub mod app_audio;
-pub mod game_icon;
 pub mod audio;
 pub mod autostart;
 pub mod detached;
 pub mod elevation;
 pub mod fs_publish;
 pub mod fullscreen;
+pub mod game_icon;
 pub mod game_window;
 pub mod games;
 #[cfg(windows)]
