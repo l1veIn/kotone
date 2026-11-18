@@ -32,7 +32,11 @@ pub(crate) fn active_game_pid(state: &SharedState) -> Option<u32> {
 fn resolve_active_game_pid(state: &SharedState) -> Option<u32> {
     let guard = state.settings.read().unwrap();
     let mut available = profile::list();
-    for builtin in [GameProfile::builtin_lol(), GameProfile::builtin_generic()] {
+    for builtin in [
+        GameProfile::builtin_lol(),
+        GameProfile::builtin_dota2(),
+        GameProfile::builtin_generic(),
+    ] {
         if !available.iter().any(|candidate| candidate.id == builtin.id) {
             available.push(builtin);
         }
