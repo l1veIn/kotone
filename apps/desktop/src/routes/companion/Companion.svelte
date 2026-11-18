@@ -4,6 +4,22 @@
   import {
     askRemaining, bubbleBody, bubbleLook, bubbleSnapshot, subscribeBubble, type BubbleSnapshot,
   } from "../../lib/bubble";
+  import { getSettings } from "../../lib/ipc";
+  import { workspaceAvatar } from "../../lib/workspace";
+
+  /** 玩家上传的头像（每次气泡出现时读一次设置，换了头像下一句就生效）。 */
+  let custom = $state<string | null>(null);
+  let customName = "";
+  async function refreshAvatar() {
+    try {
+      const name = (await getSettings()).agent?.identity?.avatar ?? "";
+      if (name === customName) return;
+      customName = name;
+      const bytes = name ? await workspaceAvatar(name) : null;
+      if (custom) URL.revokeObjectURL(custom);
+      custom = bytes ? URL.createObjectURL(new Blob([bytes as BlobPart])) : null;
+    } catch { /* 读不到就用内置表情 */ }
+  }
 
   let snap = $state<BubbleSnapshot | null>(null);
   let now = $state(Date.now());
@@ -16,6 +32,7 @@
 
   function accept(next: BubbleSnapshot) {
     if (snap && next.revision < snap.revision) return;
+    if (next.phase !== "hidden" && (!snap || snap.phase === "hidden")) void refreshAvatar();
     snap = next;
   }
 
@@ -33,7 +50,10 @@
   {#if visible && snap && look}
     {#key look.face}
       <div class="avatar ring-{look.ring}" aria-hidden="true">
-        <div class="face"><img src={look.face} alt="" style="margin: calc(50% - {look.fy * 170}%) 0 0 calc(50% - {look.fx * 170}%)" /></div>
+        <div class="face">
+          {#if custom}<img src={custom} alt="" class="custom" />
+          {:else}<img src={look.face} alt="" style="margin: calc(50% - {look.fy * 170}%) 0 0 calc(50% - {look.fx * 170}%)" />{/if}
+        </div>
       </div>
     {/key}
     <div class="bubble phase-{snap.phase}" role="status" aria-live="polite" data-phase={snap.phase}>
@@ -75,6 +95,7 @@
   }
   .face { width: 100%; height: 100%; border-radius: 50%; overflow: hidden; background: radial-gradient(circle at 50% 35%, #3a3358, #1d1a2b); }
   .face img { display: block; width: 170%; height: 170%; max-width: none; object-fit: cover; }
+  .face img.custom { width: 100%; height: 100%; margin: 0; }
   .avatar::after {
     content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 3px solid var(--ring, #8b8fa8);
   }

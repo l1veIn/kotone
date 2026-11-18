@@ -9,7 +9,7 @@
   import WorkspaceFileEditor from "./WorkspaceFileEditor.svelte";
   import { workspaceAvatar, workspaceOverview, workspaceSetAvatar, type WorkspaceOverview } from "../../../../lib/workspace";
   import { errText, patchSettings, settingsStore } from "../../../../lib/stores/ui";
-  import cutout from "../../../../assets/brand/kotone-cutout.webp";
+  import KotoneAvatar from "../../../../lib/components/KotoneAvatar.svelte";
 
   let { onOpenTalk }: { onOpenTalk: () => void } = $props();
 
@@ -77,7 +77,7 @@
     <SettingsRow label="头像" description="PNG、JPG、WebP 或 GIF，不超过 2 MB">
       {#snippet control()}
         <div class="flex items-center gap-3">
-          <img src={avatarUrl ?? cutout} alt="头像" class="size-12 rounded-full border border-hairline bg-muted object-cover" data-testid="identity-avatar" />
+          <div data-testid="identity-avatar" data-src={avatarUrl ?? ""}><KotoneAvatar size={48} mood="asking" custom={avatarUrl} /></div>
           <input bind:this={fileInput} type="file" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif" class="hidden"
             onchange={(e) => void pickAvatar(e)} data-testid="identity-avatar-input" />
           <Button size="sm" variant="outline" onclick={() => fileInput?.click()}>换一张</Button>
