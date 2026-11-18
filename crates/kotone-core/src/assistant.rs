@@ -46,13 +46,6 @@ pub enum AssistantRoute {
     Agent,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AssistantVoiceSession {
-    pub session_id: String,
-    pub interaction_mode: AssistantInteractionMode,
-}
-
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AssistantConfig {

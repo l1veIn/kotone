@@ -3,7 +3,6 @@
 
 mod agent;
 mod assistant;
-mod assistant_input;
 mod automation;
 mod bubble;
 mod companion;
@@ -2203,10 +2202,6 @@ pub fn run() {
             assistant::cancel_reminder,
             assistant::assistant_submit_text,
             assistant::cancel_assistant_request,
-            assistant_input::assistant_voice_begin,
-            assistant_input::assistant_voice_end,
-            assistant_input::assistant_voice_confirm,
-            assistant_input::assistant_voice_cancel,
             assistant::list_speech_voices,
             assistant::preview_reminder,
             assistant::assistant_call,

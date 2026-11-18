@@ -1,21 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { isTauri, type AssistantInteractionMode } from "./ipc";
-
-export interface AssistantVoiceSession { sessionId: string; interactionMode: AssistantInteractionMode }
-export async function beginAssistantVoice(): Promise<AssistantVoiceSession> {
-  if (!isTauri) throw new Error("浏览器仅预览界面；请在桌面应用中使用语音输入。");
-  return invoke("assistant_voice_begin");
-}
-export async function endAssistantVoice(sessionId: string): Promise<void> {
-  if (isTauri) await invoke("assistant_voice_end", { sessionId });
-}
-export async function confirmAssistantVoice(sessionId: string): Promise<void> {
-  if (isTauri) await invoke("assistant_voice_confirm", { sessionId });
-}
-export async function cancelAssistantVoice(sessionId: string): Promise<void> {
-  if (isTauri) await invoke("assistant_voice_cancel", { sessionId });
-}
+import { isTauri } from "./ipc";
 
 export type DeliveryKind = "voice" | "danmaku";
 export interface Reminder {
