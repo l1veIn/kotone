@@ -17,12 +17,24 @@ pub(crate) fn play(
 ) -> Result<(), String> {
     let _lease = control.begin_playback(ticket)?;
     if volume == 0 {
+        kotone_core::log::log("speech: volume is 0, nothing played");
         return Ok(());
+    }
+    // 合成结果是空的（服务商返回了无法解码或没有声音的数据）：报错，不要假装“播完了”。
+    if audio.samples.is_empty() || audio.sample_rate == 0 {
+        return Err("语音合成的结果是空的，没有可以播放的声音".into());
     }
     let host = cpal::default_host();
     let device = host
         .default_output_device()
         .ok_or("未找到系统默认音频输出设备")?;
+    // 试听“没声音”时要能查：记下放到哪个设备、放了多长。
+    kotone_core::log::log(&format!(
+        "speech: playing {:.1}s at {} Hz on \"{}\" volume={volume}",
+        audio.samples.len() as f64 / audio.sample_rate as f64,
+        audio.sample_rate,
+        device.name().unwrap_or_default()
+    ));
     let supported = device
         .default_output_config()
         .map_err(|error| error.to_string())?;
