@@ -164,4 +164,27 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 - auto-caption (MIT), https://github.com/HiMeditator/auto-caption — continuous captions with sherpa-onnx SenseVoice and endpoint detection (design reference; no code copied).
 - Speech recognition of heard audio uses the SenseVoice and silero VAD models listed above.
 
+## Prefix cache, context compaction and usage statistics (ADR 024)
+
+### DeepSeek Harness (MIT)
+
+- Project: https://github.com/deepseek-ai/deepseek-harness, commit `ca33fd6843b2` (0.2.2-rc.4); license text in `licenses/deepseek-harness-MIT.txt`.
+- Adapted: the request layout for DeepSeek's prefix cache (a byte-stable system prompt and tool list per conversation, changing facts appended with the user message, append-only history, images dropped in batches, reasoning passed back), the compaction request shape (the conversation's own system prompt, tools and messages plus a final instruction, so the summary call reuses the cache; one checkpoint that later compactions merge; a proportional retained tail), the structure and rules of the compaction instruction (sections, "(none)" for empty sections, merge a previous checkpoint, no tool calls), and the cache hit-rate formula and display (hits / input, never shown as 100% unless it is). Kotone's text is Chinese and companion-specific. `crates/kotone-ai/src/agent/compact.rs`, `crates/kotone-agent/src/prompt.rs`, `crates/kotone-agent/src/port.rs`, `apps/desktop/src/lib/agentChat/timeline.ts`.
+
+### goose (Apache-2.0)
+
+- Project: https://github.com/aaif-goose/goose (formerly block/goose), commit `196698819392`, Copyright 2024 Block, Inc.; license text in `licenses/goose-APACHE-2.0.txt`. goose has no NOTICE file.
+- Adapted and modified (Apache-2.0 §4(b)): the compaction trigger (a share of the context window, compact before the model call), keeping the original history visible while only the summary goes to the model, the rules of `crates/goose-context-management/src/prompts/compaction.md` (quote errors verbatim, keep the user's words, omit rather than invent, no new ideas) and the continuation sentence of `goose/src/context_mgmt/mod.rs` ("do not mention the summary, continue naturally"), rewritten in Chinese for a game companion in `crates/kotone-ai/src/agent/compact.rs`.
+
+### Hermes Agent (MIT)
+
+- The guard against repeated ineffective compactions (skip when compacting would free too little) — see the Hermes notice above.
+
+## Switchable roles and custom wake words (ADR 025)
+
+- Character Card V2 specification, https://github.com/malfoyslastname/character-card-spec-v2 (commit `8083fb38`; the repository has no license — Kotone implements the format only and copies no text): `roles/<id>/role.json` is a V2 card, Kotone's fields under `data.extensions.kotone`; import also reads V1 and V3 cards (`chara_card_v3`, https://github.com/kwaroran/character-card-spec-v3, MIT).
+- SillyTavern (AGPL-3.0), https://github.com/SillyTavern/SillyTavern — concept only (the character card belongs to the character; the user's persona and world info are shared). No code copied.
+- sherpa-onnx `text2token` (`tokens_type="ppinyin"`), Apache License 2.0, https://github.com/k2-fsa/sherpa-onnx (`sherpa_onnx/utils.py`, `sherpa-onnx/csrc/utils.cc` @ `4488718d`): how a Chinese phrase becomes the keyword spotter's pinyin tokens and how a keyword line is parsed, reimplemented in `crates/kotone-stt/src/wake_word.rs`. The model's `tokens.txt` (sherpa-onnx KWS zipformer WenetSpeech 3.3M, listed above) is embedded as `crates/kotone-stt/src/wake_tokens.txt` to check wake words before the model is downloaded.
+- `pinyin` crate (rust-pinyin), MIT License, Copyright (c) 2016 mozillazg, https://github.com/mozillazg/rust-pinyin — Chinese characters to tone-marked pinyin (features `with_tone`, `heteronym`).
+
 These notices describe third-party components and models; they do not grant a license to Kotone itself.

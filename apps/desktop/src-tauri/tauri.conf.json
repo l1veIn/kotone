@@ -88,6 +88,8 @@
       "../../../LICENSE": "LICENSE.txt",
       "../../../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
       "../../../licenses/codeg-APACHE-2.0.txt": "licenses/codeg-APACHE-2.0.txt",
+      "../../../licenses/goose-APACHE-2.0.txt": "licenses/goose-APACHE-2.0.txt",
+      "../../../licenses/deepseek-harness-MIT.txt": "licenses/deepseek-harness-MIT.txt",
       "../../../docs/third-party/rambledesk-ports.md": "licenses/rambledesk-ports.md"
     },
     "publisher": "l1veIn",

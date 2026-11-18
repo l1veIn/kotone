@@ -23,3 +23,9 @@ ADR 保留当时的上下文和选择，状态决定其适用性。当前架构�
 | [017 语音唤醒与执行中的语音接话](017-voice-wake.md) | Accepted / 已采纳 | sherpa-onnx 关键词检测（“琴音琴音”），模型按需下载；唤醒后与陪玩热键同一条收音与琴音流程；应答“嗯？/我在”，玩家开口即打断；1.5 秒先接一句；默认关 |
 | [018 琴音的对话气泡](018-companion-bubble.md) | Accepted / 已采纳 | 语音和琴音说话时用屏幕角落的独立气泡窗（头像 + 状态 + 一句话），不再借用语音输入的悬浮窗；整窗鼠标穿透、不抢焦点；回答默认不走弹幕 |
 | [019 琴音在游戏里看屏幕、动鼠标](019-game-computer-use.md) | Accepted / 已采纳（设计，待实现） | 底层与自动化共用；新增 `game.look`（截图 + 编号文字元素）与 `game.act`（批量动作）；动作清单照抄 Anthropic，批量与安全照抄 dsh-computer-use-win，编号照抄 UFO² / OmniParser，游戏循环照抄 Cradle / GameVerse / UI-TARS |
+| [020 替玩家在游戏语音里说话](020-voice-into-game-chat.md) | Accepted / 已采纳 | 虚拟麦克风 VB-CABLE（一键安装）、混音、改 Windows 默认麦克风；`voice_chat.*` 工具 |
+| [021 听懂说外语的队友](021-hear-teammates.md) | Accepted / 已采纳 | 只录指定程序的声音、本地切句识别，交给“同传”子会话翻译 |
+| [022 会话、记忆与 SOUL](022-sessions-memory-soul.md) | Accepted / 已采纳 | 子会话（照 OpenClaw）、工作区（SOUL / USER / MEMORY / 游戏记忆 / Skill，照 Hermes） |
+| [023 界面转向陪玩 Agent](023-ui-toward-companion-agent.md) | Accepted / 已采纳 | 侧栏分“语音输入 / 游戏陪玩”，「琴音」页分聊天、角色、记忆、技能、设置 |
+| [024 前缀缓存、上下文压缩与用量账本](024-prefix-cache-compaction-usage.md) | Accepted / 已采纳 | 照 DeepSeek Harness：系统提示与工具清单一段对话不变、会变的写进每轮附注、只追加；照 Goose 压缩（请求形状照 dsh，整理也命中缓存）；usage.jsonl 记 token、命中、费用 |
+| [025 角色、自定义唤醒词与对局复盘](025-roles-wake-words-match-recap.md) | Accepted / 已采纳 | 角色卡照 Character Card V2；唤醒词照 sherpa-onnx text2token 转拼音并校验；游戏进程退出时自动复盘写进游戏记忆（陪玩特有，自己设计） |

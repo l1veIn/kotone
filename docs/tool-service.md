@@ -263,6 +263,12 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `diagnostics.export` | 可选 `window`（`24h`/`7d`/`all`） | 脱敏诊断 ZIP 的 `path`（`<KOTONE_HOME>/exports/`），不含识别文字、音频与热词 |
 | `diagnostics.clear` | 可选 `stopRecording` | 清除本地流程事件与 `kotone.log` |
 | `app.resources` | 无 | CPU 与内存占用 |
+| `usage.summary` | 无 | 用量与费用（`<KOTONE_HOME>/usage.jsonl`）：今天、本月、按用途（对话 / 压缩 / 复盘 / 语音合成 / 语音识别 / 文字识别）、按模型、最近 30 天；token、命中缓存的 token 与命中率、字数、音频时长、张数、按币种的估算费用（DeepSeek 用人民币，分高峰 / 空闲）。估算值，以服务商账单为准 |
+| `roles.list` / `roles.get` | 无 / `id` | 可切换的角色：id、名字、介绍、头像文件、声音（`provider/voice`，空 = 全局）、唤醒词及其拼音检查、是否当前；`get` 另带性格全文（ADR 025） |
+| `roles.switch` | `id` | 换角色：名字、头像、性格、声音、唤醒词一起换，下一句话开始新对话（记忆共用）；琴音正在回答时拒绝。副作用 `writes-settings` |
+| `roles.create` / `roles.update` | `name` 等 / `id`+`patch` | 新建 / 修改角色：`name`、`summary`、`voice`、`wake {text, readings}`（3–8 个汉字，多音字的读音）、`greeting`、`soul`；头像只能由用户在设置页上传 |
+| `roles.delete` | `id` | 删除自己建的角色（内置的改回默认）；删的是当前角色就换回琴音 |
+| `game.recap` | 可选 `game`（游戏配置 id）、`sinceMinutes`（默认 60） | 现在就复盘：最近这段时间琴音的对话、工具、提醒、自动化 → 聊天里一条复盘 + 合并进这个游戏的记忆。Kotone 在游戏进程退出时也会自己做（`agent.matchRecap`）。调一次用户的 AI 连接；没发生什么就跳过 |
 | `app.restart` | 无 | 先返回 `status=restarting`，再走正常退出流程后重启（同一用户，不弹 UAC；新 `instanceId`）。用于 `effects.restartApp` 不为空时 |
 | `postprocess.processors` | 无 | 已注册的文字处理模块与配置 schema |
 | `postprocess.test` | `text`、可选 `pipeline` | 逐步输入输出与耗时；不发送、不记录 |
