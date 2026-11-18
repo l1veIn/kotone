@@ -423,7 +423,7 @@ test("tool cards link the settings 琴音 changed, and a key request is pasted i
   await expect(page.getByTestId("assistant-chat")).not.toContainText("sk-test-123");
 });
 
-test("a compaction checkpoint shows as a divider with the summary; usage shows hit rate and cost", async ({ page }, testInfo) => {
+test("compaction divider, match recap card and switch; usage shows hit rate and cost", async ({ page }, testInfo) => {
   await openChat(page);
   await page.evaluate(async (T) => {
     const t = window.agentTest;
@@ -439,7 +439,18 @@ test("a compaction checkpoint shows as a divider with the summary; usage shows h
   await checkpoint.locator("summary").click();
   await expect(checkpoint.getByText("星河下的猫")).toBeVisible();
 
+  // 对局复盘：游戏退出后 Kotone 留在聊天里的一条（只给玩家看）
+  await page.evaluate(async (T) => {
+    await window.agentTest.event("c-old", { kind: "appended", message: { role: "notice", text: "对局复盘：测试游戏（32 分钟），已记进这个游戏的记忆", atMs: T + 9000, recap: "- 拿了两条龙\n- 你让我提醒买真眼" } });
+  }, T);
+  const recap = page.getByTestId("agent-recap");
+  await expect(recap).toContainText("对局复盘：测试游戏");
+  await expect(recap).toContainText("你让我提醒买真眼");
+
   await page.getByTestId("assistant-nav-settings").click();
+  // 对局复盘可以关
+  await page.getByTestId("agent-match-recap").click();
+  await expect.poll(async () => page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings().then((s) => s.agent?.matchRecap))).toBe(false);
   await page.getByTestId("companion-settings-links").getByRole("button", { name: "用量" }).click();
   const usage = page.getByTestId("usage-settings");
   await expect(usage.getByTestId("usage-today")).toContainText("¥0.025");

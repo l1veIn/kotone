@@ -285,6 +285,8 @@ export interface AgentConfig {
   compactAtTokens?: number;
   /** 当前角色（默认 kotone = 琴音）。换角色用 lib/roles.ts 的 rolesSwitch（同时换名字、头像）。 */
   roleId?: string;
+  /** 游戏退出时自动复盘（默认开）。 */
+  matchRecap?: boolean;
 }
 
 /** 语音唤醒设置（config.json `assistant.wake`）。 */

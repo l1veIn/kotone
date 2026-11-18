@@ -18,7 +18,9 @@ export type Block =
   | { kind: "tool"; key: string; tool: ToolView }
   | { kind: "notice"; key: string; text: string }
   /** 上下文压缩的检查点：它之前的对话已整理成这份摘要。 */
-  | { kind: "checkpoint"; key: string; text: string; summary: string };
+  | { kind: "checkpoint"; key: string; text: string; summary: string }
+  /** 对局复盘：标题 + 几条要点。 */
+  | { kind: "recap"; key: string; text: string; body: string };
 
 export interface Turn {
   /** 稳定的标识（第一条消息的位置与时间），用于滚动锚点。 */
@@ -89,6 +91,9 @@ export function buildTurns(messages: readonly AgentMessage[], live: LiveState | 
         });
       }
       current.usage = addUsage(current.usage, message.usage);
+      current.endedAtMs = message.atMs;
+    } else if (message.role === "notice" && message.recap) {
+      current.blocks.push({ kind: "recap", key: `p${index}`, text: message.text, body: message.recap });
       current.endedAtMs = message.atMs;
     } else if (message.role === "notice" && message.compaction) {
       current.blocks.push({ kind: "checkpoint", key: `k${index}`, text: message.text, summary: message.compaction });

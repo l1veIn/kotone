@@ -17,7 +17,8 @@ export type AgentMessage =
   | { role: "assistant"; text: string; toolCalls?: ToolCall[]; reasoning?: string; usage?: TokenUsage; atMs: number }
   | { role: "tool"; callId: string; name: string; content: string; isError: boolean; untrusted: boolean; atMs: number }
   /** `compaction`：上下文压缩的检查点（摘要）；它之前的消息不再发给模型。 */
-  | { role: "notice"; text: string; atMs: number; compaction?: string; usage?: TokenUsage };
+  /** `recap`：对局复盘的正文（`text` 是标题），只给玩家看。 */
+  | { role: "notice"; text: string; atMs: number; compaction?: string; usage?: TokenUsage; recap?: string };
 
 /** `parent` / `label`：琴音派出的子会话（ADR 022），只能查看。 */
 export interface Conversation { version: number; id: string; title: string; createdAtMs: number; updatedAtMs: number; messages: AgentMessage[]; parent?: string | null; label?: string | null }

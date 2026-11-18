@@ -28,6 +28,7 @@
   let loadError = $state("");
   const inGame = $derived($settingsStore?.agent?.inGame ?? true);
   const progressSpeech = $derived($settingsStore?.agent?.progressSpeech ?? true);
+  const matchRecap = $derived($settingsStore?.agent?.matchRecap ?? true);
   /** 按分组排好（核心工具在前）；已有规则但清单里没有的工具也列出来，方便删掉。 */
   const groups = $derived.by(() => {
     const known = new Set(tools.map((tool) => tool.name));
@@ -97,6 +98,11 @@
     <SettingsRow label="执行中先接一句" description="游戏里交给琴音后 1.5 秒还没出声，先用语音说一句“好，我看看”，免得干等。">
       {#snippet control()}
         <Switch data-testid="agent-progress-speech" bind:checked={() => progressSpeech, (checked) => void patchSettings({ agent: { progressSpeech: checked } }, checked ? "执行中会先接一句" : "执行中不再接话")} aria-label="执行中先接一句" />
+      {/snippet}
+    </SettingsRow>
+    <SettingsRow label="对局复盘" description="游戏一退出，把这一局和她的对话、提醒、自动化整理成几句复盘留在聊天里，学到的写进这个游戏的记忆。只整理玩了 3 分钟以上、这一局里叫过她的；每次调用一次 AI。">
+      {#snippet control()}
+        <Switch data-testid="agent-match-recap" bind:checked={() => matchRecap, (checked) => void patchSettings({ agent: { matchRecap: checked } }, checked ? "对局结束会自动复盘" : "不再自动复盘")} aria-label="对局复盘" />
       {/snippet}
     </SettingsRow>
     {#if loadError}<p role="alert" class="my-3 text-xs text-destructive">{loadError}</p>{/if}
