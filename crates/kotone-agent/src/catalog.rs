@@ -25,6 +25,8 @@ pub const TOOL_MEMORY: &str = "memory";
 pub const TOOL_SKILL_VIEW: &str = "skill.view";
 pub const TOOL_SKILL_MANAGE: &str = "skill.manage";
 pub const TOOL_SOUL_WRITE: &str = "soul.write";
+/// 请玩家在 Kotone 窗口里粘贴某个服务商的 Key（Key 不经过模型）。
+pub const TOOL_REQUEST_KEY: &str = "connections.request_key";
 /// 会话（ADR 022，照 OpenClaw 的 sessions_*）。
 pub const TOOL_SESSION_SPAWN: &str = "session.spawn";
 pub const TOOL_SESSION_SEND: &str = "session.send";
@@ -37,6 +39,7 @@ pub const TOOL_LISTEN_STOP: &str = "voice.listen.stop";
 
 /// 交给桌面（[`crate::port::BuiltinHost::builtin`]）执行、需要知道是哪个会话调用的内置工具。
 pub const HOST_BUILTINS: &[&str] = &[
+    TOOL_REQUEST_KEY,
     TOOL_SESSION_SPAWN,
     TOOL_SESSION_SEND,
     TOOL_SESSION_LIST,
@@ -102,6 +105,7 @@ pub const CORE_TOOLS: &[&str] = &[
     TOOL_SKILL_VIEW,
     TOOL_SKILL_MANAGE,
     TOOL_SOUL_WRITE,
+    TOOL_REQUEST_KEY,
     TOOL_SESSION_SPAWN,
     TOOL_SESSION_SEND,
     TOOL_SESSION_LIST,
@@ -340,9 +344,9 @@ pub fn agent_entries() -> Vec<ToolEntry> {
         entry(
             TOOL_SKILL_VIEW,
             "meta",
-            "读一个 Skill（可以分发的通用技能包）的 SKILL.md，或它目录里的附件（path）。系统提示里列出了已安装的 Skill，用得上时再读全文。",
-            json!({"type": "object", "additionalProperties": false, "required": ["name"], "properties": {
-                "name": {"type": "string", "maxLength": 64},
+            "读一个 Skill（可以分发的通用技能包）的 SKILL.md，或它目录里的附件（path）。不传 name = 列出已安装的 Skill（名字和描述）。系统提示里列出了已安装的 Skill，做事前先看有没有用得上的，有就先读全文再照做。",
+            json!({"type": "object", "additionalProperties": false, "properties": {
+                "name": {"type": "string", "maxLength": 64, "description": "不填 = 列出全部"},
                 "path": {"type": "string", "maxLength": 200, "description": "附件的相对路径，缺省 SKILL.md"}
             }}),
             &[],
@@ -369,6 +373,17 @@ pub fn agent_entries() -> Vec<ToolEntry> {
                 "content": {"type": "string", "minLength": 1, "maxLength": 4000}
             }}),
             &["writes-soul"],
+        ),
+        entry(
+            TOOL_REQUEST_KEY,
+            "settings",
+            "请玩家在 Kotone 窗口里粘贴某个服务商的 Key：聊天里会出现一个只给玩家看的输入框，Key 直接存进系统凭据库（建好或更新这条连接），你只会收到“已保存”和连接 id，看不到 Key。永远不要让玩家把 Key 发在聊天里。provider 用 connections.presets 里的 id（如 openai、dashscope）。玩家在游戏里用语音叫你时，告诉他到 Kotone 窗口里粘贴。最多等 5 分钟。",
+            json!({"type": "object", "additionalProperties": false, "required": ["provider"], "properties": {
+                "provider": {"type": "string", "maxLength": 64, "description": "服务商预设 id（connections.presets）"},
+                "reason": {"type": "string", "maxLength": 200, "description": "为什么要这个 Key（显示给玩家）"},
+                "connectionId": {"type": "string", "maxLength": 64, "description": "要更新 Key 的已有连接；不填 = 用这个服务商的已有连接，没有就新建"}
+            }}),
+            &["requests-credentials"],
         ),
         entry(
             TOOL_SESSION_SPAWN,

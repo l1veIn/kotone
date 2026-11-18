@@ -65,6 +65,8 @@ const ALLOWED_EFFECTS: &[&str] = &[
     "sends-session",
     "stops-session",
     "listens-to-game-audio",
+    // 请玩家粘贴 Key：输入框本身就是玩家的同意，Key 不经过模型。
+    "requests-credentials",
 ];
 
 /// 默认询问的副作用及原因。

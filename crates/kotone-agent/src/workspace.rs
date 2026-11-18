@@ -35,6 +35,31 @@ pub const DEFAULT_SOUL: &str = "# SOUL\n\n你是屏幕前玩家的游戏陪玩 A
 
 pub const DEFAULT_NAME: &str = "琴音";
 
+/// 随 Kotone 发布的 Skill：第一次用时装进工作区；玩家删了不再装回；
+/// 玩家没改过的随新版本更新，改过的不动（记录在工作区的 [`BUNDLED_RECORD`]）。
+pub const BUNDLED_SKILLS: &[(&str, &str)] = &[
+    (
+        "kotone-config",
+        include_str!("../skills/kotone-config/SKILL.md"),
+    ),
+    (
+        "skill-creator",
+        include_str!("../skills/skill-creator/SKILL.md"),
+    ),
+];
+/// 装过哪些内置 Skill、装的是哪个版本（内容的 FNV-1a 64 位哈希）。
+pub const BUNDLED_RECORD: &str = ".bundled-skills.json";
+
+/// 稳定的内容哈希（不随 Rust 版本变）。
+fn fnv64(text: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
 /// 工作区。
 #[derive(Debug, Clone)]
 pub struct Workspace {
@@ -279,7 +304,43 @@ impl Workspace {
         &self.dir
     }
 
-    /// 第一次用时写入默认的 SOUL.md 与 IDENTITY.md（不覆盖已有的）。
+    /// 装 / 更新内置 Skill（见 [`BUNDLED_SKILLS`]）。
+    fn seed_bundled_skills(&self) -> Result<(), String> {
+        let record_path = self.dir.join(BUNDLED_RECORD);
+        let mut record: std::collections::BTreeMap<String, String> =
+            serde_json::from_str(&read(&record_path)).unwrap_or_default();
+        let mut changed = false;
+        for (name, content) in BUNDLED_SKILLS {
+            let file = self.dir.join(SKILLS).join(name).join(SKILL_FILE);
+            let bundled = fnv64(content);
+            match record.get(*name) {
+                None => {
+                    // 玩家自己有同名的就不覆盖，只记下（以后也不会覆盖它）。
+                    if !file.exists() {
+                        write_atomic(&file, content)?;
+                    }
+                    record.insert((*name).to_string(), bundled);
+                    changed = true;
+                }
+                Some(installed) if *installed != bundled => {
+                    // 新版本：文件还是当初装的那份才更新；删了的不装回，改过的不动。
+                    if file.exists() && fnv64(&read(&file)) == *installed {
+                        write_atomic(&file, content)?;
+                        record.insert((*name).to_string(), bundled);
+                        changed = true;
+                    }
+                }
+                Some(_) => {}
+            }
+        }
+        if changed {
+            let text = serde_json::to_string_pretty(&record).map_err(|e| e.to_string())?;
+            write_atomic(&record_path, &text)?;
+        }
+        Ok(())
+    }
+
+    /// 第一次用时写入默认的 SOUL.md 与 IDENTITY.md（不覆盖已有的），装好内置 Skill。
     pub fn ensure(&self) -> Result<(), String> {
         std::fs::create_dir_all(self.dir.join(SKILLS))
             .map_err(|e| format!("创建工作区失败：{e}"))?;
@@ -294,7 +355,7 @@ impl Workspace {
                 ),
             )?;
         }
-        Ok(())
+        self.seed_bundled_skills()
     }
 
     fn game_path(&self, game: &str) -> Result<PathBuf, String> {
@@ -591,6 +652,54 @@ fn scan_dir(dir: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn bundled_skills_install_once_update_if_untouched_and_stay_deleted() {
+        let dir = std::env::temp_dir().join(format!("kotone-bundled-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ws = Workspace::new(dir.clone());
+        ws.ensure().unwrap();
+        let names: Vec<String> = ws.skills().into_iter().map(|s| s.name).collect();
+        assert!(
+            names.contains(&"kotone-config".to_string())
+                && names.contains(&"skill-creator".to_string())
+        );
+
+        // 玩家删了：不再装回
+        ws.skill_delete("skill-creator").unwrap();
+        ws.ensure().unwrap();
+        assert!(!ws.skills().iter().any(|s| s.name == "skill-creator"));
+
+        // 新版本发布：没改过的更新，改过的不动
+        let record_path = dir.join(BUNDLED_RECORD);
+        let file = dir.join(SKILLS).join("kotone-config").join(SKILL_FILE);
+        let old_text = "---\nname: kotone-config\ndescription: 旧版\n---\n旧\n";
+        std::fs::write(&file, old_text).unwrap();
+        let mut record: std::collections::BTreeMap<String, String> =
+            serde_json::from_str(&std::fs::read_to_string(&record_path).unwrap()).unwrap();
+        record.insert("kotone-config".into(), fnv64(old_text));
+        std::fs::write(&record_path, serde_json::to_string(&record).unwrap()).unwrap();
+        ws.ensure().unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), BUNDLED_SKILLS[0].1);
+
+        record.insert("kotone-config".into(), fnv64(old_text));
+        std::fs::write(&record_path, serde_json::to_string(&record).unwrap()).unwrap();
+        ws.skill_patch("kotone-config", "# Kotone 配置", "# Kotone 配置（我改过）")
+            .unwrap();
+        ws.ensure().unwrap();
+        assert!(std::fs::read_to_string(&file).unwrap().contains("我改过"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bundled_skills_are_valid() {
+        for (name, content) in BUNDLED_SKILLS {
+            let info = parse_skill(content).unwrap();
+            assert_eq!(info.name, *name);
+            assert!(info.description.chars().count() <= SKILL_DESCRIPTION_LIMIT);
+            scan(content).unwrap();
+        }
+    }
+
     fn ws() -> (tempfile::TempDir, Workspace) {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(dir.path().join("workspace"));
@@ -678,7 +787,7 @@ mod tests {
         let (_d, ws) = ws();
         let skill = "---\nname: tongchuan\ndescription: 派一个子会话当同传，把队友的外语翻成中文\n---\n\n# 同传\n\n先 voice.listen.start。\n";
         ws.skill_create("tongchuan", skill).unwrap();
-        assert_eq!(ws.skills()[0].name, "tongchuan");
+        assert!(ws.skills().iter().any(|s| s.name == "tongchuan"));
         ws.skill_patch(
             "tongchuan",
             "先 voice.listen.start。",
@@ -700,7 +809,7 @@ mod tests {
             .unwrap_err()
             .contains("一致"));
         ws.skill_delete("tongchuan").unwrap();
-        assert!(ws.skills().is_empty());
+        assert!(!ws.skills().iter().any(|s| s.name == "tongchuan"));
     }
 
     #[test]

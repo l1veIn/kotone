@@ -404,6 +404,11 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
                     json!({"saved": true, "entries": entries, "chars": chars, "note": "下一段对话开始时生效"}),
                 )
             }
+            TOOL_SKILL_VIEW if s("name").is_empty() => Ok(json!({"skills": ws
+                .skills()
+                .into_iter()
+                .map(|k| json!({"name": k.name, "description": k.description}))
+                .collect::<Vec<_>>()})),
             TOOL_SKILL_VIEW => {
                 let path = arguments.get("path").and_then(Value::as_str);
                 Ok(json!({"name": s("name"), "content": ws.skill_view(&s("name"), path)?}))

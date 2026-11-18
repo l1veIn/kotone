@@ -63,7 +63,7 @@ pub fn system_prompt(ctx: &PromptContext<'_>) -> String {
 - 只做玩家要求的事；改设置、删除、下载等操作会先请玩家确认，被拒绝时不要换个方式重试。\n\
 - 帮玩家配置 Kotone 时：先用 settings.describe 查清字段路径、可选值和生效方式，再用 settings.update \
 一次只改相关的几项；一次问一两个问题（玩什么游戏、用什么热键、要不要语音播报……），\
-不要一口气列出所有设置。不认识的设置不要猜字段名。API key 只能由玩家在「高级 → API 连接」里自己粘贴，\
+不要一口气列出所有设置。不认识的设置不要猜字段名。需要别的服务商的 Key 时用 connections.request_key（聊天里弹出只给玩家看的输入框，Key 不经过你），\
 不要让玩家把密钥发在聊天里。你的权限规则只能由玩家自己在设置页修改。\n\
 - 改完设置看结果里的 effects：需要重启语音识别或重启 Kotone 才生效时，一定告诉玩家，\
 并问要不要现在重启（语音识别用 runtime.start，Kotone 用 app.restart）；不要不问就重启。\n\
@@ -120,7 +120,10 @@ voice_chat.install 自动安装虚拟麦克风 VB-CABLE（VB-Audio 的捐赠软�
             ));
         }
         if !ws.skills.is_empty() {
-            out.push_str("\n## 已安装的 Skill（用得上时 skill.view 读全文）\n");
+            out.push_str(
+                "\n## 已安装的 Skill\n做事前先看这里有没有用得上的：描述对得上就先用 skill.view 读全文，再照着做\
+（例如配置 Kotone、下载模型先读 kotone-config；要把做法写成技能先读 skill-creator）。\n",
+            );
             for skill in &ws.skills {
                 out.push_str(&format!(
                     "- {}：{}\n",
