@@ -9,6 +9,15 @@
 | `uia.ps1` | 用 Windows UI 自动化操作 Kotone 设置窗口（WebView2 把无障碍树暴露给 UIA）：列出元素、点按钮、给输入框填值。经 `kotone.py ui` 调用，中文名用 base64 传，避免控制台编码问题 |
 | `computer_use_e2e.py` | `game.look` / `game.act`（ADR 019）的真机测试：坐标点击、按编号点击、按键 / 组合键 / 滚轮 / 按住、相对移动、旧编号被拒、玩家按 Esc 停下（Esc 不传给游戏、别的键不停）并松开按住的键、琴音自己的 Esc 照常、被别的窗口盖住不点、窗口尺寸变了作废。隔离目录 `target/cu-e2e/`；`init` 写隔离配置，`setup-ocr` 在隔离目录里下载并启用文字识别模型。**前台不是测试窗口、也不是终端时直接退出**（2026-11-17 测试开始时前台是用户的英雄联盟对局，`fg.ps1` 的 Alt 进了游戏） |
 | `kotone.py` | 对隔离实例调用工具（`call` / `runs` / `wait`）和 UI 自动化（`ui`） |
+| `real_deepseek.py` | 用玩家真实的 DeepSeek Key 测试：从 Windows 凭据库（`kotone` / `connection:<id>`）只读进内存，经 `tools call … --args-file -` 的标准输入交给隔离实例（它有自己的凭据空间），**不打印、不写文件、不进命令行**；测完 `delete_connection` 删掉。拿不到时设环境变量 `KOTONE_REAL_DEEPSEEK_KEY` |
+| `cache_real.py` | 真实 DeepSeek：聊天 5 轮 + 游戏内 4 次（同一段对话），逐个请求打印输入 / 命中 / 命中率 / 费用；再把压缩阈值调到刚好超过，看整理那一次和之后的命中率，以及整理后还记不记得早先的事 |
+| `speech_preview_real.py` | 真实 DeepSeek 语音的「试听语音」，用 WASAPI 回环量扬声器的音量（`PLAYER_LIKE=1` 用玩家自己的语音设置） |
+| `happy_path_real.py` | 真实 DeepSeek 的 happy path：只给 DeepSeek Key → 琴音读《Kotone 配置》技能把识别、文字识别换成 DeepSeek → 呼叫琴音说一句（VB-CABLE）→ DeepSeek 识别、DeepSeek 语音回答 → 测试窗口用 DeepSeek OCR 认字（切前台前先确认前台不是游戏） |
+| `sessions_real.py` | 真实模型的同传子会话：派子会话、听 python.exe、翻译成弹幕、“停止同传”连同监听一起停（SenseVoice 模型用 `target/sess-e2e` 里下好的） |
+| `voice_chat_real.py` | 真实 DeepSeek 的“跟队友说话”：先应玩家一声，再从虚拟麦克风说出来；录 CABLE Output（队友那边）和扬声器回环（玩家这边）的音量。不混玩家自己的麦克风 |
+| `recap_real.py` | 对局复盘：把改名的 PING.EXE 当成“游戏”，游戏内说几句，结束进程，看聊天里的复盘和这个游戏的记忆（`KOTONE_RECAP_MIN_SECONDS=20`） |
+| `roles_real.py` | 换角色：琴音 → 小雨 → 小林 → 琴音，名字、唤醒词（从 VB-CABLE 喊）和应答的声音都跟着换 |
+| `wake_eval.py` | 唤醒词实测（离线）：SAPI 和 DeepSeek 两种声音合成各个唤醒词，加几分钟不含唤醒词的普通说话，喂给和桌面端同一个唤醒检测器，统计喊中率和误唤醒 |
 
 ## 准备
 
@@ -51,3 +60,11 @@ python -X utf8 -I scripts/manual-e2e/kotone.py call app.quit
 - 中文输入法会吞掉字母键的按下；测试窗口关闭了输入法。
 - 隔离实例的设置窗口启动后会抢前台，后台启动的测试窗口拿不回前台，用 `fg.ps1`。
 - UIA 按名字找元素：同名的文字和输入框都会匹配，`setvalue` 只挑输入框，`invoke` 只挑按钮；自定义下拉框（`Select` 组件）还没有封装。
+
+## 用真实 DeepSeek 测试的规矩（2026-11-18）
+
+- Key 只在内存里（`real_deepseek.py`），测完删掉隔离实例里的连接。
+- 真机脚本一律禁止会按键的工具（`game_chat.send`、`game.act`、`automation.run`、`companion.type` 设为 deny）：
+  2026-11-18 `voice_chat_real.py` 第一次跑时，琴音把“跟队友说我去拿龙了”理解成打字，字和回车进了前台（桌面）。
+  之后 Kotone 自己也加了检查：前台不是当前游戏就不打字。
+- 会出声的脚本（试听、跟队友说话、同传）开始前看一眼前台，玩家在游戏里就不要跑。
