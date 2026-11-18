@@ -195,3 +195,7 @@ The avatar and expression images in `apps/desktop/src/assets/roles/` are **not**
 - Claude大小姐 (`claude-ojou/`): 素材：Claude大小姐的日记本（github.com/opsCar/claude-daxiaojie-assets）· 角色设定：ZipZipPipe（胖次狐）· 设定图：lmy414/ai-chan-sheets · CC BY-NC-SA 4.0. Fan work, not affiliated with Anthropic; "Claude" is a trademark of Anthropic.
 
 These notices describe third-party components and models; they do not grant a license to Kotone itself.
+
+## DeepSeek API documentation (behaviour reference)
+
+The DeepSeek connection client (`crates/kotone-ai/src/agent/deepseek.rs`) and web search (`crates/kotone-ai/src/web.rs`) follow DeepSeek's official guides — "构建 Chatbot" (`latest_reminder`, `title`, `safety_check`, thinking mode, error handling) and "网页搜索与抓取" (`/v1/tools/search`, `/v1/tools/fetch`) — at https://api-docs.deepseek.com/zh-cn/guides/build_a_chatbot. No code or text was copied; requests go to the player's own DeepSeek account under DeepSeek's API terms. See ADR 026.
