@@ -92,9 +92,15 @@
 
 1. 会话：对话存储加 `parent`、`label`（旧对话照常读）；`session.spawn / send / list / history / stop` 在桌面端实现（`agent.rs`）。子会话：最多同时 5 个；每轮最多 8 步、90 秒；模型用 `agent.subagents.model`（空 = 和琴音同一个）；只能用 `CHILD_TOOLS` 里的工具；只能给父会话发消息；权限询问一律拒绝（子会话没人能回答）。子会话结束时由代码停掉它名下的监听。玩家在对话列表里选中子会话的记录时只能看，发消息会开新对话。
 2. 工作区：`kotone-agent::workspace`（`<KOTONE_HOME>/agent/workspace`），`SOUL.md` / `IDENTITY.md` / `USER.md` / `MEMORY.md` / `memory/games/<id>.md` / `skills/<name>/SKILL.md`；`memory` 工具整批原子生效、有字数上限、写入前做注入扫描；快照在每段对话第一次用时冻结。
-3. 游戏记忆：**没做 `companionNotes` 的迁移**——旧的游戏笔记照常读，这个游戏有了游戏记忆以后以游戏记忆为准。Skill：`skill.view`、`skill.manage`（新建、修改、加删文件、删除）、从文件夹导入；“导出”就是在资源管理器里打开 Skill 的文件夹拷走；**没做版本保留**。
+3. 游戏记忆：**没做 `companionNotes` 的迁移**——旧的游戏笔记照常读，这个游戏有了游戏记忆以后以游戏记忆为准。Skill：`skill.view`、`skill.manage`（新建、修改、加删文件、删除）、从文件夹导入；“导出”就是在资源管理器里打开 Skill 的文件夹拷走；每次修改前把旧的整个 Skill 文件夹备份一份（之前这里误写成“没做版本保留”，已更正）。内置 Skill：`kotone-config`、`skill-creator`（2026-11-18 补，见下）。
 4. 身份：名字、头像在设置 `agent.identity`（设置优先，回退 `IDENTITY.md`，再回退“琴音”），气泡、侧栏、页标题、系统提示都用它。**唤醒词没有跟着名字改**：仍是预置的“琴音琴音 / 你好琴音”；按新名字生成拼音唤醒词需要实测准确度，留到以后。
 5. ADR 021 见那边的实施记录。
 6. 文档：CHANGELOG、THIRD_PARTY_NOTICES（OpenClaw、Hermes Agent 的 MIT 声明，wasapi-rs 等）。
 
 测试：工作区与工具的单元测试；设置页 Playwright（改名、编辑 SOUL / 记忆 / 游戏记忆、删技能、头像超限）；真机（隔离实例，经 WebView2 调试端口只发 DOM 事件）：读 SOUL、改名写进配置、SOUL 写进文件、注入文本被拒、头像经 Tauri 传进工作区并显示、USER.md 保存、游戏记忆与技能列出。没验证：真实模型下琴音自己写记忆 / 技能的效果。
+
+### 补充（2026-11-18，玩家试用后的反馈）
+
+- 内置两个 Skill：`kotone-config`（只用一个 DeepSeek Key 配好全部功能；本地模型的做法）和 `skill-creator`（参照 Anthropic skill-creator 与 Hermes `skill_manage`）。第一次用时装进工作区，记在 `.bundled-skills.json`：玩家删了不再装回，玩家改过的不被新版本覆盖。系统提示要求做事前先看有没有对得上的 Skill；`skill.view` 不带名字 = 列出全部。
+- 新工具 `connections.request_key`：聊天里弹出只给玩家看的输入框，Key 直接存进凭据库，模型只拿到“已保存”和连接 id（原来“Key 只能由玩家在连接页粘贴”的规矩不变，只是不用玩家自己找页面）。
+- 真机：`scripts/manual-e2e/happy_path_e2e.py`（隔离实例 + 本地假 DeepSeek）——琴音读 `kotone-config`，把语音识别、文字识别换成 DeepSeek；之后点“呼叫琴音”说话，录音送到 DeepSeek 语音识别，她的回答用 DeepSeek 语音说出来。全部通过。没验证：真实 DeepSeek 模型会不会照着技能做（需要真 Key）。
