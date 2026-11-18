@@ -10,3 +10,7 @@ description = "Kotone companion scripts: LLM-written Luau run in a sandbox with 
 mlua = { version = "0.10", features = ["luau", "vendored", "send"] }
 serde_json.workspace = true
 
+
+[dev-dependencies]
+# 测试内置自动化（定义在 kotone-core 的自动化库里）真的能跑：只在测试里用。
+kotone-core.workspace = true

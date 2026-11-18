@@ -508,6 +508,231 @@ fn builtin_remind(now: u64) -> Automation {
     }
 }
 
+fn param(name: &str, label: &str, description: &str, kind: ParamKind, default: Value) -> ParamSpec {
+    ParamSpec {
+        name: name.into(),
+        label: label.into(),
+        description: description.into(),
+        kind,
+        default: Some(default),
+    }
+}
+
+fn number(min: f64, max: f64) -> ParamKind {
+    ParamKind::Number {
+        min: Some(min),
+        max: Some(max),
+        integer: true,
+    }
+}
+
+fn program(
+    id: &str,
+    name: &str,
+    description: &str,
+    params: Vec<ParamSpec>,
+    source: &str,
+    now: u64,
+) -> Automation {
+    Automation {
+        id: id.into(),
+        name: name.into(),
+        description: description.into(),
+        params,
+        action: AutomationBody::Program(ProgramBody {
+            source: source.trim().to_string() + "\n",
+        }),
+        created_by: CreatedBy::User,
+        created_at_ms: now,
+        updated_at_ms: now,
+        schedule: None,
+    }
+}
+
+/// 内置的常用按键程序（照 AutoHotkey / 按键精灵的常见宏：连发、连点、按住、连招、定时喊话、
+/// 看到文字就按、看到颜色就按）。都是普通的已保存自动化：玩家可以改、删（删了不再装回），
+/// 琴音可以直接调用（`saved.<id>`）。按键间隔不能低于脚本引擎的 50 ms，单次最长 30 分钟。
+pub const BUILTIN_PROGRAM_IDS: &[&str] = &[
+    "builtin-key-repeat",
+    "builtin-auto-click",
+    "builtin-hold-key",
+    "builtin-key-sequence",
+    "builtin-chat-repeat",
+    "builtin-text-then-key",
+    "builtin-color-then-key",
+];
+
+fn builtin_programs(now: u64) -> Vec<Automation> {
+    use serde_json::json;
+    let key = |default: &str| {
+        param(
+            "key",
+            "按哪个键",
+            "例如 Q、F、Space、Ctrl+1",
+            ParamKind::Key,
+            json!(default),
+        )
+    };
+    vec![
+        program(
+            "builtin-key-repeat",
+            "每隔几毫秒按一个键",
+            "连发：每隔一段时间按一次同一个键，按到时间为止（例如每 500 毫秒按一次 F 拾取）。",
+            vec![
+                key("F"),
+                param("interval_ms", "每隔几毫秒", "最快 50 毫秒", number(50.0, 60_000.0), json!(500)),
+                param("seconds", "一共按多少秒", "最长 30 分钟", number(1.0, 1_800.0), json!(60)),
+            ],
+            r#"
+every(args.interval_ms, function()
+  key(args.key)
+end, { for_ms = args.seconds * 1000 })
+"#,
+            now,
+        ),
+        program(
+            "builtin-auto-click",
+            "连点鼠标",
+            "连点器：每隔一段时间在指定位置点一下鼠标（位置取区域的中心），点到时间为止。",
+            vec![
+                param("area", "点哪里", "在游戏窗口里框一块，点它的中心", ParamKind::Region, json!({"x": 0.45, "y": 0.45, "w": 0.1, "h": 0.1})),
+                param("button", "哪个键", "", ParamKind::Choice { options: vec!["左键".into(), "右键".into()] }, json!("左键")),
+                param("interval_ms", "每隔几毫秒", "最快 50 毫秒", number(50.0, 60_000.0), json!(200)),
+                param("seconds", "一共点多少秒", "最长 30 分钟", number(1.0, 1_800.0), json!(10)),
+            ],
+            r#"
+local x = args.area.x + args.area.w / 2
+local y = args.area.y + args.area.h / 2
+local button = "left"
+if args.button == "右键" then button = "right" end
+every(args.interval_ms, function()
+  click(x, y, { button = button })
+end, { for_ms = args.seconds * 1000 })
+"#,
+            now,
+        ),
+        program(
+            "builtin-hold-key",
+            "按住一个键几秒",
+            "按住不放（例如自动往前跑、蓄力），到时间松开；中途停止也会松开。",
+            vec![
+                key("W"),
+                param("seconds", "按住几秒", "最长 30 分钟", number(1.0, 1_800.0), json!(10)),
+            ],
+            r#"
+key_down(args.key)
+wait(args.seconds * 1000)
+key_up(args.key)
+"#,
+            now,
+        ),
+        program(
+            "builtin-key-sequence",
+            "按一串键（连招）",
+            "按顺序按一串键，键之间等一会儿，可以重复几遍（例如 Q W E R 连招）。",
+            vec![
+                param("keys", "按哪些键", "用空格隔开，例如 Q W E R", ParamKind::Text { max_length: 100 }, json!("Q W E R")),
+                param("interval_ms", "每个键之间等几毫秒", "", number(50.0, 10_000.0), json!(150)),
+                param("times", "重复几遍", "", number(1.0, 100.0), json!(1)),
+            ],
+            r#"
+for round = 1, args.times do
+  for k in string.gmatch(args.keys, "%S+") do
+    key(k)
+    wait(args.interval_ms)
+  end
+end
+"#,
+            now,
+        ),
+        program(
+            "builtin-chat-repeat",
+            "每隔几秒在聊天里发一句",
+            "定时喊话：打开聊天框、打一句话、回车发出，隔一会儿再发，发够次数为止。别刷屏。",
+            vec![
+                param("text", "发什么", "", ParamKind::Text { max_length: 100 }, json!("组队来人")),
+                param("open_key", "打开聊天框的键", "", ParamKind::Key, json!("Enter")),
+                param("interval_seconds", "每隔几秒", "", number(5.0, 1_800.0), json!(60)),
+                param("times", "发几次", "", number(1.0, 20.0), json!(3)),
+            ],
+            r#"
+for i = 1, args.times do
+  key(args.open_key)
+  wait(200)
+  type_text(args.text)
+  wait(100)
+  key("Enter")
+  if i < args.times then
+    wait(args.interval_seconds * 1000)
+  end
+end
+"#,
+            now,
+        ),
+        program(
+            "builtin-text-then-key",
+            "看到某段文字就点它或按键",
+            "盯着画面上的一块区域，认出这段文字就点它（或按一个键），例如“接受”出现就点接受。每隔一会儿识别一次文字；用在线文字识别会按次计费。",
+            vec![
+                param("text", "等哪段文字", "", ParamKind::Text { max_length: 40 }, json!("接受")),
+                param("area", "在哪里找", "框小一点识别更快", ParamKind::Region, json!({"x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0})),
+                param("click_it", "看到后点它", "关掉就按下面的键", ParamKind::Boolean, json!(true)),
+                key("Enter"),
+                param("check_ms", "每隔几毫秒看一次", "", number(500.0, 60_000.0), json!(1500)),
+                param("minutes", "最多等几分钟", "", number(1.0, 30.0), json!(10)),
+            ],
+            r#"
+local done = false
+every(args.check_ms, function()
+  local x, y = find_text(args.area, args.text)
+  if x then
+    if args.click_it then
+      click(x, y)
+    else
+      key(args.key)
+    end
+    done = true
+    return false
+  end
+end, { for_ms = args.minutes * 60000 })
+if not done then
+  toast("没等到：" .. args.text)
+end
+"#,
+            now,
+        ),
+        program(
+            "builtin-color-then-key",
+            "看到某个颜色就按键",
+            "盯着一块区域的颜色（例如血条），这个颜色出现（或消失）时按一个键（例如喝药），按完歇一会儿再看。",
+            vec![
+                param("area", "看哪里", "框住血条之类的一小块", ParamKind::Region, json!({"x": 0.05, "y": 0.9, "w": 0.2, "h": 0.04})),
+                param("color", "什么颜色", "", ParamKind::Color, json!({"r": 200, "g": 30, "b": 30})),
+                param("when", "什么时候按", "", ParamKind::Choice { options: vec!["颜色消失时".into(), "颜色出现时".into()] }, json!("颜色消失时")),
+                key("1"),
+                param("variation", "颜色容差", "0 = 完全一样，越大越宽松", number(0.0, 255.0), json!(30)),
+                param("check_ms", "每隔几毫秒看一次", "", number(100.0, 10_000.0), json!(500)),
+                param("cooldown_ms", "按完歇几毫秒", "", number(0.0, 60_000.0), json!(3000)),
+                param("minutes", "一共盯几分钟", "最长 30 分钟", number(1.0, 30.0), json!(30)),
+            ],
+            r#"
+local want_present = args.when == "颜色出现时"
+every(args.check_ms, function()
+  local x = find_color(args.area, args.color, { variation = args.variation })
+  local present = x ~= nil
+  if present == want_present then
+    key(args.key)
+    if args.cooldown_ms > 0 then
+      wait(args.cooldown_ms)
+    end
+  end
+end, { for_ms = args.minutes * 60000 })
+"#,
+            now,
+        ),
+    ]
+}
+
 impl Default for StoredAutomations {
     fn default() -> Self {
         Self {
@@ -612,21 +837,37 @@ impl AutomationLibrary {
         Ok(saved)
     }
 
-    /// 装上内置的自动化（只装一次：玩家删了不再装回）。返回这次有没有装。
+    /// 装上内置的自动化（每个只装一次：玩家删了不再装回；以后新加的内置自动化老用户也会装上）。
+    /// 返回这次有没有装。
     pub fn ensure_builtin(&self) -> Result<bool, String> {
         let mut state = self.state.lock().unwrap();
-        if state.builtin.iter().any(|id| id == BUILTIN_REMIND_ID) {
+        let now = now_ms();
+        let mut all = vec![builtin_remind(now)];
+        all.extend(builtin_programs(now));
+        let missing: Vec<Automation> = all
+            .into_iter()
+            .filter(|a| !state.builtin.contains(&a.id))
+            .collect();
+        if missing.is_empty() {
             return Ok(false);
         }
         let mut next = state.clone();
-        next.builtin.push(BUILTIN_REMIND_ID.to_string());
-        if !next.automations.iter().any(|a| a.id == BUILTIN_REMIND_ID) {
-            let now = now_ms();
-            next.automations.push(builtin_remind(now));
+        for automation in missing {
+            next.builtin.push(automation.id.clone());
+            if next.automations.len() < MAX_AUTOMATIONS
+                && !next.automations.iter().any(|a| a.id == automation.id)
+            {
+                next.automations.push(automation);
+            }
         }
         self.persist(&next)?;
         *state = next;
         Ok(true)
+    }
+
+    /// 内置程序的定义（测试与文档用）。
+    pub fn builtin_programs_preview() -> Vec<Automation> {
+        builtin_programs(0)
     }
 
     /// 删除；返回是否存在。已安排的执行保存了快照，不受影响。
@@ -755,6 +996,42 @@ mod tests {
         let reopened = AutomationLibrary::open(dir.path().join("automations.json")).unwrap();
         assert!(!reopened.ensure_builtin().unwrap());
         assert!(reopened.get(BUILTIN_REMIND_ID).is_none());
+    }
+
+    #[test]
+    fn builtin_programs_are_valid_installed_for_old_users_and_stay_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("automations.json");
+        // 老用户：只装过“X 秒之后提醒我”
+        std::fs::write(
+            &path,
+            json!({"version": 1, "nextId": 1, "automations": [], "builtin": [BUILTIN_REMIND_ID]})
+                .to_string(),
+        )
+        .unwrap();
+        let library = AutomationLibrary::open(path.clone()).unwrap();
+        assert!(library.ensure_builtin().unwrap());
+        assert!(library.get(BUILTIN_REMIND_ID).is_none(), "删过的不装回");
+        for id in BUILTIN_PROGRAM_IDS {
+            let a = library.get(id).unwrap_or_else(|| panic!("{id}"));
+            let draft = AutomationDraft {
+                id: None,
+                name: a.name.clone(),
+                description: a.description.clone(),
+                params: a.params.clone(),
+                action: a.action.clone(),
+                schedule: None,
+            }
+            .normalized()
+            .unwrap_or_else(|e| panic!("{id}: {e}"));
+            // 缺省值本身能通过入参校验（什么都不填也能跑）
+            validate_args(&draft.params, &Map::new()).unwrap_or_else(|e| panic!("{id}: {e}"));
+        }
+        assert!(!library.ensure_builtin().unwrap());
+        library.delete("builtin-key-repeat").unwrap();
+        let reopened = AutomationLibrary::open(path).unwrap();
+        assert!(!reopened.ensure_builtin().unwrap());
+        assert!(reopened.get("builtin-key-repeat").is_none());
     }
 
     #[test]

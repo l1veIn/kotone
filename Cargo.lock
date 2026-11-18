@@ -2682,6 +2682,7 @@ dependencies = [
 name = "kotone-script"
 version = "0.1.0"
 dependencies = [
+ "kotone-core",
  "mlua",
  "serde_json",
 ]

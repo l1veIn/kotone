@@ -639,3 +639,154 @@ fn bad_arguments_and_stop_are_reported_truthfully() {
     assert!(check_syntax("every(1000, function() key('Q') end)").is_ok());
     assert!(check_syntax("every(1000, function(").is_err());
 }
+
+// ---------- 内置的常用按键程序（kotone-core 自动化库，ADR 013） ----------
+
+fn builtin(id: &str) -> (String, serde_json::Map<String, serde_json::Value>) {
+    use kotone_core::automation::library::{validate_args, AutomationBody, AutomationLibrary};
+    let a = AutomationLibrary::builtin_programs_preview()
+        .into_iter()
+        .find(|a| a.id == id)
+        .unwrap();
+    let AutomationBody::Program(p) = a.action else {
+        panic!("{id} 不是程序")
+    };
+    let args = validate_args(&a.params, &serde_json::Map::new()).unwrap();
+    (p.source, args)
+}
+
+fn go_builtin(id: &str, host: &Arc<Fake>, overrides: serde_json::Value) -> RunReport {
+    let (source, mut args) = builtin(id);
+    if let serde_json::Value::Object(o) = overrides {
+        args.extend(o);
+    }
+    run_with_args(
+        &source,
+        &args,
+        host.clone(),
+        Limits::default(),
+        Cancel::default(),
+    )
+}
+
+#[test]
+fn every_builtin_program_compiles() {
+    for a in kotone_core::automation::library::AutomationLibrary::builtin_programs_preview() {
+        let kotone_core::automation::library::AutomationBody::Program(p) = &a.action else {
+            continue;
+        };
+        check_syntax(&p.source).unwrap_or_else(|e| panic!("{}: {e}", a.id));
+    }
+}
+
+#[test]
+fn builtin_key_repeat_presses_on_the_beat() {
+    let host = Fake::new();
+    let report = go_builtin(
+        "builtin-key-repeat",
+        &host,
+        serde_json::json!({"key": "F", "interval_ms": 500, "seconds": 5}),
+    );
+    assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+    let keys = host.keys();
+    assert_eq!(keys.len(), 10);
+    assert!(keys
+        .iter()
+        .all(|(_, a, k)| *a == KeyAction::Press && k == "F"));
+    assert!(keys.windows(2).all(|w| w[1].0 - w[0].0 == 500));
+}
+
+#[test]
+fn builtin_auto_click_hold_and_sequence() {
+    let host = Fake::new();
+    let report = go_builtin(
+        "builtin-auto-click",
+        &host,
+        serde_json::json!({"seconds": 1, "button": "右键"}),
+    );
+    assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+    let clicks = host.mouse.lock().unwrap().clone();
+    assert_eq!(clicks.len(), 5, "200 ms 一下，点 1 秒");
+    assert!(
+        matches!(clicks[0].1, MouseAction::Click { button: MouseButton::Right, x, y, .. } if (x - 0.5).abs() < 1e-9 && (y - 0.5).abs() < 1e-9)
+    );
+
+    let host = Fake::new();
+    go_builtin(
+        "builtin-hold-key",
+        &host,
+        serde_json::json!({"key": "W", "seconds": 3}),
+    );
+    let keys = host.keys();
+    assert_eq!(keys.len(), 2);
+    assert_eq!((keys[0].1, keys[1].1), (KeyAction::Down, KeyAction::Up));
+    assert_eq!(keys[1].0 - keys[0].0, 3000);
+
+    let host = Fake::new();
+    go_builtin(
+        "builtin-key-sequence",
+        &host,
+        serde_json::json!({"keys": "Q  W E", "times": 2}),
+    );
+    let pressed: Vec<String> = host.keys().into_iter().map(|(_, _, k)| k).collect();
+    assert_eq!(pressed, ["Q", "W", "E", "Q", "W", "E"]);
+}
+
+#[test]
+fn builtin_chat_repeat_opens_types_and_sends() {
+    let host = Fake::new();
+    let report = go_builtin(
+        "builtin-chat-repeat",
+        &host,
+        serde_json::json!({"text": "来人", "times": 2, "interval_seconds": 5}),
+    );
+    assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+    assert_eq!(host.typed.lock().unwrap().clone(), ["来人", "来人"]);
+    let keys: Vec<String> = host.keys().into_iter().map(|(_, _, k)| k).collect();
+    assert_eq!(keys, ["Enter", "Enter", "Enter", "Enter"]);
+}
+
+#[test]
+fn builtin_text_and_color_watchers() {
+    // 看到“接受”就点它
+    let host = Fake::with(|f| {
+        f.text_lines = vec![
+            line("找到对局", 0.40, 0.40, 0.20, 0.06),
+            line("接受", 0.45, 0.70, 0.10, 0.05),
+        ]
+    });
+    let report = go_builtin(
+        "builtin-text-then-key",
+        &host,
+        serde_json::json!({"minutes": 1}),
+    );
+    assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+    assert_eq!(host.mouse.lock().unwrap().len(), 1, "点了一下就结束");
+    // 没等到：不点也不按
+    let host = Fake::new();
+    go_builtin(
+        "builtin-text-then-key",
+        &host,
+        serde_json::json!({"minutes": 1, "text": "不存在"}),
+    );
+    assert!(host.mouse.lock().unwrap().is_empty() && host.keys().is_empty());
+    // 测试画面右侧有一大块红：“颜色出现时”每次看都按，按完歇 3 秒
+    let host = Fake::new();
+    let report = go_builtin(
+        "builtin-color-then-key",
+        &host,
+        serde_json::json!({"area": {"x": 0.5, "y": 0.3, "w": 0.4, "h": 0.4}, "color": {"r": 200, "g": 30, "b": 30},
+                           "when": "颜色出现时", "minutes": 1, "variation": 10}),
+    );
+    assert_eq!(report.outcome, Outcome::Finished, "{report:?}");
+    let n = host.keys().len();
+    assert!((10..=20).contains(&n), "{n}");
+    // “颜色消失时”：红色一直在，就一直不按
+    let host = Fake::new();
+    go_builtin(
+        "builtin-color-then-key",
+        &host,
+        serde_json::json!({"area": {"x": 0.5, "y": 0.3, "w": 0.4, "h": 0.4}, "color": {"r": 200, "g": 30, "b": 30}, "minutes": 1, "variation": 10}),
+    );
+    assert!(host.keys().is_empty());
+}
