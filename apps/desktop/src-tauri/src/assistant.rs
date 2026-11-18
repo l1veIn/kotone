@@ -309,9 +309,6 @@ pub fn start(app: &AppHandle) {
             let _ = scheduler.start().await;
         });
     }
-    if let Some(window) = app.get_webview_window("danmaku") {
-        let _ = window.set_ignore_cursor_events(true);
-    }
 }
 
 pub fn shutdown(app: &AppHandle) {

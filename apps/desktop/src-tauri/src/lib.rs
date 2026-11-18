@@ -1870,6 +1870,36 @@ fn auto_elevate_before_tauri_init() {
     }
 }
 
+/// 建启动时就要有的窗口（`tauri.conf.json` 里标了 `create: false`；悬浮窗另由 [`overlay`] 按需建）。
+fn create_startup_windows(app: &tauri::AppHandle) {
+    for label in ["danmaku", "companion", "main"] {
+        if app.get_webview_window(label).is_some() {
+            continue;
+        }
+        let Some(config) = app
+            .config()
+            .app
+            .windows
+            .iter()
+            .find(|config| config.label == label)
+            .cloned()
+        else {
+            log::log(&format!("startup: missing window configuration {label}"));
+            continue;
+        };
+        match tauri::WebviewWindowBuilder::from_config(app, &config)
+            .and_then(|builder| builder.build())
+        {
+            // 弹幕窗口鼠标穿透（原来在 assistant::start 里设，那时窗口还没建）。
+            Ok(window) if label == "danmaku" => {
+                let _ = window.set_ignore_cursor_events(true);
+            }
+            Ok(_) => {}
+            Err(e) => log::log(&format!("startup: create window {label} failed: {e}")),
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 见函数注释：自启动提权必须先于单实例插件的互斥锁创建。
@@ -1942,19 +1972,6 @@ pub fn run() {
             ));
             tray::setup_tray(app.handle())?;
             app.manage(startup_options.clone());
-
-            // 开发调试：`pnpm tauri dev -- --console` 启动后自动打开 webview 控制台。
-            // `open_devtools` 只在 Tauri 的开发构建中可用，必须从 release 编译中移除。
-            #[cfg(debug_assertions)]
-            {
-                if std::env::args().any(|a| a == "--console") {
-                    for label in ["main", "overlay"] {
-                        if let Some(win) = app.get_webview_window(label) {
-                            win.open_devtools();
-                        }
-                    }
-                }
-            }
 
             // 首次运行：默认配置 + 内置 profile 落盘（~/.kotone/）
             let loaded_settings = settings::load_with_diagnostic();
@@ -2092,9 +2109,22 @@ pub fn run() {
             tool_service::start(app.handle(), tool_service_enabled);
             compatibility::start_fullscreen_monitor(app.handle().clone());
 
+            // 启动时的窗口（设置、弹幕、气泡）在全部状态 manage() 之后才建：页面一加载就会发 IPC，
+            // 走快速 IPC（ipc.localhost）时可能早于 setup 结束到达，命令取不到状态会崩溃。
+            create_startup_windows(app.handle());
             for label in ["main", "overlay", "danmaku"] {
                 if let Some(win) = app.get_webview_window(label) {
                     harden_webview(&win);
+                }
+            }
+            // 开发调试：`pnpm tauri dev -- --console` 启动后自动打开 webview 控制台。
+            // `open_devtools` 只在 Tauri 的开发构建中可用，必须从 release 编译中移除。
+            #[cfg(debug_assertions)]
+            {
+                if std::env::args().any(|a| a == "--console") {
+                    if let Some(win) = app.get_webview_window("main") {
+                        win.open_devtools();
+                    }
                 }
             }
             overlay::reconcile(app.handle(), false);

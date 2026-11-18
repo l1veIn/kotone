@@ -13,6 +13,7 @@
     "windows": [
       {
         "label": "danmaku",
+        "create": false,
         "title": "Kotone 提醒",
         "url": "index.html#/danmaku",
         "width": 800,
@@ -29,6 +30,7 @@
       },
       {
         "label": "companion",
+        "create": false,
         "title": "琴音",
         "url": "index.html#/companion",
         "width": 440,
@@ -60,6 +62,7 @@
       },
       {
         "label": "main",
+        "create": false,
         "title": "Kotone 设置",
         "url": "index.html#/settings",
         "width": 1280,
