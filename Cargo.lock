@@ -2651,6 +2651,7 @@ dependencies = [
  "base64 0.22.1",
  "clipboard-win",
  "cpal",
+ "image",
  "kotone-core",
  "kotone-tools",
  "serde",

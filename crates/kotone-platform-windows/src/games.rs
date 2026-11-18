@@ -377,6 +377,23 @@ mod scan {
         PathBuf::from(std::env::var("ProgramData").unwrap_or_else(|_| "C:\\ProgramData".into()))
     }
 
+    /// Steam 的安装目录（注册表）。
+    pub fn steam_root() -> Option<PathBuf> {
+        reg::string(
+            reg::HKEY_CURRENT_USER,
+            "Software\\Valve\\Steam",
+            "SteamPath",
+        )
+        .or_else(|| {
+            reg::string(
+                reg::HKEY_LOCAL_MACHINE,
+                "SOFTWARE\\Valve\\Steam",
+                "InstallPath",
+            )
+        })
+        .map(|r| PathBuf::from(r.replace('/', "\\")))
+    }
+
     pub fn steam(out: &mut Vec<InstalledGame>) {
         let root = reg::string(
             reg::HKEY_CURRENT_USER,
@@ -737,6 +754,17 @@ pub fn detect(query: Option<&str>) -> Vec<InstalledGame> {
         }
     }
     out
+}
+
+/// Steam 的安装目录（找它缓存的游戏图标用）。
+#[cfg(windows)]
+pub fn steam_root() -> Option<std::path::PathBuf> {
+    scan::steam_root()
+}
+
+#[cfg(not(windows))]
+pub fn steam_root() -> Option<std::path::PathBuf> {
+    None
 }
 
 #[cfg(not(windows))]

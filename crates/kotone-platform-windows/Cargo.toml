@@ -13,6 +13,8 @@ serde.workspace = true
 serde_json.workspace = true
 # 音频采集（docs/development.md §2：cpal 为 Rust 跨平台音频采集事实标准）
 cpal = "0.15"
+# 游戏列表的图标编码成 PNG（同一个 image 版本已在工作区里）
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 # 输入注入 / LL 钩子 / 提权检测：raw windows crate 直调 Win32
 [target.'cfg(windows)'.dependencies]
