@@ -10,6 +10,18 @@
 - 每一步用简单的中文汇报：做了什么、怎么验证的、没验证的；不编造。
 - **新授权：可以用真实的 DeepSeek 服务测试，不用担心花钱。** 取 Key 的方式：玩家的 DeepSeek 连接 id 是 `deepseek-mwjiotc0`，Key 在 Windows 凭据库里（keyring 服务名 `kotone`，用户名 `connection:deepseek-mwjiotc0`，见 `crates/kotone-ai/src/secrets.rs`）。只在内存里读出来，经 `connections.upsert` 的 `apiKey` 交给隔离实例（隔离实例有自己的凭据空间）；**不打印、不写进任何文件、日志、提交或报告**；测完在隔离实例里 `connections.delete`。拿不到就请玩家用 `! <命令>` 设一个环境变量。
 
+## 原则：Agent 相关的东西先找成熟项目照搬
+
+玩家（2026-11-18）：Agent 相关代码能找到大量可以参考的项目，就尽量参考别人的，省得踩坑。动手写之前先看这些项目怎么做、照着做，在代码注释和 `THIRD_PARTY_NOTICES.md` 里写明出处和许可证；只有陪玩特有、别人没有的部分才自己设计（并在 ADR 里说明为什么）。
+
+| 要做的 | 先参考 |
+| --- | --- |
+| 前缀缓存命中、用量与费用统计 | DeepSeek Harness（MIT） |
+| 上下文压缩、工具输出截断 | Goose `compaction.md` 与 smart context management（Apache-2.0）；也可对照 OpenClaw、Hermes Agent 的压缩 |
+| 会话、子会话、记忆、技能 | OpenClaw、Hermes Agent（都是 MIT，ADR 022 已照搬过一部分） |
+| 角色（persona）切换 | SillyTavern 的角色卡（Character Card V2 格式）等开源角色扮演前端，先看许可证 |
+| 自定义唤醒词 | sherpa-onnx 的关键词检测示例与 `text2token`（Apache-2.0） |
+
 ## 要做的事（按顺序）
 
 ### 1. 缓存命中统计与费用统计（照搬 DeepSeek Harness）
