@@ -121,6 +121,7 @@ fn saved(id: &str, params: Vec<ParamSpec>) -> Automation {
         created_by: CreatedBy::User,
         created_at_ms: 0,
         updated_at_ms: 0,
+        schedule: None,
     }
 }
 

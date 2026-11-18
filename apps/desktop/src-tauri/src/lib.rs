@@ -2080,6 +2080,7 @@ pub fn run() {
             app.manage(ocr_engines::OcrEngines::new(app.handle()));
             app.manage(companion::CompanionRuntime::default());
             app.manage(automation::AutomationManager::open());
+            automation::start_schedules(app.handle());
             // 内置琴音 Agent：对话存储与运行状态（ADR 014 / 015）
             app.manage(agent::AgentRuntime::open());
             // 先接上程序执行端口，再启动调度器（到点的程序才有人执行）。

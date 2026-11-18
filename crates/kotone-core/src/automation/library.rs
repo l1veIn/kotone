@@ -7,7 +7,7 @@ use std::{path::PathBuf, sync::Mutex};
 use serde_json::{Map, Value};
 
 use super::{now_ms, write_atomic, SpeakAction, MAX_NAME_CHARS, MAX_SOURCE_CHARS};
-use crate::reminders::validate_content;
+use crate::reminders::{validate_content, DeliveryKind};
 
 pub const MAX_AUTOMATIONS: usize = 200;
 pub const MAX_PARAMS: usize = 16;
@@ -103,6 +103,28 @@ pub enum CreatedBy {
     Agent,
 }
 
+/// 定时（类似 crontab，本地时间）：到点用 `args` 运行一次。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Schedule {
+    /// 五段 `分 时 日 月 周`，或 `@daily` 等（见 [`super::cron`]）。
+    pub cron: String,
+    #[serde(default = "enabled_by_default")]
+    pub enabled: bool,
+    /// 到点运行时用的入参（没给的用参数默认值）。
+    #[serde(default)]
+    pub args: Map<String, Value>,
+}
+
+fn enabled_by_default() -> bool {
+    true
+}
+
+/// 内置的“X 秒之后提醒我 xxx”（第一次打开时装上；玩家删了不再装回）。
+pub const BUILTIN_REMIND_ID: &str = "builtin-remind-later";
+/// 播报类自动化里表示“几秒后再说”的参数名。
+pub const DELAY_PARAM: &str = "delay_seconds";
+
 /// 已保存的自动化。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -117,6 +139,9 @@ pub struct Automation {
     pub created_by: CreatedBy,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
+    /// 定时运行；None = 只手动 / 由琴音运行。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<Schedule>,
 }
 
 /// 新建或覆盖时提交的内容（`id` 为空 = 新建）。
@@ -131,6 +156,8 @@ pub struct AutomationDraft {
     #[serde(default)]
     pub params: Vec<ParamSpec>,
     pub action: AutomationBody,
+    #[serde(default)]
+    pub schedule: Option<Schedule>,
 }
 
 fn is_identifier(name: &str) -> bool {
@@ -269,6 +296,49 @@ pub fn validate_args(
     Ok(out)
 }
 
+/// 播报文字里的 `{参数名}`。
+fn placeholders(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('{') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('}') else { break };
+        let name = &after[..end];
+        if is_identifier(name) || name == DELAY_PARAM {
+            out.push(name.to_string());
+        }
+        rest = &after[end + 1..];
+    }
+    out
+}
+
+/// 按入参生成这一次的播报：`{参数名}` 换成值；`delaySeconds` 给出几秒后再说（毫秒）。
+pub fn render_speak(speak: &SpeakAction, args: &Map<String, Value>) -> (String, u64) {
+    let mut text = speak.text.clone();
+    for (name, value) in args {
+        let shown = match value {
+            Value::String(s) => s.clone(),
+            Value::Bool(b) => {
+                if *b {
+                    "是".into()
+                } else {
+                    "否".into()
+                }
+            }
+            Value::Number(n) => n.to_string(),
+            other => other.to_string(),
+        };
+        text = text.replace(&format!("{{{name}}}"), &shown);
+    }
+    let delay = args
+        .get(DELAY_PARAM)
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .map(|v| (v * 1000.0) as u64)
+        .unwrap_or(0);
+    (text, delay)
+}
+
 fn validate_params(params: &mut [ParamSpec]) -> Result<(), String> {
     if params.len() > MAX_PARAMS {
         return Err(format!("最多 {MAX_PARAMS} 个参数"));
@@ -345,12 +415,37 @@ impl AutomationDraft {
             return Err(format!("说明最多 {MAX_DESCRIPTION_CHARS} 字"));
         }
         validate_params(&mut self.params)?;
+        if let Some(schedule) = &mut self.schedule {
+            schedule.cron = schedule.cron.trim().to_string();
+            super::cron::Cron::parse(&schedule.cron)?;
+            validate_args(&self.params, &schedule.args)?;
+        }
         match &mut self.action {
             AutomationBody::Speak(speak) => {
                 speak.text = speak.text.trim().to_string();
                 validate_content(&speak.text, &speak.delivery)?;
-                if !self.params.is_empty() {
-                    return Err("播报类自动化不支持参数".into());
+                for spec in &self.params {
+                    let simple = matches!(
+                        spec.kind,
+                        ParamKind::Number { .. }
+                            | ParamKind::Text { .. }
+                            | ParamKind::Boolean
+                            | ParamKind::Choice { .. }
+                    );
+                    if !simple {
+                        return Err(format!(
+                            "播报类自动化的参数 {} 只能是数字、文字、开关或选项",
+                            spec.name
+                        ));
+                    }
+                    if spec.name == DELAY_PARAM && !matches!(spec.kind, ParamKind::Number { .. }) {
+                        return Err(format!("{DELAY_PARAM}（几秒后再说）要是数字"));
+                    }
+                }
+                for name in placeholders(&speak.text) {
+                    if !self.params.iter().any(|p| p.name == name) {
+                        return Err(format!("播报里的 {{{name}}} 没有对应的参数"));
+                    }
                 }
             }
             AutomationBody::Program(program) => {
@@ -371,6 +466,46 @@ struct StoredAutomations {
     version: u32,
     next_id: u64,
     automations: Vec<Automation>,
+    /// 已经装过的内置自动化（删了也记着，不再装回）。
+    #[serde(default)]
+    builtin: Vec<String>,
+}
+
+/// “X 秒之后提醒我 xxx”：到点用语音和弹幕说一句。
+fn builtin_remind(now: u64) -> Automation {
+    Automation {
+        id: BUILTIN_REMIND_ID.into(),
+        name: "X 秒之后提醒我".into(),
+        description: "过一会儿用语音和弹幕提醒你一句话，例如 300 秒后提醒“打小龙”。".into(),
+        params: vec![
+            ParamSpec {
+                name: DELAY_PARAM.into(),
+                label: "几秒之后".into(),
+                description: "最多一天（86400 秒）".into(),
+                kind: ParamKind::Number {
+                    min: Some(1.0),
+                    max: Some(86_400.0),
+                    integer: true,
+                },
+                default: Some(Value::from(60)),
+            },
+            ParamSpec {
+                name: "text".into(),
+                label: "提醒什么".into(),
+                description: String::new(),
+                kind: ParamKind::Text { max_length: 100 },
+                default: None,
+            },
+        ],
+        action: AutomationBody::Speak(SpeakAction {
+            text: "{text}".into(),
+            delivery: vec![DeliveryKind::Voice, DeliveryKind::Danmaku],
+        }),
+        created_by: CreatedBy::User,
+        created_at_ms: now,
+        updated_at_ms: now,
+        schedule: None,
+    }
 }
 
 impl Default for StoredAutomations {
@@ -379,6 +514,7 @@ impl Default for StoredAutomations {
             version: STORE_VERSION,
             next_id: 1,
             automations: vec![],
+            builtin: vec![],
         }
     }
 }
@@ -446,6 +582,7 @@ impl AutomationLibrary {
                 existing.description = draft.description;
                 existing.params = draft.params;
                 existing.action = draft.action;
+                existing.schedule = draft.schedule;
                 existing.updated_at_ms = now;
                 existing.clone()
             }
@@ -464,6 +601,7 @@ impl AutomationLibrary {
                     created_by: by,
                     created_at_ms: now,
                     updated_at_ms: now,
+                    schedule: draft.schedule,
                 };
                 next.automations.push(automation.clone());
                 automation
@@ -472,6 +610,23 @@ impl AutomationLibrary {
         self.persist(&next)?;
         *state = next;
         Ok(saved)
+    }
+
+    /// 装上内置的自动化（只装一次：玩家删了不再装回）。返回这次有没有装。
+    pub fn ensure_builtin(&self) -> Result<bool, String> {
+        let mut state = self.state.lock().unwrap();
+        if state.builtin.iter().any(|id| id == BUILTIN_REMIND_ID) {
+            return Ok(false);
+        }
+        let mut next = state.clone();
+        next.builtin.push(BUILTIN_REMIND_ID.to_string());
+        if !next.automations.iter().any(|a| a.id == BUILTIN_REMIND_ID) {
+            let now = now_ms();
+            next.automations.push(builtin_remind(now));
+        }
+        self.persist(&next)?;
+        *state = next;
+        Ok(true)
     }
 
     /// 删除；返回是否存在。已安排的执行保存了快照，不受影响。
@@ -518,6 +673,88 @@ mod tests {
             "action": {"kind": "program", "source": "every(args.interval, function() key(args.key) end)"},
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn speak_automations_take_simple_params_placeholders_and_a_delay() {
+        let draft: AutomationDraft = serde_json::from_value(json!({
+            "name": "提醒", "params": [
+                {"name": "delay_seconds", "type": "number", "min": 1, "integer": true, "default": 5},
+                {"name": "text", "type": "text"}],
+            "action": {"kind": "speak", "text": "该{text}了", "delivery": ["voice"]},
+        }))
+        .unwrap();
+        let ok = draft.clone().normalized().unwrap();
+        let AutomationBody::Speak(speak) = &ok.action else {
+            panic!()
+        };
+        let filled = validate_args(&ok.params, &args(json!({"text": "打小龙"}))).unwrap();
+        assert_eq!(
+            render_speak(speak, &filled),
+            ("该打小龙了".to_string(), 5_000)
+        );
+
+        let mut unknown = draft.clone();
+        unknown.action = serde_json::from_value(
+            json!({"kind": "speak", "text": "{who}", "delivery": ["voice"]}),
+        )
+        .unwrap();
+        assert!(unknown.normalized().unwrap_err().contains("{who}"));
+        let mut region = draft;
+        region
+            .params
+            .push(spec(json!({"name": "area", "type": "region"})));
+        assert!(region.normalized().is_err());
+    }
+
+    #[test]
+    fn schedules_are_validated_and_saved() {
+        let mut draft = press_every();
+        draft.params.retain(|p| p.name != "area");
+        draft.schedule = Some(Schedule {
+            cron: " 0 8 * * * ".into(),
+            enabled: true,
+            args: args(json!({"key": "E"})),
+        });
+        let ok = draft.clone().normalized().unwrap();
+        assert_eq!(ok.schedule.as_ref().unwrap().cron, "0 8 * * *");
+        draft.schedule = Some(Schedule {
+            cron: "8 点".into(),
+            enabled: true,
+            args: Map::new(),
+        });
+        assert!(draft.clone().normalized().is_err());
+        draft.schedule = Some(Schedule {
+            cron: "@daily".into(),
+            enabled: true,
+            args: args(json!({"nope": 1})),
+        });
+        assert!(draft.normalized().is_err());
+    }
+
+    #[test]
+    fn the_builtin_reminder_is_installed_once_and_stays_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = AutomationLibrary::open(dir.path().join("automations.json")).unwrap();
+        assert!(library.ensure_builtin().unwrap());
+        let builtin = library.get(BUILTIN_REMIND_ID).unwrap();
+        assert_eq!(builtin.name, "X 秒之后提醒我");
+        // 装上的定义自己也要能通过校验
+        AutomationDraft {
+            id: None,
+            name: builtin.name.clone(),
+            description: builtin.description.clone(),
+            params: builtin.params.clone(),
+            action: builtin.action.clone(),
+            schedule: None,
+        }
+        .normalized()
+        .unwrap();
+        assert!(!library.ensure_builtin().unwrap());
+        library.delete(BUILTIN_REMIND_ID).unwrap();
+        let reopened = AutomationLibrary::open(dir.path().join("automations.json")).unwrap();
+        assert!(!reopened.ensure_builtin().unwrap());
+        assert!(reopened.get(BUILTIN_REMIND_ID).is_none());
     }
 
     #[test]
@@ -593,7 +830,7 @@ mod tests {
             (bad_name, "参数名"),
             (dup, "重复"),
             (bad_default, "缺省值"),
-            (speak_with_params, "不支持参数"),
+            (speak_with_params, "只能是数字、文字、开关或选项"),
             (empty, "为空"),
             (no_name, "名字"),
         ] {

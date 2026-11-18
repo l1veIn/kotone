@@ -1121,6 +1121,7 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8], what: &str) -> Result<(), 
     std::fs::rename(&tmp, path).map_err(|e| format!("保存{what}失败：{e}"))
 }
 
+pub mod cron;
 pub mod library;
 
 #[cfg(test)]

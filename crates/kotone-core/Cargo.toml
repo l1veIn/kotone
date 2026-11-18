@@ -7,6 +7,8 @@ rust-version = "1.77.2"
 
 # 依赖纪律：只允许轻量通用依赖；不得依赖 cpal/windows/tauri/任何 STT 引擎 SDK
 [dependencies]
+# 自动化定时（类似 crontab）的本地时间计算；版本已在工作区锁文件里
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"

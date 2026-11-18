@@ -57,8 +57,13 @@ impl AutomationManager {
         let library =
             AutomationLibrary::open(kotone_core::settings::kotone_dir().join("automations.json"))
                 .map(Arc::new);
-        if let Err(e) = &library {
-            kotone_core::log::log(&format!("automation library unavailable: {e}"));
+        match &library {
+            Err(e) => kotone_core::log::log(&format!("automation library unavailable: {e}")),
+            Ok(library) => {
+                if let Err(e) = library.ensure_builtin() {
+                    kotone_core::log::log(&format!("automation: builtin not installed: {e}"));
+                }
+            }
         }
         Self {
             live: Mutex::new(HashMap::new()),
@@ -585,10 +590,55 @@ pub fn run_saved(
             due_at_ms,
         ),
         AutomationBody::Speak(speak) => {
-            let run = scheduler(app)?.schedule_speak(session, speak.clone(), due_at_ms)?;
+            // `{参数名}` 换成这次的值；`delay_seconds` = 几秒后再说。
+            let (text, delay_ms) = kotone_core::automation::library::render_speak(speak, &args);
+            let speak = kotone_core::automation::SpeakAction {
+                text,
+                delivery: speak.delivery.clone(),
+            };
+            let run = scheduler(app)?.schedule_speak(session, speak, due_at_ms + delay_ms)?;
             Ok(scheduled_json(&run, None))
         }
     }
+}
+
+/// 定时运行的自动化（类似 crontab）：每 20 秒看一次上次检查以来有没有到点的；
+/// Kotone 没开时错过的不补（与调度器“错过不补”一致）。
+pub fn start_schedules(app: &AppHandle) {
+    let app = app.clone();
+    let _ = std::thread::Builder::new()
+        .name("kotone-automation-schedule".into())
+        .spawn(move || {
+            let mut last = kotone_core::automation::now_ms();
+            loop {
+                std::thread::sleep(Duration::from_secs(20));
+                let now = kotone_core::automation::now_ms();
+                for automation in saved_list(&app) {
+                    let Some(schedule) = automation.schedule.as_ref().filter(|s| s.enabled) else {
+                        continue;
+                    };
+                    let Ok(cron) = kotone_core::automation::cron::Cron::parse(&schedule.cron)
+                    else {
+                        continue;
+                    };
+                    if !kotone_core::automation::cron::due_between(&cron, last, now) {
+                        continue;
+                    }
+                    kotone_core::log::log(&format!(
+                        "automation {}: scheduled run ({})",
+                        automation.id, schedule.cron
+                    ));
+                    if let Err(e) = run_saved(&app, "schedule", &automation.id, &schedule.args, now)
+                    {
+                        kotone_core::log::log(&format!(
+                            "automation {}: scheduled run failed: {e}",
+                            automation.id
+                        ));
+                    }
+                }
+                last = now;
+            }
+        });
 }
 
 /// 内置 Agent 的提醒：延迟播报，进同一个调度器（ADR 013“延迟 + 播报”）。
@@ -667,8 +717,19 @@ pub fn get(app: &AppHandle, id: &str) -> Result<Value, String> {
 
 pub fn list_saved(app: &AppHandle) -> Result<Value, String> {
     let list = library(app)?.list();
+    let now = kotone_core::automation::now_ms();
     Ok(json!({
-        "automations": list.iter().map(|a| automation_json(a, false)).collect::<Vec<_>>(),
+        "automations": list.iter().map(|a| {
+            let mut value = automation_json(a, false);
+            // 定时的下一次（界面显示“下次 08:00”）
+            let next = a.schedule.as_ref().filter(|s| s.enabled)
+                .and_then(|s| kotone_core::automation::cron::Cron::parse(&s.cron).ok())
+                .and_then(|cron| kotone_core::automation::cron::next_run_ms(&cron, now));
+            if let (Some(next), Some(object)) = (next, value.as_object_mut()) {
+                object.insert("nextRunAtMs".into(), json!(next));
+            }
+            value
+        }).collect::<Vec<_>>(),
         "max": kotone_core::automation::library::MAX_AUTOMATIONS,
     }))
 }
