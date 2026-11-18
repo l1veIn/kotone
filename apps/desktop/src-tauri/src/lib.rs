@@ -1880,28 +1880,35 @@ pub fn run() {
         onboarding: parse_onboarding_launch_mode(std::env::args()),
         background: has_background_flag(std::env::args()),
     };
-    tauri::Builder::default()
-        // 单实例：第二实例启动时唤起已有实例的设置窗口并退出自身，
-        // 避免旧进程未退出导致热键「already registered」与 WebView2 类注册冲突
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            // Agent 以后台方式再次启动：实例已在运行，保持静默，不唤起窗口、不抢焦点
-            if has_background_flag(args.iter().map(String::as_str)) {
-                return;
-            }
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.show();
-                let _ = win.unminimize();
-                let _ = win.set_focus();
-            }
-            // 测试时常从已在托盘运行的实例再次执行
-            // `kotone.exe --onboarding=always`。第二实例不会进入 setup，
-            // 因此必须把强制打开请求转发给现有设置窗口。
-            if parse_onboarding_launch_mode(args.iter().map(String::as_str))
-                == OnboardingLaunchMode::Always
-            {
-                let _ = app.emit_to("main", "kotone://open-onboarding", ());
-            }
-        }))
+    // 隔离实例（设了 KOTONE_HOME：开发、测试、外部 Agent 的独立实例）不参与单实例：
+    // 否则正式安装在运行时，隔离实例一启动就把正式实例的窗口唤到前台然后退出。
+    // 隔离实例的配置要自己关掉热键，免得和正式实例抢按键（见 scripts/manual-e2e/README.md）。
+    let mut builder = tauri::Builder::default();
+    if std::env::var_os("KOTONE_HOME").is_none() {
+        builder = builder
+            // 单实例：第二实例启动时唤起已有实例的设置窗口并退出自身，
+            // 避免旧进程未退出导致热键「already registered」与 WebView2 类注册冲突
+            .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+                // Agent 以后台方式再次启动：实例已在运行，保持静默，不唤起窗口、不抢焦点
+                if has_background_flag(args.iter().map(String::as_str)) {
+                    return;
+                }
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.unminimize();
+                    let _ = win.set_focus();
+                }
+                // 测试时常从已在托盘运行的实例再次执行
+                // `kotone.exe --onboarding=always`。第二实例不会进入 setup，
+                // 因此必须把强制打开请求转发给现有设置窗口。
+                if parse_onboarding_launch_mode(args.iter().map(String::as_str))
+                    == OnboardingLaunchMode::Always
+                {
+                    let _ = app.emit_to("main", "kotone://open-onboarding", ());
+                }
+            }));
+    }
+    builder
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -2199,6 +2206,7 @@ pub fn run() {
             assistant_input::assistant_voice_cancel,
             assistant::list_speech_voices,
             assistant::preview_reminder,
+            assistant::assistant_call,
             assistant::stop_speech,
             assistant::get_danmaku,
             assistant::finish_danmaku,

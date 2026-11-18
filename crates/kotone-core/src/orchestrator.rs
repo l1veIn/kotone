@@ -966,6 +966,30 @@ impl Orchestrator {
         )
     }
 
+    /// 呼叫琴音（热键、首页 / 聊天窗口的按钮）：按键版的语音唤醒，按一次就听。
+    /// - 空闲（或停在成功 / 出错提示上）：开始一次唤醒式收音（说完自动提交，没开口就安静结束）；
+    /// - 琴音正在听：立刻结束这句、交给她（不用等静音）；
+    /// - 正在语音输入（另一用途）或在识别 / 发送：先取消旧的，不开始新的（与助手热键一致）。
+    ///
+    /// `ticket`：热键的输入票（过期的按键不生效）；按钮传 None。
+    pub async fn call_assistant(&self, ticket: Option<u64>, no_speech_timeout_ms: u32) {
+        if !self.input_ticket_is_current(ticket) {
+            return;
+        }
+        let (state, purpose, gen) = self.hotkey_session_snapshot();
+        match state {
+            OrchestratorState::Idle | OrchestratorState::Success | OrchestratorState::Error => {
+                if let Err(e) = self.begin_assistant_wake(no_speech_timeout_ms).await {
+                    crate::log::log(&format!("呼叫琴音没有开始：{e}"));
+                }
+            }
+            OrchestratorState::Listening if purpose == SessionPurpose::Assistant => {
+                let _ = self.end_inner(Some(gen), ticket).await;
+            }
+            _ => self.cancel_inner(ticket, Some(gen)).await,
+        }
+    }
+
     /// 独立助手键的点按入口，按助手自己的预设路由。
     pub async fn on_assistant_hotkey(&self) {
         self.on_assistant_hotkey_with_ticket(self.hotkey_input_ticket())

@@ -56,7 +56,11 @@ pub struct AssistantVoiceSession {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AssistantConfig {
+    /// 呼叫琴音的热键（按一次就听，相当于按键版的语音唤醒）。默认 ` / ~ 键；空 = 不用热键。
     pub hotkey: String,
+    /// 已经给老配置补过默认的呼叫键（只补一次；之后清空 = 玩家不要热键）。
+    pub call_hotkey_defaulted: bool,
+    /// 旧的“陪玩热键”交互方式。呼叫琴音固定为“说完自动提交”，这一项只保留给旧配置。
     pub interaction_mode: AssistantInteractionMode,
     pub connection_id: String,
     pub default_delivery: Vec<DeliveryKind>,
@@ -320,10 +324,14 @@ pub enum SpeechEngine {
     System,
 }
 
+/// 呼叫琴音的默认键：主键盘左上角的 ` / ~。
+pub const DEFAULT_CALL_HOTKEY: &str = "Backquote";
+
 impl Default for AssistantConfig {
     fn default() -> Self {
         Self {
-            hotkey: String::new(),
+            hotkey: DEFAULT_CALL_HOTKEY.into(),
+            call_hotkey_defaulted: true,
             interaction_mode: AssistantInteractionMode::PushToTalk,
             connection_id: String::new(),
             default_delivery: vec![DeliveryKind::Voice, DeliveryKind::Danmaku],

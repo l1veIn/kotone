@@ -117,10 +117,10 @@ pub const FIELDS: &[Field] = &[
     f("soundFeedback.send.volume", "发送提示音音量", "高级 → 音效", "0–100。", NONE, NOW),
     f("soundFeedback.send.soundId", "发送提示音", "高级 → 音效", "", RECORD_SOUNDS, NOW),
     // ---- 琴音陪玩（助手 / Agent）----
-    f("assistant.hotkey", "陪玩热键", "琴音陪玩 → 设置", "按住说一句话交给琴音；空 = 不用。", NONE, NOW),
-    f("assistant.interactionMode", "陪玩热键方式", "琴音陪玩 → 设置", "", &[("push-to-talk", "按住说话，松开提交"), ("dictation", "按一下开始，停顿自动提交"), ("one-shot", "按一下说一句，说完自动提交")], NOW),
+    f("assistant.hotkey", "呼叫琴音热键", "琴音陪玩 → 设置", "按一下就在气泡里听，说完自动交给琴音（按键版的语音唤醒）；默认 Backquote（~ 键）；空 = 不用。", NONE, NOW),
+    f("assistant.interactionMode", "旧的陪玩热键方式（已不用，呼叫琴音固定为说完自动提交）", "琴音陪玩 → 设置", "", &[("push-to-talk", "按住说话，松开提交"), ("dictation", "按一下开始，停顿自动提交"), ("one-shot", "按一下说一句，说完自动提交")], NOW),
     f("assistant.connectionId", "琴音用的 AI 连接", "高级 → API 连接", "连接 ID，用 connections.list 查。换了以后要重新能力自检。", NONE, NOW),
-    f("assistant.route", "陪玩热键交给谁", "琴音陪玩 → 设置", "", &[("reminders", "内置（琴音 / 旧的单次陪玩）"), ("agent", "转交外部 Agent（需开启工具服务）")], NOW),
+    f("assistant.route", "呼叫琴音交给谁", "琴音陪玩 → 设置", "", &[("reminders", "内置（琴音 / 旧的单次陪玩）"), ("agent", "转交外部 Agent（需开启工具服务）")], NOW),
     f("assistant.defaultDelivery", "回答方式", "琴音陪玩 → 设置", "数组，元素 voice（语音）/ danmaku（弹幕），1–2 个不重复。", NONE, NOW),
     f("assistant.speechEngine", "本地语音合成", "通用 → 语音", "assistant.ttsModelId 为空时使用。", &[("system", "Windows 系统语音"), ("kokoro", "Kokoro 本地中文语音（需下载）")], NOW),
     f("assistant.ttsModelId", "在线语音合成", "高级 → 模型 → 语音合成", "空 = 自动（默认）：琴音的 AI 连接是 DeepSeek 且有密钥时用 DeepSeek 语音，否则用本地的 assistant.speechEngine。在线语音按字数计费。一般用 models.activate {category: tts}。", &[("", "自动（默认）"), ("local", "本地（assistant.speechEngine）"), ("deepseek-tts", "DeepSeek 语音（在线）"), ("openai-compat-tts", "OpenAI 兼容在线语音"), ("volcano-tts", "火山在线语音")], NOW),
@@ -248,6 +248,10 @@ pub const INTERNAL: &[(&str, &str)] = &[
     ("modelConfigs", "用 models.activate"),
     ("agent.permissions", "琴音的权限只能由用户在设置页修改"),
     ("agent.identity.avatar", "头像要在设置页上传图片"),
+    (
+        "assistant.callHotkeyDefaulted",
+        "迁移标记：老配置补过默认呼叫键",
+    ),
     (
         "assistant.companion.check",
         "测试连接的结果，由“测试连接”写入（只用于显示）",

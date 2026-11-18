@@ -950,6 +950,27 @@ pub async fn preview_reminder(app: AppHandle, kind: String) -> Result<(), String
     .await
 }
 
+/// 呼叫琴音的按钮（首页、聊天窗口）：和热键一样，按一次就在气泡里听。
+#[tauri::command]
+pub async fn assistant_call(app: AppHandle) -> Result<(), String> {
+    let running = app
+        .try_state::<crate::runtime::RuntimeManager>()
+        .is_some_and(|rt| rt.phase() == kotone_core::runtime::RuntimePhase::Running);
+    if !running {
+        return Err("先点右上角「启动」，Kotone 运行时才能呼叫琴音".into());
+    }
+    let state = app.state::<crate::SharedState>();
+    let timeout = state
+        .settings
+        .read()
+        .unwrap()
+        .assistant
+        .wake
+        .no_speech_timeout_ms;
+    state.orchestrator.call_assistant(None, timeout).await;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn stop_speech(app: AppHandle) {
     let runtime = app.state::<AssistantRuntime>();

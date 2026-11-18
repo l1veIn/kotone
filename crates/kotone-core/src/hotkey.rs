@@ -99,6 +99,8 @@ pub const VK_MENU: u32 = 0x12; // Alt
 pub const VK_PAUSE: u32 = 0x13;
 pub const VK_CAPITAL: u32 = 0x14;
 pub const VK_ESCAPE: u32 = 0x1B;
+/// 主键盘左上角的 ` / ~ 键（呼叫琴音的默认键）。
+pub const VK_OEM_3: u32 = 0xC0;
 pub const VK_SPACE: u32 = 0x20;
 pub const VK_PRIOR: u32 = 0x21; // PageUp
 pub const VK_NEXT: u32 = 0x22; // PageDown
@@ -188,6 +190,7 @@ fn vk_name(vk: u32) -> String {
         VK_PAUSE => "Pause",
         VK_CAPITAL => "CapsLock",
         VK_ESCAPE => "Escape",
+        VK_OEM_3 => "Backquote",
         _ => return format!("VK0x{vk:02X}"),
     };
     name.to_string()
@@ -234,6 +237,7 @@ fn vk_from_name(name: &str) -> Option<u32> {
         "printscreen" | "print" => VK_SNAPSHOT,
         "pause" => VK_PAUSE,
         "capslock" | "caps" => VK_CAPITAL,
+        "backquote" | "`" | "~" | "grave" | "tilde" => VK_OEM_3,
         _ => return None,
     };
     Some(vk)
@@ -706,6 +710,14 @@ mod tests {
         assert_eq!(parse_hotkey("F24").unwrap().vk, VK_F1 + 23);
         assert!(parse_hotkey("F25").is_none());
         assert!(parse_hotkey("F0").is_none());
+    }
+
+    #[test]
+    fn backquote_is_the_call_key() {
+        for name in ["Backquote", "`", "~", "backquote"] {
+            assert_eq!(parse_hotkey(name).unwrap().vk, VK_OEM_3, "{name}");
+        }
+        assert_eq!(vk_name(VK_OEM_3), "Backquote");
     }
 
     #[test]

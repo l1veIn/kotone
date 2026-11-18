@@ -776,6 +776,7 @@ pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
     };
     let mut user = user;
     migrate_legacy_post_processing_json(&mut user);
+    migrate_call_hotkey_json(&mut user);
     merge_json(&mut merged, &user);
     let mut settings: Settings = match serde_json::from_value(merged) {
         Ok(settings) => settings,
@@ -789,6 +790,50 @@ pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
         settings,
         warning: None,
     }
+}
+
+/// 0.2.0：旧的“陪玩热键”默认是空的；改成“呼叫琴音”后给老配置补上默认的 ` 键（只补一次，
+/// 并且这个键没被别的热键占用时才补）。之后玩家清空就是不要热键。
+fn migrate_call_hotkey_json(user: &mut serde_json::Value) {
+    let Some(object) = user.as_object_mut() else {
+        return;
+    };
+    let used: Vec<String> = [
+        object.get("hotkey").and_then(|h| h.get("key")),
+        object.get("channelCycleHotkey"),
+        object.get("resendLastHotkey"),
+        object.get("togglePostProcessingHotkey"),
+        object.get("cyclePostProcessingHotkey"),
+        object.get("runtimeToggleHotkey"),
+        object.get("automationStopHotkey"),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|v| v.as_str())
+    .map(str::to_ascii_lowercase)
+    .collect();
+    let assistant = object
+        .entry("assistant")
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(assistant) = assistant.as_object_mut() else {
+        return;
+    };
+    if assistant
+        .get("callHotkeyDefaulted")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let empty = assistant
+        .get("hotkey")
+        .and_then(|v| v.as_str())
+        .map_or(true, |k| k.trim().is_empty());
+    let default = crate::assistant::DEFAULT_CALL_HOTKEY;
+    if empty && !used.iter().any(|k| k == &default.to_ascii_lowercase()) {
+        assistant.insert("hotkey".into(), default.into());
+    }
+    assistant.insert("callHotkeyDefaulted".into(), true.into());
 }
 
 /// 旧配置只有单条 `pipeline`：空流程改种默认屏蔽词；有步骤则收成一条可切换流程。
@@ -966,6 +1011,28 @@ pub fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_configs_get_the_call_hotkey_once_unless_the_key_is_taken() {
+        let mut empty = serde_json::json!({"assistant": {"hotkey": ""}});
+        migrate_call_hotkey_json(&mut empty);
+        assert_eq!(empty["assistant"]["hotkey"], "Backquote");
+        assert_eq!(empty["assistant"]["callHotkeyDefaulted"], true);
+
+        // 玩家后来清空：不再补
+        let mut cleared =
+            serde_json::json!({"assistant": {"hotkey": "", "callHotkeyDefaulted": true}});
+        migrate_call_hotkey_json(&mut cleared);
+        assert_eq!(cleared["assistant"]["hotkey"], "");
+
+        // 自己设过的不动；` 被录音热键占用时不补
+        let mut own = serde_json::json!({"assistant": {"hotkey": "F9"}});
+        migrate_call_hotkey_json(&mut own);
+        assert_eq!(own["assistant"]["hotkey"], "F9");
+        let mut taken = serde_json::json!({"hotkey": {"key": "Backquote"}, "assistant": {}});
+        migrate_call_hotkey_json(&mut taken);
+        assert!(taken["assistant"].get("hotkey").is_none());
+    }
 
     #[test]
     fn legacy_config_without_interaction_mode_defaults_to_push_to_talk() {

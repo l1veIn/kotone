@@ -374,7 +374,17 @@ fn dispatch_runtime_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, event: Hoo
                 HK_RESEND_LAST => orch.resend_last().await,
                 HK_PP_TOGGLE => orch.on_post_processing_toggle().await,
                 HK_PP_CYCLE => orch.on_post_processing_cycle().await,
-                HK_ASSISTANT => orch.on_assistant_hotkey_with_ticket(ticket.core).await,
+                HK_ASSISTANT => {
+                    let timeout = app
+                        .state::<crate::SharedState>()
+                        .settings
+                        .read()
+                        .unwrap()
+                        .assistant
+                        .wake
+                        .no_speech_timeout_ms;
+                    orch.call_assistant(Some(ticket.core), timeout).await
+                }
                 other => match quick_message_slot(other) {
                     // 快捷消息：替用户说了预设的那句话，不经过语音识别，直接进陪玩流程。
                     Some(slot) => crate::companion::quick(&app, slot),
@@ -418,13 +428,8 @@ const KNOWN_NAMED_HOTKEYS: &[&str] = &[
 fn named_list_from(
     settings: &kotone_core::settings::Settings,
 ) -> Vec<(&'static str, String, HotkeyMode)> {
-    let assistant_mode = if settings.assistant.interaction_mode
-        == kotone_core::assistant::AssistantInteractionMode::PushToTalk
-    {
-        HotkeyMode::Hold
-    } else {
-        HotkeyMode::Toggle
-    };
+    // 呼叫琴音：按一次就听（说完自动提交），没有按住说话。
+    let assistant_mode = HotkeyMode::Toggle;
     let quick = &settings.assistant.companion.quick_messages;
     let mut list = vec![
         (
@@ -1052,19 +1057,19 @@ mod tests {
     }
 
     #[test]
-    fn assistant_hold_mode_is_registered_independently_of_dictation() {
+    fn calling_kotone_is_always_a_single_press_regardless_of_old_modes() {
         use kotone_core::interaction::InteractionMode;
         let mut settings = kotone_core::settings::Settings {
-            interaction_mode: Some(InteractionMode::Dictation),
+            interaction_mode: Some(InteractionMode::PushToTalk),
             ..Default::default()
         };
-        assert_eq!(named_list_from(&settings)[0].2, HotkeyMode::Hold);
+        // 呼叫琴音按一次就听：旧配置里的“对讲机”也不再按住说话
         settings.assistant.interaction_mode =
-            kotone_core::assistant::AssistantInteractionMode::OneShot;
-        assert_eq!(named_list_from(&settings)[0].2, HotkeyMode::Toggle);
+            kotone_core::assistant::AssistantInteractionMode::PushToTalk;
+        assert_eq!(named_list_from(&settings)[0].0, HK_ASSISTANT);
+        assert_eq!(named_list_from(&settings)[0].1, "Backquote");
         assert!(named_list_from(&settings)
             .iter()
-            .skip(1)
             .all(|(_, _, mode)| *mode == HotkeyMode::Toggle));
     }
 }
