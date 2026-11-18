@@ -51,12 +51,13 @@
   let manualGuide = $state<ModelInstallGuide | null>(null);
   let manualGuideError = $state("");
   let connections = $state<ConnectionInfo[]>([]);
-  /** 统一模型清单按类别分栏：asr 语音识别（原有列表）/ ocr 文字识别 / tts 语音合成 */
-  let category = $state<"asr" | "ocr" | "tts">("asr");
+  /** 统一模型清单按类别分栏：asr 语音识别（原有列表）/ ocr 文字识别 / tts 语音合成 / search 联网搜索（ADR 026） */
+  let category = $state<"asr" | "ocr" | "tts" | "search">("asr");
   const categories = [
     { id: "asr", name: "语音识别" },
     { id: "ocr", name: "文字识别" },
     { id: "tts", name: "语音合成" },
+    { id: "search", name: "联网搜索" },
   ] as const;
 
   const downloadingAny = $derived(Object.keys(dlProgress).length > 0);

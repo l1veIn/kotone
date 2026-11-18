@@ -23,16 +23,19 @@ pub enum ModelCategory {
     Ocr,
     /// 语音合成。
     Tts,
+    /// 联网搜索（ADR 026；琴音的 `web.search` / `web.fetch` 用选中的这个）。
+    Search,
 }
 
 impl ModelCategory {
-    pub const ALL: [ModelCategory; 3] = [Self::Asr, Self::Ocr, Self::Tts];
+    pub const ALL: [ModelCategory; 4] = [Self::Asr, Self::Ocr, Self::Tts, Self::Search];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Asr => "asr",
             Self::Ocr => "ocr",
             Self::Tts => "tts",
+            Self::Search => "search",
         }
     }
 
@@ -41,6 +44,7 @@ impl ModelCategory {
             "" | "asr" => Some(Self::Asr),
             "ocr" => Some(Self::Ocr),
             "tts" => Some(Self::Tts),
+            "search" => Some(Self::Search),
             _ => None,
         }
     }
@@ -161,6 +165,7 @@ mod tests {
         assert_eq!(ModelCategory::parse(""), Some(ModelCategory::Asr));
         assert_eq!(ModelCategory::parse("ocr"), Some(ModelCategory::Ocr));
         assert_eq!(ModelCategory::parse("tts"), Some(ModelCategory::Tts));
+        assert_eq!(ModelCategory::parse("search"), Some(ModelCategory::Search));
         assert_eq!(ModelCategory::parse("vision"), None);
         assert_eq!(ModelCategory::default(), ModelCategory::Asr);
         assert_eq!(serde_json::to_value(ModelCategory::Tts).unwrap(), "tts");

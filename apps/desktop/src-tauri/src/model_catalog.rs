@@ -7,7 +7,8 @@
 //! - 下载与 ASR 共用同一个下载名额与取消标记（`kotone_stt::download`），支持断点续传；
 //!   OCR 逐文件校验 SHA-256，Kokoro 沿用 `speech_models` 的整包校验与安全解包。
 //! - 手动导入：OCR 包可从用户选择的目录复制，仍逐文件校验后才发布。
-//! - 切换：OCR 写 `ocr.activeModelId`；TTS 写 `assistant.speechEngine`。本地模型须已安装。
+//! - 切换：OCR 写 `ocr.activeModelId`；TTS 写 `assistant.speechEngine`；联网搜索写 `search.activeModelId`
+//!   （ADR 026）。本地模型须已安装。
 
 use std::path::{Path, PathBuf};
 
@@ -23,7 +24,9 @@ fn parse_category(category: &str) -> Result<ModelCategory, String> {
     match ModelCategory::parse(category) {
         Some(ModelCategory::Asr) => Err("语音识别模型请使用原有的模型接口".into()),
         Some(other) => Ok(other),
-        None => Err(format!("未知模型类别 {category}（可选：asr、ocr、tts）")),
+        None => Err(format!(
+            "未知模型类别 {category}（可选：asr、ocr、tts、search）"
+        )),
     }
 }
 
@@ -53,6 +56,19 @@ fn deepseek_has_key(app: &AppHandle, settings: &Settings) -> Option<bool> {
         return Some(false);
     }
     state.secrets.get(&id).ok().map(|key| key.is_some())
+}
+
+/// 联网搜索所用的 DeepSeek 连接是否已保存密钥；None = 没有连接或读不了凭据库。
+fn search_has_key(app: &AppHandle, settings: &Settings) -> Option<bool> {
+    let id = kotone_ai::web::deepseek_connection_id(settings)?;
+    if !settings.connections.iter().any(|c| c.id == id) {
+        return Some(false);
+    }
+    app.state::<SharedState>()
+        .secrets
+        .get(&id)
+        .ok()
+        .map(|key| key.is_some())
 }
 
 /// 列出某个类别的条目（阻塞：本地 OCR 包首次列出时需计算哈希）。
@@ -92,6 +108,10 @@ pub fn list_blocking(
                 },
             ))
         }
+        ModelCategory::Search => Ok(kotone_ai::web::entries(
+            &settings,
+            search_has_key(app, &settings),
+        )),
     }
 }
 
@@ -110,6 +130,7 @@ pub fn active_id(app: &AppHandle, category: ModelCategory) -> Option<String> {
             ))
             .to_string(),
         ),
+        ModelCategory::Search => Some(kotone_ai::web::resolve_active(&settings).to_string()),
     }
 }
 
@@ -118,6 +139,7 @@ fn ensure_known(category: ModelCategory, id: &str) -> Result<(), String> {
         ModelCategory::Asr => false,
         ModelCategory::Ocr => kotone_ocr::catalog::is_known(id),
         ModelCategory::Tts => kotone_tts::catalog::is_known(id),
+        ModelCategory::Search => kotone_ai::web::is_known(id),
     };
     if known {
         Ok(())
@@ -131,6 +153,7 @@ fn label(category: ModelCategory) -> &'static str {
         ModelCategory::Asr => "语音识别",
         ModelCategory::Ocr => "文字识别",
         ModelCategory::Tts => "语音合成",
+        ModelCategory::Search => "联网搜索",
     }
 }
 
@@ -150,6 +173,7 @@ pub async fn download(app: &AppHandle, category: ModelCategory, id: &str) -> Res
     ensure_known(category, id)?;
     match category {
         ModelCategory::Asr => Err("语音识别模型请使用 download_model".into()),
+        ModelCategory::Search => Err(format!("{id} 是在线服务，无需下载")),
         ModelCategory::Tts => {
             if id != kotone_tts::catalog::KOKORO_MODEL_ID {
                 return Err(format!("{id} 无需下载"));
@@ -265,6 +289,7 @@ pub fn delete(app: &AppHandle, category: ModelCategory, id: &str) -> Result<bool
     let state = app.state::<SharedState>();
     match category {
         ModelCategory::Asr => Err("语音识别模型请使用 delete_model".into()),
+        ModelCategory::Search => Err("联网搜索没有本地文件可删除".into()),
         ModelCategory::Ocr => {
             let package = kotone_ocr::manifest::package(id)
                 .ok_or_else(|| "在线模型没有本地文件可删除".to_string())?;
@@ -343,6 +368,7 @@ pub fn activate(app: &AppHandle, category: ModelCategory, id: &str) -> Result<Se
         match category {
             ModelCategory::Asr => return Err("语音识别模型请使用 set_active_model".into()),
             ModelCategory::Ocr => next.ocr.active_model_id = id.to_string(),
+            ModelCategory::Search => next.search.active_model_id = id.to_string(),
             ModelCategory::Tts => {
                 // 在线引擎写新字段 ttsModelId；本地引擎写旧字段 speechEngine（旧版本能读）。
                 use kotone_core::assistant::{SpeechEngine, TtsEngine};

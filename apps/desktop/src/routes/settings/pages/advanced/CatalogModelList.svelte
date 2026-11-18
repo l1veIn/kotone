@@ -35,7 +35,7 @@
   let guide = $state<ModelInstallGuide | null>(null);
 
   const downloadingAny = $derived(Object.keys(dlProgress).length > 0);
-  const title = $derived(category === "ocr" ? "文字识别模型" : "语音合成模型");
+  const title = $derived(category === "ocr" ? "文字识别模型" : category === "search" ? "联网搜索" : "语音合成模型");
 
   onMount(() => {
     let un: (() => void) | undefined;
@@ -178,6 +178,10 @@
   {#if category === "ocr"}
     <p class="mx-2 mt-1 mb-2 text-xs leading-relaxed text-muted-foreground">
       每次呼叫都会截取游戏窗口，用这里选中的模型识别文字。选在线模型时，<b class="font-medium text-brand-pink">每次识别都会把截图上传</b>到服务商。
+    </p>
+  {:else if category === "search"}
+    <p class="mx-2 mt-1 mb-2 text-xs leading-relaxed text-muted-foreground">
+      游戏一两周一个版本，模型自己记得的出装、强化、打法多半过时了；联网后她会先搜再答，并在聊天里列出来源。<b class="font-medium text-brand-pink">搜索词和要读的网址会发给服务商</b>。
     </p>
   {:else}
     <p class="mx-2 mt-1 mb-2 text-xs leading-relaxed text-muted-foreground">陪玩回答与提醒的播报声音。外语聊天会先翻译成中文再播报。</p>

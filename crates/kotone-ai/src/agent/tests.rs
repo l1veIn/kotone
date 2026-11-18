@@ -1898,3 +1898,317 @@ async fn an_empty_reply_after_tools_is_accepted() {
     assert_eq!(run1.stop, StopReason::Completed);
     assert_eq!(model.requests().len(), 2, "用过工具的空收尾不重发");
 }
+
+// ---------- 内容审核拒绝（ADR 026） ----------
+
+#[tokio::test]
+async fn a_refused_answer_is_withdrawn_and_reported() {
+    let mut refused = reply("这是一段会被拦下的", Vec::new());
+    refused.finish = FinishReason::Refused;
+    let model = FakeModel::new(vec![Script::Reply(refused)]);
+    let r = run(&model, &FakeTools::default(), "说点什么").await;
+    assert!(matches!(&r.stop, StopReason::Failed { message } if message.contains("内容审核")));
+    // 没有写进对话，界面收到撤回（Discarded）
+    assert!(!r
+        .history
+        .iter()
+        .any(|m| matches!(m, Message::Assistant { text, .. } if text.contains("拦下"))));
+    assert!(r
+        .events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::Discarded { .. })));
+}
+
+// ---------- DeepSeek 客户端（ADR 026），本机 wiremock ----------
+
+mod deepseek_http {
+    use super::super::deepseek::{DeepSeekModel, TitleRequest};
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+
+    fn connection(base_url: &str) -> ResolvedConnection {
+        ResolvedConnection {
+            id: "ds".into(),
+            display_name: "DeepSeek".into(),
+            kind: ConnectionKind::Remote,
+            provider: "deepseek".into(),
+            base_url: format!("{base_url}/v1"),
+            model: "deepseek-flash".into(),
+            api_key: Some("sk-test".into()),
+        }
+    }
+
+    fn data(chunk: Value) -> String {
+        format!("data: {chunk}\n\n")
+    }
+
+    fn delta(d: Value, finish: Option<&str>) -> Value {
+        json!({"choices": [{"index": 0, "delta": d, "finish_reason": finish}]})
+    }
+
+    fn request() -> ModelRequest {
+        ModelRequest {
+            system: "系统".into(),
+            messages: vec![
+                Message::User {
+                    text: "五分钟后提醒我买真眼".into(),
+                    attachments: Vec::new(),
+                    source: "chat".into(),
+                    at_ms: 1_795_000_000_000,
+                    context: "<kotone-context>入口：聊天</kotone-context>".into(),
+                },
+                Message::Assistant {
+                    text: String::new(),
+                    tool_calls: vec![call("c1", "reminder.create", r#"{"seconds":300}"#)],
+                    reasoning: "设个提醒".into(),
+                    usage: None,
+                    at_ms: 1,
+                },
+                Message::Tool {
+                    call_id: "c1".into(),
+                    name: "reminder.create".into(),
+                    content: "ok".into(),
+                    is_error: false,
+                    untrusted: false,
+                    images: Vec::new(),
+                    at_ms: 2,
+                },
+                Message::Assistant {
+                    text: "好了".into(),
+                    tool_calls: Vec::new(),
+                    reasoning: String::new(),
+                    usage: None,
+                    at_ms: 3,
+                },
+                Message::notice("不发给模型"),
+                Message::user("谢谢"),
+            ],
+            tools: vec![ToolDef {
+                name: "reminder.create".into(),
+                description: "设提醒".into(),
+                parameters: json!({"type": "object", "properties": {}}),
+            }],
+        }
+    }
+
+    async fn mount(server: &MockServer, status: u16, body: String) {
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(status).set_body_raw(body, "text/event-stream"))
+            .up_to_n_times(1)
+            .mount(server)
+            .await;
+    }
+
+    async fn complete(model: &DeepSeekModel) -> (Result<ModelReply, AiError>, Vec<String>) {
+        let deltas = Mutex::new(Vec::new());
+        let result = model
+            .complete(
+                &request(),
+                &|d| {
+                    deltas.lock().unwrap().push(match d {
+                        Delta::Text(t) => format!("text:{t}"),
+                        Delta::Thought(t) => format!("thought:{t}"),
+                    })
+                },
+                &CancellationToken::default(),
+            )
+            .await;
+        (result, deltas.into_inner().unwrap())
+    }
+
+    #[test]
+    fn body_follows_the_deepseek_guide() {
+        let mut model = DeepSeekModel::new(connection("http://x"));
+        model.safety_check = true;
+        model.reasoning_effort = Some("low".into());
+        model.title = Some(TitleRequest::new(|_| {}));
+        let (body, _) = model.body(&request());
+        let messages = body["messages"].as_array().unwrap();
+        let roles: Vec<&str> = messages
+            .iter()
+            .map(|m| m["role"].as_str().unwrap())
+            .collect();
+        // 每条玩家消息前一条 latest_reminder；通知不发
+        assert_eq!(
+            roles,
+            [
+                "system",
+                "latest_reminder",
+                "user",
+                "assistant",
+                "tool",
+                "assistant",
+                "latest_reminder",
+                "user"
+            ]
+        );
+        let reminder = messages[1]["content"].as_str().unwrap();
+        assert!(
+            reminder.ends_with(",,App,中文") && reminder.contains("星期"),
+            "{reminder}"
+        );
+        assert!(messages[2]["content"]
+            .as_str()
+            .unwrap()
+            .contains("<kotone-context>"));
+        // 推理每一轮都带回（包括没调工具、推理为空的那轮）；工具名编码
+        assert_eq!(messages[3]["reasoning_content"], "设个提醒");
+        assert_eq!(
+            messages[3]["tool_calls"][0]["function"]["name"],
+            "reminder_create"
+        );
+        assert_eq!(messages[5]["reasoning_content"], "");
+        assert_eq!(body["tools"][0]["function"]["name"], "reminder_create");
+        assert_eq!(body["safety_check"]["level"], "high");
+        assert_eq!(body["reasoning_effort"], "low");
+        assert_eq!(body["title"]["enabled"], true);
+        assert!(body.get("temperature").is_none());
+        // 关掉思考；不要标题时不带
+        model.reasoning_effort = Some("none".into());
+        model.title = None;
+        let (body, _) = model.body(&request());
+        assert_eq!(body["thinking"]["type"], "disabled");
+        assert!(body.get("reasoning_effort").is_none() && body.get("title").is_none());
+    }
+
+    #[tokio::test]
+    async fn streams_thoughts_text_tool_calls_title_and_usage() {
+        let server = MockServer::start().await;
+        let body = [
+            ": keep-alive\n\n".to_string(),
+            data(delta(json!({"reasoning_content": "想一下"}), None)),
+            data(delta(json!({"content": "好的，"}), None)),
+            data(delta(json!({"content": "我来设。"}), None)),
+            data(delta(json!({"tool_calls": [{"index": 0, "id": "c9", "function": {"name": "reminder_", "arguments": "{\"sec"}}]}), None)),
+            data(delta(json!({"tool_calls": [{"index": 0, "function": {"name": "create", "arguments": "onds\":300}"}}]}), None)),
+            data(json!({"choices": [{"index": 0, "delta": {"title": "买真眼提醒"}, "finish_reason": "tool_calls"}],
+                        "usage": {"prompt_tokens": 1000, "completion_tokens": 50, "prompt_cache_hit_tokens": 900,
+                                  "completion_tokens_details": {"reasoning_tokens": 10}}})),
+            "data: [DONE]\n\n".to_string(),
+        ]
+        .concat();
+        mount(&server, 200, body).await;
+        let titles = Arc::new(Mutex::new(Vec::new()));
+        let mut model = DeepSeekModel::new(connection(&server.uri()));
+        let sink = titles.clone();
+        model.title = Some(TitleRequest::new(move |t| sink.lock().unwrap().push(t)));
+        let (result, deltas) = complete(&model).await;
+        let reply = result.unwrap();
+        assert_eq!(deltas, ["thought:想一下", "text:好的，", "text:我来设。"]);
+        assert_eq!(reply.text, "好的，我来设。");
+        assert_eq!(reply.finish, FinishReason::ToolCalls);
+        assert_eq!(
+            reply.tool_calls,
+            vec![call("c9", "reminder.create", r#"{"seconds":300}"#)]
+        );
+        let usage = reply.usage.unwrap();
+        assert_eq!(
+            (
+                usage.input_tokens,
+                usage.cached_input_tokens,
+                usage.reasoning_tokens
+            ),
+            (Some(1000), Some(900), Some(10))
+        );
+        assert_eq!(usage.currency.as_deref(), Some("CNY"));
+        assert_eq!(*titles.lock().unwrap(), ["买真眼提醒"]);
+        // 拿到标题后不再要
+        let (body, _) = model.body(&request());
+        assert!(body.get("title").is_none());
+        let sent: Vec<Request> = server.received_requests().await.unwrap();
+        let sent: Value = serde_json::from_slice(&sent[0].body).unwrap();
+        assert_eq!(sent["title"]["enabled"], true);
+    }
+
+    #[tokio::test]
+    async fn content_filter_is_a_refusal() {
+        let server = MockServer::start().await;
+        let body = [
+            data(delta(json!({"content": "半句"}), None)),
+            data(delta(json!({}), Some("content_filter"))),
+            "data: [DONE]\n\n".to_string(),
+        ]
+        .concat();
+        mount(&server, 200, body).await;
+        let (result, _) = complete(&DeepSeekModel::new(connection(&server.uri()))).await;
+        assert_eq!(result.unwrap().finish, FinishReason::Refused);
+    }
+
+    #[tokio::test]
+    async fn an_error_in_the_last_chunk_fails_after_text_and_retries_before_it() {
+        // 出过字之后才报错：不重发，直接失败
+        let server = MockServer::start().await;
+        let failing = [
+            data(delta(json!({"content": "说到一半"}), None)),
+            data(json!({"error": {"message": "The model failed to generate a complete response. Please retry."}, "choices": []})),
+        ]
+        .concat();
+        mount(&server, 200, failing).await;
+        let (result, _) = complete(&DeepSeekModel::new(connection(&server.uri()))).await;
+        assert!(matches!(result, Err(AiError::Failed(m)) if m.contains("中途失败")));
+
+        // 还没出字就报错：等一下重发，第二次成功
+        let server = MockServer::start().await;
+        let early = data(json!({"error": {"message": "retry"}, "choices": []}));
+        mount(&server, 200, early).await;
+        let ok = [
+            data(delta(json!({"content": "好"}), Some("stop"))),
+            "data: [DONE]\n\n".to_string(),
+        ]
+        .concat();
+        mount(&server, 200, ok).await;
+        let (result, _) = complete(&DeepSeekModel::new(connection(&server.uri()))).await;
+        assert_eq!(result.unwrap().text, "好");
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn http_errors_are_explained_and_429_is_retried() {
+        let server = MockServer::start().await;
+        mount(
+            &server,
+            402,
+            r#"{"error":{"message":"Insufficient Balance"}}"#.into(),
+        )
+        .await;
+        let (result, _) = complete(&DeepSeekModel::new(connection(&server.uri()))).await;
+        assert!(matches!(result, Err(AiError::Failed(m)) if m.contains("余额不足")));
+
+        let server = MockServer::start().await;
+        mount(
+            &server,
+            400,
+            r#"{"error":{"message":"Content Exists Risk"}}"#.into(),
+        )
+        .await;
+        let (result, _) = complete(&DeepSeekModel::new(connection(&server.uri()))).await;
+        assert!(matches!(result, Err(AiError::Failed(m)) if m.contains("内容审核")));
+
+        let server = MockServer::start().await;
+        mount(&server, 429, String::new()).await;
+        mount(
+            &server,
+            200,
+            [
+                data(delta(json!({"content": "到了"}), Some("stop"))),
+                "data: [DONE]\n\n".to_string(),
+            ]
+            .concat(),
+        )
+        .await;
+        let (result, _) = complete(&DeepSeekModel::new(connection(&server.uri()))).await;
+        assert_eq!(result.unwrap().text, "到了");
+    }
+
+    #[test]
+    fn only_the_official_deepseek_endpoint_uses_this_client() {
+        assert!(super::super::deepseek::is_deepseek(&connection(
+            "https://api.deepseek.com"
+        )));
+        let mut other = connection("https://dashscope.aliyuncs.com");
+        other.provider = "dashscope".into();
+        assert!(!super::super::deepseek::is_deepseek(&other));
+    }
+}

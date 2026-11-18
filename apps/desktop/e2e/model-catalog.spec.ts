@@ -36,3 +36,20 @@ test("model page splits ASR / OCR / TTS and keeps the ASR list unchanged", async
   await page.getByTestId("model-category-asr").click();
   await expect(page.getByTestId("model-list")).toBeVisible();
 });
+
+// 联网搜索和语音识别、文字识别、语音合成并列（ADR 026）：DeepSeek 是一个选项，也可以不联网。
+test("web search is a model category: DeepSeek or off", async ({ page }) => {
+  await page.goto("/#/settings?onboarding=never");
+  await page.getByTestId("settings-nav-advanced").click();
+  await page.getByTestId("advanced-nav-models").click();
+  await page.getByTestId("model-category-search").click();
+  const search = page.getByTestId("catalog-list-search");
+  await expect(search).toContainText("搜索词和要读的网址会发给服务商");
+  const deepseek = search.getByRole("radio").filter({ hasText: "DeepSeek 联网搜索" });
+  await expect(deepseek).toHaveAttribute("aria-checked", "true");
+  await expect(deepseek.getByRole("button", { name: "下载" })).toHaveCount(0);
+  const off = search.getByRole("radio").filter({ hasText: "不联网" });
+  await off.click();
+  await expect(off).toHaveAttribute("aria-checked", "true");
+  await expect(deepseek).toHaveAttribute("aria-checked", "false");
+});

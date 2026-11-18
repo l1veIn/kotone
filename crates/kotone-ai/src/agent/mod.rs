@@ -25,6 +25,7 @@
 //! | `Finished` | `session/prompt` 的 `stopReason`（见 [`StopReason::acp`]） |
 
 pub mod compact;
+pub mod deepseek;
 pub mod model;
 pub mod store;
 
@@ -326,6 +327,8 @@ pub enum FinishReason {
     Stop,
     ToolCalls,
     Length,
+    /// 服务商的内容审核拒绝了这次回答（DeepSeek `content_filter`）：已经显示的半句要撤回（ADR 026）。
+    Refused,
     Other,
 }
 
@@ -990,6 +993,16 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
             }
         };
 
+        // 内容审核拒绝：撤回已经显示的半句（照 DeepSeek 指南），这次调用照样计费。
+        if reply.finish == FinishReason::Refused {
+            keep_partial_discard(&partial);
+            on_event(AgentEvent::Discarded {
+                usage: reply.usage.filter(|u| !u.is_empty()),
+            });
+            return StopReason::Failed {
+                message: "DeepSeek 的内容审核没让这次回答通过，已撤回；换个说法试试".into(),
+            };
+        }
         let calls = reply.tool_calls.clone();
         let truncated = reply.finish == FinishReason::Length;
         // 思考模式的模型偶尔把整段回答写进思考里、正文为空：玩家什么也听不到。

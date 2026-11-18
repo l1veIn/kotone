@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use kotone_ai::agent::model::OpenAiModel;
+use kotone_ai::agent::model::AgentModel;
 use kotone_ai::agent::{now_ms, Message, ModelClient, ModelRequest};
 use kotone_core::cancel::CancellationToken;
 use kotone_core::profile::{self, GameProfile};
@@ -275,8 +275,8 @@ pub async fn recap(app: &AppHandle, game_id: &str, start: u64, end: u64) -> Resu
             old_memory.trim()
         }
     );
-    let mut model = OpenAiModel::new(connection);
-    model.max_tokens = 4096;
+    let mut model = AgentModel::for_connection(connection);
+    model.set_max_tokens(4096);
     let request = ModelRequest {
         system,
         messages: vec![Message::user(user)],

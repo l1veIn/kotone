@@ -220,6 +220,8 @@ const toolLabels: Record<string, string> = {
   "tools.find": "查找工具",
   "reply.say": "播报",
   "reminder.create": "设提醒",
+  "web.search": "联网搜索",
+  "web.fetch": "读网页",
   "game_chat.send": "发到游戏聊天",
   "companion.read_chat": "看游戏聊天",
   "window.active": "看当前窗口",

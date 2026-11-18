@@ -454,6 +454,11 @@ test("compaction divider, match recap card and switch; usage shows hit rate and 
   // 对局复盘可以关
   await page.getByTestId("agent-match-recap").click();
   await expect.poll(async () => page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings().then((s) => s.agent?.matchRecap))).toBe(false);
+  // DeepSeek 内容审核（默认开）可以关；思考强度默认跟服务商
+  await page.getByTestId("agent-safety-check").click();
+  await expect.poll(async () => page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings().then((s) => s.agent?.safetyCheck))).toBe(false);
+  await expect(page.getByRole("combobox", { name: "游戏里的思考强度" })).toContainText("默认");
+  await expect(page.getByRole("combobox", { name: "聊天窗口里的思考强度" })).toContainText("默认");
   await page.getByTestId("companion-settings-links").getByRole("button", { name: "用量" }).click();
   const usage = page.getByTestId("usage-settings");
   await expect(usage.getByTestId("usage-today")).toContainText("¥0.025");
@@ -495,4 +500,27 @@ test("the chat shows today's and this conversation's usage; details by day and b
   await expect(dialog.getByTestId("usage-call").first()).toContainText("1%");
   await expect(dialog.getByTestId("usage-call").first().locator("td.text-warning")).toHaveCount(1);
   await page.screenshot({ path: testInfo.outputPath("usage-calls.png"), animations: "disabled" });
+});
+
+test("web search lists its sources under the tool card", async ({ page }) => {
+  await openChat(page);
+  await page.evaluate(async (T) => {
+    const t = window.agentTest;
+    await t.event("c-old", { kind: "appended", message: { role: "assistant", text: "", toolCalls: [
+      { id: "call-w", name: "web.search", arguments: '{"query":"海克斯大乱斗 强化 推荐"}' },
+    ], atMs: T + 1000 } });
+    await t.event("c-old", { kind: "appended", message: { role: "tool", callId: "call-w", name: "web.search", isError: false, untrusted: true, atMs: T + 1100,
+      content: JSON.stringify({ results: [
+        { title: "海克斯大乱斗强化推荐", url: "https://example.com/aram", site: "九游", date: "2026-11-14", summary: "…" },
+        { title: "", url: "https://example.com/b", summary: "…" },
+        { title: "坏链接", url: "javascript:alert(1)", summary: "…" },
+      ] }) } });
+  }, T);
+  const card = page.locator('[data-tool-id="call-w"]');
+  await expect(card.getByTestId("agent-tool-status")).toContainText("完成");
+  await expect(card).toContainText("联网搜索");
+  const sources = card.getByTestId("agent-tool-source");
+  await expect(sources).toHaveCount(2);
+  await expect(card.getByTestId("agent-tool-sources")).toContainText("九游 · 11-14");
+  await expect(sources.nth(1)).toHaveText("https://example.com/b");
 });

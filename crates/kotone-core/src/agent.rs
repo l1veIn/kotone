@@ -76,7 +76,25 @@ pub struct AgentConfig {
     /// 对局复盘：游戏一退出，把这一局和琴音的对话、提醒、自动化整理成复盘，写进这个游戏的记忆（默认开）。新字段。
     #[serde(default = "default_true")]
     pub match_recap: bool,
+    /// DeepSeek 内容审核（`safety_check`，ADR 026）：审核拒绝时撤回回答并说明（默认开）。别的服务商忽略。新字段。
+    #[serde(default = "default_true")]
+    pub safety_check: bool,
+    /// 游戏里（呼叫、唤醒、快捷指令）的思考强度：`low` / `high` / `max`，`none` = 不思考，空 = 服务商默认。
+    /// 只对 DeepSeek 生效（ADR 026）。新字段。
+    #[serde(default = "default_game_effort")]
+    pub game_effort: String,
+    /// 聊天窗口里的思考强度（同上）。新字段。
+    #[serde(default)]
+    pub chat_effort: String,
 }
+
+fn default_game_effort() -> String {
+    DEFAULT_GAME_EFFORT.into()
+}
+
+/// 游戏里默认的思考强度：服务商默认。实测（ADR 026，海克斯大乱斗问题，含联网搜索）高 / 低 / 不思考
+/// 每轮都是 5–6 秒，没有更快，就不改默认。
+pub const DEFAULT_GAME_EFFORT: &str = "";
 
 fn default_role_id() -> String {
     "kotone".into()
@@ -97,6 +115,32 @@ pub fn local_hh_mm(ms: u64) -> String {
         .timestamp_millis_opt(ms as i64)
         .single()
         .map(|t| t.format("%H:%M").to_string())
+        .unwrap_or_default()
+}
+
+/// DeepSeek `latest_reminder` 的日期部分（ADR 026）：`2026-11-18,星期三`（本地时间，取消息发出的那一刻，
+/// 历史里每条都算得出同样的值，前缀缓存不受影响）。
+pub fn reminder_date(ms: u64) -> String {
+    use chrono::{Datelike, TimeZone};
+    const WEEKDAYS: [&str; 7] = [
+        "星期一",
+        "星期二",
+        "星期三",
+        "星期四",
+        "星期五",
+        "星期六",
+        "星期日",
+    ];
+    chrono::Local
+        .timestamp_millis_opt(ms as i64)
+        .single()
+        .map(|t| {
+            format!(
+                "{},{}",
+                t.format("%Y-%m-%d"),
+                WEEKDAYS[t.weekday().num_days_from_monday() as usize]
+            )
+        })
         .unwrap_or_default()
 }
 
@@ -146,6 +190,9 @@ impl Default for AgentConfig {
             compact_at_tokens: DEFAULT_COMPACT_AT_TOKENS,
             role_id: default_role_id(),
             match_recap: true,
+            safety_check: true,
+            game_effort: default_game_effort(),
+            chat_effort: String::new(),
         }
     }
 }

@@ -22,7 +22,7 @@ use kotone_agent::prompt::{
 };
 use kotone_agent::workspace::Workspace;
 use kotone_agent::{Answer, Asker, PermissionRequest};
-use kotone_ai::agent::model::OpenAiModel;
+use kotone_ai::agent::model::AgentModel;
 use kotone_ai::agent::store::{Conversation, ConversationStore};
 use kotone_ai::agent::{
     now_ms, run_turn, AgentEvent, AgentLimits, Attachment, Inbox, Message, StopReason, ToolStatus,
@@ -537,9 +537,25 @@ async fn turn(
             }
         }
     }
-    let mut model = OpenAiModel::new(connection);
+    let mut model = AgentModel::for_connection(connection);
     if child.is_some_and(|spec| spec.thinking != "default") {
-        model.max_tokens = 1024;
+        model.set_max_tokens(1024);
+    }
+    // DeepSeek 官方最佳实践（ADR 026）：内容审核、思考强度、会话标题。
+    let title_cell: Arc<Mutex<Option<String>>> = Arc::default();
+    if let Some(deepseek) = model.deepseek() {
+        deepseek.safety_check = settings.agent.safety_check;
+        let effort = match entry {
+            Entry::Game => &settings.agent.game_effort,
+            _ => &settings.agent.chat_effort,
+        };
+        deepseek.reasoning_effort = valid_effort(effort);
+        if child.is_none() && conversation.auto_title.is_none() {
+            let cell = title_cell.clone();
+            deepseek.title = Some(kotone_ai::agent::deepseek::TitleRequest::new(move |t| {
+                *cell.lock().unwrap() = Some(t);
+            }));
+        }
     }
     let mut limits = match child {
         Some(_) => AgentLimits {
@@ -559,6 +575,10 @@ async fn turn(
             AgentEvent::Appended { message } => {
                 let mut c = shared.lock().unwrap();
                 c.messages.push(message.clone());
+                if let Some(title) = title_cell.lock().unwrap().take() {
+                    log::log(&format!("agent: conversation {conversation_id} titled"));
+                    c.auto_title = Some(title);
+                }
                 if let Err(e) = store.save(&mut c) {
                     log::log(&format!("agent: save failed: {e}"));
                 }
@@ -1017,6 +1037,8 @@ impl BuiltinHost for DesktopBuiltins {
             "voice.listen.stop" => {
                 Ok(json!({"stopped": crate::voice_listen::stop_owner(&self.app, &caller)}))
             }
+            "web.search" => crate::web_tools::search(&self.app, arguments).await,
+            "web.fetch" => crate::web_tools::fetch(&self.app, &caller, arguments).await,
             other => Err(format!("{other} 在这里不可用")),
         }
     }
@@ -1212,6 +1234,11 @@ impl Drop for AskGuard {
             json!({"askId": self.ask_id, "conversationId": self.conversation_id, "answer": self.answer}),
         );
     }
+}
+
+/// 设置里的思考强度：只认 DeepSeek 接受的几个值，其余（含空）用服务商默认。
+fn valid_effort(effort: &str) -> Option<String> {
+    matches!(effort, "none" | "low" | "high" | "max").then(|| effort.to_string())
 }
 
 /// 玩家说的是不是“停下”（整句只有停止的意思，去掉标点、语气词和开头叫的名字：当前角色名或琴音）。

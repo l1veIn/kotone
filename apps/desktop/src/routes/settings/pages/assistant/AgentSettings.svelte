@@ -30,6 +30,13 @@
   const inGame = $derived($settingsStore?.agent?.inGame ?? true);
   const progressSpeech = $derived($settingsStore?.agent?.progressSpeech ?? true);
   const matchRecap = $derived($settingsStore?.agent?.matchRecap ?? true);
+  const safetyCheck = $derived($settingsStore?.agent?.safetyCheck ?? true);
+  const gameEffort = $derived($settingsStore?.agent?.gameEffort ?? "");
+  const chatEffort = $derived($settingsStore?.agent?.chatEffort ?? "");
+  const efforts = [
+    { value: "default", label: "默认（高）" }, { value: "low", label: "低（更快）" }, { value: "high", label: "高" },
+    { value: "max", label: "最高" }, { value: "none", label: "不思考" },
+  ];
   /** 按分组排好（核心工具在前）；已有规则但清单里没有的工具也列出来，方便删掉。 */
   const groups = $derived.by(() => {
     const known = new Set(tools.map((tool) => tool.name));
@@ -104,6 +111,23 @@
     <SettingsRow label="对局复盘" description="游戏一退出，把这一局和她的对话、提醒、自动化整理成几句复盘留在聊天里，学到的写进这个游戏的记忆。只整理玩了 3 分钟以上、这一局里叫过她的；每次调用一次 AI。">
       {#snippet control()}
         <Switch data-testid="agent-match-recap" bind:checked={() => matchRecap, (checked) => void patchSettings({ agent: { matchRecap: checked } }, checked ? "对局结束会自动复盘" : "不再自动复盘")} aria-label="对局复盘" />
+      {/snippet}
+    </SettingsRow>
+    <SettingsRow label="思考强度" description="只对 DeepSeek 生效。实测游戏问题上高、低、不思考速度差不多（每轮 5–6 秒，含联网搜索），一般用默认就好。">
+      {#snippet control()}
+        <div class="flex flex-wrap gap-2">
+          <label class="flex items-center gap-1.5 text-xs text-muted-foreground">游戏里
+            <SelectField class="w-28" size="sm" ariaLabel="游戏里的思考强度" value={gameEffort || "default"} options={efforts}
+              onchange={(v) => void patchSettings({ agent: { gameEffort: v === "default" ? "" : v } }, "游戏里的思考强度已保存")} /></label>
+          <label class="flex items-center gap-1.5 text-xs text-muted-foreground">聊天窗口
+            <SelectField class="w-28" size="sm" ariaLabel="聊天窗口里的思考强度" value={chatEffort || "default"} options={efforts}
+              onchange={(v) => void patchSettings({ agent: { chatEffort: v === "default" ? "" : v } }, "聊天窗口里的思考强度已保存")} /></label>
+        </div>
+      {/snippet}
+    </SettingsRow>
+    <SettingsRow label="DeepSeek 内容审核" description="DeepSeek 官方的内容安全检查，不另收费。审核没通过时撤回这次回答并告诉你。只对 DeepSeek 生效。">
+      {#snippet control()}
+        <Switch data-testid="agent-safety-check" bind:checked={() => safetyCheck, (checked) => void patchSettings({ agent: { safetyCheck: checked } }, checked ? "内容审核已开启" : "内容审核已关闭")} aria-label="DeepSeek 内容审核" />
       {/snippet}
     </SettingsRow>
     {#if loadError}<p role="alert" class="my-3 text-xs text-destructive">{loadError}</p>{/if}

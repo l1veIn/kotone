@@ -66,8 +66,8 @@ export function changedLocations(tool: string, content: string | null | undefine
   if (tool.startsWith("models.") && tool !== "models.list") {
     let category = "";
     try { category = String((JSON.parse(args ?? "{}") as { category?: string }).category ?? ""); } catch { category = ""; }
-    const kind = ({ asr: "语音识别", ocr: "文字识别", tts: "语音合成" } as Record<string, string>)[category];
-    if (kind) return [{ label: `${kind}模型`, page: `设置 → 模型 → ${kind}` }];
+    const kind = ({ asr: "语音识别", ocr: "文字识别", tts: "语音合成", search: "联网搜索" } as Record<string, string>)[category];
+    if (kind) return [{ label: kind === "联网搜索" ? kind : `${kind}模型`, page: `设置 → 模型 → ${kind}` }];
   }
   let parsed: unknown = null;
   try { parsed = content ? JSON.parse(content) : null; } catch { parsed = null; }

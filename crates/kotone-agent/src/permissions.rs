@@ -67,6 +67,8 @@ const ALLOWED_EFFECTS: &[&str] = &[
     "listens-to-game-audio",
     // 请玩家粘贴 Key：输入框本身就是玩家的同意，Key 不经过模型。
     "requests-credentials",
+    // ADR 026：联网搜索、读网页。只读、每次 0.005 元；网页由 DeepSeek 的服务器去抓，碰不到本机。
+    "web-request",
 ];
 
 /// 默认询问的副作用及原因。

@@ -142,6 +142,9 @@ pub struct Settings {
     /// 文字识别（统一模型清单的 OCR 类别）：当前选用的 OCR 模型。
     #[serde(default)]
     pub ocr: OcrConfig,
+    /// 联网搜索（统一模型清单的 search 类别，ADR 026）。新字段。
+    #[serde(default)]
+    pub search: SearchConfig,
     /// 游戏语音（ADR 020）：琴音用虚拟麦克风替玩家在游戏语音里说话。新字段，缺省 = 关闭。
     #[serde(default)]
     pub voice_chat: crate::voice_chat::VoiceChatConfig,
@@ -153,6 +156,16 @@ pub struct Settings {
 pub struct OcrConfig {
     /// 当前 OCR 模型 ID（统一模型清单 `category=ocr`）。空 = 自动：按清单推荐顺序取第一个
     /// 已就绪的本地模型；都没有时为“未选择”。不会自动改用在线模型。
+    #[serde(default)]
+    pub active_model_id: String,
+}
+
+/// 联网搜索的选择（config.json `search` 段）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchConfig {
+    /// 统一模型清单 `category=search` 的 ID。空 = 自动：有 DeepSeek 连接就用 DeepSeek 联网搜索，
+    /// 否则不联网；`off` = 明确关掉。
     #[serde(default)]
     pub active_model_id: String,
 }
@@ -528,6 +541,7 @@ impl Default for Settings {
             agent: crate::agent::AgentConfig::default(),
             tool_service: ToolServiceConfig::default(),
             ocr: OcrConfig::default(),
+            search: SearchConfig::default(),
             voice_chat: crate::voice_chat::VoiceChatConfig::default(),
         }
     }

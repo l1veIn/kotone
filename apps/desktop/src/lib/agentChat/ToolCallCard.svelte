@@ -11,6 +11,7 @@
   import type { ToolView } from "./timeline";
   import { formatToolJson, toolPresentation } from "./toolPresentation";
   import { changedLocations, openLocation } from "../stores/navigation";
+  import { openExternal } from "$lib/ipc";
 
   let { tool, runActive = false, ask, onAnswer }: {
     tool: ToolView;
@@ -29,6 +30,16 @@
   const output = $derived(open ? formatToolJson(tool.content) : "");
   /** 改了设置的工具：“改了 xxx → 去看看”，点了跳到设置里的位置。 */
   const changed = $derived(tool.status === "completed" ? changedLocations(tool.call.name, tool.content, tool.call.arguments) : []);
+  /** 联网搜索、读网页（ADR 026）：在卡片下面列出来源，点开用浏览器看。 */
+  const sources = $derived.by(() => {
+    if (tool.status !== "completed" || (tool.call.name !== "web.search" && tool.call.name !== "web.fetch")) return [];
+    try {
+      const value = JSON.parse(tool.content ?? "") as { results?: { title?: string; url?: string; site?: string; date?: string }[]; url?: string; title?: string };
+      const list = value.results ?? (value.url ? [{ title: value.title, url: value.url }] : []);
+      return list.filter((r) => typeof r.url === "string" && /^https?:\/\//.test(r.url)).slice(0, 6)
+        .map((r) => ({ url: r.url!, label: r.title?.trim() || r.url!, meta: [r.site, r.date?.slice(5)].filter(Boolean).join(" · ") }));
+    } catch { return []; }
+  });
 
   async function answer(value: Answer) {
     if (!ask || !onAnswer || answering) return;
@@ -65,13 +76,25 @@
         {/if}
         {#if output}
           <section aria-label="结果">
-            <h4 class="mt-0 mb-1 text-[11px] font-medium text-muted-foreground">结果{#if tool.untrusted}<span class="ml-1 font-normal">（来自屏幕或游戏聊天，仅供参考）</span>{/if}</h4>
+            <h4 class="mt-0 mb-1 text-[11px] font-medium text-muted-foreground">结果{#if tool.untrusted}<span class="ml-1 font-normal">（{tool.call.name.startsWith("web.") ? "来自网页" : "来自屏幕或游戏聊天"}，仅供参考）</span>{/if}</h4>
             <pre class="m-0 font-mono text-xs leading-5 break-words whitespace-pre-wrap {presentation.failed ? 'text-destructive' : 'text-foreground/90'}">{output}</pre>
           </section>
         {/if}
       </div>
     {/if}
   </details>
+  {#if sources.length}
+    <ol class="m-0 mb-1 ml-5 flex list-none flex-col gap-0.5 p-0 text-xs" data-testid="agent-tool-sources" aria-label="来源">
+      {#each sources as s, i (s.url + i)}
+        <li class="flex min-w-0 items-baseline gap-1.5">
+          <span class="shrink-0 text-muted-foreground/70 tabular-nums">{i + 1}.</span>
+          <button type="button" class="min-w-0 truncate text-left text-primary/90 hover:underline" title={s.url}
+            data-testid="agent-tool-source" onclick={() => void openExternal(s.url).catch(() => {})}>{s.label}</button>
+          {#if s.meta}<span class="shrink-0 text-muted-foreground">{s.meta}</span>{/if}
+        </li>
+      {/each}
+    </ol>
+  {/if}
   {#if changed.length}
     <div class="mb-1 ml-5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground" data-testid="agent-tool-changed">
       <span>改了</span>

@@ -39,6 +39,9 @@ pub struct Conversation {
     /// 子会话的名字（如“同传”），也是它在对话列表里的标题。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// 模型起的标题（DeepSeek `title`，ADR 026）；没有时用第一句话。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_title: Option<String>,
 }
 
 impl Conversation {
@@ -224,6 +227,7 @@ impl ConversationStore {
             messages: Vec::new(),
             parent: None,
             label: None,
+            auto_title: None,
         }
     }
 
@@ -253,7 +257,12 @@ impl ConversationStore {
         trim_messages(&mut conversation.messages);
         conversation.title = match &conversation.label {
             Some(label) => format!("子会话：{label}"),
-            None => title_of(&conversation.messages),
+            None => match &conversation.auto_title {
+                Some(title) if !title.trim().is_empty() => {
+                    title.trim().chars().take(TITLE_CHARS).collect()
+                }
+                _ => title_of(&conversation.messages),
+            },
         };
         conversation.updated_at_ms = now_ms().max(conversation.created_at_ms);
         // 截图不存盘（很大且很快过时）；调用方手里的对话保持原样，本轮还要用。

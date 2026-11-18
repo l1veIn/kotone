@@ -29,6 +29,7 @@ mod voice_ask;
 mod voice_chat;
 mod voice_listen;
 mod wake;
+mod web_tools;
 mod workspace_cmd;
 
 use std::sync::{Arc, Mutex, RwLock};

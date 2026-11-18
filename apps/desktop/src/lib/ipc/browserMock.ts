@@ -104,8 +104,9 @@ const mock: MockStore = {
     assistant: { hotkey: "Backquote", callHotkeyDefaulted: true, interactionMode: "push-to-talk", connectionId: "", defaultDelivery: ["voice", "danmaku"], voiceId: "", speechEngine: "system", kokoroVoiceId: "kokoro:zf_001", speechVolume: 80, speechRate: 0, danmakuDurationMs: 8000, danmakuSpeedPxPerSec: 160, danmakuFontSize: 32, danmakuTopOffsetPx: 120, danmakuColor: "#FFFFFF", danmakuEmote: "none", route: "reminders", companion: { quickMessages: [], autoSend: true }, ttsModelId: "", wake: { enabled: false, phrase: "qinyin-qinyin", sensitivity: "normal", ack: "voice", noSpeechTimeoutMs: 5000 }, bubble: { enabled: true, corner: "bottom-right", offsetY: 0, alsoDanmaku: false } },
     toolService: { enabled: false },
     ocr: { activeModelId: "" },
+    search: { activeModelId: "" },
     voiceChat: { enabled: false, includeMic: true, micDeviceId: "default", micGain: 100 },
-    agent: { permissions: { mode: "default", rules: {} }, hiddenAutomations: [], inGame: true, progressSpeech: true, identity: { name: "", avatar: "" }, subagents: { model: "" }, compactAtTokens: 64000, roleId: "kotone", matchRecap: true },
+    agent: { permissions: { mode: "default", rules: {} }, hiddenAutomations: [], inGame: true, progressSpeech: true, identity: { name: "", avatar: "" }, subagents: { model: "" }, compactAtTokens: 64000, roleId: "kotone", matchRecap: true, safetyCheck: true, gameEffort: "", chatEffort: "" },
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },
@@ -1102,6 +1103,18 @@ const mockCatalog: CatalogModel[] = [
     downloaded: false, ready: false, state: "not-installed", active: false, recommended: true, languages: ["zh"],
     dataEgress: "none", configSchema: [], license: "Apache-2.0", files: [],
   },
+  {
+    category: "search", id: "deepseek-search", engineId: "deepseek-search", displayName: "DeepSeek 联网搜索（在线）",
+    description: "琴音查游戏版本、出装、海克斯强化、打法时用；搜索词和要读的网址会发给 DeepSeek，网页由 DeepSeek 的服务器去读。每次成功的搜索或读网页 0.005 元",
+    sizeBytes: 0, backend: "remote", downloaded: true, ready: true, state: "ready", active: false, recommended: true, languages: ["auto"],
+    dataEgress: "text", configSchema: [{ key: "connection", label: "API 连接（DeepSeek；留空 = 用琴音正在用的 DeepSeek 连接）", kind: "connection", default: "", options: [], required: false }],
+    apiKeyUrl: "https://platform.deepseek.com/api_keys", license: "DeepSeek API terms", files: [],
+  },
+  {
+    category: "search", id: "off", engineId: "off", displayName: "不联网", description: "琴音只凭自己的知识回答（游戏版本相关的内容可能过时）",
+    sizeBytes: 0, backend: "local", downloaded: true, ready: true, state: "ready", active: false, recommended: false, languages: ["auto"],
+    dataEgress: "none", configSchema: [], license: "", files: [],
+  },
 ];
 
 function refreshMockCatalog(): void {
@@ -1111,7 +1124,8 @@ function refreshMockCatalog(): void {
     "";
   const ttsActive = mock.settings.assistant.ttsModelId || (mock.settings.assistant.speechEngine === "kokoro" ? "kokoro-zh" : "system-speech");
   for (const m of mockCatalog) {
-    m.active = m.category === "ocr" ? m.id === ocrActive : m.id === ttsActive;
+    const searchActive = mock.settings.search?.activeModelId || "deepseek-search";
+    m.active = m.category === "ocr" ? m.id === ocrActive : m.category === "search" ? m.id === searchActive : m.id === ttsActive;
     if (m.id === "deepseek-ocr") {
       const connection = mock.settings.modelConfigs["deepseek-ocr"]?.connection;
       m.ready = typeof connection === "string" && connection !== "";
@@ -1155,6 +1169,7 @@ export async function activateCatalogModel(category: ModelCategory, id: string):
   if (!m) throw new Error(`未知模型 ${id}`);
   if (m.backend === "local" && !m.downloaded) throw new Error(`${m.displayName} 尚未下载，请先下载再切换`);
   if (category === "ocr") mock.settings.ocr.activeModelId = id;
+  else if (category === "search") mock.settings.search = { activeModelId: id };
   else if (id === "openai-compat-tts" || id === "volcano-tts" || id === "deepseek-tts") mock.settings.assistant.ttsModelId = id;
   else {
     mock.settings.assistant.speechEngine = id === "kokoro-zh" ? "kokoro" : "system";

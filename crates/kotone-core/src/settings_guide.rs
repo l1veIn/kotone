@@ -69,6 +69,13 @@ const fn f(
 use Effect::{Immediate as NOW, NextLaunch as NEXT, RestartApp as APP, RestartVoice as VOICE};
 
 const NONE: &[(&str, &str)] = &[];
+const EFFORTS: &[(&str, &str)] = &[
+    ("", "服务商默认"),
+    ("none", "不思考"),
+    ("low", "低"),
+    ("high", "高"),
+    ("max", "最高"),
+];
 const RECORD_SOUNDS: &[(&str, &str)] = &[
     ("rise", "上扬"),
     ("ding-up", "叮（升）"),
@@ -218,6 +225,7 @@ pub const FIELDS: &[Field] = &[
         NOW,
     ),
     f("agent.hiddenAutomations", "不交给琴音的自动化", "自动化", "已保存自动化的 ID 数组。", NONE, NOW),
+    f("search.activeModelId", "联网搜索", "设置 → 模型 → 联网搜索", "琴音的 web.search / web.fetch 用哪个后端：deepseek-search（DeepSeek 搜索与抓取接口，每次成功 0.005 元）或 off（不联网）；空 = 自动（有 DeepSeek 连接就用 DeepSeek）。用 models.activate {category: search} 选择。", NONE, NOW),
     f("ocr.activeModelId", "文字识别模型", "设置 → 模型 → 文字识别", "看游戏聊天用。用 models.activate {category: ocr} 选择。", NONE, NOW),
     // ---- 系统与其他 ----
     f("history.mode", "历史记录", "历史记录", "", &[("capped", "保留最近若干条"), ("keep-all", "全部保留"), ("off", "不记录")], NOW),
@@ -231,6 +239,9 @@ pub const FIELDS: &[Field] = &[
     f("ui.updatePromptDisabled", "不再提醒升级", "关于", "", NONE, NOW),
     f("agent.identity.name", "琴音的名字", "琴音 → 她是谁", "空 = 默认“琴音”（或工作区 IDENTITY.md 里的名字）。改了以后她会用新名字介绍自己，界面上也跟着变；唤醒词要在语音唤醒里另外设。", NONE, NOW),
     f("agent.matchRecap", "对局复盘", "琴音 → 设置 → 权限", "true（默认）：游戏退出时，琴音把这一局的对话、提醒、自动化整理成复盘，写进这个游戏的记忆，并在聊天里留一条；只整理玩了 3 分钟以上、而且这一局里叫过她或跑过自动化的。每次一次 AI 调用。", NONE, NOW),
+    f("agent.safetyCheck", "DeepSeek 内容审核", "琴音 → 设置 → 权限", "true（默认）：用 DeepSeek 时请求带 safety_check，审核没通过的回答会撤回并说明；审核不另收费。只对 DeepSeek 生效。", NONE, NOW),
+    f("agent.gameEffort", "游戏里的思考强度", "琴音 → 设置 → 权限", "只对 DeepSeek 生效。空 = 服务商默认（high）。实测游戏问题上 high / low / none 速度差不多。", EFFORTS, NOW),
+    f("agent.chatEffort", "聊天窗口里的思考强度", "琴音 → 设置 → 权限", "只对 DeepSeek 生效。空 = 服务商默认（high）。", EFFORTS, NOW),
     f("agent.compactAtTokens", "对话多长时整理成摘要", "琴音 → 设置 → AI 连接", "一段对话估到这么多 token 时，琴音把较早的部分整理成摘要、之后只看摘要和最近几轮（整理那一次多花一点，之后又能命中缓存）。默认 64000；0 = 不整理。", NONE, NOW),
     f("agent.subagents.model", "子会话用的模型", "琴音 → 设置 → AI 连接", "琴音派出的子会话（例如同传）用的模型 id；空 = 和琴音同一个模型。建议填同一家服务商更快更便宜的模型。", NONE, NOW),
     f("voiceChat.enabled", "游戏语音（琴音替你说话）", "琴音 → 设置 → 游戏语音", "开启后把你的麦克风和琴音“说给队友”的话一起转进虚拟麦克风（VB-CABLE 的 CABLE Output），游戏里的麦克风选 CABLE Output 队友就能听到。需要先装 VB-CABLE（voice_chat.install）。Kotone 没运行时队友听不到你。", NONE, NOW),

@@ -10,6 +10,7 @@
 | `computer_use_e2e.py` | `game.look` / `game.act`（ADR 019）的真机测试：坐标点击、按编号点击、按键 / 组合键 / 滚轮 / 按住、相对移动、旧编号被拒、玩家按 Esc 停下（Esc 不传给游戏、别的键不停）并松开按住的键、琴音自己的 Esc 照常、被别的窗口盖住不点、窗口尺寸变了作废。隔离目录 `target/cu-e2e/`；`init` 写隔离配置，`setup-ocr` 在隔离目录里下载并启用文字识别模型。**前台不是测试窗口、也不是终端时直接退出**（2026-11-17 测试开始时前台是用户的英雄联盟对局，`fg.ps1` 的 Alt 进了游戏） |
 | `kotone.py` | 对隔离实例调用工具（`call` / `runs` / `wait`）和 UI 自动化（`ui`） |
 | `real_deepseek.py` | 用玩家真实的 DeepSeek Key 测试：从 Windows 凭据库（`kotone` / `connection:<id>`）只读进内存，经 `tools call … --args-file -` 的标准输入交给隔离实例（它有自己的凭据空间），**不打印、不写文件、不进命令行**；测完 `delete_connection` 删掉。拿不到时设环境变量 `KOTONE_REAL_DEEPSEEK_KEY` |
+| `search_real.py` | 真实 DeepSeek：联网搜索（ADR 026）。三种思考强度各开一段对话问英雄联盟版本、海克斯大乱斗强势英雄、寒冰的强化，再在游戏内问一句蒙多出装；逐轮打印用时、搜了几次、token、费用和回答开头；检查 DeepSeek 起了标题、内容审核没拦、账本里有联网搜索 |
 | `cache_real.py` | 真实 DeepSeek：聊天 5 轮 + 游戏内 4 次（同一段对话），逐个请求打印输入 / 命中 / 命中率 / 费用；再把压缩阈值调到刚好超过，看整理那一次和之后的命中率，以及整理后还记不记得早先的事 |
 | `speech_preview_real.py` | 真实 DeepSeek 语音的「试听语音」，用 WASAPI 回环量扬声器的音量（`PLAYER_LIKE=1` 用玩家自己的语音设置） |
 | `happy_path_real.py` | 真实 DeepSeek 的 happy path：只给 DeepSeek Key → 琴音读《Kotone 配置》技能把识别、文字识别换成 DeepSeek → 呼叫琴音说一句（VB-CABLE）→ DeepSeek 识别、DeepSeek 语音回答 → 测试窗口用 DeepSeek OCR 认字（切前台前先确认前台不是游戏） |

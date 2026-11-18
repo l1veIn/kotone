@@ -35,6 +35,8 @@ pub enum UsageKind {
     Asr,
     /// 在线文字识别（按次 / token）。
     Ocr,
+    /// 联网搜索、读网页（按次，ADR 026）。
+    Search,
     /// 其余单次调用（旧的单次陪玩、文字处理的 AI 润色等）。
     Other,
 }
@@ -48,6 +50,7 @@ impl UsageKind {
             Self::Tts => "语音合成",
             Self::Asr => "语音识别",
             Self::Ocr => "文字识别",
+            Self::Search => "联网搜索",
             Self::Other => "其他",
         }
     }
@@ -150,6 +153,8 @@ pub const DEEPSEEK_TTS_PER_10K_CHARS: f64 = 1.5;
 pub const DEEPSEEK_ASR_PER_HOUR: f64 = 0.39;
 /// DeepSeek 文字识别：人民币 / 千页（只算识别成功的页）。
 pub const DEEPSEEK_OCR_PER_1K_PAGES: f64 = 1.5;
+/// 搜索与抓取接口：每次成功请求 0.005 元（5 元 / 1000 次），https://api-docs.deepseek.com/zh-cn/guides/search
+pub const DEEPSEEK_SEARCH_PER_CALL: f64 = 0.005;
 
 /// DeepSeek 的高峰时段（北京时间工作日 9–12 点、14–18 点；周末全天空闲）。
 /// 法定节假日也是空闲，但离线判断不了，按工作日算（费用偏高一点，界面说明是估算）。
@@ -362,6 +367,24 @@ pub fn record_ocr(provider: &str, model: &str, pages: u64) {
         model: model.to_string(),
         images: Some(pages),
         cost: deepseek.then(|| pages as f64 / 1_000.0 * DEEPSEEK_OCR_PER_1K_PAGES),
+        currency: if deepseek {
+            "CNY".into()
+        } else {
+            String::new()
+        },
+        ..Default::default()
+    });
+}
+
+/// 联网搜索或读网页成功一次（DeepSeek 搜索与抓取接口：每 1000 次成功请求 5 元）。
+pub fn record_search(provider: &str, what: &str) {
+    let deepseek = provider == "deepseek";
+    record(UsageRecord {
+        at_ms: now(),
+        kind: Some(UsageKind::Search),
+        provider: provider.to_string(),
+        model: what.to_string(),
+        cost: deepseek.then_some(DEEPSEEK_SEARCH_PER_CALL),
         currency: if deepseek {
             "CNY".into()
         } else {

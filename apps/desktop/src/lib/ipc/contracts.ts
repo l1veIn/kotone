@@ -164,6 +164,8 @@ export interface Settings {
   toolService: ToolServiceConfig;
   /** 当前 OCR 模型（统一模型清单 category=ocr；空 = 自动选第一个已安装的本地模型） */
   ocr: OcrConfig;
+  /** 联网搜索（统一模型清单 category=search；空 = 自动：有 DeepSeek 连接就用 DeepSeek；off = 关）。旧配置没有时按默认补齐。 */
+  search?: { activeModelId: string };
   /** 内置琴音 Agent（config.json `agent` 段；旧配置没有这一段时后端按默认补齐）。 */
   agent?: AgentConfig;
   /** 游戏语音（ADR 020）：琴音用虚拟麦克风替你在游戏语音里说话；旧配置没有时后端按默认（关）补齐。 */
@@ -287,6 +289,11 @@ export interface AgentConfig {
   roleId?: string;
   /** 游戏退出时自动复盘（默认开）。 */
   matchRecap?: boolean;
+  /** DeepSeek 内容审核（默认开；ADR 026）。 */
+  safetyCheck?: boolean;
+  /** 游戏里 / 聊天窗口里的思考强度（只对 DeepSeek）：low / high / max / none；空 = 服务商默认。 */
+  gameEffort?: string;
+  chatEffort?: string;
 }
 
 /** 语音唤醒设置（config.json `assistant.wake`）。 */
@@ -578,7 +585,7 @@ export interface ModelConfigField {
 }
 
 /** 统一模型清单的类别：asr 语音识别 / ocr 文字识别 / tts 语音合成 */
-export type ModelCategory = "asr" | "ocr" | "tts";
+export type ModelCategory = "asr" | "ocr" | "tts" | "search";
 
 export interface CatalogFile {
   name: string;

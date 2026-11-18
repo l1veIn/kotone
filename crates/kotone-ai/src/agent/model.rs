@@ -363,6 +363,51 @@ impl ModelClient for OpenAiModel {
     }
 }
 
+/// 内置 Agent 用的模型：DeepSeek 官方接口走自己的客户端（ADR 026），其余经 rig（ADR 015）。
+pub enum AgentModel {
+    Rig(Box<OpenAiModel>),
+    DeepSeek(super::deepseek::DeepSeekModel),
+}
+
+impl AgentModel {
+    pub fn for_connection(connection: ResolvedConnection) -> Self {
+        if super::deepseek::is_deepseek(&connection) {
+            Self::DeepSeek(super::deepseek::DeepSeekModel::new(connection))
+        } else {
+            Self::Rig(Box::new(OpenAiModel::new(connection)))
+        }
+    }
+
+    pub fn set_max_tokens(&mut self, max_tokens: u64) {
+        match self {
+            Self::Rig(m) => m.max_tokens = max_tokens,
+            Self::DeepSeek(m) => m.max_tokens = max_tokens,
+        }
+    }
+
+    /// DeepSeek 专有的选项；别的服务商返回 None。
+    pub fn deepseek(&mut self) -> Option<&mut super::deepseek::DeepSeekModel> {
+        match self {
+            Self::DeepSeek(m) => Some(m),
+            Self::Rig(_) => None,
+        }
+    }
+}
+
+impl ModelClient for AgentModel {
+    async fn complete(
+        &self,
+        request: &ModelRequest,
+        on_delta: &(dyn Fn(Delta<'_>) + Send + Sync),
+        cancel: &CancellationToken,
+    ) -> Result<ModelReply, AiError> {
+        match self {
+            Self::Rig(m) => m.complete(request, on_delta, cancel).await,
+            Self::DeepSeek(m) => m.complete(request, on_delta, cancel).await,
+        }
+    }
+}
+
 /// Kotone 工具名 ↔ 接口里的函数名。
 #[derive(Debug, Default)]
 pub struct NameMap {
@@ -371,7 +416,7 @@ pub struct NameMap {
 }
 
 impl NameMap {
-    fn build(request: &ModelRequest) -> Self {
+    pub(super) fn build(request: &ModelRequest) -> Self {
         let mut map = Self::default();
         for tool in &request.tools {
             map.insert(&tool.name);

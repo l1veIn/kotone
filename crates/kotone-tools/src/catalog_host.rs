@@ -179,7 +179,7 @@ fn open(description: &str) -> Value {
 
 /// 统一模型清单的类别参数：不传 = asr（与加入类别之前完全相同）。
 fn category() -> Value {
-    json!({"type": "string", "enum": ["asr", "ocr", "tts"], "default": "asr", "description": "模型类别：asr 语音识别（缺省）/ ocr 文字识别 / tts 语音合成"})
+    json!({"type": "string", "enum": ["asr", "ocr", "tts", "search"], "default": "asr", "description": "模型类别：search 联网搜索（琴音的 web.search 用哪个，ADR 026）；asr 语音识别（缺省）/ ocr 文字识别 / tts 语音合成"})
 }
 
 fn id(description: &str) -> Value {
