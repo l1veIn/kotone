@@ -17,7 +17,7 @@ test("voice wake can be enabled, its model downloaded and the phrase changed", a
 
   await page.getByLabel("唤醒词").click();
   await page.getByRole("option", { name: "你好琴音" }).click();
-  await expect(page.getByTestId("assistant-settings-tab")).toContainText("说“你好琴音”叫醒琴音");
+  await expect(page.getByTestId("assistant-settings-tab")).toContainText("说“你好琴音”叫醒琴音，接着说要做的事。");
   await page.getByTestId("wake-enabled").scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("wake-settings.png") });
 

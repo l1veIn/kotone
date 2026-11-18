@@ -200,7 +200,7 @@ pub fn switch(app: &AppHandle, id: &str) -> Result<Value, String> {
         .role(id)
         .ok_or_else(|| format!("没有角色「{id}」"))?;
     if crate::agent::is_running(app) {
-        return Err("琴音正在回答，等她说完再换角色".into());
+        return Err("正在回答，等说完再换角色".into());
     }
     sync_identity(app, &role)?;
     crate::agent::start_new_conversation(app)?;

@@ -2,6 +2,7 @@
   // 「自动化」的统一列表：每个自动化一行，像播放器一样 ▶ 运行、■ 停止；带定时的显示“每天 08:00 · 下次 …”；
   // 点开看详情（说明、参数、定时、最近的执行、编辑 / 删除 / 交给琴音）。
   // 不属于任何已保存自动化的执行（琴音设的提醒、她临时写的程序）排在最上面，也能停。
+  import { companionName } from "$lib/stores/companion";
   import { ChevronRight, CircleAlert, Clock, LoaderCircle, MessageSquare, Play, Plus, Square, Zap } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import { Switch } from "$lib/components/ui/switch";
@@ -33,7 +34,7 @@
   let confirmDelete = $state("");
   let offering = $state("");
 
-  const by: Record<Automation["createdBy"], string> = { user: "你", companion: "陪玩", agent: "琴音" };
+  const by: Record<Automation["createdBy"], string> = $derived({ user: "你", companion: "陪玩", agent: $companionName });
   const hiddenFromAgent = $derived(new Set($settingsStore?.agent?.hiddenAutomations ?? []));
   const open = (r: AutomationRun) => r.status === "pending" || r.status === "running";
   const automationOf = (r: AutomationRun) => (r.action.kind === "program" ? r.action.automationId ?? null : null);
@@ -102,7 +103,7 @@
     try {
       const hiddenAutomations = await agentSetAutomationHidden(item.id, !offered);
       settingsStore.update((s) => s && { ...s, agent: { permissions: { mode: "default", rules: {} }, inGame: true, ...s.agent, hiddenAutomations } });
-      toast(true, offered ? `「${item.name}」交给琴音使用` : `「${item.name}」不再交给琴音`);
+      toast(true, offered ? `「${item.name}」交给${$companionName}使用` : `「${item.name}」不再交给${$companionName}`);
     } catch (error) { toast(false, `保存失败：${errText(error)}`); }
     finally { offering = ""; }
   }
@@ -116,7 +117,7 @@
     <div class="mb-2.5 flex items-end justify-between gap-3 px-1">
       <div>
         <h2 class="m-0 text-sm font-semibold text-foreground">全部自动化 · {automations.length}</h2>
-        <p class="mt-1 mb-0 text-xs text-muted-foreground">▶ 运行、■ 停止；带“定时”的到点自己运行。打开“交给琴音”的，她也能帮你运行。</p>
+        <p class="mt-1 mb-0 text-xs text-muted-foreground">▶ 运行、■ 停止；带“定时”的到点自己运行。打开“交给{$companionName}”的，她也能帮你运行。</p>
       </div>
       <Button size="sm" onclick={() => { editing = "new"; }} data-testid="automation-new"><Plus class="size-3.5" />新建</Button>
     </div>
@@ -200,7 +201,7 @@
                 <dt class="text-muted-foreground">参数</dt>
                 <dd class="m-0">{item.params.length ? item.params.map((p) => p.label || p.name).join("、") : "无"}</dd>
                 <dt class="text-muted-foreground">定时</dt>
-                <dd class="m-0">{#if item.schedule}{item.schedule.enabled ? describeSchedule(item.schedule.cron) : "已暂停"}（{item.schedule.cron}）{:else}不定时，手动或让琴音运行{/if}</dd>
+                <dd class="m-0">{#if item.schedule}{item.schedule.enabled ? describeSchedule(item.schedule.cron) : "已暂停"}（{item.schedule.cron}）{:else}不定时，手动或让{$companionName}运行{/if}</dd>
                 <dt class="text-muted-foreground">创建</dt>
                 <dd class="m-0">{by[item.createdBy]} · {new Date(item.createdAtMs).toLocaleDateString()}</dd>
               </dl>
@@ -213,8 +214,8 @@
               <div class="flex flex-wrap items-center gap-2 pt-1">
                 <label class="mr-auto flex cursor-pointer items-center gap-1.5 text-muted-foreground">
                   <Switch size="sm" data-testid="saved-automation-agent" checked={!hiddenFromAgent.has(item.id)} disabled={offering === item.id}
-                    aria-label={`把「${item.name}」交给琴音使用`} onCheckedChange={(checked) => void setOffered(item, checked)} />
-                  交给琴音
+                    aria-label={`把「${item.name}」交给${$companionName}使用`} onCheckedChange={(checked) => void setOffered(item, checked)} />
+                  交给{$companionName}
                 </label>
                 <Button variant="outline" size="sm" onclick={() => edit(item)} data-testid="automation-edit">编辑 / 定时</Button>
                 <Button variant={confirmDelete === item.id ? "destructive" : "ghost"} size="sm"

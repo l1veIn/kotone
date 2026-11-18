@@ -155,7 +155,7 @@ pub fn workspace() -> Workspace {
 
 fn runtime(app: &AppHandle) -> Result<tauri::State<'_, AgentRuntime>, String> {
     app.try_state::<AgentRuntime>()
-        .ok_or_else(|| "琴音尚未就绪".to_string())
+        .ok_or_else(|| "还没准备好".to_string())
 }
 
 fn store(app: &AppHandle) -> Result<Arc<ConversationStore>, String> {
@@ -226,7 +226,9 @@ pub fn send(app: &AppHandle, outgoing: Outgoing) -> Result<Value, String> {
         return Ok(json!({"status": "answered"}));
     }
     // 语音说“停下”：立刻停下正在进行的操作和这一轮（ADR 019 决定 7），不当成插话排队。
-    if matches!(outgoing.source.as_str(), "wake-voice" | "voice") && is_stop_command(&text) {
+    if matches!(outgoing.source.as_str(), "wake-voice" | "voice")
+        && is_stop_command(&text, &settings(app).agent.identity.name)
+    {
         let acting = crate::computer_use::stop_all(app, "语音“停下”");
         let children = stop_all_children(app, "语音“停下”");
         let running = stop(app)?;
@@ -888,9 +890,9 @@ pub fn submit_from_assistant(
         },
     )?;
     Ok(match result["status"].as_str() {
-        Some("steered") => "琴音正在处理，已把这句话交给她".into(),
-        Some("answered") => "已回答琴音".into(),
-        _ => "已交给琴音".into(),
+        Some("steered") => "正在处理，已把这句话交给她".into(),
+        Some("answered") => "已回答".into(),
+        _ => "已交给她".into(),
     })
 }
 
@@ -1178,7 +1180,7 @@ impl Asker for DesktopAsker {
             tauri::async_runtime::spawn(async move {
                 let _ = crate::assistant::deliver_text(
                     &app,
-                    "没听清，请到琴音窗口里点允许或拒绝。".into(),
+                    "没听清，请到聊天窗口里点允许或拒绝。".into(),
                     vec![DeliveryKind::Voice],
                 )
                 .await;
@@ -1212,14 +1214,19 @@ impl Drop for AskGuard {
     }
 }
 
-/// 玩家说的是不是“停下”（整句只有停止的意思，去掉标点与语气词）。
-fn is_stop_command(text: &str) -> bool {
+/// 玩家说的是不是“停下”（整句只有停止的意思，去掉标点、语气词和开头叫的名字：当前角色名或琴音）。
+fn is_stop_command(text: &str, name: &str) -> bool {
     let core: String = text
         .chars()
         .filter(|c| !c.is_ascii_punctuation() && !"，。！？、…~～ 　".contains(*c))
         .collect();
+    let name = name.trim();
+    let core = if !name.is_empty() && core.starts_with(name) {
+        &core[name.len()..]
+    } else {
+        core.trim_start_matches("琴音")
+    };
     let core = core
-        .trim_start_matches("琴音")
         .trim_end_matches(['吧', '啊', '呀', '了', '吗'])
         .to_lowercase();
     matches!(
@@ -1231,7 +1238,7 @@ fn is_stop_command(text: &str) -> bool {
 // ---------- 对话管理 ----------
 
 pub fn stop(app: &AppHandle) -> Result<bool, String> {
-    crate::computer_use::stop_all(app, "停止琴音");
+    crate::computer_use::stop_all(app, "手动停止");
     crate::voice_chat::hush(app);
     let rt = runtime(app)?;
     let inner = rt.inner.lock().unwrap();
@@ -1295,7 +1302,7 @@ pub fn start_new_conversation(app: &AppHandle) -> Result<(), String> {
 
 fn ensure_idle(app: &AppHandle) -> Result<(), String> {
     if runtime(app)?.inner.lock().unwrap().running.is_some() {
-        Err("琴音正在回答，请先停止".into())
+        Err("正在回答，请先停止".into())
     } else {
         Ok(())
     }
@@ -2122,16 +2129,17 @@ mod tests {
             "停下",
             "停下！",
             "琴音，停下吧",
+            "大肥鱼，停下",
             "别动了",
             "Stop.",
             "停一下",
             "住手",
         ] {
-            assert!(is_stop_command(t), "{t}");
+            assert!(is_stop_command(t, "大肥鱼"), "{t}");
         }
         for t in ["停下来帮我看看地图", "不要停", "帮我打开背包", "停车场在哪"]
         {
-            assert!(!is_stop_command(t), "{t}");
+            assert!(!is_stop_command(t, "大肥鱼"), "{t}");
         }
     }
 

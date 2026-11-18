@@ -5,6 +5,7 @@
    * ApiKeyInput，MIT）：上面是“你的连接”卡片列表（密钥状态点、琴音在用、能力自检），下面是按分组展示的
    * 预置提供商；选中一家后在编辑器里改地址、模型（列表里选或手填）、密钥（只写）。Kotone 自己的实现。
    */
+  import { companionName } from "$lib/stores/companion";
   import { onMount } from "svelte";
   import {
     Check, CircleAlert, ExternalLink, KeyRound, LoaderCircle, Plus, Search, ShieldCheck, Sparkles, Trash2,
@@ -137,9 +138,9 @@
   async function useForAgent(id: string) {
     try {
       settingsStore.set(await updateSettings({ assistant: { connectionId: id } }));
-      toast(true, "已设为琴音的连接");
+      toast(true, `已设为${$companionName}的连接`);
     } catch (error) {
-      toast(false, `没能设为琴音的连接：${errText(error)}`);
+      toast(false, `没能设为${$companionName}的连接：${errText(error)}`);
     }
   }
 
@@ -184,9 +185,9 @@
   <div class="flex items-start gap-3 rounded-2xl border border-primary/25 bg-primary/6 px-4 py-3.5">
     <Sparkles class="mt-0.5 size-4 shrink-0 text-primary" />
     <div class="min-w-0 text-[13px] leading-relaxed">
-      <p class="m-0 font-medium text-foreground">给琴音用的主流大模型</p>
+      <p class="m-0 font-medium text-foreground">给{$companionName}用的主流大模型</p>
       <p class="mt-0.5 mb-0 text-muted-foreground">
-        选一家主流大模型、填好 API key，设为琴音的连接就能用；想确认能不能连上，点<strong class="font-medium text-foreground">测试连接</strong>（读一次服务商的模型列表，不花 token）。
+        选一家、填好 API key，设为{$companionName}的连接就能用；想确认能不能连上，点<strong class="font-medium text-foreground">测试连接</strong>（读一次模型列表，不花 token）。
         文字处理的润色、翻译也能用这里的连接。API key 存进系统凭据库，不会写入 config.json。
       </p>
     </div>
@@ -195,7 +196,7 @@
   {#if loading}
     <p class="text-sm text-muted-foreground">正在读取连接…</p>
   {:else}
-    <SettingsSection title="你的连接" description="琴音使用其中一条；也可以在「琴音陪玩 → 设置」里切换。" flush testid="connections-list">
+    <SettingsSection title="你的连接" description={`${$companionName}用其中一条。`} flush testid="connections-list">
       {#if connections.length === 0}
         <div class="flex flex-col items-center gap-1 px-4 py-8 text-center">
           <KeyRound class="mb-1 size-5 text-muted-foreground" />
@@ -216,7 +217,7 @@
             <div class="min-w-0 flex-1">
               <p class="m-0 flex flex-wrap items-center gap-2 text-sm font-medium text-foreground">
                 <span class="truncate">{connection.displayName}</span>
-                {#if forAgent}<span class="rounded-md bg-primary/15 px-1.5 py-px text-[11px] font-medium text-primary">琴音在用</span>{/if}
+                {#if forAgent}<span class="rounded-md bg-primary/15 px-1.5 py-px text-[11px] font-medium text-primary">{$companionName}在用</span>{/if}
                 <span class="rounded-md border border-hairline px-1.5 py-px text-[11px] font-normal text-muted-foreground">{groupLabel(preset?.group)}</span>
               </p>
               <p class="mt-0.5 mb-0 flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
@@ -229,7 +230,7 @@
             </div>
             <div class="flex shrink-0 items-center gap-1">
               {#if !forAgent}
-                <Button size="sm" variant="outline" data-testid="connection-use" disabled={checking} onclick={() => void useForAgent(connection.id)}>设为琴音的连接</Button>
+                <Button size="sm" variant="outline" data-testid="connection-use" disabled={checking} onclick={() => void useForAgent(connection.id)}>设为{$companionName}的连接</Button>
               {/if}
               <Button size="sm" variant={forAgent ? "outline" : "ghost"} data-testid="connection-self-check" disabled={checking || !connection.hasApiKey} onclick={() => void runCheck(connection.id)}>
                 {#if cardChecking}<LoaderCircle class="size-3.5 animate-spin" />{:else}<ShieldCheck class="size-3.5" />{/if}测试连接
@@ -333,7 +334,7 @@
               {/each}
             </div>
           {/if}
-          <p class="m-0 text-[11px] text-muted-foreground">琴音需要能稳定调用工具的模型；拿不准就用默认的那个。</p>
+          <p class="m-0 text-[11px] text-muted-foreground">要选能稳定调用工具的模型；拿不准就用默认的。</p>
         </div>
         <div class="space-y-1.5">
           <span class="flex items-center justify-between text-xs font-medium text-muted-foreground">
@@ -349,7 +350,7 @@
         {#if editing.id !== agentConnectionId}
           <label class="flex items-start gap-2 rounded-xl bg-muted/50 px-3 py-2.5 text-xs">
             <input type="checkbox" class="mt-0.5 accent-[var(--color-primary)]" bind:checked={useAfterSave} data-testid="connection-use-after-save" />
-            <span><span class="font-medium text-foreground">保存后设为琴音的连接</span></span>
+            <span><span class="font-medium text-foreground">保存后设为{$companionName}的连接</span></span>
           </label>
         {/if}
         <Dialog.Footer>
@@ -365,7 +366,7 @@
   <Dialog.Content class="ui-scope" data-testid="connection-delete-dialog">
     <Dialog.Header>
       <Dialog.Title>删除这条连接？</Dialog.Title>
-      <Dialog.Description>「{confirmDelete?.displayName}」和它的密钥会从本机删除。{confirmDelete?.id === agentConnectionId ? "琴音正在用它，删除后要重新选一条。" : ""}</Dialog.Description>
+      <Dialog.Description>「{confirmDelete?.displayName}」和它的密钥会从本机删除。{confirmDelete?.id === agentConnectionId ? `${$companionName}正在用它，删除后要重新选一条。` : ""}</Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
       <Button variant="outline" size="sm" disabled={saving} onclick={() => { confirmDelete = null; }}>取消</Button>

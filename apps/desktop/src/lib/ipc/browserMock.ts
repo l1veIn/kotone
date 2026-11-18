@@ -1074,12 +1074,12 @@ const mockCatalog: CatalogModel[] = [
   },
   {
     category: "tts", id: "deepseek-tts", engineId: "deepseek", displayName: "DeepSeek 语音合成（在线，默认）",
-    description: "DeepSeek 官方语音，默认用琴音的 DeepSeek 连接与密钥，声音海星（女声）/暗潮（男声）；按字数计费，每次播报都会把文字发给 DeepSeek，相同的话复用缓存；不支持调语速",
+    description: "DeepSeek 官方语音，默认用 AI 连接里的 DeepSeek 与密钥，声音海星（女声）/暗潮（男声）；按字数计费，每次播报都会把文字发给 DeepSeek，相同的话复用缓存；不支持调语速",
     sizeBytes: 0, backend: "remote", downloaded: true,
     ready: false, state: "not-configured", reason: "还没有 DeepSeek 连接：请在「高级 → API 连接」里添加 DeepSeek", active: false,
     recommended: true, languages: ["zh"], dataEgress: "text",
     configSchema: [
-      { key: "connection", label: "DeepSeek 连接（留空 = 用琴音正在用的 DeepSeek 连接）", kind: "connection", default: "", options: [], required: false },
+      { key: "connection", label: "DeepSeek 连接（留空 = 用 AI 连接里的 DeepSeek）", kind: "connection", default: "", options: [], required: false },
       { key: "voice", label: "声音", kind: "enum", default: "stella", options: [{ value: "stella", label: "海星（女声）" }, { value: "tide", label: "暗潮（男声）" }], required: true },
     ],
     apiKeyUrl: "https://platform.deepseek.com/api_keys", license: "服务商条款", files: [],
@@ -1185,7 +1185,7 @@ export async function openCatalogModelDir(category: ModelCategory, id: string): 
 
 export async function companionSelfCheck(): Promise<CompanionCheck> {
   const assistant = mock.settings.assistant;
-  if (!assistant.connectionId) throw new Error("还没有给琴音选 AI 连接：请在「高级 → API 连接」里设一条");
+  if (!assistant.connectionId) throw new Error("还没有选 AI 连接：请在「设置 → API 连接」里设一条");
   return connectionSelfCheck(assistant.connectionId);
 }
 
@@ -1225,7 +1225,7 @@ export async function companionStatus(): Promise<CompanionStatus> {
   const check = assistant.companion.check ?? null;
   const ocr = mock.settings.ocr.activeModelId || null;
   const reason = !assistant.connectionId
-    ? "还没有给琴音选 AI 连接：请在「高级 → API 连接」里添加一条，并设为琴音的连接"
+    ? "还没有选 AI 连接：请在「设置 → API 连接」里添加一条，并设为在用的连接"
     : !ocr
           ? "看游戏聊天需要文字识别模型：请在「高级 → 模型 → 文字识别」下载并选择一个"
           : null;

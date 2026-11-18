@@ -2,6 +2,7 @@
   // 「琴音 → 设置 → 琴音 Agent」：游戏内入口、权限模式与按工具的规则（config.json `agent` 段）。
   // 工具清单来自后端 agent_tools（含分组、默认规则与说明）；权限要整体替换（agent_set_permissions），
   // inGame 用普通设置补丁。
+  import { companionName } from "$lib/stores/companion";
   import { onMount } from "svelte";
   import { ChevronRight } from "@lucide/svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
@@ -89,13 +90,13 @@
 </script>
 
 <div class="space-y-6" data-testid="agent-settings">
-  <SettingsSection title="琴音 Agent" description="琴音能用 Kotone 的全部工具。这里决定游戏里的话交给谁，以及哪些事直接做、哪些先问你。">
-    <SettingsRow label="游戏内交给琴音" description="呼叫琴音、唤醒词与快捷指令里的“一句话”交给琴音（多步、能用全部工具）；关闭时用旧的单次陪玩。">
+  <SettingsSection title="Agent" description="游戏里的话交给谁，以及哪些事直接做、哪些先问你。">
+    <SettingsRow label={`游戏内交给${$companionName}`} description="呼叫、唤醒词和快捷指令里的“一句话”交给她（多步、能用全部工具）；关掉时用旧的单次陪玩。">
       {#snippet control()}
-        <Switch data-testid="agent-in-game" bind:checked={() => inGame, (checked) => void patchSettings({ agent: { inGame: checked } }, checked ? "游戏内入口交给琴音" : "游戏内入口改用单次陪玩")} aria-label="游戏内交给琴音" />
+        <Switch data-testid="agent-in-game" bind:checked={() => inGame, (checked) => void patchSettings({ agent: { inGame: checked } }, checked ? `游戏内入口交给${$companionName}` : "游戏内入口改用单次陪玩")} aria-label={`游戏内交给${$companionName}`} />
       {/snippet}
     </SettingsRow>
-    <SettingsRow label="执行中先接一句" description="游戏里交给琴音后 1.5 秒还没出声，先用语音说一句“好，我看看”，免得干等。">
+    <SettingsRow label="执行中先接一句" description="1.5 秒还没出声，先说一句“好，我看看”，免得干等。">
       {#snippet control()}
         <Switch data-testid="agent-progress-speech" bind:checked={() => progressSpeech, (checked) => void patchSettings({ agent: { progressSpeech: checked } }, checked ? "执行中会先接一句" : "执行中不再接话")} aria-label="执行中先接一句" />
       {/snippet}
@@ -134,7 +135,7 @@
         按工具单独设置
         <span class="ml-1 text-xs font-normal text-muted-foreground">（{ruleCount} 条自定义）</span>
       </summary>
-      <p class="mt-1.5 mb-3 px-1 text-xs leading-relaxed text-muted-foreground">“按默认”由工具的副作用决定。已保存的自动化是否交给琴音，在「自动化 → 已保存」里逐个设置。</p>
+      <p class="mt-1.5 mb-3 px-1 text-xs leading-relaxed text-muted-foreground">“按默认”由工具的副作用决定。已保存的自动化给不给她用，在「自动化」里逐个设。</p>
       {#if toolsError}<p role="alert" class="mb-3 px-1 text-xs text-destructive">{toolsError}</p>{/if}
       <div class="space-y-4">
         {#each groups as group (group.group)}

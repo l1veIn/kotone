@@ -68,7 +68,7 @@ test("calling 琴音 shows that she listens until you stop talking (no walkie-ta
     const { appState } = await import("/src/lib/stores/state.ts");
     appState.update((state) => ({ ...state, purpose: "assistant", state: "listening", partialText: "" }));
   });
-  await expect(page.getByText("在听 · 说完自动交给琴音（再按 ~ 立刻提交）", { exact: true })).toBeVisible();
+  await expect(page.getByText("在听 · 说完自动提交（再按 ~ 立刻提交）", { exact: true })).toBeVisible();
   await expect(page.getByText(/松开/)).toHaveCount(0);
   await page.evaluate(async () => {
     const { appState } = await import("/src/lib/stores/state.ts");
@@ -121,7 +121,7 @@ test("assistant shares connections and saves voice/delivery settings with an ind
   const talk = page.getByTestId("assistant-settings-tab");
   await talk.getByTestId("hotkey-capture-assistant").click();
   await page.keyboard.press("CapsLock");
-  await expect(page.getByText("呼叫琴音热键与录制热键（CapsLock）冲突，请换一个", { exact: true })).toBeVisible();
+  await expect(page.getByText("呼叫热键与录制热键（CapsLock）冲突，请换一个", { exact: true })).toBeVisible();
   await talk.getByTestId("hotkey-capture-assistant").click();
   await page.keyboard.press("Control+F9");
   await expect(talk.getByTestId("hotkey-input-assistant")).toHaveValue("Ctrl+F9");
@@ -148,7 +148,7 @@ test("assistant shares connections and saves voice/delivery settings with an ind
   const named = page.getByTestId("hotkey-input-post-process-toggle");
   await named.fill("Ctrl+F9");
   await named.press("Enter");
-  await expect(page.getByText("文字处理开关热键与呼叫琴音热键（Ctrl+F9）冲突，请换一个", { exact: true })).toBeVisible();
+  await expect(page.getByText("文字处理开关热键与呼叫热键（Ctrl+F9）冲突，请换一个", { exact: true })).toBeVisible();
 });
 
 test("settings modal traps Tab and restores focus after Escape", async ({ page }) => {

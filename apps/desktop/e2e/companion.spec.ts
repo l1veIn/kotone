@@ -18,7 +18,7 @@ test("choosing a connection is enough: no self-check gate", async ({ page }) => 
   await page.getByTestId("settings-nav-assistant").click();
   await page.getByTestId("assistant-nav-settings").click();
   const companion = page.getByTestId("companion-settings");
-  await expect(companion.getByTestId("companion-status")).toContainText("还没有给琴音选 AI 连接");
+  await expect(companion.getByTestId("companion-status")).toContainText("还没有选 AI 连接");
   // AI 连接在「琴音 → 设置」，状态在「交流」（ADR 023）
   await page.getByTestId("settings-nav-assistant").click();
   await page.getByTestId("assistant-nav-settings").click();

@@ -23,7 +23,7 @@
     if (run.action.kind === "speak") {
       return run.action.delivery.map((kind) => (kind === "voice" ? "语音" : "弹幕")).join(" + ");
     }
-    if (run.action.kind === "chat") return run.action.sent ? "琴音替你发到游戏聊天" : "琴音打进了聊天框（未发送）";
+    if (run.action.kind === "chat") return run.action.sent ? "替你发到了游戏聊天" : "打进了聊天框（未发送）";
     return run.action.target?.label ?? "";
   }
 

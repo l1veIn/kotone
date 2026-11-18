@@ -244,7 +244,7 @@ pub async fn recap(app: &AppHandle, game_id: &str, start: u64, end: u64) -> Resu
     };
     let lines = transcript(app, &name, start, end);
     if lines.is_empty() {
-        return Ok(json!({"skipped": "这一局没有和琴音的对话、提醒或自动化"}));
+        return Ok(json!({"skipped": format!("这一局没有和{name}的对话、提醒或自动化")}));
     }
     let connection = crate::companion::connection_ready(app, &settings)?;
     let provider = connection.provider.clone();

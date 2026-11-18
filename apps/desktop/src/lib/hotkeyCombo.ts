@@ -96,7 +96,7 @@ export function findHotkeyConflict(settings: Settings | null, selfId: string, ke
   if (!settings || !key.trim()) return null;
   const bindings: [string, string, string][] = [
     ["record", "录制热键", settings.hotkey.key],
-    ["assistant", "呼叫琴音热键", settings.assistant.hotkey],
+    ["assistant", "呼叫热键", settings.assistant.hotkey],
     ...(settings.assistant.companion?.quickMessages ?? []).map(
       (message, index): [string, string, string] => [`quick-message-${index + 1}`, `快捷消息 ${index + 1} 热键`, message.hotkey],
     ),

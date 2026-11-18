@@ -47,7 +47,7 @@ export class AgentChat {
         (requestId) => { this.keyRequests = this.keyRequests.filter((r) => r.requestId !== requestId); },
       ));
     } catch (error) {
-      this.loadError = `订阅琴音事件失败：${errorText(error)}`;
+      this.loadError = `订阅对话事件失败：${errorText(error)}`;
     }
     await this.refresh();
   }

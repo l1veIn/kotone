@@ -38,7 +38,7 @@
 
 {#if config}
   <div data-testid="output-settings">
-    <SettingsSection title="声音与弹幕" description="琴音提醒你、回答你、播报自动化结果时用的声音和弹幕。" id="assistant-delivery-title">
+    <SettingsSection title="声音与弹幕" description="提醒、回答和播报自动化结果时用的声音和弹幕。" id="assistant-delivery-title">
       <SettingsRow label="默认方式" description="提醒没指定方式时用哪种。">
         {#snippet control()}
           <div class="flex gap-4 text-[13px] text-foreground">

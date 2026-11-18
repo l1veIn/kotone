@@ -1,6 +1,7 @@
 <script lang="ts">
   // 「琴音」页（ADR 014）：聊天（默认）与设置（AI 连接、热键、快捷指令、琴音 Agent）。
   // 顶栏参照 DeepSeek Harness 的会话头：页名 / 当前对话标题，右侧是进行中概况与分页切换。
+  import { companionName } from "$lib/stores/companion";
   import { onMount, untrack } from "svelte";
   import { listConnections, type ConnectionInfo } from "../../../lib/ipc";
   import { useAgentChat } from "../../../lib/agentChat/context";
@@ -39,7 +40,7 @@
     { id: "chat", label: "聊天" }, { id: "identity", label: "角色" }, { id: "memory", label: "记忆" },
     { id: "skills", label: "技能" }, { id: "settings", label: "设置" },
   ] as const;
-  const name = $derived($settingsStore?.agent?.identity?.name?.trim() || "琴音");
+  const name = $derived($companionName);
 
   // 只在请求号变化时切换（首次挂载不算）。
   let seenRequest: number | null = null;
@@ -93,7 +94,7 @@
   <!-- 分页切换放在页名旁（右上角留给提示消息） -->
   <header class="sticky top-0 z-20 flex h-13 shrink-0 items-center gap-3 border-b border-hairline bg-background/85 px-5 backdrop-blur">
     <h1 class="m-0 shrink-0 text-[15px] font-semibold text-foreground" data-testid="assistant-page-title">{name}</h1>
-    <nav class="flex shrink-0 rounded-lg bg-muted/70 p-0.5" aria-label="琴音分类">
+    <nav class="flex shrink-0 rounded-lg bg-muted/70 p-0.5" aria-label={`${name}分类`}>
       {#each tabs as tab}
         {@const active = section === tab.id}
         <button type="button" data-testid={`assistant-nav-${tab.id}`} aria-current={active ? "page" : undefined}

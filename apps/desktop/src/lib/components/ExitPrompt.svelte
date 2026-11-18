@@ -31,7 +31,7 @@
       <div class="min-w-0">
         <h2 id="exit-prompt-title" class="text-base font-bold">要结束今天的演奏吗？</h2>
         <p class="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
-          彻底退出后，语音输入和全局快捷键都会停止。也可以先最小化到系统托盘，让琴音继续待命。
+          彻底退出后，语音输入和全局快捷键都会停止。也可以先最小化到系统托盘，在后台待命。
         </p>
       </div>
     </div>

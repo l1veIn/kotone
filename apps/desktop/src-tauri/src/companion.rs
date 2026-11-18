@@ -102,9 +102,7 @@ pub fn connection_ready(
 ) -> Result<kotone_core::connection::ResolvedConnection, String> {
     let id = settings.assistant.connection_id.trim();
     if id.is_empty() {
-        return Err(
-            "还没有给琴音选 AI 连接：请在「高级 → API 连接」里添加一条，并设为琴音的连接".into(),
-        );
+        return Err("还没有选 AI 连接：请在「设置 → API 连接」里添加一条，并设为在用的连接".into());
     }
     let connection = app.state::<SharedState>().connections.resolve(id)?;
     if connection
@@ -114,7 +112,7 @@ pub fn connection_ready(
         .trim()
         .is_empty()
     {
-        return Err("琴音的 AI 连接还没有保存 API key，请在「高级 → API 连接」里填写".into());
+        return Err("AI 连接还没有保存 API key，请在「设置 → API 连接」里填写".into());
     }
     Ok(connection)
 }
@@ -746,7 +744,7 @@ pub fn quick(app: &AppHandle, slot: usize) {
         if let Err(error) =
             crate::agent::submit_from_assistant(app, message.text.clone(), "quick-command")
         {
-            tell(app, format!("快捷指令没能交给琴音：{error}"));
+            tell(app, format!("快捷指令没能交出去：{error}"));
         }
         return;
     }
@@ -779,7 +777,7 @@ pub fn quick_message_text(app: &AppHandle, id: &str) -> Option<String> {
 pub async fn self_check(app: &AppHandle) -> Result<CompanionCheck, String> {
     let id = settings(app).assistant.connection_id.trim().to_string();
     if id.is_empty() {
-        return Err("还没有给琴音选 AI 连接：请在「高级 → API 连接」里设一条".into());
+        return Err("还没有选 AI 连接：请在「设置 → API 连接」里设一条".into());
     }
     check_connection(app, &id).await
 }

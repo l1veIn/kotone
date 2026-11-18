@@ -82,7 +82,7 @@ test("game profile saves who may operate the game (computer use)", async ({ page
   await expect(select).toHaveAttribute("data-value", "allow");
   await editor.screenshot({ path: testInfo.outputPath("game-profile-computer-use.png") });
   await editor.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(lol).toContainText("琴音可直接操作");
+  await expect(lol).toContainText("可直接操作");
   const saved = await page.evaluate(async () =>
     (await import("/src/lib/ipc.ts")).listProfiles().then((list) => list.find((p) => p.id === "lol")));
   expect(saved?.computerUse).toBe("allow");

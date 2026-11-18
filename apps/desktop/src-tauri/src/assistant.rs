@@ -983,7 +983,7 @@ pub async fn assistant_call(app: AppHandle) -> Result<(), String> {
         .try_state::<crate::runtime::RuntimeManager>()
         .is_some_and(|rt| rt.phase() == kotone_core::runtime::RuntimePhase::Running);
     if !running {
-        return Err("先点右上角「启动」，Kotone 运行时才能呼叫琴音".into());
+        return Err("先点右上角「启动」，Kotone 运行时才能呼叫".into());
     }
     let state = app.state::<crate::SharedState>();
     let timeout = state

@@ -1,6 +1,7 @@
 <script lang="ts">
   // 「自动化」页（ADR 013 §8）：一个列表——每个自动化 ▶ 运行 / ■ 停止、定时、详情；临时的提醒与程序排在最上面；
   // 下面可以展开全部记录。
+  import { companionName } from "$lib/stores/companion";
   import { onMount } from "svelte";
   import {
     listAutomations, listRuns, stopRuns, subscribeAutomations,
@@ -73,7 +74,7 @@
 
 <SettingsPage
   title="自动化"
-  description="琴音替你做的事：提醒、按键、点鼠标、盯屏幕。可以让琴音生成，也可以自己保存常用的；带定时的到点自己运行。"
+  description={`提醒、按键、点鼠标、盯屏幕。可以让${$companionName}写，也可以自己保存常用的；带定时的到点自己运行。`}
   testid="automation-page"
 >
   {#if !isTauri}

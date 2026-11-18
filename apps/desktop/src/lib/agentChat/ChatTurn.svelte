@@ -2,6 +2,7 @@
   // 一轮对话：用户气泡（或自动化结果的系统行）+ 琴音的思考、回答、工具行、状态说明 + 页脚。
   // 版式参照 DeepSeek Harness 的消息流（MessageItem / UserMessageBubble，MIT）：用户消息是右侧
   // 圆角气泡，回答不加气泡，过程是一行一行的“流程行”。Kotone 自己的实现。
+  import { companionName } from "$lib/stores/companion";
   import { ChevronRight, Info, Zap } from "@lucide/svelte";
   import { sourceLabel, type AgentAsk, type Answer } from "../agent";
   import MessageMarkdown from "./markdown/MessageMarkdown.svelte";
@@ -61,7 +62,7 @@
     <div class="min-w-0 space-y-1.5">
       <div class="flex items-center gap-2 pb-0.5 text-xs text-muted-foreground" aria-hidden="true">
         <KotoneAvatar size={20} mood="speaking" custom={$customAvatar} faces={$roleFaces} letter={$avatarLetter} animate={turn.active} />
-        <span class="font-medium text-foreground/80">{$settingsStore?.agent?.identity?.name?.trim() || "琴音"}</span>
+        <span class="font-medium text-foreground/80">{$companionName}</span>
       </div>
       {#each turn.blocks as block (block.key)}
         {#if block.kind === "thinking"}
@@ -85,7 +86,7 @@
         {/if}
       {/each}
       {#if waiting}
-        <p class="m-0 flex h-7 items-center text-[13px] text-muted-foreground" role="status"><span class="kotone-shimmer">琴音在想…</span></p>
+        <p class="m-0 flex h-7 items-center text-[13px] text-muted-foreground" role="status"><span class="kotone-shimmer">{$companionName}在想…</span></p>
       {/if}
       {#if !turn.active}<TurnFooter copyText={turn.answerText} endedAtMs={turn.endedAtMs} usage={turn.usage} />{/if}
     </div>

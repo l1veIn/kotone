@@ -3,7 +3,7 @@
 Isolated Kotone (KOTONE_HOME=target/roles-e2e/home, hotkeys off) with the real DeepSeek key (real_deepseek.py, memory
 only, deleted afterwards): DeepSeek speech recognition, the downloaded wake model copied from target/agent-smoke,
 VB-CABLE "CABLE Output" as the microphone, wake answer = voice (synthesized with the role's voice, played at volume 0).
-For 琴音 → 小雨 → 小林 → 琴音: roles.switch, check agent.identity, check the wake detector restarted with the role's
+For 琴音 → 大肥鱼 → Claude大小姐 → 琴音: roles.switch, check agent.identity, check the wake detector restarted with the role's
 wake word, play the wake word (SAPI) into "CABLE Input", check it was detected and that the "嗯？" answer was synthesized
 with the role's DeepSeek voice.
 usage: python -X utf8 -I scripts/manual-e2e/roles_real.py
@@ -87,7 +87,7 @@ def main():
         call("runtime.start")
         line = wait_log(r"wake: listening \(phrase=琴音琴音", since, 30)
         passed &= check("琴音: wake detector listens for 琴音琴音", line, line)
-        for role, word, voice in [("xiaoyu", "小雨小雨", "deepseek/stella"), ("xiaolin", "小林小林", "deepseek/tide"), ("kotone", "琴音琴音", None)]:
+        for role, word, voice in [("dafeiyu", "你好大肥鱼", "deepseek/stella"), ("claude-ojou", "你好大小姐", "deepseek/stella"), ("kotone", "琴音琴音", None)]:
             since = len(log_lines())
             switched = since
             result = call("roles.switch", {"id": role})

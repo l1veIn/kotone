@@ -57,7 +57,7 @@ const OPENAI_SCHEMA: &[StaticConfigField] = &[
 const DEEPSEEK_SCHEMA: &[StaticConfigField] = &[
     StaticConfigField {
         key: "connection",
-        label: "DeepSeek 连接（留空 = 用琴音正在用的 DeepSeek 连接）",
+        label: "DeepSeek 连接（留空 = 用 AI 连接里的 DeepSeek）",
         kind: "connection",
         default: "",
         options: &[],
@@ -244,7 +244,7 @@ pub fn entries(state: &CatalogState) -> Vec<CatalogModel> {
                 id: DEEPSEEK_MODEL_ID,
                 engine_id: "deepseek",
                 display_name: "DeepSeek 语音合成（在线，默认）",
-                description: "DeepSeek 官方语音，默认用琴音的 DeepSeek 连接与密钥，声音海星（女声）/暗潮（男声）；按字数计费（每万字符约 1.5–3 元，汉字算 2 个字符），每次播报都会把文字发给 DeepSeek，相同的话复用缓存；不支持调语速",
+                description: "DeepSeek 官方语音，默认用 AI 连接里的 DeepSeek 与密钥，声音海星（女声）/暗潮（男声）；按字数计费（每万字符约 1.5–3 元，汉字算 2 个字符），每次播报都会把文字发给 DeepSeek，相同的话复用缓存；不支持调语速",
                 schema: DEEPSEEK_SCHEMA,
                 api_key_url: "https://platform.deepseek.com/api_keys",
             },

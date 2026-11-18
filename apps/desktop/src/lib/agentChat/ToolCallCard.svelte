@@ -85,7 +85,7 @@
   {#if ask}
     <div class="my-2 overflow-hidden rounded-2xl border border-warning/45 bg-composer shadow-lg" data-testid="agent-ask" data-ask-id={ask.askId}>
       <div class="flex items-center gap-2 bg-warning/10 px-4 py-2 text-xs font-medium text-warning">
-        <ShieldAlert class="size-3.5" />琴音请求权限
+        <ShieldAlert class="size-3.5" />请求权限
       </div>
       <div class="px-4 pt-3 pb-3.5">
         <p class="m-0 text-[15px] leading-6 font-medium text-foreground">需要你确认：{ask.request.title || title}</p>

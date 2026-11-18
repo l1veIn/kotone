@@ -71,7 +71,7 @@
   const useCable = (use: boolean) => run("mic", () => voiceChatDefaultMic(use), (r) =>
     toast(true, use ? `Windows 默认麦克风已改成 ${r.defaultMic}` : `已改回 ${r.defaultMic ?? "原来的麦克风"}`));
   const test = () => run("test", voiceChatTest, (r) => toast(r.ok, r.note));
-  const say = () => run("say", () => voiceChatSay("这是琴音的游戏语音测试。"), () => toast(true, "已经说给队友了"));
+  const say = () => run("say", () => voiceChatSay("这是游戏语音测试。"), () => toast(true, "已经说给队友了"));
 
   const stateText = $derived.by(() => {
     if (!status) return "读取中…";
@@ -83,7 +83,7 @@
   });
 </script>
 
-<SettingsSection title="游戏语音" description="让琴音用麦克风替你跟队友说话：她的声音和你的麦克风一起送进虚拟麦克风 CABLE Output，游戏或语音软件的麦克风选它就行。这些设置也可以直接交给琴音帮你弄。" id="voice-chat-settings">
+<SettingsSection title="游戏语音" description="替你跟队友说话：她的声音和你的麦克风一起送进虚拟麦克风 CABLE Output，游戏或语音软件的麦克风选它就行。也可以直接让她帮你设。" id="voice-chat-settings">
   <div data-testid="voice-chat-settings" class="contents">
     <SettingsRow label="虚拟麦克风" description={status?.attribution ?? ""}>
       {#snippet control()}
@@ -103,7 +103,7 @@
           bind:checked={() => config.enabled, (checked) => void save({ enabled: checked }, checked ? "游戏语音已开启" : "游戏语音已关闭")} aria-label="开启游戏语音" />
       {/snippet}
     </SettingsRow>
-    <SettingsRow label="混入我的麦克风" description="关掉后虚拟麦克风里只有琴音的声音。琴音说话时你的声音会自动压低一半。">
+    <SettingsRow label="混入我的麦克风" description="关掉后虚拟麦克风里只有她的声音。她说话时你的声音自动压低一半。">
       {#snippet control()}
         <Switch data-testid="voice-chat-include-mic" bind:checked={() => config.includeMic, (checked) => void save({ includeMic: checked }, "已保存")} aria-label="混入我的麦克风" />
       {/snippet}
@@ -139,7 +139,7 @@
         </div>
       {/snippet}
     </SettingsRow>
-    <SettingsRow label="试一下" description={status && !status.ttsCanSpeak ? "当前语音是系统语音，送不进游戏：在「通用 → 语音」换成 DeepSeek、Kokoro 或在线语音。" : "测试音：放 1 秒“嘀”再从 CABLE Output 录回来，确认通了；说一句：琴音对队友说一句测试的话。在游戏语音里时队友会听到。"}>
+    <SettingsRow label="试一下" description={status && !status.ttsCanSpeak ? "当前语音是系统语音，送不进游戏：在「通用 → 语音」换成 DeepSeek、Kokoro 或在线语音。" : "测试音：放 1 秒“嘀”再从 CABLE Output 录回来，确认通了；说一句：对队友说一句测试的话。在游戏语音里时队友会听到。"}>
       {#snippet control()}
         <div class="flex items-center gap-2">
           <Button size="sm" variant="outline" data-testid="voice-chat-test" disabled={busy !== "" || !status?.running} onclick={() => void test()}>

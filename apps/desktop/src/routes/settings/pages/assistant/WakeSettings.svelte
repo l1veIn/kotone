@@ -14,6 +14,8 @@
   } from "../../../../lib/wake";
   import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
   import type { WakeConfig } from "../../../../lib/ipc";
+  import { DEFAULT_ROLE, rolesList, type RoleInfo } from "../../../../lib/roles";
+  import { DEFAULT_COMPANION_NAME, companionName } from "$lib/stores/companion";
 
   const wake = $derived<WakeConfig>($settingsStore?.assistant?.wake ?? {
     enabled: false, phrase: "qinyin-qinyin", sensitivity: "normal", ack: "voice", noSpeechTimeoutMs: 5000,
@@ -22,6 +24,15 @@
   let progress = $state<WakeModelProgress | null>(null);
   let downloading = $state(false);
   const phraseLabel = $derived(wakePhrases.find((p) => p.value === wake.phrase)?.label ?? "琴音琴音");
+  // 唤醒词跟着角色走：只有没改过名字和唤醒词的琴音用这里的预置唤醒词，其他角色用自己在「角色」里设的。
+  let role = $state<RoleInfo | null>(null);
+  const roleKey = $derived(`${$settingsStore?.agent?.roleId ?? ""}|${$companionName}|${wake.phrase}`);
+  $effect(() => {
+    void roleKey;
+    void rolesList().then((list) => { role = list.roles.find((r) => r.current) ?? null; }).catch(() => {});
+  });
+  const usesPreset = $derived(!role || (role.id === DEFAULT_ROLE && !role.wake.text.trim() && role.name === DEFAULT_COMPANION_NAME));
+  const word = $derived(usesPreset || !role ? phraseLabel : role.wakeCheck.text);
   const percent = $derived(progress?.totalBytes ? Math.min(100, Math.round((progress.downloadedBytes / progress.totalBytes) * 100)) : null);
 
   onMount(() => {
@@ -53,7 +64,7 @@
   }
 </script>
 
-<SettingsSection title="语音唤醒" description={`不用按键：说“${phraseLabel}”叫醒琴音，接着说要做的事，回答用语音播出。`} id="wake-settings">
+<SettingsSection title="语音唤醒" description={`不用按键：说“${word}”叫醒${$companionName}，接着说要做的事。`} id="wake-settings">
   <div data-testid="wake-settings" class="contents">
     <SettingsRow label="开启语音唤醒" description="开启后麦克风常开（Windows 任务栏会一直显示麦克风在用），唤醒词只在本机检测，不上传。建议戴耳机，外放时游戏声音可能误唤醒。">
       {#snippet control()}
@@ -74,14 +85,22 @@
         {/snippet}
       </SettingsRow>
     {/if}
-    <SettingsRow label="唤醒词" description="四个字更不容易被别的话误触发。">
-      {#snippet control()}
-        <div class="w-44 max-w-full">
-          <SelectField ariaLabel="唤醒词" value={wake.phrase} options={[...wakePhrases]}
-            onchange={(phrase) => void save({ phrase: phrase as WakeConfig["phrase"] }, `唤醒词：${wakePhrases.find((p) => p.value === phrase)?.label}`)} />
-        </div>
-      {/snippet}
-    </SettingsRow>
+    {#if usesPreset}
+      <SettingsRow label="唤醒词" description="四个字更不容易被别的话误触发。">
+        {#snippet control()}
+          <div class="w-44 max-w-full">
+            <SelectField ariaLabel="唤醒词" value={wake.phrase} options={[...wakePhrases]}
+              onchange={(phrase) => void save({ phrase: phrase as WakeConfig["phrase"] }, `唤醒词：${wakePhrases.find((p) => p.value === phrase)?.label}`)} />
+          </div>
+        {/snippet}
+      </SettingsRow>
+    {:else}
+      <SettingsRow label="唤醒词" description={`${$companionName}自己的唤醒词，在「角色」里改。`}>
+        {#snippet control()}
+          <span class="text-sm font-medium" data-testid="wake-role-word">{word}</span>
+        {/snippet}
+      </SettingsRow>
+    {/if}
     <SettingsRow label="灵敏度" description="经常误唤醒就调低；喊了没反应就调高。">
       {#snippet control()}
         <div class="w-44 max-w-full">
@@ -90,7 +109,7 @@
         </div>
       {/snippet}
     </SettingsRow>
-    <SettingsRow label="唤醒后的应答" description="喊完唤醒词停一下，琴音会先接一声再听；连着往下说时不应答。唤醒后 5 秒没说话就安静结束。">
+    <SettingsRow label="唤醒后的应答" description="喊完唤醒词停一下，会先应一声再听；连着往下说时不应。唤醒后 5 秒没说话就结束。">
       {#snippet control()}
         <div class="w-44 max-w-full">
           <SelectField ariaLabel="唤醒后的应答" value={wake.ack} options={[...wakeAcks]}

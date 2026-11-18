@@ -388,7 +388,7 @@ test("tool cards link the settings 琴音 changed, and a key request is pasted i
       { id: "call-l", name: "models.list", arguments: "{}" },
     ], atMs: T + 1000 } });
     await t.event("c-old", { kind: "appended", message: { role: "tool", callId: "call-s", name: "settings.update", isError: false, untrusted: false, atMs: T + 1100,
-      content: JSON.stringify({ effects: { changed: ["assistant.hotkey"], locations: [{ path: "assistant.hotkey", label: "呼叫琴音热键", page: "琴音 → 设置 → 呼叫" }], summary: "已保存，立即生效" } }) } });
+      content: JSON.stringify({ effects: { changed: ["assistant.hotkey"], locations: [{ path: "assistant.hotkey", label: "呼叫热键", page: "琴音 → 设置 → 呼叫" }], summary: "已保存，立即生效" } }) } });
     await t.event("c-old", { kind: "appended", message: { role: "tool", callId: "call-m", name: "models.activate", content: "{}", isError: false, untrusted: false, atMs: T + 1200 } });
     await t.event("c-old", { kind: "appended", message: { role: "tool", callId: "call-l", name: "models.list", content: "{}", isError: false, untrusted: false, atMs: T + 1300 } });
   }, T);
@@ -396,7 +396,7 @@ test("tool cards link the settings 琴音 changed, and a key request is pasted i
   await expect(page.locator('[data-tool-id="call-l"]').getByTestId("agent-tool-changed")).toHaveCount(0);
   await expect(page.locator('[data-tool-id="call-m"]').getByTestId("agent-tool-changed-link")).toHaveText("语音识别模型 →");
   const link = page.locator('[data-tool-id="call-s"]').getByTestId("agent-tool-changed-link");
-  await expect(link).toHaveText("呼叫琴音热键 →");
+  await expect(link).toHaveText("呼叫热键 →");
   await link.click();
   await expect(page.getByTestId("assistant-nav-settings")).toHaveAttribute("aria-current", "page");
   await expect(page.locator("#companion-settings-call")).toBeInViewport();

@@ -38,7 +38,7 @@
   }
 </script>
 
-<SettingsSection title="对话气泡" description="用语音和琴音说话时（呼叫、唤醒、她追问你），在游戏所在屏幕的角落用气泡显示她在听、在想、在说什么。鼠标会直接穿过气泡，不挡游戏操作。" id="bubble-settings">
+<SettingsSection title="对话气泡" description="用语音说话时（呼叫、唤醒、她追问你），在游戏所在屏幕的角落显示她在听、在想、在说什么。鼠标会穿过气泡，不挡操作。" id="bubble-settings">
   <div data-testid="bubble-settings" class="contents">
     <SettingsRow label="显示对话气泡" description="关掉后回到旧方式：录音状态用语音输入的悬浮窗，回答用弹幕。">
       {#snippet control()}
@@ -64,7 +64,7 @@
         </div>
       {/snippet}
     </SettingsRow>
-    <SettingsRow label="回答同时用弹幕" description="默认只在气泡里显示琴音的回答。定时提醒不受影响，照旧用弹幕。">
+    <SettingsRow label="回答同时用弹幕" description="默认只在气泡里显示回答。定时提醒照旧用弹幕。">
       {#snippet control()}
         <Switch data-testid="bubble-danmaku" bind:checked={() => bubble.alsoDanmaku, (checked) => void save({ alsoDanmaku: checked }, checked ? "回答会同时用弹幕" : "回答只在气泡里显示")} aria-label="回答同时用弹幕" />
       {/snippet}

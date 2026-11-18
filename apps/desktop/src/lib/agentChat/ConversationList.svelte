@@ -21,7 +21,7 @@
   let deleting = $state(false);
   const running = $derived(runningId !== null);
   const sorted = $derived([...conversations].sort((a, b) => b.updatedAtMs - a.updatedAtMs));
-  const busyHint = "琴音正在回答，请先停止";
+  const busyHint = "正在回答，请先停止";
 
   function when(ms: number): string {
     const date = new Date(ms);
@@ -59,7 +59,7 @@
             {active && activePage ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-foreground'}"
           onclick={() => onSelect(item.id)}>
           {#if item.id === runningId}<span class="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" aria-label="回答中"></span>{/if}
-          {#if item.parent}<span class="shrink-0 rounded bg-sidebar-accent px-1 text-[10px] text-sidebar-foreground/60" data-testid="agent-conversation-child" title="琴音派出的子会话（只能查看）">子</span>{/if}
+          {#if item.parent}<span class="shrink-0 rounded bg-sidebar-accent px-1 text-[10px] text-sidebar-foreground/60" data-testid="agent-conversation-child" title="子会话（只能查看）">子</span>{/if}
           <span class="min-w-0 flex-1 truncate">{item.title || "（无标题）"}</span>
           <span class="shrink-0 text-[11px] text-sidebar-foreground/45 tabular-nums group-hover/item:invisible">{when(item.updatedAtMs)}</span>
         </button>

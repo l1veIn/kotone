@@ -61,7 +61,7 @@
     try {
       const saved = await agentSetPermissions({ ...permissions, mode: id });
       settingsStore.update((s) => s && { ...s, agent: { hiddenAutomations: [], inGame: true, ...s.agent, permissions: saved } });
-      toast(true, `琴音的权限：${modes.find((m) => m.id === id)?.name}`);
+      toast(true, `权限：${modes.find((m) => m.id === id)?.name}`);
       onchanged?.();
     } catch (error) {
       toast(false, `保存失败：${errText(error)}`);
@@ -80,7 +80,7 @@
         await upsertConnection({ ...connection, model });
       }
       await load();
-      toast(true, `琴音改用 ${model}`);
+      toast(true, `改用 ${model}`);
     } catch (error) {
       toast(false, `切换模型失败：${errText(error)}`);
     } finally {

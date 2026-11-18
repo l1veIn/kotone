@@ -94,9 +94,9 @@
           <div class="flex flex-wrap items-center gap-2">
             <h2 id="update-dialog-title" class="text-lg font-bold">
               {#if dialog.phase === "available"}
-                发现琴音新版本
+                发现 Kotone 新版本
               {:else if dialog.phase === "downloading"}
-                正在更新琴音
+                正在更新 Kotone
               {:else if dialog.phase === "ready"}
                 更新已经准备好
               {:else}
@@ -113,9 +113,9 @@
             {#if dialog.phase === "available"}
               新版本已经就绪，可以直接从当前版本更新到最新版。
             {:else if dialog.phase === "downloading"}
-              正在下载并安装完整更新包，请保持琴音运行。
+              正在下载并安装完整更新包，请保持 Kotone 运行。
             {:else if dialog.phase === "ready"}
-              安装已完成。重新启动琴音后，新版本就会生效。
+              安装已完成。重新启动 Kotone 后，新版本就会生效。
             {:else}
               马上回来，请稍候片刻…
             {/if}

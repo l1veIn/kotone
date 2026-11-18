@@ -10,6 +10,7 @@
    * 底部固定的设置项）。三种形态：展开（236px）、图标栏（56px）、窄窗口时的抽屉。
    * Kotone 的气质：当前项的青色指示条与图标高亮，底部的琴音形象卡。
    */
+  import { companionName } from "$lib/stores/companion";
   import {
     Bot, Gamepad2, History, Info, MessageSquarePlus, Mic, Settings2, Sparkles, Zap,
   } from "@lucide/svelte";
@@ -31,7 +32,6 @@
   const chat = useAgentChat();
   // ADR 023：侧栏分两组。语音输入仍排第一（首页），游戏陪玩是第二组；页面内部标识不变。
   // 「琴音」一项用她现在的名字（ADR 022：可以改名）。
-  const companionName = $derived($settingsStore?.agent?.identity?.name?.trim() || "琴音");
   const groups: { label: string; items: { id: PageId; label: string; icon: Component }[] }[] = $derived([
     {
       label: "语音输入",
@@ -44,7 +44,7 @@
     {
       label: "游戏陪玩",
       items: [
-        { id: "assistant", label: companionName, icon: Bot },
+        { id: "assistant", label: $companionName, icon: Bot },
         { id: "game", label: "游戏列表", icon: Gamepad2 },
         { id: "automation", label: "自动化", icon: Zap },
       ],
@@ -94,7 +94,7 @@
     class="flex h-9 w-full shrink-0 items-center gap-2.5 rounded-lg border border-hairline text-[13px] text-foreground transition-colors hover:border-primary/40 hover:bg-sidebar-accent/60
       {rail ? 'justify-center' : 'px-2.5'}">
     <MessageSquarePlus class="size-4 shrink-0 text-primary" />
-    {#if !rail}<span>新对话</span><span class="ml-auto text-[11px] text-sidebar-foreground/50">{companionName}</span>{/if}
+    {#if !rail}<span>新对话</span><span class="ml-auto text-[11px] text-sidebar-foreground/50">{$companionName}</span>{/if}
   </button>
 
   <nav class="mt-3 flex shrink-0 flex-col gap-px" aria-label="设置分类">

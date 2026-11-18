@@ -93,7 +93,7 @@ export async function previewReminder(kind: DeliveryKind): Promise<void> {
 }
 /** 呼叫琴音（和热键一样）：按一次就在右下角气泡里听，说完自动交给她；她在听时再按一次立刻提交。 */
 export async function callKotone(): Promise<void> {
-  if (!isTauri) throw new Error("呼叫琴音仅限桌面版");
+  if (!isTauri) throw new Error("呼叫仅限桌面版");
   await invoke("assistant_call");
 }
 export async function stopSpeech(): Promise<void> {

@@ -67,7 +67,7 @@ export interface AgentTool {
   core: boolean;
 }
 
-export const PREVIEW_ERROR = "仅预览：浏览器里不会真的发给琴音。请在桌面应用中和琴音聊天。";
+export const PREVIEW_ERROR = "仅预览：浏览器里不会真的发出去，请在桌面应用里聊天。";
 
 // ---------- 浏览器预览数据（只在 isTauri = false 时使用） ----------
 

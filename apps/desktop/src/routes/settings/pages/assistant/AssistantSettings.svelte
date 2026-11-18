@@ -22,8 +22,8 @@
 
 {#if config}
   <div class="space-y-6" data-testid="assistant-settings">
-    <SettingsSection title="AI 连接" id="assistant-input-settings-title" description="琴音用的大模型。在游戏里怎么叫她，在「交流」里设置。">
-      <SettingsRow label="AI 连接" description="给琴音用的主流大模型。选好、有密钥就能用；想确认能不能连上，到「设置 → API 连接」点“测试连接”。">
+    <SettingsSection title="AI 连接" id="assistant-input-settings-title" description="用哪个大模型。在游戏里怎么叫她，在「交流」里设置。">
+      <SettingsRow label="AI 连接" description="选好、有密钥就能用；想确认能不能连上，到「设置 → API 连接」点“测试连接”。">
         {#snippet control()}
           <div class="w-64 max-w-full">
             <SelectField ariaLabel="陪玩 AI 连接" value={config.connectionId} disabled={saving}

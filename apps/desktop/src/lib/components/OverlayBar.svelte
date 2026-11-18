@@ -51,7 +51,7 @@
   let hotkeyLabel = $state("CapsLock");
   let assistantHotkeyLabel = $state("呼叫键");
   // 呼叫琴音：说完自动交给她（相当于按键版的语音唤醒）；再按一次呼叫键立刻提交。
-  const assistantListeningHint = $derived(`在听 · 说完自动交给琴音（再按 ${assistantHotkeyLabel} 立刻提交）`);
+  const assistantListeningHint = $derived(`在听 · 说完自动提交（再按 ${assistantHotkeyLabel} 立刻提交）`);
   const confirmLabel = $derived($appState.purpose === "assistant" ? "提交助手" : "发送");
   const confirmHotkey = $derived($appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel);
   const previewHint = $derived(`${confirmHotkey} ${confirmLabel} · Esc 重说`);

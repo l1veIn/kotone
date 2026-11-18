@@ -50,7 +50,7 @@
 
 <div class="space-y-6" data-testid="usage-settings">
   <SettingsSection title="用量与费用" id="companion-usage-title"
-    description="琴音的对话、整理摘要、在线语音和文字识别花了多少。命中缓存的输入便宜得多（DeepSeek 约为没命中的 1/50），所以命中率越高越省。">
+    description="对话、整理摘要、在线语音和文字识别花了多少。命中缓存的输入便宜得多（DeepSeek 约为没命中的 1/50）。">
     <div class="flex items-center justify-between gap-3 py-2">
       <p class="m-0 text-xs text-muted-foreground">{summary?.note ?? ""}</p>
       <Button size="sm" variant="ghost" disabled={loading} onclick={() => void load()} aria-label="刷新用量"><RefreshCw class="size-3.5" />刷新</Button>
@@ -85,7 +85,7 @@
       {/if}
       <p class="m-0 py-2 text-[11px] leading-relaxed text-muted-foreground/80">价格：{summary.priceSource}。{#if summary.ledger}账本：{summary.ledger}{/if}</p>
     {/if}
-    <SettingsRow label="对话多长时整理成摘要" description="一段对话估到这么多 token 时，琴音把较早的部分整理成一份摘要，之后只看摘要和最近几轮（整理那一次多花一点，之后又能命中缓存）。0 = 不整理。">
+    <SettingsRow label="对话多长时整理成摘要" description="一段对话估到这么多 token 时，把较早的部分整理成摘要，之后只看摘要和最近几轮（整理那次多花一点，之后又能命中缓存）。0 = 不整理。">
       {#snippet control()}
         <input type="number" min="0" step="1000" class="h-8 w-32 rounded-md border border-input bg-background px-2 text-sm tabular-nums" aria-label="整理阈值（token）"
           value={compactAt} disabled={savingCompact} onchange={(e) => void saveCompact(Number(e.currentTarget.value))} />

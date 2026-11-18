@@ -16,7 +16,7 @@
 | `sessions_real.py` | 真实模型的同传子会话：派子会话、听 python.exe、翻译成弹幕、“停止同传”连同监听一起停（SenseVoice 模型用 `target/sess-e2e` 里下好的） |
 | `voice_chat_real.py` | 真实 DeepSeek 的“跟队友说话”：先应玩家一声，再从虚拟麦克风说出来；录 CABLE Output（队友那边）和扬声器回环（玩家这边）的音量。不混玩家自己的麦克风 |
 | `recap_real.py` | 对局复盘：把改名的 PING.EXE 当成“游戏”，游戏内说几句，结束进程，看聊天里的复盘和这个游戏的记忆（`KOTONE_RECAP_MIN_SECONDS=20`） |
-| `roles_real.py` | 换角色：琴音 → 小雨 → 小林 → 琴音，名字、唤醒词（从 VB-CABLE 喊）和应答的声音都跟着换 |
+| `roles_real.py` | 换角色：琴音 → 大肥鱼 → Claude大小姐 → 琴音，名字、唤醒词（从 VB-CABLE 喊）和应答的声音都跟着换 |
 | `wake_eval.py` | 唤醒词实测（离线）：SAPI 和 DeepSeek 两种声音合成各个唤醒词，加几分钟不含唤醒词的普通说话，喂给和桌面端同一个唤醒检测器，统计喊中率和误唤醒 |
 
 ## 准备

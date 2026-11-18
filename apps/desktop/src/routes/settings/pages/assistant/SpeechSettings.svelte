@@ -178,12 +178,12 @@
     {:else if engine === "auto"}
       <p class="m-0 text-xs leading-relaxed text-muted-foreground" data-testid="auto-speech-info">
         {autoProvider === "deepseek"
-          ? "正在用 DeepSeek 语音（琴音的 DeepSeek 连接）：按字数计费，每次播报都会把文字发给 DeepSeek，相同的话复用缓存；不支持调语速。"
-          : "琴音的 AI 连接是 DeepSeek（且已保存密钥）时自动用 DeepSeek 语音，否则用 Windows 系统语音。"}
+          ? "正在用 DeepSeek 语音（AI 连接里的 DeepSeek）：按字数计费，每次播报都会把文字发给 DeepSeek，相同的话复用缓存；不能调语速。"
+          : "AI 连接是 DeepSeek（且有密钥）时自动用 DeepSeek 语音，否则用 Windows 系统语音。"}
       </p>
     {:else if engine === "deepseek"}
       <p class="m-0 text-xs leading-relaxed text-muted-foreground" data-testid="online-speech-info">
-        DeepSeek 语音：默认用琴音的 DeepSeek 连接与密钥，按字数计费（汉字算 2 个字符），每次播报都会把文字发给 DeepSeek；相同的话复用缓存，不支持调语速。连接可在「高级 → 模型 → 语音合成」里另选。
+        DeepSeek 语音：默认用 AI 连接里的 DeepSeek 与密钥，按字数计费（汉字算 2 个字符），每次播报都会把文字发给 DeepSeek；相同的话复用缓存，不能调语速。连接可在「高级 → 模型 → 语音合成」里另选。
       </p>
     {:else if engine === "openai" || engine === "volcano"}
       <p class="m-0 text-xs leading-relaxed text-muted-foreground" data-testid="online-speech-info">

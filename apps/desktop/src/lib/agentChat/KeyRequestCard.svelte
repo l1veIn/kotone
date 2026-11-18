@@ -1,6 +1,7 @@
 <script lang="ts">
   // 琴音请你粘贴某个服务商的 Key（connections.request_key）：Key 直接存进系统凭据库，
   // 不进聊天记录、不发给 AI；琴音只知道“已保存”。
+  import { companionName } from "$lib/stores/companion";
   import { KeyRound } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import { agentSubmitKey, type KeyRequest } from "../agent";
@@ -23,7 +24,7 @@
 
 <div class="rounded-2xl border border-primary/40 bg-composer px-4 py-3 text-[13px]" data-testid="agent-key-request" data-provider={request.provider}>
   <p class="m-0 flex items-center gap-2 font-medium text-foreground">
-    <KeyRound class="size-4 text-primary" />琴音需要 {request.displayName} 的 Key
+    <KeyRound class="size-4 text-primary" />{$companionName}需要 {request.displayName} 的 Key
   </p>
   {#if request.reason}<p class="mt-1 mb-0 text-xs text-muted-foreground">{request.reason}</p>{/if}
   <p class="mt-1 mb-0 text-xs text-muted-foreground">

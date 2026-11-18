@@ -143,7 +143,7 @@ pub fn computer_use_verdict(profile: Option<&GameProfile>) -> ComputerUseVerdict
     }
     match setting {
         ComputerUse::Deny => ComputerUseVerdict::Denied(format!(
-            "「{name}」设置为不让琴音操作（可以在「游戏适配」里改）"
+            "「{name}」设置为不许操作（可以在「游戏列表」里改）"
         )),
         ComputerUse::Allow => ComputerUseVerdict::Allowed,
         ComputerUse::Ask => ComputerUseVerdict::Ask,

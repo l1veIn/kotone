@@ -14,6 +14,7 @@
    *   保存时整份 profile 原样带回，新字段不会丢。
    * - 版式：SettingsPage / SettingsSection（参照 DeepSeek Harness 设置页）。
    */
+  import { companionName } from "$lib/stores/companion";
   import { onDestroy, onMount } from "svelte";
   import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
   import {
@@ -46,7 +47,7 @@
   const COMPUTER_USE_OPTIONS = [
     { value: "ask", label: "先问我", description: "每段对话第一次操作前问一次" },
     { value: "allow", label: "一直允许", description: "不再询问" },
-    { value: "deny", label: "不允许", description: "琴音不在这个游戏里动鼠标键盘" },
+    { value: "deny", label: "不允许", description: "不在这个游戏里动鼠标键盘" },
   ];
 
   let profiles = $state<GameProfile[]>([]);
@@ -469,7 +470,7 @@
   {/if}
 {/snippet}
 
-<SettingsPage title="游戏列表" description="本机装了哪些游戏；每个游戏一套打法：聊天键、词表、节奏，以及琴音能不能替你在这个游戏里按键。">
+<SettingsPage title="游戏列表" description="本机装了哪些游戏；每个游戏一套打法：聊天键、词表、节奏，以及能不能替你按键。">
   <InstalledGamesSection {profiles} onOpenProfile={(p) => { openEditor(p); requestAnimationFrame(() => document.querySelector(`[data-testid="game-profile-${p.id}"]`)?.scrollIntoView({ block: "start" })); }} />
   {#snippet actions()}
     <Button variant="outline" size="sm" disabled={importingPackage} onclick={() => void onImportPackage()}>
@@ -502,7 +503,7 @@
             </p>
             <p class="mt-0.5 mb-0 truncate text-xs text-muted-foreground">
               {p.processNames.length > 0 ? `适配 ${p.processNames.length} 个进程` : "适用于所有窗口"}
-              · 热词 {p.hotwords.length} 个{p.allowAutomationInput === false ? " · 不允许自动化输入" : ""}{p.computerUse === "allow" ? " · 琴音可直接操作" : p.computerUse === "deny" ? " · 不让琴音操作" : ""}
+              · 热词 {p.hotwords.length} 个{p.allowAutomationInput === false ? " · 不允许自动化输入" : ""}{p.computerUse === "allow" ? " · 可直接操作" : p.computerUse === "deny" ? " · 不许操作" : ""}
             </p>
           </div>
           <div class="flex shrink-0 flex-wrap items-center gap-1.5">
@@ -583,7 +584,7 @@
                 rows={3}
                 maxlength={500}
                 data-testid="profile-companion-notes"
-                placeholder="写给琴音的这个游戏的说明，例如：聊天在左下角，[队伍] 前缀是队友，[全部] 是所有人"
+                placeholder="这个游戏的说明，例如：聊天在左下角，[队伍] 前缀是队友，[全部] 是所有人"
                 class="mt-2 w-full resize-y rounded-lg border border-input bg-background/60 px-3 py-2 text-xs leading-relaxed text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40"
               ></textarea>
               <p class="mt-1.5 mb-0 text-[11px] text-muted-foreground">
@@ -602,12 +603,12 @@
               />
               <div class="flex items-start justify-between gap-4">
                 <div class="min-w-0">
-                  <span class="block text-xs font-medium text-foreground">让琴音操作</span>
-                  <p class="mt-0.5 mb-0 text-[11px] leading-relaxed text-muted-foreground">琴音一边看画面一边点鼠标、按键（例如帮你找背包里的东西），右下角会提示“正在操作 · 按 Esc 停止”。操作时按 Esc 就停（这个 Esc 不会传给游戏）；Ctrl+Shift+F12 或说“停下”也能停。有反作弊的游戏能不能用模拟点击，请你自己判断。</p>
+                  <span class="block text-xs font-medium text-foreground">让{$companionName}操作</span>
+                  <p class="mt-0.5 mb-0 text-[11px] leading-relaxed text-muted-foreground">一边看画面一边点鼠标、按键（例如帮你找背包里的东西），右下角提示“正在操作 · 按 Esc 停止”。按 Esc（不会传给游戏）、Ctrl+Shift+F12 或说“停下”都能停。有反作弊的游戏能不能用模拟点击，请自己判断。</p>
                 </div>
                 <SelectField
                   class="w-32 shrink-0"
-                  ariaLabel="让琴音操作"
+                  ariaLabel={`让${$companionName}操作`}
                   testid="profile-computer-use"
                   value={draft.computerUse ?? "ask"}
                   options={COMPUTER_USE_OPTIONS}
@@ -621,7 +622,7 @@
                     {#if detecting}<LoaderCircle class="size-3.5 animate-spin" />{:else}<ScanSearch class="size-3.5" />{/if}自动检测
                   </Button>
                 </div>
-                <p class="mt-0.5 mb-0 text-[11px] leading-relaxed text-muted-foreground">程序、快捷方式或 steam:// 之类的链接。点“自动检测”可以从本机装的游戏里选（Steam、英雄联盟、Riot、米哈游、Epic、WeGame）；留空时琴音也会自动找。</p>
+                <p class="mt-0.5 mb-0 text-[11px] leading-relaxed text-muted-foreground">程序、快捷方式或 steam:// 之类的链接。点“自动检测”可以从本机装的游戏里选（Steam、英雄联盟、Riot、米哈游、Epic、WeGame）；留空时会自动找。</p>
                 <Input id="profile-launch-path" data-testid="profile-launch-path" class="mt-2 font-mono text-xs"
                   placeholder="例如：C:\Games\Game.exe 或 steam://rungameid/570"
                   value={draft.launchPath ?? ""}

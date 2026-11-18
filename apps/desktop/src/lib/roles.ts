@@ -38,16 +38,14 @@ function previewCheck(text: string, readings: string[] = []): WakeWordCheck {
 }
 const previewSouls: Record<string, string> = {
   kotone: "# SOUL\n\n你是屏幕前玩家的游戏陪玩 Agent。说话温暖、轻快、简短；像一起开黑的朋友，不说教、不啰嗦。\n",
-  xiaoyu: "# SOUL\n\n你是小雨，屏幕前玩家的游戏陪玩。性格温柔、安静、有耐心。\n",
-  xiaolin: "# SOUL\n\n你是小林，屏幕前玩家的游戏陪玩。性格沉稳、冷静。\n",
+  dafeiyu: "# SOUL\n\n你是大肥鱼，一只蓝色长发的鲸鱼娘女仆，屏幕前玩家的游戏陪玩。\n",
+  "claude-ojou": "# SOUL\n\n你是 Claude大小姐，优雅又有点傲娇的大小姐，屏幕前玩家的游戏陪玩。\n",
 };
 const preview: { current: string; roles: Omit<RoleInfo, "wakeCheck" | "current">[]; next: number } = {
   current: DEFAULT_ROLE,
   next: 3,
   roles: [
     { id: "kotone", name: "琴音", summary: "温暖、轻快，像一起开黑的朋友", builtin: true, avatar: "", voice: "", wake: { text: "", readings: [] }, greeting: "" },
-    { id: "xiaoyu", name: "小雨", summary: "温柔安静，话不多，耐心", builtin: true, avatar: "", voice: "deepseek/stella", wake: { text: "", readings: [] }, greeting: "" },
-    { id: "xiaolin", name: "小林", summary: "沉稳冷静的男生，像靠谱的指挥", builtin: true, avatar: "", voice: "deepseek/tide", wake: { text: "", readings: [] }, greeting: "" },
     { id: "dafeiyu", name: "大肥鱼", summary: "蓝色鲸鱼娘女仆，贪吃软萌（社区二创，非官方）", builtin: true, avatar: "", voice: "deepseek/stella", wake: { text: "你好大肥鱼", readings: [] }, greeting: "" },
     { id: "claude-ojou", name: "Claude大小姐", summary: "傲娇优雅的大小姐，爱喝红茶（同人角色，非官方）", builtin: true, avatar: "", voice: "deepseek/stella", wake: { text: "你好大小姐", readings: [] }, greeting: "" },
   ],

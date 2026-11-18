@@ -1,6 +1,7 @@
 <script lang="ts">
   // 呼叫琴音（首页、聊天窗口）：和热键一样，按一次就在右下角气泡里听你说，说完自动交给她；
   // 她在听时再按一次立刻提交。相当于按键版的语音唤醒，没有“按住说话”。
+  import { companionName } from "$lib/stores/companion";
   import { Mic } from "@lucide/svelte";
   import { callKotone } from "../assistant";
   import { hotkeyLabel } from "../hotkeyCombo";
@@ -17,7 +18,7 @@
     testid?: string;
   } = $props();
 
-  const name = $derived($settingsStore?.agent?.identity?.name?.trim() || "琴音");
+  const name = $derived($companionName);
   const hotkey = $derived($settingsStore?.assistant.hotkey.trim() ?? "");
   const listening = $derived($appState.purpose === "assistant" && $appState.state === "listening");
   const blocked = $derived(!isTauri ? "仅限桌面版"

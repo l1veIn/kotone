@@ -30,7 +30,7 @@ test("the branded update dialog covers confirmation, progress and restart states
   });
   const dialog = page.getByTestId("update-dialog");
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("heading", { name: "发现琴音新版本" })).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "发现 Kotone 新版本" })).toBeVisible();
   await expect(page.getByTestId("update-notes")).toContainText("增加鼠标侧键支持");
   const laterButton = dialog.getByRole("button", { name: "稍后更新" });
   const updateButton = dialog.getByRole("button", { name: "立即更新" });
@@ -58,7 +58,7 @@ test("the branded update dialog covers confirmation, progress and restart states
     downloadedBytes: 42,
     totalBytes: 100,
   });
-  await expect(dialog.getByRole("heading", { name: "正在更新琴音" })).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "正在更新 Kotone" })).toBeVisible();
   await expect(page.getByTestId("update-progress")).toHaveText("42%");
   await expect(dialog.getByRole("button")).toHaveCount(0);
 

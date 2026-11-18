@@ -241,7 +241,7 @@
           </div>
         {/snippet}
       </SettingsRow>
-      <SettingsRow label="头像" description={cur.id === DEFAULT_ROLE ? "PNG、JPG、WebP 或 GIF，不超过 2 MB；不传就用琴音的立绘和表情" : "PNG、JPG、WebP 或 GIF，不超过 2 MB；不传就显示名字的第一个字"}>
+      <SettingsRow label="头像" description={`PNG、JPG、WebP 或 GIF，不超过 2 MB；不传就${cur.id === DEFAULT_ROLE || bundledFaces(cur.id, "") ? "用内置的表情" : "显示名字的第一个字"}`}>
         {#snippet control()}
           <div class="flex items-center gap-3">
             <div data-testid="identity-avatar" data-src={avatars[cur.id] ?? ""}><KotoneAvatar size={48} mood="asking" custom={avatars[cur.id] ?? null} faces={bundledFaces(cur.id, cur.avatar)} letter={placeholderLetter(cur.id, cur.name, cur.avatar)} /></div>
@@ -285,7 +285,7 @@
             </div>
             {#if wakeCheck.ok}<p class="m-0 flex items-center gap-1 text-xs text-success"><Check class="size-3" />唤醒模型认得这个词{#if wakeCheck.warnings.length}<span class="text-warning">（{wakeCheck.warnings.join("；")}）</span>{/if}</p>
             {:else}<p class="m-0 text-xs text-destructive" role="alert" data-testid="role-wake-problem">{wakeCheck.problems.join("；")}</p>{/if}
-            <p class="m-0 text-[11px] text-muted-foreground">自定义唤醒词是实验性的：喊中率和误唤醒还在实测，叫不醒时换回预置的“琴音琴音”。
+            <p class="m-0 text-[11px] text-muted-foreground">自定义唤醒词是实验性的：叫不醒就换一个更长、字音更清楚的词。
               <button type="button" class="text-primary hover:underline" onclick={onOpenTalk}>语音唤醒设置 →</button></p>
           </div>
         {/if}

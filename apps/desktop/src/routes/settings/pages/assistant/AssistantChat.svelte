@@ -2,6 +2,7 @@
   // 「琴音 → 聊天」：和内置琴音 Agent 对话（ADR 014）。游戏内语音、快捷指令与这里是同一段“当前对话”。
   // 对话列表在侧边栏（AppSidebar）；这里是消息流与输入卡。空白对话时输入卡居中（参照 DeepSeek
   // Harness 的 EmptyHero，MIT），配上琴音形象与起手提示。
+  import { companionName } from "$lib/stores/companion";
   import { CircleAlert, Eye } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import { isTauri } from "../../../../lib/ipc";
@@ -49,7 +50,7 @@
     sendNotice = "";
     try {
       const status = await chat.send(text);
-      if (status === "steered") sendNotice = "已插话：琴音做完当前这一步就会看到。";
+      if (status === "steered") sendNotice = "已插话：做完当前这一步就会看到。";
       return true;
     } catch (error) {
       sendError = errText(error);
@@ -84,7 +85,7 @@
       <div class="space-y-2" data-testid="agent-stray-asks">
         {#each strayAsks as ask (ask.askId)}
           <div class="flex flex-wrap items-center gap-2 rounded-2xl border border-warning/45 bg-composer px-4 py-2.5 text-[13px]" data-testid="agent-ask" data-ask-id={ask.askId}>
-            <span class="min-w-0 flex-1">琴音需要你确认：<strong class="font-medium">{ask.request.title}</strong>{#if ask.request.reason}<span class="text-muted-foreground"> · {ask.request.reason}</span>{/if}</span>
+            <span class="min-w-0 flex-1">需要你确认：<strong class="font-medium">{ask.request.title}</strong>{#if ask.request.reason}<span class="text-muted-foreground"> · {ask.request.reason}</span>{/if}</span>
             <Button size="sm" data-testid="agent-ask-allow-once" onclick={() => void chat.answer(ask.askId, "allow-once")}>允许</Button>
             <Button size="sm" variant="outline" data-testid="agent-ask-allow-conversation" onclick={() => void chat.answer(ask.askId, "allow-for-conversation")}>本段对话都允许</Button>
             <Button size="sm" variant="ghost" class="text-destructive hover:bg-destructive/10" data-testid="agent-ask-deny" onclick={() => void chat.answer(ask.askId, "deny")}>拒绝</Button>
@@ -92,14 +93,14 @@
         {/each}
       </div>
     {/if}
-    {#if chat.conversation?.parent}<p role="note" class="m-0 px-2 text-xs text-muted-foreground" data-testid="agent-child-notice">这是琴音派出的子会话「{chat.conversation.label ?? ""}」的记录，只能查看；在这里发消息会开始一段新对话。</p>{/if}
+    {#if chat.conversation?.parent}<p role="note" class="m-0 px-2 text-xs text-muted-foreground" data-testid="agent-child-notice">这是子会话「{chat.conversation.label ?? ""}」的记录，只能查看；在这里发消息会开始新对话。</p>{/if}
     {#if sendError}<p role="alert" class="m-0 px-2 text-xs text-destructive" data-testid="agent-send-error">{sendError}</p>{/if}
     {#if sendNotice}<p role="status" class="m-0 px-2 text-xs text-primary" data-testid="agent-send-notice">{sendNotice}</p>{/if}
     <ChatComposer
       bind:value={draft}
       bind:textarea
       disabled={inputBusy}
-      blockedReason={notReady ? "琴音还没准备好" : ""}
+      blockedReason={notReady ? "还没准备好" : ""}
       running={chat.running}
       {stopping}
       onsubmit={submit}
@@ -126,7 +127,7 @@
       {#if notReady}
         <div class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-destructive/35 bg-destructive/8 px-3.5 py-2.5 text-[13px]" data-testid="agent-not-ready">
           <CircleAlert class="size-4 shrink-0 text-destructive" />
-          <span class="font-medium text-destructive">琴音还没准备好</span>
+          <span class="font-medium text-destructive">{$companionName}还没准备好</span>
           <span class="min-w-0 flex-1 text-foreground/80">{notReady}</span>
           <Button variant="link" size="sm" class="h-auto p-0" data-testid="agent-open-settings" onclick={onOpenSettings}>前往设置 →</Button>
         </div>
@@ -141,7 +142,7 @@
       <div class="w-full max-w-[680px]">
         <div class="mb-6 flex flex-col items-center text-center">
           <div class="mb-4 shadow-[0_0_40px_-8px_var(--color-primary)] rounded-full"><KotoneAvatar size={80} mood="asking" custom={$customAvatar} faces={$roleFaces} letter={$avatarLetter} /></div>
-          <h2 class="m-0 text-2xl font-semibold tracking-tight">想让{$settingsStore?.agent?.identity?.name?.trim() || "琴音"}做点什么？</h2>
+          <h2 class="m-0 text-2xl font-semibold tracking-tight">想让{$companionName}做点什么？</h2>
           <p class="mt-2 mb-0 text-[13px] text-muted-foreground">做自动化、看游戏聊天、设提醒……在游戏里呼叫她说的话也会出现在这里。</p>
         </div>
         {@render composer()}

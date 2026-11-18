@@ -30,7 +30,7 @@ pub const GREETING_LIMIT: usize = 200;
 /// 最多几个角色（含内置）。
 pub const MAX_ROLES: usize = 30;
 
-/// 内置角色：琴音用现有的全套立绘和表情；其余先用占位头像（不冒用别人的形象），以后玩家补画。
+/// 内置角色：琴音，和两个社区二创角色（各有自己的表情图，打包在前端）。
 pub struct BuiltinRole {
     pub id: &'static str,
     pub name: &'static str,
@@ -50,22 +50,6 @@ pub const BUILTIN: &[BuiltinRole] = &[
         summary: "温暖、轻快，像一起开黑的朋友",
         soul: DEFAULT_SOUL,
         voice: "",
-        wake: "",
-    },
-    BuiltinRole {
-        id: "xiaoyu",
-        name: "小雨",
-        summary: "温柔安静，话不多，耐心",
-        soul: "# SOUL\n\n你是小雨，屏幕前玩家的游戏陪玩。性格温柔、安静、有耐心，说话轻声细语、简短。\n玩家打得不好时先安慰再给建议，从不催促；不确定的事如实说，不编。\n玩家在游戏里时只说结论，一两句口语。\n",
-        voice: "deepseek/stella",
-        wake: "",
-    },
-    BuiltinRole {
-        id: "xiaolin",
-        name: "小林",
-        summary: "沉稳冷静的男生，像靠谱的指挥",
-        soul: "# SOUL\n\n你是小林，屏幕前玩家的游戏陪玩。性格沉稳、冷静，说话干脆，像一个靠谱的队伍指挥。\n先说结论和该做什么，再简单说理由；不说教、不夸张；不确定的事如实说，不编。\n玩家在游戏里时只说结论，一两句口语。\n",
-        voice: "deepseek/tide",
         wake: "",
     },
     // 社区二创角色（形象 CC BY-NC-SA 4.0，见 apps/desktop/src/assets/roles/README.md 与 THIRD_PARTY_NOTICES.md）。
@@ -627,11 +611,10 @@ mod tests {
         let roles = ws.roles();
         assert_eq!(roles[0].id, DEFAULT_ROLE);
         assert_eq!(roles[0].name, "琴音");
-        assert!(roles
-            .iter()
-            .any(|r| r.id == "xiaoyu" && r.voice == "deepseek/stella"));
+        assert_eq!(roles.len(), 3);
         let fish = roles.iter().find(|r| r.id == "dafeiyu").unwrap();
         assert_eq!(fish.wake.text, "你好大肥鱼");
+        assert_eq!(fish.voice, "deepseek/stella");
         assert!(roles
             .iter()
             .any(|r| r.id == "claude-ojou" && r.name == "Claude大小姐"));
@@ -641,7 +624,7 @@ mod tests {
             ws.role_soul_path(DEFAULT_ROLE).unwrap(),
             ws.dir().join(SOUL)
         );
-        assert!(ws.role_soul("xiaolin").contains("小林"));
+        assert!(ws.role_soul("dafeiyu").contains("大肥鱼"));
     }
 
     #[test]
@@ -697,16 +680,16 @@ mod tests {
         assert!(ws.role(&role.id).is_none());
         // 内置的删不掉，只是改回默认
         ws.update_role(
-            "xiaoyu",
+            "dafeiyu",
             &RolePatch {
-                name: Some("雨".into()),
+                name: Some("小鱼".into()),
                 ..Default::default()
             },
         )
         .unwrap();
-        assert_eq!(ws.role("xiaoyu").unwrap().name, "雨");
-        ws.delete_role("xiaoyu").unwrap();
-        assert_eq!(ws.role("xiaoyu").unwrap().name, "小雨");
+        assert_eq!(ws.role("dafeiyu").unwrap().name, "小鱼");
+        ws.delete_role("dafeiyu").unwrap();
+        assert_eq!(ws.role("dafeiyu").unwrap().name, "大肥鱼");
     }
 
     #[test]

@@ -2,6 +2,7 @@
   // 输入框：Enter 发送、Shift+Enter 换行、输入法组字时不发送；回答中显示“停止”，仍可发送（插话）。
   // 外形参照 DeepSeek Harness 的输入卡（InputBar，MIT）：大圆角卡片，文字区在上、工具行在下。
   // 按键判断见 keys.ts（源自 Codeg）；输入器本身是 Kotone 的纯文本实现（不引入 Tiptap）。
+  import { companionName } from "$lib/stores/companion";
   import type { Snippet } from "svelte";
   import { ArrowUp, Square } from "@lucide/svelte";
   import { shouldSubmitOnEnter } from "./keys";
@@ -66,10 +67,10 @@
     bind:this={textarea}
     bind:value
     data-testid="assistant-request"
-    aria-label="跟琴音说"
+    aria-label={`跟${$companionName}说`}
     rows="1"
     maxlength="4000"
-    placeholder={running ? "琴音回答时也可以继续说（插话）…" : "跟琴音说点什么…"}
+    placeholder={running ? "回答时也可以接着说（插话）…" : `跟${$companionName}说点什么…`}
     {disabled}
     class="block max-h-[336px] min-h-12 w-full resize-none bg-transparent px-1.5 py-1 text-sm leading-6 text-foreground outline-none [field-sizing:content] placeholder:text-muted-foreground/80 disabled:cursor-not-allowed disabled:opacity-60"
     onkeydown={keydown}

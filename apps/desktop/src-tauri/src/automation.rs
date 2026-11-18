@@ -751,7 +751,7 @@ fn launch(app: &AppHandle, run: &Run) -> Result<(), String> {
         return Err("不是程序".into());
     };
     if crate::computer_use::busy(app) {
-        return Err("琴音正在操作游戏，自动化没有启动（不能同时按键）".into());
+        return Err("正在替你操作游戏，自动化没有启动（不能同时按键）".into());
     }
     let target = program.target.as_ref().ok_or("没有记录目标窗口")?;
     let identity = WindowIdentity {

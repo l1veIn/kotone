@@ -3,6 +3,7 @@
    * 通用页：琴音立绘横幅（启动按钮在这里）+ 日常高频设置（麦克风、热键、交互模式、悬浮窗、
    * 声音与弹幕、外观）。版式参照 DeepSeek Harness 设置页：居中内容列、细边设置卡、行间分隔。
    */
+  import { companionName } from "$lib/stores/companion";
   import { onDestroy, onMount } from "svelte";
   import {
     updateSettings,
@@ -36,7 +37,6 @@
   import CallKotoneButton from "../../../lib/components/CallKotoneButton.svelte";
   import heroGeneral from "../../../assets/brand/hero-general.webp";
 
-  const companionName = $derived($settingsStore?.agent?.identity?.name?.trim() || "琴音");
   let { onOpenAdvanced, onOpenCompanion, onOpenTalk }: {
     onOpenAdvanced: () => void;
     /** 「试试游戏陪玩」：打开琴音的聊天。 */
@@ -284,14 +284,14 @@
   <section class="rounded-2xl border border-primary/35 bg-primary/8 px-5 py-4" data-testid="companion-cta">
     <div class="flex flex-wrap items-center gap-4">
       <div class="min-w-0 flex-1">
-        <p class="m-0 text-[15px] font-semibold text-foreground">试试游戏陪玩：让{companionName}陪你玩</p>
+        <p class="m-0 text-[15px] font-semibold text-foreground">试试游戏陪玩：让{$companionName}陪你玩</p>
         <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">
           跟她说一句话，她能看游戏画面、帮你点鼠标按键、读队友聊天、替你用别的语言跟队友说话，还能帮你配置 Kotone。
         </p>
       </div>
       <div class="flex shrink-0 items-center gap-2">
         <Button size="sm" variant="outline" data-testid="companion-cta-talk" onclick={onOpenTalk}>怎么叫她</Button>
-        <Button size="sm" data-testid="companion-cta-open" onclick={onOpenCompanion}>和{companionName}聊聊</Button>
+        <Button size="sm" data-testid="companion-cta-open" onclick={onOpenCompanion}>和{$companionName}聊聊</Button>
       </div>
     </div>
     {#if $runtimeStore?.phase === "running"}
@@ -304,7 +304,7 @@
       <section class="flex flex-wrap items-center gap-3 rounded-2xl border border-brand-pink/45 bg-brand-pink/8 px-4 py-3.5">
         <div class="min-w-0 flex-1">
           <p class="m-0 text-[13px] font-semibold text-brand-pink">当前游戏需要更高权限才能接收文字</p>
-          <p class="mt-1 mb-0 text-xs text-muted-foreground">重新启动琴音后即可继续，其他设置不会丢失。</p>
+          <p class="mt-1 mb-0 text-xs text-muted-foreground">重新启动 Kotone 后即可继续，其他设置不会丢失。</p>
         </div>
         <Button size="sm" class="bg-brand-pink text-[#fff] hover:bg-brand-pink/90" disabled={restarting} onclick={() => void onRestartAsAdmin()}>
           {restarting ? "正在重启…" : "重新启动"}
