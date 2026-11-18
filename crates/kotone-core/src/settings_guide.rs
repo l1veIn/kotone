@@ -250,6 +250,10 @@ pub const INTERNAL: &[(&str, &str)] = &[
     ("agent.permissions", "琴音的权限只能由用户在设置页修改"),
     ("agent.identity.avatar", "头像要在设置页上传图片"),
     (
+        "agent.roleId",
+        "换角色用 roles.switch（会同时换名字、头像，开一段新对话）",
+    ),
+    (
         "assistant.callHotkeyDefaulted",
         "迁移标记：老配置补过默认呼叫键",
     ),

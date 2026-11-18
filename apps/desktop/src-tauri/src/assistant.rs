@@ -569,13 +569,29 @@ fn speech_request(
 ) -> SpeechRequest {
     // 声音编号可带提供方前缀（`system/…`、`kokoro/…`）；在线引擎的声音在模型配置里，
     // 每次播报时由合成线程解析。属于其他提供方的声音会在合成时报错，不会换声音。
-    let voice = match engine {
-        TtsEngine::Kokoro => config.kokoro_voice_id.trim().to_string(),
-        TtsEngine::System => {
+    // 当前角色有自己的声音、并且属于正在用的引擎时，用角色的（换角色声音跟着换）。
+    let role_voice = crate::roles::cached_voice();
+    let role_voice = role_voice.trim();
+    let provider = match engine {
+        TtsEngine::Kokoro => kotone_tts::voice::KOKORO,
+        TtsEngine::System => kotone_tts::voice::SYSTEM,
+        TtsEngine::Openai => kotone_tts::voice::OPENAI,
+        TtsEngine::Volcano => kotone_tts::voice::VOLCANO,
+        TtsEngine::Deepseek => kotone_tts::voice::DEEPSEEK,
+    };
+    let role_voice = role_voice
+        .split_once('/')
+        .filter(|(p, v)| *p == provider && !v.is_empty())
+        .map(|_| role_voice.to_string());
+    let voice = match (engine, role_voice) {
+        (TtsEngine::System, Some(v)) => v.trim_start_matches("system/").to_string(),
+        (_, Some(v)) => v,
+        (TtsEngine::Kokoro, None) => config.kokoro_voice_id.trim().to_string(),
+        (TtsEngine::System, None) => {
             let id = config.voice_id.trim();
             id.strip_prefix("system/").unwrap_or(id).to_string()
         }
-        TtsEngine::Openai | TtsEngine::Volcano | TtsEngine::Deepseek => String::new(),
+        (TtsEngine::Openai | TtsEngine::Volcano | TtsEngine::Deepseek, None) => String::new(),
     };
     SpeechRequest {
         text: text.to_string(),

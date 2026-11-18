@@ -15,18 +15,47 @@ fn workspace() -> Workspace {
     crate::agent::workspace()
 }
 
-/// 头像文件名合法：`avatar.<ext>`。
-fn avatar_name(ext: &str) -> Result<String, String> {
+/// 头像文件名：琴音（默认角色）是 `avatar.<ext>`（升级前的名字），其他角色是 `avatar-<角色 id>.<ext>`。
+fn avatar_stem(role: &str) -> String {
+    if role.is_empty() || role == kotone_agent::roles::DEFAULT_ROLE {
+        "avatar".into()
+    } else {
+        format!("avatar-{role}")
+    }
+}
+
+fn avatar_name(ext: &str, role: &str) -> Result<String, String> {
     let ext = ext.trim().trim_start_matches('.').to_ascii_lowercase();
     if !AVATAR_TYPES.contains(&ext.as_str()) {
         return Err("头像只支持 PNG、JPG、WebP、GIF".into());
     }
-    Ok(format!("avatar.{ext}"))
+    if !role.is_empty() && !kotone_agent::roles::valid_role_id(role) {
+        return Err("角色 id 不合法".into());
+    }
+    Ok(format!("{}.{ext}", avatar_stem(role)))
+}
+
+/// 某个角色的头像文件（`role` 为 None：任何角色的）。
+fn is_avatar_file_of(name: &str, role: Option<&str>) -> bool {
+    let Some((stem, ext)) = name.rsplit_once('.') else {
+        return false;
+    };
+    if !AVATAR_TYPES.contains(&ext) {
+        return false;
+    }
+    match role {
+        Some(role) => stem == avatar_stem(role),
+        None => {
+            stem == "avatar"
+                || stem
+                    .strip_prefix("avatar-")
+                    .is_some_and(kotone_agent::roles::valid_role_id)
+        }
+    }
 }
 
 fn is_avatar_file(name: &str) -> bool {
-    name.strip_prefix("avatar.")
-        .is_some_and(|ext| AVATAR_TYPES.contains(&ext))
+    is_avatar_file_of(name, None)
 }
 
 /// 总览：名字、记忆文件、游戏记忆、Skill、上限。
@@ -102,18 +131,27 @@ pub fn workspace_delete_game(id: String) -> Result<(), String> {
 
 /// 保存头像，返回文件名（再由设置页写进 `agent.identity.avatar`）。旧头像一并删掉。
 #[tauri::command]
-pub fn workspace_set_avatar(bytes: Vec<u8>, ext: String) -> Result<String, String> {
+pub fn workspace_set_avatar(
+    bytes: Vec<u8>,
+    ext: String,
+    role: Option<String>,
+) -> Result<String, String> {
     if bytes.is_empty() {
         return Err("图片是空的".into());
     }
     if bytes.len() > AVATAR_LIMIT {
         return Err("头像不能超过 2 MB".into());
     }
-    let name = avatar_name(&ext)?;
+    let role = role.unwrap_or_default();
+    let name = avatar_name(&ext, &role)?;
     let ws = workspace();
     if let Ok(entries) = std::fs::read_dir(ws.dir()) {
         for entry in entries.flatten() {
-            if entry.file_name().to_str().is_some_and(is_avatar_file) {
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|n| is_avatar_file_of(n, Some(&role)))
+            {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
@@ -161,10 +199,19 @@ mod tests {
 
     #[test]
     fn only_plain_avatar_files_are_accepted() {
-        assert_eq!(avatar_name(".PNG").unwrap(), "avatar.png");
-        assert!(avatar_name("exe").is_err());
+        assert_eq!(avatar_name(".PNG", "").unwrap(), "avatar.png");
+        assert_eq!(avatar_name("png", "kotone").unwrap(), "avatar.png");
+        assert_eq!(avatar_name("png", "xiaoyu").unwrap(), "avatar-xiaoyu.png");
+        assert!(avatar_name("exe", "").is_err());
+        assert!(avatar_name("png", "../x").is_err());
         assert!(is_avatar_file("avatar.webp"));
+        assert!(is_avatar_file("avatar-r3.png"));
+        assert!(!is_avatar_file("avatar-../x.png"));
         assert!(!is_avatar_file("../avatar.png"));
         assert!(!is_avatar_file("SOUL.md"));
+        // 换一个角色的头像只删那个角色的旧头像
+        assert!(is_avatar_file_of("avatar-r3.png", Some("r3")));
+        assert!(!is_avatar_file_of("avatar.png", Some("r3")));
+        assert!(is_avatar_file_of("avatar.png", Some("kotone")));
     }
 }

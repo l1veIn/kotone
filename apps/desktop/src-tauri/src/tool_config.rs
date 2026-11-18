@@ -39,6 +39,13 @@ struct NoArgs {}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RoleUpdateArgs {
+    id: String,
+    patch: kotone_agent::roles::RolePatch,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct IdArgs {
     id: String,
 }
@@ -700,6 +707,30 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
         c::TOOL_USAGE_SUMMARY => {
             let _: NoArgs = parse(tool, args)?;
             Ok(crate::usage::summary())
+        }
+        c::TOOL_ROLES_LIST => {
+            let _: NoArgs = parse(tool, args)?;
+            Ok(crate::roles::list(app))
+        }
+        c::TOOL_ROLES_GET => {
+            let IdArgs { id } = parse(tool, args)?;
+            crate::roles::get(app, &id).map_err(HostError::InvalidArguments)
+        }
+        c::TOOL_ROLES_SWITCH => {
+            let IdArgs { id } = parse(tool, args)?;
+            crate::roles::switch(app, &id).map_err(HostError::InvalidArguments)
+        }
+        c::TOOL_ROLES_CREATE => {
+            let patch: kotone_agent::roles::RolePatch = parse(tool, args)?;
+            crate::roles::create(app, patch).map_err(HostError::InvalidArguments)
+        }
+        c::TOOL_ROLES_UPDATE => {
+            let RoleUpdateArgs { id, patch } = parse(tool, args)?;
+            crate::roles::update(app, &id, patch).map_err(HostError::InvalidArguments)
+        }
+        c::TOOL_ROLES_DELETE => {
+            let IdArgs { id } = parse(tool, args)?;
+            crate::roles::delete(app, &id).map_err(HostError::InvalidArguments)
         }
         c::TOOL_POSTPROCESS_PROCESSORS => {
             let _: NoArgs = parse(tool, args)?;

@@ -28,6 +28,9 @@ bzip2 = "0.4"
 # 预编译原生库——体量大（~50MB 原生包 + 链接体积），故仅 engine-sherpa
 # feature 开启时才拉取编译，默认构建零原生依赖
 sherpa-onnx = { version = "1.13.5", optional = true }
+# 自定义唤醒词：汉字 → 带声调拼音（MIT，与 sherpa-onnx text2token 用的 pypinyin 同源 pinyin-data）。
+# 只开带声调与多音字：约 +0.5 MB。
+pinyin = { version = "0.11", default-features = false, features = ["with_tone", "heteronym"] }
 
 [dev-dependencies]
 tempfile.workspace = true

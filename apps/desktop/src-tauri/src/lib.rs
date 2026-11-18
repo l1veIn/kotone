@@ -16,6 +16,7 @@ mod key_request;
 mod model_catalog;
 mod ocr_engines;
 mod overlay;
+mod roles;
 mod runtime;
 mod speech_models;
 mod tool_config;
@@ -1150,8 +1151,21 @@ fn update_settings(
         let _ = app.emit("kotone://overlay-config", &updated.overlay);
     }
 
+    // 当前角色（名字、声音、唤醒词跟着它）
+    roles::remember(&updated.agent.role_id);
     // 引擎/模型/模式可能经 patch 变更 → restartNeeded 推导依赖最新配置，推送全量状态
     runtime::snapshot_and_emit(&app, None);
+    Ok(updated)
+}
+
+/// 后端自己改设置（例如换角色）：和设置页保存一样生效，并通知各窗口刷新。
+pub(crate) fn update_settings_from_backend(
+    app: &AppHandle,
+    patch: serde_json::Value,
+) -> Result<Settings, String> {
+    use tauri::Emitter as _;
+    let updated = update_settings(app.clone(), app.state(), patch)?;
+    let _ = app.emit("kotone://settings-changed", &updated);
     Ok(updated)
 }
 
@@ -2009,6 +2023,8 @@ pub fn run() {
 
             // 用量账本（usage.jsonl）：之后的在线调用都记进去。
             usage::start();
+            // 当前角色（工作区与语音合成按它取性格和声音）。
+            roles::remember(&settings.agent.role_id);
             let settings = Arc::new(RwLock::new(settings));
             let settings_repository = Arc::new(SettingsRepository::new(settings.clone()));
             let mut registry = EngineRegistry::new();
@@ -2102,6 +2118,8 @@ pub fn run() {
             automation::start_schedules(app.handle());
             // 内置琴音 Agent：对话存储与运行状态（ADR 014 / 015）
             app.manage(agent::AgentRuntime::open());
+            // 琴音原来的名字和头像记进她的角色卡（只做一次）。
+            roles::migrate(app.handle());
             // 先接上程序执行端口，再启动调度器（到点的程序才有人执行）。
             automation::attach(app.handle());
             assistant::start(app.handle());
@@ -2256,6 +2274,15 @@ pub fn run() {
             automation::automation_run_saved,
             automation::automation_stop,
             usage::usage_summary,
+            roles::roles_list,
+            roles::roles_get,
+            roles::roles_switch,
+            roles::roles_update,
+            roles::roles_create,
+            roles::roles_delete,
+            roles::roles_export,
+            roles::roles_import,
+            roles::roles_check_wake,
             agent::agent_send,
             workspace_cmd::workspace_overview,
             key_request::agent_submit_key,

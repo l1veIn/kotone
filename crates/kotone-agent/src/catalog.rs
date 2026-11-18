@@ -214,7 +214,7 @@ pub fn group_of(name: &str) -> &'static str {
         "tools" => "meta",
         "reply" | "reminder" | "game_chat" | "game" | "companion" | "chat" | "voice_chat"
         | "voice" => "game",
-        "memory" | "skill" | "soul" | "session" => "meta",
+        "memory" | "skill" | "soul" | "session" | "roles" => "meta",
         "window" | "screen" | "image" | "artifact" | "ocr" => "screen",
         "automation" | "saved" => "automation",
         "settings" | "profiles" | "hotkeys" | "connections" | "audio" | "input" | "postprocess"

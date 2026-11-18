@@ -41,6 +41,12 @@ pub const TOOL_DIAGNOSTICS_EXPORT: &str = "diagnostics.export";
 pub const TOOL_DIAGNOSTICS_CLEAR: &str = "diagnostics.clear";
 pub const TOOL_APP_RESOURCES: &str = "app.resources";
 pub const TOOL_USAGE_SUMMARY: &str = "usage.summary";
+pub const TOOL_ROLES_LIST: &str = "roles.list";
+pub const TOOL_ROLES_GET: &str = "roles.get";
+pub const TOOL_ROLES_SWITCH: &str = "roles.switch";
+pub const TOOL_ROLES_CREATE: &str = "roles.create";
+pub const TOOL_ROLES_UPDATE: &str = "roles.update";
+pub const TOOL_ROLES_DELETE: &str = "roles.delete";
 pub const TOOL_APP_RESTART: &str = "app.restart";
 pub const TOOL_POSTPROCESS_PROCESSORS: &str = "postprocess.processors";
 pub const TOOL_POSTPROCESS_TEST: &str = "postprocess.test";
@@ -108,6 +114,12 @@ pub const HOST_TOOLS: &[&str] = &[
     TOOL_DIAGNOSTICS_CLEAR,
     TOOL_APP_RESOURCES,
     TOOL_USAGE_SUMMARY,
+    TOOL_ROLES_LIST,
+    TOOL_ROLES_GET,
+    TOOL_ROLES_SWITCH,
+    TOOL_ROLES_CREATE,
+    TOOL_ROLES_UPDATE,
+    TOOL_ROLES_DELETE,
     TOOL_APP_RESTART,
     TOOL_POSTPROCESS_PROCESSORS,
     TOOL_POSTPROCESS_TEST,
@@ -136,6 +148,20 @@ pub const HOST_TOOLS: &[&str] = &[
     TOOL_VOICE_CHAT_SAY,
     TOOL_VOICE_CHAT_TEST,
 ];
+
+fn role_patch_schema() -> Value {
+    json!({
+        "name": {"type": "string", "minLength": 1, "maxLength": 20},
+        "summary": {"type": "string", "maxLength": 60},
+        "voice": {"type": "string", "maxLength": 80, "description": "provider/voice, empty = follow the global voice"},
+        "wake": {"type": "object", "additionalProperties": false, "properties": {
+            "text": {"type": "string", "maxLength": 8, "description": "Chinese wake word; empty = default"},
+            "readings": {"type": "array", "items": {"type": "string"}, "description": "toned pinyin per character for polyphones, e.g. [\"yín\", \"háng\"]"}
+        }},
+        "greeting": {"type": "string", "maxLength": 200},
+        "soul": {"type": "string", "maxLength": 4000, "description": "personality, Markdown (SOUL.md)"}
+    })
+}
 
 fn none() -> Value {
     json!({"type": ["object", "null"], "additionalProperties": false, "properties": {}})
@@ -488,6 +514,54 @@ fn defs() -> Vec<Def> {
             egress: "none",
             input: none(),
             output: open("用量与费用"),
+        },
+        Def {
+            name: TOOL_ROLES_LIST,
+            description: "List the companion's switchable roles (琴音 is the default): id, name, one-line summary, avatar file, voice (provider/voice, empty = the global voice), wake word with its pinyin check, greeting, and which one is current. Memory, skills and settings are shared by all roles.",
+            side_effects: &[],
+            egress: "none",
+            input: none(),
+            output: open("角色列表"),
+        },
+        Def {
+            name: TOOL_ROLES_GET,
+            description: "One role in full, including its personality (SOUL.md text).",
+            side_effects: &[],
+            egress: "none",
+            input: object(&["id"], json!({"id": {"type": "string", "minLength": 1, "maxLength": 40}})),
+            output: open("角色"),
+        },
+        Def {
+            name: TOOL_ROLES_SWITCH,
+            description: "Switch the current role: name, avatar, personality, voice and wake word change together, and the next message starts a new conversation (memory is shared, nothing is forgotten). Refused while the companion is answering.",
+            side_effects: &["writes-settings"],
+            egress: "none",
+            input: object(&["id"], json!({"id": {"type": "string", "minLength": 1, "maxLength": 40}})),
+            output: open("换角色结果"),
+        },
+        Def {
+            name: TOOL_ROLES_CREATE,
+            description: "Create a role. name is required; summary, voice (provider/voice from speech.voices, e.g. deepseek/tide), wake {text, readings} (Chinese, 3-8 characters; default = the name said twice), greeting and soul (personality, Markdown) are optional. The avatar is uploaded by the user in the settings window.",
+            side_effects: &["writes-files"],
+            egress: "none",
+            input: object(&["name"], role_patch_schema()),
+            output: open("新角色"),
+        },
+        Def {
+            name: TOOL_ROLES_UPDATE,
+            description: "Edit a role (fields left out are unchanged): name, summary, voice, wake {text, readings}, greeting, soul. Changes to the current role's personality take effect in the next conversation.",
+            side_effects: &["writes-files"],
+            egress: "none",
+            input: object(&["id", "patch"], json!({"id": {"type": "string", "minLength": 1, "maxLength": 40}, "patch": {"type": "object", "additionalProperties": false, "properties": role_patch_schema()}})),
+            output: open("角色"),
+        },
+        Def {
+            name: TOOL_ROLES_DELETE,
+            description: "Delete a role the user created (a built-in role is reset to its defaults instead). Deleting the current role switches back to 琴音.",
+            side_effects: &["deletes-files"],
+            egress: "none",
+            input: object(&["id"], json!({"id": {"type": "string", "minLength": 1, "maxLength": 40}})),
+            output: open("角色列表"),
         },
         Def {
             name: TOOL_APP_RESTART,

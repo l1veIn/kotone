@@ -127,7 +127,8 @@ mod detector {
     }
 
     impl WakeDetector {
-        pub fn new(dir: &Path, phrase: &str, sensitivity: &str) -> Result<Self, String> {
+        /// `keywords`：关键词行（[`keywords_text`] 的预置唤醒词，或 [`crate::wake_word`] 算出的自定义唤醒词）。
+        pub fn new(dir: &Path, keywords: &str, sensitivity: &str) -> Result<Self, String> {
             if !kws_model_ready_in(dir) {
                 return Err("唤醒模型还没有下载".into());
             }
@@ -142,7 +143,10 @@ mod detector {
             config.model_config.provider = Some("cpu".into());
             config.keywords_threshold = threshold;
             config.keywords_score = score;
-            config.keywords_buf = Some(keywords_text(phrase)?);
+            if keywords.trim().is_empty() {
+                return Err("唤醒词是空的".into());
+            }
+            config.keywords_buf = Some(keywords.to_string());
             let spotter = KeywordSpotter::create(&config).ok_or("唤醒模型加载失败")?;
             let stream = spotter.create_stream();
             Ok(Self { spotter, stream })
@@ -218,7 +222,8 @@ mod tests {
         let dir = PathBuf::from(std::env::var("KOTONE_KWS_TEST_DIR").unwrap());
         let wav = std::env::var("KOTONE_KWS_TEST_WAV").unwrap();
         let samples = kotone_core::eval::read_wav(Path::new(&wav)).unwrap();
-        let mut detector = WakeDetector::new(&dir, "qinyin-qinyin", "normal").unwrap();
+        let mut detector =
+            WakeDetector::new(&dir, &keywords_text("qinyin-qinyin").unwrap(), "normal").unwrap();
         let mut hits = Vec::new();
         for chunk in samples.chunks(800) {
             if let Some(k) = detector.accept(chunk) {

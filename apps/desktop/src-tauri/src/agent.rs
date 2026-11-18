@@ -145,7 +145,8 @@ pub fn workspace() -> Workspace {
         kotone_core::settings::kotone_dir()
             .join("agent")
             .join("workspace"),
-    );
+    )
+    .with_role(&crate::roles::cached_id());
     if let Err(e) = ws.ensure() {
         log::log(&format!("agent: workspace unavailable: {e}"));
     }
@@ -1208,6 +1209,19 @@ pub fn stop(app: &AppHandle) -> Result<bool, String> {
         }
         None => Ok(false),
     }
+}
+
+/// 主会话正在回答吗。
+pub fn is_running(app: &AppHandle) -> bool {
+    runtime(app).is_ok_and(|rt| rt.inner.lock().unwrap().running.is_some())
+}
+
+/// 下一句话开始一段新对话（换角色时用）。
+pub fn start_new_conversation(app: &AppHandle) -> Result<(), String> {
+    ensure_idle(app)?;
+    store(app)?.set_current(None)?;
+    emit(app, "", json!({"kind": "idle"}));
+    Ok(())
 }
 
 fn ensure_idle(app: &AppHandle) -> Result<(), String> {

@@ -60,10 +60,11 @@ fn fnv64(text: &str) -> String {
     format!("{hash:016x}")
 }
 
-/// 工作区。
+/// 工作区。`role` 是当前角色（决定用哪份 SOUL.md，见 [`crate::roles`]）；记忆、Skill 所有角色共用。
 #[derive(Debug, Clone)]
 pub struct Workspace {
     dir: PathBuf,
+    role: String,
 }
 
 /// 记忆写到哪里。
@@ -297,7 +298,30 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
 
 impl Workspace {
     pub fn new(dir: PathBuf) -> Self {
-        Self { dir }
+        Self {
+            dir,
+            role: crate::roles::DEFAULT_ROLE.into(),
+        }
+    }
+
+    /// 当前角色（不合法或空的 id 当成默认角色琴音）。
+    pub fn with_role(mut self, role: &str) -> Self {
+        let role = role.trim();
+        self.role = if crate::roles::valid_role_id(role) {
+            role.to_string()
+        } else {
+            crate::roles::DEFAULT_ROLE.into()
+        };
+        self
+    }
+
+    pub fn current_role(&self) -> &str {
+        &self.role
+    }
+
+    fn soul_path(&self) -> PathBuf {
+        self.role_soul_path(&self.role)
+            .unwrap_or_else(|_| self.dir.join(SOUL))
     }
 
     pub fn dir(&self) -> &Path {
@@ -410,7 +434,7 @@ impl Workspace {
     /// 直接写一份记忆或 SOUL 的全文（设置页编辑用；同样有上限与扫描）。
     pub fn write_file(&self, file: &str, text: &str) -> Result<(), String> {
         let (path, limit) = match file {
-            SOUL => (self.dir.join(SOUL), SOUL_LIMIT),
+            SOUL => (self.soul_path(), SOUL_LIMIT),
             USER => (self.dir.join(USER), USER_LIMIT),
             MEMORY => (self.dir.join(MEMORY), MEMORY_LIMIT),
             IDENTITY => (self.dir.join(IDENTITY), 1_000),
@@ -428,7 +452,8 @@ impl Workspace {
 
     pub fn read_file(&self, file: &str) -> Result<String, String> {
         Ok(match file {
-            SOUL | USER | MEMORY | IDENTITY => read(&self.dir.join(file)),
+            SOUL => self.role_soul(&self.role),
+            USER | MEMORY | IDENTITY => read(&self.dir.join(file)),
             other => match other.strip_prefix("games/") {
                 Some(game) => read(&self.game_path(game)?),
                 None => return Err(format!("不能读 {other}")),
@@ -586,7 +611,7 @@ impl Workspace {
             .filter(|(_, text)| !text.trim().is_empty());
         Snapshot {
             name: self.identity(name_override).name,
-            soul: read(&self.dir.join(SOUL)),
+            soul: self.role_soul(&self.role),
             user: read(&self.dir.join(USER)),
             memory: read(&self.dir.join(MEMORY)),
             game,

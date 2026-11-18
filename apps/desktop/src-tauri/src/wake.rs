@@ -64,6 +64,8 @@ struct Worker {
     stop: Arc<AtomicBool>,
     config: WakeConfig,
     device: String,
+    /// 正在用的关键词行（当前角色的唤醒词）。
+    keywords: String,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -257,10 +259,15 @@ pub fn sync(app: &AppHandle) {
     let device = settings.audio_device_id.clone();
     let mut worker = rt.worker.lock().unwrap();
     let wanted = config.enabled && voice_running(app) && kotone_stt::wake::kws_model_ready();
+    // 唤醒词跟着当前角色（换角色、改唤醒词都要重新开始监听）。
+    let (keywords, keyword_label, keyword_warning) = crate::roles::wake_keywords(app);
     if let Some(w) = worker.as_ref() {
-        if wanted && w.config == config && w.device == device {
+        if wanted && w.config == config && w.device == device && w.keywords == keywords {
             return;
         }
+    }
+    if let Some(warning) = &keyword_warning {
+        log::log(&format!("wake: {warning}"));
     }
     // 先停旧的，再按需开新的。旧线程在后台退出（它可能正等着开始一次会话），
     // 调用方不必等它；两路共享模式的采集短暂重叠没有问题。
@@ -290,10 +297,12 @@ pub fn sync(app: &AppHandle) {
         let stop = stop.clone();
         let config = config.clone();
         let device = device.clone();
+        let keywords = keywords.clone();
         std::thread::Builder::new()
             .name("kotone-wake".into())
             .spawn(move || {
-                if let Err(error) = listen(&app, &config, &device, &stop) {
+                if let Err(error) = listen(&app, &config, &keywords, &keyword_label, &device, &stop)
+                {
                     log::log(&format!("wake: stopped with error: {error}"));
                     set_state(&app, WakeState::Error { message: error });
                 }
@@ -305,6 +314,7 @@ pub fn sync(app: &AppHandle) {
                 stop,
                 config,
                 device,
+                keywords,
                 thread: Some(thread),
             });
         }
@@ -363,20 +373,18 @@ enum Phase {
 fn listen(
     app: &AppHandle,
     config: &WakeConfig,
+    keywords: &str,
+    phrase: &str,
     device: &str,
     stop: &AtomicBool,
 ) -> Result<(), String> {
-    let phrase = serde_json::to_value(config.phrase)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_default();
     let sensitivity = serde_json::to_value(config.sensitivity)
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_default();
     let mut detector = kotone_stt::wake::WakeDetector::new(
         &kotone_stt::wake::kws_model_dir(),
-        &phrase,
+        keywords,
         &sensitivity,
     )?;
     let backend = kotone_platform_windows::audio::CpalBackend;
@@ -607,6 +615,8 @@ fn listen(
 fn listen(
     _app: &AppHandle,
     _config: &WakeConfig,
+    _keywords: &str,
+    _phrase: &str,
     _device: &str,
     _stop: &AtomicBool,
 ) -> Result<(), String> {

@@ -25,6 +25,7 @@ pub mod transcriber;
 pub mod vad;
 mod volcano;
 pub mod wake;
+pub mod wake_word;
 
 use kotone_core::stt::{EngineRegistry, SttEngine};
 

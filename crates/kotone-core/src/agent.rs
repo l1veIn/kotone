@@ -69,6 +69,14 @@ pub struct AgentConfig {
     /// 0 = 不整理（太长时只能丢最早的轮次）。新字段。
     #[serde(default = "default_compact_at_tokens")]
     pub compact_at_tokens: u64,
+    /// 当前角色（工作区 `roles/<id>`；默认 `kotone` = 琴音）。换角色走 `roles.switch`，
+    /// 它会同时把名字、头像写进 `identity`，并开一段新对话。新字段。
+    #[serde(default = "default_role_id")]
+    pub role_id: String,
+}
+
+fn default_role_id() -> String {
+    "kotone".into()
 }
 
 /// 默认 6.4 万 token：DeepSeek 的上下文有 100 万，但每次请求都会把整段对话带上，
@@ -123,6 +131,7 @@ impl Default for AgentConfig {
             identity: IdentityConfig::default(),
             subagents: SubagentsConfig::default(),
             compact_at_tokens: DEFAULT_COMPACT_AT_TOKENS,
+            role_id: default_role_id(),
         }
     }
 }

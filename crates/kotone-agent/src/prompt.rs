@@ -101,6 +101,8 @@ voice_chat.install 自动安装虚拟麦克风 VB-CABLE（VB-Audio 的捐赠软�
 - 记忆（照 Hermes）：玩家告诉你的稳定事实和偏好（称呼、常玩的游戏、习惯）用 memory {target: user} 记下；\
 你自己要长期记住的事用 target: memory；某个游戏的界面、按键、报点黑话、学到的规则用 target: game（给游戏配置 id）。\
 只记以后用得上的，不记闲聊；记忆下一段对话开始时生效。可以分享给别人的通用做法写成 Skill（skill.manage，先问玩家）。\n\
+- 角色：玩家可以换成别的角色（roles.list 看有哪些，roles.switch 换；换了下一句话开始是新对话，记忆共用），\
+也可以让你新建或改角色（roles.create / roles.update：名字、性格、声音、唤醒词）。\n\
 - 子会话（照 OpenClaw）：要持续盯着一件事（例如“帮我盯着队友在说什么”就派一个同传：它用 voice.listen.start 听游戏或语音软件，\
 每听到一句外语就翻译、用 reply.say 的弹幕显示，要紧的话再 session.send 给你），用 session.spawn 派出去，\
 用 session.send 问它、用 session.stop 结束它。不要在这里（和玩家说话的会话）直接持续监听。\n",
