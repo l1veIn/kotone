@@ -99,7 +99,10 @@ async function openChat(page: Page, options: { empty?: boolean; notReady?: strin
         case "usage_summary": {
           const today = { requests: 9, inputTokens: 182_000, cacheHitTokens: 179_000, outputTokens: 1_200, characters: 300, audioMs: 65_000, images: 2, hitRate: 179_000 / 182_000, cost: { CNY: 0.0251 }, unpriced: 0 };
           return { today, month: { ...today, cost: { CNY: 1.204 }, unpriced: 3 }, byKind: [{ kind: "chat", label: "对话", totals: today }, { kind: "compaction", label: "压缩", totals: { ...today, requests: 1 } }],
-            byModel: [], days: [], priceSource: "DeepSeek 官方价格页（测试）", note: "费用是估算", ledger: "C:/test/usage.jsonl" };
+            byModel: [], days: [
+              { day: "2026-11-17", totals: { ...today, requests: 4, cost: { CNY: 0.012 } }, byKind: [{ kind: "chat", label: "对话", totals: today }], byModel: [{ model: "deepseek/deepseek-flash", totals: today }] },
+              { day: "2026-11-18", totals: today, byKind: [{ kind: "chat", label: "对话", totals: today }, { kind: "tts", label: "语音合成", totals: { ...today, requests: 2, inputTokens: 0, cacheHitTokens: 0, cost: { CNY: 0.003 } } }], byModel: [{ model: "deepseek/deepseek-flash", totals: today }] },
+            ], priceSource: "DeepSeek 官方价格页（测试）", note: "费用是估算", ledger: "C:/test/usage.jsonl" };
         }
         case "get_runtime_status": return { phase: "running", restartNeeded: false, engineId: "fixture", engineName: "测试引擎", modelId: "fixture", interactionMode: "dictation", stage: null };
         case "list_connections": return [{ id: "test-ai", displayName: "测试连接", provider: "test", kind: "remote", baseUrl: "https://example.invalid", model: connectionModel, hasApiKey: true }];
@@ -462,4 +465,34 @@ test("compaction divider, match recap card and switch; usage shows hit rate and 
   await usage.getByLabel("整理阈值（token）").press("Tab");
   await expect.poll(async () => page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings().then((s) => s.agent?.compactAtTokens))).toBe(32000);
   await usage.screenshot({ path: testInfo.outputPath("usage.png"), animations: "disabled" });
+});
+
+test("the chat shows today's and this conversation's usage; details by day and by call", async ({ page }, testInfo) => {
+  await openChat(page);
+  await page.evaluate(async (T) => {
+    const t = window.agentTest;
+    await t.event("c-old", { kind: "step", step: 1 });
+    await t.event("c-old", { kind: "appended", message: { role: "assistant", text: "好", usage: { inputTokens: 20_000, cachedInputTokens: 19_800, outputTokens: 50, cost: 0.0015, currency: "CNY" }, atMs: T + 1000 } });
+    await t.event("c-old", { kind: "appended", message: { role: "assistant", text: "嗯", usage: { inputTokens: 18_000, cachedInputTokens: 100, outputTokens: 40, cost: 0.036, currency: "CNY" }, atMs: T + 2000 } });
+    await t.event("c-old", { kind: "finished", stop: { kind: "completed" }, acpStopReason: "end_turn" });
+    await t.event("c-old", { kind: "idle" });
+  }, T);
+  const pill = page.getByTestId("usage-pill");
+  await expect(page.getByTestId("usage-pill-today")).toHaveText("今天 ¥0.025 · 命中 98%");
+  // 本段对话：(19800 + 100) / 38000 = 52%
+  await expect(page.getByTestId("usage-pill-conversation")).toHaveText("本段对话 ¥0.037 · 命中 52%");
+  await pill.click();
+  const dialog = page.getByTestId("usage-dialog");
+  await expect(dialog.getByTestId("usage-day")).toHaveCount(2);
+  await expect(dialog.getByTestId("usage-day").first()).toHaveAttribute("data-day", "2026-11-18");
+  await dialog.getByTestId("usage-day").first().click();
+  await expect(dialog.getByTestId("usage-day-detail")).toContainText("语音合成");
+  await expect(dialog.getByTestId("usage-day-detail")).toContainText("deepseek/deepseek-flash");
+  await page.screenshot({ path: testInfo.outputPath("usage-days.png"), animations: "disabled" });
+  await dialog.getByTestId("usage-tab-conversation").click();
+  await expect(dialog.getByTestId("usage-call")).toHaveCount(2);
+  // 新的在前；没命中的那次标出来
+  await expect(dialog.getByTestId("usage-call").first()).toContainText("1%");
+  await expect(dialog.getByTestId("usage-call").first().locator("td.text-warning")).toHaveCount(1);
+  await page.screenshot({ path: testInfo.outputPath("usage-calls.png"), animations: "disabled" });
 });

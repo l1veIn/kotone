@@ -335,7 +335,8 @@ export interface UsageSummary {
   today: UsageTotals; month: UsageTotals;
   byKind: { kind: string; label: string; totals: UsageTotals }[];
   byModel: { model: string; totals: UsageTotals }[];
-  days: { day: string; totals: UsageTotals }[];
+  /** 最近 60 天，每天的合计、按用途、按模型（旧的在前）。 */
+  days: { day: string; totals: UsageTotals; byKind: { kind: string; label: string; totals: UsageTotals }[]; byModel: { model: string; totals: UsageTotals }[] }[];
   priceSource: string; note: string; ledger: string | null;
 }
 
@@ -348,6 +349,11 @@ export async function usageSummary(): Promise<UsageSummary> {
     today, month: { ...today, requests: 230, inputTokens: 3_600_000, cacheHitTokens: 3_350_000, outputTokens: 51_000, characters: 9_800, audioMs: 420_000, images: 35, hitRate: 3_350_000 / 3_600_000, cost: { CNY: 0.92 } },
     byKind: [{ kind: "chat", label: "对话", totals: today }],
     byModel: [{ model: "deepseek/deepseek-flash", totals: today }],
-    days: [], priceSource: "界面预览", note: "界面预览的示例数字", ledger: null,
+    days: [3, 2, 1, 0].map((ago) => {
+      const day = new Date(Date.now() - ago * 86_400_000).toISOString().slice(0, 10);
+      const totals = { ...today, requests: 10 + ago, cost: { CNY: 0.02 + ago * 0.01 } };
+      return { day, totals, byKind: [{ kind: "chat", label: "对话", totals }], byModel: [{ model: "deepseek/deepseek-flash", totals }] };
+    }),
+    priceSource: "界面预览", note: "界面预览的示例数字", ledger: null,
   };
 }

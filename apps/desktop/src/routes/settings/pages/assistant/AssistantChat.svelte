@@ -15,6 +15,7 @@
   import CallKotoneButton from "../../../../lib/components/CallKotoneButton.svelte";
   import KeyRequestCard from "../../../../lib/agentChat/KeyRequestCard.svelte";
   import ComposerOptions from "../../../../lib/agentChat/ComposerOptions.svelte";
+  import UsagePanel from "../../../../lib/agentChat/UsagePanel.svelte";
   import KotoneAvatar from "../../../../lib/components/KotoneAvatar.svelte";
   import { avatarLetter, customAvatar, roleFaces } from "../../../../lib/stores/avatar";
 
@@ -160,6 +161,7 @@
       onAnswer={(askId, answer) => chat.answer(askId, answer)}
     />
     <div class="mx-auto w-full max-w-[840px] shrink-0 px-6 pb-4">
+      <UsagePanel messages={chat.conversation?.messages ?? []} running={chat.runningHere} />
       {@render composer()}
     </div>
   {/if}
