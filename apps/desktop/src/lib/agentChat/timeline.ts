@@ -16,7 +16,9 @@ export type Block =
   | { kind: "thinking"; key: string; text: string; streaming: boolean }
   | { kind: "text"; key: string; text: string; streaming: boolean }
   | { kind: "tool"; key: string; tool: ToolView }
-  | { kind: "notice"; key: string; text: string };
+  | { kind: "notice"; key: string; text: string }
+  /** 上下文压缩的检查点：它之前的对话已整理成这份摘要。 */
+  | { kind: "checkpoint"; key: string; text: string; summary: string };
 
 export interface Turn {
   /** 稳定的标识（第一条消息的位置与时间），用于滚动锚点。 */
@@ -48,6 +50,10 @@ function addUsage(total: TokenUsage | null, usage: TokenUsage | undefined): Toke
     cachedInputTokens: sum(total?.cachedInputTokens, usage.cachedInputTokens),
     reasoningTokens: sum(total?.reasoningTokens, usage.reasoningTokens),
     costUsd: sum(total?.costUsd, usage.costUsd),
+    // 币种不同（换过连接）就不加在一起。
+    ...(total?.currency && usage.currency && total.currency !== usage.currency
+      ? { cost: undefined, currency: undefined }
+      : { cost: sum(total?.cost, usage.cost), currency: usage.currency ?? total?.currency }),
   };
 }
 
@@ -84,6 +90,8 @@ export function buildTurns(messages: readonly AgentMessage[], live: LiveState | 
       }
       current.usage = addUsage(current.usage, message.usage);
       current.endedAtMs = message.atMs;
+    } else if (message.role === "notice" && message.compaction) {
+      current.blocks.push({ kind: "checkpoint", key: `k${index}`, text: message.text, summary: message.compaction });
     } else if (message.role === "notice") {
       current.blocks.push({ kind: "notice", key: `n${index}`, text: message.text });
       current.endedAtMs = message.atMs;
@@ -104,4 +112,37 @@ export function buildTurns(messages: readonly AgentMessage[], live: LiveState | 
 /** 显示用：1234 → “1,234”。 */
 export function formatTokens(value: number): string {
   return value.toLocaleString("en-US");
+}
+
+/** 一段对话所有模型调用的用量之和（含压缩）。 */
+export function conversationUsage(messages: readonly AgentMessage[]): TokenUsage | null {
+  let total: TokenUsage | null = null;
+  for (const message of messages) {
+    if (message.role === "assistant" || message.role === "notice") total = addUsage(total, message.usage);
+  }
+  return total;
+}
+
+/**
+ * 命中率显示（照 DeepSeek Harness 的 token-format）：整数百分比；没全中时不显示成 100
+ * （99.5、99.95……多保留到不是 100 为止）。没有输入时为空。
+ */
+export function formatHitRate(hit: number | undefined, input: number | undefined): string {
+  if (!input) return "";
+  const h = Math.min(hit ?? 0, input);
+  if (h === input) return "100%";
+  const percent = (h / input) * 100;
+  for (let digits = 0; digits <= 4; digits += 1) {
+    const text = percent.toFixed(digits);
+    if (Number(text) < 100) return `${text}%`;
+  }
+  return "99.9999%";
+}
+
+/** 显示费用：人民币 ¥、美元 $；很小的数多保留几位。 */
+export function formatCost(cost: number | undefined, currency: string | undefined): string {
+  if (cost === undefined) return "";
+  const symbol = currency === "CNY" ? "¥" : currency === "USD" || !currency ? "$" : `${currency} `;
+  const digits = cost >= 1 ? 2 : cost >= 0.01 ? 3 : 4;
+  return `${symbol}${cost.toFixed(digits)}`;
 }

@@ -17,6 +17,7 @@
   import BubbleSettings from "./assistant/BubbleSettings.svelte";
   import OutputSettings from "./assistant/OutputSettings.svelte";
   import VoiceChatSettings from "./assistant/VoiceChatSettings.svelte";
+  import UsageSettings from "./assistant/UsageSettings.svelte";
 
   type Section = "chat" | "identity" | "memory" | "skills" | "settings";
   let { onOpenConnections, onOpenAutomation, chatRequest = 0, open = null }: {
@@ -70,6 +71,7 @@
     { id: "companion-settings-reply", label: "回答" },
     { id: "companion-settings-teammates", label: "游戏语音" },
     { id: "companion-settings-permissions", label: "权限" },
+    { id: "companion-settings-usage", label: "用量" },
   ];
 
   onMount(() => {
@@ -146,6 +148,7 @@
       <VoiceChatSettings />
       {@render group("companion-settings-permissions", "她能直接做什么", "游戏内交给她、每个工具允许 / 询问 / 禁止。")}
       <AgentSettings />
+      <div id="companion-settings-usage" class="scroll-mt-16"><UsageSettings /></div>
     </div>
   {/if}
 </div>

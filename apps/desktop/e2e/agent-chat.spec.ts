@@ -47,6 +47,7 @@ async function openChat(page: Page, options: { empty?: boolean; notReady?: strin
         // 与后端一致：每条 appended 的消息同时存盘
         const e = event as { kind: string; message?: unknown };
         if (e.kind === "appended") conversations[conversationId]?.messages.push(e.message as never);
+        if (e.kind === "compacted") conversations[conversationId]?.messages.splice((e as unknown as { index: number }).index, 0, e.message as never);
         if (e.kind === "step") state.running = conversationId;
         if (e.kind === "idle") state.running = null;
         await emit("kotone://agent-event", { conversationId, event });
@@ -95,6 +96,11 @@ async function openChat(page: Page, options: { empty?: boolean; notReady?: strin
           return true;
         }
         case "automation_runs": return { runs: [] };
+        case "usage_summary": {
+          const today = { requests: 9, inputTokens: 182_000, cacheHitTokens: 179_000, outputTokens: 1_200, characters: 300, audioMs: 65_000, images: 2, hitRate: 179_000 / 182_000, cost: { CNY: 0.0251 }, unpriced: 0 };
+          return { today, month: { ...today, cost: { CNY: 1.204 }, unpriced: 3 }, byKind: [{ kind: "chat", label: "对话", totals: today }, { kind: "compaction", label: "压缩", totals: { ...today, requests: 1 } }],
+            byModel: [], days: [], priceSource: "DeepSeek 官方价格页（测试）", note: "费用是估算", ledger: "C:/test/usage.jsonl" };
+        }
         case "get_runtime_status": return { phase: "running", restartNeeded: false, engineId: "fixture", engineName: "测试引擎", modelId: "fixture", interactionMode: "dictation", stage: null };
         case "list_connections": return [{ id: "test-ai", displayName: "测试连接", provider: "test", kind: "remote", baseUrl: "https://example.invalid", model: connectionModel, hasApiKey: true }];
         case "list_connection_presets": return [{ id: "test", displayName: "测试", group: "custom", description: "", defaultBaseUrl: "https://example.invalid", defaultModel: "test", models: ["test", "test-pro"] }];
@@ -210,14 +216,15 @@ test("streams text and thinking, tracks tool card states, asks for permission an
     const t = window.agentTest;
     await t.event("c-old", { kind: "step", step: 2 });
     await t.event("c-old", { kind: "chunk", text: "已经发了。" });
-    await t.event("c-old", { kind: "appended", message: { role: "assistant", text: "已经发了。", usage: { inputTokens: 1400, outputTokens: 8, cachedInputTokens: 1000 }, atMs: T + 3000 } });
+    await t.event("c-old", { kind: "appended", message: { role: "assistant", text: "已经发了。", usage: { inputTokens: 1400, outputTokens: 8, cachedInputTokens: 1000, cost: 0.0012, currency: "CNY" }, atMs: T + 3000 } });
     await t.event("c-old", { kind: "finished", stop: { kind: "completed" }, acpStopReason: "end_turn" });
     await t.event("c-old", { kind: "idle" });
   }, T);
   await expect(page.getByTestId("agent-stop")).toHaveCount(0);
   await expect(page.getByTestId("agent-send")).toHaveText("发送");
   const footer = page.getByTestId("agent-turn").last().getByTestId("agent-turn-usage");
-  await expect(footer).toHaveText("输入 2,600（缓存 1,000） · 输出 38 tokens");
+  // 命中率 = 命中 ÷ 输入（照 DeepSeek Harness）；费用按价格表（DeepSeek 用人民币）。
+  await expect(footer).toHaveText("输入 2,600（命中缓存 38%） · 输出 38 tokens · 约 ¥0.0012");
   // 旧的一轮没有用量：不显示、不估算
   await expect(page.getByTestId("agent-turn").first().getByTestId("agent-turn-usage")).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("agent-chat-done.png"), animations: "disabled" });
@@ -414,4 +421,34 @@ test("tool cards link the settings 琴音 changed, and a key request is pasted i
   await expect(card).toHaveCount(0);
   // Key 不会出现在聊天记录里
   await expect(page.getByTestId("assistant-chat")).not.toContainText("sk-test-123");
+});
+
+test("a compaction checkpoint shows as a divider with the summary; usage shows hit rate and cost", async ({ page }, testInfo) => {
+  await openChat(page);
+  await page.evaluate(async (T) => {
+    const t = window.agentTest;
+    await t.event("c-old", { kind: "step", step: 1 });
+    await t.event("c-old", { kind: "compacted", index: 1, message: { role: "notice", text: "较早的对话已整理成摘要（之后发给 AI 的是摘要和最近的几轮）", atMs: T, compaction: "## 玩家的要求和意图\n- 记住召唤师名字“星河下的猫”", usage: { inputTokens: 25_000, cachedInputTokens: 24_000, outputTokens: 1_000, cost: 0.012, currency: "CNY" } } });
+    await t.event("c-old", { kind: "finished", stop: { kind: "completed" }, acpStopReason: "end_turn" });
+    await t.event("c-old", { kind: "idle" });
+  }, T);
+  const checkpoint = page.getByTestId("agent-checkpoint");
+  await expect(checkpoint).toHaveCount(1);
+  await expect(checkpoint).toContainText("较早的对话已整理成摘要");
+  await expect(checkpoint.getByText("星河下的猫")).toBeHidden();
+  await checkpoint.locator("summary").click();
+  await expect(checkpoint.getByText("星河下的猫")).toBeVisible();
+
+  await page.getByTestId("assistant-nav-settings").click();
+  await page.getByTestId("companion-settings-links").getByRole("button", { name: "用量" }).click();
+  const usage = page.getByTestId("usage-settings");
+  await expect(usage.getByTestId("usage-today")).toContainText("¥0.025");
+  // 没全中不显示 100%（照 DeepSeek Harness）：179000 / 182000 = 98.4%
+  await expect(usage.getByTestId("usage-today-hit")).toHaveText("98%");
+  await expect(usage.getByTestId("usage-month")).toContainText("3 次没有价格");
+  await expect(usage.getByTestId("usage-by-kind")).toContainText("压缩");
+  await usage.getByLabel("整理阈值（token）").fill("32000");
+  await usage.getByLabel("整理阈值（token）").press("Tab");
+  await expect.poll(async () => page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings().then((s) => s.agent?.compactAtTokens))).toBe(32000);
+  await usage.screenshot({ path: testInfo.outputPath("usage.png"), animations: "disabled" });
 });

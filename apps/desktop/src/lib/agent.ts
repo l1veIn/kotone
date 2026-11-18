@@ -6,16 +6,18 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { isTauri } from "./ipc";
 
 export interface ToolCall { id: string; name: string; arguments: string }
-export interface TokenUsage { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number; reasoningTokens?: number; costUsd?: number }
+/** `cachedInputTokens`：输入里命中服务商前缀缓存的部分；`cost` + `currency`：按 Kotone 价格表估的费用（DeepSeek 用人民币）。 */
+export interface TokenUsage { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number; reasoningTokens?: number; costUsd?: number; cost?: number; currency?: string }
 export type Attachment =
   | { kind: "data"; label: string; text: string }
   | { kind: "image"; label: string; mime: string; data?: string };
 
 export type AgentMessage =
-  | { role: "user"; text: string; attachments?: Attachment[]; source?: string; atMs: number }
+  | { role: "user"; text: string; attachments?: Attachment[]; source?: string; atMs: number; context?: string }
   | { role: "assistant"; text: string; toolCalls?: ToolCall[]; reasoning?: string; usage?: TokenUsage; atMs: number }
   | { role: "tool"; callId: string; name: string; content: string; isError: boolean; untrusted: boolean; atMs: number }
-  | { role: "notice"; text: string; atMs: number };
+  /** `compaction`：上下文压缩的检查点（摘要）；它之前的消息不再发给模型。 */
+  | { role: "notice"; text: string; atMs: number; compaction?: string; usage?: TokenUsage };
 
 /** `parent` / `label`：琴音派出的子会话（ADR 022），只能查看。 */
 export interface Conversation { version: number; id: string; title: string; createdAtMs: number; updatedAtMs: number; messages: AgentMessage[]; parent?: string | null; label?: string | null }
@@ -31,6 +33,9 @@ export type AgentEvent =
   | { kind: "toolCall"; call: ToolCall }
   | { kind: "toolCallUpdate"; callId: string; status: ToolStatus; content: string | null }
   | { kind: "appended"; message: AgentMessage }
+  | { kind: "compacted"; index: number; message: AgentMessage }
+  /** 空回复已丢弃、重发了同样的请求。 */
+  | { kind: "discarded" }
   | { kind: "finished"; stop: StopReason; acpStopReason: string | null }
   | { kind: "idle" };
 
@@ -317,3 +322,31 @@ export const starterPrompts = [
   { label: "设个提醒", text: "5 分钟后提醒我" },
   { label: "我有哪些自动化", text: "我保存了哪些自动化？" },
 ];
+
+// ---------- 用量与费用（usage.jsonl，见 apps/desktop/src-tauri/src/usage.rs） ----------
+
+export interface UsageTotals {
+  requests: number; inputTokens: number; cacheHitTokens: number; outputTokens: number;
+  characters: number; audioMs: number; images: number;
+  hitRate: number | null; cost: Record<string, number>; unpriced: number;
+}
+export interface UsageSummary {
+  today: UsageTotals; month: UsageTotals;
+  byKind: { kind: string; label: string; totals: UsageTotals }[];
+  byModel: { model: string; totals: UsageTotals }[];
+  days: { day: string; totals: UsageTotals }[];
+  priceSource: string; note: string; ledger: string | null;
+}
+
+const emptyTotals = (): UsageTotals => ({ requests: 0, inputTokens: 0, cacheHitTokens: 0, outputTokens: 0, characters: 0, audioMs: 0, images: 0, hitRate: null, cost: {}, unpriced: 0 });
+
+export async function usageSummary(): Promise<UsageSummary> {
+  if (isTauri) return invoke("usage_summary");
+  const today: UsageTotals = { ...emptyTotals(), requests: 12, inputTokens: 182_000, cacheHitTokens: 171_000, outputTokens: 2_400, characters: 640, hitRate: 171_000 / 182_000, cost: { CNY: 0.0412 } };
+  return {
+    today, month: { ...today, requests: 230, inputTokens: 3_600_000, cacheHitTokens: 3_350_000, outputTokens: 51_000, characters: 9_800, audioMs: 420_000, images: 35, hitRate: 3_350_000 / 3_600_000, cost: { CNY: 0.92 } },
+    byKind: [{ kind: "chat", label: "对话", totals: today }],
+    byModel: [{ model: "deepseek/deepseek-flash", totals: today }],
+    days: [], priceSource: "界面预览", note: "界面预览的示例数字", ledger: null,
+  };
+}

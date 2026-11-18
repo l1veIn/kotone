@@ -281,6 +281,8 @@ export interface AgentConfig {
   identity?: { name: string; avatar: string };
   /** 子会话（同传等）用的模型 id；空 = 和琴音同一个模型。 */
   subagents?: { model: string };
+  /** 一段对话估到这么多 token 时整理成摘要（上下文压缩）；0 = 不整理。默认 64000。 */
+  compactAtTokens?: number;
 }
 
 /** 语音唤醒设置（config.json `assistant.wake`）。 */

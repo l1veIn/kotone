@@ -7,7 +7,7 @@
   import { onDestroy } from "svelte";
   import { Check, Copy } from "@lucide/svelte";
   import type { TokenUsage } from "../agent";
-  import { formatTokens } from "./timeline";
+  import { formatCost, formatHitRate, formatTokens } from "./timeline";
 
   let { copyText = "", endedAtMs = null, usage = null }: { copyText?: string; endedAtMs?: number | null; usage?: TokenUsage | null } = $props();
   let copied = $state(false);
@@ -17,11 +17,14 @@
   const usageText = $derived.by(() => {
     if (!usage) return "";
     const parts: string[] = [];
-    if (usage.inputTokens !== undefined) parts.push(`输入 ${formatTokens(usage.inputTokens)}${usage.cachedInputTokens ? `（缓存 ${formatTokens(usage.cachedInputTokens)}）` : ""}`);
+    if (usage.inputTokens !== undefined) {
+      const rate = usage.cachedInputTokens !== undefined ? formatHitRate(usage.cachedInputTokens, usage.inputTokens) : "";
+      parts.push(`输入 ${formatTokens(usage.inputTokens)}${rate ? `（命中缓存 ${rate}）` : ""}`);
+    }
     if (usage.outputTokens !== undefined) parts.push(`输出 ${formatTokens(usage.outputTokens)}`);
     if (!parts.length) return "";
-    const cost = usage.costUsd !== undefined ? ` · 约 $${usage.costUsd.toFixed(4)}` : "";
-    return `${parts.join(" · ")} tokens${cost}`;
+    const money = usage.cost !== undefined ? formatCost(usage.cost, usage.currency) : formatCost(usage.costUsd, "USD");
+    return `${parts.join(" · ")} tokens${money ? ` · 约 ${money}` : ""}`;
   });
 
   async function copy() {

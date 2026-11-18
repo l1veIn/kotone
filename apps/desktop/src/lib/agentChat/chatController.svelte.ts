@@ -139,6 +139,14 @@ export class AgentChat {
         if (event.message.role === "assistant") { this.live.text = ""; this.live.thought = ""; }
         break;
       }
+      case "discarded":
+        this.live.text = "";
+        this.live.thought = "";
+        break;
+      case "compacted":
+        // 检查点插在对话中间：按存盘的重新读一遍。
+        if (!replay) void this.refresh();
+        break;
       case "finished":
         this.live.text = "";
         this.live.thought = "";

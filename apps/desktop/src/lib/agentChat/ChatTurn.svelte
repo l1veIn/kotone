@@ -70,6 +70,11 @@
           <div class="py-0.5" data-testid="agent-answer" data-streaming={block.streaming}><MessageMarkdown text={block.text} /></div>
         {:else if block.kind === "tool"}
           <ToolCallCard tool={block.tool} runActive={turn.active} ask={askFor(block.tool.call.id)} {onAnswer} />
+        {:else if block.kind === "checkpoint"}
+          <details class="group my-1 rounded-lg border border-dashed border-border/80 px-3 py-1.5 text-[13px] text-muted-foreground" data-testid="agent-checkpoint">
+            <summary class="flex cursor-pointer list-none items-center gap-2"><Info class="size-3.5 shrink-0" />{block.text}<span class="ml-auto text-xs text-primary group-open:hidden">看摘要</span></summary>
+            <pre class="m-0 mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground/80">{block.summary}</pre>
+          </details>
         {:else}
           <p class="m-0 flex min-h-7 items-center gap-2 text-[13px] text-muted-foreground" data-testid="agent-notice"><Info class="size-3.5 shrink-0" />{block.text}</p>
         {/if}
