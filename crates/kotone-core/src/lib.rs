@@ -38,5 +38,6 @@ pub mod settings_guide;
 pub mod speech;
 pub mod stt;
 pub mod tools;
+pub mod usage;
 pub mod vad;
 pub mod voice_chat;
