@@ -1,5 +1,6 @@
 <script lang="ts">
-  // 「自动化」页（ADR 013 §8）：进行中（等待中的提醒与自动化、运行中的自动化）/ 已保存 / 记录。
+  // 「自动化」页（ADR 013 §8）：一个列表——每个自动化 ▶ 运行 / ■ 停止、定时、详情；临时的提醒与程序排在最上面；
+  // 下面可以展开全部记录。
   import { onMount } from "svelte";
   import {
     listAutomations, listRuns, stopRuns, subscribeAutomations,
@@ -8,14 +9,12 @@
   import { isTauri } from "../../../lib/ipc";
   import { errText, settingsStore, toast } from "../../../lib/stores/ui";
   import RunList from "./automation/RunList.svelte";
-  import SavedAutomations from "./automation/SavedAutomations.svelte";
+  import AutomationList from "./automation/AutomationList.svelte";
   import { RefreshCw, Square } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import SettingsPage from "$lib/components/settings/SettingsPage.svelte";
-  import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
 
   let { onOpenHotkeys }: { onOpenHotkeys: () => void } = $props();
-  let section = $state<"open" | "saved" | "history">("open");
   let snapshot = $state<RunsSnapshot | null>(null);
   let automations = $state<Automation[]>([]);
   let loadError = $state("");
@@ -29,11 +28,6 @@
   const history = $derived((snapshot?.runs ?? []).filter((r) => r.status !== "pending" && r.status !== "running"));
   const runningPrograms = $derived(open.filter((r) => r.action.kind === "program").length);
   const stopHotkey = $derived($settingsStore?.automationStopHotkey ?? "");
-  const tabs = $derived([
-    { id: "open", label: `进行中 ${open.length}` },
-    { id: "saved", label: `已保存 ${automations.length}` },
-    { id: "history", label: "记录" },
-  ] as const);
 
   async function refresh() {
     const current = ++version;
@@ -79,44 +73,34 @@
 
 <SettingsPage
   title="自动化"
-  description="琴音替你做的事：提醒、按键、点鼠标、盯屏幕。可以让陪玩或 Agent 生成，也可以自己保存常用的。"
+  description="琴音替你做的事：提醒、按键、点鼠标、盯屏幕。可以让琴音生成，也可以自己保存常用的；带定时的到点自己运行。"
   testid="automation-page"
 >
   {#if !isTauri}
     <p class="-mt-2 mb-0 rounded-xl border border-warning/30 bg-warning/8 px-3.5 py-2 text-xs text-warning" role="status">界面预览：以下是示例数据，不会真的运行。</p>
   {/if}
-  <nav class="flex w-fit max-w-full flex-wrap gap-0.5 rounded-xl bg-muted/70 p-1" aria-label="自动化分类">
-    {#each tabs as tab}
-      {@const active = section === tab.id}
-      <button type="button" data-testid={`automation-nav-${tab.id}`} aria-current={active ? "page" : undefined}
-        class="h-7 rounded-lg px-3 text-xs font-medium transition-colors
-          {active ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-        onclick={() => { section = tab.id; }}>{tab.label}</button>
-    {/each}
-  </nav>
   {#if loadError}<p role="alert" class="m-0 text-xs text-destructive">{loadError}</p>{/if}
-  {#if section === "open"}
-    <SettingsSection title={`进行中 · ${open.length}`} id="automation-open-title" flush>
-      {#snippet actions()}
-        <Button variant="ghost" size="sm" onclick={refresh}><RefreshCw class="size-3.5" />刷新</Button>
-        <Button variant="outline" size="sm" disabled={!runningPrograms && !open.some((r) => r.action.kind === "program")}
-          onclick={stopAll}><Square class="size-3 fill-current" />停止所有自动化</Button>
-      {/snippet}
-      <p class="m-0 px-4 py-3 text-xs leading-relaxed text-muted-foreground">
-        等待中的提醒和自动化在 Kotone 重启后仍在；退出 Kotone 时运行中的自动化会停下并松开按住的键。
-        {#if stopHotkey}在游戏里按 <span class="rounded bg-primary/12 px-1.5 py-0.5 font-mono text-primary">{stopHotkey}</span> 立即停止所有自动化（不影响提醒）。{:else}停止自动化热键未设置。{/if}
-        <button type="button" class="text-primary hover:underline" onclick={onOpenHotkeys}>改热键 →</button>
-      </p>
-      {#if !snapshot}<p class="m-0 px-4 py-8 text-center text-[13px] text-muted-foreground">正在读取…</p>
-      {:else if !open.length}<p class="m-0 px-4 py-8 text-center text-[13px] text-muted-foreground">没有进行中的提醒或自动化</p>
-      {:else}<RunList runs={open} {now} mode="open" {busyId} onStop={stop} />{/if}
-    </SettingsSection>
-  {:else if section === "saved"}
-    <SavedAutomations {automations} onChanged={refresh} />
+  <div class="flex flex-wrap items-center gap-2 rounded-xl border border-hairline bg-card/50 px-3.5 py-2.5 text-xs text-muted-foreground" data-testid="automation-status">
+    <span class="mr-auto">
+      {#if open.length}<span class="text-foreground">{open.length} 个进行中</span> · {/if}
+      {#if stopHotkey}在游戏里按 <span class="rounded bg-primary/12 px-1.5 py-0.5 font-mono text-primary">{stopHotkey}</span> 立即停止所有自动化（不影响提醒）{:else}停止自动化热键未设置{/if}
+      <button type="button" class="ml-1 text-primary hover:underline" onclick={onOpenHotkeys}>改热键 →</button>
+    </span>
+    <Button variant="ghost" size="sm" onclick={refresh}><RefreshCw class="size-3.5" />刷新</Button>
+    <Button variant="outline" size="sm" disabled={!runningPrograms && !open.some((r) => r.action.kind === "program")}
+      onclick={stopAll} data-testid="automation-stop-all"><Square class="size-3 fill-current" />停止所有自动化</Button>
+  </div>
+  {#if !snapshot}<p class="m-0 px-4 py-8 text-center text-[13px] text-muted-foreground">正在读取…</p>
   {:else}
-    <SettingsSection title="记录" id="automation-history-title" description="最近结束的提醒与自动化（最多 50 条，含失败、取消、错过的原因）。" flush>
-      {#if !history.length}<p class="m-0 px-4 py-8 text-center text-[13px] text-muted-foreground">还没有记录</p>
-      {:else}<RunList runs={history} {now} mode="history" />{/if}
-    </SettingsSection>
+    <AutomationList {automations} runs={snapshot.runs} {now} {busyId} onStop={stop} onChanged={refresh} />
+    <details class="group" data-testid="automation-history">
+      <summary class="cursor-pointer list-none px-1 text-sm font-semibold text-foreground">
+        全部记录 · {history.length} <span class="text-xs font-normal text-muted-foreground">（最近结束的提醒与自动化，含失败、取消、错过的原因）</span>
+      </summary>
+      <div class="mt-2.5 overflow-hidden rounded-2xl border border-hairline bg-card/70">
+        {#if !history.length}<p class="m-0 px-4 py-8 text-center text-[13px] text-muted-foreground">还没有记录</p>
+        {:else}<RunList runs={history} {now} mode="history" />{/if}
+      </div>
+    </details>
   {/if}
 </SettingsPage>

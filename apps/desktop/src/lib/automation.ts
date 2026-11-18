@@ -58,6 +58,9 @@ export type AutomationBody =
   | { kind: "program"; source?: string }
   | { kind: "speak"; text: string; delivery: DeliveryKind[] };
 
+/** 定时（类似 crontab，本地时间）：到点用 args 运行一次；错过的不补。 */
+export interface Schedule { cron: string; enabled: boolean; args: Record<string, unknown> }
+
 export interface Automation {
   id: string;
   name: string;
@@ -67,6 +70,59 @@ export interface Automation {
   createdBy: "user" | "companion" | "agent";
   createdAtMs: number;
   updatedAtMs: number;
+  schedule?: Schedule | null;
+  /** 定时的下一次（列表里才有）。 */
+  nextRunAtMs?: number | null;
+}
+
+/** 内置的“X 秒之后提醒我”。 */
+export const BUILTIN_REMIND_ID = "builtin-remind-later";
+
+/** 定时的常用写法（界面里选）；其余写 cron。 */
+export type SchedulePreset =
+  | { kind: "daily"; time: string }
+  | { kind: "weekdays"; time: string }
+  | { kind: "hourly" }
+  | { kind: "minutes"; every: number }
+  | { kind: "cron"; cron: string };
+
+export function presetToCron(preset: SchedulePreset): string {
+  const hm = (time: string) => {
+    const [h, m] = time.split(":").map((v) => Number(v) || 0);
+    return `${Math.min(59, Math.max(0, m))} ${Math.min(23, Math.max(0, h))}`;
+  };
+  switch (preset.kind) {
+    case "daily": return `${hm(preset.time)} * * *`;
+    case "weekdays": return `${hm(preset.time)} * * 1-5`;
+    case "hourly": return "0 * * * *";
+    case "minutes": return `*/${Math.min(59, Math.max(1, Math.round(preset.every)))} * * * *`;
+    case "cron": return preset.cron.trim();
+  }
+}
+
+export function cronToPreset(cron: string): SchedulePreset {
+  const t = cron.trim();
+  const pad = (n: string) => n.padStart(2, "0");
+  let m = /^(\d{1,2}) (\d{1,2}) \* \* \*$/.exec(t);
+  if (m) return { kind: "daily", time: `${pad(m[2])}:${pad(m[1])}` };
+  m = /^(\d{1,2}) (\d{1,2}) \* \* 1-5$/.exec(t);
+  if (m) return { kind: "weekdays", time: `${pad(m[2])}:${pad(m[1])}` };
+  if (t === "0 * * * *" || t === "@hourly") return { kind: "hourly" };
+  m = /^\*\/(\d{1,2}) \* \* \* \*$/.exec(t);
+  if (m) return { kind: "minutes", every: Number(m[1]) };
+  return { kind: "cron", cron: t };
+}
+
+/** 给人看的定时说明：“每天 08:00”“工作日 09:30”“每 10 分钟”…… */
+export function describeSchedule(cron: string): string {
+  const p = cronToPreset(cron);
+  switch (p.kind) {
+    case "daily": return `每天 ${p.time}`;
+    case "weekdays": return `工作日 ${p.time}`;
+    case "hourly": return "每小时整点";
+    case "minutes": return `每 ${p.every} 分钟`;
+    case "cron": return cron === "@daily" ? "每天 00:00" : `cron：${cron}`;
+  }
 }
 
 export interface AutomationDraft {
@@ -75,6 +131,7 @@ export interface AutomationDraft {
   description: string;
   params: ParamSpec[];
   action: AutomationBody;
+  schedule?: Schedule | null;
 }
 
 export const PARAM_TYPES: { id: ParamType; label: string }[] = [
@@ -96,6 +153,13 @@ export function runTitle(run: AutomationRun): string {
 // ---------- 浏览器预览数据 ----------
 
 const t0 = Date.now();
+/** 预览数据：今天或明天的 h:m。 */
+function nextAt(h: number, m: number): number {
+  const d = new Date();
+  d.setHours(h, m, 0, 0);
+  if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+  return d.getTime();
+}
 let previewRuns: AutomationRun[] = [
   {
     id: "preview-run-1", sessionId: "preview", status: "running", createdAtMs: t0 - 20_000, dueAtMs: t0 - 20_000, startedAtMs: t0 - 20_000,
@@ -124,6 +188,16 @@ let previewAutomations: Automation[] = [
   {
     id: "preview-auto-2", name: "界面示例：喝水提醒", description: "", createdBy: "agent", createdAtMs: t0, updatedAtMs: t0,
     params: [], action: { kind: "speak", text: "该喝水了", delivery: ["danmaku"] },
+    schedule: { cron: "0 22 * * *", enabled: true, args: {} }, nextRunAtMs: nextAt(22, 0),
+  },
+  {
+    id: BUILTIN_REMIND_ID, name: "X 秒之后提醒我", description: "过一会儿用语音和弹幕提醒你一句话，例如 300 秒后提醒“打小龙”。",
+    createdBy: "user", createdAtMs: t0, updatedAtMs: t0,
+    params: [
+      { name: "delay_seconds", label: "几秒之后", description: "最多一天（86400 秒）", type: "number", min: 1, max: 86400, integer: true, default: 60 },
+      { name: "text", label: "提醒什么", description: "", type: "text", maxLength: 100 },
+    ],
+    action: { kind: "speak", text: "{text}", delivery: ["voice", "danmaku"] },
   },
 ];
 const previewListeners = new Set<() => void>();
@@ -184,6 +258,7 @@ export async function saveAutomation(draft: AutomationDraft): Promise<Automation
     id: existing?.id ?? `preview-auto-${now}`, name: draft.name.trim(), description: draft.description.trim(),
     params: draft.params.map((p) => ({ ...p, label: p.label.trim() || p.name })), action: draft.action,
     createdBy: existing?.createdBy ?? "user", createdAtMs: existing?.createdAtMs ?? now, updatedAtMs: now,
+    schedule: draft.schedule ?? null, nextRunAtMs: draft.schedule?.enabled ? now + 3_600_000 : null,
   };
   previewAutomations = existing ? previewAutomations.map((a) => (a.id === saved.id ? saved : a)) : [...previewAutomations, saved];
   notify();
@@ -201,7 +276,25 @@ export async function deleteAutomation(id: string): Promise<boolean> {
 /** 从设置页运行：程序类倒数 switchSeconds 秒（切到游戏）后以那时的前台窗口为目标。 */
 export async function runAutomation(id: string, args: Record<string, unknown>, switchSeconds: number): Promise<{ status: string; seconds?: number }> {
   if (isTauri) return invoke("automation_run_saved", { id, args, switchSeconds });
-  throw new Error(PREVIEW_ONLY);
+  // 浏览器预览：只在列表里加一条示例执行，不会真的按键或出声
+  const automation = previewAutomations.find((a) => a.id === id);
+  if (!automation) throw new Error(`找不到自动化 ${id}`);
+  const now = Date.now();
+  const missing = automation.params.find((p) => (p.default === undefined || p.default === null) && (args[p.name] === undefined || args[p.name] === ""));
+  if (missing) throw new Error(`缺少参数 ${missing.label || missing.name}`);
+  if (automation.action.kind === "speak") {
+    const values = Object.fromEntries(automation.params.map((p) => [p.name, args[p.name] ?? p.default]));
+    const text = automation.action.text.replace(/\{(\w+)\}/g, (_all, name: string) => String(values[name] ?? ""));
+    const delay = Number(values.delay_seconds ?? 0) * 1000;
+    previewRuns = [...previewRuns, { id: `preview-run-${now}`, sessionId: "ui", status: "pending", createdAtMs: now, dueAtMs: now + delay,
+      action: { kind: "speak", text, delivery: automation.action.delivery } }];
+    notify();
+    return { status: "scheduled" };
+  }
+  previewRuns = [...previewRuns, { id: `preview-run-${now}`, sessionId: "ui", status: "running", createdAtMs: now, dueAtMs: now, startedAtMs: now,
+    action: { kind: "program", name: automation.name, automationId: id, args, target: { handle: 1, pid: 1, label: "示例游戏 (game.exe)" } } }];
+  notify();
+  return { status: "countdown", seconds: switchSeconds };
 }
 
 export async function subscribeAutomations(callback: () => void): Promise<UnlistenFn> {

@@ -572,7 +572,7 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_AUTOMATION_SAVE,
-            description: "Save an automation for reuse (create, or overwrite by id). action is {kind: program, source: Luau} or {kind: speak, text, delivery: [voice|danmaku]}. params declare typed arguments the program reads as args.<name>: type number {min, max, integer} / text {maxLength ≤200, no newlines} / boolean / choice {options} / key (key name such as Q, Enter, Ctrl+Q) / region ({x, y, w, h} window-client ratios) / color ({r, g, b}) / image (template for find_image: pass {png: base64} — e.g. from screen.capture → image.crop → artifact.get — and it is stored as {image: sha256}; PNG ≤512×512, ≤512 KB); each has name (lowercase identifier), optional label, description and default (no default = required). Programs are syntax-checked; speak automations take no params. Saved automations run without calling a model (automation.run with id and args); runs keep a snapshot, so editing or deleting later does not change scheduled runs. Max 200.",
+            description: "Save an automation for reuse (create, or overwrite by id). action is {kind: program, source: Luau} or {kind: speak, text, delivery: [voice|danmaku]}. params declare typed arguments the program reads as args.<name>: type number {min, max, integer} / text {maxLength ≤200, no newlines} / boolean / choice {options} / key (key name such as Q, Enter, Ctrl+Q) / region ({x, y, w, h} window-client ratios) / color ({r, g, b}) / image (template for find_image: pass {png: base64} — e.g. from screen.capture → image.crop → artifact.get — and it is stored as {image: sha256}; PNG ≤512×512, ≤512 KB); each has name (lowercase identifier), optional label, description and default (no default = required). Programs are syntax-checked. Speak automations may take number / text / boolean / choice params: {name} in text is replaced by the value, and a number param named delay_seconds speaks that many seconds later. schedule {cron, enabled, args} runs it on a crontab-like schedule in local time (5 fields \"min hour day month weekday\", or @hourly / @daily / @weekly / @monthly; missed runs are not caught up). Saved automations run without calling a model (automation.run with id and args); runs keep a snapshot, so editing or deleting later does not change scheduled runs. Max 200.",
             side_effects: &["writes-automations"],
             egress: "none",
             input: object(&["name", "action"], json!({
@@ -594,6 +594,11 @@ fn defs() -> Vec<Def> {
                     "source": {"type": "string", "maxLength": 8000},
                     "text": {"type": "string", "maxLength": 300},
                     "delivery": {"type": "array", "items": {"enum": ["voice", "danmaku"]}}
+                }},
+                "schedule": {"type": ["object", "null"], "required": ["cron"], "properties": {
+                    "cron": {"type": "string", "maxLength": 100, "description": "如 0 8 * * *（每天 8 点）、*/10 * * * *、0 9 * * 1-5、@daily"},
+                    "enabled": {"type": "boolean"},
+                    "args": {"type": "object", "description": "到点运行时的入参"}
                 }}
             })),
             output: open("保存后的自动化：id、name、description、params（补全 label 与规范化缺省值）、action、createdBy、createdAtMs、updatedAtMs"),
