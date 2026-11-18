@@ -10,6 +10,7 @@
   import { toolLabel, type AgentAsk, type Answer } from "../agent";
   import type { ToolView } from "./timeline";
   import { formatToolJson, toolPresentation } from "./toolPresentation";
+  import { changedLocations, openLocation } from "../stores/navigation";
 
   let { tool, runActive = false, ask, onAnswer }: {
     tool: ToolView;
@@ -26,6 +27,8 @@
   const saved = $derived(tool.call.name.startsWith("saved."));
   const input = $derived(open ? formatToolJson(tool.call.arguments) : "");
   const output = $derived(open ? formatToolJson(tool.content) : "");
+  /** 改了设置的工具：“改了 xxx → 去看看”，点了跳到设置里的位置。 */
+  const changed = $derived(tool.status === "completed" ? changedLocations(tool.call.name, tool.content) : []);
 
   async function answer(value: Answer) {
     if (!ask || !onAnswer || answering) return;
@@ -69,6 +72,15 @@
       </div>
     {/if}
   </details>
+  {#if changed.length}
+    <div class="mb-1 ml-5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground" data-testid="agent-tool-changed">
+      <span>改了</span>
+      {#each changed as item (item.label + item.page)}
+        <button type="button" class="rounded-md bg-primary/10 px-1.5 py-0.5 text-primary hover:bg-primary/20" title={`去看看：${item.page}`}
+          data-testid="agent-tool-changed-link" data-page={item.page} onclick={() => openLocation(item.page)}>{item.label} →</button>
+      {/each}
+    </div>
+  {/if}
 
   {#if ask}
     <div class="my-2 overflow-hidden rounded-2xl border border-warning/45 bg-composer shadow-lg" data-testid="agent-ask" data-ask-id={ask.askId}>

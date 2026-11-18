@@ -190,6 +190,23 @@ export async function subscribeAsks(onAsk: (ask: AgentAsk) => void, onResolved: 
   return () => { a(); b(); };
 }
 
+/** 琴音请玩家粘贴某个服务商的 Key（connections.request_key）：Key 直接存进凭据库，不经过模型。 */
+export interface KeyRequest {
+  requestId: string; conversationId: string; provider: string; displayName: string;
+  apiKeyUrl: string | null; connectionId: string; reason: string;
+}
+export async function subscribeKeyRequests(onRequest: (request: KeyRequest) => void, onResolved: (requestId: string) => void): Promise<UnlistenFn> {
+  if (!isTauri) return () => {};
+  const a = await listen<KeyRequest>("kotone://agent-key-request", (e) => onRequest(e.payload));
+  const b = await listen<{ requestId: string }>("kotone://agent-key-request-resolved", (e) => onResolved(e.payload.requestId));
+  return () => { a(); b(); };
+}
+/** 提交（apiKey 为空 = 不用了）。 */
+export async function agentSubmitKey(request: KeyRequest, apiKey: string | null): Promise<{ saved: boolean; connectionId?: string }> {
+  if (!isTauri) throw new Error(PREVIEW_ERROR);
+  return invoke("agent_submit_key", { requestId: request.requestId, provider: request.provider, connectionId: request.connectionId || null, apiKey });
+}
+
 // ---------- 展示 ----------
 
 /** 工具名的中文说明（卡片标题用；没有的显示原名）。 */

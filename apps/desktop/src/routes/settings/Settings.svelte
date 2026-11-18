@@ -35,6 +35,7 @@
   import Titlebar from "./Titlebar.svelte";
   import GeneralPage from "./pages/GeneralPage.svelte";
   import TextProcessingPage from "./pages/TextProcessingPage.svelte";
+  import { navigationRequest } from "../../lib/stores/navigation";
   import AssistantPage from "./pages/AssistantPage.svelte";
   import AutomationPage from "./pages/AutomationPage.svelte";
   import AdvancedPage from "./pages/AdvancedPage.svelte";
@@ -64,20 +65,33 @@
     try { localStorage.setItem(SIDEBAR_KEY, rail ? "rail" : "expanded"); } catch { /* 只是偏好 */ }
   }
   function navigate(id: PageId) {
-    assistantStart = "chat";
+    assistantOpen = null;
     page = id;
     drawerOpen = false;
   }
   /** 侧边栏点了对话或“新对话”：切到「琴音」的聊天分页。 */
   let chatRequest = $state(0);
-  let settingsRequest = $state(0);
-  let assistantStart = $state<"chat" | "settings">("chat");
+  /** 打开「琴音」的某个分页 / 分组（首页入口、聊天里“去看看”）；普通导航清掉它，回到聊天。 */
+  let assistantOpen = $state<{ section: "chat" | "identity" | "memory" | "skills" | "settings"; anchor?: string; n: number } | null>(null);
+  let openCount = 0;
+  function openCompanion(section: "chat" | "identity" | "memory" | "skills" | "settings", anchor?: string) {
+    navigate("assistant");
+    assistantOpen = { section, anchor, n: ++openCount };
+  }
   /** 「琴音 → 设置」（原「交流」页的内容也在这里）。 */
   function openCompanionSettings() {
-    navigate("assistant");
-    assistantStart = "settings";
-    settingsRequest++;
+    openCompanion("settings", "companion-settings-call");
   }
+  // 聊天里的“去看看”等：跳到设置说明里写的位置。
+  const unsubscribeNavigation = navigationRequest.subscribe((request) => {
+    if (!request) return;
+    navigationRequest.set(null);
+    const target = request.target;
+    if (target.page === "assistant") openCompanion(target.section, target.anchor);
+    else if (target.page === "advanced") openAdvanced(target.tab as AdvancedSection);
+    else navigate(target.page);
+  });
+  onDestroy(unsubscribeNavigation);
   function openChat() {
     navigate("assistant");
     chatRequest++;
@@ -283,7 +297,7 @@
     {:else if page === "processing"}
       <TextProcessingPage onOpenConnections={() => openAdvanced("connections")} />
     {:else if page === "assistant"}
-      <AssistantPage {chatRequest} {settingsRequest} startSection={assistantStart} onOpenConnections={() => openAdvanced("connections")} onOpenAutomation={() => (page = "automation")} />
+      <AssistantPage {chatRequest} open={assistantOpen} onOpenConnections={() => openAdvanced("connections")} onOpenAutomation={() => (page = "automation")} />
     {:else if page === "automation"}
       <AutomationPage onOpenHotkeys={() => openAdvanced("hotkeys")} />
     {:else if page === "game"}

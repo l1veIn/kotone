@@ -2,8 +2,8 @@
 // 当前对话由后端决定（游戏内语音与聊天窗口共用“当前对话”）；这里显示的总是 agent_state.current。
 import {
   agentAnswer, agentConversation, agentDeleteConversation, agentNewConversation, agentSelectConversation,
-  agentSend, agentState, agentStop, subscribeAgent, subscribeAsks,
-  type AgentAsk, type AgentEvent, type AgentMessage, type AgentState, type Answer, type Conversation,
+  agentSend, agentState, agentStop, subscribeAgent, subscribeAsks, subscribeKeyRequests,
+  type AgentAsk, type KeyRequest, type AgentEvent, type AgentMessage, type AgentState, type Answer, type Conversation,
 } from "../agent";
 import type { LiveState } from "./timeline";
 
@@ -22,6 +22,8 @@ export class AgentChat {
   runningId = $state<string | null>(null);
   live = $state<LiveState>({ text: "", thought: "", tools: {} });
   asks = $state<AgentAsk[]>([]);
+  /** 琴音请玩家粘贴的 Key（输入框在聊天里）。 */
+  keyRequests = $state<KeyRequest[]>([]);
   loading = $state(true);
   loadError = $state("");
 
@@ -40,6 +42,10 @@ export class AgentChat {
     try {
       retain(await subscribeAgent((id, event) => this.#onEvent(id, event)));
       retain(await subscribeAsks((ask) => this.#onAsk(ask), (askId) => this.#onResolved(askId)));
+      retain(await subscribeKeyRequests(
+        (request) => { if (!this.#disposed && !this.keyRequests.some((r) => r.requestId === request.requestId)) this.keyRequests.push(request); },
+        (requestId) => { this.keyRequests = this.keyRequests.filter((r) => r.requestId !== requestId); },
+      ));
     } catch (error) {
       this.loadError = `订阅琴音事件失败：${errorText(error)}`;
     }

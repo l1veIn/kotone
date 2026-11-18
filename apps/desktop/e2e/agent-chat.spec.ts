@@ -367,3 +367,51 @@ test("composer switches permission mode and model like DeepSeek Harness", async 
   expect(calls.map((c) => c.command)).toEqual(["upsert_connection"]);
   expect((calls[0].args as { connection: { model: string } }).connection.model).toBe("test-pro");
 });
+
+test("tool cards link the settings 琴音 changed, and a key request is pasted into a private box", async ({ page }) => {
+  await openChat(page);
+  await page.evaluate(async (T) => {
+    const t = window.agentTest;
+    await t.event("c-old", { kind: "appended", message: { role: "assistant", text: "", toolCalls: [
+      { id: "call-s", name: "settings.update", arguments: '{"patch":{"assistant":{"hotkey":"F9"}}}' },
+      { id: "call-m", name: "models.activate", arguments: '{"category":"asr","modelId":"deepseek-asr"}' },
+      { id: "call-l", name: "models.list", arguments: "{}" },
+    ], atMs: T + 1000 } });
+    await t.event("c-old", { kind: "appended", message: { role: "tool", callId: "call-s", name: "settings.update", isError: false, untrusted: false, atMs: T + 1100,
+      content: JSON.stringify({ effects: { changed: ["assistant.hotkey"], locations: [{ path: "assistant.hotkey", label: "呼叫琴音热键", page: "琴音 → 设置 → 呼叫" }], summary: "已保存，立即生效" } }) } });
+    await t.event("c-old", { kind: "appended", message: { role: "tool", callId: "call-m", name: "models.activate", content: "{}", isError: false, untrusted: false, atMs: T + 1200 } });
+    await t.event("c-old", { kind: "appended", message: { role: "tool", callId: "call-l", name: "models.list", content: "{}", isError: false, untrusted: false, atMs: T + 1300 } });
+  }, T);
+  // 只读的工具没有链接
+  await expect(page.locator('[data-tool-id="call-l"]').getByTestId("agent-tool-changed")).toHaveCount(0);
+  await expect(page.locator('[data-tool-id="call-m"]').getByTestId("agent-tool-changed-link")).toHaveText("模型 →");
+  const link = page.locator('[data-tool-id="call-s"]').getByTestId("agent-tool-changed-link");
+  await expect(link).toHaveText("呼叫琴音热键 →");
+  await link.click();
+  await expect(page.getByTestId("assistant-nav-settings")).toHaveAttribute("aria-current", "page");
+  await expect(page.locator("#companion-settings-call")).toBeInViewport();
+  await page.getByTestId("assistant-nav-chat").click();
+  await page.locator('[data-tool-id="call-m"]').getByTestId("agent-tool-changed-link").click();
+  await expect(page.getByTestId("advanced-nav-models")).toHaveAttribute("aria-current", "page");
+
+  // 琴音要别的服务商的 Key：聊天里出现只给玩家看的输入框
+  await page.getByTestId("settings-nav-assistant").click();
+  await page.evaluate(async () => {
+    const { emit } = await import("/node_modules/@tauri-apps/api/event.js");
+    await emit("kotone://agent-key-request", { requestId: "key-1", conversationId: "c-old", provider: "openai", displayName: "OpenAI", apiKeyUrl: "https://platform.openai.com/api-keys", connectionId: "", reason: "在线语音合成要用" });
+  });
+  const card = page.getByTestId("agent-key-request");
+  await expect(card).toContainText("琴音需要 OpenAI 的 Key");
+  await expect(card).toContainText("不会出现在聊天里");
+  await expect(page.getByTestId("agent-key-input")).toHaveAttribute("type", "password");
+  await page.getByTestId("agent-key-input").fill("sk-test-123");
+  await page.getByTestId("agent-key-save").click();
+  expect(await agentCalls(page, "agent_submit_key")).toEqual([{ requestId: "key-1", provider: "openai", connectionId: null, apiKey: "sk-test-123" }]);
+  await page.evaluate(async () => {
+    const { emit } = await import("/node_modules/@tauri-apps/api/event.js");
+    await emit("kotone://agent-key-request-resolved", { requestId: "key-1", conversationId: "c-old", saved: true });
+  });
+  await expect(card).toHaveCount(0);
+  // Key 不会出现在聊天记录里
+  await expect(page.getByTestId("assistant-chat")).not.toContainText("sk-test-123");
+});

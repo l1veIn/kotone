@@ -13,6 +13,7 @@
   import { appState } from "../../../../lib/stores/state";
   import { errText, toast } from "../../../../lib/stores/ui";
   import CallKotoneButton from "../../../../lib/components/CallKotoneButton.svelte";
+  import KeyRequestCard from "../../../../lib/agentChat/KeyRequestCard.svelte";
   import ComposerOptions from "../../../../lib/agentChat/ComposerOptions.svelte";
   import kotoneCutout from "../../../../assets/brand/kotone-cutout.webp";
 
@@ -74,6 +75,9 @@
 
 {#snippet composer()}
   <div class="space-y-2">
+    {#each chat.keyRequests as request (request.requestId)}
+      <KeyRequestCard {request} />
+    {/each}
     {#if strayAsks.length}
       <div class="space-y-2" data-testid="agent-stray-asks">
         {#each strayAsks as ask (ask.askId)}

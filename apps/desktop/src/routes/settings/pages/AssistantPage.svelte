@@ -18,19 +18,18 @@
   import OutputSettings from "./assistant/OutputSettings.svelte";
   import VoiceChatSettings from "./assistant/VoiceChatSettings.svelte";
 
-  let { onOpenConnections, onOpenAutomation, chatRequest = 0, settingsRequest = 0, startSection = "chat" }: {
+  type Section = "chat" | "identity" | "memory" | "skills" | "settings";
+  let { onOpenConnections, onOpenAutomation, chatRequest = 0, open = null }: {
     onOpenConnections: () => void;
     onOpenAutomation: () => void;
     /** 侧边栏点了对话 / 新对话时递增：切回聊天分页。 */
     chatRequest?: number;
-    /** 要打开「设置」分页时递增（首页、引导等处的入口）。 */
-    settingsRequest?: number;
-    /** 页面刚打开时显示哪个分页（从别的页跳过来时页面是新挂载的，收不到请求号变化）。 */
-    startSection?: "chat" | "settings";
+    /** 要打开某个分页（及「设置」里的某个分组）：首页入口、聊天里“去看看”的跳转。
+     *  页面新挂载时也照它显示（从别的页跳过来收不到变化）。 */
+    open?: { section: Section; anchor?: string; n: number } | null;
   } = $props();
   const chat = useAgentChat();
-  type Section = "chat" | "identity" | "memory" | "skills" | "settings";
-  let section = $state<Section>(untrack(() => startSection));
+  let section = $state<Section>(untrack(() => open?.section ?? "chat"));
   let connections = $state<ConnectionInfo[]>([]);
   let connectionError = $state("");
   const ready = $derived(!!connections.find((item) => item.id === $settingsStore?.assistant.connectionId)?.hasApiKey);
@@ -48,15 +47,21 @@
     if (seenRequest !== null && request !== seenRequest) section = "chat";
     seenRequest = request;
   });
-  let seenSettings: number | null = null;
   $effect(() => {
-    const request = settingsRequest;
-    if (seenSettings !== null && request !== seenSettings) openSettings();
-    seenSettings = request;
+    const request = open;
+    if (!request) return;
+    untrack(() => {
+      section = request.section;
+      if (request.anchor) scrollTo(request.anchor);
+    });
   });
+  function scrollTo(anchor: string) {
+    // 分页刚切过来时还没渲染：等一帧再滚。
+    requestAnimationFrame(() => document.getElementById(anchor)?.scrollIntoView({ block: "start" }));
+  }
   function openSettings(anchor?: string) {
     section = "settings";
-    if (anchor) queueMicrotask(() => document.getElementById(anchor)?.scrollIntoView({ block: "start" }));
+    if (anchor) scrollTo(anchor);
   }
   // 「设置」分页很长：顶部给几个跳转（原「交流」页的内容并进来了，ADR 023 修订）。
   const settingsLinks = [
