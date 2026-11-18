@@ -105,7 +105,7 @@ const mock: MockStore = {
     toolService: { enabled: false },
     ocr: { activeModelId: "" },
     voiceChat: { enabled: false, includeMic: true, micDeviceId: "default", micGain: 100 },
-    agent: { permissions: { mode: "default", rules: {} }, hiddenAutomations: [], inGame: true, progressSpeech: true, identity: { name: "", avatar: "" }, subagents: { model: "" }, compactAtTokens: 64000 },
+    agent: { permissions: { mode: "default", rules: {} }, hiddenAutomations: [], inGame: true, progressSpeech: true, identity: { name: "", avatar: "" }, subagents: { model: "" }, compactAtTokens: 64000, roleId: "kotone" },
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },

@@ -16,7 +16,7 @@
   import KeyRequestCard from "../../../../lib/agentChat/KeyRequestCard.svelte";
   import ComposerOptions from "../../../../lib/agentChat/ComposerOptions.svelte";
   import KotoneAvatar from "../../../../lib/components/KotoneAvatar.svelte";
-  import { customAvatar } from "../../../../lib/stores/avatar";
+  import { avatarLetter, customAvatar } from "../../../../lib/stores/avatar";
 
   let { ready, active, onOpenSettings, onOpenTalk }: {
     /** 陪玩 AI 连接已选好（语音按钮用）。 */
@@ -139,7 +139,7 @@
     <div class="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-8" data-testid="agent-empty">
       <div class="w-full max-w-[680px]">
         <div class="mb-6 flex flex-col items-center text-center">
-          <div class="mb-4 shadow-[0_0_40px_-8px_var(--color-primary)] rounded-full"><KotoneAvatar size={80} mood="asking" custom={$customAvatar} /></div>
+          <div class="mb-4 shadow-[0_0_40px_-8px_var(--color-primary)] rounded-full"><KotoneAvatar size={80} mood="asking" custom={$customAvatar} letter={$avatarLetter} /></div>
           <h2 class="m-0 text-2xl font-semibold tracking-tight">想让{$settingsStore?.agent?.identity?.name?.trim() || "琴音"}做点什么？</h2>
           <p class="mt-2 mb-0 text-[13px] text-muted-foreground">做自动化、看游戏聊天、设提醒……在游戏里呼叫她说的话也会出现在这里。</p>
         </div>

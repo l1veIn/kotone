@@ -3,13 +3,15 @@
   // 玩家上传了头像就用上传的（没有表情变化，光环照常）。聊天、空白对话页、「她是谁」、气泡都用它。
   import { bubbleLook, type BubblePhase } from "../bubble";
 
-  let { size = 40, mood = "asking", ring = true, custom = null, animate = false }: {
+  let { size = 40, mood = "asking", ring = true, custom = null, letter = null, animate = false }: {
     size?: number;
     /** 表情：和气泡的状态一致（asking = 招手，speaking = 指着说话……）。 */
     mood?: Exclude<BubblePhase, "hidden">;
     ring?: boolean;
     /** 玩家上传的头像（object URL）；null = 用内置表情。 */
     custom?: string | null;
+    /** 没有头像的其他角色：显示名字的第一个字（占位头像，不冒用别人的形象）。 */
+    letter?: string | null;
     /** 光环动起来（在听 / 在想 / 在说）。 */
     animate?: boolean;
   } = $props();
@@ -21,6 +23,8 @@
   <div class="face">
     {#if custom}
       <img src={custom} alt="" class="custom" />
+    {:else if letter}
+      <span class="letter" style:font-size={`${Math.round(size * 0.46)}px`} data-testid="avatar-letter">{letter}</span>
     {:else}
       <img src={look.face} alt="" style="margin: calc(50% - {look.fy * 170}%) 0 0 calc(50% - {look.fx * 170}%)" />
     {/if}
@@ -32,6 +36,7 @@
   .face { width: 100%; height: 100%; border-radius: 50%; overflow: hidden; background: radial-gradient(circle at 50% 35%, #3a3358, #1d1a2b); }
   .face img { display: block; width: 170%; height: 170%; max-width: none; object-fit: cover; }
   .face img.custom { width: 100%; height: 100%; margin: 0; }
+  .letter { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; font-weight: 600; color: #f1edff; line-height: 1; }
   .ringed::after {
     content: ""; position: absolute; inset: calc(var(--ring-width) * -1.3); border-radius: 50%;
     border: var(--ring-width) solid var(--ring, #8b8fa8);

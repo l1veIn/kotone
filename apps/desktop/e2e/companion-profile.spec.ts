@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-// ADR 022 / 023：「琴音」页的“她是谁 / 记忆 / 技能”。浏览器预览用内存里的示例工作区。
+// ADR 022 / 023：「琴音」页的“角色 / 记忆 / 技能”。浏览器预览用内存里的示例工作区和示例角色。
 test("rename her, edit SOUL, memory and game memory, manage skills", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1100, height: 860 });
   await page.goto("/#/settings?onboarding=never");
@@ -9,15 +9,15 @@ test("rename her, edit SOUL, memory and game memory, manage skills", async ({ pa
     await expect(page.getByTestId(`assistant-nav-${tab}`)).toBeVisible();
   }
 
-  // 她是谁：改名 → 页标题、侧栏都跟着变；恢复默认
+  // 角色：给当前角色（琴音）改名 → 页标题、侧栏都跟着变；最后改回来
   await page.getByTestId("assistant-nav-identity").click();
   const identity = page.getByTestId("identity-tab");
   await expect(identity).toBeVisible();
   await expect(page.getByTestId("identity-name-save")).toBeDisabled();
-  await page.getByTestId("identity-name").fill("小雨");
+  await page.getByTestId("identity-name").fill("小星");
   await page.getByTestId("identity-name-save").click();
-  await expect(page.getByTestId("assistant-page-title")).toHaveText("小雨");
-  await expect(page.getByTestId("settings-nav-assistant")).toHaveText("小雨");
+  await expect(page.getByTestId("assistant-page-title")).toHaveText("小星");
+  await expect(page.getByTestId("settings-nav-assistant")).toHaveText("小星");
 
   // SOUL：计字、超上限不能保存、保存后“还原”消失
   const soul = page.getByTestId("identity-soul-text");
@@ -60,9 +60,60 @@ test("rename her, edit SOUL, memory and game memory, manage skills", async ({ pa
   await page.getByTestId("skill-delete-confirm").click();
   await expect(page.getByTestId("skills-empty")).toBeVisible();
 
-  // 恢复默认名字
+  // 改回原来的名字
   await page.getByTestId("assistant-nav-identity").click();
-  await page.getByTestId("identity-name").fill("");
+  await page.getByTestId("identity-name").fill("琴音");
   await page.getByTestId("identity-name-save").click();
+  await expect(page.getByTestId("assistant-page-title")).toHaveText("琴音");
+});
+
+test("roles: switch, create, wake word check, placeholder avatar", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await page.goto("/#/settings?onboarding=never");
+  await page.getByTestId("settings-nav-assistant").click();
+  await page.getByTestId("assistant-nav-identity").click();
+  const cards = page.getByTestId("role-card");
+  // 内置：琴音（当前）、小雨、小林
+  await expect(cards).toHaveCount(3);
+  await expect(cards.filter({ hasText: "琴音" }).getByTestId("role-current")).toBeVisible();
+  // 小雨没有头像：显示名字的第一个字（占位，不冒用别人的形象）
+  await expect(cards.filter({ hasText: "小雨" }).getByTestId("avatar-letter")).toHaveText("小");
+
+  // 换成小雨：名字跟着变，她成了当前角色
+  await cards.filter({ hasText: "小雨" }).getByTestId("role-switch").click();
+  await expect(page.getByTestId("assistant-page-title")).toHaveText("小雨");
+  await expect(page.getByTestId("settings-nav-assistant")).toHaveText("小雨");
+  await expect(cards.filter({ hasText: "小雨" }).getByTestId("role-current")).toBeVisible();
+  // 聊天页也是小雨的占位头像
+  await page.getByTestId("assistant-nav-chat").click();
+  await expect(page.getByTestId("avatar-letter").first()).toHaveText("小");
+  await page.getByTestId("assistant-nav-identity").click();
+
+  // 新建角色
+  await page.getByTestId("role-new-name").fill("星野");
+  await page.getByTestId("role-create").click();
+  await expect(cards).toHaveCount(4);
+  await expect(page.getByTestId("identity-name")).toHaveValue("星野");
+
+  // 唤醒词：默认是名字重复两遍；太短、不是汉字都提示
+  const wake = page.getByTestId("role-wake");
+  await expect(wake).toHaveAttribute("placeholder", "星野星野");
+  await wake.fill("星野");
+  await expect(page.getByTestId("role-wake-problem")).toContainText("至少 3 个字");
+  await expect(page.getByTestId("role-wake-save")).toBeEnabled();
+  await wake.fill("Hoshino");
+  await expect(page.getByTestId("role-wake-problem")).toContainText("只能用汉字");
+  await wake.fill("星野银行");
+  await expect(page.getByTestId("role-wake-check")).toHaveAttribute("data-ok", "true");
+  // 多音字给下拉框
+  await page.getByTestId("role-wake-reading").selectOption("háng");
+  await page.getByTestId("role-wake-save").click();
+  await expect(page.getByTestId("role-wake-save")).toBeDisabled();
+  await page.screenshot({ path: testInfo.outputPath("roles.png"), fullPage: true });
+
+  // 删掉自己建的角色；换回琴音
+  await page.getByTestId("role-delete").click();
+  await expect(cards).toHaveCount(3);
+  await cards.filter({ hasText: "琴音" }).getByTestId("role-switch").click();
   await expect(page.getByTestId("assistant-page-title")).toHaveText("琴音");
 });

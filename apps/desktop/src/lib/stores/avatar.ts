@@ -1,7 +1,12 @@
 // 玩家上传的琴音头像（设置 agent.identity.avatar → 工作区里的图片）→ object URL；没有 = null。
 import { derived, type Readable } from "svelte/store";
+import { placeholderLetter } from "../roles";
 import { workspaceAvatar } from "../workspace";
 import { settingsStore } from "./ui";
+
+/** 当前角色没有头像、又不是琴音时的占位字（名字的第一个字）。 */
+export const avatarLetter: Readable<string | null> = derived(settingsStore, ($settings) =>
+  placeholderLetter($settings?.agent?.roleId, $settings?.agent?.identity?.name, $settings?.agent?.identity?.avatar));
 
 let current: { name: string; url: string | null } = { name: "", url: null };
 

@@ -64,11 +64,12 @@ export async function workspaceDeleteGame(id: string): Promise<void> {
 }
 
 /** 保存头像，返回文件名（写进设置 `agent.identity.avatar`）。 */
-export async function workspaceSetAvatar(bytes: Uint8Array, ext: string): Promise<string> {
-  if (isTauri) return invoke("workspace_set_avatar", { bytes: Array.from(bytes), ext });
+/** 保存头像，返回文件名。`role`：哪个角色的（缺省 = 琴音）。 */
+export async function workspaceSetAvatar(bytes: Uint8Array, ext: string, role?: string): Promise<string> {
+  if (isTauri) return invoke("workspace_set_avatar", { bytes: Array.from(bytes), ext, role: role ?? null });
   if (bytes.length > 2 * 1024 * 1024) throw new Error("头像不能超过 2 MB");
   preview.avatar = bytes;
-  return `avatar.${ext.toLowerCase()}`;
+  return role && role !== "kotone" ? `avatar-${role}.${ext.toLowerCase()}` : `avatar.${ext.toLowerCase()}`;
 }
 
 export async function workspaceAvatar(name: string): Promise<Uint8Array | null> {

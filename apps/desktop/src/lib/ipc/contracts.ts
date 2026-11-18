@@ -283,6 +283,8 @@ export interface AgentConfig {
   subagents?: { model: string };
   /** 一段对话估到这么多 token 时整理成摘要（上下文压缩）；0 = 不整理。默认 64000。 */
   compactAtTokens?: number;
+  /** 当前角色（默认 kotone = 琴音）。换角色用 lib/roles.ts 的 rolesSwitch（同时换名字、头像）。 */
+  roleId?: string;
 }
 
 /** 语音唤醒设置（config.json `assistant.wake`）。 */

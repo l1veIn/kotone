@@ -34,9 +34,9 @@
   let connections = $state<ConnectionInfo[]>([]);
   let connectionError = $state("");
   const ready = $derived(!!connections.find((item) => item.id === $settingsStore?.assistant.connectionId)?.hasApiKey);
-  // ADR 023：聊天 · 她是谁 · 记忆 · 技能 · 设置
+  // ADR 023：聊天 · 角色（原“她是谁”）· 记忆 · 技能 · 设置
   const tabs = [
-    { id: "chat", label: "聊天" }, { id: "identity", label: "她是谁" }, { id: "memory", label: "记忆" },
+    { id: "chat", label: "聊天" }, { id: "identity", label: "角色" }, { id: "memory", label: "记忆" },
     { id: "skills", label: "技能" }, { id: "settings", label: "设置" },
   ] as const;
   const name = $derived($settingsStore?.agent?.identity?.name?.trim() || "琴音");
