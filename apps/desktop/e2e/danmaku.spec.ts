@@ -262,10 +262,11 @@ test("appearance settings persist speed, font, exact top offset, color and built
   await expect(settings.getByRole("button", { name: "弹幕表情加油", exact: true })).toHaveAttribute("aria-pressed", "true");
   const saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
   expect(saved.assistant).toMatchObject({ danmakuSpeedPxPerSec: 240, danmakuFontSize: 40, danmakuTopOffsetPx: 345, danmakuColor: "#00E5FF", danmakuEmote: "cheering" });
-  await page.getByTestId("assistant-nav-tasks").click();
+  await page.getByTestId("settings-nav-history").click();
+  await page.getByTestId("settings-nav-assistant").click();
   await page.getByTestId("assistant-nav-settings").click();
   await expect(topNumber).toHaveValue("345");
-  await expect(page.getByRole("status").filter({ hasText: "弹幕样式已保存" })).toHaveCount(0);
+  await expect(page.locator("[data-sonner-toast]").filter({ hasText: "弹幕样式已保存" })).toHaveCount(0);
   await settings.screenshot({ path: testInfo.outputPath("danmaku-settings.png") });
   await page.setViewportSize({ width: 1040, height: 900 });
   await page.getByRole("main").evaluate((element) => { element.scrollTop = element.scrollHeight; });

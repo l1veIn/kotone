@@ -8,8 +8,13 @@ rust-version = "1.77.2"
 [dependencies]
 kotone-core.workspace = true
 tokio.workspace = true
+# 已安装游戏检测（games.rs）：结果序列化、读 Epic / Riot 的 JSON 清单
+serde.workspace = true
+serde_json.workspace = true
 # 音频采集（docs/development.md §2：cpal 为 Rust 跨平台音频采集事实标准）
 cpal = "0.15"
+# 游戏列表的图标编码成 PNG（同一个 image 版本已在工作区里）
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 # 输入注入 / LL 钩子 / 提权检测：raw windows crate 直调 Win32
 [target.'cfg(windows)'.dependencies]
@@ -26,9 +31,30 @@ windows = { workspace = true, features = [
     "Win32_System_Registry",
     "Win32_System_Com",
     "Win32_Media_Speech",
+    # 工具服务 M1：窗口观察 / GDI 前台客户区捕获 / 物理像素与 DPI（docs/tool-service.md）
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
+    "Win32_UI_HiDpi",
+    # 工具服务实例发现：会话 ID、私有描述文件 DACL（SDDL）校验
+    "Win32_System_RemoteDesktop",
+    "Win32_Security_Authorization",
+    # CLI 导出产物：MoveFileExW 原子不覆盖发布
+    "Win32_Storage_FileSystem",
+    # 游戏语音（ADR 020）：录音设备列表与默认设备（MMDevice API、IPolicyConfig）
+    "Win32_Media_Audio",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
 ] }
+# 只录某一个程序的声音（ADR 021）：进程回环录音（MIT）
+wasapi = "0.27"
 arboard = "3"
 clipboard-win = "5"
 
 [dev-dependencies]
 tempfile.workspace = true
+# tests/native_capture.rs：真实后端 → 工具服务 → loopback HTTP 的完整链路（dev 依赖环为 Cargo 允许）
+kotone-tools = { workspace = true, features = ["test-support"] }
+tokio.workspace = true
+serde_json.workspace = true
+base64 = "0.22"

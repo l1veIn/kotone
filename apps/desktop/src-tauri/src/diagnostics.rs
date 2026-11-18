@@ -123,6 +123,8 @@ struct RuntimeSnapshot {
     history_include_audio: bool,
     overlay_visibility: String,
     overlay_style: String,
+    overlay_degraded: bool,
+    overlay_degradation_reason: Option<String>,
     vad_compiled: bool,
     vad_model_ready: bool,
     diagnostics_recording: bool,
@@ -222,6 +224,7 @@ pub fn export(
         })
         .collect();
 
+    let overlay_health = super::overlay::health(app);
     let runtime_snapshot = RuntimeSnapshot {
         phase: runtime.phase,
         restart_needed: runtime.restart_needed,
@@ -244,6 +247,8 @@ pub fn export(
         history_include_audio: settings.history.include_audio,
         overlay_visibility: serde_label(&settings.overlay.visibility),
         overlay_style: serde_label(&settings.overlay.style),
+        overlay_degraded: overlay_health.degraded,
+        overlay_degradation_reason: overlay_health.reason,
         vad_compiled: kotone_stt::vad::compiled(),
         vad_model_ready: kotone_stt::model::vad_model_ready(),
         diagnostics_recording: settings.diagnostics.recording,

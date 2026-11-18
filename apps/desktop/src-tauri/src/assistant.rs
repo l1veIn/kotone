@@ -6,21 +6,22 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use kotone_core::assistant::{
-    AssistantConfig, AssistantHandler, AssistantPlan, AssistantRequest, SpeechEngine,
+    AssistantConfig, AssistantHandler, AssistantPlan, AssistantRequest, TtsEngine,
 };
+use kotone_core::automation::AutomationScheduler;
 use kotone_core::cancel::CancellationToken;
-use kotone_core::reminders::{
-    DeliveryFuture, DeliveryKind, Reminder, ReminderDelivery, ReminderScheduler,
-};
+use kotone_core::reminders::{DeliveryFuture, DeliveryKind, Reminder, ReminderDelivery};
 use kotone_core::settings::Settings;
 use kotone_core::speech::{SpeechOutput, SpeechRequest, SpeechVoice};
 use tauri::{AppHandle, Emitter, Manager};
 
 pub struct AssistantRuntime {
-    pub scheduler: Result<Arc<ReminderScheduler>, String>,
+    pub scheduler: Result<Arc<AutomationScheduler>, String>,
     pub handler: Arc<dyn AssistantHandler>,
     system_speaker: Result<Arc<dyn SpeechOutput>, String>,
     local_speaker: Mutex<Option<(std::path::PathBuf, Arc<kotone_tts::LocalSpeechOutput>)>>,
+    /// 在线语音（OpenAI 兼容 / 火山）：每种一个输出线程，配置在每次播报时重新解析。
+    online_speakers: Mutex<Vec<(TtsEngine, Arc<kotone_tts::LocalSpeechOutput>)>>,
     typed_request: Mutex<Option<CancellationToken>>,
     presentation: Mutex<Option<DanmakuPresentation>>,
     presentation_generation: AtomicU64,
@@ -66,6 +67,11 @@ impl OutputCancellation {
 }
 
 impl AssistantRuntime {
+    /// 系统语音不可用时的原因（统一模型清单 TTS 条目的就绪状态）。
+    pub fn system_speech_error(&self) -> Option<String> {
+        self.system_speaker.as_ref().err().cloned()
+    }
+
     fn cancel_speech(&self) -> Result<(), String> {
         let local = self
             .local_speaker
@@ -81,8 +87,24 @@ impl AssistantRuntime {
             .map(|s| s.cancel())
             .unwrap_or(Ok(()));
         let local_result = local.map(|s| s.cancel()).unwrap_or(Ok(()));
-        system_result.and(local_result)
+        let online: Vec<_> = self
+            .online_speakers
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, speaker)| speaker.clone())
+            .collect();
+        let online_result = online
+            .into_iter()
+            .map(|s| s.cancel())
+            .fold(Ok(()), Result::and);
+        system_result.and(local_result).and(online_result)
     }
+}
+
+/// 实际用哪个语音引擎：“自动”（默认）时，琴音的连接能用 DeepSeek 语音就用它，否则系统语音。
+pub fn effective_engine(app: &AppHandle, config: &AssistantConfig) -> TtsEngine {
+    config.tts_engine_auto(|| crate::tts_online::deepseek_ready(app))
 }
 
 fn selected_speaker(
@@ -90,8 +112,30 @@ fn selected_speaker(
     config: &AssistantConfig,
 ) -> Result<Arc<dyn SpeechOutput>, String> {
     let runtime = app.state::<AssistantRuntime>();
-    if config.speech_engine == SpeechEngine::System {
-        return runtime.system_speaker.clone();
+    let engine = effective_engine(app, config);
+    let online_kind = match engine {
+        TtsEngine::System => return runtime.system_speaker.clone(),
+        TtsEngine::Kokoro => None,
+        TtsEngine::Openai => Some(kotone_tts::online::OnlineKind::OpenAi),
+        TtsEngine::Volcano => Some(kotone_tts::online::OnlineKind::Volcano),
+        TtsEngine::Deepseek => Some(kotone_tts::online::OnlineKind::Deepseek),
+    };
+    if let Some(kind) = online_kind {
+        let mut online = runtime.online_speakers.lock().unwrap();
+        if let Some((_, speaker)) = online
+            .iter()
+            .find(|(e, speaker)| *e == engine && !speaker.is_closed())
+        {
+            return Ok(speaker.clone());
+        }
+        let resolver_app = app.clone();
+        let speaker = Arc::new(kotone_tts::LocalSpeechOutput::online(
+            kind,
+            Arc::new(move || crate::tts_online::config(&resolver_app, kind)),
+        )?);
+        online.retain(|(e, _)| *e != engine);
+        online.push((engine, speaker.clone()));
+        return Ok(speaker);
     }
     let settings = app.state::<crate::SharedState>();
     let path = kotone_stt::model::models_dir_from(&settings.settings.read().unwrap())
@@ -128,31 +172,125 @@ pub fn prepare_model_migration(
     Ok(guard)
 }
 
-pub fn initialize(
-    app: &AppHandle,
+/// 助手入口的请求去向：
+/// - 默认交给内置琴音 Agent（`agent.inGame`，ADR 014 §4）：立即返回，结果在后台播出；
+/// - `agent.inGame = false` 时用旧的单次陪玩（截图 + OCR + 一次大模型调用，提醒 / 打字 /
+///   回答三选一）；
+/// - `assistant.route = agent` 时原文转交外部 Agent（经工具服务发布 `user.request`）。
+///
+/// 热键语音与文字入口都经过这里，因此两者行为一致。
+struct RoutingHandler {
+    app: AppHandle,
     settings: Arc<RwLock<Settings>>,
-    connections: Arc<dyn kotone_core::connection::ConnectionResolver>,
-) -> AssistantRuntime {
+}
+
+/// 请求来源：设置窗口（文字入口与语音按钮）/ 工具提交 / 热键语音（按会话 ID 前缀区分）。
+fn request_source(session_id: &str) -> &'static str {
+    if session_id.starts_with("assistant-wake-") {
+        "wake"
+    } else if session_id.starts_with("assistant-ui-") {
+        "assistant-text"
+    } else if session_id.starts_with("assistant-tool-") {
+        "tool"
+    } else {
+        "assistant-voice"
+    }
+}
+
+impl AssistantHandler for RoutingHandler {
+    fn handle(
+        &self,
+        request: AssistantRequest,
+        cancel: CancellationToken,
+    ) -> kotone_core::assistant::AssistantFuture<'_> {
+        let (route, in_game) = {
+            let settings = self.settings.read().unwrap();
+            (settings.assistant.route, settings.agent.in_game)
+        };
+        if route != kotone_core::assistant::AssistantRoute::Agent && in_game {
+            return Box::pin(async move {
+                if cancel.is_cancelled() {
+                    return Err("助手指令已取消".into());
+                }
+                let message = crate::agent::submit_from_assistant(
+                    &self.app,
+                    request.text,
+                    match request_source(&request.session_id) {
+                        "assistant-text" => "assistant-text",
+                        "tool" => "tool",
+                        "wake" => "wake-voice",
+                        _ => "voice",
+                    },
+                )?;
+                Ok(AssistantPlan {
+                    message,
+                    reminders: vec![],
+                })
+            });
+        }
+        if route != kotone_core::assistant::AssistantRoute::Agent {
+            let source = match request_source(&request.session_id) {
+                "assistant-text" => crate::companion::Source::Text,
+                "tool" => crate::companion::Source::Tool,
+                _ => crate::companion::Source::Voice,
+            };
+            return Box::pin(async move {
+                crate::companion::handle_assistant(&self.app, request.text, source, cancel).await
+            });
+        }
+        Box::pin(async move {
+            if cancel.is_cancelled() {
+                return Err("助手指令已取消".into());
+            }
+            let submitted = crate::tool_service::submit_user_request(
+                &self.app,
+                &request.text,
+                // 外部 Agent 的来源只有三种：唤醒也算语音
+                match request_source(&request.session_id) {
+                    "wake" => "assistant-voice",
+                    other => other,
+                },
+            )?;
+            let id = submitted["requestId"].as_str().unwrap_or_default();
+            Ok(AssistantPlan {
+                message: format!("已转交 Agent（请求 {id}）"),
+                reminders: vec![],
+            })
+        })
+    }
+}
+
+pub fn initialize(app: &AppHandle, settings: Arc<RwLock<Settings>>) -> AssistantRuntime {
     let speaker = kotone_platform_windows::speech::WindowsSpeechOutput::new()
         .map(|speaker| Arc::new(speaker) as Arc<dyn SpeechOutput>);
-    let scheduler = ReminderScheduler::open(
-        kotone_core::settings::kotone_dir().join("reminders.json"),
+    // 提醒与程序共用自动化调度器（ADR 013）；旧 reminders.json 只读导入一次，不改不删。
+    let scheduler = AutomationScheduler::open(
+        kotone_core::settings::kotone_dir().join("automation-runs.json"),
         Arc::new(DesktopDelivery { app: app.clone() }),
     );
     if let Ok(scheduler) = &scheduler {
+        match scheduler
+            .import_legacy_reminders(&kotone_core::settings::kotone_dir().join("reminders.json"))
+        {
+            Ok(0) => {}
+            Ok(n) => kotone_core::log::log(&format!("automation: imported {n} pending reminders")),
+            Err(e) => kotone_core::log::log(&format!("automation: reminders import skipped: {e}")),
+        }
         let handle = app.clone();
         scheduler.set_on_changed(Arc::new(move || {
             let _ = handle.emit("kotone://reminders-updated", ());
+            let _ = handle.emit("kotone://automations-updated", ());
         }));
     }
     AssistantRuntime {
         scheduler,
-        handler: Arc::new(kotone_ai::reminders::ReminderAssistant::new(
-            connections,
+        handler: Arc::new(RoutingHandler {
+            app: app.clone(),
             settings,
-        )),
+        }),
         system_speaker: speaker,
         local_speaker: Mutex::new(None),
+        online_speakers: Mutex::new(Vec::new()),
         typed_request: Mutex::new(None),
         presentation: Mutex::new(None),
         presentation_generation: AtomicU64::new(0),
@@ -170,9 +308,6 @@ pub fn start(app: &AppHandle) {
         tauri::async_runtime::spawn(async move {
             let _ = scheduler.start().await;
         });
-    }
-    if let Some(window) = app.get_webview_window("danmaku") {
-        let _ = window.set_ignore_cursor_events(true);
     }
 }
 
@@ -195,11 +330,73 @@ pub fn silence(app: &AppHandle) {
     }
 }
 
+/// 立即用当前语音说一句短话（唤醒应答“嗯？/我在”）：先停掉正在播的，播完才返回。
+/// 阻塞，从普通线程调用；不经过提醒队列，也不改弹幕。
+pub fn speak_now(app: &AppHandle, text: &str) -> Result<(), String> {
+    let state = app.state::<AssistantRuntime>();
+    if state.active_captures.load(Ordering::SeqCst) != 0 {
+        return Err("正在录音，不播应答".into());
+    }
+    state.cancel_speech()?;
+    let config = app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .assistant
+        .clone();
+    let speaker = selected_speaker(app, &config)?;
+    speaker.speak(speech_request(
+        effective_engine(app, &config),
+        &config,
+        text,
+    ))
+}
+
+/// 当前的语音引擎与一句话的合成请求（游戏语音“说给队友”用）。
+pub fn speaker_and_request(
+    app: &AppHandle,
+    text: &str,
+) -> Result<(Arc<dyn SpeechOutput>, kotone_core::speech::SpeechRequest), String> {
+    let config = app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .assistant
+        .clone();
+    let speaker = selected_speaker(app, &config)?;
+    let request = speech_request(effective_engine(app, &config), &config, text);
+    Ok((speaker, request))
+}
+
+/// 先把这些短句合成进缓存（唤醒应答“嗯？/我在”），用时立刻出声、不用现场请求在线语音。
+pub fn prefetch(app: &AppHandle, texts: &[&str]) {
+    let config = app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .assistant
+        .clone();
+    let Ok(speaker) = selected_speaker(app, &config) else {
+        return;
+    };
+    let engine = effective_engine(app, &config);
+    for text in texts {
+        speaker.prefetch(speech_request(engine, &config, text));
+    }
+}
+
 pub fn before_capture(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AssistantRuntime>();
     // Set before purging: output admission sees even the interval before Listening.
     state.active_captures.fetch_add(1, Ordering::SeqCst);
-    state.cancel_speech()
+    // 停播失败（语音服务忙或已停止）不该让录音开不了：记下来，照常开始。
+    if let Err(error) = state.cancel_speech() {
+        kotone_core::log::log(&format!("录音开始前停止播报失败（继续录音）：{error}"));
+    }
+    Ok(())
 }
 
 pub fn after_capture(app: &AppHandle) {
@@ -306,7 +503,11 @@ impl ReminderDelivery for DesktopDelivery {
                             guard.speaker = Some(speaker.clone());
                             match queue_speech(
                                 speaker.clone(),
-                                speech_request(&config, &reminder.text),
+                                speech_request(
+                                    effective_engine(&self.app, &config),
+                                    &config,
+                                    &reminder.text,
+                                ),
                                 &runtime.active_captures,
                                 &output_cancel,
                             ) {
@@ -361,14 +562,40 @@ impl ReminderDelivery for DesktopDelivery {
     }
 }
 
-fn speech_request(config: &kotone_core::assistant::AssistantConfig, text: &str) -> SpeechRequest {
-    let voice = match config.speech_engine {
-        SpeechEngine::Kokoro => &config.kokoro_voice_id,
-        SpeechEngine::System => &config.voice_id,
+fn speech_request(
+    engine: TtsEngine,
+    config: &kotone_core::assistant::AssistantConfig,
+    text: &str,
+) -> SpeechRequest {
+    // 声音编号可带提供方前缀（`system/…`、`kokoro/…`）；在线引擎的声音在模型配置里，
+    // 每次播报时由合成线程解析。属于其他提供方的声音会在合成时报错，不会换声音。
+    // 当前角色有自己的声音、并且属于正在用的引擎时，用角色的（换角色声音跟着换）。
+    let role_voice = crate::roles::cached_voice();
+    let role_voice = role_voice.trim();
+    let provider = match engine {
+        TtsEngine::Kokoro => kotone_tts::voice::KOKORO,
+        TtsEngine::System => kotone_tts::voice::SYSTEM,
+        TtsEngine::Openai => kotone_tts::voice::OPENAI,
+        TtsEngine::Volcano => kotone_tts::voice::VOLCANO,
+        TtsEngine::Deepseek => kotone_tts::voice::DEEPSEEK,
+    };
+    let role_voice = role_voice
+        .split_once('/')
+        .filter(|(p, v)| *p == provider && !v.is_empty())
+        .map(|_| role_voice.to_string());
+    let voice = match (engine, role_voice) {
+        (TtsEngine::System, Some(v)) => v.trim_start_matches("system/").to_string(),
+        (_, Some(v)) => v,
+        (TtsEngine::Kokoro, None) => config.kokoro_voice_id.trim().to_string(),
+        (TtsEngine::System, None) => {
+            let id = config.voice_id.trim();
+            id.strip_prefix("system/").unwrap_or(id).to_string()
+        }
+        (TtsEngine::Openai | TtsEngine::Volcano | TtsEngine::Deepseek, None) => String::new(),
     };
     SpeechRequest {
         text: text.to_string(),
-        voice_id: (!voice.is_empty()).then(|| voice.clone()),
+        voice_id: (!voice.is_empty()).then_some(voice),
         volume: config.speech_volume,
         rate: config.speech_rate,
     }
@@ -553,6 +780,15 @@ pub fn cancel_reminder(state: tauri::State<AssistantRuntime>, id: String) -> Res
 
 #[tauri::command]
 pub async fn assistant_submit_text(app: AppHandle, text: String) -> Result<AssistantPlan, String> {
+    submit_text(&app, text, "assistant-ui").await
+}
+
+/// 与文字入口相同的提交路径（工具服务 `assistant.submit` 以 `assistant-tool` 前缀调用）。
+pub async fn submit_text(
+    app: &AppHandle,
+    text: String,
+    session_prefix: &str,
+) -> Result<AssistantPlan, String> {
     let state = app.state::<AssistantRuntime>();
     let scheduler = state.scheduler.as_ref().map_err(Clone::clone)?.clone();
     let cancel = CancellationToken::default();
@@ -573,7 +809,7 @@ pub async fn assistant_submit_text(app: AppHandle, text: String) -> Result<Assis
     }
     let _request_guard = RequestGuard(&state.typed_request);
     let request = AssistantRequest {
-        session_id: format!("assistant-ui-{}", kotone_core::eval::new_session_id()),
+        session_id: format!("{session_prefix}-{}", kotone_core::eval::new_session_id()),
         text,
         received_at_ms: now_ms(),
     };
@@ -592,6 +828,42 @@ pub async fn assistant_submit_text(app: AppHandle, text: String) -> Result<Assis
     result
 }
 
+/// 向用户交付一段文字（Agent 回复）：复用提醒的交付路径——输出互斥、等待麦克风释放、
+/// 语音与弹幕、失败降级。`kinds` 为空时使用助手设置中的默认提醒方式。future 被丢弃时
+/// （工具期限 / 服务关闭）随交付守卫停止播报并收起弹幕。
+pub async fn deliver_text(
+    app: &AppHandle,
+    text: String,
+    kinds: Vec<DeliveryKind>,
+) -> Result<Vec<DeliveryKind>, String> {
+    let delivery = if kinds.is_empty() {
+        app.state::<crate::SharedState>()
+            .settings
+            .read()
+            .unwrap()
+            .assistant
+            .default_delivery
+            .clone()
+    } else {
+        kinds
+    };
+    let now = now_ms();
+    let reminder = Reminder {
+        id: format!("agent-reply-{now}"),
+        session_id: "agent-reply".into(),
+        text,
+        delivery: delivery.clone(),
+        created_at_ms: now,
+        due_at_ms: now,
+        status: kotone_core::reminders::ReminderStatus::Delivering,
+        error: None,
+    };
+    DesktopDelivery { app: app.clone() }
+        .deliver(&reminder, CancellationToken::default())
+        .await?;
+    Ok(delivery)
+}
+
 #[tauri::command]
 pub fn cancel_assistant_request(state: tauri::State<AssistantRuntime>) {
     if let Some(cancel) = state.typed_request.lock().unwrap().as_ref() {
@@ -608,13 +880,37 @@ pub async fn list_speech_voices(app: AppHandle) -> Result<Vec<SpeechVoice>, Stri
         .unwrap()
         .assistant
         .clone();
-    if config.speech_engine == SpeechEngine::Kokoro {
-        return Ok(kotone_tts::kokoro_voices());
+    match effective_engine(&app, &config) {
+        TtsEngine::Kokoro => return Ok(kotone_tts::kokoro_voices()),
+        TtsEngine::Deepseek => {
+            return Ok(kotone_tts::catalog::online_voices(
+                kotone_tts::online::OnlineKind::Deepseek,
+            ))
+        }
+        TtsEngine::Openai => {
+            return Ok(kotone_tts::catalog::online_voices(
+                kotone_tts::online::OnlineKind::OpenAi,
+            ))
+        }
+        TtsEngine::Volcano => {
+            return Ok(kotone_tts::catalog::online_voices(
+                kotone_tts::online::OnlineKind::Volcano,
+            ))
+        }
+        TtsEngine::System => {}
     }
     let speaker = selected_speaker(&app, &config)?;
-    tokio::task::spawn_blocking(move || speaker.voices())
+    let voices = tokio::task::spawn_blocking(move || speaker.voices())
         .await
-        .map_err(|_| "读取系统语音失败".to_string())?
+        .map_err(|_| "读取系统语音失败".to_string())??;
+    // 声音编号统一写成 `system/<语音 token>`；旧配置里不带前缀的值照常可用。
+    Ok(voices
+        .into_iter()
+        .map(|voice| SpeechVoice {
+            id: kotone_tts::voice::qualify(kotone_tts::voice::SYSTEM, &voice.id),
+            name: voice.name,
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -647,20 +943,58 @@ pub async fn preview_reminder(app: AppHandle, kind: String) -> Result<(), String
         if kind != "voice" {
             return Err("未知提醒方式".into());
         }
-        let speaker = selected_speaker(&app, &config)?;
+        let engine = effective_engine(&app, &config);
+        let started = std::time::Instant::now();
+        // 试听没声音时要能查：记下用的引擎、花了多久、结果。
+        let log_result = |result: &Result<(), String>| {
+            kotone_core::log::log(&format!(
+                "speech preview: engine={engine:?} took={}ms result={}",
+                started.elapsed().as_millis(),
+                match result {
+                    Ok(()) => "played".to_string(),
+                    Err(e) => format!("error: {e}"),
+                }
+            ));
+        };
+        let speaker =
+            selected_speaker(&app, &config).inspect_err(|e| log_result(&Err(e.clone())))?;
         guard.speaker = Some(speaker.clone());
         let result = queue_speech(
             speaker,
-            speech_request(&config, "打野有闪了。该打小龙了。"),
+            speech_request(engine, &config, "打野有闪了。该打小龙了。"),
             &runtime.active_captures,
             &output_cancel,
-        )?
+        )
+        .inspect_err(|e| log_result(&Err(e.clone())))?
         .await
-        .map_err(|_| "语音试听失败".to_string())?;
+        .map_err(|_| "语音试听失败".to_string())
+        .and_then(|r| r);
+        log_result(&result);
         guard.speaker = None;
         result
     })
     .await
+}
+
+/// 呼叫琴音的按钮（首页、聊天窗口）：和热键一样，按一次就在气泡里听。
+#[tauri::command]
+pub async fn assistant_call(app: AppHandle) -> Result<(), String> {
+    let running = app
+        .try_state::<crate::runtime::RuntimeManager>()
+        .is_some_and(|rt| rt.phase() == kotone_core::runtime::RuntimePhase::Running);
+    if !running {
+        return Err("先点右上角「启动」，Kotone 运行时才能呼叫".into());
+    }
+    let state = app.state::<crate::SharedState>();
+    let timeout = state
+        .settings
+        .read()
+        .unwrap()
+        .assistant
+        .wake
+        .no_speech_timeout_ms;
+    state.orchestrator.call_assistant(None, timeout).await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -825,7 +1159,13 @@ mod tests {
             speaker.cancel().unwrap();
         }
         let captures = AtomicUsize::new(0);
-        let request = || speech_request(&AssistantConfig::default(), "打野有闪了。");
+        let request = || {
+            speech_request(
+                TtsEngine::System,
+                &AssistantConfig::default(),
+                "打野有闪了。",
+            )
+        };
         assert!(queue_speech(speaker.clone(), request(), &captures, &current).is_err());
         assert_eq!(speaker.spoken.load(Ordering::SeqCst), 0);
         let next = outputs.begin();
@@ -843,7 +1183,11 @@ mod tests {
         let speaker = Arc::new(TestSpeaker::default());
         let result = queue_speech(
             speaker.clone(),
-            speech_request(&AssistantConfig::default(), "打野有闪了。"),
+            speech_request(
+                TtsEngine::System,
+                &AssistantConfig::default(),
+                "打野有闪了。",
+            ),
             &AtomicUsize::new(1),
             &output,
         );

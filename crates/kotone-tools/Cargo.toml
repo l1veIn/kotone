@@ -1,0 +1,36 @@
+[package]
+name = "kotone-tools"
+version = "0.1.0"
+description = "Kotone 本机 Agent 工具服务：协议信封、能力目录、不可变图像产物、loopback HTTP 服务端与客户端"
+edition = "2021"
+rust-version = "1.77.2"
+
+# 依赖纪律：领域端口来自 kotone-core（不依赖 Windows/Tauri）；平台实现由桌面壳 / CLI 注入。
+[dependencies]
+kotone-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+# 客户端：仅 loopback 明文 HTTP，关闭默认 TLS/代理探测之外的功能
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+png = "0.17"
+sha2 = "0.10"
+base64 = "0.22"
+# computer use 截图：缩放与 JPEG 编码（image 已在依赖树里，只多开 jpeg 编解码）
+image_codec = { package = "image", version = "0.25", default-features = false, features = ["jpeg"] }
+getrandom = "0.2"
+
+[features]
+# 仅供测试：假窗口/捕获后端、假宿主与 schema 校验器（正式构建不启用）
+test-support = []
+
+[dev-dependencies]
+tempfile.workspace = true
+# M2：真实 DeepSeek 后端对接本地 mock 服务（不触网、无本地推理特性）
+kotone-ocr.workspace = true
+wiremock = "0.6"
+# 测试真实私有描述文件 ACL 与进程身份（窗口后端仍用假实现）
+kotone-platform-windows.workspace = true

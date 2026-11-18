@@ -1,21 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { isTauri, type AssistantInteractionMode } from "./ipc";
-
-export interface AssistantVoiceSession { sessionId: string; interactionMode: AssistantInteractionMode }
-export async function beginAssistantVoice(): Promise<AssistantVoiceSession> {
-  if (!isTauri) throw new Error("浏览器仅预览界面；请在桌面应用中使用语音输入。");
-  return invoke("assistant_voice_begin");
-}
-export async function endAssistantVoice(sessionId: string): Promise<void> {
-  if (isTauri) await invoke("assistant_voice_end", { sessionId });
-}
-export async function confirmAssistantVoice(sessionId: string): Promise<void> {
-  if (isTauri) await invoke("assistant_voice_confirm", { sessionId });
-}
-export async function cancelAssistantVoice(sessionId: string): Promise<void> {
-  if (isTauri) await invoke("assistant_voice_cancel", { sessionId });
-}
+import { isTauri } from "./ipc";
 
 export type DeliveryKind = "voice" | "danmaku";
 export interface Reminder {
@@ -99,12 +84,17 @@ export async function cancelAssistantRequest(): Promise<void> {
 }
 export async function listSpeechVoices(): Promise<SpeechVoice[]> {
   return isTauri ? invoke("list_speech_voices") : [
-    {id:"kokoro:zf_001",name:"中文女声 001"}, {id:"kokoro:zf_003",name:"中文女声 003"}, {id:"kokoro:zf_017",name:"中文女声 017"},
+    {id:"kokoro/zf_001",name:"中文女声 001"}, {id:"kokoro/zf_003",name:"中文女声 003"}, {id:"kokoro/zf_017",name:"中文女声 017"},
   ];
 }
 export async function previewReminder(kind: DeliveryKind): Promise<void> {
   if (!isTauri) throw new Error("浏览器预览不播放语音或显示系统弹幕；请在桌面应用中测试。");
   await invoke("preview_reminder", { kind });
+}
+/** 呼叫琴音（和热键一样）：按一次就在右下角气泡里听，说完自动交给她；她在听时再按一次立刻提交。 */
+export async function callKotone(): Promise<void> {
+  if (!isTauri) throw new Error("呼叫仅限桌面版");
+  await invoke("assistant_call");
 }
 export async function stopSpeech(): Promise<void> {
   if (isTauri) await invoke("stop_speech");

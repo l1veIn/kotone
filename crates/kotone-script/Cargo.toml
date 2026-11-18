@@ -1,0 +1,16 @@
+[package]
+name = "kotone-script"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77.2"
+description = "Kotone companion scripts: LLM-written Luau run in a sandbox with whitelisted key, timer, screen and speech functions"
+
+# 依赖纪律：只定义脚本运行时与宿主端口；按键注入、截图、OCR、播报由桌面端实现端口注入。
+[dependencies]
+mlua = { version = "0.10", features = ["luau", "vendored", "send"] }
+serde_json.workspace = true
+
+
+[dev-dependencies]
+# 测试内置自动化（定义在 kotone-core 的自动化库里）真的能跑：只在测试里用。
+kotone-core.workspace = true

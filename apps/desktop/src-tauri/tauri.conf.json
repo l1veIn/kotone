@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kotone",
-  "version": "0.1.13",
+  "version": "0.2.0",
   "identifier": "com.l1vein.kotone",
   "build": {
     "beforeDevCommand": "pnpm dev:web",
@@ -13,6 +13,7 @@
     "windows": [
       {
         "label": "danmaku",
+        "create": false,
         "title": "Kotone 提醒",
         "url": "index.html#/danmaku",
         "width": 800,
@@ -28,7 +29,25 @@
         "visible": false
       },
       {
+        "label": "companion",
+        "create": false,
+        "title": "琴音",
+        "url": "index.html#/companion",
+        "width": 440,
+        "height": 260,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "focusable": false,
+        "visible": false,
+        "shadow": false,
+        "resizable": false
+      },
+      {
         "label": "overlay",
+        "create": false,
         "title": "Kotone Overlay",
         "url": "index.html#/overlay",
         "width": 480,
@@ -43,19 +62,20 @@
       },
       {
         "label": "main",
+        "create": false,
         "title": "Kotone 设置",
         "url": "index.html#/settings",
-        "width": 800,
-        "height": 600,
-        "minWidth": 640,
-        "minHeight": 480,
+        "width": 1280,
+        "height": 820,
+        "minWidth": 520,
+        "minHeight": 600,
         "decorations": false,
-        "maximizable": false,
+        "maximizable": true,
         "visible": false
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: https://asset.localhost"
+      "csp": "default-src 'self'; connect-src 'self' http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: https://asset.localhost"
     }
   },
   "bundle": {
@@ -64,10 +84,20 @@
       "nsis"
     ],
     "createUpdaterArtifacts": true,
+    "resources": {
+      "../../../LICENSE": "LICENSE.txt",
+      "../../../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+      "../../../licenses/codeg-APACHE-2.0.txt": "licenses/codeg-APACHE-2.0.txt",
+      "../../../licenses/goose-APACHE-2.0.txt": "licenses/goose-APACHE-2.0.txt",
+      "../../../licenses/deepseek-harness-MIT.txt": "licenses/deepseek-harness-MIT.txt",
+      "../../../licenses/CC-BY-NC-SA-4.0.txt": "licenses/CC-BY-NC-SA-4.0.txt",
+      "../src/assets/roles/README.md": "licenses/role-art.md",
+      "../../../docs/third-party/rambledesk-ports.md": "licenses/rambledesk-ports.md"
+    },
     "publisher": "l1veIn",
     "category": "Utility",
     "shortDescription": "面向游戏玩家的本地语音输入工具",
-    "longDescription": "Kotone（琴音）通过全局热键把语音转换为文字，并发送到游戏聊天框。支持本地或可选在线识别、文字处理与语音提醒；本地模式支持英雄联盟术语热词与通用输入配置。",
+    "longDescription": "Kotone（琴音）通过全局热键把语音转换为文字，并发送到游戏聊天框。支持本地或可选在线识别与文字处理；内置的琴音 Agent 能替你看聊天、在游戏里发言、提醒和运行自动化；本地模式支持英雄联盟术语热词与通用输入配置。",
     "copyright": "Copyright © 2026 l1veIn",
     "icon": [
       "icons/32x32.png",

@@ -7,7 +7,9 @@ test("assistant uses the same editable, captured and clearable hotkey field as a
   const input = page.getByTestId("hotkey-input-assistant");
   const capture = page.getByTestId("hotkey-capture-assistant");
   const status = page.getByTestId("hotkey-status-assistant");
-  await expect(status).toHaveText("未设置");
+  // 呼叫琴音默认是 ~ 键
+  await expect(input).toHaveValue("Backquote");
+  await expect(status).toHaveText("当前生效：Backquote");
   await input.fill("Alt+F8");
   await input.press("Enter");
   await expect(status).toHaveText("当前生效：Alt+F8");
@@ -46,21 +48,22 @@ test("leaving assistant during capture cannot save a later key or leave capture 
   await expect(page.getByTestId("hotkey-input-post-process-toggle")).toHaveValue("F10");
   await page.getByTestId("settings-nav-assistant").click();
   await page.getByTestId("assistant-nav-settings").click();
-  await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("");
+  await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("Backquote");
   const saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
-  expect(saved.assistant.hotkey).toBe("");
+  expect(saved.assistant.hotkey).toBe("Backquote");
   expect(saved.togglePostProcessingHotkey).toBe("F10");
 });
 
-test("switching to reminder tasks cancels an in-progress assistant hotkey capture", async ({ page }) => {
+test("leaving the companion settings cancels an in-progress assistant hotkey capture", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-assistant").click();
   await page.getByTestId("assistant-nav-settings").click();
   await page.getByTestId("hotkey-capture-assistant").click();
-  await page.getByTestId("assistant-nav-tasks").click();
+  await page.getByTestId("assistant-nav-chat").click();
   await page.keyboard.press("F9");
+  await page.getByTestId("settings-nav-assistant").click();
   await page.getByTestId("assistant-nav-settings").click();
-  await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("");
+  await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("Backquote");
   await page.getByTestId("hotkey-capture-assistant").click();
   await page.keyboard.press("F10");
   await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("F10");

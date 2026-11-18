@@ -84,6 +84,9 @@ pub struct Settings {
     /// Kotone 拉起来的热键；与其它热键冲突时拒绝注册。
     #[serde(default)]
     pub runtime_toggle_hotkey: String,
+    /// 停止全部自动化（应用级热键，runtime 未运行时也有效；默认 Ctrl+Shift+F12，留空 = 关闭）。
+    #[serde(default = "default_automation_stop_hotkey")]
+    pub automation_stop_hotkey: String,
     /// 「以管理员权限重启」启动提示：用户勾选「不再提示」后置 true，不再弹窗（默认 false）
     #[serde(default)]
     pub admin_prompt_dismissed: bool,
@@ -130,6 +133,67 @@ pub struct Settings {
     /// 独立语音助手入口、AI 连接和提醒呈现偏好。
     #[serde(default)]
     pub assistant: crate::assistant::AssistantConfig,
+    /// 内置 Agent（琴音）：权限模式与规则、不交给 AI 的已保存自动化。新字段，缺省 = 默认规则。
+    #[serde(default)]
+    pub agent: crate::agent::AgentConfig,
+    /// 本机 Agent 工具服务（默认关闭；修改后需重启桌面实例才生效，见 docs/tool-service.md）。
+    #[serde(default)]
+    pub tool_service: ToolServiceConfig,
+    /// 文字识别（统一模型清单的 OCR 类别）：当前选用的 OCR 模型。
+    #[serde(default)]
+    pub ocr: OcrConfig,
+    /// 联网搜索（统一模型清单的 search 类别，ADR 026）。新字段。
+    #[serde(default)]
+    pub search: SearchConfig,
+    /// 游戏语音（ADR 020）：琴音用虚拟麦克风替玩家在游戏语音里说话。新字段，缺省 = 关闭。
+    #[serde(default)]
+    pub voice_chat: crate::voice_chat::VoiceChatConfig,
+}
+
+/// OCR 模型选择（config.json `ocr` 段）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrConfig {
+    /// 当前 OCR 模型 ID（统一模型清单 `category=ocr`）。空 = 自动：按清单推荐顺序取第一个
+    /// 已就绪的本地模型；都没有时为“未选择”。不会自动改用在线模型。
+    #[serde(default)]
+    pub active_model_id: String,
+}
+
+/// 联网搜索的选择（config.json `search` 段）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchConfig {
+    /// 统一模型清单 `category=search` 的 ID。空 = 自动：有 DeepSeek 连接就用 DeepSeek 联网搜索，
+    /// 否则不联网；`off` = 明确关掉。
+    #[serde(default)]
+    pub active_model_id: String,
+}
+
+/// 本机工具服务开关（config.json `toolService` 段）。
+///
+/// 只有显式开启时，桌面实例才在 127.0.0.1 随机端口上启动带会话凭证的工具服务。
+/// 不提供固定端口或外网监听选项。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolServiceConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// 工具服务的 OCR 后端配置（M2）。
+    #[serde(default)]
+    pub ocr: ToolOcrConfig,
+}
+
+/// 工具服务 OCR 配置（config.json `toolService.ocr` 段）。
+///
+/// 在线 OCR 默认关闭：只有用户显式指定一条已有连接（API key 仍在系统凭据库）后，
+/// `deepseek-ocr` 后端才会就绪；Agent 不能通过参数改选其他连接或端点。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolOcrConfig {
+    /// 用于 DeepSeek 在线 OCR 的连接 ID；None = 不启用在线 OCR（不会外发图像）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deepseek_connection_id: Option<String>,
 }
 
 /// 诊断记录开关（config.json `diagnostics` 段）。
@@ -157,6 +221,9 @@ pub struct UiConfig {
     /// app 启动后自动进入 Running（warmup 引擎 + 注册热键 + 显示悬浮窗）；默认 false
     #[serde(default)]
     pub auto_start: bool,
+    /// 用户在新版本弹窗里选了「不再提醒」：启动时不再自动弹出（关于页仍可手动检查，也可重新打开）。
+    #[serde(default)]
+    pub update_prompt_disabled: bool,
 }
 
 /// 录音/发送音效提示（config.json `soundFeedback` 段）。
@@ -409,6 +476,10 @@ impl Default for DownloadConfig {
     }
 }
 
+fn default_automation_stop_hotkey() -> String {
+    "Ctrl+Shift+F12".into()
+}
+
 fn default_gh_proxy() -> String {
     "https://ghfast.top/".into()
 }
@@ -452,6 +523,7 @@ impl Default for Settings {
             toggle_post_processing_hotkey: String::new(), // 默认关闭（设置里录入）
             cycle_post_processing_hotkey: String::new(), // 默认关闭（设置里录入）
             runtime_toggle_hotkey: String::new(), // 默认关闭（设置里录入）
+            automation_stop_hotkey: default_automation_stop_hotkey(),
             admin_prompt_dismissed: false,
             auto_admin_prompt_dismissed: false,
             history: crate::history::HistoryConfig::default(),
@@ -466,11 +538,31 @@ impl Default for Settings {
             connections: Vec::new(),
             diagnostics: DiagnosticsConfig::default(),
             assistant: crate::assistant::AssistantConfig::default(),
+            agent: crate::agent::AgentConfig::default(),
+            tool_service: ToolServiceConfig::default(),
+            ocr: OcrConfig::default(),
+            search: SearchConfig::default(),
+            voice_chat: crate::voice_chat::VoiceChatConfig::default(),
         }
     }
 }
 
 impl Settings {
+    /// 琴音的 DeepSeek 连接：琴音正在用的（若是 DeepSeek）→ 第一条 DeepSeek 连接。
+    /// DeepSeek 的语音识别、文字识别、语音合成没单独选连接时都用它（只配一个 DeepSeek 就能用全部功能）。
+    pub fn deepseek_connection_id(&self) -> Option<String> {
+        let is_deepseek = |c: &&crate::connection::Connection| {
+            c.provider == "deepseek" || c.base_url.contains("api.deepseek.com")
+        };
+        let agent = self.assistant.connection_id.trim();
+        self.connections
+            .iter()
+            .filter(is_deepseek)
+            .find(|c| c.id == agent)
+            .or_else(|| self.connections.iter().find(is_deepseek))
+            .map(|c| c.id.clone())
+    }
+
     /// 引擎专有项 + 当前活动模型的 configSchema 值。
     /// 旧家族 id 与新 I/O 引擎 id 的 engineOptions 会合并；活动模型 id 写入 `model`。
     pub fn session_options(&self, engine_id: &str) -> serde_json::Value {
@@ -566,10 +658,17 @@ fn default_channel_cycle_hotkey() -> String {
 }
 
 /// Kotone 用户数据目录：~/.kotone/
+/// 环境变量：覆盖 Kotone 数据目录（默认 `~/.kotone`）。供 Agent 隔离运行与自动化测试使用；
+/// 桌面端、CLI 与工具服务的描述文件目录都随之切换。
+pub const HOME_ENV: &str = "KOTONE_HOME";
+
 pub fn kotone_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".kotone")
+    match std::env::var_os(HOME_ENV) {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".kotone"),
+    }
 }
 
 fn config_path() -> PathBuf {
@@ -706,18 +805,64 @@ pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
     };
     let mut user = user;
     migrate_legacy_post_processing_json(&mut user);
+    migrate_call_hotkey_json(&mut user);
     merge_json(&mut merged, &user);
     let mut settings: Settings = match serde_json::from_value(merged) {
         Ok(settings) => settings,
         Err(error) => return recover_invalid_config(path, format!("配置项不合法: {error}")),
     };
     settings.overlay.normalize_interaction();
+    settings.assistant.normalize_voices();
     migrate_legacy_engine_ids(&mut settings);
     settings.post_processing.normalize_active_id();
     SettingsLoadResult {
         settings,
         warning: None,
     }
+}
+
+/// 0.2.0：旧的“陪玩热键”默认是空的；改成“呼叫琴音”后给老配置补上默认的 ` 键（只补一次，
+/// 并且这个键没被别的热键占用时才补）。之后玩家清空就是不要热键。
+fn migrate_call_hotkey_json(user: &mut serde_json::Value) {
+    let Some(object) = user.as_object_mut() else {
+        return;
+    };
+    let used: Vec<String> = [
+        object.get("hotkey").and_then(|h| h.get("key")),
+        object.get("channelCycleHotkey"),
+        object.get("resendLastHotkey"),
+        object.get("togglePostProcessingHotkey"),
+        object.get("cyclePostProcessingHotkey"),
+        object.get("runtimeToggleHotkey"),
+        object.get("automationStopHotkey"),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|v| v.as_str())
+    .map(str::to_ascii_lowercase)
+    .collect();
+    let assistant = object
+        .entry("assistant")
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(assistant) = assistant.as_object_mut() else {
+        return;
+    };
+    if assistant
+        .get("callHotkeyDefaulted")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let empty = assistant
+        .get("hotkey")
+        .and_then(|v| v.as_str())
+        .map_or(true, |k| k.trim().is_empty());
+    let default = crate::assistant::DEFAULT_CALL_HOTKEY;
+    if empty && !used.iter().any(|k| k == &default.to_ascii_lowercase()) {
+        assistant.insert("hotkey".into(), default.into());
+    }
+    assistant.insert("callHotkeyDefaulted".into(), true.into());
 }
 
 /// 旧配置只有单条 `pipeline`：空流程改种默认屏蔽词；有步骤则收成一条可切换流程。
@@ -897,6 +1042,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn old_configs_get_the_call_hotkey_once_unless_the_key_is_taken() {
+        let mut empty = serde_json::json!({"assistant": {"hotkey": ""}});
+        migrate_call_hotkey_json(&mut empty);
+        assert_eq!(empty["assistant"]["hotkey"], "Backquote");
+        assert_eq!(empty["assistant"]["callHotkeyDefaulted"], true);
+
+        // 玩家后来清空：不再补
+        let mut cleared =
+            serde_json::json!({"assistant": {"hotkey": "", "callHotkeyDefaulted": true}});
+        migrate_call_hotkey_json(&mut cleared);
+        assert_eq!(cleared["assistant"]["hotkey"], "");
+
+        // 自己设过的不动；` 被录音热键占用时不补
+        let mut own = serde_json::json!({"assistant": {"hotkey": "F9"}});
+        migrate_call_hotkey_json(&mut own);
+        assert_eq!(own["assistant"]["hotkey"], "F9");
+        let mut taken = serde_json::json!({"hotkey": {"key": "Backquote"}, "assistant": {}});
+        migrate_call_hotkey_json(&mut taken);
+        assert!(taken["assistant"].get("hotkey").is_none());
+    }
+
+    #[test]
     fn legacy_config_without_interaction_mode_defaults_to_push_to_talk() {
         // 0.1.5 迁移：老配置缺 interactionMode 键 → 合并默认值得到「对讲机」；
         // 显式 null（自定义兼容路径）则原样保留
@@ -978,6 +1145,60 @@ mod tests {
         assert_eq!(
             s.post_processing.pipelines[0].steps[0].processor_id,
             "builtin.blocklist-filter"
+        );
+        assert!(!s.tool_service.enabled, "工具服务必须默认关闭");
+    }
+
+    #[test]
+    fn tool_service_setting_defaults_off_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // 旧配置缺 toolService 段：合并默认值 = 关闭
+        std::fs::write(&path, r#"{"language":"zh"}"#).unwrap();
+        let loaded = load_from_with_diagnostic(&path);
+        assert!(loaded.warning.is_none());
+        assert!(!loaded.settings.tool_service.enabled);
+
+        std::fs::write(&path, r#"{"toolService":{"enabled":true}}"#).unwrap();
+        assert!(load_from(&path).tool_service.enabled);
+
+        let mut settings = Settings::default();
+        settings.tool_service.enabled = true;
+        save_to(&path, &settings).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(raw["toolService"]["enabled"], serde_json::json!(true));
+        assert!(load_from(&path).tool_service.enabled);
+
+        // 类型错误不被静默当成开启
+        let bad: Result<Settings, _> = serde_json::from_value({
+            let mut merged = serde_json::to_value(Settings::default()).unwrap();
+            merge_json(
+                &mut merged,
+                &serde_json::json!({"toolService":{"enabled":"yes"}}),
+            );
+            merged
+        });
+        assert!(bad.is_err());
+
+        // 在线 OCR 连接默认未配置，配置后 round-trip
+        assert!(Settings::default()
+            .tool_service
+            .ocr
+            .deepseek_connection_id
+            .is_none());
+        std::fs::write(
+            &path,
+            r#"{"toolService":{"enabled":true,"ocr":{"deepseekConnectionId":"ds"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_from(&path)
+                .tool_service
+                .ocr
+                .deepseek_connection_id
+                .as_deref(),
+            Some("ds")
         );
     }
 

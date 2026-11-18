@@ -16,8 +16,9 @@ use std::time::Duration;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::assistant::{AssistantHandler, AssistantRequest, AssistantVoiceSession, SessionPurpose};
+use crate::assistant::{AssistantHandler, AssistantRequest, SessionPurpose};
 use crate::audio::{AudioBackend, AudioHandle};
+use crate::automation::AutomationScheduler;
 use crate::inject::{CancelToken, FocusBackend, InjectError, Injector, TargetWindow};
 use crate::interaction::{EndTrigger, InteractionPolicy, PostFinalize};
 use crate::postprocess::{
@@ -25,7 +26,6 @@ use crate::postprocess::{
     ProcessingContext, ProcessorRegistry,
 };
 use crate::profile::{self, GameProfile};
-use crate::reminders::ReminderScheduler;
 use crate::settings::Settings;
 use crate::stt::{EngineRegistry, SessionConfig, SttEvent, SttSession};
 
@@ -81,6 +81,20 @@ impl SessionBeginError {
             message: message.into(),
         }
     }
+}
+
+/// 会话从哪里开始：决定会话 ID 前缀与唤醒专用的收音策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionOrigin {
+    Hotkey,
+    /// 语音唤醒（ADR 017）。
+    Wake {
+        no_speech_timeout_ms: u32,
+    },
+}
+
+fn kotone_core_assistant_one_shot() -> crate::interaction::InteractionMode {
+    crate::assistant::AssistantInteractionMode::OneShot.into()
 }
 
 /// Rust → UI 事件出口（生产实现发 Tauri 事件，测试用 Vec 收集）
@@ -257,8 +271,6 @@ struct Inner {
     target_window: Option<TargetWindow>,
     /// 本地诊断流程的 case id；无论 history 是否关闭，每次 begin 都生成。
     process_case_id: Option<String>,
-    /// 仅面板按钮创建的会话接受带 ID 的面板结束/确认/取消命令。
-    assistant_voice_owner: bool,
     /// history 草稿（history.mode != off 时 begin 创建；不放 ActiveSession——
     /// end() 会 take 走 active，而 Sending/Error 态的终态落账仍需要草稿）
     history: Option<Arc<Mutex<HistoryDraft>>>,
@@ -381,7 +393,7 @@ pub struct Orchestrator {
     runtime_inputs_enabled: AtomicBool,
     engines: Arc<EngineRegistry>,
     processors: Arc<ProcessorRegistry>,
-    assistant: Option<(Arc<dyn AssistantHandler>, Arc<ReminderScheduler>)>,
+    assistant: Option<(Arc<dyn AssistantHandler>, Arc<AutomationScheduler>)>,
     audio: Arc<dyn AudioBackend>,
     before_capture: Option<Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
     after_capture: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -436,7 +448,6 @@ impl Orchestrator {
                 processing_cancel: None,
                 target_window: None,
                 process_case_id: None,
-                assistant_voice_owner: false,
                 history: None,
                 channel: None,
                 release_grace_task: None,
@@ -480,7 +491,7 @@ impl Orchestrator {
     pub fn with_assistant(
         mut self,
         handler: Arc<dyn AssistantHandler>,
-        reminders: Arc<ReminderScheduler>,
+        reminders: Arc<AutomationScheduler>,
     ) -> Self {
         self.assistant = Some((handler, reminders));
         self
@@ -631,14 +642,6 @@ impl Orchestrator {
         }
         // 另一用途的热键只能取消旧会话，不结束它、确认它或把结果交给另一条管线。
         let (state, active_purpose, gen) = self.hotkey_session_snapshot();
-        if self.inner.lock().unwrap().assistant_voice_owner
-            && !matches!(
-                state,
-                OrchestratorState::Idle | OrchestratorState::Success | OrchestratorState::Error
-            )
-        {
-            return;
-        }
         if state != OrchestratorState::Idle && active_purpose != purpose {
             self.cancel_inner(Some(ticket), Some(gen)).await;
             return;
@@ -704,14 +707,6 @@ impl Orchestrator {
             return;
         }
         let (state, active_purpose, gen) = self.hotkey_session_snapshot();
-        if self.inner.lock().unwrap().assistant_voice_owner
-            && !matches!(
-                state,
-                OrchestratorState::Idle | OrchestratorState::Success | OrchestratorState::Error
-            )
-        {
-            return;
-        }
         if state != OrchestratorState::Idle && active_purpose != purpose {
             if pressed {
                 self.cancel_inner(Some(ticket), Some(gen)).await;
@@ -928,6 +923,52 @@ impl Orchestrator {
             .await
     }
 
+    /// 语音唤醒后的收音（ADR 017）：助手会话，说完（VAD 静音）直接提交，不管助手热键的
+    /// 交互模式；一直没开口超过 `no_speech_timeout_ms` 就安静取消。会话 ID 以
+    /// `assistant-wake-` 开头，宿主据此把它记为唤醒来源。只在空闲时开始。
+    pub async fn begin_assistant_wake(&self, no_speech_timeout_ms: u32) -> Result<(), String> {
+        let _op = self.op.lock().await;
+        // 上一次会话停在“成功 / 出错”的提示上：与热键一样，新会话先清掉它。
+        if matches!(
+            self.state(),
+            OrchestratorState::Success | OrchestratorState::Error
+        ) {
+            self.cancel_locked();
+        }
+        self.begin_admitted_with(
+            false,
+            SessionPurpose::Assistant,
+            None,
+            SessionOrigin::Wake {
+                no_speech_timeout_ms,
+            },
+        )
+    }
+
+    /// 呼叫琴音（热键、首页 / 聊天窗口的按钮）：按键版的语音唤醒，按一次就听。
+    /// - 空闲（或停在成功 / 出错提示上）：开始一次唤醒式收音（说完自动提交，没开口就安静结束）；
+    /// - 琴音正在听：立刻结束这句、交给她（不用等静音）；
+    /// - 正在语音输入（另一用途）或在识别 / 发送：先取消旧的，不开始新的（与助手热键一致）。
+    ///
+    /// `ticket`：热键的输入票（过期的按键不生效）；按钮传 None。
+    pub async fn call_assistant(&self, ticket: Option<u64>, no_speech_timeout_ms: u32) {
+        if !self.input_ticket_is_current(ticket) {
+            return;
+        }
+        let (state, purpose, gen) = self.hotkey_session_snapshot();
+        match state {
+            OrchestratorState::Idle | OrchestratorState::Success | OrchestratorState::Error => {
+                if let Err(e) = self.begin_assistant_wake(no_speech_timeout_ms).await {
+                    crate::log::log(&format!("呼叫琴音没有开始：{e}"));
+                }
+            }
+            OrchestratorState::Listening if purpose == SessionPurpose::Assistant => {
+                let _ = self.end_inner(Some(gen), ticket).await;
+            }
+            _ => self.cancel_inner(ticket, Some(gen)).await,
+        }
+    }
+
     /// 独立助手键的点按入口，按助手自己的预设路由。
     pub async fn on_assistant_hotkey(&self) {
         self.on_assistant_hotkey_with_ticket(self.hotkey_input_ticket())
@@ -950,86 +991,6 @@ impl Orchestrator {
             .await;
     }
 
-    /// 面板语音按钮专用入口。会话 ID 在同一入场临界区内生成和返回，
-    /// 迟到的按钮命令不能接管热键会话，也不能操作下一次录音。
-    pub async fn start_assistant_voice_input(
-        &self,
-        input_ticket: u64,
-    ) -> Result<AssistantVoiceSession, String> {
-        let _op = self.op.lock().await;
-        if !self.input_ticket_is_current(Some(input_ticket)) {
-            return Err("语音输入操作已失效，请重试".into());
-        }
-        let clear_terminal = {
-            let inner = self.inner.lock().unwrap();
-            match inner.state {
-                OrchestratorState::Idle => false,
-                OrchestratorState::Success | OrchestratorState::Error
-                    if inner.purpose == SessionPurpose::Assistant =>
-                {
-                    true
-                }
-                _ => return Err("已有语音会话正在进行，请先结束或取消".into()),
-            }
-        };
-        if clear_terminal {
-            self.cancel_locked();
-        }
-        self.begin_admitted(false, SessionPurpose::Assistant, None, true)?;
-        let session_id = self
-            .inner
-            .lock()
-            .unwrap()
-            .process_case_id
-            .clone()
-            .expect("begin assigned session ID");
-        // begin_admitted 持有 op；配置发布也使用 op，故这里读取与开麦相同的模式。
-        let interaction_mode = self.settings.read().unwrap().assistant.interaction_mode;
-        Ok(AssistantVoiceSession {
-            session_id,
-            interaction_mode,
-        })
-    }
-
-    fn assistant_voice_generation(&self, session_id: &str) -> Option<u64> {
-        let inner = self.inner.lock().unwrap();
-        (inner.assistant_voice_owner
-            && inner.purpose == SessionPurpose::Assistant
-            && inner.process_case_id.as_deref() == Some(session_id))
-        .then_some(inner.gen)
-    }
-
-    pub async fn finish_assistant_voice_input(&self, session_id: &str) -> Result<(), String> {
-        let op = self.op.lock().await;
-        let Some(gen) = self.assistant_voice_generation(session_id) else {
-            return Ok(());
-        };
-        if self.state() != OrchestratorState::Listening {
-            return Ok(());
-        }
-        if self.policy().end == EndTrigger::HotkeyRelease {
-            self.schedule_release_end(gen, self.hotkey_input_ticket());
-            return Ok(());
-        }
-        drop(op);
-        self.end_inner(Some(gen), None).await
-    }
-
-    pub async fn confirm_assistant_voice_input(&self, session_id: &str) -> Result<(), String> {
-        let Some(gen) = self.assistant_voice_generation(session_id) else {
-            return Ok(());
-        };
-        self.confirm_send_inner(None, Some(gen)).await
-    }
-
-    pub async fn cancel_assistant_voice_input(&self, session_id: &str) -> Result<(), String> {
-        let _op = self.op.lock().await;
-        if self.assistant_voice_generation(session_id).is_some() {
-            self.cancel_locked();
-        }
-        Ok(())
-    }
-
     /// solo 连续模式逐句续录：与 begin 同路径，但「录制音」提示由壳做区分
     /// （capture_started 事件带 resumed=true，不播录制音效，只保留逐句发送音）。
     async fn begin_resumed(&self, purpose: SessionPurpose, gen: u64) -> Result<(), String> {
@@ -1047,22 +1008,31 @@ impl Orchestrator {
         if !self.input_ticket_is_current(input_ticket) {
             return Ok(());
         }
-        self.begin_admitted(resumed, purpose, expected_gen, false)
+        self.begin_admitted_with(resumed, purpose, expected_gen, SessionOrigin::Hotkey)
     }
 
-    /// 调用方持有 op；所有来源共享录音入场和失败收尾，owner 只限制操作权限。
-    fn begin_admitted(
+    fn begin_admitted_with(
         &self,
         resumed: bool,
         purpose: SessionPurpose,
         expected_gen: Option<u64>,
-        assistant_voice_owner: bool,
+        origin: SessionOrigin,
     ) -> Result<(), String> {
         if !self.runtime_inputs_enabled.load(Ordering::SeqCst) {
             return Err("运行时已停止，不能开始新会话".into());
         }
         let settings = self.settings.read().unwrap().clone();
-        let policy = Self::configured_policy(&settings, purpose);
+        let mut policy = Self::configured_policy(&settings, purpose);
+        let no_speech_timeout_ms = match origin {
+            SessionOrigin::Wake {
+                no_speech_timeout_ms,
+            } => {
+                // 唤醒后：说完即提交（与助手“一句话”预设相同），不等热键。
+                policy = InteractionPolicy::from_preset(kotone_core_assistant_one_shot());
+                Some(no_speech_timeout_ms)
+            }
+            _ => None,
+        };
         {
             let mut inner = self.inner.lock().unwrap();
             if expected_gen.is_some_and(|gen| inner.gen != gen) {
@@ -1084,13 +1054,16 @@ impl Orchestrator {
             }
             inner.purpose = purpose;
             inner.process_case_id = Some(format!(
-                "session-{}-{}",
+                "{}-{}-{}",
+                match origin {
+                    SessionOrigin::Wake { .. } => "assistant-wake",
+                    SessionOrigin::Hotkey => "session",
+                },
                 crate::eval::new_session_id(),
                 NEXT_PROCESS_SESSION_ID.fetch_add(1, Ordering::Relaxed),
             ));
-            inner.assistant_voice_owner = assistant_voice_owner;
         }
-        match self.begin_locked(resumed, purpose, settings, policy) {
+        match self.begin_locked(resumed, purpose, settings, policy, no_speech_timeout_ms) {
             Ok(()) => Ok(()),
             Err(e) => {
                 // 开始失败（如引擎/麦克风未就绪）：Error 保持到用户关闭或重试
@@ -1110,6 +1083,7 @@ impl Orchestrator {
         purpose: SessionPurpose,
         settings: Settings,
         policy: InteractionPolicy,
+        no_speech_timeout_ms: Option<u32>,
     ) -> Result<(), SessionBeginError> {
         if purpose == SessionPurpose::Assistant && self.assistant.is_none() {
             return Err(SessionBeginError::new(
@@ -1146,7 +1120,7 @@ impl Orchestrator {
             .and_then(profile::get)
             .unwrap_or_else(GameProfile::builtin_generic);
         let mut cfg = build_session_config(&stt_settings, &engine_id, &active_profile);
-        enrich_remote_connection(&stt_settings, &mut cfg, self.secrets.as_deref());
+        enrich_remote_connection(&stt_settings, &engine_id, &mut cfg, self.secrets.as_deref());
 
         let (stt_tx, stt_rx) = mpsc::unbounded_channel::<SttEvent>();
         let session = engine
@@ -1241,7 +1215,8 @@ impl Orchestrator {
                                 crate::vad::SilenceStopTracker::new(
                                     silence_ms,
                                     crate::vad::MIN_SESSION_MS,
-                                ),
+                                )
+                                .with_no_speech_timeout(no_speech_timeout_ms),
                             )),
                             None,
                         )
@@ -1376,7 +1351,7 @@ impl Orchestrator {
                                                     }
                                                 }
                                                 decision = tracker.push(speech);
-                                                if decision == crate::vad::StopDecision::Stop {
+                                                if decision != crate::vad::StopDecision::Continue {
                                                     break;
                                                 }
                                             }
@@ -1444,6 +1419,20 @@ impl Orchestrator {
                                             }
                                         }
                                         vad_state = None;
+                                    } else if decision == crate::vad::StopDecision::NoSpeech {
+                                        // 唤醒后一直没开口：安静取消，不转写、不提交
+                                        emitter.emit(
+                                            "kotone://vad-no-speech",
+                                            json!({ "elapsedMs": tracker.elapsed_ms() }),
+                                        );
+                                        if let Some(me) =
+                                            me_weak.as_ref().and_then(|w| w.upgrade())
+                                        {
+                                            tokio::spawn(async move {
+                                                me.cancel_inner(None, Some(capture_gen)).await;
+                                            });
+                                        }
+                                        break;
                                     } else if decision == crate::vad::StopDecision::Stop {
                                         emitter.emit(
                                             "kotone://vad-stop",
@@ -2343,12 +2332,11 @@ impl Orchestrator {
         self.cancel_locked();
     }
 
-    /// 调用方持有 op；按钮取消在核验归属后同一临界区内立即取消 AI。
+    /// 调用方持有 op；取消时在同一临界区内立即取消 AI。
     fn cancel_locked(&self) {
         // 宽限期倒计时一并收回（Esc / 停止 runtime / 状态变迁兜底）
         self.abort_release_grace();
         let mut inner = self.inner.lock().unwrap();
-        inner.assistant_voice_owner = false;
         if inner.state == OrchestratorState::Idle {
             // 逐句模式两段之间的 Idle 窗口也必须撤销尚未入场的续录。
             inner.gen += 1;
@@ -2901,21 +2889,13 @@ impl Orchestrator {
     }
 
     fn vad_fallback_warning(&self) -> &'static str {
-        if self.inner.lock().unwrap().assistant_voice_owner {
-            "自动静音检测暂时不可用；请点击语音按钮结束并提交本次请求"
-        } else {
-            VAD_FALLBACK_WARNING
-        }
+        VAD_FALLBACK_WARNING
     }
 
     fn emit_state(&self, state: OrchestratorState, mut payload: Option<serde_json::Value>) {
-        let (case_id, purpose, button_owned) = {
+        let (case_id, purpose) = {
             let inner = self.inner.lock().unwrap();
-            (
-                inner.process_case_id.clone(),
-                inner.purpose,
-                inner.assistant_voice_owner,
-            )
+            (inner.process_case_id.clone(), inner.purpose)
         };
         if state != OrchestratorState::Idle {
             let data = payload.get_or_insert_with(|| json!({}));
@@ -2927,12 +2907,6 @@ impl Orchestrator {
                         SessionPurpose::Dictation => "dictation",
                     }),
                 );
-                if purpose == SessionPurpose::Assistant {
-                    data.insert(
-                        "inputSource".into(),
-                        json!(if button_owned { "button" } else { "hotkey" }),
-                    );
-                }
             }
         }
         self.emitter.emit(
@@ -3025,17 +2999,24 @@ fn build_session_config(
 
 fn enrich_remote_connection(
     settings: &Settings,
+    engine_id: &str,
     cfg: &mut SessionConfig,
     secrets: Option<&dyn crate::connection::SecretStore>,
 ) {
-    let Some(connection_id) = cfg
+    let configured = cfg
         .options
         .get("connectionId")
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|id| !id.is_empty())
-        .map(str::to_string)
-    else {
+        .map(str::to_string);
+    // DeepSeek 语音识别不用单独选连接：用琴音的 DeepSeek 连接，没有就用第一条 DeepSeek 连接。
+    let connection_id = configured.or_else(|| {
+        (engine_id == DEEPSEEK_ASR_ENGINE_ID)
+            .then(|| settings.deepseek_connection_id())
+            .flatten()
+    });
+    let Some(connection_id) = connection_id else {
         return;
     };
     let Some(connection) = settings
@@ -3055,6 +3036,9 @@ fn enrich_remote_connection(
         }
     }
 }
+
+/// 与 `kotone_stt::model::DEEPSEEK_ASR_STT_ID` 相同（core 不依赖 stt）。
+const DEEPSEEK_ASR_ENGINE_ID: &str = "deepseek-asr";
 
 #[cfg(test)]
 mod tests {

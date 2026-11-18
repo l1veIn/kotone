@@ -4,9 +4,9 @@
  */
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { writable } from "svelte/store";
+import { get, writable } from "svelte/store";
 import { isTauri, logFrontendError } from "./ipc";
-import { toast, toastInfo, toastWarn } from "./stores/ui";
+import { patchSettings, settingsStore, toast, toastInfo, toastWarn } from "./stores/ui";
 
 export type UpdateCheckResult =
   | { status: "up-to-date" }
@@ -29,7 +29,7 @@ export type UpdateDialogState =
   | (UpdateDialogBase & { phase: "ready" })
   | (UpdateDialogBase & { phase: "restarting" });
 
-type UpdateDialogChoice = "primary" | "later";
+type UpdateDialogChoice = "primary" | "later" | "never";
 
 /** 设置窗口根组件渲染的全局更新弹窗；检查入口只负责推动状态。 */
 export const updateDialogStore = writable<UpdateDialogState | null>(null);
@@ -69,8 +69,14 @@ function readableNotes(body: string | undefined | null): string | undefined {
   return characters.length <= 3000 ? notes : `${characters.slice(0, 2999).join("")}…`;
 }
 
-/** 检查一次更新；自动检查和手动点击重叠时复用同一个请求。 */
-export function checkForUpdates(): Promise<UpdateCheckResult> {
+/**
+ * 检查一次更新；自动检查和手动点击重叠时复用同一个请求。
+ * `auto`（启动时的静默检查）在用户选过「不再提醒」后直接跳过，关于页的手动检查不受影响。
+ */
+export function checkForUpdates(options: { auto?: boolean } = {}): Promise<UpdateCheckResult> {
+  if (options.auto && get(settingsStore)?.ui.updatePromptDisabled) {
+    return Promise.resolve({ status: "up-to-date" });
+  }
   if (updateCheckInFlight) return updateCheckInFlight;
   const task = runUpdateCheck().finally(() => {
     if (updateCheckInFlight === task) updateCheckInFlight = null;
@@ -93,6 +99,10 @@ async function runUpdateCheck(): Promise<UpdateCheckResult> {
       version: update.version,
       notes,
     });
+    if (choice === "never") {
+      await patchSettings({ ui: { updatePromptDisabled: true } }, "以后不再自动提醒新版本，可在「关于」里重新打开").catch(() => {});
+      return { status: "available", version: update.version, notes };
+    }
     if (choice === "later") return { status: "available", version: update.version, notes };
 
     updateStarted = true;

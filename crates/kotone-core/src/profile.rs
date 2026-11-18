@@ -83,6 +83,105 @@ pub struct GameProfile {
     /// 尊重删除、不复活（见 ensure_builtin_in）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub removed_builtin_hotwords: Vec<String>,
+    /// 陪玩的游戏说明（可选自由文本，写进提示词），例如“LoL 聊天在左下角，[队伍] 前缀是队友”。
+    /// 游戏适配写在这里，而不是给每个游戏写死规则。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub companion_notes: String,
+    /// 聊天框在窗口客户区里的位置（0..1 的比例），由陪玩时模型回报后记录；None = 整窗识别。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_region: Option<ChatRegion>,
+    /// 允许 Kotone 的自动化程序对这个游戏按键、点鼠标（ADR 014 第 5 步；默认允许，
+    /// 与引入这一项之前相同）。关闭后对它的程序执行会被拒绝；玩家自己的语音打字不受影响。
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub allow_automation_input: bool,
+    /// 启动游戏用的程序、快捷方式或启动器链接（如 `steam://rungameid/…`）；空 = 不能由
+    /// Kotone 打开（工具 `game.launch`）。只由用户填写。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub launch_path: String,
+    /// 让琴音在这个游戏里一步一步操作鼠标键盘（ADR 019 `game.act`）：先问（默认）/ 一直允许 /
+    /// 不允许。
+    #[serde(default, skip_serializing_if = "ComputerUse::is_ask")]
+    pub computer_use: ComputerUse,
+}
+
+/// 琴音能不能在某个游戏里操作鼠标键盘（`game.act`）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ComputerUse {
+    /// 每段对话第一次操作前先问玩家。
+    #[default]
+    Ask,
+    /// 一直允许（不再问）。
+    Allow,
+    /// 不允许。
+    Deny,
+}
+
+impl ComputerUse {
+    fn is_ask(&self) -> bool {
+        *self == Self::Ask
+    }
+}
+
+/// 对某个进程的判定。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ComputerUseVerdict {
+    Allowed,
+    /// 要先问玩家。
+    Ask,
+    Denied(String),
+}
+
+/// 琴音能不能在这个游戏里操作：先看“允许自动化输入”，再看“让琴音操作”。哪些游戏能让她
+/// 操作由玩家自己判断，Kotone 不替玩家区分竞技与非竞技（2026-11-17 用户的决定）。
+pub fn computer_use_verdict(profile: Option<&GameProfile>) -> ComputerUseVerdict {
+    let name = profile.map_or("这个游戏", |p| p.display_name.as_str());
+    let setting = profile.map_or(ComputerUse::Ask, |p| p.computer_use);
+    if profile.is_some_and(|p| !p.allow_automation_input) {
+        return ComputerUseVerdict::Denied(format!(
+            "「{name}」设置为不允许自动化输入（可以在「游戏适配」里打开）"
+        ));
+    }
+    match setting {
+        ComputerUse::Deny => ComputerUseVerdict::Denied(format!(
+            "「{name}」设置为不许操作（可以在「游戏列表」里改）"
+        )),
+        ComputerUse::Allow => ComputerUseVerdict::Allowed,
+        ComputerUse::Ask => ComputerUseVerdict::Ask,
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
+/// 窗口客户区内的相对区域（左上原点，均为 0..=1 的比例）。
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatRegion {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl ChatRegion {
+    pub fn validate(&self) -> Result<(), String> {
+        let ok = |v: f64| v.is_finite() && (0.0..=1.0).contains(&v);
+        if !(ok(self.x) && ok(self.y) && ok(self.width) && ok(self.height))
+            || self.width < 0.02
+            || self.height < 0.02
+            || self.x + self.width > 1.0001
+            || self.y + self.height > 1.0001
+        {
+            return Err("聊天框区域必须在窗口范围内（0 到 1 的比例）".into());
+        }
+        Ok(())
+    }
 }
 
 impl GameProfile {
@@ -473,6 +572,14 @@ pub fn validate_profile(profile: &GameProfile) -> Result<(), String> {
         return Err("profile id 只能包含 ASCII 字母、数字、连字符和下划线".into());
     }
     bounded("profile 显示名", &profile.display_name, 128, false)?;
+    bounded("陪玩说明", &profile.companion_notes, 500, true)?;
+    bounded("启动路径", &profile.launch_path, 1024, true)?;
+    if profile.launch_path.contains(['\r', '\n', '\0']) {
+        return Err("启动路径不能包含换行".into());
+    }
+    if let Some(region) = &profile.chat_region {
+        region.validate()?;
+    }
     if profile.process_names.len() > 64 {
         return Err("进程名不能超过 64 个".into());
     }
@@ -973,7 +1080,10 @@ pub fn import_profile_in(dir: &Path, zip_path: &Path) -> Result<GameProfile, Str
         let entry = archive
             .by_index(index)
             .map_err(|e| format!("读取 profile 包目录失败: {e}"))?;
-        let name = entry.name().to_string();
+        let name = entry
+            .name()
+            .map_err(|e| format!("profile 包里有无法识别的文件名: {e}"))?
+            .to_string();
         if entry.is_dir() || entry.enclosed_name().is_none() || name.contains(['/', '\\']) {
             return Err(format!("profile 包含非法条目：{name}"));
         }
@@ -1104,7 +1214,82 @@ pub fn delete_profile_in(dir: &Path, id: &str) -> Result<ProfileDeleteOutcome, S
 }
 
 #[cfg(test)]
+mod computer_use_tests {
+    use super::*;
+
+    fn game(json: &str) -> GameProfile {
+        let mut p = parse_builtin_profile("lol", include_str!("../resources/profiles/lol.json"));
+        let patch: serde_json::Value = serde_json::from_str(json).unwrap();
+        let mut v = serde_json::to_value(&p).unwrap();
+        for (k, val) in patch.as_object().unwrap() {
+            v[k] = val.clone();
+        }
+        p = serde_json::from_value(v).unwrap();
+        p
+    }
+
+    #[test]
+    fn the_player_decides_per_game() {
+        let ask = game("{}");
+        assert_eq!(ask.computer_use, ComputerUse::Ask);
+        // 不区分竞技对局：对局进程和客户端一样先问
+        assert_eq!(computer_use_verdict(Some(&ask)), ComputerUseVerdict::Ask);
+        assert_eq!(computer_use_verdict(Some(&ask)), ComputerUseVerdict::Ask);
+        let allow = game(r#"{"computerUse": "allow"}"#);
+        assert_eq!(
+            computer_use_verdict(Some(&allow)),
+            ComputerUseVerdict::Allowed
+        );
+        let deny = game(r#"{"computerUse": "deny"}"#);
+        assert!(matches!(
+            computer_use_verdict(Some(&deny)),
+            ComputerUseVerdict::Denied(_)
+        ));
+        let no_input = game(r#"{"computerUse": "allow", "allowAutomationInput": false}"#);
+        assert!(matches!(
+            computer_use_verdict(Some(&no_input)),
+            ComputerUseVerdict::Denied(m) if m.contains("自动化输入")
+        ));
+        assert_eq!(computer_use_verdict(None), ComputerUseVerdict::Ask);
+    }
+
+    #[test]
+    fn ask_is_not_written_to_disk() {
+        let v = serde_json::to_value(game("{}")).unwrap();
+        assert!(v.get("computerUse").is_none());
+        let v = serde_json::to_value(game(r#"{"computerUse": "deny"}"#)).unwrap();
+        assert_eq!(v["computerUse"], "deny");
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    #[test]
+    fn automation_input_and_launch_path_default_and_round_trip() {
+        let generic = GameProfile::builtin_generic();
+        assert!(
+            generic.allow_automation_input,
+            "allowed unless the user turns it off"
+        );
+        assert!(generic.launch_path.is_empty());
+        // 默认值不写进文件（旧版本读到的内容与以前一样）。
+        let json = serde_json::to_value(&generic).unwrap();
+        assert!(json.get("allowAutomationInput").is_none());
+        assert!(json.get("launchPath").is_none());
+
+        let mut custom = generic.clone();
+        custom.allow_automation_input = false;
+        custom.launch_path = "steam://rungameid/570".into();
+        let json = serde_json::to_value(&custom).unwrap();
+        assert_eq!(json["allowAutomationInput"], false);
+        let back: GameProfile = serde_json::from_value(json).unwrap();
+        assert!(!back.allow_automation_input);
+        assert_eq!(back.launch_path, "steam://rungameid/570");
+
+        custom.launch_path = "C:\\game.exe\n--evil".into();
+        assert!(validate_profile(&custom).is_err());
+    }
+
     use super::*;
 
     fn sample_profiles() -> Vec<GameProfile> {
@@ -1496,9 +1681,9 @@ mod tests {
         assert!(json_str.contains("\"icon\": \"lol-kotone.webp\""));
         let icon_entry = archive
             .file_names()
+            .map(|n| n.unwrap().to_string())
             .find(|n| n.starts_with("icon."))
-            .unwrap()
-            .to_string();
+            .unwrap();
         let mut icon_bytes = Vec::new();
         archive
             .by_name(&icon_entry)

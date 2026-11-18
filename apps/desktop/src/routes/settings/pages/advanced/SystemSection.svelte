@@ -16,8 +16,13 @@
     type HotkeyStatus,
   } from "../../../../lib/ipc";
   import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
-  import Toggle from "../../../../lib/components/Toggle.svelte";
-  import Select from "../../../../lib/components/Select.svelte";
+  import { Download } from "@lucide/svelte";
+  import { Button } from "$lib/components/ui/button";
+  import * as Dialog from "$lib/components/ui/dialog";
+  import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
+  import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
+  import SelectField from "$lib/components/settings/SelectField.svelte";
+  import ToggleField from "$lib/components/settings/ToggleField.svelte";
 
   let { onOpenOnboarding }: { onOpenOnboarding: () => void } = $props();
 
@@ -120,83 +125,82 @@
 </script>
 
 {#if $settingsStore}
-  <section class="kotone-panel flex items-center justify-between gap-4 p-4">
-    <div>
-      <h2 class="text-sm font-semibold text-kotone-cyan/90">语言</h2>
-      <p class="mt-1 text-[11px] leading-relaxed text-white/50">界面语言。更多语言即将到来。</p>
-    </div>
-    <div class="w-28 shrink-0">
-      <Select
-        ariaLabel="语言"
-        value={$settingsStore.language}
-        options={[{ value: "zh", label: "中文" }]}
-        onchange={(language) => void patchSettings({ language }, "语言已切换")}
+  <div class="space-y-6">
+  <SettingsSection title="通用">
+    <SettingsRow label="语言" description="界面语言。更多语言即将到来。">
+      {#snippet control()}
+        <SelectField
+          class="w-32"
+          ariaLabel="语言"
+          value={$settingsStore.language}
+          options={[{ value: "zh", label: "中文" }]}
+          onchange={(language) => void patchSettings({ language }, "语言已切换")}
+        />
+      {/snippet}
+    </SettingsRow>
+    <SettingsRow label="设置助手" description="重新选择游戏配置、检查模型与麦克风、设置热键，并完成一次真实发送测试。">
+      {#snippet control()}
+        <Button variant="outline" size="sm" onclick={onOpenOnboarding}>重新运行向导</Button>
+      {/snippet}
+    </SettingsRow>
+  </SettingsSection>
+
+  <SettingsSection title="运行时">
+    <div class="py-3.5">
+      <ToggleField
+        checked={autostartEnabled ?? false}
+        disabled={autostartEnabled === null}
+        label="开机自动启动"
+        desc="登录 Windows 后自动打开 Kotone（仅当前用户）· 与系统启动项实时同步"
+        onchange={(v) => void onAutostartChange(v)}
       />
     </div>
-  </section>
-
-  <section class="kotone-panel mt-3 flex flex-col gap-4 p-4">
-    <h2 class="text-sm font-semibold text-kotone-cyan/90">运行时</h2>
-    <Toggle
-      checked={autostartEnabled ?? false}
-      disabled={autostartEnabled === null}
-      label="开机自动启动"
-      desc="登录 Windows 后自动打开 Kotone（仅当前用户）· 与系统启动项实时同步"
-      onchange={(v) => void onAutostartChange(v)}
-    />
-    <Toggle
-      checked={$settingsStore.ui.autoStart}
-      label="启动 Kotone 后自动开始运行"
-      desc="自动加载识别模型、注册热键并显示悬浮窗；关闭时需手动点「启动」"
-      onchange={(v) =>
-        void patchSettings({ ui: { autoStart: v } }, v ? "已开启自动启动" : "已关闭自动启动，需手动点「启动」")}
-    />
-  </section>
-
-  <section class="kotone-panel mt-3 flex items-center justify-between gap-4 p-4">
-    <div>
-      <h2 class="text-sm font-semibold text-kotone-cyan/90">设置助手</h2>
-      <p class="mt-1 text-[11px] leading-relaxed text-white/50">
-        重新选择游戏配置、检查模型与麦克风、设置热键，并完成一次真实发送测试。
-      </p>
+    <div class="py-3.5">
+      <ToggleField
+        checked={$settingsStore.ui.autoStart}
+        label="启动 Kotone 后自动开始运行"
+        desc="自动加载识别模型、注册热键并显示悬浮窗；关闭时需手动点「启动」"
+        onchange={(v) =>
+          void patchSettings({ ui: { autoStart: v } }, v ? "已开启自动启动" : "已关闭自动启动，需手动点「启动」")}
+      />
     </div>
-    <button
-      class="shrink-0 rounded-lg bg-white/10 px-3 py-2 text-xs font-semibold text-white/85 ring-1 ring-white/15 transition hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-kotone-cyan"
-      onclick={onOpenOnboarding}
-    >
-      重新运行向导
-    </button>
-  </section>
+  </SettingsSection>
 
-  <section class="kotone-panel mt-3 p-4">
-    <h2 class="text-sm font-semibold text-kotone-cyan/90">悬浮窗外观</h2>
-    <p class="mt-1 text-[11px] text-white/45">只改变展示密度，不影响识别和发送。</p>
-    <div class="mt-3 grid grid-cols-2 gap-2">
+  <SettingsSection title="悬浮窗外观" description="只改变展示密度，不影响识别和发送。">
+    <div class="grid grid-cols-2 gap-2 py-3.5">
       {#each [
         { id: "capsule", name: "胶囊", desc: "更轻巧，减少遮挡" },
         { id: "card", name: "卡片", desc: "信息完整，适合首次使用" },
       ] as const as option}
         {@const selected = $settingsStore.overlay.style === option.id}
         <button
-          class="rounded-lg px-3 py-2.5 text-left ring-1 transition {selected
-            ? 'bg-kotone-violet/15 ring-kotone-violet/60'
-            : 'bg-white/5 ring-white/10 hover:bg-white/10'}"
+          type="button"
+          aria-pressed={selected}
+          class="rounded-xl border px-3 py-2.5 text-left transition-colors {selected
+            ? 'border-primary/60 bg-primary/10'
+            : 'border-hairline hover:bg-muted/60'}"
           onclick={() =>
             void patchSettings({ overlay: { style: option.id } }, `悬浮窗外观已切换：${option.name}`)}
         >
-          <p class="text-sm font-semibold {selected ? 'text-kotone-violet' : ''}">{option.name}</p>
-          <p class="mt-0.5 text-[11px] text-white/45">{option.desc}</p>
+          <p class="m-0 text-[13px] font-medium {selected ? 'text-primary' : 'text-foreground'}">{option.name}</p>
+          <p class="mt-0.5 mb-0 text-xs text-muted-foreground">{option.desc}</p>
         </button>
       {/each}
     </div>
-  </section>
+  </SettingsSection>
 
-  <section class="kotone-panel mt-3 p-4">
-    <h2 class="text-sm font-semibold text-kotone-cyan/90">Windows 兼容性</h2>
-    <div class="mt-3 flex items-center gap-2">
-      <label class="text-xs text-white/60" for="advanced-hotkey-backend">热键实现</label>
-      <div class="w-40">
-        <Select
+  <SettingsSection title="Windows 兼容性">
+    <SettingsRow label="热键实现" for="advanced-hotkey-backend">
+      {#snippet description()}
+        除非特定游戏收不到热键，否则保持“自动”。当前：{hotkeyStatus?.backend === "llhook"
+          ? "低层钩子"
+          : hotkeyStatus?.backend === "register"
+            ? "系统热键"
+            : "未注册"}
+      {/snippet}
+      {#snippet control()}
+        <SelectField
+          class="w-44"
           id="advanced-hotkey-backend"
           ariaLabel="热键实现"
           value={$settingsStore.hotkeyBackend}
@@ -207,60 +211,40 @@
           ]}
           onchange={(backend) => void onHotkeyBackendChange(backend)}
         />
-      </div>
-      <span class="text-[11px] text-white/40">
-        当前：{hotkeyStatus?.backend === "llhook"
-          ? "低层钩子"
-          : hotkeyStatus?.backend === "register"
-            ? "系统热键"
-            : "未注册"}
-      </span>
-    </div>
-    <p class="mt-2 text-[11px] text-white/40">除非特定游戏收不到热键，否则保持“自动”。</p>
-
-    <div class="mt-4 border-t border-white/8 pt-4">
-      <div class="flex items-center justify-between">
-        <div>
-          <p class="text-xs font-semibold">当前进程权限</p>
-          <p class="mt-0.5 text-[11px] text-white/40">
-            {elevation === null ? "检测中…" : elevation.elevated ? "管理员" : "普通用户"}
-          </p>
-        </div>
+      {/snippet}
+    </SettingsRow>
+    <SettingsRow label="当前进程权限" description={elevation === null ? "检测中…" : elevation.elevated ? "管理员" : "普通用户"}>
+      {#snippet control()}
         {#if elevation && !elevation.elevated}
-          <button
-            class="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/75 hover:bg-white/20 disabled:opacity-50"
-            disabled={restartingAsAdmin}
-            onclick={() => void onRestartAsAdmin()}
-          >
+          <Button variant="outline" size="sm" disabled={restartingAsAdmin} onclick={() => void onRestartAsAdmin()}>
             {restartingAsAdmin ? "正在重启…" : "以管理员身份重启"}
-          </button>
+          </Button>
         {/if}
-      </div>
-      <div class="mt-4">
-        <Toggle
-          checked={$settingsStore.runAsAdminOnStart}
-          label="启动时自动请求管理员权限"
-          desc="开启后每次启动都会自动发起 Windows UAC 确认；普通桌面应用不能静默获得管理员权限"
-          onchange={(value) =>
-            void patchSettings(
-              {
-                runAsAdminOnStart: value,
-                ...(value ? { adminPromptDismissed: true, autoAdminPromptDismissed: true } : {}),
-              },
-              value ? "已开启启动时自动权限请求" : "已关闭启动时自动权限请求",
-            )}
-        />
-      </div>
+      {/snippet}
+    </SettingsRow>
+    <div class="py-3.5">
+      <ToggleField
+        checked={$settingsStore.runAsAdminOnStart}
+        label="启动时自动请求管理员权限"
+        desc="开启后每次启动都会自动发起 Windows UAC 确认；普通桌面应用不能静默获得管理员权限"
+        onchange={(value) =>
+          void patchSettings(
+            {
+              runAsAdminOnStart: value,
+              ...(value ? { adminPromptDismissed: true, autoAdminPromptDismissed: true } : {}),
+            },
+            value ? "已开启启动时自动权限请求" : "已关闭启动时自动权限请求",
+          )}
+      />
     </div>
-  </section>
+  </SettingsSection>
 
-  <section class="kotone-panel mt-3 p-4">
-    <h2 class="text-sm font-semibold text-kotone-cyan/90">诊断包</h2>
-    <p class="mt-1 text-[11px] text-white/45">
-      不包含录音、识别文本和热词，可安全分享给测试群管理员。默认记录流程事件，便于排查无法复现的热键/全屏问题。
-    </p>
-    <div class="mt-3">
-      <Toggle
+  <SettingsSection
+    title="诊断包"
+    description="不包含录音、识别文本和热词，可安全分享给测试群管理员。默认记录流程事件，便于排查无法复现的热键/全屏问题。"
+  >
+    <div class="py-3.5">
+      <ToggleField
         checked={$settingsStore.diagnostics.recording}
         label="记录诊断信息"
         desc="写入流程事件（热键、悬浮窗显隐、注入结果）。关闭后不再落盘，已有文件需手动清除"
@@ -271,82 +255,59 @@
           )}
       />
     </div>
-    <div class="mt-4 flex flex-wrap items-center gap-2">
-      <div class="w-36">
-        <Select
-          testid="diagnostics-window"
-          ariaLabel="导出时间范围"
-          value={exportWindow}
-          options={[
-            { value: "24h", label: "最近 24 小时" },
-            { value: "7d", label: "最近 7 天" },
-            { value: "all", label: "全部" },
-          ]}
-          onchange={(value) => (exportWindow = value as DiagnosticWindow)}
-        />
-      </div>
-      <button
-        data-testid="diagnostics-export"
-        class="inline-flex items-center gap-2 rounded-xl bg-kotone-cyan/12 px-4 py-2.5 text-xs font-semibold text-kotone-cyan
-          ring-1 ring-kotone-cyan/25 transition hover:bg-kotone-cyan/18 hover:shadow-glow-cyan
-          disabled:cursor-wait disabled:opacity-60"
-        disabled={exportingDiagnostics}
-        onclick={() => void onExportDiagnostics()}
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4" aria-hidden="true">
-          <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 18v2h14v-2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
+    <div class="flex flex-wrap items-center gap-2 py-3.5">
+      <SelectField
+        class="w-36"
+        testid="diagnostics-window"
+        ariaLabel="导出时间范围"
+        value={exportWindow}
+        options={[
+          { value: "24h", label: "最近 24 小时" },
+          { value: "7d", label: "最近 7 天" },
+          { value: "all", label: "全部" },
+        ]}
+        onchange={(value) => (exportWindow = value as DiagnosticWindow)}
+      />
+      <Button size="sm" data-testid="diagnostics-export" disabled={exportingDiagnostics} onclick={() => void onExportDiagnostics()}>
+        <Download class="size-3.5" />
         {exportingDiagnostics ? "正在生成…" : "导出诊断包"}
-      </button>
-      <button
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
         data-testid="diagnostics-clear"
-        class="rounded-xl bg-white/8 px-4 py-2.5 text-xs font-semibold text-white/70 ring-1 ring-white/15 transition hover:bg-white/12"
         onclick={() => {
           confirmClear = true;
           stopRecordingOnClear = false;
         }}
       >
         清除本地诊断信息
-      </button>
+      </Button>
     </div>
-  </section>
-{/if}
-
-{#if confirmClear}
-  <div
-    class="fixed inset-0 z-[70] flex items-center justify-center bg-kotone-deep/80 p-6 backdrop-blur-sm"
-    data-testid="diagnostics-clear-dialog"
-  >
-    <div class="kotone-panel w-full max-w-md p-6">
-      <h2 class="text-base font-bold">清除本地诊断信息？</h2>
-      <p class="mt-2 text-[13px] leading-relaxed text-white/65">
-        会删除流程事件和 kotone.log，不影响识别历史、设置和录音。此操作不可恢复。
-      </p>
-      <label class="mt-4 flex cursor-pointer items-start gap-2 text-[13px] text-white/80">
-        <input
-          data-testid="diagnostics-stop-recording"
-          type="checkbox"
-          class="mt-0.5"
-          bind:checked={stopRecordingOnClear}
-        />
-        <span>以后不再记录诊断信息</span>
-      </label>
-      <div class="mt-5 flex justify-end gap-3">
-        <button
-          class="rounded-lg bg-white/10 px-4 py-2 text-xs font-semibold text-white/75 ring-1 ring-white/15 transition hover:bg-white/20"
-          onclick={() => (confirmClear = false)}
-        >
-          取消
-        </button>
-        <button
-          data-testid="diagnostics-clear-confirm"
-          class="rounded-lg bg-kotone-pink/80 px-4 py-2 text-xs font-semibold text-white transition hover:brightness-110 disabled:opacity-50"
-          disabled={clearingDiagnostics}
-          onclick={() => void onClearDiagnostics()}
-        >
-          {clearingDiagnostics ? "正在清除…" : "确认清除"}
-        </button>
-      </div>
-    </div>
+  </SettingsSection>
   </div>
 {/if}
+
+<Dialog.Root open={confirmClear} onOpenChange={(open) => { if (!open && !clearingDiagnostics) confirmClear = false; }}>
+  <Dialog.Content class="ui-scope" data-testid="diagnostics-clear-dialog">
+    <Dialog.Header>
+      <Dialog.Title>清除本地诊断信息？</Dialog.Title>
+      <Dialog.Description>会删除流程事件和 kotone.log，不影响识别历史、设置和录音。此操作不可恢复。</Dialog.Description>
+    </Dialog.Header>
+    <label class="flex cursor-pointer items-start gap-2 text-[13px] text-foreground">
+      <input
+        data-testid="diagnostics-stop-recording"
+        type="checkbox"
+        class="mt-0.5 accent-[var(--color-primary)]"
+        bind:checked={stopRecordingOnClear}
+      />
+      <span>以后不再记录诊断信息</span>
+    </label>
+    <Dialog.Footer>
+      <Button variant="outline" size="sm" onclick={() => (confirmClear = false)}>取消</Button>
+      <Button variant="destructive" size="sm" data-testid="diagnostics-clear-confirm" disabled={clearingDiagnostics} onclick={() => void onClearDiagnostics()}>
+        {clearingDiagnostics ? "正在清除…" : "确认清除"}
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>

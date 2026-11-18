@@ -1,6 +1,6 @@
 [package]
 name = "kotone-tauri"
-version = "0.1.13"
+version = "0.2.0"
 description = "Kotone（琴音）— 游戏语音输入工具（Tauri 壳）"
 edition = "2021"
 rust-version = "1.77.2"
@@ -22,16 +22,26 @@ tauri-build = { version = "2", features = [] }
 # 内部能力 crate；桌面壳负责组合 core 端口、AI、识别、播报和平台实现。
 kotone-core.workspace = true
 kotone-ai.workspace = true
+kotone-agent.workspace = true
 kotone-tts.workspace = true
 kotone-postprocess.workspace = true
 kotone-stt.workspace = true
 kotone-platform-windows.workspace = true
+# 可选本机 Agent 工具服务（默认关闭，toolService.enabled）
+kotone-tools.workspace = true
+kotone-script.workspace = true
+# 工具服务 OCR 后端（M2）：本地韩文 PP-OCRv5 与 DeepSeek 在线
+kotone-ocr.workspace = true
+# `kotone.exe <子命令>`：安装版只带一个 exe，Agent / 插件用它当命令行与 stdio MCP 服务器
+kotone-cli.workspace = true
 
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
-tauri-plugin-updater = "2"
+# 更新包是 NSIS setup.exe（createUpdaterArtifacts = true），用不到 zip 解压；关掉 zip 特性，
+# 也不再引入有公告的 zip 4.x（RUSTSEC-2026-0367/0368/0369/0429）。
+tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls"] }
 tauri-plugin-process = "2"
 serde.workspace = true
 serde_json.workspace = true
@@ -61,7 +71,9 @@ tempfile.workspace = true
 # STT 引擎 feature 转发到 kotone-stt（§3.3）
 # 默认内置 sherpa-onnx 引擎 + silero VAD（ADR-007 one-shot 静音判停开箱可用）；
 # 裁剪体积可 --no-default-features 后按需开启
-default = ["engine-sherpa", "vad-silero"]
-engine-sherpa = ["kotone-stt/engine-sherpa"]
+default = ["engine-sherpa", "vad-silero", "ocr-local"]
+engine-sherpa = ["kotone-stt/engine-sherpa", "kotone-cli/engine-sherpa"]
 # VAD（ADR-007 one-shot 静音判停）：复用 sherpa-onnx 原生依赖
-vad-silero = ["kotone-stt/vad-silero"]
+vad-silero = ["kotone-stt/vad-silero", "kotone-cli/vad-silero"]
+# 本地 OCR 推理：使用 sherpa-onnx 静态库内的 ONNX Runtime（不新增原生库）
+ocr-local = ["kotone-ocr/onnx", "kotone-cli/ocr-local"]

@@ -67,6 +67,9 @@ impl FrameSplitter {
 pub enum StopDecision {
     Continue,
     Stop,
+    /// 一直没开口，超过 [`SilenceStopTracker::with_no_speech_timeout`] 设的时长：
+    /// 调用方应安静地取消会话（不转写、不提交）。
+    NoSpeech,
 }
 
 /// 静音判停状态机（B3 核心纯逻辑）：
@@ -79,6 +82,7 @@ pub struct SilenceStopTracker {
     seen_speech: bool,
     silence_run_ms: u32,
     elapsed_ms: u32,
+    no_speech_timeout_ms: Option<u32>,
 }
 
 impl SilenceStopTracker {
@@ -89,7 +93,15 @@ impl SilenceStopTracker {
             seen_speech: false,
             silence_run_ms: 0,
             elapsed_ms: 0,
+            no_speech_timeout_ms: None,
         }
+    }
+
+    /// 一直没开口超过 `timeout_ms` 时给出 [`StopDecision::NoSpeech`]（语音唤醒后的收音用；
+    /// 热键会话不设，保持原行为）。
+    pub fn with_no_speech_timeout(mut self, timeout_ms: Option<u32>) -> Self {
+        self.no_speech_timeout_ms = timeout_ms;
+        self
     }
 
     /// 喂一帧的语音判定，返回是否应判停
@@ -106,6 +118,12 @@ impl SilenceStopTracker {
             && self.elapsed_ms >= self.min_session_ms
         {
             StopDecision::Stop
+        } else if !self.seen_speech
+            && self
+                .no_speech_timeout_ms
+                .is_some_and(|timeout| self.elapsed_ms >= timeout)
+        {
+            StopDecision::NoSpeech
         } else {
             StopDecision::Continue
         }
@@ -123,6 +141,28 @@ impl SilenceStopTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_speech_timeout_only_when_never_spoken() {
+        let mut t = SilenceStopTracker::new(700, 0).with_no_speech_timeout(Some(300));
+        let mut decisions = Vec::new();
+        for _ in 0..(300 / VAD_FRAME_MS + 1) {
+            decisions.push(t.push(false));
+        }
+        assert_eq!(decisions.last(), Some(&StopDecision::NoSpeech));
+        // 开过口之后不再判“没开口”，按静音判停
+        let mut t = SilenceStopTracker::new(90, 0).with_no_speech_timeout(Some(60));
+        assert_eq!(t.push(true), StopDecision::Continue);
+        for _ in 0..2 {
+            assert_eq!(t.push(false), StopDecision::Continue);
+        }
+        assert_eq!(t.push(false), StopDecision::Stop);
+        // 不设超时：一直安静也不停（热键会话原行为）
+        let mut t = SilenceStopTracker::new(700, 0);
+        for _ in 0..1000 {
+            assert_eq!(t.push(false), StopDecision::Continue);
+        }
+    }
 
     // ---------- FrameSplitter ----------
 

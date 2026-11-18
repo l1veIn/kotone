@@ -15,7 +15,7 @@ reqwest = { version = "0.12", features = ["blocking", "json"] }
 sha2 = "0.10"
 base64 = "0.22"
 # 在线 ASR WebSocket（火山引擎一句话识别 / 科大讯飞语音听写）
-tungstenite = { version = "0.21", features = ["rustls-tls-native-roots"] }
+tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 flate2 = "1.0"
 # 科大讯飞语音听写 HMAC-SHA256 鉴权签名
 hmac = "0.12"
@@ -28,6 +28,9 @@ bzip2 = "0.4"
 # 预编译原生库——体量大（~50MB 原生包 + 链接体积），故仅 engine-sherpa
 # feature 开启时才拉取编译，默认构建零原生依赖
 sherpa-onnx = { version = "1.13.5", optional = true }
+# 自定义唤醒词：汉字 → 带声调拼音（MIT，与 sherpa-onnx text2token 用的 pypinyin 同源 pinyin-data）。
+# 只开带声调与多音字：约 +0.5 MB。
+pinyin = { version = "0.11", default-features = false, features = ["with_tone", "heteronym"] }
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -41,3 +44,8 @@ engine-sherpa = ["dep:sherpa-onnx"]
 # silero VAD（ADR-007 one-shot 静音判停）：与 engine-sherpa 共享同一份
 # sherpa-onnx 原生依赖，独立 feature 控制（只要 VAD 不要 STT 引擎时不必开 engine-sherpa）
 vad-silero = ["dep:sherpa-onnx"]
+
+# 唤醒词实测（scripts/manual-e2e/wake_eval.py 调用）：要真实的 sherpa-onnx。
+[[example]]
+name = "wake_eval"
+required-features = ["engine-sherpa"]

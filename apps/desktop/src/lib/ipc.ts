@@ -24,6 +24,11 @@ import type {
   GameProfile,
   ModelInfo,
   ModelInstallGuide,
+  CatalogModel,
+  CatalogDeleteOutcome,
+  ModelCategory,
+  CompanionCheck,
+  CompanionStatus,
   HistoryRecord,
   HotwordMergeReport,
   ElevationStatus,
@@ -32,6 +37,8 @@ import type {
   ResourceUsage,
   DiagnosticExportResult,
   DiagnosticWindow,
+  OverlayHealth,
+  OverlayStateSnapshot,
 } from "./ipc/contracts";
 import { modelsDirPathError } from "./ipc/contracts";
 
@@ -60,6 +67,16 @@ export async function getStartupOptions(): Promise<StartupOptions> {
 export async function getSettings(): Promise<Settings> {
   if (!isTauri) return browserMock.getSettings();
   return invoke<Settings>("get_settings");
+}
+
+export async function getOverlayHealth(): Promise<OverlayHealth> {
+  if (!isTauri) return browserMock.getOverlayHealth();
+  return invoke<OverlayHealth>("get_overlay_health");
+}
+
+export async function getOverlayState(): Promise<OverlayStateSnapshot | null> {
+  if (!isTauri) return browserMock.getOverlayState();
+  return invoke<OverlayStateSnapshot | null>("get_overlay_state");
 }
 
 export async function listPostProcessors(): Promise<PostProcessorInfo[]> {
@@ -398,6 +415,108 @@ export async function openModelDestDir(id: string): Promise<void> {
 export async function setActiveModel(engineId: string, modelId: string): Promise<void> {
   if (!isTauri) return browserMock.setActiveModel(engineId, modelId);
   return invoke<void>("set_active_model", { engineId, modelId });
+}
+
+// ---------- 统一模型清单：OCR / TTS（ASR 仍用上面的接口） ----------
+
+export async function listCatalogModels(category: ModelCategory): Promise<CatalogModel[]> {
+  if (!isTauri) return browserMock.listCatalogModels(category);
+  return invoke<CatalogModel[]>("list_catalog_models", { category });
+}
+
+/** 下载本地 OCR / TTS 模型（进度同样经 kotone://download 推送） */
+export async function downloadCatalogModel(category: ModelCategory, id: string): Promise<void> {
+  if (!isTauri) return browserMock.downloadCatalogModel(category, id);
+  return invoke<void>("download_catalog_model", { category, id });
+}
+
+/** 从本地目录导入模型文件（逐文件校验 SHA-256） */
+export async function importCatalogModel(category: ModelCategory, id: string, dir: string): Promise<void> {
+  if (!isTauri) return browserMock.importCatalogModel(category, id, dir);
+  return invoke<void>("import_catalog_model", { category, id, dir });
+}
+
+export async function deleteCatalogModel(category: ModelCategory, id: string): Promise<CatalogDeleteOutcome> {
+  if (!isTauri) return browserMock.deleteCatalogModel(category, id);
+  return invoke<CatalogDeleteOutcome>("delete_catalog_model", { category, id });
+}
+
+/** 选用某个 OCR / TTS 模型，返回更新后的设置 */
+export async function activateCatalogModel(category: ModelCategory, id: string): Promise<Settings> {
+  if (!isTauri) return browserMock.activateCatalogModel(category, id);
+  return invoke<Settings>("activate_catalog_model", { category, id });
+}
+
+export async function getCatalogInstallGuide(category: ModelCategory, id: string): Promise<ModelInstallGuide> {
+  if (!isTauri) return browserMock.getCatalogInstallGuide(category, id);
+  return invoke<ModelInstallGuide>("get_catalog_install_guide", { category, id });
+}
+
+export async function openCatalogModelDir(category: ModelCategory, id: string): Promise<void> {
+  if (!isTauri) return browserMock.openCatalogModelDir(category, id);
+  return invoke<void>("open_catalog_model_dir", { category, id });
+}
+
+// ---------- Kotone 陪玩 ----------
+
+/** 测试琴音所选的 AI 连接（读一次模型列表，不花 token；不支持时发一次短对话），结果写进设置 */
+export async function companionSelfCheck(): Promise<CompanionCheck> {
+  if (!isTauri) return browserMock.companionSelfCheck();
+  return invoke<CompanionCheck>("companion_self_check");
+}
+
+/** 单独测某一条连接（一次付费请求）。只有它是琴音在用的连接时，结果才写进设置。 */
+export async function connectionSelfCheck(id: string): Promise<CompanionCheck> {
+  if (!isTauri) return browserMock.connectionSelfCheck(id);
+  return invoke<CompanionCheck>("connection_self_check", { id });
+}
+
+/** 本机检测到的游戏（注册表与启动器清单，不扫全盘）。 */
+export interface InstalledGame {
+  id: string;
+  name: string;
+  source: "steam" | "tencent" | "riot" | "hoyoplay" | "epic" | "wegame" | "uninstall" | string;
+  installDir: string;
+  /** 可以填进启动路径的命令；null = 不知道怎么启动 */
+  launch: string | null;
+  processNames: string[];
+  needsAdmin: boolean;
+}
+
+export async function installedGames(query?: string): Promise<InstalledGame[]> {
+  if (!isTauri) return browserMock.installedGames(query);
+  return invoke<InstalledGame[]>("installed_games", { query: query ?? null });
+}
+/** 游戏的图标（主程序的图标，PNG 字节）；先调过 installedGames 才认得 id。 */
+export async function gameIcon(id: string): Promise<Uint8Array | null> {
+  if (!isTauri) return null;
+  const bytes = await invoke<number[] | null>("game_icon", { id });
+  return bytes ? new Uint8Array(bytes) : null;
+}
+/** 用检测到的启动方式打开游戏。 */
+export async function launchInstalledGame(id: string): Promise<void> {
+  if (!isTauri) throw new Error("浏览器预览不能打开游戏");
+  await invoke("launch_installed_game", { id });
+}
+
+/** 服务商的模型列表（`GET /models`，不花 token）；supported=false 表示服务商没有列表接口。 */
+export interface ConnectionModels { supported: boolean; models: string[] }
+
+export async function connectionModels(id: string): Promise<ConnectionModels> {
+  if (!isTauri) return browserMock.connectionModels(id);
+  return invoke<ConnectionModels>("connection_models", { id });
+}
+
+/** 陪玩是否可用：AI 连接 / 自检 / OCR 模型 / 快捷消息 / profile */
+export async function companionStatus(): Promise<CompanionStatus> {
+  if (!isTauri) return browserMock.companionStatus();
+  return invoke<CompanionStatus>("companion_status");
+}
+
+/** 清除当前 profile 记录的聊天框位置（回到整窗识别） */
+export async function companionClearChatRegion(): Promise<void> {
+  if (!isTauri) return browserMock.companionClearChatRegion();
+  return invoke<void>("companion_clear_chat_region");
 }
 
 // ---------- 识别历史（历史记录页） ----------

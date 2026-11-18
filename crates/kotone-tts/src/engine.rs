@@ -7,7 +7,8 @@ use sherpa_onnx::{
 };
 
 pub const KOKORO_MODEL_DIR: &str = "kokoro-int8-multi-lang-v1_1";
-pub const DEFAULT_VOICE: &str = "kokoro:zf_001";
+/// 默认声音（旧写法 `kokoro:zf_001` 与新写法 `kokoro/zf_001` 都接受）。
+pub const DEFAULT_VOICE: &str = "kokoro/zf_001";
 pub const REQUIRED_FILES: &[&str] = &[
     "model.int8.onnx",
     "voices.bin",
@@ -53,7 +54,7 @@ pub fn kokoro_voices() -> Vec<SpeechVoice> {
     [1, 3, 17]
         .into_iter()
         .map(|id| SpeechVoice {
-            id: format!("kokoro:zf_{id:03}"),
+            id: format!("kokoro/zf_{id:03}"),
             name: format!("中文女声 {id:03}{}", if id == 1 { "（默认）" } else { "" }),
         })
         .collect()
@@ -63,9 +64,8 @@ fn speaker_id(voice: Option<&str>) -> Result<i32, String> {
     let voice = voice
         .filter(|id| !id.trim().is_empty())
         .unwrap_or(DEFAULT_VOICE);
-    let suffix = voice
-        .strip_prefix("kokoro:zf_")
-        .ok_or("请选择 Kokoro 中文女声")?;
+    let native = crate::voice::native(crate::voice::KOKORO, voice)?;
+    let suffix = native.strip_prefix("zf_").ok_or("请选择 Kokoro 中文女声")?;
     let number: u8 = suffix.parse().map_err(|_| "本地语音声线编号无效")?;
     FEMALE_VOICES
         .iter()
@@ -80,9 +80,32 @@ fn speed(rate: i32) -> f32 {
     (1.06 * 2.0_f32.powf(rate as f32 / 20.0)).clamp(0.75, 1.5)
 }
 
+#[derive(Debug)]
 pub struct SynthesizedSpeech {
     pub samples: Vec<f32>,
     pub sample_rate: u32,
+}
+
+/// 低于这个幅度算静音。
+const SILENCE_LEVEL: f32 = 0.01;
+/// 裁静音后首尾各留多少（毫秒），避免切掉气声。
+const SILENCE_PAD_MS: usize = 40;
+
+/// 裁掉首尾的静音（各留 40 ms）。全是静音时原样返回。
+pub fn trim_silence(mut speech: SynthesizedSpeech) -> SynthesizedSpeech {
+    let loud = |s: &f32| s.abs() >= SILENCE_LEVEL;
+    let (Some(first), Some(last)) = (
+        speech.samples.iter().position(loud),
+        speech.samples.iter().rposition(loud),
+    ) else {
+        return speech;
+    };
+    let pad = speech.sample_rate as usize * SILENCE_PAD_MS / 1000;
+    let start = first.saturating_sub(pad);
+    let end = (last + 1 + pad).min(speech.samples.len());
+    speech.samples.truncate(end);
+    speech.samples.drain(..start);
+    speech
 }
 
 pub struct KokoroEngine(OfflineTts);
@@ -190,12 +213,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn trim_silence_keeps_a_short_pad_around_the_voice() {
+        let rate = 1_000;
+        let mut samples = vec![0.0; 500];
+        samples.extend(vec![0.5; 100]);
+        samples.extend(vec![0.001; 400]);
+        let out = trim_silence(SynthesizedSpeech {
+            samples,
+            sample_rate: rate,
+        });
+        // 40 ms pad = 40 samples on each side of the 100 loud ones
+        assert_eq!(out.samples.len(), 180);
+        assert_eq!(out.samples[40], 0.5);
+        let quiet = trim_silence(SynthesizedSpeech {
+            samples: vec![0.0; 10],
+            sample_rate: rate,
+        });
+        assert_eq!(quiet.samples.len(), 10);
+    }
+
+    #[test]
     fn stock_voice_ids_match_the_official_v11_mapping() {
         assert_eq!(speaker_id(None).unwrap(), 3);
         assert_eq!(speaker_id(Some("kokoro:zf_017")).unwrap(), 11);
         assert_eq!(speaker_id(Some("kokoro:zf_099")).unwrap(), 57);
         assert!(speaker_id(Some("kokoro:zf_009")).is_err());
         assert!(speaker_id(Some("system-voice")).is_err());
+        assert_eq!(speaker_id(Some("kokoro/zf_017")).unwrap(), 11);
+        assert!(speaker_id(Some("openai/alloy")).is_err());
     }
 
     #[test]

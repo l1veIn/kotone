@@ -10,7 +10,11 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "allowJs": true,
-    "checkJs": false
+    "checkJs": false,
+    "paths": {
+      "$lib": ["./src/lib"],
+      "$lib/*": ["./src/lib/*"]
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.svelte", "vite.config.ts"]
 }

@@ -19,6 +19,8 @@ export interface UiConfig {
   firstRunCompleted: boolean;
   /** app 启动后自动进入 Running（warmup 引擎 + 注册热键 + 显示悬浮窗） */
   autoStart: boolean;
+  /** 新版本弹窗里选了「不再提醒」：启动时不自动弹出（关于页仍可手动检查） */
+  updatePromptDisabled?: boolean;
 }
 
 /** 模型存储配置（core settings `models` 段） */
@@ -132,6 +134,8 @@ export interface Settings {
   cyclePostProcessingHotkey: string;
   /** 启动 / 停止 Kotone 热键（默认空 = 关闭；应用级热键，runtime 停止时也生效） */
   runtimeToggleHotkey: string;
+  /** 停止全部自动化（应用级热键；默认 Ctrl+Shift+F12，空 = 关闭） */
+  automationStopHotkey: string;
   /** 交互模式预设（null = 旧字段推导） */
   interactionMode: InteractionMode | null;
   /** VAD 静音判停阈值 ms（one-shot 生效，200-5000） */
@@ -156,18 +160,55 @@ export interface Settings {
   /** 诊断记录（流程事件）；默认开启 */
   diagnostics: DiagnosticsConfig;
   assistant: AssistantConfig;
+  /** 本机 Agent 工具服务开关；桌面端启动时读取，默认关闭（docs/tool-service.md） */
+  toolService: ToolServiceConfig;
+  /** 当前 OCR 模型（统一模型清单 category=ocr；空 = 自动选第一个已安装的本地模型） */
+  ocr: OcrConfig;
+  /** 联网搜索（统一模型清单 category=search；空 = 自动：有 DeepSeek 连接就用 DeepSeek；off = 关）。旧配置没有时按默认补齐。 */
+  search?: { activeModelId: string };
+  /** 内置琴音 Agent（config.json `agent` 段；旧配置没有这一段时后端按默认补齐）。 */
+  agent?: AgentConfig;
+  /** 游戏语音（ADR 020）：琴音用虚拟麦克风替你在游戏语音里说话；旧配置没有时后端按默认（关）补齐。 */
+  voiceChat?: VoiceChatConfig;
+}
+
+export interface VoiceChatConfig {
+  enabled: boolean;
+  /** 混入你自己的麦克风 */
+  includeMic: boolean;
+  /** 设备名；default = 系统默认录音设备 */
+  micDeviceId: string;
+  /** 百分比 0–400 */
+  micGain: number;
+}
+
+export interface OcrConfig {
+  activeModelId: string;
 }
 
 export interface AssistantConfig {
+  /** 呼叫琴音的热键（按一次就听）；默认 "Backquote"（~ 键）；空 = 不用热键。 */
   hotkey: string;
-  /** 助手独立交互模式，不改变常规语音输入模式。 */
+  /** 老配置补过默认呼叫键的标记（只补一次）。 */
+  callHotkeyDefaulted?: boolean;
+  /** 旧的陪玩热键方式；呼叫琴音固定为说完自动提交，只剩旧的窗口语音按钮在用。 */
   interactionMode: AssistantInteractionMode;
   connectionId: string;
   defaultDelivery: ("voice" | "danmaku")[];
   voiceId: string;
   speechVolume: number;
   speechRate: number;
+  /** 本地播报引擎（旧字段，只写旧版本认识的 system / kokoro） */
   speechEngine: "kokoro" | "system";
+  /**
+   * 语音合成：空 = 自动（默认：琴音用 DeepSeek 连接时用 DeepSeek 语音，否则 speechEngine）；
+   * "local" = 明确用本地 speechEngine；deepseek-tts / openai-compat-tts / volcano-tts = 在线。
+   */
+  ttsModelId?: string;
+  /** 语音唤醒（ADR 017；新字段，旧配置没有）。 */
+  wake?: WakeConfig;
+  /** 琴音的对话气泡（0.2.0 新字段，旧配置没有）。 */
+  bubble?: BubbleConfig;
   kokoroVoiceId: string;
   danmakuDurationMs: number;
   danmakuSpeedPxPerSec: number;
@@ -176,6 +217,109 @@ export interface AssistantConfig {
   danmakuTopOffsetPx: number;
   danmakuColor: string;
   danmakuEmote: "none" | "hello" | "cheering" | "pointing" | "amazed";
+  /** 请求去向：companion 为 Kotone 陪玩（默认；旧值 reminders 视同 companion）；agent 原文转交外部 Agent（需开启工具服务）。 */
+  route?: "reminders" | "companion" | "agent";
+  /** 陪玩：快捷消息、帮忙打字是否自动发送、AI 连接的测试结果（只用于显示） */
+  companion: CompanionConfig;
+}
+
+/** 快捷指令（字段名沿用快捷消息，最多 8 条）：按下热键，要么等于替用户说了 text（交给 AI），
+ *  要么直接运行已保存的自动化 automationId（带 args，不调用 AI）。 */
+export interface QuickMessage {
+  id: string;
+  label: string;
+  text: string;
+  hotkey: string;
+  /** 要直接运行的已保存自动化；空 / 缺省 = 交给 AI 的一句话 */
+  automationId?: string;
+  args?: Record<string, unknown>;
+}
+
+export interface CompanionCheck {
+  connectionId: string;
+  baseUrl: string;
+  model: string;
+  passed: boolean;
+  checkedAtMs: number;
+  message: string;
+}
+
+export interface CompanionConfig {
+  quickMessages: QuickMessage[];
+  /** 帮忙打字后自动按发送键（默认 true；关掉后只打进聊天框） */
+  autoSend: boolean;
+  check?: CompanionCheck | null;
+}
+
+/** 陪玩是否可用（companion_status） */
+export interface CompanionStatus {
+  ready: boolean;
+  reason: string | null;
+  connectionId: string;
+  check: CompanionCheck | null;
+  ocr: { modelId: string | null; state: { ready: boolean; reason?: string | null; backend?: string; dataEgress?: string } };
+  autoSend: boolean;
+  quickMessages: QuickMessage[];
+  profile: { id: string; notes: string; chatRegion: ChatRegion | null };
+}
+
+export interface ChatRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** 内置琴音 Agent 的设置（ADR 014 / 015）。权限与隐藏列表要用专门的命令整体修改（见 lib/agent.ts）。 */
+export interface AgentConfig {
+  permissions: { mode: "default" | "allow-all" | "read-only"; rules: Record<string, "allow" | "ask" | "deny"> };
+  /** 不交给 AI 的已保存自动化 id。 */
+  hiddenAutomations: string[];
+  /** 陪玩热键与快捷指令交给琴音（默认开；关闭时用旧的单次陪玩）。 */
+  inGame: boolean;
+  /** 游戏内交给琴音后 1.5 秒还没出声，先说一句“好，我看看”（默认开）。 */
+  progressSpeech?: boolean;
+  /** 名字与头像（空 = “琴音”与内置形象）。头像是工作区里的文件名，用 workspaceSetAvatar 上传。 */
+  identity?: { name: string; avatar: string };
+  /** 子会话（同传等）用的模型 id；空 = 和琴音同一个模型。 */
+  subagents?: { model: string };
+  /** 一段对话估到这么多 token 时整理成摘要（上下文压缩）；0 = 不整理。默认 64000。 */
+  compactAtTokens?: number;
+  /** 当前角色（默认 kotone = 琴音）。换角色用 lib/roles.ts 的 rolesSwitch（同时换名字、头像）。 */
+  roleId?: string;
+  /** 游戏退出时自动复盘（默认开）。 */
+  matchRecap?: boolean;
+  /** DeepSeek 内容审核（默认开；ADR 026）。 */
+  safetyCheck?: boolean;
+  /** 游戏里 / 聊天窗口里的思考强度（只对 DeepSeek）：low / high / max / none；空 = 服务商默认。 */
+  gameEffort?: string;
+  chatEffort?: string;
+}
+
+/** 语音唤醒设置（config.json `assistant.wake`）。 */
+export type BubbleCorner = "bottom-right" | "bottom-left" | "top-right" | "top-left";
+
+export interface BubbleConfig {
+  enabled: boolean;
+  corner: BubbleCorner;
+  /** 离屏幕上下边缘再挪开多少逻辑像素（0–800） */
+  offsetY: number;
+  /** 回答同时用弹幕 */
+  alsoDanmaku: boolean;
+}
+
+export interface WakeConfig {
+  enabled: boolean;
+  phrase: "qinyin-qinyin" | "nihao-qinyin";
+  sensitivity: "low" | "normal" | "high";
+  ack: "voice" | "tone" | "none";
+  /** 唤醒后一直不说话多久就结束（毫秒，2000–15000） */
+  noSpeechTimeoutMs: number;
+}
+
+/** 本机工具服务配置（config.json `toolService` 段）；修改后需重启桌面端 */
+export interface ToolServiceConfig {
+  enabled: boolean;
 }
 
 export interface DiagnosticsConfig {
@@ -224,6 +368,19 @@ export interface OverlayConfig {
   clickThrough: boolean;
   customX?: number;
   customY?: number;
+}
+
+/** 当前进程对悬浮窗显示异常采取的自动降级。 */
+export interface OverlayHealth {
+  degraded: boolean;
+  reason: string | null;
+}
+
+/** 新创建的窗口补读最近一条状态，恢复预览或错误内容。 */
+export interface OverlayStateSnapshot {
+  state: string;
+  payload: unknown;
+  caseId?: string;
 }
 
 /** 模型下载配置（config.json `download` 段） */
@@ -350,11 +507,20 @@ export interface ConnectionInfo extends Connection {
   hasApiKey: boolean;
 }
 
+/** 预置提供商的分组（界面按这个顺序展示）。 */
+export type ConnectionPresetGroup = "recommended" | "china" | "global" | "aggregator" | "custom";
+
 export interface ConnectionPreset {
   id: string;
   displayName: string;
+  group: ConnectionPresetGroup;
+  /** 一句话说明。 */
+  description: string;
   defaultBaseUrl: string;
   defaultModel: string;
+  /** 可选的模型（第一个一般就是默认模型；也可以手填）。 */
+  models: string[];
+  /** 控制台里创建 API key 的页面；null = 不确定，不显示“获取密钥”。 */
   apiKeyUrl?: string | null;
 }
 
@@ -389,6 +555,18 @@ export interface GameProfile {
   removedBuiltinHotwords?: string[];
   /** 聊天频道列表（ADR-008；缺省/空 = 单频道，行为与旧版一致） */
   channels?: ProfileChannel[];
+  /** 陪玩的游戏说明（可选，写进提示词），如“聊天在左下角，[队伍] 前缀是队友” */
+  companionNotes?: string;
+  /** 陪玩记录的聊天框位置（窗口客户区比例）；缺省 = 整窗识别 */
+  chatRegion?: ChatRegion | null;
+  /** 允许自动化程序对这个游戏按键、点鼠标（缺省 true；新字段，旧版本忽略） */
+  allowAutomationInput?: boolean;
+  /** 打开这个游戏用的程序、快捷方式或 steam:// 之类的链接（空 = 琴音不能打开它） */
+  launchPath?: string;
+  /**
+   * 让琴音一步一步操作这个游戏（game.act，ADR 019）：ask 先问（缺省）/ allow 一直允许 / deny 不允许。
+   */
+  computerUse?: "ask" | "allow" | "deny";
 }
 
 // ---------- 模型 ----------
@@ -406,7 +584,48 @@ export interface ModelConfigField {
   required: boolean;
 }
 
+/** 统一模型清单的类别：asr 语音识别 / ocr 文字识别 / tts 语音合成 */
+export type ModelCategory = "asr" | "ocr" | "tts" | "search";
+
+export interface CatalogFile {
+  name: string;
+  url: string;
+  sha256: string;
+  sizeBytes: number;
+}
+
+/** OCR / TTS 清单条目（ASR 仍用 ModelInfo） */
+export interface CatalogModel {
+  category: ModelCategory;
+  id: string;
+  engineId: string;
+  displayName: string;
+  description: string;
+  sizeBytes: number;
+  backend: "local" | "remote";
+  downloaded: boolean;
+  ready: boolean;
+  state: "ready" | "not-installed" | "invalid" | "not-configured" | "unavailable" | string;
+  reason?: string | null;
+  active: boolean;
+  recommended: boolean;
+  languages: string[];
+  /** none / selected-image（每次识别上传截图）/ text（上传文字） */
+  dataEgress: "none" | "selected-image" | "text" | string;
+  configSchema: ModelConfigField[];
+  apiKeyUrl?: string | null;
+  license: string;
+  files: CatalogFile[];
+}
+
+export interface CatalogDeleteOutcome {
+  wasActive: boolean;
+  settings: Settings;
+}
+
 export interface ModelInfo {
+  /** 统一模型清单类别；本清单恒为 asr */
+  category?: "asr";
   id: string;
   engineId: string;
   /** 展示名（清单内置文案） */

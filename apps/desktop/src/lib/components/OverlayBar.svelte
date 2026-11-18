@@ -11,6 +11,7 @@
    *   success      Kotone 贴纸弹出 + 气泡「收到，已发送！✨」
    *   error        amazed 贴纸 + 错误摘要 + 重试 / 关闭
    */
+  import { hotkeyLabel as formatHotkey } from "../hotkeyCombo";
   import { fade, fly, scale } from "svelte/transition";
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
@@ -48,17 +49,12 @@
   let sendPending = $state(false);
   /** preview 提示中的热键名（动态读配置，读取失败回退 CapsLock） */
   let hotkeyLabel = $state("CapsLock");
-  let assistantHotkeyLabel = $state("助手热键");
-  let assistantMode = $state<AssistantInteractionMode>("push-to-talk");
-  const buttonAssistant = $derived($appState.purpose === "assistant" && $appState.inputSource === "button");
-  const assistantListeningHint = $derived({
-    "push-to-talk": buttonAssistant ? "助手收音中 · 松开按钮提交" : "助手收音中 · 松开助手热键提交",
-    dictation: buttonAssistant ? "助手收音中 · 点击结束录音后预览" : "助手收音中 · 再按助手热键预览",
-    "one-shot": "助手收音中 · 停顿后提交",
-  }[assistantMode]);
+  let assistantHotkeyLabel = $state("呼叫键");
+  // 呼叫琴音：说完自动交给她（相当于按键版的语音唤醒）；再按一次呼叫键立刻提交。
+  const assistantListeningHint = $derived(`在听 · 说完自动提交（再按 ${assistantHotkeyLabel} 立刻提交）`);
   const confirmLabel = $derived($appState.purpose === "assistant" ? "提交助手" : "发送");
   const confirmHotkey = $derived($appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel);
-  const previewHint = $derived(buttonAssistant ? "请回到提醒助手确认 · Esc 取消" : `${confirmHotkey} ${confirmLabel} · Esc 重说`);
+  const previewHint = $derived(`${confirmHotkey} ${confirmLabel} · Esc 重说`);
   /** overlay.style：true = 胶囊布局（窗口几何由后端 SetWindowPos 居中靠下重排） */
   let capsule = $state(false);
   let draggable = $state(true);
@@ -67,6 +63,40 @@
   let manualDragMoved = false;
   let dragSettleTimer: ReturnType<typeof setTimeout> | undefined;
   let dragDisarmTimer: ReturnType<typeof setTimeout> | undefined;
+  // 原生隐藏窗口不一定触发 visibilitychange，两个来源都要允许才播放动效。
+  let documentVisible = $state(false);
+  let nativeVisible = $state(!isTauri);
+  const renderActive = $derived(documentVisible && nativeVisible);
+
+  onMount(() => {
+    let disposed = false;
+    let revision = 0;
+    let unlisten: (() => void) | undefined;
+    const updateDocumentVisibility = () => {
+      documentVisible = document.visibilityState !== "hidden";
+    };
+    updateDocumentVisibility();
+    document.addEventListener("visibilitychange", updateDocumentVisibility);
+    if (isTauri) {
+      void (async () => {
+        const cleanup = await listen<boolean>("kotone://overlay-visibility", ({ payload }) => {
+          if (disposed) return;
+          revision++;
+          nativeVisible = payload;
+        });
+        if (disposed) { cleanup(); return; }
+        unlisten = cleanup;
+        const snapshotRevision = revision;
+        const visible = await getCurrentWindow().isVisible();
+        if (!disposed && revision === snapshotRevision) nativeVisible = visible;
+      })().catch(() => { /* 可见性未知时保留静态 UI，避免隐藏窗口持续渲染。 */ });
+    }
+    return () => {
+      disposed = true;
+      unlisten?.();
+      document.removeEventListener("visibilitychange", updateDocumentVisibility);
+    };
+  });
 
   function applyOverlayConfig(config: OverlayConfig) {
     capsule = config.style === "capsule";
@@ -84,8 +114,7 @@
           if (disposed) return;
           revision++;
           hotkeyLabel = payload.hotkey;
-          assistantHotkeyLabel = payload.assistantHotkey || "助手热键";
-          assistantMode = payload.assistantMode;
+          assistantHotkeyLabel = payload.assistantHotkey ? formatHotkey(payload.assistantHotkey) : "呼叫键";
         });
         if (disposed) { cleanup(); return; }
         unlisten = cleanup;
@@ -95,8 +124,7 @@
       if (disposed) return;
       if (revision === snapshotRevision) {
         hotkeyLabel = s.hotkey.key;
-        assistantHotkeyLabel = s.assistant.hotkey || "助手热键";
-        assistantMode = s.assistant.interactionMode;
+        assistantHotkeyLabel = s.assistant.hotkey ? formatHotkey(s.assistant.hotkey) : "呼叫键";
       }
       applyOverlayConfig(s.overlay);
     })().catch(() => { /* Keep useful defaults if the initial snapshot fails. */ });
@@ -172,7 +200,7 @@
   });
 
   async function onConfirm() {
-    if (sendPending || buttonAssistant) return;
+    if (sendPending) return;
     sendPending = true;
     actionError = "";
     try {
@@ -195,7 +223,7 @@
 
   /** 错误重试：沿用 orchestrator 保留的文本、profile、频道与目标窗口。 */
   async function onRetry() {
-    if (sendPending || buttonAssistant) return;
+    if (sendPending) return;
     actionError = "";
     actionHint = "";
     const text = $appState.errorText ?? $appState.finalText;
@@ -243,6 +271,7 @@
     class="flex h-full items-center justify-center select-none {draggable && !clickThrough
       ? 'cursor-move'
       : ''}"
+    class:render-paused={!renderActive}
     onpointerdown={onDragPointerDown}
   >
     <div
@@ -285,7 +314,7 @@
             {$appState.partialText}&#x200E;
           </p>
         {:else}
-          <Waveform level={$appState.level} bars={12} />
+          <Waveform level={$appState.level} bars={12} active={renderActive} />
           {#if $appState.purpose === "assistant"}
             <span class="truncate text-xs text-kotone-cyan">{assistantListeningHint}</span>
           {/if}
@@ -316,7 +345,7 @@
         <span class="shrink-0 text-[10px] whitespace-nowrap text-white/40">
           {previewHint}
         </span>
-        {#if mouseInteractive && !buttonAssistant}
+        {#if mouseInteractive}
           <button
             class="shrink-0 rounded-full bg-kotone-pink px-2.5 py-0.5 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95"
             onclick={() => void onConfirm()}
@@ -347,7 +376,7 @@
         <p class="max-w-[220px] truncate text-sm text-kotone-pink" title={displayError}>
           {displayError}
         </p>
-        {#if mouseInteractive && $appState.errorText && !buttonAssistant}
+        {#if mouseInteractive && $appState.errorText}
           <button
             class="shrink-0 rounded-full bg-kotone-pink/80 px-2.5 py-0.5 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95"
             onclick={() => void onRetry()}
@@ -358,7 +387,7 @@
         {/if}
         <!-- Error 的退出一律走键盘：无文本时没有任何鼠标可做的事，不给按钮 -->
         <span class="shrink-0 text-[10px] whitespace-nowrap text-white/40">
-          {#if buttonAssistant}请回到提醒助手重试 · Esc {errorEscAction}{:else}{$appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel} {errorAction} · Esc {errorEscAction}{/if}
+          {$appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel} {errorAction} · Esc {errorEscAction}
         </span>
       {:else}
         <!-- idle：热键切换文字处理时短暂显示提示（托盘手动唤起时显示待机文案） -->
@@ -377,6 +406,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="flex h-full items-stretch select-none {draggable && !clickThrough ? 'cursor-move' : ''}"
+  class:render-paused={!renderActive}
   onpointerdown={onDragPointerDown}
 >
   <div
@@ -419,17 +449,15 @@
         <div class="min-w-0 flex-1">
           <p class="text-[11px] leading-tight text-kotone-cyan/80">{$appState.purpose === "assistant" ? assistantListeningHint : stateLabel.listening}</p>
           <div bind:this={textScrollEl} class="kotone-scroll mt-0.5 max-h-14 overflow-y-auto pr-1">
-            {#key $appState.partialText}
-              <p class="text-sm leading-snug break-all text-white" in:fade={{ duration: 180 }}>
-                {$appState.partialText}
-              </p>
-            {/key}
+            <p class="text-sm leading-snug break-all text-white">
+              {$appState.partialText}
+            </p>
           </div>
         </div>
       {:else}
         <!-- 第一条 partial 到达前保持声波；非流式引擎会始终停留在这里。 -->
         <div class="flex min-w-0 flex-1 items-center justify-center {$appState.purpose === 'assistant' ? 'flex-col gap-1' : ''}" in:fade={{ duration: 150 }}>
-          <Waveform level={$appState.level} />
+          <Waveform level={$appState.level} active={renderActive} />
           {#if $appState.purpose === "assistant"}
             <p class="text-[11px] leading-tight text-kotone-cyan/80">{assistantListeningHint}</p>
           {/if}
@@ -462,13 +490,13 @@
           <p class="text-sm leading-snug break-all text-white">{$appState.finalText}</p>
         </div>
         <p class="text-[11px] leading-tight text-white/45">
-          {buttonAssistant ? previewHint : `再按 ${previewHint}`}
+          {`再按 ${previewHint}`}
         </p>
         {#if actionError}
           <p class="truncate text-[11px] text-kotone-pink">{actionError}</p>
         {/if}
       </div>
-      {#if mouseInteractive && !buttonAssistant}
+      {#if mouseInteractive}
         <div class="flex shrink-0 flex-col gap-1.5">
           <button
             class="rounded-lg bg-kotone-pink px-3 py-1 text-xs font-semibold text-white shadow-glow-pink transition hover:brightness-110 active:scale-95"
@@ -531,7 +559,7 @@
         {/if}
       </div>
       <div class="flex shrink-0 flex-col items-end gap-1">
-        {#if mouseInteractive && $appState.errorText && !buttonAssistant}
+        {#if mouseInteractive && $appState.errorText}
           <button
             class="rounded-lg bg-kotone-pink/80 px-2.5 py-1 text-xs font-semibold text-white transition hover:brightness-110 active:scale-95"
             onclick={() => void onRetry()}
@@ -542,7 +570,7 @@
         {/if}
         <!-- Error 的退出一律走键盘：无文本时没有任何鼠标可做的事，不给按钮 -->
         <span class="text-[11px] whitespace-nowrap text-white/45">
-          {#if buttonAssistant}请回到提醒助手重试 · Esc {errorEscAction}{:else}再按 {$appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel} {errorAction} · Esc {errorEscAction}{/if}
+          再按 {$appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel} {errorAction} · Esc {errorEscAction}
         </span>
       </div>
     {:else}
@@ -564,6 +592,12 @@
 {/if}
 
 <style>
+  /* 窗口隐藏后仍会收到状态/电平事件，显式停掉整个子树的动画与过渡。 */
+  .render-paused :global(*) {
+    animation-play-state: paused !important;
+    transition: none !important;
+  }
+
   /*
    * 头部省略号（capsule 单行文本）：direction:rtl 让 truncate 的省略号落在行首，
    * 显示最新尾部、头部滚出；text-align:left 保持视觉左对齐。
@@ -611,33 +645,33 @@
     }
   }
 
-  /* 麦克风呼吸光晕 */
+  /* 保持小光晕静态，只改变透明度，避免每帧重绘阴影。 */
   .mic-breath {
+    box-shadow: 0 0 6px rgba(0, 229, 255, 0.35);
     animation: kotone-mic-breath 1.8s ease-in-out infinite;
   }
   @keyframes kotone-mic-breath {
     0%,
     100% {
-      box-shadow: 0 0 6px rgba(0, 229, 255, 0.25);
+      opacity: 0.65;
     }
     50% {
-      box-shadow: 0 0 18px rgba(0, 229, 255, 0.6);
+      opacity: 1;
     }
   }
 
-  /* 发送中：品红光晕脉冲 */
+  /* 发送中：静态品红光晕 + 透明度脉冲 */
   .send-pulse {
+    box-shadow: 0 0 4px rgba(255, 45, 120, 0.5);
     animation: kotone-send-pulse 0.9s ease-in-out infinite;
   }
   @keyframes kotone-send-pulse {
     0%,
     100% {
-      box-shadow: 0 0 4px rgba(255, 45, 120, 0.4);
-      transform: scale(1);
+      opacity: 0.6;
     }
     50% {
-      box-shadow: 0 0 16px rgba(255, 45, 120, 0.85);
-      transform: scale(1.15);
+      opacity: 1;
     }
   }
 

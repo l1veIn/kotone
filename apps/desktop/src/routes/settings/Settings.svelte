@@ -4,14 +4,16 @@
    * 左侧导航 + 右侧页面。页面组件在 ./pages/ 下，
    * 共享 settingsStore / toast（lib/stores/ui.ts）；IPC 全部走 lib/ipc.ts。
    */
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import {
     getSettings,
+    getOverlayHealth,
     getSettingsLoadWarning,
     getStartupOptions,
     getElevationStatus,
     isTauri,
+    type OverlayHealth,
   } from "../../lib/ipc";
   import {
     settingsStore,
@@ -23,44 +25,90 @@
   } from "../../lib/stores/ui";
   import { initRuntime } from "../../lib/stores/runtime";
   import { checkForUpdates } from "../../lib/updater";
-  import Toasts from "../../lib/components/Toasts.svelte";
+  import { Sonner } from "$lib/components/ui/sonner";
   import ElevationPrompt from "../../lib/components/ElevationPrompt.svelte";
   import AutoAdminPrompt from "../../lib/components/AutoAdminPrompt.svelte";
   import InjectionBlockedDialog from "../../lib/components/InjectionBlockedDialog.svelte";
   import UpdateDialog from "../../lib/components/UpdateDialog.svelte";
   import { appState } from "../../lib/stores/state";
   import Onboarding from "./Onboarding.svelte";
+  import { pendingPrompt } from "../../lib/agentChat/pendingPrompt";
   import Titlebar from "./Titlebar.svelte";
   import GeneralPage from "./pages/GeneralPage.svelte";
   import TextProcessingPage from "./pages/TextProcessingPage.svelte";
+  import { navigationRequest } from "../../lib/stores/navigation";
   import AssistantPage from "./pages/AssistantPage.svelte";
+  import AutomationPage from "./pages/AutomationPage.svelte";
   import AdvancedPage from "./pages/AdvancedPage.svelte";
   import type { AdvancedSection } from "./pages/advanced/types";
   import GamePage from "./pages/GamePage.svelte";
   import HistoryPage from "./pages/HistoryPage.svelte";
   import AboutPage from "./pages/AboutPage.svelte";
   import CharacterPage from "./pages/CharacterPage.svelte";
-  import patternSwitch from "../../assets/brand/patterns/switch.webp";
+  import { initializeAppearance, resolvedTheme } from "../../lib/appearance/appearanceRuntime";
 
-  type PageId =
-    | "general"
-    | "processing"
-    | "assistant"
-    | "game"
-    | "history"
-    | "advanced"
-    | "about"
-    | "character";
+  import AppSidebar, { type PageId } from "./AppSidebar.svelte";
+  import { AgentChat } from "../../lib/agentChat/chatController.svelte";
+  import { provideAgentChat } from "../../lib/agentChat/context";
 
-  const navItems: { id: PageId; label: string; icon: string }[] = [
-    { id: "general", label: "通用", icon: "home" },
-    { id: "processing", label: "文字处理", icon: "sparkles" },
-    { id: "assistant", label: "提醒助手", icon: "bell" },
-    { id: "game", label: "游戏适配", icon: "gamepad" },
-    { id: "history", label: "历史记录", icon: "clock" },
-    { id: "advanced", label: "高级", icon: "sliders" },
-    { id: "about", label: "关于", icon: "info" },
-  ];
+  /** 侧边栏：宽窗口展开 / 图标栏（记在本机）；窄窗口（< 760px）改成抽屉。 */
+  const SIDEBAR_KEY = "kotone.sidebar.v1";
+  let rail = $state(readRail());
+  let drawerOpen = $state(false);
+  let viewportWidth = $state(typeof window === "undefined" ? 1280 : window.innerWidth);
+  const narrow = $derived(viewportWidth < 760);
+  function readRail(): boolean {
+    try { return localStorage.getItem(SIDEBAR_KEY) === "rail"; } catch { return false; }
+  }
+  function toggleSidebar() {
+    if (narrow) { drawerOpen = !drawerOpen; return; }
+    rail = !rail;
+    try { localStorage.setItem(SIDEBAR_KEY, rail ? "rail" : "expanded"); } catch { /* 只是偏好 */ }
+  }
+  function navigate(id: PageId) {
+    assistantOpen = null;
+    page = id;
+    drawerOpen = false;
+  }
+  /** 侧边栏点了对话或“新对话”：切到「琴音」的聊天分页。 */
+  let chatRequest = $state(0);
+  /** 打开「琴音」的某个分页 / 分组（首页入口、聊天里“去看看”）；普通导航清掉它，回到聊天。 */
+  let assistantOpen = $state<{ section: "chat" | "identity" | "memory" | "skills" | "settings"; anchor?: string; n: number } | null>(null);
+  let openCount = 0;
+  function openCompanion(section: "chat" | "identity" | "memory" | "skills" | "settings", anchor?: string) {
+    navigate("assistant");
+    assistantOpen = { section, anchor, n: ++openCount };
+  }
+  /** 「琴音 → 设置」（原「交流」页的内容也在这里）。 */
+  function openCompanionSettings() {
+    openCompanion("settings", "companion-settings-call");
+  }
+  // 聊天里的“去看看”等：跳到设置说明里写的位置。
+  const unsubscribeNavigation = navigationRequest.subscribe((request) => {
+    if (!request) return;
+    navigationRequest.set(null);
+    const target = request.target;
+    if (target.page === "assistant") openCompanion(target.section, target.anchor);
+    else if (target.page === "advanced") openAdvanced(target.tab as AdvancedSection);
+    else navigate(target.page);
+  });
+  onDestroy(unsubscribeNavigation);
+  function openChat(prompt?: string) {
+    if (prompt) pendingPrompt.set(prompt);
+    navigate("assistant");
+    chatRequest++;
+  }
+
+  // 侧边栏的对话列表与聊天页共用一份状态。
+  const chat = provideAgentChat(new AgentChat());
+  onMount(() => {
+    void chat.init();
+    return () => chat.dispose();
+  });
+
+  // 外观（配色、明暗、缩放、字体）只作用于设置窗口：在这里挂上，卸载时还原。
+  // 在首次绘制前应用，避免先闪一下默认配色。
+  onDestroy(initializeAppearance());
 
   let page = $state<PageId>("general");
   let advancedSection = $state<AdvancedSection>("system");
@@ -85,6 +133,15 @@
   /** 模拟输入被系统拦截的排查引导弹窗（SendInput 0/N 时弹出；同一错误只弹一次） */
   let showBlockedDialog = $state(false);
   let blockedDismissedFor = $state<string | null>(null);
+  let overlayHealth = $state<OverlayHealth>({ degraded: false, reason: null });
+  let settingsReadRevision = 0;
+
+  async function refreshSettings() {
+    const revision = ++settingsReadRevision;
+    const settings = await getSettings();
+    if (revision === settingsReadRevision) settingsStore.set(settings);
+    return settings;
+  }
 
   $effect(() => {
     if ($appState.state === "error" && $appState.inputBlocked) {
@@ -104,11 +161,10 @@
     void initRuntime();
     try {
       const [s, startup, settingsWarning] = await Promise.all([
-        getSettings(),
+        refreshSettings(),
         getStartupOptions(),
         getSettingsLoadWarning(),
       ]);
-      settingsStore.set(s);
       if (settingsWarning) toastWarn(settingsWarning);
       showOnboarding =
         startup.onboarding === "always" ||
@@ -137,12 +193,42 @@
     }
   });
 
+  onMount(() => {
+    if (!isTauri) return;
+    let disposed = false;
+    let revision = 0;
+    let unlisten: (() => void) | undefined;
+    const applyHealth = (health: OverlayHealth) => {
+      const wasDegraded = overlayHealth.degraded;
+      overlayHealth = health;
+      if (health.degraded) {
+        void refreshSettings().catch(() => { /* 提示不依赖配置刷新成功。 */ });
+      } else if (wasDegraded) {
+        // 用户重新启用显示时，旧降级读取不能覆盖刚保存的设置。
+        settingsReadRevision++;
+      }
+    };
+    void (async () => {
+      const cleanup = await listen<OverlayHealth>("kotone://overlay-degraded", ({ payload }) => {
+        if (disposed) return;
+        revision++;
+        applyHealth(payload);
+      });
+      if (disposed) { cleanup(); return; }
+      unlisten = cleanup;
+      const snapshotRevision = revision;
+      const health = await getOverlayHealth();
+      if (!disposed && revision === snapshotRevision) applyHealth(health);
+    })().catch(() => { /* 健康状态不可用不影响设置和语音输入。 */ });
+    return () => { disposed = true; unlisten?.(); };
+  });
+
   // 单实例转发：应用已在托盘运行时，再执行
   // `kotone.exe --onboarding=always` 会唤起现有窗口并重新打开向导。
   onMount(() => {
     if (!isTauri) return;
     // 启动后静默检测一次更新（离线/无 release 不打扰用户）
-    const updateTimer = setTimeout(() => void checkForUpdates(), 3000);
+    const updateTimer = setTimeout(() => void checkForUpdates({ auto: true }), 3000);
     let unlisten: (() => void) | undefined;
     void listen("kotone://open-onboarding", () => (showOnboarding = true)).then(
       (un) => (unlisten = un),
@@ -151,6 +237,17 @@
       clearTimeout(updateTimer);
       unlisten?.();
     };
+  });
+
+  // Agent 经工具服务改了设置（settings.update / 连接 / 模型 / profile …）：
+  // 重新读取，打开着的设置页不显示过期值，也不会用旧值覆盖。
+  onMount(() => {
+    if (!isTauri) return;
+    let unlisten: (() => void) | undefined;
+    void listen("kotone://settings-changed", () => {
+      void refreshSettings().catch(() => { /* 下次打开设置页会重新读取 */ });
+    }).then((un) => (unlisten = un));
+    return () => unlisten?.();
   });
 
   // 独占全屏下后端会拦截浮窗显示，并发送持久到共享 store 的提示事件。
@@ -165,68 +262,34 @@
   });
 </script>
 
-<div class="flex h-full flex-col overflow-hidden bg-kotone-deep text-white">
-  <!-- 自绘标题栏（decorations:false）：拖拽区 + 运行状态 + 启动/停止 + 窗口控制 -->
-  <Titlebar onOpenAdvanced={() => openAdvanced("models")} />
+<svelte:window bind:innerWidth={viewportWidth} />
+<div class="flex h-full flex-col overflow-hidden bg-sidebar text-foreground" data-testid="app-frame">
+  <!-- 自绘标题栏（decorations:false）：侧边栏开关 + 运行状态 + 启动/停止 + 窗口控制 -->
+  <Titlebar onOpenAdvanced={() => openAdvanced("models")} onToggleSidebar={toggleSidebar}
+    brandWidth={narrow ? "auto" : rail ? "3.5rem" : "14.75rem"} />
   <div class="relative flex min-h-0 flex-1 overflow-hidden">
-  <!-- 窗口底纹理：switch 无缝 tile，极低透明度 -->
-  <div
-    class="pointer-events-none absolute inset-0 opacity-[0.04]"
-    style:background-image="url({patternSwitch})"
-    style:background-size="256px"
-  ></div>
-
-  <!-- 左侧导航（品牌位移交顶部操作面板，导航直接从「通用」开始） -->
-  <nav class="relative z-10 flex w-50 shrink-0 flex-col border-r border-white/8 bg-kotone-deep/60 px-3 py-4">
-    <div class="flex flex-col gap-1">
-      {#each navItems as item}
-        {@const active = page === item.id || (page === "character" && item.id === "about")}
-        <button
-          data-testid={`settings-nav-${item.id}`}
-          class="group relative flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition
-            {active
-            ? 'bg-kotone-cyan/12 text-kotone-cyan shadow-glow-cyan'
-            : 'text-white/60 hover:bg-white/8 hover:text-white/90 hover:shadow-[0_0_14px_rgba(0,229,255,0.15)]'}"
-          onclick={() => (page = item.id)}
-        >
-          <!-- 激活指示条 -->
-          <span
-            class="absolute top-1/2 left-0 h-5 w-[3px] -translate-y-1/2 rounded-full bg-kotone-cyan transition-opacity
-              {active ? 'opacity-100 shadow-glow-cyan' : 'opacity-0'}"
-          ></span>
-          <span class="inline-flex h-4.5 w-4.5 items-center justify-center" aria-hidden="true">
-            {#if item.icon === "home"}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M3 10.5 12 3l9 7.5M5 9.5V21h14V9.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            {:else if item.icon === "sparkles"}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="m12 3 1.2 3.8L17 8l-3.8 1.2L12 13l-1.2-3.8L7 8l3.8-1.2L12 3ZM18.5 14l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2ZM5 12l.8 2.2L8 15l-2.2.8L5 18l-.8-2.2L2 15l2.2-.8L5 12Z" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            {:else if item.icon === "sliders"}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" stroke-linecap="round"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
-            {:else if item.icon === "gamepad"}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M6 9h4M8 7v4M15 8h.01M18 10h.01M17.3 5H6.7a4.7 4.7 0 0 0-4.6 5.6l1 5.4A3 3 0 0 0 6 18.6c.8 0 1.6-.3 2.1-.9L9.5 16h5l1.4 1.7c.5.6 1.3.9 2.1.9a3 3 0 0 0 2.9-2.6l1-5.4A4.7 4.7 0 0 0 17.3 5Z" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            {:else if item.icon === "clock"}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            {:else if item.icon === "bell"}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            {:else}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01" stroke-linecap="round"/></svg>
-            {/if}
-          </span>
-          {item.label}
-        </button>
-      {/each}
+  {#if !narrow}
+    <AppSidebar {page} {rail} onNavigate={navigate} onOpenChat={openChat} />
+  {:else if drawerOpen}
+    <!-- 窄窗口：侧边栏作为抽屉盖在内容上 -->
+    <button type="button" class="absolute inset-0 z-40 bg-black/40" aria-label="关闭侧边栏" onclick={() => (drawerOpen = false)}></button>
+    <div class="absolute inset-y-0 left-0 z-50 shadow-2xl" data-testid="sidebar-drawer">
+      <AppSidebar {page} onNavigate={navigate} onOpenChat={openChat} />
     </div>
+  {/if}
 
-    <p class="mt-auto px-2 pt-4 text-[10px] leading-relaxed text-white/30">
-       反馈群：1092354484
-    </p>
-  </nav>
-
-  <!-- 右侧内容 -->
-  <main class="relative z-10 min-w-0 flex-1 overflow-y-auto" bind:this={mainEl}>
+  <!-- 内容区：比侧边栏亮一档的底色，左上圆角（参照 DeepSeek Harness 的 Windows 外框） -->
+  <main class="relative z-10 min-w-0 flex-1 overflow-y-auto border-t border-hairline bg-background [scrollbar-gutter:stable]
+    {narrow ? '' : 'rounded-tl-2xl border-l'}" bind:this={mainEl}>
+    {#if overlayHealth.degraded}
+      <p role="status" data-testid="overlay-degraded-notice" class="mx-8 mt-5 rounded-lg border border-amber-300/20 bg-amber-300/8 px-4 py-3 text-xs leading-relaxed text-amber-100/90">
+        悬浮窗显示异常，已自动关闭。语音输入仍可使用。
+      </p>
+    {/if}
     {#if loading}
-      <p class="px-8 py-10 text-sm text-white/50">加载配置中…</p>
+      <p class="px-8 py-10 text-sm text-muted-foreground">加载配置中…</p>
     {:else if page === "general"}
-      <GeneralPage onOpenAdvanced={() => openAdvanced("models")} />
+      <GeneralPage onOpenAdvanced={() => openAdvanced("models")} onOpenCompanion={openChat} onOpenTalk={openCompanionSettings} />
     {:else if page === "advanced"}
       <AdvancedPage
         section={advancedSection}
@@ -236,7 +299,9 @@
     {:else if page === "processing"}
       <TextProcessingPage onOpenConnections={() => openAdvanced("connections")} />
     {:else if page === "assistant"}
-      <AssistantPage onOpenConnections={() => openAdvanced("connections")} />
+      <AssistantPage {chatRequest} open={assistantOpen} onOpenConnections={() => openAdvanced("connections")} onOpenAutomation={() => (page = "automation")} />
+    {:else if page === "automation"}
+      <AutomationPage onOpenHotkeys={() => openAdvanced("hotkeys")} />
     {:else if page === "game"}
       <GamePage />
     {:else if page === "history"}
@@ -247,13 +312,13 @@
       <AboutPage onOpenCharacter={() => (page = "character")} />
     {/if}
 
-    <!-- 底部留白（反馈条已升级为右上角 toast，见 <Toasts />） -->
-    <div class="h-4"></div>
+    <!-- 底部留白（提示在右上角，见 Sonner） -->
+    {#if page !== "assistant"}<div class="h-4"></div>{/if}
   </main>
 
   <!-- 首启向导覆盖层（加载完成且未完成向导时弹出） -->
   {#if showOnboarding && !loading}
-    <Onboarding onDone={() => (showOnboarding = false)} />
+    <Onboarding onDone={(next, prompt) => { showOnboarding = false; if (next === "assistant") openChat(prompt); }} />
   {/if}
 
   <!-- 管理员提权提示 · 第一段（Windows 未提权且用户未表态时弹一次） -->
@@ -273,6 +338,6 @@
   </div>
 
   <!-- 右上角 toast 堆叠（fixed 定位，z 高于向导） -->
-  <Toasts />
+  <Sonner theme={$resolvedTheme} />
   <UpdateDialog />
 </div>

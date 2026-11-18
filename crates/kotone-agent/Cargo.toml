@@ -1,0 +1,21 @@
+[package]
+name = "kotone-agent"
+version = "0.1.0"
+edition = "2021"
+description = "Kotone 内置 Agent 的运行框架层：工具清单接入、分组与查找、权限规则与询问、已保存自动化作为工具（ADR 014 / 015）"
+
+# 依赖纪律：循环与模型在 kotone-ai；工具实现在 kotone-tools；本 crate 只做 Kotone 专属的编排，
+# 不依赖 Tauri 与 Windows API（桌面专属动作经 BuiltinHost / Asker 端口注入）。
+[dependencies]
+kotone-core.workspace = true
+kotone-ai.workspace = true
+kotone-tools.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile.workspace = true
+kotone-tools = { workspace = true, features = ["test-support"] }
+wiremock = "0.6"

@@ -53,6 +53,15 @@ pub trait SpeechOutput: Send + Sync {
     ) -> Result<(), String>;
     /// 取消当前及已经排队的播报。识别开始前调用，避免把播报录回麦克风。
     fn cancel(&self) -> Result<(), String>;
+    /// 先在后台合成并缓存、不播放（例如唤醒应答“嗯？/我在”，用时立刻出声）。
+    /// 不等结果；不缓存的引擎（系统语音本来就即时出声）什么也不做。
+    fn prefetch(&self, _request: SpeechRequest) {}
+    /// 只合成、不播放，返回声音数据（单声道 f32，采样率）。用于把一句话送进游戏语音
+    /// （ADR 020）；合成结果进缓存，紧接着 `speak` 同一句会立刻出声。系统语音直接出声、
+    /// 拿不到数据，返回错误。阻塞，从工作线程调用。
+    fn synthesize(&self, _request: SpeechRequest) -> Result<(Vec<f32>, u32), String> {
+        Err("当前的语音引擎（系统语音）不能送进游戏语音：请在「通用 → 语音」换成 DeepSeek、Kokoro 或在线语音".into())
+    }
 }
 
 #[cfg(test)]

@@ -1,8 +1,9 @@
 <script lang="ts">
   /*
-   * 通用页（方向 B 灵魂首屏）：欢迎面板 = 直播间背景 + Kotone 立绘 +
-   * 渐变标题 + 三个特性 chip；下方只保留日常高频设置。
+   * 通用页：琴音立绘横幅（启动按钮在这里）+ 日常高频设置（麦克风、热键、交互模式、悬浮窗、
+   * 声音与弹幕、外观）。版式参照 DeepSeek Harness 设置页：居中内容列、细边设置卡、行间分隔。
    */
+  import { companionName } from "$lib/stores/companion";
   import { onDestroy, onMount } from "svelte";
   import {
     updateSettings,
@@ -17,7 +18,12 @@
     type InteractionMode,
   } from "../../../lib/ipc";
   import { captureHotkey } from "../../../lib/hotkeyCapture";
-  import Select from "../../../lib/components/Select.svelte";
+  import SelectField from "../../../lib/components/settings/SelectField.svelte";
+  import ToggleField from "../../../lib/components/settings/ToggleField.svelte";
+  import SettingsPage from "../../../lib/components/settings/SettingsPage.svelte";
+  import SettingsSection from "../../../lib/components/settings/SettingsSection.svelte";
+  import SettingsRow from "../../../lib/components/settings/SettingsRow.svelte";
+  import { Button } from "$lib/components/ui/button";
   import { findHotkeyConflict } from "../../../lib/hotkeyCombo";
   import {
     settingsStore,
@@ -27,11 +33,17 @@
     errText,
   } from "../../../lib/stores/ui";
   import { runtimeStore } from "../../../lib/stores/runtime";
-  import Toggle from "../../../lib/components/Toggle.svelte";
   import RuntimeButton from "../../../lib/components/RuntimeButton.svelte";
+  import CallKotoneButton from "../../../lib/components/CallKotoneButton.svelte";
   import heroGeneral from "../../../assets/brand/hero-general.webp";
 
-  let { onOpenAdvanced }: { onOpenAdvanced: () => void } = $props();
+  let { onOpenAdvanced, onOpenCompanion, onOpenTalk }: {
+    onOpenAdvanced: () => void;
+    /** 「试试游戏陪玩」：打开琴音的聊天。 */
+    onOpenCompanion: () => void;
+    /** 「交流」：怎么在游戏里叫琴音。 */
+    onOpenTalk: () => void;
+  } = $props();
 
   let devices = $state<AudioDevice[]>([]);
   let elevation = $state<ElevationStatus | null>(null);
@@ -243,30 +255,24 @@
 
 </script>
 
-<div class="px-6 py-5">
-  <!-- 欢迎面板：ord-ui-hero-general 合成视觉（立绘+直播间一张图） -->
-  <section class="relative overflow-hidden rounded-[var(--radius-kotone-panel)] ring-1 ring-white/10">
-    <img src={heroGeneral} alt="Kotone 在中继站直播间挥手欢迎" class="absolute inset-0 h-full w-full object-cover" />
-    <!-- 左侧压暗渐变：保证标题与芯片可读 -->
-    <div class="absolute inset-0 bg-gradient-to-r from-kotone-deep/92 via-kotone-deep/55 to-transparent"></div>
-    <div class="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-kotone-deep/80 to-transparent"></div>
+<SettingsPage title="语音输入" description="在游戏里按住热键说话，转成文字发进聊天：麦克风、录音热键、交互方式、悬浮窗。" testid="general-page">
+  <!-- 欢迎横幅：琴音立绘（直播间合成图）+ 渐变标语 + 启动按钮 -->
+  <section class="relative overflow-hidden rounded-2xl border border-hairline bg-card" data-testid="general-hero">
+    <img src={heroGeneral} alt="Kotone 在中继站直播间挥手欢迎" class="absolute inset-0 h-full w-full object-cover object-[70%_28%]" />
+    <!-- 左侧压暗（深色 / 浅色都保证标题可读） -->
+    <div class="absolute inset-0 bg-gradient-to-r from-[#10101e]/95 via-[#10101e]/70 to-transparent"></div>
     <!-- 弹幕装饰层：游戏沟通短句从右向左飘过（reduced-motion 自动隐藏） -->
     <div class="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
       {#each danmakuLines as line}
-        <span
-          class="danmaku-item"
-          style:top="{line.top}%"
-          style:animation-duration="{line.duration}s"
-          style:animation-delay="{line.delay}s"
-        >{line.text}</span>
+        <span class="danmaku-item" style:top="{line.top}%" style:animation-duration="{line.duration}s" style:animation-delay="{line.delay}s">{line.text}</span>
       {/each}
     </div>
-    <div class="relative flex min-h-64 flex-col justify-between gap-8 px-6 py-6">
+    <div class="relative flex min-h-48 flex-col justify-between gap-5 px-6 py-5">
       <div>
-        <h1 class="text-[26px] leading-tight font-bold">
-          想说的话，<br /><span class="kotone-gradient-text">一秒都别等</span>
-        </h1>
-        <p class="mt-2 text-[12px] leading-relaxed text-white/70">
+        <h2 class="m-0 text-[22px] leading-tight font-bold text-[#fff]">
+          想说的话，<span class="kotone-gradient-text">一秒都别等</span>
+        </h2>
+        <p class="mt-2 mb-0 text-[13px] leading-relaxed text-[rgb(255_255_255/0.78)]">
           嗨，我是 Kotone！你的专属语音助手，<br />随时待命，陪你指挥每一场胜利！
         </p>
       </div>
@@ -274,245 +280,209 @@
     </div>
   </section>
 
-  {#if $settingsStore}
-    <!-- 麦克风 -->
-    <section class="kotone-panel mt-4 p-4">
-      <h2 class="text-sm font-semibold text-kotone-cyan/90">麦克风</h2>
-      <div class="mt-3">
-        <Select
-          size="md"
-          ariaLabel="麦克风"
-          value={$settingsStore.audioDeviceId}
-          options={devices.map((device) => ({ value: device.id, label: device.name }))}
-          onchange={async (id) => {
-            try {
-              await setAudioDevice(id);
-              settingsStore.update((s) => (s ? { ...s, audioDeviceId: id } : s));
-              toast(true, "麦克风已切换");
-            } catch (err) {
-              toast(false, `切换麦克风失败：${errText(err)}`);
-            }
-          }}
-        />
+  <!-- 游戏陪玩入口（ADR 023）：语音输入仍是首页，这里引导用户用琴音；启动后直接给“呼叫琴音”的快速入口 -->
+  <section class="rounded-2xl border border-primary/35 bg-primary/8 px-5 py-4" data-testid="companion-cta">
+    <div class="flex flex-wrap items-center gap-4">
+      <div class="min-w-0 flex-1">
+        <p class="m-0 text-[15px] font-semibold text-foreground">试试游戏陪玩：让{$companionName}陪你玩</p>
+        <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">
+          跟她说一句话，她能看游戏画面、帮你点鼠标按键、读队友聊天、替你用别的语言跟队友说话，还能帮你配置 Kotone。
+        </p>
       </div>
-    </section>
+      <div class="flex shrink-0 items-center gap-2">
+        <Button size="sm" variant="outline" data-testid="companion-cta-talk" onclick={onOpenTalk}>怎么叫她</Button>
+        <Button size="sm" data-testid="companion-cta-open" onclick={onOpenCompanion}>和{$companionName}聊聊</Button>
+      </div>
+    </div>
+    {#if $runtimeStore?.phase === "running"}
+      <div class="mt-4 border-t border-primary/20 pt-4"><CallKotoneButton size="lg" testid="home-call" /></div>
+    {/if}
+  </section>
 
+  {#if $settingsStore}
     {#if needsElevation}
-      <section class="mt-4 flex items-center gap-3 rounded-xl bg-kotone-pink/12 p-4 ring-1 ring-kotone-pink/45">
+      <section class="flex flex-wrap items-center gap-3 rounded-2xl border border-brand-pink/45 bg-brand-pink/8 px-4 py-3.5">
         <div class="min-w-0 flex-1">
-          <p class="text-sm font-semibold text-kotone-pink">当前游戏需要更高权限才能接收文字</p>
-          <p class="mt-1 text-[11px] text-white/55">重新启动琴音后即可继续，其他设置不会丢失。</p>
+          <p class="m-0 text-[13px] font-semibold text-brand-pink">当前游戏需要更高权限才能接收文字</p>
+          <p class="mt-1 mb-0 text-xs text-muted-foreground">重新启动 Kotone 后即可继续，其他设置不会丢失。</p>
         </div>
-        <button
-          class="shrink-0 rounded-lg bg-kotone-pink px-3 py-2 text-xs font-semibold text-white transition hover:brightness-110 disabled:opacity-50"
-          disabled={restarting}
-          onclick={() => void onRestartAsAdmin()}
-        >
+        <Button size="sm" class="bg-brand-pink text-[#fff] hover:bg-brand-pink/90" disabled={restarting} onclick={() => void onRestartAsAdmin()}>
           {restarting ? "正在重启…" : "重新启动"}
-        </button>
+        </Button>
       </section>
     {/if}
 
     {#if $fullscreenWarningStore}
-      <section class="mt-4 flex items-center gap-3 rounded-xl bg-amber-400/10 p-4 ring-1 ring-amber-300/40">
+      <section class="flex flex-wrap items-center gap-3 rounded-2xl border border-warning/45 bg-warning/8 px-4 py-3.5">
         <div class="min-w-0 flex-1">
-          <p class="text-sm font-semibold text-amber-200">检测到游戏正在使用全屏模式</p>
-          <p class="mt-1 text-[11px] leading-relaxed text-white/55">
+          <p class="m-0 text-[13px] font-semibold text-warning">检测到游戏正在使用全屏模式</p>
+          <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">
             全屏模式下唤起悬浮窗可能导致游戏最小化。请在游戏的视频设置中切换为无边框或窗口模式。
           </p>
         </div>
-        <button
-          class="shrink-0 rounded-lg bg-white/10 px-3 py-2 text-xs font-semibold text-white/75 ring-1 ring-white/15 transition hover:bg-white/20"
-          onclick={() => fullscreenWarningStore.set(false)}
-        >
-          知道了
-        </button>
+        <Button size="sm" variant="outline" onclick={() => fullscreenWarningStore.set(false)}>知道了</Button>
       </section>
     {/if}
 
-    <!-- 热键 -->
-    <section class="kotone-panel mt-4 p-4">
-      <h2 class="text-sm font-semibold text-kotone-cyan/90">热键</h2>
-      <div class="mt-3 flex items-center gap-2">
-        <input
-          id="hotkey-input"
-          bind:value={hotkeyDraft}
-          disabled={capturing}
-          class="w-32 rounded-lg bg-white/8 px-2.5 py-1.5 text-sm ring-1 ring-white/15 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/60 disabled:opacity-50"
-          placeholder="如 CapsLock / Alt+V"
-          spellcheck="false"
-        />
-        <button
-          class="rounded-lg px-3 py-1.5 text-xs font-semibold ring-1 transition active:scale-95 disabled:opacity-70 {capturing
-            ? 'animate-pulse bg-kotone-violet/25 text-kotone-violet ring-kotone-violet/60'
-            : 'bg-white/10 text-white/85 ring-white/15 hover:bg-white/20'}"
-          disabled={capturing}
-          onclick={() => void startCapture()}
-        >
-          {capturing ? "请按下键盘组合或鼠标侧键…（Esc 取消）" : "点击录入"}
-        </button>
-        <button
-          class="rounded-lg bg-kotone-cyan px-3 py-1.5 text-xs font-semibold text-kotone-deep transition hover:shadow-glow-cyan hover:brightness-110 active:scale-95 disabled:opacity-50"
-          disabled={capturing}
-          onclick={() => void saveHotkey()}
-        >
-          保存并生效
-        </button>
-        <span class="text-[11px] text-white/40">当前：{$settingsStore?.hotkey.key ?? "…"}</span>
-      </div>
-      <p class="mt-2 text-[11px] text-white/40">
-        支持键盘组合以及鼠标侧键 Mouse4 / Mouse5；鼠标侧键会自动使用低层键鼠钩子。
-      </p>
-      {#if hotkeyStatus?.error}
-        <div class="mt-3 rounded-lg bg-kotone-pink/15 p-2.5 ring-1 ring-kotone-pink/50">
-          <p class="text-xs font-medium text-kotone-pink">
-            热键注册失败，可能被其他程序或其他 Kotone 实例占用
-          </p>
-          <p class="mt-0.5 text-[11px] break-all text-white/50">{hotkeyStatus.error}</p>
-          <button
-            class="mt-2 rounded-lg bg-kotone-pink/80 px-2.5 py-1 text-xs font-semibold text-white transition hover:brightness-110 active:scale-95"
-            onclick={() => void saveHotkey()}
-          >
-            重新注册
-          </button>
-        </div>
-      {/if}
-    </section>
+    <SettingsSection title="输入">
+      <SettingsRow label="麦克风" description="说话用的输入设备。">
+        {#snippet control()}
+          <div class="w-72 max-w-full">
+            <SelectField
+              size="md"
+              ariaLabel="麦克风"
+              value={$settingsStore.audioDeviceId}
+              options={devices.map((device) => ({ value: device.id, label: device.name }))}
+              onchange={async (id) => {
+                try {
+                  await setAudioDevice(id);
+                  settingsStore.update((s) => (s ? { ...s, audioDeviceId: id } : s));
+                  toast(true, "麦克风已切换");
+                } catch (err) {
+                  toast(false, `切换麦克风失败：${errText(err)}`);
+                }
+              }}
+            />
+          </div>
+        {/snippet}
+      </SettingsRow>
+      <SettingsRow label="录制热键" description="支持键盘组合以及鼠标侧键 Mouse4 / Mouse5；鼠标侧键会自动使用低层键鼠钩子。" stacked for="hotkey-input">
+        {#snippet control()}
+          <div class="flex flex-wrap items-center gap-2">
+            <input
+              id="hotkey-input"
+              bind:value={hotkeyDraft}
+              disabled={capturing}
+              class="h-8 w-36 rounded-lg border border-input bg-background/60 px-2.5 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:ring-3 focus:ring-ring/30 disabled:opacity-50"
+              placeholder="如 CapsLock / Alt+V"
+              spellcheck="false"
+            />
+            <Button size="sm" variant="outline" class={capturing ? "animate-pulse border-primary/60 text-primary" : ""} disabled={capturing} onclick={() => void startCapture()}>
+              {capturing ? "请按下键盘组合或鼠标侧键…（Esc 取消）" : "点击录入"}
+            </Button>
+            <Button size="sm" disabled={capturing} onclick={() => void saveHotkey()}>保存并生效</Button>
+            <span class="text-xs text-muted-foreground">当前：{$settingsStore?.hotkey.key ?? "…"}</span>
+          </div>
+          {#if hotkeyStatus?.error}
+            <div class="mt-3 rounded-xl border border-destructive/40 bg-destructive/8 p-3">
+              <p class="m-0 text-xs font-medium text-destructive">热键注册失败，可能被其他程序或其他 Kotone 实例占用</p>
+              <p class="mt-0.5 mb-0 text-[11px] break-all text-muted-foreground">{hotkeyStatus.error}</p>
+              <Button size="xs" variant="destructive" class="mt-2" onclick={() => void saveHotkey()}>重新注册</Button>
+            </div>
+          {/if}
+        {/snippet}
+      </SettingsRow>
+    </SettingsSection>
 
-    <!-- 交互模式（ADR-006 四预设，lucide 风格图标） -->
-    <section class="kotone-panel mt-4 p-4">
-      <h2 class="text-sm font-semibold text-kotone-cyan/90">交互模式</h2>
-      <div class="mt-3 flex gap-2">
-        {#each modes as m}
-          {@const active = currentMode === m.id}
-          <button
-            class="flex-1 rounded-[var(--radius-kotone-card)] px-3 py-3 text-left ring-1 transition
-              {active
-              ? 'bg-kotone-cyan/12 ring-kotone-cyan/60 shadow-glow-cyan'
-              : 'bg-kotone-card/60 ring-white/10 hover:bg-kotone-card'}"
-            onclick={() => void onModeSelect(m.id)}
-          >
-            <span
-              class="inline-flex h-5 w-5 items-center justify-center {active ? 'text-kotone-cyan' : 'text-white/60'}"
-              aria-hidden="true"
+    <!-- 交互模式（ADR-006 四预设） -->
+    <SettingsSection title="交互模式" description="按热键之后怎么录、什么时候发。">
+      <div class="py-3.5">
+        <div class="grid grid-cols-2 gap-2 lg:grid-cols-4" role="group" aria-label="交互模式">
+          {#each modes as m}
+            {@const active = currentMode === m.id}
+            <button
+              aria-pressed={active}
+              class="rounded-xl border px-3 py-3 text-left transition-colors {active
+                ? 'border-primary/60 bg-primary/10'
+                : 'border-hairline bg-background/40 hover:bg-muted/60'}"
+              onclick={() => void onModeSelect(m.id)}
             >
-              {#if m.id === "push-to-talk"}
-                <!-- lucide: mic -->
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4.5 w-4.5"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
-              {:else if m.id === "dictation"}
-                <!-- lucide: circle-dot（录音） -->
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4.5 w-4.5"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>
-              {:else if m.id === "one-shot"}
-                <!-- lucide: rocket -->
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4.5 w-4.5"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
-              {:else}
-                <!-- lucide: music（独奏） -->
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4.5 w-4.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-              {/if}
-            </span>
-            <p class="mt-1 text-sm font-semibold {active ? 'text-kotone-cyan' : ''}">{m.name}</p>
-            <p class="mt-0.5 text-[11px] text-white/50">{m.desc}</p>
-          </button>
-        {/each}
+              <span class="inline-flex size-5 items-center justify-center {active ? 'text-primary' : 'text-muted-foreground'}" aria-hidden="true">
+                {#if m.id === "push-to-talk"}
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+                {:else if m.id === "dictation"}
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>
+                {:else if m.id === "one-shot"}
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
+                {:else}
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                {/if}
+              </span>
+              <p class="mt-1 mb-0 text-[13px] font-semibold {active ? 'text-primary' : 'text-foreground'}">{m.name}</p>
+              <p class="mt-0.5 mb-0 text-[11px] text-muted-foreground">{m.desc}</p>
+            </button>
+          {/each}
+        </div>
+        {#if currentMode === null}
+          <p class="mt-2 mb-0 text-[11px] text-muted-foreground">
+            当前为兼容模式（由热键触发方式 + 发送行为旧字段推导）；点选上方卡片即切换为预设模式。
+          </p>
+        {/if}
       </div>
-      {#if currentMode === null}
-        <p class="mt-2 text-[11px] text-white/40">
-          当前为兼容模式（由热键触发方式 + 发送行为旧字段推导）；点选上方卡片即切换为预设模式。
-        </p>
-      {/if}
-
       {#if currentMode === "one-shot" || currentMode === "solo"}
         <!-- one-shot / solo 专属：VAD 静音判停时长（solo 按该阈值切分每一句） -->
-        <div class="mt-4 rounded-lg bg-white/5 p-3 ring-1 ring-white/10">
-          <div class="flex items-center justify-between">
-            <label class="text-xs text-white/70" for="vad-slider">静音判停时长</label>
-            <span class="rounded bg-kotone-cyan/15 px-2 py-0.5 text-xs font-semibold text-kotone-cyan">
-              {vadMs} ms
-            </span>
-          </div>
-          <input
-            id="vad-slider"
-            type="range"
-            min="200"
-            max="5000"
-            step="100"
-            value={vadMs}
-            onchange={(e) => void onVadChange(e)}
-            class="mt-2 w-full accent-kotone-cyan"
-          />
-          <p class="mt-1 text-[11px] text-white/40">
-            {#if currentMode === "solo"}
-              每句之间静音超过该时长即切分并发送，随后继续监听下一句（200–5000ms，需要 VAD 模型就绪）。
-            {:else}
-              说完话后静音超过该时长即自动结束并发送（200–5000ms，需要 VAD 模型就绪）。
-            {/if}
-          </p>
-        </div>
+        <SettingsRow label="静音判停时长" for="vad-slider" stacked
+          description={currentMode === "solo"
+            ? "每句之间静音超过该时长即切分并发送，随后继续监听下一句（200–5000ms，需要 VAD 模型就绪）。"
+            : "说完话后静音超过该时长即自动结束并发送（200–5000ms，需要 VAD 模型就绪）。"}>
+          {#snippet control()}
+            <div class="flex items-center gap-3">
+              <input id="vad-slider" type="range" min="200" max="5000" step="100" value={vadMs}
+                onchange={(e) => void onVadChange(e)} class="w-full accent-[var(--color-primary)]" />
+              <span class="shrink-0 rounded-md bg-primary/12 px-2 py-0.5 text-xs font-semibold text-primary tabular-nums">{vadMs} ms</span>
+            </div>
+          {/snippet}
+        </SettingsRow>
       {/if}
-    </section>
+    </SettingsSection>
 
     <!-- 悬浮窗：普通用户只需要决定何时出现、放在哪里、是否穿透。 -->
-    <section class="kotone-panel mt-4 p-4">
-      <h2 class="text-sm font-semibold text-kotone-cyan/90">悬浮窗</h2>
-      <p class="mt-2 text-[10px] font-semibold tracking-wide text-white/40">什么时候出现</p>
-      <div class="mt-1.5 grid grid-cols-3 gap-2">
-        {#each [
-          { id: "on_demand", name: "用时浮现", desc: "平时隐藏，说话时出现，发完自动隐藏" },
-          { id: "always", name: "常驻", desc: "启动即显示，停止才隐藏" },
-          { id: "never", name: "不显示", desc: "完全隐藏悬浮窗，全凭感觉操作" },
-        ] as const as opt}
-          {@const selected = ($settingsStore.overlay?.visibility ?? "on_demand") === opt.id}
-          <button
-            class="rounded-[var(--radius-kotone-card)] px-3 py-2.5 text-left ring-1 transition
-              {selected
-              ? 'bg-kotone-cyan/12 ring-kotone-cyan/60 shadow-glow-cyan'
-              : 'bg-kotone-card/60 ring-white/10 hover:bg-kotone-card'}"
-            onclick={() =>
-              void patchSettings(
-                { overlay: { visibility: opt.id } },
-                `悬浮窗已切换：${opt.name}`,
-              )}
-          >
-            <p class="text-sm font-semibold {selected ? 'text-kotone-cyan' : ''}">{opt.name}</p>
-            <p class="mt-0.5 text-[11px] text-white/50">{opt.desc}</p>
-          </button>
-        {/each}
-      </div>
-
-      <p class="mt-4 text-[10px] font-semibold tracking-wide text-white/40">固定位置</p>
-      <div class="mt-1.5 grid grid-cols-4 gap-2">
-        {#each [
-          { id: "auto", name: "智能" },
-          { id: "top_left", name: "左上" },
-          { id: "top_center", name: "顶部" },
-          { id: "top_right", name: "右上" },
-          { id: "center", name: "中央" },
-          { id: "bottom_left", name: "左下" },
-          { id: "bottom_center", name: "底部" },
-          { id: "bottom_right", name: "右下" },
-        ] as const as opt}
-          {@const selected = ($settingsStore.overlay.position ?? "auto") === opt.id}
-          <button
-            class="rounded-lg px-2 py-2 text-center text-xs font-semibold ring-1 transition
-              {selected
-              ? 'bg-kotone-cyan/12 text-kotone-cyan ring-kotone-cyan/60'
-              : 'bg-white/5 text-white/60 ring-white/10 hover:bg-white/10'}"
-            onclick={() =>
-              void patchSettings(
-                { overlay: { position: opt.id } },
-                `悬浮窗位置已切换：${opt.name}`,
-              )}
-          >
-            {opt.name}
-          </button>
-        {/each}
-      </div>
-      {#if $settingsStore.overlay.position === "custom"}
-        <p class="mt-2 text-[11px] text-kotone-cyan/75">当前使用你上次拖动后的位置。</p>
-      {/if}
-
-      <div class="mt-4 flex flex-col gap-4 rounded-lg bg-white/4 p-3 ring-1 ring-white/8">
-        <Toggle
+    <SettingsSection title="悬浮窗" description="说话时在游戏里显示识别进度的小窗。">
+      <SettingsRow label="什么时候出现" stacked>
+        {#snippet control()}
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {#each [
+              { id: "on_demand", name: "用时浮现", desc: "平时隐藏，说话时出现，发完自动隐藏" },
+              { id: "always", name: "常驻", desc: "启动即显示，停止才隐藏" },
+              { id: "never", name: "不显示", desc: "关闭悬浮窗，热键和语音输入照常" },
+            ] as const as opt}
+              {@const selected = ($settingsStore.overlay?.visibility ?? "on_demand") === opt.id}
+              <button
+                aria-pressed={selected}
+                class="rounded-xl border px-3 py-2.5 text-left transition-colors {selected
+                  ? 'border-primary/60 bg-primary/10'
+                  : 'border-hairline bg-background/40 hover:bg-muted/60'}"
+                onclick={() => void patchSettings({ overlay: { visibility: opt.id } }, `悬浮窗已切换：${opt.name}`)}
+              >
+                <p class="m-0 text-[13px] font-semibold {selected ? 'text-primary' : 'text-foreground'}">{opt.name}</p>
+                <p class="mt-0.5 mb-0 text-[11px] text-muted-foreground">{opt.desc}</p>
+              </button>
+            {/each}
+          </div>
+        {/snippet}
+      </SettingsRow>
+      <SettingsRow label="固定位置" stacked>
+        {#snippet control()}
+          <div class="grid grid-cols-4 gap-2" role="group" aria-label="悬浮窗位置">
+            {#each [
+              { id: "auto", name: "智能" },
+              { id: "top_left", name: "左上" },
+              { id: "top_center", name: "顶部" },
+              { id: "top_right", name: "右上" },
+              { id: "center", name: "中央" },
+              { id: "bottom_left", name: "左下" },
+              { id: "bottom_center", name: "底部" },
+              { id: "bottom_right", name: "右下" },
+            ] as const as opt}
+              {@const selected = ($settingsStore.overlay.position ?? "auto") === opt.id}
+              <button
+                aria-pressed={selected}
+                class="h-8 rounded-lg border text-center text-xs font-medium transition-colors {selected
+                  ? 'border-primary/60 bg-primary/10 text-primary'
+                  : 'border-hairline bg-background/40 text-muted-foreground hover:bg-muted/60 hover:text-foreground'}"
+                onclick={() => void patchSettings({ overlay: { position: opt.id } }, `悬浮窗位置已切换：${opt.name}`)}
+              >
+                {opt.name}
+              </button>
+            {/each}
+          </div>
+          {#if $settingsStore.overlay.position === "custom"}
+            <p class="mt-2 mb-0 text-[11px] text-primary">当前使用你上次拖动后的位置。</p>
+          {/if}
+        {/snippet}
+      </SettingsRow>
+      <div class="py-3.5">
+        <ToggleField
           checked={!$settingsStore.overlay.clickThrough}
           label="允许鼠标操作和拖动悬浮窗"
           desc="开启时可拖动并操作按钮；关闭后自动锁定位置，鼠标会穿透到游戏"
@@ -523,14 +493,11 @@
             )}
         />
       </div>
-    </section>
+    </SettingsSection>
 
-
-
-
-
+    <!-- 声音与弹幕：提醒、陪玩回答与自动化共用的输出（ADR 013 §8） -->
   {/if}
-</div>
+</SettingsPage>
 
 <style>
   /* hero 弹幕：从右缘外匀速漂到左缘外，无限循环；透明度克制不抢主体 */

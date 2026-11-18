@@ -24,6 +24,11 @@ import type {
   GameProfile,
   ModelInfo,
   ModelInstallGuide,
+  CatalogModel,
+  CatalogDeleteOutcome,
+  ModelCategory,
+  CompanionCheck,
+  CompanionStatus,
   HistoryRecord,
   HotwordMergeReport,
   ElevationStatus,
@@ -32,6 +37,8 @@ import type {
   ResourceUsage,
   DiagnosticExportResult,
   DiagnosticWindow,
+  OverlayHealth,
+  OverlayStateSnapshot,
 } from "./contracts";
 import { defaultPostProcessing, modelsDirPathError } from "./contracts";
 
@@ -71,6 +78,7 @@ const mock: MockStore = {
     togglePostProcessingHotkey: "",
     cyclePostProcessingHotkey: "",
     runtimeToggleHotkey: "",
+    automationStopHotkey: "Ctrl+Shift+F12",
     interactionMode: "push-to-talk",
     vadSilenceMs: 700,
     vad: { threshold: 0.5, minSpeechMs: 50, minSilenceMs: 50 },
@@ -78,7 +86,7 @@ const mock: MockStore = {
     postProcessing: defaultPostProcessing(),
     connections: [],
     history: { mode: "capped", maxRecords: 1000, includeAudio: false, dir: "" },
-    ui: { firstRunCompleted: true, autoStart: false },
+    ui: { firstRunCompleted: true, autoStart: false, updatePromptDisabled: false },
     models: { dir: "" },
     download: { source: "auto", ghProxy: "https://ghfast.top/" },
     overlay: {
@@ -93,7 +101,12 @@ const mock: MockStore = {
       send: { enabled: true, volume: 60, soundId: "fall" },
     },
     diagnostics: { recording: true },
-    assistant: { hotkey: "", interactionMode: "push-to-talk", connectionId: "", defaultDelivery: ["voice", "danmaku"], voiceId: "", speechEngine: "system", kokoroVoiceId: "kokoro:zf_001", speechVolume: 80, speechRate: 0, danmakuDurationMs: 8000, danmakuSpeedPxPerSec: 160, danmakuFontSize: 32, danmakuTopOffsetPx: 120, danmakuColor: "#FFFFFF", danmakuEmote: "none" },
+    assistant: { hotkey: "Backquote", callHotkeyDefaulted: true, interactionMode: "push-to-talk", connectionId: "", defaultDelivery: ["voice", "danmaku"], voiceId: "", speechEngine: "system", kokoroVoiceId: "kokoro:zf_001", speechVolume: 80, speechRate: 0, danmakuDurationMs: 8000, danmakuSpeedPxPerSec: 160, danmakuFontSize: 32, danmakuTopOffsetPx: 120, danmakuColor: "#FFFFFF", danmakuEmote: "none", route: "reminders", companion: { quickMessages: [], autoSend: true }, ttsModelId: "", wake: { enabled: false, phrase: "qinyin-qinyin", sensitivity: "normal", ack: "voice", noSpeechTimeoutMs: 5000 }, bubble: { enabled: true, corner: "bottom-right", offsetY: 0, alsoDanmaku: false } },
+    toolService: { enabled: false },
+    ocr: { activeModelId: "" },
+    search: { activeModelId: "" },
+    voiceChat: { enabled: false, includeMic: true, micDeviceId: "default", micGain: 100 },
+    agent: { permissions: { mode: "default", rules: {} }, hiddenAutomations: [], inGame: true, progressSpeech: true, identity: { name: "", avatar: "" }, subagents: { model: "" }, compactAtTokens: 64000, roleId: "kotone", matchRecap: true, safetyCheck: true, gameEffort: "", chatEffort: "" },
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },
@@ -158,6 +171,8 @@ const mock: MockStore = {
       preferClipboardPaste: false,
       icon: "lol-kotone.webp",
       hotwords: ["闪现", "大龙", "gank", "打野", "推塔", "回城"],
+      allowAutomationInput: true,
+      launchPath: "C:\\Riot Games\\Riot Client\\RiotClientServices.exe",
       channels: [
         { id: "team", displayName: "队伍", default: true },
         { id: "all", displayName: "所有人", openChatKey: "Shift+Enter" },
@@ -384,6 +399,14 @@ export async function getSettings(): Promise<Settings> {
   return clone(mock.settings);
 }
 
+export async function getOverlayHealth(): Promise<OverlayHealth> {
+  return { degraded: false, reason: null };
+}
+
+export async function getOverlayState(): Promise<OverlayStateSnapshot | null> {
+  return null;
+}
+
 export async function listPostProcessors(): Promise<PostProcessorInfo[]> {
   return [
     {
@@ -469,21 +492,37 @@ export async function listPostProcessors(): Promise<PostProcessorInfo[]> {
   ];
 }
 
+// 浏览器预览：与后端 kotone-core connection::CONNECTION_PRESETS 同一份数据（29 家，按分组排列）。
 const mockConnectionPresets: ConnectionPreset[] = [
-  {
-    id: "dashscope",
-    displayName: "通义千问（北京）",
-    defaultBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    defaultModel: "qwen3-30b-a3b-instruct-2507",
-    apiKeyUrl: "https://bailian.console.aliyun.com/?apiKey=1#/api-key",
-  },
-  {
-    id: "custom",
-    displayName: "自定义 OpenAI 兼容",
-    defaultBaseUrl: "",
-    defaultModel: "",
-    apiKeyUrl: null,
-  },
+  {id: "deepseek", displayName: "DeepSeek", group: "recommended", description: "深度求索官方接口，工具调用稳定，支持看图（V4.1 Flash）", defaultBaseUrl: "https://api.deepseek.com/v1", defaultModel: "deepseek-flash", models: ["deepseek-flash", "deepseek-v4-pro"], apiKeyUrl: "https://platform.deepseek.com/api_keys"},
+  {id: "dashscope", displayName: "通义千问（北京）", group: "recommended", description: "阿里云百炼，国内访问快", defaultBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", defaultModel: "qwen-plus", models: ["qwen-plus", "qwen-max", "qwen-flash"], apiKeyUrl: "https://bailian.console.aliyun.com/?apiKey=1#/api-key"},
+  {id: "moonshot-cn", displayName: "月之暗面 Kimi（国内）", group: "recommended", description: "Kimi 开放平台，长上下文，支持看图", defaultBaseUrl: "https://api.moonshot.cn/v1", defaultModel: "kimi-k3", models: ["kimi-k3", "kimi-k2.6", "kimi-k2.7-code"], apiKeyUrl: "https://platform.moonshot.cn/console/api-keys"},
+  {id: "zhipu", displayName: "智谱 GLM（国内）", group: "recommended", description: "智谱开放平台按量计费接口", defaultBaseUrl: "https://open.bigmodel.cn/api/paas/v4", defaultModel: "glm-5.3", models: ["glm-5.3", "glm-5.3-flash", "glm-5.2"], apiKeyUrl: "https://open.bigmodel.cn/usercenter/apikeys"},
+  {id: "minimax-cn", displayName: "MiniMax（国内）", group: "china", description: "MiniMax 开放平台（OpenAI 兼容接口）", defaultBaseUrl: "https://api.minimaxi.com/v1", defaultModel: "MiniMax-M3", models: ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"], apiKeyUrl: "https://platform.minimaxi.com/user-center/basic-information/interface-key"},
+  {id: "xiaomi", displayName: "小米 MiMo", group: "china", description: "小米 MiMo 开放平台", defaultBaseUrl: "https://api.xiaomimimo.com/v1", defaultModel: "mimo-v2.6-pro", models: ["mimo-v2.6-pro", "mimo-v2.6-flash", "mimo-v2.5"], apiKeyUrl: null},
+  {id: "zhipu-coding", displayName: "智谱 GLM Coding Plan", group: "china", description: "智谱编程套餐专用接口（需订阅套餐）", defaultBaseUrl: "https://open.bigmodel.cn/api/coding/paas/v4", defaultModel: "glm-5.3", models: ["glm-5.3", "glm-5.3-flash", "glm-4.6v"], apiKeyUrl: "https://open.bigmodel.cn/usercenter/apikeys"},
+  {id: "kimi-coding", displayName: "Kimi For Coding", group: "china", description: "Kimi 编程套餐专用接口（需订阅套餐）", defaultBaseUrl: "https://api.kimi.com/coding/v1", defaultModel: "kimi-for-coding", models: ["kimi-for-coding", "k3"], apiKeyUrl: null},
+  {id: "qwen-token-plan-cn", displayName: "百炼 Token Plan（国内）", group: "china", description: "阿里云百炼 Token Plan 套餐接口，可用多家模型", defaultBaseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", defaultModel: "deepseek-v4.1-flash", models: ["deepseek-v4.1-flash", "glm-5.3", "kimi-k2.6", "deepseek-v4-pro"], apiKeyUrl: "https://bailian.console.aliyun.com/?apiKey=1#/api-key"},
+  {id: "ant-ling", displayName: "蚂蚁百灵 Ling", group: "china", description: "蚂蚁百灵大模型", defaultBaseUrl: "https://api.ant-ling.com/v1", defaultModel: "Ling-2.6-1T", models: ["Ling-2.6-1T", "Ring-2.6-1T", "Ling-2.6-flash"], apiKeyUrl: null},
+  {id: "openai", displayName: "OpenAI", group: "global", description: "OpenAI 官方接口", defaultBaseUrl: "https://api.openai.com/v1", defaultModel: "gpt-5", models: ["gpt-5", "gpt-5-mini", "gpt-4.1"], apiKeyUrl: "https://platform.openai.com/api-keys"},
+  {id: "anthropic", displayName: "Anthropic Claude", group: "global", description: "Claude（经 Anthropic 的 OpenAI 兼容接口）", defaultBaseUrl: "https://api.anthropic.com/v1", defaultModel: "claude-sonnet-4-5", models: ["claude-sonnet-4-5", "claude-opus-5-5", "claude-haiku-5-5"], apiKeyUrl: "https://console.anthropic.com/settings/keys"},
+  {id: "gemini", displayName: "Google Gemini", group: "global", description: "Gemini（经 Google 的 OpenAI 兼容接口）", defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/", defaultModel: "gemini-3.5-flash", models: ["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-2.5-pro"], apiKeyUrl: "https://aistudio.google.com/apikey"},
+  {id: "xai", displayName: "xAI Grok", group: "global", description: "xAI 官方接口", defaultBaseUrl: "https://api.x.ai/v1", defaultModel: "grok-4.7", models: ["grok-4.7", "grok-4.6", "grok-4.3"], apiKeyUrl: "https://console.x.ai/"},
+  {id: "moonshot", displayName: "Kimi（国际）", group: "global", description: "Moonshot AI 国际站", defaultBaseUrl: "https://api.moonshot.ai/v1", defaultModel: "kimi-k3", models: ["kimi-k3", "kimi-k2.6", "kimi-k2.7-code"], apiKeyUrl: "https://platform.moonshot.ai/console/api-keys"},
+  {id: "zai", displayName: "Z.AI GLM（国际）", group: "global", description: "智谱国际站按量计费接口", defaultBaseUrl: "https://api.z.ai/api/paas/v4", defaultModel: "glm-5.3", models: ["glm-5.3", "glm-5.3-flash", "glm-5.2"], apiKeyUrl: "https://z.ai/manage-apikey/apikey-list"},
+  {id: "minimax", displayName: "MiniMax（国际）", group: "global", description: "MiniMax 国际站（OpenAI 兼容接口）", defaultBaseUrl: "https://api.minimax.io/v1", defaultModel: "MiniMax-M3", models: ["MiniMax-M3", "MiniMax-M2.7"], apiKeyUrl: null},
+  {id: "dashscope-intl", displayName: "通义千问（国际）", group: "global", description: "阿里云 Model Studio 国际站", defaultBaseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", defaultModel: "qwen-plus", models: ["qwen-plus", "qwen-max", "qwen-flash"], apiKeyUrl: "https://modelstudio.console.alibabacloud.com/?tab=dashboard#/api-key"},
+  {id: "mistral", displayName: "Mistral", group: "global", description: "Mistral 官方接口", defaultBaseUrl: "https://api.mistral.ai/v1", defaultModel: "mistral-medium-latest", models: ["mistral-medium-latest", "magistral-medium-latest", "ministral-14b-2512"], apiKeyUrl: "https://console.mistral.ai/api-keys"},
+  {id: "groq", displayName: "Groq", group: "global", description: "Groq 高速推理", defaultBaseUrl: "https://api.groq.com/openai/v1", defaultModel: "openai/gpt-oss-120b", models: ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "llama-3.3-70b-versatile"], apiKeyUrl: "https://console.groq.com/keys"},
+  {id: "cerebras", displayName: "Cerebras", group: "global", description: "Cerebras 高速推理", defaultBaseUrl: "https://api.cerebras.ai/v1", defaultModel: "gpt-oss-120b", models: ["gpt-oss-120b", "qwen-3.8-27b"], apiKeyUrl: "https://cloud.cerebras.ai/"},
+  {id: "openrouter", displayName: "OpenRouter", group: "aggregator", description: "一个密钥用多家模型", defaultBaseUrl: "https://openrouter.ai/api/v1", defaultModel: "anthropic/claude-sonnet-4.5", models: ["anthropic/claude-sonnet-4.5", "anthropic/claude-opus-5.5", "anthropic/claude-haiku-5.5"], apiKeyUrl: "https://openrouter.ai/keys"},
+  {id: "together", displayName: "Together AI", group: "aggregator", description: "开源模型推理平台", defaultBaseUrl: "https://api.together.ai/v1", defaultModel: "deepseek-ai/DeepSeek-V4.1-Flash", models: ["deepseek-ai/DeepSeek-V4.1-Flash", "moonshotai/Kimi-K3", "MiniMaxAI/MiniMax-M3", "Qwen/Qwen3.6-Plus"], apiKeyUrl: "https://api.together.ai/settings/api-keys"},
+  {id: "fireworks", displayName: "Fireworks AI", group: "aggregator", description: "开源模型推理平台", defaultBaseUrl: "https://api.fireworks.ai/inference/v1", defaultModel: "accounts/fireworks/models/kimi-k3", models: ["accounts/fireworks/models/kimi-k3", "accounts/fireworks/models/glm-5p3", "accounts/fireworks/routers/glm-latest"], apiKeyUrl: "https://fireworks.ai/account/api-keys"},
+  {id: "nvidia", displayName: "NVIDIA NIM", group: "aggregator", description: "NVIDIA 托管的模型接口", defaultBaseUrl: "https://integrate.api.nvidia.com/v1", defaultModel: "deepseek-ai/deepseek-v4.1-flash", models: ["deepseek-ai/deepseek-v4.1-flash", "moonshotai/kimi-k2.6", "nvidia/nemotron-3-ultra-550b-a55b"], apiKeyUrl: "https://build.nvidia.com/"},
+  {id: "huggingface", displayName: "Hugging Face", group: "aggregator", description: "Hugging Face 推理路由", defaultBaseUrl: "https://router.huggingface.co/v1", defaultModel: "deepseek-ai/DeepSeek-V4.1-Flash", models: ["deepseek-ai/DeepSeek-V4.1-Flash", "deepseek-ai/DeepSeek-V4-Pro"], apiKeyUrl: "https://huggingface.co/settings/tokens"},
+  {id: "baseten", displayName: "Baseten", group: "aggregator", description: "开源模型推理平台", defaultBaseUrl: "https://inference.baseten.co/v1", defaultModel: "deepseek-ai/DeepSeek-V4.1-Flash", models: ["deepseek-ai/DeepSeek-V4.1-Flash", "moonshotai/Kimi-K3", "deepseek-ai/DeepSeek-V4-Pro"], apiKeyUrl: null},
+  {id: "vercel-ai-gateway", displayName: "Vercel AI Gateway", group: "aggregator", description: "Vercel 的多模型网关", defaultBaseUrl: "https://ai-gateway.vercel.sh/v1", defaultModel: "anthropic/claude-sonnet-4.5", models: ["anthropic/claude-sonnet-4.5"], apiKeyUrl: null},
+  {id: "custom", displayName: "自定义 OpenAI 兼容", group: "custom", description: "任何兼容 OpenAI /chat/completions 的接口", defaultBaseUrl: "", defaultModel: "", models: [], apiKeyUrl: null},
 ];
 
 const mockConnectionSecrets = new Map<string, string>();
@@ -769,6 +808,11 @@ export async function getHotkeyStatus(): Promise<HotkeyStatus> {
           key: mock.settings.runtimeToggleHotkey || null,
           error: null,
         },
+        {
+          id: "automation-stop",
+          key: mock.settings.automationStopHotkey || null,
+          error: null,
+        },
       ],
     };
 }
@@ -934,6 +978,8 @@ export async function openExternal(url: string): Promise<void> {
 
 /** 全部引擎的模型清单（downloaded 标记） */
 export async function listModels(): Promise<ModelInfo[]> {
+  // ?mockModels=none：刚装好、一个模型都没下载（新手引导用）
+  if (mockQuery("mockModels") === "none") return clone(mock.models).map((m) => ({ ...m, downloaded: false }));
   return clone(mock.models);
 }
 
@@ -1004,6 +1050,215 @@ export async function setActiveModel(engineId: string, modelId: string): Promise
   mock.settings.sttEngine = resolvedEngine;
   return;
 }
+
+// ---------- 统一模型清单：OCR / TTS ----------
+
+const mockCatalog: CatalogModel[] = [
+  {
+    category: "ocr", id: "ppocrv5-korean-mobile", engineId: "local-ppocrv5-korean",
+    displayName: "PP-OCRv5 mobile Korean (local, CPU)", description: "韩文聊天（韩服）。本机 CPU 推理，不上传截图",
+    sizeBytes: 18_308_324, backend: "local", downloaded: false, ready: false, state: "not-installed",
+    active: false, recommended: false, languages: ["ko"], dataEgress: "none", configSchema: [], license: "Apache-2.0",
+    files: [],
+  },
+  {
+    category: "ocr", id: "deepseek-ocr", engineId: "deepseek-ocr", displayName: "DeepSeek OCR（在线）",
+    description: "在线识别，多语种、版面更稳；每次识别都会把截图上传到 DeepSeek", sizeBytes: 0, backend: "remote",
+    downloaded: true, ready: false, state: "not-configured", reason: "请选择一条 DeepSeek API 连接", active: false,
+    recommended: false, languages: ["auto"], dataEgress: "selected-image",
+    configSchema: [{ key: "connection", label: "API 连接（DeepSeek）", kind: "connection", default: "", options: [], required: true }],
+    apiKeyUrl: "https://platform.deepseek.com/api_keys", license: "DeepSeek API terms", files: [],
+  },
+  {
+    category: "tts", id: "system-speech", engineId: "system", displayName: "Windows 系统语音",
+    description: "系统自带，无需下载；声音取决于系统已安装的语音包", sizeBytes: 0, backend: "local", downloaded: true,
+    ready: true, state: "ready", active: true, recommended: false, languages: ["zh"], dataEgress: "none",
+    configSchema: [], license: "Windows", files: [],
+  },
+  {
+    category: "tts", id: "deepseek-tts", engineId: "deepseek", displayName: "DeepSeek 语音合成（在线，默认）",
+    description: "DeepSeek 官方语音，默认用 AI 连接里的 DeepSeek 与密钥，声音海星（女声）/暗潮（男声）；按字数计费，每次播报都会把文字发给 DeepSeek，相同的话复用缓存；不支持调语速",
+    sizeBytes: 0, backend: "remote", downloaded: true,
+    ready: false, state: "not-configured", reason: "还没有 DeepSeek 连接：请在「高级 → API 连接」里添加 DeepSeek", active: false,
+    recommended: true, languages: ["zh"], dataEgress: "text",
+    configSchema: [
+      { key: "connection", label: "DeepSeek 连接（留空 = 用 AI 连接里的 DeepSeek）", kind: "connection", default: "", options: [], required: false },
+      { key: "voice", label: "声音", kind: "enum", default: "stella", options: [{ value: "stella", label: "海星（女声）" }, { value: "tide", label: "暗潮（男声）" }], required: true },
+    ],
+    apiKeyUrl: "https://platform.deepseek.com/api_keys", license: "服务商条款", files: [],
+  },
+  {
+    category: "tts", id: "openai-compat-tts", engineId: "openai", displayName: "OpenAI 兼容语音合成（在线）",
+    description: "调用 /audio/speech 接口；每次播报都会把文字发给服务商", sizeBytes: 0, backend: "remote", downloaded: true,
+    ready: false, state: "not-configured", reason: "在线语音合成还没有选择 API 连接（模型 → 语音合成）", active: false,
+    recommended: false, languages: ["zh"], dataEgress: "text",
+    configSchema: [
+      { key: "connection", label: "API 连接", kind: "connection", default: "", options: [], required: true },
+      { key: "model", label: "合成模型", kind: "string", default: "gpt-4o-mini-tts", options: [], required: false },
+      { key: "voice", label: "声音（服务商的声音名，如 alloy）", kind: "string", default: "alloy", options: [], required: true },
+    ],
+    apiKeyUrl: "https://platform.openai.com/api-keys", license: "服务商条款", files: [],
+  },
+  {
+    category: "tts", id: "kokoro-zh", engineId: "kokoro", displayName: "Kokoro 中文（本地神经语音）",
+    description: "更自然的本地中文女声，约 147 MB；本机 CPU 合成，不上传文字", sizeBytes: 147_031_220, backend: "local",
+    downloaded: false, ready: false, state: "not-installed", active: false, recommended: true, languages: ["zh"],
+    dataEgress: "none", configSchema: [], license: "Apache-2.0", files: [],
+  },
+  {
+    category: "search", id: "deepseek-search", engineId: "deepseek-search", displayName: "DeepSeek 联网搜索（在线）",
+    description: "琴音查游戏版本、出装、海克斯强化、打法时用；搜索词和要读的网址会发给 DeepSeek，网页由 DeepSeek 的服务器去读。每次成功的搜索或读网页 0.005 元",
+    sizeBytes: 0, backend: "remote", downloaded: true, ready: true, state: "ready", active: false, recommended: true, languages: ["auto"],
+    dataEgress: "text", configSchema: [{ key: "connection", label: "API 连接（DeepSeek；留空 = 用琴音正在用的 DeepSeek 连接）", kind: "connection", default: "", options: [], required: false }],
+    apiKeyUrl: "https://platform.deepseek.com/api_keys", license: "DeepSeek API terms", files: [],
+  },
+  {
+    category: "search", id: "off", engineId: "off", displayName: "不联网", description: "琴音只凭自己的知识回答（游戏版本相关的内容可能过时）",
+    sizeBytes: 0, backend: "local", downloaded: true, ready: true, state: "ready", active: false, recommended: false, languages: ["auto"],
+    dataEgress: "none", configSchema: [], license: "", files: [],
+  },
+];
+
+function refreshMockCatalog(): void {
+  const ocrActive =
+    mock.settings.ocr.activeModelId ||
+    mockCatalog.find((m) => m.category === "ocr" && m.backend === "local" && m.ready)?.id ||
+    "";
+  const ttsActive = mock.settings.assistant.ttsModelId || (mock.settings.assistant.speechEngine === "kokoro" ? "kokoro-zh" : "system-speech");
+  for (const m of mockCatalog) {
+    const searchActive = mock.settings.search?.activeModelId || "deepseek-search";
+    m.active = m.category === "ocr" ? m.id === ocrActive : m.category === "search" ? m.id === searchActive : m.id === ttsActive;
+    if (m.id === "deepseek-ocr") {
+      const connection = mock.settings.modelConfigs["deepseek-ocr"]?.connection;
+      m.ready = typeof connection === "string" && connection !== "";
+      m.state = m.ready ? "ready" : "not-configured";
+    }
+  }
+}
+
+export async function listCatalogModels(category: ModelCategory): Promise<CatalogModel[]> {
+  refreshMockCatalog();
+  return clone(mockCatalog.filter((m) => m.category === category));
+}
+
+export async function downloadCatalogModel(category: ModelCategory, id: string): Promise<void> {
+  if (mockQuery("mockDownload") === "fail") throw new Error("网络连接失败：无法连接模型下载源");
+  const m = mockCatalog.find((x) => x.category === category && x.id === id);
+  if (m) Object.assign(m, { downloaded: true, ready: true, state: "ready" });
+}
+
+export async function importCatalogModel(category: ModelCategory, id: string, _dir: string): Promise<void> {
+  return downloadCatalogModel(category, id);
+}
+
+export async function deleteCatalogModel(category: ModelCategory, id: string): Promise<CatalogDeleteOutcome> {
+  const m = mockCatalog.find((x) => x.category === category && x.id === id);
+  if (m) Object.assign(m, { downloaded: false, ready: false, state: "not-installed" });
+  let wasActive = false;
+  if (category === "ocr" && mock.settings.ocr.activeModelId === id) {
+    mock.settings.ocr.activeModelId = "";
+    wasActive = true;
+  }
+  if (category === "tts" && id === "kokoro-zh" && !mock.settings.assistant.ttsModelId && mock.settings.assistant.speechEngine === "kokoro") {
+    mock.settings.assistant.speechEngine = "system";
+    wasActive = true;
+  }
+  return { wasActive, settings: clone(mock.settings) };
+}
+
+export async function activateCatalogModel(category: ModelCategory, id: string): Promise<Settings> {
+  const m = mockCatalog.find((x) => x.category === category && x.id === id);
+  if (!m) throw new Error(`未知模型 ${id}`);
+  if (m.backend === "local" && !m.downloaded) throw new Error(`${m.displayName} 尚未下载，请先下载再切换`);
+  if (category === "ocr") mock.settings.ocr.activeModelId = id;
+  else if (category === "search") mock.settings.search = { activeModelId: id };
+  else if (id === "openai-compat-tts" || id === "volcano-tts" || id === "deepseek-tts") mock.settings.assistant.ttsModelId = id;
+  else {
+    mock.settings.assistant.speechEngine = id === "kokoro-zh" ? "kokoro" : "system";
+    // 明确选系统语音写 "local"，不再参与“自动”
+    mock.settings.assistant.ttsModelId = id === "kokoro-zh" ? "" : "local";
+  }
+  return clone(mock.settings);
+}
+
+export async function getCatalogInstallGuide(category: ModelCategory, id: string): Promise<ModelInstallGuide> {
+  const m = mockCatalog.find((x) => x.category === category && x.id === id);
+  if (!m) throw new Error(`未知模型 ${id}`);
+  return {
+    id,
+    displayName: m.displayName,
+    destDir: `C:\\Users\\mock\\.kotone\\models\\ocr\\${id}`,
+    destSubdir: `ocr/${id}`,
+    pageUrl: "https://www.modelscope.cn/models/RapidAI/RapidOCR/files",
+    files: m.files.map((f) => ({ name: f.name, url: f.url, sizeBytes: f.sizeBytes })),
+  };
+}
+
+export async function openCatalogModelDir(category: ModelCategory, id: string): Promise<void> {
+  console.info("[mock] open_catalog_model_dir", category, id);
+}
+
+// ---------- Kotone 陪玩 ----------
+
+export async function companionSelfCheck(): Promise<CompanionCheck> {
+  const assistant = mock.settings.assistant;
+  if (!assistant.connectionId) throw new Error("还没有选 AI 连接：请在「设置 → API 连接」里设一条");
+  return connectionSelfCheck(assistant.connectionId);
+}
+
+export async function installedGames(query?: string): Promise<import("../ipc").InstalledGame[]> {
+  const all = [
+    { id: "tencent:lol", name: "英雄联盟（国服）", source: "tencent", installDir: "C:\\WeGameApps\\英雄联盟", launch: "\"C:\\WeGameApps\\英雄联盟\\WeGameLauncher\\launcher.exe\"", processNames: ["League of Legends.exe"], needsAdmin: true },
+    { id: "hoyo:hk4e_cn", name: "原神", source: "hoyoplay", installDir: "D:\\miHoYo Launcher\\games\\Genshin Impact Game", launch: "\"D:\\miHoYo Launcher\\games\\Genshin Impact Game\\YuanShen.exe\"", processNames: ["YuanShen.exe"], needsAdmin: true },
+    { id: "steam:570", name: "Dota 2", source: "steam", installDir: "D:\\SteamLibrary\\steamapps\\common\\dota 2 beta", launch: "steam://rungameid/570", processNames: [], needsAdmin: false },
+  ];
+  return query ? all.filter((g) => g.name.includes(query)) : all;
+}
+
+export async function connectionModels(id: string): Promise<{ supported: boolean; models: string[] }> {
+  const connection = mock.settings.connections.find((c) => c.id === id);
+  if (!connection) throw new Error(`连接 ${id} 不存在`);
+  return { supported: true, models: [connection.model, `${connection.model}-pro`] };
+}
+
+export async function connectionSelfCheck(id: string): Promise<CompanionCheck> {
+  const assistant = mock.settings.assistant;
+  const connection = mock.settings.connections.find((c) => c.id === id);
+  if (!connection) throw new Error(`连接 ${id} 不存在`);
+  const check: CompanionCheck = {
+    connectionId: id,
+    baseUrl: connection?.baseUrl ?? "",
+    model: connection?.model ?? "",
+    passed: mockQuery("mockCompanionCheck") !== "fail",
+    checkedAtMs: Date.now(),
+    message: mockQuery("mockCompanionCheck") === "fail" ? `连得上，但服务商的模型列表里没有“${connection.model}”，请换一个模型` : "连接正常",
+  };
+  if (assistant.connectionId === id) assistant.companion.check = check;
+  return clone(check);
+}
+
+export async function companionStatus(): Promise<CompanionStatus> {
+  const assistant = mock.settings.assistant;
+  const check = assistant.companion.check ?? null;
+  const ocr = mock.settings.ocr.activeModelId || null;
+  const reason = !assistant.connectionId
+    ? "还没有选 AI 连接：请在「设置 → API 连接」里添加一条，并设为在用的连接"
+    : !ocr
+          ? "看游戏聊天需要文字识别模型：请在「高级 → 模型 → 文字识别」下载并选择一个"
+          : null;
+  return {
+    ready: reason === null,
+    reason,
+    connectionId: assistant.connectionId,
+    check,
+    ocr: { modelId: ocr, state: { ready: !!ocr, dataEgress: ocr === "deepseek-ocr" ? "selected-image" : "none" } },
+    autoSend: assistant.companion.autoSend,
+    quickMessages: clone(assistant.companion.quickMessages),
+    profile: { id: mock.settings.activeProfileId ?? "generic", notes: "", chatRegion: null },
+  };
+}
+
+export async function companionClearChatRegion(): Promise<void> {}
 
 // ---------- 识别历史（历史记录页） ----------
 

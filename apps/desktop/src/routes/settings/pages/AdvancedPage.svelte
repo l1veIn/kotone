@@ -1,14 +1,17 @@
 <script lang="ts">
   /*
-   * 高级页壳：二级导航 + 子页。
+   * 高级页壳：分段导航 + 子页（DeepSeek Harness 风格的设置页骨架）。
    * 模型 / API 连接 / 热键 / 调参 / 系统拆在 ./advanced/。
    */
+  import SettingsPage from "$lib/components/settings/SettingsPage.svelte";
   import ConnectionsSection from "./advanced/ConnectionsSection.svelte";
   import HotkeysSection from "./advanced/HotkeysSection.svelte";
   import ModelsSection from "./advanced/ModelsSection.svelte";
   import SoundSection from "./advanced/SoundSection.svelte";
   import SystemSection from "./advanced/SystemSection.svelte";
   import TuningSection from "./advanced/TuningSection.svelte";
+  import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
+  import AppearanceSettingsPanel from "$lib/appearance/AppearanceSettingsPanel.svelte";
   import type { AdvancedSection } from "./advanced/types";
 
   let {
@@ -28,22 +31,20 @@
     { id: "hotkeys", label: "其他热键" },
     { id: "sound", label: "音效" },
     { id: "tuning", label: "调参" },
+    { id: "appearance", label: "外观" },
   ];
 </script>
 
-<div class="px-6 py-5">
-  <h1 class="text-lg font-bold">高级</h1>
-  <p class="mt-0.5 text-[11px] text-white/45">模型、连接与系统级设置</p>
-
-  <nav class="mt-4 flex flex-wrap gap-1.5" aria-label="高级设置分类">
+<SettingsPage title="设置" description="模型、AI 连接、外观与系统级设置" testid="advanced-page">
+  <nav class="-mt-2 flex w-fit max-w-full flex-wrap gap-0.5 rounded-xl bg-muted/70 p-1" aria-label="设置分类">
     {#each tabs as tab}
       {@const active = section === tab.id}
       <button
+        type="button"
         data-testid={`advanced-nav-${tab.id}`}
-        class="rounded-lg px-3 py-1.5 text-xs font-semibold ring-1 transition
-          {active
-            ? 'bg-kotone-cyan/15 text-kotone-cyan ring-kotone-cyan/40'
-            : 'bg-white/5 text-white/55 ring-white/10 hover:bg-white/10 hover:text-white/80'}"
+        aria-current={active ? "page" : undefined}
+        class="h-7 rounded-lg px-3 text-xs font-medium transition-colors
+          {active ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
         onclick={() => onSectionChange?.(tab.id)}
       >
         {tab.label}
@@ -51,7 +52,7 @@
     {/each}
   </nav>
 
-  <div class="mt-4">
+  <div>
     <!-- 模型清单会校验已下载 ONNX，保持挂载避免切 tab 重复哈希；其它页按需创建 -->
     <div class:hidden={section !== "models"}>
       <ModelsSection />
@@ -66,6 +67,11 @@
       <TuningSection />
     {:else if section === "system"}
       <SystemSection {onOpenOnboarding} />
+    {:else if section === "appearance"}
+      <!-- 外观：配色、明暗、缩放、字体（只影响设置窗口，偏好存在本机；ADR 023 从「通用」搬来） -->
+      <SettingsSection title="外观" description="只影响设置窗口；游戏里的悬浮窗与弹幕保持原样。" id="appearance-title">
+        <AppearanceSettingsPanel />
+      </SettingsSection>
     {/if}
   </div>
-</div>
+</SettingsPage>

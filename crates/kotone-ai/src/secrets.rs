@@ -9,6 +9,20 @@ use kotone_core::settings::{Settings, SettingsConnectionResolver};
 
 const SERVICE: &str = "kotone";
 
+/// 凭据库服务名。设置了 `KOTONE_HOME`（隔离的数据目录：自动化测试、Agent 沙箱）时按该目录
+/// 区分（`kotone@<目录>`），隔离实例既读不到也写不进用户主实例的 API key；未设置时为
+/// `kotone`（与旧版本一致，已保存的 key 不受影响）。
+fn service_name() -> String {
+    service_for(std::env::var_os(kotone_core::settings::HOME_ENV))
+}
+
+fn service_for(home: Option<std::ffi::OsString>) -> String {
+    match home {
+        Some(dir) if !dir.is_empty() => format!("{SERVICE}@{}", dir.to_string_lossy()),
+        _ => SERVICE.to_string(),
+    }
+}
+
 fn credential_user(connection_id: &str) -> String {
     format!("connection:{connection_id}")
 }
@@ -17,7 +31,7 @@ pub struct KeyringSecretStore;
 
 impl SecretStore for KeyringSecretStore {
     fn get(&self, connection_id: &str) -> Result<Option<String>, String> {
-        let entry = Entry::new(SERVICE, &credential_user(connection_id))
+        let entry = Entry::new(&service_name(), &credential_user(connection_id))
             .map_err(|error| format!("打开凭据项失败：{error}"))?;
         match entry.get_password() {
             Ok(secret) if !secret.is_empty() => Ok(Some(secret)),
@@ -28,7 +42,7 @@ impl SecretStore for KeyringSecretStore {
     }
 
     fn set(&self, connection_id: &str, secret: &str) -> Result<(), String> {
-        let entry = Entry::new(SERVICE, &credential_user(connection_id))
+        let entry = Entry::new(&service_name(), &credential_user(connection_id))
             .map_err(|error| format!("打开凭据项失败：{error}"))?;
         entry
             .set_password(secret)
@@ -44,7 +58,7 @@ impl SecretStore for KeyringSecretStore {
     }
 
     fn delete(&self, connection_id: &str) -> Result<(), String> {
-        let entry = Entry::new(SERVICE, &credential_user(connection_id))
+        let entry = Entry::new(&service_name(), &credential_user(connection_id))
             .map_err(|error| format!("打开凭据项失败：{error}"))?;
         match entry.delete_credential() {
             Ok(()) => Ok(()),
@@ -122,5 +136,18 @@ mod tests {
         let resolver = SecretBackedResolver::new(Arc::new(RwLock::new(settings)), secrets);
         let resolved = resolver.resolve("ds").unwrap();
         assert_eq!(resolved.api_key.as_deref(), Some("sk-test"));
+    }
+}
+
+#[cfg(test)]
+mod service_name_tests {
+    #[test]
+    fn isolated_homes_get_their_own_credential_service() {
+        assert_eq!(super::service_for(None), "kotone");
+        assert_eq!(super::service_for(Some("".into())), "kotone");
+        assert_eq!(
+            super::service_for(Some(r"D:\work\kotone-home".into())),
+            r"kotone@D:\work\kotone-home"
+        );
     }
 }

@@ -15,8 +15,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use kotone_core::hotkey::{
-    parse_hotkey, HookEvent, HotkeySource, HK_ASSISTANT, HK_CHANNEL_CYCLE, HK_PP_CYCLE,
-    HK_PP_TOGGLE, HK_RESEND_LAST, HK_RUNTIME_TOGGLE,
+    parse_hotkey, quick_message_slot, HookEvent, HotkeySource, HK_ASSISTANT, HK_AUTOMATION_STOP,
+    HK_CHANNEL_CYCLE, HK_PP_CYCLE, HK_PP_TOGGLE, HK_QUICK_MESSAGES, HK_RESEND_LAST,
+    HK_RUNTIME_TOGGLE,
 };
 use kotone_core::orchestrator::Orchestrator;
 use kotone_core::settings::HotkeyBackend;
@@ -288,6 +289,16 @@ fn route_named_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, id: &str) {
     kotone_core::log::log(&format!("named hotkey fired: {id}"));
     // 应用级热键需要 AppHandle 才能启停运行时，故与其它热键分开走：
     // 它不依赖 runtime 生命周期的 orchestrator 状态。
+    if id == HK_AUTOMATION_STOP {
+        crate::automation::stop(app, None, "停止自动化热键");
+        // 琴音正在一步一步操作游戏：停下这次操作，并结束这一轮（不再自动重试，ADR 019）。
+        if crate::computer_use::stop_all(app, "停止自动化热键") {
+            let _ = crate::agent::stop(app);
+        }
+        // 琴音派出的子会话（同传等）和它们名下的监听一起停（ADR 022）。
+        crate::agent::stop_all_children(app, "停止热键");
+        return;
+    }
     if id == HK_RUNTIME_TOGGLE {
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
@@ -363,8 +374,22 @@ fn dispatch_runtime_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, event: Hoo
                 HK_RESEND_LAST => orch.resend_last().await,
                 HK_PP_TOGGLE => orch.on_post_processing_toggle().await,
                 HK_PP_CYCLE => orch.on_post_processing_cycle().await,
-                HK_ASSISTANT => orch.on_assistant_hotkey_with_ticket(ticket.core).await,
-                _ => kotone_core::log::log(&format!("未知具名热键: {id}")),
+                HK_ASSISTANT => {
+                    let timeout = app
+                        .state::<crate::SharedState>()
+                        .settings
+                        .read()
+                        .unwrap()
+                        .assistant
+                        .wake
+                        .no_speech_timeout_ms;
+                    orch.call_assistant(Some(ticket.core), timeout).await
+                }
+                other => match quick_message_slot(other) {
+                    // 快捷消息：替用户说了预设的那句话，不经过语音识别，直接进陪玩流程。
+                    Some(slot) => crate::companion::quick(&app, slot),
+                    None => kotone_core::log::log(&format!("未知具名热键: {id}")),
+                },
             },
             HookEvent::MainKeyMissed { .. } => {}
         }
@@ -378,7 +403,7 @@ struct HotkeyInputTicket {
 }
 
 /// 应用级具名热键：runtime 未运行时也保持注册（只随配置变化重注册）。
-const APP_NAMED_HOTKEYS: &[&str] = &[HK_RUNTIME_TOGGLE];
+const APP_NAMED_HOTKEYS: &[&str] = &[HK_RUNTIME_TOGGLE, HK_AUTOMATION_STOP];
 
 /// 已知具名热键的稳定声明顺序（设置页展示顺序；新增具名热键加入此清单即出现在 UI）。
 const KNOWN_NAMED_HOTKEYS: &[&str] = &[
@@ -387,21 +412,26 @@ const KNOWN_NAMED_HOTKEYS: &[&str] = &[
     HK_RESEND_LAST,
     HK_PP_TOGGLE,
     HK_PP_CYCLE,
+    HK_QUICK_MESSAGES[0],
+    HK_QUICK_MESSAGES[1],
+    HK_QUICK_MESSAGES[2],
+    HK_QUICK_MESSAGES[3],
+    HK_QUICK_MESSAGES[4],
+    HK_QUICK_MESSAGES[5],
+    HK_QUICK_MESSAGES[6],
+    HK_QUICK_MESSAGES[7],
     HK_RUNTIME_TOGGLE,
+    HK_AUTOMATION_STOP,
 ];
 
 /// 从配置取出当前要应用的全部具名热键（id, combo）；声明顺序即冲突/优先级顺序。
 fn named_list_from(
     settings: &kotone_core::settings::Settings,
 ) -> Vec<(&'static str, String, HotkeyMode)> {
-    let assistant_mode = if settings.assistant.interaction_mode
-        == kotone_core::assistant::AssistantInteractionMode::PushToTalk
-    {
-        HotkeyMode::Hold
-    } else {
-        HotkeyMode::Toggle
-    };
-    vec![
+    // 呼叫琴音：按一次就听（说完自动提交），没有按住说话。
+    let assistant_mode = HotkeyMode::Toggle;
+    let quick = &settings.assistant.companion.quick_messages;
+    let mut list = vec![
         (
             HK_ASSISTANT,
             settings.assistant.hotkey.clone(),
@@ -427,12 +457,24 @@ fn named_list_from(
             settings.cycle_post_processing_hotkey.clone(),
             HotkeyMode::Toggle,
         ),
-    ]
+    ];
+    // 快捷消息：第 n 条占固定槽位 quick-message-n；没有这条或没绑热键时为空（不注册）。
+    list.extend(HK_QUICK_MESSAGES.iter().enumerate().map(|(i, id)| {
+        (
+            *id,
+            quick.get(i).map(|m| m.hotkey.clone()).unwrap_or_default(),
+            HotkeyMode::Toggle,
+        )
+    }));
+    list
 }
 
 /// 从配置取出应用级具名热键（独立于 runtime 生命周期）。
 fn app_named_list_from(settings: &kotone_core::settings::Settings) -> Vec<(&'static str, String)> {
-    vec![(HK_RUNTIME_TOGGLE, settings.runtime_toggle_hotkey.clone())]
+    vec![
+        (HK_RUNTIME_TOGGLE, settings.runtime_toggle_hotkey.clone()),
+        (HK_AUTOMATION_STOP, settings.automation_stop_hotkey.clone()),
+    ]
 }
 
 /// 热键管理器：后端选择/回退 + 状态暴露；对上层签名不变
@@ -518,6 +560,7 @@ impl HotkeyManager {
             &settings.toggle_post_processing_hotkey,
             &settings.cycle_post_processing_hotkey,
             &settings.runtime_toggle_hotkey,
+            &settings.automation_stop_hotkey,
             &settings.assistant.hotkey,
         ]);
 
@@ -1014,19 +1057,19 @@ mod tests {
     }
 
     #[test]
-    fn assistant_hold_mode_is_registered_independently_of_dictation() {
+    fn calling_kotone_is_always_a_single_press_regardless_of_old_modes() {
         use kotone_core::interaction::InteractionMode;
         let mut settings = kotone_core::settings::Settings {
-            interaction_mode: Some(InteractionMode::Dictation),
+            interaction_mode: Some(InteractionMode::PushToTalk),
             ..Default::default()
         };
-        assert_eq!(named_list_from(&settings)[0].2, HotkeyMode::Hold);
+        // 呼叫琴音按一次就听：旧配置里的“对讲机”也不再按住说话
         settings.assistant.interaction_mode =
-            kotone_core::assistant::AssistantInteractionMode::OneShot;
-        assert_eq!(named_list_from(&settings)[0].2, HotkeyMode::Toggle);
+            kotone_core::assistant::AssistantInteractionMode::PushToTalk;
+        assert_eq!(named_list_from(&settings)[0].0, HK_ASSISTANT);
+        assert_eq!(named_list_from(&settings)[0].1, "Backquote");
         assert!(named_list_from(&settings)
             .iter()
-            .skip(1)
             .all(|(_, _, mode)| *mode == HotkeyMode::Toggle));
     }
 }

@@ -21,8 +21,11 @@ mod pcm;
 pub mod remote_openai;
 mod sensevoice;
 pub mod sherpa_runtime;
+pub mod transcriber;
 pub mod vad;
 mod volcano;
+pub mod wake;
+pub mod wake_word;
 
 use kotone_core::stt::{EngineRegistry, SttEngine};
 
@@ -33,6 +36,7 @@ pub fn builtin_engines() -> Vec<Box<dyn SttEngine>> {
         Box::new(sherpa_runtime::SherpaStreamingEngine::new()),
         Box::new(sherpa_runtime::SherpaOfflineEngine::new()),
         Box::new(remote_openai::RemoteOpenaiEngine),
+        Box::new(remote_openai::RemoteDeepseekEngine),
         Box::new(volcano::VolcanoAsrEngine),
         Box::new(iflytek::IflytekAsrEngine),
     ]

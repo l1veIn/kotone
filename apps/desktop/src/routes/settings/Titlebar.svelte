@@ -1,15 +1,16 @@
 <script lang="ts">
   /*
-   * 标准标题栏（main 窗 decorations:false，方向 B 富化，高 48px）：
-   * - 左：Kotone 圆角图标（青光晕）+ 名称 + 状态区两行（上行：状态灯 + 相位文字；
-   *   下行：引擎 · 模型 · 交互模式）；
-   * - 右：运行中显示 CPU/内存占用（2s 轮询）+ 启动/停止/重启生效按钮
-   *   + 标准窗口控制两键（min / close，最右上角；conf 已设 maximizable:false）；
-   * - 拖拽：非按钮区 mousedown 由 startDragging() 接管；
-   * - close = 弹确认框：「退出」彻底退出进程，「最小化到托盘」保持隐藏语义。
+   * 自绘标题栏（main 窗 decorations:false，高 40px，与侧边栏同底色，参照 DeepSeek Harness 的
+   * Windows 标题行）：
+   * - 左：侧边栏开关 + Kotone 图标与名称；状态胶囊（状态灯 + 相位 + 快捷键状态）；
+   * - 右：运行中的 CPU / 内存（2s 轮询）+ 启动 / 停止 / 重启生效 + 最小化 / 最大化（还原）/ 关闭；
+   * - 非按钮区按下拖动窗口，双击切换最大化；
+   * - 关闭 = 弹确认框：「退出」彻底退出进程，「最小化到托盘」保持隐藏语义。
    */
+  import { onMount } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { exit } from "@tauri-apps/plugin-process";
+  import { Copy, Minus, PanelLeft, Square, X } from "@lucide/svelte";
   import { getResourceUsage, isTauri } from "../../lib/ipc";
   import { runtimeStore } from "../../lib/stores/runtime";
   import { settingsStore, toast, errText } from "../../lib/stores/ui";
@@ -17,7 +18,12 @@
   import RuntimeButton from "../../lib/components/RuntimeButton.svelte";
   import iconSrc from "../../assets/brand/icon-src.webp";
 
-  let { onOpenAdvanced }: { onOpenAdvanced: () => void } = $props();
+  let { onOpenAdvanced, onToggleSidebar, brandWidth }: {
+    onOpenAdvanced: () => void;
+    onToggleSidebar: () => void;
+    /** 品牌区宽度（与侧边栏对齐；侧边栏收起时只留开关）。 */
+    brandWidth: string;
+  } = $props();
 
   const modeNames: Record<string, string> = {
     "push-to-talk": "对讲机",
@@ -35,6 +41,7 @@
   const rt = $derived($runtimeStore);
   let showExitPrompt = $state(false);
   let exiting = $state(false);
+  let maximized = $state(false);
 
   /** 运行中的资源占用文本（空 = 非 running 或尚未采样成功） */
   let resourceText = $state("");
@@ -57,6 +64,17 @@
     void pollResourceUsage();
     const timer = setInterval(() => void pollResourceUsage(), 2000);
     return () => clearInterval(timer);
+  });
+
+  onMount(() => {
+    if (!isTauri) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    const win = getCurrentWindow();
+    const sync = () => void win.isMaximized().then((v) => { if (!disposed) maximized = v; }).catch(() => {});
+    sync();
+    void win.onResized(sync).then((un) => { if (disposed) un(); else unlisten = un; }).catch(() => {});
+    return () => { disposed = true; unlisten?.(); };
   });
 
   const phaseLabel = $derived(
@@ -85,20 +103,26 @@
           : `快捷键：${hotkeyLabel} · ${phaseLabel}`,
   );
 
-  /** 非按钮区按下即整窗拖拽（按钮自身 mousedown 不触发） */
+  /** 非按钮区按下即整窗拖拽；双击切换最大化（按钮自身不触发）。 */
   function onDragMouseDown(e: MouseEvent) {
-    if (!isTauri) return;
+    if (!isTauri || e.button !== 0) return;
     if ((e.target as HTMLElement).closest("button")) return;
-    void getCurrentWindow().startDragging();
+    if (e.detail === 2) void toggleMaximize();
+    else void getCurrentWindow().startDragging();
   }
 
   async function minimize() {
     if (!isTauri) return;
+    try { await getCurrentWindow().minimize(); }
+    catch { /* 最小化失败静默（窗口可能已销毁） */ }
+  }
+
+  async function toggleMaximize() {
+    if (!isTauri) return;
     try {
-      await getCurrentWindow().minimize();
-    } catch {
-      /* 最小化失败静默（窗口可能已销毁） */
-    }
+      await getCurrentWindow().toggleMaximize();
+      maximized = await getCurrentWindow().isMaximized();
+    } catch { /* 最大化失败静默 */ }
   }
 
   /** 关闭：展示 Kotone 自绘确认弹窗。 */
@@ -126,103 +150,65 @@
       toast(false, `退出失败：${errText(e)}`);
     }
   }
+
+  const dotClass = $derived(
+    !rt || rt.phase === "stopped"
+      ? "bg-muted-foreground/50"
+      : rt.phase === "running"
+        ? "bg-primary shadow-[0_0_8px_var(--color-primary)]"
+        : "bg-brand-pink animate-pulse",
+  );
+  const windowButton = "flex h-full w-11 items-center justify-center text-sidebar-foreground/70 transition-colors hover:bg-foreground/8 hover:text-foreground";
 </script>
 
 <!-- 标题栏整行可拖拽：非按钮区 mousedown 由 startDragging 接管（按钮已排除） -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <header
-  class="relative z-20 flex h-12 shrink-0 items-center justify-between border-b border-white/8 bg-kotone-panel/60 select-none"
+  class="relative z-30 flex h-10 shrink-0 items-center bg-sidebar text-sidebar-foreground select-none"
+  data-testid="titlebar"
   onmousedown={onDragMouseDown}
 >
-  <!-- 克制的背景光晕（方向 B 霓虹语言，标题栏尺度收敛） -->
-  <div
-    class="pointer-events-none absolute -top-12 left-1/4 h-20 w-56 rounded-full bg-kotone-violet/15 blur-3xl"
-  ></div>
-  <div
-    class="pointer-events-none absolute -top-10 right-1/3 h-16 w-44 rounded-full blur-3xl transition-colors duration-500 {rt?.phase ===
-    'running'
-      ? 'bg-kotone-cyan/12'
-      : 'bg-kotone-pink/8'}"
-  ></div>
+  <div class="flex shrink-0 items-center gap-1.5 self-stretch pl-2 transition-[width] duration-300" style:width={brandWidth}>
+    <button type="button" class="flex size-7 shrink-0 items-center justify-center rounded-lg text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-foreground"
+      title="展开 / 收起侧边栏" aria-label="展开或收起侧边栏" data-testid="sidebar-toggle" onclick={onToggleSidebar}>
+      <PanelLeft class="size-4" />
+    </button>
+    <img src={iconSrc} alt="" class="ml-1 size-5 shrink-0 rounded-md object-cover ring-1 ring-primary/50" />
+    <p class="min-w-0 truncate text-[13px] font-semibold tracking-wide text-foreground">
+      Kotone <span class="font-normal text-sidebar-foreground/70">琴音</span>
+    </p>
+  </div>
 
-  <!-- 左：品牌区（固定 w-50，与下方侧边栏宽度对齐）+ 状态信息 -->
-  <div class="relative flex min-w-0 flex-1 items-center self-stretch">
-    <div class="flex w-50 shrink-0 items-center gap-2.5 self-stretch border-r border-white/8 px-4">
-      <img
-        src={iconSrc}
-        alt=""
-        class="h-8 w-8 shrink-0 rounded-[22%] ring-1 ring-kotone-cyan/70 shadow-glow-cyan object-cover"
-      />
-      <p class="shrink-0 text-xs font-bold tracking-wide">
-        Kotone <span class="font-medium text-white/55">琴音</span>
-      </p>
-    </div>
-    <!-- 状态区两行：上行 = 状态灯 + 相位文字；下行 = 快捷键 · 运行状态 -->
-    <div class="flex min-w-0 flex-col justify-center gap-px px-4">
-      <div class="flex items-center gap-2 leading-none">
-        <span class="relative flex h-2 w-2 shrink-0">
-          <span
-            class="h-2 w-2 rounded-full transition-colors {!rt || rt.phase === 'stopped'
-              ? 'bg-white/25'
-              : rt.phase === 'running'
-                ? 'bg-kotone-cyan shadow-glow-cyan animate-pulse'
-                : 'bg-kotone-pink shadow-glow-pink animate-ping'}"
-          ></span>
-          {#if rt?.restartNeeded}
-            <span
-              class="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-yellow-400 ring-1 ring-kotone-panel"
-              title="配置已变更，需重启生效"
-            ></span>
-          {/if}
-        </span>
-        <span
-          class="text-[11px] leading-tight font-semibold {rt?.phase === 'running'
-            ? 'text-kotone-cyan'
-            : rt && rt.phase !== 'stopped'
-              ? 'text-kotone-pink'
-              : 'text-white/45'}"
-        >
-          {phaseLabel}
-        </span>
-      </div>
-      {#if statusLine}
-        <p class="truncate pl-4 text-[10px] leading-tight text-white/40" title={statusLine}>
-          {statusLine}
-        </p>
-      {/if}
+  <!-- 状态胶囊：状态灯 + 相位 + 快捷键状态 -->
+  <div class="flex min-w-0 flex-1 items-center px-2">
+    <div class="flex min-w-0 items-center gap-2 rounded-full px-2.5 py-1 text-xs" title={statusLine}>
+      <span class="relative flex size-2 shrink-0">
+        <span class="size-2 rounded-full transition-colors {dotClass}"></span>
+        {#if rt?.restartNeeded}
+          <span class="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-warning ring-1 ring-sidebar" title="配置已变更，需重启生效"></span>
+        {/if}
+      </span>
+      <span class="shrink-0 font-medium {rt?.phase === 'running' ? 'text-primary' : rt && rt.phase !== 'stopped' ? 'text-brand-pink' : 'text-sidebar-foreground'}">{phaseLabel}</span>
+      <span class="hidden min-w-0 truncate text-sidebar-foreground/60 md:inline">{statusLine}</span>
     </div>
   </div>
 
-  <!-- 右：资源占用（running 时）+ 启动/停止 + 标准窗口控制两键 -->
-  <div class="relative flex h-full shrink-0 items-center">
+  <div class="flex h-full shrink-0 items-center">
     {#if rt?.phase === "running" && resourceText}
-      <span class="mr-2 text-[10px] text-white/40 tabular-nums" title="Kotone 进程资源占用">
-        {resourceText}
-      </span>
+      <span class="mr-2 hidden text-[11px] text-sidebar-foreground/60 tabular-nums lg:inline" title="Kotone 进程资源占用">{resourceText}</span>
     {/if}
     <RuntimeButton variant="titlebar" {onOpenAdvanced} />
-    <div class="h-4 w-px bg-white/10"></div>
-    <button
-      class="flex h-full w-12 items-center justify-center text-white/55 transition hover:bg-white/10 hover:text-white"
-      title="最小化"
-      onclick={() => void minimize()}
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M5 12h14" stroke-linecap="round" /></svg>
+    <div class="mx-1 h-4 w-px bg-hairline"></div>
+    <button class={windowButton} title="最小化" aria-label="最小化" onclick={() => void minimize()}><Minus class="size-4" /></button>
+    <button class={windowButton} title={maximized ? "还原" : "最大化"} aria-label={maximized ? "还原" : "最大化"} data-testid="window-maximize" onclick={() => void toggleMaximize()}>
+      {#if maximized}<Copy class="size-3.5 -scale-x-100" />{:else}<Square class="size-3.5" />{/if}
     </button>
-    <button
-      class="flex h-full w-12 items-center justify-center text-white/55 transition hover:bg-red-500 hover:text-white"
-      title="关闭"
-      onclick={() => void close()}
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round" /></svg>
+    <button class="flex h-full w-11 items-center justify-center text-sidebar-foreground/70 transition-colors hover:bg-[#e81123] hover:text-white" title="关闭" aria-label="关闭" onclick={() => void close()}>
+      <X class="size-4" />
     </button>
   </div>
 </header>
 
 {#if showExitPrompt}
-  <ExitPrompt
-    busy={exiting}
-    onExit={() => void quitApp()}
-    onMinimize={() => void minimizeToTray()}
-  />
+  <ExitPrompt busy={exiting} onExit={() => void quitApp()} onMinimize={() => void minimizeToTray()} />
 {/if}

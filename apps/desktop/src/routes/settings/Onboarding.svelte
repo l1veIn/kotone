@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { companionName } from "$lib/stores/companion";
   import { onDestroy, onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import {
@@ -18,6 +19,13 @@
     setModelsDir,
     updateSettings,
     getModelInstallGuide,
+    getSettings,
+    upsertConnection,
+    connectionSelfCheck,
+    setActiveModel,
+    activateCatalogModel,
+    startRuntime,
+    openExternal,
     isDownloadCancelled,
     type AudioDevice,
     type ModelInstallGuide,
@@ -29,7 +37,9 @@
     type ModelsDirInfo,
   } from "../../lib/ipc";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
-  import { findHotkeyConflict } from "../../lib/hotkeyCombo";
+  import { findHotkeyConflict, hotkeyLabel as formatHotkey } from "../../lib/hotkeyCombo";
+  import { subscribeAgent } from "../../lib/agent";
+  import { appState } from "../../lib/stores/state";
   import { captureHotkey } from "../../lib/hotkeyCapture";
   import {
     errText,
@@ -43,11 +53,18 @@
   import stickerThinking from "../../assets/brand/stickers/thinking.webp";
   import stickerCheering from "../../assets/brand/stickers/cheering.webp";
   import ManualDownloadDialog from "../../lib/components/ManualDownloadDialog.svelte";
-  import Select from "../../lib/components/Select.svelte";
+  import SelectField from "$lib/components/settings/SelectField.svelte";
 
-  let { onDone }: { onDone: () => void } = $props();
+  /** next = "assistant"：结束后进「琴音」的聊天；prompt：顺便替玩家发这句话。 */
+  let { onDone }: { onDone: (next?: "assistant", prompt?: string) => void } = $props();
 
-  let step = $state(0);
+  // 两条路（只告诉玩家怎么开始，带他完成第一次）：
+  // - 和琴音开始：填一个 DeepSeek Key → 第一次“嗨琴音，你能干什么？”
+  // - 只用语音输入法：选游戏 → 识别模型 → 热键 → 第一次说话上屏
+  type Step = "welcome" | "key" | "hello" | "profile" | "model" | "hotkey" | "try";
+  let step = $state<Step>("welcome");
+  let path = $state<"ai" | "voice">("ai");
+  const dots = $derived<Step[]>(path === "ai" ? ["welcome", "key", "hello"] : ["welcome", "profile", "model", "hotkey", "try"]);
   let loadingResources = $state(true);
   let resourceError = $state("");
   let models = $state<ModelInfo[]>([]);
@@ -366,7 +383,7 @@
   }
 
   function enterHotkeyStep() {
-    step = 3;
+    step = "hotkey";
     // 第三步一出现就主动检测，不要求用户先点击「重新录入」或启动运行时。
     void runInputEnvironmentCheck();
   }
@@ -425,7 +442,78 @@
       finishing = false;
       return;
     }
-    onDone();
+    finishing = false;
+    step = "try";
+    void startTry();
+  }
+
+  // ---------- 和琴音开始：一个 DeepSeek Key ----------
+  const DEEPSEEK_KEY_PAGE = "https://platform.deepseek.com/api_keys";
+  const hello = $derived(`嗨${$companionName}，你能干什么？`);
+  const callKey = $derived($settingsStore?.assistant?.hotkey ? formatHotkey($settingsStore.assistant.hotkey) : "~");
+  let apiKey = $state("");
+  let keyBusy = $state(false);
+  let keyError = $state("");
+  let keyConnectionId = "";
+
+  async function startWithKey() {
+    const key = apiKey.trim();
+    if (!key || keyBusy) return;
+    keyBusy = true;
+    keyError = "";
+    try {
+      keyConnectionId ||= `deepseek-${Date.now().toString(36)}`;
+      await upsertConnection(
+        { id: keyConnectionId, displayName: "DeepSeek", kind: "remote", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-flash" },
+        key,
+      );
+      // 读一次模型列表确认 Key 能用（不花钱）。
+      const check = await connectionSelfCheck(keyConnectionId);
+      if (!check.passed) {
+        keyError = check.message || "这个 Key 用不了，检查一下有没有复制完整";
+        return;
+      }
+      // 一个 Key 就能用全部功能：琴音、语音识别、读屏都走 DeepSeek（以后想换本地模型再下）。
+      await updateSettings({ assistant: { connectionId: keyConnectionId }, activeProfileId: selectedProfileId, ui: { firstRunCompleted: true } });
+      if (!models.some((m) => m.downloaded)) await setActiveModel("deepseek-asr", "deepseek-asr");
+      if (!$settingsStore?.ocr?.activeModelId) await activateCatalogModel("ocr", "deepseek-ocr");
+      settingsStore.set(await getSettings());
+      void startRuntime().catch(() => {});
+      step = "hello";
+      void watchHello();
+    } catch (e) {
+      keyError = errText(e);
+    } finally {
+      keyBusy = false;
+    }
+  }
+
+  /** 第一次打招呼：听她有没有开始想、有没有回答（按呼叫键说，或者在聊天里打字都算）。 */
+  let helloState = $state<"waiting" | "thinking" | "answered">("waiting");
+  let helloAnswer = $state("");
+  let unlistenAgent: (() => void) | undefined;
+  async function watchHello() {
+    unlistenAgent?.();
+    unlistenAgent = await subscribeAgent((_, event) => {
+      if (event.kind === "step" && helloState === "waiting") helloState = "thinking";
+      if (event.kind === "appended" && event.message.role === "assistant" && event.message.text.trim()) {
+        helloState = "answered";
+        helloAnswer = event.message.text.trim();
+      }
+    });
+  }
+
+  // ---------- 只用语音输入法：第一次说话上屏 ----------
+  let tryText = $state("");
+  let tryBox = $state<HTMLTextAreaElement | null>(null);
+  const tried = $derived(tryText.trim().length > 0 || $appState.state === "success");
+  async function startTry() {
+    try {
+      await startRuntime();
+    } catch (e) {
+      toast(false, `启动语音输入失败：${errText(e)}`);
+    }
+    tryBox?.focus();
   }
 
 
@@ -460,71 +548,149 @@
   onDestroy(() => {
     captureCleanup?.();
     unlistenDl?.();
+    unlistenAgent?.();
   });
 </script>
 
 <div
-  class="absolute inset-0 z-50 flex items-center justify-center bg-kotone-deep/94 p-5 backdrop-blur-sm"
+  class="absolute inset-0 z-50 flex items-center justify-center bg-black/50 p-5 backdrop-blur-sm"
   data-testid="onboarding"
 >
   <div
-    class="kotone-panel relative max-h-full w-full max-w-2xl overflow-y-auto shadow-glow-cyan-lg"
+    class="rounded-3xl border border-hairline bg-popover text-popover-foreground shadow-2xl relative max-h-full w-full max-w-2xl overflow-y-auto"
   >
     <div
       class="pointer-events-none absolute -top-24 left-1/2 h-48 w-96 -translate-x-1/2 rounded-full bg-kotone-violet/25 blur-3xl"
     ></div>
 
-    {#if step === 0}
+    {#if step === "welcome"}
       <div class="relative overflow-hidden">
         <!-- 欢迎视觉：ord-ui-onboarding-hero 合成图（张开双臂的邀请感） -->
         <div class="relative">
           <img src={heroOnboarding} alt="Kotone 张开双臂欢迎来到直播间" class="h-52 w-full object-cover object-top" />
-          <div class="absolute inset-0 bg-gradient-to-t from-kotone-panel via-kotone-panel/30 to-transparent"></div>
+          <div class="absolute inset-0 bg-gradient-to-t from-popover via-popover/30 to-transparent"></div>
         </div>
         <div class="relative -mt-8 px-8 pb-8">
           <img src={stickerHello} alt="" class="mb-3 h-12 w-12" />
           <h1 class="text-2xl font-bold">
             欢迎来到 <span class="kotone-gradient-text">Kotone 琴音</span>
           </h1>
-          <p class="mt-2 text-sm leading-relaxed text-white/65">
-            游戏里不动手，说话就能发消息。<br />
-            接下来会选游戏配置、准备本地模型、设置热键，完成后直接进入主页。
-          </p>
-          <div class="mt-6 flex items-center gap-3">
+          <p class="mt-2 text-sm leading-relaxed text-muted-foreground">陪你打游戏的 AI：叫她一声，她帮你查、帮你说、帮你按。</p>
+          <div class="mt-6 flex flex-wrap items-center gap-3">
             <button
-              class="rounded-lg bg-kotone-cyan px-5 py-2 text-sm font-semibold text-kotone-deep transition hover:brightness-110 focus-visible:ring-2 focus-visible:ring-white active:scale-95"
-              onclick={() => (step = 1)}
+              class="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110 focus-visible:ring-2 focus-visible:ring-ring active:scale-95"
+              data-testid="onboarding-start-ai"
+              onclick={() => { path = "ai"; step = "key"; }}
             >
-              开始设置
+              和{$companionName}开始
             </button>
             <button
-              class="text-xs text-white/50 underline-offset-2 transition hover:text-white/80 hover:underline"
+              class="rounded-lg border border-hairline px-4 py-2 text-sm text-foreground/85 transition hover:bg-muted"
+              data-testid="onboarding-start-voice"
+              onclick={() => { path = "voice"; step = "profile"; }}
+            >
+              只用语音输入法
+            </button>
+            <button
+              class="ml-auto text-xs text-muted-foreground underline-offset-2 transition hover:text-foreground/90 hover:underline"
               onclick={() => void finish(true)}
             >
-              跳过向导
+              跳过
             </button>
           </div>
         </div>
       </div>
-    {:else if step === 1}
+    {:else if step === "key"}
+      <div class="relative p-7" data-testid="onboarding-key">
+        <div class="flex items-start gap-4">
+          <img src={stickerHello} alt="" class="h-11 w-11 shrink-0" />
+          <div>
+            <h2 class="mt-0.5 text-lg font-bold">填一个 DeepSeek Key</h2>
+            <p class="mt-1 text-xs leading-relaxed text-muted-foreground">有这一个 Key，{$companionName}的全部功能就能用。</p>
+          </div>
+        </div>
+        <form class="mt-5" onsubmit={(e) => { e.preventDefault(); void startWithKey(); }}>
+          <input
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="sk-…"
+            aria-label="DeepSeek Key"
+            data-testid="onboarding-key-input"
+            bind:value={apiKey}
+            class="h-10 w-full rounded-lg border border-hairline bg-background px-3 font-mono text-sm outline-none focus:border-primary"
+          />
+          {#if keyError}<p role="alert" class="mt-2 mb-0 text-xs text-destructive" data-testid="onboarding-key-error">{keyError}</p>{/if}
+          <button type="button" class="mt-2 text-xs text-primary hover:underline" onclick={() => void openExternal(DEEPSEEK_KEY_PAGE).catch(() => {})}>
+            还没有 Key？去 DeepSeek 开放平台创建 →
+          </button>
+          <div class="mt-6 flex items-center justify-between">
+            <button type="button" class="text-xs text-muted-foreground hover:text-foreground/90" onclick={() => (step = "welcome")}>返回</button>
+            <button
+              type="submit"
+              class="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
+              data-testid="onboarding-key-start"
+              disabled={!apiKey.trim() || keyBusy}
+            >
+              {keyBusy ? "连接中…" : "开始"}
+            </button>
+          </div>
+        </form>
+      </div>
+    {:else if step === "hello"}
+      <div class="relative p-7" data-testid="onboarding-hello">
+        <div class="flex items-start gap-4">
+          <img src={helloState === "answered" ? stickerCheering : stickerHello} alt="" class="h-11 w-11 shrink-0" />
+          <div>
+            <h2 class="mt-0.5 text-lg font-bold">跟她打个招呼</h2>
+            <p class="mt-1 text-xs leading-relaxed text-muted-foreground">在游戏里也一样：按一下就叫她。</p>
+          </div>
+        </div>
+        <div class="mt-5 rounded-2xl bg-muted/40 px-5 py-4 ring-1 ring-hairline">
+          <p class="m-0 text-sm text-muted-foreground">按一下 <kbd class="rounded border border-hairline bg-background px-1.5 py-0.5 font-mono text-xs text-foreground">{callKey}</kbd>，说：</p>
+          <p class="m-0 mt-1.5 text-lg font-semibold">“{hello}”</p>
+        </div>
+        <p class="mt-3 mb-0 min-h-5 text-xs" data-testid="onboarding-hello-status" role="status">
+          {#if helloState === "answered"}
+            <span class="text-success">✓ 她回答了：</span><span class="text-foreground/85">{helloAnswer.length > 80 ? `${helloAnswer.slice(0, 80)}…` : helloAnswer}</span>
+          {:else if helloState === "thinking"}
+            <span class="text-primary">她在想…</span>
+          {:else}
+            <span class="text-muted-foreground">等你开口…</span>
+          {/if}
+        </p>
+        <div class="mt-6 flex items-center justify-between">
+          <button class="text-xs text-muted-foreground hover:text-foreground/90" data-testid="onboarding-hello-type" onclick={() => onDone("assistant", hello)}>
+            不方便说话？打字问她
+          </button>
+          <button
+            class="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
+            data-testid="onboarding-hello-done"
+            onclick={() => onDone("assistant")}
+          >
+            {helloState === "answered" ? "好的" : "完成"}
+          </button>
+        </div>
+      </div>
+    {:else if step === "profile"}
       <div class="relative p-7" data-testid="onboarding-profile">
         <div class="flex items-start gap-4">
           <img src={stickerCheering} alt="" class="h-11 w-11 shrink-0" />
           <div>
-            <p class="text-[11px] font-semibold tracking-wide text-kotone-cyan">第 1 步 / 3</p>
+            <p class="text-[11px] font-semibold tracking-wide text-primary">第 1 步 / 3</p>
             <h2 class="mt-0.5 text-lg font-bold">选择游戏配置</h2>
-            <p class="mt-1 text-xs leading-relaxed text-white/55">
+            <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
               Profile 只决定聊天键、输入方式和术语词库，不会限制你向哪个前台窗口发送。
             </p>
           </div>
         </div>
 
         {#if loadingResources}
-          <p class="mt-5 text-sm text-white/55">正在读取游戏配置…</p>
+          <p class="mt-5 text-sm text-muted-foreground">正在读取游戏配置…</p>
         {:else if resourceError}
-          <div class="mt-5 rounded-lg bg-kotone-pink/10 p-3 ring-1 ring-kotone-pink/40">
-            <p class="text-xs text-kotone-pink">{resourceError}</p>
-            <button class="mt-2 text-xs text-white underline" onclick={() => void reloadResources()}>
+          <div class="mt-5 rounded-lg bg-brand-pink/10 p-3 ring-1 ring-brand-pink/40">
+            <p class="text-xs text-brand-pink">{resourceError}</p>
+            <button class="mt-2 text-xs text-foreground underline" onclick={() => void reloadResources()}>
               重试
             </button>
           </div>
@@ -533,34 +699,34 @@
             {#each profiles as profile}
               {@const active = selectedProfileId === profile.id}
               <button
-                class="relative rounded-xl p-4 text-left ring-1 transition focus-visible:ring-2 focus-visible:ring-kotone-cyan {active
-                  ? 'bg-kotone-cyan/12 ring-kotone-cyan/60 shadow-glow-cyan'
-                  : 'bg-kotone-card/60 ring-white/10 hover:bg-kotone-card'}"
+                class="relative rounded-xl p-4 text-left ring-1 transition focus-visible:ring-2 focus-visible:ring-primary {active
+                  ? 'bg-primary/12 ring-primary/60'
+                  : 'bg-muted/40 ring-hairline hover:bg-muted'}"
                 data-testid="profile-{profile.id}"
                 onclick={() => void chooseProfile(profile.id)}
               >
                 {#if profile.id === "lol"}
-                  <span class="absolute top-3 right-3 rounded bg-kotone-pink/20 px-2 py-0.5 text-[10px] font-semibold text-kotone-pink">
+                  <span class="absolute top-3 right-3 rounded bg-brand-pink/20 px-2 py-0.5 text-[10px] font-semibold text-brand-pink">
                     推荐
                   </span>
                 {/if}
                 <span
-                  class="flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl {active ? 'bg-kotone-cyan/15' : 'bg-white/8'}"
+                  class="flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl {active ? 'bg-primary/15' : 'bg-muted/70'}"
                 >
                   {#if profile.icon && iconUrls[profile.id]}
                     <img src={iconUrls[profile.id]} alt={profile.displayName} class="h-full w-full object-contain" />
                   {:else if profile.processNames.length === 0}
                     <!-- lucide: globe -->
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5 {active ? 'text-kotone-cyan' : 'text-white/60'}"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5 {active ? 'text-primary' : 'text-muted-foreground'}"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
                   {:else}
                     <!-- lucide: gamepad-2 -->
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5 {active ? 'text-kotone-cyan' : 'text-white/60'}"><line x1="6" x2="10" y1="11" y2="11"/><line x1="8" x2="8" y1="9" y2="13"/><line x1="15" x2="15.01" y1="12" y2="12"/><line x1="18" x2="18.01" y1="10" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5 {active ? 'text-primary' : 'text-muted-foreground'}"><line x1="6" x2="10" y1="11" y2="11"/><line x1="8" x2="8" y1="9" y2="13"/><line x1="15" x2="15.01" y1="12" y2="12"/><line x1="18" x2="18.01" y1="10" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/></svg>
                   {/if}
                 </span>
-                <p class="mt-2 text-sm font-semibold {active ? 'text-kotone-cyan' : ''}">
+                <p class="mt-2 text-sm font-semibold {active ? 'text-primary' : ''}">
                   {profile.displayName}
                 </p>
-                <p class="mt-1 text-[11px] leading-relaxed text-white/50">
+                <p class="mt-1 text-[11px] leading-relaxed text-muted-foreground">
                   {profile.openChatKey} 打开聊天 · {profile.sendKey} 发送 · 热词 {profile.hotwords.length} 个
                 </p>
               </button>
@@ -569,42 +735,42 @@
         {/if}
 
         <div class="mt-6 flex items-center justify-between">
-          <button class="text-xs text-white/50 hover:text-white/80" onclick={() => (step = 0)}>
+          <button class="text-xs text-muted-foreground hover:text-foreground/90" onclick={() => (step = "welcome")}>
             ← 上一步
           </button>
           <button
-            class="rounded-lg bg-kotone-cyan px-5 py-2 text-sm font-semibold text-kotone-deep transition hover:brightness-110 disabled:opacity-50"
+            class="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
             disabled={loadingResources || !selectedProfile}
-            onclick={() => (step = 2)}
+            onclick={() => (step = "model")}
           >
             下一步
           </button>
         </div>
       </div>
-    {:else if step === 2}
+    {:else if step === "model"}
       <div class="relative p-6" data-testid="onboarding-model">
         <div class="flex items-start gap-4">
           <img src={stickerThinking} alt="" class="h-11 w-11 shrink-0" />
           <div>
-            <p class="text-[11px] font-semibold tracking-wide text-kotone-cyan">第 2 步 / 3</p>
+            <p class="text-[11px] font-semibold tracking-wide text-primary">第 2 步 / 3</p>
             <h2 class="mt-0.5 text-lg font-bold">准备识别模型与麦克风</h2>
-            <p class="mt-1 text-xs leading-relaxed text-white/55">
+            <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
               识别完全在本地运行。推荐模型只需下载一次，不会上传你的语音。
             </p>
           </div>
         </div>
 
         <!-- 先确认存储位置，再下载模型；两项属于同一准备流程。 -->
-        <div class="kotone-card mt-4 overflow-hidden" data-testid="model-setup-section">
-          <div class="border-b border-white/10 p-3.5" data-testid="model-storage-section">
+        <div class="rounded-xl border border-hairline bg-card/70 mt-4 overflow-hidden" data-testid="model-setup-section">
+          <div class="border-b border-hairline p-3.5" data-testid="model-storage-section">
             <div class="flex items-center gap-3">
-              <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-kotone-cyan/15 text-[11px] font-bold text-kotone-cyan">
+              <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[11px] font-bold text-primary">
                 1
               </span>
               <div class="min-w-0 flex-1">
                 <p class="text-sm font-semibold">先确认模型存储位置</p>
                 <p
-                  class="mt-0.5 truncate text-[11px] text-white/45"
+                  class="mt-0.5 truncate text-[11px] text-muted-foreground"
                   title={dirInfo?.dir ?? "正在读取模型存储位置"}
                   data-testid="models-dir-path"
                 >
@@ -614,7 +780,7 @@
               <div class="flex shrink-0 items-center gap-1.5">
                 {#if dirInfo && !dirInfo.isDefault}
                   <button
-                    class="rounded-lg bg-white/8 px-2.5 py-1.5 text-[11px] text-white/65 ring-1 ring-white/12 transition hover:bg-white/15 disabled:opacity-50"
+                    class="rounded-lg bg-muted/70 px-2.5 py-1.5 text-[11px] text-muted-foreground ring-1 ring-hairline transition hover:bg-muted disabled:opacity-50"
                     disabled={changingDir || downloadTargetId !== null}
                     onclick={() => void resetModelsDir()}
                   >
@@ -622,14 +788,14 @@
                   </button>
                 {/if}
                 <button
-                  class="rounded-lg bg-white/10 px-2.5 py-1.5 text-[11px] font-semibold text-white/85 ring-1 ring-white/15 transition hover:bg-white/20 disabled:opacity-50"
+                  class="rounded-lg bg-muted/70 px-2.5 py-1.5 text-[11px] font-semibold text-foreground/90 ring-1 ring-hairline transition hover:bg-muted disabled:opacity-50"
                   disabled={changingDir || downloadTargetId !== null || dirInfo === null}
                   onclick={() => void pickModelsDir()}
                 >
                   {changingDir ? "切换中…" : "选择位置"}
                 </button>
                 <button
-                  class="rounded-lg bg-white/8 px-2.5 py-1.5 text-[11px] text-white/65 ring-1 ring-white/12 transition hover:bg-white/15 disabled:opacity-50"
+                  class="rounded-lg bg-muted/70 px-2.5 py-1.5 text-[11px] text-muted-foreground ring-1 ring-hairline transition hover:bg-muted disabled:opacity-50"
                   disabled={dirInfo === null}
                   onclick={() => void openModelsDir()}
                 >
@@ -638,11 +804,11 @@
               </div>
             </div>
             {#if currentModelsDirError}
-              <p class="mt-2 text-[11px] text-kotone-pink" data-testid="models-dir-error">
+              <p class="mt-2 text-[11px] text-brand-pink" data-testid="models-dir-error">
                 {currentModelsDirError}。请先点击“选择位置”。
               </p>
             {:else}
-              <p class="mt-2 text-[11px] text-white/40">
+              <p class="mt-2 text-[11px] text-muted-foreground/80">
                 模型路径需要使用纯英文，例如 D:\KotoneModels。
               </p>
             {/if}
@@ -656,17 +822,17 @@
               {#if primaryModel}
                 <div class="min-w-0 flex-1">
                   <p class="truncate text-sm font-semibold">再下载 {primaryModel.displayName}</p>
-                  <p class="mt-0.5 text-[11px] text-white/45">
+                  <p class="mt-0.5 text-[11px] text-muted-foreground">
                     约 {Math.round(primaryModel.sizeBytes / 1_000_000)} MB · 中英流式识别
                   </p>
                 </div>
                 {#if primaryReady}
-                  <span class="shrink-0 rounded bg-kotone-cyan/15 px-3 py-1.5 text-xs font-semibold text-kotone-cyan">
+                  <span class="shrink-0 rounded bg-primary/15 px-3 py-1.5 text-xs font-semibold text-primary">
                     ✓ 已就绪
                   </span>
                 {:else}
                   <button
-                    class="shrink-0 rounded-lg bg-kotone-cyan px-3.5 py-1.5 text-xs font-semibold text-kotone-deep disabled:opacity-50"
+                    class="shrink-0 rounded-lg bg-primary px-3.5 py-1.5 text-xs font-semibold text-primary-foreground disabled:opacity-50"
                     disabled={downloadTargetId !== null || changingDir || dirInfo === null || currentModelsDirError !== null}
                     onclick={() => void downloadById(primaryModel.id)}
                   >
@@ -674,24 +840,24 @@
                   </button>
                 {/if}
               {:else}
-                <p class="text-xs text-kotone-pink">未找到推荐模型，请重试读取资源。</p>
+                <p class="text-xs text-brand-pink">未找到推荐模型，请重试读取资源。</p>
               {/if}
             </div>
             {#if primaryModel && downloadTargetId === primaryModel.id}
               <div class="mt-2.5 flex items-center gap-2 pl-9">
-                <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-white/10">
+                <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-muted/70">
                   <div
-                    class="h-full rounded-full bg-kotone-cyan transition-[width] {dlPercent === null
+                    class="h-full rounded-full bg-primary transition-[width] {dlPercent === null
                       ? 'w-1/3 animate-pulse'
                       : ''}"
                     style:width={dlPercent === null ? undefined : `${dlPercent}%`}
                   ></div>
                 </div>
-                <span class="w-9 text-right text-[10px] text-white/45">
+                <span class="w-9 text-right text-[10px] text-muted-foreground">
                   {dlPercent === null ? "连接" : `${dlPercent}%`}
                 </span>
                 <button
-                  class="shrink-0 rounded-lg bg-white/10 px-2.5 py-1 text-[11px] text-white/70 ring-1 ring-white/15 transition hover:bg-white/20 disabled:opacity-50"
+                  class="shrink-0 rounded-lg bg-muted/70 px-2.5 py-1 text-[11px] text-muted-foreground ring-1 ring-hairline transition hover:bg-muted disabled:opacity-50"
                   disabled={cancellingDownload}
                   onclick={() => void cancelDownloadById()}
                 >
@@ -701,10 +867,10 @@
             {/if}
             {#if dlError}
               <div class="mt-2 flex items-start gap-2 pl-9">
-                <p class="min-w-0 flex-1 text-[11px] text-kotone-pink">{dlError}</p>
+                <p class="min-w-0 flex-1 text-[11px] text-brand-pink">{dlError}</p>
                 {#if primaryModel}
                   <button
-                    class="shrink-0 text-[11px] text-white/60 underline-offset-2 hover:text-white/85 hover:underline"
+                    class="shrink-0 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground/90 hover:underline"
                     onclick={() => void openManualGuide(primaryModel.id)}
                   >
                     手动下载
@@ -715,10 +881,10 @@
           </div>
         </div>
 
-        <label class="kotone-card mt-3 flex items-center gap-3 p-3">
-          <span class="shrink-0 text-sm font-semibold text-kotone-cyan/90">麦克风</span>
+        <label class="rounded-xl border border-hairline bg-card/70 mt-3 flex items-center gap-3 p-3">
+          <span class="shrink-0 text-sm font-semibold text-primary/90">麦克风</span>
           <div class="min-w-0 flex-1">
-            <Select
+            <SelectField
               size="md"
               ariaLabel="麦克风"
               value={selectedDeviceId}
@@ -726,15 +892,15 @@
               onchange={(id) => void chooseDevice(id)}
             />
           </div>
-          <span class="shrink-0 text-[10px] text-white/40">下一步会验证</span>
+          <span class="shrink-0 text-[10px] text-muted-foreground/80">下一步会验证</span>
         </label>
 
         <div class="mt-4 flex items-center justify-between" data-testid="onboarding-model-footer">
-          <button class="text-xs text-white/50 hover:text-white/80" onclick={() => (step = 1)}>
+          <button class="text-xs text-muted-foreground hover:text-foreground/90" onclick={() => (step = "profile")}>
             ← 上一步
           </button>
           <button
-            class="rounded-lg bg-kotone-cyan px-5 py-2 text-sm font-semibold text-kotone-deep transition hover:brightness-110 disabled:opacity-50"
+            class="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
             disabled={!primaryReady || downloadTargetId !== null}
             onclick={enterHotkeyStep}
           >
@@ -742,14 +908,14 @@
           </button>
         </div>
       </div>
-    {:else if step === 3}
+    {:else if step === "hotkey"}
       <div class="relative p-7" data-testid="onboarding-hotkey">
         <div class="flex items-start gap-4">
           <img src={stickerCheering} alt="" class="h-11 w-11 shrink-0" />
           <div>
-            <p class="text-[11px] font-semibold tracking-wide text-kotone-cyan">第 3 步 / 3</p>
+            <p class="text-[11px] font-semibold tracking-wide text-primary">第 3 步 / 3</p>
             <h2 class="mt-0.5 text-lg font-bold">设置说话方式与热键</h2>
-            <p class="mt-1 text-xs leading-relaxed text-white/55">
+            <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
               选择最顺手的操作方式，点「完成」进入主页后即可开始使用。
             </p>
           </div>
@@ -759,14 +925,14 @@
           {#each modes as mode}
             {@const active = selectedMode === mode.id}
             <button
-              class="rounded-xl px-3 py-3 text-left ring-1 transition focus-visible:ring-2 focus-visible:ring-kotone-cyan {active
-                ? 'bg-kotone-cyan/12 ring-kotone-cyan/60 shadow-glow-cyan'
-                : 'bg-kotone-card/60 ring-white/10 hover:bg-kotone-card'}"
+              class="rounded-xl px-3 py-3 text-left ring-1 transition focus-visible:ring-2 focus-visible:ring-primary {active
+                ? 'bg-primary/12 ring-primary/60'
+                : 'bg-muted/40 ring-hairline hover:bg-muted'}"
               data-testid="mode-{mode.id}"
               onclick={() => (selectedMode = mode.id)}
             >
               <span
-                class="inline-flex h-5 w-5 items-center justify-center {active ? 'text-kotone-cyan' : 'text-white/60'}"
+                class="inline-flex h-5 w-5 items-center justify-center {active ? 'text-primary' : 'text-muted-foreground'}"
                 aria-hidden="true"
               >
                 {#if mode.id === "push-to-talk"}
@@ -780,45 +946,45 @@
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4.5 w-4.5"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
                 {/if}
               </span>
-              <p class="mt-1 text-sm font-semibold {active ? 'text-kotone-cyan' : ''}">{mode.name}</p>
-              <p class="mt-1 text-[11px] leading-relaxed text-white/50">{mode.desc}</p>
+              <p class="mt-1 text-sm font-semibold {active ? 'text-primary' : ''}">{mode.name}</p>
+              <p class="mt-1 text-[11px] leading-relaxed text-muted-foreground">{mode.desc}</p>
             </button>
           {/each}
         </div>
 
         {#if checkingInputEnvironment}
           <div
-            class="mt-4 rounded-xl bg-kotone-cyan/8 p-4 ring-1 ring-kotone-cyan/30"
+            class="mt-4 rounded-xl bg-primary/8 p-4 ring-1 ring-primary/30"
             data-testid="input-environment-checking"
           >
-            <p class="text-sm font-semibold text-kotone-cyan">正在检测键盘输入环境…</p>
-            <p class="mt-1 text-[11px] leading-relaxed text-white/50">
+            <p class="text-sm font-semibold text-primary">正在检测键盘输入环境…</p>
+            <p class="mt-1 text-[11px] leading-relaxed text-muted-foreground">
               正在验证低级键盘钩子与 Windows 模拟输入，无需按下任何按键。
             </p>
           </div>
         {:else if inputEnvironment && !inputEnvironment.available}
           <div
-            class="mt-4 rounded-xl bg-kotone-pink/10 p-4 ring-1 ring-kotone-pink/45"
+            class="mt-4 rounded-xl bg-brand-pink/10 p-4 ring-1 ring-brand-pink/45"
             data-testid="input-environment-blocked"
           >
-            <p class="text-sm font-semibold text-kotone-pink">检测到键盘输入被拦截</p>
-            <p class="mt-1 text-xs leading-relaxed text-white/65">
+            <p class="text-sm font-semibold text-brand-pink">检测到键盘输入被拦截</p>
+            <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
               Kotone 暂时无法可靠监听热键或发送文字。请将 Kotone 可执行文件加入
               360、火绒等安全软件的信任区，然后重新检测。
             </p>
             {#if inputEnvironment.detail}
-              <p class="mt-2 break-all text-[10px] leading-relaxed text-white/35">
+              <p class="mt-2 break-all text-[10px] leading-relaxed text-muted-foreground/80">
                 检测详情：{inputEnvironment.detail}
               </p>
             {/if}
             <button
-              class="mt-3 rounded-lg bg-kotone-pink/18 px-3 py-1.5 text-xs font-semibold text-kotone-pink ring-1 ring-kotone-pink/35 hover:bg-kotone-pink/25"
+              class="mt-3 rounded-lg bg-brand-pink/18 px-3 py-1.5 text-xs font-semibold text-brand-pink ring-1 ring-brand-pink/35 hover:bg-brand-pink/25"
               onclick={() => void runInputEnvironmentCheck()}
             >
               已加入信任区，重新检测
             </button>
             <button
-              class="mt-3 rounded-lg bg-white/10 px-3 py-1.5 text-xs text-white/70 ring-1 ring-white/15 transition hover:bg-white/20"
+              class="mt-3 rounded-lg bg-muted/70 px-3 py-1.5 text-xs text-muted-foreground ring-1 ring-hairline transition hover:bg-muted"
               onclick={() => {
                 inputBlockedOverridden = true;
                 toastWarn("已跳过输入环境检测：如后续发送无反应，请回此步重新检测");
@@ -829,25 +995,25 @@
           </div>
         {:else if inputEnvironment}
           <div
-            class="mt-4 rounded-xl bg-kotone-cyan/8 p-3 ring-1 ring-kotone-cyan/25"
+            class="mt-4 rounded-xl bg-primary/8 p-3 ring-1 ring-primary/25"
             data-testid="input-environment-ready"
           >
-            <p class="text-xs font-semibold text-kotone-cyan">✓ 键盘输入环境可用</p>
+            <p class="text-xs font-semibold text-primary">✓ 键盘输入环境可用</p>
             {#if !inputEnvironment.hookVerified}
-              <p class="mt-1 text-[10px] leading-relaxed text-white/40">
+              <p class="mt-1 text-[10px] leading-relaxed text-muted-foreground/80">
                 Windows 已接受模拟输入；低级钩子将在你实际录入按键时继续验证。
               </p>
             {/if}
           </div>
         {/if}
 
-        <div class="kotone-card mt-4 flex items-center gap-3 p-4">
+        <div class="rounded-xl border border-hairline bg-card/70 mt-4 flex items-center gap-3 p-4">
           <div class="min-w-0 flex-1">
-            <p class="text-xs text-white/50">当前热键</p>
-            <p class="mt-1 text-lg font-bold text-kotone-cyan">{currentKey}</p>
+            <p class="text-xs text-muted-foreground">当前热键</p>
+            <p class="mt-1 text-lg font-bold text-primary">{currentKey}</p>
           </div>
           <button
-            class="rounded-lg bg-white/10 px-3 py-2 text-xs font-semibold text-white/85 ring-1 ring-white/15 hover:bg-white/20 disabled:opacity-60"
+            class="rounded-lg bg-muted/70 px-3 py-2 text-xs font-semibold text-foreground/90 ring-1 ring-hairline hover:bg-muted disabled:opacity-60"
             disabled={capturing || checkingInputEnvironment || (inputEnvironment?.available === false && !inputBlockedOverridden)}
             onclick={() => void startCapture()}
           >
@@ -856,22 +1022,59 @@
         </div>
 
         {#if hotkeyWarnings.length > 0}
-          <div class="mt-3 rounded-xl bg-kotone-pink/10 p-3 ring-1 ring-kotone-pink/35">
-            <p class="text-xs font-semibold text-kotone-pink">键位冲突提示</p>
+          <div class="mt-3 rounded-xl bg-brand-pink/10 p-3 ring-1 ring-brand-pink/35">
+            <p class="text-xs font-semibold text-brand-pink">键位冲突提示</p>
             {#each hotkeyWarnings as w}
-              <p class="mt-1 text-[11px] leading-relaxed text-white/65">⚠ {w}</p>
+              <p class="mt-1 text-[11px] leading-relaxed text-muted-foreground">⚠ {w}</p>
             {/each}
           </div>
         {/if}
 
         <div class="mt-6 flex items-center justify-between">
-          <button class="text-xs text-white/50 hover:text-white/80" onclick={() => (step = 2)}>
+          <button class="text-xs text-muted-foreground hover:text-foreground/90" onclick={() => (step = "model")}>
             ← 上一步
           </button>
           <button
-            class="rounded-lg bg-kotone-cyan px-5 py-2 text-sm font-semibold text-kotone-deep transition hover:brightness-110 disabled:opacity-50"
+            class="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
             disabled={capturing || checkingInputEnvironment || (inputEnvironment?.available === false && !inputBlockedOverridden)}
             onclick={() => void saveInteractionAndContinue()}
+          >
+            完成
+          </button>
+        </div>
+      </div>
+    {:else if step === "try"}
+      <div class="relative p-7" data-testid="onboarding-try">
+        <div class="flex items-start gap-4">
+          <img src={tried ? stickerCheering : stickerHello} alt="" class="h-11 w-11 shrink-0" />
+          <div>
+            <h2 class="mt-0.5 text-lg font-bold">说一句试试</h2>
+            <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
+              点一下下面的框，{selectedMode === "push-to-talk" ? "按住" : "按一下"}
+              <kbd class="rounded border border-hairline bg-background px-1.5 py-0.5 font-mono text-[11px] text-foreground">{currentKey}</kbd>
+              说一句话，比如“打野来下路”。在游戏里，字会这样打进聊天框。
+            </p>
+          </div>
+        </div>
+        <textarea
+          bind:this={tryBox}
+          bind:value={tryText}
+          rows="2"
+          data-testid="onboarding-try-box"
+          aria-label="试一下语音输入"
+          class="mt-5 w-full resize-none rounded-xl border border-hairline bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+        ></textarea>
+        <p class="mt-2 mb-0 min-h-5 text-xs" role="status" data-testid="onboarding-try-status">
+          {#if tried}<span class="text-success">✓ 成了，语音输入设好了</span>{:else}<span class="text-muted-foreground">等你开口…</span>{/if}
+        </p>
+        <div class="mt-6 flex items-center justify-between">
+          <button class="text-xs text-primary hover:underline" data-testid="onboarding-try-ai" onclick={() => { path = "ai"; step = "key"; }}>
+            也想让{$companionName}陪你玩？填个 DeepSeek Key
+          </button>
+          <button
+            class="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
+            data-testid="onboarding-try-done"
+            onclick={() => onDone()}
           >
             完成
           </button>
@@ -880,11 +1083,11 @@
     {/if}
 
     <div class="relative flex justify-center gap-1.5 pb-4">
-      {#each [0, 1, 2, 3] as i}
+      {#each dots as i (i)}
         <span
           class="h-1.5 rounded-full transition-all {i === step
-            ? 'w-5 bg-kotone-cyan shadow-glow-cyan'
-            : 'w-1.5 bg-white/20'}"
+            ? 'w-5 bg-primary'
+            : 'w-1.5 bg-muted'}"
         ></span>
       {/each}
     </div>

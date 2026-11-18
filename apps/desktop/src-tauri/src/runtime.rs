@@ -190,7 +190,15 @@ pub fn snapshot_and_emit(app: &AppHandle, stage: Option<String>) -> Option<Runti
     };
     // 托盘「启动引擎 / 停止引擎」文案同步：启动/停止完成都会经过本推送点
     crate::tray::sync_toggle_label(app, status.phase == "running");
+    // 语音唤醒跟随语音识别的启停与设置（设置保存的最后一步也经过这里）。
+    crate::wake::sync(app);
+    // 游戏语音（ADR 020）同样跟着设置启停转发。
+    crate::voice_chat::sync(app);
     emit_status(app, &status);
+    // 反向通道：Agent 可订阅运行时相位变化（工具服务未开启时为空操作）
+    if let Ok(value) = serde_json::to_value(&status) {
+        crate::tool_service::publish(app, "runtime.phase", value);
+    }
     Some(status)
 }
 
@@ -479,6 +487,9 @@ fn finish_start(
     }));
     rt.input_epoch.fetch_add(1, Ordering::SeqCst);
     rt.transit(runtime::finish_start)?;
+    // Creation is optional and asynchronous; reconcile again now that Always
+    // can observe Running even if its WebView was not ready during stage 3.
+    crate::overlay::reconcile(app, false);
     kotone_core::log::log("runtime started");
     crate::record_process_event(
         app,

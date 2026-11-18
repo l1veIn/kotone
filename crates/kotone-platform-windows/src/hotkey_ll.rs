@@ -15,7 +15,7 @@
 //! 吞键策略：完整命中（主键 + 修饰键严格匹配）才 return 1 吞掉；
 //! 其余按键一律 CallNextHookEx 放行。
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -104,6 +104,51 @@ struct ProbeRequest {
 }
 
 static SHARED: OnceLock<HookShared> = OnceLock::new();
+
+/// 钩子正在运行（`game.act` 据此知道 Esc 停止能不能用）。
+static HOOKS_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// 琴音操作游戏时的 Esc 停止（ADR 019，2026-11-17 用户改为“按 Esc 退出”）：开着时，玩家按的
+/// Esc 被拦下、不传给游戏，并记一次“按了 Esc”；琴音自己发的 Esc（带 Kotone 标记）照常传给游戏。
+static ESC_STOP_ARMED: AtomicBool = AtomicBool::new(false);
+static ESC_STOP_PRESSED: AtomicBool = AtomicBool::new(false);
+/// 拦下了 Esc 的按下，对应的松开也要拦下。
+static ESC_SWALLOWING: AtomicBool = AtomicBool::new(false);
+
+/// 低级键鼠钩子在运行。
+pub fn hooks_running() -> bool {
+    HOOKS_RUNNING.load(Ordering::Relaxed)
+}
+
+/// 开 / 关 Esc 停止；每次打开都清掉上一次的“按了 Esc”。
+pub fn arm_esc_stop(armed: bool) {
+    ESC_STOP_PRESSED.store(false, Ordering::SeqCst);
+    ESC_STOP_ARMED.store(armed, Ordering::SeqCst);
+}
+
+/// 打开之后玩家按过 Esc。
+pub fn esc_stop_pressed() -> bool {
+    ESC_STOP_PRESSED.load(Ordering::SeqCst)
+}
+
+/// 钩子里的 Esc 停止判定；返回 true = 吞掉这个事件。
+fn esc_stop(vk: u32, down: bool, injected: bool, extra_info: usize) -> bool {
+    let ours = injected && extra_info == crate::inject::KOTONE_INPUT_TAG;
+    if vk != VK_ESCAPE || ours {
+        return false;
+    }
+    if down {
+        if ESC_STOP_ARMED.load(Ordering::SeqCst) {
+            ESC_STOP_PRESSED.store(true, Ordering::SeqCst);
+            ESC_SWALLOWING.store(true, Ordering::SeqCst);
+            return true;
+        }
+        // 按住时自动重复的按下也一并吞掉
+        ESC_SWALLOWING.load(Ordering::SeqCst)
+    } else {
+        ESC_SWALLOWING.swap(false, Ordering::SeqCst)
+    }
+}
 
 /// `SendInput` 探测事件的专用标记（ASCII "KTNP"）。优先用于标识探测来源；
 /// 兼容会清除 flags/extraInfo 的输入过滤器时，短暂 probe 槽内也接受 F24 键码。
@@ -409,6 +454,8 @@ impl HotkeySource for LlHookSource {
             let mut matcher = shared.matcher.lock().unwrap();
             shared.generation.fetch_add(1, Ordering::SeqCst);
             matcher.set_enabled(false);
+            // 日志可能等待磁盘或日志锁，不能让低层钩子回调一起等待。
+            drop(matcher);
             kotone_core::log::log("llhook unregistered (matcher disabled)");
         }
     }
@@ -469,7 +516,11 @@ fn spawn_hook_thread() -> Result<u32, String> {
         .map_err(|e| format!("启动钩子线程失败: {e}"))?;
 
     match boot_rx.recv() {
-        Ok(Ok(tid)) => Ok(tid),
+        Ok(Ok(tid)) => {
+            // 日志留在调用线程，让安装线程直接进入消息泵，不阻塞全局输入。
+            kotone_core::log::log("WH_KEYBOARD_LL + WH_MOUSE_LL hooks installed");
+            Ok(tid)
+        }
         Ok(Err(e)) => Err(format!("安装低层键鼠钩子失败: {e}")),
         Err(_) => Err("钩子线程启动后异常退出".into()),
     }
@@ -507,13 +558,14 @@ fn hook_thread_main(boot: mpsc::Sender<Result<u32, String>>) {
                     return;
                 }
             };
-        // ready 之前完成日志等可能阻塞的工作；收到 ready 后线程下一步立即进入
-        // GetMessageW，不能留出“hook 已返回成功但消息泵尚未工作”的竞态窗口。
-        kotone_core::log::log("WH_KEYBOARD_LL + WH_MOUSE_LL hooks installed");
+        // hook 安装后不能做日志/IO：物理输入此时已可能等待本线程回调。
+        // ready 后立即进入消息泵，安装成功日志由调用方记录。
         let _ = boot.send(Ok(tid));
+        HOOKS_RUNNING.store(true, Ordering::Relaxed);
 
         // GetMessageW 返回 false = 收到 WM_QUIT
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {}
+        HOOKS_RUNNING.store(false, Ordering::Relaxed);
 
         let _ = UnhookWindowsHookEx(mouse_hook);
         let _ = UnhookWindowsHookEx(keyboard_hook);
@@ -593,6 +645,15 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     if code >= 0 {
         if let Some(shared) = SHARED.get() {
             let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+            let down = matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
+            if esc_stop(
+                kb.vkCode,
+                down,
+                kb.flags.contains(LLKHF_INJECTED),
+                kb.dwExtraInfo,
+            ) {
+                return LRESULT(1);
+            }
             // 闭环探测事件优先处理：确认收到后吞掉，不进入正常热键匹配，也不传给前台。
             // 某些输入过滤软件会清除 LLKHF_INJECTED 或 dwExtraInfo，但仍把事件
             // 交给钩子。probe 槽只开放 250ms，期间按 F24 键码识别比强依赖标记
@@ -727,6 +788,36 @@ mod tests {
         assert_eq!(xbutton_vk(u32::from(XBUTTON1) << 16), Some(VK_XBUTTON1));
         assert_eq!(xbutton_vk(u32::from(XBUTTON2) << 16), Some(VK_XBUTTON2));
         assert_eq!(xbutton_vk(0), None);
+    }
+
+    #[test]
+    fn esc_stops_only_while_armed_and_never_eats_kotones_own_esc() {
+        use crate::inject::KOTONE_INPUT_TAG;
+        arm_esc_stop(false);
+        assert!(
+            !esc_stop(VK_ESCAPE, true, false, 0),
+            "not armed: Esc goes to the game"
+        );
+        assert!(!esc_stop(VK_ESCAPE, false, false, 0));
+        arm_esc_stop(true);
+        assert!(!esc_stop(0x41, true, false, 0), "other keys pass");
+        assert!(
+            !esc_stop(VK_ESCAPE, true, true, KOTONE_INPUT_TAG),
+            "琴音's own Esc passes"
+        );
+        assert!(!esc_stop(VK_ESCAPE, false, true, KOTONE_INPUT_TAG));
+        assert!(!esc_stop_pressed());
+        assert!(
+            esc_stop(VK_ESCAPE, true, false, 0),
+            "player's Esc is swallowed"
+        );
+        assert!(esc_stop_pressed());
+        arm_esc_stop(false); // 松开前操作已结束：松开照样吞掉，游戏不会只收到一个松开
+        assert!(esc_stop(VK_ESCAPE, false, false, 0));
+        assert!(!esc_stop(VK_ESCAPE, false, false, 0));
+        arm_esc_stop(true);
+        assert!(!esc_stop_pressed(), "arming clears the last press");
+        arm_esc_stop(false);
     }
 
     #[test]

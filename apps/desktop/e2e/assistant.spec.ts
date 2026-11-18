@@ -1,47 +1,53 @@
 import { expect, test } from "@playwright/test";
 
-test("assistant opens on tasks, keeps drafts across sections and defaults to system speech without a download", async ({ page }, testInfo) => {
+test("assistant opens on talk, keeps drafts across sections; speech lives in General and defaults to system speech", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1040, height: 1000 });
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-assistant").click();
-  await expect(page.getByTestId("assistant-nav-tasks")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("assistant-nav-chat")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("assistant-nav-chat")).toHaveText("聊天");
   await expect(page.getByTestId("assistant-tasks")).toBeVisible();
   await expect(page.getByTestId("assistant-settings")).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "待办提醒 1" })).toBeVisible();
+  // 进行中的提醒与自动化只在这里显示概况（预览数据：1 条提醒等待中、1 个自动化运行中）
+  await expect(page.getByTestId("assistant-open-summary")).toContainText("1 条提醒、1 个自动化");
   await page.getByTestId("assistant-request").fill("5 分钟后提醒我打野有闪");
   await page.screenshot({ path: testInfo.outputPath("assistant-tasks.png"), animations: "disabled" });
   await page.getByTestId("assistant-nav-settings").click();
   await expect(page.getByTestId("assistant-tasks")).not.toBeVisible();
   await expect(page.getByTestId("assistant-settings")).toBeVisible();
-  await expect(page.getByLabel("语音引擎", { exact: true })).toHaveAttribute("data-value", "system");
-  await expect(page.getByTestId("system-speech-info")).toHaveText("无需下载。");
-  await expect(page.getByRole("button", { name: "下载语音模型", exact: true })).toHaveCount(0);
-  await expect(page.getByTestId("assistant-mode-push-to-talk")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("assistant-settings").getByTestId("speech-settings")).toHaveCount(0);
   await page.getByRole("main").evaluate((element) => { element.scrollTop = 0; });
   await page.screenshot({ path: testInfo.outputPath("assistant-settings.png"), animations: "disabled" });
-  await page.getByTestId("assistant-nav-tasks").click();
+  await page.getByTestId("assistant-nav-chat").click();
   await expect(page.getByTestId("assistant-request")).toHaveValue("5 分钟后提醒我打野有闪");
+  await page.getByTestId("assistant-open-summary").getByRole("button", { name: "在「自动化」里查看 →" }).click();
+  await expect(page.getByTestId("automation-page")).toBeVisible();
+  // 呼叫琴音、声音与弹幕都在「琴音 → 设置」（原「交流」页并进来了）
+  await page.getByTestId("settings-nav-assistant").click();
+  await page.getByTestId("assistant-nav-settings").click();
+  await expect(page.getByTestId("assistant-settings-tab")).toContainText("呼叫琴音");
+  const output = page.getByTestId("output-settings");
+  // 默认“自动”：琴音用 DeepSeek 连接时用 DeepSeek 语音，否则系统语音（预览里没有 DeepSeek 连接）
+  await expect(output.getByLabel("语音引擎", { exact: true })).toHaveAttribute("data-value", "auto");
+  await expect(output.getByTestId("auto-speech-info")).toContainText("自动用 DeepSeek 语音");
+  await expect(output.getByRole("button", { name: "下载语音模型", exact: true })).toHaveCount(0);
+  await output.screenshot({ path: testInfo.outputPath("output-settings.png") });
 });
 
-test("assistant interaction modes save independently of regular input and survive section changes", async ({ page }) => {
+test("呼叫琴音 has one key (default ~) and no input-mode choice; the chat offers a call button instead of push-to-talk", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-assistant").click();
-  const original = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
+  // 聊天输入框里是“呼叫琴音”，不是“按住说话”；浏览器预览里不可用
+  await expect(page.getByTestId("call-kotone")).toContainText("呼叫琴音");
+  await expect(page.getByTestId("call-kotone")).toBeDisabled();
+  await expect(page.getByText("按住说话")).toHaveCount(0);
   await page.getByTestId("assistant-nav-settings").click();
-  await expect(page.getByTestId("assistant-mode-solo")).toHaveCount(0);
-  for (const mode of ["dictation", "one-shot", "push-to-talk"]) {
-    await page.getByTestId(`assistant-mode-${mode}`).click();
-    await expect(page.getByTestId(`assistant-mode-${mode}`)).toHaveAttribute("aria-pressed", "true");
-    const saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
-    expect(saved.assistant.interactionMode).toBe(mode);
-    expect(saved.interactionMode).toBe(original.interactionMode);
-    expect(saved.hotkey).toEqual(original.hotkey);
-  }
-  await page.getByTestId("assistant-mode-dictation").click();
-  await expect(page.getByTestId("assistant-mode-dictation")).toHaveAttribute("aria-pressed", "true");
-  await page.getByTestId("assistant-nav-tasks").click();
-  await page.getByTestId("assistant-nav-settings").click();
-  await expect(page.getByTestId("assistant-mode-dictation")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("assistant-interaction")).toHaveCount(0);
+  await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("Backquote");
+  await expect(page.getByTestId("assistant-settings-tab")).not.toContainText("陪玩热键");
+  // 顶部的跳转
+  await page.getByTestId("companion-settings-links").getByRole("button", { name: "游戏语音" }).click();
+  await expect(page.locator("#companion-settings-teammates")).toBeInViewport();
 });
 
 test("assistant preview submits to the assistant instead of offering game send", async ({ page }) => {
@@ -50,20 +56,20 @@ test("assistant preview submits to the assistant instead of offering game send",
     const { appState } = await import("/src/lib/stores/state.ts");
     appState.update((state) => ({ ...state, purpose: "assistant", state: "preview", finalText: "5 分钟后提醒我打野有闪" }));
   });
-  await expect(page.getByText("助手热键 提交助手 · Esc 重说", { exact: true })).toBeVisible();
+  await expect(page.getByText("~ 提交助手 · Esc 重说", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "发送", exact: true })).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText("发送");
   await expect(page.getByText(/提交助手/).first()).toBeVisible();
 });
 
-test("default assistant walkie-talkie overlay tells the user to release the assistant hotkey", async ({ page }) => {
+test("calling 琴音 shows that she listens until you stop talking (no walkie-talkie)", async ({ page }) => {
   await page.goto("/#/overlay");
   await page.evaluate(async () => {
     const { appState } = await import("/src/lib/stores/state.ts");
     appState.update((state) => ({ ...state, purpose: "assistant", state: "listening", partialText: "" }));
   });
-  await expect(page.getByText("助手收音中 · 松开助手热键提交", { exact: true })).toBeVisible();
-  await expect(page.getByText(/再按助手热键预览/)).toHaveCount(0);
+  await expect(page.getByText("在听 · 说完自动提交（再按 ~ 立刻提交）", { exact: true })).toBeVisible();
+  await expect(page.getByText(/松开/)).toHaveCount(0);
   await page.evaluate(async () => {
     const { appState } = await import("/src/lib/stores/state.ts");
     appState.update((state) => ({ ...state, partialText: "打野有闪" }));
@@ -71,7 +77,7 @@ test("default assistant walkie-talkie overlay tells the user to release the assi
   await expect(page.getByText(/^打野有闪/)).toBeVisible();
 });
 
-test("assistant preview labels fixtures, cancels reminders and never pretends to run AI", async ({ page }, testInfo) => {
+test("assistant preview labels itself and never pretends to run AI", async ({ page }, testInfo) => {
   const externalRequests: string[] = [];
   page.on("request", (request) => {
     if (/^https?:/.test(request.url()) && !request.url().startsWith("http://127.0.0.1:17420")) externalRequests.push(request.url());
@@ -79,20 +85,14 @@ test("assistant preview labels fixtures, cancels reminders and never pretends to
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-assistant").click();
   const assistant = page.getByTestId("assistant-page");
-  await expect(assistant.getByRole("heading", { name: "提醒助手", exact: true })).toBeVisible();
+  await expect(assistant.getByRole("heading", { name: "琴音", exact: true })).toBeVisible();
   await expect(assistant.getByText(/界面预览/)).toBeVisible();
-  await expect(assistant.getByText("界面示例：打野有闪了")).toBeVisible();
-  await assistant.getByRole("button", { name: "添加示例提醒", exact: true }).click();
-  const fixture = assistant.getByRole("listitem").filter({ hasText: "界面示例：该打小龙了" });
-  await expect(fixture).toContainText(/分 .*秒后/);
-  await fixture.getByRole("button", { name: "取消", exact: true }).click();
-  await expect(assistant.getByRole("heading", { name: "待办提醒 1" })).toBeVisible();
-  await assistant.getByText("最近记录（1）", { exact: true }).click();
-  await expect(fixture).toContainText("已取消");
   await assistant.getByTestId("assistant-request").fill("五分钟后提醒我打野有闪");
-  await assistant.getByRole("button", { name: "创建提醒", exact: true }).click();
-  await expect(assistant.getByRole("alert")).toContainText("浏览器仅预览界面");
-  await expect(assistant.getByRole("heading", { name: "待办提醒 1" })).toBeVisible();
+  await assistant.getByTestId("agent-send").click();
+  await expect(assistant.getByTestId("agent-send-error")).toContainText("仅预览");
+  // 草稿留着，示例对话不变
+  await expect(assistant.getByTestId("assistant-request")).toHaveValue("五分钟后提醒我打野有闪");
+  await expect(assistant.getByTestId("agent-user-message").first()).toHaveText("帮我做一个每秒按 Q 的自动化");
   expect(externalRequests).toEqual([]);
   await page.setViewportSize({ width: 1040, height: 1150 });
   await page.getByRole("main").evaluate((element) => { element.scrollTop = 0; });
@@ -105,32 +105,38 @@ test("assistant shares connections and saves voice/delivery settings with an ind
   await page.getByTestId("assistant-nav-settings").click();
   const assistant = page.getByTestId("assistant-page");
   await assistant.getByRole("button", { name: "管理连接 →", exact: true }).click();
-  await expect(page.getByTestId("advanced-nav-connections")).toHaveClass(/bg-kotone-cyan/);
+  await expect(page.getByTestId("advanced-nav-connections")).toHaveAttribute("aria-current", "page");
   await page.getByTestId("connection-preset-dashscope").click();
   await page.getByTestId("connection-api-key").fill("sk-test-local-fixture");
   await page.getByTestId("connection-save").click();
   await expect(page.getByText("已保存密钥")).toBeVisible();
   await page.getByTestId("settings-nav-assistant").click();
   await page.getByTestId("assistant-nav-settings").click();
-  await assistant.getByLabel("提醒助手 AI 连接").click();
+  await assistant.getByLabel("陪玩 AI 连接").click();
   await page.getByRole("option").nth(1).click();
   await expect(assistant.getByRole("button", { name: "管理连接 →", exact: true })).toHaveCount(0);
-  await assistant.getByTestId("hotkey-capture-assistant").click();
+  // 呼叫琴音的热键在「琴音 → 设置」
+  await page.getByTestId("settings-nav-assistant").click();
+  await page.getByTestId("assistant-nav-settings").click();
+  const talk = page.getByTestId("assistant-settings-tab");
+  await talk.getByTestId("hotkey-capture-assistant").click();
   await page.keyboard.press("CapsLock");
-  await expect(page.getByText("助手快捷键与录制热键（CapsLock）冲突，请换一个", { exact: true })).toBeVisible();
-  await assistant.getByTestId("hotkey-capture-assistant").click();
+  await expect(page.getByText("呼叫热键与录制热键（CapsLock）冲突，请换一个", { exact: true })).toBeVisible();
+  await talk.getByTestId("hotkey-capture-assistant").click();
   await page.keyboard.press("Control+F9");
-  await expect(assistant.getByTestId("hotkey-input-assistant")).toHaveValue("Ctrl+F9");
-  await expect(assistant.getByTestId("hotkey-status-assistant")).toContainText("当前生效：Ctrl+F9");
+  await expect(talk.getByTestId("hotkey-input-assistant")).toHaveValue("Ctrl+F9");
+  await expect(talk.getByTestId("hotkey-status-assistant")).toContainText("当前生效：Ctrl+F9");
 
-  await assistant.getByRole("checkbox", { name: "弹幕", exact: true }).uncheck();
-  await expect(assistant.getByRole("checkbox", { name: "弹幕", exact: true })).not.toBeChecked();
-  await assistant.getByLabel("播报音量").fill("65");
-  await assistant.getByLabel("播报音量").dispatchEvent("change");
-  await expect(assistant.getByText("65%", { exact: true })).toBeVisible();
-  await assistant.getByLabel("播报语速").fill("2");
-  await assistant.getByLabel("播报语速").dispatchEvent("change");
-  await expect(assistant.getByText("+2", { exact: true })).toBeVisible();
+  // 声音与弹幕也在「交流」
+  const output = page.getByTestId("output-settings");
+  await output.getByRole("checkbox", { name: "弹幕", exact: true }).uncheck();
+  await expect(output.getByRole("checkbox", { name: "弹幕", exact: true })).not.toBeChecked();
+  await output.getByLabel("播报音量").fill("65");
+  await output.getByLabel("播报音量").dispatchEvent("change");
+  await expect(output.getByText("65%", { exact: true })).toBeVisible();
+  await output.getByLabel("播报语速").fill("2");
+  await output.getByLabel("播报语速").dispatchEvent("change");
+  await expect(output.getByText("+2", { exact: true })).toBeVisible();
 
   const saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
   expect(saved.assistant).toMatchObject({ hotkey: "Ctrl+F9", defaultDelivery: ["voice"], speechVolume: 65, speechRate: 2 });
@@ -142,7 +148,7 @@ test("assistant shares connections and saves voice/delivery settings with an ind
   const named = page.getByTestId("hotkey-input-post-process-toggle");
   await named.fill("Ctrl+F9");
   await named.press("Enter");
-  await expect(page.getByText("文字处理开关热键与提醒助手热键（Ctrl+F9）冲突，请换一个", { exact: true })).toBeVisible();
+  await expect(page.getByText("文字处理开关热键与呼叫热键（Ctrl+F9）冲突，请换一个", { exact: true })).toBeVisible();
 });
 
 test("settings modal traps Tab and restores focus after Escape", async ({ page }) => {

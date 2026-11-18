@@ -40,9 +40,9 @@ test("registered post-processors can be composed, tried out and edited", async (
   await expect(steps.nth(0)).toContainText("AI 润色");
   await expect(steps.nth(1)).toContainText("屏蔽词过滤");
 
-  const secondToggle = steps.nth(1).getByRole("checkbox", { name: /启用.*屏蔽词过滤/ });
+  const secondToggle = steps.nth(1).getByRole("switch", { name: /启用.*屏蔽词过滤/ });
   await expect(secondToggle).toBeChecked();
-  await secondToggle.uncheck({ force: true });
+  await secondToggle.click();
   await expect(secondToggle).not.toBeChecked();
 
   await steps.nth(1).getByRole("button", { name: "移除" }).click();
@@ -62,7 +62,7 @@ test("a discovered blocklist processor works by default and saves a custom CSV p
   );
 
   const step = page.getByTestId("postprocess-step-builtin.blocklist-filter");
-  const toggle = step.getByRole("checkbox", { name: "启用屏蔽词过滤" });
+  const toggle = step.getByRole("switch", { name: "启用屏蔽词过滤" });
   await expect(toggle).toBeChecked();
   await expect(step).toContainText("自带一份默认词库");
 
@@ -93,13 +93,13 @@ test("online polish is added best-effort after a saved connection", async ({ pag
   await page.getByTestId("processor-option-writing.openai-compat").click();
 
   const step = page.getByTestId("postprocess-step-writing.openai-compat");
-  await expect(step.getByRole("checkbox", { name: "启用AI 润色" })).not.toBeChecked();
+  await expect(step.getByRole("switch", { name: "启用AI 润色" })).not.toBeChecked();
   await expect(step.locator('[data-testid^="postprocess-on-error-"]')).toHaveAttribute(
     "data-value",
     "best-effort",
   );
   await step.getByTestId("open-advanced-connections").click();
-  await expect(page.getByTestId("advanced-nav-connections")).toHaveClass(/bg-kotone-cyan/);
+  await expect(page.getByTestId("advanced-nav-connections")).toHaveAttribute("aria-current", "page");
 
   await page.getByTestId("connection-preset-dashscope").click();
   await expect(page.getByTestId("connection-editor")).toBeVisible();
@@ -111,5 +111,5 @@ test("online polish is added best-effort after a saved connection", async ({ pag
   const polishStep = page.getByTestId("postprocess-step-writing.openai-compat");
   await polishStep.getByLabel("API 连接").click();
   await page.getByRole("option").nth(1).click();
-  await expect(polishStep.getByRole("checkbox", { name: "启用AI 润色" })).toBeChecked();
+  await expect(polishStep.getByRole("switch", { name: "启用AI 润色" })).toBeChecked();
 });

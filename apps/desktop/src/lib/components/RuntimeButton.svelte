@@ -46,31 +46,30 @@
     }
   }
 
+  // 颜色全用主题变量：停止时是 Kotone 品红的主行动按钮，运行中是青色描边，待重启是警示色。
   const stateClass = $derived(
     busy || acting
-      ? variant === "hero"
-        ? "bg-white/10 text-white/50"
-        : "bg-white/10 text-white/50"
+      ? "bg-muted text-muted-foreground"
       : !rt || rt.phase === "stopped"
-        ? "bg-kotone-pink text-white shadow-glow-pink-lg hover:brightness-110"
+        ? "bg-brand-pink text-[#fff] shadow-[0_0_22px_-6px_var(--color-brand-pink)] hover:brightness-110"
         : rt.restartNeeded
-          ? "bg-yellow-400/90 text-kotone-deep shadow-[0_0_14px_rgba(250,204,21,0.4)] hover:brightness-110"
-          : "bg-kotone-cyan/15 text-kotone-cyan ring-1 ring-kotone-cyan/50 hover:bg-kotone-cyan/25 hover:shadow-glow-cyan",
+          ? "bg-warning text-warning-foreground hover:brightness-110"
+          : "bg-primary/12 text-primary ring-1 ring-primary/45 hover:bg-primary/20",
   );
 </script>
 
 <button
   class={variant === "hero"
-    ? `flex h-12 w-1/3 min-w-44 items-center justify-center gap-2 rounded-[var(--radius-kotone-card)] text-sm font-bold
+    ? `flex h-10 w-fit min-w-40 items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold
        tracking-wide transition active:scale-[0.98] disabled:cursor-not-allowed ${stateClass}`
-    : `mr-2 flex h-7 items-center gap-1.5 rounded-[var(--radius-kotone-card)] px-3 text-[11px] font-bold
+    : `mr-1 flex h-7 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold
        transition active:scale-95 disabled:cursor-not-allowed ${stateClass}`}
   disabled={busy || acting || !rt}
   onclick={() => void onClick()}
 >
   {#if busy || acting}
     <span
-      class="animate-spin rounded-full border-2 border-white/25 border-t-white/80
+      class="animate-spin rounded-full border-2 border-current/25 border-t-current
         {variant === 'hero' ? 'h-4 w-4' : 'h-3 w-3'}"
     ></span>
     {rt?.phase === "stopping" ? "停止中" : "启动中"}

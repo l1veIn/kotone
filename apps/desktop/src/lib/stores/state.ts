@@ -11,7 +11,7 @@
 
 import { writable } from "svelte/store";
 import { listen } from "@tauri-apps/api/event";
-import { isTauri } from "../ipc";
+import { getOverlayState, isTauri } from "../ipc";
 import { settingsStore } from "./ui";
 
 export type KotoneState =
@@ -41,7 +41,6 @@ export interface ProcessingStepInfo {
 export interface AppState {
   state: KotoneState;
   purpose: "dictation" | "assistant";
-  inputSource: "button" | "hotkey";
   /** 流式引擎的 partial 文本（录音中实时上屏；非流式引擎为空） */
   partialText: string;
   /** 最终/预览文本（preview / sending / success 的 payload.text） */
@@ -69,7 +68,6 @@ export interface AppState {
 const initial: AppState = {
   state: "idle",
   purpose: "dictation",
-  inputSource: "hotkey",
   partialText: "",
   finalText: "",
   level: 0,
@@ -102,7 +100,6 @@ interface StateEventPayload {
     index?: number | null;
     total?: number | null;
     purpose?: "dictation" | "assistant";
-    inputSource?: "button" | "hotkey";
   } | null;
 }
 
@@ -130,8 +127,6 @@ function applyStateEvent(ev: StateEventPayload): void {
     const next: AppState = { ...s, state: ev.state };
     if (ev.payload?.purpose) next.purpose = ev.payload.purpose;
     else if (ev.state === "idle" || ev.state === "listening") next.purpose = "dictation";
-    if (ev.payload?.inputSource) next.inputSource = ev.payload.inputSource;
-    else if (ev.state === "idle" || ev.state === "listening") next.inputSource = "hotkey";
     const text = ev.payload?.text ?? null;
     const message = ev.payload?.message ?? null;
     const warning = ev.payload?.warning ?? null;
@@ -218,9 +213,15 @@ export async function initStateListeners(): Promise<() => void> {
   if (!isTauri) return () => {};
   if (unlistenAll) return unlistenAll;
 
+  let stateRevision = 0;
+  let disposed = false;
   const unlisteners = await Promise.all([
-    listen<StateEventPayload>("kotone://state", (e) => applyStateEvent(e.payload)),
+    listen<StateEventPayload>("kotone://state", (e) => {
+      stateRevision++;
+      applyStateEvent(e.payload);
+    }),
     listen<PartialEventPayload>("kotone://partial", (e) => {
+      stateRevision++;
       appState.update((s) => ({ ...s, partialText: e.payload.text }));
     }),
     listen<LevelEventPayload>("kotone://level", (e) => {
@@ -273,8 +274,20 @@ export async function initStateListeners(): Promise<() => void> {
   ]);
 
   unlistenAll = () => {
+    disposed = true;
     for (const u of unlisteners) u();
     unlistenAll = null;
   };
+  // 动态创建的悬浮窗可能错过触发创建的那条事件。先订阅再补读，
+  // 读取期间若已有状态或 partial 更新，保留较新的事件结果。
+  const snapshotRevision = stateRevision;
+  void getOverlayState().then((snapshot) => {
+    if (disposed || stateRevision !== snapshotRevision || !snapshot) return;
+    if (!["idle", "listening", "transcribing", "processing", "preview", "sending", "success", "error"].includes(snapshot.state)) return;
+    applyStateEvent({
+      state: snapshot.state as KotoneState,
+      payload: snapshot.payload as StateEventPayload["payload"],
+    });
+  }).catch(() => { /* 快照读取失败时仍通过实时事件更新。 */ });
   return unlistenAll;
 }

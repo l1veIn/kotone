@@ -111,39 +111,39 @@
 </script>
 
 <div data-testid={`hotkey-field-${id}`}>
-  <div class="mt-3 flex flex-wrap items-center gap-2">
+  <div class="mt-1.5 flex flex-wrap items-center gap-2">
     <input bind:value={draft} disabled={busy} data-testid={`hotkey-input-${id}`} aria-label={title}
-      class="w-40 rounded-lg bg-white/8 px-2.5 py-1.5 text-sm ring-1 ring-white/15 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/60 disabled:opacity-50"
+      class="h-8 w-44 rounded-lg border border-input bg-background/60 px-2.5 text-[13px] text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-ring focus:ring-3 focus:ring-ring/30 disabled:opacity-50"
       {placeholder} spellcheck="false" autocomplete="off"
       onkeydown={(event) => {
         if (event.key === "Enter") { event.preventDefault(); if (!busy) saveDraft(); }
         else if (event.key === "Escape") { event.preventDefault(); draft = value; }
       }} />
     <button type="button" data-testid={`hotkey-capture-${id}`} disabled={busy} onclick={startCapture}
-      class="rounded-lg px-3 py-1.5 text-xs font-semibold ring-1 transition active:scale-95 disabled:opacity-70 {capturing ? 'animate-pulse bg-kotone-violet/25 text-kotone-violet ring-kotone-violet/60' : 'bg-white/10 text-white/85 ring-white/15 hover:bg-white/20'}">
+      class="h-8 rounded-lg border px-3 text-xs font-medium transition-colors active:translate-y-px disabled:opacity-70 {capturing ? 'animate-pulse border-primary/60 bg-primary/15 text-primary' : 'border-hairline bg-muted/60 text-foreground hover:bg-muted'}">
       {capturing ? "请按下键盘组合或鼠标侧键…（Esc 取消）" : "点击录入"}
     </button>
     {#if draft.trim() && draft.trim() !== value}
       <button type="button" data-testid={`hotkey-save-${id}`} disabled={busy} onclick={saveDraft}
-        class="rounded-lg px-2.5 py-1.5 text-xs text-kotone-cyan ring-1 ring-kotone-cyan/40 hover:bg-kotone-cyan/10 disabled:opacity-50">保存</button>
+        class="h-8 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-[filter] hover:brightness-110 disabled:opacity-50">保存</button>
     {/if}
     {#if draft || value}
       <button type="button" data-testid={`hotkey-clear-${id}`} disabled={busy} onclick={() => persist("")}
-        class="rounded-lg px-2.5 py-1.5 text-xs text-white/60 ring-1 ring-white/15 transition hover:bg-white/10 active:scale-95 disabled:opacity-50">清除</button>
+        class="h-8 rounded-lg px-2.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50">清除</button>
     {/if}
   </div>
-  {#if !compact}<p class="mt-1.5 text-[10px] leading-relaxed text-white/35">可手动输入后按 Enter 保存，或点击录入键盘组合 / 鼠标侧键。</p>{/if}
+  {#if !compact}<p class="mt-1.5 mb-0 text-[11px] leading-relaxed text-muted-foreground/80">可手动输入后按 Enter 保存，或点击录入键盘组合 / 鼠标侧键。</p>{/if}
   <div aria-live="polite" data-testid={`hotkey-status-${id}`}>
     {#if status?.error}
-      <p class="mt-2 text-[11px] leading-relaxed text-kotone-pink">{status.error}</p>
+      <p class="mt-2 mb-0 text-xs leading-relaxed text-destructive">{status.error}</p>
     {:else if statusError}
-      <p class="mt-2 text-[11px] leading-relaxed text-kotone-pink">{statusError}</p>
+      <p class="mt-2 mb-0 text-xs leading-relaxed text-destructive">{statusError}</p>
     {:else if status?.key}
-      <p class="mt-2 text-[11px] text-white/40">当前生效：{status.key}</p>
+      <p class="mt-2 mb-0 flex items-center gap-1.5 text-xs text-muted-foreground"><span class="size-1.5 rounded-full bg-success"></span>当前生效：{status.key}</p>
     {:else if !value}
-      <p class="mt-2 text-[11px] text-white/40">{compact ? "未设置" : "未设置（默认关闭，不会误触发）"}</p>
+      <p class="mt-2 mb-0 text-xs text-muted-foreground">{compact ? "未设置" : "未设置（默认关闭，不会误触发）"}</p>
     {:else}
-      <p class="mt-2 text-[11px] text-white/40">已保存：{value}；启动 Kotone 后生效</p>
+      <p class="mt-2 mb-0 text-xs text-muted-foreground">已保存：{value}；启动 Kotone 后生效</p>
     {/if}
   </div>
 </div>

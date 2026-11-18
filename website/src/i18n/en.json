@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Kotone · Voice-to-text for gamers",
-    "description": "A Windows voice-input tool for gamers, with local transcription by default, optional online ASR, AI text processing, and reminders. Hold a hotkey, speak, and release to send to game chat."
+    "description": "A Windows voice-input tool for gamers, with local transcription by default, optional online ASR, AI text processing, and the 琴音 agent that reads chat, types, reminds and runs automations for you. Hold a hotkey, speak, and release to send to game chat."
   },
   "nav": {
     "features": "Features",
@@ -100,7 +100,7 @@
     "kicker": "Privacy",
     "title": "Local by default. Online by choice.",
     "items": [
-      { "title": "Clear network boundaries", "text": "Default X-ASR runs locally. Optional online ASR sends audio; AI text processing and reminder creation send relevant text to your selected service." },
+      { "title": "Clear network boundaries", "text": "Default X-ASR runs locally. Optional online ASR sends audio; AI text processing and the 琴音 agent send your messages, recognized screen text and tool results to your selected service, and changing settings, deleting, or opening/closing a game asks you first by default." },
       { "title": "Save only when enabled", "text": "Evaluation recordings and history audio are off by default. Text history can be disabled or cleared. Diagnostic packages are never uploaded automatically." },
       { "title": "Open & auditable", "text": "Models, glossary, and privacy policy are all public and inspectable." }
     ],

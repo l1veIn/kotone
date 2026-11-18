@@ -27,6 +27,9 @@ pnpm dev
 | 桌面组合与 IPC | `apps/desktop/src-tauri/src`；前端 `lib/ipc.ts` 命令封装、`lib/ipc/contracts.ts` 类型、`lib/ipc/browserMock.ts` 浏览器实现、`lib/assistant.ts` 助手命令 |
 | 设置页面、悬浮窗、浏览器测试 | `apps/desktop/src/routes`、`apps/desktop/e2e` |
 | 命令行与评测目标解析 | `crates/kotone-cli/src/main.rs`、`crates/kotone-stt/src/eval.rs` |
+| 本机 Agent 工具服务 | 端口 `crates/kotone-core/src/tools.rs`、`ocr.rs`；协议/存储/预处理/跟踪/服务端/客户端 `crates/kotone-tools`；OCR 后端与模型安装 `crates/kotone-ocr`；Windows 实现 `kotone-platform-windows/src/window_tools.rs`、`tool_host.rs`；桌面生命周期 `apps/desktop/src-tauri/src/tool_service.rs`；CLI `crates/kotone-cli/src/tools.rs`、`ocr.rs` |
+
+**配置兼容（2026-11-16 起）**：用户可能不升级，或升级后又装回旧版。旧版本读到某个字段里不认识的值时，会把整份 `config.json` 当作损坏、改名备份并恢复默认（0.1.13 即如此）。因此：已有字段只写旧版本认识的值，不扩展它的取值范围、不改变写法；新能力一律用新字段（旧版本会忽略未知字段）。例如在线语音写 `assistant.ttsModelId` 而不是给 `assistant.speechEngine` 加新值；声音编号在界面与接口上是 `提供方/声音`，落盘仍是 `kokoro:zf_001` 与不带前缀的 Windows 语音；陪玩路由落盘仍是 `reminders`。代价：旧版本保存配置时会丢掉它不认识的新字段。`kotone-core` 有对应的回归测试。
 
 修改接口时同时检查 Rust、IPC 类型、Svelte 消费者和浏览器 mock。新增能力通过领域端口注入；core 不能反向依赖平台、STT 或网络实现。锁保护区内避免网络/音频设备/模型加载等阻塞操作，异步结果交付前再次核对会话代际。
 
@@ -43,6 +46,13 @@ pnpm -C apps/desktop test:e2e
 pnpm release:verify
 pnpm release:test
 ```
+
+受控窗口的前台像素测试会短暂把测试窗口切到前台，默认忽略，需要交互式桌面时单独运行：`cargo test -p kotone-platform-windows --test native_capture -- --ignored --test-threads=1`。
+
+两条构建与真机测试的环境事实（2026-11-16 自动化真机测试时确认）：
+
+- **C++ 依赖统一用静态运行时 `/MT`**：sherpa-onnx 预编译库是 `static-MT`，`.cargo/config.toml` 的 `[env]` 因此给 MSVC 目标设了 `CXXFLAGS_x86_64_pc_windows_msvc=/MT`，否则 cc 以 `/MD` 编译的 C++（如 `kotone-script` 用的 Luau）会和 sherpa 的 `libcpmt` 冲突（LNK2005 / LNK2038）。改过这个设置后需 `cargo clean -p luau0-src -p mlua-sys -p mlua` 让 C++ 重新编译。
+- **从本仓库目录启动的 exe 以低完整性级别运行**：仓库根目录带 `Mandatory Label\Low Mandatory Level`（OI/CI 继承，供工具沙盒写入），所以 `target/debug/kotone.exe` 是 Low IL。Windows 的 UIPI 会**静默丢弃**它向普通（Medium）窗口发送的模拟输入——`SendInput` 仍返回成功。需要真实按键 / 打字的真机测试，先把 exe 复制到仓库外（例如 `%LOCALAPPDATA%\Temp\kotone-script-e2e\`）再启动；已安装的 Kotone 不受影响。不要改仓库目录的完整性标签。
 
 CI 还执行依赖审计与 debug NSIS 构建；精确命令以 [ci.yml](../.github/workflows/ci.yml) 和 [发布清单](release-checklist.md) 为准。`pnpm build` 生成 release NSIS 安装包；用户配置与模型不会因为构建而迁移。
 

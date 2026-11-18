@@ -156,15 +156,15 @@
   ];
 </script>
 
-<div class="relative min-h-full">
+<div class="ui-scope relative min-h-full text-foreground" data-testid="character-page">
   <!-- 顶栏：返回 + 档案标头 + 分区跳转（吸顶，滚动时保持可返回/可跳转） -->
   <div
-    class="sticky top-0 z-20 border-b border-white/8 bg-kotone-deep/85 backdrop-blur-md"
+    class="sticky top-0 z-20 border-b border-hairline bg-background/85 backdrop-blur-md"
   >
     <div class="flex items-center gap-3 px-5 py-2.5">
       <button
-        class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-semibold text-white/70
-          transition hover:bg-white/8 hover:text-kotone-cyan"
+        class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-semibold text-foreground/80
+          transition hover:bg-foreground/8 hover:text-primary"
         onclick={onBack}
       >
         <svg
@@ -184,11 +184,11 @@
         返回关于
       </button>
       <span
-        class="text-[10px] font-semibold tracking-[0.22em] text-kotone-cyan/60"
+        class="text-[10px] font-semibold tracking-[0.22em] text-primary/60"
         >CHARACTER FILE</span
       >
       <span
-        class="ml-auto rounded-full bg-white/6 px-2.5 py-0.5 text-[10px] text-white/35 ring-1 ring-white/10"
+        class="ml-auto rounded-full bg-foreground/6 px-2.5 py-0.5 text-[10px] text-muted-foreground/75 ring-1 ring-hairline"
       >
         repochan.persona.v2
       </span>
@@ -200,8 +200,8 @@
     >
       {#each sections as s}
         <button
-          class="shrink-0 rounded-full bg-white/6 px-2.5 py-1 text-[10px] text-white/55 ring-1 ring-white/10 transition
-            hover:bg-kotone-cyan/15 hover:text-kotone-cyan hover:ring-kotone-cyan/40"
+          class="shrink-0 rounded-full bg-foreground/6 px-2.5 py-1 text-[10px] text-muted-foreground ring-1 ring-hairline transition
+            hover:bg-primary/15 hover:text-primary hover:ring-primary/40"
           onclick={() =>
             document
               .getElementById(`cf-${s.num}`)
@@ -215,7 +215,7 @@
 
   <!-- Hero：幽灵大字 + 立绘 + 姓名 + 口头禅 + 信息徽章 -->
   <section
-    class="relative flex flex-col items-center overflow-hidden px-6 pt-6 pb-4 text-center"
+    class="relative mx-auto flex max-w-3xl flex-col items-center overflow-hidden px-6 pt-6 pb-4 text-center"
   >
     <span
       class="pointer-events-none absolute top-2 left-1/2 -translate-x-1/2 text-[92px] font-black tracking-tight whitespace-nowrap select-none"
@@ -250,66 +250,66 @@
     </div>
 
     <p
-      class="mt-3 text-[11px] font-semibold tracking-[0.18em] text-kotone-cyan/80"
+      class="mt-3 text-[11px] font-semibold tracking-[0.18em] text-primary/80"
     >
       打字比打游戏快的主播
     </p>
     <h1 class="mt-1 text-3xl font-black">
       琴音 <span class="kotone-gradient-text">Kotone</span>
     </h1>
-    <p class="mt-0.5 text-[12px] text-white/40">
+    <p class="mt-0.5 text-[12px] text-muted-foreground">
       ことね · 游戏主播 · 「人形语音输入法」
     </p>
 
     <span
-      class="mt-3 rounded-full bg-kotone-pink/12 px-4 py-1.5 text-[13px] font-bold text-kotone-pink ring-1 ring-kotone-pink/30"
+      class="mt-3 rounded-full bg-brand-pink/12 px-4 py-1.5 text-[13px] font-bold text-brand-pink ring-1 ring-brand-pink/30"
       >「收到，已发送！✨」</span
     >
 
     <div class="mt-4 flex flex-wrap justify-center gap-2">
       {#each heroChips as chip}
         <span
-          class="rounded-full bg-white/7 px-3 py-1 text-[11px] text-white/60 ring-1 ring-white/12"
+          class="rounded-full bg-foreground/7 px-3 py-1 text-[11px] text-foreground/80 ring-1 ring-hairline"
           >{chip}</span
         >
       {/each}
     </div>
   </section>
 
-  <div class="px-6 pb-6">
+  <div class="mx-auto max-w-3xl px-6 pb-8">
     <!-- 01 面板数据 -->
     {@render secHead(sections[0])}
     <div use:reveal class="reveal mt-3 grid grid-cols-4 gap-2.5">
       {#each stats as s}
-        <div class="kotone-card kotone-spotlight p-3 text-center" use:spotlight>
-          <p class="text-[10px] text-white/40">{s.k}</p>
-          <p class="mt-1 text-xl font-black text-kotone-cyan">
+        <div class="rounded-xl border border-hairline bg-card kotone-spotlight p-3 text-center" use:spotlight>
+          <p class="text-[10px] text-muted-foreground">{s.k}</p>
+          <p class="mt-1 text-xl font-black text-primary">
             {s.v}<span
-              class="ml-0.5 text-[10px] font-semibold text-kotone-cyan/60"
+              class="ml-0.5 text-[10px] font-semibold text-primary/60"
               >{s.unit}</span
             >
           </p>
-          <p class="mt-1 text-[10px] leading-snug text-white/35">{s.note}</p>
+          <p class="mt-1 text-[10px] leading-snug text-muted-foreground/75">{s.note}</p>
         </div>
       {/each}
     </div>
 
     <!-- 02 她的故事 -->
     {@render secHead(sections[1])}
-    <div use:reveal class="reveal kotone-panel mt-3 p-4">
+    <div use:reveal class="reveal rounded-2xl border border-hairline bg-card mt-3 p-4">
       {#each story.paragraphs as p}
-        <p class="mb-3 text-[12.5px] leading-relaxed text-white/70 last:mb-0">
+        <p class="mb-3 text-[12.5px] leading-relaxed text-foreground/80 last:mb-0">
           {p}
         </p>
       {/each}
-      <blockquote class="mt-4 border-l-2 border-kotone-cyan/50 pl-3">
-        <p class="text-[13px] font-semibold text-white/85">「{story.quote}」</p>
-        <cite class="mt-1 block text-[10px] text-white/35 not-italic"
+      <blockquote class="mt-4 border-l-2 border-primary/50 pl-3">
+        <p class="text-[13px] font-semibold text-foreground/90">「{story.quote}」</p>
+        <cite class="mt-1 block text-[10px] text-muted-foreground/75 not-italic"
           >{story.quoteCaption}</cite
         >
       </blockquote>
       <p
-        class="mt-4 text-right text-[11px] tracking-widest text-kotone-pink/70"
+        class="mt-4 text-right text-[11px] tracking-widest text-brand-pink/70"
       >
         —— {story.motto}
       </p>
@@ -317,20 +317,20 @@
 
     <!-- 03 性格与弱点 -->
     {@render secHead(sections[2])}
-    <div use:reveal class="reveal kotone-panel mt-3 p-4">
-      <p class="text-[12.5px] leading-relaxed text-white/70">{personality}</p>
+    <div use:reveal class="reveal rounded-2xl border border-hairline bg-card mt-3 p-4">
+      <p class="text-[12.5px] leading-relaxed text-foreground/80">{personality}</p>
     </div>
     <div use:reveal class="reveal mt-3 grid grid-cols-2 gap-3">
       {#each flaws as f}
-        <div class="kotone-card kotone-spotlight p-3.5" use:spotlight>
+        <div class="rounded-xl border border-hairline bg-card kotone-spotlight p-3.5" use:spotlight>
           <div class="flex items-center justify-between gap-2">
-            <p class="text-xs font-bold text-kotone-pink/90">{f.name}</p>
+            <p class="text-xs font-bold text-brand-pink/90">{f.name}</p>
             <span
-              class="rounded bg-kotone-pink/10 px-1.5 py-0.5 text-[9px] font-semibold tracking-wider text-kotone-pink/60 ring-1 ring-kotone-pink/20"
+              class="rounded bg-brand-pink/10 px-1.5 py-0.5 text-[9px] font-semibold tracking-wider text-brand-pink/60 ring-1 ring-brand-pink/20"
               >{f.type}</span
             >
           </div>
-          <p class="mt-1.5 text-[11.5px] leading-relaxed text-white/55">
+          <p class="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
             {f.desc}
           </p>
         </div>
@@ -339,7 +339,7 @@
 
     <!-- 04 世界 · 中继站 -->
     {@render secHead(sections[3])}
-    <div use:reveal class="reveal kotone-card mt-3 overflow-hidden">
+    <div use:reveal class="reveal rounded-xl border border-hairline bg-card mt-3 overflow-hidden">
       <div class="relative">
         <img
           src={relayRoom}
@@ -347,24 +347,24 @@
           class="h-44 w-full object-cover"
         />
         <div
-          class="absolute inset-0 bg-gradient-to-t from-kotone-deep via-kotone-deep/30 to-transparent"
+          class="absolute inset-0 bg-gradient-to-t from-background via-background/30 to-transparent"
         ></div>
         <div class="absolute bottom-2.5 left-3.5">
           <p class="text-sm font-black">
             {world.name}
             <span
-              class="text-[10px] font-semibold tracking-widest text-kotone-cyan/70"
+              class="text-[10px] font-semibold tracking-widest text-primary/70"
               >{world.nameEn}</span
             >
           </p>
         </div>
       </div>
       <div class="p-4">
-        <p class="text-[12px] leading-relaxed text-white/65">
+        <p class="text-[12px] leading-relaxed text-foreground/80">
           {world.atmosphere}
         </p>
         <p
-          class="mt-2.5 border-t border-white/8 pt-2.5 text-[11.5px] leading-relaxed text-white/45"
+          class="mt-2.5 border-t border-hairline pt-2.5 text-[11.5px] leading-relaxed text-muted-foreground"
         >
           {world.relationship}
         </p>
@@ -376,13 +376,13 @@
     <div use:reveal class="reveal mt-3 flex flex-col gap-2.5">
       {#each funFacts as fact, i}
         <div
-          class="kotone-card kotone-spotlight flex items-start gap-3 p-3.5"
+          class="rounded-xl border border-hairline bg-card kotone-spotlight flex items-start gap-3 p-3.5"
           use:spotlight
         >
           <span class="text-lg font-black text-kotone-violet/70"
             >{String(i + 1).padStart(2, "0")}</span
           >
-          <p class="text-[12px] leading-relaxed text-white/65">{fact}</p>
+          <p class="text-[12px] leading-relaxed text-foreground/80">{fact}</p>
         </div>
       {/each}
     </div>
@@ -391,20 +391,20 @@
     {@render secHead(sections[5])}
     <div use:reveal class="reveal mt-3 flex flex-col gap-2.5">
       {#each abilities as a}
-        <div class="kotone-card kotone-spotlight p-3.5" use:spotlight>
+        <div class="rounded-xl border border-hairline bg-card kotone-spotlight p-3.5" use:spotlight>
           <div class="flex items-center justify-between gap-2">
-            <p class="text-[13px] font-bold text-kotone-cyan">{a.name}</p>
+            <p class="text-[13px] font-bold text-primary">{a.name}</p>
             <span
-              class="shrink-0 rounded bg-kotone-cyan/10 px-1.5 py-0.5 text-[9px] font-semibold tracking-wider text-kotone-cyan/70 ring-1 ring-kotone-cyan/25"
+              class="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold tracking-wider text-primary/70 ring-1 ring-primary/25"
               >{a.type}</span
             >
           </div>
-          <p class="mt-1.5 text-[11.5px] leading-relaxed text-white/55">
+          <p class="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
             {a.desc}
           </p>
         </div>
       {/each}
-      <div class="kotone-card kotone-spotlight p-3.5" use:spotlight>
+      <div class="rounded-xl border border-hairline bg-card kotone-spotlight p-3.5" use:spotlight>
         <div class="flex items-center justify-between gap-2">
           <p class="text-[13px] font-bold text-kotone-violet">
             {passiveSkill.name}
@@ -414,7 +414,7 @@
             >{passiveSkill.type}</span
           >
         </div>
-        <p class="mt-1.5 text-[11.5px] leading-relaxed text-white/55">
+        <p class="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
           {passiveSkill.desc}
         </p>
       </div>
@@ -425,10 +425,10 @@
     <div use:reveal class="reveal mt-3 flex flex-wrap gap-2">
       {#each likes as like}
         <span
-          class="kotone-card inline-flex items-baseline gap-1.5 px-3 py-1.5 text-[11.5px]"
+          class="rounded-xl border border-hairline bg-card inline-flex items-baseline gap-1.5 px-3 py-1.5 text-[11.5px]"
         >
-          <span class="font-semibold text-white/80">{like.label}</span>
-          <span class="text-[10px] text-white/35">{like.note}</span>
+          <span class="font-semibold text-foreground/90">{like.label}</span>
+          <span class="text-[10px] text-muted-foreground/75">{like.note}</span>
         </span>
       {/each}
     </div>
@@ -437,7 +437,7 @@
     {@render secHead(sections[7])}
     <div use:reveal class="reveal mt-3 grid grid-cols-3 gap-3">
       {#each gear as g}
-        <figure class="kotone-card overflow-hidden">
+        <figure class="rounded-xl border border-hairline bg-card overflow-hidden">
           <div class="aspect-square bg-white">
             <img
               src={g.src}
@@ -448,7 +448,7 @@
           </div>
           <figcaption class="p-2.5">
             <p class="text-[11px] font-semibold">{g.name}</p>
-            <p class="mt-0.5 text-[10px] leading-snug text-white/40">
+            <p class="mt-0.5 text-[10px] leading-snug text-muted-foreground">
               {g.desc}
             </p>
           </figcaption>
@@ -461,7 +461,7 @@
     <div use:reveal class="reveal mt-3 grid grid-cols-3 gap-3">
       {#each stickers as s}
         <div
-          class="kotone-card flex flex-col items-center gap-2 p-3.5 transition duration-200 hover:-translate-y-1 hover:scale-[1.04] hover:-rotate-2 hover:shadow-glow-cyan"
+          class="rounded-xl border border-hairline bg-card flex flex-col items-center gap-2 p-3.5 transition duration-200 hover:-translate-y-1 hover:scale-[1.04] hover:-rotate-2 hover:shadow-glow-cyan"
         >
           <img
             src={s.src}
@@ -469,7 +469,7 @@
             class="h-16 w-16 object-contain"
             loading="lazy"
           />
-          <p class="text-[11px] text-white/50">{s.name}</p>
+          <p class="text-[11px] text-muted-foreground">{s.name}</p>
         </div>
       {/each}
     </div>
@@ -478,7 +478,7 @@
     {@render secHead(sections[9])}
     <div use:reveal class="reveal mt-3 flex flex-col gap-3">
       {#each posters as p}
-        <figure class="kotone-card overflow-hidden">
+        <figure class="rounded-xl border border-hairline bg-card overflow-hidden">
           <div class="relative">
             <img
               src={p.src}
@@ -487,11 +487,11 @@
               loading="lazy"
             />
             <span
-              class="absolute top-2 right-2 rounded bg-kotone-deep/70 px-2 py-0.5 text-[9px] font-bold tracking-[0.2em] text-kotone-cyan/90 ring-1 ring-kotone-cyan/30 backdrop-blur-sm"
+              class="absolute top-2 right-2 rounded bg-background/70 px-2 py-0.5 text-[9px] font-bold tracking-[0.2em] text-primary/90 ring-1 ring-primary/30 backdrop-blur-sm"
               >{p.tag}</span
             >
           </div>
-          <figcaption class="px-3.5 py-2.5 text-[11px] text-white/50">
+          <figcaption class="px-3.5 py-2.5 text-[11px] text-muted-foreground">
             {p.name}
           </figcaption>
         </figure>
@@ -509,12 +509,12 @@
             class="mt-1 h-8 w-8 shrink-0 object-contain"
             aria-hidden="true"
           />
-          <div class="kotone-panel relative p-3.5">
+          <div class="rounded-2xl border border-hairline bg-card relative p-3.5">
             <span
-              class="absolute top-3 -left-1 h-2.5 w-2.5 rotate-45 border-l border-b border-white/8 bg-kotone-panel"
+              class="absolute top-3 -left-1 h-2.5 w-2.5 rotate-45 border-l border-b border-hairline bg-card"
               aria-hidden="true"
             ></span>
-            <p class="text-[12px] leading-relaxed text-white/70">{line}</p>
+            <p class="text-[12px] leading-relaxed text-foreground/80">{line}</p>
           </div>
         </div>
       {/each}
@@ -525,15 +525,15 @@
     <div use:reveal class="reveal mt-3">
       <div class="grid grid-cols-3 gap-3">
         {#each motifs as m}
-          <div class="kotone-card overflow-hidden">
+          <div class="rounded-xl border border-hairline bg-card overflow-hidden">
             <div
-              class="h-16 ring-1 ring-white/10"
+              class="h-16 ring-1 ring-hairline"
               style:background-image="url({m.img})"
               style:background-size="96px"
             ></div>
             <div class="p-3">
               <p class="text-xs font-semibold">{m.name}</p>
-              <p class="mt-1 text-[11px] leading-relaxed text-white/45">
+              <p class="mt-1 text-[11px] leading-relaxed text-muted-foreground">
                 {m.desc}
               </p>
             </div>
@@ -542,16 +542,16 @@
       </div>
       <div class="mt-3 grid grid-cols-4 gap-3">
         {#each colors as c}
-          <div class="kotone-card flex items-center gap-2.5 p-3">
+          <div class="rounded-xl border border-hairline bg-card flex items-center gap-2.5 p-3">
             <span
-              class="h-7 w-7 shrink-0 rounded-lg ring-1 ring-white/15"
+              class="h-7 w-7 shrink-0 rounded-lg ring-1 ring-hairline"
               style:background-color={c.hex}
             ></span>
             <div class="min-w-0">
               <p class="truncate text-[11px] font-semibold">
-                {c.name} <span class="text-white/40">{c.hex}</span>
+                {c.name} <span class="text-muted-foreground">{c.hex}</span>
               </p>
-              <p class="truncate text-[10px] text-white/40">{c.role}</p>
+              <p class="truncate text-[10px] text-muted-foreground">{c.role}</p>
             </div>
           </div>
         {/each}
@@ -560,20 +560,20 @@
 
     <!-- 弹幕跑马灯 -->
     <div
-      class="relative mt-4 overflow-hidden rounded-xl border border-white/8 bg-kotone-panel/60 py-2"
+      class="relative mt-4 overflow-hidden rounded-xl border border-hairline bg-card/60 py-2"
       aria-hidden="true"
     >
       <div class="marquee-track flex w-max items-center gap-6">
         {#each danmakuTrack as d}
-          <span class="text-[11px] whitespace-nowrap text-kotone-cyan/50"
-            ><i class="mr-1 text-kotone-pink/60 not-italic">※</i>{d}</span
+          <span class="text-[11px] whitespace-nowrap text-primary/50"
+            ><i class="mr-1 text-brand-pink/60 not-italic">※</i>{d}</span
           >
         {/each}
       </div>
     </div>
 
     <!-- 档案页脚 -->
-    <p class="mt-6 text-center text-[10px] leading-relaxed text-white/25">
+    <p class="mt-6 text-center text-[10px] leading-relaxed text-muted-foreground/75">
       CHARACTER FILE · KOTONE<br />档案由 repochan persona 协议生成 ·
       贴纸与立绘版权归 Kotone 项目
     </p>
@@ -586,17 +586,17 @@
     id={"cf-" + s.num}
     class="reveal mt-8 flex scroll-mt-24 items-baseline gap-2.5"
   >
-    <span class="text-[11px] font-black tracking-widest text-kotone-pink/70"
+    <span class="text-[11px] font-black tracking-widest text-brand-pink/70"
       >{s.num}</span
     >
     <h2 class="text-sm font-bold">
       {s.title}<span
-        class="ml-2 text-[9px] font-semibold tracking-[0.24em] text-white/30"
+        class="ml-2 text-[9px] font-semibold tracking-[0.24em] text-muted-foreground/75"
         >{s.sub}</span
       >
     </h2>
     <span
-      class="h-px flex-1 self-center bg-gradient-to-r from-kotone-cyan/30 to-transparent"
+      class="h-px flex-1 self-center bg-gradient-to-r from-primary/30 to-transparent"
     ></span>
   </div>
 {/snippet}

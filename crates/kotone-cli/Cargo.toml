@@ -1,7 +1,7 @@
 [package]
 name = "kotone-cli"
 version = "0.1.1"
-description = "Kotone 命令行前端：send 注入 / listen 全链路（wav 直灌+虚拟声卡）/ config / devices / play / eval"
+description = "Kotone 命令行前端：send 注入 / listen 全链路（wav 直灌+虚拟声卡）/ config / devices / play / eval / tools 工具服务客户端"
 edition = "2021"
 rust-version = "1.77.2"
 
@@ -10,16 +10,31 @@ kotone-core.workspace = true
 kotone-postprocess.workspace = true
 kotone-stt.workspace = true
 kotone-platform-windows.workspace = true
+# tools 子命令：直连已运行桌面实例的工具服务客户端
+kotone-tools.workspace = true
+# ocr 子命令：本地 OCR 模型安装与就绪检查
+kotone-ocr.workspace = true
+base64 = "0.22"
+serde.workspace = true
 clap = { version = "4", features = ["derive"] }
 tokio.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# 集成测试用假窗口/捕获后端启动真实 HTTP 服务（正式构建不启用）
+kotone-tools = { workspace = true, features = ["test-support"] }
+# M2 冒烟测试解码 PNG 输入
+png = "0.17"
 
 [features]
 # STT 引擎 feature 转发到 kotone-stt（与 kotone-tauri 对齐）。
 # CLI 是开发/自动化工具：默认带 sherpa（50MB 原生库无所谓）与 silero VAD；
 # kotone-tauri 保持默认关（注意：cargo build --workspace 会按 feature
 # 统一把 sherpa 编进同次构建的全部产物；发布壳用 -p kotone-tauri 单独构建）
-default = ["engine-sherpa", "vad-silero"]
+default = ["engine-sherpa", "vad-silero", "ocr-local"]
 engine-sherpa = ["kotone-stt/engine-sherpa"]
 # silero VAD（ADR-007 one-shot 静音判停）
 vad-silero = ["kotone-stt/vad-silero"]
+# 本地 OCR 推理（ONNX Runtime 随 sherpa-onnx 静态库链接）：ocr status 报告运行时版本
+ocr-local = ["kotone-ocr/onnx"]

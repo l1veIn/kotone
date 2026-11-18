@@ -2,6 +2,8 @@
   import { updateSettings } from "../../../../lib/ipc";
   import { settingsStore } from "../../../../lib/stores/ui";
   import HotkeyField from "../../../../lib/components/HotkeyField.svelte";
+  import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
+  import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
 
   interface NamedHotkeySection {
     id: string;
@@ -13,7 +15,8 @@
       | "resendLastHotkey"
       | "togglePostProcessingHotkey"
       | "cyclePostProcessingHotkey"
-      | "runtimeToggleHotkey";
+      | "runtimeToggleHotkey"
+      | "automationStopHotkey";
     placeholder: string;
   }
 
@@ -59,17 +62,27 @@
       settingsKey: "runtimeToggleHotkey",
       placeholder: "如 Alt+F10",
     },
+    {
+      id: "automation-stop",
+      title: "停止所有自动化热键",
+      desc: "自动化（例如“每秒帮我按一次 Q”）运行时，按下立即停止全部自动化，它们按住的键会一起松开。托盘菜单「停止所有自动化」作用相同。",
+      help: "和启动 / 停止热键一样，Kotone 停止时也有效；默认 Ctrl+Shift+F12，留空 = 关闭（不建议）。",
+      settingsKey: "automationStopHotkey",
+      placeholder: "如 Ctrl+Shift+F12",
+    },
   ];
 
 </script>
 
-{#each NAMED_HOTKEY_SECTIONS as section, i (section.id)}
-  <section class="kotone-panel p-4 {i === 0 ? "" : "mt-3"}">
-    <h2 class="text-sm font-semibold text-kotone-cyan/90">{section.title}</h2>
-    <p class="mt-1 text-[11px] leading-relaxed text-white/45">{section.desc}</p>
-    <HotkeyField id={section.id} title={section.title}
-      value={$settingsStore?.[section.settingsKey] ?? ""} placeholder={section.placeholder}
-      onSave={async (key) => { settingsStore.set(await updateSettings({ [section.settingsKey]: key })); }} />
-    <p class="mt-1.5 text-[10px] leading-relaxed text-white/35">{section.help}</p>
-  </section>
-{/each}
+<SettingsSection title="其他热键" description="和「通用」页的录制热键一样，按下组合键录入；留空 = 关闭。">
+  {#each NAMED_HOTKEY_SECTIONS as section (section.id)}
+    <SettingsRow label={section.title} description={section.desc} stacked testid={`hotkey-section-${section.id}`}>
+      {#snippet control()}
+        <HotkeyField id={section.id} title={section.title}
+          value={$settingsStore?.[section.settingsKey] ?? ""} placeholder={section.placeholder}
+          onSave={async (key) => { settingsStore.set(await updateSettings({ [section.settingsKey]: key })); }} />
+        <p class="mt-1.5 mb-0 text-[11px] leading-relaxed text-muted-foreground/80">{section.help}</p>
+      {/snippet}
+    </SettingsRow>
+  {/each}
+</SettingsSection>

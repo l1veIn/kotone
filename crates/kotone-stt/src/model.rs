@@ -46,32 +46,20 @@ pub enum ModelRecipe {
     OpenaiCompat,
     VolcanoAsr,
     IflytekAsr,
+    /// DeepSeek 语音识别（`/v1/tools/asr`，整段上传，自动判断语种）。
+    DeepseekAsr,
 }
 
-/// 模型自己声明的可配项（语言、连接、密钥等）。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelConfigField {
-    pub key: String,
-    pub label: String,
-    /// string / enum / secret / connection
-    pub kind: String,
-    pub default: String,
-    pub options: Vec<ModelConfigOption>,
-    pub required: bool,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelConfigOption {
-    pub value: String,
-    pub label: String,
-}
+/// 模型自己声明的可配项（语言、连接、密钥等）；与 OCR / TTS 清单共用同一结构。
+pub use kotone_core::model_catalog::{ModelCategory, ModelConfigField, ModelConfigOption};
 
 /// 模型信息（跨后端统一列出：已下载/可下载）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
+    /// 统一模型清单的类别；本清单恒为 `asr`。
+    #[serde(default)]
+    pub category: ModelCategory,
     pub id: String,
     pub engine_id: String,
     pub display_name: String,
@@ -169,14 +157,7 @@ pub struct MultiFileModel {
     pub config_schema: &'static [StaticConfigField],
 }
 
-pub struct StaticConfigField {
-    pub key: &'static str,
-    pub label: &'static str,
-    pub kind: &'static str,
-    pub default: &'static str,
-    pub options: &'static [(&'static str, &'static str)],
-    pub required: bool,
-}
+pub use kotone_core::model_catalog::StaticConfigField;
 
 const SENSEVOICE_LANGUAGE_SCHEMA: &[StaticConfigField] = &[StaticConfigField {
     key: "language",
@@ -200,6 +181,8 @@ pub const REMOTE_OPENAI_ENGINE_ID: &str = "remote-openai-compat";
 pub const ONLINE_ASR_TAG: &str = "online-asr";
 pub const VOLCANO_ASR_STT_ID: &str = "volcano-asr";
 pub const IFLYTEK_ASR_STT_ID: &str = "iflytek-asr";
+/// DeepSeek 语音识别：直接用琴音的 DeepSeek 连接与密钥（只配一个 DeepSeek 就能用全部功能）。
+pub const DEEPSEEK_ASR_STT_ID: &str = "deepseek-asr";
 pub const SHERPA_STREAMING_ENGINE_ID: &str = "sherpa-streaming";
 pub const SHERPA_OFFLINE_ENGINE_ID: &str = "sherpa-offline";
 
@@ -780,28 +763,12 @@ pub fn active_model_from(s: &settings::Settings, engine_id: &str) -> String {
 // ---------- 清单查询 ----------
 
 fn schema_of(fields: &'static [StaticConfigField]) -> Vec<ModelConfigField> {
-    fields
-        .iter()
-        .map(|f| ModelConfigField {
-            key: f.key.into(),
-            label: f.label.into(),
-            kind: f.kind.into(),
-            default: f.default.into(),
-            options: f
-                .options
-                .iter()
-                .map(|(value, label)| ModelConfigOption {
-                    value: (*value).into(),
-                    label: (*label).into(),
-                })
-                .collect(),
-            required: f.required,
-        })
-        .collect()
+    kotone_core::model_catalog::schema_of(fields)
 }
 
 fn sherpa_info(m: &MultiFileModel) -> ModelInfo {
     ModelInfo {
+        category: ModelCategory::Asr,
         id: m.id.into(),
         engine_id: m.engine_id.into(),
         display_name: m.display_name.into(),
@@ -840,6 +807,23 @@ pub fn list() -> Result<Vec<ModelInfo>, String> {
 fn online_asr_infos() -> Vec<ModelInfo> {
     vec![
         ModelInfo {
+            category: ModelCategory::Asr,
+            id: DEEPSEEK_ASR_STT_ID.into(),
+            engine_id: DEEPSEEK_ASR_STT_ID.into(),
+            display_name: "DeepSeek 语音识别（在线，用琴音的 DeepSeek 密钥）".into(),
+            size_bytes: 0,
+            download_url: String::new(),
+            sha256: String::new(),
+            downloaded: true,
+            io: ModelIo::Offline,
+            backend: ModelBackend::Remote,
+            recipe: ModelRecipe::DeepseekAsr,
+            config_schema: Vec::new(),
+            api_key_url: Some("https://platform.deepseek.com/api_keys".into()),
+            tag: Some(ONLINE_ASR_TAG.into()),
+        },
+        ModelInfo {
+            category: ModelCategory::Asr,
             id: VOLCANO_ASR_STT_ID.into(),
             engine_id: VOLCANO_ASR_STT_ID.into(),
             display_name: "火山引擎语音识别（在线）".into(),
@@ -855,6 +839,7 @@ fn online_asr_infos() -> Vec<ModelInfo> {
             tag: Some(ONLINE_ASR_TAG.into()),
         },
         ModelInfo {
+            category: ModelCategory::Asr,
             id: IFLYTEK_ASR_STT_ID.into(),
             engine_id: IFLYTEK_ASR_STT_ID.into(),
             display_name: "科大讯飞语音听写（在线）".into(),
@@ -877,6 +862,7 @@ pub fn recipe_of(id: &str) -> Option<ModelRecipe> {
         REMOTE_OPENAI_STT_ID => Some(ModelRecipe::OpenaiCompat),
         VOLCANO_ASR_STT_ID => Some(ModelRecipe::VolcanoAsr),
         IFLYTEK_ASR_STT_ID => Some(ModelRecipe::IflytekAsr),
+        DEEPSEEK_ASR_STT_ID => Some(ModelRecipe::DeepseekAsr),
         _ => SHERPA_MODELS.iter().find(|m| m.id == id).map(|m| m.recipe),
     }
 }
@@ -886,6 +872,7 @@ pub fn engine_id_of(id: &str) -> Option<&'static str> {
         REMOTE_OPENAI_STT_ID => Some(REMOTE_OPENAI_ENGINE_ID),
         VOLCANO_ASR_STT_ID => Some(VOLCANO_ASR_STT_ID),
         IFLYTEK_ASR_STT_ID => Some(IFLYTEK_ASR_STT_ID),
+        DEEPSEEK_ASR_STT_ID => Some(DEEPSEEK_ASR_STT_ID),
         _ => SHERPA_MODELS
             .iter()
             .find(|m| m.id == id)
@@ -894,7 +881,10 @@ pub fn engine_id_of(id: &str) -> Option<&'static str> {
 }
 
 pub fn is_remote_model(id: &str) -> bool {
-    id == REMOTE_OPENAI_STT_ID || id == VOLCANO_ASR_STT_ID || id == IFLYTEK_ASR_STT_ID
+    id == REMOTE_OPENAI_STT_ID
+        || id == VOLCANO_ASR_STT_ID
+        || id == IFLYTEK_ASR_STT_ID
+        || id == DEEPSEEK_ASR_STT_ID
 }
 
 /// 手动安装指引：官方页 + 目标目录 + 应放置的文件清单。
@@ -1008,6 +998,14 @@ pub fn download(id: &str, progress: Progress<'_>) -> Result<(), String> {
     validate_models_dir_path(&models_dir())?;
     let _download_guard = download::begin_download()?;
     download_inner(id, progress)
+}
+
+/// 下载一个不在语音识别清单里的多文件模型（如唤醒模型）：与 [`download`] 共用互斥、取消与下载源策略。
+pub fn download_model(m: &MultiFileModel, progress: Progress<'_>) -> Result<(), String> {
+    validate_models_dir_path(&models_dir())?;
+    let _download_guard = download::begin_download()?;
+    let cfg = settings::load().download;
+    download_multi(m, progress, &cfg)
 }
 
 /// 请求取消当前下载（幂等；Tauri IPC 用）
@@ -1781,8 +1779,8 @@ mod tests {
         let items = list().unwrap();
         assert_eq!(
             items.len(),
-            SHERPA_MODELS.len() + 2,
-            "VAD 不在清单内；火山引擎 + 科大讯飞两个在线条目应出现在清单末尾"
+            SHERPA_MODELS.len() + 3,
+            "VAD 不在清单内；DeepSeek、火山引擎、科大讯飞三个在线条目应出现在清单末尾"
         );
         assert!(
             items.iter().all(|i| i.id != VAD_MODEL_ID),

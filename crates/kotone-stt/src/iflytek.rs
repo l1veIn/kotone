@@ -467,7 +467,7 @@ fn send_frame(
 ) -> Result<(), String> {
     let frame = iflytek_audio_frame(app_id, status, audio);
     socket
-        .send(Message::Text(frame.to_string()))
+        .send(Message::Text(frame.to_string().into()))
         .map_err(|e| format!("科大讯飞音频发送失败：{e}"))
 }
 

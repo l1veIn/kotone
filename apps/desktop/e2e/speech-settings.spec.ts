@@ -71,8 +71,8 @@ async function openNativeSettings(page: Page) {
       if (command === "list_speech_voices") {
         if (bridge.holdVoices) return new Promise((resolve) => voices.push(resolve));
         return (await browser.getSettings()).assistant.speechEngine === "system"
-          ? [{ id: "sapi:test", name: "系统测试声音" }]
-          : ["001", "003", "017"].map((id) => ({ id: `kokoro:zf_${id}`, name: `中文女声 ${id}` }));
+          ? [{ id: "system/sapi:test", name: "系统测试声音" }]
+          : ["001", "003", "017"].map((id) => ({ id: `kokoro/zf_${id}`, name: `中文女声 ${id}` }));
       }
       if (command === "list_reminders") return [];
       if (command === "get_startup_options") return { onboarding: "never" };
@@ -94,7 +94,7 @@ test("Kokoro offers three Chinese voices and switching engines preserves each vo
   await speech.getByLabel("播报声音", { exact: true }).click();
   await expect(page.getByRole("option")).toHaveText(["中文女声 001", "中文女声 003", "中文女声 017"]);
   await page.getByRole("option", { name: "中文女声 017", exact: true }).click();
-  await expect(speech.getByLabel("播报声音", { exact: true })).toHaveAttribute("data-value", "kokoro:zf_017");
+  await expect(speech.getByLabel("播报声音", { exact: true })).toHaveAttribute("data-value", "kokoro/zf_017");
   await speech.getByLabel("语音引擎", { exact: true }).click();
   await page.getByRole("option", { name: "Windows · 系统语音", exact: true }).click();
   await expect(speech.getByLabel("播报声音", { exact: true })).toHaveText("系统测试声音");
@@ -104,6 +104,7 @@ test("Kokoro offers three Chinese voices and switching engines preserves each vo
   await page.getByRole("option", { name: "Kokoro · 本地中文语音", exact: true }).click();
   await expect(speech.getByLabel("播报声音", { exact: true })).toHaveText("中文女声 017");
   const saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
+  // 落盘用旧写法，旧版本仍能使用这个声音
   expect(saved.assistant).toMatchObject({ speechEngine: "kokoro", kokoroVoiceId: "kokoro:zf_017", voiceId: "" });
 });
 
@@ -116,7 +117,7 @@ test("browser preview clearly shows an uninstalled model, disables download and 
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-assistant").click();
   await page.getByTestId("assistant-nav-settings").click();
-  await expect(page.getByTestId("system-speech-info")).toBeVisible();
+  await expect(page.getByTestId("auto-speech-info")).toBeVisible();
   await page.getByLabel("语音引擎", { exact: true }).click();
   await page.getByRole("option", { name: "Kokoro · 本地中文语音", exact: true }).click();
   await expect(page.getByTestId("speech-model")).toContainText("尚未下载");
@@ -159,12 +160,12 @@ test("native download progress, failure, retry and cancellation remain actionabl
 
 test("leaving the page discards old model and voice responses while fresh events win over a snapshot", async ({ page }) => {
   await openNativeSettings(page);
-  await page.getByTestId("settings-nav-general").click();
+  await page.getByTestId("settings-nav-history").click();
   await page.evaluate(() => { window.speechTest.holdSnapshots = true; window.speechTest.holdVoices = true; });
   await page.getByTestId("settings-nav-assistant").click();
   await page.getByTestId("assistant-nav-settings").click();
   await page.waitForFunction(() => window.speechTest.pendingSnapshots() === 1 && window.speechTest.pendingVoices() === 1);
-  await page.getByTestId("settings-nav-general").click();
+  await page.getByTestId("settings-nav-history").click();
   await page.evaluate(() => { window.speechTest.holdSnapshots = false; window.speechTest.holdVoices = false; });
   await page.getByTestId("settings-nav-assistant").click();
   await page.getByTestId("assistant-nav-settings").click();
@@ -173,7 +174,7 @@ test("leaving the page discards old model and voice responses while fresh events
   await expect(page.getByTestId("speech-model")).toContainText("尚未下载");
   await expect(page.getByLabel("播报声音", { exact: true })).toHaveText("中文女声 001");
 
-  await page.getByTestId("settings-nav-general").click();
+  await page.getByTestId("settings-nav-history").click();
   await page.evaluate(() => { window.speechTest.holdSnapshots = true; });
   await page.getByTestId("settings-nav-assistant").click();
   await page.getByTestId("assistant-nav-settings").click();
@@ -183,4 +184,28 @@ test("leaving the page discards old model and voice responses while fresh events
     window.speechTest.resolveSnapshots();
   });
   await expect(page.getByTestId("speech-model")).toContainText("正在下载 · 72%");
+});
+
+test("speech engine: automatic by default, DeepSeek or an explicit system choice are saved distinctly", async ({ page }) => {
+  await page.goto("/#/settings?onboarding=never");
+  await page.getByTestId("settings-nav-assistant").click();
+  await page.getByTestId("assistant-nav-settings").click();
+  const engine = page.getByLabel("语音引擎", { exact: true });
+  await expect(engine).toHaveAttribute("data-value", "auto");
+  const saved = async () => (await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings())).assistant;
+
+  await engine.click();
+  await page.getByRole("option", { name: "在线 · DeepSeek 语音", exact: true }).click();
+  await expect(page.getByTestId("online-speech-info")).toContainText("DeepSeek 语音");
+  expect((await saved()).ttsModelId).toBe("deepseek-tts");
+
+  await engine.click();
+  await page.getByRole("option", { name: "Windows · 系统语音", exact: true }).click();
+  await expect(page.getByTestId("system-speech-info")).toBeVisible();
+  expect(await saved()).toMatchObject({ ttsModelId: "local", speechEngine: "system" });
+
+  await engine.click();
+  await page.getByRole("option", { name: "自动（默认）", exact: true }).click();
+  await expect(page.getByTestId("auto-speech-info")).toBeVisible();
+  expect(await saved()).toMatchObject({ ttsModelId: "", speechEngine: "system" });
 });

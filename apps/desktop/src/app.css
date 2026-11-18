@@ -1,4 +1,21 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "./lib/appearance/palettes.css";
+
+/* shadcn-svelte 的 dark: 变体跟随 <html data-theme>（设置窗口的外观系统写入）。 */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/*
+ * shadcn-svelte 组件里的状态变体（data-checked: / data-open: …）。bits-ui 2.21 只写 data-state /
+ * data-orientation，不写这些布尔属性，所以在这里把变体映射到 bits-ui 实际的属性上。
+ */
+@custom-variant data-checked (&[data-state="checked"]);
+@custom-variant data-unchecked (&[data-state="unchecked"]);
+@custom-variant data-open (&[data-state="open"]);
+@custom-variant data-closed (&[data-state="closed"]);
+@custom-variant data-active (&[data-state="active"]);
+@custom-variant data-horizontal (&[data-orientation="horizontal"]);
+@custom-variant data-vertical (&[data-orientation="vertical"]);
 
 /*
  * 方向 B「中继站」品牌 tokens（Gate 1 定案）——全应用唯一色彩来源。
@@ -24,6 +41,93 @@
   --radius-kotone-card: 12px;
 }
 
+/*
+ * shadcn-svelte 设计变量（命名照 shadcn）。:root 的默认值就是 Kotone 深色配色；
+ * 设置窗口里由外观系统按 data-palette / data-theme 换成 lib/appearance/palettes.css 中的一套。
+ * 悬浮窗与弹幕窗不加载外观系统，也不用这些变量。
+ */
+:root {
+  --background: #1a1a2e;
+  --foreground: #f2f4ff;
+  --card: #212140;
+  --card-foreground: #f2f4ff;
+  --popover: #2a2a4e;
+  --popover-foreground: #f2f4ff;
+  --primary: #00e5ff;
+  --primary-foreground: #10101e;
+  --secondary: #2a2a4e;
+  --secondary-foreground: #f2f4ff;
+  --muted: #26264a;
+  --muted-foreground: #a3a6c8;
+  --accent: #23304f;
+  --accent-foreground: #8ff4ff;
+  --destructive: #ff2d78;
+  --border: #35355c;
+  --input: #3d3d66;
+  --ring: #00e5ff;
+  --success: #34d399;
+  --success-foreground: #062a1d;
+  --warning: #fbbf24;
+  --warning-foreground: #2d2108;
+  --info: #00e5ff;
+  --brand-pink: #ff2d78;
+}
+
+/* 圆角沿用 Tailwind 默认刻度（与 shadcn 组件一致），不覆盖，避免改变现有页面。 */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-brand-pink: var(--brand-pink);
+  /* 外壳与聊天用的层级（Codeg 配色没有的用相近的变量兜底） */
+  --color-sidebar: var(--sidebar, var(--background));
+  --color-sidebar-foreground: var(--sidebar-foreground, var(--foreground));
+  --color-sidebar-accent: var(--sidebar-accent, var(--accent));
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground, var(--accent-foreground));
+  --color-sidebar-border: var(--sidebar-border, var(--border));
+  --color-bubble: var(--bubble, var(--muted));
+  --color-composer: var(--composer, var(--card));
+  --color-hairline: var(--hairline, var(--border));
+}
+
+/*
+ * 新组件的默认边框色只在 shadcn 组件（data-slot）与新页面（.ui-scope）里生效，
+ * 不改变旧页面里没写颜色的 border。
+ */
+@layer base {
+  [data-slot],
+  .ui-scope,
+  .ui-scope * {
+    border-color: var(--color-border);
+    outline-color: color-mix(in oklab, var(--color-ring) 50%, transparent);
+  }
+}
+
+/* 界面字体（外观设置）：只在设置窗口启用外观系统后生效。 */
+:root[data-appearance="enabled"] :is(body, #app) {
+  font-family: var(--appearance-ui-font);
+}
+
 html,
 body,
 #app {
@@ -45,26 +149,6 @@ body,
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-}
-
-/* 面板 / 卡片表面（配合 bg-kotone-panel / bg-kotone-card 之外的光边） */
-.kotone-panel {
-  background: color-mix(in srgb, #212140 88%, transparent);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: var(--radius-kotone-panel);
-}
-.kotone-card {
-  background: color-mix(in srgb, #2a2a4e 72%, transparent);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: var(--radius-kotone-card);
-  transition:
-    box-shadow 180ms ease,
-    border-color 180ms ease,
-    transform 180ms ease;
-}
-.kotone-card:hover {
-  border-color: rgba(0, 229, 255, 0.35);
-  box-shadow: 0 0 18px rgba(0, 229, 255, 0.18);
 }
 
 /*
@@ -91,6 +175,21 @@ body,
 }
 .kotone-spotlight:hover::before {
   opacity: 1;
+}
+
+/* 进行中的文字微光（琴音在想 / 正在思考），参照 DeepSeek Harness 的 TextShimmer */
+.kotone-shimmer {
+  background: linear-gradient(90deg, var(--color-muted-foreground) 0%, var(--color-muted-foreground) 35%, var(--color-primary) 50%, var(--color-muted-foreground) 65%, var(--color-muted-foreground) 100%);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: kotone-shimmer 2.2s linear infinite;
+}
+@keyframes kotone-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: 0% 0; }
 }
 
 /* 细滚动条（全局，与悬浮条一致） */

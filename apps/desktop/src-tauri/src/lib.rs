@@ -1,14 +1,36 @@
 //! Kotone Rust 核心：模块组装、共享状态与 IPC 命令。
 //! 职责划分见 docs/development.md §5.1；IPC 契约见 §5.3（类型对齐 src/lib/ipc.ts）。
 
+mod agent;
 mod assistant;
-mod assistant_input;
+mod automation;
+mod bubble;
+mod companion;
 mod compatibility;
+mod computer_use;
 mod diagnostics;
+mod game_session;
+mod game_tools;
 mod hotkey;
+mod key_request;
+mod model_catalog;
+mod ocr_engines;
+mod overlay;
+mod recap;
+mod roles;
 mod runtime;
 mod speech_models;
+mod tool_config;
+mod tool_service;
 mod tray;
+mod tts_online;
+mod usage;
+mod voice_ask;
+mod voice_chat;
+mod voice_listen;
+mod wake;
+mod web_tools;
+mod workspace_cmd;
 
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -67,6 +89,16 @@ enum OnboardingLaunchMode {
 #[serde(rename_all = "camelCase")]
 struct StartupOptions {
     onboarding: OnboardingLaunchMode,
+    /// `--background`：只驻留托盘，不打开设置窗口、不抢焦点（供 Agent / `kotone-cli app launch`）。
+    background: bool,
+}
+
+fn has_background_flag<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().any(|a| a.as_ref() == "--background")
 }
 
 fn parse_onboarding_launch_mode<I, S>(args: I) -> OnboardingLaunchMode
@@ -261,20 +293,29 @@ fn peek_on_demand_overlay(
             if vis_gen.load(std::sync::atomic::Ordering::SeqCst) != gen {
                 return;
             }
-            let still_peek = current_overlay_action(&app)
-                .map(|(_, action)| should_peek_on_demand_notice(action))
-                .unwrap_or(true);
-            if !still_peek {
-                return;
-            }
-            if let Some(win) = app.get_webview_window("overlay") {
-                hide_window(&win);
-                record_overlay_event(
-                    "overlay_hide",
-                    reason,
-                    fullscreen::is_exclusive_fullscreen_active(),
-                );
-            }
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if vis_gen.load(std::sync::atomic::Ordering::SeqCst) != gen {
+                    return;
+                }
+                let still_peek = current_overlay_action(&handle)
+                    .map(|(visibility, action)| {
+                        visibility == OverlayVisibility::OnDemand
+                            && should_peek_on_demand_notice(action)
+                    })
+                    .unwrap_or(false);
+                if !still_peek {
+                    return;
+                }
+                if let Some(win) = handle.get_webview_window("overlay") {
+                    hide_window(&win);
+                    record_overlay_event(
+                        "overlay_hide",
+                        reason,
+                        fullscreen::is_exclusive_fullscreen_active(),
+                    );
+                }
+            });
         });
     }
 }
@@ -398,7 +439,22 @@ struct TauriEmitter {
 impl Emitter for TauriEmitter {
     fn emit(&self, event: &str, payload: serde_json::Value) {
         use tauri::Emitter as _;
+        if event == "kotone://state" {
+            overlay::remember_state(&self.app, &payload);
+        }
         let _ = self.app.emit(event, payload.clone());
+        // 琴音的语音会话改在对话气泡里显示（不再借用语音输入法的悬浮窗）。
+        let bubble_session = event == "kotone://state" && bubble::owns_session(&self.app, &payload);
+        match event {
+            "kotone://state" => bubble::on_state(&self.app, &payload),
+            "kotone://partial" => {
+                if let Some(text) = payload.get("text").and_then(|t| t.as_str()) {
+                    bubble::on_partial(&self.app, text);
+                }
+            }
+            "kotone://vad-no-speech" => bubble::on_no_speech(&self.app),
+            _ => {}
+        }
         if event == "kotone://state" {
             let state = payload.get("state").and_then(|s| s.as_str()).unwrap_or("");
             let text_chars = payload
@@ -417,7 +473,11 @@ impl Emitter for TauriEmitter {
             }
             // 后端驱动 overlay 显隐（显隐一律走原始 Win32 SW_SHOWNA/SW_HIDE 路径，
             // 不碰 tao set_visible——tao 缓存 diff 短路坑，见 hide_window 注释）
-            if let Some(win) = self.app.get_webview_window("overlay") {
+            if bubble_session {
+                if let Some(win) = self.app.get_webview_window("overlay") {
+                    hide_window(&win);
+                }
+            } else if let Some(win) = self.app.get_webview_window("overlay") {
                 let (visibility, continuous) = self
                     .app
                     .try_state::<SharedState>()
@@ -465,14 +525,23 @@ impl Emitter for TauriEmitter {
                                 if vis_gen.load(std::sync::atomic::Ordering::SeqCst) != gen {
                                     return; // 600ms 内已有新状态事件（新会话/停止），不藏
                                 }
-                                if let Some(win) = app.get_webview_window("overlay") {
-                                    hide_window(&win);
-                                    record_overlay_event(
-                                        "overlay_hide",
-                                        "success-dwell",
-                                        fullscreen::is_exclusive_fullscreen_active(),
-                                    );
-                                }
+                                let handle = app.clone();
+                                let _ = app.run_on_main_thread(move || {
+                                    if vis_gen.load(std::sync::atomic::Ordering::SeqCst) != gen
+                                        || current_overlay_action(&handle).map(|(_, action)| action)
+                                            != Some(OnDemandOverlayAction::HideSuccessAfterDwell)
+                                    {
+                                        return;
+                                    }
+                                    if let Some(win) = handle.get_webview_window("overlay") {
+                                        hide_window(&win);
+                                        record_overlay_event(
+                                            "overlay_hide",
+                                            "success-dwell",
+                                            fullscreen::is_exclusive_fullscreen_active(),
+                                        );
+                                    }
+                                });
                             });
                         }
                         OnDemandOverlayAction::Hide => {
@@ -572,15 +641,7 @@ fn record_process_event(app: &AppHandle, payload: &serde_json::Value) {
 /// 走对称的 `hide_window`（见下），不能混用 Tauri 的 hide()/show()。
 #[cfg(windows)]
 fn show_window_no_focus<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
-    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNA};
-    match win.hwnd() {
-        Ok(hwnd) => unsafe {
-            let _ = ShowWindow(hwnd, SW_SHOWNA);
-        },
-        Err(_) => {
-            let _ = win.show();
-        }
-    }
+    overlay::set_visible(win, true);
 }
 
 /// 隐藏窗口（与 show_window_no_focus 对称的原始 Win32 路径）。
@@ -592,15 +653,7 @@ fn show_window_no_focus<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
 /// 不隐藏」的根因：显隐机制不对称，与 runtime 编排无关。
 #[cfg(windows)]
 fn hide_window<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
-    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
-    match win.hwnd() {
-        Ok(hwnd) => unsafe {
-            let _ = ShowWindow(hwnd, SW_HIDE);
-        },
-        Err(_) => {
-            let _ = win.hide();
-        }
-    }
+    overlay::set_visible(win, false);
 }
 
 #[cfg(not(windows))]
@@ -804,6 +857,17 @@ fn apply_overlay_window_config<R: tauri::Runtime>(
     overlay: &OverlayConfig,
 ) {
     layout_overlay_window(win, overlay);
+    #[cfg(windows)]
+    if let Ok(hwnd) = win.hwnd() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TRANSPARENT,
+        };
+        let click_through =
+            unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } & WS_EX_TRANSPARENT.0 as isize != 0;
+        if click_through == overlay.click_through {
+            return;
+        }
+    }
     let _ = win.set_ignore_cursor_events(overlay.click_through);
 }
 
@@ -849,6 +913,16 @@ fn get_settings(state: tauri::State<SharedState>) -> Settings {
     state.settings.read().unwrap().clone()
 }
 
+#[tauri::command]
+fn get_overlay_health(app: AppHandle) -> overlay::OverlayHealth {
+    overlay::health(&app)
+}
+
+#[tauri::command]
+fn get_overlay_state(app: AppHandle) -> Option<serde_json::Value> {
+    overlay::state_snapshot(&app)
+}
+
 /// 已注册后处理模块的只读发现接口；设置页不维护硬编码模块清单。
 #[tauri::command]
 fn list_post_processors(
@@ -862,8 +936,12 @@ fn list_post_processors(
 struct ConnectionPresetInfo {
     id: String,
     display_name: String,
+    /// `recommended` / `china` / `global` / `aggregator` / `custom`
+    group: String,
+    description: String,
     default_base_url: String,
     default_model: String,
+    models: Vec<String>,
     api_key_url: Option<String>,
 }
 
@@ -874,8 +952,11 @@ fn list_connection_presets() -> Vec<ConnectionPresetInfo> {
         .map(|preset| ConnectionPresetInfo {
             id: preset.id.into(),
             display_name: preset.display_name.into(),
+            group: preset.group.into(),
+            description: preset.description.into(),
             default_base_url: preset.default_base_url.into(),
             default_model: preset.default_model.into(),
+            models: preset.models.iter().map(|m| m.to_string()).collect(),
             api_key_url: preset.api_key_url.map(str::to_string),
         })
         .collect()
@@ -954,6 +1035,7 @@ fn hotkey_registration_changed(old: &Settings, next: &Settings) -> bool {
 /// 应用级热键（启动 / 停止 Kotone）变化：与 runtime 是否运行无关，必须重注册。
 fn app_hotkey_changed(old: &Settings, next: &Settings) -> bool {
     old.runtime_toggle_hotkey != next.runtime_toggle_hotkey
+        || old.automation_stop_hotkey != next.automation_stop_hotkey
 }
 
 /// 局部更新配置；热键变化时触发重注册
@@ -991,7 +1073,13 @@ fn update_settings(
             settings::merge_json(&mut merged, &patch);
             *next = serde_json::from_value(merged).map_err(|e| format!("配置项不合法: {e}"))?;
             next.overlay.normalize_interaction();
+            next.assistant.normalize_voices();
             next.assistant.validate()?;
+            if previous.overlay.visibility != next.overlay.visibility
+                && next.overlay.visibility != OverlayVisibility::Never
+            {
+                overlay::prepare_enable(&app);
+            }
             if running && hotkey_registration_changed(&previous, next) {
                 input_configuration = Some(state.orchestrator.try_input_configuration_guard()?);
                 input_pause = runtime_manager.as_ref().map(|rt| rt.pause_inputs());
@@ -1056,27 +1144,30 @@ fn update_settings(
 
     // overlay 配置变化 → 立即重排几何/点击穿透/显隐 + 通知前端（无需重启）
     if old_overlay != updated.overlay {
-        if let Some(win) = app.get_webview_window("overlay") {
-            apply_overlay_window_config(&win, &updated.overlay);
-            if old_overlay.visibility != updated.overlay.visibility {
-                let running = app
-                    .try_state::<RuntimeManager>()
-                    .map(|rt| rt.phase() == RuntimePhase::Running)
-                    .unwrap_or(false);
-                match updated.overlay.visibility {
-                    OverlayVisibility::Never => hide_window(&win),
-                    OverlayVisibility::Always if running => show_window_no_focus(&win),
-                    OverlayVisibility::OnDemand => hide_window(&win),
-                    OverlayVisibility::Always => {}
-                }
-            }
-        }
+        overlay::reconcile(
+            &app,
+            old_overlay.visibility != updated.overlay.visibility
+                && updated.overlay.visibility != OverlayVisibility::Never,
+        );
         use tauri::Emitter as _;
         let _ = app.emit("kotone://overlay-config", &updated.overlay);
     }
 
+    // 当前角色（名字、声音、唤醒词跟着它）
+    roles::remember(&updated.agent.role_id);
     // 引擎/模型/模式可能经 patch 变更 → restartNeeded 推导依赖最新配置，推送全量状态
     runtime::snapshot_and_emit(&app, None);
+    Ok(updated)
+}
+
+/// 后端自己改设置（例如换角色）：和设置页保存一样生效，并通知各窗口刷新。
+pub(crate) fn update_settings_from_backend(
+    app: &AppHandle,
+    patch: serde_json::Value,
+) -> Result<Settings, String> {
+    use tauri::Emitter as _;
+    let updated = update_settings(app.clone(), app.state(), patch)?;
+    let _ = app.emit("kotone://settings-changed", &updated);
     Ok(updated)
 }
 
@@ -1544,6 +1635,9 @@ fn set_models_dir(
     {
         return Err("语音模型正在下载，请等待完成或取消后再迁移目录".into());
     }
+    if kotone_stt::download::is_active() {
+        return Err("有模型正在下载，请等待完成或取消后再迁移目录".into());
+    }
     let assistant_state = app.state::<assistant::AssistantRuntime>();
     let _output = assistant::prepare_model_migration(&assistant_state)?;
     let requested_dir = dir.trim().to_string();
@@ -1794,6 +1888,36 @@ fn auto_elevate_before_tauri_init() {
     }
 }
 
+/// 建启动时就要有的窗口（`tauri.conf.json` 里标了 `create: false`；悬浮窗另由 [`overlay`] 按需建）。
+fn create_startup_windows(app: &tauri::AppHandle) {
+    for label in ["danmaku", "companion", "main"] {
+        if app.get_webview_window(label).is_some() {
+            continue;
+        }
+        let Some(config) = app
+            .config()
+            .app
+            .windows
+            .iter()
+            .find(|config| config.label == label)
+            .cloned()
+        else {
+            log::log(&format!("startup: missing window configuration {label}"));
+            continue;
+        };
+        match tauri::WebviewWindowBuilder::from_config(app, &config)
+            .and_then(|builder| builder.build())
+        {
+            // 弹幕窗口鼠标穿透（原来在 assistant::start 里设，那时窗口还没建）。
+            Ok(window) if label == "danmaku" => {
+                let _ = window.set_ignore_cursor_events(true);
+            }
+            Ok(_) => {}
+            Err(e) => log::log(&format!("startup: create window {label} failed: {e}")),
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 见函数注释：自启动提权必须先于单实例插件的互斥锁创建。
@@ -1802,25 +1926,37 @@ pub fn run() {
 
     let startup_options = StartupOptions {
         onboarding: parse_onboarding_launch_mode(std::env::args()),
+        background: has_background_flag(std::env::args()),
     };
-    tauri::Builder::default()
-        // 单实例：第二实例启动时唤起已有实例的设置窗口并退出自身，
-        // 避免旧进程未退出导致热键「already registered」与 WebView2 类注册冲突
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.show();
-                let _ = win.unminimize();
-                let _ = win.set_focus();
-            }
-            // 测试时常从已在托盘运行的实例再次执行
-            // `kotone.exe --onboarding=always`。第二实例不会进入 setup，
-            // 因此必须把强制打开请求转发给现有设置窗口。
-            if parse_onboarding_launch_mode(args.iter().map(String::as_str))
-                == OnboardingLaunchMode::Always
-            {
-                let _ = app.emit_to("main", "kotone://open-onboarding", ());
-            }
-        }))
+    // 隔离实例（设了 KOTONE_HOME：开发、测试、外部 Agent 的独立实例）不参与单实例：
+    // 否则正式安装在运行时，隔离实例一启动就把正式实例的窗口唤到前台然后退出。
+    // 隔离实例的配置要自己关掉热键，免得和正式实例抢按键（见 scripts/manual-e2e/README.md）。
+    let mut builder = tauri::Builder::default();
+    if std::env::var_os("KOTONE_HOME").is_none() {
+        builder = builder
+            // 单实例：第二实例启动时唤起已有实例的设置窗口并退出自身，
+            // 避免旧进程未退出导致热键「already registered」与 WebView2 类注册冲突
+            .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+                // Agent 以后台方式再次启动：实例已在运行，保持静默，不唤起窗口、不抢焦点
+                if has_background_flag(args.iter().map(String::as_str)) {
+                    return;
+                }
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.unminimize();
+                    let _ = win.set_focus();
+                }
+                // 测试时常从已在托盘运行的实例再次执行
+                // `kotone.exe --onboarding=always`。第二实例不会进入 setup，
+                // 因此必须把强制打开请求转发给现有设置窗口。
+                if parse_onboarding_launch_mode(args.iter().map(String::as_str))
+                    == OnboardingLaunchMode::Always
+                {
+                    let _ = app.emit_to("main", "kotone://open-onboarding", ());
+                }
+            }));
+    }
+    builder
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -1829,7 +1965,13 @@ pub fn run() {
         // 仅托盘菜单「退出」（app.exit）真正结束进程。
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
+                if matches!(window.label(), "overlay" | "danmaku") {
+                    if let Some(win) = window.app_handle().get_webview_window(window.label()) {
+                        hide_window(&win);
+                    }
+                } else {
+                    let _ = window.hide();
+                }
                 api.prevent_close();
             }
         })
@@ -1848,19 +1990,6 @@ pub fn run() {
             ));
             tray::setup_tray(app.handle())?;
             app.manage(startup_options.clone());
-
-            // 开发调试：`pnpm tauri dev -- --console` 启动后自动打开 webview 控制台。
-            // `open_devtools` 只在 Tauri 的开发构建中可用，必须从 release 编译中移除。
-            #[cfg(debug_assertions)]
-            {
-                if std::env::args().any(|a| a == "--console") {
-                    for label in ["main", "overlay"] {
-                        if let Some(win) = app.get_webview_window(label) {
-                            win.open_devtools();
-                        }
-                    }
-                }
-            }
 
             // 首次运行：默认配置 + 内置 profile 落盘（~/.kotone/）
             let loaded_settings = settings::load_with_diagnostic();
@@ -1895,6 +2024,10 @@ pub fn run() {
                 Err(e) => log::log(&format!("silero VAD 模型写入失败: {e}")),
             }
 
+            // 用量账本（usage.jsonl）：之后的在线调用都记进去。
+            usage::start();
+            // 当前角色（工作区与语音合成按它取性格和声音）。
+            roles::remember(&settings.agent.role_id);
             let settings = Arc::new(RwLock::new(settings));
             let settings_repository = Arc::new(SettingsRepository::new(settings.clone()));
             let mut registry = EngineRegistry::new();
@@ -1918,10 +2051,21 @@ pub fn run() {
             });
             let injector: Arc<dyn Injector> = Arc::new(WindowsInjector);
             let focus: Arc<dyn FocusBackend> = Arc::new(WinFocusBackend);
+            // 语音唤醒（ADR 017）：唤醒后的那次会话改用唤醒线程转来的音频，其余照常开麦克风。
+            let wake_runtime = wake::WakeRuntime::default();
             let audio_backend: Arc<dyn kotone_core::audio::AudioBackend> =
-                Arc::new(platform_audio::CpalBackend);
-            let assistant_runtime =
-                assistant::initialize(app.handle(), settings.clone(), connections.clone());
+                Arc::new(wake::WakeAudioBackend {
+                    inner: Arc::new(platform_audio::CpalBackend),
+                    handoff: wake_runtime.handoff(),
+                });
+            app.manage(wake_runtime);
+            app.manage(voice_ask::VoiceAsk::default());
+            app.manage(bubble::BubbleRuntime::default());
+            app.manage(computer_use::ComputerUse::default());
+            app.manage(voice_chat::VoiceChat::default());
+            app.manage(voice_listen::VoiceListen::default());
+            app.manage(key_request::KeyRequests::default());
+            let assistant_runtime = assistant::initialize(app.handle(), settings.clone());
 
             #[allow(unused_mut)] // vad-silero feature 关闭时无可变接线
             let mut orchestrator = Orchestrator::new(
@@ -1968,20 +2112,48 @@ pub fn run() {
             app.manage(HotkeyManager::new(app.handle(), orchestrator.clone()));
             app.manage(RuntimeManager::new());
             app.manage(ResourceMonitor(Mutex::new(sysinfo::System::new())));
+            app.manage(overlay::OverlayManager::default());
             app.manage(assistant_runtime);
             app.manage(speech_models::SpeechModelManager::default());
+            app.manage(ocr_engines::OcrEngines::new(app.handle()));
+            app.manage(companion::CompanionRuntime::default());
+            app.manage(automation::AutomationManager::open());
+            automation::start_schedules(app.handle());
+            // 内置琴音 Agent：对话存储与运行状态（ADR 014 / 015）
+            app.manage(agent::AgentRuntime::open());
+            // 琴音原来的名字和头像记进她的角色卡（只做一次）。
+            roles::migrate(app.handle());
+            // 对局复盘：盯着游戏进程，一局结束就整理（agent.matchRecap，默认开）。
+            recap::start(app.handle());
+            // 先接上程序执行端口，再启动调度器（到点的程序才有人执行）。
+            automation::attach(app.handle());
             assistant::start(app.handle());
+            // 游戏语音（ADR 020）：设置里开着就开始转发（之后跟着设置保存启停）。
+            voice_chat::sync(app.handle());
+            // 可选本机工具服务：独立于 ASR 运行时，只在启动时读取开关（docs/tool-service.md）
+            let tool_service_enabled = settings.read().unwrap().tool_service.enabled;
+            tool_service::start(app.handle(), tool_service_enabled);
             compatibility::start_fullscreen_monitor(app.handle().clone());
 
+            // 启动时的窗口（设置、弹幕、气泡）在全部状态 manage() 之后才建：页面一加载就会发 IPC，
+            // 走快速 IPC（ipc.localhost）时可能早于 setup 结束到达，命令取不到状态会崩溃。
+            create_startup_windows(app.handle());
             for label in ["main", "overlay", "danmaku"] {
                 if let Some(win) = app.get_webview_window(label) {
                     harden_webview(&win);
                 }
             }
-            if let Some(win) = app.get_webview_window("overlay") {
-                let overlay = settings.read().unwrap().overlay.clone();
-                apply_overlay_window_config(&win, &overlay);
+            // 开发调试：`pnpm tauri dev -- --console` 启动后自动打开 webview 控制台。
+            // `open_devtools` 只在 Tauri 的开发构建中可用，必须从 release 编译中移除。
+            #[cfg(debug_assertions)]
+            {
+                if std::env::args().any(|a| a == "--console") {
+                    if let Some(win) = app.get_webview_window("main") {
+                        win.open_devtools();
+                    }
+                }
             }
+            overlay::reconcile(app.handle(), false);
 
             // 应用级热键（启动 / 停止 Kotone）：runtime 未运行时也必须生效，
             // 故在启动阶段就落到低级钩子上（未配置时空操作，不安装钩子）。
@@ -2006,9 +2178,13 @@ pub fn run() {
             // 启动即显示设置窗口：全部窗口默认隐藏时，应用看起来像「没起来」。
             // 托盘常驻语义不变——关闭此窗口只是隐藏，进程仍在托盘。
             // 自动提权重启的场合此分支在提权子进程中执行，同样弹窗，符合预期。
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.show();
-                let _ = win.set_focus();
+            // `--background`（Agent 启动）只驻留托盘，不显示窗口、不抢焦点
+            let background = app.state::<StartupOptions>().background;
+            if !background {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
             }
 
             Ok(())
@@ -2020,6 +2196,8 @@ pub fn run() {
             log_frontend_error,
             get_startup_options,
             get_settings,
+            get_overlay_health,
+            get_overlay_state,
             list_post_processors,
             list_connection_presets,
             list_connections,
@@ -2080,24 +2258,87 @@ pub fn run() {
             assistant::cancel_reminder,
             assistant::assistant_submit_text,
             assistant::cancel_assistant_request,
-            assistant_input::assistant_voice_begin,
-            assistant_input::assistant_voice_end,
-            assistant_input::assistant_voice_confirm,
-            assistant_input::assistant_voice_cancel,
             assistant::list_speech_voices,
             assistant::preview_reminder,
+            assistant::assistant_call,
             assistant::stop_speech,
             assistant::get_danmaku,
             assistant::finish_danmaku,
             speech_models::get_speech_model_status,
             speech_models::download_speech_model,
+            wake::wake_status,
+            bubble::bubble_snapshot,
+            bubble::bubble_preview,
+            wake::wake_download_model,
             speech_models::cancel_speech_model_download,
+            automation::automation_runs,
+            automation::automation_saved_list,
+            automation::automation_get,
+            automation::automation_save,
+            automation::automation_delete,
+            automation::automation_run_saved,
+            automation::automation_stop,
+            usage::usage_summary,
+            roles::roles_list,
+            roles::roles_get,
+            roles::roles_switch,
+            roles::roles_update,
+            roles::roles_create,
+            roles::roles_delete,
+            roles::roles_export,
+            roles::roles_import,
+            roles::roles_check_wake,
+            agent::agent_send,
+            workspace_cmd::workspace_overview,
+            key_request::agent_submit_key,
+            game_tools::game_icon,
+            game_tools::launch_installed_game,
+            workspace_cmd::workspace_read,
+            workspace_cmd::workspace_write,
+            workspace_cmd::workspace_delete_game,
+            workspace_cmd::workspace_set_avatar,
+            workspace_cmd::workspace_avatar,
+            workspace_cmd::workspace_delete_skill,
+            workspace_cmd::workspace_import_skill,
+            workspace_cmd::workspace_open_dir,
+            agent::agent_stop,
+            agent::agent_answer,
+            agent::agent_state,
+            agent::agent_tools,
+            agent::agent_conversation,
+            agent::agent_new_conversation,
+            agent::agent_select_conversation,
+            agent::agent_delete_conversation,
+            agent::agent_set_permissions,
+            agent::agent_set_automation_hidden,
+            companion::companion_self_check,
+            companion::connection_self_check,
+            companion::connection_models,
+            game_tools::installed_games,
+            companion::companion_status,
+            companion::companion_clear_chat_region,
+            model_catalog::list_catalog_models,
+            model_catalog::download_catalog_model,
+            model_catalog::import_catalog_model,
+            model_catalog::delete_catalog_model,
+            model_catalog::activate_catalog_model,
+            model_catalog::get_catalog_install_guide,
+            model_catalog::open_catalog_model_dir,
+            voice_chat::voice_chat_status,
+            voice_chat::voice_chat_install,
+            voice_chat::voice_chat_default_mic,
+            voice_chat::voice_chat_test,
+            voice_chat::voice_chat_say,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Kotone application")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                tool_service::shutdown(app);
+                automation::shutdown(app);
+                voice_listen::stop_all(app);
                 assistant::shutdown(app);
+                wake::shutdown(app);
             }
         });
 }

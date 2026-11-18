@@ -7,10 +7,16 @@ members = ["apps/desktop/src-tauri", "crates/*"]
 # 内部 crate（路径相对 workspace 根）
 kotone-core = { path = "crates/kotone-core" }
 kotone-ai = { path = "crates/kotone-ai" }
+kotone-agent = { path = "crates/kotone-agent" }
 kotone-tts = { path = "crates/kotone-tts" }
 kotone-postprocess = { path = "crates/kotone-postprocess" }
 kotone-stt = { path = "crates/kotone-stt" }
 kotone-platform-windows = { path = "crates/kotone-platform-windows" }
+kotone-tools = { path = "crates/kotone-tools" }
+kotone-ocr = { path = "crates/kotone-ocr" }
+kotone-script = { path = "crates/kotone-script" }
+# 桌面端 `kotone.exe <子命令>` 复用 CLI；特性由桌面端按自身特性转发
+kotone-cli = { path = "crates/kotone-cli", default-features = false }
 
 # 通用依赖
 serde = { version = "1", features = ["derive"] }
@@ -19,7 +25,7 @@ tokio = { version = "1", features = ["full"] }
 # raw Win32（features 由各成员按需追加，可叠加）
 windows = "0.61"
 # profile 导入导出（.kprofile ZIP 包；deflate 同时满足读/写）
-zip = { version = "4", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 # 测试
 tempfile = "3"

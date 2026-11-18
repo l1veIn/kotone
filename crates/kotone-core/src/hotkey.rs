@@ -31,6 +31,24 @@ pub const HK_ASSISTANT: &str = "assistant";
 /// 应用级热键：启动 / 停止 Kotone 运行时。与其它具名热键不同，它在 runtime
 /// 未运行（主热键未注册）时也必须生效——否则「启动」永远按不到。
 pub const HK_RUNTIME_TOGGLE: &str = "runtime-toggle";
+/// 应用级热键：立即停止全部自动化（自动化按住的键随之松开）。
+pub const HK_AUTOMATION_STOP: &str = "automation-stop";
+/// 陪玩快捷消息的固定槽位：第 n 条快捷消息（`assistant.companion.quickMessages[n-1]`）。
+pub const HK_QUICK_MESSAGES: [&str; crate::assistant::MAX_QUICK_MESSAGES] = [
+    "quick-message-1",
+    "quick-message-2",
+    "quick-message-3",
+    "quick-message-4",
+    "quick-message-5",
+    "quick-message-6",
+    "quick-message-7",
+    "quick-message-8",
+];
+
+/// 快捷消息槽位 id → 下标。
+pub fn quick_message_slot(id: &str) -> Option<usize> {
+    HK_QUICK_MESSAGES.iter().position(|slot| *slot == id)
+}
 
 /// 热键事件源端口（core）：Windows 低层键鼠钩子与 RegisterHotKey 是两种实现。
 ///
@@ -81,6 +99,8 @@ pub const VK_MENU: u32 = 0x12; // Alt
 pub const VK_PAUSE: u32 = 0x13;
 pub const VK_CAPITAL: u32 = 0x14;
 pub const VK_ESCAPE: u32 = 0x1B;
+/// 主键盘左上角的 ` / ~ 键（呼叫琴音的默认键）。
+pub const VK_OEM_3: u32 = 0xC0;
 pub const VK_SPACE: u32 = 0x20;
 pub const VK_PRIOR: u32 = 0x21; // PageUp
 pub const VK_NEXT: u32 = 0x22; // PageDown
@@ -170,6 +190,7 @@ fn vk_name(vk: u32) -> String {
         VK_PAUSE => "Pause",
         VK_CAPITAL => "CapsLock",
         VK_ESCAPE => "Escape",
+        VK_OEM_3 => "Backquote",
         _ => return format!("VK0x{vk:02X}"),
     };
     name.to_string()
@@ -216,6 +237,7 @@ fn vk_from_name(name: &str) -> Option<u32> {
         "printscreen" | "print" => VK_SNAPSHOT,
         "pause" => VK_PAUSE,
         "capslock" | "caps" => VK_CAPITAL,
+        "backquote" | "`" | "~" | "grave" | "tilde" => VK_OEM_3,
         _ => return None,
     };
     Some(vk)
@@ -688,6 +710,14 @@ mod tests {
         assert_eq!(parse_hotkey("F24").unwrap().vk, VK_F1 + 23);
         assert!(parse_hotkey("F25").is_none());
         assert!(parse_hotkey("F0").is_none());
+    }
+
+    #[test]
+    fn backquote_is_the_call_key() {
+        for name in ["Backquote", "`", "~", "backquote"] {
+            assert_eq!(parse_hotkey(name).unwrap().vk, VK_OEM_3, "{name}");
+        }
+        assert_eq!(vk_name(VK_OEM_3), "Backquote");
     }
 
     #[test]

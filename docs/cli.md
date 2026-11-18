@@ -2,6 +2,8 @@
 
 > 无 Tauri 的命令行前端：core 的一等消费者，也是无人值守自动化测试的入口。
 > 构建：`cargo build -p kotone-cli`（默认带 sherpa 引擎，见 crates/kotone-cli/Cargo.toml）
+>
+> **两个入口，同一套命令**：安装版只带 `kotone.exe`，它的首个参数是下表的子命令时就按命令行执行（在启动应用与单实例检查之前分流），例如 `kotone.exe mcp`、`kotone.exe tools call …`、`kotone.exe app status`；其他参数（如 `--background`）照常启动桌面端。`kotone.exe` 是 GUI 程序、没有控制台：被程序经管道调用（Agent、DSH 插件、MCP 客户端）时输入输出与退出码和 `kotone-cli` 完全一致；在终端里手动使用（命令行不会等它结束、输出也不显示）以及 `elevate`、热键 `listen` 这类需要控制台的命令，请用开发构建的 `kotone-cli.exe`。
 
 ## 命令清单
 
@@ -25,6 +27,16 @@
 | `elevate <command> [args...]` | sudo 式提权：以管理员权限在新控制台执行子命令（典型 `elevate listen`；裸 elevate 报用法错误） |
 | `profile list / use <id> / detect` | 游戏 profile 列表 / 激活 / 前台进程匹配检测 |
 | `log list [--limit N] [--json] / clear [--yes] / delete --session-id <id> --ts <ts> [--yes]` | 识别历史查看 / 清空 / 单条删除（~/.kotone/history/） |
+| `tools status [--json] / list [--json]` | 连接**已运行**的桌面实例，查看工具服务状态 / 实际实现的工具与 schema |
+| `tools call <tool> [--args-file <json文件\|->] [--timeout-ms N] [--request-id ID]` | 调用工具服务的工具，输出 JSON 信封 |
+| `tools artifact get <artifact-id> --output <png> [--force]` | 下载图像产物，由客户端写入指定路径 |
+| `tools events [--cursor C \| --from oldest\|latest] [--types T1,T2] [--wait-ms N] [--follow]` | 读取 Kotone 发给 Agent 的事件（`user.request`、`agent.*`、`runtime.phase`、`app.*`）；`--follow` 逐行输出（JSON Lines）并持续长轮询 |
+| `app status [--json]` | 桌面端是否在运行；运行时给出实例、版本、ASR 相位、启动方式与待处理用户请求数（未运行退出码 1） |
+| `app launch [--exe <kotone.exe>] [--wait-ms N] [--enable-tool-service] [--foreground]` | 后台启动桌面端（只驻留托盘、不开窗口、不抢焦点）并等待工具服务就绪；已在运行直接返回 |
+| `app quit [--wait-ms N]` | 等同托盘“退出”，等进程真正结束才返回 |
+| `mcp` | stdio MCP 服务器：把工具服务映射为 `kotone_*` 工具，供支持 MCP 的 Agent（DSH 插件即用它） |
+| `ocr status [--model-dir <目录>] [--json]` | 本地韩文 OCR 模型就绪检查：文件、大小、SHA-256 与本构建的 ONNX Runtime（不联网、不连接桌面） |
+| `ocr install [--model-dir <目录>] [--from-dir <目录>] [--json]` | 显式安装本地韩文 OCR 模型（PP-OCRv5 mobile，约 18.3 MB）；校验通过才发布 |
 
 ### config set 支持的键
 
@@ -37,10 +49,32 @@
 `history.includeAudio`(true/false)、`download.source`(auto/official/mirror)、
 `download.ghProxy`（GitHub 加速代理前缀，默认 `https://ghfast.top/`，失效可换）、
 `overlay.visibility`(always/on_demand/never)、`overlay.style`(card/capsule)、
-`overlay.position`、`overlay.draggable`、`overlay.clickThrough`。
+`overlay.position`、`overlay.draggable`、`overlay.clickThrough`、
+`toolService.enabled`(true/false，默认 false；桌面端启动时读取——先从托盘退出 Kotone，再写入并重新启动)、
+`toolService.ocr.deepseekConnectionId`（在线 OCR 使用的已有连接 ID；空字符串清除；不存在的连接被拒绝；同样需先退出再重启桌面端）、
+`assistant.route`(reminders/agent，默认 reminders；agent 时助手热键语音与文字入口转交外部 Agent，见[工具服务手册 §10](tool-service.md#10-应用生命周期事件与用户请求agent-底座)；桌面端运行中请改用工具 `settings.update`（立即生效）——直接改配置文件会被运行中的桌面端覆盖，需先退出再重启)。
+
+环境变量 `KOTONE_HOME` 把 Kotone 数据目录（默认 `~/.kotone`：配置、日志、历史、工具服务描述文件）整体换到别处，CLI 与桌面端都读取，用于隔离运行与测试；`KOTONE_EXE` 指定 `app launch` 使用的 `kotone.exe`。
 
 `config get` 可读取存在的配置路径，`config set` 仅支持上述白名单，不等于全部设置字段。
 评测参数、旧模型族别名与缓存规则见 [评测手册](eval-playbook.md)。提醒助手当前通过桌面页和独立热键使用，不是 `eval` 或 `listen` 的隐藏模式。
+
+### 工具服务客户端（tools 命令）
+
+`tools` 子命令通过 `~/.kotone/run/`（或 `$KOTONE_HOME/run/`）下当前用户/会话私有的描述文件，直接连接已经运行并开启了
+`toolService.enabled` 的 Kotone 桌面实例；它不会启动 `kotone.exe`（启动用 `app launch`）、不读取或修改配置、不启动 ASR，
+桌面 ASR 运行时处于停止状态时同样可用。会话凭证只从描述文件读取，不作为参数、也不出现在输出里。
+退出码：0 成功；1 工具返回 `ok=false`；2 本地用法/文件错误；3 未发现服务、描述文件过期/不安全或连接失败。
+协议、工具 schema、捕获限制与示例见 [工具服务手册](tool-service.md)。
+
+### 本地 OCR 模型（ocr 命令）
+
+`ocr status` / `ocr install` 不连接桌面实例，也不需要开启工具服务。模型目录缺省为
+`<模型根>/ocr/ppocrv5-korean-mobile`（模型根同 ASR：`models.dir` 或 `~/.kotone/models`），
+`--model-dir` 或 `KOTONE_OCR_MODEL_DIR` 可直接指定包目录（隔离冒烟用）。`install` 是唯一会下载 OCR
+模型的入口：从 ModelScope（RapidAI/RapidOCR v3.10.0）下载两个文件，或用 `--from-dir` 从本地目录复制，
+每个文件写入临时文件并核对字节数与 SHA-256 后才原子发布；任一校验失败不留下文件。
+退出码：0 就绪/安装成功；1 未就绪/安装失败；2 用法错误。桌面实例无需重启即可使用新安装的模型。
 
 ### 识别历史（log 命令）
 

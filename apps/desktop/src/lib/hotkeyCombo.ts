@@ -20,7 +20,15 @@ const NAMED_CODES: Record<string, string> = {
   PrintScreen: "PrintScreen",
   Pause: "Pause",
   CapsLock: "CapsLock",
+  Backquote: "Backquote",
+  "`": "Backquote",
+  "~": "Backquote",
 };
+
+/** 给人看的热键名：Backquote 显示成 ~。 */
+export function hotkeyLabel(combo: string): string {
+  return combo.split("+").map((part) => (part === "Backquote" ? "~" : part)).join(" + ");
+}
 
 /** KeyboardEvent → 与 Rust parse_hotkey 一致的规范组合名。 */
 export function keyboardEventCombo(event: KeyboardEvent): string | null {
@@ -88,12 +96,16 @@ export function findHotkeyConflict(settings: Settings | null, selfId: string, ke
   if (!settings || !key.trim()) return null;
   const bindings: [string, string, string][] = [
     ["record", "录制热键", settings.hotkey.key],
-    ["assistant", "提醒助手热键", settings.assistant.hotkey],
+    ["assistant", "呼叫热键", settings.assistant.hotkey],
+    ...(settings.assistant.companion?.quickMessages ?? []).map(
+      (message, index): [string, string, string] => [`quick-message-${index + 1}`, `快捷消息 ${index + 1} 热键`, message.hotkey],
+    ),
     ["channel-cycle", "频道切换热键", settings.channelCycleHotkey],
     ["resend-last", "重发最近一条热键", settings.resendLastHotkey],
     ["post-process-toggle", "文字处理开关热键", settings.togglePostProcessingHotkey],
     ["post-process-cycle", "切换文字处理流程热键", settings.cyclePostProcessingHotkey],
     ["runtime-toggle", "启动 / 停止 Kotone 热键", settings.runtimeToggleHotkey],
+    ["automation-stop", "停止所有自动化热键", settings.automationStopHotkey ?? ""],
   ];
   return bindings.find(([id, , combo]) => id !== selfId && combo && combosConflict(key, combo))?.[1] ?? null;
 }

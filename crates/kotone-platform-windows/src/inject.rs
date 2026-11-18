@@ -30,8 +30,20 @@ mod windows_imp {
         VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_LEFT, VK_MENU, VK_RETURN, VK_RIGHT,
         VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
     };
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN,
+        MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE,
+        MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL,
+        MOUSEINPUT, MOUSE_EVENT_FLAGS,
+    };
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        VK_CAPITAL, VK_INSERT, VK_LWIN, VK_NEXT, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5,
+        VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowThreadProcessId, IsWindow, SetForegroundWindow,
+        GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindowThreadProcessId, IsWindow,
+        SetCursorPos, SetForegroundWindow, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+        SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
     };
 
     use kotone_core::inject::{
@@ -42,6 +54,11 @@ mod windows_imp {
 
     /// 游戏可能在低帧率下迟于输入流处理按键；50ms 保持让最终 Enter 更可靠。
     const KEY_HOLD_MS: u64 = 50;
+
+    /// Kotone 发出的每个模拟输入都在 `dwExtraInfo` 里带这个标记（ASCII "KTNI"），低级钩子据此
+    /// 分清“琴音按的”和“玩家按的”：玩家一动，正在进行的 `game.act` 就停下（ADR 019 决定 7，
+    /// 照 dsh-computer-use-win 的做法）。
+    pub const KOTONE_INPUT_TAG: usize = 0x4B54_4E49;
     /// 单次 SendInput 批量的 UTF-16 code unit 上限（每单元 2 个事件）
     const UNICODE_CHUNK_UNITS: usize = 64;
 
@@ -249,6 +266,129 @@ mod windows_imp {
         result
     }
 
+    /// 鼠标键。
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum MouseButton {
+        Left,
+        Right,
+        Middle,
+    }
+
+    fn mouse_input(dx: i32, dy: i32, data: i32, flags: MOUSE_EVENT_FLAGS) -> INPUT {
+        INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx,
+                    dy,
+                    mouseData: data as _,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: KOTONE_INPUT_TAG,
+                },
+            },
+        }
+    }
+
+    /// 相对移动鼠标 (dx, dy)（不带 ABSOLUTE）：游戏用原始输入读鼠标时，转视角只认相对移动
+    /// （照 Cradle `gui_utils.py` 的 `MOVE_BY`）。普通桌面上会受“提高指针精确度”影响，
+    /// 实际移动的像素数不保证等于 dx / dy。
+    pub fn mouse_move_by(dx: i32, dy: i32) -> Result<(), InjectError> {
+        send_inputs(&[mouse_input(dx, dy, 0, MOUSEEVENTF_MOVE)])
+    }
+
+    /// 把鼠标移到屏幕物理像素 (x, y)（自动化的 `mouse_move` / `click`）。用 SendInput 的绝对
+    /// 坐标（虚拟桌面 0..65535），游戏读原始输入也能收到这次移动；移动后核对位置，偏差超过
+    /// 2 像素（DPI 换算不一致等）时用 SetCursorPos 校正。
+    pub fn mouse_move_to(x: i32, y: i32) -> Result<(), InjectError> {
+        let (vx, vy, vw, vh) = unsafe {
+            (
+                GetSystemMetrics(SM_XVIRTUALSCREEN),
+                GetSystemMetrics(SM_YVIRTUALSCREEN),
+                GetSystemMetrics(SM_CXVIRTUALSCREEN).max(2),
+                GetSystemMetrics(SM_CYVIRTUALSCREEN).max(2),
+            )
+        };
+        let nx = ((i64::from(x - vx) * 65_535) / i64::from(vw - 1)) as i32;
+        let ny = ((i64::from(y - vy) * 65_535) / i64::from(vh - 1)) as i32;
+        send_inputs(&[mouse_input(
+            nx,
+            ny,
+            0,
+            MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+        )])?;
+        let mut at = windows::Win32::Foundation::POINT::default();
+        if unsafe { GetCursorPos(&mut at) }.is_ok()
+            && ((at.x - x).abs() > 2 || (at.y - y).abs() > 2)
+        {
+            let _ = unsafe { SetCursorPos(x, y) };
+        }
+        Ok(())
+    }
+
+    /// 在当前位置按下或松开鼠标键。
+    pub fn mouse_button(button: MouseButton, down: bool) -> Result<(), InjectError> {
+        let flags = match (button, down) {
+            (MouseButton::Left, true) => MOUSEEVENTF_LEFTDOWN,
+            (MouseButton::Left, false) => MOUSEEVENTF_LEFTUP,
+            (MouseButton::Right, true) => MOUSEEVENTF_RIGHTDOWN,
+            (MouseButton::Right, false) => MOUSEEVENTF_RIGHTUP,
+            (MouseButton::Middle, true) => MOUSEEVENTF_MIDDLEDOWN,
+            (MouseButton::Middle, false) => MOUSEEVENTF_MIDDLEUP,
+        };
+        send_inputs(&[mouse_input(0, 0, 0, flags)])
+    }
+
+    /// 在当前位置点击 `count` 次：每次按下 → 停一下 → 松开（与按键的按住时长一致）。
+    pub fn mouse_click(button: MouseButton, count: u8) -> Result<(), InjectError> {
+        for i in 0..count.max(1) {
+            if i > 0 {
+                std::thread::sleep(Duration::from_millis(KEY_HOLD_MS));
+            }
+            mouse_button(button, true)?;
+            std::thread::sleep(Duration::from_millis(KEY_HOLD_MS));
+            mouse_button(button, false)?;
+        }
+        Ok(())
+    }
+
+    /// 滚轮：正数向上（远离用户），每格 120。
+    pub fn mouse_wheel(clicks: i32) -> Result<(), InjectError> {
+        send_inputs(&[mouse_input(0, 0, clicks * 120, MOUSEEVENTF_WHEEL)])
+    }
+
+    /// 横向滚轮：正数向右，每格 120。
+    pub fn mouse_hwheel(clicks: i32) -> Result<(), InjectError> {
+        send_inputs(&[mouse_input(0, 0, clicks * 120, MOUSEEVENTF_HWHEEL)])
+    }
+
+    /// 只按下（脚本的 `key_down`）：先按修饰键再按主键。调用方负责之后调用 [`key_up`]。
+    pub fn key_down(spec: &str) -> Result<(), InjectError> {
+        let (mods, main) = parse_key_spec(spec)?;
+        for &vk in &mods {
+            vk_event(vk, true)?;
+        }
+        if let Err(e) = vk_event(main, true) {
+            for &vk in mods.iter().rev() {
+                let _ = vk_event(vk, false);
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// 只松开（脚本的 `key_up`）：先松主键再松修饰键；全部尝试，返回第一个错误。
+    pub fn key_up(spec: &str) -> Result<(), InjectError> {
+        let (mods, main) = parse_key_spec(spec)?;
+        let mut first_err = vk_event(main, false).err();
+        for &vk in mods.iter().rev() {
+            if let Err(e) = vk_event(vk, false) {
+                first_err.get_or_insert(e);
+            }
+        }
+        first_err.map_or(Ok(()), Err)
+    }
+
     fn record_inject(activity: &str, detail: String, result: &Result<(), InjectError>) {
         let (outcome, error_code) = match result {
             Ok(()) => (Some("ok".into()), None),
@@ -288,7 +428,7 @@ mod windows_imp {
                     wScan: scan,
                     dwFlags: flags,
                     time: 0,
-                    dwExtraInfo: 0,
+                    dwExtraInfo: KOTONE_INPUT_TAG,
                 },
             },
         }
@@ -334,6 +474,11 @@ mod windows_imp {
     }
 
     // ---------- 键名解析（纯逻辑，可单测） ----------
+
+    /// 键名（含组合键，如 `Ctrl+S`）认不认识：`game.act` 动手前用它校验整份计划。
+    pub fn key_spec_valid(spec: &str) -> bool {
+        parse_key_spec(spec).is_ok()
+    }
 
     /// 解析 "Enter" / "Ctrl+V" 形式：返回（修饰键列表, 主键）
     fn parse_key_spec(spec: &str) -> Result<(Vec<VIRTUAL_KEY>, VIRTUAL_KEY), InjectError> {
@@ -382,6 +527,22 @@ mod windows_imp {
             "right" => VK_RIGHT,
             "home" => VK_HOME,
             "end" => VK_END,
+            "pageup" | "pgup" => VK_PRIOR,
+            "pagedown" | "pgdn" => VK_NEXT,
+            "insert" | "ins" => VK_INSERT,
+            "capslock" => VK_CAPITAL,
+            "win" | "windows" => VK_LWIN,
+            "`" | "backquote" => VK_OEM_3,
+            "-" | "minus" => VK_OEM_MINUS,
+            "=" | "equal" | "equals" => VK_OEM_PLUS,
+            "[" | "bracketleft" => VK_OEM_4,
+            "]" | "bracketright" => VK_OEM_6,
+            "\\" | "backslash" => VK_OEM_5,
+            ";" | "semicolon" => VK_OEM_1,
+            "'" | "apostrophe" | "quote" => VK_OEM_7,
+            "," | "comma" => VK_OEM_COMMA,
+            "." | "period" => VK_OEM_PERIOD,
+            "/" | "slash" => VK_OEM_2,
             "f1" => VK_F1,
             "f2" => VK_F2,
             "f3" => VK_F3,
@@ -529,6 +690,39 @@ mod windows_imp {
         }
     }
 
+    /// 全部进程：(PID, 父进程 PID, 可执行文件名)。
+    pub fn process_list() -> Vec<(u32, u32, String)> {
+        let mut out = Vec::new();
+        unsafe {
+            let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+                return out;
+            };
+            let mut entry = PROCESSENTRY32W {
+                dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+                ..Default::default()
+            };
+            if Process32FirstW(snapshot, &mut entry).is_ok() {
+                loop {
+                    let len = entry
+                        .szExeFile
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(entry.szExeFile.len());
+                    out.push((
+                        entry.th32ProcessID,
+                        entry.th32ParentProcessID,
+                        String::from_utf16_lossy(&entry.szExeFile[..len]),
+                    ));
+                    if Process32NextW(snapshot, &mut entry).is_err() {
+                        break;
+                    }
+                }
+            }
+            let _ = CloseHandle(snapshot);
+        }
+        out
+    }
+
     /// Toolhelp 快照按可执行文件名（大小写不敏感）查 PID；取首个匹配
     pub fn find_pid_by_name(name: &str) -> Option<u32> {
         unsafe {
@@ -596,6 +790,16 @@ mod windows_imp {
             assert_eq!(vk_from_name("v"), Some(VIRTUAL_KEY(u16::from(b'V'))));
             assert_eq!(vk_from_name("A"), Some(VIRTUAL_KEY(u16::from(b'A'))));
             assert_eq!(vk_from_name("7"), Some(VIRTUAL_KEY(u16::from(b'7'))));
+        }
+
+        #[test]
+        fn computer_use_key_names() {
+            assert_eq!(vk_from_name("PageDown"), Some(VK_NEXT));
+            assert_eq!(vk_from_name("pageup"), Some(VK_PRIOR));
+            assert_eq!(vk_from_name("Win"), Some(VK_LWIN));
+            assert_eq!(vk_from_name("/"), Some(VK_OEM_2));
+            assert!(key_spec_valid("Ctrl+Shift+PageDown"));
+            assert!(!key_spec_valid("Ctrl+Bogus"));
         }
 
         #[test]
@@ -676,6 +880,51 @@ mod fallback {
         ))
     }
 
+    pub fn key_down(_key: &str) -> Result<(), InjectError> {
+        Err(InjectError::new("key_down 仅 Windows 实现"))
+    }
+
+    pub fn key_up(_key: &str) -> Result<(), InjectError> {
+        Err(InjectError::new("key_up 仅 Windows 实现"))
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum MouseButton {
+        Left,
+        Right,
+        Middle,
+    }
+
+    pub fn mouse_move_to(_x: i32, _y: i32) -> Result<(), InjectError> {
+        Err(InjectError::new("鼠标仅 Windows 实现"))
+    }
+
+    pub fn mouse_button(_button: MouseButton, _down: bool) -> Result<(), InjectError> {
+        Err(InjectError::new("鼠标仅 Windows 实现"))
+    }
+
+    pub fn mouse_click(_button: MouseButton, _count: u8) -> Result<(), InjectError> {
+        Err(InjectError::new("鼠标仅 Windows 实现"))
+    }
+
+    pub fn mouse_wheel(_clicks: i32) -> Result<(), InjectError> {
+        Err(InjectError::new("鼠标仅 Windows 实现"))
+    }
+
+    pub fn mouse_move_by(_dx: i32, _dy: i32) -> Result<(), InjectError> {
+        Err(InjectError::new("鼠标仅 Windows 实现"))
+    }
+
+    pub fn mouse_hwheel(_clicks: i32) -> Result<(), InjectError> {
+        Err(InjectError::new("鼠标仅 Windows 实现"))
+    }
+
+    pub fn key_spec_valid(_spec: &str) -> bool {
+        false
+    }
+
+    pub const KOTONE_INPUT_TAG: usize = 0x4B54_4E49;
+
     pub fn is_process_foreground(process_names: &[String]) -> bool {
         // 空列表 = 通配任意前台进程；非 Windows 无法校验，保守按通配处理
         process_names.is_empty()
@@ -695,6 +944,10 @@ mod fallback {
 
     pub fn find_pid_by_name(_name: &str) -> Option<u32> {
         None
+    }
+
+    pub fn process_list() -> Vec<(u32, u32, String)> {
+        Vec::new()
     }
 
     /// 非 Windows 兜底焦点后端：无法捕获/恢复，恒返回空
