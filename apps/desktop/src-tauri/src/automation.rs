@@ -493,7 +493,7 @@ pub(crate) fn foreground_target() -> Result<RunTarget, String> {
     foreground_target_info().map(|(target, _)| target)
 }
 
-fn foreground_target_info() -> Result<(RunTarget, WindowInfo), String> {
+pub(crate) fn foreground_target_info() -> Result<(RunTarget, WindowInfo), String> {
     let window = WindowsWindowObserver
         .foreground_window()
         .map_err(|e| format!("找不到前台窗口：{e}"))?

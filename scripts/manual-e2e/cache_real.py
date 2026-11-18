@@ -43,6 +43,11 @@ GAME = [
 ]
 
 
+# 真机测试不让琴音按键：会往前台窗口打字、点鼠标的工具一律禁止（2026-11-18 voice_chat_real 里她选了打字，
+# 字和回车进了桌面）。
+NO_INPUT = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny", "companion.type": "deny"}
+
+
 def call(tool, args=None, timeout_ms=30_000):
     return real_deepseek.tools_call(EXE, ENV, tool, args or {}, timeout_ms)
 
@@ -123,7 +128,7 @@ def main():
         json.dump({"ui": {"firstRunCompleted": True}, "adminPromptDismissed": True, "toolService": {"enabled": True},
                    "hotkey": {"key": "F24", "mode": "toggle"}, "runtimeToggleHotkey": "", "automationStopHotkey": "",
                    "assistant": {"hotkey": "", "callHotkeyDefaulted": True, "wake": {"enabled": False}, "speechVolume": 0},
-                   "agent": {"permissions": {"mode": "allow-all", "rules": {}}, "progressSpeech": False}}, f)
+                   "agent": {"permissions": {"mode": "allow-all", "rules": NO_INPUT}, "progressSpeech": False}}, f)
     app = subprocess.Popen([EXE], env=ENV)
     try:
         time.sleep(10)

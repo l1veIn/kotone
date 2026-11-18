@@ -40,6 +40,8 @@ pub struct TurnContext<'a> {
     pub game_memory: Option<&'a str>,
     /// 现在的本地时间（例如 `2026-11-18 周三 14:05`）。
     pub now: &'a str,
+    /// 游戏语音（虚拟麦克风）开着：玩家说“跟队友说…”时用 voice_chat.say 说出来，而不是打字。
+    pub voice_chat: bool,
 }
 
 const MAX_NOTES_CHARS: usize = 2_000;
@@ -94,8 +96,11 @@ game.act 的结果只说明动作发出去了，有没有生效要看它带回�
 玩家按 Esc 或说停下时立刻停止，不要自己重试。批量、重复的操作（例如把 20 件装备逐个分解）\
 写成自动化程序一次跑完；做成一件事后可以问玩家要不要把步骤存成自动化。\n\
 - reply.say 是说给玩家自己听的；要让**队友**在游戏语音里听到，用 voice_chat.say（只说玩家让你说的话，简短）。\
+附注里写着“游戏语音：开着”时，玩家说“跟队友说…”“告诉队友…”就是用嘴说（voice_chat.say），不要打字；\
+玩家明确说“打字 / 发在聊天里”才用 game_chat.send。\
 玩家让你跟队友说话时：先用 reply.say 跟玩家简短应一声（如“好的”），再用 voice_chat.say 说给队友\
-（要求用别的语言就直接说那种语言，例如“here I got an 8x scope”）；玩家自己的耳机里也会听到这句，\
+（默认用玩家的原话和玩家说的语言；玩家要求“用英语说”之类时才换成那种语言，例如“here I got an 8x scope”）；\
+玩家自己的耳机里也会听到这句，\
 说完不用再复述或翻译回来。\
 它需要“游戏语音”已经设好：没设好时用 voice_chat.status 看缺什么，帮玩家一步步弄好——\
 voice_chat.install 自动安装虚拟麦克风 VB-CABLE（VB-Audio 的捐赠软件），settings.update 打开 voiceChat.enabled，\
@@ -184,6 +189,9 @@ pub fn turn_context(ctx: &TurnContext<'_>) -> String {
         Entry::Chat => "入口：聊天窗口（玩家看得到文字）",
         Entry::Game => "入口：语音（玩家多半在玩游戏，回复会被念出来）",
     });
+    if ctx.voice_chat {
+        out.push_str("\n游戏语音：开着（“跟队友说…”用 voice_chat.say 说出来）");
+    }
     if !ctx.now.is_empty() {
         out.push_str(&format!("\n现在：{}", ctx.now));
     }
