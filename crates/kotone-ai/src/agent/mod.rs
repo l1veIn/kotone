@@ -24,6 +24,7 @@
 //! | `ToolCallUpdate` | `tool_call_update`（in_progress / completed / failed） |
 //! | `Finished` | `session/prompt` 的 `stopReason`（见 [`StopReason::acp`]） |
 
+pub mod compact;
 pub mod model;
 pub mod store;
 
@@ -58,6 +59,10 @@ pub enum Message {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         source: String,
         at_ms: u64,
+        /// Kotone 写的这一轮的情况（入口、当前游戏……），交给模型时放在正文前（照 DeepSeek Harness：
+        /// 会变的信息跟着消息走、只追加，不改系统提示，前缀缓存才能一直命中）。不显示给玩家。
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        context: String,
     },
     /// 模型的一次回复：文字和 / 或工具调用。
     Assistant {
@@ -89,7 +94,18 @@ pub enum Message {
         at_ms: u64,
     },
     /// 给用户看的状态说明（已停止、达到步数上限……），不发给模型。
-    Notice { text: String, at_ms: u64 },
+    ///
+    /// 带 `compaction` 的是上下文压缩的检查点（[`compact`]）：它之前的消息不再发给模型，
+    /// 换成这份摘要；界面照常显示全部历史。
+    Notice {
+        text: String,
+        at_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        compaction: Option<String>,
+        /// 整理这份摘要花的用量。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<TokenUsage>,
+    },
 }
 
 impl Message {
@@ -99,14 +115,43 @@ impl Message {
             attachments: Vec::new(),
             source: String::new(),
             at_ms: now_ms(),
+            context: String::new(),
         }
+    }
+
+    /// 一条状态说明。
+    pub fn notice(text: impl Into<String>) -> Self {
+        Self::Notice {
+            text: text.into(),
+            at_ms: now_ms(),
+            compaction: None,
+            usage: None,
+        }
+    }
+
+    /// 上下文压缩的检查点（摘要）。
+    pub fn is_checkpoint(&self) -> bool {
+        matches!(
+            self,
+            Self::Notice {
+                compaction: Some(_),
+                ..
+            }
+        )
     }
 
     fn chars(&self) -> usize {
         match self {
             Self::User {
-                text, attachments, ..
-            } => text.chars().count() + attachments.iter().map(Attachment::chars).sum::<usize>(),
+                text,
+                attachments,
+                context,
+                ..
+            } => {
+                context.chars().count()
+                    + text.chars().count()
+                    + attachments.iter().map(Attachment::chars).sum::<usize>()
+            }
             Self::Assistant {
                 text,
                 tool_calls,
@@ -123,7 +168,7 @@ impl Message {
             Self::Tool {
                 content, images, ..
             } => content.chars().count() + images.iter().map(Attachment::chars).sum::<usize>(),
-            Self::Notice { .. } => 0,
+            Self::Notice { compaction, .. } => compaction.as_ref().map_or(0, |s| s.chars().count()),
         }
     }
 }
@@ -186,6 +231,12 @@ pub struct TokenUsage {
     /// 服务商报的或按模型价格表估算的费用（美元）；未知时为 None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// 按 Kotone 的价格表（[`kotone_core::usage::price_for`]）估算的费用，币种见 `currency`。
+    /// DeepSeek 用人民币；价格表里没有的模型为 None（界面再看 `cost_usd`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
 }
 
 impl TokenUsage {
@@ -381,7 +432,13 @@ pub struct AgentLimits {
     /// 单个工具结果最多保留多少字（超出截断并注明）。
     pub max_tool_result_chars: usize,
     /// 每次请求带上的历史最多多少字（系统提示与工具说明不计；一张图按 1000 字计）。
+    /// 正常靠上下文压缩（`compact_at_tokens`）控制长度；这个只是压缩失败时的最后防线——
+    /// 超出时从最早的轮次开始丢，前缀会变、缓存会断，所以要比压缩阈值宽得多。
     pub history_budget_chars: usize,
+    /// 上下文估到这么多 token 时先整理一次（[`compact`]）；0 = 不整理。
+    pub compact_at_tokens: u64,
+    /// 整理时原样保留的最近一段最多多少字（本轮总是保留）。
+    pub compact_tail_chars: usize,
     /// 用户一句话最多多少字。
     pub max_user_chars: usize,
     /// 本轮调用过这些工具之后，步数与时长放宽到 `extended_steps` / `extended_duration`
@@ -398,7 +455,9 @@ impl Default for AgentLimits {
             max_duration: Duration::from_secs(300),
             max_tool_calls_per_step: 8,
             max_tool_result_chars: 8_000,
-            history_budget_chars: 60_000,
+            history_budget_chars: 400_000,
+            compact_at_tokens: 0,
+            compact_tail_chars: 12_000,
             max_user_chars: 4_000,
             extend_on: Vec::new(),
             extended_steps: 0,
@@ -489,6 +548,16 @@ pub enum AgentEvent {
     Appended {
         message: Message,
     },
+    /// 上下文压缩：检查点插在 `index`（它之后是原样保留的最近几轮）——存盘用。
+    Compacted {
+        index: usize,
+        message: Message,
+    },
+    /// 模型这次回复没有正文也没有工具调用（例如把回答整段写进了思考里），已丢弃并重发同样的请求；
+    /// 这次调用照样计费——记账用。
+    Discarded {
+        usage: Option<TokenUsage>,
+    },
     Finished {
         stop: StopReason,
     },
@@ -504,15 +573,30 @@ pub const DATA_RULE: &str =
 const DATA_OPEN: &str = "<<<KOTONE_DATA";
 const DATA_CLOSE: &str = "KOTONE_DATA>>>";
 
-/// 数据里出现的标记会被改写，避免伪造“数据结束”。
+/// 数据里出现的标记会被改写，避免伪造“数据结束”或 Kotone 的附注。
 fn neutralize(text: &str) -> String {
     text.replace("KOTONE_DATA", "KOTONE-DATA")
+        .replace("kotone-context", "kotone_context")
 }
 
-/// 用户消息交给模型时的文字部分（数据附件按数据块附在后面；图片另行发送，
-/// 已清空的图片只留一句说明）。
-pub fn render_user(text: &str, attachments: &[Attachment]) -> String {
-    let mut out = text.trim().to_string();
+/// Kotone 写在用户消息前面的附注（这一轮的入口、当前游戏……）用的标签。
+pub const CONTEXT_OPEN: &str = "<kotone-context>";
+pub const CONTEXT_CLOSE: &str = "</kotone-context>";
+
+/// 用户消息交给模型时的文字部分：Kotone 的附注在前，玩家的话，数据附件按数据块附在后面；
+/// 图片另行发送，已清空的图片只留一句说明。
+pub fn render_user(context: &str, text: &str, attachments: &[Attachment]) -> String {
+    let mut out = String::new();
+    if !context.trim().is_empty() {
+        out.push_str(&format!(
+            "{CONTEXT_OPEN}
+{}
+{CONTEXT_CLOSE}
+",
+            context.trim()
+        ));
+    }
+    out.push_str(text.trim());
     for attachment in attachments {
         match attachment {
             Attachment::Data { label, text } => out.push_str(&format!(
@@ -581,18 +665,33 @@ fn strip_user_images(message: &mut Message) {
     }
 }
 
-/// 只保留最近 [`MAX_TOOL_IMAGES`] 张工具带回的图片，更早的清空数据（发给模型时换成说明）。
+/// 工具带回的图片：只保留最近几张，更早的清空数据（发给模型时换成说明）。
+/// 照 DeepSeek Harness：成批地丢（攒到 2×[`MAX_TOOL_IMAGES`] 张时一次丢掉最早的
+/// [`MAX_TOOL_IMAGES`] 张），而不是每来一张就丢一张——否则每次请求都改写较早的消息，前缀缓存一直不中。
 fn keep_recent_tool_images(history: &[Message]) -> Vec<Message> {
-    let mut left = MAX_TOOL_IMAGES;
     let mut out: Vec<Message> = history.to_vec();
-    for message in out.iter_mut().rev() {
+    let total = out
+        .iter()
+        .map(|m| match m {
+            Message::Tool { images, .. } => images
+                .iter()
+                .filter(|i| matches!(i, Attachment::Image { data, .. } if !data.is_empty()))
+                .count(),
+            _ => 0,
+        })
+        .sum::<usize>();
+    let mut drop = if total < 2 * MAX_TOOL_IMAGES {
+        0
+    } else {
+        (total - MAX_TOOL_IMAGES) / MAX_TOOL_IMAGES * MAX_TOOL_IMAGES
+    };
+    for message in out.iter_mut() {
         if let Message::Tool { images, .. } = message {
-            for image in images.iter_mut().rev() {
+            for image in images.iter_mut() {
                 let has_data = matches!(image, Attachment::Image { data, .. } if !data.is_empty());
-                if has_data && left > 0 {
-                    left -= 1;
-                } else {
+                if has_data && drop > 0 {
                     clear_image(image);
+                    drop -= 1;
                 }
             }
         }
@@ -624,11 +723,11 @@ pub fn render_tool_images(name: &str, images: &[Attachment]) -> String {
     out
 }
 
-/// 取出要发给模型的历史：去掉状态说明；按预算从新往旧保留；
+/// 取出要发给模型的历史：最后一个检查点之后的部分（检查点换成摘要）；去掉状态说明；按预算从新往旧保留；
 /// “模型调用工具 + 对应的全部结果”作为一组，不拆开；本轮的用户消息一定保留；
 /// 只有最后一条用户消息带图片。返回 (消息, 是否省略了更早的内容)。
 pub fn context_window(history: &[Message], budget_chars: usize) -> (Vec<Message>, bool) {
-    let history = keep_recent_tool_images(history);
+    let history = keep_recent_tool_images(&compact::after_checkpoint(history));
     let history = history.as_slice();
     // 分组：一组 = 一条用户消息 / 一条模型消息及其后紧跟的工具结果。
     let mut groups: Vec<Vec<&Message>> = Vec::new();
@@ -736,10 +835,7 @@ pub async fn run_turn<M: ModelClient, T: ToolPort>(
 ) -> StopReason {
     let stop = run_inner(model, tools, history, &turn, on_event).await;
     if let Some(text) = stop.notice() {
-        let notice = Message::Notice {
-            text,
-            at_ms: now_ms(),
-        };
+        let notice = Message::notice(text);
         history.push(notice.clone());
         on_event(AgentEvent::Appended { message: notice });
     }
@@ -800,6 +896,11 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
     let system = format!("{}\n\n{DATA_RULE}", system.trim());
 
     let mut step = 0u32;
+    // 一轮最多整理一次（整理完还超就不再反复整理）。
+    let mut compacted = false;
+    // 空回复（没正文、没工具调用）最多重发一次；这一轮已经调用过工具（例如用 reply.say 说过了）的不算。
+    let mut empty_retried = false;
+    let mut used_tools = false;
     loop {
         if step >= max_steps {
             return StopReason::StepLimit;
@@ -811,13 +912,46 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
         take_steer(history);
         on_event(AgentEvent::StepStarted { step });
         let definitions = tools.definitions();
-        let (messages, omitted) = context_window(history, limits.history_budget_chars);
+        // 系统提示、工具清单在一段对话里不变，历史只追加（照 DeepSeek Harness），前缀缓存才会一直命中。
+        // 快到上限时先整理一次（照 Goose），这一次之后前缀又稳定下来。
+        let fixed_chars = system.chars().count()
+            + definitions
+                .iter()
+                .map(|d| {
+                    d.name.len() + d.description.chars().count() + d.parameters.to_string().len()
+                })
+                .sum::<usize>();
+        if !compacted && compact::should_compact(history, fixed_chars, limits) {
+            compacted = true;
+            let (messages, _) = context_window(history, limits.history_budget_chars);
+            match compact::compact(
+                model,
+                &system,
+                &definitions,
+                history,
+                messages,
+                limits,
+                cancel,
+            )
+            .await
+            {
+                Ok(Some((index, message))) => {
+                    history.insert(index, message.clone());
+                    on_event(AgentEvent::Compacted { index, message });
+                }
+                Ok(None) => {}
+                Err(e) => push(
+                    history,
+                    Message::notice(format!("整理较早的对话没有成功：{e}")),
+                ),
+            }
+            if cancel.is_cancelled() {
+                return StopReason::Cancelled;
+            }
+        }
+        let (messages, _) = context_window(history, limits.history_budget_chars);
         let request = ModelRequest {
-            system: if omitted {
-                format!("{system}\n\n（更早的对话已省略。）")
-            } else {
-                system.clone()
-            },
+            system: system.clone(),
             messages,
             tools: definitions.clone(),
         };
@@ -854,6 +988,21 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
 
         let calls = reply.tool_calls.clone();
         let truncated = reply.finish == FinishReason::Length;
+        // 思考模式的模型偶尔把整段回答写进思考里、正文为空：玩家什么也听不到。
+        // 同样的请求再发一次（前缀全中缓存，只多花一点）；还是空才收下。不写进对话，保持只追加。
+        if calls.is_empty()
+            && !truncated
+            && !used_tools
+            && reply.text.trim().is_empty()
+            && !empty_retried
+        {
+            empty_retried = true;
+            keep_partial_discard(&partial);
+            on_event(AgentEvent::Discarded {
+                usage: reply.usage.filter(|u| !u.is_empty()),
+            });
+            continue;
+        }
         push(
             history,
             Message::Assistant {
@@ -875,6 +1024,7 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
                 StopReason::Completed
             };
         }
+        used_tools = true;
         for call in &calls {
             on_event(AgentEvent::ToolCall { call: call.clone() });
         }
@@ -975,6 +1125,11 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
             return StopReason::TimeLimit;
         }
     }
+}
+
+/// 丢弃这次回复已经流出来的内容（空回复重发前）。
+fn keep_partial_discard(partial: &Mutex<String>) {
+    partial.lock().unwrap().clear();
 }
 
 /// 中断时把已经流出来的文字留在对话里（用户已经看到了）。

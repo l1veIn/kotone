@@ -157,9 +157,12 @@ fn media_type(mime: &str) -> Option<ImageMediaType> {
 fn convert_message(message: &Message, names: &NameMap) -> Result<Option<RigMessage>, AiError> {
     Ok(Some(match message {
         Message::User {
-            text, attachments, ..
+            text,
+            attachments,
+            context,
+            ..
         } => {
-            let mut content = vec![UserContent::text(render_user(text, attachments))];
+            let mut content = vec![UserContent::text(render_user(context, text, attachments))];
             for attachment in attachments {
                 if let Attachment::Image { mime, data, .. } = attachment {
                     if !data.is_empty() {
@@ -252,7 +255,11 @@ pub fn map_error(error: &ProviderError) -> AiError {
     })
 }
 
-fn convert_reply(response: &CompletionResponse, names: &NameMap) -> Result<ModelReply, AiError> {
+fn convert_reply(
+    response: &CompletionResponse,
+    names: &NameMap,
+    connection: &ResolvedConnection,
+) -> Result<ModelReply, AiError> {
     if response.error.is_some() {
         return Err(AiError::Failed("AI 接口返回错误".into()));
     }
@@ -274,6 +281,15 @@ fn convert_reply(response: &CompletionResponse, names: &NameMap) -> Result<Model
         _ => FinishReason::Other,
     };
     let usage = &response.usage;
+    // DeepSeek 在 usage 里报 `prompt_cache_hit_tokens`（另有 `prompt_tokens_details.cached_tokens`），
+    // rig 的 OpenAI 兼容解析两者都认；原始字段也再看一眼，以官方字段为准。
+    let cached = response
+        .raw
+        .pointer("/usage/prompt_cache_hit_tokens")
+        .and_then(Value::as_u64)
+        .or(usage.cached_input_tokens);
+    let price =
+        kotone_core::usage::price_for(&connection.provider, &connection.model, super::now_ms());
     Ok(ModelReply {
         text: response.text(),
         reasoning: response.reasoning(),
@@ -282,7 +298,7 @@ fn convert_reply(response: &CompletionResponse, names: &NameMap) -> Result<Model
         usage: Some(TokenUsage {
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
-            cached_input_tokens: usage.cached_input_tokens,
+            cached_input_tokens: cached,
             reasoning_tokens: usage.reasoning_tokens,
             // 价格表缺了某一部分时 total 只是下限，这种情况不报，免得低估。
             cost_usd: usage
@@ -290,6 +306,10 @@ fn convert_reply(response: &CompletionResponse, names: &NameMap) -> Result<Model
                 .as_ref()
                 .filter(|c| c.is_complete())
                 .map(|c| c.total),
+            cost: price.as_ref().and_then(|p| {
+                kotone_core::usage::estimate(p, usage.input_tokens, cached, usage.output_tokens)
+            }),
+            currency: price.map(|p| p.currency.to_string()),
         }),
     })
 }
@@ -333,7 +353,7 @@ impl ModelClient for OpenAiModel {
                 }
                 response
             };
-            convert_reply(&response, &names)
+            convert_reply(&response, &names, &self.connection)
         };
         tokio::select! {
             biased;

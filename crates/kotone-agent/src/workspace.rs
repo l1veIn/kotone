@@ -386,6 +386,14 @@ impl Workspace {
         Ok(read(&self.target_path(target)?.0))
     }
 
+    /// 某个游戏的记忆全文；游戏 id 无效或没有时为 None。
+    pub fn game_memory(&self, game: &str) -> Option<String> {
+        if !valid_game_id(game) {
+            return None;
+        }
+        self.read_memory(&MemoryTarget::Game(game.to_string())).ok()
+    }
+
     /// 一批记忆操作（整批原子生效）。返回写完后的条数与字数。
     pub fn apply_memory(
         &self,

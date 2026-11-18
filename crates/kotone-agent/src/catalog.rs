@@ -8,8 +8,8 @@
 //!   （`game_chat.send`，替代 `companion.type`，会写进执行记录）和查找工具（`tools.find`）；
 //! - **已保存的自动化**：每个一个工具 `saved.<id>`（最多 [`MAX_SAVED_TOOLS`] 个）。
 //!
-//! 八十多个工具不全量交给模型：[`CORE_TOOLS`] 与已保存的自动化始终提供，其余按分组
-//! 由模型先用 `tools.find` 查，查到的才在本段对话里可用。
+//! 全部工具在一段对话开始时一次交给模型、之后不变（照 DeepSeek Harness：工具清单变了前缀缓存就断）；
+//! [`CORE_TOOLS`] 只用于界面上标“常用”。`tools.find` 只是按关键词查。
 
 use kotone_core::automation::library::{Automation, AutomationBody, ParamKind};
 use serde_json::{json, Map, Value};
@@ -203,8 +203,8 @@ pub const GROUPS: &[(&str, &str, &str)] = &[
     ),
     (
         "app",
-        "应用（状态、历史、诊断、退出）",
-        "应用 状态 历史 诊断 日志 退出 重启 app history diagnostics",
+        "应用（状态、历史、诊断、用量与费用、退出）",
+        "应用 状态 历史 诊断 日志 退出 重启 用量 费用 花了多少钱 缓存 命中率 app history diagnostics usage cost",
     ),
 ];
 
@@ -247,10 +247,10 @@ pub fn builtin_entries() -> Vec<ToolEntry> {
     vec![
         ToolEntry {
             name: TOOL_FIND.into(),
-            description: "查找并启用更多工具。只有常用工具一开始就可用；需要改设置、管理模型、看窗口列表、截图识别等时，先用关键词（中文或英文）或分组查找，查到的工具从下一步起可以调用。不带参数时列出分组。".into(),
+            description: "按关键词（中文或英文）或分组查工具，返回工具名和说明。全部工具一开始就都能直接调用；不确定该用哪个时再查。不带参数时列出分组。".into(),
             parameters: json!({"type": "object", "additionalProperties": false, "properties": {
                 "query": {"type": "string", "maxLength": 100, "description": "关键词，如“热键”“下载模型”“window”"},
-                "group": {"enum": groups, "description": "列出并启用这一组的全部工具"}
+                "group": {"enum": groups, "description": "列出这一组的全部工具"}
             }}),
             side_effects: Vec::new(),
             group: "meta",
@@ -628,27 +628,44 @@ impl Catalog {
         CORE_TOOLS.contains(&entry.name.as_str()) || matches!(entry.source, Source::Saved { .. })
     }
 
-    /// 按关键词或分组查找（不含始终提供的工具）。关键词按空白拆开，每个词都要在
-    /// 名字、说明或分组关键词里出现。
+    /// 按关键词或分组查找。关键词按空白拆开，每个词都要在名字、说明或分组关键词里出现。
     pub fn find(&self, query: Option<&str>, group: Option<&str>) -> Vec<&ToolEntry> {
         let words: Vec<String> = query
             .unwrap_or("")
             .split_whitespace()
             .map(str::to_lowercase)
             .collect();
-        // 不在这里排除常驻工具：常驻与否取决于入口（聊天 / 语音），由调用方按当前入口过滤。
-        self.entries
+        // 名字里就有的排最前，其次说明里有的，只在分组关键词里对上的最后（同档按清单顺序）。
+        let mut found: Vec<(u8, &ToolEntry)> = self
+            .entries
             .iter()
             .filter(|e| group.is_none_or(|g| e.group == g))
-            .filter(|e| {
+            .filter_map(|e| {
                 let keywords = GROUPS
                     .iter()
                     .find(|(id, _, _)| *id == e.group)
                     .map(|(_, label, words)| format!("{label} {words}"))
                     .unwrap_or_default();
-                let haystack = format!("{} {} {}", e.name, e.description, keywords).to_lowercase();
-                words.iter().all(|w| haystack.contains(w.as_str()))
+                let name = e.name.to_lowercase();
+                let description = e.description.to_lowercase();
+                let haystack = format!("{name} {description} {}", keywords.to_lowercase());
+                if !words.iter().all(|w| haystack.contains(w.as_str())) {
+                    return None;
+                }
+                let rank = if words.iter().all(|w| name.contains(w.as_str())) {
+                    0
+                } else if words
+                    .iter()
+                    .all(|w| name.contains(w.as_str()) || description.contains(w.as_str()))
+                {
+                    1
+                } else {
+                    2
+                };
+                Some((rank, e))
             })
-            .collect()
+            .collect();
+        found.sort_by_key(|(rank, _)| *rank);
+        found.into_iter().map(|(_, e)| e).collect()
     }
 }

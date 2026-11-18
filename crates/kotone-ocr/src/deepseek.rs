@@ -714,6 +714,8 @@ impl OcrBackend for DeepSeekOcr {
             other => other?,
         };
         let mut output = parse_response(status, &body, input.width, input.height, purpose)?;
+        // 用量账本：按识别成功的页数计费（一张截图 = 1 页）。
+        kotone_core::usage::record_ocr("deepseek", BACKEND_ID, 1);
         output
             .phases
             .push(("requestMs".into(), started.elapsed().as_millis() as u64));

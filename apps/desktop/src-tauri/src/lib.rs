@@ -22,6 +22,7 @@ mod tool_config;
 mod tool_service;
 mod tray;
 mod tts_online;
+mod usage;
 mod voice_ask;
 mod voice_chat;
 mod voice_listen;
@@ -2006,6 +2007,8 @@ pub fn run() {
                 Err(e) => log::log(&format!("silero VAD 模型写入失败: {e}")),
             }
 
+            // 用量账本（usage.jsonl）：之后的在线调用都记进去。
+            usage::start();
             let settings = Arc::new(RwLock::new(settings));
             let settings_repository = Arc::new(SettingsRepository::new(settings.clone()));
             let mut registry = EngineRegistry::new();
@@ -2252,6 +2255,7 @@ pub fn run() {
             automation::automation_delete,
             automation::automation_run_saved,
             automation::automation_stop,
+            usage::usage_summary,
             agent::agent_send,
             workspace_cmd::workspace_overview,
             key_request::agent_submit_key,

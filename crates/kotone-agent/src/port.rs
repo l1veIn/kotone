@@ -3,7 +3,6 @@
 //! 一次调用：查清单 → 权限（允许 / 询问 / 禁止）→ 按来源执行（工具服务 / 内置动作 /
 //! 已保存的自动化 / `tools.find`）→ 结果文字（屏幕文字类标为不可信）。
 
-use std::collections::BTreeSet;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
@@ -23,7 +22,7 @@ use crate::permissions::{
 };
 use crate::workspace::{MemoryOp, MemoryTarget, Workspace};
 
-/// `tools.find` 一次最多启用几个工具。
+/// `tools.find` 一次最多列出几个工具。
 const MAX_FIND: usize = 12;
 
 /// 内置动作的桌面实现。
@@ -117,29 +116,30 @@ pub fn take_images(result: &mut Value) -> Vec<Attachment> {
     out
 }
 
-/// 一段对话里跨轮保留的状态：经 `tools.find` 启用的工具、“本段对话都允许”的授权。
+/// 一段对话里跨轮保留的状态：“本段对话都允许”的授权，以及会话开始时冻结的东西。
+///
+/// 照 DeepSeek Harness：系统提示与工具清单在一段对话里**一个字都不变**，会变的信息跟着
+/// 每条用户消息走（[`crate::prompt::turn_context`]），这样 DeepSeek 的前缀缓存每次都能命中。
 #[derive(Default)]
 pub struct Session {
-    active: Mutex<BTreeSet<String>>,
     pub grants: Grants,
     /// 会话开始时冻结的工作区快照（照 Hermes：会话中途写入的记忆下一段会话才生效，前缀不变）。
     pub snapshot: std::sync::OnceLock<crate::workspace::Snapshot>,
+    /// 会话开始时冻结的系统提示。
+    pub system: std::sync::OnceLock<String>,
+    /// 会话开始时冻结的工具清单（全部工具，一开始就给；不再经 `tools.find` 中途启用）。
+    pub definitions: std::sync::OnceLock<Vec<ToolDef>>,
+    /// 上一轮附注里的游戏（变了才再附上游戏说明）。
+    pub last_game: Mutex<Option<String>>,
 }
 
-impl Session {
-    pub fn active(&self) -> Vec<String> {
-        self.active.lock().unwrap().iter().cloned().collect()
-    }
-}
-
-/// 交给模型的工具范围。
+/// 这一轮从哪个入口来（两个入口共用一段对话、同一份工具清单）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Scope {
-    /// 常用工具 + 已保存的自动化 + 经 `tools.find` 启用的工具。
+    /// 聊天窗口。
     #[default]
     Full,
-    /// 语音入口：与聊天窗口同一套工具，另加 `reply.ask`（用语音追问玩家）。
-    /// 早先这里只给一小套“游戏常用”工具，玩家实测让琴音下载模型、打开游戏时她总说没有这个工具。
+    /// 语音入口：`reply.ask`（用语音追问玩家）只在这里能用。
     Game,
 }
 
@@ -195,15 +195,11 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
         self
     }
 
-    fn offered(&self, entry: &ToolEntry, active: &std::collections::BTreeSet<String>) -> bool {
-        if let Some(filter) = &self.tool_filter {
-            return filter.iter().any(|t| t == &entry.name);
-        }
-        match self.scope {
-            Scope::Full => Catalog::is_core(entry) || active.contains(&entry.name),
-            Scope::Game => {
-                Catalog::is_core(entry) || entry.name == TOOL_ASK || active.contains(&entry.name)
-            }
+    /// 主会话：全部工具；子会话：只有交给它的那几个。
+    fn offered(&self, entry: &ToolEntry) -> bool {
+        match &self.tool_filter {
+            Some(filter) => filter.iter().any(|t| t == &entry.name),
+            None => true,
         }
     }
 
@@ -211,6 +207,7 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
         &self.catalog
     }
 
+    /// 按关键词或分组查工具（只是查，工具清单一开始就是全的）。
     fn find(&self, arguments: &Value) -> ToolOutcome {
         let query = arguments
             .get("query")
@@ -227,41 +224,34 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
                 })
                 .collect();
             return ToolOutcome::ok(
-                json!({"groups": groups, "hint": "用 query 或 group 查找；查到的工具从下一步起可用"})
-                    .to_string(),
+                json!({"groups": groups, "hint": "用 query 或 group 查找"}).to_string(),
             );
         }
-        // 只列当前入口里还不能用的工具（聊天窗口常驻的设置工具，在语音入口要查了才有）。
-        let offered_now = self.session.active.lock().unwrap().clone();
         let found: Vec<&ToolEntry> = self
             .catalog
             .find(query, group)
             .into_iter()
-            .filter(|e| !self.offered(e, &offered_now))
+            .filter(|e| self.offered(e))
             .collect();
         let total = found.len();
-        // 按分组查：启用整组（分组本身就有界，最多十几个）；按关键词查：最多 MAX_FIND 个。
-        // 否则组里排在后面的工具（例如“设置”组的 settings.update）永远启用不了。
         let limit = if query.is_none() {
             usize::MAX
         } else {
             MAX_FIND
         };
-        let mut active = self.session.active.lock().unwrap();
         let tools: Vec<Value> = found
             .into_iter()
             .take(limit)
             .map(|e| {
-                active.insert(e.name.clone());
                 let short: String = e.description.chars().take(160).collect();
                 json!({"name": e.name, "group": e.group, "description": short})
             })
             .collect();
         ToolOutcome::ok(
             json!({
-                "enabled": tools,
+                "tools": tools,
                 "matched": total,
-                "note": if total > limit { "结果太多，只启用了前几个；换更具体的关键词" } else { "这些工具从下一步起可以调用" },
+                "note": if total > limit { "结果太多，只列了前几个；换更具体的关键词" } else { "这些工具都可以直接调用" },
             })
             .to_string(),
         )
@@ -309,6 +299,11 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
                     return ToolOutcome::error("text 为空或超过 300 字");
                 }
                 self.host.say(text, delivery).await
+            }
+            TOOL_ASK if self.scope != Scope::Game => {
+                return ToolOutcome::error(
+                    "reply.ask 只在语音入口用；在聊天窗口里直接在回复里问玩家",
+                )
             }
             TOOL_ASK => {
                 let question = arguments
@@ -482,21 +477,23 @@ fn parse_delivery(arguments: &Value) -> Result<Vec<DeliveryKind>, String> {
 
 impl<H: BuiltinHost, A: Asker> ToolPort for KotonePort<H, A> {
     fn definitions(&self) -> Vec<ToolDef> {
-        let active = self.session.active.lock().unwrap().clone();
-        self.catalog
-            .entries()
-            .iter()
-            .filter(|e| self.offered(e, &active))
-            .filter(|e| {
-                // 只读模式 / 用户禁止的工具不交给模型，免得白白调用。
-                !matches!(self.policy.decide(e, &Value::Null), Decision::Deny { .. })
+        // 一段对话里冻结（照 DeepSeek Harness）：中途改权限、保存新的自动化都不改清单，
+        // 禁止的工具调用时再拒绝；新保存的自动化下一段对话才成为工具（这段里用 automation.run）。
+        self.session
+            .definitions
+            .get_or_init(|| {
+                self.catalog
+                    .entries()
+                    .iter()
+                    .filter(|e| self.offered(e))
+                    .map(|e| ToolDef {
+                        name: e.name.clone(),
+                        description: e.description.clone(),
+                        parameters: e.parameters.clone(),
+                    })
+                    .collect()
             })
-            .map(|e| ToolDef {
-                name: e.name.clone(),
-                description: e.description.clone(),
-                parameters: e.parameters.clone(),
-            })
-            .collect()
+            .clone()
     }
 
     async fn call(
@@ -506,8 +503,7 @@ impl<H: BuiltinHost, A: Asker> ToolPort for KotonePort<H, A> {
         arguments: Value,
         cancel: &CancellationToken,
     ) -> ToolOutcome {
-        let active = self.session.active.lock().unwrap().clone();
-        let Some(entry) = self.catalog.get(name).filter(|e| self.offered(e, &active)) else {
+        let Some(entry) = self.catalog.get(name).filter(|e| self.offered(e)) else {
             return ToolOutcome::error(format!("没有名为 {name} 的可用工具"));
         };
         // 琴音不能改自己的权限：在询问用户之前就拒绝，不受“全部允许”影响。

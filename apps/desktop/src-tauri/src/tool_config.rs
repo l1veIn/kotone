@@ -697,6 +697,10 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
             let _: NoArgs = parse(tool, args)?;
             to_json(crate::get_resource_usage(app.state()))
         }
+        c::TOOL_USAGE_SUMMARY => {
+            let _: NoArgs = parse(tool, args)?;
+            Ok(crate::usage::summary())
+        }
         c::TOOL_POSTPROCESS_PROCESSORS => {
             let _: NoArgs = parse(tool, args)?;
             Ok(json!({"processors": crate::list_post_processors(app.state())}))

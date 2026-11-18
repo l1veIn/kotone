@@ -153,11 +153,13 @@ impl OnlineSynth {
     pub fn synthesize(&self, request: &SpeechRequest) -> Result<SynthesizedSpeech, String> {
         request.validate()?;
         let (config, native) = self.resolve(request)?;
-        let bytes = match self.kind {
-            OnlineKind::OpenAi => self.openai(&config, &native, request)?,
-            OnlineKind::Volcano => self.volcano(&config, &native, request)?,
-            OnlineKind::Deepseek => self.deepseek(&config, &native, request)?,
+        let (bytes, provider) = match self.kind {
+            OnlineKind::OpenAi => (self.openai(&config, &native, request)?, "openai"),
+            OnlineKind::Volcano => (self.volcano(&config, &native, request)?, "volcano"),
+            OnlineKind::Deepseek => (self.deepseek(&config, &native, request)?, "deepseek"),
         };
+        // 用量账本（按字计费）：真的请求了才记，缓存命中走不到这里。
+        kotone_core::usage::record_tts(provider, &config.model, &request.text);
         crate::wav::decode(&bytes)
     }
 

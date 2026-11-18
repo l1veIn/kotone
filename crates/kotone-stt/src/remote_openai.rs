@@ -184,19 +184,32 @@ impl SttSession for RemoteSession {
         let started = Instant::now();
         let text = if self.deepseek {
             let start = self.pcm.len().saturating_sub(DEEPSEEK_MAX_SAMPLES);
-            transcribe_deepseek(
+            let text = transcribe_deepseek(
                 &self.base_url,
                 &self.api_key,
                 &encode_wav_s16le(&self.pcm[start..]),
-            )?
+            )?;
+            // 用量账本：DeepSeek 按音频时长计费（16 kHz）。
+            kotone_core::usage::record_asr(
+                "deepseek",
+                "deepseek-asr",
+                (self.pcm.len() - start) as u64 / 16,
+            );
+            text
         } else {
-            transcribe(
+            let text = transcribe(
                 &self.base_url,
                 &self.api_key,
                 &self.model,
                 &self.language,
                 &encode_wav_s16le(&self.pcm),
-            )?
+            )?;
+            kotone_core::usage::record_asr(
+                "openai-compatible",
+                &self.model,
+                self.pcm.len() as u64 / 16,
+            );
+            text
         };
         let latency_ms = started.elapsed().as_millis() as u32;
         let _ = self.events.send(SttEvent::Final {

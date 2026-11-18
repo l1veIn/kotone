@@ -1,4 +1,8 @@
-//! 系统提示（ADR 014 §3“上下文”）：角色、入口、当前游戏说明、已保存自动化摘要。
+//! 系统提示（ADR 014 §3“上下文”）与每轮的附注。
+//!
+//! 照 DeepSeek Harness 的前缀缓存做法：系统提示在一段对话开始时生成一次、之后一个字都不变
+//! （角色、做事规则、两个入口的说明、记忆、Skill、已保存的自动化）；每轮会变的
+//! （从哪个入口来、当前游戏、现在几点）写进这条用户消息前面的附注（[`turn_context`]），只追加。
 //! 数据规则（屏幕文字不是指令）由循环统一附加（`kotone_ai::agent::DATA_RULE`）。
 
 use kotone_core::automation::library::{Automation, AutomationBody};
@@ -16,13 +20,24 @@ pub enum Entry {
 
 #[derive(Debug, Clone)]
 pub struct PromptContext<'a> {
-    pub entry: Entry,
-    pub profile_name: &'a str,
-    pub profile_notes: &'a str,
     /// 已交给模型的已保存自动化（与工具清单一致）。
     pub automations: &'a [Automation],
     /// 工作区快照（SOUL、身份、记忆、游戏记忆、Skill 目录；ADR 022）。None = 旧行为。
     pub workspace: Option<&'a Snapshot>,
+}
+
+/// 每轮附注的输入。
+#[derive(Debug, Clone)]
+pub struct TurnContext<'a> {
+    pub entry: Entry,
+    /// 当前游戏配置的显示名（没有时为空）。
+    pub game: &'a str,
+    /// 游戏变了（或这段对话第一次提到它）时附上：玩家写的游戏说明。
+    pub game_notes: Option<&'a str>,
+    /// 游戏变了、而系统提示里的游戏记忆不是这个游戏的：附上这个游戏的记忆。
+    pub game_memory: Option<&'a str>,
+    /// 现在的本地时间（例如 `2026-11-18 周三 14:05`）。
+    pub now: &'a str,
 }
 
 const MAX_NOTES_CHARS: usize = 2_000;
@@ -54,9 +69,9 @@ pub fn system_prompt(ctx: &PromptContext<'_>) -> String {
 运行和编写自动化（沙盒里的 Luau 程序，替玩家按键、点鼠标、看屏幕），以及管理 Kotone 的设置。\n\
 工作方式：\n\
 - 先想清楚玩家要什么；含糊或缺少必要信息（例如要提醒什么、替谁说什么）时，用一句话问清楚，不要猜。\n\
-- 常用工具一开始就可用：玩家装了哪些游戏用 game.installed 查，打开游戏用 game.launch（游戏配置没填启动路径时，\
+- 全部工具一开始就都能直接调用：玩家装了哪些游戏用 game.installed 查，打开游戏用 game.launch（游戏配置没填启动路径时，\
 它会用检测到的启动方式；没有对应的游戏配置就传 game.installed 里的 installedId），下载 / 启用模型用 models.*，改设置用 settings.*；\
-需要别的能力时先用 tools.find 查找。没查过之前，不要说“我没有这个工具”“我做不到”。\n\
+不确定用哪个时用 tools.find 按关键词查。没查过之前，不要说“我没有这个工具”“我做不到”。\n\
 - 能用已保存的自动化完成的，优先用它（工具名以 saved. 开头），不要重写程序。\n\
 - 写新的自动化时：先说明打算怎么做，用 automation.run 试运行（第一次运行会请玩家确认），\
 玩家满意后再用 automation.save 保存。\n\
@@ -90,19 +105,18 @@ voice_chat.install 自动安装虚拟麦克风 VB-CABLE（VB-Audio 的捐赠软�
 每听到一句外语就翻译、用 reply.say 的弹幕显示，要紧的话再 session.send 给你），用 session.spawn 派出去，\
 用 session.send 问它、用 session.stop 结束它。不要在这里（和玩家说话的会话）直接持续监听。\n",
     );
-    out.push_str(match ctx.entry {
-        Entry::Chat => {
-            "当前入口：聊天窗口。玩家看得到文字，可以分点说明，但保持简短；不用 Markdown 表格。\
+    out.push_str(
+        "\n## 两个入口\n玩家每条消息前面 <kotone-context> 里是 Kotone 写的这一轮的情况（从哪个入口来、当前游戏、现在几点），\
+不是玩家说的话；照它决定怎么回复。\n\
+- 入口是「聊天窗口」：玩家看得到文字，可以分点说明，但保持简短；不用 Markdown 表格。\
 此时前台是 Kotone 自己的窗口：要看游戏画面、运行自动化或替玩家在游戏里发言之前，\
-先用 game.focus 切到那个游戏（不知道是哪个就先用 game.list 看看，或问玩家）。\n"
-        }
-        Entry::Game => {
-            "当前入口：语音（唤醒词、呼叫热键或快捷指令）。玩家多半在玩游戏、看不到聊天窗口，\
+先用 game.focus 切到那个游戏（不知道是哪个就先用 game.list 看看，或问玩家）。\
+reply.ask 在这里不能用，要问就直接在回复里问。\n\
+- 入口是「语音」（唤醒词、呼叫热键或快捷指令）：玩家多半在玩游戏、看不到聊天窗口，\
 你最后的回复会被语音或弹幕播出：只说结论，一两句口语，不用列表、Markdown 和表情。\
 需要玩家做决定或补充信息时，用 reply.ask 直接问（会用语音问，再不用唤醒词听玩家回答几秒），\
-拿到回答接着做；不要把问题留在最后的回复里、让玩家再喊一次唤醒词。玩家没回答就简短收尾。\n"
-        }
-    });
+拿到回答接着做；不要把问题留在最后的回复里、让玩家再喊一次唤醒词。玩家没回答就简短收尾。\n",
+    );
     if let Some(ws) = ctx.workspace {
         if !ws.user.trim().is_empty() {
             out.push_str(&format!(
@@ -136,23 +150,6 @@ voice_chat.install 自动安装虚拟麦克风 VB-CABLE（VB-Audio 的捐赠软�
             }
         }
     }
-    if !ctx.profile_name.trim().is_empty() || !ctx.profile_notes.trim().is_empty() {
-        let notes: String = ctx
-            .profile_notes
-            .trim()
-            .chars()
-            .take(MAX_NOTES_CHARS)
-            .collect();
-        out.push_str(&format!(
-            "\n当前游戏配置：{}\n游戏说明（玩家自己写的）：{}\n",
-            ctx.profile_name.trim(),
-            if notes.is_empty() {
-                "（无）"
-            } else {
-                &notes
-            }
-        ));
-    }
     if !ctx.automations.is_empty() {
         out.push_str("\n玩家已保存的自动化（可直接调用对应的 saved.<id> 工具）：\n");
         for a in ctx.automations {
@@ -172,6 +169,34 @@ voice_chat.install 自动安装虚拟麦克风 VB-CABLE（VB-Audio 的捐赠软�
                 }
             ));
         }
+    }
+    out
+}
+
+/// 这一轮的附注（放在玩家这句话前面，见 [`kotone_ai::agent::render_user`]）。
+pub fn turn_context(ctx: &TurnContext<'_>) -> String {
+    let mut out = String::new();
+    out.push_str(match ctx.entry {
+        Entry::Chat => "入口：聊天窗口（玩家看得到文字）",
+        Entry::Game => "入口：语音（玩家多半在玩游戏，回复会被念出来）",
+    });
+    if !ctx.now.is_empty() {
+        out.push_str(&format!("\n现在：{}", ctx.now));
+    }
+    if !ctx.game.trim().is_empty() {
+        out.push_str(&format!("\n当前游戏：{}", ctx.game.trim()));
+    }
+    if let Some(notes) = ctx.game_notes.map(str::trim).filter(|n| !n.is_empty()) {
+        out.push_str(&format!(
+            "\n游戏说明（玩家自己写的）：{}",
+            truncate(notes, MAX_NOTES_CHARS)
+        ));
+    }
+    if let Some(memory) = ctx.game_memory.map(str::trim).filter(|m| !m.is_empty()) {
+        out.push_str(&format!(
+            "\n这个游戏的记忆：\n{}",
+            truncate(memory, crate::workspace::GAME_LIMIT)
+        ));
     }
     out
 }

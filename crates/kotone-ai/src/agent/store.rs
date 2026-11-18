@@ -6,7 +6,8 @@
 //!
 //! 都是原子写入。索引丢失或损坏时从对话文件重建；对话文件损坏时报错，不删除。
 //! 上限：最多保留 [`MAX_CONVERSATIONS`] 段（超出删最久没更新的），每段最多
-//! [`MAX_STORED_MESSAGES`] 条（超出从最早的一轮开始丢）。
+//! [`MAX_STORED_MESSAGES`] 条：超出时只丢最后一个压缩检查点之前的（那部分已经整理成摘要、
+//! 不再发给模型，丢了不影响前缀缓存）；没有检查点时超过 [`HARD_MAX_MESSAGES`] 才从最早的一轮丢。
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -19,6 +20,7 @@ use super::{now_ms, Message};
 
 pub const MAX_CONVERSATIONS: usize = 100;
 pub const MAX_STORED_MESSAGES: usize = 400;
+pub const HARD_MAX_MESSAGES: usize = 2_000;
 const VERSION: u32 = 1;
 const TITLE_CHARS: usize = 30;
 
@@ -112,12 +114,24 @@ fn title_of(messages: &[Message]) -> String {
         .unwrap_or_else(|| "新对话".into())
 }
 
-/// 超出条数上限时，从最早的一轮（以用户消息为界）开始丢。
+/// 超出条数上限时，从最早的一轮（以用户消息为界）开始丢；不丢最后一个检查点和它之后的。
 fn trim_messages(messages: &mut Vec<Message>) {
     if messages.len() <= MAX_STORED_MESSAGES {
         return;
     }
-    let excess = messages.len() - MAX_STORED_MESSAGES;
+    if let Some(checkpoint) = messages.iter().rposition(Message::is_checkpoint) {
+        let excess = messages.len() - MAX_STORED_MESSAGES;
+        // 从一条用户消息（或检查点本身）开始，界面上不留半截的工具调用。
+        let cut = (excess.min(checkpoint)..=checkpoint)
+            .find(|&i| i == checkpoint || matches!(messages[i], Message::User { .. }))
+            .unwrap_or(checkpoint);
+        messages.drain(..cut);
+        return;
+    }
+    if messages.len() <= HARD_MAX_MESSAGES {
+        return;
+    }
+    let excess = messages.len() - HARD_MAX_MESSAGES;
     let cut = messages
         .iter()
         .enumerate()

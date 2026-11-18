@@ -65,6 +65,31 @@ pub struct AgentConfig {
     /// 子会话（ADR 022）：缺省模型（空 = 和琴音同一个模型）。新字段。
     #[serde(default)]
     pub subagents: SubagentsConfig,
+    /// 一段对话估到这么多 token 时，把较早的部分整理成摘要（照 Goose / DeepSeek Harness 的上下文压缩）；
+    /// 0 = 不整理（太长时只能丢最早的轮次）。新字段。
+    #[serde(default = "default_compact_at_tokens")]
+    pub compact_at_tokens: u64,
+}
+
+/// 默认 6.4 万 token：DeepSeek 的上下文有 100 万，但每次请求都会把整段对话带上，
+/// 太长了首字更慢、缓存没命中时也更贵；6.4 万大约是几十轮带读屏的语音对话。
+pub const DEFAULT_COMPACT_AT_TOKENS: u64 = 64_000;
+
+fn default_compact_at_tokens() -> u64 {
+    DEFAULT_COMPACT_AT_TOKENS
+}
+
+/// 现在的本地时间，写进琴音每轮的附注：`2026-11-18 周三 14:05`。
+pub fn now_label() -> String {
+    use chrono::Datelike;
+    const WEEKDAYS: [&str; 7] = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+    let now = chrono::Local::now();
+    format!(
+        "{} {} {}",
+        now.format("%Y-%m-%d"),
+        WEEKDAYS[now.weekday().num_days_from_monday() as usize],
+        now.format("%H:%M")
+    )
 }
 
 /// 琴音的身份。空 = 用工作区 `IDENTITY.md` 或默认（“琴音”、内置头像）。
@@ -97,6 +122,7 @@ impl Default for AgentConfig {
             progress_speech: true,
             identity: IdentityConfig::default(),
             subagents: SubagentsConfig::default(),
+            compact_at_tokens: DEFAULT_COMPACT_AT_TOKENS,
         }
     }
 }

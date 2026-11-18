@@ -213,7 +213,9 @@ fn catalog_offers_core_tools_and_hides_external_channels() {
         );
     }
     assert!(offered.contains(&"saved.auto-1".to_string()));
-    assert!(!offered.contains(&"models.delete".to_string()));
+    // 全部工具一开始就给（照 DeepSeek Harness：清单中途变了前缀缓存就断）。
+    assert!(offered.contains(&"models.delete".to_string()));
+    assert_eq!(offered.len(), all.len());
     // 每个工具的参数顶层都是 object。
     for def in f.port.definitions() {
         assert_eq!(def.parameters["type"], "object", "{}", def.name);
@@ -221,24 +223,28 @@ fn catalog_offers_core_tools_and_hides_external_channels() {
 }
 
 #[tokio::test]
-async fn tools_find_lists_groups_then_enables_matches() {
+async fn tools_find_only_searches_and_the_tool_list_never_changes() {
     let f = fixture(Policy::default(), Answer::Deny);
+    let before = f.port.definitions();
     let groups: Value =
         serde_json::from_str(&call(&f.port, "tools.find", json!({})).await.content).unwrap();
     assert!(groups["groups"].as_array().unwrap().len() >= 5);
-    assert!(!names(&f.port).contains(&"hotkeys.status".to_string()));
-
-    let found = call(&f.port, "tools.find", json!({"query": "热键"})).await;
-    assert!(!found.is_error);
-    let offered = names(&f.port);
+    let found: Value = serde_json::from_str(
+        &call(&f.port, "tools.find", json!({"query": "hotkey"}))
+            .await
+            .content,
+    )
+    .unwrap();
     assert!(
-        offered.contains(&"hotkeys.status".to_string()),
-        "{offered:?}"
+        found["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "hotkeys.status"),
+        "{found}"
     );
-    assert!(!offered.contains(&"models.delete".to_string()));
-
     call(&f.port, "tools.find", json!({"group": "models"})).await;
-    assert!(names(&f.port).contains(&"models.delete".to_string()));
+    assert_eq!(f.port.definitions(), before, "查找不改工具清单");
 }
 
 #[test]
@@ -269,13 +275,12 @@ fn saved_automation_becomes_a_typed_tool() {
 }
 
 #[tokio::test]
-async fn voice_scope_offers_the_chat_tools_plus_ask() {
-    let chat = names(&fixture(Policy::default(), Answer::Deny).port);
+async fn both_entries_share_one_tool_list_and_ask_only_works_by_voice() {
     let f = fixture(Policy::default(), Answer::Deny);
-    let voice = names(&f.port.with_scope(crate::Scope::Game));
-    for name in &chat {
-        assert!(voice.contains(name), "{name}");
-    }
+    let chat = names(&f.port);
+    let voice_port = f.port.with_scope(crate::Scope::Game);
+    let voice = names(&voice_port);
+    assert_eq!(chat, voice, "同一段对话两个入口用同一份清单");
     // 玩家最常让琴音做的事一开始就能用（实测：语音里让她下载模型、打开游戏，她说没有这个工具）
     for name in [
         "game.launch",
@@ -287,10 +292,9 @@ async fn voice_scope_offers_the_chat_tools_plus_ask() {
     ] {
         assert!(voice.contains(&name.to_string()), "{name}");
     }
-    assert!(
-        !chat.contains(&"reply.ask".to_string()),
-        "聊天窗口用确认卡，不用语音追问"
-    );
+    let chat_port = fixture(Policy::default(), Answer::Deny).port;
+    let out = call(&chat_port, "reply.ask", json!({"question": "要不要？"})).await;
+    assert!(out.is_error && out.content.contains("聊天窗口"));
 }
 
 #[tokio::test]
@@ -471,7 +475,7 @@ async fn risky_tools_ask_and_respect_the_answer() {
 }
 
 #[tokio::test]
-async fn read_only_mode_hides_and_refuses_writes() {
+async fn read_only_mode_refuses_writes_at_call_time() {
     let f = fixture(
         Policy {
             mode: Mode::ReadOnly,
@@ -479,7 +483,8 @@ async fn read_only_mode_hides_and_refuses_writes() {
         },
         Answer::AllowOnce,
     );
-    assert!(!names(&f.port).contains(&"game_chat.send".to_string()));
+    // 清单不变（改权限不打断前缀缓存），调用时拒绝。
+    assert!(names(&f.port).contains(&"game_chat.send".to_string()));
     assert!(names(&f.port).contains(&"companion.read_chat".to_string()));
     let out = call(&f.port, "game_chat.send", json!({"text": "gg"})).await;
     assert!(out.is_error && out.content.contains("只读"));
@@ -557,32 +562,36 @@ async fn screen_text_results_are_marked_untrusted() {
 // ---------- 系统提示 ----------
 
 #[test]
-fn prompt_mentions_entry_game_notes_and_saved_automations() {
+fn prompt_is_one_text_for_both_entries_and_the_turn_context_carries_the_rest() {
+    use crate::prompt::{turn_context, TurnContext};
     let automations = [saved("auto-1", Vec::new())];
-    let game = system_prompt(&PromptContext {
-        entry: Entry::Game,
-        profile_name: "英雄联盟",
-        profile_notes: "聊天在左下角",
+    let prompt = system_prompt(&PromptContext {
         automations: &automations,
         workspace: None,
     });
-    assert!(game.contains("语音") && game.contains("reply.ask"));
-    assert!(game.contains("聊天在左下角"));
-    assert!(game.contains("saved.auto-1"));
-    let chat = system_prompt(&PromptContext {
-        entry: Entry::Chat,
-        profile_name: "",
-        profile_notes: "",
-        automations: &[],
-        workspace: None,
+    // 两个入口的说明都在系统提示里（一段对话里不变，前缀缓存才命中）。
+    assert!(prompt.contains("reply.ask") && prompt.contains("game.focus"));
+    assert!(prompt.contains("<kotone-context>"));
+    assert!(prompt.contains("saved.auto-1"));
+    assert!(!prompt.contains("聊天在左下角"));
+    // 这一轮的情况在附注里。
+    let game = turn_context(&TurnContext {
+        entry: Entry::Game,
+        game: "英雄联盟",
+        game_notes: Some("聊天在左下角"),
+        game_memory: None,
+        now: "2026-11-18 周三 14:05",
     });
-    assert!(chat.contains("聊天窗口"));
-    assert!(
-        chat.contains("game.focus"),
-        "chat entry must switch to the game first"
-    );
-    assert!(!game.contains("game.focus"));
-    assert!(!chat.contains("游戏说明"));
+    assert!(game.starts_with("入口：语音"));
+    assert!(game.contains("英雄联盟") && game.contains("聊天在左下角") && game.contains("14:05"));
+    let chat = turn_context(&TurnContext {
+        entry: Entry::Chat,
+        game: "",
+        game_notes: None,
+        game_memory: None,
+        now: "",
+    });
+    assert_eq!(chat, "入口：聊天窗口（玩家看得到文字）");
 }
 
 // ---------- 整条链路：循环 + rig-core 客户端（本机 wiremock）+ 端口 + 工具服务 ----------
@@ -772,9 +781,6 @@ fn screenshots_in_results_become_image_attachments() {
 #[test]
 fn prompt_teaches_the_look_think_act_loop() {
     let prompt = system_prompt(&PromptContext {
-        entry: Entry::Game,
-        profile_name: "",
-        profile_notes: "",
         automations: &[],
         workspace: None,
     });
@@ -918,9 +924,6 @@ fn prompt_carries_soul_memory_game_memory_and_skills_and_child_prompt_is_minimal
         }],
     };
     let prompt = system_prompt(&PromptContext {
-        entry: Entry::Chat,
-        profile_name: "PUBG",
-        profile_notes: "",
         automations: &[],
         workspace: Some(&snap),
     });

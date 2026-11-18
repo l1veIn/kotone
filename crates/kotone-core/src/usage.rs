@@ -282,6 +282,95 @@ impl UsageLedger {
     }
 }
 
+/// 进程里的账本：宿主（桌面端）启动时 [`enable`] 之后才记；没开（测试、命令行）时什么都不写，
+/// 免得测试写进用户的 `~/.kotone`。
+static GLOBAL: std::sync::OnceLock<UsageLedger> = std::sync::OnceLock::new();
+
+/// 打开进程里的账本（桌面端启动时调用一次）。
+pub fn enable(path: impl Into<PathBuf>) {
+    let _ = GLOBAL.set(UsageLedger::new(path));
+}
+
+/// 进程里的账本（没开时为 None）。
+pub fn global() -> Option<&'static UsageLedger> {
+    GLOBAL.get()
+}
+
+/// 记一行；没开账本时什么都不做，写失败只记日志。
+pub fn record(record: UsageRecord) {
+    if let Some(ledger) = global() {
+        if let Err(e) = ledger.append(&record) {
+            crate::log::log(&format!("usage: {e}"));
+        }
+    }
+}
+
+fn now() -> u64 {
+    crate::reminders::now_ms()
+}
+
+/// 在线语音合成一次（真的发了请求才记；缓存命中不记）。只有 DeepSeek 有价格。
+pub fn record_tts(provider: &str, model: &str, text: &str) {
+    let deepseek = provider == "deepseek";
+    let characters = if deepseek {
+        deepseek_tts_characters(text)
+    } else {
+        text.chars().count() as u64
+    };
+    record(UsageRecord {
+        at_ms: now(),
+        kind: Some(UsageKind::Tts),
+        provider: provider.to_string(),
+        model: model.to_string(),
+        characters: Some(characters),
+        cost: deepseek.then(|| characters as f64 / 10_000.0 * DEEPSEEK_TTS_PER_10K_CHARS),
+        currency: if deepseek {
+            "CNY".into()
+        } else {
+            String::new()
+        },
+        ..Default::default()
+    });
+}
+
+/// 在线语音识别一次。
+pub fn record_asr(provider: &str, model: &str, audio_ms: u64) {
+    let deepseek = provider == "deepseek";
+    record(UsageRecord {
+        at_ms: now(),
+        kind: Some(UsageKind::Asr),
+        provider: provider.to_string(),
+        model: model.to_string(),
+        audio_ms: Some(audio_ms),
+        cost: deepseek.then(|| deepseek_asr_cost(audio_ms)),
+        currency: if deepseek {
+            "CNY".into()
+        } else {
+            String::new()
+        },
+        ..Default::default()
+    });
+}
+
+/// 在线文字识别一次（`pages`：识别成功的页数，一张截图就是 1）。
+pub fn record_ocr(provider: &str, model: &str, pages: u64) {
+    let deepseek = provider == "deepseek";
+    record(UsageRecord {
+        at_ms: now(),
+        kind: Some(UsageKind::Ocr),
+        provider: provider.to_string(),
+        model: model.to_string(),
+        images: Some(pages),
+        cost: deepseek.then(|| pages as f64 / 1_000.0 * DEEPSEEK_OCR_PER_1K_PAGES),
+        currency: if deepseek {
+            "CNY".into()
+        } else {
+            String::new()
+        },
+        ..Default::default()
+    });
+}
+
 /// 一组记录的合计。
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

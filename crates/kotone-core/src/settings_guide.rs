@@ -230,6 +230,7 @@ pub const FIELDS: &[Field] = &[
     f("ui.autoStart", "开机自启", "设置 → 系统", "请用 autostart.set 修改（会同时写系统启动项）。", NONE, NOW),
     f("ui.updatePromptDisabled", "不再提醒升级", "关于", "", NONE, NOW),
     f("agent.identity.name", "琴音的名字", "琴音 → 她是谁", "空 = 默认“琴音”（或工作区 IDENTITY.md 里的名字）。改了以后她会用新名字介绍自己，界面上也跟着变；唤醒词要在语音唤醒里另外设。", NONE, NOW),
+    f("agent.compactAtTokens", "对话多长时整理成摘要", "琴音 → 设置 → AI 连接", "一段对话估到这么多 token 时，琴音把较早的部分整理成摘要、之后只看摘要和最近几轮（整理那一次多花一点，之后又能命中缓存）。默认 64000；0 = 不整理。", NONE, NOW),
     f("agent.subagents.model", "子会话用的模型", "琴音 → 设置 → AI 连接", "琴音派出的子会话（例如同传）用的模型 id；空 = 和琴音同一个模型。建议填同一家服务商更快更便宜的模型。", NONE, NOW),
     f("voiceChat.enabled", "游戏语音（琴音替你说话）", "琴音 → 设置 → 游戏语音", "开启后把你的麦克风和琴音“说给队友”的话一起转进虚拟麦克风（VB-CABLE 的 CABLE Output），游戏里的麦克风选 CABLE Output 队友就能听到。需要先装 VB-CABLE（voice_chat.install）。Kotone 没运行时队友听不到你。", NONE, NOW),
     f("voiceChat.includeMic", "混入我的麦克风", "琴音 → 设置 → 游戏语音", "关掉后虚拟麦克风里只有琴音的声音（你自己说话要在游戏里另选麦克风）。", NONE, NOW),

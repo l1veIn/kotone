@@ -17,7 +17,9 @@ use std::sync::{Arc, Mutex};
 
 use kotone_agent::catalog::{saved_entry, Catalog, MAX_SAVED_TOOLS, SAVED_PREFIX};
 use kotone_agent::port::{BuiltinHost, KotonePort, Scope, Session};
-use kotone_agent::prompt::{child_prompt, system_prompt, Entry, PromptContext};
+use kotone_agent::prompt::{
+    child_prompt, system_prompt, turn_context, Entry, PromptContext, TurnContext,
+};
 use kotone_agent::workspace::Workspace;
 use kotone_agent::{Answer, Asker, PermissionRequest};
 use kotone_ai::agent::model::OpenAiModel;
@@ -47,7 +49,6 @@ fn game_limits() -> AgentLimits {
     AgentLimits {
         max_steps: 10,
         max_duration: std::time::Duration::from_secs(120),
-        history_budget_chars: 20_000,
         ..chat_limits()
     }
 }
@@ -62,6 +63,7 @@ fn chat_limits() -> AgentLimits {
             .collect(),
         extended_steps: 30,
         extended_duration: std::time::Duration::from_secs(300),
+        compact_at_tokens: kotone_core::agent::DEFAULT_COMPACT_AT_TOKENS,
         ..AgentLimits::default()
     }
 }
@@ -189,6 +191,10 @@ fn event_json(event: &AgentEvent) -> Value {
             json!({"kind": "toolCallUpdate", "callId": call_id, "status": status, "content": content})
         }
         AgentEvent::Appended { message } => json!({"kind": "appended", "message": message}),
+        AgentEvent::Compacted { index, message } => {
+            json!({"kind": "compacted", "index": index, "message": message})
+        }
+        AgentEvent::Discarded { .. } => json!({"kind": "discarded"}),
         AgentEvent::Finished { stop } => {
             json!({"kind": "finished", "stop": stop, "acpStopReason": stop.acp()})
         }
@@ -234,6 +240,7 @@ pub fn send(app: &AppHandle, outgoing: Outgoing) -> Result<Value, String> {
             attachments: outgoing.attachments,
             source: outgoing.source,
             at_ms: now_ms(),
+            context: String::new(),
         },
     )
 }
@@ -354,6 +361,8 @@ fn fail_early(
         Message::Notice {
             text: stop.notice().unwrap_or_default(),
             at_ms: now_ms(),
+            compaction: None,
+            usage: None,
         },
     ] {
         conversation.messages.push(m.clone());
@@ -449,6 +458,8 @@ async fn turn(
     if entry == Entry::Game && child.is_none() {
         attach_screen(app, &mut user).await;
     }
+    let provider = connection.provider.clone();
+    let model_id = connection.model.clone();
     let ws = workspace();
     let port = KotonePort::new(
         service,
@@ -493,36 +504,43 @@ async fn turn(
             .clone(),
         None => ws.snapshot(&settings.agent.identity.name, Some(&profile.id)),
     };
-    // 游戏记忆里已经有说明时，不再重复附上游戏配置里的旧“陪玩说明”。
-    let notes = if snapshot.game.is_some() {
-        ""
-    } else {
-        profile.companion_notes.as_str()
+    // 系统提示在这段对话第一次用时生成、之后不变（照 DeepSeek Harness，前缀缓存才命中）；
+    // 每轮会变的（入口、当前游戏、时间）写进这条消息前面的附注。
+    let system = {
+        let make = || match child {
+            Some(spec) => child_prompt(&snapshot.name, &spec.label),
+            None => system_prompt(&PromptContext {
+                automations: &automations,
+                workspace: Some(&snapshot),
+            }),
+        };
+        match &session_state {
+            Some(session) => session.system.get_or_init(make).clone(),
+            None => make(),
+        }
     };
-    let system = match child {
-        Some(spec) => child_prompt(&snapshot.name, &spec.label),
-        None => system_prompt(&PromptContext {
-            entry,
-            profile_name: &profile.display_name,
-            profile_notes: notes,
-            automations: &automations,
-            workspace: Some(&snapshot),
-        }),
-    };
+    if child.is_none() {
+        if let Message::User { context, .. } = &mut user {
+            if context.is_empty() {
+                *context =
+                    main_turn_context(entry, &profile, &snapshot, session_state.as_deref(), &ws);
+            }
+        }
+    }
     let mut model = OpenAiModel::new(connection);
     if child.is_some_and(|spec| spec.thinking != "default") {
         model.max_tokens = 1024;
     }
-    let limits = match child {
+    let mut limits = match child {
         Some(_) => AgentLimits {
             max_steps: 8,
             max_duration: std::time::Duration::from_secs(90),
-            history_budget_chars: 20_000,
             ..AgentLimits::default()
         },
         None if entry == Entry::Game => game_limits(),
         None => chat_limits(),
     };
+    limits.compact_at_tokens = settings.agent.compact_at_tokens;
     let conversation_id = conversation.id.clone();
     let shared = Mutex::new(conversation.clone());
     let tool_names: Mutex<HashMap<String, String>> = Mutex::default();
@@ -533,6 +551,53 @@ async fn turn(
                 c.messages.push(message.clone());
                 if let Err(e) = store.save(&mut c) {
                     log::log(&format!("agent: save failed: {e}"));
+                }
+                if let Message::Assistant {
+                    usage: Some(usage), ..
+                } = message
+                {
+                    crate::usage::record_model(
+                        kotone_core::usage::UsageKind::Chat,
+                        &provider,
+                        &model_id,
+                        &conversation_id,
+                        usage,
+                    );
+                }
+            }
+            AgentEvent::Compacted { index, message } => {
+                let mut c = shared.lock().unwrap();
+                let at = (*index).min(c.messages.len());
+                c.messages.insert(at, message.clone());
+                if let Err(e) = store.save(&mut c) {
+                    log::log(&format!("agent: save failed: {e}"));
+                }
+                if let Message::Notice {
+                    usage: Some(usage), ..
+                } = message
+                {
+                    crate::usage::record_model(
+                        kotone_core::usage::UsageKind::Compaction,
+                        &provider,
+                        &model_id,
+                        &conversation_id,
+                        usage,
+                    );
+                }
+                log::log(&format!(
+                    "agent: compacted conversation {conversation_id} at {at}"
+                ));
+            }
+            AgentEvent::Discarded { usage } => {
+                log::log("agent: empty reply discarded, asking again");
+                if let Some(usage) = usage {
+                    crate::usage::record_model(
+                        kotone_core::usage::UsageKind::Chat,
+                        &provider,
+                        &model_id,
+                        &conversation_id,
+                        usage,
+                    );
                 }
             }
             AgentEvent::StepStarted { .. } if entry == Entry::Game => {
@@ -582,6 +647,45 @@ async fn turn(
     .await;
     *conversation = shared.into_inner().unwrap();
     stop
+}
+
+/// 主会话这一轮的附注：入口、现在几点、当前游戏；游戏变了（或第一次出现）再附上玩家写的游戏说明，
+/// 系统提示里的游戏记忆不是这个游戏的就附上这个游戏的记忆。
+fn main_turn_context(
+    entry: Entry,
+    profile: &kotone_core::profile::GameProfile,
+    snapshot: &kotone_agent::workspace::Snapshot,
+    session: Option<&kotone_agent::port::Session>,
+    ws: &Workspace,
+) -> String {
+    let game = profile.display_name.trim().to_string();
+    let changed = match session {
+        Some(session) => {
+            let mut last = session.last_game.lock().unwrap();
+            let changed = last.as_deref() != Some(profile.id.as_str());
+            *last = Some(profile.id.clone());
+            changed
+        }
+        None => true,
+    };
+    let snapshot_game = snapshot.game.as_ref().map(|(id, _)| id.as_str());
+    let other_memory = (changed && snapshot_game != Some(profile.id.as_str()))
+        .then(|| ws.game_memory(&profile.id))
+        .flatten()
+        .filter(|m| !m.trim().is_empty());
+    // 系统提示或附注里已经有这个游戏的记忆时，不再附旧的“陪玩说明”。
+    let has_memory = snapshot_game == Some(profile.id.as_str()) || other_memory.is_some();
+    let notes = (changed && !has_memory)
+        .then_some(profile.companion_notes.as_str())
+        .filter(|n| !n.trim().is_empty());
+    let now = kotone_core::agent::now_label();
+    turn_context(&TurnContext {
+        entry,
+        game: &game,
+        game_notes: notes,
+        game_memory: other_memory.as_deref(),
+        now: &now,
+    })
 }
 
 /// 游戏内：请求前先读一次屏幕（截前台窗口、识别文字、更新聊天跟踪），作为数据附上，
@@ -820,6 +924,7 @@ pub fn on_run_finished(app: &AppHandle, run: &Run) {
         }],
         source: "automation".into(),
         at_ms: now_ms(),
+        context: String::new(),
     };
     {
         let inner = rt.inner.lock().unwrap();
@@ -1418,6 +1523,7 @@ async fn send_to_child(app: &AppHandle, id: &str, text: &str) -> Result<String, 
             attachments: Vec::new(),
             source: tag,
             at_ms: now_ms(),
+            context: String::new(),
         },
     )?;
     match tokio::time::timeout(CHILD_REPLY_TIMEOUT, rx).await {
@@ -1488,6 +1594,7 @@ fn merge_heard(first: Message, inbox: &Inbox) -> (Message, Option<Message>) {
         attachments,
         source,
         at_ms,
+        context,
     } = first
     else {
         unreachable!()
@@ -1518,6 +1625,7 @@ fn merge_heard(first: Message, inbox: &Inbox) -> (Message, Option<Message>) {
             attachments,
             source,
             at_ms,
+            context,
         },
         leftover,
     )
@@ -1640,6 +1748,7 @@ fn deliver_from_child(
         }],
         source: "session".into(),
         at_ms: now_ms(),
+        context: String::new(),
     };
     let rt = runtime(app)?;
     {
@@ -1764,6 +1873,7 @@ pub fn deliver_heard(app: &AppHandle, owner: &str, app_name: &str, language: &st
         }],
         source: "heard".into(),
         at_ms: now_ms(),
+        context: String::new(),
     };
     if child_spec(app, owner).is_some() {
         if let Err(e) = deliver_to_child(app, owner, message) {
@@ -1792,6 +1902,7 @@ mod tests {
             attachments: Vec::new(),
             source: source.into(),
             at_ms: 0,
+            context: String::new(),
         }
     }
 
@@ -1859,6 +1970,7 @@ mod tests {
             }],
             source: "heard".into(),
             at_ms: 0,
+            context: String::new(),
         }
     }
 
@@ -1897,7 +2009,9 @@ mod tests {
         assert_eq!(
             last_reply(&[Message::Notice {
                 text: "已停止".into(),
-                at_ms: 0
+                at_ms: 0,
+                compaction: None,
+                usage: None,
             }]),
             "已停止"
         );

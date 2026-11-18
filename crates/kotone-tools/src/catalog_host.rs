@@ -40,6 +40,7 @@ pub const TOOL_HISTORY_CLEAR: &str = "history.clear";
 pub const TOOL_DIAGNOSTICS_EXPORT: &str = "diagnostics.export";
 pub const TOOL_DIAGNOSTICS_CLEAR: &str = "diagnostics.clear";
 pub const TOOL_APP_RESOURCES: &str = "app.resources";
+pub const TOOL_USAGE_SUMMARY: &str = "usage.summary";
 pub const TOOL_APP_RESTART: &str = "app.restart";
 pub const TOOL_POSTPROCESS_PROCESSORS: &str = "postprocess.processors";
 pub const TOOL_POSTPROCESS_TEST: &str = "postprocess.test";
@@ -106,6 +107,7 @@ pub const HOST_TOOLS: &[&str] = &[
     TOOL_DIAGNOSTICS_EXPORT,
     TOOL_DIAGNOSTICS_CLEAR,
     TOOL_APP_RESOURCES,
+    TOOL_USAGE_SUMMARY,
     TOOL_APP_RESTART,
     TOOL_POSTPROCESS_PROCESSORS,
     TOOL_POSTPROCESS_TEST,
@@ -478,6 +480,14 @@ fn defs() -> Vec<Def> {
             egress: "none",
             input: none(),
             output: open("资源占用"),
+        },
+        Def {
+            name: TOOL_USAGE_SUMMARY,
+            description: "AI usage and cost from Kotone's local ledger (usage.jsonl): today, this month, by kind (chat, compaction, recap, TTS, ASR, OCR), by model and the last 30 days — tokens, prompt-cache hit tokens and hit rate, characters, audio time, images and estimated cost per currency (DeepSeek in CNY with peak / off-peak prices). Estimates; the provider's bill is authoritative.",
+            side_effects: &[],
+            egress: "none",
+            input: none(),
+            output: open("用量与费用"),
         },
         Def {
             name: TOOL_APP_RESTART,
