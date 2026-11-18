@@ -19,6 +19,13 @@
     setModelsDir,
     updateSettings,
     getModelInstallGuide,
+    getSettings,
+    upsertConnection,
+    connectionSelfCheck,
+    setActiveModel,
+    activateCatalogModel,
+    startRuntime,
+    openExternal,
     isDownloadCancelled,
     type AudioDevice,
     type ModelInstallGuide,
@@ -30,7 +37,9 @@
     type ModelsDirInfo,
   } from "../../lib/ipc";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
-  import { findHotkeyConflict } from "../../lib/hotkeyCombo";
+  import { findHotkeyConflict, hotkeyLabel as formatHotkey } from "../../lib/hotkeyCombo";
+  import { subscribeAgent } from "../../lib/agent";
+  import { appState } from "../../lib/stores/state";
   import { captureHotkey } from "../../lib/hotkeyCapture";
   import {
     errText,
@@ -46,10 +55,16 @@
   import ManualDownloadDialog from "../../lib/components/ManualDownloadDialog.svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
 
-  /** next = "assistant"：最后一步选了“去认识她”，进「琴音」页。 */
-  let { onDone }: { onDone: (next?: "assistant") => void } = $props();
+  /** next = "assistant"：结束后进「琴音」的聊天；prompt：顺便替玩家发这句话。 */
+  let { onDone }: { onDone: (next?: "assistant", prompt?: string) => void } = $props();
 
-  let step = $state(0);
+  // 两条路（只告诉玩家怎么开始，带他完成第一次）：
+  // - 和琴音开始：填一个 DeepSeek Key → 第一次“嗨琴音，你能干什么？”
+  // - 只用语音输入法：选游戏 → 识别模型 → 热键 → 第一次说话上屏
+  type Step = "welcome" | "key" | "hello" | "profile" | "model" | "hotkey" | "try";
+  let step = $state<Step>("welcome");
+  let path = $state<"ai" | "voice">("ai");
+  const dots = $derived<Step[]>(path === "ai" ? ["welcome", "key", "hello"] : ["welcome", "profile", "model", "hotkey", "try"]);
   let loadingResources = $state(true);
   let resourceError = $state("");
   let models = $state<ModelInfo[]>([]);
@@ -368,7 +383,7 @@
   }
 
   function enterHotkeyStep() {
-    step = 3;
+    step = "hotkey";
     // 第三步一出现就主动检测，不要求用户先点击「重新录入」或启动运行时。
     void runInputEnvironmentCheck();
   }
@@ -427,9 +442,78 @@
       finishing = false;
       return;
     }
-    // ADR 023 第 3 步：语音输入设好后，介绍一下游戏陪玩（可选，不打断只想用输入法的人）。
     finishing = false;
-    step = 4;
+    step = "try";
+    void startTry();
+  }
+
+  // ---------- 和琴音开始：一个 DeepSeek Key ----------
+  const DEEPSEEK_KEY_PAGE = "https://platform.deepseek.com/api_keys";
+  const hello = $derived(`嗨${$companionName}，你能干什么？`);
+  const callKey = $derived($settingsStore?.assistant?.hotkey ? formatHotkey($settingsStore.assistant.hotkey) : "~");
+  let apiKey = $state("");
+  let keyBusy = $state(false);
+  let keyError = $state("");
+  let keyConnectionId = "";
+
+  async function startWithKey() {
+    const key = apiKey.trim();
+    if (!key || keyBusy) return;
+    keyBusy = true;
+    keyError = "";
+    try {
+      keyConnectionId ||= `deepseek-${Date.now().toString(36)}`;
+      await upsertConnection(
+        { id: keyConnectionId, displayName: "DeepSeek", kind: "remote", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-flash" },
+        key,
+      );
+      // 读一次模型列表确认 Key 能用（不花钱）。
+      const check = await connectionSelfCheck(keyConnectionId);
+      if (!check.passed) {
+        keyError = check.message || "这个 Key 用不了，检查一下有没有复制完整";
+        return;
+      }
+      // 一个 Key 就能用全部功能：琴音、语音识别、读屏都走 DeepSeek（以后想换本地模型再下）。
+      await updateSettings({ assistant: { connectionId: keyConnectionId }, activeProfileId: selectedProfileId, ui: { firstRunCompleted: true } });
+      if (!models.some((m) => m.downloaded)) await setActiveModel("deepseek-asr", "deepseek-asr");
+      if (!$settingsStore?.ocr?.activeModelId) await activateCatalogModel("ocr", "deepseek-ocr");
+      settingsStore.set(await getSettings());
+      void startRuntime().catch(() => {});
+      step = "hello";
+      void watchHello();
+    } catch (e) {
+      keyError = errText(e);
+    } finally {
+      keyBusy = false;
+    }
+  }
+
+  /** 第一次打招呼：听她有没有开始想、有没有回答（按呼叫键说，或者在聊天里打字都算）。 */
+  let helloState = $state<"waiting" | "thinking" | "answered">("waiting");
+  let helloAnswer = $state("");
+  let unlistenAgent: (() => void) | undefined;
+  async function watchHello() {
+    unlistenAgent?.();
+    unlistenAgent = await subscribeAgent((_, event) => {
+      if (event.kind === "step" && helloState === "waiting") helloState = "thinking";
+      if (event.kind === "appended" && event.message.role === "assistant" && event.message.text.trim()) {
+        helloState = "answered";
+        helloAnswer = event.message.text.trim();
+      }
+    });
+  }
+
+  // ---------- 只用语音输入法：第一次说话上屏 ----------
+  let tryText = $state("");
+  let tryBox = $state<HTMLTextAreaElement | null>(null);
+  const tried = $derived(tryText.trim().length > 0 || $appState.state === "success");
+  async function startTry() {
+    try {
+      await startRuntime();
+    } catch (e) {
+      toast(false, `启动语音输入失败：${errText(e)}`);
+    }
+    tryBox?.focus();
   }
 
 
@@ -464,6 +548,7 @@
   onDestroy(() => {
     captureCleanup?.();
     unlistenDl?.();
+    unlistenAgent?.();
   });
 </script>
 
@@ -478,7 +563,7 @@
       class="pointer-events-none absolute -top-24 left-1/2 h-48 w-96 -translate-x-1/2 rounded-full bg-kotone-violet/25 blur-3xl"
     ></div>
 
-    {#if step === 0}
+    {#if step === "welcome"}
       <div class="relative overflow-hidden">
         <!-- 欢迎视觉：ord-ui-onboarding-hero 合成图（张开双臂的邀请感） -->
         <div class="relative">
@@ -490,27 +575,104 @@
           <h1 class="text-2xl font-bold">
             欢迎来到 <span class="kotone-gradient-text">Kotone 琴音</span>
           </h1>
-          <p class="mt-2 text-sm leading-relaxed text-muted-foreground">
-            游戏里不动手，说话就能发消息。<br />
-            接下来会选游戏配置、准备本地模型、设置热键，完成后直接进入主页。
-          </p>
-          <div class="mt-6 flex items-center gap-3">
+          <p class="mt-2 text-sm leading-relaxed text-muted-foreground">陪你打游戏的 AI：叫她一声，她帮你查、帮你说、帮你按。</p>
+          <div class="mt-6 flex flex-wrap items-center gap-3">
             <button
               class="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110 focus-visible:ring-2 focus-visible:ring-ring active:scale-95"
-              onclick={() => (step = 1)}
+              data-testid="onboarding-start-ai"
+              onclick={() => { path = "ai"; step = "key"; }}
             >
-              开始设置
+              和{$companionName}开始
             </button>
             <button
-              class="text-xs text-muted-foreground underline-offset-2 transition hover:text-foreground/90 hover:underline"
+              class="rounded-lg border border-hairline px-4 py-2 text-sm text-foreground/85 transition hover:bg-muted"
+              data-testid="onboarding-start-voice"
+              onclick={() => { path = "voice"; step = "profile"; }}
+            >
+              只用语音输入法
+            </button>
+            <button
+              class="ml-auto text-xs text-muted-foreground underline-offset-2 transition hover:text-foreground/90 hover:underline"
               onclick={() => void finish(true)}
             >
-              跳过向导
+              跳过
             </button>
           </div>
         </div>
       </div>
-    {:else if step === 1}
+    {:else if step === "key"}
+      <div class="relative p-7" data-testid="onboarding-key">
+        <div class="flex items-start gap-4">
+          <img src={stickerHello} alt="" class="h-11 w-11 shrink-0" />
+          <div>
+            <h2 class="mt-0.5 text-lg font-bold">填一个 DeepSeek Key</h2>
+            <p class="mt-1 text-xs leading-relaxed text-muted-foreground">有这一个 Key，{$companionName}的全部功能就能用。</p>
+          </div>
+        </div>
+        <form class="mt-5" onsubmit={(e) => { e.preventDefault(); void startWithKey(); }}>
+          <input
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="sk-…"
+            aria-label="DeepSeek Key"
+            data-testid="onboarding-key-input"
+            bind:value={apiKey}
+            class="h-10 w-full rounded-lg border border-hairline bg-background px-3 font-mono text-sm outline-none focus:border-primary"
+          />
+          {#if keyError}<p role="alert" class="mt-2 mb-0 text-xs text-destructive" data-testid="onboarding-key-error">{keyError}</p>{/if}
+          <button type="button" class="mt-2 text-xs text-primary hover:underline" onclick={() => void openExternal(DEEPSEEK_KEY_PAGE).catch(() => {})}>
+            还没有 Key？去 DeepSeek 开放平台创建 →
+          </button>
+          <div class="mt-6 flex items-center justify-between">
+            <button type="button" class="text-xs text-muted-foreground hover:text-foreground/90" onclick={() => (step = "welcome")}>返回</button>
+            <button
+              type="submit"
+              class="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
+              data-testid="onboarding-key-start"
+              disabled={!apiKey.trim() || keyBusy}
+            >
+              {keyBusy ? "连接中…" : "开始"}
+            </button>
+          </div>
+        </form>
+      </div>
+    {:else if step === "hello"}
+      <div class="relative p-7" data-testid="onboarding-hello">
+        <div class="flex items-start gap-4">
+          <img src={helloState === "answered" ? stickerCheering : stickerHello} alt="" class="h-11 w-11 shrink-0" />
+          <div>
+            <h2 class="mt-0.5 text-lg font-bold">跟她打个招呼</h2>
+            <p class="mt-1 text-xs leading-relaxed text-muted-foreground">在游戏里也一样：按一下就叫她。</p>
+          </div>
+        </div>
+        <div class="mt-5 rounded-2xl bg-muted/40 px-5 py-4 ring-1 ring-hairline">
+          <p class="m-0 text-sm text-muted-foreground">按一下 <kbd class="rounded border border-hairline bg-background px-1.5 py-0.5 font-mono text-xs text-foreground">{callKey}</kbd>，说：</p>
+          <p class="m-0 mt-1.5 text-lg font-semibold">“{hello}”</p>
+        </div>
+        <p class="mt-3 mb-0 min-h-5 text-xs" data-testid="onboarding-hello-status" role="status">
+          {#if helloState === "answered"}
+            <span class="text-success">✓ 她回答了：</span><span class="text-foreground/85">{helloAnswer.length > 80 ? `${helloAnswer.slice(0, 80)}…` : helloAnswer}</span>
+          {:else if helloState === "thinking"}
+            <span class="text-primary">她在想…</span>
+          {:else}
+            <span class="text-muted-foreground">等你开口…</span>
+          {/if}
+        </p>
+        <div class="mt-6 flex items-center justify-between">
+          <button class="text-xs text-muted-foreground hover:text-foreground/90" data-testid="onboarding-hello-type" onclick={() => onDone("assistant", hello)}>
+            不方便说话？打字问她
+          </button>
+          <button
+            class="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
+            data-testid="onboarding-hello-done"
+            onclick={() => onDone("assistant")}
+          >
+            {helloState === "answered" ? "好的" : "完成"}
+          </button>
+        </div>
+      </div>
+    {:else if step === "profile"}
       <div class="relative p-7" data-testid="onboarding-profile">
         <div class="flex items-start gap-4">
           <img src={stickerCheering} alt="" class="h-11 w-11 shrink-0" />
@@ -573,19 +735,19 @@
         {/if}
 
         <div class="mt-6 flex items-center justify-between">
-          <button class="text-xs text-muted-foreground hover:text-foreground/90" onclick={() => (step = 0)}>
+          <button class="text-xs text-muted-foreground hover:text-foreground/90" onclick={() => (step = "welcome")}>
             ← 上一步
           </button>
           <button
             class="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
             disabled={loadingResources || !selectedProfile}
-            onclick={() => (step = 2)}
+            onclick={() => (step = "model")}
           >
             下一步
           </button>
         </div>
       </div>
-    {:else if step === 2}
+    {:else if step === "model"}
       <div class="relative p-6" data-testid="onboarding-model">
         <div class="flex items-start gap-4">
           <img src={stickerThinking} alt="" class="h-11 w-11 shrink-0" />
@@ -734,7 +896,7 @@
         </label>
 
         <div class="mt-4 flex items-center justify-between" data-testid="onboarding-model-footer">
-          <button class="text-xs text-muted-foreground hover:text-foreground/90" onclick={() => (step = 1)}>
+          <button class="text-xs text-muted-foreground hover:text-foreground/90" onclick={() => (step = "profile")}>
             ← 上一步
           </button>
           <button
@@ -746,7 +908,7 @@
           </button>
         </div>
       </div>
-    {:else if step === 3}
+    {:else if step === "hotkey"}
       <div class="relative p-7" data-testid="onboarding-hotkey">
         <div class="flex items-start gap-4">
           <img src={stickerCheering} alt="" class="h-11 w-11 shrink-0" />
@@ -869,7 +1031,7 @@
         {/if}
 
         <div class="mt-6 flex items-center justify-between">
-          <button class="text-xs text-muted-foreground hover:text-foreground/90" onclick={() => (step = 2)}>
+          <button class="text-xs text-muted-foreground hover:text-foreground/90" onclick={() => (step = "model")}>
             ← 上一步
           </button>
           <button
@@ -881,40 +1043,47 @@
           </button>
         </div>
       </div>
-    {:else if step === 4}
-      <div class="relative p-7" data-testid="onboarding-companion">
+    {:else if step === "try"}
+      <div class="relative p-7" data-testid="onboarding-try">
         <div class="flex items-start gap-4">
-          <img src={stickerHello} alt="" class="h-11 w-11 shrink-0" />
+          <img src={tried ? stickerCheering : stickerHello} alt="" class="h-11 w-11 shrink-0" />
           <div>
-            <p class="text-[11px] font-semibold tracking-wide text-primary">语音输入设好了 · 还有一件事（可选）</p>
-            <h2 class="mt-0.5 text-lg font-bold">让{$companionName}陪你玩游戏</h2>
+            <h2 class="mt-0.5 text-lg font-bold">说一句试试</h2>
             <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
-              连上一个 AI 之后，她能在游戏里听你说话、看画面、替你按键，还能帮你听懂外语队友、用麦克风替你说话。
+              点一下下面的框，{selectedMode === "push-to-talk" ? "按住" : "按一下"}
+              <kbd class="rounded border border-hairline bg-background px-1.5 py-0.5 font-mono text-[11px] text-foreground">{currentKey}</kbd>
+              说一句话，比如“打野来下路”。在游戏里，字会这样打进聊天框。
             </p>
           </div>
         </div>
-        <ul class="mt-5 space-y-2 text-xs leading-relaxed text-muted-foreground">
-          <li class="rounded-xl bg-muted/40 px-3.5 py-2.5 ring-1 ring-hairline"><span class="font-semibold text-foreground">按一下 ~ 键或喊她的名字</span>，问“这把该出什么”“帮我盯着小地图”</li>
-          <li class="rounded-xl bg-muted/40 px-3.5 py-2.5 ring-1 ring-hairline"><span class="font-semibold text-foreground">她会记住你和每个游戏</span>：习惯、按键、打法，在「记忆」里随时能看能改</li>
-          <li class="rounded-xl bg-muted/40 px-3.5 py-2.5 ring-1 ring-hairline"><span class="font-semibold text-foreground">动键鼠前会先问你</span>，操作时按 Esc 随时停下</li>
-        </ul>
+        <textarea
+          bind:this={tryBox}
+          bind:value={tryText}
+          rows="2"
+          data-testid="onboarding-try-box"
+          aria-label="试一下语音输入"
+          class="mt-5 w-full resize-none rounded-xl border border-hairline bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+        ></textarea>
+        <p class="mt-2 mb-0 min-h-5 text-xs" role="status" data-testid="onboarding-try-status">
+          {#if tried}<span class="text-success">✓ 成了，语音输入设好了</span>{:else}<span class="text-muted-foreground">等你开口…</span>{/if}
+        </p>
         <div class="mt-6 flex items-center justify-between">
-          <button class="text-xs text-muted-foreground hover:text-foreground/90" data-testid="onboarding-companion-skip" onclick={() => onDone()}>
-            先只用语音输入
+          <button class="text-xs text-primary hover:underline" data-testid="onboarding-try-ai" onclick={() => { path = "ai"; step = "key"; }}>
+            也想让{$companionName}陪你玩？填个 DeepSeek Key
           </button>
           <button
             class="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
-            data-testid="onboarding-companion-open"
-            onclick={() => onDone("assistant")}
+            data-testid="onboarding-try-done"
+            onclick={() => onDone()}
           >
-            去认识她
+            完成
           </button>
         </div>
       </div>
     {/if}
 
     <div class="relative flex justify-center gap-1.5 pb-4">
-      {#each [0, 1, 2, 3, 4] as i}
+      {#each dots as i (i)}
         <span
           class="h-1.5 rounded-full transition-all {i === step
             ? 'w-5 bg-primary'

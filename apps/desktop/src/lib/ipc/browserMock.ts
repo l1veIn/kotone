@@ -978,6 +978,8 @@ export async function openExternal(url: string): Promise<void> {
 
 /** 全部引擎的模型清单（downloaded 标记） */
 export async function listModels(): Promise<ModelInfo[]> {
+  // ?mockModels=none：刚装好、一个模型都没下载（新手引导用）
+  if (mockQuery("mockModels") === "none") return clone(mock.models).map((m) => ({ ...m, downloaded: false }));
   return clone(mock.models);
 }
 

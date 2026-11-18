@@ -17,6 +17,7 @@
   import KeyRequestCard from "../../../../lib/agentChat/KeyRequestCard.svelte";
   import ComposerOptions from "../../../../lib/agentChat/ComposerOptions.svelte";
   import UsagePanel from "../../../../lib/agentChat/UsagePanel.svelte";
+  import { pendingPrompt } from "../../../../lib/agentChat/pendingPrompt";
   import KotoneAvatar from "../../../../lib/components/KotoneAvatar.svelte";
   import { avatarLetter, customAvatar, roleFaces } from "../../../../lib/stores/avatar";
 
@@ -64,6 +65,14 @@
     catch (error) { toast(false, `停止失败：${errText(error)}`); }
     finally { stopping = false; }
   }
+
+  // 新手引导“打字问她”：聊天准备好后替玩家发出这句话。
+  $effect(() => {
+    const text = $pendingPrompt;
+    if (!text || inputBusy || notReady || !chat.state) return;
+    pendingPrompt.set(null);
+    void submit(text);
+  });
 
   function starter(text: string) {
     // 以冒号结尾的提示要接着补充，先放进输入框；其余直接发出。

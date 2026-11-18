@@ -32,6 +32,7 @@
   import UpdateDialog from "../../lib/components/UpdateDialog.svelte";
   import { appState } from "../../lib/stores/state";
   import Onboarding from "./Onboarding.svelte";
+  import { pendingPrompt } from "../../lib/agentChat/pendingPrompt";
   import Titlebar from "./Titlebar.svelte";
   import GeneralPage from "./pages/GeneralPage.svelte";
   import TextProcessingPage from "./pages/TextProcessingPage.svelte";
@@ -92,7 +93,8 @@
     else navigate(target.page);
   });
   onDestroy(unsubscribeNavigation);
-  function openChat() {
+  function openChat(prompt?: string) {
+    if (prompt) pendingPrompt.set(prompt);
     navigate("assistant");
     chatRequest++;
   }
@@ -316,7 +318,7 @@
 
   <!-- 首启向导覆盖层（加载完成且未完成向导时弹出） -->
   {#if showOnboarding && !loading}
-    <Onboarding onDone={(next) => { showOnboarding = false; if (next === "assistant") openChat(); }} />
+    <Onboarding onDone={(next, prompt) => { showOnboarding = false; if (next === "assistant") openChat(prompt); }} />
   {/if}
 
   <!-- 管理员提权提示 · 第一段（Windows 未提权且用户未表态时弹一次） -->
