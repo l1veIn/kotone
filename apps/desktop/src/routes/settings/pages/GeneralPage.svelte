@@ -33,8 +33,10 @@
   } from "../../../lib/stores/ui";
   import { runtimeStore } from "../../../lib/stores/runtime";
   import RuntimeButton from "../../../lib/components/RuntimeButton.svelte";
+  import CallKotoneButton from "../../../lib/components/CallKotoneButton.svelte";
   import heroGeneral from "../../../assets/brand/hero-general.webp";
 
+  const companionName = $derived($settingsStore?.agent?.identity?.name?.trim() || "琴音");
   let { onOpenAdvanced, onOpenCompanion, onOpenTalk }: {
     onOpenAdvanced: () => void;
     /** 「试试游戏陪玩」：打开琴音的聊天。 */
@@ -278,18 +280,23 @@
     </div>
   </section>
 
-  <!-- 游戏陪玩入口（ADR 023）：语音输入仍是首页，这里引导用户用琴音 -->
-  <section class="flex flex-wrap items-center gap-4 rounded-2xl border border-primary/35 bg-primary/8 px-5 py-4" data-testid="companion-cta">
-    <div class="min-w-0 flex-1">
-      <p class="m-0 text-[15px] font-semibold text-foreground">试试游戏陪玩：让琴音陪你玩</p>
-      <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">
-        跟她说一句话，她能看游戏画面、帮你点鼠标按键、读队友聊天、替你用别的语言跟队友说话，还能帮你配置 Kotone。
-      </p>
+  <!-- 游戏陪玩入口（ADR 023）：语音输入仍是首页，这里引导用户用琴音；启动后直接给“呼叫琴音”的快速入口 -->
+  <section class="rounded-2xl border border-primary/35 bg-primary/8 px-5 py-4" data-testid="companion-cta">
+    <div class="flex flex-wrap items-center gap-4">
+      <div class="min-w-0 flex-1">
+        <p class="m-0 text-[15px] font-semibold text-foreground">试试游戏陪玩：让{companionName}陪你玩</p>
+        <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">
+          跟她说一句话，她能看游戏画面、帮你点鼠标按键、读队友聊天、替你用别的语言跟队友说话，还能帮你配置 Kotone。
+        </p>
+      </div>
+      <div class="flex shrink-0 items-center gap-2">
+        <Button size="sm" variant="outline" data-testid="companion-cta-talk" onclick={onOpenTalk}>怎么叫她</Button>
+        <Button size="sm" data-testid="companion-cta-open" onclick={onOpenCompanion}>和{companionName}聊聊</Button>
+      </div>
     </div>
-    <div class="flex shrink-0 items-center gap-2">
-      <Button size="sm" variant="outline" data-testid="companion-cta-talk" onclick={onOpenTalk}>怎么在游戏里叫她</Button>
-      <Button size="sm" data-testid="companion-cta-open" onclick={onOpenCompanion}>和琴音聊聊</Button>
-    </div>
+    {#if $runtimeStore?.phase === "running"}
+      <div class="mt-4 border-t border-primary/20 pt-4"><CallKotoneButton size="lg" testid="home-call" /></div>
+    {/if}
   </section>
 
   {#if $settingsStore}

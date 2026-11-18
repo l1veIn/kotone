@@ -177,7 +177,7 @@
   <h2 class="m-0 px-2 pt-1.5 text-sm font-semibold text-foreground">{title}</h2>
   {#if category === "ocr"}
     <p class="mx-2 mt-1 mb-2 text-xs leading-relaxed text-muted-foreground">
-      陪玩热键每按一次都会截取游戏窗口并用这里选中的模型识别文字。选在线模型时，<b class="font-medium text-brand-pink">每次识别都会把截图上传</b>到对应服务商。
+      每次呼叫琴音都会截取游戏窗口并用这里选中的模型识别文字。选在线模型时，<b class="font-medium text-brand-pink">每次识别都会把截图上传</b>到对应服务商。
     </p>
   {:else}
     <p class="mx-2 mt-1 mb-2 text-xs leading-relaxed text-muted-foreground">陪玩回答与提醒的播报声音。外语聊天会先翻译成中文再播报。</p>

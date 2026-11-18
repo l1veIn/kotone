@@ -185,8 +185,11 @@ export interface OcrConfig {
 }
 
 export interface AssistantConfig {
+  /** 呼叫琴音的热键（按一次就听）；默认 "Backquote"（~ 键）；空 = 不用热键。 */
   hotkey: string;
-  /** 助手独立交互模式，不改变常规语音输入模式。 */
+  /** 老配置补过默认呼叫键的标记（只补一次）。 */
+  callHotkeyDefaulted?: boolean;
+  /** 旧的陪玩热键方式；呼叫琴音固定为说完自动提交，只剩旧的窗口语音按钮在用。 */
   interactionMode: AssistantInteractionMode;
   connectionId: string;
   defaultDelivery: ("voice" | "danmaku")[];

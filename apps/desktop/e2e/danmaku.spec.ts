@@ -224,7 +224,8 @@ for (const cancel of [false, true]) {
 
 test("appearance settings persist speed, font, exact top offset, color and built-in emote", async ({ page }, testInfo) => {
   await page.goto("/#/settings?onboarding=never");
-  await page.getByTestId("settings-nav-talk").click();
+  await page.getByTestId("settings-nav-assistant").click();
+  await page.getByTestId("assistant-nav-settings").click();
   const settings = page.getByTestId("danmaku-settings");
   await expect(settings).toBeVisible();
   await settings.getByLabel("弹幕速度", { exact: true }).fill("240");
@@ -262,7 +263,8 @@ test("appearance settings persist speed, font, exact top offset, color and built
   const saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
   expect(saved.assistant).toMatchObject({ danmakuSpeedPxPerSec: 240, danmakuFontSize: 40, danmakuTopOffsetPx: 345, danmakuColor: "#00E5FF", danmakuEmote: "cheering" });
   await page.getByTestId("settings-nav-history").click();
-  await page.getByTestId("settings-nav-talk").click();
+  await page.getByTestId("settings-nav-assistant").click();
+  await page.getByTestId("assistant-nav-settings").click();
   await expect(topNumber).toHaveValue("345");
   await expect(page.locator("[data-sonner-toast]").filter({ hasText: "弹幕样式已保存" })).toHaveCount(0);
   await settings.screenshot({ path: testInfo.outputPath("danmaku-settings.png") });

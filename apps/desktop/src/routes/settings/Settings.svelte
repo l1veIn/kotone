@@ -40,7 +40,6 @@
   import AdvancedPage from "./pages/AdvancedPage.svelte";
   import type { AdvancedSection } from "./pages/advanced/types";
   import GamePage from "./pages/GamePage.svelte";
-  import TalkPage from "./pages/TalkPage.svelte";
   import HistoryPage from "./pages/HistoryPage.svelte";
   import AboutPage from "./pages/AboutPage.svelte";
   import CharacterPage from "./pages/CharacterPage.svelte";
@@ -65,11 +64,20 @@
     try { localStorage.setItem(SIDEBAR_KEY, rail ? "rail" : "expanded"); } catch { /* 只是偏好 */ }
   }
   function navigate(id: PageId) {
+    assistantStart = "chat";
     page = id;
     drawerOpen = false;
   }
   /** 侧边栏点了对话或“新对话”：切到「琴音」的聊天分页。 */
   let chatRequest = $state(0);
+  let settingsRequest = $state(0);
+  let assistantStart = $state<"chat" | "settings">("chat");
+  /** 「琴音 → 设置」（原「交流」页的内容也在这里）。 */
+  function openCompanionSettings() {
+    navigate("assistant");
+    assistantStart = "settings";
+    settingsRequest++;
+  }
   function openChat() {
     navigate("assistant");
     chatRequest++;
@@ -265,7 +273,7 @@
     {#if loading}
       <p class="px-8 py-10 text-sm text-muted-foreground">加载配置中…</p>
     {:else if page === "general"}
-      <GeneralPage onOpenAdvanced={() => openAdvanced("models")} onOpenCompanion={openChat} onOpenTalk={() => navigate("talk")} />
+      <GeneralPage onOpenAdvanced={() => openAdvanced("models")} onOpenCompanion={openChat} onOpenTalk={openCompanionSettings} />
     {:else if page === "advanced"}
       <AdvancedPage
         section={advancedSection}
@@ -275,11 +283,9 @@
     {:else if page === "processing"}
       <TextProcessingPage onOpenConnections={() => openAdvanced("connections")} />
     {:else if page === "assistant"}
-      <AssistantPage {chatRequest} onOpenConnections={() => openAdvanced("connections")} onOpenAutomation={() => (page = "automation")} onOpenTalk={() => navigate("talk")} />
+      <AssistantPage {chatRequest} {settingsRequest} startSection={assistantStart} onOpenConnections={() => openAdvanced("connections")} onOpenAutomation={() => (page = "automation")} />
     {:else if page === "automation"}
       <AutomationPage onOpenHotkeys={() => openAdvanced("hotkeys")} />
-    {:else if page === "talk"}
-      <TalkPage />
     {:else if page === "game"}
       <GamePage />
     {:else if page === "history"}

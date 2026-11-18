@@ -4,7 +4,8 @@ import { expect, test } from "@playwright/test";
 test("voice wake can be enabled, its model downloaded and the phrase changed", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/#/settings?onboarding=never");
-  await page.getByTestId("settings-nav-talk").click();
+  await page.getByTestId("settings-nav-assistant").click();
+  await page.getByTestId("assistant-nav-settings").click();
   await expect(page.locator("#wake-settings")).toContainText("语音唤醒");
   await expect(page.getByTestId("wake-status")).toContainText("未开启");
 
@@ -16,7 +17,7 @@ test("voice wake can be enabled, its model downloaded and the phrase changed", a
 
   await page.getByLabel("唤醒词").click();
   await page.getByRole("option", { name: "你好琴音" }).click();
-  await expect(page.getByTestId("talk-page")).toContainText("说“你好琴音”叫醒琴音");
+  await expect(page.getByTestId("assistant-settings-tab")).toContainText("说“你好琴音”叫醒琴音");
   await page.getByTestId("wake-enabled").scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("wake-settings.png") });
 

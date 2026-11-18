@@ -1,7 +1,7 @@
 <script lang="ts">
   // 「琴音」页（ADR 014）：聊天（默认）与设置（AI 连接、热键、快捷指令、琴音 Agent）。
   // 顶栏参照 DeepSeek Harness 的会话头：页名 / 当前对话标题，右侧是进行中概况与分页切换。
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { listConnections, type ConnectionInfo } from "../../../lib/ipc";
   import { useAgentChat } from "../../../lib/agentChat/context";
   import { errText, settingsStore } from "../../../lib/stores/ui";
@@ -12,18 +12,25 @@
   import IdentityTab from "./assistant/IdentityTab.svelte";
   import MemoryTab from "./assistant/MemoryTab.svelte";
   import SkillsTab from "./assistant/SkillsTab.svelte";
+  import CompanionInputSettings from "./assistant/CompanionInputSettings.svelte";
+  import WakeSettings from "./assistant/WakeSettings.svelte";
+  import BubbleSettings from "./assistant/BubbleSettings.svelte";
+  import OutputSettings from "./assistant/OutputSettings.svelte";
+  import VoiceChatSettings from "./assistant/VoiceChatSettings.svelte";
 
-  let { onOpenConnections, onOpenAutomation, onOpenTalk, chatRequest = 0 }: {
+  let { onOpenConnections, onOpenAutomation, chatRequest = 0, settingsRequest = 0, startSection = "chat" }: {
     onOpenConnections: () => void;
     onOpenAutomation: () => void;
-    /** 「交流」页（陪玩热键、唤醒、气泡、游戏语音）。 */
-    onOpenTalk: () => void;
     /** 侧边栏点了对话 / 新对话时递增：切回聊天分页。 */
     chatRequest?: number;
+    /** 要打开「设置」分页时递增（首页、引导等处的入口）。 */
+    settingsRequest?: number;
+    /** 页面刚打开时显示哪个分页（从别的页跳过来时页面是新挂载的，收不到请求号变化）。 */
+    startSection?: "chat" | "settings";
   } = $props();
   const chat = useAgentChat();
   type Section = "chat" | "identity" | "memory" | "skills" | "settings";
-  let section = $state<Section>("chat");
+  let section = $state<Section>(untrack(() => startSection));
   let connections = $state<ConnectionInfo[]>([]);
   let connectionError = $state("");
   const ready = $derived(!!connections.find((item) => item.id === $settingsStore?.assistant.connectionId)?.hasApiKey);
@@ -41,6 +48,24 @@
     if (seenRequest !== null && request !== seenRequest) section = "chat";
     seenRequest = request;
   });
+  let seenSettings: number | null = null;
+  $effect(() => {
+    const request = settingsRequest;
+    if (seenSettings !== null && request !== seenSettings) openSettings();
+    seenSettings = request;
+  });
+  function openSettings(anchor?: string) {
+    section = "settings";
+    if (anchor) queueMicrotask(() => document.getElementById(anchor)?.scrollIntoView({ block: "start" }));
+  }
+  // 「设置」分页很长：顶部给几个跳转（原「交流」页的内容并进来了，ADR 023 修订）。
+  const settingsLinks = [
+    { id: "companion-settings-ai", label: "AI 连接" },
+    { id: "companion-settings-call", label: "呼叫" },
+    { id: "companion-settings-reply", label: "回答" },
+    { id: "companion-settings-teammates", label: "游戏语音" },
+    { id: "companion-settings-permissions", label: "权限" },
+  ];
 
   onMount(() => {
     let disposed = false;
@@ -49,6 +74,13 @@
     return () => { disposed = true; };
   });
 </script>
+
+{#snippet group(id: string, title: string, description: string)}
+  <div id={id} class="scroll-mt-16 border-t border-hairline pt-6">
+    <h2 class="m-0 text-[15px] font-semibold text-foreground">{title}</h2>
+    <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">{description}</p>
+  </div>
+{/snippet}
 
 <div class="flex flex-col {section === 'chat' ? 'h-full' : ''}" data-testid="assistant-page">
   <!-- 分页切换放在页名旁（右上角留给提示消息） -->
@@ -76,11 +108,11 @@
   {#if connectionError}<p role="alert" class="mx-5 mt-3 text-xs text-destructive">{connectionError}</p>{/if}
   <!-- 聊天一直挂着：切到设置再回来，草稿、流式输出和事件订阅都还在。 -->
   <div class="min-h-0 flex-1" class:hidden={section !== "chat"} data-testid="assistant-tasks">
-    <AssistantChat {ready} active={section === "chat"} onOpenSettings={() => { section = "settings"; }} {onOpenTalk} />
+    <AssistantChat {ready} active={section === "chat"} onOpenSettings={() => openSettings()} onOpenTalk={() => openSettings("companion-settings-call")} />
   </div>
   {#if section === "identity" || section === "memory" || section === "skills"}
     <div class="ui-scope mx-auto w-full max-w-3xl px-6 pt-7 pb-10 text-foreground" data-testid={`assistant-${section}-tab`}>
-      {#if section === "identity"}<IdentityTab {onOpenTalk} />
+      {#if section === "identity"}<IdentityTab onOpenTalk={() => openSettings("companion-settings-call")} />
       {:else if section === "memory"}<MemoryTab />
       {:else}<SkillsTab />{/if}
     </div>
@@ -88,11 +120,26 @@
   {#if section === "settings"}
     <div class="ui-scope mx-auto w-full max-w-3xl space-y-6 px-6 pt-7 pb-10 text-foreground" data-testid="assistant-settings-tab">
       <div>
-        <h2 class="m-0 text-xl font-semibold tracking-tight">琴音设置</h2>
-        <p class="mt-1.5 mb-0 text-[13px] leading-relaxed text-muted-foreground">琴音用的 AI 连接，以及她能直接做哪些事。怎么叫她、她怎么回答你，在「交流」里设置。</p>
+        <h2 class="m-0 text-xl font-semibold tracking-tight">{name}的设置</h2>
+        <p class="mt-1.5 mb-0 text-[13px] leading-relaxed text-muted-foreground">她用哪个 AI、怎么叫她、她怎么回答你、怎么替你跟队友说话，以及她能直接做哪些事。这些也都可以直接跟她说，让她帮你设。</p>
+        <nav class="mt-3 flex flex-wrap gap-1.5" aria-label="设置分组" data-testid="companion-settings-links">
+          {#each settingsLinks as link}
+            <button type="button" class="h-7 rounded-md bg-muted/70 px-2.5 text-xs text-muted-foreground hover:text-foreground"
+              onclick={() => openSettings(link.id)}>{link.label}</button>
+          {/each}
+        </nav>
         <div class="mt-3 lg:hidden"><OpenRunsSummary {onOpenAutomation} /></div>
       </div>
-      <AssistantSettings {connections} {ready} {onOpenConnections} />
+      <div id="companion-settings-ai" class="scroll-mt-16"><AssistantSettings {connections} {ready} {onOpenConnections} /></div>
+      {@render group("companion-settings-call", "呼叫" + name, "按一下热键或喊她的名字，她就在右下角气泡里听你说。")}
+      <CompanionInputSettings />
+      <WakeSettings />
+      {@render group("companion-settings-reply", "她怎么回答你", "右下角的对话气泡、语音和弹幕。")}
+      <BubbleSettings />
+      <OutputSettings />
+      {@render group("companion-settings-teammates", "替你跟队友说话", "用虚拟麦克风替你在游戏语音里说话。")}
+      <VoiceChatSettings />
+      {@render group("companion-settings-permissions", "她能直接做什么", "游戏内交给她、每个工具允许 / 询问 / 禁止。")}
       <AgentSettings />
     </div>
   {/if}

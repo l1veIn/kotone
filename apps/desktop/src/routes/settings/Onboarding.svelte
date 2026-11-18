@@ -893,7 +893,7 @@
           </div>
         </div>
         <ul class="mt-5 space-y-2 text-xs leading-relaxed text-muted-foreground">
-          <li class="rounded-xl bg-muted/40 px-3.5 py-2.5 ring-1 ring-hairline"><span class="font-semibold text-foreground">按住陪玩热键或喊她的名字</span>，问“这把该出什么”“帮我盯着小地图”</li>
+          <li class="rounded-xl bg-muted/40 px-3.5 py-2.5 ring-1 ring-hairline"><span class="font-semibold text-foreground">按一下 ~ 键或喊她的名字</span>，问“这把该出什么”“帮我盯着小地图”</li>
           <li class="rounded-xl bg-muted/40 px-3.5 py-2.5 ring-1 ring-hairline"><span class="font-semibold text-foreground">她会记住你和每个游戏</span>：习惯、按键、打法，在「琴音 → 记忆」里随时能看能改</li>
           <li class="rounded-xl bg-muted/40 px-3.5 py-2.5 ring-1 ring-hairline"><span class="font-semibold text-foreground">动键鼠前会先问你</span>，操作时按 Esc 随时停下</li>
         </ul>

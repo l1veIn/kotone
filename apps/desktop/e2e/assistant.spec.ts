@@ -22,9 +22,10 @@ test("assistant opens on talk, keeps drafts across sections; speech lives in Gen
   await expect(page.getByTestId("assistant-request")).toHaveValue("5 分钟后提醒我打野有闪");
   await page.getByTestId("assistant-open-summary").getByRole("button", { name: "在「自动化」里查看 →" }).click();
   await expect(page.getByTestId("automation-page")).toBeVisible();
-  // 陪玩热键的交互方式与声音、弹幕在「交流」（ADR 023）
-  await page.getByTestId("settings-nav-talk").click();
-  await expect(page.getByTestId("assistant-mode-push-to-talk")).toHaveAttribute("aria-pressed", "true");
+  // 呼叫琴音、声音与弹幕都在「琴音 → 设置」（原「交流」页并进来了）
+  await page.getByTestId("settings-nav-assistant").click();
+  await page.getByTestId("assistant-nav-settings").click();
+  await expect(page.getByTestId("assistant-settings-tab")).toContainText("呼叫琴音");
   const output = page.getByTestId("output-settings");
   // 默认“自动”：琴音用 DeepSeek 连接时用 DeepSeek 语音，否则系统语音（预览里没有 DeepSeek 连接）
   await expect(output.getByLabel("语音引擎", { exact: true })).toHaveAttribute("data-value", "auto");
@@ -33,24 +34,20 @@ test("assistant opens on talk, keeps drafts across sections; speech lives in Gen
   await output.screenshot({ path: testInfo.outputPath("output-settings.png") });
 });
 
-test("assistant interaction modes save independently of regular input and survive section changes", async ({ page }) => {
+test("呼叫琴音 has one key (default ~) and no input-mode choice; the chat offers a call button instead of push-to-talk", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
-  const original = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
-  await page.getByTestId("settings-nav-talk").click();
-  await expect(page.getByTestId("assistant-mode-solo")).toHaveCount(0);
-  for (const mode of ["dictation", "one-shot", "push-to-talk"]) {
-    await page.getByTestId(`assistant-mode-${mode}`).click();
-    await expect(page.getByTestId(`assistant-mode-${mode}`)).toHaveAttribute("aria-pressed", "true");
-    const saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
-    expect(saved.assistant.interactionMode).toBe(mode);
-    expect(saved.interactionMode).toBe(original.interactionMode);
-    expect(saved.hotkey).toEqual(original.hotkey);
-  }
-  await page.getByTestId("assistant-mode-dictation").click();
-  await expect(page.getByTestId("assistant-mode-dictation")).toHaveAttribute("aria-pressed", "true");
-  await page.getByTestId("settings-nav-general").click();
-  await page.getByTestId("settings-nav-talk").click();
-  await expect(page.getByTestId("assistant-mode-dictation")).toHaveAttribute("aria-pressed", "true");
+  await page.getByTestId("settings-nav-assistant").click();
+  // 聊天输入框里是“呼叫琴音”，不是“按住说话”；浏览器预览里不可用
+  await expect(page.getByTestId("call-kotone")).toContainText("呼叫琴音");
+  await expect(page.getByTestId("call-kotone")).toBeDisabled();
+  await expect(page.getByText("按住说话")).toHaveCount(0);
+  await page.getByTestId("assistant-nav-settings").click();
+  await expect(page.getByTestId("assistant-interaction")).toHaveCount(0);
+  await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("Backquote");
+  await expect(page.getByTestId("assistant-settings-tab")).not.toContainText("陪玩热键");
+  // 顶部的跳转
+  await page.getByTestId("companion-settings-links").getByRole("button", { name: "游戏语音" }).click();
+  await expect(page.locator("#companion-settings-teammates")).toBeInViewport();
 });
 
 test("assistant preview submits to the assistant instead of offering game send", async ({ page }) => {
@@ -59,20 +56,20 @@ test("assistant preview submits to the assistant instead of offering game send",
     const { appState } = await import("/src/lib/stores/state.ts");
     appState.update((state) => ({ ...state, purpose: "assistant", state: "preview", finalText: "5 分钟后提醒我打野有闪" }));
   });
-  await expect(page.getByText("助手热键 提交助手 · Esc 重说", { exact: true })).toBeVisible();
+  await expect(page.getByText("~ 提交助手 · Esc 重说", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "发送", exact: true })).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText("发送");
   await expect(page.getByText(/提交助手/).first()).toBeVisible();
 });
 
-test("default assistant walkie-talkie overlay tells the user to release the assistant hotkey", async ({ page }) => {
+test("calling 琴音 shows that she listens until you stop talking (no walkie-talkie)", async ({ page }) => {
   await page.goto("/#/overlay");
   await page.evaluate(async () => {
     const { appState } = await import("/src/lib/stores/state.ts");
     appState.update((state) => ({ ...state, purpose: "assistant", state: "listening", partialText: "" }));
   });
-  await expect(page.getByText("助手收音中 · 松开助手热键提交", { exact: true })).toBeVisible();
-  await expect(page.getByText(/再按助手热键预览/)).toHaveCount(0);
+  await expect(page.getByText("在听 · 说完自动交给琴音（再按 ~ 立刻提交）", { exact: true })).toBeVisible();
+  await expect(page.getByText(/松开/)).toHaveCount(0);
   await page.evaluate(async () => {
     const { appState } = await import("/src/lib/stores/state.ts");
     appState.update((state) => ({ ...state, partialText: "打野有闪" }));
@@ -118,12 +115,13 @@ test("assistant shares connections and saves voice/delivery settings with an ind
   await assistant.getByLabel("陪玩 AI 连接").click();
   await page.getByRole("option").nth(1).click();
   await expect(assistant.getByRole("button", { name: "管理连接 →", exact: true })).toHaveCount(0);
-  // 陪玩热键在「交流」（ADR 023）
-  await page.getByTestId("settings-nav-talk").click();
-  const talk = page.getByTestId("talk-page");
+  // 呼叫琴音的热键在「琴音 → 设置」
+  await page.getByTestId("settings-nav-assistant").click();
+  await page.getByTestId("assistant-nav-settings").click();
+  const talk = page.getByTestId("assistant-settings-tab");
   await talk.getByTestId("hotkey-capture-assistant").click();
   await page.keyboard.press("CapsLock");
-  await expect(page.getByText("陪玩热键与录制热键（CapsLock）冲突，请换一个", { exact: true })).toBeVisible();
+  await expect(page.getByText("呼叫琴音热键与录制热键（CapsLock）冲突，请换一个", { exact: true })).toBeVisible();
   await talk.getByTestId("hotkey-capture-assistant").click();
   await page.keyboard.press("Control+F9");
   await expect(talk.getByTestId("hotkey-input-assistant")).toHaveValue("Ctrl+F9");
@@ -150,7 +148,7 @@ test("assistant shares connections and saves voice/delivery settings with an ind
   const named = page.getByTestId("hotkey-input-post-process-toggle");
   await named.fill("Ctrl+F9");
   await named.press("Enter");
-  await expect(page.getByText("文字处理开关热键与陪玩热键（Ctrl+F9）冲突，请换一个", { exact: true })).toBeVisible();
+  await expect(page.getByText("文字处理开关热键与呼叫琴音热键（Ctrl+F9）冲突，请换一个", { exact: true })).toBeVisible();
 });
 
 test("settings modal traps Tab and restores focus after Escape", async ({ page }) => {

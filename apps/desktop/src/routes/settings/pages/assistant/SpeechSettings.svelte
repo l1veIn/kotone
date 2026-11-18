@@ -90,7 +90,7 @@
     voices = [];
     if (current) void listSpeechVoices().then((items) => {
       if (!active) return;
-      voices = !isTauri && (current === "system" || current === "auto") ? [] : items;
+      voices = !isTauri && (current === "system" || current === "auto") ? [] : (items ?? []);
       voiceError = "";
     }).catch((cause) => { if (active) voiceError = errText(cause); });
     return () => { active = false; };

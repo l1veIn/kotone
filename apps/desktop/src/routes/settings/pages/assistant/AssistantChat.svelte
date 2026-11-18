@@ -12,7 +12,7 @@
   import ChatComposer from "../../../../lib/agentChat/ChatComposer.svelte";
   import { appState } from "../../../../lib/stores/state";
   import { errText, toast } from "../../../../lib/stores/ui";
-  import AssistantVoiceInput from "./AssistantVoiceInput.svelte";
+  import CallKotoneButton from "../../../../lib/components/CallKotoneButton.svelte";
   import ComposerOptions from "../../../../lib/agentChat/ComposerOptions.svelte";
   import kotoneCutout from "../../../../assets/brand/kotone-cutout.webp";
 
@@ -21,7 +21,7 @@
     ready: boolean;
     active: boolean;
     onOpenSettings: () => void;
-    /** 「交流」：陪玩热键等（ADR 023 从琴音设置搬过去）。 */
+    /** 「琴音 → 设置 → 呼叫」：呼叫热键、唤醒词。 */
     onOpenTalk: () => void;
   } = $props();
 
@@ -31,9 +31,8 @@
   let sendError = $state("");
   let sendNotice = $state("");
   let stopping = $state(false);
-  let voiceBusy = $state(false);
   const browserPreview = !isTauri;
-  const inputBusy = $derived(voiceBusy || !["idle", "success", "error"].includes($appState.state));
+  const inputBusy = $derived(!["idle", "success", "error"].includes($appState.state));
   const notReady = $derived(chat.state?.notReadyReason ?? null);
   const turns = $derived(buildTurns(chat.conversation?.messages ?? [], chat.runningHere ? chat.live : null, chat.runningHere));
   const empty = $derived(!chat.loading && turns.length === 0);
@@ -101,7 +100,7 @@
       onstop={() => void stop()}
     >
       {#snippet tools()}
-        <AssistantVoiceInput {ready} {active} submitting={false} onOpenSettings={onOpenTalk} onBusyChange={(busy) => { voiceBusy = busy; }} />
+        <CallKotoneButton {ready} />
       {/snippet}
       {#snippet options()}
         <ComposerOptions onchanged={() => void chat.refresh()} />
@@ -139,7 +138,7 @@
             <img src={kotoneCutout} alt="" class="absolute top-1 left-1/2 w-[150%] max-w-none -translate-x-1/2" />
           </div>
           <h2 class="m-0 text-2xl font-semibold tracking-tight">想让琴音做点什么？</h2>
-          <p class="mt-2 mb-0 text-[13px] text-muted-foreground">做自动化、看游戏聊天、设提醒……游戏里按陪玩热键说的话也会出现在这里。</p>
+          <p class="mt-2 mb-0 text-[13px] text-muted-foreground">做自动化、看游戏聊天、设提醒……在游戏里呼叫她说的话也会出现在这里。</p>
         </div>
         {@render composer()}
         <div class="mt-4 flex flex-wrap justify-center gap-2" data-testid="agent-starters">

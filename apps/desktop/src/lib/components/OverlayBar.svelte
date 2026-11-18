@@ -11,6 +11,7 @@
    *   success      Kotone 贴纸弹出 + 气泡「收到，已发送！✨」
    *   error        amazed 贴纸 + 错误摘要 + 重试 / 关闭
    */
+  import { hotkeyLabel as formatHotkey } from "../hotkeyCombo";
   import { fade, fly, scale } from "svelte/transition";
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
@@ -48,14 +49,16 @@
   let sendPending = $state(false);
   /** preview 提示中的热键名（动态读配置，读取失败回退 CapsLock） */
   let hotkeyLabel = $state("CapsLock");
-  let assistantHotkeyLabel = $state("助手热键");
+  let assistantHotkeyLabel = $state("呼叫键");
   let assistantMode = $state<AssistantInteractionMode>("push-to-talk");
   const buttonAssistant = $derived($appState.purpose === "assistant" && $appState.inputSource === "button");
-  const assistantListeningHint = $derived({
-    "push-to-talk": buttonAssistant ? "助手收音中 · 松开按钮提交" : "助手收音中 · 松开助手热键提交",
-    dictation: buttonAssistant ? "助手收音中 · 点击结束录音后预览" : "助手收音中 · 再按助手热键预览",
+  // 呼叫琴音：说完自动交给她（相当于按键版的语音唤醒）；再按一次呼叫键立刻提交。
+  // 旧的设置窗口语音按钮仍按自己的交互方式。
+  const assistantListeningHint = $derived(buttonAssistant ? {
+    "push-to-talk": "助手收音中 · 松开按钮提交",
+    dictation: "助手收音中 · 点击结束录音后预览",
     "one-shot": "助手收音中 · 停顿后提交",
-  }[assistantMode]);
+  }[assistantMode] : `在听 · 说完自动交给琴音（再按 ${assistantHotkeyLabel} 立刻提交）`);
   const confirmLabel = $derived($appState.purpose === "assistant" ? "提交助手" : "发送");
   const confirmHotkey = $derived($appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel);
   const previewHint = $derived(buttonAssistant ? "请回到提醒助手确认 · Esc 取消" : `${confirmHotkey} ${confirmLabel} · Esc 重说`);
@@ -118,7 +121,7 @@
           if (disposed) return;
           revision++;
           hotkeyLabel = payload.hotkey;
-          assistantHotkeyLabel = payload.assistantHotkey || "助手热键";
+          assistantHotkeyLabel = payload.assistantHotkey ? formatHotkey(payload.assistantHotkey) : "呼叫键";
           assistantMode = payload.assistantMode;
         });
         if (disposed) { cleanup(); return; }
@@ -129,7 +132,7 @@
       if (disposed) return;
       if (revision === snapshotRevision) {
         hotkeyLabel = s.hotkey.key;
-        assistantHotkeyLabel = s.assistant.hotkey || "助手热键";
+        assistantHotkeyLabel = s.assistant.hotkey ? formatHotkey(s.assistant.hotkey) : "呼叫键";
         assistantMode = s.assistant.interactionMode;
       }
       applyOverlayConfig(s.overlay);

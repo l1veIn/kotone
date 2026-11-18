@@ -101,7 +101,7 @@ const mock: MockStore = {
       send: { enabled: true, volume: 60, soundId: "fall" },
     },
     diagnostics: { recording: true },
-    assistant: { hotkey: "", interactionMode: "push-to-talk", connectionId: "", defaultDelivery: ["voice", "danmaku"], voiceId: "", speechEngine: "system", kokoroVoiceId: "kokoro:zf_001", speechVolume: 80, speechRate: 0, danmakuDurationMs: 8000, danmakuSpeedPxPerSec: 160, danmakuFontSize: 32, danmakuTopOffsetPx: 120, danmakuColor: "#FFFFFF", danmakuEmote: "none", route: "reminders", companion: { quickMessages: [], autoSend: true }, ttsModelId: "", wake: { enabled: false, phrase: "qinyin-qinyin", sensitivity: "normal", ack: "voice", noSpeechTimeoutMs: 5000 }, bubble: { enabled: true, corner: "bottom-right", offsetY: 0, alsoDanmaku: false } },
+    assistant: { hotkey: "Backquote", callHotkeyDefaulted: true, interactionMode: "push-to-talk", connectionId: "", defaultDelivery: ["voice", "danmaku"], voiceId: "", speechEngine: "system", kokoroVoiceId: "kokoro:zf_001", speechVolume: 80, speechRate: 0, danmakuDurationMs: 8000, danmakuSpeedPxPerSec: 160, danmakuFontSize: 32, danmakuTopOffsetPx: 120, danmakuColor: "#FFFFFF", danmakuEmote: "none", route: "reminders", companion: { quickMessages: [], autoSend: true }, ttsModelId: "", wake: { enabled: false, phrase: "qinyin-qinyin", sensitivity: "normal", ack: "voice", noSpeechTimeoutMs: 5000 }, bubble: { enabled: true, corner: "bottom-right", offsetY: 0, alsoDanmaku: false } },
     toolService: { enabled: false },
     ocr: { activeModelId: "" },
     voiceChat: { enabled: false, includeMic: true, micDeviceId: "default", micGain: 100 },

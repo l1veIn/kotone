@@ -5,7 +5,8 @@ import { expect, test } from "@playwright/test";
 test("game voice chat can be installed, enabled, routed to the Windows default mic and tested", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/#/settings?onboarding=never");
-  await page.getByTestId("settings-nav-talk").click();
+  await page.getByTestId("settings-nav-assistant").click();
+  await page.getByTestId("assistant-nav-settings").click();
   const section = page.getByTestId("voice-chat-settings");
   await expect(page.locator("#voice-chat-settings")).toContainText("游戏语音");
   await expect(page.getByTestId("voice-chat-state")).toContainText("还没有安装");

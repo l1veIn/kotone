@@ -20,7 +20,15 @@ const NAMED_CODES: Record<string, string> = {
   PrintScreen: "PrintScreen",
   Pause: "Pause",
   CapsLock: "CapsLock",
+  Backquote: "Backquote",
+  "`": "Backquote",
+  "~": "Backquote",
 };
+
+/** 给人看的热键名：Backquote 显示成 ~。 */
+export function hotkeyLabel(combo: string): string {
+  return combo.split("+").map((part) => (part === "Backquote" ? "~" : part)).join(" + ");
+}
 
 /** KeyboardEvent → 与 Rust parse_hotkey 一致的规范组合名。 */
 export function keyboardEventCombo(event: KeyboardEvent): string | null {
@@ -88,7 +96,7 @@ export function findHotkeyConflict(settings: Settings | null, selfId: string, ke
   if (!settings || !key.trim()) return null;
   const bindings: [string, string, string][] = [
     ["record", "录制热键", settings.hotkey.key],
-    ["assistant", "陪玩热键", settings.assistant.hotkey],
+    ["assistant", "呼叫琴音热键", settings.assistant.hotkey],
     ...(settings.assistant.companion?.quickMessages ?? []).map(
       (message, index): [string, string, string] => [`quick-message-${index + 1}`, `快捷消息 ${index + 1} 热键`, message.hotkey],
     ),

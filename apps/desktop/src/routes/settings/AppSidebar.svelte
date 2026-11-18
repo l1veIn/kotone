@@ -1,6 +1,6 @@
 <script lang="ts" module>
   export type PageId =
-    | "general" | "processing" | "assistant" | "talk" | "automation" | "game"
+    | "general" | "processing" | "assistant" | "automation" | "game"
     | "history" | "advanced" | "about" | "character";
 </script>
 
@@ -11,7 +11,7 @@
    * Kotone 的气质：当前项的青色指示条与图标高亮，底部的琴音形象卡。
    */
   import {
-    Bot, Gamepad2, History, Info, MessageSquarePlus, MessagesSquare, Mic, Settings2, Sparkles, Zap,
+    Bot, Gamepad2, History, Info, MessageSquarePlus, Mic, Settings2, Sparkles, Zap,
   } from "@lucide/svelte";
   import type { Component } from "svelte";
   import ConversationList from "../../lib/agentChat/ConversationList.svelte";
@@ -45,7 +45,6 @@
       label: "游戏陪玩",
       items: [
         { id: "assistant", label: companionName, icon: Bot },
-        { id: "talk", label: "交流", icon: MessagesSquare },
         { id: "game", label: "游戏", icon: Gamepad2 },
         { id: "automation", label: "自动化", icon: Zap },
       ],

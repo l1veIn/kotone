@@ -86,7 +86,7 @@
       {/snippet}
       {#if avatarError}<p role="alert" class="m-0 text-xs text-destructive" data-testid="identity-avatar-error">{avatarError}</p>{/if}
     </SettingsRow>
-    <SettingsRow label="怎么叫她" description="唤醒词、陪玩热键在「交流」里设置">
+    <SettingsRow label="怎么叫她" description="呼叫热键、唤醒词在「设置 → 呼叫」里">
       {#snippet control()}<Button size="sm" variant="outline" onclick={onOpenTalk}>去设置</Button>{/snippet}
     </SettingsRow>
   </SettingsSection>

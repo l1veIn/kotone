@@ -89,7 +89,7 @@
 
 <div class="space-y-6" data-testid="agent-settings">
   <SettingsSection title="琴音 Agent" description="琴音能用 Kotone 的全部工具。这里决定游戏里的话交给谁，以及哪些事直接做、哪些先问你。">
-    <SettingsRow label="游戏内交给琴音" description="陪玩热键与快捷指令里的“一句话”交给琴音（多步、能用全部工具）；关闭时用旧的单次陪玩。">
+    <SettingsRow label="游戏内交给琴音" description="呼叫琴音、唤醒词与快捷指令里的“一句话”交给琴音（多步、能用全部工具）；关闭时用旧的单次陪玩。">
       {#snippet control()}
         <Switch data-testid="agent-in-game" bind:checked={() => inGame, (checked) => void patchSettings({ agent: { inGame: checked } }, checked ? "游戏内入口交给琴音" : "游戏内入口改用单次陪玩")} aria-label="游戏内交给琴音" />
       {/snippet}

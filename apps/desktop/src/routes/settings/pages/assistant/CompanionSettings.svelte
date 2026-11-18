@@ -77,7 +77,7 @@
 
 {#if config}
   <div class="space-y-6" data-testid="companion-settings">
-    <SettingsSection title="陪玩" id="companion-title" description="按住陪玩热键说一句话（或按快捷指令热键），琴音会截取游戏窗口、识别聊天、调用 AI，然后帮你设提醒、帮你打字，或直接用语音 / 弹幕回答。">
+    <SettingsSection title="快捷指令与读屏" id="companion-title" description="呼叫琴音或按快捷指令热键时，她会先截取游戏窗口、识别聊天，再帮你设提醒、帮你打字，或直接用语音 / 弹幕回答。">
       {#if status}
         <div class="py-3.5">
           <p class="m-0 flex items-start gap-2 rounded-lg border px-3 py-2 text-xs leading-relaxed {status.ready ? 'border-success/35 bg-success/8 text-success' : 'border-warning/35 bg-warning/8 text-foreground/85'}">
@@ -86,7 +86,7 @@
           </p>
           {#if status.ocr.state?.dataEgress === "selected-image"}
             <p class="mt-2 mb-0 text-xs leading-relaxed text-brand-pink" data-testid="companion-upload-warning">
-              当前文字识别用的是在线模型：每按一次陪玩热键都会把游戏截图上传到服务商。
+              当前文字识别用的是在线模型：每次呼叫琴音都会把游戏截图上传到服务商。
             </p>
           {/if}
         </div>
