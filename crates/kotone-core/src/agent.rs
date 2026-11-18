@@ -73,6 +73,9 @@ pub struct AgentConfig {
     /// 它会同时把名字、头像写进 `identity`，并开一段新对话。新字段。
     #[serde(default = "default_role_id")]
     pub role_id: String,
+    /// 对局复盘：游戏一退出，把这一局和琴音的对话、提醒、自动化整理成复盘，写进这个游戏的记忆（默认开）。新字段。
+    #[serde(default = "default_true")]
+    pub match_recap: bool,
 }
 
 fn default_role_id() -> String {
@@ -85,6 +88,16 @@ pub const DEFAULT_COMPACT_AT_TOKENS: u64 = 64_000;
 
 fn default_compact_at_tokens() -> u64 {
     DEFAULT_COMPACT_AT_TOKENS
+}
+
+/// 某个时刻（毫秒）的本地时间 `HH:MM`。
+pub fn local_hh_mm(ms: u64) -> String {
+    use chrono::TimeZone;
+    chrono::Local
+        .timestamp_millis_opt(ms as i64)
+        .single()
+        .map(|t| t.format("%H:%M").to_string())
+        .unwrap_or_default()
 }
 
 /// 现在的本地时间，写进琴音每轮的附注：`2026-11-18 周三 14:05`。
@@ -132,6 +145,7 @@ impl Default for AgentConfig {
             subagents: SubagentsConfig::default(),
             compact_at_tokens: DEFAULT_COMPACT_AT_TOKENS,
             role_id: default_role_id(),
+            match_recap: true,
         }
     }
 }

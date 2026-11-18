@@ -37,6 +37,13 @@ fn to_json<T: serde::Serialize>(value: T) -> HostResult {
 #[serde(deny_unknown_fields)]
 struct NoArgs {}
 
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+struct RecapArgs {
+    game: Option<String>,
+    since_minutes: Option<u64>,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RoleUpdateArgs {
@@ -707,6 +714,15 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
         c::TOOL_USAGE_SUMMARY => {
             let _: NoArgs = parse(tool, args)?;
             Ok(crate::usage::summary())
+        }
+        c::TOOL_GAME_RECAP => {
+            let RecapArgs {
+                game,
+                since_minutes,
+            } = parse(tool, args)?;
+            crate::recap::recap_now(app, game, since_minutes)
+                .await
+                .map_err(HostError::InvalidArguments)
         }
         c::TOOL_ROLES_LIST => {
             let _: NoArgs = parse(tool, args)?;

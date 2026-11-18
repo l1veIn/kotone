@@ -1049,6 +1049,7 @@ fn messages_round_trip_through_json() {
             at_ms: 2,
             compaction: None,
             usage: None,
+            recap: None,
         },
     ];
     let json = serde_json::to_value(&messages).unwrap();
@@ -1524,6 +1525,7 @@ fn store_trims_long_conversations_at_a_user_boundary() {
         at_ms: 0,
         compaction: Some("摘要".into()),
         usage: None,
+        recap: None,
     });
     for i in 0..5 {
         turn(&mut c, 1000 + i);
@@ -1816,6 +1818,7 @@ fn a_second_compaction_starts_after_the_previous_checkpoint() {
         at_ms: 0,
         compaction: Some("旧摘要".into()),
         usage: None,
+        recap: None,
     });
     history.extend(old_turns(3));
     let window = compact::after_checkpoint(&history);

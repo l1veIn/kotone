@@ -16,6 +16,7 @@ mod key_request;
 mod model_catalog;
 mod ocr_engines;
 mod overlay;
+mod recap;
 mod roles;
 mod runtime;
 mod speech_models;
@@ -2120,6 +2121,8 @@ pub fn run() {
             app.manage(agent::AgentRuntime::open());
             // 琴音原来的名字和头像记进她的角色卡（只做一次）。
             roles::migrate(app.handle());
+            // 对局复盘：盯着游戏进程，一局结束就整理（agent.matchRecap，默认开）。
+            recap::start(app.handle());
             // 先接上程序执行端口，再启动调度器（到点的程序才有人执行）。
             automation::attach(app.handle());
             assistant::start(app.handle());

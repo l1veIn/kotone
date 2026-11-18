@@ -221,6 +221,7 @@ pub async fn compact<M: ModelClient>(
             at_ms: now_ms(),
             compaction: Some(summary),
             usage: reply.usage.filter(|u| !u.is_empty()),
+            recap: None,
         },
     )))
 }

@@ -364,6 +364,7 @@ fn fail_early(
             at_ms: now_ms(),
             compaction: None,
             usage: None,
+            recap: None,
         },
     ] {
         conversation.messages.push(m.clone());
@@ -683,6 +684,7 @@ fn main_turn_context(
     turn_context(&TurnContext {
         entry,
         game: &game,
+        game_id: &profile.id,
         game_notes: notes,
         game_memory: other_memory.as_deref(),
         now: &now,
@@ -1209,6 +1211,41 @@ pub fn stop(app: &AppHandle) -> Result<bool, String> {
         }
         None => Ok(false),
     }
+}
+
+/// 对话存储（对局复盘读这一局的对话用）。
+pub fn conversation_store(app: &AppHandle) -> Result<Arc<ConversationStore>, String> {
+    store(app)
+}
+
+/// 等琴音空下来（最多 3 分钟），把一条说明加到当前对话末尾（没有当前对话就加到最近的主对话）；
+/// 不发给模型。返回加到了哪段对话。
+pub async fn append_notice_when_idle(app: &AppHandle, notice: Message) -> Option<String> {
+    for _ in 0..90 {
+        if !is_running(app) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+    if is_running(app) {
+        return None;
+    }
+    let store = store(app).ok()?;
+    let id = store.current().or_else(|| {
+        store
+            .list()
+            .into_iter()
+            .find(|c| c.parent.is_none())
+            .map(|c| c.id)
+    })?;
+    let mut conversation = store.load(&id).ok()??;
+    conversation.messages.push(notice.clone());
+    if let Err(e) = store.save(&mut conversation) {
+        log::log(&format!("agent: save failed: {e}"));
+        return None;
+    }
+    emit(app, &id, json!({"kind": "appended", "message": notice}));
+    Some(id)
 }
 
 /// 主会话正在回答吗。
@@ -2026,6 +2063,7 @@ mod tests {
                 at_ms: 0,
                 compaction: None,
                 usage: None,
+                recap: None,
             }]),
             "已停止"
         );

@@ -105,6 +105,9 @@ pub enum Message {
         /// 整理这份摘要花的用量。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         usage: Option<TokenUsage>,
+        /// 对局复盘的正文（游戏一退出 Kotone 自动整理的；`text` 是标题）。只给玩家看，不发给模型。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recap: Option<String>,
     },
 }
 
@@ -126,6 +129,7 @@ impl Message {
             at_ms: now_ms(),
             compaction: None,
             usage: None,
+            recap: None,
         }
     }
 

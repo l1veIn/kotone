@@ -330,7 +330,9 @@ async fn capabilities_list_exactly_the_implemented_tools() {
             assert!(tool["notReadyReason"].is_string());
             // 陪玩：请求与识别出的聊天发给用户的 AI 连接；读聊天取决于所选 OCR 后端
             let egress = match tool["name"].as_str().unwrap() {
-                "postprocess.test" | "companion.ask" | "companion.check" => "connection-dependent",
+                "postprocess.test" | "companion.ask" | "companion.check" | "game.recap" => {
+                    "connection-dependent"
+                }
                 "companion.read_chat" | "automation.run" => "backend-dependent",
                 _ => "none",
             };

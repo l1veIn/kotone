@@ -32,6 +32,8 @@ pub struct TurnContext<'a> {
     pub entry: Entry,
     /// 当前游戏配置的显示名（没有时为空）。
     pub game: &'a str,
+    /// 当前游戏配置的 id（`memory {target: game}`、`game.*` 工具要用 id，不是显示名）。
+    pub game_id: &'a str,
     /// 游戏变了（或这段对话第一次提到它）时附上：玩家写的游戏说明。
     pub game_notes: Option<&'a str>,
     /// 游戏变了、而系统提示里的游戏记忆不是这个游戏的：附上这个游戏的记忆。
@@ -186,7 +188,15 @@ pub fn turn_context(ctx: &TurnContext<'_>) -> String {
         out.push_str(&format!("\n现在：{}", ctx.now));
     }
     if !ctx.game.trim().is_empty() {
-        out.push_str(&format!("\n当前游戏：{}", ctx.game.trim()));
+        if ctx.game_id.trim().is_empty() {
+            out.push_str(&format!("\n当前游戏：{}", ctx.game.trim()));
+        } else {
+            out.push_str(&format!(
+                "\n当前游戏：{}（游戏配置 id：{}）",
+                ctx.game.trim(),
+                ctx.game_id.trim()
+            ));
+        }
     }
     if let Some(notes) = ctx.game_notes.map(str::trim).filter(|n| !n.is_empty()) {
         out.push_str(&format!(

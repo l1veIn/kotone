@@ -578,15 +578,18 @@ fn prompt_is_one_text_for_both_entries_and_the_turn_context_carries_the_rest() {
     let game = turn_context(&TurnContext {
         entry: Entry::Game,
         game: "英雄联盟",
+        game_id: "lol",
         game_notes: Some("聊天在左下角"),
         game_memory: None,
         now: "2026-11-18 周三 14:05",
     });
     assert!(game.starts_with("入口：语音"));
     assert!(game.contains("英雄联盟") && game.contains("聊天在左下角") && game.contains("14:05"));
+    assert!(game.contains("游戏配置 id：lol"), "记忆工具要用 id");
     let chat = turn_context(&TurnContext {
         entry: Entry::Chat,
         game: "",
+        game_id: "",
         game_notes: None,
         game_memory: None,
         now: "",

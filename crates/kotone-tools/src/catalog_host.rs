@@ -47,6 +47,7 @@ pub const TOOL_ROLES_SWITCH: &str = "roles.switch";
 pub const TOOL_ROLES_CREATE: &str = "roles.create";
 pub const TOOL_ROLES_UPDATE: &str = "roles.update";
 pub const TOOL_ROLES_DELETE: &str = "roles.delete";
+pub const TOOL_GAME_RECAP: &str = "game.recap";
 pub const TOOL_APP_RESTART: &str = "app.restart";
 pub const TOOL_POSTPROCESS_PROCESSORS: &str = "postprocess.processors";
 pub const TOOL_POSTPROCESS_TEST: &str = "postprocess.test";
@@ -120,6 +121,7 @@ pub const HOST_TOOLS: &[&str] = &[
     TOOL_ROLES_CREATE,
     TOOL_ROLES_UPDATE,
     TOOL_ROLES_DELETE,
+    TOOL_GAME_RECAP,
     TOOL_APP_RESTART,
     TOOL_POSTPROCESS_PROCESSORS,
     TOOL_POSTPROCESS_TEST,
@@ -562,6 +564,17 @@ fn defs() -> Vec<Def> {
             egress: "none",
             input: object(&["id"], json!({"id": {"type": "string", "minLength": 1, "maxLength": 40}})),
             output: open("角色列表"),
+        },
+        Def {
+            name: TOOL_GAME_RECAP,
+            description: "Recap a match now: the companion's conversation, tool calls, reminders and automation runs of the last sinceMinutes (default 60) for a game profile (default the active one) become a short recap posted in the chat and a merged update of that game's memory (<= 4000 characters). Kotone also does this by itself when a game process that ran 3+ minutes exits (agent.matchRecap). One AI call; skipped when nothing happened.",
+            side_effects: &["writes-files"],
+            egress: "connection-dependent",
+            input: json!({"type": ["object", "null"], "additionalProperties": false, "properties": {
+                "game": {"type": "string", "maxLength": 64, "description": "game profile id (profiles.list); default the active one"},
+                "sinceMinutes": {"type": "integer", "minimum": 1, "maximum": 1440}
+            }}),
+            output: open("复盘结果"),
         },
         Def {
             name: TOOL_APP_RESTART,
