@@ -426,9 +426,33 @@ pub struct UsageSummary {
     pub by_kind: Vec<(UsageKind, UsageTotals)>,
     /// 本月按模型（`provider/model`）。
     pub by_model: Vec<(String, UsageTotals)>,
-    /// 最近 30 天，每天一项（`YYYY-MM-DD`，旧的在前；没用量的天不列）。
-    pub days: Vec<(String, UsageTotals)>,
+    /// 最近 [`DAYS`] 天，每天一项（旧的在前；没用量的天不列）。
+    pub days: Vec<DayUsage>,
     pub price_source: &'static str,
+}
+
+/// 统计最近几天（界面按天列出）。
+pub const DAYS: i64 = 60;
+
+/// 一天的用量：合计、按用途、按模型。
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DayUsage {
+    /// `YYYY-MM-DD`（本地时间）。
+    pub day: String,
+    pub totals: UsageTotals,
+    pub by_kind: Vec<(UsageKind, UsageTotals)>,
+    pub by_model: Vec<(String, UsageTotals)>,
+}
+
+fn model_key(r: &UsageRecord) -> String {
+    if r.provider.is_empty() {
+        r.model.clone()
+    } else if r.model.is_empty() {
+        r.provider.clone()
+    } else {
+        format!("{}/{}", r.provider, r.model)
+    }
 }
 
 fn local_day(ms: u64) -> String {
@@ -439,7 +463,7 @@ fn local_day(ms: u64) -> String {
         .unwrap_or_default()
 }
 
-/// 本地时间的今天 0 点、本月 1 日 0 点、30 天前 0 点（毫秒）。
+/// 本地时间的今天 0 点、本月 1 日 0 点、[`DAYS`] 天前 0 点（毫秒）。
 fn boundaries(now_ms: u64) -> (u64, u64, u64) {
     let now = Local
         .timestamp_millis_opt(now_ms as i64)
@@ -453,7 +477,7 @@ fn boundaries(now_ms: u64) -> (u64, u64, u64) {
     };
     let today = now.date_naive();
     let month = today.with_day(1).unwrap_or(today);
-    let days30 = today - chrono::Duration::days(29);
+    let days30 = today - chrono::Duration::days(DAYS - 1);
     (midnight(today), midnight(month), midnight(days30))
 }
 
@@ -466,7 +490,15 @@ pub fn summarize(records: &[UsageRecord], now_ms: u64) -> UsageSummary {
     let mut by_kind: std::collections::BTreeMap<String, (UsageKind, UsageTotals)> =
         Default::default();
     let mut by_model: std::collections::BTreeMap<String, UsageTotals> = Default::default();
-    let mut days: std::collections::BTreeMap<String, UsageTotals> = Default::default();
+    #[allow(clippy::type_complexity)]
+    let mut days: std::collections::BTreeMap<
+        String,
+        (
+            UsageTotals,
+            std::collections::BTreeMap<String, (UsageKind, UsageTotals)>,
+            std::collections::BTreeMap<String, UsageTotals>,
+        ),
+    > = Default::default();
     for r in records {
         if r.at_ms >= today {
             summary.today.add(r);
@@ -479,24 +511,35 @@ pub fn summarize(records: &[UsageRecord], now_ms: u64) -> UsageSummary {
                 .or_insert_with(|| (kind, UsageTotals::default()))
                 .1
                 .add(r);
-            let model = if r.provider.is_empty() {
-                r.model.clone()
-            } else {
-                format!("{}/{}", r.provider, r.model)
-            };
-            by_model.entry(model).or_default().add(r);
+            by_model.entry(model_key(r)).or_default().add(r);
         }
         if r.at_ms >= days30 {
-            days.entry(local_day(r.at_ms)).or_default().add(r);
+            let kind = r.kind.unwrap_or(UsageKind::Other);
+            let day = days.entry(local_day(r.at_ms)).or_default();
+            day.0.add(r);
+            day.1
+                .entry(kind.label().to_string())
+                .or_insert_with(|| (kind, UsageTotals::default()))
+                .1
+                .add(r);
+            day.2.entry(model_key(r)).or_default().add(r);
         }
     }
     summary.by_kind = by_kind.into_values().collect();
     summary.by_model = by_model.into_iter().collect();
-    summary.days = days.into_iter().collect();
+    summary.days = days
+        .into_iter()
+        .map(|(day, (totals, kinds, models))| DayUsage {
+            day,
+            totals,
+            by_kind: kinds.into_values().collect(),
+            by_model: models.into_iter().collect(),
+        })
+        .collect();
     summary
 }
 
-/// 汇总时从哪天读起（本月 1 日与 30 天前取更早的）。
+/// 汇总时从哪天读起（本月 1 日与 [`DAYS`] 天前取更早的）。
 pub fn summary_since(now_ms: u64) -> u64 {
     let (_, month, days30) = boundaries(now_ms);
     month.min(days30)
@@ -621,5 +664,11 @@ mod tests {
         assert!(summary.today.cost["CNY"] > 0.0);
         assert_eq!(summary.by_kind.len(), 2);
         assert_eq!(summary.days.len(), 1);
+        assert_eq!(summary.days[0].totals.requests, 3);
+        assert_eq!(summary.days[0].by_kind.len(), 2);
+        assert!(summary.days[0]
+            .by_model
+            .iter()
+            .any(|(m, t)| m == "deepseek/deepseek-chat" && t.requests == 2));
     }
 }

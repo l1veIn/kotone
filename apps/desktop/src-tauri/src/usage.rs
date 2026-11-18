@@ -71,7 +71,12 @@ pub fn summary() -> Value {
         "month": totals_json(&s.month),
         "byKind": s.by_kind.iter().map(|(kind, t)| json!({"kind": kind, "label": kind.label(), "totals": totals_json(t)})).collect::<Vec<_>>(),
         "byModel": s.by_model.iter().map(|(model, t)| json!({"model": model, "totals": totals_json(t)})).collect::<Vec<_>>(),
-        "days": s.days.iter().map(|(day, t)| json!({"day": day, "totals": totals_json(t)})).collect::<Vec<_>>(),
+        "days": s.days.iter().map(|d| json!({
+            "day": d.day,
+            "totals": totals_json(&d.totals),
+            "byKind": d.by_kind.iter().map(|(kind, t)| json!({"kind": kind, "label": kind.label(), "totals": totals_json(t)})).collect::<Vec<_>>(),
+            "byModel": d.by_model.iter().map(|(model, t)| json!({"model": model, "totals": totals_json(t)})).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
         "priceSource": s.price_source,
         "note": "费用按 Kotone 内置的价格表估算（DeepSeek 分高峰 / 空闲时段，节假日按工作日算，会略偏高），以服务商账单为准；没有价格的模型只记 token。",
         "ledger": usage::global().map(|l| l.path().display().to_string()),
