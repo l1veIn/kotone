@@ -133,7 +133,8 @@ export class AgentChat {
         break;
       case "appended": {
         const messages = this.conversation.messages;
-        if (replay && messages.some((m) => sameMessage(m, event.message))) break;
+        // 刚读出来的对话里可能已经有这条（后端先存盘再发事件）：同内容同时间的就是同一条。
+        if (messages.some((m) => sameMessage(m, event.message))) break;
         messages.push(event.message);
         if (event.message.role === "assistant") { this.live.text = ""; this.live.thought = ""; }
         break;

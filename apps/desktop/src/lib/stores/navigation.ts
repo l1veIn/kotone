@@ -61,7 +61,14 @@ const TOOL_LOCATIONS: Record<string, [string, string]> = {
 };
 
 /** 一次完成的工具调用改了哪些设置、在界面上的哪里（聊天里显示成可点的链接）。 */
-export function changedLocations(tool: string, content: string | null | undefined): { label: string; page: string }[] {
+export function changedLocations(tool: string, content: string | null | undefined, args?: string): { label: string; page: string }[] {
+  // 换 / 下载模型：按类别说清是哪种模型
+  if (tool.startsWith("models.") && tool !== "models.list") {
+    let category = "";
+    try { category = String((JSON.parse(args ?? "{}") as { category?: string }).category ?? ""); } catch { category = ""; }
+    const kind = ({ asr: "语音识别", ocr: "文字识别", tts: "语音合成" } as Record<string, string>)[category];
+    if (kind) return [{ label: `${kind}模型`, page: `设置 → 模型 → ${kind}` }];
+  }
   let parsed: unknown = null;
   try { parsed = content ? JSON.parse(content) : null; } catch { parsed = null; }
   const locations = (parsed as { effects?: { locations?: { label: string; page: string }[] } } | null)?.effects?.locations;

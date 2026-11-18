@@ -384,7 +384,7 @@ test("tool cards link the settings 琴音 changed, and a key request is pasted i
   }, T);
   // 只读的工具没有链接
   await expect(page.locator('[data-tool-id="call-l"]').getByTestId("agent-tool-changed")).toHaveCount(0);
-  await expect(page.locator('[data-tool-id="call-m"]').getByTestId("agent-tool-changed-link")).toHaveText("模型 →");
+  await expect(page.locator('[data-tool-id="call-m"]').getByTestId("agent-tool-changed-link")).toHaveText("语音识别模型 →");
   const link = page.locator('[data-tool-id="call-s"]').getByTestId("agent-tool-changed-link");
   await expect(link).toHaveText("呼叫琴音热键 →");
   await link.click();

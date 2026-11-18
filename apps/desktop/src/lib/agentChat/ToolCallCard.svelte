@@ -28,7 +28,7 @@
   const input = $derived(open ? formatToolJson(tool.call.arguments) : "");
   const output = $derived(open ? formatToolJson(tool.content) : "");
   /** 改了设置的工具：“改了 xxx → 去看看”，点了跳到设置里的位置。 */
-  const changed = $derived(tool.status === "completed" ? changedLocations(tool.call.name, tool.content) : []);
+  const changed = $derived(tool.status === "completed" ? changedLocations(tool.call.name, tool.content, tool.call.arguments) : []);
 
   async function answer(value: Answer) {
     if (!ask || !onAnswer || answering) return;
