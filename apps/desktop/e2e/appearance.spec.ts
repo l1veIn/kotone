@@ -27,6 +27,9 @@ test("appearance switches theme, palette, zoom and font, and persists across rel
   await panel.getByTestId("appearance-palette-green").click();
   await panel.getByTestId("appearance-zoom").click();
   await page.getByRole("option", { name: "110%" }).click();
+  // 缩放会让整页重新排版：等它生效、下拉收起后再开字体
+  await expect(page.locator("body")).toHaveCSS("zoom", "1.1");
+  await expect(page.getByRole("option", { name: "110%" })).toHaveCount(0);
   await panel.getByTestId("appearance-font").click();
   await page.getByRole("option", { name: "等线" }).click();
 
