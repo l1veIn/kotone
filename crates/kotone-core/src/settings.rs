@@ -534,6 +534,21 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// 琴音的 DeepSeek 连接：琴音正在用的（若是 DeepSeek）→ 第一条 DeepSeek 连接。
+    /// DeepSeek 的语音识别、文字识别、语音合成没单独选连接时都用它（只配一个 DeepSeek 就能用全部功能）。
+    pub fn deepseek_connection_id(&self) -> Option<String> {
+        let is_deepseek = |c: &&crate::connection::Connection| {
+            c.provider == "deepseek" || c.base_url.contains("api.deepseek.com")
+        };
+        let agent = self.assistant.connection_id.trim();
+        self.connections
+            .iter()
+            .filter(is_deepseek)
+            .find(|c| c.id == agent)
+            .or_else(|| self.connections.iter().find(is_deepseek))
+            .map(|c| c.id.clone())
+    }
+
     /// 引擎专有项 + 当前活动模型的 configSchema 值。
     /// 旧家族 id 与新 I/O 引擎 id 的 engineOptions 会合并；活动模型 id 写入 `model`。
     pub fn session_options(&self, engine_id: &str) -> serde_json::Value {

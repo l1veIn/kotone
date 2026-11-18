@@ -33,7 +33,8 @@ pub fn package_dir(models_root: &Path, package: &ModelPackage) -> PathBuf {
     manifest::package_dir(models_root, package)
 }
 
-/// DeepSeek OCR 绑定的连接 ID：统一清单的配置优先，其次旧的 `toolService.ocr` 配置。
+/// DeepSeek OCR 绑定的连接 ID：统一清单的配置优先，其次旧的 `toolService.ocr` 配置，
+/// 都没有就用琴音的 DeepSeek 连接（只配一个 DeepSeek 就能用全部功能）。
 pub fn deepseek_connection_id(settings: &Settings) -> Option<String> {
     settings
         .model_configs
@@ -53,6 +54,7 @@ pub fn deepseek_connection_id(settings: &Settings) -> Option<String> {
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
         })
+        .or_else(|| settings.deepseek_connection_id())
 }
 
 /// 清单里是否有该 OCR 模型 ID。

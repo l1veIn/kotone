@@ -1242,7 +1242,7 @@ impl Orchestrator {
             .and_then(profile::get)
             .unwrap_or_else(GameProfile::builtin_generic);
         let mut cfg = build_session_config(&stt_settings, &engine_id, &active_profile);
-        enrich_remote_connection(&stt_settings, &mut cfg, self.secrets.as_deref());
+        enrich_remote_connection(&stt_settings, &engine_id, &mut cfg, self.secrets.as_deref());
 
         let (stt_tx, stt_rx) = mpsc::unbounded_channel::<SttEvent>();
         let session = engine
@@ -3136,17 +3136,24 @@ fn build_session_config(
 
 fn enrich_remote_connection(
     settings: &Settings,
+    engine_id: &str,
     cfg: &mut SessionConfig,
     secrets: Option<&dyn crate::connection::SecretStore>,
 ) {
-    let Some(connection_id) = cfg
+    let configured = cfg
         .options
         .get("connectionId")
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|id| !id.is_empty())
-        .map(str::to_string)
-    else {
+        .map(str::to_string);
+    // DeepSeek 语音识别不用单独选连接：用琴音的 DeepSeek 连接，没有就用第一条 DeepSeek 连接。
+    let connection_id = configured.or_else(|| {
+        (engine_id == DEEPSEEK_ASR_ENGINE_ID)
+            .then(|| settings.deepseek_connection_id())
+            .flatten()
+    });
+    let Some(connection_id) = connection_id else {
         return;
     };
     let Some(connection) = settings
@@ -3166,6 +3173,9 @@ fn enrich_remote_connection(
         }
     }
 }
+
+/// 与 `kotone_stt::model::DEEPSEEK_ASR_STT_ID` 相同（core 不依赖 stt）。
+const DEEPSEEK_ASR_ENGINE_ID: &str = "deepseek-asr";
 
 #[cfg(test)]
 mod tests {

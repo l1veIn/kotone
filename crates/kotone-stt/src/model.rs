@@ -46,6 +46,8 @@ pub enum ModelRecipe {
     OpenaiCompat,
     VolcanoAsr,
     IflytekAsr,
+    /// DeepSeek 语音识别（`/v1/tools/asr`，整段上传，自动判断语种）。
+    DeepseekAsr,
 }
 
 /// 模型自己声明的可配项（语言、连接、密钥等）；与 OCR / TTS 清单共用同一结构。
@@ -179,6 +181,8 @@ pub const REMOTE_OPENAI_ENGINE_ID: &str = "remote-openai-compat";
 pub const ONLINE_ASR_TAG: &str = "online-asr";
 pub const VOLCANO_ASR_STT_ID: &str = "volcano-asr";
 pub const IFLYTEK_ASR_STT_ID: &str = "iflytek-asr";
+/// DeepSeek 语音识别：直接用琴音的 DeepSeek 连接与密钥（只配一个 DeepSeek 就能用全部功能）。
+pub const DEEPSEEK_ASR_STT_ID: &str = "deepseek-asr";
 pub const SHERPA_STREAMING_ENGINE_ID: &str = "sherpa-streaming";
 pub const SHERPA_OFFLINE_ENGINE_ID: &str = "sherpa-offline";
 
@@ -804,6 +808,22 @@ fn online_asr_infos() -> Vec<ModelInfo> {
     vec![
         ModelInfo {
             category: ModelCategory::Asr,
+            id: DEEPSEEK_ASR_STT_ID.into(),
+            engine_id: DEEPSEEK_ASR_STT_ID.into(),
+            display_name: "DeepSeek 语音识别（在线，用琴音的 DeepSeek 密钥）".into(),
+            size_bytes: 0,
+            download_url: String::new(),
+            sha256: String::new(),
+            downloaded: true,
+            io: ModelIo::Offline,
+            backend: ModelBackend::Remote,
+            recipe: ModelRecipe::DeepseekAsr,
+            config_schema: Vec::new(),
+            api_key_url: Some("https://platform.deepseek.com/api_keys".into()),
+            tag: Some(ONLINE_ASR_TAG.into()),
+        },
+        ModelInfo {
+            category: ModelCategory::Asr,
             id: VOLCANO_ASR_STT_ID.into(),
             engine_id: VOLCANO_ASR_STT_ID.into(),
             display_name: "火山引擎语音识别（在线）".into(),
@@ -842,6 +862,7 @@ pub fn recipe_of(id: &str) -> Option<ModelRecipe> {
         REMOTE_OPENAI_STT_ID => Some(ModelRecipe::OpenaiCompat),
         VOLCANO_ASR_STT_ID => Some(ModelRecipe::VolcanoAsr),
         IFLYTEK_ASR_STT_ID => Some(ModelRecipe::IflytekAsr),
+        DEEPSEEK_ASR_STT_ID => Some(ModelRecipe::DeepseekAsr),
         _ => SHERPA_MODELS.iter().find(|m| m.id == id).map(|m| m.recipe),
     }
 }
@@ -851,6 +872,7 @@ pub fn engine_id_of(id: &str) -> Option<&'static str> {
         REMOTE_OPENAI_STT_ID => Some(REMOTE_OPENAI_ENGINE_ID),
         VOLCANO_ASR_STT_ID => Some(VOLCANO_ASR_STT_ID),
         IFLYTEK_ASR_STT_ID => Some(IFLYTEK_ASR_STT_ID),
+        DEEPSEEK_ASR_STT_ID => Some(DEEPSEEK_ASR_STT_ID),
         _ => SHERPA_MODELS
             .iter()
             .find(|m| m.id == id)
@@ -859,7 +881,10 @@ pub fn engine_id_of(id: &str) -> Option<&'static str> {
 }
 
 pub fn is_remote_model(id: &str) -> bool {
-    id == REMOTE_OPENAI_STT_ID || id == VOLCANO_ASR_STT_ID || id == IFLYTEK_ASR_STT_ID
+    id == REMOTE_OPENAI_STT_ID
+        || id == VOLCANO_ASR_STT_ID
+        || id == IFLYTEK_ASR_STT_ID
+        || id == DEEPSEEK_ASR_STT_ID
 }
 
 /// 手动安装指引：官方页 + 目标目录 + 应放置的文件清单。
@@ -1754,8 +1779,8 @@ mod tests {
         let items = list().unwrap();
         assert_eq!(
             items.len(),
-            SHERPA_MODELS.len() + 2,
-            "VAD 不在清单内；火山引擎 + 科大讯飞两个在线条目应出现在清单末尾"
+            SHERPA_MODELS.len() + 3,
+            "VAD 不在清单内；DeepSeek、火山引擎、科大讯飞三个在线条目应出现在清单末尾"
         );
         assert!(
             items.iter().all(|i| i.id != VAD_MODEL_ID),

@@ -35,23 +35,13 @@ fn or_default(value: String, default: &str) -> String {
     }
 }
 
-fn is_deepseek(connection: &kotone_core::connection::Connection) -> bool {
-    connection.provider == "deepseek" || connection.base_url.contains("api.deepseek.com")
-}
-
 /// DeepSeek 语音用哪条连接：配置里指定的 → 琴音正在用的（若是 DeepSeek）→ 第一条 DeepSeek 连接。
 fn deepseek_connection_id(settings: &Settings) -> Option<String> {
     let chosen = field(settings, DEEPSEEK_MODEL_ID, "connection");
     if !chosen.is_empty() {
         return Some(chosen);
     }
-    let agent = settings.assistant.connection_id.trim();
-    settings
-        .connections
-        .iter()
-        .find(|c| c.id == agent && is_deepseek(c))
-        .or_else(|| settings.connections.iter().find(|c| is_deepseek(c)))
-        .map(|c| c.id.clone())
+    settings.deepseek_connection_id()
 }
 
 /// “自动”语音能不能用 DeepSeek：有 DeepSeek 连接且凭据库里有密钥（不访问网络）。
