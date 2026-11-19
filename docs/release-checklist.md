@@ -54,10 +54,10 @@
 
 ### 0.2.0 过渡版
 
-1. 先完成 [ADR 027](adr/027-0.2-upgrade-transition.md) 的验证并取得玩家确认。确认默认分支的手动 COS 发布入口也有旧通道护栏，再推送 Tag。0.2 的 Tag 工作流只生成草稿和签名制品，公开 GitHub Release 时显式设置 `make_latest: "false"`，旧通道继续使用自己的 `latest.json`。
+1. 先完成 [ADR 027](adr/027-0.2-upgrade-transition.md) 的验证并取得玩家确认。当前代码已是 0.2.0，日志也已有这一节。确认发布时把待发布条目合入现有小节并更新日期，保留回退链接。确认默认分支的手动 COS 发布入口也有旧通道护栏，再推送 Tag。0.2 的 Tag 工作流只生成草稿和签名制品，公开 GitHub Release 时显式设置 `make_latest: "false"`，旧通道继续使用自己的 `latest.json`。
 2. 核对 GitHub 草稿的 SHA-256 和更新签名。先将版本化安装包、签名和校验文件上传 COS，再验证公开包 URL 与下载校验和。
 3. 用 `node scripts/stage-transition-update.mjs <签名清单> <输出目录> <确认的比例>` 离线生成 `latest-0.2.json`。它带短版更新说明。收到该档放量批准后，才更新 COS 的专用地址，并为清单设置 `Cache-Control: no-store, no-cache, must-revalidate`。
-4. 用无缓存请求分别检查 COS 专用清单、COS 旧清单与 GitHub 旧清单。两个固定旧地址须继续提供 0.1.x。确认客户端的版本提示、短说明和旧版回退入口符合 ADR 027。
+4. 用无缓存请求分别检查 COS 专用清单、COS 旧清单与 GitHub 旧清单。两个固定旧地址须继续提供 0.1.x。用 0.1.14 检查到 0.2.0 的弹窗说明，确认完整日志指向旧版下载，且 0.1.14 关于页的回退链接可用。
 
 ## 签名与更新策略
 

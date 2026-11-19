@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 export const transitionNotes = [
   "语音输入法照常使用，原来的录音热键和识别设置会保留。",
   "琴音由你选择开启，不配置 API Key 就不会产生琴音费用。",
-  "升级前会备份本机数据，也可以手动重装旧版。",
+  "升级前会备份本机数据，需要时可从完整更新日志下载旧版手动重装。",
   "完整更新日志：https://github.com/l1veIn/kotone/releases/tag/v0.2.0",
 ].join("\n");
 
