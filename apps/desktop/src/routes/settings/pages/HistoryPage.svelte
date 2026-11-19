@@ -319,7 +319,7 @@
   }
 </script>
 
-<SettingsPage title="历史记录" description="每一次开口，都有迹可循。记录只存在本机。" testid="history-page">
+<SettingsPage embedded title="历史" description="语音输入说过的每一句都记在这里，只存在本机；和角色的聊天在侧栏的对话列表里。" testid="history-page">
   {#snippet actions()}
     <Button size="sm" variant={confirmingClear ? "destructive" : "outline"} onclick={() => void onClear()}>
       {confirmingClear ? "再点一次确认清空" : "清空历史"}

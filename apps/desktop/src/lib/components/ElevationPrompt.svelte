@@ -53,7 +53,7 @@
     try {
       await persistDismissed();
       if (neverAsk) {
-        toastInfo("好的，以后可以随时在 设置 → 高级 页面以管理员身份重启");
+        toastInfo("好的，以后可以随时在「设置 → 系统」里以管理员身份重启");
       }
     } catch (e) {
       toast(false, `保存设置失败：${errText(e)}`);

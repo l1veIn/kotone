@@ -16,6 +16,10 @@
     type HotkeyStatus,
   } from "../../../../lib/ipc";
   import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
+  import { startPageOf, usesLegacyVoiceInput } from "../../../../lib/ipc/contracts";
+  import { companionName } from "$lib/stores/companion";
+  import { updateSettings } from "../../../../lib/ipc";
+  import HotkeyField from "../../../../lib/components/HotkeyField.svelte";
   import { Download } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import * as Dialog from "$lib/components/ui/dialog";
@@ -138,14 +142,25 @@
         />
       {/snippet}
     </SettingsRow>
-    <SettingsRow label="设置助手" description="重新选择游戏配置、检查模型与麦克风、设置热键，并完成一次真实发送测试。">
+    <div id="system-start-page" class="scroll-mt-16">
+      <SettingsRow label="打开软件时显示" description="打开 Kotone 时先看到哪一页。">
+        {#snippet control()}
+          <SelectField
+            class="w-32"
+            ariaLabel="打开软件时显示"
+            testid="start-page-select"
+            value={startPageOf($settingsStore.ui)}
+            options={[{ value: "chat", label: "聊天" }, { value: "voiceInput", label: "语音输入" }]}
+            onchange={(startPage) => void patchSettings({ ui: { startPage } }, startPage === "voiceInput" ? "打开时显示语音输入" : "打开时显示聊天")}
+          />
+        {/snippet}
+      </SettingsRow>
+    </div>
+    <SettingsRow label="引导" description="重新看一遍引导：添加 DeepSeek Key、设呼叫键。">
       {#snippet control()}
-        <Button variant="outline" size="sm" onclick={onOpenOnboarding}>重新运行向导</Button>
+        <Button variant="outline" size="sm" data-testid="reopen-onboarding" onclick={onOpenOnboarding}>重新打开引导</Button>
       {/snippet}
     </SettingsRow>
-  </SettingsSection>
-
-  <SettingsSection title="运行时">
     <div class="py-3.5">
       <ToggleField
         checked={autostartEnabled ?? false}
@@ -155,39 +170,21 @@
         onchange={(v) => void onAutostartChange(v)}
       />
     </div>
-    <div class="py-3.5">
-      <ToggleField
-        checked={$settingsStore.ui.autoStart}
-        label="启动 Kotone 后自动开始运行"
-        desc="自动加载识别模型、注册热键并显示悬浮窗；关闭时需手动点「启动」"
-        onchange={(v) =>
-          void patchSettings({ ui: { autoStart: v } }, v ? "已开启自动启动" : "已关闭自动启动，需手动点「启动」")}
-      />
-    </div>
   </SettingsSection>
 
-  <SettingsSection title="悬浮窗外观" description="只改变展示密度，不影响识别和发送。">
-    <div class="grid grid-cols-2 gap-2 py-3.5">
-      {#each [
-        { id: "capsule", name: "胶囊", desc: "更轻巧，减少遮挡" },
-        { id: "card", name: "卡片", desc: "信息完整，适合首次使用" },
-      ] as const as option}
-        {@const selected = $settingsStore.overlay.style === option.id}
-        <button
-          type="button"
-          aria-pressed={selected}
-          class="rounded-xl border px-3 py-2.5 text-left transition-colors {selected
-            ? 'border-primary/60 bg-primary/10'
-            : 'border-hairline hover:bg-muted/60'}"
-          onclick={() =>
-            void patchSettings({ overlay: { style: option.id } }, `悬浮窗外观已切换：${option.name}`)}
-        >
-          <p class="m-0 text-[13px] font-medium {selected ? 'text-primary' : 'text-foreground'}">{option.name}</p>
-          <p class="mt-0.5 mb-0 text-xs text-muted-foreground">{option.desc}</p>
-        </button>
-      {/each}
+  {#if !usesLegacyVoiceInput($settingsStore.ui)}
+    <div id="system-stop" class="scroll-mt-16">
+      <SettingsSection title="停下" testid="system-stop"
+        description={`停止${$companionName}正在做的事和所有自动化。四种方式：她操作游戏时按 Esc、停止热键、说“停下”、托盘菜单「停下」。`}>
+        <SettingsRow label="停止热键" description="Kotone 没在听的时候也有效；自动化按住的键会一起松开。" stacked testid="hotkey-section-automation-stop">
+          {#snippet control()}
+            <HotkeyField id="automation-stop" title="停止热键" value={$settingsStore.automationStopHotkey ?? ""} placeholder="如 Ctrl+Shift+F12" compact
+              onSave={async (key) => { settingsStore.set(await updateSettings({ automationStopHotkey: key })); }} />
+          {/snippet}
+        </SettingsRow>
+      </SettingsSection>
     </div>
-  </SettingsSection>
+  {/if}
 
   <SettingsSection title="Windows 兼容性">
     <SettingsRow label="热键实现" for="advanced-hotkey-backend">

@@ -1,10 +1,11 @@
+import { openVoiceInput } from "./nav";
 import { expect, test } from "@playwright/test";
 
 test("registered post-processors can be composed, tried out and edited", async ({
   page,
 }) => {
   await page.goto("/#/settings?onboarding=never");
-  await page.getByTestId("settings-nav-processing").click();
+  await openVoiceInput(page, "processing");
 
   await expect(page.getByRole("heading", { name: "文字处理" })).toBeVisible();
   await expect(page.getByTestId("postprocess-pipeline-select")).toHaveAttribute(
@@ -54,7 +55,7 @@ test("a discovered blocklist processor works by default and saves a custom CSV p
   page,
 }) => {
   await page.goto("/#/settings?onboarding=never");
-  await page.getByTestId("settings-nav-processing").click();
+  await openVoiceInput(page, "processing");
 
   await expect(page.getByTestId("postprocess-pipeline-select")).toHaveAttribute(
     "data-value",
@@ -85,7 +86,7 @@ test("a discovered blocklist processor works by default and saves a custom CSV p
 
 test("online polish is added best-effort after a saved connection", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
-  await page.getByTestId("settings-nav-processing").click();
+  await openVoiceInput(page, "processing");
   await page.getByTestId("add-postprocess-step").click();
   const addDialog = page.getByRole("dialog", { name: "添加步骤" });
   await expect(addDialog).toContainText("AI 润色");
@@ -107,7 +108,7 @@ test("online polish is added best-effort after a saved connection", async ({ pag
   await page.getByTestId("connection-save").click();
   await expect(page.getByText("已保存密钥")).toBeVisible();
 
-  await page.getByTestId("settings-nav-processing").click();
+  await openVoiceInput(page, "processing");
   const polishStep = page.getByTestId("postprocess-step-writing.openai-compat");
   await polishStep.getByLabel("API 连接").click();
   await page.getByRole("option").nth(1).click();

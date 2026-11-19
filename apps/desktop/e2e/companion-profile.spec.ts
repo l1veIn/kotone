@@ -1,13 +1,15 @@
 import { expect, test } from "@playwright/test";
+import { openChat, openSettingsTab } from "./nav";
 
-// ADR 022 / 023：「琴音」页的“角色 / 记忆 / 技能”。浏览器预览用内存里的示例工作区和示例角色。
+// ADR 022 / 023 / 028：角色页只有“角色 / 记忆 / 技能”（聊天从侧栏进入，设置在「设置」）。浏览器预览用内存里的示例工作区和示例角色。
 test("rename her, edit SOUL, memory and game memory, manage skills", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1100, height: 860 });
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-assistant").click();
-  for (const tab of ["chat", "identity", "memory", "skills", "settings"]) {
+  for (const tab of ["identity", "memory", "skills"]) {
     await expect(page.getByTestId(`assistant-nav-${tab}`)).toBeVisible();
   }
+  for (const tab of ["chat", "settings"]) await expect(page.getByTestId(`assistant-nav-${tab}`)).toHaveCount(0);
 
   // 角色：给当前角色（琴音）改名 → 页标题、侧栏都跟着变；最后改回来
   await page.getByTestId("assistant-nav-identity").click();
@@ -87,15 +89,16 @@ test("roles: switch, create, wake word check, placeholder avatar", async ({ page
   await expect(page.getByTestId("assistant-page-title")).toHaveText("大肥鱼");
   await expect(page.getByTestId("settings-nav-assistant")).toHaveText("大肥鱼");
   await expect(cards.filter({ hasText: "大肥鱼" }).getByTestId("role-current")).toBeVisible();
-  await page.getByTestId("assistant-nav-chat").click();
+  await openChat(page);
   await expect(page.getByTestId("avatar-face").first()).toBeVisible();
   await expect(page.getByLabel("跟大肥鱼说")).toBeVisible();
-  // 语音唤醒用她自己的唤醒词，不再给琴音的预置选项
-  await page.getByTestId("assistant-nav-settings").click();
+  // 语音唤醒用她自己的唤醒词，不再给琴音的预置选项（「设置 → 怎么叫她」）
+  await openSettingsTab(page, "call");
   await expect(page.getByTestId("wake-role-word")).toHaveText("你好大肥鱼");
-  await expect(page.getByTestId("assistant-settings-tab")).toContainText("说“你好大肥鱼”叫醒大肥鱼");
+  await expect(page.getByTestId("settings-call")).toContainText("说“你好大肥鱼”叫醒大肥鱼");
   await expect(page.getByRole("combobox", { name: "唤醒词" })).toHaveCount(0);
-  await page.getByTestId("assistant-nav-identity").click();
+  await page.getByTestId("settings-nav-assistant").click();
+  await expect(page.getByTestId("assistant-nav-identity")).toHaveAttribute("aria-current", "page");
 
   // 新建角色：没有头像时显示名字的第一个字（占位）
   await page.getByTestId("role-new-name").fill("星野");

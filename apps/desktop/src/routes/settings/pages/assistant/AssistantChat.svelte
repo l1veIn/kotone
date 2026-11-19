@@ -1,7 +1,14 @@
+<script lang="ts" module>
+  // 输入框草稿：她的设置搬进了「设置」（ADR 028），去改个设置再回来，草稿还在。
+  let keptDraft = "";
+</script>
+
 <script lang="ts">
-  // 「琴音 → 聊天」：和内置琴音 Agent 对话（ADR 014）。游戏内语音、快捷指令与这里是同一段“当前对话”。
+  // 聊天页（ADR 014 / 028，主界面）：和角色 Agent 对话。游戏内语音、快捷指令与这里是同一段“当前对话”。
   // 对话列表在侧边栏（AppSidebar）；这里是消息流与输入卡。空白对话时输入卡居中（参照 DeepSeek
-  // Harness 的 EmptyHero，MIT），配上琴音形象与起手提示。
+  // Harness 的 EmptyHero，MIT），配上角色形象、呼叫按钮与起手提示。三种状态（ADR 028 W5–W7）：
+  // 没有 AI 连接 → Key 卡片（和引导里填 Key 的是同一个组件，照 DSH“回到空白会话就检查有没有 Key”）；
+  // 已配置 → 呼叫按钮下面写当前的触发方式；用本地识别且没启动 → 呼叫按钮上方一行状态。
   import { companionName } from "$lib/stores/companion";
   import { CircleAlert, Eye } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
@@ -18,29 +25,63 @@
   import ComposerOptions from "../../../../lib/agentChat/ComposerOptions.svelte";
   import UsagePanel from "../../../../lib/agentChat/UsagePanel.svelte";
   import { pendingPrompt } from "../../../../lib/agentChat/pendingPrompt";
+  import DeepSeekKeyForm from "../../../../lib/components/DeepSeekKeyForm.svelte";
+  import type { DeepSeekSetupResult } from "../../../../lib/deepseekSetup";
+  import { startRuntime } from "../../../../lib/ipc";
+  import { LOCAL_ASR_LABELS, companionBindings } from "../../../../lib/ipc/contracts";
+  import { untrack } from "svelte";
+  import { asrStore } from "../../../../lib/stores/runtime";
   import KotoneAvatar from "../../../../lib/components/KotoneAvatar.svelte";
   import { avatarLetter, customAvatar, roleFaces } from "../../../../lib/stores/avatar";
 
-  let { ready, active, onOpenSettings, onOpenTalk }: {
-    /** 陪玩 AI 连接已选好（语音按钮用）。 */
+  let { ready, active, legacy = false, onOpenSettings, onOpenTalk, onOpenConnections, onKeyConnected, onBackToVoice }: {
+    /** 角色的 AI 连接已选好、有密钥。 */
     ready: boolean;
     active: boolean;
+    /** 0.1.x 升级后还没启用角色的用户（逃生通道）：Key 卡片下多一行“回到语音输入”。 */
+    legacy?: boolean;
     onOpenSettings: () => void;
-    /** 「琴音 → 设置 → 呼叫」：呼叫热键、唤醒词。 */
+    /** 「设置 → 怎么叫她」：呼叫键、唤醒词。 */
     onOpenTalk: () => void;
+    onOpenConnections: () => void;
+    /** Key 卡片连好了：接着设呼叫键（引导的“已连接”页）。 */
+    onKeyConnected: (result: DeepSeekSetupResult) => void;
+    onBackToVoice: () => void;
   } = $props();
 
   const chat = useAgentChat();
-  let draft = $state("");
+  let draft = $state(keptDraft);
+  $effect(() => { keptDraft = draft; });
   let textarea = $state<HTMLTextAreaElement>();
   let sendError = $state("");
   let sendNotice = $state("");
   let stopping = $state(false);
   const browserPreview = !isTauri;
   const inputBusy = $derived(!["idle", "success", "error"].includes($appState.state));
-  const notReady = $derived(chat.state?.notReadyReason ?? null);
+  /** 有 Key 但 Agent 仍报没准备好（例如选的模型不对）：顶部一条说明。没有 Key 时显示 Key 卡片。 */
+  const notReady = $derived(ready ? (chat.state?.notReadyReason ?? null) : null);
+  // 连接或角色的 AI 设置变了（填 Key、换连接、0.1.x 用户启用角色）：重新读一次 Agent 的状态，
+  // 否则“还没准备好”会停在打开软件时读到的那一刻（2026-11-20 真机：填完 Key 进聊天发不出去）。
+  const companionConnection = $derived(companionBindings($settingsStore?.assistant)?.connectionId ?? "");
+  $effect(() => {
+    companionConnection;
+    $settingsStore?.connections;
+    ready;
+    untrack(() => { if (chat.state) void chat.refresh().catch(() => {}); });
+  });
+  const asr = $derived($asrStore);
+  const localPending = $derived(asr === "local-stopped" || asr === "local-starting" || asr === "local-error");
+  let startingAsr = $state(false);
+  async function startLocal() {
+    if (startingAsr) return;
+    startingAsr = true;
+    try { await startRuntime(); }
+    catch (error) { toast(false, `本地语音识别没能启动：${errText(error)}`); }
+    finally { startingAsr = false; }
+  }
   const turns = $derived(buildTurns(chat.conversation?.messages ?? [], chat.runningHere ? chat.live : null, chat.runningHere));
-  const empty = $derived(!chat.loading && turns.length === 0);
+  // 逃生通道用户还没启用角色，对话存储没打开（ADR 027 静默）：直接按空白对话显示 Key 卡片。
+  const empty = $derived((!chat.loading || legacy) && turns.length === 0);
   /** 没挂到可见工具行上的询问（例如在另一段对话里）：单独列出来，不让它没人回答。 */
   const strayAsks = $derived(chat.asks.filter((ask) =>
     ask.conversationId !== chat.conversation?.id
@@ -66,12 +107,13 @@
     finally { stopping = false; }
   }
 
-  // 新手引导“打字问她”：聊天准备好后替玩家发出这句话。
+  // 引导结束后放好“你能做什么？”等：只预填进输入框，玩家自己点发送（D2）。
   $effect(() => {
     const text = $pendingPrompt;
-    if (!text || inputBusy || notReady || !chat.state) return;
+    if (!text || !ready) return;
     pendingPrompt.set(null);
-    void submit(text);
+    draft = text;
+    queueMicrotask(() => textarea?.focus());
   });
 
   function starter(text: string) {
@@ -116,7 +158,7 @@
       onstop={() => void stop()}
     >
       {#snippet tools()}
-        <CallKotoneButton {ready} />
+        <CallKotoneButton {ready} onSetCallKey={onOpenTalk} />
       {/snippet}
       {#snippet options()}
         <ComposerOptions onchanged={() => void chat.refresh()} />
@@ -145,14 +187,35 @@
     </div>
   {/if}
 
-  {#if empty}
-    <!-- 空白对话：琴音形象 + 问候 + 居中的输入卡 + 起手提示 -->
+  {#if !ready && empty}
+    <!-- 没有 AI 连接（W5）：和引导里的“填 Key”是同一个组件 -->
+    <div class="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-8" data-testid="agent-empty">
+      <div class="flex w-full max-w-[680px] flex-col items-center text-center" data-testid="chat-unconfigured">
+        <div class="mb-4 rounded-full shadow-[0_0_40px_-8px_var(--color-primary)]"><KotoneAvatar size={72} mood="asking" custom={$customAvatar} faces={$roleFaces} letter={$avatarLetter} /></div>
+        <DeepSeekKeyForm variant="card" testid="chat-key" onConnected={onKeyConnected} />
+        <p class="mt-4 mb-0 text-xs text-muted-foreground">用别的服务商？<button class="text-primary hover:underline" data-testid="chat-open-connections" onclick={onOpenConnections}>设置 → API 连接</button></p>
+        {#if legacy}
+          <p class="mt-1.5 mb-0 text-xs text-muted-foreground">只用语音输入法？<button class="text-primary hover:underline" data-testid="chat-back-to-voice" onclick={onBackToVoice}>回到语音输入</button></p>
+        {/if}
+      </div>
+    </div>
+  {:else if empty}
+    <!-- 空白对话（W6 / W7）：角色形象 + 呼叫按钮 + 居中的输入卡 + 起手提示 -->
     <div class="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-8" data-testid="agent-empty">
       <div class="w-full max-w-[680px]">
         <div class="mb-6 flex flex-col items-center text-center">
-          <div class="mb-4 shadow-[0_0_40px_-8px_var(--color-primary)] rounded-full"><KotoneAvatar size={80} mood="asking" custom={$customAvatar} faces={$roleFaces} letter={$avatarLetter} /></div>
-          <h2 class="m-0 text-2xl font-semibold tracking-tight">想让{$companionName}做点什么？</h2>
-          <p class="mt-2 mb-0 text-[13px] text-muted-foreground">做自动化、看游戏聊天、设提醒……在游戏里呼叫她说的话也会出现在这里。</p>
+          <div class="mb-4 shadow-[0_0_40px_-8px_var(--color-primary)] rounded-full"><KotoneAvatar size={80} mood={localPending ? "note" : "asking"} custom={$customAvatar} faces={$roleFaces} letter={$avatarLetter} /></div>
+          {#if localPending}
+            <div class="mb-3 flex flex-wrap items-center justify-center gap-2 text-xs" data-testid="chat-local-asr">
+              <span class="rounded-full border px-2.5 py-0.5 {asr === 'local-error' ? 'border-destructive/50 text-destructive' : 'border-warning/50 text-warning'}">
+                本地语音识别 · {LOCAL_ASR_LABELS[asr as keyof typeof LOCAL_ASR_LABELS]}{asr === "local-starting" ? "…" : ""}
+              </span>
+              {#if asr !== "local-starting"}
+                <Button size="sm" variant="outline" class="h-7" disabled={startingAsr} data-testid="chat-local-asr-start" onclick={() => void startLocal()}>{asr === "local-error" ? "重试" : "启动"}</Button>
+              {/if}
+            </div>
+          {/if}
+          <CallKotoneButton size="lg" {ready} testid="chat-call" onSetCallKey={onOpenTalk} />
         </div>
         {@render composer()}
         <div class="mt-4 flex flex-wrap justify-center gap-2" data-testid="agent-starters">
@@ -171,6 +234,9 @@
       onAnswer={(askId, answer) => chat.answer(askId, answer)}
     />
     <div class="mx-auto w-full max-w-[840px] shrink-0 px-6 pb-4">
+      {#if !ready}
+        <div class="mb-3 flex justify-center" data-testid="chat-unconfigured"><DeepSeekKeyForm variant="card" testid="chat-key" onConnected={onKeyConnected} /></div>
+      {/if}
       <UsagePanel messages={chat.conversation?.messages ?? []} running={chat.runningHere} />
       {@render composer()}
     </div>

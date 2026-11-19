@@ -1,39 +1,56 @@
 <script lang="ts">
-  // 呼叫琴音（首页、聊天窗口）：和热键一样，按一次就在右下角气泡里听你说，说完自动交给她；
-  // 她在听时再按一次立刻提交。相当于按键版的语音唤醒，没有“按住说话”。
+  // 聊天页的呼叫按钮（ADR 028）：和呼叫键一样，按一次就在右下角气泡里听你说，说完自动交给她；
+  // 她在听时再按一次立刻提交。用本地识别且还没启动时，点一下会先启动本地识别，准备好就开始听。
   import { companionName } from "$lib/stores/companion";
   import { Mic } from "@lucide/svelte";
   import { callKotone } from "../assistant";
   import { hotkeyLabel } from "../hotkeyCombo";
-  import { companionBindings, isTauri } from "../ipc";
+  import { companionBindings, isTauri, startRuntime } from "../ipc";
   import { appState } from "../stores/state";
-  import { runtimeStore } from "../stores/runtime";
+  import { asrStore } from "../stores/runtime";
   import { errText, settingsStore, toast } from "../stores/ui";
+  import { wakePhrases } from "../wake";
 
-  let { size = "sm", ready = true, testid = "call-kotone" }: {
-    /** sm：聊天输入框里的小按钮；lg：首页的大按钮。 */
+  let { size = "sm", ready = true, testid = "call-kotone", onSetCallKey }: {
+    /** sm：聊天输入框里的小按钮；lg：聊天页中间的大按钮。 */
     size?: "sm" | "lg";
     /** AI 连接选好了没有。 */
     ready?: boolean;
     testid?: string;
+    /** 没有呼叫键时，说明里给一个“设一个呼叫键 →”。 */
+    onSetCallKey?: () => void;
   } = $props();
 
   const name = $derived($companionName);
   const hotkey = $derived(companionBindings($settingsStore?.assistant)?.hotkey.trim() ?? "");
+  const wake = $derived($settingsStore?.assistant.wake);
+  const wakeWord = $derived(wake?.enabled ? (wakePhrases.find((p) => p.value === wake.phrase)?.label ?? wake.phrase) : "");
   const listening = $derived($appState.purpose === "assistant" && !$appState.legacyReminder && $appState.state === "listening");
-  const blocked = $derived(!isTauri ? "仅限桌面版"
-    : $runtimeStore?.phase !== "running" ? "先点右上角「启动」"
-    : !ready ? "先选好 AI 连接" : "");
-  const hint = $derived(blocked || (listening ? "说完了？再按一次直接交给她"
-    : hotkey ? `或在游戏里按 ${hotkeyLabel(hotkey)}` : "也可以在「设置」里给它配一个热键"));
+  const asr = $derived($asrStore);
+  const preparing = $derived(asr === "local-starting" || asr === "online-preparing");
+  const blocked = $derived(!isTauri ? "仅限桌面版" : !ready ? "先配好 AI 连接" : "");
   let calling = $state(false);
+  const label = $derived(listening ? `${name}在听…` : calling && preparing ? "正在准备…" : `呼叫${name}`);
+  const hint = $derived(blocked
+    || (listening ? "说完了？再按一次直接交给她"
+      : asr === "local-stopped" || asr === "local-error" ? "点一下会先启动本地识别，准备好就开始听"
+      : hotkey && wakeWord ? `按 ${hotkeyLabel(hotkey)} 或者说“${wakeWord}”`
+      : hotkey ? `或在游戏里按 ${hotkeyLabel(hotkey)}`
+      : wakeWord ? `或者说“${wakeWord}”`
+      : ""));
 
   async function call() {
     if (blocked || calling) return;
     calling = true;
-    try { await callKotone(); }
-    catch (error) { toast(false, `呼叫失败：${errText(error)}`); }
-    finally { calling = false; }
+    try {
+      // 语音识别没准备好：先启动（本地识别）或等它准备好（在线识别），再开始听。
+      if (asr !== "local-running" && asr !== "online-ready") await startRuntime();
+      await callKotone();
+    } catch (error) {
+      toast(false, `呼叫失败：${errText(error)}`);
+    } finally {
+      calling = false;
+    }
   }
 </script>
 
@@ -44,10 +61,15 @@
         disabled:cursor-not-allowed disabled:opacity-50
         {listening ? 'bg-brand-pink text-white' : 'bg-primary text-primary-foreground hover:brightness-110'}"
       onclick={() => void call()}>
-      <Mic class="size-5 {listening ? 'animate-pulse' : ''}" />
-      {listening ? `${name}在听…` : `呼叫${name}`}
+      <Mic class="size-5 {listening || calling ? 'animate-pulse' : ''}" />
+      {label}
     </button>
-    <p class="m-0 text-xs text-muted-foreground" data-testid={`${testid}-hint`}>{hint}</p>
+    <p class="m-0 text-xs text-muted-foreground" data-testid={`${testid}-hint`}>
+      {hint}
+      {#if !blocked && !listening && !hotkey && onSetCallKey}
+        {hint ? " · " : ""}<button type="button" class="text-primary hover:underline" data-testid={`${testid}-set-key`} onclick={onSetCallKey}>设一个呼叫键 →</button>
+      {/if}
+    </p>
   </div>
 {:else}
   <button type="button" data-testid={testid} disabled={!!blocked || calling} aria-pressed={listening}
@@ -56,8 +78,8 @@
       disabled:cursor-not-allowed disabled:opacity-50
       {listening ? 'bg-brand-pink/15 text-brand-pink' : 'bg-muted/70 text-foreground hover:bg-muted'}"
     onclick={() => void call()}>
-    <Mic class="size-3.5 {listening ? 'animate-pulse' : ''}" />
-    {listening ? "在听…" : `呼叫${name}`}
+    <Mic class="size-3.5 {listening || calling ? 'animate-pulse' : ''}" />
+    {listening ? "在听…" : calling && preparing ? "准备中…" : `呼叫${name}`}
     {#if hotkey && !blocked && !listening}<span class="text-[10px] text-muted-foreground">{hotkeyLabel(hotkey)}</span>{/if}
   </button>
 {/if}

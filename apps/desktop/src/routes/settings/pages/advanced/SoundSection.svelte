@@ -1,6 +1,9 @@
 <script lang="ts">
-  import { patchSettings, settingsStore } from "../../../../lib/stores/ui";
-  import { previewSfx } from "../../../../lib/ipc";
+  // 声音（ADR 028：原「音效」，麦克风也搬到这里——语音输入和呼叫共用一个麦克风）。
+  import { onMount } from "svelte";
+  import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
+  import { listAudioDevices, previewSfx, setAudioDevice, type AudioDevice } from "../../../../lib/ipc";
+  import ToggleField from "$lib/components/settings/ToggleField.svelte";
   import { Play } from "@lucide/svelte";
   import { Switch } from "$lib/components/ui/switch";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
@@ -8,6 +11,11 @@
   import SelectField from "$lib/components/settings/SelectField.svelte";
 
   type EventKind = "record" | "send";
+
+  let devices = $state<AudioDevice[]>([]);
+  onMount(async () => {
+    try { devices = await listAudioDevices(); } catch (error) { toast(false, `读取麦克风失败：${errText(error)}`); }
+  });
 
   const recordSounds = [
     { value: "rise", label: "上扬" },
@@ -41,8 +49,33 @@
 
 {#if $settingsStore}
   <div class="space-y-6">
+  <SettingsSection title="麦克风" description="语音输入和呼叫共用。" testid="sound-microphone">
+    <SettingsRow label="麦克风" description="说话用的输入设备。">
+      {#snippet control()}
+        <div class="w-72 max-w-full">
+          <SelectField size="md" ariaLabel="麦克风" value={$settingsStore.audioDeviceId}
+            options={devices.map((device) => ({ value: device.id, label: device.name }))}
+            onchange={async (id) => {
+              try {
+                await setAudioDevice(id);
+                settingsStore.update((s) => (s ? { ...s, audioDeviceId: id } : s));
+                toast(true, "麦克风已切换");
+              } catch (err) {
+                toast(false, `切换麦克风失败：${errText(err)}`);
+              }
+            }} />
+        </div>
+      {/snippet}
+    </SettingsRow>
+    <div class="py-3.5">
+      <ToggleField checked={$settingsStore.lowerSpeakerVolumeWhileListening} label="录音时降低扬声器音量"
+        desc="语音输入录音或角色倾听时暂时降低扬声器音量，结束后恢复。"
+        onchange={(enabled) => void patchSettings({ lowerSpeakerVolumeWhileListening: enabled }, "扬声器设置已保存")} />
+    </div>
+  </SettingsSection>
+
   <p class="m-0 px-1 text-[13px] leading-relaxed text-muted-foreground">
-    不开悬浮窗、或全屏游戏时，也能听到录音与发送是否生效。录制音与发送音可分别开关、分别调音量、分别选音效。
+    提示音：不开悬浮窗、或全屏游戏时，也能听到录音与发送是否生效。录制音与发送音可分别开关、分别调音量、分别选音效。
   </p>
 
   {#each cards as card}

@@ -1,3 +1,4 @@
+import { openSettingsTab } from "./nav";
 import { expect, test } from "@playwright/test";
 
 // 「自动化」页（ADR 013 §8）：浏览器预览用示例数据，不运行任何程序。
@@ -133,8 +134,8 @@ test("saved automations can be created with params and a schedule, edited and de
 
 test("a quick command can run a saved automation with its own args instead of asking the AI", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
-  await page.getByTestId("settings-nav-assistant").click();
-  await page.getByTestId("assistant-nav-settings").click();
+  // 快捷指令在「设置 → 怎么叫她」（ADR 028）
+  await openSettingsTab(page, "call");
   const companion = page.getByTestId("companion-settings");
   await expect(companion.getByRole("heading", { name: "快捷指令", exact: true })).toBeVisible();
   await companion.getByRole("button", { name: "添加", exact: true }).click();

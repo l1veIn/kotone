@@ -258,6 +258,18 @@ const mock: MockStore = {
       ],
     },
     {
+      id: "deepseek-asr",
+      engineId: "deepseek-asr",
+      displayName: "DeepSeek 语音识别（在线）",
+      sizeBytes: 0,
+      downloaded: true,
+      io: "offline",
+      backend: "remote",
+      recipe: "deepseek-asr",
+      tag: "online-asr",
+      configSchema: [],
+    },
+    {
       id: "iflytek-asr",
       engineId: "iflytek-asr",
       displayName: "科大讯飞语音听写（在线）",
@@ -397,8 +409,12 @@ export async function getStartupOptions(): Promise<StartupOptions> {
 }
 
 export async function getSettings(): Promise<Settings> {
-  if (mockQuery("mockLegacyUpgrade") === "pending" && mock.settings.ui.legacyUpgrade === undefined) {
-    mock.settings.ui.legacyUpgrade = "pending";
+  initMockRuntime();
+  const legacyMode = mockQuery("mockLegacyUpgrade");
+  if ((legacyMode === "pending" || legacyMode === "dismissed") && mock.settings.ui.legacyUpgrade === undefined) {
+    // 0.1.x 升级用户；dismissed = 上次选了“继续使用语音输入法”之后再打开（ADR 028 流程 B2）。
+    mock.settings.ui.legacyUpgrade = legacyMode;
+    if (legacyMode === "dismissed") mock.settings.ui.startPage = "voiceInput";
     mock.settings.assistant.hotkey = "";
     if (mockQuery("mockLegacyReminder") === "configured") {
       mock.settings.assistant.hotkey = "Alt+F9";
@@ -911,16 +927,30 @@ export async function cancelHotkeyCapture(): Promise<void> {
 let mockStarted: { engineId: string; modelId: string } | null = null;
 
 let mockPhase: RuntimePhase = "stopped";
+let mockRuntimeError: string | null = null;
+let mockRuntimeInitialized = false;
+const runtimeListeners = new Set<(status: RuntimeStatus) => void>();
+/** 在线识别（与后端 `kotone_stt::model::is_remote_model` 同一份清单）。 */
+const REMOTE_ASR_IDS = new Set(["openai-compat-stt", "volcano-asr", "iflytek-asr", "deepseek-asr"]);
+
+function mockActiveModelId(): string {
+  const s = mock.settings;
+  if (s.activeModelId.trim()) return s.activeModelId.trim();
+  return (s.engineOptions[s.sttEngine] as Record<string, unknown> | undefined)?.model as string ??
+    (s.sttEngine === "sherpa-streaming"
+      ? "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05"
+      : "default");
+}
+
+function mockAsrIsLocal(): boolean {
+  return !REMOTE_ASR_IDS.has(mockActiveModelId());
+}
 
 /** mock 的 restartNeeded 推导：Running 且快照 ≠ 当前配置 */
 function mockRuntimeStatus(stage: string | null = null): RuntimeStatus {
   const s = mock.settings;
   const engineId = s.sttEngine;
-  const modelId =
-    (s.engineOptions[engineId] as Record<string, unknown> | undefined)?.model as string ??
-    (engineId === "sherpa-streaming"
-      ? "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05"
-      : "default");
+  const modelId = mockActiveModelId();
   const restartNeeded =
     mockPhase === "running" &&
     mockStarted !== null &&
@@ -933,22 +963,90 @@ function mockRuntimeStatus(stage: string | null = null): RuntimeStatus {
     modelId,
     interactionMode: s.interactionMode,
     stage,
+    asrLocal: mockAsrIsLocal(),
+    error: mockRuntimeError,
   };
 }
 
+function publishRuntime() {
+  const status = mockRuntimeStatus();
+  for (const listener of runtimeListeners) listener(status);
+}
+
+/** 浏览器预览里代替 `kotone://runtime` 事件：启动、停止、换识别模型后推送全量状态。 */
+export function subscribeBrowserRuntime(listener: (status: RuntimeStatus) => void): () => void {
+  runtimeListeners.add(listener);
+  return () => runtimeListeners.delete(listener);
+}
+
+/** 在线识别打开即就绪（对齐壳侧 `runtime::after_asr_change` 与启动时的自动就绪）。 */
+function reconcileMockRuntime(previousWasLocal: boolean | null) {
+  const local = mockAsrIsLocal();
+  if (!local) {
+    mockRuntimeError = null;
+    mockPhase = "running";
+    mockStarted = { engineId: mock.settings.sttEngine, modelId: mockActiveModelId() };
+  } else if (previousWasLocal === false) {
+    // 从在线换成本地：立即启动一次（D9）；模型没下好时停在“出问题了”。
+    startMockLocal();
+  }
+  publishRuntime();
+}
+
+function startMockLocal(): void {
+  const modelId = mockActiveModelId();
+  const model = mock.models.find((item) => item.id === modelId);
+  const engine = mock.engines.find((item) => item.id === mock.settings.sttEngine);
+  const ready = mockQuery("mockAsr") === "local-ready" || model?.downloaded || engine?.isReady;
+  if (!ready) {
+    mockPhase = "stopped";
+    mockStarted = null;
+    mockRuntimeError = `模型「${model?.displayName ?? modelId}」还没下载，请先在「语音输入」里下载`;
+    throw new Error(mockRuntimeError);
+  }
+  mockRuntimeError = null;
+  mockPhase = "running";
+  mockStarted = { engineId: mock.settings.sttEngine, modelId };
+}
+
+function initMockRuntime() {
+  if (mockRuntimeInitialized) return;
+  mockRuntimeInitialized = true;
+  // ?mockAsr=online：配好了 DeepSeek，用在线识别；?mockAsr=local-ready：本地模型已下载。
+  if (mockQuery("mockAsr") === "online") {
+    mock.settings.activeModelId = "deepseek-asr";
+    mock.settings.sttEngine = "deepseek-asr";
+    if (!mock.settings.connections.some((c) => c.id === "deepseek-mock")) {
+      mock.settings.connections.push({ id: "deepseek-mock", displayName: "DeepSeek", kind: "remote", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-flash" });
+      mockConnectionSecrets.set("deepseek-mock", "sk-mock");
+    }
+  }
+  // ?mockCompanion=ready：角色已配好 DeepSeek（识别方式不动）。
+  if (mockQuery("mockCompanion") === "ready" && !mock.settings.connections.some((c) => c.id === "deepseek-companion")) {
+    mock.settings.connections.push({ id: "deepseek-companion", displayName: "DeepSeek", kind: "remote", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-flash" });
+    mockConnectionSecrets.set("deepseek-companion", "sk-mock");
+    mock.settings.assistant.connectionId = "deepseek-companion";
+  }
+  if (!mockAsrIsLocal()) reconcileMockRuntime(null);
+  else if (mock.settings.ui.autoStart) {
+    try { startMockLocal(); } catch { /* 停在“出问题了” */ }
+  }
+}
+
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
+  initMockRuntime();
   return mockRuntimeStatus();
 }
 
 /** 启动：warmup 引擎 → 注册热键 → 显示悬浮窗；Running+restartNeeded 时等价重启 */
 export async function startRuntime(): Promise<RuntimeStatus> {
-  const engine = mock.engines.find((item) => item.id === mock.settings.sttEngine);
-  if (!engine?.isReady) {
-    throw new Error("X-ASR 模型未下载。请先下载模型再启动");
+  initMockRuntime();
+  if (mockAsrIsLocal()) {
+    try { startMockLocal(); }
+    finally { publishRuntime(); }
+  } else {
+    reconcileMockRuntime(null);
   }
-  mockPhase = "running";
-  const s = mockRuntimeStatus();
-  mockStarted = { engineId: s.engineId ?? "", modelId: s.modelId ?? "" };
   return mockRuntimeStatus();
 }
 
@@ -956,6 +1054,8 @@ export async function startRuntime(): Promise<RuntimeStatus> {
 export async function stopRuntime(): Promise<RuntimeStatus> {
   mockPhase = "stopped";
   mockStarted = null;
+  mockRuntimeError = null;
+  publishRuntime();
   return mockRuntimeStatus();
 }
 
@@ -1063,12 +1163,15 @@ export async function openModelDestDir(id: string): Promise<void> {
 
 /** 切换引擎的活动模型（Running 时置 restartNeeded，不自动重启） */
 export async function setActiveModel(engineId: string, modelId: string): Promise<void> {
+  const wasLocal = mockAsrIsLocal();
   const spec = mock.models.find((item) => item.id === modelId);
   const resolvedEngine = spec?.engineId ?? engineId;
   const opts = (mock.settings.engineOptions[resolvedEngine] ??= {}) as Record<string, unknown>;
   opts.model = modelId;
   mock.settings.activeModelId = modelId;
   mock.settings.sttEngine = resolvedEngine;
+  mockRuntimeError = null;
+  try { reconcileMockRuntime(wasLocal); } catch { publishRuntime(); }
   return;
 }
 
@@ -1100,7 +1203,7 @@ const mockCatalog: CatalogModel[] = [
     category: "tts", id: "deepseek-tts", engineId: "deepseek", displayName: "DeepSeek 语音合成（在线，默认）",
     description: "DeepSeek 官方语音，默认用 AI 连接里的 DeepSeek 与密钥，声音海星（女声）/暗潮（男声）；按字数计费，每次播报都会把文字发给 DeepSeek，相同的话复用缓存；不支持调语速",
     sizeBytes: 0, backend: "remote", downloaded: true,
-    ready: false, state: "not-configured", reason: "还没有 DeepSeek 连接：请在「高级 → API 连接」里添加 DeepSeek", active: false,
+    ready: false, state: "not-configured", reason: "还没有 DeepSeek 连接：请在「设置 → API 连接」里添加 DeepSeek", active: false,
     recommended: true, languages: ["zh"], dataEgress: "text",
     configSchema: [
       { key: "connection", label: "DeepSeek 连接（留空 = 用 AI 连接里的 DeepSeek）", kind: "connection", default: "", options: [], required: false },
@@ -1266,7 +1369,7 @@ export async function companionStatus(): Promise<CompanionStatus> {
   const reason = !connectionId
     ? "还没有选 AI 连接：请在「设置 → API 连接」里添加一条，并设为在用的连接"
     : !ocr
-          ? "看游戏聊天需要文字识别模型：请在「高级 → 模型 → 文字识别」下载并选择一个"
+          ? "看游戏聊天需要文字识别模型：请在「设置 → 模型 → 文字识别」下载并选择一个"
           : null;
   return {
     ready: reason === null,

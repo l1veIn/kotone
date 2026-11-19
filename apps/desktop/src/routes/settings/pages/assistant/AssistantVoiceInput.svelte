@@ -19,7 +19,7 @@
   const inputBusy = $derived(!["idle", "success", "error"].includes($appState.state));
   const own = $derived($voice.phase !== "idle");
   const blocked = $derived(!isTauri ? "语音输入仅限桌面版"
-    : $runtimeStore?.phase !== "running" ? "请先启动 Kotone"
+    : $runtimeStore?.phase !== "running" ? ($runtimeStore?.asrLocal === false ? "语音识别还没准备好" : "本地语音识别未启动")
     : !ready ? "请先选择 AI 连接"
     : submitting ? "正在创建提醒"
     : inputBusy && !own ? ($appState.purpose === "assistant" ? "助手语音尚未结束" : "请先结束当前输入") : "");

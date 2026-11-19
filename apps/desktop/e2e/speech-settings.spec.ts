@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { openSettingsTab, openVoiceInput } from "./nav";
 import type { SpeechModelStatus } from "../src/lib/assistant";
 
 declare global {
@@ -83,8 +84,7 @@ async function openNativeSettings(page: Page) {
     }, { shouldMockEvents: true });
     await import("/src/main.ts");
   });
-  await page.getByTestId("settings-nav-assistant").click();
-  await page.getByTestId("assistant-nav-settings").click();
+  await openSettingsTab(page, "reply");
   await expect(page.getByTestId("speech-settings")).toBeVisible();
 }
 
@@ -116,8 +116,7 @@ test("browser preview clearly shows an uninstalled model, disables download and 
   });
   await page.setViewportSize({ width: 1040, height: 1150 });
   await page.goto("/#/settings?onboarding=never");
-  await page.getByTestId("settings-nav-assistant").click();
-  await page.getByTestId("assistant-nav-settings").click();
+  await openSettingsTab(page, "reply");
   await expect(page.getByTestId("auto-speech-info")).toBeVisible();
   await page.getByLabel("语音引擎", { exact: true }).click();
   await page.getByRole("option", { name: "Kokoro · 本地中文语音", exact: true }).click();
@@ -161,24 +160,21 @@ test("native download progress, failure, retry and cancellation remain actionabl
 
 test("leaving the page discards old model and voice responses while fresh events win over a snapshot", async ({ page }) => {
   await openNativeSettings(page);
-  await page.getByTestId("settings-nav-history").click();
+  await openVoiceInput(page, "history");
   await page.evaluate(() => { window.speechTest.holdSnapshots = true; window.speechTest.holdVoices = true; });
-  await page.getByTestId("settings-nav-assistant").click();
-  await page.getByTestId("assistant-nav-settings").click();
+  await openSettingsTab(page, "reply");
   await page.waitForFunction(() => window.speechTest.pendingSnapshots() === 1 && window.speechTest.pendingVoices() === 1);
-  await page.getByTestId("settings-nav-history").click();
+  await openVoiceInput(page, "history");
   await page.evaluate(() => { window.speechTest.holdSnapshots = false; window.speechTest.holdVoices = false; });
-  await page.getByTestId("settings-nav-assistant").click();
-  await page.getByTestId("assistant-nav-settings").click();
+  await openSettingsTab(page, "reply");
   await expect(page.getByTestId("speech-model")).toContainText("尚未下载");
   await page.evaluate(() => { window.speechTest.resolveSnapshots(); window.speechTest.resolveVoices(); });
   await expect(page.getByTestId("speech-model")).toContainText("尚未下载");
   await expect(page.getByLabel("播报声音", { exact: true })).toHaveText("中文女声 001");
 
-  await page.getByTestId("settings-nav-history").click();
+  await openVoiceInput(page, "history");
   await page.evaluate(() => { window.speechTest.holdSnapshots = true; });
-  await page.getByTestId("settings-nav-assistant").click();
-  await page.getByTestId("assistant-nav-settings").click();
+  await openSettingsTab(page, "reply");
   await page.waitForFunction(() => window.speechTest.pendingSnapshots() === 1);
   await page.evaluate(async () => {
     await window.speechTest.push({ phase: "downloading", downloading: true, downloadedBytes: 72 });
@@ -189,8 +185,7 @@ test("leaving the page discards old model and voice responses while fresh events
 
 test("speech engine: automatic by default, DeepSeek or an explicit system choice are saved distinctly", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
-  await page.getByTestId("settings-nav-assistant").click();
-  await page.getByTestId("assistant-nav-settings").click();
+  await openSettingsTab(page, "reply");
   const engine = page.getByLabel("语音引擎", { exact: true });
   await expect(engine).toHaveAttribute("data-value", "auto");
   const saved = async () => (await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings())).assistant;

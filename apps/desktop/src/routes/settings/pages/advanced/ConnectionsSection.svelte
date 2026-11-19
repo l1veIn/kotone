@@ -1,6 +1,6 @@
 <script lang="ts">
   /*
-   * 高级 → API 连接：给琴音（内置 Agent）用的主流大模型。
+   * 设置 → API 连接：给琴音（内置 Agent）用的主流大模型。
    * 版式参照 DeepSeek Harness 的模型 / 提供商设置（ModelsSection、ProviderEditor、CustomProviderCard、
    * ApiKeyInput，MIT）：上面是“你的连接”卡片列表（密钥状态点、琴音在用、能力自检），下面是按分组展示的
    * 预置提供商；选中一家后在编辑器里改地址、模型（列表里选或手填）、密钥（只写）。Kotone 自己的实现。

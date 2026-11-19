@@ -1,27 +1,32 @@
 import { expect, test } from "@playwright/test";
+import { openVoiceInput } from "./nav";
 
+// ADR 028：原「设置 → 其他热键」拆开了——语音输入的四个热键在「语音输入 → 输入」，
+// 启动 / 停止本地语音识别的快捷键在识别卡片里（只在本地识别时出现），停止热键在「设置 → 系统 → 停下」。
 test("named hotkey rows render with defaults and can be configured/cleared", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
-  await page.getByTestId("settings-nav-advanced").click();
-  await page.getByTestId("advanced-nav-hotkeys").click();
+  await openVoiceInput(page);
+  const rows = page.getByTestId("voice-hotkeys");
 
-  // 五个具名热键行都在：频道切换（默认生效）/ 重发 / 文字处理开关 / 切换流程 /
-  // 启动停止 Kotone（应用级热键，停止时也生效）
-  await expect(page.getByText("频道切换热键", { exact: true })).toBeVisible();
-  await expect(page.getByText("重发最近一条热键", { exact: true })).toBeVisible();
-  await expect(page.getByText("文字处理开关热键", { exact: true })).toBeVisible();
-  await expect(page.getByText("切换文字处理流程热键", { exact: true })).toBeVisible();
-  await expect(page.getByText("启动 / 停止 Kotone 热键", { exact: true })).toBeVisible();
+  // 四个语音输入的热键行：频道切换（默认生效）/ 重发 / 文字处理开关 / 切换流程
+  await expect(rows.getByText("频道切换热键", { exact: true })).toBeVisible();
+  await expect(rows.getByText("重发最近一条热键", { exact: true })).toBeVisible();
+  await expect(rows.getByText("文字处理开关热键", { exact: true })).toBeVisible();
+  await expect(rows.getByText("切换文字处理流程热键", { exact: true })).toBeVisible();
+  // 本地识别（默认）：启动快捷键在识别卡片里，没启动时也有效
+  await expect(page.getByTestId("asr-toggle-hotkey")).toContainText("启动快捷键");
 
-  // 默认：开关、切流程与启动停止均为「未设置」，频道切换沿用默认 Shift+CapsLock
+  // 默认：重发、开关、切流程与启动快捷键均为「未设置」，频道切换沿用默认 Shift+CapsLock
   const toggleInput = page.getByTestId("hotkey-input-post-process-toggle");
   const cycleInput = page.getByTestId("hotkey-input-post-process-cycle");
+  await expect(page.getByTestId("hotkey-input-channel-cycle")).toHaveValue("Shift+CapsLock");
+  await expect(page.getByTestId("hotkey-input-resend-last")).toHaveValue("");
   await expect(toggleInput).toHaveValue("");
   await expect(cycleInput).toHaveValue("");
   await expect(page.getByTestId("hotkey-input-runtime-toggle")).toHaveValue("");
-  await expect(
-    page.getByText("未设置（默认关闭，不会误触发）", { exact: true }),
-  ).toHaveCount(4);
+  for (const id of ["resend-last", "post-process-toggle", "post-process-cycle", "runtime-toggle"]) {
+    await expect(page.getByTestId(`hotkey-status-${id}`), id).toHaveText("未设置");
+  }
 
   // 录入文字处理开关热键
   await toggleInput.fill("F9");
@@ -35,11 +40,11 @@ test("named hotkey rows render with defaults and can be configured/cleared", asy
   await expect(page.getByText("切换文字处理流程热键已保存并生效：F10", { exact: true })).toBeVisible();
   await expect(page.getByText("当前生效：F10", { exact: true })).toBeVisible();
 
-  // 与录制热键冲突：预检拒绝并 toast（主键默认 CapsLock）
+  // 与语音输入热键冲突：预检拒绝并 toast（主键默认 CapsLock）
   await toggleInput.fill("CapsLock");
   await toggleInput.press("Enter");
   await expect(
-    page.getByText("文字处理开关热键与录制热键（CapsLock）冲突，请换一个", { exact: true }),
+    page.getByText("文字处理开关热键与语音输入热键（CapsLock）冲突，请换一个", { exact: true }),
   ).toBeVisible();
 
   // 清除后回到未设置

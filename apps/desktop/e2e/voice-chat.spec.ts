@@ -1,12 +1,12 @@
 import { expect, test } from "@playwright/test";
+import { openSettingsTab } from "./nav";
 
-// 琴音陪玩 → 设置 → 游戏语音（ADR 020）：自动安装 VB-CABLE、开关、改 / 改回 Windows 默认麦克风、测试。
+// 设置 → 她怎么回答 → 游戏语音（ADR 020 / 028）：自动安装 VB-CABLE、开关、改 / 改回 Windows 默认麦克风、测试。
 // 浏览器预览里安装与设备是模拟的；设置写进 config.json `voiceChat`。
 test("game voice chat can be installed, enabled, routed to the Windows default mic and tested", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/#/settings?onboarding=never");
-  await page.getByTestId("settings-nav-assistant").click();
-  await page.getByTestId("assistant-nav-settings").click();
+  await openSettingsTab(page, "reply");
   const section = page.getByTestId("voice-chat-settings");
   await expect(page.locator("#voice-chat-settings")).toContainText("游戏语音");
   await expect(page.getByTestId("voice-chat-state")).toContainText("还没有安装");

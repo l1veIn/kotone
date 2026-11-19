@@ -40,7 +40,7 @@
 
 <SettingsSection title="对话气泡" description="用语音说话时（呼叫、唤醒、她追问你），在游戏所在屏幕的角落显示她在听、在想、在说什么。鼠标会穿过气泡，不挡操作。" id="bubble-settings">
   <div data-testid="bubble-settings" class="contents">
-    <SettingsRow label="显示对话气泡" description="关掉后回到旧方式：录音状态用语音输入的悬浮窗，回答用弹幕。">
+    <SettingsRow label="显示对话气泡" description="关掉后只用声音和弹幕回答你；悬浮窗只属于语音输入，不会拿来显示她。">
       {#snippet control()}
         <Switch data-testid="bubble-enabled" bind:checked={() => bubble.enabled, (checked) => void save({ enabled: checked }, checked ? "对话气泡已开启" : "对话气泡已关闭")} aria-label="显示对话气泡" />
       {/snippet}

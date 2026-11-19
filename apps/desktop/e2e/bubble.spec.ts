@@ -1,3 +1,4 @@
+import { openSettingsTab } from "./nav";
 import { expect, test, type Page } from "@playwright/test";
 
 // 琴音的对话气泡页（#/companion）：浏览器预览里用 kotone-bubble-preview 事件喂状态。
@@ -59,9 +60,11 @@ test.describe("对话气泡", () => {
   test("设置页有对话气泡分区：默认开启、右下角，改位置会保存", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1280, height: 820 });
     await page.goto("/#/settings?onboarding=never");
-    await page.getByTestId("settings-nav-assistant").click();
-  await page.getByTestId("assistant-nav-settings").click();
+    // 对话气泡在「设置 → 她怎么回答」（ADR 028）
+    await openSettingsTab(page, "reply");
     await expect(page.locator("#bubble-settings")).toContainText("对话气泡");
+    // 关掉气泡不再借用语音输入的悬浮窗（D10）
+    await expect(page.getByText(/关掉后只用声音和弹幕回答你/)).toBeVisible();
     await expect(page.getByTestId("bubble-enabled")).toHaveAttribute("aria-checked", "true");
     await expect(page.getByTestId("bubble-danmaku")).toHaveAttribute("aria-checked", "false");
     await page.getByLabel("气泡位置").click();

@@ -2,41 +2,32 @@
   /*
    * 自绘标题栏（main 窗 decorations:false，高 40px，与侧边栏同底色，参照 DeepSeek Harness 的
    * Windows 标题行）：
-   * - 左：侧边栏开关 + Kotone 图标与名称；状态胶囊（状态灯 + 相位 + 快捷键状态）；
-   * - 右：运行中的 CPU / 内存（2s 轮询）+ 启动 / 停止 / 重启生效 + 最小化 / 最大化（还原）/ 关闭；
+   * - 左：侧边栏开关 + Kotone 图标与名称；只有用本地语音识别时才有状态胶囊
+   *   （未启动 / 准备中 / 已启动 / 出问题了，点开是 启动 / 停止 / 去语音输入设置，ADR 028）；
+   *   在线识别打开就能用，这里什么都不显示；
+   * - 右：运行中的 CPU / 内存（2s 轮询）+ 最小化 / 最大化（还原）/ 关闭；
    * - 非按钮区按下拖动窗口，双击切换最大化；
    * - 关闭 = 弹确认框：「退出」彻底退出进程，「最小化到托盘」保持隐藏语义。
    */
   import { onMount } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { exit } from "@tauri-apps/plugin-process";
-  import { Copy, Minus, PanelLeft, Square, X } from "@lucide/svelte";
-  import { getResourceUsage, isTauri } from "../../lib/ipc";
-  import { runtimeStore } from "../../lib/stores/runtime";
-  import { settingsStore, toast, errText } from "../../lib/stores/ui";
+  import { ChevronDown, Copy, Minus, PanelLeft, Square, X } from "@lucide/svelte";
+  import * as Menu from "$lib/components/ui/dropdown-menu";
+  import { getResourceUsage, isTauri, startRuntime, stopRuntime } from "../../lib/ipc";
+  import { LOCAL_ASR_LABELS } from "../../lib/ipc/contracts";
+  import { asrStore, runtimeStore } from "../../lib/stores/runtime";
+  import { toast, errText } from "../../lib/stores/ui";
   import ExitPrompt from "../../lib/components/ExitPrompt.svelte";
-  import RuntimeButton from "../../lib/components/RuntimeButton.svelte";
   import iconSrc from "../../assets/brand/icon-src.webp";
 
-  let { onOpenAdvanced, onToggleSidebar, brandWidth }: {
-    onOpenAdvanced: () => void;
+  let { onOpenVoiceInput, onToggleSidebar, brandWidth }: {
+    /** 状态胶囊菜单里的「去语音输入设置」。 */
+    onOpenVoiceInput: () => void;
     onToggleSidebar: () => void;
     /** 品牌区宽度（与侧边栏对齐；侧边栏收起时只留开关）。 */
     brandWidth: string;
   } = $props();
-
-  const modeNames: Record<string, string> = {
-    "push-to-talk": "对讲机",
-    dictation: "录音笔",
-    "one-shot": "说一句就走",
-    solo: "独奏模式",
-  };
-  const stageNames: Record<string, string> = {
-    warmup: "正在加载引擎…",
-    hotkey: "正在注册热键…",
-    overlay: "正在显示悬浮窗…",
-    unload: "正在卸载引擎…",
-  };
 
   const rt = $derived($runtimeStore);
   let showExitPrompt = $state(false);
@@ -77,31 +68,21 @@
     return () => { disposed = true; unlisten?.(); };
   });
 
-  const phaseLabel = $derived(
-    !rt
-      ? "状态未知"
-      : rt.phase === "stopped"
-        ? "已停止"
-        : rt.phase === "running"
-          ? rt.restartNeeded
-            ? "运行中 · 变更待重启"
-            : "运行中"
-          : (stageNames[rt.stage ?? ""] ?? "处理中…"),
-  );
-
-  /** 标题栏只呈现用户任务状态；引擎与模型详情收纳在高级页。 */
-  const hotkeyLabel = $derived($settingsStore?.hotkey.key ?? "—");
-  const statusLine = $derived(
-    !rt
-      ? `快捷键：${hotkeyLabel} · 状态未知`
-      : rt.phase === "stopped"
-        ? `快捷键：${hotkeyLabel} · 未注册 · 点右侧「启动」开始说话`
-        : rt.phase === "running"
-          ? `快捷键：${hotkeyLabel} · 已注册 · ${
-              rt.interactionMode ? (modeNames[rt.interactionMode] ?? "自定义模式") : "自定义模式"
-            }`
-          : `快捷键：${hotkeyLabel} · ${phaseLabel}`,
-  );
+  const asr = $derived($asrStore);
+  const localState = $derived(asr.startsWith("local-") ? (asr as keyof typeof LOCAL_ASR_LABELS) : null);
+  let acting = $state(false);
+  async function runAsr(action: "start" | "stop") {
+    if (acting) return;
+    acting = true;
+    try {
+      await (action === "start" ? startRuntime() : stopRuntime());
+      toast(true, action === "start" ? "本地语音识别已启动" : "本地语音识别已停止");
+    } catch (e) {
+      toast(false, errText(e));
+    } finally {
+      acting = false;
+    }
+  }
 
   /** 非按钮区按下即整窗拖拽；双击切换最大化（按钮自身不触发）。 */
   function onDragMouseDown(e: MouseEvent) {
@@ -152,11 +133,13 @@
   }
 
   const dotClass = $derived(
-    !rt || rt.phase === "stopped"
-      ? "bg-muted-foreground/50"
-      : rt.phase === "running"
-        ? "bg-primary shadow-[0_0_8px_var(--color-primary)]"
-        : "bg-brand-pink animate-pulse",
+    localState === "local-running"
+      ? "bg-primary shadow-[0_0_8px_var(--color-primary)]"
+      : localState === "local-starting"
+        ? "bg-warning animate-pulse"
+        : localState === "local-error"
+          ? "bg-destructive"
+          : "bg-muted-foreground/50",
   );
   const windowButton = "flex h-full w-11 items-center justify-center text-sidebar-foreground/70 transition-colors hover:bg-foreground/8 hover:text-foreground";
 </script>
@@ -179,25 +162,41 @@
     </p>
   </div>
 
-  <!-- 状态胶囊：状态灯 + 相位 + 快捷键状态 -->
+  <!-- 本地语音识别的全局状态（只在用本地识别时出现，ADR 028 W7 / W9） -->
   <div class="flex min-w-0 flex-1 items-center px-2">
-    <div class="flex min-w-0 items-center gap-2 rounded-full px-2.5 py-1 text-xs" title={statusLine}>
-      <span class="relative flex size-2 shrink-0">
-        <span class="size-2 rounded-full transition-colors {dotClass}"></span>
-        {#if rt?.restartNeeded}
-          <span class="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-warning ring-1 ring-sidebar" title="配置已变更，需重启生效"></span>
-        {/if}
-      </span>
-      <span class="shrink-0 font-medium {rt?.phase === 'running' ? 'text-primary' : rt && rt.phase !== 'stopped' ? 'text-brand-pink' : 'text-sidebar-foreground'}">{phaseLabel}</span>
-      <span class="hidden min-w-0 truncate text-sidebar-foreground/60 md:inline">{statusLine}</span>
-    </div>
+    {#if localState}
+      <Menu.DropdownMenu>
+        <Menu.DropdownMenuTrigger data-testid="titlebar-asr" data-asr={localState}
+          class="flex min-w-0 items-center gap-2 rounded-full px-2.5 py-1 text-xs transition-colors hover:bg-sidebar-accent">
+          <span class="size-2 shrink-0 rounded-full transition-colors {dotClass}"></span>
+          <span class="truncate font-medium {localState === 'local-running' ? 'text-primary' : localState === 'local-error' ? 'text-destructive' : 'text-sidebar-foreground'}">本地识别 · {LOCAL_ASR_LABELS[localState]}{localState === "local-starting" ? "…" : ""}</span>
+          <ChevronDown class="size-3 shrink-0 opacity-60" />
+        </Menu.DropdownMenuTrigger>
+        <Menu.DropdownMenuContent align="start" class="w-52">
+          {#if localState === "local-running"}
+            <Menu.DropdownMenuItem data-testid="titlebar-asr-stop" disabled={acting} onSelect={() => void runAsr("stop")}>停止本地语音识别</Menu.DropdownMenuItem>
+            {#if rt?.restartNeeded}
+              <Menu.DropdownMenuItem data-testid="titlebar-asr-restart" disabled={acting} onSelect={() => void runAsr("start")}>按新设置重新启动</Menu.DropdownMenuItem>
+            {/if}
+          {:else}
+            <Menu.DropdownMenuItem data-testid="titlebar-asr-start" disabled={acting || localState === "local-starting"} onSelect={() => void runAsr("start")}>
+              {localState === "local-error" ? "重试启动" : "启动本地语音识别"}
+            </Menu.DropdownMenuItem>
+          {/if}
+          {#if localState === "local-error" && rt?.error}
+            <p class="m-0 px-2 py-1.5 text-[11px] leading-relaxed text-destructive">{rt.error}</p>
+          {/if}
+          <Menu.DropdownMenuSeparator />
+          <Menu.DropdownMenuItem data-testid="titlebar-asr-settings" onSelect={onOpenVoiceInput}>去语音输入设置</Menu.DropdownMenuItem>
+        </Menu.DropdownMenuContent>
+      </Menu.DropdownMenu>
+    {/if}
   </div>
 
   <div class="flex h-full shrink-0 items-center">
     {#if rt?.phase === "running" && resourceText}
       <span class="mr-2 hidden text-[11px] text-sidebar-foreground/60 tabular-nums lg:inline" title="Kotone 进程资源占用">{resourceText}</span>
     {/if}
-    <RuntimeButton variant="titlebar" {onOpenAdvanced} />
     <div class="mx-1 h-4 w-px bg-hairline"></div>
     <button class={windowButton} title="最小化" aria-label="最小化" onclick={() => void minimize()}><Minus class="size-4" /></button>
     <button class={windowButton} title={maximized ? "还原" : "最大化"} aria-label={maximized ? "还原" : "最大化"} data-testid="window-maximize" onclick={() => void toggleMaximize()}>

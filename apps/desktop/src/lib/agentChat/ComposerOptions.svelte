@@ -119,7 +119,7 @@
     </Menu.DropdownMenuTrigger>
     <Menu.DropdownMenuContent align="end" side="top" class="max-h-80 w-72 overflow-y-auto">
       {#if usable.length === 0}
-        <p class="m-0 px-2 py-2 text-xs text-muted-foreground">还没有保存了 API key 的连接，请先在「高级 → API 连接」里添加。</p>
+        <p class="m-0 px-2 py-2 text-xs text-muted-foreground">还没有保存了 API key 的连接，请先在「设置 → API 连接」里添加。</p>
       {/if}
       {#each usable as c (c.id)}
         <Menu.DropdownMenuGroup>

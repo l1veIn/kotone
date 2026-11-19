@@ -4,7 +4,7 @@
    * 提权成功后（Settings.svelte 凭 AUTO_ADMIN_PROMPT_FLAG 判定）弹出，
    * 单独询问「是否启动时自动请求管理员权限」。
    * 逃生通道：勾选「不再提醒」并跳过（autoAdminPromptDismissed），
-   * 并提示可随时在 设置 → 高级 页面更改同一开关。
+   * 并提示可随时在「设置 → 系统」里更改同一开关。
    */
   import { updateSettings } from "../ipc";
   import { settingsStore, toast, toastInfo, errText } from "../stores/ui";
@@ -43,7 +43,7 @@
         settingsStore.set(
           await updateSettings({ autoAdminPromptDismissed: true }),
         );
-        toastInfo("好的，以后可以随时在 设置 → 高级 页面开启或关闭此选项");
+        toastInfo("好的，以后可以随时在「设置 → 系统」里开启或关闭此选项");
       }
     } catch (e) {
       toast(false, `保存设置失败：${errText(e)}`);
@@ -63,7 +63,7 @@
           UAC 请求吗？省去每次手动重启的麻烦。
         </p>
         <p class="mt-1.5 text-[11px] leading-relaxed text-muted-foreground/80">
-          无论是否开启，以后都可以在 设置 → 高级 页面随时更改。
+          无论是否开启，以后都可以在「设置 → 系统」里随时更改。
         </p>
       </div>
     </div>

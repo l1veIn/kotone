@@ -1,7 +1,9 @@
 import { expect, test } from "@playwright/test";
+import { openVoiceInput } from "./nav";
 
 test("overlay can be disabled completely", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
+  await openVoiceInput(page);
 
   const neverButton = page.getByRole("button", { name: /不显示.*热键和语音输入照常/ });
   await expect(neverButton).toBeVisible();

@@ -1,3 +1,4 @@
+import { openSettingsTab, openVoiceInput } from "./nav";
 import { expect, test, type Page } from "@playwright/test";
 
 const message = (page: Page) => page.getByTestId("danmaku-message");
@@ -224,8 +225,8 @@ for (const cancel of [false, true]) {
 
 test("appearance settings persist speed, font, exact top offset, color and built-in emote", async ({ page }, testInfo) => {
   await page.goto("/#/settings?onboarding=never");
-  await page.getByTestId("settings-nav-assistant").click();
-  await page.getByTestId("assistant-nav-settings").click();
+  // 弹幕样式在「设置 → 她怎么回答 → 声音与弹幕」（ADR 028）
+  await openSettingsTab(page, "reply");
   const settings = page.getByTestId("danmaku-settings");
   await expect(settings).toBeVisible();
   await settings.getByLabel("弹幕速度", { exact: true }).fill("240");
@@ -262,9 +263,8 @@ test("appearance settings persist speed, font, exact top offset, color and built
   await expect(settings.getByRole("button", { name: "弹幕表情加油", exact: true })).toHaveAttribute("aria-pressed", "true");
   const saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
   expect(saved.assistant).toMatchObject({ danmakuSpeedPxPerSec: 240, danmakuFontSize: 40, danmakuTopOffsetPx: 345, danmakuColor: "#00E5FF", danmakuEmote: "cheering" });
-  await page.getByTestId("settings-nav-history").click();
-  await page.getByTestId("settings-nav-assistant").click();
-  await page.getByTestId("assistant-nav-settings").click();
+  await openVoiceInput(page, "history");
+  await openSettingsTab(page, "reply");
   await expect(topNumber).toHaveValue("345");
   await expect(page.locator("[data-sonner-toast]").filter({ hasText: "弹幕样式已保存" })).toHaveCount(0);
   await settings.screenshot({ path: testInfo.outputPath("danmaku-settings.png") });

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 「琴音 → 设置」：琴音用的 AI 连接。陪玩热键、快捷指令搬到了「交流」（ADR 023）。
+  // 「设置 → 她怎么回答 → AI 连接」：角色用的 AI 连接（ADR 028，原「琴音 → 设置」）。
   import { companionBindingPatch, companionBindings, type ConnectionInfo } from "../../../../lib/ipc";
   import { patchSettings, settingsStore } from "../../../../lib/stores/ui";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
@@ -16,14 +16,14 @@
   async function save(connectionId: string) {
     if (saving) return;
     saving = true;
-    try { await patchSettings({ assistant: companionBindingPatch(config, { connectionId }) }, "陪玩设置已保存"); }
+    try { await patchSettings({ assistant: companionBindingPatch(config, { connectionId }) }, "AI 连接已保存"); }
     finally { saving = false; }
   }
 </script>
 
 {#if bindings}
   <div class="space-y-6" data-testid="assistant-settings">
-    <SettingsSection title="AI 连接" id="assistant-input-settings-title" description="用哪个大模型。在游戏里怎么叫她，在「交流」里设置。">
+    <SettingsSection title="AI 连接" id="assistant-input-settings-title" description="她用哪个大模型。在游戏里怎么叫她，在「设置 → 怎么叫她」里设。">
       <SettingsRow label="AI 连接" description="选好、有密钥就能用；想确认能不能连上，到「设置 → API 连接」点“测试连接”。">
         {#snippet control()}
           <div class="w-64 max-w-full">

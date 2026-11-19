@@ -1,7 +1,9 @@
 import { expect, test } from "@playwright/test";
+import { openVoiceInput } from "./nav";
 
 test("a configured Tab hotkey does not install a browser-local listener", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
+  await openVoiceInput(page);
 
   const input = page.locator("#hotkey-input");
   await input.fill("Tab");

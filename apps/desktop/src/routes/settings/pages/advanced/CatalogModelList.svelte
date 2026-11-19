@@ -364,7 +364,7 @@
                           onchange={(next) => void saveField(m.id, field.key, next)}
                         />
                       </div>
-                      <p class="mt-1 mb-0 text-[11px] text-muted-foreground/80">地址和 API key 在「高级 → API 连接」里保存，密钥只存在系统凭据管理器。</p>
+                      <p class="mt-1 mb-0 text-[11px] text-muted-foreground/80">地址和 API key 在「设置 → API 连接」里保存，密钥只存在系统凭据管理器。</p>
                     {:else}
                       <input
                         class="mt-1 h-8 w-full rounded-lg border border-input bg-background/60 px-2.5 text-[13px] text-foreground outline-none focus:border-ring focus:ring-3 focus:ring-ring/30"

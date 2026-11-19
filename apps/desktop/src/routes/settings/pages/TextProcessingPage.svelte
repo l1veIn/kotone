@@ -387,7 +387,7 @@
   }
 </script>
 
-<SettingsPage title="文字处理" description="识别完先处理，再发到游戏：屏蔽词、AI 润色、翻译……按流程从上到下依次处理。">
+<SettingsPage embedded title="文字处理" description="识别完先处理，再发到游戏：屏蔽词、AI 润色、翻译……按流程从上到下依次处理。">
   {#if $settingsStore}
     <SettingsSection>
       <div class="py-3.5">

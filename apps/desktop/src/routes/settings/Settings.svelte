@@ -4,7 +4,7 @@
    * 左侧导航 + 右侧页面。页面组件在 ./pages/ 下，
    * 共享 settingsStore / toast（lib/stores/ui.ts）；IPC 全部走 lib/ipc.ts。
    */
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import {
     getSettings,
@@ -25,8 +25,7 @@
     AUTO_ADMIN_PROMPT_FLAG,
   } from "../../lib/stores/ui";
   import { initRuntime } from "../../lib/stores/runtime";
-  import { usesLegacyVoiceInput } from "../../lib/ipc/contracts";
-  import { Button } from "$lib/components/ui/button";
+  import { companionBindings, startPageOf, usesLegacyVoiceInput } from "../../lib/ipc/contracts";
   import LegacyRemindersPage from "./pages/LegacyRemindersPage.svelte";
   import { checkForUpdates } from "../../lib/updater";
   import { Sonner } from "$lib/components/ui/sonner";
@@ -35,16 +34,18 @@
   import InjectionBlockedDialog from "../../lib/components/InjectionBlockedDialog.svelte";
   import UpdateDialog from "../../lib/components/UpdateDialog.svelte";
   import { appState } from "../../lib/stores/state";
-  import Onboarding from "./Onboarding.svelte";
+  import Onboarding, { type OnboardingNext } from "./Onboarding.svelte";
+  import type { DeepSeekSetupResult } from "../../lib/deepseekSetup";
   import { pendingPrompt } from "../../lib/agentChat/pendingPrompt";
   import Titlebar from "./Titlebar.svelte";
   import GeneralPage from "./pages/GeneralPage.svelte";
   import TextProcessingPage from "./pages/TextProcessingPage.svelte";
-  import { navigationRequest } from "../../lib/stores/navigation";
+  import { navigationRequest, type AssistantSection, type VoiceInputPage } from "../../lib/stores/navigation";
+  import VoiceInputShell from "./pages/voice/VoiceInputShell.svelte";
   import AssistantPage from "./pages/AssistantPage.svelte";
   import AutomationPage from "./pages/AutomationPage.svelte";
   import AdvancedPage from "./pages/AdvancedPage.svelte";
-  import type { AdvancedSection } from "./pages/advanced/types";
+  import { isAdvancedSection, type AdvancedSection } from "./pages/advanced/types";
   import GamePage from "./pages/GamePage.svelte";
   import HistoryPage from "./pages/HistoryPage.svelte";
   import AboutPage from "./pages/AboutPage.svelte";
@@ -70,46 +71,81 @@
     try { localStorage.setItem(SIDEBAR_KEY, rail ? "rail" : "expanded"); } catch { /* 只是偏好 */ }
   }
   function navigate(id: PageId) {
-    if (id === "assistant" && legacyVoiceOnly) {
-      showUpgradeNotice = true;
-      drawerOpen = false;
-      return;
-    }
     assistantOpen = null;
+    if (id === "advanced" && page !== "advanced") advancedAnchor = null;
     page = id;
     drawerOpen = false;
   }
-  /** 侧边栏点了对话或“新对话”：切到「琴音」的聊天分页。 */
+  /** 侧边栏点了对话或“新对话”：切到聊天。 */
   let chatRequest = $state(0);
-  /** 打开「琴音」的某个分页 / 分组（首页入口、聊天里“去看看”）；普通导航清掉它，回到聊天。 */
-  let assistantOpen = $state<{ section: "chat" | "identity" | "memory" | "skills" | "settings"; anchor?: string; n: number } | null>(null);
+  /** 打开角色页的某个分页（侧栏的角色入口、聊天里“去看看”）。普通导航清掉它，回到聊天。 */
+  let assistantOpen = $state<{ section: AssistantSection; n: number } | null>(null);
   let openCount = 0;
-  function openCompanion(section: "chat" | "identity" | "memory" | "skills" | "settings", anchor?: string) {
-    navigate("assistant");
-    if (!legacyVoiceOnly) assistantOpen = { section, anchor, n: ++openCount };
+  function openCompanion(section: AssistantSection) {
+    page = "assistant";
+    drawerOpen = false;
+    assistantOpen = { section, n: ++openCount };
+    if (section === "chat") chatRequest++;
   }
-  /** 「琴音 → 设置」（原「交流」页的内容也在这里）。 */
-  function openCompanionSettings() {
-    openCompanion("settings", "companion-settings-call");
+  /** 「设置」的陪玩组（原「琴音 → 设置」，ADR 028 D11）。 */
+  function openCompanionSettings(section: AdvancedSection = "call", anchor?: string) {
+    openAdvanced(section, anchor);
   }
   // 聊天里的“去看看”等：跳到设置说明里写的位置。
   const unsubscribeNavigation = navigationRequest.subscribe((request) => {
     if (!request) return;
     navigationRequest.set(null);
     const target = request.target;
-    if (target.page === "assistant") openCompanion(target.section, target.anchor);
-    else if (target.page === "advanced") openAdvanced(target.tab as AdvancedSection);
-    else navigate(target.page);
+    if (target.page === "assistant") openCompanion(target.section);
+    else if (target.page === "advanced") openAdvanced(isAdvancedSection(target.tab) ? target.tab : "system", target.anchor);
+    else {
+      navigate(target.page);
+      if (target.anchor) scrollToAnchor(target.anchor);
+    }
   });
   onDestroy(unsubscribeNavigation);
+  function scrollToAnchor(id: string) {
+    void tick().then(() => requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ block: "start" })));
+  }
+  /** 打开聊天；prompt 只预填进输入框（D2）。 */
   function openChat(prompt?: string) {
-    if (legacyVoiceOnly) {
-      showUpgradeNotice = true;
-      return;
-    }
     if (prompt) pendingPrompt.set(prompt);
-    navigate("assistant");
-    chatRequest++;
+    openCompanion("chat");
+  }
+  function openRole() {
+    openCompanion("identity");
+  }
+
+  // ---------- 引导（ADR 028） ----------
+  /** 正在显示的引导：新用户 / 0.1.x 升级用户；从聊天页 Key 卡片或“让 Kotone 帮我配置”进来时带起始步骤。 */
+  let onboarding = $state<{ mode: "new" | "upgrade"; initialStep?: "key" | "connected"; result?: DeepSeekSetupResult | null } | null>(null);
+  /** 语音输入子板块顶部的四步引导（V 路径）。 */
+  let voiceGuideOpen = $state(false);
+
+  function openOnboarding() {
+    onboarding = { mode: legacyVoiceOnly ? "upgrade" : "new" };
+  }
+  function onboardingDone(next: OnboardingNext, prompt?: string) {
+    onboarding = null;
+    if (next === "chat") openChat(prompt);
+    else {
+      navigate("general");
+      if (next === "voiceGuide") voiceGuideOpen = true;
+    }
+  }
+  /** 聊天页的 Key 卡片连好了：接着设呼叫键（引导的“已连接”页）。 */
+  function keyConnected(result: DeepSeekSetupResult) {
+    onboarding = { mode: "new", initialStep: "connected", result };
+  }
+  /** 语音输入的「让 Kotone 帮我配置」：有可用的角色就请她帮忙（只预填，不经过语音输入）；没有就先填 Key。 */
+  function configureVoiceInput() {
+    const s = $settingsStore;
+    const connectionId = companionBindings(s?.assistant)?.connectionId?.trim();
+    if (s && !legacyVoiceOnly && connectionId && s.connections.some((c) => c.id === connectionId)) {
+      openChat("帮我配置语音输入：");
+    } else {
+      onboarding = { mode: legacyVoiceOnly ? "upgrade" : "new", initialStep: "key" };
+    }
   }
 
   // 侧边栏的对话列表与聊天页共用一份状态。
@@ -124,12 +160,19 @@
   // 在首次绘制前应用，避免先闪一下默认配色。
   onDestroy(initializeAppearance());
 
-  let page = $state<PageId>("general");
-  let advancedSection = $state<AdvancedSection>("system");
+  /** 打开时先显示聊天；逃生通道和“只想用语音输入？”的用户、或设置里选了语音输入的，落在语音输入（ADR 028）。 */
+  let page = $state<PageId>("assistant");
+  let advancedSection = $state<AdvancedSection>("call");
+  const chatActive = $derived(page === "assistant" && (assistantOpen?.section ?? "chat") === "chat");
+  let advancedAnchor = $state<{ id: string; n: number } | null>(null);
+  let anchorCount = 0;
 
-  function openAdvanced(section: AdvancedSection = "system") {
-    advancedSection = section;
+  function openAdvanced(section: AdvancedSection = "system", anchor?: string) {
+    // 逃生通道用户没有陪玩组：落到模型页。
+    advancedSection = legacyVoiceOnly && ["call", "reply", "permissions", "usage"].includes(section) ? "models" : section;
+    advancedAnchor = anchor ? { id: anchor, n: ++anchorCount } : null;
     page = "advanced";
+    drawerOpen = false;
   }
   /** 右侧滚动容器：切页时复位到顶部（角色详情页是长滚动页） */
   let mainEl = $state<HTMLElement>();
@@ -138,31 +181,7 @@
     mainEl?.scrollTo({ top: 0 });
   });
   let loading = $state(true);
-  /** 首启向导：ui.firstRunCompleted === false 时弹出（完成/跳过后置 true） */
-  let showOnboarding = $state(false);
-  let showUpgradeNotice = $state(false);
-  let showLegacySetup = $state(false);
-  let savingUpgradeChoice = $state(false);
   const legacyVoiceOnly = $derived(usesLegacyVoiceInput($settingsStore?.ui));
-
-  function openOnboarding() {
-    if (legacyVoiceOnly) showUpgradeNotice = true;
-    else showOnboarding = true;
-  }
-
-  async function keepVoiceInput() {
-    if (savingUpgradeChoice) return;
-    savingUpgradeChoice = true;
-    try {
-      settingsStore.set(await updateSettings({ ui: { legacyUpgrade: "dismissed" } }));
-      showUpgradeNotice = false;
-      showLegacySetup = false;
-    } catch (error) {
-      toast(false, errText(error));
-    } finally {
-      savingUpgradeChoice = false;
-    }
-  }
   /** 管理员提权提示 · 第一段（仅 Windows 未提权且用户未表态时弹一次） */
   let showElevationPrompt = $state(false);
   /** 管理员提权提示 · 第二段（第一段「以管理员权限重启」成功后弹一次） */
@@ -203,12 +222,14 @@
         getSettingsLoadWarning(),
       ]);
       if (settingsWarning) toastWarn(settingsWarning);
-      if (usesLegacyVoiceInput(s.ui)) {
-        showUpgradeNotice = startup.onboarding !== "never" && s.ui.legacyUpgrade === "pending";
-      } else {
-        showOnboarding =
-          startup.onboarding === "always" ||
-          (startup.onboarding === "auto" && !s.ui.firstRunCompleted);
+      const legacy = usesLegacyVoiceInput(s.ui);
+      page = legacy || startPageOf(s.ui) === "voiceInput" ? "general" : "assistant";
+      if (legacy) advancedSection = "models";
+      if (legacy) {
+        // 0.1.x 升级用户：新引导显示一次（即使 firstRunCompleted 为真），看过 = legacyUpgrade 不再是 pending。
+        if (startup.onboarding === "always" || (startup.onboarding === "auto" && s.ui.legacyUpgrade === "pending")) onboarding = { mode: "upgrade" };
+      } else if (startup.onboarding === "always" || (startup.onboarding === "auto" && !s.ui.firstRunCompleted)) {
+        onboarding = { mode: "new" };
       }
       // 两段式提权提示：
       // 第一段（未提权）：未勾选「不再提示」/「默认提权启动」时，询问是否以管理员身份重启；
@@ -305,17 +326,17 @@
 
 <svelte:window bind:innerWidth={viewportWidth} />
 <div class="flex h-full flex-col overflow-hidden bg-sidebar text-foreground" data-testid="app-frame">
-  <!-- 自绘标题栏（decorations:false）：侧边栏开关 + 运行状态 + 启动/停止 + 窗口控制 -->
-  <Titlebar onOpenAdvanced={() => openAdvanced("models")} onToggleSidebar={toggleSidebar}
+  <!-- 自绘标题栏（decorations:false）：侧边栏开关 + 本地识别状态（只在用本地识别时）+ 窗口控制 -->
+  <Titlebar onOpenVoiceInput={() => { navigate("general"); scrollToAnchor("voice-asr"); }} onToggleSidebar={toggleSidebar}
     brandWidth={narrow ? "auto" : rail ? "3.5rem" : "14.75rem"} />
   <div class="relative flex min-h-0 flex-1 overflow-hidden">
   {#if !narrow}
-    <AppSidebar {page} {rail} {legacyVoiceOnly} onNavigate={navigate} onOpenChat={openChat} />
+    <AppSidebar {page} {chatActive} {rail} {legacyVoiceOnly} onNavigate={navigate} onOpenChat={() => openChat()} onOpenRole={openRole} />
   {:else if drawerOpen}
     <!-- 窄窗口：侧边栏作为抽屉盖在内容上 -->
     <button type="button" class="absolute inset-0 z-40 bg-black/40" aria-label="关闭侧边栏" onclick={() => (drawerOpen = false)}></button>
     <div class="absolute inset-y-0 left-0 z-50 shadow-2xl" data-testid="sidebar-drawer">
-      <AppSidebar {page} {legacyVoiceOnly} onNavigate={navigate} onOpenChat={openChat} />
+      <AppSidebar {page} {chatActive} {legacyVoiceOnly} onNavigate={navigate} onOpenChat={() => openChat()} onOpenRole={openRole} />
     </div>
   {/if}
 
@@ -329,26 +350,36 @@
     {/if}
     {#if loading}
       <p class="px-8 py-10 text-sm text-muted-foreground">加载配置中…</p>
-    {:else if page === "general"}
-      <GeneralPage {legacyVoiceOnly} onOpenAdvanced={() => openAdvanced("models")} onOpenCompanion={openChat} onOpenTalk={openCompanionSettings} />
+    {:else if page === "general" || page === "processing" || page === "history"}
+      <VoiceInputShell {page} onTab={(next: VoiceInputPage) => navigate(next)} onConfigure={configureVoiceInput}>
+        {#if page === "general"}
+          <GeneralPage guideOpen={voiceGuideOpen} onOpenGuide={() => (voiceGuideOpen = true)} onCloseGuide={() => (voiceGuideOpen = false)}
+            onConfigure={configureVoiceInput} onOpenModels={() => openAdvanced("models", "models-asr")}
+            onOpenSound={() => openAdvanced("sound")} onOpenGames={() => navigate("game")} />
+        {:else if page === "processing"}
+          <TextProcessingPage onOpenConnections={() => openAdvanced("connections")} />
+        {:else}
+          <HistoryPage />
+        {/if}
+      </VoiceInputShell>
     {:else if page === "advanced"}
       <AdvancedPage
         section={advancedSection}
-        onSectionChange={(next) => (advancedSection = next)}
+        anchor={advancedAnchor}
+        onSectionChange={(next) => { advancedSection = next; advancedAnchor = null; }}
         onOpenOnboarding={openOnboarding}
       />
-    {:else if page === "processing"}
-      <TextProcessingPage onOpenConnections={() => openAdvanced("connections")} />
     {:else if page === "assistant"}
-      <AssistantPage {chatRequest} open={assistantOpen} onOpenConnections={() => openAdvanced("connections")} onOpenAutomation={() => (page = "automation")} />
+      <AssistantPage {chatRequest} open={assistantOpen}
+        onOpenConnections={() => openAdvanced("connections")} onOpenAutomation={() => navigate("automation")}
+        onOpenSettings={() => openCompanionSettings("reply", "settings-reply-ai")} onOpenTalk={() => openCompanionSettings("call", "settings-call-hotkey")}
+        onKeyConnected={keyConnected} onBackToVoice={() => navigate("general")} />
     {:else if page === "legacy-reminders"}
       <LegacyRemindersPage onOpenConnections={() => openAdvanced("connections")} />
     {:else if page === "automation"}
-      <AutomationPage onOpenHotkeys={() => openAdvanced("hotkeys")} />
+      <AutomationPage onOpenHotkeys={() => openAdvanced("system", "system-stop")} />
     {:else if page === "game"}
       <GamePage {legacyVoiceOnly} />
-    {:else if page === "history"}
-      <HistoryPage />
     {:else if page === "character"}
       <CharacterPage onBack={() => (page = "about")} />
     {:else}
@@ -359,34 +390,20 @@
     {#if page !== "assistant"}<div class="h-4"></div>{/if}
   </main>
 
-  <!-- 首启向导覆盖层（加载完成且未完成向导时弹出） -->
-  {#if showUpgradeNotice && !loading}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
-      <div role="dialog" aria-modal="true" aria-labelledby="legacy-upgrade-title"
-        class="w-full max-w-md rounded-xl border border-hairline bg-card p-6 shadow-xl"
-        data-testid="legacy-upgrade-notice">
-        <h2 id="legacy-upgrade-title" class="m-0 text-lg font-semibold">语音输入法的用法没有变</h2>
-        <p class="mt-3 text-sm text-muted-foreground">你可以继续用原来的热键和识别设置。琴音是可选的游戏陪玩，可以听你说话、回答问题，也可以在你允许时帮你操作游戏。</p>
-        <div class="mt-5 flex flex-wrap gap-2">
-          <Button disabled={savingUpgradeChoice} onclick={() => void keepVoiceInput()}>继续只用语音输入法</Button>
-          <Button variant="outline" disabled={savingUpgradeChoice} onclick={() => { showUpgradeNotice = false; showLegacySetup = true; }}>认识琴音</Button>
-        </div>
-      </div>
-    </div>
-  {:else if showLegacySetup && !loading}
-    <Onboarding legacyUpgrade onCancel={() => { showLegacySetup = false; showUpgradeNotice = true; }}
-      onDone={(next, prompt) => { showLegacySetup = false; if (next === "assistant") openChat(prompt); }} />
-  {:else if showOnboarding && !loading}
-    <Onboarding onDone={(next, prompt) => { showOnboarding = false; if (next === "assistant") openChat(prompt); }} />
+  <!-- 引导覆盖层（ADR 028）：新用户 / 0.1.x 升级用户；聊天页 Key 卡片连好后接着设呼叫键 -->
+  {#if onboarding && !loading}
+    {#key onboarding}
+      <Onboarding mode={onboarding.mode} initialStep={onboarding.initialStep} initialResult={onboarding.result ?? null} onDone={onboardingDone} />
+    {/key}
   {/if}
 
   <!-- 管理员提权提示 · 第一段（Windows 未提权且用户未表态时弹一次） -->
-  {#if showElevationPrompt && !loading && !showUpgradeNotice && !showLegacySetup}
+  {#if showElevationPrompt && !loading && !onboarding}
     <ElevationPrompt onClose={() => (showElevationPrompt = false)} />
   {/if}
 
   <!-- 管理员提权提示 · 第二段（第一段的重启成功后弹一次） -->
-  {#if showAutoAdminPrompt && !loading && !showUpgradeNotice && !showLegacySetup}
+  {#if showAutoAdminPrompt && !loading && !onboarding}
     <AutoAdminPrompt onClose={() => (showAutoAdminPrompt = false)} />
   {/if}
 

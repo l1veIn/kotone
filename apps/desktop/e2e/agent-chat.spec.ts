@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-// 「琴音 → 聊天」：用 @tauri-apps/api/mocks 模拟 agent_* 命令与 kotone://agent-* 事件，不接任何 AI。
+// 聊天页（ADR 028：打开 Kotone 先看到它）：用 @tauri-apps/api/mocks 模拟 agent_* 命令与 kotone://agent-* 事件，不接任何 AI。
 
 interface AgentCall { command: string; args?: Record<string, unknown> }
 declare global {
@@ -18,12 +18,12 @@ declare global {
 
 const T = 1_800_000_000_000;
 
-async function openChat(page: Page, options: { empty?: boolean; notReady?: string } = {}) {
+async function openChat(page: Page, options: { empty?: boolean; notReady?: string; asr?: "online" | "local-stopped" } = {}) {
   await page.route("**/__agent-chat-test", (route) => route.fulfill({
     contentType: "text/html", body: '<!doctype html><html><body><div id="app"></div></body></html>',
   }));
   await page.goto("/__agent-chat-test#/settings?onboarding=never");
-  await page.evaluate(async ({ empty, notReady, T }) => {
+  await page.evaluate(async ({ empty, notReady, asr, T }) => {
     const { mockIPC, mockWindows } = await import("/node_modules/@tauri-apps/api/mocks.js");
     const { emit } = await import("/node_modules/@tauri-apps/api/event.js");
     const browser = await import("/src/lib/ipc/browserMock.ts");
@@ -40,6 +40,10 @@ async function openChat(page: Page, options: { empty?: boolean; notReady?: strin
       conversations: [{ id: "c-old", title: old.title, createdAtMs: old.createdAtMs, updatedAtMs: old.updatedAtMs, messageCount: 2 }],
     };
     let created = 0;
+    // 语音识别：默认在线、已就绪；local-stopped = 本地识别还没启动（ADR 028）
+    const runtime = asr === "local-stopped"
+      ? { phase: "stopped", restartNeeded: false, engineId: "sherpa-streaming", engineName: "本地", modelId: "x-asr", interactionMode: "dictation", stage: null, asrLocal: true, error: null }
+      : { phase: "running", restartNeeded: false, engineId: "fixture", engineName: "测试引擎", modelId: "fixture", interactionMode: "dictation", stage: null, asrLocal: false, error: null };
     let connectionModel = "test";
     const bridge = {
       calls: [] as { command: string; args?: Record<string, unknown> }[], state, conversations,
@@ -104,7 +108,14 @@ async function openChat(page: Page, options: { empty?: boolean; notReady?: strin
               { day: "2026-11-18", totals: today, byKind: [{ kind: "chat", label: "对话", totals: today }, { kind: "tts", label: "语音合成", totals: { ...today, requests: 2, inputTokens: 0, cacheHitTokens: 0, cost: { CNY: 0.003 } } }], byModel: [{ model: "deepseek/deepseek-flash", totals: today }] },
             ], priceSource: "DeepSeek 官方价格页（测试）", note: "费用是估算", ledger: "C:/test/usage.jsonl" };
         }
-        case "get_runtime_status": return { phase: "running", restartNeeded: false, engineId: "fixture", engineName: "测试引擎", modelId: "fixture", interactionMode: "dictation", stage: null };
+        case "get_runtime_status": return structuredClone(runtime);
+        case "start_runtime": {
+          bridge.calls.push({ command });
+          runtime.phase = "running";
+          await emit("kotone://runtime", runtime);
+          return structuredClone(runtime);
+        }
+        case "assistant_call": bridge.calls.push({ command }); return null;
         case "list_connections": return [{ id: "test-ai", displayName: "测试连接", provider: "test", kind: "remote", baseUrl: "https://example.invalid", model: connectionModel, hasApiKey: true }];
         case "list_connection_presets": return [{ id: "test", displayName: "测试", group: "custom", description: "", defaultBaseUrl: "https://example.invalid", defaultModel: "test", models: ["test", "test-pro"] }];
         case "upsert_connection": {
@@ -124,8 +135,8 @@ async function openChat(page: Page, options: { empty?: boolean; notReady?: strin
       return typeof fn === "function" ? (fn as () => unknown)() : null;
     }, { shouldMockEvents: true });
     await import("/src/main.ts");
-  }, { empty: options.empty ?? false, notReady: options.notReady, T });
-  await page.getByTestId("settings-nav-assistant").click();
+  }, { empty: options.empty ?? false, notReady: options.notReady, asr: options.asr ?? "online", T });
+  // 打开就是聊天页（ADR 028），不用再点侧栏。
   await expect(page.getByTestId("assistant-chat")).toBeVisible();
 }
 
@@ -135,16 +146,16 @@ const agentCalls = (page: Page, command: string) =>
 test("empty conversation shows starter prompts; a starter sends or fills the composer", async ({ page }, testInfo) => {
   await openChat(page, { empty: true });
   const starters = page.getByTestId("agent-starter");
-  await expect(starters).toHaveText(["帮我配置 Kotone", "做一个自动化", "看看队友在说什么", "设个提醒", "我有哪些自动化"]);
+  await expect(starters).toHaveText(["你能做什么？", "帮我配置 Kotone", "这个版本什么英雄强？", "做一个自动化", "5 分钟后提醒我"]);
   await page.screenshot({ path: testInfo.outputPath("agent-chat-empty.png"), animations: "disabled" });
   // 以冒号结尾的提示只放进输入框
   await starters.filter({ hasText: "做一个自动化" }).click();
   await expect(page.getByTestId("assistant-request")).toHaveValue("帮我做一个自动化：");
   expect(await agentCalls(page, "agent_send")).toEqual([]);
   // 其它提示直接发出，并切到新建的对话
-  await starters.filter({ hasText: "看看队友在说什么" }).click();
-  expect(await agentCalls(page, "agent_send")).toEqual([{ text: "看看队友在聊天里说了什么" }]);
-  await expect(page.getByTestId("agent-conversation-title")).toHaveText(/看看队友在聊天里说了什么/);
+  await starters.filter({ hasText: "你能做什么？" }).click();
+  expect(await agentCalls(page, "agent_send")).toEqual([{ text: "你能做什么？" }]);
+  await expect(page.getByTestId("agent-conversation-title")).toHaveText(/你能做什么？/);
 });
 
 test("streams text and thinking, tracks tool card states, asks for permission and shows usage", async ({ page }, testInfo) => {
@@ -318,18 +329,20 @@ test("switching and deleting are disabled while answering", async ({ page }) => 
 });
 
 test("not ready shows the reason and a way to settings", async ({ page }) => {
-  await openChat(page, { notReady: "请先在「琴音 → 设置」里选择 AI 连接" });
-  await expect(page.getByTestId("agent-not-ready")).toContainText("请先在「琴音 → 设置」里选择 AI 连接");
+  await openChat(page, { notReady: "请在「设置 → 她怎么回答 → AI 连接」里选一个模型" });
+  await expect(page.getByTestId("agent-not-ready")).toContainText("请在「设置 → 她怎么回答 → AI 连接」里选一个模型");
   await page.getByTestId("assistant-request").fill("你好");
   await expect(page.getByTestId("agent-send")).toBeDisabled();
   await page.getByTestId("agent-open-settings").click();
-  await expect(page.getByTestId("assistant-nav-settings")).toHaveAttribute("aria-current", "page");
-  await expect(page.getByTestId("agent-settings")).toBeVisible();
+  // 原「琴音 → 设置」并进了「设置」（ADR 028 D11）
+  await expect(page.getByTestId("advanced-nav-reply")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("assistant-settings")).toBeVisible();
 });
 
 test("agent settings replace permissions as a whole and save the in-game switch", async ({ page }) => {
   await openChat(page);
-  await page.getByTestId("assistant-nav-settings").click();
+  await page.getByTestId("settings-nav-advanced").click();
+  await page.getByTestId("advanced-nav-permissions").click();
   const settings = page.getByTestId("agent-settings");
   await settings.getByTestId("agent-mode-read-only").click();
   await expect(settings.getByTestId("agent-mode-read-only")).toHaveAttribute("aria-pressed", "true");
@@ -388,7 +401,7 @@ test("tool cards link the settings 琴音 changed, and a key request is pasted i
       { id: "call-l", name: "models.list", arguments: "{}" },
     ], atMs: T + 1000 } });
     await t.event("c-old", { kind: "appended", message: { role: "tool", callId: "call-s", name: "settings.update", isError: false, untrusted: false, atMs: T + 1100,
-      content: JSON.stringify({ effects: { changed: ["assistant.hotkey"], locations: [{ path: "assistant.hotkey", label: "呼叫热键", page: "琴音 → 设置 → 呼叫" }], summary: "已保存，立即生效" } }) } });
+      content: JSON.stringify({ effects: { changed: ["assistant.hotkey"], locations: [{ path: "assistant.hotkey", label: "呼叫键", page: "设置 → 怎么叫她 → 呼叫键" }], summary: "已保存，立即生效" } }) } });
     await t.event("c-old", { kind: "appended", message: { role: "tool", callId: "call-m", name: "models.activate", content: "{}", isError: false, untrusted: false, atMs: T + 1200 } });
     await t.event("c-old", { kind: "appended", message: { role: "tool", callId: "call-l", name: "models.list", content: "{}", isError: false, untrusted: false, atMs: T + 1300 } });
   }, T);
@@ -396,16 +409,17 @@ test("tool cards link the settings 琴音 changed, and a key request is pasted i
   await expect(page.locator('[data-tool-id="call-l"]').getByTestId("agent-tool-changed")).toHaveCount(0);
   await expect(page.locator('[data-tool-id="call-m"]').getByTestId("agent-tool-changed-link")).toHaveText("语音识别模型 →");
   const link = page.locator('[data-tool-id="call-s"]').getByTestId("agent-tool-changed-link");
-  await expect(link).toHaveText("呼叫热键 →");
+  await expect(link).toHaveText("呼叫键 →");
   await link.click();
-  await expect(page.getByTestId("assistant-nav-settings")).toHaveAttribute("aria-current", "page");
-  await expect(page.locator("#companion-settings-call")).toBeInViewport();
-  await page.getByTestId("assistant-nav-chat").click();
+  await expect(page.getByTestId("advanced-nav-call")).toHaveAttribute("aria-current", "page");
+  await expect(page.locator("#settings-call-hotkey")).toBeInViewport();
+  // 回到聊天：侧栏的对话列表
+  await page.getByTestId("sidebar-conversations").getByText("上次的对话").click();
   await page.locator('[data-tool-id="call-m"]').getByTestId("agent-tool-changed-link").click();
   await expect(page.getByTestId("advanced-nav-models")).toHaveAttribute("aria-current", "page");
 
   // 琴音要别的服务商的 Key：聊天里出现只给玩家看的输入框
-  await page.getByTestId("settings-nav-assistant").click();
+  await page.getByTestId("sidebar-conversations").getByText("上次的对话").click();
   await page.evaluate(async () => {
     const { emit } = await import("/node_modules/@tauri-apps/api/event.js");
     await emit("kotone://agent-key-request", { requestId: "key-1", conversationId: "c-old", provider: "openai", displayName: "OpenAI", apiKeyUrl: "https://platform.openai.com/api-keys", connectionId: "", reason: "在线语音合成要用" });
@@ -450,7 +464,8 @@ test("compaction divider, match recap card and switch; usage shows hit rate and 
   await expect(recap).toContainText("对局复盘：测试游戏");
   await expect(recap).toContainText("你让我提醒买真眼");
 
-  await page.getByTestId("assistant-nav-settings").click();
+  await page.getByTestId("settings-nav-advanced").click();
+  await page.getByTestId("advanced-nav-permissions").click();
   // 对局复盘可以关
   await page.getByTestId("agent-match-recap").click();
   await expect.poll(async () => page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings().then((s) => s.agent?.matchRecap))).toBe(false);
@@ -459,7 +474,7 @@ test("compaction divider, match recap card and switch; usage shows hit rate and 
   await expect.poll(async () => page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings().then((s) => s.agent?.safetyCheck))).toBe(false);
   await expect(page.getByRole("combobox", { name: "游戏里的思考强度" })).toContainText("默认");
   await expect(page.getByRole("combobox", { name: "聊天窗口里的思考强度" })).toContainText("默认");
-  await page.getByTestId("companion-settings-links").getByRole("button", { name: "用量" }).click();
+  await page.getByTestId("advanced-nav-usage").click();
   const usage = page.getByTestId("usage-settings");
   await expect(usage.getByTestId("usage-today")).toContainText("¥0.025");
   // 没全中不显示 100%（照 DeepSeek Harness）：179000 / 182000 = 98.4%
@@ -523,4 +538,44 @@ test("web search lists its sources under the tool card", async ({ page }) => {
   await expect(sources).toHaveCount(2);
   await expect(card.getByTestId("agent-tool-sources")).toContainText("九游 · 11-14");
   await expect(sources.nth(1)).toHaveText("https://example.com/b");
+});
+
+test("local recognition not started: the chat says so, and the call button starts it before listening", async ({ page }, testInfo) => {
+  await openChat(page, { empty: true, asr: "local-stopped" });
+  await expect(page.getByTestId("chat-local-asr")).toContainText("本地语音识别 · 未启动");
+  await expect(page.getByTestId("titlebar-asr")).toHaveAttribute("data-asr", "local-stopped");
+  await expect(page.getByTestId("chat-call-hint")).toContainText("点一下会先启动本地识别");
+  await page.screenshot({ path: testInfo.outputPath("chat-local-stopped.png"), animations: "disabled" });
+  await page.getByTestId("chat-call").click();
+  await expect.poll(() => page.evaluate(() => window.agentTest.calls
+    .filter((call) => call.command === "start_runtime" || call.command === "assistant_call").map((call) => call.command)))
+    .toEqual(["start_runtime", "assistant_call"]);
+  await expect(page.getByTestId("chat-local-asr")).toHaveCount(0);
+  await expect(page.getByTestId("titlebar-asr")).toHaveAttribute("data-asr", "local-running");
+});
+
+test("online recognition: the call button listens right away and says how else to call her", async ({ page }) => {
+  await openChat(page, { empty: true });
+  await expect(page.getByTestId("chat-local-asr")).toHaveCount(0);
+  await expect(page.getByTestId("titlebar-asr")).toHaveCount(0);
+  await expect(page.getByTestId("chat-call-hint")).toContainText("或在游戏里按 ~");
+  await page.getByTestId("chat-call").click();
+  await expect.poll(() => page.evaluate(() => window.agentTest.calls
+    .filter((call) => call.command === "start_runtime" || call.command === "assistant_call").map((call) => call.command)))
+    .toEqual(["assistant_call"]);
+});
+
+test("after the AI connection changes, the chat re-reads her state instead of keeping a stale 还没准备好", async ({ page }) => {
+  // 2026-11-20 真机：填完 Key 进聊天，聊天页还停在打开软件时读到的“还没有选 AI 连接”，发不出去。
+  await openChat(page, { notReady: "还没有选 AI 连接：请在「设置 → 她怎么回答 → AI 连接」里选一条" });
+  await expect(page.getByTestId("agent-not-ready")).toBeVisible();
+  await page.evaluate(async () => {
+    window.agentTest.state.notReadyReason = null;
+    const { settingsStore } = await import("/src/lib/stores/ui.ts");
+    const browser = await import("/src/lib/ipc/browserMock.ts");
+    settingsStore.set(await browser.updateSettings({ connections: [{ id: "test-ai", displayName: "测试连接", kind: "remote", provider: "test", baseUrl: "https://example.invalid", model: "test" }] }));
+  });
+  await expect(page.getByTestId("agent-not-ready")).toHaveCount(0);
+  await page.getByTestId("assistant-request").fill("你好");
+  await expect(page.getByTestId("agent-send")).toBeEnabled();
 });

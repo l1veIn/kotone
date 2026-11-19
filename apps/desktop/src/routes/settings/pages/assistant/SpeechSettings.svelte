@@ -188,11 +188,11 @@
       </p>
     {:else if engine === "deepseek"}
       <p class="m-0 text-xs leading-relaxed text-muted-foreground" data-testid="online-speech-info">
-        DeepSeek 语音：默认用 AI 连接里的 DeepSeek 与密钥，按字数计费（汉字算 2 个字符），每次播报都会把文字发给 DeepSeek；相同的话复用缓存，不能调语速。连接可在「高级 → 模型 → 语音合成」里另选。
+        DeepSeek 语音：默认用 AI 连接里的 DeepSeek 与密钥，按字数计费（汉字算 2 个字符），每次播报都会把文字发给 DeepSeek；相同的话复用缓存，不能调语速。连接可在「设置 → 模型 → 语音合成」里另选。
       </p>
     {:else if engine === "openai" || engine === "volcano"}
       <p class="m-0 text-xs leading-relaxed text-muted-foreground" data-testid="online-speech-info">
-        在线语音：每次播报都会把文字发给服务商。连接、模型与声音在「高级 → 模型 → 语音合成」里配置；相同的话会直接复用缓存，不再请求。
+        在线语音：每次播报都会把文字发给服务商。连接、模型与声音在「设置 → 模型 → 语音合成」里配置；相同的话会直接复用缓存，不再请求。
       </p>
     {:else}
       <p class="m-0 text-xs leading-relaxed text-muted-foreground" data-testid="system-speech-info">无需下载。</p>

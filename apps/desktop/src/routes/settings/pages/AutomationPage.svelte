@@ -84,12 +84,12 @@
   <div class="flex flex-wrap items-center gap-2 rounded-xl border border-hairline bg-card/50 px-3.5 py-2.5 text-xs text-muted-foreground" data-testid="automation-status">
     <span class="mr-auto">
       {#if open.length}<span class="text-foreground">{open.length} 个进行中</span> · {/if}
-      {#if stopHotkey}在游戏里按 <span class="rounded bg-primary/12 px-1.5 py-0.5 font-mono text-primary">{stopHotkey}</span> 立即停止所有自动化（不影响提醒）{:else}停止自动化热键未设置{/if}
+      {#if stopHotkey}在游戏里按 <span class="rounded bg-primary/12 px-1.5 py-0.5 font-mono text-primary">{stopHotkey}</span> 停下全部自动化和她正在做的事（不影响提醒）{:else}停止热键未设置（在「设置 → 系统 → 停下」里设）{/if}
       <button type="button" class="ml-1 text-primary hover:underline" onclick={onOpenHotkeys}>改热键 →</button>
     </span>
     <Button variant="ghost" size="sm" onclick={refresh}><RefreshCw class="size-3.5" />刷新</Button>
     <Button variant="outline" size="sm" disabled={!runningPrograms && !open.some((r) => r.action.kind === "program")}
-      onclick={stopAll} data-testid="automation-stop-all"><Square class="size-3 fill-current" />停止所有自动化</Button>
+      onclick={stopAll} data-testid="automation-stop-all"><Square class="size-3 fill-current" />停下全部自动化</Button>
   </div>
   {#if !snapshot}<p class="m-0 px-4 py-8 text-center text-[13px] text-muted-foreground">正在读取…</p>
   {:else}

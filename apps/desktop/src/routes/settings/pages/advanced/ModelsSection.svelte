@@ -20,6 +20,7 @@
     getModelInstallGuide,
     isDownloadCancelled,
     isTauri,
+    startRuntime,
     type DownloadProgress,
     type EngineInfo,
     type ConnectionInfo,
@@ -52,7 +53,15 @@
   let manualGuideError = $state("");
   let connections = $state<ConnectionInfo[]>([]);
   /** 统一模型清单按类别分栏：asr 语音识别（原有列表）/ ocr 文字识别 / tts 语音合成 / search 联网搜索（ADR 026） */
+  let { focus = null }: {
+    /** 聊天里“去看看 设置 → 模型 → 语音识别”等：切到这个类别。 */
+    focus?: { category: string; n: number } | null;
+  } = $props();
   let category = $state<"asr" | "ocr" | "tts" | "search">("asr");
+  $effect(() => {
+    const next = focus?.category;
+    if (next === "asr" || next === "ocr" || next === "tts" || next === "search") category = next;
+  });
   const categories = [
     { id: "asr", name: "语音识别" },
     { id: "ocr", name: "文字识别" },
@@ -334,9 +343,10 @@
 {#if $runtimeStore?.restartNeeded}
   <div class="flex items-center gap-2 rounded-xl border border-warning/40 bg-warning/8 px-3.5 py-2.5">
     <span class="size-2 shrink-0 rounded-full bg-warning"></span>
-    <p class="m-0 text-xs text-warning">
-      活动模型已变更，运行中的实例仍用旧配置——点标题栏「重启生效」后按新配置运行。
+    <p class="m-0 flex-1 text-xs text-warning">
+      识别设置改了：本地语音识别重新启动后才用新设置。
     </p>
+    <Button size="sm" variant="outline" class="h-7" onclick={() => void startRuntime().then(() => toast(true, "已按新设置重新启动")).catch((e) => toast(false, errText(e)))}>重新启动</Button>
   </div>
 {/if}
 
@@ -405,7 +415,7 @@
 </SettingsSection>
 
 <div class="space-y-3">
-<div class="flex w-fit gap-0.5 rounded-xl bg-muted/70 p-1" role="tablist" aria-label="模型类别">
+<div id="models-category" class="flex w-fit scroll-mt-16 gap-0.5 rounded-xl bg-muted/70 p-1" role="tablist" aria-label="模型类别">
   {#each categories as c}
     <button
       type="button"
@@ -622,7 +632,7 @@
                       />
                     </div>
                     <p class="mt-1 mb-0 text-[11px] text-muted-foreground/80">
-                      地址和 API key 在「高级 → API 连接」里保存，不会写入配置文件。
+                      地址和 API key 在「设置 → API 连接」里保存，不会写入配置文件。
                     </p>
                   {:else}
                     <input
@@ -640,7 +650,7 @@
       {/each}
     </div>
     <p class="mx-2 mt-2 mb-1.5 text-xs text-muted-foreground">
-      本机模型未下载时「启动」会提示缺失项；切换后如已「启动」，需点标题栏「重启生效」。
+      在线识别打开 Kotone 就能用；本地模型要先下载，选中后会立即启动一次。
     </p>
   </section>
 {/if}

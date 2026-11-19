@@ -76,7 +76,7 @@ export async function subscribeWakeModel(callback: (progress: WakeModelProgress)
 export function wakeStateText(status: WakeStatus): string {
   switch (status.state) {
     case "off": return "未开启";
-    case "waitingRuntime": return "等待语音识别启动（点右上角「启动」后开始监听）";
+    case "waitingRuntime": return "本地语音识别启动后开始听";
     case "modelMissing": return "还没有下载唤醒模型";
     case "listening": return "正在监听唤醒词";
     case "error": return `出错了：${status.message ?? "未知原因"}`;

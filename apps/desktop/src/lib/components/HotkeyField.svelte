@@ -3,7 +3,7 @@
   import { getHotkeyStatus, type NamedHotkeyStatus } from "../ipc";
   import { captureHotkey } from "../hotkeyCapture";
   import { findHotkeyConflict } from "../hotkeyCombo";
-  import { runtimeStore } from "../stores/runtime";
+  import { asrLocalStore, runtimeStore } from "../stores/runtime";
   import { errText, settingsStore, toast } from "../stores/ui";
 
   let {
@@ -27,6 +27,8 @@
   let refreshVersion = 0;
   let captureAbort: AbortController | null = null;
   const busy = $derived(disabled || saving || capturing);
+  /** 还没生效时的说明（ADR 028：只有本地识别有「启动」）。 */
+  const pendingText = $derived($asrLocalStore ? "启动本地语音识别后生效" : "语音识别准备好后生效");
 
   $effect(() => { draft = value; });
   $effect(() => {
@@ -70,7 +72,7 @@
       else if (current?.error) toast(false, `${title}未生效：${current.error}`);
       else if (current?.key) toast(true, `${title}已保存并生效：${current.key}`);
       else if (!current) toast(true, `${title}已保存；暂时无法确认是否生效`);
-      else toast(true, `${title}已保存，启动 Kotone 后生效：${key}`);
+      else toast(true, `${title}已保存，${pendingText}：${key}`);
     } catch (error) {
       if (!disposed) {
         toast(false, `保存${title}失败：${errText(error)}`);
@@ -143,7 +145,7 @@
     {:else if !value}
       <p class="mt-2 mb-0 text-xs text-muted-foreground">{compact ? "未设置" : "未设置（默认关闭，不会误触发）"}</p>
     {:else}
-      <p class="mt-2 mb-0 text-xs text-muted-foreground">已保存：{value}；启动 Kotone 后生效</p>
+      <p class="mt-2 mb-0 text-xs text-muted-foreground">已保存：{value}；{pendingText}</p>
     {/if}
   </div>
 </div>

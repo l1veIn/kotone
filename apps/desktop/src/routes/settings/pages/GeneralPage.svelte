@@ -1,24 +1,24 @@
 <script lang="ts">
   /*
-   * 通用页：琴音立绘横幅（启动按钮在这里）+ 日常高频设置（麦克风、热键、交互模式、悬浮窗、
-   * 声音与弹幕、外观）。版式参照 DeepSeek Harness 设置页：居中内容列、细边设置卡、行间分隔。
+   * 语音输入 · 输入（ADR 028 W8 / W9，页面 ID 仍是 general）：语音识别卡片（在线 / 本地与启动）、
+   * 语音输入热键、交互模式、悬浮窗、其他热键。说话、原话打进游戏聊天框，不经过角色（Agent）。
+   * 麦克风搬到「设置 → 声音」，游戏在「游戏列表」——这里只显示一行共享设置。
    */
-  import { companionName } from "$lib/stores/companion";
   import { onDestroy, onMount } from "svelte";
   import {
     updateSettings,
     listAudioDevices,
-    setAudioDevice,
+    listProfiles,
     getElevationStatus,
     restartAsAdmin,
     getHotkeyStatus,
     type AudioDevice,
     type ElevationStatus,
+    type GameProfile,
     type HotkeyStatus,
     type InteractionMode,
   } from "../../../lib/ipc";
   import { captureHotkey } from "../../../lib/hotkeyCapture";
-  import SelectField from "../../../lib/components/settings/SelectField.svelte";
   import ToggleField from "../../../lib/components/settings/ToggleField.svelte";
   import SettingsPage from "../../../lib/components/settings/SettingsPage.svelte";
   import SettingsSection from "../../../lib/components/settings/SettingsSection.svelte";
@@ -32,21 +32,27 @@
     toast,
     errText,
   } from "../../../lib/stores/ui";
-  import { runtimeStore } from "../../../lib/stores/runtime";
-  import RuntimeButton from "../../../lib/components/RuntimeButton.svelte";
-  import CallKotoneButton from "../../../lib/components/CallKotoneButton.svelte";
-  import heroGeneral from "../../../assets/brand/hero-general.webp";
+  import { asrLocalStore } from "../../../lib/stores/runtime";
+  import AsrCard from "./voice/AsrCard.svelte";
+  import VoiceHotkeysSection from "./voice/VoiceHotkeysSection.svelte";
+  import VoiceSetupGuide from "./voice/VoiceSetupGuide.svelte";
 
-  let { legacyVoiceOnly = false, onOpenAdvanced, onOpenCompanion, onOpenTalk }: {
-    legacyVoiceOnly?: boolean;
-    onOpenAdvanced: () => void;
-    /** 「试试游戏陪玩」：打开琴音的聊天。 */
-    onOpenCompanion: () => void;
-    /** 「交流」：怎么在游戏里叫琴音。 */
-    onOpenTalk: () => void;
+  let { guideOpen = false, onOpenGuide, onCloseGuide, onConfigure, onOpenModels, onOpenSound, onOpenGames }: {
+    /** 语音输入的四步引导（V 路径）展开着。 */
+    guideOpen?: boolean;
+    onOpenGuide: () => void;
+    onCloseGuide: () => void;
+    /** 让 Kotone 帮我配置（填 DeepSeek Key / 让她帮你设）。 */
+    onConfigure: () => void;
+    onOpenModels: () => void;
+    onOpenSound: () => void;
+    onOpenGames: () => void;
   } = $props();
 
   let devices = $state<AudioDevice[]>([]);
+  let profiles = $state<GameProfile[]>([]);
+  const micName = $derived(devices.find((d) => d.id === $settingsStore?.audioDeviceId)?.name ?? "系统默认");
+  const game = $derived(profiles.find((p) => p.id === $settingsStore?.activeProfileId) ?? null);
   let elevation = $state<ElevationStatus | null>(null);
   let restarting = $state(false);
 
@@ -60,11 +66,13 @@
 
   onMount(async () => {
     try {
-      const [nextDevices, nextElevation] = await Promise.all([
+      const [nextDevices, nextElevation, nextProfiles] = await Promise.all([
         listAudioDevices(),
         getElevationStatus(),
+        listProfiles(),
       ]);
       devices = nextDevices;
+      profiles = nextProfiles;
       applyGameCompatibilityStatus(nextElevation);
       if (localStorage.getItem(ADMIN_RESTART_FLAG)) {
         localStorage.removeItem(ADMIN_RESTART_FLAG);
@@ -146,16 +154,6 @@
     }
   });
 
-  /** hero 弹幕装饰：漂浮的游戏沟通短句（reduced-motion 下隐藏） */
-  const danmakuLines = [
-    { text: "中路 MISS！", top: 10, duration: 17, delay: 0 },
-    { text: "nice 啊这波", top: 28, duration: 21, delay: 3.5 },
-    { text: "打野来上了", top: 48, duration: 14, delay: 7 },
-    { text: "稳住，我们能赢", top: 66, duration: 19, delay: 1.5 },
-    { text: "大龙集合 大龙集合", top: 20, duration: 23, delay: 10 },
-    { text: "666", top: 58, duration: 12, delay: 12 },
-  ];
-
   const modes: { id: InteractionMode; name: string; desc: string }[] = [
     { id: "push-to-talk", name: "对讲机", desc: "按住说话，松开发送" },
     { id: "dictation", name: "录音笔", desc: "点按开始，再点停止" },
@@ -204,7 +202,7 @@
     }
     const conflict = findHotkeyConflict($settingsStore, "record", key);
     if (conflict) {
-      toast(false, `录制热键与${conflict}冲突，请换一个组合`);
+      toast(false, `语音输入热键和${conflict}相同，请换一个组合`);
       return;
     }
     try {
@@ -215,7 +213,7 @@
       hotkeyDraft = $settingsStore?.hotkey.key ?? key;
       hotkeyStatus = await getHotkeyStatus().catch(() => null);
       if (hotkeyStatus?.error) toast(false, `热键已保存，但未生效：${hotkeyStatus.error}`);
-      else toast(true, hotkeyStatus?.registered ? `热键已保存并生效：${key}` : `热键已保存，启动 Kotone 后生效：${key}`);
+      else toast(true, hotkeyStatus?.registered ? `热键已保存并生效：${key}` : `热键已保存，${$asrLocalStore ? "启动本地语音识别后生效" : "语音识别准备好后生效"}：${key}`);
     } catch (e) {
       toast(false, `保存热键失败：${errText(e)}`);
     } finally {
@@ -256,52 +254,9 @@
 
 </script>
 
-<SettingsPage title="语音输入" description="在游戏里按住热键说话，转成文字发进聊天：麦克风、录音热键、交互方式、悬浮窗。" testid="general-page">
-  <!-- 欢迎横幅：琴音立绘（直播间合成图）+ 渐变标语 + 启动按钮 -->
-  <section class="relative overflow-hidden rounded-2xl border border-hairline bg-card" data-testid="general-hero">
-    <img src={heroGeneral} alt="Kotone 在中继站直播间挥手欢迎" class="absolute inset-0 h-full w-full object-cover object-[70%_28%]" />
-    <!-- 左侧压暗（深色 / 浅色都保证标题可读） -->
-    <div class="absolute inset-0 bg-gradient-to-r from-[#10101e]/95 via-[#10101e]/70 to-transparent"></div>
-    <!-- 弹幕装饰层：游戏沟通短句从右向左飘过（reduced-motion 自动隐藏） -->
-    <div class="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
-      {#each danmakuLines as line}
-        <span class="danmaku-item" style:top="{line.top}%" style:animation-duration="{line.duration}s" style:animation-delay="{line.delay}s">{line.text}</span>
-      {/each}
-    </div>
-    <div class="relative flex min-h-48 flex-col justify-between gap-5 px-6 py-5">
-      <div>
-        <h2 class="m-0 text-[22px] leading-tight font-bold text-[#fff]">
-          想说的话，<span class="kotone-gradient-text">一秒都别等</span>
-        </h2>
-        <p class="mt-2 mb-0 text-[13px] leading-relaxed text-[rgb(255_255_255/0.78)]">
-          嗨，我是 Kotone！你的专属语音助手，<br />随时待命，陪你指挥每一场胜利！
-        </p>
-      </div>
-      <RuntimeButton variant="hero" {onOpenAdvanced} />
-    </div>
-  </section>
-
-  <!-- 游戏陪玩入口（ADR 023）：语音输入仍是首页，这里引导用户用琴音；启动后直接给“呼叫琴音”的快速入口 -->
-  {#if legacyVoiceOnly}
-    <Button size="sm" variant="ghost" onclick={onOpenCompanion}>认识琴音</Button>
-  {:else}
-  <section class="rounded-2xl border border-primary/35 bg-primary/8 px-5 py-4" data-testid="companion-cta">
-    <div class="flex flex-wrap items-center gap-4">
-      <div class="min-w-0 flex-1">
-        <p class="m-0 text-[15px] font-semibold text-foreground">试试游戏陪玩：让{$companionName}陪你玩</p>
-        <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">
-          跟她说一句话，她能看游戏画面、帮你点鼠标按键、读队友聊天、替你用别的语言跟队友说话，还能帮你配置 Kotone。
-        </p>
-      </div>
-      <div class="flex shrink-0 items-center gap-2">
-        <Button size="sm" variant="outline" data-testid="companion-cta-talk" onclick={onOpenTalk}>怎么叫她</Button>
-        <Button size="sm" data-testid="companion-cta-open" onclick={onOpenCompanion}>和{$companionName}聊聊</Button>
-      </div>
-    </div>
-    {#if $runtimeStore?.phase === "running"}
-      <div class="mt-4 border-t border-primary/20 pt-4"><CallKotoneButton size="lg" testid="home-call" /></div>
-    {/if}
-  </section>
+<SettingsPage embedded title="输入" testid="general-page">
+  {#if guideOpen}
+    <VoiceSetupGuide onClose={onCloseGuide} {onConfigure} />
   {/if}
 
   {#if $settingsStore}
@@ -329,38 +284,11 @@
       </section>
     {/if}
 
-    <SettingsSection title="输入">
-      <SettingsRow label="麦克风" description="说话用的输入设备。">
-        {#snippet control()}
-          <div class="w-72 max-w-full">
-            <SelectField
-              size="md"
-              ariaLabel="麦克风"
-              value={$settingsStore.audioDeviceId}
-              options={devices.map((device) => ({ value: device.id, label: device.name }))}
-              onchange={async (id) => {
-                try {
-                  await setAudioDevice(id);
-                  settingsStore.update((s) => (s ? { ...s, audioDeviceId: id } : s));
-                  toast(true, "麦克风已切换");
-                } catch (err) {
-                  toast(false, `切换麦克风失败：${errText(err)}`);
-                }
-              }}
-            />
-          </div>
-        {/snippet}
-      </SettingsRow>
-      <div class="py-3.5">
-        <ToggleField
-          checked={$settingsStore.lowerSpeakerVolumeWhileListening}
-          label="录音时降低扬声器音量"
-          desc="按键录音或琴音倾听时暂时降低扬声器音量，结束后恢复。"
-          onchange={(enabled) =>
-            void patchSettings({ lowerSpeakerVolumeWhileListening: enabled }, "扬声器设置已保存")}
-        />
-      </div>
-      <SettingsRow label="录制热键" description="支持键盘组合以及鼠标侧键 Mouse4 / Mouse5；鼠标侧键会自动使用低层键鼠钩子。" stacked for="hotkey-input">
+    <AsrCard {onOpenModels} {onConfigure} />
+
+    <div id="voice-hotkey" class="scroll-mt-16">
+    <SettingsSection title="语音输入热键">
+      <SettingsRow label="语音输入热键" description="按下它说话，原话打进游戏聊天框。支持键盘组合以及鼠标侧键 Mouse4 / Mouse5。" stacked for="hotkey-input">
         {#snippet control()}
           <div class="flex flex-wrap items-center gap-2">
             <input
@@ -387,8 +315,10 @@
         {/snippet}
       </SettingsRow>
     </SettingsSection>
+    </div>
 
     <!-- 交互模式（ADR-006 四预设） -->
+    <div id="voice-mode" class="scroll-mt-16">
     <SettingsSection title="交互模式" description="按热键之后怎么录、什么时候发。">
       <div class="py-3.5">
         <div class="grid grid-cols-2 gap-2 lg:grid-cols-4" role="group" aria-label="交互模式">
@@ -439,15 +369,17 @@
         </SettingsRow>
       {/if}
     </SettingsSection>
+    </div>
 
-    <!-- 悬浮窗：普通用户只需要决定何时出现、放在哪里、是否穿透。 -->
-    <SettingsSection title="悬浮窗" description="说话时在游戏里显示识别进度的小窗。">
+    <!-- 悬浮窗：只属于语音输入（角色用气泡，ADR 028）。样式从「设置 → 系统」搬来。 -->
+    <div id="voice-overlay" class="scroll-mt-16">
+    <SettingsSection title="悬浮窗" description="语音输入时在游戏里显示识别进度的小窗。角色的回答在气泡里，不用它。">
       <SettingsRow label="什么时候出现" stacked>
         {#snippet control()}
           <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
             {#each [
               { id: "on_demand", name: "用时浮现", desc: "平时隐藏，说话时出现，发完自动隐藏" },
-              { id: "always", name: "常驻", desc: "启动即显示，停止才隐藏" },
+              { id: "always", name: "常驻", desc: "一直显示在游戏画面上" },
               { id: "never", name: "不显示", desc: "关闭悬浮窗，热键和语音输入照常" },
             ] as const as opt}
               {@const selected = ($settingsStore.overlay?.visibility ?? "on_demand") === opt.id}
@@ -507,37 +439,42 @@
             )}
         />
       </div>
+      <SettingsRow label="样式" stacked>
+        {#snippet control()}
+          <div class="grid grid-cols-2 gap-2">
+            {#each [
+              { id: "capsule", name: "胶囊", desc: "更轻巧，减少遮挡" },
+              { id: "card", name: "卡片", desc: "信息完整，适合首次使用" },
+            ] as const as option}
+              {@const selected = $settingsStore.overlay.style === option.id}
+              <button type="button" aria-pressed={selected}
+                class="rounded-xl border px-3 py-2.5 text-left transition-colors {selected ? 'border-primary/60 bg-primary/10' : 'border-hairline hover:bg-muted/60'}"
+                onclick={() => void patchSettings({ overlay: { style: option.id } }, `悬浮窗样式已切换：${option.name}`)}>
+                <p class="m-0 text-[13px] font-medium {selected ? 'text-primary' : 'text-foreground'}">{option.name}</p>
+                <p class="mt-0.5 mb-0 text-xs text-muted-foreground">{option.desc}</p>
+              </button>
+            {/each}
+          </div>
+        {/snippet}
+      </SettingsRow>
     </SettingsSection>
+    </div>
 
-    <!-- 声音与弹幕：提醒、陪玩回答与自动化共用的输出（ADR 013 §8） -->
+    <VoiceHotkeysSection />
+
+    <section class="rounded-2xl border border-hairline bg-card/40 px-4 py-3 text-xs leading-relaxed text-muted-foreground" data-testid="voice-shared">
+      共享设置：麦克风 <b class="font-medium text-foreground">{micName}</b>
+      <button class="text-primary hover:underline" onclick={onOpenSound}>设置 → 声音</button>
+      <span class="mx-1">·</span>
+      游戏 <b class="font-medium text-foreground">{game?.displayName ?? "通用"}</b>{#if game}（{game.openChatKey} 开聊天，热词 {game.hotwords.length}）{/if}
+      <button class="text-primary hover:underline" onclick={onOpenGames}>游戏列表</button>
+    </section>
+
+    {#if !guideOpen}
+      <div class="flex justify-center">
+        <Button size="sm" variant="ghost" data-testid="voice-guide-open" onclick={onOpenGuide}>重新走一遍语音输入引导</Button>
+      </div>
+    {/if}
   {/if}
 </SettingsPage>
 
-<style>
-  /* hero 弹幕：从右缘外匀速漂到左缘外，无限循环；透明度克制不抢主体 */
-  .danmaku-item {
-    position: absolute;
-    left: 100%;
-    white-space: nowrap;
-    font-size: 11px;
-    color: rgba(255, 255, 255, 0.32);
-    text-shadow: 0 0 8px rgba(0, 229, 255, 0.35);
-    animation-name: kotone-danmaku;
-    animation-timing-function: linear;
-    animation-iteration-count: infinite;
-  }
-  @keyframes kotone-danmaku {
-    from {
-      transform: translateX(0);
-    }
-    to {
-      /* 自身宽度 + 约 56rem 容器行程，保证完全漂出左缘 */
-      transform: translateX(calc(-100% - 56rem));
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .danmaku-item {
-      display: none;
-    }
-  }
-</style>

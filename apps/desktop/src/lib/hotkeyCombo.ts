@@ -105,18 +105,18 @@ export function findHotkeyConflict(settings: Settings | null, selfId: string, ke
   if (!settings || !key.trim()) return null;
   const legacyVoiceOnly = usesLegacyVoiceInput(settings.ui);
   const bindings: [string, string, string][] = [
-    ["record", "录制热键", settings.hotkey.key],
+    ["record", "语音输入热键", settings.hotkey.key],
     ["legacy-reminder", "提醒助手热键", hasLegacyReminders(settings.ui) ? settings.assistant.hotkey : ""],
-    ["assistant", "呼叫热键", legacyVoiceOnly ? "" : companionBindings(settings.assistant)?.hotkey ?? ""],
+    ["assistant", "呼叫键", legacyVoiceOnly ? "" : companionBindings(settings.assistant)?.hotkey ?? ""],
     ...(legacyVoiceOnly ? [] : settings.assistant.companion?.quickMessages ?? []).map(
-      (message, index): [string, string, string] => [`quick-message-${index + 1}`, `快捷消息 ${index + 1} 热键`, message.hotkey],
+      (message, index): [string, string, string] => [`quick-message-${index + 1}`, `快捷指令 ${index + 1} 热键`, message.hotkey],
     ),
     ["channel-cycle", "频道切换热键", settings.channelCycleHotkey],
     ["resend-last", "重发最近一条热键", settings.resendLastHotkey],
     ["post-process-toggle", "文字处理开关热键", settings.togglePostProcessingHotkey],
     ["post-process-cycle", "切换文字处理流程热键", settings.cyclePostProcessingHotkey],
-    ["runtime-toggle", "启动 / 停止 Kotone 热键", settings.runtimeToggleHotkey],
-    ["automation-stop", "停止所有自动化热键",
+    ["runtime-toggle", "启动 / 停止本地语音识别快捷键", settings.runtimeToggleHotkey],
+    ["automation-stop", "停止热键",
       legacyVoiceOnly ? "" : settings.automationStopHotkey ?? ""],
   ];
   return bindings.find(([id, , combo]) => id !== selfId && combo && combosConflict(key, combo))?.[1] ?? null;

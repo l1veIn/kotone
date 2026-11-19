@@ -18,10 +18,19 @@ export interface UiConfig {
   /** 首启向导已完成（或已跳过） */
   firstRunCompleted: boolean;
   legacyUpgrade?: "notNeeded" | "pending" | "dismissed" | "optedIn";
-  /** app 启动后自动进入 Running（warmup 引擎 + 注册热键 + 显示悬浮窗） */
+  /** 打开 Kotone 时自动启动本地语音识别（在线识别打开即就绪，不看这一项）。 */
   autoStart: boolean;
   /** 新版本弹窗里选了「不再提醒」：启动时不自动弹出（关于页仍可手动检查） */
   updatePromptDisabled?: boolean;
+  /** 打开软件时显示：`voiceInput` = 语音输入；空或其它任何值 = 聊天（ADR 028）。 */
+  startPage?: string;
+}
+
+export type StartPage = "chat" | "voiceInput";
+
+/** 打开软件时落在哪：只认 `voiceInput`，其它（含以后新加、这一版不认识的值）都按聊天。 */
+export function startPageOf(ui: UiConfig | undefined): StartPage {
+  return ui?.startPage === "voiceInput" ? "voiceInput" : "chat";
 }
 
 export function usesLegacyVoiceInput(ui: UiConfig | undefined): boolean {
@@ -206,7 +215,7 @@ export interface AssistantConfig extends AssistantBindings {
   companionBindings?: AssistantBindings | null;
   /** 老配置补过默认呼叫键的标记（只补一次）。 */
   callHotkeyDefaulted?: boolean;
-  /** 旧的陪玩热键方式；呼叫琴音固定为说完自动提交，只剩旧的窗口语音按钮在用。 */
+  /** 旧的提醒助手热键方式；呼叫琴音固定为说完自动提交，只剩旧的窗口语音按钮在用。 */
   interactionMode: AssistantInteractionMode;
   defaultDelivery: ("voice" | "danmaku")[];
   voiceId: string;
@@ -289,7 +298,7 @@ export interface AgentConfig {
   permissions: { mode: "default" | "allow-all" | "read-only"; rules: Record<string, "allow" | "ask" | "deny"> };
   /** 不交给 AI 的已保存自动化 id。 */
   hiddenAutomations: string[];
-  /** 陪玩热键与快捷指令交给琴音（默认开；关闭时用旧的单次陪玩）。 */
+  /** 呼叫键与快捷指令交给琴音（默认开；关闭时用旧的单次陪玩）。 */
   inGame: boolean;
   /** 游戏内交给琴音后 1.5 秒还没出声，先说一句“好，我看看”（默认开）。 */
   progressSpeech?: boolean;
@@ -428,7 +437,39 @@ export interface RuntimeStatus {
   interactionMode: InteractionMode | null;
   /** 过渡阶段提示（warmup / hotkey / overlay / unload），稳态为 null */
   stage: string | null;
+  /** 当前语音识别是本地模型（有「启动」概念）；在线识别为 false，打开即就绪。 */
+  asrLocal?: boolean;
+  /** 最近一次启动失败的原因；成功启动、停止或换识别模型后清空。 */
+  error?: string | null;
 }
+
+/**
+ * 语音识别就绪状态（ADR 028）：
+ * - 在线识别：`online-ready` / `online-preparing` / `online-error`，界面上不出现「启动」；
+ * - 本地识别：未启动 / 准备中 / 已启动 / 出问题了。
+ */
+export type AsrReadiness =
+  | "unknown"
+  | "online-ready" | "online-preparing" | "online-error"
+  | "local-stopped" | "local-starting" | "local-running" | "local-error";
+
+export function asrReadiness(status: RuntimeStatus | null | undefined): AsrReadiness {
+  if (!status) return "unknown";
+  const local = status.asrLocal ?? true;
+  if (status.phase === "running") return local ? "local-running" : "online-ready";
+  if (status.phase === "starting") return local ? "local-starting" : "online-preparing";
+  if (status.error) return local ? "local-error" : "online-error";
+  if (status.phase === "stopping") return local ? "local-starting" : "online-preparing";
+  return local ? "local-stopped" : "online-preparing";
+}
+
+/** 本地识别四种状态的文案（标题栏、语音输入卡片、聊天页共用）。 */
+export const LOCAL_ASR_LABELS: Record<"local-stopped" | "local-starting" | "local-running" | "local-error", string> = {
+  "local-stopped": "未启动",
+  "local-starting": "准备中",
+  "local-running": "已启动",
+  "local-error": "出问题了",
+};
 
 export type OnboardingLaunchMode = "auto" | "always" | "never";
 

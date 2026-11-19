@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { openSettingsTab, openVoiceInput } from "./nav";
 
 // 设置窗口外壳：标题栏、侧边栏（展开 / 图标栏 / 窄窗口抽屉）、窗口按钮。
 
@@ -32,20 +33,27 @@ test("narrow windows use a drawer that closes after navigating", async ({ page }
   const drawer = page.getByTestId("sidebar-drawer");
   await expect(drawer).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("shell-drawer.png"), animations: "disabled" });
-  await drawer.getByTestId("settings-nav-assistant").click();
+  await drawer.getByTestId("settings-nav-general").click();
   await expect(drawer).toHaveCount(0);
+  await expect(page.getByTestId("voice-input")).toBeVisible();
+  // 抽屉里的对话列表回到聊天，抽屉同样收起
+  await page.getByTestId("sidebar-toggle").click();
+  await page.getByTestId("sidebar-drawer").getByTestId("agent-conversation").first().click();
+  await expect(page.getByTestId("sidebar-drawer")).toHaveCount(0);
   await expect(page.getByTestId("assistant-chat")).toBeVisible();
   // 窄窗口下输入框与发送按钮都在视口里
   await expect(page.getByTestId("agent-send")).toBeInViewport();
 });
 
-test("a conversation in the sidebar opens the chat tab from any page", async ({ page }) => {
+test("a conversation in the sidebar opens the chat from any page", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-assistant").click();
-  await page.getByTestId("assistant-nav-settings").click();
-  await page.getByTestId("settings-nav-history").click();
+  await openSettingsTab(page, "call");
+  await openVoiceInput(page, "history");
   await page.getByTestId("agent-conversations").getByTestId("agent-conversation").first().click();
-  await expect(page.getByTestId("assistant-nav-chat")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("assistant-tasks")).toBeVisible();
+  // 在聊天时侧栏的角色项不高亮，对话列表里的当前对话高亮
+  await expect(page.getByTestId("settings-nav-assistant")).not.toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("agent-user-message").first()).toHaveText("帮我做一个每秒按 Q 的自动化");
   await page.getByTestId("sidebar-new-chat").click();
   await expect(page.getByTestId("agent-empty")).toBeVisible();
