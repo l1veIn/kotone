@@ -10,6 +10,7 @@ mod overlay;
 mod runtime;
 mod speech_models;
 mod tray;
+mod update_transition;
 
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -2026,6 +2027,7 @@ pub fn run() {
             app.manage(assistant_runtime);
             app.manage(recording_output_volume);
             app.manage(speech_models::SpeechModelManager::default());
+            app.manage(update_transition::InstallLock::default());
             assistant::start(app.handle());
             compatibility::start_fullscreen_monitor(app.handle().clone());
 
@@ -2068,6 +2070,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ping,
+            update_transition::check_kotone_update,
+            update_transition::install_kotone_update,
             export_diagnostics,
             clear_diagnostics,
             log_frontend_error,

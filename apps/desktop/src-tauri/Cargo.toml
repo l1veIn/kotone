@@ -43,6 +43,7 @@ sysinfo = "0.30"
 # 脱敏诊断包 ZIP（版本已由 updater 间接锁定，显式依赖以供壳侧写包）
 zip.workspace = true
 dirs = "6"
+fastrand = "2"
 tar = "0.4"
 bzip2 = "0.4"
 tempfile.workspace = true

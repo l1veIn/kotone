@@ -5,7 +5,7 @@ const pkg = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
 ) as { version: string };
 
-test("the check-for-updates button is always visible and reports the latest version", async ({
+test("the check-for-updates button reports when this installation has no eligible update", async ({
   page,
 }) => {
   await page.goto("/#/settings?onboarding=never");
@@ -17,7 +17,7 @@ test("the check-for-updates button is always visible and reports the latest vers
 
   await checkUpdates.click();
   await expect(
-    page.getByText(`✓ 已是最新版本（v${pkg.version}）`, { exact: true }),
+    page.getByText(`✓ 暂无可用更新（v${pkg.version}）`, { exact: true }),
   ).toBeVisible();
   await expect(checkUpdates).toBeVisible();
   await expect(checkUpdates).toBeEnabled();

@@ -2593,6 +2593,7 @@ version = "0.1.14"
 dependencies = [
  "bzip2",
  "dirs",
+ "fastrand",
  "kotone-ai",
  "kotone-core",
  "kotone-platform-windows",

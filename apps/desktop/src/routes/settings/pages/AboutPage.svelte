@@ -26,12 +26,13 @@
   });
 
   const GITHUB_URL = "https://github.com/l1veIn/kotone";
+  const OLD_RELEASE_URL = "https://github.com/l1veIn/kotone/releases/download/v0.1.13/Kotone_0.1.13_x64-setup.exe";
 
   /** webview 内 target=_blank 不会调起系统浏览器，走后端 open_external */
-  async function openGitHub(e: MouseEvent) {
+  async function openLink(e: MouseEvent, url: string) {
     e.preventDefault();
     try {
-      await openExternal(GITHUB_URL);
+      await openExternal(url);
     } catch (err) {
       toast(false, `打开链接失败：${errText(err)}`);
     }
@@ -76,7 +77,7 @@
           href={GITHUB_URL}
           target="_blank"
           rel="noreferrer"
-          onclick={(e) => void openGitHub(e)}
+          onclick={(e) => void openLink(e, GITHUB_URL)}
         >
           <svg viewBox="0 0 24 24" fill="currentColor" class="h-3.5 w-3.5" aria-hidden="true">
             <path
@@ -119,7 +120,7 @@
         {#if checkingUpdate}
           <p class="text-white/45">正在连接更新服务器…</p>
         {:else if updateResult?.status === "up-to-date"}
-          <p class="text-emerald-300">✓ 已是最新版本（v{version}）</p>
+          <p class="text-emerald-300">✓ 暂无可用更新（v{version}）</p>
         {:else if updateResult?.status === "available"}
           <p class="text-kotone-pink">发现新版本 v{updateResult.version}，尚未安装</p>
           {#if updateResult.notes}
@@ -138,6 +139,25 @@
       </div>
     </div>
   </section>
+
+  <details class="kotone-card mt-4 p-4" data-testid="rollback-section">
+    <summary class="cursor-pointer text-sm font-bold">回到旧版本</summary>
+    <ol class="mt-3 list-decimal space-y-1.5 pl-5 text-xs leading-relaxed text-white/70">
+      <li>从托盘退出琴音。先复制当前数据目录留存，默认位置是 <code>%USERPROFILE%\.kotone</code>。</li>
+      <li>从下方下载并手动安装 0.1.13。若安装器要求先卸载，请保留应用数据。安装完成后先取消打开琴音。</li>
+      <li>如需恢复升级前的数据，将数据目录下 <code>backup</code> 中对应版本和时间的备份内容复制回原数据目录，再启动旧版。</li>
+    </ol>
+    <p class="mt-2 text-xs text-white/50">
+      系统凭据和设置在数据目录之外的模型或历史文件留在原处。
+    </p>
+    <a
+      class="mt-3 inline-block text-xs text-kotone-cyan hover:underline"
+      href={OLD_RELEASE_URL}
+      target="_blank"
+      rel="noreferrer"
+      onclick={(event) => void openLink(event, OLD_RELEASE_URL)}
+    >下载 0.1.13 安装包</a>
+  </details>
 
   <p class="mt-4 text-center text-[10px] text-white/30">
     © 2026 Kotone 项目 · 第三方组件声明见 THIRD_PARTY_NOTICES

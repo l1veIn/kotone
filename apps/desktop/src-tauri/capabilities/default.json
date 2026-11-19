@@ -14,7 +14,6 @@
     "core:event:default",
     "global-shortcut:default",
     "dialog:default",
-    "updater:default",
     "process:default"
   ]
 }

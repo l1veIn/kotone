@@ -2,6 +2,8 @@
   /** 琴音风格更新弹窗：发现新版、下载安装、重启确认共用同一张状态卡。 */
   import { tick } from "svelte";
   import { answerUpdateDialog, updateDialogStore } from "../updater";
+  import { openExternal } from "../ipc";
+  import { errText, toast } from "../stores/ui";
   import stickerProud from "../../assets/brand/stickers/proud.webp";
   import stickerCheering from "../../assets/brand/stickers/cheering.webp";
 
@@ -28,6 +30,15 @@
     });
   });
 
+  async function openChangelog(event: MouseEvent, url: string) {
+    event.preventDefault();
+    try {
+      await openExternal(url);
+    } catch (error) {
+      toast(false, `打开更新日志失败：${errText(error)}`);
+    }
+  }
+
   function handleKeydown(event: KeyboardEvent) {
     const phase = $updateDialogStore?.phase;
     if (event.key === "Escape" && (phase === "available" || phase === "ready")) {
@@ -37,7 +48,7 @@
     }
     if (event.key !== "Tab" || !dialogElement) return;
     const focusable = Array.from(
-      dialogElement.querySelectorAll<HTMLElement>("button:not(:disabled), [tabindex='0']"),
+      dialogElement.querySelectorAll<HTMLElement>("button:not(:disabled), a[href], [tabindex='0']"),
     );
     if (focusable.length === 0) {
       event.preventDefault();
@@ -95,6 +106,8 @@
             <h2 id="update-dialog-title" class="text-lg font-bold">
               {#if dialog.phase === "available"}
                 发现琴音新版本
+              {:else if dialog.phase === "backing-up"}
+                正在备份设置和数据
               {:else if dialog.phase === "downloading"}
                 正在更新琴音
               {:else if dialog.phase === "ready"}
@@ -111,7 +124,9 @@
           </div>
           <p id="update-dialog-description" class="mt-1.5 text-[13px] leading-relaxed text-white/60">
             {#if dialog.phase === "available"}
-              新版本已经就绪，可以直接从当前版本更新到最新版。
+              有可用更新。
+            {:else if dialog.phase === "backing-up"}
+              备份完成后开始下载，请保持琴音运行。
             {:else if dialog.phase === "downloading"}
               正在下载并安装完整更新包，请保持琴音运行。
             {:else if dialog.phase === "ready"}
@@ -137,12 +152,22 @@
           {:else}
             <p class="text-[12px] text-white/45">本次发布暂未提供更新说明。</p>
           {/if}
+          {#if dialog.changelogUrl}
+            {@const url = dialog.changelogUrl}
+            <a
+              class="mt-2 inline-block text-xs text-kotone-cyan hover:underline"
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+              onclick={(event) => void openChangelog(event, url)}
+            >查看完整更新日志</a>
+          {/if}
         </div>
       {:else}
         <div class="relative mt-6" aria-live="polite">
           <div class="mb-2 flex items-center justify-between text-[11px] font-semibold">
             <span class="text-white/55">
-              {dialog.phase === "downloading" ? "下载安装中" : "正在重新启动"}
+              {dialog.phase === "backing-up" ? "备份中" : dialog.phase === "downloading" ? "下载安装中" : "正在重新启动"}
             </span>
             {#if dialog.phase === "downloading" && progressPercent !== null}
               <span class="text-kotone-cyan" data-testid="update-progress">{progressPercent}%</span>
