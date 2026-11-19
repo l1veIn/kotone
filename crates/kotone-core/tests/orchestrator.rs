@@ -2786,7 +2786,13 @@ async fn assistant_hold_release_is_independent_and_repress_preserves_the_sentenc
         queue.clone(),
         sent.clone(),
         Arc::new(VecEmitter::default()),
-    );
+    )
+    .with_dictation_capture_hook(|| panic!("提醒助手不应降低扬声器音量"));
+    builder
+        .settings()
+        .write()
+        .unwrap()
+        .lower_speaker_volume_while_listening = true;
     builder.release_grace = Duration::from_millis(80);
     builder.settings().write().unwrap().interaction_mode =
         Some(kotone_core::interaction::InteractionMode::OneShot);
@@ -3236,14 +3242,25 @@ impl AudioBackend for ControlledStopAudio {
     }
 }
 
+struct TestOutputVolumeLease(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for TestOutputVolumeLease {
+    fn drop(&mut self) {
+        assert!(self.0.fetch_sub(1, Ordering::SeqCst) > 0);
+    }
+}
+
 fn capture_lifecycle_orchestrator(
     audio: Arc<dyn AudioBackend>,
     captures: Arc<std::sync::atomic::AtomicUsize>,
+    volume_leases: Arc<std::sync::atomic::AtomicUsize>,
 ) -> Arc<Orchestrator> {
     let mut settings = test_settings();
     settings.stt_engine = "stub-final".into();
     settings.active_profile_id = None;
     settings.auto_send = false;
+    settings.history.mode = kotone_core::history::HistoryMode::Off;
+    settings.lower_speaker_volume_while_listening = true;
     let mut engines = EngineRegistry::new();
     engines.register(Box::new(StubFinalEngine {
         final_text: "提醒"
@@ -3270,6 +3287,10 @@ fn capture_lifecycle_orchestrator(
     .with_after_capture(Arc::new(move || {
         assert!(captures.fetch_sub(1, Ordering::SeqCst) > 0);
     }))
+    .with_dictation_capture_hook(move || {
+        volume_leases.fetch_add(1, Ordering::SeqCst);
+        Some(Box::new(TestOutputVolumeLease(volume_leases.clone())))
+    })
     .into_arc()
 }
 
@@ -3277,6 +3298,7 @@ fn capture_lifecycle_orchestrator(
 async fn capture_admission_is_held_until_audio_thread_joins_on_end_cancel_and_drop() {
     for action in ["end", "cancel", "drop"] {
         let captures = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let volume_leases = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let stopping = Arc::new(tokio::sync::Notify::new());
         let (release, receiver) = std::sync::mpsc::channel();
         let orch = capture_lifecycle_orchestrator(
@@ -3285,8 +3307,10 @@ async fn capture_admission_is_held_until_audio_thread_joins_on_end_cancel_and_dr
                 release: Mutex::new(Some(receiver)),
             }),
             captures.clone(),
+            volume_leases.clone(),
         );
         orch.begin().await.unwrap();
+        assert_eq!(volume_leases.load(Ordering::SeqCst), 1);
         let work = tokio::spawn(async move {
             match action {
                 "end" => {
@@ -3304,6 +3328,7 @@ async fn capture_admission_is_held_until_audio_thread_joins_on_end_cancel_and_dr
             1,
             "{action}: stop is not complete"
         );
+        assert_eq!(volume_leases.load(Ordering::SeqCst), 1);
         release.send(()).unwrap();
         work.await.unwrap();
         assert_eq!(
@@ -3311,6 +3336,7 @@ async fn capture_admission_is_held_until_audio_thread_joins_on_end_cancel_and_dr
             0,
             "{action}: lease must release once"
         );
+        assert_eq!(volume_leases.load(Ordering::SeqCst), 0);
     }
 }
 
@@ -3323,9 +3349,15 @@ async fn audio_start_failure_releases_capture_admission() {
         }
     }
     let captures = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let orch = capture_lifecycle_orchestrator(Arc::new(FailingAudio), captures.clone());
+    let volume_leases = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let orch = capture_lifecycle_orchestrator(
+        Arc::new(FailingAudio),
+        captures.clone(),
+        volume_leases.clone(),
+    );
     assert!(orch.begin().await.unwrap_err().contains("开麦失败"));
     assert_eq!(captures.load(Ordering::SeqCst), 0);
+    assert_eq!(volume_leases.load(Ordering::SeqCst), 0);
     orch.cancel().await;
     assert_eq!(captures.load(Ordering::SeqCst), 0);
 }

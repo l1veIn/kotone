@@ -32,6 +32,9 @@ pub struct Settings {
     #[serde(default)]
     pub hotkey_backend: HotkeyBackend,
     pub audio_device_id: String,
+    /// 语音输入录音时暂时降低 Windows 默认播放设备的音量。
+    #[serde(default)]
+    pub lower_speaker_volume_while_listening: bool,
     /// 当前 STT 引擎 ID（由活动模型推导后回写，兼容旧配置/CLI）
     pub stt_engine: String,
     /// 当前活动模型 ID。空 = 仍按 sttEngine + engineOptions.model 推导。
@@ -434,6 +437,7 @@ impl Default for Settings {
             },
             hotkey_backend: HotkeyBackend::Auto,
             audio_device_id: "default".into(),
+            lower_speaker_volume_while_listening: false,
             stt_engine: "sherpa-streaming".into(),
             active_model_id: String::new(),
             model_configs: HashMap::new(),
@@ -930,6 +934,7 @@ mod tests {
         assert_eq!(s.hotkey.mode, HotkeyMode::Toggle);
         assert_eq!(s.hotkey_backend, HotkeyBackend::Auto);
         assert_eq!(s.audio_device_id, "default");
+        assert!(!s.lower_speaker_volume_while_listening);
         assert_eq!(s.stt_engine, "sherpa-streaming");
         assert!(s.active_model_id.is_empty());
         assert!(s.model_configs.is_empty());
@@ -1170,6 +1175,7 @@ mod tests {
         assert_eq!(s.language, "en");
         assert_eq!(s.stt_engine, "sherpa-streaming");
         assert!(!s.eval_recording);
+        assert!(!s.lower_speaker_volume_while_listening);
         assert_eq!(
             s.download.source,
             DownloadSource::Auto,
@@ -1192,6 +1198,22 @@ mod tests {
         assert_eq!(s.sound_feedback.send.volume, 60);
         assert_eq!(s.sound_feedback.record.sound_id, "rise", "录制音默认上扬");
         assert_eq!(s.sound_feedback.send.sound_id, "fall", "发送音默认下沉");
+    }
+
+    #[test]
+    fn speaker_volume_setting_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let settings = Settings {
+            lower_speaker_volume_while_listening: true,
+            ..Settings::default()
+        };
+        save_to(&path, &settings).unwrap();
+
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["lowerSpeakerVolumeWhileListening"], true);
+        assert!(load_from(&path).lower_speaker_volume_while_listening);
     }
 
     #[test]

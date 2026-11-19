@@ -103,11 +103,14 @@ struct ActiveSession {
     recorder: Option<crate::eval::SessionRecorder>,
 }
 
+type DictationCaptureHook = dyn Fn() -> Option<Box<dyn Send>> + Send + Sync;
+
 /// The release callback belongs to the actual microphone handle, not a UI state.
 /// AudioHandle::drop joins the capture thread before admission is released.
 struct CaptureGuard {
     audio: Option<AudioHandle>,
     _completion: CaptureCompletion,
+    _dictation_output_volume: Option<Box<dyn Send>>,
 }
 
 impl Drop for CaptureGuard {
@@ -385,6 +388,7 @@ pub struct Orchestrator {
     audio: Arc<dyn AudioBackend>,
     before_capture: Option<Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
     after_capture: Option<Arc<dyn Fn() + Send + Sync>>,
+    dictation_capture_hook: Option<Box<DictationCaptureHook>>,
     injector: Arc<dyn Injector>,
     focus: Arc<dyn FocusBackend>,
     emitter: Arc<dyn Emitter>,
@@ -455,6 +459,7 @@ impl Orchestrator {
             audio,
             before_capture: None,
             after_capture: None,
+            dictation_capture_hook: None,
             injector,
             focus,
             emitter,
@@ -499,6 +504,15 @@ impl Orchestrator {
     /// 不依赖状态事件，因此 Transcribing、迟到的 UI 事件不会提前放行播报。
     pub fn with_after_capture(mut self, callback: Arc<dyn Fn() + Send + Sync>) -> Self {
         self.after_capture = Some(callback);
+        self
+    }
+
+    /// 只在语音输入录音时取得输出音量租约；停止麦克风采集后释放。
+    pub fn with_dictation_capture_hook(
+        mut self,
+        hook: impl Fn() -> Option<Box<dyn Send>> + Send + Sync + 'static,
+    ) -> Self {
+        self.dictation_capture_hook = Some(Box::new(hook));
         self
     }
 
@@ -1165,6 +1179,14 @@ impl Orchestrator {
             }
         }
 
+        let dictation_output_volume = if purpose == SessionPurpose::Dictation
+            && settings.lower_speaker_volume_while_listening
+        {
+            self.dictation_capture_hook.as_ref().and_then(|hook| hook())
+        } else {
+            None
+        };
+
         // 开录音失败要有清晰错误；已建的 session 取消掉
         let mut handle = match self.audio.start(&settings.audio_device_id) {
             Ok(h) => h,
@@ -1307,6 +1329,7 @@ impl Orchestrator {
                                 me.abort_with_code(
                                     "单次录音已达 10 分钟上限，本次会话已中止，请重新开始",
                                     "SESSION_DURATION_LIMIT",
+                                    None,
                                 )
                                 .await;
                             });
@@ -1477,9 +1500,11 @@ impl Orchestrator {
                             if let Some(me) = me_weak.as_ref().and_then(|w| w.upgrade()) {
                                 let msg2 = msg.clone();
                                 tokio::spawn(async move {
-                                    me.abort_with_message(&format!(
-                                        "{msg2}（本次会话已中止，请检查麦克风后重试）"
-                                    ))
+                                    me.abort_with_code(
+                                        &format!("{msg2}（本次会话已中止，请检查麦克风后重试）"),
+                                        "AUDIO_DEVICE_ERROR",
+                                        Some(capture_gen),
+                                    )
                                     .await;
                                 });
                             }
@@ -1527,6 +1552,7 @@ impl Orchestrator {
                     me.abort_with_code(
                         &format!("语音识别处理音频失败：{error}（本次会话已中止，请重试）"),
                         "STT_AUDIO_PUSH_FAILED",
+                        None,
                     )
                     .await;
                 }
@@ -1568,6 +1594,7 @@ impl Orchestrator {
             guard: Some(CaptureGuard {
                 audio: Some(handle),
                 _completion: capture_completion,
+                _dictation_output_volume: dictation_output_volume,
             }),
             pump,
             level_task,
@@ -2279,19 +2306,27 @@ impl Orchestrator {
     /// （P1-⑤：拔麦克风/驱动错误不再永久卡 Listening）。
     /// Error 保持到用户关闭/重试，确保按需悬浮窗也能让用户看到核心链路故障。
     pub async fn abort_with_message(&self, message: &str) {
-        self.abort_with_code(message, "AUDIO_DEVICE_ERROR").await;
+        self.abort_with_code(message, "AUDIO_DEVICE_ERROR", None)
+            .await;
     }
 
     /// 会话泵的致命错误统一中止入口：清理录音/STT/发送句柄并转入可见 Error。
-    async fn abort_with_code(&self, message: &str, error_code: &str) {
-        // 宽限期倒计时一并收回
-        self.abort_release_grace();
+    async fn abort_with_code(&self, message: &str, error_code: &str, expected_gen: Option<u64>) {
+        if expected_gen.is_none() {
+            self.abort_release_grace();
+        }
         let _op = self.op.lock().await;
         let gen;
         {
             let mut inner = self.inner.lock().unwrap();
-            if inner.state == OrchestratorState::Idle {
+            if inner.state == OrchestratorState::Idle
+                || expected_gen.is_some_and(|expected| inner.gen != expected)
+            {
                 return;
+            }
+            // 过期采集错误不能收回新一轮的松键宽限计时。
+            if let Some(task) = inner.release_grace_task.take() {
+                task.abort();
             }
             inner.gen += 1;
             gen = inner.gen;
@@ -3117,6 +3152,35 @@ mod tests {
         ending.await.unwrap().unwrap();
         assert_eq!(orch.state(), OrchestratorState::Listening);
         assert_eq!(orch.inner.lock().unwrap().gen, 6);
+    }
+
+    #[tokio::test]
+    async fn queued_audio_error_cannot_abort_replacement_capture() {
+        let orch = admission_test_orchestrator();
+        let lock = orch.op.lock().await;
+        {
+            let mut inner = orch.inner.lock().unwrap();
+            inner.gen = 4;
+            inner.state = OrchestratorState::Listening;
+        }
+        let old = orch.clone();
+        let aborting = tokio::spawn(async move {
+            old.abort_with_code("录音已中断", "AUDIO_DEVICE_ERROR", Some(4))
+                .await;
+        });
+        tokio::task::yield_now().await;
+        assert!(!aborting.is_finished());
+        {
+            let mut inner = orch.inner.lock().unwrap();
+            inner.gen = 6;
+            inner.release_grace_task = Some(tokio::spawn(std::future::pending::<()>()));
+        }
+        drop(lock);
+        aborting.await.unwrap();
+        let mut inner = orch.inner.lock().unwrap();
+        assert_eq!(inner.state, OrchestratorState::Listening);
+        assert_eq!(inner.gen, 6);
+        inner.release_grace_task.take().unwrap().abort();
     }
 
     #[tokio::test]

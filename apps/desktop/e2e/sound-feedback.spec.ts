@@ -1,5 +1,17 @@
 import { expect, test } from "@playwright/test";
 
+test("speaker volume reduction is off by default and stays on while navigating", async ({ page }) => {
+  await page.goto("/#/settings?onboarding=never");
+  const lowerVolume = page.getByRole("checkbox", { name: "录音时降低扬声器音量" });
+  await expect(lowerVolume).toBeVisible();
+  await expect(lowerVolume).not.toBeChecked();
+  await lowerVolume.check({ force: true });
+  await expect(lowerVolume).toBeChecked();
+  await page.getByTestId("settings-nav-advanced").click();
+  await page.getByTestId("settings-nav-general").click();
+  await expect(lowerVolume).toBeChecked();
+});
+
 test("sound feedback cards render with defaults and per-item toggles", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
 

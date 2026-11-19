@@ -1923,6 +1923,10 @@ pub fn run() {
             let assistant_runtime =
                 assistant::initialize(app.handle(), settings.clone(), connections.clone());
 
+            let recording_output_volume =
+                Arc::new(kotone_platform_windows::output_volume::RecordingOutputVolume::default());
+            let dictation_volume = recording_output_volume.clone();
+
             #[allow(unused_mut)] // vad-silero feature 关闭时无可变接线
             let mut orchestrator = Orchestrator::new(
                 settings.clone(),
@@ -1934,7 +1938,16 @@ pub fn run() {
             )
             .with_processors(processors.clone())
             .with_secrets(secrets.clone())
-            .with_settings_repository(settings_repository.clone());
+            .with_settings_repository(settings_repository.clone())
+            .with_dictation_capture_hook(move || match dictation_volume.acquire() {
+                Ok(guard) => Some(Box::new(guard)),
+                Err(error) => {
+                    kotone_core::log::log(&format!(
+                        "录音开始前降低扬声器音量失败（继续录音）：{error}"
+                    ));
+                    None
+                }
+            });
             if let Ok(scheduler) = &assistant_runtime.scheduler {
                 orchestrator = orchestrator
                     .with_assistant(assistant_runtime.handler.clone(), scheduler.clone());
@@ -1969,6 +1982,7 @@ pub fn run() {
             app.manage(RuntimeManager::new());
             app.manage(ResourceMonitor(Mutex::new(sysinfo::System::new())));
             app.manage(assistant_runtime);
+            app.manage(recording_output_volume);
             app.manage(speech_models::SpeechModelManager::default());
             assistant::start(app.handle());
             compatibility::start_fullscreen_monitor(app.handle().clone());
@@ -2097,6 +2111,11 @@ pub fn run() {
         .expect("error while building Kotone application")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                if let Some(volume) = app.try_state::<
+                    Arc<kotone_platform_windows::output_volume::RecordingOutputVolume>,
+                >() {
+                    volume.close();
+                }
                 assistant::shutdown(app);
             }
         });

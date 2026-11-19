@@ -295,6 +295,15 @@
           }}
         />
       </div>
+      <div class="mt-3">
+        <Toggle
+          checked={$settingsStore.lowerSpeakerVolumeWhileListening}
+          label="录音时降低扬声器音量"
+          desc="语音输入录音时降低系统扬声器音量，录音结束后恢复。"
+          onchange={(enabled) =>
+            void patchSettings({ lowerSpeakerVolumeWhileListening: enabled }, "录音音量设置已保存")}
+        />
+      </div>
     </section>
 
     {#if needsElevation}
