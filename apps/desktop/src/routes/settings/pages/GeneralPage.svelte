@@ -346,6 +346,15 @@
           </div>
         {/snippet}
       </SettingsRow>
+      <div class="py-3.5">
+        <ToggleField
+          checked={$settingsStore.lowerSpeakerVolumeWhileListening}
+          label="录音时降低扬声器音量"
+          desc="按键录音或琴音倾听时暂时降低扬声器音量，结束后恢复。"
+          onchange={(enabled) =>
+            void patchSettings({ lowerSpeakerVolumeWhileListening: enabled }, "扬声器设置已保存")}
+        />
+      </div>
       <SettingsRow label="录制热键" description="支持键盘组合以及鼠标侧键 Mouse4 / Mouse5；鼠标侧键会自动使用低层键鼠钩子。" stacked for="hotkey-input">
         {#snippet control()}
           <div class="flex flex-wrap items-center gap-2">

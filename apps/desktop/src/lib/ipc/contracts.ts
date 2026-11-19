@@ -108,6 +108,7 @@ export interface Settings {
   /** 热键后端：auto（Windows 优先 LL 钩子）/ llhook / register */
   hotkeyBackend: "auto" | "llhook" | "register";
   audioDeviceId: string;
+  lowerSpeakerVolumeWhileListening: boolean;
   sttEngine: string;
   /** 当前活动模型；空则按 sttEngine + engineOptions.model 推导 */
   activeModelId: string;

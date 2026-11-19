@@ -13,6 +13,7 @@ use kotone_core::cancel::CancellationToken;
 use kotone_core::reminders::{DeliveryFuture, DeliveryKind, Reminder, ReminderDelivery};
 use kotone_core::settings::Settings;
 use kotone_core::speech::{SpeechOutput, SpeechRequest, SpeechVoice};
+use kotone_platform_windows::output_volume::OutputVolumeLease;
 use tauri::{AppHandle, Emitter, Manager};
 
 pub struct AssistantRuntime {
@@ -31,6 +32,12 @@ pub struct AssistantRuntime {
     // A cancelled session may still be joining its capture thread while a new
     // session opens. Each microphone lease retains its own admission slot.
     active_captures: AtomicUsize,
+    capture_output_volume: Mutex<CaptureOutputVolume>,
+}
+
+enum CaptureOutputVolume {
+    Open(Option<OutputVolumeLease>),
+    Closed,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -298,6 +305,7 @@ pub fn initialize(app: &AppHandle, settings: Arc<RwLock<Settings>>) -> Assistant
         output_lock: tokio::sync::Mutex::new(()),
         output_cancel: OutputCancellation::default(),
         active_captures: AtomicUsize::new(0),
+        capture_output_volume: Mutex::new(CaptureOutputVolume::Open(None)),
     }
 }
 
@@ -313,6 +321,7 @@ pub fn start(app: &AppHandle) {
 
 pub fn shutdown(app: &AppHandle) {
     if let Some(state) = app.try_state::<AssistantRuntime>() {
+        *state.capture_output_volume.lock().unwrap() = CaptureOutputVolume::Closed;
         drop(state.output_cancel.stop());
         if let Some(token) = state.typed_request.lock().unwrap().as_ref() {
             token.cancel();
@@ -390,8 +399,27 @@ pub fn prefetch(app: &AppHandle, texts: &[&str]) {
 
 pub fn before_capture(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AssistantRuntime>();
-    // Set before purging: output admission sees even the interval before Listening.
-    state.active_captures.fetch_add(1, Ordering::SeqCst);
+    let lower_speaker_volume = app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .lower_speaker_volume_while_listening;
+    {
+        // Pair the volume lease with actual captures, including overlapping capture teardown.
+        let mut volume = state.capture_output_volume.lock().unwrap();
+        state.active_captures.fetch_add(1, Ordering::SeqCst);
+        if let CaptureOutputVolume::Open(lease @ None) = &mut *volume {
+            if lower_speaker_volume {
+                match OutputVolumeLease::acquire() {
+                    Ok(acquired) => *lease = Some(acquired),
+                    Err(error) => kotone_core::log::log(&format!(
+                        "录音开始前降低扬声器音量失败（继续录音）：{error}"
+                    )),
+                }
+            }
+        }
+    }
     // 停播失败（语音服务忙或已停止）不该让录音开不了：记下来，照常开始。
     if let Err(error) = state.cancel_speech() {
         kotone_core::log::log(&format!("录音开始前停止播报失败（继续录音）：{error}"));
@@ -401,6 +429,12 @@ pub fn before_capture(app: &AppHandle) -> Result<(), String> {
 
 pub fn after_capture(app: &AppHandle) {
     if let Some(state) = app.try_state::<AssistantRuntime>() {
+        let mut volume = state.capture_output_volume.lock().unwrap();
+        if state.active_captures.load(Ordering::SeqCst) == 1 {
+            if let CaptureOutputVolume::Open(lease) = &mut *volume {
+                drop(lease.take());
+            }
+        }
         state.active_captures.fetch_sub(1, Ordering::SeqCst);
     }
 }
