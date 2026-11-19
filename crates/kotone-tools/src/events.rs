@@ -139,6 +139,12 @@ impl EventBus {
         self.inner.lock().unwrap().closed
     }
 
+    /// 正在等新事件的长轮询数（测试用：确认长轮询已经在服务端等着，再触发关闭）。
+    #[cfg(test)]
+    pub(crate) fn waiters(&self) -> usize {
+        self.changed.receiver_count()
+    }
+
     /// 当前最后一个序号（没有事件时为 0）。
     pub fn head(&self) -> u64 {
         self.inner.lock().unwrap().next_seq - 1

@@ -161,6 +161,12 @@ fn commit(f: impl FnOnce(&ToolService) -> Result<Value, ToolError> + Send + 'sta
 }
 
 impl ToolService {
+    /// 正在等新事件的长轮询数（测试用）。
+    #[cfg(test)]
+    pub(crate) fn event_waiters(&self) -> usize {
+        self.events.waiters()
+    }
+
     /// 发布事件（关闭后忽略）。桌面端用它报告运行时相位等变化。
     pub fn publish_event(&self, kind: &str, data: Value) -> Option<u64> {
         self.events.publish(kind, data, self.store.now())

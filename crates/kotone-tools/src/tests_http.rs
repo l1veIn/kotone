@@ -887,12 +887,24 @@ async fn shutdown_lets_http_long_polls_deliver_stopping() {
             .unwrap()
             .to_string();
         let client = ToolClient::discover(h.dir.path(), h.host.as_ref()).unwrap();
+        let waiting = h.running.service().event_waiters();
         let poll = tokio::spawn(async move {
             client
                 .events(&format!("cursor={head}&waitMs=10000"), 10_000)
                 .await
         });
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // 等长轮询真的在服务端等着再关闭：只睡 100ms 时，CI 上请求有时还没到服务端，
+        // 连接就被关掉了（那种情况传输失败是对的，不是这个测试要验证的）。
+        for _ in 0..500 {
+            if h.running.service().event_waiters() > waiting {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            h.running.service().event_waiters() > waiting,
+            "长轮询没有进入等待"
+        );
         h.running.shutdown_now();
         let envelope = poll.await.unwrap().expect("长轮询应收到完整响应");
         let result = envelope.result.expect("ok");
