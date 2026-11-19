@@ -33,6 +33,18 @@ finally:
 '@ | python -
 if ($LASTEXITCODE -ne 0) { throw 'Guest desktop preflight failed.' }
 
+# Enable the Windows microphone privacy switches in this throwaway guest.
+# The only capture endpoint added below is the virtual cable.
+$consent = 'SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone'
+foreach ($key in @("HKLM:\$consent", "HKCU:\$consent", "HKCU:\$consent\NonPackaged")) {
+    $previous = Get-ItemPropertyValue -LiteralPath $key -Name Value -ErrorAction SilentlyContinue
+    if ($previous -ne 'Allow') {
+        New-Item -Path $key -Force | Out-Null
+        New-ItemProperty -LiteralPath $key -Name Value -PropertyType String -Value Allow -Force | Out-Null
+    }
+    Write-Host "Guest microphone consent ${key}: '$previous' -> Allow"
+}
+
 foreach ($serviceName in @('AudioEndpointBuilder', 'Audiosrv')) {
     $service = Get-Service -Name $serviceName
     if ($service.StartType -eq 'Disabled') { Set-Service -Name $serviceName -StartupType Manual }
