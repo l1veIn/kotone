@@ -5,6 +5,7 @@ from array import array
 import ctypes
 from ctypes import wintypes
 import json
+import math
 import os
 from pathlib import Path
 import socket
@@ -46,6 +47,42 @@ $form.add_Shown({
     [System.IO.File]::WriteAllText((Join-Path $TestDirectory 'hwnd.txt'), $form.Handle.ToInt64().ToString())
 })
 [System.Windows.Forms.Application]::Run($form)
+"""
+
+OVERLAY_DIAGNOSTIC = r"""
+const port = process.argv[1];
+const endpoint = `http://127.0.0.1:${port}`;
+const pages = await (await fetch(endpoint + "/json/list", { signal: AbortSignal.timeout(3000) })).json();
+const page = pages.find(({ type, url }) => {
+    const location = new URL(url);
+    return type === "page" && location.hash.startsWith("#/settings")
+        && (location.origin === "http://tauri.localhost"
+            || (location.protocol === "tauri:" && location.hostname === "localhost"));
+});
+if (!page) throw new Error("No installed settings WebView.");
+const debugUrl = new URL(page.webSocketDebuggerUrl);
+if (debugUrl.protocol !== "ws:" || !["127.0.0.1", "localhost"].includes(debugUrl.hostname)
+    || debugUrl.port !== port) throw new Error("Expected the runner's loopback debugger.");
+const socket = new WebSocket(debugUrl);
+try {
+    await new Promise((resolve, reject) => {
+        socket.addEventListener("open", resolve, { once: true });
+        socket.addEventListener("error", reject, { once: true });
+    });
+    const response = await new Promise((resolve) => {
+        socket.addEventListener("message", (event) => resolve(JSON.parse(event.data)), { once: true });
+        socket.send(JSON.stringify({
+            id: 1, method: "Runtime.evaluate",
+            params: {
+                expression: 'window.__TAURI_INTERNALS__.invoke("get_overlay_state")',
+                awaitPromise: true, returnByValue: true,
+            },
+        }));
+    });
+    console.log(JSON.stringify(response.result?.result?.value ?? response.result?.exceptionDetails ?? response.error));
+} finally {
+    socket.close();
+}
 """
 
 
@@ -140,42 +177,136 @@ def reserve_loopback_port():
         return server.getsockname()[1]
 
 
-def find_playback_config(fixture):
-    import sounddevice as sd
-
+def read_fixture(fixture):
     with wave.open(str(fixture), "rb") as source:
         if source.getnchannels() != 1 or source.getsampwidth() != 2 or source.getcomptype() != "NONE":
             raise RuntimeError("The speech fixture must be mono, uncompressed 16-bit PCM.")
-        frames = array("h", source.readframes(source.getnframes()))
-        source_rate = source.getframerate()
+        return array("h", source.readframes(source.getnframes())), source.getframerate()
 
+
+def stream_choices(sd, matches, capture, source_rate):
+    channel_limit = "max_input_channels" if capture else "max_output_channels"
+    check = sd.check_input_settings if capture else sd.check_output_settings
     host_apis = sd.query_hostapis()
     for api_name in ("Windows WASAPI", "MME"):
         for index, device in enumerate(sd.query_devices()):
-            if (
-                host_apis[device["hostapi"]]["name"] != api_name
-                or not device["name"].startswith(("CABLE Input (VB-Audio", "Speakers (VB-Audio Virtual Cab"))
-                or not device["max_output_channels"]
-            ):
+            if host_apis[device["hostapi"]]["name"] != api_name or not matches(device["name"]):
                 continue
-            for rate in dict.fromkeys((source_rate, int(device["default_samplerate"]))):
-                for channels in (1, 2):
-                    if channels > device["max_output_channels"]:
+            device_channels = device[channel_limit]
+            if not device_channels:
+                continue
+            selected = None
+            for rate in dict.fromkeys((int(device["default_samplerate"]), source_rate)):
+                for channels in dict.fromkeys((2, 1, device_channels)):
+                    if channels > device_channels:
                         continue
                     try:
-                        sd.check_output_settings(device=index, channels=channels, dtype="int16", samplerate=rate)
+                        check(device=index, channels=channels, dtype="int16", samplerate=rate)
                     except sd.PortAudioError:
                         continue
-                    # The endpoint may accept only its native rate and two channels.
-                    output = array("h")
-                    for sample in range(len(frames) * rate // source_rate):
-                        pos = sample * source_rate
-                        left, remainder = divmod(pos, rate)
-                        right = min(left + 1, len(frames) - 1)
-                        value = (frames[left] * (rate - remainder) + frames[right] * remainder) // rate
-                        output.extend((value,) * channels)
-                    return sd, index, channels, rate, output.tobytes(), device["name"]
-    raise RuntimeError("The hosted runner has no compatible VB-CABLE playback endpoint.")
+                    selected = (index, channels, rate, device["name"], api_name)
+                    break
+                if selected:
+                    yield selected
+                    break
+
+
+def format_playback(samples, source_rate, output_rate, channels):
+    output = array("h")
+    extra_channels = (0,) * max(0, channels - 2)
+    for sample in range(len(samples) * output_rate // source_rate):
+        left, remainder = divmod(sample * source_rate, output_rate)
+        right = min(left + 1, len(samples) - 1)
+        value = (samples[left] * (output_rate - remainder) + samples[right] * remainder) // output_rate
+        output.extend((value,) * min(channels, 2) + extra_channels)
+    return output.tobytes()
+
+
+def pcm_summary(samples, channels, rate):
+    return {
+        "frames": len(samples) // channels,
+        "captureHz": rate,
+        "captureChannels": channels,
+        "peak": max(map(abs, samples), default=0),
+        "rms": round(math.sqrt(sum(value * value for value in samples) / max(len(samples), 1)), 1),
+    }
+
+
+def measure_cable_route(sd, playback, capture, pcm):
+    output_id, output_channels, output_rate, _, _ = playback
+    input_id, input_channels, input_rate, _, _ = capture
+    received = []
+    warnings = set()
+
+    def on_audio(data, frames, clock, status):
+        if status:
+            warnings.add(str(status))
+        received.append(bytes(data))
+
+    with sd.RawInputStream(
+        device=input_id, channels=input_channels, samplerate=input_rate, dtype="int16", callback=on_audio
+    ):
+        time.sleep(0.25)
+        with sd.RawOutputStream(
+            device=output_id, channels=output_channels, samplerate=output_rate, dtype="int16"
+        ) as stream:
+            stream.write(pcm)
+        time.sleep(0.5)
+
+    samples = array("h", b"".join(received))
+    first = input_rate * input_channels // 6
+    quiet = pcm_summary(samples[:first], input_channels, input_rate)
+    audio = pcm_summary(samples[first:], input_channels, input_rate)
+    audio["baselinePeak"] = quiet["peak"]
+    audio["baselineRms"] = quiet["rms"]
+    audio["warnings"] = sorted(warnings)
+    audio["signal"] = (
+        audio["frames"] >= input_rate
+        and audio["peak"] >= 128
+        and audio["rms"] >= max(20, quiet["rms"] * 2)
+    )
+    return audio
+
+
+def find_playback_config(fixture, capture_name, report):
+    import sounddevice as sd
+
+    samples, source_rate = read_fixture(fixture)
+    captures = list(stream_choices(
+        sd, lambda name: name.startswith("CABLE Output (VB-Audio") and capture_name.startswith(name),
+        capture=True, source_rate=source_rate,
+    ))
+    playbacks = list(stream_choices(
+        sd,
+        lambda name: (
+            name.startswith(("CABLE Input", "CABLE In 16 Ch", "Speakers (")) and "VB-Audio" in name
+        ),
+        capture=False,
+        source_rate=source_rate,
+    ))
+    if not captures or not playbacks:
+        summary = [{"playback": playbacks, "capture": captures, "requestedCapture": capture_name}]
+        report.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        raise RuntimeError(f"No usable VB-CABLE playback/capture pair: {summary!r}")
+    results = []
+    for playback in playbacks:
+        output_id, channels, rate, name, api = playback
+        pcm = format_playback(samples, source_rate, rate, channels)
+        for capture in captures:
+            result = {
+                "render": name, "renderApi": api, "renderHz": rate, "renderChannels": channels,
+                "capture": capture[3], "captureApi": capture[4],
+            }
+            try:
+                result.update(measure_cable_route(sd, playback, capture, pcm))
+            except sd.PortAudioError as error:
+                result["error"] = str(error)
+            results.append(result)
+            report.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
+            print("VB-CABLE PCM " + json.dumps(result), flush=True)
+            if result.get("signal"):
+                return sd, output_id, channels, rate, pcm, name
+    raise RuntimeError("No render endpoint delivered fixture audio to the configured VB-CABLE capture.")
 
 
 class Desktop:
@@ -255,15 +386,44 @@ def test_recording(desktop, hwnd, pid, playback, session):
     return output_name
 
 
-def receive_text(received):
+def read_received(received):
     try:
-        text = received.read_text(encoding="utf-8")
+        return received.read_text(encoding="utf-8").strip()
     except (FileNotFoundError, PermissionError, UnicodeDecodeError):
         return ""
+
+
+def receive_text(received):
+    text = read_received(received)
     normalized = "".join(
         char for char in text if not char.isspace() and not unicodedata.category(char).startswith("P")
     )
-    return text.strip() if normalized == EXPECTED_TEXT else ""
+    return text if normalized == EXPECTED_TEXT else ""
+
+
+def print_voice_failure(home, run_dir, port):
+    events = home / "diagnostics/events.jsonl"
+    if events.is_file():
+        lines = events.read_text(encoding="utf-8", errors="replace").splitlines()[-30:]
+        event_log = "\n".join(lines)
+        (run_dir / "voice-events.jsonl").write_text(event_log + "\n", encoding="utf-8")
+        print(event_log, flush=True)
+    received = read_received(run_dir / "received.txt")
+    print("Textbox received " + json.dumps(received, ensure_ascii=True), flush=True)
+    try:
+        diagnostic = subprocess.run(
+            ["node", "--input-type=module", "-e", OVERLAY_DIAGNOSTIC, str(port)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+        )
+        if diagnostic.returncode != 0:
+            print("Overlay diagnostic unavailable: " + diagnostic.stderr.strip(), flush=True)
+        else:
+            data = json.loads(diagnostic.stdout)
+            formatted = json.dumps(data, ensure_ascii=True)
+            (run_dir / "overlay-error.json").write_text(formatted + "\n", encoding="utf-8")
+            print("Overlay diagnostic: " + formatted, flush=True)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        print(f"Overlay diagnostic unavailable: {error}", flush=True)
 
 
 def stop_receiver(desktop, receiver, hwnd):
@@ -283,7 +443,9 @@ def run_smoke(args):
     run_dir = Path(tempfile.mkdtemp(prefix=f"audio-{args.version}-", dir=target))
     target_script = run_dir / "receiver.ps1"
     target_script.write_text(TEST_WINDOW, encoding="utf-8")
-    playback = find_playback_config(repo / "crates/kotone-stt/tests/fixtures/zh-game-3s.wav")
+    playback = find_playback_config(
+        repo / "crates/kotone-stt/tests/fixtures/zh-game-3s.wav", capture_name, run_dir / "cable-pcm.json"
+    )
     desktop = Desktop()
     port = reserve_loopback_port()
     app_env = {
@@ -332,7 +494,12 @@ def run_smoke(args):
             10,
         )
         playback_name = test_recording(desktop, hwnd, receiver.pid, playback, app_session)
-        transcript = wait_for(lambda: receive_text(run_dir / "received.txt"), "known X-ASR transcript", 15)
+        def result():
+            if "state -> error " in app_session():
+                raise RuntimeError("The ASR session entered the error state.")
+            return receive_text(run_dir / "received.txt")
+
+        transcript = wait_for(result, "known X-ASR transcript", 15)
         data = {
             "version": args.version,
             "hotkey": "F8",
@@ -354,6 +521,9 @@ def run_smoke(args):
                 check=True,
                 timeout=60,
             )
+    except (RuntimeError, TimeoutError):
+        print_voice_failure(home, run_dir, port)
+        raise
     finally:
         try:
             (run_dir / "kotone-session.log").write_text(runtime_log(log, app.pid), encoding="utf-8")

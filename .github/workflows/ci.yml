@@ -72,5 +72,8 @@ jobs:
         if: failure()
         shell: pwsh
         run: |
-          $log = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.kotone/kotone.log'
-          if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 100 }
+          $homeDir = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.kotone'
+          foreach ($name in @('kotone.log', 'diagnostics/events.jsonl')) {
+            $log = Join-Path $homeDir $name
+            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 100 }
+          }
