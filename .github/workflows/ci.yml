@@ -1,83 +1,27 @@
-name: CI
+name: Isolated 0.1.14 upgrade smoke
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+    inputs:
+      smoke_kind:
+        description: Preflight desktop and audio, or test the full upgrade
+        required: true
+        default: preflight
+        type: choice
+        options: [preflight, full]
 
 permissions:
   contents: read
 
 jobs:
-  verify-windows:
+  isolated-windows:
+    if: github.ref == 'refs/heads/codex/smoke-0.1.14-isolated'
     runs-on: windows-latest
     timeout-minutes: 45
-
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          version: 11.16.0
-          run_install: false
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: .
-          # sherpa-onnx-sys downloads native .lib files outside Cargo's normal
-          # dependency artifacts. Keep them explicitly; rust-cache otherwise
-          # prunes the files but leaves the directory, which fools its build.rs.
-          cache-directories: target/sherpa-onnx-prebuilt
-          prefix-key: v2-rust
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Install Playwright Chromium
-        run: pnpm -C apps/desktop exec playwright install chromium
-
-      - name: Audit production JavaScript dependencies
-        run: pnpm audit --prod
-
-      - name: Audit Rust dependencies
-        run: |
-          cargo install cargo-audit --locked
-          cargo audit --ignore RUSTSEC-2024-0429
-
-      - name: Verify release metadata
-        run: pnpm release:verify
-
-      - name: Test release tooling
-        run: pnpm release:test
-
-      - name: Check Rust formatting
-        run: cargo fmt --all -- --check
-
-      - name: Lint Rust workspace
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
-
-      - name: Check desktop UI
-        run: pnpm check
-
-      - name: Test desktop journeys
-        run: pnpm -C apps/desktop test:e2e
-
-      - name: Test Rust workspace
-        run: cargo test --workspace --locked
-
-      - name: Compile the Tauri desktop shell and NSIS installer
-        run: pnpm -C apps/desktop tauri build --debug --bundles nsis --config src-tauri/tauri.ci.conf.json
+          persist-credentials: false
+      - name: Prepare the guest desktop and virtual microphone
+        shell: pwsh
+        run: ./scripts/manual-e2e/smoke_014_preflight.ps1
