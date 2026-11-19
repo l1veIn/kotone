@@ -81,6 +81,28 @@
   let documentVisible = $state(false);
   let nativeVisible = $state(!isTauri);
   const renderActive = $derived(documentVisible && nativeVisible);
+  /** 语音识别没准备好时按了语音输入热键：后端发来的提示（ADR 028，D8）；null = 收起。 */
+  let notReadyHint = $state<{ title: string; detail: string } | null>(null);
+  // 一开始录音（任何非 idle 状态）就撤掉提示
+  $effect(() => {
+    if ($appState.state !== "idle") notReadyHint = null;
+  });
+
+  onMount(() => {
+    if (!isTauri) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<{ title: string; detail: string } | null>("kotone://overlay-hint", ({ payload }) => {
+      if (!disposed) notReadyHint = payload;
+    }).then((cleanup) => {
+      if (disposed) cleanup();
+      else unlisten = cleanup;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  });
 
   onMount(() => {
     let disposed = false;
@@ -410,7 +432,11 @@
         </span>
       {:else}
         <!-- idle：热键切换文字处理时短暂显示提示（托盘手动唤起时显示待机文案） -->
-        {#if $appState.ppNotice}
+        {#if notReadyHint}
+          <span class="h-2 w-2 shrink-0 rounded-full bg-amber-300"></span>
+          <p class="shrink-0 text-sm font-semibold whitespace-nowrap text-amber-300" data-testid="overlay-not-ready-title">{notReadyHint.title}</p>
+          <p class="max-w-[300px] truncate text-xs text-white/65" title={notReadyHint.detail}>{notReadyHint.detail}</p>
+        {:else if $appState.ppNotice}
           <p class="shrink-0 text-sm whitespace-nowrap text-kotone-cyan">
             {$appState.ppNotice.text}
           </p>
@@ -594,7 +620,12 @@
       </div>
     {:else}
       <!-- idle（托盘手动唤起悬浮条时可见；正常流程会自动隐藏窗口） -->
-      {#if $appState.ppNotice}
+      {#if notReadyHint}
+        <div class="min-w-0 flex-1" in:fade={{ duration: 150 }} role="status">
+          <p class="text-sm font-semibold text-amber-300" data-testid="overlay-not-ready-title">{notReadyHint.title}</p>
+          <p class="truncate text-[11px] text-white/60" title={notReadyHint.detail}>{notReadyHint.detail}</p>
+        </div>
+      {:else if $appState.ppNotice}
         <div class="min-w-0 flex-1" in:fade={{ duration: 150 }}>
           <p class="text-sm font-semibold text-kotone-cyan">{$appState.ppNotice.text}</p>
           <p class="text-[11px] text-white/40">文字处理状态已更新</p>

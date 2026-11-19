@@ -211,7 +211,7 @@ impl LocalPpOcr {
             OcrError::NotReady {
             reason: "not-installed".into(),
             message: format!(
-                "{message}；请在设置「高级 → 模型 → 文字识别」下载 {}，或运行 `kotone-cli ocr install --model {}`",
+                "{message}；请在「设置 → 模型 → 文字识别」下载 {}，或运行 `kotone-cli ocr install --model {}`",
                 self.package.display_name, self.package.id
             ),
         }
@@ -287,7 +287,7 @@ impl OcrBackend for LocalPpOcr {
                 false,
                 "not-installed".to_string(),
                 Some(format!(
-                    "本地 OCR 模型 {} 未安装；在设置「高级 → 模型 → 文字识别」下载，或运行 `kotone-cli ocr install --model {}`",
+                    "本地 OCR 模型 {} 未安装；在「设置 → 模型 → 文字识别」下载，或运行 `kotone-cli ocr install --model {}`",
                     self.package.display_name, self.package.id
                 )),
             ),

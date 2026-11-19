@@ -33,6 +33,10 @@ pub const HK_ASSISTANT: &str = "assistant";
 pub const HK_RUNTIME_TOGGLE: &str = "runtime-toggle";
 /// 应用级热键：立即停止全部自动化（自动化按住的键随之松开）。
 pub const HK_AUTOMATION_STOP: &str = "automation-stop";
+/// 被动提示（只观察、不吞键）：语音识别没准备好时按了语音输入热键，悬浮窗提示怎么启动。
+pub const HK_HINT_VOICE_INPUT: &str = "hint-voice-input";
+/// 被动提示（只观察、不吞键）：语音识别没准备好时按了呼叫键，气泡提示怎么启动。
+pub const HK_HINT_CALL: &str = "hint-call";
 /// 陪玩快捷消息的固定槽位：第 n 条快捷消息（`assistant.companion.quickMessages[n-1]`）。
 pub const HK_QUICK_MESSAGES: [&str; crate::assistant::MAX_QUICK_MESSAGES] = [
     "quick-message-1",
@@ -351,7 +355,10 @@ pub struct HookMatcher {
     /// 具名辅助热键：稳定 id、严格修饰键匹配 spec 和触发模式。声明顺序即
     /// 优先级（与主键同 vk 不同修饰键时互不干扰，未命中的具名键落回主键分支）。
     named_specs: Vec<(String, HotkeySpec, HotkeyMode)>,
-    /// 当前被按住（已吞 down 未 up）的具名热键 id，用于重复 down 过滤与成对吞 up
+    /// 被动具名热键 id：命中照样产生事件，但按下、重复按下、松开都不吞键（键照常传给游戏）。
+    /// 用于语音识别没准备好时的提示（D8：只提示、不吞键）。
+    passive: Vec<String>,
+    /// 当前被按住（已命中 down 未 up）的具名热键 id，用于重复 down 过滤与成对处理 up
     named_down: Vec<String>,
     // 修饰键实时按下态
     ctrl: bool,
@@ -381,6 +388,7 @@ impl HookMatcher {
             mode,
             enabled: true,
             named_specs: Vec::new(),
+            passive: Vec::new(),
             named_down: Vec::new(),
             ctrl: false,
             alt: false,
@@ -400,8 +408,10 @@ impl HookMatcher {
     /// 驱动，主键改键不应顺手清掉它们）
     pub fn set_config(&mut self, spec: HotkeySpec, mode: HotkeyMode) {
         let named_specs = std::mem::take(&mut self.named_specs);
+        let passive = std::mem::take(&mut self.passive);
         *self = Self::new(spec, mode);
         self.named_specs = named_specs;
+        self.passive = passive;
     }
 
     /// 配置/更新/清除一个具名热键（None = 关闭该 id）。同 id 已存在时原位更新
@@ -411,6 +421,7 @@ impl HookMatcher {
     }
 
     pub fn set_named_spec_mode(&mut self, id: &str, spec: Option<HotkeySpec>, mode: HotkeyMode) {
+        self.passive.retain(|existing| existing != id);
         self.named_down.retain(|existing| existing != id);
         match spec {
             Some(spec) => {
@@ -429,9 +440,24 @@ impl HookMatcher {
         }
     }
 
-    /// 注销全部具名热键（主键与 Esc 取消不受影响）
+    /// 配置/清除一个被动具名热键（None = 关闭该 id）：命中时产生 `NamedHotkey` 事件，
+    /// 但这个键的按下、重复按下和松开都照常传给前台程序。
+    pub fn set_passive_spec(&mut self, id: &str, spec: Option<HotkeySpec>) {
+        let enabled = spec.is_some();
+        self.set_named_spec_mode(id, spec, HotkeyMode::Toggle);
+        if enabled {
+            self.passive.push(id.to_string());
+        }
+    }
+
+    fn is_passive(&self, id: &str) -> bool {
+        self.passive.iter().any(|existing| existing == id)
+    }
+
+    /// 注销全部具名热键（含被动提示；主键与 Esc 取消不受影响）
     pub fn clear_named_specs(&mut self) {
         self.named_specs.clear();
+        self.passive.clear();
         self.named_down.clear();
     }
 
@@ -536,11 +562,13 @@ impl HookMatcher {
             if vk != ns.vk {
                 continue;
             }
+            // 被动提示键：事件照发，键照常传给游戏。
+            let swallow = !self.is_passive(id);
             if down {
                 if self.named_down.iter().any(|existing| existing == id) {
-                    // 已命中按住的重复 down：吞但不重复触发
+                    // 已命中按住的重复 down：吞（被动键放行）但不重复触发
                     return MatchOutcome {
-                        swallow: true,
+                        swallow,
                         event: None,
                         captured: None,
                     };
@@ -549,7 +577,7 @@ impl HookMatcher {
                 if matched {
                     self.named_down.push(id.clone());
                     return MatchOutcome {
-                        swallow: true,
+                        swallow,
                         event: Some(match mode {
                             HotkeyMode::Toggle => HookEvent::NamedHotkey { id: id.clone() },
                             HotkeyMode::Hold => HookEvent::NamedHold {
@@ -564,7 +592,7 @@ impl HookMatcher {
             } else if self.named_down.iter().any(|existing| existing == id) {
                 self.named_down.retain(|existing| existing != id);
                 return MatchOutcome {
-                    swallow: true,
+                    swallow,
                     event: (*mode == HotkeyMode::Hold).then(|| HookEvent::NamedHold {
                         id: id.clone(),
                         pressed: false,
@@ -1295,6 +1323,49 @@ mod tests {
             assert_eq!(up(&mut m, spec.vk), PASS);
             assert_eq!(down(&mut m, VK_F1 + 7).event, Some(HookEvent::Toggle));
         }
+    }
+
+    #[test]
+    fn passive_hint_fires_but_never_swallows_and_clears_with_named_specs() {
+        // 主键未注册（runtime 停止）时盯住语音输入热键：按下发事件，但键照常传给游戏。
+        let mut m = matcher("CapsLock", HotkeyMode::Hold);
+        m.set_enabled(false);
+        let caps = parse_hotkey("CapsLock").unwrap();
+        m.set_passive_spec(HK_HINT_VOICE_INPUT, Some(caps));
+        let pressed = down(&mut m, caps.vk);
+        assert!(!pressed.swallow, "被动提示键不能吞键");
+        assert_eq!(
+            pressed.event,
+            Some(HookEvent::NamedHotkey {
+                id: HK_HINT_VOICE_INPUT.into()
+            })
+        );
+        // 按住的重复按下不重复提示，也不吞
+        let repeat = down(&mut m, caps.vk);
+        assert!(!repeat.swallow);
+        assert_eq!(repeat.event, None);
+        let released = up(&mut m, caps.vk);
+        assert!(!released.swallow);
+        assert_eq!(released.event, None);
+        // 修饰键不一致时不提示
+        let f9 = parse_hotkey("Ctrl+F9").unwrap();
+        m.set_passive_spec(HK_HINT_CALL, Some(f9));
+        assert_eq!(down(&mut m, f9.vk), PASS);
+        up(&mut m, f9.vk);
+        // 普通具名键照旧吞键；改成普通具名键后不再被动
+        m.set_named_spec(HK_HINT_CALL, Some(f9));
+        down(&mut m, VK_CONTROL);
+        assert!(down(&mut m, f9.vk).swallow);
+        up(&mut m, f9.vk);
+        up(&mut m, VK_CONTROL);
+        // 关闭 / 清空后都不再触发
+        m.set_passive_spec(HK_HINT_VOICE_INPUT, None);
+        assert_eq!(down(&mut m, caps.vk), PASS);
+        up(&mut m, caps.vk);
+        m.set_passive_spec(HK_HINT_VOICE_INPUT, Some(caps));
+        m.clear_named_specs();
+        assert!(m.passive.is_empty());
+        assert_eq!(down(&mut m, caps.vk), PASS);
     }
 
     #[test]

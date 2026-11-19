@@ -1089,25 +1089,40 @@ pub async fn preview_reminder(
     .await
 }
 
-/// 呼叫琴音的按钮（首页、聊天窗口）：和热键一样，按一次就在气泡里听。
+/// 呼叫琴音的按钮（聊天页）：和呼叫键一样，按一次就在气泡里听。
+/// ADR 028：语音识别没就绪（本地识别未启动）时先启动，准备好再开始听；不让玩家先去点「启动」。
 #[tauri::command]
 pub async fn assistant_call(app: AppHandle) -> Result<(), String> {
-    let running = app
-        .try_state::<crate::runtime::RuntimeManager>()
-        .is_some_and(|rt| rt.phase() == kotone_core::runtime::RuntimePhase::Running);
-    if !running {
-        return Err("先点右上角「启动」，Kotone 运行时才能呼叫".into());
-    }
     let state = app.state::<crate::SharedState>();
     let timeout = {
         let settings = state.settings.read().unwrap();
         if settings.ui.legacy_upgrade.uses_legacy_assistant() {
-            return Err("请先在设置中选择「认识琴音」".into());
+            return Err("先添加 DeepSeek Key，才能呼叫琴音".into());
         }
         settings.assistant.wake.no_speech_timeout_ms
     };
+    ensure_voice_ready(&app).await?;
     state.orchestrator.call_assistant(None, timeout).await;
     Ok(())
+}
+
+/// 等语音识别就绪：停着就启动（本地识别先加载模型），正在启动 / 停止就等它稳定下来。
+async fn ensure_voice_ready(app: &AppHandle) -> Result<(), String> {
+    use kotone_core::runtime::RuntimePhase;
+    for _ in 0..150 {
+        let phase = app.state::<crate::runtime::RuntimeManager>().phase();
+        match phase {
+            RuntimePhase::Running => return Ok(()),
+            RuntimePhase::Stopped => {
+                crate::runtime::start(app).await?;
+                return Ok(());
+            }
+            RuntimePhase::Starting | RuntimePhase::Stopping => {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+        }
+    }
+    Err("语音识别还在准备，稍后再试".into())
 }
 
 #[tauri::command]

@@ -10,7 +10,9 @@ use crate::{runtime::RuntimeManager, SharedState};
 pub async fn assistant_voice_begin(app: AppHandle) -> Result<AssistantVoiceSession, String> {
     let runtime = app.state::<RuntimeManager>();
     if runtime.phase() != RuntimePhase::Running {
-        return Err("请先启动 Kotone，再使用语音输入".into());
+        return Err(
+            "语音识别还没准备好：用本地识别时，先在「语音输入 → 输入 → 语音识别」里启动它".into(),
+        );
     }
     let runtime_ticket = runtime.input_ticket().ok_or("输入正在切换，请稍后重试")?;
     let state = app.state::<SharedState>();

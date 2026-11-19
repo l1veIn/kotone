@@ -228,7 +228,7 @@ pub async fn run(command: OcrCommand) -> i32 {
                             );
                         }
                         println!(
-                            "本地 OCR 模型 {} 就绪。桌面实例下次识别时加载，在设置「模型 → 文字识别」里选用它。",
+                            "本地 OCR 模型 {} 就绪。桌面实例下次识别时加载，在「设置 → 模型 → 文字识别」里选用它。",
                             package.id
                         );
                     }

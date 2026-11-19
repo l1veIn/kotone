@@ -18,7 +18,8 @@ use std::sync::{Arc, Mutex};
 use kotone_agent::catalog::{saved_entry, Catalog, MAX_SAVED_TOOLS, SAVED_PREFIX};
 use kotone_agent::port::{BuiltinHost, KotonePort, Scope, Session};
 use kotone_agent::prompt::{
-    child_prompt, system_prompt, turn_context, Entry, PromptContext, TurnContext,
+    capability_overview, child_prompt, system_prompt, turn_context, AsrState, Calling, Entry,
+    PromptContext, TurnContext,
 };
 use kotone_agent::workspace::Workspace;
 use kotone_agent::{Answer, Asker, PermissionRequest};
@@ -181,7 +182,7 @@ fn store(app: &AppHandle) -> Result<Arc<ConversationStore>, String> {
         .legacy_upgrade
         .uses_legacy_assistant()
     {
-        return Err("请先在设置中选择「认识琴音」".into());
+        return Err("还没启用琴音：先在聊天页添加一个 DeepSeek Key".into());
     }
     runtime(app)?.conversation_store()
 }
@@ -249,16 +250,13 @@ pub fn send(app: &AppHandle, outgoing: Outgoing) -> Result<Value, String> {
     {
         return Ok(json!({"status": "answered"}));
     }
-    // 语音说“停下”：立刻停下正在进行的操作和这一轮（ADR 019 决定 7），不当成插话排队。
+    // 语音说“停下”：和停止热键、托盘「停下」一样停下一切（正在进行的操作、这一轮、子会话、
+    // 全部自动化，ADR 019 决定 7 / ADR 028），不当成插话排队。
     if matches!(outgoing.source.as_str(), "wake-voice" | "voice")
         && is_stop_command(&text, &settings(app).agent.identity.name)
+        && crate::stop::stop_everything(app, "语音“停下”")
     {
-        let acting = crate::computer_use::stop_all(app, "语音“停下”");
-        let children = stop_all_children(app, "语音“停下”");
-        let running = stop(app)?;
-        if acting || running || children > 0 {
-            return Ok(json!({"status": "stopped"}));
-        }
+        return Ok(json!({"status": "stopped"}));
     }
     send_message(
         app,
@@ -471,6 +469,12 @@ async fn turn(
         .unwrap_or_default();
     let automations = offered_automations(app, &settings.agent.hidden_automations);
     let catalog = Catalog::build(&specs, &automations);
+    // “你能做什么”按这段对话真实的工具清单回答（ADR 028）；只给和玩家对话的主会话。
+    let capabilities = if child.is_none() {
+        capability_overview(&catalog)
+    } else {
+        String::new()
+    };
     let session = match runtime(app) {
         Ok(rt) => rt
             .inner
@@ -540,6 +544,7 @@ async fn turn(
             None => system_prompt(&PromptContext {
                 automations: &automations,
                 workspace: Some(&snapshot),
+                capabilities: &capabilities,
             }),
         };
         match &session_state {
@@ -551,8 +556,9 @@ async fn turn(
         if let Message::User { context, .. } = &mut user {
             if context.is_empty() {
                 *context = main_turn_context(
+                    app,
+                    &settings,
                     entry,
-                    settings.voice_chat.enabled,
                     &profile,
                     &snapshot,
                     session_state.as_deref(),
@@ -706,13 +712,15 @@ async fn turn(
 /// 主会话这一轮的附注：入口、现在几点、当前游戏；游戏变了（或第一次出现）再附上玩家写的游戏说明，
 /// 系统提示里的游戏记忆不是这个游戏的就附上这个游戏的记忆。
 fn main_turn_context(
+    app: &AppHandle,
+    settings: &kotone_core::settings::Settings,
     entry: Entry,
-    voice_chat: bool,
     profile: &kotone_core::profile::GameProfile,
     snapshot: &kotone_agent::workspace::Snapshot,
     session: Option<&kotone_agent::port::Session>,
     ws: &Workspace,
 ) -> String {
+    let voice_chat = settings.voice_chat.enabled;
     let game = profile.display_name.trim().to_string();
     let changed = match session {
         Some(session) => {
@@ -734,6 +742,15 @@ fn main_turn_context(
         .then_some(profile.companion_notes.as_str())
         .filter(|n| !n.trim().is_empty());
     let now = kotone_core::agent::now_label();
+    // 聊天窗口里才写“怎么叫她”（回答“你能做什么”、给下一步建议用）；语音入口玩家已经在叫她了。
+    let hotkey = display_hotkey(settings.call_hotkey());
+    let wake_phrase = (entry == Entry::Chat && settings.assistant.wake.enabled)
+        .then(|| crate::roles::wake_keywords(app).1);
+    let calling = (entry == Entry::Chat).then(|| Calling {
+        hotkey: &hotkey,
+        wake_phrase: wake_phrase.as_deref(),
+        asr: asr_state(app, settings),
+    });
     turn_context(&TurnContext {
         entry,
         game: &game,
@@ -742,7 +759,32 @@ fn main_turn_context(
         game_notes: notes,
         game_memory: other_memory.as_deref(),
         now: &now,
+        calling,
     })
+}
+
+/// 呼叫键给玩家看的写法（`Backquote` → `~`）。
+fn display_hotkey(combo: &str) -> String {
+    combo.trim().replace("Backquote", "~")
+}
+
+/// 语音识别现在的情况：在线识别打开就绪；本地识别要启动（ADR 028“启动”只属于本地识别）。
+fn asr_state(app: &AppHandle, settings: &kotone_core::settings::Settings) -> AsrState {
+    use kotone_core::runtime::RuntimePhase;
+    let model = kotone_stt::model::active_model_from(settings, &settings.stt_engine);
+    let online = kotone_stt::model::is_remote_model(&model);
+    let phase = app
+        .try_state::<crate::runtime::RuntimeManager>()
+        .map(|rt| rt.phase())
+        .unwrap_or(RuntimePhase::Stopped);
+    match (online, phase) {
+        (true, RuntimePhase::Running) => AsrState::OnlineReady,
+        (true, RuntimePhase::Starting) => AsrState::OnlinePreparing,
+        (true, _) => AsrState::OnlineNotReady,
+        (false, RuntimePhase::Running) => AsrState::LocalStarted,
+        (false, RuntimePhase::Starting) => AsrState::LocalPreparing,
+        (false, _) => AsrState::LocalNotStarted,
+    }
 }
 
 /// 游戏内：请求前先读一次屏幕（截前台窗口、识别文字、更新聊天跟踪），作为数据附上，

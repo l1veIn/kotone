@@ -1,4 +1,4 @@
-//! 琴音的对话气泡（屏幕角落，默认右下角）：语音入口（唤醒、陪玩热键、追问）的状态与回答。
+//! 琴音的对话气泡（屏幕角落，默认右下角）：语音入口（唤醒、呼叫键、追问）的状态与回答。
 //!
 //! 参考成熟桌宠（dsh-pet、VPet、AIRI）的做法：
 //! - 只有一个气泡位，状态依次是 在听 → 听清了 → 在想 / 在用工具 → 在说 / 等你回答 → 收起；
@@ -240,6 +240,14 @@ impl Model {
         self.set(Phase::Error, "出错了", text)
     }
 
+    /// 一条带标题的提示（如“本地语音识别未启动”）。正在念或在等回答时不打断。
+    pub fn notice(&mut self, label: &str, text: &str) -> Option<&Snapshot> {
+        if self.holding || self.snap.phase == Phase::Asking {
+            return None;
+        }
+        Some(self.set(Phase::Error, label, text))
+    }
+
     /// 这一轮结束且没有要念的话：还在“在想”就收起。
     pub fn finished(&mut self) -> Option<&Snapshot> {
         (matches!(self.snap.phase, Phase::Thinking | Phase::Recognizing) && !self.holding)
@@ -300,7 +308,7 @@ fn config(app: &AppHandle) -> Option<BubbleConfig> {
     })
 }
 
-/// 气泡开着吗（关掉 = 回到旧的悬浮窗 + 弹幕）。
+/// 气泡开着吗（关掉 = 只用声音和弹幕；不借用语音输入的悬浮窗，ADR 028）。
 pub fn enabled(app: &AppHandle) -> bool {
     config(app).is_some_and(|c| c.enabled)
 }
@@ -485,6 +493,17 @@ where
 pub fn note(app: &AppHandle, text: &str) {
     if let Some(rev) = update(app, |m| Some(m.note(text).clone())) {
         schedule_hide(app, rev, dwell(text));
+    }
+}
+
+/// 语音识别没准备好时按了呼叫键：气泡里提示怎么启动（ADR 028，D8）。
+/// 气泡只属于角色：气泡关着（或琴音还没启用）就不提示，绝不借用悬浮窗。
+pub fn hint(app: &AppHandle, title: &str, detail: &str) {
+    if !enabled(app) {
+        return;
+    }
+    if let Some(rev) = update(app, |m| m.notice(title, detail).cloned()) {
+        schedule_hide(app, rev, Duration::from_millis(4_000));
     }
 }
 

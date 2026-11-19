@@ -57,7 +57,7 @@ pub fn config(app: &AppHandle, kind: OnlineKind) -> Result<OnlineConfig, String>
         OnlineKind::OpenAi => {
             let id = field(&settings, OPENAI_MODEL_ID, "connection");
             if id.is_empty() {
-                return Err("在线语音合成还没有选择 API 连接（模型 → 语音合成）".into());
+                return Err("在线语音合成还没有选择 API 连接（设置 → 模型 → 语音合成）".into());
             }
             let connection = state.connections.resolve(&id)?;
             Ok(OnlineConfig {
@@ -73,7 +73,7 @@ pub fn config(app: &AppHandle, kind: OnlineKind) -> Result<OnlineConfig, String>
         }
         OnlineKind::Deepseek => {
             let id = deepseek_connection_id(&settings)
-                .ok_or("还没有 DeepSeek 连接：请在「高级 → API 连接」里添加 DeepSeek")?;
+                .ok_or("还没有 DeepSeek 连接：请在「设置 → API 连接」里添加 DeepSeek")?;
             let connection = state.connections.resolve(&id)?;
             Ok(OnlineConfig {
                 base_url: connection.base_url,

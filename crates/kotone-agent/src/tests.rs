@@ -568,6 +568,7 @@ fn prompt_is_one_text_for_both_entries_and_the_turn_context_carries_the_rest() {
     let prompt = system_prompt(&PromptContext {
         automations: &automations,
         workspace: None,
+        capabilities: "",
     });
     // 两个入口的说明都在系统提示里（一段对话里不变，前缀缓存才命中）。
     assert!(prompt.contains("reply.ask") && prompt.contains("game.focus"));
@@ -583,6 +584,7 @@ fn prompt_is_one_text_for_both_entries_and_the_turn_context_carries_the_rest() {
         game_notes: Some("聊天在左下角"),
         game_memory: None,
         now: "2026-11-18 周三 14:05",
+        calling: None,
     });
     assert!(game.starts_with("入口：语音"));
     assert!(game.contains("英雄联盟") && game.contains("聊天在左下角") && game.contains("14:05"));
@@ -596,8 +598,114 @@ fn prompt_is_one_text_for_both_entries_and_the_turn_context_carries_the_rest() {
         game_notes: None,
         game_memory: None,
         now: "",
+        calling: None,
     });
     assert_eq!(chat, "入口：聊天窗口（玩家看得到文字）");
+}
+
+// ---------- “你能做什么”：能力概览与怎么叫她（ADR 028） ----------
+
+#[test]
+fn capability_overview_names_only_real_tools_and_covers_every_group() {
+    use crate::prompt::capability_overview;
+    let (service, _host) = service();
+    let specs = service.capabilities()["tools"].as_array().cloned().unwrap();
+    let catalog = Catalog::build(&specs, &[saved("auto-1", Vec::new())]);
+    let overview = capability_overview(&catalog);
+    assert!(overview.contains("## 你能做什么"));
+    assert!(overview.contains("不要编") && overview.contains("下一步"));
+    // 概览里括号中列出的每个工具名都真实存在于这段对话的工具清单。
+    let mut named = 0;
+    for line in overview.lines().filter(|l| l.starts_with("- ")) {
+        let tools = line
+            .rsplit_once('（')
+            .and_then(|(_, rest)| rest.strip_suffix('）'))
+            .unwrap_or_else(|| panic!("没有列工具：{line}"));
+        for tool in tools.split('、') {
+            assert!(
+                catalog.get(tool).is_some(),
+                "概览里的 {tool} 不在工具清单里"
+            );
+            named += 1;
+        }
+    }
+    assert!(named >= 20, "概览太单薄：{overview}");
+    // 工具清单的每个分组都在概览里出现（用它的代表性工具来认）。
+    let mut groups: Vec<&str> = catalog.entries().iter().map(|e| e.group).collect();
+    groups.dedup();
+    for group in groups {
+        assert!(
+            catalog
+                .entries()
+                .iter()
+                .filter(|e| e.group == group)
+                .any(|e| overview.contains(&format!("（{}", e.name))
+                    || overview.contains(&format!("、{}", e.name))),
+            "分组 {group} 没出现在概览里"
+        );
+    }
+    // 不交给内置 Agent 的工具不会出现。
+    for excluded in crate::catalog::EXCLUDED {
+        assert!(
+            !overview.contains(&format!("（{excluded}"))
+                && !overview.contains(&format!("、{excluded}"))
+        );
+    }
+    // 放进系统提示（一段对话里不变）。
+    let prompt = system_prompt(&PromptContext {
+        automations: &[],
+        workspace: None,
+        capabilities: &overview,
+    });
+    assert!(prompt.contains("## 你能做什么") && prompt.contains("game_chat.send"));
+    assert!(prompt.find("## 你能做什么").unwrap() < prompt.find("## 两个入口").unwrap());
+}
+
+#[test]
+fn chat_turn_context_says_how_to_call_her_and_whether_speech_recognition_is_ready() {
+    use crate::prompt::{turn_context, AsrState, Calling, TurnContext};
+    let base = |entry, calling| {
+        turn_context(&TurnContext {
+            entry,
+            game: "",
+            game_id: "",
+            voice_chat: false,
+            game_notes: None,
+            game_memory: None,
+            now: "",
+            calling,
+        })
+    };
+    let ready = base(
+        Entry::Chat,
+        Some(Calling {
+            hotkey: "~",
+            wake_phrase: Some("琴音琴音"),
+            asr: AsrState::OnlineReady,
+        }),
+    );
+    assert!(ready.contains("呼叫键 ~") && ready.contains("唤醒词“琴音琴音”"));
+    assert!(ready.contains("语音识别：在线识别，已就绪"));
+    let unset = base(
+        Entry::Chat,
+        Some(Calling {
+            hotkey: "",
+            wake_phrase: None,
+            asr: AsrState::LocalNotStarted,
+        }),
+    );
+    assert!(unset.contains("呼叫键没设") && unset.contains("设置 → 怎么叫她"));
+    assert!(unset.contains("语音唤醒没开") && unset.contains("本地识别，未启动"));
+    // 语音入口不写这些（玩家已经在叫她了）。
+    let game = base(
+        Entry::Game,
+        Some(Calling {
+            hotkey: "~",
+            wake_phrase: None,
+            asr: AsrState::LocalStarted,
+        }),
+    );
+    assert!(!game.contains("怎么叫她") && !game.contains("语音识别"));
 }
 
 // ---------- 整条链路：循环 + rig-core 客户端（本机 wiremock）+ 端口 + 工具服务 ----------
@@ -789,6 +897,7 @@ fn prompt_teaches_the_look_think_act_loop() {
     let prompt = system_prompt(&PromptContext {
         automations: &[],
         workspace: None,
+        capabilities: "",
     });
     assert!(prompt.contains("game.look") && prompt.contains("game.act"));
     assert!(prompt.contains("不要重复"));
@@ -932,6 +1041,7 @@ fn prompt_carries_soul_memory_game_memory_and_skills_and_child_prompt_is_minimal
     let prompt = system_prompt(&PromptContext {
         automations: &[],
         workspace: Some(&snap),
+        capabilities: "",
     });
     for text in [
         "星野",

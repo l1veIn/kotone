@@ -102,7 +102,7 @@ pub fn connection_ready(
 ) -> Result<kotone_core::connection::ResolvedConnection, String> {
     let id = settings.companion_connection_id().trim();
     if id.is_empty() {
-        return Err("还没有选 AI 连接：请在「设置 → API 连接」里添加一条，并设为在用的连接".into());
+        return Err("还没有选 AI 连接：请在「设置 → 她怎么回答 → AI 连接」里选一条（还没有连接就先在「设置 → API 连接」里添加）".into());
     }
     let connection = app.state::<SharedState>().connections.resolve(id)?;
     if connection
@@ -125,7 +125,7 @@ pub(crate) fn ocr_backend(
     let root = kotone_stt::model::models_dir_from(settings);
     let model =
         kotone_ocr::catalog::resolve_active(settings, &root, crate::model_catalog::verifier())
-            .ok_or("看游戏聊天需要文字识别模型：请在「高级 → 模型 → 文字识别」下载并选择一个")?;
+            .ok_or("看游戏聊天需要文字识别模型：请在「设置 → 模型 → 文字识别」下载并选择一个")?;
     let backend = app
         .state::<crate::ocr_engines::OcrEngines>()
         .by_model(settings, &model)
@@ -777,7 +777,7 @@ pub fn quick_message_text(app: &AppHandle, id: &str) -> Option<String> {
 pub async fn self_check(app: &AppHandle) -> Result<CompanionCheck, String> {
     let id = settings(app).companion_connection_id().trim().to_string();
     if id.is_empty() {
-        return Err("还没有选 AI 连接：请在「设置 → API 连接」里设一条".into());
+        return Err("还没有选 AI 连接：请在「设置 → 她怎么回答 → AI 连接」里选一条".into());
     }
     check_connection(app, &id).await
 }

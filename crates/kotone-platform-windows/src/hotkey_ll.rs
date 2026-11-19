@@ -397,6 +397,29 @@ impl LlHookSource {
         kotone_core::log::log("llhook infrastructure ready for app-level hotkeys");
         Ok(())
     }
+
+    /// 设置 / 清除一个被动具名热键：命中时照常发 `NamedHotkey` 事件，但按键不被吞掉
+    /// （语音识别没准备好时的提示，D8）。RegisterHotKey 做不到放行，所以只有钩子能用。
+    /// 钩子未安装时返回 Err；`None` / 空串 = 清除，钩子未安装时视为已清除。
+    pub fn set_passive_hotkey(&self, id: &str, combo: Option<&str>) -> Result<(), String> {
+        let spec = match combo {
+            Some(k) if !k.trim().is_empty() => Some(
+                parse_hotkey(k)
+                    .ok_or_else(|| format!("无法解析热键「{k}」（LL 钩子后端不支持该键名）"))?,
+            ),
+            _ => None,
+        };
+        let Some(shared) = SHARED.get() else {
+            return if spec.is_some() {
+                Err("低级键盘钩子尚未安装，提示热键无法注册".into())
+            } else {
+                Ok(())
+            };
+        };
+        shared.matcher.lock().unwrap().set_passive_spec(id, spec);
+        kotone_core::log::log(&format!("llhook passive hint {id}: {spec:?}"));
+        Ok(())
+    }
 }
 
 impl HotkeySource for LlHookSource {

@@ -16,8 +16,8 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use kotone_core::hotkey::{
     parse_hotkey, quick_message_slot, HookEvent, HotkeySource, HK_ASSISTANT, HK_AUTOMATION_STOP,
-    HK_CHANNEL_CYCLE, HK_PP_CYCLE, HK_PP_TOGGLE, HK_QUICK_MESSAGES, HK_RESEND_LAST,
-    HK_RUNTIME_TOGGLE,
+    HK_CHANNEL_CYCLE, HK_HINT_CALL, HK_HINT_VOICE_INPUT, HK_PP_CYCLE, HK_PP_TOGGLE,
+    HK_QUICK_MESSAGES, HK_RESEND_LAST, HK_RUNTIME_TOGGLE,
 };
 use kotone_core::orchestrator::Orchestrator;
 use kotone_core::settings::HotkeyBackend;
@@ -292,13 +292,25 @@ fn route_named_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, id: &str) {
     // 应用级热键需要 AppHandle 才能启停运行时，故与其它热键分开走：
     // 它不依赖 runtime 生命周期的 orchestrator 状态。
     if id == HK_AUTOMATION_STOP {
-        crate::automation::stop(app, None, "停止自动化热键");
-        // 琴音正在一步一步操作游戏：停下这次操作，并结束这一轮（不再自动重试，ADR 019）。
-        if crate::computer_use::stop_all(app, "停止自动化热键") {
-            let _ = crate::agent::stop(app);
+        // 「停下」：自动化、琴音正在做的事、她派出的子会话和正在念的话一起停（ADR 028）。
+        crate::stop::stop_everything(app, "停止热键");
+        return;
+    }
+    // 语音识别没准备好时的被动提示（键照常传给游戏，D8）：语音输入热键 → 悬浮窗，呼叫键 → 气泡。
+    if id == HK_HINT_VOICE_INPUT || id == HK_HINT_CALL {
+        let running = app
+            .try_state::<crate::runtime::RuntimeManager>()
+            .is_some_and(|rt| rt.phase() == kotone_core::runtime::RuntimePhase::Running);
+        if !running {
+            crate::runtime::not_ready_hint(
+                app,
+                if id == HK_HINT_CALL {
+                    crate::runtime::HintKind::Call
+                } else {
+                    crate::runtime::HintKind::VoiceInput
+                },
+            );
         }
-        // 琴音派出的子会话（同传等）和它们名下的监听一起停（ADR 022）。
-        crate::agent::stop_all_children(app, "停止热键");
         return;
     }
     if id == HK_RUNTIME_TOGGLE {
@@ -404,6 +416,36 @@ struct HotkeyInputTicket {
 
 /// 应用级具名热键：runtime 未运行时也保持注册（只随配置变化重注册）。
 const APP_NAMED_HOTKEYS: &[&str] = &[HK_RUNTIME_TOGGLE, HK_AUTOMATION_STOP];
+
+/// 语音识别没准备好时的被动提示键（只观察、不吞键；只有低层钩子能做到）。
+const HINT_HOTKEYS: &[&str] = &[HK_HINT_VOICE_INPUT, HK_HINT_CALL];
+
+/// runtime 不在 Running 时要盯的提示键：(id, 组合)。和应用级热键撞车的跳过（应用级优先），
+/// 呼叫键和语音输入热键相同时只留语音输入那条。
+fn hint_list_from(
+    settings: &kotone_core::settings::Settings,
+    app_combos: &[String],
+) -> Vec<(&'static str, String)> {
+    let voice = settings.hotkey.key.trim().to_string();
+    let call = settings.call_hotkey().trim().to_string();
+    let mut list = Vec::new();
+    for (id, combo) in [(HK_HINT_VOICE_INPUT, voice.clone()), (HK_HINT_CALL, call)] {
+        if combo.is_empty() || parse_hotkey(&combo).is_none() {
+            continue;
+        }
+        if app_combos
+            .iter()
+            .any(|taken| kotone_core::hotkey::combos_conflict(&combo, taken))
+        {
+            continue;
+        }
+        if id == HK_HINT_CALL && kotone_core::hotkey::combos_conflict(&combo, &voice) {
+            continue;
+        }
+        list.push((id, combo));
+    }
+    list
+}
 
 /// 已知具名热键的稳定声明顺序（设置页展示顺序；新增具名热键加入此清单即出现在 UI）。
 const KNOWN_NAMED_HOTKEYS: &[&str] = &[
@@ -522,6 +564,8 @@ pub struct HotkeyManager {
     app_named: Mutex<HashMap<String, Option<String>>>,
     /// 应用级具名热键的失败信息（冲突/钩子与插件都注册失败）
     app_named_errors: Mutex<HashMap<String, Option<String>>>,
+    /// 当前生效的被动提示键（runtime 未运行时）：id → 组合
+    hints: Mutex<HashMap<String, String>>,
 }
 
 impl HotkeyManager {
@@ -557,6 +601,60 @@ impl HotkeyManager {
             named_errors: Mutex::new(HashMap::new()),
             app_named: Mutex::new(HashMap::new()),
             app_named_errors: Mutex::new(HashMap::new()),
+            hints: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// 语音识别没准备好时（runtime 不在 Running）盯住语音输入热键和呼叫键：被动、不吞键，
+    /// 按下只弹提示（D8）。`active = false`（进入 Running）时全部撤掉。
+    /// 由 `runtime::refresh_hints` 在配置锁内调用。钩子不可用时不提示（RegisterHotKey 会吞键）。
+    pub fn set_runtime_hints(&self, settings: &kotone_core::settings::Settings, active: bool) {
+        let app_combos: Vec<String> = self
+            .app_named
+            .lock()
+            .unwrap()
+            .values()
+            .flatten()
+            .cloned()
+            .collect();
+        let wanted: HashMap<String, String> = if active {
+            hint_list_from(settings, &app_combos)
+                .into_iter()
+                .map(|(id, combo)| (id.to_string(), combo))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        let mut current = self.hints.lock().unwrap();
+        if *current == wanted {
+            return;
+        }
+        #[cfg(windows)]
+        {
+            for id in HINT_HOTKEYS {
+                let _ = self.llhook.set_passive_hotkey(id, None);
+            }
+            current.clear();
+            if wanted.is_empty() {
+                return;
+            }
+            if let Err(e) = self.llhook.ensure_hook_ready() {
+                kotone_core::log::log(&format!("没准备好的提示键未启用（钩子不可用）：{e}"));
+                return;
+            }
+            for (id, combo) in wanted {
+                match self.llhook.set_passive_hotkey(&id, Some(&combo)) {
+                    Ok(()) => {
+                        current.insert(id, combo);
+                    }
+                    Err(e) => kotone_core::log::log(&format!("提示键 {id} 未启用：{e}")),
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (&wanted, HINT_HOTKEYS);
+            current.clear();
         }
     }
 
@@ -644,7 +742,9 @@ impl HotkeyManager {
         #[cfg(windows)]
         {
             self.llhook.unregister();
+            // 也会清掉被动提示键：停止后由 runtime::refresh_hints 重新盯上
             self.llhook.clear_named_hotkeys();
+            self.hints.lock().unwrap().clear();
         }
         self.plugin.unregister();
         *self.backend.lock().unwrap() = ActiveBackend::None;
@@ -817,6 +917,7 @@ impl HotkeyManager {
             {
                 if backend == ActiveBackend::LlHook {
                     self.llhook.clear_named_hotkeys();
+                    self.hints.lock().unwrap().clear();
                 } else {
                     self.plugin.clear_named_hotkeys();
                 }
@@ -1129,6 +1230,34 @@ mod tests {
                 (HK_LEGACY_REMINDER, "F9".into(), HotkeyMode::Hold),
             ]
         );
+    }
+
+    #[test]
+    fn hint_list_watches_voice_and_call_keys_but_yields_to_app_hotkeys() {
+        let mut settings = kotone_core::settings::Settings::default();
+        settings.hotkey.key = "CapsLock".into();
+        settings.assistant.hotkey = "Ctrl+F9".into();
+        let list = hint_list_from(&settings, &[]);
+        assert_eq!(
+            list,
+            vec![
+                (HK_HINT_VOICE_INPUT, "CapsLock".to_string()),
+                (HK_HINT_CALL, "Ctrl+F9".to_string())
+            ]
+        );
+        // 和应用级热键相同：应用级优先，不盯
+        assert_eq!(
+            hint_list_from(&settings, &["Ctrl+F9".to_string()]),
+            vec![(HK_HINT_VOICE_INPUT, "CapsLock".to_string())]
+        );
+        // 0.1.x 用户还没启用琴音：没有呼叫键
+        settings.ui.legacy_upgrade = kotone_core::settings::LegacyUpgrade::Dismissed;
+        assert_eq!(
+            hint_list_from(&settings, &[]),
+            vec![(HK_HINT_VOICE_INPUT, "CapsLock".to_string())]
+        );
+        settings.hotkey.key = String::new();
+        assert!(hint_list_from(&settings, &[]).is_empty());
     }
 
     #[test]

@@ -182,6 +182,16 @@ impl AppHost for DesktopHost {
 
     fn runtime_stop(&self) -> HostFuture<'_, Value> {
         Box::pin(async move {
+            // ADR 028：在线识别没有“启动 / 停止”，停了玩家在界面上也找不到地方再打开。
+            let remote = self
+                .app
+                .try_state::<crate::SharedState>()
+                .is_some_and(|state| {
+                    crate::runtime::asr_is_remote(&state.settings.read().unwrap())
+                });
+            if remote {
+                return Err("现在用的是在线语音识别，打开就能用，不需要停止".into());
+            }
             let status = crate::runtime::stop(&self.app).await?;
             serde_json::to_value(status).map_err(|e| e.to_string())
         })

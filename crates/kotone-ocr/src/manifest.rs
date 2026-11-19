@@ -1,6 +1,6 @@
 //! 本地 OCR 模型清单：来源、许可、版本、文件大小与 SHA-256。
 //!
-//! 权重不随仓库或安装包分发；设置页「高级 → 模型 → 文字识别」或 `kotone-cli ocr install`
+//! 权重不随仓库或安装包分发；「设置 → 模型 → 文字识别」或 `kotone-cli ocr install`
 //! 按本清单下载到用户模型目录，逐文件校验大小与 SHA-256 后才原子发布。
 //!
 //! 来源统一为 ModelScope `RapidAI/RapidOCR` 发布标签 `v3.10.0` 的 PP-OCRv5 ONNX。全部 15 个

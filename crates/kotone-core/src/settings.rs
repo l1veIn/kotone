@@ -251,6 +251,21 @@ pub struct UiConfig {
     /// 用户在新版本弹窗里选了「不再提醒」：启动时不再自动弹出（关于页仍可手动检查，也可重新打开）。
     #[serde(default)]
     pub update_prompt_disabled: bool,
+    /// 打开软件时显示哪一页（ADR 028）：`"voiceInput"` = 语音输入；空串或任何不认识的值 = 聊天。
+    /// 存成字符串而不是枚举：以后加取值时，读到新值的旧版本不会把整份配置当成损坏
+    /// （docs/development.md 的配置兼容规则）。0.1.x 不认识这个字段，会忽略它。
+    #[serde(default)]
+    pub start_page: String,
+}
+
+/// `ui.startPage` 里表示“打开时显示语音输入”的值。
+pub const START_PAGE_VOICE_INPUT: &str = "voiceInput";
+
+impl UiConfig {
+    /// 打开软件时是否落在语音输入（否则落在聊天）。
+    pub fn starts_on_voice_input(&self) -> bool {
+        self.start_page == START_PAGE_VOICE_INPUT
+    }
 }
 
 /// 录音/发送音效提示（config.json `soundFeedback` 段）。
@@ -1698,6 +1713,47 @@ mod tests {
         save_to(&path, &s).unwrap();
         let loaded = load_from(&path);
         assert!(loaded.ui.first_run_completed);
+    }
+
+    #[test]
+    fn start_page_roundtrips_tolerates_unknown_values_and_is_empty_for_old_configs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // 新装：空 = 聊天
+        let fresh = load_from(&path);
+        assert_eq!(fresh.ui.start_page, "");
+        assert!(!fresh.ui.starts_on_voice_input());
+
+        let mut s = Settings::default();
+        s.ui.start_page = START_PAGE_VOICE_INPUT.into();
+        save_to(&path, &s).unwrap();
+        let loaded = load_from(&path);
+        assert_eq!(loaded.ui.start_page, "voiceInput");
+        assert!(loaded.ui.starts_on_voice_input());
+        let disk: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(disk["ui"]["startPage"], "voiceInput");
+
+        // 以后加的取值：照样读进来（不当成坏配置），按聊天处理
+        std::fs::write(
+            &path,
+            br#"{"agent":{},"toolService":{},"ui":{"firstRunCompleted":true,"startPage":"somethingNew"}}"#,
+        )
+        .unwrap();
+        let future = load_from(&path);
+        assert_eq!(future.ui.start_page, "somethingNew");
+        assert!(future.ui.first_run_completed);
+        assert!(!future.ui.starts_on_voice_input());
+
+        // 0.1.x 配置里没有这个字段
+        std::fs::write(
+            &path,
+            br#"{"hotkey":{"key":"F8","mode":"hold"},"ui":{"firstRunCompleted":true,"autoStart":true}}"#,
+        )
+        .unwrap();
+        let old = load_from(&path);
+        assert_eq!(old.ui.start_page, "");
+        assert_eq!(old.ui.legacy_upgrade, LegacyUpgrade::Pending);
     }
 
     #[test]

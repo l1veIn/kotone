@@ -24,6 +24,8 @@ pub struct PromptContext<'a> {
     pub automations: &'a [Automation],
     /// 工作区快照（SOUL、身份、记忆、游戏记忆、Skill 目录；ADR 022）。None = 旧行为。
     pub workspace: Option<&'a Snapshot>,
+    /// 能力概览（[`capability_overview`] 按这段对话的工具清单生成）；空 = 不写这一节。
+    pub capabilities: &'a str,
 }
 
 /// 每轮附注的输入。
@@ -42,6 +44,45 @@ pub struct TurnContext<'a> {
     pub now: &'a str,
     /// 游戏语音（虚拟麦克风）开着：玩家说“跟队友说…”时用 voice_chat.say 说出来，而不是打字。
     pub voice_chat: bool,
+    /// 怎么叫她（只在聊天窗口入口写进附注：回答“你能做什么”、给下一步建议时要用）。
+    pub calling: Option<Calling<'a>>,
+}
+
+/// 玩家现在能怎么叫她（ADR 028“呼叫”：呼叫键、唤醒词、聊天页的呼叫按钮），以及语音识别准备好没有。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Calling<'a> {
+    /// 呼叫键的显示名（如 `~`、`F9`）；空 = 没设。
+    pub hotkey: &'a str,
+    /// 唤醒词（如“琴音琴音”）；None = 语音唤醒没开。
+    pub wake_phrase: Option<&'a str>,
+    pub asr: AsrState,
+}
+
+/// 语音识别现在的情况。在线识别打开 Kotone 就能用；只有本地识别有“启动”。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AsrState {
+    OnlineReady,
+    OnlinePreparing,
+    /// 在线识别没准备好（例如缺 Key、网络问题）。
+    OnlineNotReady,
+    LocalStarted,
+    LocalPreparing,
+    LocalNotStarted,
+}
+
+impl AsrState {
+    fn describe(self) -> &'static str {
+        match self {
+            AsrState::OnlineReady => "在线识别，已就绪",
+            AsrState::OnlinePreparing => "在线识别，正在准备",
+            AsrState::OnlineNotReady => "在线识别，没准备好（看「语音输入 → 输入 → 语音识别」）",
+            AsrState::LocalStarted => "本地识别，已启动",
+            AsrState::LocalPreparing => "本地识别，正在启动",
+            AsrState::LocalNotStarted => {
+                "本地识别，未启动（呼叫键和唤醒词要等它启动；打字聊天不受影响）"
+            }
+        }
+    }
 }
 
 const MAX_NOTES_CHARS: usize = 2_000;
@@ -83,7 +124,7 @@ pub fn system_prompt(ctx: &PromptContext<'_>) -> String {
 - 帮玩家配置 Kotone 时：先用 settings.describe 查清字段路径、可选值和生效方式，再用 settings.update \
 一次只改相关的几项；一次问一两个问题（玩什么游戏、用什么热键、要不要语音播报……），\
 不要一口气列出所有设置。不认识的设置不要猜字段名。需要别的服务商的 Key 时用 connections.request_key（聊天里弹出只给玩家看的输入框，Key 不经过你），\
-不要让玩家把密钥发在聊天里。你的权限规则只能由玩家自己在设置页修改。\n\
+不要让玩家把密钥发在聊天里。你的权限规则只能由玩家自己在「设置 → 权限」里修改。\n\
 - 改完设置看结果里的 effects：需要重启语音识别或重启 Kotone 才生效时，一定告诉玩家，\
 并问要不要现在重启（语音识别用 runtime.start，Kotone 用 app.restart）；不要不问就重启。\n\
 - 不要声称做成了没有做的事；工具失败时如实说明原因。\n\
@@ -114,6 +155,9 @@ voice_chat.install 自动安装虚拟麦克风 VB-CABLE（VB-Audio 的捐赠软�
 每听到一句外语就翻译、用 reply.say 的弹幕显示，要紧的话再 session.send 给你），用 session.spawn 派出去，\
 用 session.send 问它、用 session.stop 结束它。不要在这里（和玩家说话的会话）直接持续监听。\n",
     );
+    if !ctx.capabilities.trim().is_empty() {
+        out.push_str(ctx.capabilities);
+    }
     out.push_str(
         "\n## 两个入口\n玩家每条消息前面 <kotone-context> 里是 Kotone 写的这一轮的情况（从哪个入口来、当前游戏、现在几点），\
 不是玩家说的话；照它决定怎么回复。\n\
@@ -121,7 +165,7 @@ voice_chat.install 自动安装虚拟麦克风 VB-CABLE（VB-Audio 的捐赠软�
 此时前台是 Kotone 自己的窗口：要看游戏画面、运行自动化或替玩家在游戏里发言之前，\
 先用 game.focus 切到那个游戏（不知道是哪个就先用 game.list 看看，或问玩家）。\
 reply.ask 在这里不能用，要问就直接在回复里问。\n\
-- 入口是「语音」（唤醒词、呼叫热键或快捷指令）：玩家多半在玩游戏、看不到聊天窗口，\
+- 入口是「语音」（唤醒词、呼叫键或快捷指令）：玩家多半在玩游戏、看不到聊天窗口，\
 你最后的回复会被语音或弹幕播出：只说结论，一两句口语，不用列表、Markdown 和表情。\
 需要玩家做决定或补充信息时，用 reply.ask 直接问（会用语音问，再不用唤醒词听玩家回答几秒），\
 拿到回答接着做；不要把问题留在最后的回复里、让玩家再喊一次唤醒词。玩家没回答就简短收尾。\n",
@@ -182,6 +226,131 @@ reply.ask 在这里不能用，要问就直接在回复里问。\n\
     out
 }
 
+/// 能力概览里每个工具分组的说法：(分组, 一句人话, 代表性工具)。代表性工具只写真实存在的工具名
+/// （测试对照工具清单检查），不在这段对话工具清单里的会被略去。
+const CAPABILITIES: &[(&str, &str, &[&str])] = &[
+    (
+        "game",
+        "游戏里帮玩家：看游戏聊天、替玩家在聊天框打字、用语音或弹幕告诉玩家、定时提醒、打开 / 切换游戏、\
+一边看画面一边操作游戏、用虚拟麦克风替玩家对队友说话、听队友的语音（例如同传翻译）",
+        &[
+            "companion.read_chat",
+            "game_chat.send",
+            "reply.say",
+            "reminder.create",
+            "game.launch",
+            "game.focus",
+            "game.look",
+            "game.act",
+            "voice_chat.say",
+            "voice.listen.start",
+        ],
+    ),
+    (
+        "screen",
+        "看屏幕：截图、识别画面上的文字、看现在是哪个窗口",
+        &["screen.capture", "ocr.recognize", "window.active"],
+    ),
+    (
+        "automation",
+        "自动化：把重复的操作写成小程序替玩家按键、点鼠标、看画面，可以保存、定时运行，随时停下",
+        &[
+            "automation.run",
+            "automation.save",
+            "automation.list",
+            "automation.stop",
+        ],
+    ),
+    (
+        "settings",
+        "帮玩家配置 Kotone：语音输入热键、呼叫键、游戏配置、API 连接、麦克风等（先查说明再改，改之前问玩家）",
+        &[
+            "settings.describe",
+            "settings.update",
+            "profiles.list",
+            "hotkeys.conflicts",
+            "connections.request_key",
+        ],
+    ),
+    (
+        "models",
+        "下载和切换模型：语音识别（在线或本地）、文字识别、语音合成、联网搜索",
+        &["models.list", "models.download", "models.activate"],
+    ),
+    (
+        "app",
+        "联网查游戏知识（版本、出装、攻略）、看用量和花了多少钱、看语音识别的状态、导出诊断",
+        &[
+            "web.search",
+            "web.fetch",
+            "usage.summary",
+            "runtime.status",
+            "diagnostics.export",
+        ],
+    ),
+    (
+        "meta",
+        "记住玩家的偏好和游戏心得、学会并分享新技能（Skill）、换角色、派子会话盯着一件事",
+        &["memory", "skill.manage", "roles.switch", "session.spawn"],
+    ),
+];
+
+/// “你能做什么”的能力概览：按这段对话真实的工具清单分组生成，写进系统提示。
+///
+/// 思路照 DeepSeek Harness（MIT，ca33fd68，`target/research/deepseek-harness`）内置的 dsh-doc 技能：
+/// 让模型按自己真实的能力回答“你能做什么”，而不是凭印象编。不同的是这里直接放进系统提示、
+/// 并由测试对照工具清单，不靠模型自己去读技能文件（ADR 028）。
+pub fn capability_overview(catalog: &crate::catalog::Catalog) -> String {
+    let entries = catalog.entries();
+    let mut groups: Vec<&str> = Vec::new();
+    for entry in entries {
+        if !groups.contains(&entry.group) {
+            groups.push(entry.group);
+        }
+    }
+    // 先按上面的说法顺序，再补没写说法的分组（新加的分组不会被漏掉）。
+    groups.sort_by_key(|group| {
+        CAPABILITIES
+            .iter()
+            .position(|(id, _, _)| id == group)
+            .unwrap_or(usize::MAX)
+    });
+    let mut out = String::from(
+        "\n## 你能做什么（能力概览）\n按这段对话真实的工具清单整理。玩家问“你能做什么”“你会什么”时，\
+只按这里和「已安装的 Skill」回答，不要编没有的本事：挑三五件和玩家眼下最相关的，用口语说，不要把工具名念给玩家；\
+最后给一个具体的下一步，按附注里的“怎么叫她”和“语音识别”来定——有呼叫键就说“进游戏按 X 叫我试试”\
+（唤醒词开着也可以说喊唤醒词），没设呼叫键就建议去「设置 → 怎么叫她」设一个，\
+用本地识别又没启动时提醒先在「语音输入」里启动本地识别（打字聊天不用）。\n",
+    );
+    for group in groups {
+        let (sentence, representative) = match CAPABILITIES.iter().find(|(id, _, _)| *id == group) {
+            Some((_, sentence, tools)) => (sentence.to_string(), tools.to_vec()),
+            None => (
+                crate::catalog::GROUPS
+                    .iter()
+                    .find(|(id, _, _)| *id == group)
+                    .map(|(_, name, _)| name.to_string())
+                    .unwrap_or_else(|| group.to_string()),
+                Vec::new(),
+            ),
+        };
+        let mut tools: Vec<&str> = representative
+            .into_iter()
+            .filter(|name| catalog.get(name).is_some())
+            .collect();
+        if tools.is_empty() {
+            tools = entries
+                .iter()
+                .filter(|e| e.group == group)
+                .map(|e| e.name.as_str())
+                .take(3)
+                .collect();
+        }
+        out.push_str(&format!("- {sentence}（{}）\n", tools.join("、")));
+    }
+    out
+}
+
 /// 这一轮的附注（放在玩家这句话前面，见 [`kotone_ai::agent::render_user`]）。
 pub fn turn_context(ctx: &TurnContext<'_>) -> String {
     let mut out = String::new();
@@ -191,6 +360,22 @@ pub fn turn_context(ctx: &TurnContext<'_>) -> String {
     });
     if ctx.voice_chat {
         out.push_str("\n游戏语音：开着（“跟队友说…”用 voice_chat.say 说出来）");
+    }
+    if let (Entry::Chat, Some(calling)) = (ctx.entry, ctx.calling) {
+        let hotkey = calling.hotkey.trim();
+        let key = if hotkey.is_empty() {
+            "呼叫键没设（在「设置 → 怎么叫她」设）".to_string()
+        } else {
+            format!("呼叫键 {hotkey}")
+        };
+        let wake = match calling.wake_phrase.map(str::trim).filter(|p| !p.is_empty()) {
+            Some(phrase) => format!("唤醒词“{phrase}”"),
+            None => "语音唤醒没开".to_string(),
+        };
+        out.push_str(&format!(
+            "\n怎么叫她：{key}；{wake}；聊天页的呼叫按钮\n语音识别：{}",
+            calling.asr.describe()
+        ));
     }
     if !ctx.now.is_empty() {
         out.push_str(&format!("\n现在：{}", ctx.now));

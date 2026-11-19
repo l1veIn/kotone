@@ -60,7 +60,7 @@ pub trait SpeechOutput: Send + Sync {
     /// （ADR 020）；合成结果进缓存，紧接着 `speak` 同一句会立刻出声。系统语音直接出声、
     /// 拿不到数据，返回错误。阻塞，从工作线程调用。
     fn synthesize(&self, _request: SpeechRequest) -> Result<(Vec<f32>, u32), String> {
-        Err("当前的语音引擎（系统语音）不能送进游戏语音：请在「通用 → 语音」换成 DeepSeek、Kokoro 或在线语音".into())
+        Err("当前的语音引擎（系统语音）不能送进游戏语音：请在「设置 → 模型 → 语音合成」换成 DeepSeek、Kokoro 或在线语音".into())
     }
 }
 

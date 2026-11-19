@@ -22,6 +22,8 @@ pub struct OverlayManager {
     generation: AtomicU64,
     destroying: AtomicBool,
     lifecycle: Mutex<()>,
+    /// 没准备好提示的代际：新提示到来时旧的定时收起作废
+    hint_generation: AtomicU64,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -463,4 +465,78 @@ mod tests {
         apply_fallback(&mut settings, false);
         assert_eq!(settings.overlay.visibility, OverlayVisibility::Always);
     }
+}
+
+/// 悬浮窗上的一条提示（`kotone://overlay-hint`）；`null` = 收起。
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayHint {
+    pub title: String,
+    pub detail: String,
+}
+
+const HINT_DWELL: std::time::Duration = std::time::Duration::from_millis(3_500);
+
+/// 语音识别没准备好时按了语音输入热键：在悬浮窗提示怎么启动（ADR 028，D8）。
+/// 悬浮窗只属于语音输入；关了悬浮窗（never）、悬浮窗降级或游戏独占全屏时不显示。
+/// 约 3.5 秒后收起；期间语音识别已就绪（Running）就只撤掉提示，窗口交给平常的显隐规则。
+pub fn show_hint(app: &AppHandle, title: &str, detail: &str) {
+    if !can_show(app) {
+        return;
+    }
+    if kotone_platform_windows::fullscreen::is_exclusive_fullscreen_active() == Some(true) {
+        log::log("overlay hint skipped: exclusive fullscreen game is active");
+        return;
+    }
+    let Some(win) = app.get_webview_window("overlay") else {
+        return;
+    };
+    let generation = app
+        .state::<OverlayManager>()
+        .hint_generation
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
+    let _ = app.emit_to(
+        "overlay",
+        "kotone://overlay-hint",
+        Some(OverlayHint {
+            title: title.to_string(),
+            detail: detail.to_string(),
+        }),
+    );
+    crate::show_window_no_focus(&win);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(HINT_DWELL).await;
+        if app
+            .state::<OverlayManager>()
+            .hint_generation
+            .load(Ordering::SeqCst)
+            != generation
+        {
+            return;
+        }
+        let _ = app.emit_to("overlay", "kotone://overlay-hint", None::<OverlayHint>);
+        let running = app.state::<crate::RuntimeManager>().phase()
+            == kotone_core::runtime::RuntimePhase::Running;
+        if running {
+            return;
+        }
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let still_stopped = handle.state::<crate::RuntimeManager>().phase()
+                != kotone_core::runtime::RuntimePhase::Running;
+            if still_stopped
+                && handle
+                    .state::<OverlayManager>()
+                    .hint_generation
+                    .load(Ordering::SeqCst)
+                    == generation
+            {
+                if let Some(win) = handle.get_webview_window("overlay") {
+                    crate::hide_window(&win);
+                }
+            }
+        });
+    });
 }

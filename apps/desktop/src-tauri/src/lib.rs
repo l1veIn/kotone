@@ -21,6 +21,7 @@ mod recap;
 mod roles;
 mod runtime;
 mod speech_models;
+mod stop;
 mod tool_config;
 mod tool_service;
 mod tray;
@@ -435,6 +436,18 @@ struct TauriEmitter {
     app: AppHandle,
     /// overlay 显隐代际：每个状态事件 +1；延迟隐藏任务只认调度时的代际
     vis_gen: Arc<std::sync::atomic::AtomicU64>,
+    /// 为琴音的会话藏起了常驻悬浮窗：会话结束（idle）时放回来
+    hidden_for_companion: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// 琴音（角色）的录音会话：气泡只属于角色、悬浮窗只属于语音输入（ADR 028）。
+/// 0.1.x 的提醒助手仍是语音输入法的一部分，照旧用悬浮窗。
+fn is_companion_session(payload: &serde_json::Value) -> bool {
+    payload.pointer("/payload/purpose").and_then(|v| v.as_str()) == Some("assistant")
+        && payload
+            .pointer("/payload/legacyReminder")
+            .and_then(|v| v.as_bool())
+            != Some(true)
 }
 
 impl Emitter for TauriEmitter {
@@ -444,8 +457,8 @@ impl Emitter for TauriEmitter {
             overlay::remember_state(&self.app, &payload);
         }
         let _ = self.app.emit(event, payload.clone());
-        // 琴音的语音会话改在对话气泡里显示（不再借用语音输入法的悬浮窗）。
-        let bubble_session = event == "kotone://state" && bubble::owns_session(&self.app, &payload);
+        // 琴音的语音会话只在对话气泡里显示；气泡关着时也不借用语音输入的悬浮窗（D10）。
+        let companion_session = event == "kotone://state" && is_companion_session(&payload);
         match event {
             "kotone://state" => bubble::on_state(&self.app, &payload),
             "kotone://partial" => {
@@ -474,9 +487,11 @@ impl Emitter for TauriEmitter {
             }
             // 后端驱动 overlay 显隐（显隐一律走原始 Win32 SW_SHOWNA/SW_HIDE 路径，
             // 不碰 tao set_visible——tao 缓存 diff 短路坑，见 hide_window 注释）
-            if bubble_session {
+            if companion_session {
                 if let Some(win) = self.app.get_webview_window("overlay") {
                     hide_window(&win);
+                    self.hidden_for_companion
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
                 }
             } else if let Some(win) = self.app.get_webview_window("overlay") {
                 let (visibility, continuous) = self
@@ -549,8 +564,19 @@ impl Emitter for TauriEmitter {
                             hide_window(&win);
                             record_overlay_event("overlay_hide", "state", Some(false));
                         }
-                        // always + Running + idle，以及 continuous（solo）的 success：保持现状。
-                        OnDemandOverlayAction::Keep => {}
+                        // always + Running + idle，以及 continuous（solo）的 success：保持现状；
+                        // 但刚为琴音的会话藏起了常驻悬浮窗，就放回来。
+                        OnDemandOverlayAction::Keep => {
+                            if state == "idle"
+                                && self
+                                    .hidden_for_companion
+                                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+                                && visibility == OverlayVisibility::Always
+                                && fullscreen::is_exclusive_fullscreen_active() != Some(true)
+                            {
+                                show_window_no_focus(&win);
+                            }
+                        }
                     }
                 }
             }
@@ -1140,6 +1166,10 @@ fn update_settings(
     drop(input_configuration);
     drop(input_pause);
     drop(configuration_guard);
+    // 语音识别没准备好时盯着的提示键（语音输入热键 / 呼叫键）跟着设置走
+    if hotkey_registration_changed(&old, &updated) || app_hotkey_changed(&old, &updated) {
+        runtime::refresh_hints(&app);
+    }
     if hotkey_registration_changed(&old, &updated) {
         use tauri::Emitter as _;
         let _ = app.emit(
@@ -1171,7 +1201,13 @@ fn update_settings(
         if old.ui.legacy_upgrade.uses_legacy_assistant() {
             automation::ensure_builtin(&app);
             roles::migrate(&app);
-            create_startup_windows(&app, true);
+            // 同步命令跑在主线程的 IPC 回调里：在这里直接建 WebView（气泡窗）会让 WebView2
+            // 在回调里嵌套创建控制器而死锁（2026-11-20 真机：老用户填 Key 启用琴音后整个应用卡住）。
+            // 交给后台任务，等这次 IPC 返回后再由事件循环建窗口。
+            let windows_app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                create_startup_windows(&windows_app, true);
+            });
         }
         // 当前角色（名字、声音、唤醒词跟着它）
         roles::remember(&updated.agent.role_id);
@@ -1646,9 +1682,16 @@ fn set_models_dir(
 ) -> Result<ModelsDirMigration, String> {
     let runtime_manager = app.state::<RuntimeManager>();
     let _configuration = runtime_manager.configuration_guard();
-    let running = runtime_manager.phase() != RuntimePhase::Stopped;
-    if running {
-        return Err("引擎正在运行，请先停止引擎再迁移模型目录（设置页或托盘「停止引擎」）".into());
+    // 只有本地识别会占用模型文件（Windows 文件锁）；在线识别一直就绪，不影响迁移。
+    let local_running = runtime_manager.phase() != RuntimePhase::Stopped
+        && runtime_manager
+            .status(&state.settings.read().unwrap(), &state.engines, None)
+            .asr_local;
+    if local_running {
+        return Err(
+            "本地语音识别正在运行，请先停止再迁移模型目录（「语音输入」页或托盘「停止本地语音识别」）"
+                .into(),
+        );
     }
     if app
         .state::<speech_models::SpeechModelManager>()
@@ -2072,6 +2115,7 @@ pub fn run() {
             let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter {
                 app: app.handle().clone(),
                 vis_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                hidden_for_companion: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             });
             let injector: Arc<dyn Injector> = Arc::new(WindowsInjector);
             let focus: Arc<dyn FocusBackend> = Arc::new(WinFocusBackend);
@@ -2192,11 +2236,14 @@ pub fn run() {
                 let app_hotkeys = settings.read().unwrap().clone();
                 manager.apply_app_hotkeys(&app_hotkeys);
             }
+            // 语音识别还没就绪：按语音输入热键 / 呼叫键只提示怎么启动，键照常传给游戏（D8）。
+            runtime::refresh_hints(app.handle());
+            tray::refresh(app.handle());
 
-            // 「启动」开关（core runtime 状态机）：默认 Stopped——不注册热键、
-            // 不 warmup 引擎、悬浮窗隐藏。ui.autoStart = true 时自动 start_runtime
+            // 语音识别运行时（core runtime 状态机）默认 Stopped。ADR 028：在线识别打开就能用，
+            // 直接 start；本地识别只有开了「打开时自动启动」（ui.autoStart）才自动启动
             // （warmup → 注册热键 → 显示悬浮窗，进度经 kotone://runtime 推送）。
-            if settings.read().unwrap().ui.auto_start {
+            if runtime::should_start_on_launch(&settings.read().unwrap()) {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = runtime::start(&handle).await {

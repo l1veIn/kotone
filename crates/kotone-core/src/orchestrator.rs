@@ -1267,7 +1267,7 @@ impl Orchestrator {
             return Err(SessionBeginError::new(
                 "STT_ENGINE_NOT_READY",
                 format!(
-                    "引擎「{}」未就绪（模型未下载），请到「设置 → 高级」下载模型",
+                    "引擎「{}」未就绪（模型未下载），请到「设置 → 模型 → 语音识别」下载模型",
                     engine.display_name()
                 ),
             ));

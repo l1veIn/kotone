@@ -1,6 +1,10 @@
-//! 运行时「启动」开关的壳侧实现：RuntimeManager 持有相位与启动快照，
+//! 语音识别运行时的壳侧实现：RuntimeManager 持有相位与启动快照，
 //! start/stop 编排（warmup → 注册热键 → 显示悬浮窗 / 反向卸载），
 //! 状态变化经 `kotone://runtime` 事件推送全量状态给前端。
+//!
+//! ADR 028：“启动”只属于本地语音识别。在线识别打开 Kotone 就自动就绪（这里自动 start），
+//! 换了识别模型也自动跟上（[`after_asr_change`]）；本地识别才需要玩家点「启动」。
+//! 没准备好时按语音输入热键 / 呼叫键，只提示、不吞键（[`not_ready_hint`]）。
 //!
 //! 迁移合法性由 core `kotone_core::runtime` 纯函数裁决；本模块只做编排。
 
@@ -57,6 +61,10 @@ pub struct RuntimeStatus {
     pub interaction_mode: Option<String>,
     /// 过渡阶段提示（warmup / hotkey / overlay / unload），稳态为 null
     pub stage: Option<String>,
+    /// 当前识别模型是本地模型（只有本地识别有“启动”的概念）
+    pub asr_local: bool,
+    /// 最近一次启动失败的原因（再次启动、启动成功、停止或换识别模型时清掉）
+    pub error: Option<String>,
 }
 
 /// 运行时管理器：相位 + 启动快照（两个锁分开，避免事件构造时长持锁）
@@ -66,6 +74,14 @@ pub struct RuntimeManager {
     configuration: Mutex<()>,
     input_epoch: AtomicU64,
     input_pauses: Arc<AtomicUsize>,
+    /// 最近一次启动失败的原因
+    last_error: Mutex<Option<String>>,
+    /// 上次推送状态时的识别引擎 / 模型：变化 = 玩家换了识别模型
+    last_asr: Mutex<Option<(String, String)>>,
+    /// 自动启动 / 重启串行执行（换模型、在线识别自动应用设置）
+    follow: Arc<tokio::sync::Mutex<()>>,
+    /// 在线识别自动重启过的会话配置（同一份配置只自动重启一次，防止推导不一致时反复重启）
+    auto_restarted_for: Mutex<Option<String>>,
 }
 
 /// Pause only input admission; no mutex is held while asynchronous cancellation runs.
@@ -85,7 +101,19 @@ impl RuntimeManager {
             configuration: Mutex::new(()),
             input_epoch: AtomicU64::new(0),
             input_pauses: Arc::new(AtomicUsize::new(0)),
+            last_error: Mutex::new(None),
+            last_asr: Mutex::new(None),
+            follow: Arc::new(tokio::sync::Mutex::new(())),
+            auto_restarted_for: Mutex::new(None),
         }
+    }
+
+    fn set_error(&self, error: Option<String>) {
+        *self.last_error.lock().unwrap() = error;
+    }
+
+    pub fn error(&self) -> Option<String> {
+        self.last_error.lock().unwrap().clone()
     }
 
     pub fn phase(&self) -> RuntimePhase {
@@ -154,6 +182,7 @@ impl RuntimeManager {
                 snapshot.session_config != session_config_from(settings, &engine_id)
             });
         let restart_needed = engine_or_model_changed || session_config_changed;
+        let asr_local = !kotone_stt::model::is_remote_model(&model_id);
         RuntimeStatus {
             phase: phase.as_str().to_string(),
             restart_needed,
@@ -169,8 +198,18 @@ impl RuntimeManager {
                     .to_string()
             }),
             stage,
+            asr_local,
+            error: self.error(),
         }
     }
+}
+
+/// 当前活动识别模型是不是在线模型（在线识别没有“启动”）。
+pub fn asr_is_remote(settings: &Settings) -> bool {
+    kotone_stt::model::is_remote_model(&kotone_stt::model::active_model_from(
+        settings,
+        &settings.stt_engine,
+    ))
 }
 
 /// 推送全量状态（失败仅记日志；前端启动时会主动 get_runtime_status 对齐）
@@ -188,8 +227,8 @@ pub fn snapshot_and_emit(app: &AppHandle, stage: Option<String>) -> Option<Runti
         let settings = state.settings.read().unwrap();
         rt.status(&settings, &state.engines, stage)
     };
-    // 托盘「启动引擎 / 停止引擎」文案同步：启动/停止完成都会经过本推送点
-    crate::tray::sync_toggle_label(app, status.phase == "running");
+    // 托盘「启动 / 停止本地语音识别」：只在本地识别时出现，文案随相位变（启动/停止完成都经过这里）
+    crate::tray::sync(app, &status);
     // 语音唤醒跟随语音识别的启停与设置（设置保存的最后一步也经过这里）。
     crate::wake::sync(app);
     // 游戏语音（ADR 020）同样跟着设置启停转发。
@@ -199,7 +238,224 @@ pub fn snapshot_and_emit(app: &AppHandle, stage: Option<String>) -> Option<Runti
     if let Ok(value) = serde_json::to_value(&status) {
         crate::tool_service::publish(app, "runtime.phase", value);
     }
+    follow_asr(app, &rt, &status);
     Some(status)
+}
+
+/// 每次推送状态时检查：识别模型换了 → 跟着启动 / 重启；在线识别改了会话设置 → 自动重启生效。
+/// 只调度，不在这里等（推送点可能在启动流程或设置事务里）。
+fn follow_asr(app: &AppHandle, rt: &RuntimeManager, status: &RuntimeStatus) {
+    let current = (
+        status.engine_id.clone().unwrap_or_default(),
+        status.model_id.clone().unwrap_or_default(),
+    );
+    let previous = {
+        let mut last = rt.last_asr.lock().unwrap();
+        let previous = last.clone();
+        *last = Some(current.clone());
+        previous
+    };
+    match previous {
+        Some(previous) if previous != current => {
+            rt.set_error(None);
+            let previous_was_remote = kotone_stt::model::is_remote_model(&previous.1);
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                after_asr_change(&app, previous_was_remote).await;
+            });
+        }
+        Some(_)
+            if !status.asr_local
+                && status.phase == "running"
+                && status.restart_needed
+                && status.stage.is_none() =>
+        {
+            // 在线识别没有「重启生效」按钮：热词、语言等会话设置变了就自动重启一次。
+            let signature = {
+                let state = app.state::<SharedState>();
+                let settings = state.settings.read().unwrap();
+                format!(
+                    "{}|{}|{:?}",
+                    current.0,
+                    current.1,
+                    session_config_from(&settings, &current.0)
+                )
+            };
+            {
+                let mut done = rt.auto_restarted_for.lock().unwrap();
+                if done.as_deref() == Some(signature.as_str()) {
+                    return;
+                }
+                *done = Some(signature);
+            }
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let follow = app.state::<RuntimeManager>().follow.clone();
+                let _serial = follow.lock().await;
+                let still = {
+                    let state = app.state::<SharedState>();
+                    let rt = app.state::<RuntimeManager>();
+                    let settings = state.settings.read().unwrap();
+                    asr_is_remote(&settings)
+                        && rt.phase() == RuntimePhase::Running
+                        && rt.status(&settings, &state.engines, None).restart_needed
+                };
+                if still {
+                    if let Err(e) = start(&app).await {
+                        kotone_core::log::log(&format!("在线识别自动应用设置失败: {e}"));
+                    }
+                }
+            });
+        }
+        _ => {}
+    }
+}
+
+/// 等运行时离开过渡态（最多约 30 秒），返回稳定后的相位。
+async fn settled_phase(app: &AppHandle) -> RuntimePhase {
+    for _ in 0..150 {
+        let phase = app.state::<RuntimeManager>().phase();
+        if matches!(phase, RuntimePhase::Stopped | RuntimePhase::Running) {
+            return phase;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    app.state::<RuntimeManager>().phase()
+}
+
+/// 换了识别模型 / 引擎之后（设置页、工具、settings.update 等所有入口都经 snapshot_and_emit 到这里）：
+/// - 新模型在线：直接就绪（停着就启动，运行中按重启语义换过去）；
+/// - 从在线换成本地：立即启动一次，热键不会突然失灵（D9）；
+/// - 本地换本地：运行中保持「重启生效」提示，停着不动。
+pub async fn after_asr_change(app: &AppHandle, previous_was_remote: bool) {
+    let follow = app.state::<RuntimeManager>().follow.clone();
+    let _serial = follow.lock().await;
+    let phase = settled_phase(app).await;
+    let (now_remote, restart_needed) = {
+        let state = app.state::<SharedState>();
+        let settings = state.settings.read().unwrap();
+        (
+            asr_is_remote(&settings),
+            app.state::<RuntimeManager>()
+                .status(&settings, &state.engines, None)
+                .restart_needed,
+        )
+    };
+    if !(now_remote || previous_was_remote) {
+        return;
+    }
+    if phase == RuntimePhase::Running && !restart_needed {
+        return;
+    }
+    kotone_core::log::log(&format!(
+        "识别模型已切换（{}），自动{}",
+        if now_remote { "在线" } else { "本地" },
+        if phase == RuntimePhase::Running {
+            "重启"
+        } else {
+            "启动"
+        }
+    ));
+    if let Err(e) = start(app).await {
+        kotone_core::log::log(&format!("切换识别模型后自动启动失败: {e}"));
+    }
+}
+
+/// 启动时（lib.rs setup）：在线识别打开即就绪；本地识别看「打开时自动启动」。
+pub fn should_start_on_launch(settings: &Settings) -> bool {
+    settings.ui.auto_start || asr_is_remote(settings)
+}
+
+/// 没准备好时按下的是哪个键。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HintKind {
+    /// 语音输入热键：只在悬浮窗提示
+    VoiceInput,
+    /// 呼叫键：只在气泡提示
+    Call,
+}
+
+/// 语音识别没准备好时的提示文案：(标题, 说明)。Running 返回 None。
+pub fn not_ready_text(
+    phase: RuntimePhase,
+    remote: bool,
+    error: Option<&str>,
+    toggle_hotkey: &str,
+) -> Option<(String, String)> {
+    let what = if remote {
+        "语音识别"
+    } else {
+        "本地语音识别"
+    };
+    match phase {
+        RuntimePhase::Running => None,
+        RuntimePhase::Starting => Some((format!("{what}正在准备…"), "准备好就能用了".into())),
+        RuntimePhase::Stopping => Some((format!("{what}正在停止"), "稍后再试".into())),
+        RuntimePhase::Stopped => {
+            if let Some(error) = error.map(str::trim).filter(|e| !e.is_empty()) {
+                let mut short: String = error.chars().take(60).collect();
+                if error.chars().count() > 60 {
+                    short.push('…');
+                }
+                return Some((format!("{what}出问题了"), short));
+            }
+            if remote {
+                return Some((
+                    "语音识别还没准备好".into(),
+                    "打开 Kotone，看看「语音输入」页".into(),
+                ));
+            }
+            let toggle = toggle_hotkey.trim();
+            let how = if toggle.is_empty() {
+                "打开 Kotone，点「启动」".to_string()
+            } else {
+                format!("按 {toggle} 启动，或在 Kotone 里点「启动」")
+            };
+            Some(("本地语音识别未启动".into(), how))
+        }
+    }
+}
+
+/// 被动提示热键触发（只观察、不吞键）：语音输入热键 → 悬浮窗；呼叫键 → 气泡。
+/// 两者不混用：气泡关着时呼叫键就不提示。
+pub fn not_ready_hint(app: &AppHandle, kind: HintKind) {
+    let (Some(rt), Some(state)) = (
+        app.try_state::<RuntimeManager>(),
+        app.try_state::<SharedState>(),
+    ) else {
+        return;
+    };
+    let (remote, toggle) = {
+        let settings = state.settings.read().unwrap();
+        (
+            asr_is_remote(&settings),
+            settings.runtime_toggle_hotkey.clone(),
+        )
+    };
+    let Some((title, detail)) = not_ready_text(rt.phase(), remote, rt.error().as_deref(), &toggle)
+    else {
+        return;
+    };
+    kotone_core::log::log(&format!("not-ready hint ({kind:?}): {title}"));
+    match kind {
+        HintKind::VoiceInput => crate::overlay::show_hint(app, &title, &detail),
+        HintKind::Call => crate::bubble::hint(app, &title, &detail),
+    }
+}
+
+/// runtime 不在 Running 时盯住语音输入热键 / 呼叫键（被动、不吞键）；Running 时撤掉。
+/// 在配置锁内检查相位，避免与 finish_start 的热键注册交错。
+pub fn refresh_hints(app: &AppHandle) {
+    let (Some(rt), Some(state), Some(mgr)) = (
+        app.try_state::<RuntimeManager>(),
+        app.try_state::<SharedState>(),
+        app.try_state::<HotkeyManager>(),
+    ) else {
+        return;
+    };
+    let _configuration = rt.configuration_guard();
+    let settings = state.settings.read().unwrap().clone();
+    mgr.set_runtime_hints(&settings, rt.phase() != RuntimePhase::Running);
 }
 
 /// 热键触发的启动 / 停止切换（「启动 / 停止 Kotone」热键）。
@@ -208,6 +464,12 @@ pub fn snapshot_and_emit(app: &AppHandle, stage: Option<String>) -> Option<Runti
 /// 避免热键连按把状态机推到非法相位。
 pub async fn toggle(app: &AppHandle) -> Result<RuntimeStatus, String> {
     let rt = app.state::<RuntimeManager>();
+    {
+        let state = app.state::<SharedState>();
+        if asr_is_remote(&state.settings.read().unwrap()) {
+            return Err("在线语音识别打开就能用，不需要启动或停止".into());
+        }
+    }
     match rt.phase() {
         RuntimePhase::Stopped => start(app).await,
         RuntimePhase::Running => {
@@ -267,11 +529,13 @@ pub async fn start(app: &AppHandle) -> Result<RuntimeStatus, String> {
     }
 
     rt.transit(runtime::begin_start)?;
+    rt.set_error(None);
     snapshot_and_emit(app, Some("warmup".into()));
 
     // 每个失败分支都要回滚相位；用闭包包住主流程统一处理
     let result = start_inner(app).await;
     if let Err(ref e) = result {
+        rt.set_error(Some(e.clone()));
         kotone_core::log::log(&format!("runtime start failed: {e}"));
         crate::record_process_event(
             app,
@@ -282,6 +546,8 @@ pub async fn start(app: &AppHandle) -> Result<RuntimeStatus, String> {
             }),
         );
         let _ = rt.transit(runtime::fail_start);
+        // 热键注册可能已被拆掉：没准备好的提示重新盯上
+        refresh_hints(app);
     }
     let status = snapshot_and_emit(app, None);
     match (result, status) {
@@ -311,7 +577,7 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
     ))?;
     if state.engines.get(&engine_id).is_none() {
         return Err(format!(
-            "未注册的 STT 引擎: {engine_id}（请在「引擎与模型」页重新选择）"
+            "未注册的 STT 引擎: {engine_id}（请在「设置 → 模型 → 语音识别」重新选择）"
         ));
     }
 
@@ -328,7 +594,7 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
     if !engine_ready() {
         if kotone_stt::model::is_remote_model(&model_id) {
             return Err(format!(
-                "在线模型「{model_id}」未就绪：请在「模型切换」里填写 API 凭据（App ID / Token 等）后重试"
+                "在线模型「{model_id}」未就绪：请在「设置 → 模型 → 语音识别」填好 API 凭据（或 DeepSeek Key）后重试"
             ));
         }
         let missing = kotone_stt::model::multi_model_missing(&model_id);
@@ -347,7 +613,7 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
         if !ready {
             let missing = kotone_stt::model::multi_model_missing(&model_id);
             return Err(format!(
-                "模型「{model_id}」文件不齐备：{}。请在「设置 → 高级」重新下载",
+                "模型「{model_id}」文件不齐备：{}。请在「设置 → 模型 → 语音识别」重新下载",
                 missing.join("、")
             ));
         }
@@ -560,7 +826,10 @@ pub async fn stop(app: &AppHandle) -> Result<RuntimeStatus, String> {
 
     state.orchestrator.deactivate_runtime_settings();
     rt.set_started(None);
+    rt.set_error(None);
     rt.transit(runtime::finish_stop)?;
+    // 停下以后：按语音输入热键 / 呼叫键只提示怎么启动，键照常传给游戏（D8）
+    refresh_hints(app);
     kotone_core::log::log("runtime stopped");
     crate::record_process_event(
         app,
@@ -615,6 +884,61 @@ mod tests {
         task.await.unwrap();
         assert!(!runtime.accepts_input(queued));
         assert!(runtime.input_ticket().is_some());
+    }
+
+    #[test]
+    fn not_ready_hint_text_follows_phase_error_and_toggle_hotkey() {
+        assert_eq!(not_ready_text(RuntimePhase::Running, false, None, ""), None);
+        assert_eq!(
+            not_ready_text(RuntimePhase::Stopped, false, None, "Ctrl+Alt+K"),
+            Some((
+                "本地语音识别未启动".into(),
+                "按 Ctrl+Alt+K 启动，或在 Kotone 里点「启动」".into()
+            ))
+        );
+        assert_eq!(
+            not_ready_text(RuntimePhase::Stopped, false, None, " ")
+                .unwrap()
+                .1,
+            "打开 Kotone，点「启动」"
+        );
+        assert_eq!(
+            not_ready_text(RuntimePhase::Starting, false, None, "")
+                .unwrap()
+                .0,
+            "本地语音识别正在准备…"
+        );
+        assert_eq!(
+            not_ready_text(RuntimePhase::Starting, true, None, "")
+                .unwrap()
+                .0,
+            "语音识别正在准备…"
+        );
+        let (title, detail) =
+            not_ready_text(RuntimePhase::Stopped, false, Some("模型文件不齐备"), "F10").unwrap();
+        assert_eq!(title, "本地语音识别出问题了");
+        assert_eq!(detail, "模型文件不齐备");
+        for (title, detail) in [
+            not_ready_text(RuntimePhase::Stopped, false, None, "").unwrap(),
+            not_ready_text(RuntimePhase::Stopped, true, None, "").unwrap(),
+        ] {
+            assert!(!title.contains("右上角") && !detail.contains("右上角"));
+        }
+    }
+
+    #[test]
+    fn launch_starts_online_recognition_or_local_with_auto_start() {
+        let mut settings = Settings::default();
+        assert!(
+            !should_start_on_launch(&settings),
+            "默认是本地识别，且没开自动启动"
+        );
+        settings.ui.auto_start = true;
+        assert!(should_start_on_launch(&settings));
+        settings.ui.auto_start = false;
+        kotone_stt::model::set_active_in(&mut settings, "deepseek-asr", "deepseek-asr").unwrap();
+        assert!(asr_is_remote(&settings));
+        assert!(should_start_on_launch(&settings), "在线识别打开就能用");
     }
 
     #[test]

@@ -944,7 +944,7 @@ fn base_tool_specs(limits: &ServiceLimits, readiness: &Readiness) -> Vec<Value> 
         ),
         spec(
             TOOL_RUNTIME_STATUS,
-            "Report the ASR (voice input) runtime: phase stopped/starting/running/stopping, whether a restart is needed, engine and model. The tool service works in every phase.",
+            "Report the speech recognition (ASR) runtime: phase stopped/starting/running/stopping, whether a restart is needed, engine and model. Online ASR (e.g. deepseek-asr) is ready as soon as Kotone opens; only a local ASR model has a start (启动) step the player sees. The tool service works in every phase.",
             &[],
             true,
             None,
@@ -953,7 +953,7 @@ fn base_tool_specs(limits: &ServiceLimits, readiness: &Readiness) -> Vec<Value> 
         ),
         spec(
             TOOL_RUNTIME_START,
-            "Start the ASR runtime (warm up the model, register hotkeys, show the overlay) and return the new status. Running with restartNeeded restarts. Use a generous timeoutMs: model warm-up can take seconds.",
+            "Start (启动) local speech recognition: load the local model, register the voice input hotkey and call key, show the overlay; returns the new status. Running with restartNeeded restarts (also for online ASR, to apply changed settings). Use a generous timeoutMs: model warm-up can take seconds.",
             &["starts-runtime", "registers-hotkeys"],
             true,
             None,
@@ -962,7 +962,7 @@ fn base_tool_specs(limits: &ServiceLimits, readiness: &Readiness) -> Vec<Value> 
         ),
         spec(
             TOOL_RUNTIME_STOP,
-            "Stop the ASR runtime (cancel the session, unregister hotkeys, hide the overlay, unload the engine). Idempotent when already stopped.",
+            "Stop local speech recognition (cancel the session, unregister hotkeys, hide the overlay, unload the model). Idempotent when already stopped. Online ASR has no stop step for the player; do not stop it unless asked.",
             &["stops-runtime"],
             true,
             None,
