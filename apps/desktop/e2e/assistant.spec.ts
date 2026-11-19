@@ -71,10 +71,10 @@ test("default assistant walkie-talkie overlay tells the user to release the assi
   await expect(page.getByText(/^打野有闪/)).toBeVisible();
 });
 
-test("assistant preview labels fixtures, cancels reminders and never pretends to run AI", async ({ page }, testInfo) => {
+test("assistant preview labels fixtures, cancels reminders and never pretends to run AI", async ({ page, baseURL }, testInfo) => {
   const externalRequests: string[] = [];
   page.on("request", (request) => {
-    if (/^https?:/.test(request.url()) && !request.url().startsWith("http://127.0.0.1:17420")) externalRequests.push(request.url());
+    if (/^https?:/.test(request.url()) && new URL(request.url()).origin !== new URL(baseURL!).origin) externalRequests.push(request.url());
   });
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-assistant").click();

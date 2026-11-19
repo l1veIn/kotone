@@ -93,7 +93,7 @@ export function findHotkeyConflict(settings: Settings | null, selfId: string, ke
     ["resend-last", "重发最近一条热键", settings.resendLastHotkey],
     ["post-process-toggle", "文字处理开关热键", settings.togglePostProcessingHotkey],
     ["post-process-cycle", "切换文字处理流程热键", settings.cyclePostProcessingHotkey],
-    ["runtime-toggle", "启动 / 停止 Kotone 热键", settings.runtimeToggleHotkey],
+    ["runtime-toggle", "暂停 / 恢复语音输入热键", settings.runtimeToggleHotkey],
   ];
   return bindings.find(([id, , combo]) => id !== selfId && combo && combosConflict(key, combo))?.[1] ?? null;
 }

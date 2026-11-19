@@ -1,8 +1,4 @@
 <script lang="ts">
-  /*
-   * 通用页（方向 B 灵魂首屏）：欢迎面板 = 直播间背景 + Kotone 立绘 +
-   * 渐变标题 + 三个特性 chip；下方只保留日常高频设置。
-   */
   import { onDestroy, onMount } from "svelte";
   import {
     updateSettings,
@@ -11,6 +7,8 @@
     getElevationStatus,
     restartAsAdmin,
     getHotkeyStatus,
+    getRuntimeStatus,
+    startRuntime,
     type AudioDevice,
     type ElevationStatus,
     type HotkeyStatus,
@@ -26,9 +24,8 @@
     toast,
     errText,
   } from "../../../lib/stores/ui";
-  import { runtimeStore } from "../../../lib/stores/runtime";
+  import { runtimeStore, voiceInputStatus } from "../../../lib/stores/runtime";
   import Toggle from "../../../lib/components/Toggle.svelte";
-  import RuntimeButton from "../../../lib/components/RuntimeButton.svelte";
   import heroGeneral from "../../../assets/brand/hero-general.webp";
 
   let { onOpenAdvanced }: { onOpenAdvanced: () => void } = $props();
@@ -36,6 +33,7 @@
   let devices = $state<AudioDevice[]>([]);
   let elevation = $state<ElevationStatus | null>(null);
   let restarting = $state(false);
+  let retrying = $state(false);
 
   function applyGameCompatibilityStatus(status: ElevationStatus) {
     elevation = status;
@@ -124,14 +122,37 @@
   /** 进行中捕获的 cleanup（组件销毁兜底取消） */
   let captureCleanup: (() => void) | null = null;
 
-  onMount(async () => {
-    try {
-      hotkeyStatus = await getHotkeyStatus();
-      hotkeyDraft = $settingsStore?.hotkey.key ?? "CapsLock";
-    } catch (e) {
-      toast(false, `读取热键状态失败：${errText(e)}`);
-    }
+  const status = $derived($runtimeStore);
+  const runtimeError = $derived(status?.error || "");
+  const modelError = $derived(/模型|引擎|凭据|recognizer/i.test(runtimeError));
+  const hotkeyError = $derived(!status?.voiceInputPaused && !runtimeError ? hotkeyStatus?.error : null);
+
+  onMount(() => {
+    hotkeyDraft = $settingsStore?.hotkey.key ?? "CapsLock";
   });
+
+  $effect(() => {
+    if (!status) return;
+    let current = true;
+    void getHotkeyStatus().then((next) => {
+      if (current) hotkeyStatus = next;
+    }).catch(() => {});
+    return () => { current = false; };
+  });
+
+  async function retryVoiceInput() {
+    if (retrying) return;
+    retrying = true;
+    try {
+      runtimeStore.set(await startRuntime());
+    } catch (error) {
+      toast(false, errText(error));
+      const next = await getRuntimeStatus().catch(() => null);
+      if (next) runtimeStore.set(next);
+    } finally {
+      retrying = false;
+    }
+  }
 
   /** hero 弹幕装饰：漂浮的游戏沟通短句（reduced-motion 下隐藏） */
   const danmakuLines = [
@@ -202,7 +223,7 @@
       hotkeyDraft = $settingsStore?.hotkey.key ?? key;
       hotkeyStatus = await getHotkeyStatus().catch(() => null);
       if (hotkeyStatus?.error) toast(false, `热键已保存，但未生效：${hotkeyStatus.error}`);
-      else toast(true, hotkeyStatus?.registered ? `热键已保存并生效：${key}` : `热键已保存，启动 Kotone 后生效：${key}`);
+      else toast(true, hotkeyStatus?.registered ? `热键已保存并生效：${key}` : `热键已保存：${key}`);
     } catch (e) {
       toast(false, `保存热键失败：${errText(e)}`);
     } finally {
@@ -243,13 +264,10 @@
 
 </script>
 
-<div class="px-6 py-5">
-  <!-- 欢迎面板：ord-ui-hero-general 合成视觉（立绘+直播间一张图） -->
-  <section class="relative overflow-hidden rounded-[var(--radius-kotone-panel)] ring-1 ring-white/10">
-    <img src={heroGeneral} alt="Kotone 在中继站直播间挥手欢迎" class="absolute inset-0 h-full w-full object-cover" />
-    <!-- 左侧压暗渐变：保证标题与芯片可读 -->
-    <div class="absolute inset-0 bg-gradient-to-r from-kotone-deep/92 via-kotone-deep/55 to-transparent"></div>
-    <div class="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-kotone-deep/80 to-transparent"></div>
+<div class="mx-auto max-w-6xl space-y-4 px-4 py-5 sm:px-6">
+  <section class="relative isolate overflow-hidden rounded-2xl border border-white/10 bg-kotone-panel" data-testid="general-hero">
+    <img src={heroGeneral} alt="Kotone 在中继站直播间挥手欢迎" class="absolute inset-0 size-full object-cover object-[70%_28%]" />
+    <div class="absolute inset-0 bg-gradient-to-r from-[#10101e]/95 via-[#10101e]/55 to-transparent" aria-hidden="true"></div>
     <!-- 弹幕装饰层：游戏沟通短句从右向左飘过（reduced-motion 自动隐藏） -->
     <div class="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
       {#each danmakuLines as line}
@@ -261,23 +279,85 @@
         >{line.text}</span>
       {/each}
     </div>
-    <div class="relative flex min-h-64 flex-col justify-between gap-8 px-6 py-6">
+    <div class="relative flex min-h-64 flex-col items-start justify-between gap-6 px-4 py-5 sm:px-6">
       <div>
         <h1 class="text-[26px] leading-tight font-bold">
-          想说的话，<br /><span class="kotone-gradient-text">一秒都别等</span>
+          想说的话，<span class="kotone-gradient-text">一秒都别等</span>
         </h1>
-        <p class="mt-2 text-[12px] leading-relaxed text-white/70">
-          嗨，我是 Kotone！你的专属语音助手，<br />随时待命，陪你指挥每一场胜利！
-        </p>
       </div>
-      <RuntimeButton variant="hero" {onOpenAdvanced} />
+
+      {#if $settingsStore}
+        <div class="w-full max-w-[28rem] rounded-xl border border-white/12 bg-[#10101e]/92 px-3.5 py-3 backdrop-blur-sm">
+          <div class="mb-2.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            <label for="hotkey-input" class="text-sm font-semibold text-white">录音热键</label>
+            <p role="status" data-testid="voice-input-status" class="inline-flex items-center gap-1.5 text-xs text-white/80">
+              <span class="size-1.5 rounded-full {runtimeError ? 'bg-amber-300' : status?.phase === 'running' ? 'bg-kotone-cyan' : 'bg-white/45'}" aria-hidden="true"></span>
+              {voiceInputStatus(status)}
+            </p>
+          </div>
+          <form class="flex flex-wrap items-center gap-2" onsubmit={(event) => { event.preventDefault(); void saveHotkey(); }}>
+            <input
+              id="hotkey-input"
+              bind:value={hotkeyDraft}
+              disabled={capturing}
+              class="h-8 min-w-0 flex-1 rounded-lg border border-white/18 bg-white/8 px-2.5 text-[13px] outline-none placeholder:text-white/50 focus:border-kotone-cyan/60 focus:ring-2 focus:ring-kotone-cyan/25 disabled:opacity-50"
+              placeholder="如 CapsLock / Alt+V"
+              aria-describedby="record-hotkey-hint"
+              spellcheck="false"
+              autocomplete="off"
+            />
+            <button
+              type="button"
+              class="h-8 rounded-lg border border-white/18 bg-white/8 px-3 text-xs font-semibold text-white/90 transition hover:bg-white/16 focus-visible:ring-2 focus-visible:ring-kotone-cyan/60 disabled:opacity-70"
+              disabled={capturing}
+              onclick={() => void startCapture()}
+            >点击录入</button>
+            <button
+              type="submit"
+              class="h-8 rounded-lg bg-kotone-cyan/90 px-3 text-xs font-semibold text-kotone-deep transition hover:bg-kotone-cyan focus-visible:ring-2 focus-visible:ring-kotone-cyan/60 disabled:opacity-50"
+              disabled={capturing}
+            >{status?.phase === "running" ? "保存并生效" : "保存热键"}</button>
+          </form>
+          <p id="record-hotkey-hint" class="mt-2 text-xs leading-relaxed text-white/65" aria-live={capturing ? "polite" : undefined}>
+            {#if capturing}
+              请按下键盘组合或鼠标侧键，按 Esc 取消。
+            {:else}
+              <span>当前：{$settingsStore.hotkey.key}</span>
+              <span class="ml-2">
+                {#if status?.voiceInputPaused}可从托盘菜单恢复。
+                {:else if status?.phase === "running" && currentMode === "push-to-talk"}按住说话，松开发送。
+                {:else if status?.phase === "running"}{modes.find((mode) => mode.id === currentMode)?.desc ?? "支持键盘组合与鼠标侧键。"}
+                {:else}支持键盘组合以及鼠标侧键 Mouse4 / Mouse5。
+                {/if}
+              </span>
+            {/if}
+          </p>
+
+          {#if runtimeError}
+            <div class="mt-3 rounded-lg border border-amber-300/25 bg-amber-300/8 p-2.5 text-xs text-amber-100" role="alert">
+              <p class="break-words">{runtimeError}</p>
+              <div class="mt-1.5 flex flex-wrap gap-3">
+                {#if modelError}
+                  <button type="button" class="font-semibold underline underline-offset-2" onclick={onOpenAdvanced}>打开模型设置</button>
+                {/if}
+                <button type="button" class="font-semibold underline underline-offset-2 disabled:opacity-60" disabled={retrying} onclick={() => void retryVoiceInput()}>{retrying ? "正在重试…" : "重试"}</button>
+              </div>
+            </div>
+          {:else if hotkeyError}
+            <div class="mt-3 rounded-lg border border-amber-300/25 bg-amber-300/8 p-2.5 text-xs text-amber-100" role="alert">
+              <p class="break-words">热键注册失败：{hotkeyError}</p>
+              <button type="button" class="mt-1.5 font-semibold underline underline-offset-2" onclick={() => void saveHotkey()}>重新注册</button>
+            </div>
+          {/if}
+        </div>
+      {/if}
     </div>
   </section>
 
   {#if $settingsStore}
     <!-- 麦克风 -->
-    <section class="kotone-panel mt-4 p-4">
-      <h2 class="text-sm font-semibold text-kotone-cyan/90">麦克风</h2>
+    <section class="kotone-panel border-white/10 bg-kotone-panel/60 p-4">
+      <h2 class="text-sm font-semibold text-white/90">麦克风</h2>
       <div class="mt-3">
         <Select
           size="md"
@@ -339,63 +419,16 @@
       </section>
     {/if}
 
-    <!-- 热键 -->
-    <section class="kotone-panel mt-4 p-4">
-      <h2 class="text-sm font-semibold text-kotone-cyan/90">热键</h2>
-      <div class="mt-3 flex items-center gap-2">
-        <input
-          id="hotkey-input"
-          bind:value={hotkeyDraft}
-          disabled={capturing}
-          class="w-32 rounded-lg bg-white/8 px-2.5 py-1.5 text-sm ring-1 ring-white/15 outline-none placeholder:text-white/30 focus:ring-kotone-cyan/60 disabled:opacity-50"
-          placeholder="如 CapsLock / Alt+V"
-          spellcheck="false"
-        />
-        <button
-          class="rounded-lg px-3 py-1.5 text-xs font-semibold ring-1 transition active:scale-95 disabled:opacity-70 {capturing
-            ? 'animate-pulse bg-kotone-violet/25 text-kotone-violet ring-kotone-violet/60'
-            : 'bg-white/10 text-white/85 ring-white/15 hover:bg-white/20'}"
-          disabled={capturing}
-          onclick={() => void startCapture()}
-        >
-          {capturing ? "请按下键盘组合或鼠标侧键…（Esc 取消）" : "点击录入"}
-        </button>
-        <button
-          class="rounded-lg bg-kotone-cyan px-3 py-1.5 text-xs font-semibold text-kotone-deep transition hover:shadow-glow-cyan hover:brightness-110 active:scale-95 disabled:opacity-50"
-          disabled={capturing}
-          onclick={() => void saveHotkey()}
-        >
-          保存并生效
-        </button>
-        <span class="text-[11px] text-white/40">当前：{$settingsStore?.hotkey.key ?? "…"}</span>
-      </div>
-      <p class="mt-2 text-[11px] text-white/40">
-        支持键盘组合以及鼠标侧键 Mouse4 / Mouse5；鼠标侧键会自动使用低层键鼠钩子。
-      </p>
-      {#if hotkeyStatus?.error}
-        <div class="mt-3 rounded-lg bg-kotone-pink/15 p-2.5 ring-1 ring-kotone-pink/50">
-          <p class="text-xs font-medium text-kotone-pink">
-            热键注册失败，可能被其他程序或其他 Kotone 实例占用
-          </p>
-          <p class="mt-0.5 text-[11px] break-all text-white/50">{hotkeyStatus.error}</p>
-          <button
-            class="mt-2 rounded-lg bg-kotone-pink/80 px-2.5 py-1 text-xs font-semibold text-white transition hover:brightness-110 active:scale-95"
-            onclick={() => void saveHotkey()}
-          >
-            重新注册
-          </button>
-        </div>
-      {/if}
-    </section>
-
     <!-- 交互模式（ADR-006 四预设，lucide 风格图标） -->
-    <section class="kotone-panel mt-4 p-4">
-      <h2 class="text-sm font-semibold text-kotone-cyan/90">交互模式</h2>
-      <div class="mt-3 flex gap-2">
+    <section class="kotone-panel border-white/10 bg-kotone-panel/60 p-4">
+      <h2 class="text-sm font-semibold text-white/90">交互模式</h2>
+      <div class="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4" role="group" aria-label="交互模式">
         {#each modes as m}
           {@const active = currentMode === m.id}
           <button
-            class="flex-1 rounded-[var(--radius-kotone-card)] px-3 py-3 text-left ring-1 transition
+            type="button"
+            aria-pressed={active}
+            class="rounded-[var(--radius-kotone-card)] px-3 py-3 text-left ring-1 transition
               {active
               ? 'bg-kotone-cyan/12 ring-kotone-cyan/60 shadow-glow-cyan'
               : 'bg-kotone-card/60 ring-white/10 hover:bg-kotone-card'}"
@@ -461,8 +494,8 @@
     </section>
 
     <!-- 悬浮窗：普通用户只需要决定何时出现、放在哪里、是否穿透。 -->
-    <section class="kotone-panel mt-4 p-4">
-      <h2 class="text-sm font-semibold text-kotone-cyan/90">悬浮窗</h2>
+    <section class="kotone-panel border-white/10 bg-kotone-panel/60 p-4">
+      <h2 class="text-sm font-semibold text-white/90">悬浮窗</h2>
       <p class="mt-2 text-[10px] font-semibold tracking-wide text-white/40">什么时候出现</p>
       <div class="mt-1.5 grid grid-cols-3 gap-2">
         {#each [

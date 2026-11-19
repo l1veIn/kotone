@@ -26,8 +26,9 @@ test("forced onboarding completes the full guided setup and can be reopened", as
   // 0.1.6 起引导为 3 步：第三步「完成」保存配置并直接进入主页（发送测试暂缓）
   await page.getByRole("button", { name: "完成", exact: true }).click();
   await expect(onboarding).toBeHidden();
+  await expect(page.getByTestId("voice-input-status")).toHaveText("语音输入已就绪");
 
-  await page.getByRole("button", { name: "高级", exact: true }).click();
+  await page.getByTestId("settings-nav-advanced").click();
   await page.getByTestId("advanced-nav-system").click();
   await page.getByRole("button", { name: "重新运行向导", exact: true }).click();
   await expect(onboarding).toBeVisible();
@@ -83,21 +84,27 @@ test("auto and never modes respect the persisted completed state", async ({ page
   await expect(page.getByTestId("onboarding")).toHaveCount(0);
 });
 
-test("starting without a model routes the user to a recoverable download state", async ({
+test("a missing model offers recovery without a startup button", async ({
   page,
 }) => {
   await page.goto("/#/settings");
-  await page.getByRole("button", { name: "▶ 启动", exact: true }).click();
+  await expect(page.getByTestId("voice-input-status")).toHaveText("语音输入暂不可用");
+  await page.getByTestId("general-hero").getByRole("button", { name: "重试", exact: true }).click();
+  await expect(page.getByTestId("voice-input-status")).toHaveText("语音输入暂不可用");
+  await page.getByRole("button", { name: "打开模型设置", exact: true }).click();
 
-  await expect(page.getByRole("heading", { name: "高级", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "设置", exact: true })).toBeVisible();
   // 0.1.5 起高级页只恒显 X-ASR 模型卡：未下载时展示模型行 + 下载按钮（可恢复状态）
   await expect(page.getByText("X-ASR 流式中英标点（int8，480ms 低延迟）", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "下载", exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "下载", exact: true }).first().click();
+  await page.getByTestId("settings-nav-general").click();
+  await expect(page.getByTestId("voice-input-status")).toHaveText("语音输入已就绪");
 });
 
 test("a failed model download keeps an inline error and retry action", async ({ page }) => {
   await page.goto("/#/settings?mockDownload=fail");
-  await page.getByRole("button", { name: "高级", exact: true }).click();
+  await page.getByTestId("settings-nav-advanced").click();
   await page.getByTestId("advanced-nav-models").click();
   await page.getByRole("button", { name: "下载", exact: true }).first().click();
 

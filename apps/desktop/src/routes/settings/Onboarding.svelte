@@ -488,7 +488,12 @@
           </h1>
           <p class="mt-2 text-sm leading-relaxed text-white/65">
             游戏里不动手，说话就能发消息。<br />
-            接下来会选游戏配置、准备本地模型、设置热键，完成后直接进入主页。
+            接下来会选游戏配置、准备本地模型、设置热键。
+            {#if $settingsStore?.ui.voiceInputPaused}
+              完成后可从托盘恢复语音输入。
+            {:else}
+              完成后就可以按热键说话。
+            {/if}
           </p>
           <div class="mt-6 flex items-center gap-3">
             <button

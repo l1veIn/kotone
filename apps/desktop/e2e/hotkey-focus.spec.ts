@@ -5,7 +5,7 @@ test("a configured Tab hotkey does not install a browser-local listener", async 
 
   const input = page.locator("#hotkey-input");
   await input.fill("Tab");
-  const save = page.getByRole("button", { name: "保存并生效", exact: true });
+  const save = page.getByRole("button", { name: "保存热键", exact: true });
   await save.click();
   await expect(page.getByText("当前：Tab", { exact: true })).toBeVisible();
 

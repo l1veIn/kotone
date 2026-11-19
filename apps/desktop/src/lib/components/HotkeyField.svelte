@@ -70,7 +70,7 @@
       else if (current?.error) toast(false, `${title}未生效：${current.error}`);
       else if (current?.key) toast(true, `${title}已保存并生效：${current.key}`);
       else if (!current) toast(true, `${title}已保存；暂时无法确认是否生效`);
-      else toast(true, `${title}已保存，启动 Kotone 后生效：${key}`);
+      else toast(true, `${title}已保存：${key}`);
     } catch (error) {
       if (!disposed) {
         toast(false, `保存${title}失败：${errText(error)}`);
@@ -143,7 +143,7 @@
     {:else if !value}
       <p class="mt-2 text-[11px] text-white/40">{compact ? "未设置" : "未设置（默认关闭，不会误触发）"}</p>
     {:else}
-      <p class="mt-2 text-[11px] text-white/40">已保存：{value}；启动 Kotone 后生效</p>
+      <p class="mt-2 text-[11px] text-white/40">已保存：{value} · 尚未注册</p>
     {/if}
   </div>
 </div>

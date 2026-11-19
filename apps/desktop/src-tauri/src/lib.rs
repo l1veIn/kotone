@@ -429,6 +429,9 @@ impl Emitter for TauriEmitter {
             if let Some(mgr) = self.app.try_state::<HotkeyManager>() {
                 mgr.set_cancel_enabled(&self.app, state != "idle" && !state.is_empty());
             }
+            if state == "idle" {
+                runtime::reconcile(&self.app);
+            }
             // 后端驱动 overlay 显隐（显隐一律走原始 Win32 SW_SHOWNA/SW_HIDE 路径，
             // 不碰 tao set_visible——tao 缓存 diff 短路坑，见 hide_window 注释）
             if let Some(win) = self.app.get_webview_window("overlay") {
@@ -1098,8 +1101,9 @@ fn update_settings(
         let _ = app.emit("kotone://overlay-config", &updated.overlay);
     }
 
-    // 引擎/模型/模式可能经 patch 变更 → restartNeeded 推导依赖最新配置，推送全量状态
+    // 模型配置可立即应用，录音中的更改等这轮完成。
     runtime::snapshot_and_emit(&app, None);
+    runtime::reconcile(&app);
     Ok(updated)
 }
 
@@ -1166,8 +1170,8 @@ fn set_stt_engine(
         next.stt_engine = canonical;
         Ok(())
     })?;
-    // Running 期间换引擎 → restartNeeded 推导变化，推送全量状态
     runtime::snapshot_and_emit(&app, None);
+    runtime::reconcile(&app);
     Ok(())
 }
 
@@ -1192,7 +1196,7 @@ fn list_profiles() -> Vec<GameProfile> {
 /// 内置热词全量列表 − 传入热词列表 = 用户主动删除的内置热词（供后续合并逻辑排除）。
 /// 非内置 id 不触碰该字段。
 #[tauri::command]
-fn save_profile(mut profile: GameProfile) -> Result<(), String> {
+fn save_profile(app: AppHandle, mut profile: GameProfile) -> Result<(), String> {
     let builtin = match profile.id.as_str() {
         "lol" => Some(GameProfile::builtin_lol()),
         "dota2" => Some(GameProfile::builtin_dota2()),
@@ -1207,7 +1211,9 @@ fn save_profile(mut profile: GameProfile) -> Result<(), String> {
             .cloned()
             .collect();
     }
-    profile::save(&profile)
+    profile::save(&profile)?;
+    runtime::reconcile(&app);
+    Ok(())
 }
 
 /// 导出 profile 热词到 UTF-8 文本（每行一词条，无权重），返回条数。
@@ -1229,8 +1235,14 @@ fn export_builtin_blocklist(path: String) -> Result<usize, String> {
 
 /// 从 UTF-8 文本导入热词（合并去重，追加到现有列表末尾），返回合并报告。
 #[tauri::command]
-fn import_hotwords(profile_id: String, path: String) -> Result<HotwordMergeReport, String> {
-    profile::import_hotwords_from_file(&profile_id, std::path::Path::new(&path))
+fn import_hotwords(
+    app: AppHandle,
+    profile_id: String,
+    path: String,
+) -> Result<HotwordMergeReport, String> {
+    let report = profile::import_hotwords_from_file(&profile_id, std::path::Path::new(&path))?;
+    runtime::reconcile(&app);
+    Ok(report)
 }
 
 /// 导出整包 profile 为 .kprofile ZIP（profile.json + icon.*）。
@@ -1437,6 +1449,9 @@ async fn download_model(
             }
         }),
     );
+    if result.is_ok() {
+        runtime::reconcile(&app);
+    }
     result
 }
 
@@ -1480,21 +1495,25 @@ fn open_model_dest_dir(id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn set_active_model(
+async fn set_active_model(
     app: AppHandle,
-    state: tauri::State<SharedState>,
+    state: tauri::State<'_, SharedState>,
     engine_id: String,
     model_id: String,
 ) -> Result<(), String> {
-    state
-        .settings_repository
-        .update(|next| model::set_active_in(next, &engine_id, &model_id))?;
-    // Running 期间换活动模型 → restartNeeded = true（不自动重启，用户显式重启生效）
+    {
+        let runtime = app.state::<RuntimeManager>();
+        let _configuration = runtime.configuration_guard();
+        state
+            .settings_repository
+            .update(|next| model::set_active_in(next, &engine_id, &model_id))?;
+    }
     runtime::snapshot_and_emit(&app, None);
+    runtime::reconcile_current(&app).await;
     Ok(())
 }
 
-// ---------- 运行时「启动」开关 ----------
+// ---------- 语音输入状态 ----------
 
 /// 全量运行时状态（相位 + restartNeeded + 当前引擎/模型/模式）
 #[tauri::command]
@@ -1504,14 +1523,13 @@ fn get_runtime_status(app: AppHandle, state: tauri::State<SharedState>) -> Runti
     rt.status(&settings, &state.engines, None)
 }
 
-/// 启动：warmup 引擎 → 注册热键 → 显示悬浮窗（进度经 kotone://runtime 推送）。
-/// Running + restartNeeded 时等价于 stop + start（重启语义）。
+/// 恢复语音输入，或重试当前模型。也供首启向导试用。
 #[tauri::command]
 async fn start_runtime(app: AppHandle) -> Result<RuntimeStatus, String> {
     runtime::start(&app).await
 }
 
-/// 停止：取消会话 → 注销热键 → 隐藏悬浮窗 → 卸载引擎。Stopped 时幂等。
+/// 暂停语音输入并记住选择。
 #[tauri::command]
 async fn stop_runtime(app: AppHandle) -> Result<RuntimeStatus, String> {
     runtime::stop(&app).await
@@ -1562,7 +1580,7 @@ fn set_models_dir(
     let _configuration = runtime_manager.configuration_guard();
     let running = runtime_manager.phase() != RuntimePhase::Stopped;
     if running {
-        return Err("引擎正在运行，请先停止引擎再迁移模型目录（设置页或托盘「停止引擎」）".into());
+        return Err("请先在托盘暂停语音输入，再迁移模型目录".into());
     }
     if app
         .state::<speech_models::SpeechModelManager>()
@@ -1589,8 +1607,8 @@ fn set_models_dir(
         |_, _| Ok(()),
     )?;
     let new_dir = model::models_dir_from(&updated);
-    // 模型路径变化影响就绪判断与 restartNeeded 推导，推送状态
     runtime::snapshot_and_emit(&app, None);
+    runtime::reconcile(&app);
     Ok(ModelsDirMigration {
         dir: new_dir.to_string_lossy().into_owned(),
         moved: report.moved,
@@ -1618,6 +1636,7 @@ fn delete_model(
         was_active: was_active.get(),
     };
     runtime::snapshot_and_emit(&app, None);
+    runtime::reconcile(&app);
     Ok(outcome)
 }
 
@@ -2046,17 +2065,8 @@ pub fn run() {
                 manager.apply_app_hotkeys(&app_hotkeys);
             }
 
-            // 「启动」开关（core runtime 状态机）：默认 Stopped——不注册热键、
-            // 不 warmup 引擎、悬浮窗隐藏。ui.autoStart = true 时自动 start_runtime
-            // （warmup → 注册热键 → 显示悬浮窗，进度经 kotone://runtime 推送）。
-            if settings.read().unwrap().ui.auto_start {
-                let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) = runtime::start(&handle).await {
-                        log::log(&format!("auto-start failed: {e}"));
-                    }
-                });
-            }
+            // 已配置的安装直接启用热键，后台模型预热由运行时调度。
+            runtime::reconcile(app.handle());
 
             // 启动即显示设置窗口：全部窗口默认隐藏时，应用看起来像「没起来」。
             // 托盘常驻语义不变——关闭此窗口只是隐藏，进程仍在托盘。

@@ -144,13 +144,6 @@
       desc="登录 Windows 后自动打开 Kotone（仅当前用户）· 与系统启动项实时同步"
       onchange={(v) => void onAutostartChange(v)}
     />
-    <Toggle
-      checked={$settingsStore.ui.autoStart}
-      label="启动 Kotone 后自动开始运行"
-      desc="自动加载识别模型、注册热键并显示悬浮窗；关闭时需手动点「启动」"
-      onchange={(v) =>
-        void patchSettings({ ui: { autoStart: v } }, v ? "已开启自动启动" : "已关闭自动启动，需手动点「启动」")}
-    />
   </section>
 
   <section class="kotone-panel mt-3 flex items-center justify-between gap-4 p-4">

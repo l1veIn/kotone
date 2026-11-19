@@ -1,9 +1,6 @@
-//! 系统托盘：左键唤起主窗口；右键菜单「打开主页面 / 启动引擎 / 退出」
-//! （docs/development.md §3.6）
-//!
-//! 「启动引擎」为动态文案：引擎运行中显示「停止引擎」，由 runtime.rs 在
-//! 状态推送时（snapshot_and_emit）同步更新；启动/停止完成都会经过该推送点。
+//! 系统托盘：左键打开主窗口，右键可暂停或恢复语音输入。
 
+use kotone_core::runtime::RuntimePhase;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -15,29 +12,30 @@ pub struct TrayState {
     pub toggle_item: MenuItem<tauri::Wry>,
 }
 
-/// 按运行时相位更新「启动引擎 / 停止引擎」文案。
-/// 任何相位变化（启动/停止完成、失败回滚）都应调用，保证文案始终正确。
-pub fn sync_toggle_label(app: &AppHandle, running: bool) {
+/// 同步语音输入暂停 / 恢复菜单项。
+pub fn sync_toggle_label(app: &AppHandle, phase: RuntimePhase) {
     if let Some(tray) = app.try_state::<TrayState>() {
-        let text = if running {
-            "停止引擎"
-        } else {
-            "启动引擎"
+        let text = match phase {
+            RuntimePhase::Stopped | RuntimePhase::Stopping => "恢复语音输入",
+            RuntimePhase::Starting | RuntimePhase::Running => "暂停语音输入",
         };
         let _ = tray.toggle_item.set_text(text);
+        let _ = tray
+            .toggle_item
+            .set_enabled(!kotone_core::runtime::is_transitioning(phase));
     }
 }
 
-/// 构建托盘图标与菜单：左键释放唤起主窗口，右键菜单切换引擎或退出
+/// 构建托盘图标与菜单。
 pub fn setup_tray(app: &AppHandle<tauri::Wry>) -> tauri::Result<()> {
     let open_main = MenuItem::with_id(app, "open-main", "打开主页面", true, None::<&str>)?;
-    let toggle_engine = MenuItem::with_id(app, "toggle-engine", "启动引擎", true, None::<&str>)?;
+    let toggle_input = MenuItem::with_id(app, "toggle-input", "恢复语音输入", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open_main, &toggle_engine, &quit])?;
+    let menu = Menu::with_items(app, &[&open_main, &toggle_input, &quit])?;
 
     // 存句柄供 runtime 状态推送时更新文案
     app.manage(TrayState {
-        toggle_item: toggle_engine.clone(),
+        toggle_item: toggle_input,
     });
 
     let mut builder = TrayIconBuilder::with_id("kotone-tray")
@@ -58,22 +56,11 @@ pub fn setup_tray(app: &AppHandle<tauri::Wry>) -> tauri::Result<()> {
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open-main" => show_window(app, "main"),
-            "toggle-engine" => {
-                // 按当前相位异步启动/停止（避免阻塞菜单事件循环）；
-                // 文案更新统一走 runtime 状态推送（snapshot_and_emit）
-                let running = app
-                    .try_state::<crate::runtime::RuntimeManager>()
-                    .map(|rt| rt.phase() == kotone_core::runtime::RuntimePhase::Running)
-                    .unwrap_or(false);
+            "toggle-input" => {
                 let handle = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    let result = if running {
-                        crate::runtime::stop(&handle).await
-                    } else {
-                        crate::runtime::start(&handle).await
-                    };
-                    if let Err(e) = result {
-                        kotone_core::log::log(&format!("tray toggle engine failed: {e}"));
+                    if let Err(error) = crate::runtime::toggle(&handle).await {
+                        kotone_core::log::log(&format!("tray toggle voice input failed: {error}"));
                     }
                 });
             }

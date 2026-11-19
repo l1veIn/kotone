@@ -1,11 +1,11 @@
-//! 运行时「启动」开关的壳侧实现：RuntimeManager 持有相位与启动快照，
-//! start/stop 编排（warmup → 注册热键 → 显示悬浮窗 / 反向卸载），
-//! 状态变化经 `kotone://runtime` 事件推送全量状态给前端。
+//! 语音输入的启用状态独立于模型是否已载入。先注册热键，再在后台预热小模型。
+//! 大模型在第一次录音时加载，由编排器在闲置时释放。
 //!
 //! 迁移合法性由 core `kotone_core::runtime` 纯函数裁决；本模块只做编排。
 
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -18,6 +18,44 @@ use kotone_core::stt::{EngineRegistry, SessionConfig};
 use crate::hotkey::HotkeyManager;
 use crate::{hide_window, show_window_no_focus, SharedState};
 
+const LARGE_MODEL_BYTES: u64 = 200 * 1024 * 1024;
+const LARGE_MODEL_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+#[derive(Debug, PartialEq, Eq)]
+enum ModelLoading {
+    Online,
+    Background,
+    OnDemand,
+}
+
+fn model_loading(model_id: &str) -> ModelLoading {
+    if kotone_stt::model::is_remote_model(model_id) {
+        ModelLoading::Online
+    } else if kotone_stt::model::model_size_bytes(model_id)
+        .is_some_and(|bytes| bytes >= LARGE_MODEL_BYTES)
+    {
+        ModelLoading::OnDemand
+    } else {
+        ModelLoading::Background
+    }
+}
+
+fn automatically_enabled(settings: &Settings) -> bool {
+    if settings.ui.voice_input_paused {
+        return false;
+    }
+    // 已开始配置的旧安装沿用原模型；首次安装继续由引导设置录音热键。
+    settings.ui.first_run_completed
+        || settings.ui.auto_start
+        || !settings.active_model_id.trim().is_empty()
+        || settings
+            .engine_options
+            .get(&settings.stt_engine)
+            .and_then(|options| options.get("model"))
+            .and_then(|model| model.as_str())
+            .is_some_and(|model| !model.trim().is_empty())
+}
+
 /// 启动时快照：Running 期间与当前配置比对推导 restartNeeded
 #[derive(Debug, Clone)]
 pub struct StartedSnapshot {
@@ -28,17 +66,26 @@ pub struct StartedSnapshot {
     pub session_config: SessionConfig,
 }
 
-fn session_config_from(settings: &Settings, engine_id: &str) -> SessionConfig {
+fn session_config_from(settings: &Settings, engine_id: &str, model_id: &str) -> SessionConfig {
     let active_profile = settings
         .active_profile_id
         .as_deref()
         .and_then(kotone_core::profile::get)
         .unwrap_or_else(GameProfile::builtin_generic);
+    let options = if settings.active_model_id == model_id {
+        settings.session_options(engine_id)
+    } else {
+        // 老配置可由默认文件或引擎选项推导活动模型。锁定结果，避免识别线程
+        // 回读刚变更的磁盘设置，同时让对应 modelConfigs 一并进入快照。
+        let mut resolved = settings.clone();
+        resolved.active_model_id = model_id.into();
+        resolved.session_options(engine_id)
+    };
     SessionConfig {
         language: settings.language.clone(),
         hotwords: active_profile.hotwords,
         hotwords_score: settings.hotwords_score,
-        options: settings.session_options(engine_id),
+        options,
     }
 }
 
@@ -57,6 +104,8 @@ pub struct RuntimeStatus {
     pub interaction_mode: Option<String>,
     /// 过渡阶段提示（warmup / hotkey / overlay / unload），稳态为 null
     pub stage: Option<String>,
+    pub voice_input_paused: bool,
+    pub error: Option<String>,
 }
 
 /// 运行时管理器：相位 + 启动快照（两个锁分开，避免事件构造时长持锁）
@@ -64,8 +113,12 @@ pub struct RuntimeManager {
     phase: Mutex<RuntimePhase>,
     started: Mutex<Option<StartedSnapshot>>,
     configuration: Mutex<()>,
+    operation: tokio::sync::Mutex<()>,
     input_epoch: AtomicU64,
     input_pauses: Arc<AtomicUsize>,
+    model_epoch: AtomicU64,
+    warming: AtomicBool,
+    error: Mutex<Option<String>>,
 }
 
 /// Pause only input admission; no mutex is held while asynchronous cancellation runs.
@@ -83,8 +136,12 @@ impl RuntimeManager {
             phase: Mutex::new(RuntimePhase::Stopped),
             started: Mutex::new(None),
             configuration: Mutex::new(()),
+            operation: tokio::sync::Mutex::new(()),
             input_epoch: AtomicU64::new(0),
             input_pauses: Arc::new(AtomicUsize::new(0)),
+            model_epoch: AtomicU64::new(0),
+            warming: AtomicBool::new(false),
+            error: Mutex::new(None),
         }
     }
 
@@ -151,7 +208,7 @@ impl RuntimeManager {
         );
         let session_config_changed = phase == RuntimePhase::Running
             && started.as_ref().is_some_and(|snapshot| {
-                snapshot.session_config != session_config_from(settings, &engine_id)
+                snapshot.session_config != session_config_from(settings, &engine_id, &model_id)
             });
         let restart_needed = engine_or_model_changed || session_config_changed;
         RuntimeStatus {
@@ -168,8 +225,19 @@ impl RuntimeManager {
                     .trim_matches('"')
                     .to_string()
             }),
-            stage,
+            stage: stage.or_else(|| {
+                (phase == RuntimePhase::Running && self.warming.load(Ordering::SeqCst))
+                    .then(|| "warmup".into())
+            }),
+            voice_input_paused: settings.ui.voice_input_paused,
+            error: self.error.lock().unwrap().clone(),
         }
+    }
+
+    fn next_model_epoch(&self) -> u64 {
+        self.warming.store(false, Ordering::SeqCst);
+        *self.error.lock().unwrap() = None;
+        self.model_epoch.fetch_add(1, Ordering::SeqCst) + 1
     }
 }
 
@@ -188,39 +256,109 @@ pub fn snapshot_and_emit(app: &AppHandle, stage: Option<String>) -> Option<Runti
         let settings = state.settings.read().unwrap();
         rt.status(&settings, &state.engines, stage)
     };
-    // 托盘「启动引擎 / 停止引擎」文案同步：启动/停止完成都会经过本推送点
-    crate::tray::sync_toggle_label(app, status.phase == "running");
+    // 托盘与设置页从同一状态更新。
+    crate::tray::sync_toggle_label(app, rt.phase());
     emit_status(app, &status);
     Some(status)
 }
 
-/// 热键触发的启动 / 停止切换（「启动 / 停止 Kotone」热键）。
-/// 语义与标题栏 / Hero 的主按钮一致：Stopped → start；Running → stop；
-/// Running + restartNeeded → start（壳内做 stop + start 重启）；过渡态忽略，
-/// 避免热键连按把状态机推到非法相位。
+fn remember_pause(app: &AppHandle, paused: bool) -> Result<(), String> {
+    let state = app.state::<SharedState>();
+    let rt = app.state::<RuntimeManager>();
+    let _configuration = rt.configuration_guard();
+    if state.settings.read().unwrap().ui.voice_input_paused != paused {
+        state.settings_repository.update(|settings| {
+            settings.ui.voice_input_paused = paused;
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+/// 托盘和旧版启停热键共用的暂停 / 恢复操作。
 pub async fn toggle(app: &AppHandle) -> Result<RuntimeStatus, String> {
     let rt = app.state::<RuntimeManager>();
+    let Ok(_operation) = rt.operation.try_lock() else {
+        return Err("语音输入正在调整，请稍候".into());
+    };
     match rt.phase() {
-        RuntimePhase::Stopped => start(app).await,
-        RuntimePhase::Running => {
-            let state = app.state::<SharedState>();
-            let restart_needed = {
-                let settings = state.settings.read().unwrap();
-                rt.status(&settings, &state.engines, None).restart_needed
-            };
-            if restart_needed {
-                start(app).await // 与按钮一致：重启生效
-            } else {
-                stop(app).await
-            }
+        RuntimePhase::Stopped => {
+            remember_pause(app, false)?;
+            start_enabled(app).await
         }
-        p => Err(format!("运行时正在{}，请稍候", p.as_str())),
+        RuntimePhase::Running => {
+            remember_pause(app, true)?;
+            stop_enabled(app).await
+        }
+        _ => Err("语音输入正在调整，请稍候".into()),
     }
 }
 
-/// 启动：warmup 当前引擎 → 注册热键 → 显示悬浮窗。
-/// Running + restartNeeded 时等价于 stop + start（用户显式点「重启」走这里）。
+/// 供首启引导、恢复输入及显式重试使用。
 pub async fn start(app: &AppHandle) -> Result<RuntimeStatus, String> {
+    let rt = app.state::<RuntimeManager>();
+    let _operation = rt.operation.lock().await;
+    remember_pause(app, false)?;
+    if rt.phase() == RuntimePhase::Running {
+        refresh_running_model(app)?;
+        return snapshot_and_emit(app, None).ok_or_else(|| "运行时状态未初始化".into());
+    }
+    start_enabled(app).await
+}
+
+/// 自动启动和配置变更共用同一路径。正在录音时继续用本轮配置，
+/// 会话回到空闲后再次提交所选模型。
+pub fn reconcile(app: &AppHandle) {
+    let Some(rt) = app.try_state::<RuntimeManager>() else {
+        return;
+    };
+    let Some(state) = app.try_state::<SharedState>() else {
+        return;
+    };
+    let needs_work = {
+        let settings = state.settings.read().unwrap();
+        match rt.phase() {
+            RuntimePhase::Running => {
+                settings.ui.voice_input_paused
+                    || rt.status(&settings, &state.engines, None).restart_needed
+            }
+            _ => automatically_enabled(&settings),
+        }
+    };
+    if !needs_work {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        reconcile_current(&app).await;
+    });
+}
+
+/// 模型选择成功返回时，让下一次录音已经能使用新选择。若有会话，
+/// 热键入场锁会延迟模型切换，直到前一轮结束。
+pub async fn reconcile_current(app: &AppHandle) {
+    let rt = app.state::<RuntimeManager>();
+    let _operation = rt.operation.lock().await;
+    let state = app.state::<SharedState>();
+    let (enabled, paused) = {
+        let settings = state.settings.read().unwrap();
+        (
+            automatically_enabled(&settings),
+            settings.ui.voice_input_paused,
+        )
+    };
+    let result = match rt.phase() {
+        RuntimePhase::Stopped if enabled => start_enabled(app).await.map(|_| ()),
+        RuntimePhase::Running if paused => stop_enabled(app).await.map(|_| ()),
+        RuntimePhase::Running => refresh_running_model(app),
+        _ => Ok(()),
+    };
+    if let Err(error) = result {
+        kotone_core::log::log(&format!("runtime reconcile: {error}"));
+    }
+}
+
+async fn start_enabled(app: &AppHandle) -> Result<RuntimeStatus, String> {
     crate::record_process_event(
         app,
         &serde_json::json!({
@@ -230,40 +368,14 @@ pub async fn start(app: &AppHandle) -> Result<RuntimeStatus, String> {
         }),
     );
     let rt = app.state::<RuntimeManager>();
-    // Running + restartNeeded → 先停再启（restart 语义）；Running 且无变更 → 幂等返回
-    match rt.phase() {
-        RuntimePhase::Running => {
-            let state = app.state::<SharedState>();
-            let restart_needed = {
-                let settings = state.settings.read().unwrap();
-                rt.status(&settings, &state.engines, None).restart_needed
-            };
-            if restart_needed {
-                stop(app).await?;
-            } else {
-                return snapshot_and_emit(app, None)
-                    .ok_or_else(|| "运行时状态未初始化".to_string());
-            }
-        }
-        p if runtime::can_start(p) => {}
-        p => {
-            return Err(format!(
-                "运行时正在{}，请稍候",
-                if p == RuntimePhase::Starting {
-                    "启动"
-                } else {
-                    "停止"
-                }
-            ))
-        }
-    }
-
+    rt.next_model_epoch();
     rt.transit(runtime::begin_start)?;
-    snapshot_and_emit(app, Some("warmup".into()));
+    snapshot_and_emit(app, None);
 
     // 每个失败分支都要回滚相位；用闭包包住主流程统一处理
     let result = start_inner(app).await;
     if let Err(ref e) = result {
+        *rt.error.lock().unwrap() = Some(e.clone());
         kotone_core::log::log(&format!("runtime start failed: {e}"));
         crate::record_process_event(
             app,
@@ -289,120 +401,121 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
     let (settings_snapshot, engine_id, model_id, session_config) = {
         let settings = state.settings.read().unwrap();
         let engine_id = settings.stt_engine.clone();
-        (
-            settings.clone(),
-            engine_id.clone(),
-            kotone_stt::model::active_model_from(&settings, &engine_id),
-            session_config_from(&settings, &engine_id),
-        )
+        let model_id = kotone_stt::model::active_model_from(&settings, &engine_id);
+        let session_config = session_config_from(&settings, &engine_id, &model_id);
+        (settings.clone(), engine_id, model_id, session_config)
     };
-    // 兼容旧配置或手工修改 config.json 的场景：在进入任何 sherpa 原生代码前
-    // 拒绝非 ASCII 模型路径，避免词表读取失败后直接终止整个桌面进程。
-    kotone_stt::model::validate_models_dir_path(&kotone_stt::model::models_dir_from(
-        &settings_snapshot,
-    ))?;
-    if state.engines.get(&engine_id).is_none() {
-        return Err(format!(
-            "未注册的 STT 引擎: {engine_id}（请在「引擎与模型」页重新选择）"
-        ));
-    }
-
     // 就绪预检（warmup 前的快速布尔检查）：失败时先记录明细（缺哪个文件）并做
     // 短重试，吸收杀软扫描/文件锁造成的瞬时误判——0.1.5 用户遇到运行中
     // stop/start 后误报「模型未下载」，被迫重新下载，布尔检查无法定位原因。
-    let engine_ready = || {
-        state
-            .engines
-            .get(&engine_id)
-            .map(|e| e.is_ready())
-            .unwrap_or(false)
-    };
-    if !engine_ready() {
-        if kotone_stt::model::is_remote_model(&model_id) {
-            return Err(format!(
-                "在线模型「{model_id}」未就绪：请在「模型切换」里填写 API 凭据（App ID / Token 等）后重试"
-            ));
+    if let Err(error) = validate_engine(&settings_snapshot, &state.engines, &engine_id, &model_id) {
+        if model_loading(&model_id) == ModelLoading::Online {
+            return Err(error);
         }
-        let missing = kotone_stt::model::multi_model_missing(&model_id);
-        kotone_core::log::log(&format!(
-            "runtime start: 模型就绪检查未通过（{model_id}）：{}；重试中",
-            missing.join("、")
-        ));
-        let mut ready = false;
+        kotone_core::log::log(&format!("runtime model preflight: {error}"));
         for _ in 0..3 {
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-            if engine_ready() {
-                ready = true;
+            if validate_engine(&settings_snapshot, &state.engines, &engine_id, &model_id).is_ok() {
                 break;
             }
         }
-        if !ready {
-            let missing = kotone_stt::model::multi_model_missing(&model_id);
-            return Err(format!(
-                "模型「{model_id}」文件不齐备：{}。请在「设置 → 高级」重新下载",
-                missing.join("、")
-            ));
-        }
-        kotone_core::log::log("runtime start: 模型就绪检查重试后通过（前次为瞬时误判）");
+        validate_engine(&settings_snapshot, &state.engines, &engine_id, &model_id)?;
     }
 
-    // 阶段 1：warmup（模型入内存；sherpa 百毫秒级，放阻塞线程不卡 UI）
-    crate::record_process_event(
-        app,
-        &serde_json::json!({
-            "caseId": kotone_core::process_log::app_session_id(),
-            "activity": "model_warmup_started",
-            "data": {}
-        }),
-    );
-    let warmup_started = std::time::Instant::now();
-    let engines: Arc<EngineRegistry> = state.engines.clone();
-    let warm_engine = engine_id.clone();
-    let warm_config = session_config.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        engines
-            .get(&warm_engine)
-            .ok_or_else(|| format!("未注册的 STT 引擎: {warm_engine}"))?
-            .warmup(&warm_config)
-    })
-    .await
-    .map_err(|e| format!("warmup 任务异常：{e}"))??;
-    kotone_core::log::log(&format!("runtime warmup ok: {engine_id} ({model_id})"));
-    crate::record_process_event(
-        app,
-        &serde_json::json!({
-            "caseId": kotone_core::process_log::app_session_id(),
-            "activity": "model_ready",
-            "data": {
-                "outcome": "success",
-                "durationMs": warmup_started.elapsed().as_millis() as u64
-            }
-        }),
-    );
-
-    let result = finish_start(
-        app,
-        settings_snapshot,
-        engine_id.clone(),
-        model_id,
-        session_config,
-    );
-    if result.is_err() {
-        let engines = state.engines.clone();
-        let _ = tauri::async_runtime::spawn_blocking(move || {
-            if let Some(engine) = engines.get(&engine_id) {
-                engine.unload();
-            }
-        })
-        .await;
-    }
-    result
+    finish_start(app, engine_id, model_id, session_config)
 }
 
-/// 此段无 await：与配置事务串行提交最新热键及运行态，避免注册旧的启动快照。
+fn validate_engine(
+    settings: &Settings,
+    engines: &EngineRegistry,
+    engine_id: &str,
+    model_id: &str,
+) -> Result<(), String> {
+    let loading = model_loading(model_id);
+    if loading != ModelLoading::Online {
+        // 原生词表读取不支持非 ASCII 路径。
+        kotone_stt::model::validate_models_dir_path(&kotone_stt::model::models_dir_from(settings))?;
+    }
+    let engine = engines
+        .get(engine_id)
+        .ok_or_else(|| format!("未注册的语音识别引擎：{engine_id}"))?;
+    if engine.is_ready() {
+        return Ok(());
+    }
+    if loading == ModelLoading::Online {
+        return Err(format!(
+            "在线模型「{model_id}」未就绪，请填写 API 凭据后重试"
+        ));
+    }
+    let missing = kotone_stt::model::multi_model_missing(model_id).join("、");
+    Err(format!(
+        "模型「{model_id}」文件不齐备：{missing}。请在「设置 → 高级」重新下载"
+    ))
+}
+
+/// 仅在热键已可用后执行。提前捕获模型代际，避免暂停或切模型后写回旧结果。
+fn prewarm(app: &AppHandle, started: &StartedSnapshot) {
+    if model_loading(&started.model_id) != ModelLoading::Background {
+        return;
+    }
+    let rt = app.state::<RuntimeManager>();
+    let state = app.state::<SharedState>();
+    let epoch = rt.model_epoch.load(Ordering::SeqCst);
+    let loading = state
+        .orchestrator
+        .prewarm_runtime_engine(started.session_config.clone());
+    rt.warming.store(true, Ordering::SeqCst);
+    let app = app.clone();
+    let engine_id = started.engine_id.clone();
+    let model_id = started.model_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let warmup_started = std::time::Instant::now();
+        crate::record_process_event(
+            &app,
+            &serde_json::json!({
+                "caseId": kotone_core::process_log::app_session_id(),
+                "activity": "model_warmup_started",
+                "data": {}
+            }),
+        );
+        let result = loading.await;
+        let rt = app.state::<RuntimeManager>();
+        let _operation = rt.operation.lock().await;
+        if rt.model_epoch.load(Ordering::SeqCst) != epoch {
+            return;
+        }
+        rt.warming.store(false, Ordering::SeqCst);
+        match result {
+            Ok(()) => {
+                kotone_core::log::log(&format!("runtime warmup ok: {engine_id} ({model_id})"));
+                crate::record_process_event(
+                    &app,
+                    &serde_json::json!({
+                        "caseId": kotone_core::process_log::app_session_id(),
+                        "activity": "model_ready",
+                        "data": {
+                            "outcome": "success",
+                            "durationMs": warmup_started.elapsed().as_millis() as u64
+                        }
+                    }),
+                );
+            }
+            Err(error) => {
+                kotone_core::log::log(&format!("runtime warmup failed: {error}"));
+                *rt.error.lock().unwrap() = Some(error);
+            }
+        }
+        snapshot_and_emit(&app, None);
+    });
+}
+
+fn idle_timeout(model_id: &str) -> Option<Duration> {
+    (model_loading(model_id) == ModelLoading::OnDemand).then_some(LARGE_MODEL_IDLE_TIMEOUT)
+}
+
+/// 热键和本轮模型快照串行提交。之后的小模型预热不会拦住录音入口。
 fn finish_start(
     app: &AppHandle,
-    settings_snapshot: Settings,
     engine_id: String,
     model_id: String,
     session_config: SessionConfig,
@@ -410,8 +523,18 @@ fn finish_start(
     let state = app.state::<SharedState>();
     let rt = app.state::<RuntimeManager>();
     let _configuration = rt.configuration_guard();
-    let current_settings = state.settings.read().unwrap().clone();
-    // 阶段 2：注册全局热键（失败回滚：卸载引擎，不半截启动）
+    let mut current_settings = state.settings.read().unwrap().clone();
+    if current_settings.ui.voice_input_paused {
+        return Err("语音输入已暂停".into());
+    }
+    let current_model =
+        kotone_stt::model::active_model_from(&current_settings, &current_settings.stt_engine);
+    if current_settings.stt_engine != engine_id
+        || current_model != model_id
+        || session_config_from(&current_settings, &engine_id, &model_id) != session_config
+    {
+        return Err("语音模型配置已更改，请重试".into());
+    }
     snapshot_and_emit(app, Some("hotkey".into()));
     crate::record_process_event(
         app,
@@ -421,11 +544,13 @@ fn finish_start(
             "data": {}
         }),
     );
-    // 注册热键前先锁定已预热快照，消除「热键已可用但 begin 读到
-    // 设置页新值」的竞态窗口。注册失败时与引擎一起回滚。
+    current_settings.active_model_id.clone_from(&model_id);
     state
         .orchestrator
-        .activate_runtime_settings(settings_snapshot);
+        .activate_runtime_settings_with_idle_timeout(
+            current_settings.clone(),
+            idle_timeout(&model_id),
+        );
     let mgr = app.state::<HotkeyManager>();
     if let Err(e) = mgr.register_with_settings(
         app,
@@ -437,7 +562,18 @@ fn finish_start(
         return Err(e);
     }
 
-    // 阶段 3：显示悬浮窗（不抢焦点；会话态显隐仍由 TauriEmitter 驱动）。
+    let started = StartedSnapshot {
+        engine_id,
+        model_id,
+        session_config,
+    };
+    rt.set_started(Some(started.clone()));
+    rt.input_epoch.fetch_add(1, Ordering::SeqCst);
+    rt.transit(runtime::finish_start)?;
+    kotone_core::log::log("runtime started");
+    prewarm(app, &started);
+
+    // 显示悬浮窗（不抢焦点；会话态显隐仍由 TauriEmitter 驱动）。
     // on_demand（用时浮现）与 never（完全隐藏）档位启动时不显示；前者在
     // 收音/转写时由 TauriEmitter 浮现，后者始终保持隐藏；always 启动即显示。
     // 每次启动重新应用尺寸、固定/自定义位置与点击穿透（显示器/DPI 可能已变）。
@@ -472,17 +608,7 @@ fn finish_start(
         }
     }
 
-    rt.set_started(Some(StartedSnapshot {
-        engine_id,
-        model_id,
-        session_config,
-    }));
-    rt.input_epoch.fetch_add(1, Ordering::SeqCst);
-    rt.transit(runtime::finish_start)?;
-    // Creation is optional and asynchronous; reconcile again now that Always
-    // can observe Running even if its WebView was not ready during stage 3.
     crate::overlay::reconcile(app, false);
-    kotone_core::log::log("runtime started");
     crate::record_process_event(
         app,
         &serde_json::json!({
@@ -494,10 +620,59 @@ fn finish_start(
     Ok(())
 }
 
-/// 停止：取消进行中的会话 → 注销热键 → 隐藏悬浮窗 → 卸载引擎。
-/// Stopped 时幂等返回（不报错）。
+fn refresh_running_model(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<SharedState>();
+    let rt = app.state::<RuntimeManager>();
+    let _configuration = rt.configuration_guard();
+    let mut settings = state.settings.read().unwrap().clone();
+    let engine_id = settings.stt_engine.clone();
+    let model_id = kotone_stt::model::active_model_from(&settings, &engine_id);
+    let session_config = session_config_from(&settings, &engine_id, &model_id);
+    if let Some(current) = rt.started().filter(|current| {
+        current.engine_id == engine_id
+            && current.model_id == model_id
+            && current.session_config == session_config
+    }) {
+        let failed_warmup = rt.error.lock().unwrap().is_some();
+        if failed_warmup && !rt.warming.load(Ordering::SeqCst) {
+            rt.next_model_epoch();
+            prewarm(app, &current);
+        }
+        return Ok(());
+    }
+    let _input = state.orchestrator.try_input_configuration_guard()?;
+    if let Err(error) = validate_engine(&settings, &state.engines, &engine_id, &model_id) {
+        *rt.error.lock().unwrap() = Some(error.clone());
+        snapshot_and_emit(app, None);
+        return Err(error);
+    }
+    rt.next_model_epoch();
+    settings.active_model_id.clone_from(&model_id);
+    state
+        .orchestrator
+        .activate_runtime_settings_with_idle_timeout(settings, idle_timeout(&model_id));
+    let started = StartedSnapshot {
+        engine_id,
+        model_id,
+        session_config,
+    };
+    rt.set_started(Some(started.clone()));
+    prewarm(app, &started);
+    snapshot_and_emit(app, None);
+    Ok(())
+}
+
+/// 显式暂停保持到用户恢复，不影响已经安排的提醒播报。
 pub async fn stop(app: &AppHandle) -> Result<RuntimeStatus, String> {
     let rt = app.state::<RuntimeManager>();
+    let _operation = rt.operation.lock().await;
+    remember_pause(app, true)?;
+    stop_enabled(app).await
+}
+
+async fn stop_enabled(app: &AppHandle) -> Result<RuntimeStatus, String> {
+    let rt = app.state::<RuntimeManager>();
+    rt.next_model_epoch();
     match rt.phase() {
         RuntimePhase::Stopped => {
             return snapshot_and_emit(app, None).ok_or_else(|| "运行时状态未初始化".to_string())
@@ -535,22 +710,7 @@ pub async fn stop(app: &AppHandle) -> Result<RuntimeStatus, String> {
         hide_window(&win);
     }
 
-    // 卸载引擎（释放模型内存）
-    let engines = state.engines.clone();
-    // 设置页可在 Running 期间先选中另一引擎。停止时必须卸载
-    // 真正已预热的快照引擎，不能卸载尚未启动的「当前选择」。
-    let engine_id = rt
-        .started()
-        .map(|snapshot| snapshot.engine_id)
-        .unwrap_or_else(|| state.settings.read().unwrap().stt_engine.clone());
-    let _ = tauri::async_runtime::spawn_blocking(move || {
-        if let Some(en) = engines.get(&engine_id) {
-            en.unload();
-        }
-    })
-    .await;
-
-    state.orchestrator.deactivate_runtime_settings();
+    state.orchestrator.deactivate_runtime_settings_wait().await;
     rt.set_started(None);
     rt.transit(runtime::finish_stop)?;
     kotone_core::log::log("runtime stopped");
@@ -573,6 +733,32 @@ mod tests {
         let runtime = RuntimeManager::new();
         *runtime.phase.lock().unwrap() = RuntimePhase::Running;
         runtime
+    }
+
+    #[test]
+    fn configured_installations_are_enabled_unless_explicitly_paused() {
+        let mut settings = Settings::default();
+        assert!(!automatically_enabled(&settings));
+        settings.ui.first_run_completed = true;
+        assert!(!settings.ui.auto_start);
+        assert!(automatically_enabled(&settings));
+        settings.ui.voice_input_paused = true;
+        assert!(!automatically_enabled(&settings));
+        settings.ui.voice_input_paused = false;
+        settings.ui.first_run_completed = false;
+        settings.active_model_id = "iflytek-asr".into();
+        assert!(automatically_enabled(&settings));
+    }
+
+    #[test]
+    fn schedules_local_models_by_size_without_prewarming_online_engines() {
+        assert_eq!(model_loading("iflytek-asr"), ModelLoading::Online);
+        let light = "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05";
+        let large = "sense-voice-zh-en-ja-ko-yue-2024-07-17";
+        assert_eq!(model_loading(light), ModelLoading::Background);
+        assert_eq!(idle_timeout(light), None);
+        assert_eq!(model_loading(large), ModelLoading::OnDemand);
+        assert_eq!(idle_timeout(large), Some(Duration::from_secs(300)));
     }
 
     #[test]

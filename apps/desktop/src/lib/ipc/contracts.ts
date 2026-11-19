@@ -17,8 +17,10 @@ export type AssistantInteractionMode = Exclude<InteractionMode, "solo">;
 export interface UiConfig {
   /** 首启向导已完成（或已跳过） */
   firstRunCompleted: boolean;
-  /** app 启动后自动进入 Running（warmup 引擎 + 注册热键 + 显示悬浮窗） */
+  /** 兼容旧配置中的自动运行偏好。 */
   autoStart: boolean;
+  /** 用户明确暂停语音输入。 */
+  voiceInputPaused?: boolean;
 }
 
 /** 模型存储配置（core settings `models` 段） */
@@ -131,7 +133,7 @@ export interface Settings {
   togglePostProcessingHotkey: string;
   /** 切换文字处理流程热键（默认空 = 关闭；按下按声明顺序循环流程） */
   cyclePostProcessingHotkey: string;
-  /** 启动 / 停止 Kotone 热键（默认空 = 关闭；应用级热键，runtime 停止时也生效） */
+  /** 暂停 / 恢复语音输入热键（默认空；暂停后仍可用） */
   runtimeToggleHotkey: string;
   /** 交互模式预设（null = 旧字段推导） */
   interactionMode: InteractionMode | null;
@@ -258,7 +260,7 @@ export interface VadConfig {
   minSilenceMs: number;
 }
 
-// ---------- 运行时「启动」开关 ----------
+// ---------- 语音输入状态 ----------
 export type RuntimePhase = "stopped" | "starting" | "running" | "stopping";
 
 /** get_runtime_status 返回值；kotone://runtime 事件同构（全量推送） */
@@ -271,6 +273,8 @@ export interface RuntimeStatus {
   interactionMode: InteractionMode | null;
   /** 过渡阶段提示（warmup / hotkey / overlay / unload），稳态为 null */
   stage: string | null;
+  voiceInputPaused?: boolean;
+  error?: string | null;
 }
 
 export type OnboardingLaunchMode = "auto" | "always" | "never";

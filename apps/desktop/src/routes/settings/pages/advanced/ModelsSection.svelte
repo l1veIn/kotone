@@ -260,11 +260,7 @@
         ((next.engineOptions[engineId] ??= {}) as Record<string, unknown>).model = modelId;
         return next;
       });
-      if ($runtimeStore?.phase === "running") {
-        toastWarn(`已切换模型，重启后生效`);
-      } else {
-        toast(true, "已切换模型");
-      }
+      toast(true, "已保存模型选择");
     } catch (e) {
       toast(false, `切换模型失败：${errText(e)}`);
     }
@@ -324,7 +320,7 @@
   <div class="flex items-center gap-2 rounded-lg bg-yellow-400/10 px-3 py-2 ring-1 ring-yellow-400/40">
     <span class="h-2 w-2 shrink-0 rounded-full bg-yellow-400"></span>
     <p class="text-[11px] text-yellow-200/90">
-      活动模型已变更，运行中的实例仍用旧配置——点标题栏「重启生效」后按新配置运行。
+      模型设置已变更。语音输入空闲后会自动应用。
     </p>
   </div>
 {/if}
@@ -651,7 +647,7 @@
       {/each}
     </div>
     <p class="mt-3 text-[11px] text-white/40">
-      本机模型未下载时「启动」会提示缺失项；切换后如已「启动」，需点标题栏「重启生效」。
+      本机模型需先下载。在线模型填写凭据后，可按录音热键使用。
     </p>
   </section>
 {/if}

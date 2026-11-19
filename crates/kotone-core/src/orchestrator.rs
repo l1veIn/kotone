@@ -18,6 +18,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::assistant::{AssistantHandler, AssistantRequest, AssistantVoiceSession, SessionPurpose};
 use crate::audio::{AudioBackend, AudioHandle};
+use crate::cancel::CancellationToken;
 use crate::inject::{CancelToken, FocusBackend, InjectError, Injector, TargetWindow};
 use crate::interaction::{EndTrigger, InteractionPolicy, PostFinalize};
 use crate::postprocess::{
@@ -26,11 +27,16 @@ use crate::postprocess::{
 };
 use crate::profile::{self, GameProfile};
 use crate::reminders::ReminderScheduler;
+use crate::runtime_model::{ModelCache, RuntimeModel};
 use crate::settings::Settings;
 use crate::stt::{EngineRegistry, SessionConfig, SttEvent, SttSession};
 
 /// finalize 超时（docs/development.md §6：finalize 设置 10s 超时）
 const DEFAULT_FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Model opening and online handshakes have a separate budget from recognition.
+const SESSION_PREPARE_TIMEOUT: Duration = Duration::from_secs(90);
+const MAX_PREPARE_SAMPLES: usize =
+    SESSION_PREPARE_TIMEOUT.as_secs() as usize * crate::audio::TARGET_SAMPLE_RATE as usize;
 /// 时间戳仅用于可读性；同一毫秒内取消/重开也必须获得不同的操作凭证。
 static NEXT_PROCESS_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 /// 单次持续收音硬上限。除了避免误触后长时间占用麦克风，也给
@@ -74,6 +80,75 @@ struct SessionBeginError {
     message: String,
 }
 
+type PreparedSession = Result<Box<dyn SttSession>, SessionBeginError>;
+type SessionPreparation = tokio::task::JoinHandle<Result<Box<dyn SttSession>, String>>;
+
+/// Preserve PCM in capture order until the native recognizer or online connection is ready.
+#[derive(Default)]
+struct SessionInput {
+    session: Option<Box<dyn SttSession>>,
+    buffered: Vec<Vec<f32>>,
+    samples: usize,
+}
+
+impl SessionInput {
+    fn push(&mut self, pcm: &[f32]) -> Result<(), SessionBeginError> {
+        if let Some(session) = &mut self.session {
+            return session.push_audio(pcm).map_err(|error| {
+                SessionBeginError::new(
+                    "STT_AUDIO_PUSH_FAILED",
+                    format!("语音识别处理音频失败：{error}"),
+                )
+            });
+        }
+        if pcm.is_empty() {
+            return Ok(());
+        }
+        if pcm.len() > MAX_PREPARE_SAMPLES.saturating_sub(self.samples) {
+            return Err(SessionBeginError::new(
+                "STT_PREPARE_BUFFER_LIMIT",
+                "识别模型准备过久，录音缓冲已满，请重试",
+            ));
+        }
+        self.samples += pcm.len();
+        self.buffered.push(pcm.to_vec());
+        Ok(())
+    }
+
+    fn attach(&mut self, prepared: PreparedSession) -> Result<(), SessionBeginError> {
+        self.session = Some(prepared?);
+        for pcm in std::mem::take(&mut self.buffered) {
+            self.push(&pcm)?;
+        }
+        self.samples = 0;
+        Ok(())
+    }
+
+    fn cancel(&mut self) {
+        if let Some(session) = &mut self.session {
+            session.cancel();
+        }
+    }
+}
+
+async fn await_prepared(task: &mut SessionPreparation) -> PreparedSession {
+    task.await
+        .map_err(|error| {
+            SessionBeginError::new(
+                "STT_SESSION_START_FAILED",
+                format!("识别启动线程异常：{error}"),
+            )
+        })?
+        .map_err(|error| SessionBeginError::new("STT_SESSION_START_FAILED", error))
+}
+
+fn prepare_timeout() -> SessionBeginError {
+    SessionBeginError::new(
+        "STT_PREPARE_TIMEOUT",
+        "识别准备超时，本次会话已中止，请重试",
+    )
+}
+
 impl SessionBeginError {
     fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
@@ -92,9 +167,7 @@ pub trait Emitter: Send + Sync {
 struct ActiveSession {
     purpose: SessionPurpose,
     stop_tx: Option<oneshot::Sender<()>>,
-    session_rx: Option<oneshot::Receiver<Box<dyn SttSession>>>,
-    /// pump 线程据此决定收尾时 session.cancel() 还是交还 session
-    cancelled_flag: Arc<AtomicBool>,
+    session_rx: Option<oneshot::Receiver<PreparedSession>>,
     /// 录音采集 guard：drop 即停止采集线程
     guard: Option<CaptureGuard>,
     pump: tokio::task::JoinHandle<()>,
@@ -251,6 +324,9 @@ struct Inner {
     session_policy: Option<InteractionPolicy>,
     gen: u64,
     active: Option<ActiveSession>,
+    /// Kept during the transition from recording to finalization, when ActiveSession
+    /// already belongs to end_inner. Esc can still discard a pending load and PCM.
+    capture_cancel: Option<CancellationToken>,
     pending_text: Option<PendingText>,
     /// 正在准备或执行的发送。取消/超时后仍保留，直到阻塞调用真正退出。
     send_operation: Option<SendOperation>,
@@ -376,10 +452,9 @@ pub struct Orchestrator {
     /// 配置仓库（桌面壳注入）：热键类动作（切换文字处理开关/流程）经它原子写盘并
     /// 更新共享内存快照。None = 未注入（CLI/测试），此类动作直接忽略并记日志。
     settings_repository: Option<Arc<crate::settings::SettingsRepository>>,
-    /// 桌面运行时成功预热时的 STT 配置快照。设置页在 Running 期间
-    /// 仍可编辑下次启动的引擎/模型/参数，但本轮会话必须继续使用
-    /// 已预热配置。None 用于 CLI/测试，保持原有「现场读设置」语义。
-    runtime_stt_settings: RwLock<Option<Settings>>,
+    /// 配置和本次激活的模型一起快照，设置变更从下一次运行时激活生效。
+    runtime_stt_settings: RwLock<Option<RuntimeStt>>,
+    runtime_model_cache: Arc<ModelCache>,
     /// 桌面停止前同步关闭入口；CLI 默认开放。必须在 op 临界区再次核验。
     runtime_inputs_enabled: AtomicBool,
     engines: Arc<EngineRegistry>,
@@ -416,6 +491,12 @@ pub struct Orchestrator {
     pub vad_factory: Option<crate::vad::VadFactory>,
 }
 
+#[derive(Clone)]
+struct RuntimeStt {
+    settings: Settings,
+    model: Option<Arc<RuntimeModel>>,
+}
+
 impl Orchestrator {
     /// 构造（返回 Self 便于调用方先调整 pub 字段：超时/录档目录/vad_factory）。
     /// **必须接 `.into_arc()` 收尾**：VAD 判停靠 Weak 自引用触发 end()，
@@ -435,6 +516,7 @@ impl Orchestrator {
                 session_policy: None,
                 gen: 0,
                 active: None,
+                capture_cancel: None,
                 pending_text: None,
                 send_operation: None,
                 processing_cancel: None,
@@ -452,6 +534,7 @@ impl Orchestrator {
             settings,
             settings_repository: None,
             runtime_stt_settings: RwLock::new(None),
+            runtime_model_cache: Arc::new(ModelCache::default()),
             runtime_inputs_enabled: AtomicBool::new(true),
             engines,
             processors: Arc::new(ProcessorRegistry::new()),
@@ -565,10 +648,64 @@ impl Orchestrator {
         Ok(guard)
     }
 
-    /// 桌面壳在 warmup 成功后锁定本轮运行时的 STT 配置。
+    /// 锁定调用方已经准备好的 STT 配置，保持同步会话初始化。
     pub fn activate_runtime_settings(&self, settings: Settings) {
-        *self.runtime_stt_settings.write().unwrap() = Some(settings);
+        self.replace_runtime_stt(Some(RuntimeStt {
+            settings,
+            model: None,
+        }));
         self.runtime_inputs_enabled.store(true, Ordering::SeqCst);
+    }
+
+    /// 桌面壳在注册热键前锁定识别配置。会话先录音，再启动模型或在线连接。
+    pub fn activate_runtime_settings_with_idle_timeout(
+        &self,
+        settings: Settings,
+        idle_timeout: Option<Duration>,
+    ) {
+        let model = RuntimeModel::new(
+            settings.stt_engine.clone(),
+            self.engines.clone(),
+            self.runtime_model_cache.clone(),
+            idle_timeout,
+        );
+        self.replace_runtime_stt(Some(RuntimeStt {
+            settings,
+            model: Some(model),
+        }));
+        self.runtime_inputs_enabled.store(true, Ordering::SeqCst);
+    }
+
+    pub fn prewarm_runtime_engine(
+        &self,
+        config: SessionConfig,
+    ) -> impl std::future::Future<Output = Result<(), String>> + Send + 'static {
+        let model = self.runtime_model();
+        async move {
+            let model = model.ok_or_else(|| "运行时尚未启用".to_string())?;
+            model
+                .prewarm(config)
+                .await
+                .map_err(|error| format!("预热任务异常：{error}"))?
+        }
+    }
+
+    fn runtime_model(&self) -> Option<Arc<RuntimeModel>> {
+        self.runtime_stt_settings
+            .read()
+            .unwrap()
+            .as_ref()?
+            .model
+            .clone()
+    }
+
+    fn replace_runtime_stt(&self, next: Option<RuntimeStt>) -> Option<Arc<RuntimeModel>> {
+        let previous = std::mem::replace(&mut *self.runtime_stt_settings.write().unwrap(), next);
+        let previous_model = previous.and_then(|runtime| runtime.model);
+        if let Some(model) = &previous_model {
+            model.retire();
+        }
+        previous_model
     }
 
     /// 桌面停止的第一个同步动作；阻止已经排队的 begin/发送在 cancel 后重新入场。
@@ -592,7 +729,16 @@ impl Orchestrator {
     /// 桌面壳停止运行时后解除快照并保持入口关闭；CLI/测试默认一直开放。
     pub fn deactivate_runtime_settings(&self) {
         self.suspend_runtime_inputs();
-        *self.runtime_stt_settings.write().unwrap() = None;
+        self.replace_runtime_stt(None);
+    }
+
+    /// Wait until the old recognizer and its in-flight native operations release
+    /// their files before the desktop can migrate or delete the model directory.
+    pub async fn deactivate_runtime_settings_wait(&self) {
+        self.suspend_runtime_inputs();
+        if let Some(model) = self.replace_runtime_stt(None) {
+            model.wait_released().await;
+        }
     }
 
     // ---------- 热键入口（hotkey 模块调用；ADR-006 单键语义表 + 策略路由） ----------
@@ -1131,12 +1277,13 @@ impl Orchestrator {
                 "助手尚未配置，请先设置助手连接",
             ));
         }
-        let stt_settings = self
+        let (stt_settings, runtime_model) = self
             .runtime_stt_settings
             .read()
             .unwrap()
-            .clone()
-            .unwrap_or_else(|| settings.clone());
+            .as_ref()
+            .map(|runtime| (runtime.settings.clone(), runtime.model.clone()))
+            .unwrap_or_else(|| (settings.clone(), None));
         let engine_id = stt_settings.stt_engine.clone();
         let engine = self.engines.get(&engine_id).ok_or_else(|| {
             SessionBeginError::new(
@@ -1144,7 +1291,7 @@ impl Orchestrator {
                 format!("未注册的 STT 引擎: {engine_id}"),
             )
         })?;
-        if !engine.is_ready() {
+        if runtime_model.is_none() && !engine.is_ready() {
             return Err(SessionBeginError::new(
                 "STT_ENGINE_NOT_READY",
                 format!(
@@ -1163,15 +1310,28 @@ impl Orchestrator {
         enrich_remote_connection(&stt_settings, &mut cfg, self.secrets.as_deref());
 
         let (stt_tx, stt_rx) = mpsc::unbounded_channel::<SttEvent>();
-        let session = engine
-            .start_session(&cfg, stt_tx)
-            .map_err(|error| SessionBeginError::new("STT_SESSION_START_FAILED", error))?;
+        let capture_cancel = CancellationToken::default();
+        let (capture_announced, announced) = oneshot::channel();
+        let (mut session, preparation) =
+            match runtime_model {
+                Some(model) => (
+                    None,
+                    Some(model.start_session(cfg, stt_tx, capture_cancel.clone(), announced)),
+                ),
+                None => (
+                    Some(engine.start_session(&cfg, stt_tx).map_err(|error| {
+                        SessionBeginError::new("STT_SESSION_START_FAILED", error)
+                    })?),
+                    None,
+                ),
+            };
 
         let capture_completion = CaptureCompletion(self.after_capture.clone());
         if let Some(before_capture) = &self.before_capture {
             if let Err(error) = before_capture() {
-                let mut session = session;
-                session.cancel();
+                if let Some(session) = &mut session {
+                    session.cancel();
+                }
                 return Err(SessionBeginError::new(
                     "AUDIO_CAPTURE_PREPARATION_FAILED",
                     error,
@@ -1191,8 +1351,9 @@ impl Orchestrator {
         let mut handle = match self.audio.start(&settings.audio_device_id) {
             Ok(h) => h,
             Err(e) => {
-                let mut session = session;
-                session.cancel();
+                if let Some(session) = &mut session {
+                    session.cancel();
+                }
                 return Err(SessionBeginError::new("AUDIO_CAPTURE_START_FAILED", e));
             }
         };
@@ -1201,8 +1362,7 @@ impl Orchestrator {
         let audio_err_rx = handle.error_rx.take();
 
         let (stop_tx, stop_rx) = oneshot::channel::<()>();
-        let (session_tx, session_rx) = oneshot::channel::<Box<dyn SttSession>>();
-        let cancelled_flag = Arc::new(AtomicBool::new(false));
+        let (session_tx, session_rx) = oneshot::channel::<PreparedSession>();
 
         // eval 录档：evalRecording 开启时创建录档句柄，pump 边录边喂；
         // finalize 成功后落盘，取消则随会话句柄整体丢弃（docs/adr/005）。
@@ -1293,7 +1453,7 @@ impl Orchestrator {
         // PCM pump：录音 → session.push_audio（VAD 策略下并行喂 VAD）；
         // STT partial → kotone://partial；VAD 判停 → 触发 end()（与热键结束同路径）
         let emitter = self.emitter.clone();
-        let pump_flag = cancelled_flag.clone();
+        let pump_cancel = capture_cancel.clone();
         let pump_recorder = recorder.clone();
         let pump_history = history_draft.clone();
         let pump_case_id = process_case_id.clone();
@@ -1308,37 +1468,56 @@ impl Orchestrator {
         // begin 持有 op；所有异步结束回调必须携带本次即将发布的会话代际。
         let capture_gen = self.inner.lock().unwrap().gen + 1;
         let pump = tokio::spawn(async move {
-            let mut session = session;
+            let mut input = SessionInput {
+                session,
+                ..SessionInput::default()
+            };
+            let mut preparation = preparation;
             let mut stop_rx = stop_rx;
             let mut pcm_rx = pcm_rx;
             let mut stt_rx = stt_rx;
+            let mut stt_events_open = true;
             let mut audio_err_rx = audio_err_rx;
             let mut vad_state = vad_state;
-            let mut stt_push_error = None;
+            let mut session_error = None;
+            let prepare_timer = tokio::time::sleep(SESSION_PREPARE_TIMEOUT);
             let session_deadline = tokio::time::sleep(max_session_duration);
+            tokio::pin!(prepare_timer);
             tokio::pin!(session_deadline);
             // 松手收尾：end() 先停采集再发停止信号，pump 收到信号后把通道里
             // 已缓冲未消费的 PCM 全部灌进 session（松手丢字 P0：采音侧排空）；
-            // 取消（pump_flag）则立即停，音频丢弃
+            // 取消则立即停，音频丢弃。冷模型准备时继续消费 PCM 和运行 VAD。
             loop {
                 tokio::select! {
                     biased;
+                    _ = pump_cancel.cancelled() => break,
                     _ = &mut session_deadline => {
                         if let Some(me) = me_weak.as_ref().and_then(|weak| weak.upgrade()) {
                             tokio::spawn(async move {
                                 me.abort_with_code(
                                     "单次录音已达 10 分钟上限，本次会话已中止，请重新开始",
                                     "SESSION_DURATION_LIMIT",
-                                    None,
+                                    Some(capture_gen),
                                 )
                                 .await;
                             });
                         }
                         break;
                     }
+                    _ = &mut prepare_timer, if preparation.is_some() => {
+                        session_error = Some(prepare_timeout());
+                        break;
+                    }
+                    ready = async { await_prepared(preparation.as_mut().unwrap()).await }, if preparation.is_some() => {
+                        preparation = None;
+                        if let Err(error) = input.attach(ready) {
+                            session_error = Some(error);
+                            break;
+                        }
+                    }
                     r = &mut stop_rx => {
                         let _ = r;
-                        if !pump_flag.load(Ordering::SeqCst) {
+                        if !pump_cancel.is_cancelled() {
                             // 非阻塞排空：此时采集线程已被 join（end 先 drop
                             // guard），通道里剩下的就是全部缓冲
                             while let Ok(c) = pcm_rx.try_recv() {
@@ -1352,8 +1531,8 @@ impl Orchestrator {
                                         pcm.extend_from_slice(&c);
                                     }
                                 }
-                                if let Err(e) = session.push_audio(&c) {
-                                    stt_push_error = Some(e);
+                                if let Err(error) = input.push(&c) {
+                                    session_error = Some(error);
                                     break;
                                 }
                             }
@@ -1373,8 +1552,8 @@ impl Orchestrator {
                                         pcm.extend_from_slice(&c);
                                     }
                                 }
-                                if let Err(e) = session.push_audio(&c) {
-                                    stt_push_error = Some(e);
+                                if let Err(error) = input.push(&c) {
+                                    session_error = Some(error);
                                     break;
                                 }
                                 // VAD 帧判定与 STT 并行（同一 PCM 流）；
@@ -1513,7 +1692,7 @@ impl Orchestrator {
                         // 通道关闭 = 采集线程正常退出（pcm 分支会收尾）；停用该分支防 busy 循环
                         audio_err_rx = None;
                     }
-                    ev = stt_rx.recv() => {
+                    ev = stt_rx.recv(), if input.session.is_some() && stt_events_open => {
                         match ev {
                             Some(SttEvent::Partial { text }) => {
                                 if let Some(rec) = &pump_recorder {
@@ -1540,29 +1719,42 @@ impl Orchestrator {
                                 emitter.emit("kotone://partial", json!({ "text": text }));
                             }
                             // Final 由 finalize 返回值承载，这里不重复上屏
-                            Some(SttEvent::Final { .. }) | None => {}
+                            Some(SttEvent::Final { .. }) => {}
+                            None => stt_events_open = false,
                         }
                     }
                 }
             }
-            if let Some(error) = stt_push_error {
-                session.cancel();
-                drop(session);
-                if let Some(me) = me_weak.as_ref().and_then(|w| w.upgrade()) {
-                    me.abort_with_code(
-                        &format!("语音识别处理音频失败：{error}（本次会话已中止，请重试）"),
-                        "STT_AUDIO_PUSH_FAILED",
-                        None,
-                    )
-                    .await;
-                }
+            if pump_cancel.is_cancelled() {
+                input.cancel();
                 return;
             }
-            if pump_flag.load(Ordering::SeqCst) {
-                session.cancel();
+            // 用户可能在模型就绪前已经松手。麦克风已经关闭，继续等识别器，
+            // 把刚刚录下的完整句子按序交给 finalize，取消仍可打断这段等待。
+            if session_error.is_none() {
+                if let Some(task) = &mut preparation {
+                    let ready = tokio::select! {
+                        _ = pump_cancel.cancelled() => return,
+                        _ = &mut prepare_timer => Err(prepare_timeout()),
+                        ready = await_prepared(task) => ready,
+                    };
+                    session_error = input.attach(ready).err();
+                }
             }
-            // 取消路径下接收端已 drop，send 失败则 session 随之释放
-            let _ = session_tx.send(session);
+            if let Some(error) = session_error {
+                pump_cancel.cancel();
+                input.cancel();
+                if let Some(me) = me_weak.as_ref().and_then(|w| w.upgrade()) {
+                    let message = error.message.clone();
+                    let code = error.code;
+                    tokio::spawn(async move {
+                        me.abort_with_code(&message, code, Some(capture_gen)).await;
+                    });
+                }
+                let _ = session_tx.send(Err(error));
+            } else if let Some(session) = input.session {
+                let _ = session_tx.send(Ok(session));
+            }
         });
 
         // RMS 电平 → kotone://level（驱动波形，~50ms 一条）
@@ -1586,11 +1778,11 @@ impl Orchestrator {
         inner.history = history_draft;
         inner.continuous_session =
             continuous_session && vad_inference_status.load(Ordering::SeqCst) == 0;
+        inner.capture_cancel = Some(capture_cancel);
         inner.active = Some(ActiveSession {
             purpose,
             stop_tx: Some(stop_tx),
             session_rx: Some(session_rx),
-            cancelled_flag,
             guard: Some(CaptureGuard {
                 audio: Some(handle),
                 _completion: capture_completion,
@@ -1652,6 +1844,7 @@ impl Orchestrator {
             );
         }
         self.emit_process("capture_started", json!({ "resumed": resumed }));
+        let _ = capture_announced.send(());
         Ok(())
     }
 
@@ -1751,13 +1944,27 @@ impl Orchestrator {
             let _ = tx.send(());
         }
         let session = match active.session_rx.take() {
-            Some(rx) => match rx.await {
-                Ok(s) => s,
-                Err(_) => {
-                    self.fail(gen, "录音线程异常结束", None);
-                    return Err("录音线程异常结束".into());
+            Some(rx) => {
+                let prepared = rx.await;
+                if self.inner.lock().unwrap().gen != gen {
+                    return Ok(());
                 }
-            },
+                match prepared {
+                    Ok(Ok(s)) => s,
+                    Ok(Err(error)) => {
+                        self.emit_process(
+                            "recognize_failed",
+                            json!({ "outcome": "error", "errorCode": error.code }),
+                        );
+                        self.fail(gen, &error.message, None);
+                        return Err(error.message);
+                    }
+                    Err(_) => {
+                        self.fail(gen, "录音线程异常结束", None);
+                        return Err("录音线程异常结束".into());
+                    }
+                }
+            }
             None => {
                 self.fail(gen, "会话句柄缺失（内部错误）", None);
                 return Err("会话句柄缺失".into());
@@ -2332,6 +2539,9 @@ impl Orchestrator {
             gen = inner.gen;
             let mut active = inner.active.take();
             inner.pending_text = None;
+            if let Some(cancel) = inner.capture_cancel.take() {
+                cancel.cancel();
+            }
             if let Some(operation) = &inner.send_operation {
                 operation.cancel();
             }
@@ -2341,7 +2551,6 @@ impl Orchestrator {
             inner.state = OrchestratorState::Error;
             drop(inner);
             if let Some(a) = active.as_mut() {
-                a.cancelled_flag.store(true, Ordering::SeqCst);
                 if let Some(tx) = a.stop_tx.take() {
                     let _ = tx.send(());
                 }
@@ -2392,6 +2601,9 @@ impl Orchestrator {
         inner.gen += 1;
         let mut active = inner.active.take();
         inner.pending_text = None;
+        if let Some(cancel) = inner.capture_cancel.take() {
+            cancel.cancel();
+        }
         if let Some(operation) = &inner.send_operation {
             operation.cancel();
         }
@@ -2402,7 +2614,6 @@ impl Orchestrator {
         drop(inner);
 
         if let Some(a) = active.as_mut() {
-            a.cancelled_flag.store(true, Ordering::SeqCst);
             if let Some(tx) = a.stop_tx.take() {
                 let _ = tx.send(());
             }
@@ -2946,6 +3157,12 @@ impl Orchestrator {
     fn emit_state(&self, state: OrchestratorState, mut payload: Option<serde_json::Value>) {
         let (case_id, purpose, button_owned) = {
             let inner = self.inner.lock().unwrap();
+            if let Some(model) = self.runtime_model() {
+                model.set_idle(matches!(
+                    inner.state,
+                    OrchestratorState::Idle | OrchestratorState::Success | OrchestratorState::Error
+                ));
+            }
             (
                 inner.process_case_id.clone(),
                 inner.purpose,

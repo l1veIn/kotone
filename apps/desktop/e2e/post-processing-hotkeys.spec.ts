@@ -11,7 +11,7 @@ test("named hotkey rows render with defaults and can be configured/cleared", asy
   await expect(page.getByText("重发最近一条热键", { exact: true })).toBeVisible();
   await expect(page.getByText("文字处理开关热键", { exact: true })).toBeVisible();
   await expect(page.getByText("切换文字处理流程热键", { exact: true })).toBeVisible();
-  await expect(page.getByText("启动 / 停止 Kotone 热键", { exact: true })).toBeVisible();
+  await expect(page.getByText("暂停 / 恢复语音输入热键", { exact: true })).toBeVisible();
 
   // 默认：开关、切流程与启动停止均为「未设置」，频道切换沿用默认 Shift+CapsLock
   const toggleInput = page.getByTestId("hotkey-input-post-process-toggle");

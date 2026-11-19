@@ -1,6 +1,6 @@
 <script lang="ts">
   /*
-   * 设置窗口视图（index.html#/settings）——方向 B「中继站」：
+   * 设置窗口视图（index.html#/settings）：
    * 左侧导航 + 右侧页面。页面组件在 ./pages/ 下，
    * 共享 settingsStore / toast（lib/stores/ui.ts）；IPC 全部走 lib/ipc.ts。
    */
@@ -55,12 +55,12 @@
     | "character";
 
   const navItems: { id: PageId; label: string; icon: string }[] = [
-    { id: "general", label: "通用", icon: "home" },
+    { id: "general", label: "语音输入", icon: "mic" },
     { id: "processing", label: "文字处理", icon: "sparkles" },
-    { id: "assistant", label: "提醒助手", icon: "bell" },
-    { id: "game", label: "游戏适配", icon: "gamepad" },
     { id: "history", label: "历史记录", icon: "clock" },
-    { id: "advanced", label: "高级", icon: "sliders" },
+    { id: "game", label: "游戏适配", icon: "gamepad" },
+    { id: "assistant", label: "提醒助手", icon: "bell" },
+    { id: "advanced", label: "设置", icon: "sliders" },
     { id: "about", label: "关于", icon: "info" },
   ];
 
@@ -206,8 +206,7 @@
 </script>
 
 <div class="flex h-full flex-col overflow-hidden bg-kotone-deep text-white">
-  <!-- 自绘标题栏（decorations:false）：拖拽区 + 运行状态 + 启动/停止 + 窗口控制 -->
-  <Titlebar onOpenAdvanced={() => openAdvanced("models")} />
+  <Titlebar showVoiceStatus={page !== "general" || loading} />
   <div class="relative flex min-h-0 flex-1 overflow-hidden">
   <!-- 窗口底纹理：switch 无缝 tile，极低透明度 -->
   <div
@@ -216,27 +215,31 @@
     style:background-size="256px"
   ></div>
 
-  <!-- 左侧导航（品牌位移交顶部操作面板，导航直接从「通用」开始） -->
-  <nav class="relative z-10 flex w-50 shrink-0 flex-col border-r border-white/8 bg-kotone-deep/60 px-3 py-4">
-    <div class="flex flex-col gap-1">
-      {#each navItems as item}
+  <nav
+    class="relative z-10 flex w-46 shrink-0 flex-col gap-1 border-r border-white/8 bg-[#171729] px-2.5 py-3 max-[720px]:w-14 max-[720px]:px-2"
+    aria-label="设置分类"
+  >
+      {#each navItems as item (item.id)}
         {@const active = page === item.id || (page === "character" && item.id === "about")}
         <button
+          type="button"
           data-testid={`settings-nav-${item.id}`}
-          class="group relative flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition
+          aria-current={active ? "page" : undefined}
+          aria-label={item.label}
+          title={item.label}
+          class="group relative flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors focus-visible:ring-2 focus-visible:ring-kotone-cyan/60 max-[720px]:justify-center max-[720px]:px-0
+            {item.id === 'advanced' ? 'mt-auto' : ''}
             {active
-            ? 'bg-kotone-cyan/12 text-kotone-cyan shadow-glow-cyan'
-            : 'text-white/60 hover:bg-white/8 hover:text-white/90 hover:shadow-[0_0_14px_rgba(0,229,255,0.15)]'}"
+            ? 'bg-white/10 font-medium text-white'
+            : 'text-white/65 hover:bg-white/6 hover:text-white/90'}"
           onclick={() => (page = item.id)}
         >
-          <!-- 激活指示条 -->
-          <span
-            class="absolute top-1/2 left-0 h-5 w-[3px] -translate-y-1/2 rounded-full bg-kotone-cyan transition-opacity
-              {active ? 'opacity-100 shadow-glow-cyan' : 'opacity-0'}"
-          ></span>
-          <span class="inline-flex h-4.5 w-4.5 items-center justify-center" aria-hidden="true">
-            {#if item.icon === "home"}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M3 10.5 12 3l9 7.5M5 9.5V21h14V9.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          {#if active}
+            <span class="absolute top-1/2 left-0 h-4 w-[3px] -translate-y-1/2 rounded-full bg-kotone-cyan" aria-hidden="true"></span>
+          {/if}
+          <span class="inline-flex size-4 shrink-0 items-center justify-center {active ? 'text-kotone-cyan' : 'text-white/60'}" aria-hidden="true">
+            {#if item.icon === "mic"}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="size-4"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2m-7 9v3m-3 0h6"/></svg>
             {:else if item.icon === "sparkles"}
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="m12 3 1.2 3.8L17 8l-3.8 1.2L12 13l-1.2-3.8L7 8l3.8-1.2L12 3ZM18.5 14l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2ZM5 12l.8 2.2L8 15l-2.2.8L5 18l-.8-2.2L2 15l2.2-.8L5 12Z" stroke-linecap="round" stroke-linejoin="round"/></svg>
             {:else if item.icon === "sliders"}
@@ -251,14 +254,9 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01" stroke-linecap="round"/></svg>
             {/if}
           </span>
-          {item.label}
+          <span class="truncate max-[720px]:hidden">{item.label}</span>
         </button>
       {/each}
-    </div>
-
-    <p class="mt-auto px-2 pt-4 text-[10px] leading-relaxed text-white/30">
-       反馈群：1092354484
-    </p>
   </nav>
 
   <!-- 右侧内容 -->

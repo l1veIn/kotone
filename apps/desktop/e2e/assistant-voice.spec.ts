@@ -83,7 +83,7 @@ async function commands(page: Page) {
   return page.evaluate(() => window.assistantVoiceTest.calls.map((call) => call.command));
 }
 
-test("voice entry sits in the create card, works without a shortcut and exposes setup and stopped guidance", async ({ page }, testInfo) => {
+test("voice entry sits in the create card, works without a shortcut and exposes setup and readiness guidance", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1040, height: 900 });
   await openVoice(page);
   const button = page.getByTestId("assistant-voice-button");
@@ -97,7 +97,7 @@ test("voice entry sits in the create card, works without a shortcut and exposes 
   await page.getByTestId("assistant-nav-tasks").click();
   await page.evaluate(() => window.assistantVoiceTest.runtime("stopped"));
   await expect(button).toBeDisabled();
-  await expect(page.getByTestId("assistant-voice-input")).toContainText("请先启动 Kotone");
+  await expect(page.getByTestId("assistant-voice-input")).toContainText("语音输入待就绪，请检查首页状态");
   await page.evaluate(async () => {
     const { settingsStore } = await import("/src/lib/stores/ui.ts");
     settingsStore.update((settings) => settings && ({ ...settings, assistant: { ...settings.assistant, hotkey: "Ctrl+F9" } }));

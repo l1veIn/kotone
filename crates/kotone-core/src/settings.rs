@@ -157,9 +157,12 @@ pub struct UiConfig {
     /// 首启向导已完成（或已跳过）；默认 false——老配置升级合并后也会弹一次向导
     #[serde(default)]
     pub first_run_completed: bool,
-    /// app 启动后自动进入 Running（warmup 引擎 + 注册热键 + 显示悬浮窗）；默认 false
+    /// 旧版自动启用偏好；保留以便识别旧配置及降级。
     #[serde(default)]
     pub auto_start: bool,
+    /// 用户在托盘或用热键显式暂停语音输入。与模型是否常驻内存无关。
+    #[serde(default)]
+    pub voice_input_paused: bool,
 }
 
 /// 录音/发送音效提示（config.json `soundFeedback` 段）。
@@ -1351,15 +1354,17 @@ mod tests {
     }
 
     #[test]
-    fn auto_start_and_models_dir_roundtrip() {
+    fn auto_start_pause_and_models_dir_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         let mut s = Settings::default();
         s.ui.auto_start = true;
+        s.ui.voice_input_paused = true;
         s.models.dir = "D:\\kotone-models".into();
         save_to(&path, &s).unwrap();
         let loaded = load_from(&path);
         assert!(loaded.ui.auto_start);
+        assert!(loaded.ui.voice_input_paused);
         assert_eq!(loaded.models.dir, "D:\\kotone-models");
     }
 

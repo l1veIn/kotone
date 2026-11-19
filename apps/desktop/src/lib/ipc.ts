@@ -327,13 +327,13 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   return invoke<RuntimeStatus>("get_runtime_status");
 }
 
-/** 启动：warmup 引擎 → 注册热键 → 显示悬浮窗；Running+restartNeeded 时等价重启 */
+/** 恢复语音输入，或在模型、热键错误后重试。 */
 export async function startRuntime(): Promise<RuntimeStatus> {
   if (!isTauri) return browserMock.startRuntime();
   return invoke<RuntimeStatus>("start_runtime");
 }
 
-/** 停止：取消会话 → 注销热键 → 隐藏悬浮窗 → 卸载引擎；Stopped 幂等 */
+/** 暂停语音输入并注销录音热键。 */
 export async function stopRuntime(): Promise<RuntimeStatus> {
   if (!isTauri) return browserMock.stopRuntime();
   return invoke<RuntimeStatus>("stop_runtime");

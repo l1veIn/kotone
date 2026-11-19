@@ -9,7 +9,7 @@
 
 #![allow(clippy::field_reassign_with_default)] // 测试用例按场景逐项改写 Settings 更易读
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -19,7 +19,9 @@ use kotone_core::orchestrator::{Emitter, Orchestrator, OrchestratorState};
 use kotone_core::postprocess::{PipelineStepConfig, StepFailurePolicy};
 use kotone_core::profile::GameProfile;
 use kotone_core::settings::Settings;
-use kotone_core::stt::EngineRegistry;
+use kotone_core::stt::{
+    EngineCapabilities, EngineRegistry, SessionConfig, SttEngine, SttEvent, SttSession, Transcript,
+};
 use tokio::sync::mpsc;
 
 /// 10 倍速推送假音频的 mock 采集后端（每 5ms 推一个 50ms chunk）
@@ -373,6 +375,282 @@ fn make_orchestrator_tuned(
     orch.release_grace = Duration::from_millis(10); // 测试用小宽限期
     tune(&mut orch);
     (orch.into_arc(), emitter)
+}
+
+// Produce one chunk while the recognizer is deliberately blocked and one in the
+// capture thread's stop path, like a device callback flushing its trailing frames.
+struct FirstAndTailAudio;
+
+impl AudioBackend for FirstAndTailAudio {
+    fn start(&self, _: &str) -> Result<AudioHandle, String> {
+        let (audio, samples) = mpsc::unbounded_channel();
+        let (levels, level_rx) = mpsc::unbounded_channel();
+        let (errors, error_rx) = mpsc::unbounded_channel();
+        let (stop, stopped) = std::sync::mpsc::channel();
+        audio.send(vec![0.125, 0.25]).unwrap();
+        let worker = std::thread::spawn(move || {
+            let _ = stopped.recv();
+            let _ = audio.send(vec![0.5, 0.75]);
+            drop((levels, errors));
+        });
+        Ok(AudioHandle::with_thread(
+            samples, level_rx, error_rx, stop, worker,
+        ))
+    }
+}
+
+struct ControlledModel {
+    resident: AtomicBool,
+    local: bool,
+    load_started: mpsc::UnboundedSender<()>,
+    permit: Mutex<std::sync::mpsc::Receiver<()>>,
+    unloaded: mpsc::UnboundedSender<()>,
+    warmups: Arc<AtomicUsize>,
+    captures: mpsc::UnboundedSender<Vec<f32>>,
+}
+
+impl ControlledModel {
+    fn load(&self) -> Result<(), String> {
+        if !self.resident.load(Ordering::SeqCst) {
+            self.load_started.send(()).unwrap();
+            self.permit
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(5))
+                .map_err(|error| error.to_string())?;
+            self.resident.store(true, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+}
+
+impl SttEngine for ControlledModel {
+    fn id(&self) -> &'static str {
+        "controlled-asr"
+    }
+    fn display_name(&self) -> &str {
+        "Controlled ASR"
+    }
+    fn capabilities(&self) -> EngineCapabilities {
+        EngineCapabilities {
+            streaming: true,
+            offline: self.local,
+            hotwords: false,
+            gpu: false,
+            languages: vec!["zh".into()],
+        }
+    }
+    fn is_ready(&self) -> bool {
+        true
+    }
+    fn warmup(&self, _: &SessionConfig) -> Result<(), String> {
+        self.warmups.fetch_add(1, Ordering::SeqCst);
+        self.load()
+    }
+    fn unload(&self) {
+        self.resident.store(false, Ordering::SeqCst);
+        let _ = self.unloaded.send(());
+    }
+    fn start_session(
+        &self,
+        _: &SessionConfig,
+        _events: mpsc::UnboundedSender<SttEvent>,
+    ) -> Result<Box<dyn SttSession>, String> {
+        self.load()?;
+        Ok(Box::new(CapturedSamples {
+            pcm: Vec::new(),
+            captures: self.captures.clone(),
+        }))
+    }
+}
+
+struct CapturedSamples {
+    pcm: Vec<f32>,
+    captures: mpsc::UnboundedSender<Vec<f32>>,
+}
+
+impl SttSession for CapturedSamples {
+    fn push_audio(&mut self, pcm: &[f32]) -> Result<(), String> {
+        self.pcm.extend_from_slice(pcm);
+        Ok(())
+    }
+    fn finalize(self: Box<Self>) -> Result<Transcript, String> {
+        self.captures.send(self.pcm).unwrap();
+        Ok(Transcript {
+            text: "第一句话".into(),
+            latency_ms: 0,
+        })
+    }
+    fn cancel(&mut self) {}
+}
+
+struct ColdCaptureTest {
+    orch: Arc<Orchestrator>,
+    load_started: mpsc::UnboundedReceiver<()>,
+    permit: std::sync::mpsc::Sender<()>,
+    unloaded: mpsc::UnboundedReceiver<()>,
+    warmups: Arc<AtomicUsize>,
+    samples: mpsc::UnboundedReceiver<Vec<f32>>,
+}
+
+impl ColdCaptureTest {
+    fn new(local: bool, timeout: Option<Duration>) -> Self {
+        let (loading, load_started) = mpsc::unbounded_channel();
+        let (permit, allowed) = std::sync::mpsc::channel();
+        let (unload, unloaded) = mpsc::unbounded_channel();
+        let (captures, samples) = mpsc::unbounded_channel();
+        let warmups = Arc::new(AtomicUsize::new(0));
+        let mut engines = EngineRegistry::new();
+        engines.register(Box::new(ControlledModel {
+            resident: AtomicBool::new(false),
+            local,
+            load_started: loading,
+            permit: Mutex::new(allowed),
+            unloaded: unload,
+            warmups: warmups.clone(),
+            captures,
+        }));
+        let mut settings = test_settings();
+        settings.stt_engine = "controlled-asr".into();
+        settings.interaction_mode = None;
+        settings.hotkey.mode = kotone_core::hotkey::HotkeyMode::Hold;
+        settings.auto_send = false;
+        settings.history.mode = kotone_core::history::HistoryMode::Off;
+        settings.active_profile_id = None;
+        let mut orch = Orchestrator::new(
+            Arc::new(RwLock::new(settings.clone())),
+            Arc::new(engines),
+            Arc::new(FirstAndTailAudio),
+            Arc::new(RecordingInjector {
+                sent: Arc::default(),
+            }),
+            Arc::new(MockFocusBackend::new(Arc::default(), 42, true)),
+            Arc::new(VecEmitter::default()),
+        );
+        orch.release_grace = Duration::ZERO;
+        let orch = orch.into_arc();
+        orch.activate_runtime_settings_with_idle_timeout(settings, timeout);
+        Self {
+            orch,
+            load_started,
+            permit,
+            unloaded,
+            warmups,
+            samples,
+        }
+    }
+
+    async fn hold(&self) {
+        tokio::time::timeout(Duration::from_secs(2), self.orch.on_hotkey_hold(true))
+            .await
+            .unwrap();
+        assert_eq!(self.orch.state(), OrchestratorState::Listening);
+    }
+
+    async fn release_before_loaded(&mut self) {
+        let orch = self.orch.clone();
+        let ending = tokio::spawn(async move { orch.on_hotkey_hold(false).await });
+        wait_state(
+            &self.orch,
+            OrchestratorState::Transcribing,
+            Duration::from_secs(2),
+        )
+        .await;
+        assert!(self.samples.try_recv().is_err());
+        self.permit.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), ending)
+            .await
+            .unwrap()
+            .unwrap();
+        wait_state(
+            &self.orch,
+            OrchestratorState::Preview,
+            Duration::from_secs(2),
+        )
+        .await;
+        assert_eq!(self.samples.recv().await.unwrap(), [0.125, 0.25, 0.5, 0.75]);
+    }
+
+    async fn expect_cold_load(&mut self) {
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), self.load_started.recv())
+                .await
+                .unwrap(),
+            Some(())
+        );
+    }
+}
+
+#[tokio::test]
+async fn immediate_hotkey_records_and_replays_while_x_asr_style_prewarm_is_blocked() {
+    let mut test = ColdCaptureTest::new(true, None);
+    let preload = tokio::spawn(test.orch.prewarm_runtime_engine(SessionConfig::default()));
+    test.expect_cold_load().await;
+    test.hold().await;
+    test.release_before_loaded().await;
+    assert!(preload.await.unwrap().is_ok());
+    assert_eq!(test.warmups.load(Ordering::SeqCst), 1);
+    assert!(test.load_started.try_recv().is_err());
+    test.orch.cancel().await;
+    test.orch.deactivate_runtime_settings_wait().await;
+}
+
+#[tokio::test]
+async fn large_model_unloads_only_after_idle_and_keeps_the_first_utterance_after_eviction() {
+    let idle = Duration::from_millis(80);
+    let mut test = ColdCaptureTest::new(true, Some(idle));
+    test.hold().await;
+    test.expect_cold_load().await;
+    test.release_before_loaded().await;
+    assert!(
+        tokio::time::timeout(idle * 2, test.unloaded.recv())
+            .await
+            .is_err(),
+        "preview remains active"
+    );
+    test.orch.cancel().await;
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), test.unloaded.recv())
+            .await
+            .unwrap(),
+        Some(())
+    );
+    test.hold().await;
+    test.expect_cold_load().await;
+    test.release_before_loaded().await;
+    test.orch.cancel().await;
+    test.orch.deactivate_runtime_settings_wait().await;
+}
+
+#[tokio::test]
+async fn remote_model_opens_only_after_the_hotkey_and_pause_cancels_pending_pcm() {
+    let mut test = ColdCaptureTest::new(false, None);
+    test.orch
+        .prewarm_runtime_engine(SessionConfig::default())
+        .await
+        .unwrap();
+    assert_eq!(test.warmups.load(Ordering::SeqCst), 0);
+    assert!(test.load_started.try_recv().is_err());
+    test.hold().await;
+    test.expect_cold_load().await;
+    let orch = test.orch.clone();
+    let ending = tokio::spawn(async move { orch.on_hotkey_hold(false).await });
+    wait_state(
+        &test.orch,
+        OrchestratorState::Transcribing,
+        Duration::from_secs(2),
+    )
+    .await;
+    test.orch.suspend_runtime_inputs();
+    test.orch.cancel().await;
+    tokio::time::timeout(Duration::from_secs(2), ending)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(test.orch.state(), OrchestratorState::Idle);
+    assert!(test.samples.try_recv().is_err());
+    test.permit.send(()).unwrap();
+    test.orch.deactivate_runtime_settings_wait().await;
 }
 
 #[tokio::test]

@@ -31,19 +31,20 @@
   ];
 </script>
 
-<div class="px-6 py-5">
-  <h1 class="text-lg font-bold">高级</h1>
-  <p class="mt-0.5 text-[11px] text-white/45">模型、连接与系统级设置</p>
+<div class="mx-auto max-w-6xl px-4 py-5 sm:px-6">
+  <h1 class="text-lg font-semibold">设置</h1>
 
-  <nav class="mt-4 flex flex-wrap gap-1.5" aria-label="高级设置分类">
-    {#each tabs as tab}
+  <nav class="mt-4 flex flex-wrap gap-1.5 border-b border-white/8 pb-2" aria-label="设置分组">
+    {#each tabs as tab (tab.id)}
       {@const active = section === tab.id}
       <button
+        type="button"
+        aria-current={active ? "page" : undefined}
         data-testid={`advanced-nav-${tab.id}`}
-        class="rounded-lg px-3 py-1.5 text-xs font-semibold ring-1 transition
+        class="rounded-lg px-3 py-1.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-kotone-cyan/60
           {active
-            ? 'bg-kotone-cyan/15 text-kotone-cyan ring-kotone-cyan/40'
-            : 'bg-white/5 text-white/55 ring-white/10 hover:bg-white/10 hover:text-white/80'}"
+            ? 'bg-kotone-cyan/10 text-kotone-cyan'
+            : 'text-white/65 hover:bg-white/8 hover:text-white/90'}"
         onclick={() => onSectionChange?.(tab.id)}
       >
         {tab.label}

@@ -8,7 +8,6 @@ import type {
   PostProcessingTestStep,
   PostProcessingTestResult,
   Settings,
-  RuntimePhase,
   RuntimeStatus,
   StartupOptions,
   ModelsDirInfo,
@@ -594,6 +593,7 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
   const merged = clone(mock.settings) as unknown as Record<string, unknown>;
   mergeJson(merged, patch);
   mock.settings = merged as unknown as Settings;
+  emitMockRuntime();
   return clone(mock.settings);
 }
 
@@ -619,6 +619,7 @@ export async function listSttEngines(): Promise<EngineInfo[]> {
 export async function setSttEngine(id: string): Promise<void> {
   if (!mock.engines.some((e) => e.id === id)) throw new Error(`未注册的 STT 引擎: ${id}`);
   mock.settings.sttEngine = id;
+  emitMockRuntime();
   return;
 }
 
@@ -757,7 +758,7 @@ export async function previewSfx(kind: "record" | "send", soundId?: string): Pro
 /** 热键注册状态（registered/key/error/backend + 具名辅助热键），设置页热键分区展示占用冲突 */
 export async function getHotkeyStatus(): Promise<HotkeyStatus> {
   return {
-      registered: true,
+      registered: mockRuntimeStatus().phase === "running",
       key: mock.settings.hotkey.key,
       error: null,
       backend: "llhook",
@@ -851,34 +852,51 @@ export async function cancelHotkeyCapture(): Promise<void> {
   return;
 }
 
-// ---------- 运行时「启动」开关 ----------
+// ---------- 语音输入 ----------
 
-/** mock 运行时：启动快照（推导 restartNeeded 用；对齐壳侧语义） */
-let mockStarted: { engineId: string; modelId: string } | null = null;
+const mockRuntimeListeners = new Set<(status: RuntimeStatus) => void>();
 
-let mockPhase: RuntimePhase = "stopped";
+export function subscribeBrowserRuntime(receive: (status: RuntimeStatus) => void): () => void {
+  mockRuntimeListeners.add(receive);
+  return () => { mockRuntimeListeners.delete(receive); };
+}
 
-/** mock 的 restartNeeded 推导：Running 且快照 ≠ 当前配置 */
-function mockRuntimeStatus(stage: string | null = null): RuntimeStatus {
+function emitMockRuntime() {
+  const status = mockRuntimeStatus();
+  for (const receive of mockRuntimeListeners) receive(status);
+}
+
+function mockRuntimeStatus(): RuntimeStatus {
   const s = mock.settings;
   const engineId = s.sttEngine;
-  const modelId =
+  const modelId = s.activeModelId || (
     (s.engineOptions[engineId] as Record<string, unknown> | undefined)?.model as string ??
     (engineId === "sherpa-streaming"
       ? "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05"
-      : "default");
-  const restartNeeded =
-    mockPhase === "running" &&
-    mockStarted !== null &&
-    (mockStarted.engineId !== engineId || mockStarted.modelId !== modelId);
+      : "default"));
+  const engine = mock.engines.find((item) => item.id === engineId);
+  const model = mock.models.find((item) => item.id === modelId);
+  const remote = model?.backend === "remote";
+  const ready = remote
+    ? model.configSchema.filter((field) => field.required).every((field) => {
+        const value = s.modelConfigs[modelId]?.[field.key];
+        return typeof value === "string" && value.trim() !== "";
+      })
+    : model?.downloaded ?? engine?.isReady ?? false;
+  const paused = s.ui.voiceInputPaused ?? false;
+  const enabled = s.ui.firstRunCompleted || s.ui.autoStart || !!s.activeModelId;
   return {
-    phase: mockPhase,
-    restartNeeded,
+    phase: enabled && !paused && ready ? "running" : "stopped",
+    restartNeeded: false,
     engineId,
-    engineName: mock.engines.find((e) => e.id === engineId)?.displayName ?? null,
+    engineName: engine?.displayName ?? null,
     modelId,
     interactionMode: s.interactionMode,
-    stage,
+    stage: null,
+    voiceInputPaused: paused,
+    error: enabled && !paused && !ready
+      ? remote ? "在线模型未就绪：请填写 API 凭据。" : "X-ASR 模型未下载。"
+      : null,
   };
 }
 
@@ -886,22 +904,19 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   return mockRuntimeStatus();
 }
 
-/** 启动：warmup 引擎 → 注册热键 → 显示悬浮窗；Running+restartNeeded 时等价重启 */
+/** 恢复语音输入。 */
 export async function startRuntime(): Promise<RuntimeStatus> {
-  const engine = mock.engines.find((item) => item.id === mock.settings.sttEngine);
-  if (!engine?.isReady) {
-    throw new Error("X-ASR 模型未下载。请先下载模型再启动");
-  }
-  mockPhase = "running";
-  const s = mockRuntimeStatus();
-  mockStarted = { engineId: s.engineId ?? "", modelId: s.modelId ?? "" };
-  return mockRuntimeStatus();
+  mock.settings.ui.voiceInputPaused = false;
+  emitMockRuntime();
+  const status = mockRuntimeStatus();
+  if (status.error) throw new Error(status.error);
+  return status;
 }
 
-/** 停止：取消会话 → 注销热键 → 隐藏悬浮窗 → 卸载引擎；Stopped 幂等 */
+/** 暂停语音输入。 */
 export async function stopRuntime(): Promise<RuntimeStatus> {
-  mockPhase = "stopped";
-  mockStarted = null;
+  mock.settings.ui.voiceInputPaused = true;
+  emitMockRuntime();
   return mockRuntimeStatus();
 }
 
@@ -958,6 +973,7 @@ export async function downloadModel(id: string): Promise<void> {
     m.downloaded = true;
     const engine = mock.engines.find((item) => item.id === m.engineId);
     if (engine) engine.isReady = true;
+    emitMockRuntime();
   }
   return;
 }
@@ -1005,7 +1021,7 @@ export async function openModelDestDir(id: string): Promise<void> {
   return;
 }
 
-/** 切换引擎的活动模型（Running 时置 restartNeeded，不自动重启） */
+/** 切换引擎的活动模型。 */
 export async function setActiveModel(engineId: string, modelId: string): Promise<void> {
   const spec = mock.models.find((item) => item.id === modelId);
   const resolvedEngine = spec?.engineId ?? engineId;
@@ -1013,6 +1029,7 @@ export async function setActiveModel(engineId: string, modelId: string): Promise
   opts.model = modelId;
   mock.settings.activeModelId = modelId;
   mock.settings.sttEngine = resolvedEngine;
+  emitMockRuntime();
   return;
 }
 

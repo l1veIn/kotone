@@ -1,36 +1,16 @@
 <script lang="ts">
   /*
-   * 标准标题栏（main 窗 decorations:false，方向 B 富化，高 48px）：
-   * - 左：Kotone 圆角图标（青光晕）+ 名称 + 状态区两行（上行：状态灯 + 相位文字；
-   *   下行：引擎 · 模型 · 交互模式）；
-   * - 右：运行中显示 CPU/内存占用（2s 轮询）+ 启动/停止/重启生效按钮
-   *   + 标准窗口控制两键（min / close，最右上角；conf 已设 maximizable:false）；
-   * - 拖拽：非按钮区 mousedown 由 startDragging() 接管；
-   * - close = 弹确认框：「退出」彻底退出进程，「最小化到托盘」保持隐藏语义。
+   * 设置窗口的自绘标题栏：运行状态、资源占用和窗口控制。
    */
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { exit } from "@tauri-apps/plugin-process";
   import { getResourceUsage, isTauri } from "../../lib/ipc";
-  import { runtimeStore } from "../../lib/stores/runtime";
-  import { settingsStore, toast, errText } from "../../lib/stores/ui";
+  import { runtimeStore, voiceInputStatus } from "../../lib/stores/runtime";
+  import { toast, errText } from "../../lib/stores/ui";
   import ExitPrompt from "../../lib/components/ExitPrompt.svelte";
-  import RuntimeButton from "../../lib/components/RuntimeButton.svelte";
   import iconSrc from "../../assets/brand/icon-src.webp";
 
-  let { onOpenAdvanced }: { onOpenAdvanced: () => void } = $props();
-
-  const modeNames: Record<string, string> = {
-    "push-to-talk": "对讲机",
-    dictation: "录音笔",
-    "one-shot": "说一句就走",
-    solo: "独奏模式",
-  };
-  const stageNames: Record<string, string> = {
-    warmup: "正在加载引擎…",
-    hotkey: "正在注册热键…",
-    overlay: "正在显示悬浮窗…",
-    unload: "正在卸载引擎…",
-  };
+  let { showVoiceStatus }: { showVoiceStatus: boolean } = $props();
 
   const rt = $derived($runtimeStore);
   let showExitPrompt = $state(false);
@@ -58,32 +38,6 @@
     const timer = setInterval(() => void pollResourceUsage(), 2000);
     return () => clearInterval(timer);
   });
-
-  const phaseLabel = $derived(
-    !rt
-      ? "状态未知"
-      : rt.phase === "stopped"
-        ? "已停止"
-        : rt.phase === "running"
-          ? rt.restartNeeded
-            ? "运行中 · 变更待重启"
-            : "运行中"
-          : (stageNames[rt.stage ?? ""] ?? "处理中…"),
-  );
-
-  /** 标题栏只呈现用户任务状态；引擎与模型详情收纳在高级页。 */
-  const hotkeyLabel = $derived($settingsStore?.hotkey.key ?? "—");
-  const statusLine = $derived(
-    !rt
-      ? `快捷键：${hotkeyLabel} · 状态未知`
-      : rt.phase === "stopped"
-        ? `快捷键：${hotkeyLabel} · 未注册 · 点右侧「启动」开始说话`
-        : rt.phase === "running"
-          ? `快捷键：${hotkeyLabel} · 已注册 · ${
-              rt.interactionMode ? (modeNames[rt.interactionMode] ?? "自定义模式") : "自定义模式"
-            }`
-          : `快捷键：${hotkeyLabel} · ${phaseLabel}`,
-  );
 
   /** 非按钮区按下即整窗拖拽（按钮自身 mousedown 不触发） */
   function onDragMouseDown(e: MouseEvent) {
@@ -131,76 +85,34 @@
 <!-- 标题栏整行可拖拽：非按钮区 mousedown 由 startDragging 接管（按钮已排除） -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <header
-  class="relative z-20 flex h-12 shrink-0 items-center justify-between border-b border-white/8 bg-kotone-panel/60 select-none"
+  class="relative z-20 flex h-11 shrink-0 items-center justify-between border-b border-white/8 bg-[#171729] select-none"
   onmousedown={onDragMouseDown}
 >
-  <!-- 克制的背景光晕（方向 B 霓虹语言，标题栏尺度收敛） -->
-  <div
-    class="pointer-events-none absolute -top-12 left-1/4 h-20 w-56 rounded-full bg-kotone-violet/15 blur-3xl"
-  ></div>
-  <div
-    class="pointer-events-none absolute -top-10 right-1/3 h-16 w-44 rounded-full blur-3xl transition-colors duration-500 {rt?.phase ===
-    'running'
-      ? 'bg-kotone-cyan/12'
-      : 'bg-kotone-pink/8'}"
-  ></div>
-
-  <!-- 左：品牌区（固定 w-50，与下方侧边栏宽度对齐）+ 状态信息 -->
   <div class="relative flex min-w-0 flex-1 items-center self-stretch">
-    <div class="flex w-50 shrink-0 items-center gap-2.5 self-stretch border-r border-white/8 px-4">
+    <div class="flex w-46 shrink-0 items-center gap-2.5 self-stretch border-r border-white/8 px-4 max-[720px]:w-14 max-[720px]:justify-center max-[720px]:px-0">
       <img
         src={iconSrc}
         alt=""
-        class="h-8 w-8 shrink-0 rounded-[22%] ring-1 ring-kotone-cyan/70 shadow-glow-cyan object-cover"
+        class="size-6 shrink-0 rounded-[22%] object-cover"
       />
-      <p class="shrink-0 text-xs font-bold tracking-wide">
+      <p class="shrink-0 text-xs font-bold tracking-wide max-[720px]:hidden">
         Kotone <span class="font-medium text-white/55">琴音</span>
       </p>
     </div>
-    <!-- 状态区两行：上行 = 状态灯 + 相位文字；下行 = 快捷键 · 运行状态 -->
-    <div class="flex min-w-0 flex-col justify-center gap-px px-4">
-      <div class="flex items-center gap-2 leading-none">
-        <span class="relative flex h-2 w-2 shrink-0">
-          <span
-            class="h-2 w-2 rounded-full transition-colors {!rt || rt.phase === 'stopped'
-              ? 'bg-white/25'
-              : rt.phase === 'running'
-                ? 'bg-kotone-cyan shadow-glow-cyan animate-pulse'
-                : 'bg-kotone-pink shadow-glow-pink animate-ping'}"
-          ></span>
-          {#if rt?.restartNeeded}
-            <span
-              class="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-yellow-400 ring-1 ring-kotone-panel"
-              title="配置已变更，需重启生效"
-            ></span>
-          {/if}
-        </span>
-        <span
-          class="text-[11px] leading-tight font-semibold {rt?.phase === 'running'
-            ? 'text-kotone-cyan'
-            : rt && rt.phase !== 'stopped'
-              ? 'text-kotone-pink'
-              : 'text-white/45'}"
-        >
-          {phaseLabel}
-        </span>
+    {#if showVoiceStatus}
+      <div class="flex min-w-0 items-center gap-2 px-4 text-xs text-white/65">
+        <span class="size-1.5 shrink-0 rounded-full {rt?.error ? 'bg-amber-300' : rt?.phase === 'running' ? 'bg-kotone-cyan' : 'bg-white/35'}" aria-hidden="true"></span>
+        <span class="truncate" title={voiceInputStatus(rt)}>{voiceInputStatus(rt)}</span>
       </div>
-      {#if statusLine}
-        <p class="truncate pl-4 text-[10px] leading-tight text-white/40" title={statusLine}>
-          {statusLine}
-        </p>
-      {/if}
-    </div>
+    {/if}
   </div>
 
-  <!-- 右：资源占用（running 时）+ 启动/停止 + 标准窗口控制两键 -->
   <div class="relative flex h-full shrink-0 items-center">
     {#if rt?.phase === "running" && resourceText}
-      <span class="mr-2 text-[10px] text-white/40 tabular-nums" title="Kotone 进程资源占用">
+      <span class="mr-3 text-[10px] text-white/45 tabular-nums max-[720px]:hidden" title="Kotone 进程资源占用">
         {resourceText}
       </span>
     {/if}
-    <RuntimeButton variant="titlebar" {onOpenAdvanced} />
     <div class="h-4 w-px bg-white/10"></div>
     <button
       class="flex h-full w-12 items-center justify-center text-white/55 transition hover:bg-white/10 hover:text-white"

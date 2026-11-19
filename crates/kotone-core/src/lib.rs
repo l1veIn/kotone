@@ -28,6 +28,7 @@ pub mod process_log;
 pub mod profile;
 pub mod reminders;
 pub mod runtime;
+mod runtime_model;
 pub mod settings;
 pub mod speech;
 pub mod stt;
