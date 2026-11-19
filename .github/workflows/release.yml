@@ -3,7 +3,7 @@ name: Release Windows
 on:
   push:
     tags:
-      - "v*"
+      - "v0.1.*"
 
 permissions:
   contents: write
@@ -161,8 +161,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if ($env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+$') {
-            Write-Host "Prerelease tag remains a draft and will not enter the COS stable channel."
+          # The GitHub latest/download/latest.json URL also serves old clients.
+          if ($env:GITHUB_REF_NAME -cnotmatch '^v0\.1\.\d+$') {
+            Write-Host "Only stable v0.1.x tags enter the legacy update channel. Leaving this release as a draft."
             exit 0
           }
           gh release edit $env:GITHUB_REF_NAME `
@@ -172,7 +173,7 @@ jobs:
 
   publish-cos:
     needs: build-windows
-    if: ${{ !contains(github.ref_name, '-') }}
+    if: ${{ startsWith(github.ref_name, 'v0.1.') && !contains(github.ref_name, '-') }}
     uses: ./.github/workflows/publish-cos.yml
     with:
       tag: ${{ github.ref_name }}

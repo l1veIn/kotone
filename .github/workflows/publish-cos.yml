@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: "Stable release tag produced by the caller"
+        description: "Stable 0.1.x release tag produced by the caller"
         required: true
         type: string
   release:
@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Published stable release tag, for example v0.1.8"
+        description: "Published stable 0.1.x release tag, for example v0.1.14"
         required: true
         type: string
 
@@ -40,8 +40,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') {
-            throw "Stable COS channel only accepts vX.Y.Z tags: $env:RELEASE_TAG"
+          # Older clients read this fixed manifest without checking rollout.
+          if ($env:RELEASE_TAG -cnotmatch '^v0\.1\.\d+$') {
+            throw "Legacy COS channel only accepts stable v0.1.x tags: $env:RELEASE_TAG"
           }
           $release = gh release view $env:RELEASE_TAG `
             --repo $env:GITHUB_REPOSITORY `
