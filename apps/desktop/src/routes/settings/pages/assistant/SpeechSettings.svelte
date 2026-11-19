@@ -9,6 +9,7 @@
     listSpeechVoices, subscribeSpeechModel, type SpeechModelStatus, type SpeechVoice,
   } from "../../../../lib/assistant";
 
+  let { legacyReminder = false }: { legacyReminder?: boolean } = $props();
   let model = $state<SpeechModelStatus | null>(null);
   let voices = $state<SpeechVoice[]>([]);
   let error = $state("");
@@ -41,6 +42,7 @@
    */
   const engine = $derived<Engine | undefined>(
     !config ? undefined
+      : legacyReminder ? config.speechEngine
       : config.ttsModelId === onlineModel.openai ? "openai"
       : config.ttsModelId === onlineModel.volcano ? "volcano"
       : config.ttsModelId === onlineModel.deepseek ? "deepseek"
@@ -51,6 +53,7 @@
   /** “自动”时实际在用的声音提供方（从声音列表的前缀看出来）。 */
   const autoProvider = $derived(engine === "auto" ? (voices[0]?.id.split("/")[0] ?? "") : "");
   function selectEngine(value: string) {
+    if (legacyReminder) return save({ speechEngine: value === "kokoro" ? "kokoro" : "system" });
     // 在线引擎不写旧字段（旧版本读不懂会把整份配置当作损坏）。
     if (value === "openai" || value === "volcano" || value === "deepseek") return save({ ttsModelId: onlineModel[value] });
     if (value === "auto") return save({ speechEngine: "system", ttsModelId: "" });
@@ -88,7 +91,7 @@
     const current = engine;
     let active = true;
     voices = [];
-    if (current) void listSpeechVoices().then((items) => {
+    if (current) void listSpeechVoices(legacyReminder || undefined).then((items) => {
       if (!active) return;
       voices = !isTauri && (current === "system" || current === "auto") ? [] : (items ?? []);
       voiceError = "";
@@ -155,7 +158,9 @@
         <p class="mt-0.5 mb-0 text-xs text-muted-foreground">提醒、回答和自动化结果用这个声音读出来。</p>
       </div>
       <div class="w-64 max-w-full"><SelectField ariaLabel="语音引擎" value={engine ?? "auto"} disabled={saving}
-        options={[{value:"auto",label:"自动（默认）"},{value:"deepseek",label:"在线 · DeepSeek 语音"},{value:"system",label:"Windows · 系统语音"},{value:"kokoro",label:"Kokoro · 本地中文语音"},{value:"openai",label:"在线 · OpenAI 兼容"},{value:"volcano",label:"在线 · 火山语音合成"}]}
+        options={legacyReminder
+          ? [{value:"system",label:"Windows · 系统语音"},{value:"kokoro",label:"Kokoro · 本地中文语音"}]
+          : [{value:"auto",label:"自动（默认）"},{value:"deepseek",label:"在线 · DeepSeek 语音"},{value:"system",label:"Windows · 系统语音"},{value:"kokoro",label:"Kokoro · 本地中文语音"},{value:"openai",label:"在线 · OpenAI 兼容"},{value:"volcano",label:"在线 · 火山语音合成"}]}
         onchange={(value) => void selectEngine(value)} /></div>
     </div>
     {#if engine === "kokoro"}

@@ -39,7 +39,7 @@
     void subscribeAutomations(() => { void loadAutomations(); }).then((fn) => { if (disposed) fn(); else unlisten = fn; });
     return () => { disposed = true; unlisten?.(); };
   });
-  $effect(() => { config?.connectionId; config?.companion; $settingsStore?.ocr?.activeModelId; void refresh(); });
+  $effect(() => { config?.connectionId; config?.companionBindings?.connectionId; config?.companion; $settingsStore?.ocr?.activeModelId; void refresh(); });
 
   async function saveQuick(next: QuickMessage[], message = "快捷指令已保存") {
     if (saving) return;

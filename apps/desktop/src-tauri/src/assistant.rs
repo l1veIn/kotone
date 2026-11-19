@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use kotone_core::assistant::{
-    AssistantConfig, AssistantHandler, AssistantPlan, AssistantRequest, TtsEngine,
+    is_legacy_reminder_session, AssistantConfig, AssistantHandler, AssistantPlan, AssistantRequest,
+    TtsEngine, LEGACY_REMINDER_SESSION_PREFIX,
 };
 use kotone_core::automation::AutomationScheduler;
 use kotone_core::cancel::CancellationToken;
@@ -111,15 +112,29 @@ impl AssistantRuntime {
 
 /// 实际用哪个语音引擎：“自动”（默认）时，琴音的连接能用 DeepSeek 语音就用它，否则系统语音。
 pub fn effective_engine(app: &AppHandle, config: &AssistantConfig) -> TtsEngine {
-    config.tts_engine_auto(|| crate::tts_online::deepseek_ready(app))
+    config.tts_engine_auto(|| {
+        let companion_enabled = app.try_state::<crate::SharedState>().is_some_and(|state| {
+            !state
+                .settings
+                .read()
+                .unwrap()
+                .ui
+                .legacy_upgrade
+                .uses_legacy_assistant()
+        });
+        companion_enabled && crate::tts_online::deepseek_ready(app)
+    })
 }
 
 fn selected_speaker(
     app: &AppHandle,
     config: &AssistantConfig,
 ) -> Result<Arc<dyn SpeechOutput>, String> {
+    speaker_for_engine(app, effective_engine(app, config))
+}
+
+fn speaker_for_engine(app: &AppHandle, engine: TtsEngine) -> Result<Arc<dyn SpeechOutput>, String> {
     let runtime = app.state::<AssistantRuntime>();
-    let engine = effective_engine(app, config);
     let online_kind = match engine {
         TtsEngine::System => return runtime.system_speaker.clone(),
         TtsEngine::Kokoro => None,
@@ -189,6 +204,7 @@ pub fn prepare_model_migration(
 struct RoutingHandler {
     app: AppHandle,
     settings: Arc<RwLock<Settings>>,
+    legacy_reminders: kotone_ai::reminders::ReminderAssistant,
 }
 
 /// 请求来源：设置窗口（文字入口与语音按钮）/ 工具提交 / 热键语音（按会话 ID 前缀区分）。
@@ -210,10 +226,17 @@ impl AssistantHandler for RoutingHandler {
         request: AssistantRequest,
         cancel: CancellationToken,
     ) -> kotone_core::assistant::AssistantFuture<'_> {
-        let (route, in_game) = {
+        let (route, in_game, legacy) = {
             let settings = self.settings.read().unwrap();
-            (settings.assistant.route, settings.agent.in_game)
+            (
+                settings.assistant.route,
+                settings.agent.in_game,
+                settings.ui.legacy_upgrade.uses_legacy_assistant(),
+            )
         };
+        if legacy || is_legacy_reminder_session(&request.session_id) {
+            return self.legacy_reminders.handle(request, cancel);
+        }
         if route != kotone_core::assistant::AssistantRoute::Agent && in_game {
             return Box::pin(async move {
                 if cancel.is_cancelled() {
@@ -267,7 +290,11 @@ impl AssistantHandler for RoutingHandler {
     }
 }
 
-pub fn initialize(app: &AppHandle, settings: Arc<RwLock<Settings>>) -> AssistantRuntime {
+pub fn initialize(
+    app: &AppHandle,
+    settings: Arc<RwLock<Settings>>,
+    connections: Arc<dyn kotone_core::connection::ConnectionResolver>,
+) -> AssistantRuntime {
     let speaker = kotone_platform_windows::speech::WindowsSpeechOutput::new()
         .map(|speaker| Arc::new(speaker) as Arc<dyn SpeechOutput>);
     // 提醒与程序共用自动化调度器（ADR 013）；旧 reminders.json 只读导入一次，不改不删。
@@ -280,7 +307,9 @@ pub fn initialize(app: &AppHandle, settings: Arc<RwLock<Settings>>) -> Assistant
             .import_legacy_reminders(&kotone_core::settings::kotone_dir().join("reminders.json"))
         {
             Ok(0) => {}
-            Ok(n) => kotone_core::log::log(&format!("automation: imported {n} pending reminders")),
+            Ok(n) => {
+                kotone_core::log::log(&format!("automation: imported {n} legacy reminder records"))
+            }
             Err(e) => kotone_core::log::log(&format!("automation: reminders import skipped: {e}")),
         }
         let handle = app.clone();
@@ -293,6 +322,10 @@ pub fn initialize(app: &AppHandle, settings: Arc<RwLock<Settings>>) -> Assistant
         scheduler,
         handler: Arc::new(RoutingHandler {
             app: app.clone(),
+            legacy_reminders: kotone_ai::reminders::ReminderAssistant::new(
+                connections,
+                settings.clone(),
+            ),
             settings,
         }),
         system_speaker: speaker,
@@ -531,14 +564,19 @@ impl ReminderDelivery for DesktopDelivery {
                 }
                 let mut speech_error = None;
                 if use_voice {
-                    let speaker = selected_speaker(&self.app, &config);
+                    let engine = if is_legacy_reminder_session(&reminder.session_id) {
+                        config.legacy_tts_engine()
+                    } else {
+                        effective_engine(&self.app, &config)
+                    };
+                    let speaker = speaker_for_engine(&self.app, engine);
                     match speaker {
                         Ok(speaker) => {
                             guard.speaker = Some(speaker.clone());
                             match queue_speech(
                                 speaker.clone(),
                                 speech_request(
-                                    effective_engine(&self.app, &config),
+                                    engine,
                                     &config,
                                     &reminder.text,
                                 ),
@@ -813,8 +851,17 @@ pub fn cancel_reminder(state: tauri::State<AssistantRuntime>, id: String) -> Res
 }
 
 #[tauri::command]
-pub async fn assistant_submit_text(app: AppHandle, text: String) -> Result<AssistantPlan, String> {
-    submit_text(&app, text, "assistant-ui").await
+pub async fn assistant_submit_text(
+    app: AppHandle,
+    text: String,
+    legacy_reminder: Option<bool>,
+) -> Result<AssistantPlan, String> {
+    let session_prefix = if legacy_reminder.unwrap_or(false) {
+        "legacy-reminder-ui"
+    } else {
+        "assistant-ui"
+    };
+    submit_text(&app, text, session_prefix).await
 }
 
 /// 与文字入口相同的提交路径（工具服务 `assistant.submit` 以 `assistant-tool` 前缀调用）。
@@ -842,8 +889,24 @@ pub async fn submit_text(
         }
     }
     let _request_guard = RequestGuard(&state.typed_request);
+    let voice_only = app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .ui
+        .legacy_upgrade
+        .uses_legacy_assistant();
+    let marker = if voice_only && !is_legacy_reminder_session(session_prefix) {
+        LEGACY_REMINDER_SESSION_PREFIX
+    } else {
+        ""
+    };
     let request = AssistantRequest {
-        session_id: format!("{session_prefix}-{}", kotone_core::eval::new_session_id()),
+        session_id: format!(
+            "{marker}{session_prefix}-{}",
+            kotone_core::eval::new_session_id()
+        ),
         text,
         received_at_ms: now_ms(),
     };
@@ -906,7 +969,10 @@ pub fn cancel_assistant_request(state: tauri::State<AssistantRuntime>) {
 }
 
 #[tauri::command]
-pub async fn list_speech_voices(app: AppHandle) -> Result<Vec<SpeechVoice>, String> {
+pub async fn list_speech_voices(
+    app: AppHandle,
+    legacy_reminder: Option<bool>,
+) -> Result<Vec<SpeechVoice>, String> {
     let config = app
         .state::<crate::SharedState>()
         .settings
@@ -914,7 +980,12 @@ pub async fn list_speech_voices(app: AppHandle) -> Result<Vec<SpeechVoice>, Stri
         .unwrap()
         .assistant
         .clone();
-    match effective_engine(&app, &config) {
+    let engine = if legacy_reminder.unwrap_or(false) {
+        config.legacy_tts_engine()
+    } else {
+        effective_engine(&app, &config)
+    };
+    match engine {
         TtsEngine::Kokoro => return Ok(kotone_tts::kokoro_voices()),
         TtsEngine::Deepseek => {
             return Ok(kotone_tts::catalog::online_voices(
@@ -933,7 +1004,7 @@ pub async fn list_speech_voices(app: AppHandle) -> Result<Vec<SpeechVoice>, Stri
         }
         TtsEngine::System => {}
     }
-    let speaker = selected_speaker(&app, &config)?;
+    let speaker = speaker_for_engine(&app, engine)?;
     let voices = tokio::task::spawn_blocking(move || speaker.voices())
         .await
         .map_err(|_| "读取系统语音失败".to_string())??;
@@ -948,7 +1019,11 @@ pub async fn list_speech_voices(app: AppHandle) -> Result<Vec<SpeechVoice>, Stri
 }
 
 #[tauri::command]
-pub async fn preview_reminder(app: AppHandle, kind: String) -> Result<(), String> {
+pub async fn preview_reminder(
+    app: AppHandle,
+    kind: String,
+    legacy_reminder: Option<bool>,
+) -> Result<(), String> {
     let runtime = app.state::<AssistantRuntime>();
     let _output = runtime
         .output_lock
@@ -977,7 +1052,11 @@ pub async fn preview_reminder(app: AppHandle, kind: String) -> Result<(), String
         if kind != "voice" {
             return Err("未知提醒方式".into());
         }
-        let engine = effective_engine(&app, &config);
+        let engine = if legacy_reminder.unwrap_or(false) {
+            config.legacy_tts_engine()
+        } else {
+            effective_engine(&app, &config)
+        };
         let started = std::time::Instant::now();
         // 试听没声音时要能查：记下用的引擎、花了多久、结果。
         let log_result = |result: &Result<(), String>| {
@@ -991,7 +1070,7 @@ pub async fn preview_reminder(app: AppHandle, kind: String) -> Result<(), String
             ));
         };
         let speaker =
-            selected_speaker(&app, &config).inspect_err(|e| log_result(&Err(e.clone())))?;
+            speaker_for_engine(&app, engine).inspect_err(|e| log_result(&Err(e.clone())))?;
         guard.speaker = Some(speaker.clone());
         let result = queue_speech(
             speaker,
@@ -1020,13 +1099,13 @@ pub async fn assistant_call(app: AppHandle) -> Result<(), String> {
         return Err("先点右上角「启动」，Kotone 运行时才能呼叫".into());
     }
     let state = app.state::<crate::SharedState>();
-    let timeout = state
-        .settings
-        .read()
-        .unwrap()
-        .assistant
-        .wake
-        .no_speech_timeout_ms;
+    let timeout = {
+        let settings = state.settings.read().unwrap();
+        if settings.ui.legacy_upgrade.uses_legacy_assistant() {
+            return Err("请先在设置中选择「认识琴音」".into());
+        }
+        settings.assistant.wake.no_speech_timeout_ms
+    };
     state.orchestrator.call_assistant(None, timeout).await;
     Ok(())
 }

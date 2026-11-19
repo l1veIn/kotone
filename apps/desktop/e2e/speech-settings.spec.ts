@@ -108,10 +108,11 @@ test("Kokoro offers three Chinese voices and switching engines preserves each vo
   expect(saved.assistant).toMatchObject({ speechEngine: "kokoro", kokoroVoiceId: "kokoro:zf_017", voiceId: "" });
 });
 
-test("browser preview clearly shows an uninstalled model, disables download and makes no external request", async ({ page }, testInfo) => {
+test("browser preview clearly shows an uninstalled model, disables download and makes no external request", async ({ page, baseURL }, testInfo) => {
+  const origin = new URL(baseURL!).origin;
   const external: string[] = [];
   page.on("request", (request) => {
-    if (/^https?:/.test(request.url()) && !request.url().startsWith("http://127.0.0.1:17420")) external.push(request.url());
+    if (/^https?:/.test(request.url()) && new URL(request.url()).origin !== origin) external.push(request.url());
   });
   await page.setViewportSize({ width: 1040, height: 1150 });
   await page.goto("/#/settings?onboarding=never");

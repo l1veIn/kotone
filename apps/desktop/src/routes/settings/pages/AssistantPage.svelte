@@ -3,7 +3,7 @@
   // 顶栏参照 DeepSeek Harness 的会话头：页名 / 当前对话标题，右侧是进行中概况与分页切换。
   import { companionName } from "$lib/stores/companion";
   import { onMount, untrack } from "svelte";
-  import { listConnections, type ConnectionInfo } from "../../../lib/ipc";
+  import { companionBindings, listConnections, type ConnectionInfo } from "../../../lib/ipc";
   import { useAgentChat } from "../../../lib/agentChat/context";
   import { errText, settingsStore } from "../../../lib/stores/ui";
   import AssistantChat from "./assistant/AssistantChat.svelte";
@@ -34,7 +34,7 @@
   let section = $state<Section>(untrack(() => open?.section ?? "chat"));
   let connections = $state<ConnectionInfo[]>([]);
   let connectionError = $state("");
-  const ready = $derived(!!connections.find((item) => item.id === $settingsStore?.assistant.connectionId)?.hasApiKey);
+  const ready = $derived(!!connections.find((item) => item.id === companionBindings($settingsStore?.assistant)?.connectionId)?.hasApiKey);
   // ADR 023：聊天 · 角色（原“她是谁”）· 记忆 · 技能 · 设置
   const tabs = [
     { id: "chat", label: "聊天" }, { id: "identity", label: "角色" }, { id: "memory", label: "记忆" },

@@ -46,16 +46,26 @@ pub enum AssistantRoute {
     Agent,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssistantVoiceSession {
+    pub session_id: String,
+    pub interaction_mode: AssistantInteractionMode,
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AssistantConfig {
-    /// 呼叫琴音的热键（按一次就听，相当于按键版的语音唤醒）。默认 ` / ~ 键；空 = 不用热键。
+    /// 首次安装为呼叫键。旧用户保留原提醒设置，启用琴音后单独绑定呼叫键。
     pub hotkey: String,
-    /// 已经给老配置补过默认的呼叫键（只补一次；之后清空 = 玩家不要热键）。
+    /// 旧试用版用过的呼叫键迁移标记，读取时用于识别已有 0.2 配置。
     pub call_hotkey_defaulted: bool,
-    /// 旧的“陪玩热键”交互方式。呼叫琴音固定为“说完自动提交”，这一项只保留给旧配置。
+    /// 旧版提醒助手热键的交互方式。启用琴音后，呼叫热键固定为“说完自动提交”。
     pub interaction_mode: AssistantInteractionMode,
     pub connection_id: String,
+    /// 仅旧版升级后使用，保留 0.1.x 可直接读取的提醒热键和连接。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub companion_bindings: Option<CompanionBindings>,
     pub default_delivery: Vec<DeliveryKind>,
     pub voice_id: String,
     pub speech_volume: u16,
@@ -82,6 +92,13 @@ pub struct AssistantConfig {
     pub wake: WakeConfig,
     /// 琴音的对话气泡（屏幕角落）。新字段，缺省 = 开启、右下角。
     pub bubble: BubbleConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CompanionBindings {
+    pub hotkey: String,
+    pub connection_id: String,
 }
 
 /// 对话气泡放在屏幕哪个角。不认识的值按右下角处理。
@@ -327,6 +344,7 @@ impl Default for AssistantConfig {
             call_hotkey_defaulted: true,
             interaction_mode: AssistantInteractionMode::PushToTalk,
             connection_id: String::new(),
+            companion_bindings: None,
             default_delivery: vec![DeliveryKind::Voice, DeliveryKind::Danmaku],
             voice_id: String::new(),
             speech_volume: 80,
@@ -355,10 +373,14 @@ impl AssistantConfig {
             OPENAI_TTS_MODEL_ID => TtsEngine::Openai,
             VOLCANO_TTS_MODEL_ID => TtsEngine::Volcano,
             DEEPSEEK_TTS_MODEL_ID => TtsEngine::Deepseek,
-            _ => match self.speech_engine {
-                SpeechEngine::System => TtsEngine::System,
-                SpeechEngine::Kokoro => TtsEngine::Kokoro,
-            },
+            _ => self.legacy_tts_engine(),
+        }
+    }
+
+    pub fn legacy_tts_engine(&self) -> TtsEngine {
+        match self.speech_engine {
+            SpeechEngine::System => TtsEngine::System,
+            SpeechEngine::Kokoro => TtsEngine::Kokoro,
         }
     }
 
@@ -389,6 +411,12 @@ impl AssistantConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.companion_bindings.as_ref().is_some_and(|bindings| {
+            !bindings.hotkey.trim().is_empty()
+                && crate::hotkey::parse_hotkey(&bindings.hotkey).is_none()
+        }) {
+            return Err("呼叫琴音的热键无法识别".into());
+        }
         if self.default_delivery.is_empty() || self.default_delivery.len() > 2 {
             return Err("助手默认提醒方式需选择语音、弹幕或两者".into());
         }
@@ -458,6 +486,12 @@ pub struct AssistantRequest {
     pub text: String,
     /// 识别完成时刻，提醒相对时间以此计算，不叠加 AI 请求耗时。
     pub received_at_ms: u64,
+}
+
+pub const LEGACY_REMINDER_SESSION_PREFIX: &str = "legacy-reminder-";
+
+pub fn is_legacy_reminder_session(id: &str) -> bool {
+    id.starts_with(LEGACY_REMINDER_SESSION_PREFIX)
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]

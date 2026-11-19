@@ -37,7 +37,8 @@
   import CallKotoneButton from "../../../lib/components/CallKotoneButton.svelte";
   import heroGeneral from "../../../assets/brand/hero-general.webp";
 
-  let { onOpenAdvanced, onOpenCompanion, onOpenTalk }: {
+  let { legacyVoiceOnly = false, onOpenAdvanced, onOpenCompanion, onOpenTalk }: {
+    legacyVoiceOnly?: boolean;
     onOpenAdvanced: () => void;
     /** 「试试游戏陪玩」：打开琴音的聊天。 */
     onOpenCompanion: () => void;
@@ -281,6 +282,9 @@
   </section>
 
   <!-- 游戏陪玩入口（ADR 023）：语音输入仍是首页，这里引导用户用琴音；启动后直接给“呼叫琴音”的快速入口 -->
+  {#if legacyVoiceOnly}
+    <Button size="sm" variant="ghost" onclick={onOpenCompanion}>认识琴音</Button>
+  {:else}
   <section class="rounded-2xl border border-primary/35 bg-primary/8 px-5 py-4" data-testid="companion-cta">
     <div class="flex flex-wrap items-center gap-4">
       <div class="min-w-0 flex-1">
@@ -298,6 +302,7 @@
       <div class="mt-4 border-t border-primary/20 pt-4"><CallKotoneButton size="lg" testid="home-call" /></div>
     {/if}
   </section>
+  {/if}
 
   {#if $settingsStore}
     {#if needsElevation}

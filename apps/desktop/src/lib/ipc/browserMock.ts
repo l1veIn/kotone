@@ -40,7 +40,7 @@ import type {
   OverlayHealth,
   OverlayStateSnapshot,
 } from "./contracts";
-import { defaultPostProcessing, modelsDirPathError } from "./contracts";
+import { companionBindings, defaultPostProcessing, hasLegacyReminders, modelsDirPathError, usesLegacyVoiceInput } from "./contracts";
 
 // ================================================================
 // 浏览器 mock：内存态，模拟后端行为（仅 dev:web 使用）
@@ -397,6 +397,23 @@ export async function getStartupOptions(): Promise<StartupOptions> {
 }
 
 export async function getSettings(): Promise<Settings> {
+  if (mockQuery("mockLegacyUpgrade") === "pending" && mock.settings.ui.legacyUpgrade === undefined) {
+    mock.settings.ui.legacyUpgrade = "pending";
+    mock.settings.assistant.hotkey = "";
+    if (mockQuery("mockLegacyReminder") === "configured") {
+      mock.settings.assistant.hotkey = "Alt+F9";
+      mock.settings.assistant.connectionId = "original-reminder";
+      mock.settings.connections.push({
+        id: "original-reminder",
+        displayName: "原来的提醒连接",
+        kind: "remote",
+        provider: "custom",
+        baseUrl: "https://example.invalid/v1",
+        model: "original-model",
+      });
+      mockConnectionSecrets.set("original-reminder", "test-legacy-key");
+    }
+  }
   return clone(mock.settings);
 }
 
@@ -791,7 +808,10 @@ export async function getHotkeyStatus(): Promise<HotkeyStatus> {
       error: null,
       backend: "llhook",
       named: [
-        { id: "assistant", key: mock.settings.assistant.hotkey || null, error: null },
+        { id: "assistant", key: usesLegacyVoiceInput(mock.settings.ui) ? null : companionBindings(mock.settings.assistant)?.hotkey || null, error: null },
+        ...(hasLegacyReminders(mock.settings.ui)
+          ? [{ id: "legacy-reminder", key: mock.settings.assistant.hotkey || null, error: null }]
+          : []),
         { id: "channel-cycle", key: mock.settings.channelCycleHotkey, error: null },
         { id: "resend-last", key: mock.settings.resendLastHotkey || null, error: null },
         {
@@ -1202,9 +1222,9 @@ export async function openCatalogModelDir(category: ModelCategory, id: string): 
 // ---------- Kotone 陪玩 ----------
 
 export async function companionSelfCheck(): Promise<CompanionCheck> {
-  const assistant = mock.settings.assistant;
-  if (!assistant.connectionId) throw new Error("还没有选 AI 连接：请在「设置 → API 连接」里设一条");
-  return connectionSelfCheck(assistant.connectionId);
+  const id = companionBindings(mock.settings.assistant)?.connectionId;
+  if (!id) throw new Error("还没有选 AI 连接：请在「设置 → API 连接」里设一条");
+  return connectionSelfCheck(id);
 }
 
 export async function installedGames(query?: string): Promise<import("../ipc").InstalledGame[]> {
@@ -1234,15 +1254,16 @@ export async function connectionSelfCheck(id: string): Promise<CompanionCheck> {
     checkedAtMs: Date.now(),
     message: mockQuery("mockCompanionCheck") === "fail" ? `连得上，但服务商的模型列表里没有“${connection.model}”，请换一个模型` : "连接正常",
   };
-  if (assistant.connectionId === id) assistant.companion.check = check;
+  if (!usesLegacyVoiceInput(mock.settings.ui) && companionBindings(assistant)?.connectionId === id) assistant.companion.check = check;
   return clone(check);
 }
 
 export async function companionStatus(): Promise<CompanionStatus> {
   const assistant = mock.settings.assistant;
   const check = assistant.companion.check ?? null;
+  const connectionId = companionBindings(assistant)?.connectionId ?? "";
   const ocr = mock.settings.ocr.activeModelId || null;
-  const reason = !assistant.connectionId
+  const reason = !connectionId
     ? "还没有选 AI 连接：请在「设置 → API 连接」里添加一条，并设为在用的连接"
     : !ocr
           ? "看游戏聊天需要文字识别模型：请在「高级 → 模型 → 文字识别」下载并选择一个"
@@ -1250,7 +1271,7 @@ export async function companionStatus(): Promise<CompanionStatus> {
   return {
     ready: reason === null,
     reason,
-    connectionId: assistant.connectionId,
+    connectionId,
     check,
     ocr: { modelId: ocr, state: { ready: !!ocr, dataEgress: ocr === "deepseek-ocr" ? "selected-image" : "none" } },
     autoSend: assistant.companion.autoSend,

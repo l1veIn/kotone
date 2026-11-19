@@ -5,7 +5,7 @@
   import { Mic } from "@lucide/svelte";
   import { callKotone } from "../assistant";
   import { hotkeyLabel } from "../hotkeyCombo";
-  import { isTauri } from "../ipc";
+  import { companionBindings, isTauri } from "../ipc";
   import { appState } from "../stores/state";
   import { runtimeStore } from "../stores/runtime";
   import { errText, settingsStore, toast } from "../stores/ui";
@@ -19,8 +19,8 @@
   } = $props();
 
   const name = $derived($companionName);
-  const hotkey = $derived($settingsStore?.assistant.hotkey.trim() ?? "");
-  const listening = $derived($appState.purpose === "assistant" && $appState.state === "listening");
+  const hotkey = $derived(companionBindings($settingsStore?.assistant)?.hotkey.trim() ?? "");
+  const listening = $derived($appState.purpose === "assistant" && !$appState.legacyReminder && $appState.state === "listening");
   const blocked = $derived(!isTauri ? "仅限桌面版"
     : $runtimeStore?.phase !== "running" ? "先点右上角「启动」"
     : !ready ? "先选好 AI 连接" : "");

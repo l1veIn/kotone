@@ -1,7 +1,7 @@
 <script lang="ts" module>
   export type PageId =
     | "general" | "processing" | "assistant" | "automation" | "game"
-    | "history" | "advanced" | "about" | "character";
+    | "history" | "advanced" | "about" | "character" | "legacy-reminders";
 </script>
 
 <script lang="ts">
@@ -12,16 +12,18 @@
    */
   import { companionName } from "$lib/stores/companion";
   import {
-    Bot, Gamepad2, History, Info, MessageSquarePlus, Mic, Settings2, Sparkles, Zap,
+    Bell, Bot, Gamepad2, History, Info, MessageSquarePlus, Mic, Settings2, Sparkles, Zap,
   } from "@lucide/svelte";
   import type { Component } from "svelte";
   import ConversationList from "../../lib/agentChat/ConversationList.svelte";
   import { useAgentChat } from "../../lib/agentChat/context";
   import { toast, errText, settingsStore } from "../../lib/stores/ui";
+  import { hasLegacyReminders } from "../../lib/ipc";
   import iconSrc from "../../assets/brand/icon-src.webp";
 
-  let { page, rail = false, onNavigate, onOpenChat }: {
+  let { page, rail = false, legacyVoiceOnly = false, onNavigate, onOpenChat }: {
     page: PageId;
+    legacyVoiceOnly?: boolean;
     /** 收成图标栏。 */
     rail?: boolean;
     onNavigate: (id: PageId) => void;
@@ -39,16 +41,18 @@
         { id: "general", label: "语音输入", icon: Mic },
         { id: "processing", label: "文字处理", icon: Sparkles },
         { id: "history", label: "历史记录", icon: History },
+        ...(legacyVoiceOnly ? [{ id: "game" as const, label: "游戏适配", icon: Gamepad2 }] : []),
+        ...(hasLegacyReminders($settingsStore?.ui) ? [{ id: "legacy-reminders" as const, label: "提醒助手", icon: Bell }] : []),
       ],
     },
-    {
+    ...(!legacyVoiceOnly ? [{
       label: "游戏陪玩",
       items: [
-        { id: "assistant", label: $companionName, icon: Bot },
-        { id: "game", label: "游戏列表", icon: Gamepad2 },
-        { id: "automation", label: "自动化", icon: Zap },
+        { id: "assistant" as const, label: $companionName, icon: Bot },
+        { id: "game" as const, label: "游戏列表", icon: Gamepad2 },
+        { id: "automation" as const, label: "自动化", icon: Zap },
       ],
-    },
+    }] : []),
   ]);
   const footItems: { id: PageId; label: string; icon: Component }[] = [
     { id: "advanced", label: "设置", icon: Settings2 },
@@ -89,6 +93,7 @@
   class="flex h-full shrink-0 flex-col bg-sidebar pt-1 pb-2 text-sidebar-foreground {rail ? 'w-14 px-2' : 'w-59 px-2'}"
   data-testid="app-sidebar" data-rail={rail}
 >
+  {#if !legacyVoiceOnly}
   <button type="button" data-testid="sidebar-new-chat" onclick={newChat}
     aria-label={rail ? "新对话" : undefined} title={rail ? "新对话" : undefined}
     class="flex h-9 w-full shrink-0 items-center gap-2.5 rounded-lg border border-hairline text-[13px] text-foreground transition-colors hover:border-primary/40 hover:bg-sidebar-accent/60
@@ -97,6 +102,7 @@
     {#if !rail}<span>新对话</span><span class="ml-auto text-[11px] text-sidebar-foreground/50">{$companionName}</span>{/if}
   </button>
 
+  {/if}
   <nav class="mt-3 flex shrink-0 flex-col gap-px" aria-label="设置分类">
     {#each groups as group, index (group.label)}
       {#if rail}
@@ -108,7 +114,7 @@
     {/each}
   </nav>
 
-  {#if !rail}
+  {#if !rail && !legacyVoiceOnly}
     <div class="mt-4 flex min-h-0 flex-1 flex-col">
       <ConversationList
         conversations={chat.state?.conversations ?? []}

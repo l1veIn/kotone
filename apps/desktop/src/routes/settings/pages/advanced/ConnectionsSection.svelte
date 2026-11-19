@@ -15,6 +15,8 @@
   import { Input } from "$lib/components/ui/input";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import {
+    companionBindingPatch,
+    companionBindings,
     connectionSelfCheck,
     deleteConnection,
     listConnectionPresets,
@@ -22,6 +24,7 @@
     openExternal,
     updateSettings,
     upsertConnection,
+    usesLegacyVoiceInput,
     type CompanionCheck,
     type Connection,
     type ConnectionInfo,
@@ -50,7 +53,8 @@
   let checking = $state(false);
   let confirmDelete = $state<ConnectionInfo | null>(null);
 
-  const agentConnectionId = $derived($settingsStore?.assistant.connectionId ?? "");
+  const companionEnabled = $derived(!usesLegacyVoiceInput($settingsStore?.ui));
+  const agentConnectionId = $derived(companionEnabled ? companionBindings($settingsStore?.assistant)?.connectionId ?? "" : "");
   const check = $derived<CompanionCheck | null>($settingsStore?.assistant.companion.check ?? null);
   const presetOf = (id: string) => presets.find((preset) => preset.id === id);
   const editingPreset = $derived(editing ? presetOf(editing.provider) : undefined);
@@ -136,8 +140,9 @@
 
   /** 设为琴音用的连接（不需要先测试：选好、有密钥就能用）。 */
   async function useForAgent(id: string) {
+    if (!companionEnabled) return;
     try {
-      settingsStore.set(await updateSettings({ assistant: { connectionId: id } }));
+      settingsStore.set(await updateSettings({ assistant: companionBindingPatch($settingsStore?.assistant, { connectionId: id }) }));
       toast(true, `已设为${$companionName}的连接`);
     } catch (error) {
       toast(false, `没能设为${$companionName}的连接：${errText(error)}`);
@@ -154,7 +159,7 @@
     checkingId = id;
     try {
       const result = await connectionSelfCheck(id);
-      if (result.connectionId === $settingsStore?.assistant.connectionId) {
+      if (result.connectionId === agentConnectionId) {
         settingsStore.update((s) => s && { ...s, assistant: { ...s.assistant, companion: { ...s.assistant.companion, check: result } } });
       } else {
         otherChecks = { ...otherChecks, [id]: result };
@@ -229,7 +234,7 @@
               </p>
             </div>
             <div class="flex shrink-0 items-center gap-1">
-              {#if !forAgent}
+              {#if companionEnabled && !forAgent}
                 <Button size="sm" variant="outline" data-testid="connection-use" disabled={checking} onclick={() => void useForAgent(connection.id)}>设为{$companionName}的连接</Button>
               {/if}
               <Button size="sm" variant={forAgent ? "outline" : "ghost"} data-testid="connection-self-check" disabled={checking || !connection.hasApiKey} onclick={() => void runCheck(connection.id)}>
@@ -347,7 +352,7 @@
             placeholder={editingSaved?.hasApiKey ? "已保存，留空则不修改" : "不会写入配置文件"} />
           <p class="m-0 text-[11px] text-muted-foreground">只写：保存后存进系统凭据库，界面不会再显示。</p>
         </div>
-        {#if editing.id !== agentConnectionId}
+        {#if companionEnabled && editing.id !== agentConnectionId}
           <label class="flex items-start gap-2 rounded-xl bg-muted/50 px-3 py-2.5 text-xs">
             <input type="checkbox" class="mt-0.5 accent-[var(--color-primary)]" bind:checked={useAfterSave} data-testid="connection-use-after-save" />
             <span><span class="font-medium text-foreground">保存后设为{$companionName}的连接</span></span>

@@ -17,6 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::assistant::LEGACY_REMINDER_SESSION_PREFIX;
 use crate::cancel::CancellationToken;
 use crate::reminders::{
     validate_content, DeliveryKind, LegacyReminderStore, Reminder, ReminderDelivery,
@@ -235,7 +236,7 @@ pub trait ProgramLauncher: Send + Sync {
 struct StoredRuns {
     version: u32,
     next_id: u64,
-    /// `reminders.json` 里未到期的提醒是否已导入（只导入一次，旧文件不改）。
+    /// 旧 `reminders.json` 是否已导入（只导入一次，旧文件不改）。
     #[serde(default)]
     imported_reminders: bool,
     runs: Vec<Run>,
@@ -378,8 +379,8 @@ impl AutomationScheduler {
         Ok(scheduler)
     }
 
-    /// 第一次启动时把旧 `reminders.json` 里尚未到期的提醒导入为播报执行；旧文件不改不删。
-    /// 返回导入条数。
+    /// 第一次启动时导入旧 `reminders.json` 的提醒与历史；旧文件不改不删。
+    /// 已结束或超过原有宽限的提醒只作为历史显示。返回导入条数。
     pub fn import_legacy_reminders(&self, legacy: &Path) -> Result<usize, String> {
         if self.state.lock().unwrap().stored.imported_reminders {
             return Ok(0);
@@ -401,28 +402,50 @@ impl AutomationScheduler {
         };
         let now = now_ms();
         let mut state = self.state.lock().unwrap();
+        if state.stored.imported_reminders {
+            return Ok(0);
+        }
         let mut next = state.stored.clone();
         let mut imported = 0;
         for reminder in legacy_runs {
-            if reminder.status != ReminderStatus::Pending
-                || now.saturating_sub(reminder.due_at_ms) > MISSED_GRACE_MS
-                || validate_content(&reminder.text, &reminder.delivery).is_err()
+            if validate_content(&reminder.text, &reminder.delivery).is_err()
                 || next.runs.iter().any(|r| r.id == reminder.id)
-                || next.open_count() >= MAX_PENDING
             {
                 continue;
             }
+            let (status, message) = match reminder.status {
+                ReminderStatus::Pending
+                    if now.saturating_sub(reminder.due_at_ms) > MISSED_GRACE_MS =>
+                {
+                    (
+                        RunStatus::Missed,
+                        Some("应用关闭或休眠期间已错过提醒，未补播".into()),
+                    )
+                }
+                ReminderStatus::Pending => (RunStatus::Pending, reminder.error),
+                ReminderStatus::Delivering => (
+                    RunStatus::Failed,
+                    Some("上次投递中应用退出，完成情况未知，未自动重播".into()),
+                ),
+                ReminderStatus::Delivered => (RunStatus::Finished, reminder.error),
+                ReminderStatus::Failed => (RunStatus::Failed, reminder.error),
+                ReminderStatus::Cancelled => (RunStatus::Cancelled, reminder.error),
+                ReminderStatus::Missed => (RunStatus::Missed, reminder.error),
+            };
+            if status == RunStatus::Pending && next.open_count() >= MAX_PENDING {
+                return Err("待执行提醒总数已满，未导入旧提醒。请先取消部分提醒再重启".into());
+            }
             next.runs.push(Run {
                 id: reminder.id,
-                session_id: reminder.session_id,
+                session_id: format!("{LEGACY_REMINDER_SESSION_PREFIX}{}", reminder.session_id),
                 action: RunAction::Speak(SpeakAction {
                     text: reminder.text,
                     delivery: reminder.delivery,
                 }),
                 created_at_ms: reminder.created_at_ms,
                 due_at_ms: reminder.due_at_ms,
-                status: RunStatus::Pending,
-                message: None,
+                status,
+                message,
                 started_at_ms: None,
                 finished_at_ms: None,
                 report: None,

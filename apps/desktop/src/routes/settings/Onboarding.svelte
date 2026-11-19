@@ -1,6 +1,6 @@
 <script lang="ts">
   import { companionName } from "$lib/stores/companion";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import {
     checkInputEnvironment,
@@ -21,7 +21,9 @@
     getModelInstallGuide,
     getSettings,
     upsertConnection,
+    deleteConnection,
     connectionSelfCheck,
+    companionBindings,
     setActiveModel,
     activateCatalogModel,
     startRuntime,
@@ -56,15 +58,20 @@
   import SelectField from "$lib/components/settings/SelectField.svelte";
 
   /** next = "assistant"：结束后进「琴音」的聊天；prompt：顺便替玩家发这句话。 */
-  let { onDone }: { onDone: (next?: "assistant", prompt?: string) => void } = $props();
+  let { onDone, legacyUpgrade = false, onCancel }: {
+    onDone: (next?: "assistant", prompt?: string) => void;
+    legacyUpgrade?: boolean;
+    onCancel?: () => void;
+  } = $props();
 
   // 两条路（只告诉玩家怎么开始，带他完成第一次）：
   // - 和琴音开始：填一个 DeepSeek Key → 第一次“嗨琴音，你能干什么？”
   // - 只用语音输入法：选游戏 → 识别模型 → 热键 → 第一次说话上屏
-  type Step = "welcome" | "key" | "hello" | "profile" | "model" | "hotkey" | "try";
-  let step = $state<Step>("welcome");
+  type Step = "welcome" | "key" | "call-key" | "hello" | "profile" | "model" | "hotkey" | "try";
+  let step = $state<Step>(untrack(() => legacyUpgrade ? "key" : "welcome"));
   let path = $state<"ai" | "voice">("ai");
-  const dots = $derived<Step[]>(path === "ai" ? ["welcome", "key", "hello"] : ["welcome", "profile", "model", "hotkey", "try"]);
+  const dots = $derived<Step[]>(legacyUpgrade ? ["key", "call-key", "hello"]
+    : path === "ai" ? ["welcome", "key", "hello"] : ["welcome", "profile", "model", "hotkey", "try"]);
   let loadingResources = $state(true);
   let resourceError = $state("");
   let models = $state<ModelInfo[]>([]);
@@ -450,23 +457,119 @@
   // ---------- 和琴音开始：一个 DeepSeek Key ----------
   const DEEPSEEK_KEY_PAGE = "https://platform.deepseek.com/api_keys";
   const hello = $derived(`嗨${$companionName}，你能干什么？`);
-  const callKey = $derived($settingsStore?.assistant?.hotkey ? formatHotkey($settingsStore.assistant.hotkey) : "~");
+  const configuredCallKey = $derived(companionBindings($settingsStore?.assistant)?.hotkey);
+  const callKey = $derived(configuredCallKey ? formatHotkey(configuredCallKey) : "~");
   let apiKey = $state("");
   let keyBusy = $state(false);
   let keyError = $state("");
   let keyConnectionId = "";
+  let callKeyDraft = $state("");
+  let callKeyError = $state("");
+  let activatingLegacy = $state(false);
+  let tentativeConnectionId = "";
+
+  async function removeTentativeConnection() {
+    if (!tentativeConnectionId) return;
+    settingsStore.set(await deleteConnection(tentativeConnectionId));
+    tentativeConnectionId = "";
+  }
+
+  async function cancelLegacy() {
+    if (activatingLegacy) return;
+    activatingLegacy = true;
+    try {
+      await removeTentativeConnection();
+      apiKey = "";
+      onCancel?.();
+    } catch (error) {
+      if (step === "key") keyError = errText(error);
+      else callKeyError = errText(error);
+    } finally {
+      activatingLegacy = false;
+    }
+  }
+
+  async function recordCallKey() {
+    if (capturing) return;
+    capturing = true;
+    captureCleanup = await captureHotkey((result) => {
+      capturing = false;
+      captureCleanup = null;
+      if (result.kind === "combo") {
+        callKeyDraft = result.combo;
+        callKeyError = "";
+      } else if (result.kind === "error") {
+        callKeyError = result.message;
+      }
+    });
+  }
+
+  async function activateLegacyAssistant() {
+    const hotkey = callKeyDraft.trim();
+    if (!hotkey || activatingLegacy) return;
+    const conflict = findHotkeyConflict($settingsStore, "assistant", hotkey);
+    if (conflict) {
+      callKeyError = `这个键已经用于${conflict}，请换一个`;
+      return;
+    }
+    activatingLegacy = true;
+    callKeyError = "";
+    let checkingKey = true;
+    try {
+      await removeTentativeConnection();
+      const connectionId = `deepseek-${crypto.randomUUID()}`;
+      await saveDeepSeekConnection(connectionId, apiKey.trim());
+      tentativeConnectionId = connectionId;
+      const check = await connectionSelfCheck(connectionId);
+      if (!check.passed) throw new Error(check.message || "这个 Key 用不了，检查一下有没有复制完整");
+      checkingKey = false;
+      const next = await updateSettings({
+        assistant: { companionBindings: { connectionId, hotkey } },
+        ui: { legacyUpgrade: "optedIn", firstRunCompleted: true },
+      });
+      tentativeConnectionId = "";
+      apiKey = "";
+      settingsStore.set(next);
+      void startRuntime().catch(() => {});
+      step = "hello";
+      void watchHello();
+    } catch (error) {
+      let message = errText(error);
+      try {
+        await removeTentativeConnection();
+      } catch (cleanupError) {
+        message += `。移除本次新建的连接失败：${errText(cleanupError)}`;
+      }
+      if (checkingKey) {
+        keyError = message;
+        step = "key";
+      } else {
+        callKeyError = message;
+      }
+    } finally {
+      activatingLegacy = false;
+    }
+  }
+
+  async function saveDeepSeekConnection(id: string, key: string) {
+    await upsertConnection(
+      { id, displayName: "DeepSeek", kind: "remote", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-flash" },
+      key,
+    );
+  }
 
   async function startWithKey() {
     const key = apiKey.trim();
-    if (!key || keyBusy) return;
+    if (!key || keyBusy || activatingLegacy) return;
+    if (legacyUpgrade) {
+      step = "call-key";
+      return;
+    }
     keyBusy = true;
     keyError = "";
     try {
       keyConnectionId ||= `deepseek-${Date.now().toString(36)}`;
-      await upsertConnection(
-        { id: keyConnectionId, displayName: "DeepSeek", kind: "remote", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-flash" },
-        key,
-      );
+      await saveDeepSeekConnection(keyConnectionId, key);
       // 读一次模型列表确认 Key 能用（不花钱）。
       const check = await connectionSelfCheck(keyConnectionId);
       if (!check.passed) {
@@ -606,7 +709,9 @@
           <img src={stickerHello} alt="" class="h-11 w-11 shrink-0" />
           <div>
             <h2 class="mt-0.5 text-lg font-bold">填一个 DeepSeek Key</h2>
-            <p class="mt-1 text-xs leading-relaxed text-muted-foreground">有这一个 Key，{$companionName}的全部功能就能用。</p>
+            <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
+              {legacyUpgrade ? "这个 Key 用于和琴音对话。你原来的语音识别和游戏配置会保留。" : "有这一个 Key，" + $companionName + "的全部功能就能用。"}
+            </p>
           </div>
         </div>
         <form class="mt-5" onsubmit={(e) => { e.preventDefault(); void startWithKey(); }}>
@@ -625,15 +730,40 @@
             还没有 Key？去 DeepSeek 开放平台创建 →
           </button>
           <div class="mt-6 flex items-center justify-between">
-            <button type="button" class="text-xs text-muted-foreground hover:text-foreground/90" onclick={() => (step = "welcome")}>返回</button>
+            <button type="button" class="text-xs text-muted-foreground hover:text-foreground/90" disabled={keyBusy || activatingLegacy}
+              onclick={() => { if (legacyUpgrade) void cancelLegacy(); else step = "welcome"; }}>返回</button>
             <button
               type="submit"
               class="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
               data-testid="onboarding-key-start"
-              disabled={!apiKey.trim() || keyBusy}
+              disabled={!apiKey.trim() || keyBusy || activatingLegacy}
             >
-              {keyBusy ? "连接中…" : "开始"}
+              {keyBusy ? "连接中…" : legacyUpgrade ? "下一步" : "开始"}
             </button>
+          </div>
+        </form>
+      </div>
+    {:else if step === "call-key"}
+      <div class="relative p-7" data-testid="onboarding-call-key">
+        <h2 class="mt-0.5 text-lg font-bold">设置呼叫琴音的按键</h2>
+        <p class="mt-1 text-xs leading-relaxed text-muted-foreground">请选一个游戏里用不到的键。有些游戏用 ~ 打开控制台，绑定相同按键会冲突。</p>
+        <form class="mt-5" onsubmit={(event) => { event.preventDefault(); void activateLegacyAssistant(); }}>
+          <div class="flex flex-wrap items-center gap-2">
+            <input aria-label="呼叫热键" data-testid="onboarding-call-key-input" bind:value={callKeyDraft}
+              placeholder="如 Ctrl+Alt+F10" spellcheck="false" disabled={capturing || activatingLegacy}
+              class="h-10 min-w-0 flex-1 rounded-lg border border-hairline bg-background px-3 font-mono text-sm outline-none focus:border-primary" />
+            <button type="button" class="rounded-lg border border-hairline px-3 py-2 text-xs"
+              disabled={capturing || activatingLegacy} onclick={() => void recordCallKey()}>
+              {capturing ? "请按键…" : "录入按键"}
+            </button>
+          </div>
+          {#if callKeyError}<p role="alert" class="mt-2 text-xs text-destructive">{callKeyError}</p>{/if}
+          <div class="mt-6 flex items-center justify-between">
+            <button type="button" class="text-xs text-muted-foreground hover:text-foreground/90" disabled={activatingLegacy}
+              onclick={() => void cancelLegacy()}>先不启用</button>
+            <button type="submit" data-testid="onboarding-call-key-enable"
+              class="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+              disabled={!callKeyDraft.trim() || capturing || activatingLegacy}>{activatingLegacy ? "正在开启…" : "开启琴音"}</button>
           </div>
         </form>
       </div>

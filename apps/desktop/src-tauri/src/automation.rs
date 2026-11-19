@@ -57,13 +57,8 @@ impl AutomationManager {
         let library =
             AutomationLibrary::open(kotone_core::settings::kotone_dir().join("automations.json"))
                 .map(Arc::new);
-        match &library {
-            Err(e) => kotone_core::log::log(&format!("automation library unavailable: {e}")),
-            Ok(library) => {
-                if let Err(e) = library.ensure_builtin() {
-                    kotone_core::log::log(&format!("automation: builtin not installed: {e}"));
-                }
-            }
+        if let Err(e) = &library {
+            kotone_core::log::log(&format!("automation library unavailable: {e}"));
         }
         Self {
             live: Mutex::new(HashMap::new()),
@@ -74,6 +69,13 @@ impl AutomationManager {
 
 fn library(app: &AppHandle) -> Result<Arc<AutomationLibrary>, String> {
     app.state::<AutomationManager>().library.clone()
+}
+
+/// 旧用户只有在启用琴音后才安装内置程序；既有删除记录继续有效。
+pub fn ensure_builtin(app: &AppHandle) {
+    if let Err(e) = library(app).and_then(|library| library.ensure_builtin()) {
+        kotone_core::log::log(&format!("automation: builtin not installed: {e}"));
+    }
 }
 
 /// 调度器的程序执行端口。
@@ -609,6 +611,18 @@ pub fn start_schedules(app: &AppHandle) {
             loop {
                 std::thread::sleep(Duration::from_secs(20));
                 let now = kotone_core::automation::now_ms();
+                if app
+                    .state::<crate::SharedState>()
+                    .settings
+                    .read()
+                    .unwrap()
+                    .ui
+                    .legacy_upgrade
+                    .uses_legacy_assistant()
+                {
+                    last = now;
+                    continue;
+                }
                 for automation in saved_list(&app) {
                     let Some(schedule) = automation.schedule.as_ref().filter(|s| s.enabled) else {
                         continue;

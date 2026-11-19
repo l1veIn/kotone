@@ -50,6 +50,8 @@
     { value: "deny", label: "不允许", description: "不在这个游戏里动鼠标键盘" },
   ];
 
+  let { legacyVoiceOnly = false }: { legacyVoiceOnly?: boolean } = $props();
+
   let profiles = $state<GameProfile[]>([]);
   /** 启动路径的“自动检测”结果（null = 还没检测）。 */
   let detected = $state<InstalledGame[] | null>(null);
@@ -121,9 +123,9 @@
     hotwordsText.split(/\r?\n/).filter((l) => l.trim() !== "").length,
   );
 
-  /** 内置 profile（删除语义 = 恢复出厂）；当前内置集为 lol / dota2 / generic */
+  /** LOL 和通用配置支持恢复出厂。Dota 2 删除后不随升级装回。 */
   function isBuiltin(p: GameProfile): boolean {
-    return p.id === "lol" || p.id === "dota2" || p.id === "generic";
+    return p.id === "lol" || p.id === "generic";
   }
 
   /** 加载 profile 图标字节 → data URL（按扩展名推断 mime；无图标/失败 → 占位）。
@@ -470,8 +472,10 @@
   {/if}
 {/snippet}
 
-<SettingsPage title="游戏列表" description="本机装了哪些游戏；每个游戏一套打法：聊天键、词表、节奏，以及能不能替你按键。">
+<SettingsPage title={legacyVoiceOnly ? "游戏适配" : "游戏列表"} description={legacyVoiceOnly ? "管理各个游戏的聊天键、热词和发送方式。" : "本机装了哪些游戏；每个游戏一套打法：聊天键、词表、节奏，以及能不能替你按键。"}>
+  {#if !legacyVoiceOnly}
   <InstalledGamesSection {profiles} onOpenProfile={(p) => { openEditor(p); requestAnimationFrame(() => document.querySelector(`[data-testid="game-profile-${p.id}"]`)?.scrollIntoView({ block: "start" })); }} />
+  {/if}
   {#snippet actions()}
     <Button variant="outline" size="sm" disabled={importingPackage} onclick={() => void onImportPackage()}>
       <Upload class="size-3.5" />{importingPackage ? "导入中…" : "导入配置包"}
@@ -601,6 +605,7 @@
                 testid="profile-allow-automation-input"
                 onchange={(v) => (draft!.allowAutomationInput = v)}
               />
+              {#if !legacyVoiceOnly}
               <div class="flex items-start justify-between gap-4">
                 <div class="min-w-0">
                   <span class="block text-xs font-medium text-foreground">让{$companionName}操作</span>
@@ -615,6 +620,7 @@
                   onchange={(v) => (draft!.computerUse = v as "ask" | "allow" | "deny")}
                 />
               </div>
+              {/if}
               <div>
                 <div class="flex items-center justify-between gap-2">
                   <label for="profile-launch-path" class="block text-xs font-medium text-foreground">启动路径</label>

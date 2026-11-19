@@ -17,10 +17,19 @@ export type AssistantInteractionMode = Exclude<InteractionMode, "solo">;
 export interface UiConfig {
   /** 首启向导已完成（或已跳过） */
   firstRunCompleted: boolean;
+  legacyUpgrade?: "notNeeded" | "pending" | "dismissed" | "optedIn";
   /** app 启动后自动进入 Running（warmup 引擎 + 注册热键 + 显示悬浮窗） */
   autoStart: boolean;
   /** 新版本弹窗里选了「不再提醒」：启动时不自动弹出（关于页仍可手动检查） */
   updatePromptDisabled?: boolean;
+}
+
+export function usesLegacyVoiceInput(ui: UiConfig | undefined): boolean {
+  return ui?.legacyUpgrade === "pending" || ui?.legacyUpgrade === "dismissed";
+}
+
+export function hasLegacyReminders(ui: UiConfig | undefined): boolean {
+  return usesLegacyVoiceInput(ui) || ui?.legacyUpgrade === "optedIn";
 }
 
 /** 模型存储配置（core settings `models` 段） */
@@ -187,14 +196,18 @@ export interface OcrConfig {
   activeModelId: string;
 }
 
-export interface AssistantConfig {
-  /** 呼叫琴音的热键（按一次就听）；默认 "Backquote"（~ 键）；空 = 不用热键。 */
+export interface AssistantBindings {
   hotkey: string;
+  connectionId: string;
+}
+
+export interface AssistantConfig extends AssistantBindings {
+  /** 老用户主动启用琴音时单独设置，保留原提醒助手热键和连接。 */
+  companionBindings?: AssistantBindings | null;
   /** 老配置补过默认呼叫键的标记（只补一次）。 */
   callHotkeyDefaulted?: boolean;
   /** 旧的陪玩热键方式；呼叫琴音固定为说完自动提交，只剩旧的窗口语音按钮在用。 */
   interactionMode: AssistantInteractionMode;
-  connectionId: string;
   defaultDelivery: ("voice" | "danmaku")[];
   voiceId: string;
   speechVolume: number;
@@ -447,6 +460,16 @@ export interface DeleteOutcome {
 type Patch<T> = T extends unknown[] ? T : T extends object ? { [K in keyof T]?: Patch<T[K]> } : T;
 
 export type SettingsPatch = Patch<Settings>;
+
+export function companionBindings(config: AssistantConfig | undefined): AssistantBindings | undefined {
+  return config?.companionBindings ?? config;
+}
+
+export function companionBindingPatch(
+  config: AssistantConfig | undefined, patch: Partial<AssistantBindings>,
+): SettingsPatch["assistant"] {
+  return config?.companionBindings ? { companionBindings: patch } : patch;
+}
 
 export interface AudioDevice {
   id: string;

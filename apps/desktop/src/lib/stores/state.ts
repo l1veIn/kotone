@@ -41,6 +41,8 @@ export interface ProcessingStepInfo {
 export interface AppState {
   state: KotoneState;
   purpose: "dictation" | "assistant";
+  inputSource: "button" | "hotkey";
+  legacyReminder: boolean;
   /** 流式引擎的 partial 文本（录音中实时上屏；非流式引擎为空） */
   partialText: string;
   /** 最终/预览文本（preview / sending / success 的 payload.text） */
@@ -68,6 +70,8 @@ export interface AppState {
 const initial: AppState = {
   state: "idle",
   purpose: "dictation",
+  inputSource: "hotkey",
+  legacyReminder: false,
   partialText: "",
   finalText: "",
   level: 0,
@@ -100,6 +104,8 @@ interface StateEventPayload {
     index?: number | null;
     total?: number | null;
     purpose?: "dictation" | "assistant";
+    inputSource?: "button" | "hotkey";
+    legacyReminder?: boolean;
   } | null;
 }
 
@@ -127,6 +133,10 @@ function applyStateEvent(ev: StateEventPayload): void {
     const next: AppState = { ...s, state: ev.state };
     if (ev.payload?.purpose) next.purpose = ev.payload.purpose;
     else if (ev.state === "idle" || ev.state === "listening") next.purpose = "dictation";
+    if (ev.payload?.inputSource) next.inputSource = ev.payload.inputSource;
+    else if (ev.state === "idle" || ev.state === "listening") next.inputSource = "hotkey";
+    if (ev.payload?.legacyReminder !== undefined) next.legacyReminder = ev.payload.legacyReminder;
+    else if (ev.state === "idle" || ev.state === "listening") next.legacyReminder = false;
     const text = ev.payload?.text ?? null;
     const message = ev.payload?.message ?? null;
     const warning = ev.payload?.warning ?? null;

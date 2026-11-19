@@ -436,8 +436,8 @@ fn programs_running_or_overdue_at_restart_are_never_rerun() {
     assert_eq!(queue.get(&overdue.id).unwrap().status, RunStatus::Missed);
 }
 
-#[test]
-fn pending_legacy_reminders_are_imported_once_and_the_old_file_is_untouched() {
+#[tokio::test]
+async fn legacy_reminders_keep_history_and_deliver_once_at_the_original_due_time() {
     let dir = tempfile::tempdir().unwrap();
     let legacy = dir.path().join("reminders.json");
     let now = now_ms();
@@ -448,28 +448,46 @@ fn pending_legacy_reminders_are_imported_once_and_the_old_file_is_untouched() {
             "status": status, "error": null,
         })
     };
+    let due = now + 300_000;
     let old = serde_json::json!({
-        "version": 1, "nextId": 4,
+        "version": 1, "nextId": 6,
         "reminders": [
-            reminder("reminder-1", now + 300_000, "pending"),
+            reminder("reminder-1", due, "pending"),
             reminder("reminder-2", now - MISSED_GRACE_MS - 1_000, "pending"),
             reminder("reminder-3", now - 1_000, "delivered"),
+            reminder("reminder-4", now + 60_000, "cancelled"),
+            reminder("reminder-5", now - 500, "delivering"),
         ],
     });
     let bytes = serde_json::to_vec(&old).unwrap();
     std::fs::write(&legacy, &bytes).unwrap();
     let path = dir.path().join("automation-runs.json");
-    let (queue, _, _) = open_with_launcher(path.clone());
-    assert_eq!(queue.import_legacy_reminders(&legacy).unwrap(), 1);
-    assert_eq!(queue.list().len(), 1);
-    assert_eq!(queue.list()[0].id, "reminder-1");
-    assert_eq!(queue.list()[0].text, "买装备");
-    // 再导入一次（含重启后）不会重复
+    let delivery = Arc::new(RecordingDelivery::default());
+    let queue = AutomationScheduler::open(path.clone(), delivery.clone()).unwrap();
+    assert_eq!(queue.import_legacy_reminders(&legacy).unwrap(), 5);
+    let pending = queue.get("reminder-1").unwrap().as_reminder().unwrap();
+    assert_eq!(pending.text, "买装备");
+    assert_eq!(pending.due_at_ms, due);
+    assert_eq!(pending.delivery, vec![DeliveryKind::Voice]);
+    assert_eq!(queue.get("reminder-2").unwrap().status, RunStatus::Missed);
+    assert_eq!(queue.get("reminder-3").unwrap().status, RunStatus::Finished);
+    assert_eq!(
+        queue.get("reminder-4").unwrap().status,
+        RunStatus::Cancelled
+    );
+    assert_eq!(queue.get("reminder-5").unwrap().status, RunStatus::Failed);
+
     assert_eq!(queue.import_legacy_reminders(&legacy).unwrap(), 0);
     drop(queue);
-    let (queue, _, _) = open_with_launcher(path);
+    let queue = AutomationScheduler::open(path, delivery.clone()).unwrap();
     assert_eq!(queue.import_legacy_reminders(&legacy).unwrap(), 0);
-    assert_eq!(queue.list().len(), 1);
+    assert_eq!(queue.list().len(), 5);
+    queue.run_due(due - 1).await.unwrap();
+    assert!(delivery.0.lock().unwrap().is_empty());
+    queue.run_due(due).await.unwrap();
+    queue.run_due(due + 1).await.unwrap();
+    assert_eq!(&*delivery.0.lock().unwrap(), &["reminder-1"]);
+    assert_eq!(queue.get("reminder-1").unwrap().status, RunStatus::Finished);
     assert_eq!(std::fs::read(&legacy).unwrap(), bytes);
     // 新编号与旧编号不冲突
     let added = queue.schedule_batch("s", now, &[intent(1)]).unwrap();

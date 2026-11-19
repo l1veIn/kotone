@@ -20,9 +20,11 @@
   import {
     confirmSend,
     cancelSession,
+    companionBindings,
     getSettings,
     isTauri,
     saveOverlayPosition,
+    hasLegacyReminders,
     type OverlayConfig,
     type AssistantInteractionMode,
   } from "../ipc";
@@ -49,12 +51,24 @@
   let sendPending = $state(false);
   /** preview 提示中的热键名（动态读配置，读取失败回退 CapsLock） */
   let hotkeyLabel = $state("CapsLock");
-  let assistantHotkeyLabel = $state("呼叫键");
-  // 呼叫琴音：说完自动交给她（相当于按键版的语音唤醒）；再按一次呼叫键立刻提交。
-  const assistantListeningHint = $derived(`在听 · 说完自动提交（再按 ${assistantHotkeyLabel} 立刻提交）`);
+  let callHotkeyLabel = $state("呼叫键");
+  let reminderHotkeyLabel = $state("提醒键");
+  let assistantMode = $state<AssistantInteractionMode>("push-to-talk");
+  const legacyAssistant = $derived($appState.purpose === "assistant" && $appState.legacyReminder);
+  const assistantHotkeyLabel = $derived(legacyAssistant ? reminderHotkeyLabel : callHotkeyLabel);
+  const buttonAssistant = $derived(legacyAssistant && $appState.inputSource === "button");
+  const assistantControl = $derived(buttonAssistant ? "按钮" : assistantHotkeyLabel);
+  const legacyListeningHint = $derived({
+    "push-to-talk": `提醒助手收音中 · 松开 ${assistantControl} 提交`,
+    dictation: `提醒助手收音中 · 再按 ${assistantControl} 结束并预览`,
+    "one-shot": "提醒助手收音中 · 停顿后提交",
+  }[assistantMode]);
+  const assistantListeningHint = $derived(
+    legacyAssistant ? legacyListeningHint : `在听 · 说完自动提交（再按 ${assistantHotkeyLabel} 立刻提交）`,
+  );
   const confirmLabel = $derived($appState.purpose === "assistant" ? "提交助手" : "发送");
   const confirmHotkey = $derived($appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel);
-  const previewHint = $derived(`${confirmHotkey} ${confirmLabel} · Esc 重说`);
+  const previewHint = $derived(buttonAssistant ? "请回到提醒助手确认 · Esc 取消" : `${confirmHotkey} ${confirmLabel} · Esc 重说`);
   /** overlay.style：true = 胶囊布局（窗口几何由后端 SetWindowPos 居中靠下重排） */
   let capsule = $state(false);
   let draggable = $state(true);
@@ -110,11 +124,13 @@
     let unlisten: (() => void) | undefined;
     void (async () => {
       if (isTauri) {
-        const cleanup = await listen<{hotkey: string; assistantHotkey: string; assistantMode: AssistantInteractionMode}>("kotone://input-config", ({payload}) => {
+        const cleanup = await listen<{hotkey: string; assistantHotkey: string; legacyReminderHotkey: string; assistantMode: AssistantInteractionMode}>("kotone://input-config", ({payload}) => {
           if (disposed) return;
           revision++;
           hotkeyLabel = payload.hotkey;
-          assistantHotkeyLabel = payload.assistantHotkey ? formatHotkey(payload.assistantHotkey) : "呼叫键";
+          assistantMode = payload.assistantMode;
+          callHotkeyLabel = payload.assistantHotkey ? formatHotkey(payload.assistantHotkey) : "呼叫键";
+          reminderHotkeyLabel = payload.legacyReminderHotkey ? formatHotkey(payload.legacyReminderHotkey) : "提醒键";
         });
         if (disposed) { cleanup(); return; }
         unlisten = cleanup;
@@ -124,7 +140,10 @@
       if (disposed) return;
       if (revision === snapshotRevision) {
         hotkeyLabel = s.hotkey.key;
-        assistantHotkeyLabel = s.assistant.hotkey ? formatHotkey(s.assistant.hotkey) : "呼叫键";
+        const callHotkey = companionBindings(s.assistant)?.hotkey;
+        assistantMode = s.assistant.interactionMode;
+        callHotkeyLabel = callHotkey ? formatHotkey(callHotkey) : "呼叫键";
+        reminderHotkeyLabel = hasLegacyReminders(s.ui) && s.assistant.hotkey ? formatHotkey(s.assistant.hotkey) : "提醒键";
       }
       applyOverlayConfig(s.overlay);
     })().catch(() => { /* Keep useful defaults if the initial snapshot fails. */ });
@@ -200,7 +219,7 @@
   });
 
   async function onConfirm() {
-    if (sendPending) return;
+    if (sendPending || buttonAssistant) return;
     sendPending = true;
     actionError = "";
     try {
@@ -223,7 +242,7 @@
 
   /** 错误重试：沿用 orchestrator 保留的文本、profile、频道与目标窗口。 */
   async function onRetry() {
-    if (sendPending) return;
+    if (sendPending || buttonAssistant) return;
     actionError = "";
     actionHint = "";
     const text = $appState.errorText ?? $appState.finalText;
@@ -345,7 +364,7 @@
         <span class="shrink-0 text-[10px] whitespace-nowrap text-white/40">
           {previewHint}
         </span>
-        {#if mouseInteractive}
+        {#if mouseInteractive && !buttonAssistant}
           <button
             class="shrink-0 rounded-full bg-kotone-pink px-2.5 py-0.5 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95"
             onclick={() => void onConfirm()}
@@ -376,7 +395,7 @@
         <p class="max-w-[220px] truncate text-sm text-kotone-pink" title={displayError}>
           {displayError}
         </p>
-        {#if mouseInteractive && $appState.errorText}
+        {#if mouseInteractive && $appState.errorText && !buttonAssistant}
           <button
             class="shrink-0 rounded-full bg-kotone-pink/80 px-2.5 py-0.5 text-[11px] font-semibold text-white transition hover:brightness-110 active:scale-95"
             onclick={() => void onRetry()}
@@ -387,7 +406,7 @@
         {/if}
         <!-- Error 的退出一律走键盘：无文本时没有任何鼠标可做的事，不给按钮 -->
         <span class="shrink-0 text-[10px] whitespace-nowrap text-white/40">
-          {$appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel} {errorAction} · Esc {errorEscAction}
+          {#if buttonAssistant}请回到提醒助手重试 · Esc {errorEscAction}{:else}{$appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel} {errorAction} · Esc {errorEscAction}{/if}
         </span>
       {:else}
         <!-- idle：热键切换文字处理时短暂显示提示（托盘手动唤起时显示待机文案） -->
@@ -490,13 +509,13 @@
           <p class="text-sm leading-snug break-all text-white">{$appState.finalText}</p>
         </div>
         <p class="text-[11px] leading-tight text-white/45">
-          {`再按 ${previewHint}`}
+          {buttonAssistant ? previewHint : `再按 ${previewHint}`}
         </p>
         {#if actionError}
           <p class="truncate text-[11px] text-kotone-pink">{actionError}</p>
         {/if}
       </div>
-      {#if mouseInteractive}
+      {#if mouseInteractive && !buttonAssistant}
         <div class="flex shrink-0 flex-col gap-1.5">
           <button
             class="rounded-lg bg-kotone-pink px-3 py-1 text-xs font-semibold text-white shadow-glow-pink transition hover:brightness-110 active:scale-95"
@@ -559,7 +578,7 @@
         {/if}
       </div>
       <div class="flex shrink-0 flex-col items-end gap-1">
-        {#if mouseInteractive && $appState.errorText}
+        {#if mouseInteractive && $appState.errorText && !buttonAssistant}
           <button
             class="rounded-lg bg-kotone-pink/80 px-2.5 py-1 text-xs font-semibold text-white transition hover:brightness-110 active:scale-95"
             onclick={() => void onRetry()}
@@ -570,7 +589,7 @@
         {/if}
         <!-- Error 的退出一律走键盘：无文本时没有任何鼠标可做的事，不给按钮 -->
         <span class="text-[11px] whitespace-nowrap text-white/45">
-          再按 {$appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel} {errorAction} · Esc {errorEscAction}
+          {#if buttonAssistant}请回到提醒助手重试 · Esc {errorEscAction}{:else}再按 {$appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel} {errorAction} · Esc {errorEscAction}{/if}
         </span>
       </div>
     {:else}

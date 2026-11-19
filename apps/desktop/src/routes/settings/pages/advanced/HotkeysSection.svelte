@@ -1,5 +1,6 @@
 <script lang="ts">
   import { updateSettings } from "../../../../lib/ipc";
+  import { usesLegacyVoiceInput } from "../../../../lib/ipc/contracts";
   import { settingsStore } from "../../../../lib/stores/ui";
   import HotkeyField from "../../../../lib/components/HotkeyField.svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
@@ -75,7 +76,8 @@
 </script>
 
 <SettingsSection title="其他热键" description="和「通用」页的录制热键一样，按下组合键录入；留空 = 关闭。">
-  {#each NAMED_HOTKEY_SECTIONS as section (section.id)}
+  {#each NAMED_HOTKEY_SECTIONS.filter((item) =>
+    item.id !== "automation-stop" || !usesLegacyVoiceInput($settingsStore?.ui)) as section (section.id)}
     <SettingsRow label={section.title} description={section.desc} stacked testid={`hotkey-section-${section.id}`}>
       {#snippet control()}
         <HotkeyField id={section.id} title={section.title}

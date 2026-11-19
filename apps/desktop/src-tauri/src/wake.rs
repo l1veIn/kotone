@@ -259,12 +259,19 @@ fn voice_running(app: &AppHandle) -> bool {
 pub fn sync(app: &AppHandle) {
     let Some(rt) = runtime(app) else { return };
     let settings = app.state::<SharedState>().settings.read().unwrap().clone();
-    let config = settings.assistant.wake.clone();
+    let mut config = settings.assistant.wake.clone();
+    if settings.ui.legacy_upgrade.uses_legacy_assistant() {
+        config.enabled = false;
+    }
     let device = settings.audio_device_id.clone();
     let mut worker = rt.worker.lock().unwrap();
     let wanted = config.enabled && voice_running(app) && kotone_stt::wake::kws_model_ready();
-    // 唤醒词跟着当前角色（换角色、改唤醒词都要重新开始监听）。
-    let (keywords, keyword_label, keyword_warning) = crate::roles::wake_keywords(app);
+    // 没启用唤醒的旧用户不会在启动时建立角色工作区。
+    let (keywords, keyword_label, keyword_warning) = if config.enabled {
+        crate::roles::wake_keywords(app)
+    } else {
+        (String::new(), String::new(), None)
+    };
     if let Some(w) = worker.as_ref() {
         if wanted && w.config == config && w.device == device && w.keywords == keywords {
             return;

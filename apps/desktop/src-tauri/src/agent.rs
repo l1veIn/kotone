@@ -121,21 +121,34 @@ struct Inner {
 }
 
 pub struct AgentRuntime {
-    store: Result<Arc<ConversationStore>, String>,
+    store: std::sync::OnceLock<Result<Arc<ConversationStore>, String>>,
     inner: Mutex<Inner>,
 }
 
 impl AgentRuntime {
-    pub fn open() -> Self {
-        let store = ConversationStore::open(kotone_core::settings::kotone_dir().join("agent"))
-            .map(Arc::new);
-        if let Err(e) = &store {
-            log::log(&format!("agent: conversation store unavailable: {e}"));
-        }
-        Self {
-            store,
+    pub fn open(companion_enabled: bool) -> Self {
+        let runtime = Self {
+            store: std::sync::OnceLock::new(),
             inner: Mutex::new(Inner::default()),
+        };
+        if companion_enabled {
+            let _ = runtime.conversation_store();
         }
+        runtime
+    }
+
+    fn conversation_store(&self) -> Result<Arc<ConversationStore>, String> {
+        self.store
+            .get_or_init(|| {
+                let store =
+                    ConversationStore::open(kotone_core::settings::kotone_dir().join("agent"))
+                        .map(Arc::new);
+                if let Err(e) = &store {
+                    log::log(&format!("agent: conversation store unavailable: {e}"));
+                }
+                store
+            })
+            .clone()
     }
 }
 
@@ -159,7 +172,18 @@ fn runtime(app: &AppHandle) -> Result<tauri::State<'_, AgentRuntime>, String> {
 }
 
 fn store(app: &AppHandle) -> Result<Arc<ConversationStore>, String> {
-    runtime(app)?.store.clone()
+    if app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .ui
+        .legacy_upgrade
+        .uses_legacy_assistant()
+    {
+        return Err("请先在设置中选择「认识琴音」".into());
+    }
+    runtime(app)?.conversation_store()
 }
 
 fn settings(app: &AppHandle) -> kotone_core::settings::Settings {
@@ -251,7 +275,7 @@ pub fn send(app: &AppHandle, outgoing: Outgoing) -> Result<Value, String> {
 /// 把一条消息交给主会话（当前对话）：没有在跑就开始一轮；正在跑就作为插话。
 pub fn send_message(app: &AppHandle, message: Message) -> Result<Value, String> {
     let rt = runtime(app)?;
-    let store = rt.store.clone()?;
+    let store = store(app)?;
     {
         let inner = rt.inner.lock().unwrap();
         if let Some(running) = &inner.running {
@@ -971,7 +995,7 @@ pub fn on_run_finished(app: &AppHandle, run: &Run) {
         }
     }
     // 没在跑：只记进对话，不自动调用模型（不花钱）；玩家下次说话时模型能看到。
-    let Ok(store) = rt.store.clone() else { return };
+    let Ok(store) = store(app) else { return };
     match store.load(&conversation_id) {
         Ok(Some(mut conversation)) => {
             conversation.messages.push(message.clone());
@@ -1372,7 +1396,7 @@ pub fn tools(app: &AppHandle) -> Result<Value, String> {
 
 pub fn state(app: &AppHandle) -> Result<Value, String> {
     let rt = runtime(app)?;
-    let store = rt.store.clone()?;
+    let store = store(app)?;
     let running = rt
         .inner
         .lock()
@@ -1506,7 +1530,7 @@ pub fn agent_delete_conversation(app: AppHandle, id: String) -> Result<bool, Str
         return Err("这段对话正在进行，请先停止".into());
     }
     rt.inner.lock().unwrap().sessions.remove(&id);
-    rt.store.clone()?.delete(&id)
+    store(&app)?.delete(&id)
 }
 
 // ---------- 子会话（ADR 022，照 OpenClaw sessions_*） ----------
@@ -1674,7 +1698,7 @@ fn deliver_to_child(app: &AppHandle, id: &str, message: Message) -> Result<(), S
         }
     };
     if let Some((message, cancel, inbox, spec)) = start {
-        let conversation = rt.store.clone()?.load(id)?.ok_or("找不到子会话的记录")?;
+        let conversation = store(app)?.load(id)?.ok_or("找不到子会话的记录")?;
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             drive_child(app, conversation, message, cancel, inbox, spec).await;
@@ -1879,7 +1903,7 @@ fn deliver_from_child(
             return Ok(());
         }
     }
-    let store = rt.store.clone()?;
+    let store = store(app)?;
     if store.current().as_deref() == Some(spec.parent.as_str()) {
         send_message(app, message).map(|_| ())
     } else {
@@ -1998,9 +2022,8 @@ pub fn deliver_heard(app: &AppHandle, owner: &str, app_name: &str, language: &st
         }
         return;
     }
-    let is_main = runtime(app)
+    let is_main = store(app)
         .ok()
-        .and_then(|rt| rt.store.clone().ok())
         .and_then(|store| store.current())
         .is_some_and(|current| current == owner);
     if is_main {

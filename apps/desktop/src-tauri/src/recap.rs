@@ -64,7 +64,9 @@ pub fn start(app: &AppHandle) {
             let mut live: HashMap<String, (u32, u64)> = HashMap::new();
             loop {
                 std::thread::sleep(POLL);
-                if !settings(&app).agent.match_recap {
+                let settings = settings(&app);
+                if settings.ui.legacy_upgrade.uses_legacy_assistant() || !settings.agent.match_recap
+                {
                     live.clear();
                     continue;
                 }

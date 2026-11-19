@@ -40,8 +40,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') {
-            throw "Stable COS channel only accepts vX.Y.Z tags: $env:RELEASE_TAG"
+          # 0.1.13 没有分桶。始终保留一条只发送 0.1.x 的固定地址。
+          if ($env:RELEASE_TAG -notmatch '^v0\.1\.\d+$') {
+            throw "Legacy COS channel only accepts stable v0.1.x tags: $env:RELEASE_TAG"
           }
           $release = gh release view $env:RELEASE_TAG `
             --repo $env:GITHUB_REPOSITORY `

@@ -293,8 +293,11 @@ pub struct BubbleRuntime {
 }
 
 fn config(app: &AppHandle) -> Option<BubbleConfig> {
-    app.try_state::<SharedState>()
-        .map(|s| s.settings.read().unwrap().assistant.bubble.clone())
+    app.try_state::<SharedState>().and_then(|state| {
+        let settings = state.settings.read().unwrap();
+        (!settings.ui.legacy_upgrade.uses_legacy_assistant())
+            .then(|| settings.assistant.bubble.clone())
+    })
 }
 
 /// 气泡开着吗（关掉 = 回到旧的悬浮窗 + 弹幕）。
@@ -306,6 +309,10 @@ pub fn enabled(app: &AppHandle) -> bool {
 pub fn owns_session(app: &AppHandle, payload: &Value) -> bool {
     enabled(app)
         && payload.pointer("/payload/purpose").and_then(Value::as_str) == Some("assistant")
+        && payload
+            .pointer("/payload/legacyReminder")
+            .and_then(Value::as_bool)
+            != Some(true)
         && payload
             .pointer("/payload/inputSource")
             .and_then(Value::as_str)

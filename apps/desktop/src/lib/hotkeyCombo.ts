@@ -1,4 +1,4 @@
-import type { Settings } from "./ipc";
+import { companionBindings, hasLegacyReminders, usesLegacyVoiceInput, type Settings } from "./ipc/contracts";
 
 const NAMED_CODES: Record<string, string> = {
   Space: "Space",
@@ -78,15 +78,24 @@ export function normalizeHotkeyCombo(combo: string): string {
     .join("+");
 }
 
+const HOTKEY_ALIASES: Record<string, string> = {
+  control: "ctrl", menu: "alt",
+  xbutton1: "mouse4", xbutton2: "mouse5", return: "enter",
+  esc: "escape", back: "backspace", del: "delete", ins: "insert",
+  pgup: "pageup", pgdn: "pagedown", print: "printscreen", caps: "capslock",
+  "`": "backquote", "~": "backquote", grave: "backquote", tilde: "backquote",
+};
+
 /**
  * 与 Rust 侧 combos_conflict 同语义：修饰键集合 + 主键完全相同即冲突。
  * 用于录制键与频道切换键的双向冲突预检（后端注册时仍有双保险）。
  */
 export function combosConflict(a: string, b: string): boolean {
   const norm = (c: string): string => {
-    const parts = normalizeHotkeyCombo(c).split("+").filter(Boolean);
+    const parts = normalizeHotkeyCombo(c).split("+").filter(Boolean)
+      .map((part) => HOTKEY_ALIASES[part] ?? part);
     const main = parts.pop() ?? "";
-    return [...parts.sort(), main].join("+");
+    return [...new Set(parts)].sort().concat(main).join("+");
   };
   return norm(a) === norm(b);
 }
@@ -94,10 +103,12 @@ export function combosConflict(a: string, b: string): boolean {
 /** One binding catalog for every settings editor, including the onboarding record key. */
 export function findHotkeyConflict(settings: Settings | null, selfId: string, key: string): string | null {
   if (!settings || !key.trim()) return null;
+  const legacyVoiceOnly = usesLegacyVoiceInput(settings.ui);
   const bindings: [string, string, string][] = [
     ["record", "录制热键", settings.hotkey.key],
-    ["assistant", "呼叫热键", settings.assistant.hotkey],
-    ...(settings.assistant.companion?.quickMessages ?? []).map(
+    ["legacy-reminder", "提醒助手热键", hasLegacyReminders(settings.ui) ? settings.assistant.hotkey : ""],
+    ["assistant", "呼叫热键", legacyVoiceOnly ? "" : companionBindings(settings.assistant)?.hotkey ?? ""],
+    ...(legacyVoiceOnly ? [] : settings.assistant.companion?.quickMessages ?? []).map(
       (message, index): [string, string, string] => [`quick-message-${index + 1}`, `快捷消息 ${index + 1} 热键`, message.hotkey],
     ),
     ["channel-cycle", "频道切换热键", settings.channelCycleHotkey],
@@ -105,7 +116,8 @@ export function findHotkeyConflict(settings: Settings | null, selfId: string, ke
     ["post-process-toggle", "文字处理开关热键", settings.togglePostProcessingHotkey],
     ["post-process-cycle", "切换文字处理流程热键", settings.cyclePostProcessingHotkey],
     ["runtime-toggle", "启动 / 停止 Kotone 热键", settings.runtimeToggleHotkey],
-    ["automation-stop", "停止所有自动化热键", settings.automationStopHotkey ?? ""],
+    ["automation-stop", "停止所有自动化热键",
+      legacyVoiceOnly ? "" : settings.automationStopHotkey ?? ""],
   ];
   return bindings.find(([id, , combo]) => id !== selfId && combo && combosConflict(key, combo))?.[1] ?? null;
 }

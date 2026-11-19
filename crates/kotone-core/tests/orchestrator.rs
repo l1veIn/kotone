@@ -3785,6 +3785,267 @@ async fn hold_release_right_after_speech_keeps_sentence_tail() {
 }
 
 #[tokio::test]
+async fn assistant_voice_button_uses_each_supported_policy_without_injection() {
+    use kotone_core::assistant::AssistantInteractionMode;
+    for mode in [
+        AssistantInteractionMode::PushToTalk,
+        AssistantInteractionMode::Dictation,
+        AssistantInteractionMode::OneShot,
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = kotone_core::automation::AutomationScheduler::open(
+            dir.path().join("automation-runs.json"),
+            Arc::new(ReminderTestDelivery),
+        )
+        .unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let emitter = Arc::new(VecEmitter::default());
+        let mut builder = assistant_orchestrator_builder(
+            Arc::new(AssistantTestHandler {
+                entered: Arc::new(tokio::sync::Notify::new()),
+                release: None,
+                requests: requests.clone(),
+            }),
+            queue.clone(),
+            sent.clone(),
+            emitter.clone(),
+        );
+        builder
+            .settings()
+            .write()
+            .unwrap()
+            .assistant
+            .interaction_mode = mode;
+        builder.settings().write().unwrap().vad_silence_ms = 210;
+        builder.vad_factory = Some(Arc::new(|_| {
+            Ok(Box::new(ScriptVad::speech_then_silence(30)))
+        }));
+        let orch = builder.into_arc();
+        let session = orch
+            .start_assistant_voice_input(orch.hotkey_input_ticket())
+            .await
+            .unwrap();
+        assert_eq!(session.interaction_mode, mode);
+        // 设置窗口语音按钮的会话：宿主按前缀把它当作窗口里的输入（琴音聊天）。
+        assert!(session.session_id.starts_with("assistant-ui-voice-"));
+        assert!(!orch.continuous_session());
+        assert!(emitter
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(name, payload)| name == "kotone://state"
+                && payload["state"] == "listening"
+                && payload["payload"]["inputSource"] == "button"));
+        if mode != AssistantInteractionMode::OneShot {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            orch.finish_assistant_voice_input(&session.session_id)
+                .await
+                .unwrap();
+        }
+        if mode == AssistantInteractionMode::Dictation {
+            assert_eq!(orch.state(), OrchestratorState::Preview);
+            assert!(queue.list().is_empty());
+            assert!(requests.lock().unwrap().is_empty());
+            orch.confirm_assistant_voice_input(&session.session_id)
+                .await
+                .unwrap();
+        }
+        wait_state(&orch, OrchestratorState::Success, Duration::from_secs(2)).await;
+        assert_eq!(queue.list().len(), 1);
+        assert_eq!(requests.lock().unwrap()[0].session_id, session.session_id);
+        assert!(sent.lock().unwrap().is_empty());
+        assert_eq!(
+            emitter
+                .state_sequence()
+                .iter()
+                .filter(|state| *state == "listening")
+                .count(),
+            1
+        );
+        // Success need not wait for its toast before starting the next button request.
+        let next = orch
+            .start_assistant_voice_input(orch.hotkey_input_ticket())
+            .await
+            .unwrap();
+        assert_ne!(next.session_id, session.session_id);
+        orch.cancel_assistant_voice_input(&next.session_id)
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn assistant_voice_stale_commands_and_hotkey_release_cannot_touch_new_capture() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = kotone_core::automation::AutomationScheduler::open(
+        dir.path().join("automation-runs.json"),
+        Arc::new(ReminderTestDelivery),
+    )
+    .unwrap();
+    let orch = assistant_orchestrator(
+        Arc::new(AssistantTestHandler {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: None,
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }),
+        queue.clone(),
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(VecEmitter::default()),
+    );
+    let old = orch
+        .start_assistant_voice_input(orch.hotkey_input_ticket())
+        .await
+        .unwrap();
+    orch.finish_assistant_voice_input(&old.session_id)
+        .await
+        .unwrap();
+    orch.cancel_assistant_voice_input(&old.session_id)
+        .await
+        .unwrap();
+    let current = orch
+        .start_assistant_voice_input(orch.hotkey_input_ticket())
+        .await
+        .unwrap();
+    assert_ne!(current.session_id, old.session_id);
+    orch.finish_assistant_voice_input(&old.session_id)
+        .await
+        .unwrap();
+    orch.confirm_assistant_voice_input(&old.session_id)
+        .await
+        .unwrap();
+    orch.cancel_assistant_voice_input(&old.session_id)
+        .await
+        .unwrap();
+    // A physical release left over from a previous hotkey session cannot finish UI capture.
+    orch.on_assistant_hotkey_hold(false).await;
+    orch.on_assistant_hotkey().await;
+    orch.on_hotkey_toggle().await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    assert!(queue.list().is_empty());
+    assert!(orch
+        .start_assistant_voice_input(orch.hotkey_input_ticket())
+        .await
+        .is_err());
+    orch.cancel_assistant_voice_input(&current.session_id)
+        .await
+        .unwrap();
+    orch.begin().await.unwrap();
+    assert!(orch
+        .start_assistant_voice_input(orch.hotkey_input_ticket())
+        .await
+        .is_err());
+    orch.finish_assistant_voice_input(&current.session_id)
+        .await
+        .unwrap();
+    orch.cancel_assistant_voice_input(&current.session_id)
+        .await
+        .unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    orch.cancel().await;
+}
+
+#[tokio::test]
+async fn assistant_voice_cancel_interrupts_ai_but_cannot_claim_a_hotkey_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = kotone_core::automation::AutomationScheduler::open(
+        dir.path().join("automation-runs.json"),
+        Arc::new(ReminderTestDelivery),
+    )
+    .unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let orch = assistant_orchestrator(
+        Arc::new(AssistantTestHandler {
+            entered: entered.clone(),
+            release: Some(release.clone()),
+            requests: requests.clone(),
+        }),
+        queue.clone(),
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(VecEmitter::default()),
+    );
+    let session = orch
+        .start_assistant_voice_input(orch.hotkey_input_ticket())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.finish_assistant_voice_input(&session.session_id)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), entered.notified())
+        .await
+        .unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Processing);
+    tokio::time::timeout(
+        Duration::from_millis(200),
+        orch.cancel_assistant_voice_input(&session.session_id),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Idle);
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(queue.list().is_empty());
+    // Knowing a hotkey session's case ID does not grant the button ownership.
+    orch.on_assistant_hotkey_hold(true).await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.on_assistant_hotkey_hold(false).await;
+    tokio::time::timeout(Duration::from_secs(2), entered.notified())
+        .await
+        .unwrap();
+    let hotkey_id = requests.lock().unwrap().last().unwrap().session_id.clone();
+    orch.cancel_assistant_voice_input(&hotkey_id).await.unwrap();
+    orch.finish_assistant_voice_input(&hotkey_id).await.unwrap();
+    orch.confirm_assistant_voice_input(&hotkey_id)
+        .await
+        .unwrap();
+    assert_eq!(orch.state(), OrchestratorState::Processing);
+    orch.cancel().await;
+    assert!(queue.list().is_empty());
+}
+
+#[tokio::test]
+async fn assistant_voice_start_rejects_a_ticket_invalidated_while_waiting_for_admission() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = kotone_core::automation::AutomationScheduler::open(
+        dir.path().join("automation-runs.json"),
+        Arc::new(ReminderTestDelivery),
+    )
+    .unwrap();
+    let orch = assistant_orchestrator(
+        Arc::new(AssistantTestHandler {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: None,
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }),
+        queue,
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(VecEmitter::default()),
+    );
+    let ticket = orch.hotkey_input_ticket();
+    let guard = orch.try_input_configuration_guard().unwrap();
+    let queued = orch.clone();
+    let start = tokio::spawn(async move { queued.start_assistant_voice_input(ticket).await });
+    tokio::task::yield_now().await;
+    assert!(!start.is_finished());
+    orch.invalidate_hotkey_inputs();
+    drop(guard);
+    assert!(start.await.unwrap().is_err());
+    assert_eq!(orch.state(), OrchestratorState::Idle);
+    let session = orch
+        .start_assistant_voice_input(orch.hotkey_input_ticket())
+        .await
+        .unwrap();
+    orch.cancel_assistant_voice_input(&session.session_id)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn assistant_legacy_solo_configuration_records_only_on_press_and_release() {
     let dir = tempfile::tempdir().unwrap();
     let queue = kotone_core::automation::AutomationScheduler::open(
@@ -3838,7 +4099,7 @@ async fn assistant_legacy_solo_configuration_records_only_on_press_and_release()
         .iter()
         .any(|(name, payload)| name == "kotone://state"
             && payload["state"] == "listening"
-            && payload["payload"]["purpose"] == "assistant"));
+            && payload["payload"]["inputSource"] == "hotkey"));
 }
 
 type WakeFixture = (
@@ -3891,6 +4152,36 @@ async fn wake_session_submits_when_speech_ends_regardless_of_hotkey_mode() {
         "{}",
         requests[0].session_id
     );
+}
+
+#[tokio::test]
+async fn migrated_reminder_hotkey_and_companion_call_keep_their_routes_after_opt_in() {
+    let (orch, requests, emitter, _dir) = wake_builder(|| ScriptVad::speech_then_silence(30));
+    orch.settings().write().unwrap().ui.legacy_upgrade =
+        kotone_core::settings::LegacyUpgrade::OptedIn;
+
+    orch.on_assistant_hotkey_hold(true).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.on_assistant_hotkey_hold(false).await;
+    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(2)).await;
+
+    orch.begin_assistant_wake(5_000).await.unwrap();
+    orch.on_assistant_hotkey_hold(false).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    wait_state(&orch, OrchestratorState::Success, Duration::from_secs(3)).await;
+
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(kotone_core::assistant::is_legacy_reminder_session(
+        &requests[0].session_id
+    ));
+    assert!(requests[1].session_id.starts_with("assistant-wake-"));
+    assert!(emitter.events.lock().unwrap().iter().any(|(name, event)| {
+        name == "kotone://state"
+            && event["state"] == "listening"
+            && event["payload"]["legacyReminder"] == true
+    }));
 }
 
 #[tokio::test]

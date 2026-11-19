@@ -214,11 +214,35 @@ impl Default for DiagnosticsConfig {
     }
 }
 
+/// 旧版用户的过渡状态。缺少字段的 0.1.x 配置在合并默认值前标为 Pending。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LegacyUpgrade {
+    #[default]
+    NotNeeded,
+    Pending,
+    Dismissed,
+    OptedIn,
+}
+
+impl LegacyUpgrade {
+    pub fn uses_legacy_assistant(self) -> bool {
+        matches!(self, Self::Pending | Self::Dismissed)
+    }
+
+    pub fn has_legacy_reminders(self) -> bool {
+        self != Self::NotNeeded
+    }
+}
+
 /// 桌面壳 UI 状态（config.json `ui` 段）
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UiConfig {
-    /// 首启向导已完成（或已跳过）；默认 false——老配置升级合并后也会弹一次向导
+    /// 老用户的过渡说明及是否选择启用琴音。
+    #[serde(default)]
+    pub legacy_upgrade: LegacyUpgrade,
+    /// 新用户的首启向导是否完成。
     #[serde(default)]
     pub first_run_completed: bool,
     /// app 启动后自动进入 Running（warmup 引擎 + 注册热键 + 显示悬浮窗）；默认 false
@@ -552,13 +576,45 @@ impl Default for Settings {
 }
 
 impl Settings {
+    fn companion_bindings(&self) -> Option<&crate::assistant::CompanionBindings> {
+        self.assistant.companion_bindings.as_ref()
+    }
+
+    pub fn call_hotkey(&self) -> &str {
+        match self.ui.legacy_upgrade {
+            LegacyUpgrade::NotNeeded => &self.assistant.hotkey,
+            LegacyUpgrade::OptedIn => self.companion_bindings().map_or("", |c| &c.hotkey),
+            LegacyUpgrade::Pending | LegacyUpgrade::Dismissed => "",
+        }
+    }
+
+    pub fn companion_connection_id(&self) -> &str {
+        match self.ui.legacy_upgrade {
+            LegacyUpgrade::NotNeeded => &self.assistant.connection_id,
+            LegacyUpgrade::OptedIn => self.companion_bindings().map_or("", |c| &c.connection_id),
+            LegacyUpgrade::Pending | LegacyUpgrade::Dismissed => "",
+        }
+    }
+
+    pub fn legacy_reminder_hotkey(&self) -> &str {
+        if self.ui.legacy_upgrade.has_legacy_reminders() {
+            &self.assistant.hotkey
+        } else {
+            ""
+        }
+    }
+
     /// 琴音的 DeepSeek 连接：琴音正在用的（若是 DeepSeek）→ 第一条 DeepSeek 连接。
     /// DeepSeek 的语音识别、文字识别、语音合成没单独选连接时都用它（只配一个 DeepSeek 就能用全部功能）。
     pub fn deepseek_connection_id(&self) -> Option<String> {
         let is_deepseek = |c: &&crate::connection::Connection| {
             c.provider == "deepseek" || c.base_url.contains("api.deepseek.com")
         };
-        let agent = self.assistant.connection_id.trim();
+        let agent = if self.ui.legacy_upgrade.uses_legacy_assistant() {
+            self.assistant.connection_id.trim()
+        } else {
+            self.companion_connection_id().trim()
+        };
         self.connections
             .iter()
             .filter(is_deepseek)
@@ -809,7 +865,7 @@ pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
     };
     let mut user = user;
     migrate_legacy_post_processing_json(&mut user);
-    migrate_call_hotkey_json(&mut user);
+    migrate_legacy_upgrade_json(&mut user);
     merge_json(&mut merged, &user);
     let mut settings: Settings = match serde_json::from_value(merged) {
         Ok(settings) => settings,
@@ -825,48 +881,42 @@ pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
     }
 }
 
-/// 0.2.0：旧的“陪玩热键”默认是空的；改成“呼叫琴音”后给老配置补上默认的 ` 键（只补一次，
-/// 并且这个键没被别的热键占用时才补）。之后玩家清空就是不要热键。
-fn migrate_call_hotkey_json(user: &mut serde_json::Value) {
+/// 0.1.x 从未写过 Agent、工具服务或呼叫键迁移标记。已试用过 0.2 的配置保留现状。
+fn migrate_legacy_upgrade_json(user: &mut serde_json::Value) {
     let Some(object) = user.as_object_mut() else {
         return;
     };
-    let used: Vec<String> = [
-        object.get("hotkey").and_then(|h| h.get("key")),
-        object.get("channelCycleHotkey"),
-        object.get("resendLastHotkey"),
-        object.get("togglePostProcessingHotkey"),
-        object.get("cyclePostProcessingHotkey"),
-        object.get("runtimeToggleHotkey"),
-        object.get("automationStopHotkey"),
-    ]
-    .into_iter()
-    .flatten()
-    .filter_map(|v| v.as_str())
-    .map(str::to_ascii_lowercase)
-    .collect();
-    let assistant = object
-        .entry("assistant")
-        .or_insert_with(|| serde_json::json!({}));
-    let Some(assistant) = assistant.as_object_mut() else {
+    let has_agent_settings = object.contains_key("agent")
+        || object.contains_key("toolService")
+        || object
+            .get("assistant")
+            .and_then(|assistant| assistant.get("callHotkeyDefaulted"))
+            .is_some();
+    let Some(ui) = object
+        .entry("ui")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+    else {
         return;
     };
-    if assistant
-        .get("callHotkeyDefaulted")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-    {
-        return;
+    let legacy = match ui.get("legacyUpgrade").and_then(|value| value.as_str()) {
+        None if !has_agent_settings => {
+            ui.insert("legacyUpgrade".into(), "pending".into());
+            true
+        }
+        Some("pending" | "dismissed" | "optedIn") => true,
+        _ => false,
+    };
+    if legacy {
+        // 0.1.x 助手键默认空；显式设置过的键继续用于旧版提醒。
+        if let Some(assistant) = object
+            .entry("assistant")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+        {
+            assistant.entry("hotkey").or_insert_with(|| "".into());
+        }
     }
-    let empty = assistant
-        .get("hotkey")
-        .and_then(|v| v.as_str())
-        .map_or(true, |k| k.trim().is_empty());
-    let default = crate::assistant::DEFAULT_CALL_HOTKEY;
-    if empty && !used.iter().any(|k| k == &default.to_ascii_lowercase()) {
-        assistant.insert("hotkey".into(), default.into());
-    }
-    assistant.insert("callHotkeyDefaulted".into(), true.into());
 }
 
 /// 旧配置只有单条 `pipeline`：空流程改种默认屏蔽词；有步骤则收成一条可切换流程。
@@ -1046,25 +1096,109 @@ mod tests {
     use super::*;
 
     #[test]
-    fn old_configs_get_the_call_hotkey_once_unless_the_key_is_taken() {
-        let mut empty = serde_json::json!({"assistant": {"hotkey": ""}});
-        migrate_call_hotkey_json(&mut empty);
-        assert_eq!(empty["assistant"]["hotkey"], "Backquote");
-        assert_eq!(empty["assistant"]["callHotkeyDefaulted"], true);
+    fn old_profiles_keep_their_voice_and_reminder_settings_without_a_call_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let original = serde_json::json!({
+            "hotkey": {"key": "F8", "mode": "hold"},
+            "audioDeviceId": "Test microphone",
+            "assistant": {"interactionMode": "dictation", "connectionId": "old",
+                          "speechEngine": "kokoro", "defaultDelivery": ["danmaku"]},
+            "ui": {"firstRunCompleted": false, "autoStart": true},
+            "lowerSpeakerVolumeWhileListening": true
+        });
+        std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+        let mut old = load_from(&path);
+        assert_eq!(old.ui.legacy_upgrade, LegacyUpgrade::Pending);
+        assert!(!old.ui.first_run_completed);
+        assert!(old.ui.auto_start);
+        assert_eq!(old.hotkey.key, "F8");
+        assert_eq!(old.audio_device_id, "Test microphone");
+        assert_eq!(old.assistant.hotkey, "");
+        assert_eq!(
+            old.assistant.interaction_mode,
+            crate::assistant::AssistantInteractionMode::Dictation
+        );
+        assert_eq!(old.assistant.connection_id, "old");
+        assert_eq!(
+            old.assistant.speech_engine,
+            crate::assistant::SpeechEngine::Kokoro
+        );
+        assert_eq!(
+            old.assistant.default_delivery,
+            vec![crate::reminders::DeliveryKind::Danmaku]
+        );
+        assert!(old.lower_speaker_volume_while_listening);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap(),
+            original
+        );
 
-        // 玩家后来清空：不再补
-        let mut cleared =
-            serde_json::json!({"assistant": {"hotkey": "", "callHotkeyDefaulted": true}});
-        migrate_call_hotkey_json(&mut cleared);
-        assert_eq!(cleared["assistant"]["hotkey"], "");
+        old.ui.legacy_upgrade = LegacyUpgrade::Dismissed;
+        old.assistant.hotkey = "F9".into();
+        save_to(&path, &old).unwrap();
+        let dismissed = load_from(&path);
+        assert_eq!(dismissed.ui.legacy_upgrade, LegacyUpgrade::Dismissed);
+        assert_eq!(dismissed.assistant.hotkey, "F9");
+        assert_eq!(dismissed.legacy_reminder_hotkey(), "F9");
+        assert_eq!(dismissed.call_hotkey(), "");
 
-        // 自己设过的不动；` 被录音热键占用时不补
-        let mut own = serde_json::json!({"assistant": {"hotkey": "F9"}});
-        migrate_call_hotkey_json(&mut own);
-        assert_eq!(own["assistant"]["hotkey"], "F9");
-        let mut taken = serde_json::json!({"hotkey": {"key": "Backquote"}, "assistant": {}});
-        migrate_call_hotkey_json(&mut taken);
-        assert!(taken["assistant"].get("hotkey").is_none());
+        old.ui.legacy_upgrade = LegacyUpgrade::OptedIn;
+        old.assistant.companion_bindings = Some(crate::assistant::CompanionBindings {
+            hotkey: crate::assistant::DEFAULT_CALL_HOTKEY.into(),
+            connection_id: "game".into(),
+        });
+        save_to(&path, &old).unwrap();
+        let disk: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(disk["assistant"]["hotkey"], "F9");
+        assert_eq!(disk["assistant"]["connectionId"], "old");
+        let opted_in = load_from(&path);
+        assert_eq!(opted_in.ui.legacy_upgrade, LegacyUpgrade::OptedIn);
+        assert_eq!(opted_in.legacy_reminder_hotkey(), "F9");
+        assert_eq!(opted_in.assistant.connection_id, "old");
+        assert_eq!(
+            opted_in.call_hotkey(),
+            crate::assistant::DEFAULT_CALL_HOTKEY
+        );
+        assert_eq!(opted_in.companion_connection_id(), "game");
+    }
+
+    #[test]
+    fn fresh_profiles_and_previously_opted_in_preview_profiles_keep_new_behavior() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let fresh = load_from(&path);
+        assert_eq!(fresh.ui.legacy_upgrade, LegacyUpgrade::NotNeeded);
+        assert_eq!(
+            fresh.assistant.hotkey,
+            crate::assistant::DEFAULT_CALL_HOTKEY
+        );
+        assert_eq!(load_from(&path).ui.legacy_upgrade, LegacyUpgrade::NotNeeded);
+
+        std::fs::write(
+            &path,
+            br#"{"ui":{"firstRunCompleted":true},"assistant":{"hotkey":"","callHotkeyDefaulted":true}}"#,
+        )
+        .unwrap();
+        let preview = load_from(&path);
+        assert_eq!(preview.ui.legacy_upgrade, LegacyUpgrade::NotNeeded);
+        assert!(preview.ui.first_run_completed);
+        assert!(preview.assistant.hotkey.is_empty());
+
+        std::fs::write(
+            &path,
+            br#"{"toolService":{"enabled":true},"ui":{"firstRunCompleted":true}}"#,
+        )
+        .unwrap();
+        let isolated_preview = load_from(&path);
+        assert_eq!(isolated_preview.ui.legacy_upgrade, LegacyUpgrade::NotNeeded);
+        assert!(isolated_preview.tool_service.enabled);
+
+        std::fs::write(&path, br#"{"assistant":{"hotkey":"F9"}}"#).unwrap();
+        let old = load_from(&path);
+        assert_eq!(old.ui.legacy_upgrade, LegacyUpgrade::Pending);
+        assert_eq!(old.assistant.hotkey, "F9");
     }
 
     #[test]

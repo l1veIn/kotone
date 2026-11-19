@@ -6,7 +6,7 @@
   import { Check, ChevronDown, Cpu, LoaderCircle, Shield, ShieldCheck, ShieldEllipsis } from "@lucide/svelte";
   import * as Menu from "$lib/components/ui/dropdown-menu";
   import {
-    connectionModels, listConnectionPresets, listConnections, upsertConnection,
+    companionBindingPatch, companionBindings, connectionModels, listConnectionPresets, listConnections, upsertConnection,
     type ConnectionInfo, type ConnectionPreset,
   } from "../ipc";
   import { agentSetPermissions, type PermissionMode, type Permissions } from "../agent";
@@ -25,7 +25,7 @@
   let busy = $state<"" | "mode" | "model">("");
   const permissions = $derived<Permissions>($settingsStore?.agent?.permissions ?? { mode: "default", rules: {} });
   const mode = $derived(modes.find((m) => m.id === permissions.mode) ?? modes[1]);
-  const connectionId = $derived($settingsStore?.assistant?.connectionId ?? "");
+  const connectionId = $derived(companionBindings($settingsStore?.assistant)?.connectionId ?? "");
   const current = $derived(connections.find((c) => c.id === connectionId) ?? null);
   const usable = $derived(connections.filter((c) => c.hasApiKey && c.kind === "remote"));
 
@@ -74,7 +74,7 @@
     if (busy || (c.id === connectionId && c.model === model)) return;
     busy = "model";
     try {
-      if (c.id !== connectionId) await patchSettings({ assistant: { connectionId: c.id } }, "");
+      if (c.id !== connectionId) await patchSettings({ assistant: companionBindingPatch($settingsStore?.assistant, { connectionId: c.id }) }, "");
       if (c.model !== model) {
         const { hasApiKey: _key, ...connection } = c;
         await upsertConnection({ ...connection, model });

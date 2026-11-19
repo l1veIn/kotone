@@ -24,6 +24,8 @@ use kotone_core::settings::HotkeyBackend;
 
 pub use kotone_core::hotkey::HotkeyMode;
 
+const HK_LEGACY_REMINDER: &str = "legacy-reminder";
+
 /// 当前生效的热键后端
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveBackend {
@@ -346,7 +348,7 @@ fn dispatch_runtime_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, event: Hoo
     // separately can schedule release first, leaving a short press recording.
     // Other actions (especially Esc) stay independent so they can cancel input.
     if let HookEvent::NamedHold { id, pressed } = &event {
-        if id == HK_ASSISTANT {
+        if id == HK_LEGACY_REMINDER {
             let _ = app
                 .state::<HotkeyManager>()
                 .assistant_edges
@@ -375,16 +377,14 @@ fn dispatch_runtime_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, event: Hoo
                 HK_PP_TOGGLE => orch.on_post_processing_toggle().await,
                 HK_PP_CYCLE => orch.on_post_processing_cycle().await,
                 HK_ASSISTANT => {
-                    let timeout = app
-                        .state::<crate::SharedState>()
-                        .settings
-                        .read()
-                        .unwrap()
-                        .assistant
-                        .wake
-                        .no_speech_timeout_ms;
-                    orch.call_assistant(Some(ticket.core), timeout).await
+                    let timeout = {
+                        let state = app.state::<crate::SharedState>();
+                        let settings = state.settings.read().unwrap();
+                        settings.assistant.wake.no_speech_timeout_ms
+                    };
+                    orch.call_assistant(Some(ticket.core), timeout).await;
                 }
+                HK_LEGACY_REMINDER => orch.on_assistant_hotkey_with_ticket(ticket.core).await,
                 other => match quick_message_slot(other) {
                     // 快捷消息：替用户说了预设的那句话，不经过语音识别，直接进陪玩流程。
                     Some(slot) => crate::companion::quick(&app, slot),
@@ -408,6 +408,7 @@ const APP_NAMED_HOTKEYS: &[&str] = &[HK_RUNTIME_TOGGLE, HK_AUTOMATION_STOP];
 /// 已知具名热键的稳定声明顺序（设置页展示顺序；新增具名热键加入此清单即出现在 UI）。
 const KNOWN_NAMED_HOTKEYS: &[&str] = &[
     HK_ASSISTANT,
+    HK_LEGACY_REMINDER,
     HK_CHANNEL_CYCLE,
     HK_RESEND_LAST,
     HK_PP_TOGGLE,
@@ -428,14 +429,25 @@ const KNOWN_NAMED_HOTKEYS: &[&str] = &[
 fn named_list_from(
     settings: &kotone_core::settings::Settings,
 ) -> Vec<(&'static str, String, HotkeyMode)> {
-    // 呼叫琴音：按一次就听（说完自动提交），没有按住说话。
-    let assistant_mode = HotkeyMode::Toggle;
+    let legacy = settings.ui.legacy_upgrade.uses_legacy_assistant();
+    let reminder_mode = if settings.assistant.interaction_mode
+        == kotone_core::assistant::AssistantInteractionMode::PushToTalk
+    {
+        HotkeyMode::Hold
+    } else {
+        HotkeyMode::Toggle
+    };
     let quick = &settings.assistant.companion.quick_messages;
     let mut list = vec![
         (
             HK_ASSISTANT,
-            settings.assistant.hotkey.clone(),
-            assistant_mode,
+            settings.call_hotkey().into(),
+            HotkeyMode::Toggle,
+        ),
+        (
+            HK_LEGACY_REMINDER,
+            settings.legacy_reminder_hotkey().into(),
+            reminder_mode,
         ),
         (
             HK_CHANNEL_CYCLE,
@@ -462,7 +474,11 @@ fn named_list_from(
     list.extend(HK_QUICK_MESSAGES.iter().enumerate().map(|(i, id)| {
         (
             *id,
-            quick.get(i).map(|m| m.hotkey.clone()).unwrap_or_default(),
+            quick
+                .get(i)
+                .filter(|_| !legacy)
+                .map(|message| message.hotkey.clone())
+                .unwrap_or_default(),
             HotkeyMode::Toggle,
         )
     }));
@@ -473,7 +489,14 @@ fn named_list_from(
 fn app_named_list_from(settings: &kotone_core::settings::Settings) -> Vec<(&'static str, String)> {
     vec![
         (HK_RUNTIME_TOGGLE, settings.runtime_toggle_hotkey.clone()),
-        (HK_AUTOMATION_STOP, settings.automation_stop_hotkey.clone()),
+        (
+            HK_AUTOMATION_STOP,
+            if settings.ui.legacy_upgrade.uses_legacy_assistant() {
+                String::new()
+            } else {
+                settings.automation_stop_hotkey.clone()
+            },
+        ),
     ]
 }
 
@@ -561,7 +584,8 @@ impl HotkeyManager {
             &settings.cycle_post_processing_hotkey,
             &settings.runtime_toggle_hotkey,
             &settings.automation_stop_hotkey,
-            &settings.assistant.hotkey,
+            settings.call_hotkey(),
+            settings.legacy_reminder_hotkey(),
         ]);
 
         #[cfg(windows)]
@@ -1057,6 +1081,57 @@ mod tests {
     }
 
     #[test]
+    fn legacy_hotkeys_keep_the_reminder_mode_and_register_no_new_bindings() {
+        use kotone_core::assistant::AssistantInteractionMode;
+        use kotone_core::settings::LegacyUpgrade;
+
+        let mut settings = kotone_core::settings::Settings::default();
+        settings.ui.legacy_upgrade = LegacyUpgrade::Pending;
+        settings.assistant.hotkey.clear();
+        let (id, key, mode) = &named_list_from(&settings)[1];
+        assert_eq!(*id, HK_LEGACY_REMINDER);
+        assert!(key.is_empty());
+        assert_eq!(*mode, HotkeyMode::Hold);
+        assert!(named_list_from(&settings)[0].1.is_empty());
+        assert!(app_named_list_from(&settings)
+            .iter()
+            .all(|(_, key)| key.is_empty()));
+
+        settings.assistant.hotkey = "F9".into();
+        settings.ui.legacy_upgrade = LegacyUpgrade::Dismissed;
+        assert_eq!(
+            named_list_from(&settings)[1],
+            (HK_LEGACY_REMINDER, "F9".into(), HotkeyMode::Hold)
+        );
+        settings.assistant.interaction_mode = AssistantInteractionMode::Dictation;
+        assert_eq!(
+            named_list_from(&settings)[1],
+            (HK_LEGACY_REMINDER, "F9".into(), HotkeyMode::Toggle)
+        );
+    }
+
+    #[test]
+    fn legacy_opt_in_keeps_both_hotkey_bindings() {
+        use kotone_core::assistant::CompanionBindings;
+        use kotone_core::settings::LegacyUpgrade;
+
+        let mut settings = kotone_core::settings::Settings::default();
+        settings.ui.legacy_upgrade = LegacyUpgrade::OptedIn;
+        settings.assistant.hotkey = "F9".into();
+        settings.assistant.companion_bindings = Some(CompanionBindings {
+            hotkey: "F10".into(),
+            connection_id: "game".into(),
+        });
+        assert_eq!(
+            &named_list_from(&settings)[..2],
+            &[
+                (HK_ASSISTANT, "F10".into(), HotkeyMode::Toggle),
+                (HK_LEGACY_REMINDER, "F9".into(), HotkeyMode::Hold),
+            ]
+        );
+    }
+
+    #[test]
     fn calling_kotone_is_always_a_single_press_regardless_of_old_modes() {
         use kotone_core::interaction::InteractionMode;
         let mut settings = kotone_core::settings::Settings {
@@ -1066,10 +1141,12 @@ mod tests {
         // 呼叫琴音按一次就听：旧配置里的“对讲机”也不再按住说话
         settings.assistant.interaction_mode =
             kotone_core::assistant::AssistantInteractionMode::PushToTalk;
-        assert_eq!(named_list_from(&settings)[0].0, HK_ASSISTANT);
-        assert_eq!(named_list_from(&settings)[0].1, "Backquote");
-        assert!(named_list_from(&settings)
-            .iter()
-            .all(|(_, _, mode)| *mode == HotkeyMode::Toggle));
+        let call = named_list_from(&settings)
+            .into_iter()
+            .find(|(id, _, _)| *id == HK_ASSISTANT);
+        assert_eq!(
+            call,
+            Some((HK_ASSISTANT, "Backquote".into(), HotkeyMode::Toggle))
+        );
     }
 }

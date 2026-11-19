@@ -100,7 +100,7 @@ pub fn connection_ready(
     app: &AppHandle,
     settings: &Settings,
 ) -> Result<kotone_core::connection::ResolvedConnection, String> {
-    let id = settings.assistant.connection_id.trim();
+    let id = settings.companion_connection_id().trim();
     if id.is_empty() {
         return Err("还没有选 AI 连接：请在「设置 → API 连接」里添加一条，并设为在用的连接".into());
     }
@@ -160,7 +160,7 @@ pub fn status(app: &AppHandle) -> Value {
         "ready": reason.is_none(),
         "reason": reason,
         "route": s.assistant.route,
-        "connectionId": s.assistant.connection_id,
+        "connectionId": s.companion_connection_id(),
         "check": s.assistant.companion.check,
         "ocr": {"modelId": ocr_model, "state": ocr},
         "autoSend": s.assistant.companion.auto_send,
@@ -775,7 +775,7 @@ pub fn quick_message_text(app: &AppHandle, id: &str) -> Option<String> {
 
 /// 测试琴音当前用的连接能不能连通（一次付费请求），并把结果写进设置（只用于显示）。
 pub async fn self_check(app: &AppHandle) -> Result<CompanionCheck, String> {
-    let id = settings(app).assistant.connection_id.trim().to_string();
+    let id = settings(app).companion_connection_id().trim().to_string();
     if id.is_empty() {
         return Err("还没有选 AI 连接：请在「设置 → API 连接」里设一条".into());
     }
@@ -808,7 +808,7 @@ pub async fn check_connection(app: &AppHandle, id: &str) -> Result<CompanionChec
         checked_at_ms: now_ms(),
         message: result.message,
     };
-    if settings(app).assistant.connection_id.trim() != check.connection_id {
+    if settings(app).companion_connection_id().trim() != check.connection_id {
         return Ok(check);
     }
     let saved = check.clone();
@@ -816,7 +816,7 @@ pub async fn check_connection(app: &AppHandle, id: &str) -> Result<CompanionChec
         .settings_repository
         .update(move |next| {
             // 自检期间用户可能换了琴音的连接：只在仍是同一条时写入。
-            if next.assistant.connection_id.trim() == saved.connection_id {
+            if next.companion_connection_id().trim() == saved.connection_id {
                 next.assistant.companion.check = Some(saved);
             }
             Ok(())

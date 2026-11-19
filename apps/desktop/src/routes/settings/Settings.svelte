@@ -8,6 +8,7 @@
   import { listen } from "@tauri-apps/api/event";
   import {
     getSettings,
+    updateSettings,
     getOverlayHealth,
     getSettingsLoadWarning,
     getStartupOptions,
@@ -24,6 +25,9 @@
     AUTO_ADMIN_PROMPT_FLAG,
   } from "../../lib/stores/ui";
   import { initRuntime } from "../../lib/stores/runtime";
+  import { usesLegacyVoiceInput } from "../../lib/ipc/contracts";
+  import { Button } from "$lib/components/ui/button";
+  import LegacyRemindersPage from "./pages/LegacyRemindersPage.svelte";
   import { checkForUpdates } from "../../lib/updater";
   import { Sonner } from "$lib/components/ui/sonner";
   import ElevationPrompt from "../../lib/components/ElevationPrompt.svelte";
@@ -66,6 +70,11 @@
     try { localStorage.setItem(SIDEBAR_KEY, rail ? "rail" : "expanded"); } catch { /* 只是偏好 */ }
   }
   function navigate(id: PageId) {
+    if (id === "assistant" && legacyVoiceOnly) {
+      showUpgradeNotice = true;
+      drawerOpen = false;
+      return;
+    }
     assistantOpen = null;
     page = id;
     drawerOpen = false;
@@ -77,7 +86,7 @@
   let openCount = 0;
   function openCompanion(section: "chat" | "identity" | "memory" | "skills" | "settings", anchor?: string) {
     navigate("assistant");
-    assistantOpen = { section, anchor, n: ++openCount };
+    if (!legacyVoiceOnly) assistantOpen = { section, anchor, n: ++openCount };
   }
   /** 「琴音 → 设置」（原「交流」页的内容也在这里）。 */
   function openCompanionSettings() {
@@ -94,6 +103,10 @@
   });
   onDestroy(unsubscribeNavigation);
   function openChat(prompt?: string) {
+    if (legacyVoiceOnly) {
+      showUpgradeNotice = true;
+      return;
+    }
     if (prompt) pendingPrompt.set(prompt);
     navigate("assistant");
     chatRequest++;
@@ -101,7 +114,8 @@
 
   // 侧边栏的对话列表与聊天页共用一份状态。
   const chat = provideAgentChat(new AgentChat());
-  onMount(() => {
+  $effect(() => {
+    if (loading || legacyVoiceOnly) return;
     void chat.init();
     return () => chat.dispose();
   });
@@ -126,6 +140,29 @@
   let loading = $state(true);
   /** 首启向导：ui.firstRunCompleted === false 时弹出（完成/跳过后置 true） */
   let showOnboarding = $state(false);
+  let showUpgradeNotice = $state(false);
+  let showLegacySetup = $state(false);
+  let savingUpgradeChoice = $state(false);
+  const legacyVoiceOnly = $derived(usesLegacyVoiceInput($settingsStore?.ui));
+
+  function openOnboarding() {
+    if (legacyVoiceOnly) showUpgradeNotice = true;
+    else showOnboarding = true;
+  }
+
+  async function keepVoiceInput() {
+    if (savingUpgradeChoice) return;
+    savingUpgradeChoice = true;
+    try {
+      settingsStore.set(await updateSettings({ ui: { legacyUpgrade: "dismissed" } }));
+      showUpgradeNotice = false;
+      showLegacySetup = false;
+    } catch (error) {
+      toast(false, errText(error));
+    } finally {
+      savingUpgradeChoice = false;
+    }
+  }
   /** 管理员提权提示 · 第一段（仅 Windows 未提权且用户未表态时弹一次） */
   let showElevationPrompt = $state(false);
   /** 管理员提权提示 · 第二段（第一段「以管理员权限重启」成功后弹一次） */
@@ -166,9 +203,13 @@
         getSettingsLoadWarning(),
       ]);
       if (settingsWarning) toastWarn(settingsWarning);
-      showOnboarding =
-        startup.onboarding === "always" ||
-        (startup.onboarding === "auto" && !s.ui.firstRunCompleted);
+      if (usesLegacyVoiceInput(s.ui)) {
+        showUpgradeNotice = startup.onboarding !== "never" && s.ui.legacyUpgrade === "pending";
+      } else {
+        showOnboarding =
+          startup.onboarding === "always" ||
+          (startup.onboarding === "auto" && !s.ui.firstRunCompleted);
+      }
       // 两段式提权提示：
       // 第一段（未提权）：未勾选「不再提示」/「默认提权启动」时，询问是否以管理员身份重启；
       // 第二段（提权）：第一段的重启成功后（localStorage 接力标记），询问是否启动时自动请求。
@@ -230,7 +271,7 @@
     // 启动后静默检测一次更新（离线/无 release 不打扰用户）
     const updateTimer = setTimeout(() => void checkForUpdates({ auto: true }), 3000);
     let unlisten: (() => void) | undefined;
-    void listen("kotone://open-onboarding", () => (showOnboarding = true)).then(
+    void listen("kotone://open-onboarding", openOnboarding).then(
       (un) => (unlisten = un),
     );
     return () => {
@@ -269,12 +310,12 @@
     brandWidth={narrow ? "auto" : rail ? "3.5rem" : "14.75rem"} />
   <div class="relative flex min-h-0 flex-1 overflow-hidden">
   {#if !narrow}
-    <AppSidebar {page} {rail} onNavigate={navigate} onOpenChat={openChat} />
+    <AppSidebar {page} {rail} {legacyVoiceOnly} onNavigate={navigate} onOpenChat={openChat} />
   {:else if drawerOpen}
     <!-- 窄窗口：侧边栏作为抽屉盖在内容上 -->
     <button type="button" class="absolute inset-0 z-40 bg-black/40" aria-label="关闭侧边栏" onclick={() => (drawerOpen = false)}></button>
     <div class="absolute inset-y-0 left-0 z-50 shadow-2xl" data-testid="sidebar-drawer">
-      <AppSidebar {page} onNavigate={navigate} onOpenChat={openChat} />
+      <AppSidebar {page} {legacyVoiceOnly} onNavigate={navigate} onOpenChat={openChat} />
     </div>
   {/if}
 
@@ -289,21 +330,23 @@
     {#if loading}
       <p class="px-8 py-10 text-sm text-muted-foreground">加载配置中…</p>
     {:else if page === "general"}
-      <GeneralPage onOpenAdvanced={() => openAdvanced("models")} onOpenCompanion={openChat} onOpenTalk={openCompanionSettings} />
+      <GeneralPage {legacyVoiceOnly} onOpenAdvanced={() => openAdvanced("models")} onOpenCompanion={openChat} onOpenTalk={openCompanionSettings} />
     {:else if page === "advanced"}
       <AdvancedPage
         section={advancedSection}
         onSectionChange={(next) => (advancedSection = next)}
-        onOpenOnboarding={() => (showOnboarding = true)}
+        onOpenOnboarding={openOnboarding}
       />
     {:else if page === "processing"}
       <TextProcessingPage onOpenConnections={() => openAdvanced("connections")} />
     {:else if page === "assistant"}
       <AssistantPage {chatRequest} open={assistantOpen} onOpenConnections={() => openAdvanced("connections")} onOpenAutomation={() => (page = "automation")} />
+    {:else if page === "legacy-reminders"}
+      <LegacyRemindersPage onOpenConnections={() => openAdvanced("connections")} />
     {:else if page === "automation"}
       <AutomationPage onOpenHotkeys={() => openAdvanced("hotkeys")} />
     {:else if page === "game"}
-      <GamePage />
+      <GamePage {legacyVoiceOnly} />
     {:else if page === "history"}
       <HistoryPage />
     {:else if page === "character"}
@@ -317,17 +360,33 @@
   </main>
 
   <!-- 首启向导覆盖层（加载完成且未完成向导时弹出） -->
-  {#if showOnboarding && !loading}
+  {#if showUpgradeNotice && !loading}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+      <div role="dialog" aria-modal="true" aria-labelledby="legacy-upgrade-title"
+        class="w-full max-w-md rounded-xl border border-hairline bg-card p-6 shadow-xl"
+        data-testid="legacy-upgrade-notice">
+        <h2 id="legacy-upgrade-title" class="m-0 text-lg font-semibold">语音输入法的用法没有变</h2>
+        <p class="mt-3 text-sm text-muted-foreground">你可以继续用原来的热键和识别设置。琴音是可选的游戏陪玩，可以听你说话、回答问题，也可以在你允许时帮你操作游戏。</p>
+        <div class="mt-5 flex flex-wrap gap-2">
+          <Button disabled={savingUpgradeChoice} onclick={() => void keepVoiceInput()}>继续只用语音输入法</Button>
+          <Button variant="outline" disabled={savingUpgradeChoice} onclick={() => { showUpgradeNotice = false; showLegacySetup = true; }}>认识琴音</Button>
+        </div>
+      </div>
+    </div>
+  {:else if showLegacySetup && !loading}
+    <Onboarding legacyUpgrade onCancel={() => { showLegacySetup = false; showUpgradeNotice = true; }}
+      onDone={(next, prompt) => { showLegacySetup = false; if (next === "assistant") openChat(prompt); }} />
+  {:else if showOnboarding && !loading}
     <Onboarding onDone={(next, prompt) => { showOnboarding = false; if (next === "assistant") openChat(prompt); }} />
   {/if}
 
   <!-- 管理员提权提示 · 第一段（Windows 未提权且用户未表态时弹一次） -->
-  {#if showElevationPrompt && !loading}
+  {#if showElevationPrompt && !loading && !showUpgradeNotice && !showLegacySetup}
     <ElevationPrompt onClose={() => (showElevationPrompt = false)} />
   {/if}
 
   <!-- 管理员提权提示 · 第二段（第一段的重启成功后弹一次） -->
-  {#if showAutoAdminPrompt && !loading}
+  {#if showAutoAdminPrompt && !loading && !showUpgradeNotice && !showLegacySetup}
     <AutoAdminPrompt onClose={() => (showAutoAdminPrompt = false)} />
   {/if}
 

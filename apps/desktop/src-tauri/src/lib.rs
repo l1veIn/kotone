@@ -3,6 +3,7 @@
 
 mod agent;
 mod assistant;
+mod assistant_input;
 mod automation;
 mod bubble;
 mod companion;
@@ -1028,14 +1029,19 @@ fn hotkey_registration_changed(old: &Settings, next: &Settings) -> bool {
         || old.resend_last_hotkey != next.resend_last_hotkey
         || old.toggle_post_processing_hotkey != next.toggle_post_processing_hotkey
         || old.cycle_post_processing_hotkey != next.cycle_post_processing_hotkey
-        || old.assistant.hotkey != next.assistant.hotkey
+        || old.call_hotkey() != next.call_hotkey()
+        || old.legacy_reminder_hotkey() != next.legacy_reminder_hotkey()
         || old.assistant.interaction_mode != next.assistant.interaction_mode
+        || old.ui.legacy_upgrade.uses_legacy_assistant()
+            != next.ui.legacy_upgrade.uses_legacy_assistant()
 }
 
 /// 应用级热键（启动 / 停止 Kotone）变化：与 runtime 是否运行无关，必须重注册。
 fn app_hotkey_changed(old: &Settings, next: &Settings) -> bool {
     old.runtime_toggle_hotkey != next.runtime_toggle_hotkey
         || old.automation_stop_hotkey != next.automation_stop_hotkey
+        || old.ui.legacy_upgrade.uses_legacy_assistant()
+            != next.ui.legacy_upgrade.uses_legacy_assistant()
 }
 
 /// 局部更新配置；热键变化时触发重注册
@@ -1075,6 +1081,12 @@ fn update_settings(
             next.overlay.normalize_interaction();
             next.assistant.normalize_voices();
             next.assistant.validate()?;
+            let call_key = kotone_core::hotkey::parse_hotkey(next.call_hotkey());
+            if call_key.is_some()
+                && call_key == kotone_core::hotkey::parse_hotkey(next.legacy_reminder_hotkey())
+            {
+                return Err("呼叫琴音和提醒助手不能共用热键".into());
+            }
             if previous.overlay.visibility != next.overlay.visibility
                 && next.overlay.visibility != OverlayVisibility::Never
             {
@@ -1134,8 +1146,10 @@ fn update_settings(
             "kotone://input-config",
             serde_json::json!({
                 "hotkey": updated.hotkey.key,
-                "assistantHotkey": updated.assistant.hotkey,
+                "assistantHotkey": updated.call_hotkey(),
+                "legacyReminderHotkey": updated.legacy_reminder_hotkey(),
                 "assistantMode": updated.assistant.interaction_mode,
+                "legacyAssistant": updated.ui.legacy_upgrade.uses_legacy_assistant(),
             }),
         );
     }
@@ -1153,8 +1167,15 @@ fn update_settings(
         let _ = app.emit("kotone://overlay-config", &updated.overlay);
     }
 
-    // 当前角色（名字、声音、唤醒词跟着它）
-    roles::remember(&updated.agent.role_id);
+    if !updated.ui.legacy_upgrade.uses_legacy_assistant() {
+        if old.ui.legacy_upgrade.uses_legacy_assistant() {
+            automation::ensure_builtin(&app);
+            roles::migrate(&app);
+            create_startup_windows(&app, true);
+        }
+        // 当前角色（名字、声音、唤醒词跟着它）
+        roles::remember(&updated.agent.role_id);
+    }
     // 引擎/模型/模式可能经 patch 变更 → restartNeeded 推导依赖最新配置，推送全量状态
     runtime::snapshot_and_emit(&app, None);
     Ok(updated)
@@ -1889,9 +1910,9 @@ fn auto_elevate_before_tauri_init() {
 }
 
 /// 建启动时就要有的窗口（`tauri.conf.json` 里标了 `create: false`；悬浮窗另由 [`overlay`] 按需建）。
-fn create_startup_windows(app: &tauri::AppHandle) {
+fn create_startup_windows(app: &tauri::AppHandle, companion_enabled: bool) {
     for label in ["danmaku", "companion", "main"] {
-        if app.get_webview_window(label).is_some() {
+        if (label == "companion" && !companion_enabled) || app.get_webview_window(label).is_some() {
             continue;
         }
         let Some(config) = app
@@ -2026,8 +2047,11 @@ pub fn run() {
 
             // 用量账本（usage.jsonl）：之后的在线调用都记进去。
             usage::start();
-            // 当前角色（工作区与语音合成按它取性格和声音）。
-            roles::remember(&settings.agent.role_id);
+            // 旧版提醒沿用自己的音色；琴音角色在选择体验后才初始化。
+            let companion_enabled = !settings.ui.legacy_upgrade.uses_legacy_assistant();
+            if companion_enabled {
+                roles::remember(&settings.agent.role_id);
+            }
             let settings = Arc::new(RwLock::new(settings));
             let settings_repository = Arc::new(SettingsRepository::new(settings.clone()));
             let mut registry = EngineRegistry::new();
@@ -2065,7 +2089,8 @@ pub fn run() {
             app.manage(voice_chat::VoiceChat::default());
             app.manage(voice_listen::VoiceListen::default());
             app.manage(key_request::KeyRequests::default());
-            let assistant_runtime = assistant::initialize(app.handle(), settings.clone());
+            let assistant_runtime =
+                assistant::initialize(app.handle(), settings.clone(), connections.clone());
 
             #[allow(unused_mut)] // vad-silero feature 关闭时无可变接线
             let mut orchestrator = Orchestrator::new(
@@ -2118,11 +2143,16 @@ pub fn run() {
             app.manage(ocr_engines::OcrEngines::new(app.handle()));
             app.manage(companion::CompanionRuntime::default());
             app.manage(automation::AutomationManager::open());
+            if companion_enabled {
+                automation::ensure_builtin(app.handle());
+            }
             automation::start_schedules(app.handle());
             // 内置琴音 Agent：对话存储与运行状态（ADR 014 / 015）
-            app.manage(agent::AgentRuntime::open());
-            // 琴音原来的名字和头像记进她的角色卡（只做一次）。
-            roles::migrate(app.handle());
+            app.manage(agent::AgentRuntime::open(companion_enabled));
+            if companion_enabled {
+                // 琴音原来的名字和头像记进她的角色卡（只做一次）。
+                roles::migrate(app.handle());
+            }
             // 对局复盘：盯着游戏进程，一局结束就整理（agent.matchRecap，默认开）。
             recap::start(app.handle());
             // 先接上程序执行端口，再启动调度器（到点的程序才有人执行）。
@@ -2137,7 +2167,7 @@ pub fn run() {
 
             // 启动时的窗口（设置、弹幕、气泡）在全部状态 manage() 之后才建：页面一加载就会发 IPC，
             // 走快速 IPC（ipc.localhost）时可能早于 setup 结束到达，命令取不到状态会崩溃。
-            create_startup_windows(app.handle());
+            create_startup_windows(app.handle(), companion_enabled);
             for label in ["main", "overlay", "danmaku"] {
                 if let Some(win) = app.get_webview_window(label) {
                     harden_webview(&win);
@@ -2258,6 +2288,10 @@ pub fn run() {
             assistant::cancel_reminder,
             assistant::assistant_submit_text,
             assistant::cancel_assistant_request,
+            assistant_input::assistant_voice_begin,
+            assistant_input::assistant_voice_end,
+            assistant_input::assistant_voice_confirm,
+            assistant_input::assistant_voice_cancel,
             assistant::list_speech_voices,
             assistant::preview_reminder,
             assistant::assistant_call,

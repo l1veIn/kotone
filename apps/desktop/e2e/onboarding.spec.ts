@@ -155,3 +155,83 @@ test("a failed model download keeps an inline error and retry action", async ({ 
   await expect(page.getByRole("button", { name: "重试", exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "手动下载", exact: true }).first()).toBeVisible();
 });
+
+test("a legacy upgrade starts with voice input and preserves the reminder entry", async ({ page }) => {
+  await page.goto("/#/settings?mockLegacyUpgrade=pending");
+  const notice = page.getByTestId("legacy-upgrade-notice");
+  await expect(notice.getByRole("heading")).toHaveText("语音输入法的用法没有变");
+  await expect(page.getByTestId("onboarding")).toHaveCount(0);
+  await notice.getByRole("button", { name: "继续只用语音输入法" }).click();
+  await expect(notice).toHaveCount(0);
+  await expect(page.getByTestId("settings-nav-assistant")).toHaveCount(0);
+  await expect(page.getByTestId("home-call")).toHaveCount(0);
+  await page.getByTestId("settings-nav-legacy-reminders").click();
+  await expect(page.getByTestId("legacy-reminders-page")).toBeVisible();
+  const settings = await page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings());
+  expect(settings.ui.legacyUpgrade).toBe("dismissed");
+  expect(settings.assistant.hotkey).toBe("");
+});
+
+test("an upgraded user explicitly picks a separate call key and keeps the old reminder settings", async ({ page }) => {
+  await page.goto("/#/settings?mockLegacyUpgrade=pending&mockLegacyReminder=configured&mockModels=none");
+  const getSettings = () => page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings());
+  const original = await getSettings();
+  await page.getByTestId("legacy-upgrade-notice").getByRole("button", { name: "认识琴音" }).click();
+  await expect(page.getByTestId("onboarding-key")).toBeVisible();
+  await page.getByTestId("onboarding-key-input").fill("sk-test-123");
+  await page.getByTestId("onboarding-key-start").click();
+  await expect(page.getByTestId("onboarding-call-key")).toContainText("游戏用 ~");
+  await expect(page.getByTestId("onboarding-call-key-enable")).toBeDisabled();
+  expect(original.assistant.hotkey).toBe("Alt+F9");
+  expect((await getSettings()).connections).toEqual(original.connections);
+  await page.getByTestId("onboarding-call-key-input").fill("Menu+F9");
+  await page.getByTestId("onboarding-call-key-enable").click();
+  await expect(page.getByRole("alert")).toContainText("提醒助手热键");
+  expect((await getSettings()).connections).toEqual(original.connections);
+  await page.getByTestId("onboarding-call-key-input").fill("Ctrl+Alt+F10");
+  await page.getByTestId("onboarding-call-key-enable").click();
+  await expect(page.getByTestId("onboarding-hello")).toBeVisible();
+  const next = await getSettings();
+  expect(next.ui.legacyUpgrade).toBe("optedIn");
+  expect(next.assistant.hotkey).toBe(original.assistant.hotkey);
+  expect(next.assistant.connectionId).toBe(original.assistant.connectionId);
+  expect(next.assistant.companionBindings).toEqual({
+    hotkey: "Ctrl+Alt+F10",
+    connectionId: expect.stringMatching(/^deepseek-/),
+  });
+  expect(next.connections).toContainEqual(original.connections[0]);
+  expect(next.sttEngine).toBe(original.sttEngine);
+  expect(next.activeProfileId).toBe(original.activeProfileId);
+  expect(next.hotkey).toEqual(original.hotkey);
+
+  await page.getByTestId("onboarding-hello-done").click();
+  await page.getByTestId("settings-nav-legacy-reminders").click();
+  await expect(page.getByTestId("legacy-reminders-page")).toBeVisible();
+  await page.getByTestId("assistant-nav-settings").click();
+  await expect(page.getByRole("combobox", { name: "提醒助手 AI 连接" })).toContainText("原来的提醒连接");
+  await expect(page.getByTestId("hotkey-input-legacy-reminder")).toHaveValue("Alt+F9");
+});
+
+test("legacy setup discards unconfirmed keys and removes tentative connections when validation fails", async ({ page }) => {
+  await page.goto("/#/settings?mockLegacyUpgrade=pending&mockLegacyReminder=configured&mockCompanionCheck=fail");
+  await expect(page.getByTestId("legacy-upgrade-notice")).toBeVisible();
+  const listConnections = () => page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).listConnections());
+  const original = await listConnections();
+  const open = () => page.getByTestId("legacy-upgrade-notice").getByRole("button", { name: "认识琴音" }).click();
+  const key = page.getByTestId("onboarding-key-input");
+  await open();
+  await key.fill("sk-cancel");
+  await page.getByTestId("onboarding-key-start").click();
+  await page.getByRole("button", { name: "先不启用" }).click();
+  await expect(page.getByTestId("legacy-upgrade-notice")).toBeVisible();
+  expect(await listConnections()).toEqual(original);
+
+  await open();
+  await expect(key).toHaveValue("");
+  await key.fill("sk-invalid");
+  await page.getByTestId("onboarding-key-start").click();
+  await page.getByTestId("onboarding-call-key-input").fill("Ctrl+Alt+F10");
+  await page.getByTestId("onboarding-call-key-enable").click();
+  await expect(page.getByTestId("onboarding-key-error")).toBeVisible();
+  expect(await listConnections()).toEqual(original);
+});

@@ -108,6 +108,7 @@ jobs:
             完整变更与安装说明见仓库中的 CHANGELOG 与 README。
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-rc.') }}
+          uploadUpdaterJson: ${{ startsWith(github.ref_name, 'v0.1.') && !contains(github.ref_name, '-') }}
           generateReleaseNotes: true
 
       - name: Generate and upload updater manifests
@@ -127,14 +128,14 @@ jobs:
             --tag "${{ github.ref_name }}" `
             --cos-base-url "https://kotone-1258931230.cos.ap-guangzhou.myqcloud.com/releases"
           $dir = $installer.DirectoryName
-          gh release upload "${{ github.ref_name }}" `
-            (Join-Path $dir "latest.json") `
-            (Join-Path $dir "latest-cos.json") `
-            (Join-Path $dir "latest-cn-ghfast.json") `
-            (Join-Path $dir "latest-cn-ghproxy.json") `
-            (Join-Path $dir "latest-cn-ghproxynet.json") `
-            (Join-Path $dir "latest-cn-llkk.json") `
-            --clobber
+          $assets = @((Join-Path $dir "latest-cos.json"))
+          if ($env:GITHUB_REF_NAME -match '^v0\.1\.\d+$') {
+            $legacyNames = @("latest.json", "latest-cn-ghfast.json", "latest-cn-ghproxy.json",
+              "latest-cn-ghproxynet.json", "latest-cn-llkk.json")
+            $assets += $legacyNames | ForEach-Object { Join-Path $dir $_ }
+          }
+          gh release upload $env:GITHUB_REF_NAME @assets --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Failed to upload updater manifests." }
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -161,8 +162,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if ($env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+$') {
-            Write-Host "Prerelease tag remains a draft and will not enter the COS stable channel."
+          if ($env:GITHUB_REF_NAME -notmatch '^v0\.1\.\d+$') {
+            Write-Host "This release remains a draft. See ADR 027 before publishing the gated 0.2 channel."
             exit 0
           }
           gh release edit $env:GITHUB_REF_NAME `
@@ -172,7 +173,7 @@ jobs:
 
   publish-cos:
     needs: build-windows
-    if: ${{ !contains(github.ref_name, '-') }}
+    if: ${{ startsWith(github.ref_name, 'v0.1.') && !contains(github.ref_name, '-') }}
     uses: ./.github/workflows/publish-cos.yml
     with:
       tag: ${{ github.ref_name }}

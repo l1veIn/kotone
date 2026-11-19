@@ -30,3 +30,4 @@ ADR 保留当时的上下文和选择，状态决定其适用性。当前架构�
 | [024 前缀缓存、上下文压缩与用量账本](024-prefix-cache-compaction-usage.md) | Accepted / 已采纳 | 照 DeepSeek Harness：系统提示与工具清单一段对话不变、会变的写进每轮附注、只追加；照 Goose 压缩（请求形状照 dsh，整理也命中缓存）；usage.jsonl 记 token、命中、费用 |
 | [025 角色、自定义唤醒词与对局复盘](025-roles-wake-words-match-recap.md) | Accepted / 已采纳 | 角色卡照 Character Card V2；唤醒词照 sherpa-onnx text2token 转拼音并校验；游戏进程退出时自动复盘写进游戏记忆（陪玩特有，自己设计） |
 | [026 不要通用读写执行；按 DeepSeek 最佳实践对齐](026-no-generic-rwx-deepseek-best-practices.md) | Accepted / 已采纳 | 琴音没有 read / write / bash（陪玩特有）；联网搜索用 DeepSeek 搜索与抓取接口做成 `web.search` / `web.fetch`；DeepSeek 连接用自己的客户端：`latest_reminder`、`title`、`safety_check`、最后一块报错、内容审核拒绝 |
+| [027 0.1.x 到 0.2.0 过渡](027-0.2-upgrade-transition.md) | 候选方案，待验收和发布确认 | 旧用户优先保留语音输入，独立通道分桶，维护版升级前备份 |

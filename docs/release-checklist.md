@@ -45,22 +45,26 @@
    发布前须补齐摘要，不能保留空说明或占位文字。
 2. 本机执行全部自动门禁并构建 NSIS 安装包。
 3. 在干净 Windows 用户环境完成安装/首次向导/卸载冒烟测试。
-4. 推送 `v<version>` Tag；`Release Windows` 工作流先创建 Draft，完成构建、签名、清单与
-   SHA-256 上传后自动发布稳定版 GitHub Release。
-5. 同一 Tag 工作流随即调用 `Publish Release to Tencent COS`，上传版本化安装包、签名和
-   校验文件，并在最后更新 COS `releases/latest.json`；RC Tag 保持 Draft/Prerelease，不进入稳定通道。
-6. 确认 GitHub 与 COS 工作流成功，下载并核对 SHA-256，再做一次安装包回归。
-7. 确认“检查更新”能看到版本号与 CHANGELOG 更新说明。
+
+### 0.1.x 维护版
+
+1. 经确认后，从带旧通道护栏的维护分支推送稳定版 Tag。`Release Windows` 先创建 Draft，构建并上传安装包、更新签名、清单与 SHA-256，随后发布 GitHub Release。
+2. `Publish Release to Tencent COS` 上传版本化安装包、签名和校验文件，最后更新 COS `releases/latest.json`。
+3. 下载并核对 SHA-256，做一次安装包回归。确认 COS 和 GitHub 固定地址都返回该 0.1.x 版本，客户端能查到维护版说明。
+
+### 0.2.0 过渡版
+
+1. 先完成 [ADR 027](adr/027-0.2-upgrade-transition.md) 的验证并取得玩家确认。确认默认分支的手动 COS 发布入口也有旧通道护栏，再推送 Tag。0.2 的 Tag 工作流只生成草稿和签名制品，公开 GitHub Release 时显式设置 `make_latest: "false"`，旧通道继续使用自己的 `latest.json`。
+2. 核对 GitHub 草稿的 SHA-256 和更新签名。先将版本化安装包、签名和校验文件上传 COS，再验证公开包 URL 与下载校验和。
+3. 用 `node scripts/stage-transition-update.mjs <签名清单> <输出目录> <确认的比例>` 离线生成 `latest-0.2.json`。它带短版更新说明。收到该档放量批准后，才更新 COS 的专用地址，并为清单设置 `Cache-Control: no-store, no-cache, must-revalidate`。
+4. 用无缓存请求分别检查 COS 专用清单、COS 旧清单与 GitHub 旧清单。两个固定旧地址须继续提供 0.1.x。确认客户端的版本提示、短说明和旧版回退入口符合 ADR 027。
 
 ## 签名与更新策略
 
 - 当前直接分发渠道为腾讯云 COS（中国大陆首选）与 GitHub Release（兜底）+ NSIS
   （按用户安装，不要求管理员权限）。
 - Windows 代码签名证书接入后再启用签名门禁；未签名构建可能触发 SmartScreen。
-- 自动更新（Tauri updater）已接入：`tauri.conf.json` 的 `plugins.updater` 首先读取
-  COS `releases/latest.json`，GitHub 官方地址作为兜底。`bundle.createUpdaterArtifacts`
-  已开启；稳定 Tag 只有在全部 GitHub Release 附件上传完成后才自动发布并触发 COS，RC Tag 不会
-  更新稳定通道。已发布版本拒绝由 Tag 工作流重建，COS 版本化对象也禁止覆盖。
+- 0.1.x 先读 COS `releases/latest.json`，GitHub 固定地址为兜底。0.1.14 在维护版之后检查 COS 专用通道并在本机判断灰度，0.2.0 使用专用通道。只有稳定 0.1.x 允许自动更新旧通道。RC 保留为草稿，不进入稳定更新。已发布版本拒绝由 Tag 工作流重建，COS 版本化对象也禁止覆盖。
 - COS 发版子账号的对象读写只限 `kotone-1258931230/releases/*`；另有 `coscli cp`
   所需的桶级元数据权限 `HeadBucket / GetBucket / ListMultipartUploads`。仓库 Secrets 为
   `TENCENT_COS_SECRET_ID` / `TENCENT_COS_SECRET_KEY`；不授予删除对象或修改桶配置权限。

@@ -2,10 +2,11 @@ import { expect, test } from "@playwright/test";
 
 // 「自动化」页（ADR 013 §8）：浏览器预览用示例数据，不运行任何程序。
 
-test("one list: play / stop, temporary reminders, schedules, details and the full history", async ({ page }, testInfo) => {
+test("one list: play / stop, temporary reminders, schedules, details and the full history", async ({ page, baseURL }, testInfo) => {
+  const origin = new URL(baseURL!).origin;
   const external: string[] = [];
   page.on("request", (request) => {
-    if (/^https?:/.test(request.url()) && !request.url().startsWith("http://127.0.0.1:17420")) external.push(request.url());
+    if (/^https?:/.test(request.url()) && new URL(request.url()).origin !== origin) external.push(request.url());
   });
   await page.setViewportSize({ width: 1040, height: 1000 });
   await page.goto("/#/settings?onboarding=never");

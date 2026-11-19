@@ -54,12 +54,13 @@ pub struct VoiceChat {
 }
 
 fn config(app: &AppHandle) -> VoiceChatConfig {
-    app.state::<crate::SharedState>()
-        .settings
-        .read()
-        .unwrap()
-        .voice_chat
-        .clone()
+    let state = app.state::<crate::SharedState>();
+    let settings = state.settings.read().unwrap();
+    let mut config = settings.voice_chat.clone();
+    if settings.ui.legacy_upgrade.uses_legacy_assistant() {
+        config.enabled = false;
+    }
+    config
 }
 
 fn desired(config: &VoiceChatConfig, cable: &CableDevices) -> Option<RouterKey> {

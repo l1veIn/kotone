@@ -125,9 +125,11 @@ pub const FIELDS: &[Field] = &[
     f("soundFeedback.send.volume", "发送提示音音量", "设置 → 音效", "0–100。", NONE, NOW),
     f("soundFeedback.send.soundId", "发送提示音", "设置 → 音效", "", RECORD_SOUNDS, NOW),
     // ---- 琴音陪玩（助手 / Agent）----
-    f("assistant.hotkey", "呼叫热键", "琴音 → 设置 → 呼叫", "按一下就在气泡里听，说完自动提交（按键版的语音唤醒）；默认 Backquote（~ 键）；空 = 不用。", NONE, NOW),
+    f("assistant.hotkey", "助手热键", "琴音 → 交流，或提醒助手 → 提醒设置", "新用户用作呼叫键，默认 Backquote（~ 键）。0.1.x 升级用户保留原提醒键，呼叫键单独设置；空 = 不用。", NONE, NOW),
+    f("assistant.companionBindings.hotkey", "升级用户的呼叫热键", "琴音 → 交流", "仅 0.1.x 升级用户启用琴音后使用；按一下听，说完自动提交。", NONE, NOW),
     f("assistant.interactionMode", "旧的陪玩热键方式（已不用，呼叫固定为说完自动提交）", "琴音 → 设置 → 呼叫", "", &[("push-to-talk", "按住说话，松开提交"), ("dictation", "按一下开始，停顿自动提交"), ("one-shot", "按一下说一句，说完自动提交")], NOW),
-    f("assistant.connectionId", "AI 连接", "琴音 → 设置 → AI 连接", "连接 ID，用 connections.list 查。换了以后要重新能力自检。", NONE, NOW),
+    f("assistant.connectionId", "AI 连接", "琴音 → 设置，或提醒助手 → 提醒设置", "连接 ID，用 connections.list 查。0.1.x 升级用户在此保留原提醒连接。", NONE, NOW),
+    f("assistant.companionBindings.connectionId", "升级用户的琴音连接", "琴音 → 设置 → AI 连接", "仅 0.1.x 升级用户启用琴音后使用；连接 ID，用 connections.list 查。", NONE, NOW),
     f("assistant.route", "呼叫交给谁", "琴音 → 设置 → 呼叫", "", &[("reminders", "内置（琴音 / 旧的单次陪玩）"), ("agent", "转交外部 Agent（需开启工具服务）")], NOW),
     f("assistant.defaultDelivery", "回答方式", "琴音 → 设置 → 回答", "数组，元素 voice（语音）/ danmaku（弹幕），1–2 个不重复。", NONE, NOW),
     f("assistant.speechEngine", "本地语音合成", "琴音 → 设置 → 回答", "assistant.ttsModelId 为空时使用。", &[("system", "Windows 系统语音"), ("kokoro", "Kokoro 本地中文语音（需下载）")], NOW),
@@ -278,6 +280,7 @@ pub const INTERNAL: &[(&str, &str)] = &[
     ("language", "识别语言，目前只有中文"),
     ("toolService.ocr", "旧字段，保留兼容"),
     ("ui.firstRunCompleted", "首次向导是否完成"),
+    ("ui.legacyUpgrade", "由玩家在升级说明或新手引导中选择"),
     ("adminPromptDismissed", "界面提示状态"),
     ("autoAdminPromptDismissed", "界面提示状态"),
     ("evalRecording", "开发评测用"),
@@ -516,7 +519,10 @@ mod tests {
 
     #[test]
     fn documented_paths_exist_and_are_unique() {
-        let json = default_json();
+        let mut settings = Settings::default();
+        settings.assistant.companion_bindings =
+            Some(crate::assistant::CompanionBindings::default());
+        let json = serde_json::to_value(settings).unwrap();
         let mut seen = std::collections::HashSet::new();
         for field in FIELDS {
             assert!(seen.insert(field.path), "重复的说明 {}", field.path);
@@ -526,7 +532,7 @@ mod tests {
             for part in base.split('.') {
                 node = node
                     .get(part)
-                    .unwrap_or_else(|| panic!("默认设置里没有 {}", field.path));
+                    .unwrap_or_else(|| panic!("设置里没有 {}", field.path));
             }
         }
     }
