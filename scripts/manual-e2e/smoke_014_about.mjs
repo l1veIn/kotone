@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as pause } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
 const env = process.env;
 assert(process.platform === "win32"
@@ -12,6 +14,8 @@ assert(process.platform === "win32"
   && env.GITHUB_EVENT_NAME === "workflow_dispatch", "Expected the isolated GitHub-hosted smoke runner.");
 const port = Number(process.argv[2]);
 assert(Number.isInteger(port) && port > 1023 && port <= 65535, "Expected a local WebView2 debug port.");
+const appPid = Number(process.argv[4]);
+assert(Number.isSafeInteger(appPid) && appPid > 0, "Expected the installed test app's process ID.");
 const temp = await realpath(env.RUNNER_TEMP);
 const target = await realpath(process.argv[3]);
 const relativeTarget = path.relative(temp, target);
@@ -30,19 +34,49 @@ async function until(read, label, duration = 10000) {
   throw new Error(`Timed out waiting for ${label}.`);
 }
 
-const pageTarget = await until(async () => {
-  const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2000) });
-  assert(response.ok, "The isolated WebView2 debug list was unavailable.");
-  const pages = await response.json();
-  return pages.find((page) => {
-    if (page.type !== "page") return false;
-    const url = new URL(page.url);
-    return (url.origin === "http://tauri.localhost" || (url.protocol === "tauri:" && url.hostname === "localhost"))
-      && url.hash.startsWith("#/settings");
-  });
-}, "installed Kotone settings");
+const loopbacks = ["127.0.0.1", "[::1]"];
+const discoveryErrors = new Map();
+
+async function discoverSettings() {
+  for (const host of loopbacks) {
+    try {
+      const response = await fetch(`http://${host}:${port}/json/list`, { signal: AbortSignal.timeout(1000) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const pages = await response.json();
+      const page = pages.find((entry) => {
+        if (entry.type !== "page") return false;
+        const url = new URL(entry.url);
+        return (url.origin === "http://tauri.localhost" || (url.protocol === "tauri:" && url.hostname === "localhost"))
+          && url.hash.startsWith("#/settings");
+      });
+      if (page) return page;
+      discoveryErrors.set(host, "settings target missing");
+    } catch (error) {
+      discoveryErrors.set(host, error.cause?.code ?? error.message);
+    }
+  }
+  return null;
+}
+
+let pageTarget;
+try {
+  pageTarget = await until(discoverSettings, "installed Kotone settings", 15000);
+} catch (error) {
+  // A real runner can render the app without offering a CDP socket. Only
+  // retry through UI Automation before any rollback click has been sent.
+  const details = [...discoveryErrors].map(([host, message]) => `${host}: ${message}`).join("; ");
+  console.log(`${error.message} (${details}) Using the installed app's Windows UI Automation tree.`);
+  const fallback = fileURLToPath(new URL("./smoke_014_about_uia.ps1", import.meta.url));
+  const result = spawnSync("powershell.exe", [
+    "-NoProfile", "-NonInteractive", "-File", fallback,
+    "-AppProcessId", String(appPid), "-TargetDirectory", target,
+  ], { stdio: "inherit", windowsHide: true, timeout: 75000 });
+  if (result.error) throw result.error;
+  assert.equal(result.status, 0, "Windows UI Automation did not verify the installed app's rollback link.");
+  process.exit(0);
+}
 const wsUrl = new URL(pageTarget.webSocketDebuggerUrl);
-assert(wsUrl.protocol === "ws:" && ["localhost", "127.0.0.1"].includes(wsUrl.hostname) && wsUrl.port === String(port),
+assert(wsUrl.protocol === "ws:" && [...loopbacks, "localhost"].includes(wsUrl.hostname) && wsUrl.port === String(port),
   "Expected the debugger to remain on loopback.");
 
 class DebuggerClient {

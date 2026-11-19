@@ -516,10 +516,10 @@ def run_smoke(args):
         stop_receiver(desktop, receiver, hwnd)
         if args.after_audio_script:
             subprocess.run(
-                ["node", str(args.after_audio_script), str(port), str(target)],
+                ["node", str(args.after_audio_script), str(port), str(target), str(app.pid)],
                 cwd=repo,
                 check=True,
-                timeout=60,
+                timeout=110,
             )
     except (RuntimeError, TimeoutError):
         print_voice_failure(home, run_dir, port)
