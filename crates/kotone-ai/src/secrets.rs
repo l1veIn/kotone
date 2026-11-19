@@ -15,9 +15,31 @@ fn credential_user(connection_id: &str) -> String {
 
 pub struct KeyringSecretStore;
 
+fn service_name() -> String {
+    // 隔离实例有独立的凭据命名空间。正式安装的凭据查找保持原样。
+    service_for(std::env::var_os(kotone_core::settings::HOME_ENV))
+}
+
+fn service_for(home: Option<std::ffi::OsString>) -> String {
+    match home {
+        Some(dir) if !dir.is_empty() => format!("{SERVICE}@{}", dir.to_string_lossy()),
+        _ => SERVICE.to_string(),
+    }
+}
+
+#[test]
+fn isolated_homes_get_their_own_credential_service() {
+    assert_eq!(service_for(None), "kotone");
+    assert_eq!(service_for(Some("".into())), "kotone");
+    assert_eq!(
+        service_for(Some(r"D:\kotone-test".into())),
+        r"kotone@D:\kotone-test"
+    );
+}
+
 impl SecretStore for KeyringSecretStore {
     fn get(&self, connection_id: &str) -> Result<Option<String>, String> {
-        let entry = Entry::new(SERVICE, &credential_user(connection_id))
+        let entry = Entry::new(&service_name(), &credential_user(connection_id))
             .map_err(|error| format!("打开凭据项失败：{error}"))?;
         match entry.get_password() {
             Ok(secret) if !secret.is_empty() => Ok(Some(secret)),
@@ -28,7 +50,7 @@ impl SecretStore for KeyringSecretStore {
     }
 
     fn set(&self, connection_id: &str, secret: &str) -> Result<(), String> {
-        let entry = Entry::new(SERVICE, &credential_user(connection_id))
+        let entry = Entry::new(&service_name(), &credential_user(connection_id))
             .map_err(|error| format!("打开凭据项失败：{error}"))?;
         entry
             .set_password(secret)
@@ -44,7 +66,7 @@ impl SecretStore for KeyringSecretStore {
     }
 
     fn delete(&self, connection_id: &str) -> Result<(), String> {
-        let entry = Entry::new(SERVICE, &credential_user(connection_id))
+        let entry = Entry::new(&service_name(), &credential_user(connection_id))
             .map_err(|error| format!("打开凭据项失败：{error}"))?;
         match entry.delete_credential() {
             Ok(()) => Ok(()),

@@ -569,11 +569,16 @@ fn default_channel_cycle_hotkey() -> String {
     "Shift+CapsLock".into()
 }
 
-/// Kotone 用户数据目录：~/.kotone/
+/// 隔离实例的数据目录。正式安装仍使用 ~/.kotone。
+pub const HOME_ENV: &str = "KOTONE_HOME";
+
 pub fn kotone_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".kotone")
+    match std::env::var_os(HOME_ENV) {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".kotone"),
+    }
 }
 
 fn config_path() -> PathBuf {

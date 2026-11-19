@@ -1322,13 +1322,16 @@ fn restart_as_admin(app: AppHandle) -> Result<(), String> {
 /// 用户在任务管理器「启动」里禁用后这里返回 false，设置页据此与系统同步。
 #[tauri::command]
 fn get_autostart_enabled() -> bool {
-    autostart::autostart_enabled()
+    !isolated_instance() && autostart::autostart_enabled()
 }
 
 /// 设置「开机自动启动」：写入 / 删除 HKCU Run 键（无参数启动；
 /// 值名与 NSIS 卸载清理共用，卸载时自动移除）。
 #[tauri::command]
 fn set_autostart_enabled(enabled: bool) -> Result<(), String> {
+    if isolated_instance() {
+        return Err("隔离实例不能更改系统自启动设置".into());
+    }
     autostart::set_autostart(enabled)
 }
 
@@ -1816,33 +1819,43 @@ fn auto_elevate_before_tauri_init() {
     }
 }
 
+fn isolated_instance() -> bool {
+    std::env::var_os(settings::HOME_ENV).is_some_and(|dir| !dir.is_empty())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 见函数注释：自启动提权必须先于单实例插件的互斥锁创建。
     #[cfg(windows)]
-    auto_elevate_before_tauri_init();
+    if !isolated_instance() {
+        auto_elevate_before_tauri_init();
+    }
 
     let startup_options = StartupOptions {
         onboarding: parse_onboarding_launch_mode(std::env::args()),
     };
-    tauri::Builder::default()
-        // 单实例：第二实例启动时唤起已有实例的设置窗口并退出自身，
-        // 避免旧进程未退出导致热键「already registered」与 WebView2 类注册冲突
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.show();
-                let _ = win.unminimize();
-                let _ = win.set_focus();
-            }
-            // 测试时常从已在托盘运行的实例再次执行
-            // `kotone.exe --onboarding=always`。第二实例不会进入 setup，
-            // 因此必须把强制打开请求转发给现有设置窗口。
-            if parse_onboarding_launch_mode(args.iter().map(String::as_str))
-                == OnboardingLaunchMode::Always
-            {
-                let _ = app.emit_to("main", "kotone://open-onboarding", ());
-            }
-        }))
+    let mut builder = tauri::Builder::default();
+    if !isolated_instance() {
+        builder = builder
+            // 单实例：第二实例启动时唤起已有实例的设置窗口并退出自身，
+            // 避免旧进程未退出导致热键「already registered」与 WebView2 类注册冲突
+            .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.unminimize();
+                    let _ = win.set_focus();
+                }
+                // 测试时常从已在托盘运行的实例再次执行
+                // `kotone.exe --onboarding=always`。第二实例不会进入 setup，
+                // 因此必须把强制打开请求转发给现有设置窗口。
+                if parse_onboarding_launch_mode(args.iter().map(String::as_str))
+                    == OnboardingLaunchMode::Always
+                {
+                    let _ = app.emit_to("main", "kotone://open-onboarding", ());
+                }
+            }));
+    }
+    builder
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
