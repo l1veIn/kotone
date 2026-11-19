@@ -154,7 +154,7 @@ def find_playback_config(fixture):
         for index, device in enumerate(sd.query_devices()):
             if (
                 host_apis[device["hostapi"]]["name"] != api_name
-                or not device["name"].startswith("CABLE Input (VB-Audio")
+                or not device["name"].startswith(("CABLE Input (VB-Audio", "Speakers (VB-Audio Virtual Cab"))
                 or not device["max_output_channels"]
             ):
                 continue

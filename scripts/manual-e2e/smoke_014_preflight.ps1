@@ -59,7 +59,12 @@ function Wait-CableAudio([int] $Seconds) {
     do {
         $endpoints = Get-PnpDevice -Class AudioEndpoint -PresentOnly -ErrorAction SilentlyContinue
         $recording = $endpoints | Where-Object { $_.Status -eq 'OK' -and $_.FriendlyName -like 'CABLE Output*' }
-        $playback = $endpoints | Where-Object { $_.Status -eq 'OK' -and $_.FriendlyName -like 'CABLE Input (*' }
+        $playback = $endpoints | Where-Object {
+            $_.Status -eq 'OK' -and $_.FriendlyName -in @(
+                'CABLE Input (VB-Audio Virtual Cable)',
+                'Speakers (VB-Audio Virtual Cable)'
+            )
+        }
         if ($recording -and $playback) {
             Write-Host "Verified guest recording and playback endpoints: $($recording.FriendlyName); $($playback.FriendlyName)"
             return $true
