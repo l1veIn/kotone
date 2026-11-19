@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)]
-    [string]$CandidateInstaller
+    [string]$CandidateInstaller,
+    [switch]$BaselineOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,13 +21,15 @@ $CandidateVersion = '0.1.14'
 $OldInstallerName = 'Kotone_0.1.13_x64-setup.exe'
 $OldInstallerUrl = "https://github.com/l1veIn/kotone/releases/download/v0.1.13/$OldInstallerName"
 $OldInstallerSha256 = '1292c8ec5553ba2f7da08d700bda0ccbf8e1f47c322a9fec836096c7ad0ab17b'
-$Candidate = Get-Item -LiteralPath $CandidateInstaller
 $Workspace = (Resolve-Path -LiteralPath $env:GITHUB_WORKSPACE).ProviderPath.TrimEnd('\') + '\'
 $TempRoot = (Resolve-Path -LiteralPath $env:RUNNER_TEMP).ProviderPath.TrimEnd('\') + '\'
-if ($Candidate.PSIsContainer -or $Candidate.Name -cne 'Kotone_0.1.14_x64-setup.exe' -or
-    (-not $Candidate.FullName.StartsWith($Workspace, [StringComparison]::OrdinalIgnoreCase) -and
-     -not $Candidate.FullName.StartsWith($TempRoot, [StringComparison]::OrdinalIgnoreCase))) {
-    throw 'Expected the freshly built 0.1.14 NSIS installer in the runner workspace or temp directory.'
+if (!$BaselineOnly) {
+    $Candidate = Get-Item -LiteralPath $CandidateInstaller
+    if ($Candidate.PSIsContainer -or $Candidate.Name -cne 'Kotone_0.1.14_x64-setup.exe' -or
+        (-not $Candidate.FullName.StartsWith($Workspace, [StringComparison]::OrdinalIgnoreCase) -and
+         -not $Candidate.FullName.StartsWith($TempRoot, [StringComparison]::OrdinalIgnoreCase))) {
+        throw 'Expected the freshly built 0.1.14 NSIS installer in the runner workspace or temp directory.'
+    }
 }
 
 $InstallDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Kotone'
@@ -71,8 +73,9 @@ function Invoke-Nsis([string]$Path, [string[]]$Options) {
 function Assert-InstalledVersion([string]$Version) {
     $ProductVersion = (Get-Item -LiteralPath $Exe).VersionInfo.ProductVersion
     $Registry = Get-ItemProperty -LiteralPath $UninstallRegistry
+    $RegisteredPath = ([string]$Registry.InstallLocation).Trim([char]'"').TrimEnd([char]'\')
     if ($ProductVersion -notin @($Version, "$Version.0") -or $Registry.DisplayVersion -ne $Version -or
-        $Registry.InstallLocation.TrimEnd('\') -ine $InstallDir) {
+        $RegisteredPath -ine $InstallDir) {
         throw "Installed version/path mismatch. PE $ProductVersion, registry $($Registry.DisplayVersion), path $($Registry.InstallLocation)."
     }
     Write-Host "PASS installed $Version in the same per-user directory: $Exe"
@@ -111,7 +114,9 @@ if ($CaptureEndpoints.Count -ne 1) {
 $CaptureName = $CaptureEndpoints[0].FriendlyName
 
 Save-TestInput $OldInstallerUrl $OldInstaller $OldInstallerSha256
-Write-Host "0.1.14 candidate installer SHA-256: $((Get-FileHash -LiteralPath $Candidate.FullName).Hash)"
+if (!$BaselineOnly) {
+    Write-Host "0.1.14 candidate installer SHA-256: $((Get-FileHash -LiteralPath $Candidate.FullName).Hash)"
+}
 Invoke-Nsis $OldInstaller @('/S')
 Assert-InstalledVersion $FixtureVersion
 
@@ -171,6 +176,7 @@ foreach ($File in $ModelFiles.GetEnumerator()) {
 
 Invoke-VoiceSmoke $FixtureVersion
 Assert-VoiceConfig $FixtureVersion
+if ($BaselineOnly) { return }
 $ConfigSha256 = (Get-FileHash -LiteralPath $Config).Hash
 Invoke-Nsis $Candidate.FullName @('/S', '/UPDATE')
 Assert-InstalledVersion $CandidateVersion

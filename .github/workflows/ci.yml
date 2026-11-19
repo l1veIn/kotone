@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       smoke_kind:
-        description: Preflight desktop and audio, or test the full upgrade
+        description: Check guest audio, old app input, or the full upgrade
         required: true
         default: preflight
         type: choice
-        options: [preflight, full]
+        options: [preflight, baseline, full]
 
 permissions:
   contents: read
@@ -43,6 +43,7 @@ jobs:
           workspaces: .
           cache-directories: target/sherpa-onnx-prebuilt
           prefix-key: v2-rust
+          cache-on-failure: true
       - name: Build the 0.1.14 maintenance installer
         if: inputs.smoke_kind == 'full'
         shell: pwsh
@@ -54,12 +55,22 @@ jobs:
           pnpm -C apps/desktop tauri build --ci --no-sign --bundles nsis --config src-tauri/tauri.ci.conf.json -- --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Prepare the synthetic audio sender
-        if: inputs.smoke_kind == 'full'
+        if: inputs.smoke_kind != 'preflight'
         shell: pwsh
         run: |
           python -m pip install --only-binary=:all: sounddevice==0.5.3
+      - name: Verify input on the published 0.1.13 installer
+        if: inputs.smoke_kind == 'baseline'
+        shell: pwsh
+        run: ./scripts/manual-e2e/smoke_014_install.ps1 -BaselineOnly
       - name: Install 0.1.13, verify input, upgrade in place, and verify rollback
         if: inputs.smoke_kind == 'full'
         shell: pwsh
         run: |
           ./scripts/manual-e2e/smoke_014_install.ps1 -CandidateInstaller './target/release/bundle/nsis/Kotone_0.1.14_x64-setup.exe'
+      - name: Show the disposable app's diagnostic log
+        if: failure()
+        shell: pwsh
+        run: |
+          $log = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.kotone/kotone.log'
+          if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 100 }
