@@ -29,3 +29,15 @@
 | `apps/desktop/src/routes/settings/pages/advanced/ConnectionsSection.svelte` | `ui-settings-models/{ModelsSection,ProviderEditor,CustomProviderCard,ApiKeyInput}` | 已有连接的卡片列表（密钥状态点、标签、行内操作）；提供商目录；编辑器里地址、模型（列表选或手填）、只写的密钥、获取密钥链接 | 按 Kotone 的分组（推荐 / 国内 / 海外 / 聚合 / 自定义）与搜索；“琴音在用”与能力自检结果放在卡片上；编辑器是对话框 |
 | 其余设置页（通用、琴音设置、自动化、文字处理、游戏适配、历史记录、高级、关于、角色、首次向导、各弹窗） | 同上 | 统一的页面骨架、设置卡与表单控件 | 保留琴音立绘、贴纸等 Kotone 形象元素 |
 | `apps/desktop/src/lib/components/ui/sonner/sonner.svelte` | `ui-primitives/Toast` | 右下角提示 | 每种提示配一张琴音贴纸 |
+
+## 第三阶段：首启引导、一个 Key 与“游戏陪玩”的界面结构（ADR 028）
+
+读取 `target/research/deepseek-harness` @ `ca33fd68`（2026-11-17，桌面 0.2.2-rc.4），并用安装版 0.2.2-rc.3 对照。同样只参照做法、没有复制源码；对照表的完整版在 [ADR 028](../adr/028-game-companion-interaction.md#五借鉴-deepseek-harness-桌面端)。
+
+| Kotone 文件 | 参照的上游代码 | 采用的做法 | Kotone 的不同 |
+| --- | --- | --- | --- |
+| `apps/desktop/src/lib/deepseekSetup.ts` | `apps/desktop/src/client/WelcomePage.tsx` `saveKey` | Key 的本地格式检查：只能是可打印 ASCII、不能是 `NAME=value`、不能整个被引号包着；报错文案同义 | 多一步读模型列表测试连接；通过后把语音识别、文字识别、语音合成、联网搜索显式换成 DeepSeek 并列出来 |
+| `apps/desktop/src/lib/components/DeepSeekKeyForm.svelte`、`routes/settings/Onboarding.svelte` | `WelcomePage.tsx`、`welcome-api.ts` | 欢迎页两个入口；Key 页一个密码框、不选服务商，保存并继续 / 稍后配置 / 返回 | 加“去 DeepSeek 开放平台创建”的链接；第二个入口是“只想用语音输入？”；升级用户先看升级欢迎页 |
+| `routes/settings/pages/assistant/AssistantChat.svelte` | `welcome-api.ts` 每次冷启动检查有没有可用的 Key；`EmptyHero.tsx` | 回到空白对话时没有 AI 连接就显示填 Key 的卡片（和引导里同一个组件） | 引导弹窗只弹一次；空白页有呼叫按钮和起手提示 |
+| `routes/settings/AppSidebar.svelte` | `ui-sidebar/SidebarRoot` | 新会话和会话列表在上、固定的入口在下 | 底部是「游戏陪玩」分组和「语音输入」 |
+| `crates/kotone-agent/src/prompt.rs` `capability_overview` | 内置 `dsh-doc` 技能（让 Harness 按真实能力回答关于自己的问题） | “你能做什么？”按真实能力回答 | 概览从工具清单生成、放进系统提示，并有测试保证提到的工具都存在 |

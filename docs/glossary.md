@@ -2,9 +2,27 @@
 
 这是产品文案、代码评审和架构说明的权威术语表。代码标识保持原样；中文表述优先使用下表。模型能力清单以 `kotone-stt::model` 为准，配置字段以 Rust 定义为准。
 
+## 游戏陪玩的核心概念（ADR 028）
+
+界面文案以这一节为准。[ADR 028](adr/028-game-companion-interaction.md) 有完整的流程和界面结构。
+
 | 中文 / English | 代码名 | 含义与边界 |
 | --- | --- | --- |
-| 运行时 / Runtime | `RuntimePhase`, `RuntimeStatus` | 应用级 stopped → starting → running → stopping 生命周期；包含模型预热、热键和资源释放。不是一句话的识别状态。 |
+| 呼叫 / Call | `assistant_call`, `call_hotkey()`, `HK_ASSISTANT` | 开始一轮和角色的语音对话。三种触发：呼叫键、唤醒词、聊天页的呼叫按钮。听和答都在**气泡**里。语音识别没准备好时，呼叫按钮先启动本地识别再听；呼叫键只在气泡里提示。 |
+| 呼叫键 / Call key | `assistant.hotkey`；0.1.x 升级用户为 `assistant.companionBindings.hotkey` | 按一下就呼叫。新用户默认 `~`，升级用户默认空。不再叫“陪玩热键”“呼叫热键”。 |
+| 语音输入 / Voice input | `hotkey`, `Orchestrator`（`purpose = input`） | 说话，原话打进游戏聊天框。**不经过 Agent**。状态显示在**悬浮窗**里。侧栏一个入口，分页 输入 / 文字处理 / 历史（页面 ID `general` / `processing` / `history`）。 |
+| 语音输入热键 / Voice input hotkey | `hotkey.key` | 按下说话的那个键（原“录制热键”）。 |
+| 停下 / Stop | `stop::stop_everything`, `automationStopHotkey` | 停止角色正在做的事和所有自动化。四种方式：她操作游戏时按 Esc、停止热键、说“停下”、托盘「停下」。不取消语音输入的录音（那是 Esc）。 |
+| 启动 / Start | `runtime::start`, `runtimeToggleHotkey`, `ui.autoStart` | **只和本地语音识别有关**：把本地识别模型加载进内存。本地识别有 未启动 / 准备中 / 已启动 / 出问题了 四种状态；在线识别打开 Kotone 就就绪，界面上看不到“启动”。 |
+| 气泡 / Bubble | `bubble.rs`, `assistant.bubble` | 只属于角色：她在听、在想、在说什么。关掉后只用声音和弹幕，不借用悬浮窗。 |
+| 悬浮窗 / Overlay | `overlay.rs`, `overlay.*` | 只属于语音输入：识别进度、频道、没准备好的提示。 |
+| 打开软件时显示 / Start page | `ui.startPage` | `voiceInput` = 语音输入；空或其它任何值 = 聊天（默认）。 |
+
+## 语音输入与运行时
+
+| 中文 / English | 代码名 | 含义与边界 |
+| --- | --- | --- |
+| 运行时 / Runtime | `RuntimePhase`, `RuntimeStatus` | 应用级 stopped → starting → running → stopping 生命周期；包含模型预热、热键和资源释放。不是一句话的识别状态。界面上只在本地识别时以“启动”出现；`RuntimeStatus.asrLocal` 区分本地 / 在线，`error` 是最近一次启动失败的原因。 |
 | 识别会话 / Session | `Orchestrator`, `OrchestratorState`, `SttSession` | 一次采音、识别、处理和交付；`OrchestratorState` 表示业务阶段，`SttSession` 是识别端口实例。取消后的迟到结果不能继续交付。 |
 | 交互模式 / Interaction mode | `InteractionMode` | 决定怎样开始、结束以及直接发送或预览。包括对讲机、录音笔、说一句就走、独奏模式。`HotkeyMode` 仅描述按住/点按，不等于完整交互模式。 |
 | 识别引擎 / STT engine | `SttEngine`, `EngineRegistry`, `engineId` | 执行识别的适配器/运行循环，例如 `sherpa-streaming`、`sherpa-offline`。不是模型家族；旧 `sherpa-onnx-*` ID 只是兼容别名。 |
@@ -21,7 +39,7 @@
 
 | 中文 / English | 代码名 | 含义与边界 |
 | --- | --- | --- |
-| 提醒助手 / Reminder assistant | `assistant`, `voice_reminder`, `danmaku_reminder` | 面向屏幕前用户本人，通过独立热键或文字入口让 AI 提出受限的提醒计划；不向第三人喊话或注入游戏。语音入口依赖运行时启动，文字入口不依赖。 |
+| 提醒助手 / Reminder assistant | `assistant`, `voice_reminder`, `danmaku_reminder` | 面向屏幕前用户本人，通过独立热键或文字入口让 AI 提出受限的提醒计划；不向第三人喊话或注入游戏。语音入口要等语音识别准备好（本地识别要先启动），文字入口不依赖。0.2 起只有 0.1.x 升级用户保留（「提醒助手」页）。 |
 | 助手交互模式 / Assistant interaction mode | `AssistantInteractionMode`, `assistant.interactionMode` | 与游戏输入独立的对讲机、录音笔、说一句就走三种模式，默认对讲机，热键默认未绑定；录音笔确认提交给助手，其余模式按各自结束规则提交，不走游戏发送出口。旧助手独奏配置兼容为对讲机。 |
 | 提醒 / Reminder | `ReminderIntent`, `Reminder`, `ReminderScheduler` | 一次性的内容、到期时间、输出方式和状态；输出采用简短正文，不附称呼或开场白。本机保存，应用未退出时调度，停止语音运行时不停止既有提醒；不等于系统级闹钟。 |
 | 语音播报 / Text to speech (TTS) | `SpeechOutput`, `SpeechRequest`, `SpeechVoice` | 文本转成可听语音，默认 Windows SAPI 声音，无需下载 Kotone TTS 模型；Kokoro 中文模型可选、手动下载。与 STT、提示音分开。 |
