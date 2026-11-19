@@ -1,5 +1,7 @@
 """Run the maintenance candidate only in its disposable hosted Windows guest."""
 
+import ctypes
+from ctypes import wintypes
 import hashlib
 import json
 import os
@@ -93,7 +95,7 @@ def spawn_receiver(folder, desktop):
         handle = folder / "hwnd.txt"
         guest.wait_for(handle.is_file, "the owned textbox", 45)
         hwnd = int(handle.read_text(encoding="ascii"))
-        guest.wait_for(lambda: desktop.focus_owned_window(hwnd, receiver.pid), "textbox focus", 12)
+        guest.wait_for(lambda: focus_receiver(desktop, hwnd, receiver.pid), "textbox focus", 12)
         return receiver, hwnd
     except BaseException:
         receiver.terminate()
@@ -101,8 +103,35 @@ def spawn_receiver(folder, desktop):
         raise
 
 
+def focus_receiver(desktop, hwnd, pid):
+    if desktop.focus_owned_window(hwnd, pid):
+        return True
+    if desktop.owner(hwnd) != pid:
+        return False
+    api = desktop.api
+    api.GetWindowRect.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.RECT))
+    api.WindowFromPoint.argtypes = (wintypes.POINT,)
+    api.WindowFromPoint.restype = wintypes.HWND
+    api.GetAncestor.argtypes = (wintypes.HWND, wintypes.UINT)
+    api.GetAncestor.restype = wintypes.HWND
+    rect = wintypes.RECT()
+    if not api.GetWindowRect(hwnd, ctypes.byref(rect)):
+        return False
+    point = wintypes.POINT((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
+    # The guest's receiver is TopMost. Click only after the OS confirms that
+    # this on-screen pixel belongs to the window we opened.
+    if api.GetAncestor(api.WindowFromPoint(point), 2) != hwnd:
+        return False
+    api.SetCursorPos(point.x, point.y)
+    if api.GetAncestor(api.WindowFromPoint(point), 2) != hwnd:
+        return False
+    api.mouse_event(0x0002, 0, 0, 0, 0)
+    api.mouse_event(0x0004, 0, 0, 0, 0)
+    return desktop.is_focused(hwnd, pid)
+
+
 def hear_phrase(label, folder, desktop, receiver, hwnd, playback, session, cold_marker):
-    guest.wait_for(lambda: desktop.focus_owned_window(hwnd, receiver.pid), "textbox focus", 10)
+    guest.wait_for(lambda: focus_receiver(desktop, hwnd, receiver.pid), "textbox focus", 10)
     before = session()
     if cold_marker in before:
         raise RuntimeError(f"{label}: model was ready before this first press.")
@@ -200,7 +229,11 @@ def main():
     fixture = candidate / "crates/kotone-stt/tests/fixtures/zh-game-3s.wav"
     playback = guest.find_playback_config(fixture, capture, scratch / "routing.json")
     models = install_models(scratch)
-    run(exe, scratch, models, capture, playback, XASR, "sherpa-streaming", False)
+    cases = os.environ.get("SMOKE_CASES", "all")
+    if cases not in {"all", "large"}:
+        raise RuntimeError("Expected all or large smoke cases.")
+    if cases == "all":
+        run(exe, scratch, models, capture, playback, XASR, "sherpa-streaming", False)
     run(exe, scratch, models, capture, playback, SENSEVOICE, "sherpa-offline", True)
     print("PASS first speech at startup and after the five-minute release.", flush=True)
 
