@@ -207,6 +207,19 @@ fn profiles_dir() -> PathBuf {
     kotone_dir().join("profiles")
 }
 
+fn dota2_deletion_marker(dir: &Path) -> PathBuf {
+    dir.join(".dota2-deleted")
+}
+
+fn builtin_dota2_is_deleted_in(dir: &Path) -> bool {
+    dota2_deletion_marker(dir).exists()
+}
+
+/// 与维护版共用的删除标记；禁止运行时回退重新启用已删除的配置。
+pub fn builtin_dota2_is_deleted() -> bool {
+    builtin_dota2_is_deleted_in(&profiles_dir())
+}
+
 fn profile_path_in(dir: &Path, id: &str) -> PathBuf {
     // id 只保留文件安全字符，防路径穿越
     let safe: String = id
@@ -281,6 +294,9 @@ pub fn ensure_builtin_in(dir: &Path) -> Result<(), String> {
         GameProfile::builtin_dota2(),
         GameProfile::builtin_generic(),
     ] {
+        if p.id == "dota2" && builtin_dota2_is_deleted_in(dir) {
+            continue;
+        }
         let path = profile_path_in(dir, &p.id);
         if !path.exists() {
             let json = serde_json::to_string_pretty(&p)
@@ -362,7 +378,9 @@ pub fn list_in(dir: &Path) -> Vec<GameProfile> {
         }
         if let Ok(raw) = std::fs::read_to_string(&path) {
             if let Ok(p) = serde_json::from_str::<GameProfile>(&raw) {
-                out.push(p);
+                if p.id != "dota2" || !builtin_dota2_is_deleted_in(dir) {
+                    out.push(p);
+                }
             }
         }
     }
@@ -376,6 +394,9 @@ pub fn get(id: &str) -> Option<GameProfile> {
 }
 
 pub fn get_in(dir: &Path, id: &str) -> Option<GameProfile> {
+    if id == "dota2" && builtin_dota2_is_deleted_in(dir) {
+        return None;
+    }
     let path = profile_path_in(dir, id);
     let raw = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
@@ -568,6 +589,9 @@ pub fn validate_profile(profile: &GameProfile) -> Result<(), String> {
 }
 
 pub fn save_in(dir: &Path, profile: &GameProfile) -> Result<(), String> {
+    if profile.id == "dota2" && builtin_dota2_is_deleted_in(dir) {
+        return Err("内置 Dota 2 配置已删除".into());
+    }
     validate_profile(profile)?;
     std::fs::create_dir_all(dir).map_err(|e| format!("创建 profiles 目录失败: {e}"))?;
     let json =
@@ -1064,11 +1088,11 @@ fn new_profile_id() -> String {
 pub enum ProfileDeleteOutcome {
     /// 内置 profile：恢复出厂（用 bundled 覆盖磁盘文件并重写 icon）
     Reset,
-    /// 导入的自定义 profile：永久删除
+    /// Dota 2 或导入的自定义 profile：永久删除
     Deleted,
 }
 
-/// 删除 profile：内置 = 恢复出厂；导入的 = 删文件与 icon
+/// 删除 profile：LOL / 通用配置恢复出厂；Dota 2 与自定义配置永久删除。
 pub fn delete_profile(id: &str) -> Result<ProfileDeleteOutcome, String> {
     delete_profile_in(&profiles_dir(), id)
 }
@@ -1076,7 +1100,6 @@ pub fn delete_profile(id: &str) -> Result<ProfileDeleteOutcome, String> {
 pub fn delete_profile_in(dir: &Path, id: &str) -> Result<ProfileDeleteOutcome, String> {
     let builtin = match id {
         "lol" => Some(GameProfile::builtin_lol()),
-        "dota2" => Some(GameProfile::builtin_dota2()),
         "generic" => Some(GameProfile::builtin_generic()),
         _ => None,
     };
@@ -1093,6 +1116,11 @@ pub fn delete_profile_in(dir: &Path, id: &str) -> Result<ProfileDeleteOutcome, S
             return Err(format!("profile 不存在：{id}"));
         }
         let icon = get_in(dir, id).and_then(|p| p.icon);
+        if id == "dota2" {
+            // 先写标记。进程即使在删除文件前退出，下次也不会重新启用。
+            std::fs::write(dota2_deletion_marker(dir), b"")
+                .map_err(|e| format!("记录 Dota 2 配置删除失败: {e}"))?;
+        }
         std::fs::remove_file(&path).map_err(|e| format!("删除 profile 失败: {e}"))?;
         if let Some(icon) = icon {
             if let Some(safe) = sanitize_icon_name(&icon) {
@@ -1770,6 +1798,41 @@ mod tests {
             read_profile_icon_in(&dir2, &icon).is_none(),
             "icon 一并删除"
         );
+    }
+
+    #[test]
+    fn deleted_dota2_stays_deleted_across_startup_and_leftover_files() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path();
+        ensure_builtin_in(dir).unwrap();
+        let path = profile_path_in(dir, "dota2");
+        let bundled = std::fs::read(&path).unwrap();
+        assert_eq!(
+            list_in(dir)
+                .iter()
+                .filter(|profile| profile.id == "dota2")
+                .count(),
+            1,
+        );
+
+        assert_eq!(
+            delete_profile_in(dir, "dota2").unwrap(),
+            ProfileDeleteOutcome::Deleted
+        );
+        assert_eq!(std::fs::read(dir.join(".dota2-deleted")).unwrap(), b"");
+        assert!(!path.exists());
+        ensure_builtin_in(dir).unwrap();
+        assert!(!path.exists());
+        assert!(get_in(dir, "dota2").is_none());
+        assert!(save_in(dir, &GameProfile::builtin_dota2()).is_err());
+
+        // 删除过程被打断时，标记仍然有效。
+        std::fs::write(&path, bundled).unwrap();
+        ensure_builtin_in(dir).unwrap();
+        assert!(get_in(dir, "dota2").is_none());
+        assert!(list_in(dir).iter().all(|profile| profile.id != "dota2"));
+        assert!(get_in(dir, "lol").is_some());
+        assert!(get_in(dir, "generic").is_some());
     }
 
     #[test]

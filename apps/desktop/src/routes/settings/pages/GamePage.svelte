@@ -64,9 +64,9 @@
     hotwordsText.split(/\r?\n/).filter((l) => l.trim() !== "").length,
   );
 
-  /** 内置 profile（删除语义 = 恢复出厂）；当前内置集为 lol / dota2 / generic */
+  /** 删除操作会恢复出厂的配置。Dota 2 可永久删除。 */
   function isBuiltin(p: GameProfile): boolean {
-    return p.id === "lol" || p.id === "dota2" || p.id === "generic";
+    return p.id === "lol" || p.id === "generic";
   }
 
   /** 加载 profile 图标字节 → data URL（按扩展名推断 mime；无图标/失败 → 占位）。
@@ -369,7 +369,7 @@
     }
   }
 
-  /** 删除/恢复：内置 = 恢复出厂；导入的 = 永久删除。二次点击确认（3s 超时取消） */
+  /** 删除/恢复，二次点击确认（3s 超时取消）。 */
   async function onDeleteProfile(p: GameProfile) {
     if (deletingId !== p.id) {
       deletingId = p.id;
