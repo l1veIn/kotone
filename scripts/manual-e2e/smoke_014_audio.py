@@ -167,8 +167,8 @@ def runtime_log(log, pid):
         text = log.read_text(encoding="utf-8", errors="replace")
     except (FileNotFoundError, PermissionError):
         return ""
-    _, _, since_start = text.rpartition(f"===== session start (pid {pid}) =====")
-    return since_start
+    _, session_marker, since_start = text.rpartition(f"===== session start (pid {pid}) =====")
+    return since_start if session_marker else ""
 
 
 def reserve_loopback_port():
