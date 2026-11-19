@@ -53,15 +53,31 @@ if (@($setup).Count -ne 1) { throw 'Expected one x64 virtual audio installer.' }
 $installer = Start-Process -FilePath $setup.FullName -ArgumentList @('-h', '-i') -WorkingDirectory $setup.DirectoryName -WindowStyle Hidden -PassThru
 if (!$installer.WaitForExit(90000)) { throw 'The virtual audio installer did not finish in the guest.' }
 Write-Host "Guest driver installer exited $($installer.ExitCode). Verifying endpoints."
-$deadline = [DateTime]::UtcNow.AddSeconds(60)
-do {
-    $endpoints = Get-PnpDevice -Class AudioEndpoint -PresentOnly -ErrorAction SilentlyContinue
-    $recording = $endpoints | Where-Object { $_.Status -eq 'OK' -and $_.FriendlyName -like 'CABLE Output*' }
-    $playback = $endpoints | Where-Object { $_.Status -eq 'OK' -and $_.FriendlyName -like 'CABLE Input (*' }
-    if ($recording -and $playback) {
-        Write-Host "Verified guest recording and playback endpoints: $($recording.FriendlyName); $($playback.FriendlyName)"
-        return
-    }
-    Start-Sleep -Seconds 3
-} while ([DateTime]::UtcNow -lt $deadline)
+
+function Wait-CableAudio([int] $Seconds) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
+    do {
+        $endpoints = Get-PnpDevice -Class AudioEndpoint -PresentOnly -ErrorAction SilentlyContinue
+        $recording = $endpoints | Where-Object { $_.Status -eq 'OK' -and $_.FriendlyName -like 'CABLE Output*' }
+        $playback = $endpoints | Where-Object { $_.Status -eq 'OK' -and $_.FriendlyName -like 'CABLE Input (*' }
+        if ($recording -and $playback) {
+            Write-Host "Verified guest recording and playback endpoints: $($recording.FriendlyName); $($playback.FriendlyName)"
+            return $true
+        }
+        Start-Sleep -Seconds 2
+    } while ([DateTime]::UtcNow -lt $deadline)
+    return $false
+}
+
+function Show-CableDevices {
+    Get-PnpDevice -Class Media,AudioEndpoint -ErrorAction SilentlyContinue |
+        Format-Table Status, Class, FriendlyName, InstanceId -AutoSize | Out-String | Write-Host
+    pnputil.exe /enum-devices /class Media /problem /deviceids | Out-String | Write-Host
+}
+
+if (Wait-CableAudio 8) { return }
+Show-CableDevices
+& "$PSScriptRoot/smoke_014_register_cable.ps1" -DriverRoot $driverRoot
+if (Wait-CableAudio 45) { return }
+Show-CableDevices
 throw 'The guest has no working virtual recording and playback endpoints.'
