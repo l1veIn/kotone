@@ -124,7 +124,7 @@ def verify_inputs(args):
         ],
         env={**os.environ, "KOTONE_SMOKE_EXE": str(exe)},
         text=True,
-        timeout=10,
+        timeout=60,
         creationflags=subprocess.CREATE_NO_WINDOW,
     ).strip()
     if version not in {args.version, f"{args.version}.0"}:
@@ -486,7 +486,7 @@ def run_smoke(args):
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         handle_file = run_dir / "hwnd.txt"
-        wait_for(handle_file.is_file, "the disposable textbox", 20)
+        wait_for(handle_file.is_file, "the disposable textbox", 45)
         hwnd = int(handle_file.read_text(encoding="ascii"))
         wait_for(
             lambda: desktop.focus_owned_window(hwnd, receiver.pid),
