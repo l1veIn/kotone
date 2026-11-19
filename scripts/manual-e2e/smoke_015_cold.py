@@ -107,7 +107,15 @@ def hear_phrase(label, folder, desktop, receiver, hwnd, playback, session, cold_
     if cold_marker in before:
         raise RuntimeError(f"{label}: model was ready before this first press.")
     audio = guest.test_recording(desktop, hwnd, receiver.pid, playback, lambda: session()[len(before):])
-    text = guest.wait_for(lambda: guest.receive_text(folder / "received.txt"), "the entire X-ASR/SenseVoice transcript", 25)
+    try:
+        text = guest.wait_for(
+            lambda: guest.receive_text(folder / "received.txt"),
+            "the entire X-ASR/SenseVoice transcript",
+            25,
+        )
+    except TimeoutError:
+        print("Textbox received " + json.dumps(guest.read_received(folder / "received.txt"), ensure_ascii=True), flush=True)
+        raise
     recorded = session()[len(before):]
     if "state -> listening" not in recorded:
         raise RuntimeError(f"{label}: no capture entered the listening state.")
@@ -120,10 +128,13 @@ def run(exe, scratch, models, capture, playback, model, engine, expect_idle):
     seed(home, models, capture, model, engine)
     desktop = guest.Desktop()
     first_folder = home / "first"
-    receiver, hwnd = spawn_receiver(first_folder, desktop)
+    receiver = hwnd = None
     app = None
     log = home / "kotone.log"
     try:
+        if not expect_idle:
+            # Focus preparation must finish before X-ASR begins prewarming.
+            receiver, hwnd = spawn_receiver(first_folder, desktop)
         app = subprocess.Popen(
             [str(exe)],
             env={**os.environ, "KOTONE_HOME": str(home), "WEBVIEW2_USER_DATA_FOLDER": str(home / "webview")},
@@ -135,6 +146,10 @@ def run(exe, scratch, models, capture, playback, model, engine, expect_idle):
             return guest.runtime_log(log, app.pid)
 
         guest.wait_for(lambda: "runtime started" in session(), "automatic hotkey registration", 90)
+        if expect_idle:
+            # An idle heavy model does not start loading. Open our textbox after
+            # the app's window has taken its initial focus on this VM.
+            receiver, hwnd = spawn_receiver(first_folder, desktop)
         completed = f"runtime model load completed: {engine}" if expect_idle else f"runtime warmup ok: {engine} ({model})"
         hear_phrase(f"{model} first key", first_folder, desktop, receiver, hwnd, playback, session, completed)
         if not expect_idle:
@@ -163,7 +178,8 @@ def run(exe, scratch, models, capture, playback, model, engine, expect_idle):
             print(log.read_text(encoding="utf-8", errors="replace"), flush=True)
         raise
     finally:
-        guest.stop_receiver(desktop, receiver, hwnd)
+        if receiver is not None:
+            guest.stop_receiver(desktop, receiver, hwnd)
         if app is not None and app.poll() is None:
             app.terminate()
             app.wait(timeout=10)
