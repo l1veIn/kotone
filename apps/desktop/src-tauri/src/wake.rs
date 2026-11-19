@@ -107,13 +107,11 @@ impl AudioBackend for WakeAudioBackend {
         };
         let (pcm_tx, pcm_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
         let (level_tx, level_rx) = tokio::sync::mpsc::unbounded_channel::<f32>();
-        let (_err_tx, err_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (err_tx, err_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
         let thread = std::thread::Builder::new()
             .name("kotone-wake-handoff".into())
             .spawn(move || {
-                // 停止（会话结束）或唤醒线程关掉发送端时结束；结束即关闭 pcm 通道。
-                let _err_tx = _err_tx;
                 let mut forwarded = 0usize;
                 loop {
                     if stop_rx.try_recv().is_ok() {
@@ -128,7 +126,13 @@ impl AudioBackend for WakeAudioBackend {
                             }
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            // 先让会话收到故障，再随采集句柄一同关闭 PCM 通道。
+                            if err_tx.send("唤醒后的麦克风采集已中断".into()).is_ok() {
+                                let _ = stop_rx.recv();
+                            }
+                            break;
+                        }
                     }
                 }
                 log::log(&format!("wake: session audio forwarded {forwarded} chunks"));
@@ -736,6 +740,32 @@ pub fn wake_status(app: AppHandle) -> WakeStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn disconnected_wake_handoff_reports_an_error_before_closing_pcm() {
+        let (source, receiver) = mpsc::channel();
+        let backend = WakeAudioBackend {
+            inner: Arc::new(kotone_platform_windows::audio::CpalBackend),
+            handoff: Arc::new(Mutex::new(Some(receiver))),
+        };
+        let mut capture = backend.start("default").unwrap();
+        let mut errors = capture.error_rx.take().unwrap();
+        let mut pcm = capture.pcm_rx.take().unwrap();
+
+        // Disconnect the test sender without touching a microphone.
+        drop(source);
+        let error = tokio::time::timeout(Duration::from_secs(2), errors.recv()).await;
+        assert!(matches!(error, Ok(Some(_))));
+        assert!(matches!(
+            pcm.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        drop(capture);
+        assert!(matches!(
+            pcm.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+        ));
+    }
 
     #[test]
     fn continuing_speech_needs_most_of_the_probe_above_noise() {

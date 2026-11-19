@@ -60,6 +60,7 @@ const mock: MockStore = {
     hotkey: { key: "CapsLock", mode: "toggle" },
     hotkeyBackend: "auto",
     audioDeviceId: "default",
+    lowerSpeakerVolumeWhileListening: false,
     sttEngine: "sherpa-streaming",
     activeModelId: "",
     modelConfigs: {},

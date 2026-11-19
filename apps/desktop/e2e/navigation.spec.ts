@@ -1,5 +1,19 @@
 import { expect, test } from "@playwright/test";
 
+test("speaker volume reduction is off by default and saves from voice input settings", async ({ page }) => {
+  await page.goto("/#/settings?onboarding=never");
+  const lowerVolume = page.getByRole("switch", { name: "录音时降低扬声器音量" });
+  await expect(lowerVolume).toBeVisible();
+  await expect(lowerVolume).not.toBeChecked();
+  await lowerVolume.click();
+  await expect(lowerVolume).toBeChecked();
+  await page.getByTestId("settings-nav-history").click();
+  await page.getByTestId("settings-nav-general").click();
+  await expect(lowerVolume).toBeChecked();
+  await lowerVolume.click();
+  await expect(lowerVolume).not.toBeChecked();
+});
+
 // ADR 023：侧栏分“语音输入”“游戏陪玩”两组；语音输入仍是首页，顶部引导去用游戏陪玩；
 // 怎么叫琴音、她怎么回答、怎么替你跟队友说话都在「琴音 → 设置」（原「交流」页并进来了）；所有设置页内容宽度一致。
 test("sidebar groups, homepage companion entry, companion settings and one content width", async ({ page }, testInfo) => {

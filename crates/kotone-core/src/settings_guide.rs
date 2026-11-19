@@ -96,6 +96,7 @@ pub const FIELDS: &[Field] = &[
     f("vad.minSpeechMs", "最短语音", "设置 → 调参", "毫秒，短于它的声音不算说话。", NONE, NOW),
     f("vad.minSilenceMs", "最短静音", "设置 → 调参", "毫秒，人声检测内部的最短静音段。", NONE, NOW),
     f("audioDeviceId", "麦克风", "语音输入 → 输入", "设备 ID，用 audio.devices 查；空或 default = 系统默认。", NONE, NOW),
+    f("lowerSpeakerVolumeWhileListening", "录音时降低扬声器音量", "语音输入 → 输入", "默认关闭。开启后，下次按键录音或琴音开始倾听时暂时降低 Windows 默认播放设备的音量，采集结束后恢复。", NONE, NOW),
     f("sttEngine", "语音识别引擎", "设置 → 模型 → 语音识别", "引擎 ID，用 stt.engines 查。一般用 models.activate 同时选引擎和模型。", NONE, VOICE),
     f("activeModelId", "语音识别模型", "设置 → 模型 → 语音识别", "用 models.activate 选择（会同时校验模型已下载）。", NONE, VOICE),
     f("engineOptions.*", "引擎选项", "设置 → 模型", "各引擎的附加选项，如 sherpa-streaming 的 provider（cpu）。", NONE, VOICE),
