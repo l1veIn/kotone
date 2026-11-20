@@ -69,7 +69,23 @@
 - **xiaotang-daozai**（MIT）：网易云、QQ、酷狗、酷我都覆盖，SMTC 优先，找不到会话再用各家的窗口消息 / 命令行。
 - 没有许可证、只能参考不能抄：AwooMusicBot、QQMusic-mcp、top-island。
 
-## 五、要在玩家电脑上实测的
+## 五、现成的 MCP / Agent 技能（GitHub，2026-11-20）
+
+网易云的最多，QQ 音乐有几个，酷狗、酷我、汽水、通用 SMTC 都没搜到。按“怎么放歌”分三类：
+
+| 做法 | 项目 | 需要玩家准备什么 |
+| --- | --- | --- |
+| **官方技能**（搜索、歌单、推荐等数据接口） | `NetEase/skills`（基于官方 `@music163/ncm-cli`，无许可证文件，268★）；`tencentmusic/qqmusic-skills`（Apache-2.0） | 网易云：开放平台的 appId 和私钥，再 `ncm-cli login`，“调用本地客户端播放”只支持 macOS；QQ：在 y.qq.com 申请自己的 API Key |
+| **自己播放**（不控制客户端，用接口拿播放链接，在自己的播放器 / mpv / 网页里放） | Vael-KY/netease-music-mcp（MIT，229★，账号 Cookie）；Cheiineeey/netease-music-mcp（118★）；luuu-h/netease-music-mcp（MIT，87★，neteasecli + mpv，要 Node 24）；zeelinkCN/dsh-netease-music（MIT，DeepSeek Harness 插件，扫码登录） | 登录 Cookie 或扫码；多数还要装 Node / mpv。走的是非官方接口（NeteaseCloudMusicApi 2024 年收到律师函后归档） |
+| **控制桌面客户端** | Yotohime777/QQMusic-mcp（无许可证，只能参考）：六个控制用 Windows 媒体会话（即 SMTC），点歌用 `QQMusic.exe /playbysongid`，实测《稻香》《晴天》并用会话事件确认；tianyupaipai-cmd/netease-music-mcp（MIT）：只有 macOS 能控制客户端 | 无（QQ 音乐要打开 SMTC 开关） |
+
+对 Kotone 的意义：
+
+- 控制这一层，现成项目也是用 SMTC，和第二节一致。
+- 点歌这一层，没有“零准备”的现成方案：要么要玩家的登录态或开发者 Key（官方技能），要么自己当播放器、走非官方接口。
+- Kotone 现在不能直接接入外部 MCP 服务（只把自己的工具提供给外部 Agent）。即使以后支持，这些服务多数要装 Node / Python，和“玩家只需要 Key + 呼叫键”冲突。
+
+## 六、要在玩家电脑上实测的
 
 1. 网易云 3.1.24、汽水 3.1.0：放歌时 SMTC 里有没有会话、能不能读歌名、能不能切歌（只读和控制，会出声）。
 2. `orpheus://` base64 链接能不能直接播放；会不会把网易云窗口拉到前台。
