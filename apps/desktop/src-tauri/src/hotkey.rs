@@ -394,6 +394,8 @@ fn dispatch_runtime_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, event: Hoo
                         let settings = state.settings.read().unwrap();
                         settings.assistant.wake.no_speech_timeout_ms
                     };
+                    // 她正在说时按呼叫键：先停下她，再开始听（ADR 029 §五）。
+                    crate::assistant::interrupt_before_call(&app).await;
                     orch.call_assistant(Some(ticket.core), timeout).await;
                 }
                 HK_LEGACY_REMINDER => orch.on_assistant_hotkey_with_ticket(ticket.core).await,

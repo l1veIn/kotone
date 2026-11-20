@@ -67,9 +67,12 @@ pub struct UsageRecord {
     pub provider: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub model: String,
-    /// 琴音的对话 id（子会话是它自己的 id）。
+    /// 琴音的对话 id（子会话是它自己的 id）。语音合成 / 识别、文字识别、联网搜索也记（见 [`Owner`]）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation: Option<String>,
+    /// 这笔费用属于对话里的哪一轮：那一轮玩家那句话的时间（`Message::User.at_ms`）。新字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<u64>,
     /// 输入 token（含命中缓存的部分）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_tokens: Option<u64>,
@@ -303,6 +306,123 @@ pub fn global() -> Option<&'static UsageLedger> {
 
 /// 记一行；没开账本时什么都不做，写失败只记日志。
 pub fn record(record: UsageRecord) {
+    write(record);
+}
+
+fn now() -> u64 {
+    crate::reminders::now_ms()
+}
+
+// ---------- 费用归属（哪段对话、哪一轮） ----------
+//
+// 玩家要求（2026-11-20）：语音合成 / 识别、文字识别、联网搜索的花费也记到触发它的对话和那一轮上，
+// 聊天里每一轮的页脚分开显示（“对话 ¥0.002 · 语音 ¥0.005 · 读屏 ¥0.0015”）。
+// 这些调用发生在各自的 crate 里（kotone-tts / kotone-stt / kotone-ocr），不知道是哪段对话，
+// 所以由桌面端登记“现在归谁”，记账时在这里认领：
+// - 文字识别、联网搜索：记到正在跑的那一轮（[`set_turn`]）；
+// - 语音合成：按要念的文字认领（[`claim_speech`]）。预先生成的填充话、应答不登记，不归任何对话；
+// - 语音识别：识别结果比消息先到。助手开始收音时先扣住（[`hold_asr`]），这句话交给对话时再记
+//   （[`release_asr`]）；没人认领（例如识别出空话）就在下次收音或 2 分钟后照常记、不归任何对话。
+
+/// 一笔费用属于哪段对话、哪一轮（`turn` = 那一轮玩家那句话的时间）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Owner {
+    pub conversation: String,
+    pub turn: Option<u64>,
+}
+
+struct Attribution {
+    turn: Option<Owner>,
+    /// (要念的文字, 归谁, 登记时间)。
+    speech: Vec<(String, Owner, u64)>,
+    /// (扣住的时间, 扣住的识别记录)。
+    held_asr: Option<(u64, Vec<UsageRecord>)>,
+}
+
+static ATTRIBUTION: Mutex<Attribution> = Mutex::new(Attribution {
+    turn: None,
+    speech: Vec::new(),
+    held_asr: None,
+});
+
+/// 按文字认领的登记保留多久（回答可能等一会儿才念）。
+const SPEECH_CLAIM_MS: u64 = 10 * 60_000;
+const MAX_SPEECH_CLAIMS: usize = 32;
+/// 识别记录最多扣住多久。
+const ASR_HOLD_MS: u64 = 2 * 60_000;
+
+/// 正在跑的那一轮（None = 没有）。文字识别、联网搜索记到这里。
+pub fn set_turn(owner: Option<Owner>) {
+    ATTRIBUTION.lock().unwrap().turn = owner;
+}
+
+pub fn current_turn() -> Option<Owner> {
+    ATTRIBUTION.lock().unwrap().turn.clone()
+}
+
+/// 这句话要念出来，合成的费用归 `owner`。
+pub fn claim_speech(text: &str, owner: Owner) {
+    let text = text.trim();
+    if text.is_empty() {
+        return;
+    }
+    let now = now();
+    let mut a = ATTRIBUTION.lock().unwrap();
+    a.speech
+        .retain(|(_, _, at)| now.saturating_sub(*at) < SPEECH_CLAIM_MS);
+    if a.speech.len() >= MAX_SPEECH_CLAIMS {
+        a.speech.remove(0);
+    }
+    a.speech.push((text.to_string(), owner, now));
+}
+
+/// 合成了 `text`：找登记过的归属。整句对上就用掉这条登记；登记的是整段、合成的是其中一句
+/// （分句合成）时保留登记，后面的句子还要认领。
+fn speech_owner(claims: &mut Vec<(String, Owner, u64)>, text: &str, now: u64) -> Option<Owner> {
+    claims.retain(|(_, _, at)| now.saturating_sub(*at) < SPEECH_CLAIM_MS);
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    if let Some(i) = claims.iter().position(|(t, _, _)| t == text) {
+        return Some(claims.remove(i).1);
+    }
+    claims
+        .iter()
+        .rev()
+        .find(|(t, _, _)| t.contains(text))
+        .map(|(_, owner, _)| owner.clone())
+}
+
+/// 助手开始收音：之后的语音识别记录先扣住，等这句话交给对话时再记。上一次没人认领的照常记下。
+pub fn hold_asr() {
+    let stale = {
+        let mut a = ATTRIBUTION.lock().unwrap();
+        a.held_asr.replace((now(), Vec::new()))
+    };
+    for record in stale.map(|(_, records)| records).unwrap_or_default() {
+        write(record);
+    }
+}
+
+/// 这句话交给了 `owner`（None = 没交给对话）：把扣住的识别记录记下。
+pub fn release_asr(owner: Option<Owner>) {
+    let held = ATTRIBUTION.lock().unwrap().held_asr.take();
+    for record in held.map(|(_, records)| records).unwrap_or_default() {
+        write(with_owner(record, owner.as_ref()));
+    }
+}
+
+fn with_owner(mut record: UsageRecord, owner: Option<&Owner>) -> UsageRecord {
+    if let Some(owner) = owner {
+        record.conversation = Some(owner.conversation.clone());
+        record.turn = owner.turn;
+    }
+    record
+}
+
+/// 记一行（不经过归属）。
+fn write(record: UsageRecord) {
     if let Some(ledger) = global() {
         if let Err(e) = ledger.append(&record) {
             crate::log::log(&format!("usage: {e}"));
@@ -310,11 +430,34 @@ pub fn record(record: UsageRecord) {
     }
 }
 
-fn now() -> u64 {
-    crate::reminders::now_ms()
+/// 识别记录：扣着就先放着（过期的扣留先照常记掉），否则直接记。
+fn record_asr_record(record: UsageRecord) {
+    let now = record.at_ms;
+    let (stale, record) = {
+        let mut a = ATTRIBUTION.lock().unwrap();
+        let expired = a
+            .held_asr
+            .as_ref()
+            .is_some_and(|(since, _)| now.saturating_sub(*since) >= ASR_HOLD_MS);
+        let stale = if expired { a.held_asr.take() } else { None };
+        match a.held_asr.as_mut() {
+            Some((_, held)) => {
+                held.push(record);
+                (stale, None)
+            }
+            None => (stale, Some(record)),
+        }
+    };
+    for r in stale.map(|(_, records)| records).unwrap_or_default() {
+        write(r);
+    }
+    if let Some(record) = record {
+        write(record);
+    }
 }
 
 /// 在线语音合成一次（真的发了请求才记；缓存命中不记）。只有 DeepSeek 有价格。
+/// 归属按文字认领（[`claim_speech`]）；没登记的（预先生成的填充话）不归任何对话。
 pub fn record_tts(provider: &str, model: &str, text: &str) {
     let deepseek = provider == "deepseek";
     let characters = if deepseek {
@@ -322,26 +465,31 @@ pub fn record_tts(provider: &str, model: &str, text: &str) {
     } else {
         text.chars().count() as u64
     };
-    record(UsageRecord {
-        at_ms: now(),
-        kind: Some(UsageKind::Tts),
-        provider: provider.to_string(),
-        model: model.to_string(),
-        characters: Some(characters),
-        cost: deepseek.then(|| characters as f64 / 10_000.0 * DEEPSEEK_TTS_PER_10K_CHARS),
-        currency: if deepseek {
-            "CNY".into()
-        } else {
-            String::new()
+    let at_ms = now();
+    let owner = speech_owner(&mut ATTRIBUTION.lock().unwrap().speech, text, at_ms);
+    write(with_owner(
+        UsageRecord {
+            at_ms,
+            kind: Some(UsageKind::Tts),
+            provider: provider.to_string(),
+            model: model.to_string(),
+            characters: Some(characters),
+            cost: deepseek.then(|| characters as f64 / 10_000.0 * DEEPSEEK_TTS_PER_10K_CHARS),
+            currency: if deepseek {
+                "CNY".into()
+            } else {
+                String::new()
+            },
+            ..Default::default()
         },
-        ..Default::default()
-    });
+        owner.as_ref(),
+    ));
 }
 
-/// 在线语音识别一次。
+/// 在线语音识别一次。助手收音时先扣住，交给对话时归到那一轮（[`hold_asr`]）。
 pub fn record_asr(provider: &str, model: &str, audio_ms: u64) {
     let deepseek = provider == "deepseek";
-    record(UsageRecord {
+    record_asr_record(UsageRecord {
         at_ms: now(),
         kind: Some(UsageKind::Asr),
         provider: provider.to_string(),
@@ -357,41 +505,127 @@ pub fn record_asr(provider: &str, model: &str, audio_ms: u64) {
     });
 }
 
-/// 在线文字识别一次（`pages`：识别成功的页数，一张截图就是 1）。
+/// 在线文字识别一次（`pages`：识别成功的页数，一张截图就是 1）。记到正在跑的那一轮。
 pub fn record_ocr(provider: &str, model: &str, pages: u64) {
     let deepseek = provider == "deepseek";
-    record(UsageRecord {
-        at_ms: now(),
-        kind: Some(UsageKind::Ocr),
-        provider: provider.to_string(),
-        model: model.to_string(),
-        images: Some(pages),
-        cost: deepseek.then(|| pages as f64 / 1_000.0 * DEEPSEEK_OCR_PER_1K_PAGES),
-        currency: if deepseek {
-            "CNY".into()
-        } else {
-            String::new()
+    write(with_owner(
+        UsageRecord {
+            at_ms: now(),
+            kind: Some(UsageKind::Ocr),
+            provider: provider.to_string(),
+            model: model.to_string(),
+            images: Some(pages),
+            cost: deepseek.then(|| pages as f64 / 1_000.0 * DEEPSEEK_OCR_PER_1K_PAGES),
+            currency: if deepseek {
+                "CNY".into()
+            } else {
+                String::new()
+            },
+            ..Default::default()
         },
-        ..Default::default()
-    });
+        current_turn().as_ref(),
+    ));
 }
 
 /// 联网搜索或读网页成功一次（DeepSeek 搜索与抓取接口：每 1000 次成功请求 5 元）。
+/// `owner`：发起的对话（None = 用正在跑的那一轮）。
 pub fn record_search(provider: &str, what: &str) {
+    record_search_for(provider, what, None);
+}
+
+/// 同 [`record_search`]，明确记到 `owner`（子会话发起的搜索记到子会话自己）。
+pub fn record_search_for(provider: &str, what: &str, owner: Option<Owner>) {
     let deepseek = provider == "deepseek";
-    record(UsageRecord {
-        at_ms: now(),
-        kind: Some(UsageKind::Search),
-        provider: provider.to_string(),
-        model: what.to_string(),
-        cost: deepseek.then_some(DEEPSEEK_SEARCH_PER_CALL),
-        currency: if deepseek {
-            "CNY".into()
-        } else {
-            String::new()
+    let owner = owner.or_else(current_turn);
+    write(with_owner(
+        UsageRecord {
+            at_ms: now(),
+            kind: Some(UsageKind::Search),
+            provider: provider.to_string(),
+            model: what.to_string(),
+            cost: deepseek.then_some(DEEPSEEK_SEARCH_PER_CALL),
+            currency: if deepseek {
+                "CNY".into()
+            } else {
+                String::new()
+            },
+            ..Default::default()
         },
-        ..Default::default()
-    });
+        owner.as_ref(),
+    ));
+}
+
+/// 一段对话的费用按什么分开显示（聊天每轮的页脚、用量面板的“本段对话”、`usage.summary`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CostCategory {
+    /// 模型（回答、压缩、复盘）。
+    Chat,
+    /// 语音合成与识别。
+    Voice,
+    /// 文字识别（读屏）。
+    Screen,
+    /// 联网搜索、读网页。
+    Search,
+    Other,
+}
+
+impl CostCategory {
+    pub fn of(kind: Option<UsageKind>) -> Self {
+        match kind {
+            Some(UsageKind::Chat | UsageKind::Compaction | UsageKind::Recap) => Self::Chat,
+            Some(UsageKind::Tts | UsageKind::Asr) => Self::Voice,
+            Some(UsageKind::Ocr) => Self::Screen,
+            Some(UsageKind::Search) => Self::Search,
+            Some(UsageKind::Other) | None => Self::Other,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Chat => "对话",
+            Self::Voice => "语音",
+            Self::Screen => "读屏",
+            Self::Search => "搜索",
+            Self::Other => "其他",
+        }
+    }
+}
+
+/// 一段对话的费用：整段按类别、每一轮（玩家那句话的时间）按类别。只算记了这段对话的记录。
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ConversationCosts {
+    pub total: Vec<(CostCategory, UsageTotals)>,
+    /// 按轮（时间从早到晚）；没记轮次的（模型调用）只进整段。
+    pub turns: Vec<(u64, Vec<(CostCategory, UsageTotals)>)>,
+}
+
+pub fn conversation_costs(records: &[UsageRecord], conversation: &str) -> ConversationCosts {
+    use std::collections::BTreeMap;
+    let mut total: BTreeMap<CostCategory, UsageTotals> = BTreeMap::new();
+    let mut turns: BTreeMap<u64, BTreeMap<CostCategory, UsageTotals>> = BTreeMap::new();
+    for r in records
+        .iter()
+        .filter(|r| r.conversation.as_deref() == Some(conversation))
+    {
+        let category = CostCategory::of(r.kind);
+        total.entry(category).or_default().add(r);
+        if let Some(turn) = r.turn {
+            turns
+                .entry(turn)
+                .or_default()
+                .entry(category)
+                .or_default()
+                .add(r);
+        }
+    }
+    ConversationCosts {
+        total: total.into_iter().collect(),
+        turns: turns
+            .into_iter()
+            .map(|(turn, by)| (turn, by.into_iter().collect()))
+            .collect(),
+    }
 }
 
 /// 一组记录的合计。
@@ -650,6 +884,119 @@ mod tests {
     #[test]
     fn tts_characters_count_cjk_twice() {
         assert_eq!(deepseek_tts_characters("好的 ok"), 2 + 2 + 1 + 2);
+    }
+
+    fn owner(turn: u64) -> Owner {
+        Owner {
+            conversation: "c1".into(),
+            turn: Some(turn),
+        }
+    }
+
+    #[test]
+    fn speech_is_claimed_by_its_text_and_unclaimed_fillers_belong_to_nobody() {
+        let mut claims = vec![
+            ("好的，已经帮你设好了。".to_string(), owner(1), 1_000),
+            ("我看看".to_string(), owner(2), 1_000),
+        ];
+        // 预先生成的填充话没有登记
+        assert_eq!(speech_owner(&mut claims, "稍等哈", 2_000), None);
+        // 整句对上：用掉这条登记
+        assert_eq!(speech_owner(&mut claims, "我看看", 2_000), Some(owner(2)));
+        assert_eq!(speech_owner(&mut claims, "我看看", 2_000), None);
+        // 分句合成：每一句都认领到整段的归属，登记保留
+        assert_eq!(speech_owner(&mut claims, "好的，", 2_000), Some(owner(1)));
+        assert_eq!(
+            speech_owner(&mut claims, "已经帮你设好了。", 2_000),
+            Some(owner(1))
+        );
+        assert_eq!(claims.len(), 1);
+        // 过期的登记丢掉
+        assert_eq!(
+            speech_owner(&mut claims, "好的，", 1_000 + SPEECH_CLAIM_MS),
+            None
+        );
+        assert!(claims.is_empty());
+        assert_eq!(speech_owner(&mut claims, "  ", 0), None);
+    }
+
+    #[test]
+    fn held_recognition_waits_for_its_conversation() {
+        // 没开账本（测试里不写文件）：只看扣留与归属。
+        hold_asr();
+        record_asr("deepseek", "deepseek-asr", 1_500);
+        let held = ATTRIBUTION.lock().unwrap().held_asr.clone().unwrap().1;
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].conversation, None);
+        let owned = with_owner(held[0].clone(), Some(&owner(42)));
+        assert_eq!(owned.conversation.as_deref(), Some("c1"));
+        assert_eq!(owned.turn, Some(42));
+        release_asr(Some(owner(42)));
+        assert!(ATTRIBUTION.lock().unwrap().held_asr.is_none());
+    }
+
+    #[test]
+    fn conversation_costs_split_by_category_and_turn() {
+        let at = |kind, cost: f64, conversation: &str, turn: Option<u64>| UsageRecord {
+            at_ms: 1,
+            kind: Some(kind),
+            conversation: Some(conversation.into()),
+            turn,
+            cost: Some(cost),
+            currency: "CNY".into(),
+            ..Default::default()
+        };
+        let records = vec![
+            at(UsageKind::Chat, 0.002, "c1", None),
+            at(UsageKind::Compaction, 0.001, "c1", None),
+            at(UsageKind::Tts, 0.004, "c1", Some(10)),
+            at(UsageKind::Asr, 0.001, "c1", Some(10)),
+            at(UsageKind::Ocr, 0.0015, "c1", Some(10)),
+            at(UsageKind::Search, 0.005, "c1", Some(20)),
+            at(UsageKind::Tts, 0.9, "c2", Some(10)),
+            UsageRecord {
+                kind: Some(UsageKind::Tts),
+                cost: Some(0.01),
+                ..Default::default()
+            },
+        ];
+        let costs = conversation_costs(&records, "c1");
+        let total: Vec<(CostCategory, f64)> = costs
+            .total
+            .iter()
+            .map(|(c, t)| (*c, t.cost["CNY"]))
+            .collect();
+        assert_eq!(total.len(), 4);
+        assert_eq!(total[0].0, CostCategory::Chat);
+        assert!((total[0].1 - 0.003).abs() < 1e-12);
+        assert_eq!(total[1].0, CostCategory::Voice);
+        assert!((total[1].1 - 0.005).abs() < 1e-12);
+        assert_eq!(costs.turns.len(), 2);
+        assert_eq!(costs.turns[0].0, 10);
+        assert_eq!(
+            costs.turns[0]
+                .1
+                .iter()
+                .map(|(c, _)| c.label())
+                .collect::<Vec<_>>(),
+            vec!["语音", "读屏"]
+        );
+        assert_eq!(costs.turns[1].1[0].0, CostCategory::Search);
+        assert_eq!(CostCategory::of(None), CostCategory::Other);
+    }
+
+    #[test]
+    fn records_without_a_turn_still_parse() {
+        let old: UsageRecord =
+            serde_json::from_str(r#"{"atMs":1,"kind":"tts","characters":4}"#).unwrap();
+        assert_eq!(old.turn, None);
+        let line = serde_json::to_string(&UsageRecord {
+            turn: Some(7),
+            conversation: Some("c".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(line.contains("\"turn\":7"));
     }
 
     #[test]

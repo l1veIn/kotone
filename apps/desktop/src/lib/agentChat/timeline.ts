@@ -1,6 +1,6 @@
 // 把一段对话（存盘的消息 + 正在流式输出的部分）整理成按“轮”显示的时间线。Kotone 自己的实现。
 // 一轮 = 一条用户消息（或自动化送回的系统消息）及其后的回答、思考、工具调用与状态说明。
-import type { AgentMessage, TokenUsage, ToolCall, ToolStatus } from "../agent";
+import type { AgentMessage, CategoryTotals, ConversationCosts, TokenUsage, ToolCall, ToolStatus, UsageTotals } from "../agent";
 
 export type UserMessage = Extract<AgentMessage, { role: "user" }>;
 
@@ -33,6 +33,8 @@ export interface Turn {
   answerText: string;
   active: boolean;
   endedAtMs: number | null;
+  /** 这一轮模型以外的费用：语音合成 / 识别、读屏、联网搜索（来自本机账本，没有就不显示）。 */
+  extraCosts?: CategoryTotals[];
 }
 
 export interface LiveState {
@@ -150,4 +152,22 @@ export function formatCost(cost: number | undefined, currency: string | undefine
   const symbol = currency === "CNY" ? "¥" : currency === "USD" || !currency ? "$" : `${currency} `;
   const digits = cost >= 1 ? 2 : cost >= 0.01 ? 3 : 4;
   return `${symbol}${cost.toFixed(digits)}`;
+}
+
+/** 一组用量的费用（按币种，多个币种用“+”连起来）；没有价格时为空。 */
+export function totalsMoney(t: UsageTotals): string {
+  return Object.entries(t.cost).map(([currency, cost]) => formatCost(cost, currency)).join(" + ");
+}
+
+/**
+ * 把账本里记到这段对话的费用挂到对应的轮上（按玩家那句话的时间对上；模型的费用在消息里，不重复挂）。
+ * 没有费用的轮原样返回。
+ */
+export function withCosts(turns: Turn[], costs: ConversationCosts | null): Turn[] {
+  if (!costs?.turns.length) return turns;
+  const byTurn = new Map(costs.turns.map((t) => [t.turn, t.byCategory.filter((c) => c.category !== "chat")]));
+  return turns.map((turn) => {
+    const extra = turn.user ? byTurn.get(turn.user.atMs) : undefined;
+    return extra?.length ? { ...turn, extraCosts: extra } : turn;
+  });
 }

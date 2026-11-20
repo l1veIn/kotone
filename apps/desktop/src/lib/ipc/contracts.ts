@@ -232,6 +232,8 @@ export interface AssistantConfig extends AssistantBindings {
   wake?: WakeConfig;
   /** 琴音的对话气泡（0.2.0 新字段，旧配置没有）。 */
   bubble?: BubbleConfig;
+  /** 回答完接着听几秒，0 = 不接着听（ADR 029 新字段，旧配置没有 = 8）。 */
+  followUpSeconds?: number;
   kokoroVoiceId: string;
   danmakuDurationMs: number;
   danmakuSpeedPxPerSec: number;

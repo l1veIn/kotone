@@ -83,7 +83,33 @@ pub fn summary() -> Value {
     })
 }
 
+fn by_category_json(list: &[(usage::CostCategory, usage::UsageTotals)]) -> Vec<Value> {
+    list.iter()
+        .map(|(category, t)| json!({"category": category, "label": category.label(), "totals": totals_json(t)}))
+        .collect()
+}
+
+/// 一段对话的费用（玩家要求，2026-11-20）：整段按类别（对话 / 语音 / 读屏 / 搜索），
+/// 以及每一轮的（`turn` = 那一轮玩家那句话的时间，聊天里每轮的页脚用）。`since_ms`：从哪天读起
+/// （对话开始的时间），不用读整本账。
+pub fn conversation(id: &str, since_ms: u64) -> Value {
+    let records = usage::global()
+        .map(|l| l.read_since(since_ms))
+        .unwrap_or_default();
+    let costs = usage::conversation_costs(&records, id);
+    json!({
+        "conversationId": id,
+        "total": by_category_json(&costs.total),
+        "turns": costs.turns.iter().map(|(turn, by)| json!({"turn": turn, "byCategory": by_category_json(by)})).collect::<Vec<_>>(),
+    })
+}
+
 #[tauri::command]
 pub fn usage_summary() -> Value {
     summary()
+}
+
+#[tauri::command]
+pub fn usage_conversation(id: String, since_ms: Option<u64>) -> Value {
+    conversation(&id, since_ms.unwrap_or(0))
 }

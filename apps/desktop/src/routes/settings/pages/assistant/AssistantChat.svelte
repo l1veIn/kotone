@@ -13,9 +13,9 @@
   import { CircleAlert, Eye } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import { isTauri } from "../../../../lib/ipc";
-  import { starterPrompts } from "../../../../lib/agent";
+  import { starterPrompts, usageConversation, type ConversationCosts } from "../../../../lib/agent";
   import { useAgentChat } from "../../../../lib/agentChat/context";
-  import { buildTurns } from "../../../../lib/agentChat/timeline";
+  import { buildTurns, withCosts } from "../../../../lib/agentChat/timeline";
   import ChatTranscript from "../../../../lib/agentChat/ChatTranscript.svelte";
   import ChatComposer from "../../../../lib/agentChat/ChatComposer.svelte";
   import { appState } from "../../../../lib/stores/state";
@@ -79,7 +79,25 @@
     catch (error) { toast(false, `本地语音识别没能启动：${errText(error)}`); }
     finally { startingAsr = false; }
   }
-  const turns = $derived(buildTurns(chat.conversation?.messages ?? [], chat.runningHere ? chat.live : null, chat.runningHere));
+  // 这段对话里模型以外的花费（语音、读屏、搜索；本机账本）：答完读一次。回答是答完才念的，
+  // 念的费用晚几秒才记下，所以过一会儿再读两次。
+  let costs = $state<ConversationCosts | null>(null);
+  $effect(() => {
+    const id = chat.conversation?.id;
+    const since = chat.conversation?.createdAtMs ?? 0;
+    const running = chat.runningHere;
+    void chat.conversation?.messages.length;
+    untrack(() => { if (costs && costs.conversationId !== id) costs = null; });
+    if (!id || running) return;
+    let alive = true;
+    const load = () => usageConversation(id, since)
+      .then((c) => { if (alive) costs = c?.conversationId === id ? c : null; })
+      .catch(() => {});
+    void load();
+    const timers = [setTimeout(load, 6_000), setTimeout(load, 20_000)];
+    return () => { alive = false; timers.forEach(clearTimeout); };
+  });
+  const turns = $derived(withCosts(buildTurns(chat.conversation?.messages ?? [], chat.runningHere ? chat.live : null, chat.runningHere), costs));
   // 逃生通道用户还没启用角色，对话存储没打开（ADR 027 静默）：直接按空白对话显示 Key 卡片。
   const empty = $derived((!chat.loading || legacy) && turns.length === 0);
   /** 没挂到可见工具行上的询问（例如在另一段对话里）：单独列出来，不让它没人回答。 */
@@ -237,7 +255,7 @@
       {#if !ready}
         <div class="mb-3 flex justify-center" data-testid="chat-unconfigured"><DeepSeekKeyForm variant="card" testid="chat-key" onConnected={onKeyConnected} /></div>
       {/if}
-      <UsagePanel messages={chat.conversation?.messages ?? []} running={chat.runningHere} />
+      <UsagePanel messages={chat.conversation?.messages ?? []} running={chat.runningHere} {costs} />
       {@render composer()}
     </div>
   {/if}

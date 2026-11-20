@@ -5,10 +5,14 @@
   import { onMount } from "svelte";
   import { BarChart3 } from "@lucide/svelte";
   import * as Dialog from "$lib/components/ui/dialog";
-  import { usageSummary, type AgentMessage, type TokenUsage, type UsageSummary, type UsageTotals } from "../agent";
-  import { conversationUsage, formatCost, formatHitRate, formatTokens } from "./timeline";
+  import { usageSummary, type AgentMessage, type ConversationCosts, type TokenUsage, type UsageSummary, type UsageTotals } from "../agent";
+  import { conversationUsage, formatCost, formatHitRate, formatTokens, totalsMoney } from "./timeline";
 
-  let { messages = [], running = false }: { messages?: readonly AgentMessage[]; running?: boolean } = $props();
+  let { messages = [], running = false, costs = null }: {
+    messages?: readonly AgentMessage[]; running?: boolean;
+    /** 这段对话模型以外的费用（语音、读屏、搜索），来自本机账本。 */
+    costs?: ConversationCosts | null;
+  } = $props();
 
   let summary = $state<UsageSummary | null>(null);
   let open = $state(false);
@@ -27,6 +31,23 @@
   });
 
   const conv = $derived(conversationUsage(messages));
+  /** 模型以外的花费（语音、读屏、搜索）：分开列出。 */
+  const otherCosts = $derived((costs?.total ?? []).filter((c) => c.category !== "chat"));
+  /** 本段对话一共：模型（消息里的用量）+ 模型以外（账本），按币种相加。 */
+  const convMoney = $derived.by(() => {
+    if (!otherCosts.length) return usageMoney(conv);
+    const sum: Record<string, number> = {};
+    const add = (currency: string, cost: number) => { sum[currency] = (sum[currency] ?? 0) + cost; };
+    if (conv?.cost !== undefined) add(conv.currency ?? "USD", conv.cost);
+    else if (conv?.costUsd !== undefined) add("USD", conv.costUsd);
+    for (const c of otherCosts) for (const [currency, cost] of Object.entries(c.totals.cost)) add(currency, cost);
+    const parts = Object.entries(sum).map(([currency, cost]) => formatCost(cost, currency));
+    return parts.length ? parts.join(" + ") : "—";
+  });
+  /** 分开列：对话 ¥… · 语音 ¥… · 读屏 ¥… · 搜索 ¥…。 */
+  const breakdown = $derived(otherCosts.length
+    ? [...(conv && usageMoney(conv) !== "—" ? [`对话 ${usageMoney(conv)}`] : []), ...otherCosts.map((c) => `${c.label} ${totalsMoney(c.totals) || "—"}`)].join(" · ")
+    : "");
   function money(t: UsageTotals | undefined): string {
     if (!t) return "—";
     const parts = Object.entries(t.cost).map(([currency, cost]) => formatCost(cost, currency));
@@ -57,7 +78,7 @@
   }
 </script>
 
-{#if summary || conv}
+{#if summary || conv || otherCosts.length}
   <button type="button" class="flex w-full flex-wrap items-center gap-x-3 gap-y-0.5 rounded-lg px-2 py-1 text-left text-xs tabular-nums text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
     onclick={() => { open = true; void load(); }} data-testid="usage-pill" aria-label="查看用量与费用">
     <BarChart3 class="size-3.5 shrink-0" />
@@ -65,7 +86,9 @@
       <span data-testid="usage-pill-today">{`今天 ${money(summary.today)}${summary.today.inputTokens ? ` · 命中 ${formatHitRate(summary.today.cacheHitTokens, summary.today.inputTokens)}` : ""}`}</span>
     {/if}
     {#if conv?.inputTokens}
-      <span data-testid="usage-pill-conversation">本段对话 {usageMoney(conv)} · 命中 {formatHitRate(conv.cachedInputTokens, conv.inputTokens)}</span>
+      <span data-testid="usage-pill-conversation">本段对话 {convMoney} · 命中 {formatHitRate(conv.cachedInputTokens, conv.inputTokens)}</span>
+    {:else if otherCosts.length}
+      <span data-testid="usage-pill-conversation">本段对话 {convMoney}</span>
     {/if}
     <span class="ml-auto text-primary/80">明细 →</span>
   </button>
@@ -139,7 +162,10 @@
         {#if summary}<p class="m-0 mt-2 text-[11px] text-muted-foreground/80">{summary.note} 价格：{summary.priceSource}。</p>{/if}
       {:else}
         {#if conv}
-          <p class="m-0 mb-2 text-xs tabular-nums text-muted-foreground" data-testid="usage-conversation-total">本段对话：输入 {formatTokens(conv.inputTokens ?? 0)}（命中 {formatHitRate(conv.cachedInputTokens, conv.inputTokens) || "—"}）· 输出 {formatTokens(conv.outputTokens ?? 0)} · {usageMoney(conv)}</p>
+          <p class="m-0 mb-2 text-xs tabular-nums text-muted-foreground" data-testid="usage-conversation-total">本段对话：输入 {formatTokens(conv.inputTokens ?? 0)}（命中 {formatHitRate(conv.cachedInputTokens, conv.inputTokens) || "—"}）· 输出 {formatTokens(conv.outputTokens ?? 0)} · {convMoney}</p>
+        {/if}
+        {#if breakdown}
+          <p class="m-0 mb-2 text-xs tabular-nums text-muted-foreground" data-testid="usage-conversation-breakdown">{breakdown}</p>
         {/if}
         {#if calls.length}
           <table class="w-full text-xs tabular-nums whitespace-nowrap" data-testid="usage-calls">

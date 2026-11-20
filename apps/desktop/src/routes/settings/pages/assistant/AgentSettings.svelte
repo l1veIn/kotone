@@ -37,6 +37,11 @@
     { value: "default", label: "默认（高）" }, { value: "low", label: "低（更快）" }, { value: "high", label: "高" },
     { value: "max", label: "最高" }, { value: "none", label: "不思考" },
   ];
+  /** 游戏里（语音叫她）默认不思考（ADR 029：开着思考一句回答要多等十几秒）。 */
+  const gameEfforts = [
+    { value: "default", label: "默认（不思考）" }, { value: "low", label: "低" }, { value: "high", label: "高" },
+    { value: "max", label: "最高" }, { value: "none", label: "不思考" },
+  ];
   /** 按分组排好（核心工具在前）；已有规则但清单里没有的工具也列出来，方便删掉。 */
   const groups = $derived.by(() => {
     const known = new Set(tools.map((tool) => tool.name));
@@ -113,11 +118,11 @@
         <Switch data-testid="agent-match-recap" bind:checked={() => matchRecap, (checked) => void patchSettings({ agent: { matchRecap: checked } }, checked ? "对局结束会自动复盘" : "不再自动复盘")} aria-label="对局复盘" />
       {/snippet}
     </SettingsRow>
-    <SettingsRow label="思考强度" description="只对 DeepSeek 生效。实测游戏问题上高、低、不思考速度差不多（每轮 5–6 秒，含联网搜索），一般用默认就好。">
+    <SettingsRow label="思考强度" description="只对 DeepSeek 生效。游戏里默认不思考，回答更快（开着思考，一句回答常要多等十几秒）；聊天窗口默认按服务商的（高）。">
       {#snippet control()}
         <div class="flex flex-wrap gap-2">
           <label class="flex items-center gap-1.5 text-xs text-muted-foreground">游戏里
-            <SelectField class="w-28" size="sm" ariaLabel="游戏里的思考强度" value={gameEffort || "default"} options={efforts}
+            <SelectField class="w-32" size="sm" ariaLabel="游戏里的思考强度" value={gameEffort || "default"} options={gameEfforts}
               onchange={(v) => void patchSettings({ agent: { gameEffort: v === "default" ? "" : v } }, "游戏里的思考强度已保存")} /></label>
           <label class="flex items-center gap-1.5 text-xs text-muted-foreground">聊天窗口
             <SelectField class="w-28" size="sm" ariaLabel="聊天窗口里的思考强度" value={chatEffort || "default"} options={efforts}

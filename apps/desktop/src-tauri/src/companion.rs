@@ -218,14 +218,40 @@ fn region_px(
     })
 }
 
-/// 截前台窗口、识别、写入跟踪。`request` 只是带进结果的玩家原话。
-pub async fn read_chat(
+/// 截下来的前台窗口（还没识别）。语音回合在玩家开口时先截一张（[`crate::speech_screen`]），
+/// 用到时再识别。
+pub struct Frame {
+    pub window: kotone_core::tools::WindowInfo,
+    pub image: kotone_core::tools::CapturedImage,
+    /// 截图的时间（毫秒）与耗时。
+    pub captured_at_ms: u64,
+    pub capture_ms: u64,
+}
+
+/// 截前台窗口（阻塞，放在阻塞线程里调用）。
+pub fn capture_frame() -> Result<Frame, String> {
+    let started = Instant::now();
+    let window = WindowsWindowObserver
+        .foreground_window()
+        .map_err(|e| format!("找不到前台窗口：{e}"))?
+        .ok_or("当前没有前台窗口")?;
+    let image = GdiForegroundCapturer
+        .capture_foreground_client(&window.identity, MAX_CAPTURE_PIXELS)
+        .map_err(|e| format!("截图失败：{e}"))?;
+    Ok(Frame {
+        window,
+        image,
+        captured_at_ms: now_ms(),
+        capture_ms: started.elapsed().as_millis() as u64,
+    })
+}
+
+/// 当前的文字识别后端能不能用；不能用时给出原因。
+pub(crate) fn ready_ocr_backend(
     app: &AppHandle,
-    request: &str,
-    source: Source,
-) -> Result<ChatSnapshot, String> {
-    let s = settings(app);
-    let (ocr_model, backend) = ocr_backend(app, &s)?;
+    settings: &Settings,
+) -> Result<(String, Arc<dyn OcrBackend>), String> {
+    let (ocr_model, backend) = ocr_backend(app, settings)?;
     let info = backend.info();
     if !info.ready {
         return Err(format!(
@@ -233,22 +259,41 @@ pub async fn read_chat(
             info.reason.unwrap_or_else(|| info.state.clone())
         ));
     }
+    Ok((ocr_model, backend))
+}
+
+/// 截前台窗口、识别、写入跟踪。`request` 只是带进结果的玩家原话。
+pub async fn read_chat(
+    app: &AppHandle,
+    request: &str,
+    source: Source,
+) -> Result<ChatSnapshot, String> {
+    let s = settings(app);
+    ready_ocr_backend(app, &s)?;
+    let frame = tauri::async_runtime::spawn_blocking(capture_frame)
+        .await
+        .map_err(|e| format!("截图线程异常：{e}"))??;
+    read_frame(app, request, source, frame).await
+}
+
+/// 识别一张已经截好的前台窗口、写入聊天跟踪。
+pub async fn read_frame(
+    app: &AppHandle,
+    request: &str,
+    source: Source,
+    frame: Frame,
+) -> Result<ChatSnapshot, String> {
+    let s = settings(app);
+    let (ocr_model, backend) = ready_ocr_backend(app, &s)?;
+    let info = backend.info();
     let profile = active_profile(&s);
-    let mut phases = Vec::new();
-    let started = Instant::now();
-    let (window, image) = tauri::async_runtime::spawn_blocking(move || {
-        let window = WindowsWindowObserver
-            .foreground_window()
-            .map_err(|e| format!("找不到前台窗口：{e}"))?
-            .ok_or("当前没有前台窗口")?;
-        let image = GdiForegroundCapturer
-            .capture_foreground_client(&window.identity, MAX_CAPTURE_PIXELS)
-            .map_err(|e| format!("截图失败：{e}"))?;
-        Ok::<_, String>((window, image))
-    })
-    .await
-    .map_err(|e| format!("截图线程异常：{e}"))??;
-    phases.push(("captureMs", started.elapsed().as_millis() as u64));
+    let Frame {
+        window,
+        image,
+        captured_at_ms,
+        capture_ms,
+    } = frame;
+    let mut phases = vec![("captureMs", capture_ms)];
     let mut warnings: Vec<String> = Vec::new();
     if image
         .warnings
@@ -322,8 +367,8 @@ pub async fn read_chat(
             f64::from(r.height),
         ]
     });
-    // 聊天跟踪：每个窗口一个会话，记住已经见过的消息，标出这次新出现的。
-    let now = now_ms();
+    // 聊天跟踪：每个窗口一个会话，记住已经见过的消息，标出这次新出现的（按截图的时间算）。
+    let now = captured_at_ms;
     let frame_id = kotone_tools::ids::new_id("cfrm");
     let session = format!(
         "companion:{}",

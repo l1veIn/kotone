@@ -38,6 +38,12 @@ pub fn deliver_answer(app: &AppHandle, text: &str) -> bool {
     }
 }
 
+/// 有提问正在等回答吗（这时不“回答完接着听”，见 [`crate::follow_up`]）。
+pub fn is_pending(app: &AppHandle) -> bool {
+    app.try_state::<VoiceAsk>()
+        .is_some_and(|state| state.pending.lock().unwrap().is_some())
+}
+
 /// 提问结束（任何方式）时气泡回到“在想”。
 struct AskBubbleGuard(AppHandle);
 
@@ -83,7 +89,11 @@ pub async fn ask(
     let state = app.try_state::<VoiceAsk>().ok_or("语音提问不可用")?;
     crate::bubble::asking(app, question);
     let _bubble = AskBubbleGuard(app.clone());
-    // 1. 说出问题（说完才返回）
+    // 1. 说出问题（说完才返回）。合成费用记到正在跑的那一轮。
+    if let Some(owner) = kotone_core::usage::current_turn() {
+        kotone_core::usage::claim_speech(question, owner);
+    }
+    crate::voice_timing::sound("ask");
     let speak_app = app.clone();
     let text = question.to_string();
     tauri::async_runtime::spawn_blocking(move || crate::assistant::speak_now(&speak_app, &text))

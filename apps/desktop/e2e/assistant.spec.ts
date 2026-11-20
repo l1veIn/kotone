@@ -175,3 +175,26 @@ test("settings modal traps Tab and restores focus after Escape", async ({ page }
   await expect(dialog).not.toBeVisible();
   await expect(trigger).toBeFocused();
 });
+
+test("after answering she keeps listening for a few seconds; how long is set in 设置 → 怎么叫她", async ({ page }, testInfo) => {
+  await page.goto("/#/settings?onboarding=never");
+  await openSettingsTab(page, "call");
+  const talk = page.getByTestId("settings-call");
+  // ADR 029 §五：缺省 8 秒（旧配置没有这个字段）
+  const followUp = talk.getByTestId("call-follow-up");
+  await expect(followUp).toHaveAttribute("data-value", "8");
+  await expect(followUp).toContainText("8 秒（推荐）");
+  await expect(talk.getByText("回答完接着听", { exact: true })).toBeVisible();
+  await followUp.click();
+  await page.getByRole("option", { name: "不接着听" }).click();
+  await expect(followUp).toHaveAttribute("data-value", "0");
+  await expect(page.getByText("回答完不再接着听")).toBeVisible();
+  let saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
+  expect(saved.assistant.followUpSeconds).toBe(0);
+  await followUp.click();
+  await page.getByRole("option", { name: "12 秒" }).click();
+  await expect(followUp).toHaveAttribute("data-value", "12");
+  saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
+  expect(saved.assistant.followUpSeconds).toBe(12);
+  await talk.screenshot({ path: testInfo.outputPath("call-follow-up.png"), animations: "disabled" });
+});

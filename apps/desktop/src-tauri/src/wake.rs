@@ -32,7 +32,8 @@ const COOLDOWN: Duration = Duration::from_millis(1_200);
 const HANDOFF_CAPACITY: usize = 120;
 /// 估计环境底噪用最近多少块（50 ms 一块）。
 const NOISE_WINDOW: usize = 40;
-const ACKS: &[&str] = &["嗯？", "我在"];
+/// 唤醒应答（也在 [`crate::fillers`] 里预先合成）。
+pub(crate) const ACKS: &[&str] = &["嗯？", "我在"];
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase", tag = "state")]

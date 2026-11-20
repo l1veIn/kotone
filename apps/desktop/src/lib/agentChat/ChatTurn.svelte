@@ -88,7 +88,7 @@
       {#if waiting}
         <p class="m-0 flex h-7 items-center text-[13px] text-muted-foreground" role="status"><span class="kotone-shimmer">{$companionName}在想…</span></p>
       {/if}
-      {#if !turn.active}<TurnFooter copyText={turn.answerText} endedAtMs={turn.endedAtMs} usage={turn.usage} />{/if}
+      {#if !turn.active}<TurnFooter copyText={turn.answerText} endedAtMs={turn.endedAtMs} usage={turn.usage} extraCosts={turn.extraCosts ?? []} />{/if}
     </div>
   {/if}
 </section>

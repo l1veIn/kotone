@@ -511,7 +511,7 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_USAGE_SUMMARY,
-            description: "AI usage and cost from Kotone's local ledger (usage.jsonl): today, this month, by kind (chat, compaction, recap, TTS, ASR, OCR), by model and the last 30 days — tokens, prompt-cache hit tokens and hit rate, characters, audio time, images and estimated cost per currency (DeepSeek in CNY with peak / off-peak prices). Estimates; the provider's bill is authoritative.",
+            description: "AI usage and cost from Kotone's local ledger (usage.jsonl): today, this month, by kind (chat, compaction, recap, TTS, ASR, OCR), by model and the last 30 days — tokens, prompt-cache hit tokens and hit rate, characters, audio time, images and estimated cost per currency (DeepSeek in CNY with peak / off-peak prices). When called from a conversation, `conversation` splits that conversation's cost into chat (model), voice (TTS + ASR), screen (OCR) and search, in total and per turn. Estimates; the provider's bill is authoritative.",
             side_effects: &[],
             egress: "none",
             input: none(),

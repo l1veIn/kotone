@@ -1,6 +1,6 @@
 # ADR 029：像打电话一样和她说话——快回答、接着听、复杂的事交给子代理
 
-状态：Proposed / 待玩家确认（2026-11-20）。调研与实测见 [2026-11-20 语音对话的及时性与连续性](../research/2026-11-20-realtime-voice.md)。修订 [ADR 022](022-sessions-memory-soul.md) 的子会话部分（见第三节）。
+状态：Accepted / 已确认（2026-11-20），实现中。调研与实测见 [2026-11-20 语音对话的及时性与连续性](../research/2026-11-20-realtime-voice.md)。修订 [ADR 022](022-sessions-memory-soul.md) 的子会话部分（见第三节）。
 
 ## 背景
 

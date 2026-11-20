@@ -92,6 +92,9 @@ pub struct AssistantConfig {
     pub wake: WakeConfig,
     /// 琴音的对话气泡（屏幕角落）。新字段，缺省 = 开启、右下角。
     pub bubble: BubbleConfig,
+    /// 回答完接着听几秒（ADR 029 §五）：语音入口的回答念完后不用再按键、不用再喊唤醒词，
+    /// 直接接着说就是这段对话的下一句；没开口就安静结束。0 = 不接着听。新字段，缺省 8 秒。
+    pub follow_up_seconds: u32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -190,6 +193,11 @@ pub struct WakeConfig {
 }
 
 pub const WAKE_NO_SPEECH_RANGE_MS: std::ops::RangeInclusive<u32> = 2_000..=15_000;
+
+/// 回答完接着听的缺省秒数（照 Pipecat 唤醒后 10 s 内不用再喊、xiaozhi 念完自动再开麦，取 8 秒）。
+pub const DEFAULT_FOLLOW_UP_SECONDS: u32 = 8;
+/// 回答完接着听的秒数范围（0 = 不接着听）。
+pub const FOLLOW_UP_RANGE_SECONDS: std::ops::RangeInclusive<u32> = 0..=30;
 
 impl Default for WakeConfig {
     fn default() -> Self {
@@ -362,6 +370,7 @@ impl Default for AssistantConfig {
             tts_model_id: String::new(),
             wake: WakeConfig::default(),
             bubble: BubbleConfig::default(),
+            follow_up_seconds: DEFAULT_FOLLOW_UP_SECONDS,
         }
     }
 }
@@ -470,6 +479,9 @@ impl AssistantConfig {
         if !WAKE_NO_SPEECH_RANGE_MS.contains(&self.wake.no_speech_timeout_ms) {
             return Err("唤醒后等待说话的时间必须在 2 到 15 秒之间".into());
         }
+        if !FOLLOW_UP_RANGE_SECONDS.contains(&self.follow_up_seconds) {
+            return Err("回答完接着听的时间必须在 0 到 30 秒之间".into());
+        }
         self.companion.validate()
     }
 }
@@ -561,6 +573,32 @@ mod tests {
         assert_eq!(config.danmaku_color, "#FFFFFF");
         assert_eq!(config.speech_engine, SpeechEngine::System);
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn follow_up_listening_is_a_new_field_defaulting_to_eight_seconds() {
+        // 旧配置没有这个字段：缺省 8 秒（ADR 029 §五）
+        let old: AssistantConfig =
+            serde_json::from_str(r##"{"voiceId":"v","speechVolume":65}"##).unwrap();
+        assert_eq!(old.follow_up_seconds, DEFAULT_FOLLOW_UP_SECONDS);
+        old.validate().unwrap();
+        // 新字段单独落盘，不改任何旧字段的写法；旧版本忽略它
+        let off = AssistantConfig {
+            follow_up_seconds: 0,
+            ..AssistantConfig::default()
+        };
+        let json = serde_json::to_value(&off).unwrap();
+        assert_eq!(json["followUpSeconds"], 0);
+        assert_eq!(json["route"], "reminders");
+        off.validate().unwrap();
+        let back: AssistantConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(back.follow_up_seconds, 0);
+        assert!(AssistantConfig {
+            follow_up_seconds: 31,
+            ..AssistantConfig::default()
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]

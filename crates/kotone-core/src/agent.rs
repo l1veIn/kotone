@@ -79,8 +79,8 @@ pub struct AgentConfig {
     /// DeepSeek 内容审核（`safety_check`，ADR 026）：审核拒绝时撤回回答并说明（默认开）。别的服务商忽略。新字段。
     #[serde(default = "default_true")]
     pub safety_check: bool,
-    /// 游戏里（呼叫、唤醒、快捷指令）的思考强度：`low` / `high` / `max`，`none` = 不思考，空 = 服务商默认。
-    /// 只对 DeepSeek 生效（ADR 026）。新字段。
+    /// 游戏里（呼叫、唤醒、快捷指令）的思考强度：`low` / `high` / `max`，`none` = 不思考。
+    /// 空 = 不思考（ADR 029：语音回合要快；0.2.0 早期空 = 服务商默认）。只对 DeepSeek 生效（ADR 026）。新字段。
     #[serde(default = "default_game_effort")]
     pub game_effort: String,
     /// 聊天窗口里的思考强度（同上）。新字段。
@@ -92,8 +92,9 @@ fn default_game_effort() -> String {
     DEFAULT_GAME_EFFORT.into()
 }
 
-/// 游戏里默认的思考强度：服务商默认。实测（ADR 026，海克斯大乱斗问题，含联网搜索）高 / 低 / 不思考
-/// 每轮都是 5–6 秒，没有更快，就不改默认。
+/// 游戏里默认的思考强度：空，桌面端按“不思考”处理（ADR 029）。玩家本机实测“你能做什么”开着思考
+/// 模型要 19.6 秒（157 个推理 token），Pipecat、xiaozhi 对 DeepSeek 也默认关掉思考。
+/// 落盘仍是空字符串：不给已有字段写新值（配置兼容）。
 pub const DEFAULT_GAME_EFFORT: &str = "";
 
 fn default_role_id() -> String {
@@ -155,6 +156,16 @@ pub fn now_label() -> String {
         WEEKDAYS[now.weekday().num_days_from_monday() as usize],
         now.format("%H:%M")
     )
+}
+
+/// 某个时刻（毫秒）的本地时间 `14:05:09`（玩家开口时的截图等）。
+pub fn clock_label(at_ms: u64) -> String {
+    use chrono::TimeZone;
+    chrono::Local
+        .timestamp_millis_opt(at_ms as i64)
+        .single()
+        .map(|t| t.format("%H:%M:%S").to_string())
+        .unwrap_or_default()
 }
 
 /// 琴音的身份。空 = 用工作区 `IDENTITY.md` 或默认（“琴音”、内置头像）。

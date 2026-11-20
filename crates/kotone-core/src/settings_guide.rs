@@ -76,6 +76,14 @@ const EFFORTS: &[(&str, &str)] = &[
     ("high", "高"),
     ("max", "最高"),
 ];
+/// 游戏里（语音入口）的思考强度：空 = 不思考（ADR 029），其余同 [`EFFORTS`]。
+const GAME_EFFORTS: &[(&str, &str)] = &[
+    ("", "不思考（默认）"),
+    ("none", "不思考"),
+    ("low", "低"),
+    ("high", "高"),
+    ("max", "最高"),
+];
 const RECORD_SOUNDS: &[(&str, &str)] = &[
     ("rise", "上扬"),
     ("ding-up", "叮（升）"),
@@ -130,6 +138,7 @@ pub const FIELDS: &[Field] = &[
     f("assistant.interactionMode", "提醒键的说话方式（0.1.x 提醒助手；呼叫键固定为说完自动提交）", "提醒助手 → 提醒设置", "只影响 0.1.x 升级用户保留的提醒键；呼叫她不看这一项。", &[("push-to-talk", "按住说话，松开提交"), ("dictation", "按一下开始，停顿自动提交"), ("one-shot", "按一下说一句，说完自动提交")], NOW),
     f("assistant.connectionId", "AI 连接", "设置 → 她怎么回答 → AI 连接，或提醒助手 → 提醒设置", "她用哪条连接（连接 ID，用 connections.list 查）。0.1.x 升级用户在此保留原提醒连接，她的连接另存在 assistant.companionBindings.connectionId。", NONE, NOW),
     f("assistant.companionBindings.connectionId", "升级用户的琴音连接", "设置 → 她怎么回答 → AI 连接", "仅 0.1.x 升级用户启用琴音后使用；连接 ID，用 connections.list 查。", NONE, NOW),
+    f("assistant.followUpSeconds", "回答完接着听", "设置 → 怎么叫她", "秒，0–30，缺省 8。语音叫她（呼叫键、唤醒词、快捷指令）得到回答后，她念完接着听这么久：直接说就是这段对话的下一句，不用再按键或喊唤醒词；没开口就安静结束，说“没事了 / 不用了 / 拜拜”也会结束。0 = 不接着听。", NONE, NOW),
     f("assistant.route", "呼叫交给谁", "设置 → 怎么叫她", "", &[("reminders", "内置（琴音 / 旧的单次陪玩）"), ("agent", "转交外部 Agent（需开启工具服务）")], NOW),
     f("assistant.defaultDelivery", "回答方式", "设置 → 她怎么回答 → 声音与弹幕", "数组，元素 voice（语音）/ danmaku（弹幕），1–2 个不重复。", NONE, NOW),
     f("assistant.speechEngine", "本地语音合成", "设置 → 她怎么回答 → 声音与弹幕", "assistant.ttsModelId 为空时使用。", &[("system", "Windows 系统语音"), ("kokoro", "Kokoro 本地中文语音（需下载）")], NOW),
@@ -244,7 +253,7 @@ pub const FIELDS: &[Field] = &[
     f("agent.identity.name", "琴音的名字", "琴音 → 她是谁", "空 = 默认“琴音”（或工作区 IDENTITY.md 里的名字）。改了以后她会用新名字介绍自己，界面上也跟着变；唤醒词要在语音唤醒里另外设。", NONE, NOW),
     f("agent.matchRecap", "对局复盘", "设置 → 权限", "true（默认）：游戏退出时，琴音把这一局的对话、提醒、自动化整理成复盘，写进这个游戏的记忆，并在聊天里留一条；只整理玩了 3 分钟以上、而且这一局里叫过她或跑过自动化的。每次一次 AI 调用。", NONE, NOW),
     f("agent.safetyCheck", "DeepSeek 内容审核", "设置 → 权限", "true（默认）：用 DeepSeek 时请求带 safety_check，审核没通过的回答会撤回并说明；审核不另收费。只对 DeepSeek 生效。", NONE, NOW),
-    f("agent.gameEffort", "游戏里的思考强度", "设置 → 权限", "只对 DeepSeek 生效。空 = 服务商默认（high）。实测游戏问题上 high / low / none 速度差不多。", EFFORTS, NOW),
+    f("agent.gameEffort", "游戏里的思考强度", "设置 → 权限", "只对 DeepSeek 生效。语音叫她时空 = 不思考（ADR 029：开着思考实测一句回答要多等十几秒）；玩家明确选了 low / high / max 才思考。", GAME_EFFORTS, NOW),
     f("agent.chatEffort", "聊天窗口里的思考强度", "设置 → 权限", "只对 DeepSeek 生效。空 = 服务商默认（high）。", EFFORTS, NOW),
     f("agent.compactAtTokens", "对话多长时整理成摘要", "设置 → 她怎么回答 → AI 连接", "一段对话估到这么多 token 时，琴音把较早的部分整理成摘要、之后只看摘要和最近几轮（整理那一次多花一点，之后又能命中缓存）。默认 64000；0 = 不整理。", NONE, NOW),
     f("agent.subagents.model", "子会话用的模型", "设置 → 她怎么回答 → AI 连接", "琴音派出的子会话（例如同传）用的模型 id；空 = 和琴音同一个模型。建议填同一家服务商更快更便宜的模型。", NONE, NOW),

@@ -10,6 +10,8 @@ mod companion;
 mod compatibility;
 mod computer_use;
 mod diagnostics;
+mod fillers;
+mod follow_up;
 mod game_session;
 mod game_tools;
 mod hotkey;
@@ -21,6 +23,7 @@ mod recap;
 mod roles;
 mod runtime;
 mod speech_models;
+mod speech_screen;
 mod stop;
 mod tool_config;
 mod tool_service;
@@ -30,6 +33,7 @@ mod usage;
 mod voice_ask;
 mod voice_chat;
 mod voice_listen;
+mod voice_timing;
 mod wake;
 mod web_tools;
 mod workspace_cmd;
@@ -440,6 +444,18 @@ struct TauriEmitter {
     hidden_for_companion: Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// 琴音的录音会话开始 / 判停（ADR 029）：开口时截屏、语音识别费用先扣住等交给对话、计时。
+fn on_companion_state(app: &AppHandle, payload: &serde_json::Value) {
+    match payload.get("state").and_then(|s| s.as_str()).unwrap_or("") {
+        "listening" => {
+            kotone_core::usage::hold_asr();
+            speech_screen::on_listening(app);
+        }
+        "transcribing" => voice_timing::speech_ended(),
+        _ => {}
+    }
+}
+
 /// 琴音（角色）的录音会话：气泡只属于角色、悬浮窗只属于语音输入（ADR 028）。
 /// 0.1.x 的提醒助手仍是语音输入法的一部分，照旧用悬浮窗。
 fn is_companion_session(payload: &serde_json::Value) -> bool {
@@ -459,6 +475,9 @@ impl Emitter for TauriEmitter {
         let _ = self.app.emit(event, payload.clone());
         // 琴音的语音会话只在对话气泡里显示；气泡关着时也不借用语音输入的悬浮窗（D10）。
         let companion_session = event == "kotone://state" && is_companion_session(&payload);
+        if companion_session {
+            on_companion_state(&self.app, &payload);
+        }
         match event {
             "kotone://state" => bubble::on_state(&self.app, &payload),
             "kotone://partial" => {
@@ -1211,6 +1230,8 @@ fn update_settings(
         }
         // 当前角色（名字、声音、唤醒词跟着它）
         roles::remember(&updated.agent.role_id);
+        // 换了声音 / 角色 / 引擎：填充话按新声音重新合成（ADR 029 §四；没变就只是过一遍缓存）。
+        fillers::refresh(&app);
     }
     // 引擎/模型/模式可能经 patch 变更 → restartNeeded 推导依赖最新配置，推送全量状态
     runtime::snapshot_and_emit(&app, None);
@@ -2129,6 +2150,7 @@ pub fn run() {
             app.manage(wake_runtime);
             app.manage(voice_ask::VoiceAsk::default());
             app.manage(bubble::BubbleRuntime::default());
+            app.manage(speech_screen::SpeechScreen::default());
             app.manage(computer_use::ComputerUse::default());
             app.manage(voice_chat::VoiceChat::default());
             app.manage(voice_listen::VoiceListen::default());
@@ -2196,6 +2218,12 @@ pub fn run() {
             if companion_enabled {
                 // 琴音原来的名字和头像记进她的角色卡（只做一次）。
                 roles::migrate(app.handle());
+                // 填充话（“我看看”“稍等哈”……）先合成好（ADR 029 §四）。等启动的事忙完再做。
+                let fillers_app = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    fillers::refresh(&fillers_app);
+                });
             }
             // 对局复盘：盯着游戏进程，一局结束就整理（agent.matchRecap，默认开）。
             recap::start(app.handle());
@@ -2360,6 +2388,7 @@ pub fn run() {
             automation::automation_run_saved,
             automation::automation_stop,
             usage::usage_summary,
+            usage::usage_conversation,
             roles::roles_list,
             roles::roles_get,
             roles::roles_switch,

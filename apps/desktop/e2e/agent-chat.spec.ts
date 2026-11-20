@@ -108,6 +108,18 @@ async function openChat(page: Page, options: { empty?: boolean; notReady?: strin
               { day: "2026-11-18", totals: today, byKind: [{ kind: "chat", label: "对话", totals: today }, { kind: "tts", label: "语音合成", totals: { ...today, requests: 2, inputTokens: 0, cacheHitTokens: 0, cost: { CNY: 0.003 } } }], byModel: [{ model: "deepseek/deepseek-flash", totals: today }] },
             ], priceSource: "DeepSeek 官方价格页（测试）", note: "费用是估算", ledger: "C:/test/usage.jsonl" };
         }
+        case "usage_conversation": {
+          // 账本里记到这段对话的语音、读屏费用（模型的费用在消息里）
+          const id = (args as { id: string }).id;
+          const voice = { requests: 2, inputTokens: 0, cacheHitTokens: 0, outputTokens: 0, characters: 60, audioMs: 4_000, images: 0, hitRate: null, cost: { CNY: 0.005 }, unpriced: 0 };
+          const screen = { ...voice, characters: 0, audioMs: 0, images: 1, requests: 1, cost: { CNY: 0.0015 } };
+          const search = { ...voice, characters: 0, audioMs: 0, requests: 1, cost: { CNY: 0.0055 } };
+          const turn = (window as unknown as { costTurn?: number }).costTurn;
+          if (id !== "c-old" || !turn) return null;
+          return { conversationId: id,
+            total: [{ category: "voice", label: "语音", totals: voice }, { category: "screen", label: "读屏", totals: screen }, { category: "search", label: "搜索", totals: search }],
+            turns: [{ turn, byCategory: [{ category: "voice", label: "语音", totals: voice }, { category: "screen", label: "读屏", totals: screen }] }] };
+        }
         case "get_runtime_status": return structuredClone(runtime);
         case "start_runtime": {
           bridge.calls.push({ command });
@@ -578,4 +590,30 @@ test("after the AI connection changes, the chat re-reads her state instead of ke
   await expect(page.getByTestId("agent-not-ready")).toHaveCount(0);
   await page.getByTestId("assistant-request").fill("你好");
   await expect(page.getByTestId("agent-send")).toBeEnabled();
+});
+
+test("voice, screen-reading and search costs are listed separately per turn and for the conversation", async ({ page }, testInfo) => {
+  await openChat(page);
+  await page.evaluate(async (T) => {
+    const t = window.agentTest;
+    (window as unknown as { costTurn: number }).costTurn = T + 500;
+    await t.event("c-old", { kind: "appended", message: { role: "user", text: "刚才队友说的什么", source: "wake-voice", atMs: T + 500 } });
+    await t.event("c-old", { kind: "step", step: 1 });
+    await t.event("c-old", { kind: "appended", message: { role: "assistant", text: "他说去下路。", usage: { inputTokens: 2_000, cachedInputTokens: 1_900, outputTokens: 12, cost: 0.002, currency: "CNY" }, atMs: T + 1500 } });
+    await t.event("c-old", { kind: "finished", stop: { kind: "completed" }, acpStopReason: "end_turn" });
+    await t.event("c-old", { kind: "idle" });
+  }, T);
+  // 这一轮：对话（模型）与语音、读屏分开列
+  const footer = page.getByTestId("agent-turn").last().getByTestId("agent-turn-usage");
+  await expect(footer).toHaveText("输入 2,000（命中缓存 95%） · 输出 12 tokens · 对话 ¥0.0020 · 语音 ¥0.0050 · 读屏 ¥0.0015");
+  // 没有这些费用的旧轮次照旧
+  await expect(page.getByTestId("agent-turn").first().getByTestId("agent-turn-usage")).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("turn-costs.png"), animations: "disabled" });
+  // 本段对话：合计含语音、读屏、搜索；明细里分开
+  await expect(page.getByTestId("usage-pill-conversation")).toHaveText("本段对话 ¥0.014 · 命中 95%");
+  await page.getByTestId("usage-pill").click();
+  const dialog = page.getByTestId("usage-dialog");
+  await dialog.getByTestId("usage-tab-conversation").click();
+  await expect(dialog.getByTestId("usage-conversation-breakdown")).toHaveText("对话 ¥0.0020 · 语音 ¥0.0050 · 读屏 ¥0.0015 · 搜索 ¥0.0055");
+  await page.screenshot({ path: testInfo.outputPath("conversation-costs.png"), animations: "disabled" });
 });

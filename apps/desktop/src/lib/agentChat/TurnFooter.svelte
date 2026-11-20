@@ -2,29 +2,37 @@
 <!-- via RambleDesk apps/desktop/src/lib/agents/chat/TurnFooter.svelte. -->
 <!-- Copyright Codeg authors and contributors. SPDX-License-Identifier: Apache-2.0 -->
 <!-- Kotone: icon action + stat text after DeepSeek Harness MessageIconActions / StatsPills (MIT); shows the -->
-<!-- token usage the provider reported for the turn (hidden when none; never estimated). -->
+<!-- token usage the provider reported for the turn (hidden when none; never estimated). Costs outside the model -->
+<!-- (speech, screen reading, web search; from the local ledger) are listed separately: “对话 ¥… · 语音 ¥… · 读屏 ¥…”. -->
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { Check, Copy } from "@lucide/svelte";
-  import type { TokenUsage } from "../agent";
-  import { formatCost, formatHitRate, formatTokens } from "./timeline";
+  import type { CategoryTotals, TokenUsage } from "../agent";
+  import { formatCost, formatHitRate, formatTokens, totalsMoney } from "./timeline";
 
-  let { copyText = "", endedAtMs = null, usage = null }: { copyText?: string; endedAtMs?: number | null; usage?: TokenUsage | null } = $props();
+  let { copyText = "", endedAtMs = null, usage = null, extraCosts = [] }: {
+    copyText?: string; endedAtMs?: number | null; usage?: TokenUsage | null;
+    /** 模型以外的费用（语音、读屏、搜索），按类别。 */
+    extraCosts?: CategoryTotals[];
+  } = $props();
   let copied = $state(false);
   let failed = $state(false);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const time = $derived(endedAtMs ? new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(endedAtMs) : "");
   const usageText = $derived.by(() => {
-    if (!usage) return "";
     const parts: string[] = [];
-    if (usage.inputTokens !== undefined) {
+    if (usage?.inputTokens !== undefined) {
       const rate = usage.cachedInputTokens !== undefined ? formatHitRate(usage.cachedInputTokens, usage.inputTokens) : "";
       parts.push(`输入 ${formatTokens(usage.inputTokens)}${rate ? `（命中缓存 ${rate}）` : ""}`);
     }
-    if (usage.outputTokens !== undefined) parts.push(`输出 ${formatTokens(usage.outputTokens)}`);
-    if (!parts.length) return "";
-    const money = usage.cost !== undefined ? formatCost(usage.cost, usage.currency) : formatCost(usage.costUsd, "USD");
-    return `${parts.join(" · ")} tokens${money ? ` · 约 ${money}` : ""}`;
+    if (usage?.outputTokens !== undefined) parts.push(`输出 ${formatTokens(usage.outputTokens)}`);
+    const tokens = parts.length ? `${parts.join(" · ")} tokens` : "";
+    const money = !usage ? "" : usage.cost !== undefined ? formatCost(usage.cost, usage.currency) : formatCost(usage.costUsd, "USD");
+    const extras = extraCosts.map((c) => `${c.label} ${totalsMoney(c.totals) || "—"}`);
+    if (!extras.length) return tokens ? `${tokens}${money ? ` · 约 ${money}` : ""}` : "";
+    // 模型以外还有花费：分开列出（对话 ¥… · 语音 ¥… · 读屏 ¥…）。
+    const costs = [...(money ? [`对话 ${money}`] : []), ...extras].join(" · ");
+    return tokens ? `${tokens} · ${costs}` : costs;
   });
 
   async function copy() {

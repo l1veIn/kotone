@@ -713,7 +713,12 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
         }
         c::TOOL_USAGE_SUMMARY => {
             let _: NoArgs = parse(tool, args)?;
-            Ok(crate::usage::summary())
+            let mut summary = crate::usage::summary();
+            // 本段对话：模型、语音、读屏、搜索分开（正在回答的对话，没有就是当前对话）。
+            if let Some((id, since)) = crate::agent::active_conversation(app) {
+                summary["conversation"] = crate::usage::conversation(&id, since);
+            }
+            Ok(summary)
         }
         c::TOOL_GAME_RECAP => {
             let RecapArgs {

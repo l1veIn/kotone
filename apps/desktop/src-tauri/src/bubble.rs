@@ -70,6 +70,8 @@ pub struct Model {
     snap: Snapshot,
     /// 正在念：在想 / 工具状态不覆盖正在念的句子。
     holding: bool,
+    /// 等待中的是“回答完接着听”（ADR 029 §五），不是追问：开口就转到“听清了”，没开口就收起。
+    follow_up: bool,
     /// 琴音的名字（空 = 默认）。
     name: String,
 }
@@ -88,6 +90,7 @@ impl Default for Model {
                 corner: BubbleCorner::default(),
             },
             holding: false,
+            follow_up: false,
             name: String::new(),
         }
     }
@@ -115,6 +118,7 @@ impl Model {
             self.snap.ask_seconds = None;
             self.snap.ask_started_ms = None;
         }
+        self.follow_up = false;
         &self.snap
     }
 
@@ -140,7 +144,9 @@ impl Model {
     }
 
     pub fn recognizing(&mut self) -> Option<&Snapshot> {
-        (self.snap.phase == Phase::Listening).then(|| self.set(Phase::Recognizing, "听清了…", ""))
+        let from_follow_up = self.snap.phase == Phase::Asking && self.follow_up;
+        (self.snap.phase == Phase::Listening || from_follow_up)
+            .then(|| self.set(Phase::Recognizing, "听清了…", ""))
     }
 
     /// 在想 / 在用工具。正在念或在等回答时不打断。
@@ -221,6 +227,32 @@ impl Model {
         Some(&self.snap)
     }
 
+    /// 回答念完、接着听 `seconds` 秒（ADR 029 §五）：气泡留着刚才那句，显示倒计时。
+    pub fn follow_up(&mut self, seconds: u64, now_ms: u64, shown: &str) -> &Snapshot {
+        self.holding = false;
+        self.snap.heard.clear();
+        self.set(Phase::Asking, FOLLOW_UP_LABEL, shown);
+        self.follow_up = true;
+        self.snap.ask_seconds = Some(seconds);
+        self.snap.ask_started_ms = Some(now_ms);
+        &self.snap
+    }
+
+    /// 接着听结束了（没开口、开不了麦）：还在等就收起。
+    pub fn follow_up_done(&mut self) -> Option<&Snapshot> {
+        (self.snap.phase == Phase::Asking && self.follow_up).then(|| self.hide())
+    }
+
+    /// 正在念一句话（呼叫键打断用）。
+    pub fn is_speaking(&self) -> bool {
+        self.snap.phase == Phase::Speaking && self.holding
+    }
+
+    /// 被打断：正在念的这句立刻收起。
+    pub fn stop_speaking(&mut self) -> Option<&Snapshot> {
+        (self.snap.phase == Phase::Speaking).then(|| self.hide())
+    }
+
     /// 追问结束（拿到回答或没回答），回到“在想”。
     pub fn ask_done(&mut self) -> Option<&Snapshot> {
         if self.snap.phase != Phase::Asking {
@@ -265,6 +297,9 @@ impl Model {
         (self.snap.revision == revision && self.snap.phase != Phase::Hidden).then(|| self.hide())
     }
 }
+
+/// 回答完接着听时的状态行。
+pub const FOLLOW_UP_LABEL: &str = "接着说吧";
 
 /// 有子会话在听队友时的状态行（ADR 021）。
 pub const LISTEN_LABEL: &str = "正在听队友";
@@ -390,7 +425,11 @@ pub fn on_state(app: &AppHandle, payload: &Value) {
         }
         "idle" => {
             // 会话被取消（Esc、热键取消）：还在听就收起；交给琴音以后的状态由琴音那边管。
+            // 回答完接着听、一直没开口：安静收起（ADR 029 §五）。
             update(app, |m| {
+                if let Some(snap) = m.follow_up_done() {
+                    return Some(snap.clone());
+                }
                 matches!(m.snapshot().phase, Phase::Listening | Phase::Recognizing)
                     .then(|| m.hide().clone())
             });
@@ -464,6 +503,28 @@ pub fn ask_listening(app: &AppHandle, seconds: u64) {
 
 pub fn ask_done(app: &AppHandle) {
     update(app, |m| m.ask_done().cloned());
+}
+
+/// 回答念完、接着听（气泡关着时只听不显示）。
+pub fn follow_up(app: &AppHandle, seconds: u64, shown: &str) {
+    if enabled(app) {
+        update(app, |m| Some(m.follow_up(seconds, now_ms(), shown).clone()));
+    }
+}
+
+pub fn follow_up_done(app: &AppHandle) {
+    update(app, |m| m.follow_up_done().cloned());
+}
+
+/// 正在念一句话吗。
+pub fn is_speaking(app: &AppHandle) -> bool {
+    app.try_state::<BubbleRuntime>()
+        .is_some_and(|rt| rt.model.lock().unwrap().is_speaking())
+}
+
+/// 被呼叫键打断：正在念的那句马上收起。
+pub fn stop_speaking(app: &AppHandle) {
+    update(app, |m| m.stop_speaking().cloned());
 }
 
 /// 这一轮结束了：没有要念的话就收起。
@@ -675,6 +736,47 @@ mod tests {
         assert_eq!(m.heard("可以").unwrap().heard, "可以");
         assert_eq!(m.ask_done().unwrap().phase, Phase::Thinking);
         assert_eq!(m.snapshot().ask_seconds, None);
+    }
+
+    #[test]
+    fn follow_up_keeps_the_answer_with_a_countdown_then_listens_or_hides() {
+        let mut m = Model::default();
+        let rev = m.speaking("推荐出无尽之刃。").revision;
+        m.spoken(rev);
+        let snap = m.follow_up(8, 1_000, "推荐出无尽之刃。").clone();
+        assert_eq!(
+            (snap.phase, snap.label.as_str(), snap.text.as_str()),
+            (Phase::Asking, FOLLOW_UP_LABEL, "推荐出无尽之刃。")
+        );
+        assert_eq!(
+            (snap.ask_seconds, snap.ask_started_ms),
+            (Some(8), Some(1_000))
+        );
+        // 念完后的停留不收起倒计时
+        assert!(m.hide_if(rev).is_none());
+        // 开始收音不顶掉倒计时；开口识别就转到“听清了”，接着照常“在想”
+        assert_eq!(m.listening().phase, Phase::Asking);
+        assert_eq!(m.heard("那第二件呢").unwrap().heard, "那第二件呢");
+        assert_eq!(m.recognizing().unwrap().phase, Phase::Recognizing);
+        assert_eq!(m.thinking("在想…").unwrap().text, "那第二件呢");
+        assert!(m.follow_up_done().is_none());
+        // 没开口：安静收起
+        m.follow_up(8, 2_000, "好的");
+        assert_eq!(m.follow_up_done().unwrap().phase, Phase::Hidden);
+        // 追问（reply.ask）不是接着听：识别时不跳到“听清了”，结束也不由这里收
+        m.asking("要我帮你下载吗？");
+        assert!(m.recognizing().is_none());
+        assert!(m.follow_up_done().is_none());
+    }
+
+    #[test]
+    fn the_call_key_cuts_off_the_sentence_being_spoken() {
+        let mut m = Model::default();
+        assert!(!m.is_speaking());
+        m.speaking("这个版本最强的是……");
+        assert!(m.is_speaking());
+        assert_eq!(m.stop_speaking().unwrap().phase, Phase::Hidden);
+        assert!(m.stop_speaking().is_none());
     }
 
     #[test]

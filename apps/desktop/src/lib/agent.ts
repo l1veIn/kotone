@@ -309,7 +309,8 @@ export function sourceLabel(source: string | undefined): string | null {
   switch (source) {
     case undefined: case "": case "chat": return null;
     case "assistant-text": return "文字入口";
-    case "voice": return "游戏内 · 语音";
+    // 唤醒词、回答完接着听（ADR 029）都是语音叫她，和呼叫键一样显示
+    case "voice": case "wake-voice": return "游戏内 · 语音";
     case "quick-command": return "游戏内 · 快捷指令";
     case "tool": return "工具提交";
     case "automation": return "自动化结果";
@@ -343,7 +344,31 @@ export interface UsageSummary {
   priceSource: string; note: string; ledger: string | null;
 }
 
+/** 一段对话的费用按类别（ADR 029 / 玩家要求：语音合成与识别、读屏、联网搜索也记到对话上）。 */
+export type CostCategory = "chat" | "voice" | "screen" | "search" | "other";
+export interface CategoryTotals { category: CostCategory; label: string; totals: UsageTotals }
+export interface ConversationCosts {
+  conversationId: string;
+  /** 整段对话按类别。 */
+  total: CategoryTotals[];
+  /** 每一轮（turn = 那一轮玩家那句话的时间 atMs）按类别；模型调用不分轮（每轮的模型用量在消息里）。 */
+  turns: { turn: number; byCategory: CategoryTotals[] }[];
+}
+
 const emptyTotals = (): UsageTotals => ({ requests: 0, inputTokens: 0, cacheHitTokens: 0, outputTokens: 0, characters: 0, audioMs: 0, images: 0, hitRate: null, cost: {}, unpriced: 0 });
+
+/** 一段对话的费用（读本机账本 usage.jsonl；sinceMs = 对话开始的时间）。读不到时为 null。 */
+export async function usageConversation(id: string, sinceMs: number): Promise<ConversationCosts | null> {
+  if (isTauri) return invoke<ConversationCosts | null>("usage_conversation", { id, sinceMs });
+  if (id !== previewConversation.id) return null;
+  const voice: UsageTotals = { ...emptyTotals(), requests: 2, characters: 60, audioMs: 4_000, cost: { CNY: 0.0094 } };
+  const screen: UsageTotals = { ...emptyTotals(), requests: 1, images: 1, cost: { CNY: 0.0015 } };
+  return {
+    conversationId: id,
+    total: [{ category: "voice", label: "语音", totals: voice }, { category: "screen", label: "读屏", totals: screen }],
+    turns: [{ turn: previewConversation.messages[0].atMs, byCategory: [{ category: "voice", label: "语音", totals: voice }, { category: "screen", label: "读屏", totals: screen }] }],
+  };
+}
 
 export async function usageSummary(): Promise<UsageSummary> {
   if (isTauri) return invoke("usage_summary");

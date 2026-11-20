@@ -244,30 +244,78 @@ pub fn send(app: &AppHandle, outgoing: Outgoing) -> Result<Value, String> {
     if text.is_empty() {
         return Err("消息为空".into());
     }
+    // 游戏里用嘴说的（呼叫键、唤醒、接着听）；聊天页语音按钮的话另算（它进聊天窗口入口）。
+    let voice = matches!(outgoing.source.as_str(), "wake-voice" | "voice");
+    let spoken = is_spoken_source(&outgoing.source);
+    if spoken {
+        crate::voice_timing::recognized();
+    }
     // 琴音刚用语音问了一句、正在等回答：这句语音就是回答，交回那次提问。
-    if matches!(outgoing.source.as_str(), "wake-voice" | "voice")
-        && crate::voice_ask::deliver_answer(app, &text)
-    {
+    if voice && crate::voice_ask::deliver_answer(app, &text) {
+        kotone_core::usage::release_asr(kotone_core::usage::current_turn());
         return Ok(json!({"status": "answered"}));
     }
     // 语音说“停下”：和停止热键、托盘「停下」一样停下一切（正在进行的操作、这一轮、子会话、
     // 全部自动化，ADR 019 决定 7 / ADR 028），不当成插话排队。
-    if matches!(outgoing.source.as_str(), "wake-voice" | "voice")
+    if voice
         && is_stop_command(&text, &settings(app).agent.identity.name)
         && crate::stop::stop_everything(app, "语音“停下”")
     {
+        kotone_core::usage::release_asr(kotone_core::usage::current_turn());
+        crate::voice_timing::discard();
         return Ok(json!({"status": "stopped"}));
     }
-    send_message(
+    // 没在忙时说“没事了 / 不用了 / 拜拜”：安静结束，不交给模型（ADR 029 §五；在忙时照常插话）。
+    if voice
+        && !is_running(app)
+        && crate::follow_up::is_exit_phrase(&text, &settings(app).agent.identity.name)
+    {
+        kotone_core::usage::release_asr(None);
+        crate::voice_timing::discard();
+        log::log("agent: 玩家说了结束的话，安静结束");
+        // 识别成功后气泡会先显示“在想”：稍后收起。
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            crate::bubble::finished(&app);
+        });
+        return Ok(json!({"status": "dismissed"}));
+    }
+    let at_ms = now_ms();
+    let result = send_message(
         app,
         Message::User {
             text,
             attachments: outgoing.attachments,
             source: outgoing.source,
-            at_ms: now_ms(),
+            at_ms,
             context: String::new(),
         },
-    )
+    );
+    if spoken {
+        // 这句话的语音识别费用记到它进的那一轮（插话也是聊天里单独的一轮）。
+        let owner = result.as_ref().ok().and_then(|v| {
+            v["conversationId"]
+                .as_str()
+                .map(|id| kotone_core::usage::Owner {
+                    conversation: id.to_string(),
+                    turn: Some(at_ms),
+                })
+        });
+        kotone_core::usage::release_asr(owner);
+    }
+    result
+}
+
+/// 玩家用嘴说的（经过语音识别）：唤醒、呼叫键、聊天页的语音按钮。
+fn is_spoken_source(source: &str) -> bool {
+    matches!(source, "wake-voice" | "voice" | "assistant-text")
+}
+
+/// 语音入口的一轮：回答念完后接着听（ADR 029 §五）。快捷指令也算（玩家在游戏里、按键叫她）。
+fn follows_up(message: &Message) -> bool {
+    matches!(message, Message::User { source, .. }
+        if matches!(source.as_str(), "wake-voice" | "voice" | "quick-command"))
 }
 
 /// 把一条消息交给主会话（当前对话）：没有在跑就开始一轮；正在跑就作为插话。
@@ -326,22 +374,26 @@ async fn drive(
             let entry = entry_of(&user);
             let start = conversation.messages.len();
             inbox.take_delivered();
-            let filler = (entry == Entry::Game).then(|| progress_filler(&app, &cancel));
+            let owner = turn_owner(&conversation.id, &user);
+            let voice_turn = follows_up(&user);
+            let filler = (entry == Entry::Game).then(|| progress_filler(&app, &cancel, owner));
             let stop = turn(&app, &mut conversation, user, entry, &cancel, &inbox, None).await;
             if let Some(filler) = filler {
                 filler.cancel();
             }
             // 聊天窗口发起的一轮里，玩家在游戏里插了话（热键、唤醒）：回答也要播出来，
             // 否则人在游戏里听不到。
-            let game_steered = inbox
-                .take_delivered()
-                .iter()
-                .any(|m| entry_of(m) == Entry::Game);
+            let delivered = inbox.take_delivered();
+            let game_steered = delivered.iter().any(|m| entry_of(m) == Entry::Game);
             if entry == Entry::Game || game_steered {
+                let follow = (voice_turn || delivered.iter().any(follows_up))
+                    && stop == StopReason::Completed;
                 speak_outcome(
                     &app,
+                    &conversation.id,
                     &conversation.messages[start.min(conversation.messages.len())..],
                     &stop,
+                    follow,
                 );
             }
             if stop == StopReason::Cancelled || cancel.is_cancelled() {
@@ -488,7 +540,7 @@ async fn turn(
     };
     let mut user = user;
     if entry == Entry::Game && child.is_none() {
-        attach_screen(app, &mut user).await;
+        attach_speech_screen(app, &mut user).await;
     }
     let provider = connection.provider.clone();
     let model_id = connection.model.clone();
@@ -575,11 +627,12 @@ async fn turn(
     let title_cell: Arc<Mutex<Option<String>>> = Arc::default();
     if let Some(deepseek) = model.deepseek() {
         deepseek.safety_check = settings.agent.safety_check;
-        let effort = match entry {
-            Entry::Game => &settings.agent.game_effort,
-            _ => &settings.agent.chat_effort,
-        };
-        deepseek.reasoning_effort = valid_effort(effort);
+        deepseek.reasoning_effort = effort_for(
+            entry,
+            child.is_some(),
+            &settings.agent.game_effort,
+            &settings.agent.chat_effort,
+        );
         if child.is_none() && conversation.auto_title.is_none() {
             let cell = title_cell.clone();
             deepseek.title = Some(kotone_ai::agent::deepseek::TitleRequest::new(move |t| {
@@ -600,7 +653,44 @@ async fn turn(
     let conversation_id = conversation.id.clone();
     let shared = Mutex::new(conversation.clone());
     let tool_names: Mutex<HashMap<String, String>> = Mutex::default();
+    // 语音入口的主会话：计时、工具前的一句马上念（ADR 029 §一、§七）。
+    let voice_main = entry == Entry::Game && child.is_none();
     let on_event = |event: AgentEvent| {
+        if voice_main
+            && matches!(
+                event,
+                AgentEvent::MessageChunk { .. }
+                    | AgentEvent::ThoughtChunk { .. }
+                    | AgentEvent::ToolCall { .. }
+                    | AgentEvent::Appended {
+                        message: Message::Assistant { .. }
+                    }
+            )
+        {
+            crate::voice_timing::first_token();
+        }
+        match &event {
+            // 玩家的话（含插话）进了对话：这之后的读屏、搜索费用记到这一轮。
+            AgentEvent::Appended {
+                message: Message::User { at_ms, .. },
+            } if child.is_none() => {
+                kotone_core::usage::set_turn(Some(kotone_core::usage::Owner {
+                    conversation: conversation_id.clone(),
+                    turn: Some(*at_ms),
+                }));
+            }
+            // 语音入口：模型在调用工具前说的一句（“我查一下”）马上念，工具同时在跑
+            // （照 OpenAI 实时语音提示词指南、Pipecat、Retell `speak_during_execution`）。
+            AgentEvent::Appended {
+                message:
+                    Message::Assistant {
+                        text, tool_calls, ..
+                    },
+            } if voice_main && !tool_calls.is_empty() && !text.trim().is_empty() => {
+                speak_preamble(app, text.trim());
+            }
+            _ => {}
+        }
         match &event {
             AgentEvent::Appended { message } => {
                 let mut c = shared.lock().unwrap();
@@ -705,8 +795,46 @@ async fn turn(
         &on_event,
     )
     .await;
+    if child.is_none() {
+        kotone_core::usage::set_turn(None);
+    }
     *conversation = shared.into_inner().unwrap();
     stop
+}
+
+/// 思考强度（DeepSeek）：语音入口的主会话默认不思考（ADR 029 §一：玩家本机实测开着思考
+/// “你能做什么”模型要 19.6 秒；Pipecat、xiaozhi 对 DeepSeek 也默认关掉），玩家在设置里明确选了
+/// 才按他选的；子会话和聊天窗口照旧（空 = 服务商默认）。
+fn effort_for(entry: Entry, child: bool, game: &str, chat: &str) -> Option<String> {
+    match entry {
+        Entry::Game if !child && game.trim().is_empty() => Some("none".into()),
+        Entry::Game => valid_effort(game),
+        Entry::Chat => valid_effort(chat),
+    }
+}
+
+/// 这句话的费用归属：这段对话、这句话开始的那一轮。
+fn turn_owner(conversation: &str, user: &Message) -> Option<kotone_core::usage::Owner> {
+    match user {
+        Message::User { at_ms, .. } => Some(kotone_core::usage::Owner {
+            conversation: conversation.to_string(),
+            turn: Some(*at_ms),
+        }),
+        _ => None,
+    }
+}
+
+/// 模型在调用慢工具前说的一句：马上念（不等工具），这一轮之后不再接填充话。
+fn speak_preamble(app: &AppHandle, text: &str) {
+    LAST_SAY_MS.store(now_ms(), std::sync::atomic::Ordering::SeqCst);
+    let app = app.clone();
+    let text = text.to_string();
+    let owner = kotone_core::usage::current_turn();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = deliver_voice_reply(&app, text, Vec::new(), owner, "preamble").await {
+            log::log(&format!("agent: 工具前的一句没能播出：{e}"));
+        }
+    });
 }
 
 /// 主会话这一轮的附注：入口、现在几点、当前游戏；游戏变了（或第一次出现）再附上玩家写的游戏说明，
@@ -787,11 +915,14 @@ fn asr_state(app: &AppHandle, settings: &kotone_core::settings::Settings) -> Asr
     }
 }
 
-/// 游戏内：请求前先读一次屏幕（截前台窗口、识别文字、更新聊天跟踪），作为数据附上，
-/// 模型多数时候不用再调工具（ADR 014 §4）。读不到时附上原因，不中断。
-async fn attach_screen(app: &AppHandle, user: &mut Message) {
+/// 语音入口：附上玩家开口时的前台窗口（标题、程序名），告诉模型要看屏幕就调用 `screen.at_speech`
+/// （ADR 029 §二）。以前这里每轮先截图 + 在线文字识别，玩家本机实测固定多等 12 秒。
+async fn attach_speech_screen(app: &AppHandle, user: &mut Message) {
     let Message::User {
-        text, attachments, ..
+        attachments,
+        source,
+        at_ms,
+        ..
     } = user
     else {
         return;
@@ -799,73 +930,86 @@ async fn attach_screen(app: &AppHandle, user: &mut Message) {
     if !attachments.is_empty() {
         return;
     }
-    // 前台是 Kotone 自己的窗口（例如开着设置页时用唤醒或热键）：截自己的界面没有意义，
-    // 读自己窗口的标题还要主线程配合，跳过。
-    if kotone_platform_windows::inject::foreground_pid() == Some(std::process::id()) {
-        attachments.push(Attachment::Data {
-            label: "按热键时的游戏画面（文字识别）与聊天跟踪".into(),
-            text:
-                "（前台是 Kotone 自己的窗口，没有读取游戏画面；需要看游戏时先用 game.focus 切过去）"
-                    .into(),
-        });
-        return;
-    }
-    let data = match crate::companion::read_chat(app, text, crate::companion::Source::Voice).await {
-        Ok(snapshot) => {
-            let input = &snapshot.input;
-            let lines: Vec<Value> = input
-                .ocr_lines
-                .iter()
-                .take(120)
-                .map(|l| json!({"text": l.text, "box": l.bbox.map(|b| [b[0].round(), b[1].round(), b[2].round(), b[3].round()])}))
-                .collect();
-            let tracked: Vec<Value> = input
-                .tracked
-                .iter()
-                .rev()
-                .take(60)
-                .rev()
-                .map(|m| json!({"text": m.text, "new": m.new, "secondsAgo": m.first_seen_ago_ms / 1000}))
-                .collect();
-            json!({
-                "window": {"title": input.window_title, "process": input.process_name,
-                           "width": input.image_size.0, "height": input.image_size.1},
-                "ocrLines": lines,
-                "chatTracking": tracked,
-                "warnings": snapshot.warnings,
-            })
-            .to_string()
+    let text = match source.as_str() {
+        "wake-voice" | "voice" => {
+            let shot = crate::speech_screen::latest(app).await;
+            crate::speech_screen::turn_note(shot.as_deref(), *at_ms)
         }
-        Err(e) => format!("（没能读取画面：{e}）"),
+        // 快捷指令没有收音，也就没有开口时的截图。
+        "quick-command" => crate::speech_screen::turn_note(None, *at_ms),
+        _ => return,
     };
     attachments.push(Attachment::Data {
-        label: "按热键时的游戏画面（文字识别）与聊天跟踪".into(),
-        text: data,
+        label: crate::speech_screen::NOTE_LABEL.into(),
+        text,
     });
 }
 
 /// 游戏内：玩家看不到窗口，这一轮的结果用语音 / 弹幕播出。
 /// Agent 已经用 `reply.say` 播过的不再重复；出错或被停下时播一句原因；玩家自己停止的不播。
-fn speak_outcome(app: &AppHandle, appended: &[Message], stop: &StopReason) {
-    match game_reply(appended, stop) {
-        Some(text) => {
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = deliver_voice_reply(&app, text, Vec::new()).await {
-                    log::log(&format!("agent: 回复未能播出：{e}"));
-                }
-            });
-        }
-        None => crate::bubble::finished(app),
+/// `follow`：语音入口正常答完，念完后接着听（ADR 029 §五）。
+fn speak_outcome(
+    app: &AppHandle,
+    conversation_id: &str,
+    appended: &[Message],
+    stop: &StopReason,
+    follow: bool,
+) {
+    // 回答的合成费用记到这一轮最后一句玩家的话（插话也是单独的一轮）。
+    let owner = appended
+        .iter()
+        .rev()
+        .find(|m| matches!(m, Message::User { .. }))
+        .and_then(|m| turn_owner(conversation_id, m));
+    let reply = game_reply(appended, stop);
+    if reply.is_none() {
+        crate::bubble::finished(app);
+        crate::voice_timing::discard();
     }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let epoch = crate::follow_up::epoch();
+        let shown = match reply {
+            Some(text) => {
+                match deliver_voice_reply(&app, text.clone(), Vec::new(), owner, "answer").await {
+                    Ok(_) => Some(text),
+                    Err(e) => {
+                        log::log(&format!("agent: 回复未能播出：{e}"));
+                        None
+                    }
+                }
+            }
+            // 已经用 reply.say / 工具前的一句说过了：等那句念完。
+            None => {
+                for _ in 0..300 {
+                    if !crate::assistant::output_busy(&app) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                Some(String::new())
+            }
+        };
+        if let (true, Some(shown)) = (follow, shown) {
+            crate::follow_up::after_reply(&app, epoch, &shown).await;
+        }
+        // 每个语音回合之后把填充话过一遍：命中缓存不花钱，也让它们不被挤出缓存。
+        crate::fillers::refresh(&app);
+    });
 }
 
 /// 语音入口里琴音说的话：开着对话气泡时，气泡显示这句（念完再停一会儿），默认不再走弹幕
 /// （除非设置了“回答同时用弹幕”）；关着时照旧按提醒方式播报。
+///
+/// `owner`：合成费用记到哪一轮；`kind`：写进计时日志（`answer` / `preamble` / `say`）。
+/// 要念的话先合成好再交给气泡和播放（字和声音一起出来，也能记下第一次出声的时刻）；
+/// 合成期间玩家按呼叫键打断了就不念。
 async fn deliver_voice_reply(
     app: &AppHandle,
     text: String,
     delivery: Vec<DeliveryKind>,
+    owner: Option<kotone_core::usage::Owner>,
+    kind: &'static str,
 ) -> Result<Vec<DeliveryKind>, String> {
     let (bubble, assistant) = {
         let settings = settings(app);
@@ -874,14 +1018,28 @@ async fn deliver_voice_reply(
             settings.assistant.clone(),
         )
     };
-    if !bubble.enabled {
-        return crate::assistant::deliver_text(app, text, delivery).await;
-    }
     let wanted = if delivery.is_empty() {
         assistant.default_delivery.clone()
     } else {
         delivery
     };
+    if wanted.contains(&DeliveryKind::Voice) {
+        if let Some(owner) = owner {
+            kotone_core::usage::claim_speech(&text, owner);
+        }
+        let epoch = crate::follow_up::epoch();
+        crate::assistant::prepare_speech(app, &text).await;
+        // 前面还在播（填充话、工具前那句）：等它播完。期间被呼叫键打断了就不念了，
+        // 免得玩家说完话后又听到这句旧回答。
+        crate::assistant::wait_output_idle(app, std::time::Duration::from_secs(30)).await;
+        if crate::follow_up::epoch() != epoch {
+            return Err("被呼叫键打断了".into());
+        }
+    }
+    crate::voice_timing::sound(kind);
+    if !bubble.enabled {
+        return crate::assistant::deliver_text(app, text, wanted).await;
+    }
     let mut kinds = Vec::new();
     if wanted.contains(&DeliveryKind::Voice) {
         kinds.push(DeliveryKind::Voice);
@@ -901,16 +1059,22 @@ async fn deliver_voice_reply(
     result
 }
 
-/// 交给琴音后多久还没出声就先接一句（ADR 017 §5）。
-const FILLER_AFTER: std::time::Duration = std::time::Duration::from_millis(1_500);
-const FILLERS: &[&str] = &["好，我看看", "收到，稍等", "嗯，马上"];
-static FILLER_INDEX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-/// 最近一次 `reply.say` 的时间（毫秒）：这一轮里已经出过声就不再接话。
+/// 交给琴音后多久还没出声就先接一句（ADR 017 §5；ADR 029 §四 从 1.5 s 提前到 1.2 s，
+/// 照声网 `response_wait_ms` 每轮最多一句、回答先到就不说）。
+const FILLER_AFTER: std::time::Duration = std::time::Duration::from_millis(1_200);
+/// 上一次说的填充话（不连着说同一句）。
+static LAST_FILLER: Mutex<Option<&'static str>> = Mutex::new(None);
+/// 最近一次 `reply.say` / 追问 / 工具前那句的时间（毫秒）：这一轮里已经出过声就不再接话。
 static LAST_SAY_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// 游戏内一轮开始时调用：1.5 秒后这一轮还没结束、也没出过声，就用语音说一句固定的短话
-/// （不经过模型，不占步数）。返回的令牌在这一轮结束时取消。`agent.progressSpeech` 关掉时不说。
-fn progress_filler(app: &AppHandle, turn_cancel: &CancellationToken) -> CancellationToken {
+/// 游戏内一轮开始时调用：1.2 秒后这一轮还没结束、也没出过声，就随机说一句预先合成好的短话
+/// （[`crate::fillers`]；不经过模型，不占步数，每轮最多一句）。没合成好的不说，正在播报时不说。
+/// 返回的令牌在这一轮结束时取消。`agent.progressSpeech` 关掉时不说。
+fn progress_filler(
+    app: &AppHandle,
+    turn_cancel: &CancellationToken,
+    owner: Option<kotone_core::usage::Owner>,
+) -> CancellationToken {
     let done = CancellationToken::default();
     if !settings(app).agent.progress_speech {
         return done;
@@ -925,14 +1089,28 @@ fn progress_filler(app: &AppHandle, turn_cancel: &CancellationToken) -> Cancella
             _ = turn_cancel.cancelled() => return,
             _ = tokio::time::sleep(FILLER_AFTER) => {}
         }
-        if LAST_SAY_MS.load(std::sync::atomic::Ordering::SeqCst) >= started {
+        if LAST_SAY_MS.load(std::sync::atomic::Ordering::SeqCst) >= started
+            || crate::assistant::output_busy(&app)
+            || crate::bubble::is_speaking(&app)
+        {
             return;
         }
-        let i = FILLER_INDEX.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let text = FILLERS[i % FILLERS.len()].to_string();
+        let ready = crate::fillers::ready_waiting(&app);
+        let last = *LAST_FILLER.lock().unwrap();
+        let Some(text) = crate::fillers::pick(&ready, last, crate::fillers::seed()) else {
+            log::log("agent: 填充话还没合成好，这一轮不接话");
+            return;
+        };
+        *LAST_FILLER.lock().unwrap() = Some(text);
+        if let Some(owner) = owner {
+            kotone_core::usage::claim_speech(text, owner);
+        }
         log::log(&format!("agent: 先接一句“{text}”"));
-        if let Err(e) = crate::assistant::deliver_text(&app, text, vec![DeliveryKind::Voice]).await
-        {
+        crate::voice_timing::filler_started(text);
+        let result =
+            crate::assistant::deliver_text(&app, text.to_string(), vec![DeliveryKind::Voice]).await;
+        crate::voice_timing::filler_ended();
+        if let Err(e) = result {
             log::log(&format!("agent: 接话未能播出：{e}"));
         }
     });
@@ -949,8 +1127,11 @@ fn game_reply(appended: &[Message], stop: &StopReason) -> Option<String> {
         matches!(m, Message::Assistant { tool_calls, .. }
             if tool_calls.iter().any(|c| c.name == kotone_agent::catalog::TOOL_SAY))
     });
+    // 最后的回答：最后一条不带工具调用的回复。带工具调用的那几句（“我查一下”）调用时已经念过了。
     let reply = appended.iter().rev().find_map(|m| match m {
-        Message::Assistant { text, .. } if !text.trim().is_empty() => Some(text.trim().to_string()),
+        Message::Assistant {
+            text, tool_calls, ..
+        } if tool_calls.is_empty() && !text.trim().is_empty() => Some(text.trim().to_string()),
         _ => None,
     });
     let text = match stop.notice() {
@@ -1103,7 +1284,10 @@ impl BuiltinHost for DesktopBuiltins {
             "voice.listen.stop" => {
                 Ok(json!({"stopped": crate::voice_listen::stop_owner(&self.app, &caller)}))
             }
-            "web.search" => crate::web_tools::search(&self.app, arguments).await,
+            "web.search" => crate::web_tools::search(&self.app, &caller, arguments).await,
+            kotone_agent::catalog::TOOL_SCREEN_AT_SPEECH => {
+                crate::speech_screen::tool(&self.app).await
+            }
             "web.fetch" => crate::web_tools::fetch(&self.app, &caller, arguments).await,
             other => Err(format!("{other} 在这里不可用")),
         }
@@ -1123,9 +1307,17 @@ impl BuiltinHost for DesktopBuiltins {
 
     async fn say(&self, text: String, delivery: Vec<DeliveryKind>) -> Result<Value, String> {
         LAST_SAY_MS.store(now_ms(), std::sync::atomic::Ordering::SeqCst);
+        // 合成费用记到这一轮（子会话记到它自己）。
+        let owner = kotone_core::usage::current_turn()
+            .filter(|t| t.conversation == self.conversation_id())
+            .unwrap_or(kotone_core::usage::Owner {
+                conversation: self.conversation_id(),
+                turn: None,
+            });
         let delivered = if self.voice {
-            deliver_voice_reply(&self.app, text, delivery).await?
+            deliver_voice_reply(&self.app, text, delivery, Some(owner), "say").await?
         } else {
+            kotone_core::usage::claim_speech(&text, owner);
             crate::assistant::deliver_text(&self.app, text, delivery).await?
         };
         Ok(json!({"delivered": delivery_names(&delivered)}))
@@ -1343,6 +1535,27 @@ pub fn stop(app: &AppHandle) -> Result<bool, String> {
         }
         None => Ok(false),
     }
+}
+
+/// 正在回答的对话，没有就是当前对话：(id, 开始的时间)。`usage.summary` 的“本段对话”用。
+pub fn active_conversation(app: &AppHandle) -> Option<(String, u64)> {
+    let running = runtime(app)
+        .ok()?
+        .inner
+        .lock()
+        .unwrap()
+        .running
+        .as_ref()
+        .map(|r| r.conversation_id.clone());
+    let store = store(app).ok()?;
+    let id = running.or_else(|| store.current())?;
+    let since = store
+        .load(&id)
+        .ok()
+        .flatten()
+        .map(|c| c.created_at_ms)
+        .unwrap_or(0);
+    Some((id, since))
 }
 
 /// 对话存储（对局复盘读这一局的对话用）。
@@ -2155,6 +2368,70 @@ mod tests {
         assert_eq!(game_reply(&[user("voice")], &done), None);
         let long = [assistant(&"字".repeat(400), &[])];
         assert_eq!(game_reply(&long, &done).unwrap().chars().count(), 300);
+        // 工具前说的一句（“我查一下”）调用时已经念过：最后只念回答。
+        let preamble = [
+            user("wake-voice"),
+            assistant("我查一下", &["web.search"]),
+            assistant("这个版本推荐先出无尽。", &[]),
+        ];
+        assert_eq!(
+            game_reply(&preamble, &done).as_deref(),
+            Some("这个版本推荐先出无尽。")
+        );
+        // 只有工具前那句、没有最后的回答（被上限停下）：播原因，不重复那句
+        let cut = [user("voice"), assistant("我看看", &["game.look"])];
+        assert_eq!(game_reply(&cut, &done), None);
+        assert!(game_reply(&cut, &StopReason::StepLimit).is_some_and(|t| !t.contains("我看看")));
+    }
+
+    #[test]
+    fn voice_turns_do_not_think_unless_the_player_chose_to() {
+        // 语音入口的主会话：空 = 不思考（ADR 029）
+        assert_eq!(
+            effort_for(Entry::Game, false, "", "").as_deref(),
+            Some("none")
+        );
+        assert_eq!(
+            effort_for(Entry::Game, false, " ", "high").as_deref(),
+            Some("none")
+        );
+        // 玩家明确选了就照办
+        assert_eq!(
+            effort_for(Entry::Game, false, "high", "").as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            effort_for(Entry::Game, false, "none", "").as_deref(),
+            Some("none")
+        );
+        // 子会话、聊天窗口：空 = 服务商默认（不变）
+        assert_eq!(effort_for(Entry::Game, true, "", ""), None);
+        assert_eq!(effort_for(Entry::Chat, false, "", ""), None);
+        assert_eq!(
+            effort_for(Entry::Chat, false, "", "low").as_deref(),
+            Some("low")
+        );
+        assert_eq!(effort_for(Entry::Chat, false, "", "bogus"), None);
+    }
+
+    #[test]
+    fn spoken_sources_and_follow_up_turns() {
+        for source in ["wake-voice", "voice", "assistant-text"] {
+            assert!(is_spoken_source(source), "{source}");
+        }
+        for source in ["chat", "quick-command", "tool", "automation"] {
+            assert!(!is_spoken_source(source), "{source}");
+        }
+        // 呼叫键、唤醒、快捷指令（含接着听本身）答完接着听；聊天窗口、系统消息不接着听
+        for source in ["wake-voice", "voice", "quick-command"] {
+            assert!(follows_up(&user(source)), "{source}");
+        }
+        for source in ["chat", "assistant-text", "tool", "automation", "heard"] {
+            assert!(!follows_up(&user(source)), "{source}");
+        }
+        let owner = turn_owner("c1", &user("voice")).unwrap();
+        assert_eq!((owner.conversation.as_str(), owner.turn), ("c1", Some(0)));
+        assert!(turn_owner("c1", &assistant("", &[])).is_none());
     }
 
     fn heard(text: &str) -> Message {

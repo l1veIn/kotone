@@ -430,6 +430,99 @@ pub fn prefetch(app: &AppHandle, texts: &[&str]) {
     }
 }
 
+/// 现在的语音合成“引擎 + 声音 + 语速”（填充话缓存按它区分，见 [`crate::fillers`]）。
+/// 系统语音不经过合成缓存，返回 None。
+pub fn speech_signature(app: &AppHandle) -> Option<String> {
+    let config = app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .assistant
+        .clone();
+    let engine = effective_engine(app, &config);
+    if engine == TtsEngine::System {
+        return None;
+    }
+    let request = speech_request(engine, &config, "");
+    Some(format!(
+        "{engine:?}|{}|{}",
+        request.voice_id.unwrap_or_default(),
+        request.rate
+    ))
+}
+
+/// 用当前语音把一句话合成进缓存，不播（阻塞，从普通线程调用）。之后播这句时直接出声。
+/// 系统语音不需要合成，直接返回。
+pub fn synthesize_cached(app: &AppHandle, text: &str) -> Result<(), String> {
+    let config = app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .assistant
+        .clone();
+    let engine = effective_engine(app, &config);
+    if engine == TtsEngine::System {
+        return Ok(());
+    }
+    let speaker = speaker_for_engine(app, engine)?;
+    speaker
+        .synthesize(speech_request(engine, &config, text))
+        .map(|_| ())
+}
+
+/// 先把要念的话合成好（不阻塞异步线程）。失败不要紧：播的时候还会再合成。
+pub async fn prepare_speech(app: &AppHandle, text: &str) {
+    let app = app.clone();
+    let text = text.to_string();
+    let _ = tauri::async_runtime::spawn_blocking(move || synthesize_cached(&app, &text)).await;
+}
+
+/// 正在播报（语音或弹幕，含正在等着播的提醒）吗。
+pub fn output_busy(app: &AppHandle) -> bool {
+    app.try_state::<AssistantRuntime>()
+        .is_some_and(|state| state.output_lock.try_lock().is_err())
+}
+
+/// 等正在进行的播报结束（最多 `max`）。
+pub async fn wait_output_idle(app: &AppHandle, max: Duration) {
+    let started = std::time::Instant::now();
+    while output_busy(app) && started.elapsed() < max {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// 呼叫键打断（ADR 029 §五）：她正在说（或回答正等着念）就立刻停下，气泡收起那句话，
+/// 回答念完后也不再接着听（[`crate::follow_up::interrupted`]）。阻塞（停播最多等语音服务 2 秒）。
+/// 返回是否打断了什么。
+pub fn interrupt_speech(app: &AppHandle) -> bool {
+    if !output_busy(app) && !crate::bubble::is_speaking(app) {
+        return false;
+    }
+    crate::follow_up::interrupted();
+    stop_speech(app.clone());
+    crate::bubble::stop_speaking(app);
+    kotone_core::log::log("assistant: call key interrupted the speech");
+    true
+}
+
+/// 按了呼叫键：这一下要开始听（空闲或停在提示上）时，先打断她正在说的话，再开始听。
+/// 正在听时再按是“说完了”，不打断。
+pub async fn interrupt_before_call(app: &AppHandle) {
+    let state = app.state::<crate::SharedState>().orchestrator.state();
+    if !matches!(
+        state,
+        kotone_core::orchestrator::OrchestratorState::Idle
+            | kotone_core::orchestrator::OrchestratorState::Success
+            | kotone_core::orchestrator::OrchestratorState::Error
+    ) {
+        return;
+    }
+    let app = app.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || interrupt_speech(&app)).await;
+}
+
 pub fn before_capture(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AssistantRuntime>();
     let lower_speaker_volume = app
@@ -1102,6 +1195,7 @@ pub async fn assistant_call(app: AppHandle) -> Result<(), String> {
         settings.assistant.wake.no_speech_timeout_ms
     };
     ensure_voice_ready(&app).await?;
+    interrupt_before_call(&app).await;
     state.orchestrator.call_assistant(None, timeout).await;
     Ok(())
 }
