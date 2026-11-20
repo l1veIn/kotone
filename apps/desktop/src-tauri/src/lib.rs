@@ -27,6 +27,7 @@ mod profiles_cmd;
 mod recap;
 mod roles;
 mod runtime;
+mod runtime_cmd;
 mod settings_cmd;
 mod speech_models;
 mod speech_screen;
@@ -53,6 +54,7 @@ pub(crate) use events::*;
 pub(crate) use models_cmd::*;
 pub(crate) use overlay_window::*;
 pub(crate) use profiles_cmd::*;
+pub(crate) use runtime_cmd::*;
 pub(crate) use settings_cmd::*;
 pub(crate) use startup::*;
 pub(crate) use system_cmd::*;
@@ -135,29 +137,6 @@ fn log_frontend_error(context: String, message: String) {
 
 // ---------- 设置与配置（§5.3） ----------
 
-/// 全量运行时状态（相位 + restartNeeded + 当前引擎/模型/模式）
-#[tauri::command]
-fn get_runtime_status(app: AppHandle, state: tauri::State<SharedState>) -> RuntimeStatus {
-    let rt = app.state::<RuntimeManager>();
-    let settings = state.settings.read().unwrap();
-    rt.status(&settings, &state.engines, None)
-}
-
-/// 启动：warmup 引擎 → 注册热键 → 显示悬浮窗（进度经 kotone://runtime 推送）。
-/// Running + restartNeeded 时等价于 stop + start（重启语义）。
-#[tauri::command]
-async fn start_runtime(app: AppHandle) -> Result<RuntimeStatus, String> {
-    runtime::start(&app).await
-}
-
-/// 停止：取消会话 → 注销热键 → 隐藏悬浮窗 → 卸载引擎。Stopped 时幂等。
-#[tauri::command]
-async fn stop_runtime(app: AppHandle) -> Result<RuntimeStatus, String> {
-    runtime::stop(&app).await
-}
-
-// ---------- 模型目录管理 ----------
-
 /// 在系统文件管理器中打开历史记录目录（P2-⑨：历史目录可自定义后仍需可视入口）
 #[tauri::command]
 fn open_history_dir() -> Result<(), String> {
@@ -237,50 +216,6 @@ fn get_resource_usage(monitor: tauri::State<ResourceMonitor>) -> ResourceUsage {
 }
 
 // ---------- 会话控制 / 调试 ----------
-
-/// Preview 状态下确认发送（ADR-006：预览只读，始终发送预览文本）
-#[tauri::command]
-async fn confirm_send(state: tauri::State<'_, SharedState>) -> Result<(), String> {
-    state.orchestrator.confirm_send().await
-}
-
-/// 取消当前会话（悬浮窗取消按钮 / 调试）
-#[tauri::command]
-async fn cancel_session(state: tauri::State<'_, SharedState>) -> Result<(), String> {
-    state.orchestrator.cancel().await;
-    Ok(())
-}
-
-/// 手动触发发送（调试/记事本测试用）：走真实 WindowsInjector 时序
-/// （openChatKey → Unicode/剪贴板 → sendKey，直发当前前台窗口）。
-///
-/// P0（用户反馈「SendInput 被 360 拦截后卡死」）：此前是同步命令，在主线程
-/// 直接调 SendInput——被安全软件钩住挂起时整个主进程（UI/托盘/IPC）冻结。
-/// 改为 async + spawn_blocking + 10s 超时：挂起只阻塞工作线程，超时后返回
-/// 清晰错误，UI 保持响应。
-#[tauri::command]
-async fn simulate_send(
-    state: tauri::State<'_, SharedState>,
-    text: String,
-    profile_id: Option<String>,
-) -> Result<(), InjectError> {
-    let profile = profile_id
-        .as_deref()
-        .and_then(profile::get)
-        .unwrap_or_else(GameProfile::builtin_generic);
-    let injector = state.injector.clone();
-    let task = tauri::async_runtime::spawn_blocking(move || {
-        injector.send(&text, &profile, CancelToken::default())
-    });
-    const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-    match tokio::time::timeout(SEND_TIMEOUT, task).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(_)) => Err(InjectError::new("发送线程异常".to_string())),
-        Err(_) => Err(InjectError::new(
-            "发送超时（10s）：模拟输入未在限时内完成，通常是被安全软件或游戏反作弊拦截".to_string(),
-        )),
-    }
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
