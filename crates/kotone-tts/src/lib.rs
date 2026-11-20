@@ -2,12 +2,22 @@
 //! invalidates queued synthesis without waiting for a non-interruptible ONNX call
 //! or HTTP request. Microphone admission waits only for an already-open output
 //! stream to close. Synthesized audio is cached by voice + rate + text.
+//!
+//! [`SpeechStream`] (ADR 029 §6) speaks a model answer while it is being written:
+//! sentence segmentation, DeepSeek streaming synthesis or per-sentence synthesis,
+//! and its own cancellable playback. It does not go through the worker above, so
+//! callers must `cancel` it (which waits for its output device to close) before
+//! opening the microphone.
 
 pub mod cache;
 pub mod catalog;
 mod engine;
 pub mod online;
 mod player;
+pub mod segment;
+pub mod speech_stream;
+pub mod stream;
+pub mod stream_player;
 pub mod voice;
 pub mod wav;
 
@@ -15,6 +25,7 @@ pub use engine::{
     kokoro_voices, model_ready, KokoroEngine, SynthesizedSpeech, DEFAULT_VOICE, KOKORO_MODEL_DIR,
     REQUIRED_DIRS, REQUIRED_FILES,
 };
+pub use speech_stream::{SpeechStream, StreamEngine, StreamOptions};
 
 use std::{
     path::PathBuf,

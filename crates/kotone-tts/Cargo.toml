@@ -13,8 +13,11 @@ serde_json.workspace = true
 base64 = "0.22"
 # 在线语音合成（OpenAI 兼容 / 火山）：在推理工作线程里同步请求；与 kotone-stt 同一版本
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+# DeepSeek 流式语音合成 WebSocket（与 kotone-stt 讯飞 / 火山流式识别同一个库、同一个版本）
+tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
+# SpeechStream::finish 的异步等待（只用 tokio::sync，不需要运行时）
+tokio.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
 wiremock = "0.6"
-tokio.workspace = true
