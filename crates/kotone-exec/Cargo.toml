@@ -1,0 +1,29 @@
+[package]
+name = "kotone-exec"
+version = "0.1.0"
+edition = "2021"
+description = "子代理的命令执行与文件工具（ADR 030）：shell.run / file.*、先问 / 不让做的命令规则表、读过外面的东西就先问（Agents Rule of Two）"
+
+# 依赖纪律：不依赖 Tauri、kotone-agent / kotone-ai；由运行时调用 `check` 决定要不要先问玩家，再调用 `run_tool`。
+[dependencies]
+kotone-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+base64 = "0.22"
+encoding_rs = "0.8"
+glob = "0.3"
+walkdir = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_Globalization",
+] }
+
+[dev-dependencies]
+tempfile.workspace = true

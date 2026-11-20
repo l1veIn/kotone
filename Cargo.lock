@@ -2628,6 +2628,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "kotone-exec"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "encoding_rs",
+ "glob",
+ "kotone-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "walkdir",
+ "windows 0.61.3",
+]
+
+[[package]]
 name = "kotone-ocr"
 version = "0.1.0"
 dependencies = [
