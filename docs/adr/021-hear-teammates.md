@@ -60,4 +60,5 @@
 - 测试：
   - 单元：语种粗判、跟随规则、子会话合并消息与取回复；`transcribes_a_wav`（真模型、SAPI 合成的英语句子 → “Enemmy behind the Red house.” / “There're two of them.”）。
   - 真机（隔离 `KOTONE_HOME`，假 AI，`scripts/manual-e2e/sessions_e2e.py`）：琴音派出“同传”子会话 → 子会话开始听 python.exe → 另一个 Python 进程播放英语句子 → 子会话收到“Enmy behind the Red house.”，弹幕显示译文并 `session.send` 回主会话 → “停止同传”后子会话与监听一起停。全部通过。
+  - 2026-11-20 修正（ADR 029 第二期，`scripts/manual-e2e/interpreter_e2e.py`）：逐个进程录时传的 `include_tree = false` 在 Windows 进程回环里是 **EXCLUDE**（录除了这棵进程树以外的全部声音），不是“只录这一个进程”——上面那次能通过，是因为当时机器上没有别的声音。机器上有别的程序在放视频时，听 python.exe 录进了浏览器里的中文视频，那段英语反而没录到。改成含子进程录（INCLUDE）后：只录到目标程序 3.5 秒的声音，认出英语句子，视频的声音不再进来。测试改用改名的 powershell.exe（`kotone-speaker.exe`）放声音，避免和机器上别的 python.exe 混在一起。
 - 没验证：真实游戏或 Discord 里的队友语音、中文以外的非英语语种（只有模型本身支持）、长时间（一局游戏）连续运行的资源占用。

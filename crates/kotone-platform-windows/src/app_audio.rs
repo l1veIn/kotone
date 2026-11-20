@@ -88,9 +88,12 @@ impl MultiCapture {
         let mut last_error = None;
         for pid in pids {
             let shared = shared.clone();
-            match AppCapture::start_process(
+            // 含子进程录（INCLUDE_TARGET_PROCESS_TREE）。之前传 false 以为是“只录这一个进程”，
+            // 实际是 EXCLUDE：录除了它以外的全部声音（2026-11-20 真机：听“同传”的程序时录进了
+            // 浏览器里的视频，那个程序自己的声音反而没录到）。同名的子进程会被父进程那一路重复录到，
+            // 由 Follower 只跟一路。
+            match AppCapture::start(
                 pid,
-                false,
                 Box::new(move |chunk: &[f32]| {
                     let now = started.elapsed().as_millis() as u64;
                     let mut guard = shared.lock().unwrap();
@@ -129,7 +132,8 @@ impl AppCapture {
         Self::start_process(pid, true, on_audio)
     }
 
-    /// `include_tree = false`：只录这一个进程。
+    /// `include_tree`：true = 录这个进程和它的子进程；**false = 录除了这棵进程树以外的全部声音**
+    /// （Windows 进程回环只有“包含 / 排除这棵树”两种，没有“只录这一个进程”）。只录某个程序要用 true。
     pub fn start_process(
         pid: u32,
         include_tree: bool,
