@@ -34,4 +34,4 @@ ADR 保留当时的上下文和选择，状态决定其适用性。当前架构�
 | [028 按“游戏陪玩”重新设计交互流程和界面](028-game-companion-interaction.md) | Accepted / 已采纳 | 打开就是聊天页，一个 DeepSeek Key 打开全部功能；语音输入是子板块、不经过 Agent；“启动”只属于本地语音识别；「琴音 → 设置」并入「设置」；老用户可以一切照旧 |
 | [029 像打电话一样和她说话：快速主会话 + 完整子代理](029-voice-call-and-background-tasks.md) | Accepted / 已确认，实现中 | 语音回合不思考、短回答、说话那一刻截屏、预生成等待短句、答完接着听 8 秒、按键打断、边生成边念；复杂的事交给玩家看不到的子代理（照 Codex / OpenCode / Goose），做完由主会话说一句 |
 | [030 子代理可以执行命令、读写文件](030-subagent-shell-and-files.md) | Accepted / 已确认 | 主会话仍然没有；子代理有 `shell.run` / `file.*`，只能由玩家派；读过外面的东西（屏幕、聊天、网页、外部文件）就先问一句（照 Meta Agents Rule of Two）；删除类先问、模拟键鼠不让做（照 Codex execpolicy）；改文件先备份 |
-| [031 内置浏览器与浏览器操作](031-built-in-browser.md) | Proposed / 方向已确认，0.2.0 之后 | 后台任务在 Kotone 隐藏的 WebView2 窗口里操作网页（照 Playwright MCP：可访问性快照 + 按编号点击输入，程序内调用调试协议、不开端口、不抢前台）；登录由玩家扫码（handover）；网页内容算不可信；第一个用处是点歌 |
+| [031 内置浏览器与浏览器操作](031-built-in-browser.md) | Proposed / 方向已确认，0.2.0 之后 | 后台任务在 Kotone 隐藏的 WebView2 里操作网页：快照和点击照 dsh-ego-browser（调试协议、节点编号、不抢前台），安全外壳照 dsh-browser 和 xylt369 url-guard；程序内调用、不开端口、不驱动玩家的 Chrome；登录由玩家扫码；第一个用处是点歌 |
