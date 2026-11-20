@@ -175,7 +175,7 @@ def main():
         if asked:
             v.guard()
             wav = os.path.join(v.WORK, "yes.wav")
-            v.speak_to_wav("可以", wav)
+            v.speak_to_wav(os.environ.get("KOTONE_YES_TEXT", "可以"), wav)
             v.play_into_cable(wav, 0.5)
         got = wait_report(main, player2.get("atMs", 0), 240)
         v.check("V2: went on after “可以” and reported back", got)
