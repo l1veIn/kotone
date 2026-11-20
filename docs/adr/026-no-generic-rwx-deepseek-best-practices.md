@@ -3,6 +3,7 @@
 - 状态：Accepted（2026-11-18，实施在分支 `claude/kotone-agent`）
 - 照搬：DeepSeek 官方指南「构建 Chatbot」及其子页（会话标题 `title`、用户元信息 `latest_reminder`、模型内容安全 `safety_check`、思考模式、上下文硬盘缓存、错误码与保活）与「网页搜索与抓取」接口（`/v1/tools/search`、`/v1/tools/fetch`），https://api-docs.deepseek.com/zh-cn/guides/build_a_chatbot
 - 修订：[ADR 015](015-agent-scope-and-stack.md)（模型通信不再全部经 rig：DeepSeek 连接用自己的 Chat Completions 客户端）
+- 被修订：第 1 条由 [ADR 030](030-subagent-shell-and-files.md) 修订（2026-11-20）——主会话仍然没有通用读写执行；子代理有，读过外面的东西就先问一句
 
 ## 问题
 
