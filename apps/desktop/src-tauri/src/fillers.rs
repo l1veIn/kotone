@@ -24,6 +24,12 @@ pub const WAITING: &[&str] = &["我看看", "稍等哈", "让我想想", "马上
 /// 常常不带正文，等它第二次调用再说要 4–5 秒）。
 pub const HANDOFF: &str = "交给我，好了告诉你";
 
+/// 语音回合结束时补的固定短句（ADR 029 第八节：模型的正文不念，出错、没做完、忘了用 speak 时
+/// 让玩家知道去聊天里看；预先合成好，马上就能说、不花钱）。
+pub const WROTE_IN_CHAT: &str = "我写在聊天里了";
+pub const FAILED_IN_CHAT: &str = "出错了，我写在聊天里了";
+pub const UNFINISHED_IN_CHAT: &str = "没做完，我写在聊天里了";
+
 struct Warmed {
     /// 合成这些话时的“引擎 + 声音 + 语速”；变了就要重新合成。
     signature: String,
@@ -42,7 +48,7 @@ fn phrases() -> impl Iterator<Item = &'static str> {
         .iter()
         .chain(WAITING.iter())
         .copied()
-        .chain(std::iter::once(HANDOFF))
+        .chain([HANDOFF, WROTE_IN_CHAT, FAILED_IN_CHAT, UNFINISHED_IN_CHAT])
 }
 
 /// 落盘的目录：`<KOTONE_HOME>/cache/tts/`。
@@ -136,17 +142,6 @@ pub fn ready_waiting(app: &AppHandle) -> Vec<&'static str> {
                 .copied()
                 .filter(|t| state.ready.contains(t))
                 .collect()
-        }
-    }
-}
-
-/// “交给我，好了告诉你”现在能马上说吗（合成好了；系统语音随时能说）。
-pub fn handoff_ready(app: &AppHandle) -> bool {
-    match crate::assistant::speech_signature(app) {
-        None => true,
-        Some(signature) => {
-            let state = STATE.lock().unwrap();
-            state.signature == signature && state.ready.contains(&HANDOFF)
         }
     }
 }

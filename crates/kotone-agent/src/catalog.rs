@@ -4,7 +4,7 @@
 //! - **工具服务**：`system.capabilities` 里的工具，与外部 Agent 同一份实现；
 //!   给外部 Agent 的通道类工具（`agent.*`、`event.read`、`assistant.submit`）和旧陪玩流程
 //!   （`companion.ask` / `companion.check`，会再调一次模型）不交给内置 Agent；
-//! - **内置动作**：播报（`reply.say`）、提醒（`reminder.create`）、发到游戏聊天
+//! - **内置动作**：说话（`speak`）、弹幕（`danmaku`，后台用）、提醒（`reminder.create`）、发到游戏聊天
 //!   （`game_chat.send`，替代 `companion.type`，会写进执行记录）和查找工具（`tools.find`）；
 //! - **已保存的自动化**：每个一个工具 `saved.<id>`（最多 [`MAX_SAVED_TOOLS`] 个）。
 //! - **执行命令、读写文件**（ADR 030）：`shell.run`、`file.*`，只给后台任务（[`exec_entries`]）。
@@ -18,7 +18,10 @@ use kotone_core::automation::library::{Automation, AutomationBody, ParamKind};
 use serde_json::{json, Map, Value};
 
 pub const TOOL_FIND: &str = "tools.find";
-pub const TOOL_SAY: &str = "reply.say";
+/// 对玩家说一句话：只有这里的字会被念出来（ADR 029 第八节）；模型的正文只进聊天。
+pub const TOOL_SPEAK: &str = "speak";
+/// 在屏幕上显示一句弹幕（后台任务用，例如同传；后台不能开口）。
+pub const TOOL_DANMAKU: &str = "danmaku";
 pub const TOOL_REMIND: &str = "reminder.create";
 pub const TOOL_GAME_CHAT: &str = "game_chat.send";
 /// 用语音问玩家一句，然后免唤醒收音几秒，把回答作为结果（语音入口的多轮对话）。
@@ -68,8 +71,8 @@ pub const HOST_BUILTINS: &[&str] = &[
 /// 一步步操作）；`companion.read_chat`（同样要识别，玩家开口那一刻的聊天用 `screen.at_speech`）；
 /// `web.fetch`（3–7 秒）；`automation.save`（要先写程序、试运行）。
 pub const MAIN_TOOLS: &[&str] = &[
-    // 说话、追问、提醒、替玩家发言（ADR 017 / 018 / 020）
-    TOOL_SAY,
+    // 说话、追问、提醒、替玩家发言（ADR 017 / 018 / 020；ADR 029 第八节）
+    TOOL_SPEAK,
     TOOL_ASK,
     TOOL_REMIND,
     TOOL_GAME_CHAT,
@@ -110,8 +113,9 @@ pub const MAIN_TOOLS: &[&str] = &[
 
 /// 子代理不能用的工具（其余全部能用）。照 Codex：`request_user_input` 只有主线程能用、子代理不能再派
 /// 子代理；照 Hermes `DELEGATE_BLOCKED_TOOLS`：不能直接对玩家开口、不能改人格。
-/// `reply.say` 留着，但在子代理里只发弹幕（桌面端强制），见 ADR 029 第三节。
+/// 后台不能开口：没有 `speak`，要在屏幕上给玩家看一句用 `danmaku`（ADR 029 第三、八节）。
 pub const SUBAGENT_EXCLUDED: &[&str] = &[
+    TOOL_SPEAK,
     TOOL_AGENT_START,
     TOOL_AGENT_FOLLOWUP,
     TOOL_AGENT_LIST,
@@ -307,11 +311,22 @@ pub fn builtin_entries() -> Vec<ToolEntry> {
             untrusted: false,
         },
         ToolEntry {
-            name: TOOL_SAY.into(),
-            description: "现在就用语音和 / 或弹幕对玩家说一句话（玩家在游戏里、看不到聊天窗口时用）。简短口语，不加表情和 Markdown。".into(),
+            name: TOOL_SPEAK.into(),
+            description: "对玩家说话：text 会被原样念出来（只有这里的字会念，你的回复正文只显示在聊天窗口）。一两句口语，像打电话一样；说名字不说路径，网址只说网站名，不念代码、命令和编号，不用列表、Markdown 和表情。要讲的多时 text 只说一句结论，详细内容（步骤、要点、完整出装）写在 written 里：只显示在聊天窗口、不念。这一步只调用 speak 时，说完这一轮就结束（没有下一步），所以要写的细节一定放进 written。".into(),
             parameters: json!({"type": "object", "additionalProperties": false, "required": ["text"], "properties": {
-                "text": {"type": "string", "minLength": 1, "maxLength": 300},
-                "delivery": delivery_schema()
+                "text": {"type": "string", "minLength": 1, "maxLength": 300, "description": "念出来的话"},
+                "written": {"type": "string", "maxLength": 4000, "description": "可选：只显示在聊天窗口、不念的详细内容"}
+            }}),
+            side_effects: vec!["speaks-or-shows-text".into()],
+            group: "game",
+            source: Source::Builtin,
+            untrusted: false,
+        },
+        ToolEntry {
+            name: TOOL_DANMAKU.into(),
+            description: "在玩家屏幕上显示一句弹幕（不出声）。后台任务要给玩家看一句话时用，例如同传的翻译。".into(),
+            parameters: json!({"type": "object", "additionalProperties": false, "required": ["text"], "properties": {
+                "text": {"type": "string", "minLength": 1, "maxLength": 300}
             }}),
             side_effects: vec!["speaks-or-shows-text".into()],
             group: "game",

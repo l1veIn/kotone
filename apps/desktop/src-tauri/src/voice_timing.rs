@@ -97,7 +97,7 @@ pub fn tts_started() {
     });
 }
 
-/// 模型说的第一句话可以开始播了（`kind`：`answer` / `preamble` / `say` / `ask`）：写一行日志，这一轮记完。
+/// 她说的第一句话可以开始播了（`kind`：`speak` / `handoff` / `closing` / `ask`）：写一行日志，这一轮记完。
 pub fn sound(kind: &'static str) {
     sound_at(kind, now());
 }

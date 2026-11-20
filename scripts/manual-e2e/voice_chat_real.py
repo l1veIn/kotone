@@ -3,7 +3,7 @@
 Isolated Kotone (KOTONE_HOME=target/voicechat-e2e/home, hotkeys off) with the real DeepSeek key (real_deepseek.py,
 memory only, deleted afterwards); game voice on, the player's own microphone NOT mixed in (includeMic=false), so only
 琴音's voice goes into the virtual cable. The player says (in-game entry) "跟队友说我去拿龙了"; expected: she first
-answers the player with reply.say, then voice_chat.say speaks to the teammates — heard on "CABLE Output" (what the game
+speaks to the teammates with voice_chat.say, then answers the player with speak — heard on "CABLE Output" (what the game
 would hear as the microphone) and on the player's own speakers (WASAPI loopback, needs `soundcard`).
 usage: python -X utf8 -I scripts/manual-e2e/voice_chat_real.py
 """
@@ -108,8 +108,8 @@ def main():
         calls = [(c["name"], c["arguments"]) for m in messages if m["role"] == "assistant" for c in m.get("toolCalls", [])]
         print("tool calls:", calls)
         names = [n for n, _ in calls]
-        first_ack = "reply.say" in names and "voice_chat.say" in names and names.index("reply.say") < names.index("voice_chat.say")
-        passed &= check("she answered the player before speaking to teammates", first_ack)
+        ack = "speak" in names and "voice_chat.say" in names and names.index("voice_chat.say") < names.index("speak")
+        passed &= check("she spoke to teammates, then told the player (speak)", ack)
         cable = result.get("cable", [])
         loud = [i / 2 for i, p in enumerate(cable) if p > 0.05]
         passed &= check("the teammates' side (CABLE Output) carried her voice", loud,

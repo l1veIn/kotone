@@ -124,19 +124,38 @@
 
 ### 六、边生成边念
 
+（念什么由第八节修订：只念 `speak` 里的字。下面的分句、流式接口、不叠音、接着听、计费不变。）
+
 - 模型的文字一到就分句：第一句可以在“，、”处切（更快出声），之后在“。？！；：”处切，不在引号里切（照 xiaozhi `core/providers/tts/base.py`）。
 - DeepSeek 语音用官方的流式接口（`wss://api.deepseek.com/v1/tools/tts`，分段发文字、边收音频边播）；其他语音引擎按句合成、排队播放。
 - 实测 DeepSeek 流式接口收到 `finish_text` 之前不出声，所以**每句一路会话**，总是提前连好下一路，最多同时合成 2 句（`kotone-tts` 的 `SpeechStream`）。
-- **每次调用模型一路**：这一轮开始前就把第一路准备好（握手藏在模型想第一句的时间里）；工具前那句（“我查一下”）也是边写边念；工具在跑时把下一路准备好。推理文字永远不念。
+- **每次 `speak` 一路**（第八节）：这一轮开始前就把第一路准备好（握手藏在模型想第一句的时间里），模型写 `speak` 参数时就开始念。推理文字、正文都不念。
 - **不叠音**：第一段正文到了才排进播报（和提醒、等待短句共用一把锁）。前面在播等待短句时只合成、不出声，播完立刻接上；回答开口了就不再播等待短句；麦克风开着时不出声（同提醒）。
-- **打断**：按呼叫键、喊唤醒词、开始收音、说“停下”，都马上停（等输出设备关掉才开麦）；对话里这条回答只留念完的句子，后面加“（被打断）”，模型下一轮知道玩家没听到后面（照 LiveKit `_truncate_message`）。这段对话还在跑时等下次存盘再改，不会被这一轮的存盘盖掉；聊天窗口收到 `revised` 事件后重新读。
+- **打断**：按呼叫键、喊唤醒词、开始收音、说“停下”，都马上停（等输出设备关掉才开麦）。玩家听到了哪些写在 `speak` 的结果里（“玩家打断了，只说到：……”，第八节），模型下一轮看得到；不回头改对话记录。
 - 气泡跟着念到的句子更新；弹幕（关了气泡，或开了“回答同时用弹幕”）照旧显示整段。**念完（真正播完）才开始接着听。**
 - 费用：每句合成前按这句的文字认领到这一轮，账本里每句一行，都记在这一轮下面。
-- 退路：回复方式里没有语音、流式语音准备不起来、或模型用了 `reply.say`（她已经开口说过），这一轮剩下的照旧整段念；回答一句也没念出来（例如流式连接出错）就整段再念一次。
+- 退路：回复方式里没有语音、流式语音准备不起来、或服务商不流式给工具参数时，`speak` 执行时整段念。
 
 ### 七、计时
 
 每个语音回合记下：说完 → 识别出字 → 模型第一个字 → 第一句出声，写进日志（照 LiveKit 的指标）。之后的调整都看这组数字。
+
+### 八、只有 `speak` 里的字会念出来（2026-11-20 玩家提出，修订第六节）
+
+问题：会被念出来的字来源太多（工具前那句、最后的回答、`reply.say`、出错说明），写它的模型或代码不一定知道这段字要念，于是把整条文件路径念了出来；为此加的规则也越来越多（用过 `reply.say` 后最后的回答就不念……）。
+
+决定：
+
+- 主会话只有一个开口的工具 `speak {text, written?}`（由 `reply.say` 收窄而来）。工具说明写明：`text` 会被原样念出来，一两句口语；说名字不说路径，网址只说网站名，不念代码和编号；要给玩家看的细节写在 `written` 里（只显示在聊天里、不念）。**模型的正文只进聊天，不念。**
+  - 为什么细节放 `written` 不放正文（真机，2026-11-20）：“详细讲五点”时模型先搜索，再只调 `speak`“完整版我写在聊天里了”、打算下一步再写正文——但只调 `speak` 的那一步之后这一轮就结束了，正文没写出来。正文又总是在工具参数之前生成，放在正文里会把第一句拖后好几秒。`written` 排在 `text` 后面（JSON 键按字母序），念的那句先流出来。
+- 两条规则：玩家用语音说的（呼叫键、唤醒词、接着听、快捷指令），这一轮必须 `speak`；玩家打字的，不 `speak`。后台任务报告的那一轮跟随玩家最近一次的入口。
+- 这一步只调了 `speak`、没有别的工具，就结束这一轮，不再调用模型（照 OpenAI Agents SDK 的 `StopAtTools`），接着听马上开始。
+- 边生成边念不变：从流式的工具参数里取出 `text` 喂给 `SpeechStream`。
+- 被打断：`speak` 的工具结果写“只说到：……”，不再回头改写对话记录。
+- 兜底：语音回合结束时没有调 `speak`，程序念一句固定的“我写在聊天里了”，并在日志里记一次；看漏调的频率再决定要不要加强。等待短句、“交给我”、唤醒应答照旧由程序播。
+- 代码拼出来要念的句子（确认、出错）写短、只放名字；完整路径、命令、原始错误放在卡片和聊天里。
+- 后台任务没有 `speak`，发弹幕用单独的工具。
+- 去掉的：工具前那句边写边念、“用过 `reply.say` 后最后的回答不念”、从最后的回答里挑要念的字。
 
 ## 分期
 
@@ -153,9 +172,10 @@
 | --- | --- |
 | 一 | 已完成（2026-11-20，`claude/voice-call`）：说话那一刻截屏 + `screen.at_speech`；语音回合不思考、短回答；等待短句预先合成、1.2 秒、每轮最多一句；接着听 `assistant.followUpSeconds`（默认 8）；按呼叫键打断；`voice-timing` 日志；费用按轮记（账本 `turn` 字段、`usage_conversation`）。 |
 | 三 | 已完成（2026-11-20，`claude/voice-call`）：上面第六节全部；等待短句落盘（`<KOTONE_HOME>/cache/tts/<缓存键的 SHA-256>.wav`，只存登记过的短句，最多 200 个文件，重启后读文件、不再请求在线语音）。没做第四节的“用掉一句换一句”和内置兜底音频。真机计时见下。 |
-| 二 | 已完成（2026-11-20，`claude/voice-call`）。后端：`agent.start / followup / list / stop` 替代 `session.*`（`kotone_agent::subagents` 纯逻辑 + `agent.rs` 运行时）；4 秒同步窗口（关闭接收端后再看一眼，刚好做完的不会两头丢）；只有玩家来源（`chat`、`assistant-text`、`voice`、`wake-voice`、`quick-command`）那一轮能派活，玩家原话由运行时放进 `<player-request>`；最多同时 3 件在跑；后台每轮最多 30 步、15 分钟（操作游戏 60 步、30 分钟），最后一步附 `MAX_STEPS_PROMPT` 要总结（工具清单不变）；登记存 `agent/subagents/<主会话 id>.json`（和对话文件分开，主循环反复存对话不会盖掉），重启后 running / waiting → interrupted；一轮做完先存盘（`reported=false`）再交回：主会话空下来（不在回答、玩家没在说话、没有提问在等、没在出声）就插 `agent-report` 消息并唤醒主会话（入口跟随玩家最近一次说话的方式；不接“我看看”、不接着听），玩家先开口了就放在那一轮前面；总结作为数据附件（可能转述了网页）；被停掉的不交回；同传这类开着监听的，第一轮交回“开始听了”，之后每听到一句不交回。确认经主会话：语音时等主会话安静后开口问（复用 `voice_ask`，没听清就请玩家去卡片上点），打字时卡片按钮（`agent_subagent_answer`）。后台的 `reply.say` 只发弹幕；后台的模型、搜索费用记到派它出去的那一轮（主会话的 id + 玩家那句话的时间）。命令 `agent_subagent_messages / stop / continue / answer`；对话列表不返回后台的记录；删除对话时一起停、一起删。主会话的工具清单见下。界面（卡片、确认按钮、隐藏）见 commit 89bb18a4。之后补的：后台执行命令、读写文件（[ADR 030](030-subagent-shell-and-files.md)，“实现情况”在那里）；每轮的页脚多一项“后台 ¥…”（账本记录的 `background` 字段，`CostCategory::Background`）；对话上限 100 段只算看得到的，后台记录随它的主对话一起淘汰（兜底上限 300 段）；旧的 `session.*` 真机脚本换成 `interpreter_e2e.py`（同传作为后台任务，假 AI；跑它时发现并修了 ADR 021 “只录某个程序”录成了“除它以外全部”的问题，见 ADR 021）。 |
+| 二 | 已完成（2026-11-20，`claude/voice-call`）。后端：`agent.start / followup / list / stop` 替代 `session.*`（`kotone_agent::subagents` 纯逻辑 + `agent.rs` 运行时）；4 秒同步窗口（关闭接收端后再看一眼，刚好做完的不会两头丢）；只有玩家来源（`chat`、`assistant-text`、`voice`、`wake-voice`、`quick-command`）那一轮能派活，玩家原话由运行时放进 `<player-request>`；最多同时 3 件在跑；后台每轮最多 30 步、15 分钟（操作游戏 60 步、30 分钟），最后一步附 `MAX_STEPS_PROMPT` 要总结（工具清单不变）；登记存 `agent/subagents/<主会话 id>.json`（和对话文件分开，主循环反复存对话不会盖掉），重启后 running / waiting → interrupted；一轮做完先存盘（`reported=false`）再交回：主会话空下来（不在回答、玩家没在说话、没有提问在等、没在出声）就插 `agent-report` 消息并唤醒主会话（入口跟随玩家最近一次说话的方式；不接“我看看”、不接着听），玩家先开口了就放在那一轮前面；总结作为数据附件（可能转述了网页）；被停掉的不交回；同传这类开着监听的，第一轮交回“开始听了”，之后每听到一句不交回。确认经主会话：语音时等主会话安静后开口问（复用 `voice_ask`，没听清就请玩家去卡片上点），打字时卡片按钮（`agent_subagent_answer`）。后台不能开口，发弹幕（第八节起用单独的 `danmaku` 工具）；后台的模型、搜索费用记到派它出去的那一轮（主会话的 id + 玩家那句话的时间）。命令 `agent_subagent_messages / stop / continue / answer`；对话列表不返回后台的记录；删除对话时一起停、一起删。主会话的工具清单见下。界面（卡片、确认按钮、隐藏）见 commit 89bb18a4。之后补的：后台执行命令、读写文件（[ADR 030](030-subagent-shell-and-files.md)，“实现情况”在那里）；每轮的页脚多一项“后台 ¥…”（账本记录的 `background` 字段，`CostCategory::Background`）；对话上限 100 段只算看得到的，后台记录随它的主对话一起淘汰（兜底上限 300 段）；旧的 `session.*` 真机脚本换成 `interpreter_e2e.py`（同传作为后台任务，假 AI；跑它时发现并修了 ADR 021 “只录某个程序”录成了“除它以外全部”的问题，见 ADR 021）。 |
+| 八 | 已完成（2026-11-20，`claude/voice-call`）：`speak {text, written?}` 取代 `reply.say`（后台改用 `danmaku`）；模型正文只进聊天；DeepSeek 流式给工具参数（`kotone_ai::agent::Delta::ToolArgs`），从没写完的 JSON 里取 `text` 边写边念（`kotone_agent::speak::text_so_far`）；`speak` 念完（或被打断）才返回，结果写“说完了 / 玩家打断了，只说到：……”，去掉了回头改记录（`revised`）；语音入口一步只调了 `speak` 或只交给后台就结束这一轮（`AgentLimits::stop_after`，照 OpenAI Agents SDK `StopAtTools`）；派活那一步没 `speak` 时 Kotone 说“交给我，好了告诉你”；出错 / 没做完 / 漏调 `speak` 时说预先合成的“出错了 / 没做完 / 我写在聊天里了”（日志 `speak-missing`）。删掉：工具前那句边写边念、`game_reply`、`final_reply_at`、`truncate_spoken` 一套、`speak_preamble`、`handoff_ready`、`subagents::handed_off_aloud` / `is_running_result`。 |
 
-第二期：主会话的工具（`kotone_agent::catalog::MAIN_TOOLS`，语音和打字共用一份；另加已保存的自动化 `saved.*`）：`reply.say`、`reply.ask`、`reminder.create`、`game_chat.send`、`voice_chat.say`、`voice_chat.status`、`screen.at_speech`、`window.active`、`game.list`、`game.focus`、`game.installed`、`game.launch`、`automation.list / run / runs / stop`、`settings.describe / get / update`、`memory`、`skill.view`、`roles.list / switch`、`web.search`、`usage.summary`、`runtime.status`、`agent.*`。只给后台的：`game.look` / `game.act`（截图 + 识别，在线文字识别约 12 秒，而且多半要一步步操作）、`companion.read_chat`（同样要识别；开口那一刻的聊天用 `screen.at_speech`）、`web.fetch`（3–7 秒）、`automation.save`、`models.*`、`skill.manage`、`voice.listen.*`、`tools.find` 和其余长尾工具。后台不能用：`agent.*`、`reply.ask`、`voice_chat.say`、`connections.request_key`、`soul.write`（`kotone_agent::catalog::SUBAGENT_EXCLUDED`）。语音回答偏长（第三期实测 4–8 句）：系统提示改成“最多两句、一共不超过 40 个字；内容多就先用 reply.say 说结论 + ‘详细的我写在聊天里了’，最后的回复只显示不念”，附两个例子。
+第二期：主会话的工具（`kotone_agent::catalog::MAIN_TOOLS`，语音和打字共用一份；另加已保存的自动化 `saved.*`）：`speak`（原 `reply.say`，第八节）、`reply.ask`、`reminder.create`、`game_chat.send`、`voice_chat.say`、`voice_chat.status`、`screen.at_speech`、`window.active`、`game.list`、`game.focus`、`game.installed`、`game.launch`、`automation.list / run / runs / stop`、`settings.describe / get / update`、`memory`、`skill.view`、`roles.list / switch`、`web.search`、`usage.summary`、`runtime.status`、`agent.*`。只给后台的：`game.look` / `game.act`（截图 + 识别，在线文字识别约 12 秒，而且多半要一步步操作）、`companion.read_chat`（同样要识别；开口那一刻的聊天用 `screen.at_speech`）、`web.fetch`（3–7 秒）、`automation.save`、`models.*`、`skill.manage`、`voice.listen.*`、`tools.find` 和其余长尾工具。后台不能用：`agent.*`、`reply.ask`、`voice_chat.say`、`connections.request_key`、`soul.write`（`kotone_agent::catalog::SUBAGENT_EXCLUDED`）。语音回答偏长（第三期实测 4–8 句）：系统提示改成“最多两句、一共不超过 40 个字；内容多就先用 reply.say 说结论 + ‘详细的我写在聊天里了’，最后的回复只显示不念”，附两个例子。
 
 第三期真机计时（`scripts/manual-e2e/voice_turn_real.py`：真实 DeepSeek 对话 + 识别 + 流式语音，呼叫按钮经 WebView2 调试端口点，玩家的话是 SAPI 合成后放进 VB-CABLE）：
 
@@ -190,6 +210,23 @@
 - **语音派活不等**：语音入口 `agent.start` / `agent.followup` 的同步窗口改为 0（`subagents::VOICE_SYNC_WINDOW`，打字仍是 4 秒）。实测 DeepSeek 调用工具时常常不带正文，所以派活这一步没说话时，运行时马上念预先合成的“交给我，好了告诉你”（`fillers::HANDOFF`，和等待短句一起预合成、落盘）；这一轮最后的话只写进聊天、不再念（`subagents::handed_off_aloud`、`VoiceTurn::hand_off`），模型自己在调用前说了一句时同样处理。说完到“交给我”出声 **8.1 / 10.6 → 3.4 / 3.0 秒**（`first=handoff`，从拿到工具调用到出声 13 / 252 毫秒）；2.1–2.3 秒时仍先有一句等待短句。接着听在“交给我”念完后约 2 秒开始，原来要等第二次模型调用和合成。
 - **删除确认只说名字**：问句改成“要删掉 notes.txt，可以吗？”（15 字；目的很短又没说“删”时放在前面，如“我要清理没用的插件：删掉 Old，可以吗？”；三个以上说“a 等 3 个”），完整路径在卡片展开的过程里看。目标写在变量里（`$f = "…\notes.txt"; Remove-Item $f`）时，从同一段命令的赋值里找出名字。原来的问句 30 字以上、念十来秒。
 - 打字路径回归（`background_task_real.py`）28/28：打字派活仍等约 4 秒；删除的问句同样变成“要删掉 notes.txt，可以吗？”。
+
+第八节真机（2026-11-20，`voice_turn_real.py` 三次 + `background_voice_real.py` + `background_task_real.py`，真实 DeepSeek）：
+
+| 回合（第二 / 第三次） | 说完→出声 | 念出来的（speak） |
+| --- | --- | --- |
+| “你好，你是谁” | 2766 / 2643 ms | 36 / 37 字 |
+| 不按键接着说“那你都能帮我做什么” | 3962 / 3830 ms | 43 / 49 字，细节在聊天里 |
+| “帮我搜一下英雄联盟现在是哪个版本” | 5320 / 4137 ms | 22–25 字 |
+| “详细讲讲打野前期怎么开野，分五点” | 9268 / 8307 ms（模型先搜索，第二次调用带着搜索结果） | 18–29 字，五点写在 `written` 里 |
+| “DeepSeek 的官网是什么” | 3557 / 3627 ms | “deepseek 点 com……网址我写在聊天里了”，网址只在聊天里 |
+| “琴音的设置文件放在哪里” | 3610 ms（交给后台，Kotone 说“交给我”） | — |
+
+- 漏调 `speak`：第一次 0/6、第二次 0/5、第三次 0/6（第三次那个“漏调”是交给了后台，脚本已改为不算）。念出来的字里没有路径和网址。
+- 第一次运行（`speak` 还没有 `written`）发现：“详细讲五点”时模型只调 `speak`“完整版我写在聊天里了”、打算下一步再写，这一轮已经结束，聊天里没有正文——于是加了 `written`。直接调 DeepSeek 实测工具参数是一段一段流过来的：第一段 0.89 秒，`text` 1.24 秒写完，776 字的 `written` 写到 5.18 秒，念的那句不用等细节。
+- 打断：点呼叫到停下 33–38 ms；结果里写着“玩家打断了，只说到：打野开野分五点，”，之后不接着听。
+- 语音派活（`background_voice_real.py`）8/8：Kotone 说“交给我”在说完后 3.2 秒；后台做完 2.3 秒后她用 `speak` 说结果；删除前开口问“要删掉 notes.txt，可以吗？”，答“可以”后删掉并说了。打字路径（`background_task_real.py`）28/28。
+- 测试环境的两次假失败（与改动无关）：SAPI 合成的“Kotone 的设置文件放在哪”DeepSeek 识别返回空（换成纯中文后正常）；一次收音开始 0.76 秒就被一个热键事件取消。
 
 ## 待定
 

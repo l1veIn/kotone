@@ -79,11 +79,7 @@ export function buildTurns(messages: readonly AgentMessage[], live: LiveState | 
     const current: Turn = turn ?? start(null, index, message.atMs);
     if (message.role === "assistant") {
       if (message.reasoning?.trim()) current.blocks.push({ kind: "thinking", key: `r${index}`, text: message.reasoning, streaming: false });
-      if (message.text.trim()) {
-        current.blocks.push({ kind: "text", key: `a${index}`, text: message.text, streaming: false });
-        current.answerText = current.answerText ? `${current.answerText}\n\n${message.text}` : message.text;
-      }
-      for (const call of message.toolCalls ?? []) {
+      const pushCall = (call: ToolCall) => {
         const result = results.get(call.id);
         const event = live?.tools[call.id];
         const status: ToolStatus = result ? (result.isError ? "failed" : "completed") : event?.status ?? "pending";
@@ -91,7 +87,21 @@ export function buildTurns(messages: readonly AgentMessage[], live: LiveState | 
           kind: "tool", key: `t${call.id}`,
           tool: { call, status, content: result?.content ?? event?.content ?? null, untrusted: result?.untrusted ?? false },
         });
+      };
+      // 她说出口的话（speak，ADR 029 第八节）排在正文前面：先听到结论，细节在下面。
+      const calls = message.toolCalls ?? [];
+      for (const call of calls.filter((call) => call.name === "speak")) {
+        pushCall(call);
+        // 只写不念的细节（speak.written）也算这一轮的回答（复制时带上）
+        let written = "";
+        try { written = String(JSON.parse(call.arguments)?.written ?? ""); } catch { /* 参数还没写完 */ }
+        if (written.trim()) current.answerText = current.answerText ? `${current.answerText}\n\n${written}` : written;
       }
+      if (message.text.trim()) {
+        current.blocks.push({ kind: "text", key: `a${index}`, text: message.text, streaming: false });
+        current.answerText = current.answerText ? `${current.answerText}\n\n${message.text}` : message.text;
+      }
+      calls.filter((call) => call.name !== "speak").forEach(pushCall);
       current.usage = addUsage(current.usage, message.usage);
       current.endedAtMs = message.atMs;
     } else if (message.role === "notice" && message.recap) {

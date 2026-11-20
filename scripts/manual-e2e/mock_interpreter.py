@@ -6,7 +6,7 @@ main        "帮我盯着队友"  -> agent.start(name=interpreter, label=同传)
 main        "停止同传"      -> agent.stop(interpreter) -> final "已经停了"
 main        other           -> final "收到"
 background  task            -> voice.listen.start(app = MOCK_LISTEN_APP) -> final "开始听了，翻译会显示成弹幕"
-background  heard sentence  -> reply.say("（译）<text>")  (danmaku only in the background) -> final "好的"
+background  heard sentence  -> danmaku("（译）<text>")  (the background cannot speak) -> final "好的"
 
 Every request body is appended to <log dir>/requests.jsonl.
 usage: python -X utf8 -I mock_interpreter.py <port> <log dir>
@@ -46,7 +46,7 @@ def plan(body):
         if "（听到" in user:
             heard = re.findall(r"KOTONE_DATA（[^）]*）\n(.*?)\nKOTONE_DATA", user, re.S)
             said = heard[-1].strip() if heard else user[-80:]
-            steps = [("reply.say", {"text": "（译）" + said[:200], "delivery": ["danmaku"]})]
+            steps = [("danmaku", {"text": "（译）" + said[:200]})]
             final = "好的"
         else:
             steps = [("voice.listen.start", {"app": APP})]
@@ -54,7 +54,7 @@ def plan(body):
     else:
         if "帮我盯着队友" in user:
             steps = [("agent.start", {"name": "interpreter", "label": "同传",
-                                      "task": "你是同传。先 voice.listen.start 听 " + APP + "；每听到一句外语就翻成中文，用 reply.say 的弹幕显示。"})]
+                                      "task": "你是同传。先 voice.listen.start 听 " + APP + "；每听到一句外语就翻成中文，用 danmaku 的弹幕显示。"})]
             final = "好，我在听"
         elif "停止同传" in user:
             steps = [("agent.stop", {"name": "interpreter"})]

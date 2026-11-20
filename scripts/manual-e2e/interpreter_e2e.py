@@ -190,14 +190,14 @@ def main():
                 if m.get("role") == "user" and m.get("source") == "heard":
                     data = " ".join(a.get("text", "") for a in m.get("attachments", []))
                     said = [t for x in msgs[i + 1:] if x["role"] == "assistant" for t in x.get("toolCalls", [])
-                            if t["name"] == "reply.say"]
+                            if t["name"] == "danmaku"]
                     if ("enemy" in data.lower() or "house" in data.lower()) and said:
                         return data, said
             return None
         got = wait_until(heard, 90)
         sentence, said = got or ("", [])
         check("recognised the English sentence", got, sentence)
-        check("translation shown as danmaku (reply.say in the background)", said,
+        check("translation shown as danmaku (the danmaku tool in the background)", said,
               json.loads(said[0]["arguments"]).get("text", "")[:80] if said else "")
         card_now = card() or {}
         check("still running after its first round (it keeps listening)", card_now.get("status") == "running",

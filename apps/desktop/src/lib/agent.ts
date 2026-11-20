@@ -59,8 +59,6 @@ export type AgentEvent =
   | { kind: "compacted"; index: number; message: AgentMessage }
   /** 空回复已丢弃、重发了同样的请求。 */
   | { kind: "discarded" }
-  /** 语音回合被打断：对话里那条回答改成了玩家听到的部分（ADR 029 §六），按存盘的重新读。 */
-  | { kind: "revised" }
   | { kind: "finished"; stop: StopReason; acpStopReason: string | null }
   /** 派出去的一件事有了新状态（ADR 029）：按 name 更新 `conversation.subagents`。 */
   | { kind: "subagent"; info: SubagentInfo }
@@ -143,7 +141,7 @@ const preview = {
 };
 /** 浏览器预览的工具清单（与后端分组、默认规则一致的示例）。 */
 const previewTools: Omit<AgentTool, "rule">[] = [
-  { name: "reply.say", group: "game", description: "用语音或弹幕告诉玩家一句话", sideEffects: [], defaultRule: "allow", core: true },
+  { name: "speak", group: "game", description: "对玩家说一句话（只有这里的字会念出来）", sideEffects: [], defaultRule: "allow", core: true },
   { name: "reminder.create", group: "game", description: "过一会儿提醒玩家", sideEffects: [], defaultRule: "allow", core: true },
   { name: "game_chat.send", group: "game", description: "把一句话打进游戏聊天框并发出", sideEffects: ["input"], defaultRule: "ask", core: true },
   { name: "companion.read_chat", group: "game", description: "截取游戏窗口，识别聊天记录", sideEffects: [], defaultRule: "allow", core: true },
@@ -296,6 +294,8 @@ export async function agentSubmitKey(request: KeyRequest, apiKey: string | null)
 /** 工具名的中文说明（卡片标题用；没有的显示原名）。 */
 const toolLabels: Record<string, string> = {
   "tools.find": "查找工具",
+  speak: "说",
+  danmaku: "发弹幕",
   "reply.say": "播报",
   "reminder.create": "设提醒",
   "web.search": "联网搜索",

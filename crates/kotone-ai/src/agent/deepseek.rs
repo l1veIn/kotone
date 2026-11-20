@@ -269,7 +269,7 @@ impl DeepSeekModel {
                     continue;
                 };
                 last_data = tokio::time::Instant::now();
-                match parser.feed(data.trim(), on_delta, emitted) {
+                match parser.feed(data.trim(), names, on_delta, emitted) {
                     Ok(true) => break,
                     Ok(false) => {}
                     Err(message) => return Err(Attempt::fail_or_retry(emitted, &message)),
@@ -351,6 +351,7 @@ impl StreamParser {
     fn feed(
         &mut self,
         data: &str,
+        names: &NameMap,
         on_delta: &(dyn Fn(Delta<'_>) + Send + Sync),
         emitted: &AtomicBool,
     ) -> Result<bool, String> {
@@ -404,6 +405,16 @@ impl StreamParser {
                     if let Some(args) = call.pointer("/function/arguments").and_then(Value::as_str)
                     {
                         slot.2.push_str(args);
+                        if !args.is_empty() && !slot.1.is_empty() {
+                            // 参数一段一段到：交出去好边生成边念 `speak`（ADR 029 第八节）。
+                            let name = names.local(&slot.1);
+                            on_delta(Delta::ToolArgs {
+                                index,
+                                id: &slot.0,
+                                name: &name,
+                                chunk: args,
+                            });
+                        }
                     }
                 }
             }
@@ -507,5 +518,48 @@ impl ModelClient for DeepSeekModel {
             _ = cancel.cancelled() => Err(AiError::Cancelled),
             result = work => result,
         }
+    }
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    #[test]
+    fn tool_call_arguments_are_streamed_with_the_local_name() {
+        let names = NameMap::default();
+        let emitted = AtomicBool::new(false);
+        let seen: Mutex<Vec<(usize, String, String, String)>> = Mutex::default();
+        let on_delta = |d: Delta<'_>| {
+            if let Delta::ToolArgs {
+                index,
+                id,
+                name,
+                chunk,
+            } = d
+            {
+                seen.lock()
+                    .unwrap()
+                    .push((index, id.into(), name.into(), chunk.into()));
+            }
+        };
+        let mut parser = StreamParser::default();
+        for line in [
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"speak","arguments":""}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"text\":\"好"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"的\"}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+        ] {
+            parser.feed(line, &names, &on_delta, &emitted).unwrap();
+        }
+        let seen = seen.into_inner().unwrap();
+        assert_eq!(seen.len(), 2, "空的参数片段不交出去");
+        assert_eq!(
+            seen[0],
+            (0, "c1".into(), "speak".into(), r#"{"text":"好"#.into())
+        );
+        assert_eq!(seen[1].3, r#"的"}"#);
+        assert!(!emitted.load(Ordering::Relaxed), "工具参数不影响出错重发");
     }
 }

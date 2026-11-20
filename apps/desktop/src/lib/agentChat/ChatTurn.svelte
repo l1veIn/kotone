@@ -3,7 +3,7 @@
   // 版式参照 DeepSeek Harness 的消息流（MessageItem / UserMessageBubble，MIT）：用户消息是右侧
   // 圆角气泡，回答不加气泡，过程是一行一行的“流程行”。Kotone 自己的实现。
   import { companionName } from "$lib/stores/companion";
-  import { ChevronRight, Info, Zap } from "@lucide/svelte";
+  import { ChevronRight, Info, Volume2, Zap } from "@lucide/svelte";
   import { sourceLabel, type AgentAsk, type Answer } from "../agent";
   import MessageMarkdown from "./markdown/MessageMarkdown.svelte";
   import ThinkingBlock from "./ThinkingBlock.svelte";
@@ -29,6 +29,14 @@
   /** 自动化结果：后端写给模型的说明里取出“自动化「…」已完成”这一句给人看。 */
   const systemText = $derived(user?.text.match(/自动化「[^」]*」[^。；）]*/)?.[0] ?? user?.text ?? "");
   const waiting = $derived(turn.active && !turn.blocks.some((b) => b.kind === "text" && b.streaming));
+
+  /** `speak` 的参数（ADR 029 第八节）：text 念出来，written 只显示在聊天里。参数还没写完时为空。 */
+  function speakArgs(args: string): { text: string; written: string } {
+    try {
+      const value = JSON.parse(args);
+      return { text: String(value?.text ?? ""), written: String(value?.written ?? "") };
+    } catch { return { text: "", written: "" }; }
+  }
 </script>
 
 <section class="space-y-3" data-turn-anchor={turn.id} data-testid="agent-turn" data-turn-active={turn.active}>
@@ -71,6 +79,16 @@
           <ThinkingBlock text={block.text} streaming={block.streaming} />
         {:else if block.kind === "text"}
           <div class="py-0.5" data-testid="agent-answer" data-streaming={block.streaming}><MessageMarkdown text={block.text} /></div>
+        {:else if block.kind === "tool" && block.tool.call.name === "speak"}
+          {@const said = speakArgs(block.tool.call.arguments)}
+          <!-- 她说出口的话：显示成一句话，不是工具卡片；只写不念的细节在下面 -->
+          <p class="m-0 flex items-start gap-2 py-0.5 text-sm leading-[22px] text-foreground" data-testid="agent-spoken">
+            <Volume2 aria-label="说了" class="mt-[3px] size-3.5 shrink-0 text-primary" />
+            <span class="min-w-0 break-words">“{said.text}”{#if block.tool.content?.includes("打断")}<span class="ml-1.5 text-xs text-muted-foreground" data-testid="agent-spoken-interrupted">被打断了</span>{/if}</span>
+          </p>
+          {#if said.written.trim()}
+            <div class="py-0.5" data-testid="agent-written"><MessageMarkdown text={said.written} /></div>
+          {/if}
         {:else if block.kind === "tool" && (block.tool.call.name === "agent.start" || block.tool.call.name === "agent.followup")}
           <BackgroundTaskCard tool={block.tool} runActive={turn.active} />
         {:else if block.kind === "tool"}

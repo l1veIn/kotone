@@ -73,12 +73,20 @@ impl BuiltinHost for FakeBuiltin {
         Ok(json!({"answered": true, "answer": "可以"}))
     }
 
-    async fn say(&self, text: String, delivery: Vec<DeliveryKind>) -> Result<Value, String> {
+    async fn speak(&self, call_id: &str, text: String) -> Result<Value, String> {
         self.calls
             .lock()
             .unwrap()
-            .push(("say".into(), json!({"text": text, "n": delivery.len()})));
-        Ok(json!({"delivered": ["speech"]}))
+            .push(("speak".into(), json!({"text": text, "callId": call_id})));
+        Ok(json!({"spoken": true}))
+    }
+
+    async fn danmaku(&self, text: String) -> Result<Value, String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(("danmaku".into(), json!({"text": text})));
+        Ok(json!({"shown": true}))
     }
 
     async fn remind(
@@ -323,6 +331,41 @@ async fn finding_a_group_enables_the_whole_group() {
     }
 }
 
+#[test]
+fn the_spoken_text_streams_before_the_written_details() {
+    // 模型按参数说明里的顺序写：念的 text 在前，只显示的 written 在后，第一句才不用等细节写完。
+    let f = fixture(Policy::default(), Answer::Deny);
+    let speak = f
+        .port
+        .definitions()
+        .into_iter()
+        .find(|d| d.name == "speak")
+        .unwrap();
+    let schema = speak.parameters.to_string();
+    let (text, written) = (
+        schema.find("\"text\"").unwrap(),
+        schema.find("\"written\"").unwrap(),
+    );
+    assert!(text < written, "{schema}");
+    assert!(speak.description.contains("written"));
+}
+
+#[tokio::test]
+async fn speak_reaches_the_host_only_in_voice_turns() {
+    let f = fixture(Policy::default(), Answer::Deny);
+    let builtin = f.builtin.clone();
+    let port = f.port.with_scope(crate::Scope::Game);
+    let out = call(&port, "speak", json!({"text": "26.22，昨天刚更新。"})).await;
+    assert!(!out.is_error, "{}", out.content);
+    let calls = builtin.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, "speak");
+    assert_eq!(
+        calls[0].1["callId"], "call-1",
+        "边生成边念的那一路靠调用 id 找到"
+    );
+}
+
 #[tokio::test]
 async fn ask_tool_validates_and_reaches_the_host() {
     let f = fixture(Policy::default(), Answer::Deny);
@@ -358,7 +401,8 @@ fn default_rules_follow_side_effects() {
         ("automation.stop", json!({})),
         ("automation.save", json!({})),
         ("companion.read_chat", json!({})),
-        ("reply.say", json!({})),
+        ("speak", json!({})),
+        ("danmaku", json!({})),
         ("reminder.create", json!({})),
         ("game_chat.send", json!({})),
         ("saved.auto-1", json!({})),
@@ -549,12 +593,11 @@ async fn builtins_validate_then_reach_the_host() {
     )
     .await;
     assert!(!out.is_error);
-    let out = call(
-        &f.port,
-        "reply.say",
-        json!({"text": "好", "delivery": ["shout"]}),
-    )
-    .await;
+    // 打字的一轮（不是语音入口）：speak 不念、不交给桌面（ADR 029 第八节）
+    let out = call(&f.port, "speak", json!({"text": "好"})).await;
+    assert!(!out.is_error);
+    assert!(out.content.contains("不念"), "{}", out.content);
+    let out = call(&f.port, "speak", json!({"text": ""})).await;
     assert!(out.is_error);
     let calls = f.builtin.calls.lock().unwrap().clone();
     assert_eq!(calls.len(), 2);
@@ -1064,7 +1107,7 @@ async fn main_session_gets_the_instant_set_and_the_background_gets_the_rest() {
         "automation.save",
         "tools.find",
         "voice.listen.start",
-        "reply.say",
+        "danmaku",
         "memory",
         "saved.auto-1",
     ] {
@@ -1261,7 +1304,10 @@ async fn exec_calls_go_to_the_desktop_with_the_players_rule() {
 async fn exec_tools_without_a_desktop_are_unavailable() {
     struct NoDesktop;
     impl BuiltinHost for NoDesktop {
-        async fn say(&self, _t: String, _d: Vec<DeliveryKind>) -> Result<Value, String> {
+        async fn speak(&self, _c: &str, _t: String) -> Result<Value, String> {
+            Ok(json!({}))
+        }
+        async fn danmaku(&self, _t: String) -> Result<Value, String> {
             Ok(json!({}))
         }
         async fn ask(&self, _q: String, _w: u64) -> Result<Value, String> {

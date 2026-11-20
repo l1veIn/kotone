@@ -1,18 +1,20 @@
-//! 语音回合边生成边念（ADR 029 §六，第三期）：模型写一段就念一段，不等整段回答写完再合成。
+//! 语音回合边生成边念 `speak`（ADR 029 第六、八节）：只有 `speak` 里的字会念出来，
+//! 模型一边写 `speak` 的参数，这里一边取出字交给 [`SpeechStream`]，不等整句写完。
 //!
-//! - 每次调用模型（一步）一路 [`SpeechStream`]：正文增量（`MessageChunk`）进来就喂，推理文字永不喂；
-//!   这一步写完（`Appended`）就收尾，念完才算结束。工具前的那句（“我查一下”）也这样念出来。
-//! - 下一路提前准备好（DeepSeek 在后台先连好，握手藏在模型想第一句的时间里），但不占播报：
-//!   第一段正文到了才排队拿播报锁（[`crate::assistant::hold_output`]）。前面还在播填充话、提醒时
-//!   只合成不出声，轮到它了再放开；麦克风开着时也先不出声（和提醒一样，不把自己的话录进去）。
-//! - 气泡跟着念到的句子更新；第一次出声写进计时（[`crate::voice_timing::sound_at`]）。
-//! - 打断（呼叫键、唤醒词、开始录音、“停下”）：[`interrupt`] 立刻停掉正在念的，等输出设备关掉
-//!   才返回；对话里这条回答改成玩家实际听到的部分（[`crate::agent::truncate_spoken`]）。
-//! - 模型用了 `reply.say`、或流式语音用不了：这一轮剩下的文字照旧整段念（`agent` 里的老路）。
+//! - 参数是一段一段流过来的 JSON（[`AgentEvent::ToolCallChunk`]），每次从拼到现在的整段里取出
+//!   `text`（[`kotone_agent::speak::text_so_far`]），把多出来的字喂进去。
+//! - 这一轮开始前就把第一路准备好（DeepSeek 在后台先连好，握手藏在模型想第一句的时间里），
+//!   但不占播报：第一个字到了才排队拿播报锁（[`crate::assistant::hold_output`]）。前面还在播填充话、
+//!   提醒时只合成不出声，轮到它了再放开；麦克风开着时也先不出声。
+//! - `speak` 真正执行时（[`VoiceTurn::take`]）把剩下的字补上、收尾，等念完（或被打断）才返回，
+//!   工具结果里写“说完了”或“只说到：……”——不用回头改对话记录。
+//! - 打断（呼叫键、唤醒词、开始录音、“停下”）：[`interrupt`] 立刻停掉，等输出设备关掉才返回。
 //!
-//! 照 LiveKit Agents（Apache-2.0）`voice/agent_activity.py`：回答边生成边合成、按顺序播，打断时
-//! 只把已经播出去的文字写回对话（`_truncate_message`，消息标 `interrupted`）。
+//! 照 LiveKit Agents（Apache-2.0）`voice/agent_activity.py`：边生成边合成、按顺序播，打断时只算已经播出去的字。
+//!
+//! [`AgentEvent::ToolCallChunk`]: kotone_ai::agent::AgentEvent::ToolCallChunk
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -27,42 +29,43 @@ use tauri::{AppHandle, Manager};
 const CAPTURE_WAIT: Duration = Duration::from_secs(30);
 /// 多久看一次念到哪了（气泡、计时）。
 const POLL: Duration = Duration::from_millis(100);
+/// 念一句最多等多久（DeepSeek 一路会话在发完字 20 秒后自己结束）。
+const FINISH_WAIT: Duration = Duration::from_secs(60);
 
-/// 已经开口（或排着队要开口）、还没结束的回答：打断时一起停。
+/// 已经开口（或排着队要开口）、还没结束的：打断时一起停。
 static ACTIVE: Mutex<Vec<Arc<Reply>>> = Mutex::new(Vec::new());
 
-/// 一步（一次模型调用）的正文：一路边生成边念。
-struct Reply {
+/// 一次 `speak`：一路边生成边念。
+pub struct Reply {
     app: AppHandle,
     stream: SpeechStream,
-    conversation: String,
-    /// 对话里这条消息的时间（这一步写完才知道）。
-    message: Mutex<Option<u64>>,
-    /// 这一步后面跟着工具调用（计时里记成 `preamble`）。
-    tools: AtomicBool,
-    /// 被打断时玩家已经听到的部分（等知道是哪条消息再改对话记录）。
-    interrupted: Mutex<Option<String>>,
-    /// 模型撤回了这一步（内容审核、空回答重发）：不进对话，不用改记录。
+    /// 已经喂进去的字。
+    fed: Mutex<String>,
+    interrupted: AtomicBool,
+    /// 模型撤回了这一步（内容审核、空回答重发）。
     discarded: AtomicBool,
     done: tokio::sync::watch::Sender<bool>,
 }
 
-/// 一路念完以后的情况。
-#[derive(Debug, Clone)]
-pub struct Spoken {
-    /// 对话里那条消息的时间。
-    pub message: Option<u64>,
-    /// 模型写的全文。
-    pub text: String,
-    /// 完整念出来的句子。
-    pub spoken: String,
-    pub interrupted: bool,
-    pub error: Option<String>,
+/// 一次 `speak` 念完以后的情况。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Spoken {
+    /// 都念出来了。
+    Done,
+    /// 被打断了：玩家听到的那几句（按整句算）。
+    Interrupted(String),
+    Failed(String),
 }
 
 impl Reply {
-    fn was_interrupted(&self) -> bool {
-        self.interrupted.lock().unwrap().is_some()
+    fn feed(&self, text: &str) {
+        let mut fed = self.fed.lock().unwrap();
+        if let Some(rest) = text.strip_prefix(fed.as_str()) {
+            if !rest.is_empty() {
+                self.stream.push_text(rest);
+                fed.push_str(rest);
+            }
+        }
     }
 
     /// 停下；返回是不是真的打断了什么（已经念完的不算）。阻塞到输出设备关掉（最多 2 秒）。
@@ -70,57 +73,65 @@ impl Reply {
         if self.discarded.load(Ordering::SeqCst) || self.stream.is_done() {
             return false;
         }
+        self.interrupted.store(true, Ordering::SeqCst);
         if let Err(e) = self.stream.cancel() {
             log::log(&format!("voice reply: {e}"));
-        }
-        let spoken = self.stream.spoken_text();
-        // 和 `bind` 交叉加锁：两边至少有一边看得到对方，记录一定会改（改两次也一样）。
-        *self.interrupted.lock().unwrap() = Some(spoken.clone());
-        let message = *self.message.lock().unwrap();
-        if let Some(at) = message {
-            // 这一步写完了、每句都念完了（只剩设备里最后一点尾音）：记录不用改
-            if spoken.trim() != self.stream.full_text().trim() {
-                crate::agent::truncate_spoken(&self.app, &self.conversation, at, &spoken);
-            }
         }
         true
     }
 
-    /// 这一步写完了：记下是哪条消息；之前已经被打断就把记录改成听到的部分。
-    fn bind(&self, at_ms: u64) {
-        *self.message.lock().unwrap() = Some(at_ms);
-        let pending = self.interrupted.lock().unwrap().clone();
-        if let Some(spoken) = pending {
-            crate::agent::truncate_spoken(&self.app, &self.conversation, at_ms, &spoken);
-        }
-    }
-
-    async fn wait_done(&self) {
+    /// 补上最后的字、收尾，等它念完（或被打断）。
+    pub async fn finish(&self, text: &str) -> Spoken {
+        self.feed(text);
+        let result = tokio::time::timeout(FINISH_WAIT, self.stream.finish())
+            .await
+            .unwrap_or_else(|_| {
+                let _ = self.stream.cancel();
+                Err("念得太久，停下了".into())
+            });
         let mut done = self.done.subscribe();
         let _ = done.wait_for(|d| *d).await;
+        if self.interrupted.load(Ordering::SeqCst) {
+            return Spoken::Interrupted(self.stream.spoken_text());
+        }
+        match result {
+            Ok(()) => Spoken::Done,
+            // 念出来一部分就出错（例如有一句没过内容审核）：照被打断算，玩家听到了前面的
+            Err(_) if !self.stream.spoken_text().trim().is_empty() => {
+                Spoken::Interrupted(self.stream.spoken_text())
+            }
+            Err(e) => Spoken::Failed(e),
+        }
     }
 }
 
-/// 一个语音回合（游戏内入口的一轮）：一步一路边生成边念。
+/// 一次 `speak` 调用（这一步里第 index 个工具调用）的参数和念它的那一路。
+#[derive(Default)]
+struct Slot {
+    raw: String,
+    name: String,
+    id: String,
+    reply: Option<Arc<Reply>>,
+}
+
+/// 一个语音回合（游戏内入口的一轮）。
 pub struct VoiceTurn {
     app: AppHandle,
     conversation: String,
     owner: Option<Owner>,
     bubble: bool,
+    /// 弹幕也显示（关了气泡，或开了“回答同时用弹幕”）。
     danmaku: bool,
     /// 准备好的下一路（还没开始念，不占播报）。
     next: Mutex<Option<SpeechStream>>,
-    /// 这一步正在写的那路。
-    current: Mutex<Option<Arc<Reply>>>,
-    replies: Mutex<Vec<Arc<Reply>>>,
-    /// 这一轮剩下的文字不再边生成边念（用了 `reply.say`、流式语音用不了）。
-    muted: AtomicBool,
-    /// 已经说了“交给我”、后台在做：这一轮最后的话只写进聊天，不念（也不走整段念）。
-    handed_off: AtomicBool,
+    /// 这一步里的工具调用（按序号）。
+    slots: Mutex<Vec<Slot>>,
+    /// 已经开始念、等 `speak` 执行的那几路：调用 id → 那一路。
+    started: Mutex<HashMap<String, Arc<Reply>>>,
 }
 
 impl VoiceTurn {
-    /// 回复方式里有语音、流式语音准备得起来才边生成边念；否则 None（整段念）。
+    /// 回复方式里有语音、流式语音准备得起来才边生成边念；否则 None（`speak` 执行时整段念）。
     pub fn new(app: &AppHandle, conversation: &str, owner: Option<Owner>) -> Option<Arc<Self>> {
         let (wanted, also_danmaku) = {
             let settings = app.state::<crate::SharedState>();
@@ -139,13 +150,10 @@ impl VoiceTurn {
             conversation: conversation.to_string(),
             owner,
             bubble,
-            // 弹幕照旧显示全文（关了气泡，或打开了“回答同时用弹幕”）
             danmaku: wanted.contains(&DeliveryKind::Danmaku) && (!bubble || also_danmaku),
             next: Mutex::new(None),
-            current: Mutex::new(None),
-            replies: Mutex::new(Vec::new()),
-            muted: AtomicBool::new(false),
-            handed_off: AtomicBool::new(false),
+            slots: Mutex::default(),
+            started: Mutex::default(),
         };
         match turn.prepare() {
             Ok(stream) => *turn.next.lock().unwrap() = Some(stream),
@@ -160,46 +168,34 @@ impl VoiceTurn {
     fn prepare(&self) -> Result<SpeechStream, String> {
         let (engine, mut options) = crate::assistant::stream_engine(&self.app)?;
         options.held = true;
-        // 合成费用记到这一轮；轮中插了话就记到插话那一轮（同整段念时“最后一句玩家的话”）。
+        // 合成费用记到这一轮；轮中插了话就记到插话那一轮。
         options.owner = kotone_core::usage::current_turn()
             .filter(|t| t.conversation == self.conversation)
             .or_else(|| self.owner.clone());
         SpeechStream::start(engine, options)
     }
 
-    /// 这一轮剩下的文字走整段念的老路（`reply.say` 已经说过、流式语音用不了）。
-    pub fn muted(&self) -> bool {
-        self.muted.load(Ordering::SeqCst)
+    /// 新的一步（又调用了一次模型）：工具调用从 0 重新编号。
+    pub fn on_step(&self) {
+        self.slots.lock().unwrap().clear();
     }
 
-    /// 用了 `reply.say`：她已经开口说过，这一轮后面的文字不再念（同整段念时的规矩）。
-    pub fn mute(&self) {
-        self.muted.store(true, Ordering::SeqCst);
-    }
-
-    /// 说过“交给我”、后台在做：这一轮后面的话不再念。
-    pub fn hand_off(&self) {
-        self.handed_off.store(true, Ordering::SeqCst);
-        self.mute();
-    }
-
-    pub fn handed_off(&self) -> bool {
-        self.handed_off.load(Ordering::SeqCst)
-    }
-
-    /// 这一轮念过（或在念）东西吗。
-    pub fn has_replies(&self) -> bool {
-        !self.replies.lock().unwrap().is_empty()
-    }
-
-    /// 模型正文的一段。返回这段是不是让她开口了（这一步第一次有字）。
-    pub fn on_chunk(&self, text: &str) -> bool {
-        if self.muted() {
+    /// 工具参数的一段。返回这段是不是让她开口了（这一轮第一次有字）。
+    pub fn on_args(&self, index: usize, id: &str, name: &str, chunk: &str) -> bool {
+        let mut slots = self.slots.lock().unwrap();
+        while slots.len() <= index {
+            slots.push(Slot::default());
+        }
+        let slot = &mut slots[index];
+        slot.raw.push_str(chunk);
+        slot.name = name.to_string();
+        slot.id = id.to_string();
+        if slot.name != kotone_agent::catalog::TOOL_SPEAK {
             return false;
         }
-        let mut current = self.current.lock().unwrap();
-        if let Some(reply) = current.as_ref() {
-            reply.stream.push_text(text);
+        let text = kotone_agent::speak::text_so_far(&slot.raw);
+        if let Some(reply) = &slot.reply {
+            reply.feed(&text);
             return false;
         }
         if text.trim().is_empty() {
@@ -209,101 +205,88 @@ impl VoiceTurn {
         let stream = match prepared.map(Ok).unwrap_or_else(|| self.prepare()) {
             Ok(stream) => stream,
             Err(e) => {
-                log::log(&format!(
-                    "voice reply: 不能边生成边念，这一轮剩下的整段念：{e}"
-                ));
-                self.mute();
+                log::log(&format!("voice reply: 不能边生成边念，整段念：{e}"));
                 return false;
             }
         };
-        stream.push_text(text);
         let reply = Arc::new(Reply {
             app: self.app.clone(),
             stream,
-            conversation: self.conversation.clone(),
-            message: Mutex::new(None),
-            tools: AtomicBool::new(false),
-            interrupted: Mutex::new(None),
+            fed: Mutex::default(),
+            interrupted: AtomicBool::new(false),
             discarded: AtomicBool::new(false),
             done: tokio::sync::watch::channel(false).0,
         });
-        *current = Some(reply.clone());
-        self.replies.lock().unwrap().push(reply.clone());
+        reply.feed(&text);
+        slot.reply = Some(reply.clone());
         ACTIVE.lock().unwrap().push(reply.clone());
         crate::voice_timing::tts_started();
         tauri::async_runtime::spawn(play(reply, self.bubble));
         true
     }
 
-    /// 这一步写完了（`Appended`）：收尾（念完为止），弹幕显示全文；后面还要调用模型就把下一路准备好。
-    pub fn on_step_end(&self, text: &str, tools: bool, at_ms: u64) {
-        let reply = self.current.lock().unwrap().take();
-        if let Some(reply) = reply {
-            reply.tools.store(tools, Ordering::SeqCst);
-            reply.bind(at_ms);
-            tauri::async_runtime::spawn(async move {
-                let _ = reply.stream.finish().await;
-            });
-            if self.danmaku && !text.trim().is_empty() {
-                crate::assistant::show_danmaku(&self.app, text.trim());
-            }
-        }
-        if tools && !self.muted() {
-            let mut next = self.next.lock().unwrap();
-            if next.is_none() {
-                match self.prepare() {
-                    Ok(stream) => *next = Some(stream),
-                    Err(e) => log::log(&format!("voice reply: 下一步没能先准备好：{e}")),
-                }
-            }
+    /// 模型发起了完整的工具调用：开始念了的那一路记到它的调用 id 下（`speak` 执行时取）。
+    pub fn on_call(&self, id: &str) {
+        let slots = self.slots.lock().unwrap();
+        if let Some(reply) = slots
+            .iter()
+            .find(|s| s.id == id)
+            .and_then(|s| s.reply.clone())
+        {
+            self.started.lock().unwrap().insert(id.to_string(), reply);
         }
     }
 
     /// 模型撤回了这一步（内容审核没过、空回答重发）：念到一半的马上停。
     pub fn on_discard(&self) {
-        let Some(reply) = self.current.lock().unwrap().take() else {
+        let replies: Vec<Arc<Reply>> = self
+            .slots
+            .lock()
+            .unwrap()
+            .drain(..)
+            .filter_map(|s| s.reply)
+            .collect();
+        if replies.is_empty() {
             return;
-        };
-        reply.discarded.store(true, Ordering::SeqCst);
+        }
         let app = self.app.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            if let Err(e) = reply.stream.cancel() {
-                log::log(&format!("voice reply: {e}"));
+            for reply in replies {
+                reply.discarded.store(true, Ordering::SeqCst);
+                if let Err(e) = reply.stream.cancel() {
+                    log::log(&format!("voice reply: {e}"));
+                }
             }
             crate::bubble::stop_speaking(&app);
         });
     }
 
-    /// 这一轮跑完了：没用上的那路关掉（DeepSeek 按发出去的字计费，空连接不花钱）；还没收尾的那步收尾。
+    /// `speak` 执行了：取出已经开始念的那一路（没有 = 流式用不了或没来得及，整段念）。
+    /// 弹幕这时显示整句。
+    pub fn take(&self, call_id: &str, text: &str) -> Option<Arc<Reply>> {
+        if self.danmaku {
+            crate::assistant::show_danmaku(&self.app, text);
+        }
+        self.started.lock().unwrap().remove(call_id)
+    }
+
+    /// 这一轮跑完了：没用上的那路关掉（DeepSeek 按发出去的字计费，空连接不花钱）；
+    /// 开始念了却没执行的 `speak`（例如被插话跳过）让它念完。
     pub fn close(&self) {
         drop(self.next.lock().unwrap().take());
-        if let Some(reply) = self.current.lock().unwrap().take() {
+        let left: Vec<Arc<Reply>> = self
+            .started
+            .lock()
+            .unwrap()
+            .drain()
+            .map(|(_, r)| r)
+            .chain(self.slots.lock().unwrap().drain(..).filter_map(|s| s.reply))
+            .collect();
+        for reply in left {
             tauri::async_runtime::spawn(async move {
                 let _ = reply.stream.finish().await;
             });
         }
-    }
-
-    /// 等这一轮念的都结束（念完、出错或被打断），按顺序返回每一路的情况。先 [`close`](Self::close)。
-    pub async fn wait_all(&self) -> Vec<Spoken> {
-        let replies = self.replies.lock().unwrap().clone();
-        let mut out = Vec::new();
-        for reply in replies {
-            if reply.discarded.load(Ordering::SeqCst) {
-                continue;
-            }
-            let result = reply.stream.finish().await;
-            reply.wait_done().await;
-            let interrupted = reply.was_interrupted();
-            out.push(Spoken {
-                message: *reply.message.lock().unwrap(),
-                text: reply.stream.full_text(),
-                spoken: reply.stream.spoken_text(),
-                interrupted,
-                error: result.err().filter(|_| !interrupted),
-            });
-        }
-        out
     }
 }
 
@@ -335,15 +318,12 @@ async fn play(reply: Arc<Reply>, bubble: bool) {
         if !timed {
             if let Some(at) = reply.stream.first_audio_at() {
                 timed = true;
-                let kind = if reply.tools.load(Ordering::SeqCst) {
-                    "preamble"
-                } else {
-                    "answer"
-                };
-                crate::voice_timing::sound_at(kind, epoch_ms(at));
+                crate::voice_timing::sound_at("speak", epoch_ms(at));
             }
         }
-        if bubble && !reply.was_interrupted() && !reply.discarded.load(Ordering::SeqCst) {
+        let quiet =
+            reply.interrupted.load(Ordering::SeqCst) || reply.discarded.load(Ordering::SeqCst);
+        if bubble && !quiet {
             let text = reply.stream.started_text();
             let text = text.trim();
             if !text.is_empty() && text != shown {
@@ -358,9 +338,8 @@ async fn play(reply: Arc<Reply>, bubble: bool) {
     }
     drop(guard);
     // 4. 念完：气泡按字数停一会儿再收（被打断时已经收起了）
-    if let Some(revision) =
-        revision.filter(|_| !reply.was_interrupted() && !reply.discarded.load(Ordering::SeqCst))
-    {
+    let quiet = reply.interrupted.load(Ordering::SeqCst) || reply.discarded.load(Ordering::SeqCst);
+    if let Some(revision) = revision.filter(|_| !quiet) {
         crate::bubble::spoken(&app, revision);
     }
     ACTIVE.lock().unwrap().retain(|r| !Arc::ptr_eq(r, &reply));
@@ -379,13 +358,13 @@ fn epoch_ms(at: Instant) -> u64 {
         .saturating_sub(Instant::now().saturating_duration_since(at).as_millis() as u64)
 }
 
-/// 有没有正在念（或排队要念）的回答。
+/// 有没有正在念（或排队要念）的。
 pub fn active() -> bool {
     !ACTIVE.lock().unwrap().is_empty()
 }
 
-/// 打断：正在边生成边念的都停下（等输出设备关掉才返回，最多约 2 秒），对话里只留听到的部分。
-/// 返回是不是打断了什么。阻塞，不要在异步线程里直接调用太久。
+/// 打断：正在边生成边念的都停下（等输出设备关掉才返回，最多约 2 秒）。返回是不是打断了什么。
+/// 阻塞，不要在异步线程里直接调用太久。
 pub fn interrupt() -> bool {
     let active: Vec<Arc<Reply>> = ACTIVE.lock().unwrap().clone();
     let mut any = false;
@@ -398,10 +377,44 @@ pub fn interrupt() -> bool {
     any
 }
 
-/// 等正在念的回答都念完（追问前：工具前那句念完再问），最多 `max`。
+/// 等正在念的都念完（追问前：前面那句念完再问），最多 `max`。
 pub async fn wait_idle(max: Duration) {
     let started = Instant::now();
     while active() && started.elapsed() < max {
         tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// `speak` 的工具结果：说完了，或玩家打断了、只听到前面几句（ADR 029 第八节：
+/// 不回头改对话记录，模型从这里知道玩家听到了什么）。
+pub fn spoken_result(spoken: &Spoken) -> Result<serde_json::Value, String> {
+    match spoken {
+        Spoken::Done => Ok(serde_json::json!({"result": "说完了"})),
+        Spoken::Interrupted(heard) if heard.trim().is_empty() => {
+            Ok(serde_json::json!({"result": "玩家打断了，一句也没听到"}))
+        }
+        Spoken::Interrupted(heard) => Ok(serde_json::json!({
+            "result": format!("玩家打断了，只说到：{}", heard.trim())
+        })),
+        Spoken::Failed(e) => Err(format!("没能念出来：{e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_result_says_what_the_player_heard() {
+        assert_eq!(spoken_result(&Spoken::Done).unwrap()["result"], "说完了");
+        assert_eq!(
+            spoken_result(&Spoken::Interrupted("先出无尽。".into())).unwrap()["result"],
+            "玩家打断了，只说到：先出无尽。"
+        );
+        assert_eq!(
+            spoken_result(&Spoken::Interrupted(" ".into())).unwrap()["result"],
+            "玩家打断了，一句也没听到"
+        );
+        assert!(spoken_result(&Spoken::Failed("断了".into())).is_err());
     }
 }

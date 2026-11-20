@@ -1211,6 +1211,7 @@ mod http {
                     deltas.lock().unwrap().push(match d {
                         Delta::Text(t) => format!("text:{t}"),
                         Delta::Thought(t) => format!("thought:{t}"),
+                        Delta::ToolArgs { name, chunk, .. } => format!("args:{name}:{chunk}"),
                     })
                 },
                 &CancellationToken::default(),
@@ -2216,6 +2217,7 @@ mod deepseek_http {
                     deltas.lock().unwrap().push(match d {
                         Delta::Text(t) => format!("text:{t}"),
                         Delta::Thought(t) => format!("thought:{t}"),
+                        Delta::ToolArgs { name, chunk, .. } => format!("args:{name}:{chunk}"),
                     })
                 },
                 &CancellationToken::default(),
@@ -2302,7 +2304,17 @@ mod deepseek_http {
         model.title = Some(TitleRequest::new(move |t| sink.lock().unwrap().push(t)));
         let (result, deltas) = complete(&model).await;
         let reply = result.unwrap();
-        assert_eq!(deltas, ["thought:想一下", "text:好的，", "text:我来设。"]);
+        assert_eq!(
+            deltas,
+            [
+                "thought:想一下",
+                "text:好的，",
+                "text:我来设。",
+                // 名字也可能分几段到：每段带上当时拼出来的名字，用的一方按最新的名字判断
+                r#"args:reminder_:{"sec"#,
+                r#"args:reminder.create:onds":300}"#,
+            ]
+        );
         assert_eq!(reply.text, "好的，我来设。");
         assert_eq!(reply.finish, FinishReason::ToolCalls);
         assert_eq!(
@@ -2417,4 +2429,104 @@ mod deepseek_http {
         other.provider = "dashscope".into();
         assert!(!super::super::deepseek::is_deepseek(&other));
     }
+}
+
+// ---------- 调了某些工具就停（ADR 029 第八节：只说话的一步之后不再调用模型） ----------
+
+fn stop_after(tools: &[&str]) -> AgentLimits {
+    AgentLimits {
+        stop_after: tools.iter().map(|t| t.to_string()).collect(),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn a_step_with_only_stop_tools_ends_the_turn() {
+    let model = FakeModel::new(vec![
+        calls("", vec![call("c1", "automation.list", "{}")]),
+        text("不该再调用模型"),
+    ]);
+    let tools = FakeTools::default();
+    let r = run_with(
+        &model,
+        &tools,
+        Vec::new(),
+        "列一下",
+        stop_after(&["automation.list"]),
+        &CancellationToken::default(),
+    )
+    .await;
+    assert_eq!(r.stop, StopReason::Completed);
+    assert_eq!(model.requests().len(), 1);
+    assert!(
+        matches!(r.history.last(), Some(Message::Tool { name, .. }) if name == "automation.list")
+    );
+}
+
+#[tokio::test]
+async fn a_stop_tool_with_other_tools_or_an_error_keeps_going() {
+    // 和别的工具一起调用：照常继续
+    let model = FakeModel::new(vec![
+        calls(
+            "",
+            vec![
+                call("c1", "automation.list", "{}"),
+                call("c2", "screen.read", "{}"),
+            ],
+        ),
+        text("好了"),
+    ]);
+    let r = run_with(
+        &model,
+        &FakeTools::default(),
+        Vec::new(),
+        "看看",
+        stop_after(&["automation.list"]),
+        &CancellationToken::default(),
+    )
+    .await;
+    assert_eq!(r.stop, StopReason::Completed);
+    assert_eq!(model.requests().len(), 2);
+
+    // 出错了：让模型看到错误再说
+    let model = FakeModel::new(vec![
+        calls("", vec![call("c1", "nope", "{}")]),
+        text("没成"),
+    ]);
+    let r = run_with(
+        &model,
+        &FakeTools::default(),
+        Vec::new(),
+        "试试",
+        stop_after(&["nope"]),
+        &CancellationToken::default(),
+    )
+    .await;
+    assert_eq!(model.requests().len(), 2);
+    assert!(matches!(r.history.last(), Some(Message::Assistant { text, .. }) if text == "没成"));
+}
+
+#[tokio::test]
+async fn a_stop_tool_does_not_swallow_a_steer() {
+    let inbox = Arc::new(Inbox::default());
+    let model = FakeModel::new(vec![
+        calls("", vec![call("c1", "interrupt", "{}")]),
+        text("先停下了"),
+    ]);
+    let tools = FakeTools {
+        inbox: Some(inbox.clone()),
+        ..Default::default()
+    };
+    let r = run_full(
+        &model,
+        &tools,
+        Vec::new(),
+        Message::user("按 Q"),
+        stop_after(&["interrupt"]),
+        &CancellationToken::default(),
+        Some(&inbox),
+    )
+    .await;
+    assert_eq!(r.stop, StopReason::Completed);
+    assert_eq!(model.requests().len(), 2, "插话要接着处理");
 }

@@ -14,8 +14,8 @@ use kotone_tools::ToolService;
 use serde_json::{json, Value};
 
 use crate::catalog::{
-    Catalog, Source, ToolEntry, GROUPS, HOST_BUILTINS, TOOL_ASK, TOOL_GAME_CHAT, TOOL_MEMORY,
-    TOOL_REMIND, TOOL_SAY, TOOL_SKILL_MANAGE, TOOL_SKILL_VIEW, TOOL_SOUL_WRITE,
+    Catalog, Source, ToolEntry, GROUPS, HOST_BUILTINS, TOOL_ASK, TOOL_DANMAKU, TOOL_GAME_CHAT,
+    TOOL_MEMORY, TOOL_REMIND, TOOL_SKILL_MANAGE, TOOL_SKILL_VIEW, TOOL_SOUL_WRITE, TOOL_SPEAK,
 };
 use crate::permissions::{
     self, Answer, Asker, Decide, Decision, Grants, PermissionRequest, Policy,
@@ -27,12 +27,16 @@ const MAX_FIND: usize = 12;
 
 /// 内置动作的桌面实现。
 pub trait BuiltinHost: Send + Sync {
-    /// 现在就播报 / 弹幕。`delivery` 为空 = 用户默认方式。
-    fn say(
+    /// 对玩家说一句（`speak`，ADR 029 第八节）：按回复方式念出来 / 显示在气泡、弹幕，说完（或被打断）才返回。
+    /// `call_id`：这次调用（边生成边念时已经开始念的那一路靠它找到）。
+    fn speak(
         &self,
+        call_id: &str,
         text: String,
-        delivery: Vec<DeliveryKind>,
     ) -> impl Future<Output = Result<Value, String>> + Send;
+
+    /// 在屏幕上显示一句弹幕（`danmaku`，后台用）。
+    fn danmaku(&self, text: String) -> impl Future<Output = Result<Value, String>> + Send;
 
     /// 用语音问玩家一句，再免唤醒收音 `wait_seconds` 秒，返回 `{answered, answer}`。
     fn ask(
@@ -298,7 +302,7 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
         }
     }
 
-    async fn call_builtin(&self, name: &str, arguments: &Value) -> ToolOutcome {
+    async fn call_builtin(&self, call_id: &str, name: &str, arguments: &Value) -> ToolOutcome {
         let text = arguments
             .get("text")
             .and_then(Value::as_str)
@@ -310,12 +314,16 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
             Err(e) => return ToolOutcome::error(e),
         };
         let result = match name {
-            TOOL_SAY => {
-                if text.is_empty() || text.chars().count() > 300 {
-                    return ToolOutcome::error("text 为空或超过 300 字");
-                }
-                self.host.say(text, delivery).await
+            TOOL_SPEAK | TOOL_DANMAKU if text.is_empty() || text.chars().count() > 300 => {
+                return ToolOutcome::error("text 为空或超过 300 字");
             }
+            // 玩家在打字：不念（ADR 029 第八节）
+            TOOL_SPEAK if self.scope != Scope::Game => Ok(json!({
+                "spoken": false,
+                "note": "这一轮是玩家打字的，不念出来；直接写在回复里"
+            })),
+            TOOL_SPEAK => self.host.speak(call_id, text).await,
+            TOOL_DANMAKU => self.host.danmaku(text).await,
             TOOL_ASK if self.scope != Scope::Game => {
                 return ToolOutcome::error(
                     "reply.ask 只在语音入口用；在聊天窗口里直接在回复里问玩家",
@@ -462,10 +470,10 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
         self.call_service("automation.run", request).await
     }
 
-    async fn execute(&self, entry: &ToolEntry, arguments: Value) -> ToolOutcome {
+    async fn execute(&self, call_id: &str, entry: &ToolEntry, arguments: Value) -> ToolOutcome {
         let mut outcome = match &entry.source {
             Source::Meta => self.find(&arguments),
-            Source::Builtin => self.call_builtin(&entry.name, &arguments).await,
+            Source::Builtin => self.call_builtin(call_id, &entry.name, &arguments).await,
             Source::Saved { id } => self.call_saved(id, arguments).await,
             Source::Service => self.call_service(&entry.name, arguments).await,
             // 由 `call` 直接交给桌面（要带上调用 id、取消和“每次询问”），不会走到这里。
@@ -583,6 +591,6 @@ impl<H: BuiltinHost, A: Asker> ToolPort for KotonePort<H, A> {
                 }
             }
         }
-        self.execute(entry, arguments).await
+        self.execute(call_id, entry, arguments).await
     }
 }

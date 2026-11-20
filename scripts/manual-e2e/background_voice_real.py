@@ -54,7 +54,7 @@ def after(messages, at_ms):
 
 
 def spoken_answers(messages, since_ms):
-    """Her answers in voice turns (the last text of each turn after a player's spoken message or a report)."""
+    """What she said aloud in voice turns: the `speak` text of each turn (ADR 029 §8: only speak is spoken)."""
     out = []
     current = None
     for m in messages:
@@ -64,8 +64,8 @@ def spoken_answers(messages, since_ms):
             if current and current["text"]:
                 out.append(current)
             current = {"after": m.get("source"), "text": ""}
-        elif m["role"] == "assistant" and current is not None and m.get("text", "").strip():
-            current["text"] = m["text"].strip()
+        elif m["role"] == "assistant" and current is not None and v.spoken(m):
+            current["text"] = (current["text"] + " " + v.spoken(m)).strip()
     if current and current["text"]:
         out.append(current)
     return out
@@ -79,9 +79,11 @@ def wait_report(main, since_ms, timeout):
         idx = [i for i, m in enumerate(msgs) if m["role"] == "user" and m.get("source") == "agent-report"
                and m["atMs"] >= since_ms]
         if idx:
-            rest = [m for m in msgs[idx[-1] + 1:] if m["role"] == "assistant" and m.get("text", "").strip()]
+            rest = [m for m in msgs[idx[-1] + 1:] if m["role"] == "assistant"
+                    and (v.spoken(m) or m.get("text", "").strip())]
             if rest and not any(a.get("status") in ("running", "waiting") for a in registry(main)):
-                return msgs[idx[-1]], rest[-1]
+                said = " ".join(s for s in (v.spoken(m) for m in rest) if s)
+                return msgs[idx[-1]], {"text": said or rest[-1].get("text", "").strip(), "spoken": bool(said)}
         time.sleep(1)
     return None
 
@@ -149,7 +151,7 @@ def main():
             report, answer = got
             spoke = report_spoken(mark, 30)
             back = (report["atMs"] / 1000) - said_at
-            v.check("V1: she said the result out loud (no click)", spoke and answer["text"],
+            v.check("V1: she said the result out loud with speak (no click)", spoke and answer["spoken"],
                     f"report {back:.0f} s after she was asked; she said “{answer['text'][:60]}”")
             if spoke is not None:
                 print(f"   result handed back → she starts saying it {spoke:.1f} s later")

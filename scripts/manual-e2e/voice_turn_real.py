@@ -193,6 +193,44 @@ def main_conversation():
     return json.load(open(max(files, key=os.path.getmtime), encoding="utf-8")) if files else {"messages": []}
 
 
+def spoken(message):
+    """What she said aloud in one assistant step: the text of its `speak` calls (ADR 029 §8: only speak is spoken)."""
+    out = []
+    for c in message.get("toolCalls", []) or []:
+        if c["name"] == "speak":
+            try:
+                out.append(json.loads(c["arguments"]).get("text", ""))
+            except Exception:  # noqa: BLE001
+                pass
+    return " ".join(out)
+
+
+def turn_speech(messages):
+    """For the latest player turn: (spoken text, text shown only in the chat, speak tool results, what the player said).
+    Shown-only text is the reply body plus speak's `written`."""
+    start = max(i for i, m in enumerate(messages) if m["role"] == "user" and m.get("source") != "agent-report")
+    steps = [m for m in messages[start:] if m["role"] == "assistant"]
+    said = " ".join(s for s in (spoken(m) for m in steps) if s)
+    shown = [m.get("text", "").strip() for m in steps]
+    for m in steps:
+        for c in m.get("toolCalls", []) or []:
+            if c["name"] == "speak":
+                try:
+                    shown.append(json.loads(c["arguments"]).get("written", "").strip())
+                except Exception:  # noqa: BLE001
+                    pass
+    body = " ".join(s for s in shown if s)
+    # 交给后台、她自己没说话：Kotone 替她说了“交给我，好了告诉你”（ADR 029 第八节），不算漏调 speak
+    if not said and any(c["name"] in ("agent.start", "agent.followup") for m in steps for c in m.get("toolCalls", []) or []):
+        said = "（交给后台）交给我，好了告诉你"
+    results = [m.get("content", "") for m in messages[start:] if m["role"] == "tool" and m.get("name") == "speak"]
+    return said, body, results, messages[start].get("text", "")
+
+
+VOICE_TURNS = []  # (name, spoken, body)
+PATHY = re.compile(r"[A-Za-z]:\\|\\|/[\w.-]+/|https?://|www\.|\.json|\.exe")
+
+
 TIMING = re.compile(r"voice-timing: vad→text=(\S+) text→token=(\S+) token→sound=(\S+) vad→sound=(\S+) first=(\S+) "
                     r"filler=(\S+)(?: tts=(\S+))?")
 
@@ -260,6 +298,9 @@ def main():
         mark, t = voice_turn("t1", "你好，你是谁", click=True)
         rows.append(("1 你好，你是谁", t))
         check("turn 1: answer spoken while written (stream log)", "speech stream (deepseek)" in log_since(mark))
+        said, body, _, _ = turn_speech(main_conversation()["messages"])
+        VOICE_TURNS.append(("1", said, body))
+        check("turn 1: she answered with speak", said, said)
         follow = wait_log(mark, r"follow-up: listening for 8s", 1)
         check("turn 1: listening on after she finished", follow)
 
@@ -269,21 +310,24 @@ def main():
         users = [m for m in main_conversation()["messages"] if m["role"] == "user"]
         check("turn 2: heard without pressing anything", len(users) >= 2 and users[-1].get("source") != "chat",
               users[-1].get("text") if users else "-")
+        said, body, _, _ = turn_speech(main_conversation()["messages"])
+        VOICE_TURNS.append(("2", said, body))
         time.sleep(9)  # 接着听的 8 秒过去
 
-        # 3. 工具前的一句 + 回答（两路）
+        # 3. 先查再说
         mark, t = voice_turn("t3", "帮我搜一下英雄联盟现在是哪个版本", click=True, timeout=120)
-        rows.append(("3 搜版本（工具前一句）", t))
+        rows.append(("3 搜版本（先查再说）", t))
         streams = re.findall(r"speech stream \(deepseek\): (\d+) sentences, first audio (\S+) ms", log_since(mark))
         messages = main_conversation()["messages"]
         calls = [c["name"] for m in messages if m["role"] == "assistant" for c in m.get("toolCalls", [])]
         check("turn 3: searched", "web.search" in calls, ",".join(calls[-3:]))
-        # 工具前说不说那一句由模型决定：每一步写了字就是单独的一路（边写边念）。
+        # 只念 speak 的字：一次 speak 一路（正文不念）
         start = max(i for i, m in enumerate(messages) if m["role"] == "user")
-        worded = [m.get("text", "").strip() for m in messages[start:] if m["role"] == "assistant"
-                  and m.get("text", "").strip()]
-        check("turn 3: one stream per step that had words", len(streams) == len(worded),
-              f"steps with words: {[w[:12] for w in worded]}; streams {streams}")
+        speaks = [spoken(m) for m in messages[start:] if m["role"] == "assistant" and spoken(m)]
+        check("turn 3: one stream per speak call, the body is not spoken", len(streams) == len(speaks),
+              f"speak: {[s[:12] for s in speaks]}; streams {streams}")
+        said, body, _, _ = turn_speech(messages)
+        VOICE_TURNS.append(("3", said, body))
         time.sleep(9)
 
         # 4. 长回答，开口 1.5 秒后按呼叫打断
@@ -300,9 +344,24 @@ def main():
         time.sleep(10)
         check("turn 4: no listening on after being interrupted",
               not re.search(r"follow-up: listening for", log_since(mark)))
-        last = next((m for m in reversed(main_conversation()["messages"]) if m["role"] == "assistant"), {})
-        check("turn 4: the conversation keeps only what she said", last.get("text", "").endswith("（被打断）"),
-              last.get("text", "")[:120])
+        said, body, results, _ = turn_speech(main_conversation()["messages"])
+        VOICE_TURNS.append(("4", said, body))
+        check("turn 4: the five points were written in the chat (not spoken)", len(body) > 80, body[:80])
+        check("turn 4: the speak result says what the player heard", any("玩家打断了" in r for r in results),
+              results[-1][:120] if results else "no speak result")
+
+        # 5. 容易带出路径、网址的问题：只有 speak 的字念出来，路径和网址留在正文里
+        for i, (question, keyword) in enumerate([("琴音的设置文件放在哪里", "设置文件"), ("DeepSeek 的官网是什么", "官网")]):
+            time.sleep(9)
+            guard()
+            mark, t = voice_turn(f"t5{i}", question, click=True, timeout=120)
+            rows.append((f"5 {question}", t))
+            said, body, _, heard = turn_speech(main_conversation()["messages"])
+            if not check(f"turn 5{i}: heard the question", keyword in heard, heard):
+                continue  # 识别出错时这一轮没进对话（不算她的回答）
+            VOICE_TURNS.append((f"5{i}", said, body))
+            check(f"turn 5{i}: nothing path- or URL-like was spoken", said and not PATHY.search(said),
+                  f"spoken “{said}” | body “{body[:80]}”")
 
         # 费用：每轮的语音合成都记到那一轮
         conv = main_conversation()
@@ -349,6 +408,12 @@ def main():
             print("| " + " | ".join([name, *[(g or "-") for g in t.groups()]]) + " |")
         else:
             print(f"| {name} | (no voice-timing line) |")
+    print("\n| 回合 | 念出来的（speak） | 字数 | 只在聊天里的正文 |")
+    print("| --- | --- | --- | --- |")
+    for name, said, body in VOICE_TURNS:
+        print(f"| {name} | {said or '（没有 speak）'} | {len(said)} | {body[:60]} |")
+    missing = [n for n, said, _ in VOICE_TURNS if not said]
+    print(f"speak missing: {len(missing)}/{len(VOICE_TURNS)} voice turns {missing}")
     print("\ndone:", "ALL PASS" if all(ok for _, ok in RESULTS) else "SOME FAILED")
     return all(ok for _, ok in RESULTS)
 

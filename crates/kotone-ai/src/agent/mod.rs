@@ -349,6 +349,14 @@ pub enum Delta<'a> {
     Text(&'a str),
     /// 推理内容（思考过程）。
     Thought(&'a str),
+    /// 工具调用参数（原始 JSON 文本）的一段：第 `index` 个调用，`id`、`name` 是到目前为止拼出来的。
+    /// 用来边生成边念 `speak` 的字（ADR 029 第八节）；不支持的服务商不发。
+    ToolArgs {
+        index: usize,
+        id: &'a str,
+        name: &'a str,
+        chunk: &'a str,
+    },
 }
 
 /// 模型来源。
@@ -457,6 +465,9 @@ pub struct AgentLimits {
     /// （照 OpenCode `MAX_STEPS_PROMPT`：工具清单不变，前缀缓存照样命中）。这一步模型还是调用了工具时
     /// 不执行，按步数上限结束。None = 照旧，到上限直接停。
     pub final_step_prompt: Option<String>,
+    /// 一步里只调用了这些工具、而且都成功时，执行完就结束这一轮，不再调用模型
+    /// （照 OpenAI Agents SDK `StopAtTools`；语音回合的 `speak`，ADR 029 第八节）。
+    pub stop_after: Vec<String>,
 }
 
 impl Default for AgentLimits {
@@ -474,6 +485,7 @@ impl Default for AgentLimits {
             extended_steps: 0,
             extended_duration: Duration::ZERO,
             final_step_prompt: None,
+            stop_after: Vec::new(),
         }
     }
 }
@@ -549,6 +561,13 @@ pub enum AgentEvent {
     /// 模型发起了一个工具调用（状态 pending）。
     ToolCall {
         call: ToolCall,
+    },
+    /// 流式的工具调用参数片段（见 [`Delta::ToolArgs`]）；完整的调用随后以 [`AgentEvent::ToolCall`] 报告。
+    ToolCallChunk {
+        index: usize,
+        call_id: String,
+        name: String,
+        chunk: String,
     },
     /// 工具调用状态变化；`content` 是完成 / 失败时写进对话的结果。
     ToolCallUpdate {
@@ -910,7 +929,7 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
     let mut step = 0u32;
     // 一轮最多整理一次（整理完还超就不再反复整理）。
     let mut compacted = false;
-    // 空回复（没正文、没工具调用）最多重发一次；这一轮已经调用过工具（例如用 reply.say 说过了）的不算。
+    // 空回复（没正文、没工具调用）最多重发一次；这一轮已经调用过工具（例如用 speak 说过了）的不算。
     let mut empty_retried = false;
     let mut used_tools = false;
     loop {
@@ -982,6 +1001,17 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
                 on_event(AgentEvent::MessageChunk { text: text.into() });
             }
             Delta::Thought(text) => on_event(AgentEvent::ThoughtChunk { text: text.into() }),
+            Delta::ToolArgs {
+                index,
+                id,
+                name,
+                chunk,
+            } => on_event(AgentEvent::ToolCallChunk {
+                index,
+                call_id: id.into(),
+                name: name.into(),
+                chunk: chunk.into(),
+            }),
         };
         let result = tokio::select! {
             biased;
@@ -1088,6 +1118,8 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
 
         let mut interrupted: Option<StopReason> = None;
         let mut steered = false;
+        // 这一步只调用了 `stop_after` 里的工具、而且都成功：执行完就结束这一轮。
+        let mut stop_here = calls.iter().all(|c| limits.stop_after.contains(&c.name));
         for (index, call) in calls.iter().enumerate() {
             let skipped = |reason: &str| Some(ToolOutcome::error(reason));
             let precheck = if interrupted.is_some() {
@@ -1145,6 +1177,7 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
                     }
                 },
             };
+            stop_here &= !outcome.is_error;
             let content = truncate_chars(&outcome.content, limits.max_tool_result_chars);
             on_event(AgentEvent::ToolCallUpdate {
                 call_id: call.id.clone(),
@@ -1173,6 +1206,10 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
         }
         if cancel.is_cancelled() {
             return StopReason::Cancelled;
+        }
+        // 用户插话了就接着处理（同上面“回答期间插话”）。
+        if stop_here && !steered && !inbox.is_some_and(Inbox::has_steer) {
+            return StopReason::Completed;
         }
         if tokio::time::Instant::now() >= deadline {
             return StopReason::TimeLimit;

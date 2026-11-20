@@ -22,6 +22,7 @@ pub mod permissions;
 pub mod port;
 pub mod prompt;
 pub mod roles;
+pub mod speak;
 pub mod subagents;
 pub mod workspace;
 

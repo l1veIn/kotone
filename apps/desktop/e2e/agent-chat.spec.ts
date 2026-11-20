@@ -652,3 +652,33 @@ test("what a background task spent shows up under the turn that handed it off, a
   await dialog.getByTestId("usage-tab-conversation").click();
   await expect(dialog.getByTestId("usage-conversation-breakdown")).toHaveText("对话 ¥0.0020 · 语音 ¥0.0050 · 后台 ¥0.0030");
 });
+
+test("what she said aloud (speak) reads as her words above the details, and an interruption is marked", async ({ page }) => {
+  await openChat(page);
+  await page.evaluate(async (T) => {
+    const t = window.agentTest;
+    await t.event("c-old", { kind: "appended", message: { role: "user", text: "寒冰怎么出装", source: "voice", atMs: T + 500 } });
+    await t.event("c-old", { kind: "step", step: 1 });
+    await t.event("c-old", { kind: "appended", message: {
+      role: "assistant", text: "",
+      toolCalls: [{ id: "s1", name: "speak", arguments: JSON.stringify({ text: "先出鞋和无尽，详细的我写在聊天里了", written: "1. 狂战士胫甲\n2. 无尽之刃\n3. 电刀" }) }], atMs: T + 1500,
+    } });
+    await t.event("c-old", { kind: "appended", message: { role: "tool", callId: "s1", name: "speak", content: '{"result":"玩家打断了，只说到：先出鞋和无尽，"}', isError: false, atMs: T + 4000 } });
+    await t.event("c-old", { kind: "finished", stop: { kind: "completed" }, acpStopReason: "end_turn" });
+    await t.event("c-old", { kind: "idle" });
+  }, T);
+  const turn = page.getByTestId("agent-turn").last();
+  const spoken = turn.getByTestId("agent-spoken");
+  await expect(spoken).toContainText("“先出鞋和无尽，详细的我写在聊天里了”");
+  await expect(spoken.getByTestId("agent-spoken-interrupted")).toHaveText("被打断了");
+  // 不是工具卡片；说的话在正文上面
+  await expect(turn.getByTestId("agent-tool-card")).toHaveCount(0);
+  // 只写不念的细节（written）显示在下面
+  await expect(turn.getByTestId("agent-written")).toContainText("无尽之刃");
+  const order = await turn.evaluate((el) => {
+    const s = el.querySelector('[data-testid="agent-spoken"]')!;
+    const a = el.querySelector('[data-testid="agent-written"]')!;
+    return s.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING;
+  });
+  expect(order).toBeTruthy();
+});
