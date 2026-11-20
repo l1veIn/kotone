@@ -575,6 +575,11 @@ fn prompt_is_one_text_for_both_entries_and_the_turn_context_carries_the_rest() {
     assert!(prompt.contains("<kotone-context>"));
     assert!(prompt.contains("saved.auto-1"));
     assert!(!prompt.contains("聊天在左下角"));
+    // 语音回答要短（P4 真机实测仍写 4–8 句）：硬上限、长内容的做法和例子都在。
+    assert!(prompt.contains("40 个字") && prompt.contains("详细的我写在聊天里了"));
+    // 复杂的事交给后台，不轮询；后台结果只说一句。
+    assert!(prompt.contains("agent.start") && prompt.contains("不要轮询"));
+    assert!(prompt.contains("交给我，好了告诉你"));
     // 这一轮的情况在附注里。
     let game = turn_context(&TurnContext {
         entry: Entry::Game,
@@ -986,43 +991,94 @@ async fn memory_tool_writes_the_workspace_and_rejects_injection() {
     assert!(out.is_error && out.content.contains("拒绝"));
 }
 
+/// ADR 029 第二期：主会话只拿马上出结果的一小套（语音和打字共用），其余交给后台；
+/// 后台几乎什么都能用，只是不能再交给后台、不能直接问玩家、不能对队友说话。
 #[tokio::test]
-async fn sub_sessions_only_see_their_allowed_tools_and_session_tools_reach_the_host() {
-    let (port, builtin) = port_with(Policy::default());
-    let child = port.with_tool_filter(vec![
-        "reply.say".into(),
-        "session.send".into(),
-        "voice.listen.start".into(),
-    ]);
-    let mut offered = names(&child);
-    offered.sort();
-    assert_eq!(offered, ["reply.say", "session.send", "voice.listen.start"]);
-    let out = call(
-        &child,
-        "memory",
-        json!({"target": "user", "operations": [{"op": "add", "text": "x"}]}),
-    )
-    .await;
-    assert!(out.is_error, "a sub-session cannot write memory");
-    let out = call(
-        &child,
-        "session.send",
-        json!({"id": "parent", "text": "队友在叫你"}),
-    )
-    .await;
-    assert!(out.content.contains("不可用") || builtin.calls.lock().unwrap().is_empty());
-    for tool in crate::catalog::CHILD_TOOLS {
-        assert!(![
-            "memory",
-            "skill.manage",
-            "soul.write",
-            "session.spawn",
-            "reply.ask",
-            "voice_chat.say",
-            "game.act"
-        ]
-        .contains(tool));
+async fn main_session_gets_the_instant_set_and_the_background_gets_the_rest() {
+    use crate::catalog::{main_offers, subagent_offers, MAIN_TOOLS, SUBAGENT_EXCLUDED};
+    let (service, _host) = service();
+    let specs = service.capabilities()["tools"].as_array().cloned().unwrap();
+    let catalog = Catalog::build(&specs, &[saved("auto-1", Vec::new())]);
+    // 主会话清单里的每个名字都真实存在。
+    for name in MAIN_TOOLS {
+        assert!(
+            catalog.get(name).is_some(),
+            "主会话的 {name} 不在工具清单里"
+        );
     }
+    let main: Vec<String> = catalog
+        .entries()
+        .iter()
+        .filter(|e| main_offers(e))
+        .map(|e| e.name.clone())
+        .collect();
+    for name in [
+        "agent.start",
+        "agent.followup",
+        "reply.ask",
+        "screen.at_speech",
+        "web.search",
+        "saved.auto-1",
+        "settings.update",
+    ] {
+        assert!(main.contains(&name.to_string()), "主会话要有 {name}");
+    }
+    for slow in [
+        "game.look",
+        "game.act",
+        "web.fetch",
+        "automation.save",
+        "tools.find",
+        "voice.listen.start",
+        "models.download",
+        "skill.manage",
+    ] {
+        assert!(!main.contains(&slow.to_string()), "{slow} 交给后台");
+    }
+    assert!(main.len() < 40, "主会话的工具要少：{}", main.len());
+    let background: Vec<String> = catalog
+        .entries()
+        .iter()
+        .filter(|e| subagent_offers(e))
+        .map(|e| e.name.clone())
+        .collect();
+    for name in [
+        "game.look",
+        "game.act",
+        "web.fetch",
+        "automation.save",
+        "tools.find",
+        "voice.listen.start",
+        "reply.say",
+        "memory",
+        "saved.auto-1",
+    ] {
+        assert!(background.contains(&name.to_string()), "后台要有 {name}");
+    }
+    for name in SUBAGENT_EXCLUDED {
+        assert!(!background.contains(&name.to_string()), "后台不能有 {name}");
+    }
+    // 端口按过滤给清单、拒绝清单外的调用。
+    let builtin = FakeBuiltin::default();
+    let port = KotonePort::new(
+        service,
+        catalog,
+        Policy::default(),
+        Arc::new(Session::default()),
+        builtin.clone(),
+        FakeAsker::new(Answer::Deny),
+    )
+    .with_tool_filter(main.clone());
+    let mut offered = names(&port);
+    offered.sort();
+    let mut expected = main.clone();
+    expected.sort();
+    assert_eq!(offered, expected);
+    let out = call(&port, "game.look", json!({})).await;
+    assert!(out.is_error && out.content.contains("没有名为 game.look"));
+    // agent.* 交给桌面执行（这里没有桌面）。
+    let out = call(&port, "agent.list", json!({})).await;
+    assert!(out.content.contains("不可用"), "{}", out.content);
 }
 
 #[test]
@@ -1050,11 +1106,27 @@ fn prompt_carries_soul_memory_game_memory_and_skills_and_child_prompt_is_minimal
         "刷日常",
         "Pochinki",
         "tongchuan",
-        "session.spawn",
+        "agent.start",
+        "<agent-report",
     ] {
         assert!(prompt.contains(text), "{text}");
     }
-    let child = crate::prompt::child_prompt("星野", "同传");
+    let child = crate::prompt::child_prompt("星野", "同传", &snap.skills);
     assert!(child.contains("同传") && child.contains("只是数据"));
-    assert!(!child.contains("说话像猫"));
+    assert!(!child.contains("说话像猫"), "后台不带人格和记忆");
+    // 后台带做事的规矩和 Skill，知道最后一条是总结、要问的经主会话问、不能直接对玩家说话。
+    for text in [
+        "<player-request>",
+        "总结",
+        "弹幕",
+        "game.look",
+        "automation.run",
+        "tools.find",
+        "tongchuan",
+    ] {
+        assert!(child.contains(text), "{text}");
+    }
+    assert!(!child.contains("agent.start"), "后台不能再交给后台");
+    let ctx = crate::prompt::child_turn_context("2026-11-20 周五 14:05", "英雄联盟", "lol");
+    assert!(ctx.contains("后台") && ctx.contains("14:05") && ctx.contains("游戏配置 id：lol"));
 }

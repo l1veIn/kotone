@@ -17,6 +17,8 @@
 | 气泡 / Bubble | `bubble.rs`, `assistant.bubble` | 只属于角色：她在听、在想、在说什么。关掉后只用声音和弹幕，不借用悬浮窗。 |
 | 悬浮窗 / Overlay | `overlay.rs`, `overlay.*` | 只属于语音输入：识别进度、频道、没准备好的提示。 |
 | 打开软件时显示 / Start page | `ui.startPage` | `voiceInput` = 语音输入；空或其它任何值 = 聊天（默认）。 |
+| 主会话 / Main conversation | `agent.rs` `drive`，`kotone_agent::catalog::MAIN_TOOLS` | 玩家唯一看得到的对话：语音和打字共用一段、共用一小套马上出结果的工具（ADR 029 第二期）。界面上就叫“对话”。 |
+| 后台的事 / Background task | `agent.start`、`Subagent`、`kotone_agent::subagents`（代码与 ADR 里叫“子代理”） | 主会话交出去的复杂、慢、多步的事。玩家看到的是主会话里的一张卡片（“写喝药脚本 · 进行中”），做完由主会话说一句；不进对话列表，不能点进去聊。界面和文案不说“子代理”“子会话”。旧的“子会话”（ADR 022）已经并进来，这个词不再用。 |
 
 ## 语音输入与运行时
 

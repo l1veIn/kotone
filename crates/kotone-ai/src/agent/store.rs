@@ -4,6 +4,9 @@
 //! - `index.json`：版本、当前对话（游戏内与聊天窗口共用同一段，见 ADR 014“已确认”）、各对话摘要；
 //! - `conversations/<id>.json`：一段对话的全部消息。
 //!
+//! - `subagents/<id>.json`：这段对话派出去的后台任务（ADR 029 第二期的子代理）登记。和对话文件分开存：
+//!   对话正在回答时主循环会反复保存对话，后台任务的状态由别的线程更新，分开才不会互相覆盖。
+//!
 //! 都是原子写入。索引丢失或损坏时从对话文件重建；对话文件损坏时报错，不删除。
 //! 上限：最多保留 [`MAX_CONVERSATIONS`] 段（超出删最久没更新的），每段最多
 //! [`MAX_STORED_MESSAGES`] 条：超出时只丢最后一个压缩检查点之前的（那部分已经整理成摘要、
@@ -42,6 +45,61 @@ pub struct Conversation {
     /// 模型起的标题（DeepSeek `title`，ADR 026）；没有时用第一句话。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_title: Option<String>,
+    /// 这段对话派出去的后台任务（ADR 029 第二期）。存在 `subagents/<id>.json`，不写进对话文件；
+    /// 读对话给界面时由调用方填上（[`ConversationStore::load_subagents`]）。旧对话没有。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subagents: Vec<Subagent>,
+}
+
+/// 后台任务（子代理）的状态（ADR 029 第二期）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SubagentStatus {
+    Running,
+    /// 在等玩家确认（经主会话问）。
+    Waiting,
+    Done,
+    Failed,
+    /// 被玩家或主会话停掉了。
+    Stopped,
+    /// Kotone 重启时还没做完（不自动重跑，照 Codex）。
+    Interrupted,
+}
+
+impl SubagentStatus {
+    /// 正在占用一个名额（在跑或在等确认）。
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Running | Self::Waiting)
+    }
+}
+
+/// 主会话里登记的一个后台任务。界面上是一张卡片（“写喝药脚本 · 进行中”）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Subagent {
+    /// 这段对话里稳定的英文短名（`agent.followup` 靠它找回同一个）。
+    pub name: String,
+    /// 三五个字的卡片标题。
+    pub label: String,
+    /// 它的过程记录（一段隐藏的对话，`parent` = 主会话）。
+    pub conversation_id: String,
+    pub status: SubagentStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    pub started_at_ms: u64,
+    pub updated_at_ms: u64,
+    /// 一共调用了几次模型。
+    #[serde(default)]
+    pub steps: u32,
+    /// 在等玩家确认时问的那句话。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<String>,
+    /// 做完（done / failed）的结果已经交给主会话了（先存盘再交付，重启也不丢）。
+    #[serde(default)]
+    pub reported: bool,
+    /// 派它出去（或最近一次追加任务）的那一轮：玩家那句话的时间，费用记到那一轮。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<u64>,
 }
 
 impl Conversation {
@@ -228,7 +286,40 @@ impl ConversationStore {
             parent: None,
             label: None,
             auto_title: None,
+            subagents: Vec::new(),
         }
+    }
+
+    fn subagents_path(&self, id: &str) -> PathBuf {
+        self.dir.join("subagents").join(format!("{id}.json"))
+    }
+
+    /// 这段对话派出去的后台任务（没有或读不了时为空）。
+    pub fn load_subagents(&self, id: &str) -> Vec<Subagent> {
+        if !valid_id(id) {
+            return Vec::new();
+        }
+        std::fs::read(self.subagents_path(id))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    /// 整体写回后台任务的登记（空 = 删掉文件）。
+    pub fn save_subagents(&self, id: &str, subagents: &[Subagent]) -> Result<(), String> {
+        if !valid_id(id) {
+            return Err("对话 id 无效".into());
+        }
+        let path = self.subagents_path(id);
+        if subagents.is_empty() {
+            return match std::fs::remove_file(&path) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(format!("删除后台任务记录失败：{e}")),
+            };
+        }
+        let bytes = serde_json::to_vec(subagents).map_err(|e| e.to_string())?;
+        write_atomic(&path, &bytes)
     }
 
     /// 最近更新的在前。
@@ -256,7 +347,7 @@ impl ConversationStore {
         }
         trim_messages(&mut conversation.messages);
         conversation.title = match &conversation.label {
-            Some(label) => format!("子会话：{label}"),
+            Some(label) => label.clone(),
             None => match &conversation.auto_title {
                 Some(title) if !title.trim().is_empty() => {
                     title.trim().chars().take(TITLE_CHARS).collect()
@@ -268,6 +359,8 @@ impl ConversationStore {
         // 截图不存盘（很大且很快过时）；调用方手里的对话保持原样，本轮还要用。
         let mut stored = conversation.clone();
         stored.messages.iter_mut().for_each(super::strip_images);
+        // 后台任务的登记另存（见模块说明），对话文件里不写。
+        stored.subagents.clear();
         let bytes = serde_json::to_vec(&stored).map_err(|e| e.to_string())?;
         let mut index = self.index.lock().unwrap();
         write_atomic(&self.path(&conversation.id), &bytes)?;
@@ -276,6 +369,7 @@ impl ConversationStore {
         while index.conversations.len() > MAX_CONVERSATIONS {
             if let Some(old) = index.conversations.pop() {
                 let _ = std::fs::remove_file(self.path(&old.id));
+                let _ = std::fs::remove_file(self.subagents_path(&old.id));
                 if index.current.as_deref() == Some(old.id.as_str()) {
                     index.current = None;
                 }
@@ -295,6 +389,7 @@ impl ConversationStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
             Err(e) => return Err(format!("删除对话失败：{e}")),
         };
+        let _ = std::fs::remove_file(self.subagents_path(id));
         let before = index.conversations.len();
         index.conversations.retain(|c| c.id != id);
         if index.current.as_deref() == Some(id) {

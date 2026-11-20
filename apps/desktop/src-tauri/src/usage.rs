@@ -44,6 +44,36 @@ pub fn record_model(
     });
 }
 
+/// 同 [`record_model`]，明确记到某段对话的某一轮（交给后台的事：记到派它出去的那一轮，ADR 029 第二期）。
+pub fn record_model_for(
+    kind: UsageKind,
+    provider: &str,
+    model: &str,
+    owner: &usage::Owner,
+    usage: &TokenUsage,
+) {
+    let (cost, currency) = match (usage.cost, &usage.currency, usage.cost_usd) {
+        (Some(cost), Some(currency), _) => (Some(cost), currency.clone()),
+        (_, _, Some(usd)) => (Some(usd), "USD".to_string()),
+        _ => (None, String::new()),
+    };
+    append(UsageRecord {
+        at_ms: now_ms(),
+        kind: Some(kind),
+        provider: provider.to_string(),
+        model: model.to_string(),
+        conversation: Some(owner.conversation.clone()),
+        turn: owner.turn,
+        input_tokens: usage.input_tokens,
+        cache_hit_tokens: usage.cached_input_tokens,
+        output_tokens: usage.output_tokens,
+        reasoning_tokens: usage.reasoning_tokens,
+        cost,
+        currency,
+        ..Default::default()
+    });
+}
+
 fn totals_json(t: &usage::UsageTotals) -> Value {
     json!({
         "requests": t.requests,

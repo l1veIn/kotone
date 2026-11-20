@@ -430,6 +430,69 @@ async fn step_limit_stops_with_every_call_answered() {
     assert_eq!(notices(&r.history).len(), 1);
 }
 
+/// 后台任务的最后一步：请求末尾多一句“写总结”（不写进对话），模型照做就正常结束（照 OpenCode `MAX_STEPS_PROMPT`）。
+#[tokio::test]
+async fn final_step_asks_for_a_summary_without_changing_the_tool_list() {
+    let model = FakeModel::new(vec![
+        calls("", vec![call("c1", "automation.list", "{}")]),
+        text("查到一个自动化“连按Q”，还没来得及运行。"),
+    ]);
+    let tools = FakeTools::default();
+    let limits = AgentLimits {
+        max_steps: 2,
+        final_step_prompt: Some("步数用完了：不要再调用工具，写总结".into()),
+        ..Default::default()
+    };
+    let r = run_with(
+        &model,
+        &tools,
+        Vec::new(),
+        "帮我查查",
+        limits,
+        &CancellationToken::default(),
+    )
+    .await;
+    assert_eq!(r.stop, StopReason::Completed);
+    let requests = model.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].tools, requests[1].tools, "工具清单不变");
+    let last = requests[1].messages.last().unwrap();
+    assert!(matches!(last, Message::User { text, .. } if text.contains("写总结")));
+    assert!(
+        !r.history
+            .iter()
+            .any(|m| matches!(m, Message::User { text, .. } if text.contains("写总结"))),
+        "这句话不进对话"
+    );
+    assert!(
+        matches!(r.history.last(), Some(Message::Assistant { text, .. }) if text.contains("连按Q"))
+    );
+}
+
+#[tokio::test]
+async fn final_step_tool_calls_are_answered_but_not_run() {
+    let mut model = FakeModel::new(Vec::new());
+    model.repeat = Some(reply("", vec![call("c", "automation.list", "{}")]));
+    let tools = FakeTools::default();
+    let limits = AgentLimits {
+        max_steps: 2,
+        final_step_prompt: Some("写总结".into()),
+        ..Default::default()
+    };
+    let r = run_with(
+        &model,
+        &tools,
+        Vec::new(),
+        "一直查",
+        limits,
+        &CancellationToken::default(),
+    )
+    .await;
+    assert_eq!(r.stop, StopReason::StepLimit);
+    assert_eq!(tools.log().len(), 1, "最后一步的调用不执行");
+    assert_paired(&r.history);
+}
+
 #[tokio::test]
 async fn computer_use_tools_extend_the_step_budget() {
     let mut model = FakeModel::new(Vec::new());
@@ -1449,6 +1512,63 @@ fn store_saves_lists_loads_and_deletes() {
     assert!(!store.delete(&c.id).unwrap());
     assert!(store.load(&c.id).unwrap().is_none());
     assert_eq!(store.current(), None);
+}
+
+/// 后台任务的登记另存一个文件：对话文件里不写（主循环反复存对话也盖不掉它），旧对话没有这一项，删除时一起删。
+#[test]
+fn store_keeps_subagents_beside_the_conversation() {
+    use super::store::{Subagent, SubagentStatus};
+    let dir = tempfile::tempdir().unwrap();
+    let store = ConversationStore::open(dir.path()).unwrap();
+    let mut c = store.create();
+    c.messages.push(user("帮我写个喝药脚本"));
+    store.save(&mut c).unwrap();
+    assert!(store.load_subagents(&c.id).is_empty());
+    let agent = Subagent {
+        name: "potion".into(),
+        label: "写喝药脚本".into(),
+        conversation_id: "c-child".into(),
+        status: SubagentStatus::Running,
+        summary: None,
+        started_at_ms: 1,
+        updated_at_ms: 2,
+        steps: 3,
+        question: None,
+        reported: false,
+        turn: Some(1),
+    };
+    store
+        .save_subagents(&c.id, std::slice::from_ref(&agent))
+        .unwrap();
+    // 主循环接着存对话（手里的副本没有登记）：登记还在。
+    c.messages.push(assistant("交给我，好了告诉你", vec![]));
+    store.save(&mut c).unwrap();
+    assert_eq!(store.load_subagents(&c.id), vec![agent.clone()]);
+    // 对话文件里没有这一项；带着登记的副本存盘也不写进去。
+    let mut with = c.clone();
+    with.subagents = vec![agent.clone()];
+    store.save(&mut with).unwrap();
+    let raw = std::fs::read_to_string(
+        dir.path()
+            .join("conversations")
+            .join(format!("{}.json", c.id)),
+    )
+    .unwrap();
+    assert!(!raw.contains("subagents"), "{raw}");
+    // 旧格式（没有 subagents）照样能读。
+    assert!(store.load(&c.id).unwrap().unwrap().subagents.is_empty());
+    // JSON 形状（界面按它读）。
+    let json = serde_json::to_value(&agent).unwrap();
+    assert_eq!(json["status"], "running");
+    assert_eq!(json["conversationId"], "c-child");
+    assert_eq!(json["startedAtMs"], 1);
+    store.delete(&c.id).unwrap();
+    assert!(store.load_subagents(&c.id).is_empty());
+    assert!(!dir
+        .path()
+        .join("subagents")
+        .join(format!("{}.json", c.id))
+        .exists());
 }
 
 #[test]

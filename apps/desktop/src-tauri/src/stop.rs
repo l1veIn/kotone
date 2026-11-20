@@ -6,19 +6,19 @@
 
 use tauri::AppHandle;
 
-/// 停下一切：全部自动化、琴音这一轮（含正在操作游戏）、她派出的子会话和监听、正在念的话。
+/// 停下一切：全部自动化、琴音这一轮（含正在操作游戏）、交给后台的事和它们的监听、正在念的话。
 /// 返回是否真的停下了什么（都没在跑时为 false）。
 pub fn stop_everything(app: &AppHandle, reason: &str) -> bool {
     let automations = crate::automation::stop(app, None, reason);
     let acting = crate::computer_use::stop_all(app, reason);
-    // 琴音派出的子会话（同传等）和它们名下的监听一起停（ADR 022）。
+    // 交给后台的事（同传等）和它们名下的监听一起停（ADR 029 第二期）。
     let children = crate::agent::stop_all_children(app, reason);
     // 结束这一轮（不再自动重试，ADR 019）；0.1.x 用户还没启用琴音时没有这一轮。
     let turn = crate::agent::stop(app).unwrap_or(false);
     // 正在念的回答、弹幕一起收掉。
     crate::assistant::stop_speech(app.clone());
     kotone_core::log::log(&format!(
-        "停下（{reason}）：自动化 {automations} 个，操作 {acting}，子会话 {children} 个，这一轮 {turn}"
+        "停下（{reason}）：自动化 {automations} 个，操作 {acting}，后台 {children} 件，这一轮 {turn}"
     ));
     automations > 0 || acting || children > 0 || turn
 }

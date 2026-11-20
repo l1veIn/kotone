@@ -58,12 +58,14 @@ const ALLOWED_EFFECTS: &[&str] = &[
     "cancels-download",
     "writes-automations",
     "focuses-window",
-    // ADR 021 / 022：记忆只由主会话写、过注入扫描；派子会话、传话、监听都在玩家开口后发生，
-    // 而且有“正在听”的提示（子会话不能问玩家，所以监听不能默认询问）。
+    // ADR 021 / 022：记忆过注入扫描；监听有“正在听”的提示。
+    // ADR 029 第二期：交给后台只在玩家开口的那一轮能做（桌面端检查），后台要确认的事经主会话问玩家。
     "writes-memory",
     "spawns-session",
     "sends-session",
     "stops-session",
+    "delegates-task",
+    "stops-task",
     "listens-to-game-audio",
     // 请玩家粘贴 Key：输入框本身就是玩家的同意，Key 不经过模型。
     "requests-credentials",

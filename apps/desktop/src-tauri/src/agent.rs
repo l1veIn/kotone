@@ -12,19 +12,19 @@
 //!
 //! 不做：游戏内入口与快速模式（第 4 步）、切换到游戏窗口（第 5 步）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use kotone_agent::catalog::{saved_entry, Catalog, MAX_SAVED_TOOLS, SAVED_PREFIX};
 use kotone_agent::port::{BuiltinHost, KotonePort, Scope, Session};
 use kotone_agent::prompt::{
-    capability_overview, child_prompt, system_prompt, turn_context, AsrState, Calling, Entry,
-    PromptContext, TurnContext,
+    capability_overview, child_prompt, child_turn_context, system_prompt, turn_context, AsrState,
+    Calling, Entry, PromptContext, TurnContext,
 };
 use kotone_agent::workspace::Workspace;
 use kotone_agent::{Answer, Asker, PermissionRequest};
 use kotone_ai::agent::model::AgentModel;
-use kotone_ai::agent::store::{Conversation, ConversationStore};
+use kotone_ai::agent::store::{Conversation, ConversationStore, Subagent, SubagentStatus};
 use kotone_ai::agent::{
     now_ms, run_turn, AgentEvent, AgentLimits, Attachment, Inbox, Message, StopReason, ToolStatus,
     Turn,
@@ -72,10 +72,16 @@ fn chat_limits() -> AgentLimits {
 /// 消息来源 → 入口：聊天窗口里打的字是聊天，其余（热键语音、快捷指令、工具）都在游戏里。
 fn entry_of(message: &Message) -> Entry {
     match message {
-        Message::User { source, .. } if source == "chat" || source == "assistant-text" => {
-            Entry::Chat
-        }
+        Message::User { source, .. } => entry_of_source(source),
         _ => Entry::Game,
+    }
+}
+
+fn entry_of_source(source: &str) -> Entry {
+    if source == "chat" || source == "assistant-text" {
+        Entry::Chat
+    } else {
+        Entry::Game
     }
 }
 
@@ -85,33 +91,36 @@ struct Running {
     inbox: Arc<Inbox>,
 }
 
-/// 子会话（ADR 022）：琴音派出去的会话，有自己的模型、工具范围和名下的监听。
+/// 交给后台的一件事（子代理，ADR 029 第二期）：它属于哪段主会话、叫什么、费用记到哪一轮。
 #[derive(Clone)]
 pub struct ChildSpec {
     pub parent: String,
+    pub name: String,
     pub label: String,
-    pub tools: Vec<String>,
-    pub model: Option<String>,
-    pub thinking: String,
+    /// 派它出去（或最近一次追加要求）的那一轮：模型、搜索的费用记到主会话的这一轮。
+    pub owner: kotone_core::usage::Owner,
 }
 
 struct Child {
     spec: ChildSpec,
     running: Option<Running>,
-    /// 等子会话回复的人（父会话的 `session.spawn` / `session.send`），按消息的标记对应。
-    waiters: HashMap<String, oneshot::Sender<String>>,
+    /// 等这一轮结果的 `agent.start` / `agent.followup`（最多 4 秒），按任务消息的来源编号对应。
+    waiters: HashMap<String, oneshot::Sender<(SubagentStatus, String)>>,
+    /// 在等玩家确认：界面上点了按钮（`agent_subagent_answer`）就交回这里。
+    ask: Option<oneshot::Sender<Answer>>,
 }
-
-/// 子会话最多几个（OpenClaw `maxChildrenPerAgent` 默认 5）。
-const MAX_CHILDREN: usize = 5;
-/// 等子会话回复最多多久。
-const CHILD_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
 #[derive(Default)]
 struct Inner {
     running: Option<Running>,
-    /// 子会话 id → 状态（只在内存里；Kotone 重启后子会话只剩记录）。
+    /// 后台的事：它那段对话的 id → 运行时状态（只在内存里；重启后只剩登记和记录）。
     children: HashMap<String, Child>,
+    /// 主会话 id → 交给后台的事的登记（[`registry`] 第一次用时从盘上读）。
+    registries: HashMap<String, Vec<Subagent>>,
+    /// 主会话 id → 玩家最近一次在这段对话里是怎么说的（结果交回、要确认时照它开口或写字）。
+    last_entry: HashMap<String, Entry>,
+    /// 正在等主会话空下来、要把结果交回去的主会话。
+    reporting: HashSet<String>,
     next_tag: u64,
     /// 每段对话跨轮保留的状态（tools.find 启用的工具、“本段对话都允许”）。只在内存里。
     sessions: HashMap<String, Arc<Session>>,
@@ -380,7 +389,13 @@ async fn drive(
     let mut next = Some(first);
     loop {
         while let Some(user) = next.take() {
-            let entry = entry_of(&user);
+            let entry = entry_for(&app, &conversation.id, &user);
+            let report = is_report(&user);
+            if !report && is_player_message(&user) {
+                remember_entry(&app, &conversation.id, entry);
+                // 后台还有没交回的结果（主会话一直没空、或者 Kotone 重启过）：放在玩家这句话前面一起交给模型。
+                inject_pending_reports(&app, &mut conversation);
+            }
             let start = conversation.messages.len();
             inbox.take_delivered();
             let owner = turn_owner(&conversation.id, &user);
@@ -391,7 +406,9 @@ async fn drive(
             } else {
                 None
             };
-            let filler = (entry == Entry::Game).then(|| progress_filler(&app, &cancel, owner));
+            // 后台的结果交回时不接“我看看”（玩家没在等）。
+            let filler =
+                (entry == Entry::Game && !report).then(|| progress_filler(&app, &cancel, owner));
             let stop = turn(
                 &app,
                 &mut conversation,
@@ -466,6 +483,42 @@ async fn drive(
     emit(&app, &conversation.id, json!({"kind": "idle"}));
 }
 
+/// 这一轮从哪个入口来：后台交回的结果跟随玩家最近一次说话的方式（用嘴说的就开口说一句，打字的就写一句）。
+fn entry_for(app: &AppHandle, conversation: &str, user: &Message) -> Entry {
+    if is_report(user) {
+        return last_entry(app, conversation).unwrap_or(Entry::Chat);
+    }
+    entry_of(user)
+}
+
+fn is_report(message: &Message) -> bool {
+    matches!(message, Message::User { source, .. } if source == kotone_agent::subagents::REPORT_SOURCE)
+}
+
+fn is_player_message(message: &Message) -> bool {
+    matches!(message, Message::User { source, .. } if kotone_agent::subagents::is_player_source(source))
+}
+
+/// 把还没交回的后台结果记进对话（不单独调用模型，玩家这句话的这一轮一起看）。
+fn inject_pending_reports(app: &AppHandle, conversation: &mut Conversation) {
+    let reports = take_unreported(app, &conversation.id);
+    if reports.is_empty() {
+        return;
+    }
+    let message = report_message(&reports);
+    conversation.messages.push(message.clone());
+    if let Ok(store) = store(app) {
+        if let Err(e) = store.save(conversation) {
+            log::log(&format!("agent: save failed: {e}"));
+        }
+    }
+    emit(
+        app,
+        &conversation.id,
+        event_json(&AgentEvent::Appended { message }),
+    );
+}
+
 /// 开始前就失败（没有连接、工具服务未就绪）：把用户的话和原因记进对话。
 fn fail_early(
     app: &AppHandle,
@@ -537,18 +590,9 @@ async fn turn(
         Ok(c) => c,
         Err(e) => return fail_early(app, &store, conversation, user, e),
     };
-    // 子会话可以换一个（更快更便宜的）模型（OpenClaw `subagents.model`）。
-    if let Some(spec) = child {
-        let model = spec
-            .model
-            .clone()
-            .filter(|m| !m.trim().is_empty())
-            .or_else(|| {
-                Some(settings.agent.subagents.model.clone()).filter(|m| !m.trim().is_empty())
-            });
-        if let Some(model) = model {
-            connection.model = model;
-        }
+    // 后台可以换一个模型（OpenClaw `subagents.model`；空 = 和琴音同一个）。
+    if child.is_some() && !settings.agent.subagents.model.trim().is_empty() {
+        connection.model = settings.agent.subagents.model.trim().to_string();
     }
     let Some(service) = crate::tool_service::service(app) else {
         return fail_early(
@@ -565,7 +609,17 @@ async fn turn(
         .unwrap_or_default();
     let automations = offered_automations(app, &settings.agent.hidden_automations);
     let catalog = Catalog::build(&specs, &automations);
-    // “你能做什么”按这段对话真实的工具清单回答（ADR 028）；只给和玩家对话的主会话。
+    // 主会话只拿马上出结果的一小套，后台几乎全给（ADR 029 第二期）；一段对话里清单不变。
+    let offered: Vec<String> = catalog
+        .entries()
+        .iter()
+        .filter(|e| match child {
+            Some(_) => kotone_agent::catalog::subagent_offers(e),
+            None => kotone_agent::catalog::main_offers(e),
+        })
+        .map(|e| e.name.clone())
+        .collect();
+    // “你能做什么”按真实能做的事回答（ADR 028）；只给和玩家对话的主会话。
     let capabilities = if child.is_none() {
         capability_overview(&catalog)
     } else {
@@ -589,33 +643,34 @@ async fn turn(
     let provider = connection.provider.clone();
     let model_id = connection.model.clone();
     let ws = workspace();
+    // 玩家这一轮说的原话（只有它能交给后台，ADR 030 第 2 节）：玩家的话进对话时记下。
+    let player: PlayerWords = Arc::default();
     let port = KotonePort::new(
         service,
         catalog,
         settings.agent.permissions.clone(),
         session,
         DesktopBuiltins {
-            voice: entry == Entry::Game,
+            voice: entry == Entry::Game && child.is_none(),
+            subagent: child.is_some(),
             app: app.clone(),
             session: format!("agent:{}", conversation.id),
+            player: player.clone(),
         },
         DesktopAsker {
             app: app.clone(),
             conversation_id: conversation.id.clone(),
             entry,
-            child: child.is_some(),
+            child: child.cloned(),
         },
     )
-    .with_scope(if entry == Entry::Game {
+    .with_scope(if entry == Entry::Game && child.is_none() {
         Scope::Game
     } else {
         Scope::Full
     })
-    .with_workspace(ws.clone());
-    let port = match child {
-        Some(spec) => port.with_tool_filter(spec.tools.clone()),
-        None => port,
-    };
+    .with_workspace(ws.clone())
+    .with_tool_filter(offered);
     let profile = crate::companion::active_profile(&settings);
     let session_state = runtime(app).ok().and_then(|rt| {
         rt.inner
@@ -636,7 +691,7 @@ async fn turn(
     // 每轮会变的（入口、当前游戏、时间）写进这条消息前面的附注。
     let system = {
         let make = || match child {
-            Some(spec) => child_prompt(&snapshot.name, &spec.label),
+            Some(spec) => child_prompt(&snapshot.name, &spec.label, &snapshot.skills),
             None => system_prompt(&PromptContext {
                 automations: &automations,
                 workspace: Some(&snapshot),
@@ -648,10 +703,10 @@ async fn turn(
             None => make(),
         }
     };
-    if child.is_none() {
-        if let Message::User { context, .. } = &mut user {
-            if context.is_empty() {
-                *context = main_turn_context(
+    if let Message::User { context, .. } = &mut user {
+        if context.is_empty() {
+            *context = match child {
+                None => main_turn_context(
                     app,
                     &settings,
                     entry,
@@ -659,14 +714,16 @@ async fn turn(
                     &snapshot,
                     session_state.as_deref(),
                     &ws,
-                );
-            }
+                ),
+                Some(_) => child_turn_context(
+                    &kotone_core::agent::now_label(),
+                    profile.display_name.trim(),
+                    &profile.id,
+                ),
+            };
         }
     }
     let mut model = AgentModel::for_connection(connection);
-    if child.is_some_and(|spec| spec.thinking != "default") {
-        model.set_max_tokens(1024);
-    }
     // DeepSeek 官方最佳实践（ADR 026）：内容审核、思考强度、会话标题。
     let title_cell: Arc<Mutex<Option<String>>> = Arc::default();
     if let Some(deepseek) = model.deepseek() {
@@ -684,22 +741,30 @@ async fn turn(
             }));
         }
     }
-    let mut limits = match child {
-        Some(_) => AgentLimits {
-            max_steps: 8,
-            max_duration: std::time::Duration::from_secs(90),
-            ..AgentLimits::default()
+    let limits = match child {
+        Some(_) => subagent_limits(settings.agent.compact_at_tokens),
+        None if entry == Entry::Game => AgentLimits {
+            compact_at_tokens: settings.agent.compact_at_tokens,
+            ..game_limits()
         },
-        None if entry == Entry::Game => game_limits(),
-        None => chat_limits(),
+        None => AgentLimits {
+            compact_at_tokens: settings.agent.compact_at_tokens,
+            ..chat_limits()
+        },
     };
-    limits.compact_at_tokens = settings.agent.compact_at_tokens;
     let conversation_id = conversation.id.clone();
     let shared = Mutex::new(conversation.clone());
     let tool_names: Mutex<HashMap<String, String>> = Mutex::default();
     // 语音入口的主会话：计时、工具前的一句马上念（ADR 029 §一、§七）。
     let voice_main = entry == Entry::Game && child.is_none();
     let revised_now = std::sync::atomic::AtomicBool::new(false);
+    // 后台的费用记到派它出去的那段对话、那一轮（玩家在聊天里看得到这件事花了多少）。
+    let record_usage = |kind, usage: &kotone_ai::agent::TokenUsage| match child {
+        Some(spec) => {
+            crate::usage::record_model_for(kind, &provider, &model_id, &spec.owner, usage)
+        }
+        None => crate::usage::record_model(kind, &provider, &model_id, &conversation_id, usage),
+    };
     let on_event = |event: AgentEvent| {
         if voice_main
             && matches!(
@@ -740,14 +805,31 @@ async fn turn(
             }
         }
         match &event {
-            // 玩家的话（含插话）进了对话：这之后的读屏、搜索费用记到这一轮。
+            // 玩家的话（含插话）进了对话：这之后的读屏、搜索费用记到这一轮；记下原话（能交给后台）
+            // 和他是怎么说的（后台的结果、确认照它开口或写字）。
             AgentEvent::Appended {
-                message: Message::User { at_ms, .. },
+                message:
+                    Message::User {
+                        at_ms,
+                        source,
+                        text,
+                        ..
+                    },
             } if child.is_none() => {
                 kotone_core::usage::set_turn(Some(kotone_core::usage::Owner {
                     conversation: conversation_id.clone(),
                     turn: Some(*at_ms),
                 }));
+                if kotone_agent::subagents::is_player_source(source) {
+                    *player.lock().unwrap() = Some((text.clone(), *at_ms));
+                    remember_entry(app, &conversation_id, entry_of_source(source));
+                }
+            }
+            // 后台每调用一次模型，卡片上的“第 n 步”加一。
+            AgentEvent::StepStarted { .. } => {
+                if let Some(spec) = child {
+                    update_subagent(app, &spec.parent, &spec.name, |a| a.steps += 1);
+                }
             }
             // 语音入口：模型在调用工具前说的一句（“我查一下”）马上念，工具同时在跑
             // （照 OpenAI 实时语音提示词指南、Pipecat、Retell `speak_during_execution`）。
@@ -788,13 +870,7 @@ async fn turn(
                     usage: Some(usage), ..
                 } = message
                 {
-                    crate::usage::record_model(
-                        kotone_core::usage::UsageKind::Chat,
-                        &provider,
-                        &model_id,
-                        &conversation_id,
-                        usage,
-                    );
+                    record_usage(kotone_core::usage::UsageKind::Chat, usage);
                 }
             }
             AgentEvent::Compacted { index, message } => {
@@ -808,13 +884,7 @@ async fn turn(
                     usage: Some(usage), ..
                 } = message
                 {
-                    crate::usage::record_model(
-                        kotone_core::usage::UsageKind::Compaction,
-                        &provider,
-                        &model_id,
-                        &conversation_id,
-                        usage,
-                    );
+                    record_usage(kotone_core::usage::UsageKind::Compaction, usage);
                 }
                 log::log(&format!(
                     "agent: compacted conversation {conversation_id} at {at}"
@@ -823,13 +893,7 @@ async fn turn(
             AgentEvent::Discarded { usage } => {
                 log::log("agent: empty reply discarded, asking again");
                 if let Some(usage) = usage {
-                    crate::usage::record_model(
-                        kotone_core::usage::UsageKind::Chat,
-                        &provider,
-                        &model_id,
-                        &conversation_id,
-                        usage,
-                    );
+                    record_usage(kotone_core::usage::UsageKind::Chat, usage);
                 }
             }
             AgentEvent::StepStarted { .. } if entry == Entry::Game => {
@@ -1418,11 +1482,18 @@ pub fn on_run_finished(app: &AppHandle, run: &Run) {
     };
     {
         let inner = rt.inner.lock().unwrap();
-        if let Some(running) = inner
+        // 主会话或后台的那件事还在做：作为插话交给它。
+        let running = inner
             .running
             .as_ref()
             .filter(|r| r.conversation_id == conversation_id)
-        {
+            .or_else(|| {
+                inner
+                    .children
+                    .get(&conversation_id)
+                    .and_then(|c| c.running.as_ref())
+            });
+        if let Some(running) = running {
             running.inbox.steer(message);
             return;
         }
@@ -1452,8 +1523,12 @@ struct DesktopBuiltins {
     app: AppHandle,
     /// 语音入口的一轮：说的话走对话气泡。
     voice: bool,
+    /// 后台的一件事：不能对玩家开口，`reply.say` 只发弹幕（ADR 029 第三节）。
+    subagent: bool,
     /// 写进执行记录的发起方：`agent:<对话 id>`。
     session: String,
+    /// 玩家这一轮说的原话（交给后台时附上）。
+    player: PlayerWords,
 }
 
 fn delivery_names(kinds: &[DeliveryKind]) -> Vec<&'static str> {
@@ -1476,16 +1551,22 @@ impl BuiltinHost for DesktopBuiltins {
     async fn builtin(&self, tool: &str, arguments: &Value) -> Result<Value, String> {
         let caller = self.conversation_id();
         match tool {
-            "session.spawn" => spawn_child(&self.app, &caller, arguments).await,
-            "session.send" => session_send(&self.app, &caller, arguments).await,
-            "session.list" => session_list(&self.app, &caller),
-            "session.history" => session_history(&self.app, &caller, arguments),
-            "session.stop" => {
-                let id = arguments.get("id").and_then(Value::as_str).unwrap_or("");
-                if !is_child_of(&self.app, id, &caller) {
-                    return Err(format!("{id} 不是你派出的子会话"));
+            kotone_agent::catalog::TOOL_AGENT_START => {
+                agent_start(&self.app, &caller, &self.player, arguments).await
+            }
+            kotone_agent::catalog::TOOL_AGENT_FOLLOWUP => {
+                agent_followup(&self.app, &caller, &self.player, arguments).await
+            }
+            kotone_agent::catalog::TOOL_AGENT_LIST => agent_list(&self.app, &caller),
+            kotone_agent::catalog::TOOL_AGENT_STOP => {
+                let name = str_arg(arguments, "name");
+                if !subagents_of(&self.app, &caller)
+                    .iter()
+                    .any(|a| a.name == name)
+                {
+                    return Err(format!("没有叫 {name} 的后台任务（agent.list 看看）"));
                 }
-                Ok(json!({"stopped": stop_child(&self.app, id, "父会话结束了它")}))
+                Ok(json!({"stopped": stop_subagent(&self.app, &caller, name, "主会话停掉了它")}))
             }
             "connections.request_key" => {
                 crate::key_request::request(&self.app, &caller, self.voice, arguments).await
@@ -1516,6 +1597,13 @@ impl BuiltinHost for DesktopBuiltins {
     }
 
     async fn say(&self, text: String, delivery: Vec<DeliveryKind>) -> Result<Value, String> {
+        // 后台不能对玩家开口：只发弹幕（同传就靠弹幕）。
+        if self.subagent {
+            let delivered =
+                crate::assistant::deliver_text(&self.app, text, vec![DeliveryKind::Danmaku])
+                    .await?;
+            return Ok(json!({"delivered": delivery_names(&delivered), "note": "后台只能发弹幕"}));
+        }
         LAST_SAY_MS.store(now_ms(), std::sync::atomic::Ordering::SeqCst);
         // 合成费用记到这一轮（子会话记到它自己）。
         let owner = kotone_core::usage::current_turn()
@@ -1605,18 +1693,14 @@ struct DesktopAsker {
     app: AppHandle,
     conversation_id: String,
     entry: Entry,
-    /// 子会话不能问玩家（Hermes 禁 `clarify`）：要询问的一律按拒绝处理。
-    child: bool,
+    /// 后台的一件事：不自己弹窗，经主会话问玩家（ADR 029 第三节）。
+    child: Option<ChildSpec>,
 }
 
 impl Asker for DesktopAsker {
     async fn ask(&self, request: PermissionRequest, cancel: &CancellationToken) -> Answer {
-        if self.child {
-            log::log(&format!(
-                "agent: sub-session asked for {}; refused",
-                request.tool
-            ));
-            return Answer::Deny;
+        if let Some(spec) = &self.child {
+            return subagent_ask(&self.app, spec, &self.conversation_id, request, cancel).await;
         }
         let (tx, rx) = oneshot::channel();
         let ask_id = {
@@ -1871,10 +1955,16 @@ pub fn state(app: &AppHandle) -> Result<Value, String> {
         .map(|r| r.conversation_id.clone());
     let settings = settings(app);
     let ready = crate::companion::connection_ready(app, &settings).err();
+    // 交给后台的事的记录（`parent` 不为空）不进对话列表，只在主会话里是一张卡片（ADR 029 第二期）。
+    let conversations: Vec<_> = store
+        .list()
+        .into_iter()
+        .filter(|c| c.parent.is_none())
+        .collect();
     Ok(json!({
         "current": store.current(),
         "running": running,
-        "conversations": store.list(),
+        "conversations": conversations,
         "notReadyReason": ready,
         "permissions": settings.agent.permissions,
     }))
@@ -1917,7 +2007,11 @@ pub fn agent_state(app: AppHandle) -> Result<Value, String> {
 
 #[tauri::command]
 pub fn agent_conversation(app: AppHandle, id: String) -> Result<Option<Conversation>, String> {
-    store(&app)?.load(&id)
+    let mut conversation = store(&app)?.load(&id)?;
+    if let Some(c) = &mut conversation {
+        c.subagents = subagents_of(&app, &id);
+    }
+    Ok(conversation)
 }
 
 /// 新对话：下一条消息开始一段新的对话。
@@ -1995,20 +2089,183 @@ pub fn agent_delete_conversation(app: AppHandle, id: String) -> Result<bool, Str
         return Err("这段对话正在进行，请先停止".into());
     }
     rt.inner.lock().unwrap().sessions.remove(&id);
-    store(&app)?.delete(&id)
-}
-
-// ---------- 子会话（ADR 022，照 OpenClaw sessions_*） ----------
-
-fn is_child_of(app: &AppHandle, id: &str, parent: &str) -> bool {
-    runtime(app).is_ok_and(|rt| {
+    // 交给后台的事一起停、一起删（它们只在这段对话里看得到）。
+    let store = store(&app)?;
+    for agent in subagents_of(&app, &id) {
+        stop_subagent(&app, &id, &agent.name, "对话删除了");
         rt.inner
             .lock()
             .unwrap()
-            .children
-            .get(id)
-            .is_some_and(|c| c.spec.parent == parent)
+            .sessions
+            .remove(&agent.conversation_id);
+        if let Err(e) = store.delete(&agent.conversation_id) {
+            log::log(&format!("agent: delete background record failed: {e}"));
+        }
+    }
+    {
+        let mut inner = rt.inner.lock().unwrap();
+        inner.registries.remove(&id);
+        inner.last_entry.remove(&id);
+    }
+    store.delete(&id)
+}
+
+/// 一件后台的事一步步做了什么（卡片展开时看；同时间线一样的消息）。
+#[tauri::command]
+pub fn agent_subagent_messages(
+    app: AppHandle,
+    conversation_id: String,
+    name: String,
+) -> Result<Value, String> {
+    let agent = subagents_of(&app, &conversation_id)
+        .into_iter()
+        .find(|a| a.name == name)
+        .ok_or("找不到这件事")?;
+    let messages = store(&app)?
+        .load(&agent.conversation_id)?
+        .map(|c| c.messages)
+        .unwrap_or_default();
+    Ok(json!({"messages": messages}))
+}
+
+/// 卡片上的“停止”。
+#[tauri::command]
+pub fn agent_subagent_stop(app: AppHandle, conversation_id: String, name: String) -> bool {
+    stop_subagent(&app, &conversation_id, &name, "玩家点了停止")
+}
+
+/// 卡片上的“继续”（上次没做完 Kotone 就关了，或者被停了）：相当于玩家说“继续刚才的事”。
+#[tauri::command]
+pub async fn agent_subagent_continue(
+    app: AppHandle,
+    conversation_id: String,
+    name: String,
+) -> Result<Value, String> {
+    resume(
+        &app,
+        &conversation_id,
+        &name,
+        "（玩家在聊天里点了“继续”）",
+        now_ms(),
+        "继续刚才没做完的事。",
+        false,
+    )
+    .await
+}
+
+/// 卡片上的“允许 / 本次对话都允许 / 拒绝”。返回是否交到了在等的那次确认。
+#[tauri::command]
+pub fn agent_subagent_answer(
+    app: AppHandle,
+    conversation_id: String,
+    name: String,
+    answer: String,
+) -> Result<bool, String> {
+    let answer = match answer.as_str() {
+        "allow-once" => Answer::AllowOnce,
+        "allow-conversation" | "allow-for-conversation" => Answer::AllowForConversation,
+        "deny" => Answer::Deny,
+        other => return Err(format!("不认识的回答：{other}")),
+    };
+    let Some(agent) = subagents_of(&app, &conversation_id)
+        .into_iter()
+        .find(|a| a.name == name)
+    else {
+        return Ok(false);
+    };
+    let sender = runtime(&app)?
+        .inner
+        .lock()
+        .unwrap()
+        .children
+        .get_mut(&agent.conversation_id)
+        .and_then(|c| c.ask.take());
+    Ok(sender.is_some_and(|tx| tx.send(answer).is_ok()))
+}
+
+// ---------- 交给后台的事（子代理，ADR 029 第二期；照 Codex / OpenCode / Goose） ----------
+//
+// - 主会话用 `agent.start` / `agent.followup` 派活，最多等 4 秒：做完了当同步结果，没做完就让主会话
+//   说“好了告诉你”结束这一轮（`kotone_agent::subagents`）；
+// - 一件事是一段隐藏的对话（`parent` = 主会话），登记在主会话的 `subagents/<id>.json`；
+// - 一轮做完先存盘登记（`reported = false`）再交回：主会话空下来（她没在回答、玩家没在说话）就插一条
+//   `agent-report` 消息并唤醒主会话说一句；玩家先开口了就在那一轮前面带上；
+// - 要玩家确认的事经主会话问：玩家最近是用嘴说的就开口问，打字的就在卡片上点。
+
+/// 玩家这一轮说的原话和时间（只有玩家说的话能交给后台，ADR 030 第 2 节）。
+type PlayerWords = Arc<Mutex<Option<(String, u64)>>>;
+
+fn subagent_limits(compact_at_tokens: u64) -> AgentLimits {
+    use kotone_agent::subagents as sa;
+    AgentLimits {
+        max_steps: sa::MAX_STEPS,
+        max_duration: sa::MAX_DURATION,
+        extend_on: kotone_agent::catalog::COMPUTER_USE_TOOLS
+            .iter()
+            .map(|t| t.to_string())
+            .collect(),
+        extended_steps: sa::EXTENDED_STEPS,
+        extended_duration: sa::EXTENDED_DURATION,
+        final_step_prompt: Some(sa::MAX_STEPS_PROMPT.into()),
+        compact_at_tokens,
+        ..AgentLimits::default()
+    }
+}
+
+/// 主会话的后台登记（第一次用时从盘上读；读时把上次没做完的改成“中断了”，不自动重跑）。
+fn registry<'a>(
+    inner: &'a mut Inner,
+    store: &ConversationStore,
+    main: &str,
+) -> &'a mut Vec<Subagent> {
+    inner.registries.entry(main.to_string()).or_insert_with(|| {
+        let mut list = store.load_subagents(main);
+        if kotone_agent::subagents::interrupt_stale(&mut list, now_ms()) {
+            if let Err(e) = store.save_subagents(main, &list) {
+                log::log(&format!("agent: save subagents failed: {e}"));
+            }
+        }
+        list
     })
+}
+
+/// 这段对话交给后台的事（给界面）。
+fn subagents_of(app: &AppHandle, main: &str) -> Vec<Subagent> {
+    let (Ok(rt), Ok(store)) = (runtime(app), store(app)) else {
+        return Vec::new();
+    };
+    let mut inner = rt.inner.lock().unwrap();
+    registry(&mut inner, &store, main).clone()
+}
+
+fn emit_subagent(app: &AppHandle, main: &str, info: &Subagent) {
+    // 和其余 agent 事件一样用 `kind` 区分（界面也认 `type`）。
+    emit(app, main, json!({"kind": "subagent", "info": info}));
+}
+
+/// 改一件事的登记：存盘、通知界面。返回改后的样子。
+fn update_subagent(
+    app: &AppHandle,
+    main: &str,
+    name: &str,
+    change: impl FnOnce(&mut Subagent),
+) -> Option<Subagent> {
+    let rt = runtime(app).ok()?;
+    let store = store(app).ok()?;
+    let info = {
+        let mut inner = rt.inner.lock().unwrap();
+        let list = registry(&mut inner, &store, main);
+        let agent = list.iter_mut().find(|a| a.name == name)?;
+        change(agent);
+        agent.updated_at_ms = now_ms();
+        let info = agent.clone();
+        if let Err(e) = store.save_subagents(main, list) {
+            log::log(&format!("agent: save subagents failed: {e}"));
+        }
+        info
+    };
+    emit_subagent(app, main, &info);
+    Some(info)
 }
 
 fn child_spec(app: &AppHandle, id: &str) -> Option<ChildSpec> {
@@ -2022,130 +2279,333 @@ fn child_spec(app: &AppHandle, id: &str) -> Option<ChildSpec> {
         .map(|c| c.spec.clone())
 }
 
+/// 费用记到谁：后台的记到派它出去的那一轮（主会话 + 玩家那句话），主会话的记到正在跑的这一轮。
+pub fn cost_owner(app: &AppHandle, caller: &str) -> Option<kotone_core::usage::Owner> {
+    if caller.is_empty() {
+        return None;
+    }
+    if let Some(spec) = child_spec(app, caller) {
+        return Some(spec.owner);
+    }
+    Some(
+        kotone_core::usage::current_turn()
+            .filter(|t| t.conversation == caller)
+            .unwrap_or(kotone_core::usage::Owner {
+                conversation: caller.to_string(),
+                turn: None,
+            }),
+    )
+}
+
 fn new_tag(app: &AppHandle) -> String {
     let Ok(rt) = runtime(app) else {
-        return "parent:0".into();
+        return format!("{}:0", kotone_agent::subagents::TASK_SOURCE);
     };
     let mut inner = rt.inner.lock().unwrap();
     inner.next_tag += 1;
-    format!("parent:{}", inner.next_tag)
+    format!(
+        "{}:{}",
+        kotone_agent::subagents::TASK_SOURCE,
+        inner.next_tag
+    )
 }
 
-/// `session.spawn`：建一个子会话，把任务作为第一条消息发给它，等它第一轮的回复。
-async fn spawn_child(app: &AppHandle, caller: &str, arguments: &Value) -> Result<Value, String> {
-    if child_spec(app, caller).is_some() {
-        return Err("子会话不能再派子会话".into());
-    }
-    let task = arguments
-        .get("task")
+fn is_task(source: &str) -> bool {
+    source.starts_with(kotone_agent::subagents::TASK_SOURCE)
+}
+
+fn running_count(inner: &Inner) -> usize {
+    inner
+        .children
+        .values()
+        .filter(|c| c.running.is_some())
+        .count()
+}
+
+fn str_arg<'a>(arguments: &'a Value, key: &str) -> &'a str {
+    arguments
+        .get(key)
         .and_then(Value::as_str)
         .unwrap_or("")
         .trim()
-        .to_string();
+}
+
+fn player_words(player: &PlayerWords) -> Result<(String, u64), String> {
+    player.lock().unwrap().clone().ok_or_else(|| {
+        "只有玩家自己说的话能交给后台：这一轮不是玩家说的（例如后台交回的结果、自动化的结果），先告诉玩家，等他开口再说"
+            .to_string()
+    })
+}
+
+/// `agent.start`：建一件后台的事，把任务（玩家原话在前）交给它，最多等 4 秒。
+async fn agent_start(
+    app: &AppHandle,
+    caller: &str,
+    player: &PlayerWords,
+    arguments: &Value,
+) -> Result<Value, String> {
+    use kotone_agent::subagents as sa;
+    if child_spec(app, caller).is_some() {
+        return Err("后台不能再交给后台：自己做完，写进总结".into());
+    }
+    let (words, at_ms) = player_words(player)?;
+    let name = str_arg(arguments, "name").to_string();
+    if !sa::valid_name(&name) {
+        return Err("name 只能用小写英文字母、数字和连字符，1–32 个字（如 potion-script）".into());
+    }
+    let label = sa::clean_label(str_arg(arguments, "label"));
+    if label.is_empty() {
+        return Err("label 不能为空：写三五个字的中文标题".into());
+    }
+    let task = str_arg(arguments, "task").to_string();
     if task.is_empty() {
         return Err("task 不能为空".into());
     }
-    let label: String = arguments
-        .get("label")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .unwrap_or("子会话")
-        .chars()
-        .take(20)
-        .collect();
-    let allowed = kotone_agent::catalog::CHILD_TOOLS;
-    let tools: Vec<String> = match arguments.get("tools").and_then(Value::as_array) {
-        Some(list) => list
-            .iter()
-            .filter_map(Value::as_str)
-            .filter(|t| allowed.contains(t))
-            .map(String::from)
-            .collect(),
-        None => allowed.iter().map(|t| t.to_string()).collect(),
-    };
-    let spec = ChildSpec {
-        parent: caller.to_string(),
-        label: label.clone(),
-        tools,
-        model: arguments
-            .get("model")
-            .and_then(Value::as_str)
-            .map(String::from),
-        thinking: arguments
-            .get("thinking")
-            .and_then(Value::as_str)
-            .unwrap_or("low")
-            .to_string(),
-    };
     let store = store(app)?;
+    let rt = runtime(app)?;
+    {
+        let mut inner = rt.inner.lock().unwrap();
+        if registry(&mut inner, &store, caller)
+            .iter()
+            .any(|a| a.name == name)
+        {
+            return Err(format!(
+                "已经有叫 {name} 的了：同一件事的追加要求用 agent.followup"
+            ));
+        }
+        if running_count(&inner) >= sa::MAX_RUNNING {
+            return Err(format!(
+                "后台已经有 {} 件事在做了：等一件做完，或者问玩家要不要用 agent.stop 停掉一件",
+                sa::MAX_RUNNING
+            ));
+        }
+    }
     let mut conversation = store.create();
     conversation.parent = Some(caller.to_string());
     conversation.label = Some(label.clone());
     store.save(&mut conversation)?;
-    let id = conversation.id.clone();
+    let child_id = conversation.id.clone();
+    let now = now_ms();
+    let info = Subagent {
+        name: name.clone(),
+        label: label.clone(),
+        conversation_id: child_id.clone(),
+        status: SubagentStatus::Running,
+        summary: None,
+        started_at_ms: now,
+        updated_at_ms: now,
+        steps: 0,
+        question: None,
+        reported: false,
+        turn: Some(at_ms),
+    };
     {
-        let rt = runtime(app)?;
         let mut inner = rt.inner.lock().unwrap();
-        let open = inner
-            .children
-            .values()
-            .filter(|c| c.spec.parent == caller)
-            .count();
-        if open >= MAX_CHILDREN {
-            return Err(format!(
-                "最多同时有 {MAX_CHILDREN} 个子会话：先 session.stop 一个"
-            ));
-        }
         inner.children.insert(
-            id.clone(),
+            child_id.clone(),
             Child {
-                spec,
+                spec: ChildSpec {
+                    parent: caller.to_string(),
+                    name: name.clone(),
+                    label: label.clone(),
+                    owner: kotone_core::usage::Owner {
+                        conversation: caller.to_string(),
+                        turn: Some(at_ms),
+                    },
+                },
                 running: None,
                 waiters: HashMap::new(),
+                ask: None,
             },
         );
+        let list = registry(&mut inner, &store, caller);
+        list.push(info.clone());
+        if let Err(e) = store.save_subagents(caller, list) {
+            log::log(&format!("agent: save subagents failed: {e}"));
+        }
     }
-    log::log(&format!("agent: spawned sub-session {id} ({label})"));
-    let reply = send_to_child(app, &id, &task).await?;
-    Ok(json!({"id": id, "label": label, "reply": reply}))
+    emit_subagent(app, caller, &info);
+    log::log(&format!(
+        "agent: background task {name} ({label}) started as {child_id}"
+    ));
+    dispatch(
+        app,
+        caller,
+        &name,
+        &child_id,
+        sa::task_text(&words, &task),
+        true,
+    )
+    .await
 }
 
-/// 给子会话发一条（父会话的）消息并等它这一轮的回复。
-async fn send_to_child(app: &AppHandle, id: &str, text: &str) -> Result<String, String> {
+/// `agent.followup`：把玩家对同一件事的追加要求交给同一个（空闲就开新的一轮，在做就插进这一轮）。
+async fn agent_followup(
+    app: &AppHandle,
+    caller: &str,
+    player: &PlayerWords,
+    arguments: &Value,
+) -> Result<Value, String> {
+    if child_spec(app, caller).is_some() {
+        return Err("后台不能再交给后台".into());
+    }
+    let (words, at_ms) = player_words(player)?;
+    let name = str_arg(arguments, "name").to_string();
+    let message = str_arg(arguments, "message").to_string();
+    if message.is_empty() {
+        return Err("message 不能为空".into());
+    }
+    resume(app, caller, &name, &words, at_ms, &message, true).await
+}
+
+/// 接着做（`agent.followup`、卡片上的“继续”）。`wait`：最多等 4 秒拿结果。
+async fn resume(
+    app: &AppHandle,
+    main: &str,
+    name: &str,
+    words: &str,
+    at_ms: u64,
+    message: &str,
+    wait: bool,
+) -> Result<Value, String> {
+    use kotone_agent::subagents as sa;
+    let store = store(app)?;
+    let rt = runtime(app)?;
+    let child_id = {
+        let mut inner = rt.inner.lock().unwrap();
+        let Some(agent) = registry(&mut inner, &store, main)
+            .iter()
+            .find(|a| a.name == name)
+            .cloned()
+        else {
+            return Err(format!("没有叫 {name} 的后台任务（agent.list 看看）"));
+        };
+        let child_id = agent.conversation_id.clone();
+        let running = inner
+            .children
+            .get(&child_id)
+            .is_some_and(|c| c.running.is_some());
+        if !running && running_count(&inner) >= sa::MAX_RUNNING {
+            return Err(format!(
+                "后台已经有 {} 件事在做了：等一件做完再接着做这件",
+                sa::MAX_RUNNING
+            ));
+        }
+        let owner = kotone_core::usage::Owner {
+            conversation: main.to_string(),
+            turn: Some(at_ms),
+        };
+        match inner.children.get_mut(&child_id) {
+            Some(child) => child.spec.owner = owner,
+            None => {
+                inner.children.insert(
+                    child_id.clone(),
+                    Child {
+                        spec: ChildSpec {
+                            parent: main.to_string(),
+                            name: agent.name.clone(),
+                            label: agent.label.clone(),
+                            owner,
+                        },
+                        running: None,
+                        waiters: HashMap::new(),
+                        ask: None,
+                    },
+                );
+            }
+        }
+        child_id
+    };
+    update_subagent(app, main, name, |a| {
+        // 在等确认的还在等（这句话插进它这一轮，确认完接着看）。
+        if a.status != SubagentStatus::Waiting {
+            a.status = SubagentStatus::Running;
+            a.question = None;
+        }
+        a.reported = false;
+        a.turn = Some(at_ms);
+    });
+    dispatch(
+        app,
+        main,
+        name,
+        &child_id,
+        sa::task_text(words, message),
+        wait,
+    )
+    .await
+}
+
+/// 把任务消息交给它；`wait` 时最多等 4 秒：做完了返回结果（之后不再另外交回），没做完返回“在做”。
+async fn dispatch(
+    app: &AppHandle,
+    main: &str,
+    name: &str,
+    child_id: &str,
+    text: String,
+    wait: bool,
+) -> Result<Value, String> {
     let tag = new_tag(app);
-    let (tx, rx) = oneshot::channel();
-    {
+    let (tx, mut rx) = oneshot::channel();
+    if wait {
         let rt = runtime(app)?;
         let mut inner = rt.inner.lock().unwrap();
-        let child = inner.children.get_mut(id).ok_or("这个子会话已经结束了")?;
+        let child = inner.children.get_mut(child_id).ok_or("这件事已经停了")?;
         child.waiters.insert(tag.clone(), tx);
     }
     deliver_to_child(
         app,
-        id,
+        child_id,
         Message::User {
-            text: text.to_string(),
+            text,
             attachments: Vec::new(),
             source: tag,
             at_ms: now_ms(),
             context: String::new(),
         },
+        true,
     )?;
-    match tokio::time::timeout(CHILD_REPLY_TIMEOUT, rx).await {
-        Ok(Ok(reply)) => Ok(reply),
-        Ok(Err(_)) => Err("子会话没有回复就结束了".into()),
-        Err(_) => Err("子会话 90 秒内没有回复".into()),
+    let label = subagents_of(app, main)
+        .into_iter()
+        .find(|a| a.name == name)
+        .map(|a| a.label)
+        .unwrap_or_default();
+    let running = json!({"name": name, "label": label, "status": "running",
+        "note": "在后台做着，做完会交回给你。现在跟玩家说一句“交给我，好了告诉你”就结束这一轮，不要轮询。"});
+    if !wait {
+        return Ok(running);
     }
+    let result =
+        kotone_agent::subagents::wait_for_result(&mut rx, kotone_agent::subagents::SYNC_WINDOW)
+            .await;
+    Ok(match result {
+        Some((status, summary)) => {
+            json!({"name": name, "label": label, "status": status, "summary": summary})
+        }
+        None => match subagents_of(app, main).into_iter().find(|a| a.name == name) {
+            Some(agent) if !agent.status.is_active() => kotone_agent::subagents::describe(&agent),
+            _ => running,
+        },
+    })
 }
 
-/// 把一条消息交给子会话：在跑就排队（不打断它正在做的），没在跑就开始一轮。
-fn deliver_to_child(app: &AppHandle, id: &str, message: Message) -> Result<(), String> {
+/// 把一条消息交给后台的一件事：在跑就插进这一轮（`steer`）或排在这一轮之后（听到的话），
+/// 没在跑就开始一轮。
+fn deliver_to_child(
+    app: &AppHandle,
+    id: &str,
+    message: Message,
+    steer: bool,
+) -> Result<(), String> {
     let rt = runtime(app)?;
     let start = {
         let mut inner = rt.inner.lock().unwrap();
-        let child = inner.children.get_mut(id).ok_or("这个子会话已经结束了")?;
+        let child = inner.children.get_mut(id).ok_or("这件事已经停了")?;
         match &child.running {
+            Some(running) if steer => {
+                running.inbox.steer(message);
+                None
+            }
             Some(running) => {
                 running.inbox.follow_up(message);
                 None
@@ -2163,27 +2623,13 @@ fn deliver_to_child(app: &AppHandle, id: &str, message: Message) -> Result<(), S
         }
     };
     if let Some((message, cancel, inbox, spec)) = start {
-        let conversation = store(app)?.load(id)?.ok_or("找不到子会话的记录")?;
+        let conversation = store(app)?.load(id)?.ok_or("找不到这件事的记录")?;
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             drive_child(app, conversation, message, cancel, inbox, spec).await;
         });
     }
     Ok(())
-}
-
-/// 子会话最后一轮的回复文字（最后一条模型消息；没有时用状态说明）。
-fn last_reply(messages: &[Message]) -> String {
-    for m in messages.iter().rev() {
-        match m {
-            Message::Assistant { text, .. } if !text.trim().is_empty() => {
-                return text.trim().to_string()
-            }
-            Message::Notice { text, .. } => return text.clone(),
-            _ => {}
-        }
-    }
-    "（没有回复）".into()
 }
 
 fn is_heard(m: &Message) -> bool {
@@ -2237,7 +2683,8 @@ fn merge_heard(first: Message, inbox: &Inbox) -> (Message, Option<Message>) {
     )
 }
 
-/// 子会话的一轮接一轮（和主会话的 [`drive`] 一样，但不出声、不截屏、按工具范围与模型）。
+/// 后台的一轮接一轮（和主会话的 [`drive`] 一样，但不出声、不截屏）。一轮由任务消息开始的，
+/// 做完先存盘登记、再交回（4 秒内有人在等就直接交给它）。
 async fn drive_child(
     app: AppHandle,
     mut conversation: Conversation,
@@ -2250,12 +2697,11 @@ async fn drive_child(
     loop {
         while let Some(message) = next.take() {
             let (user, leftover) = merge_heard(message, &inbox);
-            let tag = match &user {
-                Message::User { source, .. } if source.starts_with("parent:") => {
-                    Some(source.clone())
-                }
-                _ => None,
+            let mut tags: Vec<String> = match &user {
+                Message::User { source, .. } if is_task(source) => vec![source.clone()],
+                _ => Vec::new(),
             };
+            inbox.take_delivered();
             let start = conversation.messages.len();
             let stop = turn(
                 &app,
@@ -2268,22 +2714,18 @@ async fn drive_child(
                 None,
             )
             .await;
-            if let Some(tag) = tag {
-                let reply =
-                    last_reply(&conversation.messages[start.min(conversation.messages.len())..]);
-                if let Ok(rt) = runtime(&app) {
-                    if let Some(waiter) = rt
-                        .inner
-                        .lock()
-                        .unwrap()
-                        .children
-                        .get_mut(&conversation.id)
-                        .and_then(|c| c.waiters.remove(&tag))
-                    {
-                        let _ = waiter.send(reply);
-                    }
-                }
-            }
+            tags.extend(inbox.take_delivered().iter().filter_map(|m| match m {
+                Message::User { source, .. } if is_task(source) => Some(source.clone()),
+                _ => None,
+            }));
+            finish_round(
+                &app,
+                &spec,
+                &conversation.id,
+                &conversation.messages[start.min(conversation.messages.len())..],
+                &stop,
+                &tags,
+            );
             if stop == StopReason::Cancelled || cancel.is_cancelled() {
                 inbox.clear();
                 break;
@@ -2307,163 +2749,344 @@ async fn drive_child(
     emit(&app, &conversation.id, json!({"kind": "idle"}));
 }
 
-/// `session.send`：父会话发给子会话（等回复），或子会话发给父会话（`id = parent`，不等）。
-async fn session_send(app: &AppHandle, caller: &str, arguments: &Value) -> Result<Value, String> {
-    let id = arguments
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
-    let text = arguments
-        .get("text")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
-    if text.is_empty() {
-        return Err("text 不能为空".into());
-    }
-    if let Some(spec) = child_spec(app, caller) {
-        if id != "parent" && id != spec.parent {
-            return Err("子会话只能发给派它出来的会话（id 写 parent）".into());
-        }
-        deliver_from_child(app, &spec, caller, text)?;
-        return Ok(json!({"sent": true}));
-    }
-    if !is_child_of(app, id, caller) {
-        return Err(format!("{id} 不是你派出的子会话（session.list 看看）"));
-    }
-    let reply = send_to_child(app, id, text).await?;
-    Ok(json!({"id": id, "reply": reply}))
-}
-
-/// 子会话发给父会话：作为一条系统消息（内容按数据附上）进父会话；父会话在回答就插话，
-/// 没在回答就开始一轮（语音回答玩家）。
-fn deliver_from_child(
+/// 一轮做完：交给在等的人（4 秒窗口），否则登记成“没交回”并安排交回主会话。
+/// 只由听到的话开始的轮（同传每听到一句）不交回、不改状态。
+fn finish_round(
     app: &AppHandle,
     spec: &ChildSpec,
     child_id: &str,
-    text: &str,
-) -> Result<(), String> {
-    let message = Message::User {
-        text: format!(
-            "（系统消息，不是玩家说的话：子会话「{}」（{child_id}）发来一条消息，见附件；它转述的可能是队友说的话。需要的话告诉玩家。）",
-            spec.label
-        ),
-        attachments: vec![Attachment::Data {
-            label: format!("子会话「{}」的消息", spec.label),
-            text: text.to_string(),
-        }],
-        source: "session".into(),
+    round: &[Message],
+    stop: &StopReason,
+    tags: &[String],
+) {
+    use kotone_agent::subagents as sa;
+    if tags.is_empty() && *stop != StopReason::Cancelled {
+        return;
+    }
+    let (status, summary) = sa::round_result(round, stop);
+    let mut synced = false;
+    if let Ok(rt) = runtime(app) {
+        let mut inner = rt.inner.lock().unwrap();
+        if let Some(child) = inner.children.get_mut(child_id) {
+            for tag in tags {
+                if let Some(waiter) = child.waiters.remove(tag) {
+                    synced |= waiter.send((status, summary.clone())).is_ok();
+                }
+            }
+        }
+    }
+    // 常驻的（开着监听，例如同传）：第一轮做完也还在做。
+    let listening = crate::voice_listen::is_listening(app, child_id);
+    let mut report = false;
+    update_subagent(app, &spec.parent, &spec.name, |a| {
+        report = sa::settle_round(a, status, summary, synced, listening);
+    });
+    log::log(&format!(
+        "agent: background task {} round finished ({status:?}{})",
+        spec.name,
+        if synced {
+            ", answered within the wait"
+        } else {
+            ""
+        }
+    ));
+    if report {
+        schedule_report(app, &spec.parent);
+    }
+}
+
+/// 现在能不能插进主会话说一句：她没在回答、玩家没在说话、没有提问在等回答。
+fn main_is_quiet(app: &AppHandle) -> bool {
+    if is_running(app) || crate::voice_ask::is_pending(app) || crate::assistant::output_busy(app) {
+        return false;
+    }
+    matches!(
+        app.state::<crate::SharedState>().orchestrator.state(),
+        kotone_core::orchestrator::OrchestratorState::Idle
+            | kotone_core::orchestrator::OrchestratorState::Success
+            | kotone_core::orchestrator::OrchestratorState::Error
+    )
+}
+
+/// 取走这段对话还没交回的结果（同时标成已交回、存盘）。没有了就不再排队交回。
+fn take_unreported(app: &AppHandle, main: &str) -> Vec<Subagent> {
+    let (Ok(rt), Ok(store)) = (runtime(app), store(app)) else {
+        return Vec::new();
+    };
+    let taken = {
+        let mut inner = rt.inner.lock().unwrap();
+        let list = registry(&mut inner, &store, main);
+        let taken = kotone_agent::subagents::take_unreported(list);
+        if !taken.is_empty() {
+            if let Err(e) = store.save_subagents(main, list) {
+                log::log(&format!("agent: save subagents failed: {e}"));
+            }
+        } else {
+            inner.reporting.remove(main);
+        }
+        taken
+    };
+    for info in &taken {
+        emit_subagent(app, main, info);
+    }
+    taken
+}
+
+/// 交回主会话的那条消息（总结按数据附上：它可能转述了网页、屏幕上别人写的话）。
+fn report_message(reports: &[Subagent]) -> Message {
+    use kotone_agent::subagents as sa;
+    Message::User {
+        text: sa::report_text(reports),
+        attachments: reports
+            .iter()
+            .map(|r| {
+                let (label, text) = sa::report_attachment(r);
+                Attachment::Data { label, text }
+            })
+            .collect(),
+        source: sa::REPORT_SOURCE.into(),
         at_ms: now_ms(),
         context: String::new(),
-    };
-    let rt = runtime(app)?;
-    {
-        let inner = rt.inner.lock().unwrap();
-        if let Some(running) = inner
-            .running
-            .as_ref()
-            .filter(|r| r.conversation_id == spec.parent)
-        {
-            running.inbox.steer(message);
-            return Ok(());
-        }
-    }
-    let store = store(app)?;
-    if store.current().as_deref() == Some(spec.parent.as_str()) {
-        send_message(app, message).map(|_| ())
-    } else {
-        // 父会话已经不是当前对话：只记进它的记录，不调用模型。
-        if let Some(mut conversation) = store.load(&spec.parent)? {
-            conversation.messages.push(message);
-            store.save(&mut conversation)?;
-        }
-        Ok(())
     }
 }
 
-fn session_list(app: &AppHandle, caller: &str) -> Result<Value, String> {
-    let rt = runtime(app)?;
-    let inner = rt.inner.lock().unwrap();
-    let sessions: Vec<Value> = inner
-        .children
-        .iter()
-        .filter(|(_, c)| c.spec.parent == caller)
-        .map(|(id, c)| {
-            json!({
-                "id": id,
-                "label": c.spec.label,
-                "running": c.running.is_some(),
-                "listening": crate::voice_listen::is_listening(app, id),
-                "model": c.spec.model,
-                "tools": c.spec.tools,
-            })
-        })
-        .collect();
-    Ok(json!({"sessions": sessions, "max": MAX_CHILDREN}))
-}
-
-fn session_history(app: &AppHandle, caller: &str, arguments: &Value) -> Result<Value, String> {
-    let id = arguments.get("id").and_then(Value::as_str).unwrap_or("");
-    let limit = arguments
-        .get("limit")
-        .and_then(Value::as_u64)
-        .unwrap_or(20)
-        .clamp(1, 100) as usize;
-    let conversation = store(app)?.load(id)?.ok_or("找不到这个会话")?;
-    if conversation.parent.as_deref() != Some(caller) {
-        return Err(format!("{id} 不是你派出的子会话"));
+/// 有结果没交回：等主会话空下来，插一条结果消息并唤醒它说一句（照 OpenCode `<background-result>`）。
+/// 主会话已经不是当前对话时只记进它的记录，不调用模型。
+fn schedule_report(app: &AppHandle, main: &str) {
+    let Ok(rt) = runtime(app) else { return };
+    if !rt.inner.lock().unwrap().reporting.insert(main.to_string()) {
+        return;
     }
-    let lines: Vec<Value> = conversation
-        .messages
-        .iter()
-        .filter_map(|m| match m {
-            Message::User { text, source, .. } => Some(json!({"from": source, "text": text})),
-            Message::Assistant { text, .. } if !text.trim().is_empty() => {
-                Some(json!({"from": "assistant", "text": text}))
+    let app = app.clone();
+    let main = main.to_string();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            if !main_is_quiet(&app) {
+                continue;
             }
-            _ => None,
-        })
-        .rev()
-        .take(limit)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
+            let reports = take_unreported(&app, &main);
+            if reports.is_empty() {
+                return;
+            }
+            let message = report_message(&reports);
+            let current = store(&app).ok().and_then(|s| s.current());
+            if current.as_deref() == Some(main.as_str()) {
+                match send_message(&app, message) {
+                    Ok(_) => log::log(&format!(
+                        "agent: {} background result(s) handed back to {main}",
+                        reports.len()
+                    )),
+                    Err(e) => log::log(&format!("agent: background result not delivered: {e}")),
+                }
+            } else {
+                append_to(&app, &main, message);
+            }
+            // 交完了这一批：同一把锁下确认没有新的再退出（见 take_unreported）。
+        }
+    });
+}
+
+/// 只把一条消息记进某段对话（不调用模型）。
+fn append_to(app: &AppHandle, id: &str, message: Message) {
+    let Ok(store) = store(app) else { return };
+    match store.load(id) {
+        Ok(Some(mut conversation)) => {
+            conversation.messages.push(message.clone());
+            if let Err(e) = store.save(&mut conversation) {
+                log::log(&format!("agent: save failed: {e}"));
+            }
+            emit(app, id, event_json(&AgentEvent::Appended { message }));
+        }
+        Ok(None) => {}
+        Err(e) => log::log(&format!("agent: load failed: {e}")),
+    }
+}
+
+/// 后台要玩家确认：经主会话问（玩家最近是用嘴说的就开口问，同时卡片上也能点；打字的就等卡片上点）。
+async fn subagent_ask(
+    app: &AppHandle,
+    spec: &ChildSpec,
+    child_id: &str,
+    request: PermissionRequest,
+    cancel: &CancellationToken,
+) -> Answer {
+    let question = kotone_agent::subagents::question(&spec.label, &request.reason);
+    let (tx, rx) = oneshot::channel();
+    {
+        let Ok(rt) = runtime(app) else {
+            return Answer::Deny;
+        };
+        let mut inner = rt.inner.lock().unwrap();
+        let Some(child) = inner.children.get_mut(child_id) else {
+            return Answer::Deny;
+        };
+        child.ask = Some(tx);
+    }
+    update_subagent(app, &spec.parent, &spec.name, |a| {
+        a.status = SubagentStatus::Waiting;
+        a.question = Some(question.clone());
+    });
+    log::log(&format!(
+        "agent: background task {} asks the player",
+        spec.name
+    ));
+    let _guard = SubagentAskGuard {
+        app: app.clone(),
+        spec: spec.clone(),
+        child_id: child_id.to_string(),
+    };
+    let mut rx = rx;
+    if last_entry(app, &spec.parent) == Some(Entry::Game) {
+        let voice = async {
+            while !main_is_quiet(app) {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            }
+            match crate::voice_ask::ask(app, &question, 8).await {
+                Ok(Some(text)) => crate::voice_ask::parse_confirmation(&text),
+                Ok(None) => None,
+                Err(e) => {
+                    log::log(&format!("agent: 后台的确认没能用语音问：{e}"));
+                    None
+                }
+            }
+        };
+        let decided = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Some(Answer::Deny),
+            answer = &mut rx => Some(answer.unwrap_or(Answer::Deny)),
+            heard = voice => heard.map(|ok| if ok { Answer::AllowOnce } else { Answer::Deny }),
+        };
+        if let Some(answer) = decided {
+            return answer;
+        }
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = crate::assistant::deliver_text(
+                &app,
+                "没听清，请到聊天窗口里点允许或拒绝。".into(),
+                vec![DeliveryKind::Voice],
+            )
+            .await;
+        });
+    }
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Answer::Deny,
+        answer = rx => answer.unwrap_or(Answer::Deny),
+    }
+}
+
+/// 确认结束（任何方式）：清掉登记，状态回到“在做”。
+struct SubagentAskGuard {
+    app: AppHandle,
+    spec: ChildSpec,
+    child_id: String,
+}
+
+impl Drop for SubagentAskGuard {
+    fn drop(&mut self) {
+        if let Ok(rt) = runtime(&self.app) {
+            if let Some(child) = rt.inner.lock().unwrap().children.get_mut(&self.child_id) {
+                child.ask = None;
+            }
+        }
+        update_subagent(&self.app, &self.spec.parent, &self.spec.name, |a| {
+            if a.status == SubagentStatus::Waiting {
+                a.status = SubagentStatus::Running;
+            }
+            a.question = None;
+        });
+    }
+}
+
+/// 玩家最近一次在这段对话里是怎么说的（语音 / 打字）。
+fn last_entry(app: &AppHandle, main: &str) -> Option<Entry> {
+    runtime(app)
+        .ok()?
+        .inner
+        .lock()
+        .unwrap()
+        .last_entry
+        .get(main)
+        .copied()
+}
+
+fn remember_entry(app: &AppHandle, main: &str, entry: Entry) {
+    if let Ok(rt) = runtime(app) {
+        rt.inner
+            .lock()
+            .unwrap()
+            .last_entry
+            .insert(main.to_string(), entry);
+    }
+}
+
+/// `agent.list`。
+fn agent_list(app: &AppHandle, caller: &str) -> Result<Value, String> {
+    let agents: Vec<Value> = subagents_of(app, caller)
+        .iter()
+        .map(kotone_agent::subagents::describe)
         .collect();
-    Ok(json!({"id": id, "label": conversation.label, "messages": lines}))
+    Ok(json!({"agents": agents, "maxRunning": kotone_agent::subagents::MAX_RUNNING}))
 }
 
-/// 结束一个子会话：取消它正在做的、停掉它名下的监听、让等它回复的人收到“已结束”。
-pub fn stop_child(app: &AppHandle, id: &str, reason: &str) -> bool {
-    let Ok(rt) = runtime(app) else { return false };
-    let child = rt.inner.lock().unwrap().children.remove(id);
-    let Some(child) = child else { return false };
-    if let Some(running) = &child.running {
-        running.cancel.cancel();
-        running.inbox.clear();
+/// 停掉一件后台的事：取消它正在做的、停掉它的监听、拒绝它在等的确认。不交回主会话（照 Codex）。
+pub fn stop_subagent(app: &AppHandle, main: &str, name: &str, reason: &str) -> bool {
+    let Some(agent) = subagents_of(app, main).into_iter().find(|a| a.name == name) else {
+        return false;
+    };
+    let child = runtime(app).ok().and_then(|rt| {
+        rt.inner
+            .lock()
+            .unwrap()
+            .children
+            .remove(&agent.conversation_id)
+    });
+    let mut was_doing = agent.status.is_active();
+    if let Some(child) = child {
+        if let Some(running) = &child.running {
+            running.cancel.cancel();
+            running.inbox.clear();
+            was_doing = true;
+        }
+        if let Some(ask) = child.ask {
+            let _ = ask.send(Answer::Deny);
+        }
     }
-    for (_, waiter) in child.waiters {
-        let _ = waiter.send(format!("（子会话已结束：{reason}）"));
+    was_doing |= crate::voice_listen::stop_owner(app, &agent.conversation_id);
+    if was_doing {
+        update_subagent(app, main, name, |a| {
+            a.status = SubagentStatus::Stopped;
+            a.question = None;
+            a.reported = true;
+        });
+        log::log(&format!("agent: background task {name} stopped ({reason})"));
     }
-    crate::voice_listen::stop_owner(app, id);
-    log::log(&format!("agent: sub-session {id} stopped ({reason})"));
-    let _ = app.emit(
-        EVENT,
-        json!({"conversationId": id, "event": {"kind": "idle"}}),
-    );
-    true
+    was_doing
 }
 
-/// 结束全部子会话（停止热键、语音“停下”）。返回结束了几个。
+/// 停下全部后台的事（停止热键、语音“停下”、托盘「停下」）。返回停了几件。
 pub fn stop_all_children(app: &AppHandle, reason: &str) -> usize {
-    let ids: Vec<String> = match runtime(app) {
-        Ok(rt) => rt.inner.lock().unwrap().children.keys().cloned().collect(),
+    let targets: Vec<(String, String)> = match runtime(app) {
+        Ok(rt) => rt
+            .inner
+            .lock()
+            .unwrap()
+            .children
+            .iter()
+            .filter(|(id, c)| c.running.is_some() || crate::voice_listen::is_listening(app, id))
+            .map(|(_, c)| (c.spec.parent.clone(), c.spec.name.clone()))
+            .collect(),
         Err(_) => return 0,
     };
-    ids.iter().filter(|id| stop_child(app, id, reason)).count()
+    targets
+        .iter()
+        .filter(|(main, name)| stop_subagent(app, main, name, reason))
+        .count()
 }
 
-/// 监听听到一句：交给监听的主人（子会话排队处理；主会话按插话 / 新的一轮处理）。
+/// 监听听到一句：交给监听的主人（后台的事排在这一轮之后处理；主会话按插话 / 新的一轮处理）。
 pub fn deliver_heard(app: &AppHandle, owner: &str, app_name: &str, language: &str, text: &str) {
     let message = Message::User {
         text: format!(
@@ -2483,7 +3106,7 @@ pub fn deliver_heard(app: &AppHandle, owner: &str, app_name: &str, language: &st
         context: String::new(),
     };
     if child_spec(app, owner).is_some() {
-        if let Err(e) = deliver_to_child(app, owner, message) {
+        if let Err(e) = deliver_to_child(app, owner, message, false) {
             log::log(&format!("agent: heard delivery failed: {e}"));
         }
         return;
@@ -2742,30 +3365,57 @@ mod tests {
         assert!(matches!(same, Message::User { ref text, .. } if text == "hi") && none.is_none());
     }
 
+    /// 后台交回的结果、自动化结果都不是玩家说的话（不能派活、不记成玩家的说话方式）；
+    /// 结果交回那一轮的入口跟随玩家最近一次怎么说的（这里只测分类，入口的查表在运行时里）。
     #[test]
-    fn a_sub_session_reply_is_its_last_answer_or_the_notice() {
-        let answer = |t: &str| Message::Assistant {
-            text: t.into(),
-            tool_calls: vec![],
-            reasoning: String::new(),
-            usage: None,
-            at_ms: 0,
+    fn background_results_are_not_the_players_words() {
+        let report = user(kotone_agent::subagents::REPORT_SOURCE);
+        assert!(is_report(&report));
+        assert!(!is_player_message(&report));
+        for source in [
+            "chat",
+            "assistant-text",
+            "voice",
+            "wake-voice",
+            "quick-command",
+        ] {
+            assert!(is_player_message(&user(source)), "{source}");
+            assert!(!is_report(&user(source)));
+        }
+        for source in ["tool", "automation", "heard", "agent-task:3"] {
+            assert!(!is_player_message(&user(source)), "{source}");
+        }
+        assert!(is_task("agent-task:3") && !is_task("chat"));
+        assert_eq!(entry_of_source("chat"), Entry::Chat);
+        assert_eq!(entry_of_source("voice"), Entry::Game);
+        // 交回主会话的消息：说明在正文，总结作为数据附件（可能转述了网页、屏幕上别人写的话）。
+        let message = report_message(&[Subagent {
+            name: "lol-patch".into(),
+            label: "查版本".into(),
+            conversation_id: "c-x".into(),
+            status: SubagentStatus::Done,
+            summary: Some("26.22：三条更新".into()),
+            started_at_ms: 0,
+            updated_at_ms: 0,
+            steps: 3,
+            question: None,
+            reported: false,
+            turn: None,
+        }]);
+        let Message::User {
+            text,
+            attachments,
+            source,
+            ..
+        } = message
+        else {
+            panic!()
         };
-        assert_eq!(
-            last_reply(&[answer("好的"), answer(" 已开始监听 ")]),
-            "已开始监听"
+        assert_eq!(source, "agent-report");
+        assert!(text.contains("<agent-report name=\"lol-patch\""));
+        assert!(
+            matches!(&attachments[..], [Attachment::Data { text, .. }] if text.contains("26.22"))
         );
-        assert_eq!(
-            last_reply(&[Message::Notice {
-                text: "已停止".into(),
-                at_ms: 0,
-                compaction: None,
-                usage: None,
-                recap: None,
-            }]),
-            "已停止"
-        );
-        assert_eq!(last_reply(&[]), "（没有回复）");
     }
 
     #[test]

@@ -453,6 +453,10 @@ pub struct AgentLimits {
     pub extend_on: Vec<String>,
     pub extended_steps: u32,
     pub extended_duration: Duration,
+    /// 最后一步（第 `max_steps` 次调用模型）时附在请求末尾的一句话：不要再调用工具，写总结
+    /// （照 OpenCode `MAX_STEPS_PROMPT`：工具清单不变，前缀缓存照样命中）。这一步模型还是调用了工具时
+    /// 不执行，按步数上限结束。None = 照旧，到上限直接停。
+    pub final_step_prompt: Option<String>,
 }
 
 impl Default for AgentLimits {
@@ -469,6 +473,7 @@ impl Default for AgentLimits {
             extend_on: Vec::new(),
             extended_steps: 0,
             extended_duration: Duration::ZERO,
+            final_step_prompt: None,
         }
     }
 }
@@ -956,7 +961,14 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
                 return StopReason::Cancelled;
             }
         }
-        let (messages, _) = context_window(history, limits.history_budget_chars);
+        let (mut messages, _) = context_window(history, limits.history_budget_chars);
+        // 最后一步：要求只写总结（这句话只放进请求，不写进对话）。
+        let final_step = step >= max_steps && limits.final_step_prompt.is_some();
+        if final_step {
+            if let Some(prompt) = &limits.final_step_prompt {
+                messages.push(Message::user(prompt.clone()));
+            }
+        }
         let request = ModelRequest {
             system: system.clone(),
             messages,
@@ -1044,6 +1056,30 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
         used_tools = true;
         for call in &calls {
             on_event(AgentEvent::ToolCall { call: call.clone() });
+        }
+        // 最后一步还在调用工具：不执行（每个调用照样写一条结果），按步数上限结束。
+        if final_step {
+            for call in &calls {
+                let content = "已经到步数上限，没有执行；请直接写总结".to_string();
+                on_event(AgentEvent::ToolCallUpdate {
+                    call_id: call.id.clone(),
+                    status: ToolStatus::Failed,
+                    content: Some(content.clone()),
+                });
+                push(
+                    history,
+                    Message::Tool {
+                        call_id: call.id.clone(),
+                        name: call.name.clone(),
+                        content,
+                        is_error: true,
+                        untrusted: false,
+                        images: Vec::new(),
+                        at_ms: now_ms(),
+                    },
+                );
+            }
+            return StopReason::StepLimit;
         }
         if calls.iter().any(|c| limits.extend_on.contains(&c.name)) {
             max_steps = max_steps.max(limits.extended_steps);

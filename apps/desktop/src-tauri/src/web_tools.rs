@@ -37,19 +37,9 @@ fn backend(app: &AppHandle) -> Result<ResolvedConnection, String> {
     Ok(connection)
 }
 
-/// 搜索 / 读网页的费用记到发起的对话（主会话这一轮，或子会话自己）。
-fn owner(caller: &str) -> Option<kotone_core::usage::Owner> {
-    if caller.is_empty() {
-        return None;
-    }
-    Some(
-        kotone_core::usage::current_turn()
-            .filter(|t| t.conversation == caller)
-            .unwrap_or(kotone_core::usage::Owner {
-                conversation: caller.to_string(),
-                turn: None,
-            }),
-    )
+/// 搜索 / 读网页的费用记到发起的对话：主会话记到这一轮，后台的事记到派它出去的那一轮（ADR 029 第二期）。
+fn owner(app: &AppHandle, caller: &str) -> Option<kotone_core::usage::Owner> {
+    crate::agent::cost_owner(app, caller)
 }
 
 pub async fn search(app: &AppHandle, caller: &str, arguments: &Value) -> Result<Value, String> {
@@ -61,7 +51,7 @@ pub async fn search(app: &AppHandle, caller: &str, arguments: &Value) -> Result<
     let count = arguments.get("count").and_then(Value::as_u64).unwrap_or(5);
     let connection = backend(app)?;
     let hits = kotone_ai::web::search(&connection, &query, count).await?;
-    kotone_core::usage::record_search_for(&connection.provider, "search", owner(caller));
+    kotone_core::usage::record_search_for(&connection.provider, "search", owner(app, caller));
     kotone_core::log::log(&format!("web: search ({} results)", hits.len()));
     if hits.is_empty() {
         return Ok(json!({"results": [], "note": "没有搜到结果，换个说法再搜"}));
@@ -92,7 +82,7 @@ pub async fn fetch(app: &AppHandle, caller: &str, arguments: &Value) -> Result<V
     }
     let connection = backend(app)?;
     let page = kotone_ai::web::fetch(&connection, &url).await?;
-    kotone_core::usage::record_search_for(&connection.provider, "fetch", owner(caller));
+    kotone_core::usage::record_search_for(&connection.provider, "fetch", owner(app, caller));
     kotone_core::log::log(&format!(
         "web: fetched a page ({} chars)",
         page.content.chars().count()

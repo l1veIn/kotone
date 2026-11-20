@@ -138,7 +138,7 @@ fn transcript(app: &AppHandle, name: &str, start: u64, end: u64) -> Vec<(u64, St
                 continue;
             };
             let who = match &conversation.label {
-                Some(label) => format!("子会话「{label}」"),
+                Some(label) => format!("后台「{label}」"),
                 None => name.to_string(),
             };
             for m in &conversation.messages {
