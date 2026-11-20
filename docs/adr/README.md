@@ -32,3 +32,4 @@ ADR 保留当时的上下文和选择，状态决定其适用性。当前架构�
 | [026 不要通用读写执行；按 DeepSeek 最佳实践对齐](026-no-generic-rwx-deepseek-best-practices.md) | Accepted / 已采纳 | 琴音没有 read / write / bash（陪玩特有）；联网搜索用 DeepSeek 搜索与抓取接口做成 `web.search` / `web.fetch`；DeepSeek 连接用自己的客户端：`latest_reminder`、`title`、`safety_check`、最后一块报错、内容审核拒绝 |
 | [027 0.1.x 到 0.2.0 过渡](027-0.2-upgrade-transition.md) | 候选方案，待验收和发布确认 | 旧用户优先保留语音输入，独立通道分桶，维护版升级前备份 |
 | [028 按“游戏陪玩”重新设计交互流程和界面](028-game-companion-interaction.md) | Accepted / 已采纳 | 打开就是聊天页，一个 DeepSeek Key 打开全部功能；语音输入是子板块、不经过 Agent；“启动”只属于本地语音识别；「琴音 → 设置」并入「设置」；老用户可以一切照旧 |
+| [029 像打电话一样和她说话：快速主会话 + 完整子代理](029-voice-call-and-background-tasks.md) | Proposed / 已确认，实现中 | 语音回合不思考、短回答、说话那一刻截屏、预生成等待短句、答完接着听 8 秒、按键打断、边生成边念；复杂的事交给玩家看不到的子代理（照 Codex / OpenCode / Goose），做完由主会话说一句 |
