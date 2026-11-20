@@ -147,7 +147,7 @@ fn encoding_for_code_page(cp: u32) -> &'static Encoding {
 }
 
 #[cfg(windows)]
-fn ansi_encoding() -> &'static Encoding {
+pub(crate) fn ansi_encoding() -> &'static Encoding {
     // SAFETY: 无参数的系统查询。
     encoding_for_code_page(unsafe { windows::Win32::Globalization::GetACP() })
 }
@@ -159,8 +159,30 @@ fn oem_encoding() -> &'static Encoding {
 }
 
 #[cfg(not(windows))]
-fn ansi_encoding() -> &'static Encoding {
+pub(crate) fn ansi_encoding() -> &'static Encoding {
     encoding_rs::GBK
+}
+
+/// 测试用：这台机器的 ANSI 编码，和一段能用它写出、又不是合法 UTF-8 的文字
+/// （中文 Windows 是 GBK 的中文；CI 的英文 Windows 是 Windows-1252 的“Café”）。
+#[cfg(test)]
+pub(crate) fn ansi_sample() -> (&'static Encoding, &'static str) {
+    let enc = ansi_encoding();
+    let text = [
+        "中文设置",
+        "中文設定",
+        "日本語の設定",
+        "설정",
+        "Настройки",
+        "Café réglé",
+    ]
+    .into_iter()
+    .find(|t| {
+        let (bytes, _, errors) = enc.encode(t);
+        !errors && std::str::from_utf8(&bytes).is_err()
+    })
+    .expect("这台机器的 ANSI 编码写得下其中一段文字");
+    (enc, text)
 }
 
 #[cfg(not(windows))]
@@ -174,17 +196,23 @@ mod tests {
 
     #[test]
     fn files_round_trip_in_their_own_encoding() {
+        // ANSI 编码随机器而定（中文 Windows 是 GBK，CI 是 Windows-1252），文字也跟着换。
+        let (ansi, sample) = ansi_sample();
         for enc in [
             FileEncoding::Utf8,
             FileEncoding::Utf8Bom,
             FileEncoding::Utf16Le,
             FileEncoding::Utf16Be,
-            FileEncoding::Ansi(encoding_rs::GBK),
+            FileEncoding::Ansi(ansi),
         ] {
-            let (bytes, used) = enc.encode("中文 abc\r\n第二行");
+            let original = match enc {
+                FileEncoding::Ansi(_) => format!("{sample} abc\r\n{sample}"),
+                _ => "中文 abc\r\n第二行".to_string(),
+            };
+            let (bytes, used) = enc.encode(&original);
             assert_eq!(used, enc);
             let (text, detected) = decode_file(&bytes);
-            assert_eq!(text, "中文 abc\r\n第二行");
+            assert_eq!(text, original);
             match enc {
                 FileEncoding::Ansi(_) => assert!(matches!(detected, FileEncoding::Ansi(_))),
                 other => assert_eq!(detected, other),

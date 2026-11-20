@@ -407,10 +407,12 @@ mod tests {
         assert!(r.result["note"].as_str().unwrap().contains("offset 用 3"));
         assert!(r.taints.is_none());
 
+        // 不是 UTF-8 的文件按这台机器的 ANSI 编码读（中文 Windows 是 GBK，CI 是 Windows-1252）。
+        let (ansi, sample) = text::ansi_sample();
         let outside = e.root.join("games").join("WoW").join("Config.wtf");
-        std::fs::write(&outside, encoding_rs::GBK.encode("中文设置\n").0).unwrap();
+        std::fs::write(&outside, ansi.encode(&format!("{sample}\n")).0).unwrap();
         let r = read(&e.cfg, &json!({"path": outside.display().to_string()}));
-        assert_eq!(r.result["content"], "     1\t中文设置\n");
+        assert_eq!(r.result["content"], format!("     1\t{sample}\n"));
         assert!(r.taints.unwrap().contains("Config.wtf"));
 
         std::fs::write(e.cfg.files_dir().join("b.bin"), [0u8, 1, 2, 0]).unwrap();
@@ -436,21 +438,24 @@ mod tests {
             .join("WTF")
             .join("Config.wtf");
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-        std::fs::write(&target, encoding_rs::GBK.encode("旧\n").0).unwrap();
+        // 原文件是这台机器的 ANSI 编码（中文 Windows 是 GBK，CI 是 Windows-1252），改完保持原编码。
+        let (ansi, sample) = text::ansi_sample();
+        let (old_text, new_text) = (format!("{sample} 1\n"), format!("{sample} 2\n"));
+        std::fs::write(&target, ansi.encode(&old_text).0).unwrap();
         let r = write(
             &e.cfg,
-            &json!({"path": target.display().to_string(), "content": "新\n"}),
+            &json!({"path": target.display().to_string(), "content": new_text}),
             7,
         );
         assert!(!r.is_error, "{:?}", r.result);
         let backup = r.result["backup"].as_str().unwrap();
         assert_eq!(
             std::fs::read(backup).unwrap(),
-            encoding_rs::GBK.encode("旧\n").0.to_vec()
+            ansi.encode(&old_text).0.to_vec()
         );
         assert_eq!(
             std::fs::read(&target).unwrap(),
-            encoding_rs::GBK.encode("新\n").0.to_vec()
+            ansi.encode(&new_text).0.to_vec()
         );
 
         let config = e.cfg.kotone_home().join("config.json");
