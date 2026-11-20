@@ -2571,6 +2571,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "url",
  "wiremock",
 ]
 
@@ -2743,6 +2744,7 @@ dependencies = [
  "kotone-stt",
  "kotone-tools",
  "kotone-tts",
+ "log",
  "serde",
  "serde_json",
  "sysinfo",
@@ -2756,6 +2758,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "tokio",
+ "url",
  "webview2-com",
  "windows 0.61.3",
  "zip",

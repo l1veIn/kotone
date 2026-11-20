@@ -5,6 +5,8 @@ mod agent;
 mod assistant;
 mod assistant_input;
 mod automation;
+mod browser;
+mod browser_cmd;
 mod bubble;
 mod companion;
 mod compatibility;
@@ -106,6 +108,7 @@ pub struct SharedState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    browser::forward_runtime_log();
     // 见函数注释：自启动提权必须先于单实例插件的互斥锁创建。
     #[cfg(windows)]
     auto_elevate_before_tauri_init();
@@ -256,6 +259,7 @@ pub fn run() {
             app.manage(voice_chat::VoiceChat::default());
             app.manage(voice_listen::VoiceListen::default());
             app.manage(key_request::KeyRequests::default());
+            app.manage(browser::BrowserRuntime::default());
             let assistant_runtime =
                 assistant::initialize(app.handle(), settings.clone(), connections.clone());
 
@@ -524,6 +528,12 @@ pub fn run() {
             agent::agent_subagent_stop,
             agent::agent_subagent_continue,
             agent::agent_subagent_answer,
+            browser_cmd::browser_state,
+            browser_cmd::browser_set_bounds,
+            browser_cmd::browser_control,
+            browser_cmd::browser_handover_done,
+            browser_cmd::browser_clear_data,
+            browser_cmd::browser_probe,
             agent::agent_set_permissions,
             agent::agent_set_automation_hidden,
             companion::companion_self_check,

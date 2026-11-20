@@ -35,7 +35,11 @@ kotone-ocr.workspace = true
 # `kotone.exe <子命令>`：安装版只带一个 exe，Agent / 插件用它当命令行与 stdio MCP 服务器
 kotone-cli.workspace = true
 
-tauri = { version = "2", features = ["tray-icon"] }
+# unstable：聊天页右侧栏里的内置浏览器是主窗口的子网页视图（`Window::add_child`，ADR 031）
+tauri = { version = "2", features = ["tray-icon", "unstable"] }
+url = "2"
+# 把 Tauri / wry 自己的警告和错误（log 库）转进 Kotone 的日志：例如子网页视图创建失败时只有这里有原因
+log = "0.4"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"

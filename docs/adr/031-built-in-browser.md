@@ -1,6 +1,6 @@
 # ADR 031：内置浏览器与浏览器操作——在后台替玩家操作网页
 
-状态：Proposed / 方向已确认（2026-11-20），0.2.0 之后实现，先做原型验证。相关：[ADR 019](019-game-computer-use.md)（操作游戏）、[ADR 029](029-voice-call-and-background-tasks.md)（后台任务）、[ADR 030](030-subagent-shell-and-files.md)（读过外面的东西先问）。调研：[常见音乐软件](../research/2026-11-20-music-apps.md)。
+状态：Accepted / 已确认（2026-11-20），玩家决定随 0.2.0-rc.1 一起上（“做完再发”），位置改成聊天页右侧栏（见第 1 节）。相关：[ADR 019](019-game-computer-use.md)（操作游戏）、[ADR 029](029-voice-call-and-background-tasks.md)（后台任务）、[ADR 030](030-subagent-shell-and-files.md)（读过外面的东西先问）。调研：[常见音乐软件](../research/2026-11-20-music-apps.md)。
 
 ## 背景
 
@@ -8,7 +8,7 @@
 
 已有的操作电脑（ADR 019）是给游戏用的：截图看画面，模拟真实的键盘鼠标，要求目标窗口在前台。玩家在游戏里时，它没法去操作别的程序。
 
-浏览器正好补上：网页本身就有搜索框和播放按钮；网页可以在 Kotone 自己的隐藏窗口里，完全不碰前台。
+浏览器正好补上：网页本身就有搜索框和播放按钮；网页在 Kotone 自己的窗口里（聊天页右侧栏），完全不碰前台。
 
 | | 操作电脑（ADR 019） | 浏览器操作（本 ADR） |
 | --- | --- | --- |
@@ -34,9 +34,9 @@
 
 ### 1. 内置浏览器
 
-- Kotone 里单独一个 WebView2 窗口，平时隐藏，需要玩家时才显示。只有一个页面，不做标签页、地址栏、书签。
+- **在聊天页的右侧栏里**（2026-11-20 玩家决定，照 DSH 桌面版的侧栏浏览器）：右侧栏常驻后台任务卡片和浏览器卡片，浏览器展开时也在右侧展开。浏览器是主窗口（`main`，关闭时只是隐藏）里的一个 Tauri 子网页视图（`Window::add_child`，tauri `unstable` 特性），第一次打开网页时创建；位置和大小跟着右侧栏里那块区域走（界面报给 `browser_set_bounds`）。收起、切到别的页面、有对话框时只隐藏、不销毁：页面、登录、正在放的歌都保留（照 DSH `keepMounted`）。只有一个页面，不做标签页、地址栏、书签。
 - 数据单独存放在 `<KOTONE_HOME>/browser/`（Tauri `data_directory`，独立的 WebView2 环境），和 Kotone 自己的界面分开。
-- 这个窗口不在任何权限声明里（Tauri capabilities），网页调用不了 Kotone 的任何功能。
+- 网页调用不了 Kotone 的任何功能：Tauri 2.11 对非本地来源一律拒绝自定义命令和插件命令，除非某个 capability 写了 `remote`（`tauri` `webview/mod.rs` 的 remote-origin 守卫）；我们的 capabilities 一个都没写（有测试）。
 - 启动参数只加在这个浏览器自己的环境上（照 ego 和 wqty123）：`--disable-renderer-backgrounding`、`--disable-background-timer-throttling`、`--disable-backgrounding-occluded-windows`、`--disable-features=CalculateNativeWinOcclusion`；为了网页播放器，试 `--autoplay-policy=no-user-gesture-required`。
 - 设置里一个按钮“清除浏览器登录”，删掉这个目录。
 
@@ -97,14 +97,45 @@
 - 不导入其他浏览器的登录信息；不替玩家输入密码、付款。
 - 不截图识别（以后真遇到只能看图的页面，再照 Playwright MCP 的 vision 选项加）。
 
-## 原型先验证
+## 原型先验证（2026-11-21 真机结果，主窗口一直隐藏 = 玩家在全屏游戏里）
 
-1. **隐藏的 WebView2 能不能收到操作**：窗口不可见时，页面内 `click()` 和调试协议的鼠标事件分别能不能生效。
-2. **被全屏游戏挡住时**：加了上面的启动参数后，能不能收到操作、音乐会不会被降频或暂停。
-3. **自动播放**：页面内 `click()` 不算用户手势，加了自动播放参数后，网易云、QQ 音乐网页版能不能开始放歌。
-4. 网易云、QQ 音乐网页版登录后常见的歌能不能直接播放；扫码登录在这个窗口里能不能完成。
-5. 暂停、下一首、读歌名能不能直接调用播放页里的播放器做到（不经过后台任务）。
-6. 单独的数据目录、单独的启动参数、“网页调用不了 Kotone”在 Tauri 里确实生效；`CallDevToolsProtocolMethod` 怎么调（2020 年有人反映只能在 WebView 回调里调用；我们踩过在 `with_webview` 回调里发事件导致死锁的坑，要避开）。
+1. **隐藏的 WebView2 能不能收到操作**：能。页面内 `click()`、原生 setter 输入、提交都生效（必应搜索、点开第一条结果跳到别的网站）；调试协议的鼠标事件只作备选，没用上。
+2. **被全屏游戏挡住时**：主窗口隐藏比“被挡住”更严，上面已经通过；音乐会不会被降频没有测到（没放成功，见 4）。
+3. **自动播放**：没测到（同 4）。
+4. **网易云 / QQ 音乐网页版**：歌曲页能打开、能读、能点“播放”；不登录时网易云《晴天》点了播放不出声，要靠交给玩家扫码登录。扫码登录本身要玩家实测。
+5. **暂停、下一首、读歌名**：能找到页面里的播放器（含不挂在页面上的 `Audio`），播放 / 暂停直接调用；“下一首”按网站的按钮表点；放没放以 WebView2 的“页面在出声”为准。真放起来以后的效果要登录后实测。
+6. **数据目录、启动参数、网页调不了 Kotone**：去掉测试环境变量后生效；`CallDevToolsProtocolMethod` 在 `with_webview` 里调用、回调里只发 channel，没有死锁；远程网页拿不到命令由 Tauri 的 remote-origin 守卫保证，我们的 capabilities 没有 `remote`（有测试）。
+
+## 实现情况（2026-11-21，`claude/voice-call`）
+
+| 部分 | 在哪 | 照谁 |
+| --- | --- | --- |
+| 工具说明、网址检查、页面快照（角色 / 名字 / 编号 / iframe / 密码打码）、分页、和上次比、不可信边界、站点授权、验证码特征、音乐网站“下一首”按钮表、交给页面执行的点击 / 输入 / 按键脚本 | `crates/kotone-agent/src/browser.rs`（纯逻辑，有单测） | ego `snapshot.mjs` / `snapshot-diff.ts` / `captcha.ts`，dsh-browser `untrusted.ts` / `privacy.ts`，xylt369 `url-guard.ts` |
+| 子网页视图（右侧栏）、访客策略（权限 / 下载 / 认证弹窗 / 新窗口 / 导航）、状态与轮询、清除登录 | `apps/desktop/src-tauri/src/browser/mod.rs` | DSH 桌面版侧栏浏览器记录 |
+| 程序内调试协议桥（`CallDevToolsProtocolMethod`，回调里只发 channel） | `browser/cdp.rs` | WebView2 文档 |
+| 打开、读页面、点击（页面内 `click()` 为主、鼠标事件备选）、输入、按键、等待、交给玩家、`music` | `browser/page.rs` | ego |
+| 后台任务的 `browser.*`：第一次打开某个网站经主会话问、解析后的地址再查一遍、遇到验证码自动交给玩家、语音入口时开口说一句（不把 Kotone 拉到前台） | `apps/desktop/src-tauri/src/agent/browser_tools.rs` | ADR 030 的确认路径 |
+| 界面命令 `browser_state / browser_set_bounds / browser_control / browser_handover_done / browser_clear_data`，事件 `kotone://browser` | `browser_cmd.rs` | — |
+
+- 工具都走 `Source::Exec`（经桌面端 `BuiltinHost::exec`，带调用 id、取消和“每次询问”），只给后台；`music` 是主会话的内置工具。`browser.*` 的结果按不可信算，接入 ADR 030 的“读过外面的东西”标记。新的副作用 `browses-web` / `plays-media` 默认允许（什么时候问由上面的规则定）。
+- 和设计不同的地方：
+  - 编号就是浏览器的节点号（照 ego）；“旧代数拒绝”做成：导航后清空上一次读页面的编号表，点击 / 输入只认最近一次读到的编号。
+  - “和上次比只给变化”做成：同一网址再读时在结果前面附一句“新增 / 少了 / 变了几行”，正文仍是完整页面（模型不用自己拼）。
+  - 网页不能抢焦点、弹对话框，用每个 frame 的初始化脚本做（`window.focus` / `alert` / `confirm` / `prompt` 置空），代替 ego 在调试协议上吞调用（我们自己从不调用 `bringToFront`）。
+  - 真机脚本用环境变量 `KOTONE_BROWSER_MUTE` 让浏览器静音（半夜测放歌）。
+- 实现时踩到、已经处理的：
+  - **测试环境变量会让浏览器建不出来**：真机脚本给 Kotone 主界面设的 `WEBVIEW2_USER_DATA_FOLDER` / `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 会盖过这里指定的数据目录和启动参数，浏览器和主界面抢同一个数据目录、参数又不同，WebView2 报 `0x8007139F`，Tauri 照样返回句柄、之后发给它的消息全被悄悄丢掉。建浏览器前去掉这两个变量（玩家不会设）。
+  - **Tauri / wry 自己的错误原来看不到**：它们走 `log` 库，Kotone 没接；现在把警告和错误转进 Kotone 的日志（上面的问题就是这样查到的）。
+  - **网页的原生对话框会卡住隐藏着的页面**：关掉 WebView2 默认对话框，alert 直接确定，其余当取消，并记日志。
+  - **网易云这类播放器用不挂在页面上的 `Audio` 对象**：初始化脚本登记所有调用过 `play()` 的媒体，`music` 用这份登记；“在不在放”另外用 WebView2 的 `IsDocumentPlayingAudio`（不管播放器怎么写都准）。
+  - 只在调试版里可用的 `browser_probe` 命令：不经过模型直接打开 / 读 / 点 / 输入，真机冒烟脚本 `scripts/manual-e2e/browser_probe_real.py` 用它（发布版拒绝）。
+- 真机（2026-11-21，真实 DeepSeek，主窗口一直隐藏、浏览器静音；`scripts/manual-e2e/browser_real.py`、`browser_probe_real.py`）：
+  - 不经过模型（`browser_probe_real.py`）13/13：打开 example.com 1.2 秒、读页面 0.3 秒；必应输入“晴天 周杰伦”提交、点开第一条结果跳到 B 站；本机 / 内网 / `file:` / `tauri.localhost` 都打不开。
+  - 经过模型（`browser_real.py`）：打开 example.com（第一次先问、记住同意）说出标题；必应搜索并点开第一条结果（百度百科《晴天》）。
+  - “我要听晴天”：不登录时网易云网页版搜什么都是 0 首，QQ 音乐也要登录。第一次跑时模型把它当成“没这首歌”，换了四个网站，最后在酷狗点了播放但没出声；提示词补上“要登录就在这个网站上交给玩家，不要换网站”后，第二次在网易云上交给玩家扫码，没人扫码（脚本 20 秒后点“好了”）就照实说没放成。真放起来要玩家登录后实测（0.2.0 试玩清单）。
+  - 主会话的 `music` 第一次跑时报“没有名为 music 的内置动作”（漏进了桌面端执行的名单），已修并加了测试。
+  - 聊天页没有出现 mock 截图里那条 “Cannot read properties of null” 提示。
+- 已知缺口：导航检查只管顶层页面，iframe 里的请求不拦（DSH 记录里也写了这不是完整的内网防火墙）；域名解析检查只在 `browser.open` 时做一次（解析和连接之间仍有时间差）；酷狗、酷我、QQ 音乐的“下一首”按钮选择器没有真机核对过，对不上时按 title / aria-label 里的“下一首”找。
 
 ## 参照
 

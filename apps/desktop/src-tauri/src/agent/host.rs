@@ -73,6 +73,11 @@ impl BuiltinHost for DesktopBuiltins {
                 crate::speech_screen::tool(&self.app).await
             }
             "web.fetch" => crate::web_tools::fetch(&self.app, &caller, arguments).await,
+            // Kotone 浏览器里在放的歌（ADR 031，主会话马上做）
+            kotone_agent::browser::TOOL_MUSIC => {
+                let action = str_arg(arguments, "action");
+                crate::browser::music(&self.app, action).await
+            }
             other => Err(format!("{other} 在这里不可用")),
         }
     }
@@ -85,6 +90,18 @@ impl BuiltinHost for DesktopBuiltins {
         confirm: bool,
         cancel: &CancellationToken,
     ) -> ToolOutcome {
+        // 浏览器（ADR 031）和执行命令、读写文件（ADR 030）都只给后台，都经这里。
+        if kotone_agent::browser::is_browser_tool(tool) {
+            return browser_tool(
+                &self.app,
+                &self.conversation_id(),
+                tool,
+                arguments,
+                confirm,
+                cancel,
+            )
+            .await;
+        }
         exec_tool(
             &self.app,
             &self.conversation_id(),

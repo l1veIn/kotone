@@ -75,6 +75,10 @@ const ALLOWED_EFFECTS: &[&str] = &[
     // 决定（读过外面的东西、删除类命令、第一次改游戏目录……）；玩家设成询问 / 禁止照常生效。
     "runs-command",
     "writes-file",
+    // ADR 031：后台在 Kotone 的浏览器里操作网页。默认“允许”：第一次打开某个网站由桌面端经主会话问玩家，
+    // 登录、验证码、付款交给玩家（browser.handover），密码框不让输入。播放 / 暂停 Kotone 浏览器里的歌。
+    "browses-web",
+    "plays-media",
 ];
 
 /// 默认询问的副作用及原因。

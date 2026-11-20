@@ -17,6 +17,8 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 sha2 = "0.10"
+# 内置浏览器（ADR 031）的网址检查
+url = "2"
 
 [dev-dependencies]
 tempfile.workspace = true
