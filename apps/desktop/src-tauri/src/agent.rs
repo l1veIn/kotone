@@ -119,6 +119,15 @@ struct Inner {
     next_ask: u64,
     /// 执行记录 id → 发起它的对话。
     run_owners: HashMap<String, String>,
+    /// 被打断的回答要改成玩家听到的部分（那段对话正在跑：下次存盘时改，见 [`truncate_spoken`]）。
+    truncations: Vec<Truncation>,
+}
+
+/// 一条被打断的回答：对话、消息时间、改成的文字。
+struct Truncation {
+    conversation: String,
+    at_ms: u64,
+    text: String,
 }
 
 pub struct AgentRuntime {
@@ -376,10 +385,29 @@ async fn drive(
             inbox.take_delivered();
             let owner = turn_owner(&conversation.id, &user);
             let voice_turn = follows_up(&user);
+            // 游戏内入口：回答边生成边念（ADR 029 §六）；用不了时为 None，答完整段念。
+            let voice = if entry == Entry::Game {
+                crate::voice_reply::VoiceTurn::new(&app, &conversation.id, owner.clone())
+            } else {
+                None
+            };
             let filler = (entry == Entry::Game).then(|| progress_filler(&app, &cancel, owner));
-            let stop = turn(&app, &mut conversation, user, entry, &cancel, &inbox, None).await;
+            let stop = turn(
+                &app,
+                &mut conversation,
+                user,
+                entry,
+                &cancel,
+                &inbox,
+                None,
+                voice.as_ref(),
+            )
+            .await;
             if let Some(filler) = filler {
                 filler.cancel();
+            }
+            if let Some(voice) = &voice {
+                voice.close();
             }
             // 聊天窗口发起的一轮里，玩家在游戏里插了话（热键、唤醒）：回答也要播出来，
             // 否则人在游戏里听不到。
@@ -394,6 +422,7 @@ async fn drive(
                     &conversation.messages[start.min(conversation.messages.len())..],
                     &stop,
                     follow,
+                    voice,
                 );
             }
             if stop == StopReason::Cancelled || cancel.is_cancelled() {
@@ -412,12 +441,25 @@ async fn drive(
                 continue;
             }
         }
+        // 这段对话跑着时被打断的回答：在同一把锁下改好存盘再放开（新的一轮读到的是改过的）。
+        let pending = take_truncations(&mut inner, &conversation.id);
+        if apply_truncations(&mut conversation.messages, &pending) {
+            if let Ok(store) = store(&app) {
+                if let Err(e) = store.save(&mut conversation) {
+                    log::log(&format!("agent: save failed: {e}"));
+                }
+            }
+        }
         if inner
             .running
             .as_ref()
             .is_some_and(|r| r.conversation_id == conversation.id)
         {
             inner.running = None;
+        }
+        drop(inner);
+        if !pending.is_empty() {
+            emit(&app, &conversation.id, json!({"kind": "revised"}));
         }
         break;
     }
@@ -474,6 +516,7 @@ fn offered_automations(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn turn(
     app: &AppHandle,
     conversation: &mut Conversation,
@@ -482,6 +525,7 @@ async fn turn(
     cancel: &CancellationToken,
     inbox: &Arc<Inbox>,
     child: Option<&ChildSpec>,
+    voice: Option<&Arc<crate::voice_reply::VoiceTurn>>,
 ) -> StopReason {
     let Ok(store) = store(app) else {
         return StopReason::Failed {
@@ -655,6 +699,7 @@ async fn turn(
     let tool_names: Mutex<HashMap<String, String>> = Mutex::default();
     // 语音入口的主会话：计时、工具前的一句马上念（ADR 029 §一、§七）。
     let voice_main = entry == Entry::Game && child.is_none();
+    let revised_now = std::sync::atomic::AtomicBool::new(false);
     let on_event = |event: AgentEvent| {
         if voice_main
             && matches!(
@@ -669,6 +714,31 @@ async fn turn(
         {
             crate::voice_timing::first_token();
         }
+        // 语音入口：模型的正文边生成边念（ADR 029 §六）；推理文字不念。
+        if let Some(voice) = voice {
+            match &event {
+                AgentEvent::MessageChunk { text } => {
+                    if voice.on_chunk(text) {
+                        // 回答开口了：这一轮不再接填充话
+                        LAST_SAY_MS.store(now_ms(), std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+                AgentEvent::Discarded { .. } => voice.on_discard(),
+                AgentEvent::ToolCall { call } if call.name == kotone_agent::catalog::TOOL_SAY => {
+                    voice.mute()
+                }
+                AgentEvent::Appended {
+                    message:
+                        Message::Assistant {
+                            text,
+                            tool_calls,
+                            at_ms,
+                            ..
+                        },
+                } => voice.on_step_end(text, !tool_calls.is_empty(), *at_ms),
+                _ => {}
+            }
+        }
         match &event {
             // 玩家的话（含插话）进了对话：这之后的读屏、搜索费用记到这一轮。
             AgentEvent::Appended {
@@ -681,12 +751,17 @@ async fn turn(
             }
             // 语音入口：模型在调用工具前说的一句（“我查一下”）马上念，工具同时在跑
             // （照 OpenAI 实时语音提示词指南、Pipecat、Retell `speak_during_execution`）。
+            // 边生成边念时这句已经在念了；只有整段念时才在这里念。
             AgentEvent::Appended {
                 message:
                     Message::Assistant {
                         text, tool_calls, ..
                     },
-            } if voice_main && !tool_calls.is_empty() && !text.trim().is_empty() => {
+            } if voice_main
+                && voice.map_or(true, |v| v.muted())
+                && !tool_calls.is_empty()
+                && !text.trim().is_empty() =>
+            {
                 speak_preamble(app, text.trim());
             }
             _ => {}
@@ -698,6 +773,13 @@ async fn turn(
                 if let Some(title) = title_cell.lock().unwrap().take() {
                     log::log(&format!("agent: conversation {conversation_id} titled"));
                     c.auto_title = Some(title);
+                }
+                // 这一轮里被打断的回答：一起改成玩家听到的部分再存（不会被这次存盘盖掉）。
+                let revised = runtime(app)
+                    .map(|rt| take_truncations(&mut rt.inner.lock().unwrap(), &conversation_id))
+                    .unwrap_or_default();
+                if apply_truncations(&mut c.messages, &revised) {
+                    revised_now.store(true, std::sync::atomic::Ordering::SeqCst);
                 }
                 if let Err(e) = store.save(&mut c) {
                     log::log(&format!("agent: save failed: {e}"));
@@ -779,6 +861,10 @@ async fn turn(
             _ => {}
         }
         emit(app, &conversation_id, event_json(&event));
+        // 改过的记录在这条消息之后通知界面重新读（这条消息本身可能就是被改的那条）。
+        if revised_now.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            emit(app, &conversation_id, json!({"kind": "revised"}));
+        }
     };
     let mut history = conversation.messages.clone();
     let stop = run_turn(
@@ -948,12 +1034,15 @@ async fn attach_speech_screen(app: &AppHandle, user: &mut Message) {
 /// 游戏内：玩家看不到窗口，这一轮的结果用语音 / 弹幕播出。
 /// Agent 已经用 `reply.say` 播过的不再重复；出错或被停下时播一句原因；玩家自己停止的不播。
 /// `follow`：语音入口正常答完，念完后接着听（ADR 029 §五）。
+/// `voice`：这一轮边生成边念（ADR 029 §六）：最后的回答已经在念了，等它念完（真正播完）再接着听；
+/// 一句也没念出来（流式语音出错）才整段再念一次。
 fn speak_outcome(
     app: &AppHandle,
     conversation_id: &str,
     appended: &[Message],
     stop: &StopReason,
     follow: bool,
+    voice: Option<Arc<crate::voice_reply::VoiceTurn>>,
 ) {
     // 回答的合成费用记到这一轮最后一句玩家的话（插话也是单独的一轮）。
     let owner = appended
@@ -962,15 +1051,45 @@ fn speak_outcome(
         .find(|m| matches!(m, Message::User { .. }))
         .and_then(|m| turn_owner(conversation_id, m));
     let reply = game_reply(appended, stop);
-    if reply.is_none() {
+    // 最后的回答是哪条消息（出错、被上限停下时念的是原因，不是这条）。
+    let final_at = stop
+        .notice()
+        .is_none()
+        .then(|| final_reply_at(appended))
+        .flatten();
+    let streamed = voice.as_ref().is_some_and(|v| v.has_replies());
+    if reply.is_none() && !streamed {
         crate::bubble::finished(app);
         crate::voice_timing::discard();
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let epoch = crate::follow_up::epoch();
-        let shown = match reply {
-            Some(text) => {
+        let mut reply = reply;
+        // 边生成边念的：等每一路都念完（或被打断）。
+        let mut streamed_answer: Option<Option<String>> = None;
+        if let Some(voice) = &voice {
+            for spoken in voice.wait_all().await {
+                if let Some(error) = &spoken.error {
+                    log::log(&format!("agent: 边生成边念出错：{error}"));
+                }
+                if final_at.is_none() || spoken.message != final_at {
+                    continue;
+                }
+                if spoken.interrupted {
+                    // 被打断了：不再念、不接着听
+                    reply = None;
+                    streamed_answer = Some(None);
+                } else if spoken.error.is_some() && spoken.spoken.trim().is_empty() {
+                    log::log("agent: 回答一句也没念出来，整段再念一次");
+                } else {
+                    reply = None;
+                    streamed_answer = Some(Some(spoken.text.trim().to_string()));
+                }
+            }
+        }
+        let shown = match (reply, streamed_answer) {
+            (Some(text), _) => {
                 match deliver_voice_reply(&app, text.clone(), Vec::new(), owner, "answer").await {
                     Ok(_) => Some(text),
                     Err(e) => {
@@ -979,8 +1098,12 @@ fn speak_outcome(
                     }
                 }
             }
+            (None, Some(shown)) => shown,
             // 已经用 reply.say / 工具前的一句说过了：等那句念完。
-            None => {
+            (None, None) => {
+                if streamed {
+                    crate::bubble::finished(&app);
+                }
                 for _ in 0..300 {
                     if !crate::assistant::output_busy(&app) {
                         break;
@@ -1092,6 +1215,7 @@ fn progress_filler(
         if LAST_SAY_MS.load(std::sync::atomic::Ordering::SeqCst) >= started
             || crate::assistant::output_busy(&app)
             || crate::bubble::is_speaking(&app)
+            || crate::voice_reply::active()
         {
             return;
         }
@@ -1115,6 +1239,92 @@ fn progress_filler(
         }
     });
     done
+}
+
+/// 这一轮最后的回答（最后一条不带工具调用、有字的回复）是哪条消息（纯函数，与 [`game_reply`] 同一规则）。
+fn final_reply_at(appended: &[Message]) -> Option<u64> {
+    appended.iter().rev().find_map(|m| match m {
+        Message::Assistant {
+            text,
+            tool_calls,
+            at_ms,
+            ..
+        } if tool_calls.is_empty() && !text.trim().is_empty() => Some(*at_ms),
+        _ => None,
+    })
+}
+
+/// 语音回合被打断（ADR 029 §六）：对话里那条回答只留玩家实际听到的部分。正在跑这段对话时先记下，
+/// 下次存盘时改（免得被这一轮的存盘盖掉，见 `turn` / `drive`）；没在跑就直接改存盘的记录。
+pub fn truncate_spoken(app: &AppHandle, conversation: &str, at_ms: u64, spoken: &str) {
+    let text = interrupted_text(spoken);
+    let Ok(rt) = runtime(app) else { return };
+    let mut inner = rt.inner.lock().unwrap();
+    if inner
+        .running
+        .as_ref()
+        .is_some_and(|r| r.conversation_id == conversation)
+    {
+        inner.truncations.push(Truncation {
+            conversation: conversation.to_string(),
+            at_ms,
+            text,
+        });
+        return;
+    }
+    // 在锁里改：新的一轮（send_message 在这把锁下登记）读到的是改过的。
+    let Ok(store) = store(app) else { return };
+    let Ok(Some(mut c)) = store.load(conversation) else {
+        return;
+    };
+    let truncation = Truncation {
+        conversation: conversation.to_string(),
+        at_ms,
+        text,
+    };
+    if !apply_truncations(&mut c.messages, std::slice::from_ref(&truncation)) {
+        return;
+    }
+    if let Err(e) = store.save(&mut c) {
+        log::log(&format!("agent: save failed: {e}"));
+        return;
+    }
+    drop(inner);
+    log::log(&format!(
+        "agent: 回答被打断，对话 {conversation} 里只留念出来的部分"
+    ));
+    emit(app, conversation, json!({"kind": "revised"}));
+}
+
+/// 取出这段对话等着改的记录。
+fn take_truncations(inner: &mut Inner, conversation: &str) -> Vec<Truncation> {
+    let (mine, rest) = std::mem::take(&mut inner.truncations)
+        .into_iter()
+        .partition(|t| t.conversation == conversation);
+    inner.truncations = rest;
+    mine
+}
+
+/// 把被打断的回答改成听到的部分（纯函数）。返回有没有改动。
+fn apply_truncations(messages: &mut [Message], truncations: &[Truncation]) -> bool {
+    let mut changed = false;
+    for t in truncations {
+        for message in messages.iter_mut() {
+            if let Message::Assistant { text, at_ms, .. } = message {
+                if *at_ms == t.at_ms && *text != t.text {
+                    *text = t.text.clone();
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed
+}
+
+/// 被打断的回答在对话里的样子（纯函数）：念出来的部分 +“（被打断）”，模型下一轮知道玩家没听到后面。
+fn interrupted_text(spoken: &str) -> String {
+    let spoken = spoken.trim();
+    format!("{spoken}（被打断）")
 }
 
 /// 游戏内这一轮要播的话（纯函数）：出错 / 被上限停下 → 原因；正常结束 → 最后的回答，
@@ -2055,6 +2265,7 @@ async fn drive_child(
                 &cancel,
                 &inbox,
                 Some(&spec),
+                None,
             )
             .await;
             if let Some(tag) = tag {
@@ -2382,6 +2593,71 @@ mod tests {
         let cut = [user("voice"), assistant("我看看", &["game.look"])];
         assert_eq!(game_reply(&cut, &done), None);
         assert!(game_reply(&cut, &StopReason::StepLimit).is_some_and(|t| !t.contains("我看看")));
+    }
+
+    fn at(mut message: Message, ms: u64) -> Message {
+        if let Message::Assistant { at_ms, .. } = &mut message {
+            *at_ms = ms;
+        }
+        message
+    }
+
+    #[test]
+    fn the_streamed_final_answer_is_found_by_the_same_rule_as_game_reply() {
+        let turn = [
+            user("voice"),
+            at(assistant("我查一下", &["web.search"]), 10),
+            at(assistant("这个版本推荐先出无尽。", &[]), 20),
+            at(assistant("  ", &[]), 30),
+        ];
+        assert_eq!(final_reply_at(&turn), Some(20));
+        assert_eq!(
+            final_reply_at(&[user("voice"), at(assistant("我看看", &["game.look"]), 5)]),
+            None
+        );
+    }
+
+    #[test]
+    fn an_interrupted_answer_keeps_only_what_was_heard() {
+        assert_eq!(
+            interrupted_text("你的打野在下路，"),
+            "你的打野在下路，（被打断）"
+        );
+        assert_eq!(interrupted_text("  "), "（被打断）");
+        let mut messages = vec![
+            user("voice"),
+            at(assistant("我查一下", &["web.search"]), 10),
+            at(assistant("先出无尽。再出电刀。最后出饮血。", &[]), 20),
+        ];
+        let cut = |conversation: &str, at_ms, spoken: &str| Truncation {
+            conversation: conversation.into(),
+            at_ms,
+            text: interrupted_text(spoken),
+        };
+        assert!(apply_truncations(
+            &mut messages,
+            &[cut("c1", 20, "先出无尽。")]
+        ));
+        assert!(
+            matches!(&messages[2], Message::Assistant { text, .. } if text == "先出无尽。（被打断）")
+        );
+        // 工具前那句没动；同样的改动再来一次不算改动
+        assert!(matches!(&messages[1], Message::Assistant { text, .. } if text == "我查一下"));
+        assert!(!apply_truncations(
+            &mut messages,
+            &[cut("c1", 20, "先出无尽。")]
+        ));
+        // 对不上的消息不改
+        assert!(!apply_truncations(&mut messages, &[cut("c1", 99, "")]));
+        // 取出等着改的：只取这段对话的
+        let mut inner = Inner {
+            truncations: vec![cut("c1", 1, ""), cut("c2", 2, ""), cut("c1", 3, "")],
+            ..Inner::default()
+        };
+        let mine = take_truncations(&mut inner, "c1");
+        assert_eq!(mine.iter().map(|t| t.at_ms).collect::<Vec<_>>(), vec![1, 3]);
+        assert_eq!(inner.truncations.len(), 1);
+        assert_eq!(inner.truncations[0].conversation, "c2");
     }
 
     #[test]

@@ -144,7 +144,8 @@ export class AgentChat {
         this.live.thought = "";
         break;
       case "compacted":
-        // 检查点插在对话中间：按存盘的重新读一遍。
+      case "revised":
+        // 检查点插在对话中间 / 被打断的回答改短了：按存盘的重新读一遍。
         if (!replay) void this.refresh();
         break;
       case "finished":

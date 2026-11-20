@@ -538,15 +538,26 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
-    let revision = update(app, |m| Some(m.speaking(text).clone()));
+    let revision = speaking(app, text);
     speak().await;
     if let Some(revision) = revision {
-        let after = app
-            .try_state::<BubbleRuntime>()
-            .and_then(|rt| rt.model.lock().unwrap().spoken(revision));
-        if let Some(after) = after {
-            schedule_hide(app, revision, after);
-        }
+        spoken(app, revision);
+    }
+}
+
+/// 正在念：气泡显示这些字（边生成边念时随念到的句子一次次换成更长的）。返回这次的序号。
+pub fn speaking(app: &AppHandle, text: &str) -> Option<u64> {
+    update(app, |m| Some(m.speaking(text).clone()))
+}
+
+/// 念完了（`revision` = 最后一次 [`speaking`] 的序号）：按字数停留一会儿再收起；
+/// 中间有了新内容就不收。
+pub fn spoken(app: &AppHandle, revision: u64) {
+    let after = app
+        .try_state::<BubbleRuntime>()
+        .and_then(|rt| rt.model.lock().unwrap().spoken(revision));
+    if let Some(after) = after {
+        schedule_hide(app, revision, after);
     }
 }
 

@@ -81,7 +81,16 @@ fn pcm(
     })
 }
 
-#[cfg(test)]
+/// 单声道 f32 → 16 位 PCM WAV（等待短句落盘用，[`crate::cache::disk`]）。
+pub fn encode(speech: &SynthesizedSpeech) -> Vec<u8> {
+    let samples: Vec<i16> = speech
+        .samples
+        .iter()
+        .map(|s| (s.clamp(-1.0, 1.0) * 32_767.0).round() as i16)
+        .collect();
+    encode_pcm16(&samples, speech.sample_rate, None)
+}
+
 pub(crate) fn encode_pcm16(samples: &[i16], rate: u32, data_len_override: Option<u32>) -> Vec<u8> {
     let data_len = (samples.len() * 2) as u32;
     let mut out = Vec::new();
@@ -117,5 +126,19 @@ mod tests {
         assert_eq!(decode(&streamed).unwrap().samples.len(), 4);
         assert!(decode(b"ID3not-a-wav").is_err());
         assert!(decode(&encode_pcm16(&[], 24_000, None)).is_err());
+    }
+
+    #[test]
+    fn encoded_speech_decodes_back() {
+        let speech = SynthesizedSpeech {
+            samples: vec![0.0, 0.25, -0.5, 1.5],
+            sample_rate: 24_000,
+        };
+        let back = decode(&encode(&speech)).unwrap();
+        assert_eq!(back.sample_rate, 24_000);
+        assert_eq!(back.samples.len(), 4);
+        for (a, b) in back.samples.iter().zip([0.0, 0.25, -0.5, 1.0]) {
+            assert!((a - b).abs() < 1e-3, "{a} vs {b}");
+        }
     }
 }

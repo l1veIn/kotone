@@ -37,6 +37,8 @@ export type AgentEvent =
   | { kind: "compacted"; index: number; message: AgentMessage }
   /** 空回复已丢弃、重发了同样的请求。 */
   | { kind: "discarded" }
+  /** 语音回合被打断：对话里那条回答改成了玩家听到的部分（ADR 029 §六），按存盘的重新读。 */
+  | { kind: "revised" }
   | { kind: "finished"; stop: StopReason; acpStopReason: string | null }
   | { kind: "idle" };
 

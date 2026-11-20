@@ -93,6 +93,8 @@ pub async fn ask(
     if let Some(owner) = kotone_core::usage::current_turn() {
         kotone_core::usage::claim_speech(question, owner);
     }
+    // 工具前那句（“我问一下”）还在边生成边念：念完再问，两句不叠在一起。
+    crate::voice_reply::wait_idle(Duration::from_secs(15)).await;
     crate::voice_timing::sound("ask");
     let speak_app = app.clone();
     let text = question.to_string();

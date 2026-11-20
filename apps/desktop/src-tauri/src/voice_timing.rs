@@ -4,8 +4,10 @@
 //! 照 LiveKit Agents 的 `metrics`（EOU 延迟、LLM TTFT、TTS TTFB 分开记）与 Pipecat 的
 //! `UserBotLatencyLogObserver`（说完到出声）。语音回合一次只有一个，所以只记“当前这一轮”。
 //!
-//! “出声”：回答是整段合成好（已进缓存）、交给播放的时刻；前面还在播填充话时要等它播完，
-//! 所以另外记填充话播完的时刻，出声取两者较晚的。
+//! “出声”：边生成边念时是第一块声音交给输出设备的时刻（`SpeechStream::first_audio_at`，
+//! 前面在播填充话时它本来就等填充话播完）；整段念（流式语音不可用、出错时的提示）是合成好、
+//! 交给播放的时刻，前面还在播填充话时要等它播完，所以另外记填充话播完的时刻，出声取两者较晚的。
+//! 边生成边念时另记“开始合成 → 出声”（`tts=`）：第一段正文到了、开始分句合成，到第一次出声。
 
 use std::sync::Mutex;
 
@@ -23,6 +25,8 @@ pub struct Timing {
     /// 她第一次出声（模型说的：工具前的一句或回答）。
     pub sound: Option<u64>,
     pub sound_kind: &'static str,
+    /// 边生成边念：第一段正文到了、开始合成的时刻。
+    pub tts_start: Option<u64>,
 }
 
 static CURRENT: Mutex<Option<Timing>> = Mutex::new(None);
@@ -83,9 +87,23 @@ pub fn filler_ended() {
     });
 }
 
+/// 边生成边念：第一段正文到了，开始分句合成。
+pub fn tts_started() {
+    let at = now();
+    update(|t| {
+        if t.text.is_some() {
+            t.tts_start.get_or_insert(at);
+        }
+    });
+}
+
 /// 模型说的第一句话可以开始播了（`kind`：`answer` / `preamble` / `say` / `ask`）：写一行日志，这一轮记完。
 pub fn sound(kind: &'static str) {
-    let at = now();
+    sound_at(kind, now());
+}
+
+/// 同 [`sound`]，出声的时刻另给（边生成边念：第一块声音交给输出设备的时刻）。
+pub fn sound_at(kind: &'static str, at: u64) {
     let done = {
         let mut current = CURRENT.lock().unwrap();
         match current.as_mut() {
@@ -137,6 +155,9 @@ pub fn format(t: &Timing) -> String {
         )),
         None => line.push_str(" filler=none"),
     }
+    if t.tts_start.is_some() {
+        line.push_str(&format!(" tts={}", span(t.tts_start, t.sound)));
+    }
     line
 }
 
@@ -154,6 +175,7 @@ mod tests {
             filler_end: Some(2_900),
             sound: Some(2_700),
             sound_kind: "answer",
+            tts_start: None,
         };
         // 回答 2.7 s 就合成好了，但要等填充话 2.9 s 播完
         assert_eq!(
@@ -168,6 +190,20 @@ mod tests {
         assert_eq!(
             format(&bare),
             "voice-timing: vad→text=40ms text→token=- token→sound=- vad→sound=- first=- filler=none"
+        );
+        // 边生成边念：多记一段“开始合成 → 出声”
+        let streamed = Timing {
+            speech_end: Some(0),
+            text: Some(50),
+            first_token: Some(900),
+            tts_start: Some(950),
+            sound: Some(2_050),
+            sound_kind: "answer",
+            ..Timing::default()
+        };
+        assert_eq!(
+            format(&streamed),
+            "voice-timing: vad→text=50ms text→token=850ms token→sound=1150ms vad→sound=2050ms first=answer filler=none tts=1100ms"
         );
     }
 

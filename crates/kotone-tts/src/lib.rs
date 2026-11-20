@@ -1,7 +1,8 @@
 //! Neural and online speech. One worker owns synthesis and output; cancellation
 //! invalidates queued synthesis without waiting for a non-interruptible ONNX call
 //! or HTTP request. Microphone admission waits only for an already-open output
-//! stream to close. Synthesized audio is cached by voice + rate + text.
+//! stream to close. Synthesized audio is cached by voice + rate + text; registered fixed
+//! phrases (wake acks, waiting phrases) are also kept on disk (`cache::disk`).
 //!
 //! [`SpeechStream`] (ADR 029 §6) speaks a model answer while it is being written:
 //! sentence segmentation, DeepSeek streaming synthesis or per-sentence synthesis,
@@ -338,7 +339,18 @@ fn worker(source: Source, receiver: mpsc::Receiver<WorkerCommand>, control: Arc<
                 ),
                 Source::Online(synth) => synth.cache_key(&command.request)?,
             };
-            let cached = cache::global().lock().unwrap().get(&key);
+            let mut cached = cache::global().lock().unwrap().get(&key);
+            // 登记过落盘的固定短句（唤醒应答、等待话）：上次启动时合成过就从文件读
+            if cached.is_none() {
+                if let Some(audio) = cache::disk::load(&key, &command.request.text) {
+                    let audio = Arc::new(audio);
+                    cache::global()
+                        .lock()
+                        .unwrap()
+                        .put(key.clone(), audio.clone());
+                    cached = Some(audio);
+                }
+            }
             if !command.play && command.audio_out.is_none() && cached.is_some() {
                 return Ok(());
             }
@@ -366,6 +378,7 @@ fn worker(source: Source, receiver: mpsc::Receiver<WorkerCommand>, control: Arc<
                     };
                     // 在线合成常在首尾带半秒静音：裁掉，短句（应答）出声更快。
                     let audio = Arc::new(engine::trim_silence(audio));
+                    cache::disk::store(&key, &command.request.text, &audio);
                     cache::global().lock().unwrap().put(key, audio.clone());
                     audio
                 }

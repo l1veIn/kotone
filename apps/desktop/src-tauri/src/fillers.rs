@@ -4,8 +4,11 @@
 //! 用的时候从不现场合成。以前“先接一句”每次现合成，玩家本机实测 1.3–7.8 秒才出声，比回答还慢。
 //!
 //! - 用在线语音或 Kokoro 时：启动后、换声音 / 角色 / 引擎后在后台把这些短句合成进现有的语音缓存
-//!   （`kotone_tts::cache`，按“引擎 + 声音 + 语速 + 文字”存，只在内存里，重启要重新合成）；
-//!   每个语音回合结束后再过一遍：命中缓存不花钱，还能让它们留在缓存里不被挤掉。
+//!   （`kotone_tts::cache`，按“引擎 + 声音 + 语速 + 文字”区分）；每个语音回合结束后再过一遍：
+//!   命中缓存不花钱，还能让它们留在缓存里不被挤掉。
+//! - 落盘（照 xiaozhi-esp32-server `core/utils/wakeup_word.py` 按音色存唤醒回复）：合成过的存成
+//!   `<KOTONE_HOME>/cache/tts/<缓存键的哈希>.wav`，重启后直接读文件，不再请求在线语音、不再花钱。
+//!   只存这里登记的短句（`kotone_tts::cache::disk`），模型的回答不落盘。
 //! - 只播已经合成好的：没准备好就这一轮不说（宁可不说，也不比回答还晚）。系统语音不用合成，随时能说。
 //! - 预先合成的费用不归任何对话（`kotone_core::usage::claim_speech` 没有登记）。
 
@@ -34,12 +37,25 @@ fn phrases() -> impl Iterator<Item = &'static str> {
     crate::wake::ACKS.iter().chain(WAITING.iter()).copied()
 }
 
+/// 落盘的目录：`<KOTONE_HOME>/cache/tts/`。
+fn disk_dir() -> std::path::PathBuf {
+    kotone_core::settings::kotone_dir()
+        .join("cache")
+        .join("tts")
+}
+
 /// 在后台把填充话合成进缓存（已经在合成就不重复）。启动、改设置、每个语音回合结束后调用。
+/// 上次启动时合成过的从文件读，不花钱。
 pub fn refresh(app: &AppHandle) {
+    static DISK: std::sync::Once = std::sync::Once::new();
+    DISK.call_once(|| {
+        let texts: Vec<&str> = phrases().collect();
+        kotone_tts::cache::disk::configure(disk_dir(), &texts);
+    });
     let Some(signature) = crate::assistant::speech_signature(app) else {
         return;
     };
-    {
+    let was_ready = {
         let mut state = STATE.lock().unwrap();
         if state.warming {
             return;
@@ -49,9 +65,11 @@ pub fn refresh(app: &AppHandle) {
             state.ready.clear();
         }
         state.warming = true;
-    }
+        state.ready.len()
+    };
     let app = app.clone();
     std::thread::spawn(move || {
+        let started = std::time::Instant::now();
         let mut warmed = 0;
         for text in phrases() {
             if crate::assistant::speech_signature(&app).as_deref() != Some(signature.as_str()) {
@@ -69,8 +87,12 @@ pub fn refresh(app: &AppHandle) {
             }
         }
         let total = phrases().count();
-        if warmed < total {
-            log::log(&format!("fillers: {warmed}/{total} ready"));
+        // 启动后、换声音后第一次准备好时记一笔（从文件读的话是几毫秒）
+        if warmed < total || was_ready < total {
+            log::log(&format!(
+                "fillers: {warmed}/{total} ready in {} ms",
+                started.elapsed().as_millis()
+            ));
         }
         STATE.lock().unwrap().warming = false;
     });

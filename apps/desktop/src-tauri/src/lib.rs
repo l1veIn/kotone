@@ -33,6 +33,7 @@ mod usage;
 mod voice_ask;
 mod voice_chat;
 mod voice_listen;
+mod voice_reply;
 mod voice_timing;
 mod wake;
 mod web_tools;

@@ -28,7 +28,8 @@ pub struct AssistantRuntime {
     presentation: Mutex<Option<DanmakuPresentation>>,
     presentation_generation: AtomicU64,
     presentation_done: tokio::sync::Notify,
-    output_lock: tokio::sync::Mutex<()>,
+    /// 一次只播一样（提醒、回答、填充话）；边生成边念的回答也拿着它（[`hold_output`]）。
+    output_lock: Arc<tokio::sync::Mutex<()>>,
     output_cancel: OutputCancellation,
     // A cancelled session may still be joining its capture thread while a new
     // session opens. Each microphone lease retains its own admission slot.
@@ -335,7 +336,7 @@ pub fn initialize(
         presentation: Mutex::new(None),
         presentation_generation: AtomicU64::new(0),
         presentation_done: tokio::sync::Notify::new(),
-        output_lock: tokio::sync::Mutex::new(()),
+        output_lock: Arc::new(tokio::sync::Mutex::new(())),
         output_cancel: OutputCancellation::default(),
         active_captures: AtomicUsize::new(0),
         capture_output_volume: Mutex::new(CaptureOutputVolume::Open(None)),
@@ -378,6 +379,10 @@ pub fn speak_now(app: &AppHandle, text: &str) -> Result<(), String> {
     let state = app.state::<AssistantRuntime>();
     if state.active_captures.load(Ordering::SeqCst) != 0 {
         return Err("正在录音，不播应答".into());
+    }
+    // 她正在边生成边念时喊了唤醒词：先停下（打断）
+    if crate::voice_reply::interrupt() {
+        crate::follow_up::interrupted();
     }
     state.cancel_speech()?;
     let config = app
@@ -472,6 +477,67 @@ pub fn synthesize_cached(app: &AppHandle, text: &str) -> Result<(), String> {
         .map(|_| ())
 }
 
+/// 边生成边念（ADR 029 §六）用的合成方式与声音：DeepSeek 用流式接口，Kokoro / 在线语音逐句合成，
+/// 系统语音逐句念。声音、音量、语速与整段播报相同（角色的声音优先）。
+pub fn stream_engine(
+    app: &AppHandle,
+) -> Result<(kotone_tts::StreamEngine, kotone_tts::StreamOptions), String> {
+    let config = app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .assistant
+        .clone();
+    let engine = effective_engine(app, &config);
+    let request = speech_request(engine, &config, "");
+    let stream_engine = match engine {
+        TtsEngine::Deepseek => kotone_tts::StreamEngine::Deepseek(crate::tts_online::config(
+            app,
+            kotone_tts::online::OnlineKind::Deepseek,
+        )?),
+        TtsEngine::System => {
+            kotone_tts::StreamEngine::Speak(app.state::<AssistantRuntime>().system_speaker.clone()?)
+        }
+        _ => kotone_tts::StreamEngine::Synthesize(speaker_for_engine(app, engine)?),
+    };
+    Ok((
+        stream_engine,
+        kotone_tts::StreamOptions {
+            voice_id: request.voice_id,
+            volume: request.volume,
+            rate: request.rate,
+            ..kotone_tts::StreamOptions::default()
+        },
+    ))
+}
+
+/// 排队拿播报（前面的提醒、填充话播完才轮到）：边生成边念的回答念完才放开。
+pub async fn hold_output(app: &AppHandle) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+    let lock = app.try_state::<AssistantRuntime>()?.output_lock.clone();
+    Some(lock.lock_owned().await)
+}
+
+/// 麦克风开着吗（正在录音时不出声，免得把自己的话录进去）。
+pub fn capturing(app: &AppHandle) -> bool {
+    app.try_state::<AssistantRuntime>()
+        .is_some_and(|state| state.active_captures.load(Ordering::SeqCst) != 0)
+}
+
+/// 马上用弹幕显示一句（边生成边念的回答：声音另外在念，不排播报队）。
+pub fn show_danmaku(app: &AppHandle, text: &str) {
+    let config = app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .assistant
+        .clone();
+    if let Err(error) = present_danmaku_active(app, text, &config) {
+        kotone_core::log::log(&format!("assistant: 弹幕没能显示：{error}"));
+    }
+}
+
 /// 先把要念的话合成好（不阻塞异步线程）。失败不要紧：播的时候还会再合成。
 pub async fn prepare_speech(app: &AppHandle, text: &str) {
     let app = app.clone();
@@ -497,10 +563,12 @@ pub async fn wait_output_idle(app: &AppHandle, max: Duration) {
 /// 回答念完后也不再接着听（[`crate::follow_up::interrupted`]）。阻塞（停播最多等语音服务 2 秒）。
 /// 返回是否打断了什么。
 pub fn interrupt_speech(app: &AppHandle) -> bool {
-    if !output_busy(app) && !crate::bubble::is_speaking(app) {
+    if !output_busy(app) && !crate::bubble::is_speaking(app) && !crate::voice_reply::active() {
         return false;
     }
     crate::follow_up::interrupted();
+    // 边生成边念的回答先停（等输出设备关掉），对话里只留已经念出来的部分
+    crate::voice_reply::interrupt();
     stop_speech(app.clone());
     crate::bubble::stop_speaking(app);
     kotone_core::log::log("assistant: call key interrupted the speech");
@@ -549,6 +617,10 @@ pub fn before_capture(app: &AppHandle) -> Result<(), String> {
     // 停播失败（语音服务忙或已停止）不该让录音开不了：记下来，照常开始。
     if let Err(error) = state.cancel_speech() {
         kotone_core::log::log(&format!("录音开始前停止播报失败（继续录音）：{error}"));
+    }
+    // 边生成边念的回答也停（等输出设备关掉才开麦）：玩家开口就是打断她。
+    if crate::voice_reply::interrupt() {
+        crate::follow_up::interrupted();
     }
     Ok(())
 }
@@ -1226,6 +1298,7 @@ pub fn stop_speech(app: AppHandle) {
     // after this stop has finished, otherwise its freshly queued voice could
     // be purged by the previous output's stop request.
     let _output_cancel = runtime.output_cancel.stop();
+    crate::voice_reply::interrupt();
     silence(&app);
     let id = runtime.presentation.lock().unwrap().as_ref().map(|p| p.id);
     if let Some(id) = id {

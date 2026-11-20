@@ -10,6 +10,10 @@
 //!    再用 [`spoken_text`](SpeechStream::spoken_text) 记进对话；
 //! 5. 计时：[`first_audio_at`](SpeechStream::first_audio_at) 是第一句开始出声的时刻。
 //!
+//! 前面还有别的话在播（填充话、提醒）时，用 [`StreamOptions::held`] 先只合成、不出声，轮到它了再
+//! [`release_playback`](SpeechStream::release_playback)。[`StreamOptions::owner`] 让每句合成的费用
+//! 记到这一轮（合成前按这句的文字认领，`kotone_core::usage::claim_speech`）。
+//!
 //! 合成方式：
 //! - **DeepSeek**：实测（2026-11-20，`stream::tests::real_deepseek_stream_when_does_audio_start`）
 //!   流式接口在收到 `finish_text` 之前不出声（三整句发过去等 4 秒也没有声音），收到后约 0.9 秒
@@ -73,6 +77,10 @@ pub struct StreamOptions {
     pub voice_id: Option<String>,
     pub volume: u16,
     pub rate: i32,
+    /// 先只合成、不出声，等 [`SpeechStream::release_playback`]（前面还有别的话在播）。
+    pub held: bool,
+    /// 每句合成的费用记到哪一轮（合成前按这句的文字认领）。
+    pub owner: Option<kotone_core::usage::Owner>,
 }
 
 impl Default for StreamOptions {
@@ -81,6 +89,8 @@ impl Default for StreamOptions {
             voice_id: None,
             volume: 80,
             rate: 0,
+            held: false,
+            owner: None,
         }
     }
 }
@@ -91,6 +101,8 @@ struct Entry {
     end: Option<u64>,
     /// 系统语音：`speak` 正常返回就算念完了。
     spoken: bool,
+    /// 系统语音：开始 `speak` 了（气泡显示念到哪句用）。
+    started: bool,
     failed: bool,
 }
 
@@ -111,6 +123,9 @@ struct Shared {
     done_tx: watch::Sender<bool>,
     device_open: Mutex<bool>,
     device_closed: Condvar,
+    /// 还不能出声（[`StreamOptions::held`]）。
+    held: Mutex<bool>,
+    released: Condvar,
     started: Instant,
 }
 
@@ -120,6 +135,22 @@ impl Shared {
         if state.error.is_none() && !state.cancelled {
             state.error = Some(error);
         }
+    }
+
+    /// 等到可以出声；被停了返回 false。
+    fn wait_released(&self) -> bool {
+        let mut held = self.held.lock().unwrap();
+        while *held {
+            if self.queue.is_stopped() {
+                return false;
+            }
+            held = self
+                .released
+                .wait_timeout(held, Duration::from_millis(100))
+                .unwrap()
+                .0;
+        }
+        !self.queue.is_stopped()
     }
 }
 
@@ -165,6 +196,8 @@ impl SpeechStream {
             done_tx,
             device_open: Mutex::new(false),
             device_closed: Condvar::new(),
+            held: Mutex::new(options.held),
+            released: Condvar::new(),
             started: Instant::now(),
         });
         let (msgs, inbox) = mpsc::channel();
@@ -231,6 +264,12 @@ impl SpeechStream {
         state.result.clone().unwrap()
     }
 
+    /// 可以出声了（[`StreamOptions::held`] 时）：合成好的声音马上开始播。可以多次调用。
+    pub fn release_playback(&self) {
+        *self.shared.held.lock().unwrap() = false;
+        self.shared.released.notify_all();
+    }
+
     /// 立刻停：不再合成、丢掉没播的声音，阻塞到输出设备关掉（最多 2 秒）。
     /// 之后 [`spoken_text`](Self::spoken_text) 就是玩家实际听到的部分。
     pub fn cancel(&self) -> Result<(), String> {
@@ -243,6 +282,7 @@ impl SpeechStream {
             state.input_closed = true;
         }
         self.shared.queue.stop();
+        self.shared.released.notify_all();
         let _ = self.msgs.send(Msg::Cancel);
         if let Some(output) = &self.speak_output {
             output.cancel()?;
@@ -274,6 +314,33 @@ impl SpeechStream {
             .filter(|e| !e.failed && (e.spoken || e.end.is_some_and(|end| consumed >= end)))
             .map(|e| e.sentence.raw.as_str())
             .collect()
+    }
+
+    /// 已经**开始**念的句子（模型原文）：气泡跟着念到哪句显示到哪句。被跳过的句子不算。
+    pub fn started_text(&self) -> String {
+        let consumed = self.shared.queue.consumed();
+        let state = self.shared.state.lock().unwrap();
+        let mut text = String::new();
+        // 这句声音在队列里开始的位置 = 前一句（没被跳过的）结束的位置。
+        let mut start = 0;
+        for entry in state.entries.iter().filter(|e| !e.failed) {
+            let begun = if self.speak_output.is_some() {
+                entry.started || entry.spoken
+            } else {
+                consumed > start
+            };
+            if !begun {
+                break;
+            }
+            text.push_str(&entry.sentence.raw);
+            match entry.end {
+                Some(end) => start = end,
+                // 正在边收边播的这一句：后面的句子还没进队列
+                None if self.speak_output.is_none() => break,
+                None => {}
+            }
+        }
+        text
     }
 
     /// 到目前为止收到的全部原文（包括还没凑成一句的部分）。
@@ -323,6 +390,7 @@ impl SpeechStream {
                 sentence,
                 end: None,
                 spoken: false,
+                started: false,
                 failed: false,
             });
             state.entries.len() - 1
@@ -370,6 +438,7 @@ impl Drop for SpeechStream {
         };
         if unfinished {
             self.shared.queue.stop();
+            self.shared.released.notify_all();
             let _ = self.msgs.send(Msg::Cancel);
             if let Some(output) = &self.speak_output {
                 let _ = output.cancel();
@@ -631,6 +700,15 @@ impl Coordinator {
                 return;
             }
             let index = self.waiting.pop_front().unwrap();
+            // 合成费用归这一轮：DeepSeek 按发出去的文字记账，其他在线引擎按请求的文字记账，
+            // 都是这句的 `speak`，整句认领。
+            if let Some(owner) = &self.options.owner {
+                let text = self.shared.state.lock().unwrap().entries[index]
+                    .sentence
+                    .speak
+                    .clone();
+                kotone_core::usage::claim_speech(&text, owner.clone());
+            }
             let mut item = InFlight {
                 index,
                 session: None,
@@ -838,13 +916,19 @@ impl Coordinator {
                             continue;
                         }
                     }
+                    // 前面还有别的话在播：等轮到它
+                    if !shared.wait_released() {
+                        return;
+                    }
                     let request = request_for(&shared, &options, index);
-                    shared
-                        .state
-                        .lock()
-                        .unwrap()
-                        .first_spoken
-                        .get_or_insert_with(Instant::now);
+                    {
+                        let mut state = shared.state.lock().unwrap();
+                        if state.cancelled {
+                            return;
+                        }
+                        state.first_spoken.get_or_insert_with(Instant::now);
+                        state.entries[index].started = true;
+                    }
                     let result = output.speak_if_current(request, ticket);
                     if let Err(error) = &result {
                         if error != CANCELLED {
@@ -910,6 +994,10 @@ fn synthesize_with_retry(
 /// 播放线程：有声音就开设备播，空闲久了先关设备，播完或被停就退出。
 fn playback(shared: &Shared, device: &dyn AudioDevice) -> Result<(), String> {
     let queue = &shared.queue;
+    // 前面还有别的话在播：先不开设备（合成照常进行）
+    if !shared.wait_released() {
+        return Ok(());
+    }
     loop {
         while !queue.ready() {
             queue.wait(Duration::from_millis(100));
@@ -1305,6 +1393,144 @@ mod tests {
         assert_eq!(stream.spoken_text(), "");
         assert_eq!(device.opened.load(Ordering::SeqCst), 0);
         assert!(seen.lock().unwrap().texts.is_empty());
+    }
+
+    #[test]
+    fn a_held_stream_synthesizes_but_stays_silent_until_released() {
+        let output = Arc::new(FakeOutput::default());
+        let device = Arc::new(FakeDevice::new(20.0));
+        let stream = SpeechStream::with_device(
+            StreamEngine::Synthesize(output.clone()),
+            StreamOptions {
+                held: true,
+                ..options()
+            },
+            device.clone(),
+        )
+        .unwrap();
+        stream.push_text("前面还在说话。");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while output.synthesized.lock().unwrap().is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        // 合成了，但没开设备、没出声
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(output.synthesized.lock().unwrap().len(), 1);
+        assert_eq!(device.opened.load(Ordering::SeqCst), 0);
+        assert!(stream.first_audio_at().is_none());
+        assert_eq!(stream.started_text(), "");
+        let released = Instant::now();
+        stream.release_playback();
+        stream.finish_blocking(Duration::from_secs(5)).unwrap();
+        assert!(stream.first_audio_at().unwrap() >= released);
+        assert_eq!(stream.spoken_text(), "前面还在说话。");
+        assert_eq!(stream.started_text(), "前面还在说话。");
+    }
+
+    #[test]
+    fn cancelling_a_held_stream_returns_at_once() {
+        let output = Arc::new(FakeOutput::default());
+        for engine in [
+            StreamEngine::Synthesize(output.clone()),
+            StreamEngine::Speak(output.clone()),
+        ] {
+            let device = Arc::new(FakeDevice::new(20.0));
+            let stream = SpeechStream::with_device(
+                engine,
+                StreamOptions {
+                    held: true,
+                    ..options()
+                },
+                device.clone(),
+            )
+            .unwrap();
+            stream.push_text("一直轮不到我。下一句。");
+            std::thread::sleep(Duration::from_millis(50));
+            let started = Instant::now();
+            stream.cancel().unwrap();
+            assert!(started.elapsed() < Duration::from_millis(500));
+            assert_eq!(
+                stream.finish_blocking(Duration::from_secs(2)).unwrap_err(),
+                CANCELLED
+            );
+            assert_eq!(stream.spoken_text(), "");
+            assert_eq!(device.opened.load(Ordering::SeqCst), 0);
+        }
+        // 系统语音也没念出任何一句
+        assert!(output.spoken.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn started_text_follows_the_sentence_being_played() {
+        let (base, _) = fake_server(Script::echo(2_400));
+        // 慢速设备：每句 0.1 秒声音 × 字数，按 2 倍速播
+        let device = Arc::new(FakeDevice::new(2.0));
+        let stream = SpeechStream::with_device(
+            StreamEngine::Deepseek(config(&base)),
+            options(),
+            device.clone(),
+        )
+        .unwrap();
+        stream.push_text("第一句。第二句话。");
+        stream.push_text("第三句。");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while stream.started_text().is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        // 第一句开始念时气泡只显示第一句，还没念完
+        assert_eq!(stream.started_text(), "第一句。");
+        assert_eq!(stream.spoken_text(), "");
+        while !stream.started_text().contains("第二句") && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(stream.started_text(), "第一句。第二句话。");
+        assert_eq!(stream.spoken_text(), "第一句。");
+        stream.cancel().unwrap();
+    }
+
+    #[test]
+    fn every_sentence_is_billed_to_the_owner_turn() {
+        // 账本是进程里唯一的：开在临时目录，只看这个测试自己那段对话的记录。
+        let dir = std::env::temp_dir().join(format!("kotone-tts-billing-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        kotone_core::usage::enable(dir.join("usage.jsonl"));
+        let ledger = kotone_core::usage::global().unwrap().path().to_path_buf();
+        let (base, _) = fake_server(Script::echo(240));
+        let owner = kotone_core::usage::Owner {
+            conversation: "stream-billing-test".into(),
+            turn: Some(42),
+        };
+        let stream = SpeechStream::with_device(
+            StreamEngine::Deepseek(config(&base)),
+            StreamOptions {
+                owner: Some(owner),
+                ..options()
+            },
+            Arc::new(FakeDevice::new(20.0)),
+        )
+        .unwrap();
+        let text = "计费归属测试甲。计费归属测试乙，后半句。";
+        push_in_pieces(&stream, text, 4);
+        stream.finish_blocking(Duration::from_secs(10)).unwrap();
+        // 用量在合成线程退出前记下：稍等最后一路的线程
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let ours = loop {
+            let records: Vec<kotone_core::usage::UsageRecord> =
+                kotone_core::usage::UsageLedger::new(&ledger)
+                    .read_since(0)
+                    .into_iter()
+                    .filter(|r| r.conversation.as_deref() == Some("stream-billing-test"))
+                    .collect();
+            if records.len() >= 2 || Instant::now() > deadline {
+                break records;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        // 两句各记一行（每句一路会话），都归第 42 轮
+        assert_eq!(ours.len(), 2, "{ours:?}");
+        assert!(ours
+            .iter()
+            .all(|r| r.turn == Some(42) && r.kind == Some(kotone_core::usage::UsageKind::Tts)));
     }
 
     #[test]

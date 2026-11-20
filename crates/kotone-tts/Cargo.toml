@@ -17,6 +17,8 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 # SpeechStream::finish 的异步等待（只用 tokio::sync，不需要运行时）
 tokio.workspace = true
+# 等待短句落盘的文件名（缓存键的哈希；与 kotone-core 同一版本）
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile.workspace = true
