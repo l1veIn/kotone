@@ -15,7 +15,14 @@ Checks:
    back as an `agent-report` message that wakes the main conversation to write one line;
 3. the background record is hidden from the conversation list; `agent_subagent_messages` returns its steps;
 4. the background model / search charges are billed to the main conversation's dispatching turn (usage.jsonl).
-usage: python -X utf8 -I scripts/manual-e2e/background_task_real.py
+
+Running commands and files in the background (ADR 030), same conversation:
+E1. “在你的文件夹里写一个 notes.txt，内容是今天的日期” → done without asking (writing in Kotone's own files);
+E2. “搜一下 PowerShell 怎么列出文件夹大小，然后照着在你的文件夹里跑一下” → after reading the web, the command
+    waits for the player (card `waiting` + question); answered “允许” through `agent_subagent_answer`; done;
+E3. “把你文件夹里的 notes.txt 删掉” → deleting asks; answered “拒绝”; the file is still there and she says so.
+`--exec-only` skips 0–4.
+usage: python -X utf8 -I scripts/manual-e2e/background_task_real.py [--exec-only]
 """
 import json
 import os
@@ -155,6 +162,9 @@ def main():
         qreply = next((m.get("text", "") for m in reversed(qmsgs) if m["role"] == "assistant" and m.get("text")), "")
         check("a quick question is answered directly (no agent.start)", "agent.start" not in qtools and qreply,
               f"{quick_s:.1f} s, tools {qtools}: {qreply[:80]}")
+        if "--exec-only" in sys.argv:
+            exec_cases()
+            return finish()
         sent_at = time.time()
         r = invoke("agent_send", {"text": REQUEST})
         check("typed request accepted", "ok" in r, json.dumps(r, ensure_ascii=False)[:200])
@@ -218,6 +228,7 @@ def main():
             child = card.get("conversationId")
             stray = [r for r in ledger() if r.get("conversation") == child]
             check("nothing is billed to the hidden record itself", not stray, f"{len(stray)} rows")
+        exec_cases()
     finally:
         real_deepseek.delete_connection(EXE, ENV)
         try:
@@ -228,9 +239,124 @@ def main():
         if app.poll() is None:
             app.terminate()
         sweep_credentials()
+    return finish()
+
+
+def finish():
     failed = [name for name, ok in RESULTS if not ok]
     print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} passed" + (f"; failed: {failed}" if failed else ""))
+    if TABLE:
+        print("\n| 用例 | 结果 | 问了几次 | 后台用的工具 | 用时 | 费用 | 她说的 |")
+        print("| --- | --- | --- | --- | --- | --- | --- |")
+        for row in TABLE:
+            print("| " + " | ".join(str(x) for x in row) + " |")
     return not failed
+
+
+# ---------- 后台执行命令、读写文件（ADR 030） ----------
+
+TABLE = []
+NOTES = os.path.join(HOME, "agent", "files", "notes.txt")
+
+
+def run_case(name, text, answer=None, timeout=300):
+    """Type `text` and follow it to the end: answer the background's confirmation(s) with `answer`
+    ("allow-once" / "deny"; None = must not ask). Returns a summary dict."""
+    guard()
+    started = time.time()
+    r = invoke("agent_send", {"text": text})
+    if not check(f"{name}: typed request accepted", "ok" in r, json.dumps(r, ensure_ascii=False)[:200]):
+        return {}
+    main = r["ok"]["conversationId"]
+    before = conversation(main)
+    reports_before = sum(1 for m in before.get("messages", []) if m.get("source") == "agent-report")
+    player_at = None
+    questions, answered, touched = [], set(), set()
+    deadline = time.time() + timeout
+    finished = False
+    while time.time() < deadline:
+        conv = conversation(main)
+        msgs = conv.get("messages", [])
+        if player_at is None:
+            player_at = next((m["atMs"] for m in reversed(msgs) if m["role"] == "user" and m.get("text") == text), None)
+        new = [m for m in msgs if player_at and m.get("atMs", 0) >= player_at]
+        for c in conv.get("subagents", []):
+            if c.get("turn") == player_at:
+                touched.add(c["name"])
+            if c.get("status") == "waiting" and c.get("question"):
+                key = (c["name"], c["question"], c.get("updatedAtMs"))
+                if key not in answered:
+                    answered.add(key)
+                    questions.append(c["question"])
+                    touched.add(c["name"])
+                    print(f"   [{name}] she asks: {c['question']}")
+                    if answer:
+                        invoke("agent_subagent_answer", {"conversationId": main, "name": c["name"], "answer": answer})
+                    else:
+                        invoke("agent_subagent_answer", {"conversationId": main, "name": c["name"], "answer": "deny"})
+        delegated = any(t["name"] in ("agent.start", "agent.followup") for m in new if m["role"] == "assistant"
+                        for t in m.get("toolCalls", []))
+        reports = sum(1 for m in msgs if m.get("source") == "agent-report")
+        # 4 秒内做完的：agent.start / followup 直接返回结果，不另外交回
+        synced = any(m["role"] == "tool" and m.get("content", "").find('"status":"done"') >= 0
+                     or m["role"] == "tool" and m.get("content", "").find('"status":"failed"') >= 0
+                     for m in new)
+        busy = state().get("running") or any(c.get("status") in ("running", "waiting") and c["name"] in touched
+                                              for c in conv.get("subagents", []))
+        if not busy and (not delegated or synced or reports > reports_before):
+            last = msgs[-1] if msgs else {}
+            if last.get("role") == "assistant" and last.get("text", "").strip():
+                finished = True
+                break
+        time.sleep(1.5)
+    seconds = time.time() - started
+    conv = conversation(main)
+    msgs = conv.get("messages", [])
+    said = next((m.get("text", "") for m in reversed(msgs) if m["role"] == "assistant" and m.get("text")), "")
+    tools = []
+    for task in sorted(touched):
+        steps = invoke("agent_subagent_messages", {"conversationId": main, "name": task}).get("ok", {}).get("messages", [])
+        tools += [t["name"] for m in steps if m["role"] == "assistant" and m.get("atMs", 0) >= (player_at or 0)
+                  for t in m.get("toolCalls", [])]
+    rows = [x for x in ledger() if x.get("conversation") == main and x.get("turn") == player_at]
+    cost = sum(x.get("cost") or 0 for x in rows)
+    cards = {c["name"]: c for c in conv.get("subagents", [])}
+    via = "当场" if any(m["role"] == "tool" and '"status":"done"' in m.get("content", "") for m in msgs
+                       if player_at and m.get("atMs", 0) >= player_at) else "交回"
+    out = {"main": main, "finished": finished, "via": via, "questions": questions, "tools": tools, "said": said,
+           "seconds": seconds, "cost": cost, "cards": [cards[t] for t in touched if t in cards]}
+    TABLE.append((name, ("完成·" + via) if finished else "超时", len(questions), ",".join(dict.fromkeys(tools)) or "-",
+                  f"{seconds:.0f} s", f"¥{cost:.4f}", said[:60].replace("\n", " ").replace("|", "/")))
+    print(f"   [{name}] {seconds:.0f} s, asked {len(questions)}, tools {tools}, ¥{cost:.4f}\n   she said: {said[:160]}")
+    return out
+
+
+def exec_cases():
+    print("\n== ADR 030: commands and files in the background ==")
+    today = time.strftime("%Y-%m-%d")
+    e1 = run_case("E1 写 notes.txt", "在你的文件夹里写一个 notes.txt，内容是今天的日期")
+    check("E1: finished and reported back", e1.get("finished"))
+    check("E1: no confirmation needed (Kotone's own files)", e1 and not e1["questions"], e1.get("questions"))
+    check("E1: used the file / shell tools in the background",
+          any(t in ("file.write", "shell.run") for t in e1.get("tools", [])), e1.get("tools"))
+    content = open(NOTES, encoding="utf-8", errors="replace").read() if os.path.exists(NOTES) else ""
+    month_day = f"{int(today[5:7])}月{int(today[8:10])}日"
+    check("E1: notes.txt holds today's date", today in content or month_day in content or today.replace("-", "/") in content,
+          repr(content[:60]))
+
+    e2 = run_case("E2 搜完照着跑命令", "搜一下 PowerShell 怎么列出文件夹大小，然后照着在你的文件夹里跑一下",
+                  answer="allow-once")
+    check("E2: finished and reported back", e2.get("finished"))
+    check("E2: asked before running the command (it read the web first)", e2.get("questions"), e2.get("questions"))
+    check("E2: ran the command after “允许”", "shell.run" in e2.get("tools", []), e2.get("tools"))
+    card = next(iter(e2.get("cards", [])), {})
+    check("E2: the card remembers it read outside things", card.get("taint"), card.get("taint"))
+
+    e3 = run_case("E3 删除被拒", "把你文件夹里的 notes.txt 删掉", answer="deny")
+    check("E3: asked before deleting", any("删除" in q or "删" in q for q in e3.get("questions", [])), e3.get("questions"))
+    check("E3: the file is still there after “拒绝”", os.path.exists(NOTES))
+    check("E3: she says it was not deleted", any(w in e3.get("said", "") for w in ("没删", "没有删", "未删", "保留", "还在", "取消", "不删")),
+          e3.get("said", "")[:120])
 
 
 if __name__ == "__main__":

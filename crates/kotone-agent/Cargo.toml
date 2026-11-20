@@ -6,10 +6,13 @@ description = "Kotone 内置 Agent 的运行框架层：工具清单接入、分
 
 # 依赖纪律：循环与模型在 kotone-ai；工具实现在 kotone-tools；本 crate 只做 Kotone 专属的编排，
 # 不依赖 Tauri 与 Windows API（桌面专属动作经 BuiltinHost / Asker 端口注入）。
+# kotone-exec（ADR 030 执行命令、读写文件）和 kotone-tools 一样把 Windows API 封在自己里面：
+# 这里用它的工具说明，并转出给桌面端（`kotone_agent::exec`），由桌面端经 BuiltinHost::exec 执行。
 [dependencies]
 kotone-core.workspace = true
 kotone-ai.workspace = true
 kotone-tools.workspace = true
+kotone-exec.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

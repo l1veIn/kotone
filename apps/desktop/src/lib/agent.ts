@@ -356,6 +356,12 @@ const toolLabels: Record<string, string> = {
   "voice.listen.start": "开始听",
   "voice.listen.stop": "不听了",
   "ask": "问你",
+  // ADR 030：后台在电脑上做事
+  "shell.run": "运行命令",
+  "file.read": "读文件",
+  "file.write": "写文件",
+  "file.edit": "改文件",
+  "file.find": "找文件",
 };
 export function toolLabel(name: string): string {
   if (name.startsWith("saved.")) return "运行已保存的自动化";
@@ -369,6 +375,7 @@ export const toolGroupLabels: Record<string, string> = {
   settings: "设置",
   models: "模型",
   meta: "查找工具",
+  computer: "电脑（命令和文件）",
   app: "其它",
 };
 export function toolGroupLabel(group: string): string {
@@ -429,7 +436,7 @@ export interface UsageSummary {
 }
 
 /** 一段对话的费用按类别（ADR 029 / 玩家要求：语音合成与识别、读屏、联网搜索也记到对话上）。 */
-export type CostCategory = "chat" | "voice" | "screen" | "search" | "other";
+export type CostCategory = "chat" | "voice" | "screen" | "search" | "background" | "other";
 export interface CategoryTotals { category: CostCategory; label: string; totals: UsageTotals }
 export interface ConversationCosts {
   conversationId: string;

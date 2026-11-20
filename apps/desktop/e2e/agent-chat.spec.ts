@@ -87,6 +87,7 @@ async function openChat(page: Page, options: { empty?: boolean; notReady?: strin
           { name: "game_chat.send", group: "game", description: "把一句话打进游戏聊天框并发出", sideEffects: ["input"], defaultRule: "ask", rule: null, core: true },
           { name: "reply.say", group: "game", description: "用语音或弹幕告诉玩家一句话", sideEffects: [], defaultRule: "allow", rule: null, core: true },
           { name: "window.list", group: "screen", description: "列出窗口", sideEffects: [], defaultRule: "allow", rule: null, core: false },
+          { name: "shell.run", group: "computer", description: "在玩家电脑上执行 PowerShell 命令（只在后台）", sideEffects: ["runs-command"], defaultRule: "allow", rule: null, core: false },
         ] };
         case "agent_set_automation_hidden": return (args as { hidden: boolean; id: string }).hidden ? [(args as { id: string }).id] : [];
         case "agent_answer": return true;
@@ -116,6 +117,13 @@ async function openChat(page: Page, options: { empty?: boolean; notReady?: strin
           const search = { ...voice, characters: 0, audioMs: 0, requests: 1, cost: { CNY: 0.0055 } };
           const turn = (window as unknown as { costTurn?: number }).costTurn;
           if (id !== "c-old" || !turn) return null;
+          // 交给后台的事的模型费用（ADR 029 第二期）：不在这段对话的消息里，按“后台”记到派它的那一轮
+          if ((window as unknown as { costBackground?: boolean }).costBackground) {
+            const background = { ...voice, characters: 0, audioMs: 0, requests: 3, inputTokens: 9_000, cacheHitTokens: 8_000, cost: { CNY: 0.003 } };
+            return { conversationId: id,
+              total: [{ category: "voice", label: "语音", totals: voice }, { category: "background", label: "后台", totals: background }],
+              turns: [{ turn, byCategory: [{ category: "voice", label: "语音", totals: voice }, { category: "background", label: "后台", totals: background }] }] };
+          }
           return { conversationId: id,
             total: [{ category: "voice", label: "语音", totals: voice }, { category: "screen", label: "读屏", totals: screen }, { category: "search", label: "搜索", totals: search }],
             turns: [{ turn, byCategory: [{ category: "voice", label: "语音", totals: voice }, { category: "screen", label: "读屏", totals: screen }] }] };
@@ -360,7 +368,7 @@ test("agent settings replace permissions as a whole and save the in-game switch"
   await expect(settings.getByTestId("agent-mode-read-only")).toHaveAttribute("aria-pressed", "true");
   await settings.getByTestId("agent-rules").locator("summary").click();
   // 工具清单来自 agent_tools：按分组列出，显示默认规则
-  await expect(settings.getByTestId("agent-rule")).toHaveCount(3);
+  await expect(settings.getByTestId("agent-rule")).toHaveCount(4);
   await expect(settings.locator('[data-tool="game_chat.send"]').getByTestId("agent-rule-default")).toHaveText("默认：询问");
   await expect(settings.getByRole("heading", { name: "屏幕与窗口", exact: true })).toBeVisible();
   await settings.getByLabel("发到游戏聊天 的规则").click();
@@ -368,11 +376,17 @@ test("agent settings replace permissions as a whole and save the in-game switch"
   await expect(settings.getByLabel("发到游戏聊天 的规则")).toHaveText("禁止");
   await settings.getByLabel("发到游戏聊天 的规则").click();
   await page.getByRole("option", { name: "按默认" }).click();
+  // 后台执行命令、读写文件（ADR 030）在“电脑”一组，默认允许（什么时候问由规则定），玩家可以禁止
+  await expect(settings.getByRole("heading", { name: "电脑（命令和文件）", exact: true })).toBeVisible();
+  await expect(settings.locator('[data-tool="shell.run"]').getByTestId("agent-rule-default")).toHaveText("默认：允许");
+  await settings.getByLabel("运行命令 的规则").click();
+  await page.getByRole("option", { name: "禁止" }).click();
   // 每次都整体替换：删掉的规则不会留在补丁里
   expect(await agentCalls(page, "agent_set_permissions")).toEqual([
     { permissions: { mode: "read-only", rules: {} } },
     { permissions: { mode: "read-only", rules: { "game_chat.send": "deny" } } },
     { permissions: { mode: "read-only", rules: {} } },
+    { permissions: { mode: "read-only", rules: { "shell.run": "deny" } } },
   ]);
   await settings.getByTestId("agent-in-game").click();
   await expect(settings.getByTestId("agent-in-game")).toHaveAttribute("aria-checked", "false");
@@ -616,4 +630,25 @@ test("voice, screen-reading and search costs are listed separately per turn and 
   await dialog.getByTestId("usage-tab-conversation").click();
   await expect(dialog.getByTestId("usage-conversation-breakdown")).toHaveText("对话 ¥0.0020 · 语音 ¥0.0050 · 读屏 ¥0.0015 · 搜索 ¥0.0055");
   await page.screenshot({ path: testInfo.outputPath("conversation-costs.png"), animations: "disabled" });
+});
+
+test("what a background task spent shows up under the turn that handed it off, as 后台", async ({ page }) => {
+  await openChat(page);
+  await page.evaluate(async (T) => {
+    const t = window.agentTest;
+    const w = window as unknown as { costTurn: number; costBackground: boolean };
+    w.costTurn = T + 500;
+    w.costBackground = true;
+    await t.event("c-old", { kind: "appended", message: { role: "user", text: "帮我写个喝药脚本", source: "chat", atMs: T + 500 } });
+    await t.event("c-old", { kind: "step", step: 1 });
+    await t.event("c-old", { kind: "appended", message: { role: "assistant", text: "交给我，好了告诉你。", usage: { inputTokens: 2_000, cachedInputTokens: 1_900, outputTokens: 12, cost: 0.002, currency: "CNY" }, atMs: T + 1500 } });
+    await t.event("c-old", { kind: "finished", stop: { kind: "completed" }, acpStopReason: "end_turn" });
+    await t.event("c-old", { kind: "idle" });
+  }, T);
+  const footer = page.getByTestId("agent-turn").last().getByTestId("agent-turn-usage");
+  await expect(footer).toHaveText("输入 2,000（命中缓存 95%） · 输出 12 tokens · 对话 ¥0.0020 · 语音 ¥0.0050 · 后台 ¥0.0030");
+  await page.getByTestId("usage-pill").click();
+  const dialog = page.getByTestId("usage-dialog");
+  await dialog.getByTestId("usage-tab-conversation").click();
+  await expect(dialog.getByTestId("usage-conversation-breakdown")).toHaveText("对话 ¥0.0020 · 语音 ¥0.0050 · 后台 ¥0.0030");
 });

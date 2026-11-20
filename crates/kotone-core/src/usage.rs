@@ -73,6 +73,10 @@ pub struct UsageRecord {
     /// 这笔费用属于对话里的哪一轮：那一轮玩家那句话的时间（`Message::User.at_ms`）。新字段。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn: Option<u64>,
+    /// 交给后台的事（ADR 029 第二期）的模型调用：记到派它的那一轮，按“后台”单独显示
+    /// （那一轮自己的模型费用在消息里，见 [`CostCategory::Background`]）。新字段。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub background: bool,
     /// 输入 token（含命中缓存的部分）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_tokens: Option<u64>,
@@ -567,6 +571,8 @@ pub enum CostCategory {
     Screen,
     /// 联网搜索、读网页。
     Search,
+    /// 交给后台的事的模型调用（它们的消息不在这段对话里，单独显示）。
+    Background,
     Other,
 }
 
@@ -581,12 +587,21 @@ impl CostCategory {
         }
     }
 
+    /// 一条记录算哪一类：后台的模型调用单独算“后台”，其余按 [`Self::of`]。
+    pub fn of_record(record: &UsageRecord) -> Self {
+        match Self::of(record.kind) {
+            Self::Chat if record.background => Self::Background,
+            other => other,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Chat => "对话",
             Self::Voice => "语音",
             Self::Screen => "读屏",
             Self::Search => "搜索",
+            Self::Background => "后台",
             Self::Other => "其他",
         }
     }
@@ -608,7 +623,7 @@ pub fn conversation_costs(records: &[UsageRecord], conversation: &str) -> Conver
         .iter()
         .filter(|r| r.conversation.as_deref() == Some(conversation))
     {
-        let category = CostCategory::of(r.kind);
+        let category = CostCategory::of_record(r);
         total.entry(category).or_default().add(r);
         if let Some(turn) = r.turn {
             turns
@@ -983,6 +998,40 @@ mod tests {
         );
         assert_eq!(costs.turns[1].1[0].0, CostCategory::Search);
         assert_eq!(CostCategory::of(None), CostCategory::Other);
+    }
+
+    #[test]
+    fn background_model_costs_show_up_per_turn_as_background() {
+        let chat = |background: bool, cost: f64, turn: Option<u64>| UsageRecord {
+            at_ms: 1,
+            kind: Some(UsageKind::Chat),
+            conversation: Some("c1".into()),
+            turn,
+            background,
+            cost: Some(cost),
+            currency: "CNY".into(),
+            ..Default::default()
+        };
+        let records = vec![
+            // 这一轮自己的模型调用（在消息里，不记轮次）
+            chat(false, 0.002, None),
+            // 派出去的后台任务的模型调用，记到派它的那一轮
+            chat(true, 0.003, Some(10)),
+            chat(true, 0.001, Some(10)),
+        ];
+        let costs = conversation_costs(&records, "c1");
+        let total: Vec<CostCategory> = costs.total.iter().map(|(c, _)| *c).collect();
+        assert_eq!(total, vec![CostCategory::Chat, CostCategory::Background]);
+        assert_eq!(costs.turns.len(), 1);
+        let (category, totals) = &costs.turns[0].1[0];
+        assert_eq!(category.label(), "后台");
+        assert!((totals.cost["CNY"] - 0.004).abs() < 1e-12);
+        // 旧记录没有这一项：照旧算“对话”。
+        let old: UsageRecord =
+            serde_json::from_str(r#"{"atMs":1,"kind":"chat","provider":"p","model":"m"}"#).unwrap();
+        assert!(!old.background);
+        assert_eq!(CostCategory::of_record(&old), CostCategory::Chat);
+        assert!(!serde_json::to_string(&old).unwrap().contains("background"));
     }
 
     #[test]

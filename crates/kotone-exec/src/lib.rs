@@ -249,6 +249,11 @@ pub fn check(cfg: &ExecConfig, taint: &Taint, tool: &str, args: &Value) -> Verdi
 
 fn rule_sentence(rule: &policy::Rule, targets: &[String]) -> String {
     if rule.justification == "删除" {
+        // 变量（`$p`）、管道里的 `$_` 这类玩家看不懂，不列（真机实测模型常写 `$p = …; Remove-Item $p`）。
+        let targets: Vec<&String> = targets
+            .iter()
+            .filter(|t| !t.trim_start_matches(['"', '\'', '(']).starts_with('$'))
+            .collect();
         if targets.is_empty() {
             return "这一步会删除文件或文件夹".into();
         }
@@ -509,6 +514,20 @@ mod tests {
         assert_eq!(
             question,
             "我要清理没用的插件。这一步会删除：D:\\WoW\\Interface\\AddOns\\Old，可以吗？"
+        );
+        // 目标写在变量里：不把 `$p` 念给玩家听。
+        let v = check(
+            &e.cfg,
+            &taint,
+            TOOL_SHELL_RUN,
+            &json!({"command": "$p = Join-Path $HOME 'notes.txt'; Remove-Item $p", "purpose": "删掉 notes.txt"}),
+        );
+        let Verdict::Ask { question, .. } = v else {
+            panic!()
+        };
+        assert_eq!(
+            question,
+            "我要删掉 notes.txt。这一步会删除文件或文件夹，可以吗？"
         );
         // 不在 taint 下同意删除，不会让以后读过外面的东西也不问。
         let mut t = Taint::new();

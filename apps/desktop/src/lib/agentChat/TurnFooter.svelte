@@ -12,7 +12,7 @@
 
   let { copyText = "", endedAtMs = null, usage = null, extraCosts = [] }: {
     copyText?: string; endedAtMs?: number | null; usage?: TokenUsage | null;
-    /** 模型以外的费用（语音、读屏、搜索），按类别。 */
+    /** 这一轮消息里的模型费用以外的（语音、读屏、搜索、交给后台的事），按类别。 */
     extraCosts?: CategoryTotals[];
   } = $props();
   let copied = $state(false);

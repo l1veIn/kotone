@@ -14,13 +14,14 @@
 | `cache_real.py` | 真实 DeepSeek：聊天 5 轮 + 游戏内 4 次（同一段对话），逐个请求打印输入 / 命中 / 命中率 / 费用；再把压缩阈值调到刚好超过，看整理那一次和之后的命中率，以及整理后还记不记得早先的事 |
 | `speech_preview_real.py` | 真实 DeepSeek 语音的「试听语音」，用 WASAPI 回环量扬声器的音量（`PLAYER_LIKE=1` 用玩家自己的语音设置） |
 | `happy_path_real.py` | 真实 DeepSeek 的 happy path：只给 DeepSeek Key → 琴音读《Kotone 配置》技能把识别、文字识别换成 DeepSeek → 呼叫琴音说一句（VB-CABLE）→ DeepSeek 识别、DeepSeek 语音回答 → 测试窗口用 DeepSeek OCR 认字（切前台前先确认前台不是游戏） |
-| `sessions_real.py` | （ADR 029 第二期之前的 `session.*` 工具，已不适用；同传现在走 `agent.start`）真实模型的同传子会话：派子会话、听 python.exe、翻译成弹幕、“停止同传”连同监听一起停（SenseVoice 模型用 `target/sess-e2e` 里下好的） |
+| `interpreter_e2e.py` + `mock_interpreter.py` | 同传（ADR 021）作为后台任务（ADR 029 第二期），假 AI、不花钱：经 WebView2 调试端口打字“帮我盯着队友”→ 主会话 `agent.start` 交给后台 → 后台开始听 python.exe → 另一个 Python 进程从扬声器放两遍英语句子（音量 0.3）→ 后台收到识别出的句子、用弹幕显示译文、做完第一轮仍在听 → “停止同传”用 `agent.stop` 连同监听一起停。SenseVoice 第一次运行时下载进隔离目录 `target/interp-e2e`。前台是游戏就停 |
 | `voice_chat_real.py` | 真实 DeepSeek 的“跟队友说话”：先应玩家一声，再从虚拟麦克风说出来；录 CABLE Output（队友那边）和扬声器回环（玩家这边）的音量。不混玩家自己的麦克风 |
 | `recap_real.py` | 对局复盘：把改名的 PING.EXE 当成“游戏”，游戏内说几句，结束进程，看聊天里的复盘和这个游戏的记忆（`KOTONE_RECAP_MIN_SECONDS=20`） |
 | `roles_real.py` | 换角色：琴音 → 大肥鱼 → Claude大小姐 → 琴音，名字、唤醒词（从 VB-CABLE 喊）和应答的声音都跟着换 |
 | `copilot_flow_real.py [new] [keep] [key]` | 真实 DeepSeek：ADR 028 的交互流程。新用户引导（一个 Key 换五项、呼叫键、聊天预填“你能做什么？”并打印她的回答）、在线识别不点启动就就绪、换成本地识别立即启动、聊天页呼叫按钮先启动再听、换回在线；0.1.x 配置“继续使用语音输入法”什么都不改、重开落在语音输入；0.1.x 配置填 Key 不动语音识别。经 WebView2 调试端口操作，不发系统按键；结束时连同卡住时删不掉的 Key 副本一起清理 |
 | `voice_turn_real.py` | 真实 DeepSeek 的语音回合计时（ADR 029 第三期）：`--background` 启动、经 WebView2 调试端口点聊天页的呼叫按钮，玩家的话用 SAPI 合成后放进 VB-CABLE。呼叫 → 简单回答；不按键在接着听的 8 秒里接着说；搜版本（工具前一句 + 回答两路）；长回答开口 1.5 秒后再点呼叫打断（记录只留说出口的部分 +“（被打断）”、不接着听）；重启后等待短句从 `cache/tts` 读回、不再花钱。打印 `voice-timing` 表和每轮的语音合成费用。会出声（音量 8），开始前和每句之前看前台，是游戏就停 |
-| `background_task_real.py` | 真实 DeepSeek 的“交给后台”（ADR 029 第二期）：`--background` 启动、经 WebView2 调试端口打字“查一下英雄联盟当前版本更新了什么，整理成三条”。查：主会话用 `agent.start` 交出去、4 秒窗口内返回 running、这一轮很快结束；卡片登记在主会话上、后台记录不进对话列表；后台做完自己交回（`agent-report`）并唤醒主会话写一句；卡片能看后台的步骤；后台的费用记到派它出去的那一轮。不出声、不发系统按键，前台是游戏就停 |
+| `background_task_real.py` | 真实 DeepSeek 的“交给后台”（ADR 029 第二期）：`--background` 启动、经 WebView2 调试端口打字“查一下英雄联盟当前版本更新了什么，整理成三条”。查：主会话用 `agent.start` 交出去、4 秒窗口内返回 running、这一轮很快结束；卡片登记在主会话上、后台记录不进对话列表；后台做完自己交回（`agent-report`）并唤醒主会话写一句；卡片能看后台的步骤；后台的费用记到派它出去的那一轮。不出声、不发系统按键，前台是游戏就停。`--exec-only` 只跑执行命令、读写文件（ADR 030）三例：写 notes.txt 不问；搜过网页后照着跑命令先问、卡片上“允许”；删除先问、“拒绝”后文件还在，她说没删 |
+| `background_voice_real.py` | 真实 DeepSeek 的“交给后台”语音路径（ADR 029 第二期 + ADR 030），沿用 `voice_turn_real.py` 的做法（`--background`、调试端口点呼叫、SAPI 句子放进 VB-CABLE、音量 8）：用嘴派写自动化的活，她当场一句、后台做完她自己开口说结果；用嘴让后台删文件，删除前她开口问、脚本用嘴答“可以”、删掉并开口说结果。打印她每句语音回答的字数和这一轮的费用。前台是游戏就停 |
 | `wake_eval.py` | 唤醒词实测（离线）：SAPI 和 DeepSeek 两种声音合成各个唤醒词，加几分钟不含唤醒词的普通说话，喂给和桌面端同一个唤醒检测器，统计喊中率和误唤醒 |
 
 ## 准备

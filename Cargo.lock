@@ -2564,6 +2564,7 @@ version = "0.1.0"
 dependencies = [
  "kotone-ai",
  "kotone-core",
+ "kotone-exec",
  "kotone-tools",
  "serde",
  "serde_json",

@@ -8,7 +8,8 @@
 //!   对话正在回答时主循环会反复保存对话，后台任务的状态由别的线程更新，分开才不会互相覆盖。
 //!
 //! 都是原子写入。索引丢失或损坏时从对话文件重建；对话文件损坏时报错，不删除。
-//! 上限：最多保留 [`MAX_CONVERSATIONS`] 段（超出删最久没更新的），每段最多
+//! 上限：玩家看得到的对话最多保留 [`MAX_CONVERSATIONS`] 段（超出删最久没更新的，连同它的后台任务记录），
+//! 每段最多
 //! [`MAX_STORED_MESSAGES`] 条：超出时只丢最后一个压缩检查点之前的（那部分已经整理成摘要、
 //! 不再发给模型，丢了不影响前缀缓存）；没有检查点时超过 [`HARD_MAX_MESSAGES`] 才从最早的一轮丢。
 
@@ -22,6 +23,8 @@ use serde::{Deserialize, Serialize};
 use super::{now_ms, Message};
 
 pub const MAX_CONVERSATIONS: usize = 100;
+/// 后台任务的过程记录（隐藏的对话）最多留几段：平时随它的主对话一起删除 / 淘汰，这里只是兜底。
+pub const MAX_BACKGROUND_RECORDS: usize = 300;
 pub const MAX_STORED_MESSAGES: usize = 400;
 pub const HARD_MAX_MESSAGES: usize = 2_000;
 const VERSION: u32 = 1;
@@ -100,6 +103,13 @@ pub struct Subagent {
     /// 派它出去（或最近一次追加任务）的那一轮：玩家那句话的时间，费用记到那一轮。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn: Option<u64>,
+    /// ADR 030：它读过外面的东西（屏幕、聊天、网页、Kotone 文件区以外的文件……）——第一次的说明。
+    /// 读过之后执行命令、写文件前要先经主会话问玩家一句（kotone-exec `Taint`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taint: Option<String>,
+    /// 这一轮里玩家已经同意过（追加任务开新一轮时清掉）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub taint_approved: bool,
 }
 
 impl Conversation {
@@ -173,6 +183,34 @@ fn title_of(messages: &[Message]) -> String {
         })
         .filter(|t| !t.is_empty())
         .unwrap_or_else(|| "新对话".into())
+}
+
+/// 超出上限时从索引里拿掉的对话 id（最近更新的在前，从末尾淘汰）。上限只按玩家看得到的对话
+/// （[`MAX_CONVERSATIONS`]）算，后台任务的过程记录（有 `parent` 的）随它的主对话一起拿掉，
+/// 不挤占看得到的对话；它们自己另有兜底上限 [`MAX_BACKGROUND_RECORDS`]。
+fn evicted(conversations: &mut Vec<ConversationSummary>) -> Vec<String> {
+    let mut out = Vec::new();
+    while conversations.iter().filter(|c| c.parent.is_none()).count() > MAX_CONVERSATIONS {
+        let Some(pos) = conversations.iter().rposition(|c| c.parent.is_none()) else {
+            break;
+        };
+        let old = conversations.remove(pos);
+        conversations.retain(|c| {
+            let child = c.parent.as_deref() == Some(old.id.as_str());
+            if child {
+                out.push(c.id.clone());
+            }
+            !child
+        });
+        out.push(old.id);
+    }
+    while conversations.iter().filter(|c| c.parent.is_some()).count() > MAX_BACKGROUND_RECORDS {
+        let Some(pos) = conversations.iter().rposition(|c| c.parent.is_some()) else {
+            break;
+        };
+        out.push(conversations.remove(pos).id);
+    }
+    out
 }
 
 /// 超出条数上限时，从最早的一轮（以用户消息为界）开始丢；不丢最后一个检查点和它之后的。
@@ -366,13 +404,11 @@ impl ConversationStore {
         write_atomic(&self.path(&conversation.id), &bytes)?;
         index.conversations.retain(|c| c.id != conversation.id);
         index.conversations.insert(0, conversation.summary());
-        while index.conversations.len() > MAX_CONVERSATIONS {
-            if let Some(old) = index.conversations.pop() {
-                let _ = std::fs::remove_file(self.path(&old.id));
-                let _ = std::fs::remove_file(self.subagents_path(&old.id));
-                if index.current.as_deref() == Some(old.id.as_str()) {
-                    index.current = None;
-                }
+        for old in evicted(&mut index.conversations) {
+            let _ = std::fs::remove_file(self.path(&old));
+            let _ = std::fs::remove_file(self.subagents_path(&old));
+            if index.current.as_deref() == Some(old.as_str()) {
+                index.current = None;
             }
         }
         self.persist_index(&index)

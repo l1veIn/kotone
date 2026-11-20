@@ -71,6 +71,10 @@ const ALLOWED_EFFECTS: &[&str] = &[
     "requests-credentials",
     // ADR 026：联网搜索、读网页。只读、每次 0.005 元；网页由 DeepSeek 的服务器去抓，碰不到本机。
     "web-request",
+    // ADR 030：后台执行命令、写文件。默认“允许”，真正什么时候先问玩家由 kotone-exec 的 `check`
+    // 决定（读过外面的东西、删除类命令、第一次改游戏目录……）；玩家设成询问 / 禁止照常生效。
+    "runs-command",
+    "writes-file",
 ];
 
 /// 默认询问的副作用及原因。

@@ -1536,6 +1536,8 @@ fn store_keeps_subagents_beside_the_conversation() {
         question: None,
         reported: false,
         turn: Some(1),
+        taint: None,
+        taint_approved: false,
     };
     store
         .save_subagents(&c.id, std::slice::from_ref(&agent))
@@ -1679,6 +1681,90 @@ fn store_prunes_oldest_conversations() {
     }
     assert_eq!(store.list().len(), super::store::MAX_CONVERSATIONS);
     assert!(store.load(&first.id).unwrap().is_none());
+}
+
+#[test]
+fn background_records_do_not_count_toward_the_limit_and_go_with_their_main_conversation() {
+    use super::store::MAX_CONVERSATIONS;
+    let dir = tempfile::tempdir().unwrap();
+    let store = ConversationStore::open(dir.path()).unwrap();
+    let mut oldest = store.create();
+    oldest.messages.push(user("最早"));
+    store.save(&mut oldest).unwrap();
+    // 最早的那段派了两件后台的事（隐藏的过程记录）。
+    let mut children = Vec::new();
+    for _ in 0..2 {
+        let mut child = store.create();
+        child.parent = Some(oldest.id.clone());
+        child.label = Some("写喝药脚本".into());
+        child.messages.push(user("任务"));
+        store.save(&mut child).unwrap();
+        children.push(child.id);
+    }
+    store
+        .save_subagents(
+            &oldest.id,
+            &[super::store::Subagent {
+                name: "potion".into(),
+                label: "写喝药脚本".into(),
+                conversation_id: children[0].clone(),
+                status: super::store::SubagentStatus::Done,
+                summary: None,
+                started_at_ms: 1,
+                updated_at_ms: 1,
+                steps: 1,
+                question: None,
+                reported: true,
+                turn: None,
+                taint: Some("读了网页".into()),
+                taint_approved: false,
+            }],
+        )
+        .unwrap();
+    // 再存满看得到的对话：后台记录不挤占名额。
+    for _ in 0..MAX_CONVERSATIONS - 1 {
+        let mut c = store.create();
+        c.messages.push(user("后来"));
+        store.save(&mut c).unwrap();
+    }
+    let visible = |s: &ConversationStore| s.list().iter().filter(|c| c.parent.is_none()).count();
+    assert_eq!(visible(&store), MAX_CONVERSATIONS);
+    assert!(store.load(&oldest.id).unwrap().is_some(), "还没超过上限");
+    assert_eq!(store.list().len(), MAX_CONVERSATIONS + 2);
+    // 再来一段：最早的那段被淘汰，它的后台记录和登记一起走。
+    let mut c = store.create();
+    c.messages.push(user("最新"));
+    store.save(&mut c).unwrap();
+    assert_eq!(visible(&store), MAX_CONVERSATIONS);
+    assert!(store.load(&oldest.id).unwrap().is_none());
+    for child in &children {
+        assert!(store.load(child).unwrap().is_none(), "后台记录随主对话淘汰");
+    }
+    assert!(store.load_subagents(&oldest.id).is_empty());
+    assert_eq!(store.list().len(), MAX_CONVERSATIONS);
+    // 登记里“读过外面的东西”存盘后读回来一样。
+    let json = serde_json::to_string(&super::store::Subagent {
+        name: "a".into(),
+        label: "b".into(),
+        conversation_id: "c-1".into(),
+        status: super::store::SubagentStatus::Running,
+        summary: None,
+        started_at_ms: 0,
+        updated_at_ms: 0,
+        steps: 0,
+        question: None,
+        reported: false,
+        turn: None,
+        taint: Some("读了网页".into()),
+        taint_approved: true,
+    })
+    .unwrap();
+    assert!(json.contains("\"taint\":\"读了网页\"") && json.contains("\"taintApproved\":true"));
+    let old: super::store::Subagent = serde_json::from_str(
+        r#"{"name":"a","label":"b","conversationId":"c-1","status":"done","startedAtMs":0,"updatedAtMs":0}"#,
+    )
+    .unwrap();
+    assert!(old.taint.is_none() && !old.taint_approved);
 }
 
 #[test]

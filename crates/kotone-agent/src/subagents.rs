@@ -9,12 +9,19 @@
 //! - 做完交回总结并唤醒主会话：OpenCode `<background-result>`；Goose 要求子代理交 `{summary}`；
 //! - 步数上限时关掉工具要总结：OpenCode `MAX_STEPS_PROMPT`；
 //! - 重启后不自动重跑：Codex 的测试明确要求。
+//!
+//! 后台执行命令、读写文件（ADR 030）的判断流程也在这里（[`run_exec`]）：规则、“读过外面的东西”的标记
+//! 在 kotone-exec，经主会话问玩家、存登记在桌面端。
 
 use std::time::Duration;
 
 use kotone_ai::agent::store::{Subagent, SubagentStatus};
-use kotone_ai::agent::{Message, StopReason};
+use kotone_ai::agent::{Message, StopReason, ToolOutcome};
+use kotone_core::cancel::CancellationToken;
 use serde_json::{json, Value};
+
+use crate::exec::Taint;
+use crate::permissions::Answer;
 
 /// 最多同时几件事在后台跑（Codex V2 默认除主线程外 3 个）。空闲的不算。
 pub const MAX_RUNNING: usize = 3;
@@ -241,6 +248,116 @@ pub fn active_count<'a>(all: impl IntoIterator<Item = &'a Subagent>) -> usize {
     all.into_iter().filter(|a| a.status.is_active()).count()
 }
 
+// ---------- 后台执行命令、读写文件（ADR 030） ----------
+
+/// 登记里存的“读过外面的东西”→ kotone-exec 的 `Taint`。
+pub fn taint_of(agent: &Subagent) -> Taint {
+    Taint::from_parts(agent.taint.clone(), agent.taint_approved)
+}
+
+/// 把 `Taint` 写回登记：先到的说明留着（别处同时记下的来源不丢），“同意过”照它。
+pub fn store_taint(agent: &mut Subagent, taint: &Taint) {
+    if agent.taint.is_none() {
+        agent.taint = taint.reason().map(String::from);
+    }
+    agent.taint_approved = taint.is_approved();
+}
+
+/// 玩家追加了任务（新的一轮）：“同意过”重新算；读过的还在上下文里，标记不清掉（`Taint::new_round`），
+/// 再加上派这句话的那一轮主会话读过的（ADR 030 第 3 节）。
+pub fn new_round(agent: &mut Subagent, inherited: Option<String>) {
+    agent.taint_approved = false;
+    if agent.taint.is_none() {
+        agent.taint = inherited;
+    }
+}
+
+/// 玩家把执行工具设成“每次询问”、而规则说不用问时问的那句话。
+pub fn exec_confirm_question(tool: &str, arguments: &Value) -> String {
+    let arg = |key: &str| {
+        arguments
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    let purpose = arg("purpose")
+        .trim_end_matches(['。', '.', '！', '!', '？', '?'])
+        .to_string();
+    if !purpose.is_empty() {
+        return format!("我要{purpose}，要我动手吗？");
+    }
+    let what = match tool {
+        crate::exec::TOOL_SHELL_RUN => {
+            let command: String = arg("command").chars().take(40).collect();
+            format!("运行命令「{command}」")
+        }
+        crate::exec::TOOL_FILE_READ => format!("读文件 {}", arg("path")),
+        crate::exec::TOOL_FILE_FIND => format!("找文件 {}", arg("pattern")),
+        _ => format!("改文件 {}", arg("path")),
+    };
+    format!("我要{what}，要我动手吗？")
+}
+
+/// 后台执行一个命令 / 文件工具：按 kotone-exec 的规则判断 → 要问就用 `ask` 经主会话问玩家一句 →
+/// 执行 → 记下这次有没有读到外面的东西（改 `taint`，调用方存回登记）。`confirm`：玩家把这个工具
+/// 设成了“每次询问”，规则说不用问也问。“本段对话都允许”对这里不适用（删除这类每次都问），
+/// 按“允许这一次”处理。
+pub async fn run_exec<F, Fut>(
+    cfg: &crate::exec::ExecConfig,
+    taint: &mut Taint,
+    tool: &str,
+    arguments: &Value,
+    confirm: bool,
+    cancel: &CancellationToken,
+    ask: F,
+) -> ToolOutcome
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Answer>,
+{
+    use crate::exec::{self, Verdict};
+    let mut verdict = exec::check(cfg, taint, tool, arguments);
+    if confirm && verdict == Verdict::Allow {
+        verdict = Verdict::Ask {
+            question: exec_confirm_question(tool, arguments),
+            reasons: Vec::new(),
+        };
+    }
+    match &verdict {
+        Verdict::Forbid { reason } => return ToolOutcome::error(format!("没有执行：{reason}")),
+        Verdict::Ask { question, .. } => {
+            let answer = ask(question.clone()).await;
+            if cancel.is_cancelled() {
+                return ToolOutcome::error("已停止，未执行");
+            }
+            if answer == Answer::Deny {
+                return ToolOutcome::error(
+                    "玩家拒绝了这次操作；不要换个方式重试，写进总结（玩家没同意的事没做）",
+                );
+            }
+            exec::approved(cfg, taint, &verdict);
+        }
+        Verdict::Allow => {}
+    }
+    let outcome = exec::run_tool(cfg, tool, arguments, cancel).await;
+    if let Some(why) = &outcome.taints {
+        taint.mark(why);
+    }
+    let content = match &outcome.result {
+        Value::String(text) if outcome.is_error => text.clone(),
+        other => other.to_string(),
+    };
+    let mut out = if outcome.is_error {
+        ToolOutcome::error(content)
+    } else {
+        ToolOutcome::ok(content)
+    };
+    out.untrusted = false;
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,6 +375,8 @@ mod tests {
             question: None,
             reported: false,
             turn: Some(1),
+            taint: None,
+            taint_approved: false,
         }
     }
 
@@ -491,5 +610,276 @@ mod tests {
         let v = describe(&agent("a", SubagentStatus::Done));
         assert_eq!(v["status"], "done");
         assert_eq!(v["summary"], "已保存为自动化《自动喝药》");
+    }
+
+    // ---------- 后台执行命令、读写文件（ADR 030） ----------
+
+    struct Env {
+        _home: tempfile::TempDir,
+        outside: tempfile::TempDir,
+        cfg: crate::exec::ExecConfig,
+    }
+
+    /// Kotone 的目录和“玩家电脑上别处”的目录分开（前者里文件区以外不能写）。
+    fn env() -> Env {
+        let base = std::env::current_dir()
+            .unwrap()
+            .join("..")
+            .join("..")
+            .join("target")
+            .join("tmp");
+        std::fs::create_dir_all(&base).unwrap();
+        let home = tempfile::tempdir_in(&base).unwrap();
+        let outside = tempfile::tempdir_in(&base).unwrap();
+        let cfg = crate::exec::ExecConfig {
+            home: home.path().join("agent"),
+            game_dirs: Vec::new(),
+        };
+        Env {
+            _home: home,
+            outside,
+            cfg,
+        }
+    }
+
+    async fn run(
+        env: &Env,
+        taint: &mut Taint,
+        tool: &str,
+        args: Value,
+        confirm: bool,
+        answer: Answer,
+    ) -> (ToolOutcome, Vec<String>) {
+        let asked = std::sync::Mutex::new(Vec::new());
+        let out = run_exec(
+            &env.cfg,
+            taint,
+            tool,
+            &args,
+            confirm,
+            &CancellationToken::default(),
+            |q| {
+                asked.lock().unwrap().push(q);
+                async move { answer }
+            },
+        )
+        .await;
+        (out, asked.into_inner().unwrap())
+    }
+
+    #[tokio::test]
+    async fn exec_writes_in_kotones_files_without_asking() {
+        let env = env();
+        let mut taint = Taint::new();
+        taint.mark("读了网页");
+        // 读过外面的东西，但写进 Kotone 自己的文件区不改变玩家电脑上的东西：不问。
+        let (out, asked) = run(
+            &env,
+            &mut taint,
+            "file.write",
+            json!({"path": "notes.txt", "content": "2026-11-20", "purpose": "记下今天的日期"}),
+            false,
+            Answer::Deny,
+        )
+        .await;
+        assert!(!out.is_error, "{}", out.content);
+        assert!(asked.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(env.cfg.files_dir().join("notes.txt")).unwrap(),
+            "2026-11-20"
+        );
+    }
+
+    #[tokio::test]
+    async fn after_reading_outside_files_changes_ask_once_per_round() {
+        let env = env();
+        let elsewhere = env.outside.path().join("addon.toc");
+        std::fs::write(&elsewhere, "## Title: DBM\n").unwrap();
+        let mut taint = Taint::new();
+        // 没读过：改玩家电脑上的文件直接做（改前备份）。
+        let (out, asked) = run(
+            &env,
+            &mut taint,
+            "file.write",
+            json!({"path": elsewhere.to_string_lossy(), "content": "## Title: DBM\n## Version: 2\n", "purpose": "更新插件版本号"}),
+            false,
+            Answer::Deny,
+        )
+        .await;
+        assert!(!out.is_error && asked.is_empty(), "{}", out.content);
+        // 读了 Kotone 文件区以外的文件：记下。
+        let (out, _) = run(
+            &env,
+            &mut taint,
+            "file.read",
+            json!({"path": elsewhere.to_string_lossy()}),
+            false,
+            Answer::Deny,
+        )
+        .await;
+        assert!(!out.is_error, "{}", out.content);
+        assert!(taint.needs_approval(), "读过外面的东西");
+        // 之后改文件要先问：玩家拒绝就不做。
+        let edit = json!({"path": elsewhere.to_string_lossy(), "old": "## Version: 2", "new": "## Version: 3", "purpose": "把插件版本号改成 3"});
+        let (out, asked) = run(
+            &env,
+            &mut taint,
+            "file.edit",
+            edit.clone(),
+            false,
+            Answer::Deny,
+        )
+        .await;
+        assert!(
+            out.is_error && out.content.contains("拒绝"),
+            "{}",
+            out.content
+        );
+        assert_eq!(
+            asked,
+            vec!["我要把插件版本号改成 3，要我动手吗？".to_string()]
+        );
+        assert!(std::fs::read_to_string(&elsewhere)
+            .unwrap()
+            .contains("Version: 2"));
+        // 同意：做了，这一轮不再因此问。
+        let (out, asked) = run(
+            &env,
+            &mut taint,
+            "file.edit",
+            edit,
+            false,
+            Answer::AllowOnce,
+        )
+        .await;
+        assert!(!out.is_error && asked.len() == 1, "{}", out.content);
+        assert!(std::fs::read_to_string(&elsewhere)
+            .unwrap()
+            .contains("Version: 3"));
+        let (out, asked) = run(
+            &env,
+            &mut taint,
+            "file.edit",
+            json!({"path": elsewhere.to_string_lossy(), "old": "## Version: 3", "new": "## Version: 4", "purpose": "再改一次"}),
+            false,
+            Answer::Deny,
+        )
+        .await;
+        assert!(!out.is_error && asked.is_empty(), "{}", out.content);
+        // 玩家追加任务（新的一轮）：读过的还在，要再问。
+        let mut agent = agent("a", SubagentStatus::Running);
+        store_taint(&mut agent, &taint);
+        assert!(agent.taint.is_some() && agent.taint_approved);
+        new_round(&mut agent, None);
+        let mut taint = taint_of(&agent);
+        assert!(taint.needs_approval());
+        let (_, asked) = run(
+            &env,
+            &mut taint,
+            "file.write",
+            json!({"path": elsewhere.to_string_lossy(), "content": "x", "purpose": "重写"}),
+            false,
+            Answer::Deny,
+        )
+        .await;
+        assert_eq!(asked.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn deleting_always_asks_and_this_conversation_does_not_cover_it() {
+        let env = env();
+        std::fs::create_dir_all(env.cfg.files_dir()).unwrap();
+        let target = env.cfg.files_dir().join("notes.txt");
+        std::fs::write(&target, "x").unwrap();
+        let mut taint = Taint::new();
+        let delete = json!({"command": "Remove-Item notes.txt", "purpose": "删掉 notes.txt"});
+        let (out, asked) = run(
+            &env,
+            &mut taint,
+            "shell.run",
+            delete.clone(),
+            false,
+            Answer::Deny,
+        )
+        .await;
+        assert!(out.is_error && asked.len() == 1, "{}", out.content);
+        assert!(
+            asked[0].contains("删除") && asked[0].contains("notes.txt"),
+            "{}",
+            asked[0]
+        );
+        assert!(target.exists(), "拒绝了就没删");
+        // “本段对话都允许”按“允许这一次”：下一次删除还是问。
+        let (_, asked) = run(
+            &env,
+            &mut taint,
+            "shell.run",
+            json!({"command": "Remove-Item other.txt -ErrorAction SilentlyContinue", "purpose": "删掉 other.txt"}),
+            false,
+            Answer::AllowForConversation,
+        )
+        .await;
+        assert_eq!(asked.len(), 1);
+        let (_, asked) = run(&env, &mut taint, "shell.run", delete, false, Answer::Deny).await;
+        assert_eq!(asked.len(), 1, "删除每次都问");
+        assert!(target.exists());
+    }
+
+    #[tokio::test]
+    async fn simulated_input_is_refused_without_asking() {
+        let env = env();
+        let mut taint = Taint::new();
+        let (out, asked) = run(
+            &env,
+            &mut taint,
+            "shell.run",
+            json!({"command": "(New-Object -ComObject wscript.shell).SendKeys('q')", "purpose": "按 Q"}),
+            false,
+            Answer::AllowOnce,
+        )
+        .await;
+        assert!(
+            out.is_error && out.content.starts_with("没有执行"),
+            "{}",
+            out.content
+        );
+        assert!(out.content.contains("game.act") || out.content.contains("game_chat.send"));
+        assert!(asked.is_empty());
+    }
+
+    #[tokio::test]
+    async fn ask_rule_from_the_player_asks_even_when_the_rules_would_not() {
+        let env = env();
+        let mut taint = Taint::new();
+        let (out, asked) = run(
+            &env,
+            &mut taint,
+            "file.write",
+            json!({"path": "a.txt", "content": "x", "purpose": "记个草稿。"}),
+            true,
+            Answer::Deny,
+        )
+        .await;
+        assert!(out.is_error);
+        assert_eq!(asked, vec!["我要记个草稿，要我动手吗？".to_string()]);
+        assert_eq!(
+            exec_confirm_question("shell.run", &json!({"command": "Get-Process"})),
+            "我要运行命令「Get-Process」，要我动手吗？"
+        );
+    }
+
+    #[test]
+    fn a_followup_keeps_what_was_read_and_inherits_the_new_turn() {
+        let mut a = agent("a", SubagentStatus::Done);
+        new_round(&mut a, Some("读了 screen.at_speech 的结果".into()));
+        assert_eq!(a.taint.as_deref(), Some("读了 screen.at_speech 的结果"));
+        a.taint_approved = true;
+        new_round(&mut a, Some("读了 web.search 的结果".into()));
+        assert_eq!(
+            a.taint.as_deref(),
+            Some("读了 screen.at_speech 的结果"),
+            "先到的留着"
+        );
+        assert!(!a.taint_approved);
     }
 }

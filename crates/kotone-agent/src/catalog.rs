@@ -1,12 +1,13 @@
 //! 内置 Agent 能用的工具清单（ADR 014 §3、ADR 015 §1 第 3 层）。
 //!
-//! 来源有三种，合成一张表：
+//! 来源有四种，合成一张表：
 //! - **工具服务**：`system.capabilities` 里的工具，与外部 Agent 同一份实现；
 //!   给外部 Agent 的通道类工具（`agent.*`、`event.read`、`assistant.submit`）和旧陪玩流程
 //!   （`companion.ask` / `companion.check`，会再调一次模型）不交给内置 Agent；
 //! - **内置动作**：播报（`reply.say`）、提醒（`reminder.create`）、发到游戏聊天
 //!   （`game_chat.send`，替代 `companion.type`，会写进执行记录）和查找工具（`tools.find`）；
 //! - **已保存的自动化**：每个一个工具 `saved.<id>`（最多 [`MAX_SAVED_TOOLS`] 个）。
+//! - **执行命令、读写文件**（ADR 030）：`shell.run`、`file.*`，只给后台任务（[`exec_entries`]）。
 //!
 //! 一段对话的工具清单在开始时一次交给模型、之后不变（照 DeepSeek Harness：工具清单变了前缀缓存就断）。
 //! ADR 029 第二期：和玩家说话的**主会话**只拿一小套马上出结果的工具（[`MAIN_TOOLS`]，语音和打字共用），
@@ -187,6 +188,8 @@ pub enum Source {
     Meta,
     /// 已保存的自动化（经 `automation.run`）。
     Saved { id: String },
+    /// 执行命令、读写文件（ADR 030，经 [`crate::port::BuiltinHost::exec`]，桌面端用 kotone-exec 执行）。
+    Exec,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -230,6 +233,11 @@ pub const GROUPS: &[(&str, &str, &str)] = &[
         "模型 下载 语音识别 文字识别 语音合成 model download",
     ),
     (
+        "computer",
+        "电脑（执行命令、读写文件；只在后台用）",
+        "电脑 命令 命令行 终端 powershell 文件 文件夹 读 写 改 找 程序 第三方工具 插件 配置文件 shell file command",
+    ),
+    (
         "app",
         "应用（状态、历史、诊断、用量与费用、退出）",
         "应用 状态 历史 诊断 日志 退出 重启 用量 费用 花了多少钱 缓存 命中率 app history diagnostics usage cost",
@@ -248,6 +256,7 @@ pub fn group_of(name: &str) -> &'static str {
         "settings" | "profiles" | "hotkeys" | "connections" | "audio" | "input" | "postprocess"
         | "autostart" | "elevation" => "settings",
         "models" | "speech" | "stt" | "wake" => "models",
+        "shell" | "file" => "computer",
         _ => "app",
     }
 }
@@ -559,6 +568,44 @@ pub fn service_entries(specs: &[Value]) -> Vec<ToolEntry> {
         .collect()
 }
 
+/// 执行命令、读写文件的工具（ADR 030）。说明、参数、副作用由 kotone-exec 的 `tool_specs()` 给。
+/// 只给后台任务（不在 [`MAIN_TOOLS`] 里）；不在工具服务里，经 MCP / 工具服务连进来的外部 Agent 拿不到。
+pub fn exec_entries(specs: &[Value]) -> Vec<ToolEntry> {
+    specs
+        .iter()
+        .filter_map(|spec| {
+            let name = spec.get("name")?.as_str()?;
+            Some(ToolEntry {
+                name: name.to_string(),
+                description: spec
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                parameters: normalize_schema(spec.get("parameters").unwrap_or(&Value::Null)),
+                side_effects: spec
+                    .get("sideEffects")
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                group: "computer",
+                source: Source::Exec,
+                // 结果是命令输出、文件内容：按不可信数据包给模型。要不要先问玩家不看这个，
+                // 看 kotone-exec 的 `taints`（否则第二条命令就要问）。
+                untrusted: spec
+                    .get("untrustedResult")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
+            })
+        })
+        .collect()
+}
+
 /// 已保存的自动化 → 工具。有必填的图片参数（模型给不出）时返回 None。
 pub fn saved_entry(automation: &Automation) -> Option<ToolEntry> {
     let mut properties = Map::new();
@@ -662,6 +709,7 @@ impl Catalog {
         let mut entries = builtin_entries();
         entries.extend(agent_entries());
         entries.extend(service_entries(specs));
+        entries.extend(exec_entries(&kotone_exec::tool_specs()));
         entries.extend(saved.iter().filter_map(saved_entry).take(MAX_SAVED_TOOLS));
         Self { entries }
     }

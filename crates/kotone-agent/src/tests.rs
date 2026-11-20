@@ -50,6 +50,21 @@ impl BuiltinHost for FakeBuiltin {
         self.preapproved.lock().unwrap().iter().any(|t| t == tool)
     }
 
+    async fn exec(
+        &self,
+        call_id: &str,
+        tool: &str,
+        arguments: &Value,
+        confirm: bool,
+        _cancel: &CancellationToken,
+    ) -> ToolOutcome {
+        self.calls.lock().unwrap().push((
+            "exec".into(),
+            json!({"callId": call_id, "tool": tool, "args": arguments, "confirm": confirm}),
+        ));
+        ToolOutcome::ok(json!({"exitCode": 0, "output": "ok"}).to_string())
+    }
+
     async fn ask(&self, question: String, wait_seconds: u64) -> Result<Value, String> {
         self.calls.lock().unwrap().push((
             "ask".into(),
@@ -1129,4 +1144,162 @@ fn prompt_carries_soul_memory_game_memory_and_skills_and_child_prompt_is_minimal
     assert!(!child.contains("agent.start"), "后台不能再交给后台");
     let ctx = crate::prompt::child_turn_context("2026-11-20 周五 14:05", "英雄联盟", "lol");
     assert!(ctx.contains("后台") && ctx.contains("14:05") && ctx.contains("游戏配置 id：lol"));
+}
+
+// ---------- 后台执行命令、读写文件（ADR 030） ----------
+
+#[tokio::test]
+async fn exec_tools_are_background_only_and_never_in_the_tool_service() {
+    use crate::catalog::{main_offers, subagent_offers};
+    let (service, _host) = service();
+    let specs = service.capabilities()["tools"].as_array().cloned().unwrap();
+    // 工具服务（外部 Agent、MCP、kotone.exe tools 用的那一份）里没有它们。
+    for spec in &specs {
+        let name = spec["name"].as_str().unwrap_or("");
+        assert!(
+            !kotone_exec::is_exec_tool(name),
+            "{name} 不能出现在工具服务里"
+        );
+    }
+    let catalog = Catalog::build(&specs, &[]);
+    for name in kotone_exec::TOOLS {
+        let entry = catalog
+            .get(name)
+            .unwrap_or_else(|| panic!("清单里没有 {name}"));
+        assert_eq!(entry.source, Source::Exec);
+        assert_eq!(entry.group, "computer");
+        assert!(!main_offers(entry), "主会话不能有 {name}");
+        assert!(subagent_offers(entry), "后台要有 {name}");
+        // 默认“允许”：什么时候先问由桌面端按 kotone-exec 的规则定。
+        assert_eq!(default_decision(entry, &json!({})), Decision::Allow);
+    }
+    // 命令输出、文件内容按不可信数据包给模型；写文件的结果不算。
+    assert!(catalog.get("shell.run").unwrap().untrusted);
+    assert!(catalog.get("file.read").unwrap().untrusted);
+    assert!(!catalog.get("file.write").unwrap().untrusted);
+    // 设置页“按工具设规则”的分组有中文名。
+    assert!(crate::catalog::GROUPS
+        .iter()
+        .any(|(id, _, _)| *id == "computer"));
+    // 能力概览里有“操作电脑上的程序和文件”。
+    let overview = crate::prompt::capability_overview(&catalog);
+    assert!(overview.contains("操作电脑上的程序和文件") && overview.contains("shell.run"));
+}
+
+#[tokio::test]
+async fn exec_calls_go_to_the_desktop_with_the_players_rule() {
+    // 默认规则：直接交给桌面（confirm = false），不经这里的询问。
+    let f = fixture(Policy::default(), Answer::AllowOnce);
+    let out = call(
+        &f.port,
+        "shell.run",
+        json!({"command": "Get-Date", "purpose": "看看现在几点"}),
+    )
+    .await;
+    assert!(!out.is_error, "{}", out.content);
+    assert!(out.untrusted, "命令输出按不可信数据交给模型");
+    assert!(f.asked.lock().unwrap().is_empty(), "不走通用的询问");
+    let calls = f.builtin.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, "exec");
+    assert_eq!(calls[0].1["tool"], "shell.run");
+    assert_eq!(calls[0].1["callId"], "call-1");
+    assert_eq!(calls[0].1["confirm"], false);
+
+    // 玩家设成“每次询问”：桌面端无论规则怎么判都先问一句（只问一遍：这里不再问）。
+    let mut policy = Policy::default();
+    policy.rules.insert("file.write".into(), Rule::Ask);
+    let f = fixture(policy, Answer::AllowOnce);
+    let out = call(
+        &f.port,
+        "file.write",
+        json!({"path": "a.txt", "content": "x", "purpose": "记一下"}),
+    )
+    .await;
+    assert!(!out.is_error);
+    assert!(f.asked.lock().unwrap().is_empty());
+    assert_eq!(f.builtin.calls.lock().unwrap()[0].1["confirm"], true);
+
+    // 玩家设成“禁止”：不交给桌面。
+    let mut policy = Policy::default();
+    policy.rules.insert("shell.run".into(), Rule::Deny);
+    let f = fixture(policy, Answer::AllowOnce);
+    let out = call(&f.port, "shell.run", json!({"command": "Get-Date"})).await;
+    assert!(
+        out.is_error && out.content.contains("禁止"),
+        "{}",
+        out.content
+    );
+    assert!(f.builtin.calls.lock().unwrap().is_empty());
+
+    // 只读模式：能读、能找，不能执行命令、写文件。
+    let f = fixture(
+        Policy {
+            mode: Mode::ReadOnly,
+            ..Policy::default()
+        },
+        Answer::AllowOnce,
+    );
+    let out = call(
+        &f.port,
+        "file.write",
+        json!({"path": "a.txt", "content": "x"}),
+    )
+    .await;
+    assert!(
+        out.is_error && out.content.contains("只读"),
+        "{}",
+        out.content
+    );
+    let out = call(&f.port, "shell.run", json!({"command": "Get-Date"})).await;
+    assert!(out.is_error);
+    let out = call(&f.port, "file.read", json!({"path": "a.txt"})).await;
+    assert!(!out.is_error, "{}", out.content);
+}
+
+#[tokio::test]
+async fn exec_tools_without_a_desktop_are_unavailable() {
+    struct NoDesktop;
+    impl BuiltinHost for NoDesktop {
+        async fn say(&self, _t: String, _d: Vec<DeliveryKind>) -> Result<Value, String> {
+            Ok(json!({}))
+        }
+        async fn ask(&self, _q: String, _w: u64) -> Result<Value, String> {
+            Ok(json!({}))
+        }
+        async fn remind(
+            &self,
+            _s: u64,
+            _t: String,
+            _d: Vec<DeliveryKind>,
+        ) -> Result<Value, String> {
+            Ok(json!({}))
+        }
+        async fn send_to_game_chat(&self, _t: String, _s: Option<bool>) -> Result<Value, String> {
+            Ok(json!({}))
+        }
+    }
+    let (service, _host) = service();
+    let specs = service.capabilities()["tools"].as_array().cloned().unwrap();
+    let port = KotonePort::new(
+        service,
+        Catalog::build(&specs, &[]),
+        Policy::default(),
+        Arc::new(Session::default()),
+        NoDesktop,
+        FakeAsker::new(Answer::AllowOnce),
+    );
+    let out = port
+        .call(
+            "c",
+            "shell.run",
+            json!({"command": "Get-Date"}),
+            &CancellationToken::default(),
+        )
+        .await;
+    assert!(
+        out.is_error && out.content.contains("不可用"),
+        "{}",
+        out.content
+    );
 }

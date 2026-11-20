@@ -153,7 +153,7 @@
 | --- | --- |
 | 一 | 已完成（2026-11-20，`claude/voice-call`）：说话那一刻截屏 + `screen.at_speech`；语音回合不思考、短回答；等待短句预先合成、1.2 秒、每轮最多一句；接着听 `assistant.followUpSeconds`（默认 8）；按呼叫键打断；`voice-timing` 日志；费用按轮记（账本 `turn` 字段、`usage_conversation`）。 |
 | 三 | 已完成（2026-11-20，`claude/voice-call`）：上面第六节全部；等待短句落盘（`<KOTONE_HOME>/cache/tts/<缓存键的 SHA-256>.wav`，只存登记过的短句，最多 200 个文件，重启后读文件、不再请求在线语音）。没做第四节的“用掉一句换一句”和内置兜底音频。真机计时见下。 |
-| 二 | 已完成（2026-11-20，`claude/voice-call`）。后端：`agent.start / followup / list / stop` 替代 `session.*`（`kotone_agent::subagents` 纯逻辑 + `agent.rs` 运行时）；4 秒同步窗口（关闭接收端后再看一眼，刚好做完的不会两头丢）；只有玩家来源（`chat`、`assistant-text`、`voice`、`wake-voice`、`quick-command`）那一轮能派活，玩家原话由运行时放进 `<player-request>`；最多同时 3 件在跑；后台每轮最多 30 步、15 分钟（操作游戏 60 步、30 分钟），最后一步附 `MAX_STEPS_PROMPT` 要总结（工具清单不变）；登记存 `agent/subagents/<主会话 id>.json`（和对话文件分开，主循环反复存对话不会盖掉），重启后 running / waiting → interrupted；一轮做完先存盘（`reported=false`）再交回：主会话空下来（不在回答、玩家没在说话、没有提问在等、没在出声）就插 `agent-report` 消息并唤醒主会话（入口跟随玩家最近一次说话的方式；不接“我看看”、不接着听），玩家先开口了就放在那一轮前面；总结作为数据附件（可能转述了网页）；被停掉的不交回；同传这类开着监听的，第一轮交回“开始听了”，之后每听到一句不交回。确认经主会话：语音时等主会话安静后开口问（复用 `voice_ask`，没听清就请玩家去卡片上点），打字时卡片按钮（`agent_subagent_answer`）。后台的 `reply.say` 只发弹幕；后台的模型、搜索费用记到派它出去的那一轮（主会话的 id + 玩家那句话的时间）。命令 `agent_subagent_messages / stop / continue / answer`；对话列表不返回后台的记录；删除对话时一起停、一起删。主会话的工具清单见下。界面（卡片、确认按钮、隐藏）见 commit 89bb18a4。 |
+| 二 | 已完成（2026-11-20，`claude/voice-call`）。后端：`agent.start / followup / list / stop` 替代 `session.*`（`kotone_agent::subagents` 纯逻辑 + `agent.rs` 运行时）；4 秒同步窗口（关闭接收端后再看一眼，刚好做完的不会两头丢）；只有玩家来源（`chat`、`assistant-text`、`voice`、`wake-voice`、`quick-command`）那一轮能派活，玩家原话由运行时放进 `<player-request>`；最多同时 3 件在跑；后台每轮最多 30 步、15 分钟（操作游戏 60 步、30 分钟），最后一步附 `MAX_STEPS_PROMPT` 要总结（工具清单不变）；登记存 `agent/subagents/<主会话 id>.json`（和对话文件分开，主循环反复存对话不会盖掉），重启后 running / waiting → interrupted；一轮做完先存盘（`reported=false`）再交回：主会话空下来（不在回答、玩家没在说话、没有提问在等、没在出声）就插 `agent-report` 消息并唤醒主会话（入口跟随玩家最近一次说话的方式；不接“我看看”、不接着听），玩家先开口了就放在那一轮前面；总结作为数据附件（可能转述了网页）；被停掉的不交回；同传这类开着监听的，第一轮交回“开始听了”，之后每听到一句不交回。确认经主会话：语音时等主会话安静后开口问（复用 `voice_ask`，没听清就请玩家去卡片上点），打字时卡片按钮（`agent_subagent_answer`）。后台的 `reply.say` 只发弹幕；后台的模型、搜索费用记到派它出去的那一轮（主会话的 id + 玩家那句话的时间）。命令 `agent_subagent_messages / stop / continue / answer`；对话列表不返回后台的记录；删除对话时一起停、一起删。主会话的工具清单见下。界面（卡片、确认按钮、隐藏）见 commit 89bb18a4。之后补的：后台执行命令、读写文件（[ADR 030](030-subagent-shell-and-files.md)，“实现情况”在那里）；每轮的页脚多一项“后台 ¥…”（账本记录的 `background` 字段，`CostCategory::Background`）；对话上限 100 段只算看得到的，后台记录随它的主对话一起淘汰（兜底上限 300 段）；旧的 `session.*` 真机脚本换成 `interpreter_e2e.py`（同传作为后台任务，假 AI；跑它时发现并修了 ADR 021 “只录某个程序”录成了“除它以外全部”的问题，见 ADR 021）。 |
 
 第二期：主会话的工具（`kotone_agent::catalog::MAIN_TOOLS`，语音和打字共用一份；另加已保存的自动化 `saved.*`）：`reply.say`、`reply.ask`、`reminder.create`、`game_chat.send`、`voice_chat.say`、`voice_chat.status`、`screen.at_speech`、`window.active`、`game.list`、`game.focus`、`game.installed`、`game.launch`、`automation.list / run / runs / stop`、`settings.describe / get / update`、`memory`、`skill.view`、`roles.list / switch`、`web.search`、`usage.summary`、`runtime.status`、`agent.*`。只给后台的：`game.look` / `game.act`（截图 + 识别，在线文字识别约 12 秒，而且多半要一步步操作）、`companion.read_chat`（同样要识别；开口那一刻的聊天用 `screen.at_speech`）、`web.fetch`（3–7 秒）、`automation.save`、`models.*`、`skill.manage`、`voice.listen.*`、`tools.find` 和其余长尾工具。后台不能用：`agent.*`、`reply.ask`、`voice_chat.say`、`connections.request_key`、`soul.write`（`kotone_agent::catalog::SUBAGENT_EXCLUDED`）。语音回答偏长（第三期实测 4–8 句）：系统提示改成“最多两句、一共不超过 40 个字；内容多就先用 reply.say 说结论 + ‘详细的我写在聊天里了’，最后的回复只显示不念”，附两个例子。
 
@@ -173,6 +173,18 @@
 - 费用：每句一行，13 / 13 行都记在各自那一轮下面。被打断的那一轮，排在后面、已经合成好的句子照样计费（最多同时合成 2 句、提前 8 秒的量）：两次分别 4 行、3 行，实际只念出一句 / 半句。
 - 等待短句第一次合成 7.8 / 9.1 秒，重启后从文件读回 10 / 12 毫秒，没有新的语音费用。
 - 两次搜版本模型都没有在工具前说话（直接调用搜索），这期间由等待短句接上；“工具前那句 + 回答”两路接着念这次没有真机数据。
+
+第二期语音路径真机（`scripts/manual-e2e/background_voice_real.py`，同上的真实 DeepSeek 与 VB-CABLE，2026-11-20，两次）：
+
+| 用嘴说的 | 结果 |
+| --- | --- |
+| “帮我写一个每隔十分钟提醒我喝水的自动化，先别运行” | `agent.start` 交给后台；她当场说“交给我了，写好存起来，不运行。”（15 字）。说完到出声 8.1 / 10.6 秒，因为 `agent.start` 最多等 4 秒，这期间 2.3–2.7 秒时由一句等待短句（“马上”“我看看”）接上，没有叠音。后台 29 / 31 秒做完交回，交回后 1.7 / 2.2 秒她自己开口说结果（32 / 48 字），不用按键；说结果那一轮不接等待短句、不接着听。 |
+| “把你文件夹里的 notes.txt 删掉”（ADR 030） | 后台删除前要确认，主会话开口问，脚本用嘴回答“可以”，后台接着删掉，她再开口说“删掉了……”。第一次运行没问出来：她说完“交给我”的瞬间接着听开始，后台的问题抢在那几十毫秒里，因为“正在录音”说不出来。改成主会话连续安静 1.5 秒再问、说不出来就等下一次安静再问（最多 3 次），第二次通过。 |
+
+- 语音回答 4 句分别 15、48、16、50 字，都是一两句。“约 40 字”大体压住，交回结果那一轮会稍长。
+- 确认的问句带了完整路径（“这一步会删除：C:\…gentiles
+otes.txt”），念出来要十来秒：从后台要确认到开始听回答约 19 秒，其中包括等主会话安静。
+- 这一轮的费用：识别 ¥0.0015、主会话 ¥0.0111、后台 ¥0.0295、语音合成 ¥0.0237。
 
 ## 待定
 

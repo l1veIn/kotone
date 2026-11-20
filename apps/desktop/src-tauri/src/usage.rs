@@ -44,7 +44,8 @@ pub fn record_model(
     });
 }
 
-/// 同 [`record_model`]，明确记到某段对话的某一轮（交给后台的事：记到派它出去的那一轮，ADR 029 第二期）。
+/// 同 [`record_model`]，明确记到某段对话的某一轮（交给后台的事：记到派它出去的那一轮，ADR 029 第二期），
+/// 并标成后台的（每轮的页脚里单独显示“后台 ¥…”）。
 pub fn record_model_for(
     kind: UsageKind,
     provider: &str,
@@ -64,6 +65,7 @@ pub fn record_model_for(
         model: model.to_string(),
         conversation: Some(owner.conversation.clone()),
         turn: owner.turn,
+        background: true,
         input_tokens: usage.input_tokens,
         cache_hit_tokens: usage.cached_input_tokens,
         output_tokens: usage.output_tokens,

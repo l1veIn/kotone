@@ -160,7 +160,8 @@ export function totalsMoney(t: UsageTotals): string {
 }
 
 /**
- * 把账本里记到这段对话的费用挂到对应的轮上（按玩家那句话的时间对上；模型的费用在消息里，不重复挂）。
+ * 把账本里记到这段对话的费用挂到对应的轮上（按玩家那句话的时间对上；这一轮自己的模型费用在消息里，不重复挂；
+ * 交给后台的事的模型费用不在这段对话的消息里，按“后台”挂到派它的那一轮）。
  * 没有费用的轮原样返回。
  */
 export function withCosts(turns: Turn[], costs: ConversationCosts | null): Turn[] {

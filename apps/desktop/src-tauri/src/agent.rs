@@ -26,8 +26,8 @@ use kotone_agent::{Answer, Asker, PermissionRequest};
 use kotone_ai::agent::model::AgentModel;
 use kotone_ai::agent::store::{Conversation, ConversationStore, Subagent, SubagentStatus};
 use kotone_ai::agent::{
-    now_ms, run_turn, AgentEvent, AgentLimits, Attachment, Inbox, Message, StopReason, ToolStatus,
-    Turn,
+    now_ms, run_turn, AgentEvent, AgentLimits, Attachment, Inbox, Message, StopReason, ToolOutcome,
+    ToolStatus, Turn,
 };
 use kotone_core::automation::{ChatAction, Run, RunStatus};
 use kotone_core::cancel::CancellationToken;
@@ -645,6 +645,8 @@ async fn turn(
     let ws = workspace();
     // 玩家这一轮说的原话（只有它能交给后台，ADR 030 第 2 节）：玩家的话进对话时记下。
     let player: PlayerWords = Arc::default();
+    // 这一轮从玩家这句话开始读到过外面的东西没有（交给后台时继承，ADR 030 第 3 节）。
+    let turn_taint: TurnTaint = Arc::default();
     let port = KotonePort::new(
         service,
         catalog,
@@ -656,6 +658,7 @@ async fn turn(
             app: app.clone(),
             session: format!("agent:{}", conversation.id),
             player: player.clone(),
+            turn_taint: turn_taint.clone(),
         },
         DesktopAsker {
             app: app.clone(),
@@ -813,6 +816,7 @@ async fn turn(
                         at_ms,
                         source,
                         text,
+                        attachments,
                         ..
                     },
             } if child.is_none() => {
@@ -823,6 +827,43 @@ async fn turn(
                 if kotone_agent::subagents::is_player_source(source) {
                     *player.lock().unwrap() = Some((text.clone(), *at_ms));
                     remember_entry(app, &conversation_id, entry_of_source(source));
+                    // 玩家新说了一句：读没读过外面的东西从这里重新算（附带的截图、数据算外面的；
+                    // Kotone 自己写的“开口时的前台窗口”说明不算，否则用嘴派的活每次都要先问）。
+                    *turn_taint.lock().unwrap() = attachments
+                        .iter()
+                        .any(|a| !crate::speech_screen::is_turn_note(a))
+                        .then(|| "玩家这句话附带了截图或数据".to_string());
+                }
+            }
+            // ADR 030：读到了外面的东西（不可信的工具结果）。主会话记在这一轮（交给后台时继承），
+            // 后台记在它自己的登记里。执行工具的结果不按“不可信”算，看 kotone-exec 给的 taints。
+            AgentEvent::Appended {
+                message:
+                    Message::Tool {
+                        name,
+                        untrusted: true,
+                        ..
+                    },
+            } if !kotone_agent::exec::is_exec_tool(name) => {
+                let why = format!("读了 {name} 的结果（屏幕、聊天、网页这类别人写的内容）");
+                match child {
+                    None => {
+                        turn_taint.lock().unwrap().get_or_insert(why);
+                    }
+                    Some(spec) => mark_subagent_taint(app, spec, &why),
+                }
+            }
+            // 后台收到的别人说的话（同传听到的一句）或附带的数据。
+            AgentEvent::Appended {
+                message:
+                    Message::User {
+                        source,
+                        attachments,
+                        ..
+                    },
+            } if child.is_some() && (source == "heard" || !attachments.is_empty()) => {
+                if let Some(spec) = child {
+                    mark_subagent_taint(app, spec, "收到了别人说的话或附带的数据");
                 }
             }
             // 后台每调用一次模型，卡片上的“第 n 步”加一。
@@ -1529,6 +1570,8 @@ struct DesktopBuiltins {
     session: String,
     /// 玩家这一轮说的原话（交给后台时附上）。
     player: PlayerWords,
+    /// 这一轮读到过外面的东西没有（交给后台时继承，ADR 030）。
+    turn_taint: TurnTaint,
 }
 
 fn delivery_names(kinds: &[DeliveryKind]) -> Vec<&'static str> {
@@ -1552,10 +1595,12 @@ impl BuiltinHost for DesktopBuiltins {
         let caller = self.conversation_id();
         match tool {
             kotone_agent::catalog::TOOL_AGENT_START => {
-                agent_start(&self.app, &caller, &self.player, arguments).await
+                let inherited = self.turn_taint.lock().unwrap().clone();
+                agent_start(&self.app, &caller, &self.player, inherited, arguments).await
             }
             kotone_agent::catalog::TOOL_AGENT_FOLLOWUP => {
-                agent_followup(&self.app, &caller, &self.player, arguments).await
+                let inherited = self.turn_taint.lock().unwrap().clone();
+                agent_followup(&self.app, &caller, &self.player, inherited, arguments).await
             }
             kotone_agent::catalog::TOOL_AGENT_LIST => agent_list(&self.app, &caller),
             kotone_agent::catalog::TOOL_AGENT_STOP => {
@@ -1582,6 +1627,25 @@ impl BuiltinHost for DesktopBuiltins {
             "web.fetch" => crate::web_tools::fetch(&self.app, &caller, arguments).await,
             other => Err(format!("{other} 在这里不可用")),
         }
+    }
+
+    async fn exec(
+        &self,
+        _call_id: &str,
+        tool: &str,
+        arguments: &Value,
+        confirm: bool,
+        cancel: &CancellationToken,
+    ) -> ToolOutcome {
+        exec_tool(
+            &self.app,
+            &self.conversation_id(),
+            tool,
+            arguments,
+            confirm,
+            cancel,
+        )
+        .await
     }
 
     fn preapproved(&self, tool: &str, _arguments: &Value) -> bool {
@@ -1700,7 +1764,8 @@ struct DesktopAsker {
 impl Asker for DesktopAsker {
     async fn ask(&self, request: PermissionRequest, cancel: &CancellationToken) -> Answer {
         if let Some(spec) = &self.child {
-            return subagent_ask(&self.app, spec, &self.conversation_id, request, cancel).await;
+            let question = kotone_agent::subagents::question(&spec.label, &request.reason);
+            return subagent_ask(&self.app, spec, &self.conversation_id, question, cancel).await;
         }
         let (tx, rx) = oneshot::channel();
         let ask_id = {
@@ -2148,6 +2213,7 @@ pub async fn agent_subagent_continue(
         "（玩家在聊天里点了“继续”）",
         now_ms(),
         "继续刚才没做完的事。",
+        None,
         false,
     )
     .await
@@ -2194,6 +2260,113 @@ pub fn agent_subagent_answer(
 
 /// 玩家这一轮说的原话和时间（只有玩家说的话能交给后台，ADR 030 第 2 节）。
 type PlayerWords = Arc<Mutex<Option<(String, u64)>>>;
+
+/// 这一轮主会话从玩家这句话开始读到过外面的东西（不可信的工具结果、附带的截图或数据）：
+/// 第一次的说明。交给后台时它继承这个标记（ADR 030 第 3 节）。
+type TurnTaint = Arc<Mutex<Option<String>>>;
+
+// ---------- 后台执行命令、读写文件（ADR 030） ----------
+
+/// kotone-exec 的配置：Kotone 的 agent 目录；游戏目录来自游戏配置里填的程序路径
+/// （`.exe` 所在的文件夹；启动器链接、快捷方式不算），正在运行的不写。
+fn exec_config() -> kotone_agent::exec::ExecConfig {
+    use kotone_agent::exec::{ExecConfig, GameDir};
+    let running: std::collections::HashSet<String> =
+        kotone_platform_windows::inject::process_list()
+            .into_iter()
+            .map(|(_, _, name)| name.to_lowercase())
+            .collect();
+    let game_dirs = kotone_core::profile::list()
+        .into_iter()
+        .filter_map(|game| {
+            let path = std::path::Path::new(game.launch_path.trim());
+            let exe = path.is_absolute()
+                && path
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("exe"));
+            if !exe {
+                return None;
+            }
+            let dir = path.parent()?.to_path_buf();
+            let running = game
+                .process_names
+                .iter()
+                .any(|p| running.contains(&p.to_lowercase()));
+            Some(GameDir {
+                game_id: game.id,
+                display: game.display_name,
+                dir,
+                running,
+            })
+        })
+        .collect();
+    ExecConfig {
+        home: kotone_core::settings::kotone_dir().join("agent"),
+        game_dirs,
+    }
+}
+
+/// 一件后台的事的“读过外面的东西”（存在它的登记里）。
+fn subagent_taint(app: &AppHandle, spec: &ChildSpec) -> kotone_agent::exec::Taint {
+    subagents_of(app, &spec.parent)
+        .iter()
+        .find(|a| a.name == spec.name)
+        .map(kotone_agent::subagents::taint_of)
+        .unwrap_or_default()
+}
+
+/// 后台读到了外面的东西（只记第一次）。
+fn mark_subagent_taint(app: &AppHandle, spec: &ChildSpec, why: &str) {
+    let marked = subagents_of(app, &spec.parent)
+        .iter()
+        .any(|a| a.name == spec.name && a.taint.is_some());
+    if !marked {
+        update_subagent(app, &spec.parent, &spec.name, |a| {
+            a.taint.get_or_insert_with(|| why.to_string());
+        });
+    }
+}
+
+/// 后台执行命令、读写文件：判断、经主会话问玩家（语音时开口问，打字时是卡片按钮）、执行、
+/// 记下读没读到外面的东西（流程在 [`kotone_agent::subagents::run_exec`]）。主会话没有这些工具
+/// （清单里就没给），这里再挡一遍。`confirm`：玩家把这个工具设成了“每次询问”。
+async fn exec_tool(
+    app: &AppHandle,
+    caller: &str,
+    tool: &str,
+    arguments: &Value,
+    confirm: bool,
+    cancel: &CancellationToken,
+) -> ToolOutcome {
+    let Some(spec) = child_spec(app, caller) else {
+        return ToolOutcome::error("执行命令、读写文件只在后台做：用 agent.start 交给后台");
+    };
+    let cfg = exec_config();
+    let mut taint = subagent_taint(app, &spec);
+    let before = taint.clone();
+    let outcome = kotone_agent::subagents::run_exec(
+        &cfg,
+        &mut taint,
+        tool,
+        arguments,
+        confirm,
+        cancel,
+        |question| {
+            log::log(&format!("agent: {} asks before {tool}", spec.name));
+            subagent_ask(app, &spec, caller, question, cancel)
+        },
+    )
+    .await;
+    if outcome.is_error && outcome.content.starts_with("没有执行") {
+        log::log(&format!("agent: {} refused {tool}", spec.name));
+    }
+    if taint != before {
+        update_subagent(app, &spec.parent, &spec.name, |a| {
+            kotone_agent::subagents::store_taint(a, &taint)
+        });
+    }
+    outcome
+}
 
 fn subagent_limits(compact_at_tokens: u64) -> AgentLimits {
     use kotone_agent::subagents as sa;
@@ -2342,6 +2515,7 @@ async fn agent_start(
     app: &AppHandle,
     caller: &str,
     player: &PlayerWords,
+    inherited_taint: Option<String>,
     arguments: &Value,
 ) -> Result<Value, String> {
     use kotone_agent::subagents as sa;
@@ -2398,6 +2572,9 @@ async fn agent_start(
         question: None,
         reported: false,
         turn: Some(at_ms),
+        // 派它的这一轮主会话读过外面的东西：任务说明可能转述了它们，算它也读过（ADR 030 第 3 节）。
+        taint: inherited_taint,
+        taint_approved: false,
     };
     {
         let mut inner = rt.inner.lock().unwrap();
@@ -2444,6 +2621,7 @@ async fn agent_followup(
     app: &AppHandle,
     caller: &str,
     player: &PlayerWords,
+    inherited_taint: Option<String>,
     arguments: &Value,
 ) -> Result<Value, String> {
     if child_spec(app, caller).is_some() {
@@ -2455,10 +2633,22 @@ async fn agent_followup(
     if message.is_empty() {
         return Err("message 不能为空".into());
     }
-    resume(app, caller, &name, &words, at_ms, &message, true).await
+    resume(
+        app,
+        caller,
+        &name,
+        &words,
+        at_ms,
+        &message,
+        inherited_taint,
+        true,
+    )
+    .await
 }
 
 /// 接着做（`agent.followup`、卡片上的“继续”）。`wait`：最多等 4 秒拿结果。
+/// `inherited_taint`：派这句话的那一轮主会话读过外面的东西（ADR 030 第 3 节）。
+#[allow(clippy::too_many_arguments)]
 async fn resume(
     app: &AppHandle,
     main: &str,
@@ -2466,6 +2656,7 @@ async fn resume(
     words: &str,
     at_ms: u64,
     message: &str,
+    inherited_taint: Option<String>,
     wait: bool,
 ) -> Result<Value, String> {
     use kotone_agent::subagents as sa;
@@ -2524,6 +2715,8 @@ async fn resume(
         }
         a.reported = false;
         a.turn = Some(at_ms);
+        // 玩家追加了任务：执行命令、写文件前的“同意过”重新算（ADR 030）。
+        kotone_agent::subagents::new_round(a, inherited_taint);
     });
     dispatch(
         app,
@@ -2795,6 +2988,25 @@ fn finish_round(
     }
 }
 
+/// 后台要开口问玩家前，主会话要连续安静这么久。
+const QUIET_BEFORE_ASKING: std::time::Duration = std::time::Duration::from_millis(1_500);
+
+/// 等主会话连续安静 `span`（见 [`main_is_quiet`]）。
+async fn wait_quiet(app: &AppHandle, span: std::time::Duration) {
+    let mut since: Option<std::time::Instant> = None;
+    loop {
+        if main_is_quiet(app) {
+            let start = *since.get_or_insert_with(std::time::Instant::now);
+            if start.elapsed() >= span {
+                return;
+            }
+        } else {
+            since = None;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
 /// 现在能不能插进主会话说一句：她没在回答、玩家没在说话、没有提问在等回答。
 fn main_is_quiet(app: &AppHandle) -> bool {
     if is_running(app) || crate::voice_ask::is_pending(app) || crate::assistant::output_busy(app) {
@@ -2908,10 +3120,9 @@ async fn subagent_ask(
     app: &AppHandle,
     spec: &ChildSpec,
     child_id: &str,
-    request: PermissionRequest,
+    question: String,
     cancel: &CancellationToken,
 ) -> Answer {
-    let question = kotone_agent::subagents::question(&spec.label, &request.reason);
     let (tx, rx) = oneshot::channel();
     {
         let Ok(rt) = runtime(app) else {
@@ -2939,17 +3150,20 @@ async fn subagent_ask(
     let mut rx = rx;
     if last_entry(app, &spec.parent) == Some(Entry::Game) {
         let voice = async {
-            while !main_is_quiet(app) {
-                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-            }
-            match crate::voice_ask::ask(app, &question, 8).await {
-                Ok(Some(text)) => crate::voice_ask::parse_confirmation(&text),
-                Ok(None) => None,
-                Err(e) => {
-                    log::log(&format!("agent: 后台的确认没能用语音问：{e}"));
-                    None
+            // 主会话安静了一会儿再问：她刚说完“交给我”时接着听马上就要开始，抢在那几十毫秒里
+            // 问会因为“正在录音”说不出来（2026-11-20 真机）。说不出来就等下一次安静再问。
+            for attempt in 0..3 {
+                wait_quiet(app, QUIET_BEFORE_ASKING).await;
+                match crate::voice_ask::ask(app, &question, 8).await {
+                    Ok(Some(text)) => return crate::voice_ask::parse_confirmation(&text),
+                    Ok(None) => return None,
+                    Err(e) => log::log(&format!(
+                        "agent: 后台的确认没能用语音问（第 {} 次）：{e}",
+                        attempt + 1
+                    )),
                 }
             }
+            None
         };
         let decided = tokio::select! {
             biased;
@@ -3401,6 +3615,8 @@ mod tests {
             question: None,
             reported: false,
             turn: None,
+            taint: None,
+            taint_approved: false,
         }]);
         let Message::User {
             text,

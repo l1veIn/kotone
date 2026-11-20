@@ -67,6 +67,22 @@ pub trait BuiltinHost: Send + Sync {
         async move { Err(message) }
     }
 
+    /// 执行命令、读写文件（ADR 030，[`Source::Exec`]）。桌面端用 kotone-exec 执行：先按它的规则判断
+    /// 要不要经主会话问玩家（读过外面的东西、删除类命令、第一次改游戏目录……），再执行，并记下
+    /// 这次有没有读到外面的东西。`confirm`：玩家把这个工具设成了“每次询问”，无论规则怎么判都先问。
+    /// 只在后台任务里可用；没有桌面（测试、外部宿主）时不可用。
+    fn exec(
+        &self,
+        _call_id: &str,
+        tool: &str,
+        _arguments: &Value,
+        _confirm: bool,
+        _cancel: &CancellationToken,
+    ) -> impl Future<Output = ToolOutcome> + Send {
+        let message = format!("{tool} 在这里不可用");
+        async move { ToolOutcome::error(message) }
+    }
+
     /// 玩家已经在别处一直允许了这次调用（例如游戏配置里“让琴音操作”设为一直允许）：
     /// 权限规则是“询问”时不再问。用户设为禁止、只读模式时仍然不执行。
     fn preapproved(&self, _tool: &str, _arguments: &Value) -> bool {
@@ -452,6 +468,8 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
             Source::Builtin => self.call_builtin(&entry.name, &arguments).await,
             Source::Saved { id } => self.call_saved(id, arguments).await,
             Source::Service => self.call_service(&entry.name, arguments).await,
+            // 由 `call` 直接交给桌面（要带上调用 id、取消和“每次询问”），不会走到这里。
+            Source::Exec => ToolOutcome::error(format!("{} 在这里不可用", entry.name)),
         };
         outcome.untrusted = entry.untrusted;
         outcome
@@ -515,10 +533,27 @@ impl<H: BuiltinHost, A: Asker> ToolPort for KotonePort<H, A> {
                 return ToolOutcome::error(format!("没有执行：{reason}"));
             }
         }
-        match self
+        let decision = self
             .policy
-            .decide_with(entry, &arguments, &self.session.grants)
-        {
+            .decide_with(entry, &arguments, &self.session.grants);
+        // 执行命令、读写文件（ADR 030）：什么时候先问由桌面端按 kotone-exec 的规则定，不走下面的
+        // 询问（免得问两遍）；玩家把它设成“每次询问”时让桌面端无论如何先问一句。
+        if entry.source == Source::Exec {
+            let confirm = match decision {
+                Decision::Allow => false,
+                Decision::Ask { .. } => true,
+                Decision::Deny { reason } => {
+                    return ToolOutcome::error(format!("没有执行：{reason}"));
+                }
+            };
+            let mut outcome = self
+                .host
+                .exec(call_id, &entry.name, &arguments, confirm, cancel)
+                .await;
+            outcome.untrusted = entry.untrusted;
+            return outcome;
+        }
+        match decision {
             Decision::Allow => {}
             Decision::Deny { reason } => {
                 return ToolOutcome::error(format!("没有执行：{reason}"));

@@ -21,6 +21,16 @@ impl Taint {
         Self::default()
     }
 
+    /// 从存盘的两项恢复（运行时把它们存在后台任务的登记里）。
+    pub fn from_parts(reason: Option<String>, approved: bool) -> Self {
+        Self { reason, approved }
+    }
+
+    /// 这一轮里玩家已经同意过。
+    pub fn is_approved(&self) -> bool {
+        self.approved
+    }
+
     /// 读到了外面的东西：不可信的工具结果（屏幕、聊天、网页……）、Kotone 文件区以外的文件、
     /// 读文件内容或下载网页的命令。只记第一次的说明。
     pub fn mark(&mut self, why: &str) {
