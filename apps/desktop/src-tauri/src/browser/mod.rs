@@ -343,6 +343,30 @@ fn guard_guest(webview: &Webview) {
                     Ok(())
                 }));
                 core.add_ScriptDialogOpening(&dialogs, &mut token)?;
+                // 网页想拉起本机程序（网易云的“去客户端播放”用 orpheus://、QQ 的 tencent:// 等）：
+                // WebView2 默认弹“要打开这个应用吗”，窗口隐藏时没人点得掉，页面会一直卡住
+                // （真机：网易云点“播放”后 60 秒没反应）。一律取消、记日志（DSH 访客策略：拒绝特殊协议）。
+                if let Ok(core18) = core.cast::<ICoreWebView2_18>() {
+                    let block = webview2_com::LaunchingExternalUriSchemeEventHandler::create(
+                        Box::new(|_, args| {
+                            if let Some(args) = args {
+                                let mut uri = windows::core::PWSTR::null();
+                                let scheme = if args.Uri(&mut uri).is_ok() {
+                                    let uri = webview2_com::take_pwstr(uri);
+                                    uri.split(':').next().unwrap_or_default().to_string()
+                                } else {
+                                    String::new()
+                                };
+                                args.SetCancel(true)?;
+                                kotone_core::log::log(&format!(
+                                    "browser: 网页想打开本机程序（{scheme}:），已拦下"
+                                ));
+                            }
+                            Ok(())
+                        }),
+                    );
+                    core18.add_LaunchingExternalUriScheme(&block, &mut token)?;
+                }
                 // 真机脚本半夜测放歌：整个浏览器静音（页面照常播放，“在放”照样读得到）。
                 if std::env::var_os("KOTONE_BROWSER_MUTE").is_some() {
                     if let Ok(core8) = core.cast::<ICoreWebView2_8>() {

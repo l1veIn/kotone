@@ -1036,26 +1036,16 @@ pub fn captcha_hint(text: &str) -> bool {
 // ---------- 音乐（主会话的 `music`） ----------
 
 /// 各音乐网站“下一首”按钮（按站点后缀找第一个对得上的；都对不上再按 title / aria-label 里的“下一首”找）。
-/// 网易云的 `.nxt`（`data-action="next"`）在网页版播放条上；其余三家是按公开页面结构写的，
-/// 没有真机核对过，对不上时会退到通用规则。
+/// 2026-11-21 在真网站上核对过按钮**存在**（不登录放不了歌，点了能不能换歌没核实）：
+/// 网易云播放条 `a.nxt`（title“下一首(ctrl+→)”）、酷狗歌曲页 `#next`（`.icon-playbar-next`）、
+/// 酷我播放条 `div.next`（title“下一首”）。QQ 音乐不登录看不到播放条，没有核实，只靠通用规则。
 pub const NEXT_BUTTONS: &[(&str, &[&str])] = &[
     (
         "music.163.com",
         &["a.nxt[data-action=\"next\"]", ".m-playbar .nxt"],
     ),
-    (
-        "y.qq.com",
-        &[
-            ".btn_big_next",
-            ".player__btn--next",
-            "a[title^=\"下一首\"]",
-        ],
-    ),
-    ("kugou.com", &[".next", "#next", "[title^=\"下一首\"]"]),
-    (
-        "kuwo.cn",
-        &[".icon-player-next", ".next", "[title^=\"下一首\"]"],
-    ),
+    ("kugou.com", &["#next", ".icon-playbar-next"]),
+    ("kuwo.cn", &["div.next[title^=\"下一首\"]", "div.next"]),
 ];
 
 /// 这个网站的“下一首”按钮选择器（没有专门的就空）。
@@ -1463,8 +1453,10 @@ mod tests {
     #[test]
     fn music_sites_have_next_buttons_and_others_fall_back() {
         assert!(next_selectors("music.163.com")[0].contains("nxt"));
-        assert!(!next_selectors("y.qq.com").is_empty());
-        assert!(!next_selectors("www.kugou.com").is_empty());
+        // QQ 音乐没核实过，只靠通用的“下一首”规则
+        assert!(next_selectors("y.qq.com").is_empty());
+        assert_eq!(next_selectors("www.kugou.com")[0], "#next");
+        assert!(next_selectors("www.kuwo.cn")[0].starts_with("div.next"));
         assert!(next_selectors("example.com").is_empty());
         let script = media_script("next", next_selectors("music.163.com"));
         assert!(script.contains("a.nxt"));

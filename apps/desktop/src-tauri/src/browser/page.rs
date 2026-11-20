@@ -363,6 +363,18 @@ pub async fn handover(
     Ok(json!({"result": outcome, "note": "先 browser.snapshot 看看现在的页面"}))
 }
 
+/// 只给调试版的 `browser_probe` 用：在页面里执行一段脚本（真机脚本排查各音乐网站的播放器）。
+pub async fn probe_eval(app: &AppHandle, expression: &str) -> Result<Value, String> {
+    let webview = current(app).ok_or("还没打开网页")?;
+    cdp::evaluate(&webview, expression).await
+}
+
+/// 只给调试版的 `browser_probe` 用：WebView2 说页面现在有没有在出声（静音时也照实回答）。
+pub async fn probe_audio(app: &AppHandle) -> Result<Value, String> {
+    let webview = current(app).ok_or("还没打开网页")?;
+    Ok(json!({"documentPlayingAudio": cdp::playing_audio(&webview).await}))
+}
+
 /// 主会话的 `music`：控制 Kotone 浏览器里在放的歌。
 pub async fn music(app: &AppHandle, action: &str) -> Result<Value, String> {
     if !matches!(action, "play" | "pause" | "next" | "now") {

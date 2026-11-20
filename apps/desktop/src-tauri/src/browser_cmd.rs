@@ -53,7 +53,7 @@ pub async fn browser_clear_data(app: AppHandle) -> Result<(), String> {
 }
 
 /// 只在调试版里：不经过模型，直接打开网址（同样的网址检查）、读页面，或者按编号点击 / 输入、
-/// 调用 `music`（真机脚本排查和对照用；发布版拒绝）。
+/// 调用 `music`，或者 `eval` 执行一段脚本、`audio` 问页面有没有在出声（真机脚本排查和对照用；发布版拒绝）。
 #[tauri::command]
 pub async fn browser_probe(
     app: AppHandle,
@@ -83,6 +83,8 @@ pub async fn browser_probe(
             .await
         }
         "music" => browser::music(&app, arg.as_str().unwrap_or("now")).await,
+        "eval" => browser::probe_eval(&app, arg.as_str().unwrap_or("null")).await,
+        "audio" => browser::probe_audio(&app).await,
         other => Err(format!("不认识的操作：{other}")),
     }
 }

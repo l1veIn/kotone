@@ -46,6 +46,9 @@ pub const BUNDLED_SKILLS: &[(&str, &str)] = &[
         "skill-creator",
         include_str!("../skills/skill-creator/SKILL.md"),
     ),
+    // 在 Kotone 右侧栏的浏览器里放歌（ADR 031）：各音乐网站的搜索网址、登录提示、播放条按钮，
+    // 2026-11-21 真网站核对过的写进去，没核对的标“未核实”。
+    ("music-web", include_str!("../skills/music-web/SKILL.md")),
 ];
 /// 装过哪些内置 Skill、装的是哪个版本（内容的 FNV-1a 64 位哈希）。
 pub const BUNDLED_RECORD: &str = ".bundled-skills.json";
@@ -695,6 +698,7 @@ mod tests {
         assert!(
             names.contains(&"kotone-config".to_string())
                 && names.contains(&"skill-creator".to_string())
+                && names.contains(&"music-web".to_string())
         );
 
         // 玩家删了：不再装回
