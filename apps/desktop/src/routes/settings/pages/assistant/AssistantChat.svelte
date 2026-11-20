@@ -33,6 +33,8 @@
   import { asrStore } from "../../../../lib/stores/runtime";
   import KotoneAvatar from "../../../../lib/components/KotoneAvatar.svelte";
   import { avatarLetter, customAvatar, roleFaces } from "../../../../lib/stores/avatar";
+  import RightSidebar from "../../../../lib/agentChat/RightSidebar.svelte";
+  import { chatNarrow, RIGHT_SIDEBAR_MIN_CHAT } from "../../../../lib/stores/rightSidebar";
 
   let { ready, active, legacy = false, onOpenSettings, onOpenTalk, onOpenConnections, onKeyConnected, onBackToVoice }: {
     /** 角色的 AI 连接已选好、有密钥。 */
@@ -134,6 +136,11 @@
     queueMicrotask(() => textarea?.focus());
   });
 
+  // 右侧栏（ADR 031）：聊天页够宽时并排，窄了盖在聊天上、默认收起。宽度量的是整个聊天页。
+  let chatWidth = $state(0);
+  const narrow = $derived(chatWidth > 0 && chatWidth < RIGHT_SIDEBAR_MIN_CHAT);
+  $effect(() => { chatNarrow.set(narrow); });
+
   function starter(text: string) {
     // 以冒号结尾的提示要接着补充，先放进输入框；其余直接发出。
     if (text.endsWith("：") || text.endsWith(":")) {
@@ -185,7 +192,8 @@
   </div>
 {/snippet}
 
-<div class="ui-scope flex h-full min-h-0 flex-col text-foreground" data-testid="assistant-chat">
+<div class="ui-scope relative flex h-full min-h-0 text-foreground" data-testid="assistant-chat" bind:clientWidth={chatWidth}>
+<div class="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="chat-column">
   {#if browserPreview || notReady || chat.loadError}
     <div class="mx-auto w-full max-w-[808px] space-y-2 px-6 pt-4">
       {#if browserPreview}
@@ -259,4 +267,6 @@
       {@render composer()}
     </div>
   {/if}
+</div>
+  <RightSidebar {active} {narrow} {chatWidth} />
 </div>

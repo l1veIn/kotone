@@ -22,6 +22,7 @@
   import VoiceChatSettings from "./assistant/VoiceChatSettings.svelte";
   import AgentSettings from "./assistant/AgentSettings.svelte";
   import UsageSettings from "./assistant/UsageSettings.svelte";
+  import BrowserDataSettings from "./assistant/BrowserDataSettings.svelte";
   import { companionBindings, listConnections, type ConnectionInfo } from "../../../lib/ipc";
   import { usesLegacyVoiceInput } from "../../../lib/ipc/contracts";
   import { settingsStore } from "../../../lib/stores/ui";
@@ -117,7 +118,7 @@
         <VoiceChatSettings />
       </div>
     {:else if section === "permissions"}
-      <div data-testid="settings-permissions"><AgentSettings /></div>
+      <div class="space-y-6" data-testid="settings-permissions"><AgentSettings /><BrowserDataSettings /></div>
     {:else if section === "usage"}
       <div data-testid="settings-usage"><UsageSettings /></div>
     {:else if section === "connections"}

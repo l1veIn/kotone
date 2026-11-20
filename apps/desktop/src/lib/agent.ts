@@ -415,6 +415,7 @@ export const starterPrompts = [
   { label: "你能做什么？", text: "你能做什么？" },
   { label: "帮我配置 Kotone", text: "帮我把 Kotone 配置好：先问我几个问题，再一项项帮我设置。" },
   { label: "这个版本什么英雄强？", text: "这个版本什么英雄强？" },
+  { label: "来首歌", text: "来首歌：" },
   { label: "做一个自动化", text: "帮我做一个自动化：" },
   { label: "5 分钟后提醒我", text: "5 分钟后提醒我" },
 ];

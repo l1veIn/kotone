@@ -41,6 +41,7 @@ import type {
   OverlayStateSnapshot,
 } from "./contracts";
 import { companionBindings, defaultPostProcessing, hasLegacyReminders, modelsDirPathError, usesLegacyVoiceInput } from "./contracts";
+import type { BrowserAction, BrowserBounds, BrowserState } from "../browser";
 
 // ================================================================
 // 浏览器 mock：内存态，模拟后端行为（仅 dev:web 使用）
@@ -1408,4 +1409,95 @@ export async function deleteHistoryRecord(sessionId: string, ts: string): Promis
 /** 读取历史记录随附的音频（相对 history/audio/ 的文件名 → wav 字节） */
 export async function readHistoryAudio(fileName: string): Promise<Uint8Array> {
   return new Uint8Array(0);
+}
+
+// ---------- 内置浏览器（ADR 031，聊天页右侧栏） ----------
+// 命令可能不带参数地被调用（e2e 的兜底按命令名找这里的函数），参数都要可缺省。
+
+const closedBrowser = (): BrowserState => ({
+  open: false, url: null, title: null, site: null, loading: false, handover: null, media: null, busy: false,
+});
+const previewSongs = [
+  { title: "晴天", artist: "周杰伦" },
+  { title: "稻香", artist: "周杰伦" },
+  { title: "夜曲", artist: "周杰伦" },
+];
+const browserPreview = {
+  state: closedBrowser(),
+  song: 0,
+  bounds: null as BrowserBounds | null,
+  listeners: new Set<(state: BrowserState) => void>(),
+};
+
+function emitBrowser(): void {
+  for (const listener of browserPreview.listeners) listener(clone(browserPreview.state));
+}
+
+export function browserState(): BrowserState {
+  return clone(browserPreview.state);
+}
+
+/** 浏览器区域的位置（预览里只记下，e2e 读它核对）。 */
+export function browserSetBounds(bounds?: BrowserBounds): null {
+  browserPreview.bounds = bounds ? { ...bounds } : null;
+  return null;
+}
+export function browserLastBounds(): BrowserBounds | null {
+  return browserPreview.bounds ? { ...browserPreview.bounds } : null;
+}
+
+export function browserControl(args?: { action?: BrowserAction }): null {
+  const state = browserPreview.state;
+  switch (args?.action) {
+    case "play": if (state.media) state.media.playing = true; break;
+    case "pause": if (state.media) state.media.playing = false; break;
+    case "next":
+      if (state.media) {
+        browserPreview.song = (browserPreview.song + 1) % previewSongs.length;
+        state.media = { playing: true, ...previewSongs[browserPreview.song] };
+      }
+      break;
+    case "close": browserPreview.state = closedBrowser(); break;
+    default: break; // reload / back：预览里没有真的页面
+  }
+  emitBrowser();
+  return null;
+}
+
+export function browserHandoverDone(): null {
+  browserPreview.state.handover = null;
+  emitBrowser();
+  return null;
+}
+
+export function browserClearData(): null {
+  browserPreview.state = closedBrowser();
+  emitBrowser();
+  return null;
+}
+
+export function subscribeBrowserPreview(callback: (state: BrowserState) => void): () => void {
+  browserPreview.listeners.add(callback);
+  return () => { browserPreview.listeners.delete(callback); };
+}
+
+/** dev:web 演示：没打开 → 网易云在放歌 → 要登录（控制台里 `__kotoneBrowserPreview("playing")`）。 */
+export function browserPreviewStep(step: "closed" | "playing" | "handover"): BrowserState {
+  if (step === "closed") {
+    browserPreview.state = closedBrowser();
+  } else {
+    browserPreview.song = 0;
+    browserPreview.state = {
+      open: true, url: "https://music.163.com/#/song?id=186016", title: "晴天 - 周杰伦 - 单曲 - 网易云音乐",
+      site: "music.163.com", loading: false, busy: false,
+      handover: step === "handover" ? { reason: "网易云要登录一下" } : null,
+      media: step === "handover" ? null : { playing: true, ...previewSongs[0] },
+    };
+  }
+  emitBrowser();
+  return clone(browserPreview.state);
+}
+
+if (typeof window !== "undefined" && import.meta.env?.DEV) {
+  (window as unknown as { __kotoneBrowserPreview?: typeof browserPreviewStep }).__kotoneBrowserPreview = browserPreviewStep;
 }

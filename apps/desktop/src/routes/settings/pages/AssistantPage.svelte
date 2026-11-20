@@ -15,6 +15,8 @@
   import IdentityTab from "./assistant/IdentityTab.svelte";
   import MemoryTab from "./assistant/MemoryTab.svelte";
   import SkillsTab from "./assistant/SkillsTab.svelte";
+  import { PanelRight } from "@lucide/svelte";
+  import { rightSidebarOpen, toggleRightSidebar } from "../../../lib/stores/rightSidebar";
 
   let { onOpenConnections, onOpenAutomation, onOpenSettings, onOpenTalk, onKeyConnected, onBackToVoice, chatRequest = 0, open = null }: {
     onOpenConnections: () => void;
@@ -80,6 +82,11 @@
         {#if chat.runningHere}<span class="flex shrink-0 items-center gap-1.5 rounded-full bg-primary/12 px-2 py-0.5 text-[11px] text-primary" role="status"><span class="size-1.5 animate-pulse rounded-full bg-primary"></span>回答中</span>{/if}
       </div>
       <div class="hidden min-w-0 lg:block"><OpenRunsSummary {onOpenAutomation} /></div>
+      <!-- 右侧栏开关（ADR 031：网页与后台在做的事） -->
+      <button type="button" data-testid="right-sidebar-toggle" aria-pressed={$rightSidebarOpen}
+        aria-label={$rightSidebarOpen ? "收起右侧栏" : "显示右侧栏：网页与后台在做的事"} title={$rightSidebarOpen ? "收起右侧栏" : "网页与后台在做的事"}
+        class="flex size-7 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-muted {$rightSidebarOpen ? 'text-foreground' : 'text-muted-foreground'}"
+        onclick={toggleRightSidebar}><PanelRight class="size-4" /></button>
     {:else}
       <nav class="flex shrink-0 rounded-lg bg-muted/70 p-0.5" aria-label={`${name}分类`}>
         {#each tabs as tab}

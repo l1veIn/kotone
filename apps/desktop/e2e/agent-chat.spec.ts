@@ -166,7 +166,7 @@ const agentCalls = (page: Page, command: string) =>
 test("empty conversation shows starter prompts; a starter sends or fills the composer", async ({ page }, testInfo) => {
   await openChat(page, { empty: true });
   const starters = page.getByTestId("agent-starter");
-  await expect(starters).toHaveText(["你能做什么？", "帮我配置 Kotone", "这个版本什么英雄强？", "做一个自动化", "5 分钟后提醒我"]);
+  await expect(starters).toHaveText(["你能做什么？", "帮我配置 Kotone", "这个版本什么英雄强？", "来首歌", "做一个自动化", "5 分钟后提醒我"]);
   await page.screenshot({ path: testInfo.outputPath("agent-chat-empty.png"), animations: "disabled" });
   // 以冒号结尾的提示只放进输入框
   await starters.filter({ hasText: "做一个自动化" }).click();
