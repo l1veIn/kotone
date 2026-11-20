@@ -20,6 +20,10 @@ use tauri::AppHandle;
 /// 等待时说的话（声网 `response_wait_ms` 1.5 s / 每轮最多一句；我们 1.2 s，见 `agent::FILLER_AFTER`）。
 pub const WAITING: &[&str] = &["我看看", "稍等哈", "让我想想", "马上", "我查一下", "嗯……"];
 
+/// 语音入口交给后台时这一步模型没说话：运行时马上念这句（ADR 029 第二期真机：DeepSeek 调用工具时
+/// 常常不带正文，等它第二次调用再说要 4–5 秒）。
+pub const HANDOFF: &str = "交给我，好了告诉你";
+
 struct Warmed {
     /// 合成这些话时的“引擎 + 声音 + 语速”；变了就要重新合成。
     signature: String,
@@ -34,7 +38,11 @@ static STATE: Mutex<Warmed> = Mutex::new(Warmed {
 });
 
 fn phrases() -> impl Iterator<Item = &'static str> {
-    crate::wake::ACKS.iter().chain(WAITING.iter()).copied()
+    crate::wake::ACKS
+        .iter()
+        .chain(WAITING.iter())
+        .copied()
+        .chain(std::iter::once(HANDOFF))
 }
 
 /// 落盘的目录：`<KOTONE_HOME>/cache/tts/`。
@@ -132,6 +140,17 @@ pub fn ready_waiting(app: &AppHandle) -> Vec<&'static str> {
     }
 }
 
+/// “交给我，好了告诉你”现在能马上说吗（合成好了；系统语音随时能说）。
+pub fn handoff_ready(app: &AppHandle) -> bool {
+    match crate::assistant::speech_signature(app) {
+        None => true,
+        Some(signature) => {
+            let state = STATE.lock().unwrap();
+            state.signature == signature && state.ready.contains(&HANDOFF)
+        }
+    }
+}
+
 /// 随机挑一句，不和上一句重复（只剩一句时除外）。纯函数。
 pub fn pick(ready: &[&'static str], last: Option<&str>, seed: u64) -> Option<&'static str> {
     let fresh: Vec<&'static str> = ready.iter().copied().filter(|t| Some(*t) != last).collect();
@@ -167,7 +186,8 @@ mod tests {
 
     #[test]
     fn the_phrases_are_short_and_never_promise_a_result() {
-        for text in phrases() {
+        assert!(phrases().any(|t| t == HANDOFF), "交给后台那句也预先合成");
+        for &text in crate::wake::ACKS.iter().chain(WAITING.iter()) {
             assert!(text.chars().count() <= 4, "{text}");
             for promise in ["好了", "找到", "没问题", "可以"] {
                 assert!(!text.contains(promise), "{text}");

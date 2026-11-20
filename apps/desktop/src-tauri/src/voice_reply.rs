@@ -115,6 +115,8 @@ pub struct VoiceTurn {
     replies: Mutex<Vec<Arc<Reply>>>,
     /// 这一轮剩下的文字不再边生成边念（用了 `reply.say`、流式语音用不了）。
     muted: AtomicBool,
+    /// 已经说了“交给我”、后台在做：这一轮最后的话只写进聊天，不念（也不走整段念）。
+    handed_off: AtomicBool,
 }
 
 impl VoiceTurn {
@@ -143,6 +145,7 @@ impl VoiceTurn {
             current: Mutex::new(None),
             replies: Mutex::new(Vec::new()),
             muted: AtomicBool::new(false),
+            handed_off: AtomicBool::new(false),
         };
         match turn.prepare() {
             Ok(stream) => *turn.next.lock().unwrap() = Some(stream),
@@ -172,6 +175,16 @@ impl VoiceTurn {
     /// 用了 `reply.say`：她已经开口说过，这一轮后面的文字不再念（同整段念时的规矩）。
     pub fn mute(&self) {
         self.muted.store(true, Ordering::SeqCst);
+    }
+
+    /// 说过“交给我”、后台在做：这一轮后面的话不再念。
+    pub fn hand_off(&self) {
+        self.handed_off.store(true, Ordering::SeqCst);
+        self.mute();
+    }
+
+    pub fn handed_off(&self) -> bool {
+        self.handed_off.load(Ordering::SeqCst)
     }
 
     /// 这一轮念过（或在念）东西吗。

@@ -768,6 +768,8 @@ async fn turn(
         }
         None => crate::usage::record_model(kind, &provider, &model_id, &conversation_id, usage),
     };
+    // 语音入口：说了一句才派活的调用（`agent.start` / `followup`）。后台在做时这一轮最后的话不再念。
+    let spoken_handoffs: Mutex<std::collections::HashSet<String>> = Mutex::default();
     let on_event = |event: AgentEvent| {
         if voice_main
             && matches!(
@@ -803,7 +805,41 @@ async fn turn(
                             at_ms,
                             ..
                         },
-                } => voice.on_step_end(text, !tool_calls.is_empty(), *at_ms),
+                } => {
+                    voice.on_step_end(text, !tool_calls.is_empty(), *at_ms);
+                    let handoffs: Vec<String> = tool_calls
+                        .iter()
+                        .filter(|c| kotone_agent::subagents::is_handoff_tool(&c.name))
+                        .map(|c| c.id.clone())
+                        .collect();
+                    // 派活这一步没说话（DeepSeek 调用工具时常常不带正文）：马上念预先合成的那句，
+                    // 不等第二次模型调用（ADR 029 第二期真机：那样说完到出声要 4–5 秒）。
+                    let spoken = !text.trim().is_empty()
+                        || (!handoffs.is_empty()
+                            && !voice.muted()
+                            && crate::fillers::handoff_ready(app)
+                            && {
+                                say_handoff(app);
+                                true
+                            });
+                    if spoken {
+                        spoken_handoffs.lock().unwrap().extend(handoffs);
+                    }
+                }
+                // 说过“交给我”、后台在做：这一轮后面的话只写进聊天，不再念（同 `game_reply`）。
+                AgentEvent::Appended {
+                    message:
+                        Message::Tool {
+                            call_id,
+                            content,
+                            is_error: false,
+                            ..
+                        },
+                } if spoken_handoffs.lock().unwrap().contains(call_id)
+                    && kotone_agent::subagents::is_running_result(content) =>
+                {
+                    voice.hand_off()
+                }
                 _ => {}
             }
         }
@@ -1155,14 +1191,19 @@ fn speak_outcome(
         .rev()
         .find(|m| matches!(m, Message::User { .. }))
         .and_then(|m| turn_owner(conversation_id, m));
-    let reply = game_reply(appended, stop);
+    // 说过“交给我”、后台在做：最后的话只写进聊天（出错、被上限停下照常念原因）。
+    let handed_off = stop.notice().is_none() && voice.as_ref().is_some_and(|v| v.handed_off());
+    let reply = game_reply(appended, stop).filter(|_| !handed_off);
     // 最后的回答是哪条消息（出错、被上限停下时念的是原因，不是这条）。
     let final_at = stop
         .notice()
         .is_none()
         .then(|| final_reply_at(appended))
         .flatten();
-    let streamed = voice.as_ref().is_some_and(|v| v.has_replies());
+    // 念过（或在念）：边生成边念的，或者交给后台时那句“交给我”。
+    let streamed = voice
+        .as_ref()
+        .is_some_and(|v| v.has_replies() || v.handed_off());
     if reply.is_none() && !streamed {
         crate::bubble::finished(app);
         crate::voice_timing::discard();
@@ -1285,6 +1326,30 @@ async fn deliver_voice_reply(
     })
     .await;
     result
+}
+
+/// 语音入口交给后台、这一步模型没说话：马上念预先合成的“交给我，好了告诉你”
+/// （[`crate::fillers::HANDOFF`]；不经过模型，命中缓存不花钱）。这一轮之后不再接填充话。
+fn say_handoff(app: &AppHandle) {
+    LAST_SAY_MS.store(now_ms(), std::sync::atomic::Ordering::SeqCst);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        log::log(&format!(
+            "agent: 交给后台，先说“{}”",
+            crate::fillers::HANDOFF
+        ));
+        if let Err(e) = deliver_voice_reply(
+            &app,
+            crate::fillers::HANDOFF.to_string(),
+            Vec::new(),
+            None,
+            "handoff",
+        )
+        .await
+        {
+            log::log(&format!("agent: “交给我”没能播出：{e}"));
+        }
+    });
 }
 
 /// 交给琴音后多久还没出声就先接一句（ADR 017 §5；ADR 029 §四 从 1.5 s 提前到 1.2 s，
@@ -1441,7 +1506,7 @@ fn game_reply(appended: &[Message], stop: &StopReason) -> Option<String> {
     let said = appended.iter().any(|m| {
         matches!(m, Message::Assistant { tool_calls, .. }
             if tool_calls.iter().any(|c| c.name == kotone_agent::catalog::TOOL_SAY))
-    });
+    }) || kotone_agent::subagents::handed_off_aloud(appended);
     // 最后的回答：最后一条不带工具调用的回复。带工具调用的那几句（“我查一下”）调用时已经念过了。
     let reply = appended.iter().rev().find_map(|m| match m {
         Message::Assistant {
@@ -1596,11 +1661,27 @@ impl BuiltinHost for DesktopBuiltins {
         match tool {
             kotone_agent::catalog::TOOL_AGENT_START => {
                 let inherited = self.turn_taint.lock().unwrap().clone();
-                agent_start(&self.app, &caller, &self.player, inherited, arguments).await
+                agent_start(
+                    &self.app,
+                    &caller,
+                    &self.player,
+                    inherited,
+                    self.voice,
+                    arguments,
+                )
+                .await
             }
             kotone_agent::catalog::TOOL_AGENT_FOLLOWUP => {
                 let inherited = self.turn_taint.lock().unwrap().clone();
-                agent_followup(&self.app, &caller, &self.player, inherited, arguments).await
+                agent_followup(
+                    &self.app,
+                    &caller,
+                    &self.player,
+                    inherited,
+                    self.voice,
+                    arguments,
+                )
+                .await
             }
             kotone_agent::catalog::TOOL_AGENT_LIST => agent_list(&self.app, &caller),
             kotone_agent::catalog::TOOL_AGENT_STOP => {
@@ -2214,7 +2295,7 @@ pub async fn agent_subagent_continue(
         now_ms(),
         "继续刚才没做完的事。",
         None,
-        false,
+        std::time::Duration::ZERO,
     )
     .await
 }
@@ -2516,6 +2597,7 @@ async fn agent_start(
     caller: &str,
     player: &PlayerWords,
     inherited_taint: Option<String>,
+    voice: bool,
     arguments: &Value,
 ) -> Result<Value, String> {
     use kotone_agent::subagents as sa;
@@ -2611,7 +2693,7 @@ async fn agent_start(
         &name,
         &child_id,
         sa::task_text(&words, &task),
-        true,
+        sa::sync_window(voice),
     )
     .await
 }
@@ -2622,6 +2704,7 @@ async fn agent_followup(
     caller: &str,
     player: &PlayerWords,
     inherited_taint: Option<String>,
+    voice: bool,
     arguments: &Value,
 ) -> Result<Value, String> {
     if child_spec(app, caller).is_some() {
@@ -2641,12 +2724,12 @@ async fn agent_followup(
         at_ms,
         &message,
         inherited_taint,
-        true,
+        kotone_agent::subagents::sync_window(voice),
     )
     .await
 }
 
-/// 接着做（`agent.followup`、卡片上的“继续”）。`wait`：最多等 4 秒拿结果。
+/// 接着做（`agent.followup`、卡片上的“继续”）。`wait`：最多等多久拿结果（零 = 不等）。
 /// `inherited_taint`：派这句话的那一轮主会话读过外面的东西（ADR 030 第 3 节）。
 #[allow(clippy::too_many_arguments)]
 async fn resume(
@@ -2657,7 +2740,7 @@ async fn resume(
     at_ms: u64,
     message: &str,
     inherited_taint: Option<String>,
-    wait: bool,
+    wait: std::time::Duration,
 ) -> Result<Value, String> {
     use kotone_agent::subagents as sa;
     let store = store(app)?;
@@ -2729,18 +2812,19 @@ async fn resume(
     .await
 }
 
-/// 把任务消息交给它；`wait` 时最多等 4 秒：做完了返回结果（之后不再另外交回），没做完返回“在做”。
+/// 把任务消息交给它；最多等 `wait`：做完了返回结果（之后不再另外交回），没做完返回“在做”。
+/// 语音时 `wait` 是零：不等，她调用前已经说了“交给我”（ADR 029 第二期真机）。
 async fn dispatch(
     app: &AppHandle,
     main: &str,
     name: &str,
     child_id: &str,
     text: String,
-    wait: bool,
+    wait: std::time::Duration,
 ) -> Result<Value, String> {
     let tag = new_tag(app);
     let (tx, mut rx) = oneshot::channel();
-    if wait {
+    if !wait.is_zero() {
         let rt = runtime(app)?;
         let mut inner = rt.inner.lock().unwrap();
         let child = inner.children.get_mut(child_id).ok_or("这件事已经停了")?;
@@ -2763,14 +2847,16 @@ async fn dispatch(
         .find(|a| a.name == name)
         .map(|a| a.label)
         .unwrap_or_default();
-    let running = json!({"name": name, "label": label, "status": "running",
-        "note": "在后台做着，做完会交回给你。现在跟玩家说一句“交给我，好了告诉你”就结束这一轮，不要轮询。"});
-    if !wait {
+    let note = if wait.is_zero() {
+        "在后台做着，做完会交回给你。你调用前已经说过一句就直接结束这一轮，什么都不用再写；没说过就只说一句“交给我，好了告诉你”。不要轮询。"
+    } else {
+        "在后台做着，做完会交回给你。现在跟玩家说一句“交给我，好了告诉你”就结束这一轮，不要轮询。"
+    };
+    let running = json!({"name": name, "label": label, "status": "running", "note": note});
+    if wait.is_zero() {
         return Ok(running);
     }
-    let result =
-        kotone_agent::subagents::wait_for_result(&mut rx, kotone_agent::subagents::SYNC_WINDOW)
-            .await;
+    let result = kotone_agent::subagents::wait_for_result(&mut rx, wait).await;
     Ok(match result {
         Some((status, summary)) => {
             json!({"name": name, "label": label, "status": status, "summary": summary})
@@ -3430,6 +3516,34 @@ mod tests {
         let cut = [user("voice"), assistant("我看看", &["game.look"])];
         assert_eq!(game_reply(&cut, &done), None);
         assert!(game_reply(&cut, &StopReason::StepLimit).is_some_and(|t| !t.contains("我看看")));
+        // 派活前说了“交给我”、后台在做：最后的话不再念（只写进聊天）。
+        let tool = |content: &str, is_error: bool| Message::Tool {
+            call_id: "c".into(),
+            name: "agent.start".into(),
+            content: content.into(),
+            is_error,
+            untrusted: false,
+            images: Vec::new(),
+            at_ms: 0,
+        };
+        let handed = [
+            user("voice"),
+            assistant("交给我，好了告诉你", &["agent.start"]),
+            tool(r#"{"name":"q","status":"running"}"#, false),
+            assistant("交给我了。", &[]),
+        ];
+        assert_eq!(game_reply(&handed, &done), None);
+        // 派活失败：解释原因的话照常念。
+        let refused = [
+            user("voice"),
+            assistant("交给我", &["agent.start"]),
+            tool("后台已经有 3 件事在做了", true),
+            assistant("后台满了，先停一件？", &[]),
+        ];
+        assert_eq!(
+            game_reply(&refused, &done).as_deref(),
+            Some("后台满了，先停一件？")
+        );
     }
 
     fn at(mut message: Message, ms: u64) -> Message {

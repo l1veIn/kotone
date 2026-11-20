@@ -139,7 +139,7 @@ impl ExecOutcome {
     }
 }
 
-const PURPOSE_CHARS: usize = 80;
+const PURPOSE_CHARS: usize = 40;
 
 fn purpose(args: &Value) -> Option<String> {
     let p = args.get("purpose")?.as_str()?.trim();
@@ -164,6 +164,8 @@ fn short(text: &str, chars: usize) -> String {
 pub fn check(cfg: &ExecConfig, taint: &Taint, tool: &str, args: &Value) -> Verdict {
     let mut reasons = Vec::new();
     let mut parts = Vec::new();
+    let mut delete = false;
+    let mut deleting: Vec<String> = Vec::new();
     let lead = match tool {
         TOOL_SHELL_RUN => {
             let Some(command) = args.get("command").and_then(Value::as_str) else {
@@ -182,7 +184,13 @@ pub fn check(cfg: &ExecConfig, taint: &Taint, tool: &str, args: &Value) -> Verdi
             }
             for (rule, targets) in &analysis.asks {
                 reasons.push(AskReason::Rule(rule.id));
-                parts.push(rule_sentence(rule, targets));
+                if is_delete(rule) {
+                    // 删除：问句就是“要删掉 xx”，不另加一句（语音念得短，ADR 029 实测）。
+                    deleting.extend(delete_names(command, targets));
+                    delete = true;
+                } else {
+                    parts.push(rule_sentence(rule, targets));
+                }
             }
             let approved = paths::ExecState::load(cfg).approved_games;
             for game in paths::games_mentioned(cfg, command) {
@@ -234,12 +242,17 @@ pub fn check(cfg: &ExecConfig, taint: &Taint, tool: &str, args: &Value) -> Verdi
     if reasons.is_empty() {
         return Verdict::Allow;
     }
-    let ending = if parts.is_empty() {
+    let ending = if parts.is_empty() && !delete {
         "，要我动手吗？"
     } else {
         "，可以吗？"
     };
-    let mut sentences = vec![format!("我要{lead}")];
+    let first = if delete {
+        delete_question(&lead, purpose(args).is_some(), &deleting)
+    } else {
+        format!("我要{lead}")
+    };
+    let mut sentences = vec![first];
     sentences.extend(parts);
     Verdict::Ask {
         question: format!("{}{ending}", sentences.join("。")),
@@ -247,25 +260,120 @@ pub fn check(cfg: &ExecConfig, taint: &Taint, tool: &str, args: &Value) -> Verdi
     }
 }
 
-fn rule_sentence(rule: &policy::Rule, targets: &[String]) -> String {
-    if rule.justification == "删除" {
-        // 变量（`$p`）、管道里的 `$_` 这类玩家看不懂，不列（真机实测模型常写 `$p = …; Remove-Item $p`）。
-        let targets: Vec<&String> = targets
-            .iter()
-            .filter(|t| !t.trim_start_matches(['"', '\'', '(']).starts_with('$'))
-            .collect();
-        if targets.is_empty() {
-            return "这一步会删除文件或文件夹".into();
-        }
-        let shown: Vec<String> = targets.iter().take(3).map(|t| short(t, 80)).collect();
-        let more = if targets.len() > 3 {
-            format!(" 等 {} 个", targets.len())
-        } else {
-            String::new()
-        };
-        return format!("这一步会删除：{}{more}", shown.join("、"));
-    }
+fn rule_sentence(rule: &policy::Rule, _targets: &[String]) -> String {
     format!("这一步会{}", rule.justification)
+}
+
+fn is_delete(rule: &policy::Rule) -> bool {
+    rule.justification == "删除"
+}
+
+/// 要删的东西给玩家听的名字：只留最后一段（`D:\WoW\Interface\AddOns\Old` → `Old`），完整路径在卡片
+/// 展开的过程里看得到。目标写在变量里时（真机实测模型常写 `$f = "…\notes.txt"; Remove-Item $f`），
+/// 从同一段命令里的赋值找出它；找不到的变量、管道里的 `$_` 这类玩家看不懂，不列。
+fn delete_names(command: &str, targets: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for target in targets {
+        let t = target.trim().trim_end_matches(',');
+        let t = t.trim_matches(['"', '\'', '(', ')']);
+        let resolved;
+        let t = if t.starts_with('$') {
+            match assigned_literal(command, t) {
+                Some(value) => {
+                    resolved = value;
+                    resolved.as_str()
+                }
+                None => continue,
+            }
+        } else {
+            t
+        };
+        if t.is_empty() {
+            continue;
+        }
+        let name = t
+            .trim_end_matches(['\\', '/'])
+            .rsplit(['\\', '/'])
+            .next()
+            .unwrap_or(t)
+            .trim();
+        let name = if name.is_empty() { t } else { name };
+        let name = short(name, 24);
+        if !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
+/// `$f = "C:\x\notes.txt"`、`$p = Join-Path $HOME 'notes.txt'` 这样的赋值里最后一个带引号的字面量
+/// （变量名不分大小写，同 PowerShell）。纯函数。
+fn assigned_literal(command: &str, var: &str) -> Option<String> {
+    let lower = command.to_lowercase();
+    let var = var.to_lowercase();
+    // to_lowercase 可能改变字节长度（极少见）：对不上就不找了。
+    if lower.len() != command.len() {
+        return None;
+    }
+    let mut from = 0;
+    while let Some(i) = lower[from..].find(&var) {
+        let end = from + i + var.len();
+        from = end;
+        let after = &lower[end..];
+        // 变量名到这里结束（不是 `$fx` 的前缀），后面跟着 `=`（不是 `==`）。
+        if after
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        {
+            continue;
+        }
+        let rest = after.trim_start();
+        if !rest.starts_with('=') || rest.starts_with("==") {
+            continue;
+        }
+        let value_at = command.len() - rest.len() + 1;
+        let value = command[value_at..].split([';', '\n']).next().unwrap_or("");
+        if let Some(literal) = last_quoted(value) {
+            return Some(literal);
+        }
+    }
+    None
+}
+
+/// 一段文字里最后一个 `"…"` 或 `'…'`。
+fn last_quoted(text: &str) -> Option<String> {
+    let mut last = None;
+    let mut rest = text;
+    while let Some(open) = rest.find(['"', '\'']) {
+        let quote = rest[open..].chars().next()?;
+        let body = &rest[open + 1..];
+        let close = body.find(quote)?;
+        last = Some(body[..close].to_string());
+        rest = &body[close + 1..];
+    }
+    last
+}
+
+/// 删除时的问句开头（后面接“，可以吗？”）：语音会念出来，控制在约 20 字（ADR 029 第二期真机：
+/// 带完整路径的问句要念 10 秒）。目的很短、又没说“删”时放在前面，让玩家知道删它是为了什么。
+fn delete_question(lead: &str, has_purpose: bool, names: &[String]) -> String {
+    const PURPOSE_IN_DELETE: usize = 12;
+    let what = match names {
+        [] => None,
+        [a] => Some(a.clone()),
+        [a, b] => Some(format!("{a} 和 {b}")),
+        [a, rest @ ..] => Some(format!("{a} 等 {} 个", rest.len() + 1)),
+    };
+    let short_purpose =
+        has_purpose && lead.chars().count() <= PURPOSE_IN_DELETE && !lead.contains('删');
+    match what {
+        Some(what) if short_purpose => format!("我要{lead}：删掉 {what}"),
+        Some(what) => format!("要删掉 {what}"),
+        None if has_purpose && lead.contains('删') => format!("我要{}", short(lead, 20)),
+        None if has_purpose => format!("我要{}，会删掉一些文件", short(lead, 16)),
+        None => "要删掉一些文件".into(),
+    }
 }
 
 fn game_sentence(game: &GameDir) -> String {
@@ -374,10 +482,10 @@ pub fn tool_specs() -> Vec<Value> {
     vec![
         json!({
             "name": TOOL_SHELL_RUN,
-            "description": "在玩家电脑上用 Windows PowerShell 5.1 执行一段命令。适合：调用第三方工具的命令行（例如 BetterGI.exe startOneDragon）、下载和解压、查进程和文件夹。默认在 Kotone 的文件区（<KOTONE_HOME>/agent/files）里执行；默认 2 分钟超时，最长 10 分钟（timeoutMs）；输出超过 3 万字只留头尾。读文件内容用 file.read、找文件用 file.find、改文件用 file.edit / file.write，不要用 Get-Content、Set-Content、Select-String。不能模拟键盘鼠标（打字用 game_chat.send，操作游戏用 game.act）。删除、改注册表、关机这类命令会先问玩家。purpose 写一句玩家听得懂的话，说明这条命令要做什么（例如“从 CurseForge 下载 DBM 插件”），需要玩家确认时会念给他听。要一直开着的程序用 Start-Process 启动，命令结束后它不会被关掉；超时或玩家让停下时会被一起结束。",
+            "description": "在玩家电脑上用 Windows PowerShell 5.1 执行一段命令。适合：调用第三方工具的命令行（例如 BetterGI.exe startOneDragon）、下载和解压、查进程和文件夹。默认在 Kotone 的文件区（<KOTONE_HOME>/agent/files）里执行；默认 2 分钟超时，最长 10 分钟（timeoutMs）；输出超过 3 万字只留头尾。读文件内容用 file.read、找文件用 file.find、改文件用 file.edit / file.write，不要用 Get-Content、Set-Content、Select-String。不能模拟键盘鼠标（打字用 game_chat.send，操作游戏用 game.act）。删除、改注册表、关机这类命令会先问玩家。purpose 写一句十来个字、玩家听得懂的话，说明这条命令要做什么（例如“从 CurseForge 下载 DBM 插件”），需要玩家确认时会念给他听。要一直开着的程序用 Start-Process 启动，命令结束后它不会被关掉；超时或玩家让停下时会被一起结束。",
             "parameters": {"type": "object", "additionalProperties": false, "required": ["command", "purpose"], "properties": {
                 "command": {"type": "string", "minLength": 1, "maxLength": 20000, "description": "PowerShell 命令，可以多行"},
-                "purpose": {"type": "string", "maxLength": 200, "description": "一句玩家听得懂的话：这条命令要做什么"},
+                "purpose": {"type": "string", "maxLength": 200, "description": "一句十来个字、玩家听得懂的话：这条命令要做什么"},
                 "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 600000, "description": "超时毫秒，缺省 120000"},
                 "cwd": {"type": "string", "description": "在哪个文件夹里执行；相对路径从 Kotone 的文件区算起"}
             }},
@@ -397,23 +505,23 @@ pub fn tool_specs() -> Vec<Value> {
         }),
         json!({
             "name": TOOL_FILE_WRITE,
-            "description": "写整个文件（不存在就新建，文件夹也会建好）。已有的文件保持原来的编码；改 Kotone 文件区以外的文件前会先备份。只改一小段用 file.edit。Kotone 自己的设置、记忆、技能不能这样写；游戏开着时不能写它的目录。purpose 写一句玩家听得懂的话，说明为什么写这个文件。",
+            "description": "写整个文件（不存在就新建，文件夹也会建好）。已有的文件保持原来的编码；改 Kotone 文件区以外的文件前会先备份。只改一小段用 file.edit。Kotone 自己的设置、记忆、技能不能这样写；游戏开着时不能写它的目录。purpose 写一句十来个字、玩家听得懂的话，说明为什么写这个文件。",
             "parameters": {"type": "object", "additionalProperties": false, "required": ["path", "content", "purpose"], "properties": {
                 "path": {"type": "string", "minLength": 1},
                 "content": {"type": "string"},
-                "purpose": {"type": "string", "maxLength": 200, "description": "一句玩家听得懂的话：为什么写这个文件"}
+                "purpose": {"type": "string", "maxLength": 200, "description": "一句十来个字、玩家听得懂的话：为什么写这个文件"}
             }},
             "sideEffects": ["writes-file"],
             "untrustedResult": false,
         }),
         json!({
             "name": TOOL_FILE_EDIT,
-            "description": "把文件里的 old 换成 new。old 必须在文件里恰好出现一次（多带几行上下文），先用 file.read 看原文。保持原来的编码；改 Kotone 文件区以外的文件前会先备份；游戏开着时不能改它的目录。purpose 写一句玩家听得懂的话，说明为什么改。",
+            "description": "把文件里的 old 换成 new。old 必须在文件里恰好出现一次（多带几行上下文），先用 file.read 看原文。保持原来的编码；改 Kotone 文件区以外的文件前会先备份；游戏开着时不能改它的目录。purpose 写一句十来个字、玩家听得懂的话，说明为什么改。",
             "parameters": {"type": "object", "additionalProperties": false, "required": ["path", "old", "new", "purpose"], "properties": {
                 "path": {"type": "string", "minLength": 1},
                 "old": {"type": "string", "minLength": 1},
                 "new": {"type": "string"},
-                "purpose": {"type": "string", "maxLength": 200, "description": "一句玩家听得懂的话：为什么改"}
+                "purpose": {"type": "string", "maxLength": 200, "description": "一句十来个字、玩家听得懂的话：为什么改"}
             }},
             "sideEffects": ["writes-file"],
             "untrustedResult": false,
@@ -511,10 +619,59 @@ mod tests {
             panic!()
         };
         assert_eq!(reasons, vec![AskReason::Rule("delete")]);
+        // 语音会念：只说名字（完整路径在卡片展开的过程里），短目的放前面。
+        assert_eq!(question, "我要清理没用的插件：删掉 Old，可以吗？");
+        let ask = |command: &str, purpose: &str| {
+            let mut args = json!({ "command": command });
+            if !purpose.is_empty() {
+                args["purpose"] = json!(purpose);
+            }
+            match check(&e.cfg, &taint, TOOL_SHELL_RUN, &args) {
+                Verdict::Ask { question, .. } => question,
+                other => panic!("{other:?}"),
+            }
+        };
         assert_eq!(
-            question,
-            "我要清理没用的插件。这一步会删除：D:\\WoW\\Interface\\AddOns\\Old，可以吗？"
+            ask(
+                "Remove-Item 'C:\\Users\\A\\.kotone\\agent\\files\\notes.txt'",
+                "删除 notes.txt"
+            ),
+            "要删掉 notes.txt，可以吗？"
         );
+        assert_eq!(
+            ask("Remove-Item a.log, b.log", ""),
+            "要删掉 a.log 和 b.log，可以吗？"
+        );
+        assert_eq!(
+            ask(
+                "Remove-Item C:\\x\\a; Remove-Item C:\\x\\b; Remove-Item C:\\x\\c\\",
+                "把下载目录里的旧插件包全部清理干净"
+            ),
+            "要删掉 a 等 3 个，可以吗？"
+        );
+        assert_eq!(ask("Remove-Item $x", ""), "要删掉一些文件，可以吗？");
+        // 目标在变量里：从赋值找出名字（2026-11-20 真机的写法）。
+        assert_eq!(
+            ask(
+                "$f = \"C:\\Users\\A\\.kotone\\agent\\files\\notes.txt\"; if (Test-Path $f) { Remove-Item -LiteralPath $f -Force }",
+                "删除 Kotone 文件区的 notes.txt 这个文件"
+            ),
+            "要删掉 notes.txt，可以吗？"
+        );
+        assert_eq!(
+            ask("$P = Join-Path $HOME 'notes.txt'; Remove-Item $p", ""),
+            "要删掉 notes.txt，可以吗？"
+        );
+        assert_eq!(
+            ask("$fx = 'a.txt'; Remove-Item $f", ""),
+            "要删掉一些文件，可以吗？"
+        );
+        for q in [
+            "我要清理没用的插件：删掉 Old，可以吗？",
+            "要删掉 notes.txt，可以吗？",
+        ] {
+            assert!(q.chars().count() <= 22, "{q}");
+        }
         // 目标写在变量里：不把 `$p` 念给玩家听。
         let v = check(
             &e.cfg,
@@ -525,10 +682,7 @@ mod tests {
         let Verdict::Ask { question, .. } = v else {
             panic!()
         };
-        assert_eq!(
-            question,
-            "我要删掉 notes.txt。这一步会删除文件或文件夹，可以吗？"
-        );
+        assert_eq!(question, "要删掉 notes.txt，可以吗？");
         // 不在 taint 下同意删除，不会让以后读过外面的东西也不问。
         let mut t = Taint::new();
         approved(

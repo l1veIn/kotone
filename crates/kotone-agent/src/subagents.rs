@@ -25,8 +25,52 @@ use crate::permissions::Answer;
 
 /// 最多同时几件事在后台跑（Codex V2 默认除主线程外 3 个）。空闲的不算。
 pub const MAX_RUNNING: usize = 3;
-/// `agent.start` / `agent.followup` 最多等多久：做完了当同步结果返回（ADR 029 第三节）。
+/// 打字时 `agent.start` / `agent.followup` 最多等多久：做完了当同步结果返回（ADR 029 第三节，
+/// 照 openai-realtime-agents 的 Chat-Supervisor）。
 pub const SYNC_WINDOW: Duration = Duration::from_secs(4);
+/// 语音时不等：她在调用前已经说了“交给我”，马上结束这一轮、接着听（真机：等 4 秒时说完到
+/// 第一次出声要 8–10 秒）。
+pub const VOICE_SYNC_WINDOW: Duration = Duration::ZERO;
+
+/// 这一轮派活时等多久（`voice`：语音入口）。
+pub fn sync_window(voice: bool) -> Duration {
+    if voice {
+        VOICE_SYNC_WINDOW
+    } else {
+        SYNC_WINDOW
+    }
+}
+
+/// 派活的工具（`agent.start` / `agent.followup`）。
+pub fn is_handoff_tool(name: &str) -> bool {
+    name == crate::catalog::TOOL_AGENT_START || name == crate::catalog::TOOL_AGENT_FOLLOWUP
+}
+
+/// 派活工具的结果是“在后台做着”。
+pub fn is_running_result(content: &str) -> bool {
+    serde_json::from_str::<Value>(content)
+        .ok()
+        .and_then(|v| v.get("status").and_then(Value::as_str).map(str::to_string))
+        .as_deref()
+        == Some("running")
+}
+
+/// 语音回合里派活那一步已经说过一句（“交给我，好了告诉你”），后台在做：这一轮最后的话不再念
+/// （聊天里照样显示），免得同一个意思念两遍。派活出错、当场做完了（打字时）都照常念。
+pub fn handed_off_aloud(messages: &[Message]) -> bool {
+    messages.iter().any(|m| match m {
+        Message::Assistant {
+            text, tool_calls, ..
+        } if !text.trim().is_empty() => tool_calls.iter().any(|call| {
+            is_handoff_tool(&call.name)
+                && messages.iter().any(|r| {
+                    matches!(r, Message::Tool { call_id, content, is_error: false, .. }
+                        if *call_id == call.id && is_running_result(content))
+                })
+        }),
+        _ => false,
+    })
+}
 /// 后台一轮最多调用几次模型、最长多久（一边看一边操作游戏时放宽到 `EXTENDED_*`）。
 pub const MAX_STEPS: u32 = 30;
 pub const MAX_DURATION: Duration = Duration::from_secs(15 * 60);
@@ -803,11 +847,7 @@ mod tests {
         )
         .await;
         assert!(out.is_error && asked.len() == 1, "{}", out.content);
-        assert!(
-            asked[0].contains("删除") && asked[0].contains("notes.txt"),
-            "{}",
-            asked[0]
-        );
+        assert_eq!(asked[0], "要删掉 notes.txt，可以吗？");
         assert!(target.exists(), "拒绝了就没删");
         // “本段对话都允许”按“允许这一次”：下一次删除还是问。
         let (_, asked) = run(
@@ -881,5 +921,94 @@ mod tests {
             "先到的留着"
         );
         assert!(!a.taint_approved);
+    }
+
+    #[test]
+    fn voice_hand_offs_do_not_wait_typed_ones_wait_four_seconds() {
+        assert_eq!(sync_window(true), Duration::ZERO);
+        assert_eq!(sync_window(false), Duration::from_secs(4));
+    }
+
+    #[tokio::test]
+    async fn a_zero_window_returns_at_once_and_the_result_is_reported_later() {
+        let (tx, mut rx) = tokio::sync::oneshot::channel::<u8>();
+        let started = std::time::Instant::now();
+        assert_eq!(wait_for_result(&mut rx, VOICE_SYNC_WINDOW).await, None);
+        assert!(started.elapsed() < Duration::from_millis(200));
+        // 等的一方已经走了：做完时送不进来，于是改成交回主会话（settle_round 的 synced = false）。
+        assert!(tx.send(1).is_err());
+    }
+
+    fn step(text: &str, calls: &[(&str, &str)]) -> Message {
+        Message::Assistant {
+            text: text.into(),
+            tool_calls: calls
+                .iter()
+                .map(|(id, name)| kotone_ai::agent::ToolCall {
+                    id: (*id).into(),
+                    name: (*name).into(),
+                    arguments: "{}".into(),
+                })
+                .collect(),
+            reasoning: String::new(),
+            usage: None,
+            at_ms: 1,
+        }
+    }
+
+    fn tool(id: &str, name: &str, content: &str, is_error: bool) -> Message {
+        Message::Tool {
+            call_id: id.into(),
+            name: name.into(),
+            content: content.into(),
+            is_error,
+            untrusted: false,
+            images: Vec::new(),
+            at_ms: 2,
+        }
+    }
+
+    #[test]
+    fn the_last_words_are_not_spoken_again_after_a_spoken_hand_off() {
+        let running = r#"{"name":"q","label":"自动按Q","status":"running"}"#;
+        let spoken = vec![
+            step("交给我，好了告诉你", &[("c1", "agent.start")]),
+            tool("c1", "agent.start", running, false),
+            step("交给我了。", &[]),
+        ];
+        assert!(handed_off_aloud(&spoken));
+        // 派活前什么都没说：最后那句要念。
+        let silent = vec![
+            step("", &[("c1", "agent.start")]),
+            tool("c1", "agent.start", running, false),
+            step("交给我了。", &[]),
+        ];
+        assert!(!handed_off_aloud(&silent));
+        // 派活出错（例如后台已经满了）：最后解释原因的话要念。
+        let failed = vec![
+            step("交给我", &[("c1", "agent.start")]),
+            tool("c1", "agent.start", "后台已经有 3 件事在做了", true),
+            step("后台满了，要先停一件吗？", &[]),
+        ];
+        assert!(!handed_off_aloud(&failed));
+        // 当场做完了（打字时 4 秒内）：照着结果回答。
+        let done = vec![
+            step("我看看", &[("c1", "agent.followup")]),
+            tool(
+                "c1",
+                "agent.followup",
+                r#"{"status":"done","summary":"好了"}"#,
+                false,
+            ),
+            step("改好了。", &[]),
+        ];
+        assert!(!handed_off_aloud(&done));
+        // 别的工具前说的话不算。
+        let other = vec![
+            step("我查一下", &[("c1", "web.search")]),
+            tool("c1", "web.search", r#"{"status":"running"}"#, false),
+            step("26.22。", &[]),
+        ];
+        assert!(!handed_off_aloud(&other));
     }
 }
