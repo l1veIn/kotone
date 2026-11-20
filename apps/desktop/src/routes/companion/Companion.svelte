@@ -90,13 +90,15 @@
 
 <style>
   :global(html), :global(body) { background: transparent !important; overflow: hidden; }
+  /* 以头像为基准对齐：头像贴着气泡所在的那个角，字多字少只改变气泡往屏幕里延伸多少，头像不动。
+     row-reverse 时 flex-start 才是右边（flex-end 会把整组推到左边，头像跟着字数左右移）。 */
   .stage {
-    position: fixed; inset: 0; display: flex; align-items: flex-end; justify-content: flex-end; gap: 10px;
+    position: fixed; inset: 0; display: flex; align-items: flex-end; justify-content: flex-start; gap: 10px;
     padding: 14px; box-sizing: border-box; pointer-events: none; user-select: none;
     flex-direction: row-reverse;
     font-family: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
   }
-  .stage.left { flex-direction: row; justify-content: flex-start; }
+  .stage.left { flex-direction: row; }
   .stage.top { align-items: flex-start; }
   .avatar {
     position: relative; flex: none; width: 64px; height: 64px; border-radius: 50%;

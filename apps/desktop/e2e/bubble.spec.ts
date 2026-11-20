@@ -57,6 +57,33 @@ test.describe("对话气泡", () => {
     }
   });
 
+  test("头像贴着所在的角：字多字少头像都不动", async ({ page }) => {
+    await page.goto("/#/companion");
+    const viewport = page.viewportSize()!;
+    const texts = ["好。", "队友说中路的人消失了，让你注意下路。还有人在问要不要一起打小龙，你要不要先回城补个状态再过去？"];
+    let revision = 100;
+    for (const corner of ["bottom-right", "bottom-left", "top-right", "top-left"]) {
+      const boxes = [];
+      for (const text of texts) {
+        await push(page, { revision: ++revision, phase: "speaking", label: "琴音", text, corner });
+        await expect(page.getByTestId("companion-text")).toHaveText(text);
+        await page.waitForTimeout(300); // 等出场动画结束
+        boxes.push(await page.locator(".avatar").boundingBox());
+      }
+      const [short, long] = boxes;
+      expect(short, corner).not.toBeNull();
+      expect(Math.abs(short!.x - long!.x), `${corner} 头像横向不动`).toBeLessThan(1);
+      expect(Math.abs(short!.y - long!.y), `${corner} 头像纵向不动`).toBeLessThan(1);
+      // 头像就在那个角上（离边 14px 的内边距）
+      const right = corner.endsWith("right");
+      const bottom = corner.startsWith("bottom");
+      const dx = right ? viewport.width - (short!.x + short!.width) : short!.x;
+      const dy = bottom ? viewport.height - (short!.y + short!.height) : short!.y;
+      expect(dx, `${corner} 横向贴角`).toBeLessThan(20);
+      expect(dy, `${corner} 纵向贴角`).toBeLessThan(20);
+    }
+  });
+
   test("设置页有对话气泡分区：默认开启、右下角，改位置会保存", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1280, height: 820 });
     await page.goto("/#/settings?onboarding=never");
