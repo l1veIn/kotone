@@ -20,8 +20,30 @@ export type AgentMessage =
   /** `recap`：对局复盘的正文（`text` 是标题），只给玩家看。 */
   | { role: "notice"; text: string; atMs: number; compaction?: string; usage?: TokenUsage; recap?: string };
 
-/** `parent` / `label`：琴音派出的子会话（ADR 022），只能查看。 */
-export interface Conversation { version: number; id: string; title: string; createdAtMs: number; updatedAtMs: number; messages: AgentMessage[]; parent?: string | null; label?: string | null }
+/**
+ * 交给后台做的事（ADR 029 第三节）：主会话用 `agent.start` 派出去，玩家只看到主会话里的一张卡片。
+ * `waiting` = 在等玩家确认（`question` 是问的那句话）。
+ */
+export type SubagentStatus = "running" | "waiting" | "done" | "failed" | "stopped" | "interrupted";
+export interface SubagentInfo {
+  name: string;
+  label: string;
+  /** 它做事过程的那段隐藏对话。 */
+  conversationId: string;
+  status: SubagentStatus;
+  /** done / failed 时的总结。 */
+  summary?: string;
+  startedAtMs: number;
+  updatedAtMs: number;
+  /** 已经做了几步。 */
+  steps: number;
+  question?: string;
+}
+/** 卡片上的确认按钮（`agent_subagent_answer`）。 */
+export type SubagentAnswer = "allow-once" | "allow-conversation" | "deny";
+
+/** `parent` / `label`：后台做事的过程（ADR 029），不出现在对话列表里。`subagents`：主会话派出去的事。 */
+export interface Conversation { version: number; id: string; title: string; createdAtMs: number; updatedAtMs: number; messages: AgentMessage[]; parent?: string | null; label?: string | null; subagents?: SubagentInfo[] }
 export interface ConversationSummary { id: string; title: string; createdAtMs: number; updatedAtMs: number; messageCount: number; parent?: string | null }
 
 export type StopReason = { kind: "completed" | "truncated" | "step-limit" | "time-limit" | "cancelled" } | { kind: "failed"; message: string };
@@ -40,6 +62,8 @@ export type AgentEvent =
   /** 语音回合被打断：对话里那条回答改成了玩家听到的部分（ADR 029 §六），按存盘的重新读。 */
   | { kind: "revised" }
   | { kind: "finished"; stop: StopReason; acpStopReason: string | null }
+  /** 派出去的一件事有了新状态（ADR 029）：按 name 更新 `conversation.subagents`。 */
+  | { kind: "subagent"; info: SubagentInfo }
   | { kind: "idle" };
 
 export interface PermissionRequest { callId: string; tool: string; title: string; reason: string; arguments: unknown }
@@ -88,8 +112,29 @@ const previewConversation: Conversation = {
     { role: "user", text: "（系统消息，不是玩家说的话：自动化「连按Q」已停止。执行记录见附件；需要的话告诉玩家结果。）", source: "automation", atMs: t0 + 53_000,
       attachments: [{ kind: "data", label: "执行记录", text: '{"id":"run-7","status":"cancelled","durationMs":42000}' }] },
     { role: "assistant", text: "连按 Q 已经停了，一共跑了 42 秒。需要的话随时叫我再开。", atMs: t0 + 55_000 },
+    { role: "user", text: "再帮我写个血量低于三成就自动喝药的脚本", source: "voice", atMs: t0 + 120_000 },
+    { role: "assistant", text: "", atMs: t0 + 121_000,
+      toolCalls: [{ id: "call-2", name: "agent.start", arguments: '{"name":"potion","label":"写喝药脚本","task":"写一个血量低于三成自动按 1 喝药的自动化"}' }] },
+    { role: "tool", callId: "call-2", name: "agent.start", content: '{"name":"potion","label":"写喝药脚本","status":"running"}', isError: false, untrusted: false, atMs: t0 + 125_000 },
+    { role: "assistant", text: "交给我，写好了告诉你。", atMs: t0 + 125_500 },
+    { role: "user", text: '<agent-report name="potion" label="写喝药脚本" status="done">已保存为自动化《自动喝药》。</agent-report>', source: "agent-report", atMs: t0 + 190_000 },
+    { role: "assistant", text: "喝药脚本写好了，保存成了《自动喝药》，要现在打开吗？", atMs: t0 + 191_000 },
   ],
+  subagents: [{
+    name: "potion", label: "写喝药脚本", conversationId: "c-preview-potion", status: "done",
+    summary: "已保存为自动化《自动喝药》。血量条低于三成时按 1，每次之间至少隔 5 秒；按 Ctrl+Shift+F12 随时停。",
+    startedAtMs: t0 + 121_000, updatedAtMs: t0 + 190_000, steps: 6,
+  }],
 };
+/** 浏览器预览里“写喝药脚本”的过程。 */
+const previewTaskMessages: AgentMessage[] = [
+  { role: "user", text: "<player-request>再帮我写个血量低于三成就自动喝药的脚本</player-request>\n写一个血量低于三成自动按 1 喝药的自动化", atMs: t0 + 121_000 },
+  { role: "assistant", text: "先看看血量条在哪。", atMs: t0 + 126_000, toolCalls: [{ id: "p-1", name: "game.look", arguments: "{}" }] },
+  { role: "tool", callId: "p-1", name: "game.look", content: '{"window":"英雄联盟","found":"血量条在左下角"}', isError: false, untrusted: true, atMs: t0 + 130_000 },
+  { role: "assistant", text: "", atMs: t0 + 150_000, toolCalls: [{ id: "p-2", name: "automation.save", arguments: '{"name":"自动喝药"}' }] },
+  { role: "tool", callId: "p-2", name: "automation.save", content: '{"saved":true,"id":"auto-potion"}', isError: false, untrusted: false, atMs: t0 + 185_000 },
+  { role: "assistant", text: "已保存为自动化《自动喝药》。血量条低于三成时按 1，每次之间至少隔 5 秒；按 Ctrl+Shift+F12 随时停。", atMs: t0 + 190_000 },
+];
 const preview = {
   current: previewConversation.id as string | null,
   conversations: [previewConversation],
@@ -187,9 +232,40 @@ export async function agentTools(): Promise<AgentTool[]> {
   return previewTools.map((tool) => ({ ...tool, rule: preview.permissions.rules[tool.name] ?? null }));
 }
 
+// ---------- 交给后台做的事（ADR 029 第三节） ----------
+
+/** 一件事的过程（和聊天时间线同一种消息），卡片展开时读。 */
+export async function agentSubagentMessages(conversationId: string, name: string): Promise<AgentMessage[]> {
+  if (!isTauri) {
+    const known = preview.conversations.find((c) => c.id === conversationId)?.subagents?.some((s) => s.name === name);
+    return known ? structuredClone(previewTaskMessages) : [];
+  }
+  return (await invoke<{ messages: AgentMessage[] }>("agent_subagent_messages", { conversationId, name })).messages;
+}
+export async function agentSubagentStop(conversationId: string, name: string): Promise<void> {
+  if (!isTauri) throw new Error(PREVIEW_ERROR);
+  await invoke("agent_subagent_stop", { conversationId, name });
+}
+/** 程序重启后中断了的事：接着做。 */
+export async function agentSubagentContinue(conversationId: string, name: string): Promise<void> {
+  if (!isTauri) throw new Error(PREVIEW_ERROR);
+  await invoke("agent_subagent_continue", { conversationId, name });
+}
+export async function agentSubagentAnswer(conversationId: string, name: string, answer: SubagentAnswer): Promise<void> {
+  if (!isTauri) throw new Error(PREVIEW_ERROR);
+  await invoke("agent_subagent_answer", { conversationId, name, answer });
+}
+
+/** 后端事件统一成 `kind`（约定里新事件写的是 `type`，两种都认）。 */
+function normalizeEvent(event: AgentEvent | (Record<string, unknown> & { type?: string })): AgentEvent {
+  const raw = event as Record<string, unknown>;
+  if (raw.kind === undefined && typeof raw.type === "string") return { ...raw, kind: raw.type } as unknown as AgentEvent;
+  return event as AgentEvent;
+}
+
 export async function subscribeAgent(callback: (conversationId: string, event: AgentEvent) => void): Promise<UnlistenFn> {
   if (!isTauri) return () => {};
-  return listen<{ conversationId: string; event: AgentEvent }>("kotone://agent-event", (e) => callback(e.payload.conversationId, e.payload.event));
+  return listen<{ conversationId: string; event: AgentEvent }>("kotone://agent-event", (e) => callback(e.payload.conversationId, normalizeEvent(e.payload.event)));
 }
 export async function subscribeAsks(onAsk: (ask: AgentAsk) => void, onResolved: (askId: string) => void): Promise<UnlistenFn> {
   if (!isTauri) return () => {};
@@ -268,11 +344,15 @@ const toolLabels: Record<string, string> = {
   "skill.view": "看技能",
   "skill.manage": "写技能",
   "soul.write": "改性格",
-  "session.spawn": "派出子会话",
-  "session.send": "给会话发消息",
-  "session.list": "查看子会话",
-  "session.history": "看子会话记录",
-  "session.stop": "结束子会话",
+  "session.spawn": "交给后台去做",
+  "session.send": "转告一句",
+  "session.list": "查看在做的事",
+  "session.history": "看做事的过程",
+  "session.stop": "停下一件事",
+  "agent.start": "交给后台去做",
+  "agent.followup": "接着做",
+  "agent.list": "查看在做的事",
+  "agent.stop": "停下一件事",
   "voice.listen.start": "开始听",
   "voice.listen.stop": "不听了",
   "ask": "问你",
@@ -316,6 +396,8 @@ export function sourceLabel(source: string | undefined): string | null {
     case "quick-command": return "游戏内 · 快捷指令";
     case "tool": return "工具提交";
     case "automation": return "自动化结果";
+    // 后台做完的事交回来（ADR 029）：卡片已经更新，这条不显示
+    case "agent-report": return null;
     default: return source;
   }
 }

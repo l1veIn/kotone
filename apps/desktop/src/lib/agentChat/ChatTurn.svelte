@@ -8,6 +8,7 @@
   import MessageMarkdown from "./markdown/MessageMarkdown.svelte";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import ToolCallCard from "./ToolCallCard.svelte";
+  import BackgroundTaskCard from "./BackgroundTaskCard.svelte";
   import TurnFooter from "./TurnFooter.svelte";
   import type { Turn } from "./timeline";
   import { formatToolJson } from "./toolPresentation";
@@ -21,7 +22,8 @@
     onAnswer: (askId: string, answer: Answer) => Promise<void>;
   } = $props();
 
-  const user = $derived(turn.user);
+  // 后台做完的事交回来的那条（ADR 029）：卡片已经更新，不显示这条，只显示她接着说的话。
+  const user = $derived(turn.user?.source === "agent-report" ? null : turn.user);
   const system = $derived(user?.source === "automation");
   const source = $derived(sourceLabel(user?.source));
   /** 自动化结果：后端写给模型的说明里取出“自动化「…」已完成”这一句给人看。 */
@@ -69,6 +71,8 @@
           <ThinkingBlock text={block.text} streaming={block.streaming} />
         {:else if block.kind === "text"}
           <div class="py-0.5" data-testid="agent-answer" data-streaming={block.streaming}><MessageMarkdown text={block.text} /></div>
+        {:else if block.kind === "tool" && (block.tool.call.name === "agent.start" || block.tool.call.name === "agent.followup")}
+          <BackgroundTaskCard tool={block.tool} runActive={turn.active} />
         {:else if block.kind === "tool"}
           <ToolCallCard tool={block.tool} runActive={turn.active} ask={askFor(block.tool.call.id)} {onAnswer} />
         {:else if block.kind === "recap"}

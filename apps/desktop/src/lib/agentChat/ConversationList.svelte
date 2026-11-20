@@ -20,7 +20,8 @@
   let confirm = $state<ConversationSummary | null>(null);
   let deleting = $state(false);
   const running = $derived(runningId !== null);
-  const sorted = $derived([...conversations].sort((a, b) => b.updatedAtMs - a.updatedAtMs));
+  // 后台做事的过程（ADR 029，旧版的“子会话”也一样）不出现在列表里，只在主对话的卡片里看。
+  const sorted = $derived(conversations.filter((c) => !c.parent).sort((a, b) => b.updatedAtMs - a.updatedAtMs));
   const busyHint = "正在回答，请先停止";
 
   function when(ms: number): string {
@@ -59,7 +60,6 @@
             {active && activePage ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-foreground'}"
           onclick={() => onSelect(item.id)}>
           {#if item.id === runningId}<span class="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" aria-label="回答中"></span>{/if}
-          {#if item.parent}<span class="shrink-0 rounded bg-sidebar-accent px-1 text-[10px] text-sidebar-foreground/60" data-testid="agent-conversation-child" title="子会话（只能查看）">子</span>{/if}
           <span class="min-w-0 flex-1 truncate">{item.title || "（无标题）"}</span>
           <span class="shrink-0 text-[11px] text-sidebar-foreground/45 tabular-nums group-hover/item:invisible">{when(item.updatedAtMs)}</span>
         </button>

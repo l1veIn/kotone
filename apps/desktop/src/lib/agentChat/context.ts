@@ -13,3 +13,8 @@ export function useAgentChat(): AgentChat {
   if (!chat) throw new Error("useAgentChat() 需要在设置窗口内使用");
   return chat;
 }
+
+/** 不在设置窗口里（没有提供对话状态）时为 undefined。 */
+export function tryAgentChat(): AgentChat | undefined {
+  return getContext<AgentChat | undefined>(KEY);
+}

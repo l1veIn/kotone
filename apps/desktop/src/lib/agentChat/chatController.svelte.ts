@@ -4,6 +4,7 @@ import {
   agentAnswer, agentConversation, agentDeleteConversation, agentNewConversation, agentSelectConversation,
   agentSend, agentState, agentStop, subscribeAgent, subscribeAsks, subscribeKeyRequests,
   type AgentAsk, type KeyRequest, type AgentEvent, type AgentMessage, type AgentState, type Answer, type Conversation,
+  type SubagentInfo,
 } from "../agent";
 import type { LiveState } from "./timeline";
 
@@ -102,6 +103,11 @@ export class AgentChat {
   }
 
   #apply(id: string, event: AgentEvent, replay: boolean) {
+    if (event.kind === "subagent") {
+      // 派出去的事有了新状态（ADR 029）：只更新登记，不算这段对话在回答。
+      if (id === this.conversation?.id) this.#upsertSubagent(event.info);
+      return;
+    }
     if (event.kind === "idle") {
       if (this.runningId === id) this.runningId = null;
       this.live = { text: "", thought: "", tools: {} };
@@ -154,6 +160,20 @@ export class AgentChat {
         void this.refreshList();
         break;
     }
+  }
+
+  #upsertSubagent(info: SubagentInfo) {
+    if (!this.conversation) return;
+    const list = this.conversation.subagents ?? [];
+    const index = list.findIndex((s) => s.name === info.name);
+    // 读取对话之后才到的旧事件不覆盖更新的状态
+    if (index >= 0 && list[index].updatedAtMs > info.updatedAtMs) return;
+    this.conversation.subagents = index >= 0 ? list.map((s, i) => (i === index ? info : s)) : [...list, info];
+  }
+
+  /** 当前对话里某件派出去的事的登记。 */
+  subagent(name: string): SubagentInfo | undefined {
+    return this.conversation?.subagents?.find((s) => s.name === name);
   }
 
   #onAsk(ask: AgentAsk) {
