@@ -574,6 +574,24 @@ test("settings: browser extensions — add an unpacked folder, turn it off, remo
   await expect(section.getByTestId("browser-extensions-empty")).toBeVisible();
 });
 
+test("settings: the player picks the music site (she only searches there)", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 860 });
+  await openChat(page);
+  await openSettingsTab(page, "permissions");
+  const section = page.getByTestId("music-site-settings");
+  await expect(section).toContainText("搜不到会告诉你，不会自己换网站");
+  const select = section.getByTestId("music-site");
+  await expect(select).toContainText("网易云音乐");
+  await select.click();
+  await page.getByRole("option", { name: "QQ 音乐" }).click();
+  // 界面预览里设置存在页面内的模拟里（不经过 IPC）：看保存提示和保存后的值。
+  await expect(page.getByText("放歌改用QQ 音乐")).toBeVisible();
+  await expect(select).toContainText("QQ 音乐");
+  await openSettingsTab(page, "usage");
+  await openSettingsTab(page, "permissions");
+  await expect(page.getByTestId("music-site")).toContainText("QQ 音乐");
+});
+
 test("settings: clearing the browser login asks first", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 860 });
   await openChat(page);

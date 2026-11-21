@@ -1185,8 +1185,10 @@ fn prompt_carries_soul_memory_game_memory_and_skills_and_child_prompt_is_minimal
         assert!(child.contains(text), "{text}");
     }
     assert!(!child.contains("agent.start"), "后台不能再交给后台");
-    let ctx = crate::prompt::child_turn_context("2026-11-20 周五 14:05", "英雄联盟", "lol");
+    let ctx =
+        crate::prompt::child_turn_context("2026-11-20 周五 14:05", "英雄联盟", "lol", "QQ 音乐");
     assert!(ctx.contains("后台") && ctx.contains("14:05") && ctx.contains("游戏配置 id：lol"));
+    assert!(ctx.contains("放歌用：QQ 音乐"));
 }
 
 // ---------- 后台执行命令、读写文件（ADR 030） ----------

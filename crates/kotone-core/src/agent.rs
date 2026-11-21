@@ -86,6 +86,33 @@ pub struct AgentConfig {
     /// 聊天窗口里的思考强度（同上）。新字段。
     #[serde(default)]
     pub chat_effort: String,
+    /// 放歌用的网站（内置浏览器，ADR 031）：[`MUSIC_SITES`] 里的 id。她只在这个网站上找歌，
+    /// 搜不到就告诉玩家，不自己换网站（2026-11-21 玩家反馈）。新字段，缺省 = 网易云音乐。
+    #[serde(default = "default_music_site")]
+    pub music_site: String,
+}
+
+/// 放歌用的网站：(id, 名字)。第一个是默认。
+pub const MUSIC_SITES: &[(&str, &str)] = &[
+    ("netease", "网易云音乐"),
+    ("qq", "QQ 音乐"),
+    ("kugou", "酷狗音乐"),
+    ("kuwo", "酷我音乐"),
+];
+
+fn default_music_site() -> String {
+    MUSIC_SITES[0].0.into()
+}
+
+impl AgentConfig {
+    /// 玩家选的放歌网站的名字（不认识的值按默认的网易云音乐）。
+    pub fn music_site_name(&self) -> &'static str {
+        MUSIC_SITES
+            .iter()
+            .find(|(id, _)| *id == self.music_site)
+            .unwrap_or(&MUSIC_SITES[0])
+            .1
+    }
 }
 
 fn default_game_effort() -> String {
@@ -204,6 +231,7 @@ impl Default for AgentConfig {
             safety_check: true,
             game_effort: default_game_effort(),
             chat_effort: String::new(),
+            music_site: default_music_site(),
         }
     }
 }

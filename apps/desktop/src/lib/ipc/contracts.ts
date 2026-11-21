@@ -319,6 +319,8 @@ export interface AgentConfig {
   /** 游戏里 / 聊天窗口里的思考强度（只对 DeepSeek）：low / high / max / none；空 = 服务商默认。 */
   gameEffort?: string;
   chatEffort?: string;
+  /** 放歌用的网站：netease（默认）/ qq / kugou / kuwo。 */
+  musicSite?: string;
 }
 
 /** 语音唤醒设置（config.json `assistant.wake`）。 */

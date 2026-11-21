@@ -1,10 +1,12 @@
 <script lang="ts">
-  // 「设置 → 权限」里的内置浏览器（ADR 031）：清除你在聊天页右侧网页里登录过的账号（网易云等）；
+  // 「设置 → 权限」里的内置浏览器（ADR 031）：放歌用哪个网站（agent.musicSite）；
+  // 清除你在聊天页右侧网页里登录过的账号（网易云等）；
   // 浏览器插件（已解压的插件文件夹，Chrome / Edge 插件格式；WebView2 的 AddBrowserExtension）。
   import { onMount } from "svelte";
   import { FolderOpen, Puzzle, Trash2 } from "@lucide/svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
+  import SelectField from "$lib/components/settings/SelectField.svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Switch } from "$lib/components/ui/switch";
@@ -14,7 +16,20 @@
     type BrowserExtension,
   } from "../../../../lib/browser";
   import { isTauri } from "../../../../lib/ipc";
-  import { errText, toast } from "../../../../lib/stores/ui";
+  import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
+
+  /** 放歌用的网站（和 kotone-core 的 MUSIC_SITES 一致）：她只在这个网站上找歌，搜不到就告诉你。 */
+  const MUSIC_SITES = [
+    { value: "netease", label: "网易云音乐" },
+    { value: "qq", label: "QQ 音乐" },
+    { value: "kugou", label: "酷狗音乐" },
+    { value: "kuwo", label: "酷我音乐" },
+  ];
+  const musicSite = $derived($settingsStore?.agent?.musicSite || "netease");
+  function setMusicSite(value: string) {
+    const name = MUSIC_SITES.find((site) => site.value === value)?.label ?? value;
+    void patchSettings({ agent: { musicSite: value } }, `放歌改用${name}`);
+  }
 
   let confirming = $state(false);
   let clearing = $state(false);
@@ -92,6 +107,17 @@
     }
   }
 </script>
+
+<SettingsSection title="放歌" id="settings-permissions-music"
+  description="在聊天页右侧的网页里放歌。她只在你选的网站上找；搜不到会告诉你，不会自己换网站。第一次要在网页上扫码登录。"
+  testid="music-site-settings">
+  <SettingsRow label="用哪个网站">
+    {#snippet control()}
+      <SelectField class="w-36" size="sm" ariaLabel="放歌用的网站" testid="music-site" value={musicSite} options={MUSIC_SITES}
+        onchange={setMusicSite} />
+    {/snippet}
+  </SettingsRow>
+</SettingsSection>
 
 <SettingsSection title="内置浏览器" id="settings-permissions-browser"
   description="聊天页右侧的网页（放歌、查东西）。你在里面登录过的账号只存在这台电脑的 Kotone 里。" testid="browser-data-settings">

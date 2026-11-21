@@ -426,6 +426,7 @@ pub(super) async fn turn(
                     &kotone_core::agent::now_label(),
                     profile.display_name.trim(),
                     &profile.id,
+                    settings.agent.music_site_name(),
                 ),
             };
         }

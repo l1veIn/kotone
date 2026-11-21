@@ -255,6 +255,7 @@ pub const FIELDS: &[Field] = &[
     f("agent.safetyCheck", "DeepSeek 内容审核", "设置 → 权限", "true（默认）：用 DeepSeek 时请求带 safety_check，审核没通过的回答会撤回并说明；审核不另收费。只对 DeepSeek 生效。", NONE, NOW),
     f("agent.gameEffort", "游戏里的思考强度", "设置 → 权限", "只对 DeepSeek 生效。语音叫她时空 = 不思考（ADR 029：开着思考实测一句回答要多等十几秒）；玩家明确选了 low / high / max 才思考。", GAME_EFFORTS, NOW),
     f("agent.chatEffort", "聊天窗口里的思考强度", "设置 → 权限", "只对 DeepSeek 生效。空 = 服务商默认（high）。", EFFORTS, NOW),
+    f("agent.musicSite", "放歌用的网站", "设置 → 权限 → 放歌", "放歌时只在这个网站上找（右侧栏的浏览器）；搜不到就告诉玩家，不自己换网站。玩家说“以后用 QQ 音乐放歌”就改这里。默认 netease（网易云音乐）。", crate::agent::MUSIC_SITES, NOW),
     f("agent.compactAtTokens", "对话多长时整理成摘要", "设置 → 她怎么回答 → AI 连接", "一段对话估到这么多 token 时，琴音把较早的部分整理成摘要、之后只看摘要和最近几轮（整理那一次多花一点，之后又能命中缓存）。默认 64000；0 = 不整理。", NONE, NOW),
     f("agent.subagents.model", "子会话用的模型", "设置 → 她怎么回答 → AI 连接", "琴音派出的子会话（例如同传）用的模型 id；空 = 和琴音同一个模型。建议填同一家服务商更快更便宜的模型。", NONE, NOW),
     f("voiceChat.enabled", "游戏语音（琴音替你说话）", "设置 → 她怎么回答 → 游戏语音", "开启后把你的麦克风和琴音“说给队友”的话一起转进虚拟麦克风（VB-CABLE 的 CABLE Output），游戏里的麦克风选 CABLE Output 队友就能听到。需要先装 VB-CABLE（voice_chat.install）。Kotone 没运行时队友听不到你。", NONE, NOW),
