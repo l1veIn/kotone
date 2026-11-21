@@ -12,8 +12,8 @@
   import { wakePhrases } from "../wake";
 
   let { size = "sm", ready = true, testid = "call-kotone", onSetCallKey }: {
-    /** sm：聊天输入框里的小按钮；lg：聊天页中间的大按钮。 */
-    size?: "sm" | "lg";
+    /** icon：输入框里发送键旁边的图标（悬停看快捷键）；sm：小按钮；lg：聊天页中间的大按钮。 */
+    size?: "icon" | "sm" | "lg";
     /** AI 连接选好了没有。 */
     ready?: boolean;
     testid?: string;
@@ -38,6 +38,14 @@
       : hotkey ? `或在游戏里按 ${hotkeyLabel(hotkey)}`
       : wakeWord ? `或者说“${wakeWord}”`
       : ""));
+
+  /** 图标按钮悬停时的说明：呼叫琴音（快捷键 ~）……（rc2 玩家反馈：输入框里只留一个图标，悬停看快捷键）。 */
+  const iconTitle = $derived(blocked ? `呼叫${name}：${blocked}`
+    : listening ? `${name}在听…说完了？再按一次直接交给她`
+    : calling && preparing ? "正在准备…"
+    : [hotkey ? `呼叫${name}（快捷键 ${hotkeyLabel(hotkey)}）` : `呼叫${name}（还没设快捷键：设置 → 怎么叫她）`,
+       wakeWord ? `也可以说“${wakeWord}”` : "",
+       asr === "local-stopped" || asr === "local-error" ? "点一下会先启动本地识别" : ""].filter(Boolean).join(" · "));
 
   async function call() {
     if (blocked || calling) return;
@@ -71,6 +79,16 @@
       {/if}
     </p>
   </div>
+{:else if size === "icon"}
+  <button type="button" data-testid={testid} disabled={!!blocked || calling} aria-pressed={listening}
+    title={iconTitle} aria-label={iconTitle}
+    class="flex size-8 shrink-0 items-center justify-center rounded-full transition
+      disabled:cursor-not-allowed disabled:opacity-50
+      {listening ? 'bg-brand-pink/15 text-brand-pink' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
+    onclick={() => void call()}>
+    <Mic class="size-4 {listening || calling ? 'animate-pulse' : ''}" />
+    <span class="sr-only">{listening ? "在听…" : `呼叫${name}`}</span>
+  </button>
 {:else}
   <button type="button" data-testid={testid} disabled={!!blocked || calling} aria-pressed={listening}
     title={hint}

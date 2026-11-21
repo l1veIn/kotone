@@ -14,6 +14,8 @@ declare global {
       calls: Call[];
       browser(state: Record<string, unknown>): Promise<void>;
       subagent(info: Partial<Info> & { name: string }): Promise<void>;
+      /** agent_subagent_messages 返回的过程。 */
+      process: unknown[];
     };
   }
 }
@@ -50,6 +52,7 @@ async function openChat(page: Page, options: { empty?: boolean } = {}) {
     const runtime = { phase: "running", restartNeeded: false, engineId: "fixture", engineName: "测试引擎", modelId: "fixture", interactionMode: "dictation", stage: null, asrLocal: false, error: null };
     const bridge = {
       calls: [] as Call[],
+      process: [] as unknown[],
       async browser(next: Record<string, unknown>) {
         browserState = { ...browserState, ...next };
         await emit("kotone://browser", browserState);
@@ -74,7 +77,7 @@ async function openChat(page: Page, options: { empty?: boolean } = {}) {
         case "agent_state": return structuredClone({ ...state, permissions: { mode: "default", rules: {} } });
         case "agent_conversation": return a.id === "c-main" ? structuredClone(main) : null;
         case "agent_send": return { status: "started", conversationId: "c-main" };
-        case "agent_subagent_messages": return { messages: [] };
+        case "agent_subagent_messages": return { messages: structuredClone(bridge.process) };
         case "agent_subagent_stop": case "agent_subagent_continue": case "agent_subagent_answer": return null;
         case "usage_conversation": return null;
         case "get_runtime_status": return structuredClone(runtime);
@@ -230,6 +233,80 @@ test("the expanded browser reports where the page goes; collapsing, dialogs and 
   // 离开聊天页：不可见
   await openSettingsTab(page, "permissions");
   await expect.poll(async () => (await lastBounds(page))?.visible).toBe(false);
+});
+
+test("a task in the sidebar opens in place to show its result and steps; a small button jumps to the chat card", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 860 });
+  await openChat(page);
+  await page.evaluate((T) => {
+    window.sidebarTest.process = [
+      { role: "user", text: "<player-request>帮我放首歌</player-request>\n在右侧栏的浏览器里放《雨爱》。", source: "agent-task:1", atMs: T },
+      { role: "assistant", text: "先打开网易云搜一下。", toolCalls: [{ id: "t1", name: "browser.open", arguments: '{"url":"https://music.163.com"}' }], atMs: T + 1000 },
+      { role: "tool", callId: "t1", name: "browser.open", content: '{"site":"music.163.com"}', isError: false, untrusted: true, atMs: T + 2000 },
+    ];
+  }, T);
+  await page.evaluate(() => window.sidebarTest.subagent({ name: "song", label: "放歌", status: "running", steps: 1 }));
+  const task = page.locator('[data-testid="sidebar-task"][data-task-name="song"]');
+  const toggle = task.getByTestId("sidebar-task-toggle");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  const body = task.getByTestId("sidebar-task-body");
+  await expect(body.getByTestId("task-card-step-task")).toHaveText("交代：在右侧栏的浏览器里放《雨爱》。");
+  await expect(body.getByTestId("task-card-step-text")).toHaveText("先打开网易云搜一下。");
+  await expect(body.getByTestId("agent-tool-card")).toHaveCount(1);
+  expect(await calls(page, "agent_subagent_messages")).toContainEqual({ conversationId: "c-main", name: "song" });
+  // 多一步就重新读
+  const before = (await calls(page, "agent_subagent_messages")).length;
+  await page.evaluate(() => window.sidebarTest.subagent({ name: "song", steps: 2 }));
+  await expect.poll(async () => (await calls(page, "agent_subagent_messages")).length).toBeGreaterThan(before);
+  // 做完：先看结果再看过程
+  await page.evaluate(() => window.sidebarTest.subagent({ name: "song", status: "done", summary: "放上了《雨爱》- 杨丞琳。" }));
+  await expect(body.getByTestId("task-card-summary-full")).toHaveText("放上了《雨爱》- 杨丞琳。");
+  await page.screenshot({ path: SHOTS ? `${SHOTS}/right-sidebar-task-open.png` : testInfo.outputPath("right-sidebar-task-open.png"), animations: "disabled" });
+  await expect(task.getByTestId("sidebar-task-reveal")).toHaveAttribute("title", "在聊天里看");
+  // 网页展开时任务区在网页下面：展开一件事后网页区变矮，重新报位置，不盖住过程
+  await page.evaluate((s) => window.sidebarTest.browser(s), PLAYING);
+  await page.getByTestId("right-sidebar").getByTestId("sidebar-browser-expand").click();
+  await expect.poll(async () => (await lastBounds(page))?.visible).toBe(true);
+  const panelTask = page.getByTestId("browser-panel").locator('[data-testid="sidebar-task"][data-task-name="song"]');
+  // 展开着的那件事在网页展开后也还展开着；先收起，量网页区的高度
+  await expect(panelTask.getByTestId("sidebar-task-toggle")).toHaveAttribute("aria-expanded", "true");
+  await expect(panelTask.getByTestId("sidebar-task-body")).toBeVisible();
+  await page.waitForTimeout(300);
+  const openHeight = (await lastBounds(page))!.height;
+  await panelTask.getByTestId("sidebar-task-toggle").click();
+  await expect(panelTask.getByTestId("sidebar-task-body")).toHaveCount(0);
+  await expect.poll(async () => (await lastBounds(page))!.height).toBeGreaterThan(openHeight);
+  const closedHeight = (await lastBounds(page))!.height;
+  await panelTask.getByTestId("sidebar-task-toggle").click();
+  await expect(panelTask.getByTestId("sidebar-task-body")).toBeVisible();
+  await expect.poll(async () => (await lastBounds(page))!.height).toBeLessThan(closedHeight);
+  const bounds = (await lastBounds(page))!;
+  const taskTop = (await panelTask.getByTestId("sidebar-task-body").boundingBox())!.y;
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(Math.ceil(taskTop));
+});
+
+test("a browser that could not open says why and offers a retry", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 860 });
+  await openChat(page);
+  const reason = "浏览器没能打开：WebView2 报错 0x80070057（参数错误）";
+  await page.evaluate((error) => window.sidebarTest.browser({ open: false, error }), reason);
+  const card = page.getByTestId("sidebar-browser-card");
+  await expect(card).toHaveAttribute("data-browser-state", "error");
+  await expect(card.getByTestId("browser-error-text")).toHaveText(reason);
+  await expect(card.getByTestId("sidebar-browser-hint")).toHaveCount(0);
+  await page.screenshot({ path: SHOTS ? `${SHOTS}/right-sidebar-error.png` : testInfo.outputPath("right-sidebar-error.png"), animations: "disabled" });
+  await card.getByTestId("browser-error-retry").click();
+  expect(await calls(page, "browser_control")).toEqual([{ action: "reload" }]);
+  // 打开过的网页后来坏了：卡片和展开的网页顶上都说
+  await page.evaluate(({ playing, error }) => window.sidebarTest.browser({ ...playing, error }), { playing: PLAYING, error: "浏览器没有回应" });
+  await expect(card).toHaveAttribute("data-browser-state", "error");
+  await expect(card.getByTestId("browser-error-text")).toHaveText("浏览器没有回应");
+  await card.getByTestId("sidebar-browser-expand").click();
+  await expect(page.getByTestId("browser-panel").getByTestId("browser-error-text")).toHaveText("浏览器没有回应");
+  await page.evaluate(() => window.sidebarTest.browser({ error: null }));
+  await expect(page.getByTestId("browser-error")).toHaveCount(0);
 });
 
 test("a handover opens the sidebar, expands the page and asks the player to log in", async ({ page }, testInfo) => {

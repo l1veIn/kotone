@@ -2,7 +2,7 @@
 <!-- 浏览器展开时右侧栏变宽，网页摆在占位区域上（网页由后端盖在界面上面，这里只报位置）。 -->
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { ArrowLeft, Globe, LoaderCircle, Maximize2, Minimize2, Pause, Play, RotateCw, SkipForward, X } from "@lucide/svelte";
+  import { ArrowLeft, CircleAlert, Globe, LoaderCircle, Maximize2, Minimize2, Pause, Play, RotateCw, SkipForward, X } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import {
     browserControl, browserHandoverDone, browserSetBounds, browserStore, mediaLine, siteName,
@@ -36,6 +36,9 @@
     return [...live, ...finished];
   });
   const conversationId = $derived(chat?.conversation?.id ?? "");
+  /** 哪些任务卡在侧栏里展开着（展开网页时给任务区多留地方）。 */
+  let openTasks = $state<Record<string, boolean>>({});
+  const anyTaskOpen = $derived(tasks.some((t) => openTasks[t.name]));
 
   // ---- 要玩家来（登录、验证码）：打开右侧栏、展开浏览器 ----
   let lastHandover: string | null = null;
@@ -167,6 +170,17 @@
   {/if}
 {/snippet}
 
+{#snippet browserError()}
+  {#if browser.error}
+    <div class="flex min-w-0 items-start gap-2 rounded-lg border border-destructive/35 bg-destructive/8 px-2.5 py-2" role="alert" data-testid="browser-error">
+      <CircleAlert class="mt-0.5 size-3.5 shrink-0 text-destructive" />
+      <p class="m-0 min-w-0 flex-1 text-xs leading-5 break-words text-destructive" data-testid="browser-error-text">{browser.error}</p>
+      <Button size="sm" variant="outline" class="h-6 shrink-0 px-2 text-[11px]" data-testid="browser-error-retry"
+        disabled={!!acting} onclick={() => void control("reload")}>重试</Button>
+    </div>
+  {/if}
+{/snippet}
+
 {#snippet handoverBanner()}
   {#if browser.handover}
     <div class="shrink-0 border-b border-warning/40 bg-warning/8 px-3 py-2.5" role="status" data-testid="browser-handover">
@@ -204,6 +218,7 @@
             onclick={() => browserExpanded.set(false)}><Minimize2 class="size-3.5" /></Button>
         </div>
         {@render handoverBanner()}
+        {#if browser.error}<div class="shrink-0 border-b border-hairline px-3 py-2">{@render browserError()}</div>{/if}
         {#if actionError}<p role="alert" class="m-0 shrink-0 px-3 py-1.5 text-xs text-destructive">{actionError}</p>{/if}
         <!-- 网页摆在这里（盖在上面）；没打开网页时显示说明 -->
         <div class="relative min-h-0 flex-1 bg-muted/30" bind:this={slot} data-testid="browser-panel-slot">
@@ -214,10 +229,11 @@
           {/if}
         </div>
         {#if tasks.length}
-          <div class="max-h-[35%] shrink-0 overflow-y-auto border-t border-hairline px-3 py-2" data-testid="sidebar-tasks">
+          <!-- 任务区在网页下面（网页只盖占位区域）；有卡片展开时多给些高度，网页区跟着缩小、重新报位置 -->
+          <div class="{anyTaskOpen ? 'max-h-[60%]' : 'max-h-[35%]'} shrink-0 overflow-y-auto border-t border-hairline px-3 py-2" data-testid="sidebar-tasks">
             <h2 class="mt-0 mb-1.5 text-[11px] font-medium tracking-wider text-muted-foreground">后台在做的事</h2>
             <ul class="m-0 list-none space-y-1.5 p-0">
-              {#each tasks as info (info.name)}<SidebarTask {info} {conversationId} />{/each}
+              {#each tasks as info (info.name)}<SidebarTask {info} {conversationId} bind:open={openTasks[info.name]} />{/each}
             </ul>
           </div>
         {/if}
@@ -231,7 +247,7 @@
       <div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3">
         <!-- 浏览器卡片 -->
         <section aria-label="网页" class="min-w-0 overflow-hidden rounded-xl border border-hairline bg-card/60" data-testid="sidebar-browser-card"
-          data-browser-state={browser.handover ? "handover" : browser.open ? "open" : "closed"}>
+          data-browser-state={browser.handover ? "handover" : browser.error ? "error" : browser.open ? "open" : "closed"}>
           {#if browser.open}
             <div class="flex min-w-0 items-center gap-2 px-3 pt-2.5">
               {#if browser.loading}<LoaderCircle class="size-3.5 shrink-0 animate-spin text-muted-foreground" />{:else}<Globe class="size-3.5 shrink-0 text-muted-foreground" />{/if}
@@ -248,10 +264,14 @@
             {#if browser.handover}
               <p class="m-0 mx-3 mt-2 rounded-lg bg-warning/10 px-2.5 py-1.5 text-xs text-warning" data-testid="sidebar-browser-handover">{browser.handover.reason}，展开登录一下</p>
             {/if}
+            {#if browser.error}<div class="mx-3 mt-2">{@render browserError()}</div>{/if}
             <div class="flex justify-end px-1.5 py-1.5">
               <Button size="sm" variant="ghost" class="h-7 gap-1 px-2 text-xs" data-testid="sidebar-browser-expand"
                 onclick={() => browserExpanded.set(true)}><Maximize2 class="size-3" />展开</Button>
             </div>
+          {:else if browser.error}
+            <!-- 浏览器没能打开（例如 WebView2 建不出来）：说清原因，给一个重试 -->
+            <div class="p-3">{@render browserError()}</div>
           {:else}
             <div class="flex items-start gap-2 px-3 py-3">
               <Globe class="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
@@ -266,7 +286,7 @@
           <h2 class="mt-0 mb-1.5 px-0.5 text-[11px] font-medium tracking-wider text-muted-foreground">后台在做的事</h2>
           {#if tasks.length}
             <ul class="m-0 list-none space-y-1.5 p-0">
-              {#each tasks as info (info.name)}<SidebarTask {info} {conversationId} />{/each}
+              {#each tasks as info (info.name)}<SidebarTask {info} {conversationId} bind:open={openTasks[info.name]} />{/each}
             </ul>
           {:else}
             <p class="m-0 px-0.5 text-xs leading-5 text-muted-foreground" data-testid="sidebar-tasks-empty">复杂的事她会放到后台做，做的时候在这里看进度。</p>

@@ -22,7 +22,7 @@
   import { errText, settingsStore, toast } from "../../../../lib/stores/ui";
   import CallKotoneButton from "../../../../lib/components/CallKotoneButton.svelte";
   import KeyRequestCard from "../../../../lib/agentChat/KeyRequestCard.svelte";
-  import ComposerOptions from "../../../../lib/agentChat/ComposerOptions.svelte";
+  import PermissionMenu from "../../../../lib/agentChat/PermissionMenu.svelte";
   import UsagePanel from "../../../../lib/agentChat/UsagePanel.svelte";
   import { pendingPrompt } from "../../../../lib/agentChat/pendingPrompt";
   import DeepSeekKeyForm from "../../../../lib/components/DeepSeekKeyForm.svelte";
@@ -182,11 +182,14 @@
       onsubmit={submit}
       onstop={() => void stop()}
     >
+      <!-- 输入框底栏（rc2 玩家反馈）：左边一行用量小字；右边 权限图标、呼叫图标（悬停看快捷键）、发送。
+           选模型挪进「设置 → 她怎么回答 → AI 连接」：游戏陪玩不常换模型。 -->
       {#snippet tools()}
-        <CallKotoneButton {ready} onSetCallKey={onOpenTalk} />
+        <UsagePanel compact messages={chat.conversation?.messages ?? []} running={chat.runningHere} {costs} />
       {/snippet}
       {#snippet options()}
-        <ComposerOptions onchanged={() => void chat.refresh()} />
+        <PermissionMenu onchanged={() => void chat.refresh()} />
+        <CallKotoneButton size="icon" {ready} onSetCallKey={onOpenTalk} />
       {/snippet}
     </ChatComposer>
   </div>
@@ -263,7 +266,6 @@
       {#if !ready}
         <div class="mb-3 flex justify-center" data-testid="chat-unconfigured"><DeepSeekKeyForm variant="card" testid="chat-key" onConnected={onKeyConnected} /></div>
       {/if}
-      <UsagePanel messages={chat.conversation?.messages ?? []} running={chat.runningHere} {costs} />
       {@render composer()}
     </div>
   {/if}

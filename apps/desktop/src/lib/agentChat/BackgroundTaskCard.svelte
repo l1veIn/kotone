@@ -5,13 +5,12 @@
   import { Check, ChevronRight, CircleAlert, CirclePause, CircleStop, ClipboardList, LoaderCircle, Play, ShieldAlert } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import {
-    agentSubagentAnswer, agentSubagentContinue, agentSubagentMessages, agentSubagentStop,
-    type AgentMessage, type SubagentAnswer, type SubagentInfo, type SubagentStatus,
+    agentSubagentAnswer, agentSubagentContinue, agentSubagentStop,
+    type SubagentAnswer, type SubagentInfo, type SubagentStatus,
   } from "../agent";
   import { tryAgentChat } from "./context";
-  import MessageMarkdown from "./markdown/MessageMarkdown.svelte";
-  import { buildTurns, type ToolView } from "./timeline";
-  import ToolCallCard from "./ToolCallCard.svelte";
+  import type { ToolView } from "./timeline";
+  import TaskProcess from "./TaskProcess.svelte";
 
   let { tool, runActive = false }: { tool: ToolView; runActive?: boolean } = $props();
 
@@ -70,9 +69,6 @@
   let open = $state(false);
   let busy = $state<"stop" | "continue" | SubagentAnswer | null>(null);
   let actionError = $state("");
-  let process = $state<AgentMessage[] | null>(null);
-  let processError = $state("");
-  let loading = $state(false);
 
   async function act(kind: "stop" | "continue" | SubagentAnswer) {
     if (busy || !conversationId || !name) return;
@@ -89,50 +85,6 @@
     }
   }
 
-  async function loadProcess() {
-    if (!conversationId || !name) return;
-    loading = true;
-    try {
-      process = await agentSubagentMessages(conversationId, name);
-      processError = "";
-    } catch (error) {
-      processError = error instanceof Error ? error.message : String(error);
-    } finally {
-      loading = false;
-    }
-  }
-
-  // 展开时读过程；还在做的时候每次状态变化（多一步、等确认、做完）都重新读。
-  $effect(() => {
-    if (!open) return;
-    void info?.updatedAtMs;
-    void info?.steps;
-    void info?.status;
-    void loadProcess();
-  });
-
-  /** 过程里的一行：交代（派给它的话）、它说的、它做的每一步、状态说明。不显示推理过程。 */
-  type Row =
-    | { kind: "task"; key: string; text: string }
-    | { kind: "text"; key: string; text: string }
-    | { kind: "tool"; key: string; tool: ToolView }
-    | { kind: "notice"; key: string; text: string };
-  const rows = $derived.by<Row[]>(() => {
-    if (!process) return [];
-    const out: Row[] = [];
-    for (const turn of buildTurns(process, null, false)) {
-      if (turn.user) {
-        const text = turn.user.text.replace(/<player-request>[\s\S]*?<\/player-request>\s*/g, "").trim();
-        if (text) out.push({ kind: "task", key: `u${turn.id}`, text });
-      }
-      for (const block of turn.blocks) {
-        if (block.kind === "text") out.push({ kind: "text", key: block.key, text: block.text });
-        else if (block.kind === "tool") out.push({ kind: "tool", key: block.key, tool: block.tool });
-        else if (block.kind === "notice") out.push({ kind: "notice", key: block.key, text: block.text });
-      }
-    }
-    return out;
-  });
   const processRunning = $derived(latest && (status === "running" || status === "waiting"));
 </script>
 
@@ -180,36 +132,8 @@
 
   {#if open}
     <div class="max-h-96 min-w-0 space-y-2 overflow-auto border-t border-hairline bg-muted/30 px-3 py-2.5" data-testid="task-card-body">
-      {#if summary && latest && (status === "done" || status === "failed")}
-        <section aria-label="结果">
-          <h4 class="mt-0 mb-1 text-[11px] font-medium text-muted-foreground">结果</h4>
-          <p class="m-0 text-[13px] leading-5 whitespace-pre-wrap text-foreground/90" data-testid="task-card-summary-full">{summary}</p>
-        </section>
-      {/if}
-      <section aria-label="过程" data-testid="task-card-process">
-        <h4 class="mt-0 mb-1 text-[11px] font-medium text-muted-foreground">过程</h4>
-        {#if processError}
-          <p class="m-0 text-xs text-destructive">读不到过程：{processError}</p>
-        {:else if process === null}
-          <p class="m-0 text-xs text-muted-foreground">{loading ? "读取中…" : ""}</p>
-        {:else if rows.length === 0}
-          <p class="m-0 text-xs text-muted-foreground">还没有开始</p>
-        {:else}
-          <div class="min-w-0 space-y-1">
-            {#each rows as row (row.key)}
-              {#if row.kind === "task"}
-                <p class="m-0 line-clamp-3 text-xs leading-5 text-muted-foreground" data-testid="task-card-step-task">交代：{row.text}</p>
-              {:else if row.kind === "text"}
-                <div class="text-[13px]" data-testid="task-card-step-text"><MessageMarkdown text={row.text} /></div>
-              {:else if row.kind === "tool"}
-                <ToolCallCard tool={row.tool} runActive={processRunning} />
-              {:else}
-                <p class="m-0 text-xs text-muted-foreground">{row.text}</p>
-              {/if}
-            {/each}
-          </div>
-        {/if}
-      </section>
+      <TaskProcess {conversationId} {name} {info} {summary}
+        showResult={latest && (status === "done" || status === "failed")} running={processRunning} />
     </div>
   {/if}
 </div>

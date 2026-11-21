@@ -30,9 +30,9 @@
     /** 发送；返回 true 表示已交出去（清空输入框）。 */
     onsubmit: (text: string) => Promise<boolean>;
     onstop: () => void;
-    /** 工具行左侧（语音输入）。 */
+    /** 底栏左侧（用量小字）。 */
     tools?: Snippet;
-    /** 发送按钮左边（权限、模型）。 */
+    /** 发送按钮左边（权限、呼叫图标）。 */
     options?: Snippet;
     textarea?: HTMLTextAreaElement;
     autofocus?: boolean;
@@ -78,8 +78,8 @@
     oncompositionend={() => { composing = false; }}
   ></textarea>
   <div class="mt-1 flex items-end justify-between gap-2">
-    <div class="min-w-0 flex-1">{@render tools?.()}</div>
-    <div class="flex shrink-0 items-center gap-1.5 pb-0.5">
+    <div class="flex min-w-0 flex-1 items-center pb-0.5">{@render tools?.()}</div>
+    <div class="flex shrink-0 items-center gap-1 pb-0.5">
       {@render options?.()}
       {#if running}
         <button type="button" data-testid="agent-stop" disabled={stopping} onclick={onstop}

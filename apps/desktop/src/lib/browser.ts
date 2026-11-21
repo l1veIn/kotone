@@ -22,13 +22,15 @@ export interface BrowserState {
   media: BrowserMedia | null;
   /** 她正在操作这个页面。 */
   busy: boolean;
+  /** 浏览器没能打开或坏了的原因（例如“浏览器没能打开：……”）；正常时为 null。 */
+  error: string | null;
 }
 export type BrowserAction = "reload" | "back" | "close" | "play" | "pause" | "next";
 /** 浏览器区域在窗口里的位置（逻辑像素，相对窗口内容区左上角）。 */
 export interface BrowserBounds { x: number; y: number; width: number; height: number; visible: boolean }
 
 export const BROWSER_EVENT = "kotone://browser";
-export const CLOSED_BROWSER: BrowserState = { open: false, url: null, title: null, site: null, loading: false, handover: null, media: null, busy: false };
+export const CLOSED_BROWSER: BrowserState = { open: false, url: null, title: null, site: null, loading: false, handover: null, media: null, busy: false, error: null };
 
 /** 后端给的状态补齐缺省字段（旧后端、模拟数据少字段也能显示）。 */
 export function normalizeBrowserState(value: Partial<BrowserState> | null | undefined): BrowserState {
@@ -42,6 +44,7 @@ export function normalizeBrowserState(value: Partial<BrowserState> | null | unde
     handover: value.handover && typeof value.handover.reason === "string" ? { reason: value.handover.reason } : null,
     media: value.media ? { playing: !!value.media.playing, title: value.media.title ?? null, artist: value.media.artist ?? null } : null,
     busy: !!value.busy,
+    error: typeof value.error === "string" && value.error.trim() ? value.error : null,
   };
 }
 

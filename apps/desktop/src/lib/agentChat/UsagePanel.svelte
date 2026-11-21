@@ -8,10 +8,12 @@
   import { usageSummary, type AgentMessage, type ConversationCosts, type TokenUsage, type UsageSummary, type UsageTotals } from "../agent";
   import { conversationUsage, formatCost, formatHitRate, formatTokens, totalsMoney } from "./timeline";
 
-  let { messages = [], running = false, costs = null }: {
+  let { messages = [], running = false, costs = null, compact = false }: {
     messages?: readonly AgentMessage[]; running?: boolean;
     /** 这段对话模型以外的费用（语音、读屏、搜索），来自本机账本。 */
     costs?: ConversationCosts | null;
+    /** 放在输入框里面（左下角的一行小字；rc2 玩家反馈：计费挪进输入框）。 */
+    compact?: boolean;
   } = $props();
 
   let summary = $state<UsageSummary | null>(null);
@@ -78,7 +80,20 @@
   }
 </script>
 
-{#if summary || conv || otherCosts.length}
+{#if compact && (summary || conv || otherCosts.length)}
+  <button type="button" class="flex h-8 max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-full px-2 text-left text-[11px] whitespace-nowrap tabular-nums text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+    onclick={() => { open = true; void load(); }} data-testid="usage-pill" aria-label="查看用量与费用" title="用量与费用：点开看明细">
+    <BarChart3 class="size-3 shrink-0" />
+    {#if summary}
+      <span class="shrink-0" data-testid="usage-pill-today">{`今天 ${money(summary.today)}${summary.today.inputTokens ? ` · 命中 ${formatHitRate(summary.today.cacheHitTokens, summary.today.inputTokens)}` : ""}`}</span>
+    {/if}
+    {#if conv?.inputTokens}
+      <span class="min-w-0 truncate" data-testid="usage-pill-conversation">本段对话 {convMoney} · 命中 {formatHitRate(conv.cachedInputTokens, conv.inputTokens)}</span>
+    {:else if otherCosts.length}
+      <span class="min-w-0 truncate" data-testid="usage-pill-conversation">本段对话 {convMoney}</span>
+    {/if}
+  </button>
+{:else if summary || conv || otherCosts.length}
   <button type="button" class="flex w-full flex-wrap items-center gap-x-3 gap-y-0.5 rounded-lg px-2 py-1 text-left text-xs tabular-nums text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
     onclick={() => { open = true; void load(); }} data-testid="usage-pill" aria-label="查看用量与费用">
     <BarChart3 class="size-3.5 shrink-0" />

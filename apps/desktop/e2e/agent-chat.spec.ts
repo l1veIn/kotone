@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { openSettingsTab } from "./nav";
 
 // 聊天页（ADR 028：打开 Kotone 先看到它）：用 @tauri-apps/api/mocks 模拟 agent_* 命令与 kotone://agent-* 事件，不接任何 AI。
 
@@ -394,22 +395,37 @@ test("agent settings replace permissions as a whole and save the in-game switch"
   expect(saved.agent?.inGame).toBe(false);
 });
 
-test("composer switches permission mode and model like DeepSeek Harness", async ({ page }, testInfo) => {
+test("composer bar: usage inside, permission and call are icons next to send; the model moved to settings", async ({ page }, testInfo) => {
   await openChat(page);
-  const permission = page.getByTestId("composer-permission");
-  await expect(permission).toContainText("先问我");
+  const composer = page.getByTestId("agent-composer");
+  // 用量在输入框里面（rc2 玩家反馈：计费挪进 chatbox）
+  await expect(composer.getByTestId("usage-pill")).toBeVisible();
+  // 选模型不在输入框里了：游戏陪玩不常换模型
+  await expect(page.getByTestId("composer-model")).toHaveCount(0);
+  // 呼叫：发送键旁边的一个图标，悬停看快捷键
+  const call = composer.getByTestId("call-kotone");
+  await expect(call).toHaveAttribute("title", /呼叫琴音（快捷键 ~）/);
+  await expect(call.locator("svg")).toHaveCount(1);
+  const callBox = (await call.boundingBox())!;
+  const sendBox = (await composer.getByTestId("agent-send").boundingBox())!;
+  expect(sendBox.x - (callBox.x + callBox.width)).toBeLessThan(16);
+  // 权限：一个盾牌图标，悬停看当前模式，点开照旧换模式
+  const permission = composer.getByTestId("composer-permission");
+  await expect(permission).toHaveAttribute("title", "权限：先问我");
+  expect((await permission.boundingBox())!.width).toBeLessThan(40);
+  await page.screenshot({ path: testInfo.outputPath("composer-bar.png"), animations: "disabled" });
   await permission.click();
   await page.getByTestId("composer-permission-allow-all").click();
-  await expect(permission).toContainText("完全权限");
+  await expect(permission).toHaveAttribute("title", "权限：完全权限");
   expect(await agentCalls(page, "agent_set_permissions")).toEqual([{ permissions: { mode: "allow-all", rules: {} } }]);
 
-  const model = page.getByTestId("composer-model");
+  // 模型在「设置 → 她怎么回答 → AI 连接」：清单来自服务商的模型列表（照 DeepSeek Harness），不是写死的预置名
+  await openSettingsTab(page, "reply");
+  const model = page.getByLabel("陪玩模型");
   await expect(model).toContainText("test");
   await model.click();
-  // 模型清单来自服务商的模型列表（照 DeepSeek Harness），不是写死的预置名
-  await expect(page.getByTestId("composer-model-test-ai-test-listed")).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath("composer-model-menu.png"), animations: "disabled" });
-  await page.getByTestId("composer-model-test-ai-test-pro").click();
+  await expect(page.getByRole("option", { name: "test-listed" })).toBeVisible();
+  await page.getByRole("option", { name: "test-pro" }).click();
   await expect(model).toContainText("test-pro");
   const calls = await page.evaluate(() => window.agentTest.calls.filter((c) => c.command === "upsert_connection" || c.command === "connection_self_check"));
   // 换模型不再自检

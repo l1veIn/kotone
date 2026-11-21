@@ -1415,7 +1415,7 @@ export async function readHistoryAudio(fileName: string): Promise<Uint8Array> {
 // 命令可能不带参数地被调用（e2e 的兜底按命令名找这里的函数），参数都要可缺省。
 
 const closedBrowser = (): BrowserState => ({
-  open: false, url: null, title: null, site: null, loading: false, handover: null, media: null, busy: false,
+  open: false, url: null, title: null, site: null, loading: false, handover: null, media: null, busy: false, error: null,
 });
 const previewSongs = [
   { title: "晴天", artist: "周杰伦" },
@@ -1458,7 +1458,9 @@ export function browserControl(args?: { action?: BrowserAction }): null {
       }
       break;
     case "close": browserPreview.state = closedBrowser(); break;
-    default: break; // reload / back：预览里没有真的页面
+    // 重试（出错时的“重试”就是 reload）：预览里直接当作好了
+    case "reload": state.error = null; break;
+    default: break; // back：预览里没有真的页面
   }
   emitBrowser();
   return null;
@@ -1482,9 +1484,12 @@ export function subscribeBrowserPreview(callback: (state: BrowserState) => void)
 }
 
 /** dev:web 演示：没打开 → 网易云在放歌 → 要登录（控制台里 `__kotoneBrowserPreview("playing")`）。 */
-export function browserPreviewStep(step: "closed" | "playing" | "handover"): BrowserState {
+export function browserPreviewStep(step: "closed" | "playing" | "handover" | "error"): BrowserState {
   if (step === "closed") {
     browserPreview.state = closedBrowser();
+  } else if (step === "error") {
+    // 浏览器没能打开（例如 WebView2 建不出来）
+    browserPreview.state = { ...closedBrowser(), error: "浏览器没能打开：WebView2 报错 0x80070057（参数错误）" };
   } else {
     browserPreview.song = 0;
     browserPreview.state = {
@@ -1492,6 +1497,7 @@ export function browserPreviewStep(step: "closed" | "playing" | "handover"): Bro
       site: "music.163.com", loading: false, busy: false,
       handover: step === "handover" ? { reason: "网易云要登录一下" } : null,
       media: step === "handover" ? null : { playing: true, ...previewSongs[0] },
+      error: null,
     };
   }
   emitBrowser();
