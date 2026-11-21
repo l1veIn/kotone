@@ -28,6 +28,8 @@ pub mod games;
 #[cfg(windows)]
 pub mod hotkey_ll;
 pub mod inject;
+#[cfg(windows)]
+pub mod input_gate;
 pub mod keyboard;
 pub mod output_volume;
 pub mod playback;

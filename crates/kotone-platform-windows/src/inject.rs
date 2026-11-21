@@ -78,6 +78,8 @@ mod windows_imp {
             if cancel.is_cancelled() {
                 return Err(InjectError::new("发送已取消"));
             }
+            // 整段发送期间挡住玩家的按下（ADR 032 决定 1）；任何出口都在 drop 时关窗。
+            let _window = crate::input_gate::SendWindow::open();
             send_sequence(text, profile, &cancel, &WinOps)
         }
     }
@@ -440,6 +442,15 @@ mod windows_imp {
             return Err(error);
         }
         let sent = unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) };
+        // 发送窗口据此判断“钩子有没有认出 Kotone 自己的键”（ADR 032 决定 1 第 7 条）。
+        let keyboard_sent = inputs
+            .iter()
+            .take(sent as usize)
+            .filter(|input| input.r#type == INPUT_KEYBOARD)
+            .count();
+        if keyboard_sent > 0 {
+            crate::input_gate::GATE.note_submitted(keyboard_sent as u64);
+        }
         if sent as usize == inputs.len() {
             Ok(())
         } else {

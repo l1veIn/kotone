@@ -5,6 +5,8 @@
 | 文件 | 作用 |
 | --- | --- |
 | `target_window.ps1 -Dir <目录>` | WinForms 测试窗口“KotoneScriptTarget”：把按键、鼠标（按窗口比例的位置）、滚轮、焦点变化逐行写进 `<目录>/events.log`；左上角可变黑的面板、40 号字“找到对局”、橙色方块（中心蓝点）、“接受”标签。往 `<目录>/control.txt` 写 `dark` / `light` / `fg` / `blur <ms>` / `close` 控制它；启动完成写 `ready.txt` |
+| `target_window.ps1 -Dir <目录> -Chat` | 同一个测试窗口的聊天模式（ADR 032）：按下时多记 Shift 状态和 `dwExtraInfo`（Kotone 的键是 `4B544E49`），不压掉字符消息，逐个 UTF-16 单元记 `CHAR` |
+| `input_gate_e2e.py [exe]` | 发送窗口内挡键（ADR 032 决定 1）的真机测试：自己起隔离实例（`target/gate-e2e/`，`--background`）和聊天模式的测试窗口，用 `companion.type` 发消息，同时用不带标记的 `SendInput` 当“玩家”按键。对照：启动后第一条（不受保护）里字母混进了消息；之后发送期间连按 Q W E R，消息和原文完全一致；Kotone 第一个 Enter 之后按下并按住 Shift，两个 Enter 都不带 Shift、窗口没收到 Shift 的按下、最后一个 Enter 之后 Kotone 没再发任何键；过程日志里有 `inject_gate`。exe 默认是 `target/gate-e2e/bin/kotone.exe`（`target/debug/kotone.exe` 的副本，免得被当成玩家在跑 `pnpm dev`）。有游戏进程或前台不是终端 / 测试窗口时直接退出 |
 | `fg.ps1 [-Title]` | 把测试窗口切到前台（先敲一下 Alt 绕过前台锁定，再 `SetForegroundWindow`） |
 | `uia.ps1` | 用 Windows UI 自动化操作 Kotone 设置窗口（WebView2 把无障碍树暴露给 UIA）：列出元素、点按钮、给输入框填值。经 `kotone.py ui` 调用，中文名用 base64 传，避免控制台编码问题 |
 | `computer_use_e2e.py` | `game.look` / `game.act`（ADR 019）的真机测试：坐标点击、按编号点击、按键 / 组合键 / 滚轮 / 按住、相对移动、旧编号被拒、玩家按 Esc 停下（Esc 不传给游戏、别的键不停）并松开按住的键、琴音自己的 Esc 照常、被别的窗口盖住不点、窗口尺寸变了作废。隔离目录 `target/cu-e2e/`；`init` 写隔离配置，`setup-ocr` 在隔离目录里下载并启用文字识别模型。**前台不是测试窗口、也不是终端时直接退出**（2026-11-17 测试开始时前台是用户的英雄联盟对局，`fg.ps1` 的 Alt 进了游戏） |

@@ -1,6 +1,11 @@
-﻿param([string]$Dir)
+﻿param([string]$Dir, [switch]$Chat)
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+# -Chat（ADR 032 发送窗口挡键测试）：按下时多记 Shift 状态和 dwExtraInfo（Kotone 的键是 4B544E49），
+# 不压掉字符消息，逐个 UTF-16 单元记 CHAR，脚本据此还原“聊天框”里收到的文字和频道。
+if ($Chat) {
+  Add-Type -Namespace KotoneTest -Name Msg -MemberDefinition '[DllImport("user32.dll")] public static extern System.IntPtr GetMessageExtraInfo();'
+}
 New-Item -ItemType Directory -Force $Dir | Out-Null
 $log = [System.IO.StreamWriter]::new((Join-Path $Dir "events.log"), $false, [System.Text.UTF8Encoding]::new($false))
 $log.AutoFlush = $true
@@ -60,8 +65,15 @@ $up = { param($s, $e) Write-Event "MOUSEUP $($e.Button) $(Ratio)" }
 foreach ($c in @($form, $panel, $label, $icon, $dot, $accept)) { $c.Add_MouseDown($down); $c.Add_MouseUp($up) }
 $form.Add_MouseWheel({ param($s, $e) Write-Event "WHEEL $($e.Delta)" })
 
-$form.Add_KeyDown({ param($s, $e) Write-Event "DOWN $($e.KeyCode)"; $e.Handled = $true; $e.SuppressKeyPress = $true })
-$form.Add_KeyUp({ param($s, $e) Write-Event "UP $($e.KeyCode)" })
+if ($Chat) {
+  function Extra { "{0:X}" -f [KotoneTest.Msg]::GetMessageExtraInfo().ToInt64() }
+  $form.Add_KeyDown({ param($s, $e) Write-Event "DOWN $($e.KeyCode) shift=$($e.Shift) x=$(Extra)"; $e.Handled = $true })
+  $form.Add_KeyUp({ param($s, $e) Write-Event "UP $($e.KeyCode) x=$(Extra)" })
+  $form.Add_KeyPress({ param($s, $e) Write-Event ("CHAR {0:X4}" -f [int]$e.KeyChar); $e.Handled = $true })
+} else {
+  $form.Add_KeyDown({ param($s, $e) Write-Event "DOWN $($e.KeyCode)"; $e.Handled = $true; $e.SuppressKeyPress = $true })
+  $form.Add_KeyUp({ param($s, $e) Write-Event "UP $($e.KeyCode)" })
+}
 $form.Add_Activated({ Write-Event "FOCUS gained" })
 $form.Add_Deactivate({ Write-Event "FOCUS lost" })
 

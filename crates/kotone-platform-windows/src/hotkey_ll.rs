@@ -13,6 +13,7 @@
 //! - 匹配逻辑全部在 core 的 HookMatcher（kotone_core::hotkey），回调只是翻译层。
 //!
 //! 吞键策略：完整命中（主键 + 修饰键严格匹配）才 return 1 吞掉；
+//! 另外，往游戏聊天里发字的窗口内玩家的按下也吞掉（`input_gate`，ADR 032）；
 //! 其余按键一律 CallNextHookEx 放行。
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -685,7 +686,8 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
                 return LRESULT(1);
             }
             // 跳过合成输入（如我们自己的 SendInput），避免自我触发
-            if !kb.flags.contains(LLKHF_INJECTED) {
+            let injected = kb.flags.contains(LLKHF_INJECTED);
+            if !injected {
                 let action = match wparam.0 as u32 {
                     WM_KEYDOWN | WM_SYSKEYDOWN => Some(KeyAction::Down),
                     WM_KEYUP | WM_SYSKEYUP => Some(KeyAction::Up),
@@ -696,6 +698,12 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
                         return LRESULT(1);
                     }
                 }
+            }
+            // 往游戏聊天里发字的窗口内，挡住玩家的按下（ADR 032 决定 1）：排在 Esc 停止、
+            // 探测、热键之后，它们没吞的事件才轮到这里。只读写原子变量。
+            let ours = injected && kb.dwExtraInfo == crate::inject::KOTONE_INPUT_TAG;
+            if crate::input_gate::GATE.on_key(down, ours, crate::input_gate::hook_now_ms()) {
+                return LRESULT(1);
             }
         }
     }
