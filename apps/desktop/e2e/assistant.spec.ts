@@ -49,7 +49,7 @@ test("呼叫琴音 has one key (default ~) and no input-mode choice; the chat of
   await expect(page.getByText("按住说话")).toHaveCount(0);
   await openSettingsTab(page, "call");
   await expect(page.getByTestId("assistant-interaction")).toHaveCount(0);
-  await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("Backquote");
+  await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("Ctrl+Backquote");
   await expect(page.getByTestId("settings-call")).not.toContainText("陪玩热键");
   await expect(page.getByTestId("settings-call")).toContainText("呼叫键");
   // 聊天里的“去看看”跳到分组：设置 → 她怎么回答 → 游戏语音
@@ -64,7 +64,7 @@ test("assistant preview submits to the assistant instead of offering game send",
     const { appState } = await import("/src/lib/stores/state.ts");
     appState.update((state) => ({ ...state, purpose: "assistant", state: "preview", finalText: "5 分钟后提醒我打野有闪" }));
   });
-  await expect(page.getByText("~ 提交助手 · Esc 重说", { exact: true })).toBeVisible();
+  await expect(page.getByText("Ctrl + ~ 提交助手 · Esc 重说", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "发送", exact: true })).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText("发送");
   await expect(page.getByText(/提交助手/).first()).toBeVisible();
@@ -76,7 +76,7 @@ test("calling 琴音 shows that she listens until you stop talking (no walkie-ta
     const { appState } = await import("/src/lib/stores/state.ts");
     appState.update((state) => ({ ...state, purpose: "assistant", state: "listening", partialText: "" }));
   });
-  await expect(page.getByText("在听 · 说完自动提交（再按 ~ 立刻提交）", { exact: true })).toBeVisible();
+  await expect(page.getByText("在听 · 说完自动提交（再按 Ctrl + ~ 立刻提交）", { exact: true })).toBeVisible();
   await expect(page.getByText(/松开/)).toHaveCount(0);
   await page.evaluate(async () => {
     const { appState } = await import("/src/lib/stores/state.ts");

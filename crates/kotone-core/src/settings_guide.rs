@@ -133,7 +133,7 @@ pub const FIELDS: &[Field] = &[
     f("soundFeedback.send.volume", "发送提示音音量", "设置 → 声音", "0–100。", NONE, NOW),
     f("soundFeedback.send.soundId", "发送提示音", "设置 → 声音", "", RECORD_SOUNDS, NOW),
     // ---- 游戏陪玩（角色 / Agent）：呼叫 = 呼叫键、唤醒词、聊天页的呼叫按钮 ----
-    f("assistant.hotkey", "呼叫键", "设置 → 怎么叫她 → 呼叫键，或提醒助手 → 提醒设置", "新用户的呼叫键，默认 Backquote（~ 键）：在游戏里按一下，她就在气泡里听你说，说完自动交给她。0.1.x 升级用户这里是原来的提醒键，呼叫键另存在 assistant.companionBindings.hotkey；空 = 不用。", NONE, NOW),
+    f("assistant.hotkey", "呼叫键", "设置 → 怎么叫她 → 呼叫键，或提醒助手 → 提醒设置", "新用户的呼叫键，默认 Ctrl+Backquote（Ctrl + ~；单独的 ~ 是英雄联盟的“只攻击英雄”键，别设成它）：在游戏里按一下，她就在气泡里听你说，说完自动交给她。0.1.x 升级用户这里是原来的提醒键，呼叫键另存在 assistant.companionBindings.hotkey；空 = 不用。", NONE, NOW),
     f("assistant.companionBindings.hotkey", "升级用户的呼叫键", "设置 → 怎么叫她 → 呼叫键", "仅 0.1.x 升级用户启用琴音后使用；按一下在气泡里听，说完自动交给她。", NONE, NOW),
     f("assistant.interactionMode", "提醒键的说话方式（0.1.x 提醒助手；呼叫键固定为说完自动提交）", "提醒助手 → 提醒设置", "只影响 0.1.x 升级用户保留的提醒键；呼叫她不看这一项。", &[("push-to-talk", "按住说话，松开提交"), ("dictation", "按一下开始，停顿自动提交"), ("one-shot", "按一下说一句，说完自动提交")], NOW),
     f("assistant.connectionId", "AI 连接", "设置 → 她怎么回答 → AI 连接，或提醒助手 → 提醒设置", "她用哪条连接（连接 ID，用 connections.list 查）。0.1.x 升级用户在此保留原提醒连接，她的连接另存在 assistant.companionBindings.connectionId。", NONE, NOW),
@@ -282,6 +282,10 @@ pub const INTERNAL: &[(&str, &str)] = &[
     (
         "assistant.callHotkeyDefaulted",
         "迁移标记：老配置补过默认呼叫键",
+    ),
+    (
+        "assistant.callHotkeyRevision",
+        "迁移标记：默认呼叫键改成 Ctrl+` 时，老配置里的旧默认跟着改过",
     ),
     (
         "assistant.companion.check",

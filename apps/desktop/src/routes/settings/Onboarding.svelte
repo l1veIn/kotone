@@ -48,8 +48,8 @@
   let saving = $state(false);
   const name = $derived($companionName);
   const dots = $derived<Step[]>(mode === "upgrade" ? ["upgrade", "key", "connected"] : ["welcome", "key", "connected"]);
-  /** 默认呼叫键（新用户本来就是 ~）。 */
-  const RECOMMENDED_CALL_KEY = "Backquote";
+  /** 默认呼叫键（新用户本来就是 Ctrl + ~；单独的 ~ 是英雄联盟的“只攻击英雄”键）。 */
+  const RECOMMENDED_CALL_KEY = "Ctrl+Backquote";
 
   // ---------- 升级欢迎：读他现在的语音输入设置 ----------
   let summary = $state<{ hotkey: string; mode: string; asr: string; asrOnline: boolean; game: string; reminders: boolean } | null>(null);
@@ -264,7 +264,7 @@
               {:else}
                 <span class="text-xs text-muted-foreground" data-testid="onboarding-call-key-value">未设置</span>
                 <button class="rounded-lg border border-primary/50 px-2.5 py-1 text-xs text-primary hover:bg-primary/10" data-testid="onboarding-call-key-recommended"
-                  onclick={() => useKey(RECOMMENDED_CALL_KEY)}>用 ~</button>
+                  onclick={() => useKey(RECOMMENDED_CALL_KEY)}>用 Ctrl + ~</button>
               {/if}
               <button class="rounded-lg border border-hairline px-2.5 py-1 text-xs hover:bg-muted disabled:opacity-50" disabled={capturing}
                 data-testid="onboarding-call-key-record" onclick={() => void recordCallKey()}>{capturing ? "请按键…（Esc 取消）" : "换一个"}</button>

@@ -1277,7 +1277,11 @@ mod tests {
             .find(|(id, _, _)| *id == HK_ASSISTANT);
         assert_eq!(
             call,
-            Some((HK_ASSISTANT, "Backquote".into(), HotkeyMode::Toggle))
+            Some((
+                HK_ASSISTANT,
+                kotone_core::assistant::DEFAULT_CALL_HOTKEY.into(),
+                HotkeyMode::Toggle
+            ))
         );
     }
 }

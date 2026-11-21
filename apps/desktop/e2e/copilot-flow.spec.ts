@@ -31,11 +31,11 @@ test("1 · new user: one DeepSeek key → five things on DeepSeek → call key �
   await page.screenshot({ path: testInfo.outputPath("w2-key.png") });
   await page.getByTestId("onboarding-key-submit").click();
 
-  // 已连接：五项都换成 DeepSeek；新用户的呼叫键默认 ~
+  // 已连接：五项都换成 DeepSeek；新用户的呼叫键默认 Ctrl + ~
   const switched = page.getByTestId("onboarding-switched");
   await expect(switched).toContainText("对话");
   for (const item of ["语音识别", "文字识别", "语音合成", "联网搜索"]) await expect(switched).toContainText(item);
-  await expect(page.getByTestId("onboarding-call-key-value")).toHaveText("~");
+  await expect(page.getByTestId("onboarding-call-key-value")).toHaveText("Ctrl + ~");
   await page.screenshot({ path: testInfo.outputPath("w3-connected.png") });
   const saved = await settingsOf(page);
   expect(saved.activeModelId).toBe("deepseek-asr");
@@ -148,7 +148,7 @@ test("4 · 0.1.x config → add a key → chat; voice input stays on local recog
   await page.getByTestId("onboarding-key-submit").click();
   const switched = page.getByTestId("onboarding-switched");
   await expect(switched).toContainText("保持原来的设置");
-  // 升级用户的呼叫键默认空，推荐 ~
+  // 升级用户的呼叫键默认空，推荐 Ctrl + ~
   await expect(page.getByTestId("onboarding-call-key-value")).toHaveText("未设置");
   await page.getByTestId("onboarding-call-key-recommended").click();
   await page.getByTestId("onboarding-enter-chat").click();
@@ -163,7 +163,7 @@ test("4 · 0.1.x config → add a key → chat; voice input stays on local recog
   // 0.1.x 的提醒键和连接原样保留；呼叫键和新连接写进 companionBindings
   expect(after.assistant.hotkey).toBe(before.assistant.hotkey);
   expect(after.assistant.connectionId).toBe(before.assistant.connectionId);
-  expect(after.assistant.companionBindings?.hotkey).toBe("Backquote");
+  expect(after.assistant.companionBindings?.hotkey).toBe("Ctrl+Backquote");
   expect(after.ocr.activeModelId).toBe("deepseek-ocr");
   // 本地识别的状态和启动按钮还在
   await expect(page.getByTestId("titlebar-asr")).toBeVisible();

@@ -7,9 +7,9 @@ test("the call key uses the same editable, captured and clearable hotkey field a
   const input = page.getByTestId("hotkey-input-assistant");
   const capture = page.getByTestId("hotkey-capture-assistant");
   const status = page.getByTestId("hotkey-status-assistant");
-  // 呼叫琴音默认是 ~ 键
-  await expect(input).toHaveValue("Backquote");
-  await expect(status).toHaveText("当前生效：Backquote");
+  // 呼叫琴音默认是 Ctrl + ~（单独的 ~ 是英雄联盟的“只攻击英雄”键）
+  await expect(input).toHaveValue("Ctrl+Backquote");
+  await expect(status).toHaveText("当前生效：Ctrl+Backquote");
   await input.fill("Alt+F8");
   await input.press("Enter");
   await expect(status).toHaveText("当前生效：Alt+F8");
@@ -44,9 +44,9 @@ test("leaving the call key during capture cannot save a later key or leave captu
   await page.keyboard.press("F10");
   await expect(page.getByTestId("hotkey-input-post-process-toggle")).toHaveValue("F10");
   await openSettingsTab(page, "call");
-  await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("Backquote");
+  await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("Ctrl+Backquote");
   const saved = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
-  expect(saved.assistant.hotkey).toBe("Backquote");
+  expect(saved.assistant.hotkey).toBe("Ctrl+Backquote");
   expect(saved.togglePostProcessingHotkey).toBe("F10");
 });
 
@@ -57,7 +57,7 @@ test("leaving the companion settings cancels an in-progress call key capture", a
   await openChat(page);
   await page.keyboard.press("F9");
   await openSettingsTab(page, "call");
-  await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("Backquote");
+  await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("Ctrl+Backquote");
   await page.getByTestId("hotkey-capture-assistant").click();
   await page.keyboard.press("F10");
   await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("F10");

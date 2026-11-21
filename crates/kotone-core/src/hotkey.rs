@@ -103,7 +103,7 @@ pub const VK_MENU: u32 = 0x12; // Alt
 pub const VK_PAUSE: u32 = 0x13;
 pub const VK_CAPITAL: u32 = 0x14;
 pub const VK_ESCAPE: u32 = 0x1B;
-/// 主键盘左上角的 ` / ~ 键（呼叫琴音的默认键）。
+/// 主键盘左上角的 ` / ~ 键（呼叫琴音的默认键是 Ctrl + 它）。
 pub const VK_OEM_3: u32 = 0xC0;
 pub const VK_SPACE: u32 = 0x20;
 pub const VK_PRIOR: u32 = 0x21; // PageUp

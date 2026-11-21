@@ -60,6 +60,9 @@ pub struct AssistantConfig {
     pub hotkey: String,
     /// 旧试用版用过的呼叫键迁移标记，读取时用于识别已有 0.2 配置。
     pub call_hotkey_defaulted: bool,
+    /// 默认呼叫键改过几次（[`CALL_HOTKEY_REVISION`]）。配置里没有这一项 = 更早的版本：读取时把还是旧默认
+    /// `Backquote` 的呼叫键改成新默认，再记上（之后玩家自己设回 `~` 不会再被改）。
+    pub call_hotkey_revision: u32,
     /// 旧版提醒助手热键的交互方式。启用琴音后，呼叫热键固定为“说完自动提交”。
     pub interaction_mode: AssistantInteractionMode,
     pub connection_id: String,
@@ -342,14 +345,21 @@ pub enum SpeechEngine {
     System,
 }
 
-/// 呼叫琴音的默认键：主键盘左上角的 ` / ~。
-pub const DEFAULT_CALL_HOTKEY: &str = "Backquote";
+/// 呼叫琴音的默认键：Ctrl + 主键盘左上角的 ` / ~。以前是单独的 `（[`OLD_DEFAULT_CALL_HOTKEY`]），
+/// 但它是英雄联盟默认的“只攻击英雄”键，Kotone 按下时吞掉它，游戏就收不到（2026-11-21 玩家反馈）；
+/// 加上 Ctrl 后单按 ` 照样给游戏。
+pub const DEFAULT_CALL_HOTKEY: &str = "Ctrl+Backquote";
+/// 0.2.0-rc.1 及以前的默认呼叫键。
+pub const OLD_DEFAULT_CALL_HOTKEY: &str = "Backquote";
+/// 默认呼叫键的版本：1 = `Ctrl+Backquote`。
+pub const CALL_HOTKEY_REVISION: u32 = 1;
 
 impl Default for AssistantConfig {
     fn default() -> Self {
         Self {
             hotkey: DEFAULT_CALL_HOTKEY.into(),
             call_hotkey_defaulted: true,
+            call_hotkey_revision: CALL_HOTKEY_REVISION,
             interaction_mode: AssistantInteractionMode::PushToTalk,
             connection_id: String::new(),
             companion_bindings: None,

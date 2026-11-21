@@ -404,7 +404,7 @@ test("composer bar: usage inside, permission and call are icons next to send; th
   await expect(page.getByTestId("composer-model")).toHaveCount(0);
   // 呼叫：发送键旁边的一个图标，悬停看快捷键
   const call = composer.getByTestId("call-kotone");
-  await expect(call).toHaveAttribute("title", /呼叫琴音（快捷键 ~）/);
+  await expect(call).toHaveAttribute("title", /呼叫琴音（快捷键 Ctrl \+ ~）/);
   await expect(call.locator("svg")).toHaveCount(1);
   const callBox = (await call.boundingBox())!;
   const sendBox = (await composer.getByTestId("agent-send").boundingBox())!;
@@ -600,7 +600,7 @@ test("online recognition: the call button listens right away and says how else t
   await openChat(page, { empty: true });
   await expect(page.getByTestId("chat-local-asr")).toHaveCount(0);
   await expect(page.getByTestId("titlebar-asr")).toHaveCount(0);
-  await expect(page.getByTestId("chat-call-hint")).toContainText("或在游戏里按 ~");
+  await expect(page.getByTestId("chat-call-hint")).toContainText("或在游戏里按 Ctrl + ~");
   await page.getByTestId("chat-call").click();
   await expect.poll(() => page.evaluate(() => window.agentTest.calls
     .filter((call) => call.command === "start_runtime" || call.command === "assistant_call").map((call) => call.command)))

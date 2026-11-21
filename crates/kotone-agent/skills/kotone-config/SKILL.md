@@ -40,7 +40,7 @@ description: 帮玩家把 Kotone 配置好：语音识别、文字识别、语�
 
 ## 呼叫和唤醒
 
-- 呼叫琴音的热键按一下就在右下角气泡里听。改键前用 `settings.get` 看 `ui.legacyUpgrade`。全新安装用 `assistant.hotkey`（默认 `Backquote`，即 `~` 键），从 0.1.x 升级并启用琴音后用 `assistant.companionBindings.hotkey`。升级用户的 `assistant.hotkey` 是原提醒键。
+- 呼叫琴音的热键按一下就在右下角气泡里听。改键前用 `settings.get` 看 `ui.legacyUpgrade`。全新安装用 `assistant.hotkey`（默认 `Ctrl+Backquote`，即 Ctrl + `~`；单独的 `~` 是英雄联盟的“只攻击英雄”键，别推荐），从 0.1.x 升级并启用琴音后用 `assistant.companionBindings.hotkey`。升级用户的 `assistant.hotkey` 是原提醒键。
 - 唤醒词（“琴音琴音”/“你好琴音”）：先 `wake.model.download`（约 5 MB），再 `settings.update` 把 `assistant.wake.enabled` 设为 `true`。会一直开着麦克风，建议戴耳机。
 - 改完看结果里的 `effects`：需要重启语音识别时问玩家要不要现在 `runtime.start`；需要重启 Kotone 时问要不要 `app.restart`。不要不问就重启。
 

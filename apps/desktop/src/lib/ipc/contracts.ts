@@ -215,6 +215,8 @@ export interface AssistantConfig extends AssistantBindings {
   companionBindings?: AssistantBindings | null;
   /** 老配置补过默认呼叫键的标记（只补一次）。 */
   callHotkeyDefaulted?: boolean;
+  /** 默认呼叫键的版本（1 = Ctrl+Backquote）；迁移标记，界面不用。 */
+  callHotkeyRevision?: number;
   /** 旧的提醒助手热键方式；呼叫琴音固定为说完自动提交，只剩旧的窗口语音按钮在用。 */
   interactionMode: AssistantInteractionMode;
   defaultDelivery: ("voice" | "danmaku")[];

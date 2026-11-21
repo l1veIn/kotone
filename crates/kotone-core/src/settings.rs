@@ -917,6 +917,7 @@ pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
     let mut user = user;
     migrate_legacy_post_processing_json(&mut user);
     migrate_legacy_upgrade_json(&mut user);
+    migrate_call_hotkey_json(&mut user);
     merge_json(&mut merged, &user);
     let mut settings: Settings = match serde_json::from_value(merged) {
         Ok(settings) => settings,
@@ -968,6 +969,44 @@ fn migrate_legacy_upgrade_json(user: &mut serde_json::Value) {
             assistant.entry("hotkey").or_insert_with(|| "".into());
         }
     }
+}
+
+/// 默认呼叫键从 ` 改成 Ctrl+`（[`crate::assistant::CALL_HOTKEY_REVISION`]）：更早的配置里还是旧默认的
+/// 呼叫键跟着改，并记上版本，之后玩家自己设回 ` 不会再被改。0.1.x 升级用户的 `assistant.hotkey`
+/// 是他自己设的提醒键，不动；他们的呼叫键在 `companionBindings.hotkey`。
+fn migrate_call_hotkey_json(user: &mut serde_json::Value) {
+    use crate::assistant::{CALL_HOTKEY_REVISION, DEFAULT_CALL_HOTKEY, OLD_DEFAULT_CALL_HOTKEY};
+    let legacy = user
+        .pointer("/ui/legacyUpgrade")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| matches!(value, "pending" | "dismissed" | "optedIn"));
+    let Some(assistant) = user
+        .get_mut("assistant")
+        .and_then(|assistant| assistant.as_object_mut())
+    else {
+        return;
+    };
+    let revision = assistant
+        .get("callHotkeyRevision")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    if revision >= u64::from(CALL_HOTKEY_REVISION) {
+        return;
+    }
+    let upgrade = |slot: Option<&mut serde_json::Value>| {
+        if let Some(value) = slot.filter(|value| value.as_str() == Some(OLD_DEFAULT_CALL_HOTKEY)) {
+            *value = DEFAULT_CALL_HOTKEY.into();
+        }
+    };
+    if !legacy {
+        upgrade(assistant.get_mut("hotkey"));
+    }
+    upgrade(
+        assistant
+            .get_mut("companionBindings")
+            .and_then(|bindings| bindings.get_mut("hotkey")),
+    );
+    assistant.insert("callHotkeyRevision".into(), CALL_HOTKEY_REVISION.into());
 }
 
 /// 旧配置只有单条 `pipeline`：空流程改种默认屏蔽词；有步骤则收成一条可切换流程。
@@ -1246,6 +1285,48 @@ mod tests {
             crate::assistant::DEFAULT_CALL_HOTKEY
         );
         assert_eq!(opted_in.companion_connection_id(), "game");
+    }
+
+    #[test]
+    fn the_old_default_call_key_moves_to_ctrl_backquote_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // rc1 的默认 `：改成 Ctrl+`（英雄联盟的“只攻击英雄”键不再被吞）。
+        std::fs::write(
+            &path,
+            br#"{"ui":{"firstRunCompleted":true,"legacyUpgrade":"notNeeded"},"assistant":{"hotkey":"Backquote","callHotkeyDefaulted":true}}"#,
+        )
+        .unwrap();
+        let migrated = load_from(&path);
+        assert_eq!(migrated.assistant.hotkey, "Ctrl+Backquote");
+        assert_eq!(
+            migrated.assistant.call_hotkey_revision,
+            crate::assistant::CALL_HOTKEY_REVISION
+        );
+        // 之后玩家自己设回 `：不再改。
+        let mut back = migrated.clone();
+        back.assistant.hotkey = "Backquote".into();
+        save_to(&path, &back).unwrap();
+        assert_eq!(load_from(&path).assistant.hotkey, "Backquote");
+        // 自己设过别的键：不动。
+        std::fs::write(
+            &path,
+            br#"{"assistant":{"hotkey":"F9","callHotkeyDefaulted":true}}"#,
+        )
+        .unwrap();
+        assert_eq!(load_from(&path).assistant.hotkey, "F9");
+        // 0.1.x 升级用户：assistant.hotkey 是原来的提醒键，不动；启用琴音后的呼叫键跟着改。
+        std::fs::write(
+            &path,
+            br#"{"ui":{"legacyUpgrade":"optedIn"},"assistant":{"hotkey":"Backquote","companionBindings":{"hotkey":"Backquote","connectionId":"game"}}}"#,
+        )
+        .unwrap();
+        let upgraded = load_from(&path);
+        assert_eq!(upgraded.assistant.hotkey, "Backquote");
+        assert_eq!(upgraded.call_hotkey(), "Ctrl+Backquote");
+        // 全新安装直接是新默认。
+        let fresh = load_from(&dir.path().join("fresh.json"));
+        assert_eq!(fresh.call_hotkey(), "Ctrl+Backquote");
     }
 
     #[test]
