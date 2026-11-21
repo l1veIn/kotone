@@ -1,9 +1,10 @@
 //! 游戏 profile：CRUD + 前台进程匹配（docs/development.md §5.1、§5.4）
 //! 存储：~/.kotone/profiles/<id>.json
 //!
-//! 内置模板存放在 `resources/profiles/*.json`；首次运行落盘三个 profile：
+//! 内置模板存放在 `resources/profiles/*.json`；首次运行落盘四个 profile：
 //! - `lol`：League of Legends（§5.4 示例值，delay 20/20/100，Unicode 逐字）
 //! - `dota2`：Dota 2（同上默认值；Enter 队伍频道、Shift+Enter 所有人）
+//! - `cs2`：Counter-Strike 2（ADR 032；U 队伍、Y 所有人、Enter 发送，资料值待核对）
 //! - `generic`：通用，匹配任意前台窗口（processNames 为空 = 通配）
 
 use std::path::{Path, PathBuf};
@@ -274,6 +275,18 @@ impl GameProfile {
             .clone()
     }
 
+    /// 内置 CS2 profile（ADR 032 决定 2）。内容由 resources/profiles/cs2.json 维护；键位和延时
+    /// 是资料值（U 队伍、Y 所有人、Enter 发送，20/20/100），要在装了 CS2 的机器上核对。
+    /// 没实测过控制台通道，所以不带 consoleChat。
+    pub fn builtin_cs2() -> Self {
+        static PROFILE: OnceLock<GameProfile> = OnceLock::new();
+        PROFILE
+            .get_or_init(|| {
+                parse_builtin_profile("cs2", include_str!("../resources/profiles/cs2.json"))
+            })
+            .clone()
+    }
+
     /// 内置通用 profile。内容由 resources/profiles/generic.json 维护。
     pub fn builtin_generic() -> Self {
         static PROFILE: OnceLock<GameProfile> = OnceLock::new();
@@ -397,6 +410,24 @@ fn builtin_dota2_is_deleted_in(dir: &Path) -> bool {
     dir.join(DOTA2_DELETION_MARKER).exists()
 }
 
+/// 玩家删过就不再装回的内置 profile（Dota 2、CS2）的删除标记文件名。
+fn deletion_marker(id: &str) -> Option<&'static str> {
+    match id {
+        "dota2" => Some(DOTA2_DELETION_MARKER),
+        "cs2" => Some(".cs2-deleted"),
+        _ => None,
+    }
+}
+
+/// 这个内置 profile 被玩家删过（之后不再装回、不再列出）。
+fn builtin_is_deleted_in(dir: &Path, id: &str) -> bool {
+    deletion_marker(id).is_some_and(|marker| dir.join(marker).exists())
+}
+
+pub fn builtin_cs2_is_deleted() -> bool {
+    builtin_is_deleted_in(&profiles_dir(), "cs2")
+}
+
 pub fn builtin_dota2_is_deleted() -> bool {
     builtin_dota2_is_deleted_in(&profiles_dir())
 }
@@ -473,9 +504,10 @@ pub fn ensure_builtin_in(dir: &Path) -> Result<(), String> {
     for p in [
         GameProfile::builtin_lol(),
         GameProfile::builtin_dota2(),
+        GameProfile::builtin_cs2(),
         GameProfile::builtin_generic(),
     ] {
-        if p.id == "dota2" && builtin_dota2_is_deleted_in(dir) {
+        if builtin_is_deleted_in(dir, &p.id) {
             continue;
         }
         let path = profile_path_in(dir, &p.id);
@@ -559,7 +591,7 @@ pub fn list_in(dir: &Path) -> Vec<GameProfile> {
         }
         if let Ok(raw) = std::fs::read_to_string(&path) {
             if let Ok(p) = serde_json::from_str::<GameProfile>(&raw) {
-                if p.id != "dota2" || !builtin_dota2_is_deleted_in(dir) {
+                if !builtin_is_deleted_in(dir, &p.id) {
                     out.push(p);
                 }
             }
@@ -575,7 +607,7 @@ pub fn get(id: &str) -> Option<GameProfile> {
 }
 
 pub fn get_in(dir: &Path, id: &str) -> Option<GameProfile> {
-    if id == "dota2" && builtin_dota2_is_deleted_in(dir) {
+    if builtin_is_deleted_in(dir, id) {
         return None;
     }
     let path = profile_path_in(dir, id);
@@ -796,8 +828,8 @@ pub fn validate_profile(profile: &GameProfile) -> Result<(), String> {
 }
 
 pub fn save_in(dir: &Path, profile: &GameProfile) -> Result<(), String> {
-    if profile.id == "dota2" && builtin_dota2_is_deleted_in(dir) {
-        return Err("Dota 2 内置配置已删除".into());
+    if builtin_is_deleted_in(dir, &profile.id) {
+        return Err(format!("{} 内置配置已删除", profile.display_name));
     }
     validate_profile(profile)?;
     std::fs::create_dir_all(dir).map_err(|e| format!("创建 profiles 目录失败: {e}"))?;
@@ -1323,17 +1355,17 @@ pub fn delete_profile_in(dir: &Path, id: &str) -> Result<ProfileDeleteOutcome, S
     } else {
         let path = profile_path_in(dir, id);
         if !path.exists() {
-            return if id == "dota2" && builtin_dota2_is_deleted_in(dir) {
+            return if builtin_is_deleted_in(dir, id) {
                 Ok(ProfileDeleteOutcome::Deleted)
             } else {
                 Err(format!("profile 不存在：{id}"))
             };
         }
         let icon = get_in(dir, id).and_then(|p| p.icon);
-        if id == "dota2" {
+        if let Some(marker) = deletion_marker(id) {
             // Publish the deletion before removing the data so a crash cannot resurrect it.
-            std::fs::write(dir.join(DOTA2_DELETION_MARKER), [])
-                .map_err(|e| format!("保存 Dota 2 删除标记失败：{e}"))?;
+            std::fs::write(dir.join(marker), [])
+                .map_err(|e| format!("保存 {id} 删除标记失败：{e}"))?;
         }
         std::fs::remove_file(&path).map_err(|e| format!("删除 profile 失败: {e}"))?;
         if let Some(icon) = icon {
@@ -1374,6 +1406,26 @@ mod dota2_upgrade_tests {
         assert!(list_in(dir).iter().all(|p| p.id != "dota2"));
         assert!(save_in(dir, &GameProfile::builtin_dota2()).is_err());
         assert!(get_in(dir, "lol").is_some());
+    }
+
+    #[test]
+    fn bundled_cs2_is_installed_once_and_stays_deleted() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path();
+        ensure_builtin_in(dir).unwrap();
+        ensure_builtin_in(dir).unwrap();
+        assert_eq!(list_in(dir).iter().filter(|p| p.id == "cs2").count(), 1);
+        assert!(matches!(
+            delete_profile_in(dir, "cs2").unwrap(),
+            ProfileDeleteOutcome::Deleted
+        ));
+        assert!(dir.join(".cs2-deleted").exists());
+        ensure_builtin_in(dir).unwrap();
+        assert!(get_in(dir, "cs2").is_none());
+        assert!(list_in(dir).iter().all(|p| p.id != "cs2"));
+        assert!(save_in(dir, &GameProfile::builtin_cs2()).is_err());
+        // 删 CS2 不影响 Dota 2
+        assert!(get_in(dir, "dota2").is_some());
     }
 }
 
@@ -1512,6 +1564,43 @@ mod tests {
     }
 
     #[test]
+    fn cs2_builtin_values_match_the_adr() {
+        let cs2 = GameProfile::builtin_cs2();
+        validate_profile(&cs2).unwrap();
+        assert_eq!(cs2.process_names, vec!["cs2.exe"]);
+        assert_eq!(
+            (
+                cs2.pre_open_delay_ms,
+                cs2.pre_paste_delay_ms,
+                cs2.pre_send_delay_ms
+            ),
+            (20, 20, 100)
+        );
+        assert_eq!(cs2.send_key, "Enter");
+        let channels = cs2.channels_effective();
+        assert_eq!(channels.len(), 2);
+        assert_eq!(
+            (channels[0].id.as_str(), channels[0].open_chat_key.as_str()),
+            ("team", "U")
+        );
+        assert!(channels[0].is_default);
+        assert_eq!(
+            (channels[1].id.as_str(), channels[1].open_chat_key.as_str()),
+            ("all", "Y")
+        );
+        // 没实测过控制台通道：内置配置不带 consoleChat（ADR 032 决定 3 第 1 条）
+        assert!(cs2.console_chat.is_none());
+        assert!(channels.iter().all(|c| c.console_command.is_empty()));
+        assert!(cs2.hotwords.iter().any(|w| w == "AWP"));
+        assert!(cs2.hotwords.iter().any(|w| w == "回防"));
+        let mut sorted = cs2.hotwords.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), cs2.hotwords.len(), "内置热词不应有重复");
+        assert!(matches_process(&cs2, "CS2.EXE"));
+    }
+
+    #[test]
     fn generic_matches_anything() {
         let generic = GameProfile::builtin_generic();
         assert!(matches_process(&generic, "notepad.exe"));
@@ -1562,11 +1651,11 @@ mod tests {
 
         ensure_builtin_in(&dir).unwrap();
         let mut all = list_in(&dir);
-        assert_eq!(all.len(), 3, "首次运行落盘 lol + dota2 + generic");
+        assert_eq!(all.len(), 4, "首次运行落盘 lol + dota2 + cs2 + generic");
         // 再跑一遍不重复、不覆盖
         ensure_builtin_in(&dir).unwrap();
         all = list_in(&dir);
-        assert_eq!(all.len(), 3);
+        assert_eq!(all.len(), 4);
 
         let mut custom = GameProfile::builtin_lol();
         custom.id = "valorant".into();
@@ -1576,7 +1665,7 @@ mod tests {
 
         let loaded = get_in(&dir, "valorant").unwrap();
         assert_eq!(loaded.display_name, "Valorant");
-        assert_eq!(list_in(&dir).len(), 4);
+        assert_eq!(list_in(&dir).len(), 5);
     }
 
     #[test]

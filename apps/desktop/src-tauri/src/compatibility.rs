@@ -35,9 +35,12 @@ fn resolve_active_game_pid(state: &SharedState) -> Option<u32> {
     for builtin in [
         GameProfile::builtin_lol(),
         GameProfile::builtin_dota2(),
+        GameProfile::builtin_cs2(),
         GameProfile::builtin_generic(),
     ] {
-        if builtin.id == "dota2" && profile::builtin_dota2_is_deleted() {
+        if (builtin.id == "dota2" && profile::builtin_dota2_is_deleted())
+            || (builtin.id == "cs2" && profile::builtin_cs2_is_deleted())
+        {
             continue;
         }
         if !available.iter().any(|candidate| candidate.id == builtin.id) {

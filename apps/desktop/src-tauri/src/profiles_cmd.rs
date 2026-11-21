@@ -8,7 +8,7 @@ pub(crate) fn list_profiles() -> Vec<GameProfile> {
     profile::list()
 }
 
-/// 保存 profile。内置 profile（lol / dota2 / generic）会同步推导 removedBuiltinHotwords：
+/// 保存 profile。内置 profile（lol / dota2 / cs2 / generic）会同步推导 removedBuiltinHotwords：
 /// 内置热词全量列表 − 传入热词列表 = 用户主动删除的内置热词（供后续合并逻辑排除）。
 /// 非内置 id 不触碰该字段。
 #[tauri::command]
@@ -16,6 +16,7 @@ pub(crate) fn save_profile(mut profile: GameProfile) -> Result<(), String> {
     let builtin = match profile.id.as_str() {
         "lol" => Some(GameProfile::builtin_lol()),
         "dota2" => Some(GameProfile::builtin_dota2()),
+        "cs2" => Some(GameProfile::builtin_cs2()),
         "generic" => Some(GameProfile::builtin_generic()),
         _ => None,
     };
