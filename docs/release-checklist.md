@@ -43,7 +43,9 @@
    版本号（package.json / tauri.conf.json / Cargo.toml / Cargo.lock），将 `Unreleased` 归档到
    带日期的版本小节，并保留新的空 `Unreleased`。若此前没有 `Unreleased`，脚本会插入待补充小节；
    发布前须补齐摘要，不能保留空说明或占位文字。
-2. 本机执行全部自动门禁并构建 NSIS 安装包。
+2. 本机执行全部自动门禁并构建 NSIS 安装包。用**正式版**程序跑一遍内置浏览器的真机脚本：
+   `KOTONE_EXE=target/release/kotone.exe python -X utf8 scripts/manual-e2e/browser_real.py`，以及调试版的
+   `browser_probe_real.py --minimized`（主窗口最小化时建浏览器；rc1 就是在这个状态下没建起来）。
 3. 在干净 Windows 用户环境完成安装/首次向导/卸载冒烟测试。
 
 ### 0.1.x 维护版

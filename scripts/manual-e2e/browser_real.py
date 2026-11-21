@@ -33,7 +33,8 @@ from voice_turn_real import GAMES, foreground_process  # noqa: E402
 REPO = os.path.dirname(os.path.dirname(HERE))
 WORK = os.path.join(REPO, "target", "browser-real")
 HOME = os.path.join(WORK, "home")
-EXE = os.path.join(REPO, "target", "debug", "kotone.exe")
+# KOTONE_EXE 可以换成正式版（target/release/kotone.exe）：浏览器视图在正式版和调试版里的行为不一样过。
+EXE = os.environ.get("KOTONE_EXE") or os.path.join(REPO, "target", "debug", "kotone.exe")
 PORT = 9337
 ENV = dict(os.environ, KOTONE_HOME=HOME, WEBVIEW2_USER_DATA_FOLDER=os.path.join(WORK, "webview"),
            WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=f"--remote-debugging-port={PORT}", KOTONE_BROWSER_MUTE="1",

@@ -103,6 +103,13 @@ def main():
     app = subprocess.Popen([EXE, "--background"], env=ENV)
     try:
         wait_ui()
+        if "--minimized" in sys.argv:
+            # rc1 试玩：主窗口最小化时第一次建浏览器报 0x80070057（wry 对要焦点的视图调 MoveFocus 失败），
+            # 之后每一步都超时。先显示再最小化主窗口，再开始测（窗口会闪一下）。
+            invoke("plugin:window|show", {"label": "main"})
+            time.sleep(1.5)
+            invoke("plugin:window|minimize", {"label": "main"})
+            time.sleep(1.5)
         r, s = probe("open", "https://example.com")
         check("P1: example.com opens", "ok" in r and not (r.get("ok") or {}).get("warning"),
               f"{s:.1f} s {json.dumps(r, ensure_ascii=False)[:200]}")

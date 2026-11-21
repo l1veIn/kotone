@@ -47,6 +47,8 @@ pub struct BrowserState {
     pub handover: Option<Handover>,
     pub media: Option<Media>,
     pub busy: bool,
+    /// 浏览器没能打开时给玩家看的原因（右侧栏网页卡片上显示）。
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -208,6 +210,10 @@ pub(crate) async fn ensure(app: &AppHandle) -> Result<Webview, String> {
     )
     .data_directory(dir)
     .additional_browser_args(BROWSER_ARGS)
+    // 不抢焦点：wry 建好后对要焦点的视图调 MoveFocus，失败就把整个创建判为失败；主窗口最小化时
+    // MoveFocus 报 0x80070057，浏览器就建不出来（rc1 玩家试玩时复现，见 ADR 031）。浏览器本来也
+    // 不该抢焦点（玩家可能在游戏里）。
+    .focused(false)
     .initialization_script_for_all_frames(kotone_agent::browser::GUEST_INIT_SCRIPT)
     .on_navigation(allowed_navigation)
     // 下载一律拒绝（DSH 访客策略）。
@@ -269,9 +275,36 @@ pub(crate) async fn ensure(app: &AppHandle) -> Result<Webview, String> {
         let mut inner = rt.inner.lock().unwrap();
         inner.webview = Some(webview.clone());
     }
-    update(app, |s| s.open = true);
+    // add_child 只是把“创建”交给主线程就返回，真正建失败只写进日志（tauri-runtime-wry）。
+    // 用一次调试协议调用确认它真的建好了；建不出来就清掉、如实告诉玩家和后台任务。
+    let ready = tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        cdp::call(&webview, "DOM.enable", serde_json::json!({})),
+    )
+    .await;
+    if !matches!(ready, Ok(Ok(_))) {
+        let reason = match ready {
+            Ok(Err(e)) => e,
+            _ => "8 秒没有回应".to_string(),
+        };
+        log::log(&format!("browser: 浏览器视图没有建起来：{reason}"));
+        rt.inner.lock().unwrap().webview = None;
+        let _ = webview.close();
+        let message = format!(
+            "浏览器没能打开（{reason}）。这是 Kotone 的问题，不是网站的问题：不要换网站重试，直接告诉玩家，\
+             建议重启 Kotone 后再试，或者把日志发给开发者。"
+        );
+        update(app, |s| {
+            s.open = false;
+            s.error = Some("浏览器没能打开，重启 Kotone 后再试".into());
+        });
+        return Err(message);
+    }
+    update(app, |s| {
+        s.open = true;
+        s.error = None;
+    });
     log::log("browser: 浏览器视图已创建");
-    let _ = cdp::call(&webview, "DOM.enable", serde_json::json!({})).await;
     start_polling(app);
     Ok(webview)
 }
@@ -518,7 +551,15 @@ pub async fn control(app: &AppHandle, action: &str) -> Result<Value, String> {
     match action {
         "play" | "pause" | "next" => music(app, action).await,
         "reload" => {
-            let webview = current(app).ok_or("浏览器还没打开")?;
+            // 上次没建起来（卡片上显示了原因）时，“重试”就是重新建一次。
+            let webview = match current(app) {
+                Some(webview) => webview,
+                None if state(app).error.is_some() => {
+                    ensure(app).await?;
+                    return Ok(serde_json::json!({"ok": true}));
+                }
+                None => return Err("浏览器还没打开".into()),
+            };
             webview.reload().map_err(|e| e.to_string())?;
             Ok(serde_json::json!({"ok": true}))
         }
