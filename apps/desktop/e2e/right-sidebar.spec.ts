@@ -1,8 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 import { openSettingsTab } from "./nav";
 
-// 聊天页右侧栏（ADR 031，照 DeepSeek Harness 桌面版）：网页卡片 + 后台在做的事；网页展开时把占位区域的位置报给后端
-// （网页由后端摆在窗口里）；要玩家登录时自动展开并出横幅；窄窗口默认收起、盖在聊天上。
+// 聊天页右侧栏（ADR 031，照 DeepSeek Harness 桌面版与 Codex 内置浏览器）：标签“卡片”（网页卡片 + 后台在做的事，
+// 按宽度 1–3 列）/“网页”（标签页、地址栏、网页）；左边缘拖动调宽、双击恢复；网页可全屏；网页的位置报给后端
+// （网页由后端摆在窗口里）；要玩家登录时切到网页并出横幅；窄窗口默认收起、盖在聊天上。
 // 用 @tauri-apps/api/mocks 模拟 browser_* / agent_* 命令与 kotone://browser、kotone://agent-event，不接任何 AI。
 
 interface Call { command: string; args?: Record<string, unknown> }
@@ -22,9 +23,18 @@ declare global {
 
 const T = 1_800_000_000_000;
 const SHOTS = process.env.KOTONE_SIDEBAR_SHOTS;
+const MUSIC_TAB = {
+  id: "t-music", url: "https://music.163.com/#/song?id=186016", title: "晴天 - 周杰伦 - 单曲 - 网易云音乐", site: "music.163.com",
+  loading: false, canGoBack: true, canGoForward: false, audible: true, agent: true, fullscreenElement: false,
+};
+const GUIDE_TAB = {
+  id: "t-guide", url: "https://www.bilibili.com/video/BV1xx411c7mD", title: "海克斯大乱斗剑姬出装 - 哔哩哔哩", site: "www.bilibili.com",
+  loading: false, canGoBack: false, canGoForward: false, audible: false, agent: false, fullscreenElement: false,
+};
 const PLAYING = {
-  open: true, url: "https://music.163.com/#/song?id=186016", title: "晴天 - 周杰伦 - 单曲 - 网易云音乐", site: "music.163.com",
+  open: true, url: MUSIC_TAB.url, title: MUSIC_TAB.title, site: MUSIC_TAB.site,
   loading: false, handover: null, busy: false, media: { playing: true, title: "晴天", artist: "周杰伦" },
+  tabs: [MUSIC_TAB], activeTab: MUSIC_TAB.id, notice: null,
 };
 
 async function openChat(page: Page, options: { empty?: boolean } = {}) {
@@ -48,7 +58,8 @@ async function openChat(page: Page, options: { empty?: boolean } = {}) {
       current: empty ? null : "c-main", running: null as string | null, notReadyReason: null,
       conversations: empty ? [] : [{ id: "c-main", title: main.title, createdAtMs: main.createdAtMs, updatedAtMs: main.updatedAtMs, messageCount: 2 }],
     };
-    let browserState: Record<string, unknown> = { open: false, url: null, title: null, site: null, loading: false, handover: null, media: null, busy: false };
+    let browserState: Record<string, unknown> = { open: false, url: null, title: null, site: null, loading: false, handover: null, media: null, busy: false, tabs: [], activeTab: null };
+    const extensions: { id: string; name: string; enabled: boolean; path: string }[] = [];
     const runtime = { phase: "running", restartNeeded: false, engineId: "fixture", engineName: "测试引擎", modelId: "fixture", interactionMode: "dictation", stage: null, asrLocal: false, error: null };
     const bridge = {
       calls: [] as Call[],
@@ -74,12 +85,23 @@ async function openChat(page: Page, options: { empty?: boolean } = {}) {
       switch (command) {
         case "browser_state": return structuredClone(browserState);
         case "browser_set_bounds": case "browser_control": case "browser_handover_done": case "browser_clear_data": return null;
+        case "browser_navigate": case "browser_tab_new": case "browser_tab_close": case "browser_tab_select": return null;
+        case "browser_extensions": return structuredClone(extensions);
+        case "browser_extension_add": {
+          const path = String(a.path);
+          extensions.push({ id: `ext-${extensions.length + 1}`, name: path.split(/[\\/]/).pop() ?? path, enabled: true, path });
+          return null;
+        }
+        case "browser_extension_toggle": { const e = extensions.find((x) => x.id === a.id); if (e) e.enabled = !!a.enabled; return null; }
+        case "browser_extension_remove": extensions.splice(extensions.findIndex((x) => x.id === a.id), 1); return null;
+        case "plugin:dialog|open": return "D:\\extensions\\ublock-origin";
         case "agent_state": return structuredClone({ ...state, permissions: { mode: "default", rules: {} } });
         case "agent_conversation": return a.id === "c-main" ? structuredClone(main) : null;
         case "agent_send": return { status: "started", conversationId: "c-main" };
         case "agent_subagent_messages": return { messages: structuredClone(bridge.process) };
         case "agent_subagent_stop": case "agent_subagent_continue": case "agent_subagent_answer": return null;
         case "usage_conversation": return null;
+        case "automation_runs": return { running: 0, pending: 0, maxRunning: 2, runs: [] };
         case "get_runtime_status": return structuredClone(runtime);
         case "list_connections": return [{ id: "test-ai", displayName: "测试连接", provider: "test", kind: "remote", baseUrl: "https://example.invalid", model: "test", hasApiKey: true }];
         case "list_connection_presets": return [];
@@ -163,15 +185,17 @@ test("the sidebar opens and closes and remembers it; task and browser cards foll
   }
 });
 
-test("the expanded browser reports where the page goes; collapsing, dialogs and leaving the chat hide it", async ({ page }, testInfo) => {
+test("the web tab reports where the page goes; the cards tab, dialogs and leaving the chat hide it", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 860 });
   await openChat(page);
   await page.evaluate((s) => window.sidebarTest.browser(s), PLAYING);
+  // 网页卡片上的“展开” = 切到“网页”标签
   await page.getByTestId("sidebar-browser-expand").click();
   const panel = page.getByTestId("browser-panel");
   await expect(panel).toBeVisible();
-  await expect(page.getByTestId("right-sidebar")).toHaveAttribute("data-expanded", "true");
-  await expect(panel.getByTestId("browser-panel-site")).toHaveText("网易云音乐");
+  await expect(page.getByTestId("right-sidebar")).toHaveAttribute("data-tab", "web");
+  await expect(page.getByTestId("sidebar-tab-web")).toHaveAttribute("aria-selected", "true");
+  await expect(panel.getByTestId("browser-address")).toHaveValue(MUSIC_TAB.url);
 
   // 报的是占位区域在窗口里的位置，可见
   const slot = page.getByTestId("browser-panel-slot");
@@ -218,14 +242,16 @@ test("the expanded browser reports where the page goes; collapsing, dialogs and 
   await page.evaluate(() => document.getElementById("fake-dialog")?.remove());
   await expect.poll(async () => (await lastBounds(page))?.visible).toBe(true);
 
-  // 收起网页：不可见；再展开又可见
+  // 回到卡片：不可见；再切到网页又可见
   await panel.getByTestId("browser-panel-collapse").click();
   await expect(panel).toHaveCount(0);
+  await expect(page.getByTestId("right-sidebar")).toHaveAttribute("data-tab", "cards");
   await expect.poll(async () => (await lastBounds(page))?.visible).toBe(false);
-  await page.getByTestId("sidebar-browser-expand").click();
+  await page.getByTestId("sidebar-tab-web").click();
   await expect.poll(async () => (await lastBounds(page))?.visible).toBe(true);
 
-  // 顶部一条：后退、刷新
+  // 地址栏：后退（能后退）、前进（不能前进时不可点）、刷新
+  await expect(page.getByTestId("browser-panel-forward")).toBeDisabled();
   await page.getByTestId("browser-panel-back").click();
   await page.getByTestId("browser-panel-reload").click();
   expect((await calls(page, "browser_control")).map((c) => c?.action)).toEqual(["back", "reload"]);
@@ -265,26 +291,12 @@ test("a task in the sidebar opens in place to show its result and steps; a small
   await expect(body.getByTestId("task-card-summary-full")).toHaveText("放上了《雨爱》- 杨丞琳。");
   await page.screenshot({ path: SHOTS ? `${SHOTS}/right-sidebar-task-open.png` : testInfo.outputPath("right-sidebar-task-open.png"), animations: "disabled" });
   await expect(task.getByTestId("sidebar-task-reveal")).toHaveAttribute("title", "在聊天里看");
-  // 网页展开时任务区在网页下面：展开一件事后网页区变矮，重新报位置，不盖住过程
-  await page.evaluate((s) => window.sidebarTest.browser(s), PLAYING);
-  await page.getByTestId("right-sidebar").getByTestId("sidebar-browser-expand").click();
-  await expect.poll(async () => (await lastBounds(page))?.visible).toBe(true);
-  const panelTask = page.getByTestId("browser-panel").locator('[data-testid="sidebar-task"][data-task-name="song"]');
-  // 展开着的那件事在网页展开后也还展开着；先收起，量网页区的高度
-  await expect(panelTask.getByTestId("sidebar-task-toggle")).toHaveAttribute("aria-expanded", "true");
-  await expect(panelTask.getByTestId("sidebar-task-body")).toBeVisible();
-  await page.waitForTimeout(300);
-  const openHeight = (await lastBounds(page))!.height;
-  await panelTask.getByTestId("sidebar-task-toggle").click();
-  await expect(panelTask.getByTestId("sidebar-task-body")).toHaveCount(0);
-  await expect.poll(async () => (await lastBounds(page))!.height).toBeGreaterThan(openHeight);
-  const closedHeight = (await lastBounds(page))!.height;
-  await panelTask.getByTestId("sidebar-task-toggle").click();
-  await expect(panelTask.getByTestId("sidebar-task-body")).toBeVisible();
-  await expect.poll(async () => (await lastBounds(page))!.height).toBeLessThan(closedHeight);
-  const bounds = (await lastBounds(page))!;
-  const taskTop = (await panelTask.getByTestId("sidebar-task-body").boundingBox())!.y;
-  expect(bounds.y + bounds.height).toBeLessThanOrEqual(Math.ceil(taskTop));
+  // 点开的任务在卡片网格里占满一行；收起后回到一格
+  await expect(task).toHaveAttribute("data-open", "true");
+  const cardsBox = (await page.getByTestId("sidebar-cards").boundingBox())!;
+  expect((await task.boundingBox())!.width).toBeGreaterThan(cardsBox.width - 2);
+  await toggle.click();
+  await expect(task).toHaveAttribute("data-open", "false");
 });
 
 test("a browser that could not open says why and offers a retry", async ({ page }, testInfo) => {
@@ -358,6 +370,208 @@ test("narrow window: the sidebar starts closed, opens over the chat and never sc
   // 起手提示“来首歌”只放进输入框，让玩家接着写歌名
   await page.getByTestId("agent-starter").filter({ hasText: "来首歌" }).click();
   await expect(page.getByTestId("assistant-request")).toHaveValue("来首歌：");
+});
+
+test("drag the divider to resize the sidebar (remembered), double-click to reset; cards flow into 1–3 columns", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1700, height: 900 });
+  await openChat(page);
+  const sidebar = page.getByTestId("right-sidebar");
+  const cards = page.getByTestId("sidebar-cards");
+  await expect(sidebar).toHaveAttribute("data-width", "420");
+  await expect(cards).toHaveAttribute("data-columns", "1");
+  for (const name of ["a", "b", "c", "d"]) {
+    await page.evaluate((name) => window.sidebarTest.subagent({ name, label: `后台的事 ${name}`, status: "done", summary: "做完了。" }), name);
+  }
+  await page.evaluate((s) => window.sidebarTest.browser(s), PLAYING);
+
+  const drag = async (dx: number) => {
+    const handle = (await page.getByTestId("right-sidebar-resize").boundingBox())!;
+    const x = handle.x + handle.width / 2;
+    const y = handle.y + handle.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + dx / 2, y, { steps: 4 });
+    await page.mouse.move(x + dx, y, { steps: 4 });
+    await page.mouse.up();
+  };
+  // 往左拖变宽：两列
+  await drag(-240);
+  await expect.poll(async () => Number(await sidebar.getAttribute("data-width"))).toBeGreaterThan(640);
+  await expect(cards).toHaveAttribute("data-columns", "2");
+  // 再宽：三列
+  await drag(-260);
+  await expect(cards).toHaveAttribute("data-columns", "3");
+  const wide = Number(await sidebar.getAttribute("data-width"));
+  expect(Number(await page.evaluate(() => localStorage.getItem("kotone.chat.rightSidebarWidth")))).toBe(wide);
+  for (const theme of ["light", "dark"] as const) {
+    await page.evaluate((theme) => document.documentElement.setAttribute("data-theme", theme), theme);
+    await page.screenshot({ path: SHOTS ? `${SHOTS}/right-sidebar-cards-wide-${theme}.png` : testInfo.outputPath(`right-sidebar-cards-wide-${theme}.png`), animations: "disabled" });
+  }
+  // 聊天区至少留 400：拖不过头
+  await drag(-2000);
+  const chatBox = (await page.getByTestId("chat-column").boundingBox())!;
+  expect(chatBox.width).toBeGreaterThanOrEqual(399);
+  // 记住：重新打开还是这个宽度
+  const kept = Number(await sidebar.getAttribute("data-width"));
+  await page.goto("about:blank");
+  await openChat(page);
+  await expect(page.getByTestId("right-sidebar")).toHaveAttribute("data-width", String(kept));
+  // 双击恢复默认
+  await page.getByTestId("right-sidebar-resize").dblclick();
+  await expect(page.getByTestId("right-sidebar")).toHaveAttribute("data-width", "420");
+  expect(await page.evaluate(() => localStorage.getItem("kotone.chat.rightSidebarWidth"))).toBe("420");
+  // 键盘：分隔线获得焦点后左右键调宽
+  await page.getByTestId("right-sidebar-resize").focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(page.getByTestId("right-sidebar")).toHaveAttribute("data-width", "436");
+
+  // 网页标签里拖动时网页跟着报位置
+  await page.evaluate((s) => window.sidebarTest.browser(s), PLAYING);
+  await page.getByTestId("sidebar-tab-web").click();
+  await expect.poll(async () => (await lastBounds(page))?.visible).toBe(true);
+  await drag(-120);
+  await expect.poll(async () => {
+    const b = await lastBounds(page);
+    const real = await page.getByTestId("browser-panel-slot").evaluate((el) => el.getBoundingClientRect().toJSON());
+    return b && b.visible && Math.abs(b.x - Math.round(real.x)) <= 1 && Math.abs(b.width - Math.round(real.width)) <= 1;
+  }).toBe(true);
+});
+
+test("tabs: the choice is remembered; a handover switches to the web tab", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 860 });
+  await openChat(page);
+  // 没打开网页时“网页”也能点：有地址栏，可以自己输入
+  await page.getByTestId("sidebar-tab-web").click();
+  await expect(page.getByTestId("browser-panel-empty")).toBeVisible();
+  await expect(page.getByTestId("browser-address")).toHaveValue("");
+  expect(await page.evaluate(() => localStorage.getItem("kotone.chat.rightSidebarTab"))).toBe("web");
+  await page.getByTestId("sidebar-tab-cards").click();
+  expect(await page.evaluate(() => localStorage.getItem("kotone.chat.rightSidebarTab"))).toBe("cards");
+  // 卡片标签上显示在跑的任务数
+  await page.evaluate(() => window.sidebarTest.subagent({ name: "x", label: "查版本", status: "running", steps: 1 }));
+  await expect(page.getByTestId("sidebar-tab-cards-count")).toHaveText("1");
+  // 要登录：切到网页
+  await page.evaluate((s) => window.sidebarTest.browser({ ...s, handover: { reason: "网易云要登录一下" } }), PLAYING);
+  await expect(page.getByTestId("right-sidebar")).toHaveAttribute("data-tab", "web");
+  await expect(page.getByTestId("browser-handover")).toBeVisible();
+  // 记住：重新打开还在网页标签
+  await page.goto("about:blank");
+  await openChat(page);
+  await expect(page.getByTestId("right-sidebar")).toHaveAttribute("data-tab", "web");
+});
+
+test("browser tabs and address bar: select, close, new tab, navigate, stop; dismissible notice", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 860 });
+  await openChat(page);
+  await page.evaluate(({ s, guide }) => window.sidebarTest.browser({ ...s, tabs: [...s.tabs, guide] }), { s: PLAYING, guide: GUIDE_TAB });
+  await page.getByTestId("sidebar-tab-web").click();
+  const tabs = page.getByTestId("browser-tab");
+  await expect(tabs).toHaveCount(2);
+  await expect(page.getByTestId("sidebar-tab-web-count")).toHaveText("2");
+  const music = page.locator('[data-testid="browser-tab"][data-tab-id="t-music"]');
+  const guide = page.locator('[data-testid="browser-tab"][data-tab-id="t-guide"]');
+  await expect(music).toHaveAttribute("data-active", "true");
+  await expect(music.getByTestId("browser-tab-title")).toHaveText(MUSIC_TAB.title);
+  await expect(music.getByTestId("browser-tab-agent")).toHaveText("她在用");
+  await expect(music.getByTestId("browser-tab-audible")).toBeVisible();
+  await expect(guide.getByTestId("browser-tab-agent")).toHaveCount(0);
+  for (const theme of ["light", "dark"] as const) {
+    await page.evaluate((theme) => document.documentElement.setAttribute("data-theme", theme), theme);
+    await page.screenshot({ path: SHOTS ? `${SHOTS}/right-sidebar-web-${theme}.png` : testInfo.outputPath(`right-sidebar-web-${theme}.png`), animations: "disabled" });
+  }
+
+  // 选另一个标签页、关掉它、新开一个
+  await guide.getByTestId("browser-tab-select").click();
+  await guide.hover();
+  await guide.getByTestId("browser-tab-close").click();
+  await page.getByTestId("browser-tab-new").click();
+  expect(await calls(page, "browser_tab_select")).toEqual([{ id: "t-guide" }]);
+  expect(await calls(page, "browser_tab_close")).toEqual([{ id: "t-guide" }]);
+  expect(await calls(page, "browser_tab_new")).toEqual([{}]);
+  // 新开标签页后地址栏获得焦点，直接输入：网址或搜索词都交给后端
+  const address = page.getByTestId("browser-address");
+  await expect(address).toBeFocused();
+  await address.fill("晴天 周杰伦");
+  await address.press("Enter");
+  expect(await calls(page, "browser_navigate")).toEqual([{ url: "晴天 周杰伦" }]);
+  // Esc：放弃输入，回到当前网址
+  await address.click();
+  await address.fill("bilibili.com");
+  await address.press("Escape");
+  await expect(address).toHaveValue(MUSIC_TAB.url);
+  expect((await calls(page, "browser_navigate")).length).toBe(1);
+
+  // 加载中：刷新变成停止；能前进时前进可点
+  await page.evaluate(({ s, tab }) => window.sidebarTest.browser({ ...s, loading: true, tabs: [{ ...tab, loading: true, canGoForward: true }] }), { s: PLAYING, tab: MUSIC_TAB });
+  await page.getByTestId("browser-panel-stop").click();
+  await page.getByTestId("browser-panel-forward").click();
+  expect((await calls(page, "browser_control")).map((c) => c?.action)).toEqual(["stop", "forward"]);
+
+  // 提示（例如下载被拒绝）：可以关掉；新的提示再出现
+  await page.evaluate((s) => window.sidebarTest.browser({ ...s, notice: "这个网页想下载文件，Kotone 暂时不支持下载。" }), PLAYING);
+  await expect(page.getByTestId("browser-notice-text")).toHaveText("这个网页想下载文件，Kotone 暂时不支持下载。");
+  await page.getByTestId("browser-notice-dismiss").click();
+  await expect(page.getByTestId("browser-notice")).toHaveCount(0);
+  await page.evaluate((s) => window.sidebarTest.browser({ ...s, notice: "又一个下载被拒绝了。" }), PLAYING);
+  await expect(page.getByTestId("browser-notice-text")).toHaveText("又一个下载被拒绝了。");
+});
+
+test("fullscreen fills the window (button, Esc) and follows the page's own fullscreen", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 860 });
+  await openChat(page);
+  await page.evaluate((s) => window.sidebarTest.browser(s), PLAYING);
+  await page.getByTestId("sidebar-tab-web").click();
+  await expect.poll(async () => (await lastBounds(page))?.visible).toBe(true);
+  const sidebarSlot = (await lastBounds(page))!;
+
+  await page.getByTestId("browser-panel-fullscreen").click();
+  const full = page.getByTestId("browser-fullscreen");
+  await expect(full).toBeVisible();
+  // 报的是铺满窗口的区域（顶上只留一条窄栏）
+  await expect.poll(async () => (await lastBounds(page))?.x).toBe(0);
+  const fb = (await lastBounds(page))!;
+  expect(fb.visible).toBe(true);
+  expect(fb.width).toBeGreaterThanOrEqual(1439);
+  expect(fb.y).toBeLessThan(50);
+  expect(fb.y + fb.height).toBeGreaterThanOrEqual(859);
+  await expect(full.getByTestId("browser-fullscreen-site")).toHaveText("网易云音乐");
+  await page.screenshot({ path: SHOTS ? `${SHOTS}/right-sidebar-fullscreen.png` : testInfo.outputPath("right-sidebar-fullscreen.png"), animations: "disabled" });
+  // Esc 退出，回到侧栏里的位置
+  await page.keyboard.press("Escape");
+  await expect(full).toHaveCount(0);
+  await expect.poll(async () => (await lastBounds(page))?.x).toBe(sidebarSlot.x);
+
+  // 页面自己要全屏（视频的全屏按钮）：自动进入；页面退出全屏时跟着退出
+  await page.evaluate(({ s, tab }) => window.sidebarTest.browser({ ...s, tabs: [{ ...tab, fullscreenElement: true }] }), { s: PLAYING, tab: MUSIC_TAB });
+  await expect(full).toBeVisible();
+  await page.evaluate(({ s, tab }) => window.sidebarTest.browser({ ...s, tabs: [{ ...tab, fullscreenElement: false }] }), { s: PLAYING, tab: MUSIC_TAB });
+  await expect(full).toHaveCount(0);
+  // 按钮退出
+  await page.getByTestId("browser-panel-fullscreen").click();
+  await page.getByTestId("browser-fullscreen-exit").click();
+  await expect(full).toHaveCount(0);
+});
+
+test("settings: browser extensions — add an unpacked folder, turn it off, remove it", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 860 });
+  await openChat(page);
+  await openSettingsTab(page, "permissions");
+  const section = page.getByTestId("browser-extensions-settings");
+  await expect(section).toContainText("只支持已解压的插件文件夹（Chrome / Edge 插件格式）");
+  await expect(section.getByTestId("browser-extensions-empty")).toBeVisible();
+  // 选文件夹（对话框）→ 加进去
+  await section.getByTestId("browser-extension-add").click();
+  await expect.poll(() => calls(page, "browser_extension_add")).toEqual([{ path: "D:\\extensions\\ublock-origin" }]);
+  const ext = section.getByTestId("browser-extension");
+  await expect(ext.getByTestId("browser-extension-name")).toHaveText("ublock-origin");
+  const toggle = ext.getByTestId("browser-extension-toggle");
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await toggle.click();
+  await expect.poll(() => calls(page, "browser_extension_toggle")).toEqual([{ id: "ext-1", enabled: false }]);
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await ext.getByTestId("browser-extension-remove").click();
+  await expect.poll(() => calls(page, "browser_extension_remove")).toEqual([{ id: "ext-1" }]);
+  await expect(section.getByTestId("browser-extensions-empty")).toBeVisible();
 });
 
 test("settings: clearing the browser login asks first", async ({ page }) => {

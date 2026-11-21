@@ -41,7 +41,7 @@ import type {
   OverlayStateSnapshot,
 } from "./contracts";
 import { companionBindings, defaultPostProcessing, hasLegacyReminders, modelsDirPathError, usesLegacyVoiceInput } from "./contracts";
-import type { BrowserAction, BrowserBounds, BrowserState } from "../browser";
+import type { BrowserAction, BrowserBounds, BrowserExtension, BrowserState, BrowserTab } from "../browser";
 
 // ================================================================
 // 浏览器 mock：内存态，模拟后端行为（仅 dev:web 使用）
@@ -1416,6 +1416,7 @@ export async function readHistoryAudio(fileName: string): Promise<Uint8Array> {
 
 const closedBrowser = (): BrowserState => ({
   open: false, url: null, title: null, site: null, loading: false, handover: null, media: null, busy: false, error: null,
+  tabs: [], activeTab: null, notice: null,
 });
 const previewSongs = [
   { title: "晴天", artist: "周杰伦" },
@@ -1425,15 +1426,43 @@ const previewSongs = [
 const browserPreview = {
   state: closedBrowser(),
   song: 0,
+  nextTab: 1,
   bounds: null as BrowserBounds | null,
   listeners: new Set<(state: BrowserState) => void>(),
+  extensions: [] as BrowserExtension[],
 };
 
+function hostOf(url: string): string | null {
+  try { return new URL(url).host || null; } catch { return null; }
+}
+
+/** 预览里的“网页”：按网址给一个标题。 */
+function previewTab(url: string | null, extra: Partial<BrowserTab> = {}): BrowserTab {
+  const site = url ? hostOf(url) : null;
+  return {
+    id: `tab-${browserPreview.nextTab++}`, url, title: site ? `${site} 的页面` : null, site, loading: false,
+    canGoBack: false, canGoForward: false, audible: false, agent: false, fullscreenElement: false, ...extra,
+  };
+}
+
+/** 旧字段（url / title / site / loading）跟着当前标签页。 */
+function syncActive(): void {
+  const state = browserPreview.state;
+  const tab = state.tabs.find((t) => t.id === state.activeTab) ?? null;
+  state.open = state.tabs.length > 0;
+  state.url = tab?.url ?? null;
+  state.title = tab?.title ?? null;
+  state.site = tab?.site ?? null;
+  state.loading = tab?.loading ?? false;
+}
+
 function emitBrowser(): void {
+  syncActive();
   for (const listener of browserPreview.listeners) listener(clone(browserPreview.state));
 }
 
 export function browserState(): BrowserState {
+  syncActive();
   return clone(browserPreview.state);
 }
 
@@ -1446,8 +1475,14 @@ export function browserLastBounds(): BrowserBounds | null {
   return browserPreview.bounds ? { ...browserPreview.bounds } : null;
 }
 
+function activeTab(): BrowserTab | null {
+  const state = browserPreview.state;
+  return state.tabs.find((t) => t.id === state.activeTab) ?? null;
+}
+
 export function browserControl(args?: { action?: BrowserAction }): null {
   const state = browserPreview.state;
+  const tab = activeTab();
   switch (args?.action) {
     case "play": if (state.media) state.media.playing = true; break;
     case "pause": if (state.media) state.media.playing = false; break;
@@ -1459,9 +1494,60 @@ export function browserControl(args?: { action?: BrowserAction }): null {
       break;
     case "close": browserPreview.state = closedBrowser(); break;
     // 重试（出错时的“重试”就是 reload）：预览里直接当作好了
-    case "reload": state.error = null; break;
-    default: break; // back：预览里没有真的页面
+    case "reload": state.error = null; if (tab) tab.loading = false; break;
+    case "stop": if (tab) tab.loading = false; break;
+    case "back": if (tab?.canGoBack) { tab.canGoBack = false; tab.canGoForward = true; } break;
+    case "forward": if (tab?.canGoForward) { tab.canGoForward = false; tab.canGoBack = true; } break;
+    default: break;
   }
+  emitBrowser();
+  return null;
+}
+
+/** 地址栏回车：像网址就打开，否则用必应搜（和后端的规则一样）。 */
+export function browserNavigate(args?: { url?: string }): null {
+  const input = (args?.url ?? "").trim();
+  if (!input) return null;
+  const looksLikeUrl = /^https?:\/\//i.test(input) || /^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(input);
+  const url = looksLikeUrl ? (/^https?:\/\//i.test(input) ? input : `https://${input}`) : `https://cn.bing.com/search?q=${encodeURIComponent(input)}`;
+  const state = browserPreview.state;
+  let tab = activeTab();
+  if (!tab) {
+    tab = previewTab(url);
+    state.tabs.push(tab);
+    state.activeTab = tab.id;
+  } else {
+    const site = hostOf(url);
+    Object.assign(tab, { url, site, title: site ? `${site} 的页面` : null, canGoBack: !!tab.url, canGoForward: false });
+  }
+  emitBrowser();
+  return null;
+}
+
+export function browserTabNew(args?: { url?: string }): null {
+  const state = browserPreview.state;
+  if (state.tabs.length >= 8) return null;
+  const tab = previewTab(args?.url ?? null);
+  state.tabs.push(tab);
+  state.activeTab = tab.id;
+  emitBrowser();
+  return null;
+}
+
+export function browserTabClose(args?: { id?: string }): null {
+  const state = browserPreview.state;
+  const index = state.tabs.findIndex((t) => t.id === args?.id);
+  if (index < 0) return null;
+  state.tabs.splice(index, 1);
+  if (state.activeTab === args?.id) state.activeTab = state.tabs[Math.min(index, state.tabs.length - 1)]?.id ?? null;
+  if (!state.tabs.length) { browserPreview.state = closedBrowser(); }
+  emitBrowser();
+  return null;
+}
+
+export function browserTabSelect(args?: { id?: string }): null {
+  const state = browserPreview.state;
+  if (state.tabs.some((t) => t.id === args?.id)) state.activeTab = args!.id!;
   emitBrowser();
   return null;
 }
@@ -1478,12 +1564,33 @@ export function browserClearData(): null {
   return null;
 }
 
+export function browserExtensions(): BrowserExtension[] {
+  return clone(browserPreview.extensions);
+}
+export function browserExtensionAdd(args?: { path?: string }): null {
+  const path = (args?.path ?? "").trim();
+  if (!path) throw new Error("没有选插件文件夹");
+  if (browserPreview.extensions.some((e) => e.path === path)) throw new Error("这个插件已经加过了");
+  const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+  browserPreview.extensions.push({ id: `ext-${browserPreview.extensions.length + 1}`, name, enabled: true, path });
+  return null;
+}
+export function browserExtensionRemove(args?: { id?: string }): null {
+  browserPreview.extensions = browserPreview.extensions.filter((e) => e.id !== args?.id);
+  return null;
+}
+export function browserExtensionToggle(args?: { id?: string; enabled?: boolean }): null {
+  const ext = browserPreview.extensions.find((e) => e.id === args?.id);
+  if (ext) ext.enabled = !!args?.enabled;
+  return null;
+}
+
 export function subscribeBrowserPreview(callback: (state: BrowserState) => void): () => void {
   browserPreview.listeners.add(callback);
   return () => { browserPreview.listeners.delete(callback); };
 }
 
-/** dev:web 演示：没打开 → 网易云在放歌 → 要登录（控制台里 `__kotoneBrowserPreview("playing")`）。 */
+/** dev:web 演示：没打开 → 网易云在放歌（两个标签页）→ 要登录（控制台里 `__kotoneBrowserPreview("playing")`）。 */
 export function browserPreviewStep(step: "closed" | "playing" | "handover" | "error"): BrowserState {
   if (step === "closed") {
     browserPreview.state = closedBrowser();
@@ -1492,12 +1599,17 @@ export function browserPreviewStep(step: "closed" | "playing" | "handover" | "er
     browserPreview.state = { ...closedBrowser(), error: "浏览器没能打开：WebView2 报错 0x80070057（参数错误）" };
   } else {
     browserPreview.song = 0;
+    const music = previewTab("https://music.163.com/#/song?id=186016", {
+      title: "晴天 - 周杰伦 - 单曲 - 网易云音乐", agent: true, audible: step !== "handover", canGoBack: true,
+    });
+    const guide = previewTab("https://www.bilibili.com/video/BV1xx411c7mD", { title: "海克斯大乱斗剑姬出装 - 哔哩哔哩", canGoBack: true });
     browserPreview.state = {
-      open: true, url: "https://music.163.com/#/song?id=186016", title: "晴天 - 周杰伦 - 单曲 - 网易云音乐",
-      site: "music.163.com", loading: false, busy: false,
+      ...closedBrowser(),
+      tabs: [music, guide],
+      activeTab: music.id,
+      busy: false,
       handover: step === "handover" ? { reason: "网易云要登录一下" } : null,
       media: step === "handover" ? null : { playing: true, ...previewSongs[0] },
-      error: null,
     };
   }
   emitBrowser();

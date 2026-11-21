@@ -53,7 +53,9 @@
   }
 </script>
 
-<li class="min-w-0 overflow-hidden rounded-lg border border-hairline bg-card/60" data-testid="sidebar-task" data-task-name={info.name} data-task-status={info.status}>
+<!-- 右侧栏“卡片”按列排：点开看过程时占满一行 -->
+<li class="min-w-0 self-start overflow-hidden rounded-xl border border-hairline bg-card/60 {open ? 'col-span-full' : ''}"
+  data-testid="sidebar-task" data-task-name={info.name} data-task-status={info.status} data-open={open ? "true" : "false"}>
   <div class="flex min-w-0 items-center gap-1 py-1.5 pr-1 pl-2.5">
     <button type="button" class="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       aria-expanded={!!open} title={open ? "收起过程" : "展开看过程"} data-testid="sidebar-task-toggle" onclick={() => { open = !open; }}>
