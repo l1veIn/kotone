@@ -92,7 +92,9 @@ pub fn fit_size(width: u32, height: u32, max_pixels: u64) -> (u32, u32) {
 }
 
 /// RGBA8 按面积平均缩小（照 OpenCV `INTER_AREA`：缩小时每个输出像素取它覆盖的源像素的加权平均，
-/// 文字边缘不会像最近邻那样断笔，适合缩小后再做文字识别）。`out_w`/`out_h` 不大于原尺寸。
+/// 文字边缘不会像最近邻那样断笔、也不像 Lanczos 那样有振铃，适合缩小后再做文字识别）。
+/// `out_w`/`out_h` 不大于原尺寸。逐行输出、只留一行的累加：不为整张图开中间缓冲（带鱼屏
+/// 5120×2160 那样开要多占一百多 MB，玩家开着游戏时内存吃紧）。
 pub fn downscale_area(rgba: &[u8], width: u32, height: u32, out_w: u32, out_h: u32) -> Vec<u8> {
     let (w, h) = (width as usize, height as usize);
     let (ow, oh) = (out_w.max(1) as usize, out_h.max(1) as usize);
@@ -100,58 +102,51 @@ pub fn downscale_area(rgba: &[u8], width: u32, height: u32, out_w: u32, out_h: u
     if ow == w && oh == h {
         return rgba.to_vec();
     }
-    // 每个输出列 / 行覆盖的源区间与边缘的部分权重。
-    let spans = |src: usize, dst: usize| -> Vec<Vec<(usize, f64)>> {
-        let ratio = src as f64 / dst as f64;
-        (0..dst)
-            .map(|d| {
-                let start = d as f64 * ratio;
-                let end = (d as f64 + 1.0) * ratio;
-                let mut taps = Vec::new();
-                let mut s = start.floor() as usize;
-                while (s as f64) < end && s < src {
-                    let lo = (s as f64).max(start);
-                    let hi = ((s + 1) as f64).min(end);
-                    if hi > lo {
-                        taps.push((s, (hi - lo) / ratio));
-                    }
-                    s += 1;
-                }
-                taps
-            })
-            .collect()
-    };
-    let xs = spans(w, ow);
-    let ys = spans(h, oh);
-    // 先横向（f32 中间结果），再纵向。
-    let mut mid = vec![0f32; ow * h * 4];
-    for y in 0..h {
-        let row = &rgba[y * w * 4..(y + 1) * w * 4];
-        for (ox, taps) in xs.iter().enumerate() {
-            let mut acc = [0f32; 4];
-            for &(sx, weight) in taps {
-                for c in 0..4 {
-                    acc[c] += row[sx * 4 + c] as f32 * weight as f32;
-                }
-            }
-            mid[(y * ow + ox) * 4..(y * ow + ox) * 4 + 4].copy_from_slice(&acc);
-        }
-    }
+    let xs = area_taps(w, ow);
+    let ys = area_taps(h, oh);
     let mut out = vec![0u8; ow * oh * 4];
-    for (oy, taps) in ys.iter().enumerate() {
-        for ox in 0..ow {
-            let mut acc = [0f32; 4];
-            for &(sy, weight) in taps {
-                for c in 0..4 {
-                    acc[c] += mid[(sy * ow + ox) * 4 + c] * weight as f32;
+    let mut acc = vec![0f32; ow * 4];
+    for (oy, y_taps) in ys.iter().enumerate() {
+        acc.fill(0.0);
+        for &(sy, wy) in y_taps {
+            let row = &rgba[sy * w * 4..(sy + 1) * w * 4];
+            for (ox, x_taps) in xs.iter().enumerate() {
+                let dst = &mut acc[ox * 4..ox * 4 + 4];
+                for &(sx, wx) in x_taps {
+                    let weight = wx * wy;
+                    for (a, &p) in dst.iter_mut().zip(&row[sx * 4..sx * 4 + 4]) {
+                        *a += f32::from(p) * weight;
+                    }
                 }
             }
-            for c in 0..4 {
-                out[(oy * ow + ox) * 4 + c] = acc[c].round().clamp(0.0, 255.0) as u8;
-            }
+        }
+        for (o, a) in out[oy * ow * 4..(oy + 1) * ow * 4].iter_mut().zip(&acc) {
+            *o = a.round().clamp(0.0, 255.0) as u8;
         }
     }
     out
+}
+
+/// 面积平均的抽头：每个输出列 / 行覆盖的源像素与权重（边缘按覆盖比例，权重和为 1）。
+fn area_taps(src: usize, dst: usize) -> Vec<Vec<(usize, f32)>> {
+    let ratio = src as f64 / dst as f64;
+    (0..dst)
+        .map(|d| {
+            let start = d as f64 * ratio;
+            let end = (d as f64 + 1.0) * ratio;
+            let mut taps = Vec::new();
+            let mut s = start.floor() as usize;
+            while (s as f64) < end && s < src {
+                let lo = (s as f64).max(start);
+                let hi = ((s + 1) as f64).min(end);
+                if hi > lo {
+                    taps.push((s, ((hi - lo) / ratio) as f32));
+                }
+                s += 1;
+            }
+            taps
+        })
+        .collect()
 }
 
 /// Kotone 自己用的前台截图（见 [`capture_view`]）：`image.client_rect` 仍是完整客户区，
@@ -453,6 +448,13 @@ mod tests {
             100, 50, 20, 255, 100, 50, 20, 255,
         ];
         assert_eq!(downscale_area(&px, 2, 2, 1, 1), vec![100, 50, 20, 255]);
+        // 非整数倍 3 → 2：边上的源像素按覆盖比例分给两个输出像素。
+        // 输出 0 覆盖 [0, 1.5)：0×1/1.5 + 90×0.5/1.5 = 30；输出 1 覆盖 [1.5, 3)：90×0.5/1.5 + 180×1/1.5 = 150。
+        let row = [0, 0, 0, 255, 90, 90, 90, 255, 180, 180, 180, 255];
+        assert_eq!(
+            downscale_area(&row, 3, 1, 2, 1),
+            vec![30, 30, 30, 255, 150, 150, 150, 255]
+        );
         // 纯色缩小后还是纯色（非整数倍也一样）。
         let solid: Vec<u8> = [12u8, 34, 56, 255].repeat(7 * 5);
         let out = downscale_area(&solid, 7, 5, 3, 2);
