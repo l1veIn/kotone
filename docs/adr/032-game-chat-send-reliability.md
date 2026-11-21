@@ -1,6 +1,6 @@
 # ADR 032：往游戏聊天里发字，不被玩家的按键打断
 
-状态：Accepted / 已确认，待实现（2026-11-22）。玩家确认了两件事，见“玩家确认过的两件事”。
+状态：Accepted / 已确认（2026-11-22）。第一期、第三期已实现并合进 main（0.2.0-rc.3）；第二期（CS2）在分支 `claude/adr-032-cs2`，没合并。真机验证大多等玩家，见末尾“实现情况”。玩家确认了两件事，见“玩家确认过的两件事”。
 
 涉及游戏：英雄联盟、Dota 2、CS2。其他游戏跟着第 1 节一起受益。
 
@@ -236,3 +236,55 @@ Windows 只保证**单次** `SendInput` 里的事件不被插队。各次之间�
 - `say_team` 绑定写法：[CS2](https://csdb.gg/zh-cn/command/say-team/)、[Dota 2](https://lis-skins.com/blog/how-to-bind-a-phrase-in-dota-2/)。
 - Dota 2 游戏文件里的字符串：2026-11-22 在本机安装目录用 `strings` / `grep` 查得，见“三个游戏的分析”。
 - 英雄联盟里钩子吞键有效：提交 `2fd7c2eb` 的试玩记录。
+
+## 实现情况（2026-11-22）
+
+### 提交
+
+| 期 | 提交 | 分支 | 内容 |
+| --- | --- | --- | --- |
+| 第一期 | `4a380fe9` | `claude/adr-032` → main | `input_gate.rs`、钩子接入、`WindowsInjector::send` 开关窗口、真机自动测试 `scripts/manual-e2e/input_gate_e2e.py`、测试窗口的 `-Chat` 模式 |
+| 第三期 | `d9841055` | `claude/adr-032` → main | `consoleChat` / `consoleCommand`、`console_chat.rs`、选路、`F13`–`F24`、游戏配置页开关、Tauri 命令 `console_chat_status` / `console_chat_set` |
+| 第二期 | `2660d8ee` | `claude/adr-032-cs2`（**没合并**） | `cs2.json`、`builtin_cs2`、删除标记 `.cs2-deleted` |
+
+本节和玩家验证步骤 [docs/playtest-adr-032.md](../playtest-adr-032.md) 是之后的文档提交。
+
+### 测试结果
+
+- `cargo test`：kotone-core、kotone-platform-windows、kotone-tauri、kotone-cli 全部通过（新增：`input_gate` 10 个、`console_chat` 11 个 + 1 个真机、profile 3 个、orchestrator 1 个、`vk_from_name` 1 个；CS2 分支另加 2 个）。
+- `cargo clippy --all-targets -- -D warnings`：上面四个 crate 通过。`rustfmt` 只对自己改的文件跑。
+- 前端：`svelte-check` 0 错误 0 警告；Playwright `e2e/game-profile.spec.ts` 5/5（新增“控制台开关只在声明了的配置里出现”）。
+- 真机自动测试（第一期，隔离实例 `target/gate-e2e/` + 测试窗口，没进游戏），跑了两遍都 PASS：
+  - 对照（启动后第一条，不受保护）：发送期间用不带标记的 `SendInput` 连按 Q W E R，消息变成 `rqwerqwe对面打野来下路了，小心 rgankqwerqwerqwe`——说明干扰确实落在发送窗口里；
+  - 受保护的发送，同样连按：消息与原文完全一致，窗口外的 53 个字母照常到达测试窗口；`inject_gate` 记 `swallowed=29 windowMs=259`；
+  - Kotone 第一个 Enter 之后 7ms 按下并按住 Shift 一秒：两个 Enter 都不带 Shift、消息在队伍频道、测试窗口没收到 Shift 的按下、最后一个 Enter 之后没有任何带 Kotone 标记的键（只有 Enter 和文字）。
+- 真机（第三期的本机部分）：测试窗口在前台时，`send` 把 `say_team "推中 '一起' 走"` 写进文件、带 Kotone 标记的 F23 到达测试窗口、约 1 秒后文件清空。**没进游戏**：游戏读不读这个文件、绑定是否生效，都在 S1–S7。
+
+### 和方案不一样、或方案没写到的地方
+
+1. **决定 1 第 7 条“一个自己的键都没认出来就停用”**：只在这次发送里 Kotone 的 `SendInput` 确实交出过键盘事件时才算。发送前就失败（例如前台是管理员程序，`SendInput` 前就报错）不会误停用。
+2. **并发发送**：两次发送重叠时窗口按计数，最后一个结束才关；30ms 尾巴只在交出过键时等。
+3. **控制台通道多一个走键盘的条件**：发送键为空（陪玩“只打进聊天框、不发送”，`send=false`）时不走控制台，因为 `say` 会直接发出去。ADR 没覆盖这种调用。
+4. **“前台是这个游戏”**：除了进程名，还要求前台程序在找到的 Steam 安装目录里（多份安装时不写错目录）；拿不到程序路径时走键盘。
+5. **怎么找安装目录**：只扫 Steam 库（`games::steam_games`），用现有的 `find_match`（先比进程名，再比名字）。Steam 的检测结果没有进程名，实际按名字对上“Dota 2”；CS2 的内置配置名字因此叫 “Counter-Strike 2”。
+6. **配置校验**（防止导入的配置包借这个功能写别的命令、写到别处）：`consoleCommand` 只能是 `say_team` / `say`；`cfgDir` 必须是相对路径、只有普通路径段、最多 8 段、最后一段是 `cfg`；`triggerKey` 只能是 F13–F23（F24 留给探测）。
+7. **发送用配置怎么带命令**：`GameProfile::for_channel` 把选中的频道在发送用配置里标成默认频道，注入器取默认频道的命令。陪玩打字、调试发送、`kotone send` 直接用原配置，即默认频道（队伍）。
+8. **那一行的写入时间**写成本地时间带时区：`2026-11-22 01:23:45 +08:00`。玩家改坏了时间就当没生效（走键盘）；绑的键被改过也走键盘，设置页会提示“关掉再打开可以修好”。
+9. **关闭开关**只删那一行和 `kotone_say.cfg`；`autoexec.cfg` 本身保留，哪怕是 Kotone 新建、删完变空的。
+10. **决定 3 第 5 条**：分号、`//`、反斜杠没处理（等 S4）。**第 7 条**：S6 没验证，所以走控制台通道时仍然等修饰键松开（orchestrator 没改）。
+11. **内置配置都没带 `consoleChat`**（S1–S7 没做）。游戏配置页的开关只在声明了这一段的配置里出现；测试时玩家手动加到自己的 `dota2.json`（步骤见验证文档）。
+12. **第二期**：ADR 说“没人能实测之前不发布这一期”，所以 CS2 留在 `claude/adr-032-cs2`，没进 main 和 rc.3。任务里的“CS2 的控制台通道配置”没写进内置配置（没实测不带 `consoleChat`），测试用的配置片段写在验证文档里。
+
+### 验证清单的状态
+
+| 编号 | 状态 |
+| --- | --- |
+| 第一期真机自动测试（测试窗口 + 不带标记的 `SendInput`） | 通过 |
+| 第三期本机部分（写文件 → 按触发键 → 清空） | 通过 |
+| L1 L2 L3 | 等玩家 |
+| M1 | 等玩家（第一期不挡鼠标，新版上测和改之前一样） |
+| D1 | 等玩家 |
+| S1 S2 S3 S4 S5 S6 S7 | 等玩家（要先在自己的 `dota2.json` 里加 `consoleChat`） |
+| C1 C2 C3 C4 | 等玩家（要装 CS2，用 `claude/adr-032-cs2` 分支） |
+
+照着做的步骤：[docs/playtest-adr-032.md](../playtest-adr-032.md)。
