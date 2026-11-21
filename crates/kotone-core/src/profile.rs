@@ -44,6 +44,10 @@ pub struct ProfileChannel {
     /// 默认频道标记；多个标记时取第一个，全无标记时取列表首项
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub default: bool,
+    /// 走控制台通道时这个频道用的命令（ADR 032 决定 3）：只能是 `say_team`（队伍）或 `say`（所有人）。
+    /// None = 这个频道只走键盘。profile 没有 `consoleChat` 时不起作用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub console_command: Option<String>,
 }
 
 /// 频道发送策略（解析结果）：开框键 + 文本前缀，全部落定无 Option
@@ -54,6 +58,66 @@ pub struct ChannelStrategy {
     pub open_chat_key: String,
     pub text_prefix: String,
     pub is_default: bool,
+    /// 控制台通道的命令（`say_team` / `say`）；空 = 这个频道只走键盘。
+    pub console_command: String,
+}
+
+/// 控制台通道允许的命令：写进游戏 cfg 的只有聊天，不让配置文件夹带别的控制台命令。
+pub const CONSOLE_COMMANDS: [&str; 2] = ["say_team", "say"];
+
+/// Source 2 控制台通道（ADR 032 决定 3）：不开聊天框，把 `say_team "…"` 写进
+/// `<cfgDir>/kotone_say.cfg`，再按一下触发键（玩家打开开关后，`autoexec.cfg` 里绑了
+/// `exec kotone_say`）。**只有实测通过的游戏，内置配置才带这一段。**
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleChat {
+    /// 游戏的 cfg 目录，相对 Steam 安装目录（Dota 2 `game/dota/cfg`，CS2 `game/csgo/cfg`）。
+    pub cfg_dir: String,
+    /// 游戏里绑了 `exec kotone_say` 的键：F13–F23（F24 是 Kotone 探测钩子用的键）。
+    #[serde(default = "default_console_trigger")]
+    pub trigger_key: String,
+}
+
+fn default_console_trigger() -> String {
+    "F23".into()
+}
+
+impl ConsoleChat {
+    /// cfg 目录拆成路径段：只能是相对路径、只有普通段、最后一段是 `cfg`。
+    pub fn cfg_dir_parts(&self) -> Result<Vec<&str>, String> {
+        let parts: Vec<&str> = self
+            .cfg_dir
+            .split(['/', '\\'])
+            .filter(|p| !p.is_empty())
+            .collect();
+        let normal = |p: &&str| {
+            !matches!(*p, "." | "..")
+                && !p.contains([':', '\r', '\n', '\0'])
+                && p.trim() == *p
+                && !p.ends_with('.')
+        };
+        if parts.is_empty()
+            || parts.len() > 8
+            || self.cfg_dir.starts_with(['/', '\\'])
+            || !parts.iter().all(normal)
+            || !parts.last().is_some_and(|p| p.eq_ignore_ascii_case("cfg"))
+        {
+            return Err(format!(
+                "控制台通道的 cfg 目录无效：{}（要相对游戏安装目录、以 cfg 结尾，例如 game/dota/cfg）",
+                self.cfg_dir
+            ));
+        }
+        Ok(parts)
+    }
+
+    /// 触发键是不是 F13–F23。
+    pub fn trigger_key_valid(&self) -> bool {
+        let key = self.trigger_key.trim().to_ascii_lowercase();
+        key.strip_prefix('f')
+            .and_then(|n| n.parse::<u8>().ok())
+            .is_some_and(|n| (13..=23).contains(&n))
+            && !key.contains('+')
+    }
 }
 
 /// 游戏 profile。空的开聊天框键或发送键表示跳过对应注入阶段。
@@ -102,6 +166,10 @@ pub struct GameProfile {
     /// 不允许。
     #[serde(default, skip_serializing_if = "ComputerUse::is_ask")]
     pub computer_use: ComputerUse,
+    /// 这个游戏支持 Source 2 控制台通道（ADR 032 决定 3）；None = 只走键盘。
+    /// 开没开不存在这里：开关就是游戏 `autoexec.cfg` 里 Kotone 的那一行。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub console_chat: Option<ConsoleChat>,
 }
 
 /// 琴音能不能在某个游戏里操作鼠标键盘（`game.act`）。
@@ -229,6 +297,7 @@ impl GameProfile {
                 open_chat_key: self.open_chat_key.clone(),
                 text_prefix: String::new(),
                 is_default: true,
+                console_command: String::new(),
             }];
         }
         let default_idx = self.channels.iter().position(|c| c.default).unwrap_or(0);
@@ -244,8 +313,23 @@ impl GameProfile {
                     .unwrap_or_else(|| self.open_chat_key.clone()),
                 text_prefix: c.text_prefix.clone().unwrap_or_default(),
                 is_default: i == default_idx,
+                console_command: c.console_command.clone().unwrap_or_default(),
             })
             .collect()
+    }
+
+    /// 发送用的配置（ADR-008 / ADR 032）：开聊天框键换成这个频道的，并把这个频道标成默认频道，
+    /// 注入器按 `channel_strategy(None)` 取到的就是这个频道（控制台通道据此选 `say` / `say_team`）。
+    /// 直接拿原 profile 调 `Injector::send` 的地方（陪玩打字、调试发送、CLI）用的是默认频道。
+    pub fn for_channel(&self, strategy: &ChannelStrategy) -> GameProfile {
+        let mut wire = self.clone();
+        wire.open_chat_key = strategy.open_chat_key.clone();
+        if wire.channels.iter().any(|c| c.id == strategy.id) {
+            for channel in &mut wire.channels {
+                channel.default = channel.id == strategy.id;
+            }
+        }
+        wire
     }
 
     /// 按 id 解析频道策略；None / 未知 id → 默认频道（发送路径的兜底）
@@ -685,10 +769,28 @@ pub fn validate_profile(profile: &GameProfile) -> Result<(), String> {
         if let Some(prefix) = &channel.text_prefix {
             bounded("频道文字前缀", prefix, 512, true)?;
         }
+        if let Some(command) = &channel.console_command {
+            if !CONSOLE_COMMANDS.contains(&command.as_str()) {
+                return Err(format!(
+                    "频道 {} 的控制台命令只能是 say_team 或 say：{command}",
+                    channel.id
+                ));
+            }
+        }
         defaults += usize::from(channel.default);
     }
     if defaults > 1 {
         return Err("最多只能有一个默认聊天频道".into());
+    }
+    if let Some(console) = &profile.console_chat {
+        bounded("控制台通道的 cfg 目录", &console.cfg_dir, 260, false)?;
+        console.cfg_dir_parts()?;
+        if !console.trigger_key_valid() {
+            return Err(format!(
+                "控制台通道的触发键只能是 F13–F23：{}",
+                console.trigger_key
+            ));
+        }
     }
     Ok(())
 }
@@ -1671,6 +1773,7 @@ mod tests {
                 open_chat_key: None,
                 text_prefix: None,
                 default: true,
+                console_command: None,
             },
             ProfileChannel {
                 id: "all".into(),
@@ -1678,12 +1781,84 @@ mod tests {
                 open_chat_key: None,
                 text_prefix: Some("/all ".into()),
                 default: false,
+                console_command: None,
             },
         ];
         let s = p.channel_strategy(Some("all"));
         assert_eq!(s.open_chat_key, p.open_chat_key);
         assert_eq!(s.text_prefix, "/all ");
         assert!(!s.is_default);
+        assert_eq!(s.console_command, "");
+    }
+
+    #[test]
+    fn console_chat_fields_round_trip_and_default_trigger() {
+        let json = r#"{"id":"d","displayName":"Dota 2","processNames":["dota2.exe"],
+            "windowTitlePatterns":[],"openChatKey":"Enter","sendKey":"Enter","preOpenDelayMs":20,
+            "prePasteDelayMs":20,"preSendDelayMs":100,"preferClipboardPaste":false,"hotwords":[],
+            "channels":[{"id":"team","displayName":"队伍","default":true,"consoleCommand":"say_team"}],
+            "consoleChat":{"cfgDir":"game/dota/cfg"}}"#;
+        let p: GameProfile = serde_json::from_str(json).unwrap();
+        let console = p.console_chat.clone().unwrap();
+        assert_eq!(console.trigger_key, "F23");
+        assert_eq!(
+            console.cfg_dir_parts().unwrap(),
+            vec!["game", "dota", "cfg"]
+        );
+        assert_eq!(p.channel_strategy(None).console_command, "say_team");
+        validate_profile(&p).unwrap();
+        let back = serde_json::to_value(&p).unwrap();
+        assert_eq!(back["consoleChat"]["cfgDir"], "game/dota/cfg");
+        assert_eq!(back["channels"][0]["consoleCommand"], "say_team");
+        // 没有这一段的 profile 序列化后也没有这些键（旧版本读得懂）
+        let plain = serde_json::to_value(GameProfile::builtin_dota2()).unwrap();
+        assert!(plain.get("consoleChat").is_none());
+        assert!(plain["channels"][0].get("consoleCommand").is_none());
+    }
+
+    #[test]
+    fn console_chat_validation_rejects_unsafe_values() {
+        let mut p = GameProfile::builtin_dota2();
+        let bad_dirs = [
+            "",
+            "/game/dota/cfg",
+            "C:/dota/cfg",
+            "game/../cfg",
+            "game/dota",
+            "game/dota/cfg\n",
+            "a/b/c/d/e/f/g/h/cfg",
+        ];
+        for dir in bad_dirs {
+            p.console_chat = Some(ConsoleChat {
+                cfg_dir: dir.into(),
+                trigger_key: "F23".into(),
+            });
+            assert!(
+                validate_profile(&p).is_err(),
+                "cfg dir {dir:?} must be rejected"
+            );
+        }
+        for key in ["F24", "F12", "Enter", "Shift+F23", "F"] {
+            p.console_chat = Some(ConsoleChat {
+                cfg_dir: "game/csgo/cfg".into(),
+                trigger_key: key.into(),
+            });
+            assert!(
+                validate_profile(&p).is_err(),
+                "trigger {key} must be rejected"
+            );
+        }
+        p.console_chat = Some(ConsoleChat {
+            cfg_dir: "game\\csgo\\cfg".into(),
+            trigger_key: "f13".into(),
+        });
+        validate_profile(&p).unwrap();
+        // 控制台命令只能是聊天：配置文件不能夹带别的命令
+        p.channels[0].console_command = Some("quit".into());
+        assert!(validate_profile(&p).is_err());
+        p.channels[0].console_command = Some("say_team".into());
+        p.channels[1].console_command = Some("say".into());
+        validate_profile(&p).unwrap();
     }
 
     #[test]
@@ -1859,6 +2034,7 @@ mod tests {
                 open_chat_key: None,
                 text_prefix: None,
                 default: false,
+                console_command: None,
             })
             .collect();
         assert!(save_in(dir.path(), &profile)

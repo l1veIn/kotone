@@ -431,6 +431,8 @@ pub fn run() {
             import_profile,
             delete_profile,
             get_profile_icon,
+            console_chat_status,
+            console_chat_set,
             save_overlay_position,
             get_elevation_status,
             get_hotkey_status,

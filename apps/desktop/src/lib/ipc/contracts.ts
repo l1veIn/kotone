@@ -606,6 +606,34 @@ export interface ProfileChannel {
   textPrefix?: string;
   /** 默认频道（每 profile 恰好一个；缺省取第一个） */
   default?: boolean;
+  /** 走控制台通道时这个频道的命令（ADR 032）：say_team 队伍 / say 所有人；缺省 = 只走键盘 */
+  consoleCommand?: "say_team" | "say";
+}
+
+/** Source 2 控制台通道（ADR 032 决定 3）：只有实测通过的游戏，内置配置才带这一段 */
+export interface ConsoleChat {
+  /** 游戏的 cfg 目录，相对 Steam 安装目录（如 game/dota/cfg） */
+  cfgDir: string;
+  /** 游戏里绑了 exec kotone_say 的键（F13–F23，缺省 F23） */
+  triggerKey?: string;
+}
+
+/** 控制台通道开关的状态（开关就是游戏 autoexec.cfg 里 Kotone 的那一行） */
+export interface ConsoleChatStatus {
+  supported: boolean;
+  /** Steam 安装目录；null = 没找到 */
+  installDir: string | null;
+  cfgDir: string | null;
+  /** autoexec.cfg 里有 Kotone 那一行 */
+  enabled: boolean;
+  writtenAt: string | null;
+  /** 玩家把那一行绑的键改成了别的 */
+  keyMismatch: boolean;
+  triggerKey: string;
+  /** 游戏开着（这时不能切换） */
+  gameRunning: boolean;
+  /** 游戏是在打开开关之前启动的，重启游戏后生效 */
+  needsRestart: boolean;
 }
 
 export interface GameProfile {
@@ -638,6 +666,8 @@ export interface GameProfile {
    * 让琴音一步一步操作这个游戏（game.act，ADR 019）：ask 先问（缺省）/ allow 一直允许 / deny 不允许。
    */
   computerUse?: "ask" | "allow" | "deny";
+  /** 支持 Source 2 控制台通道（ADR 032）；缺省 = 只走键盘 */
+  consoleChat?: ConsoleChat | null;
 }
 
 // ---------- 模型 ----------

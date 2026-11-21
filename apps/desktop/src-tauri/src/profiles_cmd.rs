@@ -1,6 +1,7 @@
-//! 游戏配置命令：列表、保存、导入导出、热词、图标。
+//! 游戏配置命令：列表、保存、导入导出、热词、图标、控制台通道开关。
 
 use super::*;
+use serde_json::Value;
 
 #[tauri::command]
 pub(crate) fn list_profiles() -> Vec<GameProfile> {
@@ -80,3 +81,50 @@ pub(crate) fn get_profile_icon(profile_id: String) -> Result<Option<Vec<u8>>, St
 }
 
 // ---------- 提权（UIPI 方案，§10 R-1） ----------
+
+// ---------- Source 2 控制台通道（ADR 032 决定 3） ----------
+
+/// 游戏配置页“不开聊天框直接发”开关的状态：找不找得到游戏目录、`autoexec.cfg` 里有没有
+/// Kotone 那一行、游戏开没开。
+#[tauri::command]
+pub(crate) async fn console_chat_status(profile_id: String) -> Result<Value, String> {
+    let p = profile::get(&profile_id).ok_or_else(|| format!("profile 不存在：{profile_id}"))?;
+    tauri::async_runtime::spawn_blocking(move || console_status(&p))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 打开 / 关闭控制台通道：只在游戏没运行时改；改 `autoexec.cfg` 之前备份到
+/// `<KOTONE_HOME>/agent/backups/`。返回改完的状态。
+#[tauri::command]
+pub(crate) async fn console_chat_set(profile_id: String, enabled: bool) -> Result<Value, String> {
+    let p = profile::get(&profile_id).ok_or_else(|| format!("profile 不存在：{profile_id}"))?;
+    tauri::async_runtime::spawn_blocking(move || console_set(&p, enabled))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[cfg(windows)]
+fn console_status(p: &GameProfile) -> Result<Value, String> {
+    serde_json::to_value(kotone_platform_windows::console_chat::status(p))
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(windows)]
+fn console_set(p: &GameProfile, enabled: bool) -> Result<Value, String> {
+    let backups = kotone_core::settings::kotone_dir()
+        .join("agent")
+        .join("backups");
+    let status = kotone_platform_windows::console_chat::set_enabled(p, enabled, &backups)?;
+    serde_json::to_value(status).map_err(|e| e.to_string())
+}
+
+#[cfg(not(windows))]
+fn console_status(_p: &GameProfile) -> Result<Value, String> {
+    Err("控制台通道只支持 Windows".into())
+}
+
+#[cfg(not(windows))]
+fn console_set(_p: &GameProfile, _enabled: bool) -> Result<Value, String> {
+    Err("控制台通道只支持 Windows".into())
+}

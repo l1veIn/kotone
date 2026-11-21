@@ -105,3 +105,49 @@ test("the game list detects installed games on first open, links their profiles 
   await list.getByTestId("installed-games-detect").click();
   await expect(list.getByTestId("installed-game")).toHaveCount(3);
 });
+
+// 控制台通道（ADR 032 决定 3）：只有声明了 consoleChat 的配置才有开关；内置配置都不带。
+test("console chat switch shows only for profiles that declare it and reports the game folder", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.goto("/#/settings?onboarding=never");
+  await page.evaluate(async () => {
+    const ipc = await import("/src/lib/ipc.ts");
+    await ipc.saveProfile({
+      id: "dota2", displayName: "Dota 2", processNames: ["dota2.exe"], windowTitlePatterns: [],
+      openChatKey: "Enter", sendKey: "Enter", preOpenDelayMs: 20, prePasteDelayMs: 20, preSendDelayMs: 100,
+      preferClipboardPaste: false, hotwords: [],
+      channels: [
+        { id: "team", displayName: "队伍", default: true, consoleCommand: "say_team" },
+        { id: "all", displayName: "所有人", openChatKey: "Shift+Enter", consoleCommand: "say" },
+      ],
+      consoleChat: { cfgDir: "game/dota/cfg" },
+    });
+  });
+  await page.getByTestId("settings-nav-game").click();
+
+  const lol = page.getByTestId("game-profile-lol");
+  await lol.getByRole("button", { name: "编辑", exact: true }).click();
+  await expect(lol.getByTestId("game-profile-editor")).toBeVisible();
+  await expect(lol.getByTestId("game-profile-console-chat")).toHaveCount(0);
+  await lol.getByRole("button", { name: "收起", exact: true }).click();
+
+  const dota = page.getByTestId("game-profile-dota2");
+  await dota.getByRole("button", { name: "编辑", exact: true }).click();
+  const section = dota.getByTestId("game-profile-console-chat");
+  await expect(section).toContainText("autoexec.cfg");
+  await expect(section).toContainText("封号风险");
+  const toggle = section.getByTestId("profile-console-chat");
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await expect(section.getByTestId("profile-console-chat-status")).toContainText("game\\dota\\cfg");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await expect(section.getByTestId("profile-console-chat-status")).toContainText("已打开");
+  await expect(section.getByTestId("profile-console-chat-status")).toContainText("F23");
+  await section.screenshot({ path: testInfo.outputPath("console-chat.png") });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  // 开关不改 profile：保存的配置里没有多出别的东西
+  const saved = await page.evaluate(async () =>
+    (await import("/src/lib/ipc.ts")).listProfiles().then((list) => list.find((p) => p.id === "dota2")));
+  expect(saved?.consoleChat).toEqual({ cfgDir: "game/dota/cfg" });
+});

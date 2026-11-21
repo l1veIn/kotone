@@ -780,6 +780,34 @@ export async function getProfileIcon(profileId: string): Promise<Uint8Array> {
   return new Uint8Array(0);
 }
 
+/** 控制台通道（ADR 032）：浏览器预览里只记在内存，假装游戏装在 Steam 库、没在运行 */
+const mockConsoleChat: Record<string, string | null> = {};
+
+export async function consoleChatStatus(profileId: string): Promise<import("../ipc").ConsoleChatStatus> {
+  const profile = mock.profiles.find((p) => p.id === profileId);
+  const cc = profile?.consoleChat ?? null;
+  const installDir = cc ? `D:\\SteamLibrary\\steamapps\\common\\${profile!.displayName}` : null;
+  const writtenAt = mockConsoleChat[profileId] ?? null;
+  return {
+    supported: cc !== null,
+    installDir,
+    cfgDir: installDir && cc ? `${installDir}\\${cc.cfgDir.replaceAll("/", "\\")}` : null,
+    enabled: writtenAt !== null,
+    writtenAt,
+    keyMismatch: false,
+    triggerKey: cc?.triggerKey ?? "F23",
+    gameRunning: false,
+    needsRestart: false,
+  };
+}
+
+export async function consoleChatSet(profileId: string, enabled: boolean): Promise<import("../ipc").ConsoleChatStatus> {
+  const profile = mock.profiles.find((p) => p.id === profileId);
+  if (!profile?.consoleChat) throw new Error("这个游戏配置不支持控制台通道");
+  mockConsoleChat[profileId] = enabled ? "2026-11-22 01:00:00 +08:00" : null;
+  return consoleChatStatus(profileId);
+}
+
 /** 游戏兼容状态：自身/游戏提权状态 + 激活 profile 的独占全屏状态 */
 export async function getElevationStatus(): Promise<ElevationStatus> {
   return {

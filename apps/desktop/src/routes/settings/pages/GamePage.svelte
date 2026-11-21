@@ -11,6 +11,8 @@
    *   （simulate_send IPC 保留——悬浮条错误重试在用）。
    * - 琴音与自动化：allowAutomationInput（缺省开）、computerUse（让琴音操作，缺省先问）、
    *   launchPath（琴音打开游戏用）；
+   * - 控制台通道（ADR 032 决定 3）：profile 声明了 consoleChat 才显示开关。开关不随“保存”走，
+   *   一拨就改游戏目录里的 autoexec.cfg（开关的状态就是那一行），游戏开着时不能拨；
    *   保存时整份 profile 原样带回，新字段不会丢。
    * - 版式：SettingsPage / SettingsSection（参照 DeepSeek Harness 设置页）。
    */
@@ -28,7 +30,10 @@
     deleteProfile,
     getProfileIcon,
     installedGames,
+    consoleChatStatus,
+    consoleChatSet,
     isTauri,
+    type ConsoleChatStatus,
     type GameProfile,
     type InstalledGame,
   } from "../../../lib/ipc";
@@ -89,6 +94,41 @@
     draft.launchPath = game.launch;
     detected = null;
     toast(true, `已填入「${game.name}」的启动方式，记得保存`);
+  }
+
+  // ---------- 控制台通道（ADR 032 决定 3） ----------
+  /** 编辑中的 profile 的控制台通道状态（null = 没声明或还在读） */
+  let consoleStatus = $state<ConsoleChatStatus | null>(null);
+  let consoleBusy = $state(false);
+
+  async function loadConsoleStatus(p: GameProfile) {
+    consoleStatus = null;
+    if (!p.consoleChat) return;
+    try {
+      const next = await consoleChatStatus(p.id);
+      if (editingId === p.id) consoleStatus = next;
+    } catch (error) {
+      toast(false, `读取控制台通道状态失败：${errText(error)}`);
+    }
+  }
+
+  async function toggleConsole(p: GameProfile, enabled: boolean) {
+    if (consoleBusy) return;
+    consoleBusy = true;
+    try {
+      consoleStatus = await consoleChatSet(p.id, enabled);
+      toast(
+        true,
+        enabled
+          ? "已打开：启动游戏后先发一条测试消息，确认能发出去"
+          : "已关闭：游戏目录里 Kotone 写的那一行和 kotone_say.cfg 已删除",
+      );
+    } catch (error) {
+      toast(false, errText(error));
+      await loadConsoleStatus(p);
+    } finally {
+      consoleBusy = false;
+    }
   }
 
   // ---------- 内联编辑器状态 ----------
@@ -187,6 +227,7 @@
     draft = $state.snapshot(p);
     hotwordsText = p.hotwords.join("\n");
     showTechnical = false;
+    void loadConsoleStatus(p);
   }
 
   function closeEditor() {
@@ -197,6 +238,7 @@
     draft = null;
     hotwordsText = "";
     showTechnical = false;
+    consoleStatus = null;
   }
 
   async function captureProfileKey(field: ProfileKeyField) {
@@ -652,6 +694,35 @@
                 {/if}
               </div>
             </div>
+
+            {#if draft.consoleChat}
+              <!-- 控制台通道（ADR 032 决定 3）：开关即改游戏目录，不随“保存”走 -->
+              <div class="space-y-2 rounded-lg border border-hairline bg-background/40 p-3.5" data-testid="game-profile-console-chat">
+                <ToggleField
+                  checked={consoleStatus?.enabled ?? false}
+                  label="不开聊天框，直接发到聊天"
+                  desc={`语音输入和${$companionName}往这个游戏发消息时，不再打开聊天框，你同时按键也不会打断（用游戏的控制台命令 say_team / say）。打开时会往游戏目录写两个文件：cfg 里的 autoexec.cfg 末尾加一行按键绑定（改之前先备份到 Kotone 的备份文件夹），新建 kotone_say.cfg；关闭时删掉这两处。这样做有没有封号风险，请你自己判断。只能在游戏没开时切换，重启游戏后生效；打开后先发一条测试消息确认能发出去。`}
+                  testid="profile-console-chat"
+                  disabled={!consoleStatus || consoleBusy || consoleStatus.gameRunning || !consoleStatus.installDir}
+                  onchange={(v) => void toggleConsole(p, v)}
+                />
+                <p class="m-0 text-[11px] leading-relaxed text-muted-foreground" data-testid="profile-console-chat-status">
+                  {#if !consoleStatus}
+                    正在读取游戏目录…
+                  {:else if !consoleStatus.installDir}
+                    没找到这个游戏的 Steam 安装目录（只支持 Steam 版），发消息照常打开聊天框。
+                  {:else if consoleStatus.gameRunning && !consoleStatus.enabled}
+                    游戏开着：先退出游戏再打开。
+                  {:else if consoleStatus.gameRunning}
+                    游戏开着：要关闭先退出游戏。{consoleStatus.needsRestart ? "游戏是在打开之前启动的，重启游戏后才生效，这之前发消息照常打开聊天框。" : ""}
+                  {:else if consoleStatus.enabled}
+                    已打开（{consoleStatus.writtenAt ?? "时间认不出来"}，按键 {consoleStatus.triggerKey}）。{consoleStatus.keyMismatch ? "autoexec.cfg 里那一行的按键被改过了，发消息会照常打开聊天框；关掉再打开可以修好。" : ""}游戏目录：{consoleStatus.cfgDir}
+                  {:else}
+                    游戏目录：{consoleStatus.cfgDir}
+                  {/if}
+                </p>
+              </div>
+            {/if}
 
             <div>
               <button

@@ -762,6 +762,19 @@ pub fn steam_root() -> Option<std::path::PathBuf> {
     scan::steam_root()
 }
 
+/// 只扫 Steam 库（控制台通道找游戏的 cfg 目录用，ADR 032 决定 3）。
+#[cfg(windows)]
+pub fn steam_games() -> Vec<InstalledGame> {
+    let mut out = Vec::new();
+    scan::steam(&mut out);
+    out
+}
+
+#[cfg(not(windows))]
+pub fn steam_games() -> Vec<InstalledGame> {
+    Vec::new()
+}
+
 #[cfg(not(windows))]
 pub fn steam_root() -> Option<std::path::PathBuf> {
     None

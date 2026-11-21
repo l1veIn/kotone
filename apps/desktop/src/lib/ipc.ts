@@ -22,6 +22,7 @@ import type {
   ConnectionInfo,
   ConnectionPreset,
   GameProfile,
+  ConsoleChatStatus,
   ModelInfo,
   ModelInstallGuide,
   CatalogModel,
@@ -238,6 +239,18 @@ export async function getProfileIcon(profileId: string): Promise<Uint8Array> {
   if (!isTauri) return browserMock.getProfileIcon(profileId);
   const bytes = await invoke<number[]>("get_profile_icon", { profileId });
   return new Uint8Array(bytes);
+}
+
+/** 控制台通道（ADR 032）开关的状态：找不找得到游戏目录、autoexec.cfg 里有没有那一行、游戏开没开 */
+export async function consoleChatStatus(profileId: string): Promise<ConsoleChatStatus> {
+  if (!isTauri) return browserMock.consoleChatStatus(profileId);
+  return invoke<ConsoleChatStatus>("console_chat_status", { profileId });
+}
+
+/** 打开 / 关闭控制台通道：往游戏 cfg 目录写 autoexec.cfg 那一行和 kotone_say.cfg（游戏开着时拒绝） */
+export async function consoleChatSet(profileId: string, enabled: boolean): Promise<ConsoleChatStatus> {
+  if (!isTauri) return browserMock.consoleChatSet(profileId, enabled);
+  return invoke<ConsoleChatStatus>("console_chat_set", { profileId, enabled });
 }
 
 /** 游戏兼容状态：自身/游戏提权状态 + 激活 profile 的独占全屏状态 */

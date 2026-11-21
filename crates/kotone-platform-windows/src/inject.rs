@@ -26,8 +26,8 @@ mod windows_imp {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
         KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MAPVK_VK_TO_VSC, VIRTUAL_KEY, VK_BACK, VK_CONTROL,
-        VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F2, VK_F3, VK_F4,
-        VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_LEFT, VK_MENU, VK_RETURN, VK_RIGHT,
+        VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F13, VK_F2, VK_F3,
+        VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_LEFT, VK_MENU, VK_RETURN, VK_RIGHT,
         VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -77,6 +77,19 @@ mod windows_imp {
         ) -> Result<(), InjectError> {
             if cancel.is_cancelled() {
                 return Err(InjectError::new("发送已取消"));
+            }
+            // 声明了 Source 2 控制台通道的游戏：条件都满足就不开聊天框直接发（ADR 032 决定 3）。
+            if profile.console_chat.is_some() {
+                match crate::console_chat::route(profile) {
+                    Ok(route) => return crate::console_chat::send(&route, text),
+                    Err(reason) => kotone_core::process_log::record_activity(
+                        "console_chat_skipped",
+                        kotone_core::process_log::EventData {
+                            detail: Some(reason.into()),
+                            ..Default::default()
+                        },
+                    ),
+                }
             }
             // 整段发送期间挡住玩家的按下（ADR 032 决定 1）；任何出口都在 drop 时关窗。
             let _window = crate::input_gate::SendWindow::open();
@@ -570,6 +583,11 @@ mod windows_imp {
             "f10" => VK_F10,
             "f11" => VK_F11,
             "f12" => VK_F12,
+            // F13–F24（ADR 032：控制台通道的触发键，普通键盘上没有，不会和玩家的键冲突）
+            f if f.len() <= 3 && f.starts_with('f') => match f[1..].parse::<u16>() {
+                Ok(n @ 13..=24) => VIRTUAL_KEY(VK_F13.0 + (n - 13)),
+                _ => return None,
+            },
             _ => return None,
         };
         Some(vk)
@@ -815,6 +833,16 @@ mod windows_imp {
             assert_eq!(vk_from_name("/"), Some(VK_OEM_2));
             assert!(key_spec_valid("Ctrl+Shift+PageDown"));
             assert!(!key_spec_valid("Ctrl+Bogus"));
+        }
+
+        #[test]
+        fn vk_from_name_knows_f13_to_f24() {
+            assert_eq!(vk_from_name("F13"), Some(VK_F13));
+            assert_eq!(vk_from_name("f23"), Some(VIRTUAL_KEY(0x86)));
+            assert_eq!(vk_from_name("F24"), Some(VIRTUAL_KEY(0x87)));
+            assert_eq!(vk_from_name("F25"), None);
+            assert_eq!(vk_from_name("F0"), None);
+            assert!(key_spec_valid("F23"));
         }
 
         #[test]

@@ -18,6 +18,8 @@
 pub mod app_audio;
 pub mod audio;
 pub mod autostart;
+#[cfg(windows)]
+pub mod console_chat;
 pub mod detached;
 pub mod elevation;
 pub mod fs_publish;

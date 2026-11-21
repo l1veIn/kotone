@@ -15,6 +15,8 @@ serde_json.workspace = true
 cpal = "0.15"
 # 游戏列表的图标编码成 PNG（同一个 image 版本已在工作区里）
 image = { version = "0.25", default-features = false, features = ["png"] }
+# 控制台通道（ADR 032）：autoexec.cfg 那一行的写入时间；版本已在工作区锁文件里
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 # 输入注入 / LL 钩子 / 提权检测：raw windows crate 直调 Win32
 [target.'cfg(windows)'.dependencies]

@@ -2748,10 +2748,10 @@ impl Orchestrator {
             .unwrap_or_else(GameProfile::builtin_generic);
 
         // ADR-008 频道策略：克隆 profile 换开框键、文本加前缀——
-        // 用户原文（预览/历史/重试）不受频道前缀污染。
+        // 用户原文（预览/历史/重试）不受频道前缀污染。选中的频道成为发送用配置的默认频道，
+        // 注入器走控制台通道时据此选 say / say_team（ADR 032 决定 3）。
         let strategy = resolve_send_strategy(&profile, &channel);
-        let mut wire_profile = profile.clone();
-        wire_profile.open_chat_key = strategy.open_chat_key.clone();
+        let wire_profile = profile.for_channel(&strategy);
         let wire_text = if strategy.text_prefix.is_empty() {
             text.clone()
         } else {
@@ -3486,6 +3486,23 @@ mod tests {
 
     fn lol_clone() -> GameProfile {
         GameProfile::builtin_lol()
+    }
+
+    #[test]
+    fn wire_profile_makes_the_selected_channel_the_default() {
+        let mut dota = GameProfile::builtin_dota2();
+        dota.channels[0].console_command = Some("say_team".into());
+        dota.channels[1].console_command = Some("say".into());
+        let sel = Some(("dota2".to_string(), "all".to_string()));
+        let wire = dota.for_channel(&resolve_send_strategy(&dota, &sel));
+        assert_eq!(wire.open_chat_key, "Shift+Enter");
+        let sent = wire.channel_strategy(None);
+        assert_eq!(sent.id, "all");
+        assert_eq!(sent.console_command, "say");
+        // 没选频道：默认频道（队伍）
+        let wire = dota.for_channel(&resolve_send_strategy(&dota, &None));
+        assert_eq!(wire.open_chat_key, "Enter");
+        assert_eq!(wire.channel_strategy(None).console_command, "say_team");
     }
 
     // ---------- 历史音频 VAD 裁剪（trim_speech_pcm / push_speech_range） ----------
