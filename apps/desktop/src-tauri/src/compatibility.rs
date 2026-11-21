@@ -71,6 +71,16 @@ pub(crate) fn elevation_status(state: &SharedState) -> ElevationStatus {
     }
 }
 
+/// 打字 / 按键因为游戏是管理员权限而被拦下时（[`platform_inject::elevation_refusal`]），
+/// 通知主窗口弹“以管理员身份重启”。她自己也会从工具结果里看到原因，用语音告诉玩家。
+pub(crate) const ELEVATION_NEEDED_EVENT: &str = "kotone://elevation-needed";
+
+pub(crate) fn watch_input_refusals(app: AppHandle) {
+    platform_inject::set_elevation_listener(move || {
+        let _ = app.emit(ELEVATION_NEEDED_EVENT, ());
+    });
+}
+
 /// 设置窗口隐藏/停留在其它分页时仍监控活动游戏。检测到独占
 /// 全屏后立即隐藏浮窗并发事件；离开全屏后，只恢复用户明确选择的
 /// Always 模式。任务随 AppHandle 生命周期结束，不持有任何设置锁跨 await。

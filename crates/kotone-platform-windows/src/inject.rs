@@ -435,6 +435,10 @@ mod windows_imp {
     }
 
     fn send_inputs(inputs: &[INPUT]) -> Result<(), InjectError> {
+        // 前台程序权限比 Kotone 高时 SendInput 会“成功”但输入被丢掉：先查，查到就明确报错。
+        if let Some(error) = super::elevation_refusal() {
+            return Err(error);
+        }
         let sent = unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) };
         if sent as usize == inputs.len() {
             Ok(())
@@ -983,3 +987,39 @@ mod fallback {
 
 #[cfg(not(windows))]
 pub use fallback::*;
+
+/// 前台程序以管理员身份运行、Kotone 没有时给的说明（给她转告玩家）。
+pub const ELEVATION_REQUIRED: &str = "前台的游戏是以管理员身份运行的，Kotone 没有管理员权限：\
+Windows 会把 Kotone 模拟的打字、按键和鼠标悄悄拦下来（字发不出去，也不会报错）。\
+以管理员身份重启 Kotone 就好：设置 → 系统 →「以管理员身份重启」（那里也能打开“启动时自动请求管理员权限”），\
+或者右键 Kotone 选“以管理员身份运行”。";
+
+/// 发往前台的模拟输入会不会被 Windows 拦下（UIPI）：前台程序以管理员身份运行而 Kotone 没有。
+/// 这时 SendInput 照样返回成功（Win32 文档：返回值和 GetLastError 都不指示 UIPI），2026-11-21
+/// 玩家实测字发不出去、也没有任何提示，所以每次发之前先查一次（一次进程查询，几十微秒）。
+/// 打字、`game.act`、自动化的按键鼠标都经过这里（Windows 上的 `send_inputs`）。
+pub fn elevation_refusal() -> Option<kotone_core::inject::InjectError> {
+    static SELF_ELEVATED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let pid = foreground_pid()?;
+    if pid == std::process::id() {
+        return None;
+    }
+    let me = *SELF_ELEVATED.get_or_init(crate::elevation::is_elevated);
+    if !crate::elevation::decide_needs_elevation(crate::elevation::is_process_elevated(pid), me) {
+        return None;
+    }
+    if let Some(listener) = ELEVATION_LISTENER.get() {
+        listener();
+    }
+    Some(kotone_core::inject::InjectError::with_needs_elevation(
+        ELEVATION_REQUIRED,
+    ))
+}
+
+static ELEVATION_LISTENER: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> =
+    std::sync::OnceLock::new();
+
+/// 输入因为权限被拦下时叫一声（桌面端用它弹“以管理员身份重启”）。只设一次；回调要快、不阻塞。
+pub fn set_elevation_listener(listener: impl Fn() + Send + Sync + 'static) {
+    let _ = ELEVATION_LISTENER.set(Box::new(listener));
+}

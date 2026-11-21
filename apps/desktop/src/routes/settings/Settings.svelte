@@ -184,6 +184,8 @@
   const legacyVoiceOnly = $derived(usesLegacyVoiceInput($settingsStore?.ui));
   /** 管理员提权提示 · 第一段（仅 Windows 未提权且用户未表态时弹一次） */
   let showElevationPrompt = $state(false);
+  /** 弹窗是因为刚才真的发不出去（不是启动时的建议）。 */
+  let elevationBlocked = $state(false);
   /** 管理员提权提示 · 第二段（第一段「以管理员权限重启」成功后弹一次） */
   let showAutoAdminPrompt = $state(false);
   /** 模拟输入被系统拦截的排查引导弹窗（SendInput 0/N 时弹出；同一错误只弹一次） */
@@ -312,6 +314,18 @@
     return () => unlisten?.();
   });
 
+  // 打字 / 按键被 Windows 拦下（游戏是管理员权限、Kotone 不是）：弹“以管理员身份重启”。
+  // 启动时那次提示玩家可能点过“不再提示”，这里是真的失败了，照样弹（她也会用语音说）。
+  onMount(() => {
+    if (!isTauri) return;
+    let unlisten: (() => void) | undefined;
+    void listen("kotone://elevation-needed", () => {
+      elevationBlocked = true;
+      showElevationPrompt = true;
+    }).then((un) => (unlisten = un));
+    return () => unlisten?.();
+  });
+
   // 独占全屏下后端会拦截浮窗显示，并发送持久到共享 store 的提示事件。
   // 监听放在设置根组件，不依赖用户当时是否停留在「通用」分页。
   onMount(() => {
@@ -399,7 +413,7 @@
 
   <!-- 管理员提权提示 · 第一段（Windows 未提权且用户未表态时弹一次） -->
   {#if showElevationPrompt && !loading && !onboarding}
-    <ElevationPrompt onClose={() => (showElevationPrompt = false)} />
+    <ElevationPrompt blocked={elevationBlocked} onClose={() => { showElevationPrompt = false; elevationBlocked = false; }} />
   {/if}
 
   <!-- 管理员提权提示 · 第二段（第一段的重启成功后弹一次） -->

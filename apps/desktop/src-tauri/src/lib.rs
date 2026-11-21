@@ -341,6 +341,7 @@ pub fn run() {
             let tool_service_enabled = settings.read().unwrap().tool_service.enabled;
             tool_service::start(app.handle(), tool_service_enabled);
             compatibility::start_fullscreen_monitor(app.handle().clone());
+            compatibility::watch_input_refusals(app.handle().clone());
 
             // 启动时的窗口（设置、弹幕、气泡）在全部状态 manage() 之后才建：页面一加载就会发 IPC，
             // 走快速 IPC（ipc.localhost）时可能早于 setup 结束到达，命令取不到状态会崩溃。

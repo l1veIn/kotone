@@ -6,6 +6,8 @@
    * 唯一的勾选项是「不再提示」；勾选并跳过后 toast 告知高级页逃生通道。
    * 「启动时自动请求管理员权限」是第二段，在提权重启成功后由
    * AutoAdminPrompt.svelte 单独询问（AUTO_ADMIN_PROMPT_FLAG 接力）。
+   * `blocked`：刚才往游戏里打字 / 按键真的被拦下了（kotone://elevation-needed）——
+   * 说清发生了什么，不给「不再提示」（这是一次失败，不是建议）。
    */
   import { updateSettings, restartAsAdmin } from "../ipc";
   import {
@@ -17,7 +19,7 @@
   } from "../stores/ui";
   import stickerPointing from "../../assets/brand/stickers/pointing.webp";
 
-  let { onClose }: { onClose: () => void } = $props();
+  let { onClose, blocked = false }: { onClose: () => void; blocked?: boolean } = $props();
 
   /** 勾选：不再提示 */
   let neverAsk = $state(false);
@@ -67,16 +69,21 @@
     <div class="flex items-start gap-4">
       <img src={stickerPointing} alt="" class="h-14 w-14 shrink-0 object-contain" />
       <div class="min-w-0">
-        <h2 class="text-base font-bold">需要管理员权限</h2>
-        <p class="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
-          Kotone 当前以普通权限运行。当目标程序（如 League of
-          Legends）以管理员权限运行时，Windows 会拦截普通权限进程发送的文字，
-          导致软件内发送失效。是否现在以管理员身份重启？
+        <h2 class="text-base font-bold">{blocked ? "游戏里发不出去" : "需要管理员权限"}</h2>
+        <p class="mt-1.5 text-[13px] leading-relaxed text-muted-foreground" data-testid="elevation-prompt-text">
+          {#if blocked}
+            刚才往游戏里打字或按键被 Windows 拦下了：游戏是以管理员身份运行的，Kotone 不是。
+            以管理员身份重启 Kotone 后就能发出去。现在重启吗？
+          {:else}
+            Kotone 当前以普通权限运行。当目标程序（如 League of
+            Legends）以管理员权限运行时，Windows 会拦截普通权限进程发送的文字，
+            导致软件内发送失效。是否现在以管理员身份重启？
+          {/if}
         </p>
       </div>
     </div>
 
-    <div class="mt-4 flex flex-col gap-2">
+    <div class="mt-4 flex flex-col gap-2" class:hidden={blocked}>
       <label class="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
         <input
           type="checkbox"
