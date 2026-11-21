@@ -164,6 +164,9 @@ pub async fn call_on_node(
             "arguments": args,
             "returnByValue": true,
             "awaitPromise": true,
+            // 当成玩家亲手点的（点击、输入）：否则 target=_blank 的链接被弹窗拦截挡掉、播放按钮可能没反应。
+            // 只给对元素的操作；轮询用的 evaluate 不带，免得网页一直有“用户刚操作过”的权限去弹窗。
+            "userGesture": true,
         }),
     )
     .await;

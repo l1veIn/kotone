@@ -302,6 +302,10 @@ pub const INTERNAL: &[(&str, &str)] = &[
         "voiceChat.previousCommunicationsMic",
         "用 voice_chat.default_mic 改 / 改回 Windows 默认麦克风时自动记录",
     ),
+    (
+        "browser",
+        "浏览器插件只能由玩家在右侧栏浏览器的插件管理里加、删、开关（ADR 031）",
+    ),
 ];
 
 /// 内置 Agent 改设置时不允许出现的路径（权限不能由 Agent 自己改）。
@@ -474,6 +478,11 @@ pub fn agent_protected_violation(patch: &Value) -> Option<String> {
                 "{protected} 只能由用户在「设置 → 权限」里修改，琴音不能改自己的权限"
             ));
         }
+    }
+    // 浏览器插件能读写浏览器里所有登录过的网站：只能由玩家自己加（ADR 031）。后台能写文件（ADR 030），
+    // 不能让它写个插件再自己登记上。
+    if patch.get("browser").is_some() {
+        return Some("浏览器插件只能由玩家自己在浏览器的插件管理里加，琴音不能改".into());
     }
     // 整个对象写成 {"agent": {"permissions": ...}} 以外的形式（如 null）也不放过
     if patch
@@ -709,5 +718,11 @@ mod tests {
             agent_protected_violation(&json!({"agent": {"permissions": {"rules": {}}}})).is_some()
         );
         assert!(agent_protected_violation(&json!({"agent": null})).is_some());
+        // 浏览器插件只能由玩家加
+        assert!(
+            agent_protected_violation(&json!({"browser": {"extensions": [{"path": "C:/x"}]}}))
+                .is_some()
+        );
+        assert!(agent_protected_violation(&json!({"browser": null})).is_some());
     }
 }

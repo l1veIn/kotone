@@ -1,6 +1,6 @@
 # ADR 031：内置浏览器与浏览器操作——在后台替玩家操作网页
 
-状态：Accepted / 已确认（2026-11-20），玩家决定随 0.2.0-rc.1 一起上（“做完再发”），位置改成聊天页右侧栏（见第 1 节）。相关：[ADR 019](019-game-computer-use.md)（操作游戏）、[ADR 029](029-voice-call-and-background-tasks.md)（后台任务）、[ADR 030](030-subagent-shell-and-files.md)（读过外面的东西先问）。调研：[常见音乐软件](../research/2026-11-20-music-apps.md)。
+状态：Accepted / 已确认（2026-11-20），玩家决定随 0.2.0-rc.1 一起上（“做完再发”），位置改成聊天页右侧栏（见第 1 节）。2026-11-21 修订：rc1 试玩后玩家决定把它做成完整浏览器——多标签页、地址栏、前进后退、页面全屏、插件（照 DSH 桌面版和 Codex 的内置浏览器，见第 1 节“完整浏览器”）。相关：[ADR 019](019-game-computer-use.md)（操作游戏）、[ADR 029](029-voice-call-and-background-tasks.md)（后台任务）、[ADR 030](030-subagent-shell-and-files.md)（读过外面的东西先问）。调研：[常见音乐软件](../research/2026-11-20-music-apps.md)。
 
 ## 背景
 
@@ -34,11 +34,25 @@
 
 ### 1. 内置浏览器
 
-- **在聊天页的右侧栏里**（2026-11-20 玩家决定，照 DSH 桌面版的侧栏浏览器）：右侧栏常驻后台任务卡片和浏览器卡片，浏览器展开时也在右侧展开。浏览器是主窗口（`main`，关闭时只是隐藏）里的一个 Tauri 子网页视图（`Window::add_child`，tauri `unstable` 特性），第一次打开网页时创建；位置和大小跟着右侧栏里那块区域走（界面报给 `browser_set_bounds`）。收起、切到别的页面、有对话框时只隐藏、不销毁：页面、登录、正在放的歌都保留（照 DSH `keepMounted`）。只有一个页面，不做标签页、地址栏、书签。
+- **在聊天页的右侧栏里**（2026-11-20 玩家决定，照 DSH 桌面版的侧栏浏览器）：右侧栏常驻后台任务卡片和浏览器卡片，浏览器展开时也在右侧展开。浏览器是主窗口（`main`，关闭时只是隐藏）里的一个 Tauri 子网页视图（`Window::add_child`，tauri `unstable` 特性），第一次打开网页时创建；位置和大小跟着右侧栏里那块区域走（界面报给 `browser_set_bounds`）。收起、切到别的页面、有对话框时只隐藏、不销毁：页面、登录、正在放的歌都保留（照 DSH `keepMounted`）。~~只有一个页面，不做标签页、地址栏、书签。~~（2026-11-21 改成完整浏览器，见下。）
 - 数据单独存放在 `<KOTONE_HOME>/browser/`（Tauri `data_directory`，独立的 WebView2 环境），和 Kotone 自己的界面分开。
 - 网页调用不了 Kotone 的任何功能：Tauri 2.11 对非本地来源一律拒绝自定义命令和插件命令，除非某个 capability 写了 `remote`（`tauri` `webview/mod.rs` 的 remote-origin 守卫）；我们的 capabilities 一个都没写（有测试）。
 - 启动参数只加在这个浏览器自己的环境上（照 ego 和 wqty123）：`--disable-renderer-backgrounding`、`--disable-background-timer-throttling`、`--disable-backgrounding-occluded-windows`、`--disable-features=CalculateNativeWinOcclusion`；为了网页播放器，试 `--autoplay-policy=no-user-gesture-required`。
 - 设置里一个按钮“清除浏览器登录”，删掉这个目录。
+
+#### 完整浏览器（2026-11-21 玩家决定）
+
+rc1 试玩后玩家拿 Codex 的内置浏览器对比，决定把它做成玩家自己也能用的完整浏览器（“这轮就把侧边栏、浏览器这些推进到一个成熟的阶段”）。照 DSH 桌面版侧栏浏览器和 Codex 内置浏览器的样子：
+
+- **多标签页**：每个标签页一个子网页视图（label `browser-N`），共用 `<KOTONE_HOME>/browser/` 一份数据（登录共享），启动参数、插件开关完全一样（WebView2 规定同一数据目录的环境选项必须一致）。只有当前标签页摆在右侧栏的区域里，其余隐藏、不销毁（声音照常）。最多 8 个。
+- **地址栏**：像网址的（写了 `http(s)://`；或主机部分像域名、是 IP、`localhost`，没写协议补 `https://`）就打开，有空格或不像网址的用必应搜（国内能直接打开）；`javascript:`、`file:` 这类别的协议直接拒绝（不当搜索词）。网址照样过网址检查。**玩家自己打开的网站记进站点授权**（她以后打开不用再问）。
+- **前进、后退、停止、刷新**用 WebView2 自带的（跨域、单页应用都准）；标签页的标题、网址、能不能前进后退从 WebView2 的事件来（`DocumentTitleChanged`、`SourceChanged`、`HistoryChanged`）。新标签页先开空白页、装好访客策略（拒绝权限、对话框、拉起本机程序）再打开网页，用 `location.replace` 换掉空白页：历史里不留空白页，“后退”不会退回空白页。
+- **网页里的新窗口**（`window.open`、`target=_blank`，只许 http(s)）在新标签页打开，切过去；满 8 个时在原标签页打开。
+- **页面全屏**（视频的全屏按钮）：`ContainsFullScreenElementChanged` → 标签页的 `fullscreenElement`，界面据此把浏览器铺满。浏览器只把全屏给看得见、有焦点的页面（隐藏时网页收到 `not granted`），玩家亲手点就满足。
+- **她的标签页**：后台任务的 `browser.*` 只动她自己的标签页（`agent: true`）。第一次 `browser.open` 新开一个并切过去，之后在里面打开、不切（玩家可能在看别的）；玩家的标签页她读不到也不动。从她的页面开出来的新窗口成为她新的标签页（原来那个留给玩家）。`busy`、交给玩家跟着她的标签页走（交给玩家时切到她的标签页）；她的标签页被关掉，正在等的交接就结束，她下次再开新的。主会话的 `music` 对正在出声的标签页，没有就对她的。
+- **下载**照旧一律拒绝，状态里给一句临时提示（`notice`，8 秒后消失），不放进 `error`。
+- **插件**：只支持已解压的 Chrome / Edge 插件文件夹（WebView2 没有应用商店，也不认 `.crx`）。玩家加的列表记在设置 `browser.extensions`（新字段，旧配置为空）；装、删、开关走 WebView2 Profile 的插件接口（`ICoreWebView2Profile7`），装进浏览器自己的数据目录。不用 wry 的 `extensions_path`：它建视图时把目录里的子文件夹逐个装，任何一个出错整个视图就建不出来。每次运行第一个标签页建好时对一遍：设置里有、浏览器里没有的装上（清除登录后数据目录没了也能装回来），浏览器没开时玩家删掉的卸掉（`browser.pendingUninstall`），开关照设置；别的插件不碰（WebView2 自带 Edge PDF Viewer 这类内置插件也在列表里）。插件变了以后重新打开各标签页的网页（重新导航，不用刷新：页面还在加载时刷新会刷回空白页）。
+- **不从 Chrome / Edge 导入登录和书签**：Chrome 127 起登录信息用应用绑定加密（App-Bound Encryption），只有 Chrome 自己能解；能解开的办法正是盗号木马的做法，而且一导入，她就能碰到玩家所有网站的登录（邮箱、Steam、支付），违背第 4 节。玩家在 Kotone 的浏览器里登一次（音乐网站扫码）就够了。
 
 ### 2. 浏览器操作工具（名字照 Playwright MCP，做法照 ego）
 
@@ -93,7 +107,7 @@
 
 ## 不做的
 
-- 不开浏览器调试端口；不驱动玩家自己的浏览器；不做通用浏览器界面。
+- 不开浏览器调试端口；不驱动玩家自己的浏览器。~~不做通用浏览器界面。~~（2026-11-21 改成完整浏览器；书签、历史记录页、下载仍然不做。）
 - 不导入其他浏览器的登录信息；不替玩家输入密码、付款。
 - 不截图识别（以后真遇到只能看图的页面，再照 Playwright MCP 的 vision 选项加）。
 
@@ -116,6 +130,10 @@
 | 打开、读页面、点击（页面内 `click()` 为主、鼠标事件备选）、输入、按键、等待、交给玩家、`music` | `browser/page.rs` | ego |
 | 后台任务的 `browser.*`：第一次打开某个网站经主会话问、解析后的地址再查一遍、遇到验证码自动交给玩家、语音入口时开口说一句（不把 Kotone 拉到前台） | `apps/desktop/src-tauri/src/agent/browser_tools.rs` | ADR 030 的确认路径 |
 | 界面命令 `browser_state / browser_set_bounds / browser_control / browser_handover_done / browser_clear_data`，事件 `kotone://browser` | `browser_cmd.rs` | — |
+| 完整浏览器（2026-11-21）：标签页的账（开、切、关、上限、她的标签页、放歌对谁，纯逻辑有单测）、地址栏命令、新窗口进新标签页、下载提示 | `browser/mod.rs` | DSH 桌面版侧栏浏览器、Codex 内置浏览器 |
+| 建标签页视图（不要焦点、建完确认、访客策略）、页面事件（标题 / 网址 / 前进后退 / 全屏）、前进 / 后退 / 停止 | `browser/view.rs` | WebView2 文档 |
+| 插件（Profile7 装 / 删 / 开关，manifest 检查，每次运行对一遍） | `browser/extensions.rs`，设置 `browser.extensions` | WebView2 文档 |
+| 地址栏判断（网址还是搜索词）、`MAX_TABS` | `crates/kotone-agent/src/browser.rs` `resolve_address` | Chromium 地址栏（简化） |
 
 - 工具都走 `Source::Exec`（经桌面端 `BuiltinHost::exec`，带调用 id、取消和“每次询问”），只给后台；`music` 是主会话的内置工具。`browser.*` 的结果按不可信算，接入 ADR 030 的“读过外面的东西”标记。新的副作用 `browses-web` / `plays-media` 默认允许（什么时候问由上面的规则定）。
 - 和设计不同的地方：
@@ -150,6 +168,14 @@
 - **拦下拉起本机程序**：网易云网页版会引导“去客户端播放”（`orpheus://`），这台电脑装了网易云客户端。WebView2 默认会弹“要打开这个应用吗”，窗口隐藏时没人点得掉。现在接 `LaunchingExternalUriScheme`（`ICoreWebView2_18`）一律取消并记日志（DSH 访客策略：拒绝特殊协议）。实测中有一次在网易云点“播放”后整个页面卡住约 60 秒、之后每次打开都要 60 秒（换新的浏览器视图后复现不出来，原因没坐实），加了这道拦截后连点 4 次都是 0.9 秒返回。
 - **网易云页面时不时把自己的主线程占满**：同一套操作，有几轮每次执行脚本 0.3 秒，有几轮（多在新的浏览器数据、第一次打开网易云时）每次要 6–19 秒、偶尔超过 20 秒报“浏览器没有回应”。日志显示是页面忙，不是调用丢了；很可能是网易云页面自己在同步等网络请求。没有修，放进试玩清单观察。
 - 经过模型的“我要听晴天”（`browser_real.py --music-only`，2026-11-21 再跑一次）：先读 `music-web` 技能，网易云要登录就交给玩家；脚本 20 秒后替玩家点“好了”但没真登录，她判断“周杰伦在网易云没版权”改去 QQ 音乐、再去酷狗，每个新网站先问，最后照实说没放成、请玩家登录。技能补了一句：点了“好了”还没登上就再请一次，只有没版权或玩家要求才换网站。
+- **完整浏览器的接口（2026-11-21）**：`BrowserState` 加 `tabs: BrowserTab[]`、`activeTab`、`notice`（`url / title / site / loading` 仍是当前标签页的；`media` 是正在出声的标签页的，没有就当前的）；`BrowserTab { id, url, title, site, loading, canGoBack, canGoForward, audible, agent, fullscreenElement }`。命令：`browser_navigate {url}`（地址栏原样交过来）、`browser_tab_new {url?}`、`browser_tab_close {id}`、`browser_tab_select {id}`、`browser_control {action}` 加 `forward` / `stop`（`close` 关当前标签页）、`browser_extensions()` → `[{id, name, enabled, path, installed}]`、`browser_extension_add {path}`、`browser_extension_remove {id}`、`browser_extension_toggle {id, enabled}`。动网页视图的命令都是 async（同步命令在主线程的 IPC 回调里跑，在那里动视图会自锁）。
+- 完整浏览器踩到、已经处理的：
+  - 新开窗口的回调里再建视图，编译器推不出 `Send`（建视图 → 新窗口回调 → 建视图是个环）：交给 tokio 时显式擦掉类型。
+  - 插件对一遍时一开始把“设置里没有的”都卸掉，结果去卸 WebView2 自带的 Edge PDF Viewer（报“未指定的错误”）；改成只卸玩家删掉的。
+  - 装好插件后刷新标签页，把正在加载的第一个网页刷回了空白页（后退也就退回空白页）；改成重新导航后历史里又多一条。最后用 `location.replace` 换成标签页的网址（不刷新、不多留历史），新标签页也是空白页 + `location.replace`（试过直接以网址创建，但那样第一个网页在访客策略装好之前就开始加载了）。
+  - 她的点击带上“用户操作”（`Runtime.callFunctionOn` 的 `userGesture`），`target=_blank` 链接照常开新标签页；轮询用的脚本不带，免得网页一直有“刚操作过”的权限去弹窗。页面全屏仍要真正的用户操作（玩家亲手点）。
+- 完整浏览器真机（2026-11-21，调试版，主窗口隐藏、静音，`scripts/manual-e2e/browser_tabs_real.py`，不经过模型）：插件在浏览器打开前加进去、第一个标签页建好后装上、页面标题被测试插件改掉；地址栏网址开新标签页、搜索词走必应、本机地址拒绝；后退 / 前进 / 停止；第二个标签页开、切、关，另一个标签页的页面不变；玩家打开的网站记进站点授权；她第一次打开新开自己的标签页并切过去，之后在里面打开不切，玩家的标签页不变；她读页面读的是她的标签页；她点 `target=_blank` 开出她的新标签页；下载被拦、提示 8 秒后消失、没下载文件；第 9 个标签页被拒；插件关掉后页面不再被改、再打开又生效、删掉后设置里也没了；全部关掉后浏览器关闭。第一个网页前面没有空白页（不能再后退）。`--show`（显示主窗口几秒、把焦点给网页，不按键不动鼠标）时页面全屏和退出全屏都报上来：41/41；不加 `--show` 跳过全屏。正式版（`KOTONE_EXE=target/release/kotone.exe`，只跑不靠调试命令的部分）27/27。
+- 完整浏览器经过模型（2026-11-21，真实 DeepSeek，`browser_real.py` 加了 B0：玩家先从地址栏开自己的 example.org 标签页）：她第一次打开 example.com 新开了自己的标签页、切过去，玩家的标签页没动；必应搜索点开的结果在她的新标签页里打开。调试版 20/21：“我要听晴天”第一次真放起来了（QQ 音乐不登录的 30 秒试听），但主会话“暂停一下”没停住——`music` 的页面脚本没找到 QQ 的播放器（`count` 为 0），WebView2 却说页面在出声，所以界面一直显示在放。全程都在她的同一个标签页里，不是标签页的问题；新的浏览器数据里 QQ 不登录就不让放，复现不了，留到玩家登录后实测。正式版 14/14（这次她在酷狗交给玩家扫码，没人扫，照实说没放成）。`browser_probe_real.py` 和 `--minimized` 仍是 13/13。
 - 已知缺口：导航检查只管顶层页面，iframe 里的请求不拦（DSH 记录里也写了这不是完整的内网防火墙）；域名解析检查只在 `browser.open` 时做一次（解析和连接之间仍有时间差）；酷狗、酷我、QQ 音乐的“下一首”按钮选择器没有真机核对过，对不上时按 title / aria-label 里的“下一首”找。
 
 ## 参照

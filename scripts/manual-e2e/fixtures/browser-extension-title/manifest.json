@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Kotone test: title marker",
+  "version": "1.0.0",
+  "description": "Kotone 真机测试用：在每个网页标题前加上 [KOTONE-EXT]，并在页面上放一个标记属性。",
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

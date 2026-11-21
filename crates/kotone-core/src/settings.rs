@@ -151,6 +151,41 @@ pub struct Settings {
     /// 游戏语音（ADR 020）：琴音用虚拟麦克风替玩家在游戏语音里说话。新字段，缺省 = 关闭。
     #[serde(default)]
     pub voice_chat: crate::voice_chat::VoiceChatConfig,
+    /// 内置浏览器（ADR 031）：玩家加的浏览器插件。新字段，旧版本会忽略。
+    #[serde(default)]
+    pub browser: BrowserConfig,
+}
+
+/// 内置浏览器（config.json `browser` 段，ADR 031）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserConfig {
+    /// 玩家加的浏览器插件：已解压的 Chrome / Edge 插件文件夹（WebView2 只支持这种，没有应用商店）。
+    #[serde(default)]
+    pub extensions: Vec<BrowserExtensionConfig>,
+    /// 浏览器没开着时删掉的插件（WebView2 给的插件 id），下次打开浏览器时卸掉。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_uninstall: Vec<String>,
+}
+
+/// 一个浏览器插件。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserExtensionConfig {
+    /// Kotone 自己的编号（插件文件夹路径的哈希），界面和命令用。
+    #[serde(default)]
+    pub id: String,
+    /// 插件文件夹（里面有 manifest.json）。
+    #[serde(default)]
+    pub path: String,
+    /// 插件名（manifest 里的 name）。
+    #[serde(default)]
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// WebView2 装好后给的插件 id（装过才有）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_id: Option<String>,
 }
 
 /// OCR 模型选择（config.json `ocr` 段）。
@@ -586,6 +621,7 @@ impl Default for Settings {
             ocr: OcrConfig::default(),
             search: SearchConfig::default(),
             voice_chat: crate::voice_chat::VoiceChatConfig::default(),
+            browser: BrowserConfig::default(),
         }
     }
 }
@@ -1109,6 +1145,39 @@ pub fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 浏览器插件是新字段（ADR 031）：旧配置没有它时为空；写进去的能原样读回；只写了路径的条目默认启用。
+    #[test]
+    fn browser_extensions_are_a_new_optional_section() {
+        let old: Settings = serde_json::from_value(serde_json::json!({
+            "hotkey": {"key": "F8", "mode": "hold"},
+            "audioDeviceId": "",
+            "sttEngine": "",
+            "engineOptions": {},
+            "autoSend": true,
+            "activeProfileId": null,
+            "language": "zh",
+            "evalRecording": false,
+            "runAsAdminOnStart": false
+        }))
+        .unwrap();
+        assert!(old.browser.extensions.is_empty() && old.browser.pending_uninstall.is_empty());
+        let mut s = Settings::default();
+        s.browser.extensions.push(BrowserExtensionConfig {
+            id: "abc".into(),
+            path: r"C:\ext\adblock".into(),
+            name: "去广告".into(),
+            enabled: false,
+            installed_id: Some("edge-id".into()),
+        });
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["browser"]["extensions"][0]["installedId"], "edge-id");
+        let back: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(back.browser, s.browser);
+        let minimal: BrowserExtensionConfig =
+            serde_json::from_value(serde_json::json!({"path": "C:/ext"})).unwrap();
+        assert!(minimal.enabled && minimal.installed_id.is_none());
+    }
 
     #[test]
     fn old_profiles_keep_their_voice_and_reminder_settings_without_a_call_key() {

@@ -67,8 +67,9 @@ pub fn entries() -> Vec<ToolEntry> {
     vec![
         browse(
             TOOL_OPEN,
-            "在 Kotone 右侧栏的浏览器里打开一个网址（只许 http / https，内网和本机地址打不开；第一次打开某个网站会先经主会话问玩家）。\
-打开后用 browser.snapshot 读页面。常用音乐网站：网易云 https://music.163.com 、QQ 音乐 https://y.qq.com 、\
+            "在 Kotone 右侧栏浏览器里**你自己的标签页**打开一个网址（第一次用时新开一个标签页并切过去；玩家自己开的标签页你看不到、也不会动；\
+只许 http / https，内网和本机地址打不开；第一次打开某个网站会先经主会话问玩家）。\
+打开后用 browser.snapshot 读页面；网页里点开的新窗口会成为你新的标签页。常用音乐网站：网易云 https://music.163.com 、QQ 音乐 https://y.qq.com 、\
 酷狗 https://www.kugou.com 、酷我 https://www.kuwo.cn 。",
             json!({"type": "object", "additionalProperties": false, "required": ["url"], "properties": {
                 "url": {"type": "string", "maxLength": 2000}
@@ -240,6 +241,83 @@ fn is_private_v6(ip: Ipv6Addr) -> bool {
 pub fn site_of(url: &url::Url) -> String {
     let host = url.host_str().unwrap_or("").to_ascii_lowercase();
     host.strip_prefix("www.").unwrap_or(&host).to_string()
+}
+
+// ---------- 地址栏、标签页（ADR 031：完整浏览器，照 DSH 桌面版侧栏浏览器与 Codex 内置浏览器） ----------
+
+/// 最多开几个标签页。
+pub const MAX_TABS: usize = 8;
+
+/// 地址栏里的搜索词用必应搜（国内能直接打开）。
+const SEARCH_URL: &str = "https://cn.bing.com/search";
+
+/// 不是 http(s) 的协议：地址栏里写了就拒绝（不当搜索词，免得 `javascript:` 之类被悄悄搜出去）。
+const OTHER_SCHEMES: &[&str] = &[
+    "javascript",
+    "file",
+    "data",
+    "about",
+    "blob",
+    "chrome",
+    "edge",
+    "view-source",
+    "ftp",
+    "mailto",
+    "tauri",
+    "kotone",
+    "ws",
+    "wss",
+];
+
+/// 地址栏输入 → 要打开的网址。照 Chromium 地址栏的简化版：写了 `http(s)://` 是网址；有空格是搜索词；
+/// 主机部分像域名（有点、最后一段是两个以上的字母）、是 IP 或 `localhost` 是网址（没写协议补 `https://`）；
+/// 其余当搜索词（必应）。网址照 [`check_url`] 检查：本机、内网、非 http(s) 一律拒绝。
+pub fn resolve_address(input: &str) -> Result<url::Url, String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err("地址栏是空的".into());
+    }
+    let lower = input.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return check_url(input);
+    }
+    if let Some((scheme, _)) = lower.split_once(':') {
+        if OTHER_SCHEMES.contains(&scheme) {
+            return Err(format!("只能打开 http / https 网址：{input}"));
+        }
+    }
+    if !input.chars().any(char::is_whitespace) && looks_like_host(input) {
+        // 自己补协议：`music.163.com:443` 直接解析会把 `music.163.com` 当成协议名。
+        return check_url(&format!("https://{input}"));
+    }
+    let mut url = url::Url::parse(SEARCH_URL).expect("固定的搜索网址");
+    url.query_pairs_mut().append_pair("q", input);
+    Ok(url)
+}
+
+/// 输入的主机部分（`/ ? #` 之前、去掉端口）像不像一个能访问的主机。
+fn looks_like_host(input: &str) -> bool {
+    let host = input.split(['/', '?', '#']).next().unwrap_or("");
+    if host.starts_with('[') {
+        return host.contains(']'); // [IPv6]
+    }
+    let host = match host.rsplit_once(':') {
+        Some((h, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => h,
+        Some(_) => return false,
+        None => host,
+    };
+    if host.eq_ignore_ascii_case("localhost") || host.parse::<Ipv4Addr>().is_ok() {
+        return true;
+    }
+    let labels: Vec<&str> = host.split('.').collect();
+    if labels.len() < 2 || labels.iter().any(|l| l.is_empty()) {
+        return false;
+    }
+    let valid_label = |l: &str| l.chars().all(|c| c.is_alphanumeric() || c == '-');
+    let tld = labels[labels.len() - 1];
+    labels.iter().all(|l| valid_label(l))
+        && tld.chars().count() >= 2
+        && tld.chars().all(char::is_alphabetic)
 }
 
 // ---------- 站点授权（第一次打开某个网站先问，ADR 031 第 4 节） ----------
@@ -1238,6 +1316,67 @@ pub const GUEST_INIT_SCRIPT: &str = r#"(() => {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_address_bar_opens_urls_and_searches_words() {
+        let open = |s: &str| resolve_address(s).map(|u| u.to_string());
+        // 网址：没写协议补 https；带路径、查询、端口的也是网址
+        assert_eq!(open("music.163.com").unwrap(), "https://music.163.com/");
+        assert_eq!(
+            open("  https://y.qq.com/n/ryqq/search?w=晴天  ").unwrap(),
+            "https://y.qq.com/n/ryqq/search?w=%E6%99%B4%E5%A4%A9"
+        );
+        assert_eq!(
+            open("example.com/path?x=1#top").unwrap(),
+            "https://example.com/path?x=1#top"
+        );
+        assert_eq!(
+            open("www.bilibili.com:443/video").unwrap(),
+            "https://www.bilibili.com/video"
+        );
+        assert_eq!(open("8.8.8.8").unwrap(), "https://8.8.8.8/");
+        assert_eq!(open("HTTP://Example.COM").unwrap(), "http://example.com/");
+        // 中文域名也是网址
+        assert!(open("中文.中国").unwrap().starts_with("https://"));
+        // 搜索词：有空格、没有点、最后一段不是字母、像版本号
+        for words in [
+            "晴天 周杰伦",
+            "周杰伦",
+            "lol",
+            "1.5",
+            "a.b",
+            "v26.23 更新",
+            "剑姬 出装",
+            "how to play",
+        ] {
+            let url = open(words).unwrap();
+            assert!(
+                url.starts_with("https://cn.bing.com/search?q="),
+                "{words} → {url}"
+            );
+        }
+        let url = resolve_address("晴天 周杰伦").unwrap();
+        assert_eq!(
+            url.query_pairs().find(|(k, _)| k == "q").unwrap().1,
+            "晴天 周杰伦"
+        );
+        // 本机、内网照 url-guard 拒绝；别的协议拒绝（不当搜索词）
+        for blocked in [
+            "localhost:3000",
+            "127.0.0.1",
+            "192.168.1.1/admin",
+            "http://10.0.0.5",
+            "javascript:alert(1)",
+            "file:///C:/Windows/win.ini",
+            "about:blank",
+            "data:text/html,hi",
+            "kotone://x",
+            "",
+            "   ",
+        ] {
+            assert!(resolve_address(blocked).is_err(), "{blocked} 应该被拒绝");
+        }
+    }
 
     #[test]
     fn urls_follow_the_url_guard_rules() {

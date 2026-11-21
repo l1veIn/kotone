@@ -8,8 +8,10 @@ debugging port). The browser is muted (KOTONE_BROWSER_MUTE) so nothing plays out
 Input tools are denied; speech volume 0. Stops before starting if a game is in front.
 
 Cases (typed, one conversation):
+B0. the player first opens example.org from the address bar (`browser_navigate`) → their own tab.
 B1. open https://example.com and say its title → the first visit to a site asks the player (card `waiting`,
     answered “允许”); `browser-sites.json` remembers it; the reply has “Example Domain”.
+    She works in her own tab (`agent: true`, switched to); the player's example.org tab is untouched.
 B2. search a public search page (Bing) and open the first result → browser.type / browser.click / browser.wait,
     all while the window is hidden.
 B3. “我要听晴天” → the background goes to music.163.com, searches and plays (or hands over for a login;
@@ -246,6 +248,10 @@ def main():
 
 def web_cases():
     if True:
+        # 玩家先在地址栏开了自己的标签页（多标签页）：她的事在她自己的标签页里做，不动玩家的。
+        r = invoke("browser_navigate", {"url": "example.org"})
+        player_tab = (r.get("ok") or {}).get("tab")
+        check("B0: the player opens a tab from the address bar", player_tab, json.dumps(r, ensure_ascii=False)[:200])
         b1 = run("B1 example.com", "在浏览器里打开 https://example.com ，告诉我这个页面的标题是什么")
         check("B1: opened in the background with the browser tools", "browser.open" in b1.get("tools", []),
               ",".join(b1.get("tools", [])))
@@ -258,6 +264,13 @@ def web_cases():
         bs = browser_state()
         check("B1: browser state follows the page", bs.get("open") and bs.get("site") == "example.com",
               json.dumps(bs, ensure_ascii=False)[:300])
+        tabs = bs.get("tabs") or []
+        mine = next((t for t in tabs if t.get("id") == player_tab), {})
+        hers = [t for t in tabs if t.get("agent")]
+        check("B1: she worked in her own tab, the player's tab is untouched",
+              mine.get("url") == "https://example.org/" and not mine.get("agent") and len(hers) == 1
+              and hers[0].get("site") == "example.com" and bs.get("activeTab") == hers[0].get("id"),
+              json.dumps(tabs, ensure_ascii=False)[:400])
 
         b2 = run("B2 search", "在浏览器里打开 https://cn.bing.com ，在搜索框里搜“晴天 周杰伦”，"
                               "然后点开第一条搜索结果，告诉我打开的是哪个网站、页面标题是什么")
