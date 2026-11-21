@@ -115,6 +115,51 @@ pub async fn playing_audio(webview: &Webview) -> Option<bool> {
         .ok()?
 }
 
+/// 这个标签页是不是被静音了（WebView2 `IsMuted`）。
+pub async fn muted(webview: &Webview) -> Option<bool> {
+    mute_call(webview, None).await
+}
+
+/// 静音 / 取消静音这个标签页；返回设好之后的状态。
+pub async fn set_muted(webview: &Webview, muted: bool) -> Option<bool> {
+    mute_call(webview, Some(muted)).await
+}
+
+/// 回调里只读写属性、经 channel 交回，不 emit（`with_webview` 里发事件会自锁）。
+async fn mute_call(webview: &Webview, set: Option<bool>) -> Option<bool> {
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<bool>>();
+    webview
+        .with_webview(move |platform| {
+            #[cfg(windows)]
+            unsafe {
+                use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_8;
+                use windows::core::Interface;
+                let value = (|| -> windows::core::Result<bool> {
+                    let core = platform
+                        .controller()
+                        .CoreWebView2()?
+                        .cast::<ICoreWebView2_8>()?;
+                    if let Some(muted) = set {
+                        core.SetIsMuted(muted)?;
+                    }
+                    let mut muted = windows::core::BOOL::default();
+                    core.IsMuted(&mut muted)?;
+                    Ok(muted.as_bool())
+                })();
+                let _ = tx.send(value.ok());
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = (platform, set, tx.send(None));
+            }
+        })
+        .ok()?;
+    tokio::time::timeout(Duration::from_secs(5), rx)
+        .await
+        .ok()?
+        .ok()?
+}
+
 fn short(text: &str) -> String {
     text.chars().take(300).collect()
 }

@@ -474,6 +474,28 @@ pub async fn music(app: &AppHandle, action: &str) -> Result<Value, String> {
         "next" if !done => {
             out["note"] = json!("这个网站找不到“下一首”按钮：要换歌就交给后台在页面上点");
         }
+        // 页面脚本找不到播放器、可这个标签页还在出声（rc1 之后实测：QQ 音乐试听）：退一步把这个
+        // 标签页静音，先让声音停下，并如实说明；说“继续”时取消静音。
+        "pause" if !done && audible == Some(true) => {
+            if cdp::set_muted(&webview, true).await == Some(true) {
+                out["playing"] = json!(false);
+                out["muted"] = json!(true);
+                out["note"] = json!(
+                    "这个网站的播放器暂停不了，先把这个标签页静音了（歌其实还在走）；玩家说“继续”就取消静音"
+                );
+            } else {
+                out["note"] = json!("这个网站的播放器暂停不了，静音也没成功");
+            }
+        }
+        "play" if !done && cdp::muted(&webview).await == Some(true) => {
+            // 真机脚本半夜测放歌时整个浏览器是静音的，那时不取消。
+            if std::env::var_os("KOTONE_BROWSER_MUTE").is_none() {
+                cdp::set_muted(&webview, false).await;
+            }
+            out["muted"] = json!(false);
+            out["playing"] = json!(audible == Some(true));
+            out["note"] = json!("取消静音了");
+        }
         "play" if !done => {
             out["note"] = json!("没有暂停着的歌可以继续");
         }
