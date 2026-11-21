@@ -9,10 +9,16 @@
 //! 独占全屏或受保护内容可能得到黑图。不移动、显示或聚焦任何窗口。
 //!
 //! 所有坐标在线程级 Per-Monitor-V2 DPI 上下文中读取，得到物理像素；上下文在调用结束时恢复。
+//!
+//! Kotone 自己用的 [`GdiForegroundCapturer::capture_foreground_view`]（开口时的截图、读聊天、
+//! `game.look`、自动化）放宽两条：跨显示器时只截客户区在主要那块屏上的部分，超过像素上限时
+//! 等比缩小；两种情况都在 `warnings` 里说明（`PARTIAL_VIEW` / `DOWNSCALED`）。外部工具服务仍用
+//! 上面严格的 `capture_foreground_client`。
 
 use kotone_core::tools::{
-    CaptureBackendInfo, CaptureWarning, CapturedImage, PhysicalRect, WindowCapturer,
-    WindowIdentity, WindowInfo, WindowObserver, WindowToolError,
+    capture_view, downscale_area, fit_size, CaptureBackendInfo, CaptureWarning, CapturedImage,
+    PhysicalRect, ViewCapture, WindowCapturer, WindowIdentity, WindowInfo, WindowObserver,
+    WindowToolError,
 };
 
 /// GDI 后端的方法标识（进入 capabilities 与每个捕获产物的来源记录）。
@@ -37,6 +43,77 @@ pub fn gdi_capture_limitations() -> Vec<String> {
 pub const WARNING_UNIFORM_PIXELS: &str = "UNIFORM_PIXELS";
 /// 系统报告 Direct3D 独占全屏时给出的警告码。
 pub const WARNING_EXCLUSIVE_FULLSCREEN: &str = "EXCLUSIVE_FULLSCREEN_SUSPECTED";
+/// 窗口横跨多块屏幕，只截了它在主要那块屏上的部分（[`GdiForegroundCapturer::capture_foreground_view`]）。
+pub const WARNING_PARTIAL_VIEW: &str = "PARTIAL_VIEW";
+/// 截到的区域超过像素上限，等比缩小了（[`GdiForegroundCapturer::capture_foreground_view`]）。
+pub const WARNING_DOWNSCALED: &str = "DOWNSCALED";
+
+/// Kotone 自己截前台窗口前的检查与取景（纯逻辑，便于测试）：窗口要在前台、没最小化、可见；
+/// 取客户区和它所在显示器的交集（[`capture_view`]）。和工具服务的严格截图不同，跨屏不拒绝、
+/// 超过像素上限也不拒绝（截完再等比缩小，见 [`finish_view`]）。
+pub fn view_rect(info: &WindowInfo) -> Result<PhysicalRect, WindowToolError> {
+    if info.minimized {
+        return Err(WindowToolError::Minimized);
+    }
+    if !info.visible || info.cloaked {
+        return Err(WindowToolError::NotVisible);
+    }
+    if !info.foreground {
+        return Err(WindowToolError::NotForeground);
+    }
+    let client = info
+        .client_rect
+        .ok_or_else(|| WindowToolError::InvalidGeometry("无法读取客户区位置".into()))?;
+    if client.width == 0 || client.height == 0 {
+        return Err(WindowToolError::InvalidGeometry("客户区为空".into()));
+    }
+    let monitor = info
+        .monitor_rect
+        .ok_or_else(|| WindowToolError::InvalidGeometry("窗口不在任何显示器上".into()))?;
+    capture_view(&client, &monitor).ok_or_else(|| {
+        WindowToolError::InvalidGeometry(
+            "客户区不在它所在的显示器上（可能整个移到了屏幕外）".into(),
+        )
+    })
+}
+
+/// 截完之后：取景区域比客户区小就加“只截了一部分”的提示；超过像素上限就等比缩小并加提示。
+/// 返回（像素、宽、高）；提示追加到 `warnings`。
+pub fn finish_view(
+    rgba: Vec<u8>,
+    view: PhysicalRect,
+    client: PhysicalRect,
+    max_pixels: u64,
+    warnings: &mut Vec<CaptureWarning>,
+) -> (Vec<u8>, u32, u32) {
+    if view != client {
+        warnings.push(CaptureWarning::new(
+            WARNING_PARTIAL_VIEW,
+            format!(
+                "窗口横跨多块屏幕：只截了它在主要那块屏上的部分（屏幕物理像素 {},{} 起 {}×{}；整个客户区 {}×{}），别的屏上的内容不在图里。",
+                view.x, view.y, view.width, view.height, client.width, client.height
+            ),
+        ));
+    }
+    let (w, h) = fit_size(view.width, view.height, max_pixels);
+    if (w, h) == (view.width, view.height) {
+        return (rgba, w, h);
+    }
+    let out = downscale_area(&rgba, view.width, view.height, w, h);
+    warnings.push(CaptureWarning::new(
+        WARNING_DOWNSCALED,
+        format!(
+            "截到的区域 {}×{} 超过 {} 像素，等比缩小到 {}×{}（{:.0}%）；很小的字可能更难认，需要时放大局部再看。",
+            view.width,
+            view.height,
+            max_pixels,
+            w,
+            h,
+            f64::from(w) / f64::from(view.width) * 100.0
+        ),
+    ));
+    (out, w, h)
+}
 
 /// RGBA 像素是否全部相同。
 pub fn is_uniform_rgba(rgba: &[u8]) -> bool {
@@ -598,37 +675,8 @@ mod imp {
             let before = inspect_in_scope(identity)?;
             let rect = capturable_rect(&before, max_pixels)?;
             let rgba = copy_screen_rect(rect)?;
-            // 复制后再次核对：期间失去前台、移动/缩放或关闭的帧不交付
-            let after = inspect_in_scope(identity).map_err(|error| match error {
-                WindowToolError::Gone | WindowToolError::IdentityChanged => {
-                    WindowToolError::ChangedDuringCapture(error.to_string())
-                }
-                other => other,
-            })?;
-            if after.minimized {
-                return Err(WindowToolError::ChangedDuringCapture("目标已最小化".into()));
-            }
-            if !after.foreground {
-                return Err(WindowToolError::ChangedDuringCapture("目标失去前台".into()));
-            }
-            if after.client_rect != Some(rect) {
-                return Err(WindowToolError::ChangedDuringCapture(
-                    "客户区已移动或改变大小".into(),
-                ));
-            }
-            let mut warnings = Vec::new();
-            if is_uniform_rgba(&rgba) {
-                warnings.push(CaptureWarning::new(
-                    WARNING_UNIFORM_PIXELS,
-                    "All captured pixels are identical; the window may be blank, exclusive-fullscreen or protected. A uniform image is not evidence of readable content.",
-                ));
-            }
-            if crate::fullscreen::is_exclusive_fullscreen_active() == Some(true) {
-                warnings.push(CaptureWarning::new(
-                    WARNING_EXCLUSIVE_FULLSCREEN,
-                    "Windows reports a Direct3D exclusive-fullscreen application; GDI screen pixels may be black or stale.",
-                ));
-            }
+            let after = recheck_after_copy(identity, rect)?;
+            let warnings = content_warnings(&rgba);
             Ok(CapturedImage {
                 width: rect.width,
                 height: rect.height,
@@ -636,6 +684,83 @@ mod imp {
                 client_rect: rect,
                 dpi: after.dpi,
                 warnings,
+            })
+        }
+    }
+
+    /// 复制后再次核对：期间失去前台、移动 / 缩放或关闭的帧不交付。
+    fn recheck_after_copy(
+        identity: &WindowIdentity,
+        client: PhysicalRect,
+    ) -> Result<WindowInfo, WindowToolError> {
+        let after = inspect_in_scope(identity).map_err(|error| match error {
+            WindowToolError::Gone | WindowToolError::IdentityChanged => {
+                WindowToolError::ChangedDuringCapture(error.to_string())
+            }
+            other => other,
+        })?;
+        if after.minimized {
+            return Err(WindowToolError::ChangedDuringCapture("目标已最小化".into()));
+        }
+        if !after.foreground {
+            return Err(WindowToolError::ChangedDuringCapture("目标失去前台".into()));
+        }
+        if after.client_rect != Some(client) {
+            return Err(WindowToolError::ChangedDuringCapture(
+                "客户区已移动或改变大小".into(),
+            ));
+        }
+        Ok(after)
+    }
+
+    /// 画面本身的提示：纯色（可能是独占全屏或受保护内容）、系统报告独占全屏。
+    fn content_warnings(rgba: &[u8]) -> Vec<CaptureWarning> {
+        let mut warnings = Vec::new();
+        if is_uniform_rgba(rgba) {
+            warnings.push(CaptureWarning::new(
+                WARNING_UNIFORM_PIXELS,
+                "All captured pixels are identical; the window may be blank, exclusive-fullscreen or protected. A uniform image is not evidence of readable content.",
+            ));
+        }
+        if crate::fullscreen::is_exclusive_fullscreen_active() == Some(true) {
+            warnings.push(CaptureWarning::new(
+                WARNING_EXCLUSIVE_FULLSCREEN,
+                "Windows reports a Direct3D exclusive-fullscreen application; GDI screen pixels may be black or stale.",
+            ));
+        }
+        warnings
+    }
+
+    impl GdiForegroundCapturer {
+        /// Kotone 自己用的前台截图（开口时的截图、读聊天、`game.look`、自动化）：截客户区和它所在
+        /// 显示器的交集（跨屏不拒绝，只截主要那块屏上的部分），超过 `max_pixels` 就等比缩小
+        /// （不拒绝）。仍然只截这个窗口、要求它在前台，复制后同样再核对一次。
+        /// 外部工具服务继续用严格的 [`WindowCapturer::capture_foreground_client`]。
+        pub fn capture_foreground_view(
+            &self,
+            identity: &WindowIdentity,
+            max_pixels: u64,
+        ) -> Result<ViewCapture, WindowToolError> {
+            let _dpi = DpiScope::enter()?;
+            let before = inspect_in_scope(identity)?;
+            let view = view_rect(&before)?;
+            let client = before
+                .client_rect
+                .ok_or_else(|| WindowToolError::InvalidGeometry("无法读取客户区位置".into()))?;
+            let rgba = copy_screen_rect(view)?;
+            let after = recheck_after_copy(identity, client)?;
+            let mut warnings = content_warnings(&rgba);
+            let (rgba, width, height) = finish_view(rgba, view, client, max_pixels, &mut warnings);
+            Ok(ViewCapture {
+                image: CapturedImage {
+                    width,
+                    height,
+                    rgba,
+                    client_rect: client,
+                    dpi: after.dpi,
+                    warnings,
+                },
+                view,
             })
         }
     }
@@ -675,6 +800,16 @@ mod imp {
             _identity: &WindowIdentity,
             _max_pixels: u64,
         ) -> Result<CapturedImage, WindowToolError> {
+            Err(unsupported())
+        }
+    }
+
+    impl GdiForegroundCapturer {
+        pub fn capture_foreground_view(
+            &self,
+            _identity: &WindowIdentity,
+            _max_pixels: u64,
+        ) -> Result<ViewCapture, WindowToolError> {
             Err(unsupported())
         }
     }
@@ -722,6 +857,116 @@ mod tests {
         assert!(is_uniform_rgba(&[]));
         assert!(is_uniform_rgba(&[0, 0, 0, 255, 0, 0, 0, 255]));
         assert!(!is_uniform_rgba(&[0, 0, 0, 255, 0, 0, 1, 255]));
+    }
+
+    fn rect(x: i32, y: i32, width: u32, height: u32) -> PhysicalRect {
+        PhysicalRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn window(client: PhysicalRect, monitor: PhysicalRect) -> WindowInfo {
+        WindowInfo {
+            identity: WindowIdentity {
+                handle: 1,
+                pid: 2,
+                process_started_at: None,
+            },
+            title: "游戏".into(),
+            class_name: "Game".into(),
+            process_name: Some("game.exe".into()),
+            visible: true,
+            minimized: false,
+            cloaked: false,
+            foreground: true,
+            client_rect: Some(client),
+            monitor_rect: Some(monitor),
+            dpi: Some(144),
+        }
+    }
+
+    const FOUR_K: u64 = 3840 * 2160;
+
+    #[test]
+    fn the_view_is_the_window_on_its_main_monitor() {
+        let left = rect(0, 0, 3840, 2160);
+        // 玩家日志：客户区约 6400×2160 横跨两块 4K 屏 → 只截左屏那块，不再“超过上限”。
+        let spanning = window(rect(0, 0, 6400, 2160), left);
+        assert_eq!(view_rect(&spanning).unwrap(), left);
+        // 没跨屏：整个客户区，和以前一样。
+        let normal = window(rect(200, 100, 1920, 1080), left);
+        assert_eq!(view_rect(&normal).unwrap(), rect(200, 100, 1920, 1080));
+        // 前置条件照旧：最小化、不在前台、看不见的不截。
+        let mut minimized = normal.clone();
+        minimized.minimized = true;
+        assert!(matches!(
+            view_rect(&minimized),
+            Err(WindowToolError::Minimized)
+        ));
+        let mut background = normal.clone();
+        background.foreground = false;
+        assert!(matches!(
+            view_rect(&background),
+            Err(WindowToolError::NotForeground)
+        ));
+        let mut cloaked = normal.clone();
+        cloaked.cloaked = true;
+        assert!(matches!(
+            view_rect(&cloaked),
+            Err(WindowToolError::NotVisible)
+        ));
+        // 整个移到屏幕外：没有可截的，不退化成截桌面。
+        let off = window(rect(5000, 0, 100, 100), left);
+        assert!(matches!(
+            view_rect(&off),
+            Err(WindowToolError::InvalidGeometry(_))
+        ));
+    }
+
+    #[test]
+    fn finishing_a_view_shrinks_oversized_images_and_explains_it() {
+        // 带鱼屏 5120×2160 的全屏游戏：没跨屏，但超过 4K 像素 → 等比缩小，提示 DOWNSCALED。
+        // （按 1/10 的同比例尺寸测：512×216 对上限 384×216，单测跑得快。）
+        let view = rect(0, 0, 512, 216);
+        let max = 384 * 216;
+        let rgba = [10u8, 20, 30, 255].repeat(512 * 216);
+        let mut warnings = Vec::new();
+        let (out, w, h) = finish_view(rgba, view, view, max, &mut warnings);
+        assert!(u64::from(w) * u64::from(h) <= max);
+        assert_eq!(out.len(), (w * h * 4) as usize);
+        assert!(out.chunks(4).all(|p| p == [10, 20, 30, 255]));
+        assert!((f64::from(w) / f64::from(h) - 512.0 / 216.0).abs() < 0.02);
+        assert_eq!(
+            warnings.iter().map(|w| w.code.as_str()).collect::<Vec<_>>(),
+            [WARNING_DOWNSCALED]
+        );
+        assert!(warnings[0].message.contains("512×216"));
+        // 跨屏：只截了一部分 → PARTIAL_VIEW；4K 一块屏不超限，不缩小。
+        let mut warnings = Vec::new();
+        let left = rect(0, 0, 3840, 2160);
+        let (_, w, h) = finish_view(
+            vec![0; 3840 * 2160 * 4],
+            left,
+            rect(0, 0, 6400, 2160),
+            FOUR_K,
+            &mut warnings,
+        );
+        assert_eq!((w, h), (3840, 2160));
+        assert_eq!(
+            warnings.iter().map(|w| w.code.as_str()).collect::<Vec<_>>(),
+            [WARNING_PARTIAL_VIEW]
+        );
+        assert!(warnings[0].message.contains("6400×2160"));
+        // 普通窗口：什么都不加，像素原样。
+        let mut warnings = Vec::new();
+        let small = rect(10, 10, 4, 2);
+        let pixels = (0..32).collect::<Vec<u8>>();
+        let (out, w, h) = finish_view(pixels.clone(), small, small, FOUR_K, &mut warnings);
+        assert_eq!((out, w, h), (pixels, 4, 2));
+        assert!(warnings.is_empty());
     }
 
     #[test]

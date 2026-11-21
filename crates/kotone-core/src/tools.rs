@@ -45,6 +45,144 @@ impl PhysicalRect {
         let other_bottom = i64::from(other.y) + i64::from(other.height);
         self.x >= other.x && self.y >= other.y && right <= other_right && bottom <= other_bottom
     }
+
+    /// 和 `other` 的交集；不相交（或只有边相接）时为 None。
+    pub fn intersection(&self, other: &PhysicalRect) -> Option<PhysicalRect> {
+        let left = i64::from(self.x).max(i64::from(other.x));
+        let top = i64::from(self.y).max(i64::from(other.y));
+        let right = (i64::from(self.x) + i64::from(self.width))
+            .min(i64::from(other.x) + i64::from(other.width));
+        let bottom = (i64::from(self.y) + i64::from(self.height))
+            .min(i64::from(other.y) + i64::from(other.height));
+        (right > left && bottom > top).then(|| PhysicalRect {
+            x: left as i32,
+            y: top as i32,
+            width: (right - left) as u32,
+            height: (bottom - top) as u32,
+        })
+    }
+}
+
+/// Kotone 自己截前台窗口时的取景（开口时的截图、读聊天、`game.look`、自动化）：客户区和它所在
+/// 显示器（系统按面积最大的那块给出）的交集。窗口没跨屏时就是整个客户区；跨屏时只截它在主要那块
+/// 屏上的部分——仍然只截这个窗口，不退化成桌面截图。外部工具服务仍走严格的
+/// [`WindowCapturer::capture_foreground_client`]（跨屏、超限就拒绝）。
+pub fn capture_view(client: &PhysicalRect, monitor: &PhysicalRect) -> Option<PhysicalRect> {
+    client.intersection(monitor)
+}
+
+/// 超过像素上限时等比缩小后的尺寸（宽高比不变、都至少 1，且宽 × 高不超过上限）；没超就原样。
+pub fn fit_size(width: u32, height: u32, max_pixels: u64) -> (u32, u32) {
+    let pixels = u64::from(width) * u64::from(height);
+    if pixels <= max_pixels || width == 0 || height == 0 {
+        return (width, height);
+    }
+    let scale = (max_pixels as f64 / pixels as f64).sqrt();
+    let mut w = ((f64::from(width) * scale).floor() as u32).max(1);
+    let mut h = ((f64::from(height) * scale).floor() as u32).max(1);
+    // 浮点误差兜底：仍超就再各减一点。
+    while u64::from(w) * u64::from(h) > max_pixels && (w > 1 || h > 1) {
+        if w >= h {
+            w -= 1;
+        } else {
+            h -= 1;
+        }
+    }
+    (w, h)
+}
+
+/// RGBA8 按面积平均缩小（照 OpenCV `INTER_AREA`：缩小时每个输出像素取它覆盖的源像素的加权平均，
+/// 文字边缘不会像最近邻那样断笔，适合缩小后再做文字识别）。`out_w`/`out_h` 不大于原尺寸。
+pub fn downscale_area(rgba: &[u8], width: u32, height: u32, out_w: u32, out_h: u32) -> Vec<u8> {
+    let (w, h) = (width as usize, height as usize);
+    let (ow, oh) = (out_w.max(1) as usize, out_h.max(1) as usize);
+    debug_assert_eq!(rgba.len(), w * h * 4);
+    if ow == w && oh == h {
+        return rgba.to_vec();
+    }
+    // 每个输出列 / 行覆盖的源区间与边缘的部分权重。
+    let spans = |src: usize, dst: usize| -> Vec<Vec<(usize, f64)>> {
+        let ratio = src as f64 / dst as f64;
+        (0..dst)
+            .map(|d| {
+                let start = d as f64 * ratio;
+                let end = (d as f64 + 1.0) * ratio;
+                let mut taps = Vec::new();
+                let mut s = start.floor() as usize;
+                while (s as f64) < end && s < src {
+                    let lo = (s as f64).max(start);
+                    let hi = ((s + 1) as f64).min(end);
+                    if hi > lo {
+                        taps.push((s, (hi - lo) / ratio));
+                    }
+                    s += 1;
+                }
+                taps
+            })
+            .collect()
+    };
+    let xs = spans(w, ow);
+    let ys = spans(h, oh);
+    // 先横向（f32 中间结果），再纵向。
+    let mut mid = vec![0f32; ow * h * 4];
+    for y in 0..h {
+        let row = &rgba[y * w * 4..(y + 1) * w * 4];
+        for (ox, taps) in xs.iter().enumerate() {
+            let mut acc = [0f32; 4];
+            for &(sx, weight) in taps {
+                for c in 0..4 {
+                    acc[c] += row[sx * 4 + c] as f32 * weight as f32;
+                }
+            }
+            mid[(y * ow + ox) * 4..(y * ow + ox) * 4 + 4].copy_from_slice(&acc);
+        }
+    }
+    let mut out = vec![0u8; ow * oh * 4];
+    for (oy, taps) in ys.iter().enumerate() {
+        for ox in 0..ow {
+            let mut acc = [0f32; 4];
+            for &(sy, weight) in taps {
+                for c in 0..4 {
+                    acc[c] += mid[(sy * ow + ox) * 4 + c] * weight as f32;
+                }
+            }
+            for c in 0..4 {
+                out[(oy * ow + ox) * 4 + c] = acc[c].round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    out
+}
+
+/// Kotone 自己用的前台截图（见 [`capture_view`]）：`image.client_rect` 仍是完整客户区，
+/// `view` 是实际截下的那块屏幕区域，图像可能比它小（`scale` = 图像像素 / 屏幕物理像素，≤ 1）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewCapture {
+    pub image: CapturedImage,
+    pub view: PhysicalRect,
+}
+
+impl ViewCapture {
+    /// 图像像素 / 屏幕物理像素（没缩小时为 1）。
+    pub fn scale(&self) -> f64 {
+        f64::from(self.image.width) / f64::from(self.view.width.max(1))
+    }
+
+    /// 图里的一点（图像像素，可以是小数）→ 屏幕物理像素（落在取景区域内）。
+    pub fn image_to_screen(&self, px: f64, py: f64) -> (i32, i32) {
+        let w = f64::from(self.image.width.max(1));
+        let h = f64::from(self.image.height.max(1));
+        view_ratio_to_screen(&self.view, px / w, py / h)
+    }
+}
+
+/// 取景区域里的比例（0–1）→ 屏幕物理像素（不越出取景区域）。
+pub fn view_ratio_to_screen(view: &PhysicalRect, x: f64, y: f64) -> (i32, i32) {
+    let w = view.width.max(1) as i32;
+    let h = view.height.max(1) as i32;
+    let px = view.x + ((x.clamp(0.0, 1.0) * f64::from(w)) as i32).min(w - 1);
+    let py = view.y + ((y.clamp(0.0, 1.0) * f64::from(h)) as i32).min(h - 1);
+    (px, py)
 }
 
 /// 一次观察到的顶层窗口元数据。
@@ -236,5 +374,121 @@ mod tests {
         };
         assert!(!huge.is_within(&monitor));
         assert_eq!(huge.pixel_count(), u64::from(u32::MAX));
+    }
+
+    fn rect(x: i32, y: i32, width: u32, height: u32) -> PhysicalRect {
+        PhysicalRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    const FOUR_K: u64 = 3840 * 2160;
+
+    #[test]
+    fn a_window_spanning_two_monitors_is_cut_to_the_main_one() {
+        // 玩家两块 4K 屏并排；窗口客户区 6400×2160，大部分在左边那块（系统给出的就是左屏）。
+        let left = rect(0, 0, 3840, 2160);
+        let client = rect(0, 0, 6400, 2160);
+        let view = capture_view(&client, &left).unwrap();
+        assert_eq!(view, left);
+        assert!(view.pixel_count() <= FOUR_K);
+        // 窗口在右屏为主、左边露出一截：只截右屏上的部分。
+        let right = rect(3840, 0, 3840, 2160);
+        let client = rect(3000, 100, 4000, 1500);
+        assert_eq!(
+            capture_view(&client, &right).unwrap(),
+            rect(3840, 100, 3160, 1500)
+        );
+        // 没跨屏：整个客户区。
+        let inside = rect(100, 100, 1280, 720);
+        assert_eq!(capture_view(&inside, &left).unwrap(), inside);
+        // 不在这块屏上（或只有边相接）：没有可截的。
+        assert_eq!(capture_view(&rect(3840, 0, 10, 10), &left), None);
+        // 负坐标的屏（主屏左边那块）也对。
+        let west = rect(-2560, 0, 2560, 1440);
+        assert_eq!(
+            capture_view(&rect(-100, 10, 300, 300), &west).unwrap(),
+            rect(-100, 10, 100, 300)
+        );
+    }
+
+    #[test]
+    fn oversized_views_shrink_under_the_limit_keeping_the_aspect_ratio() {
+        for (w, h) in [
+            (5120, 2160),
+            (6400, 2160),
+            (7680, 4320),
+            (3841, 2160),
+            (20000, 3),
+        ] {
+            let (fw, fh) = fit_size(w, h, FOUR_K);
+            assert!(
+                u64::from(fw) * u64::from(fh) <= FOUR_K,
+                "{w}x{h} -> {fw}x{fh}"
+            );
+            let before = f64::from(w) / f64::from(h);
+            let after = f64::from(fw) / f64::from(fh);
+            assert!(
+                (before - after).abs() / before < 0.01 || fh < 10,
+                "{w}x{h} -> {fw}x{fh}"
+            );
+            assert!(fw >= 1 && fh >= 1);
+        }
+        // 带鱼屏 5120×2160 缩到 0.87 倍左右，字还看得清。
+        let (fw, _) = fit_size(5120, 2160, FOUR_K);
+        assert!((4400..=4440).contains(&fw), "{fw}");
+        // 不超就不动。
+        assert_eq!(fit_size(3840, 2160, FOUR_K), (3840, 2160));
+        assert_eq!(fit_size(1920, 1080, FOUR_K), (1920, 1080));
+    }
+
+    #[test]
+    fn area_downscale_averages_and_keeps_solid_colors() {
+        // 2×2 → 1×1：四个像素的平均。
+        let px = [
+            0, 0, 0, 255, 200, 100, 40, 255, //
+            100, 50, 20, 255, 100, 50, 20, 255,
+        ];
+        assert_eq!(downscale_area(&px, 2, 2, 1, 1), vec![100, 50, 20, 255]);
+        // 纯色缩小后还是纯色（非整数倍也一样）。
+        let solid: Vec<u8> = [12u8, 34, 56, 255].repeat(7 * 5);
+        let out = downscale_area(&solid, 7, 5, 3, 2);
+        assert_eq!(out.len(), 3 * 2 * 4);
+        assert!(out.chunks(4).all(|p| p == [12, 34, 56, 255]));
+        // 尺寸不变就原样。
+        assert_eq!(downscale_area(&solid, 7, 5, 7, 5), solid);
+    }
+
+    #[test]
+    fn image_points_map_back_to_the_screen_through_the_view() {
+        let view = rect(3840, 100, 3200, 1600);
+        let capture = |w: u32, h: u32| ViewCapture {
+            image: CapturedImage {
+                width: w,
+                height: h,
+                rgba: vec![0; (w * h * 4) as usize],
+                client_rect: rect(3000, 100, 4040, 1600),
+                dpi: Some(144),
+                warnings: Vec::new(),
+            },
+            view,
+        };
+        // 没缩小：图像素 = 屏幕像素，从取景左上角算。
+        let full = capture(3200, 1600);
+        assert_eq!(full.scale(), 1.0);
+        assert_eq!(full.image_to_screen(0.0, 0.0), (3840, 100));
+        assert_eq!(full.image_to_screen(1600.0, 800.0), (5440, 900));
+        // 缩小一半：图上 (800, 400) 是取景中心。
+        let half = capture(1600, 800);
+        assert_eq!(half.scale(), 0.5);
+        assert_eq!(half.image_to_screen(800.0, 400.0), (5440, 900));
+        assert_eq!(half.image_to_screen(1599.0, 799.0), (7038, 1698));
+        // 不越出取景区域。
+        assert_eq!(half.image_to_screen(5000.0, -3.0), (7039, 100));
+        // 比例换算和工具里一致。
+        assert_eq!(view_ratio_to_screen(&view, 0.5, 0.5), (5440, 900));
     }
 }

@@ -1,5 +1,9 @@
-//! 绑定一个游戏窗口后的共享底层（ADR 019 决定 1）：窗口身份、前台检查与等待、只截客户区
+//! 绑定一个游戏窗口后的共享底层（ADR 019 决定 1）：窗口身份、前台检查与等待、只截这个窗口
 //! （纯色画面判独占全屏）、窗口比例 → 屏幕物理像素、按住的键 / 鼠标键记账与收尾松开。
+//!
+//! 截图和“窗口比例 → 屏幕”用同一个取景区域（[`GameSession::view_rect`]）：客户区和它所在显示器的
+//! 交集。窗口没跨屏时就是整个客户区（和以前一样）；跨屏时只截、只点主要那块屏上的部分；超过 4K
+//! 像素的取景等比缩小，比例不变，坐标照样对得上。
 //!
 //! 自动化程序（`automation.rs` 的 `DesktopHost`）与一步一步操作（`computer_use.rs` 的
 //! `game.act`）共用这一份，不各写一套。
@@ -9,9 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
-use kotone_core::tools::{
-    PhysicalRect, WindowCapturer, WindowIdentity, WindowInfo, WindowObserver,
-};
+use kotone_core::tools::{PhysicalRect, WindowIdentity, WindowInfo, WindowObserver};
 use kotone_platform_windows::inject;
 use kotone_platform_windows::window_tools::{GdiForegroundCapturer, WindowsWindowObserver};
 use kotone_tools::image::RgbaImage;
@@ -84,23 +86,28 @@ impl GameSession {
             .map_err(|e| format!("游戏窗口不可用：{e}"))
     }
 
-    /// 客户区的屏幕物理像素位置（最小化时报错）。
-    pub fn client_rect(&self) -> Result<PhysicalRect, String> {
-        let rect = self
-            .inspect()?
-            .client_rect
-            .ok_or("拿不到游戏窗口的客户区位置")?;
-        if rect.width == 0 || rect.height == 0 {
+    /// 取景区域：客户区和它所在显示器的交集（窗口没跨屏时就是整个客户区）。截图与“窗口比例 →
+    /// 屏幕”用同一个区域，所以跨屏的窗口截到的是主要那块屏上的部分，点的也落在那一块里。
+    pub fn view_rect(&self) -> Result<PhysicalRect, String> {
+        let info = self.inspect()?;
+        let client = info.client_rect.ok_or("拿不到游戏窗口的客户区位置")?;
+        if client.width == 0 || client.height == 0 {
             return Err("游戏窗口客户区为空（可能最小化了）".into());
         }
-        Ok(rect)
+        Ok(info
+            .monitor_rect
+            .and_then(|monitor| kotone_core::tools::capture_view(&client, &monitor))
+            .unwrap_or(client))
     }
 
-    /// 截游戏客户区（调用方先确认它在前台）。纯色画面按独占全屏报错。
-    pub fn capture(&self) -> Result<RgbaImage, String> {
-        let image = GdiForegroundCapturer
-            .capture_foreground_client(&self.target, MAX_CAPTURE_PIXELS)
+    /// 截游戏的取景区域（调用方先确认它在前台）：跨屏只截主要那块屏上的部分，超过 4K 像素
+    /// 等比缩小（图里的比例仍对应整个取景区域）。纯色画面按独占全屏报错。
+    /// 返回（图像，取景区域的屏幕物理位置，截图提示）。
+    pub fn capture_view(&self) -> Result<(RgbaImage, PhysicalRect, Vec<String>), String> {
+        let capture = GdiForegroundCapturer
+            .capture_foreground_view(&self.target, MAX_CAPTURE_PIXELS)
             .map_err(|e| format!("截图失败：{e}"))?;
+        let image = capture.image;
         if image
             .warnings
             .iter()
@@ -108,12 +115,31 @@ impl GameSession {
         {
             return Err("截到的是纯色画面，游戏可能是独占全屏：请改成无边框窗口".into());
         }
-        RgbaImage::new(image.width, image.height, image.rgba).map_err(|e| e.to_string())
+        let notes = image
+            .warnings
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w.code.as_str(),
+                    kotone_platform_windows::window_tools::WARNING_PARTIAL_VIEW
+                        | kotone_platform_windows::window_tools::WARNING_DOWNSCALED
+                )
+            })
+            .map(|w| w.message.clone())
+            .collect();
+        let rgba =
+            RgbaImage::new(image.width, image.height, image.rgba).map_err(|e| e.to_string())?;
+        Ok((rgba, capture.view, notes))
     }
 
-    /// 窗口比例（0–1）→ 屏幕物理像素（按当前客户区位置）。
+    /// 截游戏的取景区域，只要图像（见 [`capture_view`](Self::capture_view)）。
+    pub fn capture(&self) -> Result<RgbaImage, String> {
+        Ok(self.capture_view()?.0)
+    }
+
+    /// 窗口比例（0–1，相对取景区域，和截图一致）→ 屏幕物理像素（按当前位置）。
     pub fn screen_point(&self, x: f64, y: f64) -> Result<(i32, i32), String> {
-        Ok(ratio_to_screen(&self.client_rect()?, x, y))
+        Ok(ratio_to_screen(&self.view_rect()?, x, y))
     }
 
     /// 按下一个键并记账（收尾时由 [`release_all`](Self::release_all) 松开）。
@@ -153,13 +179,9 @@ impl GameSession {
     }
 }
 
-/// 窗口比例 → 客户区内的屏幕物理像素（不越出客户区）。
+/// 窗口比例 → 区域内的屏幕物理像素（不越出区域；区域一般是 [`GameSession::view_rect`]）。
 pub fn ratio_to_screen(rect: &PhysicalRect, x: f64, y: f64) -> (i32, i32) {
-    let w = rect.width.max(1) as i32;
-    let h = rect.height.max(1) as i32;
-    let px = rect.x + ((x.clamp(0.0, 1.0) * f64::from(w)) as i32).min(w - 1);
-    let py = rect.y + ((y.clamp(0.0, 1.0) * f64::from(h)) as i32).min(h - 1);
-    (px, py)
+    kotone_core::tools::view_ratio_to_screen(rect, x, y)
 }
 
 #[cfg(test)]

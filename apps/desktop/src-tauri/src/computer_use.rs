@@ -144,8 +144,10 @@ fn crop_ratio(image: &RgbaImage, [x, y, w, h]: [f64; 4]) -> RgbaImage {
 pub fn look(app: &AppHandle, zoom: Option<[f64; 4]>) -> Result<Value, String> {
     let window = foreground_game()?;
     let session = GameSession::new(window.identity);
-    let capture = session.capture()?;
-    let client = (capture.width(), capture.height());
+    let (capture, view, capture_notes) = session.capture_view()?;
+    // 取景区域的物理尺寸（不是图像尺寸：超过 4K 时图像缩小过；跨屏时只是主要那块屏上的部分）。
+    // 之后每一步都和当前取景区域比，变了就停；点击也按取景区域换算（GameSession::view_rect）。
+    let client = (view.width, view.height);
     let state = state(app)?;
     // zoom 用上一张完整截图的坐标系（同一个窗口、同样大小）。
     let base = if zoom.is_some() {
@@ -280,6 +282,9 @@ pub fn look(app: &AppHandle, zoom: Option<[f64; 4]>) -> Result<Value, String> {
     if let Some(zoom) = zoom {
         out["zoom"] = json!(zoom);
     }
+    if !capture_notes.is_empty() {
+        out["captureNotes"] = json!(capture_notes);
+    }
     if let Some(note) = ocr_note {
         out["ocr"] = json!(format!("没有文字编号：{note}"));
     }
@@ -401,9 +406,10 @@ impl ActHost for DesktopActHost {
             std::thread::sleep(Duration::from_millis(50));
             self.halt_if_interrupted()?;
         }
+        // 和 game.look 时的取景区域比（窗口没跨屏时就是整个客户区）。
         let rect = self
             .session
-            .client_rect()
+            .view_rect()
             .map_err(|_| Halt::Stop(StopReason::WindowClosed))?;
         if (rect.width, rect.height) != self.client {
             return Err(Halt::Stop(StopReason::WindowChanged));
@@ -413,9 +419,10 @@ impl ActHost for DesktopActHost {
 
     fn move_to(&self, x: f64, y: f64) -> Result<(), Halt> {
         self.halt_if_interrupted()?;
+        // 编号和坐标是截图里的比例；截图是取景区域，所以按取景区域换回屏幕。
         let rect = self
             .session
-            .client_rect()
+            .view_rect()
             .map_err(|_| Halt::Stop(StopReason::WindowClosed))?;
         if (rect.width, rect.height) != self.client {
             return Err(Halt::Stop(StopReason::WindowChanged));

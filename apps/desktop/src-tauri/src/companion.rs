@@ -24,7 +24,7 @@ use kotone_core::ocr::{OcrBackend, OcrBackendKind, OcrCancel, OcrInput, OcrParam
 use kotone_core::profile::{self, ChatRegion, GameProfile};
 use kotone_core::reminders::ReminderIntent;
 use kotone_core::settings::Settings;
-use kotone_core::tools::{WindowCapturer, WindowObserver};
+use kotone_core::tools::WindowObserver;
 use kotone_platform_windows::window_tools::{GdiForegroundCapturer, WindowsWindowObserver};
 use kotone_tools::tracking::{
     IngestInput, IngestLine, OnSourceChange, Region, SourceTag, TrackLimits, Tracker,
@@ -235,9 +235,12 @@ pub fn capture_frame() -> Result<Frame, String> {
         .foreground_window()
         .map_err(|e| format!("找不到前台窗口：{e}"))?
         .ok_or("当前没有前台窗口")?;
+    // 跨屏只截主要那块屏上的部分、超过上限等比缩小（玩家两块 4K 屏、窗口横跨两屏时
+    // 以前直接报“图像像素数超过上限”）；都写进 image.warnings。只用来识别文字，不换算屏幕坐标。
     let image = GdiForegroundCapturer
-        .capture_foreground_client(&window.identity, MAX_CAPTURE_PIXELS)
-        .map_err(|e| format!("截图失败：{e}"))?;
+        .capture_foreground_view(&window.identity, MAX_CAPTURE_PIXELS)
+        .map_err(|e| format!("截图失败：{e}"))?
+        .image;
     Ok(Frame {
         window,
         image,
@@ -304,6 +307,20 @@ pub async fn read_frame(
             "截到的是纯色画面，游戏可能是独占全屏：请在游戏设置里改成无边框窗口后再试".into(),
         );
     }
+    // 跨屏只截了一部分、缩小过：告诉模型（识别结果可能不全、小字可能读不准）。
+    warnings.extend(
+        image
+            .warnings
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w.code.as_str(),
+                    kotone_platform_windows::window_tools::WARNING_PARTIAL_VIEW
+                        | kotone_platform_windows::window_tools::WARNING_DOWNSCALED
+                )
+            })
+            .map(|w| w.message.clone()),
+    );
     let full = kotone_tools::image::RgbaImage::new(image.width, image.height, image.rgba)
         .map_err(|e| e.to_string())?;
     let crop = profile
