@@ -1,6 +1,7 @@
 //! kotone-platform-windows：Windows 平台适配器。
 //!
 //! - `audio`：cpal 生产音频采集（CpalBackend，实现 core 的 AudioBackend 端口）
+//! - `echo_cancel`：通话用的回声消除麦克风（扬声器回采作参考 + sonora AEC3，ADR 033）
 //! - `inject`：raw windows crate 直调 Win32 SendInput（WindowsInjector / WinFocusBackend），
 //!   非 Windows 编译时提供保持可编译的兜底实现（运行时明确报错）
 //! - `elevation`：UIPI 提权检测与管理员重启（TokenElevation / ShellExecuteExW runas）
@@ -21,6 +22,7 @@ pub mod autostart;
 #[cfg(windows)]
 pub mod console_chat;
 pub mod detached;
+pub mod echo_cancel;
 pub mod elevation;
 pub mod fs_publish;
 pub mod fullscreen;
