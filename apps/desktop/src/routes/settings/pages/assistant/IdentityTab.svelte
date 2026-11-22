@@ -18,6 +18,7 @@
   import { workspaceAvatar, workspaceSetAvatar } from "../../../../lib/workspace";
   import { errText, settingsStore, toast } from "../../../../lib/stores/ui";
   import { m } from "$lib/paraglide/messages.js";
+  import { clauseSeparator } from "$lib/locale";
   import { getSettings } from "../../../../lib/ipc";
 
   let { onOpenTalk }: { onOpenTalk: () => void } = $props();
@@ -146,7 +147,7 @@
   }
   const saveWake = () => run(async () => {
     if (!role) return;
-    if (wakeText.trim() && !wakeCheck?.ok) throw new Error(wakeCheck?.problems.join("；") || m.companion_identity_wake_unusable());
+    if (wakeText.trim() && !wakeCheck?.ok) throw new Error(wakeCheck?.problems.join(clauseSeparator()) || m.companion_identity_wake_unusable());
     await rolesUpdate(role.id, { wake: { text: wakeText.trim(), readings } });
     await refresh(role.id);
   }, m.companion_identity_wake_saved());
@@ -286,8 +287,8 @@
                 </span>
               {/each}
             </div>
-            {#if wakeCheck.ok}<p class="m-0 flex items-center gap-1 text-xs text-success"><Check class="size-3" />{m.companion_identity_wake_ok()}{#if wakeCheck.warnings.length}<span class="text-warning">{m.companion_identity_wake_warnings({ warnings: wakeCheck.warnings.join("；") })}</span>{/if}</p>
-            {:else}<p class="m-0 text-xs text-destructive" role="alert" data-testid="role-wake-problem">{wakeCheck.problems.join("；")}</p>{/if}
+            {#if wakeCheck.ok}<p class="m-0 flex items-center gap-1 text-xs text-success"><Check class="size-3" />{m.companion_identity_wake_ok()}{#if wakeCheck.warnings.length}<span class="text-warning">{m.companion_identity_wake_warnings({ warnings: wakeCheck.warnings.join(clauseSeparator()) })}</span>{/if}</p>
+            {:else}<p class="m-0 text-xs text-destructive" role="alert" data-testid="role-wake-problem">{wakeCheck.problems.join(clauseSeparator())}</p>{/if}
             <p class="m-0 text-[11px] text-muted-foreground">{m.companion_identity_wake_experimental()}
               <button type="button" class="text-primary hover:underline" onclick={onOpenTalk}>{m.companion_identity_wake_settings_link()}</button></p>
           </div>

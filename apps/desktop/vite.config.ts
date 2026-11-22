@@ -12,12 +12,12 @@ const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), 
 // Tauri 开发环境约定：固定端口、不自动清屏
 export default defineConfig({
   plugins: [
-    // 界面文案（i18n）：messages/zh-CN.json → src/lib/paraglide（生成，不进 git）。
+    // 界面文案（i18n）：messages/<locale>/*.json → src/lib/paraglide（生成，不进 git）。语言存在 localStorage，没选过 = 中文。
     // 插件从 node_modules 读，不从 CDN 拉（project.inlang/settings.json）。选项与 package.json 的 i18n 脚本一致。
     paraglideVitePlugin({
       project: "./project.inlang",
       outdir: "./src/lib/paraglide",
-      strategy: ["baseLocale"],
+      strategy: ["localStorage", "baseLocale"],
       outputStructure: "locale-modules",
     }),
     svelte(),

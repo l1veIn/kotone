@@ -33,6 +33,7 @@
   } from "../../../../lib/ipc";
   import { errText, settingsStore, toast } from "../../../../lib/stores/ui";
   import { m } from "$lib/paraglide/messages.js";
+  import { getLocale } from "$lib/paraglide/runtime.js";
 
   const groups: { id: ConnectionPresetGroup; label: string; hint: string }[] = [
     { id: "recommended", label: m.system_connections_group_recommended(), hint: m.system_connections_group_recommended_hint() },
@@ -183,7 +184,7 @@
   }
 
   function checkedAt(ms: number): string {
-    return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(ms);
+    return new Intl.DateTimeFormat(getLocale(), { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(ms);
   }
 </script>
 

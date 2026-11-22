@@ -6,6 +6,7 @@
   import { BarChart3 } from "@lucide/svelte";
   import * as Dialog from "$lib/components/ui/dialog";
   import { m } from "$lib/paraglide/messages.js";
+  import { getLocale } from "$lib/paraglide/runtime.js";
   import { usageSummary, type AgentMessage, type ConversationCosts, type TokenUsage, type UsageSummary, type UsageTotals } from "../agent";
   import { conversationUsage, formatCost, formatHitRate, formatTokens, totalsMoney } from "./timeline";
 
@@ -71,7 +72,7 @@
     .filter((m): m is Extract<AgentMessage, { role: "assistant" | "notice" }> => (m.role === "assistant" || m.role === "notice") && !!m.usage)
     .map((msg) => ({ at: msg.atMs, kind: msg.role === "notice" ? (msg.recap ? m.chat_usage_call_recap() : m.chat_usage_call_compaction()) : m.chat_usage_call_answer(), usage: msg.usage! }))
     .reverse());
-  const time = (ms: number) => new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(ms);
+  const time = (ms: number) => new Intl.DateTimeFormat(getLocale(), { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(ms);
   function extras(t: UsageTotals): string {
     const parts: string[] = [];
     if (t.characters) parts.push(m.chat_usage_extra_tts({ count: formatTokens(t.characters) }));

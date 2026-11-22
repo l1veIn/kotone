@@ -1,0 +1,5 @@
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "locale_title": "语言 / Language",
+  "locale_description": "界面用哪种语言。她说话、语音识别和弹幕的内容不跟着变；换了以后各个窗口会重新加载一下。"
+}

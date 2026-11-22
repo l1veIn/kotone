@@ -120,6 +120,34 @@ test("every message in messages/zh-CN is used, and the catalogs agree with proje
   expect(unused).toEqual([]);
 });
 
+test("every message has an English translation with the same parameters", () => {
+  // 英文里可以留的中文：玩家嘴里说的语音命令、唤醒词、角色名（英文界面也得照着说中文）
+  const spoken = ["琴音琴音", "你好琴音", "没事了", "退下", "安静", "挂了", "停下", "可以", "不要", "允许", "拜拜", "再见",
+    "琴音", "大肥鱼", "Claude大小姐", "ことね"];
+  const bilingual = new Set(["locale_title"]); // “语言 / Language”：两种语言都写，选错了也找得到
+  const cjkOrFullWidth = /[぀-ヿ一-鿿　-〿！-～]/;
+  const params = (text: string) =>
+    [...text.replace(/\\[{}]/g, "").matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]).sort().join(",");
+  const zhDir = join(app, "messages", "zh-CN");
+  const enDir = join(app, "messages", "en");
+  expect(readdirSync(enDir).sort()).toEqual(readdirSync(zhDir).sort());
+  const problems: string[] = [];
+  for (const name of readdirSync(zhDir)) {
+    const zh = JSON.parse(readFileSync(join(zhDir, name), "utf8"));
+    const en = JSON.parse(readFileSync(join(enDir, name), "utf8"));
+    for (const [key, source] of Object.entries<string>(zh)) {
+      if (key === "$schema") continue;
+      const value = en[key];
+      if (typeof value !== "string" || !value.trim()) { problems.push(`${name} ${key}: 没有英文`); continue; }
+      if (params(source) !== params(value)) problems.push(`${name} ${key}: 参数 ${params(value)} ≠ ${params(source)}`);
+      const rest = spoken.reduce((text, word) => text.split(word).join(""), value);
+      if (!bilingual.has(key) && cjkOrFullWidth.test(rest)) problems.push(`${name} ${key}: 英文里还有中文 ${value}`);
+    }
+    for (const key of Object.keys(en)) if (!(key in zh)) problems.push(`${name} ${key}: 中文里没有这条`);
+  }
+  expect(problems).toEqual([]);
+});
+
 test("words the glossary says not to use stay out of everything players see or she says", () => {
   const banned = bannedWords();
   expect(banned.length).toBeGreaterThan(20);

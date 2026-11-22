@@ -3,8 +3,10 @@ import App from "./App.svelte";
 import "./app.css";
 import { installDesktopGuards } from "./lib/desktopGuards";
 import { logFrontendError } from "./lib/ipc";
+import { installLocaleSync } from "./lib/locale";
 
 installDesktopGuards();
+installLocaleSync();
 
 window.addEventListener("error", (event) => {
   void logFrontendError("window", event.message || "unknown window error").catch(() => {});

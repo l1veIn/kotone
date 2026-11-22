@@ -8,6 +8,7 @@
   import { onDestroy } from "svelte";
   import { Check, Copy } from "@lucide/svelte";
   import { m } from "$lib/paraglide/messages.js";
+  import { getLocale } from "$lib/paraglide/runtime.js";
   import type { CategoryTotals, TokenUsage } from "../agent";
   import { formatCost, formatHitRate, formatTokens, totalsMoney } from "./timeline";
 
@@ -19,7 +20,7 @@
   let copied = $state(false);
   let failed = $state(false);
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const time = $derived(endedAtMs ? new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(endedAtMs) : "");
+  const time = $derived(endedAtMs ? new Intl.DateTimeFormat(getLocale(), { hour: "2-digit", minute: "2-digit" }).format(endedAtMs) : "");
   const usageText = $derived.by(() => {
     const parts: string[] = [];
     if (usage?.inputTokens !== undefined) {

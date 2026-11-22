@@ -16,6 +16,8 @@
   import ArgsForm from "./ArgsForm.svelte";
   import RunList from "./RunList.svelte";
   import { m } from "$lib/paraglide/messages.js";
+  import { listSeparator } from "$lib/locale";
+  import { getLocale } from "$lib/paraglide/runtime.js";
 
   let { automations, runs, now, busyId, onStop, onChanged }: {
     automations: Automation[];
@@ -43,7 +45,7 @@
   const loose = $derived(runs.filter((r) => open(r) && r.action.kind !== "chat"
     && !automations.some((a) => a.id === automationOf(r))).sort((a, b) => a.dueAtMs - b.dueAtMs));
   const sorted = $derived([...automations].sort((a, b) => Number(b.id === BUILTIN_REMIND_ID) - Number(a.id === BUILTIN_REMIND_ID)
-    || a.name.localeCompare(b.name, "zh-CN")));
+    || a.name.localeCompare(b.name, getLocale())));
 
   function activeRuns(item: Automation): AutomationRun[] {
     return runs.filter((r) => open(r) && automationOf(r) === item.id);
@@ -57,7 +59,7 @@
   function clock(ms: number): string {
     const d = new Date(ms);
     const sameDay = d.toDateString() === new Date(now).toDateString();
-    const hm = d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+    const hm = d.toLocaleTimeString(getLocale(), { hour: "2-digit", minute: "2-digit" });
     return sameDay ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
   }
   function left(ms: number): string {
@@ -206,7 +208,7 @@
                 <dt class="text-muted-foreground">{m.auto_field_action()}</dt>
                 <dd class="m-0">{item.action.kind === "speak" ? m.auto_list_detail_speak({ text: item.action.text, delivery: item.action.delivery.map((d) => (d === "voice" ? m.auto_delivery_voice() : m.auto_delivery_danmaku())).join(" + ") }) : m.auto_list_detail_program()}</dd>
                 <dt class="text-muted-foreground">{m.auto_field_params()}</dt>
-                <dd class="m-0">{item.params.length ? item.params.map((p) => p.label || p.name).join("、") : m.auto_list_params_none()}</dd>
+                <dd class="m-0">{item.params.length ? item.params.map((p) => p.label || p.name).join(listSeparator()) : m.auto_list_params_none()}</dd>
                 <dt class="text-muted-foreground">{m.auto_field_schedule()}</dt>
                 <dd class="m-0">{#if item.schedule}{m.auto_list_schedule_detail({ schedule: item.schedule.enabled ? describeSchedule(item.schedule.cron) : m.auto_list_schedule_paused(), cron: item.schedule.cron })}{:else}{m.auto_list_unscheduled({ companion: $companionName })}{/if}</dd>
                 <dt class="text-muted-foreground">{m.auto_list_created()}</dt>

@@ -4,6 +4,7 @@
   import { Plus, Trash2 } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import { m } from "$lib/paraglide/messages.js";
+  import { getLocale } from "$lib/paraglide/runtime.js";
   import * as Dialog from "$lib/components/ui/dialog";
   import type { ConversationSummary } from "../agent";
 
@@ -28,8 +29,8 @@
   function when(ms: number): string {
     const date = new Date(ms);
     return date.toDateString() === new Date().toDateString()
-      ? new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(date)
-      : new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(date);
+      ? new Intl.DateTimeFormat(getLocale(), { hour: "2-digit", minute: "2-digit" }).format(date)
+      : new Intl.DateTimeFormat(getLocale(), { month: "numeric", day: "numeric" }).format(date);
   }
 
   async function remove() {

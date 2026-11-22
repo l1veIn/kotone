@@ -6,6 +6,8 @@
   import { Input } from "$lib/components/ui/input";
   import * as Select from "$lib/components/ui/select";
   import { m } from "$lib/paraglide/messages.js";
+  import { Languages } from "@lucide/svelte";
+  import { LANGUAGES, changeLocale, currentLocale } from "$lib/locale";
   import { appearancePreferences, resetAppearance, updateAppearance } from "./appearancePreferences";
   import {
     PALETTES, THEME_MODES, UI_FONTS, ZOOM_LEVELS, resolveFontFamily,
@@ -125,5 +127,22 @@
   <div class="flex flex-wrap items-center gap-3 py-3.5">
     <Button variant="outline" size="sm" data-testid="appearance-reset" onclick={reset}><RotateCcw class="size-3.5" />{m.system_appearance_reset_button()}</Button>
     {#if restored}<span role="status" class="text-xs text-muted-foreground">{m.system_appearance_reset_done()}</span>{/if}
+  </div>
+  <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 py-3.5">
+    <div class="min-w-0">
+      <p class="m-0 flex items-center gap-1.5 text-[13px] font-medium"><Languages class="size-3.5 text-muted-foreground" />{m.locale_title()}</p>
+      <p class="mt-0.5 mb-0 text-xs text-muted-foreground">{m.locale_description()}</p>
+    </div>
+    <div class="flex rounded-lg bg-muted/70 p-0.5" role="group" aria-label={m.locale_title()}>
+      {#each LANGUAGES as language (language.value)}
+        {@const active = currentLocale() === language.value}
+        <button type="button" data-testid={`appearance-locale-${language.value}`} aria-pressed={active}
+          class={["flex h-7 items-center rounded-md px-3 text-xs transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+            active ? "bg-background font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"]}
+          onclick={() => void changeLocale(language.value)}>
+          {language.label}
+        </button>
+      {/each}
+    </div>
   </div>
 </div>

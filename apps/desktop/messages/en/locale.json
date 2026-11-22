@@ -1,0 +1,5 @@
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "locale_title": "语言 / Language",
+  "locale_description": "The language of Kotone's windows. What she says, speech recognition and floating text stay as they are; all windows reload after you switch."
+}

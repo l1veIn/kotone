@@ -2,7 +2,8 @@
   "$schema": "https://inlang.com/schema/project-settings",
   "baseLocale": "zh-CN",
   "locales": [
-    "zh-CN"
+    "zh-CN",
+    "en"
   ],
   "modules": [
     "./node_modules/@inlang/plugin-message-format/dist/index.js"
@@ -14,7 +15,8 @@
       "./messages/{locale}/system.json",
       "./messages/{locale}/voice.json",
       "./messages/{locale}/games.json",
-      "./messages/{locale}/shell.json"
+      "./messages/{locale}/shell.json",
+      "./messages/{locale}/locale.json"
     ]
   }
 }

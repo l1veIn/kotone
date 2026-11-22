@@ -6,39 +6,41 @@
 
 **所有给玩家看的字以这一节为准**：界面（`apps/desktop/messages/zh-CN/*.json`）、气泡、她念的固定的话、托盘、错误提示、设置说明（`settings_guide.rs`）、给模型看的系统提示和工具说明（她会照着这些词跟玩家说话）、`docs/assistant.md`、官网。下面几节的技术术语只用在代码、架构文档和评审里。
 
+英文界面（`messages/en`）照最后一栏翻；玩家嘴里说的命令（退下、停下、可以 / 不要、唤醒词）是中文语音命令，英文界面里照写中文。
+
 规则：一个概念一个说法；“不说”一栏反引号里的词是禁用词，`e2e/terminology.spec.ts` 会在上面这些地方查（注释、日志、测试不查）。调研和取舍见 [2026-11-23 术语统一](research/2026-11-23-terminology.md)。
 
-| 说法 | 意思与边界 | 不说 | 代码名 |
-| --- | --- | --- | --- |
-| 通话 | 玩家用嘴跟她说话的那段时间。按呼叫键、喊唤醒词、点聊天页的呼叫按钮、按快捷指令都会**接通**；通话里她一直在听，用 `speak` 开口回答（一两句、不思考）；说“退下”、再按一次呼叫键、或一阵子没人说话就**挂断**（ADR 033）。“通话里”取代以前“游戏里 / 游戏内”指入口的用法：她怎么回答只看这句话从哪来，和开没开游戏无关 | `游戏内 ·`、`游戏内交给`、`游戏里的思考`、`游戏里的话`、`语音入口`、`语音回合`、`快速模式`、`接着听` | `Entry::Call`、`call.rs`、`assistant.callIdleSeconds` |
-| 聊天窗口 | 在 Kotone 窗口的聊天页里打字跟她说话。她写字回答，可以思考 | | `Entry::Chat` |
-| 游戏里 | **只用字面意思**：在游戏窗口里、游戏进程里（“在游戏里按呼叫键”“往游戏里打字”“这个游戏里记下的东西”） | （见“通话”） | |
-| 呼叫 / 挂断 | 呼叫 = 接通通话；挂断 = 结束通话 | | `assistant_call`、`call::end` |
-| 呼叫键 | 按一下就呼叫；通话中再按 = 挂断。默认 `Ctrl + ~` | `陪玩热键`、`呼叫热键` | `assistant.hotkey` |
-| 她 / {名字} | 指角色时用“她”或当前角色的名字（界面里用 `{name}`，默认“琴音”）；“琴音”写死只用在产品名（Kotone 琴音）和默认角色上 | `琴音 Agent`、`陪玩模型`、`陪玩 AI 连接` | `agent.identity.name` |
-| 角色 | 她的角色卡：名字、头像、性格、唤醒词；可以切换 | `人设` | `roles`、`role.json` |
-| 游戏陪玩 | 侧栏分组名（ADR 028 D1，玩家定的），不当成名词指她 | | |
-| 外部 Agent | 经工具服务 / MCP 接进来的别的 Agent；界面上的“Agent”只指这个 | `AI 助手` | `assistant.route = agent` |
-| 提醒助手 | 只给 0.1.x 升级用户保留的旧页面名 | | `LegacyRemindersPage` |
-| 热键 | 全局按键组合的统称（语音输入热键、停下热键、快捷指令的热键）。呼叫键是唯一简称“键”的 | `快捷键` | `*Hotkey` |
-| 快捷指令 | 绑了热键、按一下就替你跟她说一句预设的话（按了也会接通通话） | `快捷消息`、`快捷短语` | `companion.quickMessages` |
-| 后台的事 / 交给后台 | 她交出去慢慢做的复杂的事，聊天里是一张卡片，做完她说一句 | `子代理`、`子会话`、`后台任务` | `agent.start`、`Subagent` |
-| 停下 | 停掉她正在做的一切和全部自动化（不挂断通话）。停止热键、托盘、说“停下”、她操作游戏时按 Esc | `停止所有自动化`、`停止热键` | `stop::stop_everything`、`automationStopHotkey` |
-| 停止 / 取消 / 打断 | 停止 = 停一件具体的事（这个自动化、播放、本地语音识别）；取消 = 不做还没做的（对话框、下载、这次录音）；打断 = 她说话时被你打断 | | |
-| 权限 | 每个工具是 允许 / 先问我 / 禁止（设置 → 权限） | `授权` | `agent.permissions` |
-| 确认 | 她做某件事前问你一次（“这一步……，可以吗？”），回答是 允许 / 拒绝 / 这段对话都允许；通话里直接说“可以 / 不要” | `授权`、`批准` | `Asker`、`PermissionRequest` |
-| Key | 服务商给你的那串钥匙（“DeepSeek Key”） | `密钥`、`API Key`、`API 密钥`、`凭据` | `apiKey`、`SecretStore` |
-| API 连接 | 一个服务商的地址、模型和 Key（设置 → API 连接）；她用哪个连接在“她怎么回答”里选 | `AI 连接`、`API连接` | `Connection`、`connectionId` |
-| 服务商 | DeepSeek、阿里云百炼、火山等 | `提供商`、`厂商` | `provider` |
-| 回答方式 | 她的回答和提醒用 语音 / 弹幕 / 两种都用 | `提醒方式`、`播报方式`、`回复方式` | `assistant.defaultDelivery` |
-| 声音 / 语音合成 | 她的声音（音色、语速、音量）；“语音合成”只用在模型分类上 | `TTS`、`朗读` | `tts*`、`SpeechOutput` |
-| 语音识别 | 把说的话变成字（本地 / 在线）。“语音输入”是另一件事：说的话直接打进游戏聊天框 | `ASR`、`转写`、`听写` | `stt*`、`asr*` |
-| 对话 | 和她的一段对话（对话列表里的一项）；“聊天”只用在聊天页、聊天窗口、游戏聊天框 | `会话` | `Conversation` |
-| 自动化 | 替你持续或稍后做事；动作是“说一句”或“程序” | `脚本` | `automation.*` |
-| 游戏配置 | 一个游戏的聊天键、频道、词表等（游戏列表页里编辑） | `游戏设置`、`游戏档案` | `GameProfile` |
-| 气泡 / 悬浮窗 / 弹幕 | 气泡只属于她（在听、在想、在说）；悬浮窗只属于语音输入；弹幕是从右往左飘的字 | `对话气泡` | |
-| 技能 | 她会的本事包（一个文件夹一个） | `Skill` | `SKILL.md`、`workspace` |
-| 本地 / 在线 | 在这台电脑上算 / 发给服务商算 | `离线`、`云端` | `asrLocal` |
+| 说法 | 意思与边界 | 不说 | 代码名 | English |
+| --- | --- | --- | --- | --- |
+| 通话 | 玩家用嘴跟她说话的那段时间。按呼叫键、喊唤醒词、点聊天页的呼叫按钮、按快捷指令都会**接通**；通话里她一直在听，用 `speak` 开口回答（一两句、不思考）；说“退下”、再按一次呼叫键、或一阵子没人说话就**挂断**（ADR 033）。“通话里”取代以前“游戏里 / 游戏内”指入口的用法：她怎么回答只看这句话从哪来，和开没开游戏无关 | `游戏内 ·`、`游戏内交给`、`游戏里的思考`、`游戏里的话`、`语音入口`、`语音回合`、`快速模式`、`接着听` | `Entry::Call`、`call.rs`、`assistant.callIdleSeconds` | call (“in a call”, “Call {name}”, “Hang up”) |
+| 聊天窗口 | 在 Kotone 窗口的聊天页里打字跟她说话。她写字回答，可以思考 | | `Entry::Chat` | chat window |
+| 游戏里 | **只用字面意思**：在游戏窗口里、游戏进程里（“在游戏里按呼叫键”“往游戏里打字”“这个游戏里记下的东西”） | （见“通话”） | | in the game (literal only) |
+| 呼叫 / 挂断 | 呼叫 = 接通通话；挂断 = 结束通话 | | `assistant_call`、`call::end` | call / hang up |
+| 呼叫键 | 按一下就呼叫；通话中再按 = 挂断。默认 `Ctrl + ~` | `陪玩热键`、`呼叫热键` | `assistant.hotkey` | call key |
+| 她 / {名字} | 指角色时用“她”或当前角色的名字（界面里用 `{name}`，默认“琴音”）；“琴音”写死只用在产品名（Kotone 琴音）和默认角色上 | `琴音 Agent`、`陪玩模型`、`陪玩 AI 连接` | `agent.identity.name` | she / {name} |
+| 角色 | 她的角色卡：名字、头像、性格、唤醒词；可以切换 | `人设` | `roles`、`role.json` | character |
+| 游戏陪玩 | 侧栏分组名（ADR 028 D1，玩家定的），不当成名词指她 | | | Game companion |
+| 外部 Agent | 经工具服务 / MCP 接进来的别的 Agent；界面上的“Agent”只指这个 | `AI 助手` | `assistant.route = agent` | external agent |
+| 提醒助手 | 只给 0.1.x 升级用户保留的旧页面名 | | `LegacyRemindersPage` | Reminder assistant (0.1.x) |
+| 热键 | 全局按键组合的统称（语音输入热键、停下热键、快捷指令的热键）。呼叫键是唯一简称“键”的 | `快捷键` | `*Hotkey` | hotkey |
+| 快捷指令 | 绑了热键、按一下就替你跟她说一句预设的话（按了也会接通通话） | `快捷消息`、`快捷短语` | `companion.quickMessages` | quick command |
+| 后台的事 / 交给后台 | 她交出去慢慢做的复杂的事，聊天里是一张卡片，做完她说一句 | `子代理`、`子会话`、`后台任务` | `agent.start`、`Subagent` | background task / hand off to the background |
+| 停下 | 停掉她正在做的一切和全部自动化（不挂断通话）。停止热键、托盘、说“停下”、她操作游戏时按 Esc | `停止所有自动化`、`停止热键` | `stop::stop_everything`、`automationStopHotkey` | Stop (stop everything); “stop hotkey” |
+| 停止 / 取消 / 打断 | 停止 = 停一件具体的事（这个自动化、播放、本地语音识别）；取消 = 不做还没做的（对话框、下载、这次录音）；打断 = 她说话时被你打断 | | | stop / cancel / interrupt |
+| 权限 | 每个工具是 允许 / 先问我 / 禁止（设置 → 权限） | `授权` | `agent.permissions` | permissions: Allow / Ask first / Block |
+| 确认 | 她做某件事前问你一次（“这一步……，可以吗？”），回答是 允许 / 拒绝 / 这段对话都允许；通话里直接说“可以 / 不要” | `授权`、`批准` | `Asker`、`PermissionRequest` | confirmation: Allow / Deny / Allow for this conversation |
+| Key | 服务商给你的那串钥匙（“DeepSeek Key”） | `密钥`、`API Key`、`API 密钥`、`凭据` | `apiKey`、`SecretStore` | API key |
+| API 连接 | 一个服务商的地址、模型和 Key（设置 → API 连接）；她用哪个连接在“她怎么回答”里选 | `AI 连接`、`API连接` | `Connection`、`connectionId` | API connection |
+| 服务商 | DeepSeek、阿里云百炼、火山等 | `提供商`、`厂商` | `provider` | provider |
+| 回答方式 | 她的回答和提醒用 语音 / 弹幕 / 两种都用 | `提醒方式`、`播报方式`、`回复方式` | `assistant.defaultDelivery` | reply mode (voice / floating text) |
+| 声音 / 语音合成 | 她的声音（音色、语速、音量）；“语音合成”只用在模型分类上 | `TTS`、`朗读` | `tts*`、`SpeechOutput` | voice / text-to-speech |
+| 语音识别 | 把说的话变成字（本地 / 在线）。“语音输入”是另一件事：说的话直接打进游戏聊天框 | `ASR`、`转写`、`听写` | `stt*`、`asr*` | speech recognition |
+| 对话 | 和她的一段对话（对话列表里的一项）；“聊天”只用在聊天页、聊天窗口、游戏聊天框 | `会话` | `Conversation` | conversation (聊天 = chat) |
+| 自动化 | 替你持续或稍后做事；动作是“说一句”或“程序” | `脚本` | `automation.*` | automation |
+| 游戏配置 | 一个游戏的聊天键、频道、词表等（游戏列表页里编辑） | `游戏设置`、`游戏档案` | `GameProfile` | game profile |
+| 气泡 / 悬浮窗 / 弹幕 | 气泡只属于她（在听、在想、在说）；悬浮窗只属于语音输入；弹幕是从右往左飘的字 | `对话气泡` | | bubble / overlay / floating text |
+| 技能 | 她会的本事包（一个文件夹一个） | `Skill` | `SKILL.md`、`workspace` | skills |
+| 本地 / 在线 | 在这台电脑上算 / 发给服务商算 | `离线`、`云端` | `asrLocal` | local / online |
 
 ## 游戏陪玩的核心概念（ADR 028）
 

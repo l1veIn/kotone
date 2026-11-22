@@ -79,7 +79,7 @@
   <nav class="-mt-2 flex flex-col gap-2" aria-label={m.system_advanced_nav_label()}>
     {#each groups as item (item.id)}
       <div class="flex flex-wrap items-center gap-2">
-        <span class="w-8 shrink-0 text-[11px] font-medium text-muted-foreground" data-testid={`advanced-group-${item.id}`}>{item.label}</span>
+        <span class="min-w-8 shrink-0 whitespace-nowrap text-[11px] font-medium text-muted-foreground" data-testid={`advanced-group-${item.id}`}>{item.label}</span>
         <div class="flex w-fit max-w-full flex-wrap gap-0.5 rounded-xl bg-muted/70 p-1">
           {#each item.tabs as tab (tab.id)}
             {@const active = section === tab.id}
