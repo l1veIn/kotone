@@ -95,4 +95,16 @@ ADR 029 选了半双工：她说话时麦克风不收音（开着音箱也不会
 
 ## 实现情况
 
-（随实现补充。）
+2026-11-22，分支 `claude/call-mode`（从 main 74e95024），没推送：
+
+| 提交 | 内容 |
+| --- | --- |
+| `f43ddcce` | 第一节：用嘴问过的确认之后整句说“可以 / 不要”也算（单独一个提交，可以单独挑进 rc） |
+| `915e3668` | 流式播放可以临时压低音量 |
+| `68a5d388` | 回声消除的麦克风（`echo_cancel.rs`，sonora + 扬声器回采） |
+| `a72e8f08` | 设置 `callIdleSeconds` / `echoCancellation`，旧的“不接着听”迁移成不通话 |
+| `ce4e66ca` | 通话本身（`call.rs`、`wake.rs` 的通话耳朵、开口打断、退下、界面） |
+
+已验证：每个提交单独能编译、clippy `-D warnings` 干净；Rust 单元测试（kotone-core 291、kotone-tts、kotone-platform-windows、桌面端 106，含整句确认、回声判断、应一声不算打断、退下的说法、通话设置迁移）全过；合成回声测试（扬声器信号延迟 30 ms、减半后进麦克风）消掉 46.6 dB；svelte-check 0 错误；Playwright 131 个全过。
+
+没验证：`scripts/manual-e2e/call_mode_real.py`（真 DeepSeek、VB-CABLE 的整条通话流程）还没跑成——玩家一直在打英雄联盟，脚本在游戏或客户端在前台时不出声、直接退出；真麦克风 + 音箱的回声消除效果（`docs/playtest-adr-033.md` A1–A10）要玩家试。
