@@ -36,3 +36,4 @@ ADR 保留当时的上下文和选择，状态决定其适用性。当前架构�
 | [030 子代理可以执行命令、读写文件](030-subagent-shell-and-files.md) | Accepted / 已确认 | 主会话仍然没有；子代理有 `shell.run` / `file.*`，只能由玩家派；读过外面的东西（屏幕、聊天、网页、外部文件）就先问一句（照 Meta Agents Rule of Two）；删除类先问、模拟键鼠不让做（照 Codex execpolicy）；改文件先备份 |
 | [031 内置浏览器与浏览器操作](031-built-in-browser.md) | Proposed / 方向已确认，0.2.0 之后 | 后台任务在 Kotone 隐藏的 WebView2 里操作网页：快照和点击照 dsh-ego-browser（调试协议、节点编号、不抢前台），安全外壳照 dsh-browser 和 xylt369 url-guard；程序内调用、不开端口、不驱动玩家的 Chrome；登录由玩家扫码；第一个用处是点歌 |
 | [032 往游戏聊天里发字，不被玩家的按键打断](032-game-chat-send-reliability.md) | Accepted / 已确认，待实现 | 发送的约 220ms 里用已有的低层钩子吞掉玩家的按下，不替玩家补按任何键；新增 CS2 内置配置；Dota 2 / CS2 可由玩家打开“不开聊天框直接发”（写 `say_team` 到 cfg 再按一个绑定键，照 cs2-chat-translator）；英雄联盟局内没有官方写接口 |
+| [033 呼叫就是通话：一直在听、开口就能打断、说“退下”挂断](033-call-mode.md) | Proposed / 已实现，待真机验证 | rc3 真人测试反馈：呼叫键 / 唤醒 = 接通通话，一直在听；回声消除照 orb（扬声器回采作参考 + 纯 Rust 的 sonora AEC3）；她说话时开口先压低、识别出真话再停（空的、“嗯”、她自己的回声不算）；“退下 / 安静”随时挂断，30 秒没人说话挂断；用嘴问过的确认之后整句说“可以 / 不要”也算回答；修订 ADR 029 第五节 |
