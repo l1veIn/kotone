@@ -918,6 +918,7 @@ pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
     migrate_legacy_post_processing_json(&mut user);
     migrate_legacy_upgrade_json(&mut user);
     migrate_call_hotkey_json(&mut user);
+    migrate_call_idle_json(&mut user);
     merge_json(&mut merged, &user);
     let mut settings: Settings = match serde_json::from_value(merged) {
         Ok(settings) => settings,
@@ -1007,6 +1008,23 @@ fn migrate_call_hotkey_json(user: &mut serde_json::Value) {
             .and_then(|bindings| bindings.get_mut("hotkey")),
     );
     assistant.insert("callHotkeyRevision".into(), CALL_HOTKEY_REVISION.into());
+}
+
+/// 通话（ADR 033）取代“回答完接着听”：以前把接着听关掉（`followUpSeconds: 0`）的玩家不想她一直听，
+/// 新字段缺省成“不通话”；其余用缺省 30 秒。已经有 `callIdleSeconds` 的不动。
+fn migrate_call_idle_json(user: &mut serde_json::Value) {
+    let Some(assistant) = user
+        .get_mut("assistant")
+        .and_then(|assistant| assistant.as_object_mut())
+    else {
+        return;
+    };
+    if assistant.contains_key("callIdleSeconds") {
+        return;
+    }
+    if assistant.get("followUpSeconds").and_then(|v| v.as_u64()) == Some(0) {
+        assistant.insert("callIdleSeconds".into(), 0.into());
+    }
 }
 
 /// 旧配置只有单条 `pipeline`：空流程改种默认屏蔽词；有步骤则收成一条可切换流程。
@@ -1285,6 +1303,28 @@ mod tests {
             crate::assistant::DEFAULT_CALL_HOTKEY
         );
         assert_eq!(opted_in.companion_connection_id(), "game");
+    }
+
+    #[test]
+    fn turning_follow_up_off_also_turns_calls_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        for (raw, expected) in [
+            (r#"{"assistant":{"followUpSeconds":0}}"#, 0),
+            (r#"{"assistant":{"followUpSeconds":8}}"#, 30),
+            (r#"{"assistant":{"voiceId":"v"}}"#, 30),
+            (
+                r#"{"assistant":{"followUpSeconds":0,"callIdleSeconds":45}}"#,
+                45,
+            ),
+        ] {
+            std::fs::write(&path, raw).unwrap();
+            assert_eq!(
+                load_from(&path).assistant.call_idle_seconds,
+                expected,
+                "{raw}"
+            );
+        }
     }
 
     #[test]

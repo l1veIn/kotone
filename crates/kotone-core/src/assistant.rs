@@ -95,9 +95,14 @@ pub struct AssistantConfig {
     pub wake: WakeConfig,
     /// 琴音的对话气泡（屏幕角落）。新字段，缺省 = 开启、右下角。
     pub bubble: BubbleConfig,
-    /// 回答完接着听几秒（ADR 029 §五）：语音入口的回答念完后不用再按键、不用再喊唤醒词，
-    /// 直接接着说就是这段对话的下一句；没开口就安静结束。0 = 不接着听。新字段，缺省 8 秒。
+    /// 回答完接着听几秒（ADR 029 §五）。ADR 033 起不再使用（通话取代，见 `call_idle_seconds`），
+    /// 只为旧版本读得懂而保留；读入时 0 迁移成“不通话”。
     pub follow_up_seconds: u32,
+    /// 通话（ADR 033）：呼叫键 / 唤醒 = 接通，一直在听；这么多秒没人说话就挂断
+    /// （她在说、在想、在做、在等确认时不计时）。0 = 不通话：一问一答，答完不再听。新字段，缺省 30 秒。
+    pub call_idle_seconds: u32,
+    /// 通话里做回声消除（ADR 033 第三节）：开着音箱也能直接开口打断她。新字段，缺省开。
+    pub echo_cancellation: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -201,6 +206,10 @@ pub const WAKE_NO_SPEECH_RANGE_MS: std::ops::RangeInclusive<u32> = 2_000..=15_00
 pub const DEFAULT_FOLLOW_UP_SECONDS: u32 = 8;
 /// 回答完接着听的秒数范围（0 = 不接着听）。
 pub const FOLLOW_UP_RANGE_SECONDS: std::ops::RangeInclusive<u32> = 0..=30;
+/// 通话多久没人说话就挂断（照 orb `idle.ts` 的缺省 30 秒，ADR 033）。
+pub const DEFAULT_CALL_IDLE_SECONDS: u32 = 30;
+/// 通话空闲挂断的秒数范围（0 = 不通话；照 orb 5–600）。
+pub const CALL_IDLE_RANGE_SECONDS: std::ops::RangeInclusive<u32> = 0..=600;
 
 impl Default for WakeConfig {
     fn default() -> Self {
@@ -381,6 +390,8 @@ impl Default for AssistantConfig {
             wake: WakeConfig::default(),
             bubble: BubbleConfig::default(),
             follow_up_seconds: DEFAULT_FOLLOW_UP_SECONDS,
+            call_idle_seconds: DEFAULT_CALL_IDLE_SECONDS,
+            echo_cancellation: true,
         }
     }
 }
@@ -491,6 +502,9 @@ impl AssistantConfig {
         }
         if !FOLLOW_UP_RANGE_SECONDS.contains(&self.follow_up_seconds) {
             return Err("回答完接着听的时间必须在 0 到 30 秒之间".into());
+        }
+        if !CALL_IDLE_RANGE_SECONDS.contains(&self.call_idle_seconds) {
+            return Err("通话多久没人说话挂断，必须在 0 到 600 秒之间".into());
         }
         self.companion.validate()
     }
@@ -609,6 +623,25 @@ mod tests {
         }
         .validate()
         .is_err());
+    }
+
+    #[test]
+    fn calls_are_new_fields_defaulting_to_thirty_seconds_with_echo_cancellation() {
+        // 旧配置没有：缺省通话 30 秒、开回声消除（ADR 033）
+        let old: AssistantConfig =
+            serde_json::from_str(r##"{"voiceId":"v","followUpSeconds":8}"##).unwrap();
+        assert_eq!(old.call_idle_seconds, DEFAULT_CALL_IDLE_SECONDS);
+        assert!(old.echo_cancellation);
+        let json = serde_json::to_value(AssistantConfig::default()).unwrap();
+        assert_eq!(json["callIdleSeconds"], 30);
+        assert_eq!(json["echoCancellation"], true);
+        for (seconds, ok) in [(0, true), (600, true), (601, false)] {
+            let config = AssistantConfig {
+                call_idle_seconds: seconds,
+                ..AssistantConfig::default()
+            };
+            assert_eq!(config.validate().is_ok(), ok, "{seconds}");
+        }
     }
 
     #[test]

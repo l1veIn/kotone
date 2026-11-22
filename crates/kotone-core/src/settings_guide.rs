@@ -138,7 +138,8 @@ pub const FIELDS: &[Field] = &[
     f("assistant.interactionMode", "提醒键的说话方式（0.1.x 提醒助手；呼叫键固定为说完自动提交）", "提醒助手 → 提醒设置", "只影响 0.1.x 升级用户保留的提醒键；呼叫她不看这一项。", &[("push-to-talk", "按住说话，松开提交"), ("dictation", "按一下开始，停顿自动提交"), ("one-shot", "按一下说一句，说完自动提交")], NOW),
     f("assistant.connectionId", "AI 连接", "设置 → 她怎么回答 → AI 连接，或提醒助手 → 提醒设置", "她用哪条连接（连接 ID，用 connections.list 查）。0.1.x 升级用户在此保留原提醒连接，她的连接另存在 assistant.companionBindings.connectionId。", NONE, NOW),
     f("assistant.companionBindings.connectionId", "升级用户的琴音连接", "设置 → 她怎么回答 → AI 连接", "仅 0.1.x 升级用户启用琴音后使用；连接 ID，用 connections.list 查。", NONE, NOW),
-    f("assistant.followUpSeconds", "回答完接着听", "设置 → 怎么叫她", "秒，0–30，缺省 8。语音叫她（呼叫键、唤醒词、快捷指令）得到回答后，她念完接着听这么久：直接说就是这段对话的下一句，不用再按键或喊唤醒词；没开口就安静结束，说“没事了 / 不用了 / 拜拜”也会结束。0 = 不接着听。", NONE, NOW),
+    f("assistant.callIdleSeconds", "通话", "设置 → 怎么叫她", "秒，0–600，缺省 30。按呼叫键或喊唤醒词就是和她通话：通话里她一直在听，开口就是下一句，不用再按键或喊唤醒词；说“退下 / 安静 / 挂了 / 没事了 / 拜拜”、再按一次呼叫键、或这么久没人说话（她在说、在做、在等确认时不算）就挂断。0 = 不通话：一问一答，答完不再听。", NONE, NOW),
+    f("assistant.echoCancellation", "开着音箱也能打断她（回声消除）", "设置 → 怎么叫她", "true（缺省）时通话里消掉音箱放出来的声音（她的声音、游戏声），玩家直接开口就能打断她；false 时她说话时不听，要打断就按呼叫键。戴耳机开着也没坏处。", NONE, NOW),
     f("assistant.route", "呼叫交给谁", "设置 → 怎么叫她", "", &[("reminders", "内置（琴音 / 旧的单次陪玩）"), ("agent", "转交外部 Agent（需开启工具服务）")], NOW),
     f("assistant.defaultDelivery", "回答方式", "设置 → 她怎么回答 → 声音与弹幕", "数组，元素 voice（语音）/ danmaku（弹幕），1–2 个不重复。", NONE, NOW),
     f("assistant.speechEngine", "本地语音合成", "设置 → 她怎么回答 → 声音与弹幕", "assistant.ttsModelId 为空时使用。", &[("system", "Windows 系统语音"), ("kokoro", "Kokoro 本地中文语音（需下载）")], NOW),
@@ -274,6 +275,10 @@ pub const INTERNAL: &[(&str, &str)] = &[
     ("models.dir", "用 models.dir.set（会迁移已有模型）"),
     ("modelConfigs", "用 models.activate"),
     ("agent.permissions", "琴音的权限只能由用户在设置页修改"),
+    (
+        "assistant.followUpSeconds",
+        "ADR 033 起不再使用（通话取代，用 assistant.callIdleSeconds），只为旧版本保留",
+    ),
     ("agent.identity.avatar", "头像要在设置页上传图片"),
     (
         "agent.roleId",
