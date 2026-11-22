@@ -20,6 +20,10 @@ use crate::SharedState;
 /// 等不到回答时最多等多久（玩家开口后说得很长、识别慢的上限）。
 const HARD_LIMIT: Duration = Duration::from_secs(60);
 
+/// 问完那几秒没听到回答时说的话。确认还在等：之后用嘴说“可以 / 不要”也算
+/// （[`crate::agent::answer_by_voice`]），窗口里的按钮也一直能点。
+pub const NOT_HEARD: &str = "没听清。按呼叫键说“可以”或“不要”就行。";
+
 #[derive(Default)]
 pub struct VoiceAsk {
     pending: Mutex<Option<(u64, oneshot::Sender<String>)>>,
@@ -206,6 +210,88 @@ pub fn parse_confirmation(text: &str) -> Option<bool> {
     None
 }
 
+/// 整句只是“可以 / 允许 / 不要”这类回答吗（去掉开头叫的名字、语气词和标点）；不是就 `None`。
+///
+/// 用在问完那几秒之后：确认还在等、玩家又开口时，只有这样的整句才当回答，别的话照常交给她——
+/// 不能用 [`parse_confirmation`]，它按“含有”判断，“对面打野在下路”会被当成“对”。
+pub fn bare_confirmation(text: &str, name: &str) -> Option<bool> {
+    const YES: &[&str] = &[
+        "没问题",
+        "可以",
+        "允许",
+        "同意",
+        "确定",
+        "继续",
+        "好的",
+        "行",
+        "好",
+        "是",
+        "对",
+        "嗯",
+        "要",
+        "ok",
+        "yes",
+        "来吧",
+        "当然",
+    ];
+    const NO: &[&str] = &[
+        "不可以",
+        "不需要",
+        "不允许",
+        "不同意",
+        "不要",
+        "不用",
+        "不行",
+        "不了",
+        "算了",
+        "取消",
+        "拒绝",
+        "别",
+        "no",
+        "不",
+    ];
+    const FILLER: &[char] = &['吧', '啊', '呀', '了', '的', '哈', '嘛', '呗', '哦', '喔'];
+    let core: String = text
+        .chars()
+        .filter(|c| {
+            !c.is_whitespace() && !c.is_ascii_punctuation() && !"，。！？、…~～".contains(*c)
+        })
+        .collect::<String>()
+        .to_lowercase();
+    let name = name.trim().to_lowercase();
+    let mut rest = if !name.is_empty() && core.starts_with(&name) {
+        &core[name.len()..]
+    } else {
+        core.trim_start_matches("琴音")
+    };
+    // 整句由“是”的词（或整句由“不”的词）和语气词拼成才算；两种混着说（“好，不要”）听不出来。
+    let mut answer = None;
+    while !rest.is_empty() {
+        if let Some(c) = rest.chars().next().filter(|c| FILLER.contains(c)) {
+            rest = &rest[c.len_utf8()..];
+            continue;
+        }
+        // 开头是哪个词（多长）
+        let matched = |words: &[&str]| -> Option<usize> {
+            words
+                .iter()
+                .find(|w| rest.starts_with(**w))
+                .map(|w| w.len())
+        };
+        let (len, yes) = match (matched(NO), matched(YES)) {
+            (Some(len), _) => (len, false),
+            (None, Some(len)) => (len, true),
+            (None, None) => return None,
+        };
+        if answer.is_some_and(|a| a != yes) {
+            return None;
+        }
+        answer = Some(yes);
+        rest = &rest[len..];
+    }
+    answer
+}
+
 /// 权限确认要念出来的话：去掉括号里的补充说明（念出来别扭）。
 pub fn confirmation_question(reason: &str) -> String {
     let mut out = String::new();
@@ -255,6 +341,52 @@ mod tests {
         for unclear in ["", "嗯……我想想", "你说什么", "等一下", "要下多大的吗"]
         {
             assert_eq!(parse_confirmation(unclear), None, "{unclear}");
+        }
+    }
+
+    #[test]
+    fn later_answers_must_be_bare_confirmations() {
+        for yes in [
+            "允许",
+            "允许。",
+            "可以",
+            "可以可以",
+            "好的",
+            "行吧",
+            "嗯嗯",
+            "琴音，可以",
+            "大肥鱼 允许吧",
+            "OK",
+            "没问题啊",
+            "好，允许",
+        ] {
+            assert_eq!(bare_confirmation(yes, "大肥鱼"), Some(true), "{yes}");
+        }
+        for no in [
+            "不要",
+            "不用了",
+            "不行",
+            "算了吧",
+            "别",
+            "不允许",
+            "取消",
+            "琴音不要",
+        ] {
+            assert_eq!(bare_confirmation(no, "大肥鱼"), Some(false), "{no}");
+        }
+        // 平常说话里带着“对 / 是 / 好 / 要”不能当成回答（2026-11-22 修：之前只在问完那几秒里听）
+        for other in [
+            "",
+            "对面打野在下路",
+            "是谁在说话",
+            "好像不太对",
+            "要不要先回城",
+            "不知道",
+            "可以吗",
+            "好，不要",
+            "允许它下载那个文件，然后把音量调小",
+        ] {
+            assert_eq!(bare_confirmation(other, "大肥鱼"), None, "{other}");
         }
     }
 

@@ -261,7 +261,9 @@ impl Asker for DesktopAsker {
         };
         let mut rx = rx;
         if self.entry == Entry::Game {
-            // 语音入口：先用语音问，听玩家说“好 / 不要”；没听清再到窗口里点（窗口按钮一直可用）。
+            // 语音入口：先用语音问，听玩家说“好 / 不要”；没听清时之后用嘴说“可以 / 不要”也算
+            // （[`super::answer_by_voice`]），窗口按钮一直可用。
+            add_spoken_ask(&self.app, SpokenAsk::Main(guard.ask_id.clone()));
             let question = crate::voice_ask::confirmation_question(&reason);
             let voice = async {
                 match crate::voice_ask::ask(&self.app, &question, 6).await {
@@ -287,7 +289,7 @@ impl Asker for DesktopAsker {
             tauri::async_runtime::spawn(async move {
                 let _ = crate::assistant::deliver_text(
                     &app,
-                    "没听清，请到聊天窗口里点允许或拒绝。".into(),
+                    crate::voice_ask::NOT_HEARD.into(),
                     vec![DeliveryKind::Voice],
                 )
                 .await;
@@ -312,7 +314,10 @@ struct AskGuard {
 impl Drop for AskGuard {
     fn drop(&mut self) {
         if let Ok(rt) = runtime(&self.app) {
-            rt.inner.lock().unwrap().asks.remove(&self.ask_id);
+            let mut inner = rt.inner.lock().unwrap();
+            inner.asks.remove(&self.ask_id);
+            let spoken = SpokenAsk::Main(self.ask_id.clone());
+            inner.spoken_asks.retain(|a| *a != spoken);
         }
         let _ = self.app.emit(
             ASK_RESOLVED_EVENT,

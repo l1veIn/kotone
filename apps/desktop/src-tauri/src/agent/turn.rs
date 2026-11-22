@@ -31,6 +31,21 @@ pub fn send(app: &AppHandle, outgoing: Outgoing) -> Result<Value, String> {
         kotone_core::usage::release_asr(kotone_core::usage::current_turn());
         return Ok(json!({"status": "answered"}));
     }
+    // 问完那几秒已经过了、确认还在等：这句只是“可以 / 不要”就交给它（rc3 真人测试：说了
+    // “允许”还卡在确认上，只能去窗口里点）。
+    if voice && super::answer_by_voice(app, &text) {
+        kotone_core::usage::release_asr(kotone_core::usage::current_turn());
+        crate::voice_timing::discard();
+        if !is_running(app) {
+            // 回答的是后台那件事：主会话没在跑，识别成功后显示的“在想”稍后收起。
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                crate::bubble::finished(&app);
+            });
+        }
+        return Ok(json!({"status": "answered"}));
+    }
     // 语音说“停下”：和停止热键、托盘「停下」一样停下一切（正在进行的操作、这一轮、子会话、
     // 全部自动化，ADR 019 决定 7 / ADR 028），不当成插话排队。
     if voice

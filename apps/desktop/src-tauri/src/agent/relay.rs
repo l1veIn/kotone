@@ -163,6 +163,8 @@ pub(super) async fn subagent_ask(
     };
     let mut rx = rx;
     if last_entry(app, &spec.parent) == Some(Entry::Game) {
+        // 问完那几秒没听清，之后用嘴说“可以 / 不要”也算（[`super::answer_by_voice`]）。
+        add_spoken_ask(app, SpokenAsk::Child(child_id.to_string()));
         let voice = async {
             // 主会话安静了一会儿再问：她刚说完“交给我”时接着听马上就要开始，抢在那几十毫秒里
             // 问会因为“正在录音”说不出来（2026-11-20 真机）。说不出来就等下一次安静再问。
@@ -192,7 +194,7 @@ pub(super) async fn subagent_ask(
         tauri::async_runtime::spawn(async move {
             let _ = crate::assistant::deliver_text(
                 &app,
-                "没听清，请到聊天窗口里点允许或拒绝。".into(),
+                crate::voice_ask::NOT_HEARD.into(),
                 vec![DeliveryKind::Voice],
             )
             .await;
@@ -214,6 +216,7 @@ struct SubagentAskGuard {
 
 impl Drop for SubagentAskGuard {
     fn drop(&mut self) {
+        remove_spoken_ask(&self.app, &SpokenAsk::Child(self.child_id.clone()));
         if let Ok(rt) = runtime(&self.app) {
             if let Some(child) = rt.inner.lock().unwrap().children.get_mut(&self.child_id) {
                 child.ask = None;

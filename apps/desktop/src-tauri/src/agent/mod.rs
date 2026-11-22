@@ -105,6 +105,9 @@ struct Inner {
     sessions: HashMap<String, Arc<Session>>,
     asks: HashMap<String, oneshot::Sender<Answer>>,
     next_ask: u64,
+    /// 用嘴问过、还在等的确认（最近问的在最后）：问完那几秒过了，玩家之后用嘴说“可以 / 不要”
+    /// 也算回答（[`answer_by_voice`]），不用再去窗口里点。
+    spoken_asks: Vec<SpokenAsk>,
     /// 执行记录 id → 发起它的对话。
     run_owners: HashMap<String, String>,
 }
@@ -153,6 +156,58 @@ pub fn workspace() -> Workspace {
         log::log(&format!("agent: workspace unavailable: {e}"));
     }
     ws
+}
+
+/// 一次用嘴问过的确认：主会话的（界面卡片的 ask id）或后台的（那件事的对话 id）。
+#[derive(Clone, PartialEq, Eq)]
+enum SpokenAsk {
+    Main(String),
+    Child(String),
+}
+
+fn add_spoken_ask(app: &AppHandle, ask: SpokenAsk) {
+    if let Ok(rt) = runtime(app) {
+        let mut inner = rt.inner.lock().unwrap();
+        inner.spoken_asks.retain(|a| *a != ask);
+        inner.spoken_asks.push(ask);
+    }
+}
+
+fn remove_spoken_ask(app: &AppHandle, ask: &SpokenAsk) {
+    if let Ok(rt) = runtime(app) {
+        rt.inner.lock().unwrap().spoken_asks.retain(|a| a != ask);
+    }
+}
+
+/// 有用嘴问过、还在等的确认，而玩家这句只是“可以 / 允许 / 不要”：交给最近问的那个。
+/// 返回是否交出去了（交出去了这句就不再交给琴音）。
+pub fn answer_by_voice(app: &AppHandle, text: &str) -> bool {
+    let Ok(rt) = runtime(app) else {
+        return false;
+    };
+    let name = settings(app).agent.identity.name;
+    let mut inner = rt.inner.lock().unwrap();
+    if inner.spoken_asks.is_empty() {
+        return false;
+    }
+    let Some(ok) = crate::voice_ask::bare_confirmation(text, &name) else {
+        return false;
+    };
+    let answer = if ok { Answer::AllowOnce } else { Answer::Deny };
+    while let Some(ask) = inner.spoken_asks.pop() {
+        let sender = match &ask {
+            SpokenAsk::Main(id) => inner.asks.remove(id),
+            SpokenAsk::Child(id) => inner.children.get_mut(id).and_then(|c| c.ask.take()),
+        };
+        if sender.is_some_and(|tx| tx.send(answer).is_ok()) {
+            log::log(&format!(
+                "agent: 玩家用嘴回答了还在等的确认（{}）",
+                if ok { "允许" } else { "拒绝" }
+            ));
+            return true;
+        }
+    }
+    false
 }
 
 fn runtime(app: &AppHandle) -> Result<tauri::State<'_, AgentRuntime>, String> {
