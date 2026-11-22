@@ -807,7 +807,10 @@ pub fn quick(app: &AppHandle, slot: usize) {
             crate::agent::submit_from_assistant(app, message.text.clone(), "quick-command")
         {
             tell(app, format!("快捷指令没能交出去：{error}"));
+            return;
         }
+        // 快捷指令 = 替你在通话里说一句：按了也接通，她答完你可以直接接着说（ADR 033、术语表“通话”）
+        crate::call::start(app);
         return;
     }
     let app = app.clone();
