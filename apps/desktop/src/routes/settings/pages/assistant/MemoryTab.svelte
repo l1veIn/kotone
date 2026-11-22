@@ -9,6 +9,7 @@
   import WorkspaceFileEditor from "./WorkspaceFileEditor.svelte";
   import { workspaceDeleteGame, workspaceOpenDir, workspaceOverview, type WorkspaceOverview } from "../../../../lib/workspace";
   import { errText, toast } from "../../../../lib/stores/ui";
+  import { m } from "$lib/paraglide/messages.js";
 
   let overview = $state<WorkspaceOverview | null>(null);
   let game = $state<string | null>(null);
@@ -20,7 +21,7 @@
       if (game && !overview.games.some((g) => g.id === game)) game = null;
       if (!game && overview.games.length) game = overview.games[0].id;
     } catch (e) {
-      toast(false, `读取记忆失败：${errText(e)}`);
+      toast(false, m.companion_memory_load_failed({ error: errText(e) }));
     }
   }
   onMount(() => { void refresh(); });
@@ -29,7 +30,7 @@
     if (!confirm) return;
     try {
       await workspaceDeleteGame(confirm);
-      toast(true, "已删除这个游戏的记忆");
+      toast(true, m.companion_memory_game_deleted());
       confirm = null;
       await refresh();
     } catch (e) {
@@ -39,40 +40,40 @@
 </script>
 
 <div class="space-y-6" data-testid="memory-tab">
-  <SettingsSection title="关于你" description="她记下的你的习惯和偏好（称呼、语言、常玩的位置……）。">
+  <SettingsSection title={m.companion_memory_user_title()} description={m.companion_memory_user_desc()}>
     <div class="py-3.5">
-      <WorkspaceFileEditor file="USER.md" limit={overview?.files.user.limit ?? 1375} label="关于你" testid="memory-user"
-        placeholder={"- 叫我小林\n- 和队友说英语"} onsaved={() => void refresh()} />
+      <WorkspaceFileEditor file="USER.md" limit={overview?.files.user.limit ?? 1375} label={m.companion_memory_user_title()} testid="memory-user"
+        placeholder={m.companion_memory_user_placeholder()} onsaved={() => void refresh()} />
     </div>
   </SettingsSection>
 
-  <SettingsSection title="她的笔记" description="跨游戏的长期笔记：环境、约定、学到的教训。写满了她会自己合并。">
+  <SettingsSection title={m.companion_memory_notes_title()} description={m.companion_memory_notes_desc()}>
     <div class="py-3.5">
-      <WorkspaceFileEditor file="MEMORY.md" limit={overview?.files.memory.limit ?? 2200} label="笔记" testid="memory-notes" onsaved={() => void refresh()} />
+      <WorkspaceFileEditor file="MEMORY.md" limit={overview?.files.memory.limit ?? 2200} label={m.companion_memory_notes_label()} testid="memory-notes" onsaved={() => void refresh()} />
     </div>
   </SettingsSection>
 
-  <SettingsSection title="游戏记忆" description="每个游戏一份：按键、地图、你的打法。玩这个游戏时她才会读。" testid="memory-games">
+  <SettingsSection title={m.companion_memory_games_title()} description={m.companion_memory_games_desc()} testid="memory-games">
     {#snippet actions()}
-      <Button size="sm" variant="ghost" onclick={() => void workspaceOpenDir()}>打开文件夹</Button>
+      <Button size="sm" variant="ghost" onclick={() => void workspaceOpenDir()}>{m.companion_open_folder()}</Button>
     {/snippet}
     <div class="py-3.5">
       {#if !overview?.games.length}
-        <p class="m-0 text-xs text-muted-foreground" data-testid="memory-games-empty">还没有。玩游戏时跟她说“记住……”，她会记到这个游戏的记忆里。</p>
+        <p class="m-0 text-xs text-muted-foreground" data-testid="memory-games-empty">{m.companion_memory_games_empty()}</p>
       {:else}
-        <div class="mb-3 flex flex-wrap gap-1.5" role="tablist" aria-label="游戏">
+        <div class="mb-3 flex flex-wrap gap-1.5" role="tablist" aria-label={m.companion_memory_games_aria()}>
           {#each overview.games as item (item.id)}
             <div class="group flex items-center rounded-md {game === item.id ? 'bg-primary/12 text-primary' : 'bg-muted/70 text-muted-foreground'}">
               <button type="button" role="tab" aria-selected={game === item.id} class="h-7 px-2.5 text-xs font-medium"
                 data-testid="memory-game" data-game-id={item.id} onclick={() => { game = item.id; }}>{item.id}</button>
-              <button type="button" aria-label={`删除 ${item.id} 的记忆`} class="mr-1 flex size-5 items-center justify-center rounded opacity-60 hover:bg-destructive/15 hover:text-destructive hover:opacity-100"
+              <button type="button" aria-label={m.companion_memory_game_delete_aria({ game: item.id })} class="mr-1 flex size-5 items-center justify-center rounded opacity-60 hover:bg-destructive/15 hover:text-destructive hover:opacity-100"
                 data-testid="memory-game-delete" onclick={() => { confirm = item.id; }}><Trash2 class="size-3" /></button>
             </div>
           {/each}
         </div>
         {#if game}
           {#key game}
-            <WorkspaceFileEditor file={`games/${game}`} limit={overview.gameLimit} label={`${game} 的记忆`} testid="memory-game-editor" onsaved={() => void refresh()} />
+            <WorkspaceFileEditor file={`games/${game}`} limit={overview.gameLimit} label={m.companion_memory_game_label({ game })} testid="memory-game-editor" onsaved={() => void refresh()} />
           {/key}
         {/if}
       {/if}
@@ -83,12 +84,12 @@
 <Dialog.Root open={confirm !== null} onOpenChange={(open) => { if (!open) confirm = null; }}>
   <Dialog.Content class="sm:max-w-sm">
     <Dialog.Header>
-      <Dialog.Title>删除「{confirm}」的记忆？</Dialog.Title>
-      <Dialog.Description>她会忘掉这个游戏里记下的东西，不能恢复。</Dialog.Description>
+      <Dialog.Title>{m.companion_memory_delete_title({ game: confirm ?? "" })}</Dialog.Title>
+      <Dialog.Description>{m.companion_memory_delete_desc()}</Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
-      <Button variant="outline" onclick={() => { confirm = null; }}>取消</Button>
-      <Button variant="destructive" onclick={() => void removeGame()} data-testid="memory-game-delete-confirm">删除</Button>
+      <Button variant="outline" onclick={() => { confirm = null; }}>{m.companion_cancel()}</Button>
+      <Button variant="destructive" onclick={() => void removeGame()} data-testid="memory-game-delete-confirm">{m.companion_memory_delete_confirm()}</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

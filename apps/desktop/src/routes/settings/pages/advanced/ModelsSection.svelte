@@ -36,6 +36,7 @@
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import { Button } from "$lib/components/ui/button";
   import stickerCurious from "../../../../assets/brand/stickers/curious.webp";
+  import { m } from "$lib/paraglide/messages.js";
 
   let engines = $state<EngineInfo[] | null>(null);
   let models = $state<ModelInfo[]>([]);
@@ -63,10 +64,10 @@
     if (next === "asr" || next === "ocr" || next === "tts" || next === "search") category = next;
   });
   const categories = [
-    { id: "asr", name: "语音识别" },
-    { id: "ocr", name: "文字识别" },
-    { id: "tts", name: "语音合成" },
-    { id: "search", name: "联网搜索" },
+    { id: "asr", name: m.system_models_category_asr() },
+    { id: "ocr", name: m.system_models_category_ocr() },
+    { id: "tts", name: m.system_models_category_tts() },
+    { id: "search", name: m.system_models_category_search() },
   ] as const;
 
   const downloadingAny = $derived(Object.keys(dlProgress).length > 0);
@@ -75,7 +76,7 @@
   const historyDirLabel = $derived($settingsStore?.history.dir.trim() || "~/.kotone/history");
   const historyDirCustom = $derived(Boolean($settingsStore?.history.dir.trim()));
 
-  const visibleModels = $derived(models.filter((m) => m.engineId !== "mock-stream"));
+  const visibleModels = $derived(models.filter((model) => model.engineId !== "mock-stream"));
 
   onMount(() => {
     let un: (() => void) | undefined;
@@ -97,17 +98,17 @@
     const [en, mo, di, cn] = await Promise.all([
       listSttEngines().catch((e) => {
         console.error("[engine-page] list_stt_engines 失败：", e);
-        toast(false, `加载引擎列表失败：${errText(e)}`);
+        toast(false, m.system_models_load_engines_failed({ error: errText(e) }));
         return null;
       }),
       listModels().catch((e) => {
         console.error("[engine-page] list_models 失败：", e);
-        toast(false, `加载模型清单失败：${errText(e)}`);
+        toast(false, m.system_models_load_models_failed({ error: errText(e) }));
         return null;
       }),
       getModelsDir().catch((e) => {
         console.error("[engine-page] get_models_dir 失败：", e);
-        toast(false, `读取模型目录失败：${errText(e)}`);
+        toast(false, m.system_models_load_dir_failed({ error: errText(e) }));
         return null;
       }),
       listConnections().catch((e) => {
@@ -137,14 +138,14 @@
     try {
       const report = await setModelsDir(dir);
       if (report.failed.length > 0) {
-        toastWarn(`已切换，但 ${report.failed.length} 项迁移失败（需重新下载）：${report.failed.join(", ")}`);
+        toastWarn(m.system_models_dir_migrate_partial({ count: report.failed.length, items: report.failed.join(", ") }));
       } else {
-        toast(true, report.moved.length > 0 ? `模型目录已切换，迁移 ${report.moved.length} 项` : "模型目录已切换");
+        toast(true, report.moved.length > 0 ? m.system_models_dir_changed_moved({ count: report.moved.length }) : m.system_models_dir_changed());
       }
       editingDir = false;
       await reload();
     } catch (e) {
-      toast(false, `切换模型目录失败：${errText(e)}`);
+      toast(false, m.system_models_dir_change_failed({ error: errText(e) }));
     } finally {
       migrating = false;
     }
@@ -154,12 +155,12 @@
     try {
       await openModelsDir();
     } catch (e) {
-      toast(false, `打开目录失败：${errText(e)}`);
+      toast(false, m.system_models_open_dir_failed({ error: errText(e) }));
     }
   }
 
   async function onBrowseDir() {
-    const sel = await openDialog({ directory: true, title: "选择模型存储位置" }).catch(() => null);
+    const sel = await openDialog({ directory: true, title: m.system_models_dir_dialog_title() }).catch(() => null);
     if (!sel) return;
     const pathError = modelsDirPathError(sel);
     if (pathError) {
@@ -170,16 +171,16 @@
   }
 
   async function onChangeHistoryDir() {
-    const sel = await openDialog({ directory: true, title: "选择历史记录位置" }).catch(() => null);
+    const sel = await openDialog({ directory: true, title: m.system_models_history_dir_dialog_title() }).catch(() => null);
     if (!sel) return;
-    await patchSettings({ history: { dir: sel } }, "历史目录已切换");
+    await patchSettings({ history: { dir: sel } }, m.system_models_history_dir_changed());
   }
 
   async function onOpenHistoryDir() {
     try {
       await openHistoryDir();
     } catch (e) {
-      toast(false, `打开目录失败：${errText(e)}`);
+      toast(false, m.system_models_open_dir_failed({ error: errText(e) }));
     }
   }
 
@@ -189,15 +190,15 @@
     dlProgress[id] = null;
     try {
       await downloadModel(id);
-      models = models.map((m) => (m.id === id ? { ...m, downloaded: true } : m));
-      toast(true, `下载完成：${id}`);
+      models = models.map((model) => (model.id === id ? { ...model, downloaded: true } : model));
+      toast(true, m.system_catalog_download_done({ name: id }));
       await reload();
     } catch (e) {
       if (isDownloadCancelled(e)) {
-        toastInfo("已取消下载，可随时继续");
+        toastInfo(m.system_catalog_download_cancelled());
       } else {
         dlErrors[id] = errText(e);
-        toast(false, "下载失败，可按指引手动下载或调整下载源后重试");
+        toast(false, m.system_models_download_failed_toast());
         await openManualGuide(id, dlErrors[id]);
       }
     } finally {
@@ -213,7 +214,7 @@
       await cancelDownload();
     } catch (e) {
       cancellingId = null;
-      toast(false, `取消失败：${errText(e)}`);
+      toast(false, m.system_models_cancel_failed({ error: errText(e) }));
     }
   }
 
@@ -222,20 +223,20 @@
       manualGuide = await getModelInstallGuide(id);
       manualGuideError = error;
     } catch (e) {
-      toast(false, `无法加载手动安装指引：${errText(e)}`);
+      toast(false, m.system_models_guide_load_failed({ error: errText(e) }));
     }
   }
 
   async function recheckAfterManualInstall() {
     const id = manualGuide?.id;
     await reload();
-    if (id && models.some((m) => m.id === id && m.downloaded)) {
+    if (id && models.some((model) => model.id === id && model.downloaded)) {
       delete dlErrors[id];
       manualGuide = null;
       manualGuideError = "";
-      toast(true, "已检测到模型文件");
+      toast(true, m.system_models_recheck_found());
     } else {
-      toastWarn("还没检测到完整模型，请确认文件名和目录后重试");
+      toastWarn(m.system_models_recheck_missing());
     }
   }
 
@@ -245,7 +246,7 @@
     confirmingDelete = null;
     try {
       const outcome = await deleteModel(id);
-      models = models.map((m) => (m.id === id ? { ...m, downloaded: false } : m));
+      models = models.map((model) => (model.id === id ? { ...model, downloaded: false } : model));
       if (outcome.wasActive) {
         settingsStore.update((s) => {
           if (!s) return s;
@@ -256,13 +257,13 @@
           }
           return next;
         });
-        toast(true, `已删除：${id}（活动模型已回退默认）`);
+        toast(true, m.system_models_deleted_was_active({ name: id }));
       } else {
-        toast(true, `已删除：${id}`);
+        toast(true, m.system_catalog_deleted({ name: id }));
       }
       await reload();
     } catch (e) {
-      toast(false, `删除失败：${errText(e)}`);
+      toast(false, m.system_catalog_delete_failed({ error: errText(e) }));
     } finally {
       deleting = null;
     }
@@ -280,24 +281,24 @@
         return next;
       });
       if ($runtimeStore?.phase === "running") {
-        toastWarn(`已切换模型，重启后生效`);
+        toastWarn(m.system_models_activated_restart());
       } else {
-        toast(true, "已切换模型");
+        toast(true, m.system_models_activated());
       }
     } catch (e) {
-      toast(false, `切换模型失败：${errText(e)}`);
+      toast(false, m.system_models_activate_failed({ error: errText(e) }));
     }
   }
 
   async function saveDownloadProxy() {
     await patchSettings(
       { download: { ghProxy: downloadProxyDraft.trim() } },
-      "下载代理地址已保存",
+      m.system_models_proxy_saved(),
     );
   }
 
   function formatSize(bytes: number): string {
-    if (bytes <= 0) return "无需下载";
+    if (bytes <= 0) return m.system_catalog_size_none();
     if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1)} GB`;
     return `${Math.round(bytes / 1_000_000)} MB`;
   }
@@ -310,7 +311,7 @@
     const configured = ($settingsStore?.engineOptions?.[engineId] as Record<string, unknown> | undefined)
       ?.model as string | undefined;
     if (configured) return configured === modelId;
-    const defaultModel = models.find((m) => m.engineId === engineId);
+    const defaultModel = models.find((model) => model.engineId === engineId);
     return defaultModel?.id === modelId;
   }
 
@@ -323,7 +324,7 @@
     const current = $settingsStore?.modelConfigs?.[modelId] ?? {};
     await patchSettings(
       { modelConfigs: { [modelId]: { ...current, [key]: value } } },
-      "模型配置已保存",
+      m.system_catalog_config_saved(),
     );
   }
 
@@ -332,10 +333,10 @@
   }
 
   function sourceLabel(model: ModelInfo): string {
-    if (model.backend === "remote") return "在线";
-    if (model.id.includes("modelscope")) return "魔搭";
-    if (model.recipe === "zipformer-transducer") return "魔搭优先";
-    return "本机";
+    if (model.backend === "remote") return m.system_catalog_source_online();
+    if (model.id.includes("modelscope")) return m.system_models_source_modelscope();
+    if (model.recipe === "zipformer-transducer") return m.system_models_source_modelscope_first();
+    return m.system_catalog_source_local();
   }
 </script>
 
@@ -344,78 +345,78 @@
   <div class="flex items-center gap-2 rounded-xl border border-warning/40 bg-warning/8 px-3.5 py-2.5">
     <span class="size-2 shrink-0 rounded-full bg-warning"></span>
     <p class="m-0 flex-1 text-xs text-warning">
-      识别设置改了：本地语音识别重新启动后才用新设置。
+      {m.system_models_restart_needed()}
     </p>
-    <Button size="sm" variant="outline" class="h-7" onclick={() => void startRuntime().then(() => toast(true, "已按新设置重新启动")).catch((e) => toast(false, errText(e)))}>重新启动</Button>
+    <Button size="sm" variant="outline" class="h-7" onclick={() => void startRuntime().then(() => toast(true, m.system_models_restarted())).catch((e) => toast(false, errText(e)))}>{m.system_models_restart_button()}</Button>
   </div>
 {/if}
 
-<SettingsSection title="存储位置">
+<SettingsSection title={m.system_models_storage_title()}>
   <div class="py-3.5">
-    <p class="m-0 text-[13px] font-medium text-foreground">模型存储位置</p>
+    <p class="m-0 text-[13px] font-medium text-foreground">{m.system_models_dir_label()}</p>
     {#if editingDir}
       <div class="mt-2 flex flex-wrap items-center gap-2">
         <input
           bind:value={dirDraft}
-          placeholder="留空 = 默认 ~/.kotone/models"
+          placeholder={m.system_models_dir_placeholder()}
           spellcheck="false"
           class="h-8 min-w-0 flex-1 rounded-lg border border-input bg-background/60 px-2.5 text-[13px] text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-ring focus:ring-3 focus:ring-ring/30"
         />
-        <Button variant="outline" size="sm" onclick={() => void onBrowseDir()}>浏览…</Button>
+        <Button variant="outline" size="sm" onclick={() => void onBrowseDir()}>{m.system_models_dir_browse()}</Button>
         <Button size="sm" disabled={migrating || dirDraftError !== null} onclick={() => void onChangeDir()}>
-          {migrating ? "迁移中…" : "确认并迁移"}
+          {migrating ? m.system_models_dir_migrating() : m.system_models_dir_confirm()}
         </Button>
-        <Button variant="ghost" size="sm" onclick={() => (editingDir = false)}>取消</Button>
+        <Button variant="ghost" size="sm" onclick={() => (editingDir = false)}>{m.system_common_cancel()}</Button>
       </div>
       {#if dirDraftError}
         <p class="mt-2 mb-0 text-xs text-destructive">{dirDraftError}</p>
       {:else}
         <p class="mt-2 mb-0 text-xs text-muted-foreground">
-          仅支持纯英文路径；已下载的模型会移动到新目录（迁移失败的条目需重新下载）。
+          {m.system_models_dir_edit_hint()}
         </p>
       {/if}
     {:else}
       <div class="mt-2 flex items-center gap-2">
         <span class="min-w-0 flex-1 truncate rounded-lg border border-hairline bg-muted/40 px-2.5 py-1.5 text-xs text-foreground/80">
-          {dirInfo?.dir ?? "读取中…"}{dirInfo?.isDefault ? "（默认）" : ""}
+          {dirInfo?.dir ?? m.system_catalog_loading()}{dirInfo?.isDefault ? m.system_common_default_suffix() : ""}
         </span>
         <Button variant="outline" size="sm" onclick={() => {
           dirDraft = dirInfo && !dirInfo.isDefault ? dirInfo.dir : "";
           editingDir = true;
-        }}>更改</Button>
-        <Button variant="outline" size="sm" onclick={() => void onOpenDir()}>打开目录</Button>
+        }}>{m.system_models_change_button()}</Button>
+        <Button variant="outline" size="sm" onclick={() => void onOpenDir()}>{m.system_models_open_dir_button()}</Button>
       </div>
       {#if currentModelsDirError}
         <p class="mt-2 mb-0 text-xs text-destructive">
-          {currentModelsDirError}。请点击“更改”选择新目录。
+          {m.system_models_dir_invalid({ error: currentModelsDirError })}
         </p>
       {:else}
         <p class="mt-2 mb-0 text-xs text-muted-foreground">
-          模型路径需要使用纯英文，例如 D:\KotoneModels。
+          {m.system_models_dir_hint()}
         </p>
       {/if}
     {/if}
   </div>
   <div class="py-3.5">
-    <p class="m-0 text-[13px] font-medium text-foreground">历史记录位置</p>
+    <p class="m-0 text-[13px] font-medium text-foreground">{m.system_models_history_dir_label()}</p>
     <div class="mt-2 flex items-center gap-2">
       <span class="min-w-0 flex-1 truncate rounded-lg border border-hairline bg-muted/40 px-2.5 py-1.5 text-xs text-foreground/80">
-        {historyDirLabel}{historyDirCustom ? "" : "（默认）"}
+        {historyDirLabel}{historyDirCustom ? "" : m.system_common_default_suffix()}
       </span>
-      <Button variant="outline" size="sm" onclick={() => void onChangeHistoryDir()}>更改</Button>
+      <Button variant="outline" size="sm" onclick={() => void onChangeHistoryDir()}>{m.system_models_change_button()}</Button>
       {#if historyDirCustom}
-        <Button variant="ghost" size="sm" onclick={() => void patchSettings({ history: { dir: "" } }, "已恢复默认历史目录")}>恢复默认</Button>
+        <Button variant="ghost" size="sm" onclick={() => void patchSettings({ history: { dir: "" } }, m.system_models_history_dir_reset_done())}>{m.system_common_restore_default()}</Button>
       {/if}
-      <Button variant="outline" size="sm" onclick={() => void onOpenHistoryDir()}>打开目录</Button>
+      <Button variant="outline" size="sm" onclick={() => void onOpenHistoryDir()}>{m.system_models_open_dir_button()}</Button>
     </div>
     <p class="mt-2 mb-0 text-xs text-muted-foreground">
-      历史记录与回放音频保存位置；新记录写入新目录，旧目录内容不自动迁移。
+      {m.system_models_history_dir_hint()}
     </p>
   </div>
 </SettingsSection>
 
 <div class="space-y-3">
-<div id="models-category" class="flex w-fit scroll-mt-16 gap-0.5 rounded-xl bg-muted/70 p-1" role="tablist" aria-label="模型类别">
+<div id="models-category" class="flex w-fit scroll-mt-16 gap-0.5 rounded-xl bg-muted/70 p-1" role="tablist" aria-label={m.system_models_category_label()}>
   {#each categories as c}
     <button
       type="button"
@@ -438,22 +439,22 @@
   {/key}
 {:else if engines === null}
   <div class="mt-10 flex flex-col items-center gap-3">
-    <img src={stickerCurious} alt="加载中" class="h-24 w-24 object-contain" />
-    <p class="m-0 text-sm text-muted-foreground">Kotone 正在清点模型…</p>
+    <img src={stickerCurious} alt={m.system_models_loading_alt()} class="h-24 w-24 object-contain" />
+    <p class="m-0 text-sm text-muted-foreground">{m.system_models_loading()}</p>
   </div>
 {:else if visibleModels.length === 0}
   <div class="mt-10 flex flex-col items-center gap-3">
-    <img src={stickerCurious} alt="空空如也" class="h-24 w-24 object-contain" />
-    <p class="m-0 text-sm text-muted-foreground">还没有可用模型</p>
+    <img src={stickerCurious} alt={m.system_models_empty_alt()} class="h-24 w-24 object-contain" />
+    <p class="m-0 text-sm text-muted-foreground">{m.system_models_empty()}</p>
   </div>
 {:else}
   <section class="rounded-2xl border border-hairline bg-card/70 p-2" data-testid="model-list">
-    <p class="m-0 px-2 pt-1.5 pb-2 text-sm font-semibold text-foreground">模型切换</p>
-    <div class="flex flex-col gap-1" role="radiogroup" aria-label="sherpa-onnx 模型选择">
-      {#each visibleModels as m}
-        {@const isActive = isCurrentModel(m.id)}
-        {@const streaming = isStreaming(m)}
-        {#if m.downloaded}
+    <p class="m-0 px-2 pt-1.5 pb-2 text-sm font-semibold text-foreground">{m.system_models_list_title()}</p>
+    <div class="flex flex-col gap-1" role="radiogroup" aria-label={m.system_models_list_label()}>
+      {#each visibleModels as model}
+        {@const isActive = isCurrentModel(model.id)}
+        {@const streaming = isStreaming(model)}
+        {#if model.downloaded}
           <div
             role="radio"
             aria-checked={isActive}
@@ -462,9 +463,9 @@
               {isActive
               ? 'border-primary/50 bg-primary/8'
               : 'border-transparent hover:bg-muted/60'}"
-            onclick={() => !isActive && void onSetActive(m.engineId, m.id)}
+            onclick={() => !isActive && void onSetActive(model.engineId, model.id)}
             onkeydown={(e) => {
-              if (e.key === "Enter" && !isActive) void onSetActive(m.engineId, m.id);
+              if (e.key === "Enter" && !isActive) void onSetActive(model.engineId, model.id);
             }}
           >
             <span
@@ -478,28 +479,28 @@
             </span>
             <div class="min-w-0 flex-1">
               <p class="m-0 truncate text-[13px] {isActive ? 'font-medium text-primary' : 'text-foreground'}">
-                {m.displayName}
+                {model.displayName}
               </p>
               <p class="mt-0.5 mb-0 text-[11px] text-muted-foreground">
-                {formatSize(m.sizeBytes)} · {streaming ? "流式" : "非流式"} · {sourceLabel(m)}
+                {formatSize(model.sizeBytes)} · {streaming ? m.system_models_streaming() : m.system_models_non_streaming()} · {sourceLabel(model)}
               </p>
             </div>
             {#if isActive}
               <span class="shrink-0 rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">
-                使用中
+                {m.system_catalog_active_badge()}
               </span>
             {/if}
-            {#if m.backend !== "remote" && confirmingDelete === m.id}
+            {#if model.backend !== "remote" && confirmingDelete === model.id}
               <Button
                 variant="destructive"
                 size="xs"
                 disabled={deleting !== null}
                 onclick={(e: MouseEvent) => {
                   e.stopPropagation();
-                  void onDelete(m.id);
+                  void onDelete(model.id);
                 }}
               >
-                {deleting === m.id ? "删除中…" : "确认删除"}
+                {deleting === model.id ? m.system_models_deleting() : m.system_catalog_delete_confirm()}
               </Button>
               <Button
                 variant="ghost"
@@ -509,20 +510,20 @@
                   confirmingDelete = null;
                 }}
               >
-                取消
+                {m.system_common_cancel()}
               </Button>
-            {:else if m.backend !== "remote"}
+            {:else if model.backend !== "remote"}
               <Button
                 variant="ghost"
                 size="xs"
                 class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                title="删除模型文件"
+                title={m.system_models_delete_tooltip()}
                 onclick={(e: MouseEvent) => {
                   e.stopPropagation();
-                  confirmingDelete = m.id;
+                  confirmingDelete = model.id;
                 }}
               >
-                删除
+                {m.system_common_delete()}
               </Button>
             {/if}
           </div>
@@ -531,27 +532,27 @@
             <div class="flex items-center gap-2.5">
               <span class="size-4 shrink-0 rounded-full border-2 border-muted-foreground/25"></span>
               <div class="min-w-0 flex-1">
-                <p class="m-0 truncate text-[13px] text-muted-foreground">{m.displayName}</p>
+                <p class="m-0 truncate text-[13px] text-muted-foreground">{model.displayName}</p>
                 <p class="mt-0.5 mb-0 text-[11px] text-muted-foreground/75">
-                  {formatSize(m.sizeBytes)} · {streaming ? "流式" : "非流式"} · {sourceLabel(m)}
+                  {formatSize(model.sizeBytes)} · {streaming ? m.system_models_streaming() : m.system_models_non_streaming()} · {sourceLabel(model)}
                 </p>
               </div>
               <Button
                 variant="outline"
                 size="xs"
                 disabled={downloadingAny}
-                onclick={() => void onDownload(m.id)}
+                onclick={() => void onDownload(model.id)}
               >
-                {m.id in dlProgress ? "下载中…" : "下载"}
+                {model.id in dlProgress ? m.system_catalog_downloading() : m.system_catalog_download_button()}
               </Button>
             </div>
-            {#if m.id in dlProgress}
+            {#if model.id in dlProgress}
               <div class="mt-2 flex items-center gap-2 pl-6.5">
                 <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                  {#if dlProgress[m.id] !== null}
+                  {#if dlProgress[model.id] !== null}
                     <div
                       class="h-full rounded-full bg-primary transition-[width]"
-                      style:width="{dlProgress[m.id]}%"
+                      style:width="{dlProgress[model.id]}%"
                     ></div>
                   {:else}
                     <div class="h-full w-1/3 animate-pulse rounded-full bg-primary/70"></div>
@@ -560,86 +561,86 @@
                 <Button
                   variant="ghost"
                   size="xs"
-                  disabled={cancellingId === m.id}
-                  onclick={() => void onCancelDownload(m.id)}
+                  disabled={cancellingId === model.id}
+                  onclick={() => void onCancelDownload(model.id)}
                 >
-                  {cancellingId === m.id ? "正在取消…" : "取消"}
+                  {cancellingId === model.id ? m.system_models_cancelling() : m.system_common_cancel()}
                 </Button>
               </div>
             {/if}
-            {#if dlErrors[m.id]}
+            {#if dlErrors[model.id]}
               <div class="mt-2 ml-6.5 flex items-start gap-2 rounded-lg border border-destructive/35 bg-destructive/8 px-2.5 py-2">
                 <p class="m-0 min-w-0 flex-1 text-[11px] leading-relaxed break-all text-destructive">
-                  下载失败：{dlErrors[m.id]}
+                  {m.system_catalog_download_failed({ error: dlErrors[model.id] })}
                 </p>
-                <Button variant="outline" size="xs" onclick={() => void openManualGuide(m.id, dlErrors[m.id])}>
-                  手动下载
+                <Button variant="outline" size="xs" onclick={() => void openManualGuide(model.id, dlErrors[model.id])}>
+                  {m.system_catalog_manual_download_button()}
                 </Button>
-                <Button variant="destructive" size="xs" disabled={downloadingAny} onclick={() => void onDownload(m.id)}>
-                  重试
+                <Button variant="destructive" size="xs" disabled={downloadingAny} onclick={() => void onDownload(model.id)}>
+                  {m.system_models_retry_button()}
                 </Button>
               </div>
             {/if}
           </div>
         {/if}
-        {#if isActive && m.configSchema.length > 0}
+        {#if isActive && model.configSchema.length > 0}
           <div
             class="mx-1 mb-1 rounded-xl border border-hairline bg-muted/40 p-3"
             transition:slide|local={{ duration: 140 }}
           >
             <div class="flex items-center justify-between gap-2">
-              <p class="m-0 text-xs font-medium text-foreground">模型配置</p>
-              {#if m.apiKeyUrl}
+              <p class="m-0 text-xs font-medium text-foreground">{m.system_catalog_config_title()}</p>
+              {#if model.apiKeyUrl}
                 <button
                   type="button"
                   class="text-xs font-medium text-primary hover:underline"
-                  onclick={() => void openExternal(m.apiKeyUrl!)}
+                  onclick={() => void openExternal(model.apiKeyUrl!)}
                 >
-                  获取 API Key
+                  {m.system_catalog_get_api_key()}
                 </button>
               {/if}
             </div>
             <div class="mt-2 flex flex-col gap-2.5">
-              {#each m.configSchema as field}
+              {#each model.configSchema as field}
                 <label class="block">
                   <span class="text-xs text-muted-foreground">{field.label}</span>
                   {#if field.kind === "enum"}
                     <div class="mt-1">
                       <SelectField
                         ariaLabel={field.label}
-                        value={fieldValue(m.id, field.key, field.default)}
+                        value={fieldValue(model.id, field.key, field.default)}
                         options={field.options.map((option) => ({
                           value: option.value,
                           label: option.label,
                         }))}
-                        onchange={(next) => void saveField(m.id, field.key, next)}
+                        onchange={(next) => void saveField(model.id, field.key, next)}
                       />
                     </div>
                   {:else if field.kind === "connection"}
                     <div class="mt-1">
                       <SelectField
                         ariaLabel={field.label}
-                        placeholder="请选择 API 连接"
-                        value={fieldValue(m.id, field.key, field.default)}
+                        placeholder={m.system_catalog_connection_placeholder()}
+                        value={fieldValue(model.id, field.key, field.default)}
                         options={[
-                          { value: "", label: "请选择 API 连接" },
+                          { value: "", label: m.system_catalog_connection_placeholder() },
                           ...connections.map((connection) => ({
                             value: connection.id,
-                            label: `${connection.displayName}${connection.hasApiKey ? "" : "（未填密钥）"}`,
+                            label: `${connection.displayName}${connection.hasApiKey ? "" : m.system_catalog_connection_no_key_suffix()}`,
                           })),
                         ]}
-                        onchange={(next) => void saveField(m.id, field.key, next)}
+                        onchange={(next) => void saveField(model.id, field.key, next)}
                       />
                     </div>
                     <p class="mt-1 mb-0 text-[11px] text-muted-foreground/80">
-                      地址和 API key 在「设置 → API 连接」里保存，不会写入配置文件。
+                      {m.system_models_connection_hint()}
                     </p>
                   {:else}
                     <input
                       class="mt-1 h-8 w-full rounded-lg border border-input bg-background/60 px-2.5 text-[13px] text-foreground outline-none focus:border-ring focus:ring-3 focus:ring-ring/30"
-                      value={fieldValue(m.id, field.key, field.default)}
+                      value={fieldValue(model.id, field.key, field.default)}
                       onchange={(e) =>
-                        void saveField(m.id, field.key, (e.target as HTMLInputElement).value)}
+                        void saveField(model.id, field.key, (e.target as HTMLInputElement).value)}
                     />
                   {/if}
                 </label>
@@ -650,7 +651,7 @@
       {/each}
     </div>
     <p class="mx-2 mt-2 mb-1.5 text-xs text-muted-foreground">
-      在线识别打开 Kotone 就能用；本地模型要先下载，选中后会立即启动一次。
+      {m.system_models_list_hint()}
     </p>
   </section>
 {/if}
@@ -675,12 +676,12 @@
 {/if}
 
 {#if $settingsStore}
-  <SettingsSection title="下载网络" description="默认优先使用魔搭国内镜像，失败后自动回退官方源。">
+  <SettingsSection title={m.system_models_network_title()} description={m.system_models_network_description()}>
     <div class="grid grid-cols-3 gap-2 py-3.5">
       {#each [
-        { id: "auto", name: "自动", desc: "魔搭优先，回退官方" },
-        { id: "official", name: "仅官方", desc: "Hugging Face / GitHub" },
-        { id: "mirror", name: "仅镜像", desc: "魔搭 / HF 镜像" },
+        { id: "auto", name: m.system_models_network_auto(), desc: m.system_models_network_auto_description() },
+        { id: "official", name: m.system_models_network_official(), desc: "Hugging Face / GitHub" },
+        { id: "mirror", name: m.system_models_network_mirror(), desc: m.system_models_network_mirror_description() },
       ] as const as option}
         {@const selected = $settingsStore.download.source === option.id}
         <button
@@ -690,7 +691,7 @@
             ? 'border-primary/60 bg-primary/10'
             : 'border-hairline hover:bg-muted/60'}"
           onclick={() =>
-            void patchSettings({ download: { source: option.id } }, `下载源已切换：${option.name}`)}
+            void patchSettings({ download: { source: option.id } }, m.system_models_network_saved({ name: option.name }))}
         >
           <p class="m-0 text-[13px] font-medium {selected ? 'text-primary' : 'text-foreground'}">{option.name}</p>
           <p class="mt-0.5 mb-0 text-[11px] leading-relaxed text-muted-foreground">{option.desc}</p>
@@ -698,7 +699,7 @@
       {/each}
     </div>
     <div class="py-3.5">
-      <label for="download-proxy" class="block text-[13px] font-medium text-foreground">GitHub 备用代理（可选）</label>
+      <label for="download-proxy" class="block text-[13px] font-medium text-foreground">{m.system_models_proxy_label()}</label>
       <div class="mt-2 flex gap-2">
         <input
           id="download-proxy"
@@ -707,7 +708,7 @@
           placeholder="https://ghfast.top/"
           spellcheck="false"
         />
-        <Button variant="outline" size="sm" onclick={() => void saveDownloadProxy()}>保存</Button>
+        <Button variant="outline" size="sm" onclick={() => void saveDownloadProxy()}>{m.system_models_proxy_save()}</Button>
       </div>
     </div>
   </SettingsSection>

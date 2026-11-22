@@ -7,12 +7,13 @@
   // value / options / onchange / ariaLabel / testid，触发器带 data-value）。
   import * as Select from "$lib/components/ui/select";
   import { cn } from "$lib/utils";
+  import { m } from "$lib/paraglide/messages.js";
 
   let {
     value,
     options,
     disabled = false,
-    placeholder = "请选择",
+    placeholder = m.shell_select_placeholder(),
     ariaLabel = "",
     testid = "",
     id = "",

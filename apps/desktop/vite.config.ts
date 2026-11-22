@@ -1,6 +1,7 @@
 import { defineConfig, normalizePath } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import tailwindcss from "@tailwindcss/vite";
+import { paraglideVitePlugin } from "@inlang/paraglide-js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -10,7 +11,18 @@ const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), 
 
 // Tauri 开发环境约定：固定端口、不自动清屏
 export default defineConfig({
-  plugins: [svelte(), tailwindcss()],
+  plugins: [
+    // 界面文案（i18n）：messages/zh-CN.json → src/lib/paraglide（生成，不进 git）。
+    // 插件从 node_modules 读，不从 CDN 拉（project.inlang/settings.json）。选项与 package.json 的 i18n 脚本一致。
+    paraglideVitePlugin({
+      project: "./project.inlang",
+      outdir: "./src/lib/paraglide",
+      strategy: ["baseLocale"],
+      outputStructure: "locale-modules",
+    }),
+    svelte(),
+    tailwindcss(),
+  ],
   // shadcn-svelte 组件用 $lib 引用公共代码（与 tsconfig.json 的 paths 一致）
   resolve: {
     alias: {

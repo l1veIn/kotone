@@ -47,12 +47,13 @@
   import ToggleField from "$lib/components/settings/ToggleField.svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
   import InstalledGamesSection from "./InstalledGamesSection.svelte";
+  import { m } from "$lib/paraglide/messages.js";
 
   /** 让琴音操作（game.act）的三档。 */
   const COMPUTER_USE_OPTIONS = [
-    { value: "ask", label: "先问我", description: "每段对话第一次操作前问一次" },
-    { value: "allow", label: "一直允许", description: "不再询问" },
-    { value: "deny", label: "不允许", description: "不在这个游戏里动鼠标键盘" },
+    { value: "ask", label: m.game_computer_use_ask(), description: m.game_computer_use_ask_desc() },
+    { value: "allow", label: m.game_computer_use_allow(), description: m.game_computer_use_allow_desc() },
+    { value: "deny", label: m.game_computer_use_deny(), description: m.game_computer_use_deny_desc() },
   ];
 
   let { legacyVoiceOnly = false }: { legacyVoiceOnly?: boolean } = $props();
@@ -62,7 +63,8 @@
   let detected = $state<InstalledGame[] | null>(null);
   let detecting = $state(false);
   const SOURCE_LABEL: Record<string, string> = {
-    steam: "Steam", tencent: "腾讯", riot: "Riot", hoyoplay: "米哈游", epic: "Epic", wegame: "WeGame", uninstall: "系统已安装程序",
+    steam: "Steam", tencent: m.game_source_tencent(), riot: "Riot", hoyoplay: m.game_source_hoyoplay(), epic: "Epic", wegame: "WeGame",
+    uninstall: m.game_source_uninstall_system(),
   };
 
   /** 和当前游戏配置对得上的排前面：先比进程名，再比名字。 */
@@ -81,9 +83,9 @@
     detecting = true;
     try {
       detected = rankDetected(await installedGames(), draft);
-      if (!detected.length) toast(false, "没有检测到已安装的游戏，可以手动填写启动路径");
+      if (!detected.length) toast(false, m.game_detect_none());
     } catch (error) {
-      toast(false, `检测失败：${errText(error)}`);
+      toast(false, m.game_detect_failed({ error: errText(error) }));
     } finally {
       detecting = false;
     }
@@ -93,7 +95,7 @@
     if (!draft || !game.launch) return;
     draft.launchPath = game.launch;
     detected = null;
-    toast(true, `已填入「${game.name}」的启动方式，记得保存`);
+    toast(true, m.game_detect_filled({ name: game.name }));
   }
 
   // ---------- 控制台通道（ADR 032 决定 3） ----------
@@ -108,7 +110,7 @@
       const next = await consoleChatStatus(p.id);
       if (editingId === p.id) consoleStatus = next;
     } catch (error) {
-      toast(false, `读取控制台通道状态失败：${errText(error)}`);
+      toast(false, m.game_console_status_failed({ error: errText(error) }));
     }
   }
 
@@ -120,8 +122,8 @@
       toast(
         true,
         enabled
-          ? "已打开：启动游戏后先发一条测试消息，确认能发出去"
-          : "已关闭：游戏目录里 Kotone 写的那一行和 kotone_say.cfg 已删除",
+          ? m.game_console_enabled_toast()
+          : m.game_console_disabled_toast(),
       );
     } catch (error) {
       toast(false, errText(error));
@@ -207,16 +209,16 @@
     try {
       await loadProfiles();
     } catch (e) {
-      toast(false, `加载游戏配置失败：${errText(e)}`);
+      toast(false, m.game_profiles_load_failed({ error: errText(e) }));
     }
   });
 
   async function onActivate(id: string) {
     try {
       settingsStore.set(await updateSettings({ activeProfileId: id }));
-      toast(true, `已切换游戏配置：${profiles.find((p) => p.id === id)?.displayName ?? id}`);
+      toast(true, m.game_profile_activated({ name: profiles.find((p) => p.id === id)?.displayName ?? id }));
     } catch (e) {
-      toast(false, `保存失败：${errText(e)}`);
+      toast(false, m.game_save_failed({ error: errText(e) }));
     }
   }
 
@@ -250,7 +252,7 @@
       if (result.kind === "combo" && draft) {
         draft[field] = result.combo;
       } else if (result.kind === "timeout") {
-        toastWarn("按键录入超时，请重试");
+        toastWarn(m.game_key_capture_timeout());
       } else if (result.kind === "error") {
         toast(false, result.message);
       }
@@ -284,12 +286,12 @@
       toast(
         true,
         duplicates > 0
-          ? `配置已保存，已合并 ${duplicates} 个重复热词（下次识别生效）`
-          : "游戏配置已保存（热词下次识别生效）",
+          ? m.game_profile_saved_merged({ count: duplicates })
+          : m.game_profile_saved(),
       );
       closeEditor();
     } catch (e) {
-      toast(false, `保存失败：${errText(e)}`);
+      toast(false, m.game_save_failed({ error: errText(e) }));
     } finally {
       saving = false;
     }
@@ -343,11 +345,11 @@
       if (isTauri) {
         const path = await saveDialog({
           defaultPath: `${p.id}-hotwords.txt`,
-          filters: [{ name: "热词表", extensions: ["txt"] }],
+          filters: [{ name: m.game_hotwords_file_filter(), extensions: ["txt"] }],
         });
         if (!path) return; // 用户取消，不打扰
         const n = await exportHotwords(p.id, path);
-        toast(true, `已导出 ${n} 个热词 → ${path}`);
+        toast(true, m.game_hotwords_exported_to({ count: n, path }));
       } else {
         const blob = new Blob([formatExport(p.hotwords)], { type: "text/plain;charset=utf-8" });
         const url = URL.createObjectURL(blob);
@@ -356,10 +358,10 @@
         a.download = `${p.id}-hotwords.txt`;
         a.click();
         URL.revokeObjectURL(url);
-        toast(true, `已导出 ${p.hotwords.length} 个热词`);
+        toast(true, m.game_hotwords_exported({ count: p.hotwords.length }));
       }
     } catch (e) {
-      toast(false, `导出失败：${errText(e)}`);
+      toast(false, m.game_export_failed({ error: errText(e) }));
     }
   }
 
@@ -369,15 +371,15 @@
       try {
         const sel = await openDialog({
           multiple: false,
-          filters: [{ name: "热词表", extensions: ["txt"] }],
+          filters: [{ name: m.game_hotwords_file_filter(), extensions: ["txt"] }],
         });
         if (!sel || typeof sel !== "string") return; // 用户取消
         importing = true;
         const report = await importHotwords(p.id, sel);
         await refreshAfterImport(p.id);
-        toast(true, `导入完成：新增 ${report.added} 条，跳过 ${report.duplicates} 条重复`);
+        toast(true, m.game_hotwords_imported({ added: report.added, duplicates: report.duplicates }));
       } catch (e) {
-        toast(false, `导入失败：${errText(e)}`);
+        toast(false, m.game_import_failed({ error: errText(e) }));
       } finally {
         importing = false;
       }
@@ -402,9 +404,9 @@
       const { merged, added, duplicates } = merge(p.hotwords, incoming);
       await saveProfile({ ...p, hotwords: merged });
       await refreshAfterImport(p.id);
-      toast(true, `导入完成：新增 ${added} 条，跳过 ${duplicates} 条重复`);
+      toast(true, m.game_hotwords_imported({ added, duplicates }));
     } catch (err) {
-      toast(false, `导入失败：${errText(err)}`);
+      toast(false, m.game_import_failed({ error: errText(err) }));
     } finally {
       importing = false;
     }
@@ -415,19 +417,19 @@
   /** 导出整包：含 icon，供分享/编辑成别的游戏再导入 */
   async function onExportPackage(p: GameProfile) {
     if (!isTauri) {
-      toastWarn("dev:web 环境不支持 .zip 导出，请在 Tauri 应用中验证");
+      toastWarn(m.game_package_export_unsupported());
       return;
     }
     try {
       const path = await saveDialog({
         defaultPath: `${p.displayName}.zip`,
-        filters: [{ name: "Kotone 配置包", extensions: ["zip"] }],
+        filters: [{ name: m.game_package_file_filter(), extensions: ["zip"] }],
       });
       if (!path) return; // 用户取消
       await exportProfile(p.id, path);
-      toast(true, `已导出配置包 → ${path}`);
+      toast(true, m.game_package_exported({ path }));
     } catch (e) {
-      toast(false, `导出失败：${errText(e)}`);
+      toast(false, m.game_export_failed({ error: errText(e) }));
     }
   }
 
@@ -441,15 +443,15 @@
     try {
       const sel = await openDialog({
         multiple: false,
-        filters: [{ name: "Kotone 配置包", extensions: ["zip"] }],
+        filters: [{ name: m.game_package_file_filter(), extensions: ["zip"] }],
       });
       if (!sel || typeof sel !== "string") return; // 用户取消
       importingPackage = true;
       const imported = await importProfile(sel);
       await loadProfiles();
-      toast(true, `已导入「${imported.displayName}」`);
+      toast(true, m.game_package_imported({ name: imported.displayName }));
     } catch (e) {
-      toast(false, `导入失败：${errText(e)}`);
+      toast(false, m.game_import_failed({ error: errText(e) }));
     } finally {
       importingPackage = false;
     }
@@ -464,9 +466,9 @@
     try {
       const imported = await importProfile(file.name);
       await loadProfiles();
-      toast(true, `已导入「${imported.displayName}」（dev:web 模拟）`);
+      toast(true, m.game_package_imported_mock({ name: imported.displayName }));
     } catch (err) {
-      toast(false, `导入失败：${errText(err)}`);
+      toast(false, m.game_import_failed({ error: errText(err) }));
     }
   }
 
@@ -489,10 +491,10 @@
       await loadProfiles();
       toast(
         true,
-        kind === "reset" ? `「${p.displayName}」已恢复默认配置` : `已删除「${p.displayName}」`,
+        kind === "reset" ? m.game_profile_reset_done({ name: p.displayName }) : m.game_profile_deleted({ name: p.displayName }),
       );
     } catch (e) {
-      toast(false, `操作失败：${errText(e)}`);
+      toast(false, m.game_action_failed({ error: errText(e) }));
     }
   }
 </script>
@@ -514,17 +516,17 @@
   {/if}
 {/snippet}
 
-<SettingsPage title={legacyVoiceOnly ? "游戏适配" : "游戏列表"} description={legacyVoiceOnly ? "管理各个游戏的聊天键、热词和发送方式。" : "本机装了哪些游戏；每个游戏一套打法：聊天键、词表、节奏，以及能不能替你按键。"}>
+<SettingsPage title={legacyVoiceOnly ? m.game_page_title_legacy() : m.game_page_title()} description={legacyVoiceOnly ? m.game_page_description_legacy() : m.game_page_description()}>
   {#if !legacyVoiceOnly}
   <InstalledGamesSection {profiles} onOpenProfile={(p) => { openEditor(p); requestAnimationFrame(() => document.querySelector(`[data-testid="game-profile-${p.id}"]`)?.scrollIntoView({ block: "start" })); }} />
   {/if}
   {#snippet actions()}
     <Button variant="outline" size="sm" disabled={importingPackage} onclick={() => void onImportPackage()}>
-      <Upload class="size-3.5" />{importingPackage ? "导入中…" : "导入配置包"}
+      <Upload class="size-3.5" />{importingPackage ? m.game_importing() : m.game_package_import()}
     </Button>
   {/snippet}
 
-  <SettingsSection title="游戏配置" description="把分享来的 .zip 配置包导进来，或导出自己的去分享。" flush>
+  <SettingsSection title={m.game_profiles_title()} description={m.game_profiles_description()} flush>
     {#each profiles as p (p.id)}
       {@const active = $settingsStore?.activeProfileId === p.id}
       {@const editing = editingId === p.id && draft !== null}
@@ -544,35 +546,35 @@
             <p class="m-0 flex items-center gap-2 text-[13px] font-medium">
               <span class="truncate">{p.displayName}</span>
               {#if active}
-                <span class="shrink-0 rounded-full bg-primary/12 px-2 py-0.5 text-[10px] font-medium text-primary">激活中</span>
+                <span class="shrink-0 rounded-full bg-primary/12 px-2 py-0.5 text-[10px] font-medium text-primary">{m.game_profile_active()}</span>
               {/if}
             </p>
             <p class="mt-0.5 mb-0 truncate text-xs text-muted-foreground">
-              {p.processNames.length > 0 ? `适配 ${p.processNames.length} 个进程` : "适用于所有窗口"}
-              · 热词 {p.hotwords.length} 个{p.allowAutomationInput === false ? " · 不允许自动化输入" : ""}{p.computerUse === "allow" ? " · 可直接操作" : p.computerUse === "deny" ? " · 不许操作" : ""}
+              {p.processNames.length > 0 ? m.game_profile_process_count({ count: p.processNames.length }) : m.game_profile_all_windows()}
+              · {m.game_profile_hotword_count({ count: p.hotwords.length })}{p.allowAutomationInput === false ? ` · ${m.game_profile_no_automation_input()}` : ""}{p.computerUse === "allow" ? ` · ${m.game_profile_computer_use_allowed()}` : p.computerUse === "deny" ? ` · ${m.game_profile_computer_use_denied()}` : ""}
             </p>
           </div>
           <div class="flex shrink-0 flex-wrap items-center gap-1.5">
             <Button size="sm" variant={editing ? "secondary" : "outline"} onclick={() => (editing ? closeEditor() : openEditor(p))}>
-              {editing ? "收起" : "编辑"}
+              {editing ? m.game_profile_collapse() : m.game_profile_edit()}
             </Button>
-            <Button size="sm" variant="ghost" title="导出 .zip 配置包（可编辑成别的游戏后重新导入）" onclick={() => void onExportPackage(p)}>
-              导出
+            <Button size="sm" variant="ghost" title={m.game_package_export_title()} onclick={() => void onExportPackage(p)}>
+              {m.game_export()}
             </Button>
             {#if !active}
-              <Button size="sm" variant="outline" onclick={() => void onActivate(p.id)}>激活</Button>
+              <Button size="sm" variant="outline" onclick={() => void onActivate(p.id)}>{m.game_profile_activate()}</Button>
             {/if}
             <Button size="sm" variant={deletingId === p.id ? "destructive" : "ghost"}
               class={deletingId === p.id ? "" : "text-muted-foreground"}
-              title={isBuiltin(p) ? "恢复默认配置（还原内置热词与图标）" : "删除该配置"}
+              title={isBuiltin(p) ? m.game_profile_reset_title() : m.game_profile_delete_title()}
               onclick={() => void onDeleteProfile(p)}>
               {deletingId === p.id
                 ? isBuiltin(p)
-                  ? "再点确认重置"
-                  : "再点确认删除"
+                  ? m.game_profile_confirm_reset()
+                  : m.game_profile_confirm_delete()
                 : isBuiltin(p)
-                  ? "重置"
-                  : "删除"}
+                  ? m.game_profile_reset()
+                  : m.game_profile_delete()}
             </Button>
           </div>
         </div>
@@ -580,21 +582,21 @@
         {#if p.channels && p.channels.length > 1}
           <!-- 多频道声明（ADR-008）：写清当前适配支持哪些频道、按什么键切换 -->
           <div class="mt-3 flex flex-wrap items-center gap-1.5 pl-13">
-            <span class="text-[11px] text-muted-foreground">聊天频道</span>
+            <span class="text-[11px] text-muted-foreground">{m.game_profile_channels()}</span>
             {#each p.channels as ch}
               <span
                 class="rounded-full px-2 py-0.5 text-[11px] {ch.default ? 'bg-primary/12 text-primary' : 'bg-muted text-foreground/75'}"
                 title={ch.textPrefix
-                  ? `发送前缀 ${ch.textPrefix}`
+                  ? m.game_channel_prefix_title({ prefix: ch.textPrefix })
                   : ch.openChatKey
-                    ? `开聊天框按 ${ch.openChatKey}`
-                    : "沿用默认开聊天框按键"}
+                    ? m.game_channel_open_key_title({ key: ch.openChatKey })
+                    : m.game_channel_default_key_title()}
               >
-                {ch.displayName}{ch.default ? "（默认）" : ""}
+                {ch.displayName}{ch.default ? m.game_channel_default() : ""}
               </span>
             {/each}
             <span class="text-[11px] text-muted-foreground">
-              · 按 {$settingsStore?.channelCycleHotkey ?? "Shift+CapsLock"} 循环切换（「高级」页可改）
+              · {m.game_channel_cycle_hint({ hotkey: $settingsStore?.channelCycleHotkey ?? "Shift+CapsLock" })}
             </span>
           </div>
         {/if}
@@ -604,37 +606,37 @@
           <div class="mt-4 space-y-5 rounded-xl border border-hairline bg-muted/30 p-4" data-testid="game-profile-editor">
             <div>
               <div class="flex items-center justify-between gap-2">
-                {@render field(`自定义词汇（${hotwordCount} 个，下次识别生效）`)}
+                {@render field(m.game_hotwords_label({ count: hotwordCount }))}
                 <div class="flex shrink-0 gap-1.5">
-                  <Button size="xs" variant="outline" disabled={importing} onclick={() => void onExport(p)}><Download class="size-3" />导出</Button>
-                  <Button size="xs" variant="outline" disabled={importing} onclick={() => void onImport(p)}><Upload class="size-3" />{importing ? "导入中…" : "导入"}</Button>
+                  <Button size="xs" variant="outline" disabled={importing} onclick={() => void onExport(p)}><Download class="size-3" />{m.game_export()}</Button>
+                  <Button size="xs" variant="outline" disabled={importing} onclick={() => void onImport(p)}><Upload class="size-3" />{importing ? m.game_importing() : m.game_import()}</Button>
                 </div>
               </div>
               <!-- 批量文本编辑：每行一个词条，与导入/导出 txt 格式同构（几百上千条可用） -->
               <textarea
                 bind:value={hotwordsText}
                 rows={10}
-                placeholder={"每行一个词条，保存时自动去重\n例：\n打野\n中路MISS\n纳什男爵"}
+                placeholder={m.game_hotwords_placeholder()}
                 spellcheck="false"
                 class="mt-2 w-full resize-y rounded-lg border border-input bg-background/60 px-3 py-2 font-mono text-xs leading-relaxed text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40"
               ></textarea>
               <p class="mt-1.5 mb-0 text-[11px] text-muted-foreground">
-                每行一个词条，保存时自动去重；导入为合并模式（UTF-8 文本同格式，跳过空行与重复，导入立即保存）。
+                {m.game_hotwords_help()}
               </p>
             </div>
 
             <div>
-              {@render field("陪玩说明（可选）")}
+              {@render field(m.game_companion_notes_label())}
               <textarea
                 bind:value={draft.companionNotes}
                 rows={3}
                 maxlength={500}
                 data-testid="profile-companion-notes"
-                placeholder="这个游戏的说明，例如：聊天在左下角，[队伍] 前缀是队友，[全部] 是所有人"
+                placeholder={m.game_companion_notes_placeholder()}
                 class="mt-2 w-full resize-y rounded-lg border border-input bg-background/60 px-3 py-2 text-xs leading-relaxed text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40"
               ></textarea>
               <p class="mt-1.5 mb-0 text-[11px] text-muted-foreground">
-                陪玩时会把这段说明连同聊天截图的文字一起交给 AI；游戏适配写在这里，不需要为每个游戏写规则。{draft.chatRegion ? "已记住聊天框位置，可在「陪玩设置」里改回整窗识别。" : ""}
+                {m.game_companion_notes_help()}{draft.chatRegion ? m.game_companion_notes_chat_region() : ""}
               </p>
             </div>
 
@@ -642,20 +644,20 @@
             <div class="space-y-4 rounded-lg border border-hairline bg-background/40 p-3.5" data-testid="game-profile-agent">
               <ToggleField
                 checked={draft.allowAutomationInput ?? true}
-                label="允许自动化输入"
-                desc="关掉后，自动化程序不会对这个游戏按键、点鼠标。"
+                label={m.game_allow_automation_input()}
+                desc={m.game_allow_automation_input_desc()}
                 testid="profile-allow-automation-input"
                 onchange={(v) => (draft!.allowAutomationInput = v)}
               />
               {#if !legacyVoiceOnly}
               <div class="flex items-start justify-between gap-4">
                 <div class="min-w-0">
-                  <span class="block text-xs font-medium text-foreground">让{$companionName}操作</span>
-                  <p class="mt-0.5 mb-0 text-[11px] leading-relaxed text-muted-foreground">一边看画面一边点鼠标、按键（例如帮你找背包里的东西），右下角提示“正在操作 · 按 Esc 停止”。按 Esc（不会传给游戏）、Ctrl+Shift+F12 或说“停下”都能停。有反作弊的游戏能不能用模拟点击，请自己判断。</p>
+                  <span class="block text-xs font-medium text-foreground">{m.game_computer_use_label({ companion: $companionName })}</span>
+                  <p class="mt-0.5 mb-0 text-[11px] leading-relaxed text-muted-foreground">{m.game_computer_use_help()}</p>
                 </div>
                 <SelectField
                   class="w-32 shrink-0"
-                  ariaLabel={`让${$companionName}操作`}
+                  ariaLabel={m.game_computer_use_label({ companion: $companionName })}
                   testid="profile-computer-use"
                   value={draft.computerUse ?? "ask"}
                   options={COMPUTER_USE_OPTIONS}
@@ -665,14 +667,14 @@
               {/if}
               <div>
                 <div class="flex items-center justify-between gap-2">
-                  <label for="profile-launch-path" class="block text-xs font-medium text-foreground">启动路径</label>
+                  <label for="profile-launch-path" class="block text-xs font-medium text-foreground">{m.game_launch_path()}</label>
                   <Button size="sm" variant="outline" data-testid="profile-detect-games" disabled={detecting} onclick={() => void detectGames()}>
-                    {#if detecting}<LoaderCircle class="size-3.5 animate-spin" />{:else}<ScanSearch class="size-3.5" />{/if}自动检测
+                    {#if detecting}<LoaderCircle class="size-3.5 animate-spin" />{:else}<ScanSearch class="size-3.5" />{/if}{m.game_detect_games()}
                   </Button>
                 </div>
-                <p class="mt-0.5 mb-0 text-[11px] leading-relaxed text-muted-foreground">程序、快捷方式或 steam:// 之类的链接。点“自动检测”可以从本机装的游戏里选（Steam、英雄联盟、Riot、米哈游、Epic、WeGame）；留空时会自动找。</p>
+                <p class="mt-0.5 mb-0 text-[11px] leading-relaxed text-muted-foreground">{m.game_launch_path_help()}</p>
                 <Input id="profile-launch-path" data-testid="profile-launch-path" class="mt-2 font-mono text-xs"
-                  placeholder="例如：C:\Games\Game.exe 或 steam://rungameid/570"
+                  placeholder={m.game_launch_path_placeholder()}
                   value={draft.launchPath ?? ""}
                   oninput={(e) => (draft!.launchPath = (e.currentTarget as HTMLInputElement).value)} />
                 {#if detected && detected.length}
@@ -686,7 +688,7 @@
                             <span class="block truncate text-[11px] text-muted-foreground">{game.installDir}</span>
                           </span>
                           <span class="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{SOURCE_LABEL[game.source] ?? game.source}</span>
-                          {#if game.needsAdmin}<span class="shrink-0 text-[10px] text-warning" title="启动时 Windows 会请你授权">需授权</span>{/if}
+                          {#if game.needsAdmin}<span class="shrink-0 text-[10px] text-warning" title={m.game_needs_admin_title()}>{m.game_needs_admin()}</span>{/if}
                         </button>
                       </li>
                     {/each}
@@ -700,25 +702,25 @@
               <div class="space-y-2 rounded-lg border border-hairline bg-background/40 p-3.5" data-testid="game-profile-console-chat">
                 <ToggleField
                   checked={consoleStatus?.enabled ?? false}
-                  label="不开聊天框，直接发到聊天"
-                  desc={`语音输入和${$companionName}往这个游戏发消息时，不再打开聊天框，你同时按键也不会打断（用游戏的控制台命令 say_team / say）。打开时会往游戏目录写两个文件：cfg 里的 autoexec.cfg 末尾加一行按键绑定（改之前先备份到 Kotone 的备份文件夹），新建 kotone_say.cfg；关闭时删掉这两处。这样做有没有封号风险，请你自己判断。只能在游戏没开时切换，重启游戏后生效；打开后先发一条测试消息确认能发出去。`}
+                  label={m.game_console_toggle()}
+                  desc={m.game_console_toggle_desc({ companion: $companionName })}
                   testid="profile-console-chat"
                   disabled={!consoleStatus || consoleBusy || consoleStatus.gameRunning || !consoleStatus.installDir}
                   onchange={(v) => void toggleConsole(p, v)}
                 />
                 <p class="m-0 text-[11px] leading-relaxed text-muted-foreground" data-testid="profile-console-chat-status">
                   {#if !consoleStatus}
-                    正在读取游戏目录…
+                    {m.game_console_reading()}
                   {:else if !consoleStatus.installDir}
-                    没找到这个游戏的 Steam 安装目录（只支持 Steam 版），发消息照常打开聊天框。
+                    {m.game_console_no_install_dir()}
                   {:else if consoleStatus.gameRunning && !consoleStatus.enabled}
-                    游戏开着：先退出游戏再打开。
+                    {m.game_console_running_enable()}
                   {:else if consoleStatus.gameRunning}
-                    游戏开着：要关闭先退出游戏。{consoleStatus.needsRestart ? "游戏是在打开之前启动的，重启游戏后才生效，这之前发消息照常打开聊天框。" : ""}
+                    {m.game_console_running_disable()}{consoleStatus.needsRestart ? m.game_console_needs_restart() : ""}
                   {:else if consoleStatus.enabled}
-                    已打开（{consoleStatus.writtenAt ?? "时间认不出来"}，按键 {consoleStatus.triggerKey}）。{consoleStatus.keyMismatch ? "autoexec.cfg 里那一行的按键被改过了，发消息会照常打开聊天框；关掉再打开可以修好。" : ""}游戏目录：{consoleStatus.cfgDir}
+                    {m.game_console_enabled({ time: consoleStatus.writtenAt ?? m.game_console_time_unknown(), key: consoleStatus.triggerKey })}{consoleStatus.keyMismatch ? m.game_console_key_mismatch() : ""}{m.game_console_cfg_dir({ dir: consoleStatus.cfgDir ?? "" })}
                   {:else}
-                    游戏目录：{consoleStatus.cfgDir}
+                    {m.game_console_cfg_dir({ dir: consoleStatus.cfgDir ?? "" })}
                   {/if}
                 </p>
               </div>
@@ -729,14 +731,14 @@
                 class="text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
                 onclick={() => (showTechnical = !showTechnical)}
               >
-                {showTechnical ? "收起高级输入设置" : "高级输入设置"}
+                {showTechnical ? m.game_advanced_collapse() : m.game_advanced()}
               </button>
               {#if showTechnical}
                 <div class="mt-3 space-y-4 rounded-lg border border-hairline bg-background/40 p-3.5">
                   <div>
-                    {@render field("聊天键", "点击按键名称后直接录入键盘组合或鼠标侧键；清空表示跳过该阶段。")}
+                    {@render field(m.game_chat_keys(), m.game_chat_keys_hint())}
                     <div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      {#each [{ key: "openChatKey", label: "打开聊天框", empty: "不打开聊天框", clear: "清空：发送时不按打开聊天框键" }, { key: "sendKey", label: "发送消息", empty: "不发送消息", clear: "清空：发送时不按发送键" }] as const as item}
+                      {#each [{ key: "openChatKey", label: m.game_open_chat_key(), empty: m.game_open_chat_key_empty(), clear: m.game_open_chat_key_clear() }, { key: "sendKey", label: m.game_send_key(), empty: m.game_send_key_empty(), clear: m.game_send_key_clear() }] as const as item}
                         <div>
                           <span class="text-[11px] text-muted-foreground">{item.label}</span>
                           <div class="mt-1 flex gap-1.5">
@@ -745,10 +747,10 @@
                               disabled={capturingKey !== null}
                               onclick={() => void captureProfileKey(item.key)}
                             >
-                              {capturingKey === item.key ? "请按下按键…" : draft[item.key] || item.empty}
+                              {capturingKey === item.key ? m.game_press_key() : draft[item.key] || item.empty}
                             </button>
                             <Button size="sm" variant="ghost" disabled={capturingKey !== null || !draft[item.key]} title={item.clear}
-                              onclick={() => clearProfileKey(item.key)}>清空</Button>
+                              onclick={() => clearProfileKey(item.key)}>{m.game_clear()}</Button>
                           </div>
                         </div>
                       {/each}
@@ -756,23 +758,23 @@
                   </div>
                   <ToggleField
                     checked={draft.preferClipboardPaste}
-                    label="使用剪贴板粘贴"
-                    desc="仅在目标游戏无法正常接收逐字输入时开启"
+                    label={m.game_clipboard_paste()}
+                    desc={m.game_clipboard_paste_desc()}
                     onchange={(v) => (draft!.preferClipboardPaste = v)}
                   />
                   <div class="space-y-3">
-                    {@render field("发送时序", "聊天框还没打开就开始打字时，把「打开聊天后等待」调到 50–100ms。")}
-                    {@render slider("打开聊天后等待", "preOpenDelayMs")}
-                    {@render slider("粘贴前等待", "prePasteDelayMs")}
-                    {@render slider("发送前等待", "preSendDelayMs")}
+                    {@render field(m.game_send_timing(), m.game_send_timing_hint())}
+                    {@render slider(m.game_pre_open_delay(), "preOpenDelayMs")}
+                    {@render slider(m.game_pre_paste_delay(), "prePasteDelayMs")}
+                    {@render slider(m.game_pre_send_delay(), "preSendDelayMs")}
                   </div>
                 </div>
               {/if}
             </div>
 
             <div class="flex items-center justify-end gap-2">
-              <Button size="sm" variant="outline" onclick={closeEditor}>取消</Button>
-              <Button size="sm" disabled={saving} onclick={() => void onSave()}>{saving ? "保存中…" : "保存"}</Button>
+              <Button size="sm" variant="outline" onclick={closeEditor}>{m.game_cancel()}</Button>
+              <Button size="sm" disabled={saving} onclick={() => void onSave()}>{saving ? m.game_saving() : m.game_save()}</Button>
             </div>
           </div>
         {/if}

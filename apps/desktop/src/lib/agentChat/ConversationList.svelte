@@ -3,6 +3,7 @@
   // 琴音正在回答时不能切换或删除（后端也会拒绝）。
   import { Plus, Trash2 } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
+  import { m } from "$lib/paraglide/messages.js";
   import * as Dialog from "$lib/components/ui/dialog";
   import type { ConversationSummary } from "../agent";
 
@@ -22,7 +23,7 @@
   const running = $derived(runningId !== null);
   // 后台做事的过程（ADR 029，旧版的“子会话”也一样）不出现在列表里，只在主对话的卡片里看。
   const sorted = $derived(conversations.filter((c) => !c.parent).sort((a, b) => b.updatedAtMs - a.updatedAtMs));
-  const busyHint = "正在回答，请先停止";
+  const busyHint = m.chat_conversations_busy_hint();
 
   function when(ms: number): string {
     const date = new Date(ms);
@@ -39,17 +40,17 @@
   }
 </script>
 
-<section class="flex min-h-0 flex-1 flex-col" aria-label="对话列表" data-testid="agent-conversations">
+<section class="flex min-h-0 flex-1 flex-col" aria-label={m.chat_conversations_label()} data-testid="agent-conversations">
   <div class="flex h-7 shrink-0 items-center justify-between pr-1 pl-2.5">
-    <h2 class="text-[11px] font-medium tracking-wider text-sidebar-foreground/55">对话</h2>
-    <button type="button" data-testid="agent-new-conversation" aria-label="新对话"
-      disabled={running || currentId === null} title={running ? busyHint : currentId === null ? "已经是新对话" : "新对话"}
+    <h2 class="text-[11px] font-medium tracking-wider text-sidebar-foreground/55">{m.chat_conversations_heading()}</h2>
+    <button type="button" data-testid="agent-new-conversation" aria-label={m.chat_conversations_new()}
+      disabled={running || currentId === null} title={running ? busyHint : currentId === null ? m.chat_conversations_already_new() : m.chat_conversations_new()}
       class="flex size-6 items-center justify-center rounded-md text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
       onclick={onNew}><Plus class="size-3.5" /></button>
   </div>
   <ul class="min-h-0 flex-1 space-y-px overflow-y-auto pb-1 [scrollbar-gutter:stable]">
     {#if currentId === null}
-      <li><div class="flex h-8 items-center rounded-lg px-2.5 text-[13px] {activePage ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'text-sidebar-foreground'}" aria-current="true" data-testid="agent-conversation-new">新对话</div></li>
+      <li><div class="flex h-8 items-center rounded-lg px-2.5 text-[13px] {activePage ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'text-sidebar-foreground'}" aria-current="true" data-testid="agent-conversation-new">{m.chat_conversations_new()}</div></li>
     {/if}
     {#each sorted as item (item.id)}
       {@const active = item.id === currentId}
@@ -59,12 +60,12 @@
           class="flex h-8 w-full items-center gap-2 rounded-lg pr-8 pl-2.5 text-left text-[13px] transition-colors disabled:cursor-not-allowed disabled:opacity-50
             {active && activePage ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-foreground'}"
           onclick={() => onSelect(item.id)}>
-          {#if item.id === runningId}<span class="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" aria-label="回答中"></span>{/if}
-          <span class="min-w-0 flex-1 truncate">{item.title || "（无标题）"}</span>
+          {#if item.id === runningId}<span class="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" aria-label={m.chat_conversations_running()}></span>{/if}
+          <span class="min-w-0 flex-1 truncate">{item.title || m.chat_conversations_untitled()}</span>
           <span class="shrink-0 text-[11px] text-sidebar-foreground/45 tabular-nums group-hover/item:invisible">{when(item.updatedAtMs)}</span>
         </button>
-        <button type="button" aria-label={`删除对话：${item.title}`} data-testid="agent-conversation-delete"
-          disabled={running && active} title={running && active ? busyHint : "删除"}
+        <button type="button" aria-label={m.chat_conversations_delete_label({ title: item.title })} data-testid="agent-conversation-delete"
+          disabled={running && active} title={running && active ? busyHint : m.chat_conversations_delete()}
           class="absolute top-1/2 right-1 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-sidebar-foreground/60 opacity-0 transition-opacity group-hover/item:opacity-100 hover:bg-destructive/15 hover:text-destructive focus-visible:opacity-100 disabled:hidden"
           onclick={() => { confirm = item; }}>
           <Trash2 class="size-3.5" />
@@ -72,7 +73,7 @@
       </li>
     {/each}
     {#if !sorted.length && currentId !== null}
-      <li class="px-2.5 py-2 text-xs text-sidebar-foreground/50">还没有对话</li>
+      <li class="px-2.5 py-2 text-xs text-sidebar-foreground/50">{m.chat_conversations_empty()}</li>
     {/if}
   </ul>
 </section>
@@ -80,12 +81,12 @@
 <Dialog.Root open={confirm !== null} onOpenChange={(open) => { if (!open && !deleting) confirm = null; }}>
   <Dialog.Content class="ui-scope" data-testid="agent-delete-dialog">
     <Dialog.Header>
-      <Dialog.Title>删除这段对话？</Dialog.Title>
-      <Dialog.Description>「{confirm?.title}」会从本机删除，不能恢复。</Dialog.Description>
+      <Dialog.Title>{m.chat_conversations_delete_title()}</Dialog.Title>
+      <Dialog.Description>{m.chat_conversations_delete_description({ title: confirm?.title ?? "" })}</Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
-      <Button variant="outline" size="sm" disabled={deleting} onclick={() => { confirm = null; }}>取消</Button>
-      <Button variant="destructive" size="sm" data-testid="agent-delete-confirm" disabled={deleting} onclick={() => void remove()}>删除</Button>
+      <Button variant="outline" size="sm" disabled={deleting} onclick={() => { confirm = null; }}>{m.chat_conversations_cancel()}</Button>
+      <Button variant="destructive" size="sm" data-testid="agent-delete-confirm" disabled={deleting} onclick={() => void remove()}>{m.chat_conversations_delete()}</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

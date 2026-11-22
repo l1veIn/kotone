@@ -5,6 +5,7 @@
 <!-- ReasoningRow (MIT). Open while streaming, folds when the thought ends. -->
 <script lang="ts">
   import { Brain, ChevronRight } from "@lucide/svelte";
+  import { m } from "$lib/paraglide/messages.js";
 
   let { text, streaming = false }: { text: string; streaming?: boolean } = $props();
   let open = $state(false);
@@ -20,7 +21,7 @@
 <details bind:open class="group/thinking min-w-0" data-testid="agent-thinking" data-streaming={streaming}>
   <summary class="flex h-7 w-fit cursor-pointer list-none items-center gap-2 rounded-md pr-1.5 text-[13px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
     <Brain class="size-3.5 shrink-0" />
-    <span class={streaming ? "kotone-shimmer" : ""}>{streaming ? "正在思考…" : "思考过程"}</span>
+    <span class={streaming ? "kotone-shimmer" : ""}>{streaming ? m.chat_thinking_streaming() : m.chat_thinking_title()}</span>
     <ChevronRight aria-hidden="true" class="size-3.5 opacity-0 transition-[opacity,transform] group-hover/thinking:opacity-100 group-open/thinking:rotate-90 group-open/thinking:opacity-100" />
   </summary>
   {#if open}

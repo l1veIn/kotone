@@ -9,6 +9,7 @@
     Play, Plus, RotateCw, Shrink, SkipForward, Square, Volume2, X,
   } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
+  import { m } from "$lib/paraglide/messages.js";
   import {
     activeTabOf, browserControl, browserHandoverDone, browserNavigate, browserSetBounds, browserStore, browserTabClose,
     browserTabNew, browserTabSelect, mediaLine, siteName, tabLabel,
@@ -328,13 +329,13 @@
   {#if browser.media}
     <div class="flex shrink-0 items-center gap-0.5">
       {#if browser.media.playing}
-        <Button size="icon" variant="ghost" class="size-7" aria-label="暂停" title="暂停"
+        <Button size="icon" variant="ghost" class="size-7" aria-label={m.chat_browser_pause()} title={m.chat_browser_pause()}
           data-testid="sidebar-browser-pause" disabled={!!acting} onclick={() => void control("pause")}><Pause class="size-3.5" /></Button>
       {:else}
-        <Button size="icon" variant="ghost" class="size-7" aria-label="播放" title="播放"
+        <Button size="icon" variant="ghost" class="size-7" aria-label={m.chat_browser_play()} title={m.chat_browser_play()}
           data-testid="sidebar-browser-play" disabled={!!acting} onclick={() => void control("play")}><Play class="size-3.5" /></Button>
       {/if}
-      <Button size="icon" variant="ghost" class="size-7" aria-label="下一首" title="下一首"
+      <Button size="icon" variant="ghost" class="size-7" aria-label={m.chat_browser_next()} title={m.chat_browser_next()}
         data-testid="sidebar-browser-next" disabled={!!acting} onclick={() => void control("next")}><SkipForward class="size-3.5" /></Button>
     </div>
   {/if}
@@ -346,7 +347,7 @@
       <CircleAlert class="mt-0.5 size-3.5 shrink-0 text-destructive" />
       <p class="m-0 min-w-0 flex-1 text-xs leading-5 break-words text-destructive" data-testid="browser-error-text">{browser.error}</p>
       <Button size="sm" variant="outline" class="h-6 shrink-0 px-2 text-[11px]" data-testid="browser-error-retry"
-        disabled={!!acting} onclick={() => void control("reload")}>重试</Button>
+        disabled={!!acting} onclick={() => void control("reload")}>{m.chat_browser_retry()}</Button>
     </div>
   {/if}
 {/snippet}
@@ -354,8 +355,8 @@
 {#snippet handoverBanner()}
   {#if browser.handover}
     <div class="shrink-0 border-b border-warning/40 bg-warning/8 px-3 py-2.5" role="status" data-testid="browser-handover">
-      <p class="m-0 text-[13px] leading-5 text-foreground"><span class="font-medium">{browser.handover.reason}</span>：在下面的页面里登录（网易云可以用手机扫码），好了点「好了」</p>
-      <Button size="sm" class="mt-2 h-7" data-testid="browser-handover-done" disabled={!!acting} onclick={() => void handoverDone()}>好了</Button>
+      <p class="m-0 text-[13px] leading-5 text-foreground"><span class="font-medium">{browser.handover.reason}</span>{m.chat_browser_handover_hint()}</p>
+      <Button size="sm" class="mt-2 h-7" data-testid="browser-handover-done" disabled={!!acting} onclick={() => void handoverDone()}>{m.chat_browser_handover_done()}</Button>
     </div>
   {/if}
 {/snippet}
@@ -366,25 +367,25 @@
     <p class="m-0 shrink-0 truncate text-[13px] font-medium text-foreground" data-testid={testid}>{siteName(browser)}</p>
     {#if browser.title}<p class="m-0 min-w-0 truncate text-xs text-muted-foreground" title={browser.title}>{browser.title}</p>{/if}
   </div>
-  {#if browser.busy}<span class="shrink-0 rounded-full bg-primary/12 px-2 py-0.5 text-[11px] text-primary" data-testid="browser-panel-busy">她在操作</span>{/if}
+  {#if browser.busy}<span class="shrink-0 rounded-full bg-primary/12 px-2 py-0.5 text-[11px] text-primary" data-testid="browser-panel-busy">{m.chat_browser_busy()}</span>{/if}
 {/snippet}
 
 {#if open}
   {#if narrow}
     <!-- 窄窗口：盖在聊天上，点空白处收起 -->
-    <button type="button" class="absolute inset-0 z-20 bg-black/30" aria-label="收起右侧栏" data-testid="right-sidebar-backdrop" onclick={toggleRightSidebar}></button>
+    <button type="button" class="absolute inset-0 z-20 bg-black/30" aria-label={m.chat_sidebar_collapse()} data-testid="right-sidebar-backdrop" onclick={toggleRightSidebar}></button>
   {/if}
   <aside
     class="flex min-h-0 flex-col border-l border-hairline bg-background {narrow ? 'absolute inset-y-0 right-0 z-30 shadow-2xl' : 'relative shrink-0'}"
     style:width={narrow ? (tab === "web" ? "100%" : "min(100%, 360px)") : `${width}px`}
-    aria-label="右侧栏" data-testid="right-sidebar" data-tab={tab} data-width={narrow ? undefined : width}
+    aria-label={m.chat_sidebar_label()} data-testid="right-sidebar" data-tab={tab} data-width={narrow ? undefined : width}
   >
     {#if !narrow}
       <!-- 分隔线：拖动调宽、双击恢复默认（照 DSH 桌面版）；网页只盖它右边的区域，不会挡住这里。
            可聚焦的 separator 是 ARIA 的“窗口分隔条”（键盘左右键调宽），Svelte 的检查不认识这种用法。 -->
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-      <div role="separator" aria-orientation="vertical" aria-label="拖动调整右侧栏宽度，双击恢复" tabindex="0"
-        aria-valuenow={width} aria-valuemin={300} title="拖动调整宽度，双击恢复"
+      <div role="separator" aria-orientation="vertical" aria-label={m.chat_sidebar_resize_label()} tabindex="0"
+        aria-valuenow={width} aria-valuemin={300} title={m.chat_sidebar_resize_title()}
         class="group absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize touch-none focus-visible:outline-none"
         data-testid="right-sidebar-resize" data-dragging={dragging ? "true" : "false"}
         onpointerdown={startDrag} onpointermove={moveDrag} onpointerup={endDrag} onpointercancel={endDrag} onlostpointercapture={endDrag}
@@ -394,23 +395,23 @@
     {/if}
 
     <!-- 标签：卡片 / 网页 -->
-    <div class="flex h-10 shrink-0 items-center gap-1 border-b border-hairline pr-1.5 pl-2" role="tablist" aria-label="右侧栏">
+    <div class="flex h-10 shrink-0 items-center gap-1 border-b border-hairline pr-1.5 pl-2" role="tablist" aria-label={m.chat_sidebar_label()}>
       <button type="button" role="tab" aria-selected={tab === "cards"} data-testid="sidebar-tab-cards"
         class="flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors {tab === 'cards' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}"
         onclick={() => setRightSidebarTab("cards")}>
-        <LayoutGrid class="size-3.5" />卡片
+        <LayoutGrid class="size-3.5" />{m.chat_sidebar_tab_cards()}
         {#if liveCount}<span class="rounded-full bg-primary/15 px-1.5 text-[10px] leading-4 text-primary" data-testid="sidebar-tab-cards-count">{liveCount}</span>{/if}
       </button>
       <button type="button" role="tab" aria-selected={tab === "web"} data-testid="sidebar-tab-web"
-        title={browser.open ? siteName(browser) : "网页：输入网址或搜索"}
+        title={browser.open ? siteName(browser) : m.chat_sidebar_tab_web_title()}
         class="flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors {tab === 'web' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}"
         onclick={() => setRightSidebarTab("web")}>
-        <Globe class="size-3.5 shrink-0" /><span class="truncate">网页</span>
+        <Globe class="size-3.5 shrink-0" /><span class="truncate">{m.chat_sidebar_tab_web()}</span>
         {#if browser.tabs.length > 1}<span class="rounded-full bg-muted px-1.5 text-[10px] leading-4 text-muted-foreground" data-testid="sidebar-tab-web-count">{browser.tabs.length}</span>{/if}
-        {#if browser.handover}<span class="size-1.5 shrink-0 rounded-full bg-warning" aria-label="要你登录"></span>{/if}
+        {#if browser.handover}<span class="size-1.5 shrink-0 rounded-full bg-warning" aria-label={m.chat_sidebar_tab_web_handover()}></span>{/if}
       </button>
       <div class="flex-1"></div>
-      <Button size="icon" variant="ghost" class="size-7" aria-label="收起右侧栏" title="收起右侧栏" data-testid="right-sidebar-close"
+      <Button size="icon" variant="ghost" class="size-7" aria-label={m.chat_sidebar_collapse()} title={m.chat_sidebar_collapse()} data-testid="right-sidebar-close"
         onclick={toggleRightSidebar}><X class="size-3.5" /></Button>
     </div>
 
@@ -418,7 +419,7 @@
       <!-- 网页：浏览器占满这个标签（照 Codex 内置浏览器）：一排标签页，一行地址栏（后退、前进、刷新、网址、播放控制、全屏、回到卡片） -->
       <div class="flex min-h-0 flex-1 flex-col" data-testid="browser-panel">
         <div class="flex h-9 shrink-0 items-end gap-0.5 overflow-x-auto border-b border-hairline bg-muted/40 px-1.5 pt-1 [scrollbar-width:none]"
-          role="tablist" aria-label="网页标签页" data-testid="browser-tabs">
+          role="tablist" aria-label={m.chat_browser_tabs_label()} data-testid="browser-tabs">
           {#each browser.tabs as item (item.id)}
             {@const selected = item.id === browser.activeTab}
             <div class="group flex h-8 max-w-[200px] min-w-[84px] flex-1 items-center gap-1 rounded-t-lg pr-1 pl-2 text-xs transition-colors
@@ -432,43 +433,43 @@
                 {:else}<Globe class="size-3 shrink-0" />{/if}
                 <span class="min-w-0 flex-1 truncate" data-testid="browser-tab-title">{tabLabel(item)}</span>
               </button>
-              {#if item.agent}<span class="shrink-0 rounded bg-primary/15 px-1 text-[10px] leading-4 text-primary" title="她在用这个标签页" data-testid="browser-tab-agent">她在用</span>{/if}
-              {#if item.audible}<Volume2 class="size-3 shrink-0 text-primary" aria-label="在出声" data-testid="browser-tab-audible" />{/if}
-              <button type="button" aria-label={`关闭标签页：${tabLabel(item)}`} title="关闭标签页" data-testid="browser-tab-close"
+              {#if item.agent}<span class="shrink-0 rounded bg-primary/15 px-1 text-[10px] leading-4 text-primary" title={m.chat_browser_tab_agent_title()} data-testid="browser-tab-agent">{m.chat_browser_tab_agent()}</span>{/if}
+              {#if item.audible}<Volume2 class="size-3 shrink-0 text-primary" aria-label={m.chat_browser_tab_audible()} data-testid="browser-tab-audible" />{/if}
+              <button type="button" aria-label={m.chat_browser_tab_close_label({ title: tabLabel(item) })} title={m.chat_browser_tab_close()} data-testid="browser-tab-close"
                 class="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground
                   {selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'}"
                 onclick={() => void run(() => browserTabClose(item.id))}><X class="size-3" /></button>
             </div>
           {/each}
-          <Button size="icon" variant="ghost" class="mb-0.5 size-7 shrink-0" aria-label="新标签页" title={browser.tabs.length >= MAX_TABS ? `最多 ${MAX_TABS} 个标签页` : "新标签页"}
+          <Button size="icon" variant="ghost" class="mb-0.5 size-7 shrink-0" aria-label={m.chat_browser_tab_new()} title={browser.tabs.length >= MAX_TABS ? m.chat_browser_tab_max({ count: MAX_TABS }) : m.chat_browser_tab_new()}
             data-testid="browser-tab-new" disabled={browser.tabs.length >= MAX_TABS} onclick={() => void newTab()}><Plus class="size-3.5" /></Button>
         </div>
         <form class="flex h-10 shrink-0 items-center gap-0.5 border-b border-hairline px-1.5" data-testid="browser-address-bar"
           onsubmit={(event) => { event.preventDefault(); submitAddress(); }}>
-          <Button type="button" size="icon" variant="ghost" class="size-7 shrink-0" aria-label="后退" title="后退" data-testid="browser-panel-back"
+          <Button type="button" size="icon" variant="ghost" class="size-7 shrink-0" aria-label={m.chat_browser_back()} title={m.chat_browser_back()} data-testid="browser-panel-back"
             disabled={!current?.canGoBack || !!acting} onclick={() => void control("back")}><ArrowLeft class="size-3.5" /></Button>
-          <Button type="button" size="icon" variant="ghost" class="size-7 shrink-0" aria-label="前进" title="前进" data-testid="browser-panel-forward"
+          <Button type="button" size="icon" variant="ghost" class="size-7 shrink-0" aria-label={m.chat_browser_forward()} title={m.chat_browser_forward()} data-testid="browser-panel-forward"
             disabled={!current?.canGoForward || !!acting} onclick={() => void control("forward")}><ArrowRight class="size-3.5" /></Button>
           {#if current?.loading}
-            <Button type="button" size="icon" variant="ghost" class="size-7 shrink-0" aria-label="停止" title="停止" data-testid="browser-panel-stop"
+            <Button type="button" size="icon" variant="ghost" class="size-7 shrink-0" aria-label={m.chat_browser_stop()} title={m.chat_browser_stop()} data-testid="browser-panel-stop"
               onclick={() => void control("stop")}><Square class="size-3" /></Button>
           {:else}
-            <Button type="button" size="icon" variant="ghost" class="size-7 shrink-0" aria-label="刷新" title="刷新" data-testid="browser-panel-reload"
+            <Button type="button" size="icon" variant="ghost" class="size-7 shrink-0" aria-label={m.chat_browser_reload()} title={m.chat_browser_reload()} data-testid="browser-panel-reload"
               disabled={!current || !!acting} onclick={() => void control("reload")}><RotateCw class="size-3.5" /></Button>
           {/if}
           <div class="mx-1 flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-full bg-muted/60 px-2.5 focus-within:ring-1 focus-within:ring-primary/50">
-            {#if secure && !editing}<Lock class="size-3 shrink-0 text-muted-foreground" aria-label="安全连接" />{:else}<Globe class="size-3 shrink-0 text-muted-foreground" />{/if}
-            <input bind:this={address} value={addressValue} placeholder="输入网址或搜索" spellcheck="false" autocomplete="off"
-              aria-label="网址" data-testid="browser-address"
+            {#if secure && !editing}<Lock class="size-3 shrink-0 text-muted-foreground" aria-label={m.chat_browser_secure()} />{:else}<Globe class="size-3 shrink-0 text-muted-foreground" />{/if}
+            <input bind:this={address} value={addressValue} placeholder={m.chat_browser_address_placeholder()} spellcheck="false" autocomplete="off"
+              aria-label={m.chat_browser_address_label()} data-testid="browser-address"
               class="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
               onfocus={startEditing} oninput={(e) => { draft = (e.currentTarget as HTMLInputElement).value; editing = true; }}
               onkeydown={addressKey} onblur={() => setTimeout(() => { editing = false; }, 0)} />
           </div>
-          {#if browser.busy}<span class="shrink-0 rounded-full bg-primary/12 px-2 py-0.5 text-[11px] text-primary" data-testid="browser-panel-busy">她在操作</span>{/if}
+          {#if browser.busy}<span class="shrink-0 rounded-full bg-primary/12 px-2 py-0.5 text-[11px] text-primary" data-testid="browser-panel-busy">{m.chat_browser_busy()}</span>{/if}
           {@render mediaControls()}
-          <Button type="button" size="icon" variant="ghost" class="size-7 shrink-0" aria-label="全屏" title="全屏（Esc 退出）" data-testid="browser-panel-fullscreen"
+          <Button type="button" size="icon" variant="ghost" class="size-7 shrink-0" aria-label={m.chat_browser_fullscreen()} title={m.chat_browser_fullscreen_title()} data-testid="browser-panel-fullscreen"
             disabled={!current} onclick={enterFullscreen}><Expand class="size-3.5" /></Button>
-          <Button type="button" size="icon" variant="ghost" class="size-7 shrink-0" aria-label="回到卡片" title="回到卡片" data-testid="browser-panel-collapse"
+          <Button type="button" size="icon" variant="ghost" class="size-7 shrink-0" aria-label={m.chat_browser_back_to_cards()} title={m.chat_browser_back_to_cards()} data-testid="browser-panel-collapse"
             onclick={() => setRightSidebarTab("cards")}><Minimize2 class="size-3.5" /></Button>
         </form>
         {@render handoverBanner()}
@@ -477,7 +478,7 @@
           <div class="flex shrink-0 items-center gap-2 border-b border-hairline bg-muted/40 px-3 py-1.5" role="status" data-testid="browser-notice">
             <Info class="size-3.5 shrink-0 text-muted-foreground" />
             <p class="m-0 min-w-0 flex-1 text-xs leading-5 text-foreground/85" data-testid="browser-notice-text">{notice}</p>
-            <Button size="icon" variant="ghost" class="size-6 shrink-0" aria-label="知道了" title="知道了" data-testid="browser-notice-dismiss"
+            <Button size="icon" variant="ghost" class="size-6 shrink-0" aria-label={m.chat_browser_notice_dismiss()} title={m.chat_browser_notice_dismiss()} data-testid="browser-notice-dismiss"
               onclick={() => { dismissedNotice = browser.notice; }}><X class="size-3" /></Button>
           </div>
         {/if}
@@ -486,7 +487,7 @@
         <div class="relative min-h-0 flex-1 bg-muted/30" bind:this={slot} data-testid="browser-panel-slot">
           {#if !browser.open}
             <p class="absolute inset-x-6 top-1/3 m-0 text-center text-xs leading-5 text-muted-foreground" data-testid="browser-panel-empty">
-              还没有打开网页。在上面输入网址或搜索，或者让她放首歌、上网查东西，页面会在这里出现。
+              {m.chat_browser_empty()}
             </p>
           {/if}
         </div>
@@ -495,18 +496,18 @@
       <!-- 卡片：网页卡片 + 后台在做的事，按宽度 1–3 列；点开的任务占满一行 -->
       <div class="min-h-0 flex-1 overflow-y-auto px-3 py-3" bind:clientWidth={cardsWidth}>
         <ul class="m-0 grid list-none gap-3 p-0" style:grid-template-columns={`repeat(${columns}, minmax(0, 1fr))`}
-          aria-label="网页与后台在做的事" data-testid="sidebar-cards" data-columns={columns}>
+          aria-label={m.chat_sidebar_cards_label()} data-testid="sidebar-cards" data-columns={columns}>
           <li class="min-w-0">
-            <section aria-label="网页" class="h-full min-w-0 overflow-hidden rounded-xl border border-hairline bg-card/60" data-testid="sidebar-browser-card"
+            <section aria-label={m.chat_sidebar_tab_web()} class="h-full min-w-0 overflow-hidden rounded-xl border border-hairline bg-card/60" data-testid="sidebar-browser-card"
               data-browser-state={browser.handover ? "handover" : browser.error ? "error" : browser.open ? "open" : "closed"}>
               {#if browser.open}
                 <div class="flex min-w-0 items-center gap-2 px-3 pt-2.5">
                   {#if browser.loading}<LoaderCircle class="size-3.5 shrink-0 animate-spin text-muted-foreground" />{:else}<Globe class="size-3.5 shrink-0 text-muted-foreground" />{/if}
                   <span class="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground" data-testid="sidebar-browser-site">{siteName(browser)}</span>
-                  {#if browser.busy}<span class="shrink-0 rounded-full bg-primary/12 px-2 py-0.5 text-[11px] text-primary" data-testid="sidebar-browser-busy">她在操作</span>{/if}
+                  {#if browser.busy}<span class="shrink-0 rounded-full bg-primary/12 px-2 py-0.5 text-[11px] text-primary" data-testid="sidebar-browser-busy">{m.chat_browser_busy()}</span>{/if}
                 </div>
                 {#if browser.title}<p class="m-0 truncate px-3 pt-0.5 pl-8.5 text-xs text-muted-foreground" title={browser.title} data-testid="sidebar-browser-title">{browser.title}</p>{/if}
-                {#if browser.tabs.length > 1}<p class="m-0 px-3 pt-0.5 pl-8.5 text-[11px] text-muted-foreground" data-testid="sidebar-browser-tabs">共 {browser.tabs.length} 个标签页</p>{/if}
+                {#if browser.tabs.length > 1}<p class="m-0 px-3 pt-0.5 pl-8.5 text-[11px] text-muted-foreground" data-testid="sidebar-browser-tabs">{m.chat_sidebar_browser_tab_count({ count: browser.tabs.length })}</p>{/if}
                 {#if browser.media}
                   <div class="mx-3 mt-2 flex min-w-0 items-center gap-2 rounded-lg bg-muted/50 py-1 pr-1 pl-2.5">
                     <p class="m-0 min-w-0 flex-1 truncate text-xs text-foreground/90" data-testid="sidebar-browser-media">{mediaLine(browser.media)}</p>
@@ -514,12 +515,12 @@
                   </div>
                 {/if}
                 {#if browser.handover}
-                  <p class="m-0 mx-3 mt-2 rounded-lg bg-warning/10 px-2.5 py-1.5 text-xs text-warning" data-testid="sidebar-browser-handover">{browser.handover.reason}，打开网页登录一下</p>
+                  <p class="m-0 mx-3 mt-2 rounded-lg bg-warning/10 px-2.5 py-1.5 text-xs text-warning" data-testid="sidebar-browser-handover">{m.chat_sidebar_browser_handover({ reason: browser.handover.reason })}</p>
                 {/if}
                 {#if browser.error}<div class="mx-3 mt-2">{@render browserError()}</div>{/if}
                 <div class="flex justify-end px-1.5 py-1.5">
                   <Button size="sm" variant="ghost" class="h-7 gap-1 px-2 text-xs" data-testid="sidebar-browser-expand"
-                    onclick={showBrowserTab}><Maximize2 class="size-3" />展开</Button>
+                    onclick={showBrowserTab}><Maximize2 class="size-3" />{m.chat_sidebar_browser_expand()}</Button>
                 </div>
               {:else if browser.error}
                 <!-- 浏览器没能打开（例如 WebView2 建不出来）：说清原因，给一个重试 -->
@@ -527,7 +528,7 @@
               {:else}
                 <div class="flex items-start gap-2 px-3 py-3">
                   <Globe class="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-                  <p class="m-0 text-xs leading-5 text-muted-foreground" data-testid="sidebar-browser-hint">让她放首歌，或者让她上网查东西，页面会在这里出现。</p>
+                  <p class="m-0 text-xs leading-5 text-muted-foreground" data-testid="sidebar-browser-hint">{m.chat_sidebar_browser_hint()}</p>
                 </div>
               {/if}
             </section>
@@ -535,7 +536,7 @@
           {#each tasks as info (info.name)}<SidebarTask {info} {conversationId} bind:open={openTasks[info.name]} />{/each}
           {#if !tasks.length}
             <li class="min-w-0 rounded-xl border border-dashed border-hairline px-3 py-3" data-testid="sidebar-tasks">
-              <p class="m-0 text-xs leading-5 text-muted-foreground" data-testid="sidebar-tasks-empty">复杂的事她会放到后台做，做的时候在这里看进度。</p>
+              <p class="m-0 text-xs leading-5 text-muted-foreground" data-testid="sidebar-tasks-empty">{m.chat_sidebar_tasks_empty()}</p>
             </li>
           {/if}
         </ul>
@@ -547,18 +548,18 @@
 
 {#if fullscreen && active && webAvailable}
   <!-- 网页全屏：铺满整个 Kotone 窗口，只留一条很窄的顶栏（照 Codex 内置浏览器的全屏） -->
-  <div use:portal class="ui-scope fixed inset-0 z-[100] flex flex-col bg-background text-foreground" role="region" aria-label="网页全屏" data-testid="browser-fullscreen">
+  <div use:portal class="ui-scope fixed inset-0 z-[100] flex flex-col bg-background text-foreground" role="region" aria-label={m.chat_browser_fullscreen_region()} data-testid="browser-fullscreen">
     <div class="flex h-9 shrink-0 items-center gap-1 border-b border-hairline px-2">
       {@render pageTitle("browser-fullscreen-site")}
       {@render mediaControls()}
-      <Button size="icon" variant="ghost" class="size-7 shrink-0" aria-label="后退" title="后退"
+      <Button size="icon" variant="ghost" class="size-7 shrink-0" aria-label={m.chat_browser_back()} title={m.chat_browser_back()}
         disabled={!current?.canGoBack || !!acting} onclick={() => void control("back")}><ArrowLeft class="size-3.5" /></Button>
-      <Button size="icon" variant="ghost" class="size-7 shrink-0" aria-label="前进" title="前进"
+      <Button size="icon" variant="ghost" class="size-7 shrink-0" aria-label={m.chat_browser_forward()} title={m.chat_browser_forward()}
         disabled={!current?.canGoForward || !!acting} onclick={() => void control("forward")}><ArrowRight class="size-3.5" /></Button>
-      <Button size="icon" variant="ghost" class="size-7 shrink-0" aria-label="刷新" title="刷新"
+      <Button size="icon" variant="ghost" class="size-7 shrink-0" aria-label={m.chat_browser_reload()} title={m.chat_browser_reload()}
         disabled={!current || !!acting} onclick={() => void control("reload")}><RotateCw class="size-3.5" /></Button>
-      <Button size="sm" variant="ghost" class="h-7 shrink-0 gap-1 px-2 text-xs" title="退出全屏（Esc）" data-testid="browser-fullscreen-exit"
-        onclick={() => exitFullscreen(true)}><Shrink class="size-3.5" />退出全屏</Button>
+      <Button size="sm" variant="ghost" class="h-7 shrink-0 gap-1 px-2 text-xs" title={m.chat_browser_exit_fullscreen_title()} data-testid="browser-fullscreen-exit"
+        onclick={() => exitFullscreen(true)}><Shrink class="size-3.5" />{m.chat_browser_exit_fullscreen()}</Button>
     </div>
     {@render handoverBanner()}
     <div class="relative min-h-0 flex-1 bg-muted/30" bind:this={fullSlot} data-testid="browser-fullscreen-slot"></div>

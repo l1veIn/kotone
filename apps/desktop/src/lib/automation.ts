@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { isTauri } from "./ipc";
 import type { DeliveryKind } from "./assistant";
+import { m } from "./paraglide/messages.js";
 
 export type RunStatus = "pending" | "running" | "finished" | "failed" | "cancelled" | "missed";
 
@@ -117,11 +118,11 @@ export function cronToPreset(cron: string): SchedulePreset {
 export function describeSchedule(cron: string): string {
   const p = cronToPreset(cron);
   switch (p.kind) {
-    case "daily": return `每天 ${p.time}`;
-    case "weekdays": return `工作日 ${p.time}`;
-    case "hourly": return "每小时整点";
-    case "minutes": return `每 ${p.every} 分钟`;
-    case "cron": return cron === "@daily" ? "每天 00:00" : `cron：${cron}`;
+    case "daily": return m.auto_schedule_daily({ time: p.time });
+    case "weekdays": return m.auto_schedule_weekdays({ time: p.time });
+    case "hourly": return m.auto_schedule_hourly();
+    case "minutes": return m.auto_schedule_every_minutes({ minutes: p.every });
+    case "cron": return cron === "@daily" ? m.auto_schedule_daily_midnight() : m.auto_schedule_cron({ cron });
   }
 }
 
@@ -135,18 +136,18 @@ export interface AutomationDraft {
 }
 
 export const PARAM_TYPES: { id: ParamType; label: string }[] = [
-  { id: "number", label: "数字" },
-  { id: "text", label: "文字" },
-  { id: "boolean", label: "开关" },
-  { id: "choice", label: "选项" },
-  { id: "key", label: "按键" },
-  { id: "region", label: "屏幕区域" },
-  { id: "color", label: "颜色" },
-  { id: "image", label: "图片" },
+  { id: "number", label: m.auto_param_type_number() },
+  { id: "text", label: m.auto_param_type_text() },
+  { id: "boolean", label: m.auto_param_type_boolean() },
+  { id: "choice", label: m.auto_param_type_choice() },
+  { id: "key", label: m.auto_param_type_key() },
+  { id: "region", label: m.auto_param_type_region() },
+  { id: "color", label: m.auto_param_type_color() },
+  { id: "image", label: m.auto_param_type_image() },
 ];
 
 export function runTitle(run: AutomationRun): string {
-  if (run.action.kind === "program") return run.action.name || "自动化";
+  if (run.action.kind === "program") return run.action.name || m.auto_kind_program();
   return run.action.text;
 }
 
@@ -163,6 +164,7 @@ function nextAt(h: number, m: number): number {
 let previewRuns: AutomationRun[] = [
   {
     id: "preview-run-1", sessionId: "preview", status: "running", createdAtMs: t0 - 20_000, dueAtMs: t0 - 20_000, startedAtMs: t0 - 20_000,
+    // i18n-ignore-start：浏览器预览的示例数据（真实应用里来自后端或玩家自己的数据），不是界面文字
     action: { kind: "program", name: "界面示例：每秒按 Q", automationId: "preview-auto-1", args: { key: "Q", interval: 1000 }, target: { handle: 1, pid: 1, label: "示例游戏 (game.exe)" } },
   },
   {
@@ -202,7 +204,7 @@ let previewAutomations: Automation[] = [
 ];
 const previewListeners = new Set<() => void>();
 const notify = () => previewListeners.forEach((listener) => listener());
-const PREVIEW_ONLY = "浏览器仅预览界面；请在桌面应用中运行自动化。";
+const PREVIEW_ONLY = m.auto_preview_only();
 
 // ---------- 调用 ----------
 
@@ -293,6 +295,7 @@ export async function runAutomation(id: string, args: Record<string, unknown>, s
   }
   previewRuns = [...previewRuns, { id: `preview-run-${now}`, sessionId: "ui", status: "running", createdAtMs: now, dueAtMs: now, startedAtMs: now,
     action: { kind: "program", name: automation.name, automationId: id, args, target: { handle: 1, pid: 1, label: "示例游戏 (game.exe)" } } }];
+    // i18n-ignore-end
   notify();
   return { status: "countdown", seconds: switchSeconds };
 }

@@ -9,30 +9,31 @@
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
+  import { m } from "$lib/paraglide/messages.js";
 
   type EventKind = "record" | "send";
 
   let devices = $state<AudioDevice[]>([]);
   onMount(async () => {
-    try { devices = await listAudioDevices(); } catch (error) { toast(false, `读取麦克风失败：${errText(error)}`); }
+    try { devices = await listAudioDevices(); } catch (error) { toast(false, m.system_sound_read_devices_failed({ error: errText(error) })); }
   });
 
   const recordSounds = [
-    { value: "rise", label: "上扬" },
-    { value: "ding-up", label: "叮咚上行" },
-    { value: "chirp-up", label: "啁啾" },
+    { value: "rise", label: m.system_sound_effect_rise() },
+    { value: "ding-up", label: m.system_sound_effect_ding_up() },
+    { value: "chirp-up", label: m.system_sound_effect_chirp_up() },
   ];
   const sendSounds = [
-    { value: "fall", label: "下沉" },
-    { value: "knock", label: "叩～叩" },
-    { value: "ding-down", label: "叮咚下行" },
+    { value: "fall", label: m.system_sound_effect_fall() },
+    { value: "knock", label: m.system_sound_effect_knock() },
+    { value: "ding-down", label: m.system_sound_effect_ding_down() },
   ];
 
   /** 切换音效：仅保存（试听走卡片上的播放键，避免切换时被打断/轰炸） */
   async function onPick(kind: EventKind, soundId: string) {
     await patchSettings(
       { soundFeedback: { [kind]: { soundId } } },
-      `${kind === "record" ? "录制音" : "发送音"}已切换`,
+      kind === "record" ? m.system_sound_record_switched() : m.system_sound_send_switched(),
     );
   }
 
@@ -42,40 +43,40 @@
     hint: string;
     options: { value: string; label: string }[];
   }[] = [
-    { kind: "record", title: "录制音", hint: "按下热键并成功开始录音时播放", options: recordSounds },
-    { kind: "send", title: "发送音", hint: "消息注入游戏成功时播放", options: sendSounds },
+    { kind: "record", title: m.system_sound_record_title(), hint: m.system_sound_record_hint(), options: recordSounds },
+    { kind: "send", title: m.system_sound_send_title(), hint: m.system_sound_send_hint(), options: sendSounds },
   ];
 </script>
 
 {#if $settingsStore}
   <div class="space-y-6">
-  <SettingsSection title="麦克风" description="语音输入和呼叫共用。" testid="sound-microphone">
-    <SettingsRow label="麦克风" description="说话用的输入设备。">
+  <SettingsSection title={m.system_sound_microphone()} description={m.system_sound_microphone_section_description()} testid="sound-microphone">
+    <SettingsRow label={m.system_sound_microphone()} description={m.system_sound_microphone_row_description()}>
       {#snippet control()}
         <div class="w-72 max-w-full">
-          <SelectField size="md" ariaLabel="麦克风" value={$settingsStore.audioDeviceId}
+          <SelectField size="md" ariaLabel={m.system_sound_microphone()} value={$settingsStore.audioDeviceId}
             options={devices.map((device) => ({ value: device.id, label: device.name }))}
             onchange={async (id) => {
               try {
                 await setAudioDevice(id);
                 settingsStore.update((s) => (s ? { ...s, audioDeviceId: id } : s));
-                toast(true, "麦克风已切换");
+                toast(true, m.system_sound_microphone_switched());
               } catch (err) {
-                toast(false, `切换麦克风失败：${errText(err)}`);
+                toast(false, m.system_sound_microphone_switch_failed({ error: errText(err) }));
               }
             }} />
         </div>
       {/snippet}
     </SettingsRow>
     <div class="py-3.5">
-      <ToggleField checked={$settingsStore.lowerSpeakerVolumeWhileListening} label="录音时降低扬声器音量"
-        desc="语音输入录音或角色倾听时暂时降低扬声器音量，结束后恢复。"
-        onchange={(enabled) => void patchSettings({ lowerSpeakerVolumeWhileListening: enabled }, "扬声器设置已保存")} />
+      <ToggleField checked={$settingsStore.lowerSpeakerVolumeWhileListening} label={m.system_sound_duck_label()}
+        desc={m.system_sound_duck_description()}
+        onchange={(enabled) => void patchSettings({ lowerSpeakerVolumeWhileListening: enabled }, m.system_sound_duck_saved())} />
     </div>
   </SettingsSection>
 
   <p class="m-0 px-1 text-[13px] leading-relaxed text-muted-foreground">
-    提示音：不开悬浮窗、或全屏游戏时，也能听到录音与发送是否生效。录制音与发送音可分别开关、分别调音量、分别选音效。
+    {m.system_sound_intro()}
   </p>
 
   {#each cards as card}
@@ -87,23 +88,23 @@
           bind:checked={() => item.enabled, (value) =>
             void patchSettings(
               { soundFeedback: { [card.kind]: { enabled: value } } },
-              `${card.title}已${value ? "开启" : "关闭"}`,
+              value ? m.system_sound_card_enabled({ name: card.title }) : m.system_sound_card_disabled({ name: card.title }),
             )}
         />
       {/snippet}
-      <SettingsRow label="音效" description="点播放键试听当前音效。">
+      <SettingsRow label={m.system_sound_effect_label()} description={m.system_sound_effect_description()}>
         {#snippet control()}
           <div class="flex items-center gap-2">
             <SelectField
               class="w-40"
-              ariaLabel={`${card.title}音效`}
+              ariaLabel={m.system_sound_card_effect_label({ name: card.title })}
               value={item.soundId}
               options={card.options}
               onchange={(soundId) => void onPick(card.kind, soundId)}
             />
             <button
               type="button"
-              aria-label={`试听${card.title}`}
+              aria-label={m.system_sound_card_preview_label({ name: card.title })}
               class="flex size-8 shrink-0 items-center justify-center rounded-lg border border-primary/35 bg-primary/10 text-primary transition-colors hover:bg-primary/20"
               onclick={() => void previewSfx(card.kind, item.soundId)}
             >
@@ -112,12 +113,12 @@
           </div>
         {/snippet}
       </SettingsRow>
-      <SettingsRow label={`${card.title}音量`} stacked>
+      <SettingsRow label={m.system_sound_card_volume_label({ name: card.title })} stacked>
         {#snippet control()}
           <div class="flex items-center gap-3">
             <input
               type="range"
-              aria-label={`${card.title}音量`}
+              aria-label={m.system_sound_card_volume_label({ name: card.title })}
               min="10"
               max="100"
               step="5"
@@ -125,7 +126,7 @@
               onchange={(e) =>
                 void patchSettings(
                   { soundFeedback: { [card.kind]: { volume: Number((e.target as HTMLInputElement).value) } } },
-                  `${card.title}音量已保存`,
+                  m.system_sound_card_volume_saved({ name: card.title }),
                 )}
               class="min-w-0 flex-1 accent-[var(--color-primary)]"
             />
@@ -136,16 +137,16 @@
     </SettingsSection>
   {/each}
 
-  <SettingsSection title="触发时机">
+  <SettingsSection title={m.system_sound_triggers_title()}>
     <ul class="m-0 list-none space-y-1.5 py-3.5 pl-0 text-xs leading-relaxed text-muted-foreground">
-      <li>· 按下热键并成功开始录音 → 录制音</li>
-      <li>· 消息注入游戏成功（松手 / 再按 / 一句话说完自动发送）→ 发送音</li>
-      <li>· 独奏模式逐句连发：每句发送都有发送音，自动续录不再重复播录制音</li>
-      <li>· 录音失败或发送失败不会发声（沿用界面错误提示），不会被误认为成功</li>
+      <li>{m.system_sound_trigger_record()}</li>
+      <li>{m.system_sound_trigger_send()}</li>
+      <li>{m.system_sound_trigger_solo()}</li>
+      <li>{m.system_sound_trigger_failure()}</li>
     </ul>
   </SettingsSection>
   <p class="m-0 px-1 text-[11px] leading-relaxed text-muted-foreground/80">
-    自定义提示音（上传自己的音频，录制音与发送音可分别设置）将在后续版本支持。
+    {m.system_sound_custom_coming()}
   </p>
   </div>
 {/if}

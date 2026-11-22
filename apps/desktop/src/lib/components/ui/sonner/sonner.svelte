@@ -2,6 +2,7 @@
   // shadcn-svelte 的 Sonner 提示（结构参照 RambleDesk lib/components/ui/sonner）。Kotone：每种提示配一张
   // 琴音贴纸（成功=得意 / 信息=指引 / 警告=思考 / 错误=惊讶），颜色跟随设置窗口的外观变量。
   import { Toaster } from "svelte-sonner";
+  import { m } from "$lib/paraglide/messages.js";
   import stickerProud from "../../../../assets/brand/stickers/proud.webp";
   import stickerPointing from "../../../../assets/brand/stickers/pointing.webp";
   import stickerThinking from "../../../../assets/brand/stickers/thinking.webp";
@@ -28,7 +29,7 @@
   {infoIcon}
   {warningIcon}
   {errorIcon}
-  toastOptions={{ duration: 4_000, closeButtonAriaLabel: "关闭提示" }}
+  toastOptions={{ duration: 4_000, closeButtonAriaLabel: m.shell_toast_close() }}
 />
 
 <style>

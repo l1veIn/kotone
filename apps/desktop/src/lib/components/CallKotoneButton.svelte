@@ -3,6 +3,7 @@
   // 通话中再按一下挂断。用本地识别且还没启动时，点一下会先启动本地识别，准备好就开始听。
   import { onMount } from "svelte";
   import { companionName } from "$lib/stores/companion";
+  import { m } from "$lib/paraglide/messages.js";
   import { Mic } from "@lucide/svelte";
   import { callActive, callKotone, subscribeCall } from "../assistant";
   import { hotkeyLabel } from "../hotkeyCombo";
@@ -29,7 +30,7 @@
   const listening = $derived($appState.purpose === "assistant" && !$appState.legacyReminder && $appState.state === "listening");
   const asr = $derived($asrStore);
   const preparing = $derived(asr === "local-starting" || asr === "online-preparing");
-  const blocked = $derived(!isTauri ? "仅限桌面版" : !ready ? "先配好 AI 连接" : "");
+  const blocked = $derived(!isTauri ? m.chat_call_desktop_only() : !ready ? m.chat_call_needs_connection() : "");
   let calling = $state(false);
   /** 正在和她通话（ADR 033）：按钮变成“挂断”。 */
   let inCall = $state(false);
@@ -39,24 +40,24 @@
     void subscribeCall((active) => { inCall = active; }).then((u) => { unlisten = u; });
     return () => unlisten?.();
   });
-  const label = $derived(listening ? `${name}在听…` : inCall ? "挂断" : calling && preparing ? "正在准备…" : `呼叫${name}`);
+  const label = $derived(listening ? m.chat_call_listening_name({ name }) : inCall ? m.chat_call_hang_up() : calling && preparing ? m.chat_call_preparing() : m.chat_call_label({ name }));
   const hint = $derived(blocked
-    || (inCall ? "通话中：直接说就行。说“退下”或再按一下挂断"
-      : listening ? "说完了？再按一次直接交给她"
-      : asr === "local-stopped" || asr === "local-error" ? "点一下会先启动本地识别，准备好就开始听"
-      : hotkey && wakeWord ? `按 ${hotkeyLabel(hotkey)} 或者说“${wakeWord}”`
-      : hotkey ? `或在游戏里按 ${hotkeyLabel(hotkey)}`
-      : wakeWord ? `或者说“${wakeWord}”`
+    || (inCall ? m.chat_call_hint_in_call()
+      : listening ? m.chat_call_hint_listening()
+      : asr === "local-stopped" || asr === "local-error" ? m.chat_call_hint_start_local()
+      : hotkey && wakeWord ? m.chat_call_hint_hotkey_or_wake({ hotkey: hotkeyLabel(hotkey), wakeWord })
+      : hotkey ? m.chat_call_hint_hotkey({ hotkey: hotkeyLabel(hotkey) })
+      : wakeWord ? m.chat_call_hint_wake({ wakeWord })
       : ""));
 
   /** 图标按钮悬停时的说明：呼叫琴音（快捷键 ~）……（rc2 玩家反馈：输入框里只留一个图标，悬停看快捷键）。 */
-  const iconTitle = $derived(blocked ? `呼叫${name}：${blocked}`
-    : inCall ? `和${name}通话中：直接说就行。说“退下”或点这里挂断`
-    : listening ? `${name}在听…说完了？再按一次直接交给她`
-    : calling && preparing ? "正在准备…"
-    : [hotkey ? `呼叫${name}（快捷键 ${hotkeyLabel(hotkey)}）` : `呼叫${name}（还没设快捷键：设置 → 怎么叫她）`,
-       wakeWord ? `也可以说“${wakeWord}”` : "",
-       asr === "local-stopped" || asr === "local-error" ? "点一下会先启动本地识别" : ""].filter(Boolean).join(" · "));
+  const iconTitle = $derived(blocked ? m.chat_call_icon_blocked({ name, reason: blocked })
+    : inCall ? m.chat_call_icon_in_call({ name })
+    : listening ? m.chat_call_icon_listening({ name })
+    : calling && preparing ? m.chat_call_preparing()
+    : [hotkey ? m.chat_call_icon_hotkey({ name, hotkey: hotkeyLabel(hotkey) }) : m.chat_call_icon_no_hotkey({ name }),
+       wakeWord ? m.chat_call_icon_wake({ wakeWord }) : "",
+       asr === "local-stopped" || asr === "local-error" ? m.chat_call_icon_start_local() : ""].filter(Boolean).join(" · "));
 
   async function call() {
     if (blocked || calling) return;
@@ -66,7 +67,7 @@
       if (asr !== "local-running" && asr !== "online-ready") await startRuntime();
       await callKotone();
     } catch (error) {
-      toast(false, `呼叫失败：${errText(error)}`);
+      toast(false, m.chat_call_failed({ error: errText(error) }));
     } finally {
       calling = false;
     }
@@ -86,7 +87,7 @@
     <p class="m-0 text-xs text-muted-foreground" data-testid={`${testid}-hint`}>
       {hint}
       {#if !blocked && !listening && !inCall && !hotkey && onSetCallKey}
-        {hint ? " · " : ""}<button type="button" class="text-primary hover:underline" data-testid={`${testid}-set-key`} onclick={onSetCallKey}>设一个呼叫键 →</button>
+        {hint ? " · " : ""}<button type="button" class="text-primary hover:underline" data-testid={`${testid}-set-key`} onclick={onSetCallKey}>{m.chat_call_set_key()}</button>
       {/if}
     </p>
   </div>
@@ -98,7 +99,7 @@
       {listening || inCall ? 'bg-brand-pink/15 text-brand-pink' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
     onclick={() => void call()}>
     <Mic class="size-4 {listening || calling ? 'animate-pulse' : ''}" />
-    <span class="sr-only">{listening ? "在听…" : inCall ? "挂断" : `呼叫${name}`}</span>
+    <span class="sr-only">{listening ? m.chat_call_listening() : inCall ? m.chat_call_hang_up() : m.chat_call_label({ name })}</span>
   </button>
 {:else}
   <button type="button" data-testid={testid} disabled={!!blocked || calling} aria-pressed={listening || inCall}
@@ -108,7 +109,7 @@
       {listening || inCall ? 'bg-brand-pink/15 text-brand-pink' : 'bg-muted/70 text-foreground hover:bg-muted'}"
     onclick={() => void call()}>
     <Mic class="size-3.5 {listening || calling ? 'animate-pulse' : ''}" />
-    {listening ? "在听…" : inCall ? "挂断" : calling && preparing ? "准备中…" : `呼叫${name}`}
+    {listening ? m.chat_call_listening() : inCall ? m.chat_call_hang_up() : calling && preparing ? m.chat_call_preparing_short() : m.chat_call_label({ name })}
     {#if hotkey && !blocked && !listening}<span class="text-[10px] text-muted-foreground">{hotkeyLabel(hotkey)}</span>{/if}
   </button>
 {/if}

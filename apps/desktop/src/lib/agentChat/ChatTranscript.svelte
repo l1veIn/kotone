@@ -5,6 +5,7 @@
 <script lang="ts">
   import { tick, type Snippet } from "svelte";
   import { Button } from "$lib/components/ui/button";
+  import { m } from "$lib/paraglide/messages.js";
   import type { AgentAsk, Answer } from "../agent";
   import ChatTurn from "./ChatTurn.svelte";
   import { captureScrollAnchor, crossedHistoryThreshold, restoreScrollAnchor } from "./scrollAnchor";
@@ -79,14 +80,14 @@
   }
 </script>
 
-<div bind:this={viewport} onscroll={onScroll} class="min-h-0 flex-1 overflow-y-auto overscroll-contain py-6 [scrollbar-gutter:stable]" data-testid="agent-transcript" aria-label="对话内容">
+<div bind:this={viewport} onscroll={onScroll} class="min-h-0 flex-1 overflow-y-auto overscroll-contain py-6 [scrollbar-gutter:stable]" data-testid="agent-transcript" aria-label={m.chat_transcript_label()}>
   {#if turns.length === 0}
     {@render empty?.()}
   {:else}
     <div class="mx-auto w-full max-w-[808px] space-y-8 px-6" use:observeSize>
       {#if hidden}
         <div class="flex justify-center">
-          <Button variant="ghost" size="sm" data-testid="agent-load-earlier" onclick={() => void revealOlder()}>显示更早的消息（还有 {hidden} 轮）</Button>
+          <Button variant="ghost" size="sm" data-testid="agent-load-earlier" onclick={() => void revealOlder()}>{m.chat_transcript_load_earlier({ count: hidden })}</Button>
         </div>
       {/if}
       {#each visible as turn (turn.id)}

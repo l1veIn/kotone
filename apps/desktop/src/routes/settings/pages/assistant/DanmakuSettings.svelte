@@ -1,6 +1,7 @@
 <script lang="ts">
   import { DANMAKU_EMOTES, danmakuStyle, type DanmakuEmote } from "../../../../lib/danmaku";
   import { patchSettings, settingsStore } from "../../../../lib/stores/ui";
+  import { m } from "$lib/paraglide/messages.js";
   import type { AssistantConfig } from "../../../../lib/ipc";
   import relayRoom from "../../../../assets/brand/relay-room-bg.webp";
 
@@ -33,7 +34,7 @@
   let saving = $state(false);
   let topError = $state("");
   const config = $derived($settingsStore?.assistant);
-  const sample = "该打小龙了";
+  const sample = m.companion_danmaku_sample();
   const preview = $derived(danmakuStyle({
     text: sample,
     fontSize: config?.danmakuFontSize ?? 32,
@@ -41,17 +42,17 @@
     emote: (config?.danmakuEmote ?? "none") as DanmakuEmote,
   }));
   const colors = [
-    { value: "#FFFFFF", label: "白色" },
-    { value: "#00E5FF", label: "霓虹青" },
-    { value: "#FF6DA8", label: "樱粉" },
-    { value: "#FFE082", label: "暖黄" },
+    { value: "#FFFFFF", label: m.companion_danmaku_color_white() },
+    { value: "#00E5FF", label: m.companion_danmaku_color_cyan() },
+    { value: "#FF6DA8", label: m.companion_danmaku_color_pink() },
+    { value: "#FFE082", label: m.companion_danmaku_color_yellow() },
   ];
 
   async function save(patch: Partial<Appearance>) {
     if (saving) return false;
     saving = true;
     try {
-      return await patchSettings({ assistant: patch }, "弹幕样式已保存");
+      return await patchSettings({ assistant: patch }, m.companion_danmaku_saved());
     } finally {
       saving = false;
     }
@@ -59,12 +60,12 @@
   async function saveTop(value: number) {
     if (saving) return;
     if (!Number.isInteger(value) || value < 0 || value > 2160) {
-      topError = "请输入 0 到 2160 之间的整数像素。";
+      topError = m.companion_danmaku_top_invalid();
       return;
     }
     topError = "";
     if (value !== config?.danmakuTopOffsetPx && !await save({ danmakuTopOffsetPx: value })) {
-      topError = "距顶部未保存，请重新输入或按 Enter 重试。";
+      topError = m.companion_danmaku_top_not_saved();
     }
   }
 </script>
@@ -72,30 +73,30 @@
 {#if config}
   <section class="space-y-4 py-4" data-testid="danmaku-settings" aria-labelledby="danmaku-settings-title">
     <div>
-      <h3 id="danmaku-settings-title" class="m-0 text-[13px] font-medium text-foreground">弹幕</h3>
-      <p class="mt-0.5 mb-0 text-xs text-muted-foreground">在游戏画面上方飘过的文字提示。</p>
+      <h3 id="danmaku-settings-title" class="m-0 text-[13px] font-medium text-foreground">{m.companion_danmaku_title()}</h3>
+      <p class="mt-0.5 mb-0 text-xs text-muted-foreground">{m.companion_danmaku_desc()}</p>
     </div>
 
     <div class="grid gap-4 sm:grid-cols-2">
       <label class="block space-y-2 text-xs text-muted-foreground">
-        <span class="flex justify-between"><span>速度</span><span class="text-foreground/85">{config.danmakuSpeedPxPerSec} px/s</span></span>
-        <input aria-label="弹幕速度" type="range" min="40" max="600" step="10" value={config.danmakuSpeedPxPerSec} disabled={saving}
+        <span class="flex justify-between"><span>{m.companion_danmaku_speed()}</span><span class="text-foreground/85">{config.danmakuSpeedPxPerSec} px/s</span></span>
+        <input aria-label={m.companion_danmaku_speed_aria()} type="range" min="40" max="600" step="10" value={config.danmakuSpeedPxPerSec} disabled={saving}
           onchange={(event) => void save({ danmakuSpeedPxPerSec: event.currentTarget.valueAsNumber })} class="w-full accent-primary" />
-        <span class="flex justify-between text-[10px] text-muted-foreground/80"><span>慢一些</span><span>快一些</span></span>
+        <span class="flex justify-between text-[10px] text-muted-foreground/80"><span>{m.companion_danmaku_speed_slow()}</span><span>{m.companion_danmaku_speed_fast()}</span></span>
       </label>
       <label class="block space-y-2 text-xs text-muted-foreground">
-        <span class="flex justify-between"><span>字号</span><span class="text-foreground/85">{config.danmakuFontSize} px</span></span>
-        <input aria-label="弹幕字号" type="range" min="16" max="72" step="1" value={config.danmakuFontSize} disabled={saving}
+        <span class="flex justify-between"><span>{m.companion_danmaku_font_size()}</span><span class="text-foreground/85">{config.danmakuFontSize} px</span></span>
+        <input aria-label={m.companion_danmaku_font_size_aria()} type="range" min="16" max="72" step="1" value={config.danmakuFontSize} disabled={saving}
           onchange={(event) => void save({ danmakuFontSize: event.currentTarget.valueAsNumber })} class="w-full accent-primary" />
-        <span class="flex justify-between text-[10px] text-muted-foreground/80"><span>小</span><span>大</span></span>
+        <span class="flex justify-between text-[10px] text-muted-foreground/80"><span>{m.companion_danmaku_font_size_small()}</span><span>{m.companion_danmaku_font_size_large()}</span></span>
       </label>
     </div>
 
     <div class="space-y-2 text-xs text-muted-foreground">
       <div class="flex items-center justify-between gap-3">
-        <label for="danmaku-top-offset">距顶部</label>
+        <label for="danmaku-top-offset">{m.companion_danmaku_top()}</label>
         <label class="flex items-center gap-2 text-[11px]">
-          <input type="number" aria-label="弹幕距顶部像素" min="0" max="2160" step="1" value={config.danmakuTopOffsetPx ?? 120} disabled={saving}
+          <input type="number" aria-label={m.companion_danmaku_top_px_aria()} min="0" max="2160" step="1" value={config.danmakuTopOffsetPx ?? 120} disabled={saving}
             aria-invalid={!!topError} aria-describedby={topError ? "danmaku-top-error" : "danmaku-top-help"}
             onchange={(event) => saveTop(event.currentTarget.valueAsNumber)}
             onkeydown={(event) => { if (event.key === "Enter") { event.preventDefault(); saveTop(event.currentTarget.valueAsNumber); } }}
@@ -103,32 +104,32 @@
           <span>px</span>
         </label>
       </div>
-      <input id="danmaku-top-offset" aria-label="弹幕距顶部" type="range" min="0" max="2160" step="1" value={config.danmakuTopOffsetPx ?? 120} disabled={saving}
+      <input id="danmaku-top-offset" aria-label={m.companion_danmaku_top_aria()} type="range" min="0" max="2160" step="1" value={config.danmakuTopOffsetPx ?? 120} disabled={saving}
         onchange={(event) => saveTop(event.currentTarget.valueAsNumber)} class="w-full accent-primary" />
-      <p id="danmaku-top-help" class="m-0 text-[10px] leading-relaxed text-muted-foreground/80">超出屏幕时自动调整。</p>
+      <p id="danmaku-top-help" class="m-0 text-[10px] leading-relaxed text-muted-foreground/80">{m.companion_danmaku_top_help()}</p>
       {#if topError}<p id="danmaku-top-error" role="alert" class="m-0 text-[11px] text-destructive">{topError}</p>{/if}
     </div>
 
     <div class="flex flex-wrap items-center gap-2">
-      <span class="mr-2 text-xs text-muted-foreground">文字颜色</span>
+      <span class="mr-2 text-xs text-muted-foreground">{m.companion_danmaku_color()}</span>
       {#each colors as color}
-        <button type="button" aria-label={`弹幕颜色${color.label}`} aria-pressed={config.danmakuColor.toUpperCase() === color.value}
+        <button type="button" aria-label={m.companion_danmaku_color_aria({ color: color.label })} aria-pressed={config.danmakuColor.toUpperCase() === color.value}
           class="choice size-7 rounded-full p-1" style:--swatch={color.value} disabled={saving} onclick={() => void save({ danmakuColor: color.value })}>
           <span class="block size-full rounded-full ring-1 ring-black/20" style:background="var(--swatch)" aria-hidden="true"></span>
         </button>
       {/each}
       <label class="ml-1 flex items-center gap-2 text-[11px] text-muted-foreground">
-        <input type="color" aria-label="自定义弹幕颜色" value={config.danmakuColor} disabled={saving}
+        <input type="color" aria-label={m.companion_danmaku_color_custom_aria()} value={config.danmakuColor} disabled={saving}
           onchange={(event) => void save({ danmakuColor: event.currentTarget.value.toUpperCase() })} class="h-7 w-9 cursor-pointer rounded border border-hairline bg-transparent" />
         <span class="font-mono">{config.danmakuColor.toUpperCase()}</span>
       </label>
     </div>
 
     <fieldset disabled={saving} class="m-0 border-0 p-0">
-      <legend class="mb-2 text-xs text-muted-foreground">表情</legend>
+      <legend class="mb-2 text-xs text-muted-foreground">{m.companion_danmaku_emote()}</legend>
       <div class="flex flex-wrap gap-2">
         {#each DANMAKU_EMOTES as emote}
-          <button type="button" aria-label={`弹幕表情${emote.label}`} aria-pressed={config.danmakuEmote === emote.id}
+          <button type="button" aria-label={m.companion_danmaku_emote_aria({ emote: emote.label })} aria-pressed={config.danmakuEmote === emote.id}
             class="choice flex h-16 w-16 flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] text-muted-foreground" onclick={() => void save({ danmakuEmote: emote.id })}>
             {#if emote.src}<img src={emote.src} alt="" width="34" height="34" class="object-contain" />{:else}<span class="text-lg" aria-hidden="true">Aa</span>{/if}
             <span>{emote.label}</span>
@@ -138,7 +139,7 @@
     </fieldset>
 
     <div>
-      <p class="mt-0 mb-1.5 text-xs text-muted-foreground">预览（按 1920 宽的屏幕等比缩小：大小、高度、速度和游戏里一样）</p>
+      <p class="mt-0 mb-1.5 text-xs text-muted-foreground">{m.companion_danmaku_preview()}</p>
       <div class="screen" bind:clientWidth={screenWidth} style:background-image={`url(${relayRoom})`} data-testid="danmaku-screen">
         {#if scale > 0}
           {#key `${preview.fontSize}|${preview.emote.id}|${preview.color}`}

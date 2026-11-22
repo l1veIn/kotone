@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { isTauri } from "./ipc";
+import { m } from "./paraglide/messages.js";
 
 export type WakeStateName = "off" | "waitingRuntime" | "modelMissing" | "listening" | "error";
 
@@ -21,20 +22,22 @@ export interface WakeModelProgress {
 }
 
 export const wakePhrases = [
+  // i18n-ignore-start：唤醒词是玩家要说的话，不是界面文字
   { value: "qinyin-qinyin", label: "琴音琴音" },
   { value: "nihao-qinyin", label: "你好琴音" },
+  // i18n-ignore-end
 ] as const;
 
 export const wakeSensitivities = [
-  { value: "low", label: "低（不容易误唤醒）" },
-  { value: "normal", label: "中" },
-  { value: "high", label: "高（更容易唤醒）" },
+  { value: "low", label: m.misc_wake_sensitivity_low() },
+  { value: "normal", label: m.misc_wake_sensitivity_normal() },
+  { value: "high", label: m.misc_wake_sensitivity_high() },
 ] as const;
 
 export const wakeAcks = [
-  { value: "voice", label: "说“嗯？/我在”" },
-  { value: "tone", label: "提示音" },
-  { value: "none", label: "不提示" },
+  { value: "voice", label: m.misc_wake_ack_voice() },
+  { value: "tone", label: m.misc_wake_ack_tone() },
+  { value: "none", label: m.misc_wake_ack_none() },
 ] as const;
 
 // ---------- 浏览器预览 ----------
@@ -75,10 +78,10 @@ export async function subscribeWakeModel(callback: (progress: WakeModelProgress)
 
 export function wakeStateText(status: WakeStatus): string {
   switch (status.state) {
-    case "off": return "未开启";
-    case "waitingRuntime": return "本地语音识别启动后开始听";
-    case "modelMissing": return "还没有下载唤醒模型";
-    case "listening": return "正在监听唤醒词";
-    case "error": return `出错了：${status.message ?? "未知原因"}`;
+    case "off": return m.misc_wake_state_off();
+    case "waitingRuntime": return m.misc_wake_state_waiting_runtime();
+    case "modelMissing": return m.misc_wake_state_model_missing();
+    case "listening": return m.misc_wake_state_listening();
+    case "error": return m.misc_wake_state_error({ message: status.message ?? m.misc_wake_state_error_unknown() });
   }
 }

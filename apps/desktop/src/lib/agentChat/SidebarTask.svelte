@@ -3,6 +3,7 @@
 <script lang="ts">
   import { Check, ChevronRight, CircleAlert, CirclePause, LoaderCircle, MessageSquareText, ShieldAlert } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
+  import { m } from "$lib/paraglide/messages.js";
   import { agentSubagentAnswer, agentSubagentContinue, agentSubagentStop, type SubagentAnswer, type SubagentInfo } from "../agent";
   import TaskProcess from "./TaskProcess.svelte";
 
@@ -15,12 +16,12 @@
 
   const statusText = $derived.by(() => {
     switch (info.status) {
-      case "running": return info.steps > 0 ? `进行中 · 第 ${info.steps} 步` : "进行中";
-      case "waiting": return "等你确认";
-      case "done": return "做完了";
-      case "failed": return "出错了";
-      case "stopped": return "停了";
-      case "interrupted": return "中断了";
+      case "running": return info.steps > 0 ? m.chat_task_status_running_steps({ steps: info.steps }) : m.chat_task_status_running();
+      case "waiting": return m.chat_task_status_waiting();
+      case "done": return m.chat_task_status_done();
+      case "failed": return m.chat_task_status_failed();
+      case "stopped": return m.chat_task_status_stopped();
+      case "interrupted": return m.chat_task_status_interrupted();
     }
   });
   const tone = $derived(info.status === "done" ? "text-success" : info.status === "failed" ? "text-destructive"
@@ -58,23 +59,23 @@
   data-testid="sidebar-task" data-task-name={info.name} data-task-status={info.status} data-open={open ? "true" : "false"}>
   <div class="flex min-w-0 items-center gap-1 py-1.5 pr-1 pl-2.5">
     <button type="button" class="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-      aria-expanded={!!open} title={open ? "收起过程" : "展开看过程"} data-testid="sidebar-task-toggle" onclick={() => { open = !open; }}>
+      aria-expanded={!!open} title={open ? m.chat_sidebar_task_collapse() : m.chat_sidebar_task_expand()} data-testid="sidebar-task-toggle" onclick={() => { open = !open; }}>
       {#if info.status === "running"}<LoaderCircle class="size-3.5 shrink-0 animate-spin text-primary" />
       {:else if info.status === "waiting"}<ShieldAlert class="size-3.5 shrink-0 text-warning" />
       {:else if info.status === "done"}<Check class="size-3.5 shrink-0 text-success" />
       {:else if info.status === "failed"}<CircleAlert class="size-3.5 shrink-0 text-destructive" />
       {:else}<CirclePause class="size-3.5 shrink-0 text-muted-foreground" />{/if}
-      <span class="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground/90" data-testid="sidebar-task-label">{info.label || "后台的事"}</span>
+      <span class="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground/90" data-testid="sidebar-task-label">{info.label || m.chat_sidebar_task_default_label()}</span>
       <ChevronRight aria-hidden="true" class="size-3.5 shrink-0 text-muted-foreground transition-transform {open ? 'rotate-90' : ''}" />
     </button>
-    <Button size="icon" variant="ghost" class="size-6 shrink-0 text-muted-foreground" aria-label={`在聊天里看「${info.label}」`} title="在聊天里看"
+    <Button size="icon" variant="ghost" class="size-6 shrink-0 text-muted-foreground" aria-label={m.chat_sidebar_task_reveal_label({ label: info.label })} title={m.chat_sidebar_task_reveal()}
       data-testid="sidebar-task-reveal" onclick={() => { if (inChat()) reveal(); else open = true; }}><MessageSquareText class="size-3.5" /></Button>
     {#if info.status === "running" || info.status === "waiting"}
       <Button size="sm" variant="ghost" class="h-6 shrink-0 px-1.5 text-[11px] text-muted-foreground hover:text-destructive"
-        aria-label={`停止「${info.label}」`} data-testid="sidebar-task-stop" disabled={busy} onclick={() => void act("stop")}>停止</Button>
+        aria-label={m.chat_sidebar_task_stop_label({ label: info.label })} data-testid="sidebar-task-stop" disabled={busy} onclick={() => void act("stop")}>{m.chat_task_stop()}</Button>
     {:else if info.status === "interrupted"}
       <Button size="sm" variant="ghost" class="h-6 shrink-0 px-1.5 text-[11px] text-primary"
-        aria-label={`继续「${info.label}」`} data-testid="sidebar-task-continue" disabled={busy} onclick={() => void act("continue")}>继续</Button>
+        aria-label={m.chat_sidebar_task_continue_label({ label: info.label })} data-testid="sidebar-task-continue" disabled={busy} onclick={() => void act("continue")}>{m.chat_task_continue()}</Button>
     {/if}
   </div>
   <p class="m-0 -mt-1 pb-1.5 pl-8 text-[11px] {tone}" data-testid="sidebar-task-status">{statusText}</p>
@@ -82,9 +83,9 @@
     <div class="pb-2 pl-8 pr-2.5" data-testid="sidebar-task-ask">
       <p class="m-0 text-xs leading-5 text-foreground">{info.question || info.label}</p>
       <div class="mt-1.5 flex gap-1.5">
-        <Button size="sm" class="h-6 px-2 text-[11px]" aria-label={`允许「${info.label}」`} data-testid="sidebar-task-allow" disabled={busy} onclick={() => void act("allow-once")}>允许</Button>
+        <Button size="sm" class="h-6 px-2 text-[11px]" aria-label={m.chat_sidebar_task_allow_label({ label: info.label })} data-testid="sidebar-task-allow" disabled={busy} onclick={() => void act("allow-once")}>{m.chat_ask_allow_once()}</Button>
         <Button size="sm" variant="ghost" class="h-6 px-2 text-[11px] text-destructive hover:bg-destructive/10 hover:text-destructive"
-          aria-label={`拒绝「${info.label}」`} data-testid="sidebar-task-deny" disabled={busy} onclick={() => void act("deny")}>拒绝</Button>
+          aria-label={m.chat_sidebar_task_deny_label({ label: info.label })} data-testid="sidebar-task-deny" disabled={busy} onclick={() => void act("deny")}>{m.chat_ask_deny()}</Button>
       </div>
     </div>
   {:else if finished && info.summary && !open}

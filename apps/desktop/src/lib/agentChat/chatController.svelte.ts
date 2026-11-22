@@ -7,6 +7,7 @@ import {
   type SubagentInfo,
 } from "../agent";
 import type { LiveState } from "./timeline";
+import { m } from "../paraglide/messages.js";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -48,7 +49,7 @@ export class AgentChat {
         (requestId) => { this.keyRequests = this.keyRequests.filter((r) => r.requestId !== requestId); },
       ));
     } catch (error) {
-      this.loadError = `订阅对话事件失败：${errorText(error)}`;
+      this.loadError = m.chat_load_subscribe_failed({ error: errorText(error) });
     }
     await this.refresh();
   }
@@ -79,7 +80,7 @@ export class AgentChat {
     } catch (error) {
       if (!this.#disposed && revision === this.#revision) {
         this.#buffer = null;
-        this.loadError = `读取对话失败：${errorText(error)}`;
+        this.loadError = m.chat_load_failed({ error: errorText(error) });
       }
     } finally {
       if (!this.#disposed && revision === this.#revision) this.loading = false;

@@ -8,21 +8,22 @@
   import { Switch } from "$lib/components/ui/switch";
   import { bubbleCorners, bubblePreview } from "../../../../lib/bubble";
   import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
+  import { m } from "$lib/paraglide/messages.js";
   import type { BubbleConfig } from "../../../../lib/ipc";
 
   const bubble = $derived<BubbleConfig>($settingsStore?.assistant?.bubble ?? {
     enabled: true, corner: "bottom-right", offsetY: 0, alsoDanmaku: false,
   });
   const offsets = [
-    { value: "0", label: "贴边" },
-    { value: "120", label: "往里挪一点（120）" },
-    { value: "240", label: "往里挪多些（240）" },
-    { value: "360", label: "离开小地图（360）" },
+    { value: "0", label: m.companion_bubble_offset_edge() },
+    { value: "120", label: m.companion_bubble_offset_120() },
+    { value: "240", label: m.companion_bubble_offset_240() },
+    { value: "360", label: m.companion_bubble_offset_360() },
   ];
   const offsetOptions = $derived(
     offsets.some((o) => o.value === String(bubble.offsetY))
       ? offsets
-      : [...offsets, { value: String(bubble.offsetY), label: `自定义（${bubble.offsetY}）` }],
+      : [...offsets, { value: String(bubble.offsetY), label: m.companion_bubble_offset_custom({ offset: bubble.offsetY }) }],
   );
 
   async function save(patch: Partial<BubbleConfig>, message: string) {
@@ -33,40 +34,40 @@
     try {
       await bubblePreview();
     } catch (error) {
-      toast(false, `预览失败：${errText(error)}`);
+      toast(false, m.companion_bubble_preview_failed({ error: errText(error) }));
     }
   }
 </script>
 
-<SettingsSection title="对话气泡" description="用语音说话时（呼叫、唤醒、她追问你），在游戏所在屏幕的角落显示她在听、在想、在说什么。鼠标会穿过气泡，不挡操作。" id="bubble-settings">
+<SettingsSection title={m.companion_bubble_title()} description={m.companion_bubble_desc()} id="bubble-settings">
   <div data-testid="bubble-settings" class="contents">
-    <SettingsRow label="显示对话气泡" description="关掉后只用声音和弹幕回答你；悬浮窗只属于语音输入，不会拿来显示她。">
+    <SettingsRow label={m.companion_bubble_enabled_label()} description={m.companion_bubble_enabled_desc()}>
       {#snippet control()}
-        <Switch data-testid="bubble-enabled" bind:checked={() => bubble.enabled, (checked) => void save({ enabled: checked }, checked ? "对话气泡已开启" : "对话气泡已关闭")} aria-label="显示对话气泡" />
+        <Switch data-testid="bubble-enabled" bind:checked={() => bubble.enabled, (checked) => void save({ enabled: checked }, checked ? m.companion_bubble_enabled_on() : m.companion_bubble_enabled_off())} aria-label={m.companion_bubble_enabled_label()} />
       {/snippet}
     </SettingsRow>
-    <SettingsRow label="位置" description="游戏全屏独占时气泡显示不出来，这时只听语音。">
+    <SettingsRow label={m.companion_bubble_corner_label()} description={m.companion_bubble_corner_desc()}>
       {#snippet control()}
         <div class="flex items-center gap-2">
           <div class="w-32 max-w-full">
-            <SelectField ariaLabel="气泡位置" value={bubble.corner} options={bubbleCorners}
-              onchange={(corner) => void save({ corner: corner as BubbleConfig["corner"] }, "气泡位置已保存")} />
+            <SelectField ariaLabel={m.companion_bubble_corner_aria()} value={bubble.corner} options={bubbleCorners}
+              onchange={(corner) => void save({ corner: corner as BubbleConfig["corner"] }, m.companion_bubble_position_saved())} />
           </div>
-          <Button size="sm" variant="outline" data-testid="bubble-preview" disabled={!bubble.enabled} onclick={() => void preview()}><Eye class="size-3.5" />试一下</Button>
+          <Button size="sm" variant="outline" data-testid="bubble-preview" disabled={!bubble.enabled} onclick={() => void preview()}><Eye class="size-3.5" />{m.companion_bubble_preview()}</Button>
         </div>
       {/snippet}
     </SettingsRow>
-    <SettingsRow label="离边缘的距离" description="右下角是小地图的游戏（比如英雄联盟），把气泡往屏幕中间挪开一些。">
+    <SettingsRow label={m.companion_bubble_offset_label()} description={m.companion_bubble_offset_desc()}>
       {#snippet control()}
         <div class="w-44 max-w-full">
-          <SelectField ariaLabel="气泡离边缘的距离" value={String(bubble.offsetY)} options={offsetOptions}
-            onchange={(v) => void save({ offsetY: Number(v) }, "气泡位置已保存")} />
+          <SelectField ariaLabel={m.companion_bubble_offset_aria()} value={String(bubble.offsetY)} options={offsetOptions}
+            onchange={(v) => void save({ offsetY: Number(v) }, m.companion_bubble_position_saved())} />
         </div>
       {/snippet}
     </SettingsRow>
-    <SettingsRow label="回答同时用弹幕" description="默认只在气泡里显示回答。定时提醒照旧用弹幕。">
+    <SettingsRow label={m.companion_bubble_danmaku_label()} description={m.companion_bubble_danmaku_desc()}>
       {#snippet control()}
-        <Switch data-testid="bubble-danmaku" bind:checked={() => bubble.alsoDanmaku, (checked) => void save({ alsoDanmaku: checked }, checked ? "回答会同时用弹幕" : "回答只在气泡里显示")} aria-label="回答同时用弹幕" />
+        <Switch data-testid="bubble-danmaku" bind:checked={() => bubble.alsoDanmaku, (checked) => void save({ alsoDanmaku: checked }, checked ? m.companion_bubble_danmaku_on() : m.companion_bubble_danmaku_off())} aria-label={m.companion_bubble_danmaku_label()} />
       {/snippet}
     </SettingsRow>
   </div>

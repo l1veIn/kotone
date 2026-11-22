@@ -1,0 +1,2 @@
+# Paraglide 编译时的缓存（生成，不进 git）
+cache/

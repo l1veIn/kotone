@@ -1,10 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { isTauri, type AssistantInteractionMode } from "./ipc";
+import { m } from "./paraglide/messages.js";
 
 export interface AssistantVoiceSession { sessionId: string; interactionMode: AssistantInteractionMode }
 export async function beginAssistantVoice(): Promise<AssistantVoiceSession> {
-  if (!isTauri) throw new Error("浏览器仅预览界面；请在桌面应用中使用语音输入。");
+  if (!isTauri) throw new Error(m.shell_assistant_voice_desktop_only());
   return invoke("assistant_voice_begin");
 }
 export async function endAssistantVoice(sessionId: string): Promise<void> {
@@ -46,11 +47,12 @@ export interface SpeechModelStatus {
 export async function getSpeechModelStatus(): Promise<SpeechModelStatus> {
   return isTauri ? invoke("get_speech_model_status") : {
     modelId: "kokoro-int8-multi-lang-v1_1", installed: false, downloading: false,
+    // i18n-ignore-start：浏览器预览的示例数据（真实应用里来自后端或玩家自己的数据），不是界面文字
     downloadedBytes: 0, totalBytes: 147031220, phase: "idle", error: null, modelDir: "界面预览",
   };
 }
 export async function downloadSpeechModel(): Promise<SpeechModelStatus> {
-  if (!isTauri) throw new Error("请在桌面应用中下载语音模型。");
+  if (!isTauri) throw new Error(m.shell_assistant_speech_download_desktop_only());
   return invoke("download_speech_model");
 }
 export async function cancelSpeechModelDownload(): Promise<void> {
@@ -70,7 +72,7 @@ let previewReminders: Reminder[] = [{
 const previewListeners = new Set<() => void>();
 
 export function addPreviewReminder(): void {
-  if (isTauri) throw new Error("桌面应用不使用预览提醒");
+  if (isTauri) throw new Error(m.shell_assistant_preview_reminder_desktop());
   const createdAtMs = Date.now();
   previewReminders = [{
     id: `preview-${crypto.randomUUID()}`, sessionId: "preview", text: "界面示例：该打小龙了",
@@ -91,7 +93,7 @@ export async function cancelReminder(id: string): Promise<boolean> {
   return true;
 }
 export async function submitAssistantText(text: string, legacyReminder?: boolean): Promise<AssistantPlan> {
-  if (!isTauri) throw new Error("浏览器仅预览界面；请在桌面应用中连接 AI 后创建提醒。");
+  if (!isTauri) throw new Error(m.shell_assistant_reminder_desktop_only());
   return invoke("assistant_submit_text", { text, legacyReminder });
 }
 export async function cancelAssistantRequest(): Promise<void> {
@@ -100,15 +102,16 @@ export async function cancelAssistantRequest(): Promise<void> {
 export async function listSpeechVoices(legacyReminder?: boolean): Promise<SpeechVoice[]> {
   return isTauri ? invoke("list_speech_voices", { legacyReminder }) : [
     {id:"kokoro/zf_001",name:"中文女声 001"}, {id:"kokoro/zf_003",name:"中文女声 003"}, {id:"kokoro/zf_017",name:"中文女声 017"},
+    // i18n-ignore-end
   ];
 }
 export async function previewReminder(kind: DeliveryKind, legacyReminder?: boolean): Promise<void> {
-  if (!isTauri) throw new Error("浏览器预览不播放语音或显示系统弹幕；请在桌面应用中测试。");
+  if (!isTauri) throw new Error(m.shell_assistant_preview_output_desktop_only());
   await invoke("preview_reminder", { kind, legacyReminder });
 }
 /** 呼叫琴音（和热键一样）：按一下就是通话（ADR 033），一直在听；通话中再按一下挂断。 */
 export async function callKotone(): Promise<void> {
-  if (!isTauri) throw new Error("呼叫仅限桌面版");
+  if (!isTauri) throw new Error(m.shell_assistant_call_desktop_only());
   await invoke("assistant_call");
 }
 /** 现在在不在和她通话（ADR 033）。 */

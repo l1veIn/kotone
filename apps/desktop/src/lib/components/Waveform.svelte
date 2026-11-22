@@ -5,6 +5,8 @@
    * 电平静默时退化为缓慢呼吸动画，提示「仍在聆听」。
    * 装饰动效经 app.css 全局 prefers-reduced-motion 降级。
    */
+  import { m } from "$lib/paraglide/messages.js";
+
   interface Props {
     /** RMS 电平（0..1，实际值通常远小于 1，内部做增益归一） */
     level?: number;
@@ -27,7 +29,7 @@
   }
 </script>
 
-<div class="flex h-8 items-center gap-[3px]" class:quiet class:paused={!active} aria-label="录音电平波形">
+<div class="flex h-8 items-center gap-[3px]" class:quiet class:paused={!active} aria-label={m.voice_waveform_label()}>
   {#each Array(bars) as _, i}
     <span
       class="bar w-[3px] rounded-full"

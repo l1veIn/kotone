@@ -10,6 +10,7 @@
    * 并提供一个快速验证路径（记事本）。可选 onRetry（如引导页的注入测试）。
    */
   import stickerAmazed from "../../assets/brand/stickers/amazed.webp";
+  import { m } from "$lib/paraglide/messages.js";
 
   let {
     onClose,
@@ -37,33 +38,30 @@
     <div class="flex items-start gap-4">
       <img src={stickerAmazed} alt="" class="h-14 w-14 shrink-0 object-contain" />
       <div class="min-w-0">
-        <h2 class="text-base font-bold">发送被系统拦截了</h2>
+        <h2 class="text-base font-bold">{m.game_injection_blocked_title()}</h2>
         <p class="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
-          Kotone 发出文字时，所有模拟按键都被系统拦截（0
-          次落地）。这不是目标程序的问题——此刻打开记事本也发不进去。通常是有软件在系统层面拦截模拟输入。
+          {m.game_injection_blocked_body()}
         </p>
       </div>
     </div>
 
     <div class="mt-4 rounded-lg bg-muted/40 p-3 ring-1 ring-hairline">
-      <p class="text-xs font-semibold text-foreground/90">按概率从高到低排查：</p>
+      <p class="text-xs font-semibold text-foreground/90">{m.game_injection_blocked_checklist_title()}</p>
       <ol class="mt-2 flex list-decimal flex-col gap-1.5 pl-4 text-[12px] leading-relaxed text-muted-foreground">
         <li>
-          <span class="font-semibold text-foreground/90">安全软件的「主动防御 / 键盘保护」</span>（电脑管家、360、火绒等）——退出该软件，或在设置里把
-          Kotone 加入信任列表
+          <span class="font-semibold text-foreground/90">{m.game_injection_blocked_security_software()}</span>{m.game_injection_blocked_security_software_hint()}
         </li>
         <li>
-          <span class="font-semibold text-foreground/90">游戏反作弊</span>（如 Riot
-          Vanguard）——从任务栏托盘完全退出后重试
+          <span class="font-semibold text-foreground/90">{m.game_injection_blocked_anticheat()}</span>{m.game_injection_blocked_anticheat_hint()}
         </li>
         <li>
-          <span class="font-semibold text-foreground/90">远程控制软件</span>（ToDesk、向日葵等）的输入保护——退出后重试
+          <span class="font-semibold text-foreground/90">{m.game_injection_blocked_remote_control()}</span>{m.game_injection_blocked_remote_control_hint()}
         </li>
       </ol>
     </div>
 
     <p class="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-      快速验证：打开记事本，再试一次发送。每退出一个可疑软件就试一次，能发进记事本就说明找到它了。
+      {m.game_injection_blocked_quick_check()}
     </p>
 
     <div class="mt-5 flex items-center justify-end gap-3">
@@ -72,7 +70,7 @@
         disabled={busy}
         onclick={onClose}
       >
-        知道了
+        {m.game_injection_blocked_close()}
       </button>
       {#if onRetry}
         <button
@@ -80,7 +78,7 @@
           disabled={busy}
           onclick={() => void handleRetry()}
         >
-          {busy ? "重试中…" : "重试发送"}
+          {busy ? m.game_injection_blocked_retrying() : m.game_injection_blocked_retry()}
         </button>
       {/if}
     </div>

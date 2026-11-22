@@ -3,6 +3,7 @@
   // 原来的「设置」分页整页搬进了「设置」的陪玩组（D11）：换角色时这些设置共用，不属于某个角色。
   // 顶栏参照 DeepSeek Harness 的会话头：页名 / 当前对话标题，右侧是进行中概况。
   import { companionName } from "$lib/stores/companion";
+  import { m } from "$lib/paraglide/messages.js";
   import { onMount, untrack } from "svelte";
   import { companionBindings, listConnections, type ConnectionInfo } from "../../../lib/ipc";
   import { usesLegacyVoiceInput } from "../../../lib/ipc/contracts";
@@ -40,7 +41,7 @@
   const ready = $derived(!legacy && !!connections.find((item) => item.id === companionBindings($settingsStore?.assistant)?.connectionId)?.hasApiKey);
   // ADR 028：角色页只留 角色（原“她是谁”）· 记忆 · 技能
   const tabs = [
-    { id: "identity", label: "角色" }, { id: "memory", label: "记忆" }, { id: "skills", label: "技能" },
+    { id: "identity", label: m.companion_page_tab_identity() }, { id: "memory", label: m.companion_page_tab_memory() }, { id: "skills", label: m.companion_page_tab_skills() },
   ] as const;
   const name = $derived($companionName);
 
@@ -59,7 +60,7 @@
 
   function refreshConnections() {
     void listConnections().then((items) => { connections = items; connectionError = ""; })
-      .catch((error) => { connectionError = `读取连接失败：${errText(error)}`; });
+      .catch((error) => { connectionError = m.companion_page_connections_load_failed({ error: errText(error) }); });
   }
   onMount(refreshConnections);
   // Key 卡片、设置页、琴音自己都可能改连接：跟着设置刷新。
@@ -77,18 +78,18 @@
       <div class="flex min-w-0 flex-1 items-center gap-2">
         <span class="shrink-0 text-muted-foreground/50" aria-hidden="true">/</span>
         <p class="m-0 min-w-0 truncate text-[13px] text-muted-foreground" data-testid="agent-conversation-title">
-          {chat.conversation?.title || "新对话"}
+          {chat.conversation?.title || m.companion_page_new_conversation()}
         </p>
-        {#if chat.runningHere}<span class="flex shrink-0 items-center gap-1.5 rounded-full bg-primary/12 px-2 py-0.5 text-[11px] text-primary" role="status"><span class="size-1.5 animate-pulse rounded-full bg-primary"></span>回答中</span>{/if}
+        {#if chat.runningHere}<span class="flex shrink-0 items-center gap-1.5 rounded-full bg-primary/12 px-2 py-0.5 text-[11px] text-primary" role="status"><span class="size-1.5 animate-pulse rounded-full bg-primary"></span>{m.companion_page_answering()}</span>{/if}
       </div>
       <div class="hidden min-w-0 lg:block"><OpenRunsSummary {onOpenAutomation} /></div>
       <!-- 右侧栏开关（ADR 031：网页与后台在做的事） -->
       <button type="button" data-testid="right-sidebar-toggle" aria-pressed={$rightSidebarOpen}
-        aria-label={$rightSidebarOpen ? "收起右侧栏" : "显示右侧栏：网页与后台在做的事"} title={$rightSidebarOpen ? "收起右侧栏" : "网页与后台在做的事"}
+        aria-label={$rightSidebarOpen ? m.companion_page_right_sidebar_hide() : m.companion_page_right_sidebar_show_label()} title={$rightSidebarOpen ? m.companion_page_right_sidebar_hide() : m.companion_page_right_sidebar_show_title()}
         class="flex size-7 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-muted {$rightSidebarOpen ? 'text-foreground' : 'text-muted-foreground'}"
         onclick={toggleRightSidebar}><PanelRight class="size-4" /></button>
     {:else}
-      <nav class="flex shrink-0 rounded-lg bg-muted/70 p-0.5" aria-label={`${name}分类`}>
+      <nav class="flex shrink-0 rounded-lg bg-muted/70 p-0.5" aria-label={m.companion_page_tabs_label({ name })}>
         {#each tabs as tab}
           {@const active = section === tab.id}
           <button type="button" data-testid={`assistant-nav-${tab.id}`} aria-current={active ? "page" : undefined}
@@ -97,7 +98,7 @@
         {/each}
       </nav>
       <div class="flex-1"></div>
-      <button type="button" class="shrink-0 text-xs text-muted-foreground hover:text-foreground" data-testid="assistant-open-settings" onclick={onOpenSettings}>{name}的设置在「设置」里 →</button>
+      <button type="button" class="shrink-0 text-xs text-muted-foreground hover:text-foreground" data-testid="assistant-open-settings" onclick={onOpenSettings}>{m.companion_page_open_settings({ name })}</button>
     {/if}
   </header>
   {#if connectionError}<p role="alert" class="mx-5 mt-3 text-xs text-destructive">{connectionError}</p>{/if}

@@ -3,6 +3,7 @@
   import { onMount } from "svelte";
   import { listRuns, subscribeAutomations, type AutomationRun } from "../../../../lib/automation";
   import { errText } from "../../../../lib/stores/ui";
+  import { m } from "$lib/paraglide/messages.js";
 
   let { onOpenAutomation }: { onOpenAutomation: () => void } = $props();
   let open = $state<AutomationRun[]>([]);
@@ -28,7 +29,7 @@
     let cleanup: (() => void) | undefined;
     void subscribeAutomations(() => { void refresh(); })
       .then((un) => { if (disposed) un(); else cleanup = un; })
-      .catch((error) => { if (!disposed) loadError = `状态订阅失败：${errText(error)}`; });
+      .catch((error) => { if (!disposed) loadError = m.companion_runs_subscribe_failed({ error: errText(error) }); });
     void refresh();
     return () => { disposed = true; refreshVersion++; cleanup?.(); };
   });
@@ -38,9 +39,9 @@
   {#if loadError}
     <span role="alert" class="truncate text-destructive">{loadError}</span>
   {:else}
-    <span class="truncate" title="停止识别不影响提醒；退出 Kotone 后不提醒。">
-      {open.length ? `进行中：${reminders} 条提醒、${programs} 个自动化` : "没有进行中的提醒或自动化"}
+    <span class="truncate" title={m.companion_runs_title()}>
+      {open.length ? m.companion_runs_summary({ reminders, programs }) : m.companion_runs_none()}
     </span>
   {/if}
-  <button type="button" class="shrink-0 text-primary hover:underline" onclick={onOpenAutomation}>在「自动化」里查看 →</button>
+  <button type="button" class="shrink-0 text-primary hover:underline" onclick={onOpenAutomation}>{m.companion_runs_open_automation()}</button>
 </div>

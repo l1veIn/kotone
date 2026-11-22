@@ -12,6 +12,7 @@ import { toast as sonner } from "svelte-sonner";
 import { writable } from "svelte/store";
 import { logFrontendError, updateSettings } from "../ipc";
 import type { Settings, SettingsPatch } from "../ipc";
+import { m } from "../paraglide/messages.js";
 
 export const settingsStore = writable<Settings | null>(null);
 /**
@@ -49,7 +50,7 @@ export async function patchSettings(
     toast(true, successMessage);
     return true;
   } catch (error) {
-    toast(false, `保存失败：${errText(error)}`);
+    toast(false, m.shell_toast_save_failed({ error: errText(error) }));
     return false;
   }
 }

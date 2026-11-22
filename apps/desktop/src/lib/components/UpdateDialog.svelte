@@ -2,6 +2,7 @@
   /** 琴音风格更新弹窗：发现新版、下载安装、重启确认共用同一张状态卡。 */
   import { tick } from "svelte";
   import { answerUpdateDialog, updateDialogStore } from "../updater";
+  import { m } from "$lib/paraglide/messages.js";
   import stickerProud from "../../assets/brand/stickers/proud.webp";
   import stickerCheering from "../../assets/brand/stickers/cheering.webp";
 
@@ -94,13 +95,13 @@
           <div class="flex flex-wrap items-center gap-2">
             <h2 id="update-dialog-title" class="text-lg font-bold">
               {#if dialog.phase === "available"}
-                发现 Kotone 新版本
+                {m.system_update_title_available()}
               {:else if dialog.phase === "downloading"}
-                正在更新 Kotone
+                {m.system_update_title_downloading()}
               {:else if dialog.phase === "ready"}
-                更新已经准备好
+                {m.system_update_title_ready()}
               {:else}
-                正在重新启动
+                {m.system_update_restarting()}
               {/if}
             </h2>
             <span
@@ -111,13 +112,13 @@
           </div>
           <p id="update-dialog-description" class="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
             {#if dialog.phase === "available"}
-              新版本已经就绪，可以直接从当前版本更新到最新版。
+              {m.system_update_description_available()}
             {:else if dialog.phase === "downloading"}
-              正在下载并安装完整更新包，请保持 Kotone 运行。
+              {m.system_update_description_downloading()}
             {:else if dialog.phase === "ready"}
-              安装已完成。重新启动 Kotone 后，新版本就会生效。
+              {m.system_update_description_ready()}
             {:else}
-              马上回来，请稍候片刻…
+              {m.system_update_description_restarting()}
             {/if}
           </p>
         </div>
@@ -127,7 +128,7 @@
         <div class="relative mt-5 rounded-xl bg-muted/40 p-4 ring-1 ring-hairline">
           <div class="mb-2 flex items-center gap-2">
             <span class="h-1.5 w-1.5 rounded-full bg-primary"></span>
-            <p class="text-xs font-bold text-foreground/90">本次更新</p>
+            <p class="text-xs font-bold text-foreground/90">{m.system_update_notes_title()}</p>
           </div>
           {#if dialog.notes}
             <div
@@ -135,14 +136,14 @@
               data-testid="update-notes"
             >{dialog.notes}</div>
           {:else}
-            <p class="text-[12px] text-muted-foreground">本次发布暂未提供更新说明。</p>
+            <p class="text-[12px] text-muted-foreground">{m.system_update_notes_empty()}</p>
           {/if}
         </div>
       {:else}
         <div class="relative mt-6" aria-live="polite">
           <div class="mb-2 flex items-center justify-between text-[11px] font-semibold">
             <span class="text-muted-foreground">
-              {dialog.phase === "downloading" ? "下载安装中" : "正在重新启动"}
+              {dialog.phase === "downloading" ? m.system_update_progress_downloading() : m.system_update_restarting()}
             </span>
             {#if dialog.phase === "downloading" && progressPercent !== null}
               <span class="text-primary" data-testid="update-progress">{progressPercent}%</span>
@@ -169,21 +170,21 @@
             class="text-[11px] text-muted-foreground/80 underline-offset-2 transition hover:text-muted-foreground hover:underline"
             onclick={() => answerUpdateDialog("never")}
           >
-            不再提醒
+            {m.system_update_never_button()}
           </button>
           <div class="ml-auto flex items-center gap-3">
             <button
               class="rounded-lg bg-muted/70 px-4 py-2 text-xs font-semibold text-muted-foreground ring-1 ring-hairline transition hover:bg-muted hover:text-foreground"
               onclick={() => answerUpdateDialog("later")}
             >
-              稍后更新
+              {m.system_update_later_button()}
             </button>
             <button
               data-update-primary
               class="rounded-lg bg-brand-pink px-5 py-2 text-xs font-bold text-white transition hover:brightness-110 active:scale-95"
               onclick={() => answerUpdateDialog("primary")}
             >
-              立即更新
+              {m.system_update_now_button()}
             </button>
           </div>
         </div>
@@ -193,14 +194,14 @@
             class="rounded-lg bg-muted/70 px-4 py-2 text-xs font-semibold text-muted-foreground ring-1 ring-hairline transition hover:bg-muted hover:text-foreground"
             onclick={() => answerUpdateDialog("later")}
           >
-            稍后重启
+            {m.system_update_restart_later_button()}
           </button>
           <button
             data-update-primary
             class="rounded-lg bg-primary px-5 py-2 text-xs font-bold text-primary-foreground transition hover:brightness-110 active:scale-95"
             onclick={() => answerUpdateDialog("primary")}
           >
-            立即重启
+            {m.system_update_restart_now_button()}
           </button>
         </div>
       {/if}

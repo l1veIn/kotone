@@ -10,6 +10,7 @@
   // 没有 AI 连接 → Key 卡片（和引导里填 Key 的是同一个组件，照 DSH“回到空白会话就检查有没有 Key”）；
   // 已配置 → 呼叫按钮下面写当前的触发方式；用本地识别且没启动 → 呼叫按钮上方一行状态。
   import { companionName } from "$lib/stores/companion";
+  import { m } from "$lib/paraglide/messages.js";
   import { CircleAlert, Eye } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import { isTauri } from "../../../../lib/ipc";
@@ -78,7 +79,7 @@
     if (startingAsr) return;
     startingAsr = true;
     try { await startRuntime(); }
-    catch (error) { toast(false, `本地语音识别没能启动：${errText(error)}`); }
+    catch (error) { toast(false, m.chat_local_asr_start_failed({ error: errText(error) })); }
     finally { startingAsr = false; }
   }
   // 这段对话里模型以外的花费（语音、读屏、搜索；本机账本）：答完读一次。回答是答完才念的，
@@ -112,7 +113,7 @@
     sendNotice = "";
     try {
       const status = await chat.send(text);
-      if (status === "steered") sendNotice = "已插话：做完当前这一步就会看到。";
+      if (status === "steered") sendNotice = m.chat_send_steered();
       return true;
     } catch (error) {
       sendError = errText(error);
@@ -123,7 +124,7 @@
   async function stop() {
     stopping = true;
     try { await chat.stop(); }
-    catch (error) { toast(false, `停止失败：${errText(error)}`); }
+    catch (error) { toast(false, m.chat_stop_request_failed({ error: errText(error) })); }
     finally { stopping = false; }
   }
 
@@ -161,22 +162,22 @@
       <div class="space-y-2" data-testid="agent-stray-asks">
         {#each strayAsks as ask (ask.askId)}
           <div class="flex flex-wrap items-center gap-2 rounded-2xl border border-warning/45 bg-composer px-4 py-2.5 text-[13px]" data-testid="agent-ask" data-ask-id={ask.askId}>
-            <span class="min-w-0 flex-1">需要你确认：<strong class="font-medium">{ask.request.title}</strong>{#if ask.request.reason}<span class="text-muted-foreground"> · {ask.request.reason}</span>{/if}</span>
-            <Button size="sm" data-testid="agent-ask-allow-once" onclick={() => void chat.answer(ask.askId, "allow-once")}>允许</Button>
-            <Button size="sm" variant="outline" data-testid="agent-ask-allow-conversation" onclick={() => void chat.answer(ask.askId, "allow-for-conversation")}>本段对话都允许</Button>
-            <Button size="sm" variant="ghost" class="text-destructive hover:bg-destructive/10" data-testid="agent-ask-deny" onclick={() => void chat.answer(ask.askId, "deny")}>拒绝</Button>
+            <span class="min-w-0 flex-1">{m.chat_ask_confirm_prefix()}<strong class="font-medium">{ask.request.title}</strong>{#if ask.request.reason}<span class="text-muted-foreground"> · {ask.request.reason}</span>{/if}</span>
+            <Button size="sm" data-testid="agent-ask-allow-once" onclick={() => void chat.answer(ask.askId, "allow-once")}>{m.chat_ask_allow_once()}</Button>
+            <Button size="sm" variant="outline" data-testid="agent-ask-allow-conversation" onclick={() => void chat.answer(ask.askId, "allow-for-conversation")}>{m.chat_ask_allow_conversation()}</Button>
+            <Button size="sm" variant="ghost" class="text-destructive hover:bg-destructive/10" data-testid="agent-ask-deny" onclick={() => void chat.answer(ask.askId, "deny")}>{m.chat_ask_deny()}</Button>
           </div>
         {/each}
       </div>
     {/if}
-    {#if chat.conversation?.parent}<p role="note" class="m-0 px-2 text-xs text-muted-foreground" data-testid="agent-child-notice">这是子会话「{chat.conversation.label ?? ""}」的记录，只能查看；在这里发消息会开始新对话。</p>{/if}
+    {#if chat.conversation?.parent}<p role="note" class="m-0 px-2 text-xs text-muted-foreground" data-testid="agent-child-notice">{m.chat_child_notice({ label: chat.conversation.label ?? "" })}</p>{/if}
     {#if sendError}<p role="alert" class="m-0 px-2 text-xs text-destructive" data-testid="agent-send-error">{sendError}</p>{/if}
     {#if sendNotice}<p role="status" class="m-0 px-2 text-xs text-primary" data-testid="agent-send-notice">{sendNotice}</p>{/if}
     <ChatComposer
       bind:value={draft}
       bind:textarea
       disabled={inputBusy}
-      blockedReason={notReady ? "还没准备好" : ""}
+      blockedReason={notReady ? m.chat_composer_not_ready() : ""}
       running={chat.running}
       {stopping}
       onsubmit={submit}
@@ -201,15 +202,15 @@
     <div class="mx-auto w-full max-w-[808px] space-y-2 px-6 pt-4">
       {#if browserPreview}
         <p role="status" class="m-0 flex items-center gap-2 rounded-xl border border-warning/30 bg-warning/8 px-3.5 py-2 text-xs text-warning" data-testid="agent-preview-banner">
-          <Eye class="size-3.5 shrink-0" />界面预览：显示的是示例对话，不会真的调用 AI。
+          <Eye class="size-3.5 shrink-0" />{m.chat_preview_banner()}
         </p>
       {/if}
       {#if notReady}
         <div class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-destructive/35 bg-destructive/8 px-3.5 py-2.5 text-[13px]" data-testid="agent-not-ready">
           <CircleAlert class="size-4 shrink-0 text-destructive" />
-          <span class="font-medium text-destructive">{$companionName}还没准备好</span>
+          <span class="font-medium text-destructive">{m.chat_not_ready_title({ name: $companionName })}</span>
           <span class="min-w-0 flex-1 text-foreground/80">{notReady}</span>
-          <Button variant="link" size="sm" class="h-auto p-0" data-testid="agent-open-settings" onclick={onOpenSettings}>前往设置 →</Button>
+          <Button variant="link" size="sm" class="h-auto p-0" data-testid="agent-open-settings" onclick={onOpenSettings}>{m.chat_open_settings()}</Button>
         </div>
       {/if}
       {#if chat.loadError}<p role="alert" class="m-0 text-xs text-destructive">{chat.loadError}</p>{/if}
@@ -222,9 +223,9 @@
       <div class="flex w-full max-w-[680px] flex-col items-center text-center" data-testid="chat-unconfigured">
         <div class="mb-4 rounded-full shadow-[0_0_40px_-8px_var(--color-primary)]"><KotoneAvatar size={72} mood="asking" custom={$customAvatar} faces={$roleFaces} letter={$avatarLetter} /></div>
         <DeepSeekKeyForm variant="card" testid="chat-key" onConnected={onKeyConnected} />
-        <p class="mt-4 mb-0 text-xs text-muted-foreground">用别的服务商？<button class="text-primary hover:underline" data-testid="chat-open-connections" onclick={onOpenConnections}>设置 → API 连接</button></p>
+        <p class="mt-4 mb-0 text-xs text-muted-foreground">{m.chat_other_provider()}<button class="text-primary hover:underline" data-testid="chat-open-connections" onclick={onOpenConnections}>{m.chat_open_connections()}</button></p>
         {#if legacy}
-          <p class="mt-1.5 mb-0 text-xs text-muted-foreground">只用语音输入法？<button class="text-primary hover:underline" data-testid="chat-back-to-voice" onclick={onBackToVoice}>回到语音输入</button></p>
+          <p class="mt-1.5 mb-0 text-xs text-muted-foreground">{m.chat_voice_only()}<button class="text-primary hover:underline" data-testid="chat-back-to-voice" onclick={onBackToVoice}>{m.chat_back_to_voice()}</button></p>
         {/if}
       </div>
     </div>
@@ -237,10 +238,10 @@
           {#if localPending}
             <div class="mb-3 flex flex-wrap items-center justify-center gap-2 text-xs" data-testid="chat-local-asr">
               <span class="rounded-full border px-2.5 py-0.5 {asr === 'local-error' ? 'border-destructive/50 text-destructive' : 'border-warning/50 text-warning'}">
-                本地语音识别 · {LOCAL_ASR_LABELS[asr as keyof typeof LOCAL_ASR_LABELS]}{asr === "local-starting" ? "…" : ""}
+                {m.chat_local_asr_status({ status: LOCAL_ASR_LABELS[asr as keyof typeof LOCAL_ASR_LABELS] })}{asr === "local-starting" ? "…" : ""}
               </span>
               {#if asr !== "local-starting"}
-                <Button size="sm" variant="outline" class="h-7" disabled={startingAsr} data-testid="chat-local-asr-start" onclick={() => void startLocal()}>{asr === "local-error" ? "重试" : "启动"}</Button>
+                <Button size="sm" variant="outline" class="h-7" disabled={startingAsr} data-testid="chat-local-asr-start" onclick={() => void startLocal()}>{asr === "local-error" ? m.chat_local_asr_retry() : m.chat_local_asr_start()}</Button>
               {/if}
             </div>
           {/if}

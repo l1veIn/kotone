@@ -7,6 +7,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { Check, Copy } from "@lucide/svelte";
+  import { m } from "$lib/paraglide/messages.js";
   import type { CategoryTotals, TokenUsage } from "../agent";
   import { formatCost, formatHitRate, formatTokens, totalsMoney } from "./timeline";
 
@@ -23,15 +24,15 @@
     const parts: string[] = [];
     if (usage?.inputTokens !== undefined) {
       const rate = usage.cachedInputTokens !== undefined ? formatHitRate(usage.cachedInputTokens, usage.inputTokens) : "";
-      parts.push(`输入 ${formatTokens(usage.inputTokens)}${rate ? `（命中缓存 ${rate}）` : ""}`);
+      parts.push(`${m.chat_usage_input({ count: formatTokens(usage.inputTokens) })}${rate ? m.chat_usage_cache_hit({ rate }) : ""}`);
     }
-    if (usage?.outputTokens !== undefined) parts.push(`输出 ${formatTokens(usage.outputTokens)}`);
+    if (usage?.outputTokens !== undefined) parts.push(m.chat_usage_output({ count: formatTokens(usage.outputTokens) }));
     const tokens = parts.length ? `${parts.join(" · ")} tokens` : "";
     const money = !usage ? "" : usage.cost !== undefined ? formatCost(usage.cost, usage.currency) : formatCost(usage.costUsd, "USD");
     const extras = extraCosts.map((c) => `${c.label} ${totalsMoney(c.totals) || "—"}`);
-    if (!extras.length) return tokens ? `${tokens}${money ? ` · 约 ${money}` : ""}` : "";
+    if (!extras.length) return tokens ? `${tokens}${money ? ` · ${m.chat_usage_approx({ money })}` : ""}` : "";
     // 模型以外还有花费：分开列出（对话 ¥… · 语音 ¥… · 读屏 ¥…）。
-    const costs = [...(money ? [`对话 ${money}`] : []), ...extras].join(" · ");
+    const costs = [...(money ? [m.chat_usage_chat_cost({ money })] : []), ...extras].join(" · ");
     return tokens ? `${tokens} · ${costs}` : costs;
   });
 
@@ -50,12 +51,12 @@
 {#if copyText.trim() || time || usageText}
   <footer class="-ml-1 flex flex-wrap items-center gap-1 text-xs text-muted-foreground/80" data-testid="agent-turn-footer">
     {#if copyText.trim()}
-      <button type="button" class="flex size-7 items-center justify-center rounded-lg transition-colors hover:bg-muted hover:text-foreground" aria-label={copied ? "已复制" : "复制回答"} title={copied ? "已复制" : "复制回答"} onclick={copy}>
+      <button type="button" class="flex size-7 items-center justify-center rounded-lg transition-colors hover:bg-muted hover:text-foreground" aria-label={copied ? m.chat_footer_copied() : m.chat_footer_copy()} title={copied ? m.chat_footer_copied() : m.chat_footer_copy()} onclick={copy}>
         {#if copied}<Check class="size-3.5 text-success" />{:else}<Copy class="size-3.5" />{/if}
       </button>
     {/if}
     {#if time}<time class="px-1 tabular-nums">{time}</time>{/if}
     {#if usageText}<span class="rounded-full bg-muted/60 px-2 py-0.5 tabular-nums" data-testid="agent-turn-usage">{usageText}</span>{/if}
-    {#if failed}<span role="alert">复制失败</span>{/if}
+    {#if failed}<span role="alert">{m.chat_footer_copy_failed()}</span>{/if}
   </footer>
 {/if}

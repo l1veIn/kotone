@@ -9,6 +9,7 @@
     type ModelInstallGuide,
   } from "../ipc";
   import { toast, toastInfo, errText } from "../stores/ui";
+  import { m } from "$lib/paraglide/messages.js";
   import stickerThinking from "../../assets/brand/stickers/thinking.webp";
 
   let {
@@ -36,7 +37,7 @@
     try {
       await openExternal(guide.pageUrl);
     } catch (e) {
-      toast(false, `打开下载页失败：${errText(e)}`);
+      toast(false, m.system_manual_download_open_page_failed({ error: errText(e) }));
     }
   }
 
@@ -44,7 +45,7 @@
     try {
       await openModelDestDir(guide.id);
     } catch (e) {
-      toast(false, `打开目标文件夹失败：${errText(e)}`);
+      toast(false, m.system_manual_download_open_folder_failed({ error: errText(e) }));
     }
   }
 
@@ -53,9 +54,9 @@
     copying = true;
     try {
       await navigator.clipboard.writeText(guide.destDir);
-      toastInfo("已复制目标目录路径");
+      toastInfo(m.system_manual_download_path_copied());
     } catch (e) {
-      toast(false, `复制失败：${errText(e)}`);
+      toast(false, m.system_manual_download_copy_failed({ error: errText(e) }));
     } finally {
       copying = false;
     }
@@ -70,9 +71,9 @@
     <div class="flex items-start gap-4">
       <img src={stickerThinking} alt="" class="h-14 w-14 shrink-0 object-contain" />
       <div class="min-w-0">
-        <h2 class="text-base font-bold">自动下载失败，改手动安装</h2>
+        <h2 class="text-base font-bold">{m.system_manual_download_title()}</h2>
         <p class="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
-          「{guide.displayName}」没能从镜像或官方源下完。用浏览器自己下载，再放进指定目录即可。
+          {m.system_manual_download_body({ name: guide.displayName })}
         </p>
       </div>
     </div>
@@ -85,27 +86,27 @@
 
     <ol class="mt-4 flex list-decimal flex-col gap-2 pl-4 text-[12px] leading-relaxed text-muted-foreground">
       <li>
-        点「打开下载页」，从 Hugging Face / GitHub 下载下面这些文件（国内打不开就换网络或代理）。
+        {m.system_manual_download_step_open_page()}
       </li>
-      <li>文件名和子目录不要改，例如 <span class="text-foreground/90">Qwen3-0.6B/merges.txt</span> 要保持这个相对路径。</li>
-      <li>点「打开目标文件夹」，把文件放进去。</li>
-      <li>回到这里点「我已放好」，Kotone 会重新检测。</li>
+      <li>{m.system_manual_download_step_keep_names_before()} <span class="text-foreground/90">Qwen3-0.6B/merges.txt</span> {m.system_manual_download_step_keep_names_after()}</li>
+      <li>{m.system_manual_download_step_open_folder()}</li>
+      <li>{m.system_manual_download_step_recheck()}</li>
     </ol>
 
     <div class="mt-3 rounded-lg bg-muted/40 p-3 ring-1 ring-hairline">
       <div class="flex items-start justify-between gap-2">
         <div class="min-w-0">
-          <p class="text-[10px] font-semibold tracking-wide text-muted-foreground/80">放到这个目录</p>
+          <p class="text-[10px] font-semibold tracking-wide text-muted-foreground/80">{m.system_manual_download_dest_label()}</p>
           <p class="mt-0.5 break-all font-mono text-[11px] text-foreground/90">{guide.destDir}</p>
         </div>
         <button
           class="shrink-0 rounded-lg bg-muted/70 px-2.5 py-1 text-[11px] text-muted-foreground ring-1 ring-hairline transition hover:bg-muted"
           onclick={() => void copyPath()}
         >
-          {copying ? "复制中…" : "复制路径"}
+          {copying ? m.system_manual_download_copying() : m.system_manual_download_copy_path_button()}
         </button>
       </div>
-      <p class="mt-3 text-[10px] font-semibold tracking-wide text-muted-foreground/80">需要这些文件</p>
+      <p class="mt-3 text-[10px] font-semibold tracking-wide text-muted-foreground/80">{m.system_manual_download_files_label()}</p>
       <ul class="mt-1 max-h-28 overflow-y-auto text-[11px] text-muted-foreground">
         {#each guide.files as file}
           <li class="truncate py-0.5">
@@ -121,26 +122,26 @@
         class="rounded-lg bg-muted/70 px-3 py-2 text-xs font-semibold text-foreground/90 ring-1 ring-hairline transition hover:bg-muted"
         onclick={onClose}
       >
-        关闭
+        {m.system_common_close()}
       </button>
       <button
         class="rounded-lg bg-muted/70 px-3 py-2 text-xs font-semibold text-foreground/90 ring-1 ring-hairline transition hover:bg-muted"
         onclick={() => void openFolder()}
       >
-        打开目标文件夹
+        {m.system_manual_download_open_folder_button()}
       </button>
       <button
         class="rounded-lg bg-muted/70 px-3 py-2 text-xs font-semibold text-foreground/90 ring-1 ring-hairline transition hover:bg-muted"
         onclick={() => void openPage()}
       >
-        打开下载页
+        {m.system_common_open_download_page()}
       </button>
       {#if onRecheck}
         <button
           class="rounded-lg bg-primary/20 px-3 py-2 text-xs font-semibold text-primary ring-1 ring-primary/40 transition hover:bg-primary/30"
           onclick={onRecheck}
         >
-          我已放好
+          {m.system_manual_download_recheck_button()}
         </button>
       {/if}
       {#if onRetry}
@@ -148,7 +149,7 @@
           class="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:brightness-110 active:scale-95"
           onclick={onRetry}
         >
-          再试自动下载
+          {m.system_manual_download_retry_button()}
         </button>
       {/if}
     </div>

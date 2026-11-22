@@ -49,6 +49,7 @@
   import patternBubble from "../../../assets/brand/patterns/bubble.webp";
   import patternSwitch from "../../../assets/brand/patterns/switch.webp";
   import patternWave from "../../../assets/brand/patterns/wave.webp";
+  import { m } from "$lib/paraglide/messages.js";
   let { onBack }: { onBack: () => void } = $props();
 
   /** 滚动进入视口时淡入上移（一次性，与关于页同一模式） */
@@ -67,18 +68,18 @@
   }
 
   const sections = [
-    { num: "01", title: "面板数据", sub: "STAT" },
-    { num: "02", title: "她的故事", sub: "STORY" },
-    { num: "03", title: "性格与弱点", sub: "PERSONA" },
-    { num: "04", title: "世界 · 中继站", sub: "WORLD" },
-    { num: "05", title: "趣闻档案", sub: "FACTS" },
-    { num: "06", title: "招牌技能", sub: "SKILLS" },
-    { num: "07", title: "喜好", sub: "LIKES" },
-    { num: "08", title: "装备收藏", sub: "GEAR" },
-    { num: "09", title: "贴纸画廊", sub: "STICKERS" },
-    { num: "10", title: "海报墙", sub: "GALLERY" },
-    { num: "11", title: "名台词", sub: "VOICE" },
-    { num: "12", title: "招牌元素", sub: "BRAND" },
+    { num: "01", title: m.role_character_section_stats(), sub: "STAT" },
+    { num: "02", title: m.role_character_section_story(), sub: "STORY" },
+    { num: "03", title: m.role_character_section_persona(), sub: "PERSONA" },
+    { num: "04", title: m.role_character_section_world(), sub: "WORLD" },
+    { num: "05", title: m.role_character_section_facts(), sub: "FACTS" },
+    { num: "06", title: m.role_character_section_skills(), sub: "SKILLS" },
+    { num: "07", title: m.role_character_section_likes(), sub: "LIKES" },
+    { num: "08", title: m.role_character_section_gear(), sub: "GEAR" },
+    { num: "09", title: m.role_character_section_stickers(), sub: "STICKERS" },
+    { num: "10", title: m.role_character_section_gallery(), sub: "GALLERY" },
+    { num: "11", title: m.role_character_section_voice(), sub: "VOICE" },
+    { num: "12", title: m.role_character_section_brand(), sub: "BRAND" },
   ] as const;
 
   /** 弹幕跑马灯轨道（首尾相接两份，CSS 平移循环） */
@@ -88,6 +89,7 @@
   const gear = [
     {
       src: propKeycap,
+      // i18n-ignore-start：琴音的角色设定（道具、贴纸、海报、配色），和 persona.ts 同源
       name: "键帽吊坠",
       desc: "封存 Cherry MX 青轴轴心的手工滴胶",
     },
@@ -153,6 +155,7 @@
     { hex: "#FF2D78", name: "品红", role: "强调 · 交互反馈" },
     { hex: "#7B2FFF", name: "紫", role: "点缀" },
     { hex: "#1A1A2E", name: "蓝黑", role: "暗色背景基调" },
+      // i18n-ignore-end
   ];
 </script>
 
@@ -181,7 +184,7 @@
             stroke-linejoin="round"
           />
         </svg>
-        返回关于
+        {m.role_character_back()}
       </button>
       <span
         class="text-[10px] font-semibold tracking-[0.22em] text-primary/60"
@@ -196,7 +199,7 @@
     <!-- 分区跳转芯片条（横向滚动） -->
     <nav
       class="kotone-scroll flex gap-1.5 overflow-x-auto px-5 pt-1 pb-2"
-      aria-label="档案分区"
+      aria-label={m.role_character_sections_nav()}
     >
       {#each sections as s}
         <button
@@ -226,7 +229,7 @@
     <div class="relative mt-10">
       <img
         src={cutout}
-        alt="Kotone 琴音 立绘"
+        alt={m.role_character_cutout_alt()}
         class="h-64 object-contain drop-shadow-[0_0_36px_rgba(0,229,255,0.35)]"
       />
       <img
@@ -249,6 +252,7 @@
       />
     </div>
 
+    <!-- i18n-ignore-start：琴音的角色设定（标语、名字、口头禅），和 persona.ts 同源 -->
     <p
       class="mt-3 text-[11px] font-semibold tracking-[0.18em] text-primary/80"
     >
@@ -265,6 +269,7 @@
       class="mt-3 rounded-full bg-brand-pink/12 px-4 py-1.5 text-[13px] font-bold text-brand-pink ring-1 ring-brand-pink/30"
       >「收到，已发送！✨」</span
     >
+    <!-- i18n-ignore-end -->
 
     <div class="mt-4 flex flex-wrap justify-center gap-2">
       {#each heroChips as chip}
@@ -343,7 +348,7 @@
       <div class="relative">
         <img
           src={relayRoom}
-          alt="中继站——琴音的直播间"
+          alt={m.role_character_relay_room_alt()}
           class="h-44 w-full object-cover"
         />
         <div
@@ -441,7 +446,7 @@
           <div class="aspect-square bg-white">
             <img
               src={g.src}
-              alt="琴音的装备·{g.name}"
+              alt={m.role_character_gear_alt({ name: g.name })}
               class="h-full w-full object-cover"
               loading="lazy"
             />
@@ -465,7 +470,7 @@
         >
           <img
             src={s.src}
-            alt="琴音贴纸·{s.name}"
+            alt={m.role_character_sticker_alt({ name: s.name })}
             class="h-16 w-16 object-contain"
             loading="lazy"
           />
@@ -524,17 +529,17 @@
     {@render secHead(sections[11])}
     <div use:reveal class="reveal mt-3">
       <div class="grid grid-cols-3 gap-3">
-        {#each motifs as m}
+        {#each motifs as motif}
           <div class="rounded-xl border border-hairline bg-card overflow-hidden">
             <div
               class="h-16 ring-1 ring-hairline"
-              style:background-image="url({m.img})"
+              style:background-image="url({motif.img})"
               style:background-size="96px"
             ></div>
             <div class="p-3">
-              <p class="text-xs font-semibold">{m.name}</p>
+              <p class="text-xs font-semibold">{motif.name}</p>
               <p class="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                {m.desc}
+                {motif.desc}
               </p>
             </div>
           </div>
@@ -574,8 +579,7 @@
 
     <!-- 档案页脚 -->
     <p class="mt-6 text-center text-[10px] leading-relaxed text-muted-foreground/75">
-      CHARACTER FILE · KOTONE<br />档案由 repochan persona 协议生成 ·
-      贴纸与立绘版权归 Kotone 项目
+      CHARACTER FILE · KOTONE<br />{m.role_character_footer()}
     </p>
   </div>
 </div>

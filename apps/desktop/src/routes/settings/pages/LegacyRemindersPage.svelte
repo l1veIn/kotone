@@ -5,6 +5,7 @@
   import ReminderTasks from "./assistant/ReminderTasks.svelte";
   import LegacyReminderSettings from "./assistant/LegacyReminderSettings.svelte";
   import SettingsPage from "$lib/components/settings/SettingsPage.svelte";
+  import { m } from "$lib/paraglide/messages.js";
   import "./assistant/legacy-reminders.css";
 
   let { onOpenConnections }: { onOpenConnections: () => void } = $props();
@@ -12,19 +13,19 @@
   let connections = $state<ConnectionInfo[]>([]);
   let connectionError = $state("");
   const ready = $derived(!!connections.find((item) => item.id === $settingsStore?.assistant.connectionId)?.hasApiKey);
-  const tabs = [{ id: "tasks", label: "待办提醒" }, { id: "settings", label: "提醒设置" }] as const;
+  const tabs = [{ id: "tasks", label: m.misc_legacy_reminders_tab_tasks() }, { id: "settings", label: m.misc_legacy_reminders_tab_settings() }] as const;
 
   onMount(() => {
     let disposed = false;
     void listConnections().then((items) => { if (!disposed) connections = items; })
-      .catch((error) => { if (!disposed) connectionError = `读取连接失败：${errText(error)}`; });
+      .catch((error) => { if (!disposed) connectionError = m.misc_legacy_reminders_connections_failed({ error: errText(error) }); });
     return () => { disposed = true; };
   });
 </script>
 
-<SettingsPage title="提醒助手" testid="legacy-reminders-page">
+<SettingsPage title={m.misc_legacy_reminders_title()} testid="legacy-reminders-page">
 <div class="legacy-reminders">
-  <nav class="mt-4 flex flex-wrap gap-1.5" aria-label="提醒助手分类">
+  <nav class="mt-4 flex flex-wrap gap-1.5" aria-label={m.misc_legacy_reminders_nav_aria()}>
     {#each tabs as tab}
       {@const active = section === tab.id}
       <button type="button" data-testid={`assistant-nav-${tab.id}`} aria-current={active ? "page" : undefined}

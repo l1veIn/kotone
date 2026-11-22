@@ -31,6 +31,7 @@
   import SelectField from "$lib/components/settings/SelectField.svelte";
   import ToggleField from "$lib/components/settings/ToggleField.svelte";
   import { errText, patchSettings, settingsStore, toast } from "../../../lib/stores/ui";
+  import { m } from "$lib/paraglide/messages.js";
 
   let { onOpenConnections }: { onOpenConnections?: () => void } = $props();
 
@@ -39,7 +40,7 @@
   let connections = $state<ConnectionInfo[]>([]);
   let saving = $state(false);
   let adding = $state(false);
-  let testInput = $state("对面那个傻逼打野太牛逼了");
+  let testInput = $state(m.voice_processing_sample_input());
   let testing = $state(false);
   let tryoutResult = $state<PostProcessingTestResult | null>(null);
 
@@ -66,7 +67,7 @@
     try {
       [processors, connections] = await Promise.all([listPostProcessors(), listConnections()]);
     } catch (error) {
-      toast(false, `加载文字处理模块失败：${errText(error)}`);
+      toast(false, m.voice_processing_load_failed({ error: errText(error) }));
     } finally {
       loadingProcessors = false;
     }
@@ -79,20 +80,20 @@
   function categoryLabel(category: PostProcessorInfo["category"]): string {
     switch (category) {
       case "writing":
-        return "表达";
+        return m.voice_processing_category_writing();
       case "translation":
-        return "语言";
+        return m.voice_processing_category_translation();
       case "utility":
-        return "基础处理";
+        return m.voice_processing_category_utility();
       default:
-        return "开发测试";
+        return m.voice_processing_category_developer();
     }
   }
 
   function accessLabel(access: PostProcessorInfo["networkAccess"]): string {
-    if (access === "internet") return "需要联网";
-    if (access === "local") return "访问本地资源";
-    return "完全离线";
+    if (access === "internet") return m.voice_processing_access_internet();
+    if (access === "local") return m.voice_processing_access_local();
+    return m.voice_processing_access_offline();
   }
 
   function nextStepId(processorId: string): string {
@@ -177,8 +178,8 @@
   function pipelineLabel(item: PipelineConfig): string {
     const name = item.displayName.trim();
     if (name) return name;
-    if (item.id === "blocklist") return "屏蔽词";
-    return item.id === "default" ? "自定义" : item.id;
+    if (item.id === "blocklist") return m.voice_pipeline_blocklist_name();
+    return item.id === "default" ? m.voice_pipeline_default_name() : item.id;
   }
 
   function nextPipelineId(): string {
@@ -192,15 +193,15 @@
   function nextPipelineName(): string {
     const names = new Set(pipelines.map((item) => pipelineLabel(item)));
     let index = pipelines.length + 1;
-    let name = `流程 ${index}`;
-    while (names.has(name)) name = `流程 ${++index}`;
+    let name = m.voice_processing_pipeline_name({ number: index });
+    while (names.has(name)) name = m.voice_processing_pipeline_name({ number: ++index });
     return name;
   }
 
   async function switchPipeline(id: string) {
     if (id === postProcessing.activePipelineId) return;
     renaming = false;
-    await savePostProcessing(configWithPipelines({ activePipelineId: id }), "已切换处理流程");
+    await savePostProcessing(configWithPipelines({ activePipelineId: id }), m.voice_processing_switched());
   }
 
   async function addPipeline() {
@@ -213,7 +214,7 @@
         activePipelineId: id,
         pipelines: [...pipelines, next],
       }),
-      `已新建：${next.displayName}`,
+      m.voice_processing_created({ name: next.displayName }),
     );
   }
 
@@ -238,7 +239,7 @@
       ),
     });
     renaming = false;
-    await savePostProcessing(next, "流程名称已更新");
+    await savePostProcessing(next, m.voice_processing_renamed());
   }
 
   async function deletePipeline(id: string) {
@@ -255,7 +256,7 @@
             : postProcessing.activePipelineId,
         pipelines: remaining,
       }),
-      `已删除：${pipelineLabel(target)}`,
+      m.voice_processing_deleted({ name: pipelineLabel(target) }),
     );
   }
 
@@ -266,7 +267,7 @@
     }
     const next = configWithSteps([...pipeline]);
     next.enabled = nextEnabled;
-    await savePostProcessing(next, nextEnabled ? "文字处理已开启" : "文字处理已关闭");
+    await savePostProcessing(next, nextEnabled ? m.voice_pp_notice_enabled() : m.voice_pp_notice_disabled());
   }
 
   async function addProcessor(processor: PostProcessorInfo) {
@@ -283,8 +284,8 @@
     const next = configWithSteps([...pipeline, step]);
     next.enabled = true;
     const message = needsConfiguration
-      ? `已添加：${processor.displayName}，请完成必填配置`
-      : `已添加：${processor.displayName}`;
+      ? m.voice_processing_added_needs_config({ name: processor.displayName })
+      : m.voice_processing_added({ name: processor.displayName });
     if (await savePostProcessing(next, message)) adding = false;
   }
 
@@ -299,10 +300,10 @@
     const step = pipeline[index];
     const processor = descriptor(step.processorId);
     if (nextEnabled && !requiredConfigComplete(processor, step.config)) {
-      toast(false, "请先完成这个步骤的必填配置");
+      toast(false, m.voice_processing_step_needs_config());
       return;
     }
-    await updateStep(index, { enabled: nextEnabled }, nextEnabled ? "步骤已启用" : "步骤已停用");
+    await updateStep(index, { enabled: nextEnabled }, nextEnabled ? m.voice_processing_step_enabled() : m.voice_processing_step_disabled());
   }
 
   async function updateConfigField(index: number, field: PostProcessorConfigField, value: string) {
@@ -314,7 +315,7 @@
     await updateStep(
       index,
       { config, enabled: complete ? step.enabled || !wasComplete : false },
-      complete && !wasComplete ? "处理步骤配置已更新并启用" : "处理步骤配置已更新",
+      complete && !wasComplete ? m.voice_processing_step_config_saved_enabled() : m.voice_processing_step_config_saved(),
     );
   }
 
@@ -323,14 +324,14 @@
     try {
       const selected = await openDialog({
         multiple: false,
-        title: `选择${field.displayName}`,
+        title: m.voice_processing_choose_file_title({ name: field.displayName }),
         filters: field.fileExtensions.length
           ? [{ name: field.displayName, extensions: field.fileExtensions }]
           : undefined,
       });
       if (typeof selected === "string") await updateConfigField(index, field, selected);
     } catch (error) {
-      toast(false, `选择文件失败：${errText(error)}`);
+      toast(false, m.voice_processing_choose_file_failed({ error: errText(error) }));
     }
   }
 
@@ -339,11 +340,11 @@
       if (isTauri) {
         const path = await saveDialog({
           defaultPath: "kotone-blocklist.csv",
-          filters: [{ name: "屏蔽词表", extensions: ["csv"] }],
+          filters: [{ name: m.voice_processing_blocklist_filter_name(), extensions: ["csv"] }],
         });
         if (!path) return;
         const count = await exportBuiltinBlocklist(path);
-        toast(true, `已导出 ${count} 条屏蔽词 → ${path}`);
+        toast(true, m.voice_processing_blocklist_exported({ count, path }));
       } else {
         const blob = new Blob([builtinBlocklistCsv()], { type: "text/csv;charset=utf-8" });
         const url = URL.createObjectURL(blob);
@@ -352,17 +353,17 @@
         anchor.download = "kotone-blocklist.csv";
         anchor.click();
         URL.revokeObjectURL(url);
-        toast(true, "已导出内置屏蔽词库");
+        toast(true, m.voice_processing_blocklist_exported_builtin());
       }
     } catch (error) {
-      toast(false, `导出屏蔽词库失败：${errText(error)}`);
+      toast(false, m.voice_processing_blocklist_export_failed({ error: errText(error) }));
     }
   }
 
   async function removeStep(index: number) {
     const name = descriptor(pipeline[index].processorId)?.displayName ?? pipeline[index].processorId;
     const steps = pipeline.filter((_, stepIndex) => stepIndex !== index).map((step) => ({ ...step }));
-    await savePostProcessing(configWithSteps(steps), `已移除：${name}`);
+    await savePostProcessing(configWithSteps(steps), m.voice_processing_step_removed({ name }));
   }
 
   async function moveStep(index: number, offset: -1 | 1) {
@@ -370,7 +371,7 @@
     if (target < 0 || target >= pipeline.length) return;
     const steps = pipeline.map((step) => ({ ...step }));
     [steps[index], steps[target]] = [steps[target], steps[index]];
-    await savePostProcessing(configWithSteps(steps), "处理顺序已更新");
+    await savePostProcessing(configWithSteps(steps), m.voice_processing_order_saved());
   }
 
   async function runTryout() {
@@ -380,34 +381,34 @@
     try {
       tryoutResult = await testPostProcessing(testInput, activePipeline);
     } catch (error) {
-      toast(false, `试跑失败：${errText(error)}`);
+      toast(false, m.voice_processing_tryout_failed({ error: errText(error) }));
     } finally {
       testing = false;
     }
   }
 </script>
 
-<SettingsPage embedded title="文字处理" description="识别完先处理，再发到游戏：屏蔽词、AI 润色、翻译……按流程从上到下依次处理。">
+<SettingsPage embedded title={m.voice_tab_processing()} description={m.voice_processing_page_desc()}>
   {#if $settingsStore}
     <SettingsSection>
       <div class="py-3.5">
         <ToggleField
           checked={enabled}
-          label="启用文字处理"
-          desc={enabled ? "下一条语音开始生效" : "关掉后原文直发"}
+          label={m.voice_processing_enable_label()}
+          desc={enabled ? m.voice_processing_enable_on_desc() : m.voice_processing_enable_off_desc()}
           onchange={(value) => void setEnabled(value)}
         />
       </div>
     </SettingsSection>
 
     {#if enabled}
-      <SettingsSection title="当前流程" description="说话时只用这一套。默认的屏蔽词开箱即用。">
+      <SettingsSection title={m.voice_processing_current_title()} description={m.voice_processing_current_desc()}>
         <div class="flex flex-wrap items-center gap-2 py-3.5">
           <div class="min-w-48 flex-1">
             <SelectField
               testid="postprocess-pipeline-select"
               size="md"
-              ariaLabel="当前流程"
+              ariaLabel={m.voice_processing_current_title()}
               value={activePipeline?.id ?? ""}
               disabled={saving}
               options={pipelines.map((item) => ({
@@ -418,24 +419,24 @@
             />
           </div>
           <Button variant="outline" data-testid="open-postprocess-tryout" onclick={() => (tryingOut = true)}>
-            <FlaskConical class="size-3.5 text-primary" />试跑流程
+            <FlaskConical class="size-3.5 text-primary" />{m.voice_processing_tryout_open()}
           </Button>
           <Button variant="ghost" data-testid="manage-postprocess-pipelines" onclick={() => (managing = true)}>
-            <Settings2 class="size-3.5" />管理流程
+            <Settings2 class="size-3.5" />{m.voice_processing_manage()}
           </Button>
         </div>
       </SettingsSection>
 
       <section class="min-w-0" aria-labelledby="pipeline-steps-title">
         <div class="mb-2.5 px-1">
-          <h2 id="pipeline-steps-title" class="m-0 text-sm font-semibold text-foreground">这套流程会做什么</h2>
-          <p class="mt-1 mb-0 text-xs text-muted-foreground">从上到下依次处理。</p>
+          <h2 id="pipeline-steps-title" class="m-0 text-sm font-semibold text-foreground">{m.voice_processing_steps_title()}</h2>
+          <p class="mt-1 mb-0 text-xs text-muted-foreground">{m.voice_processing_steps_desc()}</p>
         </div>
 
         {#if pipeline.length === 0}
           <div class="rounded-2xl border border-dashed border-hairline px-4 py-8 text-center">
-            <p class="m-0 text-sm text-foreground/80">还没有处理步骤</p>
-            <p class="mt-1 mb-0 text-xs text-muted-foreground">加一步之后，识别结果会先过这一套再发送。</p>
+            <p class="m-0 text-sm text-foreground/80">{m.voice_processing_steps_empty_title()}</p>
+            <p class="mt-1 mb-0 text-xs text-muted-foreground">{m.voice_processing_steps_empty_desc()}</p>
           </div>
         {:else}
           <div class="flex flex-col">
@@ -455,16 +456,16 @@
                         {processor?.displayName ?? step.processorId}
                       </h3>
                       {#if !processor}
-                        <span class="rounded-full bg-destructive/12 px-2 py-0.5 text-[10px] text-destructive">模块不可用</span>
+                        <span class="rounded-full bg-destructive/12 px-2 py-0.5 text-[10px] text-destructive">{m.voice_processing_module_missing()}</span>
                       {/if}
                     </div>
                     <p class="mt-0.5 mb-0 text-xs leading-relaxed text-muted-foreground">
-                      {processor?.description ?? "此步骤对应的模块尚未注册；运行时会给出明确提示。"}
+                      {processor?.description ?? m.voice_processing_module_missing_desc()}
                     </p>
                   </div>
                   <Switch
                     bind:checked={() => step.enabled, (value) => void setStepEnabled(index, value)}
-                    aria-label={`启用${processor?.displayName ?? step.processorId}`}
+                    aria-label={m.voice_processing_step_enable_aria({ name: processor?.displayName ?? step.processorId })}
                   />
                 </div>
 
@@ -474,14 +475,14 @@
                       {@const currentValue = configValue(step.config, field.key)}
                       {@const fieldPlaceholder =
                         field.placeholder ||
-                        (field.kind === "file" ? `选择或输入${field.displayName}路径` : `输入${field.displayName}`)}
+                        (field.kind === "file" ? m.voice_processing_field_file_placeholder({ name: field.displayName }) : m.voice_processing_field_placeholder({ name: field.displayName }))}
                       {@const multiline =
                         field.placeholder?.includes("\n") || (field.placeholder?.length ?? 0) > 48}
                       <div>
                         <div class="flex items-center gap-1.5 text-xs font-medium text-foreground/85">
                           <span>{field.displayName}</span>
                           {#if field.required}
-                            <span class="text-[10px] text-brand-pink">必填</span>
+                            <span class="text-[10px] text-brand-pink">{m.voice_processing_required()}</span>
                           {/if}
                         </div>
                         <div class="mt-1.5 flex gap-2">
@@ -490,14 +491,14 @@
                               <SelectField
                                 testid={`postprocess-config-${step.id}-${field.key}`}
                                 ariaLabel={field.displayName}
-                                placeholder="选择连接"
+                                placeholder={m.voice_processing_choose_connection()}
                                 value={currentValue}
                                 disabled={saving}
                                 options={[
-                                  { value: "", label: "选择连接" },
+                                  { value: "", label: m.voice_processing_choose_connection() },
                                   ...connectionsForField(field).map((connection) => ({
                                     value: connection.id,
-                                    label: `${connection.displayName}${connection.hasApiKey ? "" : "（缺密钥）"}`,
+                                    label: connection.hasApiKey ? connection.displayName : m.voice_processing_connection_missing_key({ name: connection.displayName }),
                                   })),
                                 ]}
                                 onchange={(next) => void updateConfigField(index, field, next.trim())}
@@ -505,7 +506,7 @@
                             </div>
                             {#if onOpenConnections}
                               <Button size="sm" variant="outline" data-testid="open-advanced-connections" onclick={onOpenConnections}>
-                                {connectionsForField(field).length === 0 ? "去添加 API 连接" : "管理连接"}
+                                {connectionsForField(field).length === 0 ? m.voice_processing_add_connection() : m.voice_processing_manage_connections()}
                               </Button>
                             {/if}
                           {:else if multiline}
@@ -541,7 +542,7 @@
                             />
                           {/if}
                           {#if field.kind === "file" && isTauri}
-                            <Button size="sm" variant="outline" disabled={saving} onclick={() => void chooseConfigFile(index, field)}>选择文件</Button>
+                            <Button size="sm" variant="outline" disabled={saving} onclick={() => void chooseConfigFile(index, field)}>{m.voice_processing_choose_file()}</Button>
                           {/if}
                         </div>
                         {#if field.presets && field.presets.length > 0}
@@ -563,7 +564,7 @@
                         {/if}
                         <p class="mt-1.5 mb-0 text-[11px] leading-relaxed text-muted-foreground">
                           {field.kind === "connection" && connectionsForField(field).length === 0
-                            ? "还没有可用连接。点右边按钮去添加 API key。"
+                            ? m.voice_processing_no_connections()
                             : field.description}
                         </p>
                       </div>
@@ -571,16 +572,16 @@
                     {#if processor.id === "builtin.blocklist-filter"}
                       <div class="border-t border-hairline pt-3">
                         <p class="m-0 text-xs leading-relaxed text-muted-foreground">
-                          想改词？先导出默认这份当模板，改完再选回来。
+                          {m.voice_processing_blocklist_hint()}
                         </p>
                         <Button size="sm" variant="outline" class="mt-2" data-testid="postprocess-export-blocklist" disabled={saving} onclick={() => void onExportBlocklist()}>
-                          导出默认词库
+                          {m.voice_processing_blocklist_export()}
                         </Button>
                       </div>
                     {/if}
                     {#if !requiredConfigComplete(processor, step.config)}
                       <p class="m-0 text-[11px] text-brand-pink">
-                        完成必填配置后，这个步骤会自动启用。
+                        {m.voice_processing_config_incomplete()}
                       </p>
                     {/if}
                   </div>
@@ -588,35 +589,35 @@
 
                 <div class="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-hairline pt-3">
                   <div class="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-                    失败时
+                    {m.voice_processing_on_error_label()}
                     <div class="w-44">
                       <SelectField
                         testid={`postprocess-on-error-${step.id}`}
-                        ariaLabel="失败时"
+                        ariaLabel={m.voice_processing_on_error_label()}
                         value={step.onError}
                         options={[
-                          { value: "required", label: "停止，不发送" },
-                          { value: "best-effort", label: "继续使用上一步结果" },
+                          { value: "required", label: m.voice_processing_on_error_required() },
+                          { value: "best-effort", label: m.voice_processing_on_error_best_effort() },
                         ]}
                         onchange={(next) => {
                           const onError = next as "required" | "best-effort";
                           void updateStep(
                             index,
                             { onError },
-                            onError === "required" ? "失败时将停止发送" : "失败时将继续使用上一步结果",
+                            onError === "required" ? m.voice_processing_on_error_required_saved() : m.voice_processing_on_error_best_effort_saved(),
                           );
                         }}
                       />
                     </div>
                   </div>
                   <div class="flex items-center gap-1">
-                    <Button size="icon-sm" variant="ghost" aria-label="上移" title="上移" disabled={saving || index === 0} onclick={() => void moveStep(index, -1)}>
+                    <Button size="icon-sm" variant="ghost" aria-label={m.voice_processing_move_up()} title={m.voice_processing_move_up()} disabled={saving || index === 0} onclick={() => void moveStep(index, -1)}>
                       <ArrowUp class="size-3.5" />
                     </Button>
-                    <Button size="icon-sm" variant="ghost" aria-label="下移" title="下移" disabled={saving || index === pipeline.length - 1} onclick={() => void moveStep(index, 1)}>
+                    <Button size="icon-sm" variant="ghost" aria-label={m.voice_processing_move_down()} title={m.voice_processing_move_down()} disabled={saving || index === pipeline.length - 1} onclick={() => void moveStep(index, 1)}>
                       <ArrowDown class="size-3.5" />
                     </Button>
-                    <Button size="sm" variant="ghost" class="ml-1 text-destructive hover:bg-destructive/10 hover:text-destructive" disabled={saving} onclick={() => void removeStep(index)}>移除</Button>
+                    <Button size="sm" variant="ghost" class="ml-1 text-destructive hover:bg-destructive/10 hover:text-destructive" disabled={saving} onclick={() => void removeStep(index)}>{m.voice_processing_remove_step()}</Button>
                   </div>
                 </div>
               </article>
@@ -629,10 +630,10 @@
 
         <div class="mt-3 flex items-center gap-2">
           <Button data-testid="add-postprocess-step" disabled={saving || loadingProcessors} onclick={() => (adding = true)}>
-            <Plus class="size-3.5" />添加步骤
+            <Plus class="size-3.5" />{m.voice_processing_add_step()}
           </Button>
           <Button variant="outline" data-testid="open-postprocess-tryout-bottom" disabled={saving || activeStepCount === 0} onclick={() => (tryingOut = true)}>
-            试跑效果
+            {m.voice_processing_tryout_open_bottom()}
           </Button>
         </div>
       </section>
@@ -642,13 +643,13 @@
   <Dialog.Root bind:open={adding}>
     <Dialog.Content class="ui-scope sm:max-w-xl" showCloseButton={false}>
       <Dialog.Header>
-        <Dialog.Title>添加步骤</Dialog.Title>
-        <Dialog.Description>点一行即可加到当前流程。</Dialog.Description>
+        <Dialog.Title>{m.voice_processing_add_step()}</Dialog.Title>
+        <Dialog.Description>{m.voice_processing_add_step_desc()}</Dialog.Description>
       </Dialog.Header>
       <div class="max-h-80 overflow-y-auto">
         {#if visibleProcessors.length === 0}
           <p class="m-0 rounded-lg bg-muted/50 px-3 py-3 text-xs text-muted-foreground">
-            {loadingProcessors ? "正在发现模块…" : "当前没有可用的文字处理模块。"}
+            {loadingProcessors ? m.voice_processing_modules_loading() : m.voice_processing_modules_empty()}
           </p>
         {:else}
           <ul class="m-0 divide-y divide-hairline p-0">
@@ -662,7 +663,7 @@
                   </p>
                 </div>
                 <Button size="sm" variant="outline" data-testid={`processor-option-${processor.id}`} disabled={saving} onclick={() => void addProcessor(processor)}>
-                  添加
+                  {m.voice_processing_add()}
                 </Button>
               </li>
             {/each}
@@ -670,7 +671,7 @@
         {/if}
       </div>
       <Dialog.Footer>
-        <Button variant="ghost" size="sm" onclick={() => (adding = false)}>取消</Button>
+        <Button variant="ghost" size="sm" onclick={() => (adding = false)}>{m.voice_action_cancel()}</Button>
       </Dialog.Footer>
     </Dialog.Content>
   </Dialog.Root>
@@ -678,17 +679,17 @@
   <Dialog.Root bind:open={managing}>
     <Dialog.Content class="ui-scope sm:max-w-lg" showCloseButton={false}>
       <Dialog.Header>
-        <Dialog.Title>管理流程</Dialog.Title>
-        <Dialog.Description>新建、改名或删掉一套流程。切换请回上一页用下拉框。</Dialog.Description>
+        <Dialog.Title>{m.voice_processing_manage()}</Dialog.Title>
+        <Dialog.Description>{m.voice_processing_manage_desc()}</Dialog.Description>
       </Dialog.Header>
       <div class="max-h-72 overflow-y-auto">
         <table class="w-full text-left text-xs">
           <thead>
             <tr class="text-[11px] text-muted-foreground">
-              <th class="pb-2 font-medium">名称</th>
-              <th class="pb-2 font-medium">步骤</th>
-              <th class="pb-2 font-medium">状态</th>
-              <th class="pb-2 text-right font-medium">操作</th>
+              <th class="pb-2 font-medium">{m.voice_processing_col_name()}</th>
+              <th class="pb-2 font-medium">{m.voice_processing_col_steps()}</th>
+              <th class="pb-2 font-medium">{m.voice_processing_col_status()}</th>
+              <th class="pb-2 text-right font-medium">{m.voice_processing_col_actions()}</th>
             </tr>
           </thead>
           <tbody>
@@ -714,17 +715,17 @@
                 <td class="py-2 text-muted-foreground">{item.steps.length}</td>
                 <td class="py-2">
                   {#if item.id === postProcessing.activePipelineId}
-                    <span class="text-primary">使用中</span>
+                    <span class="text-primary">{m.voice_processing_in_use()}</span>
                   {:else}
                     <button type="button" class="text-muted-foreground transition-colors hover:text-foreground" disabled={saving} onclick={() => void switchPipeline(item.id)}>
-                      切换
+                      {m.voice_processing_switch()}
                     </button>
                   {/if}
                 </td>
                 <td class="py-2 text-right whitespace-nowrap">
-                  <Button size="xs" variant="ghost" data-testid="rename-postprocess-pipeline" disabled={saving} onclick={() => void startRename(item)}>重命名</Button>
+                  <Button size="xs" variant="ghost" data-testid="rename-postprocess-pipeline" disabled={saving} onclick={() => void startRename(item)}>{m.voice_processing_rename()}</Button>
                   <Button size="xs" variant="ghost" class="text-destructive hover:bg-destructive/10 hover:text-destructive" data-testid="delete-postprocess-pipeline"
-                    disabled={saving || pipelines.length <= 1} onclick={() => void deletePipeline(item.id)}>删除</Button>
+                    disabled={saving || pipelines.length <= 1} onclick={() => void deletePipeline(item.id)}>{m.voice_processing_delete()}</Button>
                 </td>
               </tr>
             {/each}
@@ -733,9 +734,9 @@
       </div>
       <Dialog.Footer class="sm:justify-between">
         <Button variant="outline" size="sm" data-testid="add-postprocess-pipeline" disabled={saving} onclick={() => void addPipeline()}>
-          <Plus class="size-3.5" />新建流程
+          <Plus class="size-3.5" />{m.voice_processing_new_pipeline()}
         </Button>
-        <Button size="sm" onclick={() => (managing = false)}>完成</Button>
+        <Button size="sm" onclick={() => (managing = false)}>{m.voice_action_done()}</Button>
       </Dialog.Footer>
     </Dialog.Content>
   </Dialog.Root>
@@ -744,18 +745,18 @@
     <Dialog.Content class="ui-scope max-h-[85vh] overflow-y-auto sm:max-w-lg" showCloseButton={false}>
       <Dialog.Header>
         <div class="flex items-center gap-2">
-          <Dialog.Title>试跑「{pipelineLabel(activePipeline)}」</Dialog.Title>
-          <span class="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{activeStepCount} 个启用步骤</span>
+          <Dialog.Title>{m.voice_processing_tryout_title({ name: pipelineLabel(activePipeline) })}</Dialog.Title>
+          <span class="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{m.voice_processing_tryout_step_count({ count: activeStepCount })}</span>
         </div>
-        <Dialog.Description>输入一段测试文本查看文字处理效果，不会发送到游戏。</Dialog.Description>
+        <Dialog.Description>{m.voice_processing_tryout_desc()}</Dialog.Description>
       </Dialog.Header>
 
       <label class="block">
-        <span class="text-xs text-muted-foreground">输入测试文本</span>
+        <span class="text-xs text-muted-foreground">{m.voice_processing_tryout_input_label()}</span>
         <textarea
           data-testid="postprocess-tryout-input"
           class="{fieldClass} mt-1.5 min-h-24 w-full resize-y text-sm leading-relaxed"
-          placeholder="输入用于验证流程的文字"
+          placeholder={m.voice_processing_tryout_input_placeholder()}
           bind:value={testInput}
         ></textarea>
       </label>
@@ -763,7 +764,7 @@
       {#if tryoutResult}
         <div data-testid="postprocess-tryout-result" class="rounded-xl border border-primary/25 bg-primary/6 p-3.5">
           <div class="flex items-center justify-between gap-3">
-            <span class="text-xs font-semibold text-primary">处理结果</span>
+            <span class="text-xs font-semibold text-primary">{m.voice_processing_tryout_result()}</span>
             <span class="text-[11px] text-muted-foreground tabular-nums">{tryoutResult.durationMs} ms</span>
           </div>
           <p class="mt-2 mb-0 text-sm leading-relaxed break-all text-foreground">{tryoutResult.finalText}</p>
@@ -776,7 +777,7 @@
                     : 'bg-brand-pink/10 text-brand-pink'}"
                   title={`${step.durationMs} ms`}
                 >
-                  {index + 1}. {step.displayName} · {step.outcome === "succeeded" ? "完成" : "已跳过"}
+                  {index + 1}. {step.displayName} · {step.outcome === "succeeded" ? m.voice_processing_step_succeeded() : m.voice_processing_step_skipped()}
                 </span>
                 {#if step.error}
                   <p class="mt-1 mb-0 text-[11px] leading-relaxed text-brand-pink">{step.error}</p>
@@ -788,9 +789,9 @@
       {/if}
 
       <Dialog.Footer>
-        <Button variant="ghost" size="sm" data-testid="postprocess-tryout-close" onclick={() => (tryingOut = false)}>关闭</Button>
+        <Button variant="ghost" size="sm" data-testid="postprocess-tryout-close" onclick={() => (tryingOut = false)}>{m.voice_action_close()}</Button>
         <Button size="sm" data-testid="postprocess-tryout-run" disabled={testing || !testInput.trim() || activeStepCount === 0} onclick={() => void runTryout()}>
-          {testing ? "处理中…" : "运行试跑"}
+          {testing ? m.voice_processing_tryout_running() : m.voice_processing_tryout_run()}
         </Button>
       </Dialog.Footer>
     </Dialog.Content>

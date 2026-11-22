@@ -8,6 +8,7 @@
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import { gameIcon, installedGames, launchInstalledGame, type GameProfile, type InstalledGame } from "../../../lib/ipc";
   import { errText, toast } from "../../../lib/stores/ui";
+  import { m } from "$lib/paraglide/messages.js";
 
   let { profiles, onOpenProfile }: {
     profiles: GameProfile[];
@@ -16,7 +17,8 @@
   } = $props();
 
   const SOURCE_LABEL: Record<string, string> = {
-    steam: "Steam", tencent: "腾讯", riot: "Riot", hoyoplay: "米哈游", epic: "Epic", wegame: "WeGame", uninstall: "已安装程序",
+    steam: "Steam", tencent: m.game_source_tencent(), riot: "Riot", hoyoplay: m.game_source_hoyoplay(), epic: "Epic", wegame: "WeGame",
+    uninstall: m.game_installed_source_uninstall(),
   };
   const CACHE_KEY = "kotone.installedGames";
 
@@ -49,7 +51,7 @@
       try { localStorage.setItem(CACHE_KEY, JSON.stringify(found)); } catch { /* 只是缓存 */ }
       void loadIcons(found);
     } catch (error) {
-      toast(false, `检测失败：${errText(error)}`);
+      toast(false, m.game_detect_failed({ error: errText(error) }));
     } finally {
       detecting = false;
     }
@@ -69,9 +71,9 @@
     launching = game.id;
     try {
       await launchInstalledGame(game.id);
-      toast(true, `正在打开 ${game.name}`);
+      toast(true, m.game_installed_launching({ name: game.name }));
     } catch (error) {
-      toast(false, `打开失败：${errText(error)}`);
+      toast(false, m.game_installed_launch_failed({ error: errText(error) }));
     } finally {
       launching = null;
     }
@@ -83,19 +85,19 @@
   });
 </script>
 
-<SettingsSection title="本机的游戏" testid="installed-games"
-  description="Steam、英雄联盟、Riot、米哈游、Epic、WeGame 里装了的游戏。只读启动器的记录，不扫硬盘。">
+<SettingsSection title={m.game_installed_title()} testid="installed-games"
+  description={m.game_installed_description()}>
   {#snippet actions()}
-    {#if elapsedMs !== null && !detecting}<span class="text-[11px] text-muted-foreground" data-testid="installed-games-elapsed">用时 {elapsedMs} ms</span>{/if}
+    {#if elapsedMs !== null && !detecting}<span class="text-[11px] text-muted-foreground" data-testid="installed-games-elapsed">{m.game_installed_elapsed({ ms: elapsedMs })}</span>{/if}
     <Button size="sm" variant="outline" disabled={detecting} onclick={() => void detect()} data-testid="installed-games-detect">
-      {#if detecting}<LoaderCircle class="size-3.5 animate-spin" />{:else}<RefreshCw class="size-3.5" />{/if}重新检测
+      {#if detecting}<LoaderCircle class="size-3.5 animate-spin" />{:else}<RefreshCw class="size-3.5" />{/if}{m.game_installed_redetect()}
     </Button>
   {/snippet}
   <div class="py-3.5">
     {#if games === null}
-      <p class="m-0 text-xs text-muted-foreground">正在检测…</p>
+      <p class="m-0 text-xs text-muted-foreground">{m.game_installed_detecting()}</p>
     {:else if !games.length}
-      <p class="m-0 text-xs text-muted-foreground" data-testid="installed-games-empty">没有检测到。没装在这些启动器里的游戏，可以在下面的游戏配置里手动填启动路径。</p>
+      <p class="m-0 text-xs text-muted-foreground" data-testid="installed-games-empty">{m.game_installed_empty()}</p>
     {:else}
       <ul class="m-0 grid list-none grid-cols-1 gap-2 p-0 sm:grid-cols-2">
         {#each games as game (game.id)}
@@ -111,12 +113,12 @@
                 <span>{SOURCE_LABEL[game.source] ?? game.source}</span>
                 {#if profile}
                   <button type="button" class="rounded bg-primary/10 px-1.5 text-primary hover:bg-primary/20" onclick={() => onOpenProfile(profile)}
-                    data-testid="installed-game-profile">已适配：{profile.displayName}</button>
+                    data-testid="installed-game-profile">{m.game_installed_profile({ name: profile.displayName })}</button>
                 {/if}
               </p>
             </div>
             {#if game.launch}
-              <Button size="sm" variant="ghost" aria-label={`打开 ${game.name}`} title="打开游戏" disabled={launching !== null}
+              <Button size="sm" variant="ghost" aria-label={m.game_installed_launch_aria({ name: game.name })} title={m.game_installed_launch_title()} disabled={launching !== null}
                 onclick={() => void launch(game)} data-testid="installed-game-launch">
                 {#if launching === game.id}<LoaderCircle class="size-3.5 animate-spin" />{:else}<Play class="size-3.5" />{/if}
               </Button>

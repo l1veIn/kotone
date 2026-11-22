@@ -7,6 +7,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { get, writable } from "svelte/store";
 import { isTauri, logFrontendError } from "./ipc";
 import { patchSettings, settingsStore, toast, toastInfo, toastWarn } from "./stores/ui";
+import { m } from "./paraglide/messages.js";
 
 export type UpdateCheckResult =
   | { status: "up-to-date" }
@@ -38,7 +39,7 @@ let pendingDialogChoice: ((choice: UpdateDialogChoice) => void) | null = null;
 
 function requestDialogChoice(state: UpdateDialogState): Promise<UpdateDialogChoice> {
   if (pendingDialogChoice) {
-    return Promise.reject(new Error("已有更新确认弹窗正在等待用户操作"));
+    return Promise.reject(new Error(m.system_update_dialog_busy_error()));
   }
   return new Promise((resolve) => {
     pendingDialogChoice = resolve;
@@ -100,7 +101,7 @@ async function runUpdateCheck(): Promise<UpdateCheckResult> {
       notes,
     });
     if (choice === "never") {
-      await patchSettings({ ui: { updatePromptDisabled: true } }, "以后不再自动提醒新版本，可在「关于」里重新打开").catch(() => {});
+      await patchSettings({ ui: { updatePromptDisabled: true } }, m.system_update_never_saved()).catch(() => {});
       return { status: "available", version: update.version, notes };
     }
     if (choice === "later") return { status: "available", version: update.version, notes };
@@ -118,7 +119,7 @@ async function runUpdateCheck(): Promise<UpdateCheckResult> {
       });
     };
     showDownloadProgress();
-    toastInfo(`正在下载 v${update.version} 更新包…`);
+    toastInfo(m.system_update_downloading_toast({ version: update.version }));
     await update.downloadAndInstall((event) => {
       if (event.event === "Started") {
         downloadedBytes = 0;
@@ -137,7 +138,7 @@ async function runUpdateCheck(): Promise<UpdateCheckResult> {
       notes,
     });
     if (restartChoice === "later") {
-      toastWarn("更新已就绪，将在下次启动时生效");
+      toastWarn(m.system_update_ready_later_toast());
       return { status: "downloaded", version: update.version, notes };
     }
     updateDialogStore.set({ phase: "restarting", version: update.version, notes });
@@ -147,7 +148,7 @@ async function runUpdateCheck(): Promise<UpdateCheckResult> {
     pendingDialogChoice = null;
     updateDialogStore.set(null);
     const message = e instanceof Error ? e.message : String(e);
-    if (updateStarted) toast(false, `更新失败：${message}`);
+    if (updateStarted) toast(false, m.system_update_failed({ error: message }));
     // 启动时的调用方不展示结果；关于页手动调用会把 error 明确显示给用户。
     console.warn("[updater] 检查更新失败：", e);
     void logFrontendError("updater", message).catch(() => {});

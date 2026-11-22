@@ -27,6 +27,7 @@
   import { usesLegacyVoiceInput } from "../../../lib/ipc/contracts";
   import { settingsStore } from "../../../lib/stores/ui";
   import { COMPANION_SECTIONS, GENERAL_SECTIONS, type AdvancedSection } from "./advanced/types";
+  import { m } from "$lib/paraglide/messages.js";
 
   let {
     section = "system",
@@ -43,8 +44,10 @@
 
   const legacyVoiceOnly = $derived(usesLegacyVoiceInput($settingsStore?.ui));
   const groups = $derived([
-    ...(legacyVoiceOnly ? [] : [{ label: "陪玩", tabs: COMPANION_SECTIONS }]),
-    { label: "通用", tabs: GENERAL_SECTIONS },
+    // i18n-ignore-start：只用于 data-testid（测试按它找分组）
+    ...(legacyVoiceOnly ? [] : [{ id: "陪玩", label: m.system_advanced_group_companion(), tabs: COMPANION_SECTIONS }]),
+    { id: "通用", label: m.system_advanced_group_general(), tabs: GENERAL_SECTIONS },
+    // i18n-ignore-end
   ]);
   const name = $derived($companionName);
 
@@ -72,11 +75,11 @@
   </div>
 {/snippet}
 
-<SettingsPage title="设置" description={legacyVoiceOnly ? "模型、AI 连接、声音、外观与系统。" : `怎么叫${name}、她怎么回答，以及模型、AI 连接、外观与系统。这些也都可以直接跟她说，让她帮你设。`} testid="advanced-page">
-  <nav class="-mt-2 flex flex-col gap-2" aria-label="设置分类">
-    {#each groups as item (item.label)}
+<SettingsPage title={m.system_advanced_title()} description={legacyVoiceOnly ? m.system_advanced_description_legacy() : m.system_advanced_description({ name })} testid="advanced-page">
+  <nav class="-mt-2 flex flex-col gap-2" aria-label={m.system_advanced_nav_label()}>
+    {#each groups as item (item.id)}
       <div class="flex flex-wrap items-center gap-2">
-        <span class="w-8 shrink-0 text-[11px] font-medium text-muted-foreground" data-testid={`advanced-group-${item.label}`}>{item.label}</span>
+        <span class="w-8 shrink-0 text-[11px] font-medium text-muted-foreground" data-testid={`advanced-group-${item.id}`}>{item.label}</span>
         <div class="flex w-fit max-w-full flex-wrap gap-0.5 rounded-xl bg-muted/70 p-1">
           {#each item.tabs as tab (tab.id)}
             {@const active = section === tab.id}
@@ -105,8 +108,8 @@
       <div class="space-y-6" data-testid="settings-call">
         <div id="settings-call-hotkey" class="scroll-mt-16"><CompanionInputSettings /></div>
         <div id="settings-call-wake" class="scroll-mt-16"><WakeSettings /></div>
-        <SettingsSection title="聊天页的呼叫按钮" description={`在聊天页点一下「呼叫${name}」就在气泡里听你说，不用设置。用本地识别时，没启动的话会先启动再听。`}>
-          <p class="m-0 py-3 text-xs text-muted-foreground">打字聊天、自动化和定时提醒都不需要语音识别。</p>
+        <SettingsSection title={m.system_advanced_call_button_title()} description={m.system_advanced_call_button_description({ name })}>
+          <p class="m-0 py-3 text-xs text-muted-foreground">{m.system_advanced_call_button_hint()}</p>
         </SettingsSection>
       </div>
     {:else if section === "reply"}
@@ -114,7 +117,7 @@
         <div id="settings-reply-ai" class="scroll-mt-16"><AssistantSettings {connections} {ready} onOpenConnections={() => onSectionChange?.("connections")} /></div>
         <div id="settings-reply-bubble" class="scroll-mt-16"><BubbleSettings /></div>
         <div id="settings-reply-output" class="scroll-mt-16"><OutputSettings /></div>
-        {@render group("settings-reply-teammates", "替你跟队友说话", "用虚拟麦克风替你在游戏语音里说话。")}
+        {@render group("settings-reply-teammates", m.system_advanced_teammates_title(), m.system_advanced_teammates_description())}
         <VoiceChatSettings />
       </div>
     {:else if section === "permissions"}
@@ -131,7 +134,7 @@
       <SystemSection {onOpenOnboarding} />
     {:else if section === "appearance"}
       <!-- 外观：配色、明暗、缩放、字体（只影响设置窗口，偏好存在本机；ADR 023 从「通用」搬来） -->
-      <SettingsSection title="外观" description="只影响设置窗口；游戏里的悬浮窗与弹幕保持原样。" id="appearance-title">
+      <SettingsSection title={m.system_section_appearance()} description={m.system_advanced_appearance_description()} id="appearance-title">
         <AppearanceSettingsPanel />
       </SettingsSection>
     {/if}

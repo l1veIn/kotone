@@ -16,6 +16,7 @@
   import type { WakeConfig } from "../../../../lib/ipc";
   import { DEFAULT_ROLE, rolesList, type RoleInfo } from "../../../../lib/roles";
   import { DEFAULT_COMPANION_NAME, companionName } from "$lib/stores/companion";
+  import { m } from "$lib/paraglide/messages.js";
 
   const wake = $derived<WakeConfig>($settingsStore?.assistant?.wake ?? {
     enabled: false, phrase: "qinyin-qinyin", sensitivity: "normal", ack: "voice", noSpeechTimeoutMs: 5000,
@@ -23,7 +24,9 @@
   let status = $state<WakeStatus | null>(null);
   let progress = $state<WakeModelProgress | null>(null);
   let downloading = $state(false);
+  // i18n-ignore-start：唤醒词是玩家要说的话
   const phraseLabel = $derived(wakePhrases.find((p) => p.value === wake.phrase)?.label ?? "琴音琴音");
+  // i18n-ignore-end
   // 唤醒词跟着角色走：只有没改过名字和唤醒词的琴音用这里的预置唤醒词，其他角色用自己在「角色」里设的。
   let role = $state<RoleInfo | null>(null);
   const roleKey = $derived(`${$settingsStore?.agent?.roleId ?? ""}|${$companionName}|${wake.phrase}`);
@@ -55,65 +58,65 @@
     progress = null;
     try {
       status = await wakeDownloadModel(wake.enabled);
-      toast(true, "唤醒模型已下载");
+      toast(true, m.companion_wake_model_downloaded());
     } catch (error) {
-      toast(false, `唤醒模型下载失败：${errText(error)}`);
+      toast(false, m.companion_wake_model_download_failed({ error: errText(error) }));
     } finally {
       downloading = false;
     }
   }
 </script>
 
-<SettingsSection title="语音唤醒" description={`不用按键：说“${word}”叫醒${$companionName}，接着说要做的事。`} id="wake-settings">
+<SettingsSection title={m.companion_wake_title()} description={m.companion_wake_desc({ word, name: $companionName })} id="wake-settings">
   <div data-testid="wake-settings" class="contents">
-    <SettingsRow label="开启语音唤醒" description="开启后麦克风常开（Windows 任务栏会一直显示麦克风在用），唤醒词只在本机检测，不上传。建议戴耳机，外放时游戏声音可能误唤醒。">
+    <SettingsRow label={m.companion_wake_enabled_label()} description={m.companion_wake_enabled_desc()}>
       {#snippet control()}
-        <Switch data-testid="wake-enabled" bind:checked={() => wake.enabled, (checked) => void save({ enabled: checked }, checked ? "语音唤醒已开启" : "语音唤醒已关闭")} aria-label="开启语音唤醒" />
+        <Switch data-testid="wake-enabled" bind:checked={() => wake.enabled, (checked) => void save({ enabled: checked }, checked ? m.companion_wake_enabled_on() : m.companion_wake_enabled_off())} aria-label={m.companion_wake_enabled_label()} />
       {/snippet}
       {#if status}
         <p class="m-0 flex items-center gap-1.5 text-xs {status.state === 'listening' ? 'text-success' : status.state === 'error' ? 'text-destructive' : 'text-muted-foreground'}" data-testid="wake-status" role="status">
-          <Mic class="size-3.5 shrink-0" />{wakeStateText(status)}{status.state === "listening" && status.detections ? `（已唤醒 ${status.detections} 次）` : ""}
+          <Mic class="size-3.5 shrink-0" />{wakeStateText(status)}{status.state === "listening" && status.detections ? m.companion_wake_detections({ count: status.detections }) : ""}
         </p>
       {/if}
     </SettingsRow>
     {#if status && !status.modelReady}
-      <SettingsRow label="唤醒模型" description="约 5 MB，从 sherpa-onnx 官方发布页下载（压缩包约 33 MB，只保留要用的文件）。模型的训练数据只许非商用，所以不随安装包附带。">
+      <SettingsRow label={m.companion_wake_model_label()} description={m.companion_wake_model_desc()}>
         {#snippet control()}
           <Button size="sm" variant="outline" data-testid="wake-download" disabled={downloading || status?.downloading} onclick={() => void download()}>
-            {#if downloading || status?.downloading}<LoaderCircle class="size-3.5 animate-spin" />{percent !== null ? `${percent}%` : "下载中"}{:else}<Download class="size-3.5" />下载{/if}
+            {#if downloading || status?.downloading}<LoaderCircle class="size-3.5 animate-spin" />{percent !== null ? `${percent}%` : m.companion_wake_model_downloading()}{:else}<Download class="size-3.5" />{m.companion_wake_model_download()}{/if}
           </Button>
         {/snippet}
       </SettingsRow>
     {/if}
     {#if usesPreset}
-      <SettingsRow label="唤醒词" description="四个字更不容易被别的话误触发。">
+      <SettingsRow label={m.companion_wake_phrase_label()} description={m.companion_wake_phrase_desc()}>
         {#snippet control()}
           <div class="w-44 max-w-full">
-            <SelectField ariaLabel="唤醒词" value={wake.phrase} options={[...wakePhrases]}
-              onchange={(phrase) => void save({ phrase: phrase as WakeConfig["phrase"] }, `唤醒词：${wakePhrases.find((p) => p.value === phrase)?.label}`)} />
+            <SelectField ariaLabel={m.companion_wake_phrase_label()} value={wake.phrase} options={[...wakePhrases]}
+              onchange={(phrase) => void save({ phrase: phrase as WakeConfig["phrase"] }, m.companion_wake_phrase_saved({ phrase: String(wakePhrases.find((p) => p.value === phrase)?.label) }))} />
           </div>
         {/snippet}
       </SettingsRow>
     {:else}
-      <SettingsRow label="唤醒词" description={`${$companionName}自己的唤醒词，在「角色」里改。`}>
+      <SettingsRow label={m.companion_wake_phrase_label()} description={m.companion_wake_role_phrase_desc({ name: $companionName })}>
         {#snippet control()}
           <span class="text-sm font-medium" data-testid="wake-role-word">{word}</span>
         {/snippet}
       </SettingsRow>
     {/if}
-    <SettingsRow label="灵敏度" description="经常误唤醒就调低；喊了没反应就调高。">
+    <SettingsRow label={m.companion_wake_sensitivity_label()} description={m.companion_wake_sensitivity_desc()}>
       {#snippet control()}
         <div class="w-44 max-w-full">
-          <SelectField ariaLabel="唤醒灵敏度" value={wake.sensitivity} options={[...wakeSensitivities]}
-            onchange={(sensitivity) => void save({ sensitivity: sensitivity as WakeConfig["sensitivity"] }, "唤醒灵敏度已保存")} />
+          <SelectField ariaLabel={m.companion_wake_sensitivity_aria()} value={wake.sensitivity} options={[...wakeSensitivities]}
+            onchange={(sensitivity) => void save({ sensitivity: sensitivity as WakeConfig["sensitivity"] }, m.companion_wake_sensitivity_saved())} />
         </div>
       {/snippet}
     </SettingsRow>
-    <SettingsRow label="唤醒后的应答" description="喊完唤醒词停一下，会先应一声再听；连着往下说时不应。唤醒后 5 秒没说话就结束。">
+    <SettingsRow label={m.companion_wake_ack_label()} description={m.companion_wake_ack_desc()}>
       {#snippet control()}
         <div class="w-44 max-w-full">
-          <SelectField ariaLabel="唤醒后的应答" value={wake.ack} options={[...wakeAcks]}
-            onchange={(ack) => void save({ ack: ack as WakeConfig["ack"] }, "唤醒应答已保存")} />
+          <SelectField ariaLabel={m.companion_wake_ack_label()} value={wake.ack} options={[...wakeAcks]}
+            onchange={(ack) => void save({ ack: ack as WakeConfig["ack"] }, m.companion_wake_ack_saved())} />
         </div>
       {/snippet}
     </SettingsRow>

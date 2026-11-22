@@ -3,6 +3,7 @@
   // 工具清单来自后端 agent_tools（含分组、默认规则与说明）；权限要整体替换（agent_set_permissions），
   // inGame 用普通设置补丁。
   import { companionName } from "$lib/stores/companion";
+  import { m } from "$lib/paraglide/messages.js";
   import { onMount } from "svelte";
   import { ChevronRight } from "@lucide/svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
@@ -16,11 +17,13 @@
   import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
 
   const modes: { id: PermissionMode; name: string; description: string }[] = [
-    { id: "default", name: "先问我", description: "看状态、读聊天等直接做；有风险的（按键、发言、改设置、下载、打开游戏……）先问你" },
-    { id: "allow-all", name: "完全权限", description: "全部直接执行，不再询问（你设为“禁止”的仍然禁止）" },
-    { id: "read-only", name: "仅可查看", description: "只能看状态、读屏幕和播报，其余一律禁止" },
+    { id: "default", name: m.companion_agent_mode_default_name(), description: m.companion_agent_mode_default_desc() },
+    { id: "allow-all", name: m.companion_agent_mode_allow_all_name(), description: m.companion_agent_mode_allow_all_desc() },
+    { id: "read-only", name: m.companion_agent_mode_read_only_name(), description: m.companion_agent_mode_read_only_desc() },
   ];
-  const ruleNames: Record<PermissionRule | "default", string> = { default: "按默认", allow: "允许", ask: "询问", deny: "禁止" };
+  const ruleNames: Record<PermissionRule | "default", string> = {
+    default: m.companion_agent_rule_default(), allow: m.companion_agent_rule_allow(), ask: m.companion_agent_rule_ask(), deny: m.companion_agent_rule_deny(),
+  };
 
   let permissions = $state<Permissions | null>(null);
   let tools = $state<AgentTool[]>([]);
@@ -34,19 +37,21 @@
   const gameEffort = $derived($settingsStore?.agent?.gameEffort ?? "");
   const chatEffort = $derived($settingsStore?.agent?.chatEffort ?? "");
   const efforts = [
-    { value: "default", label: "默认（高）" }, { value: "low", label: "低（更快）" }, { value: "high", label: "高" },
-    { value: "max", label: "最高" }, { value: "none", label: "不思考" },
+    { value: "default", label: m.companion_agent_effort_default_high() }, { value: "low", label: m.companion_agent_effort_low_faster() },
+    { value: "high", label: m.companion_agent_effort_high() }, { value: "max", label: m.companion_agent_effort_max() },
+    { value: "none", label: m.companion_agent_effort_none() },
   ];
   /** 游戏里（语音叫她）默认不思考（ADR 029：开着思考一句回答要多等十几秒）。 */
   const gameEfforts = [
-    { value: "default", label: "默认（不思考）" }, { value: "low", label: "低" }, { value: "high", label: "高" },
-    { value: "max", label: "最高" }, { value: "none", label: "不思考" },
+    { value: "default", label: m.companion_agent_effort_default_none() }, { value: "low", label: m.companion_agent_effort_low() },
+    { value: "high", label: m.companion_agent_effort_high() }, { value: "max", label: m.companion_agent_effort_max() },
+    { value: "none", label: m.companion_agent_effort_none() },
   ];
   /** 按分组排好（核心工具在前）；已有规则但清单里没有的工具也列出来，方便删掉。 */
   const groups = $derived.by(() => {
     const known = new Set(tools.map((tool) => tool.name));
     const extra: AgentTool[] = Object.keys(permissions?.rules ?? {}).filter((name) => !known.has(name)).map((name) => ({
-      name, group: "app", description: "当前不可用的工具（规则仍会保留）", sideEffects: [], defaultRule: "ask", rule: null, core: false,
+      name, group: "app", description: m.companion_agent_tool_unavailable_desc(), sideEffects: [], defaultRule: "ask", rule: null, core: false,
     }));
     const map = new Map<string, AgentTool[]>();
     for (const tool of [...tools, ...extra]) {
@@ -66,9 +71,9 @@
     const fromSettings = $settingsStore?.agent?.permissions;
     if (fromSettings) permissions = structuredClone(fromSettings);
     else void agentState().then((state) => { if (!disposed) permissions = state.permissions; })
-      .catch((error) => { if (!disposed) loadError = `读取权限设置失败：${errText(error)}`; });
+      .catch((error) => { if (!disposed) loadError = m.companion_agent_permissions_load_failed({ error: errText(error) }); });
     void agentTools().then((list) => { if (!disposed) tools = list; })
-      .catch((error) => { if (!disposed) toolsError = `读取工具清单失败：${errText(error)}`; });
+      .catch((error) => { if (!disposed) toolsError = m.companion_agent_tools_load_failed({ error: errText(error) }); });
     return () => { disposed = true; };
   });
 
@@ -81,7 +86,7 @@
       settingsStore.update((s) => s && { ...s, agent: { hiddenAutomations: [], inGame: true, ...s.agent, permissions: saved } });
       toast(true, message);
     } catch (error) {
-      toast(false, `保存失败：${errText(error)}`);
+      toast(false, m.companion_save_failed({ error: errText(error) }));
     } finally {
       saving = false;
     }
@@ -89,7 +94,7 @@
 
   function setMode(mode: PermissionMode) {
     if (!permissions || permissions.mode === mode) return;
-    void save({ ...permissions, mode }, `权限模式：${modes.find((m) => m.id === mode)?.name}`);
+    void save({ ...permissions, mode }, m.companion_agent_mode_saved({ mode: String(modes.find((item) => item.id === mode)?.name) }));
   }
 
   function setRule(tool: string, value: string) {
@@ -97,50 +102,50 @@
     const rules = { ...permissions.rules };
     if (value === "default") delete rules[tool];
     else rules[tool] = value as PermissionRule;
-    void save({ ...permissions, rules }, `「${toolLabel(tool)}」：${ruleNames[value as PermissionRule | "default"]}`);
+    void save({ ...permissions, rules }, m.companion_agent_rule_saved({ tool: toolLabel(tool), rule: ruleNames[value as PermissionRule | "default"] }));
   }
 </script>
 
 <div class="space-y-6" data-testid="agent-settings">
-  <SettingsSection title="Agent" description="游戏里的话交给谁，以及哪些事直接做、哪些先问你。">
-    <SettingsRow label={`游戏内交给${$companionName}`} description="呼叫、唤醒词和快捷指令里的“一句话”交给她（多步、能用全部工具）；关掉时用旧的单次陪玩。">
+  <SettingsSection title="Agent" description={m.companion_agent_section_desc()}>
+    <SettingsRow label={m.companion_agent_in_game_label({ name: $companionName })} description={m.companion_agent_in_game_desc()}>
       {#snippet control()}
-        <Switch data-testid="agent-in-game" bind:checked={() => inGame, (checked) => void patchSettings({ agent: { inGame: checked } }, checked ? `游戏内入口交给${$companionName}` : "游戏内入口改用单次陪玩")} aria-label={`游戏内交给${$companionName}`} />
+        <Switch data-testid="agent-in-game" bind:checked={() => inGame, (checked) => void patchSettings({ agent: { inGame: checked } }, checked ? m.companion_agent_in_game_on({ name: $companionName }) : m.companion_agent_in_game_off())} aria-label={m.companion_agent_in_game_label({ name: $companionName })} />
       {/snippet}
     </SettingsRow>
-    <SettingsRow label="执行中先接一句" description="1.5 秒还没出声，先说一句“好，我看看”，免得干等。">
+    <SettingsRow label={m.companion_agent_progress_speech_label()} description={m.companion_agent_progress_speech_desc()}>
       {#snippet control()}
-        <Switch data-testid="agent-progress-speech" bind:checked={() => progressSpeech, (checked) => void patchSettings({ agent: { progressSpeech: checked } }, checked ? "执行中会先接一句" : "执行中不再接话")} aria-label="执行中先接一句" />
+        <Switch data-testid="agent-progress-speech" bind:checked={() => progressSpeech, (checked) => void patchSettings({ agent: { progressSpeech: checked } }, checked ? m.companion_agent_progress_speech_on() : m.companion_agent_progress_speech_off())} aria-label={m.companion_agent_progress_speech_label()} />
       {/snippet}
     </SettingsRow>
-    <SettingsRow label="对局复盘" description="游戏一退出，把这一局和她的对话、提醒、自动化整理成几句复盘留在聊天里，学到的写进这个游戏的记忆。只整理玩了 3 分钟以上、这一局里叫过她的；每次调用一次 AI。">
+    <SettingsRow label={m.companion_agent_match_recap_label()} description={m.companion_agent_match_recap_desc()}>
       {#snippet control()}
-        <Switch data-testid="agent-match-recap" bind:checked={() => matchRecap, (checked) => void patchSettings({ agent: { matchRecap: checked } }, checked ? "对局结束会自动复盘" : "不再自动复盘")} aria-label="对局复盘" />
+        <Switch data-testid="agent-match-recap" bind:checked={() => matchRecap, (checked) => void patchSettings({ agent: { matchRecap: checked } }, checked ? m.companion_agent_match_recap_on() : m.companion_agent_match_recap_off())} aria-label={m.companion_agent_match_recap_label()} />
       {/snippet}
     </SettingsRow>
-    <SettingsRow label="思考强度" description="只对 DeepSeek 生效。游戏里默认不思考，回答更快（开着思考，一句回答常要多等十几秒）；聊天窗口默认按服务商的（高）。">
+    <SettingsRow label={m.companion_agent_effort_label()} description={m.companion_agent_effort_desc()}>
       {#snippet control()}
         <div class="flex flex-wrap gap-2">
-          <label class="flex items-center gap-1.5 text-xs text-muted-foreground">游戏里
-            <SelectField class="w-32" size="sm" ariaLabel="游戏里的思考强度" value={gameEffort || "default"} options={gameEfforts}
-              onchange={(v) => void patchSettings({ agent: { gameEffort: v === "default" ? "" : v } }, "游戏里的思考强度已保存")} /></label>
-          <label class="flex items-center gap-1.5 text-xs text-muted-foreground">聊天窗口
-            <SelectField class="w-28" size="sm" ariaLabel="聊天窗口里的思考强度" value={chatEffort || "default"} options={efforts}
-              onchange={(v) => void patchSettings({ agent: { chatEffort: v === "default" ? "" : v } }, "聊天窗口里的思考强度已保存")} /></label>
+          <label class="flex items-center gap-1.5 text-xs text-muted-foreground">{m.companion_agent_effort_game()}
+            <SelectField class="w-32" size="sm" ariaLabel={m.companion_agent_effort_game_aria()} value={gameEffort || "default"} options={gameEfforts}
+              onchange={(v) => void patchSettings({ agent: { gameEffort: v === "default" ? "" : v } }, m.companion_agent_effort_game_saved())} /></label>
+          <label class="flex items-center gap-1.5 text-xs text-muted-foreground">{m.companion_agent_effort_chat()}
+            <SelectField class="w-28" size="sm" ariaLabel={m.companion_agent_effort_chat_aria()} value={chatEffort || "default"} options={efforts}
+              onchange={(v) => void patchSettings({ agent: { chatEffort: v === "default" ? "" : v } }, m.companion_agent_effort_chat_saved())} /></label>
         </div>
       {/snippet}
     </SettingsRow>
-    <SettingsRow label="DeepSeek 内容审核" description="DeepSeek 官方的内容安全检查，不另收费。审核没通过时撤回这次回答并告诉你。只对 DeepSeek 生效。">
+    <SettingsRow label={m.companion_agent_safety_check_label()} description={m.companion_agent_safety_check_desc()}>
       {#snippet control()}
-        <Switch data-testid="agent-safety-check" bind:checked={() => safetyCheck, (checked) => void patchSettings({ agent: { safetyCheck: checked } }, checked ? "内容审核已开启" : "内容审核已关闭")} aria-label="DeepSeek 内容审核" />
+        <Switch data-testid="agent-safety-check" bind:checked={() => safetyCheck, (checked) => void patchSettings({ agent: { safetyCheck: checked } }, checked ? m.companion_agent_safety_check_on() : m.companion_agent_safety_check_off())} aria-label={m.companion_agent_safety_check_label()} />
       {/snippet}
     </SettingsRow>
     {#if loadError}<p role="alert" class="my-3 text-xs text-destructive">{loadError}</p>{/if}
     {#if permissions}
       {@const current = permissions}
-      <SettingsRow label="权限模式" description="“禁止”的规则在任何模式下都生效。" stacked>
+      <SettingsRow label={m.companion_agent_permission_mode_label()} description={m.companion_agent_permission_mode_desc()} stacked>
         {#snippet control()}
-          <div class="grid grid-cols-1 gap-2 sm:grid-cols-3" role="group" aria-label="权限模式">
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-3" role="group" aria-label={m.companion_agent_permission_mode_label()}>
             {#each modes as mode (mode.id)}
               {@const active = current.mode === mode.id}
               <button type="button" data-testid={`agent-mode-${mode.id}`} aria-pressed={active} disabled={saving}
@@ -161,10 +166,10 @@
     <details class="group/rules" data-testid="agent-rules">
       <summary class="flex cursor-pointer list-none items-center gap-1.5 px-1 text-sm font-semibold text-foreground">
         <ChevronRight class="size-4 text-muted-foreground transition-transform group-open/rules:rotate-90" />
-        按工具单独设置
-        <span class="ml-1 text-xs font-normal text-muted-foreground">（{ruleCount} 条自定义）</span>
+        {m.companion_agent_rules_title()}
+        <span class="ml-1 text-xs font-normal text-muted-foreground">{m.companion_agent_rules_custom_count({ count: ruleCount })}</span>
       </summary>
-      <p class="mt-1.5 mb-3 px-1 text-xs leading-relaxed text-muted-foreground">“按默认”由工具的副作用决定。已保存的自动化给不给她用，在「自动化」里逐个设。</p>
+      <p class="mt-1.5 mb-3 px-1 text-xs leading-relaxed text-muted-foreground">{m.companion_agent_rules_hint()}</p>
       {#if toolsError}<p role="alert" class="mb-3 px-1 text-xs text-destructive">{toolsError}</p>{/if}
       <div class="space-y-4">
         {#each groups as group (group.group)}
@@ -176,13 +181,13 @@
                   <p class="m-0 flex flex-wrap items-baseline gap-x-2 text-[13px]">
                     <span class="font-medium text-foreground">{toolLabel(tool.name)}</span>
                     <span class="font-mono text-[11px] text-muted-foreground">{tool.name}</span>
-                    {#if !tool.core}<span class="rounded border border-hairline px-1 text-[10px] text-muted-foreground" title="经“查找工具”启用">按需</span>{/if}
+                    {#if !tool.core}<span class="rounded border border-hairline px-1 text-[10px] text-muted-foreground" title={m.companion_agent_tool_on_demand_title()}>{m.companion_agent_tool_on_demand()}</span>{/if}
                   </p>
                   {#if tool.description}<p class="mt-0.5 mb-0 line-clamp-2 text-xs text-muted-foreground">{tool.description}</p>{/if}
                 </div>
                 <div class="flex shrink-0 items-center gap-2">
-                  <span class="hidden text-[11px] text-muted-foreground sm:inline" data-testid="agent-rule-default">默认：{ruleNames[tool.defaultRule]}</span>
-                  <SelectField class="w-28" size="sm" ariaLabel={`${toolLabel(tool.name)} 的规则`} {value} disabled={saving}
+                  <span class="hidden text-[11px] text-muted-foreground sm:inline" data-testid="agent-rule-default">{m.companion_agent_rule_default_value({ rule: ruleNames[tool.defaultRule] })}</span>
+                  <SelectField class="w-28" size="sm" ariaLabel={m.companion_agent_rule_aria({ tool: toolLabel(tool.name) })} {value} disabled={saving}
                     options={(["default", "allow", "ask", "deny"] as const).map((option) => ({ value: option, label: ruleNames[option] }))}
                     onchange={(next) => setRule(tool.name, next)} />
                 </div>

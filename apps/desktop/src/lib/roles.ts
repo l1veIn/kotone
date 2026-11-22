@@ -4,6 +4,7 @@
 // 浏览器预览用内存里的示例角色；唤醒词检查只做长度和汉字的粗查（真实的拼音检查在桌面版）。
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri, updateSettings } from "./ipc";
+import { m } from "./paraglide/messages.js";
 
 export interface RoleWake { text: string; readings: string[] }
 export interface SyllableCheck { character: string; reading: string; choices: string[]; tokens: string[]; missing: string[] }
@@ -22,21 +23,24 @@ function previewCheck(text: string, readings: string[] = []): WakeWordCheck {
   const chars = [...text.replace(/\s+/g, "")];
   const problems: string[] = [];
   const warnings: string[] = [];
-  if (!chars.length) problems.push("唤醒词是空的");
-  else if (chars.some((c) => !/[一-鿿]/.test(c))) problems.push("唤醒词只能用汉字");
-  else if (chars.length < 3) problems.push("唤醒词至少 3 个字（两个字的名字可以重复两遍）");
-  else if (chars.length > 8) problems.push("唤醒词最多 8 个字");
-  else if (chars.length === 3) warnings.push("3 个字的唤醒词喊中率可能偏低，推荐 4 个字");
+  if (!chars.length) problems.push(m.role_wake_empty());
+  // i18n-ignore-start：汉字范围的正则、多音字读音数据
+  else if (chars.some((c) => !/[一-鿿]/.test(c))) problems.push(m.role_wake_hanzi_only());
+  else if (chars.length < 3) problems.push(m.role_wake_too_short());
+  else if (chars.length > 8) problems.push(m.role_wake_too_long());
+  else if (chars.length === 3) warnings.push(m.role_wake_three_chars());
   const choices: Record<string, string[]> = { 行: ["xíng", "háng"], 长: ["zhǎng", "cháng"] };
+  // i18n-ignore-end
   const syllables = chars.map((c, i) => {
     const options = choices[c] ?? [`(${c})`];
     const reading = readings[i] && options.includes(readings[i]) ? readings[i] : options[0];
     return { character: c, reading, choices: options, tokens: [reading], missing: [] };
   });
-  if (syllables.some((s) => s.choices.length > 1)) warnings.push("有多音字，确认一下读音");
+  if (syllables.some((s) => s.choices.length > 1)) warnings.push(m.role_wake_polyphone());
   return { text: chars.join(""), syllables, tokens: syllables.map((s) => s.reading), ok: !problems.length, problems, warnings };
 }
 const previewSouls: Record<string, string> = {
+  // i18n-ignore-start：角色内容（名字、性格、唤醒词规则，和后端一致），不是界面文字
   kotone: "# SOUL\n\n你是屏幕前玩家的游戏陪玩 Agent。说话温暖、轻快、简短；像一起开黑的朋友，不说教、不啰嗦。\n",
   dafeiyu: "# SOUL\n\n你是大肥鱼，一只蓝色长发的鲸鱼娘女仆，屏幕前玩家的游戏陪玩。\n",
   "claude-ojou": "# SOUL\n\n你是 Claude大小姐，优雅又有点傲娇的大小姐，屏幕前玩家的游戏陪玩。\n",
@@ -52,11 +56,12 @@ const preview: { current: string; roles: Omit<RoleInfo, "wakeCheck" | "current">
 };
 function previewView(r: Omit<RoleInfo, "wakeCheck" | "current">): RoleInfo {
   const text = r.wake.text || (r.id === DEFAULT_ROLE && r.name === "琴音" ? "琴音琴音" : [...r.name].length === 2 ? r.name + r.name : r.name);
+  // i18n-ignore-end
   return { ...r, wakeCheck: previewCheck(text, r.wake.readings), current: r.id === preview.current };
 }
 function previewRole(id: string) {
   const role = preview.roles.find((r) => r.id === id);
-  if (!role) throw new Error(`没有角色「${id}」`);
+  if (!role) throw new Error(m.role_preview_not_found({ id }));
   return role;
 }
 
@@ -79,7 +84,7 @@ export async function rolesUpdate(id: string, patch: RolePatch): Promise<RoleInf
   if (isTauri) return invoke("roles_update", { id, patch });
   const role = previewRole(id);
   const { soul, ...rest } = patch;
-  if (rest.name !== undefined && !rest.name.trim()) throw new Error("名字不能为空、不超过 20 个字");
+  if (rest.name !== undefined && !rest.name.trim()) throw new Error(m.role_preview_name_invalid());
   Object.assign(role, rest);
   if (soul !== undefined) previewSouls[id] = soul;
   if (preview.current === id) await updateSettings({ agent: { identity: { name: role.name, avatar: role.avatar } } });
@@ -87,10 +92,12 @@ export async function rolesUpdate(id: string, patch: RolePatch): Promise<RoleInf
 }
 export async function rolesCreate(patch: RolePatch): Promise<RoleInfo> {
   if (isTauri) return invoke("roles_create", { patch });
-  if (!patch.name?.trim()) throw new Error("角色要有名字");
+  if (!patch.name?.trim()) throw new Error(m.role_preview_name_required());
   const id = `r${preview.next++}`;
   preview.roles.push({ id, name: patch.name.trim(), summary: patch.summary ?? "", builtin: false, avatar: "", voice: patch.voice ?? "", wake: patch.wake ?? { text: "", readings: [] }, greeting: "" });
+  // i18n-ignore-start：角色内容（名字、性格、唤醒词规则，和后端一致），不是界面文字
   previewSouls[id] = patch.soul ?? `# SOUL\n\n你是${patch.name.trim()}，屏幕前玩家的游戏陪玩。\n`;
+  // i18n-ignore-end
   return rolesGet(id);
 }
 export async function rolesDelete(id: string): Promise<void> {
@@ -108,7 +115,7 @@ export async function rolesExport(id: string): Promise<unknown> {
 export async function rolesImport(card: unknown): Promise<RoleInfo> {
   if (isTauri) return invoke("roles_import", { card });
   const data = (card as { data?: { name?: string; description?: string } })?.data ?? (card as { name?: string; description?: string });
-  if (!data?.name) throw new Error("角色卡没有名字");
+  if (!data?.name) throw new Error(m.role_preview_card_no_name());
   return rolesCreate({ name: data.name, soul: data.description ?? "" });
 }
 export async function rolesCheckWake(text: string, readings: string[]): Promise<WakeWordCheck> {
@@ -153,8 +160,10 @@ export const BUNDLED_FACES: Record<string, RoleFaces> = {
 
 /** 自带形象的署名（CC BY-NC-SA 4.0 要求署名；界面上显示）。 */
 export const FACE_CREDITS: Record<string, string> = {
+  // i18n-ignore-start：立绘的版权署名，跟着素材走
   dafeiyu: "形象：社区二创 DeepSeek「大肥鱼」（非官方）· 原型 @上善无形 · 设计 @ZipZipPipe · 素材 PC2005-cloud/dsh-pet · CC BY-NC-SA 4.0（非商用）",
   "claude-ojou": "素材：Claude大小姐的日记本（github.com/opsCar/claude-daxiaojie-assets）· 角色设定：ZipZipPipe（胖次狐）· 设定图：lmy414/ai-chan-sheets · CC BY-NC-SA 4.0（非商用）· 同人作品，与 Anthropic 无关",
+  // i18n-ignore-end
 };
 
 /** 这个角色自带的表情头像；玩家上传了头像（`avatar` 非空）时不用。 */

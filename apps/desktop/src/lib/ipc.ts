@@ -42,6 +42,7 @@ import type {
   OverlayStateSnapshot,
 } from "./ipc/contracts";
 import { modelsDirPathError } from "./ipc/contracts";
+import { m } from "./paraglide/messages.js";
 
 export * from "./ipc/contracts";
 
@@ -508,7 +509,7 @@ export async function gameIcon(id: string): Promise<Uint8Array | null> {
 }
 /** 用检测到的启动方式打开游戏。 */
 export async function launchInstalledGame(id: string): Promise<void> {
-  if (!isTauri) throw new Error("浏览器预览不能打开游戏");
+  if (!isTauri) throw new Error(m.shell_ipc_launch_game_preview());
   await invoke("launch_installed_game", { id });
 }
 

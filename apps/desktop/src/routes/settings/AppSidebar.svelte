@@ -21,6 +21,7 @@
   import { toast, errText, settingsStore } from "../../lib/stores/ui";
   import { hasLegacyReminders } from "../../lib/ipc";
   import iconSrc from "../../assets/brand/icon-src.webp";
+  import { m } from "$lib/paraglide/messages.js";
 
   let { page, chatActive = false, rail = false, legacyVoiceOnly = false, onNavigate, onOpenChat, onOpenRole }: {
     page: PageId;
@@ -41,24 +42,24 @@
   // 分组名“游戏陪玩”由玩家确认（ADR 028 D1）。「琴音」一项用她现在的名字（ADR 022：可以改名）。
   const groups: { label: string; items: Item[] }[] = $derived([
     {
-      label: "游戏陪玩",
+      label: m.shell_sidebar_group_companion(),
       items: [
         { id: "assistant", label: $companionName, icon: Bot },
-        { id: "game", label: legacyVoiceOnly ? "游戏适配" : "游戏列表", icon: Gamepad2 },
-        { id: "automation", label: "自动化", icon: Zap },
+        { id: "game", label: legacyVoiceOnly ? m.shell_sidebar_game_adapt() : m.shell_sidebar_game_list(), icon: Gamepad2 },
+        { id: "automation", label: m.shell_sidebar_automation(), icon: Zap },
       ],
     },
     {
-      label: "语音输入",
+      label: m.shell_sidebar_group_voice_input(),
       items: [
-        { id: "general", label: "语音输入", icon: Mic },
-        ...(hasLegacyReminders($settingsStore?.ui) ? [{ id: "legacy-reminders" as const, label: "提醒助手", icon: Bell }] : []),
+        { id: "general", label: m.shell_sidebar_voice_input(), icon: Mic },
+        ...(hasLegacyReminders($settingsStore?.ui) ? [{ id: "legacy-reminders" as const, label: m.shell_sidebar_legacy_reminders(), icon: Bell }] : []),
       ],
     },
   ]);
   const footItems: Item[] = [
-    { id: "advanced", label: "设置", icon: Settings2 },
-    { id: "about", label: "关于", icon: Info },
+    { id: "advanced", label: m.shell_sidebar_settings(), icon: Settings2 },
+    { id: "about", label: m.shell_sidebar_about(), icon: Info },
   ];
 
   function isActive(id: PageId): boolean {
@@ -68,13 +69,13 @@
     return page === id;
   }
 
-  async function guarded(action: () => Promise<void>, failure: string) {
+  async function guarded(action: () => Promise<void>, failure: (error: string) => string) {
     try { await action(); onOpenChat(); }
-    catch (error) { toast(false, `${failure}：${errText(error)}`); }
+    catch (error) { toast(false, failure(errText(error))); }
   }
   function newChat() {
     if (legacyVoiceOnly || chat.currentId === null || chat.running) { onOpenChat(); return; }
-    void guarded(() => chat.newConversation(), "新建对话失败");
+    void guarded(() => chat.newConversation(), (error) => m.shell_sidebar_new_chat_failed({ error }));
   }
 </script>
 
@@ -103,30 +104,30 @@
   data-testid="app-sidebar" data-rail={rail}
 >
   <button type="button" data-testid="sidebar-new-chat" onclick={newChat}
-    aria-label={rail ? "新对话" : undefined} title={rail ? "新对话" : undefined}
+    aria-label={rail ? m.shell_sidebar_new_chat() : undefined} title={rail ? m.shell_sidebar_new_chat() : undefined}
     class="flex h-9 w-full shrink-0 items-center gap-2.5 rounded-lg border border-hairline text-[13px] text-foreground transition-colors hover:border-primary/40 hover:bg-sidebar-accent/60
       {rail ? 'justify-center' : 'px-2.5'}">
     <MessageSquarePlus class="size-4 shrink-0 text-primary" />
-    {#if !rail}<span>新对话</span><span class="ml-auto text-[11px] text-sidebar-foreground/50">{$companionName}</span>{/if}
+    {#if !rail}<span>{m.shell_sidebar_new_chat()}</span><span class="ml-auto text-[11px] text-sidebar-foreground/50">{$companionName}</span>{/if}
   </button>
 
   <!-- 对话列表在最上面，占满剩余高度（ADR 028 W11） -->
   {#if !rail}
     <div class="mt-3 flex min-h-0 flex-1 flex-col" data-testid="sidebar-conversations">
       {#if legacyVoiceOnly}
-        <p class="m-0 px-2.5 py-2 text-[11px] leading-relaxed text-sidebar-foreground/50" data-testid="sidebar-conversations-empty">配好 DeepSeek Key 后，和{$companionName}的对话会出现在这里</p>
+        <p class="m-0 px-2.5 py-2 text-[11px] leading-relaxed text-sidebar-foreground/50" data-testid="sidebar-conversations-empty">{m.shell_sidebar_conversations_empty({ name: $companionName })}</p>
       {:else}
         <ConversationList
           conversations={chat.state?.conversations ?? []}
           currentId={chat.currentId}
           runningId={chat.runningId}
           activePage={page === "assistant" && chatActive}
-          onNew={() => void guarded(() => chat.newConversation(), "新建对话失败")}
+          onNew={() => void guarded(() => chat.newConversation(), (error) => m.shell_sidebar_new_chat_failed({ error }))}
           onSelect={(id) => {
             if (id === chat.currentId) { onOpenChat(); return; }
-            void guarded(() => chat.select(id), "切换对话失败");
+            void guarded(() => chat.select(id), (error) => m.shell_sidebar_switch_chat_failed({ error }));
           }}
-          onDelete={(id) => chat.remove(id).catch((error) => { toast(false, `删除对话失败：${errText(error)}`); })}
+          onDelete={(id) => chat.remove(id).catch((error) => { toast(false, m.shell_sidebar_delete_chat_failed({ error: errText(error) })); })}
         />
       {/if}
     </div>
@@ -135,7 +136,7 @@
   {/if}
 
   <!-- 分组固定在底部，始终看得见 -->
-  <nav class="mt-3 flex shrink-0 flex-col gap-px border-t border-hairline pt-2" aria-label="功能">
+  <nav class="mt-3 flex shrink-0 flex-col gap-px border-t border-hairline pt-2" aria-label={m.shell_sidebar_nav_label()}>
     {#each groups as group, index (group.label)}
       {#if rail}
         {#if index > 0}<div class="mx-2 my-1.5 border-t border-hairline"></div>{/if}
@@ -151,7 +152,7 @@
     {#if !rail}
       <div class="mt-2 flex items-center gap-2 px-2.5 text-[11px] text-sidebar-foreground/45">
         <img src={iconSrc} alt="" class="size-4 rounded object-cover opacity-80" />
-        <span class="truncate">反馈群：1092354484</span>
+        <span class="truncate">{m.shell_sidebar_feedback_group()}</span>
       </div>
     {/if}
   </div>

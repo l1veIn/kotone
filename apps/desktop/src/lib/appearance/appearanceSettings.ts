@@ -9,20 +9,22 @@
  * preference, Windows CJK font stacks; the bounded-value and custom-font validation follows
  * RambleDesk's implementation.
  */
+import { m } from "../paraglide/messages.js";
+
 export const PALETTES = [
   { id: "kotone", label: "Kotone", swatch: "#00e5ff" },
-  { id: "neutral", label: "中性", swatch: "oklch(0.205 0 0)" },
-  { id: "zinc", label: "锌灰", swatch: "oklch(0.21 0.006 285.885)" },
-  { id: "slate", label: "石板", swatch: "oklch(0.208 0.042 265.755)" },
-  { id: "stone", label: "岩石", swatch: "oklch(0.216 0.006 56.043)" },
-  { id: "gray", label: "灰", swatch: "oklch(0.21 0.034 264.665)" },
-  { id: "red", label: "红", swatch: "oklch(0.637 0.237 25.331)" },
-  { id: "rose", label: "玫瑰", swatch: "oklch(0.645 0.246 16.439)" },
-  { id: "orange", label: "橙", swatch: "oklch(0.705 0.213 47.604)" },
-  { id: "green", label: "绿", swatch: "oklch(0.723 0.219 149.579)" },
-  { id: "blue", label: "蓝", swatch: "oklch(0.546 0.245 262.881)" },
-  { id: "yellow", label: "黄", swatch: "oklch(0.795 0.184 86.047)" },
-  { id: "violet", label: "紫", swatch: "oklch(0.606 0.25 292.717)" },
+  { id: "neutral", label: m.system_appearance_palette_neutral(), swatch: "oklch(0.205 0 0)" },
+  { id: "zinc", label: m.system_appearance_palette_zinc(), swatch: "oklch(0.21 0.006 285.885)" },
+  { id: "slate", label: m.system_appearance_palette_slate(), swatch: "oklch(0.208 0.042 265.755)" },
+  { id: "stone", label: m.system_appearance_palette_stone(), swatch: "oklch(0.216 0.006 56.043)" },
+  { id: "gray", label: m.system_appearance_palette_gray(), swatch: "oklch(0.21 0.034 264.665)" },
+  { id: "red", label: m.system_appearance_palette_red(), swatch: "oklch(0.637 0.237 25.331)" },
+  { id: "rose", label: m.system_appearance_palette_rose(), swatch: "oklch(0.645 0.246 16.439)" },
+  { id: "orange", label: m.system_appearance_palette_orange(), swatch: "oklch(0.705 0.213 47.604)" },
+  { id: "green", label: m.system_appearance_palette_green(), swatch: "oklch(0.723 0.219 149.579)" },
+  { id: "blue", label: m.system_appearance_palette_blue(), swatch: "oklch(0.546 0.245 262.881)" },
+  { id: "yellow", label: m.system_appearance_palette_yellow(), swatch: "oklch(0.795 0.184 86.047)" },
+  { id: "violet", label: m.system_appearance_palette_violet(), swatch: "oklch(0.606 0.25 292.717)" },
 ] as const;
 
 export type PaletteId = (typeof PALETTES)[number]["id"];
@@ -32,18 +34,18 @@ export type FontId = "system" | "yahei" | "dengxian" | "noto-sans-sc" | "harmony
 const SYSTEM_UI = '"Segoe UI", "Microsoft YaHei", system-ui, sans-serif';
 
 export const THEME_MODES: readonly { id: ThemeMode; label: string }[] = [
-  { id: "dark", label: "深色" },
-  { id: "light", label: "浅色" },
-  { id: "system", label: "跟随系统" },
+  { id: "dark", label: m.system_appearance_mode_dark() },
+  { id: "light", label: m.system_appearance_mode_light() },
+  { id: "system", label: m.system_appearance_mode_system() },
 ];
 
 export const UI_FONTS: readonly { id: FontId; label: string; stack: string }[] = [
-  { id: "system", label: "默认（Segoe UI + 微软雅黑）", stack: SYSTEM_UI },
-  { id: "yahei", label: "微软雅黑", stack: `"Microsoft YaHei UI", "Microsoft YaHei", ${SYSTEM_UI}` },
-  { id: "dengxian", label: "等线", stack: `DengXian, ${SYSTEM_UI}` },
-  { id: "noto-sans-sc", label: "思源黑体 / Noto Sans SC（需已安装）", stack: `"Noto Sans SC", "Source Han Sans SC", "Source Han Sans CN", ${SYSTEM_UI}` },
-  { id: "harmony", label: "HarmonyOS Sans（需已安装）", stack: `"HarmonyOS Sans SC", "HarmonyOS Sans", ${SYSTEM_UI}` },
-  { id: "custom", label: "自定义", stack: SYSTEM_UI },
+  { id: "system", label: m.system_appearance_font_system(), stack: SYSTEM_UI },
+  { id: "yahei", label: m.system_appearance_font_yahei(), stack: `"Microsoft YaHei UI", "Microsoft YaHei", ${SYSTEM_UI}` },
+  { id: "dengxian", label: m.system_appearance_font_dengxian(), stack: `DengXian, ${SYSTEM_UI}` },
+  { id: "noto-sans-sc", label: m.system_appearance_font_noto_sans_sc(), stack: `"Noto Sans SC", "Source Han Sans SC", "Source Han Sans CN", ${SYSTEM_UI}` },
+  { id: "harmony", label: m.system_appearance_font_harmony(), stack: `"HarmonyOS Sans SC", "HarmonyOS Sans", ${SYSTEM_UI}` },
+  { id: "custom", label: m.system_appearance_font_custom(), stack: SYSTEM_UI },
 ];
 
 /** 界面缩放（百分比）。字体与间距一起缩放，布局不变形。 */

@@ -98,7 +98,9 @@
       const onPreview = (event: Event) => show((event as CustomEvent<DanmakuPresentation | null>).detail);
       window.addEventListener(DANMAKU_PREVIEW_EVENT, onPreview);
       unlisten = () => window.removeEventListener(DANMAKU_PREVIEW_EVENT, onPreview);
+      // i18n-ignore-start：浏览器预览的示例数据（真实应用里来自后端或玩家自己的数据），不是界面文字
       show({ id: 1, text: "该打小龙了", startedAtMs: Date.now(), expiresAtMs: Date.now() + 60_000, speedPxPerSec: 160, fontSize: 32, topOffsetPx: DEFAULT_DANMAKU_TOP_OFFSET_PX, color: "#FFFFFF", emote: "none" });
+      // i18n-ignore-end
     }
     return () => { disposed = true; unlisten?.(); clearTimeout(expiry); };
   });

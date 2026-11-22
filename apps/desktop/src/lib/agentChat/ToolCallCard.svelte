@@ -7,6 +7,7 @@
 <script lang="ts">
   import { Check, ChevronRight, Circle, CircleAlert, LoaderCircle, ShieldAlert, Wrench, Zap } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
+  import { m } from "$lib/paraglide/messages.js";
   import { toolLabel, type AgentAsk, type Answer } from "../agent";
   import type { ToolView } from "./timeline";
   import { formatToolJson, toolPresentation } from "./toolPresentation";
@@ -70,13 +71,13 @@
     {#if open}
       <div class="mt-1 mb-2 ml-1 max-h-72 min-w-0 space-y-3 overflow-auto rounded-xl border border-hairline bg-muted/40 px-4 py-3 text-xs">
         <p class="m-0 font-mono text-[11px] break-all text-muted-foreground">{tool.call.name}</p>
-        {#if presentation.incomplete}<p class="m-0 text-muted-foreground">这一轮结束前，这个工具没有返回结果。</p>{/if}
+        {#if presentation.incomplete}<p class="m-0 text-muted-foreground">{m.chat_tool_card_incomplete()}</p>{/if}
         {#if input && input !== "{}"}
-          <section aria-label="参数"><h4 class="mt-0 mb-1 text-[11px] font-medium text-muted-foreground">参数</h4><pre class="m-0 font-mono text-xs leading-5 break-words whitespace-pre-wrap text-foreground/90">{input}</pre></section>
+          <section aria-label={m.chat_tool_card_arguments()}><h4 class="mt-0 mb-1 text-[11px] font-medium text-muted-foreground">{m.chat_tool_card_arguments()}</h4><pre class="m-0 font-mono text-xs leading-5 break-words whitespace-pre-wrap text-foreground/90">{input}</pre></section>
         {/if}
         {#if output}
-          <section aria-label="结果">
-            <h4 class="mt-0 mb-1 text-[11px] font-medium text-muted-foreground">结果{#if tool.untrusted}<span class="ml-1 font-normal">（{tool.call.name.startsWith("web.") ? "来自网页" : "来自屏幕或游戏聊天"}，仅供参考）</span>{/if}</h4>
+          <section aria-label={m.chat_tool_card_result()}>
+            <h4 class="mt-0 mb-1 text-[11px] font-medium text-muted-foreground">{m.chat_tool_card_result()}{#if tool.untrusted}<span class="ml-1 font-normal">{m.chat_tool_card_untrusted({ source: tool.call.name.startsWith("web.") ? m.chat_tool_card_source_web() : m.chat_tool_card_source_screen() })}</span>{/if}</h4>
             <pre class="m-0 font-mono text-xs leading-5 break-words whitespace-pre-wrap {presentation.failed ? 'text-destructive' : 'text-foreground/90'}">{output}</pre>
           </section>
         {/if}
@@ -84,7 +85,7 @@
     {/if}
   </details>
   {#if sources.length}
-    <ol class="m-0 mb-1 ml-5 flex list-none flex-col gap-0.5 p-0 text-xs" data-testid="agent-tool-sources" aria-label="来源">
+    <ol class="m-0 mb-1 ml-5 flex list-none flex-col gap-0.5 p-0 text-xs" data-testid="agent-tool-sources" aria-label={m.chat_tool_card_sources()}>
       {#each sources as s, i (s.url + i)}
         <li class="flex min-w-0 items-baseline gap-1.5">
           <span class="shrink-0 text-muted-foreground/70 tabular-nums">{i + 1}.</span>
@@ -97,9 +98,9 @@
   {/if}
   {#if changed.length}
     <div class="mb-1 ml-5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground" data-testid="agent-tool-changed">
-      <span>改了</span>
+      <span>{m.chat_tool_card_changed()}</span>
       {#each changed as item (item.label + item.page)}
-        <button type="button" class="rounded-md bg-primary/10 px-1.5 py-0.5 text-primary hover:bg-primary/20" title={`去看看：${item.page}`}
+        <button type="button" class="rounded-md bg-primary/10 px-1.5 py-0.5 text-primary hover:bg-primary/20" title={m.chat_tool_card_changed_link_title({ page: item.page })}
           data-testid="agent-tool-changed-link" data-page={item.page} onclick={() => openLocation(item.page)}>{item.label} →</button>
       {/each}
     </div>
@@ -108,15 +109,15 @@
   {#if ask}
     <div class="my-2 overflow-hidden rounded-2xl border border-warning/45 bg-composer shadow-lg" data-testid="agent-ask" data-ask-id={ask.askId}>
       <div class="flex items-center gap-2 bg-warning/10 px-4 py-2 text-xs font-medium text-warning">
-        <ShieldAlert class="size-3.5" />请求权限
+        <ShieldAlert class="size-3.5" />{m.chat_tool_card_ask_title()}
       </div>
       <div class="px-4 pt-3 pb-3.5">
-        <p class="m-0 text-[15px] leading-6 font-medium text-foreground">需要你确认：{ask.request.title || title}</p>
+        <p class="m-0 text-[15px] leading-6 font-medium text-foreground">{m.chat_ask_confirm({ question: ask.request.title || title })}</p>
         {#if ask.request.reason}<p class="m-0 mt-0.5 text-[13px] leading-5 text-muted-foreground">{ask.request.reason}</p>{/if}
         <div class="mt-3 flex flex-wrap gap-2">
-          <Button size="sm" data-testid="agent-ask-allow-once" disabled={!!answering} onclick={() => void answer("allow-once")}>允许</Button>
-          <Button size="sm" variant="outline" data-testid="agent-ask-allow-conversation" disabled={!!answering} onclick={() => void answer("allow-for-conversation")}>本段对话都允许</Button>
-          <Button size="sm" variant="ghost" class="text-destructive hover:bg-destructive/10 hover:text-destructive" data-testid="agent-ask-deny" disabled={!!answering} onclick={() => void answer("deny")}>拒绝</Button>
+          <Button size="sm" data-testid="agent-ask-allow-once" disabled={!!answering} onclick={() => void answer("allow-once")}>{m.chat_ask_allow_once()}</Button>
+          <Button size="sm" variant="outline" data-testid="agent-ask-allow-conversation" disabled={!!answering} onclick={() => void answer("allow-for-conversation")}>{m.chat_ask_allow_conversation()}</Button>
+          <Button size="sm" variant="ghost" class="text-destructive hover:bg-destructive/10 hover:text-destructive" data-testid="agent-ask-deny" disabled={!!answering} onclick={() => void answer("deny")}>{m.chat_ask_deny()}</Button>
         </div>
         {#if answerError}<p role="alert" class="mt-2 mb-0 text-xs text-destructive">{answerError}</p>{/if}
       </div>

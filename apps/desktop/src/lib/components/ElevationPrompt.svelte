@@ -10,6 +10,7 @@
    * 说清发生了什么，不给「不再提示」（这是一次失败，不是建议）。
    */
   import { updateSettings, restartAsAdmin } from "../ipc";
+  import { m } from "$lib/paraglide/messages.js";
   import {
     settingsStore,
     toast,
@@ -55,10 +56,10 @@
     try {
       await persistDismissed();
       if (neverAsk) {
-        toastInfo("好的，以后可以随时在「设置 → 系统」里以管理员身份重启");
+        toastInfo(m.system_elevation_never_ask_toast());
       }
     } catch (e) {
-      toast(false, `保存设置失败：${errText(e)}`);
+      toast(false, m.system_save_settings_failed({ error: errText(e) }));
     }
     onClose();
   }
@@ -69,15 +70,12 @@
     <div class="flex items-start gap-4">
       <img src={stickerPointing} alt="" class="h-14 w-14 shrink-0 object-contain" />
       <div class="min-w-0">
-        <h2 class="text-base font-bold">{blocked ? "游戏里发不出去" : "需要管理员权限"}</h2>
+        <h2 class="text-base font-bold">{blocked ? m.system_elevation_blocked_title() : m.system_elevation_title()}</h2>
         <p class="mt-1.5 text-[13px] leading-relaxed text-muted-foreground" data-testid="elevation-prompt-text">
           {#if blocked}
-            刚才往游戏里打字或按键被 Windows 拦下了：游戏是以管理员身份运行的，Kotone 不是。
-            以管理员身份重启 Kotone 后就能发出去。现在重启吗？
+            {m.system_elevation_blocked_body()}
           {:else}
-            Kotone 当前以普通权限运行。当目标程序（如 League of
-            Legends）以管理员权限运行时，Windows 会拦截普通权限进程发送的文字，
-            导致软件内发送失效。是否现在以管理员身份重启？
+            {m.system_elevation_body()}
           {/if}
         </p>
       </div>
@@ -93,7 +91,7 @@
             neverAsk = (event.target as HTMLInputElement).checked;
           }}
         />
-        不再提示
+        {m.system_elevation_never_ask()}
       </label>
     </div>
 
@@ -103,14 +101,14 @@
         disabled={busy}
         onclick={() => void onLater()}
       >
-        暂不
+        {m.system_admin_prompt_later()}
       </button>
       <button
         class="rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:brightness-110 active:scale-95 disabled:opacity-50"
         disabled={busy}
         onclick={() => void onRestart()}
       >
-        {busy ? "处理中…" : "以管理员权限重启"}
+        {busy ? m.system_admin_prompt_busy() : m.system_elevation_restart_button()}
       </button>
     </div>
   </div>

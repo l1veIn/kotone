@@ -1,26 +1,27 @@
 <script lang="ts">
   import type { AssistantInteractionMode } from "../../../../lib/ipc";
   import { patchSettings, settingsStore } from "../../../../lib/stores/ui";
+  import { m } from "$lib/paraglide/messages.js";
 
   let saving = $state(false);
   const mode = $derived($settingsStore?.assistant.interactionMode ?? "push-to-talk");
   const modes: { id: AssistantInteractionMode; name: string; description: string }[] = [
-    { id: "push-to-talk", name: "对讲机", description: "按住说话，松开提交" },
-    { id: "dictation", name: "录音笔", description: "点按录音，再点停止并确认" },
-    { id: "one-shot", name: "说一句就走", description: "点按录音，停顿后提交" },
+    { id: "push-to-talk", name: m.companion_interaction_ptt_name(), description: m.companion_interaction_ptt_desc() },
+    { id: "dictation", name: m.companion_interaction_dictation_name(), description: m.companion_interaction_dictation_desc() },
+    { id: "one-shot", name: m.companion_interaction_one_shot_name(), description: m.companion_interaction_one_shot_desc() },
   ];
 
   async function select(interactionMode: AssistantInteractionMode) {
     if (saving || interactionMode === mode) return;
     saving = true;
-    try { await patchSettings({ assistant: { interactionMode } }, "助手交互模式已保存"); }
+    try { await patchSettings({ assistant: { interactionMode } }, m.companion_interaction_saved()); }
     finally { saving = false; }
   }
 </script>
 
 <div class="mt-5 border-t border-white/8 pt-4" data-testid="assistant-interaction">
-  <h3>输入方式</h3>
-  <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3" aria-label="助手输入方式">
+  <h3>{m.companion_interaction_title()}</h3>
+  <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3" aria-label={m.companion_interaction_aria()}>
     {#each modes as item}
       {@const active = mode === item.id}
       <button type="button" data-testid={`assistant-mode-${item.id}`} aria-pressed={active} disabled={saving}

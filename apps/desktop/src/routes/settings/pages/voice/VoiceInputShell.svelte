@@ -9,6 +9,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Sparkles } from "@lucide/svelte";
   import type { VoiceInputPage } from "../../../../lib/stores/navigation";
+  import { m } from "$lib/paraglide/messages.js";
 
   let { page, onTab, onConfigure, children }: {
     page: VoiceInputPage;
@@ -19,7 +20,7 @@
   } = $props();
 
   const tabs: { id: VoiceInputPage; label: string }[] = [
-    { id: "general", label: "输入" }, { id: "processing", label: "文字处理" }, { id: "history", label: "历史" },
+    { id: "general", label: m.voice_tab_input() }, { id: "processing", label: m.voice_tab_processing() }, { id: "history", label: m.voice_tab_history() },
   ];
 </script>
 
@@ -27,12 +28,12 @@
   <div class="ui-scope mx-auto w-full max-w-3xl px-6 pt-7 text-foreground">
     <header class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
       <div class="min-w-0">
-        <h1 class="m-0 text-xl font-semibold tracking-tight">语音输入</h1>
-        <p class="mt-1.5 mb-0 text-[13px] leading-relaxed text-muted-foreground">说话，原话打进游戏聊天框。不经过{$companionName}。</p>
+        <h1 class="m-0 text-xl font-semibold tracking-tight">{m.voice_shell_title()}</h1>
+        <p class="mt-1.5 mb-0 text-[13px] leading-relaxed text-muted-foreground">{m.voice_shell_subtitle({ name: $companionName })}</p>
       </div>
-      <Button size="sm" variant="outline" data-testid="voice-configure" onclick={onConfigure}><Sparkles class="size-3.5 text-primary" />让 Kotone 帮我配置</Button>
+      <Button size="sm" variant="outline" data-testid="voice-configure" onclick={onConfigure}><Sparkles class="size-3.5 text-primary" />{m.voice_shell_configure()}</Button>
     </header>
-    <nav class="mt-4 flex w-fit gap-0.5 rounded-xl bg-muted/70 p-1" aria-label="语音输入分页">
+    <nav class="mt-4 flex w-fit gap-0.5 rounded-xl bg-muted/70 p-1" aria-label={m.voice_shell_tabs_label()}>
       {#each tabs as tab (tab.id)}
         {@const active = page === tab.id}
         <button type="button" data-testid={`voice-tab-${tab.id}`} aria-current={active ? "page" : undefined}

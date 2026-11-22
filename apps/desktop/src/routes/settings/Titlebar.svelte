@@ -20,6 +20,7 @@
   import { toast, errText } from "../../lib/stores/ui";
   import ExitPrompt from "../../lib/components/ExitPrompt.svelte";
   import iconSrc from "../../assets/brand/icon-src.webp";
+  import { m } from "$lib/paraglide/messages.js";
 
   let { onOpenVoiceInput, onToggleSidebar, brandWidth }: {
     /** 状态胶囊菜单里的「去语音输入设置」。 */
@@ -40,7 +41,7 @@
   async function pollResourceUsage() {
     try {
       const u = await getResourceUsage();
-      resourceText = `CPU ${u.cpuPercent.toFixed(1)}% · 内存 ${Math.round(u.memoryBytes / 1024 / 1024)} MB`;
+      resourceText = m.shell_titlebar_resource_usage({ cpu: u.cpuPercent.toFixed(1), memory: Math.round(u.memoryBytes / 1024 / 1024) });
     } catch {
       /* 采样失败保留旧值 */
     }
@@ -76,7 +77,7 @@
     acting = true;
     try {
       await (action === "start" ? startRuntime() : stopRuntime());
-      toast(true, action === "start" ? "本地语音识别已启动" : "本地语音识别已停止");
+      toast(true, action === "start" ? m.shell_titlebar_asr_started() : m.shell_titlebar_asr_stopped());
     } catch (e) {
       toast(false, errText(e));
     } finally {
@@ -117,7 +118,7 @@
       await getCurrentWindow().hide();
       showExitPrompt = false;
     } catch (e) {
-      toast(false, `最小化到托盘失败：${errText(e)}`);
+      toast(false, m.shell_titlebar_minimize_to_tray_failed({ error: errText(e) }));
     }
   }
 
@@ -128,7 +129,7 @@
       await exit(0);
     } catch (e) {
       exiting = false;
-      toast(false, `退出失败：${errText(e)}`);
+      toast(false, m.shell_titlebar_quit_failed({ error: errText(e) }));
     }
   }
 
@@ -153,12 +154,12 @@
 >
   <div class="flex shrink-0 items-center gap-1.5 self-stretch pl-2 transition-[width] duration-300" style:width={brandWidth}>
     <button type="button" class="flex size-7 shrink-0 items-center justify-center rounded-lg text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-foreground"
-      title="展开 / 收起侧边栏" aria-label="展开或收起侧边栏" data-testid="sidebar-toggle" onclick={onToggleSidebar}>
+      title={m.shell_titlebar_toggle_sidebar_title()} aria-label={m.shell_titlebar_toggle_sidebar_label()} data-testid="sidebar-toggle" onclick={onToggleSidebar}>
       <PanelLeft class="size-4" />
     </button>
     <img src={iconSrc} alt="" class="ml-1 size-5 shrink-0 rounded-md object-cover ring-1 ring-primary/50" />
     <p class="min-w-0 truncate text-[13px] font-semibold tracking-wide text-foreground">
-      Kotone <span class="font-normal text-sidebar-foreground/70">琴音</span>
+      Kotone <span class="font-normal text-sidebar-foreground/70">{m.shell_titlebar_brand_name()}</span>
     </p>
   </div>
 
@@ -169,25 +170,25 @@
         <Menu.DropdownMenuTrigger data-testid="titlebar-asr" data-asr={localState}
           class="flex min-w-0 items-center gap-2 rounded-full px-2.5 py-1 text-xs transition-colors hover:bg-sidebar-accent">
           <span class="size-2 shrink-0 rounded-full transition-colors {dotClass}"></span>
-          <span class="truncate font-medium {localState === 'local-running' ? 'text-primary' : localState === 'local-error' ? 'text-destructive' : 'text-sidebar-foreground'}">本地识别 · {LOCAL_ASR_LABELS[localState]}{localState === "local-starting" ? "…" : ""}</span>
+          <span class="truncate font-medium {localState === 'local-running' ? 'text-primary' : localState === 'local-error' ? 'text-destructive' : 'text-sidebar-foreground'}">{m.shell_titlebar_local_asr({ status: LOCAL_ASR_LABELS[localState] })}{localState === "local-starting" ? "…" : ""}</span>
           <ChevronDown class="size-3 shrink-0 opacity-60" />
         </Menu.DropdownMenuTrigger>
         <Menu.DropdownMenuContent align="start" class="w-52">
           {#if localState === "local-running"}
-            <Menu.DropdownMenuItem data-testid="titlebar-asr-stop" disabled={acting} onSelect={() => void runAsr("stop")}>停止本地语音识别</Menu.DropdownMenuItem>
+            <Menu.DropdownMenuItem data-testid="titlebar-asr-stop" disabled={acting} onSelect={() => void runAsr("stop")}>{m.shell_titlebar_asr_stop()}</Menu.DropdownMenuItem>
             {#if rt?.restartNeeded}
-              <Menu.DropdownMenuItem data-testid="titlebar-asr-restart" disabled={acting} onSelect={() => void runAsr("start")}>按新设置重新启动</Menu.DropdownMenuItem>
+              <Menu.DropdownMenuItem data-testid="titlebar-asr-restart" disabled={acting} onSelect={() => void runAsr("start")}>{m.shell_titlebar_asr_restart()}</Menu.DropdownMenuItem>
             {/if}
           {:else}
             <Menu.DropdownMenuItem data-testid="titlebar-asr-start" disabled={acting || localState === "local-starting"} onSelect={() => void runAsr("start")}>
-              {localState === "local-error" ? "重试启动" : "启动本地语音识别"}
+              {localState === "local-error" ? m.shell_titlebar_asr_retry() : m.shell_titlebar_asr_start()}
             </Menu.DropdownMenuItem>
           {/if}
           {#if localState === "local-error" && rt?.error}
             <p class="m-0 px-2 py-1.5 text-[11px] leading-relaxed text-destructive">{rt.error}</p>
           {/if}
           <Menu.DropdownMenuSeparator />
-          <Menu.DropdownMenuItem data-testid="titlebar-asr-settings" onSelect={onOpenVoiceInput}>去语音输入设置</Menu.DropdownMenuItem>
+          <Menu.DropdownMenuItem data-testid="titlebar-asr-settings" onSelect={onOpenVoiceInput}>{m.shell_titlebar_voice_settings()}</Menu.DropdownMenuItem>
         </Menu.DropdownMenuContent>
       </Menu.DropdownMenu>
     {/if}
@@ -195,14 +196,14 @@
 
   <div class="flex h-full shrink-0 items-center">
     {#if rt?.phase === "running" && resourceText}
-      <span class="mr-2 hidden text-[11px] text-sidebar-foreground/60 tabular-nums lg:inline" title="Kotone 进程资源占用">{resourceText}</span>
+      <span class="mr-2 hidden text-[11px] text-sidebar-foreground/60 tabular-nums lg:inline" title={m.shell_titlebar_resource_title()}>{resourceText}</span>
     {/if}
     <div class="mx-1 h-4 w-px bg-hairline"></div>
-    <button class={windowButton} title="最小化" aria-label="最小化" onclick={() => void minimize()}><Minus class="size-4" /></button>
-    <button class={windowButton} title={maximized ? "还原" : "最大化"} aria-label={maximized ? "还原" : "最大化"} data-testid="window-maximize" onclick={() => void toggleMaximize()}>
+    <button class={windowButton} title={m.shell_titlebar_minimize()} aria-label={m.shell_titlebar_minimize()} onclick={() => void minimize()}><Minus class="size-4" /></button>
+    <button class={windowButton} title={maximized ? m.shell_titlebar_restore() : m.shell_titlebar_maximize()} aria-label={maximized ? m.shell_titlebar_restore() : m.shell_titlebar_maximize()} data-testid="window-maximize" onclick={() => void toggleMaximize()}>
       {#if maximized}<Copy class="size-3.5 -scale-x-100" />{:else}<Square class="size-3.5" />{/if}
     </button>
-    <button class="flex h-full w-11 items-center justify-center text-sidebar-foreground/70 transition-colors hover:bg-[#e81123] hover:text-white" title="关闭" aria-label="关闭" onclick={() => void close()}>
+    <button class="flex h-full w-11 items-center justify-center text-sidebar-foreground/70 transition-colors hover:bg-[#e81123] hover:text-white" title={m.shell_titlebar_close()} aria-label={m.shell_titlebar_close()} onclick={() => void close()}>
       <X class="size-4" />
     </button>
   </div>

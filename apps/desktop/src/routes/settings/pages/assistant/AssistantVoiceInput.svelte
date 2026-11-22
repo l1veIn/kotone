@@ -6,6 +6,7 @@
   import { appState } from "../../../../lib/stores/state";
   import { runtimeStore } from "../../../../lib/stores/runtime";
   import { errText, settingsStore } from "../../../../lib/stores/ui";
+  import { m } from "$lib/paraglide/messages.js";
 
   let { ready, active, submitting, onOpenSettings, onBusyChange }: {
     ready: boolean; active: boolean; submitting: boolean;
@@ -18,17 +19,17 @@
   const hotkey = $derived($settingsStore?.assistant.hotkey.trim() ?? "");
   const inputBusy = $derived(!["idle", "success", "error"].includes($appState.state));
   const own = $derived($voice.phase !== "idle");
-  const blocked = $derived(!isTauri ? "语音输入仅限桌面版"
-    : $runtimeStore?.phase !== "running" ? ($runtimeStore?.asrLocal === false ? "语音识别还没准备好" : "本地语音识别未启动")
-    : !ready ? "请先选择 AI 连接"
-    : submitting ? "正在创建提醒"
-    : inputBusy && !own ? ($appState.purpose === "assistant" ? "助手语音尚未结束" : "请先结束当前输入") : "");
-  const label = $derived($voice.phase === "starting" ? "开启麦克风…"
-    : $voice.phase === "cancelling" ? "取消中…"
-    : $voice.phase === "working" ? "处理中…"
-    : $voice.phase === "preview" ? "确认创建"
-    : $voice.phase === "listening" ? (mode === "push-to-talk" ? "松开提交" : "结束录音")
-    : mode === "push-to-talk" ? "按住说话" : "语音输入");
+  const blocked = $derived(!isTauri ? m.companion_voice_input_desktop_only()
+    : $runtimeStore?.phase !== "running" ? ($runtimeStore?.asrLocal === false ? m.companion_voice_input_asr_not_ready() : m.companion_voice_input_asr_not_started())
+    : !ready ? m.companion_voice_input_choose_connection()
+    : submitting ? m.companion_voice_input_creating_reminder()
+    : inputBusy && !own ? ($appState.purpose === "assistant" ? m.companion_voice_input_assistant_busy() : m.companion_voice_input_finish_current()) : "");
+  const label = $derived($voice.phase === "starting" ? m.companion_voice_input_starting()
+    : $voice.phase === "cancelling" ? m.companion_voice_input_cancelling()
+    : $voice.phase === "working" ? m.companion_voice_input_working()
+    : $voice.phase === "preview" ? m.companion_voice_input_confirm()
+    : $voice.phase === "listening" ? (mode === "push-to-talk" ? m.companion_voice_input_release_to_submit() : m.companion_voice_input_stop_recording())
+    : mode === "push-to-talk" ? m.companion_voice_input_hold_to_talk() : m.companion_voice_input_voice());
   const disabled = $derived(!!blocked && !own || ["working", "cancelling"].includes($voice.phase));
   const hideHint = $derived((!ready && isTauri) || (!blocked && mode === "push-to-talk"));
   let pointer: number | null = null;
@@ -113,7 +114,7 @@
 
 <div class="min-w-0 text-right" data-testid="assistant-voice-input">
   <div class="flex flex-wrap items-center justify-end gap-2">
-    {#if own}<button type="button" class="secondary" disabled={$voice.phase === "cancelling"} onclick={cancel} aria-label="取消语音输入">取消</button>{/if}
+    {#if own}<button type="button" class="secondary" disabled={$voice.phase === "cancelling"} onclick={cancel} aria-label={m.companion_voice_input_cancel_aria()}>{m.companion_voice_input_cancel()}</button>{/if}
     <button type="button" data-testid="assistant-voice-button" aria-label={label}
       aria-describedby="assistant-voice-hint" aria-pressed={$voice.phase === "listening"} {disabled}
       class="inline-flex touch-none select-none items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold ring-1 transition disabled:cursor-not-allowed disabled:opacity-40
@@ -128,12 +129,12 @@
   </div>
   <div class="mt-1.5 flex items-center justify-end gap-1 whitespace-nowrap text-[11px] leading-relaxed text-muted-foreground">
     <button type="button" class="min-w-0 truncate hover:text-primary" onclick={onOpenSettings} data-testid="assistant-voice-hotkey"
-      title={hotkey ? `快捷键：${hotkey}` : "设置快捷键"}>
-      {hotkey ? `快捷键：${hotkey}` : "设置快捷键"}
+      title={hotkey ? m.companion_voice_input_hotkey({ hotkey }) : m.companion_voice_input_set_hotkey()}>
+      {hotkey ? m.companion_voice_input_hotkey({ hotkey }) : m.companion_voice_input_set_hotkey()}
     </button>
     {#if !hideHint}<span aria-hidden="true" class="shrink-0">·</span>{/if}
     <p id="assistant-voice-hint" class="shrink-0" class:sr-only={hideHint}>
-      {blocked || (mode === "push-to-talk" ? "按住按钮说话，松开提交；聚焦后也可用空格或 Enter" : mode === "dictation" ? "结束录音后确认" : "说完自动提交")}
+      {blocked || (mode === "push-to-talk" ? m.companion_voice_input_hint_ptt() : mode === "dictation" ? m.companion_voice_input_hint_dictation() : m.companion_voice_input_hint_one_shot())}
     </p>
   </div>
   {#if own && $appState.purpose === "assistant" && ($appState.finalText || $appState.partialText)}

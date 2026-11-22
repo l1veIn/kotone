@@ -2,6 +2,7 @@
 <!-- 展开时读过程；还在做的时候每次状态变化（多一步、等确认、做完）都重新读。不显示推理过程。 -->
 <script lang="ts">
   import { agentSubagentMessages, type AgentMessage, type SubagentInfo } from "../agent";
+  import { m } from "$lib/paraglide/messages.js";
   import MessageMarkdown from "./markdown/MessageMarkdown.svelte";
   import { buildTurns, type ToolView } from "./timeline";
   import ToolCallCard from "./ToolCallCard.svelte";
@@ -66,24 +67,24 @@
 </script>
 
 {#if showResult && summary}
-  <section aria-label="结果">
-    <h4 class="mt-0 mb-1 text-[11px] font-medium text-muted-foreground">结果</h4>
+  <section aria-label={m.chat_task_process_result()}>
+    <h4 class="mt-0 mb-1 text-[11px] font-medium text-muted-foreground">{m.chat_task_process_result()}</h4>
     <p class="m-0 text-[13px] leading-5 whitespace-pre-wrap text-foreground/90" data-testid="task-card-summary-full">{summary}</p>
   </section>
 {/if}
-<section aria-label="过程" data-testid="task-card-process">
-  <h4 class="mt-0 mb-1 text-[11px] font-medium text-muted-foreground">过程</h4>
+<section aria-label={m.chat_task_process_steps()} data-testid="task-card-process">
+  <h4 class="mt-0 mb-1 text-[11px] font-medium text-muted-foreground">{m.chat_task_process_steps()}</h4>
   {#if processError}
-    <p class="m-0 text-xs text-destructive">读不到过程：{processError}</p>
+    <p class="m-0 text-xs text-destructive">{m.chat_task_process_error({ error: processError })}</p>
   {:else if process === null}
-    <p class="m-0 text-xs text-muted-foreground">{loading ? "读取中…" : ""}</p>
+    <p class="m-0 text-xs text-muted-foreground">{loading ? m.chat_task_process_loading() : ""}</p>
   {:else if rows.length === 0}
-    <p class="m-0 text-xs text-muted-foreground">还没有开始</p>
+    <p class="m-0 text-xs text-muted-foreground">{m.chat_task_process_not_started()}</p>
   {:else}
     <div class="min-w-0 space-y-1">
       {#each rows as row (row.key)}
         {#if row.kind === "task"}
-          <p class="m-0 line-clamp-3 text-xs leading-5 text-muted-foreground" data-testid="task-card-step-task">交代：{row.text}</p>
+          <p class="m-0 line-clamp-3 text-xs leading-5 text-muted-foreground" data-testid="task-card-step-task">{m.chat_task_process_task({ text: row.text })}</p>
         {:else if row.kind === "text"}
           <div class="text-[13px]" data-testid="task-card-step-text"><MessageMarkdown text={row.text} /></div>
         {:else if row.kind === "tool"}

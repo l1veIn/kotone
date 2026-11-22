@@ -3,22 +3,23 @@
   import { TriangleAlert } from "@lucide/svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
+  import { m } from "$lib/paraglide/messages.js";
 </script>
 
 {#if $settingsStore}
   <div class="space-y-6">
   <p class="m-0 flex items-start gap-2 rounded-xl border border-warning/35 bg-warning/8 px-3.5 py-2.5 text-xs leading-relaxed text-warning">
     <TriangleAlert class="mt-0.5 size-3.5 shrink-0" />
-    除非你知道你在做什么，否则不建议修改这些配置。默认值即原行为。
+    {m.system_tuning_warning()}
   </p>
 
-  <SettingsSection title="VAD 高级设置" description="控制 silero 把背景噪声判成说话的程度，仅 one-shot / solo 生效（与通用页的「静音判停时长」是两回事）。下一条会话立即生效。">
-    <SettingsRow label="语音判定阈值" stacked>
+  <SettingsSection title={m.system_tuning_vad_title()} description={m.system_tuning_vad_description()}>
+    <SettingsRow label={m.system_tuning_vad_threshold()} stacked>
       {#snippet control()}
         <div class="flex items-center gap-3">
           <input
             type="range"
-            aria-label="语音判定阈值"
+            aria-label={m.system_tuning_vad_threshold()}
             min="0.1"
             max="0.9"
             step="0.05"
@@ -26,7 +27,7 @@
             onchange={(e) =>
               void patchSettings(
                 { vad: { threshold: Number((e.target as HTMLInputElement).value) } },
-                "VAD 阈值已保存",
+                m.system_tuning_vad_threshold_saved(),
               )}
             class="min-w-0 flex-1 accent-[var(--color-primary)]"
           />
@@ -34,12 +35,12 @@
         </div>
       {/snippet}
     </SettingsRow>
-    <SettingsRow label="最短语音" stacked>
+    <SettingsRow label={m.system_tuning_min_speech()} stacked>
       {#snippet control()}
         <div class="flex items-center gap-3">
           <input
             type="range"
-            aria-label="最短语音"
+            aria-label={m.system_tuning_min_speech()}
             min="20"
             max="500"
             step="10"
@@ -47,7 +48,7 @@
             onchange={(e) =>
               void patchSettings(
                 { vad: { minSpeechMs: Number((e.target as HTMLInputElement).value) } },
-                "最短语音已保存",
+                m.system_tuning_min_speech_saved(),
               )}
             class="min-w-0 flex-1 accent-[var(--color-primary)]"
           />
@@ -55,12 +56,12 @@
         </div>
       {/snippet}
     </SettingsRow>
-    <SettingsRow label="最短静音" stacked>
+    <SettingsRow label={m.system_tuning_min_silence()} stacked>
       {#snippet control()}
         <div class="flex items-center gap-3">
           <input
             type="range"
-            aria-label="最短静音"
+            aria-label={m.system_tuning_min_silence()}
             min="20"
             max="500"
             step="10"
@@ -68,7 +69,7 @@
             onchange={(e) =>
               void patchSettings(
                 { vad: { minSilenceMs: Number((e.target as HTMLInputElement).value) } },
-                "最短静音已保存",
+                m.system_tuning_min_silence_saved(),
               )}
             class="min-w-0 flex-1 accent-[var(--color-primary)]"
           />
@@ -76,16 +77,16 @@
         </div>
       {/snippet}
     </SettingsRow>
-    <p class="m-0 py-3 text-[11px] leading-relaxed text-muted-foreground">调高阈值、拉长最短语音可减少背景噪声被误判成语音。</p>
+    <p class="m-0 py-3 text-[11px] leading-relaxed text-muted-foreground">{m.system_tuning_vad_hint()}</p>
   </SettingsSection>
 
-  <SettingsSection title="热词权重" description="热词命中加分：越高热词越容易命中，但背景噪声被识别成热词的概率也越高（如句首「DPS」）。">
-    <SettingsRow label="热词加分" stacked>
+  <SettingsSection title={m.system_tuning_hotwords_title()} description={m.system_tuning_hotwords_description()}>
+    <SettingsRow label={m.system_tuning_hotwords_score()} stacked>
       {#snippet control()}
         <div class="flex items-center gap-3">
           <input
             type="range"
-            aria-label="热词加分"
+            aria-label={m.system_tuning_hotwords_score()}
             min="0"
             max="10"
             step="0.5"
@@ -93,7 +94,7 @@
             onchange={(e) =>
               void patchSettings(
                 { hotwordsScore: Number((e.target as HTMLInputElement).value) },
-                "热词权重已保存",
+                m.system_tuning_hotwords_saved(),
               )}
             class="min-w-0 flex-1 accent-[var(--color-primary)]"
           />
@@ -101,7 +102,7 @@
         </div>
       {/snippet}
     </SettingsRow>
-    <p class="m-0 py-3 text-[11px] leading-relaxed text-muted-foreground">0 = 无偏置（完全不鼓励热词）；改动需「停止 → 启动」后生效。</p>
+    <p class="m-0 py-3 text-[11px] leading-relaxed text-muted-foreground">{m.system_tuning_hotwords_hint()}</p>
   </SettingsSection>
   </div>
 {/if}

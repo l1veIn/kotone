@@ -4,6 +4,7 @@
 // 旧版本写进对话里的位置（「琴音 → 设置 → 呼叫」「设置 → 其他热键」等）也认，跳到它们的新位置（ADR 028）。
 // 设置窗口（Settings.svelte）订阅这里的请求并切页面 / 分页 / 滚到分组。
 import { writable } from "svelte/store";
+import { m } from "../paraglide/messages.js";
 
 export type AssistantSection = "chat" | "identity" | "memory" | "skills";
 export type VoiceInputPage = "general" | "processing" | "history";
@@ -15,6 +16,7 @@ export type PageTarget =
 
 /** 「设置」的分页（页面 ID 不变；陪玩组是 ADR 028 新加的分页）。 */
 export const ADVANCED_TABS: Record<string, string> = {
+  // i18n-ignore-start：设置位置的词：要和后端 settings_guide.rs 写的位置一字不差（玩家点“去看看”时据此跳转），不是界面文字
   "怎么叫她": "call", "她怎么回答": "reply", "权限": "permissions", "用量": "usage",
   "模型": "models", "API 连接": "connections", "声音": "sound", "调参": "tuning", "外观": "appearance", "系统": "system",
   // 旧写法
@@ -103,21 +105,21 @@ export function parseLocation(where: string): PageTarget | null {
 
 /** 改了东西、但结果里没有 effects.locations 的工具：按工具名给“改了什么、在哪”。只读的工具不给。 */
 const TOOL_LOCATIONS: Record<string, [string, string]> = {
-  "models.activate": ["模型", "设置 → 模型"],
-  "models.download": ["模型", "设置 → 模型"],
-  "models.delete": ["模型", "设置 → 模型"],
-  "models.dir.set": ["模型目录", "设置 → 模型"],
-  "speech.model.download": ["语音合成模型", "设置 → 模型 → 语音合成"],
-  "connections.upsert": ["API 连接", "设置 → API 连接"],
-  "connections.delete": ["API 连接", "设置 → API 连接"],
-  "connections.request_key": ["API 连接", "设置 → API 连接"],
-  "voice_chat.install": ["游戏语音", "设置 → 她怎么回答 → 游戏语音"],
-  "voice_chat.default_mic": ["Windows 默认麦克风", "设置 → 她怎么回答 → 游戏语音"],
-  "wake.model.download": ["唤醒模型", "设置 → 怎么叫她 → 语音唤醒"],
-  "skill.manage": ["技能", "琴音 → 技能"],
-  "memory": ["记忆", "琴音 → 记忆"],
-  "soul.write": ["性格", "琴音 → 她是谁"],
-  "automation.save": ["自动化", "自动化"],
+  "models.activate": [m.shell_nav_changed_models(), "设置 → 模型"],
+  "models.download": [m.shell_nav_changed_models(), "设置 → 模型"],
+  "models.delete": [m.shell_nav_changed_models(), "设置 → 模型"],
+  "models.dir.set": [m.shell_nav_changed_models_dir(), "设置 → 模型"],
+  "speech.model.download": [m.shell_nav_changed_tts_model(), "设置 → 模型 → 语音合成"],
+  "connections.upsert": [m.shell_nav_changed_connections(), "设置 → API 连接"],
+  "connections.delete": [m.shell_nav_changed_connections(), "设置 → API 连接"],
+  "connections.request_key": [m.shell_nav_changed_connections(), "设置 → API 连接"],
+  "voice_chat.install": [m.shell_nav_changed_voice_chat(), "设置 → 她怎么回答 → 游戏语音"],
+  "voice_chat.default_mic": [m.shell_nav_changed_default_mic(), "设置 → 她怎么回答 → 游戏语音"],
+  "wake.model.download": [m.shell_nav_changed_wake_model(), "设置 → 怎么叫她 → 语音唤醒"],
+  "skill.manage": [m.shell_nav_changed_skills(), "琴音 → 技能"],
+  "memory": [m.shell_nav_changed_memory(), "琴音 → 记忆"],
+  "soul.write": [m.shell_nav_changed_soul(), "琴音 → 她是谁"],
+  "automation.save": [m.shell_nav_changed_automation(), "自动化"],
 };
 
 /** 一次完成的工具调用改了哪些设置、在界面上的哪里（聊天里显示成可点的链接）。 */
@@ -127,7 +129,12 @@ export function changedLocations(tool: string, content: string | null | undefine
     let category = "";
     try { category = String((JSON.parse(args ?? "{}") as { category?: string }).category ?? ""); } catch { category = ""; }
     const kind = ({ asr: "语音识别", ocr: "文字识别", tts: "语音合成", search: "联网搜索" } as Record<string, string>)[category];
-    if (kind) return [{ label: kind === "联网搜索" ? kind : `${kind}模型`, page: `设置 → 模型 → ${kind}` }];
+    const label = ({
+      asr: m.shell_nav_changed_asr_model(), ocr: m.shell_nav_changed_ocr_model(),
+      tts: m.shell_nav_changed_tts_model(), search: m.shell_nav_changed_search(),
+    } as Record<string, string>)[category];
+    if (kind && label) return [{ label, page: `设置 → 模型 → ${kind}` }];
+  // i18n-ignore-end
   }
   let parsed: unknown = null;
   try { parsed = content ? JSON.parse(content) : null; } catch { parsed = null; }

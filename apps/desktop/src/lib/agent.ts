@@ -4,6 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { isTauri } from "./ipc";
+import { m } from "./paraglide/messages.js";
 
 export interface ToolCall { id: string; name: string; arguments: string }
 /** `cachedInputTokens`：输入里命中服务商前缀缓存的部分；`cost` + `currency`：按 Kotone 价格表估的费用（DeepSeek 用人民币）。 */
@@ -91,12 +92,13 @@ export interface AgentTool {
   core: boolean;
 }
 
-export const PREVIEW_ERROR = "仅预览：浏览器里不会真的发出去，请在桌面应用里聊天。";
+export const PREVIEW_ERROR = m.chat_preview_error();
 
 // ---------- 浏览器预览数据（只在 isTauri = false 时使用） ----------
 
 const t0 = Date.now() - 5 * 60_000;
 const previewConversation: Conversation = {
+  // i18n-ignore-start：浏览器预览的示例数据（真实应用里来自后端或玩家自己的数据），不是界面文字
   version: 1, id: "c-preview", title: "帮我做一个每秒按 Q 的自动化", createdAtMs: t0, updatedAtMs: t0 + 60_000,
   messages: [
     { role: "user", text: "帮我做一个每秒按 Q 的自动化", source: "chat", atMs: t0 },
@@ -157,6 +159,7 @@ const previewTools: Omit<AgentTool, "rule">[] = [
   { name: "automation.stop", group: "automation", description: "停止正在运行的自动化", sideEffects: [], defaultRule: "allow", core: true },
   { name: "automation.save", group: "automation", description: "保存一段自动化", sideEffects: ["write"], defaultRule: "ask", core: true },
   { name: "settings.update", group: "settings", description: "修改 Kotone 设置", sideEffects: ["write"], defaultRule: "ask", core: false },
+  // i18n-ignore-end
 ];
 
 function summary(c: Conversation): ConversationSummary {
@@ -293,90 +296,90 @@ export async function agentSubmitKey(request: KeyRequest, apiKey: string | null)
 
 /** 工具名的中文说明（卡片标题用；没有的显示原名）。 */
 const toolLabels: Record<string, string> = {
-  "tools.find": "查找工具",
-  speak: "说",
-  danmaku: "发弹幕",
-  "reply.say": "播报",
-  "reminder.create": "设提醒",
-  "web.search": "联网搜索",
-  "web.fetch": "读网页",
-  "game_chat.send": "发到游戏聊天",
-  "companion.read_chat": "看游戏聊天",
-  "window.active": "看当前窗口",
-  "window.list": "查看窗口",
-  "game.list": "查看游戏",
-  "game.focus": "切换到游戏",
-  "game.launch": "打开游戏",
-  "game.close": "关闭游戏",
-  "game.look": "看游戏画面",
-  "game.act": "操作游戏",
-  "automation.list": "查看已保存的自动化",
-  "automation.get": "查看自动化",
-  "automation.run": "运行自动化",
-  "automation.runs": "查看执行记录",
-  "automation.stop": "停止自动化",
-  "automation.save": "保存自动化",
-  "automation.delete": "删除自动化",
-  "settings.get": "读取设置",
-  "settings.update": "修改设置",
-  "ocr.recognize": "识别屏幕文字",
-  "settings.describe": "查设置说明",
-  "game.installed": "查装了哪些游戏",
-  "models.list": "查看模型",
-  "models.download": "下载模型",
-  "models.activate": "换模型",
-  "models.delete": "删除模型",
-  "speech.model.download": "下载语音模型",
-  "connections.list": "查看 API 连接",
-  "connections.presets": "查看服务商",
-  "connections.request_key": "请你粘贴 Key",
-  "wake.status": "查看唤醒词",
-  "wake.model.download": "下载唤醒模型",
-  "runtime.status": "查看运行状态",
-  "runtime.start": "启动语音识别",
-  "app.restart": "重启 Kotone",
-  "voice_chat.status": "查看游戏语音",
-  "voice_chat.install": "安装虚拟麦克风",
-  "voice_chat.default_mic": "改 Windows 默认麦克风",
-  "voice_chat.say": "对队友说话",
-  "voice_chat.test": "测试游戏语音",
-  "memory": "记下来",
-  "skill.view": "看技能",
-  "skill.manage": "写技能",
-  "soul.write": "改性格",
-  "session.spawn": "交给后台去做",
-  "session.send": "转告一句",
-  "session.list": "查看在做的事",
-  "session.history": "看做事的过程",
-  "session.stop": "停下一件事",
-  "agent.start": "交给后台去做",
-  "agent.followup": "接着做",
-  "agent.list": "查看在做的事",
-  "agent.stop": "停下一件事",
-  "voice.listen.start": "开始听",
-  "voice.listen.stop": "不听了",
-  "ask": "问你",
+  "tools.find": m.chat_tool_label_tools_find(),
+  speak: m.chat_tool_label_speak(),
+  danmaku: m.chat_tool_label_danmaku(),
+  "reply.say": m.chat_tool_label_reply_say(),
+  "reminder.create": m.chat_tool_label_reminder_create(),
+  "web.search": m.chat_tool_label_web_search(),
+  "web.fetch": m.chat_tool_label_web_fetch(),
+  "game_chat.send": m.chat_tool_label_game_chat_send(),
+  "companion.read_chat": m.chat_tool_label_companion_read_chat(),
+  "window.active": m.chat_tool_label_window_active(),
+  "window.list": m.chat_tool_label_window_list(),
+  "game.list": m.chat_tool_label_game_list(),
+  "game.focus": m.chat_tool_label_game_focus(),
+  "game.launch": m.chat_tool_label_game_launch(),
+  "game.close": m.chat_tool_label_game_close(),
+  "game.look": m.chat_tool_label_game_look(),
+  "game.act": m.chat_tool_label_game_act(),
+  "automation.list": m.chat_tool_label_automation_list(),
+  "automation.get": m.chat_tool_label_automation_get(),
+  "automation.run": m.chat_tool_label_automation_run(),
+  "automation.runs": m.chat_tool_label_automation_runs(),
+  "automation.stop": m.chat_tool_label_automation_stop(),
+  "automation.save": m.chat_tool_label_automation_save(),
+  "automation.delete": m.chat_tool_label_automation_delete(),
+  "settings.get": m.chat_tool_label_settings_get(),
+  "settings.update": m.chat_tool_label_settings_update(),
+  "ocr.recognize": m.chat_tool_label_ocr_recognize(),
+  "settings.describe": m.chat_tool_label_settings_describe(),
+  "game.installed": m.chat_tool_label_game_installed(),
+  "models.list": m.chat_tool_label_models_list(),
+  "models.download": m.chat_tool_label_models_download(),
+  "models.activate": m.chat_tool_label_models_activate(),
+  "models.delete": m.chat_tool_label_models_delete(),
+  "speech.model.download": m.chat_tool_label_speech_model_download(),
+  "connections.list": m.chat_tool_label_connections_list(),
+  "connections.presets": m.chat_tool_label_connections_presets(),
+  "connections.request_key": m.chat_tool_label_connections_request_key(),
+  "wake.status": m.chat_tool_label_wake_status(),
+  "wake.model.download": m.chat_tool_label_wake_model_download(),
+  "runtime.status": m.chat_tool_label_runtime_status(),
+  "runtime.start": m.chat_tool_label_runtime_start(),
+  "app.restart": m.chat_tool_label_app_restart(),
+  "voice_chat.status": m.chat_tool_label_voice_chat_status(),
+  "voice_chat.install": m.chat_tool_label_voice_chat_install(),
+  "voice_chat.default_mic": m.chat_tool_label_voice_chat_default_mic(),
+  "voice_chat.say": m.chat_tool_label_voice_chat_say(),
+  "voice_chat.test": m.chat_tool_label_voice_chat_test(),
+  "memory": m.chat_tool_label_memory(),
+  "skill.view": m.chat_tool_label_skill_view(),
+  "skill.manage": m.chat_tool_label_skill_manage(),
+  "soul.write": m.chat_tool_label_soul_write(),
+  "session.spawn": m.chat_tool_label_agent_start(),
+  "session.send": m.chat_tool_label_session_send(),
+  "session.list": m.chat_tool_label_agent_list(),
+  "session.history": m.chat_tool_label_session_history(),
+  "session.stop": m.chat_tool_label_agent_stop(),
+  "agent.start": m.chat_tool_label_agent_start(),
+  "agent.followup": m.chat_tool_label_agent_followup(),
+  "agent.list": m.chat_tool_label_agent_list(),
+  "agent.stop": m.chat_tool_label_agent_stop(),
+  "voice.listen.start": m.chat_tool_label_voice_listen_start(),
+  "voice.listen.stop": m.chat_tool_label_voice_listen_stop(),
+  "ask": m.chat_tool_label_ask(),
   // ADR 030：后台在电脑上做事
-  "shell.run": "运行命令",
-  "file.read": "读文件",
-  "file.write": "写文件",
-  "file.edit": "改文件",
-  "file.find": "找文件",
+  "shell.run": m.chat_tool_label_shell_run(),
+  "file.read": m.chat_tool_label_file_read(),
+  "file.write": m.chat_tool_label_file_write(),
+  "file.edit": m.chat_tool_label_file_edit(),
+  "file.find": m.chat_tool_label_file_find(),
 };
 export function toolLabel(name: string): string {
-  if (name.startsWith("saved.")) return "运行已保存的自动化";
+  if (name.startsWith("saved.")) return m.chat_tool_label_saved();
   return toolLabels[name] ?? name;
 }
 /** 工具分组的中文名（agent_tools 的 group；没有的显示原名）。 */
 export const toolGroupLabels: Record<string, string> = {
-  game: "游戏与播报",
-  automation: "自动化",
-  screen: "屏幕与窗口",
-  settings: "设置",
-  models: "模型",
-  meta: "查找工具",
-  computer: "电脑（命令和文件）",
-  app: "其它",
+  game: m.chat_tool_group_game(),
+  automation: m.chat_tool_group_automation(),
+  screen: m.chat_tool_group_screen(),
+  settings: m.chat_tool_group_settings(),
+  models: m.chat_tool_group_models(),
+  meta: m.chat_tool_group_meta(),
+  computer: m.chat_tool_group_computer(),
+  app: m.chat_tool_group_app(),
 };
 export function toolGroupLabel(group: string): string {
   return toolGroupLabels[group] ?? group;
@@ -385,11 +388,11 @@ export function toolGroupLabel(group: string): string {
 export function stopText(stop: StopReason): string | null {
   switch (stop.kind) {
     case "completed": return null;
-    case "truncated": return "回复太长被截断了";
-    case "step-limit": return "步骤太多，已停下";
-    case "time-limit": return "用时太长，已停下";
-    case "cancelled": return "已停止";
-    case "failed": return `出错了：${stop.message}`;
+    case "truncated": return m.chat_stop_reason_truncated();
+    case "step-limit": return m.chat_stop_reason_step_limit();
+    case "time-limit": return m.chat_stop_reason_time_limit();
+    case "cancelled": return m.chat_stop_reason_cancelled();
+    case "failed": return m.chat_stop_reason_failed({ message: stop.message });
   }
 }
 
@@ -397,12 +400,12 @@ export function stopText(stop: StopReason): string | null {
 export function sourceLabel(source: string | undefined): string | null {
   switch (source) {
     case undefined: case "": case "chat": return null;
-    case "assistant-text": return "文字入口";
+    case "assistant-text": return m.chat_source_assistant_text();
     // 唤醒词、回答完接着听（ADR 029）都是语音叫她，和呼叫键一样显示
-    case "voice": case "wake-voice": return "游戏内 · 语音";
-    case "quick-command": return "游戏内 · 快捷指令";
-    case "tool": return "工具提交";
-    case "automation": return "自动化结果";
+    case "voice": case "wake-voice": return m.chat_source_voice();
+    case "quick-command": return m.chat_source_quick_command();
+    case "tool": return m.chat_source_tool();
+    case "automation": return m.chat_source_automation();
     // 后台做完的事交回来（ADR 029）：卡片已经更新，这条不显示
     case "agent-report": return null;
     default: return source;
@@ -412,12 +415,12 @@ export function sourceLabel(source: string | undefined): string | null {
 /** 起手提示（ADR 014“已确认”）。 */
 /** 聊天页的起手提示（ADR 028）。以冒号结尾的放进输入框让玩家接着写，其余直接发出。 */
 export const starterPrompts = [
-  { label: "你能做什么？", text: "你能做什么？" },
-  { label: "帮我配置 Kotone", text: "帮我把 Kotone 配置好：先问我几个问题，再一项项帮我设置。" },
-  { label: "这个版本什么英雄强？", text: "这个版本什么英雄强？" },
-  { label: "来首歌", text: "来首歌：" },
-  { label: "做一个自动化", text: "帮我做一个自动化：" },
-  { label: "5 分钟后提醒我", text: "5 分钟后提醒我" },
+  { label: m.chat_starter_what_can_you_do(), text: m.chat_starter_what_can_you_do() },
+  { label: m.chat_starter_setup_label(), text: m.chat_starter_setup_text() },
+  { label: m.chat_starter_strong_heroes(), text: m.chat_starter_strong_heroes() },
+  { label: m.chat_starter_song_label(), text: m.chat_starter_song_text() },
+  { label: m.chat_starter_automation_label(), text: m.chat_starter_automation_text() },
+  { label: m.chat_starter_reminder(), text: m.chat_starter_reminder() },
 ];
 
 // ---------- 用量与费用（usage.jsonl，见 apps/desktop/src-tauri/src/usage.rs） ----------
@@ -457,6 +460,7 @@ export async function usageConversation(id: string, sinceMs: number): Promise<Co
   const screen: UsageTotals = { ...emptyTotals(), requests: 1, images: 1, cost: { CNY: 0.0015 } };
   return {
     conversationId: id,
+    // i18n-ignore-start：浏览器预览的示例数据（真实应用里来自后端或玩家自己的数据），不是界面文字
     total: [{ category: "voice", label: "语音", totals: voice }, { category: "screen", label: "读屏", totals: screen }],
     turns: [{ turn: previewConversation.messages[0].atMs, byCategory: [{ category: "voice", label: "语音", totals: voice }, { category: "screen", label: "读屏", totals: screen }] }],
   };
@@ -475,5 +479,6 @@ export async function usageSummary(): Promise<UsageSummary> {
       return { day, totals, byKind: [{ kind: "chat", label: "对话", totals }], byModel: [{ model: "deepseek/deepseek-flash", totals }] };
     }),
     priceSource: "界面预览", note: "界面预览的示例数字", ledger: null,
+    // i18n-ignore-end
   };
 }

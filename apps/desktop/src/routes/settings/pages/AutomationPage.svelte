@@ -14,6 +14,7 @@
   import { RefreshCw, Square } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import SettingsPage from "$lib/components/settings/SettingsPage.svelte";
+  import { m } from "$lib/paraglide/messages.js";
 
   let { onOpenHotkeys }: { onOpenHotkeys: () => void } = $props();
   let snapshot = $state<RunsSnapshot | null>(null);
@@ -39,7 +40,7 @@
       automations = saved;
       loadError = "";
     } catch (error) {
-      if (!disposed && current === version) loadError = `读取自动化失败：${errText(error)}`;
+      if (!disposed && current === version) loadError = m.auto_page_load_failed({ error: errText(error) });
     }
   }
 
@@ -47,7 +48,7 @@
     let unlisten: (() => void) | null = null;
     void subscribeAutomations(() => { void refresh(); })
       .then((fn) => { if (disposed) fn(); else unlisten = fn; })
-      .catch((error) => { loadError = `自动化状态订阅失败：${errText(error)}`; });
+      .catch((error) => { loadError = m.auto_page_subscribe_failed({ error: errText(error) }); });
     void refresh();
     const timer = setInterval(() => { now = Date.now(); }, 1000);
     return () => { disposed = true; version++; clearInterval(timer); unlisten?.(); };
@@ -57,49 +58,49 @@
     busyId = run.id;
     try {
       const count = await stopRuns(run.id);
-      if (!count) toast(false, "状态已经变化，请查看最新列表");
+      if (!count) toast(false, m.auto_page_state_changed());
       await refresh();
-    } catch (error) { toast(false, `操作失败：${errText(error)}`); }
+    } catch (error) { toast(false, m.auto_page_action_failed({ error: errText(error) })); }
     finally { busyId = ""; }
   }
 
   async function stopAll() {
     try {
       const count = await stopRuns();
-      toast(true, count ? `已停止 ${count} 个自动化` : "没有需要停止的自动化");
+      toast(true, count ? m.auto_page_stopped_count({ count }) : m.auto_page_nothing_to_stop());
       await refresh();
-    } catch (error) { toast(false, `停止失败：${errText(error)}`); }
+    } catch (error) { toast(false, m.auto_page_stop_failed({ error: errText(error) })); }
   }
 </script>
 
 <SettingsPage
-  title="自动化"
-  description={`提醒、按键、点鼠标、盯屏幕。可以让${$companionName}写，也可以自己保存常用的；带定时的到点自己运行。`}
+  title={m.auto_page_title()}
+  description={m.auto_page_description({ companion: $companionName })}
   testid="automation-page"
 >
   {#if !isTauri}
-    <p class="-mt-2 mb-0 rounded-xl border border-warning/30 bg-warning/8 px-3.5 py-2 text-xs text-warning" role="status">界面预览：以下是示例数据，不会真的运行。</p>
+    <p class="-mt-2 mb-0 rounded-xl border border-warning/30 bg-warning/8 px-3.5 py-2 text-xs text-warning" role="status">{m.auto_page_preview_notice()}</p>
   {/if}
   {#if loadError}<p role="alert" class="m-0 text-xs text-destructive">{loadError}</p>{/if}
   <div class="flex flex-wrap items-center gap-2 rounded-xl border border-hairline bg-card/50 px-3.5 py-2.5 text-xs text-muted-foreground" data-testid="automation-status">
     <span class="mr-auto">
-      {#if open.length}<span class="text-foreground">{open.length} 个进行中</span> · {/if}
-      {#if stopHotkey}在游戏里按 <span class="rounded bg-primary/12 px-1.5 py-0.5 font-mono text-primary">{stopHotkey}</span> 停下全部自动化和她正在做的事（不影响提醒）{:else}停止热键未设置（在「设置 → 系统 → 停下」里设）{/if}
-      <button type="button" class="ml-1 text-primary hover:underline" onclick={onOpenHotkeys}>改热键 →</button>
+      {#if open.length}<span class="text-foreground">{m.auto_page_open_count({ count: open.length })}</span> · {/if}
+      {#if stopHotkey}{m.auto_page_stop_hotkey_before()} <span class="rounded bg-primary/12 px-1.5 py-0.5 font-mono text-primary">{stopHotkey}</span> {m.auto_page_stop_hotkey_after()}{:else}{m.auto_page_stop_hotkey_unset()}{/if}
+      <button type="button" class="ml-1 text-primary hover:underline" onclick={onOpenHotkeys}>{m.auto_page_change_hotkey()}</button>
     </span>
-    <Button variant="ghost" size="sm" onclick={refresh}><RefreshCw class="size-3.5" />刷新</Button>
+    <Button variant="ghost" size="sm" onclick={refresh}><RefreshCw class="size-3.5" />{m.auto_page_refresh()}</Button>
     <Button variant="outline" size="sm" disabled={!runningPrograms && !open.some((r) => r.action.kind === "program")}
-      onclick={stopAll} data-testid="automation-stop-all"><Square class="size-3 fill-current" />停下全部自动化</Button>
+      onclick={stopAll} data-testid="automation-stop-all"><Square class="size-3 fill-current" />{m.auto_page_stop_all()}</Button>
   </div>
-  {#if !snapshot}<p class="m-0 px-4 py-8 text-center text-[13px] text-muted-foreground">正在读取…</p>
+  {#if !snapshot}<p class="m-0 px-4 py-8 text-center text-[13px] text-muted-foreground">{m.auto_page_loading()}</p>
   {:else}
     <AutomationList {automations} runs={snapshot.runs} {now} {busyId} onStop={stop} onChanged={refresh} />
     <details class="group" data-testid="automation-history">
       <summary class="cursor-pointer list-none px-1 text-sm font-semibold text-foreground">
-        全部记录 · {history.length} <span class="text-xs font-normal text-muted-foreground">（最近结束的提醒与自动化，含失败、取消、错过的原因）</span>
+        {m.auto_page_history_title({ count: history.length })} <span class="text-xs font-normal text-muted-foreground">{m.auto_page_history_hint()}</span>
       </summary>
       <div class="mt-2.5 overflow-hidden rounded-2xl border border-hairline bg-card/70">
-        {#if !history.length}<p class="m-0 px-4 py-8 text-center text-[13px] text-muted-foreground">还没有记录</p>
+        {#if !history.length}<p class="m-0 px-4 py-8 text-center text-[13px] text-muted-foreground">{m.auto_page_history_empty()}</p>
         {:else}<RunList runs={history} {now} mode="history" />{/if}
       </div>
     </details>

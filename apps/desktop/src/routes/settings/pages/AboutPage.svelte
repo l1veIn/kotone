@@ -17,6 +17,7 @@
   import { Switch } from "$lib/components/ui/switch";
   import { Button } from "$lib/components/ui/button";
   import { ChevronRight, RefreshCw } from "@lucide/svelte";
+  import { m } from "$lib/paraglide/messages.js";
 
   /** 角色详情页入口回调：由 Settings 切换至 CharacterPage 全屏档案视图 */
   let { onOpenCharacter }: { onOpenCharacter: () => void } = $props();
@@ -39,7 +40,7 @@
     try {
       await openExternal(GITHUB_URL);
     } catch (err) {
-      toast(false, `打开链接失败：${errText(err)}`);
+      toast(false, m.system_about_open_link_failed({ error: errText(err) }));
     }
   }
 
@@ -55,19 +56,19 @@
   }
 </script>
 
-<SettingsPage title="关于" description="版本、更新与琴音的角色档案。" testid="about-page">
+<SettingsPage title={m.system_about_title()} description={m.system_about_description()} testid="about-page">
   <!-- 项目卡：琴音贴纸 + 名称、版本、链接与角色详情入口 -->
   <section class="relative overflow-hidden rounded-2xl border border-hairline bg-card px-5 py-5">
     <div class="pointer-events-none absolute -top-16 -right-10 size-56 rounded-full bg-primary/10 blur-3xl" aria-hidden="true"></div>
     <div class="pointer-events-none absolute -bottom-20 left-10 size-48 rounded-full bg-brand-pink/8 blur-3xl" aria-hidden="true"></div>
     <div class="relative flex flex-wrap items-center gap-5">
-      <img src={stickerProud} alt="琴音贴纸 · 得意" class="size-24 shrink-0 object-contain drop-shadow-[0_0_18px_color-mix(in_oklab,var(--color-primary)_35%,transparent)]" />
+      <img src={stickerProud} alt={m.system_about_sticker_alt()} class="size-24 shrink-0 object-contain drop-shadow-[0_0_18px_color-mix(in_oklab,var(--color-primary)_35%,transparent)]" />
       <div class="min-w-0 flex-1">
         <p class="m-0 flex flex-wrap items-center gap-2 text-lg font-bold text-foreground">
-          Kotone <span class="kotone-gradient-text">琴音</span>
+          Kotone <span class="kotone-gradient-text">{m.system_about_brand_name()}</span>
           <span class="rounded-full border border-hairline bg-muted/60 px-2 py-0.5 text-[11px] font-normal text-muted-foreground">v{version}</span>
         </p>
-        <p class="mt-1 mb-0 text-xs text-muted-foreground">本地优先 · 隐私安全 · 反馈群：1092354484</p>
+        <p class="mt-1 mb-0 text-xs text-muted-foreground">{m.system_about_tagline()}</p>
         <div class="mt-3 flex flex-wrap items-center gap-2">
           <a
             class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-hairline bg-background/50 px-3 text-xs text-foreground/85 transition-colors hover:bg-muted hover:text-primary"
@@ -87,7 +88,7 @@
             class="group inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary/12 px-3 text-xs font-semibold text-primary ring-1 ring-primary/35 transition-colors hover:bg-primary/20"
             onclick={onOpenCharacter}
           >
-            CHARACTER FILE · 角色详情
+            {m.system_about_character_button()}
             <ChevronRight class="size-3.5 transition-transform group-hover:translate-x-0.5" />
           </button>
         </div>
@@ -95,49 +96,49 @@
     </div>
   </section>
 
-  <SettingsSection title="更新">
-    <SettingsRow label="检查更新">
+  <SettingsSection title={m.system_about_update_section()}>
+    <SettingsRow label={m.system_about_check_updates()}>
       {#snippet description()}
         <div aria-live="polite">
           {#if checkingUpdate}
-            <p class="m-0">正在连接更新服务器…</p>
+            <p class="m-0">{m.system_about_update_connecting()}</p>
           {:else if updateResult?.status === "up-to-date"}
-            <p class="m-0 text-success">✓ 已是最新版本（v{version}）</p>
+            <p class="m-0 text-success">{m.system_about_update_up_to_date({ version })}</p>
           {:else if updateResult?.status === "available"}
-            <p class="m-0 text-brand-pink">发现新版本 v{updateResult.version}，尚未安装</p>
+            <p class="m-0 text-brand-pink">{m.system_about_update_available({ version: updateResult.version })}</p>
             {#if updateResult.notes}
               <p class="mt-1 mb-0 whitespace-pre-wrap break-words">{updateResult.notes}</p>
             {/if}
           {:else if updateResult?.status === "downloaded"}
-            <p class="m-0 text-primary">v{updateResult.version} 已下载，重启后生效</p>
+            <p class="m-0 text-primary">{m.system_about_update_downloaded({ version: updateResult.version })}</p>
             {#if updateResult.notes}
               <p class="mt-1 mb-0 whitespace-pre-wrap break-words">{updateResult.notes}</p>
             {/if}
           {:else if updateResult?.status === "error"}
-            <p class="m-0 break-all text-destructive">检查更新失败：{updateResult.message}</p>
+            <p class="m-0 break-all text-destructive">{m.system_about_update_check_failed({ error: updateResult.message })}</p>
           {:else}
-            <p class="m-0">支持启动时自动检查，也可以随时手动检查</p>
+            <p class="m-0">{m.system_about_update_idle()}</p>
           {/if}
         </div>
       {/snippet}
       {#snippet control()}
         <Button size="sm" variant="outline" data-testid="check-updates" disabled={checkingUpdate} onclick={() => void checkUpdates()}>
           <RefreshCw class="size-3.5 {checkingUpdate ? 'animate-spin' : ''}" />
-          {checkingUpdate ? "正在检查…" : "检查更新"}
+          {checkingUpdate ? m.system_about_update_checking() : m.system_about_check_updates()}
         </Button>
       {/snippet}
     </SettingsRow>
     {#if $settingsStore}
-      <SettingsRow label="启动时提醒新版本" description="有新版本时在启动后弹出更新窗口。" for="update-prompt-enabled">
+      <SettingsRow label={m.system_about_update_prompt_label()} description={m.system_about_update_prompt_description()} for="update-prompt-enabled">
         {#snippet control()}
           <Switch
             id="update-prompt-enabled"
             data-testid="update-prompt-enabled"
-            aria-label="启动时提醒新版本"
+            aria-label={m.system_about_update_prompt_label()}
             bind:checked={() => !$settingsStore.ui.updatePromptDisabled, (checked) =>
               void patchSettings(
                 { ui: { updatePromptDisabled: !checked } },
-                checked ? "启动时会提醒新版本" : "启动时不再提醒新版本",
+                checked ? m.system_about_update_prompt_on() : m.system_about_update_prompt_off(),
               )}
           />
         {/snippet}
@@ -146,6 +147,6 @@
   </SettingsSection>
 
   <p class="m-0 text-center text-[11px] text-muted-foreground/70">
-    © 2026 Kotone 项目 · 第三方组件声明见 THIRD_PARTY_NOTICES
+    {m.system_about_footer()}
   </p>
 </SettingsPage>

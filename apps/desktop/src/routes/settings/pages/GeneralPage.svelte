@@ -36,6 +36,7 @@
   import AsrCard from "./voice/AsrCard.svelte";
   import VoiceHotkeysSection from "./voice/VoiceHotkeysSection.svelte";
   import VoiceSetupGuide from "./voice/VoiceSetupGuide.svelte";
+  import { m } from "$lib/paraglide/messages.js";
 
   let { guideOpen = false, onOpenGuide, onCloseGuide, onConfigure, onOpenModels, onOpenSound, onOpenGames }: {
     /** 语音输入的四步引导（V 路径）展开着。 */
@@ -51,7 +52,7 @@
 
   let devices = $state<AudioDevice[]>([]);
   let profiles = $state<GameProfile[]>([]);
-  const micName = $derived(devices.find((d) => d.id === $settingsStore?.audioDeviceId)?.name ?? "系统默认");
+  const micName = $derived(devices.find((d) => d.id === $settingsStore?.audioDeviceId)?.name ?? m.voice_general_mic_default());
   const game = $derived(profiles.find((p) => p.id === $settingsStore?.activeProfileId) ?? null);
   let elevation = $state<ElevationStatus | null>(null);
   let restarting = $state(false);
@@ -76,10 +77,10 @@
       applyGameCompatibilityStatus(nextElevation);
       if (localStorage.getItem(ADMIN_RESTART_FLAG)) {
         localStorage.removeItem(ADMIN_RESTART_FLAG);
-        if (elevation?.elevated) toast(true, "已通过管理员权限运行 ✨");
+        if (elevation?.elevated) toast(true, m.voice_general_admin_ok());
       }
     } catch (e) {
-      toast(false, `加载设备信息失败：${errText(e)}`);
+      toast(false, m.voice_general_load_devices_failed({ error: errText(e) }));
     }
   });
 
@@ -150,15 +151,15 @@
       hotkeyStatus = await getHotkeyStatus();
       hotkeyDraft = $settingsStore?.hotkey.key ?? "CapsLock";
     } catch (e) {
-      toast(false, `读取热键状态失败：${errText(e)}`);
+      toast(false, m.voice_hotkey_status_read_failed({ error: errText(e) }));
     }
   });
 
   const modes: { id: InteractionMode; name: string; desc: string }[] = [
-    { id: "push-to-talk", name: "对讲机", desc: "按住说话，松开发送" },
-    { id: "dictation", name: "录音笔", desc: "点按开始，再点停止" },
-    { id: "one-shot", name: "说一句就走", desc: "说完自动停、自动发" },
-    { id: "solo", name: "独奏模式", desc: "持续收音，说一句发一句，再点停止" },
+    { id: "push-to-talk", name: m.voice_mode_ptt_name(), desc: m.voice_mode_ptt_desc() },
+    { id: "dictation", name: m.voice_mode_dictation_name(), desc: m.voice_mode_dictation_desc() },
+    { id: "one-shot", name: m.voice_mode_one_shot_name(), desc: m.voice_mode_one_shot_desc() },
+    { id: "solo", name: m.voice_mode_solo_name(), desc: m.voice_mode_solo_desc() },
   ];
 
   const currentMode = $derived($settingsStore?.interactionMode ?? null);
@@ -178,10 +179,10 @@
           },
         }),
       );
-      const m = modes.find((x) => x.id === id);
-      toast(true, `交互模式已切换：${m?.name ?? id}`);
+      const mode = modes.find((x) => x.id === id);
+      toast(true, m.voice_general_mode_switched({ name: mode?.name ?? id }));
     } catch (e) {
-      toast(false, `切换模式失败：${errText(e)}`);
+      toast(false, m.voice_general_mode_switch_failed({ error: errText(e) }));
     }
   }
 
@@ -190,19 +191,19 @@
     try {
       settingsStore.set(await updateSettings({ vadSilenceMs }));
     } catch (err) {
-      toast(false, `保存失败：${errText(err)}`);
+      toast(false, m.voice_save_failed({ error: errText(err) }));
     }
   }
 
   async function saveHotkey() {
     const key = hotkeyDraft.trim();
     if (!key) {
-      toast(false, "热键不能为空");
+      toast(false, m.voice_general_hotkey_empty());
       return;
     }
     const conflict = findHotkeyConflict($settingsStore, "record", key);
     if (conflict) {
-      toast(false, `语音输入热键和${conflict}相同，请换一个组合`);
+      toast(false, m.voice_general_hotkey_conflict({ conflict }));
       return;
     }
     try {
@@ -212,10 +213,10 @@
       );
       hotkeyDraft = $settingsStore?.hotkey.key ?? key;
       hotkeyStatus = await getHotkeyStatus().catch(() => null);
-      if (hotkeyStatus?.error) toast(false, `热键已保存，但未生效：${hotkeyStatus.error}`);
-      else toast(true, hotkeyStatus?.registered ? `热键已保存并生效：${key}` : `热键已保存，${$asrLocalStore ? "启动本地语音识别后生效" : "语音识别准备好后生效"}：${key}`);
+      if (hotkeyStatus?.error) toast(false, m.voice_general_hotkey_not_effective({ error: hotkeyStatus.error }));
+      else toast(true, hotkeyStatus?.registered ? m.voice_general_hotkey_saved_active({ key }) : m.voice_general_hotkey_saved_pending({ pending: $asrLocalStore ? m.voice_hotkey_pending_local() : m.voice_hotkey_pending_ready(), key }));
     } catch (e) {
-      toast(false, `保存热键失败：${errText(e)}`);
+      toast(false, m.voice_general_hotkey_save_failed({ error: errText(e) }));
     } finally {
       try {
         hotkeyStatus = await getHotkeyStatus();
@@ -238,9 +239,9 @@
         hotkeyDraft = r.combo;
         void saveHotkey();
       } else if (r.kind === "cancelled") {
-        toast(false, "已取消录入");
+        toast(false, m.voice_hotkey_capture_cancelled());
       } else if (r.kind === "timeout") {
-        toast(false, "录入超时，请重试");
+        toast(false, m.voice_hotkey_capture_timeout());
       } else {
         toast(false, r.message);
       }
@@ -254,7 +255,7 @@
 
 </script>
 
-<SettingsPage embedded title="输入" testid="general-page">
+<SettingsPage embedded title={m.voice_tab_input()} testid="general-page">
   {#if guideOpen}
     <VoiceSetupGuide onClose={onCloseGuide} {onConfigure} />
   {/if}
@@ -263,11 +264,11 @@
     {#if needsElevation}
       <section class="flex flex-wrap items-center gap-3 rounded-2xl border border-brand-pink/45 bg-brand-pink/8 px-4 py-3.5">
         <div class="min-w-0 flex-1">
-          <p class="m-0 text-[13px] font-semibold text-brand-pink">当前游戏需要更高权限才能接收文字</p>
-          <p class="mt-1 mb-0 text-xs text-muted-foreground">重新启动 Kotone 后即可继续，其他设置不会丢失。</p>
+          <p class="m-0 text-[13px] font-semibold text-brand-pink">{m.voice_general_elevation_title()}</p>
+          <p class="mt-1 mb-0 text-xs text-muted-foreground">{m.voice_general_elevation_desc()}</p>
         </div>
         <Button size="sm" class="bg-brand-pink text-[#fff] hover:bg-brand-pink/90" disabled={restarting} onclick={() => void onRestartAsAdmin()}>
-          {restarting ? "正在重启…" : "重新启动"}
+          {restarting ? m.voice_general_restarting() : m.voice_general_restart()}
         </Button>
       </section>
     {/if}
@@ -275,20 +276,20 @@
     {#if $fullscreenWarningStore}
       <section class="flex flex-wrap items-center gap-3 rounded-2xl border border-warning/45 bg-warning/8 px-4 py-3.5">
         <div class="min-w-0 flex-1">
-          <p class="m-0 text-[13px] font-semibold text-warning">检测到游戏正在使用全屏模式</p>
+          <p class="m-0 text-[13px] font-semibold text-warning">{m.voice_general_fullscreen_title()}</p>
           <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">
-            全屏模式下唤起悬浮窗可能导致游戏最小化。请在游戏的视频设置中切换为无边框或窗口模式。
+            {m.voice_general_fullscreen_desc()}
           </p>
         </div>
-        <Button size="sm" variant="outline" onclick={() => fullscreenWarningStore.set(false)}>知道了</Button>
+        <Button size="sm" variant="outline" onclick={() => fullscreenWarningStore.set(false)}>{m.voice_action_got_it()}</Button>
       </section>
     {/if}
 
     <AsrCard {onOpenModels} {onConfigure} />
 
     <div id="voice-hotkey" class="scroll-mt-16">
-    <SettingsSection title="语音输入热键">
-      <SettingsRow label="语音输入热键" description="按下它说话，原话打进游戏聊天框。支持键盘组合以及鼠标侧键 Mouse4 / Mouse5。" stacked for="hotkey-input">
+    <SettingsSection title={m.voice_hotkey_name_record()}>
+      <SettingsRow label={m.voice_hotkey_name_record()} description={m.voice_general_hotkey_desc()} stacked for="hotkey-input">
         {#snippet control()}
           <div class="flex flex-wrap items-center gap-2">
             <input
@@ -296,20 +297,20 @@
               bind:value={hotkeyDraft}
               disabled={capturing}
               class="h-8 w-36 rounded-lg border border-input bg-background/60 px-2.5 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:ring-3 focus:ring-ring/30 disabled:opacity-50"
-              placeholder="如 CapsLock / Alt+V"
+              placeholder={m.voice_hotkey_placeholder({ example: "CapsLock / Alt+V" })}
               spellcheck="false"
             />
             <Button size="sm" variant="outline" class={capturing ? "animate-pulse border-primary/60 text-primary" : ""} disabled={capturing} onclick={() => void startCapture()}>
-              {capturing ? "请按下键盘组合或鼠标侧键…（Esc 取消）" : "点击录入"}
+              {capturing ? m.voice_hotkey_capturing() : m.voice_hotkey_capture()}
             </Button>
-            <Button size="sm" disabled={capturing} onclick={() => void saveHotkey()}>保存并生效</Button>
-            <span class="text-xs text-muted-foreground">当前：{$settingsStore?.hotkey.key ?? "…"}</span>
+            <Button size="sm" disabled={capturing} onclick={() => void saveHotkey()}>{m.voice_general_hotkey_save()}</Button>
+            <span class="text-xs text-muted-foreground">{m.voice_general_hotkey_current({ key: $settingsStore?.hotkey.key ?? "…" })}</span>
           </div>
           {#if hotkeyStatus?.error}
             <div class="mt-3 rounded-xl border border-destructive/40 bg-destructive/8 p-3">
-              <p class="m-0 text-xs font-medium text-destructive">热键注册失败，可能被其他程序或其他 Kotone 实例占用</p>
+              <p class="m-0 text-xs font-medium text-destructive">{m.voice_general_hotkey_register_failed()}</p>
               <p class="mt-0.5 mb-0 text-[11px] break-all text-muted-foreground">{hotkeyStatus.error}</p>
-              <Button size="xs" variant="destructive" class="mt-2" onclick={() => void saveHotkey()}>重新注册</Button>
+              <Button size="xs" variant="destructive" class="mt-2" onclick={() => void saveHotkey()}>{m.voice_general_hotkey_reregister()}</Button>
             </div>
           {/if}
         {/snippet}
@@ -319,46 +320,46 @@
 
     <!-- 交互模式（ADR-006 四预设） -->
     <div id="voice-mode" class="scroll-mt-16">
-    <SettingsSection title="交互模式" description="按热键之后怎么录、什么时候发。">
+    <SettingsSection title={m.voice_general_mode_title()} description={m.voice_general_mode_desc()}>
       <div class="py-3.5">
-        <div class="grid grid-cols-2 gap-2 lg:grid-cols-4" role="group" aria-label="交互模式">
-          {#each modes as m}
-            {@const active = currentMode === m.id}
+        <div class="grid grid-cols-2 gap-2 lg:grid-cols-4" role="group" aria-label={m.voice_general_mode_title()}>
+          {#each modes as mode}
+            {@const active = currentMode === mode.id}
             <button
               aria-pressed={active}
               class="rounded-xl border px-3 py-3 text-left transition-colors {active
                 ? 'border-primary/60 bg-primary/10'
                 : 'border-hairline bg-background/40 hover:bg-muted/60'}"
-              onclick={() => void onModeSelect(m.id)}
+              onclick={() => void onModeSelect(mode.id)}
             >
               <span class="inline-flex size-5 items-center justify-center {active ? 'text-primary' : 'text-muted-foreground'}" aria-hidden="true">
-                {#if m.id === "push-to-talk"}
+                {#if mode.id === "push-to-talk"}
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
-                {:else if m.id === "dictation"}
+                {:else if mode.id === "dictation"}
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>
-                {:else if m.id === "one-shot"}
+                {:else if mode.id === "one-shot"}
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
                 {:else}
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
                 {/if}
               </span>
-              <p class="mt-1 mb-0 text-[13px] font-semibold {active ? 'text-primary' : 'text-foreground'}">{m.name}</p>
-              <p class="mt-0.5 mb-0 text-[11px] text-muted-foreground">{m.desc}</p>
+              <p class="mt-1 mb-0 text-[13px] font-semibold {active ? 'text-primary' : 'text-foreground'}">{mode.name}</p>
+              <p class="mt-0.5 mb-0 text-[11px] text-muted-foreground">{mode.desc}</p>
             </button>
           {/each}
         </div>
         {#if currentMode === null}
           <p class="mt-2 mb-0 text-[11px] text-muted-foreground">
-            当前为兼容模式（由热键触发方式 + 发送行为旧字段推导）；点选上方卡片即切换为预设模式。
+            {m.voice_general_mode_legacy()}
           </p>
         {/if}
       </div>
       {#if currentMode === "one-shot" || currentMode === "solo"}
         <!-- one-shot / solo 专属：VAD 静音判停时长（solo 按该阈值切分每一句） -->
-        <SettingsRow label="静音判停时长" for="vad-slider" stacked
+        <SettingsRow label={m.voice_general_vad_label()} for="vad-slider" stacked
           description={currentMode === "solo"
-            ? "每句之间静音超过该时长即切分并发送，随后继续监听下一句（200–5000ms，需要 VAD 模型就绪）。"
-            : "说完话后静音超过该时长即自动结束并发送（200–5000ms，需要 VAD 模型就绪）。"}>
+            ? m.voice_general_vad_desc_solo()
+            : m.voice_general_vad_desc()}>
           {#snippet control()}
             <div class="flex items-center gap-3">
               <input id="vad-slider" type="range" min="200" max="5000" step="100" value={vadMs}
@@ -373,14 +374,14 @@
 
     <!-- 悬浮窗：只属于语音输入（角色用气泡，ADR 028）。样式从「设置 → 系统」搬来。 -->
     <div id="voice-overlay" class="scroll-mt-16">
-    <SettingsSection title="悬浮窗" description="语音输入时在游戏里显示识别进度的小窗。角色的回答在气泡里，不用它。">
-      <SettingsRow label="什么时候出现" stacked>
+    <SettingsSection title={m.voice_general_overlay_title()} description={m.voice_general_overlay_desc()}>
+      <SettingsRow label={m.voice_general_overlay_visibility_label()} stacked>
         {#snippet control()}
           <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
             {#each [
-              { id: "on_demand", name: "用时浮现", desc: "平时隐藏，说话时出现，发完自动隐藏" },
-              { id: "always", name: "常驻", desc: "一直显示在游戏画面上" },
-              { id: "never", name: "不显示", desc: "关闭悬浮窗，热键和语音输入照常" },
+              { id: "on_demand", name: m.voice_overlay_visibility_on_demand_name(), desc: m.voice_overlay_visibility_on_demand_desc() },
+              { id: "always", name: m.voice_overlay_visibility_always_name(), desc: m.voice_overlay_visibility_always_desc() },
+              { id: "never", name: m.voice_overlay_visibility_never_name(), desc: m.voice_overlay_visibility_never_desc() },
             ] as const as opt}
               {@const selected = ($settingsStore.overlay?.visibility ?? "on_demand") === opt.id}
               <button
@@ -388,7 +389,7 @@
                 class="rounded-xl border px-3 py-2.5 text-left transition-colors {selected
                   ? 'border-primary/60 bg-primary/10'
                   : 'border-hairline bg-background/40 hover:bg-muted/60'}"
-                onclick={() => void patchSettings({ overlay: { visibility: opt.id } }, `悬浮窗已切换：${opt.name}`)}
+                onclick={() => void patchSettings({ overlay: { visibility: opt.id } }, m.voice_general_overlay_visibility_switched({ name: opt.name }))}
               >
                 <p class="m-0 text-[13px] font-semibold {selected ? 'text-primary' : 'text-foreground'}">{opt.name}</p>
                 <p class="mt-0.5 mb-0 text-[11px] text-muted-foreground">{opt.desc}</p>
@@ -397,18 +398,18 @@
           </div>
         {/snippet}
       </SettingsRow>
-      <SettingsRow label="固定位置" stacked>
+      <SettingsRow label={m.voice_general_overlay_position_label()} stacked>
         {#snippet control()}
-          <div class="grid grid-cols-4 gap-2" role="group" aria-label="悬浮窗位置">
+          <div class="grid grid-cols-4 gap-2" role="group" aria-label={m.voice_general_overlay_position_aria()}>
             {#each [
-              { id: "auto", name: "智能" },
-              { id: "top_left", name: "左上" },
-              { id: "top_center", name: "顶部" },
-              { id: "top_right", name: "右上" },
-              { id: "center", name: "中央" },
-              { id: "bottom_left", name: "左下" },
-              { id: "bottom_center", name: "底部" },
-              { id: "bottom_right", name: "右下" },
+              { id: "auto", name: m.voice_overlay_position_auto() },
+              { id: "top_left", name: m.voice_overlay_position_top_left() },
+              { id: "top_center", name: m.voice_overlay_position_top_center() },
+              { id: "top_right", name: m.voice_overlay_position_top_right() },
+              { id: "center", name: m.voice_overlay_position_center() },
+              { id: "bottom_left", name: m.voice_overlay_position_bottom_left() },
+              { id: "bottom_center", name: m.voice_overlay_position_bottom_center() },
+              { id: "bottom_right", name: m.voice_overlay_position_bottom_right() },
             ] as const as opt}
               {@const selected = ($settingsStore.overlay.position ?? "auto") === opt.id}
               <button
@@ -416,40 +417,40 @@
                 class="h-8 rounded-lg border text-center text-xs font-medium transition-colors {selected
                   ? 'border-primary/60 bg-primary/10 text-primary'
                   : 'border-hairline bg-background/40 text-muted-foreground hover:bg-muted/60 hover:text-foreground'}"
-                onclick={() => void patchSettings({ overlay: { position: opt.id } }, `悬浮窗位置已切换：${opt.name}`)}
+                onclick={() => void patchSettings({ overlay: { position: opt.id } }, m.voice_general_overlay_position_switched({ name: opt.name }))}
               >
                 {opt.name}
               </button>
             {/each}
           </div>
           {#if $settingsStore.overlay.position === "custom"}
-            <p class="mt-2 mb-0 text-[11px] text-primary">当前使用你上次拖动后的位置。</p>
+            <p class="mt-2 mb-0 text-[11px] text-primary">{m.voice_general_overlay_position_custom()}</p>
           {/if}
         {/snippet}
       </SettingsRow>
       <div class="py-3.5">
         <ToggleField
           checked={!$settingsStore.overlay.clickThrough}
-          label="允许鼠标操作和拖动悬浮窗"
-          desc="开启时可拖动并操作按钮；关闭后自动锁定位置，鼠标会穿透到游戏"
+          label={m.voice_general_overlay_mouse_label()}
+          desc={m.voice_general_overlay_mouse_desc()}
           onchange={(v) =>
             void patchSettings(
               { overlay: { draggable: v, clickThrough: !v } },
-              v ? "悬浮窗已允许操作和拖动" : "悬浮窗已锁定并开启鼠标穿透",
+              v ? m.voice_general_overlay_mouse_on() : m.voice_general_overlay_mouse_off(),
             )}
         />
       </div>
-      <SettingsRow label="样式" stacked>
+      <SettingsRow label={m.voice_general_overlay_style_label()} stacked>
         {#snippet control()}
           <div class="grid grid-cols-2 gap-2">
             {#each [
-              { id: "capsule", name: "胶囊", desc: "更轻巧，减少遮挡" },
-              { id: "card", name: "卡片", desc: "信息完整，适合首次使用" },
+              { id: "capsule", name: m.voice_overlay_style_capsule_name(), desc: m.voice_overlay_style_capsule_desc() },
+              { id: "card", name: m.voice_overlay_style_card_name(), desc: m.voice_overlay_style_card_desc() },
             ] as const as option}
               {@const selected = $settingsStore.overlay.style === option.id}
               <button type="button" aria-pressed={selected}
                 class="rounded-xl border px-3 py-2.5 text-left transition-colors {selected ? 'border-primary/60 bg-primary/10' : 'border-hairline hover:bg-muted/60'}"
-                onclick={() => void patchSettings({ overlay: { style: option.id } }, `悬浮窗样式已切换：${option.name}`)}>
+                onclick={() => void patchSettings({ overlay: { style: option.id } }, m.voice_general_overlay_style_switched({ name: option.name }))}>
                 <p class="m-0 text-[13px] font-medium {selected ? 'text-primary' : 'text-foreground'}">{option.name}</p>
                 <p class="mt-0.5 mb-0 text-xs text-muted-foreground">{option.desc}</p>
               </button>
@@ -463,16 +464,16 @@
     <VoiceHotkeysSection />
 
     <section class="rounded-2xl border border-hairline bg-card/40 px-4 py-3 text-xs leading-relaxed text-muted-foreground" data-testid="voice-shared">
-      共享设置：麦克风 <b class="font-medium text-foreground">{micName}</b>
-      <button class="text-primary hover:underline" onclick={onOpenSound}>设置 → 声音</button>
+      {m.voice_general_shared_mic()} <b class="font-medium text-foreground">{micName}</b>
+      <button class="text-primary hover:underline" onclick={onOpenSound}>{m.voice_general_shared_sound_link()}</button>
       <span class="mx-1">·</span>
-      游戏 <b class="font-medium text-foreground">{game?.displayName ?? "通用"}</b>{#if game}（{game.openChatKey} 开聊天，热词 {game.hotwords.length}）{/if}
-      <button class="text-primary hover:underline" onclick={onOpenGames}>游戏列表</button>
+      {m.voice_general_shared_game()} <b class="font-medium text-foreground">{game?.displayName ?? m.voice_general_shared_game_generic()}</b>{#if game}{m.voice_general_shared_game_info({ chatKey: game.openChatKey, count: game.hotwords.length })}{/if}
+      <button class="text-primary hover:underline" onclick={onOpenGames}>{m.voice_general_shared_games_link()}</button>
     </section>
 
     {#if !guideOpen}
       <div class="flex justify-center">
-        <Button size="sm" variant="ghost" data-testid="voice-guide-open" onclick={onOpenGuide}>重新走一遍语音输入引导</Button>
+        <Button size="sm" variant="ghost" data-testid="voice-guide-open" onclick={onOpenGuide}>{m.voice_general_guide_reopen()}</Button>
       </div>
     {/if}
   {/if}

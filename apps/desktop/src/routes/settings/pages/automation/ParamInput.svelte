@@ -2,6 +2,7 @@
   // 一个入参的输入控件（运行时填值、编辑器里填缺省值共用）。
   import SelectField from "$lib/components/settings/SelectField.svelte";
   import type { Color, ParamSpec, Region } from "../../../../lib/automation";
+  import { m } from "$lib/paraglide/messages.js";
 
   let { spec, value, label, disabled = false, onchange }: {
     spec: ParamSpec; value: unknown; label: string; disabled?: boolean; onchange: (value: unknown) => void;
@@ -37,7 +38,7 @@
     value={typeof value === "string" ? value : ""}
     onchange={(event) => onchange(event.currentTarget.value === "" ? undefined : event.currentTarget.value)} />
 {:else if spec.type === "key"}
-  <input class="field w-32" aria-label={label} {disabled} maxlength="32" placeholder="如 Q、Enter、Ctrl+Q"
+  <input class="field w-32" aria-label={label} {disabled} maxlength="32" placeholder={m.auto_param_key_placeholder()}
     value={typeof value === "string" ? value : ""}
     onchange={(event) => onchange(event.currentTarget.value.trim() === "" ? undefined : event.currentTarget.value.trim())} />
 {:else if spec.type === "boolean"}
@@ -46,26 +47,26 @@
 {:else if spec.type === "choice"}
   <div class="w-48">
     <SelectField ariaLabel={label} {disabled} value={typeof value === "string" ? value : ""}
-      options={[{ value: "", label: "（未选）" }, ...(spec.options ?? []).map((o) => ({ value: o, label: o }))]}
+      options={[{ value: "", label: m.auto_param_choice_unselected() }, ...(spec.options ?? []).map((o) => ({ value: o, label: o }))]}
       onchange={(next) => onchange(next === "" ? undefined : next)} />
   </div>
 {:else if spec.type === "region"}
   <div class="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground" role="group" aria-label={label}>
-    {#each [["x", "左"], ["y", "上"], ["w", "宽"], ["h", "高"]] as [key, name]}
+    {#each [["x", m.auto_param_region_x()], ["y", m.auto_param_region_y()], ["w", m.auto_param_region_w()], ["h", m.auto_param_region_h()]] as [key, name]}
       <label class="flex items-center gap-1">{name}
         <input class="field w-16" type="number" min="0" max="1" step="0.01" {disabled} aria-label={`${label} ${name}`}
           value={value ? region[key as keyof Region] : ""}
           onchange={(event) => setRegion(key as keyof Region, event.currentTarget.value)} />
       </label>
     {/each}
-    <span class="text-muted-foreground/75">（窗口比例 0–1；框选工具稍后提供）</span>
+    <span class="text-muted-foreground/75">{m.auto_param_region_hint()}</span>
   </div>
 {:else if spec.type === "color"}
   <input type="color" class="h-8 w-12 cursor-pointer rounded-lg border border-input bg-transparent p-0.5" aria-label={label} {disabled} value={hex}
     onchange={(event) => onchange(fromHex(event.currentTarget.value))} />
 {:else}
   <span class="text-xs text-muted-foreground">
-    {value && typeof value === "object" && "image" in value ? "已设置图片" : "未设置：可由 Agent 截图设置（框选工具稍后提供）"}
+    {value && typeof value === "object" && "image" in value ? m.auto_param_image_set() : m.auto_param_image_unset()}
   </span>
 {/if}
 

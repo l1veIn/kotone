@@ -13,6 +13,7 @@ import { writable } from "svelte/store";
 import { listen } from "@tauri-apps/api/event";
 import { getOverlayState, isTauri } from "../ipc";
 import { settingsStore } from "./ui";
+import { m } from "../paraglide/messages.js";
 
 export type KotoneState =
   | "idle"
@@ -197,7 +198,7 @@ function applyStateEvent(ev: StateEventPayload): void {
         }
         break;
       case "error":
-        next.errorMessage = message ?? "未知错误";
+        next.errorMessage = message ?? m.voice_error_unknown();
         next.inputBlocked = ev.payload?.inputBlocked === true;
         next.needsElevation = ev.payload?.needsElevation === true;
         if (text) next.errorText = text;
@@ -248,12 +249,12 @@ export async function initStateListeners(): Promise<() => void> {
       const p = e.payload;
       let text: string;
       if (p.action === "toggle") {
-        text = p.enabled ? "文字处理已开启" : "文字处理已关闭";
+        text = p.enabled ? m.voice_pp_notice_enabled() : m.voice_pp_notice_disabled();
       } else {
         const name =
           p.displayName.trim() ||
-          (p.pipelineId === "blocklist" ? "屏蔽词" : p.pipelineId);
-        text = `处理流程：${name}`;
+          (p.pipelineId === "blocklist" ? m.voice_pipeline_blocklist_name() : p.pipelineId);
+        text = m.voice_pp_notice_pipeline({ name });
       }
       const seq = ++ppNoticeSeq;
       appState.update((s) => ({ ...s, ppNotice: { id: seq, text } }));

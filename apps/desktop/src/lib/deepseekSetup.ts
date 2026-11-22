@@ -19,6 +19,7 @@ import {
   type Settings,
 } from "./ipc";
 import { usesLegacyVoiceInput } from "./ipc/contracts";
+import { m } from "./paraglide/messages.js";
 
 export const DEEPSEEK_KEY_PAGE = "https://platform.deepseek.com/api_keys";
 export const DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1";
@@ -27,13 +28,13 @@ export const DEEPSEEK_DEFAULT_MODEL = "deepseek-flash";
 /** 本地格式检查；通过返回 null，否则返回要显示给玩家的话。 */
 export function deepseekKeyProblem(raw: string): string | null {
   const value = raw.trim();
-  if (!value) return "请输入 DeepSeek Key。";
+  if (!value) return m.shell_deepseek_key_empty();
   if (
     !/^[\x21-\x7e]+$/.test(value) ||
     /^[A-Z][A-Z0-9_]*=[^=]/.test(value) ||
     ((value.startsWith('"') || value.startsWith("'") || value.charCodeAt(0) === 96) && value[value.length - 1] === value[0])
   ) {
-    return "请只粘贴 Key 本身，不要带引号、空格或 DEEPSEEK_API_KEY=。";
+    return m.shell_deepseek_key_malformed();
   }
   return null;
 }
@@ -75,28 +76,28 @@ export async function connectDeepSeek(rawKey: string, current: Settings | null):
   }
   if (!check.passed) {
     await deleteConnection(connectionId).catch(() => {});
-    throw new Error(check.message || "这个 Key 用不了，检查一下有没有复制完整");
+    throw new Error(check.message || m.shell_deepseek_key_unusable());
   }
 
-  const items: SwitchedItem[] = [{ id: "chat", label: "对话", ok: true }];
+  const items: SwitchedItem[] = [{ id: "chat", label: m.shell_deepseek_item_chat(), ok: true }];
   if (legacy) {
     await updateSettings({
       assistant: { companionBindings: { connectionId, hotkey: "" } },
       ui: { legacyUpgrade: "optedIn", firstRunCompleted: true, startPage: "chat" },
     });
-    items.push({ id: "asr", label: "语音识别", ok: true, note: "保持原来的设置" });
+    items.push({ id: "asr", label: m.shell_deepseek_item_asr(), ok: true, note: m.shell_deepseek_asr_keep_settings() });
   } else {
     await updateSettings({ assistant: { connectionId }, ui: { firstRunCompleted: true } });
     const keepLocal = await keepsChosenLocalAsr(current);
     if (keepLocal) {
-      items.push({ id: "asr", label: "语音识别", ok: true, note: `保持本地 ${keepLocal}` });
+      items.push({ id: "asr", label: m.shell_deepseek_item_asr(), ok: true, note: m.shell_deepseek_asr_keep_local({ model: keepLocal }) });
     } else {
-      items.push(await attempt("asr", "语音识别", () => setActiveModel("deepseek-asr", "deepseek-asr")));
+      items.push(await attempt("asr", m.shell_deepseek_item_asr(), () => setActiveModel("deepseek-asr", "deepseek-asr")));
     }
   }
-  items.push(await attempt("ocr", "文字识别", () => activateCatalogModel("ocr", "deepseek-ocr")));
-  items.push(await attempt("tts", "语音合成", () => activateCatalogModel("tts", "deepseek-tts")));
-  items.push(await attempt("search", "联网搜索", () => activateCatalogModel("search", "deepseek-search")));
+  items.push(await attempt("ocr", m.shell_deepseek_item_ocr(), () => activateCatalogModel("ocr", "deepseek-ocr")));
+  items.push(await attempt("tts", m.shell_deepseek_item_tts(), () => activateCatalogModel("tts", "deepseek-tts")));
+  items.push(await attempt("search", m.shell_deepseek_item_search(), () => activateCatalogModel("search", "deepseek-search")));
   return { connectionId, items, settings: await getSettings() };
 }
 

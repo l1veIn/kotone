@@ -11,7 +11,8 @@
     "build:web": "vite build",
     "test:e2e": "playwright test",
     "tauri": "tauri",
-    "check": "svelte-check --tsconfig ./tsconfig.json"
+    "i18n": "paraglide-js compile --project ./project.inlang --outdir ./src/lib/paraglide --strategy baseLocale --output-structure locale-modules --silent",
+    "check": "pnpm i18n && svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -21,6 +22,8 @@
     "marked": "17.0.6"
   },
   "devDependencies": {
+    "@inlang/paraglide-js": "3.2.2",
+    "@inlang/plugin-message-format": "4.5.0",
     "@internationalized/date": "^3.12.4",
     "@lucide/svelte": "^1.73.0",
     "@playwright/test": "^1.62.0",

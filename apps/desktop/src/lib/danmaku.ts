@@ -2,6 +2,7 @@ import hello from "../assets/brand/stickers/hello.webp";
 import cheering from "../assets/brand/stickers/cheering.webp";
 import pointing from "../assets/brand/stickers/pointing.webp";
 import amazed from "../assets/brand/stickers/amazed.webp";
+import { m } from "./paraglide/messages.js";
 
 export type DanmakuEmote = "none" | "hello" | "cheering" | "pointing" | "amazed";
 export interface DanmakuPresentation {
@@ -17,11 +18,11 @@ export interface DanmakuPresentation {
 }
 
 export const DANMAKU_EMOTES: { id: DanmakuEmote; label: string; src: string | null }[] = [
-  { id: "none", label: "纯文字", src: null },
-  { id: "hello", label: "招手", src: hello },
-  { id: "cheering", label: "加油", src: cheering },
-  { id: "pointing", label: "提醒", src: pointing },
-  { id: "amazed", label: "惊讶", src: amazed },
+  { id: "none", label: m.misc_danmaku_emote_none(), src: null },
+  { id: "hello", label: m.misc_danmaku_emote_hello(), src: hello },
+  { id: "cheering", label: m.misc_danmaku_emote_cheering(), src: cheering },
+  { id: "pointing", label: m.misc_danmaku_emote_pointing(), src: pointing },
+  { id: "amazed", label: m.misc_danmaku_emote_amazed(), src: amazed },
 ];
 export const DANMAKU_PREVIEW_EVENT = "kotone:preview-danmaku";
 export const DANMAKU_PREVIEW_FINISHED_EVENT = "kotone:preview-danmaku-finished";

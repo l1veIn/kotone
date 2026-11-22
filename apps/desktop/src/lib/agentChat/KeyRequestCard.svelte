@@ -4,6 +4,7 @@
   import { companionName } from "$lib/stores/companion";
   import { KeyRound } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
+  import { m } from "$lib/paraglide/messages.js";
   import { agentSubmitKey, type KeyRequest } from "../agent";
   import { errText } from "../stores/ui";
 
@@ -24,19 +25,19 @@
 
 <div class="rounded-2xl border border-primary/40 bg-composer px-4 py-3 text-[13px]" data-testid="agent-key-request" data-provider={request.provider}>
   <p class="m-0 flex items-center gap-2 font-medium text-foreground">
-    <KeyRound class="size-4 text-primary" />{$companionName}需要 {request.displayName} 的 Key
+    <KeyRound class="size-4 text-primary" />{m.chat_key_request_title({ name: $companionName, provider: request.displayName })}
   </p>
   {#if request.reason}<p class="mt-1 mb-0 text-xs text-muted-foreground">{request.reason}</p>{/if}
   <p class="mt-1 mb-0 text-xs text-muted-foreground">
-    粘贴在这里：直接存进系统凭据库，不会出现在聊天里，也不会发给 AI。
-    {#if request.apiKeyUrl}<a class="text-primary hover:underline" href={request.apiKeyUrl} target="_blank" rel="noreferrer">去创建 Key →</a>{/if}
+    {m.chat_key_request_hint()}
+    {#if request.apiKeyUrl}<a class="text-primary hover:underline" href={request.apiKeyUrl} target="_blank" rel="noreferrer">{m.chat_key_request_create_link()}</a>{/if}
   </p>
   <form class="mt-2.5 flex flex-wrap items-center gap-2" onsubmit={(e) => { e.preventDefault(); if (key.trim()) void submit(key); }}>
-    <input type="password" autocomplete="off" spellcheck="false" bind:value={key} placeholder="sk-…" aria-label={`${request.displayName} 的 Key`}
+    <input type="password" autocomplete="off" spellcheck="false" bind:value={key} placeholder="sk-…" aria-label={m.chat_key_request_input_label({ provider: request.displayName })}
       class="h-8 min-w-0 flex-1 rounded-lg border border-input bg-transparent px-2.5 font-mono text-xs outline-none focus-visible:border-ring"
       data-testid="agent-key-input" />
-    <Button size="sm" type="submit" disabled={busy || !key.trim()} data-testid="agent-key-save">{busy ? "保存中…" : "保存"}</Button>
-    <Button size="sm" variant="ghost" type="button" disabled={busy} onclick={() => void submit(null)} data-testid="agent-key-skip">不用了</Button>
+    <Button size="sm" type="submit" disabled={busy || !key.trim()} data-testid="agent-key-save">{busy ? m.chat_key_request_saving() : m.chat_key_request_save()}</Button>
+    <Button size="sm" variant="ghost" type="button" disabled={busy} onclick={() => void submit(null)} data-testid="agent-key-skip">{m.chat_key_request_skip()}</Button>
   </form>
   {#if error}<p role="alert" class="mt-1.5 mb-0 text-xs text-destructive">{error}</p>{/if}
 </div>

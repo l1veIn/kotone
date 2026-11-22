@@ -5,6 +5,7 @@
   import { Textarea } from "$lib/components/ui/textarea";
   import { workspaceRead, workspaceWrite, type WorkspaceFile } from "../../../../lib/workspace";
   import { errText, toast } from "../../../../lib/stores/ui";
+  import { m } from "$lib/paraglide/messages.js";
 
   let { file, limit, label, placeholder = "", testid, onsaved }: {
     file: WorkspaceFile;
@@ -31,7 +32,7 @@
     error = "";
     void workspaceRead(target)
       .then((value) => { if (!disposed) { text = value; saved = value; } })
-      .catch((e) => { if (!disposed) error = `读取失败：${errText(e)}`; })
+      .catch((e) => { if (!disposed) error = m.companion_workspace_load_failed({ error: errText(e) }); })
       .finally(() => { if (!disposed) loading = false; });
     return () => { disposed = true; };
   });
@@ -42,7 +43,7 @@
     try {
       await workspaceWrite(file, text);
       saved = text;
-      toast(true, `${label}已保存，下一段对话生效`);
+      toast(true, m.companion_workspace_saved({ label }));
       onsaved?.();
     } catch (e) {
       error = errText(e);
@@ -56,9 +57,9 @@
   <Textarea bind:value={text} disabled={loading} rows={8} spellcheck={false} aria-label={label} {placeholder}
     class="max-h-80 min-h-32 font-mono text-[12.5px] leading-relaxed" data-testid={`${testid}-text`} />
   <div class="flex items-center gap-3">
-    <span class="text-[11px] tabular-nums {over ? 'text-destructive' : 'text-muted-foreground'}" data-testid={`${testid}-count`}>{count} / {limit} 字</span>
+    <span class="text-[11px] tabular-nums {over ? 'text-destructive' : 'text-muted-foreground'}" data-testid={`${testid}-count`}>{m.companion_char_count({ count, limit })}</span>
     {#if error}<span role="alert" class="min-w-0 flex-1 truncate text-xs text-destructive" title={error} data-testid={`${testid}-error`}>{error}</span>{:else}<span class="flex-1"></span>{/if}
-    {#if dirty}<Button size="sm" variant="ghost" disabled={saving} onclick={() => { text = saved; error = ""; }}>还原</Button>{/if}
-    <Button size="sm" disabled={!dirty || over || saving || loading} onclick={() => void save()} data-testid={`${testid}-save`}>{saving ? "保存中…" : "保存"}</Button>
+    {#if dirty}<Button size="sm" variant="ghost" disabled={saving} onclick={() => { text = saved; error = ""; }}>{m.companion_workspace_revert()}</Button>{/if}
+    <Button size="sm" disabled={!dirty || over || saving || loading} onclick={() => void save()} data-testid={`${testid}-save`}>{saving ? m.companion_saving() : m.companion_save()}</Button>
   </div>
 </div>

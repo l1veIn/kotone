@@ -26,6 +26,7 @@
     }, 60);
 
     later(100, () => appState.update((s) => ({ ...s, state: "listening" })));
+    // i18n-ignore-start：?demo 演示用的识别文字（玩家说的话），不是界面文字
     later(600, () => appState.update((s) => ({ ...s, partialText: "对面" })));
     later(1200, () => appState.update((s) => ({ ...s, partialText: "对面打野" })));
     later(1800, () => appState.update((s) => ({ ...s, partialText: "对面打野在下" })));
@@ -36,6 +37,7 @@
         state: "preview",
         partialText: "对面打野在下路",
         finalText: "对面打野在下路",
+    // i18n-ignore-end
       })),
     );
     later(5200, () => appState.update((s) => ({ ...s, state: "sending" })));

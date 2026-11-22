@@ -32,6 +32,7 @@
   import heroOnboarding from "../../assets/brand/hero-onboarding.webp";
   import stickerHello from "../../assets/brand/stickers/hello.webp";
   import stickerCheering from "../../assets/brand/stickers/cheering.webp";
+  import { m } from "$lib/paraglide/messages.js";
 
   let { mode = "new", initialStep, initialResult = null, onDone }: {
     mode?: "new" | "upgrade";
@@ -53,7 +54,7 @@
 
   // ---------- 升级欢迎：读他现在的语音输入设置 ----------
   let summary = $state<{ hotkey: string; mode: string; asr: string; asrOnline: boolean; game: string; reminders: boolean } | null>(null);
-  const modeNames: Record<string, string> = { "push-to-talk": "按住说话", dictation: "按一下开始、再按停止", "one-shot": "说一句就走", solo: "独奏模式" };
+  const modeNames: Record<string, string> = { "push-to-talk": m.shell_onboarding_mode_push_to_talk(), dictation: m.shell_onboarding_mode_dictation(), "one-shot": m.shell_onboarding_mode_one_shot(), solo: m.shell_onboarding_mode_solo() };
   onMount(async () => {
     if (mode !== "upgrade") return;
     const settings = $settingsStore;
@@ -64,10 +65,10 @@
       const model = models.find((item) => item.id === modelId);
       summary = {
         hotkey: hotkeyLabel(settings.hotkey.key),
-        mode: modeNames[settings.interactionMode ?? ""] ?? (settings.hotkey.mode === "hold" ? "按住说话" : "按一下开始"),
-        asr: model?.displayName.replace(/（.*$/, "") ?? "本地识别",
+        mode: modeNames[settings.interactionMode ?? ""] ?? (settings.hotkey.mode === "hold" ? m.shell_onboarding_mode_push_to_talk() : m.shell_onboarding_mode_toggle()),
+        asr: model?.displayName.replace(/（.*$/, "") ?? m.shell_onboarding_asr_fallback_name(),
         asrOnline: model?.backend === "remote",
-        game: profiles.find((item) => item.id === settings.activeProfileId)?.displayName ?? "通用",
+        game: profiles.find((item) => item.id === settings.activeProfileId)?.displayName ?? m.shell_onboarding_game_generic(),
         reminders: hasLegacyReminders(settings.ui) && !!settings.assistant.hotkey.trim(),
       };
     } catch {
@@ -155,7 +156,7 @@
 
   async function enterChat() {
     if (saving) return;
-    if (conflict) { toast(false, `呼叫键和${conflict}相同，请换一个`); return; }
+    if (conflict) { toast(false, m.shell_onboarding_call_key_conflict_toast({ conflict })); return; }
     saving = true;
     try {
       if (callKeyTouched || (companionBindings($settingsStore?.assistant)?.hotkey ?? "") !== callKey) {
@@ -163,9 +164,9 @@
           assistant: companionBindingPatch($settingsStore?.assistant, { hotkey: callKey }),
         }));
       }
-      onDone("chat", "你能做什么？");
+      onDone("chat", m.shell_onboarding_first_prompt());
     } catch (error) {
-      toast(false, `保存呼叫键失败：${errText(error)}`);
+      toast(false, m.shell_onboarding_save_call_key_failed({ error: errText(error) }));
     } finally {
       saving = false;
     }
@@ -176,27 +177,27 @@
 
 <div class="absolute inset-0 z-50 flex items-center justify-center bg-black/50 p-5 backdrop-blur-sm" data-testid="onboarding">
   <div class="relative max-h-full w-full max-w-xl overflow-y-auto rounded-3xl border border-hairline bg-popover text-popover-foreground shadow-2xl"
-    role="dialog" aria-modal="true" aria-label="Kotone 引导">
+    role="dialog" aria-modal="true" aria-label={m.shell_onboarding_dialog_label()}>
     <div class="pointer-events-none absolute -top-24 left-1/2 h-48 w-96 -translate-x-1/2 rounded-full bg-kotone-violet/25 blur-3xl"></div>
 
     {#if step === "welcome"}
       <div class="relative overflow-hidden" data-testid="onboarding-welcome">
         <div class="relative">
-          <img src={heroOnboarding} alt="Kotone 张开双臂欢迎你" class="h-48 w-full object-cover object-top" />
+          <img src={heroOnboarding} alt={m.shell_onboarding_hero_alt()} class="h-48 w-full object-cover object-top" />
           <div class="absolute inset-0 bg-gradient-to-t from-popover via-popover/30 to-transparent"></div>
         </div>
         <div class="relative -mt-8 px-8 pb-6">
           <img src={stickerHello} alt="" class="mb-3 h-12 w-12" />
-          <h1 class="m-0 text-2xl font-bold">欢迎来到 <span class="kotone-gradient-text">Kotone 琴音</span></h1>
-          <p class="mt-2 mb-0 text-sm leading-relaxed text-muted-foreground">陪你打游戏的 AI 陪玩：叫她一声，她帮你查、帮你说、帮你按。</p>
+          <h1 class="m-0 text-2xl font-bold">{m.shell_onboarding_welcome_title()} <span class="kotone-gradient-text">{m.shell_onboarding_welcome_brand()}</span></h1>
+          <p class="mt-2 mb-0 text-sm leading-relaxed text-muted-foreground">{m.shell_onboarding_welcome_intro()}</p>
           <button class="mt-6 w-full rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 active:scale-[0.99]"
-            data-testid="onboarding-add-key" onclick={() => (step = "key")}>添加 DeepSeek Key</button>
-          <p class="mt-2 mb-0 text-center text-[11px] text-muted-foreground">有这一个 Key 就能用全部功能：对话、语音识别、文字识别、语音合成、联网搜索。</p>
+            data-testid="onboarding-add-key" onclick={() => (step = "key")}>{m.shell_onboarding_add_key()}</button>
+          <p class="mt-2 mb-0 text-center text-[11px] text-muted-foreground">{m.shell_onboarding_key_covers_all()}</p>
           <div class="mt-5 flex items-center justify-between">
             <button class="text-xs text-primary underline-offset-2 hover:underline disabled:opacity-50" data-testid="onboarding-voice-only"
-              disabled={saving} onclick={() => void finishWithoutKey("voiceGuide")}>只想用语音输入？</button>
+              disabled={saving} onclick={() => void finishWithoutKey("voiceGuide")}>{m.shell_onboarding_voice_only()}</button>
             <button class="text-xs text-muted-foreground hover:text-foreground/90 disabled:opacity-50" data-testid="onboarding-later"
-              disabled={saving} onclick={() => void finishWithoutKey("chat")}>稍后配置</button>
+              disabled={saving} onclick={() => void finishWithoutKey("chat")}>{m.shell_setup_later()}</button>
           </div>
         </div>
       </div>
@@ -205,29 +206,29 @@
         <div class="flex items-start gap-4">
           <img src={stickerHello} alt="" class="h-11 w-11 shrink-0" />
           <div class="min-w-0">
-            <h2 class="m-0 text-lg font-bold">Kotone 0.2：多了一位游戏陪玩</h2>
-            <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">升级不会改你的任何设置。</p>
+            <h2 class="m-0 text-lg font-bold">{m.shell_onboarding_upgrade_title()}</h2>
+            <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">{m.shell_onboarding_upgrade_no_changes()}</p>
           </div>
         </div>
         <div class="mt-5 rounded-2xl border border-hairline bg-card/70 px-4 py-3" data-testid="onboarding-upgrade-summary">
-          <p class="m-0 text-sm font-semibold">你的语音输入没有变</p>
+          <p class="m-0 text-sm font-semibold">{m.shell_onboarding_upgrade_voice_unchanged()}</p>
           {#if summary}
             <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">
-              热键 {summary.hotkey}（{summary.mode}）· {summary.asrOnline ? "在线识别" : "本地识别"} {summary.asr} · {summary.game}{summary.reminders ? " · 提醒助手照旧" : ""}
+              {m.shell_onboarding_upgrade_summary({ hotkey: summary.hotkey, mode: summary.mode, recognition: summary.asrOnline ? m.shell_onboarding_asr_online() : m.shell_onboarding_asr_local(), model: summary.asr, game: summary.game })}{summary.reminders ? m.shell_onboarding_upgrade_summary_reminders() : ""}
             </p>
             {#if summary.asrOnline}
-              <p class="mt-1 mb-0 text-xs text-primary">在线识别不用再点「启动」，打开 Kotone 就能用。</p>
+              <p class="mt-1 mb-0 text-xs text-primary">{m.shell_onboarding_upgrade_online_hint()}</p>
             {/if}
           {:else}
-            <p class="mt-1 mb-0 text-xs text-muted-foreground">热键、识别模型、游戏配置都和以前一样。</p>
+            <p class="mt-1 mb-0 text-xs text-muted-foreground">{m.shell_onboarding_upgrade_summary_fallback()}</p>
           {/if}
         </div>
         <button class="mt-5 w-full rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
-          data-testid="onboarding-keep-voice" disabled={saving} onclick={() => void keepVoiceInput()}>继续使用语音输入法</button>
+          data-testid="onboarding-keep-voice" disabled={saving} onclick={() => void keepVoiceInput()}>{m.shell_onboarding_keep_voice_input()}</button>
         <button class="mt-2 w-full rounded-xl border border-hairline px-5 py-2.5 text-sm text-foreground/90 transition hover:bg-muted disabled:opacity-50"
-          data-testid="onboarding-meet-companion" disabled={saving} onclick={() => (step = "key")}>添加 DeepSeek Key，认识{name}</button>
+          data-testid="onboarding-meet-companion" disabled={saving} onclick={() => (step = "key")}>{m.shell_onboarding_meet_companion({ name })}</button>
         <p class="mt-4 mb-0 text-[11px] leading-relaxed text-muted-foreground">
-          {name}是可选的：她能听你说话、回答问题，在你允许时帮你操作游戏。以后随时可以从侧栏开始。
+          {m.shell_onboarding_companion_optional({ name })}
         </p>
       </div>
     {:else if step === "key"}
@@ -235,15 +236,15 @@
         <DeepSeekKeyForm testid="onboarding-key" onConnected={onConnected}
           onBack={() => (step = mode === "upgrade" ? "upgrade" : "welcome")}
           onLater={mode === "upgrade" ? () => void keepVoiceInput() : () => void finishWithoutKey("chat")}
-          laterLabel={mode === "upgrade" ? "继续使用语音输入法" : "稍后配置"} />
+          laterLabel={mode === "upgrade" ? m.shell_onboarding_keep_voice_input() : m.shell_setup_later()} />
       </div>
     {:else if step === "connected"}
       <div class="relative p-7" data-testid="onboarding-connected">
         <div class="flex items-start gap-4">
           <img src={stickerCheering} alt="" class="h-11 w-11 shrink-0" />
           <div>
-            <h2 class="m-0 text-lg font-bold">已连接 DeepSeek</h2>
-            <p class="mt-1 mb-0 text-xs text-muted-foreground">下面这些现在都用 DeepSeek，以后可以在「设置 → 模型」里换。</p>
+            <h2 class="m-0 text-lg font-bold">{m.shell_onboarding_connected_title()}</h2>
+            <p class="mt-1 mb-0 text-xs text-muted-foreground">{m.shell_onboarding_connected_hint()}</p>
           </div>
         </div>
         {#if result}
@@ -257,36 +258,36 @@
         {/if}
         <div class="mt-3 rounded-2xl border border-hairline bg-card/70 px-4 py-3" data-testid="onboarding-call-key">
           <div class="flex flex-wrap items-center justify-between gap-2">
-            <span class="text-sm font-semibold">呼叫键</span>
+            <span class="text-sm font-semibold">{m.shell_onboarding_call_key()}</span>
             <div class="flex items-center gap-2">
               {#if callKey}
                 <kbd class="rounded-md border border-hairline bg-background px-2 py-0.5 font-mono text-xs" data-testid="onboarding-call-key-value">{hotkeyLabel(callKey)}</kbd>
               {:else}
-                <span class="text-xs text-muted-foreground" data-testid="onboarding-call-key-value">未设置</span>
+                <span class="text-xs text-muted-foreground" data-testid="onboarding-call-key-value">{m.shell_onboarding_call_key_unset()}</span>
                 <button class="rounded-lg border border-primary/50 px-2.5 py-1 text-xs text-primary hover:bg-primary/10" data-testid="onboarding-call-key-recommended"
-                  onclick={() => useKey(RECOMMENDED_CALL_KEY)}>用 Ctrl + ~</button>
+                  onclick={() => useKey(RECOMMENDED_CALL_KEY)}>{m.shell_onboarding_call_key_recommended()}</button>
               {/if}
               <button class="rounded-lg border border-hairline px-2.5 py-1 text-xs hover:bg-muted disabled:opacity-50" disabled={capturing}
-                data-testid="onboarding-call-key-record" onclick={() => void recordCallKey()}>{capturing ? "请按键…（Esc 取消）" : "换一个"}</button>
+                data-testid="onboarding-call-key-record" onclick={() => void recordCallKey()}>{capturing ? m.shell_onboarding_call_key_capturing() : m.shell_onboarding_call_key_change()}</button>
             </div>
           </div>
-          <p class="mt-1.5 mb-0 text-xs text-muted-foreground">在游戏里按一下，{name}就在右下角的气泡里听你说，说完自动交给她。</p>
+          <p class="mt-1.5 mb-0 text-xs text-muted-foreground">{m.shell_onboarding_call_key_hint({ name })}</p>
           {#if conflict}
-            <p class="mt-1.5 mb-0 text-xs text-destructive" role="alert" data-testid="onboarding-call-key-conflict">和你的{conflict}相同，请换一个</p>
+            <p class="mt-1.5 mb-0 text-xs text-destructive" role="alert" data-testid="onboarding-call-key-conflict">{m.shell_onboarding_call_key_conflict({ conflict })}</p>
           {/if}
           {#each staticWarnings as warning}
             <p class="mt-1 mb-0 text-xs text-warning">⚠ {warning}</p>
           {/each}
           {#if legacyOptedIn && !callKey}
-            <p class="mt-1.5 mb-0 text-[11px] text-muted-foreground">你原来的语音输入热键和提醒助手热键不受影响。</p>
+            <p class="mt-1.5 mb-0 text-[11px] text-muted-foreground">{m.shell_onboarding_legacy_hotkeys_kept()}</p>
           {/if}
         </div>
         <div class="mt-6 flex items-center justify-between">
           {#if callKey}
-            <button class="text-xs text-muted-foreground hover:text-foreground/90" data-testid="onboarding-call-key-clear" onclick={() => useKey("")}>不要呼叫键</button>
+            <button class="text-xs text-muted-foreground hover:text-foreground/90" data-testid="onboarding-call-key-clear" onclick={() => useKey("")}>{m.shell_onboarding_call_key_clear()}</button>
           {:else}<span></span>{/if}
           <button class="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
-            data-testid="onboarding-enter-chat" disabled={saving || capturing || !!conflict} onclick={() => void enterChat()}>进入聊天</button>
+            data-testid="onboarding-enter-chat" disabled={saving || capturing || !!conflict} onclick={() => void enterChat()}>{m.shell_onboarding_enter_chat()}</button>
         </div>
       </div>
     {/if}

@@ -3,6 +3,7 @@
 // 浏览器预览用内存里的示例数据，不读写任何文件。
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "./ipc";
+import { m } from "./paraglide/messages.js";
 
 export interface FileSize { chars: number; limit: number }
 export interface SkillInfo { name: string; description: string }
@@ -22,6 +23,7 @@ const LIMITS: Record<string, number> = { "SOUL.md": 4000, "USER.md": 1375, "MEMO
 const GAME_LIMIT = 4000;
 const preview = {
   files: new Map<string, string>([
+    // i18n-ignore-start：浏览器预览的示例数据（真实应用里来自后端或玩家自己的数据），不是界面文字
     ["SOUL.md", "# SOUL\n\n你是屏幕前玩家的游戏陪玩 Agent。说话温暖、轻快、简短；像一起开黑的朋友，不说教、不啰嗦。\n"],
     ["USER.md", ""],
     ["MEMORY.md", "# MEMORY\n\n- 玩家习惯用中文语音交流\n"],
@@ -40,6 +42,7 @@ export async function workspaceOverview(): Promise<WorkspaceOverview> {
   const size = (file: string) => ({ chars: [...(preview.files.get(file) ?? "")].length, limit: limitOf(file) });
   return {
     name: "琴音", defaultName: "琴音", dir: "（浏览器预览）",
+    // i18n-ignore-end
     files: { soul: size("SOUL.md"), user: size("USER.md"), memory: size("MEMORY.md") },
     gameLimit: GAME_LIMIT,
     games: [...preview.files.keys()].filter((k) => k.startsWith("games/")).map((k) => ({ id: k.slice(6), chars: size(k).chars })),
@@ -54,7 +57,7 @@ export async function workspaceRead(file: WorkspaceFile): Promise<string> {
 
 export async function workspaceWrite(file: WorkspaceFile, text: string): Promise<void> {
   if (isTauri) return invoke("workspace_write", { file, text });
-  if ([...text].length > limitOf(file)) throw new Error(`超过 ${limitOf(file)} 字`);
+  if ([...text].length > limitOf(file)) throw new Error(m.role_workspace_too_long({ limit: limitOf(file) }));
   preview.files.set(file, text);
 }
 
@@ -67,7 +70,7 @@ export async function workspaceDeleteGame(id: string): Promise<void> {
 /** 保存头像，返回文件名。`role`：哪个角色的（缺省 = 琴音）。 */
 export async function workspaceSetAvatar(bytes: Uint8Array, ext: string, role?: string): Promise<string> {
   if (isTauri) return invoke("workspace_set_avatar", { bytes: Array.from(bytes), ext, role: role ?? null });
-  if (bytes.length > 2 * 1024 * 1024) throw new Error("头像不能超过 2 MB");
+  if (bytes.length > 2 * 1024 * 1024) throw new Error(m.role_workspace_avatar_too_large());
   preview.avatar = bytes;
   return role && role !== "kotone" ? `avatar-${role}.${ext.toLowerCase()}` : `avatar.${ext.toLowerCase()}`;
 }
@@ -88,7 +91,7 @@ export async function workspaceDeleteSkill(name: string): Promise<void> {
 
 export async function workspaceImportSkill(dir: string): Promise<SkillInfo> {
   if (isTauri) return invoke("workspace_import_skill", { dir });
-  throw new Error("浏览器预览不能导入 Skill");
+  throw new Error(m.role_workspace_skill_import_preview());
 }
 
 export async function workspaceOpenDir(skill?: string): Promise<void> {

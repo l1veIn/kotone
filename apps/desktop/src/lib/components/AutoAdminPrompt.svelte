@@ -7,6 +7,7 @@
    * 并提示可随时在「设置 → 系统」里更改同一开关。
    */
   import { updateSettings } from "../ipc";
+  import { m } from "$lib/paraglide/messages.js";
   import { settingsStore, toast, toastInfo, errText } from "../stores/ui";
   import stickerPointing from "../../assets/brand/stickers/pointing.webp";
 
@@ -27,9 +28,9 @@
           autoAdminPromptDismissed: true,
         }),
       );
-      toast(true, "已开启：以后每次启动都会出现 Windows UAC 确认");
+      toast(true, m.system_auto_admin_enabled_toast());
     } catch (e) {
-      toast(false, `保存设置失败：${errText(e)}`);
+      toast(false, m.system_save_settings_failed({ error: errText(e) }));
     }
     onClose();
   }
@@ -43,10 +44,10 @@
         settingsStore.set(
           await updateSettings({ autoAdminPromptDismissed: true }),
         );
-        toastInfo("好的，以后可以随时在「设置 → 系统」里开启或关闭此选项");
+        toastInfo(m.system_auto_admin_never_ask_toast());
       }
     } catch (e) {
-      toast(false, `保存设置失败：${errText(e)}`);
+      toast(false, m.system_save_settings_failed({ error: errText(e) }));
     }
     onClose();
   }
@@ -57,13 +58,12 @@
     <div class="flex items-start gap-4">
       <img src={stickerPointing} alt="" class="h-14 w-14 shrink-0 object-contain" />
       <div class="min-w-0">
-        <h2 class="text-base font-bold">启动时自动请求管理员权限？</h2>
+        <h2 class="text-base font-bold">{m.system_auto_admin_title()}</h2>
         <p class="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
-          已以管理员权限运行。要让 Kotone 以后每次启动都自动发起 Windows
-          UAC 请求吗？省去每次手动重启的麻烦。
+          {m.system_auto_admin_body()}
         </p>
         <p class="mt-1.5 text-[11px] leading-relaxed text-muted-foreground/80">
-          无论是否开启，以后都可以在「设置 → 系统」里随时更改。
+          {m.system_auto_admin_hint()}
         </p>
       </div>
     </div>
@@ -78,7 +78,7 @@
             neverAsk = (event.target as HTMLInputElement).checked;
           }}
         />
-        不再提醒
+        {m.system_auto_admin_never_ask()}
       </label>
     </div>
 
@@ -88,14 +88,14 @@
         disabled={busy}
         onclick={() => void onLater()}
       >
-        暂不
+        {m.system_admin_prompt_later()}
       </button>
       <button
         class="rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:brightness-110 active:scale-95 disabled:opacity-50"
         disabled={busy}
         onclick={() => void onEnable()}
       >
-        {busy ? "处理中…" : "每次启动自动请求"}
+        {busy ? m.system_admin_prompt_busy() : m.system_auto_admin_enable_button()}
       </button>
     </div>
   </div>

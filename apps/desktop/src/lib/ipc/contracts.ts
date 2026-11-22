@@ -3,6 +3,8 @@
  * 此模块不依赖 Tauri、浏览器状态或模拟数据。
  */
 
+import { m } from "../paraglide/messages.js";
+
 // ---------- 设置与配置 ----------
 export interface HotkeyConfig {
   key: string;
@@ -88,7 +90,9 @@ export function defaultPostProcessing(): PostProcessingConfig {
     pipelines: [
       {
         id: "blocklist",
+        // i18n-ignore-start：默认流程名，存进配置（和后端的默认一致）
         displayName: "屏蔽词",
+        // i18n-ignore-end
         steps: [
           {
             id: "blocklist-1",
@@ -475,10 +479,10 @@ export function asrReadiness(status: RuntimeStatus | null | undefined): AsrReadi
 
 /** 本地识别四种状态的文案（标题栏、语音输入卡片、聊天页共用）。 */
 export const LOCAL_ASR_LABELS: Record<"local-stopped" | "local-starting" | "local-running" | "local-error", string> = {
-  "local-stopped": "未启动",
-  "local-starting": "准备中",
-  "local-running": "已启动",
-  "local-error": "出问题了",
+  "local-stopped": m.shell_asr_state_stopped(),
+  "local-starting": m.shell_asr_state_starting(),
+  "local-running": m.shell_asr_state_running(),
+  "local-error": m.shell_asr_state_error(),
 };
 
 export type OnboardingLaunchMode = "auto" | "always" | "never";
@@ -772,7 +776,9 @@ export function isDownloadCancelled(error: unknown): boolean {
         : error !== null && typeof error === "object" && "message" in error
           ? String((error as { message?: unknown }).message ?? "")
           : String(error);
+  // i18n-ignore-start：匹配后端的错误文字
   return text.includes("下载已取消");
+  // i18n-ignore-end
 }
 
 // ---------- 识别历史（core history 模块，camelCase 对齐 serde） ----------
@@ -889,7 +895,7 @@ export interface HotkeyCaptureEvent {
 
 export function modelsDirPathError(dir: string): string | null {
   return /[^\x00-\x7F]/.test(dir)
-    ? "模型存储路径必须使用纯英文路径（可包含英文字母、数字、空格和英文符号），例如 D:\\KotoneModels"
+    ? m.shell_models_dir_ascii_only()
     : null;
 }
 

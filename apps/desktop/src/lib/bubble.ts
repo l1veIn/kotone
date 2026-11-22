@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { isTauri, type BubbleCorner } from "./ipc";
+import { m } from "./paraglide/messages.js";
 import curious from "../assets/brand/stickers/curious.webp";
 import thinking from "../assets/brand/stickers/thinking.webp";
 import hello from "../assets/brand/stickers/hello.webp";
@@ -81,8 +82,8 @@ export async function subscribeBubble(cb: (s: BubbleSnapshot) => void): Promise<
 }
 
 export const bubbleCorners: { value: BubbleCorner; label: string }[] = [
-  { value: "bottom-right", label: "右下角" },
-  { value: "bottom-left", label: "左下角" },
-  { value: "top-right", label: "右上角" },
-  { value: "top-left", label: "左上角" },
+  { value: "bottom-right", label: m.misc_bubble_corner_bottom_right() },
+  { value: "bottom-left", label: m.misc_bubble_corner_bottom_left() },
+  { value: "top-right", label: m.misc_bubble_corner_top_right() },
+  { value: "top-left", label: m.misc_bubble_corner_top_left() },
 ];

@@ -2,6 +2,7 @@
   // 按入参声明填运行时的值：没填的用缺省值；没有缺省值的是必填。
   import type { ParamSpec } from "../../../../lib/automation";
   import ParamInput from "./ParamInput.svelte";
+  import { m } from "$lib/paraglide/messages.js";
 
   let { params, values, disabled = false, prefix = "", onchange }: {
     params: ParamSpec[]; values: Record<string, unknown>; disabled?: boolean; prefix?: string;
@@ -11,7 +12,7 @@
   function describe(value: unknown): string {
     if (value === undefined || value === null) return "";
     if (typeof value === "object") {
-      if ("image" in (value as object)) return "图片";
+      if ("image" in (value as object)) return m.auto_args_value_image();
       return JSON.stringify(value);
     }
     return String(value);
@@ -34,12 +35,12 @@
         <ParamInput {spec} {disabled} label={`${prefix}${spec.label || spec.name}`}
           value={values[spec.name]} onchange={(value) => set(spec.name, value)} />
         {#if !required && values[spec.name] === undefined}
-          <span class="text-xs text-muted-foreground/80">缺省：{describe(spec.default)}</span>
+          <span class="text-xs text-muted-foreground/80">{m.auto_args_default({ value: describe(spec.default) })}</span>
         {/if}
         {#if spec.description}<span class="text-xs text-muted-foreground">{spec.description}</span>{/if}
       </div>
     {/each}
   </div>
 {:else}
-  <p class="m-0 text-xs text-muted-foreground">没有参数。</p>
+  <p class="m-0 text-xs text-muted-foreground">{m.auto_args_none()}</p>
 {/if}

@@ -31,16 +31,17 @@
   import Waveform from "./Waveform.svelte";
   import stickerProud from "../../assets/brand/stickers/proud.webp";
   import stickerAmazed from "../../assets/brand/stickers/amazed.webp";
+  import { m } from "$lib/paraglide/messages.js";
 
   const stateLabel: Record<string, string> = {
-    idle: "Kotone 待机",
-    listening: "语音输入中…",
-    transcribing: "转写中",
-    processing: "后处理中",
-    preview: "预览确认",
-    sending: "发送中",
-    success: "已发送",
-    error: "出错了",
+    idle: m.voice_overlay_state_idle(),
+    listening: m.voice_overlay_state_listening(),
+    transcribing: m.voice_overlay_state_transcribing(),
+    processing: m.voice_overlay_state_processing(),
+    preview: m.voice_overlay_state_preview(),
+    sending: m.voice_overlay_state_sending(),
+    success: m.voice_overlay_state_success(),
+    error: m.voice_overlay_state_error(),
   };
 
   /** 操作中的瞬时错误提示（如 confirm 调用失败） */
@@ -51,24 +52,24 @@
   let sendPending = $state(false);
   /** preview 提示中的热键名（动态读配置，读取失败回退 CapsLock） */
   let hotkeyLabel = $state("CapsLock");
-  let callHotkeyLabel = $state("呼叫键");
-  let reminderHotkeyLabel = $state("提醒键");
+  let callHotkeyLabel: string = $state(m.voice_hotkey_name_call());
+  let reminderHotkeyLabel: string = $state(m.voice_overlay_reminder_key());
   let assistantMode = $state<AssistantInteractionMode>("push-to-talk");
   const legacyAssistant = $derived($appState.purpose === "assistant" && $appState.legacyReminder);
   const assistantHotkeyLabel = $derived(legacyAssistant ? reminderHotkeyLabel : callHotkeyLabel);
   const buttonAssistant = $derived(legacyAssistant && $appState.inputSource === "button");
-  const assistantControl = $derived(buttonAssistant ? "按钮" : assistantHotkeyLabel);
+  const assistantControl = $derived(buttonAssistant ? m.voice_overlay_control_button() : assistantHotkeyLabel);
   const legacyListeningHint = $derived({
-    "push-to-talk": `提醒助手收音中 · 松开 ${assistantControl} 提交`,
-    dictation: `提醒助手收音中 · 再按 ${assistantControl} 结束并预览`,
-    "one-shot": "提醒助手收音中 · 停顿后提交",
+    "push-to-talk": m.voice_overlay_legacy_listening_ptt({ control: assistantControl }),
+    dictation: m.voice_overlay_legacy_listening_dictation({ control: assistantControl }),
+    "one-shot": m.voice_overlay_legacy_listening_one_shot(),
   }[assistantMode]);
   const assistantListeningHint = $derived(
-    legacyAssistant ? legacyListeningHint : `在听 · 说完自动提交（再按 ${assistantHotkeyLabel} 立刻提交）`,
+    legacyAssistant ? legacyListeningHint : m.voice_overlay_assistant_listening({ hotkey: assistantHotkeyLabel }),
   );
-  const confirmLabel = $derived($appState.purpose === "assistant" ? "提交助手" : "发送");
+  const confirmLabel = $derived($appState.purpose === "assistant" ? m.voice_overlay_confirm_assistant() : m.voice_overlay_confirm_send());
   const confirmHotkey = $derived($appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel);
-  const previewHint = $derived(buttonAssistant ? "请回到提醒助手确认 · Esc 取消" : `${confirmHotkey} ${confirmLabel} · Esc 重说`);
+  const previewHint = $derived(buttonAssistant ? m.voice_overlay_preview_hint_button() : m.voice_overlay_preview_hint({ hotkey: confirmHotkey, action: confirmLabel }));
   /** overlay.style：true = 胶囊布局（窗口几何由后端 SetWindowPos 居中靠下重排） */
   let capsule = $state(false);
   let draggable = $state(true);
@@ -151,8 +152,8 @@
           revision++;
           hotkeyLabel = payload.hotkey;
           assistantMode = payload.assistantMode;
-          callHotkeyLabel = payload.assistantHotkey ? formatHotkey(payload.assistantHotkey) : "呼叫键";
-          reminderHotkeyLabel = payload.legacyReminderHotkey ? formatHotkey(payload.legacyReminderHotkey) : "提醒键";
+          callHotkeyLabel = payload.assistantHotkey ? formatHotkey(payload.assistantHotkey) : m.voice_hotkey_name_call();
+          reminderHotkeyLabel = payload.legacyReminderHotkey ? formatHotkey(payload.legacyReminderHotkey) : m.voice_overlay_reminder_key();
         });
         if (disposed) { cleanup(); return; }
         unlisten = cleanup;
@@ -164,8 +165,8 @@
         hotkeyLabel = s.hotkey.key;
         const callHotkey = companionBindings(s.assistant)?.hotkey;
         assistantMode = s.assistant.interactionMode;
-        callHotkeyLabel = callHotkey ? formatHotkey(callHotkey) : "呼叫键";
-        reminderHotkeyLabel = hasLegacyReminders(s.ui) && s.assistant.hotkey ? formatHotkey(s.assistant.hotkey) : "提醒键";
+        callHotkeyLabel = callHotkey ? formatHotkey(callHotkey) : m.voice_hotkey_name_call();
+        reminderHotkeyLabel = hasLegacyReminders(s.ui) && s.assistant.hotkey ? formatHotkey(s.assistant.hotkey) : m.voice_overlay_reminder_key();
       }
       applyOverlayConfig(s.overlay);
     })().catch(() => { /* Keep useful defaults if the initial snapshot fails. */ });
@@ -275,7 +276,7 @@
     sendPending = true;
     try {
       await confirmSend();
-      actionHint = $appState.purpose === "assistant" ? "已重新提交助手" : "已重试发送";
+      actionHint = $appState.purpose === "assistant" ? m.voice_overlay_retried_assistant() : m.voice_overlay_retried_send();
     } catch (e) {
       actionError = String(e);
     } finally {
@@ -283,17 +284,17 @@
     }
   }
 
-  const displayError = $derived(actionError || $appState.errorMessage || "未知错误");
+  const displayError = $derived(actionError || $appState.errorMessage || m.voice_error_unknown());
   /** 鼠标模式：穿透（默认）时 overlay 窗口收不到任何鼠标事件，鼠标按钮只会误导用户。 */
   const mouseInteractive = $derived(!clickThrough);
   /** Error 态热键语义：保留文本 = 重试发送；无文本（如空转录）= 重说。 */
-  const errorAction = $derived($appState.errorText ? ($appState.purpose === "assistant" ? "重新提交" : "重试发送") : "重说");
+  const errorAction = $derived($appState.errorText ? ($appState.purpose === "assistant" ? m.voice_overlay_error_action_resubmit() : m.voice_overlay_error_action_retry_send()) : m.voice_overlay_error_action_redo());
   /** Esc 出口：带文本时按下等于丢弃保留的文本（放弃），否则只是收起提示。 */
-  const errorEscAction = $derived($appState.errorText ? "放弃" : "关闭");
+  const errorEscAction = $derived($appState.errorText ? m.voice_overlay_esc_discard() : m.voice_overlay_esc_close());
   const processingLabel = $derived(
-    $appState.purpose === "assistant" ? "正在理解提醒请求…" : $appState.processingStep
+    $appState.purpose === "assistant" ? m.voice_overlay_processing_assistant() : $appState.processingStep
       ? `${$appState.processingStep.displayName} · ${$appState.processingStep.index}/${$appState.processingStep.total}`
-      : "后处理中…",
+      : m.voice_overlay_processing(),
   );
 </script>
 
@@ -324,7 +325,7 @@
         {#key $appState.channel.id}
           <span
             class="channel-badge shrink-0 rounded-full bg-kotone-violet/30 px-2 py-0.5 text-[10px] leading-tight font-semibold whitespace-nowrap text-kotone-violet ring-1 ring-kotone-violet/50"
-            title="当前发送频道：{$appState.channel.displayName}"
+            title={m.voice_overlay_channel_title({ name: $appState.channel.displayName })}
           >
             {$appState.channel.displayName}
           </span>
@@ -366,7 +367,7 @@
           class="ellipsis-head max-w-[380px] truncate text-sm text-kotone-violet"
           in:fade={{ duration: 150 }}
         >
-          {$appState.partialText || "转写中…"}&#x200E;
+          {$appState.partialText || m.voice_overlay_transcribing()}&#x200E;
         </p>
       {:else if $appState.state === "processing"}
         <span class="spinner inline-block h-3.5 w-3.5 shrink-0 rounded-full"></span>
@@ -401,7 +402,7 @@
           class="ellipsis-head max-w-[380px] truncate text-sm text-white/70"
           in:fade={{ duration: 150 }}
         >
-          {$appState.finalText || "发送中"}&#x200E;
+          {$appState.finalText || m.voice_overlay_state_sending()}&#x200E;
         </p>
       {:else if $appState.state === "success"}
         <!-- 发送后短暂显示结果（随后按 overlay.visibility 规则隐藏/驻留） -->
@@ -410,7 +411,7 @@
           class="ellipsis-head max-w-[380px] truncate text-sm text-white"
           in:fade={{ duration: 150 }}
         >
-          {$appState.purpose === "assistant" ? "助手" : "已发送"} · {$appState.finalText}&#x200E;
+          {$appState.purpose === "assistant" ? m.voice_overlay_success_assistant() : m.voice_overlay_state_success()} · {$appState.finalText}&#x200E;
         </p>
       {:else if $appState.state === "error"}
         <span class="shrink-0 text-sm font-bold text-kotone-pink">✗</span>
@@ -423,12 +424,12 @@
             onclick={() => void onRetry()}
             disabled={sendPending}
           >
-            重试
+            {m.voice_action_retry()}
           </button>
         {/if}
         <!-- Error 的退出一律走键盘：无文本时没有任何鼠标可做的事，不给按钮 -->
         <span class="shrink-0 text-[10px] whitespace-nowrap text-white/40">
-          {#if buttonAssistant}请回到提醒助手重试 · Esc {errorEscAction}{:else}{$appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel} {errorAction} · Esc {errorEscAction}{/if}
+          {#if buttonAssistant}{m.voice_overlay_error_hint_button({ escAction: errorEscAction })}{:else}{$appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel} {errorAction} · Esc {errorEscAction}{/if}
         </span>
       {:else}
         <!-- idle：热键切换文字处理时短暂显示提示（托盘手动唤起时显示待机文案） -->
@@ -442,7 +443,7 @@
           </p>
         {:else}
           <span class="h-2 w-2 shrink-0 rounded-full bg-kotone-cyan/60"></span>
-          <p class="shrink-0 text-sm whitespace-nowrap text-white/70">Kotone 待机 · 按热键说话</p>
+          <p class="shrink-0 text-sm whitespace-nowrap text-white/70">{m.voice_overlay_idle_capsule()}</p>
         {/if}
       {/if}
     </div>
@@ -461,7 +462,7 @@
       {#key $appState.channel.id}
         <span
           class="channel-badge shrink-0 rounded-full bg-kotone-violet/30 px-2 py-1 text-[10px] leading-tight font-semibold whitespace-nowrap text-kotone-violet ring-1 ring-kotone-violet/50"
-          title="当前发送频道：{$appState.channel.displayName}"
+          title={m.voice_overlay_channel_title({ name: $appState.channel.displayName })}
         >
           {$appState.channel.displayName}
         </span>
@@ -487,7 +488,7 @@
       </span>
       {#if $appState.warningMessage}
         <div class="min-w-0 flex-1" in:fade={{ duration: 150 }}>
-          <p class="text-[11px] leading-tight font-semibold text-amber-300">已切换为手动结束</p>
+          <p class="text-[11px] leading-tight font-semibold text-amber-300">{m.voice_overlay_manual_end()}</p>
           <p class="mt-0.5 truncate text-xs text-white/65">{$appState.warningMessage}</p>
         </div>
       {:else if $appState.partialText}
@@ -512,7 +513,7 @@
       <div class="min-w-0 flex-1" in:fade={{ duration: 150 }}>
         <p class="flex items-center gap-2 text-sm text-kotone-violet">
           <span class="spinner inline-block h-3.5 w-3.5 rounded-full"></span>
-          转写中…
+          {m.voice_overlay_transcribing()}
         </p>
         {#if $appState.partialText}
           <p class="mt-0.5 truncate text-xs text-white/50">{$appState.partialText}</p>
@@ -535,7 +536,7 @@
           <p class="text-sm leading-snug break-all text-white">{$appState.finalText}</p>
         </div>
         <p class="text-[11px] leading-tight text-white/45">
-          {buttonAssistant ? previewHint : `再按 ${previewHint}`}
+          {buttonAssistant ? previewHint : m.voice_overlay_press_again({ hint: previewHint })}
         </p>
         {#if actionError}
           <p class="truncate text-[11px] text-kotone-pink">{actionError}</p>
@@ -554,7 +555,7 @@
             class="rounded-lg bg-white/10 px-3 py-1 text-xs text-white/75 transition hover:bg-white/20 active:scale-95"
             onclick={() => void onCancel()}
           >
-            取消 Esc
+            {m.voice_overlay_cancel_esc()}
           </button>
         </div>
       {/if}
@@ -562,7 +563,7 @@
       <div class="min-w-0 flex-1" in:fade={{ duration: 150 }}>
         <p class="flex items-center gap-2 text-sm font-semibold text-kotone-pink">
           <span class="send-pulse inline-block h-3 w-3 rounded-full bg-kotone-pink"></span>
-          发送中
+          {m.voice_overlay_state_sending()}
         </p>
         <p class="mt-0.5 truncate text-xs text-white/50">{$appState.finalText}</p>
       </div>
@@ -570,13 +571,13 @@
       <!-- 已发送：Kotone 贴纸弹出 + 气泡 -->
       <img
         src={stickerProud}
-        alt="Kotone 点赞"
+        alt={m.voice_overlay_sticker_proud_alt()}
         class="h-14 w-14 shrink-0 object-contain"
         in:scale={{ duration: 220, start: 0.5 }}
       />
       <div class="min-w-0 flex-1" in:fly={{ y: 6, duration: 200 }}>
         <div class="bubble inline-block max-w-full px-3 py-1.5">
-          <p class="text-sm font-semibold text-white">{$appState.purpose === "assistant" ? "提醒助手" : "收到，已发送！✨"}</p>
+          <p class="text-sm font-semibold text-white">{$appState.purpose === "assistant" ? m.voice_overlay_success_legacy_assistant() : m.voice_overlay_success_sent()}</p>
         </div>
         <p class="mt-1 truncate text-xs text-white/55">{$appState.finalText}</p>
       </div>
@@ -584,7 +585,7 @@
       <!-- 出错：amazed 贴纸 + 错误摘要 -->
       <img
         src={stickerAmazed}
-        alt="Kotone 惊讶"
+        alt={m.voice_overlay_sticker_amazed_alt()}
         class="h-12 w-12 shrink-0 object-contain"
         in:scale={{ duration: 200, start: 0.6 }}
       />
@@ -595,11 +596,11 @@
         {#if actionHint}
           <p class="mt-0.5 text-[11px] text-kotone-cyan">{actionHint}</p>
         {:else if $appState.errorText}
-          <p class="mt-0.5 truncate text-[11px] text-white/50">保留文本：{$appState.errorText}</p>
+          <p class="mt-0.5 truncate text-[11px] text-white/50">{m.voice_overlay_kept_text({ text: $appState.errorText })}</p>
         {/if}
         {#if $appState.needsElevation}
           <p class="mt-0.5 text-[11px] text-kotone-cyan/85">
-            目标程序权限更高：请以管理员身份运行 Kotone 后重试
+            {m.voice_overlay_needs_elevation()}
           </p>
         {/if}
       </div>
@@ -610,12 +611,12 @@
             onclick={() => void onRetry()}
             disabled={sendPending}
           >
-            重试
+            {m.voice_action_retry()}
           </button>
         {/if}
         <!-- Error 的退出一律走键盘：无文本时没有任何鼠标可做的事，不给按钮 -->
         <span class="text-[11px] whitespace-nowrap text-white/45">
-          {#if buttonAssistant}请回到提醒助手重试 · Esc {errorEscAction}{:else}再按 {$appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel} {errorAction} · Esc {errorEscAction}{/if}
+          {#if buttonAssistant}{m.voice_overlay_error_hint_button({ escAction: errorEscAction })}{:else}{m.voice_overlay_error_hint({ hotkey: $appState.purpose === "assistant" ? assistantHotkeyLabel : hotkeyLabel, action: errorAction, escAction: errorEscAction })}{/if}
         </span>
       </div>
     {:else}
@@ -628,12 +629,12 @@
       {:else if $appState.ppNotice}
         <div class="min-w-0 flex-1" in:fade={{ duration: 150 }}>
           <p class="text-sm font-semibold text-kotone-cyan">{$appState.ppNotice.text}</p>
-          <p class="text-[11px] text-white/40">文字处理状态已更新</p>
+          <p class="text-[11px] text-white/40">{m.voice_overlay_pp_updated()}</p>
         </div>
       {:else}
         <div class="min-w-0 flex-1" in:fade={{ duration: 150 }}>
-          <p class="text-sm font-medium text-white/80">Kotone 琴音</p>
-          <p class="text-[11px] text-white/40">待机中 · 按热键开始说话</p>
+          <p class="text-sm font-medium text-white/80">{m.voice_overlay_idle_title()}</p>
+          <p class="text-[11px] text-white/40">{m.voice_overlay_idle_hint()}</p>
         </div>
       {/if}
     {/if}

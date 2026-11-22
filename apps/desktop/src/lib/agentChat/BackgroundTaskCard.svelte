@@ -4,6 +4,7 @@
 <script lang="ts">
   import { Check, ChevronRight, CircleAlert, CirclePause, CircleStop, ClipboardList, LoaderCircle, Play, ShieldAlert } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
+  import { m } from "$lib/paraglide/messages.js";
   import {
     agentSubagentAnswer, agentSubagentContinue, agentSubagentStop,
     type SubagentAnswer, type SubagentInfo, type SubagentStatus,
@@ -38,7 +39,7 @@
     return last === null || last === tool.call.id;
   });
 
-  const label = $derived(info?.label || (typeof args.label === "string" && args.label.trim()) || (typeof result.label === "string" && result.label) || "交给后台的事");
+  const label = $derived(info?.label || (typeof args.label === "string" && args.label.trim()) || (typeof result.label === "string" && result.label) || m.chat_task_default_label());
 
   /** 没有登记时（旧对话、事件还没到）按工具本身的结果推断。 */
   const status = $derived.by<SubagentStatus>(() => {
@@ -53,14 +54,14 @@
   const steps = $derived(info?.steps ?? 0);
 
   const statusText = $derived.by(() => {
-    if (!latest) return "后面接着做了";
+    if (!latest) return m.chat_task_status_superseded();
     switch (status) {
-      case "running": return steps > 0 ? `进行中 · 第 ${steps} 步` : "进行中";
-      case "waiting": return "等你确认";
-      case "done": return "做完了";
-      case "failed": return "出错了";
-      case "stopped": return "停了";
-      case "interrupted": return "中断了";
+      case "running": return steps > 0 ? m.chat_task_status_running_steps({ steps }) : m.chat_task_status_running();
+      case "waiting": return m.chat_task_status_waiting();
+      case "done": return m.chat_task_status_done();
+      case "failed": return m.chat_task_status_failed();
+      case "stopped": return m.chat_task_status_stopped();
+      case "interrupted": return m.chat_task_status_interrupted();
     }
   });
   const tone = $derived(!latest ? "" : status === "done" ? "text-success" : status === "failed" ? "text-destructive"
@@ -106,10 +107,10 @@
     </button>
     {#if latest && (status === "running" || status === "waiting")}
       <Button size="sm" variant="ghost" class="h-7 shrink-0 gap-1 px-2 text-xs text-muted-foreground hover:text-destructive" data-testid="task-card-stop"
-        disabled={!!busy} onclick={() => void act("stop")}><CircleStop class="size-3" />停止</Button>
+        disabled={!!busy} onclick={() => void act("stop")}><CircleStop class="size-3" />{m.chat_task_stop()}</Button>
     {:else if latest && status === "interrupted"}
       <Button size="sm" variant="ghost" class="h-7 shrink-0 gap-1 px-2 text-xs text-primary" data-testid="task-card-continue"
-        disabled={!!busy} onclick={() => void act("continue")}><Play class="size-3" />继续</Button>
+        disabled={!!busy} onclick={() => void act("continue")}><Play class="size-3" />{m.chat_task_continue()}</Button>
     {/if}
   </div>
 
@@ -119,11 +120,11 @@
 
   {#if latest && status === "waiting"}
     <div class="border-t border-warning/40 bg-warning/5 px-3 pt-2.5 pb-3" data-testid="task-card-ask">
-      <p class="m-0 text-[14px] leading-6 font-medium text-foreground">需要你确认：{info?.question || label}</p>
+      <p class="m-0 text-[14px] leading-6 font-medium text-foreground">{m.chat_ask_confirm({ question: info?.question || label })}</p>
       <div class="mt-2.5 flex flex-wrap gap-2">
-        <Button size="sm" data-testid="task-card-allow-once" disabled={!!busy} onclick={() => void act("allow-once")}>允许</Button>
-        <Button size="sm" variant="outline" data-testid="task-card-allow-conversation" disabled={!!busy} onclick={() => void act("allow-conversation")}>本段对话都允许</Button>
-        <Button size="sm" variant="ghost" class="text-destructive hover:bg-destructive/10 hover:text-destructive" data-testid="task-card-deny" disabled={!!busy} onclick={() => void act("deny")}>拒绝</Button>
+        <Button size="sm" data-testid="task-card-allow-once" disabled={!!busy} onclick={() => void act("allow-once")}>{m.chat_ask_allow_once()}</Button>
+        <Button size="sm" variant="outline" data-testid="task-card-allow-conversation" disabled={!!busy} onclick={() => void act("allow-conversation")}>{m.chat_ask_allow_conversation()}</Button>
+        <Button size="sm" variant="ghost" class="text-destructive hover:bg-destructive/10 hover:text-destructive" data-testid="task-card-deny" disabled={!!busy} onclick={() => void act("deny")}>{m.chat_ask_deny()}</Button>
       </div>
     </div>
   {/if}

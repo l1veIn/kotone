@@ -14,6 +14,7 @@ import {
   type HotkeyCaptureEvent,
 } from "./ipc";
 import { keyboardEventCombo, mouseEventCombo } from "./hotkeyCombo";
+import { m } from "./paraglide/messages.js";
 
 export type CaptureResult =
   | { kind: "combo"; combo: string }
@@ -43,7 +44,7 @@ export async function captureHotkey(
 ): Promise<() => void> {
   if (options.signal?.aborted) return () => {};
   if (captureActive) {
-    onResult({ kind: "error", message: "已有热键录入进行中，请先完成或按 Esc 取消" });
+    onResult({ kind: "error", message: m.voice_capture_busy() });
     return () => {};
   }
   captureActive = true;
@@ -72,7 +73,7 @@ export async function captureHotkey(
       if (stopBackend && backendRequested) {
         try { await cancelHotkeyCapture(); }
         catch (error) {
-          if (result) result = { kind: "error", message: `结束热键录入失败：${errText(error)}` };
+          if (result) result = { kind: "error", message: m.voice_capture_stop_failed({ error: errText(error) }) };
         }
       }
       captureActive = false;
@@ -112,7 +113,9 @@ export async function captureHotkey(
         // SendInput 环境自检负责。
         void logFrontendError(
           "hotkey-capture-fallback",
+          // i18n-ignore-start：写进诊断日志，给开发者看
           `低级键盘钩子未捕获本次按键，已通过设置窗口兜底录入：${combo}`,
+          // i18n-ignore-end
         ).catch(() => {});
       }
       finishFromWebview({ kind: "combo", combo });
@@ -127,7 +130,9 @@ export async function captureHotkey(
     if (isTauri) {
       void logFrontendError(
         "hotkey-capture-fallback",
+        // i18n-ignore-start：写进诊断日志，给开发者看
         `低级鼠标钩子未捕获本次侧键，已通过设置窗口兜底录入：${combo}`,
+        // i18n-ignore-end
       ).catch(() => {});
     }
     finishFromWebview({ kind: "combo", combo });
@@ -155,7 +160,7 @@ export async function captureHotkey(
       await startHotkeyCapture();
       backendStarted = true;
     } catch (error) {
-      void finish({ kind: "error", message: `无法启动热键录入：${errText(error)}` }, backendRequested);
+      void finish({ kind: "error", message: m.voice_capture_start_failed({ error: errText(error) }) }, backendRequested);
     }
   })();
   await startup;

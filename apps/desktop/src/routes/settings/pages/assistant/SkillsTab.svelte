@@ -10,6 +10,7 @@
   import { isTauri } from "../../../../lib/ipc";
   import { workspaceDeleteSkill, workspaceImportSkill, workspaceOpenDir, workspaceOverview, type SkillInfo } from "../../../../lib/workspace";
   import { errText, toast } from "../../../../lib/stores/ui";
+  import { m } from "$lib/paraglide/messages.js";
 
   let skills = $state<SkillInfo[]>([]);
   let loaded = $state(false);
@@ -20,7 +21,7 @@
     try {
       skills = (await workspaceOverview()).skills;
     } catch (e) {
-      toast(false, `读取技能失败：${errText(e)}`);
+      toast(false, m.companion_skills_load_failed({ error: errText(e) }));
     } finally {
       loaded = true;
     }
@@ -28,13 +29,13 @@
   onMount(() => { void refresh(); });
 
   async function importSkill() {
-    if (!isTauri) { toast(false, "浏览器预览不能导入 Skill"); return; }
-    const dir = await openDialog({ directory: true, multiple: false, title: "选择含 SKILL.md 的文件夹" });
+    if (!isTauri) { toast(false, m.companion_skills_import_unavailable()); return; }
+    const dir = await openDialog({ directory: true, multiple: false, title: m.companion_skills_pick_title() });
     if (typeof dir !== "string") return;
     importing = true;
     try {
       const info = await workspaceImportSkill(dir);
-      toast(true, `已导入「${info.name}」，下一段对话生效`);
+      toast(true, m.companion_skills_imported({ name: info.name }));
       await refresh();
     } catch (e) {
       toast(false, errText(e));
@@ -47,7 +48,7 @@
     if (!confirm) return;
     try {
       await workspaceDeleteSkill(confirm);
-      toast(true, "已删除");
+      toast(true, m.companion_skills_deleted());
       confirm = null;
       await refresh();
     } catch (e) {
@@ -57,13 +58,13 @@
 </script>
 
 <div class="space-y-6" data-testid="skills-tab">
-  <SettingsSection title="技能" description="技能包教她做某一类事（报点用语、某个游戏的出装思路……）。格式和 agentskills.io 一样，可以拷给朋友用。" flush>
+  <SettingsSection title={m.companion_skills_title()} description={m.companion_skills_desc()} flush>
     {#snippet actions()}
-      <Button size="sm" variant="ghost" onclick={() => void workspaceOpenDir()}>打开文件夹</Button>
-      <Button size="sm" disabled={importing} onclick={() => void importSkill()} data-testid="skills-import">{importing ? "导入中…" : "导入"}</Button>
+      <Button size="sm" variant="ghost" onclick={() => void workspaceOpenDir()}>{m.companion_open_folder()}</Button>
+      <Button size="sm" disabled={importing} onclick={() => void importSkill()} data-testid="skills-import">{importing ? m.companion_skills_importing() : m.companion_skills_import()}</Button>
     {/snippet}
     {#if loaded && !skills.length}
-      <p class="m-0 px-4 py-3.5 text-xs text-muted-foreground" data-testid="skills-empty">还没有技能。可以导入别人分享的，或者让她把一套做法“写成技能”。</p>
+      <p class="m-0 px-4 py-3.5 text-xs text-muted-foreground" data-testid="skills-empty">{m.companion_skills_empty()}</p>
     {/if}
     {#each skills as skill (skill.name)}
       <div class="flex items-center gap-3 px-4 py-3" data-testid="skill" data-skill-name={skill.name}>
@@ -71,10 +72,10 @@
           <p class="m-0 truncate font-mono text-[13px] font-medium text-foreground">{skill.name}</p>
           <p class="mt-0.5 mb-0 line-clamp-2 text-xs text-muted-foreground">{skill.description}</p>
         </div>
-        <button type="button" aria-label={`打开 ${skill.name} 的文件夹`} title="打开文件夹（分享时拷走整个文件夹）"
+        <button type="button" aria-label={m.companion_skills_open_folder_aria({ name: skill.name })} title={m.companion_skills_open_folder_title()}
           class="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
           onclick={() => void workspaceOpenDir(skill.name)}><FolderOpen class="size-3.5" /></button>
-        <button type="button" aria-label={`删除 ${skill.name}`} data-testid="skill-delete"
+        <button type="button" aria-label={m.companion_skills_delete_aria({ name: skill.name })} data-testid="skill-delete"
           class="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/15 hover:text-destructive"
           onclick={() => { confirm = skill.name; }}><Trash2 class="size-3.5" /></button>
       </div>
@@ -85,12 +86,12 @@
 <Dialog.Root open={confirm !== null} onOpenChange={(open) => { if (!open) confirm = null; }}>
   <Dialog.Content class="sm:max-w-sm">
     <Dialog.Header>
-      <Dialog.Title>删除技能「{confirm}」？</Dialog.Title>
-      <Dialog.Description>整个技能文件夹都会删掉，不能恢复。</Dialog.Description>
+      <Dialog.Title>{m.companion_skills_delete_title({ name: confirm ?? "" })}</Dialog.Title>
+      <Dialog.Description>{m.companion_skills_delete_desc()}</Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
-      <Button variant="outline" onclick={() => { confirm = null; }}>取消</Button>
-      <Button variant="destructive" onclick={() => void remove()} data-testid="skill-delete-confirm">删除</Button>
+      <Button variant="outline" onclick={() => { confirm = null; }}>{m.companion_cancel()}</Button>
+      <Button variant="destructive" onclick={() => void remove()} data-testid="skill-delete-confirm">{m.companion_skills_delete_confirm()}</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

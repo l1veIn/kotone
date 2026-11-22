@@ -27,6 +27,7 @@
   import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
   import ToggleField from "$lib/components/settings/ToggleField.svelte";
+  import { m } from "$lib/paraglide/messages.js";
 
   let { onOpenOnboarding }: { onOpenOnboarding: () => void } = $props();
 
@@ -51,7 +52,7 @@
     ]);
     if (localStorage.getItem(ADMIN_RESTART_FLAG)) {
       localStorage.removeItem(ADMIN_RESTART_FLAG);
-      if (elevation?.elevated) toast(true, "已通过管理员权限运行");
+      if (elevation?.elevated) toast(true, m.system_compat_now_elevated());
     }
   });
 
@@ -60,16 +61,16 @@
     try {
       await setAutostartEnabled(enabled);
       autostartEnabled = await getAutostartEnabled().catch(() => enabled);
-      toast(true, enabled ? "已开启开机自动启动" : "已关闭开机自动启动");
+      toast(true, enabled ? m.system_general_autostart_on() : m.system_general_autostart_off());
     } catch (error) {
       autostartEnabled = await getAutostartEnabled().catch(() => autostartEnabled ?? false);
-      toast(false, `开机自启设置失败：${errText(error)}`);
+      toast(false, m.system_general_autostart_failed({ error: errText(error) }));
     }
   }
 
   async function onHotkeyBackendChange(hotkeyBackend: string) {
     if (hotkeyBackend !== "auto" && hotkeyBackend !== "llhook" && hotkeyBackend !== "register") return;
-    await patchSettings({ hotkeyBackend }, "热键兼容模式已更新");
+    await patchSettings({ hotkeyBackend }, m.system_compat_hotkey_backend_saved());
     hotkeyStatus = await getHotkeyStatus().catch(() => hotkeyStatus);
   }
 
@@ -80,18 +81,18 @@
       const defaultName = `kotone-diagnostics-${new Date().toISOString().slice(0, 10)}.zip`;
       const path = isTauri
         ? await saveDialog({
-            title: "导出 Kotone 诊断包",
+            title: m.system_diagnostics_save_dialog_title(),
             defaultPath: defaultName,
-            filters: [{ name: "ZIP 诊断包", extensions: ["zip"] }],
+            filters: [{ name: m.system_diagnostics_save_dialog_filter(), extensions: ["zip"] }],
           })
         : defaultName;
       if (!path) return;
       const result = await exportDiagnostics(path, exportWindow);
       const windowLabel =
-        result.window === "24h" ? "最近 24 小时" : result.window === "7d" ? "最近 7 天" : "全部";
-      toast(true, `诊断包已导出（${windowLabel}）：${result.reportId}`);
+        result.window === "24h" ? m.system_diagnostics_window_24h() : result.window === "7d" ? m.system_diagnostics_window_7d() : m.system_diagnostics_window_all();
+      toast(true, m.system_diagnostics_exported({ range: windowLabel, reportId: result.reportId }));
     } catch (error) {
-      toast(false, `导出诊断包失败：${errText(error)}`);
+      toast(false, m.system_diagnostics_export_failed({ error: errText(error) }));
     } finally {
       exportingDiagnostics = false;
     }
@@ -107,9 +108,9 @@
       }
       confirmClear = false;
       stopRecordingOnClear = false;
-      toast(true, "本地诊断信息已清除");
+      toast(true, m.system_diagnostics_cleared());
     } catch (error) {
-      toast(false, `清除诊断信息失败：${errText(error)}`);
+      toast(false, m.system_diagnostics_clear_failed({ error: errText(error) }));
     } finally {
       clearingDiagnostics = false;
     }
@@ -130,43 +131,43 @@
 
 {#if $settingsStore}
   <div class="space-y-6">
-  <SettingsSection title="通用">
-    <SettingsRow label="语言" description="界面语言。更多语言即将到来。">
+  <SettingsSection title={m.system_general_title()}>
+    <SettingsRow label={m.system_general_language()} description={m.system_general_language_description()}>
       {#snippet control()}
         <SelectField
           class="w-32"
-          ariaLabel="语言"
+          ariaLabel={m.system_general_language()}
           value={$settingsStore.language}
-          options={[{ value: "zh", label: "中文" }]}
-          onchange={(language) => void patchSettings({ language }, "语言已切换")}
+          options={[{ value: "zh", label: m.system_general_language_zh() }]}
+          onchange={(language) => void patchSettings({ language }, m.system_general_language_saved())}
         />
       {/snippet}
     </SettingsRow>
     <div id="system-start-page" class="scroll-mt-16">
-      <SettingsRow label="打开软件时显示" description="打开 Kotone 时先看到哪一页。">
+      <SettingsRow label={m.system_general_start_page()} description={m.system_general_start_page_description()}>
         {#snippet control()}
           <SelectField
             class="w-32"
-            ariaLabel="打开软件时显示"
+            ariaLabel={m.system_general_start_page()}
             testid="start-page-select"
             value={startPageOf($settingsStore.ui)}
-            options={[{ value: "chat", label: "聊天" }, { value: "voiceInput", label: "语音输入" }]}
-            onchange={(startPage) => void patchSettings({ ui: { startPage } }, startPage === "voiceInput" ? "打开时显示语音输入" : "打开时显示聊天")}
+            options={[{ value: "chat", label: m.system_general_start_page_chat() }, { value: "voiceInput", label: m.system_general_start_page_voice_input() }]}
+            onchange={(startPage) => void patchSettings({ ui: { startPage } }, startPage === "voiceInput" ? m.system_general_start_page_voice_input_saved() : m.system_general_start_page_chat_saved())}
           />
         {/snippet}
       </SettingsRow>
     </div>
-    <SettingsRow label="引导" description="重新看一遍引导：添加 DeepSeek Key、设呼叫键。">
+    <SettingsRow label={m.system_general_onboarding()} description={m.system_general_onboarding_description()}>
       {#snippet control()}
-        <Button variant="outline" size="sm" data-testid="reopen-onboarding" onclick={onOpenOnboarding}>重新打开引导</Button>
+        <Button variant="outline" size="sm" data-testid="reopen-onboarding" onclick={onOpenOnboarding}>{m.system_general_onboarding_button()}</Button>
       {/snippet}
     </SettingsRow>
     <div class="py-3.5">
       <ToggleField
         checked={autostartEnabled ?? false}
         disabled={autostartEnabled === null}
-        label="开机自动启动"
-        desc="登录 Windows 后自动打开 Kotone（仅当前用户）· 与系统启动项实时同步"
+        label={m.system_general_autostart()}
+        desc={m.system_general_autostart_description()}
         onchange={(v) => void onAutostartChange(v)}
       />
     </div>
@@ -174,11 +175,11 @@
 
   {#if !usesLegacyVoiceInput($settingsStore.ui)}
     <div id="system-stop" class="scroll-mt-16">
-      <SettingsSection title="停下" testid="system-stop"
-        description={`停止${$companionName}正在做的事和所有自动化。四种方式：她操作游戏时按 Esc、停止热键、说“停下”、托盘菜单「停下」。`}>
-        <SettingsRow label="停止热键" description="Kotone 没在听的时候也有效；自动化按住的键会一起松开。" stacked testid="hotkey-section-automation-stop">
+      <SettingsSection title={m.system_stop_title()} testid="system-stop"
+        description={m.system_stop_description({ name: $companionName })}>
+        <SettingsRow label={m.system_stop_hotkey()} description={m.system_stop_hotkey_description()} stacked testid="hotkey-section-automation-stop">
           {#snippet control()}
-            <HotkeyField id="automation-stop" title="停止热键" value={$settingsStore.automationStopHotkey ?? ""} placeholder="如 Ctrl+Shift+F12" compact
+            <HotkeyField id="automation-stop" title={m.system_stop_hotkey()} value={$settingsStore.automationStopHotkey ?? ""} placeholder={m.system_stop_hotkey_placeholder()} compact
               onSave={async (key) => { settingsStore.set(await updateSettings({ automationStopHotkey: key })); }} />
           {/snippet}
         </SettingsRow>
@@ -186,35 +187,37 @@
     </div>
   {/if}
 
-  <SettingsSection title="Windows 兼容性">
-    <SettingsRow label="热键实现" for="advanced-hotkey-backend">
+  <SettingsSection title={m.system_compat_title()}>
+    <SettingsRow label={m.system_compat_hotkey_backend()} for="advanced-hotkey-backend">
       {#snippet description()}
-        除非特定游戏收不到热键，否则保持“自动”。当前：{hotkeyStatus?.backend === "llhook"
-          ? "低层钩子"
-          : hotkeyStatus?.backend === "register"
-            ? "系统热键"
-            : "未注册"}
+        {m.system_compat_hotkey_backend_description({
+          current: hotkeyStatus?.backend === "llhook"
+            ? m.system_compat_backend_llhook_short()
+            : hotkeyStatus?.backend === "register"
+              ? m.system_compat_backend_register()
+              : m.system_compat_backend_unregistered(),
+        })}
       {/snippet}
       {#snippet control()}
         <SelectField
           class="w-44"
           id="advanced-hotkey-backend"
-          ariaLabel="热键实现"
+          ariaLabel={m.system_compat_hotkey_backend()}
           value={$settingsStore.hotkeyBackend}
           options={[
-            { value: "auto", label: "自动（推荐）" },
-            { value: "llhook", label: "低层键鼠钩子" },
-            { value: "register", label: "系统热键" },
+            { value: "auto", label: m.system_compat_backend_auto() },
+            { value: "llhook", label: m.system_compat_backend_llhook() },
+            { value: "register", label: m.system_compat_backend_register() },
           ]}
           onchange={(backend) => void onHotkeyBackendChange(backend)}
         />
       {/snippet}
     </SettingsRow>
-    <SettingsRow label="当前进程权限" description={elevation === null ? "检测中…" : elevation.elevated ? "管理员" : "普通用户"}>
+    <SettingsRow label={m.system_compat_elevation()} description={elevation === null ? m.system_compat_elevation_checking() : elevation.elevated ? m.system_compat_elevation_admin() : m.system_compat_elevation_user()}>
       {#snippet control()}
         {#if elevation && !elevation.elevated}
           <Button variant="outline" size="sm" disabled={restartingAsAdmin} onclick={() => void onRestartAsAdmin()}>
-            {restartingAsAdmin ? "正在重启…" : "以管理员身份重启"}
+            {restartingAsAdmin ? m.system_compat_restarting() : m.system_compat_restart_as_admin()}
           </Button>
         {/if}
       {/snippet}
@@ -222,33 +225,33 @@
     <div class="py-3.5">
       <ToggleField
         checked={$settingsStore.runAsAdminOnStart}
-        label="启动时自动请求管理员权限"
-        desc="开启后每次启动都会自动发起 Windows UAC 确认；普通桌面应用不能静默获得管理员权限"
+        label={m.system_compat_auto_admin()}
+        desc={m.system_compat_auto_admin_description()}
         onchange={(value) =>
           void patchSettings(
             {
               runAsAdminOnStart: value,
               ...(value ? { adminPromptDismissed: true, autoAdminPromptDismissed: true } : {}),
             },
-            value ? "已开启启动时自动权限请求" : "已关闭启动时自动权限请求",
+            value ? m.system_compat_auto_admin_on() : m.system_compat_auto_admin_off(),
           )}
       />
     </div>
   </SettingsSection>
 
   <SettingsSection
-    title="诊断包"
-    description="不包含录音、识别文本和热词，可安全分享给测试群管理员。默认记录流程事件，便于排查无法复现的热键/全屏问题。"
+    title={m.system_diagnostics_title()}
+    description={m.system_diagnostics_description()}
   >
     <div class="py-3.5">
       <ToggleField
         checked={$settingsStore.diagnostics.recording}
-        label="记录诊断信息"
-        desc="写入流程事件（热键、悬浮窗显隐、注入结果）。关闭后不再落盘，已有文件需手动清除"
+        label={m.system_diagnostics_recording()}
+        desc={m.system_diagnostics_recording_description()}
         onchange={(value) =>
           void patchSettings(
             { diagnostics: { recording: value } },
-            value ? "已开启诊断记录" : "已关闭诊断记录",
+            value ? m.system_diagnostics_recording_on() : m.system_diagnostics_recording_off(),
           )}
       />
     </div>
@@ -256,18 +259,18 @@
       <SelectField
         class="w-36"
         testid="diagnostics-window"
-        ariaLabel="导出时间范围"
+        ariaLabel={m.system_diagnostics_window_label()}
         value={exportWindow}
         options={[
-          { value: "24h", label: "最近 24 小时" },
-          { value: "7d", label: "最近 7 天" },
-          { value: "all", label: "全部" },
+          { value: "24h", label: m.system_diagnostics_window_24h() },
+          { value: "7d", label: m.system_diagnostics_window_7d() },
+          { value: "all", label: m.system_diagnostics_window_all() },
         ]}
         onchange={(value) => (exportWindow = value as DiagnosticWindow)}
       />
       <Button size="sm" data-testid="diagnostics-export" disabled={exportingDiagnostics} onclick={() => void onExportDiagnostics()}>
         <Download class="size-3.5" />
-        {exportingDiagnostics ? "正在生成…" : "导出诊断包"}
+        {exportingDiagnostics ? m.system_diagnostics_exporting() : m.system_diagnostics_export_button()}
       </Button>
       <Button
         variant="outline"
@@ -278,7 +281,7 @@
           stopRecordingOnClear = false;
         }}
       >
-        清除本地诊断信息
+        {m.system_diagnostics_clear_button()}
       </Button>
     </div>
   </SettingsSection>
@@ -288,8 +291,8 @@
 <Dialog.Root open={confirmClear} onOpenChange={(open) => { if (!open && !clearingDiagnostics) confirmClear = false; }}>
   <Dialog.Content class="ui-scope" data-testid="diagnostics-clear-dialog">
     <Dialog.Header>
-      <Dialog.Title>清除本地诊断信息？</Dialog.Title>
-      <Dialog.Description>会删除流程事件和 kotone.log，不影响识别历史、设置和录音。此操作不可恢复。</Dialog.Description>
+      <Dialog.Title>{m.system_diagnostics_clear_dialog_title()}</Dialog.Title>
+      <Dialog.Description>{m.system_diagnostics_clear_dialog_description()}</Dialog.Description>
     </Dialog.Header>
     <label class="flex cursor-pointer items-start gap-2 text-[13px] text-foreground">
       <input
@@ -298,12 +301,12 @@
         class="mt-0.5 accent-[var(--color-primary)]"
         bind:checked={stopRecordingOnClear}
       />
-      <span>以后不再记录诊断信息</span>
+      <span>{m.system_diagnostics_clear_stop_recording()}</span>
     </label>
     <Dialog.Footer>
-      <Button variant="outline" size="sm" onclick={() => (confirmClear = false)}>取消</Button>
+      <Button variant="outline" size="sm" onclick={() => (confirmClear = false)}>{m.system_common_cancel()}</Button>
       <Button variant="destructive" size="sm" data-testid="diagnostics-clear-confirm" disabled={clearingDiagnostics} onclick={() => void onClearDiagnostics()}>
-        {clearingDiagnostics ? "正在清除…" : "确认清除"}
+        {clearingDiagnostics ? m.system_diagnostics_clearing() : m.system_diagnostics_clear_confirm()}
       </Button>
     </Dialog.Footer>
   </Dialog.Content>

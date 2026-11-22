@@ -1,6 +1,7 @@
 <script lang="ts">
   // 执行记录列表：“进行中”（等待中 + 运行中，可取消 / 停止）或“记录”（已结束）。
   import { runTitle, type AutomationRun } from "../../../../lib/automation";
+  import { m } from "$lib/paraglide/messages.js";
 
   let { runs, now, mode, busyId = "", onStop }: {
     runs: AutomationRun[]; now: number; mode: "open" | "history"; busyId?: string;
@@ -8,34 +9,37 @@
   } = $props();
 
   const statusText: Record<AutomationRun["status"], string> = {
-    pending: "等待中", running: "运行中", finished: "完成", failed: "失败", cancelled: "已取消", missed: "已错过",
+    pending: m.auto_run_status_pending(), running: m.auto_run_status_running(), finished: m.auto_run_status_finished(),
+    failed: m.auto_run_status_failed(), cancelled: m.auto_run_status_cancelled(), missed: m.auto_run_status_missed(),
   };
-  const outcomeText: Record<string, string> = { finished: "跑完", stopped: "被停止", limit: "超出上限", error: "出错" };
+  const outcomeText: Record<string, string> = {
+    finished: m.auto_run_outcome_finished(), stopped: m.auto_run_outcome_stopped(), limit: m.auto_run_outcome_limit(), error: m.auto_run_outcome_error(),
+  };
 
   function duration(ms: number): string {
     const seconds = Math.max(0, Math.ceil(ms / 1000));
     const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    return `${h ? `${h} 小时 ` : ""}${m ? `${m} 分 ` : ""}${seconds % 60} 秒`;
+    const min = Math.floor((seconds % 3600) / 60);
+    return `${h ? `${m.auto_duration_hours({ hours: h })} ` : ""}${min ? `${m.auto_duration_minutes({ minutes: min })} ` : ""}${m.auto_duration_seconds({ seconds: seconds % 60 })}`;
   }
 
   function subtitle(run: AutomationRun): string {
     if (run.action.kind === "speak") {
-      return run.action.delivery.map((kind) => (kind === "voice" ? "语音" : "弹幕")).join(" + ");
+      return run.action.delivery.map((kind) => (kind === "voice" ? m.auto_delivery_voice() : m.auto_delivery_danmaku())).join(" + ");
     }
-    if (run.action.kind === "chat") return run.action.sent ? "替你发到了游戏聊天" : "打进了聊天框（未发送）";
+    if (run.action.kind === "chat") return run.action.sent ? m.auto_run_chat_sent() : m.auto_run_chat_typed();
     return run.action.target?.label ?? "";
   }
 
-  const badgeText = { speak: "提醒", program: "自动化", chat: "打字" } as const;
+  const badgeText = { speak: m.auto_kind_speak(), program: m.auto_kind_program(), chat: m.auto_kind_chat() } as const;
 
   function when(run: AutomationRun): string {
     if (run.status === "pending") {
       const left = run.dueAtMs - now;
-      return left <= 0 ? "即将开始" : `${duration(left)}后`;
+      return left <= 0 ? m.auto_run_starting_soon() : m.auto_run_due_in({ duration: duration(left) });
     }
     if (run.status === "running") {
-      return run.action.kind === "speak" ? "正在提醒" : `已运行 ${duration(now - (run.startedAtMs ?? now))}`;
+      return run.action.kind === "speak" ? m.auto_run_reminding() : m.auto_run_running_for({ duration: duration(now - (run.startedAtMs ?? now)) });
     }
     return new Date(run.finishedAtMs ?? run.dueAtMs).toLocaleString();
   }
@@ -53,9 +57,9 @@
         {#if mode === "history"}
           {#if run.message}<p class="mt-1 mb-0 text-xs {run.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}">{run.message}</p>{/if}
           {#if run.report}
-            <p class="mt-1 mb-0 text-xs text-muted-foreground">{outcomeText[run.report.outcome] ?? run.report.outcome} · 输入 {run.report.keys} 次 · 用时 {duration(run.report.durationMs)}</p>
+            <p class="mt-1 mb-0 text-xs text-muted-foreground">{m.auto_run_report({ outcome: outcomeText[run.report.outcome] ?? run.report.outcome, keys: run.report.keys, duration: duration(run.report.durationMs) })}</p>
             {#if run.report.log.length}
-              <details class="mt-1"><summary class="cursor-pointer text-[11px] text-muted-foreground hover:text-foreground">日志（{run.report.log.length}）</summary>
+              <details class="mt-1"><summary class="cursor-pointer text-[11px] text-muted-foreground hover:text-foreground">{m.auto_run_log({ count: run.report.log.length })}</summary>
                 <pre class="mt-1 mb-0 max-h-40 overflow-auto rounded-lg border border-hairline bg-muted/40 p-2 font-mono text-[11px] whitespace-pre-wrap text-foreground/80">{run.report.log.join("\n")}</pre>
               </details>
             {/if}
@@ -66,7 +70,7 @@
         <span class="text-xs tabular-nums {mode === 'open' ? 'text-primary' : 'text-muted-foreground'}">{mode === "open" ? when(run) : `${statusText[run.status]} · ${when(run)}`}</span>
         {#if mode === "open" && onStop}
           <button type="button" class="h-7 rounded-lg border border-hairline px-2.5 text-xs text-foreground transition-colors hover:bg-muted disabled:opacity-50" disabled={busyId === run.id} onclick={() => onStop(run)}>
-            {run.status === "running" ? "停止" : "取消"}
+            {run.status === "running" ? m.auto_action_stop() : m.auto_action_cancel()}
           </button>
         {/if}
       </div>

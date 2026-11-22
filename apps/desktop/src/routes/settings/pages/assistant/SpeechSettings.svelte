@@ -4,6 +4,7 @@
   import { Button } from "$lib/components/ui/button";
   import { isTauri, type AssistantConfig } from "../../../../lib/ipc";
   import { errText, patchSettings, settingsStore } from "../../../../lib/stores/ui";
+  import { m } from "$lib/paraglide/messages.js";
   import {
     cancelSpeechModelDownload, downloadSpeechModel, getSpeechModelStatus,
     listSpeechVoices, subscribeSpeechModel, type SpeechModelStatus, type SpeechVoice,
@@ -21,8 +22,10 @@
   let modelRevision = 0;
   const config = $derived($settingsStore?.assistant);
   const phases: Record<SpeechModelStatus["phase"], string> = {
-    idle: "尚未下载", downloading: "正在下载", verifying: "正在校验", extracting: "正在安装",
-    installed: "已就绪", error: "安装失败", cancelled: "已取消下载",
+    idle: m.companion_speech_phase_idle(), downloading: m.companion_speech_phase_downloading(),
+    verifying: m.companion_speech_phase_verifying(), extracting: m.companion_speech_phase_extracting(),
+    installed: m.companion_speech_phase_installed(), error: m.companion_speech_phase_error(),
+    cancelled: m.companion_speech_phase_cancelled(),
   };
   /** 在线引擎对应的统一模型清单 ID（声音存在 modelConfigs[id].voice） */
   const onlineModel: Record<string, string> = { openai: "openai-compat-tts", volcano: "volcano-tts", deepseek: "deepseek-tts" };
@@ -83,7 +86,7 @@
     if (!model) return;
     const current = $settingsStore?.modelConfigs?.[model] ?? {};
     const native = value.startsWith(`${provider}/`) ? value.slice(provider.length + 1) : value;
-    await patchSettings({ modelConfigs: { [model]: { ...current, voice: native } } }, "播报声音已保存");
+    await patchSettings({ modelConfigs: { [model]: { ...current, voice: native } } }, m.companion_speech_voice_saved());
   }
   const progress = $derived(model?.totalBytes ? Math.min(100, Math.round(model.downloadedBytes / model.totalBytes * 100)) : 0);
 
@@ -121,7 +124,7 @@
   async function save(patch: Partial<AssistantConfig>) {
     if (saving) return;
     saving = true;
-    try { await patchSettings({assistant: patch}, "播报设置已保存"); }
+    try { await patchSettings({assistant: patch}, m.companion_speech_saved()); }
     finally { saving = false; }
   }
 
@@ -154,28 +157,28 @@
   <div class="space-y-4 py-4" data-testid="speech-settings">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div>
-        <p class="m-0 text-[13px] font-medium text-foreground">语音播报</p>
-        <p class="mt-0.5 mb-0 text-xs text-muted-foreground">提醒、回答和自动化结果用这个声音读出来。</p>
+        <p class="m-0 text-[13px] font-medium text-foreground">{m.companion_speech_title()}</p>
+        <p class="mt-0.5 mb-0 text-xs text-muted-foreground">{m.companion_speech_desc()}</p>
       </div>
-      <div class="w-64 max-w-full"><SelectField ariaLabel="语音引擎" value={engine ?? "auto"} disabled={saving}
+      <div class="w-64 max-w-full"><SelectField ariaLabel={m.companion_speech_engine_aria()} value={engine ?? "auto"} disabled={saving}
         options={legacyReminder
-          ? [{value:"system",label:"Windows · 系统语音"},{value:"kokoro",label:"Kokoro · 本地中文语音"}]
-          : [{value:"auto",label:"自动（默认）"},{value:"deepseek",label:"在线 · DeepSeek 语音"},{value:"system",label:"Windows · 系统语音"},{value:"kokoro",label:"Kokoro · 本地中文语音"},{value:"openai",label:"在线 · OpenAI 兼容"},{value:"volcano",label:"在线 · 火山语音合成"}]}
+          ? [{value:"system",label:m.companion_speech_engine_system()},{value:"kokoro",label:m.companion_speech_engine_kokoro()}]
+          : [{value:"auto",label:m.companion_speech_engine_auto()},{value:"deepseek",label:m.companion_speech_engine_deepseek()},{value:"system",label:m.companion_speech_engine_system()},{value:"kokoro",label:m.companion_speech_engine_kokoro()},{value:"openai",label:m.companion_speech_engine_openai()},{value:"volcano",label:m.companion_speech_engine_volcano()}]}
         onchange={(value) => void selectEngine(value)} /></div>
     </div>
     {#if engine === "kokoro"}
       <div class="rounded-xl border border-primary/25 bg-primary/5 p-3 text-xs" data-testid="speech-model">
         <div class="flex flex-wrap items-center justify-between gap-3">
-          <div><p class="m-0 font-semibold text-foreground">Kokoro 中文语音 <span class="ml-2 font-normal text-primary">{model ? phases[model.phase] : "正在读取…"}</span></p>
-            <p class="mt-1 mb-0 text-[11px] leading-relaxed text-muted-foreground">约 147 MB，下载后本地离线使用。</p></div>
+          <div><p class="m-0 font-semibold text-foreground">{m.companion_speech_kokoro_title()} <span class="ml-2 font-normal text-primary">{model ? phases[model.phase] : m.companion_speech_loading()}</span></p>
+            <p class="mt-1 mb-0 text-[11px] leading-relaxed text-muted-foreground">{m.companion_speech_kokoro_desc()}</p></div>
           {#if model?.downloading || starting}
-            <Button variant="outline" size="sm" disabled={cancelling} onclick={cancelDownload}>{cancelling ? "正在取消…" : "取消下载"}</Button>
+            <Button variant="outline" size="sm" disabled={cancelling} onclick={cancelDownload}>{cancelling ? m.companion_speech_cancelling() : m.companion_speech_cancel_download()}</Button>
           {:else if model && !model.installed}
-            <Button size="sm" disabled={!isTauri} onclick={download}>下载语音模型</Button>
+            <Button size="sm" disabled={!isTauri} onclick={download}>{m.companion_speech_download()}</Button>
           {/if}
         </div>
         {#if model?.downloading}
-          <progress class="mt-3 h-1.5 w-full accent-primary" max="100" value={progress} aria-label="语音模型下载进度"></progress>
+          <progress class="mt-3 h-1.5 w-full accent-primary" max="100" value={progress} aria-label={m.companion_speech_progress_aria()}></progress>
           <p class="mt-1 mb-0 text-[10px] text-muted-foreground">{phases[model.phase]} · {progress}%</p>
         {/if}
         {#if model?.error}<p class="mt-2 mb-0 text-destructive" role="alert">{model.error}</p>{/if}
@@ -183,33 +186,33 @@
     {:else if engine === "auto"}
       <p class="m-0 text-xs leading-relaxed text-muted-foreground" data-testid="auto-speech-info">
         {autoProvider === "deepseek"
-          ? "正在用 DeepSeek 语音（AI 连接里的 DeepSeek）：按字数计费，每次播报都会把文字发给 DeepSeek，相同的话复用缓存；不能调语速。"
-          : "AI 连接是 DeepSeek（且有密钥）时自动用 DeepSeek 语音，否则用 Windows 系统语音。"}
+          ? m.companion_speech_auto_deepseek()
+          : m.companion_speech_auto_info()}
       </p>
     {:else if engine === "deepseek"}
       <p class="m-0 text-xs leading-relaxed text-muted-foreground" data-testid="online-speech-info">
-        DeepSeek 语音：默认用 AI 连接里的 DeepSeek 与密钥，按字数计费（汉字算 2 个字符），每次播报都会把文字发给 DeepSeek；相同的话复用缓存，不能调语速。连接可在「设置 → 模型 → 语音合成」里另选。
+        {m.companion_speech_deepseek_info()}
       </p>
     {:else if engine === "openai" || engine === "volcano"}
       <p class="m-0 text-xs leading-relaxed text-muted-foreground" data-testid="online-speech-info">
-        在线语音：每次播报都会把文字发给服务商。连接、模型与声音在「设置 → 模型 → 语音合成」里配置；相同的话会直接复用缓存，不再请求。
+        {m.companion_speech_online_info()}
       </p>
     {:else}
-      <p class="m-0 text-xs leading-relaxed text-muted-foreground" data-testid="system-speech-info">无需下载。</p>
+      <p class="m-0 text-xs leading-relaxed text-muted-foreground" data-testid="system-speech-info">{m.companion_speech_system_info()}</p>
     {/if}
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <span class="text-[13px] text-foreground/85">播报声音</span>
-      <div class="w-64 max-w-full"><SelectField ariaLabel="播报声音" value={selectedVoice} disabled={saving}
-        options={[...(voiceEngine === "system" ? [{value:"",label:"系统默认声音"}] : []), ...(selectedVoice && !voices.some((voice) => voice.id === selectedVoice) && voiceEngine !== "system" && voiceEngine !== "kokoro" ? [{value:selectedVoice,label:selectedVoice.split("/").slice(1).join("/")}] : []), ...voices.map((voice) => ({value:voice.id,label:voice.name}))]}
+      <span class="text-[13px] text-foreground/85">{m.companion_speech_voice_label()}</span>
+      <div class="w-64 max-w-full"><SelectField ariaLabel={m.companion_speech_voice_label()} value={selectedVoice} disabled={saving}
+        options={[...(voiceEngine === "system" ? [{value:"",label:m.companion_speech_voice_system_default()}] : []), ...(selectedVoice && !voices.some((voice) => voice.id === selectedVoice) && voiceEngine !== "system" && voiceEngine !== "kokoro" ? [{value:selectedVoice,label:selectedVoice.split("/").slice(1).join("/")}] : []), ...voices.map((voice) => ({value:voice.id,label:voice.name}))]}
         onchange={(value) => void saveVoice(value)} /></div>
     </div>
     {#if voiceError}<p class="m-0 text-xs text-destructive" role="alert">{voiceError}</p>{/if}
     {#if error}<p class="m-0 text-xs text-destructive" role="alert">{error}</p>{/if}
     <div class="grid gap-5 sm:grid-cols-2">
-      <label class="block text-xs text-muted-foreground"><span class="flex justify-between"><span>音量</span><span class="text-foreground/85">{config.speechVolume}%</span></span>
-        <input class="mt-3 block w-full accent-primary" aria-label="播报音量" type="range" min="0" max="100" step="5" disabled={saving} value={config.speechVolume} onchange={(event) => save({speechVolume:Number(event.currentTarget.value)})} /></label>
-      <label class="block text-xs text-muted-foreground"><span class="flex justify-between"><span>语速</span><span class="text-foreground/85">{config.speechRate === 0 ? "正常" : config.speechRate > 0 ? `+${config.speechRate}` : config.speechRate}</span></span>
-        <input class="mt-3 block w-full accent-primary" aria-label="播报语速" type="range" min="-10" max="10" step="1" disabled={saving} value={config.speechRate} onchange={(event) => save({speechRate:Number(event.currentTarget.value)})} /></label>
+      <label class="block text-xs text-muted-foreground"><span class="flex justify-between"><span>{m.companion_speech_volume()}</span><span class="text-foreground/85">{config.speechVolume}%</span></span>
+        <input class="mt-3 block w-full accent-primary" aria-label={m.companion_speech_volume_aria()} type="range" min="0" max="100" step="5" disabled={saving} value={config.speechVolume} onchange={(event) => save({speechVolume:Number(event.currentTarget.value)})} /></label>
+      <label class="block text-xs text-muted-foreground"><span class="flex justify-between"><span>{m.companion_speech_rate()}</span><span class="text-foreground/85">{config.speechRate === 0 ? m.companion_speech_rate_normal() : config.speechRate > 0 ? `+${config.speechRate}` : config.speechRate}</span></span>
+        <input class="mt-3 block w-full accent-primary" aria-label={m.companion_speech_rate_aria()} type="range" min="-10" max="10" step="1" disabled={saving} value={config.speechRate} onchange={(event) => save({speechRate:Number(event.currentTarget.value)})} /></label>
     </div>
   </div>
 {/if}

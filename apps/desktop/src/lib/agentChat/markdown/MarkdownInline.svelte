@@ -1,6 +1,7 @@
 <script lang="ts">
   // 行内节点：粗体、斜体、删除线、行内代码、链接、换行。HTML 与图片都按文字显示。
   import { openExternal } from "$lib/ipc";
+  import { m } from "$lib/paraglide/messages.js";
   import { isSafeHttpUrl, tokenText, type Token, type Tokens } from "./markdown";
   import Self from "./MarkdownInline.svelte";
 
@@ -32,7 +33,7 @@
       <Self tokens={link.tokens} />
     {/if}
   {:else if token.type === "image"}
-    <span class="text-muted-foreground">[图片：{(token as Tokens.Image).text || "未命名"}]</span>
+    <span class="text-muted-foreground">{m.chat_markdown_image({ name: (token as Tokens.Image).text || m.chat_markdown_image_untitled() })}</span>
   {:else if token.type === "text" && (token as Tokens.Text).tokens?.length}
     <Self tokens={(token as Tokens.Text).tokens ?? []} />
   {:else if token.type === "checkbox"}

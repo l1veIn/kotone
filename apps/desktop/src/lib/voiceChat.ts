@@ -48,6 +48,7 @@ function previewStatus(enabled: boolean): VoiceChatStatus {
     micGain: 100,
     running: enabled && preview.installed,
     error: null,
+    // i18n-ignore-start：浏览器预览的示例数据（真实应用里来自后端或玩家自己的数据），不是界面文字
     windowsDefaultMic: { id: "mic", name: preview.defaultIsCable ? "CABLE Output (VB-Audio Virtual Cable)" : "麦克风 (USB Audio)" },
     windowsCommunicationsMic: { id: "mic", name: preview.defaultIsCable ? "CABLE Output (VB-Audio Virtual Cable)" : "麦克风 (USB Audio)" },
     windowsDefaultIsCable: preview.defaultIsCable,
@@ -88,6 +89,7 @@ export async function voiceChatTest(): Promise<{ ok: boolean; peak: number; note
   if (isTauri) return invoke("voice_chat_test");
   await wait(300);
   return { ok: true, peak: 0.3, note: "通了：游戏或语音软件的麦克风选 CABLE Output，队友就能听到" };
+    // i18n-ignore-end
 }
 
 export async function voiceChatSay(text: string): Promise<{ sent: boolean; durationMs: number }> {

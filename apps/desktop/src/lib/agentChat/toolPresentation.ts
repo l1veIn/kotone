@@ -4,6 +4,7 @@
 // Copyright Codeg authors and contributors. SPDX-License-Identifier: Apache-2.0
 // Kotone: Chinese labels; statuses come from Kotone's agent events and stored tool results.
 import type { ToolStatus } from "../agent";
+import { m } from "../paraglide/messages.js";
 
 export function toolStatusUnsettled(status: ToolStatus): boolean {
   return status !== "completed" && status !== "failed";
@@ -16,8 +17,8 @@ export function toolPresentation(status: ToolStatus, runActive: boolean) {
     spinning: unsettled && runActive,
     incomplete: unsettled && !runActive,
     failed: status === "failed",
-    label: status === "completed" ? "完成" : status === "failed" ? "失败"
-      : !runActive ? "未完成" : status === "pending" ? "等待中" : "执行中",
+    label: status === "completed" ? m.chat_tool_status_completed() : status === "failed" ? m.chat_tool_status_failed()
+      : !runActive ? m.chat_tool_status_incomplete() : status === "pending" ? m.chat_tool_status_pending() : m.chat_tool_status_running(),
   };
 }
 

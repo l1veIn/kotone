@@ -10,7 +10,9 @@ export function provideAgentChat(chat: AgentChat): AgentChat {
 
 export function useAgentChat(): AgentChat {
   const chat = getContext<AgentChat | undefined>(KEY);
+  // i18n-ignore-start：给开发者看的错误
   if (!chat) throw new Error("useAgentChat() 需要在设置窗口内使用");
+  // i18n-ignore-end
   return chat;
 }
 

@@ -1,4 +1,5 @@
 import { companionBindings, hasLegacyReminders, usesLegacyVoiceInput, type Settings } from "./ipc/contracts";
+import { m } from "./paraglide/messages.js";
 
 const NAMED_CODES: Record<string, string> = {
   Space: "Space",
@@ -105,18 +106,18 @@ export function findHotkeyConflict(settings: Settings | null, selfId: string, ke
   if (!settings || !key.trim()) return null;
   const legacyVoiceOnly = usesLegacyVoiceInput(settings.ui);
   const bindings: [string, string, string][] = [
-    ["record", "语音输入热键", settings.hotkey.key],
-    ["legacy-reminder", "提醒助手热键", hasLegacyReminders(settings.ui) ? settings.assistant.hotkey : ""],
-    ["assistant", "呼叫键", legacyVoiceOnly ? "" : companionBindings(settings.assistant)?.hotkey ?? ""],
+    ["record", m.voice_hotkey_name_record(), settings.hotkey.key],
+    ["legacy-reminder", m.voice_hotkey_name_legacy_reminder(), hasLegacyReminders(settings.ui) ? settings.assistant.hotkey : ""],
+    ["assistant", m.voice_hotkey_name_call(), legacyVoiceOnly ? "" : companionBindings(settings.assistant)?.hotkey ?? ""],
     ...(legacyVoiceOnly ? [] : settings.assistant.companion?.quickMessages ?? []).map(
-      (message, index): [string, string, string] => [`quick-message-${index + 1}`, `快捷指令 ${index + 1} 热键`, message.hotkey],
+      (message, index): [string, string, string] => [`quick-message-${index + 1}`, m.voice_hotkey_name_quick_message({ number: index + 1 }), message.hotkey],
     ),
-    ["channel-cycle", "频道切换热键", settings.channelCycleHotkey],
-    ["resend-last", "重发最近一条热键", settings.resendLastHotkey],
-    ["post-process-toggle", "文字处理开关热键", settings.togglePostProcessingHotkey],
-    ["post-process-cycle", "切换文字处理流程热键", settings.cyclePostProcessingHotkey],
-    ["runtime-toggle", "启动 / 停止本地语音识别快捷键", settings.runtimeToggleHotkey],
-    ["automation-stop", "停止热键",
+    ["channel-cycle", m.voice_hotkey_name_channel_cycle(), settings.channelCycleHotkey],
+    ["resend-last", m.voice_hotkey_name_resend_last(), settings.resendLastHotkey],
+    ["post-process-toggle", m.voice_hotkey_name_post_process_toggle(), settings.togglePostProcessingHotkey],
+    ["post-process-cycle", m.voice_hotkey_name_post_process_cycle(), settings.cyclePostProcessingHotkey],
+    ["runtime-toggle", m.voice_hotkey_name_runtime_toggle(), settings.runtimeToggleHotkey],
+    ["automation-stop", m.voice_hotkey_name_automation_stop(),
       legacyVoiceOnly ? "" : settings.automationStopHotkey ?? ""],
   ];
   return bindings.find(([id, , combo]) => id !== selfId && combo && combosConflict(key, combo))?.[1] ?? null;

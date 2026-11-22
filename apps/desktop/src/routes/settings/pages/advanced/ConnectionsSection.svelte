@@ -32,13 +32,14 @@
     type ConnectionPresetGroup,
   } from "../../../../lib/ipc";
   import { errText, settingsStore, toast } from "../../../../lib/stores/ui";
+  import { m } from "$lib/paraglide/messages.js";
 
   const groups: { id: ConnectionPresetGroup; label: string; hint: string }[] = [
-    { id: "recommended", label: "推荐", hint: "工具调用稳定、国内可直连" },
-    { id: "china", label: "国内厂商", hint: "国内平台与编程套餐" },
-    { id: "global", label: "海外厂商", hint: "需要能访问对应服务" },
-    { id: "aggregator", label: "聚合平台", hint: "一个密钥用多家模型" },
-    { id: "custom", label: "自定义", hint: "任意 OpenAI 兼容接口" },
+    { id: "recommended", label: m.system_connections_group_recommended(), hint: m.system_connections_group_recommended_hint() },
+    { id: "china", label: m.system_connections_group_china(), hint: m.system_connections_group_china_hint() },
+    { id: "global", label: m.system_connections_group_global(), hint: m.system_connections_group_global_hint() },
+    { id: "aggregator", label: m.system_connections_group_aggregator(), hint: m.system_connections_group_aggregator_hint() },
+    { id: "custom", label: m.system_connections_group_custom(), hint: m.system_connections_group_custom_hint() },
   ];
 
   let connections = $state<ConnectionInfo[]>([]);
@@ -69,7 +70,7 @@
     try {
       [connections, presets] = await Promise.all([listConnections(), listConnectionPresets()]);
     } catch (error) {
-      toast(false, `加载连接失败：${errText(error)}`);
+      toast(false, m.system_connections_load_failed({ error: errText(error) }));
     } finally {
       loading = false;
     }
@@ -79,7 +80,7 @@
     try { return new URL(url).host; } catch { return url; }
   }
   function groupLabel(id: string | undefined): string {
-    return groups.find((g) => g.id === id)?.label ?? "自定义";
+    return groups.find((g) => g.id === id)?.label ?? m.system_connections_group_custom();
   }
 
   function openNew(preset: ConnectionPreset) {
@@ -115,10 +116,10 @@
       settingsStore.set(await upsertConnection(editing, apiKey || undefined));
       connections = await listConnections();
       closeEditor();
-      toast(true, "连接已保存，密钥不会写入配置文件");
+      toast(true, m.system_connections_saved());
       if (useAfterSave) await useForAgent(id);
     } catch (error) {
-      toast(false, `保存连接失败：${errText(error)}`);
+      toast(false, m.system_connections_save_failed({ error: errText(error) }));
     } finally {
       saving = false;
     }
@@ -130,9 +131,9 @@
       settingsStore.set(await deleteConnection(connection.id));
       connections = await listConnections();
       confirmDelete = null;
-      toast(true, "连接已删除");
+      toast(true, m.system_connections_deleted());
     } catch (error) {
-      toast(false, `删除连接失败：${errText(error)}`);
+      toast(false, m.system_connections_delete_failed({ error: errText(error) }));
     } finally {
       saving = false;
     }
@@ -143,9 +144,9 @@
     if (!companionEnabled) return;
     try {
       settingsStore.set(await updateSettings({ assistant: companionBindingPatch($settingsStore?.assistant, { connectionId: id }) }));
-      toast(true, `已设为${$companionName}的连接`);
+      toast(true, m.system_connections_use_done({ name: $companionName }));
     } catch (error) {
-      toast(false, `没能设为${$companionName}的连接：${errText(error)}`);
+      toast(false, m.system_connections_use_failed({ name: $companionName, error: errText(error) }));
     }
   }
 
@@ -164,9 +165,9 @@
       } else {
         otherChecks = { ...otherChecks, [id]: result };
       }
-      toast(result.passed, result.passed ? "连接正常" : result.message);
+      toast(result.passed, result.passed ? m.system_connections_check_passed() : result.message);
     } catch (error) {
-      const message = `连不上：${errText(error)}`;
+      const message = m.system_connections_check_unreachable({ error: errText(error) });
       const failed = { connectionId: id, baseUrl: "", model: "", passed: false, checkedAtMs: Date.now(), message } as CompanionCheck;
       otherChecks = { ...otherChecks, [id]: failed };
       toast(false, message);
@@ -178,7 +179,7 @@
 
   async function openKeyPage(url: string) {
     try { await openExternal(url); }
-    catch (error) { toast(false, `打开 API key 页面失败：${errText(error)}`); }
+    catch (error) { toast(false, m.system_connections_open_key_page_failed({ error: errText(error) })); }
   }
 
   function checkedAt(ms: number): string {
@@ -190,23 +191,22 @@
   <div class="flex items-start gap-3 rounded-2xl border border-primary/25 bg-primary/6 px-4 py-3.5">
     <Sparkles class="mt-0.5 size-4 shrink-0 text-primary" />
     <div class="min-w-0 text-[13px] leading-relaxed">
-      <p class="m-0 font-medium text-foreground">给{$companionName}用的主流大模型</p>
+      <p class="m-0 font-medium text-foreground">{m.system_connections_intro_title({ name: $companionName })}</p>
       <p class="mt-0.5 mb-0 text-muted-foreground">
-        选一家、填好 API key，设为{$companionName}的连接就能用；想确认能不能连上，点<strong class="font-medium text-foreground">测试连接</strong>（读一次模型列表，不花 token）。
-        文字处理的润色、翻译也能用这里的连接。API key 存进系统凭据库，不会写入 config.json。
+        {m.system_connections_intro_before({ name: $companionName })}<strong class="font-medium text-foreground">{m.system_connections_test_button()}</strong>{m.system_connections_intro_after()}
       </p>
     </div>
   </div>
 
   {#if loading}
-    <p class="text-sm text-muted-foreground">正在读取连接…</p>
+    <p class="text-sm text-muted-foreground">{m.system_connections_loading()}</p>
   {:else}
-    <SettingsSection title="你的连接" description={`${$companionName}用其中一条。`} flush testid="connections-list">
+    <SettingsSection title={m.system_connections_list_title()} description={m.system_connections_list_description({ name: $companionName })} flush testid="connections-list">
       {#if connections.length === 0}
         <div class="flex flex-col items-center gap-1 px-4 py-8 text-center">
           <KeyRound class="mb-1 size-5 text-muted-foreground" />
-          <p class="m-0 text-[13px] text-foreground">还没有连接</p>
-          <p class="m-0 text-xs text-muted-foreground">在下面选一家提供商，填上 API key 就能用。推荐先试 DeepSeek 或通义千问。</p>
+          <p class="m-0 text-[13px] text-foreground">{m.system_connections_empty_title()}</p>
+          <p class="m-0 text-xs text-muted-foreground">{m.system_connections_empty_description()}</p>
         </div>
       {/if}
       {#each connections as connection (connection.id)}
@@ -222,37 +222,37 @@
             <div class="min-w-0 flex-1">
               <p class="m-0 flex flex-wrap items-center gap-2 text-sm font-medium text-foreground">
                 <span class="truncate">{connection.displayName}</span>
-                {#if forAgent}<span class="rounded-md bg-primary/15 px-1.5 py-px text-[11px] font-medium text-primary">{$companionName}在用</span>{/if}
+                {#if forAgent}<span class="rounded-md bg-primary/15 px-1.5 py-px text-[11px] font-medium text-primary">{m.system_connections_in_use_badge({ name: $companionName })}</span>{/if}
                 <span class="rounded-md border border-hairline px-1.5 py-px text-[11px] font-normal text-muted-foreground">{groupLabel(preset?.group)}</span>
               </p>
               <p class="mt-0.5 mb-0 flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
                 <span class="font-mono">{connection.model}</span><span aria-hidden="true">·</span>
                 <span class="truncate">{host(connection.baseUrl)}</span><span aria-hidden="true">·</span>
                 <span class="inline-flex items-center gap-1 {connection.hasApiKey ? 'text-success' : 'text-destructive'}">
-                  <span class="size-1.5 rounded-full {connection.hasApiKey ? 'bg-success' : 'bg-destructive'}"></span>{connection.hasApiKey ? "已保存密钥" : "缺少密钥"}
+                  <span class="size-1.5 rounded-full {connection.hasApiKey ? 'bg-success' : 'bg-destructive'}"></span>{connection.hasApiKey ? m.system_connections_key_saved() : m.system_connections_key_missing()}
                 </span>
               </p>
             </div>
             <div class="flex shrink-0 items-center gap-1">
               {#if companionEnabled && !forAgent}
-                <Button size="sm" variant="outline" data-testid="connection-use" disabled={checking} onclick={() => void useForAgent(connection.id)}>设为{$companionName}的连接</Button>
+                <Button size="sm" variant="outline" data-testid="connection-use" disabled={checking} onclick={() => void useForAgent(connection.id)}>{m.system_connections_use_button({ name: $companionName })}</Button>
               {/if}
               <Button size="sm" variant={forAgent ? "outline" : "ghost"} data-testid="connection-self-check" disabled={checking || !connection.hasApiKey} onclick={() => void runCheck(connection.id)}>
-                {#if cardChecking}<LoaderCircle class="size-3.5 animate-spin" />{:else}<ShieldCheck class="size-3.5" />{/if}测试连接
+                {#if cardChecking}<LoaderCircle class="size-3.5 animate-spin" />{:else}<ShieldCheck class="size-3.5" />{/if}{m.system_connections_test_button()}
               </Button>
-              <Button size="sm" variant="ghost" onclick={() => openEdit(connection)}>编辑</Button>
-              <Button size="icon-sm" variant="ghost" class="text-muted-foreground hover:text-destructive" aria-label={`删除 ${connection.displayName}`} disabled={saving} onclick={() => { confirmDelete = connection; }}><Trash2 class="size-3.5" /></Button>
+              <Button size="sm" variant="ghost" onclick={() => openEdit(connection)}>{m.system_connections_edit_button()}</Button>
+              <Button size="icon-sm" variant="ghost" class="text-muted-foreground hover:text-destructive" aria-label={m.system_connections_delete_label({ name: connection.displayName })} disabled={saving} onclick={() => { confirmDelete = connection; }}><Trash2 class="size-3.5" /></Button>
             </div>
           </div>
           {#if ownCheck || cardChecking}
             <div class="mt-3 ml-12 flex items-start gap-2 rounded-xl bg-muted/50 px-3 py-2 text-xs" data-testid="connection-check-result">
               {#if cardChecking}
-                <LoaderCircle class="mt-0.5 size-3.5 shrink-0 animate-spin text-primary" /><span class="text-muted-foreground">正在测试：读一次服务商的模型列表…</span>
+                <LoaderCircle class="mt-0.5 size-3.5 shrink-0 animate-spin text-primary" /><span class="text-muted-foreground">{m.system_connections_checking()}</span>
               {:else if ownCheck}
                 {#if ownCheck.passed}<Check class="mt-0.5 size-3.5 shrink-0 text-success" />{:else}<CircleAlert class="mt-0.5 size-3.5 shrink-0 text-destructive" />{/if}
                 <span class="min-w-0">
-                  <span class="font-medium {ownCheck.passed ? 'text-success' : 'text-destructive'}">{ownCheck.passed ? "连接正常" : "有问题"}</span>
-                  <span class="text-muted-foreground"> · {ownCheck.message} · {checkedAt(ownCheck.checkedAtMs)}{ownCheck.model && ownCheck.model !== connection.model ? `（当时的模型：${ownCheck.model}）` : ""}</span>
+                  <span class="font-medium {ownCheck.passed ? 'text-success' : 'text-destructive'}">{ownCheck.passed ? m.system_connections_check_passed() : m.system_connections_check_failed()}</span>
+                  <span class="text-muted-foreground"> · {ownCheck.message} · {checkedAt(ownCheck.checkedAtMs)}{ownCheck.model && ownCheck.model !== connection.model ? m.system_connections_check_model_at_time({ model: ownCheck.model }) : ""}</span>
                 </span>
               {/if}
             </div>
@@ -264,12 +264,12 @@
     <section aria-labelledby="connection-providers-title" data-testid="connection-providers">
       <div class="mb-3 flex flex-wrap items-end justify-between gap-3 px-1">
         <div>
-          <h2 id="connection-providers-title" class="m-0 text-sm font-semibold">添加连接</h2>
-          <p class="mt-1 mb-0 text-xs text-muted-foreground">{presets.length} 家提供商，都走 OpenAI 兼容接口。选一家，填上密钥即可。</p>
+          <h2 id="connection-providers-title" class="m-0 text-sm font-semibold">{m.system_connections_add_title()}</h2>
+          <p class="mt-1 mb-0 text-xs text-muted-foreground">{m.system_connections_add_description({ count: presets.length })}</p>
         </div>
         <div class="relative w-56 max-w-full">
           <Search class="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input bind:value={query} placeholder="搜索提供商或模型" aria-label="搜索提供商或模型" class="h-8 pl-8 text-[13px]" />
+          <Input bind:value={query} placeholder={m.system_connections_search()} aria-label={m.system_connections_search()} class="h-8 pl-8 text-[13px]" />
         </div>
       </div>
       <div class="space-y-5">
@@ -297,7 +297,7 @@
             </div>
           {/if}
         {/each}
-        {#if !filtered.length}<p class="px-1 text-xs text-muted-foreground">没有找到「{query}」。可以用“自定义”接入任意 OpenAI 兼容接口。</p>{/if}
+        {#if !filtered.length}<p class="px-1 text-xs text-muted-foreground">{m.system_connections_search_empty({ query })}</p>{/if}
       </div>
     </section>
   {/if}
@@ -307,30 +307,30 @@
   <Dialog.Content class="ui-scope max-h-[88vh] overflow-y-auto sm:max-w-lg" data-testid="connection-editor">
     {#if editing}
       <Dialog.Header>
-        <Dialog.Title>{editingIsNew ? "添加 API 连接" : "编辑 API 连接"}</Dialog.Title>
+        <Dialog.Title>{editingIsNew ? m.system_connections_editor_add_title() : m.system_connections_editor_edit_title()}</Dialog.Title>
         <Dialog.Description>
-          {editingPreset ? `${editingPreset.displayName} · ${groupLabel(editingPreset.group)}` : "自定义"}{editingPreset?.description ? ` — ${editingPreset.description}` : ""}
+          {editingPreset ? `${editingPreset.displayName} · ${groupLabel(editingPreset.group)}` : m.system_connections_group_custom()}{editingPreset?.description ? ` — ${editingPreset.description}` : ""}
         </Dialog.Description>
       </Dialog.Header>
       <form class="space-y-4" onsubmit={(event) => { event.preventDefault(); void save(); }}>
         <label class="block space-y-1.5">
-          <span class="text-xs font-medium text-muted-foreground">显示名称</span>
+          <span class="text-xs font-medium text-muted-foreground">{m.system_connections_name_label()}</span>
           <Input bind:value={editing.displayName} data-testid="connection-name" />
         </label>
         <label class="block space-y-1.5">
           <span class="flex items-center justify-between text-xs font-medium text-muted-foreground">
-            接口地址
+            {m.system_connections_base_url_label()}
             {#if editingPreset?.defaultBaseUrl && editing.baseUrl !== editingPreset.defaultBaseUrl}
-              <button type="button" class="font-normal text-primary hover:underline" onclick={() => { if (editing && editingPreset) editing.baseUrl = editingPreset.defaultBaseUrl; }}>恢复默认</button>
+              <button type="button" class="font-normal text-primary hover:underline" onclick={() => { if (editing && editingPreset) editing.baseUrl = editingPreset.defaultBaseUrl; }}>{m.system_common_restore_default()}</button>
             {/if}
           </span>
           <Input bind:value={editing.baseUrl} placeholder="https://…/v1" class="font-mono text-xs" data-testid="connection-base-url" />
         </label>
         <div class="space-y-1.5">
-          <label for="connection-model" class="text-xs font-medium text-muted-foreground">模型</label>
-          <Input id="connection-model" bind:value={editing.model} placeholder="模型名，可以手填" class="font-mono text-xs" data-testid="connection-model" />
+          <label for="connection-model" class="text-xs font-medium text-muted-foreground">{m.system_connections_model_label()}</label>
+          <Input id="connection-model" bind:value={editing.model} placeholder={m.system_connections_model_placeholder()} class="font-mono text-xs" data-testid="connection-model" />
           {#if editingPreset?.models.length}
-            <div class="flex flex-wrap gap-1.5" role="group" aria-label="常用模型">
+            <div class="flex flex-wrap gap-1.5" role="group" aria-label={m.system_connections_model_suggestions()}>
               {#each editingPreset.models as model (model)}
                 {@const active = editing.model === model}
                 <button type="button" aria-pressed={active}
@@ -339,28 +339,28 @@
               {/each}
             </div>
           {/if}
-          <p class="m-0 text-[11px] text-muted-foreground">要选能稳定调用工具的模型；拿不准就用默认的。</p>
+          <p class="m-0 text-[11px] text-muted-foreground">{m.system_connections_model_hint()}</p>
         </div>
         <div class="space-y-1.5">
           <span class="flex items-center justify-between text-xs font-medium text-muted-foreground">
             <label for="connection-api-key">API key</label>
             {#if editingPreset?.apiKeyUrl}
-              <button type="button" class="inline-flex items-center gap-1 font-normal text-primary hover:underline" onclick={() => void openKeyPage(editingPreset!.apiKeyUrl!)}>获取 API key<ExternalLink class="size-3" /></button>
+              <button type="button" class="inline-flex items-center gap-1 font-normal text-primary hover:underline" onclick={() => void openKeyPage(editingPreset!.apiKeyUrl!)}>{m.system_connections_get_key()}<ExternalLink class="size-3" /></button>
             {/if}
           </span>
           <Input id="connection-api-key" type="password" autocomplete="off" data-testid="connection-api-key" bind:value={apiKey}
-            placeholder={editingSaved?.hasApiKey ? "已保存，留空则不修改" : "不会写入配置文件"} />
-          <p class="m-0 text-[11px] text-muted-foreground">只写：保存后存进系统凭据库，界面不会再显示。</p>
+            placeholder={editingSaved?.hasApiKey ? m.system_connections_key_placeholder_saved() : m.system_connections_key_placeholder_new()} />
+          <p class="m-0 text-[11px] text-muted-foreground">{m.system_connections_key_hint()}</p>
         </div>
         {#if companionEnabled && editing.id !== agentConnectionId}
           <label class="flex items-start gap-2 rounded-xl bg-muted/50 px-3 py-2.5 text-xs">
             <input type="checkbox" class="mt-0.5 accent-[var(--color-primary)]" bind:checked={useAfterSave} data-testid="connection-use-after-save" />
-            <span><span class="font-medium text-foreground">保存后设为{$companionName}的连接</span></span>
+            <span><span class="font-medium text-foreground">{m.system_connections_use_after_save({ name: $companionName })}</span></span>
           </label>
         {/if}
         <Dialog.Footer>
-          <Button type="button" variant="outline" size="sm" onclick={closeEditor}>取消</Button>
-          <Button type="submit" size="sm" data-testid="connection-save" disabled={saving}>保存连接</Button>
+          <Button type="button" variant="outline" size="sm" onclick={closeEditor}>{m.system_common_cancel()}</Button>
+          <Button type="submit" size="sm" data-testid="connection-save" disabled={saving}>{m.system_connections_save_button()}</Button>
         </Dialog.Footer>
       </form>
     {/if}
@@ -370,12 +370,12 @@
 <Dialog.Root open={confirmDelete !== null} onOpenChange={(open) => { if (!open && !saving) confirmDelete = null; }}>
   <Dialog.Content class="ui-scope" data-testid="connection-delete-dialog">
     <Dialog.Header>
-      <Dialog.Title>删除这条连接？</Dialog.Title>
-      <Dialog.Description>「{confirmDelete?.displayName}」和它的密钥会从本机删除。{confirmDelete?.id === agentConnectionId ? `${$companionName}正在用它，删除后要重新选一条。` : ""}</Dialog.Description>
+      <Dialog.Title>{m.system_connections_delete_title()}</Dialog.Title>
+      <Dialog.Description>{m.system_connections_delete_description({ name: confirmDelete?.displayName ?? "" })}{confirmDelete?.id === agentConnectionId ? m.system_connections_delete_in_use({ name: $companionName }) : ""}</Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
-      <Button variant="outline" size="sm" disabled={saving} onclick={() => { confirmDelete = null; }}>取消</Button>
-      <Button variant="destructive" size="sm" data-testid="connection-delete-confirm" disabled={saving} onclick={() => { if (confirmDelete) void remove(confirmDelete); }}>删除</Button>
+      <Button variant="outline" size="sm" disabled={saving} onclick={() => { confirmDelete = null; }}>{m.system_common_cancel()}</Button>
+      <Button variant="destructive" size="sm" data-testid="connection-delete-confirm" disabled={saving} onclick={() => { if (confirmDelete) void remove(confirmDelete); }}>{m.system_common_delete()}</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

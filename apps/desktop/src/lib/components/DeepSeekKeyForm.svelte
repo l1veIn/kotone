@@ -7,8 +7,9 @@
   import { openExternal } from "../ipc";
   import { connectDeepSeek, deepseekKeyProblem, DEEPSEEK_KEY_PAGE, type DeepSeekSetupResult } from "../deepseekSetup";
   import { errText, settingsStore } from "../stores/ui";
+  import { m } from "$lib/paraglide/messages.js";
 
-  let { variant = "dialog", testid = "deepseek-key", onConnected, onLater, onBack, laterLabel = "稍后配置" }: {
+  let { variant = "dialog", testid = "deepseek-key", onConnected, onLater, onBack, laterLabel = m.shell_setup_later() }: {
     variant?: "dialog" | "card";
     testid?: string;
     onConnected: (result: DeepSeekSetupResult) => void;
@@ -44,12 +45,12 @@
 <form class={variant === "card" ? "w-full max-w-sm rounded-2xl border border-hairline bg-card/80 p-4 text-left shadow-sm" : "w-full"}
   data-testid={testid} onsubmit={(event) => void submit(event)}>
   {#if variant === "dialog"}
-    <h2 class="m-0 text-lg font-bold">添加一个 DeepSeek Key 开始使用</h2>
+    <h2 class="m-0 text-lg font-bold">{m.shell_deepseek_form_title_dialog()}</h2>
   {:else}
-    <h2 class="m-0 text-[15px] font-semibold">先添加一个 DeepSeek Key</h2>
+    <h2 class="m-0 text-[15px] font-semibold">{m.shell_deepseek_form_title_card()}</h2>
   {/if}
   <p class="mt-1.5 mb-0 text-xs leading-relaxed text-muted-foreground">
-    有这一个 Key 就能用全部功能：对话、语音识别、文字识别、语音合成、联网搜索。按用量付费；Key 只存进本机的系统凭据库，界面和聊天里都看不到它。
+    {m.shell_deepseek_form_intro()}
   </p>
   <input
     type="password"
@@ -65,14 +66,14 @@
   />
   <p class="mt-2 mb-0 min-h-4 text-xs" role={error ? "alert" : "status"} data-testid={`${testid}-status`}>
     {#if error}<span class="text-destructive" data-testid={`${testid}-error`}>{error}</span>
-    {:else if busy}<span class="text-primary">正在测试：读取模型列表…</span>{/if}
+    {:else if busy}<span class="text-primary">{m.shell_deepseek_form_testing()}</span>{/if}
   </p>
   <button type="button" class="mt-1 text-xs text-primary hover:underline" onclick={() => void openExternal(DEEPSEEK_KEY_PAGE).catch(() => {})}>
-    还没有 Key？去 DeepSeek 开放平台创建 →
+    {m.shell_deepseek_form_create_link()}
   </button>
   <div class="mt-5 flex items-center justify-between gap-2">
     {#if onBack}
-      <button type="button" class="text-xs text-muted-foreground hover:text-foreground/90" disabled={busy} data-testid={`${testid}-back`} onclick={onBack}>返回</button>
+      <button type="button" class="text-xs text-muted-foreground hover:text-foreground/90" disabled={busy} data-testid={`${testid}-back`} onclick={onBack}>{m.shell_back()}</button>
     {:else}<span></span>{/if}
     <div class="flex items-center gap-2">
       {#if onLater}
@@ -81,7 +82,7 @@
       {/if}
       <button type="submit" data-testid={`${testid}-submit`} disabled={busy || !key.trim()}
         class="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50">
-        {busy ? "测试中…" : "测试并继续"}
+        {busy ? m.shell_deepseek_form_submit_busy() : m.shell_deepseek_form_submit()}
       </button>
     </div>
   </div>

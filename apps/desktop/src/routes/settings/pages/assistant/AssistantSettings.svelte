@@ -10,6 +10,7 @@
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
+  import { m } from "$lib/paraglide/messages.js";
 
   let { connections, ready, onOpenConnections }: {
     connections: ConnectionInfo[]; ready: boolean; onOpenConnections: () => void;
@@ -22,7 +23,7 @@
   async function save(connectionId: string) {
     if (saving) return;
     saving = true;
-    try { await patchSettings({ assistant: companionBindingPatch(config, { connectionId }) }, "AI 连接已保存"); }
+    try { await patchSettings({ assistant: companionBindingPatch(config, { connectionId }) }, m.companion_ai_connection_saved()); }
     finally { saving = false; }
   }
 
@@ -59,9 +60,9 @@
       // 换模型不再自检（照原来输入框里的做法）；设置更新后「设置」页的连接清单会跟着刷新
       settingsStore.set(await upsertConnection({ ...connection, model }));
       savedModel = { ...savedModel, [c.id]: model };
-      toast(true, `改用 ${model}`);
+      toast(true, m.companion_ai_model_switched({ model }));
     } catch (error) {
-      toast(false, `切换模型失败：${errText(error)}`);
+      toast(false, m.companion_ai_model_switch_failed({ error: errText(error) }));
     } finally {
       saving = false;
     }
@@ -70,27 +71,27 @@
 
 {#if bindings}
   <div class="space-y-6" data-testid="assistant-settings">
-    <SettingsSection title="AI 连接" id="assistant-input-settings-title" description="她用哪个大模型。在游戏里怎么叫她，在「设置 → 怎么叫她」里设。">
-      <SettingsRow label="AI 连接" description="选好、有密钥就能用；想确认能不能连上，到「设置 → API 连接」点“测试连接”。">
+    <SettingsSection title={m.companion_ai_connection_title()} id="assistant-input-settings-title" description={m.companion_ai_section_desc()}>
+      <SettingsRow label={m.companion_ai_connection_title()} description={m.companion_ai_connection_desc()}>
         {#snippet control()}
           <div class="w-64 max-w-full">
-            <SelectField ariaLabel="陪玩 AI 连接" value={bindings.connectionId} disabled={saving}
-              options={[{ value: "", label: "请选择连接" }, ...connections.map((item) => ({ value: item.id, label: `${item.displayName}${item.hasApiKey ? "" : "（未保存密钥）"}` }))]}
+            <SelectField ariaLabel={m.companion_ai_connection_aria()} value={bindings.connectionId} disabled={saving}
+              options={[{ value: "", label: m.companion_ai_connection_placeholder() }, ...connections.map((item) => ({ value: item.id, label: `${item.displayName}${item.hasApiKey ? "" : m.companion_ai_connection_no_key()}` }))]}
               onchange={(connectionId) => { void save(connectionId); }} />
           </div>
         {/snippet}
         {#if !ready}
           <p class="m-0 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-warning/30 bg-warning/8 px-3 py-2 text-xs text-foreground/85">
-            {connections.length ? "请选择连接并配置密钥。" : "请先添加 AI 连接。"}
-            <button type="button" class="font-medium text-primary hover:underline" onclick={onOpenConnections}>管理连接 →</button>
+            {connections.length ? m.companion_ai_choose_connection_hint() : m.companion_ai_add_connection_hint()}
+            <button type="button" class="font-medium text-primary hover:underline" onclick={onOpenConnections}>{m.companion_ai_manage_connections()}</button>
           </p>
         {/if}
       </SettingsRow>
       {#if current && current.hasApiKey && current.kind === "remote"}
-        <SettingsRow label="模型" description="用这个连接里的哪个模型。服务商列出的模型都在这里；一般不用改。">
+        <SettingsRow label={m.companion_ai_model_label()} description={m.companion_ai_model_desc()}>
           {#snippet control()}
             <div class="w-64 max-w-full">
-              <SelectField ariaLabel="陪玩模型" testid="assistant-model" value={currentModel} disabled={saving || models.length === 0}
+              <SelectField ariaLabel={m.companion_ai_model_aria()} testid="assistant-model" value={currentModel} disabled={saving || models.length === 0}
                 options={models.map((m) => ({ value: m, label: m }))}
                 onchange={(model) => { void setModel(model); }} />
             </div>

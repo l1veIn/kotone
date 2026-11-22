@@ -27,6 +27,7 @@
   } from "../../../lib/ipc";
   import { settingsStore, toast, errText } from "../../../lib/stores/ui";
   import stickerSleepy from "../../../assets/brand/stickers/sleepy.webp";
+  import { m } from "$lib/paraglide/messages.js";
 
   let records = $state<HistoryRecord[] | null>(null);
   /** 清空二次确认：点一次进入确认态，3s 内再点执行 */
@@ -118,7 +119,7 @@
     try {
       const bytes = await readHistoryAudio(r.audioFile);
       if (loadingId !== id) return; // 加载期间已切播/停止
-      if (bytes.byteLength === 0) throw new Error("音频文件为空或已被清理");
+      if (bytes.byteLength === 0) throw new Error(m.voice_history_audio_empty());
       ac ??= new AudioContext();
       await ac.resume(); // 点击手势内调用，自动播放策略安全
       // 复制一份再解码（decodeAudioData 可能 detach 传入的 buffer）
@@ -135,7 +136,7 @@
       startFrom(0);
     } catch (e) {
       if (loadingId === id || playingId === id) {
-        toast(false, `播放失败：${errText(e)}`);
+        toast(false, m.voice_history_play_failed({ error: errText(e) }));
         stopPlayback();
       }
     } finally {
@@ -240,7 +241,7 @@
       records = next;
     } catch (e) {
       if (seq !== refreshSeq) return;
-      toast(false, `读取历史失败：${errText(e)}`);
+      toast(false, m.voice_history_load_failed({ error: errText(e) }));
       records = [];
     }
   }
@@ -254,10 +255,10 @@
       await deleteHistoryRecord(r.sessionId, r.ts);
       // 正在播/正在加载这条时先停（wav 可能已物理删除，加载完成会播放空数据）
       if (playingId === id || loadingId === id) stopPlayback();
-      toast(true, `已删除该条记录${r.audioFile ? "（含录音）" : ""}`);
+      toast(true, r.audioFile ? m.voice_history_deleted_with_audio() : m.voice_history_deleted());
       await refresh();
     } catch (e) {
-      toast(false, `删除失败：${errText(e)}`);
+      toast(false, m.voice_history_delete_failed({ error: errText(e) }));
     } finally {
       deletingId = null;
     }
@@ -267,11 +268,11 @@
     if (mode !== "capped" && mode !== "keep-all" && mode !== "off") return;
     try {
       settingsStore.set(await updateSettings({ history: { mode } }));
-      toast(true, "历史记录模式已保存");
+      toast(true, m.voice_history_mode_saved());
       if (mode === "off") records = [];
       else await refresh();
     } catch (err) {
-      toast(false, `保存失败：${errText(err)}`);
+      toast(false, m.voice_save_failed({ error: errText(err) }));
     }
   }
 
@@ -281,11 +282,11 @@
       toast(
         true,
         includeAudio
-          ? "已开启历史音频保存"
-          : "已关闭历史音频保存（已有音频保留）",
+          ? m.voice_history_audio_on()
+          : m.voice_history_audio_off(),
       );
     } catch (err) {
-      toast(false, `保存失败：${errText(err)}`);
+      toast(false, m.voice_save_failed({ error: errText(err) }));
     }
   }
 
@@ -300,16 +301,16 @@
     try {
       await clearHistory();
       records = [];
-      toast(true, "已清空全部识别历史");
+      toast(true, m.voice_history_cleared());
     } catch (e) {
-      toast(false, `清空失败：${errText(e)}`);
+      toast(false, m.voice_history_clear_failed({ error: errText(e) }));
     }
   }
 
   const outcomeMeta: Record<string, { text: string; cls: string }> = {
-    sent: { text: "已发送", cls: "bg-primary/12 text-primary" },
-    cancelled: { text: "已取消", cls: "bg-muted text-muted-foreground" },
-    error: { text: "失败", cls: "bg-brand-pink/12 text-brand-pink" },
+    sent: { text: m.voice_history_outcome_sent(), cls: "bg-primary/12 text-primary" },
+    cancelled: { text: m.voice_history_outcome_cancelled(), cls: "bg-muted text-muted-foreground" },
+    error: { text: m.voice_history_outcome_error(), cls: "bg-brand-pink/12 text-brand-pink" },
   };
 
   function fmtTime(ts: string): string {
@@ -319,25 +320,25 @@
   }
 </script>
 
-<SettingsPage embedded title="历史" description="语音输入说过的每一句都记在这里，只存在本机；和角色的聊天在侧栏的对话列表里。" testid="history-page">
+<SettingsPage embedded title={m.voice_tab_history()} description={m.voice_history_page_desc()} testid="history-page">
   {#snippet actions()}
     <Button size="sm" variant={confirmingClear ? "destructive" : "outline"} onclick={() => void onClear()}>
-      {confirmingClear ? "再点一次确认清空" : "清空历史"}
+      {confirmingClear ? m.voice_history_clear_confirm() : m.voice_history_clear()}
     </Button>
   {/snippet}
 
   <SettingsSection>
-    <SettingsRow label="记录模式" description="保留多少条语音输入记录。" for="history-mode">
+    <SettingsRow label={m.voice_history_mode_label()} description={m.voice_history_mode_desc()} for="history-mode">
       {#snippet control()}
         <div class="w-52">
           <SelectField
             id="history-mode"
-            ariaLabel="记录模式"
+            ariaLabel={m.voice_history_mode_label()}
             value={$settingsStore?.history.mode ?? "capped"}
             options={[
-              { value: "capped", label: `保留最近 ${$settingsStore?.history.maxRecords ?? 1000} 条` },
-              { value: "keep-all", label: "全部保留" },
-              { value: "off", label: "不记录" },
+              { value: "capped", label: m.voice_history_mode_capped({ count: $settingsStore?.history.maxRecords ?? 1000 }) },
+              { value: "keep-all", label: m.voice_history_mode_keep_all() },
+              { value: "off", label: m.voice_history_mode_off() },
             ]}
             onchange={(mode) => void onModeChange(mode)}
           />
@@ -347,8 +348,8 @@
     <div class="py-3.5">
       <ToggleField
         checked={$settingsStore?.history.includeAudio ?? false}
-        label="保存历史记录音频"
-        desc="为之后的新记录独立保存 WAV，便于在本页回听；会增加磁盘占用"
+        label={m.voice_history_audio_label()}
+        desc={m.voice_history_audio_desc()}
         onchange={(value) => void onIncludeAudioChange(value)}
       />
     </div>
@@ -356,15 +357,15 @@
 
   <!-- 记录列表 -->
   {#if records === null}
-    <p class="py-8 text-center text-sm text-muted-foreground">读取中…</p>
+    <p class="py-8 text-center text-sm text-muted-foreground">{m.voice_history_loading()}</p>
   {:else if records.length === 0}
     <div class="flex flex-col items-center gap-2 py-8">
-      <img src={stickerSleepy} alt="空空如也" class="size-28 object-contain opacity-90" />
-      <p class="m-0 text-sm font-medium text-foreground/80">还没有语音记录</p>
-      <p class="m-0 text-xs text-muted-foreground">你的语音输入记录将显示在这里</p>
+      <img src={stickerSleepy} alt={m.voice_history_empty_alt()} class="size-28 object-contain opacity-90" />
+      <p class="m-0 text-sm font-medium text-foreground/80">{m.voice_history_empty_title()}</p>
+      <p class="m-0 text-xs text-muted-foreground">{m.voice_history_empty_desc()}</p>
     </div>
   {:else}
-    <SettingsSection title="记录" description={`共 ${records.length} 条（新→旧）`}>
+    <SettingsSection title={m.voice_history_records_title()} description={m.voice_history_records_count({ count: records.length })}>
       {#each records as r (r.sessionId + r.ts)}
         {@const meta = outcomeMeta[r.outcome] ?? outcomeMeta.cancelled}
         {@const id = recordId(r)}
@@ -373,30 +374,30 @@
             <span class="shrink-0 text-[11px] text-muted-foreground tabular-nums">{fmtTime(r.ts)}</span>
             <div class="min-w-0 flex-1">
               <p class="m-0 truncate text-[13px] {r.finalText ? 'text-foreground' : 'text-muted-foreground'}">
-                {r.finalText || (r.outcome === "cancelled" ? "（未说完成取消）" : "（无文本）")}
+                {r.finalText || (r.outcome === "cancelled" ? m.voice_history_cancelled_unfinished() : m.voice_history_no_text())}
               </p>
               <p class="mt-0.5 mb-0 text-[11px] text-muted-foreground">
-                语音时长 {(r.audioMs / 1000).toFixed(1)} 秒
+                {m.voice_history_duration({ seconds: (r.audioMs / 1000).toFixed(1) })}
               </p>
             </div>
             {#if r.audioFile}
               <!-- 播放/暂停：播放中下方显示波形 -->
               <button
                 class="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/12 text-[11px] text-primary ring-1 ring-primary/35 transition hover:bg-primary/20 active:scale-95 disabled:opacity-50"
-                title={playingId === id ? "停止播放" : "播放录音"}
-                aria-label={playingId === id ? "停止播放" : "播放录音"}
+                title={playingId === id ? m.voice_history_stop_playback() : m.voice_history_play()}
+                aria-label={playingId === id ? m.voice_history_stop_playback() : m.voice_history_play()}
                 disabled={loadingId === id}
                 onclick={() => void togglePlay(r)}
               >
                 {loadingId === id ? "…" : playingId === id ? "⏸" : "▶"}
               </button>
             {/if}
-            <Button size="xs" variant="outline" onclick={() => (detail = r)}>详情</Button>
+            <Button size="xs" variant="outline" onclick={() => (detail = r)}>{m.voice_history_details()}</Button>
             <span class="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium {meta.cls}">{meta.text}</span>
             <button
               class="flex size-7 shrink-0 items-center justify-center rounded-full text-[11px] text-muted-foreground transition hover:bg-destructive/12 hover:text-destructive active:scale-95 disabled:opacity-50"
-              title="删除该条记录（含录音）"
-              aria-label="删除该条记录"
+              title={m.voice_history_delete_title()}
+              aria-label={m.voice_history_delete_aria()}
               disabled={deletingId === id}
               onclick={() => void onDelete(r)}
             >
@@ -418,34 +419,34 @@
 </SettingsPage>
 
 <Dialog.Root open={detail !== null} onOpenChange={(open) => { if (!open) detail = null; }}>
-  <Dialog.Content class="ui-scope max-h-[80vh] overflow-y-auto sm:max-w-lg" aria-label="历史详情">
+  <Dialog.Content class="ui-scope max-h-[80vh] overflow-y-auto sm:max-w-lg" aria-label={m.voice_history_detail_aria()}>
     {#if detail}
       {@const meta = outcomeMeta[detail.outcome] ?? outcomeMeta.cancelled}
       <Dialog.Header>
-        <Dialog.Title>记录详情</Dialog.Title>
+        <Dialog.Title>{m.voice_history_detail_title()}</Dialog.Title>
         <Dialog.Description>{fmtTime(detail.ts)} · {meta.text}</Dialog.Description>
       </Dialog.Header>
       <dl class="m-0 space-y-3 text-[13px]">
         <div>
-          <dt class="text-[11px] text-muted-foreground">发出</dt>
-          <dd class="m-0 mt-0.5 break-all text-foreground">{detail.finalText || "（无文本）"}</dd>
+          <dt class="text-[11px] text-muted-foreground">{m.voice_history_detail_sent()}</dt>
+          <dd class="m-0 mt-0.5 break-all text-foreground">{detail.finalText || m.voice_history_no_text()}</dd>
         </div>
         <div>
-          <dt class="text-[11px] text-muted-foreground">识别原文</dt>
-          <dd class="m-0 mt-0.5 break-all text-foreground/80">{detail.sourceText || "（旧记录无原文）"}</dd>
+          <dt class="text-[11px] text-muted-foreground">{m.voice_history_detail_source()}</dt>
+          <dd class="m-0 mt-0.5 break-all text-foreground/80">{detail.sourceText || m.voice_history_detail_no_source()}</dd>
         </div>
         <div class="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-          <div>引擎 {detail.engineId}</div>
-          <div>语音 {(detail.audioMs / 1000).toFixed(1)} 秒</div>
-          <div>处理 {detail.processDurationMs != null ? `${detail.processDurationMs} ms` : "—"}</div>
-          <div>识别收尾 {detail.finalizeLatencyMs != null ? `${detail.finalizeLatencyMs} ms` : "—"}</div>
+          <div>{m.voice_history_detail_engine({ engine: detail.engineId })}</div>
+          <div>{m.voice_history_detail_audio({ seconds: (detail.audioMs / 1000).toFixed(1) })}</div>
+          <div>{m.voice_history_detail_process({ value: detail.processDurationMs != null ? `${detail.processDurationMs} ms` : "—" })}</div>
+          <div>{m.voice_history_detail_finalize({ value: detail.finalizeLatencyMs != null ? `${detail.finalizeLatencyMs} ms` : "—" })}</div>
         </div>
         {#if detail.error}
           <p class="m-0 text-xs text-destructive">{detail.error}</p>
         {/if}
       </dl>
       <Dialog.Footer>
-        <Button size="sm" variant="outline" onclick={() => (detail = null)}>关闭</Button>
+        <Button size="sm" variant="outline" onclick={() => (detail = null)}>{m.voice_action_close()}</Button>
       </Dialog.Footer>
     {/if}
   </Dialog.Content>

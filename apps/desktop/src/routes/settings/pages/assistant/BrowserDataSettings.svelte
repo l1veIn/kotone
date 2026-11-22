@@ -17,18 +17,19 @@
   } from "../../../../lib/browser";
   import { isTauri } from "../../../../lib/ipc";
   import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
+  import { m } from "$lib/paraglide/messages.js";
 
   /** 放歌用的网站（和 kotone-core 的 MUSIC_SITES 一致）：她只在这个网站上找歌，搜不到就告诉你。 */
   const MUSIC_SITES = [
-    { value: "netease", label: "网易云音乐" },
-    { value: "qq", label: "QQ 音乐" },
-    { value: "kugou", label: "酷狗音乐" },
-    { value: "kuwo", label: "酷我音乐" },
+    { value: "netease", label: m.companion_browser_music_netease() },
+    { value: "qq", label: m.companion_browser_music_qq() },
+    { value: "kugou", label: m.companion_browser_music_kugou() },
+    { value: "kuwo", label: m.companion_browser_music_kuwo() },
   ];
   const musicSite = $derived($settingsStore?.agent?.musicSite || "netease");
   function setMusicSite(value: string) {
     const name = MUSIC_SITES.find((site) => site.value === value)?.label ?? value;
-    void patchSettings({ agent: { musicSite: value } }, `放歌改用${name}`);
+    void patchSettings({ agent: { musicSite: value } }, m.companion_browser_music_saved({ site: name }));
   }
 
   let confirming = $state(false);
@@ -39,9 +40,9 @@
     try {
       await browserClearData();
       confirming = false;
-      toast(true, "已清除内置浏览器的登录和网页数据");
+      toast(true, m.companion_browser_cleared());
     } catch (error) {
-      toast(false, `清除失败：${errText(error)}`);
+      toast(false, m.companion_browser_clear_failed({ error: errText(error) }));
     } finally {
       clearing = false;
     }
@@ -71,17 +72,17 @@
     try {
       await browserExtensionAdd(value);
       manualPath = "";
-      toast(true, "已添加插件，重新打开网页后生效");
+      toast(true, m.companion_browser_extension_added());
       await reload();
     } catch (error) {
-      toast(false, `没能添加插件：${errText(error)}`);
+      toast(false, m.companion_browser_extension_add_failed({ error: errText(error) }));
     } finally {
       busy = null;
     }
   }
   async function pick() {
     const { open } = await import("@tauri-apps/plugin-dialog");
-    const dir = await open({ directory: true, title: "选择已解压的浏览器插件文件夹（里面有 manifest.json）" }).catch(() => null);
+    const dir = await open({ directory: true, title: m.companion_browser_extension_pick_title() }).catch(() => null);
     if (typeof dir === "string" && dir) await add(dir);
   }
   async function toggle(ext: BrowserExtension, enabled: boolean) {
@@ -90,7 +91,9 @@
       await browserExtensionToggle(ext.id, enabled);
       await reload();
     } catch (error) {
-      toast(false, `没能${enabled ? "启用" : "停用"}插件：${errText(error)}`);
+      toast(false, enabled
+        ? m.companion_browser_extension_enable_failed({ error: errText(error) })
+        : m.companion_browser_extension_disable_failed({ error: errText(error) }));
     } finally {
       busy = null;
     }
@@ -101,49 +104,49 @@
       await browserExtensionRemove(ext.id);
       await reload();
     } catch (error) {
-      toast(false, `没能移除插件：${errText(error)}`);
+      toast(false, m.companion_browser_extension_remove_failed({ error: errText(error) }));
     } finally {
       busy = null;
     }
   }
 </script>
 
-<SettingsSection title="放歌" id="settings-permissions-music"
-  description="在聊天页右侧的网页里放歌。她只在你选的网站上找；搜不到会告诉你，不会自己换网站。第一次要在网页上扫码登录。"
+<SettingsSection title={m.companion_browser_music_title()} id="settings-permissions-music"
+  description={m.companion_browser_music_desc()}
   testid="music-site-settings">
-  <SettingsRow label="用哪个网站">
+  <SettingsRow label={m.companion_browser_music_site_label()}>
     {#snippet control()}
-      <SelectField class="w-36" size="sm" ariaLabel="放歌用的网站" testid="music-site" value={musicSite} options={MUSIC_SITES}
+      <SelectField class="w-36" size="sm" ariaLabel={m.companion_browser_music_site_aria()} testid="music-site" value={musicSite} options={MUSIC_SITES}
         onchange={setMusicSite} />
     {/snippet}
   </SettingsRow>
 </SettingsSection>
 
-<SettingsSection title="内置浏览器" id="settings-permissions-browser"
-  description="聊天页右侧的网页（放歌、查东西）。你在里面登录过的账号只存在这台电脑的 Kotone 里。" testid="browser-data-settings">
-  <SettingsRow label="清除浏览器登录" description="退出在右侧网页里登录过的所有账号，删掉它的网页数据。正在放的歌会停。">
+<SettingsSection title={m.companion_browser_title()} id="settings-permissions-browser"
+  description={m.companion_browser_desc()} testid="browser-data-settings">
+  <SettingsRow label={m.companion_browser_clear_label()} description={m.companion_browser_clear_desc()}>
     {#snippet control()}
       <Button size="sm" variant="outline" class="text-destructive hover:bg-destructive/10 hover:text-destructive"
-        data-testid="browser-clear-data" onclick={() => (confirming = true)}>清除…</Button>
+        data-testid="browser-clear-data" onclick={() => (confirming = true)}>{m.companion_browser_clear_button()}</Button>
     {/snippet}
   </SettingsRow>
 </SettingsSection>
 
-<SettingsSection title="浏览器插件" id="settings-permissions-browser-extensions"
-  description="给右侧网页装插件（例如去广告）。只支持已解压的插件文件夹（Chrome / Edge 插件格式），添加、停用后重新打开网页时生效。"
+<SettingsSection title={m.companion_browser_extensions_title()} id="settings-permissions-browser-extensions"
+  description={m.companion_browser_extensions_desc()}
   testid="browser-extensions-settings">
   {#snippet actions()}
     {#if isTauri}
       <Button size="sm" variant="outline" class="gap-1.5" data-testid="browser-extension-add" disabled={busy === "add"} onclick={() => void pick()}>
-        <FolderOpen class="size-3.5" />添加插件文件夹…
+        <FolderOpen class="size-3.5" />{m.companion_browser_extension_add_folder()}
       </Button>
     {/if}
   {/snippet}
   {#if !isTauri}
     <!-- 界面预览没有选文件夹的对话框：填路径 -->
     <form class="flex gap-2 py-2" onsubmit={(e) => { e.preventDefault(); void add(manualPath); }}>
-      <Input bind:value={manualPath} placeholder="插件文件夹路径，例如 D:\extensions\ublock" class="h-8 text-xs" data-testid="browser-extension-path" />
-      <Button type="submit" size="sm" variant="outline" data-testid="browser-extension-add" disabled={!manualPath.trim() || busy === "add"}>添加</Button>
+      <Input bind:value={manualPath} placeholder={m.companion_browser_extension_path_placeholder()} class="h-8 text-xs" data-testid="browser-extension-path" />
+      <Button type="submit" size="sm" variant="outline" data-testid="browser-extension-add" disabled={!manualPath.trim() || busy === "add"}>{m.companion_browser_extension_add()}</Button>
     </form>
   {/if}
   {#if loadError}<p role="alert" class="m-0 py-2 text-xs text-destructive">{loadError}</p>{/if}
@@ -156,28 +159,28 @@
             <p class="m-0 truncate text-[13px] font-medium text-foreground" data-testid="browser-extension-name">{ext.name}</p>
             <p class="m-0 truncate text-xs text-muted-foreground" title={ext.path}>{ext.path}</p>
           </div>
-          <Switch aria-label={`${ext.enabled ? "停用" : "启用"}插件 ${ext.name}`} data-testid="browser-extension-toggle"
+          <Switch aria-label={ext.enabled ? m.companion_browser_extension_disable_aria({ name: ext.name }) : m.companion_browser_extension_enable_aria({ name: ext.name })} data-testid="browser-extension-toggle"
             disabled={busy === ext.id} checked={ext.enabled} onCheckedChange={(value) => void toggle(ext, value)} />
           <Button size="icon" variant="ghost" class="size-7 shrink-0 text-muted-foreground hover:text-destructive"
-            aria-label={`移除插件 ${ext.name}`} title="移除" data-testid="browser-extension-remove"
+            aria-label={m.companion_browser_extension_remove_aria({ name: ext.name })} title={m.companion_browser_extension_remove()} data-testid="browser-extension-remove"
             disabled={busy === ext.id} onclick={() => void remove(ext)}><Trash2 class="size-3.5" /></Button>
         </li>
       {/each}
     </ul>
   {:else if !loadError}
-    <p class="m-0 py-2 text-xs text-muted-foreground" data-testid="browser-extensions-empty">还没有装插件。</p>
+    <p class="m-0 py-2 text-xs text-muted-foreground" data-testid="browser-extensions-empty">{m.companion_browser_extensions_empty()}</p>
   {/if}
 </SettingsSection>
 
 <Dialog.Root open={confirming} onOpenChange={(open) => { if (!open && !clearing) confirming = false; }}>
   <Dialog.Content class="ui-scope" data-testid="browser-clear-dialog">
     <Dialog.Header>
-      <Dialog.Title>清除内置浏览器的登录？</Dialog.Title>
-      <Dialog.Description>在聊天页右侧网页里登录过的账号（例如网易云音乐）都会退出，下次要用时再登录一次。</Dialog.Description>
+      <Dialog.Title>{m.companion_browser_clear_dialog_title()}</Dialog.Title>
+      <Dialog.Description>{m.companion_browser_clear_dialog_desc()}</Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
-      <Button variant="outline" size="sm" disabled={clearing} onclick={() => (confirming = false)}>取消</Button>
-      <Button variant="destructive" size="sm" data-testid="browser-clear-confirm" disabled={clearing} onclick={() => void clear()}>清除</Button>
+      <Button variant="outline" size="sm" disabled={clearing} onclick={() => (confirming = false)}>{m.companion_cancel()}</Button>
+      <Button variant="destructive" size="sm" data-testid="browser-clear-confirm" disabled={clearing} onclick={() => void clear()}>{m.companion_browser_clear_confirm()}</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

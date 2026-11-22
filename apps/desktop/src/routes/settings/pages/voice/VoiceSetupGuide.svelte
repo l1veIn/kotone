@@ -20,6 +20,7 @@
   import { runtimeStore } from "../../../../lib/stores/runtime";
   import { errText, settingsStore, toast, toastInfo, toastWarn } from "../../../../lib/stores/ui";
   import ManualDownloadDialog from "../../../../lib/components/ManualDownloadDialog.svelte";
+  import { m } from "$lib/paraglide/messages.js";
 
   let { onClose, onConfigure }: {
     onClose: () => void;
@@ -29,7 +30,7 @@
 
   type Step = "profile" | "model" | "hotkey" | "try";
   const STEPS: { id: Step; label: string }[] = [
-    { id: "profile", label: "游戏" }, { id: "model", label: "识别" }, { id: "hotkey", label: "热键和模式" }, { id: "try", label: "说一句试试" },
+    { id: "profile", label: m.voice_guide_step_profile() }, { id: "model", label: m.voice_guide_step_model() }, { id: "hotkey", label: m.voice_guide_step_hotkey() }, { id: "try", label: m.voice_guide_step_try() },
   ];
   let step = $state<Step>("profile");
   const stepIndex = $derived(STEPS.findIndex((item) => item.id === step));
@@ -52,9 +53,9 @@
   const recognitionReady = $derived(online || localReady);
 
   const modes: { id: InteractionMode; name: string; desc: string }[] = [
-    { id: "push-to-talk", name: "对讲机", desc: "按住说话，松开发送" },
-    { id: "dictation", name: "录音笔", desc: "按一下开始，再按停止，确认后发送" },
-    { id: "one-shot", name: "说一句就走", desc: "按一下，说完自动发送" },
+    { id: "push-to-talk", name: m.voice_mode_ptt_name(), desc: m.voice_mode_ptt_desc() },
+    { id: "dictation", name: m.voice_mode_dictation_name(), desc: m.voice_guide_mode_dictation_desc() },
+    { id: "one-shot", name: m.voice_mode_one_shot_name(), desc: m.voice_guide_mode_one_shot_desc() },
   ];
 
   onMount(async () => {
@@ -93,7 +94,7 @@
   async function chooseProfile(id: string) {
     selectedProfileId = id;
     try { settingsStore.set(await updateSettings({ activeProfileId: id })); }
-    catch (error) { toast(false, `保存游戏失败：${errText(error)}`); }
+    catch (error) { toast(false, m.voice_guide_save_game_failed({ error: errText(error) })); }
   }
 
   // ---------- 识别：本地模型下载 ----------
@@ -109,18 +110,18 @@
   async function pickModelsDir() {
     if (changingDir || downloading) return;
     let picked: string | null;
-    if (isTauri) picked = (await openDialog({ directory: true, title: "选择模型存储位置" }).catch(() => null)) as string | null;
-    else picked = window.prompt("模型存储目录（开发预览模式）", dirInfo?.dir ?? "");
+    if (isTauri) picked = (await openDialog({ directory: true, title: m.voice_guide_pick_dir_title() }).catch(() => null)) as string | null;
+    else picked = window.prompt(m.voice_guide_pick_dir_prompt(), dirInfo?.dir ?? "");
     if (!picked) return;
     const pathError = modelsDirPathError(picked);
     if (pathError) { toast(false, pathError); return; }
     changingDir = true;
     try {
       const report = await setModelsDir(picked);
-      if (report.failed.length) toastWarn(`目录已切换，但 ${report.failed.length} 项迁移失败（需重新下载）`);
+      if (report.failed.length) toastWarn(m.voice_guide_dir_migrate_partial({ count: report.failed.length }));
       dirInfo = await getModelsDir();
     } catch (error) {
-      toast(false, `切换模型目录失败：${errText(error)}`);
+      toast(false, m.voice_guide_dir_change_failed({ error: errText(error) }));
     } finally {
       changingDir = false;
     }
@@ -143,9 +144,9 @@
       // 换成本地识别：选中它，并默认“打开 Kotone 时自动启动”（D9，可在识别卡片里取消）。
       await setActiveModel(model.engineId, model.id);
       settingsStore.set(await updateSettings({ ui: { autoStart: true } }));
-      toast(true, "模型下载好了");
+      toast(true, m.voice_guide_model_downloaded());
     } catch (error) {
-      if (isDownloadCancelled(error)) toastInfo("已取消下载，可随时继续");
+      if (isDownloadCancelled(error)) toastInfo(m.voice_guide_download_cancelled());
       else {
         downloadError = errText(error);
         manualGuide = await getModelInstallGuide(model.id).catch(() => null);
@@ -164,9 +165,9 @@
       manualGuide = null;
       downloadError = "";
       await setActiveModel(primaryModel.engineId, primaryModel.id).catch(() => {});
-      toast(true, "已检测到模型文件");
+      toast(true, m.voice_guide_model_detected());
     } else {
-      toastWarn("还没检测到完整模型，请确认文件名和目录后重试");
+      toastWarn(m.voice_guide_model_incomplete());
     }
   }
 
@@ -204,7 +205,7 @@
   async function saveHotkeyAndTry() {
     if (saving) return;
     const conflict = findHotkeyConflict($settingsStore, "record", currentKey);
-    if (conflict) { toast(false, `语音输入热键和${conflict}相同，请换一个`); return; }
+    if (conflict) { toast(false, m.voice_guide_hotkey_conflict({ conflict })); return; }
     saving = true;
     try {
       settingsStore.set(await updateSettings({
@@ -216,7 +217,7 @@
       step = "try";
       void startTry();
     } catch (error) {
-      toast(false, `保存失败：${errText(error)}`);
+      toast(false, m.voice_save_failed({ error: errText(error) }));
     } finally {
       saving = false;
     }
@@ -229,7 +230,7 @@
   async function startTry() {
     // 本地识别没启动时先启动（在线识别打开即就绪）。
     if ($runtimeStore?.phase !== "running") {
-      try { await startRuntime(); } catch (error) { toast(false, `本地语音识别没能启动：${errText(error)}`); }
+      try { await startRuntime(); } catch (error) { toast(false, m.voice_guide_runtime_start_failed({ error: errText(error) })); }
     }
     tryBox?.focus();
   }
@@ -240,10 +241,10 @@
   });
 </script>
 
-<section class="rounded-2xl border border-primary/35 bg-primary/6 p-4" data-testid="voice-guide" aria-label="设好语音输入">
+<section class="rounded-2xl border border-primary/35 bg-primary/6 p-4" data-testid="voice-guide" aria-label={m.voice_guide_aria()}>
   <div class="flex flex-wrap items-center justify-between gap-2">
-    <h2 class="m-0 text-sm font-semibold">四步设好语音输入</h2>
-    <button class="text-xs text-muted-foreground hover:text-foreground" data-testid="voice-guide-close" onclick={onClose}>收起</button>
+    <h2 class="m-0 text-sm font-semibold">{m.voice_guide_title()}</h2>
+    <button class="text-xs text-muted-foreground hover:text-foreground" data-testid="voice-guide-close" onclick={onClose}>{m.voice_guide_close()}</button>
   </div>
   <ol class="mt-3 mb-0 flex list-none flex-wrap gap-1.5 p-0">
     {#each STEPS as item, index (item.id)}
@@ -254,13 +255,13 @@
 
   <div class="mt-4 rounded-xl border border-hairline bg-card/80 p-4">
     {#if loading}
-      <p class="m-0 text-sm text-muted-foreground">正在读取…</p>
+      <p class="m-0 text-sm text-muted-foreground">{m.voice_guide_loading()}</p>
     {:else if resourceError}
       <p class="m-0 text-xs text-destructive">{resourceError}</p>
     {:else if step === "profile"}
       <div data-testid="voice-guide-profile">
-        <p class="m-0 text-sm font-semibold">在哪个游戏里用？</p>
-        <p class="mt-1 mb-0 text-xs text-muted-foreground">决定聊天键、输入方式和游戏术语词库，不限制你往哪个窗口发。</p>
+        <p class="m-0 text-sm font-semibold">{m.voice_guide_profile_title()}</p>
+        <p class="mt-1 mb-0 text-xs text-muted-foreground">{m.voice_guide_profile_desc()}</p>
         <div class="mt-3 grid grid-cols-2 gap-2">
           {#each profiles as profile (profile.id)}
             {@const active = selectedProfileId === profile.id}
@@ -271,7 +272,7 @@
               </span>
               <span class="min-w-0">
                 <span class="block truncate text-[13px] font-semibold {active ? 'text-primary' : ''}">{profile.displayName}</span>
-                <span class="block truncate text-[11px] text-muted-foreground">{profile.openChatKey} 开聊天 · 热词 {profile.hotwords.length}</span>
+                <span class="block truncate text-[11px] text-muted-foreground">{m.voice_guide_profile_info({ chatKey: profile.openChatKey, count: profile.hotwords.length })}</span>
               </span>
             </button>
           {/each}
@@ -279,56 +280,56 @@
       </div>
     {:else if step === "model"}
       <div data-testid="voice-guide-model">
-        <p class="m-0 text-sm font-semibold">用什么识别？</p>
+        <p class="m-0 text-sm font-semibold">{m.voice_guide_model_title()}</p>
         {#if online}
           <p class="mt-1 mb-0 text-xs text-muted-foreground" data-testid="voice-guide-online">
-            现在用 {activeModel?.displayName ?? "在线识别"}：打开 Kotone 就能用，不需要启动。
+            {m.voice_guide_online_now({ name: activeModel?.displayName ?? m.voice_guide_online_default() })}
           </p>
         {/if}
         <div class="mt-3 rounded-xl border border-hairline p-3" data-testid="model-setup-section">
           <div class="flex flex-wrap items-center gap-3">
             <div class="min-w-0 flex-1">
-              <p class="m-0 text-[13px] font-semibold">{online ? "换成本地识别" : "本地识别"}：免费、离线、边说边出字</p>
+              <p class="m-0 text-[13px] font-semibold">{m.voice_guide_local_title({ name: online ? m.voice_guide_switch_to_local() : m.voice_guide_local_name() })}</p>
               <p class="mt-0.5 mb-0 text-[11px] text-muted-foreground">
-                {primaryModel ? `${primaryModel.displayName.replace(/（.*$/, "")} · 约 ${Math.round(primaryModel.sizeBytes / 1_000_000)} MB` : "推荐模型"} · 下载一次，语音不上传
+                {m.voice_guide_model_line({ model: primaryModel ? m.voice_guide_model_size({ name: primaryModel.displayName.replace(/（.*$/, ""), size: Math.round(primaryModel.sizeBytes / 1_000_000) }) : m.voice_guide_model_recommended() })}
               </p>
             </div>
             {#if localReady && !online}
-              <span class="rounded bg-primary/15 px-2.5 py-1 text-xs font-semibold text-primary">✓ 已就绪</span>
+              <span class="rounded bg-primary/15 px-2.5 py-1 text-xs font-semibold text-primary">{m.voice_guide_ready()}</span>
             {:else if primaryModel}
               <button class="rounded-lg bg-primary px-3.5 py-1.5 text-xs font-semibold text-primary-foreground disabled:opacity-50" data-testid="voice-guide-download"
                 disabled={downloading || changingDir || dirInfo === null || !!dirError}
                 onclick={() => void (primaryModel.downloaded ? setActiveModel(primaryModel.engineId, primaryModel.id) : downloadPrimary())}>
-                {downloading ? "下载中…" : primaryModel.downloaded ? "换成本地识别" : downloadError ? "重试下载" : online ? "下载并切换" : "下载"}
+                {downloading ? m.voice_asr_downloading() : primaryModel.downloaded ? m.voice_guide_switch_to_local() : downloadError ? m.voice_guide_retry_download() : online ? m.voice_asr_download_and_switch() : m.voice_asr_download()}
               </button>
             {/if}
           </div>
           <div class="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-            <span class="min-w-0 truncate" data-testid="models-dir-path" title={dirInfo?.dir}>存储位置：{dirInfo?.dir ?? "正在读取…"}</span>
-            <button class="text-primary hover:underline disabled:opacity-50" disabled={changingDir || downloading || dirInfo === null} onclick={() => void pickModelsDir()}>{changingDir ? "切换中…" : "更改"}</button>
+            <span class="min-w-0 truncate" data-testid="models-dir-path" title={dirInfo?.dir}>{m.voice_guide_models_dir({ dir: dirInfo?.dir ?? m.voice_guide_loading() })}</span>
+            <button class="text-primary hover:underline disabled:opacity-50" disabled={changingDir || downloading || dirInfo === null} onclick={() => void pickModelsDir()}>{changingDir ? m.voice_guide_dir_changing() : m.voice_guide_dir_change()}</button>
           </div>
-          {#if dirError}<p class="mt-1 mb-0 text-[11px] text-destructive" data-testid="models-dir-error">{dirError}。模型路径需要纯英文，例如 D:\KotoneModels。</p>{/if}
+          {#if dirError}<p class="mt-1 mb-0 text-[11px] text-destructive" data-testid="models-dir-error">{m.voice_guide_dir_error({ error: dirError, example: "D:\\KotoneModels" })}</p>{/if}
           {#if downloading}
             <div class="mt-2 flex items-center gap-2">
               <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-muted/70"><div class="h-full rounded-full bg-primary transition-[width] {percent === null ? 'w-1/3 animate-pulse' : ''}" style:width={percent === null ? undefined : `${percent}%`}></div></div>
-              <span class="w-9 text-right text-[10px] text-muted-foreground">{percent === null ? "连接" : `${percent}%`}</span>
+              <span class="w-9 text-right text-[10px] text-muted-foreground">{percent === null ? m.voice_asr_progress_connecting() : `${percent}%`}</span>
               <button class="text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-50" disabled={cancelling}
-                onclick={() => { cancelling = true; void cancelDownload().catch(() => (cancelling = false)); }}>{cancelling ? "正在取消…" : "取消"}</button>
+                onclick={() => { cancelling = true; void cancelDownload().catch(() => (cancelling = false)); }}>{cancelling ? m.voice_asr_cancelling() : m.voice_action_cancel()}</button>
             </div>
           {/if}
           {#if downloadError}<p class="mt-2 mb-0 text-[11px] text-destructive">{downloadError}</p>{/if}
         </div>
         {#if !online}
           <p class="mt-3 mb-0 text-xs text-muted-foreground" data-testid="voice-guide-online-option">
-            在线识别（DeepSeek）：需要 DeepSeek Key →
-            <button class="text-primary hover:underline" data-testid="voice-guide-configure" onclick={onConfigure}>让 Kotone 帮我配置</button>
+            {m.voice_asr_online_needs_key()}
+            <button class="text-primary hover:underline" data-testid="voice-guide-configure" onclick={onConfigure}>{m.voice_shell_configure()}</button>
           </p>
         {/if}
       </div>
     {:else if step === "hotkey"}
       <div data-testid="voice-guide-hotkey">
-        <p class="m-0 text-sm font-semibold">热键和说话方式</p>
-        <div class="mt-3 grid grid-cols-3 gap-2" role="group" aria-label="交互模式">
+        <p class="m-0 text-sm font-semibold">{m.voice_guide_hotkey_title()}</p>
+        <div class="mt-3 grid grid-cols-3 gap-2" role="group" aria-label={m.voice_general_mode_title()}>
           {#each modes as mode (mode.id)}
             {@const active = selectedMode === mode.id}
             <button class="rounded-xl px-3 py-2.5 text-left ring-1 transition {active ? 'bg-primary/12 ring-primary/60' : 'bg-muted/40 ring-hairline hover:bg-muted'}"
@@ -340,42 +341,42 @@
         </div>
         <div class="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-hairline p-3">
           <div class="min-w-0 flex-1">
-            <p class="m-0 text-[11px] text-muted-foreground">语音输入热键</p>
+            <p class="m-0 text-[11px] text-muted-foreground">{m.voice_hotkey_name_record()}</p>
             <p class="m-0 text-base font-bold text-primary" data-testid="voice-guide-hotkey-value">{hotkeyLabel(currentKey)}</p>
           </div>
           <button class="rounded-lg border border-hairline px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50"
             disabled={capturing || checkingInput || inputBlocked} onclick={() => void recordHotkey()}>
-            {capturing ? "请按下键盘组合或鼠标侧键…（Esc 取消）" : "重新录入"}
+            {capturing ? m.voice_hotkey_capturing() : m.voice_guide_rerecord()}
           </button>
         </div>
         {#each hotkeyWarnings as warning}<p class="mt-1 mb-0 text-[11px] text-warning">⚠ {warning}</p>{/each}
         {#if checkingInput}
-          <p class="mt-2 mb-0 text-[11px] text-primary" data-testid="input-environment-checking">正在检测键盘输入环境…</p>
+          <p class="mt-2 mb-0 text-[11px] text-primary" data-testid="input-environment-checking">{m.voice_guide_input_checking()}</p>
         {:else if inputEnvironment && !inputEnvironment.available}
           <div class="mt-2 rounded-lg bg-brand-pink/10 p-3 ring-1 ring-brand-pink/40" data-testid="input-environment-blocked">
-            <p class="m-0 text-xs font-semibold text-brand-pink">检测到键盘输入被拦截</p>
-            <p class="mt-1 mb-0 text-[11px] text-muted-foreground">请把 Kotone 加入 360、火绒等安全软件的信任区，然后重新检测。{inputEnvironment.detail ?? ""}</p>
+            <p class="m-0 text-xs font-semibold text-brand-pink">{m.voice_guide_input_blocked_title()}</p>
+            <p class="mt-1 mb-0 text-[11px] text-muted-foreground">{m.voice_guide_input_blocked_desc({ detail: inputEnvironment.detail ?? "" })}</p>
             <div class="mt-2 flex gap-2">
-              <button class="rounded-lg bg-brand-pink/18 px-2.5 py-1 text-[11px] text-brand-pink" onclick={() => void runInputCheck()}>重新检测</button>
-              <button class="rounded-lg bg-muted/70 px-2.5 py-1 text-[11px] text-muted-foreground" onclick={() => (inputOverridden = true)}>仍然继续</button>
+              <button class="rounded-lg bg-brand-pink/18 px-2.5 py-1 text-[11px] text-brand-pink" onclick={() => void runInputCheck()}>{m.voice_guide_input_recheck()}</button>
+              <button class="rounded-lg bg-muted/70 px-2.5 py-1 text-[11px] text-muted-foreground" onclick={() => (inputOverridden = true)}>{m.voice_guide_input_continue()}</button>
             </div>
           </div>
         {:else if inputEnvironment}
-          <p class="mt-2 mb-0 text-[11px] text-success" data-testid="input-environment-ready">✓ 键盘输入环境可用</p>
+          <p class="mt-2 mb-0 text-[11px] text-success" data-testid="input-environment-ready">{m.voice_guide_input_ready()}</p>
         {/if}
       </div>
     {:else}
       <div data-testid="voice-guide-try">
-        <p class="m-0 text-sm font-semibold">说一句试试</p>
+        <p class="m-0 text-sm font-semibold">{m.voice_guide_step_try()}</p>
         <p class="mt-1 mb-0 text-xs text-muted-foreground">
-          点一下下面的框，{selectedMode === "push-to-talk" ? "按住" : "按一下"}
+          {m.voice_guide_try_before({ action: selectedMode === "push-to-talk" ? m.voice_guide_try_hold() : m.voice_guide_try_press() })}
           <kbd class="rounded border border-hairline bg-background px-1.5 py-0.5 font-mono text-[11px]">{hotkeyLabel(currentKey)}</kbd>
-          说一句，比如“打野来下路”。在游戏里，字会这样打进聊天框。
+          {m.voice_guide_try_after()}
         </p>
-        <textarea bind:this={tryBox} bind:value={tryText} rows="2" data-testid="onboarding-try-box" aria-label="试一下语音输入"
+        <textarea bind:this={tryBox} bind:value={tryText} rows="2" data-testid="onboarding-try-box" aria-label={m.voice_guide_try_box_label()}
           class="mt-3 w-full resize-none rounded-xl border border-hairline bg-background px-3 py-2 text-sm outline-none focus:border-primary"></textarea>
         <p class="mt-1 mb-0 min-h-5 text-xs" role="status" data-testid="onboarding-try-status">
-          {#if tried}<span class="text-success">✓ 成了，语音输入设好了</span>{:else}<span class="text-muted-foreground">等你开口…</span>{/if}
+          {#if tried}<span class="text-success">{m.voice_guide_try_done()}</span>{:else}<span class="text-muted-foreground">{m.voice_guide_try_waiting()}</span>{/if}
         </p>
       </div>
     {/if}
@@ -383,18 +384,18 @@
 
   <div class="mt-3 flex items-center justify-between">
     <button class="text-xs text-muted-foreground hover:text-foreground disabled:opacity-40" disabled={stepIndex === 0}
-      onclick={() => (step = STEPS[Math.max(0, stepIndex - 1)].id)}>← 上一步</button>
+      onclick={() => (step = STEPS[Math.max(0, stepIndex - 1)].id)}>{m.voice_guide_prev()}</button>
     {#if step === "profile"}
       <button class="rounded-lg bg-primary px-4 py-1.5 text-sm font-semibold text-primary-foreground disabled:opacity-50" data-testid="voice-guide-next"
-        disabled={loading || !selectedProfileId} onclick={() => (step = "model")}>下一步</button>
+        disabled={loading || !selectedProfileId} onclick={() => (step = "model")}>{m.voice_guide_next()}</button>
     {:else if step === "model"}
       <button class="rounded-lg bg-primary px-4 py-1.5 text-sm font-semibold text-primary-foreground disabled:opacity-50" data-testid="voice-guide-next"
-        disabled={!recognitionReady || downloading} onclick={() => { step = "hotkey"; void runInputCheck(); }}>下一步</button>
+        disabled={!recognitionReady || downloading} onclick={() => { step = "hotkey"; void runInputCheck(); }}>{m.voice_guide_next()}</button>
     {:else if step === "hotkey"}
       <button class="rounded-lg bg-primary px-4 py-1.5 text-sm font-semibold text-primary-foreground disabled:opacity-50" data-testid="voice-guide-next"
-        disabled={saving || capturing || checkingInput || inputBlocked} onclick={() => void saveHotkeyAndTry()}>下一步</button>
+        disabled={saving || capturing || checkingInput || inputBlocked} onclick={() => void saveHotkeyAndTry()}>{m.voice_guide_next()}</button>
     {:else}
-      <button class="rounded-lg bg-primary px-4 py-1.5 text-sm font-semibold text-primary-foreground" data-testid="voice-guide-done" onclick={onClose}>完成</button>
+      <button class="rounded-lg bg-primary px-4 py-1.5 text-sm font-semibold text-primary-foreground" data-testid="voice-guide-done" onclick={onClose}>{m.voice_action_done()}</button>
     {/if}
   </div>
 </section>

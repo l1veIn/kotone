@@ -6,6 +6,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { readable, type Readable } from "svelte/store";
 import { isTauri } from "./ipc";
 import * as browserMock from "./ipc/browserMock";
+import { m } from "./paraglide/messages.js";
 
 export interface BrowserMedia { playing: boolean; title: string | null; artist: string | null }
 /** 一个标签页（照 Codex / DSH 的内置浏览器：多标签、地址栏）。 */
@@ -120,7 +121,7 @@ export function activeTabOf(state: BrowserState): BrowserTab | null {
 export function tabLabel(tab: BrowserTab): string {
   if (tab.title?.trim()) return tab.title;
   if (tab.site || tab.url) return siteName(tab);
-  return "新标签页";
+  return m.misc_browser_new_tab();
 }
 
 export async function browserState(): Promise<BrowserState> {
@@ -207,19 +208,22 @@ export const browserStore: Readable<BrowserState> = readable<BrowserState>({ ...
 
 /** “正在放《晴天》- 周杰伦”；没有歌名时只说在放。 */
 export function mediaLine(media: BrowserMedia): string {
-  if (!media.title) return media.playing ? "正在放歌" : "暂停了";
-  const song = `《${media.title}》${media.artist ? `- ${media.artist}` : ""}`;
-  return media.playing ? `正在放${song}` : `暂停了：${song}`;
+  if (!media.title) return media.playing ? m.misc_browser_media_playing() : m.misc_browser_media_paused();
+  const song = media.artist
+    ? m.misc_browser_media_song_artist({ title: media.title, artist: media.artist })
+    : m.misc_browser_media_song({ title: media.title });
+  return media.playing ? m.misc_browser_media_playing_song({ song }) : m.misc_browser_media_paused_song({ song });
 }
 
 /** 网站的叫法：常见音乐站给中文名，其余显示域名。 */
 const SITE_NAMES: Record<string, string> = {
-  "music.163.com": "网易云音乐", "y.qq.com": "QQ 音乐", "www.kugou.com": "酷狗音乐", "kugou.com": "酷狗音乐",
-  "www.kuwo.cn": "酷我音乐", "kuwo.cn": "酷我音乐",
+  "music.163.com": m.misc_browser_site_netease_music(), "y.qq.com": m.misc_browser_site_qq_music(),
+  "www.kugou.com": m.misc_browser_site_kugou_music(), "kugou.com": m.misc_browser_site_kugou_music(),
+  "www.kuwo.cn": m.misc_browser_site_kuwo_music(), "kuwo.cn": m.misc_browser_site_kuwo_music(),
 };
 export function siteName(state: Pick<BrowserState, "site" | "url">): string {
   const site = state.site ?? (state.url ? safeHost(state.url) : null);
-  if (!site) return "网页";
+  if (!site) return m.misc_browser_site_web_page();
   return SITE_NAMES[site] ?? site.replace(/^www\./, "");
 }
 function safeHost(url: string): string | null {

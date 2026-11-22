@@ -55,6 +55,7 @@
   import AppSidebar, { type PageId } from "./AppSidebar.svelte";
   import { AgentChat } from "../../lib/agentChat/chatController.svelte";
   import { provideAgentChat } from "../../lib/agentChat/context";
+  import { m } from "$lib/paraglide/messages.js";
 
   /** 侧边栏：宽窗口展开 / 图标栏（记在本机）；窄窗口（< 760px）改成抽屉。 */
   const SIDEBAR_KEY = "kotone.sidebar.v1";
@@ -142,7 +143,7 @@
     const s = $settingsStore;
     const connectionId = companionBindings(s?.assistant)?.connectionId?.trim();
     if (s && !legacyVoiceOnly && connectionId && s.connections.some((c) => c.id === connectionId)) {
-      openChat("帮我配置语音输入：");
+      openChat(m.shell_settings_voice_setup_prompt());
     } else {
       onboarding = { mode: legacyVoiceOnly ? "upgrade" : "new", initialStep: "key" };
     }
@@ -251,7 +252,7 @@
         }
       }
     } catch (e) {
-      toast(false, `加载配置失败：${errText(e)}`);
+      toast(false, m.shell_settings_load_failed({ error: errText(e) }));
     } finally {
       loading = false;
     }
@@ -348,7 +349,7 @@
     <AppSidebar {page} {chatActive} {rail} {legacyVoiceOnly} onNavigate={navigate} onOpenChat={() => openChat()} onOpenRole={openRole} />
   {:else if drawerOpen}
     <!-- 窄窗口：侧边栏作为抽屉盖在内容上 -->
-    <button type="button" class="absolute inset-0 z-40 bg-black/40" aria-label="关闭侧边栏" onclick={() => (drawerOpen = false)}></button>
+    <button type="button" class="absolute inset-0 z-40 bg-black/40" aria-label={m.shell_settings_close_sidebar()} onclick={() => (drawerOpen = false)}></button>
     <div class="absolute inset-y-0 left-0 z-50 shadow-2xl" data-testid="sidebar-drawer">
       <AppSidebar {page} {chatActive} {legacyVoiceOnly} onNavigate={navigate} onOpenChat={() => openChat()} onOpenRole={openRole} />
     </div>
@@ -359,11 +360,11 @@
     {narrow ? '' : 'rounded-tl-2xl border-l'}" bind:this={mainEl}>
     {#if overlayHealth.degraded}
       <p role="status" data-testid="overlay-degraded-notice" class="mx-8 mt-5 rounded-lg border border-amber-300/20 bg-amber-300/8 px-4 py-3 text-xs leading-relaxed text-amber-100/90">
-        悬浮窗显示异常，已自动关闭。语音输入仍可使用。
+        {m.shell_settings_overlay_degraded()}
       </p>
     {/if}
     {#if loading}
-      <p class="px-8 py-10 text-sm text-muted-foreground">加载配置中…</p>
+      <p class="px-8 py-10 text-sm text-muted-foreground">{m.shell_settings_loading()}</p>
     {:else if page === "general" || page === "processing" || page === "history"}
       <VoiceInputShell {page} onTab={(next: VoiceInputPage) => navigate(next)} onConfigure={configureVoiceInput}>
         {#if page === "general"}
