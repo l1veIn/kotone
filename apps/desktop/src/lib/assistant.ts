@@ -106,10 +106,18 @@ export async function previewReminder(kind: DeliveryKind, legacyReminder?: boole
   if (!isTauri) throw new Error("浏览器预览不播放语音或显示系统弹幕；请在桌面应用中测试。");
   await invoke("preview_reminder", { kind, legacyReminder });
 }
-/** 呼叫琴音（和热键一样）：按一次就在右下角气泡里听，说完自动交给她；她在听时再按一次立刻提交。 */
+/** 呼叫琴音（和热键一样）：按一下就是通话（ADR 033），一直在听；通话中再按一下挂断。 */
 export async function callKotone(): Promise<void> {
   if (!isTauri) throw new Error("呼叫仅限桌面版");
   await invoke("assistant_call");
+}
+/** 现在在不在和她通话（ADR 033）。 */
+export async function callActive(): Promise<boolean> {
+  return isTauri ? invoke<boolean>("call_active") : false;
+}
+/** 接通 / 挂断时通知。 */
+export async function subscribeCall(callback: (active: boolean) => void): Promise<UnlistenFn> {
+  return isTauri ? listen<{ active: boolean }>("kotone://call", ({ payload }) => callback(payload.active)) : () => {};
 }
 export async function stopSpeech(): Promise<void> {
   if (isTauri) await invoke("stop_speech");

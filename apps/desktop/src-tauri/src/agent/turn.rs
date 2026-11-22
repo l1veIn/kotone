@@ -26,8 +26,35 @@ pub fn send(app: &AppHandle, outgoing: Outgoing) -> Result<Value, String> {
     if spoken {
         crate::voice_timing::recognized();
     }
+    let name = settings(app).agent.identity.name;
+    // 通话里玩家在她说话时开口了（ADR 033 第三节，她的声音这时压低着）：这句识别出来了，
+    // 不算打断（空的、只是“嗯”、是她自己的回声）就恢复音量、她接着说；算就停下她，这句照常往下走。
+    if voice && crate::voice_reply::ducked_for().is_some() {
+        if let Some(reason) = crate::call::not_an_interruption(&text) {
+            crate::voice_reply::unduck(reason);
+            kotone_core::usage::release_asr(None);
+            crate::voice_timing::discard();
+            // 识别成功后气泡会显示“在想”：收起（她接着说的下一句会再显示出来）
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                crate::bubble::finished(&app);
+            });
+            return Ok(json!({"status": "ignored", "reason": reason}));
+        }
+        tauri::async_runtime::spawn_blocking(|| {
+            if crate::voice_reply::barge_in() {
+                log::log("agent: 玩家开口打断了她");
+            }
+        });
+    }
+    // 通话里说“退下 / 安静”这类（又不是“不用了”那样的回答）：先挂断，不当成问题的回答（见下面）。
+    let exit = voice
+        && crate::call::active()
+        && crate::follow_up::is_exit_phrase(&text, &name)
+        && crate::voice_ask::parse_confirmation(&text).is_none();
     // 琴音刚用语音问了一句、正在等回答：这句语音就是回答，交回那次提问。
-    if voice && crate::voice_ask::deliver_answer(app, &text) {
+    if voice && !exit && crate::voice_ask::deliver_answer(app, &text) {
         kotone_core::usage::release_asr(kotone_core::usage::current_turn());
         return Ok(json!({"status": "answered"}));
     }
@@ -48,21 +75,27 @@ pub fn send(app: &AppHandle, outgoing: Outgoing) -> Result<Value, String> {
     }
     // 语音说“停下”：和停止热键、托盘「停下」一样停下一切（正在进行的操作、这一轮、子会话、
     // 全部自动化，ADR 019 决定 7 / ADR 028），不当成插话排队。
-    if voice
-        && is_stop_command(&text, &settings(app).agent.identity.name)
-        && crate::stop::stop_everything(app, "语音“停下”")
+    if voice && is_stop_command(&text, &name) && crate::stop::stop_everything(app, "语音“停下”")
     {
         kotone_core::usage::release_asr(kotone_core::usage::current_turn());
         crate::voice_timing::discard();
         return Ok(json!({"status": "stopped"}));
     }
-    // 没在忙时说“没事了 / 不用了 / 拜拜”：安静结束，不交给模型（ADR 029 §五；在忙时照常插话）。
-    if voice
-        && !is_running(app)
-        && crate::follow_up::is_exit_phrase(&text, &settings(app).agent.identity.name)
-    {
+    // 说“退下 / 安静 / 挂了 / 没事了 / 拜拜”：通话里任何时候都挂断——停掉她正在说的话和这一轮，
+    // 交给后台的事不停（ADR 033 第二节，照 orb 的“退下”）；不在通话里只在她没在忙时安静结束
+    // （ADR 029 §五；在忙时照常插话）。都不交给模型。
+    let in_call = crate::call::active();
+    if voice && (in_call || !is_running(app)) && crate::follow_up::is_exit_phrase(&text, &name) {
         kotone_core::usage::release_asr(None);
         crate::voice_timing::discard();
+        if in_call {
+            crate::call::end(app, "玩家说了退下");
+            if is_running(app) {
+                let _ = stop(app);
+            }
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || crate::assistant::stop_speech(app));
+        }
         log::log("agent: 玩家说了结束的话，安静结束");
         // 识别成功后气泡会先显示“在想”：稍后收起。
         let app = app.clone();

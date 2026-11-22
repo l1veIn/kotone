@@ -179,6 +179,11 @@ fn remove_spoken_ask(app: &AppHandle, ask: &SpokenAsk) {
     }
 }
 
+/// 有用嘴问过、还在等回答的确认吗（通话等它时不计空闲，ADR 033）。
+pub fn has_spoken_asks(app: &AppHandle) -> bool {
+    runtime(app).is_ok_and(|rt| !rt.inner.lock().unwrap().spoken_asks.is_empty())
+}
+
 /// 有用嘴问过、还在等的确认，而玩家这句只是“可以 / 允许 / 不要”：交给最近问的那个。
 /// 返回是否交出去了（交出去了这句就不再交给琴音）。
 pub fn answer_by_voice(app: &AppHandle, text: &str) -> bool {

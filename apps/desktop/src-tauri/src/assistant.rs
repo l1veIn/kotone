@@ -393,11 +393,23 @@ pub fn speak_now(app: &AppHandle, text: &str) -> Result<(), String> {
         .assistant
         .clone();
     let speaker = selected_speaker(app, &config)?;
-    speaker.speak(speech_request(
+    crate::voice_reply::remember_spoken(text);
+    SPEAKING_NOW.fetch_add(1, Ordering::SeqCst);
+    let result = speaker.speak(speech_request(
         effective_engine(app, &config),
         &config,
         text,
-    ))
+    ));
+    SPEAKING_NOW.fetch_sub(1, Ordering::SeqCst);
+    result
+}
+
+/// 正在用 [`speak_now`] 说的句数（应答、追问）。
+static SPEAKING_NOW: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// 正在用 [`speak_now`] 说一句吗（通话里没有回声消除时，这时麦克风里是她自己，ADR 033）。
+pub fn speaking_now() -> bool {
+    SPEAKING_NOW.load(Ordering::SeqCst) != 0
 }
 
 /// 当前的语音引擎与一句话的合成请求（游戏语音“说给队友”用）。
@@ -619,7 +631,8 @@ pub fn before_capture(app: &AppHandle) -> Result<(), String> {
         kotone_core::log::log(&format!("录音开始前停止播报失败（继续录音）：{error}"));
     }
     // 边生成边念的回答也停（等输出设备关掉才开麦）：玩家开口就是打断她。
-    if crate::voice_reply::interrupt() {
+    // 通话里开着回声消除、玩家在她说话时开口（ADR 033）：只压低着，识别出来再决定停不停。
+    if crate::voice_reply::ducked_for().is_none() && crate::voice_reply::interrupt() {
         crate::follow_up::interrupted();
     }
     Ok(())
@@ -1266,9 +1279,16 @@ pub async fn assistant_call(app: AppHandle) -> Result<(), String> {
         }
         settings.assistant.wake.no_speech_timeout_ms
     };
+    // 通话中再点一下 = 挂断（同呼叫键，ADR 033 D1）
+    if crate::call::active() {
+        crate::call::hang_up_by_key(&app).await;
+        return Ok(());
+    }
     ensure_voice_ready(&app).await?;
     interrupt_before_call(&app).await;
     state.orchestrator.call_assistant(None, timeout).await;
+    // 接通（ADR 033）：这句说完以后一直在听，直到挂断
+    crate::call::start(&app);
     Ok(())
 }
 

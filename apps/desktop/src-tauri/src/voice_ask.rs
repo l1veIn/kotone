@@ -22,7 +22,7 @@ const HARD_LIMIT: Duration = Duration::from_secs(60);
 
 /// 问完那几秒没听到回答时说的话。确认还在等：之后用嘴说“可以 / 不要”也算
 /// （[`crate::agent::answer_by_voice`]），窗口里的按钮也一直能点。
-pub const NOT_HEARD: &str = "没听清。按呼叫键说“可以”或“不要”就行。";
+pub const NOT_HEARD: &str = "没听清。说“可以”或“不要”就行。";
 
 #[derive(Default)]
 pub struct VoiceAsk {
@@ -102,22 +102,33 @@ pub async fn ask(
     crate::voice_timing::sound("ask");
     let speak_app = app.clone();
     let text = question.to_string();
-    tauri::async_runtime::spawn_blocking(move || crate::assistant::speak_now(&speak_app, &text))
-        .await
-        .map_err(|_| "播报问题失败".to_string())?
-        .map_err(|e| format!("没能把问题说出来：{e}"))?;
+    let spoken = tauri::async_runtime::spawn_blocking(move || {
+        crate::assistant::speak_now(&speak_app, &text)
+    })
+    .await
+    .map_err(|_| "播报问题失败".to_string())?;
+    match spoken {
+        Ok(()) => {}
+        // 通话里玩家没等她问完就开口了（问题被停掉、或正在收他的话）：直接听他这句（ADR 033）
+        Err(e) if crate::call::active() && (e.contains("取消") || e.contains("正在录音")) => {
+            log::log("voice ask: the player spoke before the question finished");
+        }
+        Err(e) => return Err(format!("没能把问题说出来：{e}")),
+    }
     // 2. 登记等待（新的提问顶掉旧的）
     let (tx, mut rx) = oneshot::channel();
     let id = state.next.fetch_add(1, Ordering::SeqCst) + 1;
     *state.pending.lock().unwrap() = Some((id, tx));
     let _guard = PendingGuard { state: &state, id };
-    // 3. 不用唤醒词，直接开始收音
+    // 3. 不用唤醒词，直接开始收音（通话里本来就一直在听，下一句就是回答，ADR 033）
     let wait = wait_seconds.clamp(3, 15);
     let orchestrator = app.state::<SharedState>().orchestrator.clone();
-    orchestrator
-        .begin_assistant_wake((wait * 1000) as u32)
-        .await
-        .map_err(|e| format!("没法开始听你回答：{e}"))?;
+    if !crate::call::active() {
+        orchestrator
+            .begin_assistant_wake((wait * 1000) as u32)
+            .await
+            .map_err(|e| format!("没法开始听你回答：{e}"))?;
+    }
     log::log(&format!("voice ask: listening for {wait}s"));
     crate::bubble::ask_listening(app, wait);
     // 4. 等回答：开口后等他说完；一直没开口、过了等待时间就算没回答

@@ -67,7 +67,20 @@ struct Worker {
     device: String,
     /// 正在用的关键词行（当前角色的唤醒词）。
     keywords: String,
+    /// 判唤醒词（开了唤醒、模型在）；false = 只为通话开着。
+    kws: bool,
+    /// 这一路麦克风做回声消除（ADR 033 第三节）。
+    echo: bool,
     thread: Option<std::thread::JoinHandle<()>>,
+}
+
+/// 这一路麦克风怎么开、听什么。
+struct Ears<'a> {
+    kws: bool,
+    echo: bool,
+    keywords: &'a str,
+    phrase: &'a str,
+    device: &'a str,
 }
 
 impl Drop for Worker {
@@ -258,6 +271,11 @@ fn voice_running(app: &AppHandle) -> bool {
 
 /// 按设置与语音运行时状态启停唤醒监听。设置保存、语音识别启停后调用；幂等。
 pub fn sync(app: &AppHandle) {
+    // 通话中语音识别停了（本地识别被停掉）：听不了，挂断（挂断时会再进来一次）
+    if crate::call::active() && !voice_running(app) {
+        crate::call::end(app, "语音识别停了");
+        return;
+    }
     let Some(rt) = runtime(app) else { return };
     let settings = app.state::<SharedState>().settings.read().unwrap().clone();
     let mut config = settings.assistant.wake.clone();
@@ -265,16 +283,26 @@ pub fn sync(app: &AppHandle) {
         config.enabled = false;
     }
     let device = settings.audio_device_id.clone();
+    let echo = settings.assistant.echo_cancellation;
     let mut worker = rt.worker.lock().unwrap();
-    let wanted = config.enabled && voice_running(app) && kotone_stt::wake::kws_model_ready();
+    // 唤醒词要模型；通话（ADR 033）不要，只要语音识别在运行。
+    let kws = config.enabled && kotone_stt::wake::kws_model_ready();
+    let call = crate::call::active();
+    let wanted = voice_running(app) && (kws || call);
     // 没启用唤醒的旧用户不会在启动时建立角色工作区。
-    let (keywords, keyword_label, keyword_warning) = if config.enabled {
+    let (keywords, keyword_label, keyword_warning) = if kws {
         crate::roles::wake_keywords(app)
     } else {
         (String::new(), String::new(), None)
     };
     if let Some(w) = worker.as_ref() {
-        if wanted && w.config == config && w.device == device && w.keywords == keywords {
+        if wanted
+            && w.kws == kws
+            && w.echo == echo
+            && w.config == config
+            && w.device == device
+            && w.keywords == keywords
+        {
             return;
         }
     }
@@ -288,20 +316,23 @@ pub fn sync(app: &AppHandle) {
         std::thread::spawn(move || drop(old));
     }
     rt.handoff.lock().unwrap().take();
-    if !config.enabled {
+    // 唤醒的状态只说唤醒词这件事；只为通话开着时唤醒仍显示“关”。
+    let wake_state = if !config.enabled {
+        Some(WakeState::Off)
+    } else if !kotone_stt::wake::kws_model_ready() {
+        Some(WakeState::ModelMissing)
+    } else if !voice_running(app) {
+        Some(WakeState::WaitingRuntime)
+    } else {
+        None
+    };
+    if !wanted {
         drop(worker);
-        set_state(app, WakeState::Off);
+        set_state(app, wake_state.unwrap_or(WakeState::Off));
         return;
     }
-    if !kotone_stt::wake::kws_model_ready() {
-        drop(worker);
-        set_state(app, WakeState::ModelMissing);
-        return;
-    }
-    if !voice_running(app) {
-        drop(worker);
-        set_state(app, WakeState::WaitingRuntime);
-        return;
+    if let Some(state) = wake_state {
+        set_state(app, state);
     }
     let stop = Arc::new(AtomicBool::new(false));
     let thread = {
@@ -313,10 +344,20 @@ pub fn sync(app: &AppHandle) {
         std::thread::Builder::new()
             .name("kotone-wake".into())
             .spawn(move || {
-                if let Err(error) = listen(&app, &config, &keywords, &keyword_label, &device, &stop)
-                {
+                let ears = Ears {
+                    kws,
+                    echo,
+                    keywords: &keywords,
+                    phrase: &keyword_label,
+                    device: &device,
+                };
+                if let Err(error) = listen(&app, &config, &ears, &stop) {
                     log::log(&format!("wake: stopped with error: {error}"));
-                    set_state(&app, WakeState::Error { message: error });
+                    if kws {
+                        set_state(&app, WakeState::Error { message: error });
+                    }
+                    // 通话的耳朵坏了：挂断，免得玩家以为她还在听
+                    crate::call::end(&app, "麦克风出错");
                 }
             })
     };
@@ -327,6 +368,8 @@ pub fn sync(app: &AppHandle) {
                 config,
                 device,
                 keywords,
+                kws,
+                echo,
                 thread: Some(thread),
             });
         }
@@ -385,29 +428,34 @@ enum Phase {
 fn listen(
     app: &AppHandle,
     config: &WakeConfig,
-    keywords: &str,
-    phrase: &str,
-    device: &str,
+    ears: &Ears<'_>,
     stop: &AtomicBool,
 ) -> Result<(), String> {
     let sensitivity = serde_json::to_value(config.sensitivity)
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_default();
-    let mut detector = kotone_stt::wake::WakeDetector::new(
-        &kotone_stt::wake::kws_model_dir(),
-        keywords,
-        &sensitivity,
-    )?;
-    let backend = kotone_platform_windows::audio::CpalBackend;
-    let mut handle = backend.start(device)?;
+    let mut detector = if ears.kws {
+        Some(kotone_stt::wake::WakeDetector::new(
+            &kotone_stt::wake::kws_model_dir(),
+            ears.keywords,
+            &sensitivity,
+        )?)
+    } else {
+        None
+    };
+    let (mut handle, echo) = open_microphone(ears)?;
     let mut pcm = handle.pcm_rx.take().ok_or("麦克风通道不可用")?;
     let mut errors = handle.error_rx.take();
     log::log(&format!(
-        "wake: listening (phrase={phrase}, sensitivity={sensitivity}, device={device})"
+        "wake: listening (wake={}, phrase={}, sensitivity={sensitivity}, device={}, echo-cancel={echo})",
+        ears.kws, ears.phrase, ears.device
     ));
-    set_state(app, WakeState::Listening);
-    if config.ack == WakeAck::Voice {
+    if ears.kws {
+        set_state(app, WakeState::Listening);
+    }
+    let mut call = CallEars::new(echo);
+    if config.ack == WakeAck::Voice && ears.kws {
         // 应答先合成好：在线语音现场合成要一两秒，玩家会觉得她反应慢。
         let prefetch_app = app.clone();
         std::thread::spawn(move || crate::assistant::prefetch(&prefetch_app, ACKS));
@@ -467,13 +515,30 @@ fn listen(
                     OrchestratorState::Idle | OrchestratorState::Success | OrchestratorState::Error
                 ) {
                     // 有会话在进行：不判唤醒，也不让会话里的话残留在检测器里
-                    detector.reset();
+                    if let Some(detector) = detector.as_mut() {
+                        detector.reset();
+                    }
+                    call.reset();
                     Phase::Listening
-                } else if let Some(keyword) = detector.accept(&chunk) {
+                } else if crate::call::active() {
+                    // 通话（ADR 033）：开口就把这句交给收音会话，不判唤醒词
+                    if let Some(detector) = detector.as_mut() {
+                        detector.reset();
+                    }
+                    match call.accept(app, chunk) {
+                        Some(prefill) => {
+                            crate::call::touch();
+                            begin_session(app, &handoff, prefill, config)
+                        }
+                        None => Phase::Listening,
+                    }
+                } else if let Some(keyword) = detector.as_mut().and_then(|d| d.accept(&chunk)) {
                     let n = rt.detections.fetch_add(1, Ordering::SeqCst) + 1;
                     log::log(&format!("wake: detected {keyword} (#{n})"));
                     let _ = app.emit("kotone://wake", json!({"keyword": keyword}));
                     crate::bubble::woke(app);
+                    // 喊唤醒词也是接通（ADR 033）
+                    crate::call::start(app);
                     Phase::Probing {
                         until: Instant::now() + CONTINUE_PROBE,
                         chunks: Vec::new(),
@@ -603,15 +668,25 @@ fn listen(
             Phase::Handoff { tx } => match tx.try_send(chunk) {
                 Ok(()) | Err(TrySendError::Full(_)) => Phase::Handoff { tx },
                 Err(TrySendError::Disconnected(_)) => {
-                    detector.reset();
-                    Phase::Cooldown {
-                        until: Instant::now() + COOLDOWN,
+                    if let Some(detector) = detector.as_mut() {
+                        detector.reset();
+                    }
+                    call.reset();
+                    if crate::call::active() {
+                        // 通话里这句收完马上接着听（玩家可能接着说第二句）
+                        Phase::Listening
+                    } else {
+                        Phase::Cooldown {
+                            until: Instant::now() + COOLDOWN,
+                        }
                     }
                 }
             },
             Phase::Cooldown { until } => {
-                if Instant::now() >= until {
-                    detector.reset();
+                if Instant::now() >= until || crate::call::active() {
+                    if let Some(detector) = detector.as_mut() {
+                        detector.reset();
+                    }
                     Phase::Listening
                 } else {
                     Phase::Cooldown { until }
@@ -627,12 +702,159 @@ fn listen(
 fn listen(
     _app: &AppHandle,
     _config: &WakeConfig,
-    _keywords: &str,
-    _phrase: &str,
-    _device: &str,
+    _ears: &Ears<'_>,
     _stop: &AtomicBool,
 ) -> Result<(), String> {
     Err("这个版本没有编译语音唤醒".into())
+}
+
+#[cfg(feature = "engine-sherpa")]
+/// 打开这一路麦克风：要回声消除就用回声消除的那一路（ADR 033 第三节），打不开退回普通采集。
+/// 返回采集句柄和是否真的在做回声消除。
+fn open_microphone(ears: &Ears<'_>) -> Result<(AudioHandle, bool), String> {
+    if ears.echo {
+        match kotone_platform_windows::echo_cancel::EchoCancelledBackend.start(ears.device) {
+            Ok(handle) => return Ok((handle, true)),
+            Err(e) => log::log(&format!(
+                "wake: echo cancellation unavailable, she won't hear you while she talks: {e}"
+            )),
+        }
+    }
+    Ok((
+        kotone_platform_windows::audio::CpalBackend.start(ears.device)?,
+        false,
+    ))
+}
+
+#[cfg(feature = "engine-sherpa")]
+/// 通话里开口前留多少块（50 ms 一块）：这句话的开头不被截掉（照 voice-call 的预录，取 0.6 秒）。
+const CALL_PRE_ROLL_CHUNKS: usize = 12;
+#[cfg(feature = "engine-sherpa")]
+/// 连续多少毫秒是人声算玩家开口（照 voice-call `minSpeechMs` 200 ms）。
+const CALL_ONSET_MS: u32 = 210;
+#[cfg(feature = "engine-sherpa")]
+/// 她不说话以后多久才开始听（没有回声消除时，房间里的尾音不当成玩家开口；照 orb 自己的声音后预录取 0）。
+const CALL_AFTER_SPEECH: Duration = Duration::from_millis(300);
+
+#[cfg(feature = "engine-sherpa")]
+/// 通话里的“耳朵”：silero 判开口，留着开口前的一小段。
+struct CallEars {
+    vad: Option<Box<dyn kotone_core::vad::Vad>>,
+    vad_error: bool,
+    splitter: kotone_core::vad::FrameSplitter,
+    ring: VecDeque<Vec<f32>>,
+    voiced_ms: u32,
+    echo: bool,
+    /// 她最近一次在说话的时刻（没有回声消除时用）。
+    her_voice_at: Option<Instant>,
+}
+
+#[cfg(feature = "engine-sherpa")]
+impl CallEars {
+    fn new(echo: bool) -> Self {
+        Self {
+            vad: None,
+            vad_error: false,
+            splitter: kotone_core::vad::FrameSplitter::new(),
+            ring: VecDeque::with_capacity(CALL_PRE_ROLL_CHUNKS + 1),
+            voiced_ms: 0,
+            echo,
+            her_voice_at: None,
+        }
+    }
+
+    fn reset(&mut self) {
+        if let Some(vad) = self.vad.as_mut() {
+            vad.reset();
+        }
+        self.splitter = kotone_core::vad::FrameSplitter::new();
+        self.ring.clear();
+        self.voiced_ms = 0;
+    }
+
+    /// 喂一块；玩家开口了就返回要交给收音会话的音频（开口前的一小段 + 这一块）。
+    fn accept(&mut self, app: &AppHandle, chunk: Vec<f32>) -> Option<Vec<Vec<f32>>> {
+        let speaking = her_voice_playing(app);
+        if speaking {
+            self.her_voice_at = Some(Instant::now());
+        }
+        // 没有回声消除：她说话时（和刚说完那一下）麦克风里是她自己，不听（半双工）
+        if !self.echo
+            && (speaking
+                || self
+                    .her_voice_at
+                    .is_some_and(|at| at.elapsed() < CALL_AFTER_SPEECH))
+        {
+            self.reset();
+            return None;
+        }
+        if self.vad.is_none() && !self.vad_error {
+            let state = app.state::<SharedState>();
+            let factory = state.orchestrator.vad_factory.clone();
+            let settings = state.settings.read().unwrap().vad;
+            match factory.map(|f| f(&settings)) {
+                Some(Ok(vad)) => self.vad = Some(vad),
+                Some(Err(e)) => {
+                    log::log(&format!("call: voice detection unavailable: {e}"));
+                    self.vad_error = true;
+                }
+                None => {
+                    log::log("call: voice detection not compiled in");
+                    self.vad_error = true;
+                }
+            }
+        }
+        let vad = self.vad.as_mut()?;
+        let mut voiced = false;
+        for frame in self.splitter.push(&chunk) {
+            match vad.push_frame(&frame) {
+                Ok(true) => voiced = true,
+                Ok(false) => {}
+                Err(e) => {
+                    log::log(&format!("call: voice detection failed: {e}"));
+                    self.vad_error = true;
+                    self.vad = None;
+                    return None;
+                }
+            }
+        }
+        if self.ring.len() == CALL_PRE_ROLL_CHUNKS {
+            self.ring.pop_front();
+        }
+        self.ring.push_back(chunk);
+        self.voiced_ms = if voiced {
+            self.voiced_ms + (kotone_core::audio::CHUNK_SAMPLES as u32 * 1000 / 16_000)
+        } else {
+            0
+        };
+        if self.voiced_ms < CALL_ONSET_MS {
+            return None;
+        }
+        log::log(&format!(
+            "call: player started speaking{}",
+            if speaking {
+                " while she was talking"
+            } else {
+                ""
+            }
+        ));
+        if speaking {
+            // 开口打断（ADR 033 第三节）：先把她的声音压低，识别出来再决定停还是接着说
+            crate::voice_reply::duck();
+        }
+        let prefill: Vec<Vec<f32>> = self.ring.drain(..).collect();
+        self.reset();
+        Some(prefill)
+    }
+}
+
+#[cfg(feature = "engine-sherpa")]
+/// 她正在出声吗（边生成边念的回答、整段念的话、等待短句、应答）。
+fn her_voice_playing(app: &AppHandle) -> bool {
+    crate::assistant::output_busy(app)
+        || crate::assistant::speaking_now()
+        || crate::voice_reply::active()
+        || crate::bubble::is_speaking(app)
 }
 
 /// 把已收集的音频交给新的唤醒会话并开始它；失败就回到冷却。

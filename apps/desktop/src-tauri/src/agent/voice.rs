@@ -134,6 +134,7 @@ pub(super) async fn deliver_voice_reply(
         }
     }
     crate::voice_timing::sound(kind);
+    crate::voice_reply::remember_spoken(&text);
     if !bubble.enabled {
         return crate::assistant::deliver_text(app, text, wanted).await;
     }

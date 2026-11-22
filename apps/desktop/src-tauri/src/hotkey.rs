@@ -389,14 +389,21 @@ fn dispatch_runtime_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, event: Hoo
                 HK_PP_TOGGLE => orch.on_post_processing_toggle().await,
                 HK_PP_CYCLE => orch.on_post_processing_cycle().await,
                 HK_ASSISTANT => {
-                    let timeout = {
-                        let state = app.state::<crate::SharedState>();
-                        let settings = state.settings.read().unwrap();
-                        settings.assistant.wake.no_speech_timeout_ms
-                    };
-                    // 她正在说时按呼叫键：先停下她，再开始听（ADR 029 §五）。
-                    crate::assistant::interrupt_before_call(&app).await;
-                    orch.call_assistant(Some(ticket.core), timeout).await;
+                    if crate::call::active() {
+                        // 通话中再按一次 = 挂断（ADR 033 D1）。
+                        crate::call::hang_up_by_key(&app).await;
+                    } else {
+                        let timeout = {
+                            let state = app.state::<crate::SharedState>();
+                            let settings = state.settings.read().unwrap();
+                            settings.assistant.wake.no_speech_timeout_ms
+                        };
+                        // 她正在说时按呼叫键：先停下她，再开始听（ADR 029 §五）。
+                        crate::assistant::interrupt_before_call(&app).await;
+                        orch.call_assistant(Some(ticket.core), timeout).await;
+                        // 接通（ADR 033）：这句说完以后一直在听，直到挂断。
+                        crate::call::start(&app);
+                    }
                 }
                 HK_LEGACY_REMINDER => orch.on_assistant_hotkey_with_ticket(ticket.core).await,
                 other => match quick_message_slot(other) {

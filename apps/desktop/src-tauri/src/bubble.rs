@@ -227,7 +227,7 @@ impl Model {
         Some(&self.snap)
     }
 
-    /// 回答念完、接着听 `seconds` 秒（ADR 029 §五）：气泡留着刚才那句，显示倒计时。
+    /// 回答念完、通话还开着（ADR 033）：气泡留着刚才那句，显示还有几秒没人说话就挂断。
     pub fn follow_up(&mut self, seconds: u64, now_ms: u64, shown: &str) -> &Snapshot {
         self.holding = false;
         self.snap.heard.clear();
@@ -298,8 +298,8 @@ impl Model {
     }
 }
 
-/// 回答完接着听时的状态行。
-pub const FOLLOW_UP_LABEL: &str = "接着说吧";
+/// 通话里她说完、在等玩家开口时的标签（ADR 033；以前是“接着听”的“接着说吧”）。
+pub const FOLLOW_UP_LABEL: &str = "通话中";
 
 /// 有子会话在听队友时的状态行（ADR 021）。
 pub const LISTEN_LABEL: &str = "正在听队友";

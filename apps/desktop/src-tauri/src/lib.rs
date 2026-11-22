@@ -8,6 +8,7 @@ mod automation;
 mod browser;
 mod browser_cmd;
 mod bubble;
+mod call;
 mod companion;
 mod compatibility;
 mod computer_use;
@@ -520,6 +521,7 @@ pub fn run() {
             workspace_cmd::workspace_import_skill,
             workspace_cmd::workspace_open_dir,
             agent::agent_stop,
+            call::call_active,
             agent::agent_answer,
             agent::agent_state,
             agent::agent_tools,

@@ -342,7 +342,12 @@ async fn play(reply: Arc<Reply>, bubble: bool) {
     if let Some(revision) = revision.filter(|_| !quiet) {
         crate::bubble::spoken(&app, revision);
     }
+    remember_spoken(&reply.stream.started_text());
     ACTIVE.lock().unwrap().retain(|r| !Arc::ptr_eq(r, &reply));
+    if ACTIVE.lock().unwrap().is_empty() {
+        // 念完了：没有要压低的了
+        DUCKED.lock().unwrap().take();
+    }
     reply.done.send_replace(true);
 }
 
@@ -375,6 +380,86 @@ pub fn interrupt() -> bool {
         log::log("voice reply: interrupted");
     }
     any
+}
+
+/// 玩家在她说话时开口了（通话里、有回声消除，ADR 033 第三节）：什么时候压低的。
+static DUCKED: Mutex<Option<Instant>> = Mutex::new(None);
+/// 压低到原音量的多少。
+const DUCK_GAIN: f32 = 0.25;
+
+/// 玩家开口：先把她正在念的压低（不停）。这句识别出来后由 [`barge_in`]（真打断）或 [`unduck`]
+/// （不算打断，接着说）收尾。照 LiveKit Agents 的“先停、没识别出字就接着说”，只是压低而不是停，
+/// 误判时不留空白。
+pub fn duck() {
+    let active: Vec<Arc<Reply>> = ACTIVE.lock().unwrap().clone();
+    if active.is_empty() {
+        return;
+    }
+    for reply in &active {
+        reply.stream.set_gain(DUCK_GAIN);
+    }
+    *DUCKED.lock().unwrap() = Some(Instant::now());
+    log::log("voice reply: ducked (player started speaking)");
+}
+
+/// 正在因为玩家开口而压低着吗；压低了多久。
+pub fn ducked_for() -> Option<Duration> {
+    DUCKED.lock().unwrap().map(|at| at.elapsed())
+}
+
+/// 不算打断（空的、只是“嗯”、是她自己的回声）：音量恢复，她接着说。返回是否压低过。
+pub fn unduck(reason: &str) -> bool {
+    if DUCKED.lock().unwrap().take().is_none() {
+        return false;
+    }
+    let active: Vec<Arc<Reply>> = ACTIVE.lock().unwrap().clone();
+    for reply in &active {
+        reply.stream.set_gain(1.0);
+    }
+    log::log(&format!("voice reply: back to full volume ({reason})"));
+    true
+}
+
+/// 真打断：玩家说了话、不是回声，她停下（同按呼叫键打断：对话里只留已经念出来的）。
+/// 阻塞到输出设备关掉（最多约 2 秒）。返回是否打断了什么。
+pub fn barge_in() -> bool {
+    DUCKED.lock().unwrap().take();
+    let stopped = interrupt();
+    if stopped {
+        crate::follow_up::interrupted();
+    }
+    stopped
+}
+
+/// 她最近念过的话（念完的时刻、字）：识别结果是不是她自己的回声，要和这些比（照 orb `echo.ts`）。
+static RECENT: Mutex<Vec<(Instant, String)>> = Mutex::new(Vec::new());
+/// 念完多久以内的还算“最近”（一句话从开口到识别出来最多几秒）。
+const RECENT_FOR: Duration = Duration::from_secs(12);
+
+/// 记下她刚念过的一句（整句念的话：应答、追问、固定的话）。
+pub fn remember_spoken(text: &str) {
+    let text = text.trim();
+    if text.is_empty() {
+        return;
+    }
+    let mut recent = RECENT.lock().unwrap();
+    recent.retain(|(at, _)| at.elapsed() < RECENT_FOR);
+    recent.push((Instant::now(), text.to_string()));
+}
+
+/// 她最近念过、正在念的字。
+pub fn recent_text() -> String {
+    let mut out: String = RECENT
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(at, _)| at.elapsed() < RECENT_FOR)
+        .map(|(_, text)| text.as_str())
+        .collect();
+    for reply in ACTIVE.lock().unwrap().iter() {
+        out.push_str(&reply.stream.started_text());
+    }
+    out
 }
 
 /// 等正在念的都念完（追问前：前面那句念完再问），最多 `max`。

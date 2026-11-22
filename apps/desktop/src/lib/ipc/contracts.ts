@@ -234,8 +234,12 @@ export interface AssistantConfig extends AssistantBindings {
   wake?: WakeConfig;
   /** 琴音的对话气泡（0.2.0 新字段，旧配置没有）。 */
   bubble?: BubbleConfig;
-  /** 回答完接着听几秒，0 = 不接着听（ADR 029 新字段，旧配置没有 = 8）。 */
+  /** 回答完接着听几秒（ADR 029）。ADR 033 起不再使用，只为旧版本保留。 */
   followUpSeconds?: number;
+  /** 通话多久没人说话挂断，0 = 不通话（ADR 033 新字段，旧配置没有 = 30）。 */
+  callIdleSeconds?: number;
+  /** 通话里做回声消除：开着音箱也能开口打断她（ADR 033 新字段，旧配置没有 = true）。 */
+  echoCancellation?: boolean;
   kokoroVoiceId: string;
   danmakuDurationMs: number;
   danmakuSpeedPxPerSec: number;
