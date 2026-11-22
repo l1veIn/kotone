@@ -55,6 +55,8 @@ pub struct PcmQueue {
 struct QueueState {
     rate: u32,
     volume: f32,
+    /// 临时压低（玩家开口打断时，ADR 033）：1 = 不压。
+    gain: f32,
     samples: VecDeque<f32>,
     appended: u64,
     consumed: u64,
@@ -69,6 +71,7 @@ impl PcmQueue {
             state: Mutex::new(QueueState {
                 rate: 0,
                 volume: volume.min(100) as f32 / 100.0,
+                gain: 1.0,
                 samples: VecDeque::new(),
                 appended: 0,
                 consumed: 0,
@@ -121,6 +124,12 @@ impl PcmQueue {
         self.stopped.load(Ordering::SeqCst)
     }
 
+    /// 临时压低 / 恢复音量（0–1，1 = 原音量），下一次取声音就生效。玩家开口打断时先压低，
+    /// 识别出来不算打断再恢复（ADR 033，照 LiveKit 的“误打断后接着说”）。
+    pub fn set_gain(&self, gain: f32) {
+        self.state.lock().unwrap().gain = gain.clamp(0.0, 1.0);
+    }
+
     /// 设备这边：取最多 `out.len()` 个样本。在音频回调里调用，只短暂加锁。
     pub fn pull(&self, out: &mut [f32]) -> Pulled {
         if self.is_stopped() {
@@ -135,7 +144,7 @@ impl PcmQueue {
                 Pulled::Waiting
             };
         }
-        let volume = state.volume;
+        let volume = state.volume * state.gain;
         for (slot, sample) in out.iter_mut().zip(state.samples.drain(..n)) {
             *slot = sample * volume;
         }
@@ -463,6 +472,21 @@ pub(crate) mod fake {
 mod tests {
     use super::fake::FakeDevice;
     use super::*;
+
+    #[test]
+    fn gain_lowers_and_restores_the_next_samples() {
+        let queue = PcmQueue::new(100);
+        queue.append(&[0.8; 30], 24_000);
+        let mut out = [0.0; 10];
+        queue.set_gain(0.25);
+        assert_eq!(queue.pull(&mut out), Pulled::Audio(10));
+        assert!((out[0] - 0.2).abs() < 1e-6);
+        queue.set_gain(1.0);
+        assert_eq!(queue.pull(&mut out), Pulled::Audio(10));
+        assert!((out[0] - 0.8).abs() < 1e-6);
+        // 压低不算停：位置照常往前走
+        assert_eq!(queue.consumed(), 20);
+    }
 
     #[test]
     fn queue_tracks_appended_and_played_positions_with_volume() {

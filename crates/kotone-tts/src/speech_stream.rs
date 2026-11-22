@@ -270,6 +270,11 @@ impl SpeechStream {
         self.shared.released.notify_all();
     }
 
+    /// 临时压低 / 恢复音量（0–1）。只对流式播放的声音有效（系统语音整句念的不管）。
+    pub fn set_gain(&self, gain: f32) {
+        self.shared.queue.set_gain(gain);
+    }
+
     /// 立刻停：不再合成、丢掉没播的声音，阻塞到输出设备关掉（最多 2 秒）。
     /// 之后 [`spoken_text`](Self::spoken_text) 就是玩家实际听到的部分。
     pub fn cancel(&self) -> Result<(), String> {
