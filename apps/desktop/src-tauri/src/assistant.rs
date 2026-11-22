@@ -1228,7 +1228,7 @@ pub async fn preview_reminder(
             return Ok(());
         }
         if kind != "voice" {
-            return Err("未知提醒方式".into());
+            return Err("未知回答方式".into());
         }
         let engine = if legacy_reminder.unwrap_or(false) {
             config.legacy_tts_engine()

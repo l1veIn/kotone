@@ -57,7 +57,7 @@ impl BuiltinHost for DesktopBuiltins {
                     .iter()
                     .any(|a| a.name == name)
                 {
-                    return Err(format!("没有叫 {name} 的后台任务（agent.list 看看）"));
+                    return Err(format!("后台没有叫 {name} 的事（agent.list 看看）"));
                 }
                 Ok(json!({"stopped": stop_subagent(&self.app, &caller, name, "主会话停掉了它")}))
             }
@@ -260,7 +260,7 @@ impl Asker for DesktopAsker {
             answer: Answer::Deny,
         };
         let mut rx = rx;
-        if self.entry == Entry::Game {
+        if self.entry == Entry::Call {
             // 语音入口：先用语音问，听玩家说“好 / 不要”；没听清时之后用嘴说“可以 / 不要”也算
             // （[`super::answer_by_voice`]），窗口按钮一直可用。
             add_spoken_ask(&self.app, SpokenAsk::Main(guard.ask_id.clone()));

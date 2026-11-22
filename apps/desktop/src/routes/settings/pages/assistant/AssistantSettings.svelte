@@ -71,7 +71,7 @@
 
 {#if bindings}
   <div class="space-y-6" data-testid="assistant-settings">
-    <SettingsSection title={m.companion_ai_connection_title()} id="assistant-input-settings-title" description={m.companion_ai_section_desc()}>
+    <SettingsSection title={m.companion_ai_section_title()} id="assistant-input-settings-title" description={m.companion_ai_section_desc()}>
       <SettingsRow label={m.companion_ai_connection_title()} description={m.companion_ai_connection_desc()}>
         {#snippet control()}
           <div class="w-64 max-w-full">

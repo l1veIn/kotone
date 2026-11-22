@@ -915,7 +915,7 @@ impl Tracker {
                 }
             }
             if rematched > 0 {
-                warnings.push(json!({"code": "REMATCHED_FROM_HISTORY", "message": format!("{rematched} 行与会话历史中紧邻的已知消息重新对齐（翻看聊天记录），没有作为新消息")}));
+                warnings.push(json!({"code": "REMATCHED_FROM_HISTORY", "message": format!("{rematched} 行与跟踪记录中紧邻的已知消息重新对齐（翻看聊天记录），没有作为新消息")}));
             }
             let first_matched_line = targets.keys().min().copied();
             let mut new_visible: Vec<String> = Vec::with_capacity(lines.len());

@@ -154,7 +154,7 @@ pub fn entries(
         (Some(_), Some(false)) => (
             false,
             "not-configured",
-            Some("所选连接尚未保存 API key".to_string()),
+            Some("所选连接还没有保存 Key".to_string()),
         ),
         (Some(_), _) => (true, "ready", None),
     };

@@ -14,12 +14,12 @@ test("providers are grouped, searchable and every preset is listed", async ({ pa
   await openConnections(page);
   const providers = page.getByTestId("connection-providers");
   await expect(providers.locator('[data-testid^="connection-preset-"]')).toHaveCount(29);
-  for (const label of ["推荐", "国内厂商", "海外厂商", "聚合平台", "自定义"]) {
+  for (const label of ["推荐", "国内服务商", "海外服务商", "聚合平台", "自定义"]) {
     await expect(providers.getByText(label, { exact: true })).toBeVisible();
   }
   await expect(page.getByTestId("connections-section")).toContainText("给琴音用的主流大模型");
   await page.screenshot({ path: testInfo.outputPath("connections-list.png"), fullPage: false });
-  await providers.getByLabel("搜索提供商或模型").fill("kimi");
+  await providers.getByLabel("搜索服务商或模型").fill("kimi");
   await expect(providers.getByTestId("connection-preset-moonshot-cn")).toBeVisible();
   await expect(providers.getByTestId("connection-preset-openai")).toHaveCount(0);
 });
@@ -38,7 +38,7 @@ test("editing picks a listed model or a typed one, and the key is write-only", a
   await page.screenshot({ path: testInfo.outputPath("connections-editor.png") });
   await editor.getByTestId("connection-save").click();
   const card = page.locator('[data-testid^="connection-card-deepseek-"]');
-  await expect(card).toContainText("已保存密钥");
+  await expect(card).toContainText("已保存 Key");
   await expect(card).toContainText("deepseek-v4-pro");
 
   await card.getByRole("button", { name: "编辑", exact: true }).click();
@@ -47,7 +47,7 @@ test("editing picks a listed model or a typed one, and the key is write-only", a
   await editor.getByTestId("connection-model").fill("my-own-model");
   await editor.getByTestId("connection-save").click();
   await expect(card).toContainText("my-own-model");
-  await expect(card).toContainText("已保存密钥");
+  await expect(card).toContainText("已保存 Key");
 });
 
 test("a connection becomes 琴音's without any check, and can be tested by hand", async ({ page }, testInfo) => {

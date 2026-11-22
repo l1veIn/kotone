@@ -775,7 +775,7 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
                 (None, Some(id)) => {
                     crate::companion::quick_message_text(app, &id).ok_or_else(|| {
                         HostError::InvalidArguments(format!(
-                            "没有快捷消息 {id}（见 companion.status）"
+                            "没有快捷指令 {id}（见 companion.status）"
                         ))
                     })?
                 }

@@ -312,7 +312,7 @@ impl CaptureState {
                     if !self.overrun_reported {
                         self.overrun_reported = true;
                         let _ = error_tx.send(
-                            "语音识别处理速度跟不上录音，本次会话已中止。请关闭占用 CPU 的程序后重试"
+                            "语音识别处理速度跟不上录音，这次识别已中止。请关闭占用 CPU 的程序后重试"
                                 .into(),
                         );
                     }
@@ -342,7 +342,7 @@ impl CaptureState {
                 if !self.overrun_reported {
                     self.overrun_reported = true;
                     let _ = error_tx.send(
-                        "语音识别处理速度跟不上录音，本次会话已中止。请关闭占用 CPU 的程序后重试"
+                        "语音识别处理速度跟不上录音，这次识别已中止。请关闭占用 CPU 的程序后重试"
                             .into(),
                     );
                 }

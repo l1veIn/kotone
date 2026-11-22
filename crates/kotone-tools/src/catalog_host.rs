@@ -369,7 +369,7 @@ fn defs() -> Vec<Def> {
             egress: "none",
             input: object(&["connection"], json!({
                 "connection": {"type": "object", "description": "连接对象（id、displayName、kind、provider、baseUrl、model；见 connections.list / connections.presets）"},
-                "apiKey": {"type": "string", "maxLength": 4096, "description": "只写：存入系统凭据库"}
+                "apiKey": {"type": "string", "maxLength": 4096, "description": "只写：存进 Windows 的安全存储"}
             })),
             output: object(&["connections"], json!({"connections": {"type": "array"}})),
         },
@@ -511,7 +511,7 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_USAGE_SUMMARY,
-            description: "AI usage and cost from Kotone's local ledger (usage.jsonl): today, this month, by kind (chat, compaction, recap, TTS, ASR, OCR), by model and the last 30 days — tokens, prompt-cache hit tokens and hit rate, characters, audio time, images and estimated cost per currency (DeepSeek in CNY with peak / off-peak prices). When called from a conversation, `conversation` splits that conversation's cost into chat (model), voice (TTS + ASR), screen (OCR) and search, in total and per turn. Estimates; the provider's bill is authoritative.",
+            description: "AI usage and cost from Kotone's local ledger (usage.jsonl): today, this month, by kind (chat, compaction, recap, tts = speech synthesis, asr = speech recognition, ocr, search, other), by model and the last 30 days — tokens, prompt-cache hit tokens and hit rate, characters, audio time, images and estimated cost per currency (DeepSeek in CNY with peak / off-peak prices). When called from a conversation, `conversation` splits that conversation's cost into chat (model), voice (speech synthesis + recognition), screen (OCR) and search, in total and per turn. Estimates; the provider's bill is authoritative.",
             side_effects: &[],
             egress: "none",
             input: none(),
@@ -615,7 +615,7 @@ fn defs() -> Vec<Def> {
             egress: "connection-dependent",
             input: json!({"type": "object", "additionalProperties": false, "properties": {
                 "text": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "玩家说的话（与 quickMessageId 二选一）"},
-                "quickMessageId": id("快捷消息 ID（companion.status 的 quickMessages[].id）")
+                "quickMessageId": id("快捷指令 ID（companion.status 的 quickMessages[].id）")
             }}),
             output: object(&["status", "jobId"], json!({"status": {"const": "started"}, "jobId": {"type": "string"}})),
         },

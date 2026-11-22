@@ -190,7 +190,7 @@ pub mod imp {
     impl SttSession for OfflineSession {
         fn push_audio(&mut self, pcm: &[f32]) -> Result<(), String> {
             if self.cancelled {
-                return Err("会话已取消".into());
+                return Err("这次识别已取消".into());
             }
             self.pcm.extend_from_slice(pcm);
             Ok(())
@@ -198,7 +198,7 @@ pub mod imp {
 
         fn finalize(self: Box<Self>) -> Result<Transcript, String> {
             if self.cancelled {
-                return Err("会话已取消".into());
+                return Err("这次识别已取消".into());
             }
             if self.pcm.is_empty() {
                 return Err("没有音频数据".into());

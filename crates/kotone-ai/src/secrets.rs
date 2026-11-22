@@ -32,26 +32,26 @@ pub struct KeyringSecretStore;
 impl SecretStore for KeyringSecretStore {
     fn get(&self, connection_id: &str) -> Result<Option<String>, String> {
         let entry = Entry::new(&service_name(), &credential_user(connection_id))
-            .map_err(|error| format!("打开凭据项失败：{error}"))?;
+            .map_err(|error| format!("打开 Key 的存储失败：{error}"))?;
         match entry.get_password() {
             Ok(secret) if !secret.is_empty() => Ok(Some(secret)),
             Ok(_) => Ok(None),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(error) => Err(format!("读取凭据失败：{error}")),
+            Err(error) => Err(format!("读取 Key 失败：{error}")),
         }
     }
 
     fn set(&self, connection_id: &str, secret: &str) -> Result<(), String> {
         let entry = Entry::new(&service_name(), &credential_user(connection_id))
-            .map_err(|error| format!("打开凭据项失败：{error}"))?;
+            .map_err(|error| format!("打开 Key 的存储失败：{error}"))?;
         entry
             .set_password(secret)
-            .map_err(|error| format!("写入凭据失败：{error}"))?;
+            .map_err(|error| format!("保存 Key 失败：{error}"))?;
         match self.get(connection_id)? {
             Some(stored) if stored == secret => Ok(()),
-            Some(_) => Err("凭据已写入，但回读内容不一致".into()),
+            Some(_) => Err("Key 已保存，但读回来的内容不一致".into()),
             None => Err(
-                "凭据未能写入系统凭据库（回读为空）。请确认应用有权限访问 Windows 凭据管理器。"
+                "Key 没能存进 Windows 的安全存储（读回来是空的）。请确认 Kotone 有权限访问 Windows 凭据管理器。"
                     .into(),
             ),
         }
@@ -59,11 +59,11 @@ impl SecretStore for KeyringSecretStore {
 
     fn delete(&self, connection_id: &str) -> Result<(), String> {
         let entry = Entry::new(&service_name(), &credential_user(connection_id))
-            .map_err(|error| format!("打开凭据项失败：{error}"))?;
+            .map_err(|error| format!("打开 Key 的存储失败：{error}"))?;
         match entry.delete_credential() {
             Ok(()) => Ok(()),
             Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => Err(format!("删除凭据失败：{error}")),
+            Err(error) => Err(format!("删除 Key 失败：{error}")),
         }
     }
 }

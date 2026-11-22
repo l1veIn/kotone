@@ -137,9 +137,9 @@ pub fn scan(text: &str) -> Result<(), String> {
         ("系统提示", "涉及系统提示"),
         ("you are now", "要求改变身份"),
         ("从现在起你是", "要求改变身份"),
-        ("api key", "涉及密钥"),
-        ("api_key", "涉及密钥"),
-        ("密钥", "涉及密钥"),
+        ("api key", "涉及 Key"),
+        ("api_key", "涉及 Key"),
+        ("密钥", "涉及 Key"),
         ("password", "涉及密码"),
         ("密码", "涉及密码"),
         ("<<<kotone_data", "伪造数据标记"),
@@ -499,7 +499,7 @@ impl Workspace {
     fn skill_dir(&self, name: &str) -> Result<PathBuf, String> {
         if !valid_skill_name(name) {
             return Err(format!(
-                "Skill 名字「{name}」不合法：只能用小写字母、数字和连字符，最多 64 个字"
+                "技能名字「{name}」不合法：只能用小写字母、数字和连字符，最多 64 个字"
             ));
         }
         Ok(self.dir.join(SKILLS).join(name))
@@ -524,7 +524,7 @@ impl Workspace {
         let dir = self.skill_dir(name)?;
         let rel = path.unwrap_or(SKILL_FILE);
         let file = safe_join(&dir, rel)?;
-        std::fs::read_to_string(&file).map_err(|_| format!("Skill {name} 里没有 {rel}"))
+        std::fs::read_to_string(&file).map_err(|_| format!("技能 {name} 里没有 {rel}"))
     }
 
     /// 改 Skill 前留一份旧版本（`skills/.versions/<name>/<毫秒>/`，OpenClaw：改动可撤销）。
@@ -569,7 +569,7 @@ impl Workspace {
         scan(content)?;
         let dir = self.skill_dir(name)?;
         if !dir.join(SKILL_FILE).exists() {
-            return Err(format!("没有 Skill {name}：先创建它的 SKILL.md"));
+            return Err(format!("没有技能 {name}：先创建它的 SKILL.md"));
         }
         self.backup(name)?;
         write_atomic(&safe_join(&dir, path)?, content)
@@ -577,7 +577,7 @@ impl Workspace {
 
     pub fn skill_remove_file(&self, name: &str, path: &str) -> Result<(), String> {
         if path == SKILL_FILE {
-            return Err("不能删 SKILL.md（要删整个 Skill 用 delete）".into());
+            return Err("不能删 SKILL.md（要删整个技能用 delete）".into());
         }
         let file = safe_join(&self.skill_dir(name)?, path)?;
         self.backup(name)?;
@@ -587,7 +587,7 @@ impl Workspace {
     pub fn skill_delete(&self, name: &str) -> Result<(), String> {
         let dir = self.skill_dir(name)?;
         if !dir.exists() {
-            return Err(format!("没有 Skill {name}"));
+            return Err(format!("没有技能 {name}"));
         }
         self.backup(name)?;
         std::fs::remove_dir_all(&dir).map_err(|e| format!("删除失败：{e}"))
@@ -627,7 +627,7 @@ fn check_skill(name: &str, content: &str) -> Result<(), String> {
     let info = parse_skill(content).ok_or("SKILL.md 开头要有 --- 包起来的 name、description")?;
     if info.name != name {
         return Err(format!(
-            "SKILL.md 里的 name（{}）要和 Skill 名字（{name}）一致",
+            "SKILL.md 里的 name（{}）要和技能名字（{name}）一致",
             info.name
         ));
     }

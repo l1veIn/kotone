@@ -107,7 +107,7 @@
 </script>
 
 <div class="space-y-6" data-testid="agent-settings">
-  <SettingsSection title="Agent" description={m.companion_agent_section_desc()}>
+  <SettingsSection title={m.companion_agent_section_title()} description={m.companion_agent_section_desc()}>
     <SettingsRow label={m.companion_agent_in_game_label({ name: $companionName })} description={m.companion_agent_in_game_desc()}>
       {#snippet control()}
         <Switch data-testid="agent-in-game" bind:checked={() => inGame, (checked) => void patchSettings({ agent: { inGame: checked } }, checked ? m.companion_agent_in_game_on({ name: $companionName }) : m.companion_agent_in_game_off())} aria-label={m.companion_agent_in_game_label({ name: $companionName })} />

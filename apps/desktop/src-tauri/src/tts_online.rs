@@ -122,8 +122,8 @@ pub fn status(app: &AppHandle, kind: OnlineKind) -> OnlineStatus {
         Ok(config) => {
             let missing = if config.api_key.trim().is_empty() {
                 Some(match kind {
-                    OnlineKind::OpenAi => "所选连接尚未保存 API key",
-                    OnlineKind::Deepseek => "DeepSeek 连接尚未保存 API key",
+                    OnlineKind::OpenAi => "所选连接还没有保存 Key",
+                    OnlineKind::Deepseek => "DeepSeek 连接还没有保存 Key",
                     OnlineKind::Volcano => {
                         "缺少 Access Token：请选择连接，或先在语音识别里填写火山配置"
                     }

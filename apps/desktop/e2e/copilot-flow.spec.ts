@@ -218,7 +218,7 @@ test("7 · online ↔ local: the start UI appears and disappears, the start shor
   await page.getByTestId("settings-nav-general").click();
   const card = page.getByTestId("asr-card");
   await expect(card).toHaveAttribute("data-asr-state", "online-ready");
-  await expect(page.getByTestId("asr-switch-local")).toContainText("换成本地识别：免费、离线、边说边出字");
+  await expect(page.getByTestId("asr-switch-local")).toContainText("换成本地识别：免费、不联网、边说边出字");
   await page.screenshot({ path: testInfo.outputPath("w8-online.png") });
   // 下载并切换：切到本地后立即启动一次，“打开时自动启动”默认勾上（D9）
   await page.getByTestId("asr-switch-local-button").click();
@@ -254,7 +254,10 @@ test("8 · every location in settings_guide (and the old wording) opens the righ
   await expect(page.getByTestId("assistant-chat")).toBeVisible();
   const locations = [...new Set(guidePages.flatMap((where) => where.split(/，或/).map((part) => part.trim())))];
   const old = ["琴音 → 设置 → 呼叫", "琴音 → 设置 → AI 连接", "琴音 → 设置 → 游戏语音", "琴音 → 设置 → 权限", "琴音 → 交流",
-    "设置 → 其他热键", "设置 → 音效", "文字处理", "历史记录", "琴音 → 设置"];
+    "设置 → 其他热键", "设置 → 音效", "文字处理", "历史记录", "琴音 → 设置",
+    // 术语表 v2 改名的小节：新名字和旧名字（以前的对话里引用着）都能跳过去
+    "设置 → 她怎么回答 → 她用的模型", "设置 → 她怎么回答 → 气泡", "设置 → 她怎么回答 → 回答方式",
+    "设置 → 她怎么回答 → AI 连接", "设置 → 她怎么回答 → 对话气泡"];
   for (const where of [...locations, ...old]) {
     const target = await page.evaluate(async (where) => {
       const nav = await import("/src/lib/stores/navigation.ts");
@@ -287,13 +290,14 @@ function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
     const path = join(dir, name);
     if (statSync(path).isDirectory()) return sourceFiles(path);
-    return /\.(svelte|ts|rs)$/.test(name) ? [path] : [];
+    return /\.(svelte|ts|rs|json)$/.test(name) ? [path] : [];
   });
 }
 
 test("9 · banned wording never appears in the UI sources", () => {
   const banned = [/右上角「启动」/, /陪玩热键/, /启动 Kotone 后生效/, /启动引擎|停止引擎/, /停止所有自动化/, /点「启动」开始说话/, /需手动点「启动」/, /标题栏「重启生效」/];
-  const roots = [here("../src"), here("../src-tauri/src")];
+  // 界面文字搬进了 messages/zh-CN 的目录（Paraglide）：一条消息一行，按行查就是查每条的值
+  const roots = [here("../src"), here("../src-tauri/src"), here("../messages/zh-CN")];
   const hits: string[] = [];
   for (const file of roots.flatMap(sourceFiles)) {
     const lines = readFileSync(file, "utf8").split(/\r?\n/);

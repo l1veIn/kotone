@@ -241,9 +241,9 @@ pub fn map_error(error: &ProviderError) -> AiError {
             .unwrap_or_else(|| "AI 接口返回错误".into())
     };
     AiError::Failed(match error {
-        ProviderError::Http(_) => "AI 连接失败，请检查接口地址与网络".into(),
+        ProviderError::Http(_) => "连不上 AI 接口，请检查接口地址与网络".into(),
         ProviderError::ProviderResponse(r) => status(r),
-        ProviderError::InvalidAuthentication(r) => format!("{}（密钥无效或无权限）", status(r)),
+        ProviderError::InvalidAuthentication(r) => format!("{}（Key 无效或无权限）", status(r)),
         ProviderError::Stalled(_) => "AI 响应超时".into(),
         ProviderError::Truncated => "AI 响应中断".into(),
         ProviderError::Json(_) | ProviderError::Response(_) => "AI 响应格式不正确".into(),
@@ -329,7 +329,7 @@ impl ModelClient for OpenAiModel {
             .trim()
             .is_empty()
         {
-            return Err(AiError::Failed("AI 连接尚未保存密钥".into()));
+            return Err(AiError::Failed("API 连接还没有保存 Key".into()));
         }
         let (rig, names) = self.to_rig(request)?;
         let work = async {

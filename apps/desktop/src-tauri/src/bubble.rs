@@ -583,7 +583,7 @@ pub fn hint(app: &AppHandle, title: &str, detail: &str) {
 pub fn preview(app: &AppHandle) {
     if let Some(rev) = update(app, |m| {
         Some(
-            m.speaking("我在这儿～游戏里叫我的时候，我会在这个角落说话。")
+            m.speaking("我在这儿～呼叫我的时候，我会在这个角落说话。")
                 .clone(),
         )
     }) {

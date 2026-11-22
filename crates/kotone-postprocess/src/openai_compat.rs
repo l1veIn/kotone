@@ -75,7 +75,7 @@ impl ProcessorFactory for OpenAiCompatFactory {
             .trim()
             .is_empty()
         {
-            return Err(format!("连接「{}」还没有 API key", connection.display_name));
+            return Err(format!("连接「{}」还没有保存 Key", connection.display_name));
         }
         let system_prompt = config
             .get("systemPrompt")
@@ -265,7 +265,7 @@ mod tests {
         };
         assert!(factory.create(&json!({})).is_err());
         match factory.create(&json!({"connectionId": "ds"})) {
-            Err(error) => assert!(error.contains("API key")),
+            Err(error) => assert!(error.contains("Key")),
             Ok(_) => panic!("missing key should fail"),
         }
     }

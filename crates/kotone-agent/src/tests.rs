@@ -640,7 +640,7 @@ fn prompt_is_one_text_for_both_entries_and_the_turn_context_carries_the_rest() {
     assert!(prompt.contains("交给我，好了告诉你"));
     // 这一轮的情况在附注里。
     let game = turn_context(&TurnContext {
-        entry: Entry::Game,
+        entry: Entry::Call,
         game: "英雄联盟",
         game_id: "lol",
         voice_chat: true,
@@ -649,7 +649,7 @@ fn prompt_is_one_text_for_both_entries_and_the_turn_context_carries_the_rest() {
         now: "2026-11-18 周三 14:05",
         calling: None,
     });
-    assert!(game.starts_with("入口：语音"));
+    assert!(game.starts_with("入口：通话"));
     assert!(game.contains("英雄联盟") && game.contains("聊天在左下角") && game.contains("14:05"));
     assert!(game.contains("游戏配置 id：lol"), "记忆工具要用 id");
     assert!(game.contains("游戏语音：开着"), "跟队友说话用嘴说");
@@ -761,7 +761,7 @@ fn chat_turn_context_says_how_to_call_her_and_whether_speech_recognition_is_read
     assert!(unset.contains("语音唤醒没开") && unset.contains("本地识别，未启动"));
     // 语音入口不写这些（玩家已经在叫她了）。
     let game = base(
-        Entry::Game,
+        Entry::Call,
         Some(Calling {
             hotkey: "~",
             wake_phrase: None,

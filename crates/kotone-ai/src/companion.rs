@@ -289,7 +289,7 @@ pub async fn plan(
         .trim()
         .is_empty()
     {
-        return Err("琴音的 AI 连接尚未保存密钥".into());
+        return Err("她用的 API 连接还没有保存 Key".into());
     }
     let response = request(connection, input, cancel).await?;
     if cancel.is_cancelled() {
@@ -443,7 +443,7 @@ pub fn parse_plan(
                     region = Some([a.x, a.y, a.width, a.height]);
                 }
             }
-            _ => return Err("AI 返回了未授权的工具".into()),
+            _ => return Err("AI 返回了不允许用的工具".into()),
         }
     }
     let chosen = usize::from(!reminders.is_empty())

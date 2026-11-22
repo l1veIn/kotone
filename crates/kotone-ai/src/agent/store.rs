@@ -353,7 +353,7 @@ impl ConversationStore {
             return match std::fs::remove_file(&path) {
                 Ok(()) => Ok(()),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(e) => Err(format!("删除后台任务记录失败：{e}")),
+                Err(e) => Err(format!("删除后台记录失败：{e}")),
             };
         }
         let bytes = serde_json::to_vec(subagents).map_err(|e| e.to_string())?;

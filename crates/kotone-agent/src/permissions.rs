@@ -84,8 +84,8 @@ const ALLOWED_EFFECTS: &[&str] = &[
 /// 默认询问的副作用及原因。
 const ASK_EFFECTS: &[(&str, &str)] = &[
     ("writes-settings", "会修改设置"),
-    ("writes-credentials", "会保存密钥"),
-    ("deletes-credentials", "会删除密钥"),
+    ("writes-credentials", "会保存 Key"),
+    ("deletes-credentials", "会删除 Key"),
     ("writes-profiles", "会修改游戏配置"),
     ("deletes-files", "会删除文件"),
     ("deletes-history", "会删除历史记录"),
@@ -106,11 +106,11 @@ const ASK_EFFECTS: &[(&str, &str)] = &[
     ("sends-game-input", "会在游戏里操作鼠标键盘"),
     (
         "installs-driver",
-        "会安装虚拟声卡 VB-CABLE（Windows 会请求管理员授权）",
+        "会安装虚拟声卡 VB-CABLE（Windows 会请求管理员权限）",
     ),
     ("writes-system-audio", "会修改 Windows 的默认麦克风"),
     ("speaks-to-teammates", "会用麦克风对游戏里的队友说话"),
-    ("writes-skills", "会修改 Skill"),
+    ("writes-skills", "会修改技能"),
     ("writes-soul", "会修改琴音的人格（SOUL.md）"),
 ];
 

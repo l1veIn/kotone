@@ -196,14 +196,14 @@ async fn drive(
             let owner = turn_owner(&conversation.id, &user);
             let voice_turn = follows_up(&user);
             // 游戏内入口：回答边生成边念（ADR 029 §六）；用不了时为 None，答完整段念。
-            let voice = if entry == Entry::Game {
+            let voice = if entry == Entry::Call {
                 crate::voice_reply::VoiceTurn::new(&app, &conversation.id, owner.clone())
             } else {
                 None
             };
             // 后台的结果交回时不接“我看看”（玩家没在等）。
             let filler =
-                (entry == Entry::Game && !report).then(|| progress_filler(&app, &cancel, owner));
+                (entry == Entry::Call && !report).then(|| progress_filler(&app, &cancel, owner));
             let stop = turn(
                 &app,
                 &mut conversation,
@@ -224,8 +224,8 @@ async fn drive(
             // 聊天窗口发起的一轮里，玩家在游戏里插了话（热键、唤醒）：回答也要播出来，
             // 否则人在游戏里听不到。
             let delivered = inbox.take_delivered();
-            let game_steered = delivered.iter().any(|m| entry_of(m) == Entry::Game);
-            if entry == Entry::Game || game_steered {
+            let game_steered = delivered.iter().any(|m| entry_of(m) == Entry::Call);
+            if entry == Entry::Call || game_steered {
                 let follow = (voice_turn || delivered.iter().any(follows_up))
                     && stop == StopReason::Completed;
                 finish_voice_turn(
@@ -389,7 +389,7 @@ pub(super) async fn turn(
         Err(_) => Arc::new(Session::default()),
     };
     let mut user = user;
-    if entry == Entry::Game && child.is_none() {
+    if entry == Entry::Call && child.is_none() {
         attach_speech_screen(app, &mut user).await;
     }
     let provider = connection.provider.clone();
@@ -405,7 +405,7 @@ pub(super) async fn turn(
         settings.agent.permissions.clone(),
         session,
         DesktopBuiltins {
-            voice: entry == Entry::Game && child.is_none(),
+            voice: entry == Entry::Call && child.is_none(),
             speech: voice.cloned(),
             app: app.clone(),
             session: format!("agent:{}", conversation.id),
@@ -419,7 +419,7 @@ pub(super) async fn turn(
             child: child.cloned(),
         },
     )
-    .with_scope(if entry == Entry::Game && child.is_none() {
+    .with_scope(if entry == Entry::Call && child.is_none() {
         Scope::Game
     } else {
         Scope::Full
@@ -500,7 +500,7 @@ pub(super) async fn turn(
     let limits = match child {
         Some(_) => subagent_limits(settings.agent.compact_at_tokens),
         // 语音入口：只说话（或只交给后台）的一步之后就结束，不再调用模型（ADR 029 第八节）。
-        None if entry == Entry::Game => AgentLimits {
+        None if entry == Entry::Call => AgentLimits {
             compact_at_tokens: settings.agent.compact_at_tokens,
             stop_after: VOICE_STOP_TOOLS.iter().map(|t| t.to_string()).collect(),
             ..game_limits()
@@ -514,7 +514,7 @@ pub(super) async fn turn(
     let shared = Mutex::new(conversation.clone());
     let tool_names: Mutex<HashMap<String, String>> = Mutex::default();
     // 语音入口的主会话：计时、工具前的一句马上念（ADR 029 §一、§七）。
-    let voice_main = entry == Entry::Game && child.is_none();
+    let voice_main = entry == Entry::Call && child.is_none();
     // 后台的费用记到派它出去的那段对话、那一轮（玩家在聊天里看得到这件事花了多少）。
     let record_usage = |kind, usage: &kotone_ai::agent::TokenUsage| match child {
         Some(spec) => {
@@ -676,7 +676,7 @@ pub(super) async fn turn(
                     record_usage(kotone_core::usage::UsageKind::Chat, usage);
                 }
             }
-            AgentEvent::StepStarted { .. } if entry == Entry::Game => {
+            AgentEvent::StepStarted { .. } if entry == Entry::Call => {
                 crate::bubble::thinking(app, "在想…");
             }
             AgentEvent::ToolCall { call } => {
@@ -688,7 +688,7 @@ pub(super) async fn turn(
                     kotone_agent::catalog::TOOL_SPEAK,
                     kotone_agent::catalog::TOOL_ASK,
                 ];
-                if entry == Entry::Game && !narrated.contains(&call.name.as_str()) {
+                if entry == Entry::Call && !narrated.contains(&call.name.as_str()) {
                     crate::bubble::thinking(app, crate::bubble::tool_label(&call.name));
                 }
             }

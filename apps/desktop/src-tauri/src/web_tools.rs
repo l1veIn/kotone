@@ -32,7 +32,7 @@ fn backend(app: &AppHandle) -> Result<ResolvedConnection, String> {
         .trim()
         .is_empty()
     {
-        return Err("联网搜索用的 DeepSeek 连接还没有保存 API key".into());
+        return Err("联网搜索用的 DeepSeek 连接还没有保存 Key".into());
     }
     Ok(connection)
 }

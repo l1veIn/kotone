@@ -44,7 +44,7 @@ pub(crate) fn validate_content(text: &str, delivery: &[DeliveryKind]) -> Result<
         || delivery.len() > 2
         || (delivery.len() == 2 && delivery[0] == delivery[1])
     {
-        return Err("提醒方式需为语音、弹幕或两者，不能重复".into());
+        return Err("回答方式需为语音、弹幕或两者，不能重复".into());
     }
     Ok(())
 }

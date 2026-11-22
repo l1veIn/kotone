@@ -267,7 +267,7 @@ pub mod imp {
     impl SttSession for OnlineTransducerSession {
         fn push_audio(&mut self, pcm: &[f32]) -> Result<(), String> {
             if self.cancelled {
-                return Err("会话已取消".into());
+                return Err("这次识别已取消".into());
             }
             let stream = self.stream.as_ref().expect("stream taken");
             stream.accept_waveform(16000, pcm);
@@ -278,7 +278,7 @@ pub mod imp {
 
         fn finalize(mut self: Box<Self>) -> Result<Transcript, String> {
             if self.cancelled {
-                return Err("会话已取消".into());
+                return Err("这次识别已取消".into());
             }
             let started = Instant::now();
             let stream = self.stream.take().expect("stream taken");

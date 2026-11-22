@@ -162,7 +162,7 @@ pub(super) async fn subagent_ask(
         child_id: child_id.to_string(),
     };
     let mut rx = rx;
-    if last_entry(app, &spec.parent) == Some(Entry::Game) {
+    if last_entry(app, &spec.parent) == Some(Entry::Call) {
         // 问完那几秒没听清，之后用嘴说“可以 / 不要”也算（[`super::answer_by_voice`]）。
         add_spoken_ask(app, SpokenAsk::Child(child_id.to_string()));
         let voice = async {
@@ -280,7 +280,7 @@ mod tests {
         }
         assert!(is_task("agent-task:3") && !is_task("chat"));
         assert_eq!(entry_of_source("chat"), Entry::Chat);
-        assert_eq!(entry_of_source("voice"), Entry::Game);
+        assert_eq!(entry_of_source("voice"), Entry::Call);
         // 交回主会话的消息：说明在正文，总结作为数据附件（可能转述了网页、屏幕上别人写的话）。
         let message = report_message(&[Subagent {
             name: "lol-patch".into(),

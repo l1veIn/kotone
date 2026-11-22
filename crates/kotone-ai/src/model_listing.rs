@@ -76,7 +76,7 @@ pub async fn list_models(
         .as_deref()
         .map(str::trim)
         .filter(|k| !k.is_empty())
-        .ok_or("这条连接还没有保存 API key")?;
+        .ok_or("这条连接还没有保存 Key")?;
     let mut builder = client().get(listing_url(connection));
     builder = if is_anthropic(connection) {
         builder
@@ -97,7 +97,7 @@ pub async fn list_models(
         match status {
             200..=299 => {}
             404 | 405 | 501 => return Ok(Listing::Unsupported),
-            401 | 403 => return Err(format!("API key 无效或没有权限（HTTP {status}）")),
+            401 | 403 => return Err(format!("Key 无效或没有权限（HTTP {status}）")),
             429 => return Err("服务商限流或余额不足（HTTP 429），稍后再试或检查账户".into()),
             _ => return Err(format!("服务商返回 HTTP {status}，请检查连接与服务商状态")),
         }
@@ -212,7 +212,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(bad.contains("API key") && !bad.contains("secret"), "{bad}");
+        assert!(bad.contains("Key 无效") && !bad.contains("secret"), "{bad}");
         let none = list_models(
             &connection(format!("{}/none", server.uri()), "x"),
             &CancellationToken::default(),

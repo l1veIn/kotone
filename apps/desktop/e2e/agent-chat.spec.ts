@@ -273,7 +273,7 @@ test("stop, steering while answering, notices and automation results", async ({ 
     await t.event("c-old", { kind: "step", step: 1 });
     await t.event("c-old", { kind: "chunk", text: "我看看" });
   }, T);
-  await expect(page.getByTestId("agent-user-source").last()).toHaveText("游戏内 · 语音");
+  await expect(page.getByTestId("agent-user-source").last()).toHaveText("通话");
   // 回答中仍可发送：算插话
   const composer = page.getByTestId("assistant-request");
   await composer.fill("顺便看看队友");
@@ -404,7 +404,7 @@ test("composer bar: usage inside, permission and call are icons next to send; th
   await expect(page.getByTestId("composer-model")).toHaveCount(0);
   // 呼叫：发送键旁边的一个图标，悬停看快捷键
   const call = composer.getByTestId("call-kotone");
-  await expect(call).toHaveAttribute("title", /呼叫琴音（快捷键 Ctrl \+ ~）/);
+  await expect(call).toHaveAttribute("title", /呼叫琴音（呼叫键 Ctrl \+ ~）/);
   await expect(call.locator("svg")).toHaveCount(1);
   const callBox = (await call.boundingBox())!;
   const sendBox = (await composer.getByTestId("agent-send").boundingBox())!;
@@ -419,9 +419,9 @@ test("composer bar: usage inside, permission and call are icons next to send; th
   await expect(permission).toHaveAttribute("title", "权限：完全权限");
   expect(await agentCalls(page, "agent_set_permissions")).toEqual([{ permissions: { mode: "allow-all", rules: {} } }]);
 
-  // 模型在「设置 → 她怎么回答 → AI 连接」：清单来自服务商的模型列表（照 DeepSeek Harness），不是写死的预置名
+  // 模型在「设置 → 她怎么回答 → 她用的模型」：清单来自服务商的模型列表（照 DeepSeek Harness），不是写死的预置名
   await openSettingsTab(page, "reply");
-  const model = page.getByLabel("陪玩模型");
+  const model = page.getByLabel("模型", { exact: true });
   await expect(model).toContainText("test");
   await model.click();
   await expect(page.getByRole("option", { name: "test-listed" })).toBeVisible();
@@ -514,7 +514,7 @@ test("compaction divider, match recap card and switch; usage shows hit rate and 
   // DeepSeek 内容审核（默认开）可以关；思考强度默认跟服务商
   await page.getByTestId("agent-safety-check").click();
   await expect.poll(async () => page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings().then((s) => s.agent?.safetyCheck))).toBe(false);
-  await expect(page.getByRole("combobox", { name: "游戏里的思考强度" })).toContainText("默认");
+  await expect(page.getByRole("combobox", { name: "通话里的思考强度" })).toContainText("默认");
   await expect(page.getByRole("combobox", { name: "聊天窗口里的思考强度" })).toContainText("默认");
   await page.getByTestId("advanced-nav-usage").click();
   const usage = page.getByTestId("usage-settings");
@@ -609,7 +609,7 @@ test("online recognition: the call button listens right away and says how else t
 
 test("after the AI connection changes, the chat re-reads her state instead of keeping a stale 还没准备好", async ({ page }) => {
   // 2026-11-20 真机：填完 Key 进聊天，聊天页还停在打开软件时读到的“还没有选 AI 连接”，发不出去。
-  await openChat(page, { notReady: "还没有选 AI 连接：请在「设置 → 她怎么回答 → AI 连接」里选一条" });
+  await openChat(page, { notReady: "还没有选 API 连接：请在「设置 → 她怎么回答 → 她用的模型」里选一条" });
   await expect(page.getByTestId("agent-not-ready")).toBeVisible();
   await page.evaluate(async () => {
     window.agentTest.state.notReadyReason = null;

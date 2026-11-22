@@ -149,7 +149,7 @@ fn start_listener(
         "listen: {owner} listens to {app_name} ({trees} processes)"
     ));
     crate::bubble::listening_to(app, Some(&app_name));
-    Ok(json!({"listening": true, "app": app_name, "note": "每听到一句会作为一条消息进这个会话"}))
+    Ok(json!({"listening": true, "app": app_name, "note": "每听到一句会作为一条消息进这段对话"}))
 }
 
 #[cfg(not(all(feature = "engine-sherpa", feature = "vad-silero")))]

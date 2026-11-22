@@ -65,7 +65,7 @@ pub fn upsert_connection(
             |next| {
                 let existed = next.connections.iter().any(|item| item.id == id);
                 if !existed && key.is_none() {
-                    return Err("新建连接必须填写 API key".into());
+                    return Err("新建连接必须填写 Key".into());
                 }
                 if key.is_some() {
                     *previous_key.borrow_mut() = secrets.get(&id)?;

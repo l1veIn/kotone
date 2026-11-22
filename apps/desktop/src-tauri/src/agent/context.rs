@@ -31,7 +31,7 @@ pub(super) fn chat_limits() -> AgentLimits {
 pub(super) fn entry_of(message: &Message) -> Entry {
     match message {
         Message::User { source, .. } => entry_of_source(source),
-        _ => Entry::Game,
+        _ => Entry::Call,
     }
 }
 
@@ -39,7 +39,7 @@ pub(super) fn entry_of_source(source: &str) -> Entry {
     if source == "chat" || source == "assistant-text" {
         Entry::Chat
     } else {
-        Entry::Game
+        Entry::Call
     }
 }
 
@@ -88,8 +88,8 @@ pub(super) fn offered_automations(
 /// 才按他选的；子会话和聊天窗口照旧（空 = 服务商默认）。
 pub(super) fn effort_for(entry: Entry, child: bool, game: &str, chat: &str) -> Option<String> {
     match entry {
-        Entry::Game if !child && game.trim().is_empty() => Some("none".into()),
-        Entry::Game => valid_effort(game),
+        Entry::Call if !child && game.trim().is_empty() => Some("none".into()),
+        Entry::Call => valid_effort(game),
         Entry::Chat => valid_effort(chat),
     }
 }
@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(entry_of(&user("chat")), Entry::Chat);
         assert_eq!(entry_of(&user("assistant-text")), Entry::Chat);
         for source in ["voice", "quick-command", "tool", "automation", ""] {
-            assert_eq!(entry_of(&user(source)), Entry::Game, "{source}");
+            assert_eq!(entry_of(&user(source)), Entry::Call, "{source}");
         }
     }
 
@@ -259,24 +259,24 @@ mod tests {
     fn voice_turns_do_not_think_unless_the_player_chose_to() {
         // 语音入口的主会话：空 = 不思考（ADR 029）
         assert_eq!(
-            effort_for(Entry::Game, false, "", "").as_deref(),
+            effort_for(Entry::Call, false, "", "").as_deref(),
             Some("none")
         );
         assert_eq!(
-            effort_for(Entry::Game, false, " ", "high").as_deref(),
+            effort_for(Entry::Call, false, " ", "high").as_deref(),
             Some("none")
         );
         // 玩家明确选了就照办
         assert_eq!(
-            effort_for(Entry::Game, false, "high", "").as_deref(),
+            effort_for(Entry::Call, false, "high", "").as_deref(),
             Some("high")
         );
         assert_eq!(
-            effort_for(Entry::Game, false, "none", "").as_deref(),
+            effort_for(Entry::Call, false, "none", "").as_deref(),
             Some("none")
         );
         // 子会话、聊天窗口：空 = 服务商默认（不变）
-        assert_eq!(effort_for(Entry::Game, true, "", ""), None);
+        assert_eq!(effort_for(Entry::Call, true, "", ""), None);
         assert_eq!(effort_for(Entry::Chat, false, "", ""), None);
         assert_eq!(
             effort_for(Entry::Chat, false, "", "low").as_deref(),

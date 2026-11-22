@@ -14,7 +14,7 @@ test("named hotkey rows render with defaults and can be configured/cleared", asy
   await expect(rows.getByText("文字处理开关热键", { exact: true })).toBeVisible();
   await expect(rows.getByText("切换文字处理流程热键", { exact: true })).toBeVisible();
   // 本地识别（默认）：启动快捷键在识别卡片里，没启动时也有效
-  await expect(page.getByTestId("asr-toggle-hotkey")).toContainText("启动快捷键");
+  await expect(page.getByTestId("asr-toggle-hotkey")).toContainText("启动热键");
 
   // 默认：重发、开关、切流程与启动快捷键均为「未设置」，频道切换沿用默认 Shift+CapsLock
   const toggleInput = page.getByTestId("hotkey-input-post-process-toggle");

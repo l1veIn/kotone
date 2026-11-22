@@ -77,7 +77,7 @@ async fn post(
         .trim()
         .to_string();
     if key.is_empty() {
-        return Err("DeepSeek 连接还没有保存密钥".into());
+        return Err("DeepSeek 连接还没有保存 Key".into());
     }
     let mut last = String::new();
     for attempt in 0..2 {
@@ -111,7 +111,7 @@ async fn post(
                 last = format!("DeepSeek 联网服务暂时不可用（HTTP {status}）");
                 continue;
             }
-            401 => return Err("DeepSeek 密钥无效（HTTP 401）".into()),
+            401 => return Err("DeepSeek Key 无效（HTTP 401）".into()),
             402 => return Err("DeepSeek 账户余额不足，请先充值".into()),
             403 => return Err("这个网址被 DeepSeek 的安全策略拒绝了".into()),
             404 => return Err("这个网页读不到内容（打不开、被网站拦了，或不是文字网页）".into()),
@@ -278,7 +278,7 @@ pub fn entries(settings: &Settings, deepseek_has_key: Option<bool>) -> Vec<Catal
         (Some(_), Some(false)) => (
             false,
             "not-configured",
-            Some("所选连接尚未保存 API key".to_string()),
+            Some("所选连接还没有保存 Key".to_string()),
         ),
         (Some(_), _) => (true, "ready", None),
     };

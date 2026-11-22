@@ -594,7 +594,7 @@ async fn start_inner(app: &AppHandle) -> Result<(), String> {
     if !engine_ready() {
         if kotone_stt::model::is_remote_model(&model_id) {
             return Err(format!(
-                "在线模型「{model_id}」未就绪：请在「设置 → 模型 → 语音识别」填好 API 凭据（或 DeepSeek Key）后重试"
+                "在线模型「{model_id}」未就绪：请在「设置 → 模型 → 语音识别」填好它要的 Key（DeepSeek 用 DeepSeek 连接的 Key）后重试"
             ));
         }
         let missing = kotone_stt::model::multi_model_missing(&model_id);

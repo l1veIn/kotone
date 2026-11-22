@@ -102,7 +102,7 @@ pub fn connection_ready(
 ) -> Result<kotone_core::connection::ResolvedConnection, String> {
     let id = settings.companion_connection_id().trim();
     if id.is_empty() {
-        return Err("还没有选 AI 连接：请在「设置 → 她怎么回答 → AI 连接」里选一条（还没有连接就先在「设置 → API 连接」里添加）".into());
+        return Err("还没有选 API 连接：请在「设置 → 她怎么回答 → 她用的模型」里选一条（还没有连接就先在「设置 → API 连接」里添加）".into());
     }
     let connection = app.state::<SharedState>().connections.resolve(id)?;
     if connection
@@ -112,7 +112,7 @@ pub fn connection_ready(
         .trim()
         .is_empty()
     {
-        return Err("AI 连接还没有保存 API key，请在「设置 → API 连接」里填写".into());
+        return Err("这条 API 连接还没有保存 Key，请在「设置 → API 连接」里填写".into());
     }
     Ok(connection)
 }
@@ -304,7 +304,7 @@ pub async fn read_frame(
         .any(|w| w.code == kotone_platform_windows::window_tools::WARNING_UNIFORM_PIXELS)
     {
         return Err(
-            "截到的是纯色画面，游戏可能是独占全屏：请在游戏设置里改成无边框窗口后再试".into(),
+            "截到的是纯色画面，游戏可能是独占全屏：请在游戏里把显示模式改成无边框窗口后再试".into(),
         );
     }
     // 跨屏只截了一部分、缩小过：告诉模型（识别结果可能不全、小字可能读不准）。
@@ -839,7 +839,7 @@ pub fn quick_message_text(app: &AppHandle, id: &str) -> Option<String> {
 pub async fn self_check(app: &AppHandle) -> Result<CompanionCheck, String> {
     let id = settings(app).companion_connection_id().trim().to_string();
     if id.is_empty() {
-        return Err("还没有选 AI 连接：请在「设置 → 她怎么回答 → AI 连接」里选一条".into());
+        return Err("还没有选 API 连接：请在「设置 → 她怎么回答 → 她用的模型」里选一条".into());
     }
     check_connection(app, &id).await
 }
@@ -859,7 +859,7 @@ pub async fn check_connection(app: &AppHandle, id: &str) -> Result<CompanionChec
         .trim()
         .is_empty()
     {
-        return Err("这条连接还没有保存 API key".into());
+        return Err("这条连接还没有保存 Key".into());
     }
     let result = planner::self_check(&connection, &CancellationToken::default()).await?;
     let check = CompanionCheck {

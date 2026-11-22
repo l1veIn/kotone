@@ -7,21 +7,21 @@ async function addConnection(page: import("@playwright/test").Page) {
   await page.getByTestId("connection-preset-dashscope").click();
   await page.getByTestId("connection-api-key").fill("sk-test-local-fixture");
   await page.getByTestId("connection-save").click();
-  await expect(page.getByText("已保存密钥")).toBeVisible();
+  await expect(page.getByText("已保存 Key")).toBeVisible();
 }
 
-// 陪玩只要选好有密钥的 AI 连接（不再要求能力自检；测试连接只是给用户手动确认）。
+// 陪玩只要选好有 Key 的 API 连接（不再要求能力自检；测试连接只是给用户手动确认）。
 test("choosing a connection is enough: no self-check gate", async ({ page }) => {
   await page.goto("/?mockCompanionCheck=fail#/settings?onboarding=never");
   await addConnection(page);
   await page.getByTestId("settings-nav-assistant").click();
   await expect(page.getByRole("heading", { name: "琴音", exact: true })).toBeVisible();
-  // 状态在「设置 → 怎么叫她」，AI 连接在「设置 → 她怎么回答」（ADR 028）
+  // 状态在「设置 → 怎么叫她」，API 连接在「设置 → 她怎么回答 → 她用的模型」（ADR 028）
   await openSettingsTab(page, "call");
   const companion = page.getByTestId("companion-settings");
-  await expect(companion.getByTestId("companion-status")).toContainText("还没有选 AI 连接");
+  await expect(companion.getByTestId("companion-status")).toContainText("还没有选 API 连接");
   await openSettingsTab(page, "reply");
-  await page.getByLabel("陪玩 AI 连接").click();
+  await page.getByLabel("她用的 API 连接").click();
   await page.getByRole("option").nth(1).click();
   await openSettingsTab(page, "call");
   // 下一步缺的是文字识别模型，而不是自检
@@ -33,7 +33,7 @@ test("quick messages can be added, edited and removed, and online OCR shows the 
   await page.goto("/#/settings?onboarding=never");
   await addConnection(page);
   await openSettingsTab(page, "reply");
-  await page.getByLabel("陪玩 AI 连接").click();
+  await page.getByLabel("她用的 API 连接").click();
   await page.getByRole("option").nth(1).click();
   await openSettingsTab(page, "call");
   const companion = page.getByTestId("companion-settings");

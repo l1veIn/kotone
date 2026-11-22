@@ -106,7 +106,7 @@ test("online polish is added best-effort after a saved connection", async ({ pag
   await expect(page.getByTestId("connection-editor")).toBeVisible();
   await page.getByTestId("connection-api-key").fill("sk-test");
   await page.getByTestId("connection-save").click();
-  await expect(page.getByText("已保存密钥")).toBeVisible();
+  await expect(page.getByText("已保存 Key")).toBeVisible();
 
   await openVoiceInput(page, "processing");
   const polishStep = page.getByTestId("postprocess-step-writing.openai-compat");

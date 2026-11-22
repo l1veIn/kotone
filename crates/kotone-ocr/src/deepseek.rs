@@ -605,7 +605,7 @@ impl OcrBackend for DeepSeekOcr {
             Resolved::MissingKey(c) => (
                 false,
                 "credentials-missing",
-                Some(format!("连接 {} 没有 API key（系统凭据库）", c.id)),
+                Some(format!("连接 {} 没有保存 Key", c.id)),
                 Some(c),
                 None,
             ),
@@ -666,7 +666,7 @@ impl OcrBackend for DeepSeekOcr {
                     Resolved::NotConfigured => ("not-configured", "在线 OCR 未启用".to_string()),
                     Resolved::Error(e) => ("credentials-error", e),
                     Resolved::MissingKey(c) => {
-                        ("credentials-missing", format!("连接 {} 没有 API key", c.id))
+                        ("credentials-missing", format!("连接 {} 没有保存 Key", c.id))
                     }
                     Resolved::InvalidEndpoint(_, e) => ("invalid", e),
                     Resolved::Ready(..) => unreachable!(),

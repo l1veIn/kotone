@@ -65,7 +65,8 @@ impl SttEngine for RemoteDeepseekEngine {
         let (base_url, api_key) = (text("baseUrl"), text("apiKey"));
         if api_key.is_empty() {
             return Err(
-                "DeepSeek 语音识别需要一条已保存密钥的 DeepSeek 连接（「设置 → API 连接」）".into(),
+                "DeepSeek 语音识别需要一条已保存 Key 的 DeepSeek 连接（「设置 → API 连接」）"
+                    .into(),
             );
         }
         Ok(Box::new(RemoteSession {
@@ -138,7 +139,7 @@ impl SttEngine for RemoteOpenaiEngine {
             .trim()
             .to_string();
         if base_url.is_empty() || api_key.is_empty() {
-            return Err("在线识别未就绪：请在模型配置里选择一条已保存密钥的 API 连接".into());
+            return Err("在线识别未就绪：请在模型配置里选择一条已保存 Key 的 API 连接".into());
         }
         Ok(Box::new(RemoteSession {
             pcm: Vec::new(),
@@ -327,7 +328,7 @@ fn transcribe_deepseek(base_url: &str, api_key: &str, wav: &[u8]) -> Result<Stri
     if !status.is_success() {
         let body = response.text().unwrap_or_default();
         let hint = match status.as_u16() {
-            401 => "密钥不对",
+            401 => "Key 不对",
             413 => "这段话太长了",
             429 => "同时识别的太多了，稍后再试",
             503 | 504 => "服务忙或超时，稍后再试",

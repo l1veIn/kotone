@@ -320,13 +320,13 @@ impl Default for CompanionConfig {
 impl CompanionConfig {
     pub fn validate(&self) -> Result<(), String> {
         if self.quick_messages.len() > MAX_QUICK_MESSAGES {
-            return Err(format!("快捷消息最多 {MAX_QUICK_MESSAGES} 条"));
+            return Err(format!("快捷指令最多 {MAX_QUICK_MESSAGES} 条"));
         }
         let mut ids = std::collections::HashSet::new();
         for message in &self.quick_messages {
             let id = message.id.trim();
             if id.is_empty() || id.len() > 64 || !ids.insert(id) {
-                return Err("快捷消息的 ID 不能为空、过长或重复".into());
+                return Err("快捷指令的 ID 不能为空、过长或重复".into());
             }
             let count = message.text.trim().chars().count();
             if message.runs_automation() {
@@ -337,10 +337,10 @@ impl CompanionConfig {
                     return Err("快捷指令的入参过大".into());
                 }
             } else if count == 0 || count > 200 {
-                return Err("快捷消息的内容需要 1 到 200 字".into());
+                return Err("快捷指令的内容需要 1 到 200 字".into());
             }
             if message.label.chars().count() > 40 {
-                return Err("快捷消息的名字不能超过 40 字".into());
+                return Err("快捷指令的名字不能超过 40 字".into());
             }
         }
         Ok(())
@@ -448,11 +448,11 @@ impl AssistantConfig {
             return Err("呼叫琴音的热键无法识别".into());
         }
         if self.default_delivery.is_empty() || self.default_delivery.len() > 2 {
-            return Err("助手默认提醒方式需选择语音、弹幕或两者".into());
+            return Err("默认回答方式需选择语音、弹幕或两者".into());
         }
         if self.default_delivery.len() == 2 && self.default_delivery[0] == self.default_delivery[1]
         {
-            return Err("助手默认提醒方式不能重复".into());
+            return Err("默认回答方式不能重复".into());
         }
         if self.speech_volume > 100 {
             return Err("语音音量必须在 0 到 100 之间".into());
@@ -495,13 +495,13 @@ impl AssistantConfig {
             return Err("在线语音合成模型无效".into());
         }
         if !BUBBLE_OFFSET_RANGE.contains(&self.bubble.offset_y) {
-            return Err("对话气泡的偏移必须在 0 到 800 之间".into());
+            return Err("气泡的偏移必须在 0 到 800 之间".into());
         }
         if !WAKE_NO_SPEECH_RANGE_MS.contains(&self.wake.no_speech_timeout_ms) {
             return Err("唤醒后等待说话的时间必须在 2 到 15 秒之间".into());
         }
         if !FOLLOW_UP_RANGE_SECONDS.contains(&self.follow_up_seconds) {
-            return Err("回答完接着听的时间必须在 0 到 30 秒之间".into());
+            return Err("assistant.followUpSeconds（已不再使用）必须在 0 到 30 秒之间".into());
         }
         if !CALL_IDLE_RANGE_SECONDS.contains(&self.call_idle_seconds) {
             return Err("通话多久没人说话挂断，必须在 0 到 600 秒之间".into());

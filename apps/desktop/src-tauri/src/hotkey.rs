@@ -293,7 +293,7 @@ fn route_named_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, id: &str) {
     // 它不依赖 runtime 生命周期的 orchestrator 状态。
     if id == HK_AUTOMATION_STOP {
         // 「停下」：自动化、琴音正在做的事、她派出的子会话和正在念的话一起停（ADR 028）。
-        crate::stop::stop_everything(app, "停止热键");
+        crate::stop::stop_everything(app, "停下热键");
         return;
     }
     // 语音识别没准备好时的被动提示（键照常传给游戏，D8）：语音输入热键 → 悬浮窗，呼叫键 → 气泡。
@@ -1126,7 +1126,7 @@ impl HotkeyManager {
                 .capture_next(cb, std::time::Duration::from_secs(10))
                 .map_err(|detail| {
                     format!(
-                        "低级键鼠钩子自检未通过，暂时无法录入快捷键。\
+                        "低级键鼠钩子自检未通过，暂时无法录入热键。\
                          可能是 360、火绒等安全软件拦截了输入钩子或模拟输入；\
                          请将 Kotone 加入信任区后重试。检测详情：{detail}"
                     )

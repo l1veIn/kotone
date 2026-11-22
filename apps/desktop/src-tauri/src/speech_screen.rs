@@ -215,9 +215,9 @@ fn time_label(at_ms: u64) -> String {
 pub async fn tool(app: &AppHandle) -> Result<Value, String> {
     match latest(app).await {
         Some(shot) => Ok(recognize(app, &shot).await),
-        None => {
-            Err("还没有玩家开口时的截图（这次不是用语音叫她的）；要看现在的画面用 game.look".into())
-        }
+        None => Err(
+            "还没有玩家开口时的截图（这句话不是在通话里说的）；要看现在的画面用 game.look".into(),
+        ),
     }
 }
 

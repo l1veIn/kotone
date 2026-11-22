@@ -128,9 +128,9 @@ impl OnlineSynth {
         }
         if config.api_key.trim().is_empty() {
             return Err(match self.kind {
-                OnlineKind::OpenAi => "在线语音合成的 API 连接尚未保存密钥".into(),
+                OnlineKind::OpenAi => "在线语音合成的 API 连接还没有保存 Key".into(),
                 OnlineKind::Volcano => "火山语音合成缺少 Access Token".into(),
-                OnlineKind::Deepseek => "DeepSeek 连接尚未保存 API key".into(),
+                OnlineKind::Deepseek => "DeepSeek 连接还没有保存 Key".into(),
             });
         }
         Ok((config, native))

@@ -325,9 +325,7 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
             TOOL_SPEAK => self.host.speak(call_id, text).await,
             TOOL_DANMAKU => self.host.danmaku(text).await,
             TOOL_ASK if self.scope != Scope::Game => {
-                return ToolOutcome::error(
-                    "reply.ask 只在语音入口用；在聊天窗口里直接在回复里问玩家",
-                )
+                return ToolOutcome::error("reply.ask 只在通话里用；在聊天窗口里直接在回复里问玩家")
             }
             TOOL_ASK => {
                 let question = arguments

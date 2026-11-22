@@ -36,7 +36,7 @@ impl AssistantHandler for ReminderAssistant {
         Box::pin(async move {
             let config = self.settings.read().unwrap().assistant.clone();
             if config.connection_id.trim().is_empty() {
-                return Err("请先在「提醒助手」选择支持工具调用的 AI 连接".into());
+                return Err("请先在「提醒助手」选择支持工具调用的 API 连接".into());
             }
             if request.text.trim().is_empty() || request.text.chars().count() > 2_000 {
                 return Err("提醒指令为空或过长，请说一句简短的提醒".into());
@@ -49,7 +49,7 @@ impl AssistantHandler for ReminderAssistant {
                 .trim()
                 .is_empty()
             {
-                return Err("提醒助手的 AI 连接尚未保存密钥".into());
+                return Err("提醒助手的 API 连接还没有保存 Key".into());
             }
             let defaults = config
                 .default_delivery
@@ -67,7 +67,7 @@ impl AssistantHandler for ReminderAssistant {
                  提醒的听众和接收者始终是正在使用 Kotone 的用户本人，不是队友或其他第三人；不要称呼用户为'队友'。\n\
                  可调用 voice_reminder（语音播报）和 danmaku_reminder（全屏弹幕）两个工具。\n\
                  将秒/分钟/小时换算为 delaySeconds，范围 1 到 604800；text 是到时提醒的简短内容，最多300字。\n\
-                 用户未指定提醒方式时默认调用：{defaults}；指定方式时遵从用户。\n\
+                 用户没指定用语音还是弹幕时默认调用：{defaults}；指定方式时遵从用户。\n\
                  同一个提醒的两种方式必须使用完全相同的 delaySeconds 和 text。一次最多8个不同提醒。\n\
                  提醒text要适合到时直接对用户本人念出，只说简短正文，温暖通过自然措辞体现，不套称呼。\n\
                  保留用户给出的英雄、技能、对象、数量、否定和行动事实，不改动时间，不自行补充战术或倒计时。\n\
@@ -172,7 +172,7 @@ fn parse_plan(response: &Value) -> Result<AssistantPlan, String> {
         let delivery = match function.get("name").and_then(Value::as_str) {
             Some("voice_reminder") => DeliveryKind::Voice,
             Some("danmaku_reminder") => DeliveryKind::Danmaku,
-            _ => return Err("AI 返回了未授权的提醒工具".into()),
+            _ => return Err("AI 返回了不允许用的提醒工具".into()),
         };
         let arguments = function
             .get("arguments")

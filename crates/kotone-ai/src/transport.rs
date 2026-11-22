@@ -40,7 +40,7 @@ pub(crate) async fn send(
             if e.is_timeout() {
                 "AI 请求超时"
             } else {
-                "AI 连接失败，请检查接口地址与网络"
+                "连不上 AI 接口，请检查接口地址与网络"
             }
             .into(),
         )

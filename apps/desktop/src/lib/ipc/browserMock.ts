@@ -1355,7 +1355,7 @@ export async function openCatalogModelDir(category: ModelCategory, id: string): 
 
 export async function companionSelfCheck(): Promise<CompanionCheck> {
   const id = companionBindings(mock.settings.assistant)?.connectionId;
-  if (!id) throw new Error("还没有选 AI 连接：请在「设置 → API 连接」里设一条");
+  if (!id) throw new Error("还没有选 API 连接：请在「设置 → 她怎么回答 → 她用的模型」里选一条");
   return connectionSelfCheck(id);
 }
 
@@ -1396,7 +1396,7 @@ export async function companionStatus(): Promise<CompanionStatus> {
   const connectionId = companionBindings(assistant)?.connectionId ?? "";
   const ocr = mock.settings.ocr.activeModelId || null;
   const reason = !connectionId
-    ? "还没有选 AI 连接：请在「设置 → API 连接」里添加一条，并设为在用的连接"
+    ? "还没有选 API 连接：请在「设置 → API 连接」里添加一条，再到「设置 → 她怎么回答 → 她用的模型」里选它"
     : !ocr
           ? "看游戏聊天需要文字识别模型：请在「设置 → 模型 → 文字识别」下载并选择一个"
           : null;

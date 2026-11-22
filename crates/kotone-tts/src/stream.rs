@@ -85,7 +85,7 @@ impl DeepseekStream {
         let url = stream_url(config, voice_override)?;
         let key = config.api_key.trim().to_string();
         if key.is_empty() {
-            return Err("DeepSeek 连接尚未保存 API key".into());
+            return Err("DeepSeek 连接还没有保存 Key".into());
         }
         let model = config.model.clone();
         let (commands, receiver) = mpsc::channel();
@@ -366,7 +366,7 @@ fn connect(url: &str, key: &str) -> Result<Socket, String> {
         "Authorization",
         format!("Bearer {key}")
             .parse()
-            .map_err(|_| "DeepSeek API key 含有无法放进请求头的字符".to_string())?,
+            .map_err(|_| "DeepSeek Key 含有无法放进请求头的字符".to_string())?,
     );
     headers.insert(
         "User-Agent",
@@ -396,7 +396,7 @@ fn connect(url: &str, key: &str) -> Result<Socket, String> {
             let status = response.status().as_u16();
             kotone_core::log::log(&format!("deepseek tts stream handshake: HTTP {status}"));
             Err(match status {
-                401 | 403 => "DeepSeek API key 无效或没有语音合成权限".into(),
+                401 | 403 => "DeepSeek Key 无效或没有语音合成权限".into(),
                 402 => "DeepSeek 账户余额不足".into(),
                 429 => "DeepSeek 语音合成请求太多（同时最多 50 路），请稍后再试".into(),
                 _ => format!("DeepSeek 语音合成连接失败（HTTP {status}）"),
@@ -704,7 +704,7 @@ pub(crate) mod tests {
         let Some(StreamEvent::Failed(error)) = end else {
             panic!("expected failure, got {end:?}");
         };
-        assert!(error.contains("API key 无效"), "{error}");
+        assert!(error.contains("Key 无效"), "{error}");
         assert!(!error.contains("sk-test"));
     }
 
@@ -743,7 +743,7 @@ pub(crate) mod tests {
         assert!(DeepseekStream::open(&c, None, |_| {})
             .err()
             .unwrap()
-            .contains("API key"));
+            .contains("Key"));
     }
 
     /// 真接口：`KOTONE_REAL_DEEPSEEK_KEY` 只从环境变量读，不打印。量第一块声音的延迟、

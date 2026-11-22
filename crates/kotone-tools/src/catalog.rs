@@ -279,7 +279,7 @@ fn root_transform_schema() -> Value {
 }
 
 fn session_schema() -> Value {
-    json!({"type": "string", "minLength": 1, "maxLength": 64, "description": "调用方命名的跟踪会话（字母、数字与 - _ . :）"})
+    json!({"type": "string", "minLength": 1, "maxLength": 64, "description": "调用方给这次聊天跟踪起的名字（字母、数字与 - _ . :）"})
 }
 
 fn warnings_schema() -> Value {
@@ -473,7 +473,7 @@ fn base_tool_specs(limits: &ServiceLimits, readiness: &Readiness) -> Vec<Value> 
         ),
         spec(
             TOOL_SYSTEM_STATUS,
-            "Report the desktop instance, tool-service state, ASR runtime phase and artifact store usage. Never includes credentials.",
+            "Report the desktop instance, tool-service state, speech recognition runtime phase and artifact store usage. Never includes credentials.",
             &[],
             true,
             None,
@@ -906,7 +906,7 @@ fn base_tool_specs(limits: &ServiceLimits, readiness: &Readiness) -> Vec<Value> 
         ),
         spec(
             TOOL_APP_STATUS,
-            "Report this Kotone desktop instance: version, pid, uptime, launch mode, assistant route, ASR runtime status, event head and pending Agent requests.",
+            "Report this Kotone desktop instance: version, pid, uptime, launch mode, assistant route, speech recognition runtime status, event head and pending Agent requests.",
             &[],
             true,
             None,
@@ -944,7 +944,7 @@ fn base_tool_specs(limits: &ServiceLimits, readiness: &Readiness) -> Vec<Value> 
         ),
         spec(
             TOOL_RUNTIME_STATUS,
-            "Report the speech recognition (ASR) runtime: phase stopped/starting/running/stopping, whether a restart is needed, engine and model. Online ASR (e.g. deepseek-asr) is ready as soon as Kotone opens; only a local ASR model has a start (启动) step the player sees. The tool service works in every phase.",
+            "Report the speech recognition runtime: phase stopped/starting/running/stopping, whether a restart is needed, engine and model. Online recognition (e.g. deepseek-asr) is ready as soon as Kotone opens; only a local recognition model has a start (启动) step the player sees. The tool service works in every phase.",
             &[],
             true,
             None,
@@ -953,7 +953,7 @@ fn base_tool_specs(limits: &ServiceLimits, readiness: &Readiness) -> Vec<Value> 
         ),
         spec(
             TOOL_RUNTIME_START,
-            "Start (启动) local speech recognition: load the local model, register the voice input hotkey and call key, show the overlay; returns the new status. Running with restartNeeded restarts (also for online ASR, to apply changed settings). Use a generous timeoutMs: model warm-up can take seconds.",
+            "Start (启动) local speech recognition: load the local model, register the voice input hotkey and call key, show the overlay; returns the new status. Running with restartNeeded restarts (also for online recognition, to apply changed settings). Use a generous timeoutMs: model warm-up can take seconds.",
             &["starts-runtime", "registers-hotkeys"],
             true,
             None,
@@ -962,7 +962,7 @@ fn base_tool_specs(limits: &ServiceLimits, readiness: &Readiness) -> Vec<Value> 
         ),
         spec(
             TOOL_RUNTIME_STOP,
-            "Stop local speech recognition (cancel the session, unregister hotkeys, hide the overlay, unload the model). Idempotent when already stopped. Online ASR has no stop step for the player; do not stop it unless asked.",
+            "Stop local speech recognition (cancel the session, unregister hotkeys, hide the overlay, unload the model). Idempotent when already stopped. Online recognition has no stop step for the player; do not stop it unless asked.",
             &["stops-runtime"],
             true,
             None,
@@ -1048,7 +1048,7 @@ fn base_tool_specs(limits: &ServiceLimits, readiness: &Readiness) -> Vec<Value> 
                 "properties": {
                     "requestId": {"type": "string"},
                     "text": {"type": "string", "minLength": 1, "maxLength": 2000},
-                    "outputs": {"type": "array", "items": {"enum": ["speech", "danmaku"]}, "description": "缺省使用助手设置中的默认提醒方式"},
+                    "outputs": {"type": "array", "items": {"enum": ["speech", "danmaku"]}, "description": "缺省用设置里的默认回答方式"},
                     "wait": {"type": "boolean", "default": false, "description": "true：等播完 / 弹幕滚完再返回（受 timeoutMs 约束）"}
                 }
             }),

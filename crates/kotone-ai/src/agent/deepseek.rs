@@ -310,7 +310,7 @@ fn http_error(status: u16, body: &str) -> Attempt {
             "DeepSeek 内容审核没通过：这段对话里有不允许的内容，换个说法或开一段新对话".into(),
         ),
         400 | 422 => Attempt::Fail(format!("AI 请求格式不正确（HTTP {status}）")),
-        401 | 403 => Attempt::Fail(format!("DeepSeek 密钥无效或无权限（HTTP {status}）")),
+        401 | 403 => Attempt::Fail(format!("DeepSeek Key 无效或无权限（HTTP {status}）")),
         402 => Attempt::Fail("DeepSeek 账户余额不足，请先充值".into()),
         429 => Attempt::Retry("DeepSeek 请求太频繁，请稍后再试".into()),
         500..=599 => Attempt::Retry(format!(
@@ -491,7 +491,7 @@ impl ModelClient for DeepSeekModel {
             .trim()
             .is_empty()
         {
-            return Err(AiError::Failed("AI 连接尚未保存密钥".into()));
+            return Err(AiError::Failed("API 连接还没有保存 Key".into()));
         }
         let (body, names) = self.body(request);
         let emitted = AtomicBool::new(false);

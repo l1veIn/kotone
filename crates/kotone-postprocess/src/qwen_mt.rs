@@ -93,7 +93,7 @@ impl ProcessorFactory for QwenMtFactory {
             .trim()
             .is_empty()
         {
-            return Err(format!("连接「{}」还没有 API key", connection.display_name));
+            return Err(format!("连接「{}」还没有保存 Key", connection.display_name));
         }
         if let Some(model) = config
             .get("model")

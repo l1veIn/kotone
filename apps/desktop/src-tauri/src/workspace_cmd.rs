@@ -187,7 +187,7 @@ pub fn workspace_open_dir(skill: Option<String>) -> Result<(), String> {
     let ws = workspace();
     let dir = match skill {
         Some(name) if ws::valid_skill_name(&name) => ws.dir().join(ws::SKILLS).join(name),
-        Some(name) => return Err(format!("Skill 名字「{name}」不合法")),
+        Some(name) => return Err(format!("技能名字「{name}」不合法")),
         None => ws.dir().to_path_buf(),
     };
     crate::open_in_file_manager(&dir)

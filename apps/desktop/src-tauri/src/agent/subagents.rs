@@ -305,7 +305,7 @@ pub(super) async fn resume(
             .find(|a| a.name == name)
             .cloned()
         else {
-            return Err(format!("没有叫 {name} 的后台任务（agent.list 看看）"));
+            return Err(format!("后台没有叫 {name} 的事（agent.list 看看）"));
         };
         let child_id = agent.conversation_id.clone();
         let running = inner

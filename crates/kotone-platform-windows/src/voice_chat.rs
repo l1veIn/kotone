@@ -235,7 +235,7 @@ mod imp {
             if ShellExecuteExW(&mut info).is_err() {
                 let err = GetLastError();
                 return Err(if err == ERROR_CANCELLED {
-                    "你取消了管理员授权，没有安装".into()
+                    "你没有允许管理员权限，没有安装".into()
                 } else {
                     format!("无法以管理员身份运行安装程序：{err:?}")
                 });

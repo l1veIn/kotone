@@ -228,12 +228,12 @@ pub const GROUPS: &[(&str, &str, &str)] = &[
     (
         "automation",
         "自动化（运行、保存、停止、记录）",
-        "自动化 程序 脚本 按键 运行 保存 停止 记录 automation run",
+        "自动化 程序 按键 运行 保存 停止 记录 automation script run",
     ),
     (
         "settings",
         "设置（游戏配置、热键、连接、声音、输入）",
-        "设置 配置 游戏配置 热键 连接 密钥 麦克风 输入法 开机 管理员 settings profile hotkey",
+        "设置 配置 游戏配置 热键 连接 Key 麦克风 输入法 开机 管理员 settings profile hotkey",
     ),
     (
         "models",
@@ -334,7 +334,7 @@ pub fn builtin_entries() -> Vec<ToolEntry> {
         },
         ToolEntry {
             name: TOOL_DANMAKU.into(),
-            description: "在玩家屏幕上显示一句弹幕（不出声）。后台任务要给玩家看一句话时用，例如同传的翻译。".into(),
+            description: "在玩家屏幕上显示一句弹幕（不出声）。后台做事时要给玩家看一句话时用，例如同传的翻译。".into(),
             parameters: json!({"type": "object", "additionalProperties": false, "required": ["text"], "properties": {
                 "text": {"type": "string", "minLength": 1, "maxLength": 300}
             }}),
@@ -425,7 +425,7 @@ pub fn agent_entries() -> Vec<ToolEntry> {
         entry(
             TOOL_MEMORY,
             "meta",
-            "写长期记忆（照 Hermes 的 memory 工具）。target：user = 关于玩家的稳定事实与偏好（称呼、常玩的游戏、习惯）；memory = 你自己需要长期记住的事；game = 某个游戏的记忆（界面在哪、按什么键、报点黑话、学到的规则；要给 game = 游戏配置 id，看 game.list）。operations 整批生效：add {text} 加一条；patch {old, new} 把包含 old 的那一条里的 old 换成 new；remove {old} 删掉包含 old 的那一条。写满会报错：先删掉或合并旧的。只记以后用得上的事实，不记一次性的闲聊；学到的通用做法写成 Skill（skill.manage）。记忆在下一段对话开始时生效。",
+            "写长期记忆（照 Hermes 的 memory 工具）。target：user = 关于玩家的稳定事实与偏好（称呼、常玩的游戏、习惯）；memory = 你自己需要长期记住的事；game = 某个游戏的记忆（界面在哪、按什么键、报点黑话、学到的规则；要给 game = 游戏配置 id，看 game.list）。operations 整批生效：add {text} 加一条；patch {old, new} 把包含 old 的那一条里的 old 换成 new；remove {old} 删掉包含 old 的那一条。写满会报错：先删掉或合并旧的。只记以后用得上的事实，不记一次性的闲聊；学到的通用做法写成技能（skill.manage）。记忆在下一段对话开始时生效。",
             json!({"type": "object", "additionalProperties": false, "required": ["target", "operations"], "properties": {
                 "target": {"enum": ["user", "memory", "game"]},
                 "game": {"type": "string", "description": "target = game 时的游戏配置 id"},
@@ -441,7 +441,7 @@ pub fn agent_entries() -> Vec<ToolEntry> {
         entry(
             TOOL_SKILL_VIEW,
             "meta",
-            "读一个 Skill（可以分发的通用技能包）的 SKILL.md，或它目录里的附件（path）。不传 name = 列出已安装的 Skill（名字和描述）。系统提示里列出了已安装的 Skill，做事前先看有没有用得上的，有就先读全文再照做。",
+            "读一个技能（可以分享的本事包，一个文件夹一个）的 SKILL.md，或它目录里的附件（path）。不传 name = 列出已安装的技能（名字和描述）。系统提示里列出了已安装的技能，做事前先看有没有用得上的，有就先读全文再照做。",
             json!({"type": "object", "additionalProperties": false, "properties": {
                 "name": {"type": "string", "maxLength": 64, "description": "不填 = 列出全部"},
                 "path": {"type": "string", "maxLength": 200, "description": "附件的相对路径，缺省 SKILL.md"}
@@ -451,7 +451,7 @@ pub fn agent_entries() -> Vec<ToolEntry> {
         entry(
             TOOL_SKILL_MANAGE,
             "meta",
-            "新建 / 修改 / 删除 Skill（agentskills.io 格式：SKILL.md 开头是 --- 包起来的 name、description）。action：create {name, content}、patch {name, old, new}、delete {name}、write_file {name, path, content}、remove_file {name, path}。Skill 是能分享给别人的通用做法（例如“同传”怎么做、某个游戏的日常一条龙），只属于这个玩家的事写进记忆。每次修改保留旧版本。",
+            "新建 / 修改 / 删除技能（agentskills.io 格式：SKILL.md 开头是 --- 包起来的 name、description）。action：create {name, content}、patch {name, old, new}、delete {name}、write_file {name, path, content}、remove_file {name, path}。技能是能分享给别人的通用做法（例如“同传”怎么做、某个游戏的日常一条龙），只属于这个玩家的事写进记忆。每次修改保留旧版本。",
             json!({"type": "object", "additionalProperties": false, "required": ["action", "name"], "properties": {
                 "action": {"enum": ["create", "patch", "delete", "write_file", "remove_file"]},
                 "name": {"type": "string", "maxLength": 64},
@@ -474,7 +474,7 @@ pub fn agent_entries() -> Vec<ToolEntry> {
         entry(
             TOOL_REQUEST_KEY,
             "settings",
-            "请玩家在 Kotone 窗口里粘贴某个服务商的 Key：聊天里会出现一个只给玩家看的输入框，Key 直接存进系统凭据库（建好或更新这条连接），你只会收到“已保存”和连接 id，看不到 Key。永远不要让玩家把 Key 发在聊天里。provider 用 connections.presets 里的 id（如 openai、dashscope）。玩家在游戏里用语音叫你时，告诉他到 Kotone 窗口里粘贴。最多等 5 分钟。",
+            "请玩家在 Kotone 窗口里粘贴某个服务商的 Key：聊天里会出现一个只给玩家看的输入框，Key 直接存进 Windows 的安全存储（建好或更新这条连接），你只会收到“已保存”和连接 id，看不到 Key。永远不要让玩家把 Key 发在聊天里。provider 用 connections.presets 里的 id（如 openai、dashscope）。在通话里时，告诉玩家到 Kotone 窗口里粘贴。最多等 5 分钟。",
             json!({"type": "object", "additionalProperties": false, "required": ["provider"], "properties": {
                 "provider": {"type": "string", "maxLength": 64, "description": "服务商预设 id（connections.presets）"},
                 "reason": {"type": "string", "maxLength": 200, "description": "为什么要这个 Key（显示给玩家）"},
@@ -485,7 +485,7 @@ pub fn agent_entries() -> Vec<ToolEntry> {
         entry(
             TOOL_AGENT_START,
             "meta",
-            "把一件复杂、慢或要好几步的事交给后台去做（照 Codex spawn_agent / OpenCode subagent）：写或改自动化、一边看一边操作游戏、读网页整理资料、下载和配置模型、一次改一串设置、持续盯着一件事（例如同传：听队友语音翻成弹幕），以及你手上没有的工具能做的事。后台几乎什么工具都能用，做完会把总结交回给你，你再用一句话告诉玩家。name 是这段对话里稳定的英文短名（小写字母、数字、连字符，如 potion-script），以后追加要求用它；label 是三五个字的中文标题（如“写喝药脚本”），玩家会在聊天里看到；task 写清楚要做什么、做到什么程度算完、结果要什么形式（玩家的原话会自动附上）。最多等约 4 秒：做完了直接返回 status=done 和 summary，照着回答；没做完返回 status=running——这时说一句“交给我，好了告诉你”就结束这一轮，不要轮询、不要用 agent.list 反复查。",
+            "把一件复杂、慢或要好几步的事交给后台去做（照 Codex spawn_agent / OpenCode subagent）：写或改自动化、一边看一边操作游戏、读网页整理资料、下载和配置模型、一次改一串设置、持续盯着一件事（例如同传：听队友语音翻成弹幕），以及你手上没有的工具能做的事。后台几乎什么工具都能用，做完会把总结交回给你，你再用一句话告诉玩家。name 是这段对话里稳定的英文短名（小写字母、数字、连字符，如 potion-script），以后追加要求用它；label 是三五个字的中文标题（如“喝药自动化”），玩家会在聊天里看到；task 写清楚要做什么、做到什么程度算完、结果要什么形式（玩家的原话会自动附上）。最多等约 4 秒：做完了直接返回 status=done 和 summary，照着回答；没做完返回 status=running——这时说一句“交给我，好了告诉你”就结束这一轮，不要轮询、不要用 agent.list 反复查。",
             json!({"type": "object", "additionalProperties": false, "required": ["name", "label", "task"], "properties": {
                 "name": {"type": "string", "pattern": "^[a-z0-9-]{1,32}$", "description": "英文短名，这段对话里不重复"},
                 "label": {"type": "string", "minLength": 1, "maxLength": 12, "description": "三五个字的中文标题"},
@@ -496,7 +496,7 @@ pub fn agent_entries() -> Vec<ToolEntry> {
         entry(
             TOOL_AGENT_FOLLOWUP,
             "meta",
-            "把玩家对同一件事的追加要求交给之前派出去的那个（同一个 name），例如“把刚才那个脚本改成三成血”“继续”。它记得之前做了什么：空闲就接着做新的一轮，还在做就把这句话插进当前这一轮。返回同 agent.start（最多等约 4 秒）。",
+            "把玩家对同一件事的追加要求交给之前派出去的那个（同一个 name），例如“把刚才那个自动化改成三成血”“继续”。它记得之前做了什么：空闲就接着做新的一轮，还在做就把这句话插进当前这一轮。返回同 agent.start（最多等约 4 秒）。",
             json!({"type": "object", "additionalProperties": false, "required": ["name", "message"], "properties": {
                 "name": {"type": "string", "maxLength": 32},
                 "message": {"type": "string", "minLength": 1, "maxLength": 4000}
@@ -532,7 +532,7 @@ pub fn agent_entries() -> Vec<ToolEntry> {
         entry(
             TOOL_LISTEN_STOP,
             "game",
-            "停止这个会话名下的监听。",
+            "停止这段对话名下的监听。",
             json!({"type": "object", "additionalProperties": false, "properties": {}}),
             &[],
         ),

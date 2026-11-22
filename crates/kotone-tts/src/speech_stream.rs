@@ -1169,7 +1169,7 @@ mod tests {
         .unwrap();
         stream.push_text("你好，在吗？我在。");
         let error = stream.finish_blocking(Duration::from_secs(10)).unwrap_err();
-        assert!(error.contains("API key 无效"), "{error}");
+        assert!(error.contains("Key 无效"), "{error}");
         assert!(!error.contains("sk-test"));
         assert_eq!(stream.spoken_text(), "");
         assert_eq!(device.opened.load(Ordering::SeqCst), 0);

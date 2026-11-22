@@ -156,7 +156,7 @@ async fn hand_over(
     reason: &str,
     cancel: &CancellationToken,
 ) -> Result<Value, String> {
-    if last_entry(app, &spec.parent) == Some(Entry::Game) {
+    if last_entry(app, &spec.parent) == Some(Entry::Call) {
         let line = format!("{reason}，你方便时打开 Kotone，在右边的浏览器里弄一下");
         let app = app.clone();
         tauri::async_runtime::spawn(async move {

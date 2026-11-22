@@ -73,7 +73,7 @@ impl SttEngine for IflytekAsrEngine {
     }
 
     fn display_name(&self) -> &str {
-        "科大讯飞语音听写"
+        "科大讯飞语音识别"
     }
 
     fn capabilities(&self) -> EngineCapabilities {
@@ -103,7 +103,7 @@ impl SttEngine for IflytekAsrEngine {
         let api_key = Self::option(cfg, "apiKey");
         let api_secret = Self::option(cfg, "apiSecret");
         if app_id.is_empty() || api_key.is_empty() || api_secret.is_empty() {
-            return Err("科大讯飞语音听写未就绪：请填写 APPID、APIKey 与 APISecret".into());
+            return Err("科大讯飞语音识别未就绪：请填写 APPID、APIKey 与 APISecret".into());
         }
         Ok(Box::new(IflytekSession::start(
             app_id, api_key, api_secret, events,
@@ -135,7 +135,7 @@ impl IflytekSession {
                 let result = run_session(app_id, api_key, api_secret, cmd_rx, events_io);
                 let _ = result_tx.send(result);
             })
-            .map_err(|e| format!("无法启动科大讯飞会话：{e}"))?;
+            .map_err(|e| format!("无法连接科大讯飞：{e}"))?;
         Ok(Self {
             events,
             cancelled: false,
@@ -153,7 +153,7 @@ impl SttSession for IflytekSession {
         }
         self.cmd_tx
             .send(IflytekCmd::Audio(pcm_f32_to_s16le(pcm)))
-            .map_err(|_| "科大讯飞会话已结束".to_string())
+            .map_err(|_| "和科大讯飞的连接已断开".to_string())
     }
 
     fn finalize(mut self: Box<Self>) -> Result<Transcript, String> {
@@ -183,7 +183,7 @@ impl SttSession for IflytekSession {
                 Ok(Transcript { text, latency_ms })
             }
             Ok(Err(error)) => Err(error),
-            Err(_) => Err("科大讯飞语音听写超时".into()),
+            Err(_) => Err("科大讯飞语音识别超时".into()),
         }
     }
 
@@ -374,7 +374,7 @@ fn parse_server_msg(payload: &str) -> Result<ServerMsg, String> {
         .unwrap_or("")
         .to_string();
     if code != 0 {
-        return Err(format!("科大讯飞语音听写失败（{code}）：{message}"));
+        return Err(format!("科大讯飞语音识别失败（{code}）：{message}"));
     }
     let is_final = json
         .pointer("/data/status")

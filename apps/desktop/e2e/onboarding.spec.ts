@@ -270,7 +270,7 @@ test("an upgraded user explicitly picks a separate call key and keeps the old re
   await page.getByTestId("settings-nav-legacy-reminders").click();
   await expect(page.getByTestId("legacy-reminders-page")).toBeVisible();
   await page.getByTestId("assistant-nav-settings").click();
-  await expect(page.getByRole("combobox", { name: "提醒助手 AI 连接" })).toContainText("原来的提醒连接");
+  await expect(page.getByRole("combobox", { name: "提醒助手 API 连接" })).toContainText("原来的提醒连接");
   await expect(page.getByTestId("hotkey-input-legacy-reminder")).toHaveValue("Alt+F9");
 });
 

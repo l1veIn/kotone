@@ -361,7 +361,7 @@ pub const CONNECTION_PRESETS: &[ConnectionProviderPreset] = &[
         id: "openrouter",
         display_name: "OpenRouter",
         group: "aggregator",
-        description: "一个密钥用多家模型",
+        description: "一个 Key 用多家模型",
         default_base_url: "https://openrouter.ai/api/v1",
         default_model: "anthropic/claude-sonnet-4.5",
         models: &[

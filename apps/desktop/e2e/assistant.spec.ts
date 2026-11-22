@@ -109,7 +109,7 @@ test("assistant preview labels itself and never pretends to run AI", async ({ pa
 
 test("assistant shares connections and saves voice/delivery settings with an independent conflict-checked hotkey", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
-  // AI 连接在「设置 → 她怎么回答」
+  // 她用的模型（API 连接）在「设置 → 她怎么回答」
   await openSettingsTab(page, "reply");
   const reply = page.getByTestId("settings-reply");
   await reply.getByRole("button", { name: "管理连接 →", exact: true }).click();
@@ -117,9 +117,9 @@ test("assistant shares connections and saves voice/delivery settings with an ind
   await page.getByTestId("connection-preset-dashscope").click();
   await page.getByTestId("connection-api-key").fill("sk-test-local-fixture");
   await page.getByTestId("connection-save").click();
-  await expect(page.getByText("已保存密钥")).toBeVisible();
+  await expect(page.getByText("已保存 Key")).toBeVisible();
   await openSettingsTab(page, "reply");
-  await reply.getByLabel("陪玩 AI 连接").click();
+  await reply.getByLabel("她用的 API 连接").click();
   await page.getByRole("option").nth(1).click();
   await expect(reply.getByRole("button", { name: "管理连接 →", exact: true })).toHaveCount(0);
   // 呼叫键在「设置 → 怎么叫她」

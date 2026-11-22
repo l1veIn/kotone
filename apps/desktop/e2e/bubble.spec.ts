@@ -84,12 +84,13 @@ test.describe("对话气泡", () => {
     }
   });
 
-  test("设置页有对话气泡分区：默认开启、右下角，改位置会保存", async ({ page }, testInfo) => {
+  test("设置页有气泡分区：默认开启、右下角，改位置会保存", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1280, height: 820 });
     await page.goto("/#/settings?onboarding=never");
-    // 对话气泡在「设置 → 她怎么回答」（ADR 028）
+    // 气泡在「设置 → 她怎么回答」（ADR 028）
     await openSettingsTab(page, "reply");
-    await expect(page.locator("#bubble-settings")).toContainText("对话气泡");
+    await expect(page.locator("#bubble-settings")).toContainText("气泡");
+    await expect(page.locator("#bubble-settings")).not.toContainText("对话气泡");
     // 关掉气泡不再借用语音输入的悬浮窗（D10）
     await expect(page.getByText(/关掉后只用声音和弹幕回答你/)).toBeVisible();
     await expect(page.getByTestId("bubble-enabled")).toHaveAttribute("aria-checked", "true");

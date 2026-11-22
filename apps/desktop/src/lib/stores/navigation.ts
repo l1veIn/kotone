@@ -26,7 +26,12 @@ export const ADVANCED_TABS: Record<string, string> = {
 /** 分页里的分组锚点（第三段）。 */
 const ADVANCED_ANCHORS: Record<string, Record<string, string>> = {
   call: { "呼叫键": "settings-call-hotkey", "语音唤醒": "settings-call-wake", "快捷指令": "companion-title" },
-  reply: { "AI 连接": "settings-reply-ai", "对话气泡": "settings-reply-bubble", "声音与弹幕": "settings-reply-output", "游戏语音": "settings-reply-teammates" },
+  reply: {
+    "她用的模型": "settings-reply-ai", "气泡": "settings-reply-bubble", "声音与弹幕": "settings-reply-output", "回答方式": "settings-reply-output",
+    "游戏语音": "settings-reply-teammates",
+    // 旧写法（术语表 v2 之前的小节名；以前的对话里还引用着）
+    "AI 连接": "settings-reply-ai", "对话气泡": "settings-reply-bubble",
+  },
   models: { "语音识别": "models-asr", "文字识别": "models-ocr", "语音合成": "models-tts", "联网搜索": "models-search" },
   system: { "停下": "system-stop", "打开软件时显示": "system-start-page" },
 };
@@ -43,11 +48,14 @@ const ROLE_TABS: Record<string, AssistantSection> = {
 
 /** 旧版「琴音 → 设置 → 分组」/「琴音 → 交流」：搬进「设置」之后的位置。 */
 const OLD_COMPANION_GROUPS: Record<string, { tab: string; anchor?: string }> = {
+  "她用的模型": { tab: "reply", anchor: "settings-reply-ai" },
   "AI 连接": { tab: "reply", anchor: "settings-reply-ai" },
   "呼叫": { tab: "call", anchor: "settings-call-hotkey" },
   "语音唤醒": { tab: "call", anchor: "settings-call-wake" },
   "快捷指令": { tab: "call", anchor: "companion-title" },
   "回答": { tab: "reply", anchor: "settings-reply-output" },
+  "回答方式": { tab: "reply", anchor: "settings-reply-output" },
+  "气泡": { tab: "reply", anchor: "settings-reply-bubble" },
   "对话气泡": { tab: "reply", anchor: "settings-reply-bubble" },
   "弹幕": { tab: "reply", anchor: "settings-reply-output" },
   "游戏语音": { tab: "reply", anchor: "settings-reply-teammates" },
