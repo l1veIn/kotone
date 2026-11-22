@@ -44,6 +44,18 @@ jobs:
           cache-directories: target/sherpa-onnx-prebuilt
           prefix-key: v2-rust
 
+      - name: Drop an incomplete sherpa-onnx download
+        # rust-cache prunes files under target/ before saving (cache-directories
+        # included), so a restore can bring back an empty lib/ directory. The
+        # sherpa-onnx-sys build.rs only checks that lib/ exists, skips the
+        # download and then fails with "could not find native static library
+        # sherpa-onnx-c-api". Remove such a directory so build.rs downloads again.
+        shell: pwsh
+        run: |
+          Get-ChildItem target/sherpa-onnx-prebuilt -Directory -ErrorAction SilentlyContinue |
+            Where-Object { -not (Test-Path (Join-Path $_.FullName 'lib/sherpa-onnx-c-api.lib')) } |
+            ForEach-Object { Write-Host "Removing incomplete $($_.FullName)"; Remove-Item -LiteralPath $_.FullName -Recurse -Force }
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
