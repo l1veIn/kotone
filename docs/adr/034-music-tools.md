@@ -121,3 +121,29 @@ ADR 031 让她在右侧栏的浏览器里打开音乐网站放歌（`music-web` 
 - **账号风险**：短时间大量请求会被限制（有人 1.3 秒取 30 次歌词，整个账号很久取不到播放链接）。缓存、不批量、不反复登录。
 - **歌曲版权**：网易云本身没有的歌（周杰伦）只能搜到翻唱；她要直说“网易云没有原唱”。
 - **非中国 IP、代理**：会 `-460` / `-462`，给玩家的提示里说清楚。
+
+## 实现情况（2026-11-23，分支 `claude/adr-034-music`）
+
+| 提交 | 内容 |
+| --- | --- |
+| `75acf688` | `kotone-music` 网易云客户端：扫码登录（eapi `type:3`）、搜歌、播放链接（判断试听）、歌单、每日推荐、喜欢列表、FM、红心；照 ncmapi / api-enhanced / YesPlayMusic（MIT，署名在 `THIRD_PARTY_NOTICES.md`）。weapi 的公钥一步用 `num-bigint` 做，不依赖 `rsa`，`cargo audit` 干净 |
+| `2c8af410` | 播放器：边下边放（不落盘）、symphonia 解码、重采样、cpal 输出、播放列表、跳过放不了的（最多试 8 首）、链接过期重取、她说话时压低（0.25）、FM 放完自动要下一批 |
+| `7c1ca602` | `kotone-cli music search / url / login / play`（真网络冒烟） |
+| `9b1833a1` `f89cd362` | 界面：去掉浏览器卡片的播放 / 暂停 / 下一首和“放歌用哪个网站”；音乐页（发现、搜索、歌单、扫码卡片、底部播放条、播放列表）、左侧栏小播放条、聊天页的扫码卡片、侧边栏“全部页面”（上移 / 下移 / 隐藏 / 恢复默认、右键菜单）；中英文案、术语表 |
+| `cb1b92bf` | 桌面接入：`music_*` 命令、`kotone://music`、她的 `music` 工具和提示词、凭据库存登录、没登录过不写凭据库也不连网易云、她出声时压低、设置 `music` / `ui.sidebar`、去掉 `agent.musicSite` 和 `music-web` 技能、CSP 允许网易云封面 |
+
+验证：`cargo clippy --workspace -D warnings` 干净；`cargo test --workspace` 1177 个全过（`kotone-music` 61 个：加密向量照 api-enhanced 的 JS 算、能不能放的规则、缓存、跳过、重采样）；`cargo audit` 没有新的；svelte-check 0；Playwright 142 个全过（`music.spec.ts`、`sidebar-edit.spec.ts` 新加）。
+
+真机（`scripts/manual-e2e/music_real.py`，真 app、真网易云、真 DeepSeek，隔离 KOTONE_HOME，没登录）：
+
+- 搜《孤勇者》0.5 秒 30 首，陈奕迅原唱标成 VIP，22 首能完整放；
+- 音乐页显示扫码卡片，`music_login_start` 出真二维码，取消能收起；
+- 没登录时点放歌：提示扫码并把二维码打开（D5）；
+- 打字“我要听孤勇者”：她直接用 `music`（没交给后台），工具返回 `need_login`，她说“你还没登录网易云哦～聊天页上有二维码，用网易云音乐 App 扫一下……”，5 秒；
+- fork 用 `kotone-cli` 匿名真放：跳过 VIP 原唱放了田一名的版本，0.4–0.5 秒出声；拖进度、暂停、继续、停都正常。
+
+还没验证（要玩家）：
+
+- **登录以后的一切**：扫码登录、每日推荐、我的歌单、我喜欢的、私人 FM、红心、VIP 账号的整首链接。`music_real.py --login` 会显示窗口等玩家扫码，然后跑 L1–L5。
+- 无损（FLAC）播放；她说话时音乐压低的实际听感；通话里放着歌时回声消除会不会把歌当成玩家在说话。
+- 网易云哪天停掉旧的 eapi 取链接接口（api-enhanced 从 2026-05 起用 xeapi）：还没有退路，到时候照 api-enhanced 补。
