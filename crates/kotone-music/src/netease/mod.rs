@@ -394,7 +394,14 @@ impl MusicProvider for NeteaseProvider {
                 message: "没拿到二维码".into(),
             })?
             .to_string();
-        let content = format!("{BASE}/login?codekey={key}");
+        let s_device_id = self
+            .session
+            .lock()
+            .unwrap()
+            .cookies
+            .get("sDeviceId")
+            .cloned();
+        let content = qr_content(&key, s_device_id.as_deref(), now_ms());
         let svg =
             crate::qr::svg(&content).map_err(|message| MusicError::Api { code: 0, message })?;
         Ok(QrStart { key, content, svg })
@@ -640,8 +647,38 @@ impl MusicProvider for NeteaseProvider {
     }
 }
 
+/// 二维码里的网址。带 `chainId` 照 api-enhanced 4f4aa134（2025-09，MIT）：不带时手机上扫完提示
+/// “检测到当前设备环境异常”（api-enhanced #1、#6；2026-11-23 玩家真机复现）。格式
+/// `v1_<sDeviceId 或 unknown-随机数>_web_login_<毫秒>`。
+fn qr_content(key: &str, s_device_id: Option<&str>, now_ms: u128) -> String {
+    let device = match s_device_id.map(str::trim).filter(|d| !d.is_empty()) {
+        Some(device) => device.to_string(),
+        None => format!("unknown-{}", crate::random::u64() % 1_000_000),
+    };
+    format!("{BASE}/login?codekey={key}&chainId=v1_{device}_web_login_{now_ms}")
+}
+
+fn now_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn qr_content_carries_a_chain_id() {
+        let url = super::qr_content("abc-123", None, 1_795_400_000_000);
+        assert!(url.starts_with("https://music.163.com/login?codekey=abc-123&chainId=v1_unknown-"));
+        assert!(url.ends_with("_web_login_1795400000000"));
+        let url = super::qr_content("k", Some("DEVICE42"), 7);
+        assert_eq!(
+            url,
+            "https://music.163.com/login?codekey=k&chainId=v1_DEVICE42_web_login_7"
+        );
+    }
+
     use super::*;
     use crate::MemorySessionStore;
 

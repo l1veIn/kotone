@@ -12,7 +12,7 @@ M4. `music_login_start`: a QR (SVG) on the page; `music_login_cancel` puts it aw
 M5. `music_play` while logged out refuses with a scan hint and starts the QR (D5).
 M6. typed “我要听孤勇者” → she uses `music` directly (no agent.start) and asks the player to scan.
 
-`--login` (window shown, the player scans with the NetEase Cloud Music app; waits up to 3 minutes):
+`--login` (window shown, only these cases; the player scans with the NetEase Cloud Music app; waits up to 3 minutes):
 L1. after the scan the account shows up; `music_home` has daily picks and playlists (我喜欢的音乐 first).
 L2. typed “放每日推荐” → playing within ~15 s, position moves, the sidebar mini player shows it.
 L3. typed “暂停一下” / “继续放” / “这是什么歌” → `music`, paused / playing again / she names it.
@@ -205,9 +205,11 @@ def main():
         cid = real_deepseek.add_connection(bt.EXE, bt.ENV, model="deepseek-flash")
         bt.call("settings.update", {"patch": {"assistant": {"connectionId": cid}}})
         bt.invoke("agent_new_conversation", {})
-        logged_out_cases()
+        # --login 只跑登录以后的（没登录的那几项会弹出又收起二维码，玩家容易扫错）
         if LOGIN:
             logged_in_cases()
+        else:
+            logged_out_cases()
     finally:
         try:
             bt.invoke("music_control", {"action": "stop"})
