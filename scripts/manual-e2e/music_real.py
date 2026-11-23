@@ -75,7 +75,12 @@ def log_text():
 
 
 def music_state():
-    return bt.invoke("music_state", {}).get("ok") or {}
+    # 登录窗口（无痕）开着时，调试端口偶尔连不上一次：当成“还没好”，下一轮再问
+    try:
+        return bt.invoke("music_state", {}).get("ok") or {}
+    except Exception as e:  # noqa: BLE001
+        print("   (music_state:", str(e)[-80:].replace(chr(10), " "), ")")
+        return {}
 
 
 def main_tools(main, text):

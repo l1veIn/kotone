@@ -222,14 +222,11 @@ fn emit(app: &AppHandle) {
 // 第三方扫码（`type: 3`）在玩家手机上提示“检测到当前设备环境异常”（2026-11-23 真机，带 chainId 也一样；
 // api-enhanced #1 / #6、YesPlayMusic #2493）。官网的扫码可以：弹一个小窗口打开 music.163.com 的登录页，
 // 玩家用网易云音乐 App 扫官网的二维码，Kotone 从这个窗口的 Cookie 里拿 MUSIC_U（SPlayer 也这么做）。
-// 窗口用自己的数据目录（`<KOTONE_HOME>/music-login`），退出登录时清掉。
+// 窗口是无痕的（WebView2 InPrivate，和主窗口同一个浏览器进程）：网页数据关窗口就没了，登录凭据只在
+// Kotone 自己这边（凭据库）。用单独的数据目录会另起一个浏览器进程，真机测试的调试端口会被它占走。
 
 const LOGIN_WINDOW: &str = "music-login";
 const LOGIN_URL: &str = "https://music.163.com/#/login";
-
-fn login_dir() -> std::path::PathBuf {
-    kotone_core::settings::kotone_dir().join("music-login")
-}
 
 fn logged_in(music: &Music) -> bool {
     music.account.lock().unwrap().is_some()
@@ -250,7 +247,7 @@ fn open_login_window(app: &AppHandle) -> Result<(), String> {
         .title("登录网易云音乐")
         .inner_size(1000.0, 720.0)
         .center()
-        .data_directory(login_dir())
+        .incognito(true)
         .build()
         .map_err(|e| format!("打不开网易云的登录窗口：{e}"))?;
     Ok(())
@@ -263,19 +260,19 @@ fn close_login_window(app: &AppHandle) {
 }
 
 /// 登录窗口里 music.163.com 的 Cookie（读 Cookie 在 Windows 上不能在主线程 / 同步回调里做，会卡死）。
-async fn login_cookies(app: &AppHandle) -> Option<Vec<(String, String)>> {
-    let window = app.get_webview_window(LOGIN_WINDOW)?;
-    let url: url::Url = "https://music.163.com/".parse().ok()?;
-    tauri::async_runtime::spawn_blocking(move || window.cookies_for_url(url))
+async fn login_cookies(app: &AppHandle) -> Result<Vec<(String, String)>, String> {
+    let window = app.get_webview_window(LOGIN_WINDOW).ok_or("登录窗口没了")?;
+    let url: url::Url = "https://music.163.com/"
+        .parse()
+        .map_err(|e| format!("{e}"))?;
+    let cookies = tauri::async_runtime::spawn_blocking(move || window.cookies_for_url(url))
         .await
-        .ok()?
-        .ok()
-        .map(|cookies| {
-            cookies
-                .iter()
-                .map(|c| (c.name().to_string(), c.value().to_string()))
-                .collect()
-        })
+        .map_err(|e| format!("读 Cookie 的线程出错：{e}"))?
+        .map_err(|e| format!("读 Cookie 失败：{e}"))?;
+    Ok(cookies
+        .iter()
+        .map(|c| (c.name().to_string(), c.value().to_string()))
+        .collect())
 }
 
 /// 打开官网登录窗口，等玩家扫码（已经在等就只是把窗口调到前面）。登好了关窗口、发事件。
@@ -299,6 +296,7 @@ pub async fn login_start(app: &AppHandle) -> Result<Value, String> {
     let task = tauri::async_runtime::spawn(async move {
         let app = task_music.app.clone();
         let started = std::time::Instant::now();
+        let mut seen = String::new();
         loop {
             tokio::time::sleep(LOGIN_POLL).await;
             if app.get_webview_window(LOGIN_WINDOW).is_none() {
@@ -315,9 +313,24 @@ pub async fn login_start(app: &AppHandle) -> Result<Value, String> {
                 );
                 break;
             }
-            let Some(cookies) = login_cookies(&app).await else {
-                continue;
+            // 诊断：读到的 Cookie 名字变了才记一次（只记名字，不记值：MUSIC_U 是登录凭据）
+            let cookies = match login_cookies(&app).await {
+                Ok(cookies) => cookies,
+                Err(error) => {
+                    if seen != error {
+                        log::log(&format!("music: 登录窗口 {error}"));
+                        seen = error;
+                    }
+                    continue;
+                }
             };
+            let mut names: Vec<&str> = cookies.iter().map(|(name, _)| name.as_str()).collect();
+            names.sort_unstable();
+            let names = names.join(",");
+            if seen != names {
+                log::log(&format!("music: 登录窗口里的 Cookie：{names}"));
+                seen = names;
+            }
             if !cookies
                 .iter()
                 .any(|(name, value)| name == "MUSIC_U" && !value.is_empty())
@@ -366,22 +379,13 @@ pub fn login_cancel(app: &AppHandle) -> Result<Value, String> {
     Ok(state_with(music, None))
 }
 
-/// 退出登录：Kotone 这边忘掉，登录窗口的网页数据也清掉（下次登录要重新扫码）。
+/// 退出登录：Kotone 这边忘掉（登录窗口是无痕的，网页那边本来就没留东西；下次登录要重新扫码）。
 pub async fn logout(app: &AppHandle) -> Result<Value, String> {
     let music = music()?.clone();
     music.player.stop();
     music.provider.logout().await.map_err(|e| e.to_string())?;
     *music.account.lock().unwrap() = None;
     close_login_window(app);
-    // 窗口刚关时浏览器进程可能还拿着文件：等一下再删，删不掉也不要紧（下次打开还是官网的登录页）
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        if let Err(error) = std::fs::remove_dir_all(login_dir()) {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                log::log(&format!("music: 登录窗口的网页数据没删掉：{error}"));
-            }
-        }
-    });
     log::log("music: 退出登录");
     emit(app);
     Ok(state_with(&music, None))
