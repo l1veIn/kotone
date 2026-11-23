@@ -163,13 +163,11 @@ def main():
             r, s = probe("click", int(play.group(1)))
             print(f"   P4 click play: {json.dumps(r, ensure_ascii=False)[:160]}")
             time.sleep(4)
-            r, _ = probe("music", "now")
-            print(f"   P4 music now: {json.dumps(r, ensure_ascii=False)[:200]}")
+            # 放歌不在浏览器里了（ADR 034）：这里只看页面在不在出声（标签页上的“在出声”）
+            r, _ = probe("audio")
+            print(f"   P4 page audio: {json.dumps(r, ensure_ascii=False)[:200]}")
             state = invoke("browser_state", {}).get("ok") or {}
             print(f"   P4 browser state media: {state.get('media')}")
-            if (r.get("ok") or {}).get("playing"):
-                r, _ = probe("music", "pause")
-                print(f"   P4 music pause: {json.dumps(r, ensure_ascii=False)[:160]}")
 
         for bad in ["http://localhost:1420", "http://127.0.0.1", "file:///C:/Windows/win.ini", "http://tauri.localhost"]:
             r, _ = probe("open", bad)

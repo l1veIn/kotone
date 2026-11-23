@@ -60,8 +60,8 @@ pub const HOST_BUILTINS: &[&str] = &[
     TOOL_WEB_SEARCH,
     TOOL_WEB_FETCH,
     TOOL_SCREEN_AT_SPEECH,
-    // Kotone 浏览器里在放的歌（ADR 031）
-    crate::browser::TOOL_MUSIC,
+    // 放歌（ADR 034，桌面端的播放器）
+    crate::music::TOOL_MUSIC,
 ];
 
 /// 主会话（和玩家说话的那段对话）的工具：马上出结果（约 1–2 秒内）的一小套，语音和打字共用一份
@@ -106,8 +106,8 @@ pub const MAIN_TOOLS: &[&str] = &[
     TOOL_WEB_SEARCH,
     "usage.summary",
     "runtime.status",
-    // Kotone 浏览器里在放的歌：暂停、继续、下一首、现在放的是什么（ADR 031；点歌交给后台）
-    crate::browser::TOOL_MUSIC,
+    // 放歌：搜歌即放、每日推荐、我喜欢的、暂停切歌（ADR 034，一次调用就出声，不交给后台）
+    crate::music::TOOL_MUSIC,
     // 交给后台
     TOOL_AGENT_START,
     TOOL_AGENT_FOLLOWUP,
@@ -270,7 +270,8 @@ pub fn group_of(name: &str) -> &'static str {
         | "autostart" | "elevation" => "settings",
         "models" | "speech" | "stt" | "wake" => "models",
         "shell" | "file" => "computer",
-        "browser" | "music" => "browser",
+        "browser" => "browser",
+        "music" => "game",
         _ => "app",
     }
 }
@@ -736,6 +737,7 @@ impl Catalog {
         entries.extend(service_entries(specs));
         entries.extend(exec_entries(&kotone_exec::tool_specs()));
         entries.extend(crate::browser::entries());
+        entries.extend(crate::music::entries());
         entries.extend(saved.iter().filter_map(saved_entry).take(MAX_SAVED_TOOLS));
         Self { entries }
     }

@@ -34,8 +34,8 @@ pub async fn browser_set_bounds(
     Ok(())
 }
 
-/// 右侧栏上的按钮（对当前标签页）：`reload` / `back` / `forward` / `stop` / `close`（关掉当前标签页）；
-/// `play` / `pause` / `next` 对正在放歌的标签页。
+/// 右侧栏上的按钮（对当前标签页）：`reload` / `back` / `forward` / `stop` / `close`（关掉当前标签页）。
+/// 放歌不在浏览器里了（ADR 034，音乐页和 `music` 工具）。
 #[tauri::command]
 pub async fn browser_control(app: AppHandle, action: String) -> Result<Value, String> {
     browser::control(&app, &action).await
@@ -138,7 +138,6 @@ pub async fn browser_probe(
             )
             .await
         }
-        "music" => browser::music(&app, arg.as_str().unwrap_or("now")).await,
         "eval" => browser::probe_eval(&app, arg.as_str().unwrap_or("null")).await,
         "audio" => browser::probe_audio(&app).await,
         other => Err(format!("不认识的操作：{other}")),

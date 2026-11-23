@@ -19,6 +19,7 @@ pub use kotone_exec as exec;
 
 pub mod browser;
 pub mod catalog;
+pub mod music;
 pub mod permissions;
 pub mod port;
 pub mod prompt;

@@ -29,8 +29,6 @@ pub const TOOL_TYPE: &str = "browser.type";
 pub const TOOL_PRESS: &str = "browser.press";
 pub const TOOL_WAIT: &str = "browser.wait";
 pub const TOOL_HANDOVER: &str = "browser.handover";
-/// 主会话控制 Kotone 浏览器里在放的歌（马上出结果）。
-pub const TOOL_MUSIC: &str = "music";
 
 pub const TOOLS: [&str; 7] = [
     TOOL_OPEN,
@@ -130,19 +128,6 @@ pub fn entries() -> Vec<ToolEntry> {
             }}),
             false,
         ),
-        ToolEntry {
-            name: TOOL_MUSIC.into(),
-            description: "控制 Kotone 浏览器里正在放的歌：play 继续、pause 暂停、next 下一首、now 现在放的是什么。\
-玩家要听某首歌（“我要听晴天”“来点歌”）交给后台（agent.start），后台在音乐网站上搜了放。".into(),
-            parameters: json!({"type": "object", "additionalProperties": false, "required": ["action"], "properties": {
-                "action": {"enum": ["play", "pause", "next", "now"]}
-            }}),
-            side_effects: vec!["plays-media".into()],
-            group: "browser",
-            source: Source::Builtin,
-            // 歌名、页面标题是网站写的
-            untrusted: true,
-        },
     ]
 }
 
@@ -1113,79 +1098,27 @@ pub fn captcha_hint(text: &str) -> bool {
 
 // ---------- 音乐（主会话的 `music`） ----------
 
-/// 各音乐网站“下一首”按钮（按站点后缀找第一个对得上的；都对不上再按 title / aria-label 里的“下一首”找）。
-/// 2026-11-21 在真网站上核对过按钮**存在**（不登录放不了歌，点了能不能换歌没核实）：
-/// 网易云播放条 `a.nxt`（title“下一首(ctrl+→)”）、酷狗歌曲页 `#next`（`.icon-playbar-next`）、
-/// 酷我播放条 `div.next`（title“下一首”）。QQ 音乐不登录看不到播放条，没有核实，只靠通用规则。
-pub const NEXT_BUTTONS: &[(&str, &[&str])] = &[
-    (
-        "music.163.com",
-        &["a.nxt[data-action=\"next\"]", ".m-playbar .nxt"],
-    ),
-    ("kugou.com", &["#next", ".icon-playbar-next"]),
-    ("kuwo.cn", &["div.next[title^=\"下一首\"]", "div.next"]),
-];
-
-/// 这个网站的“下一首”按钮选择器（没有专门的就空）。
-pub fn next_selectors(site: &str) -> &'static [&'static str] {
-    NEXT_BUTTONS
-        .iter()
-        .find(|(suffix, _)| site == *suffix || site.ends_with(&format!(".{suffix}")))
-        .map(|(_, selectors)| *selectors)
-        .unwrap_or(&[])
-}
-
-/// 在页面里（含同源 iframe）找 `<audio>/<video>` 播放 / 暂停 / 下一首，并读媒体会话的歌名。
-/// 返回 `{count, playing, title, artist, done}`。
-pub fn media_script(action: &str, next_selectors: &[&str]) -> String {
-    let selectors = serde_json::to_string(next_selectors).unwrap_or_else(|_| "[]".into());
-    let action = serde_json::to_string(action).unwrap_or_else(|_| "\"now\"".into());
-    format!(
-        r#"(() => {{
-  const action = {action};
+/// 读页面（含同源 iframe）里的 `<audio>/<video>`（和初始化脚本登记的不挂在页面上的 `Audio`）在不在放、
+/// 媒体会话的歌名：右侧栏标签页上的“在出声”。返回 `{count, playing, title, artist}`。
+/// （放歌不再走网页，ADR 034；这里只读，不暂停、不切歌。）
+pub const MEDIA_NOW_SCRIPT: &str = r#"(() => {
   const media = [];
-  const docs = [];
-  const collect = (doc) => {{
-    try {{
-      docs.push(doc);
+  const collect = (doc) => {
+    try {
       media.push(...doc.querySelectorAll('audio,video'));
-      try {{ for (const m of (doc.defaultView && doc.defaultView.__kotoneMedia) || []) {{ if (!media.includes(m)) media.push(m); }} }} catch (e) {{}}
-      for (const f of doc.querySelectorAll('iframe')) {{ try {{ if (f.contentDocument) collect(f.contentDocument); }} catch (e) {{}} }}
-    }} catch (e) {{}}
-  }};
+      try { for (const m of (doc.defaultView && doc.defaultView.__kotoneMedia) || []) { if (!media.includes(m)) media.push(m); } } catch (e) {}
+      for (const f of doc.querySelectorAll('iframe')) { try { if (f.contentDocument) collect(f.contentDocument); } catch (e) {} }
+    } catch (e) {}
+  };
   collect(document);
-  let done = false;
-  if (action === 'pause') {{
-    for (const m of media) {{ if (!m.paused) {{ m.pause(); done = true; }} }}
-  }} else if (action === 'play') {{
-    const m = media.find((m) => m.paused && (m.currentSrc || m.src));
-    if (m) {{ const p = m.play(); if (p && p.catch) p.catch(() => {{}}); done = true; }}
-  }} else if (action === 'next') {{
-    const selectors = {selectors};
-    const click = (el) => {{ if (el) {{ el.click(); done = true; }} }};
-    for (const doc of docs) {{
-      for (const sel of selectors) {{ if (!done) {{ try {{ click(doc.querySelector(sel)); }} catch (e) {{}} }} }}
-    }}
-    if (!done) {{
-      for (const doc of docs) {{
-        if (done) break;
-        const el = [...doc.querySelectorAll('[title],[aria-label]')].find((e) =>
-          /下一首|下一曲|^next( track)?$/i.test((e.getAttribute('aria-label') || e.getAttribute('title') || '').trim()));
-        click(el);
-      }}
-    }}
-  }}
   const md = navigator.mediaSession && navigator.mediaSession.metadata;
-  return {{
+  return {
     count: media.length,
     playing: media.some((m) => !m.paused && !m.ended),
     title: md ? md.title || null : null,
     artist: md ? md.artist || null : null,
-    done,
-  }};
-}})()"#
-    )
-}
+  };
+})()"#;
 
 // ---------- 交给页面执行的函数（`Runtime.callFunctionOn`，this = 那个元素） ----------
 
@@ -1590,17 +1523,9 @@ mod tests {
     }
 
     #[test]
-    fn music_sites_have_next_buttons_and_others_fall_back() {
-        assert!(next_selectors("music.163.com")[0].contains("nxt"));
-        // QQ 音乐没核实过，只靠通用的“下一首”规则
-        assert!(next_selectors("y.qq.com").is_empty());
-        assert_eq!(next_selectors("www.kugou.com")[0], "#next");
-        assert!(next_selectors("www.kuwo.cn")[0].starts_with("div.next"));
-        assert!(next_selectors("example.com").is_empty());
-        let script = media_script("next", next_selectors("music.163.com"));
-        assert!(script.contains("a.nxt"));
-        assert!(script.contains("下一首"));
-        assert!(media_script("pause", &[]).contains("\"pause\""));
+    fn the_media_script_only_reads() {
+        assert!(MEDIA_NOW_SCRIPT.contains("__kotoneMedia"));
+        assert!(!MEDIA_NOW_SCRIPT.contains(".pause()") && !MEDIA_NOW_SCRIPT.contains(".play()"));
     }
 
     #[test]
@@ -1615,18 +1540,15 @@ mod tests {
     }
 
     #[test]
-    fn browser_tools_are_background_only_and_music_is_for_the_main_session() {
+    fn browser_tools_are_background_only() {
         let entries = entries();
         for name in TOOLS {
             let e = entries.iter().find(|e| e.name == name).unwrap();
             assert_eq!(e.source, Source::Exec, "{name}");
             assert!(!crate::catalog::MAIN_TOOLS.contains(&name), "{name}");
         }
-        let music = entries.iter().find(|e| e.name == TOOL_MUSIC).unwrap();
-        assert_eq!(music.source, Source::Builtin);
-        assert!(crate::catalog::MAIN_TOOLS.contains(&TOOL_MUSIC));
-        // 由桌面端执行（2026-11-21 真机：漏了这一条，主会话调用时报“没有名为 music 的内置动作”）
-        assert!(crate::catalog::HOST_BUILTINS.contains(&TOOL_MUSIC));
+        // 放歌不在浏览器里了（ADR 034）：music 是 crate::music 的
+        assert!(!entries.iter().any(|e| e.name == crate::music::TOOL_MUSIC));
         assert!(is_browser_tool("browser.open"));
         assert!(!is_browser_tool("music"));
         assert!(!is_browser_tool("shell.run"));

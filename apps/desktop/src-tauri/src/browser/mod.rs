@@ -230,15 +230,6 @@ impl<V> Inner<V> {
         Ok(tab.webview)
     }
 
-    /// 放歌对哪个标签页：正在出声的，没有就她的，再没有就当前的。
-    fn music_tab(&self) -> Option<&Tab<V>> {
-        self.tabs
-            .iter()
-            .find(|t| t.info.audible)
-            .or_else(|| self.agent.as_deref().and_then(|id| self.tab(id)))
-            .or_else(|| self.active.as_deref().and_then(|id| self.tab(id)))
-    }
-
     /// 交给界面的状态：`url / title / site / loading` 是当前标签页的；`media` 是正在出声的标签页的
     /// （没有就当前标签页）。
     fn compose(&self) -> BrowserState {
@@ -367,18 +358,6 @@ pub(crate) fn agent_tab(app: &AppHandle) -> Option<(String, Webview)> {
     let id = inner.agent.clone()?;
     let webview = inner.tab(&id)?.webview.clone();
     Some((id, webview))
-}
-
-/// 放歌的标签页：正在出声的，没有就她的，再没有就当前的。
-fn music_tab(app: &AppHandle) -> Option<(String, Webview, Option<String>)> {
-    let rt = runtime(app)?;
-    let inner = rt.inner.lock().unwrap();
-    let tab = inner.music_tab()?;
-    Some((
-        tab.info.id.clone(),
-        tab.webview.clone(),
-        tab.info.site.clone(),
-    ))
 }
 
 /// 后台正在操作页面（界面显示“她在操作”）。
@@ -599,7 +578,7 @@ fn start_polling(app: &AppHandle) {
                 let (media, page) = if audible || active {
                     let script = format!(
                         "(() => {{ const m = {}; return {{ title: document.title, url: location.href, media: m }}; }})()",
-                        kotone_agent::browser::media_script("now", &[])
+                        kotone_agent::browser::MEDIA_NOW_SCRIPT
                     );
                     match cdp::evaluate(&webview, &script).await {
                         Ok(value) => (
@@ -777,7 +756,6 @@ pub fn tab_close(app: &AppHandle, id: &str) -> Result<(), String> {
 /// 界面上的按钮：刷新、后退、前进、停止、关掉当前标签页、播放、暂停、下一首。
 pub async fn control(app: &AppHandle, action: &str) -> Result<Value, String> {
     match action {
-        "play" | "pause" | "next" => music(app, action).await,
         "reload" => {
             let webview = match active_tab(app) {
                 Some((_, webview)) => webview,
@@ -952,15 +930,13 @@ mod tests {
             inner.compose().url.as_deref(),
             Some("https://www.bilibili.com/")
         );
-        // 放歌：谁出声对谁；都不出声对她的
-        assert_eq!(inner.music_tab().unwrap().info.id, hers);
+        // 顶上的“在出声”跟着出声的标签页（放歌不在浏览器里了，ADR 034；只读）
         inner.tab_mut(&mine).unwrap().info.audible = true;
         inner.tab_mut(&mine).unwrap().media = Some(Media {
             playing: true,
             title: Some("晴天".into()),
             artist: None,
         });
-        assert_eq!(inner.music_tab().unwrap().info.id, mine);
         inner.select(&hers).unwrap();
         assert_eq!(
             inner.compose().media.and_then(|m| m.title).as_deref(),

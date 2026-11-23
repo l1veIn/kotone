@@ -72,6 +72,7 @@ pub(crate) fn update_settings(
             *next = serde_json::from_value(merged).map_err(|e| format!("配置项不合法: {e}"))?;
             next.overlay.normalize_interaction();
             next.assistant.normalize_voices();
+            next.ui.sidebar.normalize();
             next.assistant.validate()?;
             let call_key = kotone_core::hotkey::parse_hotkey(next.call_hotkey());
             if call_key.is_some()
@@ -162,6 +163,8 @@ pub(crate) fn update_settings(
         use tauri::Emitter as _;
         let _ = app.emit("kotone://overlay-config", &updated.overlay);
     }
+
+    crate::music::settings_changed(&old.music, &updated.music);
 
     if !updated.ui.legacy_upgrade.uses_legacy_assistant() {
         if old.ui.legacy_upgrade.uses_legacy_assistant() {

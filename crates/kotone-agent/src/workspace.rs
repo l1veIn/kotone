@@ -46,10 +46,10 @@ pub const BUNDLED_SKILLS: &[(&str, &str)] = &[
         "skill-creator",
         include_str!("../skills/skill-creator/SKILL.md"),
     ),
-    // 在 Kotone 右侧栏的浏览器里放歌（ADR 031）：各音乐网站的搜索网址、登录提示、播放条按钮，
-    // 2026-11-21 真网站核对过的写进去，没核对的标“未核实”。
-    ("music-web", include_str!("../skills/music-web/SKILL.md")),
 ];
+/// 不再内置的 Skill：装过、玩家没改过的删掉；改过的留着（只是不再随版本更新）。
+/// `music-web`：放歌改成主会话的 `music` 工具（ADR 034），不在网页上放了。
+pub const RETIRED_BUNDLED_SKILLS: &[&str] = &["music-web"];
 /// 装过哪些内置 Skill、装的是哪个版本（内容的 FNV-1a 64 位哈希）。
 pub const BUNDLED_RECORD: &str = ".bundled-skills.json";
 
@@ -358,6 +358,17 @@ impl Workspace {
                     }
                 }
                 Some(_) => {}
+            }
+        }
+        for name in RETIRED_BUNDLED_SKILLS {
+            let Some(installed) = record.remove(*name) else {
+                continue;
+            };
+            changed = true;
+            let dir = self.dir.join(SKILLS).join(name);
+            if fnv64(&read(&dir.join(SKILL_FILE))) == installed {
+                std::fs::remove_dir_all(&dir)
+                    .map_err(|e| format!("删掉不再内置的技能 {name} 失败：{e}"))?;
             }
         }
         if changed {
@@ -698,7 +709,6 @@ mod tests {
         assert!(
             names.contains(&"kotone-config".to_string())
                 && names.contains(&"skill-creator".to_string())
-                && names.contains(&"music-web".to_string())
         );
 
         // 玩家删了：不再装回
@@ -725,6 +735,48 @@ mod tests {
         ws.ensure().unwrap();
         assert!(std::fs::read_to_string(&file).unwrap().contains("我改过"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn retired_bundled_skills_go_away_unless_the_player_changed_them() {
+        let (_d, ws) = ws();
+        let skills = ws.dir().join(SKILLS);
+        let record_path = ws.dir().join(BUNDLED_RECORD);
+        let untouched = "---
+name: music-web
+description: 旧的放歌
+---
+旧
+";
+        let write_old = |text: &str| {
+            std::fs::create_dir_all(skills.join("music-web")).unwrap();
+            std::fs::write(skills.join("music-web").join(SKILL_FILE), text).unwrap();
+            let mut record: std::collections::BTreeMap<String, String> =
+                serde_json::from_str(&std::fs::read_to_string(&record_path).unwrap()).unwrap();
+            record.insert("music-web".into(), fnv64(untouched));
+            std::fs::write(&record_path, serde_json::to_string(&record).unwrap()).unwrap();
+        };
+        // 装过、没改过：删掉，记录里也去掉
+        write_old(untouched);
+        ws.ensure().unwrap();
+        assert!(!skills.join("music-web").exists());
+        assert!(!std::fs::read_to_string(&record_path)
+            .unwrap()
+            .contains("music-web"));
+        // 改过：留着，只是不再跟踪
+        write_old(
+            "---
+name: music-web
+description: 我改过
+---
+我的
+",
+        );
+        ws.ensure().unwrap();
+        assert!(skills.join("music-web").join(SKILL_FILE).exists());
+        assert!(!std::fs::read_to_string(&record_path)
+            .unwrap()
+            .contains("music-web"));
     }
 
     #[test]

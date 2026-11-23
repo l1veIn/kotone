@@ -14,11 +14,9 @@ B1. open https://example.com and say its title → the first visit to a site ask
     She works in her own tab (`agent: true`, switched to); the player's example.org tab is untouched.
 B2. search a public search page (Bing) and open the first result → browser.type / browser.click / browser.wait,
     all while the window is hidden.
-B3. “我要听晴天” → the background goes to music.163.com, searches and plays (or hands over for a login;
-    the script records it and presses “好了”). `browser_state().media` tells whether something plays.
-B4. main conversation: “暂停一下” / “继续放” / “这首歌叫什么” → `music` (instant, no background).
+(Music no longer plays in the browser — ADR 034 made it the `music` tool; the old B3/B4 music cases are gone.)
 Also prints whether the chat page shows the “Cannot read properties of null” banner.
-usage: python -X utf8 -I scripts/manual-e2e/browser_real.py [--music-only]
+usage: python -X utf8 -I scripts/manual-e2e/browser_real.py
 """
 import json
 import os
@@ -230,9 +228,8 @@ def main():
         call("settings.update", {"patch": {"assistant": {"connectionId": cid}}})
         invoke("agent_new_conversation", {})
 
-        if "--music-only" not in sys.argv:
-            web_cases()
-        music_cases()
+        web_cases()
+        chat_page_banner()
     finally:
         real_deepseek.delete_connection(EXE, ENV)
         try:
@@ -282,29 +279,8 @@ def web_cases():
               or "browser.click" in used, f"{bs.get('site')} {bs.get('title')}")
 
 
-def music_cases():
+def chat_page_banner():
     if True:
-        b3 = run("B3 我要听晴天", "我要听晴天", timeout=420)
-        bs = browser_state()
-        media = bs.get("media") or {}
-        print(f"   browser after B3: site={bs.get('site')} title={bs.get('title')} media={media} handovers={b3.get('handovers')}")
-        check("B3: the background went to a music site", bs.get("site") in ("music.163.com", "y.qq.com", "kugou.com", "kuwo.cn")
-              or any("163" in str(q) for q in b3.get("questions", [])), str(bs.get("site")))
-        check("B3: a song plays, or she handed the login over to the player",
-              media.get("playing") or b3.get("handovers"), json.dumps(media, ensure_ascii=False))
-
-        if media.get("playing"):
-            b4 = run("B4 暂停", "暂停一下")
-            check("B4: pause is instant (music, no background)", "music" in b4.get("main_tools", [])
-                  and "agent.start" not in b4.get("main_tools", []), ",".join(b4.get("main_tools", [])))
-            check("B4: it is paused", not (browser_state().get("media") or {}).get("playing"),
-                  json.dumps(browser_state().get("media"), ensure_ascii=False))
-            run("B4 继续", "继续放")
-            check("B4: it plays again", (browser_state().get("media") or {}).get("playing"),
-                  json.dumps(browser_state().get("media"), ensure_ascii=False))
-            b4n = run("B4 歌名", "这首歌叫什么")
-            check("B4: she names the song", "music" in b4n.get("main_tools", []), b4n.get("said", "")[:100])
-
         try:
             seen = page_text()
             banner = "Cannot read properties" in seen.get("text", "")

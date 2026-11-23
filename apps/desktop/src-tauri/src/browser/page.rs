@@ -9,7 +9,7 @@ use kotone_core::cancel::CancellationToken;
 use serde_json::{json, Value};
 use tauri::AppHandle;
 
-use super::{agent_tab, cdp, create_tab, music_tab, runtime, update, Busy, Handover, Memo};
+use super::{agent_tab, cdp, create_tab, runtime, update, Busy, Handover, Memo};
 
 /// 打开网页最多等多久加载完。
 const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
@@ -439,88 +439,4 @@ pub fn probe_focus(app: &AppHandle) -> Result<Value, String> {
 pub async fn probe_audio(app: &AppHandle) -> Result<Value, String> {
     let (_, webview) = probe_tab(app)?;
     Ok(json!({"documentPlayingAudio": cdp::playing_audio(&webview).await}))
-}
-
-/// 主会话的 `music`：控制 Kotone 浏览器里在放的歌。
-pub async fn music(app: &AppHandle, action: &str) -> Result<Value, String> {
-    if !matches!(action, "play" | "pause" | "next" | "now") {
-        return Err("action 只能是 play / pause / next / now".into());
-    }
-    // 正在出声的标签页；没有就她的标签页，再没有就当前的。
-    let Some((id, webview, site)) = music_tab(app) else {
-        return Err(
-            "现在 Kotone 里没有在放歌（还没打开音乐网站）。玩家想听歌就交给后台去音乐网站上放"
-                .into(),
-        );
-    };
-    let site = site.unwrap_or_default();
-    let script = rules::media_script(action, rules::next_selectors(&site));
-    let value = cdp::evaluate(&webview, &script).await?;
-    let audible = cdp::playing_audio(&webview).await;
-    let media = super::with_audio(super::media_of(&value), audible);
-    set_media(app, &id, media.clone());
-    let count = value["count"].as_u64().unwrap_or(0);
-    if count == 0 && audible != Some(true) {
-        return Err("Kotone 的浏览器里没有在放的歌（页面上没有播放器）".into());
-    }
-    let done = value["done"].as_bool().unwrap_or(false);
-    let mut out = json!({
-        "site": site,
-        "playing": media.as_ref().is_some_and(|m| m.playing),
-        "title": value["title"],
-        "artist": value["artist"],
-    });
-    match action {
-        "next" if !done => {
-            out["note"] = json!("这个网站找不到“下一首”按钮：要换歌就交给后台在页面上点");
-        }
-        // 页面脚本找不到播放器、可这个标签页还在出声（rc1 之后实测：QQ 音乐试听）：退一步把这个
-        // 标签页静音，先让声音停下，并如实说明；说“继续”时取消静音。
-        "pause" if !done && audible == Some(true) => {
-            if cdp::set_muted(&webview, true).await == Some(true) {
-                out["playing"] = json!(false);
-                out["muted"] = json!(true);
-                out["note"] = json!(
-                    "这个网站的播放器暂停不了，先把这个标签页静音了（歌其实还在走）；玩家说“继续”就取消静音"
-                );
-            } else {
-                out["note"] = json!("这个网站的播放器暂停不了，静音也没成功");
-            }
-        }
-        "play" if !done && cdp::muted(&webview).await == Some(true) => {
-            // 真机脚本半夜测放歌时整个浏览器是静音的，那时不取消。
-            if std::env::var_os("KOTONE_BROWSER_MUTE").is_none() {
-                cdp::set_muted(&webview, false).await;
-            }
-            out["muted"] = json!(false);
-            out["playing"] = json!(audible == Some(true));
-            out["note"] = json!("取消静音了");
-        }
-        "play" if !done => {
-            out["note"] = json!("没有暂停着的歌可以继续");
-        }
-        "pause" if !done => {
-            out["note"] = json!("本来就没在放");
-        }
-        _ => {}
-    }
-    if action == "next" && done {
-        // 换歌要一会儿：等新歌名出来再回答。
-        tokio::time::sleep(Duration::from_millis(1500)).await;
-        if let Ok(after) = cdp::evaluate(&webview, &rules::media_script("now", &[])).await {
-            out["playing"] = after["playing"].clone();
-            out["title"] = after["title"].clone();
-            out["artist"] = after["artist"].clone();
-            set_media(app, &id, super::media_of(&after));
-        }
-    }
-    Ok(out)
-}
-
-fn set_media(app: &AppHandle, id: &str, media: Option<super::Media>) {
-    update(app, |inner| {
-        if let Some(tab) = inner.tab_mut(id) {
-            tab.media = media;
-        }
-    });
 }

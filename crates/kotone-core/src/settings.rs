@@ -154,6 +154,57 @@ pub struct Settings {
     /// 内置浏览器（ADR 031）：玩家加的浏览器插件。新字段，旧版本会忽略。
     #[serde(default)]
     pub browser: BrowserConfig,
+    /// 放歌（ADR 034）：音质、音量。登录凭据不在这里（Windows 凭据库）。新字段，旧版本会忽略。
+    #[serde(default)]
+    pub music: MusicConfig,
+}
+
+/// 放歌（config.json `music` 段，ADR 034）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicConfig {
+    /// 音质：`standard` / `exhigh`（默认，非 VIP 的上限）/ `lossless`（要 VIP）。存成字符串：
+    /// 不认识的值按默认（docs/development.md 的配置兼容规则）。
+    #[serde(default = "default_music_quality")]
+    pub quality: String,
+    /// 音量 0–100。
+    #[serde(default = "default_music_volume")]
+    pub volume: u8,
+}
+
+/// 音质的取值：(值, 名字)。第一个是默认。
+pub const MUSIC_QUALITIES: &[(&str, &str)] = &[
+    ("exhigh", "极高"),
+    ("standard", "标准"),
+    ("lossless", "无损（要 VIP）"),
+];
+
+fn default_music_quality() -> String {
+    MUSIC_QUALITIES[0].0.into()
+}
+
+fn default_music_volume() -> u8 {
+    70
+}
+
+impl Default for MusicConfig {
+    fn default() -> Self {
+        Self {
+            quality: default_music_quality(),
+            volume: default_music_volume(),
+        }
+    }
+}
+
+impl MusicConfig {
+    /// 音质（不认识的值按默认“极高”）。
+    pub fn quality(&self) -> &'static str {
+        MUSIC_QUALITIES
+            .iter()
+            .find(|(id, _)| *id == self.quality)
+            .unwrap_or(&MUSIC_QUALITIES[0])
+            .0
+    }
 }
 
 /// 内置浏览器（config.json `browser` 段，ADR 031）。
@@ -291,6 +342,41 @@ pub struct UiConfig {
     /// （docs/development.md 的配置兼容规则）。0.1.x 不认识这个字段，会忽略它。
     #[serde(default)]
     pub start_page: String,
+    /// 左侧栏页面的顺序和隐藏（ADR 034 第六节）。空 = 默认。新字段，旧版本会忽略。
+    #[serde(default)]
+    pub sidebar: SidebarConfig,
+}
+
+/// 左侧栏（config.json `ui.sidebar`，ADR 034 第六节）：页面 id 的顺序（在各自的分组里排）和隐藏的页面。
+/// 不认识的 id 忽略；新加的页面按默认位置出现；“设置”（`advanced`）不能隐藏（前端保证，这里也不信任）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SidebarConfig {
+    #[serde(default)]
+    pub order: Vec<String>,
+    #[serde(default)]
+    pub hidden: Vec<String>,
+}
+
+/// 不能隐藏的页面：设置（藏了就回不来了）。
+pub const SIDEBAR_ALWAYS_SHOWN: &[&str] = &["advanced"];
+
+impl SidebarConfig {
+    /// 保存前整理：去重、去空、太长的不要，“设置”不能隐藏。
+    pub fn normalize(&mut self) {
+        fn clean(ids: &mut Vec<String>) {
+            let mut seen = std::collections::HashSet::new();
+            ids.retain(|id| {
+                let id = id.trim();
+                !id.is_empty() && id.len() <= 40 && seen.insert(id.to_string())
+            });
+            ids.truncate(40);
+        }
+        clean(&mut self.order);
+        clean(&mut self.hidden);
+        self.hidden
+            .retain(|id| !SIDEBAR_ALWAYS_SHOWN.contains(&id.as_str()));
+    }
 }
 
 /// `ui.startPage` 里表示“打开时显示语音输入”的值。
@@ -622,6 +708,7 @@ impl Default for Settings {
             search: SearchConfig::default(),
             voice_chat: crate::voice_chat::VoiceChatConfig::default(),
             browser: BrowserConfig::default(),
+            music: MusicConfig::default(),
         }
     }
 }
@@ -1202,6 +1289,40 @@ pub fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 放歌和左侧栏是新字段（ADR 034）：旧配置没有它们时用默认；旧的 `agent.musicSite` 读到就丢掉；
+    /// 不认识的音质按默认；“设置”不能隐藏、重复的去掉。
+    #[test]
+    fn music_and_sidebar_are_new_sections_and_music_site_is_dropped() {
+        // 旧配置：有 agent.musicSite，没有 music 和 ui.sidebar
+        let mut json = serde_json::to_value(Settings::default()).unwrap();
+        json["agent"]["musicSite"] = serde_json::json!("qq");
+        json.as_object_mut().unwrap().remove("music");
+        json["ui"].as_object_mut().unwrap().remove("sidebar");
+        let old: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(old.music, MusicConfig::default());
+        assert_eq!(old.music.quality(), "exhigh");
+        assert_eq!(old.music.volume, 70);
+        assert_eq!(old.ui.sidebar, SidebarConfig::default());
+        assert!(!serde_json::to_string(&old).unwrap().contains("musicSite"));
+        let odd = MusicConfig {
+            quality: "hires".into(),
+            volume: 30,
+        };
+        assert_eq!(odd.quality(), "exhigh");
+        let mut sidebar = SidebarConfig {
+            order: vec![
+                "music".into(),
+                "music".into(),
+                " ".into(),
+                "assistant".into(),
+            ],
+            hidden: vec!["advanced".into(), "general".into()],
+        };
+        sidebar.normalize();
+        assert_eq!(sidebar.order, vec!["music", "assistant"]);
+        assert_eq!(sidebar.hidden, vec!["general"]);
+    }
 
     /// 浏览器插件是新字段（ADR 031）：旧配置没有它时为空；写进去的能原样读回；只写了路径的条目默认启用。
     #[test]
