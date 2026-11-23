@@ -10,6 +10,7 @@
 
 mod cache;
 pub mod netease;
+mod player;
 mod qr;
 mod random;
 
@@ -21,6 +22,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 pub use netease::NeteaseProvider;
+pub use player::{PlayOutcome, Player, PlayerState, Status, DUCK_GAIN, MAX_TRIES};
 
 /// 一首歌。`id` 带来源前缀（`ne:12345`）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
