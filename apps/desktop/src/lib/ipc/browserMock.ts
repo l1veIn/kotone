@@ -108,7 +108,8 @@ const mock: MockStore = {
     ocr: { activeModelId: "" },
     search: { activeModelId: "" },
     voiceChat: { enabled: false, includeMic: true, micDeviceId: "default", micGain: 100 },
-    agent: { permissions: { mode: "default", rules: {} }, hiddenAutomations: [], inGame: true, progressSpeech: true, identity: { name: "", avatar: "" }, subagents: { model: "" }, compactAtTokens: 64000, roleId: "kotone", matchRecap: true, safetyCheck: true, gameEffort: "", chatEffort: "", musicSite: "netease" },
+    agent: { permissions: { mode: "default", rules: {} }, hiddenAutomations: [], inGame: true, progressSpeech: true, identity: { name: "", avatar: "" }, subagents: { model: "" }, compactAtTokens: 64000, roleId: "kotone", matchRecap: true, safetyCheck: true, gameEffort: "", chatEffort: "" },
+    music: { quality: "exhigh", volume: 70 },
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },
@@ -411,6 +412,10 @@ export async function getStartupOptions(): Promise<StartupOptions> {
 
 export async function getSettings(): Promise<Settings> {
   initMockRuntime();
+  if (!mock.settings.ui.sidebar) {
+    const sidebar = loadMockSidebar();
+    if (sidebar) mock.settings.ui.sidebar = sidebar;
+  }
   const legacyMode = mockQuery("mockLegacyUpgrade");
   if ((legacyMode === "pending" || legacyMode === "dismissed") && mock.settings.ui.legacyUpgrade === undefined) {
     // 0.1.x 升级用户；dismissed = 上次选了“继续使用语音输入法”之后再打开（ADR 028 流程 B2）。
@@ -657,7 +662,21 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
   const merged = clone(mock.settings) as unknown as Record<string, unknown>;
   mergeJson(merged, patch);
   mock.settings = merged as unknown as Settings;
+  if (patch.ui?.sidebar) saveMockSidebar(mock.settings.ui.sidebar);
   return clone(mock.settings);
+}
+
+// 左侧栏自己排的顺序（ADR 034）：预览里记在 localStorage，刷新后还在（真的在 config.json）。
+const MOCK_SIDEBAR_KEY = "kotone.mock.sidebar";
+function saveMockSidebar(sidebar: Settings["ui"]["sidebar"]) {
+  try { localStorage.setItem(MOCK_SIDEBAR_KEY, JSON.stringify(sidebar ?? null)); } catch { /* 只是预览 */ }
+}
+function loadMockSidebar(): Settings["ui"]["sidebar"] | undefined {
+  try {
+    const raw = localStorage.getItem(MOCK_SIDEBAR_KEY);
+    const value = raw ? JSON.parse(raw) : null;
+    return value && Array.isArray(value.order) && Array.isArray(value.hidden) ? value : undefined;
+  } catch { return undefined; }
 }
 
 /** 用户拖动悬浮窗后保存当前位置并切换为 custom。 */
@@ -1512,14 +1531,6 @@ export function browserControl(args?: { action?: BrowserAction }): null {
   const state = browserPreview.state;
   const tab = activeTab();
   switch (args?.action) {
-    case "play": if (state.media) state.media.playing = true; break;
-    case "pause": if (state.media) state.media.playing = false; break;
-    case "next":
-      if (state.media) {
-        browserPreview.song = (browserPreview.song + 1) % previewSongs.length;
-        state.media = { playing: true, ...previewSongs[browserPreview.song] };
-      }
-      break;
     case "close": browserPreview.state = closedBrowser(); break;
     // 重试（出错时的“重试”就是 reload）：预览里直接当作好了
     case "reload": state.error = null; if (tab) tab.loading = false; break;

@@ -1,5 +1,5 @@
 // 内置浏览器（ADR 031）：聊天页右侧栏里那块网页。网页本身由后端摆在窗口里（盖在界面上），
-// 前端只负责：告诉后端那块区域在哪、显示它的状态（网站、在放的歌、要不要玩家来登录）、几个按钮。
+// 前端只负责：告诉后端那块区域在哪、显示它的状态（网站、网页里在放什么、要不要玩家来登录）、几个按钮。
 // 后端：apps/desktop/src-tauri/src/browser/。浏览器预览（dev:web）用 ipc/browserMock 里的内存状态。
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -49,7 +49,8 @@ export interface BrowserState {
   /** 一句提示（例如“下载被拒绝了”）；玩家可以关掉。 */
   notice: string | null;
 }
-export type BrowserAction = "reload" | "back" | "forward" | "stop" | "close" | "play" | "pause" | "next";
+/** 网页上的按钮（放歌不在这里：音乐页，ADR 034）。 */
+export type BrowserAction = "reload" | "back" | "forward" | "stop" | "close";
 /** 浏览器区域在窗口里的位置（逻辑像素，相对窗口内容区左上角）。 */
 export interface BrowserBounds { x: number; y: number; width: number; height: number; visible: boolean }
 /** 一个浏览器插件（已解压的插件文件夹，Chrome / Edge 插件格式）。 */

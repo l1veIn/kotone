@@ -1,12 +1,10 @@
 <script lang="ts">
-  // 「设置 → 权限」里的内置浏览器（ADR 031）：放歌用哪个网站（agent.musicSite）；
-  // 清除你在聊天页右侧网页里登录过的账号（网易云等）；
+  // 「设置 → 权限」里的内置浏览器（ADR 031）：清除你在聊天页右侧网页里登录过的账号（网易云等）；
   // 浏览器插件（已解压的插件文件夹，Chrome / Edge 插件格式；WebView2 的 AddBrowserExtension）。
   import { onMount } from "svelte";
   import { FolderOpen, Puzzle, Trash2 } from "@lucide/svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
-  import SelectField from "$lib/components/settings/SelectField.svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Switch } from "$lib/components/ui/switch";
@@ -16,21 +14,8 @@
     type BrowserExtension,
   } from "../../../../lib/browser";
   import { isTauri } from "../../../../lib/ipc";
-  import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
+  import { errText, toast } from "../../../../lib/stores/ui";
   import { m } from "$lib/paraglide/messages.js";
-
-  /** 放歌用的网站（和 kotone-core 的 MUSIC_SITES 一致）：她只在这个网站上找歌，搜不到就告诉你。 */
-  const MUSIC_SITES = [
-    { value: "netease", label: m.companion_browser_music_netease() },
-    { value: "qq", label: m.companion_browser_music_qq() },
-    { value: "kugou", label: m.companion_browser_music_kugou() },
-    { value: "kuwo", label: m.companion_browser_music_kuwo() },
-  ];
-  const musicSite = $derived($settingsStore?.agent?.musicSite || "netease");
-  function setMusicSite(value: string) {
-    const name = MUSIC_SITES.find((site) => site.value === value)?.label ?? value;
-    void patchSettings({ agent: { musicSite: value } }, m.companion_browser_music_saved({ site: name }));
-  }
 
   let confirming = $state(false);
   let clearing = $state(false);
@@ -110,17 +95,6 @@
     }
   }
 </script>
-
-<SettingsSection title={m.companion_browser_music_title()} id="settings-permissions-music"
-  description={m.companion_browser_music_desc()}
-  testid="music-site-settings">
-  <SettingsRow label={m.companion_browser_music_site_label()}>
-    {#snippet control()}
-      <SelectField class="w-36" size="sm" ariaLabel={m.companion_browser_music_site_aria()} testid="music-site" value={musicSite} options={MUSIC_SITES}
-        onchange={setMusicSite} />
-    {/snippet}
-  </SettingsRow>
-</SettingsSection>
 
 <SettingsSection title={m.companion_browser_title()} id="settings-permissions-browser"
   description={m.companion_browser_desc()} testid="browser-data-settings">

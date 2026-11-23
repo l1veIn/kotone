@@ -133,7 +133,7 @@ test("the sidebar opens and closes and remembers it; task and browser cards foll
   await expect(sidebar).toBeVisible();
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByTestId("sidebar-browser-card")).toHaveAttribute("data-browser-state", "closed");
-  await expect(page.getByTestId("sidebar-browser-hint")).toHaveText("让她放首歌，或者让她上网查东西，页面会在这里出现。");
+  await expect(page.getByTestId("sidebar-browser-hint")).toHaveText("让她上网查东西，页面会在这里出现。");
   await expect(page.getByTestId("sidebar-tasks-empty")).toBeVisible();
 
   // 收起并记住：重新打开还是收起的
@@ -164,19 +164,17 @@ test("the sidebar opens and closes and remembers it; task and browser cards foll
   await expect(task).toHaveAttribute("data-task-status", "done");
   await expect(task.getByTestId("sidebar-task-summary")).toHaveText("已保存为自动化《自动喝药》。");
 
-  // 网页卡片：在放歌（播放 / 暂停、下一首），她在操作
+  // 网页卡片：网页里在放什么（只读：放歌在音乐页，ADR 034），她在操作
   await page.evaluate((s) => window.sidebarTest.browser(s), PLAYING);
   const card = page.getByTestId("sidebar-browser-card");
   await expect(card).toHaveAttribute("data-browser-state", "open");
   await expect(card.getByTestId("sidebar-browser-site")).toHaveText("网易云音乐");
   await expect(card.getByTestId("sidebar-browser-media")).toHaveText("正在放《晴天》- 周杰伦");
-  await card.getByTestId("sidebar-browser-pause").click();
-  await card.getByTestId("sidebar-browser-next").click();
-  expect(await calls(page, "browser_control")).toEqual([{ action: "pause" }, { action: "next" }]);
+  await expect(card.getByTestId("sidebar-browser-pause")).toHaveCount(0);
+  await expect(card.getByTestId("sidebar-browser-next")).toHaveCount(0);
   await page.evaluate(() => window.sidebarTest.browser({ busy: true, media: { playing: false, title: "晴天", artist: "周杰伦" } }));
   await expect(card.getByTestId("sidebar-browser-busy")).toHaveText("她在操作");
   await expect(card.getByTestId("sidebar-browser-media")).toHaveText("暂停了：《晴天》- 周杰伦");
-  await expect(card.getByTestId("sidebar-browser-play")).toBeVisible();
   await expect(page.getByTestId("assistant-chat")).not.toContainText(/子代理|子会话|子网页视图|CDP|工具调用/);
 
   for (const theme of ["light", "dark"] as const) {
@@ -572,24 +570,6 @@ test("settings: browser extensions — add an unpacked folder, turn it off, remo
   await ext.getByTestId("browser-extension-remove").click();
   await expect.poll(() => calls(page, "browser_extension_remove")).toEqual([{ id: "ext-1" }]);
   await expect(section.getByTestId("browser-extensions-empty")).toBeVisible();
-});
-
-test("settings: the player picks the music site (she only searches there)", async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 860 });
-  await openChat(page);
-  await openSettingsTab(page, "permissions");
-  const section = page.getByTestId("music-site-settings");
-  await expect(section).toContainText("搜不到会告诉你，不会自己换网站");
-  const select = section.getByTestId("music-site");
-  await expect(select).toContainText("网易云音乐");
-  await select.click();
-  await page.getByRole("option", { name: "QQ 音乐" }).click();
-  // 界面预览里设置存在页面内的模拟里（不经过 IPC）：看保存提示和保存后的值。
-  await expect(page.getByText("放歌改用QQ 音乐")).toBeVisible();
-  await expect(select).toContainText("QQ 音乐");
-  await openSettingsTab(page, "usage");
-  await openSettingsTab(page, "permissions");
-  await expect(page.getByTestId("music-site")).toContainText("QQ 音乐");
 });
 
 test("settings: clearing the browser login asks first", async ({ page }) => {

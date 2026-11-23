@@ -26,6 +26,8 @@ export interface UiConfig {
   updatePromptDisabled?: boolean;
   /** 打开软件时显示：`voiceInput` = 语音输入；空或其它任何值 = 聊天（ADR 028）。 */
   startPage?: string;
+  /** 左侧栏自己排的顺序和隐藏的页面（ADR 034 第六节；空 = 默认）。 */
+  sidebar?: { order: string[]; hidden: string[] };
 }
 
 export type StartPage = "chat" | "voiceInput";
@@ -193,6 +195,8 @@ export interface Settings {
   agent?: AgentConfig;
   /** 游戏语音（ADR 020）：琴音用虚拟麦克风替你在游戏语音里说话；旧配置没有时后端按默认（关）补齐。 */
   voiceChat?: VoiceChatConfig;
+  /** 放歌（ADR 034）：音质和音量。旧配置没有时后端按默认（极高、70）补齐。 */
+  music?: { quality: "standard" | "exhigh" | "lossless"; volume: number };
 }
 
 export interface VoiceChatConfig {
@@ -329,8 +333,6 @@ export interface AgentConfig {
   /** 游戏里 / 聊天窗口里的思考强度（只对 DeepSeek）：low / high / max / none；空 = 服务商默认。 */
   gameEffort?: string;
   chatEffort?: string;
-  /** 放歌用的网站：netease（默认）/ qq / kugou / kuwo。 */
-  musicSite?: string;
 }
 
 /** 语音唤醒设置（config.json `assistant.wake`）。 */

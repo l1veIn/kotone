@@ -5,8 +5,8 @@
   import { onDestroy } from "svelte";
   import { tick } from "svelte";
   import {
-    ArrowLeft, ArrowRight, CircleAlert, Expand, Globe, Info, LayoutGrid, LoaderCircle, Lock, Maximize2, Minimize2, Pause,
-    Play, Plus, RotateCw, Shrink, SkipForward, Square, Volume2, X,
+    ArrowLeft, ArrowRight, CircleAlert, Expand, Globe, Info, LayoutGrid, LoaderCircle, Lock, Maximize2, Minimize2,
+    Plus, RotateCw, Shrink, Square, Volume2, X,
   } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import { m } from "$lib/paraglide/messages.js";
@@ -325,22 +325,6 @@
   });
 </script>
 
-{#snippet mediaControls()}
-  {#if browser.media}
-    <div class="flex shrink-0 items-center gap-0.5">
-      {#if browser.media.playing}
-        <Button size="icon" variant="ghost" class="size-7" aria-label={m.chat_browser_pause()} title={m.chat_browser_pause()}
-          data-testid="sidebar-browser-pause" disabled={!!acting} onclick={() => void control("pause")}><Pause class="size-3.5" /></Button>
-      {:else}
-        <Button size="icon" variant="ghost" class="size-7" aria-label={m.chat_browser_play()} title={m.chat_browser_play()}
-          data-testid="sidebar-browser-play" disabled={!!acting} onclick={() => void control("play")}><Play class="size-3.5" /></Button>
-      {/if}
-      <Button size="icon" variant="ghost" class="size-7" aria-label={m.chat_browser_next()} title={m.chat_browser_next()}
-        data-testid="sidebar-browser-next" disabled={!!acting} onclick={() => void control("next")}><SkipForward class="size-3.5" /></Button>
-    </div>
-  {/if}
-{/snippet}
-
 {#snippet browserError()}
   {#if browser.error}
     <div class="flex min-w-0 items-start gap-2 rounded-lg border border-destructive/35 bg-destructive/8 px-2.5 py-2" role="alert" data-testid="browser-error">
@@ -466,7 +450,6 @@
               onkeydown={addressKey} onblur={() => setTimeout(() => { editing = false; }, 0)} />
           </div>
           {#if browser.busy}<span class="shrink-0 rounded-full bg-primary/12 px-2 py-0.5 text-[11px] text-primary" data-testid="browser-panel-busy">{m.chat_browser_busy()}</span>{/if}
-          {@render mediaControls()}
           <Button type="button" size="icon" variant="ghost" class="size-7 shrink-0" aria-label={m.chat_browser_fullscreen()} title={m.chat_browser_fullscreen_title()} data-testid="browser-panel-fullscreen"
             disabled={!current} onclick={enterFullscreen}><Expand class="size-3.5" /></Button>
           <Button type="button" size="icon" variant="ghost" class="size-7 shrink-0" aria-label={m.chat_browser_back_to_cards()} title={m.chat_browser_back_to_cards()} data-testid="browser-panel-collapse"
@@ -509,9 +492,9 @@
                 {#if browser.title}<p class="m-0 truncate px-3 pt-0.5 pl-8.5 text-xs text-muted-foreground" title={browser.title} data-testid="sidebar-browser-title">{browser.title}</p>{/if}
                 {#if browser.tabs.length > 1}<p class="m-0 px-3 pt-0.5 pl-8.5 text-[11px] text-muted-foreground" data-testid="sidebar-browser-tabs">{m.chat_sidebar_browser_tab_count({ count: browser.tabs.length })}</p>{/if}
                 {#if browser.media}
-                  <div class="mx-3 mt-2 flex min-w-0 items-center gap-2 rounded-lg bg-muted/50 py-1 pr-1 pl-2.5">
+                  <!-- 网页里在放什么（只读；放歌在音乐页，ADR 034） -->
+                  <div class="mx-3 mt-2 flex min-w-0 items-center gap-2 rounded-lg bg-muted/50 px-2.5 py-1.5">
                     <p class="m-0 min-w-0 flex-1 truncate text-xs text-foreground/90" data-testid="sidebar-browser-media">{mediaLine(browser.media)}</p>
-                    {@render mediaControls()}
                   </div>
                 {/if}
                 {#if browser.handover}
@@ -551,7 +534,6 @@
   <div use:portal class="ui-scope fixed inset-0 z-[100] flex flex-col bg-background text-foreground" role="region" aria-label={m.chat_browser_fullscreen_region()} data-testid="browser-fullscreen">
     <div class="flex h-9 shrink-0 items-center gap-1 border-b border-hairline px-2">
       {@render pageTitle("browser-fullscreen-site")}
-      {@render mediaControls()}
       <Button size="icon" variant="ghost" class="size-7 shrink-0" aria-label={m.chat_browser_back()} title={m.chat_browser_back()}
         disabled={!current?.canGoBack || !!acting} onclick={() => void control("back")}><ArrowLeft class="size-3.5" /></Button>
       <Button size="icon" variant="ghost" class="size-7 shrink-0" aria-label={m.chat_browser_forward()} title={m.chat_browser_forward()}
