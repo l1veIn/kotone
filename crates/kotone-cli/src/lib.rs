@@ -19,6 +19,7 @@
 
 mod app;
 mod mcp;
+mod music;
 mod ocr;
 mod tools;
 
@@ -182,6 +183,11 @@ enum Command {
     Ocr {
         #[command(subcommand)]
         action: ocr::OcrCommand,
+    },
+    /// 网易云音乐（ADR 034）：search / url / login 扫码 / daily / playlists / play 放几秒，真网络冒烟用
+    Music {
+        #[command(subcommand)]
+        action: music::MusicCommand,
     },
 }
 
@@ -361,6 +367,7 @@ async fn dispatch(cli: Cli) -> i32 {
         },
         Command::Tools { action } => tools::run(action).await,
         Command::Ocr { action } => ocr::run(action).await,
+        Command::Music { action } => music::run(action).await,
         Command::App { action } => app::run(action).await,
         Command::Mcp => mcp::run().await,
     }

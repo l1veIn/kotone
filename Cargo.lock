@@ -2671,6 +2671,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "kotone-core",
+ "kotone-music",
  "kotone-ocr",
  "kotone-platform-windows",
  "kotone-postprocess",

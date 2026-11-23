@@ -11,7 +11,7 @@
 mod cache;
 pub mod netease;
 mod player;
-mod qr;
+pub mod qr;
 mod random;
 
 use std::fmt;
