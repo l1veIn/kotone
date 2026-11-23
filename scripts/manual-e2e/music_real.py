@@ -8,9 +8,11 @@ Without a login (default, `--background`, no window):
 M1. `music_state`: NetEase, not logged in, nothing playing.
 M2. `music_search 孤勇者`: results within a few seconds; the 陈奕迅 original is marked vip; covers are full.
 M3. the Music page (sidebar → 音乐) shows the scan card; screenshot.
-M4. `music_login_start`: a QR (SVG) on the page; `music_login_cancel` puts it away.
-M5. `music_play` while logged out refuses with a scan hint and starts the QR (D5).
-M6. typed “我要听孤勇者” → she uses `music` directly (no agent.start) and asks the player to scan.
+M4. `music_login_start`: NetEase's official web login opens in its own window (`music-login`, the player scans the
+    official QR there — our own `type:3` QR was refused as “设备环境异常”); `music_login_cancel` closes it.
+M5. `music_play` from the page while logged out refuses with a login hint and opens that window (D5).
+M6. typed “我要听孤勇者” → she uses `music` directly (no agent.start), opens NO window (the player may be in a game),
+    the state says `needed` (the chat page shows a login button) and she asks the player to log in.
 
 `--login` (window shown, only these cases; the player scans with the NetEase Cloud Music app; waits up to 3 minutes):
 L1. after the scan the account shows up; `music_home` has daily picks and playlists (我喜欢的音乐 first).
@@ -65,6 +67,13 @@ finally { await browser.close(); }
         return {"error": (out.stdout + out.stderr)[-500:]}
 
 
+def log_text():
+    try:
+        return open(os.path.join(bt.HOME, "kotone.log"), encoding="utf-8", errors="replace").read()
+    except FileNotFoundError:
+        return ""
+
+
 def music_state():
     return bt.invoke("music_state", {}).get("ok") or {}
 
@@ -110,19 +119,20 @@ def logged_out_cases():
            "m3-logged-out.png")
     check("M3: the Music page shows the scan card", r.get("ok") is True, json.dumps(r, ensure_ascii=False)[:200])
 
+    mark = len(log_text())
     r = bt.invoke("music_login_start", {})
     login = (r.get("ok") or {}).get("login", {})
-    check("M4: a QR code to scan", login.get("stage") == "waiting" and (login.get("qrSvg") or "").startswith("<svg"),
-          json.dumps({"stage": login.get("stage"), "qr": (login.get("qrSvg") or "")[:30]}, ensure_ascii=False))
-    r = ui('await page.getByTestId("music-login-qr").waitFor({ timeout: 5000 }); return true;', "m4-qr.png")
-    check("M4: the QR is on the page", r.get("ok") is True, json.dumps(r, ensure_ascii=False)[:200])
+    check("M4: the official login window opens", login.get("stage") == "waiting" and "打开网易云官网登录窗口" in log_text()[mark:],
+          json.dumps(login, ensure_ascii=False)[:200])
+    time.sleep(4)
+    ui("return true;", "m4-waiting.png")
     r = bt.invoke("music_login_cancel", {})
-    check("M4: cancel puts it away", ((r.get("ok") or {}).get("login") or {}).get("stage") == "idle")
+    check("M4: cancel closes it", ((r.get("ok") or {}).get("login") or {}).get("stage") == "idle")
 
     if full:
         r = bt.invoke("music_play", {"tracks": full[:1], "index": 0})
-        check("M5: playing while logged out asks for a scan (D5)", "error" in r and "扫" in r["error"], r.get("error", "")[:120])
-        check("M5: …and the QR is up", music_state().get("login", {}).get("stage") == "waiting")
+        check("M5: playing while logged out asks to log in (D5)", "error" in r and "登录" in r["error"], r.get("error", "")[:120])
+        check("M5: …and the login window is open", music_state().get("login", {}).get("stage") == "waiting")
         bt.invoke("music_login_cancel", {})
 
     text = "我要听孤勇者"
@@ -131,16 +141,17 @@ def logged_out_cases():
     results = tool_results(r.get("main", ""), text, "music")
     check("M6: the tool said the player must log in", any("need_login" in x for x in results), (results or ["-"])[-1][:160])
     said = r.get("said", "")
-    check("M6: she asks the player to scan", any(w in said for w in ("扫", "登录")), said[:120])
+    check("M6: she asks the player to log in", any(w in said for w in ("扫", "登录")), said[:120])
+    check("M6: no window from her, the chat page shows a login button (stage needed)",
+          music_state().get("login", {}).get("stage") == "needed", json.dumps(music_state().get("login"), ensure_ascii=False))
     bt.invoke("music_login_cancel", {})
 
 
 def logged_in_cases():
     ui('await page.getByTestId("settings-nav-music").click(); await page.getByTestId("music-page").waitFor(); return true;')
     bt.invoke("music_login_start", {})
-    ui('await page.getByTestId("music-login-qr").waitFor({ timeout: 5000 }); return true;', "l0-scan-me.png")
-    print("\n>>> 请用网易云音乐 App 扫一扫 Kotone 窗口里音乐页的二维码，并在手机上确认（最多等 3 分钟）\n")
-    account = bt.wait_until(lambda: music_state().get("account"), 200, 2)
+    print("\n>>> 弹出了“登录网易云音乐”窗口（网易云官网的登录页）：请用网易云音乐 App 扫里面的二维码并在手机上确认（最多等 5 分钟）\n")
+    account = bt.wait_until(lambda: music_state().get("account"), 320, 2)
     if not check("L1: logged in after the scan", account, json.dumps(account, ensure_ascii=False)[:120] if account else "timed out"):
         return
     print(f"   account: {account.get('nickname')} vip={account.get('vip')}")

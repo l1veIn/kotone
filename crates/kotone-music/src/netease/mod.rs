@@ -84,6 +84,29 @@ impl NeteaseProvider {
         self.store.save(&blob);
     }
 
+    /// 用网易云官网登录页拿到的 Cookie 登录（玩家在 Kotone 弹出的“登录网易云音乐”窗口里用官网的二维码扫）。
+    /// 第三方扫码（`type: 3`）2026-11 在玩家手机上提示“检测到当前设备环境异常”，带 chainId 也一样；
+    /// 官网的扫码不会（api-enhanced #1 / #6、YesPlayMusic #2493：用浏览器登录后拿 MUSIC_U 是公认的退路，
+    /// SPlayer 也这么做）。只收会话要用的几个（见 [`session_cookies`]），登录凭据不进日志。
+    pub async fn login_with_cookies(
+        &self,
+        cookies: &[(String, String)],
+    ) -> Result<Account, MusicError> {
+        let picked = session_cookies(cookies);
+        if !picked.iter().any(|(name, _)| name == "MUSIC_U") {
+            return Err(MusicError::NeedLogin);
+        }
+        {
+            let mut session = self.session.lock().unwrap();
+            for (name, value) in picked {
+                session.cookies.insert(name, value);
+            }
+        }
+        self.persist();
+        self.forget();
+        self.account().await?.ok_or(MusicError::NeedLogin)
+    }
+
     /// 登录 / 退出以后：缓存的结果都是另一个身份的。
     fn forget(&self) {
         self.cache.clear();
@@ -647,6 +670,17 @@ impl MusicProvider for NeteaseProvider {
     }
 }
 
+/// 官网登录后浏览器里的 Cookie 里，会话要用的：MUSIC_U（登录凭证）、__csrf（weapi 要）、NMTID。
+/// 其余的（统计、广告）不要，存进凭据库的东西越少越好（Windows 凭据最多约 1200 个字）。
+fn session_cookies(cookies: &[(String, String)]) -> Vec<(String, String)> {
+    const KEEP: &[&str] = &["MUSIC_U", "__csrf", "NMTID"];
+    cookies
+        .iter()
+        .filter(|(name, value)| KEEP.contains(&name.as_str()) && !value.trim().is_empty())
+        .map(|(name, value)| (name.clone(), value.trim().to_string()))
+        .collect()
+}
+
 /// 二维码里的网址。带 `chainId` 照 api-enhanced 4f4aa134（2025-09，MIT）：不带时手机上扫完提示
 /// “检测到当前设备环境异常”（api-enhanced #1、#6；2026-11-23 玩家真机复现）。格式
 /// `v1_<sDeviceId 或 unknown-随机数>_web_login_<毫秒>`。
@@ -667,6 +701,21 @@ fn now_ms() -> u128 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_session_cookies_are_kept_from_the_web_login() {
+        let jar = [
+            ("MUSIC_U".to_string(), "abc".to_string()),
+            ("__csrf".to_string(), "c5".to_string()),
+            ("_ntes_nuid".to_string(), "tracking".to_string()),
+            ("NMTID".to_string(), " 00Oxyz ".to_string()),
+            ("MUSIC_A".to_string(), "".to_string()),
+        ];
+        let kept = super::session_cookies(&jar);
+        let names: Vec<&str> = kept.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["MUSIC_U", "__csrf", "NMTID"]);
+        assert_eq!(kept[2].1, "00Oxyz");
+    }
+
     #[test]
     fn qr_content_carries_a_chain_id() {
         let url = super::qr_content("abc-123", None, 1_795_400_000_000);

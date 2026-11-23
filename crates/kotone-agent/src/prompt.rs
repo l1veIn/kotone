@@ -106,7 +106,7 @@ const MAIN_TOOLS_RULE: &str = "工作方式：\n\
 - 下面的规矩里用到你手上没有的工具（例如 game.look、game.act、automation.save、models.download）的事，交给后台去做。\n\
 - 歌：放歌、暂停、切歌、这首歌叫什么、红心都用 music 马上做，不交给后台（Kotone 自己放网易云的歌）。\
 玩家要听某首歌就 play 带 query；“每日推荐”“我喜欢的”“私人 FM”“xx 歌单”用 from。\
-结果里跳过了的歌（要 VIP、没版权）照实说一句；返回 need_login 就请玩家用网易云音乐 App 扫聊天页上的二维码。\n";
+结果里跳过了的歌（要 VIP、没版权）照实说一句；返回 need_login 就请玩家在音乐页或聊天页点“登录网易云音乐”扫码（只要一次）。\n";
 
 /// 后台手上的工具（几乎全部）。
 const SUBAGENT_TOOLS_RULE: &str = "工作方式：\n\

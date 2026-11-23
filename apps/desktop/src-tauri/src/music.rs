@@ -11,8 +11,8 @@ use std::time::Duration;
 use kotone_core::connection::SecretStore;
 use kotone_core::log;
 use kotone_music::{
-    Account, MusicError, MusicProvider, NeteaseProvider, PlayOutcome, Player, PlayerState, QrPoll,
-    Quality, SessionStore, Track,
+    Account, MusicError, MusicProvider, NeteaseProvider, PlayOutcome, Player, PlayerState, Quality,
+    SessionStore, Track,
 };
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
@@ -21,8 +21,8 @@ pub const EVENT: &str = "kotone://music";
 /// 凭据库里的名字（KeyringSecretStore 会加上 `connection:` 前缀）。
 const SECRET_ID: &str = "music:netease";
 /// 扫码最多等多久（二维码本身也会过期，网易云返回 800）。
-const LOGIN_TIMEOUT: Duration = Duration::from_secs(180);
-const LOGIN_POLL: Duration = Duration::from_secs(2);
+const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
+const LOGIN_POLL: Duration = Duration::from_millis(1500);
 
 /// 登录凭据存在 Windows 凭据库（和连接的 Key 同一个地方、同一套隔离规则）。内容是
 /// `{"cookies":{"MUSIC_U":…,"__csrf":…},"deviceId":…}`，是登录凭据：不进日志、不进 config.json。
@@ -217,80 +217,132 @@ fn emit(app: &AppHandle) {
     emit_with(app, None);
 }
 
-// ---------- 登录 ----------
+// ---------- 登录：网易云官网的登录页（ADR 034 实现情况） ----------
+//
+// 第三方扫码（`type: 3`）在玩家手机上提示“检测到当前设备环境异常”（2026-11-23 真机，带 chainId 也一样；
+// api-enhanced #1 / #6、YesPlayMusic #2493）。官网的扫码可以：弹一个小窗口打开 music.163.com 的登录页，
+// 玩家用网易云音乐 App 扫官网的二维码，Kotone 从这个窗口的 Cookie 里拿 MUSIC_U（SPlayer 也这么做）。
+// 窗口用自己的数据目录（`<KOTONE_HOME>/music-login`），退出登录时清掉。
+
+const LOGIN_WINDOW: &str = "music-login";
+const LOGIN_URL: &str = "https://music.163.com/#/login";
+
+fn login_dir() -> std::path::PathBuf {
+    kotone_core::settings::kotone_dir().join("music-login")
+}
 
 fn logged_in(music: &Music) -> bool {
     music.account.lock().unwrap().is_some()
 }
 
-/// 开始扫码登录（已经在等就不重来）；后台每 2 秒问一次，进展经事件通知。
+/// 打开（或调到前面）网易云官网的登录窗口。
+fn open_login_window(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(LOGIN_WINDOW) {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+    let url = LOGIN_URL
+        .parse()
+        .map_err(|e| format!("登录页网址不对：{e}"))?;
+    tauri::WebviewWindowBuilder::new(app, LOGIN_WINDOW, tauri::WebviewUrl::External(url))
+        .title("登录网易云音乐")
+        .inner_size(1000.0, 720.0)
+        .center()
+        .data_directory(login_dir())
+        .build()
+        .map_err(|e| format!("打不开网易云的登录窗口：{e}"))?;
+    Ok(())
+}
+
+fn close_login_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(LOGIN_WINDOW) {
+        let _ = window.destroy();
+    }
+}
+
+/// 登录窗口里 music.163.com 的 Cookie（读 Cookie 在 Windows 上不能在主线程 / 同步回调里做，会卡死）。
+async fn login_cookies(app: &AppHandle) -> Option<Vec<(String, String)>> {
+    let window = app.get_webview_window(LOGIN_WINDOW)?;
+    let url: url::Url = "https://music.163.com/".parse().ok()?;
+    tauri::async_runtime::spawn_blocking(move || window.cookies_for_url(url))
+        .await
+        .ok()?
+        .ok()
+        .map(|cookies| {
+            cookies
+                .iter()
+                .map(|c| (c.name().to_string(), c.value().to_string()))
+                .collect()
+        })
+}
+
+/// 打开官网登录窗口，等玩家扫码（已经在等就只是把窗口调到前面）。登好了关窗口、发事件。
 pub async fn login_start(app: &AppHandle) -> Result<Value, String> {
     let music = music()?.clone();
     if logged_in(&music) {
         return Ok(state_with(&music, None));
     }
-    let waiting = matches!(music.login.lock().unwrap().stage, "waiting" | "scanned");
+    open_login_window(app)?;
+    let waiting = music.login.lock().unwrap().stage == "waiting";
     if waiting {
         return Ok(state_with(&music, None));
     }
-    let start = music
-        .provider
-        .login_qr_start()
-        .await
-        .map_err(|e| e.to_string())?;
-    // 页面用 {@html} 嵌进去：只要 <svg …> 本身（去掉 XML 声明）
-    let svg = start
-        .svg
-        .find("<svg")
-        .map_or(start.svg.as_str(), |at| &start.svg[at..])
-        .to_string();
-    *music.login.lock().unwrap() = Login {
-        stage: "waiting",
-        qr_svg: Some(svg),
-        message: None,
-    };
-    log::log("music: 开始扫码登录");
+    set_login(
+        &music,
+        "waiting",
+        Some("在弹出的网易云音乐窗口里，用网易云音乐 App 扫码登录".into()),
+    );
+    log::log("music: 打开网易云官网登录窗口");
     let task_music = music.clone();
-    let key = start.key.clone();
     let task = tauri::async_runtime::spawn(async move {
+        let app = task_music.app.clone();
         let started = std::time::Instant::now();
         loop {
             tokio::time::sleep(LOGIN_POLL).await;
-            if started.elapsed() > LOGIN_TIMEOUT {
-                set_login(&task_music, "expired", None);
+            if app.get_webview_window(LOGIN_WINDOW).is_none() {
+                // 玩家把窗口关了：不登了
+                set_login(&task_music, "idle", None);
                 break;
             }
-            match task_music.provider.login_qr_poll(&key).await {
-                Ok(QrPoll::Waiting) => {}
-                Ok(QrPoll::Scanned) => set_login(&task_music, "scanned", None),
-                Ok(QrPoll::Expired) => {
-                    set_login(&task_music, "expired", None);
-                    break;
-                }
-                Ok(QrPoll::Ok(account)) => {
-                    log::log("music: 扫码登录好了");
-                    *task_music.account.lock().unwrap() = Some(account);
-                    *task_music.login.lock().unwrap() = Login {
-                        stage: "idle",
-                        ..Login::default()
-                    };
-                    emit(&task_music.app);
-                    break;
-                }
-                Ok(QrPoll::Failed(message)) => {
-                    log::log(&format!("music: 扫码登录没成功：{message}"));
-                    set_login(&task_music, "failed", Some(message));
-                    break;
-                }
-                // 网络抖一下不算失败，接着问
-                Err(error) => log::log(&format!("music: 查扫码结果失败：{error}")),
+            if started.elapsed() > LOGIN_TIMEOUT {
+                close_login_window(&app);
+                set_login(
+                    &task_music,
+                    "expired",
+                    Some("等太久了，再点一次登录".into()),
+                );
+                break;
             }
+            let Some(cookies) = login_cookies(&app).await else {
+                continue;
+            };
+            if !cookies
+                .iter()
+                .any(|(name, value)| name == "MUSIC_U" && !value.is_empty())
+            {
+                continue;
+            }
+            match task_music.provider.login_with_cookies(&cookies).await {
+                Ok(account) => {
+                    log::log("music: 网易云登录好了");
+                    *task_music.account.lock().unwrap() = Some(account);
+                    close_login_window(&app);
+                    set_login(&task_music, "idle", None);
+                }
+                Err(error) => {
+                    log::log(&format!("music: 拿到了登录凭据但登录没成功：{error}"));
+                    close_login_window(&app);
+                    set_login(&task_music, "failed", Some(error.to_string()));
+                }
+            }
+            break;
         }
     });
     if let Some(old) = music.login_task.lock().unwrap().replace(task) {
         old.abort();
     }
-    emit(app);
     Ok(state_with(&music, None))
 }
 
@@ -299,9 +351,7 @@ fn set_login(music: &Music, stage: &'static str, message: Option<String>) {
         let mut login = music.login.lock().unwrap();
         login.stage = stage;
         login.message = message;
-        if stage == "idle" {
-            login.qr_svg = None;
-        }
+        login.qr_svg = None;
     }
     emit(&music.app);
 }
@@ -311,43 +361,54 @@ pub fn login_cancel(app: &AppHandle) -> Result<Value, String> {
     if let Some(task) = music.login_task.lock().unwrap().take() {
         task.abort();
     }
-    *music.login.lock().unwrap() = Login {
-        stage: "idle",
-        ..Login::default()
-    };
-    emit(app);
+    close_login_window(app);
+    set_login(music, "idle", None);
     Ok(state_with(music, None))
 }
 
+/// 退出登录：Kotone 这边忘掉，登录窗口的网页数据也清掉（下次登录要重新扫码）。
 pub async fn logout(app: &AppHandle) -> Result<Value, String> {
     let music = music()?.clone();
     music.player.stop();
     music.provider.logout().await.map_err(|e| e.to_string())?;
     *music.account.lock().unwrap() = None;
+    close_login_window(app);
+    // 窗口刚关时浏览器进程可能还拿着文件：等一下再删，删不掉也不要紧（下次打开还是官网的登录页）
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        if let Err(error) = std::fs::remove_dir_all(login_dir()) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                log::log(&format!("music: 登录窗口的网页数据没删掉：{error}"));
+            }
+        }
+    });
     log::log("music: 退出登录");
     emit(app);
     Ok(state_with(&music, None))
 }
 
-/// 要登录才能放（D5）：没登录就开始扫码，返回给她 / 界面的说明。
-async fn need_login(app: &AppHandle, music: &Arc<Music>) -> Option<Value> {
+/// 要登录才能放（D5）。`open_window`：玩家在音乐页点的（打开官网登录窗口）；她的工具不弹窗口
+/// （通话里玩家多半在游戏里，弹窗会抢游戏的前台），只把状态设成“要登录”，聊天页出一个登录按钮。
+async fn need_login(app: &AppHandle, music: &Arc<Music>, open_window: bool) -> Option<Value> {
     if !*music.checked.lock().unwrap() {
         refresh_account(music).await;
     }
     if logged_in(music) {
         return None;
     }
-    let stage = match login_start(app).await {
-        Ok(_) => "waiting",
-        Err(error) => {
-            return Some(json!({"status": "need_login", "error": error,
-                "note": "网易云的扫码登录没能开始：把原因告诉玩家"}))
+    if open_window {
+        if let Err(error) = login_start(app).await {
+            return Some(json!({"status": "need_login", "error": error}));
         }
-    };
+        return Some(json!({"status": "need_login",
+            "note": "要先登录网易云：已经打开网易云音乐的登录窗口，用网易云音乐 App 扫码"}));
+    }
+    if music.login.lock().unwrap().stage != "waiting" {
+        set_login(music, "needed", None);
+    }
     Some(json!({
         "status": "need_login",
-        "login": stage,
-        "note": "玩家还没登录网易云：扫码卡片已经显示在聊天页和音乐页，请玩家用网易云音乐 App 扫一下、在手机上确认，好了再放",
+        "note": "玩家还没登录网易云（只要登一次）：请玩家在 Kotone 的音乐页或聊天页点“登录网易云音乐”，在弹出的网易云页面里用网易云音乐 App 扫码。登好了再放",
     }))
 }
 
@@ -482,13 +543,14 @@ fn outcome_json(outcome: &PlayOutcome) -> Value {
     })
 }
 
-/// 音乐页的“放”：要登录（D5）。
+/// 音乐页的“放”：要登录（D5）；玩家就在音乐页上，没登录就直接打开官网登录窗口。
 pub async fn play(app: &AppHandle, request: PlayRequest) -> Result<Value, String> {
     let music = music()?.clone();
-    if let Some(login) = need_login(app, &music).await {
+    if let Some(login) = need_login(app, &music, true).await {
         return Err(login["note"]
             .as_str()
-            .unwrap_or("要先扫码登录网易云")
+            .or(login["error"].as_str())
+            .unwrap_or("要先登录网易云")
             .to_string());
     }
     let outcome = play_request(&music, request).await?;
@@ -606,7 +668,7 @@ pub async fn tool(app: &AppHandle, arguments: &Value) -> Result<Value, String> {
     let action = str_arg(arguments, "action").unwrap_or("now");
     match action {
         "play" => {
-            if let Some(login) = need_login(app, &music).await {
+            if let Some(login) = need_login(app, &music, false).await {
                 return Ok(login);
             }
             let request = PlayRequest {
@@ -635,7 +697,7 @@ pub async fn tool(app: &AppHandle, arguments: &Value) -> Result<Value, String> {
             Ok(now_json(&music))
         }
         "like" => {
-            if let Some(login) = need_login(app, &music).await {
+            if let Some(login) = need_login(app, &music, false).await {
                 return Ok(login);
             }
             control(app, "like", Some(&json!(true))).await?;

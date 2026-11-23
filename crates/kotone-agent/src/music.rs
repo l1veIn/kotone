@@ -14,7 +14,8 @@ pub fn entries() -> Vec<ToolEntry> {
 或带 from 放 daily（每日推荐）/ liked（我喜欢的音乐）/ fm（私人 FM）/ playlist（再带 playlist 写歌单名）；\
 pause / resume / next / previous / stop；volume（value 0–100）；now 现在放的是什么；like 红心现在这首。\
 结果里有正在放哪首、跳过了哪些（要 VIP、没版权）和原因：照实用一句话告诉玩家，例如“原唱要 VIP，先放了 xx 的版本”。\
-need_login：玩家还没登录网易云，扫码卡片已经显示在聊天页和音乐页，请玩家用网易云音乐 App 扫一下，扫好了再放。"
+need_login：玩家还没登录网易云（只要登一次），请玩家在 Kotone 的音乐页或聊天页点“登录网易云音乐”，\
+在弹出的网易云页面里用网易云音乐 App 扫码，登好了再放。"
             .into(),
         parameters: json!({"type": "object", "additionalProperties": false, "required": ["action"], "properties": {
             "action": {"enum": ["play", "pause", "resume", "next", "previous", "stop", "volume", "now", "like"]},
