@@ -1,5 +1,6 @@
 // 音乐页（ADR 034 第五节）：浏览器预览里的模拟网易云（lib/ipc/musicMock.ts）。
-// 扫码登录 → 发现（每日推荐、私人 FM、我的歌单）→ 放歌和控制；搜索结果里要 VIP 的灰掉；歌单；聊天页的扫码卡片。
+// 登录（网易云官方登录页的窗口，预览里没有窗口）→ 发现（每日推荐、私人 FM、我的歌单）→ 放歌和控制；
+// 搜索结果里要 VIP 的灰掉；歌单；她要放歌而你没登录时聊天页的登录卡片。
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { openChat } from "./nav";
 
@@ -15,7 +16,7 @@ async function openMusic(page: Page, query = "") {
   await expect(page.getByTestId("music-page")).toBeVisible();
 }
 
-test("logged out: scan the QR code, then play daily picks and control playback", async ({ page }, testInfo) => {
+test("logged out: log in through NetEase's login window, then play daily picks and control playback", async ({ page }, testInfo) => {
   await openMusic(page, "&mockMusicLogin=manual");
   // 音乐在“游戏陪玩”一组里、自动化下面
   const order = await page.getByTestId("app-sidebar").locator('nav [data-testid^="settings-nav-"]').evaluateAll(
@@ -25,13 +26,16 @@ test("logged out: scan the QR code, then play daily picks and control playback",
   const card = page.getByTestId("music-login-card");
   await expect(card).toHaveAttribute("data-stage", "idle");
   await page.screenshot({ path: shot(testInfo, "music-logged-out") });
+  await expect(card.getByTestId("music-login-start")).toHaveText("登录网易云音乐");
   await card.getByTestId("music-login-start").click();
+  // 登录在弹出的网易云官方登录页里做：卡片上没有二维码，只有提示、重新打开窗口和取消
   await expect(card).toHaveAttribute("data-stage", "waiting");
-  await expect(card.getByTestId("music-login-qr").locator("svg")).toBeVisible();
-  await expect(card.getByTestId("music-login-stage")).toHaveText("等你扫码…");
-  await page.screenshot({ path: shot(testInfo, "music-qr") });
-  await preview(page, "scanned");
-  await expect(card.getByTestId("music-login-stage")).toHaveText("扫好了，在手机上点确认");
+  await expect(card.getByTestId("music-login-stage")).toHaveText("在弹出的网易云音乐窗口里扫码登录（用网易云音乐 App 扫）");
+  await expect(card.locator("svg rect")).toHaveCount(0);
+  await expect(card.getByTestId("music-login-cancel")).toBeVisible();
+  await card.getByTestId("music-login-reopen").click();
+  await expect(card).toHaveAttribute("data-stage", "waiting");
+  await page.screenshot({ path: shot(testInfo, "music-login-waiting") });
   await preview(page, "confirmed");
   await expect(page.getByTestId("music-account")).toContainText("开黑的猫");
 
@@ -127,7 +131,7 @@ test("playlist: open it, play all, then go back", async ({ page }, testInfo) => 
   await expect(page.getByTestId("music-playlists")).toBeVisible();
 });
 
-test("quality and logout from the header; the QR card also shows above the chat composer", async ({ page }) => {
+test("quality and logout from the header; when she wants to play and you're logged out, the chat shows a login card", async ({ page }, testInfo) => {
   await openMusic(page, "&mockMusic=loggedIn&mockMusicLogin=manual");
   await page.getByTestId("music-quality").click();
   await page.getByTestId("music-quality-lossless").click();
@@ -135,17 +139,37 @@ test("quality and logout from the header; the QR card also shows above the chat 
   await page.getByTestId("music-account").click();
   await page.getByTestId("music-logout").click();
   await expect(page.getByTestId("music-login-card")).toHaveAttribute("data-stage", "idle");
-  await page.getByTestId("music-login-start").click();
-  await expect(page.getByTestId("music-login-card")).toHaveAttribute("data-stage", "waiting");
-  // 聊天页：她要放歌而你没登录时，输入框上面有同一张卡片
+
+  // 聊天页：她的 music 工具发现没登录 → needed（她不自己弹窗），输入框上面出登录卡片
   await openChat(page);
   const compact = page.getByTestId("assistant-chat").getByTestId("music-login-card");
-  await expect(compact).toBeVisible();
-  await expect(compact.getByTestId("music-login-qr").locator("svg")).toBeVisible();
-  await preview(page, "expired");
-  await expect(compact.getByTestId("music-login-stage")).toHaveText("二维码过期了，点一下换一张");
-  await compact.getByTestId("music-login-refresh").click();
+  await expect(compact).toHaveCount(0);
+  await preview(page, "needed");
+  await expect(compact).toHaveAttribute("data-stage", "needed");
+  await expect(compact.getByTestId("music-login-stage")).toHaveText("她要放歌：先登录一下网易云（只要一次）");
+  await page.screenshot({ path: shot(testInfo, "music-chat-needed") });
+  await compact.getByTestId("music-login-start").click();
   await expect(compact).toHaveAttribute("data-stage", "waiting");
+  await expect(compact.getByTestId("music-login-stage")).toHaveText("在弹出的网易云音乐窗口里扫码登录（用网易云音乐 App 扫）");
+  await expect(compact.getByTestId("music-login-reopen")).toBeVisible();
   await compact.getByTestId("music-login-cancel").click();
+  await expect(compact).toHaveCount(0);
+
+  // 5 分钟没登录（窗口关了）/ 出错：再点一下重新打开
+  await preview(page, "needed");
+  await compact.getByTestId("music-login-start").click();
+  await preview(page, "expired");
+  await expect(compact.getByTestId("music-login-stage")).toHaveText("太久没登录，登录窗口关掉了；再点一下重新打开");
+  await expect(compact.getByTestId("music-login-start")).toBeVisible();
+  await preview(page, "failed");
+  await expect(compact.getByTestId("music-login-stage")).toContainText("网易云没有回应");
+  await compact.getByTestId("music-login-start").click();
+  await expect(compact).toHaveAttribute("data-stage", "waiting");
+  // 你自己关了登录窗口：卡片收起
+  await preview(page, "closed");
+  await expect(compact).toHaveCount(0);
+  // 先不登录
+  await preview(page, "needed");
+  await compact.getByTestId("music-login-dismiss").click();
   await expect(compact).toHaveCount(0);
 });

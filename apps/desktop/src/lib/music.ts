@@ -11,7 +11,12 @@ import { m } from "./paraglide/messages.js";
 /** 这首能不能完整放：要 VIP、要单独买（付费专辑）、网易云没有版权 / 下架了。 */
 export type MusicPlayable = "full" | "vip" | "paid" | "unavailable";
 export type MusicQuality = "standard" | "exhigh" | "lossless";
-export type MusicLoginStage = "idle" | "waiting" | "scanned" | "expired" | "failed";
+/**
+ * 登录网易云音乐（ADR 034）：idle 没在登录；needed 她要放歌而你没登录（她不自己弹窗，聊天页出按钮）；
+ * waiting 网易云官方登录页的窗口开着、等你用 App 扫码；expired 5 分钟没登录、窗口关了；failed 出错了。
+ * scanned 是旧的自制二维码流程留下的，现在不会出现。
+ */
+export type MusicLoginStage = "idle" | "needed" | "waiting" | "scanned" | "expired" | "failed";
 export type MusicStatus = "idle" | "loading" | "playing" | "paused" | "error";
 
 export interface MusicTrack {
@@ -37,6 +42,7 @@ export interface MusicPlaylist {
   mine: boolean;
 }
 export interface MusicAccount { id: string; nickname: string; avatarUrl: string | null; vip: boolean }
+/** qrSvg 现在总是 null（登录在网易云自己的页面里扫码）；message 是一句提示或出错原因。 */
 export interface MusicLogin { stage: MusicLoginStage; qrSvg: string | null; message: string | null }
 export interface MusicPlayer {
   status: MusicStatus;
@@ -81,7 +87,7 @@ export const IDLE_MUSIC: MusicState = {
 const text = (value: unknown): string | null => (typeof value === "string" && value.trim() ? value : null);
 const num = (value: unknown, fallback = 0): number => (typeof value === "number" && Number.isFinite(value) ? value : fallback);
 const PLAYABLE: MusicPlayable[] = ["full", "vip", "paid", "unavailable"];
-const STAGES: MusicLoginStage[] = ["idle", "waiting", "scanned", "expired", "failed"];
+const STAGES: MusicLoginStage[] = ["idle", "needed", "waiting", "scanned", "expired", "failed"];
 const STATUSES: MusicStatus[] = ["idle", "loading", "playing", "paused", "error"];
 const QUALITIES: MusicQuality[] = ["standard", "exhigh", "lossless"];
 
@@ -212,9 +218,10 @@ export const musicStore: Readable<MusicState> = readable<MusicState>(structuredC
   return () => { alive = false; unlisten?.(); };
 });
 
-/** 在等扫码（显示二维码卡片）。 */
+/** 要登录（聊天页显示登录卡片）：她要放歌、登录窗口开着、过期了、出错了。 */
 export function loginPending(state: MusicState): boolean {
-  return !state.account && (state.login.stage === "waiting" || state.login.stage === "scanned" || state.login.stage === "expired");
+  const stage = state.login.stage;
+  return !state.account && stage !== "idle";
 }
 /** 有歌（在放、暂停、在加载）：左侧栏显示小播放条、音乐页显示播放条。 */
 export function hasTrack(state: MusicState): boolean {

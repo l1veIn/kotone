@@ -1,8 +1,9 @@
 /**
  * dev:web 的音乐后端（ADR 034）：模拟网易云账号、扫码登录、每日推荐、歌单、搜索和一个会走进度的播放器。
+ * 登录照真的：music_login_start 开“登录网易云音乐”窗口（网易云官方登录页，预览里没有窗口）→ waiting，几秒后登录好。
  * 只依赖契约类型，不导入 Tauri。演示和 e2e 用 `window.__kotoneMusicPreview(step)` 推进：
- * "scanned" / "confirmed" / "expired" / "loggedIn" / "playing" / "reset"。
- * URL 里带 `mockMusic=loggedIn|playing` 直接从那一步开始；`mockMusicLogin=manual` 时扫码不自动往下走。
+ * "needed"（她要放歌而你没登录）/ "confirmed" / "closed"（你关了登录窗口）/ "expired" / "failed" / "loggedIn" / "playing" / "reset"。
+ * URL 里带 `mockMusic=loggedIn|playing|needed` 直接从那一步开始；`mockMusicLogin=manual` 时登录不自动完成。
  */
 import type { MusicAccount, MusicPlaylist, MusicState, MusicTrack, MusicPlayArgs, MusicQuality } from "../music";
 
@@ -85,32 +86,11 @@ function ensureStarted() {
   started = true;
   const step = query("mockMusic");
   if (step === "loggedIn" || step === "playing") state.account = { ...ACCOUNT };
+  if (step === "needed") state.login = { stage: "needed", qrSvg: null, message: null };
   if (step === "playing") void startAt(DAILY, 0, "每日推荐");
   if (typeof window !== "undefined") {
     (window as unknown as { __kotoneMusicPreview?: (s: string) => MusicState }).__kotoneMusicPreview = preview;
   }
-}
-
-/** 假二维码（25×25，三个定位角 + 按 key 散开的点）。真的二维码由后端生成。 */
-function fakeQr(key: string): string {
-  const size = 25;
-  let seed = 0;
-  for (const ch of key) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
-  const dark = (x: number, y: number) => {
-    const finder = (fx: number, fy: number) => {
-      const dx = x - fx, dy = y - fy;
-      if (dx < 0 || dy < 0 || dx > 6 || dy > 6) return null;
-      return dx === 0 || dy === 0 || dx === 6 || dy === 6 || (dx >= 2 && dx <= 4 && dy >= 2 && dy <= 4);
-    };
-    const f = finder(0, 0) ?? finder(size - 7, 0) ?? finder(0, size - 7);
-    if (f !== null) return f;
-    if ((x === 7 || y === 7) && (x < 8 || y < 8)) return false;
-    seed = (seed * 1103515245 + 12345) >>> 0;
-    return (seed >>> 16) % 2 === 0;
-  };
-  let rects = "";
-  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (dark(x, y)) rects += `<rect x="${x}" y="${y}" width="1" height="1"/>`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-2 -2 ${size + 4} ${size + 4}" shape-rendering="crispEdges"><rect x="-2" y="-2" width="${size + 4}" height="${size + 4}" fill="#fff"/><g fill="#111">${rects}</g></svg>`;
 }
 
 function clearLogin() {
@@ -119,13 +99,12 @@ function clearLogin() {
 }
 
 function loginStart(): MusicState {
-  clearLogin();
   if (state.account) return structuredClone(state);
-  state.login = { stage: "waiting", qrSvg: fakeQr(`k-${Date.now()}`), message: null };
-  if (query("mockMusicLogin") !== "manual") {
-    loginTimers.push(setTimeout(() => preview("scanned"), 3500));
-    loginTimers.push(setTimeout(() => preview("confirmed"), 6000));
-  }
+  // 窗口已经开着：再点一次只是把它拿到前面（真的后端这样），不重新计时
+  if (state.login.stage === "waiting") return structuredClone(state);
+  clearLogin();
+  state.login = { stage: "waiting", qrSvg: null, message: "在网易云音乐的登录窗口里扫码" };
+  if (query("mockMusicLogin") !== "manual") loginTimers.push(setTimeout(() => preview("confirmed"), 4000));
   emit();
   return structuredClone(state);
 }
@@ -133,8 +112,16 @@ function loginStart(): MusicState {
 function preview(step: string): MusicState {
   ensureStarted();
   switch (step) {
-    case "scanned":
-      if (state.login.stage === "waiting") state.login = { ...state.login, stage: "scanned" };
+    case "needed":
+      if (!state.account) state.login = { stage: "needed", qrSvg: null, message: null };
+      break;
+    case "closed":
+      clearLogin();
+      state.login = { stage: "idle", qrSvg: null, message: null };
+      break;
+    case "failed":
+      clearLogin();
+      state.login = { stage: "failed", qrSvg: null, message: "网易云没有回应" };
       break;
     case "confirmed":
     case "loggedIn":
@@ -144,7 +131,7 @@ function preview(step: string): MusicState {
       break;
     case "expired":
       clearLogin();
-      state.login = { ...state.login, stage: "expired", message: "二维码过期了" };
+      state.login = { stage: "expired", qrSvg: null, message: null };
       break;
     case "playing":
       state.account = { ...ACCOUNT };
