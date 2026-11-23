@@ -40,13 +40,15 @@
   import Titlebar from "./Titlebar.svelte";
   import GeneralPage from "./pages/GeneralPage.svelte";
   import TextProcessingPage from "./pages/TextProcessingPage.svelte";
-  import { navigationRequest, type AssistantSection, type VoiceInputPage } from "../../lib/stores/navigation";
+  import { navigationRequest, sidebarPagesOpen, type AssistantSection, type VoiceInputPage } from "../../lib/stores/navigation";
   import VoiceInputShell from "./pages/voice/VoiceInputShell.svelte";
   import AssistantPage from "./pages/AssistantPage.svelte";
   import AutomationPage from "./pages/AutomationPage.svelte";
   import AdvancedPage from "./pages/AdvancedPage.svelte";
   import { isAdvancedSection, type AdvancedSection } from "./pages/advanced/types";
   import GamePage from "./pages/GamePage.svelte";
+  import MusicPage from "./pages/MusicPage.svelte";
+  import SidebarPagesDialog from "./SidebarPagesDialog.svelte";
   import HistoryPage from "./pages/HistoryPage.svelte";
   import AboutPage from "./pages/AboutPage.svelte";
   import CharacterPage from "./pages/CharacterPage.svelte";
@@ -98,6 +100,7 @@
     navigationRequest.set(null);
     const target = request.target;
     if (target.page === "assistant") openCompanion(target.section);
+    else if (target.page === "sidebar-pages") sidebarPagesOpen.set(true);
     else if (target.page === "advanced") openAdvanced(isAdvancedSection(target.tab) ? target.tab : "system", target.anchor);
     else {
       navigate(target.page);
@@ -395,6 +398,8 @@
       <AutomationPage onOpenHotkeys={() => openAdvanced("system", "system-stop")} />
     {:else if page === "game"}
       <GamePage {legacyVoiceOnly} />
+    {:else if page === "music"}
+      <MusicPage />
     {:else if page === "character"}
       <CharacterPage onBack={() => (page = "about")} />
     {:else}
@@ -402,8 +407,11 @@
     {/if}
 
     <!-- 底部留白（提示在右上角，见 Sonner） -->
-    {#if page !== "assistant"}<div class="h-4"></div>{/if}
+    {#if page !== "assistant" && page !== "music"}<div class="h-4"></div>{/if}
   </main>
+
+  <!-- 左侧栏的“全部页面”（ADR 034 第六节）：侧栏的“⋯”、右键菜单、聊天里“去看看：左侧栏 → ⋯” -->
+  <SidebarPagesDialog onOpen={(id) => (id === "assistant" ? openRole() : navigate(id))} />
 
   <!-- 引导覆盖层（ADR 028）：新用户 / 0.1.x 升级用户；聊天页 Key 卡片连好后接着设呼叫键 -->
   {#if onboarding && !loading}

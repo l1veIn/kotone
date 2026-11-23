@@ -16,7 +16,8 @@
       "./messages/{locale}/voice.json",
       "./messages/{locale}/games.json",
       "./messages/{locale}/shell.json",
-      "./messages/{locale}/locale.json"
+      "./messages/{locale}/locale.json",
+      "./messages/{locale}/music.json"
     ]
   }
 }

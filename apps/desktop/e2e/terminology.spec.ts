@@ -87,7 +87,8 @@ function ignoredLines(text: string): Set<number> {
 test("the frontend keeps its words in messages/zh-CN, not in code", () => {
   const hits: string[] = [];
   for (const file of walk(join(app, "src"), [".svelte", ".ts"])) {
-    if (/browserMock\.ts$|persona\.ts$|vite-env\.d\.ts$/.test(file)) continue;
+    // 预览用的模拟数据（假歌单、假歌名）不是界面文字
+    if (/browserMock\.ts$|musicMock\.ts$|persona\.ts$|vite-env\.d\.ts$/.test(file)) continue;
     const text = readFileSync(file, "utf8");
     const ignored = ignoredLines(text);
     for (const [line, code] of codeLines(text)) {

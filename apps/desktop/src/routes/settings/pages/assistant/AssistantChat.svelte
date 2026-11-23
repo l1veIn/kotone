@@ -23,6 +23,8 @@
   import { errText, settingsStore, toast } from "../../../../lib/stores/ui";
   import CallKotoneButton from "../../../../lib/components/CallKotoneButton.svelte";
   import KeyRequestCard from "../../../../lib/agentChat/KeyRequestCard.svelte";
+  import MusicLoginCard from "../music/MusicLoginCard.svelte";
+  import { loginPending, musicStore } from "../../../../lib/music";
   import PermissionMenu from "../../../../lib/agentChat/PermissionMenu.svelte";
   import UsagePanel from "../../../../lib/agentChat/UsagePanel.svelte";
   import { pendingPrompt } from "../../../../lib/agentChat/pendingPrompt";
@@ -155,6 +157,8 @@
 
 {#snippet composer()}
   <div class="space-y-2">
+    <!-- 她要放歌而你还没登录网易云：扫码卡片（ADR 034 D5） -->
+    {#if loginPending($musicStore)}<MusicLoginCard compact />{/if}
     {#each chat.keyRequests as request (request.requestId)}
       <KeyRequestCard {request} />
     {/each}

@@ -273,6 +273,11 @@ test("8 · every location in settings_guide (and the old wording) opens the righ
       await expect(page.getByTestId(`assistant-nav-${target.section}`), where).toHaveAttribute("aria-current", "page");
     } else if (target.page === "general" || target.page === "processing" || target.page === "history") {
       await expect(page.getByTestId(`voice-tab-${target.page}`), where).toHaveAttribute("aria-current", "page");
+    } else if (target.page === "sidebar-pages") {
+      // 「左侧栏 → ⋯」= 全部页面（ADR 034）：打开对话框，看完关掉
+      await expect(page.getByTestId("sidebar-pages-dialog"), where).toBeVisible();
+      await page.getByTestId("sidebar-pages-done").click();
+      await expect(page.getByTestId("sidebar-pages-dialog"), where).toHaveCount(0);
     } else if (target.page !== "legacy-reminders") {
       // 提醒助手只有 0.1.x 升级用户才有，这里只核对能解析出来
       await expect(page.getByTestId(`settings-nav-${target.page}`), where).toHaveAttribute("aria-current", "page");

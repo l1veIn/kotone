@@ -10,11 +10,16 @@ export type AssistantSection = "chat" | "identity" | "memory" | "skills";
 export type VoiceInputPage = "general" | "processing" | "history";
 
 export type PageTarget =
-  | { page: VoiceInputPage | "automation" | "game" | "about" | "legacy-reminders"; anchor?: string }
+  | { page: VoiceInputPage | "automation" | "game" | "music" | "about" | "legacy-reminders"; anchor?: string }
+  /** 左侧栏的“全部页面”（排顺序、显示 / 隐藏；ADR 034 第六节）。 */
+  | { page: "sidebar-pages" }
   | { page: "assistant"; section: AssistantSection }
   | { page: "advanced"; tab: string; anchor?: string };
 
 /** 「设置」的分页（页面 ID 不变；陪玩组是 ADR 028 新加的分页）。 */
+/** 左侧栏的“全部页面”开着（侧栏的“⋯”、聊天里“去看看：左侧栏 → ⋯”）。 */
+export const sidebarPagesOpen = writable(false);
+
 export const ADVANCED_TABS: Record<string, string> = {
   // i18n-ignore-start：设置位置的词：要和后端 settings_guide.rs 写的位置一字不差（玩家点“去看看”时据此跳转），不是界面文字
   "怎么叫她": "call", "她怎么回答": "reply", "权限": "permissions", "用量": "usage",
@@ -63,8 +68,8 @@ const OLD_COMPANION_GROUPS: Record<string, { tab: string; anchor?: string }> = {
   "用量": { tab: "usage" },
 };
 
-const PAGES: Record<string, "automation" | "game" | "about" | "legacy-reminders"> = {
-  "自动化": "automation", "游戏列表": "game", "游戏": "game", "游戏适配": "game", "关于": "about", "提醒助手": "legacy-reminders",
+const PAGES: Record<string, "automation" | "game" | "music" | "about" | "legacy-reminders"> = {
+  "自动化": "automation", "游戏列表": "game", "游戏": "game", "游戏适配": "game", "音乐": "music", "关于": "about", "提醒助手": "legacy-reminders",
 };
 
 /** 旧版「设置 → 其他热键」里的热键现在分散在三处；按第三段（热键名）分，认不出就去语音输入的其他热键。 */
@@ -86,8 +91,12 @@ function parseOne(where: string): PageTarget | null {
     if (second === "交流") return { page: "advanced", tab: "call", anchor: "settings-call-hotkey" };
     return { page: "assistant", section: ROLE_TABS[second ?? "她是谁"] ?? "identity" };
   }
+  // 「左侧栏 → ⋯」= 全部页面（ADR 034）
+  if (first === "左侧栏" || first === "侧边栏") return { page: "sidebar-pages" };
   if (first === "设置") {
     if (second === "其他热键") return oldHotkeysTarget(third);
+    // 旧位置「设置 → 权限 → 放歌」（浏览器放歌时选网站的地方）：放歌现在在音乐页（ADR 034）
+    if (second === "权限" && third === "放歌") return { page: "music" };
     const tab = ADVANCED_TABS[second ?? "系统"] ?? "system";
     return { page: "advanced", tab, anchor: third ? ADVANCED_ANCHORS[tab]?.[third] : undefined };
   }

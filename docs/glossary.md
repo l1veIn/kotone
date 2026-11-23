@@ -37,6 +37,16 @@
 | 语音识别 | 把说的话变成字（本地 / 在线）。“语音输入”是另一件事：说的话直接打进游戏聊天框 | `ASR`、`转写`、`听写` | `stt*`、`asr*` | speech recognition |
 | 对话 | 和她的一段对话（对话列表里的一项）；“聊天”只用在聊天页、聊天窗口、游戏聊天框 | `会话` | `Conversation` | conversation (聊天 = chat) |
 | 自动化 | 替你持续或稍后做事；动作是“说一句”或“程序” | `脚本` | `automation.*` | automation |
+| 音乐 | 左侧栏的一页（自动化下面，ADR 034）：搜歌、每日推荐、私人 FM、我的歌单、播放条；现在只接网易云音乐 | | `MusicPage`、`kotone-music` | Music |
+| 放歌 / 正在放 | Kotone 自己放歌（不用浏览器）：你在音乐页点，或者她用 `music` 工具放；“正在放”是播放条和左侧栏小播放条上的那首 | | `music`、`Player` | play music / Now playing |
+| 扫码登录 | 用网易云音乐 App 扫音乐页或聊天页里的二维码；第一次放歌要扫一次，登录信息交给 Windows 保管 | | `music_login_start` | Scan to log in |
+| 每日推荐 / 私人 FM | 网易云按你的口味每天给的一组歌 / 一首接一首的电台 | | `daily`、`fm` | Daily picks / Personal FM |
+| 我喜欢的音乐 / 红心 | 网易云里你红心过的歌（歌单里排第一）；红心 = 把这首加进去 | | `liked`、`like` | Liked songs / Like |
+| 歌单 / 播放列表 | 歌单是网易云里的一组歌；播放列表是正在放的这一串 | | `Playlist`、`queue` | playlist / queue |
+| 试听 | 要 VIP 的歌给没会员的账号只有 30–45 秒；她不放试听，改放能完整放的版本并说一声 | | `trial` | preview |
+| VIP / 付费 / 无版权 | 放不了的三种：要会员、要单独买（付费专辑）、网易云没有版权；列表里灰掉并标出来 | | `Playable` | VIP / Paid / Unavailable |
+| 音质 | 标准 / 极高 / 无损；默认极高（非 VIP 的上限），无损要 VIP | | `music.quality` | Quality: Standard / Very high / Lossless |
+| 全部页面 / 恢复默认 | 左侧栏“⋯”打开：页面在组内上移下移、显示隐藏（设置、关于固定）；恢复默认 = 默认顺序、全部显示 | | `ui.sidebar` | All pages / Restore defaults |
 | 游戏配置 | 一个游戏的聊天键、频道、词表等（游戏列表页里编辑） | `游戏设置`、`游戏档案` | `GameProfile` | game profile |
 | 气泡 / 悬浮窗 / 弹幕 | 气泡只属于她（在听、在想、在说）；悬浮窗只属于语音输入；弹幕是从右往左飘的字 | `对话气泡` | | bubble / overlay / floating text |
 | 技能 | 她会的本事包（一个文件夹一个） | `Skill` | `SKILL.md`、`workspace` | skills |
