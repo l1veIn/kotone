@@ -60,6 +60,25 @@
 
 **插件用本体的能力，不自己再做一份**：听、看、说、调她都由本体给。语音识别只有一份。
 
+### 游戏配置怎么分（2026-11-24 补）
+
+游戏配置（`GameProfile`）留在本体，变瘦。现在的字段分给这几处：
+
+| 字段 | 归谁 |
+| --- | --- |
+| `id`、`display_name`、`icon`、`process_names`、`window_title_patterns`、`launch_path` | 本体：游戏列表（游戏中心靠它认出在玩什么） |
+| `hotwords`、`removed_builtin_hotwords` | 本体：耳朵（语音识别） |
+| `companion_notes` | 本体：她（游戏说明写进提示词） |
+| `chat_region` | 本体：眼睛（读聊天的截图区域） |
+| `open_chat_key`、`send_key`、`pre_open_delay_ms`、`pre_paste_delay_ms`、`pre_send_delay_ms`、`prefer_clipboard_paste`、`channels`、`console_chat` | 语音输入插件：`plugins.voice-input.games.<游戏>` |
+| `allow_automation_input`、`computer_use` | 按键程序插件：`plugins.key-programs.games.<游戏>` |
+| （设置里的 `lol.enabled`） | 英雄联盟插件：`plugins.lol.sources.client` |
+
+- 内置的 lol、dota2、cs2 是游戏配置，不是插件。英雄联盟插件用 `games = ["lol"]` 挂在 lol 上，以后 CS2、Dota 2 插件也一样。
+- 游戏配置页：上面是本体的那几项，下面是各插件提供的小节（语音输入的聊天键和频道、按键程序的允许操作、英雄联盟的数据开关）。照 VS Code 的“按语言的设置”。
+- 游戏配置包（导入导出 .zip）要连同插件的这些小节一起带上。
+- 迁移：老的游戏配置文件读得进来，插件的字段在第一次保存时搬到插件的设置里（照兼容规则）。哪一步搬哪些字段：语音输入的字段在第 5 步，按键程序的在第 6 步，`lol.enabled` 在第 1 步。
+
 ## 三、插件清单
 
 每个插件都能**自主运行**：有自己的页面和开关，不叫她也能用；不依赖别的插件，关掉别的照样能用。它们跑在 Kotone 里，用本体的能力（第八节）。
