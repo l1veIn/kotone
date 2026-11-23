@@ -250,6 +250,7 @@ fn open_login_window(app: &AppHandle) -> Result<(), String> {
         .incognito(true)
         .build()
         .map_err(|e| format!("打不开网易云的登录窗口：{e}"))?;
+    log::log("music: 登录窗口建好了（网易云官网登录页，无痕）");
     Ok(())
 }
 
@@ -265,8 +266,11 @@ async fn login_cookies(app: &AppHandle) -> Result<Vec<(String, String)>, String>
     let url: url::Url = "https://music.163.com/"
         .parse()
         .map_err(|e| format!("{e}"))?;
-    let cookies = tauri::async_runtime::spawn_blocking(move || window.cookies_for_url(url))
+    // 读 Cookie 要主线程配合：万一卡住，5 秒后不等了（下一轮再读）
+    let read = tauri::async_runtime::spawn_blocking(move || window.cookies_for_url(url));
+    let cookies = tokio::time::timeout(Duration::from_secs(5), read)
         .await
+        .map_err(|_| "读 Cookie 超过 5 秒没回来".to_string())?
         .map_err(|e| format!("读 Cookie 的线程出错：{e}"))?
         .map_err(|e| format!("读 Cookie 失败：{e}"))?;
     Ok(cookies
