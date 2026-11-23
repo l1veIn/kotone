@@ -32,7 +32,8 @@ pub fn champion_names(player: &LivePlayer, data: Option<&GameData>) -> (String, 
     }
 }
 
-fn dragon(kind: &str) -> &str {
+/// 龙的中文名（局内接口的 `DragonType`）。
+pub(crate) fn dragon(kind: &str) -> &str {
     match kind {
         "Fire" => "火龙",
         "Water" => "水龙",

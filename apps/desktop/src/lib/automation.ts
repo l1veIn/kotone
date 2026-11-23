@@ -57,7 +57,28 @@ export interface ParamSpec {
 
 export type AutomationBody =
   | { kind: "program"; source?: string }
-  | { kind: "speak"; text: string; delivery: DeliveryKind[] };
+  | { kind: "speak"; text: string; delivery: DeliveryKind[] }
+  /** 让她做（ADR 036 D8）：触发时把这句话交给她跑一轮，每次花一次 AI 调用。 */
+  | { kind: "prompt"; text: string };
+
+/** 游戏事件触发（ADR 036 D6）：哪些事发生时运行。 */
+export interface EventTrigger {
+  /** 事件类型（“或”），也可以写前缀 lol.* */
+  event: string[];
+  /** 只在这个游戏配置上触发；不写 = 任何游戏 */
+  game?: string | null;
+  /** 对事件数据的子集匹配，数组表示“或” */
+  match?: Record<string, unknown>;
+  /** 阶段保持多少秒才触发（只用于 game.phase_changed） */
+  for?: number;
+  mode?: "single" | "restart" | "queued";
+  oncePerMatch?: boolean;
+  cooldownSeconds?: number;
+  enabled: boolean;
+}
+
+/** “让她做”每局最多触发几次（和后端一致）。 */
+export const PROMPT_PER_MATCH = 3;
 
 /** 定时（类似 crontab，本地时间）：到点用 args 运行一次；错过的不补。 */
 export interface Schedule { cron: string; enabled: boolean; args: Record<string, unknown> }
@@ -72,12 +93,16 @@ export interface Automation {
   createdAtMs: number;
   updatedAtMs: number;
   schedule?: Schedule | null;
+  /** 游戏事件触发。 */
+  on?: EventTrigger | null;
   /** 定时的下一次（列表里才有）。 */
   nextRunAtMs?: number | null;
 }
 
 /** 内置的“X 秒之后提醒我”。 */
 export const BUILTIN_REMIND_ID = "builtin-remind-later";
+/** 内置模板“英雄联盟进加载界面播报突破口”（默认关）。 */
+export const BUILTIN_LOL_SCOUT_ID = "builtin-lol-scout-on-loading";
 
 /** 定时的常用写法（界面里选）；其余写 cron。 */
 export type SchedulePreset =
@@ -133,6 +158,7 @@ export interface AutomationDraft {
   params: ParamSpec[];
   action: AutomationBody;
   schedule?: Schedule | null;
+  on?: EventTrigger | null;
 }
 
 export const PARAM_TYPES: { id: ParamType; label: string }[] = [
@@ -201,6 +227,13 @@ let previewAutomations: Automation[] = [
     ],
     action: { kind: "speak", text: "{text}", delivery: ["voice", "danmaku"] },
   },
+  {
+    id: BUILTIN_LOL_SCOUT_ID, name: "英雄联盟进加载界面播报突破口",
+    description: "进加载界面时她查一下这局 10 个人的战绩，用一句话告诉你对面谁是突破口。每次花一次 AI 调用，默认关。",
+    createdBy: "user", createdAtMs: t0, updatedAtMs: t0, params: [],
+    action: { kind: "prompt", text: "这局进加载界面了。用 lol.scout 看看对面谁是突破口，用一句话告诉我原因（说成信息，不贴标签）。" },
+    on: { event: ["game.phase_changed"], game: "lol", match: { to: "loading" }, oncePerMatch: true, enabled: false },
+  },
 ];
 const previewListeners = new Set<() => void>();
 const notify = () => previewListeners.forEach((listener) => listener());
@@ -261,6 +294,7 @@ export async function saveAutomation(draft: AutomationDraft): Promise<Automation
     params: draft.params.map((p) => ({ ...p, label: p.label.trim() || p.name })), action: draft.action,
     createdBy: existing?.createdBy ?? "user", createdAtMs: existing?.createdAtMs ?? now, updatedAtMs: now,
     schedule: draft.schedule ?? null, nextRunAtMs: draft.schedule?.enabled ? now + 3_600_000 : null,
+    on: draft.on ?? null,
   };
   previewAutomations = existing ? previewAutomations.map((a) => (a.id === saved.id ? saved : a)) : [...previewAutomations, saved];
   notify();
@@ -284,6 +318,7 @@ export async function runAutomation(id: string, args: Record<string, unknown>, s
   const now = Date.now();
   const missing = automation.params.find((p) => (p.default === undefined || p.default === null) && (args[p.name] === undefined || args[p.name] === ""));
   if (missing) throw new Error(`缺少参数 ${missing.label || missing.name}`);
+  if (automation.action.kind === "prompt") return { status: "sent" };
   if (automation.action.kind === "speak") {
     const values = Object.fromEntries(automation.params.map((p) => [p.name, args[p.name] ?? p.default]));
     const text = automation.action.text.replace(/\{(\w+)\}/g, (_all, name: string) => String(values[name] ?? ""));

@@ -5,22 +5,19 @@
 //! ADR 022 的实施记录；做法上借了 Goose 评估里的思路——由 Rust 核心在对局结束时主动触发一次摘要——
 //! 以及 Hermes 写记忆的规矩（只记以后用得上的、有上限、写入前做注入检查）。
 //!
-//! 什么算“一局”：某个游戏配置的进程从出现到退出（每 5 秒看一次）。只整理玩了 3 分钟以上、而且这一局里
-//! 叫过琴音或跑过自动化 / 提醒的；什么都没发生就不调用 AI。
-
-use std::collections::HashMap;
-use std::time::Duration;
+//! 什么算“一局”：游戏中心（ADR 036）的 `game.match_ended`——英雄联盟是从选英雄到结算，没有适配器的游戏
+//! 还是进程从出现到退出。只整理玩了 3 分钟以上、而且这一局里叫过琴音或跑过自动化 / 提醒的；
+//! 什么都没发生就不调用 AI。
 
 use kotone_ai::agent::model::AgentModel;
 use kotone_ai::agent::{now_ms, Message, ModelClient, ModelRequest};
 use kotone_core::cancel::CancellationToken;
-use kotone_core::profile::{self, GameProfile};
+use kotone_core::profile;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
 use crate::SharedState;
 
-const POLL: Duration = Duration::from_secs(5);
 /// 一局至少多长才整理（测试可以用环境变量 `KOTONE_RECAP_MIN_SECONDS` 改短）。
 const MIN_MATCH_SECS: u64 = 180;
 /// 交给模型的记录最多多少字（太长时留最近的）。
@@ -40,77 +37,51 @@ fn settings(app: &AppHandle) -> kotone_core::settings::Settings {
     app.state::<SharedState>().settings.read().unwrap().clone()
 }
 
-/// 有进程名的游戏配置（通用配置没有进程名，不算）。
-fn games() -> Vec<GameProfile> {
-    profile::list()
-        .into_iter()
-        .filter(|g| !g.process_names.is_empty())
-        .collect()
-}
-
-fn running_pid(game: &GameProfile) -> Option<u32> {
-    game.process_names
-        .iter()
-        .find_map(|name| kotone_platform_windows::inject::find_pid_by_name(name))
-}
-
-/// 开始盯游戏进程（启动时调用一次）。
+/// 开始订阅“一局结束了”（启动时调用一次）。
 pub fn start(app: &AppHandle) {
     let app = app.clone();
-    let _ = std::thread::Builder::new()
-        .name("kotone-recap".into())
-        .spawn(move || {
-            // 游戏配置 id → (进程 id, 开始时间)
-            let mut live: HashMap<String, (u32, u64)> = HashMap::new();
-            loop {
-                std::thread::sleep(POLL);
-                let settings = settings(&app);
-                if settings.ui.legacy_upgrade.uses_legacy_assistant() || !settings.agent.match_recap
-                {
-                    live.clear();
-                    continue;
-                }
-                let now = now_ms();
-                let mut seen: HashMap<String, u32> = HashMap::new();
-                for game in games() {
-                    if let Some(pid) = running_pid(&game) {
-                        seen.insert(game.id.clone(), pid);
-                    }
-                }
-                // 结束的（进程没了或换了一个）
-                let ended: Vec<(String, u64)> = live
-                    .iter()
-                    .filter(|(id, (pid, _))| seen.get(*id) != Some(pid))
-                    .map(|(id, (_, started))| (id.clone(), *started))
-                    .collect();
-                for (id, started) in ended {
-                    live.remove(&id);
-                    if now.saturating_sub(started) < min_match_ms() {
-                        continue;
-                    }
-                    let app = app.clone();
-                    kotone_core::log::log(&format!(
-                        "recap: {id} ended after {} s",
-                        (now - started) / 1000
-                    ));
-                    tauri::async_runtime::spawn(async move {
-                        match recap(&app, &id, started, now).await {
-                            Ok(result) => kotone_core::log::log(&format!(
-                                "recap: {id} {}",
-                                result
-                                    .get("skipped")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("written")
-                            )),
-                            Err(e) => kotone_core::log::log(&format!("recap: {id} failed: {e}")),
-                        }
-                    });
-                }
-                for (id, pid) in seen {
-                    live.entry(id).or_insert((pid, now));
-                }
+    let mut events = crate::games::subscribe();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let event = match events.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+            };
+            if event.kind != "game.match_ended" {
+                continue;
             }
-        });
+            let settings = settings(&app);
+            if settings.ui.legacy_upgrade.uses_legacy_assistant() || !settings.agent.match_recap {
+                continue;
+            }
+            let seconds = event
+                .data
+                .get("elapsedSeconds")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            if seconds * 1000 < min_match_ms() {
+                continue;
+            }
+            let id = event.game.clone();
+            let ended = event.time;
+            let started = ended.saturating_sub(seconds * 1000);
+            kotone_core::log::log(&format!("recap: {id} ended after {seconds} s"));
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                match recap(&app, &id, started, ended).await {
+                    Ok(result) => kotone_core::log::log(&format!(
+                        "recap: {id} {}",
+                        result
+                            .get("skipped")
+                            .and_then(Value::as_str)
+                            .unwrap_or("written")
+                    )),
+                    Err(e) => kotone_core::log::log(&format!("recap: {id} failed: {e}")),
+                }
+            });
+        }
+    });
 }
 
 fn clock(ms: u64) -> String {
@@ -300,7 +271,15 @@ pub async fn recap(app: &AppHandle, game_id: &str, start: u64, end: u64) -> Resu
             usage,
         );
     }
-    let parsed = parse_reply(&reply.text).ok_or("复盘结果不是约定的 JSON")?;
+    let Some(parsed) = parse_reply(&reply.text) else {
+        // 记下开头，好知道模型回了什么（只在本机日志里）
+        let head: String = reply.text.chars().take(300).collect();
+        kotone_core::log::log(&format!(
+            "recap: {game_id} 回复不是 JSON（{} 字）：{head}",
+            reply.text.chars().count()
+        ));
+        return Err("复盘结果不是约定的 JSON".into());
+    };
     let recap: Vec<String> = parsed.0;
     let memory: Vec<String> = parsed.1;
     if recap.is_empty() {

@@ -11,6 +11,7 @@
 
 pub mod auth;
 pub mod client;
+pub mod events;
 pub mod gamedata;
 pub mod history;
 pub mod live;

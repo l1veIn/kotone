@@ -325,6 +325,7 @@ const toolLabels: Record<string, string> = {
   "ocr.recognize": m.chat_tool_label_ocr_recognize(),
   "settings.describe": m.chat_tool_label_settings_describe(),
   "game.installed": m.chat_tool_label_game_installed(),
+  "game.state": m.chat_tool_label_game_state(),
   "models.list": m.chat_tool_label_models_list(),
   "models.download": m.chat_tool_label_models_download(),
   "models.activate": m.chat_tool_label_models_activate(),

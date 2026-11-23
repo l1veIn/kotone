@@ -87,7 +87,8 @@ pub const MAIN_TOOLS: &[&str] = &[
     // 玩家开口那一刻的屏幕（ADR 029 §二）、前台窗口
     TOOL_SCREEN_AT_SPEECH,
     "window.active",
-    // 游戏：列出、切过去、打开
+    // 游戏：现在在玩什么、在哪个阶段（ADR 036）；列出、切过去、打开
+    "game.state",
     "game.list",
     "game.focus",
     "game.installed",
@@ -710,6 +711,8 @@ pub fn saved_entry(automation: &Automation) -> Option<ToolEntry> {
     let kind = match automation.action {
         AutomationBody::Speak(_) => "播报",
         AutomationBody::Program(_) => "程序，对当前前台的游戏窗口执行",
+        // “让她做”是交给她自己的一句话（游戏事件触发时用），不再当工具给她
+        AutomationBody::Prompt(_) => return None,
     };
     let mut description = format!("运行已保存的自动化「{}」（{kind}）", automation.name);
     if !automation.description.is_empty() {

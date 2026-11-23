@@ -597,6 +597,111 @@ pub fn run_saved(
             let run = scheduler(app)?.schedule_speak(session, speak, due_at_ms + delay_ms)?;
             Ok(scheduled_json(&run, None))
         }
+        AutomationBody::Prompt(prompt) => {
+            crate::agent::run_prompt(app, &automation.name, &prompt.text, None);
+            Ok(json!({"status": "sent"}))
+        }
+    }
+}
+
+/// `elapsedSeconds` → `elapsed_seconds`（参数名只能是小写字母、数字、下划线）。
+fn snake(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars() {
+        if c.is_ascii_uppercase() {
+            out.push('_');
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// 这个自动化还没结束的程序执行。
+fn open_program_runs(app: &AppHandle, id: &str) -> Vec<String> {
+    let Ok(scheduler) = scheduler(app) else {
+        return Vec::new();
+    };
+    scheduler
+        .runs()
+        .into_iter()
+        .filter(|r| r.status.is_open())
+        .filter(|r| {
+            matches!(&r.action, kotone_core::automation::RunAction::Program(p)
+                if p.automation_id.as_deref() == Some(id))
+        })
+        .map(|r| r.id)
+        .collect()
+}
+
+/// 游戏事件触发（ADR 036 D6）：和事件 `data` 字段同名的参数自动填上（事件是函数的输入）；
+/// 同一个自动化的程序还在跑时按 `mode` 处理；“让她做”连同事件一起交给她。
+pub fn run_on_event(app: &AppHandle, fire: &kotone_core::games::Fire) {
+    use kotone_core::games::RunMode;
+    let Some(automation) = library(app).ok().and_then(|l| l.get(&fire.automation)) else {
+        return;
+    };
+    let id = automation.id.clone();
+    kotone_core::log::log(&format!(
+        "automation {id}: 游戏事件 {} 触发（{}）",
+        fire.event.kind, fire.event.game
+    ));
+    if let AutomationBody::Prompt(prompt) = &automation.action {
+        crate::agent::run_prompt(app, &automation.name, &prompt.text, Some(&fire.event));
+        return;
+    }
+    let args: serde_json::Map<String, Value> = automation
+        .params
+        .iter()
+        .filter_map(|p| {
+            fire.event
+                .data
+                .iter()
+                .find(|(k, _)| **k == p.name || snake(k) == p.name)
+                .map(|(_, v)| (p.name.clone(), v.clone()))
+        })
+        .collect();
+    let mode = automation.on.as_ref().map(|t| t.mode).unwrap_or_default();
+    let running = open_program_runs(app, &id);
+    if !running.is_empty() {
+        match mode {
+            RunMode::Single => {
+                kotone_core::log::log(&format!("automation {id}: 还在跑，这次不管（single）"));
+                return;
+            }
+            RunMode::Restart => {
+                if let Ok(scheduler) = scheduler(app) {
+                    for run in &running {
+                        let _ = scheduler.cancel_with_reason(run, "游戏事件重新触发");
+                    }
+                }
+            }
+            RunMode::Queued => {
+                // 跑完一个再跑下一个（最多等 30 分钟，和单次程序的上限一样）
+                let app = app.clone();
+                let _ = std::thread::Builder::new()
+                    .name("kotone-automation-queued".into())
+                    .spawn(move || {
+                        let deadline = std::time::Instant::now() + Duration::from_secs(1800);
+                        while !open_program_runs(&app, &id).is_empty() {
+                            if std::time::Instant::now() >= deadline {
+                                return;
+                            }
+                            std::thread::sleep(Duration::from_secs(1));
+                        }
+                        run_event_now(&app, &id, &args);
+                    });
+                return;
+            }
+        }
+    }
+    run_event_now(app, &id, &args);
+}
+
+fn run_event_now(app: &AppHandle, id: &str, args: &serde_json::Map<String, Value>) {
+    if let Err(e) = run_saved(app, "event", id, args, kotone_core::automation::now_ms()) {
+        kotone_core::log::log(&format!("automation {id}: 游戏事件触发的运行失败：{e}"));
     }
 }
 
@@ -972,7 +1077,10 @@ pub fn automation_run_saved(
         .ok_or_else(|| format!("找不到自动化 {id}"))?;
     let stored = store_arg_images(&automation.params, &args)?;
     validate_args(&automation.params, &stored)?;
-    if matches!(automation.action, AutomationBody::Speak(_)) {
+    if matches!(
+        automation.action,
+        AutomationBody::Speak(_) | AutomationBody::Prompt(_)
+    ) {
         return run_saved(&app, "ui", &id, &stored, kotone_core::automation::now_ms());
     }
     let seconds = switch_seconds.clamp(1, 30);

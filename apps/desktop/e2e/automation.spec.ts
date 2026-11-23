@@ -20,7 +20,7 @@ test("one list: play / stop, temporary reminders, schedules, details and the ful
   await expect(automation.getByText("Ctrl+Shift+F12", { exact: true })).toBeVisible();
 
   const items = automation.getByTestId("automation-item");
-  await expect(items).toHaveCount(3);
+  await expect(items).toHaveCount(4);
   // 内置的“X 秒之后提醒我”排第一
   await expect(items.first()).toContainText("X 秒之后提醒我");
   await expect(items.first()).toContainText("内置");
@@ -83,7 +83,7 @@ test("saved automations can be created with params and a schedule, edited and de
   await page.goto("/#/settings?onboarding=never");
   await page.getByTestId("settings-nav-automation").click();
   const automation = page.getByTestId("automation-page");
-  await expect(automation.getByTestId("automation-item")).toHaveCount(3);
+  await expect(automation.getByTestId("automation-item")).toHaveCount(4);
 
   await automation.getByTestId("automation-new").click();
   const editor = automation.getByTestId("automation-editor");
@@ -129,7 +129,56 @@ test("saved automations can be created with params and a schedule, edited and de
   await expect(renamed.getByTestId("automation-details")).toBeVisible();
   await renamed.getByTestId("automation-delete").click();
   await renamed.getByRole("button", { name: "确认删除", exact: true }).click();
-  await expect(automation.getByTestId("automation-item")).toHaveCount(3);
+  await expect(automation.getByTestId("automation-item")).toHaveCount(4);
+});
+
+test("game events: the LoL template is off, and an 'ask her' automation saves with its trigger (ADR 036)", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1040, height: 1100 });
+  await page.goto("/#/settings?onboarding=never");
+  await page.getByTestId("settings-nav-automation").click();
+  const automation = page.getByTestId("automation-page");
+
+  // 内置模板：每次花一次 AI 调用，默认关（D8）——列表里不显示触发，详情里写“已暂停”
+  const template = automation.getByTestId("automation-item").filter({ hasText: "英雄联盟进加载界面播报突破口" });
+  await expect(template).toContainText("内置");
+  await expect(template).toContainText("让琴音做");
+  await expect(template.getByTestId("automation-item-trigger")).toHaveCount(0);
+  await template.getByTestId("automation-item-toggle").click();
+  await expect(template.getByTestId("automation-detail-trigger")).toHaveText("已暂停（League of Legends · 进入加载 · 每局一次）");
+  // “让她做”不交给她当工具
+  await expect(template.getByTestId("saved-automation-agent")).toBeHidden();
+
+  await automation.getByTestId("automation-new").click();
+  const editor = automation.getByTestId("automation-editor");
+  await editor.getByLabel("自动化名字").fill("进对局一分钟提醒买眼");
+  await editor.getByRole("button", { name: "让琴音做", exact: true }).click();
+  await editor.getByTestId("automation-prompt").fill("提醒我买真眼，一句话");
+  await expect(editor.getByTestId("automation-prompt-cost")).toContainText("每局最多 3 次");
+  await expect(editor.getByRole("button", { name: "添加参数", exact: true })).toHaveCount(0);
+  await editor.getByTestId("automation-trigger-enabled").check();
+  await editor.getByTestId("automation-trigger-game").click();
+  await page.getByRole("option", { name: "League of Legends", exact: true }).click();
+  await editor.getByTestId("automation-trigger-phase").click();
+  await page.getByRole("option", { name: "对局中", exact: true }).click();
+  await editor.getByTestId("automation-trigger-hold").fill("60");
+  // 英雄联盟专用的事带“哪一边”
+  await editor.getByTestId("automation-trigger-event").click();
+  await page.getByRole("option", { name: "三杀以上", exact: true }).click();
+  await expect(editor.getByTestId("automation-trigger-team")).toBeVisible();
+  await expect(editor.getByTestId("automation-trigger-phase")).toHaveCount(0);
+  await editor.getByTestId("automation-trigger-event").click();
+  await page.getByRole("option", { name: "阶段变化", exact: true }).click();
+  await expect(editor.getByTestId("automation-trigger-team")).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("automation-trigger.png"), fullPage: true });
+  await editor.getByRole("button", { name: "保存", exact: true }).click();
+
+  const saved = automation.getByTestId("automation-item").filter({ hasText: "进对局一分钟提醒买眼" });
+  await expect(saved.getByTestId("automation-item-trigger")).toHaveText("League of Legends · 进入对局中满 60 秒 · 每局一次");
+  await saved.getByTestId("automation-item-toggle").click();
+  await expect(saved.getByTestId("automation-details")).toContainText("让琴音做：提醒我买真眼，一句话");
+  await saved.getByTestId("automation-edit").click();
+  await expect(editor.getByTestId("automation-trigger-hold")).toHaveValue("60");
+  await expect(editor.getByTestId("automation-prompt")).toHaveValue("提醒我买真眼，一句话");
 });
 
 test("a quick command can run a saved automation with its own args instead of asking the AI", async ({ page }) => {

@@ -30,6 +30,7 @@ pub use commands::*;
 use context::*;
 use exec_tools::*;
 use host::*;
+pub use relay::run_prompt;
 use relay::*;
 pub use subagents::*;
 pub use turn::*;

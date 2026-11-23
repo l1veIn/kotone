@@ -5,6 +5,8 @@
 //! - `lol.match` / `lol.spell` 读局内接口（马上返回）；召唤师技能是玩家说了才记，这局结束清掉；
 //! - 端口和令牌从 `LeagueClientUx.exe` 的命令行读（不用管理员）；令牌不进日志。
 //! - 设置 `lol.enabled` 关掉时什么都不读（D5）。
+//! - 游戏中心（ADR 036）的 `lol` 适配器：客户端开着时由这里报阶段（客户端阶段 + 局内接口有没有数据），
+//!   对局里每 2 秒把局内接口的新事件（龙、塔、团灭……）和“我阵亡 / 复活”报给游戏中心。
 //! - 测试用（不开游戏，`scripts/manual-e2e/lol_tools_real.py`）：`KOTONE_LOL_LCU=<端口>:<令牌>` 不找客户端进程、
 //!   直接连 127.0.0.1 的这个端口；`KOTONE_LOL_LIVE=<地址>` 换掉局内接口的地址（只认本机）。
 
@@ -13,16 +15,18 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use kotone_agent::lol::{TOOL_MATCH, TOOL_SCOUT, TOOL_SPELL};
+use kotone_core::games::{Observation, Phase};
 use kotone_core::log;
 use kotone_lol::client::paths;
 use kotone_lol::client::{loopback_base, LIVE_BASE};
+use kotone_lol::events;
 use kotone_lol::gamedata::normalize;
 use kotone_lol::history::{self, PlayerHistory};
 use kotone_lol::live::{self, LiveGame, LivePlayer};
 use kotone_lol::spells::{self, SpellTracker, SpellUse};
 use kotone_lol::text::{self, ScoutPlayer};
 use kotone_lol::{in_game_phase, GameData, Lcu, LcuAuth, Live, LolError};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Manager};
 
 /// 客户端开着时多久看一次阶段；没开时多久看一次进程。
@@ -34,6 +38,8 @@ const HISTORY_GAMES: u32 = 20;
 const CONCURRENCY: usize = 2;
 /// 她问的时候还没查完，最多等多久。
 const SCOUT_WAIT: Duration = Duration::from_secs(12);
+/// 英雄联盟的游戏配置 id（游戏中心里的 `game`）。
+const LOL: &str = "lol";
 
 struct Client {
     pid: u32,
@@ -70,6 +76,12 @@ struct State {
     loading_data: bool,
     current: Option<Match>,
     tracker: SpellTracker,
+    /// 已经向游戏中心认领了英雄联盟的阶段（客户端开着）。
+    claimed: bool,
+    /// 局内接口里已经报过的最大 `EventID`（第一次连上时取当时最新的，之前的不补）。
+    live_seen: Option<i64>,
+    /// 上一轮玩家自己是不是阵亡了。
+    was_dead: Option<bool>,
 }
 
 fn state() -> &'static Mutex<State> {
@@ -137,12 +149,29 @@ pub fn init(app: &AppHandle) {
     });
 }
 
-fn reset_all() {
-    let mut s = state().lock().unwrap();
-    if s.client.is_some() {
-        log::log("lol: 英雄联盟客户端关了");
+fn reset_all(app: &AppHandle) {
+    let claimed = {
+        let mut s = state().lock().unwrap();
+        if s.client.is_some() {
+            log::log("lol: 英雄联盟客户端关了");
+        }
+        let claimed = s.claimed;
+        *s = State::default();
+        claimed
+    };
+    if claimed {
+        // 交回给游戏中心的进程那一路
+        crate::games::observe(
+            app,
+            LOL,
+            Observation {
+                phase: Phase::Stopped,
+                source: "lol/client".into(),
+                ..Observation::default()
+            },
+        );
+        crate::games::claim(LOL, false);
     }
-    *s = State::default();
 }
 
 fn client_pid() -> Option<u32> {
@@ -189,11 +218,11 @@ fn ensure_client(pid: u32) -> Option<Lcu> {
 /// 一轮；返回客户端是不是开着。
 async fn tick(app: &AppHandle) -> bool {
     if !enabled(app) {
-        reset_all();
+        reset_all(app);
         return false;
     }
     let Some(pid) = client_pid() else {
-        reset_all();
+        reset_all(app);
         return false;
     };
     let Some(lcu) = ensure_client(pid) else {
@@ -211,15 +240,111 @@ async fn tick(app: &AppHandle) -> bool {
     };
     let previous = std::mem::replace(&mut state().lock().unwrap().phase, phase.clone());
     load_data_in_background(&lcu);
+    let mut live = None;
     if in_game_phase(&phase) {
         if let Ok(session) = lcu.get(paths::SESSION).await {
             on_session(&lcu, &session).await;
         }
+        live = poll_live().await;
+        if let Some((raw, game)) = &live {
+            push_live_events(app, raw, game);
+        }
     } else if in_game_phase(&previous) {
         // 这局结束：技能记录清掉；战绩留着，下一局开始时换掉
-        state().lock().unwrap().tracker = SpellTracker::default();
+        let mut s = state().lock().unwrap();
+        s.tracker = SpellTracker::default();
+        s.live_seen = None;
+        s.was_dead = None;
     }
+    report_phase(app, &phase, live.as_ref().map(|(_, game)| game));
     true
+}
+
+/// 局内接口这一轮的数据（连不上、还在加载时 None）。
+async fn poll_live() -> Option<(Value, LiveGame)> {
+    let raw = live_client().ok()?.all_game_data().await.ok()?;
+    let game = live::parse_all_game_data(&raw)?;
+    Some((raw, game))
+}
+
+/// 报给游戏中心：现在的阶段（`InProgress` 要局内接口有游戏时间才算“对局中”，之前是“加载”）和几项状态。
+fn report_phase(app: &AppHandle, native: &str, live: Option<&LiveGame>) {
+    let ready = live.is_some_and(|g| g.time > 0.0);
+    let phase: Phase =
+        serde_json::from_value(json!(events::generic_phase(native, ready))).unwrap_or(Phase::Menu);
+    let mut attrs = Map::new();
+    {
+        let mut s = state().lock().unwrap();
+        s.claimed = true;
+        if let Some(m) = s.current.as_ref().filter(|_| in_game_phase(native)) {
+            attrs.insert("lol.gameId".into(), json!(m.game_id));
+            attrs.insert("lol.queueId".into(), json!(m.queue_id));
+            attrs.insert("lol.mode".into(), json!(m.mode));
+        }
+    }
+    if let Some(game) = live {
+        attrs.insert("lol.gameTime".into(), json!(game.time.round()));
+        attrs.insert("lol.mode".into(), json!(game.mode));
+    }
+    crate::games::claim(LOL, true);
+    crate::games::observe(
+        app,
+        LOL,
+        Observation {
+            phase,
+            native_phase: native.to_string(),
+            attrs,
+            source: "lol/client".into(),
+        },
+    );
+}
+
+/// 局内接口的新事件和“我阵亡 / 复活”报给游戏中心。第一次连上时只记下起点，之前的不补。
+fn push_live_events(app: &AppHandle, raw: &Value, game: &LiveGame) {
+    let me = game.me().map(|p| (p.dead, p.respawn));
+    let (after, was_dead) = {
+        let mut s = state().lock().unwrap();
+        let after = *s
+            .live_seen
+            .get_or_insert_with(|| events::last_event_id(raw));
+        let was_dead = match me {
+            Some((dead, _)) => s.was_dead.replace(dead),
+            None => s.was_dead,
+        };
+        (after, was_dead)
+    };
+    let new = events::new_events(raw, game, after);
+    if let Some(last) = new.iter().map(|e| e.0).max() {
+        state().lock().unwrap().live_seen = Some(last);
+    }
+    for (_, kind, data, time) in new {
+        crate::games::push(app, LOL, kind, "lol/live-client", data, Some(time));
+    }
+    match (was_dead, me) {
+        (Some(false), Some((true, respawn))) => {
+            let mut data = Map::new();
+            data.insert("respawnSeconds".into(), json!(respawn.max(0.0).round()));
+            crate::games::push(
+                app,
+                LOL,
+                "lol.my_death",
+                "lol/live-client",
+                data,
+                Some(game.time),
+            );
+        }
+        (Some(true), Some((false, _))) => {
+            crate::games::push(
+                app,
+                LOL,
+                "lol.my_respawn",
+                "lol/live-client",
+                Map::new(),
+                Some(game.time),
+            );
+        }
+        _ => {}
+    }
 }
 
 fn load_data_in_background(lcu: &Lcu) {

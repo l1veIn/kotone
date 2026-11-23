@@ -47,6 +47,9 @@
   import ToggleField from "$lib/components/settings/ToggleField.svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
   import InstalledGamesSection from "./InstalledGamesSection.svelte";
+  import { eventLabel, eventsFor, phaseLabel, playingGames, type PlayingGame } from "../../../lib/gameEvents";
+  import { listSeparator } from "$lib/locale";
+  import { listen } from "@tauri-apps/api/event";
   import { m } from "$lib/paraglide/messages.js";
 
   /** 让琴音操作（game.act）的三档。 */
@@ -221,6 +224,23 @@
       toast(false, m.game_profiles_load_failed({ error: errText(e) }));
     }
   });
+
+  // 游戏中心（ADR 036）：哪些游戏在跑、在哪个阶段；有游戏事件就刷新
+  let playing = $state<PlayingGame[]>([]);
+  async function refreshPlaying() {
+    try { playing = await playingGames(); } catch { playing = []; }
+  }
+  onMount(() => {
+    void refreshPlaying();
+    if (!isTauri) return;
+    const off = listen("kotone://game", () => void refreshPlaying());
+    return () => { void off.then((unlisten) => unlisten()); };
+  });
+  /** 这个游戏配置能给的事：英雄联盟对局数据关着时只有通用的。 */
+  function profileEvents(id: string): string {
+    const lolOff = id === "lol" && ($settingsStore?.lol?.enabled ?? true) === false;
+    return eventsFor(lolOff ? null : id).map((e) => eventLabel(e.type)).join(listSeparator());
+  }
 
   async function onActivate(id: string) {
     try {
@@ -745,6 +765,20 @@
                   testid="profile-lol-data"
                   onchange={(v) => void toggleLolData(v)}
                 />
+              </div>
+            {/if}
+
+            {#if draft.processNames.length}
+              <!-- 游戏事件（ADR 036）：这个游戏现在在哪个阶段、能给哪些事（自动化里“按游戏事件运行”用） -->
+              {@const now = playing.find((g) => g.game === draft?.id)}
+              <div class="space-y-1 rounded-lg border border-hairline bg-background/40 p-3.5 text-xs" data-testid="game-profile-events">
+                <p class="m-0 text-[13px] font-medium text-foreground">{m.game_events_title()}</p>
+                <p class="m-0 text-muted-foreground" data-testid="game-profile-events-now">{now ? m.game_events_now({ phase: phaseLabel(now.phase) }) : m.game_events_not_running()}</p>
+                <p class="m-0 text-muted-foreground" data-testid="game-profile-events-list">{m.game_events_list({ events: profileEvents(draft.id) })}</p>
+                {#if draft.id === "lol" && ($settingsStore?.lol?.enabled ?? true) === false}
+                  <p class="m-0 text-muted-foreground">{m.game_events_lol_off()}</p>
+                {/if}
+                <p class="m-0 text-muted-foreground/80">{m.game_events_hint()}</p>
               </div>
             {/if}
 

@@ -7,6 +7,7 @@ use std::{path::PathBuf, sync::Mutex};
 use serde_json::{Map, Value};
 
 use super::{now_ms, write_atomic, SpeakAction, MAX_NAME_CHARS, MAX_SOURCE_CHARS};
+use crate::games::{validate_trigger, EventTrigger};
 use crate::reminders::{validate_content, DeliveryKind};
 
 pub const MAX_AUTOMATIONS: usize = 200;
@@ -16,6 +17,8 @@ const MAX_LABEL_CHARS: usize = 40;
 const MAX_TEXT_PARAM_CHARS: u32 = 200;
 const MAX_CHOICES: usize = 16;
 const STORE_VERSION: u32 = 1;
+/// “让她做”那句话最多多少字。
+pub const MAX_PROMPT_CHARS: usize = 500;
 
 /// 入参类型。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -87,6 +90,14 @@ pub struct ParamSpec {
 pub enum AutomationBody {
     Speak(SpeakAction),
     Program(ProgramBody),
+    /// 让她做（ADR 036 D8）：一句交给她的话，触发时放进主会话让她跑一轮（每次花一次 AI 调用）。
+    Prompt(PromptBody),
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptBody {
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -142,6 +153,9 @@ pub struct Automation {
     /// 定时运行；None = 只手动 / 由琴音运行。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule: Option<Schedule>,
+    /// 游戏事件触发（ADR 036 D6）；None = 不按事件运行。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<EventTrigger>,
 }
 
 /// 新建或覆盖时提交的内容（`id` 为空 = 新建）。
@@ -158,6 +172,8 @@ pub struct AutomationDraft {
     pub action: AutomationBody,
     #[serde(default)]
     pub schedule: Option<Schedule>,
+    #[serde(default)]
+    pub on: Option<EventTrigger>,
 }
 
 fn is_identifier(name: &str) -> bool {
@@ -420,6 +436,9 @@ impl AutomationDraft {
             super::cron::Cron::parse(&schedule.cron)?;
             validate_args(&self.params, &schedule.args)?;
         }
+        if let Some(on) = &self.on {
+            self.on = Some(validate_trigger(on)?);
+        }
         match &mut self.action {
             AutomationBody::Speak(speak) => {
                 speak.text = speak.text.trim().to_string();
@@ -453,6 +472,18 @@ impl AutomationDraft {
                 let chars = program.source.chars().count();
                 if chars == 0 || chars > MAX_SOURCE_CHARS {
                     return Err(format!("自动化内容为空或超过 {MAX_SOURCE_CHARS} 字"));
+                }
+            }
+            AutomationBody::Prompt(prompt) => {
+                prompt.text = prompt.text.trim().to_string();
+                let chars = prompt.text.chars().count();
+                if chars == 0 || chars > MAX_PROMPT_CHARS {
+                    return Err(format!(
+                        "“让她做”的那句话不能为空，最多 {MAX_PROMPT_CHARS} 字"
+                    ));
+                }
+                if !self.params.is_empty() {
+                    return Err("“让她做”不用参数：触发它的游戏事件会一起交给她".into());
                 }
             }
         }
@@ -505,6 +536,7 @@ fn builtin_remind(now: u64) -> Automation {
         created_at_ms: now,
         updated_at_ms: now,
         schedule: None,
+        on: None,
     }
 }
 
@@ -546,6 +578,38 @@ fn program(
         created_at_ms: now,
         updated_at_ms: now,
         schedule: None,
+        on: None,
+    }
+}
+
+/// 内置模板“英雄联盟进加载界面播报突破口”（ADR 036 D8）：每次触发花一次 AI 调用，所以默认关。
+pub const BUILTIN_LOL_SCOUT_ID: &str = "builtin-lol-scout-on-loading";
+
+fn builtin_lol_scout(now: u64) -> Automation {
+    let mut matches = Map::new();
+    matches.insert("to".into(), Value::from("loading"));
+    Automation {
+        id: BUILTIN_LOL_SCOUT_ID.into(),
+        name: "英雄联盟进加载界面播报突破口".into(),
+        description: "进加载界面时她查一下这局 10 个人的战绩，用一句话告诉你对面谁是突破口。每次花一次 AI 调用，默认关。".into(),
+        params: vec![],
+        action: AutomationBody::Prompt(PromptBody {
+            text: "这局进加载界面了。用 lol.scout 看看对面谁是突破口，用一句话告诉我原因（说成信息，不贴标签）。".into(),
+        }),
+        created_by: CreatedBy::User,
+        created_at_ms: now,
+        updated_at_ms: now,
+        schedule: None,
+        on: Some(EventTrigger {
+            event: vec!["game.phase_changed".into()],
+            game: Some("lol".into()),
+            matches,
+            for_seconds: 0,
+            mode: Default::default(),
+            once_per_match: true,
+            cooldown_seconds: 0,
+            enabled: false,
+        }),
     }
 }
 
@@ -808,6 +872,7 @@ impl AutomationLibrary {
                 existing.params = draft.params;
                 existing.action = draft.action;
                 existing.schedule = draft.schedule;
+                existing.on = draft.on;
                 existing.updated_at_ms = now;
                 existing.clone()
             }
@@ -827,6 +892,7 @@ impl AutomationLibrary {
                     created_at_ms: now,
                     updated_at_ms: now,
                     schedule: draft.schedule,
+                    on: draft.on,
                 };
                 next.automations.push(automation.clone());
                 automation
@@ -842,7 +908,7 @@ impl AutomationLibrary {
     pub fn ensure_builtin(&self) -> Result<bool, String> {
         let mut state = self.state.lock().unwrap();
         let now = now_ms();
-        let mut all = vec![builtin_remind(now)];
+        let mut all = vec![builtin_remind(now), builtin_lol_scout(now)];
         all.extend(builtin_programs(now));
         let missing: Vec<Automation> = all
             .into_iter()
@@ -988,6 +1054,7 @@ mod tests {
             params: builtin.params.clone(),
             action: builtin.action.clone(),
             schedule: None,
+            on: None,
         }
         .normalized()
         .unwrap();
@@ -1021,6 +1088,7 @@ mod tests {
                 params: a.params.clone(),
                 action: a.action.clone(),
                 schedule: None,
+                on: None,
             }
             .normalized()
             .unwrap_or_else(|e| panic!("{id}: {e}"));
@@ -1150,5 +1218,77 @@ mod tests {
             library.save(press_every(), CreatedBy::User).unwrap().id,
             "auto-2"
         );
+    }
+
+    #[test]
+    fn prompt_automations_with_a_game_event_trigger() {
+        let draft = |value: Value| serde_json::from_value::<AutomationDraft>(value).unwrap();
+        let ok = draft(json!({
+            "name": "进加载界面说突破口",
+            "action": {"kind": "prompt", "text": "  用 lol.scout 看看对面谁是突破口  "},
+            "on": {"event": ["game.phase_changed"], "game": "lol", "match": {"to": "loading"}, "oncePerMatch": true}
+        }))
+        .normalized()
+        .unwrap();
+        let AutomationBody::Prompt(prompt) = &ok.action else {
+            panic!("{:?}", ok.action)
+        };
+        assert_eq!(prompt.text, "用 lol.scout 看看对面谁是突破口");
+        assert!(ok.on.as_ref().unwrap().once_per_match);
+        for (bad, want) in [
+            (
+                json!({"name": "x", "action": {"kind": "prompt", "text": " "}}),
+                "不能为空",
+            ),
+            (
+                json!({"name": "x", "action": {"kind": "prompt", "text": "a".repeat(501)}}),
+                "500",
+            ),
+            (
+                json!({"name": "x", "action": {"kind": "prompt", "text": "说一句"},
+                    "params": [{"name": "n", "type": "number"}]}),
+                "不用参数",
+            ),
+            (
+                json!({"name": "x", "action": {"kind": "speak", "text": "龙", "delivery": ["voice"]},
+                    "on": {"event": ["lol.dragon"]}}),
+                "没有",
+            ),
+        ] {
+            let error = draft(bad.clone()).normalized().unwrap_err();
+            assert!(error.contains(want), "{bad} → {error}");
+        }
+    }
+
+    #[test]
+    fn the_lol_scout_template_is_installed_switched_off_and_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = AutomationLibrary::open(dir.path().join("automations.json")).unwrap();
+        library.ensure_builtin().unwrap();
+        let a = library.get(BUILTIN_LOL_SCOUT_ID).unwrap();
+        let on = a.on.clone().unwrap();
+        assert!(!on.enabled, "每次花一次 AI 调用：默认关（ADR 036 D8）");
+        assert!(on.once_per_match);
+        assert!(matches!(a.action, AutomationBody::Prompt(_)));
+        let draft = AutomationDraft {
+            id: None,
+            name: a.name.clone(),
+            description: a.description.clone(),
+            params: a.params.clone(),
+            action: a.action.clone(),
+            schedule: None,
+            on: a.on.clone(),
+        }
+        .normalized()
+        .unwrap();
+        assert_eq!(draft.on, a.on);
+        // 老的自动化文件里没有 on：照兼容规则读成 None
+        let old: Automation = serde_json::from_value(json!({
+            "id": "auto-1", "name": "x", "action": {"kind": "program", "source": "key('Q')"},
+            "createdBy": "user", "createdAtMs": 0, "updatedAtMs": 0
+        }))
+        .unwrap();
+        assert!(old.on.is_none());
+        assert!(!serde_json::to_string(&old).unwrap().contains("\"on\""));
     }
 }

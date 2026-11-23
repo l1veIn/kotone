@@ -975,6 +975,14 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
             };
             blocking(move || Ok(crate::game_tools::installed(a.query.as_deref()))).await
         }
+        c::TOOL_GAME_STATE => {
+            let game = args
+                .get("game")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|g| !g.is_empty());
+            Ok(crate::games::state_json(game))
+        }
         c::TOOL_GAME_CLOSE => {
             let a: GameIdArgs = parse(tool, args)?;
             blocking(move || crate::game_tools::close(&a.profile_id)).await

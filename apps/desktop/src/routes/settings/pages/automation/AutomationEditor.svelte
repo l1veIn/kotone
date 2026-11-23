@@ -1,12 +1,16 @@
 <script lang="ts">
   // 新建 / 编辑一个已保存的自动化。程序在后端检查语法，参数声明在后端校验；这里只做基本输入。
-  import { untrack } from "svelte";
+  import { onMount, untrack } from "svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
   import { Button } from "$lib/components/ui/button";
   import type { DeliveryKind } from "../../../../lib/assistant";
   import {
-    PARAM_TYPES, saveAutomation, type Automation, type AutomationBody, type ParamSpec, type ParamType,
+    PARAM_TYPES, PROMPT_PER_MATCH, saveAutomation, type Automation, type AutomationBody, type EventTrigger, type ParamSpec, type ParamType,
   } from "../../../../lib/automation";
+  import { eventLabel, eventsFor, GAME_EVENTS, phaseLabel, TRIGGER_PHASES } from "../../../../lib/gameEvents";
+  import { listProfiles } from "../../../../lib/ipc";
+  import type { GameProfile } from "../../../../lib/ipc/contracts";
+  import { companionName } from "$lib/stores/companion";
   import { errText, toast } from "../../../../lib/stores/ui";
   import ParamInput from "./ParamInput.svelte";
   import ArgsForm from "./ArgsForm.svelte";
@@ -24,6 +28,7 @@
   let kind = $state<AutomationBody["kind"]>(initial?.action.kind ?? "program");
   let source = $state(initial?.action.kind === "program" ? initial.action.source ?? "" : "");
   let text = $state(initial?.action.kind === "speak" ? initial.action.text : "");
+  let promptText = $state(initial?.action.kind === "prompt" ? initial.action.text : "");
   let delivery = $state<DeliveryKind[]>(initial?.action.kind === "speak" ? [...initial.action.delivery] : ["voice"]);
   // 传进来的定义可能是上层 $state 的代理，structuredClone 会抛错：用 $state.snapshot 取普通对象。
   let params = $state<ParamSpec[]>($state.snapshot(initial?.params ?? []) as ParamSpec[]);
@@ -37,6 +42,48 @@
   let presetEvery = $state("every" in initialPreset ? initialPreset.every : 10);
   let customCron = $state(initialPreset.kind === "cron" ? initialPreset.cron : (initial?.schedule?.cron ?? "0 8 * * *"));
   let scheduleArgs = $state<Record<string, unknown>>($state.snapshot(initial?.schedule?.args ?? {}) as Record<string, unknown>);
+  // 游戏事件触发（ADR 036）：界面编辑第一种事件；她用工具写的多种事件不动它就原样保存
+  const initialOn: EventTrigger | null = initial?.on ? ($state.snapshot(initial.on) as EventTrigger) : null;
+  const initialMatch = (initialOn?.match ?? {}) as Record<string, unknown>;
+  let triggered = $state(initialOn?.enabled ?? false);
+  let onGame = $state(initialOn?.game ?? "");
+  let onEvent = $state(initialOn?.event[0] ?? "game.phase_changed");
+  let onPhase = $state(typeof initialMatch.to === "string" ? initialMatch.to : "loading");
+  let onTeam = $state(typeof initialMatch.team === "string" ? initialMatch.team : "");
+  let onHold = $state(initialOn?.for ?? 0);
+  let onOnce = $state(initialOn?.oncePerMatch ?? true);
+  let onCooldown = $state(initialOn?.cooldownSeconds ?? 0);
+  let profiles = $state<GameProfile[]>([]);
+  const games = $derived(profiles.filter((p) => p.processNames.length > 0));
+  const eventOptions = $derived(eventsFor(onGame));
+  const teamEvent = $derived(GAME_EVENTS.find((e) => e.type === onEvent)?.team ?? false);
+
+  onMount(async () => {
+    try { profiles = await listProfiles(); } catch { profiles = []; }
+  });
+
+  function pickGame(game: string) {
+    onGame = game;
+    // 换了游戏，这个游戏给不了的事换回“阶段变化”
+    if (!eventsFor(game).some((e) => e.type === onEvent)) onEvent = "game.phase_changed";
+  }
+
+  function trigger(): EventTrigger | null {
+    if (!triggered && !initialOn) return null;
+    const match: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(initialMatch)) {
+      if (key !== "to" && key !== "team") match[key] = value;
+    }
+    if (onEvent === "game.phase_changed") match.to = onPhase;
+    if (teamEvent && onTeam) match.team = onTeam;
+    const keepEvents = initialOn && initialOn.event[0] === onEvent ? initialOn.event : [onEvent];
+    return {
+      event: keepEvents, game: onGame || null, match,
+      for: onEvent === "game.phase_changed" ? Math.max(0, Math.round(Number(onHold) || 0)) : 0,
+      mode: initialOn?.mode ?? "single", oncePerMatch: onOnce,
+      cooldownSeconds: Math.max(0, Math.round(Number(onCooldown) || 0)), enabled: triggered,
+    };
+  }
   const cron = $derived(presetToCron(
     presetKind === "daily" || presetKind === "weekdays" ? { kind: presetKind, time: presetTime }
       : presetKind === "minutes" ? { kind: "minutes", every: Number(presetEvery) }
@@ -74,11 +121,14 @@
     saving = true;
     error = "";
     try {
-      const action: AutomationBody = kind === "program" ? { kind, source } : { kind, text, delivery };
+      const action: AutomationBody = kind === "program" ? { kind, source }
+        : kind === "prompt" ? { kind, text: promptText } : { kind, text, delivery };
       const saved = await saveAutomation({
         id: initial?.id ?? null, name, description,
-        params: params.map((p) => ({ ...p, default: p.default ?? undefined })),
+        // “让她做”不用参数：触发它的游戏事件会一起交给她
+        params: kind === "prompt" ? [] : params.map((p) => ({ ...p, default: p.default ?? undefined })),
         action,
+        on: trigger(),
         // 关掉定时时保留写好的时间（暂停），下次打开还在
         schedule: scheduled || initial?.schedule ? { cron, enabled: scheduled, args: $state.snapshot(scheduleArgs) as Record<string, unknown> } : null,
       });
@@ -152,7 +202,7 @@
       <input class="field min-w-0 flex-1" bind:value={description} maxlength="200" aria-label={m.auto_editor_description_aria()} placeholder={m.auto_editor_description_placeholder()} /></label>
     <div class="row"><span>{m.auto_field_action()}</span>
       <div class="flex gap-1.5" role="group" aria-label={m.auto_editor_kind_aria()}>
-        {#each [{ id: "program", label: m.auto_editor_kind_program() }, { id: "speak", label: m.auto_editor_kind_speak() }] as option}
+        {#each [{ id: "program", label: m.auto_editor_kind_program() }, { id: "speak", label: m.auto_editor_kind_speak() }, { id: "prompt", label: m.auto_editor_kind_prompt({ name: $companionName }) }] as option}
           <button type="button" class="chip" aria-pressed={kind === option.id} onclick={() => { kind = option.id as AutomationBody["kind"]; }}>{option.label}</button>
         {/each}
       </div>
@@ -170,6 +220,14 @@
       </div>
 
       {@render paramsEditor()}
+    {:else if kind === "prompt"}
+      <div>
+        <label class="mb-1.5 block text-xs font-medium text-muted-foreground" for="automation-prompt">{m.auto_editor_prompt_label({ name: $companionName })}</label>
+        <textarea id="automation-prompt" bind:value={promptText} rows="3" maxlength="500" data-testid="automation-prompt"
+          placeholder={m.auto_editor_prompt_placeholder()}
+          class="w-full resize-y rounded-xl border border-input bg-background/60 px-3 py-2.5 text-[13px] leading-5 text-foreground outline-none transition-colors focus:border-ring focus:ring-3 focus:ring-ring/30"></textarea>
+        <p class="mt-1.5 mb-0 text-[11px] leading-relaxed text-muted-foreground" data-testid="automation-prompt-cost">{m.auto_editor_prompt_cost({ max: PROMPT_PER_MATCH, name: $companionName })}</p>
+      </div>
     {:else}
       <label class="row"><span>{m.auto_editor_speak_text()}</span>
         <input class="field min-w-0 flex-1" bind:value={text} maxlength="300" aria-label={m.auto_editor_speak_text()} placeholder={m.auto_editor_speak_placeholder()} /></label>
@@ -210,6 +268,49 @@
             <ArgsForm params={params} values={scheduleArgs} prefix={`${m.auto_editor_schedule_args_prefix()} `} onchange={(values) => { scheduleArgs = values; }} />
           </div>
         {/if}
+      {/if}
+    </div>
+
+    <div class="rounded-xl border border-hairline bg-muted/30 p-3" data-testid="automation-trigger">
+      <label class="flex items-center gap-2 text-[13px] font-medium">
+        <input type="checkbox" class="size-4 accent-[var(--color-primary)]" bind:checked={triggered} data-testid="automation-trigger-enabled" />{m.auto_editor_on_enabled()}
+        <span class="font-normal text-xs text-muted-foreground">{m.auto_editor_on_hint()}</span>
+      </label>
+      {#if triggered}
+        <div class="mt-2.5 flex flex-col gap-2 text-[13px]">
+          <div class="row"><span>{m.auto_editor_on_game()}</span>
+            <div class="w-52"><SelectField ariaLabel={m.auto_editor_on_game()} value={onGame} testid="automation-trigger-game"
+              options={[{ value: "", label: m.game_event_any_game() }, ...games.map((g) => ({ value: g.id, label: g.displayName }))]}
+              onchange={(value) => pickGame(String(value))} /></div>
+          </div>
+          <div class="row"><span>{m.auto_editor_on_event()}</span>
+            <div class="w-52"><SelectField ariaLabel={m.auto_editor_on_event()} value={onEvent} testid="automation-trigger-event"
+              options={eventOptions.map((e) => ({ value: e.type, label: eventLabel(e.type) }))}
+              onchange={(value) => { onEvent = String(value); }} /></div>
+          </div>
+          {#if onEvent === "game.phase_changed"}
+            <div class="row"><span>{m.auto_editor_on_phase()}</span>
+              <div class="w-40"><SelectField ariaLabel={m.auto_editor_on_phase()} value={onPhase} testid="automation-trigger-phase"
+                options={TRIGGER_PHASES.map((p) => ({ value: p, label: phaseLabel(p) }))}
+                onchange={(value) => { onPhase = String(value); }} /></div>
+              <span class="!w-auto">{m.auto_editor_on_hold()}</span>
+              <input class="field w-16" type="number" min="0" max="3600" bind:value={onHold} aria-label={m.auto_editor_on_hold()} data-testid="automation-trigger-hold" />
+              <span class="!w-auto">{m.auto_editor_on_hold_unit()}</span>
+            </div>
+          {/if}
+          {#if teamEvent}
+            <div class="row"><span>{m.auto_editor_on_team()}</span>
+              <div class="w-40"><SelectField ariaLabel={m.auto_editor_on_team()} value={onTeam} testid="automation-trigger-team"
+                options={[{ value: "", label: m.auto_editor_on_team_any() }, { value: "ally", label: m.game_event_team_ally() }, { value: "enemy", label: m.game_event_team_enemy() }]}
+                onchange={(value) => { onTeam = String(value); }} /></div>
+            </div>
+          {/if}
+          <div class="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+            <label class="flex items-center gap-1.5"><input type="checkbox" class="size-4 accent-[var(--color-primary)]" bind:checked={onOnce} data-testid="automation-trigger-once" />{m.auto_editor_on_once()}</label>
+            <label class="flex items-center gap-1.5">{m.auto_editor_on_cooldown()}
+              <input class="field w-20" type="number" min="0" max="86400" bind:value={onCooldown} aria-label={m.auto_editor_on_cooldown()} />{m.auto_editor_on_cooldown_unit()}</label>
+          </div>
+        </div>
       {/if}
     </div>
   </div>

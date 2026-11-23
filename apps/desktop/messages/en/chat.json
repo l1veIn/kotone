@@ -313,5 +313,6 @@
   "chat_back_to_voice": "Back to voice input",
   "chat_local_asr_status": "Local speech recognition · {status}",
   "chat_local_asr_retry": "Retry",
-  "chat_local_asr_start": "Start"
+  "chat_local_asr_start": "Start",
+  "chat_tool_label_game_state": "Check what's being played"
 }

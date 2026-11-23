@@ -162,6 +162,8 @@ test("the League profile shows the match-data switch with its risk note and save
   const generic = page.getByTestId("game-profile-generic");
   await generic.getByRole("button", { name: "编辑", exact: true }).click();
   await expect(generic.getByTestId("game-profile-lol-data")).toHaveCount(0);
+  // 通用配置没有进程名，不算一个游戏：没有游戏事件
+  await expect(generic.getByTestId("game-profile-events")).toHaveCount(0);
   await generic.getByRole("button", { name: "收起", exact: true }).click();
 
   const lol = page.getByTestId("game-profile-lol");
@@ -173,8 +175,17 @@ test("the League profile shows the match-data switch with its risk note and save
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await box.screenshot({ path: testInfo.outputPath("lol-data-switch.png") });
 
+  // 游戏事件（ADR 036）：通用的加英雄联盟局内的；浏览器预览里没有游戏在跑
+  const events = lol.getByTestId("game-profile-events");
+  await expect(events.getByTestId("game-profile-events-now")).toHaveText("现在没在跑");
+  await expect(events.getByTestId("game-profile-events-list")).toContainText("阶段变化");
+  await expect(events.getByTestId("game-profile-events-list")).toContainText("拿了大龙");
+
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   const settings = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
   expect(settings.lol).toEqual({ enabled: false });
+  // 对局数据关了：只剩通用的事
+  await expect(events.getByTestId("game-profile-events-list")).not.toContainText("拿了大龙");
+  await expect(events).toContainText("英雄联盟对局数据关着");
 });

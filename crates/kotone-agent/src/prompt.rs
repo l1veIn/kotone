@@ -263,6 +263,8 @@ speak 最多两句、一共不超过 40 个字，只说结论，像打电话一�
             let kind = match a.action {
                 AutomationBody::Speak(_) => "播报",
                 AutomationBody::Program(_) => "程序",
+                // “让她做”是交给她自己的，不列成她能调用的
+                AutomationBody::Prompt(_) => continue,
             };
             let description: String = a.description.chars().take(80).collect();
             out.push_str(&format!(

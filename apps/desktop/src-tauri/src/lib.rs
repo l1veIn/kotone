@@ -20,6 +20,7 @@ mod fillers;
 mod follow_up;
 mod game_session;
 mod game_tools;
+mod games;
 mod history_cmd;
 mod hotkey;
 mod key_request;
@@ -338,8 +339,10 @@ pub fn run() {
                     fillers::refresh(&fillers_app);
                 });
             }
-            // 对局复盘：盯着游戏进程，一局结束就整理（agent.matchRecap，默认开）。
+            // 对局复盘：订阅游戏中心的“一局结束了”就整理（agent.matchRecap，默认开）。
             recap::start(app.handle());
+            // 游戏中心（ADR 036）：看进程和前台窗口，合成游戏状态、发游戏事件、按事件运行自动化。
+            games::start(app.handle());
             // 先接上程序执行端口，再启动调度器（到点的程序才有人执行）。
             automation::attach(app.handle());
             assistant::start(app.handle());
@@ -498,6 +501,7 @@ pub fn run() {
             speech_models::cancel_speech_model_download,
             automation::automation_runs,
             automation::automation_saved_list,
+            games::game_state,
             automation::automation_get,
             automation::automation_save,
             automation::automation_delete,

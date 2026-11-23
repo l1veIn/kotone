@@ -113,6 +113,58 @@ pub(super) fn schedule_report(app: &AppHandle, main: &str) {
     });
 }
 
+/// “让她做”最多等主会话空下来多久（玩家一直在和她说话就算了：事件已经过去了）。
+const PROMPT_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// 自动化“让她做”（ADR 036 D8）：等主会话空下来，放一条系统消息进当前对话，让她跑一轮。
+/// 来源是 `automation`：界面当系统消息显示；算游戏里的入口（开口说）；不是玩家亲口说的，
+/// 这一轮不能交给后台（ADR 030 第 2 节）。触发它的游戏事件按数据附上。
+pub fn run_prompt(
+    app: &AppHandle,
+    name: &str,
+    text: &str,
+    event: Option<&kotone_core::games::GameEvent>,
+) {
+    let why = match event {
+        Some(e) => format!("因为游戏事件 {} 触发", e.kind),
+        None => "被运行".to_string(),
+    };
+    let message = Message::User {
+        text: format!(
+            "（系统消息，不是玩家说的话：自动化「{name}」{why}，请照下面这句做；触发它的事件见附件。）
+{text}"
+        ),
+        attachments: event
+            .map(|e| Attachment::Data {
+                label: "游戏事件".into(),
+                text: serde_json::to_string(e).unwrap_or_default(),
+            })
+            .into_iter()
+            .collect(),
+        source: "automation".into(),
+        at_ms: now_ms(),
+        context: String::new(),
+    };
+    let app = app.clone();
+    let name = name.to_string();
+    tauri::async_runtime::spawn(async move {
+        let deadline = std::time::Instant::now() + PROMPT_WAIT;
+        while !main_is_quiet(&app) {
+            if std::time::Instant::now() >= deadline {
+                log::log(&format!(
+                    "automation {name}: 她一直没空，这次“让她做”不做了"
+                ));
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+        match send_message(&app, message) {
+            Ok(_) => log::log(&format!("automation {name}: 交给她做了")),
+            Err(e) => log::log(&format!("automation {name}: 没能交给她：{e}")),
+        }
+    });
+}
+
 /// 只把一条消息记进某段对话（不调用模型）。
 fn append_to(app: &AppHandle, id: &str, message: Message) {
     let Ok(store) = store(app) else { return };

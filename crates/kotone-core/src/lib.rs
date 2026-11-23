@@ -20,6 +20,7 @@ pub mod automation;
 pub mod cancel;
 pub mod connection;
 pub mod eval;
+pub mod games;
 pub mod history;
 pub mod hotkey;
 pub mod inject;

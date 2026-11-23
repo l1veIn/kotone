@@ -3,14 +3,17 @@
   // 点开看详情（说明、参数、定时、最近的执行、编辑 / 删除 / 交给琴音）。
   // 不属于任何已保存自动化的执行（琴音设的提醒、她临时写的程序）排在最上面，也能停。
   import { companionName } from "$lib/stores/companion";
-  import { ChevronRight, CircleAlert, Clock, LoaderCircle, MessageSquare, Play, Plus, Square, Zap } from "@lucide/svelte";
+  import { ChevronRight, CircleAlert, Clock, Gamepad2, LoaderCircle, MessageSquare, Play, Plus, Square, Zap } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import { Switch } from "$lib/components/ui/switch";
   import {
-    BUILTIN_REMIND_ID, deleteAutomation, describeSchedule, getAutomation, runAutomation, runTitle,
+    BUILTIN_LOL_SCOUT_ID, BUILTIN_REMIND_ID, deleteAutomation, describeSchedule, getAutomation, runAutomation, runTitle,
     type Automation, type AutomationRun,
   } from "../../../../lib/automation";
   import { agentSetAutomationHidden } from "../../../../lib/agent";
+  import { describeTrigger } from "../../../../lib/gameEvents";
+  import { listProfiles } from "../../../../lib/ipc";
+  import { onMount } from "svelte";
   import { errText, settingsStore, toast } from "../../../../lib/stores/ui";
   import AutomationEditor from "./AutomationEditor.svelte";
   import ArgsForm from "./ArgsForm.svelte";
@@ -36,6 +39,18 @@
   let starting = $state("");
   let confirmDelete = $state("");
   let offering = $state("");
+
+  // 游戏配置 id → 名字（触发说明里用）
+  let profileNames = $state<Record<string, string>>({});
+  onMount(async () => {
+    try { profileNames = Object.fromEntries((await listProfiles()).map((p) => [p.id, p.displayName])); } catch { profileNames = {}; }
+  });
+  const gameName = (id: string) => profileNames[id] ?? id;
+  function kindLabel(item: Automation): string {
+    if (item.action.kind === "speak") return m.auto_list_kind_speak();
+    if (item.action.kind === "prompt") return m.auto_list_kind_prompt({ name: $companionName });
+    return m.auto_list_kind_program();
+  }
 
   const by: Record<Automation["createdBy"], string> = $derived({ user: m.auto_created_by_user(), companion: m.auto_created_by_companion(), agent: $companionName });
   const hiddenFromAgent = $derived(new Set($settingsStore?.agent?.hiddenAutomations ?? []));
@@ -168,11 +183,14 @@
             <button type="button" class="min-w-0 flex-1 text-left" aria-expanded={isOpen} onclick={() => { expanded = isOpen ? "" : item.id; }} data-testid="automation-item-toggle">
               <p class="m-0 flex items-center gap-1.5 truncate text-[13px] font-medium text-foreground">
                 {item.name}
-                {#if item.id === BUILTIN_REMIND_ID}<span class="rounded bg-muted px-1 text-[10px] font-normal text-muted-foreground">{m.auto_list_builtin()}</span>{/if}
+                {#if item.id === BUILTIN_REMIND_ID || item.id === BUILTIN_LOL_SCOUT_ID}<span class="rounded bg-muted px-1 text-[10px] font-normal text-muted-foreground">{m.auto_list_builtin()}</span>{/if}
               </p>
               <p class="m-0 mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
-                <span>{item.action.kind === "speak" ? m.auto_list_kind_speak() : m.auto_list_kind_program()}</span>
+                <span>{kindLabel(item)}</span>
                 {#if active.length}<span class="text-primary" data-testid="automation-item-running">{m.auto_run_status_running()}</span>{/if}
+                {#if item.on?.enabled}
+                  <span class="flex items-center gap-1 text-foreground/80" data-testid="automation-item-trigger"><Gamepad2 class="size-3" />{describeTrigger(item.on, gameName)}</span>
+                {/if}
                 {#if item.schedule?.enabled}
                   <span class="flex items-center gap-1 text-foreground/80" data-testid="automation-item-schedule"><Clock class="size-3" />{describeSchedule(item.schedule.cron)}{#if item.nextRunAtMs}{` · ${m.auto_list_next_run({ time: clock(item.nextRunAtMs) })}`}{/if}</span>
                 {/if}
@@ -206,11 +224,14 @@
               {#if item.description}<p class="m-0 text-muted-foreground">{item.description}</p>{/if}
               <dl class="m-0 grid grid-cols-[5rem_1fr] gap-x-3 gap-y-1.5">
                 <dt class="text-muted-foreground">{m.auto_field_action()}</dt>
-                <dd class="m-0">{item.action.kind === "speak" ? m.auto_list_detail_speak({ text: item.action.text, delivery: item.action.delivery.map((d) => (d === "voice" ? m.auto_delivery_voice() : m.auto_delivery_danmaku())).join(" + ") }) : m.auto_list_detail_program()}</dd>
+                <dd class="m-0">{item.action.kind === "speak" ? m.auto_list_detail_speak({ text: item.action.text, delivery: item.action.delivery.map((d) => (d === "voice" ? m.auto_delivery_voice() : m.auto_delivery_danmaku())).join(" + ") })
+                  : item.action.kind === "prompt" ? m.auto_list_detail_prompt({ name: $companionName, text: item.action.text }) : m.auto_list_detail_program()}</dd>
                 <dt class="text-muted-foreground">{m.auto_field_params()}</dt>
                 <dd class="m-0">{item.params.length ? item.params.map((p) => p.label || p.name).join(listSeparator()) : m.auto_list_params_none()}</dd>
                 <dt class="text-muted-foreground">{m.auto_field_schedule()}</dt>
                 <dd class="m-0">{#if item.schedule}{m.auto_list_schedule_detail({ schedule: item.schedule.enabled ? describeSchedule(item.schedule.cron) : m.auto_list_schedule_paused(), cron: item.schedule.cron })}{:else}{m.auto_list_unscheduled({ companion: $companionName })}{/if}</dd>
+                <dt class="text-muted-foreground">{m.auto_field_trigger()}</dt>
+                <dd class="m-0" data-testid="automation-detail-trigger">{#if item.on}{item.on.enabled ? describeTrigger(item.on, gameName) : m.auto_list_trigger_paused({ trigger: describeTrigger(item.on, gameName) })}{:else}{m.auto_list_no_trigger()}{/if}</dd>
                 <dt class="text-muted-foreground">{m.auto_list_created()}</dt>
                 <dd class="m-0">{by[item.createdBy]} · {new Date(item.createdAtMs).toLocaleDateString()}</dd>
               </dl>
@@ -221,7 +242,7 @@
                 {:else}<p class="m-0 text-muted-foreground/80">{m.auto_list_no_runs()}</p>{/if}
               </div>
               <div class="flex flex-wrap items-center gap-2 pt-1">
-                <label class="mr-auto flex cursor-pointer items-center gap-1.5 text-muted-foreground">
+                <label class="mr-auto flex cursor-pointer items-center gap-1.5 text-muted-foreground" class:invisible={item.action.kind === "prompt"}>
                   <Switch size="sm" data-testid="saved-automation-agent" checked={!hiddenFromAgent.has(item.id)} disabled={offering === item.id}
                     aria-label={m.auto_list_offer_aria({ name: item.name, companion: $companionName })} onCheckedChange={(checked) => void setOffered(item, checked)} />
                   {m.auto_list_offer({ companion: $companionName })}

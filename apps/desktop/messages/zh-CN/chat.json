@@ -313,5 +313,6 @@
   "chat_back_to_voice": "回到语音输入",
   "chat_local_asr_status": "本地语音识别 · {status}",
   "chat_local_asr_retry": "重试",
-  "chat_local_asr_start": "启动"
+  "chat_local_asr_start": "启动",
+  "chat_tool_label_game_state": "看看在玩什么"
 }
