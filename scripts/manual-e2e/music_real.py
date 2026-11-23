@@ -20,7 +20,9 @@ L2. typed “放每日推荐” → playing within ~15 s, position moves, the si
 L3. typed “暂停一下” / “继续放” / “这是什么歌” → `music`, paused / playing again / she names it.
 L4. typed “我要听孤勇者” → playing; when the account isn't VIP the original is skipped and she says why.
 L5. `music_control stop`; screenshots of the playing page. The test home is logged out at the end.
-usage: python -X utf8 -I scripts/manual-e2e/music_real.py [--login]
+`--reuse`: with `--login`, use target/music-manual (an isolated home the player already logged into by hand, without the
+debugging port — NetEase's web login flags a WebView2 with a remote-debugging port as “设备环境异常”) and skip the scan.
+usage: python -X utf8 -I scripts/manual-e2e/music_real.py [--login [--reuse]]
 """
 import json
 import os
@@ -35,7 +37,8 @@ import background_task_real as bt  # noqa: E402
 import real_deepseek  # noqa: E402
 
 REPO = bt.REPO
-bt.WORK = os.path.join(REPO, "target", "music-real")
+REUSE = "--reuse" in sys.argv
+bt.WORK = os.path.join(REPO, "target", "music-manual" if REUSE else "music-real")
 bt.HOME = os.path.join(bt.WORK, "home")
 bt.PORT = 9338
 bt.ENV = dict(os.environ, KOTONE_HOME=bt.HOME, WEBVIEW2_USER_DATA_FOLDER=os.path.join(bt.WORK, "webview"),
@@ -154,8 +157,11 @@ def logged_out_cases():
 
 def logged_in_cases():
     ui('await page.getByTestId("settings-nav-music").click(); await page.getByTestId("music-page").waitFor(); return true;')
-    bt.invoke("music_login_start", {})
-    print("\n>>> 弹出了“登录网易云音乐”窗口（网易云官网的登录页）：请用网易云音乐 App 扫里面的二维码并在手机上确认（最多等 5 分钟）\n")
+    if REUSE and music_state().get("account"):
+        print("   already logged in (reused home)")
+    else:
+        bt.invoke("music_login_start", {})
+        print("\n>>> 弹出了“登录网易云音乐”窗口（网易云官网的登录页）：请用网易云音乐 App 扫里面的二维码并在手机上确认（最多等 5 分钟）\n")
     account = bt.wait_until(lambda: music_state().get("account"), 320, 2)
     if not check("L1: logged in after the scan", account, json.dumps(account, ensure_ascii=False)[:120] if account else "timed out"):
         return
@@ -204,9 +210,10 @@ def logged_in_cases():
 
 def main():
     bt.guard()
-    shutil.rmtree(bt.WORK, ignore_errors=True)
-    os.makedirs(bt.HOME)
-    os.makedirs(SHOTS)
+    if not REUSE:
+        shutil.rmtree(bt.WORK, ignore_errors=True)
+    os.makedirs(bt.HOME, exist_ok=True)
+    os.makedirs(SHOTS, exist_ok=True)
     with open(os.path.join(bt.HOME, "config.json"), "w", encoding="utf-8") as f:
         json.dump({"ui": {"firstRunCompleted": True}, "adminPromptDismissed": True, "toolService": {"enabled": True},
                    "hotkey": {"key": "F24", "mode": "toggle"}, "runtimeToggleHotkey": "", "automationStopHotkey": "",
