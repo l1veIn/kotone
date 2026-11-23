@@ -3,6 +3,9 @@
 // 搜索结果里要 VIP 的灰掉；歌单；她要放歌而你没登录时聊天页的登录卡片。
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { openChat } from "./nav";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const SHOTS = process.env.KOTONE_MUSIC_SHOTS;
 const shot = (testInfo: TestInfo, name: string) => (SHOTS ? `${SHOTS}/${name}.png` : testInfo.outputPath(`${name}.png`));
@@ -172,4 +175,15 @@ test("quality and logout from the header; when she wants to play and you're logg
   await preview(page, "needed");
   await compact.getByTestId("music-login-dismiss").click();
   await expect(compact).toHaveCount(0);
+});
+
+// 封面图来自网易云的图床：index.html 的 <meta> CSP 和 tauri.conf.json 的 CSP 两份都要放行
+// （浏览器两份都执行；2026-11-23 真机只改了 tauri.conf.json，封面全被挡了）。
+test("both content security policies allow NetEase cover images", () => {
+  const app = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const meta = readFileSync(join(app, "index.html"), "utf8").match(/img-src[^;"]*/)?.[0] ?? "";
+  const conf = JSON.parse(readFileSync(join(app, "src-tauri", "tauri.conf.json"), "utf8")).app.security.csp as string;
+  for (const policy of [meta, conf.match(/img-src[^;]*/)?.[0] ?? ""]) {
+    expect(policy).toContain("https://*.music.126.net");
+  }
 });
