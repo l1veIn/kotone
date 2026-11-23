@@ -110,6 +110,7 @@ const mock: MockStore = {
     voiceChat: { enabled: false, includeMic: true, micDeviceId: "default", micGain: 100 },
     agent: { permissions: { mode: "default", rules: {} }, hiddenAutomations: [], inGame: true, progressSpeech: true, identity: { name: "", avatar: "" }, subagents: { model: "" }, compactAtTokens: 64000, roleId: "kotone", matchRecap: true, safetyCheck: true, gameEffort: "", chatEffort: "" },
     music: { quality: "exhigh", volume: 70 },
+    lol: { enabled: true },
   },
   devices: [
     { id: "default", name: "系统默认（Mock 麦克风）" },

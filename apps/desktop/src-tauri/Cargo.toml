@@ -25,6 +25,7 @@ kotone-ai.workspace = true
 kotone-agent.workspace = true
 kotone-tts.workspace = true
 kotone-music.workspace = true
+kotone-lol.workspace = true
 kotone-postprocess.workspace = true
 kotone-stt.workspace = true
 kotone-platform-windows.workspace = true

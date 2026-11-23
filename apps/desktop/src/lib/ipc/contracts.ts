@@ -197,6 +197,8 @@ export interface Settings {
   voiceChat?: VoiceChatConfig;
   /** 放歌（ADR 034）：音质和音量。旧配置没有时后端按默认（极高、70）补齐。 */
   music?: { quality: "standard" | "exhigh" | "lossless"; volume: number };
+  /** 英雄联盟对局数据（ADR 035）：读本机的客户端和局内接口。旧配置没有时后端按默认（开）补齐。 */
+  lol?: { enabled: boolean };
 }
 
 export interface VoiceChatConfig {

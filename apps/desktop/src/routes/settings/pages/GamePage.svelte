@@ -133,6 +133,15 @@
     }
   }
 
+  // ---------- 英雄联盟对局数据（ADR 035 D5）：设置 lol.enabled，立即生效，不随“保存”走 ----------
+  async function toggleLolData(enabled: boolean) {
+    try {
+      settingsStore.set(await updateSettings({ lol: { enabled } }));
+    } catch (error) {
+      toast(false, errText(error));
+    }
+  }
+
   // ---------- 内联编辑器状态 ----------
   /** 展开编辑中的 profile id（null = 全部收起） */
   let editingId = $state<string | null>(null);
@@ -723,6 +732,19 @@
                     {m.game_console_cfg_dir({ dir: consoleStatus.cfgDir ?? "" })}
                   {/if}
                 </p>
+              </div>
+            {/if}
+
+            {#if draft.id === "lol"}
+              <!-- 英雄联盟对局数据（ADR 035 D5）：默认开，提示风险 -->
+              <div class="space-y-2 rounded-lg border border-hairline bg-background/40 p-3.5" data-testid="game-profile-lol-data">
+                <ToggleField
+                  checked={$settingsStore?.lol?.enabled ?? true}
+                  label={m.game_lol_data_toggle({ companion: $companionName })}
+                  desc={m.game_lol_data_toggle_desc()}
+                  testid="profile-lol-data"
+                  onchange={(v) => void toggleLolData(v)}
+                />
               </div>
             {/if}
 

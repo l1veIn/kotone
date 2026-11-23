@@ -23,6 +23,7 @@ mod game_tools;
 mod history_cmd;
 mod hotkey;
 mod key_request;
+mod lol;
 mod model_catalog;
 mod models_cmd;
 mod music;
@@ -325,6 +326,8 @@ pub fn run() {
             app.manage(agent::AgentRuntime::open(companion_enabled));
             // 放歌（ADR 034）：播放器、登录状态（只有登录过才联网查账号）
             music::init(app.handle());
+            // 英雄联盟工具（ADR 035）：客户端开着时盯对局阶段，进加载界面先查这局的战绩
+            lol::init(app.handle());
             if companion_enabled {
                 // 琴音原来的名字和头像记进她的角色卡（只做一次）。
                 roles::migrate(app.handle());

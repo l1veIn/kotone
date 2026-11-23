@@ -62,6 +62,10 @@ pub const HOST_BUILTINS: &[&str] = &[
     TOOL_SCREEN_AT_SPEECH,
     // 放歌（ADR 034，桌面端的播放器）
     crate::music::TOOL_MUSIC,
+    // 英雄联盟（ADR 035，桌面端读本机的客户端和局内接口）
+    crate::lol::TOOL_MATCH,
+    crate::lol::TOOL_SPELL,
+    crate::lol::TOOL_SCOUT,
 ];
 
 /// 主会话（和玩家说话的那段对话）的工具：马上出结果（约 1–2 秒内）的一小套，语音和打字共用一份
@@ -108,6 +112,10 @@ pub const MAIN_TOOLS: &[&str] = &[
     "runtime.status",
     // 放歌：搜歌即放、每日推荐、我喜欢的、暂停切歌（ADR 034，一次调用就出声，不交给后台）
     crate::music::TOOL_MUSIC,
+    // 英雄联盟：这局的样子、记对面交的技能、查这局的战绩和突破口（ADR 035，读本机接口，马上返回）
+    crate::lol::TOOL_MATCH,
+    crate::lol::TOOL_SPELL,
+    crate::lol::TOOL_SCOUT,
     // 交给后台
     TOOL_AGENT_START,
     TOOL_AGENT_FOLLOWUP,
@@ -271,7 +279,7 @@ pub fn group_of(name: &str) -> &'static str {
         "models" | "speech" | "stt" | "wake" => "models",
         "shell" | "file" => "computer",
         "browser" => "browser",
-        "music" => "game",
+        "music" | "lol" => "game",
         _ => "app",
     }
 }
@@ -738,6 +746,7 @@ impl Catalog {
         entries.extend(exec_entries(&kotone_exec::tool_specs()));
         entries.extend(crate::browser::entries());
         entries.extend(crate::music::entries());
+        entries.extend(crate::lol::entries());
         entries.extend(saved.iter().filter_map(saved_entry).take(MAX_SAVED_TOOLS));
         Self { entries }
     }

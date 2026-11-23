@@ -75,6 +75,10 @@ impl BuiltinHost for DesktopBuiltins {
             "web.fetch" => crate::web_tools::fetch(&self.app, &caller, arguments).await,
             // 放歌（ADR 034，主会话马上做）
             kotone_agent::music::TOOL_MUSIC => crate::music::tool(&self.app, arguments).await,
+            // 英雄联盟（ADR 035，读本机接口）
+            name if kotone_agent::lol::TOOLS.contains(&name) => {
+                crate::lol::tool(&self.app, name, arguments).await
+            }
             other => Err(format!("{other} 在这里不可用")),
         }
     }

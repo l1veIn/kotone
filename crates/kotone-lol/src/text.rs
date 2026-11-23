@@ -1,0 +1,511 @@
+//! 把这局、战绩、技能记录写成给她看的几行字（工具结果）。玩家名是别人起的，工具结果整体按不可信数据交给模型。
+
+use std::collections::BTreeMap;
+
+use crate::clock;
+use crate::gamedata::GameData;
+use crate::history::PlayerHistory;
+use crate::live::{LiveGame, LivePlayer};
+use crate::scout::{self, Summary};
+use crate::spells::SpellTracker;
+
+/// 模式的中文名（局内接口的 `gameMode`）。
+pub fn mode_name(mode: &str) -> &str {
+    match mode.to_ascii_uppercase().as_str() {
+        "CLASSIC" => "召唤师峡谷",
+        "SWIFTPLAY" => "快速模式",
+        "ARAM" => "极地大乱斗",
+        "KIWI" => "海克斯大乱斗",
+        "URF" | "ARURF" => "无限火力",
+        "CHERRY" => "斗魂竞技场",
+        "PRACTICETOOL" => "训练模式",
+        "TUTORIAL" => "新手教程",
+        _ => mode,
+    }
+}
+
+/// 局内的一个人：英雄全名（“疾风剑豪 亚索”）和短名（“亚索”）。
+pub fn champion_names(player: &LivePlayer, data: Option<&GameData>) -> (String, String) {
+    match data.and_then(|d| d.champion_by_alias(&player.alias)) {
+        Some(c) => (c.label(), c.short().to_string()),
+        None => (player.champion.clone(), player.champion.clone()),
+    }
+}
+
+fn dragon(kind: &str) -> &str {
+    match kind {
+        "Fire" => "火龙",
+        "Water" => "水龙",
+        "Earth" => "土龙",
+        "Air" => "风龙",
+        "Hextech" => "海克斯龙",
+        "Chemtech" => "炼金龙",
+        "Elder" => "远古龙",
+        _ => "小龙",
+    }
+}
+
+fn side(game: &LiveGame, name: &str) -> &'static str {
+    match game.is_ally_name(name) {
+        Some(true) => "我方",
+        Some(false) => "对面",
+        None => "",
+    }
+}
+
+/// 最近的几件大事（龙、男爵、先锋、塔、水晶、团灭、多杀），最多 `limit` 条，旧的在前。
+fn recent_events(game: &LiveGame, limit: usize) -> Vec<String> {
+    let mut out: Vec<String> = game
+        .events
+        .iter()
+        .filter_map(|e| {
+            let who = side(game, &e.killer);
+            let what = match e.name.as_str() {
+                "DragonKill" => {
+                    let mut kind = e.detail.split(' ');
+                    let dragon = dragon(kind.next().unwrap_or(""));
+                    let stolen = if e.detail.contains("抢的") {
+                        "（抢的）"
+                    } else {
+                        ""
+                    };
+                    format!("{who}拿了{dragon}{stolen}")
+                }
+                "BaronKill" => format!("{who}拿了大龙"),
+                "HeraldKill" => format!("{who}拿了峡谷先锋"),
+                "TurretKilled" => format!("{who}推掉一座塔"),
+                "InhibKilled" => format!("{who}推掉一个水晶"),
+                "Ace" => {
+                    let acing = if e.detail.contains(game.my_team()) && !game.my_team().is_empty() {
+                        "我方"
+                    } else {
+                        "对面"
+                    };
+                    format!("{acing}团灭了另一边")
+                }
+                "Multikill" => {
+                    let n: i64 = e.detail.trim().parse().unwrap_or(0);
+                    if n < 3 {
+                        return None;
+                    }
+                    format!("{who}{} {n} 杀", e.killer)
+                }
+                "FirstBlood" => "一血".to_string(),
+                _ => return None,
+            };
+            Some(format!("{} {what}", clock(e.time)))
+        })
+        .collect();
+    let skip = out.len().saturating_sub(limit);
+    out.drain(..skip);
+    out
+}
+
+fn player_line(
+    p: &LivePlayer,
+    data: Option<&GameData>,
+    tracker: &SpellTracker,
+    now: f64,
+    is_me: bool,
+) -> String {
+    let (full, _) = champion_names(p, data);
+    let mut parts = vec![if is_me {
+        format!("{full}（你）")
+    } else {
+        full
+    }];
+    if !p.name.is_empty() {
+        parts.push(format!("「{}」", p.name));
+    }
+    parts.push(format!(
+        "{} 级 {}/{}/{} 补刀 {}",
+        p.level, p.kills, p.deaths, p.assists, p.cs
+    ));
+    let spells: Vec<String> = p
+        .spells
+        .iter()
+        .map(|s| match tracker.ready_at(&p.alias, s, now) {
+            Some(ready) => format!("{s}（{} 好）", clock(ready)),
+            None => s.clone(),
+        })
+        .collect();
+    if !spells.is_empty() {
+        parts.push(spells.join("、"));
+    }
+    let items: Vec<&str> = p
+        .items
+        .iter()
+        .map(|i| i.name.as_str())
+        .filter(|n| !n.is_empty())
+        .collect();
+    if !items.is_empty() {
+        parts.push(format!("装备：{}", items.join("、")));
+    }
+    if p.dead {
+        parts.push(format!("阵亡，{:.0} 秒后复活", p.respawn.max(0.0)));
+    }
+    if p.bot {
+        parts.push("电脑".into());
+    }
+    parts.join(" · ")
+}
+
+/// 对面的闪现：谁没好（几点好）、谁没带。
+pub fn enemy_flash_line(
+    game: &LiveGame,
+    data: Option<&GameData>,
+    tracker: &SpellTracker,
+) -> String {
+    let now = game.time;
+    let mut down = Vec::new();
+    let mut without = Vec::new();
+    for p in game.enemies() {
+        let (_, short) = champion_names(p, data);
+        if !p.spells.iter().any(|s| s == "闪现") {
+            without.push(short);
+        } else if let Some(ready) = tracker.ready_at(&p.alias, "闪现", now) {
+            down.push(format!(
+                "{short} {} 好（还有 {}）",
+                clock(ready),
+                clock(ready - now)
+            ));
+        }
+    }
+    let mut parts = Vec::new();
+    parts.push(if down.is_empty() {
+        "没记到谁交了闪".to_string()
+    } else {
+        format!("没闪：{}", down.join("、"))
+    });
+    if !without.is_empty() {
+        parts.push(format!("没带闪：{}", without.join("、")));
+    }
+    format!("对面的闪现：{}", parts.join("；"))
+}
+
+/// `lol.match` 的结果。
+pub fn render_match(game: &LiveGame, data: Option<&GameData>, tracker: &SpellTracker) -> String {
+    let (ours, theirs) = game.score();
+    let mut out = vec![
+        format!(
+            "{} · 游戏时间 {} · 比分 我方 {ours} : {theirs} 对面",
+            mode_name(&game.mode),
+            clock(game.time)
+        ),
+        enemy_flash_line(game, data, tracker),
+    ];
+    let others = tracker
+        .down(game.time)
+        .into_iter()
+        .filter(|u| u.spell != "闪现")
+        .map(|u| format!("{} {}（{} 好）", u.champion, u.spell, clock(u.ready_at)))
+        .collect::<Vec<_>>();
+    if !others.is_empty() {
+        out.push(format!("记着的其他技能：{}", others.join("、")));
+    }
+    let me = game.me().map(|p| p.riot_id.clone()).unwrap_or_default();
+    out.push("我方：".into());
+    for p in game.allies() {
+        out.push(format!(
+            "- {}",
+            player_line(p, data, tracker, game.time, p.riot_id == me)
+        ));
+    }
+    out.push("对面：".into());
+    for p in game.enemies() {
+        out.push(format!(
+            "- {}",
+            player_line(p, data, tracker, game.time, false)
+        ));
+    }
+    let events = recent_events(game, 5);
+    if !events.is_empty() {
+        out.push(format!("最近：{}", events.join("；")));
+    }
+    out.join("\n")
+}
+
+/// 查战绩时的一个人。
+#[derive(Debug, Clone, Default)]
+pub struct ScoutPlayer {
+    /// “疾风剑豪 亚索”。
+    pub champion: String,
+    /// 认人用的英文 id、短名。
+    pub alias: String,
+    pub short: String,
+    pub champion_id: i64,
+    /// 玩家名（`名字#编号` 或名字）。
+    pub name: String,
+    pub ally: bool,
+    pub me: bool,
+    /// 开黑分组（`teamParticipantId`）。
+    pub party: Option<i64>,
+    /// None = 还在查。
+    pub history: Option<PlayerHistory>,
+}
+
+impl ScoutPlayer {
+    pub fn matches(&self, query: &str) -> bool {
+        let q = crate::gamedata::normalize(query);
+        !q.is_empty()
+            && [&self.champion, &self.alias, &self.short, &self.name]
+                .iter()
+                .map(|s| crate::gamedata::normalize(s))
+                .any(|s| !s.is_empty() && (s.contains(&q) || q.contains(&s)))
+    }
+}
+
+fn scout_line(p: &ScoutPlayer, s: Option<&Summary>, mode: &str) -> String {
+    let mut parts = vec![if p.me {
+        format!("{}（你）", p.champion)
+    } else {
+        p.champion.clone()
+    }];
+    if !p.name.is_empty() {
+        parts.push(format!("「{}」", p.name));
+    }
+    let Some(h) = &p.history else {
+        parts.push("还在查".into());
+        return parts.join(" · ");
+    };
+    if let Some(rank) = &h.rank {
+        parts.push(format!("单双排 {rank}"));
+    }
+    if h.hidden() {
+        parts.push("隐藏战绩".into());
+    }
+    let Some(s) = s.filter(|s| s.games > 0) else {
+        parts.push(match &h.error {
+            Some(e) => format!("战绩查不到（{e}）"),
+            None => "最近没有对局".into(),
+        });
+        return parts.join(" · ");
+    };
+    parts.push(format!(
+        "近 {} 局 {} 胜 {} 负",
+        s.games,
+        s.wins,
+        s.games - s.wins
+    ));
+    if s.mode_games > 0 {
+        parts.push(format!(
+            "{mode} {} 局 {} 胜，分均伤害 {:.0}",
+            s.mode_games, s.mode_wins, s.mode_dpm
+        ));
+    }
+    parts.push(format!("KDA {:.1}，场均死 {:.1}", s.kda, s.deaths));
+    parts.push(format!("这个英雄 {} 局 {} 胜", s.champ_games, s.champ_wins));
+    parts.extend(scout::tags(s));
+    parts.join(" · ")
+}
+
+/// 开黑的几组（同一边、同一个 `teamParticipantId`、至少两个人）。
+fn parties(players: &[ScoutPlayer]) -> Vec<String> {
+    let mut groups: BTreeMap<(bool, i64), Vec<&str>> = BTreeMap::new();
+    for p in players {
+        if let Some(id) = p.party.filter(|id| *id > 0) {
+            groups.entry((!p.ally, id)).or_default().push(&p.short);
+        }
+    }
+    groups
+        .into_iter()
+        .filter(|(_, names)| names.len() >= 2)
+        .map(|((enemy, _), names)| {
+            format!(
+                "{} {}",
+                if enemy { "对面" } else { "我方" },
+                names.join(" + ")
+            )
+        })
+        .collect()
+}
+
+/// `lol.scout` 的结果。`only` = 只看这个人（英雄名或玩家名）。
+pub fn render_scout(
+    players: &[ScoutPlayer],
+    queue_id: i64,
+    mode: &str,
+    only: Option<&str>,
+) -> String {
+    let summaries: Vec<Option<Summary>> = players
+        .iter()
+        .map(|p| {
+            p.history
+                .as_ref()
+                .map(|h| scout::summarize(&h.games, p.champion_id, queue_id))
+        })
+        .collect();
+    let mut out = Vec::new();
+    let wanted: Vec<usize> = match only.map(str::trim).filter(|q| !q.is_empty()) {
+        Some(q) => (0..players.len())
+            .filter(|i| players[*i].matches(q))
+            .collect(),
+        None => (0..players.len()).collect(),
+    };
+    if wanted.is_empty() {
+        let names: Vec<&str> = players.iter().map(|p| p.short.as_str()).collect();
+        return format!(
+            "这局没有“{}”。这局的英雄：{}",
+            only.unwrap_or(""),
+            names.join("、")
+        );
+    }
+    out.push(format!(
+        "每人最近 20 局（全部模式；“{mode}”是和这局同一个模式的）："
+    ));
+    for (title, ally) in [("我方：", true), ("对面：", false)] {
+        let lines: Vec<String> = wanted
+            .iter()
+            .filter(|i| players[**i].ally == ally)
+            .map(|i| {
+                format!(
+                    "- {}",
+                    scout_line(&players[*i], summaries[*i].as_ref(), mode)
+                )
+            })
+            .collect();
+        if !lines.is_empty() {
+            out.push(title.into());
+            out.extend(lines);
+        }
+    }
+    if only.is_some() {
+        return out.join("\n");
+    }
+    let groups = parties(players);
+    if !groups.is_empty() {
+        out.push(format!("开黑：{}", groups.join("；")));
+    }
+    let enemies: Vec<(usize, &Summary)> = players
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| !p.ally)
+        .filter_map(|(i, _)| summaries[i].as_ref().map(|s| (i, s)))
+        .collect();
+    let waiting = players.iter().filter(|p| p.history.is_none()).count();
+    if waiting > 0 {
+        out.push(format!("还有 {waiting} 个人在查，过几秒再问会更全。"));
+    }
+    let spots = scout::weak_spots(&enemies);
+    if spots.is_empty() {
+        out.push("突破口：对面几个人最近的数据差不多，看不出明显的突破口。".into());
+    } else {
+        let lines: Vec<String> = spots
+            .iter()
+            .map(|w| {
+                let p = &players[w.index];
+                let hidden = if p.history.as_ref().is_some_and(PlayerHistory::hidden) {
+                    "（隐藏战绩）"
+                } else {
+                    ""
+                };
+                format!("{}{hidden}——{}", p.short, w.reasons.join("、"))
+            })
+            .collect();
+        out.push(format!("突破口（对面，按数据）：{}", lines.join("；")));
+    }
+    out.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::history::{parse_match_list, tests as h};
+    use crate::live::{parse_all_game_data, tests as l};
+    use crate::spells::SpellUse;
+
+    #[test]
+    fn match_text_shows_score_flash_state_and_events() {
+        let data = crate::gamedata::tests::sample();
+        let game = parse_all_game_data(&l::sample_json()).unwrap();
+        let mut tracker = SpellTracker::default();
+        tracker.record(SpellUse {
+            alias: "Yasuo".into(),
+            champion: "亚索".into(),
+            spell: "闪现".into(),
+            used_at: 700.0,
+            ready_at: 866.7,
+            notes: vec![],
+        });
+        let text = render_match(&game, Some(&data), &tracker);
+        assert!(
+            text.starts_with("海克斯大乱斗 · 游戏时间 12:34 · 比分 我方 5 : 4 对面"),
+            "{text}"
+        );
+        assert!(
+            text.contains("对面的闪现：没闪：亚索 14:27 好（还有 1:53）；没带闪：阿狸"),
+            "{text}"
+        );
+        assert!(
+            text.contains("刀锋舞者 艾瑞莉娅（你） · 「玩家」"),
+            "{text}"
+        );
+        assert!(
+            text.contains("闪现（14:27 好）、引燃 · 装备：明朗之靴"),
+            "{text}"
+        );
+        assert!(text.contains("最近：10:01 对面拿了火龙（抢的）"), "{text}");
+    }
+
+    fn scout_player(
+        short: &str,
+        ally: bool,
+        party: Option<i64>,
+        games: Vec<serde_json::Value>,
+    ) -> ScoutPlayer {
+        let list = h::list(games);
+        ScoutPlayer {
+            champion: format!("称号 {short}"),
+            alias: short.into(),
+            short: short.into(),
+            champion_id: 39,
+            name: format!("{short}的主人"),
+            ally,
+            me: false,
+            party,
+            history: Some(PlayerHistory {
+                riot_id: String::new(),
+                privacy: "PUBLIC".into(),
+                games: parse_match_list(&list),
+                rank: None,
+                error: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn scout_text_flags_hidden_players_parties_and_the_weak_spot() {
+        let good: Vec<_> = (0..10)
+            .map(|i| h::game(i, 2400, 39, i % 3 != 0, (8, 3, 10), 30000))
+            .collect();
+        let bad: Vec<_> = (0..10)
+            .map(|i| h::game(i, 2400, 157, i >= 5, (2, 9, 4), 12000))
+            .collect();
+        let mut players = vec![
+            scout_player("甲", true, Some(1), good.clone()),
+            scout_player("乙", false, Some(7), good.clone()),
+            scout_player("丙", false, Some(7), good.clone()),
+            scout_player("丁", false, Some(9), bad),
+        ];
+        players[3].history.as_mut().unwrap().privacy = "PRIVATE".into();
+        let mut waiting = scout_player("戊", false, None, vec![]);
+        waiting.history = None;
+        players.push(waiting);
+        let text = render_scout(&players, 2400, "海克斯大乱斗", None);
+        assert!(text.contains("隐藏战绩"), "{text}");
+        assert!(text.contains("开黑：对面 乙 + 丙"), "{text}");
+        assert!(
+            text.contains("突破口（对面，按数据）：丁（隐藏战绩）——"),
+            "{text}"
+        );
+        assert!(text.contains("5 连败"), "{text}");
+        assert!(text.contains("「戊的主人」 · 还在查"), "{text}");
+        assert!(text.contains("还有 1 个人在查"), "{text}");
+
+        let one = render_scout(&players, 2400, "海克斯大乱斗", Some("丁"));
+        assert!(one.contains("丁") && !one.contains("乙"), "{one}");
+        assert!(
+            render_scout(&players, 2400, "海克斯大乱斗", Some("不存在")).starts_with("这局没有")
+        );
+    }
+}

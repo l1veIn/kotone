@@ -258,6 +258,7 @@ pub const FIELDS: &[Field] = &[
     f("agent.chatEffort", "聊天窗口里的思考强度", "设置 → 权限", "只对 DeepSeek 生效。空 = 服务商默认（high）。", EFFORTS, NOW),
     f("music.quality", "音质", "音乐", "放歌的音质：exhigh（默认，极高 320k，没有网易云 VIP 时最高就是这个）、standard（标准，省流量）、lossless（无损，要网易云 VIP）。", crate::settings::MUSIC_QUALITIES, NOW),
     f("music.volume", "音乐音量", "音乐", "0–100，默认 70。她说话时音乐会自动压低、说完恢复，不用为这个改音量。", NONE, NOW),
+    f("lol.enabled", "英雄联盟对局数据", "游戏列表 → 英雄联盟", "true（默认）：读英雄联盟客户端和局内的本地接口（只读），查这局玩家的战绩和突破口、记对面交的召唤师技能（lol.match / lol.spell / lol.scout）。false：这三个工具都只回答“已关闭”。国服用这类功能可能违反腾讯的用户协议，风险由玩家自己决定。", NONE, NOW),
     f("ui.sidebar.order", "左侧栏页面的顺序", "左侧栏 → ⋯", "页面 id 的顺序，各自在自己的分组里排：游戏陪玩组 assistant（琴音）、game（游戏）、automation（自动化）、music（音乐），语音输入组 general（语音输入）。空 = 默认；没写到的页面按默认位置。玩家说“把音乐放到最上面”就改这里。", NONE, NOW),
     f("ui.sidebar.hidden", "左侧栏隐藏的页面", "左侧栏 → ⋯", "不在左侧栏显示的页面 id（同上）；隐藏了的还能从“⋯ → 全部页面”打开。advanced（设置）不能隐藏。玩家说“别显示语音输入”就把 general 加进来。", NONE, NOW),
     f("agent.compactAtTokens", "对话多长时整理成摘要", "设置 → 用量", "一段对话估到这么多 token 时，琴音把较早的部分整理成摘要、之后只看摘要和最近几轮（整理那一次多花一点，之后又能命中缓存）。默认 64000；0 = 不整理。", NONE, NOW),

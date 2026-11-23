@@ -37,6 +37,7 @@ pub mod input_gate;
 pub mod keyboard;
 pub mod output_volume;
 pub mod playback;
+pub mod process_cmdline;
 pub mod speech;
 pub mod tool_host;
 pub mod voice_chat;

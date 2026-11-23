@@ -1,0 +1,14 @@
+[package]
+name = "kotone-lol"
+version = "0.1.0"
+description = "Kotone 英雄联盟工具（ADR 035）：客户端本地接口（LCU）和局内接口（Live Client Data）、战绩统计、突破口、召唤师技能计时"
+edition = "2021"
+rust-version = "1.77.2"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+# 只连 127.0.0.1（客户端和游戏的自签证书，不校验，照 LeagueAkari）
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+base64 = "0.22"

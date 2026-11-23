@@ -17,6 +17,7 @@ kotone-ocr = { path = "crates/kotone-ocr" }
 kotone-script = { path = "crates/kotone-script" }
 kotone-exec = { path = "crates/kotone-exec" }
 kotone-music = { path = "crates/kotone-music" }
+kotone-lol = { path = "crates/kotone-lol" }
 # 桌面端 `kotone.exe <子命令>` 复用 CLI；特性由桌面端按自身特性转发
 kotone-cli = { path = "crates/kotone-cli", default-features = false }
 

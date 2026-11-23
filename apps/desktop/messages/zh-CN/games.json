@@ -99,6 +99,8 @@
   "game_needs_admin": "需确认",
   "game_console_toggle": "不开聊天框，直接发到聊天",
   "game_console_toggle_desc": "语音输入和{companion}往这个游戏发消息时，不再打开聊天框，你同时按键也不会打断（用游戏的控制台命令 say_team / say）。打开时会往游戏目录写两个文件：cfg 里的 autoexec.cfg 末尾加一行按键绑定（改之前先备份到 Kotone 的备份文件夹），新建 kotone_say.cfg；关闭时删掉这两处。这样做有没有封号风险，请你自己判断。只能在游戏没开时切换，重启游戏后生效；打开后先发一条测试消息确认能发出去。",
+  "game_lol_data_toggle": "让{companion}读这局的数据",
+  "game_lol_data_toggle_desc": "读英雄联盟客户端和对局里的本地接口（只读，不改任何东西）：查这局玩家的战绩、找对面的突破口、记对面交的召唤师技能。国服用这类功能可能违反腾讯的用户协议，LeagueAkari 等工具有封号、禁言的报告；Riot 也限制第三方的技能冷却计时。用不用由你决定。",
   "game_console_reading": "正在读取游戏目录…",
   "game_console_no_install_dir": "没找到这个游戏的 Steam 安装目录（只支持 Steam 版），发消息照常打开聊天框。",
   "game_console_running_enable": "游戏开着：先退出游戏再打开。",

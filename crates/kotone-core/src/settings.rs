@@ -157,6 +157,24 @@ pub struct Settings {
     /// 放歌（ADR 034）：音质、音量。登录凭据不在这里（Windows 凭据库）。新字段，旧版本会忽略。
     #[serde(default)]
     pub music: MusicConfig,
+    /// 英雄联盟工具（ADR 035）：读本机的客户端和局内接口。新字段，缺省 = 开。
+    #[serde(default)]
+    pub lol: LolConfig,
+}
+
+/// 英雄联盟工具（config.json `lol` 段，ADR 035）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LolConfig {
+    /// 读英雄联盟客户端和局内的本地接口（只读）：查这局玩家的战绩、记对面交的召唤师技能。默认开（D5）。
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl Default for LolConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 /// 放歌（config.json `music` 段，ADR 034）。
@@ -709,6 +727,7 @@ impl Default for Settings {
             voice_chat: crate::voice_chat::VoiceChatConfig::default(),
             browser: BrowserConfig::default(),
             music: MusicConfig::default(),
+            lol: LolConfig::default(),
         }
     }
 }

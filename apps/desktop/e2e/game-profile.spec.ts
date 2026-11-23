@@ -151,3 +151,30 @@ test("console chat switch shows only for profiles that declare it and reports th
     (await import("/src/lib/ipc.ts")).listProfiles().then((list) => list.find((p) => p.id === "dota2")));
   expect(saved?.consoleChat).toEqual({ cfgDir: "game/dota/cfg" });
 });
+
+// ADR 035 D5：英雄联盟的配置里有“读这局的数据”开关（默认开、写着风险），改的是设置 lol.enabled，不随“保存”走。
+test("the League profile shows the match-data switch with its risk note and saves lol.enabled", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.goto("/#/settings?onboarding=never");
+  await page.getByTestId("settings-nav-game").click();
+
+  // 别的游戏没有这个开关
+  const generic = page.getByTestId("game-profile-generic");
+  await generic.getByRole("button", { name: "编辑", exact: true }).click();
+  await expect(generic.getByTestId("game-profile-lol-data")).toHaveCount(0);
+  await generic.getByRole("button", { name: "收起", exact: true }).click();
+
+  const lol = page.getByTestId("game-profile-lol");
+  await lol.getByRole("button", { name: "编辑", exact: true }).click();
+  const box = lol.getByTestId("game-profile-lol-data");
+  await expect(box).toContainText("读这局的数据");
+  await expect(box).toContainText("可能违反腾讯的用户协议");
+  const toggle = box.getByTestId("profile-lol-data");
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await box.screenshot({ path: testInfo.outputPath("lol-data-switch.png") });
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  const settings = await page.evaluate(async () => (await import("/src/lib/ipc.ts")).getSettings());
+  expect(settings.lol).toEqual({ enabled: false });
+});

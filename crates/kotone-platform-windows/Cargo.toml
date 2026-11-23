@@ -28,6 +28,8 @@ windows = { workspace = true, features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Threading",
+    # 读英雄联盟客户端的命令行（ADR 035）：NtQueryInformationProcess
+    "Wdk_System_Threading",
     # 提权检测（TokenElevation）与 runas 重启（docs/development.md §10 R-1）
     # ShellExecuteExW 门控于 Win32_System_Registry（旧构建靠 tauri 传递开启）
     "Win32_Security",

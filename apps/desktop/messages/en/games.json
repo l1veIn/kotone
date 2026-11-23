@@ -99,6 +99,8 @@
   "game_needs_admin": "Needs confirmation",
   "game_console_toggle": "Send straight to chat without opening the chat box",
   "game_console_toggle_desc": "When you use voice input or {companion} sends a message to this game, the chat box isn't opened, and pressing keys at the same time won't interrupt it (uses the game's console commands say_team / say). Turning this on writes two things in the game folder: a key binding line at the end of autoexec.cfg in cfg (backed up to Kotone's backup folder first), and a new kotone_say.cfg. Turning it off removes both. Whether this risks a ban is your call. You can only switch it while the game is closed, and it takes effect after the game restarts. After turning it on, send a test message first to make sure it goes through.",
+  "game_lol_data_toggle": "Let {companion} read this match's data",
+  "game_lol_data_toggle_desc": "Reads League of Legends' local client and in-game APIs (read-only, nothing is changed) to look up the history of this match's players, point out the enemy's weak spot, and track the summoner spells the enemy used. On the Chinese (Tencent) servers this kind of feature may break Tencent's user agreement; tools like LeagueAkari have reports of bans and chat mutes, and Riot restricts third-party cooldown timers. Whether to use it is your call.",
   "game_console_reading": "Reading the game folder…",
   "game_console_no_install_dir": "Couldn't find this game's Steam install folder (only the Steam version is supported). Messages open the chat box as usual.",
   "game_console_running_enable": "The game is running. Quit it before turning this on.",
