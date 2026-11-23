@@ -301,10 +301,15 @@ pub async fn login_start(app: &AppHandle) -> Result<Value, String> {
             tokio::time::sleep(LOGIN_POLL).await;
             if app.get_webview_window(LOGIN_WINDOW).is_none() {
                 // 玩家把窗口关了：不登了
+                log::log(&format!(
+                    "music: 登录窗口关了（{} 秒后），不登了",
+                    started.elapsed().as_secs()
+                ));
                 set_login(&task_music, "idle", None);
                 break;
             }
             if started.elapsed() > LOGIN_TIMEOUT {
+                log::log("music: 登录窗口开了 5 分钟没登上，关掉");
                 close_login_window(&app);
                 set_login(
                     &task_music,
@@ -371,6 +376,7 @@ fn set_login(music: &Music, stage: &'static str, message: Option<String>) {
 
 pub fn login_cancel(app: &AppHandle) -> Result<Value, String> {
     let music = music()?;
+    log::log("music: 取消登录");
     if let Some(task) = music.login_task.lock().unwrap().take() {
         task.abort();
     }
