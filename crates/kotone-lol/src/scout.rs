@@ -2,7 +2,9 @@
 //!
 //! - 每人最近 20 局、全部模式；和这局同一个队列的单独算（峡谷和大乱斗的伤害不放在一起比）；
 //! - 突破口：在对面里比对面的平均，胜率 / KDA / 同模式分均伤害偏低、连败、第一次玩这个英雄加分，
-//!   连胜、常玩这个英雄且赢得多减分；分数最高的一两个，原因一起写出来。
+//!   连胜、常玩这个英雄且赢得多减分；分数最高的一两个，原因一起写出来；
+//! - 随机英雄的模式（大乱斗、海斗，见 [`crate::gamedata::random_pick`]）不看这个英雄玩没玩过：英雄是随机的，
+//!   实测海斗里几乎每个人都“最近没玩过”，是噪音。
 
 use crate::history::GameRecord;
 
@@ -84,15 +86,17 @@ pub fn main_champion(s: &Summary) -> bool {
     s.champ_games >= 5
 }
 
-/// 标签（给每个人那一行用）。
-pub fn tags(s: &Summary) -> Vec<String> {
+/// 标签（给每个人那一行用）。`random_pick` = 这局是随机英雄的模式。
+pub fn tags(s: &Summary, random_pick: bool) -> Vec<String> {
     let mut out = Vec::new();
     if s.streak >= 3 {
         out.push(format!("{} 连胜", s.streak));
     } else if s.streak <= -3 {
         out.push(format!("{} 连败", -s.streak));
     }
-    if first_time(s) {
+    if random_pick {
+        // 英雄是随机的，玩没玩过不说明什么
+    } else if first_time(s) {
         out.push("这个英雄最近没玩过".into());
     } else if main_champion(s) {
         out.push(format!(
@@ -117,7 +121,8 @@ fn average(values: impl Iterator<Item = f64>) -> Option<f64> {
 }
 
 /// 对面谁是突破口：传对面每个人的（下标，统计），返回最多两个，分数 ≥ 1 才算。
-pub fn weak_spots(enemies: &[(usize, &Summary)]) -> Vec<WeakSpot> {
+/// `random_pick` = 这局是随机英雄的模式：不看这个英雄玩没玩过。
+pub fn weak_spots(enemies: &[(usize, &Summary)], random_pick: bool) -> Vec<WeakSpot> {
     let known: Vec<&(usize, &Summary)> = enemies
         .iter()
         .filter(|(_, s)| s.games >= MIN_GAMES)
@@ -178,7 +183,9 @@ pub fn weak_spots(enemies: &[(usize, &Summary)]) -> Vec<WeakSpot> {
             } else if s.streak >= 3 {
                 score -= 1.0;
             }
-            if first_time(s) {
+            if random_pick {
+                // 英雄是随机的
+            } else if first_time(s) {
                 score += 1.0;
                 reasons.push("这个英雄最近 20 局没玩过".into());
             } else if main_champion(s) && s.champ_wins * 10 >= s.champ_games * 6 {
@@ -243,7 +250,7 @@ mod tests {
         // 45000 伤害 / 30 分钟
         assert!((s.mode_dpm - 1500.0).abs() < 1e-9);
         assert_eq!((s.champ_games, s.champ_wins), (3, 1));
-        assert_eq!(tags(&s), ["3 连败"]);
+        assert_eq!(tags(&s, false), ["3 连败"]);
         assert_eq!(summarize(&[], 39, 2400), Summary::default());
     }
 
@@ -283,7 +290,7 @@ mod tests {
             (3, &normal),
             (4, &tiny),
         ];
-        let spots = weak_spots(&enemies);
+        let spots = weak_spots(&enemies, false);
         assert_eq!(spots[0].index, 2, "{spots:?}");
         let reasons = spots[0].reasons.join("；");
         for want in [
@@ -301,7 +308,36 @@ mod tests {
     #[test]
     fn no_weak_spot_when_everyone_is_alike() {
         let a = summary(20, 10, 1, 3.0, 5.0, 2000.0, 2);
-        assert!(weak_spots(&[(0, &a), (1, &a), (2, &a)]).is_empty());
-        assert!(weak_spots(&[(0, &a)]).is_empty(), "一个人没法比");
+        assert!(weak_spots(&[(0, &a), (1, &a), (2, &a)], false).is_empty());
+        assert!(weak_spots(&[(0, &a)], false).is_empty(), "一个人没法比");
+    }
+
+    #[test]
+    fn random_pick_modes_ignore_champion_familiarity() {
+        // 海斗实测：英雄是随机的，几乎每个人这个英雄都是 0 局
+        let fresh = summary(20, 10, 1, 3.0, 5.0, 2000.0, 0);
+        assert_eq!(tags(&fresh, false), ["这个英雄最近没玩过"]);
+        assert!(tags(&fresh, true).is_empty());
+        let main = summary(20, 10, 1, 3.0, 5.0, 2000.0, 6);
+        assert!(tags(&main, false)[0].starts_with("常玩这个英雄"));
+        assert!(tags(&main, true).is_empty());
+
+        // 只是没玩过这个英雄、其余和别人一样：峡谷里是突破口，随机英雄的模式里不是
+        let same = summary(20, 10, 1, 3.0, 5.0, 2000.0, 2);
+        let enemies = [(0, &same), (1, &same), (2, &fresh)];
+        let spots = weak_spots(&enemies, false);
+        assert_eq!(spots.len(), 1, "{spots:?}");
+        assert_eq!(spots[0].reasons, ["这个英雄最近 20 局没玩过"]);
+        assert!(weak_spots(&enemies, true).is_empty());
+
+        // 别的理由照样算，只是原因里没有“没玩过”
+        let weak = summary(20, 6, -4, 1.6, 7.5, 1300.0, 0);
+        let spots = weak_spots(&[(0, &same), (1, &same), (2, &weak)], true);
+        assert_eq!(spots[0].index, 2);
+        let reasons = spots[0].reasons.join("；");
+        assert!(
+            reasons.contains("4 连败") && !reasons.contains("没玩过"),
+            "{reasons}"
+        );
     }
 }

@@ -5,6 +5,8 @@
 //! - `lol.match` / `lol.spell` 读局内接口（马上返回）；召唤师技能是玩家说了才记，这局结束清掉；
 //! - 端口和令牌从 `LeagueClientUx.exe` 的命令行读（不用管理员）；令牌不进日志。
 //! - 设置 `lol.enabled` 关掉时什么都不读（D5）。
+//! - 测试用（不开游戏，`scripts/manual-e2e/lol_tools_real.py`）：`KOTONE_LOL_LCU=<端口>:<令牌>` 不找客户端进程、
+//!   直接连 127.0.0.1 的这个端口；`KOTONE_LOL_LIVE=<地址>` 换掉局内接口的地址（只认本机）。
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -13,12 +15,13 @@ use std::time::{Duration, Instant};
 use kotone_agent::lol::{TOOL_MATCH, TOOL_SCOUT, TOOL_SPELL};
 use kotone_core::log;
 use kotone_lol::client::paths;
+use kotone_lol::client::{loopback_base, LIVE_BASE};
 use kotone_lol::gamedata::normalize;
 use kotone_lol::history::{self, PlayerHistory};
 use kotone_lol::live::{self, LiveGame, LivePlayer};
 use kotone_lol::spells::{self, SpellTracker, SpellUse};
 use kotone_lol::text::{self, ScoutPlayer};
-use kotone_lol::{in_game_phase, GameData, Lcu, Live, LolError};
+use kotone_lol::{in_game_phase, GameData, Lcu, LcuAuth, Live, LolError};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
@@ -76,9 +79,42 @@ fn state() -> &'static Mutex<State> {
 
 fn live_client() -> Result<&'static Live, String> {
     static LIVE: OnceLock<Option<Live>> = OnceLock::new();
-    LIVE.get_or_init(|| Live::new().ok())
-        .as_ref()
-        .ok_or_else(|| "局内接口的客户端建不起来".to_string())
+    LIVE.get_or_init(|| {
+        let base = match std::env::var("KOTONE_LOL_LIVE") {
+            Err(_) => LIVE_BASE.to_string(),
+            Ok(value) => {
+                let base = loopback_base(&value);
+                log::log(&match &base {
+                    Some(base) => format!("lol: KOTONE_LOL_LIVE：局内接口改连 {base}"),
+                    None => "lol: KOTONE_LOL_LIVE 不是本机的 http(s) 地址，局内接口不连".into(),
+                });
+                base?
+            }
+        };
+        Live::with_base(&base).ok()
+    })
+    .as_ref()
+    .ok_or_else(|| "局内接口的客户端建不起来".to_string())
+}
+
+/// 测试用的客户端（`KOTONE_LOL_LCU=<端口>:<令牌>`）。没设 → None（照常找 `LeagueClientUx.exe`）；
+/// 设了 → Some，写错了是 Some(None)：谁都不连，免得测试悄悄连上玩家真的客户端。
+fn test_lcu() -> Option<Option<&'static LcuAuth>> {
+    static AUTH: OnceLock<Option<Option<LcuAuth>>> = OnceLock::new();
+    AUTH.get_or_init(|| {
+        let value = std::env::var("KOTONE_LOL_LCU").ok()?;
+        let auth = kotone_lol::parse_port_token(&value);
+        log::log(&match &auth {
+            Some(auth) => format!(
+                "lol: KOTONE_LOL_LCU：不找客户端进程，连 127.0.0.1:{}",
+                auth.port
+            ),
+            None => "lol: KOTONE_LOL_LCU 要写成 <端口>:<令牌>，客户端接口不连".into(),
+        });
+        Some(auth)
+    })
+    .as_ref()
+    .map(Option::as_ref)
 }
 
 fn enabled(app: &AppHandle) -> bool {
@@ -110,6 +146,9 @@ fn reset_all() {
 }
 
 fn client_pid() -> Option<u32> {
+    if let Some(test) = test_lcu() {
+        return test.map(|_| 0);
+    }
     kotone_platform_windows::app_audio::pids_by_name(kotone_lol::CLIENT_PROCESS)
         .first()
         .copied()
@@ -126,9 +165,12 @@ fn ensure_client(pid: u32) -> Option<Lcu> {
     {
         return Some(c.lcu.clone());
     }
-    let auth = kotone_platform_windows::process_cmdline::command_line(pid)
-        .as_deref()
-        .and_then(kotone_lol::parse_command_line)?;
+    let auth = match test_lcu() {
+        Some(test) => test?.clone(),
+        None => kotone_platform_windows::process_cmdline::command_line(pid)
+            .as_deref()
+            .and_then(kotone_lol::parse_command_line)?,
+    };
     let lcu = Lcu::new(&auth).ok()?;
     log::log(&format!(
         "lol: 连上英雄联盟客户端（端口 {}，{} {}）",
@@ -694,5 +736,6 @@ async fn scout_tool(app: &AppHandle, arguments: &Value) -> Value {
         .and_then(|d| d.queue_name(m.queue_id))
         .map(str::to_string)
         .unwrap_or_else(|| text::mode_name(&m.mode).to_string());
-    json!({"status": "ok", "text": text::render_scout(&players, m.queue_id, &mode, only)})
+    let random = kotone_lol::gamedata::random_pick(data.as_deref(), m.queue_id);
+    json!({"status": "ok", "text": text::render_scout(&players, m.queue_id, &mode, random, only)})
 }

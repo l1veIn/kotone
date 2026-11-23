@@ -255,7 +255,7 @@ impl ScoutPlayer {
     }
 }
 
-fn scout_line(p: &ScoutPlayer, s: Option<&Summary>, mode: &str) -> String {
+fn scout_line(p: &ScoutPlayer, s: Option<&Summary>, mode: &str, random_pick: bool) -> String {
     let mut parts = vec![if p.me {
         format!("{}（你）", p.champion)
     } else {
@@ -294,8 +294,11 @@ fn scout_line(p: &ScoutPlayer, s: Option<&Summary>, mode: &str) -> String {
         ));
     }
     parts.push(format!("KDA {:.1}，场均死 {:.1}", s.kda, s.deaths));
-    parts.push(format!("这个英雄 {} 局 {} 胜", s.champ_games, s.champ_wins));
-    parts.extend(scout::tags(s));
+    // 随机英雄的模式里“这个英雄 0 局”人人都是，不写
+    if !random_pick || s.champ_games > 0 {
+        parts.push(format!("这个英雄 {} 局 {} 胜", s.champ_games, s.champ_wins));
+    }
+    parts.extend(scout::tags(s, random_pick));
     parts.join(" · ")
 }
 
@@ -320,11 +323,13 @@ fn parties(players: &[ScoutPlayer]) -> Vec<String> {
         .collect()
 }
 
-/// `lol.scout` 的结果。`only` = 只看这个人（英雄名或玩家名）。
+/// `lol.scout` 的结果。`only` = 只看这个人（英雄名或玩家名）；
+/// `random_pick` = 随机英雄的模式（[`crate::gamedata::random_pick`]），不看这个英雄玩没玩过。
 pub fn render_scout(
     players: &[ScoutPlayer],
     queue_id: i64,
     mode: &str,
+    random_pick: bool,
     only: Option<&str>,
 ) -> String {
     let summaries: Vec<Option<Summary>> = players
@@ -350,8 +355,13 @@ pub fn render_scout(
             names.join("、")
         );
     }
+    let random = if random_pick {
+        "；英雄是随机的，不看玩没玩过这个英雄"
+    } else {
+        ""
+    };
     out.push(format!(
-        "每人最近 20 局（全部模式；“{mode}”是和这局同一个模式的）："
+        "每人最近 20 局（全部模式；“{mode}”是和这局同一个模式的{random}）："
     ));
     for (title, ally) in [("我方：", true), ("对面：", false)] {
         let lines: Vec<String> = wanted
@@ -360,7 +370,7 @@ pub fn render_scout(
             .map(|i| {
                 format!(
                     "- {}",
-                    scout_line(&players[*i], summaries[*i].as_ref(), mode)
+                    scout_line(&players[*i], summaries[*i].as_ref(), mode, random_pick)
                 )
             })
             .collect();
@@ -386,7 +396,7 @@ pub fn render_scout(
     if waiting > 0 {
         out.push(format!("还有 {waiting} 个人在查，过几秒再问会更全。"));
     }
-    let spots = scout::weak_spots(&enemies);
+    let spots = scout::weak_spots(&enemies, random_pick);
     if spots.is_empty() {
         out.push("突破口：对面几个人最近的数据差不多，看不出明显的突破口。".into());
     } else {
@@ -491,7 +501,7 @@ mod tests {
         let mut waiting = scout_player("戊", false, None, vec![]);
         waiting.history = None;
         players.push(waiting);
-        let text = render_scout(&players, 2400, "海克斯大乱斗", None);
+        let text = render_scout(&players, 2400, "海克斯大乱斗", true, None);
         assert!(text.contains("隐藏战绩"), "{text}");
         assert!(text.contains("开黑：对面 乙 + 丙"), "{text}");
         assert!(
@@ -502,10 +512,45 @@ mod tests {
         assert!(text.contains("「戊的主人」 · 还在查"), "{text}");
         assert!(text.contains("还有 1 个人在查"), "{text}");
 
-        let one = render_scout(&players, 2400, "海克斯大乱斗", Some("丁"));
+        let one = render_scout(&players, 2400, "海克斯大乱斗", true, Some("丁"));
         assert!(one.contains("丁") && !one.contains("乙"), "{one}");
         assert!(
-            render_scout(&players, 2400, "海克斯大乱斗", Some("不存在")).starts_with("这局没有")
+            render_scout(&players, 2400, "海克斯大乱斗", true, Some("不存在"))
+                .starts_with("这局没有")
         );
+    }
+
+    #[test]
+    fn random_pick_modes_drop_the_never_played_this_champion_noise() {
+        // 海斗实测：英雄是随机的，几乎每个人这个英雄都是 0 局（测试数据里的人都玩英雄 39 / 157，这局是 103）
+        let games: Vec<_> = (0..10)
+            .map(|i| h::game(i, 2400, 39, i % 2 == 0, (6, 5, 10), 25000))
+            .collect();
+        let mut players: Vec<ScoutPlayer> = ["甲", "乙", "丙"]
+            .iter()
+            .map(|n| scout_player(n, false, None, games.clone()))
+            .collect();
+        for p in &mut players {
+            p.champion_id = 103;
+        }
+        let aram = render_scout(&players, 2400, "海克斯大乱斗", true, None);
+        assert!(
+            aram.contains("英雄是随机的，不看玩没玩过这个英雄"),
+            "{aram}"
+        );
+        assert!(
+            !aram.contains("最近没玩过") && !aram.contains("局没玩过"),
+            "{aram}"
+        );
+        assert!(!aram.contains("这个英雄 0 局"), "{aram}");
+        assert!(aram.contains("看不出明显的突破口"), "{aram}");
+
+        // 峡谷：同样的数据照旧标出来
+        let rift = render_scout(&players, 420, "单双排", false, None);
+        assert!(
+            rift.contains("这个英雄 0 局 0 胜 · 这个英雄最近没玩过"),
+            "{rift}"
+        );
+        assert!(!rift.contains("英雄是随机的"), "{rift}");
     }
 }

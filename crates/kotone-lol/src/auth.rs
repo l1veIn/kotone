@@ -55,9 +55,39 @@ pub fn parse_command_line(cmd: &str) -> Option<LcuAuth> {
     })
 }
 
+/// 测试用的 `KOTONE_LOL_LCU=<端口>:<令牌>` → 连 127.0.0.1 的这个端口（不读命令行，连录好数据的假客户端）。
+pub fn parse_port_token(value: &str) -> Option<LcuAuth> {
+    let (port, token) = value.trim().split_once(':')?;
+    let port = port.trim().parse().ok().filter(|p: &u16| *p > 0)?;
+    let token = token.trim();
+    (!token.is_empty()).then(|| LcuAuth {
+        port,
+        token: token.to_string(),
+        platform: String::new(),
+        region: String::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn port_token_override() {
+        let auth = parse_port_token(" 52260:AbC_d-1 ").unwrap();
+        assert_eq!((auth.port, auth.token.as_str()), (52260, "AbC_d-1"));
+        for bad in [
+            "",
+            "52260",
+            "52260:",
+            ":tok",
+            "0:tok",
+            "abc:tok",
+            "70000:tok",
+        ] {
+            assert!(parse_port_token(bad).is_none(), "{bad}");
+        }
+    }
 
     #[test]
     fn parses_plain_and_quoted_arguments() {

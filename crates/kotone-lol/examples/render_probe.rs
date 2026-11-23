@@ -129,8 +129,9 @@ fn main() {
         }
     }
     let mode = data.queue_name(queue).unwrap_or("").to_string();
+    let random = kotone_lol::gamedata::random_pick(Some(&data), queue);
     println!(
         "== lol.scout ==\n{}",
-        text::render_scout(&players, queue, &mode, None)
+        text::render_scout(&players, queue, &mode, random, None)
     );
 }

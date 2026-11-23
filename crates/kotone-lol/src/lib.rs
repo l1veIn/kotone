@@ -18,7 +18,7 @@ pub mod scout;
 pub mod spells;
 pub mod text;
 
-pub use auth::{parse_command_line, LcuAuth};
+pub use auth::{parse_command_line, parse_port_token, LcuAuth};
 pub use client::{Lcu, Live, LolError};
 pub use gamedata::GameData;
 

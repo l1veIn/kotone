@@ -1,9 +1,19 @@
 //! 客户端自带的游戏资料（`/lol-game-data/assets/v1/…`，语言跟客户端，国服是中文）：
 //! 英雄、召唤师技能（含基础冷却）、装备、海克斯、队列。不用联网，换版本自动跟着变。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
+
+/// 随机英雄的队列（客户端资料读不到时用）：极地大乱斗 450、大乱斗冠军杯 720、无限乱斗 900、海克斯大乱斗 2400。
+pub const RANDOM_PICK_QUEUES: [i64; 4] = [450, 720, 900, 2400];
+
+/// 这个队列是不是随机英雄：客户端资料里 `pickMode` 是 `AllRandomPickStrategy`，或者是上面几个常见的。
+/// 随机英雄的模式里“这个英雄最近没玩过 / 常玩”不说明什么（ADR 035）。
+pub fn random_pick(data: Option<&GameData>, queue_id: i64) -> bool {
+    RANDOM_PICK_QUEUES.contains(&queue_id)
+        || data.is_some_and(|d| d.random_pick_queues.contains(&queue_id))
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Champion {
@@ -83,6 +93,8 @@ pub struct GameData {
     pub items: HashMap<i64, String>,
     pub augments: HashMap<i64, Augment>,
     pub queues: HashMap<i64, String>,
+    /// `pickMode` 是 `AllRandomPickStrategy` 的队列。
+    pub random_pick_queues: HashSet<i64>,
 }
 
 fn s(v: &Value, key: &str) -> String {
@@ -158,6 +170,11 @@ impl GameData {
                 .map(|x| (i(x, "id"), s(x, "name")))
                 .filter(|(_, name)| !name.is_empty())
                 .collect(),
+            random_pick_queues: list(queues)
+                .iter()
+                .filter(|x| s(x, "pickMode") == "AllRandomPickStrategy")
+                .map(|x| i(x, "id"))
+                .collect(),
         }
     }
 
@@ -220,7 +237,11 @@ pub(crate) mod tests {
             ]),
             &json!([{"id": 3158, "name": "明朗之靴"}]),
             &json!([{"id": 1205, "nameTRA": "物理转魔法", "rarity": "kSilver"}]),
-            &json!([{"id": 2400, "name": "海克斯大乱斗 "}]),
+            &json!([
+                {"id": 2400, "name": "海克斯大乱斗 ", "pickMode": "AllRandomPickStrategy"},
+                {"id": 3120, "name": "召唤师峡谷 全随机", "pickMode": "AllRandomPickStrategy"},
+                {"id": 420, "name": "单双排", "pickMode": "DraftModeSinglePickStrategy"}
+            ]),
         )
     }
 
@@ -254,5 +275,19 @@ pub(crate) mod tests {
         let data = sample();
         assert_eq!(data.queue_name(2400), Some("海克斯大乱斗"));
         assert_eq!(data.augment_name(1205), Some("物理转魔法"));
+    }
+
+    #[test]
+    fn random_pick_queues_come_from_pick_mode_or_the_fallback_list() {
+        let data = sample();
+        assert!(random_pick(Some(&data), 2400));
+        // 资料里标了全随机的（列表里没有）
+        assert!(random_pick(Some(&data), 3120));
+        assert!(!random_pick(Some(&data), 420));
+        // 没有资料：大乱斗、海斗照样算
+        assert!(random_pick(None, 450));
+        assert!(random_pick(None, 2400));
+        assert!(!random_pick(None, 420));
+        assert!(!random_pick(None, 3120));
     }
 }

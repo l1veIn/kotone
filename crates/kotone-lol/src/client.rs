@@ -11,6 +11,14 @@ use crate::auth::LcuAuth;
 /// 局内接口（Riot 官方 Live Client Data API）。
 pub const LIVE_BASE: &str = "https://127.0.0.1:2999";
 
+/// 测试用的局内接口地址（`KOTONE_LOL_LIVE`）：只认本机（`127.0.0.1` / `localhost`）的 http(s)，别的返回 None。
+pub fn loopback_base(value: &str) -> Option<String> {
+    let url = reqwest::Url::parse(value.trim()).ok()?;
+    let local = matches!(url.host_str()?, "127.0.0.1" | "localhost");
+    (local && matches!(url.scheme(), "http" | "https"))
+        .then(|| url.as_str().trim_end_matches('/').to_string())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LolError {
     /// 连不上：客户端 / 游戏没开，或者游戏还在加载。
@@ -169,6 +177,27 @@ mod tests {
         // 1 号端口在测试机上不会有服务
         let live = Live::with_base("https://127.0.0.1:1").unwrap();
         assert_eq!(live.get("/x").await, Err(LolError::Unavailable));
+    }
+
+    #[test]
+    fn live_override_must_be_this_machine() {
+        assert_eq!(
+            loopback_base("https://127.0.0.1:2998/").as_deref(),
+            Some("https://127.0.0.1:2998")
+        );
+        assert_eq!(
+            loopback_base(" http://localhost:8080 ").as_deref(),
+            Some("http://localhost:8080")
+        );
+        for bad in [
+            "",
+            "127.0.0.1:2998",
+            "https://example.com:2999",
+            "https://127.0.0.2:2999",
+            "ftp://127.0.0.1:21",
+        ] {
+            assert!(loopback_base(bad).is_none(), "{bad}");
+        }
     }
 
     #[test]
