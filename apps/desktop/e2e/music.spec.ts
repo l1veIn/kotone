@@ -28,7 +28,7 @@ test("logged out: scan the QR code, then play daily picks and control playback",
   await card.getByTestId("music-login-start").click();
   await expect(card).toHaveAttribute("data-stage", "waiting");
   await expect(card.getByTestId("music-login-qr").locator("svg")).toBeVisible();
-  await expect(card.getByTestId("music-login-stage")).toHaveText("用网易云音乐 App 扫一扫");
+  await expect(card.getByTestId("music-login-stage")).toHaveText("等你扫码…");
   await page.screenshot({ path: shot(testInfo, "music-qr") });
   await preview(page, "scanned");
   await expect(card.getByTestId("music-login-stage")).toHaveText("扫好了，在手机上点确认");

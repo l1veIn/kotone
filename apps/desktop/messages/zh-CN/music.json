@@ -42,7 +42,7 @@
   "music_quality_vip_hint": "要 VIP",
   "music_login_title": "扫码登录网易云音乐",
   "music_login_desc": "用网易云音乐 App 扫一扫。登录以后能放整首歌、每日推荐和你的歌单（不登录多半只能放 30 秒试听）。",
-  "music_login_waiting": "用网易云音乐 App 扫一扫",
+  "music_login_waiting": "等你扫码…",
   "music_login_scanned": "扫好了，在手机上点确认",
   "music_login_expired": "二维码过期了，点一下换一张",
   "music_login_failed": "登录没成功：{error}",

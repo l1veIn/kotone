@@ -42,7 +42,7 @@
   "music_quality_vip_hint": "VIP",
   "music_login_title": "Log in to NetEase Cloud Music",
   "music_login_desc": "Scan with the NetEase Cloud Music app. Once you're logged in you can play full songs, daily picks and your playlists (without logging in, most songs are 30-second previews).",
-  "music_login_waiting": "Scan with the NetEase Cloud Music app",
+  "music_login_waiting": "Waiting for you to scan…",
   "music_login_scanned": "Scanned. Confirm on your phone",
   "music_login_expired": "The QR code expired. Click for a new one",
   "music_login_failed": "Couldn't log in: {error}",

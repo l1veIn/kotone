@@ -238,9 +238,15 @@ pub async fn login_start(app: &AppHandle) -> Result<Value, String> {
         .login_qr_start()
         .await
         .map_err(|e| e.to_string())?;
+    // 页面用 {@html} 嵌进去：只要 <svg …> 本身（去掉 XML 声明）
+    let svg = start
+        .svg
+        .find("<svg")
+        .map_or(start.svg.as_str(), |at| &start.svg[at..])
+        .to_string();
     *music.login.lock().unwrap() = Login {
         stage: "waiting",
-        qr_svg: Some(start.svg.clone()),
+        qr_svg: Some(svg),
         message: None,
     };
     log::log("music: 开始扫码登录");
