@@ -164,9 +164,11 @@
 
 **收尾时的检查**：全工作区格式检查和 clippy `-D warnings` 都过；改过的代码之前已经跑过相关 crate 的测试、Playwright 145 个、两个真机脚本。
 
+**收尾**（玩家 2026-11-24：“推送分支吧”，之后“我们现在应该先合并到 main”）：`claude/adr-035-lol-tools` 快进合并进 main，并推送（main 之前是 rc.5 `b89520a7`）。合并前补了 CHANGELOG 的 Unreleased（随机英雄的修正、按游戏事件运行的自动化和“让她做”）。没有打 tag，没有出 RC。
+
 **下一轮**：
 
-1. 玩家决定推不推送 `claude/adr-035-lol-tools`（本地已经领先 origin 很多个提交）、要不要先合并进 main；
-2. 照计划在 `claude/plugins` 上从第 1 步做起；
-3. 第三节、第六节里“要玩家开局才能测”的那些还在。
+1. 从 main 分出 `claude/plugins`，照 [`docs/plugin-refactor.md`](../plugin-refactor.md) 从第 1 步做起；
+2. 第三节、第六节里“要玩家开局才能测”的那些还在；
+3. 下一个 RC 要玩家说。
 
