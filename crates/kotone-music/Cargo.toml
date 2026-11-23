@@ -1,0 +1,31 @@
+[package]
+name = "kotone-music"
+version = "0.1.0"
+description = "Kotone 放歌（ADR 034）：网易云音乐接口（扫码登录、搜歌、歌单、每日推荐）与本机播放器（边下边放）"
+edition = "2021"
+rust-version = "1.77.2"
+
+[dependencies]
+kotone-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# 网易云接口加密（weapi：AES-CBC 两次 + 公钥 RSA；eapi：AES-ECB + MD5）。不用 rsa crate
+#（RUSTSEC-2023-0071，且我们只做公钥运算）：公钥 RSA 就是一次模幂，用 num-bigint。
+aes = "0.8"
+cbc = "0.1"
+cipher = { version = "0.4", features = ["block-padding", "alloc"] }
+md-5 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+num-bigint = "0.4"
+# 扫码登录的二维码（SVG 字符串，界面直接显示）
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+# 播放：解码 MP3 / FLAC / AAC（MPL-2.0），输出到系统默认扬声器（与 kotone-tts 同一个 cpal）
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "flac", "aac", "isomp4"] }
+cpal = "0.15"
+
+[dev-dependencies]
+tempfile.workspace = true
