@@ -116,7 +116,6 @@ pub(super) fn main_turn_context(
     session: Option<&kotone_agent::port::Session>,
     ws: &Workspace,
 ) -> String {
-    let voice_chat = settings.voice_chat.enabled;
     let game = profile.display_name.trim().to_string();
     let changed = match session {
         Some(session) => {
@@ -151,7 +150,6 @@ pub(super) fn main_turn_context(
         entry,
         game: &game,
         game_id: &profile.id,
-        voice_chat,
         game_notes: notes,
         game_memory: other_memory.as_deref(),
         now: &now,

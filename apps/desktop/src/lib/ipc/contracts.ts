@@ -193,25 +193,13 @@ export interface Settings {
   search?: { activeModelId: string };
   /** 内置琴音 Agent（config.json `agent` 段；旧配置没有这一段时后端按默认补齐）。 */
   agent?: AgentConfig;
-  /** 游戏语音（ADR 020）：琴音用虚拟麦克风替你在游戏语音里说话；旧配置没有时后端按默认（关）补齐。 */
-  voiceChat?: VoiceChatConfig;
   /** 放歌（ADR 034）：音质和音量。旧配置没有时后端按默认（极高、70）补齐。 */
   music?: { quality: "standard" | "exhigh" | "lossless"; volume: number };
   /**
    * 插件（ADR 038）：每个插件一份，按插件 id。没写的项按插件清单的默认（旧的 `lol.enabled` 后端读进来时
-   * 搬到 `plugins.lol.sources.client`）。
+   * 搬到 `plugins.lol.sources.client`；旧的 `voiceChat` 搬到 `plugins.game-voice`）。
    */
   plugins?: Record<string, { enabled?: boolean; sources?: Record<string, boolean>; settings?: Record<string, unknown> }>;
-}
-
-export interface VoiceChatConfig {
-  enabled: boolean;
-  /** 混入你自己的麦克风 */
-  includeMic: boolean;
-  /** 设备名；default = 系统默认录音设备 */
-  micDeviceId: string;
-  /** 百分比 0–400 */
-  micGain: number;
 }
 
 export interface OcrConfig {

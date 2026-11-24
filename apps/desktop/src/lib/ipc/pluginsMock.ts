@@ -1,11 +1,14 @@
 /**
  * dev:web 的插件后端（ADR 038）：照桌面端 `plugins.rs` 列出内置插件、按设置现算开关、
  * 插件页面调工具。清单的文字从插件自己的文案读（plugins/<id>/messages/zh-CN.json），和 plugin.toml 一致
- * （插件的 Rust 测试对过）。英雄联盟的工具返回示例数据（lolMock.ts），页面和聊天卡片照真的显示。
+ * （插件的 Rust 测试对过）。英雄联盟的工具返回示例数据（lolMock.ts），页面和聊天卡片照真的显示；
+ * 游戏语音（默认关）的驱动、默认麦克风是模拟的（gameVoiceMock.ts）。
  */
 import lolZh from "../../../../../plugins/lol/messages/zh-CN.json";
+import gameVoiceZh from "../../../../../plugins/game-voice/messages/zh-CN.json";
 import type { PluginInfo, PluginManifest, PluginToolResult, PluginVisibility } from "../plugins";
 import { getSettings } from "./browserMock";
+import { gameVoiceCall } from "./gameVoiceMock";
 import { findSamplePlayer, sampleGame, sampleMatch, samplePlayer } from "./lolMock";
 import {
   findSampleChampion, sampleChampionList, sampleChampionMayhem, sampleChampionRift, sampleTierMayhem, sampleTierRift,
@@ -63,6 +66,20 @@ const lol: PluginManifest = {
   agent: { overview: "", rule: "" },
 };
 
+// 游戏语音（ADR 020、038 第 4 步）：工具名沿用 voice_chat.*，默认关
+const gameVoice: PluginManifest = {
+  id: "game-voice",
+  name: gameVoiceZh.plugin_game_voice_name,
+  description: gameVoiceZh.plugin_game_voice_description,
+  games: [],
+  adapter: null,
+  enabledByDefault: false,
+  sources: [],
+  pages: [{ uri: "ui://kotone/game-voice/home", title: gameVoiceZh.plugin_game_voice_name, needs: [] }],
+  overlays: [],
+  agent: { overview: "", rule: "" },
+};
+
 interface MockTool { name: string; needs: string[]; visibility: PluginVisibility[]; page: string | null }
 const BOTH: PluginVisibility[] = ["model", "app"];
 const TOOLS: Record<string, MockTool[]> = {
@@ -77,9 +94,16 @@ const TOOLS: Record<string, MockTool[]> = {
     { name: "lol.client", needs: ["client", "control"], visibility: BOTH, page: null },
     { name: "lol.champions", needs: [], visibility: ["app"], page: "ui://kotone/lol/settings" },
   ],
+  "game-voice": [
+    { name: "voice_chat.status", needs: [], visibility: BOTH, page: "ui://kotone/game-voice/home" },
+    { name: "voice_chat.install", needs: [], visibility: BOTH, page: null },
+    { name: "voice_chat.default_mic", needs: [], visibility: BOTH, page: null },
+    { name: "voice_chat.say", needs: [], visibility: BOTH, page: null },
+    { name: "voice_chat.test", needs: [], visibility: BOTH, page: null },
+  ],
 };
 
-const MANIFESTS: PluginManifest[] = [lol];
+const MANIFESTS: PluginManifest[] = [lol, gameVoice];
 
 export async function listPlugins(): Promise<PluginInfo[]> {
   const settings = await getSettings();
@@ -112,6 +136,13 @@ async function sourceOff(source: string): Promise<boolean> {
 export async function pluginCall(plugin: string, tool: string, args: Record<string, unknown>): Promise<PluginToolResult> {
   const spec = (TOOLS[plugin] ?? []).find((t) => t.name === tool);
   if (!spec) throw new Error(`${plugin}: ${tool}`);
+  if (plugin === "game-voice") {
+    // 和桌面端 plugins::call 一样：插件关着时只回一句“关着”
+    if (!((await getSettings()).plugins?.["game-voice"]?.enabled ?? gameVoice.enabledByDefault)) {
+      return { content: { status: "disabled", text: gameVoice.name } };
+    }
+    return gameVoiceCall(tool, args);
+  }
   if (plugin !== "lol") return { content: { status: "error", text: tool } };
   for (const needs of spec.needs) {
     if (await sourceOff(needs)) {

@@ -52,10 +52,10 @@ test("呼叫琴音 has one key (default ~) and no input-mode choice; the chat of
   await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("Ctrl+Backquote");
   await expect(page.getByTestId("settings-call")).not.toContainText("陪玩热键");
   await expect(page.getByTestId("settings-call")).toContainText("呼叫键");
-  // 聊天里的“去看看”跳到分组：设置 → 她怎么回答 → 游戏语音
-  await page.evaluate(async () => (await import("/src/lib/stores/navigation.ts")).openLocation("设置 → 她怎么回答 → 游戏语音"));
+  // 聊天里的“去看看”跳到分组：设置 → 她怎么回答 → 声音与弹幕
+  await page.evaluate(async () => (await import("/src/lib/stores/navigation.ts")).openLocation("设置 → 她怎么回答 → 声音与弹幕"));
   await expect(page.getByTestId("advanced-nav-reply")).toHaveAttribute("aria-current", "page");
-  await expect(page.locator("#settings-reply-teammates")).toBeInViewport();
+  await expect(page.locator("#settings-reply-output")).toBeInViewport();
 });
 
 test("assistant preview submits to the assistant instead of offering game send", async ({ page }) => {

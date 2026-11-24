@@ -51,7 +51,6 @@ mod tray;
 mod tts_online;
 mod usage;
 mod voice_ask;
-mod voice_chat;
 mod voice_listen;
 mod voice_reply;
 mod voice_timing;
@@ -263,7 +262,6 @@ pub fn run() {
             app.manage(bubble::BubbleRuntime::default());
             app.manage(speech_screen::SpeechScreen::default());
             app.manage(computer_use::ComputerUse::default());
-            app.manage(voice_chat::VoiceChat::default());
             app.manage(voice_listen::VoiceListen::default());
             app.manage(key_request::KeyRequests::default());
             app.manage(browser::BrowserRuntime::default());
@@ -350,8 +348,6 @@ pub fn run() {
             // 先接上程序执行端口，再启动调度器（到点的程序才有人执行）。
             automation::attach(app.handle());
             assistant::start(app.handle());
-            // 游戏语音（ADR 020）：设置里开着就开始转发（之后跟着设置保存启停）。
-            voice_chat::sync(app.handle());
             // 可选本机工具服务：独立于 ASR 运行时，只在启动时读取开关（docs/tool-service.md）
             let tool_service_enabled = settings.read().unwrap().tool_service.enabled;
             tool_service::start(app.handle(), tool_service_enabled);
@@ -590,11 +586,6 @@ pub fn run() {
             model_catalog::activate_catalog_model,
             model_catalog::get_catalog_install_guide,
             model_catalog::open_catalog_model_dir,
-            voice_chat::voice_chat_status,
-            voice_chat::voice_chat_install,
-            voice_chat::voice_chat_default_mic,
-            voice_chat::voice_chat_test,
-            voice_chat::voice_chat_say,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Kotone application")

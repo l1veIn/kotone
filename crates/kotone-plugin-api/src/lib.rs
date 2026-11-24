@@ -43,6 +43,10 @@ pub struct Manifest {
     /// 带的游戏中心适配器（ADR 036 D4），例如 `lol`。
     #[serde(default)]
     pub adapter: Option<String>,
+    /// 工具名的前缀（不写 = 插件 id）。搬进插件以前就有的工具保留原来的名字（例如游戏语音的 `voice_chat.*`），
+    /// 玩家设过的权限和她的习惯都不用改。
+    #[serde(default)]
+    pub tool_prefix: Option<String>,
     #[serde(default = "yes")]
     pub enabled_by_default: bool,
     /// 插件里的数据开关，各带风险提示（ADR 038 D3 第 8 条）。
@@ -186,15 +190,21 @@ impl Manifest {
         self.sources.iter().find(|s| s.id == id)
     }
 
-    /// 检查插件代码给的工具：名字以 `<id>.` 开头（或就是 id），页面是自己的，`needs` 是自己的开关，不重名。
+    /// 工具名的前缀（`tool_prefix`，不写就是插件 id）。
+    pub fn tool_prefix(&self) -> &str {
+        self.tool_prefix.as_deref().unwrap_or(&self.id)
+    }
+
+    /// 检查插件代码给的工具：名字以 `<前缀>.` 开头（或就是前缀），页面是自己的，`needs` 是自己的开关，不重名。
     pub fn check_tools(&self, tools: &[ToolSpec]) -> Result<(), String> {
         let mut names = std::collections::HashSet::new();
+        let prefix = self.tool_prefix();
         for tool in tools {
-            let ours = tool.name == self.id || tool.name.starts_with(&format!("{}.", self.id));
+            let ours = tool.name == prefix || tool.name.starts_with(&format!("{prefix}."));
             if !ours || !names.insert(tool.name.as_str()) {
                 return Err(format!(
-                    "插件 {} 的工具 {} 要以 “{}.” 开头，并且不重名",
-                    self.id, tool.name, self.id
+                    "插件 {} 的工具 {} 要以 “{prefix}.” 开头，并且不重名",
+                    self.id, tool.name
                 ));
             }
             if tool.visibility.is_empty() {
@@ -485,6 +495,15 @@ pub trait Plugin: Send + Sync + 'static {
     fn start(self: Arc<Self>, host: Arc<dyn Host>) {
         let _ = host;
     }
+
+    /// 玩家让她停下（停下热键、停止按钮、新的一句话打断）：停掉正在替她做的事（例如正在对队友说的话）。
+    fn stop(&self) {}
+
+    /// 设置保存了（玩家在界面上改的、她用 settings.update 改的、插件自己改的都算）。
+    /// 跟着设置启停的东西（例如游戏语音的转发）在这里对一下。
+    fn settings_changed(&self, host: Arc<dyn Host>) {
+        let _ = host;
+    }
 }
 
 /// 宿主交给插件的本体能力（ADR 038 D5）。每个插件拿到的是自己那一份（设置、目录按插件 id 分开）。
@@ -498,6 +517,39 @@ pub trait Host: Send + Sync {
     /// Kotone 的版本（例如告诉 OP.GG 是哪个应用在用它的接口）。
     fn app_version(&self) -> String {
         String::new()
+    }
+    /// 她开着没有（0.1.x 升级上来、还没打开她的玩家是 false）。要她的声音、她的模型的插件看这个。
+    fn companion_enabled(&self) -> bool {
+        true
+    }
+    /// 合并进插件自己的设置（`plugins.<id>.settings`：对象按字段合并，其余整个替换），和玩家在界面上保存一样生效。
+    fn update_settings(&self, patch: Value) -> Result<(), String> {
+        let _ = patch;
+        Err("这里不能改设置".to_string())
+    }
+    /// 用她现在的声音合成一句话（嘴，ADR 038 D3 第 7 条）：单声道 PCM 和采样率。系统语音合成不出 PCM，会报错。
+    fn synthesize(&self, text: &str) -> BoxFuture<'static, Result<(Vec<f32>, u32), String>> {
+        let _ = text;
+        Box::pin(async { Err("这里没有语音合成".to_string()) })
+    }
+    /// 她的声音能不能合成成 PCM（系统语音不行）。
+    fn can_synthesize(&self) -> bool {
+        false
+    }
+    /// 用她的声音在玩家的扬声器上说一句（和 `synthesize` 同一句时走缓存）。
+    fn speak(&self, text: &str) -> BoxFuture<'static, Result<(), String>> {
+        let _ = text;
+        Box::pin(async { Err("这里没有语音".to_string()) })
+    }
+    /// 下载一个文件到 `dest`（给了 SHA-256 就校验）。和模型下载共用“同一时间只下一个”的限制。
+    fn download(
+        &self,
+        url: &str,
+        dest: PathBuf,
+        sha256: Option<&str>,
+    ) -> BoxFuture<'static, Result<(), String>> {
+        let _ = (url, dest, sha256);
+        Box::pin(async { Err("这里不能下载".to_string()) })
     }
     /// 插件自己的设置（`plugins.<id>.settings`；没有时是空对象）。
     fn settings(&self) -> Value;
@@ -710,6 +762,20 @@ rule = "- 英雄联盟：……"
         }
         .rect();
         assert_eq!(off, [0.8, 0.0, 0.2, 0.1], "超出客户区的挪回来");
+    }
+
+    #[test]
+    fn a_tool_prefix_keeps_old_tool_names() {
+        let m = Manifest::parse(&SAMPLE.replace(
+            "adapter = \"lol\"",
+            "adapter = \"lol\"\ntool_prefix = \"voice_chat\"",
+        ))
+        .unwrap();
+        assert_eq!(m.tool_prefix(), "voice_chat");
+        let say = ToolSpec::new("voice_chat.say", "", json!({"type": "object"}));
+        assert!(m.check_tools(&[say]).is_ok());
+        let lol = ToolSpec::new("lol.scout", "", json!({"type": "object"}));
+        assert!(m.check_tools(&[lol]).is_err(), "有前缀时只认前缀");
     }
 
     #[test]

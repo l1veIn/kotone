@@ -148,9 +148,6 @@ pub struct Settings {
     /// 联网搜索（统一模型清单的 search 类别，ADR 026）。新字段。
     #[serde(default)]
     pub search: SearchConfig,
-    /// 游戏语音（ADR 020）：琴音用虚拟麦克风替玩家在游戏语音里说话。新字段，缺省 = 关闭。
-    #[serde(default)]
-    pub voice_chat: crate::voice_chat::VoiceChatConfig,
     /// 内置浏览器（ADR 031）：玩家加的浏览器插件。新字段，旧版本会忽略。
     #[serde(default)]
     pub browser: BrowserConfig,
@@ -743,7 +740,6 @@ impl Default for Settings {
             tool_service: ToolServiceConfig::default(),
             ocr: OcrConfig::default(),
             search: SearchConfig::default(),
-            voice_chat: crate::voice_chat::VoiceChatConfig::default(),
             browser: BrowserConfig::default(),
             music: MusicConfig::default(),
             plugins: Default::default(),
@@ -1157,6 +1153,7 @@ fn migrate_call_idle_json(user: &mut serde_json::Value) {
 /// （英雄联盟插件的“读客户端数据”开关）。已经有新字段的按新字段；旧段落读完就丢掉，下次保存不再写
 /// （旧版本读不到 `lol` 时按默认“开”，这是装回旧版的代价）。
 pub fn migrate_plugins_json(user: &mut serde_json::Value) {
+    migrate_voice_chat_json(user);
     let Some(object) = user.as_object_mut() else {
         return;
     };
@@ -1184,6 +1181,48 @@ pub fn migrate_plugins_json(user: &mut serde_json::Value) {
         return;
     };
     sources.entry("client").or_insert(enabled.into());
+}
+
+/// 0.2 以前的游戏语音（`voiceChat` 段，ADR 020）搬进游戏语音插件（ADR 038 第 4 步）：
+/// `voiceChat.enabled` → `plugins.game-voice.enabled`，其余字段（自己的麦克风、音量、记下的默认麦克风）
+/// → `plugins.game-voice.settings`。新字段已经有了的不覆盖。
+fn migrate_voice_chat_json(user: &mut serde_json::Value) {
+    let Some(object) = user.as_object_mut() else {
+        return;
+    };
+    let Some(serde_json::Value::Object(mut old)) = object.remove("voiceChat") else {
+        return;
+    };
+    let enabled = old.remove("enabled");
+    let plugins = object
+        .entry("plugins")
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(plugin) = plugins
+        .as_object_mut()
+        .map(|p| {
+            p.entry("game-voice")
+                .or_insert_with(|| serde_json::json!({}))
+        })
+        .and_then(|p| p.as_object_mut())
+    else {
+        return;
+    };
+    if let Some(enabled @ serde_json::Value::Bool(_)) = enabled {
+        plugin.entry("enabled").or_insert(enabled);
+    }
+    if old.is_empty() {
+        return;
+    }
+    let Some(settings) = plugin
+        .entry("settings")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+    else {
+        return;
+    };
+    for (key, value) in old {
+        settings.entry(key).or_insert(value);
+    }
 }
 
 /// 旧配置只有单条 `pipeline`：空流程改种默认屏蔽词；有步骤则收成一条可切换流程。
@@ -1398,6 +1437,48 @@ mod tests {
 
     /// 插件（ADR 038）：旧的 `lol.enabled` 读进来时搬到 `plugins.lol.sources.client`，之后不再写 `lol`；
     /// 已经有新字段的不被旧字段覆盖；没写的开关按清单默认。
+    #[test]
+    fn old_voice_chat_moves_into_the_game_voice_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"voiceChat":{"enabled":true,"includeMic":false,"micGain":150,"previousDefaultMic":"{0.0.1}"}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path);
+        assert!(s.plugin_enabled("game-voice", false));
+        let settings = &s.plugins["game-voice"].settings;
+        assert_eq!(settings["includeMic"], false);
+        assert_eq!(settings["micGain"], 150);
+        assert_eq!(settings["previousDefaultMic"], "{0.0.1}");
+        assert!(!settings.contains_key("enabled"));
+        let text = serde_json::to_string(&s).unwrap();
+        assert!(!text.contains("voiceChat"), "{text}");
+
+        // 旧版里关着（默认）：插件也关着
+        std::fs::write(&path, r#"{"voiceChat":{"enabled":false}}"#).unwrap();
+        let s = load_from(&path);
+        assert!(!s.plugin_enabled("game-voice", true));
+        assert!(s.plugins["game-voice"].settings.is_empty());
+
+        // 新字段已经有了：旧字段不覆盖
+        std::fs::write(
+            &path,
+            r#"{"voiceChat":{"enabled":true,"micGain":150},"plugins":{"game-voice":{"enabled":false,"settings":{"micGain":80}}}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path);
+        assert!(!s.plugin_enabled("game-voice", true));
+        assert_eq!(s.plugins["game-voice"].settings["micGain"], 80);
+
+        // 没有旧字段：不写空段
+        let fresh = Settings::default();
+        assert!(!serde_json::to_string(&fresh)
+            .unwrap()
+            .contains("game-voice"));
+    }
+
     #[test]
     fn old_lol_switch_moves_into_the_lol_plugin() {
         let dir = tempfile::tempdir().unwrap();

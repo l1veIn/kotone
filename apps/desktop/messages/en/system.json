@@ -140,8 +140,6 @@
   "system_advanced_call_button_title": "Call button on the chat page",
   "system_advanced_call_button_description": "Click “Call {name}” on the chat page and she listens to you in her bubble. No setup needed. With local speech recognition, it starts first if it isn't running, then she listens.",
   "system_advanced_call_button_hint": "Typed chat, automations, and scheduled reminders don't need speech recognition.",
-  "system_advanced_teammates_title": "Talk to teammates for you",
-  "system_advanced_teammates_description": "Speaks for you in game voice chat through a virtual microphone.",
   "system_advanced_appearance_description": "Only affects the Settings window; the overlay and floating text in the game stay as they are.",
   "system_tuning_warning": "Don't change these unless you know what you're doing. The defaults keep the original behavior.",
   "system_tuning_vad_title": "Advanced VAD settings",

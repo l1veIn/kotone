@@ -480,3 +480,25 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 - 原有的两个真机脚本：`lol_tools_real.py --while-playing` 32/32、`game_events_real.py` 12/12。
 
 **还没测（要你开局）**：真客户端里的接受、选、禁（接口路径和请求体照 Akari，假客户端按 Akari 的写法回答）；被封号的风险只有你能决定。
+
+### 第 4 步（一）：游戏语音搬进插件（2026-11-24）
+
+**玩家能看到的**：
+
+- “设置 → 她怎么回答”里没有“游戏语音”了；它成了左侧栏“插件”组里的 **游戏语音**（设置 → 插件 里也有它的卡片和开关）。截图：`target/plugin-shots/step4/game-voice-page.png`、`target/plugin-shots/step4/settings-plugins.png`。
+- 插件开关就是原来的“开启游戏语音”（默认关）。关着时页面只有开关和一句“开着会怎样”；开着时和原来一样：VB-CABLE 的状态和安装、混入我的麦克风、我的麦克风和音量、Windows 默认麦克风（改 / 改回）、测试音、说一句。
+- 原来设过的都还在：读旧配置时 `voiceChat.enabled` 搬成插件开关，其余（混入麦克风、麦克风、音量、记下的原来的默认麦克风）搬进 `plugins.game-voice.settings`。
+- 她的工具名没变（`voice_chat.status / install / default_mic / say / test`），玩家设过的权限照旧；主会话照旧有 `say` 和 `status`。插件关着时这五个工具不出现（以前一直在，关着时她会先查状态）。
+
+**本体变了多少**：Rust 净少 1,223 行（+290 −1,513），界面净少 301 行（+137 −438）。搬走的：桌面端 `voice_chat.rs`（481）、系统适配层的 `voice_chat.rs`（321）和 `voice_router.rs`（485）、kotone-core 的 `voice_chat.rs`（60）、工具服务里的五个工具定义、提示词里游戏语音那一段、每轮附注里的“游戏语音：开着”、设置页的游戏语音一节（158）。插件 `plugins/game-voice` 共 2,094 行（含页面、文案、测试）。
+
+**宿主为它加的能力**（`kotone-plugin-api`）：
+
+- `Host`：`companion_enabled`（她开着没有）、`update_settings`（改插件自己的设置，和界面上保存走同一条路）、`can_synthesize` / `synthesize` / `speak`（她的嘴：合成 PCM、在玩家的扬声器上说）、`download`（和模型下载共用“同一时间只下一个”）。
+- `Plugin`：`stop`（玩家让她停下时，还没对队友说完的话也停）、`settings_changed`（每次保存设置，转发器跟着开关、麦克风、音量重开）。
+- 清单 `tool_prefix`：搬进插件以前就有的工具保留原来的名字（游戏语音是 `voice_chat`）。
+
+**检查**：
+
+- Rust：`kotone-plugin-game-voice` 8（新：清单和工具一致、文案和清单一致、设置读不懂时按默认）、`kotone-core` 新加“旧的 voiceChat 搬进游戏语音插件”、`kotone-agent` 的游戏语音测试改成用插件真实的工具（主会话有哪几个、默认问不问和以前一样）、桌面端新加“游戏语音是插件、工具名不变”；clippy、fmt 干净。`tests_http::shutdown_lets_http_long_polls_deliver_stopping` 第一次没过（已知不稳定），重跑通过。
+- 界面：svelte-check 0 / 0；Playwright 159 个全过（游戏语音的测试搬进 `plugins/game-voice/e2e/`：关着只有开关 → 打开 → 没装 → 安装 → 运行中 → 改 / 改回默认麦克风 → 测试音“通了”；旧位置和 `ui.open` 都打开插件页）。

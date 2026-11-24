@@ -36,7 +36,12 @@ pub const SETTINGS_SECTIONS: &[&str] = &[
 /// 内置的插件（按侧栏里的顺序）。
 pub fn registry() -> &'static [Arc<dyn Plugin>] {
     static PLUGINS: OnceLock<Vec<Arc<dyn Plugin>>> = OnceLock::new();
-    PLUGINS.get_or_init(|| vec![Arc::new(kotone_plugin_lol::LolPlugin::new()) as Arc<dyn Plugin>])
+    PLUGINS.get_or_init(|| {
+        vec![
+            Arc::new(kotone_plugin_lol::LolPlugin::new()) as Arc<dyn Plugin>,
+            Arc::new(kotone_plugin_game_voice::GameVoicePlugin::new()),
+        ]
+    })
 }
 
 #[cfg(test)]
@@ -258,6 +263,87 @@ impl Host for DesktopHost {
             json!({"plugin": self.id, "event": event, "payload": payload}),
         );
     }
+
+    fn companion_enabled(&self) -> bool {
+        !settings(&self.app)
+            .ui
+            .legacy_upgrade
+            .uses_legacy_assistant()
+    }
+
+    fn update_settings(&self, patch: Value) -> Result<(), String> {
+        // 和玩家在界面上保存一样走一遍（通知各窗口、插件的 settings_changed）
+        let id = self.id.as_str();
+        crate::settings_cmd::update_settings_from_backend(
+            &self.app,
+            json!({"plugins": {id: {"settings": patch}}}),
+        )
+        .map(|_| ())
+    }
+
+    fn can_synthesize(&self) -> bool {
+        let assistant = settings(&self.app).assistant;
+        crate::assistant::effective_engine(&self.app, &assistant)
+            != kotone_core::assistant::TtsEngine::System
+    }
+
+    fn synthesize(&self, text: &str) -> BoxFuture<'static, Result<(Vec<f32>, u32), String>> {
+        let app = self.app.clone();
+        let text = text.to_string();
+        Box::pin(async move {
+            tauri::async_runtime::spawn_blocking(move || {
+                let (speaker, request) = crate::assistant::speaker_and_request(&app, &text)?;
+                speaker.synthesize(request)
+            })
+            .await
+            .map_err(|e| e.to_string())?
+        })
+    }
+
+    fn speak(&self, text: &str) -> BoxFuture<'static, Result<(), String>> {
+        let app = self.app.clone();
+        let text = text.to_string();
+        Box::pin(async move {
+            tauri::async_runtime::spawn_blocking(move || {
+                let (speaker, request) = crate::assistant::speaker_and_request(&app, &text)?;
+                speaker.speak(request)
+            })
+            .await
+            .map_err(|e| e.to_string())?
+        })
+    }
+
+    fn download(
+        &self,
+        url: &str,
+        dest: PathBuf,
+        sha256: Option<&str>,
+    ) -> BoxFuture<'static, Result<(), String>> {
+        let url = url.to_string();
+        let sha256 = sha256.map(str::to_string);
+        Box::pin(async move {
+            tauri::async_runtime::spawn_blocking(move || {
+                let _guard = kotone_stt::download::begin_download()?;
+                kotone_stt::download::download_file(&url, &dest, sha256.as_deref(), &|_, _| {})
+            })
+            .await
+            .map_err(|e| e.to_string())?
+        })
+    }
+}
+
+/// 设置保存了（运行时状态推送点，设置保存的最后一步也经过这里）：告诉每个插件，跟着设置启停的东西自己对一下。
+pub fn settings_changed(app: &AppHandle) {
+    for plugin in registry() {
+        plugin.settings_changed(DesktopHost::for_plugin(app, plugin));
+    }
+}
+
+/// 玩家让她停下：每个插件停掉正在替她做的事（例如游戏语音里还没说完的话）。
+pub fn stop_all() {
+    for plugin in registry() {
+        plugin.stop();
+    }
 }
 
 /// 启动时：每个插件开它的后台循环（循环里自己看开关）。
@@ -444,6 +530,18 @@ pub fn list(app: &AppHandle) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn game_voice_is_a_plugin_and_keeps_its_tool_names() {
+        let gv = find("game-voice").expect("游戏语音插件");
+        assert!(!gv.manifest().enabled_by_default);
+        let names: Vec<String> = gv.tools().into_iter().map(|t| t.name).collect();
+        assert!(
+            names.iter().all(|n| n.starts_with("voice_chat.")),
+            "{names:?}"
+        );
+        assert_eq!(owner("voice_chat.say").unwrap().manifest().id, "game-voice");
+    }
 
     #[test]
     fn registry_manifests_and_tools_are_valid() {

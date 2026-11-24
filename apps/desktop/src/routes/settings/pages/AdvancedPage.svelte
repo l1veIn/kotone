@@ -20,7 +20,6 @@
   import WakeSettings from "./assistant/WakeSettings.svelte";
   import BubbleSettings from "./assistant/BubbleSettings.svelte";
   import OutputSettings from "./assistant/OutputSettings.svelte";
-  import VoiceChatSettings from "./assistant/VoiceChatSettings.svelte";
   import AgentSettings from "./assistant/AgentSettings.svelte";
   import UsageSettings from "./assistant/UsageSettings.svelte";
   import BrowserDataSettings from "./assistant/BrowserDataSettings.svelte";
@@ -69,13 +68,6 @@
   });
 </script>
 
-{#snippet group(id: string, title: string, description: string)}
-  <div id={id} class="scroll-mt-16 border-t border-hairline pt-6">
-    <h2 class="m-0 text-[15px] font-semibold text-foreground">{title}</h2>
-    <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">{description}</p>
-  </div>
-{/snippet}
-
 <SettingsPage title={m.system_advanced_title()} description={legacyVoiceOnly ? m.system_advanced_description_legacy() : m.system_advanced_description({ name })} testid="advanced-page">
   <nav class="-mt-2 flex flex-col gap-2" aria-label={m.system_advanced_nav_label()}>
     {#each groups as item (item.id)}
@@ -118,8 +110,6 @@
         <div id="settings-reply-ai" class="scroll-mt-16"><AssistantSettings {connections} {ready} onOpenConnections={() => onSectionChange?.("connections")} /></div>
         <div id="settings-reply-bubble" class="scroll-mt-16"><BubbleSettings /></div>
         <div id="settings-reply-output" class="scroll-mt-16"><OutputSettings /></div>
-        {@render group("settings-reply-teammates", m.system_advanced_teammates_title(), m.system_advanced_teammates_description())}
-        <VoiceChatSettings />
       </div>
     {:else if section === "permissions"}
       <div class="space-y-6" data-testid="settings-permissions"><AgentSettings /><BrowserDataSettings /></div>

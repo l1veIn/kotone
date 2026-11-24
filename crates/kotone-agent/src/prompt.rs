@@ -45,8 +45,6 @@ pub struct TurnContext<'a> {
     pub game_memory: Option<&'a str>,
     /// 现在的本地时间（例如 `2026-11-18 周三 14:05`）。
     pub now: &'a str,
-    /// 游戏语音（虚拟麦克风）开着：玩家说“跟队友说…”时用 voice_chat.say 说出来，而不是打字。
-    pub voice_chat: bool,
     /// 怎么叫她（只在聊天窗口入口写进附注：回答“你能做什么”、给下一步建议时要用）。
     pub calling: Option<Calling<'a>>,
 }
@@ -150,15 +148,6 @@ game.act 的结果只说明动作发出去了，有没有生效要看它带回�
 同一个动作没效果就换方法，不要重复；按住的键用完就松开；卡住了或需要玩家做决定时问玩家，不要瞎试。\
 玩家按 Esc 或说停下时立刻停止，不要自己重试。批量、重复的操作（例如把 20 件装备逐个分解）\
 写成自动化程序一次跑完；做成一件事后可以问玩家要不要把步骤存成自动化。\n\
-- speak 是说给玩家自己听的；要让**队友**在游戏语音里听到，用 voice_chat.say（只说玩家让你说的话，简短）。\
-附注里写着“游戏语音：开着”时，玩家说“跟队友说…”“告诉队友…”就是用嘴说（voice_chat.say），不要打字；\
-玩家明确说“打字 / 发在聊天里”才用 game_chat.send。\
-玩家让你跟队友说话时：用 voice_chat.say 说给队友\
-（默认用玩家的原话和玩家说的语言；玩家要求“用英语说”之类时才换成那种语言，例如“here I got an 8x scope”）；\
-玩家自己的耳机里也会听到这句，说完用 speak 简短应一声（如“说了”），不用复述或翻译回来。\
-它需要“游戏语音”已经设好：没设好时用 voice_chat.status 看缺什么，帮玩家一步步弄好——\
-voice_chat.install 自动安装虚拟麦克风 VB-CABLE（VB-Audio 的捐赠软件），settings.update 打开 voiceChat.enabled，\
-提醒玩家在游戏里把麦克风选成 CABLE Output（只认 Windows 默认麦克风的游戏用 voice_chat.default_mic），最后 voice_chat.test 试一下。\n\
 - 记忆（照 Hermes）：玩家告诉你的稳定事实和偏好（称呼、常玩的游戏、习惯）用 memory {target: user} 记下；\
 你自己要长期记住的事用 target: memory；某个游戏的界面、按键、报点黑话、学到的规则用 target: game（给游戏配置 id）。\
 只记以后用得上的，不记闲聊；记忆下一段对话开始时生效。可以分享给别人的通用做法写成技能（skill.manage，先问玩家）。\n\
@@ -289,7 +278,7 @@ const CAPABILITIES: &[(&str, &str, &[&str])] = &[
     (
         "game",
         "游戏里帮玩家：看游戏聊天、替玩家在聊天框打字、用语音或弹幕告诉玩家、定时提醒、打开 / 切换游戏、\
-一边看画面一边操作游戏、用虚拟麦克风替玩家对队友说话、听队友的语音（例如同传翻译）、\
+一边看画面一边操作游戏、听队友的语音（例如同传翻译）、\
 放歌（网易云：点歌、每日推荐、我喜欢的、私人 FM、暂停切歌）",
         &[
             "music",
@@ -301,7 +290,6 @@ const CAPABILITIES: &[(&str, &str, &[&str])] = &[
             "game.focus",
             "game.look",
             "game.act",
-            "voice_chat.say",
             "voice.listen.start",
         ],
     ),
@@ -454,9 +442,6 @@ pub fn turn_context(ctx: &TurnContext<'_>) -> String {
         Entry::Chat => "入口：聊天窗口（玩家看得到文字）",
         Entry::Call => "入口：通话（玩家多半在玩游戏，用 speak 回答）",
     });
-    if ctx.voice_chat {
-        out.push_str("\n游戏语音：开着（“跟队友说…”用 voice_chat.say 说出来）");
-    }
     if let (Entry::Chat, Some(calling)) = (ctx.entry, ctx.calling) {
         let hotkey = calling.hotkey.trim();
         let key = if hotkey.is_empty() {

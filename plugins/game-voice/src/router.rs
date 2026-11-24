@@ -14,7 +14,7 @@ use std::thread::JoinHandle;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-use crate::audio::Resampler;
+use kotone_platform_windows::audio::Resampler;
 
 /// 麦克风缓冲最多多少毫秒（超出丢最旧的）。
 pub const MAX_MIC_LATENCY_MS: u32 = 200;
@@ -220,7 +220,7 @@ fn open(config: &RouterConfig, shared: &Arc<Shared>) -> Result<(Vec<cpal::Stream
         let in_device = find_device(&host, mic, true)?;
         if in_device
             .name()
-            .is_ok_and(|n| crate::voice_chat::is_cable(&n, crate::voice_chat::CABLE_OUTPUT))
+            .is_ok_and(|n| crate::cable::is_cable(&n, crate::cable::CABLE_OUTPUT))
         {
             return Err("真麦克风不能选 CABLE Output（会把自己的声音循环回去）".into());
         }
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     #[ignore = "needs VB-CABLE on this machine"]
     fn tone_reaches_cable_output() {
-        let cable = crate::voice_chat::detect();
+        let cable = crate::cable::detect();
         let (Some(input), Some(output)) = (cable.input, cable.output) else {
             panic!("VB-CABLE not installed");
         };

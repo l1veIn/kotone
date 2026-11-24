@@ -140,8 +140,6 @@
   "system_advanced_call_button_title": "聊天页的呼叫按钮",
   "system_advanced_call_button_description": "在聊天页点一下「呼叫{name}」就在气泡里听你说，不用设置。用本地识别时，没启动的话会先启动再听。",
   "system_advanced_call_button_hint": "打字聊天、自动化和定时提醒都不需要语音识别。",
-  "system_advanced_teammates_title": "替你跟队友说话",
-  "system_advanced_teammates_description": "用虚拟麦克风替你在游戏语音里说话。",
   "system_advanced_appearance_description": "只影响设置窗口；游戏里的悬浮窗与弹幕保持原样。",
   "system_tuning_warning": "除非你知道你在做什么，否则不建议修改这些配置。默认值即原行为。",
   "system_tuning_vad_title": "VAD 高级设置",

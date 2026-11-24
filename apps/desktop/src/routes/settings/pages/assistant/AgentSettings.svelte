@@ -15,6 +15,9 @@
     type AgentTool, type PermissionMode, type PermissionRule, type Permissions,
   } from "../../../../lib/agent";
   import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
+  import { pluginToolLabel } from "$lib/pluginUi";
+  /** 工具的名字：插件的工具用插件给的（例如游戏语音的 voice_chat.*）。 */
+  const label = (name: string) => pluginToolLabel(name) ?? toolLabel(name);
 
   const modes: { id: PermissionMode; name: string; description: string }[] = [
     { id: "default", name: m.companion_agent_mode_default_name(), description: m.companion_agent_mode_default_desc() },
@@ -102,7 +105,7 @@
     const rules = { ...permissions.rules };
     if (value === "default") delete rules[tool];
     else rules[tool] = value as PermissionRule;
-    void save({ ...permissions, rules }, m.companion_agent_rule_saved({ tool: toolLabel(tool), rule: ruleNames[value as PermissionRule | "default"] }));
+    void save({ ...permissions, rules }, m.companion_agent_rule_saved({ tool: label(tool), rule: ruleNames[value as PermissionRule | "default"] }));
   }
 </script>
 
@@ -179,7 +182,7 @@
               <div class="flex items-center justify-between gap-4 py-2.5" data-testid="agent-rule" data-tool={tool.name}>
                 <div class="min-w-0">
                   <p class="m-0 flex flex-wrap items-baseline gap-x-2 text-[13px]">
-                    <span class="font-medium text-foreground">{toolLabel(tool.name)}</span>
+                    <span class="font-medium text-foreground">{label(tool.name)}</span>
                     <span class="font-mono text-[11px] text-muted-foreground">{tool.name}</span>
                     {#if !tool.core}<span class="rounded border border-hairline px-1 text-[10px] text-muted-foreground" title={m.companion_agent_tool_on_demand_title()}>{m.companion_agent_tool_on_demand()}</span>{/if}
                   </p>
@@ -187,7 +190,7 @@
                 </div>
                 <div class="flex shrink-0 items-center gap-2">
                   <span class="hidden text-[11px] text-muted-foreground sm:inline" data-testid="agent-rule-default">{m.companion_agent_rule_default_value({ rule: ruleNames[tool.defaultRule] })}</span>
-                  <SelectField class="w-28" size="sm" ariaLabel={m.companion_agent_rule_aria({ tool: toolLabel(tool.name) })} {value} disabled={saving}
+                  <SelectField class="w-28" size="sm" ariaLabel={m.companion_agent_rule_aria({ tool: label(tool.name) })} {value} disabled={saving}
                     options={(["default", "allow", "ask", "deny"] as const).map((option) => ({ value: option, label: ruleNames[option] }))}
                     onchange={(next) => setRule(tool.name, next)} />
                 </div>

@@ -1,0 +1,26 @@
+# 游戏语音插件（ADR 020、038）：她用虚拟麦克风（VB-CABLE）替你在游戏语音里对队友说话。清单的写法见 crates/kotone-plugin-api。
+# 插件开着 = 转发开着（原来的 voiceChat.enabled，读旧配置时搬过来）。界面文字以 messages/<语言>.json 为准（plugin_game_voice_*）。
+
+id = "game-voice"
+name = "游戏语音"
+description = "她用虚拟麦克风（VB-CABLE）替你在游戏语音里对队友说话；你的麦克风也一起转进去，游戏里把麦克风选成 CABLE Output 就行"
+# 搬进插件以前就叫 voice_chat.*：玩家设过的权限、她的习惯都不变
+tool_prefix = "voice_chat"
+enabled_by_default = false
+
+[[pages]]
+uri = "ui://kotone/game-voice/home"
+title = "游戏语音"
+
+[agent]
+overview = "用虚拟麦克风替玩家在游戏语音里对队友说话"
+rule = """- speak 是说给玩家自己听的；要让**队友**在游戏语音里听到，用 voice_chat.say（只说玩家让你说的话，简短）。\
+这个插件开着，所以玩家说“跟队友说…”“告诉队友…”就是用嘴说（voice_chat.say），不要打字；\
+玩家明确说“打字 / 发在聊天里”才用 game_chat.send。\
+玩家让你跟队友说话时：用 voice_chat.say 说给队友\
+（默认用玩家的原话和玩家说的语言；玩家要求“用英语说”之类时才换成那种语言，例如“here I got an 8x scope”）；\
+玩家自己的耳机里也会听到这句，说完用 speak 简短应一声（如“说了”），不用复述或翻译回来。\
+它需要“游戏语音”已经设好：没设好时用 voice_chat.status 看缺什么，帮玩家一步步弄好——\
+voice_chat.install 自动安装虚拟麦克风 VB-CABLE（VB-Audio 的捐赠软件）（安装的事交给后台），\
+提醒玩家在游戏里把麦克风选成 CABLE Output（只认 Windows 默认麦克风的游戏用 voice_chat.default_mic），最后 voice_chat.test 试一下。\n\
+"""

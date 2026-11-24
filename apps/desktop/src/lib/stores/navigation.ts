@@ -36,7 +36,6 @@ const ADVANCED_ANCHORS: Record<string, Record<string, string>> = {
   call: { "呼叫键": "settings-call-hotkey", "语音唤醒": "settings-call-wake", "快捷指令": "companion-title" },
   reply: {
     "她用的模型": "settings-reply-ai", "气泡": "settings-reply-bubble", "声音与弹幕": "settings-reply-output", "回答方式": "settings-reply-output",
-    "游戏语音": "settings-reply-teammates",
     // 旧写法（术语表 v2 之前的小节名；以前的对话里还引用着）
     "AI 连接": "settings-reply-ai", "对话气泡": "settings-reply-bubble",
   },
@@ -66,7 +65,6 @@ const OLD_COMPANION_GROUPS: Record<string, { tab: string; anchor?: string }> = {
   "气泡": { tab: "reply", anchor: "settings-reply-bubble" },
   "对话气泡": { tab: "reply", anchor: "settings-reply-bubble" },
   "弹幕": { tab: "reply", anchor: "settings-reply-output" },
-  "游戏语音": { tab: "reply", anchor: "settings-reply-teammates" },
   "权限": { tab: "permissions" },
   "用量": { tab: "usage" },
 };
@@ -95,6 +93,8 @@ function parseOne(where: string): PageTarget | null {
   const parts = where.split("→").map((part) => part.trim()).filter(Boolean);
   const [first, second, third] = parts;
   if (!first) return null;
+  // 游戏语音搬进了插件（ADR 038 第 4 步）：旧位置「设置 → 她怎么回答 → 游戏语音」「琴音 → 设置 → 游戏语音」跳到插件页
+  if (third === "游戏语音" && (second === "她怎么回答" || second === "设置")) return { page: "plugin", id: "game-voice" };
   if (first === "琴音" || first === "琴音陪玩" || first === "角色") {
     if (second === "设置") {
       const group = third ? OLD_COMPANION_GROUPS[third] : undefined;
@@ -107,7 +107,8 @@ function parseOne(where: string): PageTarget | null {
   if (first === "左侧栏" || first === "侧边栏") return { page: "sidebar-pages" };
   // 「插件 → 英雄联盟」= 插件的页面；只写「插件」= 设置里的插件列表（ADR 038）
   if (first === "插件") {
-    const id = second ? PLUGIN_NAMES[second] : undefined;
+    // 「插件 → 英雄联盟 / 游戏语音」：取第一个认得出的
+    const id = second?.split("/").map((name) => PLUGIN_NAMES[name.trim()]).find(Boolean);
     return id ? { page: "plugin", id } : { page: "advanced", tab: "plugins" };
   }
   if (first === "设置") {
@@ -147,8 +148,8 @@ const TOOL_LOCATIONS: Record<string, [string, string]> = {
   "connections.upsert": [m.shell_nav_changed_connections(), "设置 → API 连接"],
   "connections.delete": [m.shell_nav_changed_connections(), "设置 → API 连接"],
   "connections.request_key": [m.shell_nav_changed_connections(), "设置 → API 连接"],
-  "voice_chat.install": [m.shell_nav_changed_voice_chat(), "设置 → 她怎么回答 → 游戏语音"],
-  "voice_chat.default_mic": [m.shell_nav_changed_default_mic(), "设置 → 她怎么回答 → 游戏语音"],
+  "voice_chat.install": [m.shell_nav_changed_voice_chat(), "插件 → 游戏语音"],
+  "voice_chat.default_mic": [m.shell_nav_changed_default_mic(), "插件 → 游戏语音"],
   "wake.model.download": [m.shell_nav_changed_wake_model(), "设置 → 怎么叫她 → 语音唤醒"],
   "skill.manage": [m.shell_nav_changed_skills(), "琴音 → 技能"],
   "memory": [m.shell_nav_changed_memory(), "琴音 → 记忆"],

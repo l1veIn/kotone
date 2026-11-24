@@ -27,6 +27,7 @@ kotone-tts.workspace = true
 kotone-music.workspace = true
 kotone-plugin-api.workspace = true
 kotone-plugin-lol.workspace = true
+kotone-plugin-game-voice.workspace = true
 kotone-postprocess.workspace = true
 kotone-stt.workspace = true
 kotone-platform-windows.workspace = true

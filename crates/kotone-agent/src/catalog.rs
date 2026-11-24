@@ -80,8 +80,6 @@ pub const MAIN_TOOLS: &[&str] = &[
     TOOL_ASK,
     TOOL_REMIND,
     TOOL_GAME_CHAT,
-    "voice_chat.say",
-    "voice_chat.status",
     // 玩家开口那一刻的屏幕（ADR 029 §二）、前台窗口
     TOOL_SCREEN_AT_SPEECH,
     "window.active",

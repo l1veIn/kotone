@@ -1,0 +1,32 @@
+[package]
+name = "kotone-plugin-game-voice"
+version = "0.1.0"
+description = "Kotone 游戏语音插件（ADR 020、038）：VB-CABLE 检测与安装、Windows 默认麦克风、真麦克风 + 她的语音的转发与混音"
+edition = "2021"
+rust-version = "1.77.2"
+
+# 插件只依赖插件契约、kotone-core 的纯数据类型、系统适配层（共用的重采样）和自己的第三方库（ADR 038 D6），不碰 Tauri。
+[dependencies]
+kotone-plugin-api.workspace = true
+kotone-core.workspace = true
+kotone-platform-windows.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+zip.workspace = true
+# 音频设备（和系统适配层同一个版本）。下载 VB-CABLE 安装包用宿主的下载（和模型下载共用限制）
+cpal = "0.15"
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_System_Variant",
+] }

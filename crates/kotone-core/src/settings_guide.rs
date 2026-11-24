@@ -258,15 +258,11 @@ pub const FIELDS: &[Field] = &[
     f("agent.chatEffort", "聊天窗口里的思考强度", "设置 → 权限", "只对 DeepSeek 生效。空 = 服务商默认（high）。", EFFORTS, NOW),
     f("music.quality", "音质", "音乐", "放歌的音质：exhigh（默认，极高 320k，没有网易云 VIP 时最高就是这个）、standard（标准，省流量）、lossless（无损，要网易云 VIP）。", crate::settings::MUSIC_QUALITIES, NOW),
     f("music.volume", "音乐音量", "音乐", "0–100，默认 70。她说话时音乐会自动压低、说完恢复，不用为这个改音量。", NONE, NOW),
-    f("plugins.*", "插件", "设置 → 插件，或插件 → 英雄联盟", "按插件 id 一份：enabled（插件开关，true / false；没写按插件的默认）、sources.<开关 id>（插件里的数据开关，没写按默认）、settings（插件自己的设置）。现有插件：lol（英雄联盟，默认开；sources.client 读客户端数据：读英雄联盟客户端和局内的本地接口（只读），查这局玩家的战绩和突破口、记对面交的召唤师技能，默认开；国服用这类功能可能违反腾讯的用户协议，风险由玩家自己决定）。关掉插件或它的数据开关，它的页面、给你的工具、它的游戏事件都跟着没了；你的工具清单从下一段对话起变。", NONE, NOW),
+    f("plugins.*", "插件", "设置 → 插件，或插件 → 英雄联盟 / 游戏语音", "按插件 id 一份：enabled（插件开关，true / false；没写按插件的默认）、sources.<开关 id>（插件里的数据开关，没写按默认）、settings（插件自己的设置）。现有插件：lol（英雄联盟，默认开；sources.client 读客户端数据：读英雄联盟客户端和局内的本地接口（只读），查这局玩家的战绩和突破口、记对面交的召唤师技能，默认开；国服用这类功能可能违反腾讯的用户协议，风险由玩家自己决定）；game-voice（游戏语音，默认关：开着就把玩家的麦克风和你“说给队友”的话一起转进虚拟麦克风 VB-CABLE，游戏里的麦克风选 CABLE Output 队友就能听到；Kotone 没运行时队友听不到玩家。settings.includeMic 混入玩家自己的麦克风，默认 true；settings.micDeviceId 玩家的麦克风，设备名，用 audio.devices 查，default = 系统默认录音设备，不能选 CABLE Output；settings.micGain 音量百分比 0–400，默认 100；previousDefaultMic / previousCommunicationsMic 由 voice_chat.default_mic 自动记，不要改）。关掉插件或它的数据开关，它的页面、给你的工具、它的游戏事件都跟着没了；你的工具清单从下一段对话起变。", NONE, NOW),
     f("ui.sidebar.order", "左侧栏页面的顺序", "左侧栏 → ⋯", "页面 id 的顺序，各自在自己的分组里排：游戏陪玩组 assistant（琴音）、game（游戏）、automation（自动化）、music（音乐），语音输入组 general（语音输入），插件组 plugin:<插件 id>（如 plugin:lol 英雄联盟）。空 = 默认；没写到的页面按默认位置。玩家说“把音乐放到最上面”就改这里。", NONE, NOW),
     f("ui.sidebar.hidden", "左侧栏隐藏的页面", "左侧栏 → ⋯", "不在左侧栏显示的页面 id（同上）；隐藏了的还能从“⋯ → 全部页面”打开。advanced（设置）不能隐藏。玩家说“别显示语音输入”就把 general 加进来。", NONE, NOW),
     f("agent.compactAtTokens", "对话多长时整理成摘要", "设置 → 用量", "一段对话估到这么多 token 时，琴音把较早的部分整理成摘要、之后只看摘要和最近几轮（整理那一次多花一点，之后又能命中缓存）。默认 64000；0 = 不整理。", NONE, NOW),
     f("agent.subagents.model", "后台的事用的模型", "设置 → 她怎么回答 → 她用的模型", "交给后台的事（例如同传）用的模型 id；空 = 和琴音同一个模型。建议填同一家服务商更快更便宜的模型。", NONE, NOW),
-    f("voiceChat.enabled", "游戏语音（琴音替你说话）", "设置 → 她怎么回答 → 游戏语音", "开启后把你的麦克风和琴音“说给队友”的话一起转进虚拟麦克风（VB-CABLE 的 CABLE Output），游戏里的麦克风选 CABLE Output 队友就能听到。需要先装 VB-CABLE（voice_chat.install）。Kotone 没运行时队友听不到你。", NONE, NOW),
-    f("voiceChat.includeMic", "混入我的麦克风", "设置 → 她怎么回答 → 游戏语音", "关掉后虚拟麦克风里只有琴音的声音（你自己说话要在游戏里另选麦克风）。", NONE, NOW),
-    f("voiceChat.micDeviceId", "我的麦克风", "设置 → 她怎么回答 → 游戏语音", "设备名，用 audio.devices 查；default = 系统默认录音设备。不能选 CABLE Output。", NONE, NOW),
-    f("voiceChat.micGain", "我的麦克风音量", "设置 → 她怎么回答 → 游戏语音", "百分比，0–400，默认 100。", NONE, NOW),
     f("toolService.enabled", "对外工具服务", "设置 → 系统", "开启后外部 Agent（命令行 / MCP / 插件）可以连接本机 Kotone；只监听本机。", NONE, APP),
 ];
 
@@ -308,14 +304,6 @@ pub const INTERNAL: &[(&str, &str)] = &[
     ("adminPromptDismissed", "界面提示状态"),
     ("autoAdminPromptDismissed", "界面提示状态"),
     ("evalRecording", "开发评测用"),
-    (
-        "voiceChat.previousDefaultMic",
-        "用 voice_chat.default_mic 改 / 改回 Windows 默认麦克风时自动记录",
-    ),
-    (
-        "voiceChat.previousCommunicationsMic",
-        "用 voice_chat.default_mic 改 / 改回 Windows 默认麦克风时自动记录",
-    ),
     (
         "browser",
         "浏览器插件只能由玩家在右侧栏浏览器的插件管理里加、删、开关（ADR 031）",

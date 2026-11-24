@@ -4,7 +4,7 @@ use super::*;
 
 pub fn stop(app: &AppHandle) -> Result<bool, String> {
     crate::computer_use::stop_all(app, "手动停止");
-    crate::voice_chat::hush(app);
+    crate::plugins::stop_all();
     let rt = runtime(app)?;
     let inner = rt.inner.lock().unwrap();
     match &inner.running {

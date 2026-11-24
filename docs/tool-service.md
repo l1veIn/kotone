@@ -193,9 +193,9 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `game.look` | `zoom`（可选，`[x0, y0, x1, y1]`） | 看前台游戏（[ADR 019](adr/019-game-computer-use.md)）：只截游戏窗口客户区，按 Anthropic computer use 的规则缩放（长边 ≤ 1280、约 115 万像素，不放大），文字识别出的每一行框出来并编号（OmniParser 的标签样式）。返回 `observationId`、`screenshot {width, height}`（`game.act` 的坐标系）、`window {title, process, width, height}`、`elements [{id, text, box}]`、`image {mimeType: image/jpeg, base64, width, height}`；没有可用的文字识别模型时照样给截图，附 `ocr` 说明。`zoom` 是上一张完整截图里的区域，从原分辨率裁剪放大，元素和之后的坐标仍用完整截图的坐标系。前台是 Kotone 自己、独占全屏（纯色画面）时报错。结果是屏幕数据（不可信）。副作用 `captures-screen` |
 | `game.act` | `observationId`、`actions`（1–20 步） | 一步一步操作游戏。`observationId` 必须是最近一次 `game.look` 的；动作名与参数照抄 Anthropic computer use：`left_click` / `right_click` / `middle_click` / `double_click` / `triple_click`（`coordinate [x, y]` 或 `element` 编号，`text` = 点击时按住的修饰键）、`left_click_drag`（`start_coordinate`、`coordinate`）、`mouse_move`、`left_mouse_down` / `left_mouse_up`、`scroll`（`scroll_direction`、`scroll_amount`）、`type`（`text`，50 字一组）、`key`（`text` 如 `i`、`ctrl+s`、`Return`，`repeat`）、`hold_key` / `wait`（`duration` 秒 ≤ 10，一次合计 ≤ 20），游戏补充 `key_down` / `key_up`、`mouse_move_by`（`dx`、`dy` 相对移动，转视角）。规则照抄 dsh-computer-use-win `batch`：先校验整份计划；按顺序执行，第一处失败就停，后面的记 `Not executed: an earlier action failed.`；每步前检查停止（操作期间玩家按 Esc——这个 Esc 被拦下、不传给游戏；停止热键；语音“停下”；本轮停止；玩家别的键鼠输入**不**会让它停）、游戏在前台（最多等 5 秒）、窗口尺寸没变；点被别的程序窗口盖住时不点。结果 `{sent, total, results [{index, action, status sent/failed/stopped/not_executed, message}], stopReason?（cancelled / window_changed / window_closed / not_foreground / point_covered / action_failed）, hint, look}`：只说动作已发出，结尾自动再看一眼（玩家叫停时不看）。游戏配置不允许自动化输入或“让琴音操作”为不允许、自动化程序正在运行时拒绝。期限：调用时传 `timeoutMs`（建议 30000）。副作用 `sends-game-input` |
 
-### 游戏语音（委托桌面宿主，2026-11-17，[ADR 020](adr/020-voice-into-game-chat.md)）
+### 游戏语音（游戏语音插件，2026-11-17，[ADR 020](adr/020-voice-into-game-chat.md)；2026-11-24 搬进插件，ADR 038）
 
-琴音用虚拟麦克风 VB-CABLE（VB-Audio 的捐赠软件，https://vb-cable.com）替玩家在游戏语音里说话。设置在 `voiceChat.*`（`settings.update`）：`enabled`（缺省关）、`includeMic`、`micDeviceId`、`micGain`。
+琴音用虚拟麦克风 VB-CABLE（VB-Audio 的捐赠软件，https://vb-cable.com）替玩家在游戏语音里说话。由 `plugins/game-voice` 提供，工具名没变；插件关着（缺省）时这些工具不出现。开关是 `plugins.game-voice.enabled`（开着 = 转发开着），自己的设置在 `plugins.game-voice.settings`：`includeMic`、`micDeviceId`、`micGain`（`settings.update`）。旧配置的 `voiceChat.*` 读配置时自动搬过来。
 
 | 工具 | 参数 | 结果要点 |
 | --- | --- | --- |

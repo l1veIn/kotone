@@ -231,8 +231,8 @@ pub fn snapshot_and_emit(app: &AppHandle, stage: Option<String>) -> Option<Runti
     crate::tray::sync(app, &status);
     // 语音唤醒跟随语音识别的启停与设置（设置保存的最后一步也经过这里）。
     crate::wake::sync(app);
-    // 游戏语音（ADR 020）同样跟着设置启停转发。
-    crate::voice_chat::sync(app);
+    // 插件跟着设置启停（例如游戏语音的转发，ADR 020、038）。
+    crate::plugins::settings_changed(app);
     emit_status(app, &status);
     // 反向通道：Agent 可订阅运行时相位变化（工具服务未开启时为空操作）
     if let Ok(value) = serde_json::to_value(&status) {

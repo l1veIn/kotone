@@ -8,6 +8,7 @@ import type { Component } from "svelte";
 import type { Settings } from "./ipc/contracts";
 import type { PluginInfo, PluginToolResult } from "./plugins";
 import lol from "$plugins/lol/ui/index";
+import gameVoice from "$plugins/game-voice/ui/index";
 
 export interface PluginPageProps {
   plugin: PluginInfo;
@@ -73,7 +74,7 @@ export interface PluginUi {
   overlays?: Record<string, Component<PluginOverlayProps>>;
 }
 
-export const PLUGIN_UI: Record<string, PluginUi> = { lol };
+export const PLUGIN_UI: Record<string, PluginUi> = { lol, "game-voice": gameVoice };
 
 /** 有页面的插件 id（左侧栏「插件」组的顺序）。 */
 export const PLUGIN_IDS: string[] = Object.keys(PLUGIN_UI);
@@ -91,10 +92,13 @@ export function viewOf(uri: string): { plugin: string; view: PluginView } | null
   return plugin && view ? { plugin, view } : null;
 }
 
-/** 插件工具在聊天里的名字；不是插件的工具（或没写）时 null。 */
+/** 插件工具在聊天里的名字；不是插件的工具（或没写）时 null。工具名的前缀不一定是插件 id（游戏语音沿用 `voice_chat.*`）。 */
 export function pluginToolLabel(tool: string): string | null {
-  const plugin = tool.split(".")[0];
-  return PLUGIN_UI[plugin]?.toolLabels?.[tool]?.() ?? null;
+  for (const ui of Object.values(PLUGIN_UI)) {
+    const label = ui.toolLabels?.[tool];
+    if (label) return label();
+  }
+  return null;
 }
 
 /** 覆盖层页面（插件和地址都登记过才有）。 */

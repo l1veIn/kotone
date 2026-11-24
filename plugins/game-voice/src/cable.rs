@@ -1,5 +1,5 @@
 //! 游戏语音的系统一侧（ADR 020）：虚拟麦克风 VB-CABLE 的检测与静默安装、Windows 默认录音设备的
-//! 读取与切换。转发与混音在 [`crate::voice_router`]。
+//! 读取与切换。转发与混音在 [`crate::router`]。
 //!
 //! - 检测：cpal 枚举设备名（VB-CABLE 装好后有播放设备“CABLE Input (VB-Audio Virtual Cable)”与
 //!   录音设备“CABLE Output (VB-Audio Virtual Cable)”）；
@@ -49,8 +49,8 @@ pub fn detect() -> CableDevices {
             .collect()
     };
     find_cable(
-        &names(crate::audio::list_output_devices()),
-        &names(crate::audio::list_devices()),
+        &names(kotone_platform_windows::audio::list_output_devices()),
+        &names(kotone_platform_windows::audio::list_devices()),
     )
 }
 

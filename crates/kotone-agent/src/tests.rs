@@ -663,7 +663,6 @@ fn prompt_is_one_text_for_both_entries_and_the_turn_context_carries_the_rest() {
         entry: Entry::Call,
         game: "英雄联盟",
         game_id: "lol",
-        voice_chat: true,
         game_notes: Some("聊天在左下角"),
         game_memory: None,
         now: "2026-11-18 周三 14:05",
@@ -672,12 +671,10 @@ fn prompt_is_one_text_for_both_entries_and_the_turn_context_carries_the_rest() {
     assert!(game.starts_with("入口：通话"));
     assert!(game.contains("英雄联盟") && game.contains("聊天在左下角") && game.contains("14:05"));
     assert!(game.contains("游戏配置 id：lol"), "记忆工具要用 id");
-    assert!(game.contains("游戏语音：开着"), "跟队友说话用嘴说");
     let chat = turn_context(&TurnContext {
         entry: Entry::Chat,
         game: "",
         game_id: "",
-        voice_chat: false,
         game_notes: None,
         game_memory: None,
         now: "",
@@ -753,7 +750,6 @@ fn chat_turn_context_says_how_to_call_her_and_whether_speech_recognition_is_read
             entry,
             game: "",
             game_id: "",
-            voice_chat: false,
             game_notes: None,
             game_memory: None,
             now: "",
@@ -990,14 +986,32 @@ fn prompt_teaches_the_look_think_act_loop() {
 
 // ---------- 游戏语音（ADR 020） ----------
 
+/// 游戏语音搬进插件（ADR 038 第 4 步）以后：工具名、主会话有哪几个、默认问不问都和以前一样。
 #[test]
 fn voice_chat_installs_switches_mics_and_speaks_only_after_asking() {
-    let f = fixture(Policy::default(), Answer::Deny);
-    let offered = names(&f.port);
-    assert!(offered.contains(&"voice_chat.say".to_string()));
-    assert!(offered.contains(&"voice_chat.status".to_string()));
+    use kotone_plugin_api::{AgentText, Offer};
+    use kotone_plugin_game_voice as gv;
+    let m = gv::manifest();
+    let offer = Offer {
+        plugin: m.id.clone(),
+        name: m.name.clone(),
+        text: AgentText {
+            overview: m.agent.overview.clone(),
+            rule: m.agent.rule.clone(),
+        },
+        tools: gv::specs(),
+    };
+    let catalog = Catalog::build(&[], &[], &[offer]);
+    let main: Vec<&str> = catalog
+        .entries()
+        .iter()
+        .filter(|e| e.name.starts_with("voice_chat.") && crate::catalog::main_offers(e))
+        .map(|e| e.name.as_str())
+        .collect();
+    assert_eq!(main, ["voice_chat.status", "voice_chat.say"]);
+    let entry = |name: &str| catalog.get(name).unwrap_or_else(|| panic!("{name}"));
     assert_eq!(
-        default_decision(entry(&f, "voice_chat.status"), &json!({})),
+        default_decision(entry("voice_chat.status"), &json!({})),
         Decision::Allow
     );
     for (tool, reason) in [
@@ -1006,7 +1020,7 @@ fn voice_chat_installs_switches_mics_and_speaks_only_after_asking() {
         ("voice_chat.default_mic", "会修改 Windows 的默认麦克风"),
     ] {
         assert_eq!(
-            default_decision(entry(&f, tool), &json!({})),
+            default_decision(entry(tool), &json!({})),
             Decision::Ask {
                 reason: reason.into()
             },
@@ -1015,9 +1029,12 @@ fn voice_chat_installs_switches_mics_and_speaks_only_after_asking() {
     }
     // 安装：第一个副作用就是“装驱动”
     assert!(matches!(
-        default_decision(entry(&f, "voice_chat.install"), &json!({})),
+        default_decision(entry("voice_chat.install"), &json!({})),
         Decision::Ask { reason } if reason.contains("VB-CABLE")
     ));
+    // 说给队友：只在玩家当面要求时由主会话做（后台没有）
+    assert!(!crate::catalog::subagent_offers(entry("voice_chat.say")));
+    assert!(catalog.plugin_rules().contains("voice_chat.say"));
 }
 
 // ---------- 工作区、子会话（ADR 022） ----------

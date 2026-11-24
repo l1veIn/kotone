@@ -107,7 +107,6 @@ const mock: MockStore = {
     toolService: { enabled: false },
     ocr: { activeModelId: "" },
     search: { activeModelId: "" },
-    voiceChat: { enabled: false, includeMic: true, micDeviceId: "default", micGain: 100 },
     agent: { permissions: { mode: "default", rules: {} }, hiddenAutomations: [], inGame: true, progressSpeech: true, identity: { name: "", avatar: "" }, subagents: { model: "" }, compactAtTokens: 64000, roleId: "kotone", matchRecap: true, safetyCheck: true, gameEffort: "", chatEffort: "" },
     music: { quality: "exhigh", volume: 70 },
     plugins: {},

@@ -55,7 +55,7 @@ test("chat is home; sidebar groups; companion settings live in 设置; one conte
   await expect(page.getByTestId("advanced-group-通用")).toBeVisible();
   for (const [tab, texts] of [
     ["call", ["呼叫琴音", "呼叫键", "快捷指令", "语音唤醒"]],
-    ["reply", ["她用的模型", "API 连接", "气泡", "声音与弹幕", "回答方式", "替你跟队友说话", "游戏语音"]],
+    ["reply", ["她用的模型", "API 连接", "气泡", "声音与弹幕", "回答方式"]],
     ["permissions", ["她怎么做事"]],
     ["usage", ["用量与费用"]],
   ] as const) {
