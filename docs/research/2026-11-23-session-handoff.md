@@ -251,3 +251,39 @@
 
 **下一步**：语音输入剩下的（文字处理的引擎 `kotone-postprocess` 和识别记录的存储还在本体，测试的检查直接读它们；每个游戏的聊天键搬进插件）；第 6 步按键程序要玩家先定的事还在计划第九节第 6 步；第 7 步收尾。
 
+
+## 十一、第七轮（2026-11-24 夜，玩家睡觉时做）：交给新会话的长线任务
+
+玩家定的范围：“连第 2 期也做”；做完“打本地安装包，然后关机”。玩家整晚不在，**不要停下来问**：拿不准的照文档和 [软件哲学](../philosophy.md) 自己定，写进记录；真要玩家定的（看得见、而且文档没定的），记下来跳过，做下一件独立的。
+
+### 先读（原文，不读摘要）
+
+本节和第十节；[ADR 038](../adr/038-kotone-and-apps.md) 的“怎么定的”；[插件重构计划](../plugin-refactor.md) 第九节；[MCP 客户端方案](2026-11-24-mcp-client.md) 全文（第四、六、七节）；[ADR 029](../adr/029-voice-call-and-background-tasks.md)；[ADR 024](../adr/024-prefix-cache-compaction-usage.md)（工具列表一次通话内不变）；[ADR 030](../adr/030-subagent-shell-and-files.md)（不可信结果）；`docs/philosophy.md`；记忆 `long-tasks-orchestrate-not-code`、`kotone-work-discipline`、`real-machine-tests-check-foreground`、`real-key-tests-allowed`。
+
+### 工作方式（玩家原话：“如果下次进行某些长任务迭代，应该要求主会话不直接写代码，只采用子代理写代码”）
+
+- 主会话只做：计划、给子代理写任务、看报告、跑或读验证结果、`git commit -- <路径>`、写记录。代码全部交给子代理。
+- 一个子代理一件窄的事；任务里指向上面的文档，关键处引玩家原话；子代理不提交。
+- 每件单独编译、单独提交、过检查：`cargo test`、`cargo clippy -- -D warnings`、`svelte-check`、Playwright；碰到语音 / 工具的再加对应真机脚本。验不过就停在上一个提交，写清卡在哪、下一步怎么做，不留搬了一半的东西，接着做下一件独立的。
+- 原来的约束都在：不读游戏内存、不注入；不合 main、不打 tag、不上传；真机脚本跑之前先读它会不会按键，只有测试窗口在前台才能按键；真模型测试禁用按键类工具；DeepSeek key 只在内存里（`real_deepseek.py` 的 `read_key()`）；隔离的 `KOTONE_HOME`；不 `git add .`，不碰 `.gitignore`、`.codegraph/`、`scripts/manual-e2e/__pycache__/`；有英雄联盟在跑就用 BelowNormal、`-j 2` 编译。
+
+### 任务（按顺序）
+
+| # | 做什么 | 玩家看到的 | 怎么验 |
+| --- | --- | --- | --- |
+| A | 语音输入收尾（第十节“下一步”）：文字处理的引擎 `kotone-postprocess`、识别记录的存储，按 ADR 038 归属搬进 `plugins/voice-input`（`kotone-postprocess` 现在本体、命令行、桌面都在用——按归属判断搬不搬、怎么搬，写进记录）；每个游戏的聊天键和频道搬进插件，设置读旧写新、不覆盖新字段 | 看不到 | `tests/orchestrator.rs` 的检查一条不改、照样全过（可以加接线、可以随搬）；`voice_input_real.py`；`lol_tools_real.py --while-playing`、`game_events_real.py` |
+| B | MCP 方案第 0 期：修 `crates/kotone-cli/src/mcp.rs` 把带下划线的工具名改错（`voice_chat.say` → `voice.chat.say`；搬完以后 `game_chat.send` 也一样） | 外部 Agent 经 MCP 能调游戏语音和 `game_chat.send` | 单元测试 + 一次真实的 MCP 对话（`tools/list` 再 `tools/call`） |
+| C | 方案第 1.5 期：补 ADR 029 写了但代码里没做的“任何工具超过 3 秒没回来就转给子代理”，她照 ADR 029 说一句再交给后台，好了告诉玩家；然后照方案 4.3 简化 `MAIN_TOOLS` 和插件的 `instant` 标记（只看快不快；工具列表一次通话内仍不变） | 慢的事自动交给后台，不卡通话 | 一个故意慢的假工具的单元测试；`background_voice_real.py`、`voice_turn_real.py` 一类真机脚本（真模型） |
+| D | 第 7 步收尾：英雄联盟的事件目录改由插件登记；设置页只剩本体 | 设置里没有插件的东西 | 插件边界测试；Playwright；`game_events_real.py` |
+| E | 方案第 1 期：新 crate `crates/kotone-mcp`（rmcp，Job Object 管子进程）；OP.GG 迁过去 | 看不到 | `lol_tools_real.py` 照过；OP.GG 开着时一次真实调用 |
+| F | 方案第 2 期：`KOTONE_HOME/mcp.json`、导入、信任提示、一个服务器 = 一个远程插件（工具名 `<id>.<tool>`）、插件页的卡片和开关、她在后台用、询问、结果当不可信。**玩家定了（方案第七节 2、3）**：加进来的工具不经 `kotone.exe mcp` 转给外部 Agent；没标只读的第一次问，可以“总是允许这个工具”，标了只读的信任这个服务器之前也问一次 | 插件页能加 MCP 服务器 | 本机起官方示例服务器（stdio、HTTP 各一个）的真机脚本；权限和不可信的单元测试；Playwright |
+
+F 做不完就停在最后一个过了检查的提交，写清做到哪。第 3 期以后（显示别人的 MCP App）今晚不做；第 6 步“按键程序”等玩家定（计划第九节第 6 步）。
+
+### 收尾
+
+1. 每件做完在计划第九节 / 方案里记一笔；最后在本文件加“十二、第七轮做了什么”：每个提交玩家看到什么、检查数字、没做完的和原因、要玩家定的、早上要玩家试的。
+2. 全部检查再跑一遍，`CHANGELOG.md` 写上。
+3. 照 `b3bf8da2` 的做法把版本升到 0.2.0-rc.8（`CHANGELOG.md`、`Cargo.lock`、`apps/desktop/package.json`、`apps/desktop/src-tauri/Cargo.toml`、`tauri.conf.json`），在本机打 NSIS 安装包，记下路径和 SHA-256；不打 tag、不上传、不合 main。
+4. 推送 `claude/plugins`；`git status` 确认没有自己没提交的东西。
+5. 关机：`shutdown /s /t 300`（留 5 分钟）。
