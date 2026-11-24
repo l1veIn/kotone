@@ -9,7 +9,7 @@
 ### 玩家能看到的
 
 - **设置页只剩本体的几页**：她（角色、声音、怎么回答）、听、看、游戏列表、模型和连接、权限、自动化、插件、关于。每个插件的设置都在它自己的页面里。
-- **侧栏多一个“插件”分组**：每个插件一项，点开是它的页面，不叫她也能用。英雄联盟插件像 LeagueAkari 加 OP.GG / aramhex。
+- **“设置 → 插件”里列出所有插件**：每个插件一张卡片（开关、数据开关、风险提示），点开是它的页面，不叫她也能用。左侧栏不放插件入口（2026-11-24 玩家：“没必要侧边栏放一堆插件入口”）。英雄联盟插件像 LeagueAkari 加 OP.GG / aramhex。
 - **聊天里出现插件页面的卡片**：例如战绩、英雄克制、正在放的歌。卡片是她那一刻看到的样子，点开在右侧栏显示完整页面，旁边还能接着和她聊。
 - **游戏上方的覆盖层**：例如海斗三选一时，评分直接贴在三张海克斯卡片上（照 aramhex）；选英雄时显示胜率。
 - **插件能单独开关**：关掉一个，它的页面、她的相关工具、它的游戏事件都一起没了。
@@ -70,7 +70,7 @@
 | `companion_notes` | 本体：她（游戏说明写进提示词） |
 | `chat_region` | 本体：眼睛（读聊天的截图区域） |
 | `open_chat_key`、`send_key`、`pre_open_delay_ms`、`pre_paste_delay_ms`、`pre_send_delay_ms`、`prefer_clipboard_paste`、`channels`、`console_chat` | 语音输入插件：`plugins.voice-input.games.<游戏>` |
-| `allow_automation_input` | 按键程序插件：`plugins.key-programs.games.<游戏>` |
+| `allow_automation_input` | 留在游戏配置（本体）：这个游戏容不容忍模拟输入是游戏自己的事（D3 第 9 条），按键程序插件经宿主读（2026-11-24 改，原来要搬进按键程序插件） |
 | `computer_use`（让她操作：询问 / 一直允许 / 禁止） | 本体：她的“手”（computer use 留在本体，2026-11-24 改） |
 | （设置里的 `lol.enabled`） | 英雄联盟插件：`plugins.lol.sources.client` |
 
@@ -155,7 +155,7 @@
 
 ### ~~7. 浏览器~~（2026-11-24 改：留在本体）
 
-内置浏览器（右侧栏的网页标签、给后台的 `browser.*`，ADR 031）和 computer use 一样是她的“手”，玩家不会单独打开它，代码是主窗口里的网页视图、离不开 Tauri；搬成插件只会多一层转接。留在本体，设置里给一个开关。理由和玩家的话见 ADR 038“怎么定的”。
+内置浏览器（右侧栏的网页标签、给后台的 `browser.*`，ADR 031）和 computer use 一样是她的“手”，留在本体。它也是玩家自己会用的完整浏览器，留在本体的理由是：它和覆盖层一样是本体给的显示面，代码是主窗口里的网页视图、离不开 Tauri，搬成插件一行也隔离不了。设置里给“浏览器”一节（开关默认开、扩展、清除登录、同意过的网站）。讨论经过和玩家的话见 ADR 038“怎么定的”。
 
 ### 以后
 
@@ -288,7 +288,7 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 | 4 | 音乐、游戏语音、同传搬进插件（浏览器 2026-11-24 改成留在本体） | 音乐页搬到“插件”分组；设置里少了游戏语音 | 原有测试照过 |
 | 5 | 语音输入搬进插件（最大的一块） | 语音输入那一组设置搬进插件页面 | 语音输入、她替你发言、控制台通道的真机测试照过 |
 | 6 | 按键程序搬进插件（computer use 2026-11-24 改成留在本体） | 自动化里写程序的编辑器由插件提供 | 自动化的真机测试照过 |
-| 7 | 收尾：设置页只剩本体；配置迁移收口；英雄联盟的事件目录由插件登记；内置浏览器的开关（留在本体）；文档 | 设置页变成第一节说的样子 | 旧配置升级测试 |
+| 7 | 收尾：设置页只剩本体；配置迁移收口；英雄联盟的事件目录由插件登记；设置里的“浏览器”一节（开关、扩展、清除登录、同意过的网站，浏览器留在本体）；文档 | 设置页变成第一节说的样子 | 旧配置升级测试 |
 | 以后 | `kotone.exe mcp` 提供 `ui://` 资源；显示别人的 MCP Apps（沙盒 iframe） | Claude Desktop 里能看到 Kotone 的战绩页 | |
 
 ## 七、风险和要留意的
@@ -354,7 +354,7 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 - **工具定义在插件的 Rust 代码里，不在 `plugin.toml`**：照 MCP 的 `tools/list`，`visibility`、页面（`resourceUri`）、要的数据开关（`needs`）、“马上返回”（`instant`，主会话也拿）、“结果不可信”和说明、参数写在一起（`ToolSpec`）。`plugin.toml` 只写插件这一级的：名字、说明、挂在哪些游戏上、适配器、数据开关和风险提示、页面、覆盖层、给她的两段话（`[agent] overview / rule`）。清单和代码对不上由 `Manifest::check_tools` 在测试和启动时查。
 - **她的工具清单**：宿主按开关算好每个插件给她的东西（`Offer`），`Catalog::build` 拼进来；一段对话开始时定下，之后不变（ADR 024）。插件关了或数据开关关了，下一段对话起工具就没了；一段对话中途关掉，调用时插件自己回答“已关闭”。
 - **工具服务、MCP**：开着的插件的工具列在 `system.capabilities` 里，带 `plugin`、`untrustedResult`、`_meta.ui`；调用经 `AppHost::invoke` 交给插件，结果照 MCP（`content` / `structuredContent` / `_meta.ui`）。`kotone.exe mcp` 不用改就有了。外部 Agent 的说明在 `docs/tool-service.md`“插件”一节。
-- **宿主给插件的**（`Host`）：插件开关、数据开关、自己的设置和目录、后台任务、按名字找进程和读命令行（英雄联盟的端口和令牌在这里）、往游戏中心报阶段和事件、给自己的页面发事件。插件不碰 Tauri，也不再直接依赖 `kotone-platform-windows`。
+- **宿主给插件的**（`Host`）：插件开关、数据开关、自己的设置和目录、后台任务、按名字找进程和读命令行（英雄联盟的端口和令牌在这里）、往游戏中心报阶段和事件、给自己的页面发事件。插件不碰 Tauri，也不再直接依赖 `kotone-platform-windows`。（2026-11-24 改：插件可以用系统适配层里没有状态的系统调用，例如游戏语音的音频设备列表和重采样、语音输入的打字注入；全进程只有一份的钩子、停下她、免问只经宿主。见 ADR 038“怎么定的”。）
 - **配置迁移**：`lol.enabled` 读进来时搬到 `plugins.lol.sources.client`（已有新字段的不覆盖），之后不再写 `lol`。装回旧版时旧版读不到 `lol`，按默认“开”。
 - **文案**：插件的 `messages/<语言>.json` 加进 `project.inlang` 的 `pathPattern`（可以列别的目录，实测可行）；键名以 `plugin_<id>_` 开头；中文和 `plugin.toml` 的一致（测试查）。界面上的名字、开关、风险提示读文案，没有时用清单里的。
 - **页面放在 `apps/desktop` 外面**：Vite 别名 `$plugins` → `plugins/`，`resolve.dedupe` 让 `plugins/*/ui` 里的裸 import（svelte、@lucide/svelte……）解析到桌面端的 `node_modules`；`tsconfig` 把 `plugins/*/ui` 一起交给 svelte-check；Playwright 也跑 `plugins/*/e2e/`；用词测试也查插件的文案。
@@ -502,3 +502,5 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 
 - Rust：`kotone-plugin-game-voice` 8（新：清单和工具一致、文案和清单一致、设置读不懂时按默认）、`kotone-core` 新加“旧的 voiceChat 搬进游戏语音插件”、`kotone-agent` 的游戏语音测试改成用插件真实的工具（主会话有哪几个、默认问不问和以前一样）、桌面端新加“游戏语音是插件、工具名不变”；clippy、fmt 干净。`tests_http::shutdown_lets_http_long_polls_deliver_stopping` 第一次没过（已知不稳定），重跑通过。
 - 界面：svelte-check 0 / 0；Playwright 159 个全过（游戏语音的测试搬进 `plugins/game-voice/e2e/`：关着只有开关 → 打开 → 没装 → 安装 → 运行中 → 改 / 改回默认麦克风 → 测试音“通了”；旧位置和 `ui.open` 都打开插件页）。
+
+（2026-11-24 后来：左侧栏不放插件入口，游戏语音、英雄联盟都从“设置 → 插件”点开；见 ADR 038“怎么定的”。）
