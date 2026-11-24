@@ -4,6 +4,16 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { join } from "node:path";
 
+/** 插件的页面从「设置 → 插件」的卡片点开（左侧栏不放插件，ADR 038）；左侧栏亮的是「设置」。
+ * （和 apps/desktop/e2e/nav.ts 的 openPlugin 一样：这个目录的测试按 CommonJS 编译，导入不了那边的 ES 模块。） */
+async function openPlugin(page: Page, id: string) {
+  await page.getByTestId("settings-nav-advanced").click();
+  await page.getByTestId("advanced-nav-plugins").click();
+  await page.getByTestId(`settings-plugin-${id}-open`).click();
+  await expect(page.locator(`[data-testid="plugin-page"][data-plugin-id="${id}"]`)).toBeVisible();
+  await expect(page.getByTestId("settings-nav-advanced")).toHaveAttribute("aria-current", "page");
+}
+
 /** 截图放在仓库的 target/plugin-shots/step3.5/（实现记录用）；testDir 是 plugins/。 */
 const shot = (testInfo: TestInfo, name: string) => join(testInfo.project.testDir, "..", "target", "plugin-shots", "step3.5", `${name}.png`);
 
@@ -11,7 +21,7 @@ async function open(page: Page) {
   await page.setViewportSize({ width: 1440, height: 1100 });
   await page.goto("/#/settings?onboarding=never");
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
-  await page.getByTestId("settings-nav-plugin:lol").click();
+  await openPlugin(page, "lol");
   const pluginPage = page.getByTestId("plugin-page-lol");
   await expect(pluginPage).toBeVisible();
   await pluginPage.getByTestId("plugin-lol-tab-settings").click();

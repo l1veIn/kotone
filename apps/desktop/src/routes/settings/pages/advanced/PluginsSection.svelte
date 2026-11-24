@@ -1,6 +1,6 @@
 <script lang="ts">
   // 「设置 → 插件」（ADR 038）：装在她身上的每个插件一张卡片：名字、能做什么、插件开关和数据开关（带风险提示），
-  // 以及“打开”（插件自己的页面，在左侧栏「插件」组里也有）。
+  // 点名字那一块或“打开”进插件自己的页面（左侧栏不放插件，ADR 038，2026-11-24 玩家定的）。开关在卡片里直接点，不跳页。
   import { onMount } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
@@ -25,7 +25,9 @@
     {@const on = pluginEnabled($settingsStore, manifest)}
     <SettingsSection testid={`settings-plugin-${manifest.id}`}>
       <div class="flex items-start justify-between gap-3 py-3.5">
-        <div class="flex min-w-0 items-start gap-3">
+        <button type="button" class="-m-1 flex min-w-0 items-start gap-3 rounded-lg p-1 text-left transition-colors hover:bg-muted/50 disabled:pointer-events-none"
+          data-testid={`settings-plugin-${manifest.id}-header`} disabled={!PLUGIN_UI[manifest.id]}
+          onclick={() => openTarget({ page: "plugin", id: manifest.id })}>
           {#if Icon}<Icon class="mt-0.5 size-5 shrink-0 {on ? 'text-primary' : 'text-muted-foreground'}" />{/if}
           <div class="min-w-0">
             <p class="m-0 flex items-center gap-2 text-sm font-semibold text-foreground">
@@ -34,7 +36,7 @@
             </p>
             <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">{pluginDescription(manifest)}</p>
           </div>
-        </div>
+        </button>
         {#if PLUGIN_UI[manifest.id]}
           <Button variant="outline" size="sm" class="shrink-0" data-testid={`settings-plugin-${manifest.id}-open`}
             onclick={() => openTarget({ page: "plugin", id: manifest.id })}>{m.system_plugins_open()}</Button>

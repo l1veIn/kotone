@@ -1,10 +1,20 @@
 // 放歌插件（ADR 034 第五节、ADR 038 第 4 步）：浏览器预览里的模拟网易云（apps/desktop/src/lib/ipc/musicMock.ts，经 pluginsMock）。
-// 音乐页在左侧栏「插件」组里（plugin:music）。登录（网易云官方登录页的窗口，预览里没有窗口）→ 发现（每日推荐、私人 FM、
+// 音乐页从「设置 → 插件」点开（左侧栏不放插件；在放的时候左侧栏底部有小播放条）。登录（网易云官方登录页的窗口，预览里没有窗口）→ 发现（每日推荐、私人 FM、
 // 我的歌单）→ 放歌和控制；搜索结果里要 VIP 的灰掉；歌单；她要放歌而你没登录时聊天页的登录卡片；
 // 关掉插件：停下，小播放条和登录卡片都没了。由 apps/desktop 的 Playwright 一起跑（plugins 项目）。
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+
+/** 插件的页面从「设置 → 插件」的卡片点开（左侧栏不放插件，ADR 038）；左侧栏亮的是「设置」。
+ * （和 apps/desktop/e2e/nav.ts 的 openPlugin 一样：这个目录的测试按 CommonJS 编译，导入不了那边的 ES 模块。） */
+async function openPlugin(page: Page, id: string) {
+  await page.getByTestId("settings-nav-advanced").click();
+  await page.getByTestId("advanced-nav-plugins").click();
+  await page.getByTestId(`settings-plugin-${id}-open`).click();
+  await expect(page.locator(`[data-testid="plugin-page"][data-plugin-id="${id}"]`)).toBeVisible();
+  await expect(page.getByTestId("settings-nav-advanced")).toHaveAttribute("aria-current", "page");
+}
 
 /** 截图：带 KOTONE_MUSIC_SHOTS 时放那里，否则放仓库的 target/plugin-shots/step4/（实现记录用；testDir 是 plugins/）。 */
 const SHOTS = process.env.KOTONE_MUSIC_SHOTS;
@@ -21,7 +31,7 @@ async function navOrder(page: Page): Promise<string[]> {
 async function openMusic(page: Page, query = "") {
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto(`/#/settings?onboarding=never${query}`);
-  await page.getByTestId("settings-nav-plugin:music").click();
+  await openPlugin(page, "music");
   await expect(page.getByTestId("music-page")).toBeVisible();
 }
 
@@ -35,11 +45,8 @@ test("logged out: log in through NetEase's login window, then play daily picks a
   await page.goto("/#/settings?onboarding=never");
   await page.evaluate(() => localStorage.removeItem("kotone.mock.sidebar"));
   await openMusic(page, "&mockMusicLogin=manual");
-  // 音乐是插件（ADR 038）：在“插件”组里，不在“游戏陪玩”组
-  const order = await navOrder(page);
-  expect(order.slice(0, 3)).toEqual(["assistant", "game", "automation"]);
-  expect(order).toContain("plugin:music");
-  expect(order.indexOf("plugin:music")).toBeGreaterThan(order.indexOf("plugin:lol"));
+  // 音乐是插件（ADR 038）：不在左侧栏（插件都在「设置 → 插件」）
+  expect(await navOrder(page)).toEqual(["assistant", "game", "automation", "general"]);
   await expect(page.getByTestId("settings-nav-music")).toHaveCount(0);
 
   const card = page.getByTestId("music-login-card");
@@ -105,9 +112,10 @@ test("logged out: log in through NetEase's login window, then play daily picks a
   await page.getByTestId("settings-nav-automation").click();
   await expect(page.getByTestId("music-page")).toHaveCount(0);
   await mini.getByTestId("sidebar-mini-toggle").click();
-  await page.screenshot({ path: shot(testInfo, "sidebar-plugins") });
+  await page.screenshot({ path: shot(testInfo, "sidebar") });
   await mini.getByTestId("sidebar-mini-open").click();
-  await expect(page.getByTestId("settings-nav-plugin:music")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("music-page")).toBeVisible();
+  await expect(page.getByTestId("settings-nav-advanced")).toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("music-player-bar")).toHaveAttribute("data-status", "paused");
   await page.getByTestId("music-player-toggle").click();
   await expect(page.getByTestId("music-player-bar")).toHaveAttribute("data-status", "playing");
@@ -213,8 +221,8 @@ test("turning the music plugin off stops playback and hides the mini player and 
   await preview(page, "needed");
   await expect(page.getByTestId("assistant-chat").getByTestId("music-login-card")).toHaveCount(0);
 
-  // 音乐页还在左侧栏：关着时只有开关和一句说明，打开就回来了
-  await page.getByTestId("settings-nav-plugin:music").click();
+  // 音乐页还能从「设置 → 插件」点开：关着时只有开关和一句说明，打开就回来了
+  await openPlugin(page, "music");
   const off = page.getByTestId("music-page-off");
   await expect(off.getByTestId("plugin-music-off")).toBeVisible();
   await expect(page.getByTestId("music-page")).toHaveCount(0);
@@ -224,20 +232,17 @@ test("turning the music plugin off stops playback and hides the mini player and 
   await expect(page.getByTestId("sidebar-mini-player")).toHaveCount(0);
 });
 
-test("an old sidebar order that still says `music` puts the music plugin's page in that place", async ({ page }) => {
+test("an old sidebar order or hidden list that says `music` doesn't bring music back into the sidebar", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/#/settings?onboarding=never");
-  await page.evaluate(() => localStorage.setItem("kotone.mock.sidebar", JSON.stringify({ order: ["music", "plugin:lol"], hidden: [] })));
+  await page.evaluate(() => localStorage.setItem("kotone.mock.sidebar", JSON.stringify({ order: ["music", "plugin:lol"], hidden: ["music"] })));
   await page.reload();
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
-  const order = await navOrder(page);
-  expect(order.indexOf("plugin:music")).toBeLessThan(order.indexOf("plugin:lol"));
-  // 旧的“藏起音乐”也认
-  await page.evaluate(() => localStorage.setItem("kotone.mock.sidebar", JSON.stringify({ order: [], hidden: ["music"] })));
-  await page.reload();
-  await expect(page.getByTestId("app-sidebar")).toBeVisible();
-  await expect(page.getByTestId("settings-nav-plugin:lol")).toBeVisible();
-  await expect(page.getByTestId("settings-nav-plugin:music")).toHaveCount(0);
+  expect(await navOrder(page)).toEqual(["assistant", "game", "automation", "general"]);
+  await expect(page.getByTestId("sidebar-hidden-count")).toHaveCount(0);
+  // 音乐页照样从「设置 → 插件」点开
+  await openPlugin(page, "music");
+  await expect(page.getByTestId("music-page")).toBeVisible();
   await page.evaluate(() => localStorage.removeItem("kotone.mock.sidebar"));
 });
 

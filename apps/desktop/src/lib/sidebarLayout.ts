@@ -1,10 +1,11 @@
-// 侧边栏可以自己排（ADR 034 第六节）：几组（游戏陪玩、语音输入、插件）里的页面在组内上移 / 下移、隐藏。
-// 插件组（ADR 038）的页面是每个插件一项（`plugin:<id>`），由 sidebarItems.ts 按插件的登记补上。
+// 侧边栏可以自己排（ADR 034 第六节）：两组（游戏陪玩、语音输入）里的页面在组内上移 / 下移、隐藏。
+// 插件不在左侧栏（ADR 038，2026-11-24 玩家定的）：都在「设置 → 插件」里点开。旧配置里记的插件页
+// （`plugin:<id>`、`music`）不在任何一组里，排序时自然跳过。
 // 存在设置 `ui.sidebar`（order、hidden），她也能改。“设置”和“关于”在底部固定，不在这里。
 // 规则：order 只管它认得的页面；没在 order 里的（新加的页面、旧版本没有的）按默认位置插回去，
 // 所以排过序以后新加的页面也看得见。纯函数，不碰界面。
 
-export type SidebarGroupId = "companion" | "voice" | "plugins";
+export type SidebarGroupId = "companion" | "voice";
 
 /** 两组的默认顺序（页面 ID 和 AppSidebar 的 PageId 一致）。 */
 export const SIDEBAR_GROUPS: { id: SidebarGroupId; pages: string[] }[] = [
@@ -19,13 +20,10 @@ export interface SidebarPrefs { order: string[]; hidden: string[] }
 
 export const DEFAULT_SIDEBAR: SidebarPrefs = { order: [], hidden: [] };
 
-/** 改过名的页面：音乐页成了放歌插件的页面（ADR 038 第 4 步；后端读旧配置时也这样搬）。 */
-const RENAMED: Record<string, string> = { music: "plugin:music" };
-
 export function normalizePrefs(value: unknown): SidebarPrefs {
   const v = (value ?? {}) as Partial<SidebarPrefs>;
   const ids = (list: unknown) => (Array.isArray(list)
-    ? [...new Set(list.filter((x): x is string => typeof x === "string" && !!x).map((x) => RENAMED[x] ?? x))]
+    ? [...new Set(list.filter((x): x is string => typeof x === "string" && !!x))]
     : []);
   return { order: ids(v.order), hidden: ids(v.hidden).filter((id) => !PINNED_PAGES.has(id)) };
 }

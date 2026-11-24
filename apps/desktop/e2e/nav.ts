@@ -20,3 +20,14 @@ export async function openChat(page: Page) {
   await page.getByTestId("sidebar-conversations").getByTestId("agent-conversation").first().click();
   await expect(page.getByTestId("assistant-tasks")).toBeVisible();
 }
+
+/** 某个插件的页面（ADR 038）：插件不在左侧栏，从「设置 → 插件」的卡片点开。返回页面的容器。 */
+export async function openPlugin(page: Page, id: string) {
+  await openSettingsTab(page, "plugins");
+  await page.getByTestId(`settings-plugin-${id}-open`).click();
+  const pluginPage = page.locator(`[data-testid="plugin-page"][data-plugin-id="${id}"]`);
+  await expect(pluginPage).toBeVisible();
+  // 插件页从设置点进来：左侧栏亮的是「设置」
+  await expect(page.getByTestId("settings-nav-advanced")).toHaveAttribute("aria-current", "page");
+  return pluginPage;
+}

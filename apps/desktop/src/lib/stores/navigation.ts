@@ -15,7 +15,7 @@ export type PageTarget =
   | { page: "sidebar-pages" }
   | { page: "assistant"; section: AssistantSection }
   | { page: "advanced"; tab: string; anchor?: string }
-  /** 插件的页面（左侧栏「插件」组，ADR 038）。 */
+  /** 插件的页面（ADR 038，从「设置 → 插件」点开）。 */
   | { page: "plugin"; id: string };
 
 /** 「设置」的分页（页面 ID 不变；陪玩组是 ADR 028 新加的分页）。 */
@@ -115,6 +115,11 @@ function parseOne(where: string): PageTarget | null {
   }
   if (first === "设置") {
     if (second === "其他热键") return oldHotkeysTarget(third);
+    // 「设置 → 插件 → 英雄联盟」= 插件的页面（插件都在设置的插件列表里，ADR 038）
+    if (second === "插件" && third) {
+      const id = third.split("/").map((name) => PLUGIN_NAMES[name.trim()]).find(Boolean);
+      if (id) return { page: "plugin", id };
+    }
     // 旧位置「设置 → 权限 → 放歌」（浏览器放歌时选网站的地方）：放歌现在在放歌插件的音乐页（ADR 034、038）
     if (second === "权限" && third === "放歌") return { page: "plugin", id: "music" };
     const tab = ADVANCED_TABS[second ?? "系统"] ?? "system";
@@ -150,8 +155,8 @@ const TOOL_LOCATIONS: Record<string, [string, string]> = {
   "connections.upsert": [m.shell_nav_changed_connections(), "设置 → API 连接"],
   "connections.delete": [m.shell_nav_changed_connections(), "设置 → API 连接"],
   "connections.request_key": [m.shell_nav_changed_connections(), "设置 → API 连接"],
-  "voice_chat.install": [m.shell_nav_changed_voice_chat(), "插件 → 游戏语音"],
-  "voice_chat.default_mic": [m.shell_nav_changed_default_mic(), "插件 → 游戏语音"],
+  "voice_chat.install": [m.shell_nav_changed_voice_chat(), "设置 → 插件 → 游戏语音"],
+  "voice_chat.default_mic": [m.shell_nav_changed_default_mic(), "设置 → 插件 → 游戏语音"],
   "wake.model.download": [m.shell_nav_changed_wake_model(), "设置 → 怎么叫她 → 语音唤醒"],
   "skill.manage": [m.shell_nav_changed_skills(), "琴音 → 技能"],
   "memory": [m.shell_nav_changed_memory(), "琴音 → 记忆"],
