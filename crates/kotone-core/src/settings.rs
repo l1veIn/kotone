@@ -999,6 +999,7 @@ pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
         Err(error) => return recover_invalid_config(path, format!("JSON 解析失败: {error}")),
     };
     let mut user = user;
+    lift_voice_input_json(&mut user);
     migrate_legacy_post_processing_json(&mut user);
     migrate_legacy_upgrade_json(&mut user);
     migrate_call_hotkey_json(&mut user);
@@ -1230,6 +1231,76 @@ fn migrate_voice_chat_json(user: &mut serde_json::Value) {
     }
 }
 
+/// 语音输入插件的设置（ADR 038 第 5 步，读旧写新）：文字处理、识别记录、悬浮窗和语音输入自己的几个热键。
+/// 配置文件里写在 `plugins.voice-input.settings` 下面；读进来时搬回顶层，程序里仍是 [`Settings`] 上的字段
+/// （本体的“听一句”、宿主和 `tests/orchestrator.rs` 的检查都直接读它们）。
+/// 装回旧版本时旧版本找不到这几项，会按它的默认值来（和 `lol.enabled`、`voiceChat`、`music` 搬家一样的代价）。
+pub const VOICE_INPUT_SETTINGS: &[&str] = &[
+    "postProcessing",
+    "history",
+    "overlay",
+    "channelCycleHotkey",
+    "resendLastHotkey",
+    "togglePostProcessingHotkey",
+    "cyclePostProcessingHotkey",
+];
+const VOICE_INPUT_PLUGIN: &str = "voice-input";
+
+/// 读：`plugins.voice-input.settings` 里有的搬回顶层（新位置为准，盖过旧版本写的同名顶层字段）；
+/// 没有的用顶层的旧字段。
+pub fn lift_voice_input_json(user: &mut serde_json::Value) {
+    let Some(object) = user.as_object_mut() else {
+        return;
+    };
+    let lifted: Vec<(String, serde_json::Value)> = object
+        .get_mut("plugins")
+        .and_then(|p| p.get_mut(VOICE_INPUT_PLUGIN))
+        .and_then(|p| p.get_mut("settings"))
+        .and_then(|s| s.as_object_mut())
+        .map(|settings| {
+            VOICE_INPUT_SETTINGS
+                .iter()
+                .filter_map(|key| settings.remove(*key).map(|v| (key.to_string(), v)))
+                .collect()
+        })
+        .unwrap_or_default();
+    for (key, value) in lifted {
+        object.insert(key, value);
+    }
+}
+
+/// 写：顶层的这几项搬进 `plugins.voice-input.settings`（插件自己的其余设置、开关不动）。
+pub fn stash_voice_input_json(value: &mut serde_json::Value) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    let moved: Vec<(&str, serde_json::Value)> = VOICE_INPUT_SETTINGS
+        .iter()
+        .filter_map(|key| object.remove(*key).map(|v| (*key, v)))
+        .collect();
+    if moved.is_empty() {
+        return;
+    }
+    let plugins = object
+        .entry("plugins")
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(settings) = plugins
+        .as_object_mut()
+        .map(|p| {
+            p.entry(VOICE_INPUT_PLUGIN)
+                .or_insert_with(|| serde_json::json!({}))
+        })
+        .and_then(|p| p.as_object_mut())
+        .map(|p| p.entry("settings").or_insert_with(|| serde_json::json!({})))
+        .and_then(|s| s.as_object_mut())
+    else {
+        return;
+    };
+    for (key, value) in moved {
+        settings.insert(key.to_string(), value);
+    }
+}
+
 /// 旧配置只有单条 `pipeline`：空流程改种默认屏蔽词；有步骤则收成一条可切换流程。
 fn migrate_legacy_post_processing_json(user: &mut serde_json::Value) {
     let Some(post) = user.get("postProcessing") else {
@@ -1366,8 +1437,9 @@ pub fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {e}"))?;
     }
-    let json =
-        serde_json::to_string_pretty(settings).map_err(|e| format!("序列化配置失败: {e}"))?;
+    let mut value = serde_json::to_value(settings).map_err(|e| format!("序列化配置失败: {e}"))?;
+    stash_voice_input_json(&mut value);
+    let json = serde_json::to_string_pretty(&value).map_err(|e| format!("序列化配置失败: {e}"))?;
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, json).map_err(|e| format!("写入配置失败: {e}"))?;
     std::fs::rename(&tmp, path).map_err(|e| format!("落盘配置失败: {e}"))?;
@@ -2491,6 +2563,79 @@ mod tests {
 
         assert_eq!(shared.read().unwrap().history.max_records, 1016);
         assert_eq!(load_from(&path).history.max_records, 1016);
+    }
+
+    /// 语音输入搬进插件（ADR 038 第 5 步）：旧配置的顶层字段读得进来，保存时写进
+    /// `plugins.voice-input.settings`，再读回来一样；插件自己的开关和别的设置不动。
+    #[test]
+    fn voice_input_settings_are_read_old_and_written_new() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "resendLastHotkey": "Alt+F6",
+                "history": {"mode": "off"},
+                "overlay": {"visibility": "never"},
+                "postProcessing": {"enabled": false, "activePipelineId": "blocklist", "pipelines": [
+                    {"id": "blocklist", "displayName": "我的屏蔽词", "steps": []}
+                ]},
+                "plugins": {"voice-input": {"enabled": true, "settings": {"note": "插件自己的"}}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let old = load_from(&path);
+        assert_eq!(old.resend_last_hotkey, "Alt+F6");
+        assert_eq!(old.history.mode, crate::history::HistoryMode::Off);
+        assert_eq!(old.overlay.visibility, OverlayVisibility::Never);
+        assert!(!old.post_processing.enabled);
+        assert_eq!(old.post_processing.pipelines[0].display_name, "我的屏蔽词");
+
+        save_to(&path, &old).unwrap();
+        let file: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        for key in VOICE_INPUT_SETTINGS {
+            assert!(file.get(*key).is_none(), "{key} 不再写在顶层");
+            assert!(
+                file["plugins"]["voice-input"]["settings"]
+                    .get(*key)
+                    .is_some(),
+                "{key} 写进插件"
+            );
+        }
+        assert_eq!(file["plugins"]["voice-input"]["enabled"], true);
+        assert_eq!(
+            file["plugins"]["voice-input"]["settings"]["note"],
+            "插件自己的"
+        );
+
+        let again = load_from(&path);
+        assert_eq!(again.resend_last_hotkey, "Alt+F6");
+        assert_eq!(again.overlay.visibility, OverlayVisibility::Never);
+        assert_eq!(
+            again.post_processing.pipelines[0].display_name,
+            "我的屏蔽词"
+        );
+        assert!(again.plugins["voice-input"]
+            .settings
+            .get("history")
+            .is_none());
+    }
+
+    /// 新旧两处都有（装回过旧版本又升级）：新位置为准。
+    #[test]
+    fn voice_input_settings_in_the_new_place_win() {
+        let mut user = serde_json::json!({
+            "resendLastHotkey": "Alt+F1",
+            "plugins": {"voice-input": {"settings": {"resendLastHotkey": "Alt+F6"}}}
+        });
+        lift_voice_input_json(&mut user);
+        assert_eq!(user["resendLastHotkey"], "Alt+F6");
+        assert!(user["plugins"]["voice-input"]["settings"]
+            .as_object()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
