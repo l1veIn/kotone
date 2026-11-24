@@ -7,12 +7,14 @@ it):
   tool service on, the League of Legends plugin with its defaults (it only reads the local client, which is not running
   tonight), speech volume 0, hotkeys and the wake word off, no AI connection;
 - initialize (capabilities: `resources` and the MCP Apps extension `io.modelcontextprotocol/ui`) →
-  notifications/initialized → resources/list (has ui://kotone/lol/tier, text/html;profile=mcp-app, CSP declares
-  CommunityDragon) → resources/read ui://kotone/lol/tier (a whole HTML document with `<meta name="kotone:page"
-  content="tier">`; the real bundle when `pnpm -C apps/desktop build:apps` ran before the cargo build, otherwise the
-  placeholder page — reported, not failed) → resources/read of a page that is not an App (error -32002) →
-  tools/list (`kotone_lol_tier` has `_meta.ui.resourceUri`, `kotone_lol_scout` does not (its page is still the host's
-  Svelte page), `kotone_lol_champions` is listed with visibility ["app"]);
+  notifications/initialized → resources/list (the pages that are MCP Apps, `plugins/lol/src/app.rs` APP_PAGES:
+  ui://kotone/lol/tier and ui://kotone/lol/match, text/html;profile=mcp-app, CSP declares CommunityDragon; the other
+  pages are not listed: player / game / champion are drawn inside the same bundle by its own navigation, settings is the
+  host's page) → resources/read of each App (a whole HTML document with `<meta name="kotone:page" content="<page>">`;
+  the real bundle when `pnpm -C apps/desktop build:apps` ran before the cargo build, otherwise the placeholder page —
+  reported, not failed) → resources/read of a page that is not an App (the settings page: error -32002) →
+  tools/list (`kotone_lol_tier` and `kotone_lol_scout` have `_meta.ui.resourceUri`, `kotone_lol_player` does not (its
+  page is not offered on its own), `kotone_lol_champions` is listed with visibility ["app"]);
 - unless `--offline`: tools/call kotone_lol_tier {mode: rift, lane: 中} — one public request to Tencent 101 (no account,
   no key): the result follows MCP Apps (content = the few lines for the model, structuredContent = the page data).
   A network failure is reported as SKIP, not FAIL.
@@ -48,6 +50,12 @@ ENV.pop("KOTONE_TOOL_SERVICE_DIR", None)
 ENV.pop("KOTONE_EXE", None)
 APP_MIME = "text/html;profile=mcp-app"
 TIER = "ui://kotone/lol/tier"
+MATCH = "ui://kotone/lol/match"
+# 做成 MCP App 的页面（plugins/lol/src/app.rs 的 APP_PAGES）→ 页面标记
+APPS = {TIER: "tier", MATCH: "match"}
+# 清单里有、但不单独作为资源给的页面：战绩 / 单局详情 / 英雄在同一个打包里由 App 自己导航过去，设置是宿主的页面
+NOT_APPS = ("ui://kotone/lol/player", "ui://kotone/lol/game", "ui://kotone/lol/champion", "ui://kotone/lol/settings")
+SETTINGS = "ui://kotone/lol/settings"
 # 会打字、出声、操作客户端的：这个脚本一个都不调
 FORBIDDEN = {"kotone_lol_client", "kotone_game_chat_send", "kotone_voice_chat_say", "kotone_call"}
 RESULTS = []
@@ -150,38 +158,43 @@ def session(offline):
 
         resources = mcp.request("resources/list").get("result", {}).get("resources", [])
         print("  resources:", json.dumps(resources, ensure_ascii=False))
-        tier = next((r for r in resources if r.get("uri") == TIER), None)
-        check("resources/list has the tier list App", tier and tier.get("mimeType") == APP_MIME,
-              json.dumps(tier, ensure_ascii=False) if tier else "missing")
-        domains = ((tier or {}).get("_meta", {}).get("ui", {}).get("csp", {}).get("resourceDomains", []))
-        check("its CSP declares CommunityDragon (champion icons)", "https://raw.communitydragon.org" in domains,
-              str(domains))
-        check("pages that are still Svelte in the host are not listed",
-              all(r.get("uri") != "ui://kotone/lol/match" for r in resources))
+        listed = {r.get("uri"): r for r in resources}
+        for uri in APPS:
+            app = listed.get(uri)
+            domains = ((app or {}).get("_meta", {}).get("ui", {}).get("csp", {}).get("resourceDomains", []))
+            check(f"resources/list has the {uri} App ({APP_MIME}); its CSP declares CommunityDragon (icons)",
+                  app and app.get("mimeType") == APP_MIME and "https://raw.communitydragon.org" in domains,
+                  json.dumps(app, ensure_ascii=False) if app else "missing")
+        check("pages that are not offered as Apps on their own (player, game, champion, settings) are not listed",
+              not [uri for uri in NOT_APPS if uri in listed], str([uri for uri in NOT_APPS if uri in listed]))
 
-        read = mcp.request("resources/read", {"uri": TIER}).get("result", {})
-        content = (read.get("contents") or [{}])[0]
-        html = content.get("text", "")
-        built = "build:apps" not in html
-        print(f"  read {len(html)} chars; {'the built App' if built else 'the placeholder page (App not built)'}")
-        check("resources/read returns a whole HTML document as text/html;profile=mcp-app",
-              content.get("mimeType") == APP_MIME and html.lstrip().lower().startswith("<!doctype html"))
-        check("the page marker is in it", '<meta name="kotone:page" content="tier">' in html)
-        if built:
-            check("the built App talks MCP Apps (ui/initialize is in the bundle)", "ui/initialize" in html)
+        for uri, page in APPS.items():
+            read = mcp.request("resources/read", {"uri": uri}).get("result", {})
+            content = (read.get("contents") or [{}])[0]
+            html = content.get("text", "")
+            built = "build:apps" not in html
+            print(f"  read {len(html)} chars; {'the built App' if built else 'the placeholder page (App not built)'}")
+            check(f"resources/read {uri}: a whole HTML document as {APP_MIME} with its page marker",
+                  content.get("mimeType") == APP_MIME and html.lstrip().lower().startswith("<!doctype html")
+                  and f'<meta name="kotone:page" content="{page}">' in html)
+            if built and uri == TIER:
+                check("the built App talks MCP Apps (ui/initialize is in the bundle)", "ui/initialize" in html)
 
-        missing = mcp.request("resources/read", {"uri": "ui://kotone/lol/match"})
-        check("a page that is not an App is resource-not-found (-32002)",
+        missing = mcp.request("resources/read", {"uri": SETTINGS})
+        check(f"a page that is not an App ({SETTINGS}, the host's page) is resource-not-found (-32002)",
               missing.get("error", {}).get("code") == -32002, json.dumps(missing.get("error"), ensure_ascii=False))
 
         tools = {t["name"]: t for t in mcp.request("tools/list")["result"]["tools"]}
         meta = lambda name: tools.get(name, {}).get("_meta", {})  # noqa: E731
         print("  kotone_lol_tier _meta:", json.dumps(meta("kotone_lol_tier"), ensure_ascii=False))
-        check("kotone_lol_tier links its App (_meta.ui.resourceUri, and the old flat key)",
-              meta("kotone_lol_tier").get("ui", {}).get("resourceUri") == TIER
-              and meta("kotone_lol_tier").get("ui/resourceUri") == TIER)
-        check("kotone_lol_scout does not link a page external hosts cannot read",
-              "kotone_lol_scout" in tools and "resourceUri" not in meta("kotone_lol_scout").get("ui", {}))
+        print("  kotone_lol_scout _meta:", json.dumps(meta("kotone_lol_scout"), ensure_ascii=False))
+        for tool, uri in (("kotone_lol_tier", TIER), ("kotone_lol_scout", MATCH)):
+            check(f"{tool} links its App {uri} (_meta.ui.resourceUri, and the old flat key)",
+                  meta(tool).get("ui", {}).get("resourceUri") == uri and meta(tool).get("ui/resourceUri") == uri)
+        check("kotone_lol_player does not link a page external hosts cannot read",
+              "kotone_lol_player" in tools and "resourceUri" not in meta("kotone_lol_player").get("ui", {})
+              and "ui/resourceUri" not in meta("kotone_lol_player"),
+              json.dumps(meta("kotone_lol_player"), ensure_ascii=False))
         check("an app-only tool is listed with visibility [\"app\"]",
               meta("kotone_lol_champions").get("ui", {}).get("visibility") == ["app"])
 
