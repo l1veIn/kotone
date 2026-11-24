@@ -11,6 +11,8 @@
 //! - 停止自动化热键、托盘菜单与不带 id 的 `automation.stop` 停止全部程序（含等待中的程序，
 //!   不含提醒）；应用退出只停止运行中的程序，等待中的留到下次启动（过期则记为错过）。
 
+mod program;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -25,17 +27,13 @@ use kotone_core::automation::{
 };
 use kotone_core::reminders::DeliveryKind;
 use kotone_core::tools::{WindowIdentity, WindowInfo, WindowObserver};
-use kotone_platform_windows::inject;
 use kotone_platform_windows::window_tools::WindowsWindowObserver;
-use kotone_script::{
-    Cancel, KeyAction, Limits, MouseAction, MouseButton, Outcome, Pixels, Region, ScriptHost,
-    TextLine,
-};
+use kotone_script::{Cancel, Limits, Outcome, ScriptHost};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::game_session::GameSession;
-use crate::ocr_engines::ocr_image;
+use program::DesktopHost;
 
 /// 工具 `automation.runs` 最多返回的条数。
 const MAX_LISTED_RUNS: usize = 50;
@@ -113,93 +111,6 @@ fn target_label(window: &WindowInfo) -> String {
     }
 }
 
-/// 真实宿主：窗口绑定、截图、坐标与按住的键都在共享的 [`GameSession`] 里（ADR 019 决定 1）。
-struct DesktopHost {
-    app: AppHandle,
-    session: GameSession,
-    cancel: Cancel,
-}
-
-impl DesktopHost {
-    fn focused_now(&self) -> bool {
-        self.session.focused_now()
-    }
-
-    /// 节流地检查游戏窗口是否还在；不在就取消脚本。
-    fn check_alive(&self) {
-        if !self.session.check_alive() {
-            self.cancel.cancel();
-        }
-    }
-
-    /// 截游戏客户区；游戏不在前台时先等它回来（与按键一样暂停）。
-    fn capture(&self) -> Result<kotone_tools::image::RgbaImage, String> {
-        while !self.focused_now() {
-            if !self.sleep(200, &self.cancel.clone()) {
-                return Err("自动化已停止".into());
-            }
-        }
-        self.session.capture()
-    }
-
-    fn crop(image: &kotone_tools::image::RgbaImage, r: Region) -> kotone_tools::image::RgbaImage {
-        Self::crop_with_origin(image, r).0
-    }
-
-    /// 按窗口比例裁剪；同时返回实际裁到的区域（按像素取整后，窗口比例）。
-    fn crop_with_origin(
-        image: &kotone_tools::image::RgbaImage,
-        r: Region,
-    ) -> (kotone_tools::image::RgbaImage, Region) {
-        let (w, h) = (image.width(), image.height());
-        let x = ((r.x * f64::from(w)).floor() as u32).min(w - 1);
-        let y = ((r.y * f64::from(h)).floor() as u32).min(h - 1);
-        let cw = ((r.width * f64::from(w)).ceil() as u32).clamp(1, w - x);
-        let ch = ((r.height * f64::from(h)).ceil() as u32).clamp(1, h - y);
-        let crop = image.crop(kotone_tools::image::CropRect {
-            x,
-            y,
-            width: cw,
-            height: ch,
-        });
-        let origin = Region {
-            x: f64::from(x) / f64::from(w),
-            y: f64::from(y) / f64::from(h),
-            width: f64::from(cw) / f64::from(w),
-            height: f64::from(ch) / f64::from(h),
-        };
-        (crop, origin)
-    }
-
-    fn screen_point(&self, x: f64, y: f64) -> Result<(i32, i32), String> {
-        self.session.screen_point(x, y)
-    }
-
-    fn deliver(&self, text: &str, kind: DeliveryKind, wait: bool) -> Result<(), String> {
-        let app = self.app.clone();
-        let text = text.to_string();
-        let task = async move {
-            crate::assistant::deliver_text(&app, text, vec![kind])
-                .await
-                .map(|_| ())
-        };
-        if wait {
-            tauri::async_runtime::block_on(task)
-        } else {
-            tauri::async_runtime::spawn(task);
-            Ok(())
-        }
-    }
-}
-
-fn platform_button(button: MouseButton) -> inject::MouseButton {
-    match button {
-        MouseButton::Left => inject::MouseButton::Left,
-        MouseButton::Right => inject::MouseButton::Right,
-        MouseButton::Middle => inject::MouseButton::Middle,
-    }
-}
-
 /// 模板图片目录（内容寻址：`<sha256>.png`）。
 fn images_dir() -> std::path::PathBuf {
     kotone_core::settings::kotone_dir().join("automation-images")
@@ -257,150 +168,6 @@ fn store_arg_images(
         }
     }
     Ok(out)
-}
-
-/// 平均亮度（Rec.601 luma）。
-pub fn mean_luma(pixels: &[u8]) -> f64 {
-    let n = pixels.len() / 4;
-    if n == 0 {
-        return 0.0;
-    }
-    let sum: f64 = pixels
-        .chunks_exact(4)
-        .map(|p| 0.299 * f64::from(p[0]) + 0.587 * f64::from(p[1]) + 0.114 * f64::from(p[2]))
-        .sum();
-    sum / n as f64
-}
-
-impl ScriptHost for DesktopHost {
-    fn now_ms(&self) -> u64 {
-        self.session.elapsed_ms()
-    }
-
-    fn sleep(&self, ms: u64, cancel: &Cancel) -> bool {
-        let deadline = Instant::now() + Duration::from_millis(ms);
-        loop {
-            if cancel.is_cancelled() {
-                return false;
-            }
-            self.check_alive();
-            if cancel.is_cancelled() {
-                return false;
-            }
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return true;
-            }
-            std::thread::sleep(left.min(Duration::from_millis(25)));
-        }
-    }
-
-    fn game_focused(&self) -> bool {
-        self.focused_now()
-    }
-
-    fn key(&self, action: KeyAction, key: &str) -> Result<(), String> {
-        match action {
-            KeyAction::Press => inject::key_down_up(key).map_err(|e| e.message),
-            KeyAction::Down => self.session.key_down(key),
-            KeyAction::Up => self.session.key_up(key),
-        }
-    }
-
-    fn type_text(&self, text: &str) -> Result<(), String> {
-        inject::send_unicode(text).map_err(|e| e.message)
-    }
-
-    fn brightness(&self, region: Region) -> Result<f64, String> {
-        let image = self.capture()?;
-        Ok(mean_luma(Self::crop(&image, region).pixels()))
-    }
-
-    fn color_at(&self, x: f64, y: f64) -> Result<[u8; 3], String> {
-        let image = self.capture()?;
-        let px = ((x * f64::from(image.width())) as u32).min(image.width() - 1);
-        let py = ((y * f64::from(image.height())) as u32).min(image.height() - 1);
-        let [r, g, b, _] = image.pixel(px, py).ok_or("坐标超出画面")?;
-        Ok([r, g, b])
-    }
-
-    fn pixels(&self, region: Region) -> Result<Pixels, String> {
-        let (crop, origin) = Self::crop_with_origin(&self.capture()?, region);
-        Ok(Pixels {
-            width: crop.width(),
-            height: crop.height(),
-            rgba: crop.pixels().to_vec(),
-            origin,
-        })
-    }
-
-    fn image(&self, id: &str) -> Result<Pixels, String> {
-        if !kotone_core::automation::library::is_image_id(id) {
-            return Err("图片编号不合法".into());
-        }
-        let bytes = std::fs::read(images_dir().join(format!("{id}.png")))
-            .map_err(|e| format!("找不到模板图片（{e}）"))?;
-        let image = kotone_tools::image::decode_png(&bytes, MAX_IMAGE_SIDE)?;
-        Ok(Pixels {
-            width: image.width(),
-            height: image.height(),
-            rgba: image.pixels().to_vec(),
-            origin: Region {
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
-            },
-        })
-    }
-
-    fn mouse(&self, action: MouseAction) -> Result<(), String> {
-        let err = |e: kotone_core::inject::InjectError| e.message;
-        match action {
-            MouseAction::Move { x, y } => {
-                let (px, py) = self.screen_point(x, y)?;
-                inject::mouse_move_to(px, py).map_err(err)
-            }
-            MouseAction::Click {
-                x,
-                y,
-                button,
-                count,
-            } => {
-                let (px, py) = self.screen_point(x, y)?;
-                inject::mouse_move_to(px, py).map_err(err)?;
-                inject::mouse_click(platform_button(button), count).map_err(err)
-            }
-            MouseAction::Down(button) => self.session.mouse_down(platform_button(button)),
-            MouseAction::Up(button) => self.session.mouse_up(platform_button(button)),
-            MouseAction::Scroll(clicks) => inject::mouse_wheel(clicks).map_err(err),
-        }
-    }
-
-    fn ocr(&self, region: Region) -> Result<Vec<TextLine>, String> {
-        let (crop, origin) = Self::crop_with_origin(&self.capture()?, region);
-        // 识别框是裁剪图里的比例，换回窗口比例。
-        Ok(ocr_image(&self.app, &crop)?
-            .into_iter()
-            .map(|(text, rect)| TextLine {
-                rect: rect.map(|[x, y, w, h]| Region {
-                    x: origin.x + x * origin.width,
-                    y: origin.y + y * origin.height,
-                    width: w * origin.width,
-                    height: h * origin.height,
-                }),
-                text,
-            })
-            .collect())
-    }
-
-    fn say(&self, text: &str) -> Result<(), String> {
-        self.deliver(text, DeliveryKind::Voice, true)
-    }
-
-    fn toast(&self, text: &str) -> Result<(), String> {
-        self.deliver(text, DeliveryKind::Danmaku, false)
-    }
 }
 
 /// 执行记录的对外形状（工具与事件）。`with_source = false` 时省略程序源码。
@@ -1053,17 +820,4 @@ pub fn automation_run_saved(
 #[tauri::command]
 pub fn automation_stop(app: AppHandle, id: Option<String>) -> usize {
     stop(&app, id.as_deref(), "用户停止")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::mean_luma;
-
-    #[test]
-    fn luma_of_black_white_and_red() {
-        assert_eq!(mean_luma(&[0, 0, 0, 255, 0, 0, 0, 255]), 0.0);
-        assert!((mean_luma(&[255, 255, 255, 255]) - 255.0).abs() < 1e-9);
-        assert!((mean_luma(&[255, 0, 0, 255]) - 76.245).abs() < 1e-6);
-        assert_eq!(mean_luma(&[]), 0.0);
-    }
 }
