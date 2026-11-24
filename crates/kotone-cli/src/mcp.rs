@@ -14,6 +14,11 @@
 //!   两个 Kotone 名算出同一个 MCP 名（`a_b.c` 和 `a.b_c`）时两个都不列，调用这个名字会报错，
 //!   请对方用 `kotone_call` 写明 Kotone 工具名：不猜，猜错了会调到别的工具。
 //! - 本进程不持有任何业务逻辑：每次调用都经已有协议转发给桌面实例；对照表只是名字，随 capabilities 变。
+//! - **MCP Apps**（扩展 `io.modelcontextprotocol/ui`，规范 2026-01-26；ADR 039 D5）：插件做成独立 HTML 的页面
+//!   （capabilities 的 `resources`）经 `resources/list` / `resources/read` 提供；工具带 `_meta.ui`
+//!   （`visibility`；`resourceUri` 只在那个页面真是资源时带，另带已弃用的 `ui/resourceUri` 给旧宿主，照 ext-apps 的
+//!   `registerAppTool`）。带页面的工具结果照规范交出：`content` 是给模型的那几行字，`structuredContent` 是页面的数据。
+//!   App 在 Claude 这类宿主里调的是这里的名字（`kotone_lol_tier`），在 Kotone 里显示时宿主的桥按同一张对照表还原。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -28,6 +33,12 @@ use crate::tools::connect;
 
 const DEFAULT_PROTOCOL: &str = "2025-06-18";
 const PREFIX: &str = "kotone_";
+/// MCP Apps 扩展的标识（SEP-1724 的 `extensions`）。
+const UI_EXTENSION: &str = "io.modelcontextprotocol/ui";
+/// MCP App 的 HTML 资源类型。
+const APP_MIME: &str = "text/html;profile=mcp-app";
+/// MCP 的“资源不存在”错误码。
+const RESOURCE_NOT_FOUND: i64 = -32002;
 
 const INSTRUCTIONS: &str = "Kotone 是本机的游戏语音/视觉工具底座：窗口截图与裁剪、OCR、聊天消息跟踪、语音播报与弹幕、语音识别运行时、用户经 Kotone 转交给你的请求（user.request）。\
 先用 kotone_service_status 确认是否在运行，未运行用 kotone_launch 后台启动。\
@@ -139,8 +150,42 @@ impl Names {
     }
 }
 
+/// 工具的 `_meta`（MCP Apps）：`visibility` 照抄；`resourceUri` 只在那个页面是资源时带（不然外部宿主会去读一个
+/// 读不到的资源），同时带已弃用的扁平键 `ui/resourceUri`（旧宿主认它，照 ext-apps 的 `registerAppTool`）。
+fn tool_meta(tool: &Value, resources: &BTreeSet<String>) -> Option<Value> {
+    let ui = tool.get("_meta")?.get("ui")?.as_object()?;
+    let mut out = serde_json::Map::new();
+    if let Some(visibility) = ui.get("visibility") {
+        out.insert("visibility".into(), visibility.clone());
+    }
+    let page = ui
+        .get("resourceUri")
+        .and_then(Value::as_str)
+        .filter(|uri| resources.contains(*uri));
+    if let Some(uri) = page {
+        out.insert("resourceUri".into(), json!(uri));
+    }
+    if out.is_empty() {
+        return None;
+    }
+    let mut meta = json!({"ui": out});
+    if let Some(uri) = page {
+        meta["ui/resourceUri"] = json!(uri);
+    }
+    Some(meta)
+}
+
+/// capabilities 的资源（`resources/list` 的项）里的地址。
+fn resource_uris(resources: &[Value]) -> BTreeSet<String> {
+    resources
+        .iter()
+        .filter_map(|r| r["uri"].as_str().map(str::to_string))
+        .collect()
+}
+
 /// capabilities 的工具 → (列给 MCP 的工具, 对照表)。撞名的、和固定工具重名的不列。
-fn map_tools(tools: &[Value]) -> (Vec<Value>, Names) {
+/// `resources`：做成 MCP App 的页面地址（决定工具的 `_meta.ui.resourceUri` 带不带）。
+fn map_tools(tools: &[Value], resources: &BTreeSet<String>) -> (Vec<Value>, Names) {
     let names = Names::build(tools.iter().filter_map(|t| t["name"].as_str()));
     let mut seen = BTreeSet::new();
     let listed = tools
@@ -157,18 +202,22 @@ fn map_tools(tools: &[Value]) -> (Vec<Value>, Names) {
             let mut schema = t["inputSchema"].clone();
             // MCP 要求 inputSchema 为 object 类型
             schema["type"] = json!("object");
-            Some(json!({
+            let mut tool = json!({
                 "name": name,
                 "description": t["description"],
                 "inputSchema": schema,
-            }))
+            });
+            if let Some(meta) = tool_meta(t, resources) {
+                tool["_meta"] = meta;
+            }
+            Some(tool)
         })
         .collect();
     (listed, names)
 }
 
-/// 运行中实例 capabilities 里的全部工具；取不到时返回给对方看的错误结果。
-async fn capability_tools() -> Result<Vec<Value>, Value> {
+/// 运行中实例 capabilities 里的全部工具和 MCP App 资源；取不到时返回给对方看的错误结果。
+async fn capabilities() -> Result<(Vec<Value>, Vec<Value>), Value> {
     let client = connect().map_err(|e| {
         text_result(
             &json!({"ok": false, "error": e, "hint": "Kotone 未在运行：先调用 kotone_launch"}),
@@ -181,7 +230,10 @@ async fn capability_tools() -> Result<Vec<Value>, Value> {
         .map_err(|e| text_result(&json!({"ok": false, "error": e}), true))?;
     let ok = envelope.ok;
     match envelope.result {
-        Some(caps) if ok => Ok(caps["tools"].as_array().cloned().unwrap_or_default()),
+        Some(caps) if ok => Ok((
+            caps["tools"].as_array().cloned().unwrap_or_default(),
+            caps["resources"].as_array().cloned().unwrap_or_default(),
+        )),
         _ => Err(text_result(
             &serde_json::to_value(&envelope).unwrap_or_default(),
             true,
@@ -229,6 +281,29 @@ fn text_result(value: &Value, is_error: bool) -> Value {
     out
 }
 
+/// 映射工具的结果：带页面的（Kotone 结果里有 `structuredContent`）照 MCP Apps 交出——`content` 只有给模型的那份，
+/// `structuredContent` 是页面的数据，`_meta.ui` 说用哪个页面（规范“Data Passing”）；别的照旧是整个信封。
+fn mapped_result(envelope: &Value) -> Value {
+    let ok = envelope["ok"] == true;
+    let page = &envelope["result"];
+    if ok && page["structuredContent"].is_object() {
+        let text = match &page["content"] {
+            Value::String(text) => text.clone(),
+            other => serde_json::to_string_pretty(other).unwrap_or_default(),
+        };
+        let mut out = json!({
+            "content": [{"type": "text", "text": text}],
+            "structuredContent": page["structuredContent"],
+            "isError": false,
+        });
+        if page["_meta"].is_object() {
+            out["_meta"] = page["_meta"].clone();
+        }
+        return out;
+    }
+    text_result(envelope, !ok)
+}
+
 async fn call_kotone(tool: &str, arguments: Value, timeout_ms: Option<u64>) -> Value {
     let client = match connect() {
         Ok(c) => c,
@@ -266,8 +341,8 @@ impl Server {
     /// 列工具：固定工具 + 运行中实例的工具；顺便更新对照表。
     async fn list_tools(&mut self) -> Vec<Value> {
         let mut tools = static_tools();
-        if let Ok(caps) = capability_tools().await {
-            let (listed, names) = map_tools(&caps);
+        if let Ok((caps, resources)) = capabilities().await {
+            let (listed, names) = map_tools(&caps, &resource_uris(&resources));
             tools.extend(listed);
             self.names = names;
         }
@@ -277,15 +352,15 @@ impl Server {
     /// 调一个映射出来的工具：先查表，查不到就重新取一次 capabilities 再查。
     async fn call_mapped(&mut self, name: &str, args: Value) -> Value {
         if matches!(self.names.lookup(name), Lookup::Unknown) {
-            match capability_tools().await {
-                Ok(caps) => self.names = map_tools(&caps).1,
+            match capabilities().await {
+                Ok((caps, _)) => self.names = map_tools(&caps, &BTreeSet::new()).1,
                 Err(e) => return e,
             }
         }
         match self.names.lookup(name) {
             // 映射工具的参数原样转发（不夹带额外字段）；期限取服务允许的上限，
             // 快速工具照常即时返回，播报等长操作不被默认 5 秒截断
-            Lookup::Tool(tool) => call_kotone(tool, args, Some(30_000)).await,
+            Lookup::Tool(tool) => call_mapped_tool(tool, args).await,
             Lookup::Ambiguous(tools) => ambiguous_tool(name, tools),
             Lookup::Unknown => unknown_tool(name),
         }
@@ -304,6 +379,61 @@ impl Server {
             Some(rest) if !rest.is_empty() => (self.call_mapped(name, args).await, false),
             _ => (unknown_tool(name), false),
         }
+    }
+}
+
+/// 调一个映射出来的工具（结果见 [`mapped_result`]）。
+async fn call_mapped_tool(tool: &str, arguments: Value) -> Value {
+    let client = match connect() {
+        Ok(c) => c,
+        Err(e) => {
+            return text_result(
+                &json!({"ok": false, "error": e, "hint": "Kotone 未在运行：先调用 kotone_launch"}),
+                true,
+            )
+        }
+    };
+    let request = ToolCallRequest {
+        request_id: None,
+        tool: tool.to_string(),
+        arguments,
+        timeout_ms: Some(30_000),
+    };
+    match client.call(&request).await {
+        Ok(envelope) => mapped_result(&serde_json::to_value(&envelope).unwrap_or_default()),
+        Err(e) => text_result(&json!({"ok": false, "error": e}), true),
+    }
+}
+
+/// `resources/list`：运行中实例的 MCP App 资源（没在运行就是空的）。
+async fn list_resources() -> Value {
+    let resources = capabilities()
+        .await
+        .map(|(_, resources)| resources)
+        .unwrap_or_default();
+    json!({ "resources": resources })
+}
+
+/// `resources/read`：经工具服务读；结果或 JSON-RPC 错误（没有这个资源是 -32002）。
+async fn read_resource(uri: &str) -> Result<Value, (i64, String)> {
+    let client = connect().map_err(|e| {
+        (
+            -32603,
+            format!("Kotone 未在运行（先调用 kotone_launch）：{}", e.message),
+        )
+    })?;
+    let envelope = client
+        .read_resource(uri)
+        .await
+        .map_err(|e| (-32603, format!("读资源失败：{}", e.message)))?;
+    match (envelope.ok, envelope.result, envelope.error) {
+        (true, Some(result), _) => Ok(result),
+        (_, _, Some(error)) if error.code == "RESOURCE_NOT_FOUND" => Err((
+            RESOURCE_NOT_FOUND,
+            format!("Resource not found: {uri}（{}）", error.message),
+        )),
+        (_, _, Some(error)) => Err((-32603, format!("{}：{}", error.code, error.message))),
+        _ => Err((-32603, "工具服务没有给出结果".to_string())),
     }
 }
 
@@ -422,7 +552,12 @@ pub(crate) async fn handle_message(server: &mut Server, message: &Value) -> Vec<
                 id,
                 json!({
                     "protocolVersion": version,
-                    "capabilities": {"tools": {"listChanged": true}},
+                    "capabilities": {
+                        "tools": {"listChanged": true},
+                        "resources": {"listChanged": true},
+                        // MCP Apps（SEP-1724 的扩展声明；规范只要求宿主声明，服务器也声明一下，告诉对方有 ui:// 页面）
+                        "extensions": {UI_EXTENSION: {"mimeTypes": [APP_MIME]}},
+                    },
                     "serverInfo": {"name": "kotone", "version": env!("CARGO_PKG_VERSION")},
                     "instructions": INSTRUCTIONS,
                 }),
@@ -439,10 +574,23 @@ pub(crate) async fn handle_message(server: &mut Server, message: &Value) -> Vec<
             let mut out = vec![response(id, result)];
             if list_changed {
                 out.push(json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}));
+                out.push(
+                    json!({"jsonrpc": "2.0", "method": "notifications/resources/list_changed"}),
+                );
             }
             out
         }
-        "resources/list" => vec![response(id, json!({"resources": []}))],
+        "resources/list" => vec![response(id, list_resources().await)],
+        "resources/templates/list" => vec![response(id, json!({"resourceTemplates": []}))],
+        "resources/read" => {
+            let Some(uri) = params["uri"].as_str() else {
+                return vec![error(id, -32602, "缺少 uri")];
+            };
+            match read_resource(uri).await {
+                Ok(result) => vec![response(id, result)],
+                Err((code, message)) => vec![error(id, code, &message)],
+            }
+        }
         "prompts/list" => vec![response(id, json!({"prompts": []}))],
         _ => vec![error(id, -32601, &format!("不支持的方法 {method}"))],
     }
@@ -507,7 +655,7 @@ mod tests {
             "chat.track.read",
             "screen.capture",
         ];
-        let (tools, names) = map_tools(&caps(&kotone));
+        let (tools, names) = map_tools(&caps(&kotone), &BTreeSet::new());
         let expected = [
             "kotone_voice_chat_say",
             "kotone_voice_chat_status",
@@ -534,7 +682,10 @@ mod tests {
     /// 和固定工具重复的读取类工具不列，但按名字照旧能调；没有的名字就是没有。
     #[test]
     fn unlisted_and_unknown_names() {
-        let (tools, names) = map_tools(&caps(&["system.capabilities", "event.read", "x.y"]));
+        let (tools, names) = map_tools(
+            &caps(&["system.capabilities", "event.read", "x.y"]),
+            &BTreeSet::new(),
+        );
         assert_eq!(listed(&tools), ["kotone_x_y"]);
         assert_eq!(
             names.lookup("kotone_event_read"),
@@ -550,7 +701,7 @@ mod tests {
     #[test]
     fn colliding_names_are_never_guessed() {
         for order in [["a_b.c", "a.b_c", "x.y"], ["x.y", "a.b_c", "a_b.c"]] {
-            let (tools, names) = map_tools(&caps(&order));
+            let (tools, names) = map_tools(&caps(&order), &BTreeSet::new());
             assert_eq!(listed(&tools), ["kotone_x_y"], "{order:?}");
             let expected = ["a.b_c".to_string(), "a_b.c".to_string()];
             assert_eq!(
@@ -561,7 +712,10 @@ mod tests {
             assert_eq!(names.lookup("kotone_x_y"), Lookup::Tool("x.y"));
         }
         // 同一个名字列了两遍不算撞名
-        let (tools, names) = map_tools(&caps(&["voice_chat.say", "voice_chat.say"]));
+        let (tools, names) = map_tools(
+            &caps(&["voice_chat.say", "voice_chat.say"]),
+            &BTreeSet::new(),
+        );
         assert_eq!(
             names.lookup("kotone_voice_chat_say"),
             Lookup::Tool("voice_chat.say")
@@ -582,7 +736,7 @@ mod tests {
     /// Kotone 工具算出来和固定工具重名时，固定工具优先，不列第二个同名的。
     #[test]
     fn static_tools_win_over_mapped_names() {
-        let (tools, names) = map_tools(&caps(&["service.status", "call", "y.z"]));
+        let (tools, names) = map_tools(&caps(&["service.status", "call", "y.z"]), &BTreeSet::new());
         assert_eq!(listed(&tools), ["kotone_y_z"]);
         assert_eq!(names.lookup("kotone_service_status"), Lookup::Unknown);
         assert_eq!(names.lookup("kotone_call"), Lookup::Unknown);
@@ -606,5 +760,68 @@ mod tests {
             hint.contains("tools/list") && hint.contains("kotone_call"),
             "{hint}"
         );
+    }
+
+    /// MCP Apps：工具带 `_meta.ui`；`resourceUri` 只在页面真是资源时带（另带旧的扁平键），只给页面的工具标 `["app"]`。
+    #[test]
+    fn tools_carry_mcp_apps_meta() {
+        let caps = vec![
+            json!({"name": "lol.tier", "description": "强度榜", "inputSchema": {"type": "object"},
+                "_meta": {"ui": {"visibility": ["model", "app"], "resourceUri": "ui://kotone/lol/tier"}}}),
+            json!({"name": "lol.scout", "description": "这局", "inputSchema": {"type": "object"},
+                "_meta": {"ui": {"visibility": ["model", "app"], "resourceUri": "ui://kotone/lol/match"}}}),
+            json!({"name": "lol.champions", "description": "英雄列表", "inputSchema": {"type": "object"},
+                "_meta": {"ui": {"visibility": ["app"]}}}),
+            json!({"name": "screen.capture", "description": "截图", "inputSchema": {"type": "object"}}),
+        ];
+        let resources = resource_uris(&[json!({"uri": "ui://kotone/lol/tier", "name": "强度榜"})]);
+        let (tools, _) = map_tools(&caps, &resources);
+        let by = |n: &str| tools.iter().find(|t| t["name"] == n).unwrap().clone();
+        assert_eq!(
+            by("kotone_lol_tier")["_meta"],
+            json!({"ui": {"visibility": ["model", "app"], "resourceUri": "ui://kotone/lol/tier"},
+                "ui/resourceUri": "ui://kotone/lol/tier"})
+        );
+        // 这局还是宿主里的 Svelte 页面：对外不带 resourceUri（外部宿主读不到）
+        assert_eq!(
+            by("kotone_lol_scout")["_meta"],
+            json!({"ui": {"visibility": ["model", "app"]}})
+        );
+        // 只给页面的工具照样列出来，标 ["app"]（宿主不交给模型）
+        assert_eq!(
+            by("kotone_lol_champions")["_meta"]["ui"]["visibility"],
+            json!(["app"])
+        );
+        assert!(by("kotone_screen_capture").get("_meta").is_none());
+    }
+
+    /// 带页面的结果照 MCP Apps 交出：content 只有给模型的字，structuredContent 是页面的数据；别的照旧是信封。
+    #[test]
+    fn page_results_follow_mcp_apps() {
+        let envelope = json!({"ok": true, "tool": "lol.tier", "result": {
+            "content": {"status": "ok", "text": "上单：剑魔 T1"},
+            "structuredContent": {"mode": "rift", "lanes": {}},
+            "_meta": {"ui": {"resourceUri": "ui://kotone/lol/tier", "params": null}}
+        }});
+        let out = mapped_result(&envelope);
+        assert_eq!(out["isError"], false);
+        assert_eq!(
+            out["structuredContent"],
+            json!({"mode": "rift", "lanes": {}})
+        );
+        assert_eq!(out["_meta"]["ui"]["resourceUri"], "ui://kotone/lol/tier");
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("上单：剑魔 T1") && !text.contains("lanes"),
+            "{text}"
+        );
+        // 没有页面的、失败的：整个信封
+        let plain = json!({"ok": true, "tool": "x.y", "result": {"content": {"status": "ok"}}});
+        assert_eq!(mapped_result(&plain)["structuredContent"], plain);
+        let failed = json!({"ok": false, "tool": "lol.tier", "error": {"code": "TIMEOUT"}});
+        assert_eq!(mapped_result(&failed)["isError"], true);
+        let string =
+            json!({"ok": true, "result": {"content": "两句话", "structuredContent": {"a": 1}}});
+        assert_eq!(mapped_result(&string)["content"][0]["text"], "两句话");
     }
 }

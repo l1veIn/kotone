@@ -8,7 +8,9 @@
 //!   插件的 Rust 代码里，和工具的实现放在一起；
 //! - **工具结果** [`ToolResult`]：照 MCP 的 `CallToolResult`：`content` 给她（只有这份进她的上下文），
 //!   `structured_content` 给页面（存进对话记录，聊天卡片用它），`ui` 用哪个页面显示；
-//! - [`Plugin`]：插件实现；[`Host`]：宿主交给插件的本体能力（设置、游戏中心、后台任务……）。
+//! - [`Plugin`]：插件实现；[`Host`]：宿主交给插件的本体能力（设置、游戏中心、后台任务……）；
+//! - **MCP App 资源和素材**（[`resource`] 模块，ADR 039 D5、D6）：清单里的页面可以由插件做成独立的 HTML
+//!   （[`Plugin::resource`]），Kotone 和外部宿主显示同一份；图片这类素材经 [`Plugin::asset`] 取。
 //!
 //! 插件 crate 只依赖这个 crate、`kotone-core` 的纯数据类型和自己的第三方库；可以用系统适配层
 //! （`kotone-platform-windows`）里没有状态的系统调用（音频设备、重采样、打字注入……），不碰 Tauri、桌面端、
@@ -25,6 +27,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 pub use kotone_core::games::{Observation, Phase};
+
+pub mod resource;
+pub use resource::{valid_asset_path, Asset, Csp, Resource, ResourceUi, APP_MIME};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -225,6 +230,41 @@ impl Manifest {
         }
         Ok(())
     }
+
+    /// 清单里的页面（`pages`；不含覆盖层）。
+    pub fn page(&self, uri: &str) -> Option<&PageSpec> {
+        self.pages.iter().find(|p| p.uri == uri)
+    }
+
+    /// 检查插件给的 MCP App 资源（[`Plugin::resource`]，对应规则见 [`resource`] 模块）：地址是清单 `pages` 里的
+    /// （覆盖层不算）、类型是 [`APP_MIME`]、有内容、CSP 声明的每一项都是规范的源（[`resource::normalize_csp_source`]
+    /// 不改它）。
+    pub fn check_resource(&self, resource: &Resource) -> Result<(), String> {
+        if self.page(&resource.uri).is_none() {
+            return Err(format!(
+                "插件 {} 的资源 {} 不是清单 pages 里的页面",
+                self.id, resource.uri
+            ));
+        }
+        if resource.mime_type != APP_MIME || resource.text.trim().is_empty() {
+            return Err(format!(
+                "资源 {} 要是非空的 {APP_MIME}（现在是 {}）",
+                resource.uri, resource.mime_type
+            ));
+        }
+        if let Some(bad) = resource
+            .ui
+            .csp
+            .all()
+            .find(|d| resource::normalize_csp_source(d).as_deref() != Some(d.as_str()))
+        {
+            return Err(format!(
+                "资源 {} 的 CSP 声明 “{bad}” 要写成源（https://example.com）或主机（*.example.com），不能带路径、通配全部或关键字",
+                resource.uri
+            ));
+        }
+        Ok(())
+    }
 }
 
 // ---------- 工具 ----------
@@ -321,6 +361,14 @@ impl ToolSpec {
 
     /// 工具服务 `system.capabilities` 里的一项（外部 Agent、MCP 看到的样子），`plugin` 写明是哪个插件的。
     pub fn service_spec(&self, plugin: &str) -> Value {
+        let mut spec = self.body_service_spec();
+        spec["plugin"] = json!(plugin);
+        spec
+    }
+
+    /// 本体自己用 `ToolSpec` 登记的工具（不属于哪个插件，例如 `game_chat.send`，ADR 039 D2）在工具服务里的样子：
+    /// 和插件的一样，只是没有 `plugin`。
+    pub fn body_service_spec(&self) -> Value {
         let mut ui = Map::new();
         ui.insert("visibility".into(), json!(self.visibility));
         if let Some(page) = &self.page {
@@ -360,14 +408,6 @@ pub struct ToolResult {
     pub content: Value,
     /// 给页面的数据：她那一刻看到的样子，存进对话记录，聊天卡片用它。
     #[serde(skip_serializing_if = "Option::is_none")]
-        let mut spec = self.body_service_spec();
-        spec["plugin"] = json!(plugin);
-        spec
-    }
-
-    /// 本体自己用 `ToolSpec` 登记的工具（不属于哪个插件，例如 `game_chat.send`，ADR 039 D2）在工具服务里的样子：
-    /// 和插件的一样，只是没有 `plugin`。
-    pub fn body_service_spec(&self) -> Value {
     pub structured_content: Option<Value>,
     /// 用哪个页面显示。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -513,6 +553,22 @@ pub trait Plugin: Send + Sync + 'static {
     /// 跟着设置启停的东西（例如游戏语音的转发）在这里对一下。
     fn settings_changed(&self, host: Arc<dyn Host>) {
         let _ = host;
+    }
+
+    /// MCP App 资源：清单 `pages` 里某个页面做成的独立 HTML（对应规则见 [`resource`] 模块）。默认没有：
+    /// 页面还是宿主里的 Svelte 页面。宿主只拿清单 `pages` 里、插件和数据开关都开着的地址来问，给出的资源
+    /// 要过 [`Manifest::check_resource`]。要快（宿主在列资源时也会问）：HTML 一般编进插件里。
+    fn resource(&self, uri: &str) -> Option<Resource> {
+        let _ = uri;
+        None
+    }
+
+    /// 素材（英雄头像、图标……）：App 在 Kotone 里经回环代理的 `/assets/<插件 id>/<path>` 取。`path` 已由宿主
+    /// 检查过（[`valid_asset_path`]），插件关着时宿主不会问。默认没有（代理回 404）。素材不进安装包（ADR 039 D6）：
+    /// 从哪取、磁盘缓存多大由插件自己管。
+    fn asset<'a>(&'a self, host: Arc<dyn Host>, path: &'a str) -> BoxFuture<'a, Option<Asset>> {
+        let _ = (host, path);
+        Box::pin(async { None })
     }
 }
 
@@ -759,6 +815,11 @@ rule = "- 英雄联盟：……"
         assert_eq!(v["_meta"]["ui"]["visibility"], json!(["app"]));
         assert_eq!(v["_meta"]["ui"]["resourceUri"], "ui://kotone/lol/player");
         assert_eq!(v["inputSchema"]["type"], "object");
+        // 本体的工具（ADR 039）：一样的样子，只是没有 plugin
+        let mut body = spec.body_service_spec();
+        assert!(body.get("plugin").is_none());
+        body["plugin"] = json!("lol");
+        assert_eq!(body, v);
 
         let plain = ToolResult::content(json!({"status": "ok"}));
         assert_eq!(
@@ -815,11 +876,6 @@ rule = "- 英雄联盟：……"
             y: -0.1,
             w: 0.2,
             h: 0.1,
-        // 本体的工具（ADR 039）：一样的样子，只是没有 plugin
-        let mut body = spec.body_service_spec();
-        assert!(body.get("plugin").is_none());
-        body["plugin"] = json!("lol");
-        assert_eq!(body, v);
         }
         .rect();
         assert_eq!(off, [0.8, 0.0, 0.2, 0.1], "超出客户区的挪回来");
@@ -837,6 +893,71 @@ rule = "- 英雄联盟：……"
         assert!(m.check_tools(&[say]).is_ok());
         let lol = ToolSpec::new("lol.scout", "", json!({"type": "object"}));
         assert!(m.check_tools(&[lol]).is_err(), "有前缀时只认前缀");
+    }
+
+    /// 资源只能是清单 `pages` 里的页面（覆盖层不算）、类型对、CSP 声明写成源。
+    #[test]
+    fn resources_follow_the_manifest_pages() {
+        let m = Manifest::parse(&format!(
+            "{SAMPLE}\n[[overlays]]\nuri = \"ui://kotone/lol/augment-scores\"\ntitle = \"海克斯评分\"\n"
+        ))
+        .unwrap();
+        assert_eq!(m.page("ui://kotone/lol/match").unwrap().title, "这局");
+        assert!(
+            m.page("ui://kotone/lol/augment-scores").is_none(),
+            "覆盖层不是页面"
+        );
+        let ok = Resource::app("ui://kotone/lol/match", "<!doctype html><html></html>").csp(Csp {
+            resource_domains: vec!["https://raw.communitydragon.org".into()],
+            connect_domains: vec!["wss://*.example.com".into()],
+            ..Csp::default()
+        });
+        assert!(m.check_resource(&ok).is_ok());
+        let overlay = Resource::app("ui://kotone/lol/augment-scores", "<html></html>");
+        assert!(m.check_resource(&overlay).is_err());
+        let other = Resource::app("ui://kotone/music/match", "<html></html>");
+        assert!(m.check_resource(&other).is_err());
+        let mut wrong_type = ok.clone();
+        wrong_type.mime_type = "text/html".into();
+        assert!(m.check_resource(&wrong_type).is_err());
+        let empty = Resource::app("ui://kotone/lol/match", "  ");
+        assert!(m.check_resource(&empty).is_err());
+        for bad in [
+            "*",
+            "https://raw.communitydragon.org/latest/",
+            "'self'",
+            "a.com b.com",
+        ] {
+            let r = ok.clone().csp(Csp {
+                resource_domains: vec![bad.into()],
+                ..Csp::default()
+            });
+            assert!(m.check_resource(&r).is_err(), "{bad}");
+        }
+    }
+
+    /// 插件不写 `resource` 时：页面都不是 App（还是宿主里的 Svelte 页面）。
+    #[test]
+    fn plugins_have_no_apps_by_default() {
+        struct Bare(Manifest);
+        impl Plugin for Bare {
+            fn manifest(&self) -> &Manifest {
+                &self.0
+            }
+            fn tools(&self) -> Vec<ToolSpec> {
+                Vec::new()
+            }
+            fn call<'a>(
+                &'a self,
+                _host: Arc<dyn Host>,
+                _tool: &'a str,
+                _arguments: &'a Value,
+            ) -> BoxFuture<'a, Result<ToolResult, String>> {
+                Box::pin(async { Err("没有工具".to_string()) })
+            }
+        }
+        let plugin = Bare(Manifest::parse(SAMPLE).unwrap());
+        assert!(plugin.resource("ui://kotone/lol/match").is_none());
     }
 
     #[test]

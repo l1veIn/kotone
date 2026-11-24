@@ -87,6 +87,17 @@ pub trait AppHost: Send + Sync {
         let message = format!("{NO_HOST}（{tool}）");
         Box::pin(async move { Err(HostError::Failed(message)) })
     }
+    /// 开着的插件做成 MCP App 的页面（ADR 039 D5）：`resources/list` 的项（`uri`、`name`、`mimeType`、
+    /// `_meta.ui`，`kotone_plugin_api::Resource::listing` 的样子）。列在 `system.capabilities` 的 `resources` 里。
+    fn resources(&self) -> Vec<Value> {
+        Vec::new()
+    }
+    /// 读一个 MCP App 资源：`resources/read` 结果里 `contents` 的一项（`Resource::content`）。
+    /// 没有这个资源（或插件 / 数据开关关着）返回 [`HostError::InvalidArguments`]，服务映射为 `RESOURCE_NOT_FOUND`。
+    fn read_resource(&self, uri: &str) -> HostInvokeFuture<'_> {
+        let message = format!("没有资源 {uri}");
+        Box::pin(async move { Err(HostError::InvalidArguments(message)) })
+    }
 }
 
 /// 没有桌面宿主时（例如纯 CLI 测试）：应用级工具明确不可用。

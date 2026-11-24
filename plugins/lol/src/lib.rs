@@ -7,15 +7,17 @@
 //! - [`pages`]：页面的数据（这局、战绩、单局详情，照 MCP Apps 的 `structuredContent`）；
 //! - [`stats`]：数据开关“用网上的统计”（`stats`）背后的东西：腾讯 101、aramhex-data、外号和名字表，
 //!   以及默认关的 OP.GG（`opgg`）；工具在 `stats_tools.rs`；
-//! - [`watcher`]：后台每 2 秒看一次客户端（进加载界面就查战绩、往游戏中心报阶段和局内的事），以及工具的实现。
+//! - [`watcher`]：后台每 2 秒看一次客户端（进加载界面就查战绩、往游戏中心报阶段和局内的事），以及工具的实现；
+//! - [`app`]：做成 MCP App 的页面（`app/` 里独立的 HTML，ADR 039 D5），Kotone 和外部宿主显示同一份。
 //!
 //! 只依赖插件契约（`kotone-plugin-api`）和 `kotone-core` 的纯数据类型；进程、游戏中心、设置都由宿主给。
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use kotone_plugin_api::{BoxFuture, Host, Manifest, Plugin, ToolResult, ToolSpec};
+use kotone_plugin_api::{BoxFuture, Host, Manifest, Plugin, Resource, ToolResult, ToolSpec};
 use serde_json::Value;
 
+pub mod app;
 pub mod client;
 pub mod control;
 mod overlays;
@@ -75,6 +77,10 @@ impl Plugin for LolPlugin {
 
     fn start(self: Arc<Self>, host: Arc<dyn Host>) {
         self.watch(host);
+    }
+
+    fn resource(&self, uri: &str) -> Option<Resource> {
+        app::resource(uri)
     }
 }
 

@@ -2,6 +2,7 @@
 //! 职责划分见 docs/development.md §5.1；IPC 契约见 §5.3（类型对齐 src/lib/ipc.ts）。
 
 mod agent;
+mod app_proxy;
 mod assistant;
 mod assistant_input;
 mod automation;
@@ -30,6 +31,7 @@ mod ocr_engines;
 mod overlay;
 mod overlay_layer;
 mod overlay_window;
+mod plugin_apps;
 mod plugins;
 mod plugins_cmd;
 mod profiles_cmd;
@@ -264,6 +266,8 @@ pub fn run() {
             app.manage(voice_listen::VoiceListen::default());
             app.manage(key_request::KeyRequests::default());
             app.manage(browser::BrowserRuntime::default());
+            // 插件 MCP App 的回环代理（ADR 039 D5）：每个插件第一次显示 App 时才起
+            app.manage(app_proxy::Proxies::default());
             let assistant_runtime =
                 assistant::initialize(app.handle(), settings.clone(), connections.clone());
 
@@ -544,6 +548,7 @@ pub fn run() {
             agent::agent_subagent_answer,
             plugins_cmd::plugins_list,
             plugins_cmd::plugin_call,
+            plugins_cmd::plugin_app,
             browser_cmd::browser_state,
             browser_cmd::browser_set_bounds,
             browser_cmd::browser_control,

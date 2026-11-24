@@ -110,6 +110,16 @@ impl ToolClient {
         .await
     }
 
+    /// `GET /v1/resources/read?uri=…`：读一个 MCP App 资源（结果 `{contents: [...]}`，ADR 039 D5）。
+    pub async fn read_resource(&self, uri: &str) -> Result<Envelope, ToolError> {
+        let url = format!(
+            "{}?uri={}",
+            self.url(crate::protocol::PATH_RESOURCES_READ),
+            encode_query(uri)
+        );
+        self.send(self.http.get(url), GET_TIMEOUT).await
+    }
+
     fn url(&self, path: &str) -> String {
         format!("{}{path}", self.base_url)
     }
@@ -169,6 +179,19 @@ impl ToolClient {
         }
         Ok(envelope)
     }
+}
+
+/// 查询串里的一个值：字母数字和 `-_.~` 以外的字节都写成 `%XX`。
+fn encode_query(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 fn transport_error(error: reqwest::Error) -> ToolError {

@@ -59,6 +59,7 @@ kotone-cli config set toolService.ocr.deepseekConnectionId <连接ID>
 | `GET /v1/status` | 实例、服务、ASR 相位、捕获后端、产物占用 |
 | `POST /v1/tools/call` | 调用工具 |
 | `GET /v1/events` | 读取事件（与 `event.read` 相同；查询参数 `cursor` / `from` / `types`（逗号分隔）/ `limit` / `waitMs`），长轮询不占执行名额 |
+| `GET /v1/resources/read?uri=` | 读一个 MCP App 资源（插件做成独立 HTML 的页面，ADR 039 D5）：结果是 MCP `resources/read` 的样子 `{contents: [{uri, mimeType: "text/html;profile=mcp-app", text, _meta.ui}]}`；有哪些在 capabilities 的 `resources` 里（插件或页面要的数据开关关着时不列）。`kotone.exe mcp` 的 `resources/list` / `resources/read` 走这里 |
 
 请求体（`Content-Type: application/json`，不超过 64 KiB，不接受额外字段）：
 
@@ -112,7 +113,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | 产物 | `ARTIFACT_NOT_FOUND`（从未发放）`ARTIFACT_EXPIRED`（`details.reason` 为 `ttl` 或 `evicted`）`ARTIFACT_RELEASED` |
 | OCR | `OCR_BACKEND_NOT_FOUND` `OCR_BACKEND_NOT_READY`（`details.reason`：`not-installed` / `invalid` / `runtime-unavailable` / `not-configured` / `credentials-missing` / `credentials-error`）`OCR_LANGUAGE_UNSUPPORTED` `OCR_OPTION_UNSUPPORTED` `OCR_FAILED`（本地推理失败）`OCR_REMOTE_ERROR`†（远端 HTTP 错误或 HTTP 200 内的 `error` 对象；`details.httpStatus/errorType`）`OCR_TRANSPORT_ERROR`*（连接/读取失败）`OCR_RESPONSE_INVALID` `OCR_RESULT_NOT_FOUND` `OCR_RESULT_EXPIRED` |
 | 聊天跟踪 | `CHAT_TRACK_SESSION_NOT_FOUND`（`details.reason`：`unknown` / `expired`）`CHAT_TRACK_GENERATION_MISMATCH` `CHAT_TRACK_OUT_OF_ORDER` `CHAT_TRACK_SOURCE_CHANGED` `CHAT_TRACK_CURSOR_INVALID` `CHAT_TRACK_CURSOR_STALE` `CHAT_TRACK_CURSOR_EXPIRED` |
-| 事件 / 用户请求 / 宿主 | `EVENT_CURSOR_INVALID` `EVENT_CURSOR_STALE`（实例重启或事件已被淘汰）`EVENT_CURSOR_EXPIRED` `AGENT_REQUEST_NOT_FOUND` `AGENT_REQUEST_EXPIRED` `AGENT_REQUEST_CLAIMED`（`details.claimedBy`）`HOST_ACTION_FAILED`（桌面端执行失败，或本实例没有桌面宿主） |
+| 事件 / 用户请求 / 宿主 | `EVENT_CURSOR_INVALID` `EVENT_CURSOR_STALE`（实例重启或事件已被淘汰）`EVENT_CURSOR_EXPIRED` `AGENT_REQUEST_NOT_FOUND` `AGENT_REQUEST_EXPIRED` `AGENT_REQUEST_CLAIMED`（`details.claimedBy`）`HOST_ACTION_FAILED`（桌面端执行失败，或本实例没有桌面宿主） `RESOURCE_NOT_FOUND`（`GET /v1/resources/read`：没有这个资源，或插件 / 数据开关关着） |
 | 客户端发现 | `SERVICE_NOT_RUNNING` `DESCRIPTOR_INSECURE` `DESCRIPTOR_INVALID` `STALE_DESCRIPTOR` `SERVICE_UNREACHABLE`* `INSTANCE_MISMATCH` `TRANSPORT_ERROR`* `RESPONSE_INVALID` |
 
 带 * 的码 `retryable=true`；† 的 `retryable` 按远端情况逐次给出（429/500/503/504/408 与“服务暂时不可用”为 true；余额不足、文件无法处理、识别超时等为 false）。网络/连接错误不会被包装成“图像没看清”；全黑图也不等于“已经看懂聊天”；OCR 技术失败是错误，不是“没有文字”。
@@ -232,7 +233,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | 英雄联盟（数据开关 `control` 操作客户端，**默认关**，要 `client` 也开着） | `lol.client` | `action`：`accept` / `decline` / `pick` / `ban` / `hover`；`champion` | 照 LeagueAkari 经客户端的本机接口接受 / 拒绝对局、选（并锁定）/ 禁 / 亮出英雄。副作用 `controls-game-client`（她默认先问玩家）。有封号风险（LeagueAkari #523） |
 | | `lol.champions`（只给页面） | 无 | 全部英雄的 id 和名字（设置里排自动选 / 禁的顺序） |
 
-**打开页面**：`ui.open {page, params?}` 在 Kotone 窗口里打开一个页面：插件的页面（上面各工具的 `resourceUri`，例如 `ui://kotone/lol/player` 带 `{puuid}`）在聊天旁边的右侧栏；`ui://kotone/settings/<分页>`（call、reply、permissions、usage、models、connections、sound、tuning、appearance、system、browser、plugins）打开设置页。不会把窗口拉到前面。页面不存在、插件或它要的数据开关关着时报 `INVALID_ARGUMENTS`。
+**打开页面**：`ui.open {page, params?}` 在 Kotone 窗口里打开一个页面：插件的页面（上面各工具的 `resourceUri`，例如 `ui://kotone/lol/player` 带 `{puuid}`）在聊天旁边的右侧栏；`ui://kotone/settings/<分页>`（models、connections、sound、tuning、appearance、system、browser）打开设置页；`plugins` 打开左侧栏的「插件」；`call`、`reply`、`permissions`、`usage` 打开角色页的唤醒、交互、权限、用量（2026-11-25 从设置搬过去，地址没变）。不会把窗口拉到前面。页面不存在、插件或它要的数据开关关着时报 `INVALID_ARGUMENTS`。
 
 ### Kotone 陪玩（委托桌面宿主，2026-11-15）
 

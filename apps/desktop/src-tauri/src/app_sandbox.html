@@ -1,0 +1,77 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Kotone App</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        width: 100%;
+        overflow: hidden;
+        background: transparent;
+      }
+      iframe {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border: 0;
+        background: transparent;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      // MCP Apps 规范 2026-01-26 的“沙盒代理”（Sandbox proxy）：Kotone 主窗口（宿主）↔ 这一页（回环代理的源，
+      // 每个插件一个）↔ 里层 iframe（App）。照 ext-apps 的 examples/basic-host/src/sandbox.ts（MIT）和 goose 的
+      // mcp_app_proxy.html（Apache-2.0）改写，见 THIRD_PARTY_NOTICES.md。
+      // - 发 ui/notifications/sandbox-proxy-ready；收到宿主的 ui/notifications/sandbox-resource-ready 才放 App。
+      // - App 从同一个代理的 /app/ 地址加载（和 resources/read 是同一份 HTML），CSP 在那个响应的 HTTP 头里，由 Kotone
+      //   按资源的 _meta.ui.csp 拼好（改不了）；所以消息里的 html / csp / sandbox / permissions 不用。
+      // - 别的消息原样转：宿主的只转给 App，App 的只转给宿主（宿主的源从它的第一条消息记下，之后只认它）；
+      //   ui/notifications/sandbox-* 不往里转。这一页自己不发请求（规范第 7 条）。
+      (function () {
+        "use strict";
+        if (window.self === window.top) return;
+        var match = /^(\/[0-9a-f]+)\/sandbox\/([a-z0-9-]+)\/([a-z0-9-]+)$/.exec(location.pathname);
+        if (!match) return;
+        var VIEW = match[1] + "/app/" + match[2] + "/" + match[3];
+        var PREFIX = "ui/notifications/sandbox-";
+        var inner = null;
+        var host = null;
+
+        function load() {
+          if (inner) return;
+          inner = document.createElement("iframe");
+          inner.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms");
+          inner.setAttribute("referrerpolicy", "no-referrer");
+          inner.title = "App";
+          inner.src = VIEW;
+          document.body.appendChild(inner);
+        }
+
+        window.addEventListener("message", function (event) {
+          var data = event.data;
+          if (!data || typeof data !== "object") return;
+          if (event.source === window.parent) {
+            if (host === null) host = event.origin;
+            if (event.origin !== host) return;
+            if (typeof data.method === "string" && data.method.indexOf(PREFIX) === 0) {
+              if (data.method === PREFIX + "resource-ready") load();
+              return;
+            }
+            if (inner && inner.contentWindow) inner.contentWindow.postMessage(data, location.origin);
+          } else if (inner && event.source === inner.contentWindow) {
+            if (event.origin !== location.origin || host === null) return;
+            window.parent.postMessage(data, host);
+          }
+        });
+
+        window.parent.postMessage({ jsonrpc: "2.0", method: PREFIX + "proxy-ready", params: {} }, "*");
+      })();
+    </script>
+  </body>
+</html>

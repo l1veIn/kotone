@@ -1,5 +1,7 @@
 packages:
   - "apps/*"
+  # 插件的 MCP App（ADR 039 D5）：独立打包成单个 HTML，由插件的 build.rs 编进去
+  - "plugins/*/app"
 
 # pnpm 10+ 配置统一放在 pnpm-workspace.yaml（package.json 的 pnpm 字段已弃用）
 onlyBuiltDependencies:

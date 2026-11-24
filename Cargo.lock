@@ -2920,6 +2920,9 @@ version = "0.2.0-rc.7"
 dependencies = [
  "bzip2",
  "dirs",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "kotone-agent",
  "kotone-ai",
  "kotone-cli",

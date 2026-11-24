@@ -52,6 +52,10 @@ use crate::tracking::{
 mod app;
 pub use app::EventReadArgs;
 
+/// MCP App 资源（ADR 039 D5）：capabilities 里的 `resources`、`GET /v1/resources/read`。
+#[path = "service_resources.rs"]
+mod resources;
+
 /// 读取 ASR 运行时相位（stopped/starting/running/stopping）。工具服务不依赖它。
 pub type AsrPhaseProvider = Arc<dyn Fn() -> String + Send + Sync>;
 
@@ -824,6 +828,7 @@ impl ToolService {
                 format!("GET {PATH_STATUS}"),
                 format!("POST {PATH_TOOLS_CALL}"),
                 format!("GET {}", crate::protocol::PATH_EVENTS),
+                format!("GET {}", crate::protocol::PATH_RESOURCES_READ),
             ],
             "capture": {
                 "method": capture.method,
@@ -845,6 +850,7 @@ impl ToolService {
                 "fallback": "none",
             },
             "tools": self.tool_specs(&readiness),
+            "resources": self.resources(),
         })
     }
 

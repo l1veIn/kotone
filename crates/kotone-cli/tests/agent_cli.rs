@@ -247,8 +247,9 @@ impl Mcp {
             if msg["id"] == json!(id) {
                 return msg;
             }
-            assert_eq!(
-                msg["method"], "notifications/tools/list_changed",
+            assert!(
+                msg["method"] == "notifications/tools/list_changed"
+                    || msg["method"] == "notifications/resources/list_changed",
                 "意外消息 {msg}"
             );
         }
@@ -326,7 +327,7 @@ async fn mcp_server_exposes_kotone_tools_and_the_reverse_channel() {
         let claim = mcp.call("kotone_agent_request_claim", json!({"requestId": id, "consumer": "mcp-test"}));
         let reply = mcp.call("kotone_agent_reply", json!({"requestId": id, "text": "他说他去中路", "outputs": ["danmaku"]}));
         let generic = mcp.call("kotone_call", json!({"tool": "agent.requests", "arguments": {"status": "replied"}}));
-        let unknown = mcp.request("resources/templates/list", json!({}));
+        let unknown = mcp.request("completion/complete", json!({}));
         drop(mcp.stdin);
         let _ = mcp.child.wait();
         (tools, events, claim, reply, generic, unknown)
@@ -471,5 +472,114 @@ async fn mcp_maps_underscored_plugin_tool_names_back() {
         .unwrap()
         .contains("kotone_voice_chat_nope"));
     assert!(unknown.0["hint"].as_str().unwrap().contains("tools/list"));
+    drop(running);
+}
+
+/// MCP Apps（ADR 039 D5）：initialize 声明 resources 和 `io.modelcontextprotocol/ui`；resources/list、resources/read
+/// 经工具服务读到插件的 App 页面；工具带 `_meta.ui`（resourceUri 只给真是资源的页面）；带页面的结果照规范交出。
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_serves_app_resources_and_page_results() {
+    let temp = tempfile::tempdir().unwrap();
+    let run_dir = temp.path().join("run");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let (running, host) = start(&run_dir).await;
+    let spec = |name: &str, ui: Value| {
+        json!({
+            "name": name, "version": 1, "status": "implemented", "description": format!("{name} 的说明"),
+            "sideEffects": [], "dataEgress": "none", "ready": true, "notReadyReason": null,
+            "inputSchema": {"type": "object", "properties": {}}, "outputSchema": {"type": "object"},
+            "plugin": "lol", "untrustedResult": true, "_meta": {"ui": ui}
+        })
+    };
+    host.set_plugin_tools(vec![
+        spec(
+            "lol.tier",
+            json!({"visibility": ["model", "app"], "resourceUri": "ui://kotone/lol/tier"}),
+        ),
+        spec(
+            "lol.scout",
+            json!({"visibility": ["model", "app"], "resourceUri": "ui://kotone/lol/match"}),
+        ),
+        spec("lol.champions", json!({"visibility": ["app"]})),
+    ]);
+    let meta = json!({"ui": {"csp": {"resourceDomains": ["https://raw.communitydragon.org"]}, "prefersBorder": false}});
+    let html = "<!doctype html><html><head><meta name=\"kotone:page\" content=\"tier\"></head><body></body></html>";
+    host.set_resources(vec![(
+        json!({"uri": "ui://kotone/lol/tier", "name": "强度榜", "mimeType": "text/html;profile=mcp-app", "_meta": meta}),
+        json!({"uri": "ui://kotone/lol/tier", "mimeType": "text/html;profile=mcp-app", "text": html, "_meta": meta}),
+    )]);
+    host.set_invoke_result(
+        "lol.tier",
+        Ok(json!({
+            "content": {"status": "ok", "text": "上单：剑魔 T1"},
+            "structuredContent": {"mode": "rift", "lanes": {"top": []}},
+            "_meta": {"ui": {"resourceUri": "ui://kotone/lol/tier", "params": null}}
+        })),
+    );
+    let (rd, h) = (run_dir.clone(), home.clone());
+    let outcome = tokio::task::spawn_blocking(move || {
+        let mut mcp = Mcp::start(&rd, &h);
+        let init = mcp.request("initialize", json!({"protocolVersion": "2025-06-18", "capabilities": {"extensions": {"io.modelcontextprotocol/ui": {"mimeTypes": ["text/html;profile=mcp-app"]}}}, "clientInfo": {"name": "test", "version": "1"}}));
+        let list = mcp.request("resources/list", json!({}));
+        let templates = mcp.request("resources/templates/list", json!({}));
+        let read = mcp.request("resources/read", json!({"uri": "ui://kotone/lol/tier"}));
+        let missing = mcp.request("resources/read", json!({"uri": "ui://kotone/lol/match"}));
+        let tools = mcp.request("tools/list", json!({}));
+        let tier = mcp.request("tools/call", json!({"name": "kotone_lol_tier", "arguments": {}}));
+        drop(mcp.stdin);
+        let _ = mcp.child.wait();
+        (init, list, templates, read, missing, tools, tier)
+    })
+    .await
+    .unwrap();
+    let (init, list, templates, read, missing, tools, tier) = outcome;
+    let caps = &init["result"]["capabilities"];
+    assert_eq!(caps["resources"]["listChanged"], true);
+    assert_eq!(
+        caps["extensions"]["io.modelcontextprotocol/ui"]["mimeTypes"],
+        json!(["text/html;profile=mcp-app"])
+    );
+    assert_eq!(
+        list["result"]["resources"][0]["uri"],
+        "ui://kotone/lol/tier"
+    );
+    assert_eq!(
+        list["result"]["resources"][0]["mimeType"],
+        "text/html;profile=mcp-app"
+    );
+    assert_eq!(templates["result"]["resourceTemplates"], json!([]));
+    let content = &read["result"]["contents"][0];
+    assert_eq!(content["text"], html);
+    assert_eq!(content["_meta"], meta);
+    assert_eq!(missing["error"]["code"], -32002);
+    let listed = tools["result"]["tools"].as_array().unwrap();
+    let by = |n: &str| listed.iter().find(|t| t["name"] == n).unwrap().clone();
+    assert_eq!(
+        by("kotone_lol_tier")["_meta"]["ui"]["resourceUri"],
+        "ui://kotone/lol/tier"
+    );
+    assert_eq!(
+        by("kotone_lol_tier")["_meta"]["ui/resourceUri"],
+        "ui://kotone/lol/tier"
+    );
+    assert!(by("kotone_lol_scout")["_meta"]["ui"]
+        .get("resourceUri")
+        .is_none());
+    assert_eq!(
+        by("kotone_lol_champions")["_meta"]["ui"]["visibility"],
+        json!(["app"])
+    );
+    let result = &tier["result"];
+    assert_eq!(result["isError"], false);
+    assert_eq!(
+        result["structuredContent"],
+        json!({"mode": "rift", "lanes": {"top": []}})
+    );
+    assert_eq!(result["_meta"]["ui"]["resourceUri"], "ui://kotone/lol/tier");
+    assert!(result["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("剑魔"));
     drop(running);
 }

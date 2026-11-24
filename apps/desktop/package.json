@@ -9,10 +9,12 @@
     "build": "tauri build",
     "dev:web": "vite dev",
     "build:web": "vite build",
+    "build:apps": "pnpm -C ../../plugins/lol/app build",
+    "check:apps": "pnpm -C ../../plugins/lol/app check",
     "test:e2e": "playwright test",
     "tauri": "tauri",
     "i18n": "paraglide-js compile --project ./project.inlang --outdir ./src/lib/paraglide --strategy localStorage baseLocale --output-structure locale-modules --silent",
-    "check": "pnpm i18n && svelte-check --tsconfig ./tsconfig.json"
+    "check": "pnpm i18n && svelte-check --tsconfig ./tsconfig.json && pnpm check:apps"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

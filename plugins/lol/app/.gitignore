@@ -1,0 +1,3 @@
+# 打包产物：build.rs 编进插件，不进 git（没打包时编占位页）
+dist/
+node_modules/

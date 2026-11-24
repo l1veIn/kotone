@@ -676,3 +676,56 @@ async fn plugin_tools_are_listed_and_go_through_the_host() {
     let error = h.err("lol.scout", json!({})).await;
     assert_eq!(error.code.as_str(), "TOOL_NOT_FOUND");
 }
+
+/// ADR 039 D5：开着的插件做成 MCP App 的页面列在 capabilities 的 `resources` 里，
+/// `GET /v1/resources/read?uri=` 经宿主读到 MCP `resources/read` 的样子；没有的是 `RESOURCE_NOT_FOUND`。
+#[tokio::test(flavor = "multi_thread")]
+async fn app_resources_are_listed_and_read_through_the_host() {
+    let h = H::new(ServiceLimits::default()).await;
+    let caps = h.running.service().capabilities();
+    assert_eq!(caps["resources"], json!([]));
+    assert!(caps["endpoints"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("GET /v1/resources/read")));
+    let listing = json!({
+        "uri": "ui://kotone/lol/tier", "name": "强度榜", "mimeType": "text/html;profile=mcp-app",
+        "_meta": {"ui": {"csp": {"resourceDomains": ["https://raw.communitydragon.org"]}}}
+    });
+    let content = json!({
+        "uri": "ui://kotone/lol/tier", "mimeType": "text/html;profile=mcp-app",
+        "text": "<!doctype html><html><head></head><body>强度榜</body></html>",
+        "_meta": {"ui": {"csp": {"resourceDomains": ["https://raw.communitydragon.org"]}}}
+    });
+    h.host
+        .set_resources(vec![(listing.clone(), content.clone())]);
+    let caps = h.running.service().capabilities();
+    assert_eq!(caps["resources"], json!([listing]));
+
+    let env = h
+        .client
+        .read_resource("ui://kotone/lol/tier")
+        .await
+        .unwrap();
+    assert!(env.ok, "{:?}", env.error);
+    assert_eq!(env.result.unwrap(), json!({"contents": [content]}));
+
+    let env = h
+        .client
+        .read_resource("ui://kotone/lol/match")
+        .await
+        .unwrap();
+    assert!(!env.ok);
+    assert_eq!(env.error.unwrap().code, "RESOURCE_NOT_FOUND");
+    let env = h.client.read_resource("https://example.com").await.unwrap();
+    assert_eq!(env.error.unwrap().code, "INVALID_ARGUMENTS");
+
+    // 插件关了（宿主不再列）：读不到
+    h.host.set_resources(Vec::new());
+    let env = h
+        .client
+        .read_resource("ui://kotone/lol/tier")
+        .await
+        .unwrap();
+    assert_eq!(env.error.unwrap().code, "RESOURCE_NOT_FOUND");
+}

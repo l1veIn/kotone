@@ -254,6 +254,27 @@ impl AppHost for DesktopHost {
         let tool = tool.to_string();
         Box::pin(async move { crate::tool_config::invoke(&self.app, &tool, args).await })
     }
+
+    /// 插件做成 MCP App 的页面（ADR 039 D5，`plugin_apps.rs`）：`kotone.exe mcp` 的 `resources/list`。
+    fn resources(&self) -> Vec<Value> {
+        let Some(state) = self.app.try_state::<crate::SharedState>() else {
+            return Vec::new();
+        };
+        let settings = state.settings.read().unwrap().clone();
+        crate::plugin_apps::list(&settings)
+    }
+
+    /// `resources/read`：没有、关着、还不是 App 都算“没有这个资源”。
+    fn read_resource(&self, uri: &str) -> HostInvokeFuture<'_> {
+        let read = match self.app.try_state::<crate::SharedState>() {
+            Some(state) => {
+                let settings = state.settings.read().unwrap().clone();
+                crate::plugin_apps::read(&settings, uri).map(|r| r.content())
+            }
+            None => Err("Kotone 还没准备好".to_string()),
+        };
+        Box::pin(async move { read.map_err(kotone_tools::host::HostError::InvalidArguments) })
+    }
 }
 
 /// 工具服务里由宿主执行、用 ToolSpec 登记的工具（调用经 `invoke` 到 `tool_config`）：本体的

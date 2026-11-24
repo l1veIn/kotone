@@ -56,6 +56,10 @@ tauri-plugin-process = "2"
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+# 插件 MCP App 的回环代理（app_proxy.rs，ADR 039 D5）：和工具服务同一套 HTTP 库（版本已在工作区锁文件里）
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
 # 进程资源占用（CPU/内存），供设置页实时展示
 sysinfo = "0.30"
 # 脱敏诊断包 ZIP（版本已由 updater 间接锁定，显式依赖以供壳侧写包）

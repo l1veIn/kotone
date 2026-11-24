@@ -60,7 +60,7 @@ impl EventReadArgs {
     }
 }
 
-fn percent_decode(s: &str) -> Result<String, String> {
+pub(super) fn percent_decode(s: &str) -> Result<String, String> {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;

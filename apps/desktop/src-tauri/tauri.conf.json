@@ -4,9 +4,9 @@
   "version": "0.2.0-rc.7",
   "identifier": "com.l1vein.kotone",
   "build": {
-    "beforeDevCommand": "pnpm dev:web",
+    "beforeDevCommand": "pnpm build:apps && pnpm dev:web",
     "devUrl": "http://localhost:17420",
-    "beforeBuildCommand": "pnpm build:web",
+    "beforeBuildCommand": "pnpm build:apps && pnpm build:web",
     "frontendDist": "../dist"
   },
   "app": {
@@ -92,7 +92,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: https://asset.localhost https://*.music.126.net"
+      "csp": "default-src 'self'; connect-src 'self' http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: https://asset.localhost https://*.music.126.net; frame-src http://127.0.0.1:*"
     }
   },
   "bundle": {

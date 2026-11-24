@@ -1088,7 +1088,7 @@ pub fn capabilities_schema() -> Value {
         "type": "object",
         "required": [
             "protocol", "protocolVersion", "instanceId", "appVersion", "platform",
-            "endpoints", "capture", "limits", "ocr", "tools"
+            "endpoints", "capture", "limits", "ocr", "tools", "resources"
         ],
         "additionalProperties": false,
         "properties": {
@@ -1144,6 +1144,17 @@ pub fn capabilities_schema() -> Value {
                     "notReadyReason": {"type": nullable("string")},
                     "inputSchema": {"type": "object"},
                     "outputSchema": {"type": "object"}
+                }
+            }},
+            // 开着的插件做成 MCP App 的页面（ADR 039 D5；MCP `resources/list` 的项），用 GET /v1/resources/read 读
+            "resources": {"type": "array", "items": {
+                "type": "object",
+                "required": ["uri", "name", "mimeType"],
+                "properties": {
+                    "uri": {"type": "string"},
+                    "name": {"type": "string"},
+                    "mimeType": {"type": "string"},
+                    "_meta": {"type": "object"}
                 }
             }}
         }

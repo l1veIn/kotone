@@ -755,6 +755,8 @@ pub struct FakeAppHost {
     invocations: Mutex<Vec<(String, Value)>>,
     invoke_results: Mutex<std::collections::HashMap<String, Result<Value, crate::host::HostError>>>,
     plugin_tools: Mutex<Vec<Value>>,
+    /// MCP App 资源：`resources/list` 的项和读到的内容（按 uri）。
+    resources: Mutex<Vec<(Value, Value)>>,
 }
 
 impl FakeAppHost {
@@ -764,6 +766,10 @@ impl FakeAppHost {
     /// 开着的插件的工具（`AppHost::plugin_tools`）。
     pub fn set_plugin_tools(&self, specs: Vec<Value>) {
         *self.plugin_tools.lock().unwrap() = specs;
+    }
+    /// 开着的插件的 MCP App 资源（`AppHost::resources` / `read_resource`）：(列表的一项, 读到的 contents 一项)。
+    pub fn set_resources(&self, resources: Vec<(Value, Value)>) {
+        *self.resources.lock().unwrap() = resources;
     }
     pub fn set_delay(&self, delay: Duration) {
         *self.delay.lock().unwrap() = delay;
@@ -873,6 +879,28 @@ impl crate::host::AppHost for FakeAppHost {
     }
     fn plugin_tools(&self) -> Vec<Value> {
         self.plugin_tools.lock().unwrap().clone()
+    }
+    fn resources(&self) -> Vec<Value> {
+        let resources = self.resources.lock().unwrap();
+        resources
+            .iter()
+            .map(|(listing, _)| listing.clone())
+            .collect()
+    }
+    fn read_resource(&self, uri: &str) -> crate::host::HostInvokeFuture<'_> {
+        let found = self
+            .resources
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(listing, _)| listing["uri"] == uri)
+            .map(|(_, content)| content.clone());
+        let uri = uri.to_string();
+        Box::pin(async move {
+            found.ok_or(crate::host::HostError::InvalidArguments(format!(
+                "没有资源 {uri}"
+            )))
+        })
     }
     fn invoke(&self, tool: &str, args: Value) -> crate::host::HostInvokeFuture<'_> {
         let tool = tool.to_string();

@@ -1,0 +1,60 @@
+/* 先朴素：之后照 docs/design/lol-app.md 的颜色和字体整个重做。亮色 / 暗色跟宿主（hostContext.theme →
+   <html data-theme>），宿主没给就跟系统。 */
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --text: #1c1d21;
+  --muted: #6b6f7a;
+  --line: #e3e5ea;
+  --surface: #ffffff;
+  --surface-2: #f2f3f6;
+  --accent: #2f6fdb;
+  --accent-soft: rgba(47, 111, 219, 0.12);
+  --hot: #c8372d;
+  --hot-soft: rgba(200, 55, 45, 0.12);
+  --good: #1f8a4c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #16171b;
+    --text: #e9eaee;
+    --muted: #9a9eaa;
+    --line: #2b2d34;
+    --surface: #1d1f24;
+    --surface-2: #26282f;
+    --accent: #7aa7ff;
+    --accent-soft: rgba(122, 167, 255, 0.16);
+    --hot: #ff7a6e;
+    --hot-soft: rgba(255, 122, 110, 0.16);
+    --good: #5ccf8d;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #16171b;
+  --text: #e9eaee;
+  --muted: #9a9eaa;
+  --line: #2b2d34;
+  --surface: #1d1f24;
+  --surface-2: #26282f;
+  --accent: #7aa7ff;
+  --accent-soft: rgba(122, 167, 255, 0.16);
+  --hot: #ff7a6e;
+  --hot-soft: rgba(255, 122, 110, 0.16);
+  --good: #5ccf8d;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 system-ui, "Segoe UI", "Microsoft YaHei UI", sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
