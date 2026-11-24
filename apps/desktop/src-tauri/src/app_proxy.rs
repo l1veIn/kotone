@@ -47,8 +47,11 @@ const ASSET_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
 pub trait Source: Send + Sync + 'static {
     /// 插件 id。
     fn plugin(&self) -> &str;
-    /// `ui://kotone/<插件>/<page>` 的资源；插件关着、页面不是 App 时给错误（代理回 404）。
-    fn resource(&self, page: &str) -> Result<Resource, String>;
+    /// 一个页面的资源；插件关着、页面不是 App 时给错误（代理回 404）。`page`：内置插件是
+    /// `ui://kotone/<插件>/<page>` 的最后一段；第三方插件（MCP 方案第 2 期）是 `ui://` 地址的
+    /// `kotone_remote_plugin::page_slug`（别人的地址什么字都可能有，路径里只放这一段）。第三方的要经服务器的
+    /// `resources/read` 取，所以是异步的。
+    fn resource(&self, page: &str) -> BoxFuture<'static, Result<Resource, String>>;
     /// 素材（路径已检查过）；没有给 `None`（代理回 404）。
     fn asset(&self, path: String) -> BoxFuture<'static, Option<Asset>>;
 }
@@ -268,7 +271,7 @@ impl Context {
                 Bytes::from_static(SANDBOX_HTML.as_bytes()),
                 &[(CONTENT_SECURITY_POLICY, SANDBOX_CSP.to_string())],
             ),
-            "app" if valid_page(rest) => match self.source.resource(rest) {
+            "app" if valid_page(rest) => match self.source.resource(rest).await {
                 Ok(resource) => {
                     let assets = format!(
                         "http://127.0.0.1:{}/{}/assets/{plugin}/",
@@ -325,14 +328,16 @@ mod tests {
         fn plugin(&self) -> &str {
             "lol"
         }
-        fn resource(&self, page: &str) -> Result<Resource, String> {
-            if page != "tier" {
-                return Err("不是 App".into());
-            }
-            Ok(Resource::app("ui://kotone/lol/tier", HTML).csp(Csp {
-                resource_domains: vec!["https://raw.communitydragon.org".into()],
-                ..Csp::default()
-            }))
+        fn resource(&self, page: &str) -> BoxFuture<'static, Result<Resource, String>> {
+            let resource = if page != "tier" {
+                Err("不是 App".into())
+            } else {
+                Ok(Resource::app("ui://kotone/lol/tier", HTML).csp(Csp {
+                    resource_domains: vec!["https://raw.communitydragon.org".into()],
+                    ..Csp::default()
+                }))
+            };
+            Box::pin(async move { resource })
         }
         fn asset(&self, path: String) -> BoxFuture<'static, Option<Asset>> {
             self.asset_calls.fetch_add(1, Ordering::SeqCst);

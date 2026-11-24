@@ -95,6 +95,14 @@ impl ToolCallResult {
 pub struct ServerInfo {
     pub name: String,
     pub version: String,
+    /// 给人看的名字（`serverInfo.title`，2025-06-18 起）。
+    pub title: Option<String>,
+    /// 一句话说明（`serverInfo.description`，2025-11-25 起）。
+    pub description: Option<String>,
+    /// 图标（`serverInfo.icons`，2025-11-25 起）：协议原样的 `{src, mimeType?, sizes?, theme?}`。
+    pub icons: Vec<Value>,
+    /// 主页（`serverInfo.websiteUrl`）。
+    pub website_url: Option<String>,
     /// 服务器给模型的说明（`instructions`）。
     pub instructions: Option<String>,
     /// 谈好的协议版本（例如 `2025-11-25`）。

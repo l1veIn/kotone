@@ -25,6 +25,7 @@ mod games;
 mod history_cmd;
 mod hotkey;
 mod key_request;
+mod mcp_servers_cmd;
 mod message_popup;
 mod model_catalog;
 mod models_cmd;
@@ -37,6 +38,7 @@ mod plugins;
 mod plugins_cmd;
 mod profiles_cmd;
 mod recap;
+mod remote_plugins;
 mod roles;
 mod runtime;
 mod runtime_cmd;
@@ -139,9 +141,7 @@ pub fn run() {
                     return;
                 }
                 if let Some(win) = app.get_webview_window("main") {
-                    let _ = win.show();
-                    let _ = win.unminimize();
-                    let _ = win.set_focus();
+                    show_and_focus(&win);
                 }
                 // 测试时常从已在托盘运行的实例再次执行
                 // `kotone.exe --onboarding=always`。第二实例不会进入 setup，
@@ -403,12 +403,12 @@ pub fn run() {
             // 启动即显示设置窗口：全部窗口默认隐藏时，应用看起来像「没起来」。
             // 托盘常驻语义不变——关闭此窗口只是隐藏，进程仍在托盘。
             // 自动提权重启的场合此分支在提权子进程中执行，同样弹窗，符合预期。
-            // `--background`（Agent 启动）只驻留托盘，不显示窗口、不抢焦点
+            // `--background`（Agent 启动、开机自启）只驻留托盘，不显示窗口、不抢焦点：
+            // 设置窗口建的时候就不要焦点（`focus: false`），这里也不显示它。
             let background = app.state::<StartupOptions>().background;
             if !background {
                 if let Some(win) = app.get_webview_window("main") {
-                    let _ = win.show();
-                    let _ = win.set_focus();
+                    show_and_focus(&win);
                 }
             }
 
@@ -500,12 +500,12 @@ pub fn run() {
             wake::wake_status,
             bubble::bubble_snapshot,
             bubble::bubble_preview,
-            wake::wake_download_model,
-            speech_models::cancel_speech_model_download,
-            automation::automation_runs,
             message_popup::message_popup_current,
             message_popup::message_popup_close,
             message_popup::message_popup_open,
+            wake::wake_download_model,
+            speech_models::cancel_speech_model_download,
+            automation::automation_runs,
             automation::automation_saved_list,
             games::game_state,
             automation::automation_get,
@@ -550,18 +550,26 @@ pub fn run() {
             agent::agent_subagent_stop,
             agent::agent_subagent_continue,
             agent::agent_subagent_answer,
+            agent::agent_held_cards,
+            agent::auto_card_open,
             plugins_cmd::plugins_list,
             plugins_cmd::plugin_call,
             plugins_cmd::plugin_app,
-            agent::agent_held_cards,
-            agent::auto_card_open,
+            plugins_cmd::plugin_resource,
+            mcp_servers_cmd::mcp_servers_preview,
+            mcp_servers_cmd::mcp_servers_import_sources,
+            mcp_servers_cmd::mcp_server_add,
+            mcp_servers_cmd::mcp_server_remove,
+            mcp_servers_cmd::mcp_server_trust,
+            mcp_servers_cmd::mcp_server_reconnect,
+            mcp_servers_cmd::mcp_server_set_key,
+            mcp_servers_cmd::mcp_servers_reload,
             browser_cmd::browser_state,
             browser_cmd::browser_set_bounds,
             browser_cmd::browser_control,
             browser_cmd::browser_handover_done,
             browser_cmd::browser_clear_data,
             browser_cmd::browser_navigate,
-            plugins_cmd::plugin_resource,
             browser_cmd::browser_tab_new,
             browser_cmd::browser_tab_close,
             browser_cmd::browser_tab_select,

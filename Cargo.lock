@@ -2884,6 +2884,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "kotone-remote-plugin"
+version = "0.1.0"
+dependencies = [
+ "kotone-agent",
+ "kotone-core",
+ "kotone-mcp",
+ "kotone-plugin-api",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "kotone-script"
 version = "0.1.0"
 dependencies = [
@@ -2936,6 +2952,7 @@ dependencies = [
  "kotone-plugin-music",
  "kotone-plugin-voice-input",
  "kotone-postprocess",
+ "kotone-remote-plugin",
  "kotone-script",
  "kotone-stt",
  "kotone-tools",

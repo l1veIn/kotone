@@ -33,7 +33,15 @@ pub async fn plugin_call(
 /// App 读自己插件的资源（MCP Apps 的 `resources/read`，桥转过来）：`contents` 的一项。`plugin` 是宿主按 iframe
 /// 绑定的插件（不是页面说的），别的插件的资源不给。
 #[tauri::command]
-pub fn plugin_resource(app: AppHandle, plugin: String, uri: String) -> Result<Value, String> {
+pub async fn plugin_resource(app: AppHandle, plugin: String, uri: String) -> Result<Value, String> {
+    // 第三方插件（MCP 方案第 2 期）：只读它自己给的页面
+    if crate::remote_plugins::is_remote(&plugin) {
+        return Ok(
+            crate::plugin_apps::read_remote(&app, &plugin, Some(&uri), None)
+                .await?
+                .content(),
+        );
+    }
     if crate::plugin_apps::owner(&uri).map(|p| p.manifest().id.as_str()) != Some(plugin.as_str()) {
         return Err(format!("{plugin} 的页面不能读 {uri}"));
     }
@@ -50,8 +58,18 @@ pub fn plugin_resource(app: AppHandle, plugin: String, uri: String) -> Result<Va
 /// 第一次时才起代理）和资源的 `_meta.ui`（`csp`、`prefersBorder`）。前端的 App 容器把 iframe 指到 `sandboxUrl`，
 /// 照 MCP Apps 规范握手；App 调工具时宿主按这里的 `plugin` 绑定调用方，不信页面传来的。
 /// 插件或页面要的数据开关关着、页面还不是 App 时报错。
+///
+/// 第三方插件的 App（MCP 方案第 2 期）：`ui://` 不限于 `ui://kotone/`，按“哪个服务器给的”认归属（`plugin` 写了就
+/// 只看它）；页面从服务器取，CSP 用它声明的；代理路径里放地址的 `page_slug`。
 #[tauri::command]
-pub async fn plugin_app(app: AppHandle, uri: String) -> Result<Value, String> {
+pub async fn plugin_app(
+    app: AppHandle,
+    uri: String,
+    plugin: Option<String>,
+) -> Result<Value, String> {
+    if !uri.starts_with("ui://kotone/") {
+        return remote_app(&app, &uri, plugin.as_deref()).await;
+    }
     let settings = app
         .state::<crate::SharedState>()
         .settings
@@ -67,6 +85,26 @@ pub async fn plugin_app(app: AppHandle, uri: String) -> Result<Value, String> {
         "plugin": plugin.manifest().id,
         "uri": uri,
         "sandboxUrl": proxy.sandbox_url(page),
+        "ui": resource.ui,
+    }))
+}
+
+/// 第三方插件的一个 MCP App：读一次（看得到、是网页）、起它的回环代理、给沙盒代理页的地址。
+async fn remote_app(app: &AppHandle, uri: &str, plugin: Option<&str>) -> Result<Value, String> {
+    let settings = app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .clone();
+    let id = crate::plugin_apps::remote_owner(&settings, uri, plugin)?;
+    let resource = crate::plugin_apps::read_remote(app, &id, Some(uri), None).await?;
+    let source = crate::plugin_apps::RemoteSource::new(app, &id);
+    let proxy = app.state::<crate::app_proxy::Proxies>().get(source).await?;
+    Ok(json!({
+        "plugin": id,
+        "uri": uri,
+        "sandboxUrl": proxy.sandbox_url(&kotone_remote_plugin::page_slug(uri)),
         "ui": resource.ui,
     }))
 }

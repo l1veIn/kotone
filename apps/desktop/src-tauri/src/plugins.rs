@@ -62,11 +62,39 @@ fn find(id: &str) -> Option<&'static Arc<dyn Plugin>> {
     registry().iter().find(|p| p.manifest().id == id)
 }
 
-/// 这个工具是哪个插件的（不管开没开）。
+/// 这个工具是哪个内置插件的（不管开没开）。工具服务只认这些（第三方的不转给外部 Agent）。
 pub fn owner(tool: &str) -> Option<&'static Arc<dyn Plugin>> {
     registry()
         .iter()
         .find(|p| p.tools().iter().any(|t| t.name == tool))
+}
+
+/// 这个工具是哪个插件的：内置的和第三方的（MCP 方案第 2 期，`remote_plugins.rs`）都看。
+fn any_owner(tool: &str) -> Option<Arc<dyn Plugin>> {
+    owner(tool).cloned().or_else(|| {
+        crate::remote_plugins::as_plugins()
+            .into_iter()
+            .find(|p| p.tools().iter().any(|t| t.name == tool))
+    })
+}
+
+/// 第三方插件的工具只在 Kotone 里用（她、它自己的页面），不转给外部 Agent（MCP 方案第七节第 2 条，隐私）。
+const NOT_SHARED: &str =
+    "这是第三方插件的工具，只在 Kotone 里用，不转给外部 Agent（工具服务、kotone.exe mcp）";
+
+/// 谁在调、是不是第三方插件 → 不让调的原因。
+fn third_party_refusal(remote: bool, caller: Caller<'_>) -> Option<&'static str> {
+    (remote && matches!(caller, Caller::Service)).then_some(NOT_SHARED)
+}
+
+/// 交给这个插件的宿主：第三方插件拿更窄的那一份（`remote_plugins::RemoteHost`）。
+fn host_for(app: &AppHandle, plugin: &Arc<dyn Plugin>) -> Arc<dyn Host> {
+    let id = &plugin.manifest().id;
+    if crate::remote_plugins::is_remote(id) {
+        crate::remote_plugins::host(app, id)
+    } else {
+        DesktopHost::for_plugin(app, plugin)
+    }
 }
 
 fn settings(app: &AppHandle) -> kotone_core::settings::Settings {
@@ -482,6 +510,7 @@ pub fn stop_all() {
     for plugin in registry() {
         plugin.stop();
     }
+    crate::remote_plugins::settings_changed(app);
 }
 
 /// 启动时：每个插件开它的后台循环（循环里自己看开关）。
@@ -495,6 +524,8 @@ pub fn init(app: &AppHandle) {
         }
         plugin.clone().start(DesktopHost::for_plugin(app, plugin));
     }
+    // 第三方插件（MCP 方案第 2 期）：读 KOTONE_HOME/mcp.json 登记，开着、还不知道有哪些工具的去连
+    crate::remote_plugins::init(app);
 }
 
 /// 开着的插件给她的东西（她的工具清单和系统提示）。一段对话开始时取一次，之后不变（ADR 024）。
@@ -503,6 +534,16 @@ pub fn offers(app: &AppHandle) -> Vec<Offer> {
 }
 
 fn offers_for(settings: &kotone_core::settings::Settings) -> Vec<Offer> {
+    let mut offers = builtin_offers(settings);
+    // 第三方插件：工具多了只给后台（`remote_plugins::offers`）
+    offers.extend(crate::remote_plugins::offers(
+        settings,
+        &crate::remote_plugins::as_plugins(),
+    ));
+    offers
+}
+
+fn builtin_offers(settings: &kotone_core::settings::Settings) -> Vec<Offer> {
     registry()
         .iter()
         .filter(|p| enabled(settings, p.manifest()))
@@ -556,13 +597,18 @@ pub async fn call(
     arguments: &Value,
     caller: Caller<'_>,
 ) -> Result<ToolResult, String> {
-    let plugin = owner(tool).ok_or_else(|| format!("没有叫 {tool} 的插件工具"))?;
+    let plugin = any_owner(tool).ok_or_else(|| format!("没有叫 {tool} 的插件工具"))?;
     let manifest = plugin.manifest();
     let spec = plugin
         .tools()
         .into_iter()
         .find(|t| t.name == tool)
         .ok_or_else(|| format!("没有叫 {tool} 的插件工具"))?;
+    if let Some(refusal) =
+        third_party_refusal(crate::remote_plugins::is_remote(&manifest.id), caller)
+    {
+        return Err(refusal.to_string());
+    }
     match caller {
         Caller::Page(page_plugin) if page_plugin != manifest.id => {
             return Err(format!("{page_plugin} 的页面不能调 {tool}"));
@@ -577,9 +623,7 @@ pub async fn call(
             "text": format!("「{}」插件关着（在左侧栏的「插件」里可以打开）", manifest.name),
         })));
     }
-    plugin
-        .call(DesktopHost::for_plugin(app, plugin), tool, arguments)
-        .await
+    plugin.call(host_for(app, &plugin), tool, arguments).await
 }
 
 /// `ui.open`（ADR 038 D5）：检查页面地址，再让界面打开它。不把 Kotone 窗口拉到前面（玩家可能在游戏里）。
@@ -618,6 +662,21 @@ fn resolve_page(
             ))
         };
     }
+    // 第三方插件的 MCP App：`ui://` 不限于 `ui://kotone/`，按“哪个服务器给的”认归属（开着的里面第一个）
+    if !uri.starts_with("ui://kotone/") {
+        return crate::remote_plugins::plugins()
+            .iter()
+            .filter(|p| settings.plugin_enabled(&p.manifest().id, true))
+            .find_map(|p| {
+                let (_, title) = p
+                    .server()
+                    .app_pages()
+                    .into_iter()
+                    .find(|(page, _)| page == uri)?;
+                Some((title, Some(p.manifest().id.clone())))
+            })
+            .ok_or_else(|| format!("没有这个页面：{uri}"));
+    }
     let plugin = registry()
         .iter()
         .find(|p| p.manifest().owns_uri(uri))
@@ -641,12 +700,18 @@ fn resolve_page(
     Ok((page.title.clone(), Some(m.id.clone())))
 }
 
-/// 界面用的插件清单：清单、开关、工具（名字、给谁、页面）。
+/// 界面用的插件清单：清单、开关、工具（名字、给谁、页面）。内置的在前，第三方的在后（多一个 `remote`：
+/// 怎么连、要哪些 Key、信任没有、连接状态、服务器说的自己，`remote_plugins::describe`）。
 pub fn list(app: &AppHandle) -> Value {
     let settings = settings(app);
+    let remote = crate::remote_plugins::plugins();
+    let all: Vec<Arc<dyn Plugin>> = registry()
+        .iter()
+        .cloned()
+        .chain(remote.iter().map(|p| p.clone() as Arc<dyn Plugin>))
+        .collect();
     Value::Array(
-        registry()
-            .iter()
+        all.iter()
             .map(|p| {
                 let m = p.manifest();
                 let sources: Map<String, Value> = m
@@ -654,7 +719,7 @@ pub fn list(app: &AppHandle) -> Value {
                     .iter()
                     .map(|s| (s.id.clone(), json!(source_enabled(&settings, m, &s.id))))
                     .collect();
-                json!({
+                let mut item = json!({
                     "manifest": m,
                     "enabled": enabled(&settings, m),
                     "sources": sources,
@@ -664,7 +729,11 @@ pub fn list(app: &AppHandle) -> Value {
                         "page": t.page,
                         "available": tool_available(&settings, m, t),
                     })).collect::<Vec<_>>(),
-                })
+                });
+                if let Some(r) = remote.iter().find(|r| r.manifest().id == m.id) {
+                    item["remote"] = crate::remote_plugins::describe(r);
+                }
+                item
             })
             .collect(),
     )
@@ -782,6 +851,44 @@ mod tests {
             Some("music")
         );
         assert!(owner("browser.open").is_none());
+    }
+
+    /// MCP 方案第七节第 2 条：第三方插件的工具不进工具服务（外部 Agent、`kotone.exe mcp` 看不到、调不了），
+    /// 她和它自己的页面能调；它的 App 资源也不进 `resources/list`。
+    #[test]
+    fn third_party_tools_stay_inside_kotone() {
+        let id = "zz-remote-test";
+        crate::remote_plugins::insert_for_test(crate::remote_plugins::test_plugin(id, 2));
+        let s = kotone_core::settings::Settings::default();
+        let tool = format!("{id}.t0");
+        let specs = crate::tool_service::hosted_tool_specs(&s);
+        assert!(
+            specs
+                .iter()
+                .all(|spec| !spec["name"].as_str().unwrap_or("").starts_with(id)),
+            "工具服务里没有第三方的工具"
+        );
+        assert!(owner(&tool).is_none(), "工具服务只认内置插件的工具");
+        assert_eq!(
+            any_owner(&tool).map(|p| p.manifest().id.clone()).as_deref(),
+            Some(id)
+        );
+        let offer = offers_for(&s)
+            .into_iter()
+            .find(|o| o.plugin == id)
+            .expect("她拿得到");
+        assert_eq!(offer.tools.len(), 2, "只给页面的不进她的清单");
+        assert!(offer.tools.iter().all(|t| t.untrusted));
+        let catalog = kotone_agent::catalog::Catalog::build(&specs, &[], &[offer]);
+        assert!(catalog.get(&tool).unwrap().untrusted);
+        assert_eq!(third_party_refusal(true, Caller::Service), Some(NOT_SHARED));
+        assert!(third_party_refusal(true, Caller::Her).is_none());
+        assert!(third_party_refusal(true, Caller::Page(id)).is_none());
+        assert!(third_party_refusal(false, Caller::Service).is_none());
+        assert!(crate::plugin_apps::list(&s)
+            .iter()
+            .all(|r| !r["uri"].as_str().unwrap_or("").contains(id)));
+        crate::remote_plugins::remove_for_test(id);
     }
 
     #[test]

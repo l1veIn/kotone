@@ -86,9 +86,10 @@ impl crate::app_proxy::Source for PluginSource {
         &self.plugin.manifest().id
     }
 
-    fn resource(&self, page: &str) -> Result<Resource, String> {
+    fn resource(&self, page: &str) -> BoxFuture<'static, Result<Resource, String>> {
         let uri = format!("ui://kotone/{}/{page}", self.plugin.manifest().id);
-        read(&settings(&self.app), &uri)
+        let resource = read(&settings(&self.app), &uri);
+        Box::pin(async move { resource })
     }
 
     fn asset(&self, path: String) -> BoxFuture<'static, Option<Asset>> {
@@ -98,6 +99,84 @@ impl crate::app_proxy::Source for PluginSource {
         let plugin = self.plugin.clone();
         let host = crate::plugins::DesktopHost::for_plugin(&self.app, &plugin);
         Box::pin(async move { plugin.asset(host, &path).await })
+    }
+}
+
+/// 第三方插件（MCP 方案第 2 期）的一个 MCP App 页面：插件开着、页面是它给的（归属按“哪个服务器给的”记）。
+/// 页面从服务器的 `resources/read` 取，CSP 用它声明的。`uri` 和 `slug`（代理路径里的那一段）给一个。
+/// 第三方的页面只在 Kotone 里显示，不进工具服务的 `resources/list`（[`list`] 只看内置插件）。
+pub async fn read_remote(
+    app: &AppHandle,
+    id: &str,
+    uri: Option<&str>,
+    slug: Option<&str>,
+) -> Result<Resource, String> {
+    let plugin = crate::remote_plugins::find(id).ok_or_else(|| format!("没有插件 {id}"))?;
+    if !settings(app).plugin_enabled(id, true) {
+        return Err(format!("「{id}」插件关着（在左侧栏的「插件」里可以打开）"));
+    }
+    let server = plugin.server().clone();
+    let uri = match (uri, slug) {
+        (Some(uri), _) => uri.to_string(),
+        (None, Some(slug)) => server
+            .uri_for_slug(slug)
+            .ok_or_else(|| format!("「{id}」插件没有这个页面"))?,
+        (None, None) => return Err("要写页面地址".into()),
+    };
+    let host = crate::remote_plugins::host(app, id);
+    server.read_app(&host, &uri).await
+}
+
+/// 哪个开着的第三方插件给了这个 `ui://` 地址。`plugin` 写了就只看它；没写、又有两个插件给了同一个地址时不猜。
+pub fn remote_owner(
+    settings: &Settings,
+    uri: &str,
+    plugin: Option<&str>,
+) -> Result<String, String> {
+    let owners: Vec<String> = crate::remote_plugins::plugins()
+        .iter()
+        .filter(|p| plugin.map_or(true, |id| p.manifest().id == id))
+        .filter(|p| settings.plugin_enabled(&p.manifest().id, true))
+        .filter(|p| p.server().owns_uri(uri))
+        .map(|p| p.manifest().id.clone())
+        .collect();
+    match owners.as_slice() {
+        [one] => Ok(one.clone()),
+        [] => Err(format!("没有开着的插件给了 {uri}")),
+        _ => Err(format!(
+            "{uri} 有好几个插件都给了（{}），要写明是哪个插件的",
+            owners.join("、")
+        )),
+    }
+}
+
+/// 回环代理里一个第三方插件的 App 从哪来。每次按 id 找插件（配置改了会换成新的插件，代理还是同一个）；没有素材。
+pub struct RemoteSource {
+    app: AppHandle,
+    id: String,
+}
+
+impl RemoteSource {
+    pub fn new(app: &AppHandle, id: &str) -> Arc<Self> {
+        Arc::new(Self {
+            app: app.clone(),
+            id: id.to_string(),
+        })
+    }
+}
+
+impl crate::app_proxy::Source for RemoteSource {
+    fn plugin(&self) -> &str {
+        &self.id
+    }
+
+    fn resource(&self, page: &str) -> BoxFuture<'static, Result<Resource, String>> {
+        let (app, id, page) = (self.app.clone(), self.id.clone(), page.to_string());
+        Box::pin(async move { read_remote(&app, &id, None, Some(&page)).await })
+    }
+
+    fn asset(&self, _path: String) -> BoxFuture<'static, Option<Asset>> {
+        Box::pin(async { None })
     }
 }
 
@@ -203,8 +282,8 @@ mod tests {
             fn plugin(&self) -> &str {
                 "lol"
             }
-            fn resource(&self, _: &str) -> Result<Resource, String> {
-                Err("这个测试只取素材".into())
+            fn resource(&self, _: &str) -> BoxFuture<'static, Result<Resource, String>> {
+                Box::pin(async { Err("这个测试只取素材".into()) })
             }
             fn asset(&self, path: String) -> BoxFuture<'static, Option<Asset>> {
                 let (plugin, host) = (self.0.clone(), self.1.clone());

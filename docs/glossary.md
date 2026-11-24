@@ -25,6 +25,8 @@
 | 交互 | 角色页的一个分页：气泡、声音与弹幕（回答方式）；以后的右下角弹窗开关也放这里。旧说法“她怎么回答”（以前在「设置」里）。她用的模型不在这里，在聊天页输入框旁 | `设置 → 她怎么回答` | 分页 ID `reply` | Interaction |
 | 她用的模型 | 聊天页输入框旁的小菜单：她用哪条 API 连接里的哪个模型（照 DeepSeek Harness 的输入框）。2026-11-21 挪进过设置，2026-11-25 玩家要放回聊天页 | （见“她”） | `assistant.connectionId`、连接的 `model` | Her model |
 | 插件 | 装在她身上的一块本事：有自己的页面、工具和开关（英雄联盟、语音输入、网易云音乐……，ADR 038）。照 MCP Apps：她只调用插件的工具或打开它的页面。“应用”在界面里指 Kotone 自己（“桌面应用”），所以插件不叫应用，也不叫 App；浏览器里装的叫“扩展”。每个插件有自己的 logo（原创，不用网易云、拳头这类别人的商标；第三方 MCP 服务器用它自己声明的图标，ADR 039） | | `plugins/<id>`、`kotone-plugin-api` | plugin |
+| 第三方插件 | 玩家自己加进来的别人的 MCP 服务器（插件页上粘贴配置，或者从 Claude Desktop、VS Code 导入）。一个服务器就是一个插件，开关、卡片和内置的一样；它的工具名是 `<名字>.<工具>`，结果只当数据（别人写的），只在 Kotone 里用、不转给外部 Agent（MCP 方案第 2 期）。代码里叫远程插件 | | `kotone-remote-plugin`、`KOTONE_HOME/mcp.json` | third-party plugin |
+| 信任（第三方插件） | 加第三方插件时的那一次确认：看清它会在你电脑上运行什么程序、或者连哪个网址，要哪些 Key。信任以后，它说只读的工具不再先问；配置改了要重新信任。没标只读的工具照样第一次先问，可以选“总是允许” | | `plugins.<id>.settings.trusted`、`third-party-action`、`third-party-read` | trust |
 | 内置浏览器 / 网页 | 聊天页右侧栏的“网页”标签：你自己能上网，她在后台的事里也用它打开网页（ADR 031）。它留在本体，不是插件；“设置 → 浏览器”里有开关（默认开），关掉后右侧栏没有“网页”、她也不再打开网页（ADR 038） | | `browser.enabled`、`browser.*` | built-in browser / Web |
 | 扩展 | 内置浏览器里装的 Chrome / Edge 扩展（已解压的扩展文件夹，例如去广告），在“设置 → 浏览器”里加、删、开关。“插件”只指她身上的本事，所以浏览器里的不叫插件 | `浏览器插件` | `browser.extensions` | extension |
 | 外部 Agent | 经工具服务 / MCP 接进来的别的 Agent；界面上的“Agent”只指这个 | `AI 助手` | `assistant.route = agent` | external agent |

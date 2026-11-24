@@ -1,0 +1,28 @@
+[package]
+name = "kotone-remote-plugin"
+version = "0.1.0"
+description = "第三方插件（MCP 方案第 2 期）：一个第三方 MCP 服务器 = 一个远程插件；KOTONE_HOME/mcp.json、从 Claude Desktop / VS Code 导入、工具名、询问和不可信"
+edition = "2021"
+# 跟 kotone-mcp（rmcp 3.11 的最低版本）
+rust-version = "1.88"
+
+# 依赖纪律：只依赖插件契约（kotone-plugin-api）和 MCP 客户端（kotone-mcp），不碰 Tauri、桌面端、
+# kotone-agent / kotone-ai（宿主的事在桌面端 `remote_plugins.rs`）。
+[dependencies]
+kotone-mcp.workspace = true
+kotone-plugin-api.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+# 配置的指纹（信任跟着配置走：配置变了要重新信任）
+sha2 = "0.10"
+
+[dev-dependencies]
+# 进程内的 Streamable HTTP 测试服务器
+kotone-mcp = { workspace = true, features = ["test-support"] }
+# examples/remote_test_server.rs：测试用的“别人写的” stdio 服务器（和 kotone-mcp 锁同一个版本）
+rmcp = { version = "=3.11.0", default-features = false, features = ["server", "transport-io"] }
+# 权限：用 kotone-agent 的判定核对“没标只读的第一次问、总是允许、只读的信任前也问”
+kotone-agent.workspace = true
+kotone-core.workspace = true
+tempfile.workspace = true

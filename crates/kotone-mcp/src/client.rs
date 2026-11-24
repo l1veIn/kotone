@@ -113,19 +113,23 @@ impl McpClient {
     ) -> Self {
         let info = running
             .peer_info()
-            .map(|p| ServerInfo {
-                name: p
-                    .server_info
-                    .as_ref()
-                    .map(|s| s.name.clone())
-                    .unwrap_or_default(),
-                version: p
-                    .server_info
-                    .as_ref()
-                    .map(|s| s.version.clone())
-                    .unwrap_or_default(),
-                instructions: p.instructions.clone(),
-                protocol_version: p.protocol_version.to_string(),
+            .map(|p| {
+                let server = p.server_info.as_ref();
+                ServerInfo {
+                    name: server.map(|s| s.name.clone()).unwrap_or_default(),
+                    version: server.map(|s| s.version.clone()).unwrap_or_default(),
+                    title: server.and_then(|s| s.title.clone()),
+                    description: server.and_then(|s| s.description.clone()),
+                    // 图标经 JSON 交出去（协议原样的字段），不露 rmcp 的类型
+                    icons: server
+                        .and_then(|s| s.icons.as_ref())
+                        .and_then(|icons| serde_json::to_value(icons).ok())
+                        .and_then(|v| v.as_array().cloned())
+                        .unwrap_or_default(),
+                    website_url: server.and_then(|s| s.website_url.clone()),
+                    instructions: p.instructions.clone(),
+                    protocol_version: p.protocol_version.to_string(),
+                }
             })
             .unwrap_or_default();
         Self {
