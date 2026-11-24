@@ -1,6 +1,6 @@
 // 把一段对话（存盘的消息 + 正在流式输出的部分）整理成按“轮”显示的时间线。Kotone 自己的实现。
 // 一轮 = 一条用户消息（或自动化送回的系统消息）及其后的回答、思考、工具调用与状态说明。
-import type { AgentMessage, CategoryTotals, ConversationCosts, TokenUsage, ToolCall, ToolStatus, UsageTotals } from "../agent";
+import type { AgentMessage, CategoryTotals, ConversationCosts, TokenUsage, ToolCall, ToolDisplay, ToolStatus, UsageTotals } from "../agent";
 
 export type UserMessage = Extract<AgentMessage, { role: "user" }>;
 
@@ -10,6 +10,8 @@ export interface ToolView {
   /** 结果（存盘的工具消息，或执行中事件里带的内容）。 */
   content: string | null;
   untrusted: boolean;
+  /** 插件工具的页面（ADR 038）：聊天里显示成卡片。 */
+  display?: ToolDisplay;
 }
 
 export type Block =
@@ -85,7 +87,7 @@ export function buildTurns(messages: readonly AgentMessage[], live: LiveState | 
         const status: ToolStatus = result ? (result.isError ? "failed" : "completed") : event?.status ?? "pending";
         current.blocks.push({
           kind: "tool", key: `t${call.id}`,
-          tool: { call, status, content: result?.content ?? event?.content ?? null, untrusted: result?.untrusted ?? false },
+          tool: { call, status, content: result?.content ?? event?.content ?? null, untrusted: result?.untrusted ?? false, display: result?.display },
         });
       };
       // 她说出口的话（speak，ADR 029 第八节）排在正文前面：先听到结论，细节在下面。

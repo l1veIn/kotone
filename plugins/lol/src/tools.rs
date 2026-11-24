@@ -1,12 +1,18 @@
 //! 英雄联盟插件的工具（ADR 035 D2）：名字、说明、参数。实现在 [`crate::watcher`]。
-//! 三个工具都马上返回（主会话也有，ADR 029），结果里有别人起的名字，按不可信数据交给她。
+//! 给她的工具都马上返回（主会话也有，ADR 029），结果里有别人起的名字，按不可信数据交给她。
+//! 带页面的（照 MCP Apps）：`lol.scout` → 这局，`lol.player` → 战绩，`lol.game`（只给页面）→ 单局详情。
 
 use kotone_plugin_api::ToolSpec;
 use serde_json::json;
 
+use crate::pages::{PAGE_GAME, PAGE_MATCH, PAGE_PLAYER};
+
 pub const TOOL_MATCH: &str = "lol.match";
 pub const TOOL_SPELL: &str = "lol.spell";
 pub const TOOL_SCOUT: &str = "lol.scout";
+pub const TOOL_PLAYER: &str = "lol.player";
+/// 只给页面用：一局的详情。
+pub const TOOL_GAME: &str = "lol.game";
 
 pub fn specs() -> Vec<ToolSpec> {
     vec![
@@ -47,8 +53,32 @@ pub fn specs() -> Vec<ToolSpec> {
                 "player": {"type": "string", "maxLength": 40, "description": "只看这一个人：英雄名或玩家名；不写 = 全部 10 个人"}
             }}),
         )
+        .page(PAGE_MATCH)
         .needs(&["client"])
         .instant()
+        .untrusted(),
+        ToolSpec::new(
+            TOOL_PLAYER,
+            "查一个英雄联盟玩家最近的战绩（最近 20 局、全部模式）：段位、胜负、KDA、连胜连败、最近 5 局用什么英雄打成什么样；隐藏战绩的会标出来。玩家说“我最近怎么样”“查一下我的战绩”就不写参数（查自己）；“对面亚索最近怎么样”写这局里的英雄名或玩家名；查不在这局的人要写完整的“名字#编号”。聊天里会出现他的战绩卡片，点开能看每一局，你只说一两句要紧的。",
+            json!({"type": "object", "additionalProperties": false, "properties": {
+                "player": {"type": "string", "maxLength": 60, "description": "这局里的英雄名或玩家名，或者“名字#编号”；不写 = 自己"},
+                "puuid": {"type": "string", "maxLength": 100, "description": "页面里点进某个人时用"}
+            }}),
+        )
+        .page(PAGE_PLAYER)
+        .needs(&["client"])
+        .instant()
+        .untrusted(),
+        ToolSpec::new(
+            TOOL_GAME,
+            "一局的详情：两边 10 个人的英雄、KDA、伤害、经济、补刀、装备、海克斯（战绩页面里点开某一局时用）。",
+            json!({"type": "object", "additionalProperties": false, "required": ["gameId"], "properties": {
+                "gameId": {"type": "integer", "minimum": 1}
+            }}),
+        )
+        .app_only()
+        .page(PAGE_GAME)
+        .needs(&["client"])
         .untrusted(),
     ]
 }
@@ -58,15 +88,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn three_tools_for_her_and_the_page() {
+    fn tools_for_her_and_the_pages() {
         let specs = specs();
         let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, [TOOL_MATCH, TOOL_SPELL, TOOL_SCOUT]);
+        assert_eq!(
+            names,
+            [TOOL_MATCH, TOOL_SPELL, TOOL_SCOUT, TOOL_PLAYER, TOOL_GAME]
+        );
         for s in &specs {
             assert_eq!(s.parameters["type"], "object");
             assert!(s.untrusted, "{} 里有别人起的名字", s.name);
-            assert!(s.instant && s.for_model() && s.for_app());
+            assert!(s.for_app());
             assert_eq!(s.needs, ["client"]);
         }
+        // 给她的都马上返回；单局详情只给页面
+        for s in specs.iter().filter(|s| s.name != TOOL_GAME) {
+            assert!(s.instant && s.for_model(), "{}", s.name);
+        }
+        let game = specs.iter().find(|s| s.name == TOOL_GAME).unwrap();
+        assert!(!game.for_model());
+        assert_eq!(specs[2].page.as_deref(), Some(PAGE_MATCH));
     }
 }

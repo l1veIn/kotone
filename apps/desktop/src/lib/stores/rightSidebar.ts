@@ -1,7 +1,7 @@
 // 聊天页右侧栏（ADR 031，照 DeepSeek Harness 桌面版的右侧栏：标签页、拖动调宽）：
 // - 开着还是收起：宽窗口时记住玩家的选择；窄窗口时默认收起，打开是临时盖在聊天上的，不记。
 // - 宽度：拖动调宽，记住；双击分隔线恢复默认。
-// - 标签：“卡片”（网页卡片 + 后台在做的事）/ “网页”（浏览器占满）；记住。
+// - 标签：“卡片”（网页卡片 + 后台在做的事）/ “网页”（浏览器占满）/ “页面”（插件页面，ADR 038）；记住前两个。
 // - 网页全屏：铺满整个 Kotone 窗口，不记。
 // 都存本机 localStorage，读写失败就按默认（隐私窗口、清过数据时也能正常显示）。
 import { derived, get, writable } from "svelte/store";
@@ -88,7 +88,8 @@ export function saveRightSidebarWidth(width: number): void {
 
 // ---- 标签页 ----
 
-export type SidebarTab = "cards" | "web";
+/** “页面”：右侧栏里打开的插件页面（ADR 038，stores/pluginPages.ts）；不记，重开时回到“卡片”。 */
+export type SidebarTab = "cards" | "web" | "page";
 
 /** 选中的标签（记住）。“网页”只在打开过网页时生效，否则显示“卡片”。 */
 export const rightSidebarTab = writable<SidebarTab>(read(TAB_KEY) === "web" ? "web" : "cards");

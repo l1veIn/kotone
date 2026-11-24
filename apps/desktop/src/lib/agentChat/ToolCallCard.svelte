@@ -13,6 +13,8 @@
   import { formatToolJson, toolPresentation } from "./toolPresentation";
   import { changedLocations, openLocation } from "../stores/navigation";
   import { openExternal } from "$lib/ipc";
+  import PluginCard from "./PluginCard.svelte";
+  import { pluginToolLabel } from "../pluginUi";
 
   let { tool, runActive = false, ask, onAnswer }: {
     tool: ToolView;
@@ -25,7 +27,7 @@
   let answering = $state<Answer | null>(null);
   let answerError = $state("");
   const presentation = $derived(toolPresentation(tool.status, runActive));
-  const title = $derived(toolLabel(tool.call.name));
+  const title = $derived(pluginToolLabel(tool.call.name) ?? toolLabel(tool.call.name));
   const saved = $derived(tool.call.name.startsWith("saved."));
   const input = $derived(open ? formatToolJson(tool.call.arguments) : "");
   const output = $derived(open ? formatToolJson(tool.content) : "");
@@ -84,6 +86,10 @@
       </div>
     {/if}
   </details>
+  {#if tool.display?.ui?.uri && tool.status === "completed"}
+    <!-- 插件工具的页面（ADR 038）：她那一刻看到的样子，点开在右侧栏 -->
+    <PluginCard display={tool.display} />
+  {/if}
   {#if sources.length}
     <ol class="m-0 mb-1 ml-5 flex list-none flex-col gap-0.5 p-0 text-xs" data-testid="agent-tool-sources" aria-label={m.chat_tool_card_sources()}>
       {#each sources as s, i (s.url + i)}

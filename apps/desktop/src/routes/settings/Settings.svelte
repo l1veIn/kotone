@@ -54,6 +54,7 @@
   import CharacterPage from "./pages/CharacterPage.svelte";
   import PluginPage from "./pages/PluginPage.svelte";
   import { listPlugins, pluginOfPage, pluginPageId } from "../../lib/plugins";
+  import { listenUiOpen } from "../../lib/stores/pluginPages";
   import { initializeAppearance, resolvedTheme } from "../../lib/appearance/appearanceRuntime";
 
   import AppSidebar, { type PageId } from "./AppSidebar.svelte";
@@ -298,6 +299,9 @@
 
   // 单实例转发：应用已在托盘运行时，再执行
   // `kotone.exe --onboarding=always` 会唤起现有窗口并重新打开向导。
+  // 她（或外部 Agent）用 ui.open 打开一个页面（ADR 038）：插件页面在聊天页的右侧栏，设置页在这里
+  onMount(() => listenUiOpen());
+
   onMount(() => {
     if (!isTauri) return;
     // 启动后静默检测一次更新（离线/无 release 不打扰用户）

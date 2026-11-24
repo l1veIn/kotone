@@ -29,6 +29,9 @@ test("the League of Legends plugin has its own page in the 插件 group with the
   await expect(nav).toHaveAttribute("aria-current", "page");
   const pluginPage = page.getByTestId("plugin-page-lol");
   await expect(pluginPage.getByRole("heading", { name: "英雄联盟", exact: true })).toBeVisible();
+  // 开着时先是“这局”（第 2 步）；开关在“设置”
+  await expect(pluginPage.getByTestId("plugin-lol-tab-match")).toHaveAttribute("aria-current", "page");
+  await pluginPage.getByTestId("plugin-lol-tab-settings").click();
   await expect(pluginPage.getByTestId("plugin-lol-tab-settings")).toHaveAttribute("aria-current", "page");
   const enabled = pluginPage.getByTestId("plugin-lol-enabled");
   const client = pluginPage.getByTestId("plugin-lol-source-client");
@@ -59,6 +62,7 @@ test("the League of Legends plugin has its own page in the 插件 group with the
   expect((await settings(page)).plugins?.lol?.sources?.client).toBe(true);
   await expect(events.getByTestId("game-profile-events-list")).toContainText("拿了大龙");
   await section.getByTestId("game-profile-lol-open").click();
+  await page.getByTestId("plugin-page-lol").getByTestId("plugin-lol-tab-settings").click();
   await expect(page.getByTestId("plugin-page-lol").getByTestId("plugin-lol-source-client")).toHaveAttribute("aria-checked", "true");
 });
 

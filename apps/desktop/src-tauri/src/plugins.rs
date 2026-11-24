@@ -16,6 +16,22 @@ use tauri::{AppHandle, Emitter, Manager};
 
 /// 界面上插件的事件（`{plugin, event, payload}`）。
 pub const EVENT: &str = "kotone://plugin";
+/// 打开一个页面（`ui.open`）：`{uri, params, title, plugin?}`。插件的页面在右侧栏，设置页在设置窗口。
+pub const UI_OPEN_EVENT: &str = "kotone://ui-open";
+/// 本体的设置页（`ui://kotone/settings/<分页>`，和界面 `advanced/types.ts` 的分页一致）。
+pub const SETTINGS_SECTIONS: &[&str] = &[
+    "call",
+    "reply",
+    "permissions",
+    "usage",
+    "models",
+    "connections",
+    "sound",
+    "tuning",
+    "appearance",
+    "system",
+    "plugins",
+];
 
 /// 内置的插件（按侧栏里的顺序）。
 pub fn registry() -> &'static [Arc<dyn Plugin>] {
@@ -207,13 +223,24 @@ pub fn service_specs(app: &AppHandle) -> Vec<Value> {
         .collect()
 }
 
-/// 调一个插件的工具。`from_page`：插件自己的页面调的（只给页面用的工具也能调，只能调自己插件的）。
+/// 谁在调插件的工具。
+#[derive(Debug, Clone, Copy)]
+pub enum Caller<'a> {
+    /// 她（她的工具清单里只有给她的，`visibility` 含 `model`）。
+    Her,
+    /// 外部 Agent 经工具服务 / MCP（清单里两种都列出来，带 `visibility`，都能调）。
+    Service,
+    /// 插件自己的页面（只能调自己插件的、给页面的工具）。
+    Page(&'a str),
+}
+
+/// 调一个插件的工具。
 /// 插件关着时拒绝；数据开关关着时由插件自己回答（一段对话里她的工具清单不变，开关可能中途关了）。
 pub async fn call(
     app: &AppHandle,
     tool: &str,
     arguments: &Value,
-    from_page: Option<&str>,
+    caller: Caller<'_>,
 ) -> Result<ToolResult, String> {
     let plugin = owner(tool).ok_or_else(|| format!("没有叫 {tool} 的插件工具"))?;
     let manifest = plugin.manifest();
@@ -222,12 +249,12 @@ pub async fn call(
         .into_iter()
         .find(|t| t.name == tool)
         .ok_or_else(|| format!("没有叫 {tool} 的插件工具"))?;
-    match from_page {
-        Some(page_plugin) if page_plugin != manifest.id => {
+    match caller {
+        Caller::Page(page_plugin) if page_plugin != manifest.id => {
             return Err(format!("{page_plugin} 的页面不能调 {tool}"));
         }
-        Some(_) if !spec.for_app() => return Err(format!("{tool} 不给页面用")),
-        None if !spec.for_model() => return Err(format!("{tool} 只给插件的页面用")),
+        Caller::Page(_) if !spec.for_app() => return Err(format!("{tool} 不给页面用")),
+        Caller::Her if !spec.for_model() => return Err(format!("{tool} 只给插件的页面用")),
         _ => {}
     }
     if !enabled(&settings(app), manifest) {
@@ -239,6 +266,62 @@ pub async fn call(
     plugin
         .call(DesktopHost::for_plugin(app, plugin), tool, arguments)
         .await
+}
+
+/// `ui.open`（ADR 038 D5）：检查页面地址，再让界面打开它。不把 Kotone 窗口拉到前面（玩家可能在游戏里）。
+pub fn open_page(app: &AppHandle, args: &Value) -> Result<Value, String> {
+    let uri = args
+        .get("page")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .ok_or("要写 page（页面地址，如 ui://kotone/lol/match）")?;
+    let params = args.get("params").cloned().unwrap_or(Value::Null);
+    if !params.is_null() && !params.is_object() {
+        return Err("params 要是对象".into());
+    }
+    let (title, plugin) = resolve_page(&settings(app), uri)?;
+    let _ = app.emit(
+        UI_OPEN_EVENT,
+        json!({"uri": uri, "params": params, "title": title, "plugin": plugin}),
+    );
+    Ok(json!({"opened": true, "uri": uri, "title": title,
+        "note": "在 Kotone 窗口里打开了（插件的页面在右侧栏）；玩家在游戏里时窗口不会自己跳出来"}))
+}
+
+/// 页面地址 → (标题, 插件 id)。设置页的插件 id 是 None。
+fn resolve_page(
+    settings: &kotone_core::settings::Settings,
+    uri: &str,
+) -> Result<(String, Option<String>), String> {
+    if let Some(section) = uri.strip_prefix("ui://kotone/settings/") {
+        return if SETTINGS_SECTIONS.contains(&section) {
+            Ok((section.to_string(), None))
+        } else {
+            Err(format!(
+                "没有设置页 {section}（有：{}）",
+                SETTINGS_SECTIONS.join("、")
+            ))
+        };
+    }
+    let plugin = registry()
+        .iter()
+        .find(|p| p.manifest().owns_uri(uri))
+        .ok_or_else(|| format!("没有这个页面：{uri}"))?;
+    let m = plugin.manifest();
+    let page = m
+        .pages
+        .iter()
+        .find(|p| p.uri == uri)
+        .ok_or_else(|| format!("「{}」插件没有页面 {uri}", m.name))?;
+    if !enabled(settings, m) {
+        return Err(format!("「{}」插件关着（设置 → 插件 里可以打开）", m.name));
+    }
+    if let Some(off) = page.needs.iter().find(|s| !source_enabled(settings, m, s)) {
+        let name = m.source(off).map(|s| s.name.as_str()).unwrap_or(off);
+        return Err(format!("「{}」插件的“{name}”关着，这个页面用不了", m.name));
+    }
+    Ok((page.title.clone(), Some(m.id.clone())))
 }
 
 /// 界面用的插件清单：清单、开关、工具（名字、给谁、页面）。
@@ -303,6 +386,31 @@ mod tests {
             Some("lol")
         );
         assert!(owner("music").is_none());
+    }
+
+    #[test]
+    fn ui_open_checks_the_page() {
+        let s = kotone_core::settings::Settings::default();
+        assert_eq!(
+            resolve_page(&s, "ui://kotone/settings/plugins").unwrap(),
+            ("plugins".to_string(), None)
+        );
+        assert!(resolve_page(&s, "ui://kotone/settings/nope").is_err());
+        assert_eq!(
+            resolve_page(&s, "ui://kotone/lol/settings")
+                .unwrap()
+                .1
+                .as_deref(),
+            Some("lol")
+        );
+        assert!(resolve_page(&s, "ui://kotone/lol/nope").is_err());
+        assert!(resolve_page(&s, "ui://kotone/nope/x").is_err());
+        assert!(resolve_page(&s, "https://example.com").is_err());
+        let mut off = kotone_core::settings::Settings::default();
+        off.plugins.entry("lol".into()).or_default().enabled = Some(false);
+        assert!(resolve_page(&off, "ui://kotone/lol/settings")
+            .unwrap_err()
+            .contains("关着"));
     }
 
     #[test]

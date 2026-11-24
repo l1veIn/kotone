@@ -84,6 +84,9 @@ class Recording:
         for path in glob.glob(os.path.join(probe, "scout-*.json")):
             v = read(path)
             self.players[v["summoner"]["puuid"]] = v
+        detail = os.path.join(probe, "lcu-game-detail.json")
+        # 单局详情（ADR 038 第 2 步的单局页面）：录到的只有一局，任何 gameId 都给这一局
+        self.game_detail = read(detail) if os.path.exists(detail) else None
         own = os.path.join(probe, "lcu-match-history-self.json")
         if self.me.get("puuid") not in self.players and os.path.exists(own):
             self.players[self.me["puuid"]] = {"summoner": self.me, "history": read(own)}
@@ -94,7 +97,7 @@ class Recording:
         return self.session["gameData"]["queue"]["id"]
 
     def lcu(self, path):
-        path = path.partition("?")[0]
+        path, _, query = path.partition("?")
         if path == "/lol-gameflow/v1/gameflow-phase":
             return "InProgress"
         if path == "/lol-gameflow/v1/session":
@@ -113,6 +116,17 @@ class Recording:
             return self.players[m.group(1)]["summoner"]
         if re.fullmatch(r"/lol-ranked/v1/ranked-stats/[^/]+", path):
             return {"queues": []}  # 录的时候没录段位
+        if re.fullmatch(r"/lol-match-history/v1/games/\d+", path):
+            return self.game_detail
+        if path == "/lol-summoner/v1/alias/lookup":
+            # 按 名字#编号 找人（页面里的搜索）：在录到的人里找
+            from urllib.parse import parse_qs
+            q = parse_qs(query)
+            name, tag = (q.get("gameName") or [""])[0], (q.get("tagLine") or [""])[0]
+            for v in self.players.values():
+                s = v["summoner"]
+                if s.get("gameName") == name and (not tag or s.get("tagLine") == tag):
+                    return s
         return None
 
     def live_data(self, path):
@@ -208,6 +222,11 @@ def results(msgs, name):
     return [m.get("content", "") for m in msgs if m["role"] == "tool" and m.get("name") == name]
 
 
+def displays(msgs, name):
+    """ADR 038: the page data stored with a plugin tool result (chat card), never sent to the model."""
+    return [m.get("display") for m in msgs if m["role"] == "tool" and m.get("name") == name and m.get("display")]
+
+
 def say(name, text):
     r = bt.run_case(name, text, answer="deny", timeout=180)
     msgs = turn(r.get("main"), text)
@@ -271,6 +290,15 @@ def main():
               and "这个英雄 0 局" not in body, body[:120])
         said = r.get("said", "")
         check("T1: she names an enemy champion", any(n in said for n in enemies), said[:200])
+        # ADR 038 第 2 步：结果带这局页面的快照（聊天卡片），给她的还是那几行字
+        page = (displays(msgs, "lol.scout") or [{}])[-1]
+        data = page.get("structuredContent") or {}
+        check("T1: the result carries the match page (ui://kotone/lol/match) with 5 + 5 players",
+              (page.get("ui") or {}).get("uri") == "ui://kotone/lol/match"
+              and len(data.get("allies", [])) == 5 and len(data.get("enemies", [])) == 5,
+              json.dumps(page, ensure_ascii=False)[:200])
+        check("T1: the page data did not go into her context (content is the text only)",
+              "allies" not in body and "structuredContent" not in body, body[:120])
         check("T1: no labels like 牛马 / 下等马, no “没玩过”",
               not any(w in said for w in ("牛马", "下等马", "没玩过", "第一次玩")), said[:200])
 
@@ -306,6 +334,38 @@ def main():
         check("T4: no real game window was touched", not focus_results, f"called {touched}, results {focus_results}")
         print(f"   lol.spell chat line: {chat!r}; she tried to send: {line[:200]}")
         print(f"   she said: {r.get('said', '')[:200]}")
+
+        # T5 某个人的战绩（ADR 038 第 2 步：lol.player，带战绩页面）
+        text = "对面丽桑卓最近战绩怎么样"
+        r, msgs = say("T5", text)
+        player = calls(msgs, "lol.player")
+        args = json.loads(player[-1]["arguments"]) if player else {}
+        check("T5: she used lol.player (or lol.scout for one player)",
+              player or calls(msgs, "lol.scout"), ",".join(c["name"] for c in calls(msgs)))
+        page = (displays(msgs, "lol.player") or displays(msgs, "lol.scout") or [{}])[-1]
+        check("T5: the result carries a page", (page.get("ui") or {}).get("uri", "").startswith("ui://kotone/lol/"),
+              json.dumps(page, ensure_ascii=False)[:160])
+        print(f"   T5 args {args}; she said: {r.get('said', '')[:160]}")
+
+        # P2 只给页面的工具和 ui.open（经工具服务，外部 Agent 也这样用）
+        me = bt.call("lol.player", {})
+        games = ((me.get("structuredContent") or {}).get("games") or [])
+        check("P2: lol.player without args is the player themself, with games",
+              (me.get("_meta") or {}).get("ui", {}).get("resourceUri") == "ui://kotone/lol/player" and games,
+              json.dumps(me, ensure_ascii=False)[:200])
+        if games:
+            detail = bt.call("lol.game", {"gameId": games[0]["gameId"]})
+            teams = ((detail.get("structuredContent") or {}).get("teams") or [])
+            check("P2: lol.game (page only) gives both teams of one game",
+                  len(teams) == 2 and all(len(t.get("players", [])) == 5 for t in teams),
+                  json.dumps(detail, ensure_ascii=False)[:200])
+        opened = bt.call("ui.open", {"page": "ui://kotone/lol/match"})
+        check("P2: ui.open opens the match page", opened.get("opened") is True, json.dumps(opened, ensure_ascii=False))
+        try:
+            bt.call("ui.open", {"page": "ui://kotone/lol/nope"})
+            check("P2: ui.open refuses an unknown page", False, "no error")
+        except Exception as e:  # noqa: BLE001
+            check("P2: ui.open refuses an unknown page", True, str(e)[:120])
     finally:
         real_deepseek.delete_connection(bt.EXE, bt.ENV)
         try:

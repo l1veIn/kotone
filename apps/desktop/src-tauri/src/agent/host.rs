@@ -85,7 +85,7 @@ impl BuiltinHost for DesktopBuiltins {
         tool: &str,
         arguments: &Value,
     ) -> Result<kotone_plugin_api::ToolResult, String> {
-        crate::plugins::call(&self.app, tool, arguments, None).await
+        crate::plugins::call(&self.app, tool, arguments, crate::plugins::Caller::Her).await
     }
 
     async fn exec(

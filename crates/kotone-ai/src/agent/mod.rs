@@ -92,6 +92,10 @@ pub enum Message {
         /// 发给模型时只保留最近 [`MAX_TOOL_IMAGES`] 张，更早的换成一句说明。
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<Attachment>,
+        /// 给界面的（照 MCP Apps：插件工具结果的 `structuredContent` 和用哪个页面显示，ADR 038）：
+        /// 存进对话记录，聊天卡片用它；**不发给模型**。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display: Option<Value>,
         at_ms: u64,
     },
     /// 给用户看的状态说明（已停止、达到步数上限……），不发给模型。
@@ -276,6 +280,8 @@ pub struct ToolOutcome {
     pub untrusted: bool,
     /// 随结果带回的图片（[`Attachment::Image`]，如截图）；一律按不可信的画面数据交给模型。
     pub images: Vec<Attachment>,
+    /// 给界面的数据（插件工具的页面，ADR 038），写进 [`Message::Tool::display`]，不给模型。
+    pub display: Option<Value>,
 }
 
 impl ToolOutcome {
@@ -285,6 +291,7 @@ impl ToolOutcome {
             is_error: false,
             untrusted: false,
             images: Vec::new(),
+            display: None,
         }
     }
 
@@ -294,6 +301,7 @@ impl ToolOutcome {
             is_error: true,
             untrusted: false,
             images: Vec::new(),
+            display: None,
         }
     }
 }
@@ -1105,6 +1113,7 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
                         is_error: true,
                         untrusted: false,
                         images: Vec::new(),
+                        display: None,
                         at_ms: now_ms(),
                     },
                 );
@@ -1197,6 +1206,7 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
                     is_error: outcome.is_error,
                     untrusted: outcome.untrusted,
                     images: outcome.images,
+                    display: outcome.display,
                     at_ms: now_ms(),
                 },
             );

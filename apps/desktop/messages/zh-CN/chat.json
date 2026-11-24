@@ -314,5 +314,10 @@
   "chat_local_asr_status": "本地语音识别 · {status}",
   "chat_local_asr_retry": "重试",
   "chat_local_asr_start": "启动",
-  "chat_tool_label_game_state": "看看在玩什么"
+  "chat_tool_label_game_state": "看看在玩什么",
+  "chat_sidebar_tab_page": "页面",
+  "chat_plugin_page_back": "返回",
+  "chat_plugin_page_close": "关掉页面",
+  "chat_plugin_page_missing": "这个页面现在打不开（插件关着，或者没有这个页面）。",
+  "chat_plugin_card_open": "打开"
 }

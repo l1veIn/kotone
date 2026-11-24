@@ -5,8 +5,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { isTauri } from "./ipc";
 import { m } from "./paraglide/messages.js";
+import { sampleMatch } from "./ipc/lolMock";
 
 export interface ToolCall { id: string; name: string; arguments: string }
+/** 插件工具结果里给界面的那份（照 MCP Apps：structuredContent + 页面地址）。 */
+export interface ToolDisplay { structuredContent?: unknown; ui: { uri: string; params?: Record<string, unknown> | null } }
 /** `cachedInputTokens`：输入里命中服务商前缀缓存的部分；`cost` + `currency`：按 Kotone 价格表估的费用（DeepSeek 用人民币）。 */
 export interface TokenUsage { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number; reasoningTokens?: number; costUsd?: number; cost?: number; currency?: string }
 export type Attachment =
@@ -16,7 +19,8 @@ export type Attachment =
 export type AgentMessage =
   | { role: "user"; text: string; attachments?: Attachment[]; source?: string; atMs: number; context?: string }
   | { role: "assistant"; text: string; toolCalls?: ToolCall[]; reasoning?: string; usage?: TokenUsage; atMs: number }
-  | { role: "tool"; callId: string; name: string; content: string; isError: boolean; untrusted: boolean; atMs: number }
+  /** `display`：插件工具带页面的结果（ADR 038，照 MCP Apps）——给页面的数据和用哪个页面，只给界面，她看不到。 */
+  | { role: "tool"; callId: string; name: string; content: string; isError: boolean; untrusted: boolean; atMs: number; display?: ToolDisplay }
   /** `compaction`：上下文压缩的检查点（摘要）；它之前的消息不再发给模型。 */
   /** `recap`：对局复盘的正文（`text` 是标题），只给玩家看。 */
   | { role: "notice"; text: string; atMs: number; compaction?: string; usage?: TokenUsage; recap?: string };
@@ -119,6 +123,12 @@ const previewConversation: Conversation = {
     { role: "assistant", text: "交给我，写好了告诉你。", atMs: t0 + 125_500 },
     { role: "user", text: '<agent-report name="potion" label="写喝药脚本" status="done">已保存为自动化《自动喝药》。</agent-report>', source: "agent-report", atMs: t0 + 190_000 },
     { role: "assistant", text: "喝药脚本写好了，保存成了《自动喝药》，要现在打开吗？", atMs: t0 + 191_000 },
+    // 插件工具带页面的结果（ADR 038）：聊天里出一张卡片，点开在右侧栏
+    { role: "user", text: "查一下这把的战绩，对面谁是突破口", source: "chat", atMs: t0 + 240_000 },
+    { role: "assistant", text: "", atMs: t0 + 241_000, toolCalls: [{ id: "call-3", name: "lol.scout", arguments: "{}" }] },
+    { role: "tool", callId: "call-3", name: "lol.scout", content: '{"status":"ok","text":"每人最近 20 局……突破口（对面，按数据）：亚索——6 连败"}', isError: false, untrusted: true, atMs: t0 + 242_000,
+      display: { structuredContent: sampleMatch(), ui: { uri: "ui://kotone/lol/match" } } },
+    { role: "assistant", text: "对面亚索最近 20 局只赢 6 局，刚 6 连败，可以多找他。", atMs: t0 + 244_000 },
   ],
   subagents: [{
     name: "potion", label: "写喝药脚本", conversationId: "c-preview-potion", status: "done",

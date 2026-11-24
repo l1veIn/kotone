@@ -68,6 +68,8 @@ pub const TOOL_GAME_FOCUS: &str = "game.focus";
 pub const TOOL_GAME_LAUNCH: &str = "game.launch";
 pub const TOOL_GAME_INSTALLED: &str = "game.installed";
 pub const TOOL_GAME_STATE: &str = "game.state";
+/// 打开一个页面给玩家看（ADR 038：插件的页面在右侧栏，本体的设置页在设置窗口）。
+pub const TOOL_UI_OPEN: &str = "ui.open";
 pub const TOOL_GAME_CLOSE: &str = "game.close";
 pub const TOOL_GAME_LOOK: &str = "game.look";
 pub const TOOL_GAME_ACT: &str = "game.act";
@@ -144,6 +146,7 @@ pub const HOST_TOOLS: &[&str] = &[
     TOOL_GAME_CLOSE,
     TOOL_GAME_INSTALLED,
     TOOL_GAME_STATE,
+    TOOL_UI_OPEN,
     TOOL_GAME_LOOK,
     TOOL_GAME_ACT,
     TOOL_VOICE_CHAT_STATUS,
@@ -790,6 +793,17 @@ fn defs() -> Vec<Def> {
             egress: "none",
             input: object(&[], json!({"game": id("只看这个游戏配置")})),
             output: object(&["playing", "events"], json!({"playing": {"type": "array"}, "events": {"type": "array"}})),
+        },
+        Def {
+            name: TOOL_UI_OPEN,
+            description: "Open a page in the Kotone window for the player (ADR 038; MCP Apps style ui:// addresses). Plugin pages (ui://kotone/<plugin>/<page>, listed with each plugin tool as _meta.ui.resourceUri; e.g. ui://kotone/lol/match this match, ui://kotone/lol/player a player's match history with params {puuid} or {riotId: \"name#tag\"}, ui://kotone/lol/game one game with params {gameId}) open in the right sidebar next to the chat; ui://kotone/settings/<section> opens a settings page (call, reply, permissions, usage, models, connections, sound, tuning, appearance, system, plugins). Does not bring the Kotone window to the front (the player may be in a game). Returns opened, uri, title; fails for unknown pages or a plugin that is off.",
+            side_effects: &["shows-ui"],
+            egress: "none",
+            input: object(&["page"], json!({
+                "page": {"type": "string", "minLength": 12, "maxLength": 200, "description": "页面地址，如 ui://kotone/lol/match、ui://kotone/settings/plugins"},
+                "params": {"type": "object", "description": "页面的参数（可选），如 {\"puuid\": \"…\"}"}
+            })),
+            output: object(&["opened", "uri"], json!({"opened": {"type": "boolean"}, "uri": {"type": "string"}, "title": {"type": "string"}})),
         },
         Def {
             name: TOOL_GAME_LOOK,

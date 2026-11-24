@@ -486,11 +486,7 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
             Source::Saved { id } => self.call_saved(id, arguments).await,
             Source::Service => self.call_service(&entry.name, arguments).await,
             Source::Plugin { .. } => match self.host.plugin(&entry.name, &arguments).await {
-                // 只有给她的那份进上下文
-                Ok(result) => ToolOutcome::ok(match result.content {
-                    Value::String(text) => text,
-                    other => other.to_string(),
-                }),
+                Ok(result) => plugin_outcome(result),
                 Err(message) => ToolOutcome::error(message),
             },
             // 由 `call` 直接交给桌面（要带上调用 id、取消和“每次询问”），不会走到这里。
@@ -499,6 +495,22 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
         outcome.untrusted = entry.untrusted;
         outcome
     }
+}
+
+/// 插件工具的结果（照 MCP Apps）：只有 `content` 进她的上下文；`structuredContent` 和页面地址给界面
+/// （存进对话记录，聊天卡片用它）。
+pub fn plugin_outcome(result: kotone_plugin_api::ToolResult) -> ToolOutcome {
+    let mut outcome = ToolOutcome::ok(match result.content {
+        Value::String(text) => text,
+        other => other.to_string(),
+    });
+    if let Some(ui) = result.ui {
+        outcome.display = Some(json!({
+            "structuredContent": result.structured_content.unwrap_or(Value::Null),
+            "ui": ui,
+        }));
+    }
+    outcome
 }
 
 fn parse_delivery(arguments: &Value) -> Result<Vec<DeliveryKind>, String> {

@@ -1,12 +1,13 @@
 <!-- 聊天页右侧栏（ADR 031，照 DeepSeek Harness 桌面版的右侧栏与 Codex 的内置浏览器）： -->
 <!-- 顶部两个标签——“卡片”（网页卡片 + 后台在做的事，按宽度 1–3 列）和“网页”（浏览器占满）；左边缘拖动调宽、 -->
 <!-- 双击恢复；网页可以全屏（铺满整个 Kotone 窗口）。网页由后端摆在窗口里（盖在界面上），这里只报那块区域的位置。 -->
+<!-- 第三个标签“页面”（ADR 038）：聊天卡片点开的插件页面（或她用 ui.open 打开的），能往下点、返回、关掉。 -->
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { tick } from "svelte";
   import {
     ArrowLeft, ArrowRight, CircleAlert, Expand, Globe, Info, LayoutGrid, LoaderCircle, Lock, Maximize2, Minimize2,
-    Plus, RotateCw, Shrink, Square, Volume2, X,
+    PanelsTopLeft, Plus, RotateCw, Shrink, Square, Volume2, X,
   } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import { m } from "$lib/paraglide/messages.js";
@@ -23,6 +24,9 @@
   } from "../stores/rightSidebar";
   import { tryAgentChat } from "./context";
   import SidebarTask from "./SidebarTask.svelte";
+  import PluginStack from "../components/plugins/PluginStack.svelte";
+  import { viewOf } from "../pluginUi";
+  import { backPluginPage, closePluginPages, pluginPageStack, pushPluginPage } from "../stores/pluginPages";
 
   let { active = true, narrow = false, chatWidth = 0 }: {
     /** 聊天页正显示着（不在角色 / 记忆分页上）。 */
@@ -44,8 +48,11 @@
   const current = $derived(activeTabOf(browser));
   /** 最多开几个标签页（和后端一样）。 */
   const MAX_TABS = 8;
-  /** 选中的标签。“网页”一直能点：没有网页时也有地址栏，玩家可以自己输入网址或搜索。 */
-  const tab = $derived($rightSidebarTab);
+  /** 插件页面（ADR 038）：开着几页（聊天卡片点开、ui.open）。 */
+  const pages = $derived($pluginPageStack);
+  const pluginPageTitle = $derived(pages.length ? (viewOf(pages[pages.length - 1].uri)?.view.title() ?? "") : "");
+  /** 选中的标签。“网页”一直能点：没有网页时也有地址栏，玩家可以自己输入网址或搜索。“页面”没开着页面时按“卡片”。 */
+  const tab = $derived($rightSidebarTab === "page" && !pages.length ? "cards" : $rightSidebarTab);
 
   // ---- 后台在做的事：在跑的在前，再列最近做完的几件 ----
   const RECENT = 6;
@@ -361,7 +368,7 @@
   {/if}
   <aside
     class="flex min-h-0 flex-col border-l border-hairline bg-background {narrow ? 'absolute inset-y-0 right-0 z-30 shadow-2xl' : 'relative shrink-0'}"
-    style:width={narrow ? (tab === "web" ? "100%" : "min(100%, 360px)") : `${width}px`}
+    style:width={narrow ? (tab === "web" || tab === "page" ? "100%" : "min(100%, 360px)") : `${width}px`}
     aria-label={m.chat_sidebar_label()} data-testid="right-sidebar" data-tab={tab} data-width={narrow ? undefined : width}
   >
     {#if !narrow}
@@ -394,12 +401,22 @@
         {#if browser.tabs.length > 1}<span class="rounded-full bg-muted px-1.5 text-[10px] leading-4 text-muted-foreground" data-testid="sidebar-tab-web-count">{browser.tabs.length}</span>{/if}
         {#if browser.handover}<span class="size-1.5 shrink-0 rounded-full bg-warning" aria-label={m.chat_sidebar_tab_web_handover()}></span>{/if}
       </button>
+      {#if pages.length}
+        <button type="button" role="tab" aria-selected={tab === "page"} data-testid="sidebar-tab-page" title={pluginPageTitle}
+          class="flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors {tab === 'page' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}"
+          onclick={() => setRightSidebarTab("page")}>
+          <PanelsTopLeft class="size-3.5 shrink-0" /><span class="max-w-[9rem] truncate">{pluginPageTitle || m.chat_sidebar_tab_page()}</span>
+        </button>
+      {/if}
       <div class="flex-1"></div>
       <Button size="icon" variant="ghost" class="size-7" aria-label={m.chat_sidebar_collapse()} title={m.chat_sidebar_collapse()} data-testid="right-sidebar-close"
         onclick={toggleRightSidebar}><X class="size-3.5" /></Button>
     </div>
 
-    {#if tab === "web"}
+    {#if tab === "page"}
+      <!-- 插件页面（ADR 038）：最上面那一页，能返回、关掉 -->
+      <PluginStack {pages} onPush={pushPluginPage} onBack={backPluginPage} onClose={closePluginPages} testid="sidebar-plugin-page" />
+    {:else if tab === "web"}
       <!-- 网页：浏览器占满这个标签（照 Codex 内置浏览器）：一排标签页，一行地址栏（后退、前进、刷新、网址、播放控制、全屏、回到卡片） -->
       <div class="flex min-h-0 flex-1 flex-col" data-testid="browser-panel">
         <div class="flex h-9 shrink-0 items-end gap-0.5 overflow-x-auto border-b border-hairline bg-muted/40 px-1.5 pt-1 [scrollbar-width:none]"

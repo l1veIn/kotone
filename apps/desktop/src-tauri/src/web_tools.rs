@@ -122,6 +122,7 @@ mod tests {
                 is_error: false,
                 untrusted: true,
                 images: Vec::new(),
+                display: None,
                 at_ms: 0,
             },
         ];

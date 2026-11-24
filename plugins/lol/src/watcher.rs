@@ -28,7 +28,8 @@ use crate::client::live::{self, LiveGame, LivePlayer};
 use crate::client::spells::{self, SpellTracker, SpellUse};
 use crate::client::text::{self, ScoutPlayer};
 use crate::client::{in_game_phase, GameData, Lcu, LcuAuth, Live, LolError};
-use crate::tools::{TOOL_MATCH, TOOL_SCOUT, TOOL_SPELL};
+use crate::pages;
+use crate::tools::{TOOL_GAME, TOOL_MATCH, TOOL_PLAYER, TOOL_SCOUT, TOOL_SPELL};
 use crate::LolPlugin;
 
 /// 客户端开着时多久看一次阶段；没开时多久看一次进程。
@@ -623,12 +624,14 @@ impl LolPlugin {
                 "英雄联盟插件的“读客户端数据”已关闭（插件 → 英雄联盟 里可以打开）",
             )));
         }
-        Ok(ToolResult::content(match name {
-            TOOL_MATCH => self.match_tool(host.as_ref()).await,
-            TOOL_SPELL => self.spell_tool(host.as_ref(), arguments).await,
+        Ok(match name {
+            TOOL_MATCH => ToolResult::content(self.match_tool(host.as_ref()).await),
+            TOOL_SPELL => ToolResult::content(self.spell_tool(host.as_ref(), arguments).await),
             TOOL_SCOUT => self.scout_tool(host, arguments).await,
+            TOOL_PLAYER => self.player_tool(host.as_ref(), arguments).await,
+            TOOL_GAME => self.game_tool(host.as_ref(), arguments).await,
             other => return Err(format!("{other} 不是英雄联盟工具")),
-        }))
+        })
     }
 
     async fn match_tool(&self, host: &dyn Host) -> Value {
@@ -787,7 +790,7 @@ impl LolPlugin {
         })
     }
 
-    async fn scout_tool(&self, host: &Arc<dyn Host>, arguments: &Value) -> Value {
+    async fn scout_tool(&self, host: &Arc<dyn Host>, arguments: &Value) -> ToolResult {
         let only = str_arg(arguments, "player");
         let has_match = self.state().current.is_some();
         if !has_match {
@@ -799,7 +802,7 @@ impl LolPlugin {
             // 先把数取出来、放开锁，再决定（not_in_game 自己也要拿锁）
             let waiting = self.state().current.as_ref().map(|m| m.pending.len());
             match waiting {
-                None => return self.not_in_game(host.as_ref()),
+                None => return ToolResult::content(self.not_in_game(host.as_ref())),
                 Some(0) => break,
                 Some(_) if Instant::now() >= deadline => break,
                 Some(_) => tokio::time::sleep(Duration::from_millis(300)).await,
@@ -807,12 +810,30 @@ impl LolPlugin {
         }
         let data = self.ensure_data().await;
         if self.state().current.is_none() {
-            return self.not_in_game(host.as_ref());
+            return ToolResult::content(self.not_in_game(host.as_ref()));
         }
-        let s = self.state();
-        let Some(m) = s.current.as_ref() else {
-            return status("not_in_game", "这局刚结束");
+        let Some(view) = self.match_view(data.as_deref()) else {
+            return ToolResult::content(status("not_in_game", "这局刚结束"));
         };
+        let text = text::render_scout(&view.players, view.queue_id, &view.mode, view.random, only);
+        ToolResult::content(json!({"status": "ok", "text": text})).with_page(
+            pages::PAGE_MATCH,
+            pages::match_page(
+                &view.players,
+                &view.puuids,
+                view.game_id,
+                view.queue_id,
+                &view.mode,
+                view.random,
+                data.as_deref(),
+            ),
+        )
+    }
+
+    /// 这局的 10 个人（和 `puuids` 一一对应）、模式。没有这局时 None。
+    fn match_view(&self, data: Option<&GameData>) -> Option<MatchView> {
+        let s = self.state();
+        let m = s.current.as_ref()?;
         let me = s
             .client
             .as_ref()
@@ -828,7 +849,7 @@ impl LolPlugin {
             .members
             .iter()
             .map(|x| {
-                let champion = data.as_deref().and_then(|d| d.champion(x.champion_id));
+                let champion = data.and_then(|d| d.champion(x.champion_id));
                 let history = m.histories.get(&x.puuid).cloned();
                 let name = history
                     .as_ref()
@@ -852,11 +873,187 @@ impl LolPlugin {
             })
             .collect();
         let mode = data
-            .as_deref()
             .and_then(|d| d.queue_name(m.queue_id))
             .map(str::to_string)
             .unwrap_or_else(|| text::mode_name(&m.mode).to_string());
-        let random = crate::client::gamedata::random_pick(data.as_deref(), m.queue_id);
-        json!({"status": "ok", "text": text::render_scout(&players, m.queue_id, &mode, random, only)})
+        Some(MatchView {
+            puuids: m.members.iter().map(|x| x.puuid.clone()).collect(),
+            players,
+            game_id: m.game_id,
+            queue_id: m.queue_id,
+            random: crate::client::gamedata::random_pick(data, m.queue_id),
+            mode,
+        })
+    }
+
+    /// 连着的客户端（没开时给她的话）。
+    fn lcu_or_closed(&self, host: &dyn Host) -> Result<Lcu, Value> {
+        if let Some(lcu) = self.state().client.as_ref().map(|c| c.lcu.clone()) {
+            return Ok(lcu);
+        }
+        match client_pid(host).and_then(|pid| self.ensure_client(host, pid)) {
+            Some(lcu) => Ok(lcu),
+            None => Err(status(
+                "not_in_client",
+                "英雄联盟客户端没开（查战绩要开着客户端）",
+            )),
+        }
+    }
+
+    /// `lol.player`：某个人最近的战绩（不写 = 自己；这局里的人按英雄名或玩家名；别的人写“名字#编号”）。
+    async fn player_tool(&self, host: &dyn Host, arguments: &Value) -> ToolResult {
+        let lcu = match self.lcu_or_closed(host) {
+            Ok(lcu) => lcu,
+            Err(result) => return ToolResult::content(result),
+        };
+        let data = self.ensure_data().await;
+        let puuid = match self.find_player(&lcu, data.as_deref(), arguments).await {
+            Ok(puuid) => puuid,
+            Err(result) => return ToolResult::content(result),
+        };
+        // 这局查过的直接用
+        let cached = self
+            .state()
+            .current
+            .as_ref()
+            .and_then(|m| m.histories.get(&puuid).cloned());
+        let history = match cached {
+            Some(h) => h,
+            None => fetch_history(&lcu, &puuid).await,
+        };
+        let queue_id = self
+            .state()
+            .current
+            .as_ref()
+            .map(|m| m.queue_id)
+            .unwrap_or(0);
+        let text = pages::player_text(&history, data.as_deref());
+        ToolResult::content(json!({"status": "ok", "text": text})).with_page(
+            pages::PAGE_PLAYER,
+            pages::player_page(&puuid, &history, queue_id, data.as_deref()),
+        )
+    }
+
+    async fn find_player(
+        &self,
+        lcu: &Lcu,
+        data: Option<&GameData>,
+        arguments: &Value,
+    ) -> Result<String, Value> {
+        if let Some(puuid) = str_arg(arguments, "puuid") {
+            return Ok(puuid.to_string());
+        }
+        let Some(query) = str_arg(arguments, "player") else {
+            return self
+                .my_puuid(lcu)
+                .await
+                .ok_or_else(|| status("error", "读不到你自己的账号"));
+        };
+        // 先在这局里找（英雄名、玩家名）
+        if let Some(view) = self.match_view(data) {
+            let hits: Vec<usize> = (0..view.players.len())
+                .filter(|i| view.players[*i].matches(query))
+                .collect();
+            match hits.as_slice() {
+                [one] => return Ok(view.puuids[*one].clone()),
+                [] => {}
+                many => {
+                    let names: Vec<&str> = many
+                        .iter()
+                        .map(|i| view.players[*i].short.as_str())
+                        .collect();
+                    return Err(status(
+                        "ambiguous",
+                        format!("是哪个：{}？", names.join("、")),
+                    ));
+                }
+            }
+        }
+        // 名字#编号：按 Riot ID 找
+        if let Some((name, tag)) = query.split_once('#') {
+            let path = format!(
+                "/lol-summoner/v1/alias/lookup?gameName={}&tagLine={}",
+                encode(name.trim()),
+                encode(tag.trim())
+            );
+            if let Ok(found) = lcu.get(&path).await {
+                if let Some(puuid) = found
+                    .get("puuid")
+                    .and_then(Value::as_str)
+                    .filter(|p| !p.is_empty())
+                {
+                    return Ok(puuid.to_string());
+                }
+            }
+            return Err(status(
+                "not_found",
+                format!("没找到 {query}（要写完整的 名字#编号）"),
+            ));
+        }
+        Err(status(
+            "not_found",
+            format!("这局没有“{query}”；查别人要写完整的 名字#编号"),
+        ))
+    }
+
+    /// `lol.game`（只给页面）：一局的详情，10 个人的 KDA、伤害、经济、装备。
+    async fn game_tool(&self, host: &dyn Host, arguments: &Value) -> ToolResult {
+        let lcu = match self.lcu_or_closed(host) {
+            Ok(lcu) => lcu,
+            Err(result) => return ToolResult::content(result),
+        };
+        let Some(game_id) = arguments
+            .get("gameId")
+            .and_then(Value::as_i64)
+            .filter(|g| *g > 0)
+        else {
+            return ToolResult::content(status("error", "要写 gameId"));
+        };
+        let data = self.ensure_data().await;
+        let detail = match lcu.get(&paths::game(game_id)).await {
+            Ok(v) => v,
+            Err(error) => {
+                return ToolResult::content(status("error", format!("这局的详情读不到：{error}")))
+            }
+        };
+        match pages::game_page(&detail, data.as_deref()) {
+            Some(page) => ToolResult::content(json!({"status": "ok", "gameId": game_id}))
+                .with_page(pages::PAGE_GAME, page),
+            None => ToolResult::content(status("error", "这局的详情是空的")),
+        }
+    }
+}
+
+/// [`LolPlugin::match_view`]。
+struct MatchView {
+    players: Vec<ScoutPlayer>,
+    puuids: Vec<String>,
+    game_id: i64,
+    queue_id: i64,
+    mode: String,
+    random: bool,
+}
+
+/// 查询参数里的值（UTF-8 按字节百分号编码，只留字母数字和 -_.~）。
+fn encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode;
+
+    #[test]
+    fn query_values_are_percent_encoded() {
+        assert_eq!(encode("abc-1"), "abc-1");
+        assert_eq!(encode("琴音 #"), "%E7%90%B4%E9%9F%B3%20%23");
     }
 }

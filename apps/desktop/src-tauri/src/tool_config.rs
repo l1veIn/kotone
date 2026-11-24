@@ -315,7 +315,7 @@ fn settings_error(message: String) -> HostError {
 pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
     // 插件的工具（ADR 038）：外部 Agent、MCP 经工具服务调到这里，结果照 MCP（content / structuredContent / _meta.ui）
     if crate::plugins::owner(tool).is_some() {
-        return crate::plugins::call(app, tool, &args, None)
+        return crate::plugins::call(app, tool, &args, crate::plugins::Caller::Service)
             .await
             .map(|result| result.to_service_json())
             .map_err(HostError::Failed);
@@ -981,6 +981,9 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
                 parse(tool, args)?
             };
             blocking(move || Ok(crate::game_tools::installed(a.query.as_deref()))).await
+        }
+        c::TOOL_UI_OPEN => {
+            crate::plugins::open_page(app, &args).map_err(HostError::InvalidArguments)
         }
         c::TOOL_GAME_STATE => {
             let game = args

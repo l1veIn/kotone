@@ -298,6 +298,7 @@ mod tests {
             is_error: false,
             untrusted: false,
             images: Vec::new(),
+            display: None,
             at_ms: 0,
         };
         assert!(interrupted(&[tool(

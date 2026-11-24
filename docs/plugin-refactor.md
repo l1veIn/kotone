@@ -371,3 +371,39 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 - 真机（不开游戏，假客户端 + 真 DeepSeek，不发任何系统按键）：`lol_tools_real.py --while-playing` 17/17，`game_events_real.py` 11/11。她照旧用 `lol.scout` / `lol.spell` / `lol.match`，游戏中心的阶段、按事件运行的自动化、复盘都照旧。
 
 **还没测**：真客户端、真对局（同 ADR 035、036 的“还没测”）；装回旧版后 `lol.enabled` 的表现。
+
+### 第 2 步：页面和卡片（2026-11-24）
+
+**玩家能看到的**：
+
+- 问“查一下这把的战绩”，聊天里她那句话上面多一张“这局”卡片：对面 5 个人的近况、谁是突破口、我方一行。这是她查的那一刻的样子。截图：`target/plugin-shots/step2/chat-card.png`。
+- 点卡片，右侧栏多一个标签（标题就是页面名），显示完整的“这局”：两边 10 个人的段位、近 20 局胜负、KDA、场均死、同模式分均伤害、标签、隐藏战绩、开黑、突破口和原因；“刷新”重新查。截图：`sidebar-match-page.png`。
+- 点一个人进他的“战绩”：段位、常玩英雄、最近每一局；点一局进“单局详情”：两边 10 个人的 KDA、伤害、经济、补刀、装备、海克斯；左上角可以一层层返回。截图：`sidebar-player-page.png`、`sidebar-game-page.png`。
+- 左侧栏的英雄联盟插件页面多了“这局”“战绩”两个标签（战绩里可以按“名字#编号”或这局里的名字搜），原来的“设置”还在。截图：`plugin-page-player-tab.png`。
+- 说“我最近怎么样”“对面亚索最近战绩怎么样”，她用新工具 `lol.player`，聊天里出现那个人的战绩卡片；说“打开我的战绩”“打开插件设置”，她用 `ui.open` 在 Kotone 窗口里打开（不会把窗口拉到游戏前面）。
+
+**本体变了多少**：这一步主要是加东西，本体没删代码。
+
+| 量 | 第 1 步后 | 第 2 步后 |
+| --- | --- | --- |
+| 桌面端后端 | 28,520 行 | 28,639 行（`ui.open` 和三种调用者） |
+| `kotone-ai` | — | 工具结果多一个 `display`（给界面的，不发给模型），约 20 行 |
+| 宿主界面（`apps/desktop/src`） | — | 卡片、右侧栏的页面标签、页面栈、`ui.open`，约 600 行（新文件 5 个） |
+| `plugins/lol` | Rust 3,767 行，界面 100 行 | Rust 4,324 行（页面数据 `pages.rs`、两个新工具），界面 654 行 |
+
+**定下来的细节**：
+
+- **工具结果怎么进对话记录**：`ToolOutcome` / `Message::Tool` 多一个 `display`（`structuredContent` 和 `ui`），存进对话、发给界面，**不发给模型**（有测试：DeepSeek 的请求体里没有页面数据）。她看到的还是原来那几行字。旧的对话记录没有这个字段，照样读得进来。
+- **谁能调哪种工具**（`plugins::Caller`）：她只能调给她的（`model`）；插件自己的页面只能调自己插件给页面的（`app`）；外部 Agent 经工具服务 / MCP 两种都能调（清单里都列出来、带 `visibility`，照 MCP Apps 给宿主的那一份）。
+- **`ui.open`** 是工具服务的工具（她和外部 Agent 共用），主会话也有。页面地址：插件的页面 `ui://kotone/<插件>/<页面>`（插件关着、或页面要的数据开关关着时报错），本体的设置页 `ui://kotone/settings/<分页>`。界面收到 `kotone://ui-open`：插件页面切到聊天页、在右侧栏打开；设置页跳到那一页。
+- **页面的两种尺寸**（照 MCP Apps）：插件界面登记 `views`：每个 `ui://` 地址一个完整页面和一个可选的卡片。页面拿到 `{uri, params, data, bridge}`；`bridge.call(tool, args)` 调本插件的工具（`plugin_call`），`bridge.openPage(uri, params, data)` 在页面之间跳（右侧栏里压栈，可以返回）。`data` 为空时页面自己去查。
+- **卡片是快照**：从卡片点开的页面先显示“这是她查的时候的样子”，点“刷新”才重新查。
+- **英雄联盟的页面数据**（`plugins/lol/src/pages.rs`）和她拿到的文字用同一份统计（`scout::summarize`）。单局详情用客户端的 `/lol-match-history/v1/games/{id}`；按“名字#编号”找人用 `/lol-summoner/v1/alias/lookup`（**这个接口没在真客户端上试过**，假客户端里有）。
+
+**检查**：
+
+- Rust：`kotone-ai`（加了“页面数据不发给模型”）、`kotone-agent` 77、`kotone-plugin-api` 6、`kotone-plugin-lol` 37、`kotone-tools` 111、桌面端 109，全过；clippy `-D warnings`、fmt 干净。
+- 界面：svelte-check 0 / 0；Playwright 151 个全过（新加 3 个：卡片 → 右侧栏 → 战绩 → 单局 → 返回；`ui.open` 打开插件页面和设置页、拒绝不存在的地址；插件页面的三个标签和搜索）。
+- 真机（假客户端 + 真 DeepSeek，不按键）：`lol_tools_real.py --while-playing` 26/26（新加：`lol.scout` 的结果带这局的页面数据、页面数据没进她的上下文；她问一个人的战绩时用 `lol.player`；经工具服务调 `lol.player`、`lol.game`、`ui.open`），`game_events_real.py` 11/11。
+
+**还没测**：真客户端里按“名字#编号”找人；真窗口里 `ui.open` 打开右侧栏（Playwright 用的是浏览器里的同一个处理函数）。右侧栏里页面的“关闭”和侧栏自己的“关闭”挨在一起、长得一样，以后改。

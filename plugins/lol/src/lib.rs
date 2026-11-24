@@ -4,6 +4,7 @@
 //! - [`client`]：数据开关“读客户端数据”（`client`）背后的东西：本机的客户端接口（LCU）和局内接口，
 //!   战绩、突破口、技能计时，都是纯函数加一个只连 127.0.0.1 的 HTTP 客户端；
 //! - [`tools`]：给她和页面的工具（名字、说明、参数）；
+//! - [`pages`]：页面的数据（这局、战绩、单局详情，照 MCP Apps 的 `structuredContent`）；
 //! - [`watcher`]：后台每 2 秒看一次客户端（进加载界面就查战绩、往游戏中心报阶段和局内的事），以及工具的实现。
 //!
 //! 只依赖插件契约（`kotone-plugin-api`）和 `kotone-core` 的纯数据类型；进程、游戏中心、设置都由宿主给。
@@ -14,6 +15,7 @@ use kotone_plugin_api::{BoxFuture, Host, Manifest, Plugin, ToolResult, ToolSpec}
 use serde_json::Value;
 
 pub mod client;
+pub mod pages;
 pub mod tools;
 mod watcher;
 

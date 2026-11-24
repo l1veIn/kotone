@@ -19,6 +19,12 @@ pub async fn plugin_call(
     arguments: Option<Value>,
 ) -> Result<Value, String> {
     let arguments = arguments.unwrap_or_else(|| Value::Object(Default::default()));
-    let result = crate::plugins::call(&app, &tool, &arguments, Some(&plugin)).await?;
+    let result = crate::plugins::call(
+        &app,
+        &tool,
+        &arguments,
+        crate::plugins::Caller::Page(&plugin),
+    )
+    .await?;
     serde_json::to_value(result).map_err(|e| e.to_string())
 }

@@ -224,7 +224,11 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | --- | --- | --- | --- |
 | 英雄联盟（`lol`，数据开关 `client` 读客户端数据） | `lol.match` | 无 | 这局现在的样子（模式、时间、比分、10 个人的英雄 / 技能 / KDA / 装备、对面谁闪没好、谁没带闪）。只读本机的局内接口 |
 | | `lol.spell` | `champion`、`spell`（缺省闪现）、`ago`、`clear` | 记下谁交了召唤师技能，返回几点好和一句能发到聊天框的 `chat` |
-| | `lol.scout` | `player`（可选） | 这局 10 个人最近 20 局的战绩、开黑、突破口。进加载界面就在后台查 |
+| | `lol.scout` | `player`（可选） | 这局 10 个人最近 20 局的战绩、开黑、突破口。进加载界面就在后台查。页面 `ui://kotone/lol/match`（这局） |
+| | `lol.player` | `player`（这局里的英雄名或玩家名，或“名字#编号”）或 `puuid`；都不写 = 自己 | 一个人最近 20 局的战绩、段位、常玩英雄、每一局。页面 `ui://kotone/lol/player`（战绩） |
+| | `lol.game`（只给页面） | `gameId` | 一局的详情：两边 10 个人的 KDA、伤害、经济、补刀、装备、海克斯。页面 `ui://kotone/lol/game` |
+
+**打开页面**：`ui.open {page, params?}` 在 Kotone 窗口里打开一个页面：插件的页面（上面各工具的 `resourceUri`，例如 `ui://kotone/lol/player` 带 `{puuid}`）在聊天旁边的右侧栏；`ui://kotone/settings/<分页>`（call、reply、permissions、usage、models、connections、sound、tuning、appearance、system、plugins）打开设置页。不会把窗口拉到前面。页面不存在、插件或它要的数据开关关着时报 `INVALID_ARGUMENTS`。
 
 ### Kotone 陪玩（委托桌面宿主，2026-11-15）
 

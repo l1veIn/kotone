@@ -118,8 +118,10 @@ impl Manifest {
     /// 读 `plugin.toml` 并检查：id 的写法、页面地址在自己的 `ui://kotone/<id>/` 下、
     /// `needs` 只写自己有的数据开关、开关和页面不重名。
     pub fn parse(text: &str) -> Result<Self, String> {
+        // Windows 上检出的文件是 CRLF（core.autocrlf）：多行字符串里的换行统一成 LF，给她的话两边一样
+        let text = text.replace("\r\n", "\n");
         let manifest: Manifest =
-            toml::from_str(text).map_err(|e| format!("plugin.toml 不对：{e}"))?;
+            toml::from_str(&text).map_err(|e| format!("plugin.toml 不对：{e}"))?;
         manifest.check()?;
         Ok(manifest)
     }
@@ -564,6 +566,13 @@ rule = "- 英雄联盟：……"
         let v = paged.to_service_json();
         assert_eq!(v["structuredContent"], json!({"players": []}));
         assert_eq!(v["_meta"]["ui"]["resourceUri"], "ui://kotone/lol/match");
+    }
+
+    #[test]
+    fn crlf_files_give_the_same_text() {
+        let lf = Manifest::parse(SAMPLE).unwrap();
+        let crlf = Manifest::parse(&SAMPLE.replace('\n', "\r\n")).unwrap();
+        assert_eq!(lf, crlf);
     }
 
     #[test]

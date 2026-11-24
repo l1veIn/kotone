@@ -1490,6 +1490,10 @@ async fn plugin_tool_calls_give_her_only_the_content() {
     assert!(out.untrusted);
     assert!(out.content.contains("对面寒冰五连败"));
     assert!(!out.content.contains("很长的页面数据"));
+    // 页面的数据给界面（存进对话记录），不给她
+    let display = out.display.as_ref().expect("插件工具带页面时有 display");
+    assert_eq!(display["ui"]["uri"], "ui://kotone/lol/match");
+    assert_eq!(display["structuredContent"]["players"][0], "很长的页面数据");
     let calls = builtin.calls.lock().unwrap().clone();
     assert_eq!(
         calls,

@@ -160,6 +160,7 @@ impl ToolPort for FakeTools {
                 is_error: false,
                 untrusted: true,
                 images: Vec::new(),
+                display: None,
             },
             "hang" => {
                 self.hang_started.notify_one();
@@ -958,6 +959,7 @@ fn tool(id: &str, content: &str) -> Message {
         is_error: false,
         untrusted: false,
         images: Vec::new(),
+        display: None,
         at_ms: 0,
     }
 }
@@ -1174,6 +1176,7 @@ mod http {
                     is_error: false,
                     untrusted: true,
                     images: Vec::new(),
+                    display: None,
                     at_ms: 0,
                 },
                 user_with_image("现在看看画面"),
@@ -2179,6 +2182,7 @@ mod deepseek_http {
                     is_error: false,
                     untrusted: false,
                     images: Vec::new(),
+                    display: None,
                     at_ms: 2,
                 },
                 Message::Assistant {
@@ -2197,6 +2201,29 @@ mod deepseek_http {
                 parameters: json!({"type": "object", "properties": {}}),
             }],
         }
+    }
+
+    /// 插件工具结果给页面的数据（ADR 038）存在对话记录里，不发给模型。
+    #[test]
+    fn page_data_on_tool_results_never_reaches_the_model() {
+        let mut req = request();
+        if let Message::Tool { display, .. } = &mut req.messages[2] {
+            *display = Some(
+                json!({"structuredContent": {"secret": "只给页面的数据"}, "ui": {"uri": "ui://kotone/lol/match"}}),
+            );
+        }
+        let stored = serde_json::to_string(&req.messages[2]).unwrap();
+        assert!(stored.contains("只给页面的数据") && stored.contains("\"display\""));
+        let back: Message = serde_json::from_str(&stored).unwrap();
+        assert_eq!(back, req.messages[2]);
+        let (body, _) = DeepSeekModel::new(connection("http://x")).body(&req);
+        assert!(!body.to_string().contains("只给页面的数据"));
+        // 旧记录没有这个字段：照样读得进来
+        let old: Message = serde_json::from_str(
+            r#"{"role":"tool","callId":"c","name":"x","content":"ok","atMs":1}"#,
+        )
+        .unwrap();
+        assert!(matches!(old, Message::Tool { display: None, .. }));
     }
 
     async fn mount(server: &MockServer, status: u16, body: String) {

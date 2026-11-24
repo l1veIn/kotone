@@ -111,6 +111,8 @@ pub const MAIN_TOOLS: &[&str] = &[
     "runtime.status",
     // 放歌：搜歌即放、每日推荐、我喜欢的、暂停切歌（ADR 034，一次调用就出声，不交给后台）
     crate::music::TOOL_MUSIC,
+    // 在 Kotone 窗口里打开一个页面（插件的页面、设置页，ADR 038）
+    "ui.open",
     // 插件的工具不在这里：标了“马上返回”（`instant`）的主会话也拿（[`main_offers`]）
     // 交给后台
     TOOL_AGENT_START,

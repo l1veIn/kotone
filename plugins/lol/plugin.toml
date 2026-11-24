@@ -17,13 +17,29 @@ enabled_by_default = true
 risk = "国服用这类功能可能违反腾讯的用户协议，LeagueAkari 等工具有封号、禁言的报告；Riot 也限制第三方的技能冷却计时。用不用由你决定。"
 
 [[pages]]
+uri = "ui://kotone/lol/match"
+title = "这局"
+needs = ["client"]
+
+[[pages]]
+uri = "ui://kotone/lol/player"
+title = "战绩"
+needs = ["client"]
+
+[[pages]]
+uri = "ui://kotone/lol/game"
+title = "单局详情"
+needs = ["client"]
+
+[[pages]]
 uri = "ui://kotone/lol/settings"
 title = "设置"
 
 [agent]
-overview = "英雄联盟里查这局玩家的战绩和突破口、记对面交的召唤师技能"
+overview = "英雄联盟里查这局玩家的战绩和突破口、查任何人的战绩、记对面交的召唤师技能"
 rule = """- 英雄联盟（读本机的客户端和局内接口，马上返回）：这局的样子、“谁没闪”“对面谁没带闪”用 lol.match；\
 玩家说“对面阿狸闪了”就用 lol.spell 记下（不用问），简短应一声几点好；“查战绩”“对面谁是突破口”用 lol.scout，\
-挑一两个最值得说的用信息的口吻说（“对面辅助最近五连败、劫最近没玩过”），不下命令，隐藏战绩的提一句。\
+挑一两个最值得说的用信息的口吻说（“对面辅助最近五连败、劫最近没玩过”），不下命令，隐藏战绩的提一句；\
+“我最近怎么样”“查一下对面亚索 / 某某#1234 的战绩”用 lol.player。\
 玩家说了“发出去 / 发聊天框”才用 game_chat.send 发：技能发 lol.spell 返回的 chat 那句，战绩一条一行。
 """

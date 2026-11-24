@@ -166,6 +166,11 @@ pub mod paths {
     pub fn ranked(puuid: &str) -> String {
         format!("/lol-ranked/v1/ranked-stats/{puuid}")
     }
+
+    /// 一局的详情（10 个人的数据）。
+    pub fn game(game_id: i64) -> String {
+        format!("/lol-match-history/v1/games/{game_id}")
+    }
 }
 
 #[cfg(test)]

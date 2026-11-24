@@ -314,5 +314,10 @@
   "chat_local_asr_status": "Local speech recognition · {status}",
   "chat_local_asr_retry": "Retry",
   "chat_local_asr_start": "Start",
-  "chat_tool_label_game_state": "Check what's being played"
+  "chat_tool_label_game_state": "Check what's being played",
+  "chat_sidebar_tab_page": "Page",
+  "chat_plugin_page_back": "Back",
+  "chat_plugin_page_close": "Close page",
+  "chat_plugin_page_missing": "This page can't open right now (the plugin is off, or there is no such page).",
+  "chat_plugin_card_open": "Open"
 }
