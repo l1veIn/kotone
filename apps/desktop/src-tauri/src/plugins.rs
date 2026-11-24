@@ -503,6 +503,7 @@ pub fn settings_changed(app: &AppHandle) {
     for plugin in registry() {
         plugin.settings_changed(DesktopHost::for_plugin(app, plugin));
     }
+    crate::remote_plugins::settings_changed(app);
 }
 
 /// 玩家让她停下：每个插件停掉正在替她做的事（例如游戏语音里还没说完的话）。
@@ -510,7 +511,6 @@ pub fn stop_all() {
     for plugin in registry() {
         plugin.stop();
     }
-    crate::remote_plugins::settings_changed(app);
 }
 
 /// 启动时：每个插件开它的后台循环（循环里自己看开关）。
