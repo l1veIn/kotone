@@ -1,6 +1,8 @@
 <script lang="ts">
   // 聊天里插件工具结果的卡片（ADR 038 第 2 步，照 MCP Apps 的“嵌在对话里”）：页面的小尺寸版本，
   // 是她查的那一刻的样子（只读）；点一下在右侧栏打开完整页面，旁边接着和她聊。
+  // 插件做成 MCP App 的页面（ADR 039 D5）：卡片里是同一个 App（inline，进入可视区才加载），点头上一行打开完整页面；
+  // App 里能点，所以卡片本身不整块当按钮。
   import { Maximize2 } from "@lucide/svelte";
   import { m } from "$lib/paraglide/messages.js";
   import type { ToolDisplay } from "../agent";
@@ -18,7 +20,20 @@
   }
 </script>
 
-{#if found?.view.card}
+{#if found?.view.app}
+  <div class="my-1.5 max-w-[34rem] overflow-hidden rounded-xl border border-hairline bg-card/60" data-testid="plugin-card" data-uri={uri} data-app="true">
+    <button type="button" class="flex h-8 w-full items-center gap-2 border-b border-hairline px-3 text-left text-xs text-muted-foreground hover:text-foreground"
+      data-testid="plugin-card-open" onclick={open}>
+      <span class="min-w-0 flex-1 truncate font-medium text-foreground/85">{found.view.title()}</span>
+      <span class="shrink-0">{m.chat_plugin_card_open()}</span>
+      <Maximize2 class="size-3 shrink-0" />
+    </button>
+    <div data-testid="plugin-card-body">
+      <PluginView {uri} {params} data={display.structuredContent ?? null} compact onFullscreen={open}
+        onOpen={(next, nextParams) => openPluginPage(next, nextParams ?? {}, null)} />
+    </div>
+  </div>
+{:else if found?.view.card}
   <div class="my-1.5 max-w-[34rem] overflow-hidden rounded-xl border border-hairline bg-card/60 transition-colors hover:border-primary/40"
     data-testid="plugin-card" data-uri={uri}>
     <button type="button" class="flex h-8 w-full items-center gap-2 border-b border-hairline px-3 text-left text-xs text-muted-foreground hover:text-foreground"

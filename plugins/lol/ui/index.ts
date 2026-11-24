@@ -13,8 +13,6 @@ import PlayerCard from "./PlayerCard.svelte";
 import GameView from "./GameView.svelte";
 import ChampionView from "./ChampionView.svelte";
 import ChampionCard from "./ChampionCard.svelte";
-import TierView from "./TierView.svelte";
-import TierCard from "./TierCard.svelte";
 import ChampSelectOverlay from "./ChampSelectOverlay.svelte";
 import AugmentOverlay from "./AugmentOverlay.svelte";
 import {
@@ -33,7 +31,8 @@ const ui: PluginUi = {
     [PAGE_PLAYER]: { page: PlayerView, card: PlayerCard, title: () => m.plugin_lol_page_player() },
     [PAGE_GAME]: { page: GameView, title: () => m.plugin_lol_page_game() },
     [PAGE_CHAMPION]: { page: ChampionView, card: ChampionCard, title: () => m.plugin_lol_page_champion() },
-    [PAGE_TIER]: { page: TierView, card: TierCard, title: () => m.plugin_lol_page_tier() },
+    // 强度榜是 MCP App（ADR 039 D5）：plugins/lol/app 打成的独立 HTML，在 Kotone 和 Claude 这类宿主里是同一个页面
+    [PAGE_TIER]: { app: true, title: () => m.plugin_lol_page_tier() },
   },
   toolLabels: {
     "lol.match": () => m.plugin_lol_tool_match(),

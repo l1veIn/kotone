@@ -143,6 +143,38 @@ Kotone 能做的，按先后：
 
 跟在第 5 期后面做的（不算 MCP 的分期）：自动卡片和消息提示（ADR 039 D3、D4），英雄联盟第一个用。
 
+### 第 3 期（2026-11-25）
+
+**做了什么**（两个提交：先是看不到的底座，再是界面）：
+
+- 插件契约：`Plugin::resource(uri)`（清单 `pages` 里的页面做成的独立 HTML，`text/html;profile=mcp-app`，带 `_meta.ui.csp` / `prefersBorder`）和 `Plugin::asset(host, path)`（素材），都默认没有；对应规则写在 `kotone-plugin-api/src/resource.rs`：覆盖层不是资源，资源跟着页面的数据开关走，CSP 声明要写成规范的源。
+- 回环代理（`apps/desktop/src-tauri/src/app_proxy.rs`）：`127.0.0.1` 随机端口、路径第一段是 256 位随机密钥、只认本机（对方地址和 `Host` 头）。三条路：`/<密钥>/sandbox/<插件>/<页面>` 沙盒代理页，`/<密钥>/app/<插件>/<页面>` App 的 HTML（CSP 在响应头里，从 `default-src 'none'` 起，只放行声明的源和本代理的 `/assets/<插件>/`），`/<密钥>/assets/<插件>/<路径>` 素材（转给插件，带 `default-src 'none'; sandbox`）。
+- 工具服务：capabilities 多了 `resources`，新端点 `GET /v1/resources/read?uri=`、错误码 `RESOURCE_NOT_FOUND`。`kotone.exe mcp`：声明 `resources` 和 MCP Apps 扩展，`resources/list` / `resources/read` / `resources/templates/list`；工具带 `_meta.ui`（`visibility`；`resourceUri` 只给真做成资源的页面，另带旧的扁平键 `ui/resourceUri`）；带页面的结果照规范交出（`content` 只有给模型的字，`structuredContent` 是页面的数据）。
+- 前端：`McpAppFrame.svelte` 用 ext-apps 的 `AppBridge`（锁 2.1.0，用到时才加载）。握手照规范：沙盒代理页说 ready → 宿主发 `sandbox-resource-ready` → App 发 `ui/initialize` → `initialized` 之后才推工具的输入、结果和主题、尺寸的变化。插件页、右侧栏是 fullscreen，聊天卡片是 inline（进入可视区才加载，高度跟 App 报的走）。宿主上下文：主题、语言、显示方式、容器尺寸，推了结果时带 `toolInfo`。
+- 英雄联盟：强度榜（`ui://kotone/lol/tier`）做成 App（`plugins/lol/app/`，Vite + Svelte + `vite-plugin-singlefile`，`build.rs` 编进插件，没打包时编占位页），插件页的“强度榜”标签和聊天里 `lol.tier` 的卡片都是它；原来的 `TierView` / `TierCard` 删掉。之后有人在同一个 App 里加了“这局”。
+
+**和方案不一样的地方**：
+
+- **每个插件一个端口**（= 一个源），不是所有 App 共用一个：同源的 iframe 能互相读页面和 localStorage，规范的 `domain` 也是每个服务器一个源。
+- **App 由代理按地址加载**：沙盒代理页收到 `sandbox-resource-ready` 后，里层 iframe 指向本代理的 `/app/` 地址（和 `resources/read` 同一份 HTML，CSP 在 HTTP 头里，页面改不了），消息里的 `html` / `csp` / `sandbox` / `permissions` 不用（照 Goose 的“guest 页”）。
+- **资源不做成工具**：列表放在 capabilities 里、读用单独的端点，不混进琴音和外部 Agent 的工具清单。
+- **App 调工具**：按 iframe 绑定插件（后端 `plugin_app` 给的），名字认 `kotone_…`（和 `mcp.rs` 一样的对照，撞名不猜）和 Kotone 名，只在这个插件给页面的工具里找；后端 `plugins::Caller::Page` 再查一遍。读资源也只读本插件的。
+- **打开链接**：外链交给系统浏览器（`openExternal`）；`ui://kotone/<本插件>/<页面>?参数` 在 Kotone 里打开本插件的页面（强度榜点英雄进英雄页，原来 Svelte 页面就有的）。别的宿主不认这种链接，什么都不做。
+- **请求换显示方式**：聊天卡片请求 fullscreen 时在右侧栏打开完整页面，卡片自己还是 inline；pip 先不支持（第 4 期映射到覆盖层）。
+- **`ui/message`**（替玩家往聊天里发话）先回 `isError`，**`ui/update-model-context`** 回成功但不存、不进上下文：往聊天和模型上下文里放东西是大权力（ADR 039 D3），以后再定；宿主能力里也不声明这两样。
+- **浏览器预览**（dev:web、Playwright）：Vite 开发服务器旁边起一个小服务，照回环代理的路径、在 `127.0.0.1` 的另一个端口上给沙盒代理页（就是桌面端那一个）和打包好的 App；`test:e2e` 先跑 `build:apps`。
+
+**怎么验的**：
+
+- 单元测试：插件契约（资源的样子、清单的对应规则、CSP 写法、素材路径）；代理（CSP 拼对了、没密钥 404、别的插件 404、Host 不是本机 403、只认 GET、素材路径不对不转给插件、丢掉代理端口就关）；工具服务（真 HTTP + 假宿主）；`mcp.rs`（`_meta.ui`、结果的样子）和 `agent_cli.rs` 的 MCP 对话（假宿主）。
+- `scripts/manual-e2e/mcp_app_resources_real.py`（隔离实例，经 `kotone.exe mcp`）12/12：`initialize` 的能力、`resources/list`、`resources/read` 拿到真的打包、不是 App 的页面 -32002、`tools/list` 的 `_meta.ui`、`kotone_lol_tier` 的结果照规范。
+- Playwright `plugins/lol/e2e/lol-app.spec.ts` 4/4：插件页强度榜是另一个源上的沙盒 iframe、握手完成、App 经宿主调 `lol.tier`（绑定英雄联盟插件）；App 调本插件只给页面的工具能用，调别的插件的（MCP 名、Kotone 名、页面自称别的插件）被拒，读别的插件的资源被拒，`ui://` 链接只开本插件的页面；聊天卡片是 inline、用推过去的结果（没再调 `lol.tier`）、点开右侧栏是 fullscreen；两份 CSP 都有 `frame-src http://127.0.0.1:*`。
+- WebView2 真机 `scripts/manual-e2e/mcp_app_real.py`（隔离实例，DevTools 端口，不发系统按键）8/8：插件 → 英雄联盟 → 强度榜是回环代理上的 iframe，握手完成（CSP、`frame-src`、混合内容都没挡），App 显示了经宿主取的真强度榜，英雄头像经素材路走通；**Tauri 在 WebView2 里把 `__TAURI_INTERNALS__` 也放进了 iframe**，但从 App 和沙盒代理页调 Kotone 的命令都没有回应、也没执行（`log_frontend_error` 的探针没进 `kotone.log`，主窗口的对照进了）；不带密钥 404。截图在 `target/plugin-shots/round7/`。
+
+**还没测的**：在 ext-apps 的 basic-host 里打开英雄联盟 App（证明 Claude、Codex 这类宿主也能用，交接第 16 条）；Claude Desktop 里实际打开；App 请求 pip；主题切换、语言切换时 App 跟着变（宿主发了，没有专门的测试）。
+
+**第 1.5 期 2026-11-25 已做**：主会话里工具执行超过 3 秒没回来就转到后台（`kotone_agent::background`；和 `agent.start` 同一套卡片、先存盘再交回），语音时 Kotone 说“交给我，好了告诉你”、这一轮结束接着听；主会话拿哪些工具改成每个工具登记时自己标（`ToolEntry::main`、`ToolSpec::instant`），`MAIN_TOOLS` 删掉，只剩工具服务的 19 个写在 `SERVICE_MAIN`（工具服务的协议里没有这一项）。主会话的工具和改之前一模一样。细节和真机数字见 [ADR 029](../adr/029-voice-call-and-background-tasks.md)“实现情况”的 1.5。
+
 ## 七、要玩家定的（看得见的）
 
 1. ~~第三方工具她能不能在语音里马上用？~~ **定了**（玩家 2026-11-24）：只看快不快。实现上先补 ADR 029 的“超过 3 秒就转后台”，第三方工具直接进主会话。

@@ -208,7 +208,12 @@ async function sourceOff(source: string): Promise<boolean> {
   return (config.enabled ?? true) === false || (config.sources?.[source] ?? spec?.enabledByDefault ?? true) === false;
 }
 
+/** 预览里插件工具被调过的记录（测试看 App 调工具时宿主绑定的是哪个插件）：`window.__kotonePluginCalls`。 */
+const calls: { plugin: string; tool: string }[] = [];
+if (typeof window !== "undefined") (window as unknown as { __kotonePluginCalls: typeof calls }).__kotonePluginCalls = calls;
+
 export async function pluginCall(plugin: string, tool: string, args: Record<string, unknown>): Promise<PluginToolResult> {
+  calls.push({ plugin, tool });
   const spec = (TOOLS[plugin] ?? []).find((t) => t.name === tool);
   if (!spec) throw new Error(`${plugin}: ${tool}`);
   if (plugin === "game-voice") {
@@ -272,4 +277,39 @@ export async function pluginCall(plugin: string, tool: string, args: Record<stri
     default:
       return { content: { status: "not_in_game", text: "dev:web" } };
   }
+}
+
+// ---------- 插件的 MCP App（ADR 039 D5） ----------
+
+/** 做成 App 的页面（和 plugins/lol/src/app.rs 的 APP_PAGES 一致）。 */
+const APP_PAGES: string[] = [PAGE_TIER];
+/** 预览里代理路径的“密钥”（真的是每次启动随机的 64 位十六进制）。 */
+const MOCK_KEY = "0000feed";
+
+/** 预览的 App 地址：沙盒代理页和 App 由 Vite 开发服务器旁边的一个小服务照回环代理的路径给（vite.config.ts 的
+ * mcpAppsDevServer），和真的一样在 127.0.0.1 的另一个端口上（另一个源，和 Kotone 的页面隔开）。 */
+async function appBase(): Promise<string> {
+  const { origin } = (await (await fetch("/__kotone/app-proxy")).json()) as { origin: string };
+  return `${origin}/${MOCK_KEY}`;
+}
+
+/** `plugin_app`：和真的一样，插件或页面要的数据开关关着、页面不是 App 时报错。 */
+export async function pluginApp(uri: string): Promise<{ plugin: string; uri: string; sandboxUrl: string; ui: Record<string, unknown> }> {
+  if (!APP_PAGES.includes(uri)) throw new Error(`${uri} is not an app`);
+  if (!(await enabled(lol)) || (await sourceOff("stats"))) throw new Error(`${uri} is off`);
+  const page = uri.slice(uri.lastIndexOf("/") + 1);
+  return {
+    plugin: "lol",
+    uri,
+    sandboxUrl: `${await appBase()}/sandbox/lol/${page}`,
+    ui: { csp: { resourceDomains: ["https://raw.communitydragon.org"] }, prefersBorder: false },
+  };
+}
+
+/** `plugin_resource`：App 读自己插件的资源。 */
+export async function pluginResource(plugin: string, uri: string): Promise<Record<string, unknown>> {
+  if (plugin !== "lol" || !APP_PAGES.includes(uri)) throw new Error(`${plugin} cannot read ${uri}`);
+  const page = uri.slice(uri.lastIndexOf("/") + 1);
+  const text = await (await fetch(`/__kotone/app-html/lol/${page}`)).text();
+  return { uri, mimeType: "text/html;profile=mcp-app", text, _meta: { ui: { csp: { resourceDomains: ["https://raw.communitydragon.org"] } } } };
 }

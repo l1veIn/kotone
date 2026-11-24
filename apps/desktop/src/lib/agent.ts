@@ -6,7 +6,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { isTauri } from "./ipc";
 import { m } from "./paraglide/messages.js";
 import { sampleMatch } from "./ipc/lolMock";
-import { findSampleChampion, sampleChampionRift } from "./ipc/lolStatsMock";
+import { findSampleChampion, sampleChampionRift, sampleTierRift } from "./ipc/lolStatsMock";
 
 export interface ToolCall { id: string; name: string; arguments: string }
 /** 插件工具结果里给界面的那份（照 MCP Apps：structuredContent + 页面地址）。 */
@@ -164,6 +164,12 @@ const previewTools: Omit<AgentTool, "rule">[] = [
   { name: "reminder.create", group: "game", description: "过一会儿提醒玩家", sideEffects: [], defaultRule: "allow", core: true },
   { name: "game_chat.send", group: "game", description: "把一句话打进游戏聊天框并发出", sideEffects: ["input"], defaultRule: "ask", core: true },
   { name: "companion.read_chat", group: "game", description: "截取游戏窗口，识别聊天记录", sideEffects: [], defaultRule: "allow", core: true },
+    // 强度榜是插件的 MCP App（ADR 039 D5）：卡片里是同一个 App（inline）
+    { role: "user", text: "现在上单什么强", source: "chat", atMs: t0 + 280_000 },
+    { role: "assistant", text: "", atMs: t0 + 281_000, toolCalls: [{ id: "call-5", name: "lol.tier", arguments: '{"lane":"上"}' }] },
+    { role: "tool", callId: "call-5", name: "lol.tier", content: '{"status":"ok","text":"上路：……"}', isError: false, untrusted: true, atMs: t0 + 282_000,
+      display: { structuredContent: sampleTierRift("TOP"), ui: { uri: "ui://kotone/lol/tier", params: { lane: "上" } } } },
+    { role: "assistant", text: "掌盟的数据：上路的强度榜在这里。", atMs: t0 + 284_000 },
   { name: "game.list", group: "game", description: "列出已配置的游戏和它们是否在运行", sideEffects: [], defaultRule: "allow", core: true },
   { name: "game.focus", group: "game", description: "切换到游戏窗口", sideEffects: ["window"], defaultRule: "allow", core: true },
   { name: "game.launch", group: "game", description: "打开一个已配置启动路径的游戏", sideEffects: ["process"], defaultRule: "ask", core: false },

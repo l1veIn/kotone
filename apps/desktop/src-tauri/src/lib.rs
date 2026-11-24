@@ -555,6 +555,7 @@ pub fn run() {
             browser_cmd::browser_handover_done,
             browser_cmd::browser_clear_data,
             browser_cmd::browser_navigate,
+            plugins_cmd::plugin_resource,
             browser_cmd::browser_tab_new,
             browser_cmd::browser_tab_close,
             browser_cmd::browser_tab_select,

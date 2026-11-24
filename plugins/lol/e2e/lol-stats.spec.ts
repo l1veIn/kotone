@@ -1,5 +1,5 @@
 // 英雄联盟插件“用网上的统计”的页面和覆盖层（ADR 038 第 3 步）：英雄页（峡谷：克制、出装、符文、加点；海斗：最好的海克斯，
-// aramhex-data 要署名）、强度榜（分路、点进英雄）、聊天里的英雄卡片、OP.GG 开关默认关且写着替玩家问的 issue，
+// aramhex-data 要署名）、聊天里的英雄卡片（强度榜是 MCP App，见 lol-app.spec.ts）、OP.GG 开关默认关且写着替玩家问的 issue，
 // 以及游戏上方的覆盖层（选英雄的胜率、海斗三选一贴在卡片上的评分）。数据是浏览器预览的示例
 // （apps/desktop/src/lib/ipc/lolStatsMock.ts）。由 apps/desktop 的 Playwright 一起跑（plugins 项目）。
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
@@ -87,34 +87,7 @@ test("the 英雄 tab searches a champion: rift counters, builds, runes and the T
   await expect(stack.getByTestId("lol-champion-name")).toContainText("艾瑞莉娅");
 });
 
-test("the 强度榜 tab switches lanes and modes and opens a champion", async ({ page }, testInfo) => {
-  await open(page);
-  const pluginPage = await lolPage(page);
-  await pluginPage.getByTestId("plugin-lol-tab-tier").click();
-  const stack = pluginPage.getByTestId("plugin-lol-tier");
-  const rows = stack.getByTestId("lol-tier-rows");
-  await expect(rows).toHaveAttribute("data-lane", "TOP");
-  await expect(stack.getByTestId("lol-tier-row")).toHaveCount(12);
-  await expect(stack.getByTestId("lol-tier-row").first()).toContainText("T0");
-  await expect(stack.getByTestId("lol-tier-sources")).toContainText("腾讯 101");
-  await stack.getByTestId("lol-tier-lane-SUPPORT").click();
-  await expect(rows).toHaveAttribute("data-lane", "SUPPORT");
-  await page.screenshot({ path: shot(testInfo, "tier-page") });
-
-  // 点一个英雄：进它的英雄页（这一路）
-  const first = stack.getByTestId("lol-tier-row").first();
-  const name = (await first.locator("span.font-medium").textContent())?.trim() ?? "";
-  await first.click();
-  await expect(stack).toHaveAttribute("data-uri", "ui://kotone/lol/champion");
-  await expect(stack.getByTestId("lol-champion-name")).toContainText(name);
-  await expect(stack.getByTestId("lol-champion-lane-SUPPORT")).toHaveAttribute("aria-pressed", "true");
-  await stack.getByTestId("plugin-lol-tier-back").click();
-
-  // 海斗英雄榜
-  await stack.getByTestId("lol-tier-mode-mayhem").click();
-  await expect(stack.getByTestId("lol-tier-page")).toHaveAttribute("data-mode", "mayhem");
-  await expect(stack.getByTestId("lol-tier-row")).toHaveCount(15);
-});
+// 强度榜改成了插件的 MCP App（ADR 039 D5），测试在 lol-app.spec.ts
 
 test("asking which champions Yasuo struggles against leaves a champion card in the chat that opens the full page", async ({ page }) => {
   await open(page);

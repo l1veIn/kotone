@@ -105,7 +105,7 @@ impl crate::app_proxy::Source for PluginSource {
 mod tests {
     use super::*;
 
-    /// 英雄联盟的强度榜是 App（没打包时是占位页），这局还不是；关掉插件或“用网上的统计”就没有了；覆盖层不是资源。
+    /// 英雄联盟的强度榜是 App（没打包时是占位页），还没换过来的页面不是；关掉插件或“用网上的统计”就没有了；覆盖层不是资源。
     #[test]
     fn app_pages_follow_the_switches() {
         let s = Settings::default();
@@ -115,7 +115,14 @@ mod tests {
         let listed = list(&s);
         let uris: Vec<&str> = listed.iter().filter_map(|r| r["uri"].as_str()).collect();
         assert!(uris.contains(&"ui://kotone/lol/tier"), "{uris:?}");
-        assert!(!uris.contains(&"ui://kotone/lol/match"), "{uris:?}");
+        // 还没换成 App 的页面（一页页换过来，挑一个现在还不是的）
+        let not_app = kotone_plugin_lol::manifest()
+            .pages
+            .iter()
+            .map(|p| p.uri.as_str())
+            .find(|uri| !kotone_plugin_lol::app::APP_PAGES.contains(uri))
+            .expect("还有没换成 App 的页面");
+        assert!(!uris.contains(&not_app), "{uris:?}");
         let tier_listing = listed
             .iter()
             .find(|r| r["uri"] == "ui://kotone/lol/tier")
@@ -126,9 +133,7 @@ mod tests {
             "https://raw.communitydragon.org"
         );
 
-        assert!(read(&s, "ui://kotone/lol/match")
-            .unwrap_err()
-            .contains("还不是 App"));
+        assert!(read(&s, not_app).unwrap_err().contains("还不是 App"));
         assert!(read(&s, "ui://kotone/lol/champ-select").is_err(), "覆盖层");
         assert!(read(&s, "ui://kotone/nope/tier").is_err());
 

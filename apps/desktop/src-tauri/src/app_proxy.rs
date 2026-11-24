@@ -40,6 +40,9 @@ const SANDBOX_CSP: &str =
     "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
 frame-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'";
 
+/// 素材响应自己的 CSP：图片（含 SVG）被直接打开时也跑不了脚本、连不了外面（素材那边的建议）。
+const ASSET_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+
 /// 一个插件的 App 从哪来（桌面端是 `plugin_apps::PluginSource`，测试里是假的）。
 pub trait Source: Send + Sync + 'static {
     /// 插件 id。
@@ -288,7 +291,7 @@ impl Context {
                             StatusCode::OK,
                             &asset.mime_type,
                             Bytes::from(asset.bytes),
-                            &[],
+                            &[(CONTENT_SECURITY_POLICY, ASSET_CSP.to_string())],
                         );
                         // 地址里有每次启动都换的密钥：在这一次运行里放心缓存
                         response.headers_mut().insert(
@@ -478,6 +481,8 @@ mod tests {
         let asset = request(addr, "GET", &icon, &host).await;
         assert_eq!(asset.status, 200);
         assert_eq!(asset.header("content-type"), Some("image/png"));
+        assert_eq!(asset.header("content-security-policy"), Some(ASSET_CSP));
+        assert_eq!(asset.header("x-content-type-options"), Some("nosniff"));
         assert_eq!(asset.body, [0x89, b'P', b'N', b'G']);
         let missing = request(addr, "GET", &format!("/{key}/assets/lol/x/2.png"), &host).await;
         assert_eq!(missing.status, 404);

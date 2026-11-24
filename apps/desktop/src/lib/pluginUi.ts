@@ -46,9 +46,14 @@ export interface PluginViewProps {
 }
 
 export interface PluginView {
-  /** 完整页面。 */
-  page: Component<PluginViewProps>;
-  /** 聊天里的卡片（小、只读快照）；没有就不出卡片。 */
+  /**
+   * 这个页面是插件给的 MCP App（独立的 HTML，ADR 039 D5）：宿主在 McpAppFrame 里显示它（完整页面 = fullscreen，
+   * 聊天卡片 = inline），`page` / `card` 不用写。
+   */
+  app?: boolean;
+  /** 完整页面（Svelte，编进宿主）。 */
+  page?: Component<PluginViewProps>;
+  /** 聊天里的卡片（小、只读快照）；没有就不出卡片（App 的页面一直有卡片）。 */
   card?: Component<PluginViewProps>;
   /** 标题（右侧栏的标签、卡片头）。 */
   title: () => string;

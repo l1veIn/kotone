@@ -7,7 +7,8 @@ test("one list: play / stop, temporary reminders, schedules, details and the ful
   const origin = new URL(baseURL!).origin;
   const external: string[] = [];
   page.on("request", (request) => {
-    if (/^https?:/.test(request.url()) && new URL(request.url()).origin !== origin) external.push(request.url());
+    // 本机回环上的（插件 MCP App 的沙盒代理页，预览里在 127.0.0.1 的另一个端口上）不算往外发
+    if (/^https?:/.test(request.url()) && new URL(request.url()).origin !== origin && !/^(127\.0\.0\.1|localhost)$/.test(new URL(request.url()).hostname)) external.push(request.url());
   });
   await page.setViewportSize({ width: 1040, height: 1000 });
   await page.goto("/#/settings?onboarding=never");

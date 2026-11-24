@@ -11,17 +11,21 @@
     "build:web": "vite build",
     "build:apps": "pnpm -C ../../plugins/lol/app build",
     "check:apps": "pnpm -C ../../plugins/lol/app check",
-    "test:e2e": "playwright test",
+    "test:e2e": "pnpm build:apps && playwright test",
     "tauri": "tauri",
     "i18n": "paraglide-js compile --project ./project.inlang --outdir ./src/lib/paraglide --strategy localStorage baseLocale --output-structure locale-modules --silent",
     "check": "pnpm i18n && svelte-check --tsconfig ./tsconfig.json && pnpm check:apps"
   },
   "dependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/core": "2.4.0",
+    "@modelcontextprotocol/ext-apps": "2.1.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.2",
     "@tauri-apps/plugin-process": "^2",
     "@tauri-apps/plugin-updater": "^2",
-    "marked": "17.0.6"
+    "marked": "17.0.6",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@inlang/paraglide-js": "3.2.2",

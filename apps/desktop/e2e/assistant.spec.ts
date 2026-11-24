@@ -94,7 +94,8 @@ test("assistant preview labels itself and never pretends to run AI", async ({ pa
   const origin = new URL(baseURL!).origin;
   const externalRequests: string[] = [];
   page.on("request", (request) => {
-    if (/^https?:/.test(request.url()) && new URL(request.url()).origin !== origin) externalRequests.push(request.url());
+    // 本机回环上的（插件 MCP App 的沙盒代理页，预览里在 127.0.0.1 的另一个端口上）不算往外发
+    if (/^https?:/.test(request.url()) && new URL(request.url()).origin !== origin && !/^(127\.0\.0\.1|localhost)$/.test(new URL(request.url()).hostname)) externalRequests.push(request.url());
   });
   await page.goto("/#/settings?onboarding=never");
   const assistant = page.getByTestId("assistant-page");
