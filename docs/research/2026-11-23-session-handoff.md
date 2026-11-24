@@ -502,7 +502,8 @@
 | `real_data_overlay`（手动，腾讯 101 + aramhex-data） | 海斗榜 173 个英雄：S 17、A 34、B 52、C 44、D 26 | `cd41fd9c` |
 
 - `lol_tools_real.py` 最后一次是 `bd3ca0f4`；之后英雄联盟插件又改了几次（App 页面、阶段、覆盖层、技能图标），给琴音的字有单元测试管着，但真机没再跑，收尾这一遍要跑。`mcp_names_real.py` 收尾时用新的 `kotone.exe`（不带 `--mcp`）再跑一遍。
-- **最后一遍：（主会话填）**
+- **最后一遍**（HEAD `85065b4a`，代码同 `182fc8c4`，2026-11-25 04:10–04:25，没有游戏在跑）：`cargo fmt --check` 干净；`cargo clippy --workspace --all-targets --locked -D warnings` 0；`cargo test --workspace --locked` 56 个测试程序 1466 过、0 失败、32 默认跳过；`cargo audit`（照 CI 的参数）0 漏洞；`pnpm audit --prod` 0；svelte-check 本体 0 / 0、英雄联盟 App 0 / 0；Playwright 全量 191/191；`release:verify`、`release:test` 8/8。真机（带前端的调试版）：`lol_tools_real --while-playing` 34/34、`game_events_real` 12/12、`auto_card_real` 13/13、`mcp_names_real`（用 `kotone.exe mcp`）10/10、`mcp_app_resources_real` 22/22、`mcp_app_real` 29/29、`mcp_app_external_real` 13/13、`mcp_servers_real` 36/36、`mcp_remote_app_real` 10/10、`background_focus_real` 5/5 · `--normal` 4/4 · `--open` 10/10、`slow_tool_voice_real` 第一次 9/10（DeepSeek 把 `<speak text=…>` 当文字写进了回答、没调 `speak`，重跑 10/10）、`voice_input_real` 42/42（跳过 7b：要 Steam 装的 Dota 2 / CS2）。
+- 最后一遍顺带看到的、以后再定：模型偶尔把 `<speak …>` 当文字写出来（玩家会在聊天里看到原样的标签，她也不出声），要不要把这种文字转成 `speak` 或去掉，是设计上的事；`kotone.exe mcp` 报的服务器版本是命令行 crate 的 0.1.1，不是安装包的版本。
 
 ### 第十一节的任务做到哪了
 
