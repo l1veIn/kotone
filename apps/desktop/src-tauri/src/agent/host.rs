@@ -14,6 +14,8 @@ pub(super) struct DesktopBuiltins {
     pub(super) player: PlayerWords,
     /// 这一轮读到过外面的东西没有（交给后台时继承，ADR 030）。
     pub(super) turn_taint: TurnTaint,
+    /// 语音入口的主会话：这一步替她说过“交给我”没有（慢的工具转到后台时看，ADR 029 §一）。
+    pub(super) handoff: Option<Arc<Mutex<kotone_agent::background::HandoffLine>>>,
 }
 
 impl DesktopBuiltins {
@@ -22,8 +24,26 @@ impl DesktopBuiltins {
     }
 }
 
+/// 真机测试用（只在调试版）：`KOTONE_TEST_SLOW_TOOL=web.search:5000` 让这个内置工具先等这么多毫秒，
+/// 测“主会话里超过 3 秒没回来就转到后台”（ADR 029 §一；`scripts/manual-e2e/slow_tool_voice_real.py`）。
+#[cfg(debug_assertions)]
+async fn test_slow_tool(tool: &str) {
+    let Ok(spec) = std::env::var("KOTONE_TEST_SLOW_TOOL") else {
+        return;
+    };
+    let Some((name, ms)) = spec.split_once(':') else {
+        return;
+    };
+    if let (true, Ok(ms)) = (name.trim() == tool, ms.trim().parse::<u64>()) {
+        log::log(&format!("agent: test hook: {tool} waits {ms} ms first"));
+        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+    }
+}
+
 impl BuiltinHost for DesktopBuiltins {
     async fn builtin(&self, tool: &str, arguments: &Value) -> Result<Value, String> {
+        #[cfg(debug_assertions)]
+        test_slow_tool(tool).await;
         let caller = self.conversation_id();
         match tool {
             kotone_agent::catalog::TOOL_AGENT_START => {
@@ -128,6 +148,39 @@ impl BuiltinHost for DesktopBuiltins {
 
     fn preapproved(&self, tool: &str, _arguments: &Value) -> bool {
         tool == "game.act" && crate::computer_use::always_allowed(&self.app)
+    }
+
+    /// 主会话里一个工具 3 秒没回来（ADR 029 §一）：登记成一件后台的事（卡片），语音回合这一步没说话就
+    /// 替她说“交给我，好了告诉你”。
+    fn move_to_background(
+        &self,
+        moved: &kotone_agent::background::Moved,
+    ) -> Result<String, String> {
+        let inherited = self.turn_taint.lock().unwrap().clone();
+        let name = move_tool(
+            &self.app,
+            &self.conversation_id(),
+            &self.player,
+            inherited,
+            moved,
+        )?;
+        if self
+            .handoff
+            .as_ref()
+            .is_some_and(|line| line.lock().unwrap().on_moved())
+        {
+            say_handoff(&self.app);
+        }
+        Ok(name)
+    }
+
+    fn background_finished(
+        &self,
+        name: &str,
+        moved: &kotone_agent::background::Moved,
+        outcome: ToolOutcome,
+    ) {
+        finish_moved(&self.app, &self.conversation_id(), name, moved, outcome);
     }
 
     async fn ask(&self, question: String, wait_seconds: u64) -> Result<Value, String> {

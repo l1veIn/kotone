@@ -9,25 +9,18 @@ pub(super) const VOICE_STOP_TOOLS: &[&str] = &[
     kotone_agent::catalog::TOOL_AGENT_FOLLOWUP,
 ];
 
-/// 这一步交给了后台、却没有 speak（纯函数）：Kotone 替她说“交给我，好了告诉你”。
-pub(super) fn handoff_without_speech(calls: &[kotone_ai::agent::ToolCall]) -> bool {
-    calls
-        .iter()
-        .any(|c| kotone_agent::subagents::is_handoff_tool(&c.name))
-        && !calls
-            .iter()
-            .any(|c| c.name == kotone_agent::catalog::TOOL_SPEAK)
-}
-
 /// 语音入口这一轮结束后补一句固定的话（纯函数，ADR 029 第八节）：模型的正文不念，
 /// 所以出错、没做完、或者忘了用 speak 时，玩家至少知道去聊天里看。玩家自己停下的不说。
 fn closing_line(appended: &[Message], stop: &StopReason) -> Option<&'static str> {
-    let said = appended.iter().any(|m| {
-        matches!(m, Message::Assistant { tool_calls, .. } if tool_calls.iter().any(|c| {
+    let said = appended.iter().any(|m| match m {
+        Message::Assistant { tool_calls, .. } => tool_calls.iter().any(|c| {
             c.name == kotone_agent::catalog::TOOL_SPEAK
                 || c.name == kotone_agent::catalog::TOOL_ASK
                 || kotone_agent::subagents::is_handoff_tool(&c.name)
-        }))
+        }),
+        // 慢的工具转到了后台（ADR 029 §一）：说过（或替她说过）“交给我”
+        Message::Tool { content, .. } => kotone_agent::background::is_moved_result(content),
+        _ => false,
     });
     let wrote = appended
         .iter()
@@ -41,6 +34,23 @@ fn closing_line(appended: &[Message], stop: &StopReason) -> Option<&'static str>
         StopReason::Completed if !said && wrote => Some(crate::fillers::WROTE_IN_CHAT),
         StopReason::Completed => None,
     }
+}
+
+/// 这一轮 Kotone 替她说了“交给我，好了告诉你”没有（派活、或者慢的工具 3 秒转到后台，那一步没 speak；
+/// 纯函数）。那句还在合成、播放时这一轮可能已经结束了，计时由那句记，不能先丢掉。
+fn handed_off(appended: &[Message]) -> bool {
+    appended.iter().any(|m| match m {
+        Message::Assistant { tool_calls, .. } => {
+            tool_calls
+                .iter()
+                .any(|c| kotone_agent::subagents::is_handoff_tool(&c.name))
+                && !tool_calls
+                    .iter()
+                    .any(|c| c.name == kotone_agent::catalog::TOOL_SPEAK)
+        }
+        Message::Tool { content, .. } => kotone_agent::background::is_moved_result(content),
+        _ => false,
+    })
 }
 
 /// 这一轮里她说话时被玩家打断了没有（speak 的结果里写着，纯函数）。
@@ -65,6 +75,7 @@ pub(super) fn finish_voice_turn(
     }
     // 玩家按键打断了她：不再接着听（他已经在说了）。
     let follow = follow && !interrupted(appended);
+    let handed_off = handed_off(appended);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let epoch = crate::follow_up::epoch();
@@ -80,8 +91,11 @@ pub(super) fn finish_voice_turn(
             }
             None => {
                 crate::bubble::finished(&app);
-                // 这一轮一句也没说（例如被停下）：计时不写
-                crate::voice_timing::discard();
+                // 这一轮一句也没说（例如被停下）：计时不写。替她说了“交给我”的由那句记（2026-11-25 真机：
+                // 慢的工具转到后台时这一轮马上结束，先丢掉计时就没有 voice-timing 那一行了）
+                if !handed_off {
+                    crate::voice_timing::discard();
+                }
                 // “交给我”、追问还在播：等它播完再接着听
                 for _ in 0..300 {
                     if !crate::assistant::output_busy(&app) && !crate::voice_reply::active() {
@@ -265,28 +279,36 @@ mod tests {
         // 交给了后台（Kotone 替她说过“交给我”）、问过玩家：不补话
         let handed = [user("voice"), assistant("", &["agent.start"])];
         assert_eq!(closing_line(&handed, &done), None);
+        // 慢的工具转到了后台（ADR 029 §一），正文写了一句也不补“我写在聊天里了”
+        let moved = [
+            user("voice"),
+            assistant("我查一下", &["lol.scout"]),
+            Message::Tool {
+                call_id: "c".into(),
+                name: "lol.scout".into(),
+                content: kotone_agent::background::moved_result("lol-scout", "lol.scout")
+                    .to_string(),
+                is_error: false,
+                untrusted: false,
+                images: Vec::new(),
+                display: None,
+                at_ms: 0,
+            },
+        ];
+        assert_eq!(closing_line(&moved, &done), None);
+        // 替她说了“交给我”的：计时等那句记（派活、慢的工具转走）；她自己说了的、什么都没说的不算
+        assert!(handed_off(&moved) && handed_off(&handed));
+        assert!(!handed_off(&said) && !handed_off(&missing));
+        assert!(!handed_off(&[
+            user("voice"),
+            assistant("", &["agent.start", "speak"])
+        ]));
         let asked = [
             user("voice"),
             assistant("", &["reply.ask"]),
             assistant("好", &[]),
         ];
         assert_eq!(closing_line(&asked, &done), None);
-    }
-
-    #[test]
-    fn kotone_says_the_handoff_line_only_when_she_did_not_speak() {
-        let call = |name: &str| kotone_ai::agent::ToolCall {
-            id: "c".into(),
-            name: name.into(),
-            arguments: "{}".into(),
-        };
-        assert!(handoff_without_speech(&[call("agent.start")]));
-        assert!(handoff_without_speech(&[call("agent.followup")]));
-        assert!(!handoff_without_speech(&[
-            call("agent.start"),
-            call("speak")
-        ]));
-        assert!(!handoff_without_speech(&[call("web.search")]));
     }
 
     #[test]

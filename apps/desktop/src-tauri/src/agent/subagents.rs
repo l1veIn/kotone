@@ -1,4 +1,5 @@
-//! 后台任务（ADR 029 第二期）：agent.start / followup / list / stop、登记、跑一轮、停下。
+//! 后台任务（ADR 029 第二期）：agent.start / followup / list / stop、登记、跑一轮、停下；
+//! 主会话里超过 3 秒的工具转到后台（ADR 029 §一，[`move_tool`] / [`finish_moved`]）。
 
 use super::*;
 
@@ -210,6 +211,7 @@ pub(super) async fn agent_start(
         // 派它的这一轮主会话读过外面的东西：任务说明可能转述了它们，算它也读过（ADR 030 第 3 节）。
         taint: inherited_taint,
         taint_approved: false,
+        tool: None,
     };
     {
         let mut inner = rt.inner.lock().unwrap();
@@ -312,6 +314,13 @@ pub(super) async fn resume(
             .children
             .get(&child_id)
             .is_some_and(|c| c.running.is_some());
+        // 主会话的工具转到后台的那件（ADR 029 §一）还在做：没有模型在跑，插不进话；做完以后可以接着做。
+        if running && agent.tool.is_some() {
+            return Err(format!(
+                "{name} 还在做（是 {} 转到后台的），做完会交回给你；等它做完再说",
+                agent.tool.as_deref().unwrap_or_default()
+            ));
+        }
         if !running && running_count(&inner) >= sa::MAX_RUNNING {
             return Err(format!(
                 "后台已经有 {} 件事在做了：等一件做完再接着做这件",
@@ -624,6 +633,182 @@ fn finish_round(
     ));
     if report {
         schedule_report(app, &spec.parent);
+    }
+}
+
+/// 主会话里一个工具 3 秒没回来（ADR 029 §一，`kotone_agent::background`）：登记成一件后台的事，和
+/// `agent.start` 派出去的同一套——一段隐藏的对话（第一条是“哪个工具、什么参数”，Kotone 关掉时没做完、
+/// 玩家点“继续”就照它重新做）、登记里一行（卡片）、`running` 里放它的取消令牌（Esc、“停下”、卡片上的停止
+/// 都停它）。不占玩家原话的规矩（ADR 030 第 2 节）：这一步权限已经过了，后台不再调用模型。返回它的名字。
+pub(super) fn move_tool(
+    app: &AppHandle,
+    caller: &str,
+    player: &PlayerWords,
+    inherited_taint: Option<String>,
+    moved: &kotone_agent::background::Moved,
+) -> Result<String, String> {
+    use kotone_agent::background as bg;
+    if child_spec(app, caller).is_some() {
+        return Err("后台的工具不再转后台".into());
+    }
+    let store = store(app)?;
+    let rt = runtime(app)?;
+    let words = player.lock().unwrap().clone();
+    let name = {
+        let mut inner = rt.inner.lock().unwrap();
+        let list = registry(&mut inner, &store, caller);
+        bg::name_for(&moved.tool, list.iter().map(|a| a.name.as_str()))
+    };
+    let mut conversation = store.create();
+    conversation.parent = Some(caller.to_string());
+    conversation.label = Some(moved.tool.clone());
+    conversation.messages.push(Message::User {
+        text: bg::task_text(
+            words.as_ref().map(|(text, _)| text.as_str()),
+            &moved.tool,
+            &moved.arguments,
+        ),
+        attachments: Vec::new(),
+        source: new_tag(app),
+        at_ms: now_ms(),
+        context: String::new(),
+    });
+    store.save(&mut conversation)?;
+    let child_id = conversation.id.clone();
+    let now = now_ms();
+    let turn = words.as_ref().map(|(_, at_ms)| *at_ms);
+    let info = Subagent {
+        name: name.clone(),
+        // 给模型看的名字（交回时的 label）；界面按工具名显示成和工具卡片一样的叫法
+        label: moved.tool.clone(),
+        conversation_id: child_id.clone(),
+        status: SubagentStatus::Running,
+        summary: None,
+        started_at_ms: now,
+        updated_at_ms: now,
+        steps: 0,
+        question: None,
+        reported: false,
+        turn,
+        taint: inherited_taint,
+        taint_approved: false,
+        tool: Some(moved.tool.clone()),
+    };
+    {
+        let mut inner = rt.inner.lock().unwrap();
+        inner.children.insert(
+            child_id.clone(),
+            Child {
+                spec: ChildSpec {
+                    parent: caller.to_string(),
+                    name: name.clone(),
+                    label: moved.tool.clone(),
+                    owner: kotone_core::usage::Owner {
+                        conversation: caller.to_string(),
+                        turn,
+                    },
+                },
+                // 没有模型在跑：收件箱不会有人读（resume 不往这里插话）
+                running: Some(Running {
+                    conversation_id: child_id.clone(),
+                    cancel: moved.cancel.clone(),
+                    inbox: Arc::default(),
+                }),
+                waiters: HashMap::new(),
+                ask: None,
+            },
+        );
+        let list = registry(&mut inner, &store, caller);
+        list.push(info.clone());
+        if let Err(e) = store.save_subagents(caller, list) {
+            log::log(&format!("agent: save subagents failed: {e}"));
+        }
+    }
+    emit_subagent(app, caller, &info);
+    log::log(&format!(
+        "agent: {} took over {} s, moved to the background as {name}",
+        moved.tool,
+        bg::WINDOW.as_secs()
+    ));
+    Ok(name)
+}
+
+/// 转到后台的工具做完了：调用和结果记进它那段隐藏的对话（卡片展开时看，插件的页面也在那里），
+/// 登记成做完 / 出错，再照子代理做完的方式交回主会话（先存盘、空闲时插一条带名字的“完成”消息并唤醒
+/// 主会话说一句）。被停掉的保持“停了”、不交回（`settle_round`）。
+pub(super) fn finish_moved(
+    app: &AppHandle,
+    caller: &str,
+    name: &str,
+    moved: &kotone_agent::background::Moved,
+    outcome: ToolOutcome,
+) {
+    use kotone_agent::subagents as sa;
+    let Some(agent) = subagents_of(app, caller)
+        .into_iter()
+        .find(|a| a.name == name)
+    else {
+        return;
+    };
+    let (status, summary) = kotone_agent::background::finished(&outcome);
+    if let Ok(store) = store(app) {
+        match store.load(&agent.conversation_id) {
+            Ok(Some(mut conversation)) => {
+                let at_ms = now_ms();
+                conversation.messages.push(Message::Assistant {
+                    text: String::new(),
+                    tool_calls: vec![kotone_ai::agent::ToolCall {
+                        id: moved.call_id.clone(),
+                        name: moved.tool.clone(),
+                        arguments: moved.arguments.to_string(),
+                    }],
+                    reasoning: String::new(),
+                    usage: None,
+                    at_ms,
+                });
+                conversation.messages.push(Message::Tool {
+                    call_id: moved.call_id.clone(),
+                    name: moved.tool.clone(),
+                    content: outcome.content.clone(),
+                    is_error: outcome.is_error,
+                    untrusted: outcome.untrusted,
+                    images: outcome.images.clone(),
+                    display: outcome.display.clone(),
+                    at_ms,
+                });
+                if let Err(e) = store.save(&mut conversation) {
+                    log::log(&format!("agent: save failed: {e}"));
+                }
+            }
+            Ok(None) => {}
+            Err(e) => log::log(&format!("agent: load failed: {e}")),
+        }
+    }
+    if let Ok(rt) = runtime(app) {
+        if let Some(child) = rt
+            .inner
+            .lock()
+            .unwrap()
+            .children
+            .get_mut(&agent.conversation_id)
+        {
+            child.running = None;
+        }
+    }
+    let mut report = false;
+    update_subagent(app, caller, name, |a| {
+        // 结果是别人写的（战绩、网页……）：记下读过外面的东西（之后在它那段上接着做时要先问，ADR 030）
+        if outcome.untrusted && a.taint.is_none() {
+            a.taint = Some(format!("读了 {} 的结果", moved.tool));
+        }
+        report = sa::settle_round(a, status, summary, false, false);
+    });
+    log::log(&format!(
+        "agent: background tool {name} ({}) finished ({status:?})",
+        moved.tool
+    ));
+    if report {
+        schedule_report(app, caller);
     }
 }
 

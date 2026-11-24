@@ -1,10 +1,12 @@
 //! 内置 Agent 的工具端口：[`kotone_ai::agent::ToolPort`] 的 Kotone 实现。
 //!
 //! 一次调用：查清单 → 权限（允许 / 询问 / 禁止）→ 按来源执行（工具服务 / 内置动作 /
-//! 已保存的自动化 / `tools.find`）→ 结果文字（屏幕文字类标为不可信）。
+//! 已保存的自动化 / `tools.find`）→ 结果文字（屏幕文字类标为不可信）。主会话里执行超过 3 秒的
+//! 转到后台接着做（[`crate::background`]，[`KotonePort::with_background`]）。
 
 use std::future::Future;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use kotone_ai::agent::{Attachment, ToolDef, ToolOutcome, ToolPort};
 use kotone_core::cancel::CancellationToken;
@@ -108,6 +110,23 @@ pub trait BuiltinHost: Send + Sync {
     fn preapproved(&self, _tool: &str, _arguments: &Value) -> bool {
         false
     }
+
+    /// 主会话里一个工具执行超过 [`crate::background::WINDOW`] 还没回来（ADR 029 §一）：登记成一件后台的事
+    /// （和 `agent.start` 派出去的同一套卡片），返回它在这段对话里的名字。语音回合这一步没 `speak` 时
+    /// 由宿主念“交给我，好了告诉你”。Err = 转不了（没有桌面、登记失败）：照旧等它做完。
+    fn move_to_background(&self, moved: &crate::background::Moved) -> Result<String, String> {
+        Err(format!("{} 在这里不能转到后台", moved.tool))
+    }
+
+    /// 转到后台的那个工具做完了（`name` 是 [`BuiltinHost::move_to_background`] 给的名字）：先存盘，
+    /// 再照子代理做完的方式交回主会话。被停下的不会调用。
+    fn background_finished(
+        &self,
+        _name: &str,
+        _moved: &crate::background::Moved,
+        _outcome: ToolOutcome,
+    ) {
+    }
 }
 
 /// 工具服务调用的期限（毫秒）：多数用服务的默认值，一边看一边操作的要更久。
@@ -180,20 +199,39 @@ pub enum Scope {
 }
 
 pub struct KotonePort<H, A> {
-    scope: Scope,
-    /// 琴音的工作区（记忆、Skill、人格）；没有时这些工具报不可用。
-    workspace: Option<Workspace>,
     /// 子会话：只能用这些工具（ADR 022）；None = 不限（主会话）。
     tool_filter: Option<Vec<String>>,
-    service: Arc<ToolService>,
     catalog: Catalog,
     policy: Policy,
     session: Arc<Session>,
-    host: H,
     asker: A,
+    run: Runner<H>,
+    /// 主会话：工具执行超过这么久没回来就转到后台（[`crate::background`]）；None = 一直等（后台、测试）。
+    background_after: Option<Duration>,
 }
 
-impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
+/// 执行工具要用的东西。都能便宜地复制：主会话把慢的工具转到后台时，执行交给一个独立的任务，
+/// 这一轮结束了它还接着跑（[`crate::background::Timed`]）。
+struct Runner<H> {
+    scope: Scope,
+    /// 琴音的工作区（记忆、Skill、人格）；没有时这些工具报不可用。
+    workspace: Option<Workspace>,
+    service: Arc<ToolService>,
+    host: Arc<H>,
+}
+
+impl<H> Clone for Runner<H> {
+    fn clone(&self) -> Self {
+        Self {
+            scope: self.scope,
+            workspace: self.workspace.clone(),
+            service: self.service.clone(),
+            host: self.host.clone(),
+        }
+    }
+}
+
+impl<H: BuiltinHost + 'static, A: Asker> KotonePort<H, A> {
     pub fn new(
         service: Arc<ToolService>,
         catalog: Catalog,
@@ -203,25 +241,35 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
         asker: A,
     ) -> Self {
         Self {
-            scope: Scope::Full,
-            workspace: None,
             tool_filter: None,
-            service,
             catalog,
             policy,
             session,
-            host,
             asker,
+            run: Runner {
+                scope: Scope::Full,
+                workspace: None,
+                service,
+                host: Arc::new(host),
+            },
+            background_after: None,
         }
     }
 
     pub fn with_scope(mut self, scope: Scope) -> Self {
-        self.scope = scope;
+        self.run.scope = scope;
         self
     }
 
     pub fn with_workspace(mut self, workspace: Workspace) -> Self {
-        self.workspace = Some(workspace);
+        self.run.workspace = Some(workspace);
+        self
+    }
+
+    /// 主会话：工具执行超过 `after`（[`crate::background::WINDOW`]）没回来就转到后台（ADR 029 §一）。
+    /// 本来就要等的（`ToolEntry::own_wait`）不计时。
+    pub fn with_background(mut self, after: Duration) -> Self {
+        self.background_after = Some(after);
         self
     }
 
@@ -293,6 +341,60 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
         )
     }
 
+    async fn execute(&self, call_id: &str, entry: &ToolEntry, arguments: Value) -> ToolOutcome {
+        if entry.source == Source::Meta {
+            let mut outcome = self.find(&arguments);
+            outcome.untrusted = entry.untrusted;
+            return outcome;
+        }
+        self.run.execute(call_id, entry, arguments).await
+    }
+
+    /// 主会话里计时执行：[`crate::background::WINDOW`] 内做完照常返回；没做完就请宿主登记成后台的事，
+    /// 返回“转到后台了”（[`ToolOutcome::background`]），工具接着跑，做完交回宿主。登记不了就照旧等。
+    async fn execute_timed(
+        &self,
+        call_id: &str,
+        entry: &ToolEntry,
+        arguments: Value,
+        window: Duration,
+    ) -> ToolOutcome {
+        let timed = {
+            let (run, entry, call_id) = (self.run.clone(), entry.clone(), call_id.to_string());
+            let arguments = arguments.clone();
+            crate::background::Timed::spawn(async move {
+                run.execute(&call_id, &entry, arguments).await
+            })
+        };
+        if let Some(outcome) = timed.wait(Some(window)).await {
+            return outcome;
+        }
+        let moved = crate::background::Moved {
+            call_id: call_id.to_string(),
+            tool: entry.name.clone(),
+            arguments,
+            cancel: timed.token(),
+        };
+        match self.run.host.move_to_background(&moved) {
+            Ok(name) => {
+                let host = self.run.host.clone();
+                let deliver = name.clone();
+                timed.moved(move |outcome| host.background_finished(&deliver, &moved, outcome));
+                let mut outcome = ToolOutcome::ok(
+                    crate::background::moved_result(&name, &entry.name).to_string(),
+                );
+                outcome.background = true;
+                outcome
+            }
+            Err(_) => timed
+                .wait(None)
+                .await
+                .unwrap_or_else(|| ToolOutcome::error("工具没有结果")),
+        }
+    }
+}
+
+impl<H: BuiltinHost> Runner<H> {
     async fn call_service(&self, tool: &str, arguments: Value) -> ToolOutcome {
         let envelope = self
             .service
@@ -479,7 +581,8 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
 
     async fn execute(&self, call_id: &str, entry: &ToolEntry, arguments: Value) -> ToolOutcome {
         let mut outcome = match &entry.source {
-            Source::Meta => self.find(&arguments),
+            // 由 `KotonePort::execute` 自己查（要用清单），不会走到这里。
+            Source::Meta => ToolOutcome::error(format!("{} 在这里不可用", entry.name)),
             Source::Builtin => self.call_builtin(call_id, &entry.name, &arguments).await,
             Source::Saved { id } => self.call_saved(id, arguments).await,
             Source::Service => self.call_service(&entry.name, arguments).await,
@@ -487,7 +590,7 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
                 Ok(result) => plugin_outcome(result),
                 Err(message) => ToolOutcome::error(message),
             },
-            Source::Body { .. } => match self.host.body_tool(&entry.name, &arguments).await {
+            Source::Body => match self.host.body_tool(&entry.name, &arguments).await {
                 Ok(result) => plugin_outcome(result),
                 Err(message) => ToolOutcome::error(message),
             },
@@ -532,7 +635,7 @@ fn parse_delivery(arguments: &Value) -> Result<Vec<DeliveryKind>, String> {
     Ok(out)
 }
 
-impl<H: BuiltinHost, A: Asker> ToolPort for KotonePort<H, A> {
+impl<H: BuiltinHost + 'static, A: Asker> ToolPort for KotonePort<H, A> {
     fn definitions(&self) -> Vec<ToolDef> {
         // 一段对话里冻结（照 DeepSeek Harness）：中途改权限、保存新的自动化都不改清单，
         // 禁止的工具调用时再拒绝；新保存的自动化下一段对话才成为工具（这段里用 automation.run）。
@@ -590,6 +693,7 @@ impl<H: BuiltinHost, A: Asker> ToolPort for KotonePort<H, A> {
                 }
             };
             let mut outcome = self
+                .run
                 .host
                 .exec(call_id, &entry.name, &arguments, confirm, cancel)
                 .await;
@@ -601,7 +705,7 @@ impl<H: BuiltinHost, A: Asker> ToolPort for KotonePort<H, A> {
             Decision::Deny { reason } => {
                 return ToolOutcome::error(format!("没有执行：{reason}"));
             }
-            Decision::Ask { .. } if self.host.preapproved(&entry.name, &arguments) => {}
+            Decision::Ask { .. } if self.run.host.preapproved(&entry.name, &arguments) => {}
             Decision::Ask { reason } => {
                 let request = PermissionRequest {
                     call_id: call_id.to_string(),
@@ -626,6 +730,12 @@ impl<H: BuiltinHost, A: Asker> ToolPort for KotonePort<H, A> {
                 }
             }
         }
-        self.execute(call_id, entry, arguments).await
+        // 主会话：权限过了才开始计时（等玩家确认的时间不算），本来就要等的不计时（ADR 029 §一）。
+        match self.background_after {
+            Some(window) if !entry.own_wait && entry.source != Source::Meta => {
+                self.execute_timed(call_id, entry, arguments, window).await
+            }
+            _ => self.execute(call_id, entry, arguments).await,
+        }
     }
 }

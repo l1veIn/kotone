@@ -5,7 +5,8 @@ Same setup as voice_turn_real.py (whose helpers it reuses): real desktop app wit
 KOTONE_HOME=target/background-voice/home, the player's real DeepSeek key in memory only (chat, speech recognition and
 speech synthesis all DeepSeek), the chat page's call button clicked through WebView2's DevTools port, the player's
 words are SAPI sentences played into "CABLE Input" (the instance listens on "CABLE Output"). No OS input. Her voice is
-audible but quiet (volume 8). Stops before starting — and before every sentence — if a game is in front.
+audible but quiet (volume 8; KOTONE_TEST_SPEECH_VOLUME / KOTONE_TEST_EXE as in voice_turn_real.py). Stops before
+starting — and before every sentence — if a game is in front.
 
 V1. call → “帮我写一个每隔十分钟提醒我喝水的自动化，先别运行”: she hands it to the background (`agent.start`) and says
     one short line; the background finishes; the result comes back and she *says* it by herself (no click).
@@ -115,7 +116,7 @@ def main():
     with open(os.path.join(v.HOME, "config.json"), "w", encoding="utf-8") as f:
         json.dump({"ui": {"firstRunCompleted": True}, "adminPromptDismissed": True, "toolService": {"enabled": True},
                    "hotkey": {"key": "F24", "mode": "toggle"}, "runtimeToggleHotkey": "", "automationStopHotkey": "",
-                   "assistant": {"hotkey": "", "callHotkeyDefaulted": True, "speechVolume": 8,
+                   "assistant": {"hotkey": "", "callHotkeyDefaulted": True, "speechVolume": v.VOLUME,
                                  "wake": {"enabled": False}},
                    "agent": {"permissions": {"mode": "allow-all", "rules": v.NO_INPUT}}}, f)
     os.makedirs(os.path.dirname(NOTES))

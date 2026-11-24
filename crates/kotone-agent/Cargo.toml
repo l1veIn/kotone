@@ -25,6 +25,8 @@ url = "2"
 
 [dev-dependencies]
 tempfile.workspace = true
+# 主会话里慢的工具转后台（background.rs）：用暂停的时钟测“3 秒转后台、5 秒做完”，不真等
+tokio = { workspace = true, features = ["test-util"] }
 # 游戏语音插件的工具：搬进插件以后默认问不问和以前一样（tests.rs）
 kotone-plugin-game-voice.workspace = true
 kotone-tools = { workspace = true, features = ["test-support"] }

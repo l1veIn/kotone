@@ -349,6 +349,7 @@ mod tests {
             turn: None,
             taint: None,
             taint_approved: false,
+            tool: None,
         }]);
         let Message::User {
             text,

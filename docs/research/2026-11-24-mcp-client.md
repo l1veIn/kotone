@@ -173,7 +173,7 @@ Kotone 能做的，按先后：
 
 **还没测的**：在 ext-apps 的 basic-host 里打开英雄联盟 App（证明 Claude、Codex 这类宿主也能用，交接第 16 条）；Claude Desktop 里实际打开；App 请求 pip；主题切换、语言切换时 App 跟着变（宿主发了，没有专门的测试）。
 
-**第 1.5 期 2026-11-25 已做**：主会话里工具执行超过 3 秒没回来就转到后台（`kotone_agent::background`；和 `agent.start` 同一套卡片、先存盘再交回），语音时 Kotone 说“交给我，好了告诉你”、这一轮结束接着听；主会话拿哪些工具改成每个工具登记时自己标（`ToolEntry::main`、`ToolSpec::instant`），`MAIN_TOOLS` 删掉，只剩工具服务的 19 个写在 `SERVICE_MAIN`（工具服务的协议里没有这一项）。主会话的工具和改之前一模一样。细节和真机数字见 [ADR 029](../adr/029-voice-call-and-background-tasks.md)“实现情况”的 1.5。
+**第 1.5 期 2026-11-25 已做**：主会话里工具执行超过 3 秒没回来就转到后台（`kotone_agent::background`；和 `agent.start` 同一套卡片、先存盘再交回），语音时 Kotone 说“交给我，好了告诉你”、这一轮结束接着听；主会话拿哪些工具改成每个工具登记时自己标（`ToolEntry::main`、`ToolSpec::instant`），`MAIN_TOOLS` 删掉，只剩工具服务的 18 个写在 `SERVICE_MAIN`（工具服务的协议里没有这一项）。主会话的工具和改之前一模一样。细节和真机数字见 [ADR 029](../adr/029-voice-call-and-background-tasks.md)“实现情况”的 1.5。
 
 ### 第 2 期（2026-11-25）
 

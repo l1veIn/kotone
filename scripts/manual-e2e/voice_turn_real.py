@@ -16,6 +16,12 @@ Turns:
    what she said plus “（被打断）”, and she does not listen on afterwards.
 5. restart: the waiting phrases come back from <KOTONE_HOME>/cache/tts without new speech charges.
 Prints the voice-timing lines as a table and the speech charges per turn from usage.jsonl.
+Environment (optional): KOTONE_TEST_SPEECH_VOLUME — her speech volume, default 8 (0 = silent: the stream still plays
+at zero gain, the pre-made phrases are skipped; use it when someone is asleep); KOTONE_TEST_EXE — the kotone.exe to run
+(a copy outside target/debug, so other builds are not blocked while it runs).
+Call mode (ADR 033, 2026-11-25 update of this script): a click starts a call that keeps listening; clicking again
+hangs up. So a “call →” turn first hangs up a call that is still open, and “she keeps listening” means the call is
+still connected (there is no “follow-up: listening” log line any more).
 usage: python -X utf8 -I scripts/manual-e2e/voice_turn_real.py
 """
 import ctypes
@@ -36,7 +42,8 @@ import real_deepseek  # noqa: E402
 REPO = os.path.dirname(os.path.dirname(HERE))
 WORK = os.path.join(REPO, "target", "voice-real")
 HOME = os.path.join(WORK, "home")
-EXE = os.path.join(REPO, "target", "debug", "kotone.exe")
+EXE = os.environ.get("KOTONE_TEST_EXE") or os.path.join(REPO, "target", "debug", "kotone.exe")
+VOLUME = int(os.environ.get("KOTONE_TEST_SPEECH_VOLUME", "8"))
 PORT = 9335
 ENV = dict(os.environ, KOTONE_HOME=HOME, WEBVIEW2_USER_DATA_FOLDER=os.path.join(WORK, "webview"),
            WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=f"--remote-debugging-port={PORT}")
@@ -220,8 +227,12 @@ def turn_speech(messages):
                 except Exception:  # noqa: BLE001
                     pass
     body = " ".join(s for s in shown if s)
-    # 交给后台、她自己没说话：Kotone 替她说了“交给我，好了告诉你”（ADR 029 第八节），不算漏调 speak
-    if not said and any(c["name"] in ("agent.start", "agent.followup") for m in steps for c in m.get("toolCalls", []) or []):
+    # 交给后台、她自己没说话：Kotone 替她说了“交给我，好了告诉你”（ADR 029 第八节），不算漏调 speak；
+    # 慢的工具 3 秒没回来转到了后台（ADR 029 §一，结果里 background: true）也一样
+    moved = any(m["role"] == "tool" and '"background":true' in (m.get("content") or "").replace(" ", "")
+                for m in messages[start:])
+    if not said and (moved or any(c["name"] in ("agent.start", "agent.followup")
+                                  for m in steps for c in m.get("toolCalls", []) or [])):
         said = "（交给后台）交给我，好了告诉你"
     results = [m.get("content", "") for m in messages[start:] if m["role"] == "tool" and m.get("name") == "speak"]
     return said, body, results, messages[start].get("text", "")
@@ -235,18 +246,39 @@ TIMING = re.compile(r"voice-timing: vad→text=(\S+) text→token=(\S+) token→
                     r"filler=(\S+)(?: tts=(\S+))?")
 
 
+def in_call():
+    """A call is open (ADR 033): the last “call: connected” is after the last “call: ended”."""
+    text = log_text()
+    return text.rfind("call: connected") > text.rfind("call: ended")
+
+
+def hang_up():
+    """Hang up a call that is still open, so the next click starts a new call (ADR 033 D1: a click in a call hangs up)."""
+    if in_call():
+        mark = len(log_text())
+        click_call()
+        wait_log(mark, r"call: ended", 10)
+
+
+# 这一轮说完了：她念完 speak（流式语音那一路结束）或 Kotone 替她说了“交给我”（ADR 033 以后没有“接着听”的日志了）
+TURN_DONE = r"speech stream \(deepseek\): \d+ sentences, first audio Some|交给后台，先说"
+
+
 def voice_turn(name, text, click, wait_follow_up=True, timeout=90):
     """Say `text` into CABLE (clicking call first unless she is already listening). Returns (mark, timing match)."""
     guard()
     wav = os.path.join(WORK, f"{name}.wav")
     speak_to_wav(text, wav)
+    if click:
+        hang_up()
     mark = len(log_text())
     if click:
         click_call()
     play_into_cable(wav, 0.8)
     timing = wait_log(mark, TIMING.pattern, timeout)
     if wait_follow_up:
-        wait_log(mark, r"follow-up: (listening|not listening)", timeout)
+        wait_log(mark, TURN_DONE, timeout)
+        time.sleep(1)
     return mark, timing
 
 
@@ -274,7 +306,7 @@ def main():
     with open(os.path.join(HOME, "config.json"), "w", encoding="utf-8") as f:
         json.dump({"ui": {"firstRunCompleted": True}, "adminPromptDismissed": True, "toolService": {"enabled": True},
                    "hotkey": {"key": "F24", "mode": "toggle"}, "runtimeToggleHotkey": "", "automationStopHotkey": "",
-                   "assistant": {"hotkey": "", "callHotkeyDefaulted": True, "speechVolume": 8,
+                   "assistant": {"hotkey": "", "callHotkeyDefaulted": True, "speechVolume": VOLUME,
                                  "wake": {"enabled": False}},
                    "agent": {"permissions": {"mode": "allow-all", "rules": NO_INPUT}}}, f)
     app = start_app()
@@ -301,8 +333,7 @@ def main():
         said, body, _, _ = turn_speech(main_conversation()["messages"])
         VOICE_TURNS.append(("1", said, body))
         check("turn 1: she answered with speak", said, said)
-        follow = wait_log(mark, r"follow-up: listening for 8s", 1)
-        check("turn 1: listening on after she finished", follow)
+        check("turn 1: listening on after she finished (the call is still open, ADR 033)", in_call())
 
         # 2. 不按键，在接着听的 8 秒里直接说
         mark, t = voice_turn("t2", "那你都能帮我做什么", click=False)
@@ -340,10 +371,10 @@ def main():
         stopped_at = line_time(mark, r"voice reply: interrupted")
         check("turn 4: the call button stopped her", stopped,
               f"{(stopped_at - clicked) * 1000:.0f} ms after the click" if stopped_at else "")
-        # 被打断的这一轮不接着听（打断那一下本身开始的收音不算：它在“follow-up”之外）
+        # 被打断的这一轮不接着听：通话里按呼叫键就是挂断（ADR 033 D1）
         time.sleep(10)
-        check("turn 4: no listening on after being interrupted",
-              not re.search(r"follow-up: listening for", log_since(mark)))
+        check("turn 4: no listening on after being interrupted (the click hung up)",
+              re.search(r"call: ended", log_since(mark)) and not in_call())
         said, body, results, _ = turn_speech(main_conversation()["messages"])
         VOICE_TURNS.append(("4", said, body))
         check("turn 4: the five points were written in the chat (not spoken)", len(body) > 80, body[:80])

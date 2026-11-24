@@ -288,6 +288,10 @@ pub struct ToolOutcome {
     pub images: Vec<Attachment>,
     /// 给界面的数据（插件工具的页面，ADR 038），写进 [`Message::Tool::display`]，不给模型。
     pub display: Option<Value>,
+    /// 这次调用没等它做完：转到后台接着做了，`content` 只是“在做”，结果之后另外交回
+    /// （ADR 029 §一：主会话里工具超过 3 秒没回来就转到后台）。[`AgentLimits::stop_after_background`]
+    /// 时和 `stop_after` 里的工具一样算。
+    pub background: bool,
 }
 
 impl ToolOutcome {
@@ -298,6 +302,7 @@ impl ToolOutcome {
             untrusted: false,
             images: Vec::new(),
             display: None,
+            background: false,
         }
     }
 
@@ -308,6 +313,7 @@ impl ToolOutcome {
             untrusted: false,
             images: Vec::new(),
             display: None,
+            background: false,
         }
     }
 }
@@ -482,6 +488,9 @@ pub struct AgentLimits {
     /// 一步里只调用了这些工具、而且都成功时，执行完就结束这一轮，不再调用模型
     /// （照 OpenAI Agents SDK `StopAtTools`；语音回合的 `speak`，ADR 029 第八节）。
     pub stop_after: Vec<String>,
+    /// 转到后台的调用（[`ToolOutcome::background`]）也按 `stop_after` 里的工具算：语音回合里慢的工具转走了，
+    /// 这一轮就结束、接着听（ADR 029 §一）。打字时不算，模型接着写一句“好了告诉你”。
+    pub stop_after_background: bool,
 }
 
 impl Default for AgentLimits {
@@ -500,6 +509,7 @@ impl Default for AgentLimits {
             extended_duration: Duration::ZERO,
             final_step_prompt: None,
             stop_after: Vec::new(),
+            stop_after_background: false,
         }
     }
 }
@@ -1133,8 +1143,8 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
 
         let mut interrupted: Option<StopReason> = None;
         let mut steered = false;
-        // 这一步只调用了 `stop_after` 里的工具、而且都成功：执行完就结束这一轮。
-        let mut stop_here = calls.iter().all(|c| limits.stop_after.contains(&c.name));
+        // 这一步只调用了 `stop_after` 里的工具（或转到后台的调用）、而且都成功：执行完就结束这一轮。
+        let mut stop_here = true;
         for (index, call) in calls.iter().enumerate() {
             let skipped = |reason: &str| Some(ToolOutcome::error(reason));
             let precheck = if interrupted.is_some() {
@@ -1192,7 +1202,9 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
                     }
                 },
             };
-            stop_here &= !outcome.is_error;
+            stop_here &= !outcome.is_error
+                && (limits.stop_after.contains(&call.name)
+                    || (limits.stop_after_background && outcome.background));
             let content = truncate_chars(&outcome.content, limits.max_tool_result_chars);
             on_event(AgentEvent::ToolCallUpdate {
                 call_id: call.id.clone(),

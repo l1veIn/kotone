@@ -52,7 +52,8 @@
     if (!process) return [];
     const out: Row[] = [];
     for (const turn of buildTurns(process, null, false)) {
-      if (turn.user) {
+      // 主会话的工具转到后台的那件（ADR 029 §一）：交代是 Kotone 写给自己的（哪个工具、什么参数），只看工具那一行
+      if (turn.user && !info?.tool) {
         const text = turn.user.text.replace(/<player-request>[\s\S]*?<\/player-request>\s*/g, "").trim();
         if (text) out.push({ kind: "task", key: `u${turn.id}`, text });
       }

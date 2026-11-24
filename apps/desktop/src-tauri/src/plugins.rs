@@ -833,7 +833,10 @@ mod tests {
                     t.name
                 );
                 assert!(
-                    !kotone_agent::catalog::MAIN_TOOLS.contains(&t.name.as_str())
+                    !kotone_agent::catalog::builtin_entries()
+                        .iter()
+                        .chain(&kotone_agent::catalog::agent_entries())
+                        .any(|e| e.name == t.name)
                         && !kotone_agent::body::owns(&t.name),
                     "{} 和她的内置工具重名",
                     t.name

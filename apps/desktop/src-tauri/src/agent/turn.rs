@@ -407,18 +407,22 @@ pub(super) async fn turn(
     let player: PlayerWords = Arc::default();
     // 这一轮从玩家这句话开始读到过外面的东西没有（交给后台时继承，ADR 030 第 3 节）。
     let turn_taint: TurnTaint = Arc::default();
+    // 语音入口的主会话：交给后台（派活、慢的工具转走）这一步没说话时，Kotone 替她说“交给我”（一步最多一次）。
+    let voice_main = entry == Entry::Call && child.is_none();
+    let handoff: Arc<Mutex<kotone_agent::background::HandoffLine>> = Arc::default();
     let port = KotonePort::new(
         service,
         catalog,
         settings.agent.permissions.clone(),
         session,
         DesktopBuiltins {
-            voice: entry == Entry::Call && child.is_none(),
+            voice: voice_main,
             speech: voice.cloned(),
             app: app.clone(),
             session: format!("agent:{}", conversation.id),
             player: player.clone(),
             turn_taint: turn_taint.clone(),
+            handoff: voice_main.then(|| handoff.clone()),
         },
         DesktopAsker {
             app: app.clone(),
@@ -434,6 +438,12 @@ pub(super) async fn turn(
     })
     .with_workspace(ws.clone())
     .with_tool_filter(offered);
+    // 主会话里任何工具执行超过 3 秒没回来就转到后台（ADR 029 §一，MCP 方案第 1.5 期）；后台本来就在后台。
+    let port = if child.is_none() {
+        port.with_background(kotone_agent::background::WINDOW)
+    } else {
+        port
+    };
     let profile = crate::companion::active_profile(&settings);
     let session_state = runtime(app).ok().and_then(|rt| {
         rt.inner
@@ -512,10 +522,12 @@ pub(super) async fn turn(
     }
     let limits = match child {
         Some(_) => subagent_limits(settings.agent.compact_at_tokens),
-        // 语音入口：只说话（或只交给后台）的一步之后就结束，不再调用模型（ADR 029 第八节）。
+        // 语音入口：只说话（或只交给后台、慢的工具转到了后台）的一步之后就结束，不再调用模型
+        // （ADR 029 第八节、§一）。
         None if entry == Entry::Call => AgentLimits {
             compact_at_tokens: settings.agent.compact_at_tokens,
             stop_after: VOICE_STOP_TOOLS.iter().map(|t| t.to_string()).collect(),
+            stop_after_background: true,
             ..game_limits()
         },
         None => AgentLimits {
@@ -526,8 +538,6 @@ pub(super) async fn turn(
     let conversation_id = conversation.id.clone();
     let shared = Mutex::new(conversation.clone());
     let tool_names: Mutex<HashMap<String, String>> = Mutex::default();
-    // 语音入口的主会话：计时、工具前的一句马上念（ADR 029 §一、§七）。
-    let voice_main = entry == Entry::Call && child.is_none();
     // 后台的费用记到派它出去的那段对话、那一轮（玩家在聊天里看得到这件事花了多少）。
     let record_usage = |kind, usage: &kotone_ai::agent::TokenUsage| match child {
         Some(spec) => {
@@ -570,13 +580,14 @@ pub(super) async fn turn(
                 _ => {}
             }
         }
-        // 语音入口交给后台、这一步没说话：Kotone 替她说“交给我，好了告诉你”（不等模型）。
+        // 语音入口交给后台、这一步没说话：Kotone 替她说“交给我，好了告诉你”（不等模型）。慢的工具
+        // 3 秒后转到后台时也看这一步（DesktopBuiltins::move_to_background）。
         if voice_main {
             if let AgentEvent::Appended {
                 message: Message::Assistant { tool_calls, .. },
             } = &event
             {
-                if handoff_without_speech(tool_calls) {
+                if handoff.lock().unwrap().on_step(tool_calls) {
                     say_handoff(app);
                 }
             }

@@ -61,6 +61,15 @@ export interface SubagentInfo {
   /** 已经做了几步。 */
   steps: number;
   question?: string;
+  /** 不是派出去的，而是主会话的一个工具超过 3 秒转到后台接着做的（工具名，ADR 029 §一）：标题照工具卡片的叫法。 */
+  tool?: string;
+}
+/** 主会话里这一行工具超过 3 秒转到了后台（ADR 029 §一，结果是 `{"background": true, "name": …}`）：后台那件事的名字。 */
+export function movedTaskName(content: string | null | undefined): string | null {
+  try {
+    const value = JSON.parse(content ?? "");
+    return value && value.background === true && typeof value.name === "string" ? value.name : null;
+  } catch { return null; }
 }
 /** 卡片上的确认按钮（`agent_subagent_answer`）。 */
 export type SubagentAnswer = "allow-once" | "allow-conversation" | "deny";

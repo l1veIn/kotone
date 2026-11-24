@@ -7,6 +7,7 @@
 //! - [`workspace`]：琴音的工作区（SOUL、身份、记忆、游戏记忆、Skill，ADR 022）；
 //! - [`roles`]：可切换的角色（名字、头像、性格、声音、唤醒词各一份；记忆与 Skill 共用）；
 //! - [`subagents`]：交给后台的事（子代理，ADR 029 第二期）的纯逻辑；
+//! - [`background`]：主会话里超过 3 秒没回来的工具转到后台（ADR 029 §一，MCP 方案第 1.5 期）；
 //! - [`exec`]：后台执行命令、读写文件（ADR 030，kotone-exec 转出给桌面端执行）。
 //!
 //! 循环与模型通信在 `kotone-ai::agent`；工具实现在 `kotone-tools`。本 crate 不依赖 Tauri，
@@ -17,9 +18,9 @@
 /// [`catalog::exec_entries`] 从这里取，执行由桌面端经 [`port::BuiltinHost::exec`] 调用。
 pub use kotone_exec as exec;
 
-pub mod body;
 pub mod auto_card;
 pub mod background;
+pub mod body;
 pub mod browser;
 pub mod catalog;
 pub mod permissions;

@@ -66,6 +66,9 @@ pub fn entries() -> Vec<ToolEntry> {
         group: "browser",
         source: Source::Exec,
         untrusted,
+        // 网页只在后台操作（ADR 031）
+        main: false,
+        own_wait: false,
     };
     vec![
         browse(
@@ -1550,7 +1553,7 @@ mod tests {
         for name in TOOLS {
             let e = entries.iter().find(|e| e.name == name).unwrap();
             assert_eq!(e.source, Source::Exec, "{name}");
-            assert!(!crate::catalog::MAIN_TOOLS.contains(&name), "{name}");
+            assert!(!crate::catalog::main_offers(e), "{name}");
         }
         // 放歌不在浏览器里了（ADR 034）：music 是放歌插件的
         assert!(!entries.iter().any(|e| e.name == "music"));

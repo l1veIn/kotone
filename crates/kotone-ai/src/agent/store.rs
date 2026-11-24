@@ -110,6 +110,10 @@ pub struct Subagent {
     /// 这一轮里玩家已经同意过（追加任务开新一轮时清掉）。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub taint_approved: bool,
+    /// 不是派出去的子代理，而是主会话的一个工具超过 3 秒没回来、转到后台接着做的（工具名，ADR 029 §一）。
+    /// 界面按工具名显示卡片标题（和工具卡片一样的叫法）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
 }
 
 impl Conversation {

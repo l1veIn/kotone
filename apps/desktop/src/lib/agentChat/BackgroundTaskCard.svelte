@@ -1,4 +1,5 @@
 <!-- 交给后台做的一件事（ADR 029 第三节）：主会话里 agent.start / agent.followup 的那一行显示成这张卡片。 -->
+<!-- 主会话里超过 3 秒转到后台的工具（ADR 029 §一）也是这张卡片：标题照工具卡片的叫法（“查战绩 · 进行中”→ 完成）。 -->
 <!-- 玩家看不到“另一段对话”，只看到“写喝药脚本 · 进行中 [停止]”；展开看它一步步做了什么（只读，复用工具卡片）。 -->
 <!-- 等确认时的三个按钮沿用 ToolCallCard 的确认卡片（文案与样式）。Kotone 自己的实现。 -->
 <script lang="ts">
@@ -6,9 +7,10 @@
   import { Button } from "$lib/components/ui/button";
   import { m } from "$lib/paraglide/messages.js";
   import {
-    agentSubagentAnswer, agentSubagentContinue, agentSubagentStop,
+    agentSubagentAnswer, agentSubagentContinue, agentSubagentStop, movedTaskName, toolLabel,
     type SubagentAnswer, type SubagentInfo, type SubagentStatus,
   } from "../agent";
+  import { pluginToolLabel } from "../pluginUi";
   import { tryAgentChat } from "./context";
   import type { ToolView } from "./timeline";
   import TaskProcess from "./TaskProcess.svelte";
@@ -22,7 +24,9 @@
   }
   const args = $derived(parse(tool.call.arguments));
   const result = $derived(parse(tool.content));
-  const name = $derived(typeof args.name === "string" ? args.name : "");
+  /** 超过 3 秒转到后台的工具：后台那件事的名字在结果里（参数是工具自己的）。 */
+  const moved = $derived(movedTaskName(tool.content));
+  const name = $derived(moved ?? (typeof args.name === "string" ? args.name : ""));
   const conversationId = $derived(chat?.conversation?.id ?? "");
   const info = $derived<SubagentInfo | undefined>(name ? chat?.subagent(name) : undefined);
 
@@ -39,7 +43,8 @@
     return last === null || last === tool.call.id;
   });
 
-  const label = $derived(info?.label || (typeof args.label === "string" && args.label.trim()) || (typeof result.label === "string" && result.label) || m.chat_task_default_label());
+  const label = $derived(moved ? (pluginToolLabel(tool.call.name) ?? toolLabel(tool.call.name))
+    : info?.label || (typeof args.label === "string" && args.label.trim()) || (typeof result.label === "string" && result.label) || m.chat_task_default_label());
 
   /** 没有登记时（旧对话、事件还没到）按工具本身的结果推断。 */
   const status = $derived.by<SubagentStatus>(() => {
@@ -114,7 +119,8 @@
     {/if}
   </div>
 
-  {#if latest && !open && firstSentence && (status === "done" || status === "failed")}
+  <!-- 转到后台的工具：结果是工具的原始数据，不摘一句；展开看工具卡片 -->
+  {#if latest && !open && firstSentence && !moved && (status === "done" || status === "failed")}
     <p class="m-0 line-clamp-2 px-3 pb-2 text-[13px] leading-5 text-muted-foreground" data-testid="task-card-summary">{firstSentence}</p>
   {/if}
 
@@ -134,7 +140,7 @@
   {#if open}
     <div class="max-h-96 min-w-0 space-y-2 overflow-auto border-t border-hairline bg-muted/30 px-3 py-2.5" data-testid="task-card-body">
       <TaskProcess {conversationId} {name} {info} {summary}
-        showResult={latest && (status === "done" || status === "failed")} running={processRunning} />
+        showResult={latest && !moved && (status === "done" || status === "failed")} running={processRunning} />
     </div>
   {/if}
 </div>

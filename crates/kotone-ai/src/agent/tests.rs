@@ -132,14 +132,21 @@ impl FakeTools {
 
 impl ToolPort for FakeTools {
     fn definitions(&self) -> Vec<ToolDef> {
-        ["automation.list", "screen.read", "hang", "big", "interrupt"]
-            .iter()
-            .map(|name| ToolDef {
-                name: (*name).into(),
-                description: format!("测试工具 {name}"),
-                parameters: json!({"type": "object"}),
-            })
-            .collect()
+        [
+            "automation.list",
+            "screen.read",
+            "hang",
+            "big",
+            "interrupt",
+            "moved",
+        ]
+        .iter()
+        .map(|name| ToolDef {
+            name: (*name).into(),
+            description: format!("测试工具 {name}"),
+            parameters: json!({"type": "object"}),
+        })
+        .collect()
     }
 
     async fn call(
@@ -161,6 +168,12 @@ impl ToolPort for FakeTools {
                 untrusted: true,
                 images: Vec::new(),
                 display: None,
+                background: false,
+            },
+            // 超过等待时间、转到后台接着做了（ADR 029 §一）
+            "moved" => ToolOutcome {
+                background: true,
+                ..ToolOutcome::ok(r#"{"status":"running","background":true}"#)
             },
             "hang" => {
                 self.hang_started.notify_one();
@@ -1543,6 +1556,7 @@ fn store_keeps_subagents_beside_the_conversation() {
         turn: Some(1),
         taint: None,
         taint_approved: false,
+        tool: None,
     };
     store
         .save_subagents(&c.id, std::slice::from_ref(&agent))
@@ -1724,6 +1738,7 @@ fn background_records_do_not_count_toward_the_limit_and_go_with_their_main_conve
                 turn: None,
                 taint: Some("读了网页".into()),
                 taint_approved: false,
+                tool: None,
             }],
         )
         .unwrap();
@@ -1763,14 +1778,22 @@ fn background_records_do_not_count_toward_the_limit_and_go_with_their_main_conve
         turn: None,
         taint: Some("读了网页".into()),
         taint_approved: true,
+        tool: None,
     })
     .unwrap();
     assert!(json.contains("\"taint\":\"读了网页\"") && json.contains("\"taintApproved\":true"));
+    assert!(!json.contains("\"tool\""), "派出去的子代理不写 tool");
     let old: super::store::Subagent = serde_json::from_str(
         r#"{"name":"a","label":"b","conversationId":"c-1","status":"done","startedAtMs":0,"updatedAtMs":0}"#,
     )
     .unwrap();
-    assert!(old.taint.is_none() && !old.taint_approved);
+    assert!(old.taint.is_none() && !old.taint_approved && old.tool.is_none());
+    // 主会话的工具转到后台的那件事（ADR 029 §一）记下工具名
+    let moved: super::store::Subagent = serde_json::from_str(
+        r#"{"name":"lol-scout","label":"lol.scout","conversationId":"c-2","status":"running","startedAtMs":0,"updatedAtMs":0,"tool":"lol.scout"}"#,
+    )
+    .unwrap();
+    assert_eq!(moved.tool.as_deref(), Some("lol.scout"));
 }
 
 #[test]
@@ -2534,6 +2557,69 @@ async fn a_stop_tool_with_other_tools_or_an_error_keeps_going() {
     .await;
     assert_eq!(model.requests().len(), 2);
     assert!(matches!(r.history.last(), Some(Message::Assistant { text, .. }) if text == "没成"));
+}
+
+/// ADR 029 §一：语音回合里慢的工具转到后台了（`background`），这一步就结束这一轮；打字时模型接着说一句。
+#[tokio::test]
+async fn a_step_moved_to_the_background_ends_a_voice_turn_only() {
+    let voice = AgentLimits {
+        stop_after_background: true,
+        ..stop_after(&["speak"])
+    };
+    let model = FakeModel::new(vec![
+        calls("", vec![call("c1", "moved", "{}")]),
+        text("不该再调用模型"),
+    ]);
+    let r = run_with(
+        &model,
+        &FakeTools::default(),
+        Vec::new(),
+        "查一下战绩",
+        voice.clone(),
+        &CancellationToken::default(),
+    )
+    .await;
+    assert_eq!(r.stop, StopReason::Completed);
+    assert_eq!(model.requests().len(), 1);
+    // 和没转走的工具一起：照常继续
+    let model = FakeModel::new(vec![
+        calls(
+            "",
+            vec![
+                call("c1", "moved", "{}"),
+                call("c2", "automation.list", "{}"),
+            ],
+        ),
+        text("好了"),
+    ]);
+    run_with(
+        &model,
+        &FakeTools::default(),
+        Vec::new(),
+        "查一下",
+        voice,
+        &CancellationToken::default(),
+    )
+    .await;
+    assert_eq!(model.requests().len(), 2);
+    // 打字：模型看到“在做”的结果，接着写一句
+    let model = FakeModel::new(vec![
+        calls("", vec![call("c1", "moved", "{}")]),
+        text("在后台查，好了告诉你"),
+    ]);
+    let r = run_with(
+        &model,
+        &FakeTools::default(),
+        Vec::new(),
+        "查一下战绩",
+        AgentLimits::default(),
+        &CancellationToken::default(),
+    )
+    .await;
+    assert_eq!(model.requests().len(), 2);
+    assert!(
+        matches!(r.history.last(), Some(Message::Assistant { text, .. }) if text.contains("好了告诉你"))
+    );
 }
 
 #[tokio::test]

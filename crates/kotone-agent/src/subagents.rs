@@ -205,6 +205,10 @@ pub fn describe(agent: &Subagent) -> Value {
     if let Some(question) = &agent.question {
         v["question"] = json!(question);
     }
+    // 主会话的工具转到后台的那件（ADR 029 §一）：是哪个工具
+    if let Some(tool) = &agent.tool {
+        v["tool"] = json!(tool);
+    }
     v
 }
 
@@ -396,6 +400,7 @@ mod tests {
             turn: Some(1),
             taint: None,
             taint_approved: false,
+            tool: None,
         }
     }
 
