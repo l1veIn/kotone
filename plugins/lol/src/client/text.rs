@@ -243,6 +243,12 @@ pub struct ScoutPlayer {
     pub party: Option<i64>,
     /// None = 还在查。
     pub history: Option<PlayerHistory>,
+    /// 以下只给页面（给她的字里不用）：召唤师头像（`gameflow/session` 里的 `profileIconId`）、
+    /// 召唤师技能（`playerChampionSelections` 的 `spell1Id`、`spell2Id`，不知道时 0）、
+    /// 分路（`selectedPosition`：`TOP` / `JUNGLE` / `MIDDLE` / `BOTTOM` / `UTILITY`，没有时空）。
+    pub profile_icon_id: Option<i64>,
+    pub spells: [i64; 2],
+    pub position: String,
 }
 
 impl ScoutPlayer {
@@ -480,7 +486,9 @@ mod tests {
                 games: parse_match_list(&list),
                 rank: None,
                 error: None,
+                ..PlayerHistory::default()
             }),
+            ..ScoutPlayer::default()
         }
     }
 

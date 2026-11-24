@@ -82,6 +82,21 @@ impl Plugin for LolPlugin {
     fn resource(&self, uri: &str) -> Option<Resource> {
         app::resource(uri)
     }
+
+    /// 页面要的图（ADR 039 D6）：素材层 [`client::assets`]（缓存 → 客户端 → CommunityDragon），只放行三个前缀下的图片。
+    fn asset<'a>(
+        &'a self,
+        host: Arc<dyn Host>,
+        path: &'a str,
+    ) -> BoxFuture<'a, Option<kotone_plugin_api::Asset>> {
+        Box::pin(async move {
+            let asset = self.fetch_asset(host.as_ref(), path).await.ok()?;
+            Some(kotone_plugin_api::Asset {
+                mime_type: asset.mime.into(),
+                bytes: asset.bytes,
+            })
+        })
+    }
 }
 
 #[cfg(test)]

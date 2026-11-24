@@ -77,6 +77,8 @@ pub struct SpellInfo {
     pub cooldown: f64,
     /// 能用这个技能的模式（`CLASSIC`、`ARAM`、`KIWI`……）。
     pub modes: Vec<String>,
+    /// 图标的客户端路径（`iconPath`，页面用，素材层取图）。
+    pub icon: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -84,6 +86,15 @@ pub struct Augment {
     pub name: String,
     /// `kSilver` / `kGold` / `kPrismatic`。
     pub rarity: String,
+    /// 小图标的客户端路径（`augmentSmallIconPath`，64×64）。
+    pub icon: String,
+}
+
+/// 一个符文或符文系（`perks.json` / `perkstyles.json`）：名字和图标的客户端路径。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Perk {
+    pub name: String,
+    pub icon: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -91,7 +102,12 @@ pub struct GameData {
     pub champions: Vec<Champion>,
     pub spells: Vec<SpellInfo>,
     pub items: HashMap<i64, String>,
+    /// 装备图标的客户端路径（`items.json` 的 `iconPath`）。
+    pub item_icons: HashMap<i64, String>,
     pub augments: HashMap<i64, Augment>,
+    /// 符文、符文系（[`GameData::add_perks`]；客户端读不到时空）。
+    pub perks: HashMap<i64, Perk>,
+    pub perk_styles: HashMap<i64, Perk>,
     pub queues: HashMap<i64, String>,
     /// `pickMode` 是 `AllRandomPickStrategy` 的队列。
     pub random_pick_queues: HashSet<i64>,
@@ -145,12 +161,18 @@ impl GameData {
                         .filter_map(Value::as_str)
                         .map(str::to_string)
                         .collect(),
+                    icon: s(x, "iconPath"),
                 })
                 .collect(),
             items: list(items)
                 .iter()
                 .map(|x| (i(x, "id"), s(x, "name")))
                 .filter(|(_, name)| !name.is_empty())
+                .collect(),
+            item_icons: list(items)
+                .iter()
+                .map(|x| (i(x, "id"), s(x, "iconPath")))
+                .filter(|(_, icon)| !icon.is_empty())
                 .collect(),
             augments: list(augments)
                 .iter()
@@ -160,6 +182,7 @@ impl GameData {
                         Augment {
                             name: s(x, "nameTRA"),
                             rarity: s(x, "rarity"),
+                            icon: s(x, "augmentSmallIconPath"),
                         },
                     )
                 })
@@ -175,7 +198,29 @@ impl GameData {
                 .filter(|x| s(x, "pickMode") == "AllRandomPickStrategy")
                 .map(|x| i(x, "id"))
                 .collect(),
+            perks: HashMap::new(),
+            perk_styles: HashMap::new(),
         }
+    }
+
+    /// 符文（`perks.json`，一个列表）和符文系（`perkstyles.json`，`{styles: [...]}`，也认直接是列表的）。
+    pub fn add_perks(&mut self, perks: &Value, styles: &Value) {
+        fn named(v: &[Value]) -> HashMap<i64, Perk> {
+            v.iter()
+                .filter(|x| i(x, "id") > 0)
+                .map(|x| {
+                    (
+                        i(x, "id"),
+                        Perk {
+                            name: s(x, "name"),
+                            icon: s(x, "iconPath"),
+                        },
+                    )
+                })
+                .collect()
+        }
+        self.perks = named(list(perks));
+        self.perk_styles = named(list(styles.get("styles").unwrap_or(styles)));
     }
 
     pub fn is_empty(&self) -> bool {
@@ -213,6 +258,11 @@ impl GameData {
     pub fn augment_name(&self, id: i64) -> Option<&str> {
         self.augments.get(&id).map(|a| a.name.as_str())
     }
+
+    /// 按 id 找召唤师技能（`spell1Id` / `spell2Id`）。
+    pub fn spell_by_id(&self, id: i64) -> Option<&SpellInfo> {
+        self.spells.iter().find(|x| x.id == id)
+    }
 }
 
 #[cfg(test)]
@@ -235,8 +285,9 @@ pub(crate) mod tests {
                 {"id": 32, "name": "标记", "cooldown": 80, "gameModes": ["KIWI", "ARAM"]},
                 {"id": 14, "name": "引燃", "cooldown": 180, "gameModes": ["ARAM", "CLASSIC"]}
             ]),
-            &json!([{"id": 3158, "name": "明朗之靴"}]),
-            &json!([{"id": 1205, "nameTRA": "物理转魔法", "rarity": "kSilver"}]),
+            &json!([{"id": 3158, "name": "明朗之靴", "iconPath": "/lol-game-data/assets/ASSETS/Items/Icons2D/3158_Class_T2_IonianBootsofLucidity.png"}]),
+            &json!([{"id": 1205, "nameTRA": "物理转魔法", "rarity": "kSilver",
+                     "augmentSmallIconPath": "/lol-game-data/assets/ASSETS/UX/Cherry/Augments/Icons/ADAPt_small.png"}]),
             &json!([
                 {"id": 2400, "name": "海克斯大乱斗 ", "pickMode": "AllRandomPickStrategy"},
                 {"id": 3120, "name": "召唤师峡谷 全随机", "pickMode": "AllRandomPickStrategy"},
@@ -268,6 +319,30 @@ pub(crate) mod tests {
         // 没有这个模式的：用峡谷那条；冷却 0 的（斗魂竞技场）不算
         assert_eq!(data.spell("闪现", "TUTORIAL").unwrap().id, 4);
         assert!(data.spell("不存在", "KIWI").is_none());
+    }
+
+    #[test]
+    fn icons_and_perks_carry_client_paths() {
+        let mut data = sample();
+        assert!(data.item_icons[&3158].ends_with("IonianBootsofLucidity.png"));
+        assert!(data.augments[&1205].icon.ends_with("ADAPt_small.png"));
+        assert_eq!(data.spell_by_id(4).unwrap().name, "闪现");
+        assert!(data.perks.is_empty());
+        data.add_perks(
+            &json!([{"id": 8369, "name": "先攻", "iconPath": "/lol-game-data/assets/v1/perk-images/Styles/Inspiration/FirstStrike/FirstStrike.png"},
+                    {"id": 0, "name": "x"}]),
+            &json!({"schemaVersion": 2, "styles": [
+                {"id": 8300, "name": "启迪", "iconPath": "/lol-game-data/assets/v1/perk-images/Styles/7203_Whimsy.png"}]}),
+        );
+        assert_eq!(data.perks.len(), 1);
+        assert_eq!(data.perks[&8369].name, "先攻");
+        assert!(data.perk_styles[&8300].icon.ends_with("7203_Whimsy.png"));
+        // 符文系直接是列表也认
+        data.add_perks(
+            &Value::Null,
+            &json!([{"id": 8000, "name": "精密", "iconPath": "p"}]),
+        );
+        assert_eq!(data.perk_styles[&8000].icon, "p");
     }
 
     #[test]

@@ -715,3 +715,40 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 - `kotone-plugin-lol` 56 个过 + 1 个手动跑的（新加：经本地测试服务器的 OP.GG——四次请求做两次调用、缓存命中不再请求、出错的说法、服务器没了说连不上并丢掉连接）；`kotone-exec` 36（Job 的超时 / 取消结束子进程那几个照过）、`kotone-platform-windows` 90 + 集成 2、插件边界 3、`kotone-plugin-api` 13、桌面端 113；clippy `-D warnings` 干净；`cargo audit` 和改之前一样（没有新的警告）。
 - **OP.GG 真调了一次**（`cargo test -p kotone-plugin-lol opgg_real -- --ignored --nocapture`，一个工具 `lol_get_champion_analysis` 查刀妹，上路、中路各一次）：服务器自称 “OP.GG MCP Server 1.0.0”，谈好的协议 2025-06-18；第一次（握手 + 调用）1,986 ms、5,575 字，第二次（复用会话）586 ms、5,520 字，都是以前那种类声明文字（`class LolGetChampionAnalysis: champion,position,data`……）；两次是同一个会话。
 - 真机 `lol_tools_real.py --while-playing`（假客户端 + 真 DeepSeek，不按键）：**32/32**，和以前一样；最后一项“OP.GG 默认不请求”照过。
+
+### 英雄联盟 App：素材层和页面数据（2026-11-25）
+
+照 [对标调研](research/2026-11-25-lol-app-parity.md) 差距表 G0、G0.1 和第三节，[ADR 039](adr/039-desktop-companion-and-game-apps.md) D6。玩家原话：“素材不要内置到 kotone 吧？太大了，应该可以直接从客户端拿在线的。”
+
+**玩家看到的**：现在还看不到。旧的 Svelte 页面不画图；新的 App 页面（第 12 条）接上素材层以后才有英雄头像、召唤师头像、段位、海克斯、装备、技能、符文的图。琴音说的话一个字没变。
+
+**素材层**（`plugins/lol/src/client/assets.rs`，入口 `LolPlugin::fetch_asset`）：
+
+- 安装包里不带图。顺序：磁盘缓存 → 客户端（插件和“读客户端数据”开着、客户端开着时，带本机令牌）→ CommunityDragon（`https://raw.communitydragon.org/latest/…`，前缀换成它的目录、后面全部小写）→ 找不到（页面显示占位）。重新取失败时用缓存里过期的那份；CommunityDragon 失败的 10 分钟内不再问（照 AramHex）。
+- **只放行三个前缀下的图片**：`/lol-game-data/assets/`、`/fe/lol-static-assets/`、`/fe/lol-shared-components/`；扩展名 png / jpg / svg / webp；内容也要真是图片（按文件头认，客户端回一段 JSON 不算），SVG 里有脚本、事件属性、`javascript:` 的不要。路径每段只许字母、数字和 `._-`，所以 `..`、`%` 编码、查询串、反斜杠、空白、非 ASCII 都拒绝。不把客户端的别的接口转给页面（LeagueAkari 那样什么都转，等于让沙盒里的页面能接受对局、选英雄）。
+- **磁盘缓存**：`KOTONE_HOME/plugins/lol/asset-cache/`（插件目录，和统计的缓存放一起；调研写的是 `KOTONE_HOME/cache/lol-assets/`，都在 `KOTONE_HOME` 下，选插件目录是为了删插件数据时一起删）。文件名是路径（小写）的 SHA-256 前 16 字节 + 扩展名；上限 64 MB，超了先删最久没用的（最后访问时间也写回文件，重启以后还知道谁最近用过）；14 天重新取。先写临时文件再改名，不会写坏；同一个路径同时来几次只取一次。
+- 页面数据里的路径由 `champion_icon`、`profile_icon`、`ranked_crest` 和客户端资料里的 `iconPath` 给，都过得了上面的检查（有测试）。
+
+**页面数据补的字段**（`pages.rs`，camelCase，只加不改，旧页面照常）：图都给客户端路径，拿不到时是空字符串。
+
+- 共用：`champion` 多了 `icon`；召唤师技能 `{id, name, icon}`；装备 `{id, name, icon, slot}`（`slot` 0–6，6 是饰品，空格不列）；海克斯多了 `rarity`、`icon`；符文 `perks: {keystone, primaryStyle, subStyle}`（各是 `{id, name, icon}` 或 null，海斗、斗魂竞技场整个 null）；段位 `ranked: {solo, flex}`，各是 `{queue, tier, division, lp, wins, losses, highestTier, label, crest}` 或 null（没定级时 `tier` 空、`label` 是“未定级”）。
+- 这局的每个人：`profileIconId`、`profileIcon`、`summonerLevel`、`spells`、`position`（`TOP` / `JUNGLE` / `MIDDLE` / `BOTTOM` / `UTILITY`，大乱斗是空）、`ranked`；`recent` 每局多了 `championIcon`。
+- 战绩页：`profileIconId`、`profileIcon`、`summonerLevel`、`ranked`；每局多了 `level`、`spells`、`items`、`perks`。
+- 单局详情的每个人：`profileIconId`、`profileIcon`、`spells`、`perks`；`items`、`augments` 多了上面的字段。
+- 数据从哪来：都是已经在读的接口（召唤师、段位、战绩、gameflow session）；客户端资料多读两个文件 `perks.json`、`perkstyles.json`（读不到就没有符文名字和图标）。
+
+**定了什么**：
+
+- 素材层放在 `client/` 下面（`client/mod.rs` 里登记），没动 `lib.rs`（同时在做的第 3 期在改它）。
+- 第 3 期的接口提交（`8e4edbaf`）以后接上了：`lib.rs` 的 `Plugin::asset` 调 `fetch_asset`，回环代理的 `/assets/lol/<路径>` 就到素材层。测试用的 `KOTONE_LOL_CDRAGON=<本机地址>` 把 CommunityDragon 换成本机的假服务器（只认本机，写错了就不连网），和 `KOTONE_LOL_LCU`、`KOTONE_LOL_LIVE` 一样。
+- 回环代理回素材时已经带 `X-Content-Type-Options: nosniff`；建议再加 `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`（SVG 直接打开时也跑不了东西）。素材层自己也挡了带脚本的 SVG。
+- 声明：CommunityDragon 的出处和拳头 “Legal Jibber Jabber” 的声明写在 `plugins/lol/README.md` 的“素材”一节。
+
+**检查**：
+
+- `kotone-plugin-lol` 75 个过 + 1 个手动跑的（其中同时在做的第 3 期 2 个；这件事新加 17 个：素材层 12 个——生成的 PNG、三个前缀和写法、CommunityDragon 的地址、按内容认类型和挡 SVG、页面路径都过检查、客户端优先然后缓存（重启以后也在）、客户端没开 / 没这张图时问 CommunityDragon（失败的 10 分钟不再问、不放行的路径谁都不问）、同一个路径同时三次只取一次、上限满了删最久没用的、14 天重新取和没网时用旧的、坏文件和残留临时文件、本机假 CommunityDragon 走一遍真的 HTTP；页面字段 1 个；段位和战绩字段 2 个；资料里的图标和符文 1 个；**“给琴音的文字不变”** 1 个：同一份带新字段的输入，`render_scout` 和 `player_text` 的输出和改之前录的一字不差）。测试里的 PNG 是程序生成的纯色块，仓库里没有拳头的图，测试不连 CommunityDragon。clippy `-D warnings` 干净，svelte-check 0 / 0。
+- 录下来的一局（`target/lol-probe/20261123-210745`）：`render_probe` 给琴音的字改前改后 67 行一字不差；三个页面的数据样例存在 `target/plugin-shots/round7/`（`match-sample.json`、`player-sample.json`、`game-sample.json`，玩家名和 puuid 换成了“玩家 N”“puuid-N”，查过没有漏）。样例里 555 个图片路径（229 个不同的）全过素材层的检查；抽 10 个按规则换成 CommunityDragon 地址，都是 200。录的时候没录段位，所以样例里 `ranked` 都是 null。
+- 桌面端：新加 `plugin_apps::tests::the_proxy_takes_lol_assets_from_the_plugin`——真的回环代理 + 真的英雄联盟插件 + 本机假 CommunityDragon：`/assets/lol/lol-game-data/assets/v1/champion-icons/103.png` 回 200、`image/png`；第二次走磁盘缓存、假服务器没再被问；代理放行但插件不放行的（`lol-champ-select/v1/session.png`、`champion-summary.json`）回 404，假服务器没被问；哪儿都没有的回 404。`kotone-tauri` 119 过 + 1 忽略，clippy `--no-deps -D warnings` 干净。
+- 真机 `lol_tools_real.py --while-playing`：**34/34**（以前 32 项照过，多 2 项：这局页面每个人都有英雄头像、召唤师头像的路径和两个召唤师技能，给她的字里没有路径；战绩页和单局详情有头像、等级、技能、装备图标、带稀有度的海克斯）。
+
+**没验的（要玩家开客户端时看）**：国服客户端的图片接口本身（`/lol-game-data/assets/…png`、`/fe/lol-static-assets/images/ranked-mini-crests/*.svg`）能不能取到；取不到时会自动走 CommunityDragon。

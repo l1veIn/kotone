@@ -9,7 +9,10 @@
 //!
 //! 照 LeagueAkari（MIT，`dev` 分支）：读命令行、接口路径、模式急速；突破口的算法是自己写的（[`scout`]）。
 //! 除了 [`http`] 里的网络请求，其余都是纯函数。
+//!
+//! [`assets`]：页面要的图（素材层，ADR 039 D6）：磁盘缓存 → 客户端 → CommunityDragon，只放行三个前缀下的图片。
 
+pub mod assets;
 pub mod auth;
 pub mod events;
 pub mod gamedata;

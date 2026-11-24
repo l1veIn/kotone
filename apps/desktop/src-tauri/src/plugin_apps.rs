@@ -148,4 +148,160 @@ mod tests {
         disabled.plugins.entry("lol".into()).or_default().enabled = Some(false);
         assert!(read(&disabled, "ui://kotone/lol/tier").is_err());
     }
+
+    /// 回环代理的 `/assets/lol/<路径>` 走到英雄联盟插件的素材层（`Plugin::asset` → `fetch_asset`）：
+    /// 客户端没开时问 CommunityDragon（这里是本机的假服务器，`KOTONE_LOL_CDRAGON`，不连真网），
+    /// 第二次走磁盘缓存；三个前缀以外的路径插件不放行，假服务器也没被问到。
+    #[tokio::test]
+    async fn the_proxy_takes_lol_assets_from_the_plugin() {
+        use std::path::PathBuf;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use kotone_plugin_api::{Host, Observation};
+        use serde_json::Map;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        /// 只有素材层用得到的宿主：插件和开关都开着，没有客户端进程。
+        struct TestHost(PathBuf);
+        impl Host for TestHost {
+            fn plugin(&self) -> &str {
+                "lol"
+            }
+            fn enabled(&self) -> bool {
+                true
+            }
+            fn source_enabled(&self, _: &str) -> bool {
+                true
+            }
+            fn settings(&self) -> Value {
+                Value::Null
+            }
+            fn data_dir(&self) -> PathBuf {
+                self.0.clone()
+            }
+            fn spawn(&self, _: BoxFuture<'static, ()>) {}
+            fn process_ids(&self, _: &str) -> Vec<u32> {
+                Vec::new()
+            }
+            fn process_command_line(&self, _: u32) -> Option<String> {
+                None
+            }
+            fn game_observe(&self, _: &str, _: Observation) {}
+            fn game_claim(&self, _: &str, _: bool) {}
+            fn game_event(&self, _: &str, _: &str, _: &str, _: Map<String, Value>, _: Option<f64>) {
+            }
+        }
+
+        /// 和 `PluginSource` 一样把素材交给插件（少了读设置：这里插件一直开着）。
+        struct LolSource(Arc<dyn Plugin>, Arc<dyn Host>);
+        impl crate::app_proxy::Source for LolSource {
+            fn plugin(&self) -> &str {
+                "lol"
+            }
+            fn resource(&self, _: &str) -> Result<Resource, String> {
+                Err("这个测试只取素材".into())
+            }
+            fn asset(&self, path: String) -> BoxFuture<'static, Option<Asset>> {
+                let (plugin, host) = (self.0.clone(), self.1.clone());
+                Box::pin(async move { plugin.asset(host, &path).await })
+            }
+        }
+
+        async fn get(origin: &str, path: &str) -> (u16, String, Vec<u8>) {
+            let host = origin.trim_start_matches("http://");
+            let mut stream = tokio::net::TcpStream::connect(host).await.unwrap();
+            let request =
+                format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut reply = Vec::new();
+            stream.read_to_end(&mut reply).await.unwrap();
+            let split = reply.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+            let head = String::from_utf8_lossy(&reply[..split]).to_string();
+            let status = head.split_whitespace().nth(1).unwrap().parse().unwrap();
+            (
+                status,
+                head.to_ascii_lowercase(),
+                reply[split + 4..].to_vec(),
+            )
+        }
+
+        // 本机的假 CommunityDragon：只有阿狸的头像（一段 PNG 文件头，不是拳头的图）
+        let png = b"\x89PNG\r\n\x1a\nfake".to_vec();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let asked = Arc::new(AtomicUsize::new(0));
+        let (served, count) = (png.clone(), asked.clone());
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                count.fetch_add(1, Ordering::SeqCst);
+                let mut buf = vec![0u8; 4096];
+                let n = socket.read(&mut buf).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(&buf[..n]).to_string();
+                let path = head.split_whitespace().nth(1).unwrap_or("").to_string();
+                let reply = if path
+                    == "/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/103.png"
+                {
+                    let mut r = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        served.len()
+                    )
+                    .into_bytes();
+                    r.extend_from_slice(&served);
+                    r
+                } else {
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
+                };
+                let _ = socket.write_all(&reply).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+        // 这个测试进程里只有这里用英雄联盟的素材层（它第一次用时读这个变量）
+        std::env::set_var(
+            "KOTONE_LOL_CDRAGON",
+            format!("http://127.0.0.1:{port}/latest"),
+        );
+        let dir =
+            std::env::temp_dir().join(format!("kotone-proxy-lol-assets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let plugin: Arc<dyn Plugin> = Arc::new(kotone_plugin_lol::LolPlugin::new());
+        let host: Arc<dyn Host> = Arc::new(TestHost(dir.clone()));
+        let proxy = crate::app_proxy::Proxy::start(Arc::new(LolSource(plugin, host)))
+            .await
+            .unwrap();
+        // 素材地址：沙盒页地址里的 `/sandbox/lol/<页面>` 换成 `/assets/lol/`
+        let sandbox = proxy.sandbox_url("tier");
+        let base = sandbox
+            .strip_prefix(&proxy.origin())
+            .unwrap()
+            .replace("/sandbox/lol/tier", "/assets/lol/");
+        let icon = format!("{base}lol-game-data/assets/v1/champion-icons/103.png");
+
+        let (status, head, body) = get(&proxy.origin(), &icon).await;
+        assert_eq!(status, 200, "{head}");
+        assert!(head.contains("content-type: image/png"), "{head}");
+        assert_eq!(body, png);
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+        // 第二次：磁盘缓存，不再问
+        let (status, _, body) = get(&proxy.origin(), &icon).await;
+        assert_eq!((status, body), (200, png.clone()));
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+        assert_eq!(dir.join("asset-cache").read_dir().unwrap().count(), 1);
+        // 代理的写法检查过得了、插件不放行的（客户端的别的接口、不是图片）：404，假服务器没被问
+        for refused in [
+            "lol-champ-select/v1/session.png",
+            "lol-game-data/assets/v1/champion-summary.json",
+        ] {
+            let (status, _, _) = get(&proxy.origin(), &format!("{base}{refused}")).await;
+            assert_eq!(status, 404, "{refused}");
+        }
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+        // 哪儿都没有的图：404
+        let (status, _, _) = get(
+            &proxy.origin(),
+            &format!("{base}lol-game-data/assets/v1/champion-icons/999999.png"),
+        )
+        .await;
+        assert_eq!(status, 404);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

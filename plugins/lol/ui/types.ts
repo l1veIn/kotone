@@ -3,7 +3,28 @@ export const PAGE_MATCH = "ui://kotone/lol/match";
 export const PAGE_PLAYER = "ui://kotone/lol/player";
 export const PAGE_GAME = "ui://kotone/lol/game";
 
-export interface Champion { id: number; label: string; short: string; alias: string }
+/**
+ * 图（ADR 039 D6，调研 G0.1）：数据里只有 id 和客户端的资源路径（`icon`、`profileIcon`、`crest`、`championIcon`，
+ * 例如 `/lol-game-data/assets/v1/champion-icons/103.png`），拿不到时是空字符串。页面自己决定从哪取：
+ * Kotone 里经回环代理的素材层，别的宿主换成 CommunityDragon 的地址。下面带 `?` 的字段是 2026-11-25 加的。
+ */
+export interface Champion { id: number; label: string; short: string; alias: string; icon?: string }
+
+/** 召唤师技能、符文、符文系。 */
+export interface Iconed { id: number; name: string; icon: string }
+/** 装备：`slot` 0–6（6 是饰品），空格不列。 */
+export interface Item extends Iconed { slot: number }
+/** 海克斯：`rarity` 是 `kSilver` / `kGold` / `kPrismatic`，不知道时空。 */
+export interface Augment extends Iconed { rarity: string }
+/** 符文：海斗、斗魂竞技场没有符文时整个是 null。 */
+export interface Perks { keystone: Iconed | null; primaryStyle: Iconed | null; subStyle: Iconed | null }
+/** 一个排位队列；没定级时 `tier` 空、`label` 是“未定级”。 */
+export interface Ranked {
+  queue: string; tier: string; division: string; lp: number; wins: number; losses: number;
+  highestTier: string; label: string; crest: string;
+}
+/** 单双排、灵活组排；没查到的是 null。 */
+export interface Ranks { solo: Ranked | null; flex: Ranked | null }
 
 export interface Summary {
   games: number; wins: number; losses: number;
@@ -14,7 +35,7 @@ export interface Summary {
   champGames: number; champWins: number;
 }
 
-export interface RecentGame { gameId: number; win: boolean; championId: number; kills: number; deaths: number; assists: number }
+export interface RecentGame { gameId: number; win: boolean; championId: number; championIcon?: string; kills: number; deaths: number; assists: number }
 
 export interface MatchPlayer {
   puuid: string;
@@ -35,6 +56,14 @@ export interface MatchPlayer {
   recent: RecentGame[];
   /** 是突破口时的原因。 */
   weak: string[] | null;
+  profileIconId?: number | null;
+  profileIcon?: string;
+  /** 还在查、查不到时 null。 */
+  summonerLevel?: number | null;
+  spells?: Iconed[];
+  /** `TOP` / `JUNGLE` / `MIDDLE` / `BOTTOM` / `UTILITY`；大乱斗这类没有分路时空。 */
+  position?: string;
+  ranked?: Ranks;
 }
 
 export interface MatchData {
@@ -47,11 +76,13 @@ export interface Named { id: number; name: string }
 export interface PlayerGame {
   gameId: number; queueId: number; queue: string; createdMs: number; durationS: number;
   champion: Champion; win: boolean; kills: number; deaths: number; assists: number;
-  damage: number; dpm: number; gold: number; cs: number; augments: Named[];
+  damage: number; dpm: number; gold: number; cs: number; augments: (Named & Partial<Augment>)[];
+  level?: number; spells?: Iconed[]; items?: Item[]; perks?: Perks | null;
 }
 
 export interface PlayerData {
   puuid: string; riotId: string; hidden: boolean; rank: string | null; error: string | null;
+  profileIconId?: number | null; profileIcon?: string; summonerLevel?: number | null; ranked?: Ranks;
   summary: Summary | null;
   champions: { champion: Champion; games: number; wins: number }[];
   games: PlayerGame[];
@@ -60,7 +91,8 @@ export interface PlayerData {
 export interface GamePlayer {
   puuid: string; riotId: string; champion: Champion; level: number;
   kills: number; deaths: number; assists: number; damage: number; dpm: number; taken: number; gold: number; cs: number;
-  items: Named[]; augments: Named[];
+  items: (Named & Partial<Item>)[]; augments: (Named & Partial<Augment>)[];
+  profileIconId?: number | null; profileIcon?: string; spells?: Iconed[]; perks?: Perks | null;
 }
 
 export interface GameData {

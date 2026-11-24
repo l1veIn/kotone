@@ -106,6 +106,33 @@ impl Lcu {
         .await
     }
 
+    /// 读一个文件的原始内容（素材层取图，[`crate::client::assets`]；路径由素材层先检查过，只读）。
+    pub async fn get_bytes(&self, path: &str) -> Result<Vec<u8>, LolError> {
+        let response = self
+            .http
+            .get(format!("{}{path}", self.base))
+            .header("Authorization", &self.authorization)
+            .header("Accept", "image/*")
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_connect() {
+                    LolError::Unavailable
+                } else {
+                    LolError::Other(e.to_string())
+                }
+            })?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(LolError::Status(status.as_u16(), String::new()));
+        }
+        response
+            .bytes()
+            .await
+            .map(|b| b.to_vec())
+            .map_err(|e| LolError::Other(e.to_string()))
+    }
+
     /// 写：只给“操作客户端”用（接受对局、选 / 禁英雄）。
     pub async fn post(&self, path: &str, body: &Value) -> Result<Value, LolError> {
         let mut request = self
@@ -176,6 +203,9 @@ pub mod paths {
     pub const ITEMS: &str = "/lol-game-data/assets/v1/items.json";
     pub const AUGMENTS: &str = "/lol-game-data/assets/v1/cherry-augments.json";
     pub const QUEUES: &str = "/lol-game-data/assets/v1/queues.json";
+    /// 符文和符文系（页面上的图标、名字）。
+    pub const PERKS: &str = "/lol-game-data/assets/v1/perks.json";
+    pub const PERK_STYLES: &str = "/lol-game-data/assets/v1/perkstyles.json";
 
     /// 这个人最近 `count` 局（新的在前，LCU 一次最多给 20 局左右）。
     pub fn matches(puuid: &str, count: u32) -> String {

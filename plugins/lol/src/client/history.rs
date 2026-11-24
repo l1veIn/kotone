@@ -1,10 +1,10 @@
 //! 一个人的战绩（LCU `/lol-match-history/v1/products/lol/{puuid}/matches`，新的在前；
-//! 列表里每局只有他自己那一份数据）、隐私设置和单双排段位。
+//! 列表里每局只有他自己那一份数据）、隐私设置和段位（给她的是单双排一句话，页面拿结构化的两个队列）。
 
 use serde_json::Value;
 
 /// 一局（只算这个人自己的数据）。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct GameRecord {
     pub game_id: i64,
     pub queue_id: i64,
@@ -25,6 +25,17 @@ pub struct GameRecord {
     pub cs: i64,
     /// 海克斯（海斗、斗魂竞技场）。
     pub augments: Vec<i64>,
+    /// 以下只给页面（给她的字里不用）。
+    /// 召唤师技能（`spell1Id`、`spell2Id`）。
+    pub spells: [i64; 2],
+    /// 装备，按格子（`item0`–`item6`，最后一格是饰品；空格是 0）。
+    pub items: [i64; 7],
+    /// 基石符文（`perk0`）、主系、副系（`perkPrimaryStyle`、`perkSubStyle`）；海斗、斗魂竞技场是 0。
+    pub keystone: i64,
+    pub primary_style: i64,
+    pub sub_style: i64,
+    /// 英雄等级（`champLevel`）。
+    pub level: i64,
 }
 
 impl GameRecord {
@@ -45,6 +56,56 @@ pub struct PlayerHistory {
     pub rank: Option<String>,
     /// 战绩查不到的原因。
     pub error: Option<String>,
+    /// 以下只给页面（给她的字里不用）。
+    /// 召唤师头像（`profileIconId`；没查到时 None）。
+    pub profile_icon_id: Option<i64>,
+    /// 召唤师等级（没查到时 0）。
+    pub summoner_level: i64,
+    /// 单双排、灵活组排（[`parse_ranked`]；没查到时 None）。
+    pub solo: Option<Ranked>,
+    pub flex: Option<Ranked>,
+}
+
+/// 一个排位队列的段位（`/lol-ranked/v1/ranked-stats/{puuid}` 的 `queueMap` / `queues`）。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Ranked {
+    /// `RANKED_SOLO_5x5` / `RANKED_FLEX_SR`。
+    pub queue: String,
+    /// `GOLD`……（大写）；没定级时空。
+    pub tier: String,
+    /// `I`–`IV`；大师以上、没定级时空。
+    pub division: String,
+    /// 胜点。
+    pub lp: i64,
+    pub wins: i64,
+    pub losses: i64,
+    /// 历史最高（`highestTier`，大写；没有时空）。
+    pub highest_tier: String,
+}
+
+/// 单双排、灵活组排的队列名。
+pub const SOLO: &str = "RANKED_SOLO_5x5";
+pub const FLEX: &str = "RANKED_FLEX_SR";
+
+impl Ranked {
+    /// “黄金 2”“大师”；没定级是“未定级”。
+    pub fn label(&self) -> String {
+        let Some(tier) = tier_name(&self.tier) else {
+            return "未定级".into();
+        };
+        let division = match self.division.as_str() {
+            "I" => "1",
+            "II" => "2",
+            "III" => "3",
+            "IV" => "4",
+            _ => "",
+        };
+        if division.is_empty() {
+            tier.to_string()
+        } else {
+            format!("{tier} {division}")
+        }
+    }
 }
 
 impl PlayerHistory {
@@ -103,6 +164,12 @@ pub fn parse_match_list(v: &Value) -> Vec<GameRecord> {
                     .map(|n| i(st, &format!("playerAugment{n}")))
                     .filter(|a| *a > 0)
                     .collect(),
+                spells: [i(p, "spell1Id"), i(p, "spell2Id")],
+                items: std::array::from_fn(|n| i(st, &format!("item{n}"))),
+                keystone: i(st, "perk0"),
+                primary_style: i(st, "perkPrimaryStyle"),
+                sub_style: i(st, "perkSubStyle"),
+                level: i(st, "champLevel"),
             })
         })
         .collect();
@@ -146,6 +213,49 @@ fn tier_name(tier: &str) -> Option<&'static str> {
         "GRANDMASTER" => "宗师",
         "CHALLENGER" => "王者",
         _ => return None,
+    })
+}
+
+/// `/lol-ranked/v1/ranked-stats/{puuid}` 里一个队列（[`SOLO`]、[`FLEX`]）的段位；这个队列没有数据时 None，
+/// 有数据但没定级时 `tier` 是空的。
+pub fn parse_ranked(v: &Value, queue: &str) -> Option<Ranked> {
+    let q = v
+        .get("queueMap")
+        .and_then(|m| m.get(queue))
+        .cloned()
+        .or_else(|| {
+            v.get("queues")?
+                .as_array()?
+                .iter()
+                .find(|q| s(q, "queueType") == queue)
+                .cloned()
+        })?;
+    let tier = |key: &str| {
+        let t = s(&q, key).to_ascii_uppercase();
+        if tier_name(&t).is_some() {
+            t
+        } else {
+            String::new()
+        }
+    };
+    let tier_now = tier("tier");
+    let apex = matches!(tier_now.as_str(), "MASTER" | "GRANDMASTER" | "CHALLENGER");
+    let division = s(&q, "division");
+    Some(Ranked {
+        queue: queue.to_string(),
+        division: if tier_now.is_empty()
+            || apex
+            || !matches!(division.as_str(), "I" | "II" | "III" | "IV")
+        {
+            String::new()
+        } else {
+            division
+        },
+        tier: tier_now,
+        lp: i(&q, "leaguePoints"),
+        wins: i(&q, "wins"),
+        losses: i(&q, "losses"),
+        highest_tier: tier("highestTier"),
     })
 }
 
@@ -240,6 +350,66 @@ pub(crate) mod tests {
         assert_eq!(parse_solo_rank(&v).as_deref(), Some("大师"));
         let v = json!({"queueMap": {"RANKED_SOLO_5x5": {"tier": "", "division": "NA"}}});
         assert_eq!(parse_solo_rank(&v), None);
+    }
+
+    #[test]
+    fn ranked_queues_for_the_page() {
+        let v = json!({"queueMap": {
+            "RANKED_SOLO_5x5": {"tier": "GOLD", "division": "II", "leaguePoints": 45, "wins": 10,
+                                "losses": 8, "highestTier": "platinum"},
+            "RANKED_FLEX_SR": {"tier": "MASTER", "division": "I", "leaguePoints": 120},
+        }});
+        let solo = parse_ranked(&v, SOLO).unwrap();
+        assert_eq!(
+            solo,
+            Ranked {
+                queue: SOLO.into(),
+                tier: "GOLD".into(),
+                division: "II".into(),
+                lp: 45,
+                wins: 10,
+                losses: 8,
+                highest_tier: "PLATINUM".into(),
+            }
+        );
+        assert_eq!(solo.label(), "黄金 2");
+        let flex = parse_ranked(&v, FLEX).unwrap();
+        assert_eq!(
+            (flex.division.as_str(), flex.label()),
+            ("", "大师".to_string())
+        );
+        // 有这个队列但没定级；列表的写法
+        let v =
+            json!({"queues": [{"queueType": "RANKED_SOLO_5x5", "tier": "NONE", "division": "NA"}]});
+        let solo = parse_ranked(&v, SOLO).unwrap();
+        assert_eq!(
+            (solo.tier.as_str(), solo.label()),
+            ("", "未定级".to_string())
+        );
+        assert!(parse_ranked(&v, FLEX).is_none());
+        assert!(parse_ranked(&json!({"queues": []}), SOLO).is_none());
+    }
+
+    #[test]
+    fn page_fields_of_a_game() {
+        let mut g = game(0, 420, 39, true, (1, 2, 3), 100);
+        g["participants"][0]["spell1Id"] = json!(4);
+        g["participants"][0]["spell2Id"] = json!(14);
+        let st = &mut g["participants"][0]["stats"];
+        st["item0"] = json!(3031);
+        st["item6"] = json!(3340);
+        st["perk0"] = json!(8005);
+        st["perkPrimaryStyle"] = json!(8000);
+        st["perkSubStyle"] = json!(8100);
+        st["champLevel"] = json!(16);
+        let r = &parse_match_list(&list(vec![g]))[0];
+        assert_eq!(r.spells, [4, 14]);
+        assert_eq!(r.items, [3031, 0, 0, 0, 0, 0, 3340]);
+        assert_eq!(
+            (r.keystone, r.primary_style, r.sub_style),
+            (8005, 8000, 8100)
+        );
+        assert_eq!(r.level, 16);
     }
 
     #[test]

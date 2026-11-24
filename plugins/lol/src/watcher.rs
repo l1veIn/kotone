@@ -9,7 +9,8 @@
 //! - 游戏中心（ADR 036）的 `lol` 适配器：客户端开着时由这里报阶段（客户端阶段 + 局内接口有没有数据），
 //!   对局里每 2 秒把局内接口的新事件（龙、塔、团灭……）和“我阵亡 / 复活”报给游戏中心。
 //! - 测试用（不开游戏，`scripts/manual-e2e/lol_tools_real.py`）：`KOTONE_LOL_LCU=<端口>:<令牌>` 不找客户端进程、
-//!   直接连 127.0.0.1 的这个端口；`KOTONE_LOL_LIVE=<地址>` 换掉局内接口的地址（只认本机）。
+//!   直接连 127.0.0.1 的这个端口；`KOTONE_LOL_LIVE=<地址>` 换掉局内接口的地址（只认本机）；
+//!   `KOTONE_LOL_CDRAGON=<地址>` 换掉素材层的 CommunityDragon 地址（只认本机，写错了就不连网）。
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -19,6 +20,7 @@ use kotone_core::log;
 use kotone_plugin_api::{Host, Observation, Phase, ToolResult};
 use serde_json::{json, Map, Value};
 
+use crate::client::assets::{Asset, AssetError, Assets, CommunityDragon, Offline, Origin};
 use crate::client::events;
 use crate::client::gamedata::normalize;
 use crate::client::history::{self, PlayerHistory};
@@ -63,6 +65,10 @@ struct Member {
     /// 1 = teamOne，2 = teamTwo。
     team: u8,
     party: Option<i64>,
+    /// 只给页面：召唤师头像、召唤师技能、分路（[`ScoutPlayer`] 里同名的字段）。
+    profile_icon_id: Option<i64>,
+    spells: [i64; 2],
+    position: String,
 }
 
 #[derive(Default)]
@@ -432,21 +438,27 @@ impl LolPlugin {
     }
 }
 
-/// 客户端自带的中文游戏资料（英雄、召唤师技能、装备、海克斯、队列），约 0.1 秒。
+/// 客户端自带的中文游戏资料（英雄、召唤师技能、装备、海克斯、队列，页面用的符文），约 0.1 秒。
 async fn load_data(lcu: &Lcu) -> Option<GameData> {
-    let (champions, spells, items, augments, queues) = tokio::join!(
+    let (champions, spells, items, augments, queues, perks, styles) = tokio::join!(
         lcu.get(paths::CHAMPIONS),
         lcu.get(paths::SPELLS),
         lcu.get(paths::ITEMS),
         lcu.get(paths::AUGMENTS),
         lcu.get(paths::QUEUES),
+        lcu.get(paths::PERKS),
+        lcu.get(paths::PERK_STYLES),
     );
-    let data = GameData::from_json(
+    let mut data = GameData::from_json(
         &champions.ok()?,
         &spells.unwrap_or(Value::Null),
         &items.unwrap_or(Value::Null),
         &augments.unwrap_or(Value::Null),
         &queues.unwrap_or(Value::Null),
+    );
+    data.add_perks(
+        &perks.unwrap_or(Value::Null),
+        &styles.unwrap_or(Value::Null),
     );
     (!data.is_empty()).then_some(data)
 }
@@ -465,24 +477,32 @@ fn members(session: &Value) -> Vec<Member> {
             if puuid.is_empty() {
                 continue; // 电脑
             }
+            let internal = m["summonerInternalName"].as_str().unwrap_or("");
+            let selection = selections.iter().find(|x| {
+                x["puuid"].as_str() == Some(puuid.as_str())
+                    || (!internal.is_empty()
+                        && x["summonerInternalName"].as_str() == Some(internal))
+            });
             let mut champion_id = m["championId"].as_i64().unwrap_or(0);
             if champion_id <= 0 {
-                let internal = m["summonerInternalName"].as_str().unwrap_or("");
-                champion_id = selections
-                    .iter()
-                    .find(|x| {
-                        x["puuid"].as_str() == Some(puuid.as_str())
-                            || (!internal.is_empty()
-                                && x["summonerInternalName"].as_str() == Some(internal))
-                    })
+                champion_id = selection
                     .and_then(|x| x["championId"].as_i64())
                     .unwrap_or(0);
             }
+            let spell = |key: &str| selection.and_then(|x| x[key].as_i64()).unwrap_or(0);
+            let position = m["selectedPosition"].as_str().unwrap_or("").trim();
             out.push(Member {
-                puuid,
                 champion_id,
                 team,
                 party: m["teamParticipantId"].as_i64(),
+                profile_icon_id: m["profileIconId"].as_i64(),
+                spells: [spell("spell1Id"), spell("spell2Id")],
+                position: if position.eq_ignore_ascii_case("NONE") {
+                    String::new()
+                } else {
+                    position.to_ascii_uppercase()
+                },
+                puuid,
             });
         }
     }
@@ -539,6 +559,8 @@ async fn fetch_history(lcu: &Lcu, puuid: &str) -> PlayerHistory {
     let mut h = PlayerHistory::default();
     if let Ok(summoner) = lcu.get(&paths::summoner(puuid)).await {
         h.privacy = summoner["privacy"].as_str().unwrap_or("").to_string();
+        h.profile_icon_id = summoner["profileIconId"].as_i64();
+        h.summoner_level = summoner["summonerLevel"].as_i64().unwrap_or(0);
         let name = summoner["gameName"].as_str().unwrap_or("");
         let tag = summoner["tagLine"].as_str().unwrap_or("");
         if !name.is_empty() {
@@ -569,6 +591,8 @@ async fn fetch_history(lcu: &Lcu, puuid: &str) -> PlayerHistory {
     }
     if let Ok(ranked) = lcu.get(&paths::ranked(puuid)).await {
         h.rank = history::parse_solo_rank(&ranked);
+        h.solo = history::parse_ranked(&ranked, history::SOLO);
+        h.flex = history::parse_ranked(&ranked, history::FLEX);
     }
     h
 }
@@ -889,6 +913,9 @@ impl LolPlugin {
                     me: x.puuid == me,
                     party: x.party,
                     history,
+                    profile_icon_id: x.profile_icon_id,
+                    spells: x.spells,
+                    position: x.position.clone(),
                 }
             })
             .collect();
@@ -904,6 +931,39 @@ impl LolPlugin {
             random: crate::client::gamedata::random_pick(data, m.queue_id),
             mode,
         })
+    }
+
+    /// 素材层的入口（ADR 039 D6，[`crate::client::assets`]）：页面要的一张图（英雄头像、段位徽章……），
+    /// `path` 是页面数据里的客户端路径（前面的 `/` 可有可无）。插件和“读客户端数据”开着、后台已经连上客户端时
+    /// 先问客户端，不然问 CommunityDragon；磁盘缓存在插件目录下的 `asset-cache/`。一页几十张图：这里不去找客户端
+    /// 进程（后台每 2–5 秒找一次），只用已经连上的。
+    pub async fn fetch_asset(&self, host: &dyn Host, path: &str) -> Result<Asset, AssetError> {
+        static ASSETS: OnceLock<Assets> = OnceLock::new();
+        let assets = ASSETS.get_or_init(|| {
+            let assets = Assets::new(host.data_dir().join("asset-cache"));
+            // 测试用（KOTONE_LOL_CDRAGON）：换成本机的假 CommunityDragon
+            let Ok(value) = std::env::var("KOTONE_LOL_CDRAGON") else {
+                return assets;
+            };
+            match loopback_base(&value) {
+                Some(base) => {
+                    log::log(&format!("lol: KOTONE_LOL_CDRAGON：素材改问 {base}"));
+                    assets.with_online(CommunityDragon::with_base(&base))
+                }
+                None => {
+                    log::log("lol: KOTONE_LOL_CDRAGON 不是本机的 http(s) 地址，素材不连网");
+                    assets.with_online(Offline)
+                }
+            }
+        });
+        let lcu = if enabled(host) {
+            self.state().client.as_ref().map(|c| c.lcu.clone())
+        } else {
+            None
+        };
+        assets
+            .fetch(lcu.as_ref().map(|l| l as &dyn Origin), path)
+            .await
     }
 
     /// 这局的队列（不在对局里时 None）。
@@ -1079,11 +1139,20 @@ fn encode(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::encode;
+    use super::*;
 
     #[test]
     fn query_values_are_percent_encoded() {
         assert_eq!(encode("abc-1"), "abc-1");
         assert_eq!(encode("琴音 #"), "%E7%90%B4%E9%9F%B3%20%23");
+    }
+
+    /// 素材层的入口能放进宿主要的 `BoxFuture`（`Send`）：编译过就算过。
+    #[allow(dead_code)]
+    fn fetch_asset_is_send<'a>(
+        plugin: &'a LolPlugin,
+        host: &'a dyn Host,
+    ) -> kotone_plugin_api::BoxFuture<'a, Result<Asset, AssetError>> {
+        Box::pin(plugin.fetch_asset(host, "lol-game-data/assets/v1/champion-icons/1.png"))
     }
 }

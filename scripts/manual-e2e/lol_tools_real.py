@@ -323,6 +323,14 @@ def main():
               json.dumps(page, ensure_ascii=False)[:200])
         check("T1: the page data did not go into her context (content is the text only)",
               "allies" not in body and "structuredContent" not in body, body[:120])
+        # 2026-11-25 G0.1：页面要的图只给 id 和客户端路径（素材层认得的），给她的字里没有
+        people = data.get("allies", []) + data.get("enemies", [])
+        check("T1: every player on the page has a champion icon path, a profile icon path and the summoner spells",
+              people and all(p.get("champion", {}).get("icon", "").startswith("/lol-game-data/assets/v1/champion-icons/")
+                             and p.get("profileIcon", "").startswith("/lol-game-data/assets/v1/profile-icons/")
+                             and len(p.get("spells") or []) == 2 and "ranked" in p for p in people)
+              and "/lol-game-data/" not in body,
+              json.dumps(people[:1], ensure_ascii=False)[:300])
         check("T1: no labels like 牛马 / 下等马, no “没玩过”",
               not any(w in said for w in ("牛马", "下等马", "没玩过", "第一次玩")), said[:200])
 
@@ -383,6 +391,14 @@ def main():
             check("P2: lol.game (page only) gives both teams of one game",
                   len(teams) == 2 and all(len(t.get("players", [])) == 5 for t in teams),
                   json.dumps(detail, ensure_ascii=False)[:200])
+            rows = [p for t in teams for p in t.get("players", [])]
+            check("P2: lol.player and lol.game carry the icon paths (profile icon, level, spells, items, augments with rarity)",
+                  (me.get("structuredContent") or {}).get("profileIcon", "").endswith(".jpg")
+                  and (me.get("structuredContent") or {}).get("summonerLevel")
+                  and rows and all(len(p.get("spells") or []) == 2 and p.get("items") and all(i.get("icon") for i in p["items"])
+                                   and all(a.get("rarity") and a.get("icon") for a in p.get("augments") or [])
+                                   for p in rows),
+                  json.dumps(rows[:1], ensure_ascii=False)[:300])
         opened = bt.call("ui.open", {"page": "ui://kotone/lol/match"})
         check("P2: ui.open opens the match page", opened.get("opened") is True, json.dumps(opened, ensure_ascii=False))
         try:

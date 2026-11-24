@@ -16,7 +16,8 @@
 | 页面的测试（桌面端的 Playwright 一起跑） | `e2e/` |
 | 网上的统计（腾讯 101、aramhex-data、外号和名字表、OP.GG）和它的工具 `lol.champion` / `lol.tier` | `src/stats/`、`src/stats_tools.rs` |
 | 覆盖层：选英雄时的胜率面板、海斗三选一的海克斯评分（照 aramhex） | `src/overlays.rs`、`ui/*Overlay.svelte` |
-| 页面的数据（这局、战绩、单局详情） | `src/pages.rs` |
+| 页面的数据（这局、战绩、单局详情；图只给 id 和客户端路径） | `src/pages.rs` |
+| 素材层：页面要的图（英雄、召唤师头像、段位、海克斯、装备、技能、符文），见下面“素材” | `src/client/assets.rs` |
 | 用录下来的真实数据离线跑三个工具的文字；真接口跑一遍统计 | `examples/render_probe.rs`、`examples/stats_probe.rs` |
 
 ## 数据从哪来
@@ -28,6 +29,21 @@
 | `opgg` 用 OP.GG 的数据 | OP.GG 官方 MCP（`mcp-api.op.gg/mcp`），只在打开英雄页、她查一个英雄时请求，存 24 小时，页面上写 OP.GG 的出处。等 OP.GG 回复 [issue #26](https://github.com/opgginc/opgg-mcp/issues/26) | **关** |
 
 设置在 `config.json` 的 `plugins.lol`（`enabled`、`sources.client`）。以前的 `lol.enabled` 读进来时搬到 `plugins.lol.sources.client`。
+
+## 素材（图片）
+
+安装包里不带图（ADR 039 D6，[对标调研](../../docs/research/2026-11-25-lol-app-parity.md)第三节）。页面数据里只有 id 和客户端的资源路径（例如 `/lol-game-data/assets/v1/champion-icons/103.png`），页面自己决定从哪取：
+
+- Kotone 里：经回环代理交给 `src/client/assets.rs`，顺序是磁盘缓存（插件目录下的 `asset-cache/`，上限 64 MB，超了删最久没用的，14 天重新取）→ 客户端（开着、而且“读客户端数据”开着时，带本机令牌，只读）→ CommunityDragon → 页面显示占位。
+- 只放行 `/lol-game-data/assets/`、`/fe/lol-static-assets/`、`/fe/lol-shared-components/` 三个前缀下的图片（png / jpg / svg / webp，按内容认），路径里有 `..`、`%`、查询串的一律拒绝。不把客户端的别的接口转给页面：页面在沙盒里，转了等于让页面能操作客户端。
+- 别的宿主（Claude、Codex）里：页面直接换成 CommunityDragon 的地址。
+- 测试：`KOTONE_LOL_CDRAGON=<本机地址>` 把 CommunityDragon 换成本机的假服务器（只认本机，写错了就不连网）。
+
+**CommunityDragon**（https://raw.communitydragon.org ，社区维护的客户端资源镜像）：客户端路径换成它的地址的规则照它的目录结构（`/lol-game-data/assets/…` → `plugins/rcp-be-lol-game-data/global/default/…`，后面全部小写）。只请求公开的图片路径，不带玩家的任何数据。
+
+**拳头的声明**（Riot Games “Legal Jibber Jabber”，https://www.riotgames.com/en/legal ）：Kotone isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games, and all associated properties are trademarks or registered trademarks of Riot Games, Inc.
+
+英雄、召唤师头像、段位、海克斯、装备、技能、符文的图属于拳头；Kotone 用了这些素材，拳头不认可、也不赞助 Kotone。同一份政策写着：在应用里用拳头的 IP 要有书面许可或有效的 API Key，Kotone 两样都没有（LeagueAkari、AramHex 也没有）。这一条写进英雄联盟 App 的风险提示，只提示，不拦着。不用拳头的商标和 logo（ADR 039 D5、D8）。
 
 ## 风险
 
@@ -43,6 +59,8 @@
 
 ```powershell
 cargo test -p kotone-plugin-lol
+# 录下来的一局 → 给她的字，加上三个页面的数据样例（去掉玩家名和 puuid）
+cargo run -p kotone-plugin-lol --example render_probe -- target/lol-probe/20261123-210745 target/lol-probe/gamedata target/plugin-shots/round7
 python -X utf8 -I scripts/manual-e2e/lol_tools_real.py --while-playing   # 假客户端 + 真 DeepSeek，不开游戏
 python -X utf8 -I scripts/manual-e2e/game_events_real.py                 # 假客户端按时间线放一局
 ```

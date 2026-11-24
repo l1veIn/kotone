@@ -3,10 +3,16 @@
 //!
 //! 照 LeagueAkari 的页面：这局 10 个人（段位、近况、标签、隐藏战绩、开黑、突破口）；点一个人看他最近的战绩；
 //! 点一局看 10 个人的 KDA、伤害、经济、装备。
+//!
+//! **图**（ADR 039 D6，调研 G0.1）：数据里只放 id 和客户端的资源路径（`icon`、`profileIcon`、`crest`……，
+//! 例如 `/lol-game-data/assets/v1/champion-icons/103.png`），不放完整网址、不放图片本身。页面自己决定从哪取：
+//! Kotone 里经回环代理（素材层 [`crate::client::assets`]），别的宿主换成 CommunityDragon 的地址。
+//! 拿不到路径时是空字符串（页面显示占位）。给她的字（[`player_text`]、`text::render_scout`）不受影响。
 
 use serde_json::{json, Value};
 
-use crate::client::history::{GameRecord, PlayerHistory};
+use crate::client::assets;
+use crate::client::history::{GameRecord, PlayerHistory, Ranked};
 use crate::client::scout::{self, Summary};
 use crate::client::text::ScoutPlayer;
 use crate::client::GameData;
@@ -20,12 +26,117 @@ pub const PAGE_SETTINGS: &str = "ui://kotone/lol/settings";
 const RECENT: usize = 10;
 
 fn champion(data: Option<&GameData>, id: i64) -> Value {
+    let icon = assets::champion_icon(id);
     match data.and_then(|d| d.champion(id)) {
-        Some(c) => json!({"id": id, "label": c.label(), "short": c.short(), "alias": c.alias}),
+        Some(c) => {
+            json!({"id": id, "label": c.label(), "short": c.short(), "alias": c.alias, "icon": icon})
+        }
         None => {
-            json!({"id": id, "label": format!("英雄 {id}"), "short": format!("英雄 {id}"), "alias": ""})
+            json!({"id": id, "label": format!("英雄 {id}"), "short": format!("英雄 {id}"), "alias": "", "icon": icon})
         }
     }
+}
+
+/// 召唤师技能 `{id, name, icon}`（0 = 没有，不列）。
+fn spells(data: Option<&GameData>, ids: &[i64; 2]) -> Vec<Value> {
+    ids.iter()
+        .filter(|id| **id > 0)
+        .map(|id| {
+            let spell = data.and_then(|d| d.spell_by_id(*id));
+            json!({
+                "id": id,
+                "name": spell.map(|s| s.name.as_str()).unwrap_or(""),
+                "icon": spell.map(|s| s.icon.as_str()).unwrap_or(""),
+            })
+        })
+        .collect()
+}
+
+/// 装备 `{id, name, icon, slot}`，按格子（`slot` 0–6，6 是饰品），空格不列。
+fn items(data: Option<&GameData>, slots: &[i64]) -> Vec<Value> {
+    slots
+        .iter()
+        .enumerate()
+        .filter(|(_, id)| **id > 0)
+        .map(|(slot, id)| {
+            json!({
+                "id": id,
+                "name": data.and_then(|d| d.items.get(id)).cloned().unwrap_or_default(),
+                "icon": data.and_then(|d| d.item_icons.get(id)).cloned().unwrap_or_default(),
+                "slot": slot,
+            })
+        })
+        .collect()
+}
+
+/// 海克斯 `{id, name, rarity, icon}`（`rarity`：`kSilver` / `kGold` / `kPrismatic`，不知道时空）。
+fn augments(data: Option<&GameData>, ids: &[i64]) -> Vec<Value> {
+    ids.iter()
+        .map(|id| {
+            let a = data.and_then(|d| d.augments.get(id));
+            json!({
+                "id": id,
+                "name": a.map(|a| a.name.as_str()).unwrap_or(""),
+                "rarity": a.map(|a| a.rarity.as_str()).unwrap_or(""),
+                "icon": a.map(|a| a.icon.as_str()).unwrap_or(""),
+            })
+        })
+        .collect()
+}
+
+/// 符文：`{keystone, primaryStyle, subStyle}`，各是 `{id, name, icon}` 或 null；三个都没有（海斗、斗魂竞技场）时整个 null。
+fn perks(data: Option<&GameData>, keystone: i64, primary: i64, sub: i64) -> Value {
+    if keystone <= 0 && primary <= 0 && sub <= 0 {
+        return Value::Null;
+    }
+    let one = |id: i64, style: bool| {
+        (id > 0).then(|| {
+            let p = data.and_then(|d| {
+                if style {
+                    d.perk_styles.get(&id)
+                } else {
+                    d.perks.get(&id)
+                }
+            });
+            json!({
+                "id": id,
+                "name": p.map(|p| p.name.as_str()).unwrap_or(""),
+                "icon": p.map(|p| p.icon.as_str()).unwrap_or(""),
+            })
+        })
+    };
+    json!({
+        "keystone": one(keystone, false),
+        "primaryStyle": one(primary, true),
+        "subStyle": one(sub, true),
+    })
+}
+
+/// 一个排位队列：`{queue, tier, division, lp, wins, losses, highestTier, label, crest}`；没查到是 null。
+/// 没定级时 `tier` 空、`label` 是“未定级”、`crest` 是 `unranked` 的徽章。
+fn ranked(r: Option<&Ranked>) -> Value {
+    match r {
+        None => Value::Null,
+        Some(r) => json!({
+            "queue": r.queue,
+            "tier": r.tier,
+            "division": r.division,
+            "lp": r.lp,
+            "wins": r.wins,
+            "losses": r.losses,
+            "highestTier": r.highest_tier,
+            "label": r.label(),
+            "crest": assets::ranked_crest(&r.tier),
+        }),
+    }
+}
+
+/// 单双排和灵活组排：`{solo, flex}`。
+fn ranks(h: Option<&PlayerHistory>) -> Value {
+    json!({
+        "solo": ranked(h.and_then(|h| h.solo.as_ref())),
+        "flex": ranked(h.and_then(|h| h.flex.as_ref())),
+    })
 }
 
 fn queue(data: Option<&GameData>, id: i64, mode: &str) -> String {
@@ -67,10 +178,11 @@ pub fn game_json(g: &GameRecord, data: Option<&GameData>) -> Value {
         "dpm": (g.damage as f64 / g.minutes()).round(),
         "gold": g.gold,
         "cs": g.cs,
-        "augments": g.augments.iter().map(|a| json!({
-            "id": a,
-            "name": data.and_then(|d| d.augment_name(*a)).unwrap_or(""),
-        })).collect::<Vec<_>>(),
+        "augments": augments(data, &g.augments),
+        "level": g.level,
+        "spells": spells(data, &g.spells),
+        "items": items(data, &g.items),
+        "perks": perks(data, g.keystone, g.primary_style, g.sub_style),
     })
 }
 
@@ -104,9 +216,16 @@ pub fn match_page(
         let h = p.history.as_ref();
         let s = summaries[i].as_ref().filter(|s| s.games > 0);
         let spot = spots.iter().find(|w| w.index == i);
+        let icon_id = p.profile_icon_id.or(h.and_then(|h| h.profile_icon_id));
         json!({
             "puuid": puuids.get(i).cloned().unwrap_or_default(),
             "champion": champion(data, p.champion_id),
+            "profileIconId": icon_id,
+            "profileIcon": icon_id.map(assets::profile_icon).unwrap_or_default(),
+            "summonerLevel": h.map(|h| h.summoner_level).filter(|l| *l > 0),
+            "spells": spells(data, &p.spells),
+            "position": p.position,
+            "ranked": ranks(h),
             "name": p.name,
             "riotId": h.map(|h| h.riot_id.clone()).unwrap_or_default(),
             "me": p.me,
@@ -122,6 +241,7 @@ pub fn match_page(
                 "gameId": g.game_id,
                 "win": g.win,
                 "championId": g.champion_id,
+                "championIcon": assets::champion_icon(g.champion_id),
                 "kills": g.kills,
                 "deaths": g.deaths,
                 "assists": g.assists,
@@ -170,6 +290,10 @@ pub fn player_page(
     json!({
         "puuid": puuid,
         "riotId": history.riot_id,
+        "profileIconId": history.profile_icon_id,
+        "profileIcon": history.profile_icon_id.map(assets::profile_icon).unwrap_or_default(),
+        "summonerLevel": (history.summoner_level > 0).then_some(history.summoner_level),
+        "ranked": ranks(Some(history)),
         "hidden": history.hidden(),
         "rank": history.rank,
         "error": history.error,
@@ -276,16 +400,12 @@ pub fn game_page(detail: &Value, data: Option<&GameData>) -> Option<Value> {
             (false, true) => name.clone(),
             (false, false) => format!("{name}#{tag}"),
         };
-        let items: Vec<Value> = (0..=6)
-            .map(|n| i(&st, &format!("item{n}")))
-            .filter(|x| *x > 0)
-            .map(|x| json!({"id": x, "name": data.and_then(|d| d.items.get(&x)).cloned().unwrap_or_default()}))
-            .collect();
-        let augments: Vec<Value> = (1..=6)
+        let slots: Vec<i64> = (0..=6).map(|n| i(&st, &format!("item{n}"))).collect();
+        let augment_ids: Vec<i64> = (1..=6)
             .map(|n| i(&st, &format!("playerAugment{n}")))
             .filter(|a| *a > 0)
-            .map(|a| json!({"id": a, "name": data.and_then(|d| d.augment_name(a)).unwrap_or("")}))
             .collect();
+        let icon_id = player.get("profileIcon").and_then(Value::as_i64);
         let damage = i(&st, "totalDamageDealtToChampions");
         let team_id = i(p, "teamId");
         let win = st.get("win").and_then(Value::as_bool).unwrap_or(false);
@@ -302,8 +422,12 @@ pub fn game_page(detail: &Value, data: Option<&GameData>) -> Option<Value> {
             "taken": i(&st, "totalDamageTaken"),
             "gold": i(&st, "goldEarned"),
             "cs": i(&st, "totalMinionsKilled") + i(&st, "neutralMinionsKilled"),
-            "items": items,
-            "augments": augments,
+            "items": items(data, &slots),
+            "augments": augments(data, &augment_ids),
+            "profileIconId": icon_id,
+            "profileIcon": icon_id.map(assets::profile_icon).unwrap_or_default(),
+            "spells": spells(data, &[i(p, "spell1Id"), i(p, "spell2Id")]),
+            "perks": perks(data, i(&st, "perk0"), i(&st, "perkPrimaryStyle"), i(&st, "perkSubStyle")),
         });
         match teams.iter_mut().find(|(t, _, _)| *t == team_id) {
             Some(team) => team.2.push(row),
@@ -345,6 +469,7 @@ mod tests {
             gold: 12_000,
             cs: 40,
             augments: vec![1, 2],
+            ..GameRecord::default()
         }
     }
 
@@ -359,6 +484,7 @@ mod tests {
                 .collect(),
             rank: Some("黄金 2".into()),
             error: None,
+            ..PlayerHistory::default()
         }
     }
 
@@ -424,16 +550,298 @@ mod tests {
         assert_eq!(v["enemies"][0]["recent"].as_array().unwrap().len(), 10);
     }
 
+    /// 给琴音的文字：同一份录到的样子（带页面才用的字段）→ 一字不差的那几行（2026-11-25 加页面字段前录的）。
+    fn text_for_her() -> String {
+        use crate::client::history::{self as h, tests as ht};
+        let data = crate::client::gamedata::tests::sample();
+        // 一局，带召唤师技能、装备、符文、海克斯、等级（页面用，给她的字里不出现）
+        let rich = |ago: i64, champion: i64, win: bool, kda: (i64, i64, i64)| {
+            let mut g = ht::game(ago, 2400, champion, win, kda, 24_000);
+            let p = &mut g["participants"][0];
+            p["spell1Id"] = json!(4);
+            p["spell2Id"] = json!(32);
+            let st = &mut p["stats"];
+            st["item0"] = json!(3158);
+            st["item6"] = json!(3340);
+            st["perk0"] = json!(8369);
+            st["perkPrimaryStyle"] = json!(8300);
+            st["perkSubStyle"] = json!(8000);
+            st["champLevel"] = json!(15);
+            g
+        };
+        let ranked = json!({"queueMap": {
+            "RANKED_SOLO_5x5": {"queueType": "RANKED_SOLO_5x5", "tier": "GOLD", "division": "II",
+                                "leaguePoints": 45, "wins": 10, "losses": 8, "highestTier": "PLATINUM"},
+            "RANKED_FLEX_SR": {"queueType": "RANKED_FLEX_SR", "tier": "", "division": "NA"}
+        }});
+        let person = |short: &str, id: i64, ally: bool, me: bool, games: Vec<Value>| {
+            let list = ht::list(games);
+            ScoutPlayer {
+                champion: format!("称号 {short}"),
+                alias: short.into(),
+                short: short.into(),
+                champion_id: id,
+                name: format!("{short}的主人"),
+                ally,
+                me,
+                party: ally.then_some(1),
+                history: Some(PlayerHistory {
+                    riot_id: format!("{short}的主人#1"),
+                    privacy: "PUBLIC".into(),
+                    games: h::parse_match_list(&list),
+                    rank: h::parse_solo_rank(&ranked),
+                    error: None,
+                    // 页面才用的（给她的字里不出现）
+                    profile_icon_id: Some(7335),
+                    summoner_level: 321,
+                    solo: h::parse_ranked(&ranked, h::SOLO),
+                    flex: h::parse_ranked(&ranked, h::FLEX),
+                }),
+                profile_icon_id: Some(29),
+                spells: [4, 32],
+                position: "MIDDLE".into(),
+            }
+        };
+        let good: Vec<Value> = (0..10)
+            .map(|i| rich(i, 39, i % 3 != 0, (8, 3, 10)))
+            .collect();
+        let bad: Vec<Value> = (0..10).map(|i| rich(i, 157, i >= 6, (2, 9, 4))).collect();
+        let mut players = vec![
+            person("甲", 39, true, true, good.clone()),
+            person("乙", 157, true, false, good.clone()),
+            person("丙", 103, false, false, good),
+            person("丁", 157, false, false, bad),
+        ];
+        players[3].history.as_mut().unwrap().privacy = "PRIVATE".into();
+        let mut out = vec![
+            crate::client::text::render_scout(&players, 2400, "海克斯大乱斗", true, None),
+            crate::client::text::render_scout(&players, 420, "单双排", false, Some("丁")),
+        ];
+        for p in &players {
+            out.push(player_text(p.history.as_ref().unwrap(), Some(&data)));
+        }
+        out.join("\n---\n")
+    }
+
+    #[test]
+    fn text_for_her_is_unchanged() {
+        const EXPECTED: &[&str] = &[
+            "每人最近 20 局（全部模式；“海克斯大乱斗”是和这局同一个模式的；英雄是随机的，不看玩没玩过这个英雄）：",
+            "我方：",
+            "- 称号 甲（你） · 「甲的主人」 · 单双排 黄金 2 · 近 10 局 6 胜 4 负 · 海克斯大乱斗 10 局 6 胜，分均伤害 1600 · KDA 6.0，场均死 3.0 · 这个英雄 10 局 6 胜",
+            "- 称号 乙 · 「乙的主人」 · 单双排 黄金 2 · 近 10 局 6 胜 4 负 · 海克斯大乱斗 10 局 6 胜，分均伤害 1600 · KDA 6.0，场均死 3.0",
+            "对面：",
+            "- 称号 丙 · 「丙的主人」 · 单双排 黄金 2 · 近 10 局 6 胜 4 负 · 海克斯大乱斗 10 局 6 胜，分均伤害 1600 · KDA 6.0，场均死 3.0",
+            "- 称号 丁 · 「丁的主人」 · 单双排 黄金 2 · 隐藏战绩 · 近 10 局 4 胜 6 负 · 海克斯大乱斗 10 局 4 胜，分均伤害 1600 · KDA 0.7，场均死 9.0 · 这个英雄 10 局 4 胜 · 6 连败",
+            "开黑：我方 甲 + 乙",
+            "突破口（对面，按数据）：丁（隐藏战绩）——最近 10 局只赢了 4 局、KDA 0.7（对面平均 3.3）、场均死 9.0 次、6 连败",
+            "---",
+            "每人最近 20 局（全部模式；“单双排”是和这局同一个模式的）：",
+            "对面：",
+            "- 称号 丁 · 「丁的主人」 · 单双排 黄金 2 · 隐藏战绩 · 近 10 局 4 胜 6 负 · KDA 0.7，场均死 9.0 · 这个英雄 10 局 4 胜 · 6 连败 · 常玩这个英雄（10 局 4 胜）",
+            "---",
+            "「甲的主人#1」 · 单双排 黄金 2 · 近 10 局 6 胜 4 负 · KDA 6.0，场均死 3.0",
+            "最近 5 局：艾瑞莉娅 负 8/3/10（海克斯大乱斗）；艾瑞莉娅 胜 8/3/10（海克斯大乱斗）；艾瑞莉娅 胜 8/3/10（海克斯大乱斗）；艾瑞莉娅 负 8/3/10（海克斯大乱斗）；艾瑞莉娅 胜 8/3/10（海克斯大乱斗）",
+            "---",
+            "「乙的主人#1」 · 单双排 黄金 2 · 近 10 局 6 胜 4 负 · KDA 6.0，场均死 3.0",
+            "最近 5 局：艾瑞莉娅 负 8/3/10（海克斯大乱斗）；艾瑞莉娅 胜 8/3/10（海克斯大乱斗）；艾瑞莉娅 胜 8/3/10（海克斯大乱斗）；艾瑞莉娅 负 8/3/10（海克斯大乱斗）；艾瑞莉娅 胜 8/3/10（海克斯大乱斗）",
+            "---",
+            "「丙的主人#1」 · 单双排 黄金 2 · 近 10 局 6 胜 4 负 · KDA 6.0，场均死 3.0",
+            "最近 5 局：艾瑞莉娅 负 8/3/10（海克斯大乱斗）；艾瑞莉娅 胜 8/3/10（海克斯大乱斗）；艾瑞莉娅 胜 8/3/10（海克斯大乱斗）；艾瑞莉娅 负 8/3/10（海克斯大乱斗）；艾瑞莉娅 胜 8/3/10（海克斯大乱斗）",
+            "---",
+            "「丁的主人#1」 · 单双排 黄金 2 · 隐藏战绩 · 近 10 局 4 胜 6 负 · KDA 0.7，场均死 9.0 · 6 连败",
+            "最近 5 局：亚索 负 2/9/4（海克斯大乱斗）；亚索 负 2/9/4（海克斯大乱斗）；亚索 负 2/9/4（海克斯大乱斗）；亚索 负 2/9/4（海克斯大乱斗）；亚索 负 2/9/4（海克斯大乱斗）",
+        ];
+        let out = text_for_her();
+        assert_eq!(out, EXPECTED.join("\n"), "\n{out}");
+    }
+
+    /// G0.1：页面要的图都有 id 和客户端路径（素材层认得的那种），段位是结构化的。
+    #[test]
+    fn page_fields_carry_ids_and_client_paths() {
+        use crate::client::history::{self as h, tests as ht};
+        let mut data = crate::client::gamedata::tests::sample();
+        data.add_perks(
+            &json!([{"id": 8369, "name": "先攻", "iconPath": "/lol-game-data/assets/v1/perk-images/Styles/Inspiration/FirstStrike/FirstStrike.png"}]),
+            &json!({"styles": [{"id": 8300, "name": "启迪", "iconPath": "/lol-game-data/assets/v1/perk-images/Styles/7203_Whimsy.png"}]}),
+        );
+        let mut g = ht::game(0, 2400, 39, true, (6, 4, 12), 24_000);
+        g["participants"][0]["spell1Id"] = json!(4);
+        g["participants"][0]["spell2Id"] = json!(32);
+        let st = &mut g["participants"][0]["stats"];
+        st["item0"] = json!(3158);
+        st["item6"] = json!(3340);
+        st["perk0"] = json!(8369);
+        st["perkPrimaryStyle"] = json!(8300);
+        st["perkSubStyle"] = json!(8000);
+        st["champLevel"] = json!(15);
+        let ranked = json!({"queueMap": {"RANKED_SOLO_5x5": {"tier": "GOLD", "division": "II", "leaguePoints": 45, "wins": 10, "losses": 8}}});
+        let history = PlayerHistory {
+            riot_id: "某人#1".into(),
+            privacy: "PUBLIC".into(),
+            games: h::parse_match_list(&ht::list(vec![g])),
+            profile_icon_id: Some(7335),
+            summoner_level: 321,
+            solo: h::parse_ranked(&ranked, h::SOLO),
+            ..PlayerHistory::default()
+        };
+
+        // 战绩页
+        let v = player_page("p", &history, 2400, Some(&data));
+        assert_eq!(v["profileIconId"], 7335);
+        assert_eq!(
+            v["profileIcon"],
+            "/lol-game-data/assets/v1/profile-icons/7335.jpg"
+        );
+        assert_eq!(v["summonerLevel"], 321);
+        assert_eq!(
+            v["ranked"]["solo"],
+            json!({"queue": "RANKED_SOLO_5x5", "tier": "GOLD", "division": "II", "lp": 45, "wins": 10,
+                   "losses": 8, "highestTier": "", "label": "黄金 2",
+                   "crest": "/fe/lol-static-assets/images/ranked-mini-crests/gold.svg"})
+        );
+        assert_eq!(v["ranked"]["flex"], Value::Null);
+        let game = &v["games"][0];
+        assert_eq!(
+            game["champion"]["icon"],
+            "/lol-game-data/assets/v1/champion-icons/39.png"
+        );
+        assert_eq!(game["level"], 15);
+        assert_eq!(game["spells"][0]["name"], "闪现");
+        assert_eq!(game["spells"][1]["id"], 32);
+        assert_eq!(
+            game["spells"][1]["icon"], "",
+            "资料里没有图标路径：空字符串"
+        );
+        assert_eq!(game["items"].as_array().unwrap().len(), 2);
+        assert_eq!(game["items"][0]["slot"], 0);
+        assert!(game["items"][0]["icon"]
+            .as_str()
+            .unwrap()
+            .ends_with("IonianBootsofLucidity.png"));
+        assert_eq!(
+            (
+                game["items"][1]["id"].clone(),
+                game["items"][1]["slot"].clone()
+            ),
+            (json!(3340), json!(6))
+        );
+        assert_eq!(game["augments"][0]["rarity"], "kSilver");
+        assert!(game["augments"][0]["icon"]
+            .as_str()
+            .unwrap()
+            .ends_with("ADAPt_small.png"));
+        assert_eq!(game["perks"]["keystone"]["name"], "先攻");
+        assert!(game["perks"]["primaryStyle"]["icon"]
+            .as_str()
+            .unwrap()
+            .ends_with("7203_Whimsy.png"));
+        assert_eq!(game["perks"]["subStyle"]["id"], 8000);
+        assert_eq!(game["perks"]["subStyle"]["name"], "");
+
+        // 这局
+        let players = vec![ScoutPlayer {
+            champion_id: 103,
+            me: true,
+            ally: true,
+            history: Some(history.clone()),
+            profile_icon_id: Some(29),
+            spells: [4, 0],
+            position: "MIDDLE".into(),
+            ..ScoutPlayer::default()
+        }];
+        let m = match_page(
+            &players,
+            &["p".into()],
+            1,
+            420,
+            "单双排",
+            false,
+            Some(&data),
+        );
+        let me = &m["allies"][0];
+        assert_eq!(me["profileIconId"], 29, "这局的头像以 session 为准");
+        assert_eq!(
+            me["profileIcon"],
+            "/lol-game-data/assets/v1/profile-icons/29.jpg"
+        );
+        assert_eq!(me["summonerLevel"], 321);
+        assert_eq!(me["spells"].as_array().unwrap().len(), 1);
+        assert_eq!(me["position"], "MIDDLE");
+        assert_eq!(me["ranked"]["solo"]["label"], "黄金 2");
+        assert_eq!(
+            me["champion"]["icon"],
+            "/lol-game-data/assets/v1/champion-icons/103.png"
+        );
+        assert_eq!(
+            me["recent"][0]["championIcon"],
+            "/lol-game-data/assets/v1/champion-icons/39.png"
+        );
+        // 还在查的人：没有段位、等级，头像用 session 的
+        let waiting = vec![ScoutPlayer {
+            profile_icon_id: Some(1),
+            ..ScoutPlayer::default()
+        }];
+        let m = match_page(&waiting, &["q".into()], 1, 420, "单双排", false, None);
+        let w = &m["enemies"][0];
+        assert_eq!(w["ranked"], json!({"solo": null, "flex": null}));
+        assert_eq!(w["summonerLevel"], Value::Null);
+        assert_eq!(
+            w["profileIcon"],
+            "/lol-game-data/assets/v1/profile-icons/1.jpg"
+        );
+        assert_eq!(w["champion"]["icon"], "");
+
+        // 每个路径都过素材层的检查
+        let mut paths = Vec::new();
+        fn collect(v: &Value, out: &mut Vec<String>) {
+            match v {
+                Value::Object(o) => {
+                    for (k, x) in o {
+                        if matches!(
+                            k.as_str(),
+                            "icon" | "profileIcon" | "crest" | "championIcon"
+                        ) {
+                            if let Some(p) = x.as_str().filter(|p| !p.is_empty()) {
+                                out.push(p.to_string());
+                            }
+                        }
+                        collect(x, out);
+                    }
+                }
+                Value::Array(a) => a.iter().for_each(|x| collect(x, out)),
+                _ => {}
+            }
+        }
+        collect(&v, &mut paths);
+        collect(
+            &match_page(
+                &players,
+                &["p".into()],
+                1,
+                420,
+                "单双排",
+                false,
+                Some(&data),
+            ),
+            &mut paths,
+        );
+        assert!(paths.len() >= 10, "{paths:?}");
+        for p in &paths {
+            assert!(crate::client::assets::normalize(p).is_ok(), "{p}");
+        }
+    }
+
     #[test]
     fn game_page_reads_the_recorded_detail_shape() {
         let detail = json!({
             "gameId": 9, "queueId": 2400, "gameMode": "KIWI", "gameDuration": 600, "gameCreation": 5,
             "participantIdentities": [
-                {"participantId": 1, "player": {"gameName": "甲", "tagLine": "1", "puuid": "a"}},
+                {"participantId": 1, "player": {"gameName": "甲", "tagLine": "1", "puuid": "a", "profileIcon": 29}},
                 {"participantId": 2, "player": {"gameName": "乙", "tagLine": "", "puuid": "b"}}
             ],
             "participants": [
-                {"participantId": 1, "teamId": 100, "championId": 39,
+                {"participantId": 1, "teamId": 100, "championId": 39, "spell1Id": 4, "spell2Id": 0,
                  "stats": {"win": true, "kills": 3, "deaths": 1, "assists": 2, "totalDamageDealtToChampions": 6000,
                            "item0": 3031, "item1": 0, "playerAugment1": 7, "champLevel": 12}},
                 {"participantId": 2, "teamId": 200, "championId": 157, "stats": {"win": false}}
@@ -445,6 +853,17 @@ mod tests {
         assert_eq!(v["teams"][0]["players"][0]["riotId"], "甲#1");
         assert_eq!(v["teams"][0]["players"][0]["dpm"], 600.0);
         assert_eq!(v["teams"][0]["players"][0]["items"][0]["id"], 3031);
+        assert_eq!(v["teams"][0]["players"][0]["items"][0]["slot"], 0);
+        assert_eq!(v["teams"][0]["players"][0]["augments"][0]["id"], 7);
+        assert_eq!(v["teams"][0]["players"][0]["spells"][0]["id"], 4);
+        assert_eq!(v["teams"][0]["players"][0]["profileIconId"], 29);
+        assert_eq!(
+            v["teams"][0]["players"][0]["profileIcon"],
+            "/lol-game-data/assets/v1/profile-icons/29.jpg"
+        );
+        assert_eq!(v["teams"][0]["players"][0]["perks"], Value::Null);
+        assert_eq!(v["teams"][1]["players"][0]["profileIconId"], Value::Null);
+        assert_eq!(v["teams"][1]["players"][0]["spells"], json!([]));
         assert_eq!(v["teams"][1]["players"][0]["riotId"], "乙");
         assert!(game_page(&json!({}), None).is_none());
     }

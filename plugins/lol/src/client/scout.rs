@@ -232,6 +232,7 @@ mod tests {
             gold: 0,
             cs: 0,
             augments: vec![],
+            ..GameRecord::default()
         }
     }
 
