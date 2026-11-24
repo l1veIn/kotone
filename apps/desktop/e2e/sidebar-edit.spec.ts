@@ -119,6 +119,9 @@ test("“去看看：左侧栏 → ⋯” and “音乐” locations open the ed
   expect(await go("插件")).toEqual({ page: "plugins" });
   await expect(page.getByTestId("plugins-page")).toBeVisible();
   expect(await go("插件 → 英雄联盟")).toEqual({ page: "plugin", id: "lol" });
+  // 放歌插件改名「网易云音乐」（交接第十一节第 7 条）：新名字和旧名字都认
+  expect(await go("插件 → 网易云音乐")).toEqual({ page: "plugin", id: "music" });
+  expect(await go("插件 → 音乐")).toEqual({ page: "plugin", id: "music" });
   expect(await go("设置 → 插件，或插件 → 英雄联盟 / 游戏语音 / 音乐")).toEqual({ page: "plugins" });
   expect(await go("设置 → 插件")).toEqual({ page: "plugins" });
   expect(await go("设置 → 插件 → 英雄联盟")).toEqual({ page: "plugin", id: "lol" });

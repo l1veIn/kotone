@@ -1,7 +1,7 @@
 {
-  "plugin_music_name": "Music",
+  "plugin_music_name": "NetEase Cloud Music",
   "plugin_music_description": "Plays NetEase Cloud Music: search, daily picks, liked songs, personal FM and your playlists, played by Kotone itself; music ducks while she speaks",
-  "plugin_music_title": "Music",
+  "plugin_music_title": "NetEase Cloud Music",
   "plugin_music_back": "Back",
   "plugin_music_search_placeholder": "Search songs or artists",
   "plugin_music_search_clear": "Clear search",
@@ -73,7 +73,7 @@
   "plugin_music_queue_title": "Queue ({count})",
   "plugin_music_queue_empty": "The queue is empty",
   "plugin_music_now_playing": "Now playing: {name}",
-  "plugin_music_open_page": "Open Music",
+  "plugin_music_open_page": "Open NetEase Cloud Music",
   "plugin_music_tool_music": "Play music",
   "plugin_music_off_note": "Turn it on and she can play NetEase Cloud Music (search, daily picks, liked songs, personal FM, your playlists); what is playing also shows in the left sidebar."
 }

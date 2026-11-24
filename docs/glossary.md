@@ -40,8 +40,8 @@
 | 语音识别 | 把说的话变成字（本地 / 在线）。“语音输入”是另一件事：说的话直接打进游戏聊天框 | `ASR`、`转写`、`听写` | `stt*`、`asr*` | speech recognition |
 | 对话 | 和她的一段对话（对话列表里的一项）；“聊天”只用在聊天页、聊天窗口、游戏聊天框 | `会话` | `Conversation` | conversation (聊天 = chat) |
 | 自动化 | 替你持续或稍后做事；动作是“说一句”或“程序” | `脚本` | `automation.*` | automation |
-| 音乐 | 左侧栏的一页（自动化下面，ADR 034）：搜歌、每日推荐、私人 FM、我的歌单、播放条；现在只接网易云音乐 | | `MusicPage`、`kotone-music` | Music |
-| 放歌 / 正在放 | Kotone 自己放歌（不用浏览器）：你在音乐页点，或者她用 `music` 工具放；“正在放”是播放条和左侧栏小播放条上的那首 | | `music`、`Player` | play music / Now playing |
+| 网易云音乐 | 放歌插件的名字（ADR 034、038；2026-11-25 起，以前叫“音乐”）：从左侧栏“插件”的卡片点开，搜歌、每日推荐、私人 FM、我的歌单、播放条。插件 id、配置（`plugins.music`）、她的工具名还是 `music`。“音乐”只说放歌这件事本身（音乐音量、她说话时音乐压低） | | `plugins/music`、`MusicPage` | NetEase Cloud Music |
+| 放歌 / 正在放 | Kotone 自己放歌（不用浏览器）：你在网易云音乐的页面里点，或者她用 `music` 工具放；“正在放”是播放条和左侧栏小播放条上的那首 | | `music`、`Player` | play music / Now playing |
 | 登录网易云音乐 | 点“登录网易云音乐”打开网易云官方登录页的窗口，用网易云音乐 App 扫码；第一次放歌要登录一次，登录信息交给 Windows 保管。她要放歌而你没登录时，聊天页出这个按钮（她不自己弹窗，免得游戏里抢焦点） | | `music_login_start`、`login.stage = needed` | Log in to NetEase Cloud Music |
 | 每日推荐 / 私人 FM | 网易云按你的口味每天给的一组歌 / 一首接一首的电台 | | `daily`、`fm` | Daily picks / Personal FM |
 | 我喜欢的音乐 / 红心 | 网易云里你红心过的歌（歌单里排第一）；红心 = 把这首加进去 | | `liked`、`like` | Liked songs / Like |

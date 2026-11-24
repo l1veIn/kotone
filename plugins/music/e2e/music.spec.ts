@@ -21,6 +21,8 @@ const shot = (testInfo: TestInfo, name: string) =>
   SHOTS ? `${SHOTS}/${name}.png` : join(testInfo.project.testDir, "..", "target", "plugin-shots", "step4", `${name}.png`);
 /** 插件页的截图（实现记录用）：仓库的 target/plugin-shots/apps/。 */
 const appShot = (testInfo: TestInfo, name: string) => join(testInfo.project.testDir, "..", "target", "plugin-shots", "apps", `${name}.png`);
+/** 第七轮的截图（改名“网易云音乐”，交接第十一节第 7 条）：仓库的 target/plugin-shots/round7/。 */
+const round7Shot = (testInfo: TestInfo, name: string) => join(testInfo.project.testDir, "..", "target", "plugin-shots", "round7", `${name}.png`);
 const preview = (page: Page, step: string) =>
   page.evaluate((s) => (window as unknown as { __kotoneMusicPreview: (s: string) => unknown }).__kotoneMusicPreview(s), step);
 
@@ -124,8 +126,8 @@ test("logged out: log in through NetEase's login window, then play daily picks a
 
 test("search: VIP originals are greyed and labelled; a full version plays", async ({ page }, testInfo) => {
   await openMusic(page, "&mockMusic=loggedIn");
-  // 音乐的 App：占满内容区，宿主只有顶上一条“← 插件 / 音乐”
-  await expect(page.getByTestId("plugin-app-bar")).toContainText("音乐");
+  // 网易云音乐的 App：占满内容区，宿主只有顶上一条“← 插件 / 网易云音乐”（显示名改了，id 还是 music）
+  await expect(page.getByTestId("plugin-app-bar")).toContainText("网易云音乐");
   await page.screenshot({ path: appShot(testInfo, "music-app") });
   await page.getByTestId("music-search-input").fill("孤勇者");
   await page.getByTestId("music-search-input").press("Enter");
@@ -204,16 +206,18 @@ test("quality and logout from the header; when she wants to play and you're logg
   await expect(compact).toHaveCount(0);
 });
 
-test("turning the music plugin off stops playback and hides the mini player and the chat login card", async ({ page }) => {
+test("turning the music plugin off stops playback and hides the mini player and the chat login card", async ({ page }, testInfo) => {
   await openMusic(page, "&mockMusic=loggedIn");
   await page.getByTestId("music-daily-play").click();
   const mini = page.getByTestId("sidebar-mini-player");
   await expect(mini).toHaveAttribute("data-status", "playing");
 
-  // 左侧栏「插件」：音乐的卡片（默认开），用卡片上的开关关掉
+  // 左侧栏「插件」：网易云音乐的卡片（默认开；以前叫“音乐”），用卡片上的开关关掉
   await page.getByTestId("settings-nav-plugins").click();
   const card = page.getByTestId("plugins-card-music");
-  await expect(card).toContainText("音乐");
+  await expect(card).toContainText("网易云音乐");
+  await card.screenshot({ path: round7Shot(testInfo, "plugins-card-netease-music") });
+  await page.screenshot({ path: round7Shot(testInfo, "plugins-page") });
   await expect(card.getByTestId("plugins-card-music-enabled")).toHaveAttribute("aria-checked", "true");
   await card.getByTestId("plugins-card-music-enabled").click();
   await expect(card.getByTestId("plugins-card-music-enabled")).toHaveAttribute("aria-checked", "false");
