@@ -56,7 +56,7 @@ export interface PluginSidebarFooterProps {
   plugin: PluginInfo;
   /** 左侧栏收成图标栏了：只给一个小按钮。 */
   rail: boolean;
-  /** 打开这个插件的页面（从「设置 → 插件」点开的那一页）。 */
+  /** 打开这个插件的 App（左侧栏「插件」里点卡片打开的那一页）。 */
   onOpen: () => void;
 }
 
@@ -74,10 +74,8 @@ export interface PluginOverlayProps {
 export interface PluginUi {
   /** 左侧栏和插件列表里的图标。 */
   icon: Component;
-  /** 插件的完整页面（从「设置 → 插件」点开；左侧栏不放插件）。 */
+  /** 插件的 App：左侧栏「插件」里点卡片打开，占满内容区，用插件自己的界面（宿主只给顶上“← 插件”一条）。 */
   page: Component<PluginPageProps>;
-  /** 页面自己占满整块（自己有顶栏、底部的播放条之类），宿主不在下面留白。 */
-  fullBleed?: boolean;
   /** 左侧栏底部的一小块（例如放歌的小播放条）。插件开着时才显示；要不要显示东西由它自己定。 */
   sidebarFooter?: Component<PluginSidebarFooterProps>;
   /** 聊天输入框上面的一条（例如她要放歌而你没登录网易云时的登录卡片）。插件开着时才显示。 */
@@ -98,7 +96,7 @@ export interface PluginUi {
 
 export const PLUGIN_UI: Record<string, PluginUi> = { lol, "game-voice": gameVoice, music, interpreter };
 
-/** 有页面的插件 id（「设置 → 插件」里的顺序）。 */
+/** 有页面的插件 id（「插件」里卡片的顺序）。 */
 export const PLUGIN_IDS: string[] = Object.keys(PLUGIN_UI);
 
 /** `ui://kotone/<插件>/<页面>` 是哪个插件的；不是插件页面时 null。 */
@@ -123,7 +121,7 @@ export function pluginToolLabel(tool: string): string | null {
   return null;
 }
 
-/** 开着的插件里给了某一块（左侧栏底部、聊天输入框上面）的：插件和那一块的组件，按「设置 → 插件」里的顺序。 */
+/** 开着的插件里给了某一块（左侧栏底部、聊天输入框上面）的：插件和那一块的组件，按「插件」里卡片的顺序。 */
 export function enabledSlots<K extends "sidebarFooter" | "chatBanner">(
   plugins: PluginInfo[],
   settings: Settings | null | undefined,

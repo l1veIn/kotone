@@ -31,6 +31,7 @@ pub const SETTINGS_SECTIONS: &[&str] = &[
     "appearance",
     "system",
     "browser",
+    // 旧地址：插件搬到了左侧栏的「插件」（ADR 038，2026-11-24），界面上打开那一页
     "plugins",
 ];
 
@@ -550,7 +551,7 @@ pub async fn call(
     if !enabled(&settings(app), manifest) {
         return Ok(ToolResult::content(json!({
             "status": "disabled",
-            "text": format!("「{}」插件关着（设置 → 插件 里可以打开）", manifest.name),
+            "text": format!("「{}」插件关着（在左侧栏的「插件」里可以打开）", manifest.name),
         })));
     }
     plugin
@@ -605,7 +606,10 @@ fn resolve_page(
         .find(|p| p.uri == uri)
         .ok_or_else(|| format!("「{}」插件没有页面 {uri}", m.name))?;
     if !enabled(settings, m) {
-        return Err(format!("「{}」插件关着（设置 → 插件 里可以打开）", m.name));
+        return Err(format!(
+            "「{}」插件关着（在左侧栏的「插件」里可以打开）",
+            m.name
+        ));
     }
     if let Some(off) = page.needs.iter().find(|s| !source_enabled(settings, m, s)) {
         let name = m.source(off).map(|s| s.name.as_str()).unwrap_or(off);

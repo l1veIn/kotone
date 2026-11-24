@@ -443,11 +443,9 @@
   "system_models_network_saved": "Download source changed: {name}",
   "system_models_proxy_label": "GitHub fallback proxy (optional)",
   "system_models_proxy_save": "Save",
-  "system_section_plugins": "Plugins",
   "system_plugins_description": "Each plugin is one of {companion}'s skills you can also open and use on your own. Turn one off and its page, the tools it gives {companion} and its game events go away with it; {companion}'s tool list follows from the next conversation.",
   "system_plugins_enable": "Enable the {name} plugin",
   "system_plugins_enable_desc": "When it's off {companion} stops using it, and its page and game events stop too.",
-  "system_plugins_open": "Open",
   "system_plugins_off_badge": "Off",
   "system_plugins_save_failed": "Couldn't save the plugin switch: {error}"
 }

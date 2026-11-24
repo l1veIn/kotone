@@ -52,8 +52,8 @@
   import AboutPage from "./pages/AboutPage.svelte";
   import CharacterPage from "./pages/CharacterPage.svelte";
   import PluginPage from "./pages/PluginPage.svelte";
+  import PluginsPage from "./pages/PluginsPage.svelte";
   import { listPlugins, pluginOfPage, pluginPageId } from "../../lib/plugins";
-  import { PLUGIN_UI } from "../../lib/pluginUi";
   import { listenUiOpen } from "../../lib/stores/pluginPages";
   import { initializeAppearance, resolvedTheme } from "../../lib/appearance/appearanceRuntime";
 
@@ -105,6 +105,9 @@
     if (target.page === "assistant") openCompanion(target.section);
     else if (target.page === "sidebar-pages") sidebarPagesOpen.set(true);
     else if (target.page === "plugin") navigate(pluginPageId(target.id));
+    else if (target.page === "plugins") navigate("plugins");
+    // 旧的「设置 → 插件」（插件搬到了左侧栏的「插件」，ADR 038）
+    else if (target.page === "advanced" && target.tab === "plugins") navigate("plugins");
     else if (target.page === "advanced") openAdvanced(isAdvancedSection(target.tab) ? target.tab : "system", target.anchor);
     else {
       navigate(target.page);
@@ -225,7 +228,7 @@
   onMount(async () => {
     // runtime store 独立初始化（kotone://runtime 事件订阅 + 初始拉取）
     void initRuntime();
-    // 插件清单（ADR 038）：侧栏的插件页、设置里的插件列表、游戏配置页里插件给的小节都用它
+    // 插件清单（ADR 038）：左侧栏的「插件」（卡片）、插件的 App、游戏配置页里插件给的小节都用它
     void listPlugins().catch(() => { /* 打开插件页时会再读 */ });
     try {
       const [s, startup, settingsWarning] = await Promise.all([
@@ -409,14 +412,17 @@
       <GamePage {legacyVoiceOnly} />
     {:else if page === "character"}
       <CharacterPage onBack={() => (page = "about")} />
+    {:else if page === "plugins"}
+      <PluginsPage />
     {:else if pluginOfPage(page)}
+      <!-- 插件的 App 占满内容区（宿主不在下面留白） -->
       {#key page}<PluginPage id={pluginOfPage(page) ?? ""} />{/key}
     {:else}
       <AboutPage onOpenCharacter={() => (page = "character")} />
     {/if}
 
     <!-- 底部留白（提示在右上角，见 Sonner） -->
-    {#if page !== "assistant" && !PLUGIN_UI[pluginOfPage(page) ?? ""]?.fullBleed}<div class="h-4"></div>{/if}
+    {#if page !== "assistant" && !pluginOfPage(page)}<div class="h-4"></div>{/if}
   </main>
 
   <!-- 左侧栏的“全部页面”（ADR 034 第六节）：侧栏的“⋯”、右键菜单、聊天里“去看看：左侧栏 → ⋯” -->

@@ -15,7 +15,9 @@ export type PageTarget =
   | { page: "sidebar-pages" }
   | { page: "assistant"; section: AssistantSection }
   | { page: "advanced"; tab: string; anchor?: string }
-  /** 插件的页面（ADR 038，从「设置 → 插件」点开）。 */
+  /** 左侧栏的「插件」：每个插件一张卡片（ADR 038）。 */
+  | { page: "plugins" }
+  /** 一个插件的 App（从「插件」的卡片点开）。 */
   | { page: "plugin"; id: string };
 
 /** 「设置」的分页（页面 ID 不变；陪玩组是 ADR 028 新加的分页）。 */
@@ -26,7 +28,7 @@ export const ADVANCED_TABS: Record<string, string> = {
   // i18n-ignore-start：设置位置的词：要和后端 settings_guide.rs 写的位置一字不差（玩家点“去看看”时据此跳转），不是界面文字
   "怎么叫她": "call", "她怎么回答": "reply", "权限": "permissions", "用量": "usage",
   "模型": "models", "API 连接": "connections", "声音": "sound", "调参": "tuning", "外观": "appearance", "系统": "system",
-  "浏览器": "browser", "插件": "plugins",
+  "浏览器": "browser",
   // 旧写法
   "音效": "sound",
 };
@@ -107,18 +109,18 @@ function parseOne(where: string): PageTarget | null {
   }
   // 「左侧栏 → ⋯」= 全部页面（ADR 034）
   if (first === "左侧栏" || first === "侧边栏") return { page: "sidebar-pages" };
-  // 「插件 → 英雄联盟」= 插件的页面；只写「插件」= 设置里的插件列表（ADR 038）
+  // 「插件 → 英雄联盟」= 插件的 App；只写「插件」= 左侧栏的「插件」（ADR 038）
   if (first === "插件") {
     // 「插件 → 英雄联盟 / 游戏语音」：取第一个认得出的
     const id = second?.split("/").map((name) => PLUGIN_NAMES[name.trim()]).find(Boolean);
-    return id ? { page: "plugin", id } : { page: "advanced", tab: "plugins" };
+    return id ? { page: "plugin", id } : { page: "plugins" };
   }
   if (first === "设置") {
     if (second === "其他热键") return oldHotkeysTarget(third);
-    // 「设置 → 插件 → 英雄联盟」= 插件的页面（插件都在设置的插件列表里，ADR 038）
-    if (second === "插件" && third) {
-      const id = third.split("/").map((name) => PLUGIN_NAMES[name.trim()]).find(Boolean);
-      if (id) return { page: "plugin", id };
+    // 旧位置「设置 → 插件（→ 英雄联盟）」：插件搬到了左侧栏的「插件」（ADR 038）
+    if (second === "插件") {
+      const id = third?.split("/").map((name) => PLUGIN_NAMES[name.trim()]).find(Boolean);
+      return id ? { page: "plugin", id } : { page: "plugins" };
     }
     // 旧位置「设置 → 权限 → 放歌」（浏览器放歌时选网站的地方）：放歌现在在放歌插件的音乐页（ADR 034、038）
     if (second === "权限" && third === "放歌") return { page: "plugin", id: "music" };
@@ -155,8 +157,8 @@ const TOOL_LOCATIONS: Record<string, [string, string]> = {
   "connections.upsert": [m.shell_nav_changed_connections(), "设置 → API 连接"],
   "connections.delete": [m.shell_nav_changed_connections(), "设置 → API 连接"],
   "connections.request_key": [m.shell_nav_changed_connections(), "设置 → API 连接"],
-  "voice_chat.install": [m.shell_nav_changed_voice_chat(), "设置 → 插件 → 游戏语音"],
-  "voice_chat.default_mic": [m.shell_nav_changed_default_mic(), "设置 → 插件 → 游戏语音"],
+  "voice_chat.install": [m.shell_nav_changed_voice_chat(), "插件 → 游戏语音"],
+  "voice_chat.default_mic": [m.shell_nav_changed_default_mic(), "插件 → 游戏语音"],
   "wake.model.download": [m.shell_nav_changed_wake_model(), "设置 → 怎么叫她 → 语音唤醒"],
   "skill.manage": [m.shell_nav_changed_skills(), "琴音 → 技能"],
   "memory": [m.shell_nav_changed_memory(), "琴音 → 记忆"],

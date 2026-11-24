@@ -7,7 +7,7 @@ home is stored under its own credential service (kotone@<dir>), never the player
 Without a login (default, `--background`, no window):
 M1. `music.state` (the music plugin's page tool, was `music_state`): NetEase, not logged in, nothing playing.
 M2. `music_search 孤勇者`: results within a few seconds; the 陈奕迅 original is marked vip; covers are full.
-M3. the Music page (设置 → 插件 → 音乐) shows the scan card; screenshot.
+M3. the Music app (sidebar 插件 → 音乐 card) shows the scan card; screenshot.
 M4. `music_login_start`: NetEase's official web login opens in its own window (`music-login`, the player scans the
     official QR there — our own `type:3` QR was refused as “设备环境异常”); `music_login_cancel` closes it.
 M5. `music_play` from the page while logged out refuses with a login hint and opens that window (D5).
@@ -131,7 +131,7 @@ def logged_out_cases():
     full = [x for x in tracks if x["playable"] == "full"]
     check("M2: some versions are fully playable", full, f"{len(full)} full")
 
-    r = ui('await page.getByTestId("settings-nav-advanced").click(); await page.getByTestId("advanced-nav-plugins").click(); await page.getByTestId("settings-plugin-music-open").click(); await page.getByTestId("music-page").waitFor();'
+    r = ui('await page.getByTestId("settings-nav-plugins").click(); await page.getByTestId("plugins-card-music-open").click(); await page.getByTestId("music-page").waitFor();'
            'await page.waitForTimeout(800); return await page.getByTestId("music-login-card").isVisible();',
            "m3-logged-out.png")
     check("M3: the Music page shows the scan card", r.get("ok") is True, json.dumps(r, ensure_ascii=False)[:200])
@@ -165,7 +165,7 @@ def logged_out_cases():
 
 
 def logged_in_cases():
-    ui('await page.getByTestId("settings-nav-advanced").click(); await page.getByTestId("advanced-nav-plugins").click(); await page.getByTestId("settings-plugin-music-open").click(); await page.getByTestId("music-page").waitFor(); return true;')
+    ui('await page.getByTestId("settings-nav-plugins").click(); await page.getByTestId("plugins-card-music-open").click(); await page.getByTestId("music-page").waitFor(); return true;')
     if REUSE and music_state().get("account"):
         print("   already logged in (reused home)")
     else:

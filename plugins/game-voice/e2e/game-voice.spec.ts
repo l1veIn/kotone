@@ -1,4 +1,4 @@
-// 游戏语音插件（ADR 020、038 第 4 步）：设置 → 她怎么回答 里不再有游戏语音；「设置 → 插件」里有它的卡片（默认关），
+// 游戏语音插件（ADR 020、038 第 4 步）：设置 → 她怎么回答 里不再有游戏语音；左侧栏「插件」里有它的卡片（默认关），
 // 从卡片点开它的页面（左侧栏不放插件）。打开插件 → 没装虚拟麦克风 → 自动安装 → 转发在运行 → 改 / 改回 Windows 默认麦克风 → 测试音。
 // 设置写进 config.json `plugins.game-voice`（旧的 `voiceChat` 没有了）。浏览器预览里安装与设备是模拟的（ipc/gameVoiceMock.ts）。
 // 由 apps/desktop 的 Playwright 一起跑（plugins 项目）。
@@ -27,19 +27,18 @@ test("game voice is a plugin: off by default, turn it on, install the virtual mi
   await expect(page.getByTestId("settings-reply")).not.toContainText("游戏语音");
   await expect(page.getByTestId("voice-chat-settings")).toHaveCount(0);
 
-  // 设置 → 插件：游戏语音的卡片，默认关
-  await page.getByTestId("advanced-nav-plugins").click();
-  const card = page.getByTestId("settings-plugin-game-voice");
+  // 左侧栏「插件」：游戏语音的卡片，默认关
+  await page.getByTestId("settings-nav-plugins").click();
+  const card = page.getByTestId("plugins-card-game-voice");
   await expect(card).toContainText("游戏语音");
-  await expect(card.getByTestId("settings-plugin-game-voice-off")).toBeVisible();
-  await expect(card.getByTestId("plugin-game-voice-enabled")).toHaveAttribute("aria-checked", "false");
-  await card.scrollIntoViewIfNeeded();
+  await expect(card.getByTestId("plugins-card-game-voice-off")).toBeVisible();
+  await expect(card.getByTestId("plugins-card-game-voice-enabled")).toHaveAttribute("aria-checked", "false");
   await page.screenshot({ path: shot(testInfo, "settings-plugins-game-voice") });
 
-  // 从卡片点开插件的页面：关着时只有开关和一句说明；左侧栏没有插件，亮的是「设置」
+  // 从卡片点开插件的 App：关着时只有开关和一句说明；左侧栏没有单个插件，亮的是「插件」
   await expect(page.getByTestId("app-sidebar").locator('[data-testid^="settings-nav-plugin:"]')).toHaveCount(0);
-  await card.getByTestId("settings-plugin-game-voice-open").click();
-  await expect(page.getByTestId("settings-nav-advanced")).toHaveAttribute("aria-current", "page");
+  await card.getByTestId("plugins-card-game-voice-open").click();
+  await expect(page.getByTestId("settings-nav-plugins")).toHaveAttribute("aria-current", "page");
   const pluginPage = page.getByTestId("plugin-page-game-voice");
   await expect(pluginPage.getByRole("heading", { name: "游戏语音", exact: true })).toBeVisible();
   await expect(pluginPage.getByTestId("plugin-game-voice-off")).toBeVisible();
@@ -87,7 +86,7 @@ test("old 游戏语音 locations and her ui.open land on the game voice plugin p
   // 旧对话里的“去看看：设置 → 她怎么回答 → 游戏语音”
   await page.evaluate("import('/src/lib/stores/navigation.ts').then((n) => n.openLocation('设置 → 她怎么回答 → 游戏语音'))");
   await expect(page.getByTestId("plugin-page-game-voice")).toBeVisible();
-  await expect(page.getByTestId("settings-nav-advanced")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("settings-nav-plugins")).toHaveAttribute("aria-current", "page");
   // 她打开插件的页面：在聊天页的右侧栏
   await page.evaluate("window.kotoneUiOpen({ uri: 'ui://kotone/game-voice/home' })");
   await expect(page.getByTestId("plugin-view-game-voice").getByTestId("plugin-game-voice-enabled")).toBeVisible();

@@ -1,7 +1,7 @@
 <script lang="ts">
   // 同传插件的页面（ADR 021、038）：设好听哪个程序、译成什么、怎么显示，点“开始”就等于你在聊天里对她说了那句话，
   // 她交给后台去听、去翻；“停止”就是对她说“停止同传”。下面一行是她的耳朵现在在听哪些程序（开着页面时每 2 秒读一次）。
-  // 左侧栏「设置 → 插件 → 同传」和她 `ui.open` 打开的右侧栏页面共用（右侧栏里不重复页标题）。
+  // 左侧栏「插件 → 同传」和她 `ui.open` 打开的右侧栏页面共用（右侧栏里不重复页标题）。
   // 插件开关是 `plugins.interpreter.enabled`；关着时只显示开关和一句说明。
   import { onMount } from "svelte";
   import { Ear, EarOff, LoaderCircle, Play, Square } from "@lucide/svelte";

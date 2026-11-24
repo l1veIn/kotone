@@ -9,8 +9,8 @@
    * 页面 ID 不变：语音输入一项对应 general / processing / history 三个分页。
    * 三种形态：展开（236px）、图标栏（56px）、窄窗口时的抽屉。
    * 两组里的页面可以自己排（ADR 034 第六节）：右键上移 / 下移 / 隐藏，“⋯”打开全部页面（对话框在 Settings.svelte）。
-   * 在放歌时底部有一个小播放条（ADR 034）。插件不在左侧栏（ADR 038，2026-11-24 玩家定的）：都在「设置 → 插件」里点开，
-   * 打开插件页时「设置」亮着。
+   * 在放歌时底部有一个小播放条（ADR 034）。插件（ADR 038，2026-11-24 玩家定的）：左侧栏只有一项「插件」，
+   * 点开是插件的卡片；打开某个插件的 App 时「插件」亮着。
    */
   import { companionName } from "$lib/stores/companion";
   import { ArrowDown, ArrowUp, Ellipsis, EyeOff, LayoutList, MessageSquarePlus } from "@lucide/svelte";
@@ -65,8 +65,8 @@
     if (id === "general") return page === "general" || page === "processing" || page === "history";
     if (id === "assistant") return page === "assistant" && !chatActive;
     if (id === "about") return page === "about" || page === "character";
-    // 插件页从「设置 → 插件」点进来
-    if (id === "advanced") return page === "advanced" || pluginOfPage(page) !== null;
+    // 插件的 App 从「插件」的卡片点进来
+    if (id === "plugins") return page === "plugins" || pluginOfPage(page) !== null;
     return page === id;
   }
 

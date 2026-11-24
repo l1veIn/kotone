@@ -43,6 +43,7 @@
   "shell_sidebar_game_adapt": "Game profiles",
   "shell_sidebar_game_list": "Games",
   "shell_sidebar_automation": "Automations",
+  "shell_sidebar_plugins": "Plugins",
   "shell_sidebar_all_pages": "All pages",
   "shell_sidebar_all_pages_desc": "Reorder the pages in the left sidebar or hide the ones you don't use; hidden pages still open from here.",
   "shell_sidebar_all_pages_hidden": "All pages ({count} hidden)",
@@ -181,5 +182,6 @@
   "role_character_sticker_alt": "Kotone sticker: {name}",
   "role_character_footer": "Profile generated with the repochan persona protocol · Stickers and character art © the Kotone project",
   "shell_plugin_missing": "This version has no page for this plugin.",
-  "shell_plugin_back": "Back to plugins"
+  "shell_plugin_back": "Back to plugins",
+  "shell_plugins_open_aria": "Open {name}"
 }

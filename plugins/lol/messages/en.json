@@ -10,7 +10,7 @@
   "plugin_lol_game_section_desc": "Match history, weak spots and summoner spells for this game come from the League of Legends plugin.",
   "plugin_lol_game_section_open": "Open the League of Legends plugin",
   "plugin_lol_events_off": "The League of Legends plugin's \"Read client data\" is off: only the generic events arrive (start, close, window switches, match start and end), not phases like champion select or loading, nor in-game events.",
-  "plugin_lol_game_section_plugin_off": "The League of Legends plugin is off: turn it on first on its page or in Settings → Plugins.",
+  "plugin_lol_game_section_plugin_off": "The League of Legends plugin is off: turn it on first under Plugins in the left sidebar.",
   "plugin_lol_page_match": "This match",
   "plugin_lol_page_player": "Match history",
   "plugin_lol_page_game": "Game details",

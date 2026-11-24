@@ -1,4 +1,4 @@
-// 同传插件（ADR 021、038）：「设置 → 插件」里有它的卡片（默认开），点开它的页面：设好听哪个程序、译成什么、怎么显示
+// 同传插件（ADR 021、038）：左侧栏「插件」里有它的卡片（默认开），点开它的页面：设好听哪个程序、译成什么、怎么显示
 // （写进 config.json `plugins.interpreter.settings`），点“开始”就替你对她说那句话、她的耳朵开始听；“停止”就不听了。
 // 关掉插件时页面只剩开关和一句说明。浏览器预览里她的耳朵是模拟的（ipc/interpreterMock.ts）。
 // 由 apps/desktop 的 Playwright 一起跑（plugins 项目）。
@@ -20,15 +20,14 @@ test("interpreter is a plugin: on by default, set the program, language and disp
   await page.goto("/#/settings?onboarding=never");
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
 
-  // 设置 → 插件：同传的卡片，默认开
-  await page.getByTestId("settings-nav-advanced").click();
-  await page.getByTestId("advanced-nav-plugins").click();
-  const card = page.getByTestId("settings-plugin-interpreter");
+  // 左侧栏「插件」：同传的卡片，默认开
+  await page.getByTestId("settings-nav-plugins").click();
+  const card = page.getByTestId("plugins-card-interpreter");
   await expect(card).toContainText("同传");
-  await expect(card.getByTestId("plugin-interpreter-enabled")).toHaveAttribute("aria-checked", "true");
+  await expect(card.getByTestId("plugins-card-interpreter-enabled")).toHaveAttribute("aria-checked", "true");
 
-  // 点开插件的页面：还没在听
-  await card.getByTestId("settings-plugin-interpreter-open").click();
+  // 点卡片进插件的 App：还没在听
+  await card.getByTestId("plugins-card-interpreter-open").click();
   const pluginPage = page.getByTestId("plugin-page-interpreter");
   await expect(pluginPage.getByRole("heading", { name: "同传", exact: true })).toBeVisible();
   await expect(pluginPage.getByTestId("plugin-interpreter-off")).toHaveCount(0);

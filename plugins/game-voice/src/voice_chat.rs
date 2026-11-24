@@ -364,7 +364,7 @@ fn running_router(state: &VoiceChat, host: &dyn Host) -> Result<Arc<VoiceRouter>
         if !platform::detect().installed() {
             "还没有安装 VB-CABLE（voice_chat.install）".to_string()
         } else if !enabled(host) {
-            "游戏语音插件没有打开（设置 → 插件 → 游戏语音）".to_string()
+            "游戏语音插件没有打开（插件 → 游戏语音）".to_string()
         } else {
             state
                 .inner

@@ -10,7 +10,7 @@
   "plugin_lol_game_section_desc": "这个游戏的战绩、突破口和召唤师技能由英雄联盟插件提供。",
   "plugin_lol_game_section_open": "打开英雄联盟插件",
   "plugin_lol_events_off": "英雄联盟插件的“读客户端数据”关着：只收得到通用的事（启动、退出、切窗口、一局开始和结束），收不到选英雄、加载这些阶段和局内的事。",
-  "plugin_lol_game_section_plugin_off": "英雄联盟插件关着：先在插件页或「设置 → 插件」里打开它。",
+  "plugin_lol_game_section_plugin_off": "英雄联盟插件关着：先在左侧栏的「插件」里打开它。",
   "plugin_lol_page_match": "这局",
   "plugin_lol_page_player": "战绩",
   "plugin_lol_page_game": "单局详情",

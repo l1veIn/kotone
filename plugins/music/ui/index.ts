@@ -12,7 +12,6 @@ import { PAGE_HOME } from "./music";
 const ui: PluginUi = {
   icon: Music,
   page: MusicPage,
-  fullBleed: true,
   sidebarFooter: SidebarMiniPlayer,
   chatBanner: MusicChatBanner,
   views: {

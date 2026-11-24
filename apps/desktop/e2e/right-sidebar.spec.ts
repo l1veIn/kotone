@@ -601,14 +601,15 @@ test("settings: the browser has its own section; switching it off hides the web 
   await page.getByTestId("sidebar-tab-web").click();
   await expect.poll(async () => (await lastBounds(page))?.visible).toBe(true);
 
-  // 权限页不再放浏览器的东西；「设置 → 浏览器」（通用组，插件前面）：开关在最上面，下面是清除登录、扩展
+  // 权限页不再放浏览器的东西；「设置 → 浏览器」（通用组最后一页；插件不在设置里）：开关在最上面，下面是清除登录、扩展
   await openSettingsTab(page, "permissions");
   await expect(page.getByTestId("browser-data-settings")).toHaveCount(0);
   await openSettingsTab(page, "browser");
   const nav = page.getByTestId("advanced-nav-browser");
   await expect(nav).toHaveText("浏览器");
   const tabs = await page.locator('[data-testid^="advanced-nav-"]').evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
-  expect(tabs.indexOf("advanced-nav-browser")).toBe(tabs.indexOf("advanced-nav-plugins") - 1);
+  expect(tabs[tabs.length - 1]).toBe("advanced-nav-browser");
+  expect(tabs).not.toContain("advanced-nav-plugins");
   const settings = page.getByTestId("settings-browser");
   const toggle = settings.getByTestId("browser-enabled");
   await expect(toggle).toHaveAttribute("aria-checked", "true");

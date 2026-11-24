@@ -443,11 +443,9 @@
   "system_models_network_saved": "下载源已切换：{name}",
   "system_models_proxy_label": "GitHub 备用代理（可选）",
   "system_models_proxy_save": "保存",
-  "system_section_plugins": "插件",
   "system_plugins_description": "每个插件是{companion}的一样本事，不叫她也能打开来用。关掉一个，它的页面、给{companion}的工具和它的游戏事件都跟着没了；{companion}的工具清单从下一段对话起变。",
   "system_plugins_enable": "启用{name}插件",
   "system_plugins_enable_desc": "关掉后{companion}不再用它，它的页面和游戏事件也停下。",
-  "system_plugins_open": "打开",
   "system_plugins_off_badge": "已关闭",
   "system_plugins_save_failed": "插件的开关没存上：{error}"
 }

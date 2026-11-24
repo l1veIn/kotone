@@ -14,7 +14,6 @@
   import SoundSection from "./advanced/SoundSection.svelte";
   import SystemSection from "./advanced/SystemSection.svelte";
   import TuningSection from "./advanced/TuningSection.svelte";
-  import PluginsSection from "./advanced/PluginsSection.svelte";
   import AssistantSettings from "./assistant/AssistantSettings.svelte";
   import CompanionInputSettings from "./assistant/CompanionInputSettings.svelte";
   import WakeSettings from "./assistant/WakeSettings.svelte";
@@ -126,8 +125,6 @@
     {:else if section === "browser"}
       <!-- 内置浏览器（ADR 031；开关放在设置里，ADR 038）：开关、清除登录、扩展 -->
       <div class="space-y-6" data-testid="settings-browser"><BrowserDataSettings /></div>
-    {:else if section === "plugins"}
-      <PluginsSection />
     {:else if section === "appearance"}
       <!-- 外观：配色、明暗、缩放、字体（只影响设置窗口，偏好存在本机；ADR 023 从「通用」搬来） -->
       <SettingsSection title={m.system_section_appearance()} description={m.system_advanced_appearance_description()} id="appearance-title">

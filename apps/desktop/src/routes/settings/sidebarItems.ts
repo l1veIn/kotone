@@ -1,6 +1,6 @@
 // 左侧栏的页面清单（AppSidebar 和“全部页面”共用）。分组和默认顺序在 lib/sidebarLayout.ts。
 import type { Component } from "svelte";
-import { Bell, Bot, Gamepad2, Info, Mic, Settings2, Zap } from "@lucide/svelte";
+import { Bell, Bot, Gamepad2, Info, LayoutGrid, Mic, Settings2, Zap } from "@lucide/svelte";
 import { m } from "$lib/paraglide/messages.js";
 import { SIDEBAR_GROUPS, type SidebarGroupId, type SidebarPrefs } from "../../lib/sidebarLayout";
 import { updateSettings } from "../../lib/ipc";
@@ -9,7 +9,9 @@ import { errText, settingsStore, toast } from "../../lib/stores/ui";
 export type PageId =
   | "general" | "processing" | "assistant" | "automation" | "game"
   | "history" | "advanced" | "about" | "character" | "legacy-reminders"
-  /** 插件的页面（ADR 038）：`plugin:<插件 id>`。不在左侧栏，从「设置 → 插件」点开。 */
+  /** 左侧栏的「插件」：每个插件一张卡片（ADR 038，照 MCP Apps：每个插件是一个独立的 App）。 */
+  | "plugins"
+  /** 一个插件的 App（`plugin:<插件 id>`）：从「插件」的卡片点开，占满内容区。 */
   | `plugin:${string}`;
 
 export type NavItem = { id: PageId; label: string; icon: Component };
@@ -20,6 +22,7 @@ export function navItems(companionName: string, legacyVoiceOnly: boolean): Recor
     assistant: { id: "assistant", label: companionName, icon: Bot },
     game: { id: "game", label: legacyVoiceOnly ? m.shell_sidebar_game_adapt() : m.shell_sidebar_game_list(), icon: Gamepad2 },
     automation: { id: "automation", label: m.shell_sidebar_automation(), icon: Zap },
+    plugins: { id: "plugins", label: m.shell_sidebar_plugins(), icon: LayoutGrid },
     general: { id: "general", label: m.shell_sidebar_voice_input(), icon: Mic },
     "legacy-reminders": { id: "legacy-reminders", label: m.shell_sidebar_legacy_reminders(), icon: Bell },
   };

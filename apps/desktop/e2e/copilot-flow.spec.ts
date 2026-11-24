@@ -279,9 +279,9 @@ test("8 · every location in settings_guide (and the old wording) opens the righ
       await page.getByTestId("sidebar-pages-done").click();
       await expect(page.getByTestId("sidebar-pages-dialog"), where).toHaveCount(0);
     } else if (target.page === "plugin") {
-      // 插件的页面（ADR 038）：从「设置 → 插件」点开，左侧栏亮的是「设置」
+      // 插件的 App（ADR 038）：从左侧栏「插件」的卡片点开，左侧栏亮的是「插件」
       await expect(page.locator(`[data-testid="plugin-page"][data-plugin-id="${target.id}"]`), where).toBeVisible();
-      await expect(page.getByTestId("settings-nav-advanced"), where).toHaveAttribute("aria-current", "page");
+      await expect(page.getByTestId("settings-nav-plugins"), where).toHaveAttribute("aria-current", "page");
     } else if (target.page !== "legacy-reminders") {
       // 提醒助手只有 0.1.x 升级用户才有，这里只核对能解析出来
       await expect(page.getByTestId(`settings-nav-${target.page}`), where).toHaveAttribute("aria-current", "page");

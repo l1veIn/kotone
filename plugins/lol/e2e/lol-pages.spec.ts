@@ -1,18 +1,17 @@
 // 英雄联盟插件的页面和聊天卡片（ADR 038 第 2 步，照 MCP Apps）：她查战绩，聊天里出一张卡片（她那一刻看到的样子）；
 // 点开在右侧栏是完整页面，能点进某个人的战绩、再点进某一局，能返回、关掉；她用 ui.open 也能打开插件页面和设置页；
-// 从「设置 → 插件」点开的英雄联盟插件页有“这局 / 战绩 / 设置”。数据是浏览器预览的示例（apps/desktop/src/lib/ipc/lolMock.ts）。
+// 从左侧栏「插件」的卡片点开的英雄联盟插件（App）有“这局 / 战绩 / 设置”。数据是浏览器预览的示例（apps/desktop/src/lib/ipc/lolMock.ts）。
 // 由 apps/desktop 的 Playwright 一起跑（plugins 项目）。
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { join } from "node:path";
 
-/** 插件的页面从「设置 → 插件」的卡片点开（左侧栏不放插件，ADR 038）；左侧栏亮的是「设置」。
+/** 插件的 App（ADR 038）：左侧栏「插件」→ 点它的卡片；左侧栏亮的是「插件」。
  * （和 apps/desktop/e2e/nav.ts 的 openPlugin 一样：这个目录的测试按 CommonJS 编译，导入不了那边的 ES 模块。） */
 async function openPlugin(page: Page, id: string) {
-  await page.getByTestId("settings-nav-advanced").click();
-  await page.getByTestId("advanced-nav-plugins").click();
-  await page.getByTestId(`settings-plugin-${id}-open`).click();
+  await page.getByTestId("settings-nav-plugins").click();
+  await page.getByTestId(`plugins-card-${id}-open`).click();
   await expect(page.locator(`[data-testid="plugin-page"][data-plugin-id="${id}"]`)).toBeVisible();
-  await expect(page.getByTestId("settings-nav-advanced")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("settings-nav-plugins")).toHaveAttribute("aria-current", "page");
 }
 
 /** 截图放在仓库的 target/plugin-shots/step2/（实现记录用）；testDir 是 plugins/。 */
@@ -111,10 +110,10 @@ test("ui.open opens a plugin page in the right sidebar and a settings page in se
   await expect(stack).toContainText("隐藏战绩");
   await expect(stack.getByTestId("lol-snapshot")).toHaveCount(0);
 
-  // 设置页
+  // 旧的设置页地址：插件搬到了左侧栏的「插件」
   expect(await page.evaluate("window.kotoneUiOpen({ uri: 'ui://kotone/settings/plugins' })")).toBe(true);
-  await expect(page.getByTestId("advanced-nav-plugins")).toHaveAttribute("aria-current", "page");
-  await expect(page.getByTestId("settings-plugin-lol")).toBeVisible();
+  await expect(page.getByTestId("settings-nav-plugins")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("plugins-card-lol")).toBeVisible();
   // 认不出的地址：不动
   expect(await page.evaluate("window.kotoneUiOpen({ uri: 'ui://kotone/settings/' })")).toBe(false);
   expect(await page.evaluate("window.kotoneUiOpen({ uri: 'https://example.com' })")).toBe(false);

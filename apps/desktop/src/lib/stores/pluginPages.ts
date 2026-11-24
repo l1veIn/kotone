@@ -55,14 +55,15 @@ export function closePluginPages(): void {
 export interface UiOpen { uri: string; params?: Record<string, unknown> | null; title?: string; plugin?: string | null }
 
 /**
- * 处理 `ui.open`：插件的页面在聊天页的右侧栏打开（先切到聊天页）；`ui://kotone/settings/<分页>` 打开设置的那一页。
+ * 处理 `ui.open`：插件的页面在聊天页的右侧栏打开（先切到聊天页）；`ui://kotone/settings/<分页>` 打开设置的那一页
+ * （`ui://kotone/settings/plugins` 是旧地址：插件搬到了左侧栏的「插件」，打开那一页）。
  * 不把窗口拉到前面（玩家可能在游戏里）。认不出的地址返回 false。
  */
 export function handleUiOpen(event: UiOpen): boolean {
   const uri = String(event?.uri ?? "");
   const section = /^ui:\/\/kotone\/settings\/([a-z]+)$/.exec(uri)?.[1];
   if (section) {
-    openTarget({ page: "advanced", tab: section });
+    openTarget(section === "plugins" ? { page: "plugins" } : { page: "advanced", tab: section });
     return true;
   }
   if (!pluginOfUri(uri)) return false;

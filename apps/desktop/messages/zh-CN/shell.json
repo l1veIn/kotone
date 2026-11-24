@@ -43,6 +43,7 @@
   "shell_sidebar_game_adapt": "游戏适配",
   "shell_sidebar_game_list": "游戏列表",
   "shell_sidebar_automation": "自动化",
+  "shell_sidebar_plugins": "插件",
   "shell_sidebar_all_pages": "全部页面",
   "shell_sidebar_all_pages_desc": "调整左侧栏里页面的顺序，或者把不常用的藏起来；藏起来的也能从这里打开。",
   "shell_sidebar_all_pages_hidden": "全部页面（藏了 {count} 个）",
@@ -181,5 +182,6 @@
   "role_character_sticker_alt": "琴音贴纸·{name}",
   "role_character_footer": "档案由 repochan persona 协议生成 · 贴纸与立绘版权归 Kotone 项目",
   "shell_plugin_missing": "这个版本里没有这个插件的页面。",
-  "shell_plugin_back": "返回插件"
+  "shell_plugin_back": "返回插件",
+  "shell_plugins_open_aria": "打开{name}"
 }
