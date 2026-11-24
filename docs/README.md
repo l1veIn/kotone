@@ -7,6 +7,7 @@
 | 理解模块职责、依赖和关键行为 | [architecture.md](architecture.md) |
 | Kotone 是什么、本体和插件怎么分、插件重构怎么做（计划，ADR 038） | [plugin-refactor.md](plugin-refactor.md) |
 | 确认术语、代码名及中英文表达 | [glossary.md](glossary.md) |
+| 判断设计好不好、本体还是插件、审查整个项目的标准 | [philosophy.md](philosophy.md) |
 | 开发环境、验证和修改约定 | [development.md](development.md) |
 | 命令行用法 | [cli.md](cli.md)，参数以 `kotone-cli --help` 及子命令帮助为准 |
 | 模型评测、标注和缓存规则 | [eval-playbook.md](eval-playbook.md) |
