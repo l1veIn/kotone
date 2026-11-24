@@ -1,10 +1,13 @@
 <script lang="ts">
-  // 「设置 → 权限」里的内置浏览器（ADR 031）：清除你在聊天页右侧网页里登录过的账号（网易云等）；
-  // 浏览器插件（已解压的插件文件夹，Chrome / Edge 插件格式；WebView2 的 AddBrowserExtension）。
+  // 「设置 → 浏览器」（ADR 031；浏览器留在本体，开关放在设置里，ADR 038“怎么定的”，玩家选的）：
+  // 最上面是内置浏览器的开关（默认开；关掉后右侧栏没有“网页”、开着的网页都关掉，她也不再打开网页）；
+  // 清除你在聊天页右侧网页里登录过的账号（网易云等）；扩展（已解压的 Chrome / Edge 扩展文件夹，
+  // WebView2 的 AddBrowserExtension；界面上叫“扩展”，不叫插件——插件是她身上的本事）。
   import { onMount } from "svelte";
   import { FolderOpen, Puzzle, Trash2 } from "@lucide/svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
+  import ToggleField from "$lib/components/settings/ToggleField.svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Switch } from "$lib/components/ui/switch";
@@ -14,8 +17,14 @@
     type BrowserExtension,
   } from "../../../../lib/browser";
   import { isTauri } from "../../../../lib/ipc";
-  import { errText, toast } from "../../../../lib/stores/ui";
+  import { browserEnabled } from "../../../../lib/ipc/contracts";
+  import { errText, patchSettings, settingsStore, toast } from "../../../../lib/stores/ui";
   import { m } from "$lib/paraglide/messages.js";
+
+  const enabled = $derived(browserEnabled($settingsStore));
+  function setEnabled(on: boolean) {
+    void patchSettings({ browser: { enabled: on } }, on ? m.companion_browser_enabled_on() : m.companion_browser_enabled_off());
+  }
 
   let confirming = $state(false);
   let clearing = $state(false);
@@ -33,7 +42,7 @@
     }
   }
 
-  // ---- 浏览器插件 ----
+  // ---- 扩展 ----
   let extensions = $state<BrowserExtension[]>([]);
   let loadError = $state("");
   let busy = $state<string | null>(null);
@@ -96,8 +105,12 @@
   }
 </script>
 
-<SettingsSection title={m.companion_browser_title()} id="settings-permissions-browser"
+<SettingsSection title={m.companion_browser_title()} id="settings-browser-switch"
   description={m.companion_browser_desc()} testid="browser-data-settings">
+  <div class="py-3.5">
+    <ToggleField checked={enabled} label={m.companion_browser_enabled_label()}
+      desc={m.companion_browser_enabled_desc()} testid="browser-enabled" onchange={setEnabled} />
+  </div>
   <SettingsRow label={m.companion_browser_clear_label()} description={m.companion_browser_clear_desc()}>
     {#snippet control()}
       <Button size="sm" variant="outline" class="text-destructive hover:bg-destructive/10 hover:text-destructive"
@@ -106,7 +119,7 @@
   </SettingsRow>
 </SettingsSection>
 
-<SettingsSection title={m.companion_browser_extensions_title()} id="settings-permissions-browser-extensions"
+<SettingsSection title={m.companion_browser_extensions_title()} id="settings-browser-extensions"
   description={m.companion_browser_extensions_desc()}
   testid="browser-extensions-settings">
   {#snippet actions()}

@@ -232,7 +232,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | 英雄联盟（数据开关 `control` 操作客户端，**默认关**，要 `client` 也开着） | `lol.client` | `action`：`accept` / `decline` / `pick` / `ban` / `hover`；`champion` | 照 LeagueAkari 经客户端的本机接口接受 / 拒绝对局、选（并锁定）/ 禁 / 亮出英雄。副作用 `controls-game-client`（她默认先问玩家）。有封号风险（LeagueAkari #523） |
 | | `lol.champions`（只给页面） | 无 | 全部英雄的 id 和名字（设置里排自动选 / 禁的顺序） |
 
-**打开页面**：`ui.open {page, params?}` 在 Kotone 窗口里打开一个页面：插件的页面（上面各工具的 `resourceUri`，例如 `ui://kotone/lol/player` 带 `{puuid}`）在聊天旁边的右侧栏；`ui://kotone/settings/<分页>`（call、reply、permissions、usage、models、connections、sound、tuning、appearance、system、plugins）打开设置页。不会把窗口拉到前面。页面不存在、插件或它要的数据开关关着时报 `INVALID_ARGUMENTS`。
+**打开页面**：`ui.open {page, params?}` 在 Kotone 窗口里打开一个页面：插件的页面（上面各工具的 `resourceUri`，例如 `ui://kotone/lol/player` 带 `{puuid}`）在聊天旁边的右侧栏；`ui://kotone/settings/<分页>`（call、reply、permissions、usage、models、connections、sound、tuning、appearance、system、browser、plugins）打开设置页。不会把窗口拉到前面。页面不存在、插件或它要的数据开关关着时报 `INVALID_ARGUMENTS`。
 
 ### Kotone 陪玩（委托桌面宿主，2026-11-15）
 

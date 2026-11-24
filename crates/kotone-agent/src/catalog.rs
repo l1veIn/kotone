@@ -772,6 +772,8 @@ pub fn saved_entry(automation: &Automation) -> Option<ToolEntry> {
 pub struct Catalog {
     entries: Vec<ToolEntry>,
     plugins: Vec<PluginText>,
+    /// 设置里关了内置浏览器（[`Catalog::without_browser`]）。
+    browser_off: bool,
 }
 
 impl Catalog {
@@ -799,7 +801,26 @@ impl Catalog {
                 rule: o.text.rule.clone(),
             })
             .collect();
-        Self { entries, plugins }
+        Self {
+            entries,
+            plugins,
+            browser_off: false,
+        }
+    }
+
+    /// 玩家在设置里关了内置浏览器（`browser.enabled = false`，ADR 038）：清单里不再有 `browser.*`，
+    /// 能力概览、`tools.find` 也就不列。工具清单一段对话里不变（ADR 024），关之前就开始的对话里还留着它们，
+    /// 再调用时回 [`crate::browser::OFF`]（[`Catalog::switched_off`]），不说“没有这个工具”。
+    pub fn without_browser(mut self) -> Self {
+        self.entries
+            .retain(|e| !crate::browser::is_browser_tool(&e.name));
+        self.browser_off = true;
+        self
+    }
+
+    /// 玩家在设置里关掉的工具被调用时回的话；不是关掉的返回 None。
+    pub fn switched_off(&self, name: &str) -> Option<&'static str> {
+        (self.browser_off && crate::browser::is_browser_tool(name)).then_some(crate::browser::OFF)
     }
 
     /// 开着、给了她工具的插件（按登记顺序）。

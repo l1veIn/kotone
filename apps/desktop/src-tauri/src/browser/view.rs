@@ -12,7 +12,7 @@ use tauri::{AppHandle, Manager, Webview};
 use super::{cdp, update, Bounds, LABEL_PREFIX};
 
 /// 只加在浏览器自己的 WebView2 环境上（独立数据目录），不影响 Kotone 主界面。所有标签页用同一份数据目录，
-/// 启动参数和插件开关必须完全一样（WebView2：同一数据目录的环境选项不一致会报 0x8007139F）。
+/// 启动参数和扩展开关必须完全一样（WebView2：同一数据目录的环境选项不一致会报 0x8007139F）。
 /// wry 默认会传 `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection`，自己传参数时要带上。
 const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion \
 --disable-renderer-backgrounding --disable-background-timer-throttling --disable-backgrounding-occluded-windows \
@@ -70,7 +70,7 @@ pub(super) async fn create(app: &AppHandle, id: &str) -> Result<Webview, String>
     let builder = tauri::webview::WebviewBuilder::new(label, tauri::WebviewUrl::External(blank))
         .data_directory(dir)
         .additional_browser_args(BROWSER_ARGS)
-        // 插件（ADR 031）：环境上打开插件支持；装哪些、启用哪些由 `extensions` 经 WebView2 Profile 管
+        // 扩展（ADR 031）：环境上打开扩展支持；装哪些、启用哪些由 `extensions` 经 WebView2 Profile 管
         // （不用 wry 的 extensions_path：它把目录里的子文件夹逐个装、任何一个出错整个视图就建不出来）。
         .browser_extensions_enabled(true)
         // 不抢焦点：wry 建好后对要焦点的视图调 MoveFocus，失败就把整个创建判为失败；主窗口最小化时

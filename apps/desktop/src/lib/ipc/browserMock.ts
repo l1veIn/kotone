@@ -107,6 +107,7 @@ const mock: MockStore = {
     toolService: { enabled: false },
     ocr: { activeModelId: "" },
     search: { activeModelId: "" },
+    browser: { enabled: true, extensions: [] },
     agent: { permissions: { mode: "default", rules: {} }, hiddenAutomations: [], inGame: true, progressSpeech: true, identity: { name: "", avatar: "" }, subagents: { model: "" }, compactAtTokens: 64000, roleId: "kotone", matchRecap: true, safetyCheck: true, gameEffort: "", chatEffort: "" },
     plugins: {},
   },
@@ -658,10 +659,13 @@ export async function getSettingsLoadWarning(): Promise<string | null> {
 }
 
 export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
+  const wasBrowserOn = mock.settings.browser?.enabled !== false;
   const merged = clone(mock.settings) as unknown as Record<string, unknown>;
   mergeJson(merged, patch);
   mock.settings = merged as unknown as Settings;
   if (patch.ui?.sidebar) saveMockSidebar(mock.settings.ui.sidebar);
+  // 关了内置浏览器（ADR 038）：和桌面端一样，开着的网页都关掉
+  if (wasBrowserOn && mock.settings.browser?.enabled === false) browserClearTabs();
   // 插件开关变了：和桌面端一样（关掉放歌插件就停下）；动态导入，免得和 pluginsMock 互相引用
   if (patch.plugins) void import("./pluginsMock").then((plugins) => plugins.settingsChanged());
   return clone(mock.settings);
@@ -1599,9 +1603,14 @@ export function browserHandoverDone(): null {
 }
 
 export function browserClearData(): null {
+  browserClearTabs();
+  return null;
+}
+
+/** 关掉所有标签页（清除登录、设置里关了内置浏览器）。 */
+function browserClearTabs(): void {
   browserPreview.state = closedBrowser();
   emitBrowser();
-  return null;
 }
 
 export function browserExtensions(): BrowserExtension[] {
@@ -1609,8 +1618,8 @@ export function browserExtensions(): BrowserExtension[] {
 }
 export function browserExtensionAdd(args?: { path?: string }): null {
   const path = (args?.path ?? "").trim();
-  if (!path) throw new Error("没有选插件文件夹");
-  if (browserPreview.extensions.some((e) => e.path === path)) throw new Error("这个插件已经加过了");
+  if (!path) throw new Error("没有选扩展文件夹");
+  if (browserPreview.extensions.some((e) => e.path === path)) throw new Error("这个扩展已经加过了");
   const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
   browserPreview.extensions.push({ id: `ext-${browserPreview.extensions.length + 1}`, name, enabled: true, path });
   return null;

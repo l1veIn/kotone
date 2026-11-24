@@ -2,6 +2,7 @@
 <!-- 顶部两个标签——“卡片”（网页卡片 + 后台在做的事，按宽度 1–3 列）和“网页”（浏览器占满）；左边缘拖动调宽、 -->
 <!-- 双击恢复；网页可以全屏（铺满整个 Kotone 窗口）。网页由后端摆在窗口里（盖在界面上），这里只报那块区域的位置。 -->
 <!-- 第三个标签“页面”（ADR 038）：聊天卡片点开的插件页面（或她用 ui.open 打开的），能往下点、返回、关掉。 -->
+<!-- 设置里关了内置浏览器（设置 → 浏览器，ADR 038）：没有“网页”标签和网页卡片，网页也不摆出来（后端把标签页都关掉）。 -->
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { tick } from "svelte";
@@ -18,6 +19,8 @@
   } from "../browser";
   import type { SubagentInfo } from "../agent";
   import { isTauri } from "../ipc";
+  import { browserEnabled } from "../ipc/contracts";
+  import { settingsStore } from "../stores/ui";
   import {
     browserFullscreen, clampSidebarWidth, rightSidebarOpen, rightSidebarTab, rightSidebarWidth, saveRightSidebarWidth,
     setRightSidebarTab, showBrowserTab, SIDEBAR_DEFAULT_WIDTH, toggleRightSidebar,
@@ -41,9 +44,11 @@
   const browser = $derived($browserStore);
   const open = $derived($rightSidebarOpen);
   const fullscreen = $derived($browserFullscreen);
+  /** 设置里开着内置浏览器（默认开）。 */
+  const browserOn = $derived(browserEnabled($settingsStore));
 
-  /** “网页”标签能不能用：打开过网页，或者要玩家来登录、出了错要说明。 */
-  const webAvailable = $derived(browser.open || browser.tabs.length > 0 || !!browser.handover || !!browser.error);
+  /** “网页”标签能不能用：浏览器开着，而且打开过网页，或者要玩家来登录、出了错要说明。 */
+  const webAvailable = $derived(browserOn && (browser.open || browser.tabs.length > 0 || !!browser.handover || !!browser.error));
   /** 当前标签页。 */
   const current = $derived(activeTabOf(browser));
   /** 最多开几个标签页（和后端一样）。 */
@@ -51,8 +56,9 @@
   /** 插件页面（ADR 038）：开着几页（聊天卡片点开、ui.open）。 */
   const pages = $derived($pluginPageStack);
   const pluginPageTitle = $derived(pages.length ? (viewOf(pages[pages.length - 1].uri)?.view.title() ?? "") : "");
-  /** 选中的标签。“网页”一直能点：没有网页时也有地址栏，玩家可以自己输入网址或搜索。“页面”没开着页面时按“卡片”。 */
-  const tab = $derived($rightSidebarTab === "page" && !pages.length ? "cards" : $rightSidebarTab);
+  /** 选中的标签。“网页”一直能点：没有网页时也有地址栏，玩家可以自己输入网址或搜索（浏览器关着时按“卡片”）。
+   *  “页面”没开着页面时按“卡片”。 */
+  const tab = $derived(($rightSidebarTab === "page" && !pages.length) || ($rightSidebarTab === "web" && !browserOn) ? "cards" : $rightSidebarTab);
 
   // ---- 后台在做的事：在跑的在前，再列最近做完的几件 ----
   const RECENT = 6;
@@ -70,7 +76,7 @@
   let lastHandover: string | null = null;
   $effect(() => {
     const reason = browser.handover?.reason ?? null;
-    if (reason && reason !== lastHandover) showBrowserTab();
+    if (reason && reason !== lastHandover && browserOn) showBrowserTab();
     lastHandover = reason;
   });
 
@@ -393,6 +399,7 @@
         <LayoutGrid class="size-3.5" />{m.chat_sidebar_tab_cards()}
         {#if liveCount}<span class="rounded-full bg-primary/15 px-1.5 text-[10px] leading-4 text-primary" data-testid="sidebar-tab-cards-count">{liveCount}</span>{/if}
       </button>
+      {#if browserOn}
       <button type="button" role="tab" aria-selected={tab === "web"} data-testid="sidebar-tab-web"
         title={browser.open ? siteName(browser) : m.chat_sidebar_tab_web_title()}
         class="flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors {tab === 'web' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}"
@@ -401,6 +408,7 @@
         {#if browser.tabs.length > 1}<span class="rounded-full bg-muted px-1.5 text-[10px] leading-4 text-muted-foreground" data-testid="sidebar-tab-web-count">{browser.tabs.length}</span>{/if}
         {#if browser.handover}<span class="size-1.5 shrink-0 rounded-full bg-warning" aria-label={m.chat_sidebar_tab_web_handover()}></span>{/if}
       </button>
+      {/if}
       {#if pages.length}
         <button type="button" role="tab" aria-selected={tab === "page"} data-testid="sidebar-tab-page" title={pluginPageTitle}
           class="flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors {tab === 'page' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}"
@@ -497,6 +505,7 @@
       <div class="min-h-0 flex-1 overflow-y-auto px-3 py-3" bind:clientWidth={cardsWidth}>
         <ul class="m-0 grid list-none gap-3 p-0" style:grid-template-columns={`repeat(${columns}, minmax(0, 1fr))`}
           aria-label={m.chat_sidebar_cards_label()} data-testid="sidebar-cards" data-columns={columns}>
+          {#if browserOn}
           <li class="min-w-0">
             <section aria-label={m.chat_sidebar_tab_web()} class="h-full min-w-0 overflow-hidden rounded-xl border border-hairline bg-card/60" data-testid="sidebar-browser-card"
               data-browser-state={browser.handover ? "handover" : browser.error ? "error" : browser.open ? "open" : "closed"}>
@@ -533,6 +542,7 @@
               {/if}
             </section>
           </li>
+          {/if}
           {#each tasks as info (info.name)}<SidebarTask {info} {conversationId} bind:open={openTasks[info.name]} />{/each}
           {#if !tasks.length}
             <li class="min-w-0 rounded-xl border border-dashed border-hairline px-3 py-3" data-testid="sidebar-tasks">

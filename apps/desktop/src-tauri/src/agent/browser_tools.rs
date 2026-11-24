@@ -25,6 +25,10 @@ pub(super) async fn browser_tool(
     confirm: bool,
     cancel: &CancellationToken,
 ) -> ToolOutcome {
+    // 玩家在设置里关了内置浏览器（ADR 038）：这一轮开始时还开着的后台的事也到此为止
+    if !settings(app).browser.enabled {
+        return ToolOutcome::error(rules::OFF);
+    }
     let Some(spec) = child_spec(app, caller) else {
         return ToolOutcome::error("网页只在后台操作：用 agent.start 交给后台");
     };

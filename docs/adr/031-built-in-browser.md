@@ -39,6 +39,7 @@
 - 网页调用不了 Kotone 的任何功能：Tauri 2.11 对非本地来源一律拒绝自定义命令和插件命令，除非某个 capability 写了 `remote`（`tauri` `webview/mod.rs` 的 remote-origin 守卫）；我们的 capabilities 一个都没写（有测试）。
 - 启动参数只加在这个浏览器自己的环境上（照 ego 和 wqty123）：`--disable-renderer-backgrounding`、`--disable-background-timer-throttling`、`--disable-backgrounding-occluded-windows`、`--disable-features=CalculateNativeWinOcclusion`；为了网页播放器，试 `--autoplay-policy=no-user-gesture-required`。
 - 设置里一个按钮“清除浏览器登录”，删掉这个目录。
+- **开关**（2026-11-24，[ADR 038](038-kotone-and-apps.md)“怎么定的”，玩家选的）：设置里单独一节“浏览器”（通用组，插件前面）：最上面是开关 `browser.enabled`（新字段，默认开，旧配置按开着读），下面是清除登录、扩展。关掉时右侧栏没有“网页”标签和网页卡片，开着的标签页都关掉、不再建新的；她的工具清单从下一段对话起没有 `browser.*`（关之前开始的对话里调用回“内置浏览器关着（设置 → 浏览器）”），后台的提示里也不讲网页。她可以照玩家的话改这个开关，扩展仍只能玩家自己动。下面说的“插件”（Chrome / Edge 插件）界面上改叫“扩展”，免得和 Kotone 的插件撞名（`docs/glossary.md`）。
 
 #### 完整浏览器（2026-11-21 玩家决定）
 

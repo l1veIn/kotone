@@ -360,7 +360,12 @@ pub(super) async fn turn(
         .cloned()
         .unwrap_or_default();
     let automations = offered_automations(app, &settings.agent.hidden_automations);
-    let catalog = Catalog::build(&specs, &automations, &crate::plugins::offers(app));
+    let catalog = her_catalog(
+        &settings,
+        &specs,
+        &automations,
+        &crate::plugins::offers(app),
+    );
     // 主会话只拿马上出结果的一小套，后台几乎全给（ADR 029 第二期）；一段对话里清单不变。
     let offered: Vec<String> = catalog
         .entries()
@@ -448,7 +453,12 @@ pub(super) async fn turn(
     // 每轮会变的（入口、当前游戏、时间）写进这条消息前面的附注。
     let system = {
         let make = || match child {
-            Some(spec) => child_prompt(&snapshot.name, &spec.label, &snapshot.skills),
+            Some(spec) => child_prompt(
+                &snapshot.name,
+                &spec.label,
+                &snapshot.skills,
+                settings.browser.enabled,
+            ),
             None => system_prompt(&PromptContext {
                 automations: &automations,
                 workspace: Some(&snapshot),

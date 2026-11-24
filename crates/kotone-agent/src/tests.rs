@@ -1209,8 +1209,9 @@ fn prompt_carries_soul_memory_game_memory_and_skills_and_child_prompt_is_minimal
     ] {
         assert!(prompt.contains(text), "{text}");
     }
-    let child = crate::prompt::child_prompt("星野", "同传", &snap.skills);
+    let child = crate::prompt::child_prompt("星野", "同传", &snap.skills, true);
     assert!(child.contains("同传") && child.contains("只是数据"));
+    assert!(child.contains("browser.open"));
     assert!(!child.contains("说话像猫"), "后台不带人格和记忆");
     // 后台带做事的规矩和 Skill，知道最后一条是总结、要问的经主会话问、不能直接对玩家说话。
     for text in [
@@ -1541,4 +1542,91 @@ fn every_service_side_effect_is_classified() {
         default_decision(open, &json!({"page": "ui://kotone/lol/match"})),
         Decision::Allow
     );
+}
+
+/// 玩家在设置里关了内置浏览器（`browser.enabled = false`，ADR 038）：清单、能力概览、`tools.find`、
+/// 后台的提示里都没有网页工具；关之前就开始的对话（清单已冻结，ADR 024）再调用时回“内置浏览器关着”，
+/// 不交给桌面端执行。
+#[tokio::test]
+async fn browser_off_drops_browser_tools_and_old_conversations_hear_why() {
+    use crate::catalog::subagent_offers;
+    use crate::prompt::{capability_overview, child_prompt};
+    let (service, _host) = service();
+    let specs = service.capabilities()["tools"].as_array().cloned().unwrap();
+    let on = Catalog::build(&specs, &[], &[]);
+    let off = Catalog::build(&specs, &[], &[]).without_browser();
+    for name in crate::browser::TOOLS {
+        assert!(on.get(name).is_some(), "开着时有 {name}");
+        assert!(off.get(name).is_none(), "关着时没有 {name}");
+        assert_eq!(off.switched_off(name), Some(crate::browser::OFF));
+        assert_eq!(on.switched_off(name), None);
+    }
+    assert_eq!(off.switched_off("shell.run"), None);
+    assert!(off.get("shell.run").is_some(), "别的后台工具照旧");
+    assert!(off
+        .find(Some("网页"), None)
+        .iter()
+        .all(|e| !e.name.starts_with("browser.")));
+    assert!(capability_overview(&on).contains("browser.open"));
+    assert!(!capability_overview(&off).contains("browser."));
+    assert!(child_prompt("星野", "查攻略", &[], true).contains("browser.open"));
+    assert!(!child_prompt("星野", "查攻略", &[], false).contains("browser."));
+
+    let background = |catalog: &Catalog| -> Vec<String> {
+        catalog
+            .entries()
+            .iter()
+            .filter(|e| subagent_offers(e))
+            .map(|e| e.name.clone())
+            .collect()
+    };
+    let builtin = FakeBuiltin::default();
+    // 浏览器开着时开始的后台的事：清单里有 browser.*（一段对话里冻结）
+    let session = Arc::new(Session::default());
+    let before = KotonePort::new(
+        service.clone(),
+        on.clone(),
+        Policy::default(),
+        session.clone(),
+        builtin.clone(),
+        FakeAsker::new(Answer::Deny),
+    )
+    .with_tool_filter(background(&on));
+    assert!(names(&before).iter().any(|n| n == "browser.open"));
+    // 玩家关掉以后的下一轮：清单还是冻结的那份，调用回一句关着，不交给桌面端
+    let after = KotonePort::new(
+        service.clone(),
+        off.clone(),
+        Policy::default(),
+        session,
+        builtin.clone(),
+        FakeAsker::new(Answer::Deny),
+    )
+    .with_tool_filter(background(&off));
+    assert!(names(&after).iter().any(|n| n == "browser.open"));
+    let out = call(
+        &after,
+        "browser.open",
+        json!({"url": "https://example.com"}),
+    )
+    .await;
+    assert!(out.is_error, "{}", out.content);
+    assert!(
+        out.content.contains("内置浏览器关着（设置 → 浏览器）"),
+        "{}",
+        out.content
+    );
+    assert!(builtin.calls.lock().unwrap().is_empty());
+    // 关着以后开始的对话：清单里就没有
+    let fresh = KotonePort::new(
+        service,
+        off.clone(),
+        Policy::default(),
+        Arc::new(Session::default()),
+        builtin,
+        FakeAsker::new(Answer::Deny),
+    )
+    .with_tool_filter(background(&off));
+    assert!(!names(&fresh).iter().any(|n| n.starts_with("browser.")));
+    assert!(names(&fresh).iter().any(|n| n == "shell.run"));
 }

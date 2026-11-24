@@ -262,6 +262,7 @@ pub const FIELDS: &[Field] = &[
     f("agent.compactAtTokens", "对话多长时整理成摘要", "设置 → 用量", "一段对话估到这么多 token 时，琴音把较早的部分整理成摘要、之后只看摘要和最近几轮（整理那一次多花一点，之后又能命中缓存）。默认 64000；0 = 不整理。", NONE, NOW),
     f("agent.subagents.model", "后台的事用的模型", "设置 → 她怎么回答 → 她用的模型", "交给后台的事（例如同传）用的模型 id；空 = 和琴音同一个模型。建议填同一家服务商更快更便宜的模型。", NONE, NOW),
     f("toolService.enabled", "对外工具服务", "设置 → 系统", "开启后外部 Agent（命令行 / MCP / 插件）可以连接本机 Kotone；只监听本机。", NONE, APP),
+    f("browser.enabled", "内置浏览器", "设置 → 浏览器", "true（默认）：聊天页右侧栏有“网页”，玩家自己能上网，她在后台的事里能打开网页、替玩家操作（browser.*）。false：右侧栏不再显示“网页”，开着的网页都关掉；她不能在右侧栏打开网页，后台的事里没有 browser.*，她的工具清单从下一段对话起变。再打开就都回来（登录过的账号和扩展都还在）。扩展、清除浏览器登录也在“设置 → 浏览器”，只能由玩家自己动。", NONE, NOW),
 ];
 
 /// 不给 Agent 改，或要用专用工具改的设置（前缀匹配）。
@@ -303,8 +304,12 @@ pub const INTERNAL: &[(&str, &str)] = &[
     ("autoAdminPromptDismissed", "界面提示状态"),
     ("evalRecording", "开发评测用"),
     (
-        "browser",
-        "浏览器插件只能由玩家在右侧栏浏览器的插件管理里加、删、开关（ADR 031）",
+        "browser.extensions",
+        "扩展只能由玩家在「设置 → 浏览器」里加、删、开关（ADR 031）",
+    ),
+    (
+        "browser.pendingUninstall",
+        "浏览器没开时删掉的扩展，下次打开浏览器时卸掉（内部记录）",
     ),
 ];
 
@@ -479,10 +484,15 @@ pub fn agent_protected_violation(patch: &Value) -> Option<String> {
             ));
         }
     }
-    // 浏览器插件能读写浏览器里所有登录过的网站：只能由玩家自己加（ADR 031）。后台能写文件（ADR 030），
-    // 不能让它写个插件再自己登记上。
-    if patch.get("browser").is_some() {
-        return Some("浏览器插件只能由玩家自己在浏览器的插件管理里加，琴音不能改".into());
+    // 扩展能读写浏览器里所有登录过的网站：只能由玩家自己加（ADR 031）。后台能写文件（ADR 030），
+    // 不能让它写个扩展再自己登记上。内置浏览器的开关（`browser.enabled`）她可以照玩家的话改。
+    if let Some(browser) = patch.get("browser") {
+        let only_switch = browser
+            .as_object()
+            .is_some_and(|b| b.keys().all(|key| key == "enabled"));
+        if !only_switch {
+            return Some("扩展只能由玩家自己在「设置 → 浏览器」里加、删、开关，她不能改".into());
+        }
     }
     // 整个对象写成 {"agent": {"permissions": ...}} 以外的形式（如 null）也不放过
     if patch
@@ -649,6 +659,7 @@ mod tests {
                     "调参",
                     "外观",
                     "系统",
+                    "浏览器",
                     "插件",
                 ],
             ),
@@ -722,11 +733,43 @@ mod tests {
             agent_protected_violation(&json!({"agent": {"permissions": {"rules": {}}}})).is_some()
         );
         assert!(agent_protected_violation(&json!({"agent": null})).is_some());
-        // 浏览器插件只能由玩家加
+        // 扩展只能由玩家加；内置浏览器的开关她可以照玩家的话改
         assert!(
             agent_protected_violation(&json!({"browser": {"extensions": [{"path": "C:/x"}]}}))
                 .is_some()
         );
+        assert!(
+            agent_protected_violation(&json!({"browser": {"pendingUninstall": ["x"]}})).is_some()
+        );
+        assert!(agent_protected_violation(
+            &json!({"browser": {"enabled": true, "extensions": []}})
+        )
+        .is_some());
         assert!(agent_protected_violation(&json!({"browser": null})).is_some());
+        assert!(agent_protected_violation(&json!({"browser": {"enabled": false}})).is_none());
+    }
+
+    /// 内置浏览器的开关有说明、在“设置 → 浏览器”；扩展和待卸载的记录不给她改（ADR 038）。
+    #[test]
+    fn browser_switch_is_documented_and_extensions_stay_internal() {
+        let field = field_for("browser.enabled").expect("browser.enabled 要有说明");
+        assert_eq!(field.path, "browser.enabled");
+        assert_eq!(field.page, "设置 → 浏览器");
+        assert!(
+            field.description.contains("browser.*") && field.description.contains("下一段对话")
+        );
+        assert!(field_for("browser.extensions").is_none());
+        assert!(internal_for("browser.extensions").is_some());
+        assert!(internal_for("browser.pendingUninstall").is_some());
+        assert!(internal_for("browser.enabled").is_none());
+        let e = effects(vec!["browser.enabled".into()], false);
+        assert_eq!(e.summary, "已保存，立即生效");
+        assert_eq!(e.locations[0].page, "设置 → 浏览器");
+        for (_, reason) in INTERNAL.iter().filter(|(p, _)| p.starts_with("browser")) {
+            assert!(
+                reason.contains("扩展") && !reason.contains("插件"),
+                "{reason}"
+            );
+        }
     }
 }

@@ -1,4 +1,4 @@
-//! 内置浏览器的界面命令（ADR 031，聊天页右侧栏：多标签页、地址栏、前进后退、插件；接口约定见 ADR 031 实现情况）。
+//! 内置浏览器的界面命令（ADR 031，聊天页右侧栏：多标签页、地址栏、前进后退、扩展；接口约定见 ADR 031 实现情况）。
 
 use serde_json::Value;
 use tauri::AppHandle;
@@ -65,7 +65,7 @@ pub async fn browser_tab_select(app: AppHandle, id: String) -> Result<(), String
     browser::tab_select(&app, &id)
 }
 
-/// 浏览器插件（已解压的 Chrome / Edge 插件文件夹）。
+/// 扩展（已解压的 Chrome / Edge 扩展文件夹；界面上叫“扩展”，不叫插件，ADR 038）。
 #[tauri::command]
 pub fn browser_extensions(app: AppHandle) -> Vec<browser::ExtensionInfo> {
     browser::extensions(&app)

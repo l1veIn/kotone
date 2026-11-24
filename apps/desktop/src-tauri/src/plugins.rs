@@ -30,6 +30,7 @@ pub const SETTINGS_SECTIONS: &[&str] = &[
     "tuning",
     "appearance",
     "system",
+    "browser",
     "plugins",
 ];
 
@@ -700,6 +701,11 @@ mod tests {
         assert_eq!(
             resolve_page(&s, "ui://kotone/settings/plugins").unwrap(),
             ("plugins".to_string(), None)
+        );
+        // 设置里的“浏览器”一节（ADR 038：浏览器留在本体，开关在设置里）
+        assert_eq!(
+            resolve_page(&s, "ui://kotone/settings/browser").unwrap(),
+            ("browser".to_string(), None)
         );
         assert!(resolve_page(&s, "ui://kotone/settings/nope").is_err());
         assert_eq!(

@@ -151,6 +151,10 @@ pub(crate) fn update_settings(
         );
     }
     process_log::set_recording_enabled(updated.diagnostics.recording);
+    // 设置里关了内置浏览器（ADR 038）：开着的网页都关掉（界面上右侧栏的“网页”跟着设置收起来）
+    if old.browser.enabled && !updated.browser.enabled {
+        crate::browser::switched_off(&app);
+    }
     let old_overlay = old.overlay;
 
     // overlay 配置变化 → 立即重排几何/点击穿透/显隐 + 通知前端（无需重启）

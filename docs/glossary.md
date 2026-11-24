@@ -20,7 +20,9 @@
 | 她 / {名字} | 指角色时用“她”或当前角色的名字（界面里用 `{name}`，默认“琴音”）；“琴音”写死只用在产品名（Kotone 琴音）和默认角色上 | `琴音 Agent`、`陪玩模型`、`陪玩 AI 连接` | `agent.identity.name` | she / {name} |
 | 角色 | 她的角色卡：名字、头像、性格、唤醒词；可以切换 | `人设` | `roles`、`role.json` | character |
 | 游戏陪玩 | 侧栏分组名（ADR 028 D1，玩家定的），不当成名词指她 | | | Game companion |
-| 插件 | 装在她身上的一块本事：有自己的页面、工具和开关（英雄联盟、语音输入、音乐……，ADR 038）。照 MCP Apps：她只调用插件的工具或打开它的页面。“应用”在界面里指 Kotone 自己（“桌面应用”），所以插件不叫应用，也不叫 App | | `plugins/<id>`、`kotone-plugin-api` | plugin |
+| 插件 | 装在她身上的一块本事：有自己的页面、工具和开关（英雄联盟、语音输入、音乐……，ADR 038）。照 MCP Apps：她只调用插件的工具或打开它的页面。“应用”在界面里指 Kotone 自己（“桌面应用”），所以插件不叫应用，也不叫 App；浏览器里装的叫“扩展” | | `plugins/<id>`、`kotone-plugin-api` | plugin |
+| 内置浏览器 / 网页 | 聊天页右侧栏的“网页”标签：你自己能上网，她在后台的事里也用它打开网页（ADR 031）。它留在本体，不是插件；“设置 → 浏览器”里有开关（默认开），关掉后右侧栏没有“网页”、她也不再打开网页（ADR 038） | | `browser.enabled`、`browser.*` | built-in browser / Web |
+| 扩展 | 内置浏览器里装的 Chrome / Edge 扩展（已解压的扩展文件夹，例如去广告），在“设置 → 浏览器”里加、删、开关。“插件”只指她身上的本事，所以浏览器里的不叫插件 | `浏览器插件` | `browser.extensions` | extension |
 | 外部 Agent | 经工具服务 / MCP 接进来的别的 Agent；界面上的“Agent”只指这个 | `AI 助手` | `assistant.route = agent` | external agent |
 | 提醒助手 | 只给 0.1.x 升级用户保留的旧页面名 | | `LegacyRemindersPage` | Reminder assistant (0.1.x) |
 | 热键 | 全局按键组合的统称（语音输入热键、停下热键、快捷指令的热键）。呼叫键是唯一简称“键”的 | `快捷键` | `*Hotkey` | hotkey |

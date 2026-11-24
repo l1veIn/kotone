@@ -53,7 +53,7 @@ export interface BrowserState {
 export type BrowserAction = "reload" | "back" | "forward" | "stop" | "close";
 /** 浏览器区域在窗口里的位置（逻辑像素，相对窗口内容区左上角）。 */
 export interface BrowserBounds { x: number; y: number; width: number; height: number; visible: boolean }
-/** 一个浏览器插件（已解压的插件文件夹，Chrome / Edge 插件格式）。 */
+/** 一个扩展（已解压的 Chrome / Edge 扩展文件夹；界面上叫“扩展”，不叫插件）。 */
 export interface BrowserExtension { id: string; name: string; enabled: boolean; path: string }
 
 export const BROWSER_EVENT = "kotone://browser";
@@ -164,7 +164,7 @@ export async function browserTabSelect(id: string): Promise<void> {
   await invoke("browser_tab_select", { id });
 }
 
-// ---- 浏览器插件（设置 → 权限 → 内置浏览器） ----
+// ---- 扩展（设置 → 浏览器） ----
 
 function normalizeExtension(value: Partial<BrowserExtension> | null | undefined): BrowserExtension | null {
   if (!value || typeof value !== "object" || typeof value.id !== "string") return null;

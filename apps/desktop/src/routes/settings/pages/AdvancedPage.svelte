@@ -112,7 +112,7 @@
         <div id="settings-reply-output" class="scroll-mt-16"><OutputSettings /></div>
       </div>
     {:else if section === "permissions"}
-      <div class="space-y-6" data-testid="settings-permissions"><AgentSettings /><BrowserDataSettings /></div>
+      <div class="space-y-6" data-testid="settings-permissions"><AgentSettings /></div>
     {:else if section === "usage"}
       <div data-testid="settings-usage"><UsageSettings /></div>
     {:else if section === "connections"}
@@ -123,6 +123,9 @@
       <TuningSection />
     {:else if section === "system"}
       <SystemSection {onOpenOnboarding} />
+    {:else if section === "browser"}
+      <!-- 内置浏览器（ADR 031；开关放在设置里，ADR 038）：开关、清除登录、扩展 -->
+      <div class="space-y-6" data-testid="settings-browser"><BrowserDataSettings /></div>
     {:else if section === "plugins"}
       <PluginsSection />
     {:else if section === "appearance"}

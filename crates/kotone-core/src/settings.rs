@@ -148,7 +148,7 @@ pub struct Settings {
     /// 联网搜索（统一模型清单的 search 类别，ADR 026）。新字段。
     #[serde(default)]
     pub search: SearchConfig,
-    /// 内置浏览器（ADR 031）：玩家加的浏览器插件。新字段，旧版本会忽略。
+    /// 内置浏览器（ADR 031）：开关（设置 → 浏览器，ADR 038）和玩家加的扩展。新字段，旧版本会忽略。
     #[serde(default)]
     pub browser: BrowserConfig,
     /// 插件（ADR 038）：每个插件一份设置，按插件 id（`plugins.lol.sources.client`）。新字段，旧版本会忽略。
@@ -191,18 +191,33 @@ impl Settings {
 }
 
 /// 内置浏览器（config.json `browser` 段，ADR 031）。
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserConfig {
-    /// 玩家加的浏览器插件：已解压的 Chrome / Edge 插件文件夹（WebView2 只支持这种，没有应用商店）。
+    /// 内置浏览器开着没有（设置 → 浏览器，ADR 038 “怎么定的”；默认开）。关着时右侧栏没有“网页”、
+    /// 开着的网页都关掉，她的工具清单里没有 `browser.*`。新字段：旧配置没有它时按开着读。
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// 玩家加的扩展：已解压的 Chrome / Edge 扩展文件夹（WebView2 只支持这种，没有应用商店）。
+    /// 界面上叫“扩展”，不叫插件（插件是她身上的本事，ADR 038）。
     #[serde(default)]
     pub extensions: Vec<BrowserExtensionConfig>,
-    /// 浏览器没开着时删掉的插件（WebView2 给的插件 id），下次打开浏览器时卸掉。
+    /// 浏览器没开着时删掉的扩展（WebView2 给的扩展 id），下次打开浏览器时卸掉。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_uninstall: Vec<String>,
 }
 
-/// 一个浏览器插件。
+impl Default for BrowserConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            extensions: Vec::new(),
+            pending_uninstall: Vec::new(),
+        }
+    }
+}
+
+/// 一个扩展（Chrome / Edge 扩展）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserExtensionConfig {
@@ -1565,6 +1580,47 @@ mod tests {
         let minimal: BrowserExtensionConfig =
             serde_json::from_value(serde_json::json!({"path": "C:/ext"})).unwrap();
         assert!(minimal.enabled && minimal.installed_id.is_none());
+    }
+
+    /// 内置浏览器的开关（设置 → 浏览器，ADR 038）是新字段：默认开；旧配置没有 `browser` 段、或者段里只有扩展
+    /// （0.2.0-rc 写的）都按开着读，扩展原样留着；关掉写成 `browser.enabled = false`，能读回。
+    #[test]
+    fn browser_switch_is_a_new_field_that_defaults_to_on() {
+        assert!(Settings::default().browser.enabled);
+        assert_eq!(
+            serde_json::to_value(Settings::default()).unwrap()["browser"]["enabled"],
+            true
+        );
+        let base = serde_json::json!({
+            "hotkey": {"key": "F8", "mode": "hold"},
+            "audioDeviceId": "",
+            "sttEngine": "",
+            "engineOptions": {},
+            "autoSend": true,
+            "activeProfileId": null,
+            "language": "zh",
+            "evalRecording": false,
+            "runAsAdminOnStart": false
+        });
+        let old: Settings = serde_json::from_value(base.clone()).unwrap();
+        assert!(old.browser.enabled);
+        let mut rc = base.clone();
+        rc["browser"] =
+            serde_json::json!({"extensions": [{"path": "C:/ext/adblock", "name": "去广告"}]});
+        let rc: Settings = serde_json::from_value(rc).unwrap();
+        assert!(rc.browser.enabled);
+        assert_eq!(rc.browser.extensions[0].name, "去广告");
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut off = base;
+        off["browser"] = serde_json::json!({"enabled": false});
+        std::fs::write(&path, off.to_string()).unwrap();
+        let loaded = load_from(&path);
+        assert!(!loaded.browser.enabled);
+        assert!(loaded.browser.extensions.is_empty());
+        let json = serde_json::to_value(&loaded).unwrap();
+        assert_eq!(json["browser"]["enabled"], false);
     }
 
     #[test]

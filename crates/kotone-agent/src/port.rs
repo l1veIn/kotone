@@ -559,6 +559,10 @@ impl<H: BuiltinHost, A: Asker> ToolPort for KotonePort<H, A> {
         cancel: &CancellationToken,
     ) -> ToolOutcome {
         let Some(entry) = self.catalog.get(name).filter(|e| self.offered(e)) else {
+            // 玩家在设置里关掉的（例如内置浏览器）：说清是关着，免得她以为是自己写错了名字
+            if let Some(reason) = self.catalog.switched_off(name) {
+                return ToolOutcome::error(reason);
+            }
             return ToolOutcome::error(format!("没有名为 {name} 的可用工具"));
         };
         // 琴音不能改自己的权限：在询问用户之前就拒绝，不受“全部允许”影响。

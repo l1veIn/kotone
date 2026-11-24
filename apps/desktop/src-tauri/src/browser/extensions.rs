@@ -1,10 +1,10 @@
-//! 浏览器插件（ADR 031）：玩家加的、已解压的 Chrome / Edge 插件文件夹（WebView2 只支持这种，没有应用商店）。
+//! 扩展（ADR 031）：玩家加的、已解压的 Chrome / Edge 扩展文件夹（WebView2 只支持这种，没有应用商店）。
 //!
 //! - 列表记在设置的 `browser.extensions`（新字段，旧配置为空），重启后照样在。
-//! - 装、删、开关走 WebView2 Profile 的插件接口（`ICoreWebView2Profile7`，装进浏览器自己的数据目录）。
+//! - 装、删、开关走 WebView2 Profile 的扩展接口（`ICoreWebView2Profile7`，装进浏览器自己的数据目录）。
 //!   不用 wry 的 `extensions_path`：它在建视图时把目录里的子文件夹逐个装，任何一个出错整个视图就建不出来。
 //! - 每次运行第一个标签页建好时对一遍：设置里有、浏览器里没有的装上（清除登录后数据目录没了也能装回来），
-//!   浏览器没开时玩家删掉的卸掉，开关照设置。别的插件不碰（WebView2 自带 Edge PDF Viewer 这类内置插件，
+//!   浏览器没开时玩家删掉的卸掉，开关照设置。别的扩展不碰（WebView2 自带 Edge PDF Viewer 这类内置扩展，
 //!   也在列表里，卸不掉也不该卸：2026-11-21 真机）。
 //! - WebView2 回调里只发 channel，不 emit、不阻塞（同 `cdp`）。
 
@@ -16,7 +16,7 @@ use serde::Serialize;
 use serde_json::json;
 use tauri::{AppHandle, Manager, Webview};
 
-/// 交给界面的一个插件。
+/// 交给界面的一个扩展。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtensionInfo {
@@ -28,7 +28,7 @@ pub struct ExtensionInfo {
     pub installed: bool,
 }
 
-/// 一次插件操作最多等多久。
+/// 一次扩展操作最多等多久。
 const TIMEOUT: Duration = Duration::from_secs(20);
 
 fn configured(app: &AppHandle) -> BrowserConfig {
@@ -58,7 +58,7 @@ fn info(entry: &BrowserExtensionConfig) -> ExtensionInfo {
     }
 }
 
-/// 插件文件夹路径的编号（FNV-1a，跨版本稳定；路径不分大小写、斜杠方向）。
+/// 扩展文件夹路径的编号（FNV-1a，跨版本稳定；路径不分大小写、斜杠方向）。
 fn id_of(path: &str) -> String {
     let normal = path
         .trim_end_matches(['\\', '/'])
@@ -72,8 +72,8 @@ fn id_of(path: &str) -> String {
     format!("{hash:016x}")
 }
 
-/// 读插件文件夹里的 manifest.json：要有 `manifest_version` 和 `name`；名字是 `__MSG_x__` 时从
-/// `_locales/<default_locale>/messages.json` 里查。返回（规范化的路径，插件名）。
+/// 读扩展文件夹里的 manifest.json：要有 `manifest_version` 和 `name`；名字是 `__MSG_x__` 时从
+/// `_locales/<default_locale>/messages.json` 里查。返回（规范化的路径，扩展名）。
 fn read_manifest(path: &str) -> Result<(String, String), String> {
     let dir = std::path::Path::new(path.trim());
     if !dir.is_dir() {
@@ -84,19 +84,19 @@ fn read_manifest(path: &str) -> Result<(String, String), String> {
     // canonicalize 在 Windows 上带 `\\?\` 前缀，WebView2 不认。
     let shown = shown.strip_prefix(r"\\?\").unwrap_or(&shown).to_string();
     let manifest = std::fs::read_to_string(dir.join("manifest.json")).map_err(|_| {
-        "这个文件夹里没有 manifest.json：要选已解压的 Chrome / Edge 插件文件夹（不是 .crx 文件）".to_string()
+        "这个文件夹里没有 manifest.json：要选已解压的 Chrome / Edge 扩展文件夹（不是 .crx 文件）".to_string()
     })?;
     let manifest: serde_json::Value = serde_json::from_str(manifest.trim_start_matches('\u{feff}'))
         .map_err(|e| format!("manifest.json 看不懂：{e}"))?;
     if manifest["manifest_version"].as_u64().is_none() {
-        return Err("manifest.json 里没有 manifest_version，不像浏览器插件".into());
+        return Err("manifest.json 里没有 manifest_version，不像浏览器扩展".into());
     }
     let raw = manifest["name"].as_str().unwrap_or("").trim().to_string();
     let name = localized(&dir, &manifest, &raw).unwrap_or(raw);
     let name = if name.is_empty() {
         dir.file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "插件".into())
+            .unwrap_or_else(|| "扩展".into())
     } else {
         name
     };
@@ -120,7 +120,7 @@ fn localized(dir: &std::path::Path, manifest: &serde_json::Value, raw: &str) -> 
         .and_then(|(_, v)| v["message"].as_str().map(str::to_string))
 }
 
-/// 随便一个开着的标签页（插件装在整个浏览器上，用哪个标签页都一样）。
+/// 随便一个开着的标签页（扩展装在整个浏览器上，用哪个标签页都一样）。
 fn any_tab(app: &AppHandle) -> Option<Webview> {
     super::runtime(app)?
         .inner
@@ -131,12 +131,12 @@ fn any_tab(app: &AppHandle) -> Option<Webview> {
         .map(|t| t.webview.clone())
 }
 
-/// 插件列表。
+/// 扩展列表。
 pub fn list(app: &AppHandle) -> Vec<ExtensionInfo> {
     configured(app).extensions.iter().map(info).collect()
 }
 
-/// 加一个插件文件夹。浏览器开着就马上装（装不上就不加，如实报错）；没开着就先记下，下次打开时装。
+/// 加一个扩展文件夹。浏览器开着就马上装（装不上就不加，如实报错）；没开着就先记下，下次打开时装。
 pub async fn add(app: &AppHandle, path: &str) -> Result<ExtensionInfo, String> {
     let (path, name) = read_manifest(path)?;
     let id = id_of(&path);
@@ -158,11 +158,11 @@ pub async fn add(app: &AppHandle, path: &str) -> Result<ExtensionInfo, String> {
         }
         config.pending_uninstall.retain(|id| *id != installed.id);
         entry.installed_id = Some(installed.id);
-        // 新装的插件只对之后打开的页面生效：刷新一下各标签页。
+        // 新装的扩展只对之后打开的页面生效：刷新一下各标签页。
         reload_tabs(app).await;
     }
     log::log(&format!(
-        "browser: 加了插件 {}（{}）",
+        "browser: 加了扩展 {}（{}）",
         entry.name, entry.path
     ));
     config.extensions.push(entry.clone());
@@ -170,11 +170,11 @@ pub async fn add(app: &AppHandle, path: &str) -> Result<ExtensionInfo, String> {
     Ok(info(&entry))
 }
 
-/// 删掉一个插件（浏览器开着就马上卸，没开着就下次打开时卸）。
+/// 删掉一个扩展（浏览器开着就马上卸，没开着就下次打开时卸）。
 pub async fn remove(app: &AppHandle, id: &str) -> Result<(), String> {
     let mut config = configured(app);
     let Some(index) = config.extensions.iter().position(|e| e.id == id) else {
-        return Err("没有这个插件".into());
+        return Err("没有这个扩展".into());
     };
     let entry = config.extensions.remove(index);
     if let Some(installed) = entry.installed_id.clone() {
@@ -185,7 +185,7 @@ pub async fn remove(app: &AppHandle, id: &str) -> Result<(), String> {
                     true
                 }
                 Err(e) => {
-                    log::log(&format!("browser: 插件 {} 没卸掉：{e}", entry.name));
+                    log::log(&format!("browser: 扩展 {} 没卸掉：{e}", entry.name));
                     false
                 }
             },
@@ -196,15 +196,15 @@ pub async fn remove(app: &AppHandle, id: &str) -> Result<(), String> {
             config.pending_uninstall.push(installed);
         }
     }
-    log::log(&format!("browser: 删了插件 {}", entry.name));
+    log::log(&format!("browser: 删了扩展 {}", entry.name));
     save(app, &config)
 }
 
-/// 开 / 关一个插件。
+/// 开 / 关一个扩展。
 pub async fn toggle(app: &AppHandle, id: &str, enabled: bool) -> Result<ExtensionInfo, String> {
     let mut config = configured(app);
     let Some(entry) = config.extensions.iter_mut().find(|e| e.id == id) else {
-        return Err("没有这个插件".into());
+        return Err("没有这个扩展".into());
     };
     entry.enabled = enabled;
     let entry = entry.clone();
@@ -216,7 +216,7 @@ pub async fn toggle(app: &AppHandle, id: &str, enabled: bool) -> Result<Extensio
     Ok(info(&entry))
 }
 
-/// 插件变了以后重新打开各标签页的网页（插件只对之后打开的页面生效）。用 `location.replace` 换成标签页的网址，
+/// 扩展变了以后重新打开各标签页的网页（扩展只对之后打开的页面生效）。用 `location.replace` 换成标签页的网址，
 /// 不用刷新、也不用再导航一次：页面还在加载时刷新会刷回空白页，再导航一次会在历史里多留一条
 /// （“后退”退回空白页或同一页；2026-11-21 真机）。
 async fn reload_tabs(app: &AppHandle) {
@@ -242,7 +242,7 @@ async fn reload_tabs(app: &AppHandle) {
     }
 }
 
-/// 每次运行第一个标签页建好时：浏览器里的插件和设置对一遍（只动 Kotone 自己装的）。
+/// 每次运行第一个标签页建好时：浏览器里的扩展和设置对一遍（只动 Kotone 自己装的）。
 pub(super) async fn sync(app: &AppHandle, webview: &Webview) {
     let mut config = configured(app);
     if config.extensions.is_empty() && config.pending_uninstall.is_empty() {
@@ -251,7 +251,7 @@ pub(super) async fn sync(app: &AppHandle, webview: &Webview) {
     let present = match installed(webview).await {
         Ok(present) => present,
         Err(e) => {
-            log::log(&format!("browser: 读不到浏览器里的插件：{e}"));
+            log::log(&format!("browser: 读不到浏览器里的扩展：{e}"));
             return;
         }
     };
@@ -260,7 +260,7 @@ pub(super) async fn sync(app: &AppHandle, webview: &Webview) {
     for id in &plan.uninstall {
         match uninstall(webview, id).await {
             Ok(()) => touched = true,
-            Err(e) => log::log(&format!("browser: 删掉的插件 {id} 没卸掉：{e}")),
+            Err(e) => log::log(&format!("browser: 删掉的扩展 {id} 没卸掉：{e}")),
         }
     }
     config.pending_uninstall.clear();
@@ -268,18 +268,18 @@ pub(super) async fn sync(app: &AppHandle, webview: &Webview) {
         if plan.install.contains(&entry.id) {
             match install(webview, &entry.path).await {
                 Ok(new) => {
-                    log::log(&format!("browser: 装上了插件 {}", entry.name));
+                    log::log(&format!("browser: 装上了扩展 {}", entry.name));
                     touched = true;
                     let id = new.id.clone();
                     entry.installed_id = Some(new.id);
                     if new.enabled != entry.enabled {
                         if let Err(e) = enable(webview, &id, entry.enabled).await {
-                            log::log(&format!("browser: 插件 {} 开关没切过来：{e}", entry.name));
+                            log::log(&format!("browser: 扩展 {} 开关没切过来：{e}", entry.name));
                         }
                     }
                 }
                 Err(e) => {
-                    log::log(&format!("browser: 插件 {} 装不上：{e}", entry.name));
+                    log::log(&format!("browser: 扩展 {} 装不上：{e}", entry.name));
                     entry.installed_id = None;
                 }
             }
@@ -290,13 +290,13 @@ pub(super) async fn sync(app: &AppHandle, webview: &Webview) {
         {
             match enable(webview, id, entry.enabled).await {
                 Ok(()) => touched = true,
-                Err(e) => log::log(&format!("browser: 插件 {} 开关没切过来：{e}", entry.name)),
+                Err(e) => log::log(&format!("browser: 扩展 {} 开关没切过来：{e}", entry.name)),
             }
         }
     }
     if config != configured(app) {
         if let Err(e) = save(app, &config) {
-            log::log(&format!("browser: 插件列表没存上：{e}"));
+            log::log(&format!("browser: 扩展列表没存上：{e}"));
         }
     }
     if touched {
@@ -305,7 +305,7 @@ pub(super) async fn sync(app: &AppHandle, webview: &Webview) {
 }
 
 /// 对一遍要做的事（纯逻辑）：卸哪些（玩家删掉的、还在浏览器里的）、装哪些（设置里有、浏览器里没有的，
-/// 按 Kotone 的编号）、开关哪些（按 WebView2 的 id）。别的插件不碰。
+/// 按 Kotone 的编号）、开关哪些（按 WebView2 的 id）。别的扩展不碰。
 #[derive(Debug, Default, PartialEq)]
 struct SyncPlan {
     uninstall: Vec<String>,
@@ -338,7 +338,7 @@ fn plan_sync(config: &BrowserConfig, present: &[Installed]) -> SyncPlan {
     plan
 }
 
-// ---------- WebView2 Profile 插件接口 ----------
+// ---------- WebView2 Profile 扩展接口 ----------
 
 #[derive(Debug, Clone)]
 struct Installed {
@@ -372,18 +372,18 @@ async fn profile_op(
                     Ok(profile) => {
                         // 出错时 tx 已经交给 op：op 自己负责回复或丢掉（丢掉 = “没有回应”）。
                         if let Err(e) = op(&profile, tx) {
-                            log::log(&format!("browser: 插件操作（{what}）没发出去：{e}"));
+                            log::log(&format!("browser: 扩展操作（{what}）没发出去：{e}"));
                         }
                     }
                     Err(e) => {
-                        let _ = tx.send(Err(format!("这个 WebView2 版本不支持插件（{e}）")));
+                        let _ = tx.send(Err(format!("这个 WebView2 版本不支持扩展（{e}）")));
                     }
                 }
             }
             #[cfg(not(windows))]
             {
                 let _ = (platform, op, what);
-                let _ = tx.send(Err("只有 Windows 支持浏览器插件".into()));
+                let _ = tx.send(Err("只有 Windows 支持扩展".into()));
             }
         })
         .map_err(|e| format!("浏览器不可用：{e}"))?;
@@ -426,9 +426,9 @@ fn describe(
     }
 }
 
-/// 浏览器里现在装着的插件。
+/// 浏览器里现在装着的扩展。
 async fn installed(webview: &Webview) -> Result<Vec<Installed>, String> {
-    profile_op(webview, "读插件", |profile, tx| {
+    profile_op(webview, "读扩展", |profile, tx| {
         #[cfg(windows)]
         unsafe {
             let handler = webview2_com::ProfileGetBrowserExtensionsCompletedHandler::create(
@@ -462,17 +462,17 @@ async fn installed(webview: &Webview) -> Result<Vec<Installed>, String> {
     .await
 }
 
-/// 装一个插件文件夹。
+/// 装一个扩展文件夹。
 async fn install(webview: &Webview, path: &str) -> Result<Installed, String> {
     let path = path.to_string();
-    let added = profile_op(webview, "装插件", move |profile, tx| {
+    let added = profile_op(webview, "装扩展", move |profile, tx| {
         #[cfg(windows)]
         unsafe {
             let handler = webview2_com::ProfileAddBrowserExtensionCompletedHandler::create(
                 Box::new(move |result, extension| {
                     let _ = tx.send(match (result, extension) {
                         (Ok(()), Some(extension)) => Ok(vec![describe(&extension)]),
-                        (Ok(()), None) => Err("浏览器没有交回插件".into()),
+                        (Ok(()), None) => Err("浏览器没有交回扩展".into()),
                         (Err(e), _) => Err(e.message().to_string()),
                     });
                     Ok(())
@@ -490,15 +490,15 @@ async fn install(webview: &Webview, path: &str) -> Result<Installed, String> {
     })
     .await
     .map_err(|e| {
-        format!("插件装不上（{e}）：WebView2 只支持已解压的 Chrome / Edge 插件，部分插件接口不支持")
+        format!("扩展装不上（{e}）：WebView2 只支持已解压的 Chrome / Edge 扩展，部分扩展接口不支持")
     })?;
     added
         .into_iter()
         .next()
-        .ok_or_else(|| "浏览器没有交回插件".to_string())
+        .ok_or_else(|| "浏览器没有交回扩展".to_string())
 }
 
-/// 对浏览器里某个插件做一件事（卸掉 / 开关）：先按 id 找到它。
+/// 对浏览器里某个扩展做一件事（卸掉 / 开关）：先按 id 找到它。
 async fn with_extension(
     webview: &Webview,
     what: &'static str,
@@ -523,7 +523,7 @@ async fn with_extension(
                         let _ = tx.send(if enabled.is_none() {
                             Ok(Vec::new())
                         } else {
-                            Err("浏览器里没有这个插件".into())
+                            Err("浏览器里没有这个扩展".into())
                         });
                         return Ok(());
                     };
@@ -556,7 +556,7 @@ async fn with_extension(
                         }
                     };
                     if let Err(e) = sent {
-                        log::log(&format!("browser: 插件操作没发出去：{e}"));
+                        log::log(&format!("browser: 扩展操作没发出去：{e}"));
                     }
                     Ok(())
                 }),
@@ -576,11 +576,11 @@ async fn with_extension(
 }
 
 async fn uninstall(webview: &Webview, id: &str) -> Result<(), String> {
-    with_extension(webview, "卸插件", id, None).await
+    with_extension(webview, "卸扩展", id, None).await
 }
 
 async fn enable(webview: &Webview, id: &str, enabled: bool) -> Result<(), String> {
-    with_extension(webview, "开关插件", id, Some(enabled)).await
+    with_extension(webview, "开关扩展", id, Some(enabled)).await
 }
 
 #[cfg(test)]
@@ -615,6 +615,7 @@ mod tests {
                 entry("same", Some("edge-same"), true),
             ],
             pending_uninstall: vec!["edge-removed".into(), "edge-never-installed".into()],
+            ..Default::default()
         };
         let browser = [
             present("edge-pdf-viewer", true), // WebView2 自带的：不碰
@@ -634,6 +635,7 @@ mod tests {
         let readded = BrowserConfig {
             extensions: vec![entry("same", Some("edge-same"), true)],
             pending_uninstall: vec!["edge-same".into()],
+            ..Default::default()
         };
         assert_eq!(plan_sync(&readded, &browser), SyncPlan::default());
     }

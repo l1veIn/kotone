@@ -194,6 +194,11 @@ export interface Settings {
   /** 内置琴音 Agent（config.json `agent` 段；旧配置没有这一段时后端按默认补齐）。 */
   agent?: AgentConfig;
   /**
+   * 内置浏览器（ADR 031；「设置 → 浏览器」，ADR 038）：`enabled` 是开关（新字段，旧配置没有时按开着读），
+   * `extensions` 是玩家加的扩展（只经 browser_extension_* 命令改）。
+   */
+  browser?: BrowserSettings;
+  /**
    * 插件（ADR 038）：每个插件一份，按插件 id。没写的项按插件清单的默认（旧的 `lol.enabled` 后端读进来时
    * 搬到 `plugins.lol.sources.client`；旧的 `voiceChat` 搬到 `plugins.game-voice`；旧的 `music`（音质、音量）
    * 搬到 `plugins.music.settings`）。
@@ -203,6 +208,19 @@ export interface Settings {
 
 export interface OcrConfig {
   activeModelId: string;
+}
+
+/** config.json 的 `browser` 段（Rust `BrowserConfig`）。 */
+export interface BrowserSettings {
+  /** 内置浏览器开着没有（默认开）。关着时右侧栏没有“网页”，她也没有 `browser.*`。 */
+  enabled: boolean;
+  extensions?: { id: string; path: string; name: string; enabled: boolean; installedId?: string }[];
+  pendingUninstall?: string[];
+}
+
+/** 内置浏览器开着没有：旧配置没有这个字段时按开着（和后端一样）。 */
+export function browserEnabled(settings: Pick<Settings, "browser"> | null | undefined): boolean {
+  return settings?.browser?.enabled !== false;
 }
 
 export interface AssistantBindings {

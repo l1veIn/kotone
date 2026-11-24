@@ -26,7 +26,7 @@ export const ADVANCED_TABS: Record<string, string> = {
   // i18n-ignore-start：设置位置的词：要和后端 settings_guide.rs 写的位置一字不差（玩家点“去看看”时据此跳转），不是界面文字
   "怎么叫她": "call", "她怎么回答": "reply", "权限": "permissions", "用量": "usage",
   "模型": "models", "API 连接": "connections", "声音": "sound", "调参": "tuning", "外观": "appearance", "系统": "system",
-  "插件": "plugins",
+  "浏览器": "browser", "插件": "plugins",
   // 旧写法
   "音效": "sound",
 };

@@ -83,6 +83,22 @@ pub(super) fn offered_automations(
         .collect()
 }
 
+/// 她的全部工具（一段对话开始时定下清单，ADR 024）。玩家在设置里关了内置浏览器（`browser.enabled`，
+/// ADR 038）时没有 `browser.*`；关之前就开始的对话再调用时回“内置浏览器关着”。
+pub(super) fn her_catalog(
+    settings: &kotone_core::settings::Settings,
+    specs: &[Value],
+    automations: &[kotone_core::automation::library::Automation],
+    plugins: &[kotone_plugin_api::Offer],
+) -> Catalog {
+    let catalog = Catalog::build(specs, automations, plugins);
+    if settings.browser.enabled {
+        catalog
+    } else {
+        catalog.without_browser()
+    }
+}
+
 /// 思考强度（DeepSeek）：语音入口的主会话默认不思考（ADR 029 §一：玩家本机实测开着思考
 /// “你能做什么”模型要 19.6 秒；Pipecat、xiaozhi 对 DeepSeek 也默认关掉），玩家在设置里明确选了
 /// 才按他选的；子会话和聊天窗口照旧（空 = 服务商默认）。
@@ -243,6 +259,42 @@ pub(super) fn is_stop_command(text: &str, name: &str) -> bool {
 mod tests {
     use super::*;
     use crate::agent::test_util::*;
+
+    /// 设置里关了内置浏览器（ADR 038）：她的清单（主会话和后台）里没有 `browser.*`，调用回“关着”；开着照旧。
+    #[test]
+    fn browser_switch_decides_whether_she_gets_browser_tools() {
+        let mut settings = kotone_core::settings::Settings::default();
+        assert!(settings.browser.enabled);
+        let on = her_catalog(&settings, &[], &[], &[]);
+        for name in kotone_agent::browser::TOOLS {
+            let entry = on.get(name).unwrap_or_else(|| panic!("开着时有 {name}"));
+            assert!(
+                kotone_agent::catalog::subagent_offers(entry),
+                "后台有 {name}"
+            );
+        }
+        settings.browser.enabled = false;
+        let off = her_catalog(&settings, &[], &[], &[]);
+        let offered: Vec<&str> = off
+            .entries()
+            .iter()
+            .filter(|e| {
+                kotone_agent::catalog::subagent_offers(e) || kotone_agent::catalog::main_offers(e)
+            })
+            .map(|e| e.name.as_str())
+            .collect();
+        assert!(
+            !offered.iter().any(|n| n.starts_with("browser.")),
+            "{offered:?}"
+        );
+        assert!(offered.contains(&"shell.run"), "别的后台工具照旧");
+        assert_eq!(
+            off.switched_off("browser.snapshot"),
+            Some(kotone_agent::browser::OFF)
+        );
+        assert!(capability_overview(&on).contains("browser.open"));
+        assert!(!capability_overview(&off).contains("browser."));
+    }
 
     #[test]
     fn chat_window_text_is_chat_everything_else_is_in_game() {

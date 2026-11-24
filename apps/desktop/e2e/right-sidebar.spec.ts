@@ -1,4 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
+import { join } from "node:path";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { openSettingsTab } from "./nav";
 
 // 聊天页右侧栏（ADR 031，照 DeepSeek Harness 桌面版与 Codex 内置浏览器）：标签“卡片”（网页卡片 + 后台在做的事，
@@ -23,6 +24,8 @@ declare global {
 
 const T = 1_800_000_000_000;
 const SHOTS = process.env.KOTONE_SIDEBAR_SHOTS;
+/** 插件重构第 7 步的截图（实现记录用）：仓库的 target/plugin-shots/step7/；testDir 是 apps/desktop/e2e。 */
+const step7 = (testInfo: TestInfo, name: string) => join(testInfo.project.testDir, "..", "..", "..", "target", "plugin-shots", "step7", `${name}.png`);
 const MUSIC_TAB = {
   id: "t-music", url: "https://music.163.com/#/song?id=186016", title: "晴天 - 周杰伦 - 单曲 - 网易云音乐", site: "music.163.com",
   loading: false, canGoBack: true, canGoForward: false, audible: true, agent: true, fullscreenElement: false,
@@ -553,9 +556,12 @@ test("fullscreen fills the window (button, Esc) and follows the page's own fulls
 test("settings: browser extensions — add an unpacked folder, turn it off, remove it", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 860 });
   await openChat(page);
-  await openSettingsTab(page, "permissions");
+  await openSettingsTab(page, "browser");
   const section = page.getByTestId("browser-extensions-settings");
-  await expect(section).toContainText("只支持已解压的插件文件夹（Chrome / Edge 插件格式）");
+  // 浏览器里装的叫“扩展”，不叫插件（插件是她身上的本事，ADR 038；docs/glossary.md）
+  await expect(section.getByRole("heading")).toHaveText("扩展");
+  await expect(section).toContainText("只支持已解压的扩展文件夹");
+  await expect(section).not.toContainText("插件");
   await expect(section.getByTestId("browser-extensions-empty")).toBeVisible();
   // 选文件夹（对话框）→ 加进去
   await section.getByTestId("browser-extension-add").click();
@@ -575,7 +581,7 @@ test("settings: browser extensions — add an unpacked folder, turn it off, remo
 test("settings: clearing the browser login asks first", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 860 });
   await openChat(page);
-  await openSettingsTab(page, "permissions");
+  await openSettingsTab(page, "browser");
   const section = page.getByTestId("browser-data-settings");
   await expect(section).toContainText("内置浏览器");
   await section.getByTestId("browser-clear-data").click();
@@ -584,4 +590,67 @@ test("settings: clearing the browser login asks first", async ({ page }) => {
   await page.getByTestId("browser-clear-confirm").click();
   await expect(page.getByTestId("browser-clear-dialog")).toHaveCount(0);
   expect(await calls(page, "browser_clear_data")).toEqual([{}]);
+});
+
+test("settings: the browser has its own section; switching it off hides the web tab and saves browser.enabled", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 860 });
+  await openChat(page);
+  await page.evaluate((s) => window.sidebarTest.browser(s), PLAYING);
+  await expect(page.getByTestId("sidebar-tab-web")).toBeVisible();
+  await expect(page.getByTestId("sidebar-browser-card")).toHaveAttribute("data-browser-state", "open");
+  await page.getByTestId("sidebar-tab-web").click();
+  await expect.poll(async () => (await lastBounds(page))?.visible).toBe(true);
+
+  // 权限页不再放浏览器的东西；「设置 → 浏览器」（通用组，插件前面）：开关在最上面，下面是清除登录、扩展
+  await openSettingsTab(page, "permissions");
+  await expect(page.getByTestId("browser-data-settings")).toHaveCount(0);
+  await openSettingsTab(page, "browser");
+  const nav = page.getByTestId("advanced-nav-browser");
+  await expect(nav).toHaveText("浏览器");
+  const tabs = await page.locator('[data-testid^="advanced-nav-"]').evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
+  expect(tabs.indexOf("advanced-nav-browser")).toBe(tabs.indexOf("advanced-nav-plugins") - 1);
+  const settings = page.getByTestId("settings-browser");
+  const toggle = settings.getByTestId("browser-enabled");
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await expect(settings.getByTestId("browser-data-settings")).toContainText("关掉后右侧栏不再有“网页”");
+  const switchBox = (await toggle.boundingBox())!;
+  const clearBox = (await settings.getByTestId("browser-clear-data").boundingBox())!;
+  const extensionsBox = (await settings.getByTestId("browser-extensions-settings").boundingBox())!;
+  expect(switchBox.y).toBeLessThan(clearBox.y);
+  expect(clearBox.y).toBeLessThan(extensionsBox.y);
+  await expect(settings.getByTestId("browser-extensions-settings").getByRole("heading")).toHaveText("扩展");
+  await expect(settings).not.toContainText("插件");
+  await page.mouse.move(0, 0);
+  await page.screenshot({ path: step7(testInfo, "browser-settings"), animations: "disabled" });
+
+  // 关掉：存成 browser.enabled = false
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  const saved = () => page.evaluate(async () => {
+    const mock = await import("/src/lib/ipc/browserMock.ts");
+    return (await mock.getSettings()).browser?.enabled;
+  });
+  await expect.poll(saved).toBe(false);
+
+  // 回到聊天：右侧栏没有“网页”标签和网页卡片，网页不摆出来（停在“网页”标签上的也回到“卡片”）
+  await page.getByTestId("sidebar-conversations").getByTestId("agent-conversation").first().click();
+  await expect(page.getByTestId("right-sidebar")).toBeVisible();
+  await expect(page.getByTestId("sidebar-tab-web")).toHaveCount(0);
+  await expect(page.getByTestId("sidebar-browser-card")).toHaveCount(0);
+  await expect(page.getByTestId("browser-panel")).toHaveCount(0);
+  await expect(page.getByTestId("right-sidebar")).toHaveAttribute("data-tab", "cards");
+  await expect.poll(async () => (await lastBounds(page))?.visible).toBe(false);
+  // 要玩家登录的事件也不再把右侧栏切到网页
+  await page.evaluate(() => window.sidebarTest.browser({ handover: { reason: "网易云要登录一下" } }));
+  await expect(page.getByTestId("right-sidebar")).toHaveAttribute("data-tab", "cards");
+  await expect(page.getByTestId("browser-handover")).toHaveCount(0);
+
+  // 再打开：都回来
+  await openSettingsTab(page, "browser");
+  await page.getByTestId("browser-enabled").click();
+  await expect.poll(saved).toBe(true);
+  await page.getByTestId("sidebar-conversations").getByTestId("agent-conversation").first().click();
+  await expect(page.getByTestId("sidebar-tab-web")).toBeVisible();
+  await page.getByTestId("sidebar-tab-cards").click();
+  await expect(page.getByTestId("sidebar-browser-card")).toBeVisible();
 });

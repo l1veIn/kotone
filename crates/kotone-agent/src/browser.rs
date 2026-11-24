@@ -45,6 +45,11 @@ pub fn is_browser_tool(name: &str) -> bool {
     TOOLS.contains(&name)
 }
 
+/// 玩家在设置里关了内置浏览器（`browser.enabled = false`，ADR 038）时，`browser.*` 的回答
+/// （关之前就开始的对话里清单还留着它们，见 [`crate::catalog::Catalog::without_browser`]）。
+pub const OFF: &str =
+    "内置浏览器关着（设置 → 浏览器），现在打不开网页；要用的话请玩家在那里打开，不要再调用 browser.*。";
+
 /// 一次读页面最多交给模型多少字（照 ego 的约 2.4 万字，`more` 接着读）。
 pub const SNAPSHOT_PAGE_CHARS: usize = 24_000;
 
@@ -1552,5 +1557,6 @@ mod tests {
         assert!(is_browser_tool("browser.open"));
         assert!(!is_browser_tool("music"));
         assert!(!is_browser_tool("shell.run"));
+        assert!(OFF.contains("内置浏览器关着（设置 → 浏览器）"));
     }
 }

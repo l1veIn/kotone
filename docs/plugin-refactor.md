@@ -594,3 +594,10 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 2. 两把输入锁（`computer_use::busy` 和 `automation::program_running` 互相查）合成本体的一把锁（顺带堵一个小竞态）；
 3. 一次提交搬过去（不能搬一半）：`kotone-script` → `plugins/key-programs/src/script/`（测试不改）、`program.rs` 改成用宿主给的句柄；插件清单不写 `[agent]`（她的提示词不变）；两个内部工具 `key_programs.run`、`key_programs.check`；
 4. 要玩家定的（看得见的）：关掉“按键程序”会怎样（程序类的自动化、内置宏、`saved.*`、快捷指令是拒绝并说明、还是消失、还是根本没有开关）；内置宏挪到插件页面，还是两边都有；程序编辑器留在自动化的编辑器里吗；每个游戏的“允许程序按键”留在游戏配置里（推荐：它也挡她的 `game.act`）。
+
+### 第 7 步（部分）：插件边界的测试、设置里的“浏览器”一节（2026-11-24）
+
+- `95e526d4`：**插件的边界写成测试**（`crates/kotone-plugin-api/tests/boundaries.rs`）：读 `plugins/*/Cargo.toml`，本体里只许依赖 `kotone-plugin-api`、`kotone-core`、`kotone-platform-windows`；不许 Tauri、别的 `kotone-*`、别的插件；插件源码里不出现 `hotkey_ll`、`input_gate`、`SetWindowsHookEx`。另有一个测试确认规则真能抓到违反。
+- **设置里的“浏览器”一节**（玩家选的：开关放设置，不做成插件卡片）：“设置 → 浏览器”在“插件”前面：使用内置浏览器（`browser.enabled`，新字段，默认开；旧配置读成开）、清除浏览器登录、扩展（从“权限”页挪过来）。关掉以后：右侧栏没有“网页”、开着的网页关掉、不再建新网页；她从下一段对话起没有 `browser.*`（`Catalog::without_browser()`，在桌面端按设置过滤；旧对话里再调会说“内置浏览器关着（设置 → 浏览器）”）；登录过的账号和扩展都留着，再打开就回来。界面上的“浏览器插件”都改叫“扩展”（术语表加了“内置浏览器 / 网页”“扩展”，`浏览器插件` 列为禁用说法）。她也能用 `settings.update` 开关它（和别的设置一样先问玩家）；扩展只有玩家自己能加、删。截图：`target/plugin-shots/step7/browser-settings.png`。
+  - 检查：`kotone-core` 309、`kotone-agent` 79、桌面端 111 + 编排 84、`kotone-tools` 111；clippy 干净；svelte-check 0 / 0；Playwright 165；真机：`browser_probe_real.py --minimized` 13/13、`lol_tools_real.py --while-playing` 32/32、`game_events_real.py` 12/12。
+- **还没做的**：英雄联盟的事件目录由插件登记（现在是 `kotone-core/src/games.rs` 里的常量，本体的校验和测试都在用，要先有“插件登记事件”的机制）；设置页只剩本体（语音输入、按键程序的设置跟着第 5、6 步走）；同意过的网站还没有界面。

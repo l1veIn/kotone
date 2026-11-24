@@ -132,7 +132,7 @@ struct Inner<V = Webview> {
     notice: Option<String>,
     bounds: Bounds,
     next_id: u64,
-    /// 这次运行里插件和 WebView2 对过一遍没有（第一个标签页建好时对一次）。
+    /// 这次运行里扩展和 WebView2 对过一遍没有（第一个标签页建好时对一次）。
     extensions_synced: bool,
     /// 上一次发出去的状态（有变化才发事件）。
     last: BrowserState,
@@ -278,6 +278,22 @@ fn runtime(app: &AppHandle) -> Option<tauri::State<'_, BrowserRuntime>> {
     app.try_state::<BrowserRuntime>()
 }
 
+/// 玩家在设置里开着内置浏览器没有（设置 → 浏览器，ADR 038；默认开）。
+fn enabled(app: &AppHandle) -> bool {
+    app.try_state::<crate::SharedState>()
+        .map_or(true, |s| s.settings.read().unwrap().browser.enabled)
+}
+
+/// 设置里刚关掉内置浏览器：关掉所有标签页（右侧栏的“网页”跟着设置收起来）。动网页视图不能在同步命令
+/// （主线程的 IPC 回调）里做，交给后台。
+pub fn switched_off(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        close(&app);
+        log::log("browser: 设置里关了内置浏览器，标签页都关掉了");
+    });
+}
+
 pub fn data_dir() -> std::path::PathBuf {
     kotone_core::settings::kotone_dir().join("browser")
 }
@@ -385,10 +401,20 @@ async fn create_tab(
     url: Option<url::Url>,
     select: bool,
 ) -> Result<String, String> {
+    // 设置里关着（ADR 038）：不建网页视图（玩家、她、网页里的新窗口都一样）
+    const OFF: &str = "内置浏览器关着（设置 → 浏览器）";
+    if !enabled(app) {
+        return Err(OFF.into());
+    }
     let rt = runtime(app).ok_or("浏览器还没准备好")?;
     let _guard = rt.create.lock().await;
     let id = rt.inner.lock().unwrap().reserve()?;
     let webview = view::create(app, &id).await?;
+    // 建的时候玩家刚好关了：不留下
+    if !enabled(app) {
+        let _ = webview.close();
+        return Err(OFF.into());
+    }
     let mut first = false;
     update(app, |inner| {
         inner.insert(&id, webview.clone(), agent, select);
