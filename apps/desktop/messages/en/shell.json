@@ -86,7 +86,7 @@
   "shell_titlebar_asr_restart": "Restart with new settings",
   "shell_titlebar_asr_retry": "Try starting again",
   "shell_titlebar_asr_start": "Start local speech recognition",
-  "shell_titlebar_voice_settings": "Go to voice input settings",
+  "shell_titlebar_asr_settings": "Speech recognition settings",
   "shell_titlebar_resource_title": "Kotone process resource usage",
   "shell_titlebar_minimize": "Minimize",
   "shell_titlebar_restore": "Restore",

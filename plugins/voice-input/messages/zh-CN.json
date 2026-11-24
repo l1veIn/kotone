@@ -2,4 +2,14 @@
   "plugin_voice_input_name": "语音输入",
   "plugin_voice_input_description": "按住语音输入热键说话，说的话打进游戏聊天框（可以先过屏蔽词、润色、翻译）",
   "plugin_voice_input_off_note": "打开以后，按语音输入热键说话，说的话就打进游戏聊天框。关着时呼叫她、唤醒词照常能用，她也照样能替你在聊天框发言。",
+  "plugin_voice_input_asr_title": "语音识别",
+  "plugin_voice_input_asr_desc": "说的话由 Kotone 的语音识别变成字，呼叫她时也用这一个。换模型、下载、启动都在设置里。",
+  "plugin_voice_input_asr_local": "本地",
+  "plugin_voice_input_asr_online": "在线",
+  "plugin_voice_input_asr_online_ready": "打开 Kotone 就能用",
+  "plugin_voice_input_asr_preparing": "正在准备…",
+  "plugin_voice_input_asr_online_error": "没准备好：{error}",
+  "plugin_voice_input_asr_not_downloaded": "本地模型还没下载",
+  "plugin_voice_input_asr_local_error": "{label}：{error}",
+  "plugin_voice_input_asr_open_models": "去 设置 → 模型 换"
 }

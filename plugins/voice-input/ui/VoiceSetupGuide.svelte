@@ -141,7 +141,7 @@
       }
       await downloadModel(model.id);
       models = models.map((m) => (m.id === model.id ? { ...m, downloaded: true } : m));
-      // 换成本地识别：选中它，并默认“打开 Kotone 时自动启动”（D9，可在识别卡片里取消）。
+      // 换成本地识别：选中它，并默认“打开 Kotone 时自动启动”（D9，可在「设置 → 模型 → 语音识别」里取消）。
       await setActiveModel(model.engineId, model.id);
       settingsStore.set(await updateSettings({ ui: { autoStart: true } }));
       toast(true, m.voice_guide_model_downloaded());

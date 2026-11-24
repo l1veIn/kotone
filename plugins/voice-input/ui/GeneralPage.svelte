@@ -1,6 +1,6 @@
 <script lang="ts">
   /*
-   * 语音输入 · 输入（ADR 028 W8 / W9，页面 ID 仍是 general）：语音识别卡片（在线 / 本地与启动）、
+   * 语音输入 · 输入（ADR 028 W8 / W9，页面 ID 仍是 general）：语音识别卡片（只显示现在用的，换和启动在「设置 → 模型」）、
    * 语音输入热键、交互模式、悬浮窗、其他热键。说话、原话打进游戏聊天框，不经过角色（Agent）。
    * 麦克风搬到「设置 → 声音」，游戏在「游戏列表」——这里只显示一行共享设置。
    */
@@ -285,7 +285,7 @@
       </section>
     {/if}
 
-    <AsrCard {onOpenModels} {onConfigure} />
+    <AsrCard {onOpenModels} />
 
     <div id="voice-hotkey" class="scroll-mt-16">
     <SettingsSection title={m.voice_hotkey_name_record()}>

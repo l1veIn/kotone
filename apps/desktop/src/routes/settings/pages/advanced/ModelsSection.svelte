@@ -21,6 +21,7 @@
     isDownloadCancelled,
     isTauri,
     startRuntime,
+    updateSettings,
     type DownloadProgress,
     type EngineInfo,
     type ConnectionInfo,
@@ -32,6 +33,7 @@
   import { runtimeStore } from "../../../../lib/stores/runtime";
   import ManualDownloadDialog from "../../../../lib/components/ManualDownloadDialog.svelte";
   import CatalogModelList from "./CatalogModelList.svelte";
+  import AsrRuntimeCard from "./AsrRuntimeCard.svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import { Button } from "$lib/components/ui/button";
@@ -270,8 +272,11 @@
   }
 
   async function onSetActive(engineId: string, modelId: string) {
+    // 从在线换成本地：后端立即启动一次，“打开 Kotone 时自动启动”默认勾上（D9；原来在语音输入页的识别卡片里做）
+    const onlineToLocal = $runtimeStore?.asrLocal === false && models.find((model) => model.id === modelId)?.backend !== "remote";
     try {
       await setActiveModel(engineId, modelId);
+      if (onlineToLocal && !$settingsStore?.ui.autoStart) settingsStore.set(await updateSettings({ ui: { autoStart: true } }));
       settingsStore.update((s) => {
         if (!s) return s;
         const next = structuredClone(s);
@@ -433,6 +438,10 @@
   {/each}
 </div>
 
+{#if category === "asr" && engines !== null && visibleModels.length > 0}
+  <AsrRuntimeCard models={visibleModels} />
+{/if}
+
 {#if category !== "asr"}
   {#key category}
     <CatalogModelList {category} />
@@ -459,6 +468,7 @@
             role="radio"
             aria-checked={isActive}
             tabindex="0"
+            data-testid="model-row-{model.id}"
             class="flex cursor-pointer items-center gap-2.5 rounded-xl border px-3 py-2.5 transition-colors
               {isActive
               ? 'border-primary/50 bg-primary/8'
@@ -528,7 +538,7 @@
             {/if}
           </div>
         {:else}
-          <div class="rounded-xl px-3 py-2.5">
+          <div class="rounded-xl px-3 py-2.5" data-testid="model-row-{model.id}">
             <div class="flex items-center gap-2.5">
               <span class="size-4 shrink-0 rounded-full border-2 border-muted-foreground/25"></span>
               <div class="min-w-0 flex-1">
@@ -541,6 +551,7 @@
                 variant="outline"
                 size="xs"
                 disabled={downloadingAny}
+                data-testid="model-download-{model.id}"
                 onclick={() => void onDownload(model.id)}
               >
                 {model.id in dlProgress ? m.system_catalog_downloading() : m.system_catalog_download_button()}

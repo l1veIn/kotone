@@ -86,7 +86,7 @@
   "shell_titlebar_asr_restart": "按新设置重新启动",
   "shell_titlebar_asr_retry": "重试启动",
   "shell_titlebar_asr_start": "启动本地语音识别",
-  "shell_titlebar_voice_settings": "去语音输入设置",
+  "shell_titlebar_asr_settings": "语音识别设置",
   "shell_titlebar_resource_title": "Kotone 进程资源占用",
   "shell_titlebar_minimize": "最小化",
   "shell_titlebar_restore": "还原",

@@ -3,7 +3,7 @@
    * 自绘标题栏（main 窗 decorations:false，高 40px，与侧边栏同底色，参照 DeepSeek Harness 的
    * Windows 标题行）：
    * - 左：侧边栏开关 + Kotone 图标与名称；只有用本地语音识别时才有状态胶囊
-   *   （未启动 / 准备中 / 已启动 / 出问题了，点开是 启动 / 停止 / 去语音输入设置，ADR 028）；
+   *   （未启动 / 准备中 / 已启动 / 出问题了，点开是 启动 / 停止 / 语音识别设置，ADR 028；设置在「设置 → 模型 → 语音识别」）；
    *   在线识别打开就能用，这里什么都不显示；
    * - 右：运行中的 CPU / 内存（2s 轮询）+ 最小化 / 最大化（还原）/ 关闭；
    * - 非按钮区按下拖动窗口，双击切换最大化；
@@ -22,9 +22,9 @@
   import iconSrc from "../../assets/brand/icon-src.webp";
   import { m } from "$lib/paraglide/messages.js";
 
-  let { onOpenVoiceInput, onToggleSidebar, brandWidth }: {
-    /** 状态胶囊菜单里的「去语音输入设置」。 */
-    onOpenVoiceInput: () => void;
+  let { onOpenAsrSettings, onToggleSidebar, brandWidth }: {
+    /** 状态胶囊菜单里的「语音识别设置」：设置 → 模型 → 语音识别（语音识别归本体，交接第十一节第 6 条）。 */
+    onOpenAsrSettings: () => void;
     onToggleSidebar: () => void;
     /** 品牌区宽度（与侧边栏对齐；侧边栏收起时只留开关）。 */
     brandWidth: string;
@@ -188,7 +188,7 @@
             <p class="m-0 px-2 py-1.5 text-[11px] leading-relaxed text-destructive">{rt.error}</p>
           {/if}
           <Menu.DropdownMenuSeparator />
-          <Menu.DropdownMenuItem data-testid="titlebar-asr-settings" onSelect={onOpenVoiceInput}>{m.shell_titlebar_voice_settings()}</Menu.DropdownMenuItem>
+          <Menu.DropdownMenuItem data-testid="titlebar-asr-settings" onSelect={onOpenAsrSettings}>{m.shell_titlebar_asr_settings()}</Menu.DropdownMenuItem>
         </Menu.DropdownMenuContent>
       </Menu.DropdownMenu>
     {/if}
