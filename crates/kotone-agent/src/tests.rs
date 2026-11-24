@@ -109,6 +109,24 @@ impl BuiltinHost for FakeBuiltin {
             .push(("chat".into(), json!({"text": text, "send": send})));
         Ok(json!({"id": "run-2", "sent": true}))
     }
+
+    async fn plugin(
+        &self,
+        tool: &str,
+        arguments: &Value,
+    ) -> Result<kotone_plugin_api::ToolResult, String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(("plugin".into(), json!({"tool": tool, "args": arguments})));
+        Ok(kotone_plugin_api::ToolResult::content(
+            json!({"status": "ok", "text": "对面寒冰五连败"}),
+        )
+        .with_page(
+            "ui://kotone/lol/match",
+            json!({"players": ["很长的页面数据"]}),
+        ))
+    }
 }
 
 struct FakeAsker {
@@ -178,7 +196,7 @@ fn fixture(policy: Policy, answer: Answer) -> Fixture {
         },
         Some(json!(1)),
     );
-    let catalog = Catalog::build(&specs, &[saved("auto-1", vec![interval])]);
+    let catalog = Catalog::build(&specs, &[saved("auto-1", vec![interval])], &[]);
     let builtin = FakeBuiltin::default();
     let asker = FakeAsker::new(answer);
     let asked = asker.asked.clone();
@@ -628,6 +646,7 @@ fn prompt_is_one_text_for_both_entries_and_the_turn_context_carries_the_rest() {
         automations: &automations,
         workspace: None,
         capabilities: "",
+        plugin_rules: "",
     });
     // 两个入口的说明都在系统提示里（一段对话里不变，前缀缓存才命中）。
     assert!(prompt.contains("reply.ask") && prompt.contains("game.focus"));
@@ -674,7 +693,7 @@ fn capability_overview_names_only_real_tools_and_covers_every_group() {
     use crate::prompt::capability_overview;
     let (service, _host) = service();
     let specs = service.capabilities()["tools"].as_array().cloned().unwrap();
-    let catalog = Catalog::build(&specs, &[saved("auto-1", Vec::new())]);
+    let catalog = Catalog::build(&specs, &[saved("auto-1", Vec::new())], &[]);
     let overview = capability_overview(&catalog);
     assert!(overview.contains("## 你能做什么"));
     assert!(overview.contains("不要编") && overview.contains("下一步"));
@@ -720,6 +739,7 @@ fn capability_overview_names_only_real_tools_and_covers_every_group() {
         automations: &[],
         workspace: None,
         capabilities: &overview,
+        plugin_rules: "",
     });
     assert!(prompt.contains("## 你能做什么") && prompt.contains("game_chat.send"));
     assert!(prompt.find("## 你能做什么").unwrap() < prompt.find("## 两个入口").unwrap());
@@ -962,6 +982,7 @@ fn prompt_teaches_the_look_think_act_loop() {
         automations: &[],
         workspace: None,
         capabilities: "",
+        plugin_rules: "",
     });
     assert!(prompt.contains("game.look") && prompt.contains("game.act"));
     assert!(prompt.contains("不要重复"));
@@ -1007,7 +1028,7 @@ fn port_with(policy: Policy) -> (KotonePort<FakeBuiltin, FakeAsker>, FakeBuiltin
     let builtin = FakeBuiltin::default();
     let port = KotonePort::new(
         service,
-        Catalog::build(&specs, &[]),
+        Catalog::build(&specs, &[], &[]),
         policy,
         Arc::new(Session::default()),
         builtin.clone(),
@@ -1057,7 +1078,7 @@ async fn main_session_gets_the_instant_set_and_the_background_gets_the_rest() {
     use crate::catalog::{main_offers, subagent_offers, MAIN_TOOLS, SUBAGENT_EXCLUDED};
     let (service, _host) = service();
     let specs = service.capabilities()["tools"].as_array().cloned().unwrap();
-    let catalog = Catalog::build(&specs, &[saved("auto-1", Vec::new())]);
+    let catalog = Catalog::build(&specs, &[saved("auto-1", Vec::new())], &[]);
     // 主会话清单里的每个名字都真实存在。
     for name in MAIN_TOOLS {
         assert!(
@@ -1157,6 +1178,7 @@ fn prompt_carries_soul_memory_game_memory_and_skills_and_child_prompt_is_minimal
         automations: &[],
         workspace: Some(&snap),
         capabilities: "",
+        plugin_rules: "",
     });
     for text in [
         "星野",
@@ -1207,7 +1229,7 @@ async fn exec_tools_are_background_only_and_never_in_the_tool_service() {
             "{name} 不能出现在工具服务里"
         );
     }
-    let catalog = Catalog::build(&specs, &[]);
+    let catalog = Catalog::build(&specs, &[], &[]);
     for name in kotone_exec::TOOLS {
         let entry = catalog
             .get(name)
@@ -1332,7 +1354,7 @@ async fn exec_tools_without_a_desktop_are_unavailable() {
     let specs = service.capabilities()["tools"].as_array().cloned().unwrap();
     let port = KotonePort::new(
         service,
-        Catalog::build(&specs, &[]),
+        Catalog::build(&specs, &[], &[]),
         Policy::default(),
         Arc::new(Session::default()),
         NoDesktop,
@@ -1350,5 +1372,130 @@ async fn exec_tools_without_a_desktop_are_unavailable() {
         out.is_error && out.content.contains("不可用"),
         "{}",
         out.content
+    );
+}
+
+/// ADR 038：开着的插件给她的工具从插件来（不在 kotone-agent 里写死）。马上返回的主会话也拿，
+/// 只给页面的不进她的清单；系统提示里有插件的“工作方式”和能力概览；工具服务里的同名工具（给外部 Agent）
+/// 不会重复。
+#[tokio::test]
+async fn plugin_tools_come_from_the_plugin_offer() {
+    use crate::catalog::{main_offers, subagent_offers, Source};
+    use kotone_plugin_api::{AgentText, Offer, ToolSpec};
+    let (service, _host) = service();
+    let mut specs = service.capabilities()["tools"].as_array().cloned().unwrap();
+    let scout = ToolSpec::new(
+        "lol.scout",
+        "查战绩",
+        json!({"type": "object", "properties": {}}),
+    )
+    .instant()
+    .untrusted();
+    let slow = ToolSpec::new("lol.tier", "强度榜", json!({"type": "object"}));
+    let page_only =
+        ToolSpec::new("lol.history_page", "翻战绩", json!({"type": "object"})).app_only();
+    // 工具服务里也有（给外部 Agent）
+    specs.push(scout.service_spec("lol"));
+    let offer = Offer {
+        plugin: "lol".into(),
+        name: "英雄联盟".into(),
+        text: AgentText {
+            overview: "英雄联盟里查这局玩家的战绩".into(),
+            rule: "- 英雄联盟：查战绩用 lol.scout。".into(),
+        },
+        tools: vec![scout, slow, page_only],
+    };
+    let catalog = Catalog::build(&specs, &[], &[offer]);
+    let scout = catalog.get("lol.scout").unwrap();
+    assert_eq!(
+        catalog
+            .entries()
+            .iter()
+            .filter(|e| e.name == "lol.scout")
+            .count(),
+        1,
+        "工具服务里的那份不重复"
+    );
+    assert_eq!(
+        scout.source,
+        Source::Plugin {
+            plugin: "lol".into(),
+            instant: true
+        }
+    );
+    assert!(scout.untrusted && scout.group == "game");
+    assert!(main_offers(scout) && subagent_offers(scout));
+    let tier = catalog.get("lol.tier").unwrap();
+    assert!(
+        !main_offers(tier) && subagent_offers(tier),
+        "不马上返回的只给后台"
+    );
+    assert!(
+        catalog.get("lol.history_page").is_none(),
+        "只给页面的不给她"
+    );
+
+    assert_eq!(catalog.plugin_rules(), "- 英雄联盟：查战绩用 lol.scout。\n");
+    let overview = crate::prompt::capability_overview(&catalog);
+    assert!(
+        overview.contains("- 英雄联盟里查这局玩家的战绩（英雄联盟插件：lol.scout、lol.tier）"),
+        "{overview}"
+    );
+    let rules = catalog.plugin_rules();
+    let prompt = system_prompt(&PromptContext {
+        automations: &[],
+        workspace: None,
+        capabilities: &overview,
+        plugin_rules: &rules,
+    });
+    let rule_at = prompt.find("- 英雄联盟：查战绩").unwrap();
+    assert!(rule_at < prompt.find("## 你能做什么").unwrap());
+
+    // 插件关着：什么都没有
+    let none = Catalog::build(&specs, &[], &[]);
+    assert!(none.get("lol.scout").is_none() && none.plugins().is_empty());
+    assert!(!crate::prompt::capability_overview(&none).contains("英雄联盟"));
+}
+
+/// 插件的工具经端口交给桌面（BuiltinHost::plugin）；只有 content 进她的上下文，页面的数据不进；按不可信数据交给她。
+#[tokio::test]
+async fn plugin_tool_calls_give_her_only_the_content() {
+    use kotone_plugin_api::{AgentText, Offer, ToolSpec};
+    let (service, _host) = service();
+    let specs = service.capabilities()["tools"].as_array().cloned().unwrap();
+    let offer = Offer {
+        plugin: "lol".into(),
+        name: "英雄联盟".into(),
+        text: AgentText::default(),
+        tools: vec![ToolSpec::new(
+            "lol.scout",
+            "查战绩",
+            json!({"type": "object", "properties": {"player": {"type": "string"}}}),
+        )
+        .instant()
+        .untrusted()],
+    };
+    let catalog = Catalog::build(&specs, &[], &[offer]);
+    let builtin = FakeBuiltin::default();
+    let port = KotonePort::new(
+        service,
+        catalog,
+        Policy::default(),
+        Arc::new(Session::default()),
+        builtin.clone(),
+        FakeAsker::new(Answer::Deny),
+    );
+    let out = call(&port, "lol.scout", json!({"player": "寒冰"})).await;
+    assert!(!out.is_error, "{}", out.content);
+    assert!(out.untrusted);
+    assert!(out.content.contains("对面寒冰五连败"));
+    assert!(!out.content.contains("很长的页面数据"));
+    let calls = builtin.calls.lock().unwrap().clone();
+    assert_eq!(
+        calls,
+        vec![(
+            "plugin".to_string(),
+            json!({"tool": "lol.scout", "args": {"player": "寒冰"}})
+        )]
     );
 }

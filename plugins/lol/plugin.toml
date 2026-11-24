@@ -1,0 +1,29 @@
+# 英雄联盟插件（ADR 035、036、038）。清单的写法见 crates/kotone-plugin-api。
+# 界面上的文字以 messages/<语言>.json 为准（plugin_lol_*）；这里的中文给她（系统提示）、工具服务和设置说明用，
+# 两边要一致（tests::messages_match_the_manifest）。
+
+id = "lol"
+name = "英雄联盟"
+description = "这局 10 个人的战绩和突破口、记对面交的召唤师技能；只读本机的客户端和局内接口"
+games = ["lol"]
+adapter = "lol"
+enabled_by_default = true
+
+[[sources]]
+id = "client"
+name = "读客户端数据"
+description = "读英雄联盟客户端和对局里的本地接口（只读，不改任何东西）：查这局玩家的战绩、找对面的突破口、记对面交的召唤师技能；游戏中心靠它知道选英雄、加载、对局中这些阶段和局内的事。"
+enabled_by_default = true
+risk = "国服用这类功能可能违反腾讯的用户协议，LeagueAkari 等工具有封号、禁言的报告；Riot 也限制第三方的技能冷却计时。用不用由你决定。"
+
+[[pages]]
+uri = "ui://kotone/lol/settings"
+title = "设置"
+
+[agent]
+overview = "英雄联盟里查这局玩家的战绩和突破口、记对面交的召唤师技能"
+rule = """- 英雄联盟（读本机的客户端和局内接口，马上返回）：这局的样子、“谁没闪”“对面谁没带闪”用 lol.match；\
+玩家说“对面阿狸闪了”就用 lol.spell 记下（不用问），简短应一声几点好；“查战绩”“对面谁是突破口”用 lol.scout，\
+挑一两个最值得说的用信息的口吻说（“对面辅助最近五连败、劫最近没玩过”），不下命令，隐藏战绩的提一句。\
+玩家说了“发出去 / 发聊天框”才用 game_chat.send 发：技能发 lol.spell 返回的 chat 那句，战绩一条一行。
+"""

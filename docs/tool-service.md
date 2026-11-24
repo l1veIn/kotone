@@ -209,6 +209,23 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 
 **允许自动化输入**：游戏配置的 `allowAutomationInput`（缺省允许）为 `false` 时，`automation.run` 对这个游戏的程序执行会被拒绝（安排时检查，带延迟的到点时再检查一次）；玩家自己的语音打字不受影响。启动路径存在游戏配置的 `launchPath`。
 
+### 插件（委托桌面宿主，2026-11-24，[ADR 038](adr/038-kotone-and-apps.md)）
+
+插件（`plugins/<id>/`）的工具和本体的工具一起列在 `system.capabilities` 里，调用方式一样（MCP 里同样映射成 `kotone_<名字>`）。只列**开着的**插件、而且工具要的数据开关都开着的；开关在设置 `plugins.<id>`（`enabled`、`sources.<开关>`）。每个插件工具的说明多几个字段（照 MCP Apps）：
+
+- `plugin`：哪个插件；
+- `untrustedResult`：结果里有别人写的字（玩家名、聊天），只当数据；
+- `_meta.ui.visibility`：`["model", "app"]` = 给 Agent 也给插件自己的页面，`["app"]` = 只给页面用（翻页、详情、搜索）；
+- `_meta.ui.resourceUri`：结果用哪个页面显示（`ui://kotone/<插件>/<页面>`）。
+
+结果照 MCP 的工具结果：`{content, structuredContent?, _meta?: {ui: {resourceUri, params}}}`。`content` 是给 Agent 的（要短）；`structuredContent` 是给页面的数据。插件关着时调用返回 `TOOL_NOT_FOUND`。
+
+| 插件 | 工具 | 参数 | 结果要点 |
+| --- | --- | --- | --- |
+| 英雄联盟（`lol`，数据开关 `client` 读客户端数据） | `lol.match` | 无 | 这局现在的样子（模式、时间、比分、10 个人的英雄 / 技能 / KDA / 装备、对面谁闪没好、谁没带闪）。只读本机的局内接口 |
+| | `lol.spell` | `champion`、`spell`（缺省闪现）、`ago`、`clear` | 记下谁交了召唤师技能，返回几点好和一句能发到聊天框的 `chat` |
+| | `lol.scout` | `player`（可选） | 这局 10 个人最近 20 局的战绩、开黑、突破口。进加载界面就在后台查 |
+
 ### Kotone 陪玩（委托桌面宿主，2026-11-15）
 
 与用户按陪玩热键 / 快捷消息热键走的是**同一条流程、同一个实现**（[演进计划 §10](product-evolution-game-tools.md#10-kotone-陪玩2026-11-15-定稿)、[陪玩说明](assistant.md)）：截前台窗口 → 统一清单里选定的 OCR 模型 → 陪玩自己的聊天跟踪 + profile 说明 → 一次大模型调用，从提醒 / 帮忙打字 / 回答中选一种并执行。底层的截图、OCR、跟踪工具照常保留。

@@ -1,6 +1,6 @@
 # Kotone 插件重构计划（ADR 038）
 
-状态：计划（2026-11-24），还没开始。方向见 [ADR 038](adr/038-kotone-and-apps.md)（Accepted）。下一轮会话照这份做，做的时候把实际情况写回这里。
+状态：进行中（2026-11-24 起，分支 `claude/plugins`）。方向见 [ADR 038](adr/038-kotone-and-apps.md)（Accepted）。每一步的实际情况写在第九节“实现记录”。
 
 玩家定了方向，细节由 Claude 按 ADR 038 的原则定。每一步做完向玩家报两件事：本体删了多少行，玩家能看到什么变化。
 
@@ -328,3 +328,46 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
   - 外部 Agent 能单独调用它的工具。
 - **不是**：单独的程序。插件跑在 Kotone 里，用本体的能力（听、看、说、游戏中心）。
 - **以后**：通过 `kotone.exe mcp`，别的宿主（Claude Desktop 等）也能用某个插件、显示它的页面，前提是 Kotone 开着。
+
+## 九、实现记录
+
+基线：分支起点 `c8c0b8b4`（main，2026-11-24）。桌面端后端 72 个文件 29,002 行；`crates/` 108,336 行；设置页（`routes/settings` 下的 Svelte）12,420 行；中文文案 2,387 条。
+
+### 第 1 步：契约、插件注册、英雄联盟搬进 `plugins/lol/`（2026-11-24）
+
+**玩家能看到的**：
+
+- 左侧栏多了一组“插件”，里面是“英雄联盟”；点开是英雄联盟插件的页面（这一步只有“设置”：插件开关、“读客户端数据”开关和风险提示）。截图：`target/plugin-shots/step1/sidebar-plugins-group.png`、`lol-plugin-page.png`。
+- 设置 → 通用里多了“插件”：每个插件一张卡片（名字、说明、开关、数据开关和风险提示、“打开”）。截图：`target/plugin-shots/step1/settings-plugins.png`。
+- 游戏列表 → 英雄联盟：原来的“让她读这局的数据”变成英雄联盟插件提供的一节（同一个开关，改的是 `plugins.lol.sources.client`），旁边有“打开英雄联盟插件”。
+- 其余不变：她用这三个工具的方式、说的话一样（工具说明、参数、给她的那段“工作方式”逐字搬过去）。
+
+**本体少了多少**：
+
+| 量 | 之前 | 之后 |
+| --- | --- | --- |
+| 桌面端后端 | 72 个文件 29,002 行 | 73 个文件 28,520 行（删了 `lol.rs` 866 行，加了宿主 `plugins.rs` + `plugins_cmd.rs` 362 行） |
+| `crates/`（本体） | 108,336 行 | 106,547 行（`kotone-lol` 2,704 行搬出去；新的 `kotone-plugin-api` 576 行，含测试） |
+| `kotone-agent` 里写死的英雄联盟 | `lol.rs` 81 行 + `catalog.rs` / `prompt.rs` 里 3 处名单和一段提示 | 0（工具清单、能力概览、“工作方式”都从开着的插件来） |
+| 改一个英雄联盟工具要动的地方 | 8 处 | `plugins/lol/` 一个目录（工具定义在 `src/tools.rs`，实现在 `src/watcher.rs`，给她的话在 `plugin.toml`，界面在 `ui/`，文案在 `messages/`） |
+
+`plugins/lol/`：Rust 3,767 行（其中 `src/client/` 是原来的 `kotone-lol`），界面 100 行，文案 12 条。
+
+**定下来的细节**（ADR 038 D5 说“第一步实测时再定”的）：
+
+- **工具定义在插件的 Rust 代码里，不在 `plugin.toml`**：照 MCP 的 `tools/list`，`visibility`、页面（`resourceUri`）、要的数据开关（`needs`）、“马上返回”（`instant`，主会话也拿）、“结果不可信”和说明、参数写在一起（`ToolSpec`）。`plugin.toml` 只写插件这一级的：名字、说明、挂在哪些游戏上、适配器、数据开关和风险提示、页面、覆盖层、给她的两段话（`[agent] overview / rule`）。清单和代码对不上由 `Manifest::check_tools` 在测试和启动时查。
+- **她的工具清单**：宿主按开关算好每个插件给她的东西（`Offer`），`Catalog::build` 拼进来；一段对话开始时定下，之后不变（ADR 024）。插件关了或数据开关关了，下一段对话起工具就没了；一段对话中途关掉，调用时插件自己回答“已关闭”。
+- **工具服务、MCP**：开着的插件的工具列在 `system.capabilities` 里，带 `plugin`、`untrustedResult`、`_meta.ui`；调用经 `AppHost::invoke` 交给插件，结果照 MCP（`content` / `structuredContent` / `_meta.ui`）。`kotone.exe mcp` 不用改就有了。外部 Agent 的说明在 `docs/tool-service.md`“插件”一节。
+- **宿主给插件的**（`Host`）：插件开关、数据开关、自己的设置和目录、后台任务、按名字找进程和读命令行（英雄联盟的端口和令牌在这里）、往游戏中心报阶段和事件、给自己的页面发事件。插件不碰 Tauri，也不再直接依赖 `kotone-platform-windows`。
+- **配置迁移**：`lol.enabled` 读进来时搬到 `plugins.lol.sources.client`（已有新字段的不覆盖），之后不再写 `lol`。装回旧版时旧版读不到 `lol`，按默认“开”。
+- **文案**：插件的 `messages/<语言>.json` 加进 `project.inlang` 的 `pathPattern`（可以列别的目录，实测可行）；键名以 `plugin_<id>_` 开头；中文和 `plugin.toml` 的一致（测试查）。界面上的名字、开关、风险提示读文案，没有时用清单里的。
+- **页面放在 `apps/desktop` 外面**：Vite 别名 `$plugins` → `plugins/`，`resolve.dedupe` 让 `plugins/*/ui` 里的裸 import（svelte、@lucide/svelte……）解析到桌面端的 `node_modules`；`tsconfig` 把 `plugins/*/ui` 一起交给 svelte-check；Playwright 也跑 `plugins/*/e2e/`；用词测试也查插件的文案。
+- **没搬的**：英雄联盟的事件目录（`lol.dragon_kill` 等，自动化保存时校验用）还在 `kotone-core::games`；插件关着时这些事不再发生，但自动化编辑里还能选到。第 7 步收尾时改成由插件登记。
+
+**检查**（都在 `claude/plugins` 上，提交前跑的）：
+
+- Rust：`kotone-plugin-api` 5、`kotone-plugin-lol` 33、`kotone-agent` 77、`kotone-tools` 111、`kotone-core` 306 + 集成测试、桌面端 108，全过；全工作区 `cargo clippy --all-targets -D warnings`、`cargo fmt --check` 干净。
+- 界面：svelte-check 0 错误 0 警告（也查 `plugins/*/ui`）；Playwright 148 个全过（两遍；插件的 3 个在 `plugins/lol/e2e/`）。有一遍 `copilot-flow.spec.ts` 第 8 个（设置说明里的每个位置都能打开）超时一次，单独跑 3 次、之后两遍全量都过，记成可能不稳。
+- 真机（不开游戏，假客户端 + 真 DeepSeek，不发任何系统按键）：`lol_tools_real.py --while-playing` 17/17，`game_events_real.py` 11/11。她照旧用 `lol.scout` / `lol.spell` / `lol.match`，游戏中心的阶段、按事件运行的自动化、复盘都照旧。
+
+**还没测**：真客户端、真对局（同 ADR 035、036 的“还没测”）；装回旧版后 `lol.enabled` 的表现。

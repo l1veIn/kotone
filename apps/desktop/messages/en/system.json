@@ -135,7 +135,7 @@
   "system_advanced_group_general": "General",
   "system_advanced_title": "Settings",
   "system_advanced_description_legacy": "Models, API connections, sound, appearance, and system.",
-  "system_advanced_description": "How to call {name}, how she replies, plus models, API connections, appearance, and system. You can also just tell her and she'll set these up for you.",
+  "system_advanced_description": "How to call {name}, how she replies, plus models, API connections, appearance, system, and plugins. You can also just tell her and she'll set these up for you.",
   "system_advanced_nav_label": "Settings categories",
   "system_advanced_call_button_title": "Call button on the chat page",
   "system_advanced_call_button_description": "Click “Call {name}” on the chat page and she listens to you in her bubble. No setup needed. With local speech recognition, it starts first if it isn't running, then she listens.",
@@ -443,5 +443,12 @@
   "system_models_network_mirror_description": "ModelScope / HF mirror",
   "system_models_network_saved": "Download source changed: {name}",
   "system_models_proxy_label": "GitHub fallback proxy (optional)",
-  "system_models_proxy_save": "Save"
+  "system_models_proxy_save": "Save",
+  "system_section_plugins": "Plugins",
+  "system_plugins_description": "Each plugin is one of {companion}'s skills you can also open and use on your own. Turn one off and its page, the tools it gives {companion} and its game events go away with it; {companion}'s tool list follows from the next conversation.",
+  "system_plugins_enable": "Enable the {name} plugin",
+  "system_plugins_enable_desc": "When it's off {companion} stops using it, and its page and game events stop too.",
+  "system_plugins_open": "Open",
+  "system_plugins_off_badge": "Off",
+  "system_plugins_save_failed": "Couldn't save the plugin switch: {error}"
 }

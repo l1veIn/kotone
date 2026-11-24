@@ -313,6 +313,13 @@ fn settings_error(message: String) -> HostError {
 }
 
 pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
+    // 插件的工具（ADR 038）：外部 Agent、MCP 经工具服务调到这里，结果照 MCP（content / structuredContent / _meta.ui）
+    if crate::plugins::owner(tool).is_some() {
+        return crate::plugins::call(app, tool, &args, None)
+            .await
+            .map(|result| result.to_service_json())
+            .map_err(HostError::Failed);
+    }
     match tool {
         c::TOOL_SETTINGS_GET => {
             let _: NoArgs = parse(tool, args)?;

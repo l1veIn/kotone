@@ -87,6 +87,17 @@ pub trait BuiltinHost: Send + Sync {
         async move { ToolOutcome::error(message) }
     }
 
+    /// 插件的工具（ADR 038，[`Source::Plugin`]）：桌面端交给插件执行，只有 `content` 给她，
+    /// `structured_content` / `ui` 给聊天卡片。没有桌面（测试、外部宿主）时不可用。
+    fn plugin(
+        &self,
+        tool: &str,
+        _arguments: &Value,
+    ) -> impl Future<Output = Result<kotone_plugin_api::ToolResult, String>> + Send {
+        let message = format!("{tool} 在这里不可用");
+        async move { Err(message) }
+    }
+
     /// 玩家已经在别处一直允许了这次调用（例如游戏配置里“让琴音操作”设为一直允许）：
     /// 权限规则是“询问”时不再问。用户设为禁止、只读模式时仍然不执行。
     fn preapproved(&self, _tool: &str, _arguments: &Value) -> bool {
@@ -474,6 +485,14 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
             Source::Builtin => self.call_builtin(call_id, &entry.name, &arguments).await,
             Source::Saved { id } => self.call_saved(id, arguments).await,
             Source::Service => self.call_service(&entry.name, arguments).await,
+            Source::Plugin { .. } => match self.host.plugin(&entry.name, &arguments).await {
+                // 只有给她的那份进上下文
+                Ok(result) => ToolOutcome::ok(match result.content {
+                    Value::String(text) => text,
+                    other => other.to_string(),
+                }),
+                Err(message) => ToolOutcome::error(message),
+            },
             // 由 `call` 直接交给桌面（要带上调用 id、取消和“每次询问”），不会走到这里。
             Source::Exec => ToolOutcome::error(format!("{} 在这里不可用", entry.name)),
         };

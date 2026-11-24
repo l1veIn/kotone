@@ -48,6 +48,8 @@
   import SelectField from "$lib/components/settings/SelectField.svelte";
   import InstalledGamesSection from "./InstalledGamesSection.svelte";
   import { eventLabel, eventsFor, phaseLabel, playingGames, type PlayingGame } from "../../../lib/gameEvents";
+  import { pluginEnabled, pluginsStore, type PluginInfo } from "../../../lib/plugins";
+  import { PLUGIN_UI } from "../../../lib/pluginUi";
   import { listSeparator } from "$lib/locale";
   import { listen } from "@tauri-apps/api/event";
   import { m } from "$lib/paraglide/messages.js";
@@ -136,13 +138,21 @@
     }
   }
 
-  // ---------- 英雄联盟对局数据（ADR 035 D5）：设置 lol.enabled，立即生效，不随“保存”走 ----------
-  async function toggleLolData(enabled: boolean) {
-    try {
-      settingsStore.set(await updateSettings({ lol: { enabled } }));
-    } catch (error) {
-      toast(false, errText(error));
-    }
+  // ---------- 插件给的小节（ADR 038 D3 第 9 条）：挂在这个游戏上的插件，各自在游戏配置页下面放一节 ----------
+  // 例如英雄联盟插件的“读客户端数据”（原来的 lol.enabled，ADR 035 D5）。插件的开关立即生效，不随“保存”走。
+  function pluginsFor(gameId: string): PluginInfo[] {
+    return $pluginsStore.filter((p) => p.manifest.games.includes(gameId) && PLUGIN_UI[p.manifest.id]?.gameSection);
+  }
+  /** 带这个游戏的适配器的插件（ADR 036：游戏专用的事由它报）。 */
+  function adapterPlugin(gameId: string): PluginInfo | undefined {
+    return $pluginsStore.find((p) => p.manifest.adapter === gameId && p.manifest.games.includes(gameId));
+  }
+  /** 适配器的插件关着（或它要的数据开关关着）：这个游戏只收得到通用的事。 */
+  function adapterOff(gameId: string): boolean {
+    const plugin = adapterPlugin(gameId);
+    if (!plugin) return false;
+    const ui = PLUGIN_UI[plugin.manifest.id];
+    return !(ui?.adapterOn ? ui.adapterOn($settingsStore, plugin) : pluginEnabled($settingsStore, plugin.manifest));
   }
 
   // ---------- 内联编辑器状态 ----------
@@ -236,10 +246,9 @@
     const off = listen("kotone://game", () => void refreshPlaying());
     return () => { void off.then((unlisten) => unlisten()); };
   });
-  /** 这个游戏配置能给的事：英雄联盟对局数据关着时只有通用的。 */
+  /** 这个游戏配置能给的事：适配器的插件关着时只有通用的。 */
   function profileEvents(id: string): string {
-    const lolOff = id === "lol" && ($settingsStore?.lol?.enabled ?? true) === false;
-    return eventsFor(lolOff ? null : id).map((e) => eventLabel(e.type)).join(listSeparator());
+    return eventsFor(adapterOff(id) ? null : id).map((e) => eventLabel(e.type)).join(listSeparator());
   }
 
   async function onActivate(id: string) {
@@ -755,18 +764,11 @@
               </div>
             {/if}
 
-            {#if draft.id === "lol"}
-              <!-- 英雄联盟对局数据（ADR 035 D5）：默认开，提示风险 -->
-              <div class="space-y-2 rounded-lg border border-hairline bg-background/40 p-3.5" data-testid="game-profile-lol-data">
-                <ToggleField
-                  checked={$settingsStore?.lol?.enabled ?? true}
-                  label={m.game_lol_data_toggle({ companion: $companionName })}
-                  desc={m.game_lol_data_toggle_desc()}
-                  testid="profile-lol-data"
-                  onchange={(v) => void toggleLolData(v)}
-                />
-              </div>
-            {/if}
+            <!-- 挂在这个游戏上的插件给的小节（ADR 038）：例如英雄联盟插件的“读客户端数据”（默认开，提示风险） -->
+            {#each pluginsFor(draft.id) as plugin (plugin.manifest.id)}
+              {@const Section = PLUGIN_UI[plugin.manifest.id]?.gameSection}
+              {#if Section}<Section {plugin} gameId={draft.id} />{/if}
+            {/each}
 
             {#if draft.processNames.length}
               <!-- 游戏事件（ADR 036）：这个游戏现在在哪个阶段、能给哪些事（自动化里“按游戏事件运行”用） -->
@@ -775,8 +777,9 @@
                 <p class="m-0 text-[13px] font-medium text-foreground">{m.game_events_title()}</p>
                 <p class="m-0 text-muted-foreground" data-testid="game-profile-events-now">{now ? m.game_events_now({ phase: phaseLabel(now.phase) }) : m.game_events_not_running()}</p>
                 <p class="m-0 text-muted-foreground" data-testid="game-profile-events-list">{m.game_events_list({ events: profileEvents(draft.id) })}</p>
-                {#if draft.id === "lol" && ($settingsStore?.lol?.enabled ?? true) === false}
-                  <p class="m-0 text-muted-foreground">{m.game_events_lol_off()}</p>
+                {#if adapterOff(draft.id)}
+                  {@const note = PLUGIN_UI[adapterPlugin(draft.id)?.manifest.id ?? ""]?.eventsOffNote?.()}
+                  {#if note}<p class="m-0 text-muted-foreground" data-testid="game-profile-events-off">{note}</p>{/if}
                 {/if}
                 <p class="m-0 text-muted-foreground/80">{m.game_events_hint()}</p>
               </div>

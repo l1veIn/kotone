@@ -24,7 +24,6 @@ mod games;
 mod history_cmd;
 mod hotkey;
 mod key_request;
-mod lol;
 mod model_catalog;
 mod models_cmd;
 mod music;
@@ -32,6 +31,8 @@ mod music_cmd;
 mod ocr_engines;
 mod overlay;
 mod overlay_window;
+mod plugins;
+mod plugins_cmd;
 mod profiles_cmd;
 mod recap;
 mod roles;
@@ -327,8 +328,8 @@ pub fn run() {
             app.manage(agent::AgentRuntime::open(companion_enabled));
             // 放歌（ADR 034）：播放器、登录状态（只有登录过才联网查账号）
             music::init(app.handle());
-            // 英雄联盟工具（ADR 035）：客户端开着时盯对局阶段，进加载界面先查这局的战绩
-            lol::init(app.handle());
+            // 插件（ADR 038）：各自开后台循环（英雄联盟：客户端开着时盯对局阶段，进加载界面先查这局的战绩）
+            plugins::init(app.handle());
             if companion_enabled {
                 // 琴音原来的名字和头像记进她的角色卡（只做一次）。
                 roles::migrate(app.handle());
@@ -544,6 +545,8 @@ pub fn run() {
             agent::agent_subagent_stop,
             agent::agent_subagent_continue,
             agent::agent_subagent_answer,
+            plugins_cmd::plugins_list,
+            plugins_cmd::plugin_call,
             music_cmd::music_state,
             music_cmd::music_login_start,
             music_cmd::music_login_cancel,

@@ -180,5 +180,7 @@
   "role_character_relay_room_alt": "中继站——琴音的直播间",
   "role_character_gear_alt": "琴音的装备·{name}",
   "role_character_sticker_alt": "琴音贴纸·{name}",
-  "role_character_footer": "档案由 repochan persona 协议生成 · 贴纸与立绘版权归 Kotone 项目"
+  "role_character_footer": "档案由 repochan persona 协议生成 · 贴纸与立绘版权归 Kotone 项目",
+  "shell_sidebar_group_plugins": "插件",
+  "shell_plugin_missing": "这个版本里没有这个插件的页面。"
 }

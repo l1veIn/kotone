@@ -4,7 +4,7 @@
 //! 大乱斗 / 海克斯大乱斗 70、无限火力 300。Akari 不算装备，这里另外算明朗之靴（10）、
 //! 猩红明朗（20），装备取局内接口里那个人当时的。星界洞悉（符文）和海斗的“闪现 2”这类海克斯看不到。
 
-use crate::live::LiveItem;
+use crate::client::live::LiveItem;
 
 /// 模式给的召唤师技能急速。
 pub fn mode_haste(mode: &str) -> f64 {
@@ -113,7 +113,7 @@ pub fn chat_line(entry: &SpellUse) -> String {
         "{} {} {}好",
         entry.champion,
         short_spell(&entry.spell),
-        crate::clock(entry.ready_at)
+        crate::client::clock(entry.ready_at)
     )
 }
 

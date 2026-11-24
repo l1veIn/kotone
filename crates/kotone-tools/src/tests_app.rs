@@ -641,3 +641,38 @@ async fn configuration_tools_are_delegated_to_the_host() {
     h.host.set_delay(Duration::ZERO);
     drop(h);
 }
+
+/// ADR 038：开着的插件的工具列在 capabilities 里（带 plugin 和 `_meta.ui`），调用经宿主的 invoke；
+/// 插件关了（宿主不再列）就是未实现。
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_tools_are_listed_and_go_through_the_host() {
+    let h = H::new(ServiceLimits::default()).await;
+    let spec = json!({
+        "name": "lol.scout", "version": 1, "status": "implemented",
+        "description": "查这局的战绩", "sideEffects": [], "dataEgress": "none",
+        "ready": true, "notReadyReason": null,
+        "inputSchema": {"type": "object", "properties": {"player": {"type": "string"}}},
+        "outputSchema": {"type": "object"},
+        "plugin": "lol", "untrustedResult": true,
+        "_meta": {"ui": {"visibility": ["model", "app"], "resourceUri": "ui://kotone/lol/match"}}
+    });
+    h.host.set_plugin_tools(vec![spec]);
+    let caps = h.running.service().capabilities();
+    let listed = caps["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "lol.scout")
+        .cloned();
+    assert_eq!(listed.unwrap()["plugin"], "lol");
+    let result = h.ok("lol.scout", json!({"player": "寒冰"})).await;
+    assert_eq!(
+        result,
+        json!({"tool": "lol.scout", "args": {"player": "寒冰"}})
+    );
+    assert_eq!(h.host.invocations().last().unwrap().0, "lol.scout");
+
+    h.host.set_plugin_tools(Vec::new());
+    let error = h.err("lol.scout", json!({})).await;
+    assert_eq!(error.code.as_str(), "TOOL_NOT_FOUND");
+}

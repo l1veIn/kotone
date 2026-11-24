@@ -1,0 +1,14 @@
+[package]
+name = "kotone-plugin-api"
+version = "0.1.0"
+description = "Kotone 插件契约（ADR 038）：清单、工具、工具结果（照 MCP Apps）、插件和宿主之间唯一的缝"
+edition = "2021"
+rust-version = "1.77.2"
+
+# 依赖纪律：插件只依赖这个 crate、kotone-core 的纯数据类型和自己的第三方库，不碰 Tauri。
+[dependencies]
+kotone-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# plugin.toml（版本已在工作区锁文件里）
+toml = { version = "0.9", default-features = false, features = ["parse", "serde", "std"] }

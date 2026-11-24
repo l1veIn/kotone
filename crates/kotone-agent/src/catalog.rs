@@ -6,6 +6,8 @@
 //!   （`companion.ask` / `companion.check`，会再调一次模型）不交给内置 Agent；
 //! - **内置动作**：说话（`speak`）、弹幕（`danmaku`，后台用）、提醒（`reminder.create`）、发到游戏聊天
 //!   （`game_chat.send`，替代 `companion.type`，会写进执行记录）和查找工具（`tools.find`）；
+//! - **插件**（ADR 038）：开着的插件给她的工具（`visibility` 含 `model`、要的数据开关都开着），
+//!   由桌面端按开关算好（[`kotone_plugin_api::Offer`]），经 [`crate::port::BuiltinHost::plugin`] 执行；
 //! - **已保存的自动化**：每个一个工具 `saved.<id>`（最多 [`MAX_SAVED_TOOLS`] 个）。
 //! - **执行命令、读写文件**（ADR 030）：`shell.run`、`file.*`，只给后台任务（[`exec_entries`]）。
 //!
@@ -62,10 +64,6 @@ pub const HOST_BUILTINS: &[&str] = &[
     TOOL_SCREEN_AT_SPEECH,
     // 放歌（ADR 034，桌面端的播放器）
     crate::music::TOOL_MUSIC,
-    // 英雄联盟（ADR 035，桌面端读本机的客户端和局内接口）
-    crate::lol::TOOL_MATCH,
-    crate::lol::TOOL_SPELL,
-    crate::lol::TOOL_SCOUT,
 ];
 
 /// 主会话（和玩家说话的那段对话）的工具：马上出结果（约 1–2 秒内）的一小套，语音和打字共用一份
@@ -113,10 +111,7 @@ pub const MAIN_TOOLS: &[&str] = &[
     "runtime.status",
     // 放歌：搜歌即放、每日推荐、我喜欢的、暂停切歌（ADR 034，一次调用就出声，不交给后台）
     crate::music::TOOL_MUSIC,
-    // 英雄联盟：这局的样子、记对面交的技能、查这局的战绩和突破口（ADR 035，读本机接口，马上返回）
-    crate::lol::TOOL_MATCH,
-    crate::lol::TOOL_SPELL,
-    crate::lol::TOOL_SCOUT,
+    // 插件的工具不在这里：标了“马上返回”（`instant`）的主会话也拿（[`main_offers`]）
     // 交给后台
     TOOL_AGENT_START,
     TOOL_AGENT_FOLLOWUP,
@@ -143,9 +138,13 @@ pub const SUBAGENT_EXCLUDED: &[&str] = &[
     TOOL_SOUL_WRITE,
 ];
 
-/// 主会话拿不拿这个工具（[`MAIN_TOOLS`] 与已保存的自动化）。
+/// 主会话拿不拿这个工具（[`MAIN_TOOLS`]、马上返回的插件工具与已保存的自动化）。
 pub fn main_offers(entry: &ToolEntry) -> bool {
-    MAIN_TOOLS.contains(&entry.name.as_str()) || matches!(entry.source, Source::Saved { .. })
+    MAIN_TOOLS.contains(&entry.name.as_str())
+        || matches!(
+            entry.source,
+            Source::Saved { .. } | Source::Plugin { instant: true, .. }
+        )
 }
 
 /// 子代理拿不拿这个工具（除了 [`SUBAGENT_EXCLUDED`] 全给）。
@@ -207,6 +206,19 @@ pub enum Source {
     Saved { id: String },
     /// 执行命令、读写文件（ADR 030，经 [`crate::port::BuiltinHost::exec`]，桌面端用 kotone-exec 执行）。
     Exec,
+    /// 插件的工具（ADR 038，经 [`crate::port::BuiltinHost::plugin`]）。`instant`：马上返回，主会话也拿。
+    Plugin { plugin: String, instant: bool },
+}
+
+/// 一个开着的插件给她的话（系统提示用；ADR 038 D5“能力概览按插件列，关着的不列”）。
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PluginText {
+    pub id: String,
+    pub name: String,
+    /// 能力概览里的一句。
+    pub overview: String,
+    /// 主会话“工作方式”里的一条。
+    pub rule: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -559,13 +571,14 @@ pub fn agent_entries() -> Vec<ToolEntry> {
     out
 }
 
-/// 工具服务 `system.capabilities` 的 `tools` 数组 → 条目（去掉 [`EXCLUDED`]）。
+/// 工具服务 `system.capabilities` 的 `tools` 数组 → 条目（去掉 [`EXCLUDED`]）。插件的工具（带 `plugin`）
+/// 也在工具服务里（给外部 Agent），她的那份从 [`plugin_entries`] 来，这里跳过。
 pub fn service_entries(specs: &[Value]) -> Vec<ToolEntry> {
     specs
         .iter()
         .filter_map(|spec| {
             let name = spec.get("name")?.as_str()?;
-            if EXCLUDED.contains(&name) {
+            if EXCLUDED.contains(&name) || spec.get("plugin").is_some() {
                 return None;
             }
             let mut description = spec
@@ -637,6 +650,31 @@ pub fn exec_entries(specs: &[Value]) -> Vec<ToolEntry> {
                     .and_then(Value::as_bool)
                     .unwrap_or(true),
             })
+        })
+        .collect()
+}
+
+/// 开着的插件给她的工具（宿主已经按开关、`visibility` 和数据开关挑好）。
+pub fn plugin_entries(offers: &[kotone_plugin_api::Offer]) -> Vec<ToolEntry> {
+    offers
+        .iter()
+        .flat_map(|offer| {
+            offer
+                .tools
+                .iter()
+                .filter(|t| t.for_model())
+                .map(|t| ToolEntry {
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    parameters: normalize_schema(&t.parameters),
+                    side_effects: t.side_effects.clone(),
+                    group: group_of(&t.name),
+                    source: Source::Plugin {
+                        plugin: offer.plugin.clone(),
+                        instant: t.instant,
+                    },
+                    untrusted: t.untrusted,
+                })
         })
         .collect()
 }
@@ -737,21 +775,56 @@ pub fn saved_entry(automation: &Automation) -> Option<ToolEntry> {
 #[derive(Debug, Clone, Default)]
 pub struct Catalog {
     entries: Vec<ToolEntry>,
+    plugins: Vec<PluginText>,
 }
 
 impl Catalog {
     /// `specs`：工具服务的工具说明；`saved`：已允许交给 AI 的已保存自动化（调用方已过滤，
-    /// 这里再按上限截断）。
-    pub fn build(specs: &[Value], saved: &[Automation]) -> Self {
+    /// 这里再按上限截断）；`plugins`：开着的插件给她的东西（ADR 038）。
+    pub fn build(
+        specs: &[Value],
+        saved: &[Automation],
+        plugins: &[kotone_plugin_api::Offer],
+    ) -> Self {
         let mut entries = builtin_entries();
         entries.extend(agent_entries());
         entries.extend(service_entries(specs));
         entries.extend(exec_entries(&kotone_exec::tool_specs()));
         entries.extend(crate::browser::entries());
         entries.extend(crate::music::entries());
-        entries.extend(crate::lol::entries());
+        entries.extend(plugin_entries(plugins));
         entries.extend(saved.iter().filter_map(saved_entry).take(MAX_SAVED_TOOLS));
-        Self { entries }
+        let plugins = plugins
+            .iter()
+            .filter(|o| o.tools.iter().any(|t| t.for_model()))
+            .map(|o| PluginText {
+                id: o.plugin.clone(),
+                name: o.name.clone(),
+                overview: o.text.overview.clone(),
+                rule: o.text.rule.clone(),
+            })
+            .collect();
+        Self { entries, plugins }
+    }
+
+    /// 开着、给了她工具的插件（按登记顺序）。
+    pub fn plugins(&self) -> &[PluginText] {
+        &self.plugins
+    }
+
+    /// 开着的插件给主会话的几条“工作方式”（系统提示里接在主会话的规矩后面）。
+    pub fn plugin_rules(&self) -> String {
+        self.plugins
+            .iter()
+            .filter(|p| !p.rule.trim().is_empty())
+            .map(|p| {
+                let mut rule = p.rule.clone();
+                if !rule.ends_with('\n') {
+                    rule.push('\n');
+                }
+                rule
+            })
+            .collect()
     }
 
     pub fn get(&self, name: &str) -> Option<&ToolEntry> {
@@ -762,9 +835,9 @@ impl Catalog {
         &self.entries
     }
 
-    /// 是否始终提供（核心工具与已保存的自动化）。
+    /// 是否始终提供（核心工具、马上返回的插件工具与已保存的自动化）。
     pub fn is_core(entry: &ToolEntry) -> bool {
-        CORE_TOOLS.contains(&entry.name.as_str()) || matches!(entry.source, Source::Saved { .. })
+        main_offers(entry)
     }
 
     /// 按关键词或分组查找。关键词按空白拆开，每个词都要在名字、说明或分组关键词里出现。

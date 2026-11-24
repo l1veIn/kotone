@@ -6,7 +6,7 @@ use std::time::Duration;
 use base64::Engine;
 use serde_json::Value;
 
-use crate::auth::LcuAuth;
+use crate::client::auth::LcuAuth;
 
 /// 局内接口（Riot 官方 Live Client Data API）。
 pub const LIVE_BASE: &str = "https://127.0.0.1:2999";

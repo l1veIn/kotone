@@ -28,7 +28,12 @@ export default defineConfig({
     alias: {
       // 用正斜杠：Windows 反斜杠路径会让 Vite 以 /@fs/ 另起一份模块实例（store 不再共享）
       $lib: normalizePath(fileURLToPath(new URL("./src/lib", import.meta.url))),
+      // 插件的页面（ADR 038：plugins/<id>/ui/，在 apps/desktop 外面）
+      $plugins: normalizePath(fileURLToPath(new URL("../../plugins", import.meta.url))),
     },
+    // plugins/<id>/ui 下的组件也用这里的依赖：从项目根解析，只有一份（否则往上找不到 node_modules，
+    // 或者另起一份 svelte 运行时）
+    dedupe: ["svelte", "@lucide/svelte", "bits-ui", "@tauri-apps/api", "clsx", "tailwind-merge", "tailwind-variants"],
   },
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),

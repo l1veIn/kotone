@@ -135,7 +135,7 @@
   "system_advanced_group_general": "通用",
   "system_advanced_title": "设置",
   "system_advanced_description_legacy": "模型、API 连接、声音、外观与系统。",
-  "system_advanced_description": "怎么叫{name}、她怎么回答，以及模型、API 连接、外观与系统。这些也都可以直接跟她说，让她帮你设。",
+  "system_advanced_description": "怎么叫{name}、她怎么回答，以及模型、API 连接、外观、系统与插件。这些也都可以直接跟她说，让她帮你设。",
   "system_advanced_nav_label": "设置分类",
   "system_advanced_call_button_title": "聊天页的呼叫按钮",
   "system_advanced_call_button_description": "在聊天页点一下「呼叫{name}」就在气泡里听你说，不用设置。用本地识别时，没启动的话会先启动再听。",
@@ -443,5 +443,12 @@
   "system_models_network_mirror_description": "魔搭 / HF 镜像",
   "system_models_network_saved": "下载源已切换：{name}",
   "system_models_proxy_label": "GitHub 备用代理（可选）",
-  "system_models_proxy_save": "保存"
+  "system_models_proxy_save": "保存",
+  "system_section_plugins": "插件",
+  "system_plugins_description": "每个插件是{companion}的一样本事，不叫她也能打开来用。关掉一个，它的页面、给{companion}的工具和它的游戏事件都跟着没了；{companion}的工具清单从下一段对话起变。",
+  "system_plugins_enable": "启用{name}插件",
+  "system_plugins_enable_desc": "关掉后{companion}不再用它，它的页面和游戏事件也停下。",
+  "system_plugins_open": "打开",
+  "system_plugins_off_badge": "已关闭",
+  "system_plugins_save_failed": "插件的开关没存上：{error}"
 }

@@ -1,7 +1,11 @@
 import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
-  testDir: "./e2e",
+  // 本体的测试在 e2e/；每个插件的页面测试在 plugins/<id>/e2e/（ADR 038），一起跑
+  projects: [
+    { name: "desktop", testDir: "./e2e" },
+    { name: "plugins", testDir: "../../plugins", testMatch: "*/e2e/**/*.spec.ts" },
+  ],
   fullyParallel: false,
   workers: 1,
   reporter: "list",

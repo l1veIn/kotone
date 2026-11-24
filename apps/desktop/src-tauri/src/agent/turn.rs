@@ -360,7 +360,7 @@ pub(super) async fn turn(
         .cloned()
         .unwrap_or_default();
     let automations = offered_automations(app, &settings.agent.hidden_automations);
-    let catalog = Catalog::build(&specs, &automations);
+    let catalog = Catalog::build(&specs, &automations, &crate::plugins::offers(app));
     // 主会话只拿马上出结果的一小套，后台几乎全给（ADR 029 第二期）；一段对话里清单不变。
     let offered: Vec<String> = catalog
         .entries()
@@ -377,6 +377,8 @@ pub(super) async fn turn(
     } else {
         String::new()
     };
+    // 开着的插件给主会话的几条“工作方式”（ADR 038）
+    let plugin_rules = catalog.plugin_rules();
     let session = match runtime(app) {
         Ok(rt) => rt
             .inner
@@ -451,6 +453,7 @@ pub(super) async fn turn(
                 automations: &automations,
                 workspace: Some(&snapshot),
                 capabilities: &capabilities,
+                plugin_rules: &plugin_rules,
             }),
         };
         match &session_state {

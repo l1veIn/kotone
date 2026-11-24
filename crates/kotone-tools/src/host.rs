@@ -74,7 +74,13 @@ pub trait AppHost: Send + Sync {
     fn supports_invoke(&self) -> bool {
         false
     }
-    /// 执行一个配置类工具（设置、模型、连接、profile、热键、系统、历史、诊断……）。
+    /// 开着的插件的工具（ADR 038，`kotone_plugin_api::ToolSpec::service_spec` 的样子：带 `plugin`、
+    /// `_meta.ui.visibility` / `resourceUri`）。列在 `system.capabilities` 里，调用经 [`Self::invoke`]。
+    /// 插件和它要的数据开关都开着时才列。
+    fn plugin_tools(&self) -> Vec<Value> {
+        Vec::new()
+    }
+    /// 执行一个配置类工具（设置、模型、连接、profile、热键、系统、历史、诊断……）或插件的工具。
     /// `args` 已保证是 JSON 对象（缺省为空对象），由宿主按工具解析并校验；状态变更与
     /// 设置页走同一实现。长任务（下载）应受理后立即返回，结果经事件发布。
     fn invoke(&self, tool: &str, _args: Value) -> HostInvokeFuture<'_> {

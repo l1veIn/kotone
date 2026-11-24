@@ -1,4 +1,5 @@
-//! 英雄联盟工具（ADR 035）：这局有谁、他们最近的战绩、谁是突破口、对面谁交了闪。
+//! 英雄联盟插件的“读客户端数据”部分（ADR 035，数据开关 `client`）：这局有谁、他们最近的战绩、
+//! 谁是突破口、对面谁交了闪。
 //!
 //! 两个数据来源都只在本机、都只读：
 //! - **LCU**（客户端本地接口）：端口和令牌在 `LeagueClientUx.exe` 的命令行里（[`auth`]），
@@ -7,21 +8,21 @@
 //!   游戏时间（[`live`]）。国服实测没有任何冷却字段，所以召唤师技能是玩家说了才记（[`spells`]）。
 //!
 //! 照 LeagueAkari（MIT，`dev` 分支）：读命令行、接口路径、模式急速；突破口的算法是自己写的（[`scout`]）。
-//! 除了 [`client`] 里的网络请求，其余都是纯函数。
+//! 除了 [`http`] 里的网络请求，其余都是纯函数。
 
 pub mod auth;
-pub mod client;
 pub mod events;
 pub mod gamedata;
 pub mod history;
+pub mod http;
 pub mod live;
 pub mod scout;
 pub mod spells;
 pub mod text;
 
 pub use auth::{parse_command_line, parse_port_token, LcuAuth};
-pub use client::{Lcu, Live, LolError};
 pub use gamedata::GameData;
+pub use http::{Lcu, Live, LolError};
 
 /// 客户端进程名（端口和令牌在它的命令行里）。
 pub const CLIENT_PROCESS: &str = "LeagueClientUx.exe";

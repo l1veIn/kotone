@@ -180,5 +180,7 @@
   "role_character_relay_room_alt": "The Relay Station, Kotone's streaming room",
   "role_character_gear_alt": "Kotone's gear: {name}",
   "role_character_sticker_alt": "Kotone sticker: {name}",
-  "role_character_footer": "Profile generated with the repochan persona protocol · Stickers and character art © the Kotone project"
+  "role_character_footer": "Profile generated with the repochan persona protocol · Stickers and character art © the Kotone project",
+  "shell_sidebar_group_plugins": "Plugins",
+  "shell_plugin_missing": "This version has no page for this plugin."
 }

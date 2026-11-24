@@ -14,7 +14,9 @@ export type PageTarget =
   /** 左侧栏的“全部页面”（排顺序、显示 / 隐藏；ADR 034 第六节）。 */
   | { page: "sidebar-pages" }
   | { page: "assistant"; section: AssistantSection }
-  | { page: "advanced"; tab: string; anchor?: string };
+  | { page: "advanced"; tab: string; anchor?: string }
+  /** 插件的页面（左侧栏「插件」组，ADR 038）。 */
+  | { page: "plugin"; id: string };
 
 /** 「设置」的分页（页面 ID 不变；陪玩组是 ADR 028 新加的分页）。 */
 /** 左侧栏的“全部页面”开着（侧栏的“⋯”、聊天里“去看看：左侧栏 → ⋯”）。 */
@@ -24,6 +26,7 @@ export const ADVANCED_TABS: Record<string, string> = {
   // i18n-ignore-start：设置位置的词：要和后端 settings_guide.rs 写的位置一字不差（玩家点“去看看”时据此跳转），不是界面文字
   "怎么叫她": "call", "她怎么回答": "reply", "权限": "permissions", "用量": "usage",
   "模型": "models", "API 连接": "connections", "声音": "sound", "调参": "tuning", "外观": "appearance", "系统": "system",
+  "插件": "plugins",
   // 旧写法
   "音效": "sound",
 };
@@ -68,6 +71,15 @@ const OLD_COMPANION_GROUPS: Record<string, { tab: string; anchor?: string }> = {
   "用量": { tab: "usage" },
 };
 
+/** 插件的中文名 → 插件 id（「插件 → 英雄联盟」）：名字从插件自己的文案读（plugin_<id>_name）。 */
+const PLUGIN_NAMES: Record<string, string> = Object.fromEntries(
+  Object.entries(import.meta.glob<Record<string, string>>("../../../../../plugins/*/messages/zh-CN.json", { eager: true, import: "default" }))
+    .map(([path, messages]) => {
+      const id = path.split("/plugins/")[1]?.split("/")[0] ?? "";
+      return [messages[`plugin_${id.replace(/-/g, "_")}_name`] ?? id, id];
+    }),
+);
+
 const PAGES: Record<string, "automation" | "game" | "music" | "about" | "legacy-reminders"> = {
   "自动化": "automation", "游戏列表": "game", "游戏": "game", "游戏适配": "game", "音乐": "music", "关于": "about", "提醒助手": "legacy-reminders",
 };
@@ -93,6 +105,11 @@ function parseOne(where: string): PageTarget | null {
   }
   // 「左侧栏 → ⋯」= 全部页面（ADR 034）
   if (first === "左侧栏" || first === "侧边栏") return { page: "sidebar-pages" };
+  // 「插件 → 英雄联盟」= 插件的页面；只写「插件」= 设置里的插件列表（ADR 038）
+  if (first === "插件") {
+    const id = second ? PLUGIN_NAMES[second] : undefined;
+    return id ? { page: "plugin", id } : { page: "advanced", tab: "plugins" };
+  }
   if (first === "设置") {
     if (second === "其他热键") return oldHotkeysTarget(third);
     // 旧位置「设置 → 权限 → 放歌」（浏览器放歌时选网站的地方）：放歌现在在音乐页（ADR 034）

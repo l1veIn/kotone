@@ -2635,6 +2635,7 @@ dependencies = [
  "kotone-ai",
  "kotone-core",
  "kotone-exec",
+ "kotone-plugin-api",
  "kotone-tools",
  "serde",
  "serde_json",
@@ -2717,17 +2718,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kotone-lol"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "kotone-music"
 version = "0.1.0"
 dependencies = [
@@ -2789,6 +2779,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "kotone-plugin-api"
+version = "0.1.0"
+dependencies = [
+ "kotone-core",
+ "serde",
+ "serde_json",
+ "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
+name = "kotone-plugin-lol"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "kotone-core",
+ "kotone-plugin-api",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "kotone-postprocess"
 version = "0.1.0"
 dependencies = [
@@ -2844,10 +2857,11 @@ dependencies = [
  "kotone-ai",
  "kotone-cli",
  "kotone-core",
- "kotone-lol",
  "kotone-music",
  "kotone-ocr",
  "kotone-platform-windows",
+ "kotone-plugin-api",
+ "kotone-plugin-lol",
  "kotone-postprocess",
  "kotone-script",
  "kotone-stt",

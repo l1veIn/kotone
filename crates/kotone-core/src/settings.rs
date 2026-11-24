@@ -157,23 +157,42 @@ pub struct Settings {
     /// 放歌（ADR 034）：音质、音量。登录凭据不在这里（Windows 凭据库）。新字段，旧版本会忽略。
     #[serde(default)]
     pub music: MusicConfig,
-    /// 英雄联盟工具（ADR 035）：读本机的客户端和局内接口。新字段，缺省 = 开。
+    /// 插件（ADR 038）：每个插件一份设置，按插件 id（`plugins.lol.sources.client`）。新字段，旧版本会忽略。
+    /// 旧的 `lol.enabled`（ADR 035）读进来时搬到 `plugins.lol.sources.client`（[`migrate_plugins_json`]）。
     #[serde(default)]
-    pub lol: LolConfig,
+    pub plugins: std::collections::BTreeMap<String, PluginConfig>,
 }
 
-/// 英雄联盟工具（config.json `lol` 段，ADR 035）。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// 一个插件的设置（config.json `plugins.<id>`，ADR 038 D6）。没写的项按插件清单（`plugin.toml`）的默认。
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LolConfig {
-    /// 读英雄联盟客户端和局内的本地接口（只读）：查这局玩家的战绩、记对面交的召唤师技能。默认开（D5）。
-    #[serde(default = "default_true")]
-    pub enabled: bool,
+pub struct PluginConfig {
+    /// 插件开关；没写 = 清单的 `enabled_by_default`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// 插件里的数据开关（清单的 `sources`）；没写的按清单的默认。
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub sources: std::collections::BTreeMap<String, bool>,
+    /// 插件自己的其余设置（插件自己解析，宿主原样存）。
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub settings: serde_json::Map<String, serde_json::Value>,
 }
 
-impl Default for LolConfig {
-    fn default() -> Self {
-        Self { enabled: true }
+impl Settings {
+    /// 插件开着没有：设置里写了按设置，没写按清单的默认。
+    pub fn plugin_enabled(&self, id: &str, by_default: bool) -> bool {
+        self.plugins
+            .get(id)
+            .and_then(|p| p.enabled)
+            .unwrap_or(by_default)
+    }
+
+    /// 插件里的某个数据开关开着没有（插件本身关着时也算关）。
+    pub fn plugin_source_enabled(&self, id: &str, source: &str, by_default: bool) -> bool {
+        self.plugins
+            .get(id)
+            .and_then(|p| p.sources.get(source).copied())
+            .unwrap_or(by_default)
     }
 }
 
@@ -727,7 +746,7 @@ impl Default for Settings {
             voice_chat: crate::voice_chat::VoiceChatConfig::default(),
             browser: BrowserConfig::default(),
             music: MusicConfig::default(),
-            lol: LolConfig::default(),
+            plugins: Default::default(),
         }
     }
 }
@@ -1025,6 +1044,7 @@ pub fn load_from_with_diagnostic(path: &Path) -> SettingsLoadResult {
     migrate_legacy_upgrade_json(&mut user);
     migrate_call_hotkey_json(&mut user);
     migrate_call_idle_json(&mut user);
+    migrate_plugins_json(&mut user);
     merge_json(&mut merged, &user);
     let mut settings: Settings = match serde_json::from_value(merged) {
         Ok(settings) => settings,
@@ -1131,6 +1151,39 @@ fn migrate_call_idle_json(user: &mut serde_json::Value) {
     if assistant.get("followUpSeconds").and_then(|v| v.as_u64()) == Some(0) {
         assistant.insert("callIdleSeconds".into(), 0.into());
     }
+}
+
+/// 插件重构（ADR 038）：旧的 `lol.enabled`（ADR 035，英雄联盟对局数据）搬到 `plugins.lol.sources.client`
+/// （英雄联盟插件的“读客户端数据”开关）。已经有新字段的按新字段；旧段落读完就丢掉，下次保存不再写
+/// （旧版本读不到 `lol` 时按默认“开”，这是装回旧版的代价）。
+pub fn migrate_plugins_json(user: &mut serde_json::Value) {
+    let Some(object) = user.as_object_mut() else {
+        return;
+    };
+    let Some(old) = object.remove("lol") else {
+        return;
+    };
+    let Some(enabled) = old.get("enabled").and_then(|v| v.as_bool()) else {
+        return;
+    };
+    let plugins = object
+        .entry("plugins")
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(lol) = plugins
+        .as_object_mut()
+        .map(|p| p.entry("lol").or_insert_with(|| serde_json::json!({})))
+        .and_then(|lol| lol.as_object_mut())
+    else {
+        return;
+    };
+    let Some(sources) = lol
+        .entry("sources")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+    else {
+        return;
+    };
+    sources.entry("client").or_insert(enabled.into());
 }
 
 /// 旧配置只有单条 `pipeline`：空流程改种默认屏蔽词；有步骤则收成一条可切换流程。
@@ -1341,6 +1394,48 @@ mod tests {
         sidebar.normalize();
         assert_eq!(sidebar.order, vec!["music", "assistant"]);
         assert_eq!(sidebar.hidden, vec!["general"]);
+    }
+
+    /// 插件（ADR 038）：旧的 `lol.enabled` 读进来时搬到 `plugins.lol.sources.client`，之后不再写 `lol`；
+    /// 已经有新字段的不被旧字段覆盖；没写的开关按清单默认。
+    #[test]
+    fn old_lol_switch_moves_into_the_lol_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, r#"{"lol":{"enabled":false}}"#).unwrap();
+        let s = load_from(&path);
+        assert!(!s.plugin_source_enabled("lol", "client", true));
+        assert!(s.plugin_source_enabled("lol", "stats", true));
+        assert!(s.plugin_enabled("lol", true));
+        let text = serde_json::to_string(&s).unwrap();
+        assert!(!text.contains("\"lol\":{\"enabled\""), "{text}");
+        assert!(
+            text.contains(r#""plugins":{"lol":{"sources":{"client":false}}}"#),
+            "{text}"
+        );
+
+        // 新字段已经有了：旧字段不覆盖
+        std::fs::write(
+            &path,
+            r#"{"lol":{"enabled":false},"plugins":{"lol":{"sources":{"client":true},"settings":{"x":1}}}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path);
+        assert!(s.plugin_source_enabled("lol", "client", false));
+        assert_eq!(s.plugins["lol"].settings["x"], 1);
+
+        // 旧版里开着（默认）：也搬过去，等于默认
+        std::fs::write(&path, r#"{"lol":{"enabled":true}}"#).unwrap();
+        assert!(load_from(&path).plugin_source_enabled("lol", "client", false));
+
+        // 没有旧字段、没有新字段：按清单默认，不写空段
+        let fresh = Settings::default();
+        assert!(fresh.plugins.is_empty());
+        assert!(fresh.plugin_enabled("music", true));
+        assert!(!fresh.plugin_enabled("music", false));
+        assert!(serde_json::to_string(&fresh)
+            .unwrap()
+            .contains(r#""plugins":{}"#));
     }
 
     /// 浏览器插件是新字段（ADR 031）：旧配置没有它时为空；写进去的能原样读回；只写了路径的条目默认启用。

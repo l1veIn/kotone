@@ -52,6 +52,8 @@
   import HistoryPage from "./pages/HistoryPage.svelte";
   import AboutPage from "./pages/AboutPage.svelte";
   import CharacterPage from "./pages/CharacterPage.svelte";
+  import PluginPage from "./pages/PluginPage.svelte";
+  import { listPlugins, pluginOfPage, pluginPageId } from "../../lib/plugins";
   import { initializeAppearance, resolvedTheme } from "../../lib/appearance/appearanceRuntime";
 
   import AppSidebar, { type PageId } from "./AppSidebar.svelte";
@@ -101,6 +103,7 @@
     const target = request.target;
     if (target.page === "assistant") openCompanion(target.section);
     else if (target.page === "sidebar-pages") sidebarPagesOpen.set(true);
+    else if (target.page === "plugin") navigate(pluginPageId(target.id));
     else if (target.page === "advanced") openAdvanced(isAdvancedSection(target.tab) ? target.tab : "system", target.anchor);
     else {
       navigate(target.page);
@@ -221,6 +224,8 @@
   onMount(async () => {
     // runtime store 独立初始化（kotone://runtime 事件订阅 + 初始拉取）
     void initRuntime();
+    // 插件清单（ADR 038）：侧栏的插件页、设置里的插件列表、游戏配置页里插件给的小节都用它
+    void listPlugins().catch(() => { /* 打开插件页时会再读 */ });
     try {
       const [s, startup, settingsWarning] = await Promise.all([
         refreshSettings(),
@@ -402,6 +407,8 @@
       <MusicPage />
     {:else if page === "character"}
       <CharacterPage onBack={() => (page = "about")} />
+    {:else if pluginOfPage(page)}
+      {#key page}<PluginPage id={pluginOfPage(page) ?? ""} />{/key}
     {:else}
       <AboutPage onOpenCharacter={() => (page = "character")} />
     {/if}

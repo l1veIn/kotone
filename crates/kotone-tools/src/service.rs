@@ -844,8 +844,27 @@ impl ToolService {
                 }).collect::<Vec<_>>(),
                 "fallback": "none",
             },
-            "tools": catalog::tool_specs(&self.limits, &readiness),
+            "tools": self.tool_specs(&readiness),
         })
+    }
+
+    /// 全部工具：服务自己的、委托给宿主的，再加开着的插件的（ADR 038）。
+    fn tool_specs(&self, readiness: &catalog::Readiness) -> Vec<Value> {
+        let mut specs = catalog::tool_specs(&self.limits, readiness);
+        if self.host.supports_invoke() {
+            specs.extend(self.host.plugin_tools());
+        }
+        specs
+    }
+
+    /// 是不是开着的插件的工具（调用经宿主的 `invoke`）。
+    fn is_plugin_tool(&self, tool: &str) -> bool {
+        self.host.supports_invoke()
+            && self
+                .host
+                .plugin_tools()
+                .iter()
+                .any(|spec| spec.get("name").and_then(Value::as_str) == Some(tool))
     }
 
     pub fn status(&self) -> Value {
@@ -919,7 +938,7 @@ impl ToolService {
             return self.envelope_failure(request_id, Some(tool), closed_error(), started);
         }
         let implemented = catalog::implemented_tools();
-        if !implemented.contains(&tool.as_str()) {
+        if !implemented.contains(&tool.as_str()) && !self.is_plugin_tool(&tool) {
             let error = ToolError::new(
                 ErrorCode::ToolNotFound,
                 format!("工具 {tool} 未在本实例实现；可用工具见 system.capabilities"),
@@ -1335,7 +1354,7 @@ impl ToolService {
             | catalog::TOOL_AGENT_REQUEST_CLAIM
             | catalog::TOOL_AGENT_REPLY
             | catalog::TOOL_ASSISTANT_SUBMIT => self.execute_app(tool, arguments, ctx, timeout_ms),
-            t if catalog::HOST_TOOLS.contains(&t) => {
+            t if catalog::HOST_TOOLS.contains(&t) || self.is_plugin_tool(t) => {
                 self.execute_host(tool, arguments, ctx, timeout_ms)
             }
             catalog::TOOL_IMAGE_PREPROCESS => self.preprocess(parse_args(arguments)?),

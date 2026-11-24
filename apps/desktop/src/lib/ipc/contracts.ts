@@ -197,8 +197,11 @@ export interface Settings {
   voiceChat?: VoiceChatConfig;
   /** 放歌（ADR 034）：音质和音量。旧配置没有时后端按默认（极高、70）补齐。 */
   music?: { quality: "standard" | "exhigh" | "lossless"; volume: number };
-  /** 英雄联盟对局数据（ADR 035）：读本机的客户端和局内接口。旧配置没有时后端按默认（开）补齐。 */
-  lol?: { enabled: boolean };
+  /**
+   * 插件（ADR 038）：每个插件一份，按插件 id。没写的项按插件清单的默认（旧的 `lol.enabled` 后端读进来时
+   * 搬到 `plugins.lol.sources.client`）。
+   */
+  plugins?: Record<string, { enabled?: boolean; sources?: Record<string, boolean>; settings?: Record<string, unknown> }>;
 }
 
 export interface VoiceChatConfig {

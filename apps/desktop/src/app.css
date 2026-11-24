@@ -1,6 +1,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "./lib/appearance/palettes.css";
+/* 插件的页面在 apps/desktop 外面（ADR 038：plugins/<id>/ui），Tailwind 默认不扫那里 */
+@source "../../../plugins/*/ui";
 
 /* shadcn-svelte 的 dark: 变体跟随 <html data-theme>（设置窗口的外观系统写入）。 */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));

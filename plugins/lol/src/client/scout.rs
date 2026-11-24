@@ -3,10 +3,10 @@
 //! - 每人最近 20 局、全部模式；和这局同一个队列的单独算（峡谷和大乱斗的伤害不放在一起比）；
 //! - 突破口：在对面里比对面的平均，胜率 / KDA / 同模式分均伤害偏低、连败、第一次玩这个英雄加分，
 //!   连胜、常玩这个英雄且赢得多减分；分数最高的一两个，原因一起写出来；
-//! - 随机英雄的模式（大乱斗、海斗，见 [`crate::gamedata::random_pick`]）不看这个英雄玩没玩过：英雄是随机的，
+//! - 随机英雄的模式（大乱斗、海斗，见 [`crate::client::gamedata::random_pick`]）不看这个英雄玩没玩过：英雄是随机的，
 //!   实测海斗里几乎每个人都“最近没玩过”，是噪音。
 
-use crate::history::GameRecord;
+use crate::client::history::GameRecord;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Summary {

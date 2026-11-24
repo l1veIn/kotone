@@ -6,7 +6,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::live::LiveGame;
+use crate::client::live::LiveGame;
 
 /// 客户端阶段（`/lol-gameflow/v1/gameflow-phase`）→ 所有游戏共用的阶段（ADR 036 D3）。
 /// `live_ready` = 局内接口已经有数据（游戏时间 > 0），这时才算“对局中”，之前是“加载”。
@@ -108,7 +108,7 @@ pub fn new_events(all_game_data: &Value, game: &LiveGame, after: i64) -> Vec<New
             "DragonKill" => Some((
                 "lol.dragon_kill",
                 json!({"team": team, "dragon": dragon(s(e, "DragonType")),
-                    "dragonName": crate::text::dragon(s(e, "DragonType")), "stolen": stolen}),
+                    "dragonName": crate::client::text::dragon(s(e, "DragonType")), "stolen": stolen}),
             )),
             "HeraldKill" => Some(("lol.herald_kill", json!({"team": team, "stolen": stolen}))),
             "BaronKill" => Some(("lol.baron_kill", json!({"team": team, "stolen": stolen}))),
@@ -158,7 +158,7 @@ pub fn last_event_id(all_game_data: &Value) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::live::{parse_all_game_data, tests as l};
+    use crate::client::live::{parse_all_game_data, tests as l};
 
     #[test]
     fn client_phases_map_to_the_shared_ones() {

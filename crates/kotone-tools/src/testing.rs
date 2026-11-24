@@ -754,11 +754,16 @@ pub struct FakeAppHost {
     submitted: Mutex<Vec<String>>,
     invocations: Mutex<Vec<(String, Value)>>,
     invoke_results: Mutex<std::collections::HashMap<String, Result<Value, crate::host::HostError>>>,
+    plugin_tools: Mutex<Vec<Value>>,
 }
 
 impl FakeAppHost {
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
+    }
+    /// 开着的插件的工具（`AppHost::plugin_tools`）。
+    pub fn set_plugin_tools(&self, specs: Vec<Value>) {
+        *self.plugin_tools.lock().unwrap() = specs;
     }
     pub fn set_delay(&self, delay: Duration) {
         *self.delay.lock().unwrap() = delay;
@@ -865,6 +870,9 @@ impl crate::host::AppHost for FakeAppHost {
     }
     fn supports_invoke(&self) -> bool {
         true
+    }
+    fn plugin_tools(&self) -> Vec<Value> {
+        self.plugin_tools.lock().unwrap().clone()
     }
     fn invoke(&self, tool: &str, args: Value) -> crate::host::HostInvokeFuture<'_> {
         let tool = tool.to_string();

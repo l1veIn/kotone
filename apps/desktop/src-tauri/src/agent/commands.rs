@@ -104,7 +104,7 @@ pub fn tools(app: &AppHandle) -> Result<Value, String> {
         .cloned()
         .unwrap_or_default();
     let automations = offered_automations(app, &settings.agent.hidden_automations);
-    let catalog = Catalog::build(&specs, &automations);
+    let catalog = Catalog::build(&specs, &automations, &crate::plugins::offers(app));
     let rules = &settings.agent.permissions.rules;
     let tools: Vec<Value> = catalog
         .entries()

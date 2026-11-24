@@ -2,12 +2,12 @@
 
 use std::collections::BTreeMap;
 
-use crate::clock;
-use crate::gamedata::GameData;
-use crate::history::PlayerHistory;
-use crate::live::{LiveGame, LivePlayer};
-use crate::scout::{self, Summary};
-use crate::spells::SpellTracker;
+use crate::client::clock;
+use crate::client::gamedata::GameData;
+use crate::client::history::PlayerHistory;
+use crate::client::live::{LiveGame, LivePlayer};
+use crate::client::scout::{self, Summary};
+use crate::client::spells::SpellTracker;
 
 /// 模式的中文名（局内接口的 `gameMode`）。
 pub fn mode_name(mode: &str) -> &str {
@@ -247,11 +247,11 @@ pub struct ScoutPlayer {
 
 impl ScoutPlayer {
     pub fn matches(&self, query: &str) -> bool {
-        let q = crate::gamedata::normalize(query);
+        let q = crate::client::gamedata::normalize(query);
         !q.is_empty()
             && [&self.champion, &self.alias, &self.short, &self.name]
                 .iter()
-                .map(|s| crate::gamedata::normalize(s))
+                .map(|s| crate::client::gamedata::normalize(s))
                 .any(|s| !s.is_empty() && (s.contains(&q) || q.contains(&s)))
     }
 }
@@ -325,7 +325,7 @@ fn parties(players: &[ScoutPlayer]) -> Vec<String> {
 }
 
 /// `lol.scout` 的结果。`only` = 只看这个人（英雄名或玩家名）；
-/// `random_pick` = 随机英雄的模式（[`crate::gamedata::random_pick`]），不看这个英雄玩没玩过。
+/// `random_pick` = 随机英雄的模式（[`crate::client::gamedata::random_pick`]），不看这个英雄玩没玩过。
 pub fn render_scout(
     players: &[ScoutPlayer],
     queue_id: i64,
@@ -421,13 +421,13 @@ pub fn render_scout(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::history::{parse_match_list, tests as h};
-    use crate::live::{parse_all_game_data, tests as l};
-    use crate::spells::SpellUse;
+    use crate::client::history::{parse_match_list, tests as h};
+    use crate::client::live::{parse_all_game_data, tests as l};
+    use crate::client::spells::SpellUse;
 
     #[test]
     fn match_text_shows_score_flash_state_and_events() {
-        let data = crate::gamedata::tests::sample();
+        let data = crate::client::gamedata::tests::sample();
         let game = parse_all_game_data(&l::sample_json()).unwrap();
         let mut tracker = SpellTracker::default();
         tracker.record(SpellUse {

@@ -1,7 +1,7 @@
 //! 用 `scripts/manual-e2e/lol_probe.py` 录下来的真实数据，离线跑一遍三个工具会给她的文字（ADR 035 实测用）。
 //!
 //! ```text
-//! cargo run -p kotone-lol --example render_probe -- target/lol-probe/<时间> target/lol-probe/gamedata
+//! cargo run -p kotone-plugin-lol --example render_probe -- target/lol-probe/<时间> target/lol-probe/gamedata
 //! ```
 //! 第一个目录是一次探测（局内），第二个是客户端的游戏资料（`/lol-game-data/assets/v1/*.json`）。
 //! 输出里有玩家名，只在本机看，不要提交。
@@ -9,11 +9,11 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use kotone_lol::history::{self, PlayerHistory};
-use kotone_lol::live;
-use kotone_lol::spells::{self, SpellTracker, SpellUse};
-use kotone_lol::text::{self, ScoutPlayer};
-use kotone_lol::GameData;
+use kotone_plugin_lol::client::history::{self, PlayerHistory};
+use kotone_plugin_lol::client::live;
+use kotone_plugin_lol::client::spells::{self, SpellTracker, SpellUse};
+use kotone_plugin_lol::client::text::{self, ScoutPlayer};
+use kotone_plugin_lol::client::GameData;
 use serde_json::Value;
 
 fn read(path: &Path) -> Value {
@@ -129,7 +129,7 @@ fn main() {
         }
     }
     let mode = data.queue_name(queue).unwrap_or("").to_string();
-    let random = kotone_lol::gamedata::random_pick(Some(&data), queue);
+    let random = kotone_plugin_lol::client::gamedata::random_pick(Some(&data), queue);
     println!(
         "== lol.scout ==\n{}",
         text::render_scout(&players, queue, &mode, random, None)

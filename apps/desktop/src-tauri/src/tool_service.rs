@@ -240,6 +240,10 @@ impl AppHost for DesktopHost {
         true
     }
 
+    fn plugin_tools(&self) -> Vec<Value> {
+        crate::plugins::service_specs(&self.app)
+    }
+
     fn invoke(&self, tool: &str, args: Value) -> HostInvokeFuture<'_> {
         let tool = tool.to_string();
         Box::pin(async move { crate::tool_config::invoke(&self.app, &tool, args).await })

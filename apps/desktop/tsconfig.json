@@ -9,12 +9,17 @@
     "noEmit": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
+    "resolveJsonModule": true,
     "allowJs": true,
     "checkJs": false,
     "paths": {
       "$lib": ["./src/lib"],
-      "$lib/*": ["./src/lib/*"]
+      "$lib/*": ["./src/lib/*"],
+      "$plugins/*": ["../../plugins/*"],
+      "svelte": ["./node_modules/svelte"],
+      "svelte/*": ["./node_modules/svelte/*"],
+      "@lucide/svelte": ["./node_modules/@lucide/svelte"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.svelte", "vite.config.ts"]
+  "include": ["src/**/*.ts", "src/**/*.svelte", "vite.config.ts", "../../plugins/*/ui/**/*.ts", "../../plugins/*/ui/**/*.svelte"]
 }

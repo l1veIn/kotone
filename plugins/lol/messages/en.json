@@ -1,0 +1,14 @@
+{
+  "plugin_lol_name": "League of Legends",
+  "plugin_lol_description": "This match's 10 players' history and weak spots, plus the summoner spells the enemy used; reads only the local client and in-game APIs",
+  "plugin_lol_source_client_name": "Read client data",
+  "plugin_lol_source_client_desc": "Reads League of Legends' local client and in-game APIs (read-only, nothing is changed) to look up the history of this match's players, point out the enemy's weak spot, and track the summoner spells the enemy used; the game hub also uses it to know phases like champion select, loading and in match, and in-game events.",
+  "plugin_lol_source_client_risk": "On the Chinese (Tencent) servers this kind of feature may break Tencent's user agreement; tools like LeagueAkari have reports of bans and chat mutes, and Riot restricts third-party cooldown timers. Whether to use it is your call.",
+  "plugin_lol_tab_settings": "Settings",
+  "plugin_lol_settings_intro": "{companion} needs the switches below to read this match's data. Changes apply right away; {companion}'s tool list follows from the next conversation.",
+  "plugin_lol_game_section_title": "League of Legends plugin",
+  "plugin_lol_game_section_desc": "Match history, weak spots and summoner spells for this game come from the League of Legends plugin.",
+  "plugin_lol_game_section_open": "Open the League of Legends plugin",
+  "plugin_lol_events_off": "The League of Legends plugin's \"Read client data\" is off: only the generic events arrive (start, close, window switches, match start and end), not phases like champion select or loading, nor in-game events.",
+  "plugin_lol_game_section_plugin_off": "The League of Legends plugin is off: turn it on first on its page or in Settings → Plugins."
+}

@@ -13,6 +13,8 @@ kotone-core.workspace = true
 kotone-ai.workspace = true
 kotone-tools.workspace = true
 kotone-exec.workspace = true
+# 插件契约（ADR 038）：开着的插件给她的工具和话（`Offer`），由桌面端按开关算好交进来
+kotone-plugin-api.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

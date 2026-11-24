@@ -27,6 +27,8 @@ pub struct PromptContext<'a> {
     pub workspace: Option<&'a Snapshot>,
     /// 能力概览（[`capability_overview`] 按这段对话的工具清单生成）；空 = 不写这一节。
     pub capabilities: &'a str,
+    /// 开着的插件给主会话的几条“工作方式”（[`crate::Catalog::plugin_rules`]，ADR 038）；接在主会话的规矩后面。
+    pub plugin_rules: &'a str,
 }
 
 /// 每轮附注的输入。
@@ -106,11 +108,7 @@ const MAIN_TOOLS_RULE: &str = "工作方式：\n\
 - 下面的规矩里用到你手上没有的工具（例如 game.look、game.act、automation.save、models.download）的事，交给后台去做。\n\
 - 歌：放歌、暂停、切歌、这首歌叫什么、红心都用 music 马上做，不交给后台（Kotone 自己放网易云的歌）。\
 玩家要听某首歌就 play 带 query；“每日推荐”“我喜欢的”“私人 FM”“xx 歌单”用 from。\
-结果里跳过了的歌（要 VIP、没版权）照实说一句；返回 need_login 就请玩家在音乐页或聊天页点“登录网易云音乐”扫码（只要一次）。\n\
-- 英雄联盟（读本机的客户端和局内接口，马上返回）：这局的样子、“谁没闪”“对面谁没带闪”用 lol.match；\
-玩家说“对面阿狸闪了”就用 lol.spell 记下（不用问），简短应一声几点好；“查战绩”“对面谁是突破口”用 lol.scout，\
-挑一两个最值得说的用信息的口吻说（“对面辅助最近五连败、劫最近没玩过”），不下命令，隐藏战绩的提一句。\
-玩家说了“发出去 / 发聊天框”才用 game_chat.send 发：技能发 lol.spell 返回的 chat 那句，战绩一条一行。\n";
+结果里跳过了的歌（要 VIP、没版权）照实说一句；返回 need_login 就请玩家在音乐页或聊天页点“登录网易云音乐”扫码（只要一次）。\n";
 
 /// 后台手上的工具（几乎全部）。
 const SUBAGENT_TOOLS_RULE: &str = "工作方式：\n\
@@ -199,6 +197,7 @@ pub fn system_prompt(ctx: &PromptContext<'_>) -> String {
     }
     out.push_str(WHAT_YOU_DO);
     out.push_str(MAIN_TOOLS_RULE);
+    out.push_str(ctx.plugin_rules);
     out.push_str(COMMON_RULES);
     out.push_str(DELEGATE_RULES);
     if !ctx.capabilities.trim().is_empty() {
@@ -289,12 +288,9 @@ const CAPABILITIES: &[(&str, &str, &[&str])] = &[
         "game",
         "游戏里帮玩家：看游戏聊天、替玩家在聊天框打字、用语音或弹幕告诉玩家、定时提醒、打开 / 切换游戏、\
 一边看画面一边操作游戏、用虚拟麦克风替玩家对队友说话、听队友的语音（例如同传翻译）、\
-放歌（网易云：点歌、每日推荐、我喜欢的、私人 FM、暂停切歌）、\
-英雄联盟里查这局玩家的战绩和突破口、记对面交的召唤师技能",
+放歌（网易云：点歌、每日推荐、我喜欢的、私人 FM、暂停切歌）",
         &[
             "music",
-            "lol.scout",
-            "lol.spell",
             "companion.read_chat",
             "game_chat.send",
             "speak",
@@ -424,6 +420,27 @@ pub fn capability_overview(catalog: &crate::catalog::Catalog) -> String {
                 .collect();
         }
         out.push_str(&format!("- {sentence}（{}）\n", tools.join("、")));
+    }
+    // 开着的插件（ADR 038：能力概览按插件列，关着的不列）
+    for plugin in catalog.plugins() {
+        let tools: Vec<&str> = entries
+            .iter()
+            .filter(|e| {
+                matches!(&e.source, crate::catalog::Source::Plugin { plugin: id, .. } if *id == plugin.id)
+            })
+            .map(|e| e.name.as_str())
+            .take(3)
+            .collect();
+        let sentence = if plugin.overview.trim().is_empty() {
+            &plugin.name
+        } else {
+            &plugin.overview
+        };
+        out.push_str(&format!(
+            "- {sentence}（{}插件：{}）\n",
+            plugin.name,
+            tools.join("、")
+        ));
     }
     out
 }

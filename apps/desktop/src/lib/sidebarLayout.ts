@@ -1,9 +1,10 @@
-// 侧边栏可以自己排（ADR 034 第六节）：两组（游戏陪玩、语音输入）里的页面在组内上移 / 下移、隐藏。
+// 侧边栏可以自己排（ADR 034 第六节）：几组（游戏陪玩、语音输入、插件）里的页面在组内上移 / 下移、隐藏。
+// 插件组（ADR 038）的页面是每个插件一项（`plugin:<id>`），由 sidebarItems.ts 按插件的登记补上。
 // 存在设置 `ui.sidebar`（order、hidden），她也能改。“设置”和“关于”在底部固定，不在这里。
 // 规则：order 只管它认得的页面；没在 order 里的（新加的页面、旧版本没有的）按默认位置插回去，
 // 所以排过序以后新加的页面也看得见。纯函数，不碰界面。
 
-export type SidebarGroupId = "companion" | "voice";
+export type SidebarGroupId = "companion" | "voice" | "plugins";
 
 /** 两组的默认顺序（页面 ID 和 AppSidebar 的 PageId 一致）。 */
 export const SIDEBAR_GROUPS: { id: SidebarGroupId; pages: string[] }[] = [

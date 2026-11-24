@@ -14,6 +14,17 @@ const here = dirname(fileURLToPath(import.meta.url));
 const app = join(here, "..");
 const repo = join(app, "..", "..");
 const cjk = /[一-鿿]/;
+/** 插件（ADR 038）：plugins/<id>/ 下有自己的页面（ui/）和文案（messages/<语言>.json）。 */
+const pluginsDir = join(repo, "plugins");
+const pluginIds = readdirSync(pluginsDir).filter((id) => statSync(join(pluginsDir, id)).isDirectory());
+const pluginCatalogs = pluginIds
+  .filter((id) => { try { return statSync(join(pluginsDir, id, "messages", "zh-CN.json")).isFile(); } catch { return false; } })
+  .map((id) => ({ id, zh: join(pluginsDir, id, "messages", "zh-CN.json"), en: join(pluginsDir, id, "messages", "en.json") }));
+const pluginUiFiles = () => pluginIds.flatMap((id) => {
+  try { return walk(join(pluginsDir, id, "ui"), [".svelte", ".ts"]); } catch { return []; }
+});
+/** 插件的名字、说明、数据开关的名字 / 说明 / 风险提示由宿主按约定的键取（lib/plugins.ts 的 pluginText），代码里不直接写 m.xxx。 */
+const pluginConventionKey = /^plugin_[a-z0-9_]+?_(name|description|source_[a-z0-9_]+_(name|desc|risk))$/;
 
 function walk(dir: string, exts: string[]): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -86,7 +97,7 @@ function ignoredLines(text: string): Set<number> {
 
 test("the frontend keeps its words in messages/zh-CN, not in code", () => {
   const hits: string[] = [];
-  for (const file of walk(join(app, "src"), [".svelte", ".ts"])) {
+  for (const file of [...walk(join(app, "src"), [".svelte", ".ts"]), ...pluginUiFiles()]) {
     // 预览用的模拟数据（假歌单、假歌名）不是界面文字
     if (/browserMock\.ts$|musicMock\.ts$|persona\.ts$|vite-env\.d\.ts$/.test(file)) continue;
     const text = readFileSync(file, "utf8");
@@ -105,16 +116,26 @@ test("every message in messages/zh-CN is used, and the catalogs agree with proje
   expect(settings.modules.every((m: string) => !/^https?:/.test(m)), "插件不从网上拉").toBe(true);
   const patterns: string[] = settings["plugin.inlang.messageFormat"].pathPattern;
   const catalogs = readdirSync(join(app, "messages", "zh-CN")).filter((n) => n.endsWith(".json"));
-  expect(catalogs.map((n) => `./messages/{locale}/${n}`).sort()).toEqual([...patterns].sort());
-  const sources = walk(join(app, "src"), [".svelte", ".ts"]).map((f) => readFileSync(f, "utf8")).join("\n");
+  expect([
+    ...catalogs.map((n) => `./messages/{locale}/${n}`),
+    ...pluginCatalogs.map((p) => `../../plugins/${p.id}/messages/{locale}.json`),
+  ].sort()).toEqual([...patterns].sort());
+  const sources = [...walk(join(app, "src"), [".svelte", ".ts"]), ...pluginUiFiles()].map((f) => readFileSync(f, "utf8")).join("\n");
   const unused: string[] = [];
   const seen = new Map<string, string>();
-  for (const name of catalogs) {
-    const messages = JSON.parse(readFileSync(join(app, "messages", "zh-CN", name), "utf8"));
+  const files = [
+    ...catalogs.map((name) => ({ name, path: join(app, "messages", "zh-CN", name), plugin: null as string | null })),
+    ...pluginCatalogs.map((p) => ({ name: `plugins/${p.id}`, path: p.zh, plugin: p.id })),
+  ];
+  for (const { name, path, plugin } of files) {
+    const messages = JSON.parse(readFileSync(path, "utf8"));
     for (const key of Object.keys(messages)) {
       if (key === "$schema") continue;
       expect(seen.has(key), `${key} 在 ${seen.get(key)} 和 ${name} 里重复`).toBe(false);
       seen.set(key, name);
+      // 插件的文案以 plugin_<id>_ 开头（不和本体的撞）
+      if (plugin) expect(key.startsWith(`plugin_${plugin.replace(/-/g, "_")}_`), `${name}: ${key}`).toBe(true);
+      if (plugin && pluginConventionKey.test(key)) continue;
       if (!new RegExp(`\\bm\\.${key}\\b`).test(sources)) unused.push(`${name}: ${key}`);
     }
   }
@@ -133,9 +154,13 @@ test("every message has an English translation with the same parameters", () => 
   const enDir = join(app, "messages", "en");
   expect(readdirSync(enDir).sort()).toEqual(readdirSync(zhDir).sort());
   const problems: string[] = [];
-  for (const name of readdirSync(zhDir)) {
-    const zh = JSON.parse(readFileSync(join(zhDir, name), "utf8"));
-    const en = JSON.parse(readFileSync(join(enDir, name), "utf8"));
+  const pairs = [
+    ...readdirSync(zhDir).map((name) => ({ name, zh: join(zhDir, name), en: join(enDir, name) })),
+    ...pluginCatalogs.map((p) => ({ name: `plugins/${p.id}`, zh: p.zh, en: p.en })),
+  ];
+  for (const { name, zh: zhPath, en: enPath } of pairs) {
+    const zh = JSON.parse(readFileSync(zhPath, "utf8"));
+    const en = JSON.parse(readFileSync(enPath, "utf8"));
     for (const [key, source] of Object.entries<string>(zh)) {
       if (key === "$schema") continue;
       const value = en[key];
@@ -165,6 +190,16 @@ test("words the glossary says not to use stay out of everything players see or s
   for (const name of readdirSync(join(app, "messages", "zh-CN"))) {
     const messages = JSON.parse(readFileSync(join(app, "messages", "zh-CN", name), "utf8"));
     for (const [key, value] of Object.entries(messages)) if (key !== "$schema") check(`messages/zh-CN/${name} ${key}`, String(value));
+  }
+  // 插件的文案，以及 plugin.toml 里给她的话（系统提示）、名字和风险提示
+  for (const p of pluginCatalogs) {
+    const messages = JSON.parse(readFileSync(p.zh, "utf8"));
+    for (const [key, value] of Object.entries(messages)) check(`plugins/${p.id}/messages ${key}`, String(value));
+  }
+  for (const id of pluginIds) {
+    let toml = "";
+    try { toml = readFileSync(join(pluginsDir, id, "plugin.toml"), "utf8"); } catch { continue; }
+    toml.split(/\r?\n/).forEach((line, index) => { if (!line.trimStart().startsWith("#")) check(`plugins/${id}/plugin.toml:${index + 1}`, line); });
   }
   const rust = [
     "crates/kotone-core/src/settings_guide.rs",

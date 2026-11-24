@@ -1,0 +1,14 @@
+{
+  "plugin_lol_name": "英雄联盟",
+  "plugin_lol_description": "这局 10 个人的战绩和突破口、记对面交的召唤师技能；只读本机的客户端和局内接口",
+  "plugin_lol_source_client_name": "读客户端数据",
+  "plugin_lol_source_client_desc": "读英雄联盟客户端和对局里的本地接口（只读，不改任何东西）：查这局玩家的战绩、找对面的突破口、记对面交的召唤师技能；游戏中心靠它知道选英雄、加载、对局中这些阶段和局内的事。",
+  "plugin_lol_source_client_risk": "国服用这类功能可能违反腾讯的用户协议，LeagueAkari 等工具有封号、禁言的报告；Riot 也限制第三方的技能冷却计时。用不用由你决定。",
+  "plugin_lol_tab_settings": "设置",
+  "plugin_lol_settings_intro": "{companion}读这局的数据要用到下面的开关。改了马上生效，{companion}的工具清单从下一段对话起跟着变。",
+  "plugin_lol_game_section_title": "英雄联盟插件",
+  "plugin_lol_game_section_desc": "这个游戏的战绩、突破口和召唤师技能由英雄联盟插件提供。",
+  "plugin_lol_game_section_open": "打开英雄联盟插件",
+  "plugin_lol_events_off": "英雄联盟插件的“读客户端数据”关着：只收得到通用的事（启动、退出、切窗口、一局开始和结束），收不到选英雄、加载这些阶段和局内的事。",
+  "plugin_lol_game_section_plugin_off": "英雄联盟插件关着：先在插件页或「设置 → 插件」里打开它。"
+}

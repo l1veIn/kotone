@@ -1,6 +1,6 @@
 //! kotone-agent：内置琴音 Agent 的 Kotone 专属层（ADR 014、ADR 015）。
 //!
-//! - [`catalog`]：工具清单（工具服务 + 内置动作 + 已保存的自动化），分组与查找；
+//! - [`catalog`]：工具清单（工具服务 + 内置动作 + 开着的插件 + 已保存的自动化），分组与查找；
 //! - [`permissions`]：允许 / 询问 / 禁止、整体模式、默认规则、询问端口；
 //! - [`port`]：把上面两者接成 `kotone_ai::agent::ToolPort`；
 //! - [`prompt`]：系统提示（角色、当前游戏说明、已保存自动化摘要）；
@@ -19,7 +19,6 @@ pub use kotone_exec as exec;
 
 pub mod browser;
 pub mod catalog;
-pub mod lol;
 pub mod music;
 pub mod permissions;
 pub mod port;
