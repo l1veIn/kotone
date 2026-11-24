@@ -4,12 +4,15 @@
 // 旧配置里记的单个插件页不会冒出来。
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { openPlugin } from "./nav";
 
 const SHOTS = process.env.KOTONE_MUSIC_SHOTS;
 const shot = (testInfo: TestInfo, name: string) => (SHOTS ? `${SHOTS}/${name}.png` : testInfo.outputPath(`${name}.png`));
 /** 插件页的截图（实现记录用）：仓库的 target/plugin-shots/apps/；testDir 是 apps/desktop/e2e。 */
 const apps = (testInfo: TestInfo, name: string) => join(testInfo.project.testDir, "..", "..", "..", "target", "plugin-shots", "apps", `${name}.png`);
+/** 第七轮的截图（插件 logo，交接第十一节）：仓库的 target/plugin-shots/round7/。 */
+const round7 = (name: string) => fileURLToPath(new URL(`../../../target/plugin-shots/round7/${name}.png`, import.meta.url));
 
 async function navOrder(page: Page): Promise<string[]> {
   return page.getByTestId("app-sidebar").locator('nav [data-testid^="settings-nav-"]').evaluateAll(
@@ -174,4 +177,56 @@ test("the sidebar has one 插件 page of app cards, even with an old saved order
   // 她的 ui.open 用旧地址 ui://kotone/settings/plugins：打开「插件」
   await page.evaluate(() => (window as unknown as { kotoneUiOpen: (e: unknown) => boolean }).kotoneUiOpen({ uri: "ui://kotone/settings/plugins" }));
   await expect(page.getByTestId("plugins-page")).toBeVisible();
+});
+
+test("every plugin card shows its own logo (plugins/<id>/logo.svg), greyed when off; no logo = first-letter tile", async ({ page }) => {
+  // 交接第十一节玩家原话：“插件列表，同样需要每个插件有自己的 logo。”（ADR 039 D8，设计文档第五节）
+  await open(page);
+  await page.getByTestId("settings-nav-plugins").click();
+  const grid = page.getByTestId("plugins-grid");
+  const names: Record<string, string> = { "voice-input": "语音输入", lol: "英雄联盟", "game-voice": "游戏语音", music: "网易云音乐", interpreter: "同传" };
+  const seen = new Set<string>();
+  for (const [id, name] of Object.entries(names)) {
+    const logo = grid.getByTestId(`plugins-card-${id}-logo`);
+    await expect(logo).toHaveAttribute("data-logo", "file");
+    // 图真的出来了（不是坏图），按卡片的 40 px 显示
+    await expect.poll(() => logo.evaluate((img) => (img as HTMLImageElement).complete ? (img as HTMLImageElement).naturalWidth : 0)).toBeGreaterThan(0);
+    expect((await logo.boundingBox())?.width).toBe(40);
+    // 是这个插件自己的那张：SVG 里的 <title> 就是插件名（小 SVG 会被 Vite 内联成 data: 地址，大的是同源文件）
+    const src = (await logo.getAttribute("src"))!;
+    const data = /^data:[^,]*?(;base64)?,(.*)$/s.exec(src);
+    const svg = data ? (data[1] ? Buffer.from(data[2], "base64").toString("utf8") : decodeURIComponent(data[2])) : await (await page.request.get(src)).text();
+    expect(svg).toContain(`<title>${name}</title>`);
+    seen.add(src);
+  }
+  expect(seen.size).toBe(5);
+  // 游戏语音默认关：logo 变灰；开着的不灰
+  await expect(grid.getByTestId("plugins-card-game-voice-logo")).toHaveClass(/grayscale/);
+  await expect(grid.getByTestId("plugins-card-lol-logo")).not.toHaveClass(/grayscale/);
+
+  // 没有 logo 的插件（以后的第三方）：名字第一个字（英文大写）+ 按 id 定的底色（8 个里挑，同一个 id 每次一样）
+  const fallback = await page.evaluate(async () => {
+    const logos = await import("/src/lib/pluginLogos.ts");
+    return {
+      lol: logos.pluginLogo("lol") !== null,
+      weather: logos.pluginLogo("weather"),
+      tian: logos.fallbackLogo("weather", "天气"),
+      again: logos.fallbackLogo("weather", "别的名字").color,
+      memory: logos.fallbackLogo("mcp-memory", "memory"),
+      colors: [...logos.FALLBACK_COLORS] as string[],
+    };
+  });
+  expect(fallback.lol).toBe(true);
+  expect(fallback.weather).toBeNull();
+  expect(fallback.tian.text).toBe("天");
+  expect(fallback.colors).toContain(fallback.tian.color);
+  expect(fallback.again).toBe(fallback.tian.color);
+  expect(fallback.memory.text).toBe("M");
+  expect(fallback.colors).toContain(fallback.memory.color);
+
+  // 亮暗两种主题下的样子（logo 自带底色方块，两种主题一样）
+  for (const theme of ["light", "dark"] as const) {
+    await page.evaluate((theme) => document.documentElement.setAttribute("data-theme", theme), theme);
+    await page.screenshot({ path: round7(`plugins-logos-${theme}`), animations: "disabled" });
+  }
 });

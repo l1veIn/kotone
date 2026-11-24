@@ -1,7 +1,7 @@
 <script lang="ts">
   // 左侧栏的「插件」（ADR 038，2026-11-24 玩家定的）：像应用启动器，每个插件一张卡片，对应 MCP Apps 里的一个 App。
-  // 卡片上有图标、名字、一句话、开关（关着的卡片变淡）；点卡片（不是开关）进这个插件的 App，App 占满内容区、
-  // 用它自己的界面。以后的第三方插件（别的仓库的 MCP App，沙盒 iframe 显示 `ui://` 资源）也是这里的一张卡片，
+  // 卡片上有插件自己的 logo（ADR 039 D8，没有 logo 的用首字块）、名字、一句话、开关（关着的卡片变淡）；
+  // 点卡片（不是开关）进这个插件的 App，App 占满内容区、用它自己的界面。以后的第三方插件（别的仓库的 MCP App，沙盒 iframe 显示 `ui://` 资源）也是这里的一张卡片，
   // 打开后放进同一个 App 位置（PluginPage.svelte）。插件自己的数据开关和风险提示在它自己的 App 里。
   import { onMount } from "svelte";
   import { Switch } from "$lib/components/ui/switch";
@@ -10,6 +10,7 @@
   import { openTarget } from "$lib/stores/navigation";
   import { listPlugins, pluginDescription, pluginEnabled, pluginName, pluginsStore, setPluginEnabled } from "$lib/plugins";
   import { PLUGIN_UI } from "$lib/pluginUi";
+  import PluginLogo from "$lib/components/plugins/PluginLogo.svelte";
   import { m } from "$lib/paraglide/messages.js";
 
   onMount(() => {
@@ -29,7 +30,6 @@
     {#each $pluginsStore as plugin (plugin.manifest.id)}
       {@const manifest = plugin.manifest}
       {@const ui = PLUGIN_UI[manifest.id]}
-      {@const Icon = ui?.icon}
       {@const on = pluginEnabled($settingsStore, manifest)}
       {@const name = pluginName(manifest)}
       <div class="group relative flex min-h-36 flex-col rounded-2xl border border-hairline bg-card p-4 transition-[border-color,box-shadow,opacity]
@@ -40,9 +40,8 @@
           aria-label={m.shell_plugins_open_aria({ name })} data-testid={`plugins-card-${manifest.id}-open`} disabled={!ui}
           onclick={() => openTarget({ page: "plugin", id: manifest.id })}></button>
         <div class="pointer-events-none relative flex items-start justify-between gap-3">
-          <div class="grid size-10 shrink-0 place-items-center rounded-xl {on ? 'bg-primary/12 text-primary' : 'bg-muted text-muted-foreground'}">
-            {#if Icon}<Icon class="size-5" />{/if}
-          </div>
+          <!-- 插件自己的 logo（ADR 039 D8）：自带底色的方块，亮暗主题一样；关着的变灰 -->
+          <PluginLogo id={manifest.id} {name} size={40} off={!on} testid={`plugins-card-${manifest.id}-logo`} />
           <div class="pointer-events-auto relative z-10">
             <!-- 受控：显示的总是设置里的值，没存上时不会停在错误的位置 -->
             <Switch bind:checked={() => on, (next) => void toggle(manifest.id, next)}
