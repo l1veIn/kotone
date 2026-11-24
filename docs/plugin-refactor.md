@@ -962,3 +962,9 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 - Playwright：`plugins/lol/e2e/lol-pages.spec.ts` 新加“英雄页有技能图标”（艾瑞莉娅：被动 + Q W E R 五个、图走 Kotone 的素材层、加载出来、键位小牌、鼠标停留提示；贾克斯没有资料：四个字母格子、没有图）；`lol-pages` + `lol-stats` 12/12。全量 190 个 181 过、9 个没过（设置位置、`ui.open` 旧地址、侧栏、更新对话框，跑的时候别的子代理在改文件、开发服务器重载），单独重跑 12/12 过。
 - 截图（自己看过）：`target/plugin-shots/round7/lol-app-champion-rift-{light,dark}.png`（亚索的技能图标，图从 CommunityDragon 来）、`lol-app-champion-rift-letters-light.png`（没资料时的字母格子）、`kotone-champion-skills.png`（Kotone 里，图是预览的假代理给的色块）。
 - 没跑：真机 `lol_tools_real.py`（要重编桌面端；给琴音的字没改，有单元测试管着）。要玩家开客户端时看：国服客户端的 `champions/{id}.json` 能不能取到（取不到时自动走 CommunityDragon）。
+
+### 语音识别卡片只读、“音乐”改名“网易云音乐”（2026-11-25，a22ec685、0e6cb5db）
+
+- **语音识别卡片**（ADR 039 D2：语音识别属于本体）：语音输入页的“语音识别”只显示现在用的是哪个（名字 · 本地 / 在线 + 状态），一个链接“去 设置 → 模型 换”；切换、下载、启动 / 停止、启动热键、“打开时自动启动”都在“设置 → 模型 → 语音识别”最上面的新卡片（`AsrRuntimeCard.svelte`）。标题栏的“语音识别设置”、旧位置“语音输入 → 输入 → 语音识别”、设置说明、她的系统提示都指到那里。语音输入的四步引导（只用语音输入的新手路线）里还能下载本地模型，没动，记在交接第十二节“要玩家定的”。
+- **网易云音乐**：插件显示名从“音乐”改成“网易云音乐”（英文 NetEase Cloud Music），id、`plugins.music.*`、凭据名 `music:netease`、工具名 `music` 都不变，设置不迁；旧位置“插件 → 音乐”照样认。“音乐”只用来说放歌这件事本身。
+- 检查：svelte-check 0 / 0；相关 Playwright（asr-card、music、copilot-flow、onboarding、post-processing-hotkeys、sidebar-edit、terminology）过；`kotone-plugin-music` 33、`kotone-plugin-voice-input` 12。

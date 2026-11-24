@@ -88,8 +88,8 @@ args = ["mcp"]
 | `kotone_lol_tier` | 强度榜（峡谷按位置、海斗） | `ui://kotone/lol/tier` 强度榜 | 用网上的统计 |
 | `kotone_lol_match` | 这局的样子、谁的召唤师技能没好 | — | 读客户端数据 |
 | `kotone_lol_spell` | 记对面交的召唤师技能 | — | 读客户端数据 |
-| `kotone_lol_player` | 任何人的战绩 | `ui://kotone/lol/player`（还在 Kotone 里，见下） | 读客户端数据 |
-| `kotone_lol_champion` | 英雄的强度、克制、出装、海斗海克斯 | `ui://kotone/lol/champion`（同上） | 用网上的统计 |
+| `kotone_lol_player` | 任何人的战绩 | `ui://kotone/lol/player` | 读客户端数据 |
+| `kotone_lol_champion` | 英雄的强度、克制、出装、海斗海克斯 | `ui://kotone/lol/champion` | 用网上的统计 |
 | `kotone_lol_client` | 操作客户端：接受对局、选 / 禁英雄 | — | 操作客户端（**默认关**） |
 | `kotone_lol_game`、`kotone_lol_champions` | 只给页面用：单局详情、英雄列表 | — | 同上 |
 
