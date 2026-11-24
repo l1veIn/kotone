@@ -17,6 +17,7 @@
   import { pluginDescription, pluginEnabled, pluginName } from "$lib/plugins";
   import type { PluginPageProps } from "$lib/pluginUi";
   import { errText, patchSettings, settingsStore, toast } from "$lib/stores/ui";
+  import { companionName } from "$lib/stores/companion";
   import { m } from "$lib/paraglide/messages.js";
   import {
     PLUGIN_ID, voiceChatDefaultMic, voiceChatInstall, voiceChatPrefs, voiceChatSay, voiceChatStatus, voiceChatTest,
@@ -169,7 +170,7 @@
           </div>
         {/snippet}
       </SettingsRow>
-      <SettingsRow label={m.plugin_game_voice_try_label()} description={status && !status.ttsCanSpeak ? m.plugin_game_voice_try_desc_system() : m.plugin_game_voice_try_desc()}>
+      <SettingsRow label={m.plugin_game_voice_try_label()} description={status && !status.ttsCanSpeak ? m.plugin_game_voice_try_desc_system({ name: $companionName }) : m.plugin_game_voice_try_desc()}>
         {#snippet control()}
           <div class="flex items-center gap-2">
             <Button size="sm" variant="outline" data-testid="voice-chat-test" disabled={busy !== "" || !status?.running} onclick={() => void test()}>

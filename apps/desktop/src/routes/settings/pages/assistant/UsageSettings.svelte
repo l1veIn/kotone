@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 「琴音 → 设置 → 用量」：今天 / 本月花了多少 token 和钱、前缀缓存命中多少（usage.jsonl）。
+  // 「琴音 → 用量」：今天 / 本月花了多少 token 和钱、前缀缓存命中多少（usage.jsonl）。
   // 命中率的算法与显示照 DeepSeek Harness（MIT）的 StatsPills / token-format：命中 ÷ 输入，没全中不显示 100%。
   // 费用是 Kotone 按价格表估的（DeepSeek 分高峰 / 空闲），以服务商账单为准。
   import { onMount } from "svelte";

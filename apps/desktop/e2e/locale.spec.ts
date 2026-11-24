@@ -18,7 +18,8 @@ test("the interface is Chinese by default and can switch to English and back", a
   await expect(page.getByTestId("appearance-locale-en")).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByText("Language", { exact: false }).first()).toBeVisible();
   // 英文界面里不该冒出目录里的中文（玩家说的命令、语言名除外）——抽查侧栏和设置分组
-  await expect(page.getByTestId("advanced-group-陪玩")).toContainText("Companion");
+  await expect(page.getByTestId("advanced-nav-models")).toContainText("Models");
+  await expect(page.getByTestId("advanced-companion-moved")).toContainText("Wake-up, interaction, permissions and usage");
   await page.screenshot({ path: testInfo.outputPath("settings-en.png") });
 
   await page.getByTestId("appearance-locale-zh-CN").click();

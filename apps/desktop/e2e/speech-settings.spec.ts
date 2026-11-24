@@ -165,7 +165,8 @@ test("leaving the page discards old model and voice responses while fresh events
   await openVoiceInput(page, "history");
   await page.evaluate(() => { window.speechTest.holdSnapshots = true; window.speechTest.holdVoices = true; });
   await openSettingsTab(page, "reply");
-  await page.waitForFunction(() => window.speechTest.pendingSnapshots() === 1 && window.speechTest.pendingVoices() === 1);
+  // 「交互」在角色页（交接第十一节第 8 条）：从左侧栏进角色页先落在「角色」，那一页也读一次声音列表，所以等的声音请求可能是两个
+  await page.waitForFunction(() => window.speechTest.pendingSnapshots() === 1 && window.speechTest.pendingVoices() >= 1);
   await openVoiceInput(page, "history");
   await page.evaluate(() => { window.speechTest.holdSnapshots = false; window.speechTest.holdVoices = false; });
   await openSettingsTab(page, "reply");

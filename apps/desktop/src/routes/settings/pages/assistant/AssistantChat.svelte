@@ -26,7 +26,9 @@
   import { pluginsStore } from "../../../../lib/plugins";
   import { enabledSlots } from "../../../../lib/pluginUi";
   import PermissionMenu from "../../../../lib/agentChat/PermissionMenu.svelte";
+  import ModelMenu from "../../../../lib/agentChat/ModelMenu.svelte";
   import UsagePanel from "../../../../lib/agentChat/UsagePanel.svelte";
+  import type { ConnectionInfo } from "../../../../lib/ipc";
   import { pendingPrompt } from "../../../../lib/agentChat/pendingPrompt";
   import DeepSeekKeyForm from "../../../../lib/components/DeepSeekKeyForm.svelte";
   import type { DeepSeekSetupResult } from "../../../../lib/deepseekSetup";
@@ -39,14 +41,17 @@
   import RightSidebar from "../../../../lib/agentChat/RightSidebar.svelte";
   import { chatNarrow, RIGHT_SIDEBAR_MIN_CHAT } from "../../../../lib/stores/rightSidebar";
 
-  let { ready, active, legacy = false, onOpenSettings, onOpenTalk, onOpenConnections, onKeyConnected, onBackToVoice }: {
+  let { ready, active, legacy = false, connections, modelRequest = 0, onOpenTalk, onOpenConnections, onKeyConnected, onBackToVoice }: {
     /** 角色的 AI 连接已选好、有密钥。 */
     ready: boolean;
     active: boolean;
     /** 0.1.x 升级后还没启用角色的用户（逃生通道）：Key 卡片下多一行“回到语音输入”。 */
     legacy?: boolean;
-    onOpenSettings: () => void;
-    /** 「设置 → 怎么叫她」：呼叫键、唤醒词。 */
+    /** API 连接清单（输入框旁的模型菜单用）。 */
+    connections: ConnectionInfo[];
+    /** 每加一就打开一次输入框旁的模型菜单（“去看看：她用的模型”）。 */
+    modelRequest?: number;
+    /** 角色页的「唤醒」：呼叫键、唤醒词。 */
     onOpenTalk: () => void;
     onOpenConnections: () => void;
     /** Key 卡片连好了：接着设呼叫键（引导的“已连接”页）。 */
@@ -62,6 +67,8 @@
   let sendNotice = $state("");
   let stopping = $state(false);
   const browserPreview = !isTauri;
+  /** 打开模型菜单的请求：跳过来的（modelRequest）+ 上面“没准备好”那条里的「换模型」。 */
+  let localModelRequest = $state(0);
   const inputBusy = $derived(!["idle", "success", "error"].includes($appState.state));
   /** 有 Key 但 Agent 仍报没准备好（例如选的模型不对）：顶部一条说明。没有 Key 时显示 Key 卡片。 */
   const notReady = $derived(ready ? (chat.state?.notReadyReason ?? null) : null);
@@ -189,12 +196,13 @@
       onsubmit={submit}
       onstop={() => void stop()}
     >
-      <!-- 输入框底栏（rc2 玩家反馈）：左边一行用量小字；右边 权限图标、呼叫图标（悬停看快捷键）、发送。
-           选模型挪进「设置 → 她怎么回答 → AI 连接」：游戏陪玩不常换模型。 -->
+      <!-- 输入框底栏（rc2 玩家反馈）：左边一行用量小字；右边 她用的模型、权限图标、呼叫图标（悬停看快捷键）、发送。
+           选模型 2026-11-21 挪进过设置，2026-11-25 玩家要放回聊天页（交接第十一节第 8 条）。 -->
       {#snippet tools()}
         <UsagePanel compact messages={chat.conversation?.messages ?? []} running={chat.runningHere} {costs} />
       {/snippet}
       {#snippet options()}
+        <ModelMenu {connections} {active} openRequest={modelRequest + localModelRequest} {onOpenConnections} onchanged={() => void chat.refresh().catch(() => {})} />
         <PermissionMenu onchanged={() => void chat.refresh()} />
         <CallKotoneButton size="icon" {ready} onSetCallKey={onOpenTalk} />
       {/snippet}
@@ -216,7 +224,8 @@
           <CircleAlert class="size-4 shrink-0 text-destructive" />
           <span class="font-medium text-destructive">{m.chat_not_ready_title({ name: $companionName })}</span>
           <span class="min-w-0 flex-1 text-foreground/80">{notReady}</span>
-          <Button variant="link" size="sm" class="h-auto p-0" data-testid="agent-open-settings" onclick={onOpenSettings}>{m.chat_open_settings()}</Button>
+          <!-- 原来是“前往设置”（她用的模型在设置里）；模型菜单回到了输入框旁，直接打开它 -->
+          <Button variant="link" size="sm" class="h-auto p-0" data-testid="agent-open-settings" onclick={() => localModelRequest++}>{m.chat_not_ready_choose_model()}</Button>
         </div>
       {/if}
       {#if chat.loadError}<p role="alert" class="m-0 text-xs text-destructive">{chat.loadError}</p>{/if}

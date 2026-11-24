@@ -32,7 +32,7 @@
   "plugin_game_voice_restore_mic": "Change back",
   "plugin_game_voice_use_cable": "Set to CABLE Output",
   "plugin_game_voice_try_label": "Try it",
-  "plugin_game_voice_try_desc_system": "The current voice is the system voice, which can't be sent into the game. Switch to DeepSeek, Kokoro or an online voice in Settings → How she replies → Voice and floating text.",
+  "plugin_game_voice_try_desc_system": "The current voice is the system voice, which can't be sent into the game. Switch to DeepSeek, Kokoro or an online voice in {name} → Interaction → Voice and floating text.",
   "plugin_game_voice_try_desc": "Test tone: plays a 1-second beep and records it back from CABLE Output to confirm it works. Say something: says a test line to your teammates, who will hear it if you're in game voice chat.",
   "plugin_game_voice_test_tone": "Test tone",
   "plugin_game_voice_say": "Say something",

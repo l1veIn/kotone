@@ -1074,6 +1074,11 @@ function initMockRuntime() {
       mockConnectionSecrets.set("deepseek-mock", "sk-mock");
     }
   }
+  // ?mockAsr=local-ready：本地模型已下载（清单里也是下好的，设置 → 模型 → 语音识别 的启动按钮能点）。
+  if (mockQuery("mockAsr") === "local-ready") {
+    const model = mock.models.find((item) => item.id === mockActiveModelId());
+    if (model) model.downloaded = true;
+  }
   // ?mockCompanion=ready：角色已配好 DeepSeek（识别方式不动）。
   if (mockQuery("mockCompanion") === "ready" && !mock.settings.connections.some((c) => c.id === "deepseek-companion")) {
     mock.settings.connections.push({ id: "deepseek-companion", displayName: "DeepSeek", kind: "remote", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-flash" });
@@ -1379,7 +1384,7 @@ export async function openCatalogModelDir(category: ModelCategory, id: string): 
 
 export async function companionSelfCheck(): Promise<CompanionCheck> {
   const id = companionBindings(mock.settings.assistant)?.connectionId;
-  if (!id) throw new Error("还没有选 API 连接：请在「设置 → 她怎么回答 → 她用的模型」里选一条");
+  if (!id) throw new Error("还没有选 API 连接：请在聊天页输入框旁的「她用的模型」里选一个");
   return connectionSelfCheck(id);
 }
 
@@ -1420,7 +1425,7 @@ export async function companionStatus(): Promise<CompanionStatus> {
   const connectionId = companionBindings(assistant)?.connectionId ?? "";
   const ocr = mock.settings.ocr.activeModelId || null;
   const reason = !connectionId
-    ? "还没有选 API 连接：请在「设置 → API 连接」里添加一条，再到「设置 → 她怎么回答 → 她用的模型」里选它"
+    ? "还没有选 API 连接：请在「设置 → API 连接」里添加一条，再在聊天页输入框旁的「她用的模型」里选它"
     : !ocr
           ? "看游戏聊天需要文字识别模型：请在「设置 → 模型 → 文字识别」下载并选择一个"
           : null;

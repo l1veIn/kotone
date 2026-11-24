@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { openVoiceInput } from "./nav";
+import { openSettingsTab, openVoiceInput } from "./nav";
 
 const here = (relative: string) => fileURLToPath(new URL(relative, import.meta.url));
 
@@ -98,7 +98,10 @@ test("2 · “只想用语音输入？” → the four-step guide in the voice i
   expect(saved.ui.firstRunCompleted).toBe(true);
   expect(saved.ui.autoStart).toBe(true);
   expect(saved.connections).toHaveLength(0);
-  // 本地识别：启动 / 停止、启动快捷键、打开时自动启动都在识别卡片里
+  // 语音输入页的识别卡片只显示（交接第十一节第 6 条）；启动 / 停止、启动热键、打开时自动启动在「设置 → 模型 → 语音识别」
+  await expect(page.getByTestId("asr-card")).toHaveAttribute("data-asr-state", "local-running");
+  await expect(page.getByTestId("asr-card").getByRole("button", { name: /启动|停止|下载|切换/ })).toHaveCount(0);
+  await page.getByTestId("asr-open-models").click();
   await expect(page.getByTestId("asr-stop")).toBeVisible();
   await expect(page.getByTestId("asr-toggle-hotkey")).toBeVisible();
 });
@@ -171,6 +174,9 @@ test("4 · 0.1.x config → add a key → chat; voice input stays on local recog
   await page.getByTestId("sidebar-new-chat").click();
   await expect(page.getByTestId("chat-local-asr")).toBeVisible();
   await openVoiceInput(page);
+  await expect(page.getByTestId("asr-card")).toHaveAttribute("data-asr-state", /local-/);
+  // 启动按钮在「设置 → 模型 → 语音识别」（语音识别归本体，交接第十一节第 6 条）
+  await openSettingsTab(page, "models");
   await expect(page.getByTestId("asr-start")).toBeVisible();
 });
 
@@ -187,7 +193,13 @@ test("5 · online recognition is ready on launch: no start button on any page", 
     await openVoiceInput(page, tab);
     await expect(startButtons(page), tab).toHaveCount(0);
   }
-  for (const tab of ["call", "reply", "permissions", "usage", "models", "connections", "sound", "tuning", "appearance", "system"]) {
+  // 唤醒 · 交互 · 权限 · 用量在角色页（交接第十一节第 8 条），其余在「设置」
+  for (const tab of ["call", "reply", "permissions", "usage"]) {
+    await page.getByTestId("settings-nav-assistant").click();
+    await page.getByTestId(`assistant-nav-${tab}`).click();
+    await expect(startButtons(page), tab).toHaveCount(0);
+  }
+  for (const tab of ["models", "connections", "sound", "tuning", "appearance", "system"]) {
     await page.getByTestId("settings-nav-advanced").click();
     await page.getByTestId(`advanced-nav-${tab}`).click();
     await expect(startButtons(page), tab).toHaveCount(0);
@@ -205,42 +217,55 @@ test("6 · local recognition not started: chat shows the state and starts it fro
   await page.getByTestId("chat-local-asr-start").click();
   await expect(state).toHaveCount(0);
   await expect(page.getByTestId("titlebar-asr")).toHaveAttribute("data-asr", "local-running");
-  // 标题栏菜单：停止 / 去语音输入设置
+  // 标题栏菜单：停止 / 语音识别设置（落在「设置 → 模型 → 语音识别」，那里有启动按钮）
   await page.getByTestId("titlebar-asr").click();
   await page.getByTestId("titlebar-asr-stop").click();
   await expect(page.getByTestId("titlebar-asr")).toHaveAttribute("data-asr", "local-stopped");
   await page.getByTestId("titlebar-asr").click();
   await page.getByTestId("titlebar-asr-settings").click();
-  await expect(page.getByTestId("asr-card")).toBeVisible();
+  await expect(page.getByTestId("advanced-nav-models")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("model-category-asr")).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("models-asr-runtime")).toHaveAttribute("data-asr-state", "local-stopped");
+  await page.getByTestId("asr-start").click();
+  await expect(page.getByTestId("titlebar-asr")).toHaveAttribute("data-asr", "local-running");
 });
 
-test("7 · online ↔ local: the start UI appears and disappears, the start shortcut is kept", async ({ page }, testInfo) => {
+test("7 · online ↔ local in 设置 → 模型 → 语音识别: the start UI appears and disappears, the start hotkey is kept", async ({ page }, testInfo) => {
+  // 换识别方式、下载、启动都在「设置 → 模型 → 语音识别」（语音识别归本体，交接第十一节第 6 条；原来在语音输入页的识别卡片里）
   await page.goto("/#/settings?onboarding=never&mockAsr=online");
-  await openVoiceInput(page);
-  const card = page.getByTestId("asr-card");
+  await openSettingsTab(page, "models");
+  const card = page.getByTestId("models-asr-runtime");
   await expect(card).toHaveAttribute("data-asr-state", "online-ready");
-  await expect(page.getByTestId("asr-switch-local")).toContainText("换成本地识别：免费、不联网、边说边出字");
+  await expect(card).toContainText("DeepSeek 语音识别 · 在线");
+  await expect(page.getByTestId("asr-toggle-hotkey")).toHaveCount(0);
+  await expect(startButtons(page)).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("w8-online.png") });
-  // 下载并切换：切到本地后立即启动一次，“打开时自动启动”默认勾上（D9）
-  await page.getByTestId("asr-switch-local-button").click();
+  // 下载 X-ASR 再选中：从在线换成本地，立即启动一次，“打开时自动启动”默认勾上（D9）
+  const xAsr = "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05";
+  await page.getByTestId(`model-download-${xAsr}`).click();
+  await page.getByTestId(`model-row-${xAsr}`).click();
   await expect(card).toHaveAttribute("data-asr-state", "local-running");
   await expect(page.getByTestId("titlebar-asr")).toHaveAttribute("data-asr", "local-running");
-  expect((await settingsOf(page)).ui.autoStart).toBe(true);
+  await expect.poll(async () => (await settingsOf(page)).ui.autoStart).toBe(true);
   await page.getByTestId("hotkey-input-runtime-toggle").fill("Ctrl+Alt+K");
   await page.getByTestId("hotkey-input-runtime-toggle").press("Enter");
   await expect.poll(async () => (await settingsOf(page)).runtimeToggleHotkey).toBe("Ctrl+Alt+K");
   await page.screenshot({ path: testInfo.outputPath("w9-local.png") });
 
   for (let round = 0; round < 2; round++) {
-    await page.getByTestId("asr-switch-online").click();
+    await page.getByTestId("model-row-deepseek-asr").click();
     await expect(card).toHaveAttribute("data-asr-state", "online-ready");
     await expect(page.getByTestId("titlebar-asr")).toHaveCount(0);
     await expect(page.getByTestId("asr-toggle-hotkey")).toHaveCount(0);
     expect((await settingsOf(page)).runtimeToggleHotkey).toBe("Ctrl+Alt+K");
-    await page.getByTestId("asr-switch-local-button").click();
+    await page.getByTestId(`model-row-${xAsr}`).click();
     await expect(card).toHaveAttribute("data-asr-state", "local-running");
     await expect(page.getByTestId("hotkey-input-runtime-toggle")).toHaveValue("Ctrl+Alt+K");
   }
+  // 语音输入页的卡片跟着变，但只显示
+  await openVoiceInput(page);
+  await expect(page.getByTestId("asr-card")).toHaveAttribute("data-asr-state", "local-running");
+  await expect(page.getByTestId("asr-model-name")).toContainText("X-ASR 流式中英标点 · 本地");
 });
 
 // ---------- 8 · 设置说明里的每个位置都能跳过去（含旧写法） ----------
@@ -258,7 +283,16 @@ test("8 · every location in settings_guide (and the old wording) opens the righ
     "设置 → 其他热键", "设置 → 音效", "文字处理", "历史记录", "琴音 → 设置",
     // 术语表 v2 改名的小节：新名字和旧名字（以前的对话里引用着）都能跳过去
     "设置 → 她怎么回答 → 她用的模型", "设置 → 她怎么回答 → 气泡", "设置 → 她怎么回答 → 回答方式",
-    "设置 → 她怎么回答 → AI 连接", "设置 → 她怎么回答 → 对话气泡"];
+    "设置 → 她怎么回答 → AI 连接", "设置 → 她怎么回答 → 对话气泡",
+    // 原「设置」的陪玩组搬进角色页（交接第十一节第 8 条）：旧位置落到 唤醒 / 交互 / 权限 / 用量，她用的模型落到聊天页
+    "设置 → 怎么叫她 → 呼叫键", "设置 → 怎么叫她 → 语音唤醒", "设置 → 怎么叫她", "设置 → 她怎么回答", "设置 → 权限", "设置 → 用量",
+    "琴音 → 她是谁",
+    // 语音识别归本体（交接第十一节第 6 条）：以前写在语音输入里的位置跳到「设置 → 模型 → 语音识别」
+    "插件 → 语音输入 → 输入 → 语音识别", "语音输入 → 输入 → 语音识别", "设置 → 其他热键 → 启动 / 停止本地语音识别热键"];
+  for (const where of ["插件 → 语音输入 → 输入 → 语音识别", "语音输入 → 输入 → 语音识别", "语音输入 → 语音识别", "设置 → 其他热键 → 启动 / 停止本地语音识别热键"]) {
+    expect(await page.evaluate(async (w) => (await import("/src/lib/stores/navigation.ts")).parseLocation(w), where), where)
+      .toEqual({ page: "advanced", tab: "models", anchor: "models-asr" });
+  }
   for (const where of [...locations, ...old]) {
     const target = await page.evaluate(async (where) => {
       const nav = await import("/src/lib/stores/navigation.ts");
@@ -270,6 +304,13 @@ test("8 · every location in settings_guide (and the old wording) opens the righ
     if (!target) continue;
     if (target.page === "advanced") {
       await expect(page.getByTestId(`advanced-nav-${target.tab}`), where).toHaveAttribute("aria-current", "page");
+    } else if (target.page === "assistant" && target.section === "chat") {
+      // 「聊天页 → 她用的模型」（和旧的「设置 → 她怎么回答 → 她用的模型」）：聊天页；有输入框时打开旁边的模型菜单，
+      // 浏览器预览里没有 Key，空白对话只有填 Key 的卡片（交接第十一节第 8 条）
+      await expect(page.getByTestId("assistant-chat"), where).toBeVisible();
+      await expect(page.getByTestId("composer-model-menu").or(page.getByTestId("chat-unconfigured")).first(), where).toBeVisible();
+      await page.keyboard.press("Escape");
+      continue;
     } else if (target.page === "assistant") {
       await expect(page.getByTestId(`assistant-nav-${target.section}`), where).toHaveAttribute("aria-current", "page");
     } else if (target.page === "plugin" && target.id === "voice-input") {

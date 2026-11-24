@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 「琴音 → 设置 → 琴音 Agent」：游戏内入口、权限模式与按工具的规则（config.json `agent` 段）。
+  // 「琴音 → 权限」：游戏内入口、权限模式与按工具的规则（config.json `agent` 段）。
   // 工具清单来自后端 agent_tools（含分组、默认规则与说明）；权限要整体替换（agent_set_permissions），
   // inGame 用普通设置补丁。
   import { companionName } from "$lib/stores/companion";

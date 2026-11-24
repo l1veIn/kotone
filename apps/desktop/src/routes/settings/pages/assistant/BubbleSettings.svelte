@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 「琴音陪玩 → 设置 → 对话气泡」：语音和琴音说话时，屏幕角落的气泡。设置在 config.json `assistant.bubble`。
+  // 「琴音 → 交互 → 气泡」：语音和琴音说话时，屏幕角落的气泡。设置在 config.json `assistant.bubble`。
   import { Eye } from "@lucide/svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import SettingsRow from "$lib/components/settings/SettingsRow.svelte";

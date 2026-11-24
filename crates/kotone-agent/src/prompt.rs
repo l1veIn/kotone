@@ -76,9 +76,7 @@ impl AsrState {
         match self {
             AsrState::OnlineReady => "在线识别，已就绪",
             AsrState::OnlinePreparing => "在线识别，正在准备",
-            AsrState::OnlineNotReady => {
-                "在线识别，没准备好（看「插件 → 语音输入 → 输入 → 语音识别」）"
-            }
+            AsrState::OnlineNotReady => "在线识别，没准备好（看「设置 → 模型 → 语音识别」）",
             AsrState::LocalStarted => "本地识别，已启动",
             AsrState::LocalPreparing => "本地识别，正在启动",
             AsrState::LocalNotStarted => {
@@ -137,7 +135,7 @@ const COMMON_RULES: &str = "- 能用已保存的自动化完成的，优先用�
 - 帮玩家配置 Kotone 时：先用 settings.describe 查清字段路径、可选值和生效方式，再用 settings.update \
 一次只改相关的几项；一次问一两个问题（玩什么游戏、用什么热键、要不要语音播报……），\
 不要一口气列出所有设置。不认识的设置不要猜字段名。需要别的服务商的 Key 时用 connections.request_key（聊天里弹出只给玩家看的输入框，Key 不经过你），\
-不要让玩家把 Key 发在聊天里。你的权限规则只能由玩家自己在「设置 → 权限」里修改。\n\
+不要让玩家把 Key 发在聊天里。你的权限规则只能由玩家自己在「琴音 → 权限」里修改。\n\
 - 改完设置看结果里的 effects：需要重启语音识别或重启 Kotone 才生效时，一定告诉玩家，\
 并问要不要现在重启（语音识别用 runtime.start，Kotone 用 app.restart）；不要不问就重启。\n\
 - 不要声称做成了没有做的事；工具失败时如实说明原因。\n\
@@ -381,8 +379,8 @@ pub fn capability_overview(catalog: &crate::catalog::Catalog) -> String {
         "\n## 你能做什么（能力概览）\n按你真实能做的事整理（括号里是做这件事的工具；你手上没有的交给后台做）。玩家问“你能做什么”“你会什么”时，\
 只按这里和「已安装的技能」回答，不要编没有的本事：挑三五件和玩家眼下最相关的，用口语说，不要把工具名念给玩家；\
 最后给一个具体的下一步，按附注里的“怎么叫她”和“语音识别”来定——有呼叫键就说“进游戏按 X 叫我试试”\
-（唤醒词开着也可以说喊唤醒词），没设呼叫键就建议去「设置 → 怎么叫她」设一个，\
-用本地识别又没启动时提醒先在「插件 → 语音输入」里启动本地识别（打字聊天不用）。\n",
+（唤醒词开着也可以说喊唤醒词），没设呼叫键就建议去「琴音 → 唤醒」设一个，\
+用本地识别又没启动时提醒先在标题栏或「设置 → 模型 → 语音识别」里启动本地识别（打字聊天不用）。\n",
     );
     for group in groups {
         let (sentence, representative) = match CAPABILITIES.iter().find(|(id, _, _)| *id == group) {
@@ -444,7 +442,7 @@ pub fn turn_context(ctx: &TurnContext<'_>) -> String {
     if let (Entry::Chat, Some(calling)) = (ctx.entry, ctx.calling) {
         let hotkey = calling.hotkey.trim();
         let key = if hotkey.is_empty() {
-            "呼叫键没设（在「设置 → 怎么叫她」设）".to_string()
+            "呼叫键没设（在「琴音 → 唤醒」设）".to_string()
         } else {
             format!("呼叫键 {hotkey}")
         };

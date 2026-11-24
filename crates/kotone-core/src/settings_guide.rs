@@ -114,7 +114,7 @@ pub const FIELDS: &[Field] = &[
     f("resendLastHotkey", "重发上一句热键", "插件 → 语音输入 → 输入 → 其他热键", "把语音输入上一句发成功的话再发一次；空 = 不用。", NONE, NOW),
     f("togglePostProcessingHotkey", "开关文字处理热键", "插件 → 语音输入 → 输入 → 其他热键", "空 = 不用。", NONE, NOW),
     f("cyclePostProcessingHotkey", "切换文字处理方案热键", "插件 → 语音输入 → 输入 → 其他热键", "空 = 不用。", NONE, NOW),
-    f("runtimeToggleHotkey", "启动 / 停止本地语音识别热键", "插件 → 语音输入 → 输入 → 语音识别", "只在用本地语音识别时显示和生效：按一下启动（把本地模型加载进内存），再按一下停止。在线识别打开 Kotone 就能用，没有启动这回事；换成在线识别时这个值保留，换回本地时还在。空 = 不用。", NONE, NOW),
+    f("runtimeToggleHotkey", "启动 / 停止本地语音识别热键", "设置 → 模型 → 语音识别", "只在用本地语音识别时显示和生效：按一下启动（把本地模型加载进内存），再按一下停止。在线识别打开 Kotone 就能用，没有启动这回事；换成在线识别时这个值保留，换回本地时还在。空 = 不用。", NONE, NOW),
     f("automationStopHotkey", "停下热键", "设置 → 系统 → 停下", "停下：立刻停止她正在做的事（操作游戏、后台的事）和所有自动化，按住的键一起松开。也可以按 Esc（她操作游戏时）、说“停下”或用托盘菜单「停下」。空 = 不用（托盘仍能停）。", NONE, NOW),
     f("hotkeyBackend", "热键实现方式", "设置 → 系统", "游戏里热键不灵时可以换。", &[("auto", "自动"), ("llhook", "低层键盘钩子"), ("register", "系统热键注册")], NOW),
     f("postProcessing.enabled", "文字处理开关", "插件 → 语音输入 → 文字处理", "语音输入的识别结果发送前是否经过文字处理（屏蔽词、润色、翻译等）。", NONE, NOW),
@@ -133,34 +133,34 @@ pub const FIELDS: &[Field] = &[
     f("soundFeedback.send.volume", "发送提示音音量", "设置 → 声音", "0–100。", NONE, NOW),
     f("soundFeedback.send.soundId", "发送提示音", "设置 → 声音", "", RECORD_SOUNDS, NOW),
     // ---- 游戏陪玩（角色 / Agent）：呼叫 = 呼叫键、唤醒词、聊天页的呼叫按钮 ----
-    f("assistant.hotkey", "呼叫键", "设置 → 怎么叫她 → 呼叫键，或提醒助手 → 提醒设置", "新用户的呼叫键，默认 Ctrl+Backquote（Ctrl + ~；单独的 ~ 是英雄联盟的“只攻击英雄”键，别设成它）：在游戏里按一下，她就在气泡里听你说，说完自动交给她。0.1.x 升级用户这里是原来的提醒键，呼叫键另存在 assistant.companionBindings.hotkey；空 = 不用。", NONE, NOW),
-    f("assistant.companionBindings.hotkey", "升级用户的呼叫键", "设置 → 怎么叫她 → 呼叫键", "仅 0.1.x 升级用户启用琴音后使用；按一下在气泡里听，说完自动交给她。", NONE, NOW),
+    f("assistant.hotkey", "呼叫键", "琴音 → 唤醒 → 呼叫键，或提醒助手 → 提醒设置", "新用户的呼叫键，默认 Ctrl+Backquote（Ctrl + ~；单独的 ~ 是英雄联盟的“只攻击英雄”键，别设成它）：在游戏里按一下，她就在气泡里听你说，说完自动交给她。0.1.x 升级用户这里是原来的提醒键，呼叫键另存在 assistant.companionBindings.hotkey；空 = 不用。", NONE, NOW),
+    f("assistant.companionBindings.hotkey", "升级用户的呼叫键", "琴音 → 唤醒 → 呼叫键", "仅 0.1.x 升级用户启用琴音后使用；按一下在气泡里听，说完自动交给她。", NONE, NOW),
     f("assistant.interactionMode", "提醒键的说话方式（0.1.x 提醒助手；呼叫键固定为说完自动提交）", "提醒助手 → 提醒设置", "只影响 0.1.x 升级用户保留的提醒键；呼叫她不看这一项。", &[("push-to-talk", "按住说话，松开提交"), ("dictation", "按一下开始，停顿自动提交"), ("one-shot", "按一下说一句，说完自动提交")], NOW),
-    f("assistant.connectionId", "API 连接", "设置 → 她怎么回答 → 她用的模型，或提醒助手 → 提醒设置", "她用哪条连接（连接 ID，用 connections.list 查）。0.1.x 升级用户在此保留原提醒连接，她的连接另存在 assistant.companionBindings.connectionId。", NONE, NOW),
-    f("assistant.companionBindings.connectionId", "升级用户的琴音连接", "设置 → 她怎么回答 → 她用的模型", "仅 0.1.x 升级用户启用琴音后使用；连接 ID，用 connections.list 查。", NONE, NOW),
-    f("assistant.callIdleSeconds", "通话", "设置 → 怎么叫她", "秒，0–600，缺省 30。按呼叫键或喊唤醒词就是和她通话：通话里她一直在听，开口就是下一句，不用再按键或喊唤醒词；说“退下 / 安静 / 挂了 / 没事了 / 拜拜”、再按一次呼叫键、或这么久没人说话（她在说、在做、在等确认时不算）就挂断。0 = 不通话：一问一答，答完不再听。", NONE, NOW),
-    f("assistant.echoCancellation", "开着音箱也能打断她（回声消除）", "设置 → 怎么叫她", "true（缺省）时通话里消掉音箱放出来的声音（她的声音、游戏声），玩家直接开口就能打断她；false 时她说话时不听，要打断就按呼叫键。戴耳机开着也没坏处。", NONE, NOW),
-    f("assistant.route", "呼叫交给谁", "设置 → 怎么叫她", "", &[("reminders", "内置（琴音 / 旧的单次陪玩）"), ("agent", "转交外部 Agent（需开启工具服务）")], NOW),
-    f("assistant.defaultDelivery", "回答方式", "设置 → 她怎么回答 → 声音与弹幕", "数组，元素 voice（语音）/ danmaku（弹幕），1–2 个不重复。", NONE, NOW),
-    f("assistant.speechEngine", "本地语音合成", "设置 → 她怎么回答 → 声音与弹幕", "assistant.ttsModelId 为空时使用。", &[("system", "Windows 系统语音"), ("kokoro", "Kokoro 本地中文语音（需下载）")], NOW),
+    f("assistant.connectionId", "API 连接", "聊天页 → 她用的模型，或提醒助手 → 提醒设置", "她用哪条连接（连接 ID，用 connections.list 查）。0.1.x 升级用户在此保留原提醒连接，她的连接另存在 assistant.companionBindings.connectionId。", NONE, NOW),
+    f("assistant.companionBindings.connectionId", "升级用户的琴音连接", "聊天页 → 她用的模型", "仅 0.1.x 升级用户启用琴音后使用；连接 ID，用 connections.list 查。", NONE, NOW),
+    f("assistant.callIdleSeconds", "通话", "琴音 → 唤醒", "秒，0–600，缺省 30。按呼叫键或喊唤醒词就是和她通话：通话里她一直在听，开口就是下一句，不用再按键或喊唤醒词；说“退下 / 安静 / 挂了 / 没事了 / 拜拜”、再按一次呼叫键、或这么久没人说话（她在说、在做、在等确认时不算）就挂断。0 = 不通话：一问一答，答完不再听。", NONE, NOW),
+    f("assistant.echoCancellation", "开着音箱也能打断她（回声消除）", "琴音 → 唤醒", "true（缺省）时通话里消掉音箱放出来的声音（她的声音、游戏声），玩家直接开口就能打断她；false 时她说话时不听，要打断就按呼叫键。戴耳机开着也没坏处。", NONE, NOW),
+    f("assistant.route", "呼叫交给谁", "琴音 → 唤醒", "", &[("reminders", "内置（琴音 / 旧的单次陪玩）"), ("agent", "转交外部 Agent（需开启工具服务）")], NOW),
+    f("assistant.defaultDelivery", "回答方式", "琴音 → 交互 → 声音与弹幕", "数组，元素 voice（语音）/ danmaku（弹幕），1–2 个不重复。", NONE, NOW),
+    f("assistant.speechEngine", "本地语音合成", "琴音 → 交互 → 声音与弹幕", "assistant.ttsModelId 为空时使用。", &[("system", "Windows 系统语音"), ("kokoro", "Kokoro 本地中文语音（需下载）")], NOW),
     f("assistant.ttsModelId", "在线语音合成", "设置 → 模型 → 语音合成", "空 = 自动（默认）：她用的 API 连接是 DeepSeek 且有 Key 时用 DeepSeek 语音，否则用本地的 assistant.speechEngine。在线语音按字数计费。一般用 models.activate {category: tts}。", &[("", "自动（默认）"), ("local", "本地（assistant.speechEngine）"), ("deepseek-tts", "DeepSeek 语音（在线）"), ("openai-compat-tts", "OpenAI 兼容在线语音"), ("volcano-tts", "火山在线语音")], NOW),
-    f("assistant.voiceId", "系统语音音色", "设置 → 她怎么回答 → 声音与弹幕", "Windows 系统语音的音色 ID；空 = 默认。", NONE, NOW),
-    f("assistant.kokoroVoiceId", "Kokoro 音色", "设置 → 她怎么回答 → 声音与弹幕", "如 kokoro:zf_001。", NONE, NOW),
-    f("assistant.speechVolume", "语音音量", "设置 → 她怎么回答 → 声音与弹幕", "0–100。", NONE, NOW),
-    f("assistant.speechRate", "语速", "设置 → 她怎么回答 → 声音与弹幕", "-10–10，0 为正常。", NONE, NOW),
-    f("assistant.danmakuDurationMs", "弹幕显示时间", "设置 → 她怎么回答 → 声音与弹幕", "毫秒，1000–60000。", NONE, NOW),
-    f("assistant.danmakuSpeedPxPerSec", "弹幕速度", "设置 → 她怎么回答 → 声音与弹幕", "像素/秒，40–600。", NONE, NOW),
-    f("assistant.danmakuFontSize", "弹幕字号", "设置 → 她怎么回答 → 声音与弹幕", "16–72。", NONE, NOW),
-    f("assistant.danmakuTopOffsetPx", "弹幕距顶部", "设置 → 她怎么回答 → 声音与弹幕", "像素，0–2160。", NONE, NOW),
-    f("assistant.danmakuColor", "弹幕颜色", "设置 → 她怎么回答 → 声音与弹幕", "#RRGGBB。", NONE, NOW),
-    f("assistant.danmakuEmote", "弹幕琴音表情", "设置 → 她怎么回答 → 声音与弹幕", "", &[("none", "不显示"), ("hello", "打招呼"), ("cheering", "加油"), ("pointing", "指"), ("amazed", "惊讶")], NOW),
-    f("assistant.companion.autoSend", "替你打字后直接发送", "设置 → 怎么叫她 → 快捷指令", "false 时只把字打进聊天框，由你按回车。", NONE, NOW),
-    f("assistant.companion.quickMessages", "快捷指令", "设置 → 怎么叫她 → 快捷指令", "数组：每条绑一个热键，发一句话给琴音或直接运行一个已保存的自动化。整组替换。", NONE, NOW),
-    f("agent.inGame", "通话交给她", "设置 → 权限", "true：通话（呼叫键、唤醒词、快捷指令）交给她，多步、能用全部工具；false：旧的单次陪玩。", NONE, NOW),
+    f("assistant.voiceId", "系统语音音色", "琴音 → 交互 → 声音与弹幕", "Windows 系统语音的音色 ID；空 = 默认。", NONE, NOW),
+    f("assistant.kokoroVoiceId", "Kokoro 音色", "琴音 → 交互 → 声音与弹幕", "如 kokoro:zf_001。", NONE, NOW),
+    f("assistant.speechVolume", "语音音量", "琴音 → 交互 → 声音与弹幕", "0–100。", NONE, NOW),
+    f("assistant.speechRate", "语速", "琴音 → 交互 → 声音与弹幕", "-10–10，0 为正常。", NONE, NOW),
+    f("assistant.danmakuDurationMs", "弹幕显示时间", "琴音 → 交互 → 声音与弹幕", "毫秒，1000–60000。", NONE, NOW),
+    f("assistant.danmakuSpeedPxPerSec", "弹幕速度", "琴音 → 交互 → 声音与弹幕", "像素/秒，40–600。", NONE, NOW),
+    f("assistant.danmakuFontSize", "弹幕字号", "琴音 → 交互 → 声音与弹幕", "16–72。", NONE, NOW),
+    f("assistant.danmakuTopOffsetPx", "弹幕距顶部", "琴音 → 交互 → 声音与弹幕", "像素，0–2160。", NONE, NOW),
+    f("assistant.danmakuColor", "弹幕颜色", "琴音 → 交互 → 声音与弹幕", "#RRGGBB。", NONE, NOW),
+    f("assistant.danmakuEmote", "弹幕琴音表情", "琴音 → 交互 → 声音与弹幕", "", &[("none", "不显示"), ("hello", "打招呼"), ("cheering", "加油"), ("pointing", "指"), ("amazed", "惊讶")], NOW),
+    f("assistant.companion.autoSend", "替你打字后直接发送", "琴音 → 唤醒 → 快捷指令", "false 时只把字打进聊天框，由你按回车。", NONE, NOW),
+    f("assistant.companion.quickMessages", "快捷指令", "琴音 → 唤醒 → 快捷指令", "数组：每条绑一个热键，发一句话给琴音或直接运行一个已保存的自动化。整组替换。", NONE, NOW),
+    f("agent.inGame", "通话交给她", "琴音 → 权限", "true：通话（呼叫键、唤醒词、快捷指令）交给她，多步、能用全部工具；false：旧的单次陪玩。", NONE, NOW),
     f(
         "agent.progressSpeech",
         "执行中先接一句",
-        "设置 → 权限",
+        "琴音 → 权限",
         "1.5 秒还没出声，先用语音说一句“好，我看看”。",
         NONE,
         NOW,
@@ -168,7 +168,7 @@ pub const FIELDS: &[Field] = &[
     f(
         "assistant.bubble.enabled",
         "气泡",
-        "设置 → 她怎么回答 → 气泡",
+        "琴音 → 交互 → 气泡",
         "呼叫她时，在屏幕角落用气泡显示她在听、在想、在说什么（鼠标会直接穿过去，不挡游戏）。气泡只属于她，悬浮窗只属于语音输入：关掉气泡后只用语音和弹幕回答，不会借用语音输入的悬浮窗。",
         NONE,
         NOW,
@@ -176,7 +176,7 @@ pub const FIELDS: &[Field] = &[
     f(
         "assistant.bubble.corner",
         "气泡位置",
-        "设置 → 她怎么回答 → 气泡",
+        "琴音 → 交互 → 气泡",
         "放在游戏所在屏幕的哪个角。",
         &[("bottom-right", "右下角"), ("bottom-left", "左下角"), ("top-right", "右上角"), ("top-left", "左上角")],
         NOW,
@@ -184,7 +184,7 @@ pub const FIELDS: &[Field] = &[
     f(
         "assistant.bubble.offsetY",
         "气泡离边缘的距离",
-        "设置 → 她怎么回答 → 气泡",
+        "琴音 → 交互 → 气泡",
         "逻辑像素，0–800；往屏幕中间挪开一点，避开小地图等。",
         NONE,
         NOW,
@@ -192,7 +192,7 @@ pub const FIELDS: &[Field] = &[
     f(
         "assistant.bubble.alsoDanmaku",
         "回答同时用弹幕",
-        "设置 → 她怎么回答 → 气泡",
+        "琴音 → 交互 → 气泡",
         "默认只在气泡里显示回答；打开后同时滚动弹幕。",
         NONE,
         NOW,
@@ -200,7 +200,7 @@ pub const FIELDS: &[Field] = &[
     f(
         "assistant.wake.enabled",
         "语音唤醒",
-        "设置 → 怎么叫她 → 语音唤醒",
+        "琴音 → 唤醒 → 语音唤醒",
         "喊唤醒词叫醒她，接着说要做的事。开启后常开麦克风（只在本机检测，不上传），需要先下载约 5 MB 的唤醒模型（wake.model.download）。建议戴耳机。用本地语音识别时，本地识别启动后才开始听；在线识别打开 Kotone 就开始听。",
         NONE,
         NOW,
@@ -208,7 +208,7 @@ pub const FIELDS: &[Field] = &[
     f(
         "assistant.wake.phrase",
         "唤醒词",
-        "设置 → 怎么叫她 → 语音唤醒",
+        "琴音 → 唤醒 → 语音唤醒",
         "",
         &[("qinyin-qinyin", "琴音琴音"), ("nihao-qinyin", "你好琴音")],
         NOW,
@@ -216,7 +216,7 @@ pub const FIELDS: &[Field] = &[
     f(
         "assistant.wake.sensitivity",
         "唤醒灵敏度",
-        "设置 → 怎么叫她 → 语音唤醒",
+        "琴音 → 唤醒 → 语音唤醒",
         "",
         &[("low", "低：不容易误唤醒"), ("normal", "中"), ("high", "高：更容易唤醒，也更容易误触发")],
         NOW,
@@ -224,7 +224,7 @@ pub const FIELDS: &[Field] = &[
     f(
         "assistant.wake.ack",
         "唤醒后的应答",
-        "设置 → 怎么叫她 → 语音唤醒",
+        "琴音 → 唤醒 → 语音唤醒",
         "连着往下说时不应答。",
         &[("voice", "说“嗯？”/“我在”"), ("tone", "提示音"), ("none", "不提示")],
         NOW,
@@ -232,7 +232,7 @@ pub const FIELDS: &[Field] = &[
     f(
         "assistant.wake.noSpeechTimeoutMs",
         "唤醒后等多久",
-        "设置 → 怎么叫她 → 语音唤醒",
+        "琴音 → 唤醒 → 语音唤醒",
         "毫秒，2000–15000；唤醒后一直不说话就安静结束。",
         NONE,
         NOW,
@@ -248,19 +248,19 @@ pub const FIELDS: &[Field] = &[
     f("download.source", "模型下载源", "设置 → 模型", "", &[("auto", "自动（魔搭优先，回退官方）"), ("official", "官方"), ("mirror", "镜像")], NOW),
     f("download.ghProxy", "GitHub 下载代理", "设置 → 模型", "形如 https://ghfast.top/ 的前缀；空 = 不用。", NONE, NOW),
     f("runAsAdminOnStart", "以管理员身份启动", "设置 → 系统", "部分游戏以管理员运行时需要。现在就要管理员权限用 elevation.restart。", NONE, NEXT),
-    f("ui.autoStart", "打开 Kotone 时自动启动本地语音识别", "插件 → 语音输入 → 输入 → 语音识别", "只对本地语音识别有意义：true 时每次打开 Kotone 就把本地模型加载进内存，语音输入热键、呼叫键和唤醒词马上能用；false 时要先手动启动（启动热键、语音输入页或托盘）。在线识别打开 Kotone 就能用，不看这一项；换成在线识别时值保留。这不是开机自启：开机自启是系统启动项，用 autostart.status / autostart.set。", NONE, NEXT),
+    f("ui.autoStart", "打开 Kotone 时自动启动本地语音识别", "设置 → 模型 → 语音识别", "只对本地语音识别有意义：true 时每次打开 Kotone 就把本地模型加载进内存，语音输入热键、呼叫键和唤醒词马上能用；false 时要先手动启动（启动热键、标题栏、设置 → 模型 → 语音识别或托盘）。在线识别打开 Kotone 就能用，不看这一项；换成在线识别时值保留。这不是开机自启：开机自启是系统启动项，用 autostart.status / autostart.set。", NONE, NEXT),
     f("ui.startPage", "打开软件时显示", "设置 → 系统", "打开 Kotone 窗口时先显示哪一页。空 = 聊天（默认）；不认识的值也按聊天处理。", &[("", "聊天（默认）"), ("chat", "聊天"), ("voiceInput", "语音输入")], NOW),
     f("ui.updatePromptDisabled", "不再提醒升级", "关于", "", NONE, NOW),
-    f("agent.identity.name", "琴音的名字", "琴音 → 她是谁", "空 = 默认“琴音”（或工作区 IDENTITY.md 里的名字）。改了以后她会用新名字介绍自己，界面上也跟着变；唤醒词要在语音唤醒里另外设。", NONE, NOW),
-    f("agent.matchRecap", "对局复盘", "设置 → 权限", "true（默认）：游戏退出时，琴音把这一局的对话、提醒、自动化整理成复盘，写进这个游戏的记忆，并在聊天里留一条；只整理玩了 3 分钟以上、而且这一局里叫过她或跑过自动化的。每次一次 AI 调用。", NONE, NOW),
-    f("agent.safetyCheck", "DeepSeek 内容审核", "设置 → 权限", "true（默认）：用 DeepSeek 时请求带 safety_check，审核没通过的回答会撤回并说明；审核不另收费。只对 DeepSeek 生效。", NONE, NOW),
-    f("agent.gameEffort", "通话里的思考强度", "设置 → 权限", "只对 DeepSeek 生效。通话里空 = 不思考（ADR 029：开着思考实测一句回答要多等十几秒）；玩家明确选了 low / high / max 才思考。", GAME_EFFORTS, NOW),
-    f("agent.chatEffort", "聊天窗口里的思考强度", "设置 → 权限", "只对 DeepSeek 生效。空 = 服务商默认（high）。", EFFORTS, NOW),
-    f("plugins.*", "插件", "插件", "插件在左侧栏的“插件”里：每个插件一张卡片（一个独立的 App），卡片上有开关，点开是它自己的界面。按插件 id 一份：enabled（插件开关，true / false；没写按插件的默认）、sources.<开关 id>（插件里的数据开关，没写按默认）、settings（插件自己的设置）。现有插件：lol（英雄联盟，默认开；sources.client 读客户端数据：读英雄联盟客户端和局内的本地接口（只读），查这局玩家的战绩和突破口、记对面交的召唤师技能，默认开；国服用这类功能可能违反腾讯的用户协议，风险由玩家自己决定）；game-voice（游戏语音，默认关：开着就把玩家的麦克风和你“说给队友”的话一起转进虚拟麦克风 VB-CABLE，游戏里的麦克风选 CABLE Output 队友就能听到；Kotone 没运行时队友听不到玩家。settings.includeMic 混入玩家自己的麦克风，默认 true；settings.micDeviceId 玩家的麦克风，设备名，用 audio.devices 查，default = 系统默认录音设备，不能选 CABLE Output；settings.micGain 音量百分比 0–400，默认 100；previousDefaultMic / previousCommunicationsMic 由 voice_chat.default_mic 自动记，不要改）；music（音乐，默认开：网易云的歌由 Kotone 自己放；settings.quality 音质：exhigh（默认，极高 320k，没有网易云 VIP 时最高就是这个）、standard（标准，省流量）、lossless（无损，要网易云 VIP）；settings.volume 音乐音量 0–100，默认 70，她说话时音乐会自动压低、说完恢复，不用为这个改音量）。关掉插件或它的数据开关，它的页面、给你的工具、它的游戏事件都跟着没了；你的工具清单从下一段对话起变。", NONE, NOW),
+    f("agent.identity.name", "琴音的名字", "琴音 → 角色", "空 = 默认“琴音”（或工作区 IDENTITY.md 里的名字）。改了以后她会用新名字介绍自己，界面上也跟着变；唤醒词要在语音唤醒里另外设。", NONE, NOW),
+    f("agent.matchRecap", "对局复盘", "琴音 → 权限", "true（默认）：游戏退出时，琴音把这一局的对话、提醒、自动化整理成复盘，写进这个游戏的记忆，并在聊天里留一条；只整理玩了 3 分钟以上、而且这一局里叫过她或跑过自动化的。每次一次 AI 调用。", NONE, NOW),
+    f("agent.safetyCheck", "DeepSeek 内容审核", "琴音 → 权限", "true（默认）：用 DeepSeek 时请求带 safety_check，审核没通过的回答会撤回并说明；审核不另收费。只对 DeepSeek 生效。", NONE, NOW),
+    f("agent.gameEffort", "通话里的思考强度", "琴音 → 权限", "只对 DeepSeek 生效。通话里空 = 不思考（ADR 029：开着思考实测一句回答要多等十几秒）；玩家明确选了 low / high / max 才思考。", GAME_EFFORTS, NOW),
+    f("agent.chatEffort", "聊天窗口里的思考强度", "琴音 → 权限", "只对 DeepSeek 生效。空 = 服务商默认（high）。", EFFORTS, NOW),
+    f("plugins.*", "插件", "插件", "插件在左侧栏的“插件”里：每个插件一张卡片（一个独立的 App），卡片上有开关，点开是它自己的界面。按插件 id 一份：enabled（插件开关，true / false；没写按插件的默认）、sources.<开关 id>（插件里的数据开关，没写按默认）、settings（插件自己的设置）。现有插件：lol（英雄联盟，默认开；sources.client 读客户端数据：读英雄联盟客户端和局内的本地接口（只读），查这局玩家的战绩和突破口、记对面交的召唤师技能，默认开；国服用这类功能可能违反腾讯的用户协议，风险由玩家自己决定）；game-voice（游戏语音，默认关：开着就把玩家的麦克风和你“说给队友”的话一起转进虚拟麦克风 VB-CABLE，游戏里的麦克风选 CABLE Output 队友就能听到；Kotone 没运行时队友听不到玩家。settings.includeMic 混入玩家自己的麦克风，默认 true；settings.micDeviceId 玩家的麦克风，设备名，用 audio.devices 查，default = 系统默认录音设备，不能选 CABLE Output；settings.micGain 音量百分比 0–400，默认 100；previousDefaultMic / previousCommunicationsMic 由 voice_chat.default_mic 自动记，不要改）；music（网易云音乐，默认开：网易云的歌由 Kotone 自己放；settings.quality 音质：exhigh（默认，极高 320k，没有网易云 VIP 时最高就是这个）、standard（标准，省流量）、lossless（无损，要网易云 VIP）；settings.volume 音乐音量 0–100，默认 70，她说话时音乐会自动压低、说完恢复，不用为这个改音量）。关掉插件或它的数据开关，它的页面、给你的工具、它的游戏事件都跟着没了；你的工具清单从下一段对话起变。", NONE, NOW),
     f("ui.sidebar.order", "左侧栏页面的顺序", "左侧栏 → ⋯", "页面 id 的顺序，各自在自己的分组里排：游戏陪玩组 assistant（琴音）、game（游戏）、automation（自动化）、plugins（插件：每个插件一张卡片），语音输入组 general（语音输入）。单个插件不在左侧栏，从“插件”的卡片点开（音乐在放的时候左侧栏底部有小播放条）。空 = 默认；没写到的页面按默认位置。玩家说“把自动化放到最上面”就改这里。", NONE, NOW),
     f("ui.sidebar.hidden", "左侧栏隐藏的页面", "左侧栏 → ⋯", "不在左侧栏显示的页面 id（同上）；隐藏了的还能从“⋯ → 全部页面”打开。advanced（设置）不能隐藏。玩家说“别显示语音输入”就把 general 加进来。", NONE, NOW),
-    f("agent.compactAtTokens", "对话多长时整理成摘要", "设置 → 用量", "一段对话估到这么多 token 时，琴音把较早的部分整理成摘要、之后只看摘要和最近几轮（整理那一次多花一点，之后又能命中缓存）。默认 64000；0 = 不整理。", NONE, NOW),
-    f("agent.subagents.model", "后台的事用的模型", "设置 → 她怎么回答 → 她用的模型", "交给后台的事（例如同传）用的模型 id；空 = 和琴音同一个模型。建议填同一家服务商更快更便宜的模型。", NONE, NOW),
+    f("agent.compactAtTokens", "对话多长时整理成摘要", "琴音 → 用量", "一段对话估到这么多 token 时，琴音把较早的部分整理成摘要、之后只看摘要和最近几轮（整理那一次多花一点，之后又能命中缓存）。默认 64000；0 = 不整理。", NONE, NOW),
+    f("agent.subagents.model", "后台的事用的模型", "聊天页 → 她用的模型", "交给后台的事（例如同传）用的模型 id；空 = 和琴音同一个模型。建议填同一家服务商更快更便宜的模型。", NONE, NOW),
     f("toolService.enabled", "对外工具服务", "设置 → 系统", "开启后外部 Agent（命令行 / MCP / 插件）可以连接本机 Kotone；只监听本机。", NONE, APP),
     f("browser.enabled", "内置浏览器", "设置 → 浏览器", "true（默认）：聊天页右侧栏有“网页”，玩家自己能上网，她在后台的事里能打开网页、替玩家操作（browser.*）。false：右侧栏不再显示“网页”，开着的网页都关掉；她不能在右侧栏打开网页，后台的事里没有 browser.*，她的工具清单从下一段对话起变。再打开就都回来（登录过的账号和扩展都还在）。扩展、清除浏览器登录也在“设置 → 浏览器”，只能由玩家自己动。", NONE, NOW),
 ];
@@ -395,7 +395,7 @@ fn diff(prefix: &str, old: &Value, new: &Value, out: &mut Vec<String>) {
     }
 }
 
-/// 一项设置在界面上的名字和位置（如“设置 → 怎么叫她 → 呼叫键”）。
+/// 一项设置在界面上的名字和位置（如“琴音 → 唤醒 → 呼叫键”）。
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Location {
@@ -480,7 +480,7 @@ pub fn agent_protected_violation(patch: &Value) -> Option<String> {
     for path in paths {
         if let Some(protected) = AGENT_PROTECTED.iter().find(|p| path_matches(p, &path)) {
             return Some(format!(
-                "{protected} 只能由用户在「设置 → 权限」里修改，琴音不能改自己的权限"
+                "{protected} 只能由用户在「琴音 → 权限」里修改，琴音不能改自己的权限"
             ));
         }
     }
@@ -626,11 +626,14 @@ mod tests {
 
     /// 位置要用 0.2 的界面结构写（ADR 028）：前端按这些写法跳转（navigation.ts parseLocation），
     /// 旧写法（琴音 → 设置、其他热键、音效、交流）不能再出现在说明表里。
+    /// 2026-11-25（交接第十一节第 8 条）：原「设置」的陪玩组搬进角色页（琴音 → 唤醒 / 交互 / 权限 / 用量），
+    /// 她用的模型在聊天页输入框旁（聊天页 → 她用的模型）；「设置」只剩原来的通用组。
     #[test]
     fn every_page_uses_the_new_ui_structure() {
         const TOP: &[&str] = &[
             "语音输入",
             "琴音",
+            "聊天页",
             "设置",
             "游戏列表",
             "自动化",
@@ -645,14 +648,14 @@ mod tests {
                 "语音输入",
                 &["输入", "文字处理", "历史", "悬浮窗", "交互模式"],
             ),
-            ("琴音", &["她是谁", "记忆", "技能"]),
+            (
+                "琴音",
+                &["角色", "记忆", "技能", "唤醒", "交互", "权限", "用量"],
+            ),
+            ("聊天页", &["她用的模型"]),
             (
                 "设置",
                 &[
-                    "怎么叫她",
-                    "她怎么回答",
-                    "权限",
-                    "用量",
                     "模型",
                     "API 连接",
                     "声音",
@@ -683,8 +686,18 @@ mod tests {
                         field.path
                     );
                 }
-                for old in ["设置 → 其他热键", "音效", "琴音 → 设置", "交流", "历史记录"]
-                {
+                for old in [
+                    "设置 → 其他热键",
+                    "音效",
+                    "琴音 → 设置",
+                    "交流",
+                    "历史记录",
+                    "怎么叫她",
+                    "她怎么回答",
+                    "她是谁",
+                    "设置 → 权限",
+                    "设置 → 用量",
+                ] {
                     assert!(
                         !location.contains(old),
                         "{}：位置 {location} 还是旧写法",

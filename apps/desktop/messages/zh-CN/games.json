@@ -86,7 +86,7 @@
   "game_companion_notes_label": "陪玩说明（可选）",
   "game_companion_notes_placeholder": "这个游戏的说明，例如：聊天在左下角，[队伍] 前缀是队友，[全部] 是所有人",
   "game_companion_notes_help": "陪玩时会把这段说明连同聊天截图的文字一起交给 AI；游戏适配写在这里，不需要为每个游戏写规则。",
-  "game_companion_notes_chat_region": "已记住聊天框位置，可在「设置 → 怎么叫她 → 快捷指令」里改回整窗识别。",
+  "game_companion_notes_chat_region": "已记住聊天框位置，可在「{name} → 唤醒 → 快捷指令」里改回整窗识别。",
   "game_allow_automation_input": "允许自动化输入",
   "game_allow_automation_input_desc": "关掉后，自动化程序不会对这个游戏按键、点鼠标。",
   "game_computer_use_label": "让{companion}操作",

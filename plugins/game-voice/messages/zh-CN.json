@@ -32,7 +32,7 @@
   "plugin_game_voice_restore_mic": "改回原来的",
   "plugin_game_voice_use_cable": "设成 CABLE Output",
   "plugin_game_voice_try_label": "试一下",
-  "plugin_game_voice_try_desc_system": "当前语音是系统语音，送不进游戏：在「设置 → 她怎么回答 → 声音与弹幕」换成 DeepSeek、Kokoro 或在线语音。",
+  "plugin_game_voice_try_desc_system": "当前语音是系统语音，送不进游戏：在「{name} → 交互 → 声音与弹幕」换成 DeepSeek、Kokoro 或在线语音。",
   "plugin_game_voice_try_desc": "测试音：放 1 秒“嘀”再从 CABLE Output 录回来，确认通了；说一句：对队友说一句测试的话。在游戏语音里时队友会听到。",
   "plugin_game_voice_test_tone": "测试音",
   "plugin_game_voice_say": "说一句",

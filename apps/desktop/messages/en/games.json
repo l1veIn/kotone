@@ -86,7 +86,7 @@
   "game_companion_notes_label": "Companion notes (optional)",
   "game_companion_notes_placeholder": "Notes about this game, e.g. chat is in the bottom left; [Team] is your team, [All] is everyone",
   "game_companion_notes_help": "While keeping you company, she hands these notes to the AI along with the text read from chat screenshots. Put game-specific details here; no need to write rules for each game. ",
-  "game_companion_notes_chat_region": "Chat box position saved. You can switch back to reading the whole window in Settings → Calling her → Quick commands.",
+  "game_companion_notes_chat_region": "Chat box position saved. You can switch back to reading the whole window in {name} → Wake-up → Quick commands.",
   "game_allow_automation_input": "Allow automation input",
   "game_allow_automation_input_desc": "When off, automation programs won't press keys or click the mouse in this game.",
   "game_computer_use_label": "Let {companion} take control",

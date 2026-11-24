@@ -1,11 +1,25 @@
 // ADR 028 的界面结构下常用的跳转（不是测试文件，供各 spec 引用）。
 import { expect, type Page } from "@playwright/test";
 
-/** 「设置」的某个分页：陪玩组 call / reply / permissions / usage，通用组 models / connections / sound / tuning / appearance / system。 */
+/** 角色页里原来是「设置」陪玩组的分页（交接第十一节第 8 条）：唤醒 = call、交互 = reply、权限、用量。 */
+const COMPANION_TABS = new Set(["call", "reply", "permissions", "usage"]);
+
+/**
+ * 「设置」的某个分页：models / connections / sound / tuning / appearance / system / browser。
+ * call / reply / permissions / usage 搬进了角色页（唤醒 · 交互 · 权限 · 用量），这里转去 openCompanionTab。
+ */
 export async function openSettingsTab(page: Page, tab: string) {
+  if (COMPANION_TABS.has(tab)) return openCompanionTab(page, tab);
   await page.getByTestId("settings-nav-advanced").click();
   await page.getByTestId(`advanced-nav-${tab}`).click();
   await expect(page.getByTestId(`advanced-nav-${tab}`)).toHaveAttribute("aria-current", "page");
+}
+
+/** 角色页（左侧栏她的那一项）的某个分页：identity / memory / skills / call / reply / permissions / usage。 */
+export async function openCompanionTab(page: Page, tab: string) {
+  await page.getByTestId("settings-nav-assistant").click();
+  await page.getByTestId(`assistant-nav-${tab}`).click();
+  await expect(page.getByTestId(`assistant-nav-${tab}`)).toHaveAttribute("aria-current", "page");
 }
 
 /** 「语音输入」（插件的 App，ADR 038：左侧栏「插件 → 语音输入」）的某个分页（输入 = general、文字处理 = processing、历史 = history）。 */

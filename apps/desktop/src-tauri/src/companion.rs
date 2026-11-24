@@ -102,7 +102,7 @@ pub fn connection_ready(
 ) -> Result<kotone_core::connection::ResolvedConnection, String> {
     let id = settings.companion_connection_id().trim();
     if id.is_empty() {
-        return Err("还没有选 API 连接：请在「设置 → 她怎么回答 → 她用的模型」里选一条（还没有连接就先在「设置 → API 连接」里添加）".into());
+        return Err("还没有选 API 连接：请在聊天页输入框旁的「她用的模型」里选一个（还没有连接就先在「设置 → API 连接」里添加）".into());
     }
     let connection = app.state::<SharedState>().connections.resolve(id)?;
     if connection
@@ -924,7 +924,7 @@ pub fn quick_message_text(app: &AppHandle, id: &str) -> Option<String> {
 pub async fn self_check(app: &AppHandle) -> Result<CompanionCheck, String> {
     let id = settings(app).companion_connection_id().trim().to_string();
     if id.is_empty() {
-        return Err("还没有选 API 连接：请在「设置 → 她怎么回答 → 她用的模型」里选一条".into());
+        return Err("还没有选 API 连接：请在聊天页输入框旁的「她用的模型」里选一个".into());
     }
     check_connection(app, &id).await
 }

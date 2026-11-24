@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 「设置 → 怎么叫她」：呼叫键（按一下就是和她通话，相当于按键版的语音唤醒）、通话多久没人说话挂断、
+  // 「琴音 → 唤醒」（原「设置 → 怎么叫她」）：呼叫键（按一下就是和她通话，相当于按键版的语音唤醒）、通话多久没人说话挂断、
   // 回声消除（ADR 033），下面接快捷指令等（ADR 028）。
   import { companionName } from "$lib/stores/companion";
   import { m } from "$lib/paraglide/messages.js";

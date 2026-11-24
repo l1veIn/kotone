@@ -38,7 +38,7 @@
   import type { DeepSeekSetupResult } from "../../lib/deepseekSetup";
   import { pendingPrompt } from "../../lib/agentChat/pendingPrompt";
   import Titlebar from "./Titlebar.svelte";
-  import { navigationRequest, sidebarPagesOpen, voiceInputTarget, type AssistantSection, type PageTarget } from "../../lib/stores/navigation";
+  import { navigationRequest, normalizeTarget, sidebarPagesOpen, voiceInputTarget, type AssistantSection, type PageTarget } from "../../lib/stores/navigation";
   import AssistantPage from "./pages/AssistantPage.svelte";
   import AutomationPage from "./pages/AutomationPage.svelte";
   import AdvancedPage from "./pages/AdvancedPage.svelte";
@@ -81,25 +81,24 @@
   }
   /** 侧边栏点了对话或“新对话”：切到聊天。 */
   let chatRequest = $state(0);
-  /** 打开角色页的某个分页（侧栏的角色入口、聊天里“去看看”）。普通导航清掉它，回到聊天。 */
-  let assistantOpen = $state<{ section: AssistantSection; n: number } | null>(null);
+  /**
+   * 打开角色页的某个分页（侧栏的角色入口、聊天里“去看看”）；`anchor` 是分页里的分组。普通导航清掉它，回到聊天。
+   * 唤醒 · 交互 · 权限 · 用量（原「设置」的陪玩组）也在角色页（交接第十一节第 8 条）。
+   */
+  let assistantOpen = $state<{ section: AssistantSection; anchor?: string; n: number } | null>(null);
   let openCount = 0;
-  function openCompanion(section: AssistantSection) {
+  function openCompanion(section: AssistantSection, anchor?: string) {
     page = "assistant";
     drawerOpen = false;
-    assistantOpen = { section, n: ++openCount };
+    assistantOpen = { section, anchor, n: ++openCount };
     if (section === "chat") chatRequest++;
   }
-  /** 「设置」的陪玩组（原「琴音 → 设置」，ADR 028 D11）。 */
-  function openCompanionSettings(section: AdvancedSection = "call", anchor?: string) {
-    openAdvanced(section, anchor);
-  }
-  // 聊天里的“去看看”等：跳到设置说明里写的位置。
+  // 聊天里的“去看看”等：跳到设置说明里写的位置。旧位置（设置里原来的 call / reply / permissions / usage）已在 openTarget 里落到角色页。
   const unsubscribeNavigation = navigationRequest.subscribe((request) => {
     if (!request) return;
     navigationRequest.set(null);
-    const target = request.target;
-    if (target.page === "assistant") openCompanion(target.section);
+    const target = normalizeTarget(request.target);
+    if (target.page === "assistant") openCompanion(target.section, target.anchor);
     else if (target.page === "sidebar-pages") sidebarPagesOpen.set(true);
     else if (target.page === "plugin") openPlugin(target);
     else if (target.page === "setup-key") onboarding = { mode: legacyVoiceOnly ? "upgrade" : "new", initialStep: "key" };
@@ -167,14 +166,13 @@
 
   /** 打开时先显示聊天；逃生通道和“只想用语音输入？”的用户、或设置里选了语音输入的，落在语音输入（ADR 028）。 */
   let page = $state<PageId>("assistant");
-  let advancedSection = $state<AdvancedSection>("call");
+  let advancedSection = $state<AdvancedSection>("models");
   const chatActive = $derived(page === "assistant" && (assistantOpen?.section ?? "chat") === "chat");
   let advancedAnchor = $state<{ id: string; n: number } | null>(null);
   let anchorCount = 0;
 
   function openAdvanced(section: AdvancedSection = "system", anchor?: string) {
-    // 逃生通道用户没有陪玩组：落到模型页。
-    advancedSection = legacyVoiceOnly && ["call", "reply", "permissions", "usage"].includes(section) ? "models" : section;
+    advancedSection = section;
     advancedAnchor = anchor ? { id: anchor, n: ++anchorCount } : null;
     page = "advanced";
     drawerOpen = false;
@@ -352,7 +350,7 @@
 <svelte:window bind:innerWidth={viewportWidth} />
 <div class="flex h-full flex-col overflow-hidden bg-sidebar text-foreground" data-testid="app-frame">
   <!-- 自绘标题栏（decorations:false）：侧边栏开关 + 本地识别状态（只在用本地识别时）+ 窗口控制 -->
-  <Titlebar onOpenVoiceInput={() => openVoiceInput("general", "voice-asr")} onToggleSidebar={toggleSidebar}
+  <Titlebar onOpenAsrSettings={() => openAdvanced("models", "models-asr")} onToggleSidebar={toggleSidebar}
     brandWidth={narrow ? "auto" : rail ? "3.5rem" : "14.75rem"} />
   <div class="relative flex min-h-0 flex-1 overflow-hidden">
   {#if !narrow}
@@ -381,11 +379,11 @@
         anchor={advancedAnchor}
         onSectionChange={(next) => { advancedSection = next; advancedAnchor = null; }}
         onOpenOnboarding={openOnboarding}
+        onOpenCompanion={() => openCompanion("call")}
       />
     {:else if page === "assistant"}
       <AssistantPage {chatRequest} open={assistantOpen}
         onOpenConnections={() => openAdvanced("connections")} onOpenAutomation={() => navigate("automation")}
-        onOpenSettings={() => openCompanionSettings("reply", "settings-reply-ai")} onOpenTalk={() => openCompanionSettings("call", "settings-call-hotkey")}
         onKeyConnected={keyConnected} onBackToVoice={() => openVoiceInput()} />
     {:else if page === "legacy-reminders"}
       <LegacyRemindersPage onOpenConnections={() => openAdvanced("connections")} />

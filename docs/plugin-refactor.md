@@ -752,3 +752,26 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 - 真机 `lol_tools_real.py --while-playing`：**34/34**（以前 32 项照过，多 2 项：这局页面每个人都有英雄头像、召唤师头像的路径和两个召唤师技能，给她的字里没有路径；战绩页和单局详情有头像、等级、技能、装备图标、带稀有度的海克斯）。
 
 **没验的（要玩家开客户端时看）**：国服客户端的图片接口本身（`/lol-game-data/assets/…png`、`/fe/lol-static-assets/images/ranked-mini-crests/*.svg`）能不能取到；取不到时会自动走 CommunityDragon。
+
+### 设置重排（2026-11-25）
+
+交接第十一节第 8 条。玩家原话：“陪玩相关的设置项我觉得都应该在游戏陪玩-角色页面配置吧，现在这个页面有角色、记忆、技能，再加上唤醒、交互、权限、用量我觉得很合理啊。然后模型选择这块，我觉得还是放在 chat 聊天吧。”
+
+**玩家看到的：**
+
+- 左侧栏「游戏陪玩」里琴音那一项（显示角色的名字）点开是角色页，分页一排七个：**角色 · 记忆 · 技能 · 唤醒 · 交互 · 权限 · 用量**。后四个是原来「设置」的陪玩组整排搬过来，内容不变，只改两个叫法：“怎么叫她” → **唤醒**，“她怎么回答” → **交互**。顶栏原来那句“{name}的设置在「设置」里 →”去掉了。窗口窄时分页横着滚，不换行。
+- 「设置」只剩一排：模型 · API 连接 · 声音 · 调参 · 外观 · 系统 · 浏览器。只有一组，就不写组名；说明下面一行“唤醒、交互、权限和用量在{name}自己的页面里。去「{name}」→”，找老位置的人一眼看得到。0.1.x 升级来、还没启用琴音的玩家不显示这一行，角色页也没有这四个分页（和原来设置里不显示陪玩组一样；跳过去会落到聊天页的填 Key 卡片）。
+- **她用的模型**回到聊天页：输入框底栏右边、权限盾牌左边，一个小按钮写着当前模型（`test ▾`），点开按 API 连接分组列模型（服务商的模型列表，读不到用预置的），选别的连接里的模型会同时换琴音用的连接；最下面“管理 API 连接 →”。改的是和原来「设置 → 她怎么回答 → 她用的模型」同一组字段（`assistant.connectionId`，升级用户是 `companionBindings.connectionId`；连接的 `model`），换模型不自检。没有填了 Key 的连接时按钮写“选模型”（黄色），菜单里写“还没有填了 Key 的 API 连接：在上面填 DeepSeek Key，或者到「设置 → API 连接」里加一条”；空白对话没 Key 时照旧只有填 Key 的卡片。聊天页上面“{name}还没准备好”那一条的按钮从“前往设置”改成“换个模型 →”，直接打开这个菜单。
+- 「交互」里没有选模型了，最上面留一行“她用的模型在聊天页输入框旁边选。去选 →”。以后的右下角弹窗开关照样加一个 `SettingsSection` 进「交互」（`AssistantPage.svelte` 里留了注释）。
+
+**旧位置怎么落：**
+
+- `ui.open ui://kotone/settings/call | reply | permissions | usage`：地址不变（桌面端 `SETTINGS_SECTIONS` 照旧认），界面收到后打开角色页的唤醒 / 交互 / 权限 / 用量。做法是 `navigation.ts` 的 `normalizeTarget`：`openTarget`、`openLocation` 和设置窗口收跳转请求时都经过它，一处落地。`ui.open` 的工具说明（`catalog_host.rs`）和 `docs/tool-service.md` 跟着改了。
+- 设置说明（`settings_guide.rs`）全部改成新写法：“琴音 → 唤醒 → 呼叫键”“琴音 → 交互 → 气泡”“琴音 → 权限”“琴音 → 用量”“琴音 → 角色”“聊天页 → 她用的模型”；测试把“怎么叫她 / 她怎么回答 / 她是谁 / 设置 → 权限 / 设置 → 用量”列为不许再出现。旧对话里的写法都还认：“设置 → 怎么叫她 → …”“设置 → 她怎么回答 → …”“设置 → 权限 / 用量”“琴音 → 设置 → …”“琴音 → 她是谁”落到同一处；“她用的模型”“AI 连接”的旧位置落到聊天页并打开模型菜单。
+- 系统提示（`prompt.rs`：权限只能玩家自己改、没设呼叫键时建议去哪设）、没选连接时的提示（`companion.rs`）、`docs/assistant.md`、游戏配置页和游戏语音插件里的提示都换成新位置。
+- 左侧栏顺序 / 隐藏（`ui.sidebar`）和 `ui.startPage`：存的是左侧栏的页面 id（`assistant`、`advanced`……）和 `chat` / `voiceInput`，设置里的分页从来不进这两处，没有要搬的旧值。
+- 术语表“界面用语 v2”加了“角色页”“唤醒”“交互”“她用的模型”“用量”，旧说法写进去，`设置 → 怎么叫她`、`设置 → 她怎么回答`、`设置 → 权限`、`设置 → 用量` 列为禁用说法（`terminology.spec` 查）。
+
+**截图**：`target/plugin-shots/round7/`：`role-identity.png`、`role-memory.png`、`role-skills.png`、`role-call.png`（唤醒）、`role-reply.png`（交互）、`role-permissions.png`、`role-usage.png`、`settings.png`、`chat-composer.png`、`chat-model-menu.png`。
+
+**检查**：svelte-check 0 / 0；Playwright 全量 169 个：最后一次整套 167 过，2 个没过（`danmaku.spec` 的弹幕样式、`music.spec` 的关掉插件），原因是跑的时候别的子代理在改文件，Vite 把页面整页重载了（调试时看到测试中途页面又导航了一次、角色页回到聊天页），这两个文件单跑 15/15 过；改动相关的几个 spec 重跑 40/40、8/8。`kotone-core` 303 + 集成 84（1 跳过）、`kotone-agent` 82、`kotone-tools` 111、桌面端 113（1 跳过）；clippy：core、agent、tools 干净；桌面端 `-D warnings` 卡在不是这次改的两处（`plugins/lol` 的 6 个 `unnecessary_map_or`、`plugins.rs` 测试里的 `field_reassign_with_default`，HEAD 上在这个工具链 1.98 下就有），放过这两条后干净。没跑真机脚本（只动了界面和文字）。

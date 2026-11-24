@@ -19,6 +19,8 @@ pub const EVENT: &str = "kotone://plugin";
 /// 打开一个页面（`ui.open`）：`{uri, params, title, plugin?}`。插件的页面在右侧栏，设置页在设置窗口。
 pub const UI_OPEN_EVENT: &str = "kotone://ui-open";
 /// 本体的设置页（`ui://kotone/settings/<分页>`，和界面 `advanced/types.ts` 的分页一致）。
+/// `call` / `reply` / `permissions` / `usage` 现在是角色页的 唤醒 / 交互 / 权限 / 用量（交接第十一节第 8 条，2026-11-25）：
+/// 地址不变，界面收到后打开角色页的那一页（`navigation.ts` 的 `normalizeTarget`）。
 pub const SETTINGS_SECTIONS: &[&str] = &[
     "call",
     "reply",

@@ -674,7 +674,7 @@
                 class="mt-2 w-full resize-y rounded-lg border border-input bg-background/60 px-3 py-2 text-xs leading-relaxed text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40"
               ></textarea>
               <p class="mt-1.5 mb-0 text-[11px] text-muted-foreground">
-                {m.game_companion_notes_help()}{draft.chatRegion ? m.game_companion_notes_chat_region() : ""}
+                {m.game_companion_notes_help()}{draft.chatRegion ? m.game_companion_notes_chat_region({ name: $companionName }) : ""}
               </p>
             </div>
 

@@ -181,17 +181,25 @@ test("auto and never modes respect the persisted state", async ({ page }) => {
 test("a local model that is not downloaded is shown with a recoverable download instead of a start button", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
   await openVoiceInput(page);
+  // 语音输入页的卡片只说“还没下载”，下载和启动在「设置 → 模型 → 语音识别」（交接第十一节第 6 条）
   const card = page.getByTestId("asr-card");
   await expect(card).toHaveAttribute("data-asr-state", "local-stopped");
   await expect(card).toContainText("还没下载");
-  await expect(page.getByTestId("asr-download-active")).toBeVisible();
-  await expect(page.getByTestId("asr-start")).toBeDisabled();
-  // 全部模型：设置 → 模型 → 语音识别，X-ASR 行带下载按钮
-  await page.getByTestId("asr-all-models").click();
+  await expect(card.getByRole("button", { name: /下载|启动/ })).toHaveCount(0);
+  await page.getByTestId("asr-open-models").click();
   await expect(page.getByTestId("advanced-nav-models")).toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("model-category-asr")).toHaveAttribute("aria-selected", "true");
+  const runtime = page.getByTestId("models-asr-runtime");
+  await expect(runtime).toContainText("还没下载");
+  await expect(page.getByTestId("asr-start")).toBeDisabled();
+  // X-ASR 行带下载按钮；下好以后就能启动
   await expect(page.getByText("X-ASR 流式中英标点（int8，480ms 低延迟）", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "下载", exact: true }).first()).toBeVisible();
+  const xAsr = "x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05";
+  await page.getByTestId(`model-download-${xAsr}`).click();
+  await expect(page.getByTestId(`model-row-${xAsr}`)).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId("asr-start")).toBeEnabled();
+  await page.getByTestId("asr-start").click();
+  await expect(runtime).toHaveAttribute("data-asr-state", "local-running");
 });
 
 test("a failed model download keeps an inline error and retry action", async ({ page }) => {
@@ -223,10 +231,14 @@ test("a legacy upgrade that keeps voice input preserves the reminder entry and s
   await expect(page.getByTestId("settings-nav-game")).toHaveText("游戏适配");
   await page.getByTestId("settings-nav-legacy-reminders").click();
   await expect(page.getByTestId("legacy-reminders-page")).toBeVisible();
-  // 「设置」里没有陪玩组
+  // 还没启用她：「设置」里不指向唤醒、交互这些，角色页也没有这四个分页（以前是「设置」里没有陪玩组）
   await page.getByTestId("settings-nav-advanced").click();
-  await expect(page.getByTestId("advanced-group-陪玩")).toHaveCount(0);
+  await expect(page.getByTestId("advanced-companion-moved")).toHaveCount(0);
   await expect(page.getByTestId("advanced-nav-models")).toHaveAttribute("aria-current", "page");
+  await page.getByTestId("settings-nav-assistant").click();
+  await expect(page.getByTestId("assistant-nav-identity")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("assistant-nav-call")).toHaveCount(0);
+  await page.getByTestId("settings-nav-advanced").click();
   const settings = await mockSettings(page);
   expect(settings.ui.legacyUpgrade).toBe("dismissed");
   expect(settings.assistant.hotkey).toBe("");

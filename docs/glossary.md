@@ -20,7 +20,11 @@
 | 她 / {名字} | 指角色时用“她”或当前角色的名字（界面里用 `{name}`，默认“琴音”）；“琴音”写死只用在产品名（Kotone 琴音）和默认角色上 | `琴音 Agent`、`陪玩模型`、`陪玩 AI 连接` | `agent.identity.name` | she / {name} |
 | 角色 | 她的角色卡：名字、头像、性格、唤醒词；可以切换 | `人设` | `roles`、`role.json` | character |
 | 游戏陪玩 | 侧栏分组名（ADR 028 D1，玩家定的），不当成名词指她 | | | Game companion |
-| 插件 | 装在她身上的一块本事：有自己的页面、工具和开关（英雄联盟、语音输入、音乐……，ADR 038）。照 MCP Apps：她只调用插件的工具或打开它的页面。“应用”在界面里指 Kotone 自己（“桌面应用”），所以插件不叫应用，也不叫 App；浏览器里装的叫“扩展”。每个插件有自己的 logo（原创，不用网易云、拳头这类别人的商标；第三方 MCP 服务器用它自己声明的图标，ADR 039） | | `plugins/<id>`、`kotone-plugin-api` | plugin |
+| 角色页 | 左侧栏「游戏陪玩」里她那一项（显示她的名字）点开的页面。分页：角色 · 记忆 · 技能 · 唤醒 · 交互 · 权限 · 用量；聊天也在这一页。设置说明里的位置写成“琴音 → 唤醒 → 呼叫键”（第一段是她，界面上换成 `{name}`） | | `AssistantPage`、`AssistantSection` | her page (tabs: Character · Memory · Skills · Wake-up · Interaction · Permissions · Usage) |
+| 唤醒 | 角色页的一个分页：呼叫键、通话、快捷指令、语音唤醒、聊天页的呼叫按钮。旧说法“怎么叫她”（2026-11-25 以前它是「设置」的一页） | `设置 → 怎么叫她` | 分页 ID `call` | Wake-up |
+| 交互 | 角色页的一个分页：气泡、声音与弹幕（回答方式）；以后的右下角弹窗开关也放这里。旧说法“她怎么回答”（以前在「设置」里）。她用的模型不在这里，在聊天页输入框旁 | `设置 → 她怎么回答` | 分页 ID `reply` | Interaction |
+| 她用的模型 | 聊天页输入框旁的小菜单：她用哪条 API 连接里的哪个模型（照 DeepSeek Harness 的输入框）。2026-11-21 挪进过设置，2026-11-25 玩家要放回聊天页 | （见“她”） | `assistant.connectionId`、连接的 `model` | Her model |
+| 插件 | 装在她身上的一块本事：有自己的页面、工具和开关（英雄联盟、语音输入、网易云音乐……，ADR 038）。照 MCP Apps：她只调用插件的工具或打开它的页面。“应用”在界面里指 Kotone 自己（“桌面应用”），所以插件不叫应用，也不叫 App；浏览器里装的叫“扩展”。每个插件有自己的 logo（原创，不用网易云、拳头这类别人的商标；第三方 MCP 服务器用它自己声明的图标，ADR 039） | | `plugins/<id>`、`kotone-plugin-api` | plugin |
 | 内置浏览器 / 网页 | 聊天页右侧栏的“网页”标签：你自己能上网，她在后台的事里也用它打开网页（ADR 031）。它留在本体，不是插件；“设置 → 浏览器”里有开关（默认开），关掉后右侧栏没有“网页”、她也不再打开网页（ADR 038） | | `browser.enabled`、`browser.*` | built-in browser / Web |
 | 扩展 | 内置浏览器里装的 Chrome / Edge 扩展（已解压的扩展文件夹，例如去广告），在“设置 → 浏览器”里加、删、开关。“插件”只指她身上的本事，所以浏览器里的不叫插件 | `浏览器插件` | `browser.extensions` | extension |
 | 外部 Agent | 经工具服务 / MCP 接进来的别的 Agent；界面上的“Agent”只指这个 | `AI 助手` | `assistant.route = agent` | external agent |
@@ -30,10 +34,11 @@
 | 后台的事 / 交给后台 | 她交出去慢慢做的复杂的事，聊天里是一张卡片，做完她说一句 | `子代理`、`子会话`、`后台任务` | `agent.start`、`Subagent` | background task / hand off to the background |
 | 停下 | 停掉她正在做的一切和全部自动化（不挂断通话）。停止热键、托盘、说“停下”、她操作游戏时按 Esc | `停止所有自动化`、`停止热键` | `stop::stop_everything`、`automationStopHotkey` | Stop (stop everything); “stop hotkey” |
 | 停止 / 取消 / 打断 | 停止 = 停一件具体的事（这个自动化、播放、本地语音识别）；取消 = 不做还没做的（对话框、下载、这次录音）；打断 = 她说话时被你打断 | | | stop / cancel / interrupt |
-| 权限 | 每个工具是 允许 / 先问我 / 禁止（设置 → 权限） | `授权` | `agent.permissions` | permissions: Allow / Ask first / Block |
+| 权限 | 每个工具是 允许 / 先问我 / 禁止（角色页 → 权限；以前在「设置」里） | `授权`、`设置 → 权限` | `agent.permissions` | permissions: Allow / Ask first / Block |
+| 用量 | 今天 / 本月花了多少 token 和钱、命中缓存多少、对话多长整理成摘要（角色页 → 用量；以前在「设置」里） | `设置 → 用量` | `usage.jsonl`、`agent.compactAtTokens` | usage |
 | 确认 | 她做某件事前问你一次（“这一步……，可以吗？”），回答是 允许 / 拒绝 / 这段对话都允许；通话里直接说“可以 / 不要” | `授权`、`批准` | `Asker`、`PermissionRequest` | confirmation: Allow / Deny / Allow for this conversation |
 | Key | 服务商给你的那串钥匙（“DeepSeek Key”） | `密钥`、`API Key`、`API 密钥`、`凭据` | `apiKey`、`SecretStore` | API key |
-| API 连接 | 一个服务商的地址、模型和 Key（设置 → API 连接）；她用哪个连接在“她怎么回答”里选 | `AI 连接`、`API连接` | `Connection`、`connectionId` | API connection |
+| API 连接 | 一个服务商的地址、模型和 Key（设置 → API 连接）；她用哪个连接、哪个模型在聊天页输入框旁的“她用的模型”里选 | `AI 连接`、`API连接` | `Connection`、`connectionId` | API connection |
 | 服务商 | DeepSeek、阿里云百炼、火山等 | `提供商`、`厂商` | `provider` | provider |
 | 回答方式 | 她的回答和提醒用 语音 / 弹幕 / 两种都用 | `提醒方式`、`播报方式`、`回复方式` | `assistant.defaultDelivery` | reply mode (voice / floating text) |
 | 声音 / 语音合成 | 她的声音（音色、语速、音量）；“语音合成”只用在模型分类上 | `TTS`、`朗读` | `tts*`、`SpeechOutput` | voice / text-to-speech |

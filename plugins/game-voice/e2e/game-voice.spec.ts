@@ -1,4 +1,4 @@
-// 游戏语音插件（ADR 020、038 第 4 步）：设置 → 她怎么回答 里不再有游戏语音；左侧栏「插件」里有它的卡片（默认关），
+// 游戏语音插件（ADR 020、038 第 4 步）：角色页的「交互」（原「设置 → 她怎么回答」）里不再有游戏语音；左侧栏「插件」里有它的卡片（默认关），
 // 从卡片点开它的页面（左侧栏不放插件）。打开插件 → 没装虚拟麦克风 → 自动安装 → 转发在运行 → 改 / 改回 Windows 默认麦克风 → 测试音。
 // 设置写进 config.json `plugins.game-voice`（旧的 `voiceChat` 没有了）。浏览器预览里安装与设备是模拟的（ipc/gameVoiceMock.ts）。
 // 由 apps/desktop 的 Playwright 一起跑（plugins 项目）。
@@ -20,9 +20,9 @@ test("game voice is a plugin: off by default, turn it on, install the virtual mi
   await page.goto("/#/settings?onboarding=never");
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
 
-  // 设置 → 她怎么回答：没有游戏语音了
-  await page.getByTestId("settings-nav-advanced").click();
-  await page.getByTestId("advanced-nav-reply").click();
+  // 角色页的「交互」（原「设置 → 她怎么回答」，交接第十一节第 8 条）：没有游戏语音了
+  await page.getByTestId("settings-nav-assistant").click();
+  await page.getByTestId("assistant-nav-reply").click();
   await expect(page.getByTestId("settings-reply")).toBeVisible();
   await expect(page.getByTestId("settings-reply")).not.toContainText("游戏语音");
   await expect(page.getByTestId("voice-chat-settings")).toHaveCount(0);

@@ -1,6 +1,6 @@
 <script lang="ts">
   // 输入框里的权限按钮：一个盾牌图标，悬停看当前模式，点开换模式（参照 DeepSeek Harness 输入框的“权限”下拉）。
-  // 写 agent.permissions.mode（整体替换，规则保留）。选模型不在这里：游戏陪玩不常换模型，放在「设置 → 她怎么回答」。
+  // 写 agent.permissions.mode（整体替换，规则保留）。选模型在旁边的 ModelMenu（她用的模型）。
   import { Check, LoaderCircle, Shield, ShieldCheck, ShieldEllipsis } from "@lucide/svelte";
   import * as Menu from "$lib/components/ui/dropdown-menu";
   import { m } from "$lib/paraglide/messages.js";

@@ -18,18 +18,20 @@ test("chat is home and keeps the draft across the role tabs and 设置; speech l
   await expect(page.getByTestId("assistant-nav-identity")).toHaveAttribute("aria-current", "page");
   await openChat(page);
   await expect(page.getByTestId("assistant-request")).toHaveValue("5 分钟后提醒我打野有闪");
-  // 她的设置在「设置 → 她怎么回答」，那里没有语音输入的语音设置
+  // 她的设置在角色页的「交互」（原「设置 → 她怎么回答」），那里没有语音输入的语音设置
   await openSettingsTab(page, "reply");
-  await expect(page.getByTestId("assistant-settings")).toBeVisible();
-  await expect(page.getByTestId("assistant-settings").getByTestId("speech-settings")).toHaveCount(0);
+  await expect(page.getByTestId("settings-reply")).toBeVisible();
+  // 原来这一页上面是“她用的模型”（AI 连接）那一组，现在挪到了聊天页输入框旁，只留一行指过去
+  await expect(page.getByTestId("assistant-settings")).toHaveCount(0);
+  await expect(page.getByTestId("settings-reply-model-moved")).toBeVisible();
   await page.getByRole("main").evaluate((element) => { element.scrollTop = 0; });
-  await page.screenshot({ path: testInfo.outputPath("assistant-settings.png"), animations: "disabled" });
+  await page.screenshot({ path: testInfo.outputPath("settings-reply.png"), animations: "disabled" });
   // 去设置转一圈回来，草稿还在
   await openChat(page);
   await expect(page.getByTestId("assistant-request")).toHaveValue("5 分钟后提醒我打野有闪");
   await page.getByTestId("assistant-open-summary").getByRole("button", { name: "在「自动化」里查看 →" }).click();
   await expect(page.getByTestId("automation-page")).toBeVisible();
-  // 呼叫琴音在「设置 → 怎么叫她」，声音与弹幕在「设置 → 她怎么回答」（ADR 028 D11）
+  // 呼叫琴音在角色页的「唤醒」，声音与弹幕在「交互」（原「设置 → 怎么叫她 / 她怎么回答」，交接第十一节第 8 条）
   await openSettingsTab(page, "call");
   await expect(page.getByTestId("settings-call")).toContainText("呼叫琴音");
   await openSettingsTab(page, "reply");
@@ -52,10 +54,13 @@ test("呼叫琴音 has one key (default ~) and no input-mode choice; the chat of
   await expect(page.getByTestId("hotkey-input-assistant")).toHaveValue("Ctrl+Backquote");
   await expect(page.getByTestId("settings-call")).not.toContainText("陪玩热键");
   await expect(page.getByTestId("settings-call")).toContainText("呼叫键");
-  // 聊天里的“去看看”跳到分组：设置 → 她怎么回答 → 声音与弹幕
-  await page.evaluate(async () => (await import("/src/lib/stores/navigation.ts")).openLocation("设置 → 她怎么回答 → 声音与弹幕"));
-  await expect(page.getByTestId("advanced-nav-reply")).toHaveAttribute("aria-current", "page");
-  await expect(page.locator("#settings-reply-output")).toBeInViewport();
+  // 聊天里的“去看看”跳到分组：琴音 → 交互 → 声音与弹幕；旧写法「设置 → 她怎么回答 → 声音与弹幕」也落到这里
+  for (const where of ["琴音 → 交互 → 声音与弹幕", "设置 → 她怎么回答 → 声音与弹幕"]) {
+    await page.getByTestId("settings-nav-game").click();
+    await page.evaluate(async (w) => (await import("/src/lib/stores/navigation.ts")).openLocation(w), where);
+    await expect(page.getByTestId("assistant-nav-reply"), where).toHaveAttribute("aria-current", "page");
+    await expect(page.locator("#settings-reply-output"), where).toBeInViewport();
+  }
 });
 
 test("assistant preview submits to the assistant instead of offering game send", async ({ page }) => {
@@ -109,20 +114,26 @@ test("assistant preview labels itself and never pretends to run AI", async ({ pa
 
 test("assistant shares connections and saves voice/delivery settings with an independent conflict-checked hotkey", async ({ page }) => {
   await page.goto("/#/settings?onboarding=never");
-  // 她用的模型（API 连接）在「设置 → 她怎么回答」
-  await openSettingsTab(page, "reply");
-  const reply = page.getByTestId("settings-reply");
-  await reply.getByRole("button", { name: "管理连接 →", exact: true }).click();
+  // 她用的模型（API 连接 + 模型）在聊天页输入框旁（2026-11-25 从「设置 → 她怎么回答」搬回来）：
+  // 还没有填了 Key 的连接时，菜单里说一声，并能去「设置 → API 连接」
+  await openChat(page);
+  const model = page.getByTestId("composer-model");
+  await expect(model).toHaveText("选模型");
+  await model.click();
+  await expect(page.getByTestId("composer-model-none")).toContainText("还没有填了 Key 的 API 连接");
+  await page.getByTestId("composer-model-connections").click();
   await expect(page.getByTestId("advanced-nav-connections")).toHaveAttribute("aria-current", "page");
   await page.getByTestId("connection-preset-dashscope").click();
   await page.getByTestId("connection-api-key").fill("sk-test-local-fixture");
   await page.getByTestId("connection-save").click();
   await expect(page.getByText("已保存 Key")).toBeVisible();
-  await openSettingsTab(page, "reply");
-  await reply.getByLabel("她用的 API 连接").click();
-  await page.getByRole("option").nth(1).click();
-  await expect(reply.getByRole("button", { name: "管理连接 →", exact: true })).toHaveCount(0);
-  // 呼叫键在「设置 → 怎么叫她」
+  // 回到聊天，在模型菜单里选这条连接的模型：她用的连接跟着换
+  await openChat(page);
+  await model.click();
+  await page.getByTestId("composer-model-menu").getByRole("menuitem").first().click();
+  await expect.poll(async () => page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings().then((s) => s.assistant.connectionId))).not.toBe("");
+  await expect(model).not.toHaveText("选模型");
+  // 呼叫键在角色页的「唤醒」（原「设置 → 怎么叫她」）
   await openSettingsTab(page, "call");
   const talk = page.getByTestId("settings-call");
   await talk.getByTestId("hotkey-capture-assistant").click();
@@ -133,7 +144,7 @@ test("assistant shares connections and saves voice/delivery settings with an ind
   await expect(talk.getByTestId("hotkey-input-assistant")).toHaveValue("Ctrl+F9");
   await expect(talk.getByTestId("hotkey-status-assistant")).toContainText("当前生效：Ctrl+F9");
 
-  // 声音与弹幕在「设置 → 她怎么回答」
+  // 声音与弹幕在角色页的「交互」（原「设置 → 她怎么回答」）
   await openSettingsTab(page, "reply");
   const output = page.getByTestId("output-settings");
   await output.getByRole("checkbox", { name: "弹幕", exact: true }).uncheck();
@@ -176,7 +187,7 @@ test("settings modal traps Tab and restores focus after Escape", async ({ page }
   await expect(trigger).toBeFocused();
 });
 
-test("calling her opens a call; how long it stays open and echo cancellation are set in 设置 → 怎么叫她", async ({ page }, testInfo) => {
+test("calling her opens a call; how long it stays open and echo cancellation are set in 琴音 → 唤醒", async ({ page }, testInfo) => {
   await page.goto("/#/settings?onboarding=never");
   await openSettingsTab(page, "call");
   const talk = page.getByTestId("settings-call");

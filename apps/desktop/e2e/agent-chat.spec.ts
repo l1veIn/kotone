@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { fileURLToPath } from "node:url";
 import { openSettingsTab } from "./nav";
 
 // 聊天页（ADR 028：打开 Kotone 先看到它）：用 @tauri-apps/api/mocks 模拟 agent_* 命令与 kotone://agent-* 事件，不接任何 AI。
@@ -349,21 +350,22 @@ test("switching and deleting are disabled while answering", async ({ page }) => 
   await expect(list.getByTestId("agent-conversation-delete")).toBeHidden();
 });
 
-test("not ready shows the reason and a way to settings", async ({ page }) => {
-  await openChat(page, { notReady: "请在「设置 → 她怎么回答 → AI 连接」里选一个模型" });
-  await expect(page.getByTestId("agent-not-ready")).toContainText("请在「设置 → 她怎么回答 → AI 连接」里选一个模型");
+test("not ready shows the reason and opens the model menu next to the chat box", async ({ page }) => {
+  await openChat(page, { notReady: "请在聊天页输入框旁的「她用的模型」里选一个" });
+  await expect(page.getByTestId("agent-not-ready")).toContainText("请在聊天页输入框旁的「她用的模型」里选一个");
   await page.getByTestId("assistant-request").fill("你好");
   await expect(page.getByTestId("agent-send")).toBeDisabled();
+  // 选模型回到了输入框旁边（交接第十一节第 8 条）：「换个模型」直接打开那个菜单，不再跳去设置
+  await expect(page.getByTestId("agent-open-settings")).toHaveText("换个模型 →");
   await page.getByTestId("agent-open-settings").click();
-  // 原「琴音 → 设置」并进了「设置」（ADR 028 D11）
-  await expect(page.getByTestId("advanced-nav-reply")).toHaveAttribute("aria-current", "page");
-  await expect(page.getByTestId("assistant-settings")).toBeVisible();
+  await expect(page.getByTestId("composer-model-menu")).toBeVisible();
+  await expect(page.getByTestId("assistant-chat")).toBeVisible();
 });
 
 test("agent settings replace permissions as a whole and save the in-game switch", async ({ page }) => {
   await openChat(page);
-  await page.getByTestId("settings-nav-advanced").click();
-  await page.getByTestId("advanced-nav-permissions").click();
+  // 权限在角色页（原「设置」的陪玩组，交接第十一节第 8 条）
+  await openSettingsTab(page, "permissions");
   const settings = page.getByTestId("agent-settings");
   await settings.getByTestId("agent-mode-read-only").click();
   await expect(settings.getByTestId("agent-mode-read-only")).toHaveAttribute("aria-pressed", "true");
@@ -395,13 +397,15 @@ test("agent settings replace permissions as a whole and save the in-game switch"
   expect(saved.agent?.inGame).toBe(false);
 });
 
-test("composer bar: usage inside, permission and call are icons next to send; the model moved to settings", async ({ page }, testInfo) => {
+test("composer bar: usage inside; her model, permission and call sit next to send", async ({ page }) => {
   await openChat(page);
   const composer = page.getByTestId("agent-composer");
   // 用量在输入框里面（rc2 玩家反馈：计费挪进 chatbox）
   await expect(composer.getByTestId("usage-pill")).toBeVisible();
-  // 选模型不在输入框里了：游戏陪玩不常换模型
-  await expect(page.getByTestId("composer-model")).toHaveCount(0);
+  // 她用的模型回到了输入框旁边（2026-11-25 玩家：“模型选择这块，我觉得还是放在 chat 聊天吧”）
+  const model = composer.getByTestId("composer-model");
+  await expect(model).toHaveText("test");
+  await expect(model).toHaveAttribute("title", "她用的模型：test");
   // 呼叫：发送键旁边的一个图标，悬停看快捷键
   const call = composer.getByTestId("call-kotone");
   await expect(call).toHaveAttribute("title", /呼叫琴音（呼叫键 Ctrl \+ ~）/);
@@ -413,24 +417,33 @@ test("composer bar: usage inside, permission and call are icons next to send; th
   const permission = composer.getByTestId("composer-permission");
   await expect(permission).toHaveAttribute("title", "权限：先问我");
   expect((await permission.boundingBox())!.width).toBeLessThan(40);
-  await page.screenshot({ path: testInfo.outputPath("composer-bar.png"), animations: "disabled" });
+  await page.screenshot({ path: fileURLToPath(new URL("../../../target/plugin-shots/round7/chat-composer.png", import.meta.url)), animations: "disabled" });
   await permission.click();
   await page.getByTestId("composer-permission-allow-all").click();
   await expect(permission).toHaveAttribute("title", "权限：完全权限");
   expect(await agentCalls(page, "agent_set_permissions")).toEqual([{ permissions: { mode: "allow-all", rules: {} } }]);
 
-  // 模型在「设置 → 她怎么回答 → 她用的模型」：清单来自服务商的模型列表（照 DeepSeek Harness），不是写死的预置名
-  await openSettingsTab(page, "reply");
-  const model = page.getByLabel("模型", { exact: true });
-  await expect(model).toContainText("test");
+  // 选模型：清单来自服务商的模型列表（照 DeepSeek Harness），不是写死的预置名
   await model.click();
-  await expect(page.getByRole("option", { name: "test-listed" })).toBeVisible();
-  await page.getByRole("option", { name: "test-pro" }).click();
-  await expect(model).toContainText("test-pro");
+  const menu = page.getByTestId("composer-model-menu");
+  await expect(menu).toContainText("她用的模型");
+  await expect(menu.getByTestId("composer-model-test-ai-test-listed")).toBeVisible();
+  await expect(menu.getByTestId("composer-model-test-ai-test")).toContainText("test");
+  // 截图放在仓库的 target/plugin-shots/round7/（设置重排，交接第十一节第 8 条）
+  await page.screenshot({ path: fileURLToPath(new URL("../../../target/plugin-shots/round7/chat-model-menu.png", import.meta.url)), animations: "disabled" });
+  await menu.getByTestId("composer-model-test-ai-test-pro").click();
+  await expect(model).toHaveText("test-pro");
   const calls = await page.evaluate(() => window.agentTest.calls.filter((c) => c.command === "upsert_connection" || c.command === "connection_self_check"));
-  // 换模型不再自检
+  // 换模型不自检；改的是她用的连接的模型（和原来「设置 → 她怎么回答 → 她用的模型」同一个字段）
   expect(calls.map((c) => c.command)).toEqual(["upsert_connection"]);
-  expect((calls[0].args as { connection: { model: string } }).connection.model).toBe("test-pro");
+  expect((calls[0].args as { connection: { id: string; model: string } }).connection).toMatchObject({ id: "test-ai", model: "test-pro" });
+  // 「交互」里不再有选模型，只留一行指回聊天页
+  await openSettingsTab(page, "reply");
+  await expect(page.getByTestId("settings-reply").getByTestId("assistant-model")).toHaveCount(0);
+  await expect(page.getByTestId("settings-reply").getByLabel("她用的 API 连接")).toHaveCount(0);
+  await expect(page.getByTestId("composer-model")).toBeHidden();
+  await page.getByTestId("settings-reply-open-model").click();
+  await expect(page.getByTestId("composer-model-menu")).toBeVisible();
 });
 
 test("tool cards link the settings 琴音 changed, and a key request is pasted into a private box", async ({ page }) => {
@@ -453,7 +466,7 @@ test("tool cards link the settings 琴音 changed, and a key request is pasted i
   const link = page.locator('[data-tool-id="call-s"]').getByTestId("agent-tool-changed-link");
   await expect(link).toHaveText("呼叫键 →");
   await link.click();
-  await expect(page.getByTestId("advanced-nav-call")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("assistant-nav-call")).toHaveAttribute("aria-current", "page");
   await expect(page.locator("#settings-call-hotkey")).toBeInViewport();
   // 回到聊天：侧栏的对话列表
   await page.getByTestId("sidebar-conversations").getByText("上次的对话").click();
@@ -506,8 +519,8 @@ test("compaction divider, match recap card and switch; usage shows hit rate and 
   await expect(recap).toContainText("对局复盘：测试游戏");
   await expect(recap).toContainText("你让我提醒买真眼");
 
-  await page.getByTestId("settings-nav-advanced").click();
-  await page.getByTestId("advanced-nav-permissions").click();
+  // 权限、用量在角色页（交接第十一节第 8 条）
+  await openSettingsTab(page, "permissions");
   // 对局复盘可以关
   await page.getByTestId("agent-match-recap").click();
   await expect.poll(async () => page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings().then((s) => s.agent?.matchRecap))).toBe(false);
@@ -516,7 +529,7 @@ test("compaction divider, match recap card and switch; usage shows hit rate and 
   await expect.poll(async () => page.evaluate(async () => (await import("/src/lib/ipc/browserMock.ts")).getSettings().then((s) => s.agent?.safetyCheck))).toBe(false);
   await expect(page.getByRole("combobox", { name: "通话里的思考强度" })).toContainText("默认");
   await expect(page.getByRole("combobox", { name: "聊天窗口里的思考强度" })).toContainText("默认");
-  await page.getByTestId("advanced-nav-usage").click();
+  await page.getByTestId("assistant-nav-usage").click();
   const usage = page.getByTestId("usage-settings");
   await expect(usage.getByTestId("usage-today")).toContainText("¥0.025");
   // 没全中不显示 100%（照 DeepSeek Harness）：179000 / 182000 = 98.4%
@@ -609,7 +622,7 @@ test("online recognition: the call button listens right away and says how else t
 
 test("after the AI connection changes, the chat re-reads her state instead of keeping a stale 还没准备好", async ({ page }) => {
   // 2026-11-20 真机：填完 Key 进聊天，聊天页还停在打开软件时读到的“还没有选 AI 连接”，发不出去。
-  await openChat(page, { notReady: "还没有选 API 连接：请在「设置 → 她怎么回答 → 她用的模型」里选一条" });
+  await openChat(page, { notReady: "还没有选 API 连接：请在聊天页输入框旁的「她用的模型」里选一个" });
   await expect(page.getByTestId("agent-not-ready")).toBeVisible();
   await page.evaluate(async () => {
     window.agentTest.state.notReadyReason = null;
@@ -697,4 +710,24 @@ test("what she said aloud (speak) reads as her words above the details, and an i
     return s.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING;
   });
   expect(order).toBeTruthy();
+});
+
+test("where her model used to be (设置 → 她怎么回答 → 她用的模型) now opens the model menu next to the chat box", async ({ page }) => {
+  await openChat(page);
+  for (const where of ["设置 → 她怎么回答 → 她用的模型", "聊天页 → 她用的模型"]) {
+    // 先离开聊天页（去角色页的「交互」），再跳回来
+    await openSettingsTab(page, "reply");
+    await expect(page.getByTestId("composer-model-menu")).toHaveCount(0);
+    await page.evaluate(async (w) => (await import("/src/lib/stores/navigation.ts")).openLocation(w), where);
+    await expect(page.getByTestId("assistant-chat"), where).toBeVisible();
+    await expect(page.getByTestId("composer-model-menu"), where).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("composer-model-menu"), where).toHaveCount(0);
+  }
+  // 她的 ui.open 旧地址 ui://kotone/settings/reply：角色页的「交互」
+  await page.evaluate(async () => {
+    const { emit } = await import("/node_modules/@tauri-apps/api/event.js");
+    await emit("kotone://ui-open", { uri: "ui://kotone/settings/reply", params: null, title: "reply", plugin: null });
+  });
+  await expect(page.getByTestId("assistant-nav-reply")).toHaveAttribute("aria-current", "page");
 });

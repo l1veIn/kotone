@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 「琴音陪玩 → 设置 → 语音唤醒」（ADR 017）：开关、唤醒模型下载、唤醒词、灵敏度、应答方式。
+  // 「琴音 → 唤醒 → 语音唤醒」（ADR 017）：开关、唤醒模型下载、唤醒词、灵敏度、应答方式。
   // 设置在 config.json `assistant.wake`；状态与下载走 wake_status / wake_download_model。
   import { onMount } from "svelte";
   import { Download, LoaderCircle, Mic } from "@lucide/svelte";

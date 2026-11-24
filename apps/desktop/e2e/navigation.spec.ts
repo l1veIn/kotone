@@ -1,5 +1,9 @@
 import { expect, test } from "@playwright/test";
+import { fileURLToPath } from "node:url";
 import { openSettingsTab, openVoiceInput } from "./nav";
+
+/** 设置重排的截图（交接第十一节第 8 条）放在仓库的 target/plugin-shots/round7/。 */
+const round7 = (name: string) => fileURLToPath(new URL(`../../../target/plugin-shots/round7/${name}.png`, import.meta.url));
 
 // ADR 028：麦克风和“录音时降低扬声器音量”是语音输入和呼叫共用的，放在「设置 → 声音」。
 test("speaker volume reduction is off by default and saves from the shared sound settings", async ({ page }) => {
@@ -21,8 +25,8 @@ test("speaker volume reduction is off by default and saves from the shared sound
 });
 
 // ADR 028：打开就是聊天页；侧栏上面是新对话和对话列表，底部固定「游戏陪玩」分组和一项「语音输入」；
-// 怎么叫她、她怎么回答、权限、用量搬进「设置」的陪玩组；所有设置页内容宽度一致。
-test("chat is home; sidebar groups; companion settings live in 设置; one content width", async ({ page }, testInfo) => {
+// 唤醒、交互、权限、用量在角色页（2026-11-25 从「设置」的陪玩组搬来，交接第十一节第 8 条）；「设置」只剩一排；所有设置页内容宽度一致。
+test("chat is home; sidebar groups; companion settings live on her page; one content width", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 860 });
   await page.goto("/#/settings?onboarding=never");
   await expect(page.getByTestId("assistant-chat")).toBeVisible();
@@ -45,27 +49,42 @@ test("chat is home; sidebar groups; companion settings live in 设置; one conte
   expect(listBox!.y).toBeLessThan(groupBox!.y);
   await page.screenshot({ path: testInfo.outputPath("home.png") });
 
-  // 角色页只留 角色 · 记忆 · 技能
+  // 角色页的分页：角色 · 记忆 · 技能 · 唤醒 · 交互 · 权限 · 用量（玩家原话：“现在这个页面有角色、记忆、技能，再加上唤醒、交互、权限、用量”）
   await sidebar.getByTestId("settings-nav-assistant").click();
   await expect(page.getByTestId("assistant-nav-identity")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("assistant-nav").getByRole("button")).toHaveText(["角色", "记忆", "技能", "唤醒", "交互", "权限", "用量"]);
   await expect(page.getByTestId("assistant-nav-settings")).toHaveCount(0);
   await expect(page.getByTestId("assistant-nav-chat")).toHaveCount(0);
-
-  // 原「琴音 → 设置」在「设置」的陪玩组
-  await page.getByTestId("assistant-open-settings").click();
-  await expect(page.getByTestId("advanced-group-陪玩")).toBeVisible();
-  await expect(page.getByTestId("advanced-group-通用")).toBeVisible();
+  await expect(page.getByTestId("assistant-open-settings")).toHaveCount(0);
   for (const [tab, texts] of [
     ["call", ["呼叫琴音", "呼叫键", "快捷指令", "语音唤醒"]],
-    ["reply", ["她用的模型", "API 连接", "气泡", "声音与弹幕", "回答方式"]],
+    ["reply", ["气泡", "声音与弹幕", "回答方式", "她用的模型在聊天页输入框旁边选"]],
     ["permissions", ["她怎么做事"]],
     ["usage", ["用量与费用"]],
   ] as const) {
-    await page.getByTestId(`advanced-nav-${tab}`).click();
+    await page.getByTestId(`assistant-nav-${tab}`).click();
     for (const text of texts) await expect(page.getByTestId(`settings-${tab}`), `${tab} · ${text}`).toContainText(text);
   }
-  await page.getByTestId("advanced-nav-call").click();
-  await page.screenshot({ path: testInfo.outputPath("settings-call.png"), fullPage: true });
+  // 选模型不在「交互」里了（在聊天页输入框旁）
+  await page.getByTestId("assistant-nav-reply").click();
+  await expect(page.getByTestId("settings-reply-model-moved")).toBeVisible();
+  await expect(page.getByTestId("settings-reply").getByTestId("assistant-model")).toHaveCount(0);
+  await expect(page.getByTestId("settings-reply").getByLabel("她用的 API 连接")).toHaveCount(0);
+  for (const tab of ["identity", "memory", "skills", "call", "reply", "permissions", "usage"] as const) {
+    await page.getByTestId(`assistant-nav-${tab}`).click();
+    await page.getByRole("main").evaluate((element) => { element.scrollTop = 0; });
+    await page.screenshot({ path: round7(`role-${tab}`), animations: "disabled" });
+  }
+
+  // 「设置」只剩一排（不写组名），说明下面一行指向她的页面
+  await sidebar.getByTestId("settings-nav-advanced").click();
+  await expect(page.getByTestId("advanced-nav").getByRole("button")).toHaveText(["模型", "API 连接", "声音", "调参", "外观", "系统", "浏览器"]);
+  await expect(page.getByTestId("advanced-group-陪玩")).toHaveCount(0);
+  await expect(page.getByTestId("advanced-group-通用")).toHaveCount(0);
+  await expect(page.getByTestId("advanced-companion-moved")).toContainText("唤醒、交互、权限和用量在琴音自己的页面里");
+  await page.screenshot({ path: round7("settings"), animations: "disabled" });
+  await page.getByTestId("advanced-open-companion").click();
+  await expect(page.getByTestId("assistant-nav-call")).toHaveAttribute("aria-current", "page");
 
   // 所有设置页内容列一样宽（包括模型、连接这些以前更宽的页）
   const widths: number[] = [];
@@ -79,9 +98,46 @@ test("chat is home; sidebar groups; companion settings live in 设置; one conte
   }
   for (const tab of ["system", "models", "connections", "appearance", "call", "reply"]) {
     await openSettingsTab(page, tab);
-    widths.push(await page.locator("main .ui-scope").first().evaluate((el) => el.getBoundingClientRect().width));
+    // 唤醒、交互在角色页：量那一页的内容列（聊天藏着也挂在页面里）
+    const column = tab === "call" || tab === "reply" ? page.getByTestId(`assistant-${tab}-tab`) : page.locator("main .ui-scope").first();
+    widths.push(await column.evaluate((el) => el.getBoundingClientRect().width));
     if (tab === "models" || tab === "connections") await page.screenshot({ path: testInfo.outputPath(`settings-${tab}.png`) });
   }
   await page.screenshot({ path: testInfo.outputPath("settings-appearance.png") });
   expect(new Set(widths.map((w) => Math.round(w))).size).toBe(1);
+});
+
+// 设置重排（交接第十一节第 8 条）：旧地址都还认，落到新位置——她的 ui.open（ui://kotone/settings/call 等）、
+// 旧对话里的“去看看”（「设置 → 怎么叫她 → 呼叫键」）、新写法（「琴音 → 唤醒 → 呼叫键」）。
+test("old settings addresses for wake-up, interaction, permissions and usage land on her page", async ({ page }) => {
+  await page.goto("/#/settings?onboarding=never");
+  await expect(page.getByTestId("assistant-chat")).toBeVisible();
+  for (const [section, tab] of [["call", "call"], ["reply", "reply"], ["permissions", "permissions"], ["usage", "usage"]] as const) {
+    await page.getByTestId("settings-nav-game").click();
+    expect(await page.evaluate((uri) => (window as unknown as { kotoneUiOpen: (e: unknown) => boolean }).kotoneUiOpen({ uri }), `ui://kotone/settings/${section}`)).toBe(true);
+    await expect(page.getByTestId(`assistant-nav-${tab}`), section).toHaveAttribute("aria-current", "page");
+    await expect(page.getByTestId(`settings-${tab}`), section).toBeVisible();
+  }
+  // 设置里还在的分页照旧
+  expect(await page.evaluate(() => (window as unknown as { kotoneUiOpen: (e: unknown) => boolean }).kotoneUiOpen({ uri: "ui://kotone/settings/models" }))).toBe(true);
+  await expect(page.getByTestId("advanced-nav-models")).toHaveAttribute("aria-current", "page");
+  for (const [where, tab, anchor] of [
+    ["设置 → 怎么叫她 → 呼叫键", "call", "settings-call-hotkey"],
+    ["琴音 → 唤醒 → 语音唤醒", "call", "settings-call-wake"],
+    ["琴音 → 设置 → 快捷指令", "call", "companion-title"],
+    ["设置 → 她怎么回答 → 气泡", "reply", "settings-reply-bubble"],
+    ["琴音 → 交互 → 声音与弹幕", "reply", "settings-reply-output"],
+    ["设置 → 权限", "permissions", ""],
+    ["琴音 → 用量", "usage", ""],
+  ] as const) {
+    await page.getByTestId("settings-nav-game").click();
+    await page.evaluate(async (w) => (await import("/src/lib/stores/navigation.ts")).openLocation(w), where);
+    await expect(page.getByTestId(`assistant-nav-${tab}`), where).toHaveAttribute("aria-current", "page");
+    if (anchor) await expect(page.locator(`#${anchor}`), where).toBeInViewport();
+  }
+  // 「她用的模型」的旧位置都落到聊天页
+  for (const where of ["设置 → 她怎么回答 → 她用的模型", "琴音 → 设置 → AI 连接", "聊天页 → 她用的模型"]) {
+    expect(await page.evaluate(async (w) => (await import("/src/lib/stores/navigation.ts")).parseLocation(w), where), where)
+      .toEqual({ page: "assistant", section: "chat", anchor: "chat-model" });
+  }
 });

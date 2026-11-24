@@ -1,17 +1,15 @@
 /**
- * 「设置」的分页（ADR 028）：陪玩组（怎么叫她 · 她怎么回答 · 权限 · 用量，原「琴音 → 设置」）+
- * 通用组（模型 · API 连接 · 声音 · 调参 · 外观 · 系统 · 浏览器）。插件不在设置里：左侧栏有单独的「插件」（ADR 038）。原「其他热键」分页拆走了：
- * 语音输入的热键在「语音输入 → 输入」，停止热键在「系统 → 停下」，启动快捷键在识别卡片里。
+ * 「设置」的分页（ADR 028）：只剩原来的通用组（模型 · API 连接 · 声音 · 调参 · 外观 · 系统 · 浏览器）。
+ * 原来的陪玩组（怎么叫她 · 她怎么回答 · 权限 · 用量）搬进了角色页，叫 唤醒 · 交互 · 权限 · 用量（交接第十一节第 8 条，2026-11-25）；
+ * 旧的分页 ID（call、reply、permissions、usage）由 navigation.ts 的 normalizeTarget 落到角色页。
+ * 插件不在设置里：左侧栏有单独的「插件」（ADR 038）。原「其他热键」分页拆走了：
+ * 语音输入的热键在「语音输入 → 输入」，停止热键在「系统 → 停下」，启动热键在「模型 → 语音识别」。
  */
 import { m } from "../../../../lib/paraglide/messages.js";
 
-export type CompanionSection = "call" | "reply" | "permissions" | "usage";
 export type GeneralSection = "models" | "connections" | "sound" | "tuning" | "appearance" | "system" | "browser";
-export type AdvancedSection = CompanionSection | GeneralSection;
+export type AdvancedSection = GeneralSection;
 
-export const COMPANION_SECTIONS: { id: CompanionSection; label: string }[] = [
-  { id: "call", label: m.system_section_call() }, { id: "reply", label: m.system_section_reply() }, { id: "permissions", label: m.system_section_permissions() }, { id: "usage", label: m.system_section_usage() },
-];
 export const GENERAL_SECTIONS: { id: GeneralSection; label: string }[] = [
   { id: "models", label: m.system_section_models() }, { id: "connections", label: m.system_section_connections() }, { id: "sound", label: m.system_section_sound() },
   { id: "tuning", label: m.system_section_tuning() }, { id: "appearance", label: m.system_section_appearance() }, { id: "system", label: m.system_section_system() },
@@ -20,5 +18,5 @@ export const GENERAL_SECTIONS: { id: GeneralSection; label: string }[] = [
 ];
 
 export function isAdvancedSection(value: string): value is AdvancedSection {
-  return [...COMPANION_SECTIONS, ...GENERAL_SECTIONS].some((item) => item.id === value);
+  return GENERAL_SECTIONS.some((item) => item.id === value);
 }
