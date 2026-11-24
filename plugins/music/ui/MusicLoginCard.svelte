@@ -6,8 +6,8 @@
   import { LoaderCircle, LogIn, RefreshCw, X } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import { m } from "$lib/paraglide/messages.js";
-  import { musicLoginCancel, musicLoginStart, musicStore } from "../../../../lib/music";
-  import { errText, toast } from "../../../../lib/stores/ui";
+  import { musicLoginCancel, musicLoginStart, musicStore } from "./music";
+  import { errText, toast } from "$lib/stores/ui";
 
   let { compact = false }: { compact?: boolean } = $props();
 
@@ -18,7 +18,7 @@
   async function start() {
     starting = true;
     try { await musicLoginStart(); }
-    catch (error) { toast(false, m.music_login_failed({ error: errText(error) })); }
+    catch (error) { toast(false, m.plugin_music_login_failed({ error: errText(error) })); }
     finally { starting = false; }
   }
   async function cancel() {
@@ -27,10 +27,10 @@
 
   /** 卡片上的那一行：在等窗口里登录 / 她要放歌 / 过期 / 出错；没在登录时（音乐页）不写。 */
   const line = $derived(
-    waiting ? m.music_login_waiting()
-      : login.stage === "needed" ? m.music_login_needed()
-        : login.stage === "expired" ? m.music_login_expired()
-          : login.stage === "failed" ? (login.message ? m.music_login_failed({ error: login.message }) : m.music_login_failed_unknown())
+    waiting ? m.plugin_music_login_waiting()
+      : login.stage === "needed" ? m.plugin_music_login_needed()
+        : login.stage === "expired" ? m.plugin_music_login_expired()
+          : login.stage === "failed" ? (login.message ? m.plugin_music_login_failed({ error: login.message }) : m.plugin_music_login_failed_unknown())
             : "",
   );
   const lineTone = $derived(login.stage === "expired" || login.stage === "failed" ? "text-warning" : waiting ? "text-primary" : "text-muted-foreground");
@@ -39,12 +39,12 @@
 {#snippet actions(size: "sm" | "default")}
   {#if waiting}
     <Button {size} variant="outline" data-testid="music-login-reopen" disabled={starting} onclick={() => void start()}>
-      {#if starting}<LoaderCircle class="size-3.5 animate-spin" />{:else}<RefreshCw class="size-3.5" />{/if}{m.music_login_reopen()}
+      {#if starting}<LoaderCircle class="size-3.5 animate-spin" />{:else}<RefreshCw class="size-3.5" />{/if}{m.plugin_music_login_reopen()}
     </Button>
-    <Button {size} variant="ghost" data-testid="music-login-cancel" onclick={() => void cancel()}>{m.music_login_cancel()}</Button>
+    <Button {size} variant="ghost" data-testid="music-login-cancel" onclick={() => void cancel()}>{m.plugin_music_login_cancel()}</Button>
   {:else}
     <Button {size} data-testid="music-login-start" disabled={starting} onclick={() => void start()}>
-      {#if starting}<LoaderCircle class="size-3.5 animate-spin" />{:else}<LogIn class="size-3.5" />{/if}{m.music_login_button()}
+      {#if starting}<LoaderCircle class="size-3.5 animate-spin" />{:else}<LogIn class="size-3.5" />{/if}{m.plugin_music_login_button()}
     </Button>
   {/if}
 {/snippet}
@@ -55,13 +55,13 @@
     <!-- 窄的一条只写一句（按钮上已经是“登录网易云音乐”，不再重复标题） -->
     <div class="min-w-0 flex-1">
       {#if line}<p class="m-0 text-[13px] leading-snug font-medium {lineTone === 'text-muted-foreground' ? 'text-foreground' : lineTone}" data-testid="music-login-stage">{line}</p>
-      {:else}<p class="m-0 text-[13px] font-medium text-foreground">{m.music_login_title()}</p>{/if}
+      {:else}<p class="m-0 text-[13px] font-medium text-foreground">{m.plugin_music_login_title()}</p>{/if}
     </div>
     <div class="flex shrink-0 items-center gap-1.5">
       {@render actions("sm")}
       {#if !waiting}
         <button type="button" class="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-          aria-label={m.music_login_dismiss()} title={m.music_login_dismiss()} data-testid="music-login-dismiss" onclick={() => void cancel()}><X class="size-3.5" /></button>
+          aria-label={m.plugin_music_login_dismiss()} title={m.plugin_music_login_dismiss()} data-testid="music-login-dismiss" onclick={() => void cancel()}><X class="size-3.5" /></button>
       {/if}
     </div>
   </div>
@@ -72,11 +72,11 @@
       {#if waiting}<LoaderCircle class="size-10 animate-spin text-white/90" />{:else}<LogIn class="size-10 text-white/90" />{/if}
     </div>
     <div class="min-w-0 flex-1">
-      <h2 class="m-0 text-lg font-semibold">{m.music_login_title()}</h2>
-      <p class="mt-1.5 mb-0 text-[13px] leading-relaxed text-muted-foreground">{m.music_login_desc()}</p>
+      <h2 class="m-0 text-lg font-semibold">{m.plugin_music_login_title()}</h2>
+      <p class="mt-1.5 mb-0 text-[13px] leading-relaxed text-muted-foreground">{m.plugin_music_login_desc()}</p>
       {#if line}<p class="mt-3 mb-0 text-sm font-medium {lineTone}" data-testid="music-login-stage" role="status">{line}</p>{/if}
       <div class="mt-4 flex flex-wrap items-center justify-center gap-2 sm:justify-start">{@render actions("default")}</div>
-      <p class="mt-3 mb-0 text-xs text-muted-foreground">{m.music_login_privacy()}</p>
+      <p class="mt-3 mb-0 text-xs text-muted-foreground">{m.plugin_music_login_privacy()}</p>
     </div>
   </section>
 {/if}

@@ -6,9 +6,10 @@
 // 调本插件的工具（MCP Apps 的 callTool）、跳到本插件的另一个页面。
 import type { Component } from "svelte";
 import type { Settings } from "./ipc/contracts";
-import type { PluginInfo, PluginToolResult } from "./plugins";
+import { pluginEnabled, type PluginInfo, type PluginToolResult } from "./plugins";
 import lol from "$plugins/lol/ui/index";
 import gameVoice from "$plugins/game-voice/ui/index";
+import music from "$plugins/music/ui/index";
 
 export interface PluginPageProps {
   plugin: PluginInfo;
@@ -49,6 +50,20 @@ export interface PluginView {
   title: () => string;
 }
 
+/** 左侧栏底部（设置、关于上面）那一小块拿到的东西。 */
+export interface PluginSidebarFooterProps {
+  plugin: PluginInfo;
+  /** 左侧栏收成图标栏了：只给一个小按钮。 */
+  rail: boolean;
+  /** 打开这个插件的页面（左侧栏「插件」组里那一页）。 */
+  onOpen: () => void;
+}
+
+/** 聊天输入框上面那一条拿到的东西。 */
+export interface PluginChatBannerProps {
+  plugin: PluginInfo;
+}
+
 /** 覆盖层上一项拿到的东西（ADR 038：覆盖层在本体里；插件只给数据，位置由宿主算好）。 */
 export interface PluginOverlayProps {
   /** 插件给的数据（`OverlayItem.data`）。 */
@@ -60,6 +75,12 @@ export interface PluginUi {
   icon: Component;
   /** 插件的完整页面（左侧栏「插件」组里点开）。 */
   page: Component<PluginPageProps>;
+  /** 页面自己占满整块（自己有顶栏、底部的播放条之类），宿主不在下面留白。 */
+  fullBleed?: boolean;
+  /** 左侧栏底部的一小块（例如放歌的小播放条）。插件开着时才显示；要不要显示东西由它自己定。 */
+  sidebarFooter?: Component<PluginSidebarFooterProps>;
+  /** 聊天输入框上面的一条（例如她要放歌而你没登录网易云时的登录卡片）。插件开着时才显示。 */
+  chatBanner?: Component<PluginChatBannerProps>;
   /** 游戏配置页里，挂在这个游戏上的插件给的小节（照 VS Code 的“按语言的设置”）。 */
   gameSection?: Component<PluginGameSectionProps>;
   /** 带游戏中心适配器的插件：现在报不报这个游戏的阶段和局内的事（游戏配置页的“游戏事件”用）。 */
@@ -74,7 +95,7 @@ export interface PluginUi {
   overlays?: Record<string, Component<PluginOverlayProps>>;
 }
 
-export const PLUGIN_UI: Record<string, PluginUi> = { lol, "game-voice": gameVoice };
+export const PLUGIN_UI: Record<string, PluginUi> = { lol, "game-voice": gameVoice, music };
 
 /** 有页面的插件 id（左侧栏「插件」组的顺序）。 */
 export const PLUGIN_IDS: string[] = Object.keys(PLUGIN_UI);
@@ -99,6 +120,20 @@ export function pluginToolLabel(tool: string): string | null {
     if (label) return label();
   }
   return null;
+}
+
+/** 开着的插件里给了某一块（左侧栏底部、聊天输入框上面）的：插件和那一块的组件，按左侧栏「插件」组的顺序。 */
+export function enabledSlots<K extends "sidebarFooter" | "chatBanner">(
+  plugins: PluginInfo[],
+  settings: Settings | null | undefined,
+  slot: K,
+): { plugin: PluginInfo; component: NonNullable<PluginUi[K]> }[] {
+  return (plugins ?? [])
+    .filter((plugin) => pluginEnabled(settings, plugin.manifest))
+    .flatMap((plugin) => {
+      const component = PLUGIN_UI[plugin.manifest.id]?.[slot];
+      return component ? [{ plugin, component: component as NonNullable<PluginUi[K]> }] : [];
+    });
 }
 
 /** 覆盖层页面（插件和地址都登记过才有）。 */

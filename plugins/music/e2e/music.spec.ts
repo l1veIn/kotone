@@ -1,30 +1,46 @@
-// 音乐页（ADR 034 第五节）：浏览器预览里的模拟网易云（lib/ipc/musicMock.ts）。
-// 登录（网易云官方登录页的窗口，预览里没有窗口）→ 发现（每日推荐、私人 FM、我的歌单）→ 放歌和控制；
-// 搜索结果里要 VIP 的灰掉；歌单；她要放歌而你没登录时聊天页的登录卡片。
+// 放歌插件（ADR 034 第五节、ADR 038 第 4 步）：浏览器预览里的模拟网易云（apps/desktop/src/lib/ipc/musicMock.ts，经 pluginsMock）。
+// 音乐页在左侧栏「插件」组里（plugin:music）。登录（网易云官方登录页的窗口，预览里没有窗口）→ 发现（每日推荐、私人 FM、
+// 我的歌单）→ 放歌和控制；搜索结果里要 VIP 的灰掉；歌单；她要放歌而你没登录时聊天页的登录卡片；
+// 关掉插件：停下，小播放条和登录卡片都没了。由 apps/desktop 的 Playwright 一起跑（plugins 项目）。
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
-import { openChat } from "./nav";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
+/** 截图：带 KOTONE_MUSIC_SHOTS 时放那里，否则放仓库的 target/plugin-shots/step4/（实现记录用；testDir 是 plugins/）。 */
 const SHOTS = process.env.KOTONE_MUSIC_SHOTS;
-const shot = (testInfo: TestInfo, name: string) => (SHOTS ? `${SHOTS}/${name}.png` : testInfo.outputPath(`${name}.png`));
+const shot = (testInfo: TestInfo, name: string) =>
+  SHOTS ? `${SHOTS}/${name}.png` : join(testInfo.project.testDir, "..", "target", "plugin-shots", "step4", `${name}.png`);
 const preview = (page: Page, step: string) =>
   page.evaluate((s) => (window as unknown as { __kotoneMusicPreview: (s: string) => unknown }).__kotoneMusicPreview(s), step);
+
+async function navOrder(page: Page): Promise<string[]> {
+  return page.getByTestId("app-sidebar").locator('nav [data-testid^="settings-nav-"]').evaluateAll(
+    (els) => els.map((el) => (el.getAttribute("data-testid") ?? "").replace("settings-nav-", "")));
+}
 
 async function openMusic(page: Page, query = "") {
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto(`/#/settings?onboarding=never${query}`);
-  await page.getByTestId("settings-nav-music").click();
+  await page.getByTestId("settings-nav-plugin:music").click();
   await expect(page.getByTestId("music-page")).toBeVisible();
 }
 
+/** 回到聊天：侧栏对话列表里的当前对话（浏览器预览有示例对话）。 */
+async function openChat(page: Page) {
+  await page.getByTestId("sidebar-conversations").getByTestId("agent-conversation").first().click();
+  await expect(page.getByTestId("assistant-tasks")).toBeVisible();
+}
+
 test("logged out: log in through NetEase's login window, then play daily picks and control playback", async ({ page }, testInfo) => {
+  await page.goto("/#/settings?onboarding=never");
+  await page.evaluate(() => localStorage.removeItem("kotone.mock.sidebar"));
   await openMusic(page, "&mockMusicLogin=manual");
-  // 音乐在“游戏陪玩”一组里、自动化下面
-  const order = await page.getByTestId("app-sidebar").locator('nav [data-testid^="settings-nav-"]').evaluateAll(
-    (els) => els.map((el) => el.getAttribute("data-testid")));
-  expect(order.slice(0, 4)).toEqual(["settings-nav-assistant", "settings-nav-game", "settings-nav-automation", "settings-nav-music"]);
+  // 音乐是插件（ADR 038）：在“插件”组里，不在“游戏陪玩”组
+  const order = await navOrder(page);
+  expect(order.slice(0, 3)).toEqual(["assistant", "game", "automation"]);
+  expect(order).toContain("plugin:music");
+  expect(order.indexOf("plugin:music")).toBeGreaterThan(order.indexOf("plugin:lol"));
+  await expect(page.getByTestId("settings-nav-music")).toHaveCount(0);
 
   const card = page.getByTestId("music-login-card");
   await expect(card).toHaveAttribute("data-stage", "idle");
@@ -38,7 +54,6 @@ test("logged out: log in through NetEase's login window, then play daily picks a
   await expect(card.getByTestId("music-login-cancel")).toBeVisible();
   await card.getByTestId("music-login-reopen").click();
   await expect(card).toHaveAttribute("data-stage", "waiting");
-  await page.screenshot({ path: shot(testInfo, "music-login-waiting") });
   await preview(page, "confirmed");
   await expect(page.getByTestId("music-account")).toContainText("开黑的猫");
 
@@ -49,7 +64,6 @@ test("logged out: log in through NetEase's login window, then play daily picks a
   await expect(playlists).toHaveCount(5);
   await expect(playlists.first()).toHaveAttribute("data-liked", "true");
   await expect(playlists.first()).toContainText("我喜欢的音乐");
-  await page.screenshot({ path: shot(testInfo, "music-home") });
 
   // 放每日推荐：播放条和左侧栏的小播放条
   await page.getByTestId("music-daily-play").click();
@@ -59,6 +73,7 @@ test("logged out: log in through NetEase's login window, then play daily picks a
   await expect(title).toHaveText("晴天（翻唱）");
   const mini = page.getByTestId("sidebar-mini-player");
   await expect(mini.getByTestId("sidebar-mini-title")).toHaveText("晴天（翻唱）");
+  await page.screenshot({ path: shot(testInfo, "music-page") });
 
   await bar.getByTestId("music-player-toggle").click();
   await expect(bar).toHaveAttribute("data-status", "paused");
@@ -83,19 +98,19 @@ test("logged out: log in through NetEase's login window, then play daily picks a
   const queue = page.getByTestId("music-queue");
   await expect(queue.getByTestId("music-queue-item")).toHaveCount(10);
   await expect(queue.locator('[data-testid="music-queue-item"][data-current="true"]')).toContainText("起风了");
-  await page.screenshot({ path: shot(testInfo, "music-queue") });
   await page.keyboard.press("Escape");
   await expect(queue).toHaveCount(0);
 
-  // 左侧栏的小播放条：暂停、去音乐页
+  // 左侧栏的小播放条：暂停、去音乐页（插件的页面）
   await page.getByTestId("settings-nav-automation").click();
   await expect(page.getByTestId("music-page")).toHaveCount(0);
   await mini.getByTestId("sidebar-mini-toggle").click();
+  await page.screenshot({ path: shot(testInfo, "sidebar-plugins") });
   await mini.getByTestId("sidebar-mini-open").click();
+  await expect(page.getByTestId("settings-nav-plugin:music")).toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("music-player-bar")).toHaveAttribute("data-status", "paused");
   await page.getByTestId("music-player-toggle").click();
   await expect(page.getByTestId("music-player-bar")).toHaveAttribute("data-status", "playing");
-  await page.screenshot({ path: shot(testInfo, "music-playing") });
 });
 
 test("search: VIP originals are greyed and labelled; a full version plays", async ({ page }, testInfo) => {
@@ -114,7 +129,7 @@ test("search: VIP originals are greyed and labelled; a full version plays", asyn
   await piano.getByTestId("music-track-play").click();
   await expect(page.getByTestId("music-player-title")).toHaveText("孤勇者（钢琴版）");
   await expect(piano).toHaveAttribute("data-current", "true");
-  await page.screenshot({ path: shot(testInfo, "music-search") });
+  if (SHOTS) await page.screenshot({ path: shot(testInfo, "music-search") });
   await page.getByTestId("music-back").click();
   await expect(page.getByTestId("music-daily-card")).toBeVisible();
 });
@@ -129,7 +144,7 @@ test("playlist: open it, play all, then go back", async ({ page }, testInfo) => 
   await page.getByTestId("music-list-play").click();
   await expect(page.getByTestId("music-player-title")).toHaveText("Legends Never Die");
   await expect(page.getByTestId("music-player-title").locator("..")).toContainText("开黑歌单");
-  await page.screenshot({ path: shot(testInfo, "music-playlist") });
+  if (SHOTS) await page.screenshot({ path: shot(testInfo, "music-playlist") });
   await page.getByTestId("music-back").click();
   await expect(page.getByTestId("music-playlists")).toBeVisible();
 });
@@ -143,14 +158,14 @@ test("quality and logout from the header; when she wants to play and you're logg
   await page.getByTestId("music-logout").click();
   await expect(page.getByTestId("music-login-card")).toHaveAttribute("data-stage", "idle");
 
-  // 聊天页：她的 music 工具发现没登录 → needed（她不自己弹窗），输入框上面出登录卡片
+  // 聊天页：她的 music 工具发现没登录 → needed（她不自己弹窗），输入框上面出登录卡片（插件给的 chatBanner）
   await openChat(page);
   const compact = page.getByTestId("assistant-chat").getByTestId("music-login-card");
   await expect(compact).toHaveCount(0);
   await preview(page, "needed");
   await expect(compact).toHaveAttribute("data-stage", "needed");
   await expect(compact.getByTestId("music-login-stage")).toHaveText("她要放歌：先登录一下网易云（只要一次）");
-  await page.screenshot({ path: shot(testInfo, "music-chat-needed") });
+  if (SHOTS) await page.screenshot({ path: shot(testInfo, "music-chat-needed") });
   await compact.getByTestId("music-login-start").click();
   await expect(compact).toHaveAttribute("data-stage", "waiting");
   await expect(compact.getByTestId("music-login-stage")).toHaveText("在弹出的网易云音乐窗口里扫码登录（用网易云音乐 App 扫）");
@@ -177,10 +192,59 @@ test("quality and logout from the header; when she wants to play and you're logg
   await expect(compact).toHaveCount(0);
 });
 
+test("turning the music plugin off stops playback and hides the mini player and the chat login card", async ({ page }) => {
+  await openMusic(page, "&mockMusic=loggedIn");
+  await page.getByTestId("music-daily-play").click();
+  const mini = page.getByTestId("sidebar-mini-player");
+  await expect(mini).toHaveAttribute("data-status", "playing");
+
+  // 设置 → 插件：音乐的卡片（默认开），关掉
+  await page.getByTestId("settings-nav-advanced").click();
+  await page.getByTestId("advanced-nav-plugins").click();
+  const card = page.getByTestId("settings-plugin-music");
+  await expect(card).toContainText("音乐");
+  await expect(card.getByTestId("plugin-music-enabled")).toHaveAttribute("aria-checked", "true");
+  await card.getByTestId("plugin-music-enabled").click();
+  await expect(card.getByTestId("plugin-music-enabled")).toHaveAttribute("aria-checked", "false");
+  await expect(mini).toHaveCount(0);
+
+  // 她要放歌也不出登录卡片（插件关着时她没有 music）
+  await openChat(page);
+  await preview(page, "needed");
+  await expect(page.getByTestId("assistant-chat").getByTestId("music-login-card")).toHaveCount(0);
+
+  // 音乐页还在左侧栏：关着时只有开关和一句说明，打开就回来了
+  await page.getByTestId("settings-nav-plugin:music").click();
+  const off = page.getByTestId("music-page-off");
+  await expect(off.getByTestId("plugin-music-off")).toBeVisible();
+  await expect(page.getByTestId("music-page")).toHaveCount(0);
+  await off.getByTestId("plugin-music-enabled").click();
+  await expect(page.getByTestId("music-page")).toBeVisible();
+  // 关掉的时候停下了
+  await expect(page.getByTestId("sidebar-mini-player")).toHaveCount(0);
+});
+
+test("an old sidebar order that still says `music` puts the music plugin's page in that place", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.goto("/#/settings?onboarding=never");
+  await page.evaluate(() => localStorage.setItem("kotone.mock.sidebar", JSON.stringify({ order: ["music", "plugin:lol"], hidden: [] })));
+  await page.reload();
+  await expect(page.getByTestId("app-sidebar")).toBeVisible();
+  const order = await navOrder(page);
+  expect(order.indexOf("plugin:music")).toBeLessThan(order.indexOf("plugin:lol"));
+  // 旧的“藏起音乐”也认
+  await page.evaluate(() => localStorage.setItem("kotone.mock.sidebar", JSON.stringify({ order: [], hidden: ["music"] })));
+  await page.reload();
+  await expect(page.getByTestId("app-sidebar")).toBeVisible();
+  await expect(page.getByTestId("settings-nav-plugin:lol")).toBeVisible();
+  await expect(page.getByTestId("settings-nav-plugin:music")).toHaveCount(0);
+  await page.evaluate(() => localStorage.removeItem("kotone.mock.sidebar"));
+});
+
 // 封面图来自网易云的图床：index.html 的 <meta> CSP 和 tauri.conf.json 的 CSP 两份都要放行
 // （浏览器两份都执行；2026-11-23 真机只改了 tauri.conf.json，封面全被挡了）。
-test("both content security policies allow NetEase cover images", () => {
-  const app = join(dirname(fileURLToPath(import.meta.url)), "..");
+test("both content security policies allow NetEase cover images", async ({}, testInfo) => {
+  const app = join(testInfo.project.testDir, "..", "apps", "desktop");
   const meta = readFileSync(join(app, "index.html"), "utf8").match(/img-src[^;"]*/)?.[0] ?? "";
   const conf = JSON.parse(readFileSync(join(app, "src-tauri", "tauri.conf.json"), "utf8")).app.security.csp as string;
   for (const policy of [meta, conf.match(/img-src[^;]*/)?.[0] ?? ""]) {

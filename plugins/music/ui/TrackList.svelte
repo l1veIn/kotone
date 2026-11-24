@@ -3,7 +3,7 @@
   // 要 VIP、付费、没版权的灰掉并标出来（ADR 034 D6：她不放试听片段）；双击或点序号上的播放键从这首开始放这一列。
   import { AudioLines, Play } from "@lucide/svelte";
   import { m } from "$lib/paraglide/messages.js";
-  import { artistsLine, formatDuration, musicStore, playableBadge, type MusicTrack } from "../../../../lib/music";
+  import { artistsLine, formatDuration, musicStore, playableBadge, type MusicTrack } from "./music";
   import MusicCover from "./MusicCover.svelte";
 
   let { tracks, onPlay, testid = "music-tracks" }: {
@@ -18,7 +18,7 @@
 
 <div class="flex flex-col" role="list" data-testid={testid}>
   <div class="grid grid-cols-[2.5rem_minmax(0,1fr)_minmax(0,0.7fr)_3.5rem] items-center gap-3 border-b border-hairline px-2 pb-2 text-[11px] text-muted-foreground max-md:grid-cols-[2.5rem_minmax(0,1fr)_3.5rem]" aria-hidden="true">
-    <span class="text-center">#</span><span>{m.music_col_title()}</span><span class="max-md:hidden">{m.music_col_album()}</span><span class="text-right">{m.music_col_duration()}</span>
+    <span class="text-center">#</span><span>{m.plugin_music_col_title()}</span><span class="max-md:hidden">{m.plugin_music_col_album()}</span><span class="text-right">{m.plugin_music_col_duration()}</span>
   </div>
   {#each tracks as track, index (track.id + ":" + index)}
     {@const isCurrent = track.id === current}
@@ -36,7 +36,7 @@
         {/if}
         {#if track.playable === "full"}
           <button type="button" class="absolute inset-0 hidden items-center justify-center rounded-md text-foreground hover:text-primary group-hover:flex focus-visible:flex"
-            aria-label={m.music_play_track({ name: track.name })} data-testid="music-track-play" onclick={() => onPlay(index)}>
+            aria-label={m.plugin_music_play_track({ name: track.name })} data-testid="music-track-play" onclick={() => onPlay(index)}>
             <Play class="size-4 fill-current" />
           </button>
         {/if}
@@ -55,6 +55,6 @@
       <p class="m-0 text-right text-xs tabular-nums text-muted-foreground">{formatDuration(track.durationMs)}</p>
     </div>
   {:else}
-    <p class="m-0 px-2 py-6 text-center text-xs text-muted-foreground" data-testid="music-tracks-empty">{m.music_tracks_empty()}</p>
+    <p class="m-0 px-2 py-6 text-center text-xs text-muted-foreground" data-testid="music-tracks-empty">{m.plugin_music_tracks_empty()}</p>
   {/each}
 </div>

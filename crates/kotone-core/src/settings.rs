@@ -151,9 +151,6 @@ pub struct Settings {
     /// 内置浏览器（ADR 031）：玩家加的浏览器插件。新字段，旧版本会忽略。
     #[serde(default)]
     pub browser: BrowserConfig,
-    /// 放歌（ADR 034）：音质、音量。登录凭据不在这里（Windows 凭据库）。新字段，旧版本会忽略。
-    #[serde(default)]
-    pub music: MusicConfig,
     /// 插件（ADR 038）：每个插件一份设置，按插件 id（`plugins.lol.sources.client`）。新字段，旧版本会忽略。
     /// 旧的 `lol.enabled`（ADR 035）读进来时搬到 `plugins.lol.sources.client`（[`migrate_plugins_json`]）。
     #[serde(default)]
@@ -190,54 +187,6 @@ impl Settings {
             .get(id)
             .and_then(|p| p.sources.get(source).copied())
             .unwrap_or(by_default)
-    }
-}
-
-/// 放歌（config.json `music` 段，ADR 034）。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MusicConfig {
-    /// 音质：`standard` / `exhigh`（默认，非 VIP 的上限）/ `lossless`（要 VIP）。存成字符串：
-    /// 不认识的值按默认（docs/development.md 的配置兼容规则）。
-    #[serde(default = "default_music_quality")]
-    pub quality: String,
-    /// 音量 0–100。
-    #[serde(default = "default_music_volume")]
-    pub volume: u8,
-}
-
-/// 音质的取值：(值, 名字)。第一个是默认。
-pub const MUSIC_QUALITIES: &[(&str, &str)] = &[
-    ("exhigh", "极高"),
-    ("standard", "标准"),
-    ("lossless", "无损（要 VIP）"),
-];
-
-fn default_music_quality() -> String {
-    MUSIC_QUALITIES[0].0.into()
-}
-
-fn default_music_volume() -> u8 {
-    70
-}
-
-impl Default for MusicConfig {
-    fn default() -> Self {
-        Self {
-            quality: default_music_quality(),
-            volume: default_music_volume(),
-        }
-    }
-}
-
-impl MusicConfig {
-    /// 音质（不认识的值按默认“极高”）。
-    pub fn quality(&self) -> &'static str {
-        MUSIC_QUALITIES
-            .iter()
-            .find(|(id, _)| *id == self.quality)
-            .unwrap_or(&MUSIC_QUALITIES[0])
-            .0
     }
 }
 
@@ -741,7 +690,6 @@ impl Default for Settings {
             ocr: OcrConfig::default(),
             search: SearchConfig::default(),
             browser: BrowserConfig::default(),
-            music: MusicConfig::default(),
             plugins: Default::default(),
         }
     }
@@ -1154,6 +1102,7 @@ fn migrate_call_idle_json(user: &mut serde_json::Value) {
 /// （旧版本读不到 `lol` 时按默认“开”，这是装回旧版的代价）。
 pub fn migrate_plugins_json(user: &mut serde_json::Value) {
     migrate_voice_chat_json(user);
+    migrate_music_json(user);
     let Some(object) = user.as_object_mut() else {
         return;
     };
@@ -1181,6 +1130,47 @@ pub fn migrate_plugins_json(user: &mut serde_json::Value) {
         return;
     };
     sources.entry("client").or_insert(enabled.into());
+}
+
+/// 放歌（`music` 段：音质、音量，ADR 034）搬进放歌插件（ADR 038 第 4 步）：→ `plugins.music.settings`；
+/// 左侧栏里的音乐页（`music`）成了插件页（`plugin:music`）。新字段已经有了的不覆盖。
+fn migrate_music_json(user: &mut serde_json::Value) {
+    let Some(object) = user.as_object_mut() else {
+        return;
+    };
+    if let Some(serde_json::Value::Object(old)) = object.remove("music") {
+        if !old.is_empty() {
+            let plugins = object
+                .entry("plugins")
+                .or_insert_with(|| serde_json::json!({}));
+            if let Some(settings) = plugins
+                .as_object_mut()
+                .map(|p| p.entry("music").or_insert_with(|| serde_json::json!({})))
+                .and_then(|p| p.as_object_mut())
+                .map(|p| p.entry("settings").or_insert_with(|| serde_json::json!({})))
+                .and_then(|s| s.as_object_mut())
+            {
+                for (key, value) in old {
+                    settings.entry(key).or_insert(value);
+                }
+            }
+        }
+    }
+    let sidebar = object
+        .get_mut("ui")
+        .and_then(|ui| ui.get_mut("sidebar"))
+        .and_then(|s| s.as_object_mut());
+    if let Some(sidebar) = sidebar {
+        for key in ["order", "hidden"] {
+            if let Some(serde_json::Value::Array(ids)) = sidebar.get_mut(key) {
+                for id in ids.iter_mut() {
+                    if id.as_str() == Some("music") {
+                        *id = serde_json::Value::String("plugin:music".into());
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// 0.2 以前的游戏语音（`voiceChat` 段，ADR 020）搬进游戏语音插件（ADR 038 第 4 步）：
@@ -1404,35 +1394,60 @@ mod tests {
     /// 放歌和左侧栏是新字段（ADR 034）：旧配置没有它们时用默认；旧的 `agent.musicSite` 读到就丢掉；
     /// 不认识的音质按默认；“设置”不能隐藏、重复的去掉。
     #[test]
-    fn music_and_sidebar_are_new_sections_and_music_site_is_dropped() {
-        // 旧配置：有 agent.musicSite，没有 music 和 ui.sidebar
+    fn sidebar_is_a_new_section_and_music_site_is_dropped() {
+        // 旧配置：有 agent.musicSite，没有 ui.sidebar
         let mut json = serde_json::to_value(Settings::default()).unwrap();
         json["agent"]["musicSite"] = serde_json::json!("qq");
-        json.as_object_mut().unwrap().remove("music");
         json["ui"].as_object_mut().unwrap().remove("sidebar");
         let old: Settings = serde_json::from_value(json).unwrap();
-        assert_eq!(old.music, MusicConfig::default());
-        assert_eq!(old.music.quality(), "exhigh");
-        assert_eq!(old.music.volume, 70);
         assert_eq!(old.ui.sidebar, SidebarConfig::default());
         assert!(!serde_json::to_string(&old).unwrap().contains("musicSite"));
-        let odd = MusicConfig {
-            quality: "hires".into(),
-            volume: 30,
-        };
-        assert_eq!(odd.quality(), "exhigh");
         let mut sidebar = SidebarConfig {
             order: vec![
-                "music".into(),
-                "music".into(),
+                "plugin:music".into(),
+                "plugin:music".into(),
                 " ".into(),
                 "assistant".into(),
             ],
             hidden: vec!["advanced".into(), "general".into()],
         };
         sidebar.normalize();
-        assert_eq!(sidebar.order, vec!["music", "assistant"]);
+        assert_eq!(sidebar.order, vec!["plugin:music", "assistant"]);
         assert_eq!(sidebar.hidden, vec!["general"]);
+    }
+
+    /// 放歌搬进插件（ADR 038 第 4 步）：旧的 `music` 段搬进 `plugins.music.settings`，左侧栏的 `music`
+    /// 换成 `plugin:music`；新字段已经有了的不覆盖。
+    #[test]
+    fn old_music_settings_and_sidebar_move_into_the_music_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"music":{"quality":"lossless","volume":12},"ui":{"sidebar":{"order":["music","assistant"],"hidden":["music"]}}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path);
+        let settings = &s.plugins["music"].settings;
+        assert_eq!(settings["quality"], "lossless");
+        assert_eq!(settings["volume"], 12);
+        assert!(s.plugin_enabled("music", true), "开关没写：按清单默认");
+        assert_eq!(s.ui.sidebar.order, vec!["plugin:music", "assistant"]);
+        assert_eq!(s.ui.sidebar.hidden, vec!["plugin:music"]);
+        let text = serde_json::to_string(&s).unwrap();
+        assert!(!text.contains(r#""music":{"quality""#), "{text}");
+
+        std::fs::write(
+            &path,
+            r#"{"music":{"volume":12},"plugins":{"music":{"settings":{"volume":40}}}}"#,
+        )
+        .unwrap();
+        assert_eq!(load_from(&path).plugins["music"].settings["volume"], 40);
+
+        // 没有旧字段：不写空段
+        assert!(!serde_json::to_string(&Settings::default())
+            .unwrap()
+            .contains(r#""music""#));
     }
 
     /// 插件（ADR 038）：旧的 `lol.enabled` 读进来时搬到 `plugins.lol.sources.client`，之后不再写 `lol`；

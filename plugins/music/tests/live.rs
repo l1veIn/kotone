@@ -1,8 +1,8 @@
-//! 真网络冒烟（不登录）：默认不跑，`cargo test -p kotone-music --test live -- --ignored --nocapture`。
+//! 真网络冒烟（不登录）：默认不跑，`cargo test -p kotone-plugin-music --test live -- --ignored --nocapture`。
 
 use std::sync::Arc;
 
-use kotone_music::{MemorySessionStore, MusicProvider, NeteaseProvider, Playable, Quality};
+use kotone_plugin_music::{MemorySessionStore, MusicProvider, NeteaseProvider, Playable, Quality};
 
 #[tokio::test]
 #[ignore = "talks to music.163.com"]
@@ -40,7 +40,7 @@ async fn anonymous_search_stream_and_qr() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "talks to music.163.com and plays sound"]
 async fn plays_a_free_cover_quietly() {
-    use kotone_music::{Player, PlayerState, Status};
+    use kotone_plugin_music::{Player, PlayerState, Status};
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
 

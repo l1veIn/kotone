@@ -73,8 +73,6 @@ impl BuiltinHost for DesktopBuiltins {
                 crate::speech_screen::tool(&self.app).await
             }
             "web.fetch" => crate::web_tools::fetch(&self.app, &caller, arguments).await,
-            // 放歌（ADR 034，主会话马上做）
-            kotone_agent::music::TOOL_MUSIC => crate::music::tool(&self.app, arguments).await,
             other => Err(format!("{other} 在这里不可用")),
         }
     }

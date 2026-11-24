@@ -6,8 +6,8 @@
   import { m } from "$lib/paraglide/messages.js";
   import {
     artistsLine, formatDuration, musicControl, musicPlay, musicQueue, musicStore, type MusicAction, type MusicTrack,
-  } from "../../../../lib/music";
-  import { errText, toast } from "../../../../lib/stores/ui";
+  } from "./music";
+  import { errText, toast } from "$lib/stores/ui";
   import MusicCover from "./MusicCover.svelte";
 
   const player = $derived($musicStore.player);
@@ -24,7 +24,7 @@
 
   async function act(action: MusicAction, value?: number | boolean) {
     try { await musicControl(action, value); }
-    catch (error) { toast(false, m.music_control_failed({ error: errText(error) })); }
+    catch (error) { toast(false, m.plugin_music_control_failed({ error: errText(error) })); }
   }
   function seekEnd() {
     if (dragging === null) return;
@@ -46,12 +46,12 @@
     queueOpen = !queueOpen;
     if (!queueOpen) return;
     try { queue = await musicQueue(); }
-    catch (error) { queue = { tracks: [], index: 0 }; toast(false, m.music_load_failed({ error: errText(error) })); }
+    catch (error) { queue = { tracks: [], index: 0 }; toast(false, m.plugin_music_load_failed({ error: errText(error) })); }
   }
   async function playFromQueue(index: number) {
     if (!queue) return;
     try { await musicPlay({ tracks: queue.tracks, index }); queue = { ...queue, index }; }
-    catch (error) { toast(false, m.music_play_failed({ error: errText(error) })); }
+    catch (error) { toast(false, m.plugin_music_play_failed({ error: errText(error) })); }
   }
   let queueEl = $state<HTMLElement>();
   function onWindowClick(event: MouseEvent) {
@@ -65,7 +65,7 @@
 {#if track}
   <div class="sticky bottom-0 z-20 border-t border-hairline bg-background/92 backdrop-blur-md" data-testid="music-player-bar" data-status={player.status}>
     <input type="range" min="0" max={Math.max(1, player.durationMs)} step="1000" value={position}
-      class="music-range absolute -top-[7px] left-0 h-3.5 w-full cursor-pointer" aria-label={m.music_progress()}
+      class="music-range absolute -top-[7px] left-0 h-3.5 w-full cursor-pointer" aria-label={m.plugin_music_progress()}
       data-testid="music-player-progress"
       oninput={(e) => { dragging = Number((e.currentTarget as HTMLInputElement).value); }}
       onchange={seekEnd} style={`--fill: ${player.durationMs ? (position / player.durationMs) * 100 : 0}%`} />
@@ -78,7 +78,7 @@
         </div>
         {#if loggedIn}
           <button type="button" class="flex size-8 shrink-0 items-center justify-center rounded-full hover:bg-muted {player.liked ? 'text-rose-500' : 'text-muted-foreground hover:text-foreground'}"
-            aria-label={player.liked ? m.music_unlike() : m.music_like()} title={player.liked ? m.music_unlike() : m.music_like()}
+            aria-label={player.liked ? m.plugin_music_unlike() : m.plugin_music_like()} title={player.liked ? m.plugin_music_unlike() : m.plugin_music_like()}
             aria-pressed={player.liked} data-testid="music-player-like" onclick={() => void act("like", !player.liked)}>
             <Heart class="size-4 {player.liked ? 'fill-current' : ''}" />
           </button>
@@ -87,27 +87,27 @@
 
       <div class="flex items-center gap-1.5">
         <button type="button" class="flex size-9 items-center justify-center rounded-full text-foreground/80 hover:bg-muted hover:text-foreground"
-          aria-label={m.music_previous()} title={m.music_previous()} data-testid="music-player-prev" onclick={() => void act("previous")}><SkipBack class="size-4 fill-current" /></button>
+          aria-label={m.plugin_music_previous()} title={m.plugin_music_previous()} data-testid="music-player-prev" onclick={() => void act("previous")}><SkipBack class="size-4 fill-current" /></button>
         <button type="button" class="flex size-11 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-[0_0_14px_color-mix(in_oklch,var(--color-primary)_45%,transparent)] transition-transform hover:scale-105"
-          aria-label={player.status === "playing" ? m.music_pause() : m.music_resume()} title={player.status === "playing" ? m.music_pause() : m.music_resume()}
+          aria-label={player.status === "playing" ? m.plugin_music_pause() : m.plugin_music_resume()} title={player.status === "playing" ? m.plugin_music_pause() : m.plugin_music_resume()}
           data-testid="music-player-toggle" onclick={() => void act("toggle")}>
           {#if player.status === "loading"}<LoaderCircle class="size-5 animate-spin" />
           {:else if player.status === "playing"}<Pause class="size-5 fill-current" />
           {:else}<Play class="ml-0.5 size-5 fill-current" />{/if}
         </button>
         <button type="button" class="flex size-9 items-center justify-center rounded-full text-foreground/80 hover:bg-muted hover:text-foreground"
-          aria-label={m.music_next()} title={m.music_next()} data-testid="music-player-next" onclick={() => void act("next")}><SkipForward class="size-4 fill-current" /></button>
+          aria-label={m.plugin_music_next()} title={m.plugin_music_next()} data-testid="music-player-next" onclick={() => void act("next")}><SkipForward class="size-4 fill-current" /></button>
       </div>
 
       <div class="flex min-w-0 items-center justify-end gap-2">
         <span class="text-[11px] tabular-nums text-muted-foreground max-sm:hidden" data-testid="music-player-time">{formatDuration(position)} / {formatDuration(player.durationMs)}</span>
         <div class="relative" bind:this={queueEl}>
           <button type="button" class="flex size-8 items-center justify-center rounded-full hover:bg-muted {queueOpen ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}"
-            aria-label={m.music_queue()} title={m.music_queue()} aria-expanded={queueOpen} data-testid="music-player-queue"
+            aria-label={m.plugin_music_queue()} title={m.plugin_music_queue()} aria-expanded={queueOpen} data-testid="music-player-queue"
             onclick={(e) => { e.stopPropagation(); void toggleQueue(); }}><ListMusic class="size-4" /></button>
           {#if queueOpen}
             <div class="absolute right-0 bottom-11 z-30 w-80 overflow-hidden rounded-xl border border-hairline bg-popover shadow-xl" data-testid="music-queue">
-              <p class="m-0 border-b border-hairline px-3 py-2 text-xs font-medium">{m.music_queue_title({ count: queue?.tracks.length ?? player.queueLength })}</p>
+              <p class="m-0 border-b border-hairline px-3 py-2 text-xs font-medium">{m.plugin_music_queue_title({ count: queue?.tracks.length ?? player.queueLength })}</p>
               <div class="max-h-80 overflow-y-auto p-1">
                 {#each queue?.tracks ?? [] as item, index (item.id + ":" + index)}
                   <button type="button" class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-muted disabled:opacity-50
@@ -117,7 +117,7 @@
                     <span class="min-w-0 flex-1"><span class="block truncate text-xs">{item.name}</span><span class="block truncate text-[11px] text-muted-foreground">{artistsLine(item)}</span></span>
                   </button>
                 {:else}
-                  <p class="m-0 px-2 py-4 text-center text-xs text-muted-foreground">{m.music_queue_empty()}</p>
+                  <p class="m-0 px-2 py-4 text-center text-xs text-muted-foreground">{m.plugin_music_queue_empty()}</p>
                 {/each}
               </div>
             </div>
@@ -125,9 +125,9 @@
         </div>
         <div class="flex items-center gap-1.5 max-md:hidden">
           <button type="button" class="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
-            aria-label={volume === 0 ? m.music_unmute() : m.music_mute()} title={volume === 0 ? m.music_unmute() : m.music_mute()}
+            aria-label={volume === 0 ? m.plugin_music_unmute() : m.plugin_music_mute()} title={volume === 0 ? m.plugin_music_unmute() : m.plugin_music_mute()}
             onclick={() => setVolume(volume === 0 ? 70 : 0)}><VolumeIcon class="size-4" /></button>
-          <input type="range" min="0" max="100" step="1" value={volume} class="music-range h-3.5 w-24 cursor-pointer" aria-label={m.music_volume()}
+          <input type="range" min="0" max="100" step="1" value={volume} class="music-range h-3.5 w-24 cursor-pointer" aria-label={m.plugin_music_volume()}
             data-testid="music-player-volume" style={`--fill: ${volume}%`}
             oninput={(e) => setVolume(Number((e.currentTarget as HTMLInputElement).value))} />
         </div>

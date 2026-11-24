@@ -8,7 +8,7 @@ export type SidebarGroupId = "companion" | "voice" | "plugins";
 
 /** 两组的默认顺序（页面 ID 和 AppSidebar 的 PageId 一致）。 */
 export const SIDEBAR_GROUPS: { id: SidebarGroupId; pages: string[] }[] = [
-  { id: "companion", pages: ["assistant", "game", "automation", "music"] },
+  { id: "companion", pages: ["assistant", "game", "automation"] },
   { id: "voice", pages: ["general", "legacy-reminders"] },
 ];
 
@@ -19,9 +19,14 @@ export interface SidebarPrefs { order: string[]; hidden: string[] }
 
 export const DEFAULT_SIDEBAR: SidebarPrefs = { order: [], hidden: [] };
 
+/** 改过名的页面：音乐页成了放歌插件的页面（ADR 038 第 4 步；后端读旧配置时也这样搬）。 */
+const RENAMED: Record<string, string> = { music: "plugin:music" };
+
 export function normalizePrefs(value: unknown): SidebarPrefs {
   const v = (value ?? {}) as Partial<SidebarPrefs>;
-  const ids = (list: unknown) => (Array.isArray(list) ? [...new Set(list.filter((x): x is string => typeof x === "string" && !!x))] : []);
+  const ids = (list: unknown) => (Array.isArray(list)
+    ? [...new Set(list.filter((x): x is string => typeof x === "string" && !!x).map((x) => RENAMED[x] ?? x))]
+    : []);
   return { order: ids(v.order), hidden: ids(v.hidden).filter((id) => !PINNED_PAGES.has(id)) };
 }
 

@@ -1,0 +1,9 @@
+{
+  "//": "插件的页面测试由 apps/desktop 的 Playwright 一起跑（ADR 038）：依赖从 apps/desktop/node_modules 解析",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@playwright/test": ["../../../apps/desktop/node_modules/@playwright/test"]
+    }
+  }
+}

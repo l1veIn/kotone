@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use clap::Subcommand;
-use kotone_music::{
+use kotone_plugin_music::{
     FileSessionStore, MusicProvider, NeteaseProvider, Player, QrPoll, Quality, Status, Track,
 };
 
@@ -176,7 +176,7 @@ pub async fn run(command: MusicCommand) -> i32 {
                 Err(e) => return fail(e),
             };
             println!("用网易云音乐 App 扫一扫：\n");
-            match kotone_music::qr::text(&start.content) {
+            match kotone_plugin_music::qr::text(&start.content) {
                 Ok(text) => println!("{text}"),
                 Err(e) => println!("（画不出二维码：{e}）"),
             }

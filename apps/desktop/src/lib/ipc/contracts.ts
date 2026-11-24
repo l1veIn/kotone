@@ -193,11 +193,10 @@ export interface Settings {
   search?: { activeModelId: string };
   /** 内置琴音 Agent（config.json `agent` 段；旧配置没有这一段时后端按默认补齐）。 */
   agent?: AgentConfig;
-  /** 放歌（ADR 034）：音质和音量。旧配置没有时后端按默认（极高、70）补齐。 */
-  music?: { quality: "standard" | "exhigh" | "lossless"; volume: number };
   /**
    * 插件（ADR 038）：每个插件一份，按插件 id。没写的项按插件清单的默认（旧的 `lol.enabled` 后端读进来时
-   * 搬到 `plugins.lol.sources.client`；旧的 `voiceChat` 搬到 `plugins.game-voice`）。
+   * 搬到 `plugins.lol.sources.client`；旧的 `voiceChat` 搬到 `plugins.game-voice`；旧的 `music`（音质、音量）
+   * 搬到 `plugins.music.settings`）。
    */
   plugins?: Record<string, { enabled?: boolean; sources?: Record<string, boolean>; settings?: Record<string, unknown> }>;
 }

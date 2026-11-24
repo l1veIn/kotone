@@ -2673,9 +2673,9 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "kotone-core",
- "kotone-music",
  "kotone-ocr",
  "kotone-platform-windows",
+ "kotone-plugin-music",
  "kotone-postprocess",
  "kotone-stt",
  "kotone-tools",
@@ -2716,29 +2716,6 @@ dependencies = [
  "tokio",
  "walkdir",
  "windows 0.61.3",
-]
-
-[[package]]
-name = "kotone-music"
-version = "0.1.0"
-dependencies = [
- "aes",
- "async-trait",
- "base64 0.22.1",
- "cbc",
- "cipher",
- "cpal",
- "hex",
- "kotone-core",
- "md-5",
- "num-bigint",
- "qrcode",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "symphonia",
- "tempfile",
- "tokio",
 ]
 
 [[package]]
@@ -2819,6 +2796,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "kotone-plugin-music"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "async-trait",
+ "base64 0.22.1",
+ "cbc",
+ "cipher",
+ "cpal",
+ "hex",
+ "kotone-core",
+ "kotone-plugin-api",
+ "md-5",
+ "num-bigint",
+ "qrcode",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "symphonia",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "kotone-postprocess"
 version = "0.1.0"
 dependencies = [
@@ -2874,12 +2875,12 @@ dependencies = [
  "kotone-ai",
  "kotone-cli",
  "kotone-core",
- "kotone-music",
  "kotone-ocr",
  "kotone-platform-windows",
  "kotone-plugin-api",
  "kotone-plugin-game-voice",
  "kotone-plugin-lol",
+ "kotone-plugin-music",
  "kotone-postprocess",
  "kotone-script",
  "kotone-stt",

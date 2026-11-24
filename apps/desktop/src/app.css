@@ -1,8 +1,9 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "./lib/appearance/palettes.css";
-/* 插件的页面在 apps/desktop 外面（ADR 038：plugins/<id>/ui），Tailwind 默认不扫那里 */
-@source "../../../plugins/*/ui";
+/* 插件的页面在 apps/desktop 外面（ADR 038：plugins/<id>/ui），Tailwind 默认不扫那里。要写到文件那一层：
+   只写到 ui 目录时一个文件都没扫到（英雄联盟页面只在插件里用的类、音乐页的悬停按钮都没生成）。 */
+@source "../../../plugins/*/ui/**/*.{svelte,ts}";
 
 /* shadcn-svelte 的 dark: 变体跟随 <html data-theme>（设置窗口的外观系统写入）。 */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));

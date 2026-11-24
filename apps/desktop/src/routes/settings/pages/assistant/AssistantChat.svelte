@@ -23,8 +23,8 @@
   import { errText, settingsStore, toast } from "../../../../lib/stores/ui";
   import CallKotoneButton from "../../../../lib/components/CallKotoneButton.svelte";
   import KeyRequestCard from "../../../../lib/agentChat/KeyRequestCard.svelte";
-  import MusicLoginCard from "../music/MusicLoginCard.svelte";
-  import { loginPending, musicStore } from "../../../../lib/music";
+  import { pluginsStore } from "../../../../lib/plugins";
+  import { enabledSlots } from "../../../../lib/pluginUi";
   import PermissionMenu from "../../../../lib/agentChat/PermissionMenu.svelte";
   import UsagePanel from "../../../../lib/agentChat/UsagePanel.svelte";
   import { pendingPrompt } from "../../../../lib/agentChat/pendingPrompt";
@@ -157,8 +157,10 @@
 
 {#snippet composer()}
   <div class="space-y-2">
-    <!-- 她要放歌而你还没登录网易云：扫码卡片（ADR 034 D5） -->
-    {#if loginPending($musicStore)}<MusicLoginCard compact />{/if}
+    <!-- 开着的插件放在输入框上面的一条（例如她要放歌而你还没登录网易云时的登录卡片，ADR 034 D5、038） -->
+    {#each enabledSlots($pluginsStore, $settingsStore, "chatBanner") as slot (slot.plugin.manifest.id)}
+      <slot.component plugin={slot.plugin} />
+    {/each}
     {#each chat.keyRequests as request (request.requestId)}
       <KeyRequestCard {request} />
     {/each}

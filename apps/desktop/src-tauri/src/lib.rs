@@ -26,8 +26,6 @@ mod hotkey;
 mod key_request;
 mod model_catalog;
 mod models_cmd;
-mod music;
-mod music_cmd;
 mod ocr_engines;
 mod overlay;
 mod overlay_layer;
@@ -325,8 +323,6 @@ pub fn run() {
             automation::start_schedules(app.handle());
             // 内置琴音 Agent：对话存储与运行状态（ADR 014 / 015）
             app.manage(agent::AgentRuntime::open(companion_enabled));
-            // 放歌（ADR 034）：播放器、登录状态（只有登录过才联网查账号）
-            music::init(app.handle());
             // 插件（ADR 038）：各自开后台循环（英雄联盟：客户端开着时盯对局阶段，进加载界面先查这局的战绩）
             plugins::init(app.handle());
             // 游戏上方的覆盖层（ADR 038）：插件给了条目才建窗口；跟着前台的目标窗口挪、切走就藏
@@ -546,17 +542,6 @@ pub fn run() {
             agent::agent_subagent_answer,
             plugins_cmd::plugins_list,
             plugins_cmd::plugin_call,
-            music_cmd::music_state,
-            music_cmd::music_login_start,
-            music_cmd::music_login_cancel,
-            music_cmd::music_logout,
-            music_cmd::music_search,
-            music_cmd::music_home,
-            music_cmd::music_playlist,
-            music_cmd::music_play,
-            music_cmd::music_control,
-            music_cmd::music_queue,
-            music_cmd::music_set_quality,
             browser_cmd::browser_state,
             browser_cmd::browser_set_bounds,
             browser_cmd::browser_control,

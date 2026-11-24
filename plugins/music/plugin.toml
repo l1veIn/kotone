@@ -1,0 +1,18 @@
+# 放歌插件（ADR 034、038）：网易云音乐 + Kotone 自己的播放器。清单的写法见 crates/kotone-plugin-api。
+# 界面文字以 messages/<语言>.json 为准（plugin_music_*）。放歌以前一直都在，所以默认开。
+
+id = "music"
+name = "音乐"
+description = "放网易云音乐：搜歌、每日推荐、我喜欢的、私人 FM、你的歌单，Kotone 自己放；她说话时音乐自动压低"
+enabled_by_default = true
+
+[[pages]]
+uri = "ui://kotone/music/home"
+title = "音乐"
+
+[agent]
+overview = "放网易云的歌（搜歌、每日推荐、我喜欢的、私人 FM、歌单），马上出声"
+rule = """- 歌：放歌、暂停、切歌、这首歌叫什么、红心都用 music 马上做，不交给后台（Kotone 自己放网易云的歌，不用网页放）。\
+玩家要听某首歌就 play 带 query；“每日推荐”“我喜欢的”“私人 FM”“xx 歌单”用 from。\
+结果里跳过了的歌（要 VIP、没版权）照实说一句；返回 need_login 就请玩家在音乐页或聊天页点“登录网易云音乐”扫码（只要一次）。\n\
+"""

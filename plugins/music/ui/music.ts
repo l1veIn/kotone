@@ -1,12 +1,15 @@
-// 音乐（ADR 034）：Kotone 自己的播放器（Rust：crates/kotone-music，先只接网易云音乐）。
-// 这里是音乐页、左侧栏的小播放条、聊天页的扫码卡片共用的状态和命令；字段与后端 serde（camelCase）一致。
-// 浏览器预览（dev:web）用 ipc/musicMock 里的内存状态。
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+// 放歌插件（ADR 034、038）：Kotone 自己的播放器（Rust：plugins/music，先只接网易云音乐）。
+// 这里是音乐页、左侧栏的小播放条、聊天页的登录卡片共用的状态和调用；字段与后端 serde（camelCase）一致。
+// 页面经插件工具（`music.state`、`music.play`……，只给页面用）读写，状态变了后端发插件事件 `state`。
+// 浏览器预览（dev:web）由 ipc/pluginsMock 转给 ipc/musicMock 里的内存状态。
 import { readable, type Readable } from "svelte/store";
-import { isTauri } from "./ipc";
-import * as musicMock from "./ipc/musicMock";
-import { m } from "./paraglide/messages.js";
+import { listenPluginEvent, pluginCall, type Unlisten } from "$lib/plugins";
+import { m } from "$lib/paraglide/messages.js";
+
+export const PLUGIN_ID = "music";
+export const PAGE_HOME = "ui://kotone/music/home";
+/** 插件事件：音乐的状态变了（在放的时候约每秒一次）。 */
+export const STATE_EVENT = "state";
 
 /** 这首能不能完整放：要 VIP、要单独买（付费专辑）、网易云没有版权 / 下架了。 */
 export type MusicPlayable = "full" | "vip" | "paid" | "unavailable";
@@ -76,7 +79,6 @@ export interface MusicPlayArgs {
 }
 export type MusicAction = "pause" | "resume" | "toggle" | "next" | "previous" | "stop" | "seek" | "volume" | "like";
 
-export const MUSIC_EVENT = "kotone://music";
 export const IDLE_PLAYER: MusicPlayer = {
   status: "idle", track: null, positionMs: 0, durationMs: 0, volume: 70, index: 0, queueLength: 0, liked: false, source: null, error: null,
 };
@@ -147,31 +149,36 @@ export function normalizeMusicState(value: Partial<MusicState> | null | undefine
   };
 }
 
-async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+/** 调放歌插件的工具（只给页面用的那些）。插件关着时后端只回 `{status: "disabled"}`：当成出错。 */
+async function call<T>(tool: string, args?: Record<string, unknown>): Promise<T> {
   // 参数可能是界面里的响应式对象（$state 代理）：先变成普通 JSON（Tauri 本来也要序列化）
-  const plain = args ? (JSON.parse(JSON.stringify(args)) as Record<string, unknown>) : undefined;
-  if (!isTauri) return musicMock.invoke(command, plain ?? {}) as Promise<T>;
-  return invoke<T>(command, plain);
+  const plain = args ? (JSON.parse(JSON.stringify(args)) as Record<string, unknown>) : {};
+  const result = await pluginCall(PLUGIN_ID, tool, plain);
+  const content = result?.content as (T & { status?: unknown; text?: unknown }) | null;
+  if (content && typeof content === "object" && content.status === "disabled") {
+    throw new Error(typeof content.text === "string" ? content.text : "disabled");
+  }
+  return content as T;
 }
 
 export async function musicState(): Promise<MusicState> {
-  return normalizeMusicState(await call<MusicState>("music_state"));
+  return normalizeMusicState(await call<MusicState>("music.state"));
 }
 export async function musicLoginStart(): Promise<MusicState> {
-  return normalizeMusicState(await call<MusicState>("music_login_start"));
+  return normalizeMusicState(await call<MusicState>("music.login_start"));
 }
 export async function musicLoginCancel(): Promise<MusicState> {
-  return normalizeMusicState(await call<MusicState>("music_login_cancel"));
+  return normalizeMusicState(await call<MusicState>("music.login_cancel"));
 }
 export async function musicLogout(): Promise<MusicState> {
-  return normalizeMusicState(await call<MusicState>("music_logout"));
+  return normalizeMusicState(await call<MusicState>("music.logout"));
 }
 export async function musicSearch(query: string, offset = 0): Promise<{ tracks: MusicTrack[]; hasMore: boolean }> {
-  const r = await call<{ tracks: unknown; hasMore: unknown }>("music_search", { query, offset });
+  const r = await call<{ tracks: unknown; hasMore: unknown }>("music.search", { query, offset });
   return { tracks: normalizeTracks(r?.tracks), hasMore: !!r?.hasMore };
 }
 export async function musicHome(): Promise<MusicHome> {
-  const r = await call<{ daily: unknown; playlists: unknown }>("music_home");
+  const r = await call<{ daily: unknown; playlists: unknown }>("music.home");
   const playlists = Array.isArray(r?.playlists)
     ? r.playlists.map((p) => normalizePlaylist(p as Partial<MusicPlaylist>)).filter((p): p is MusicPlaylist => !!p) : [];
   // “我喜欢的音乐”排第一（后端已经这样排；这里再保证一次）
@@ -179,44 +186,55 @@ export async function musicHome(): Promise<MusicHome> {
   return { daily: normalizeTracks(r?.daily), playlists };
 }
 export async function musicPlaylist(id: string): Promise<{ playlist: MusicPlaylist; tracks: MusicTrack[] }> {
-  const r = await call<{ playlist: unknown; tracks: unknown }>("music_playlist", { id });
+  const r = await call<{ playlist: unknown; tracks: unknown }>("music.playlist", { id });
   const playlist = normalizePlaylist(r?.playlist as Partial<MusicPlaylist>);
-  if (!playlist) throw new Error(m.music_load_failed({ error: id }));
+  if (!playlist) throw new Error(m.plugin_music_load_failed({ error: id }));
   return { playlist, tracks: normalizeTracks(r?.tracks) };
 }
 export async function musicPlay(args: MusicPlayArgs): Promise<MusicState> {
-  return normalizeMusicState(await call<MusicState>("music_play", { ...args }));
+  return normalizeMusicState(await call<MusicState>("music.play", { ...args }));
 }
 export async function musicControl(action: MusicAction, value?: number | boolean): Promise<MusicState> {
-  return normalizeMusicState(await call<MusicState>("music_control", value === undefined ? { action } : { action, value }));
+  return normalizeMusicState(await call<MusicState>("music.control", value === undefined ? { action } : { action, value }));
 }
 export async function musicQueue(): Promise<{ tracks: MusicTrack[]; index: number }> {
-  const r = await call<{ tracks: unknown; index: unknown }>("music_queue");
+  const r = await call<{ tracks: unknown; index: unknown }>("music.queue");
   return { tracks: normalizeTracks(r?.tracks), index: num(r?.index) };
 }
 export async function musicSetQuality(quality: MusicQuality): Promise<MusicState> {
-  return normalizeMusicState(await call<MusicState>("music_set_quality", { quality }));
+  return normalizeMusicState(await call<MusicState>("music.set_quality", { quality }));
 }
 
-export async function subscribeMusic(callback: (state: MusicState) => void): Promise<UnlistenFn> {
-  if (!isTauri) return musicMock.subscribe((state) => callback(normalizeMusicState(state)));
-  return listen<MusicState>(MUSIC_EVENT, (e) => callback(normalizeMusicState(e.payload)));
+export async function subscribeMusic(callback: (state: MusicState) => void): Promise<Unlisten> {
+  return listenPluginEvent<MusicState>(PLUGIN_ID, STATE_EVENT, (state) => callback(normalizeMusicState(state)));
 }
 
-/** 音乐状态：先读一次，之后跟着事件更新（有人订阅时才连上）。 */
+/** 有人订阅时往 store 里写（没人订阅时 null）。 */
+let push: ((state: MusicState) => void) | null = null;
+
+/**
+ * 音乐状态：先读一次，之后跟着事件更新（有人订阅时才连上）。读不到（插件关着）时回到空状态，
+ * 免得关掉再打开插件时还显示关之前那首歌。
+ */
 export const musicStore: Readable<MusicState> = readable<MusicState>(structuredClone(IDLE_MUSIC), (set) => {
   let alive = true;
-  let unlisten: UnlistenFn | undefined;
+  let unlisten: Unlisten | undefined;
   let events = 0;
+  push = set;
   void subscribeMusic((state) => { events += 1; set(state); })
     .then((un) => { if (alive) unlisten = un; else un(); })
     .catch(() => {});
   const seen = events;
   void musicState()
     .then((state) => { if (alive && events === seen) set(state); })
-    .catch(() => {});
-  return () => { alive = false; unlisten?.(); };
+    .catch(() => { if (alive && events === seen) set(structuredClone(IDLE_MUSIC)); });
+  return () => { alive = false; if (push === set) push = null; unlisten?.(); };
 });
+
+/** 重新读一次状态（插件刚打开时）；读不到时回到空状态。 */
+export async function refreshMusic(): Promise<void> {
+  try { const state = await musicState(); push?.(state); } catch { push?.(structuredClone(IDLE_MUSIC)); }
+}
 
 /** 要登录（聊天页显示登录卡片）：她要放歌、登录窗口开着、过期了、出错了。 */
 export function loginPending(state: MusicState): boolean {
@@ -240,12 +258,12 @@ export function artistsLine(track: Pick<MusicTrack, "artists">): string {
 /** 放不了的原因（曲目列表上的小标签）；能完整放的返回空。 */
 export function playableBadge(track: MusicTrack): string {
   switch (track.playable) {
-    case "vip": return m.music_badge_vip();
-    case "paid": return m.music_badge_paid();
-    case "unavailable": return m.music_badge_unavailable();
+    case "vip": return m.plugin_music_badge_vip();
+    case "paid": return m.plugin_music_badge_paid();
+    case "unavailable": return m.plugin_music_badge_unavailable();
     default: return "";
   }
 }
 export function qualityLabel(quality: MusicQuality): string {
-  return quality === "standard" ? m.music_quality_standard() : quality === "lossless" ? m.music_quality_lossless() : m.music_quality_exhigh();
+  return quality === "standard" ? m.plugin_music_quality_standard() : quality === "lossless" ? m.plugin_music_quality_lossless() : m.plugin_music_quality_exhigh();
 }

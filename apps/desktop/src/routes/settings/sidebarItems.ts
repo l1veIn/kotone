@@ -1,6 +1,6 @@
 // 左侧栏的页面清单（AppSidebar 和“全部页面”共用）。分组和默认顺序在 lib/sidebarLayout.ts。
 import type { Component } from "svelte";
-import { Bell, Bot, Gamepad2, Info, Mic, Music, Settings2, Zap } from "@lucide/svelte";
+import { Bell, Bot, Gamepad2, Info, Mic, Settings2, Zap } from "@lucide/svelte";
 import { m } from "$lib/paraglide/messages.js";
 import { SIDEBAR_GROUPS, type SidebarGroupId, type SidebarPrefs } from "../../lib/sidebarLayout";
 import { pluginPageId, pluginText } from "../../lib/plugins";
@@ -9,7 +9,7 @@ import { updateSettings } from "../../lib/ipc";
 import { errText, settingsStore, toast } from "../../lib/stores/ui";
 
 export type PageId =
-  | "general" | "processing" | "assistant" | "automation" | "game" | "music"
+  | "general" | "processing" | "assistant" | "automation" | "game"
   | "history" | "advanced" | "about" | "character" | "legacy-reminders"
   /** 插件的页面（ADR 038）：`plugin:<插件 id>`。 */
   | `plugin:${string}`;
@@ -27,7 +27,6 @@ export function navItems(companionName: string, legacyVoiceOnly: boolean): Recor
     assistant: { id: "assistant", label: companionName, icon: Bot },
     game: { id: "game", label: legacyVoiceOnly ? m.shell_sidebar_game_adapt() : m.shell_sidebar_game_list(), icon: Gamepad2 },
     automation: { id: "automation", label: m.shell_sidebar_automation(), icon: Zap },
-    music: { id: "music", label: m.shell_sidebar_music(), icon: Music },
     general: { id: "general", label: m.shell_sidebar_voice_input(), icon: Mic },
     "legacy-reminders": { id: "legacy-reminders", label: m.shell_sidebar_legacy_reminders(), icon: Bell },
   };

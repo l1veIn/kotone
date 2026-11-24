@@ -40,6 +40,7 @@ pub fn registry() -> &'static [Arc<dyn Plugin>] {
         vec![
             Arc::new(kotone_plugin_lol::LolPlugin::new()) as Arc<dyn Plugin>,
             Arc::new(kotone_plugin_game_voice::GameVoicePlugin::new()),
+            Arc::new(kotone_plugin_music::MusicPlugin::new()),
         ]
     })
 }
@@ -138,6 +139,16 @@ pub struct DesktopHost {
 }
 
 impl DesktopHost {
+    /// 凭据库里的名字：`<插件 id>:<name>`（放歌是 `music:netease`，和搬进插件以前一样）。
+    fn secret_id(&self, name: &str) -> String {
+        format!("{}:{name}", self.id)
+    }
+
+    /// 插件的网页登录窗口（放歌是 `music-login`，和搬进插件以前一样）。
+    fn web_window_label(&self) -> String {
+        format!("{}-login", self.id)
+    }
+
     pub fn for_plugin(app: &AppHandle, plugin: &Arc<dyn Plugin>) -> Arc<dyn Host> {
         Arc::new(Self {
             app: app.clone(),
@@ -311,6 +322,89 @@ impl Host for DesktopHost {
             .await
             .map_err(|e| e.to_string())?
         })
+    }
+
+    fn she_is_audible(&self) -> bool {
+        crate::voice_reply::active()
+            || crate::assistant::speaking_now()
+            || crate::assistant::output_busy(&self.app)
+    }
+
+    fn secret(&self, name: &str) -> Option<String> {
+        use kotone_core::connection::SecretStore;
+        kotone_ai::secrets::KeyringSecretStore
+            .get(&self.secret_id(name))
+            .ok()
+            .flatten()
+    }
+
+    fn set_secret(&self, name: &str, value: &str) -> Result<(), String> {
+        use kotone_core::connection::SecretStore;
+        kotone_ai::secrets::KeyringSecretStore
+            .set(&self.secret_id(name), value)
+            .map_err(|e| e.to_string())
+    }
+
+    fn delete_secret(&self, name: &str) {
+        use kotone_core::connection::SecretStore;
+        let _ = kotone_ai::secrets::KeyringSecretStore.delete(&self.secret_id(name));
+    }
+
+    fn open_web_window(&self, url: &str, title: &str) -> Result<(), String> {
+        let label = self.web_window_label();
+        if let Some(window) = self.app.get_webview_window(&label) {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+            return Ok(());
+        }
+        let url = url.parse().map_err(|e| format!("网址不对：{e}"))?;
+        // 无痕（WebView2 InPrivate，和主窗口同一个浏览器进程）：网页数据关窗口就没了，登录凭据只在插件那边。
+        // 用单独的数据目录会另起一个浏览器进程，真机测试的调试端口会被它占走。
+        tauri::WebviewWindowBuilder::new(&self.app, &label, tauri::WebviewUrl::External(url))
+            .title(title)
+            .inner_size(1000.0, 720.0)
+            .center()
+            .incognito(true)
+            .build()
+            .map_err(|e| format!("打不开网页窗口：{e}"))?;
+        kotone_core::log::log(&format!("插件 {} 的网页窗口建好了（无痕）", self.id));
+        Ok(())
+    }
+
+    fn web_window_open(&self) -> bool {
+        self.app
+            .get_webview_window(&self.web_window_label())
+            .is_some()
+    }
+
+    fn web_window_cookies(
+        &self,
+        url: &str,
+    ) -> BoxFuture<'static, Result<Vec<(String, String)>, String>> {
+        let window = self.app.get_webview_window(&self.web_window_label());
+        let url = url.parse::<url::Url>();
+        Box::pin(async move {
+            let window = window.ok_or("网页窗口没了")?;
+            let url = url.map_err(|e| format!("{e}"))?;
+            // 读 Cookie 在 Windows 上不能在主线程 / 同步回调里做（会卡死）；要主线程配合，万一卡住 5 秒后不等了
+            let read = tauri::async_runtime::spawn_blocking(move || window.cookies_for_url(url));
+            let cookies = tokio::time::timeout(std::time::Duration::from_secs(5), read)
+                .await
+                .map_err(|_| "读 Cookie 超过 5 秒没回来".to_string())?
+                .map_err(|e| format!("读 Cookie 的线程出错：{e}"))?
+                .map_err(|e| format!("读 Cookie 失败：{e}"))?;
+            Ok(cookies
+                .iter()
+                .map(|c| (c.name().to_string(), c.value().to_string()))
+                .collect())
+        })
+    }
+
+    fn close_web_window(&self) {
+        if let Some(window) = self.app.get_webview_window(&self.web_window_label()) {
+            let _ = window.destroy();
+        }
     }
 
     fn download(
@@ -571,7 +665,12 @@ mod tests {
             owner("lol.scout").map(|p| p.manifest().id.as_str()),
             Some("lol")
         );
-        assert!(owner("music").is_none());
+        // 放歌搬进了插件（ADR 038 第 4 步）
+        assert_eq!(
+            owner("music").map(|p| p.manifest().id.as_str()),
+            Some("music")
+        );
+        assert!(owner("browser.open").is_none());
     }
 
     #[test]

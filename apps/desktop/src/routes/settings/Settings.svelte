@@ -47,13 +47,13 @@
   import AdvancedPage from "./pages/AdvancedPage.svelte";
   import { isAdvancedSection, type AdvancedSection } from "./pages/advanced/types";
   import GamePage from "./pages/GamePage.svelte";
-  import MusicPage from "./pages/MusicPage.svelte";
   import SidebarPagesDialog from "./SidebarPagesDialog.svelte";
   import HistoryPage from "./pages/HistoryPage.svelte";
   import AboutPage from "./pages/AboutPage.svelte";
   import CharacterPage from "./pages/CharacterPage.svelte";
   import PluginPage from "./pages/PluginPage.svelte";
   import { listPlugins, pluginOfPage, pluginPageId } from "../../lib/plugins";
+  import { PLUGIN_UI } from "../../lib/pluginUi";
   import { listenUiOpen } from "../../lib/stores/pluginPages";
   import { initializeAppearance, resolvedTheme } from "../../lib/appearance/appearanceRuntime";
 
@@ -407,8 +407,6 @@
       <AutomationPage onOpenHotkeys={() => openAdvanced("system", "system-stop")} />
     {:else if page === "game"}
       <GamePage {legacyVoiceOnly} />
-    {:else if page === "music"}
-      <MusicPage />
     {:else if page === "character"}
       <CharacterPage onBack={() => (page = "about")} />
     {:else if pluginOfPage(page)}
@@ -418,7 +416,7 @@
     {/if}
 
     <!-- 底部留白（提示在右上角，见 Sonner） -->
-    {#if page !== "assistant" && page !== "music"}<div class="h-4"></div>{/if}
+    {#if page !== "assistant" && !PLUGIN_UI[pluginOfPage(page) ?? ""]?.fullBleed}<div class="h-4"></div>{/if}
   </main>
 
   <!-- 左侧栏的“全部页面”（ADR 034 第六节）：侧栏的“⋯”、右键菜单、聊天里“去看看：左侧栏 → ⋯” -->

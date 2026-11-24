@@ -22,7 +22,7 @@ const row = (page: Page, id: string) => page.getByTestId("sidebar-pages-dialog")
 
 test("sidebar pages: move and hide in 全部页面, kept after a reload, hidden pages still open, restore defaults", async ({ page }, testInfo) => {
   await open(page);
-  expect(await navOrder(page)).toEqual(["assistant", "game", "automation", "music", "general", "plugin:lol", "plugin:game-voice"]);
+  expect(await navOrder(page)).toEqual(["assistant", "game", "automation", "general", "plugin:lol", "plugin:game-voice", "plugin:music"]);
 
   await page.getByTestId("sidebar-all-pages").click();
   const dialog = page.getByTestId("sidebar-pages-dialog");
@@ -34,12 +34,13 @@ test("sidebar pages: move and hide in 全部页面, kept after a reload, hidden 
   // 每组第一项不能再上移
   await expect(row(page, "assistant").getByTestId("sidebar-page-up")).toBeDisabled();
 
-  await row(page, "music").getByTestId("sidebar-page-up").click();
-  await row(page, "music").getByTestId("sidebar-page-up").click();
-  await expect.poll(() => navOrder(page)).toEqual(["assistant", "music", "game", "automation", "general", "plugin:lol", "plugin:game-voice"]);
+  // 音乐是插件（ADR 038）：在“插件”组里上移
+  await row(page, "plugin:music").getByTestId("sidebar-page-up").click();
+  await row(page, "plugin:music").getByTestId("sidebar-page-up").click();
+  await expect.poll(() => navOrder(page)).toEqual(["assistant", "game", "automation", "general", "plugin:music", "plugin:lol", "plugin:game-voice"]);
   await row(page, "game").getByTestId("sidebar-page-toggle").click();
   await expect(row(page, "game")).toHaveAttribute("data-hidden", "true");
-  await expect.poll(() => navOrder(page)).toEqual(["assistant", "music", "automation", "general", "plugin:lol", "plugin:game-voice"]);
+  await expect.poll(() => navOrder(page)).toEqual(["assistant", "automation", "general", "plugin:music", "plugin:lol", "plugin:game-voice"]);
   await page.screenshot({ path: shot(testInfo, "sidebar-pages") });
   await dialog.getByTestId("sidebar-pages-done").click();
   await expect(dialog).toHaveCount(0);
@@ -48,7 +49,7 @@ test("sidebar pages: move and hide in 全部页面, kept after a reload, hidden 
   // 刷新后还是这样
   await page.reload();
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
-  await expect.poll(() => navOrder(page)).toEqual(["assistant", "music", "automation", "general", "plugin:lol", "plugin:game-voice"]);
+  await expect.poll(() => navOrder(page)).toEqual(["assistant", "automation", "general", "plugin:music", "plugin:lol", "plugin:game-voice"]);
 
   // 藏起来的页面从全部页面里还能打开
   await page.getByTestId("sidebar-all-pages").click();
@@ -60,30 +61,30 @@ test("sidebar pages: move and hide in 全部页面, kept after a reload, hidden 
   // 恢复默认
   await page.getByTestId("sidebar-all-pages").click();
   await dialog.getByTestId("sidebar-pages-reset").click();
-  await expect.poll(() => navOrder(page)).toEqual(["assistant", "game", "automation", "music", "general", "plugin:lol", "plugin:game-voice"]);
+  await expect.poll(() => navOrder(page)).toEqual(["assistant", "game", "automation", "general", "plugin:lol", "plugin:game-voice", "plugin:music"]);
   await expect(dialog.getByTestId("sidebar-pages-reset")).toBeDisabled();
 });
 
 test("sidebar pages: right-click a page to move or hide it; the rail has 全部页面 too", async ({ page }, testInfo) => {
   await open(page);
-  await page.getByTestId("settings-nav-automation").click({ button: "right" });
+  await page.getByTestId("settings-nav-game").click({ button: "right" });
   const menu = page.getByTestId("sidebar-context-menu");
   await expect(menu).toBeVisible();
   await page.screenshot({ path: shot(testInfo, "sidebar-context-menu") });
   await menu.getByTestId("sidebar-menu-down").click();
-  await expect.poll(() => navOrder(page)).toEqual(["assistant", "game", "music", "automation", "general", "plugin:lol", "plugin:game-voice"]);
+  await expect.poll(() => navOrder(page)).toEqual(["assistant", "automation", "game", "general", "plugin:lol", "plugin:game-voice", "plugin:music"]);
   // 每组最后一项不能再下移
-  await page.getByTestId("settings-nav-automation").click({ button: "right" });
+  await page.getByTestId("settings-nav-game").click({ button: "right" });
   await expect(page.getByTestId("sidebar-context-menu").getByTestId("sidebar-menu-down")).toHaveAttribute("data-disabled", "");
   await page.getByTestId("sidebar-context-menu").getByTestId("sidebar-menu-hide").click();
-  await expect.poll(() => navOrder(page)).toEqual(["assistant", "game", "music", "general", "plugin:lol", "plugin:game-voice"]);
+  await expect.poll(() => navOrder(page)).toEqual(["assistant", "automation", "general", "plugin:lol", "plugin:game-voice", "plugin:music"]);
   // 语音输入整组都藏了：组名也不显示
   await page.getByTestId("settings-nav-general").click({ button: "right" });
   await page.getByTestId("sidebar-context-menu").getByTestId("sidebar-menu-hide").click();
   await expect(page.locator('[data-testid^="sidebar-group-"]', { hasText: "语音输入" })).toHaveCount(0);
   // 插件组（ADR 038）接上来
   await expect(page.getByTestId("sidebar-group-1")).toHaveText("插件");
-  await expect.poll(() => navOrder(page)).toEqual(["assistant", "game", "music", "plugin:lol", "plugin:game-voice"]);
+  await expect.poll(() => navOrder(page)).toEqual(["assistant", "automation", "plugin:lol", "plugin:game-voice", "plugin:music"]);
 
   // 图标栏：底部也有“⋯”
   await page.getByTestId("sidebar-toggle").click();
@@ -92,11 +93,11 @@ test("sidebar pages: right-click a page to move or hide it; the rail has 全部�
   await expect(page.getByTestId("sidebar-pages-dialog")).toBeVisible();
   await page.getByTestId("sidebar-pages-dialog").getByTestId("sidebar-pages-reset").click();
   await page.getByTestId("sidebar-pages-dialog").getByTestId("sidebar-pages-done").click();
-  await expect.poll(() => navOrder(page)).toEqual(["assistant", "game", "automation", "music", "general", "plugin:lol", "plugin:game-voice"]);
+  await expect.poll(() => navOrder(page)).toEqual(["assistant", "game", "automation", "general", "plugin:lol", "plugin:game-voice", "plugin:music"]);
   await page.getByTestId("sidebar-toggle").click();
 });
 
-test("“去看看：左侧栏 → ⋯” and “音乐” locations open the editor and the music page", async ({ page }) => {
+test("“去看看：左侧栏 → ⋯” and “音乐” locations open the editor and the music plugin's page", async ({ page }) => {
   await open(page);
   const go = (where: string) => page.evaluate(async (w) => {
     const nav = await import("/src/lib/stores/navigation.ts");
@@ -107,7 +108,9 @@ test("“去看看：左侧栏 → ⋯” and “音乐” locations open the ed
   expect(await go("左侧栏 → ⋯")).toEqual({ page: "sidebar-pages" });
   await expect(page.getByTestId("sidebar-pages-dialog")).toBeVisible();
   await page.getByTestId("sidebar-pages-done").click();
-  expect(await go("音乐")).toEqual({ page: "music" });
+  // 音乐页成了放歌插件的页面（ADR 038 第 4 步）
+  expect(await go("音乐")).toEqual({ page: "plugin", id: "music" });
   await expect(page.getByTestId("music-page")).toBeVisible();
-  expect(await go("设置 → 权限 → 放歌")).toEqual({ page: "music" });
+  expect(await go("设置 → 权限 → 放歌")).toEqual({ page: "plugin", id: "music" });
+  expect(await go("设置 → 插件，或插件 → 英雄联盟 / 游戏语音 / 音乐")).toEqual({ page: "advanced", tab: "plugins", anchor: undefined });
 });

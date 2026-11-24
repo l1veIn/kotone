@@ -108,7 +108,6 @@ const mock: MockStore = {
     ocr: { activeModelId: "" },
     search: { activeModelId: "" },
     agent: { permissions: { mode: "default", rules: {} }, hiddenAutomations: [], inGame: true, progressSpeech: true, identity: { name: "", avatar: "" }, subagents: { model: "" }, compactAtTokens: 64000, roleId: "kotone", matchRecap: true, safetyCheck: true, gameEffort: "", chatEffort: "" },
-    music: { quality: "exhigh", volume: 70 },
     plugins: {},
   },
   devices: [
@@ -663,6 +662,8 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
   mergeJson(merged, patch);
   mock.settings = merged as unknown as Settings;
   if (patch.ui?.sidebar) saveMockSidebar(mock.settings.ui.sidebar);
+  // 插件开关变了：和桌面端一样（关掉放歌插件就停下）；动态导入，免得和 pluginsMock 互相引用
+  if (patch.plugins) void import("./pluginsMock").then((plugins) => plugins.settingsChanged());
   return clone(mock.settings);
 }
 

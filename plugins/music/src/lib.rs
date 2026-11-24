@@ -1,4 +1,6 @@
-//! Kotone 放歌（ADR 034）：放歌是一个工具，她一步就能放。
+//! Kotone 放歌插件（ADR 034、038）：放歌是一个工具，她一步就能放。
+//!
+//! - 插件（[`MusicPlugin`]）：她的 `music`、音乐页用的 `music.*`（只给页面），宿主一侧在 [`app`]；
 //!
 //! - [`MusicProvider`]：一个音乐来源（现在只有网易云 [`NeteaseProvider`]）。歌曲 ID 带来源前缀
 //!   （`ne:1901371647`），以后加 QQ 音乐只是再写一个实现。
@@ -8,6 +10,7 @@
 //! 接口和做法照 NeteaseCloudMusicApi 的维护分支 api-enhanced（MIT）、ncmapi（MIT）和
 //! YesPlayMusic（MIT），见各文件开头和 `THIRD_PARTY_NOTICES.md`。
 
+pub mod app;
 mod cache;
 pub mod netease;
 mod player;
@@ -256,9 +259,183 @@ pub fn split_id(id: &str) -> Option<(&str, &str)> {
     (!provider.is_empty() && !raw.is_empty()).then_some((provider, raw))
 }
 
+// ---------- 插件（ADR 038） ----------
+
+pub const TOOL_MUSIC: &str = "music";
+pub const PAGE: &str = "ui://kotone/music/home";
+
+pub fn manifest() -> &'static kotone_plugin_api::Manifest {
+    static MANIFEST: std::sync::OnceLock<kotone_plugin_api::Manifest> = std::sync::OnceLock::new();
+    MANIFEST.get_or_init(|| {
+        kotone_plugin_api::Manifest::parse(include_str!("../plugin.toml"))
+            .expect("plugins/music/plugin.toml")
+    })
+}
+
+/// 她的 `music`（说明照搬进插件以前的）和音乐页用的工具（只给页面）。
+pub fn specs() -> Vec<kotone_plugin_api::ToolSpec> {
+    use kotone_plugin_api::ToolSpec;
+    use serde_json::json;
+    let page = |name: &str, properties: serde_json::Value| {
+        ToolSpec::new(
+            name,
+            "音乐页用",
+            json!({"type": "object", "properties": properties}),
+        )
+        .app_only()
+    };
+    vec![
+        ToolSpec::new(
+            TOOL_MUSIC,
+            "放歌（网易云音乐，Kotone 自己放，马上出声）。play：带 query 搜歌放（“晴天”“周杰伦的歌”），\
+或带 from 放 daily（每日推荐）/ liked（我喜欢的音乐）/ fm（私人 FM）/ playlist（再带 playlist 写歌单名）；\
+pause / resume / next / previous / stop；volume（value 0–100）；now 现在放的是什么；like 红心现在这首。\
+结果里有正在放哪首、跳过了哪些（要 VIP、没版权）和原因：照实用一句话告诉玩家，例如“原唱要 VIP，先放了 xx 的版本”。\
+need_login：玩家还没登录网易云（只要登一次），请玩家在 Kotone 的音乐页或聊天页点“登录网易云音乐”，\
+在弹出的网易云页面里用网易云音乐 App 扫码，登好了再放。",
+            json!({"type": "object", "additionalProperties": false, "required": ["action"], "properties": {
+                "action": {"enum": ["play", "pause", "resume", "next", "previous", "stop", "volume", "now", "like"]},
+                "query": {"type": "string", "maxLength": 100, "description": "play：要搜的歌名 / 歌手"},
+                "from": {"enum": ["daily", "liked", "fm", "playlist"], "description": "play：不搜歌，放这里的歌"},
+                "playlist": {"type": "string", "maxLength": 100, "description": "from = playlist 时：歌单名（玩家自己的或收藏的）"},
+                "value": {"type": "integer", "minimum": 0, "maximum": 100, "description": "volume：音量 0–100"}
+            }}),
+        )
+        .side_effects(&["plays-media"])
+        // 歌名、歌手、歌单名是网易云上别人写的
+        .untrusted()
+        .instant(),
+        page("music.state", json!({})),
+        page("music.login_start", json!({})),
+        page("music.login_cancel", json!({})),
+        page("music.logout", json!({})),
+        page("music.search", json!({"query": {"type": "string"}, "offset": {"type": "integer"}})),
+        page("music.home", json!({})),
+        page("music.playlist", json!({"id": {"type": "string"}})),
+        page("music.play", json!({"tracks": {"type": "array"}, "index": {"type": "integer"}, "from": {"type": "string"}, "playlistId": {"type": "string"}, "query": {"type": "string"}})),
+        page("music.control", json!({"action": {"type": "string"}, "value": {}})),
+        page("music.queue", json!({})),
+        page("music.set_quality", json!({"quality": {"type": "string"}})),
+    ]
+}
+
+/// 放歌插件。播放器在插件启动时建（要在 tokio 运行时里）。
+#[derive(Default)]
+pub struct MusicPlugin {
+    music: std::sync::OnceLock<std::sync::Arc<app::Music>>,
+}
+
+impl MusicPlugin {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn music(&self) -> Result<&std::sync::Arc<app::Music>, String> {
+        self.music.get().ok_or_else(|| "放歌还没准备好".to_string())
+    }
+}
+
+impl kotone_plugin_api::Plugin for MusicPlugin {
+    fn manifest(&self) -> &kotone_plugin_api::Manifest {
+        manifest()
+    }
+
+    fn tools(&self) -> Vec<kotone_plugin_api::ToolSpec> {
+        specs()
+    }
+
+    fn call<'a>(
+        &'a self,
+        _host: std::sync::Arc<dyn kotone_plugin_api::Host>,
+        tool: &'a str,
+        arguments: &'a serde_json::Value,
+    ) -> kotone_plugin_api::BoxFuture<'a, Result<kotone_plugin_api::ToolResult, String>> {
+        use serde_json::Value;
+        Box::pin(async move {
+            let music = self.music()?.clone();
+            let text = |key: &str| arguments.get(key).and_then(Value::as_str).unwrap_or("");
+            let value = match tool {
+                TOOL_MUSIC => music.tool(arguments).await?,
+                "music.state" => music.state(),
+                "music.login_start" => music.login_start().await?,
+                "music.login_cancel" => music.login_cancel(),
+                "music.logout" => music.logout().await?,
+                "music.search" => {
+                    let offset = arguments.get("offset").and_then(Value::as_u64).unwrap_or(0);
+                    music.search(text("query"), offset as u32).await?
+                }
+                "music.home" => music.home().await?,
+                "music.playlist" => music.playlist(text("id")).await?,
+                "music.play" => {
+                    let request: app::PlayRequest = serde_json::from_value(arguments.clone())
+                        .map_err(|e| format!("参数不对：{e}"))?;
+                    music.play(request).await?
+                }
+                "music.control" => {
+                    music
+                        .control(text("action"), arguments.get("value"))
+                        .await?
+                }
+                "music.queue" => music.queue(),
+                "music.set_quality" => music.set_quality(text("quality"))?,
+                other => return Err(format!("{other} 不是放歌的工具")),
+            };
+            Ok(kotone_plugin_api::ToolResult::content(value))
+        })
+    }
+
+    /// 启动时建播放器（在宿主的 tokio 运行时里）。插件关着也建：播放器不出声、不联网，打开插件就能用。
+    fn start(self: std::sync::Arc<Self>, host: std::sync::Arc<dyn kotone_plugin_api::Host>) {
+        let plugin = self.clone();
+        let spawner = host.clone();
+        spawner.spawn(Box::pin(async move {
+            let _ = plugin.music.set(app::Music::start(host));
+        }));
+    }
+
+    fn settings_changed(&self, _host: std::sync::Arc<dyn kotone_plugin_api::Host>) {
+        if let Some(music) = self.music.get() {
+            music.settings_changed();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manifest_and_tools_agree() {
+        let m = manifest();
+        assert_eq!(m.id, "music");
+        assert!(m.enabled_by_default, "放歌以前一直都在：默认开");
+        m.check_tools(&specs()).unwrap();
+        let tools = specs();
+        let music = tools.iter().find(|t| t.name == TOOL_MUSIC).unwrap();
+        assert!(music.instant && music.untrusted && music.for_model());
+        assert_eq!(music.side_effects, ["plays-media"]);
+        // 音乐页用的只给页面
+        assert!(tools
+            .iter()
+            .filter(|t| t.name != TOOL_MUSIC)
+            .all(|t| !t.for_model() && t.for_app()));
+        assert!(m.agent.rule.contains("music") && m.agent.rule.ends_with('\n'));
+    }
+
+    #[test]
+    fn messages_match_the_manifest() {
+        let zh: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(include_str!("../messages/zh-CN.json")).unwrap();
+        let en: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(include_str!("../messages/en.json")).unwrap();
+        let m = manifest();
+        assert_eq!(zh["plugin_music_name"], m.name.as_str());
+        assert_eq!(zh["plugin_music_description"], m.description.as_str());
+        for key in zh.keys() {
+            assert!(key.starts_with("plugin_music_"), "{key}");
+            assert!(en.contains_key(key), "en 缺 {key}");
+        }
+    }
 
     #[test]
     fn ids_and_serde_shapes_match_the_frontend_contract() {

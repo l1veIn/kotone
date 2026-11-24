@@ -5,9 +5,9 @@ the player's real DeepSeek key in memory only, input tools denied, speech volume
 home is stored under its own credential service (kotone@<dir>), never the player's real one. Music volume 12.
 
 Without a login (default, `--background`, no window):
-M1. `music_state`: NetEase, not logged in, nothing playing.
+M1. `music.state` (the music plugin's page tool, was `music_state`): NetEase, not logged in, nothing playing.
 M2. `music_search 孤勇者`: results within a few seconds; the 陈奕迅 original is marked vip; covers are full.
-M3. the Music page (sidebar → 音乐) shows the scan card; screenshot.
+M3. the Music page (sidebar → 插件 → 音乐) shows the scan card; screenshot.
 M4. `music_login_start`: NetEase's official web login opens in its own window (`music-login`, the player scans the
     official QR there — our own `type:3` QR was refused as “设备环境异常”); `music_login_cancel` closes it.
 M5. `music_play` from the page while logged out refuses with a login hint and opens that window (D5).
@@ -77,10 +77,19 @@ def log_text():
         return ""
 
 
+def music_cmd(tool, args=None):
+    """音乐页的工具（ADR 038 第 4 步起是放歌插件只给页面用的工具，经 `plugin_call`）：返回 {"ok": 结果} 或 {"error": …}，
+    和以前直接调 `music_*` 命令一样。"""
+    r = bt.invoke("plugin_call", {"plugin": "music", "tool": tool, "arguments": args or {}})
+    if isinstance(r.get("ok"), dict) and "content" in r["ok"]:
+        return {"ok": r["ok"]["content"]}
+    return r
+
+
 def music_state():
     # 登录窗口（无痕）开着时，调试端口偶尔连不上一次：当成“还没好”，下一轮再问
     try:
-        return bt.invoke("music_state", {}).get("ok") or {}
+        return music_cmd("music.state", {}).get("ok") or {}
     except Exception as e:  # noqa: BLE001
         print("   (music_state:", str(e)[-80:].replace(chr(10), " "), ")")
         return {}
@@ -112,7 +121,7 @@ def logged_out_cases():
           json.dumps({k: s.get(k) for k in ("account", "login", "quality")}, ensure_ascii=False)[:200])
 
     t = time.time()
-    r = bt.invoke("music_search", {"query": "孤勇者", "offset": 0})
+    r = music_cmd("music.search", {"query": "孤勇者", "offset": 0})
     tracks = (r.get("ok") or {}).get("tracks", [])
     took = time.time() - t
     check("M2: search answers in a few seconds", tracks and took < 5, f"{len(tracks)} tracks in {took:.1f} s")
@@ -122,26 +131,26 @@ def logged_out_cases():
     full = [x for x in tracks if x["playable"] == "full"]
     check("M2: some versions are fully playable", full, f"{len(full)} full")
 
-    r = ui('await page.getByTestId("settings-nav-music").click(); await page.getByTestId("music-page").waitFor();'
+    r = ui('await page.getByTestId("settings-nav-plugin:music").click(); await page.getByTestId("music-page").waitFor();'
            'await page.waitForTimeout(800); return await page.getByTestId("music-login-card").isVisible();',
            "m3-logged-out.png")
     check("M3: the Music page shows the scan card", r.get("ok") is True, json.dumps(r, ensure_ascii=False)[:200])
 
     mark = len(log_text())
-    r = bt.invoke("music_login_start", {})
+    r = music_cmd("music.login_start", {})
     login = (r.get("ok") or {}).get("login", {})
     check("M4: the official login window opens", login.get("stage") == "waiting" and "打开网易云官网登录窗口" in log_text()[mark:],
           json.dumps(login, ensure_ascii=False)[:200])
     time.sleep(4)
     ui("return true;", "m4-waiting.png")
-    r = bt.invoke("music_login_cancel", {})
+    r = music_cmd("music.login_cancel", {})
     check("M4: cancel closes it", ((r.get("ok") or {}).get("login") or {}).get("stage") == "idle")
 
     if full:
-        r = bt.invoke("music_play", {"tracks": full[:1], "index": 0})
+        r = music_cmd("music.play", {"tracks": full[:1], "index": 0})
         check("M5: playing while logged out asks to log in (D5)", "error" in r and "登录" in r["error"], r.get("error", "")[:120])
         check("M5: …and the login window is open", music_state().get("login", {}).get("stage") == "waiting")
-        bt.invoke("music_login_cancel", {})
+        music_cmd("music.login_cancel", {})
 
     text = "我要听孤勇者"
     r, tools = say("M6", text)
@@ -152,21 +161,21 @@ def logged_out_cases():
     check("M6: she asks the player to log in", any(w in said for w in ("扫", "登录")), said[:120])
     check("M6: no window from her, the chat page shows a login button (stage needed)",
           music_state().get("login", {}).get("stage") == "needed", json.dumps(music_state().get("login"), ensure_ascii=False))
-    bt.invoke("music_login_cancel", {})
+    music_cmd("music.login_cancel", {})
 
 
 def logged_in_cases():
-    ui('await page.getByTestId("settings-nav-music").click(); await page.getByTestId("music-page").waitFor(); return true;')
+    ui('await page.getByTestId("settings-nav-plugin:music").click(); await page.getByTestId("music-page").waitFor(); return true;')
     if REUSE and music_state().get("account"):
         print("   already logged in (reused home)")
     else:
-        bt.invoke("music_login_start", {})
+        music_cmd("music.login_start", {})
         print("\n>>> 弹出了“登录网易云音乐”窗口（网易云官网的登录页）：请用网易云音乐 App 扫里面的二维码并在手机上确认（最多等 5 分钟）\n")
     account = bt.wait_until(lambda: music_state().get("account"), 320, 2)
     if not check("L1: logged in after the scan", account, json.dumps(account, ensure_ascii=False)[:120] if account else "timed out"):
         return
     print(f"   account: {account.get('nickname')} vip={account.get('vip')}")
-    home = bt.invoke("music_home", {}).get("ok") or {}
+    home = music_cmd("music.home", {}).get("ok") or {}
     lists = home.get("playlists", [])
     check("L1: daily picks and playlists", home.get("daily") and lists, f"{len(home.get('daily', []))} daily, {len(lists)} playlists")
     check("L1: 我喜欢的音乐 first", lists and lists[0].get("liked"), lists[0].get("name") if lists else "-")
@@ -203,9 +212,9 @@ def logged_in_cases():
         check("L4: not VIP → the original was skipped and she says why", any("VIP" in x or "vip" in x for x in results)
               and ("VIP" in r.get("said", "") or "会员" in r.get("said", "")), r.get("said", "")[:120])
 
-    bt.invoke("music_control", {"action": "stop"})
+    music_cmd("music.control", {"action": "stop"})
     check("L5: stopped", music_state()["player"]["status"] in ("idle", "paused"), music_state()["player"]["status"])
-    bt.invoke("music_logout", {})
+    music_cmd("music.logout", {})
 
 
 def main():
@@ -235,8 +244,8 @@ def main():
             logged_out_cases()
     finally:
         try:
-            bt.invoke("music_control", {"action": "stop"})
-            bt.invoke("music_logout", {})
+            music_cmd("music.control", {"action": "stop"})
+            music_cmd("music.logout", {})
         except Exception:  # noqa: BLE001
             pass
         real_deepseek.delete_connection(bt.EXE, bt.ENV)

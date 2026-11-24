@@ -2,13 +2,16 @@
  * dev:web 的插件后端（ADR 038）：照桌面端 `plugins.rs` 列出内置插件、按设置现算开关、
  * 插件页面调工具。清单的文字从插件自己的文案读（plugins/<id>/messages/zh-CN.json），和 plugin.toml 一致
  * （插件的 Rust 测试对过）。英雄联盟的工具返回示例数据（lolMock.ts），页面和聊天卡片照真的显示；
- * 游戏语音（默认关）的驱动、默认麦克风是模拟的（gameVoiceMock.ts）。
+ * 游戏语音（默认关）的驱动、默认麦克风是模拟的（gameVoiceMock.ts）；放歌（默认开）是模拟的网易云和播放器（musicMock.ts），
+ * 状态照真的作为插件事件发出（[`subscribe`]）。
  */
 import lolZh from "../../../../../plugins/lol/messages/zh-CN.json";
 import gameVoiceZh from "../../../../../plugins/game-voice/messages/zh-CN.json";
+import musicZh from "../../../../../plugins/music/messages/zh-CN.json";
 import type { PluginInfo, PluginManifest, PluginToolResult, PluginVisibility } from "../plugins";
 import { getSettings } from "./browserMock";
 import { gameVoiceCall } from "./gameVoiceMock";
+import { musicCall, pluginTurnedOff as musicTurnedOff, subscribe as subscribeMusic } from "./musicMock";
 import { findSamplePlayer, sampleGame, sampleMatch, samplePlayer } from "./lolMock";
 import {
   findSampleChampion, sampleChampionList, sampleChampionMayhem, sampleChampionRift, sampleTierMayhem, sampleTierRift,
@@ -80,6 +83,20 @@ const gameVoice: PluginManifest = {
   agent: { overview: "", rule: "" },
 };
 
+// 放歌（ADR 034、038 第 4 步）：她的 music + 音乐页用的 music.*，默认开
+const music: PluginManifest = {
+  id: "music",
+  name: musicZh.plugin_music_name,
+  description: musicZh.plugin_music_description,
+  games: [],
+  adapter: null,
+  enabledByDefault: true,
+  sources: [],
+  pages: [{ uri: "ui://kotone/music/home", title: musicZh.plugin_music_name, needs: [] }],
+  overlays: [],
+  agent: { overview: "", rule: "" },
+};
+
 interface MockTool { name: string; needs: string[]; visibility: PluginVisibility[]; page: string | null }
 const BOTH: PluginVisibility[] = ["model", "app"];
 const TOOLS: Record<string, MockTool[]> = {
@@ -101,9 +118,30 @@ const TOOLS: Record<string, MockTool[]> = {
     { name: "voice_chat.say", needs: [], visibility: BOTH, page: null },
     { name: "voice_chat.test", needs: [], visibility: BOTH, page: null },
   ],
+  music: [
+    { name: "music", needs: [], visibility: BOTH, page: null },
+    ...["state", "login_start", "login_cancel", "logout", "search", "home", "playlist", "play", "control", "queue", "set_quality"]
+      .map((t): MockTool => ({ name: `music.${t}`, needs: [], visibility: ["app"], page: null })),
+  ],
 };
 
-const MANIFESTS: PluginManifest[] = [lol, gameVoice];
+const MANIFESTS: PluginManifest[] = [lol, gameVoice, music];
+
+/** 插件开着没有（设置里写了按设置，没写按清单的默认）。 */
+async function enabled(manifest: PluginManifest): Promise<boolean> {
+  return (await getSettings()).plugins?.[manifest.id]?.enabled ?? manifest.enabledByDefault;
+}
+
+/** 插件发给界面的事件（真的是 `kotone://plugin`）：放歌的 `state` 由模拟播放器发。 */
+export function subscribe(plugin: string, event: string, callback: (payload: unknown) => void): () => void {
+  if (plugin === "music" && event === "state") return subscribeMusic(callback);
+  return () => {};
+}
+
+/** 设置变了（插件开关）：和桌面端一样，关掉放歌插件就停下。 */
+export async function settingsChanged(): Promise<void> {
+  if (!(await enabled(music))) musicTurnedOff();
+}
 
 export async function listPlugins(): Promise<PluginInfo[]> {
   const settings = await getSettings();
@@ -138,10 +176,12 @@ export async function pluginCall(plugin: string, tool: string, args: Record<stri
   if (!spec) throw new Error(`${plugin}: ${tool}`);
   if (plugin === "game-voice") {
     // 和桌面端 plugins::call 一样：插件关着时只回一句“关着”
-    if (!((await getSettings()).plugins?.["game-voice"]?.enabled ?? gameVoice.enabledByDefault)) {
-      return { content: { status: "disabled", text: gameVoice.name } };
-    }
+    if (!(await enabled(gameVoice))) return { content: { status: "disabled", text: gameVoice.name } };
     return gameVoiceCall(tool, args);
+  }
+  if (plugin === "music") {
+    if (!(await enabled(music))) return { content: { status: "disabled", text: music.name } };
+    return musicCall(tool, args);
   }
   if (plugin !== "lol") return { content: { status: "error", text: tool } };
   for (const needs of spec.needs) {

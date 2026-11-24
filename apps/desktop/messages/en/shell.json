@@ -43,7 +43,6 @@
   "shell_sidebar_game_adapt": "Game profiles",
   "shell_sidebar_game_list": "Games",
   "shell_sidebar_automation": "Automations",
-  "shell_sidebar_music": "Music",
   "shell_sidebar_all_pages": "All pages",
   "shell_sidebar_all_pages_desc": "Reorder the pages in the left sidebar or hide the ones you don't use; hidden pages still open from here.",
   "shell_sidebar_all_pages_hidden": "All pages ({count} hidden)",

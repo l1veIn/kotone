@@ -15,7 +15,8 @@ kotone-tools.workspace = true
 # ocr 子命令：本地 OCR 模型安装与就绪检查
 kotone-ocr.workspace = true
 # music 子命令：网易云音乐真网络冒烟（搜歌、取链接、扫码登录、放几秒）
-kotone-music.workspace = true
+# 放歌插件的网易云接口和播放器（`kotone music`，开发时试用）
+kotone-plugin-music.workspace = true
 base64 = "0.22"
 serde.workspace = true
 clap = { version = "4", features = ["derive"] }

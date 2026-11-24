@@ -62,8 +62,6 @@ pub const HOST_BUILTINS: &[&str] = &[
     TOOL_WEB_SEARCH,
     TOOL_WEB_FETCH,
     TOOL_SCREEN_AT_SPEECH,
-    // 放歌（ADR 034，桌面端的播放器）
-    crate::music::TOOL_MUSIC,
 ];
 
 /// 主会话（和玩家说话的那段对话）的工具：马上出结果（约 1–2 秒内）的一小套，语音和打字共用一份
@@ -107,8 +105,6 @@ pub const MAIN_TOOLS: &[&str] = &[
     TOOL_WEB_SEARCH,
     "usage.summary",
     "runtime.status",
-    // 放歌：搜歌即放、每日推荐、我喜欢的、暂停切歌（ADR 034，一次调用就出声，不交给后台）
-    crate::music::TOOL_MUSIC,
     // 在 Kotone 窗口里打开一个页面（插件的页面、设置页，ADR 038）
     "ui.open",
     // 插件的工具不在这里：标了“马上返回”（`instant`）的主会话也拿（[`main_offers`]）
@@ -791,7 +787,6 @@ impl Catalog {
         entries.extend(service_entries(specs));
         entries.extend(exec_entries(&kotone_exec::tool_specs()));
         entries.extend(crate::browser::entries());
-        entries.extend(crate::music::entries());
         entries.extend(plugin_entries(plugins));
         entries.extend(saved.iter().filter_map(saved_entry).take(MAX_SAVED_TOOLS));
         let plugins = plugins

@@ -50,8 +50,8 @@ pub const SNAPSHOT_PAGE_CHARS: usize = 24_000;
 
 // ---------- 工具说明 ----------
 
-/// 浏览器工具与 `music`。`browser.*` 走桌面端的 `BuiltinHost::exec`（要调用 id、取消和“每次询问”），
-/// 只给后台任务；`music` 是主会话的内置工具。
+/// 浏览器工具。`browser.*` 走桌面端的 `BuiltinHost::exec`（要调用 id、取消和“每次询问”），
+/// 只给后台任务（放歌是放歌插件的 `music`，ADR 034、038）。
 pub fn entries() -> Vec<ToolEntry> {
     let browse = |name: &str, description: &str, parameters: Value, untrusted: bool| ToolEntry {
         name: name.into(),
@@ -1547,8 +1547,8 @@ mod tests {
             assert_eq!(e.source, Source::Exec, "{name}");
             assert!(!crate::catalog::MAIN_TOOLS.contains(&name), "{name}");
         }
-        // 放歌不在浏览器里了（ADR 034）：music 是 crate::music 的
-        assert!(!entries.iter().any(|e| e.name == crate::music::TOOL_MUSIC));
+        // 放歌不在浏览器里了（ADR 034）：music 是放歌插件的
+        assert!(!entries.iter().any(|e| e.name == "music"));
         assert!(is_browser_tool("browser.open"));
         assert!(!is_browser_tool("music"));
         assert!(!is_browser_tool("shell.run"));

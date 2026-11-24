@@ -164,8 +164,6 @@ pub(crate) fn update_settings(
         let _ = app.emit("kotone://overlay-config", &updated.overlay);
     }
 
-    crate::music::settings_changed(&old.music, &updated.music);
-
     if !updated.ui.legacy_upgrade.uses_legacy_assistant() {
         if old.ui.legacy_upgrade.uses_legacy_assistant() {
             automation::ensure_builtin(&app);

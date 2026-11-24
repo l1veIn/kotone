@@ -21,7 +21,8 @@
   import { sidebarPagesOpen } from "../../lib/stores/navigation";
   import { arrange, canMove, movePage, normalizePrefs, setPageHidden } from "../../lib/sidebarLayout";
   import { footItems as fixedItems, groupLabel, navItems, presentGroups, saveSidebarPrefs, type NavItem, type PageId } from "./sidebarItems";
-  import SidebarMiniPlayer from "./SidebarMiniPlayer.svelte";
+  import { pluginPageId, pluginsStore } from "../../lib/plugins";
+  import { enabledSlots } from "../../lib/pluginUi";
   import iconSrc from "../../assets/brand/icon-src.webp";
   import { m } from "$lib/paraglide/messages.js";
 
@@ -184,7 +185,10 @@
   </nav>
 
   <div class="mt-2 flex shrink-0 flex-col gap-px border-t border-hairline pt-2">
-    <SidebarMiniPlayer {rail} onOpen={() => onNavigate("music")} />
+    <!-- 开着的插件放在左侧栏底部的一小块（例如放歌的小播放条，ADR 034、038） -->
+    {#each enabledSlots($pluginsStore, $settingsStore, "sidebarFooter") as slot (slot.plugin.manifest.id)}
+      <slot.component plugin={slot.plugin} {rail} onOpen={() => onNavigate(pluginPageId(slot.plugin.manifest.id))} />
+    {/each}
     {#each footItems as item (item.id)}{@render navItem(item)}{/each}
     {#if !rail}
       <div class="mt-2 flex items-center gap-2 px-2.5 text-[11px] text-sidebar-foreground/45">

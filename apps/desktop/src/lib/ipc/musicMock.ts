@@ -1,11 +1,13 @@
 /**
- * dev:web 的音乐后端（ADR 034）：模拟网易云账号、扫码登录、每日推荐、歌单、搜索和一个会走进度的播放器。
- * 登录照真的：music_login_start 开“登录网易云音乐”窗口（网易云官方登录页，预览里没有窗口）→ waiting，几秒后登录好。
+ * dev:web 的放歌插件（ADR 034、038）：照桌面端 plugins/music 回答音乐页用的 `music.*` 工具（pluginsMock 先看插件开关）；
+ * 模拟网易云账号、登录、每日推荐、歌单、搜索和一个会走进度的播放器，状态变了照真的发插件事件 `state`（[`subscribe`]）。
+ * 登录照真的：music.login_start 开“登录网易云音乐”窗口（网易云官方登录页，预览里没有窗口）→ waiting，几秒后登录好。
  * 只依赖契约类型，不导入 Tauri。演示和 e2e 用 `window.__kotoneMusicPreview(step)` 推进：
  * "needed"（她要放歌而你没登录）/ "confirmed" / "closed"（你关了登录窗口）/ "expired" / "failed" / "loggedIn" / "playing" / "reset"。
  * URL 里带 `mockMusic=loggedIn|playing|needed` 直接从那一步开始；`mockMusicLogin=manual` 时登录不自动完成。
  */
-import type { MusicAccount, MusicPlaylist, MusicState, MusicTrack, MusicPlayArgs, MusicQuality } from "../music";
+import type { PluginToolResult } from "../plugins";
+import type { MusicAccount, MusicPlaylist, MusicState, MusicTrack, MusicPlayArgs, MusicQuality } from "$plugins/music/ui/music";
 
 type Listener = (state: MusicState) => void;
 type Row = [name: string, artists: string[], album: string, seconds: number, playable: MusicTrack["playable"]];
@@ -261,38 +263,52 @@ async function control(action: string, value: unknown): Promise<MusicState> {
   return structuredClone(state);
 }
 
-export async function invoke(command: string, args: Record<string, unknown>): Promise<unknown> {
+/** 音乐页调的工具（插件开着时；结果的 content 和桌面端一样）。 */
+export async function musicCall(tool: string, args: Record<string, unknown>): Promise<PluginToolResult> {
+  return { content: await answer(tool, args) };
+}
+
+async function answer(tool: string, args: Record<string, unknown>): Promise<unknown> {
   ensureStarted();
-  switch (command) {
-    case "music_state": return structuredClone(state);
-    case "music_login_start": return loginStart();
-    case "music_login_cancel": clearLogin(); state.login = { stage: "idle", qrSvg: null, message: null }; emit(); return structuredClone(state);
-    case "music_logout": clearLogin(); stopTick(); state = { ...idle(), quality: state.quality }; queue = []; emit(); return structuredClone(state);
-    case "music_search": {
+  switch (tool) {
+    case "music.state": return structuredClone(state);
+    case "music.login_start": return loginStart();
+    case "music.login_cancel": clearLogin(); state.login = { stage: "idle", qrSvg: null, message: null }; emit(); return structuredClone(state);
+    case "music.logout": clearLogin(); stopTick(); state = { ...idle(), quality: state.quality }; queue = []; emit(); return structuredClone(state);
+    case "music.search": {
       const all = search(String(args.query ?? ""));
       const offset = Number(args.offset ?? 0);
       return { tracks: all.slice(offset, offset + 30), hasMore: all.length > offset + 30 };
     }
-    case "music_home":
+    case "music.home":
       requireLogin();
       return { daily: structuredClone(DAILY), playlists: PLAYLISTS.map((p) => structuredClone(p.playlist)) };
-    case "music_playlist": {
+    case "music.playlist": {
       requireLogin();
       const found = PLAYLISTS.find((p) => p.playlist.id === args.id);
       if (!found) throw new Error("没找到这个歌单");
       return structuredClone(found);
     }
-    case "music_play": return play(args as MusicPlayArgs);
-    case "music_control": return control(String(args.action ?? ""), args.value);
-    case "music_queue": return { tracks: structuredClone(queue), index: state.player.index };
-    case "music_set_quality": {
+    case "music.play": return play(args as MusicPlayArgs);
+    case "music.control": return control(String(args.action ?? ""), args.value);
+    case "music.queue": return { tracks: structuredClone(queue), index: state.player.index };
+    case "music.set_quality": {
       const q = String(args.quality ?? "") as MusicQuality;
       if (q === "standard" || q === "exhigh" || q === "lossless") state.quality = q;
       emit();
       return structuredClone(state);
     }
   }
-  throw new Error(`预览里没有 ${command}`);
+  throw new Error(`预览里没有 ${tool}`);
+}
+
+/** 插件关了：和桌面端一样停下（`Plugin::settings_changed`）。 */
+export function pluginTurnedOff(): void {
+  if (!started || !state.player.track) return;
+  stopTick();
+  state.player = { ...state.player, status: "idle", track: null, positionMs: 0, durationMs: 0, queueLength: 0, source: null };
+  queue = [];
+  emit();
 }
 
 export function subscribe(listener: Listener): () => void {

@@ -1,11 +1,13 @@
 [package]
-name = "kotone-music"
+name = "kotone-plugin-music"
 version = "0.1.0"
-description = "Kotone 放歌（ADR 034）：网易云音乐接口（扫码登录、搜歌、歌单、每日推荐）与本机播放器（边下边放）"
+description = "Kotone 放歌插件（ADR 034、038）：网易云音乐接口（官网登录、搜歌、歌单、每日推荐）与本机播放器（边下边放）"
 edition = "2021"
 rust-version = "1.77.2"
 
+# 插件只依赖插件契约、kotone-core 的纯数据类型和自己的第三方库（ADR 038 D6），不碰 Tauri。
 [dependencies]
+kotone-plugin-api.workspace = true
 kotone-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true

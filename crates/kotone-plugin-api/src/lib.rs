@@ -10,7 +10,10 @@
 //!   `structured_content` 给页面（存进对话记录，聊天卡片用它），`ui` 用哪个页面显示；
 //! - [`Plugin`]：插件实现；[`Host`]：宿主交给插件的本体能力（设置、游戏中心、后台任务……）。
 //!
-//! 插件 crate 只依赖这个 crate、`kotone-core` 的纯数据类型和自己的第三方库，不碰 Tauri。
+//! 插件 crate 只依赖这个 crate、`kotone-core` 的纯数据类型和自己的第三方库；可以用系统适配层
+//! （`kotone-platform-windows`）里没有状态的系统调用（音频设备、重采样、打字注入……），不碰 Tauri、桌面端、
+//! 她（`kotone-agent` / `kotone-ai`）；全进程只有一份的东西（Esc 和呼叫键的钩子、停下她、免问）只经 [`Host`]
+//! （ADR 038“怎么定的”，2026-11-24）。
 //! 一期的插件都是内置的，编译在一起（桌面端 `plugins.rs` 里一张静态表）。
 
 use std::future::Future;
@@ -541,6 +544,42 @@ pub trait Host: Send + Sync {
         let _ = text;
         Box::pin(async { Err("这里没有语音".to_string()) })
     }
+    /// 她这会儿在出声没有（边生成边念的回答、应答、提醒）：放声音的插件用它压低自己（ADR 034 D7）。
+    fn she_is_audible(&self) -> bool {
+        false
+    }
+    /// 存在 Windows 凭据库里的秘密（登录凭据之类），按插件分开（凭据库里的名字是 `<插件 id>:<name>`）。
+    /// 不进日志、不进 config.json。
+    fn secret(&self, name: &str) -> Option<String> {
+        let _ = name;
+        None
+    }
+    fn set_secret(&self, name: &str, value: &str) -> Result<(), String> {
+        let _ = (name, value);
+        Err("这里不能存凭据".to_string())
+    }
+    fn delete_secret(&self, name: &str) {
+        let _ = name;
+    }
+    /// 网页登录窗口：宿主开的独立小窗口（无痕，关掉网页数据就没了，每个插件一个），给要在官网上登录的插件
+    /// （例如网易云）。已经开着就调到前面。
+    fn open_web_window(&self, url: &str, title: &str) -> Result<(), String> {
+        let _ = (url, title);
+        Err("这里不能开网页窗口".to_string())
+    }
+    /// 这个插件的网页登录窗口还开着没有（玩家可能自己关了）。
+    fn web_window_open(&self) -> bool {
+        false
+    }
+    /// 网页登录窗口里某个网址的 Cookie（名字、值）。是登录凭据：不要记进日志。
+    fn web_window_cookies(
+        &self,
+        url: &str,
+    ) -> BoxFuture<'static, Result<Vec<(String, String)>, String>> {
+        let _ = url;
+        Box::pin(async { Err("没有网页窗口".to_string()) })
+    }
+    fn close_web_window(&self) {}
     /// 下载一个文件到 `dest`（给了 SHA-256 就校验）。和模型下载共用“同一时间只下一个”的限制。
     fn download(
         &self,

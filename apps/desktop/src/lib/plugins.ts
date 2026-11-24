@@ -6,6 +6,7 @@
 // - 界面上插件的文字用插件自己的文案（`plugins/<id>/messages/<语言>.json`，键 `plugin_<id>_…`），
 //   找不到时用清单里的中文。
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { writable, type Readable } from "svelte/store";
 import { isTauri, updateSettings } from "./ipc";
 import type { Settings } from "./ipc/contracts";
@@ -76,7 +77,9 @@ export const pluginsStore: Readable<PluginInfo[]> = { subscribe: store.subscribe
 
 /** 读一次插件清单（启动设置窗口时；之后开关按设置现算，不用再读）。 */
 export async function listPlugins(): Promise<PluginInfo[]> {
-  const list = isTauri ? await invoke<PluginInfo[]>("plugins_list") : await pluginsMock.listPlugins();
+  const raw = isTauri ? await invoke<PluginInfo[] | null>("plugins_list") : await pluginsMock.listPlugins();
+  // 只模拟了部分命令的测试会回 null：当成没有插件，别让用到插件清单的地方出错
+  const list = Array.isArray(raw) ? raw : [];
   store.set(list);
   return list;
 }
@@ -85,6 +88,20 @@ export async function listPlugins(): Promise<PluginInfo[]> {
 export async function pluginCall(plugin: string, tool: string, args: Record<string, unknown> = {}): Promise<PluginToolResult> {
   if (!isTauri) return pluginsMock.pluginCall(plugin, tool, args);
   return invoke<PluginToolResult>("plugin_call", { plugin, tool, arguments: args });
+}
+
+/** 取消订阅（插件的页面在 apps/desktop 外面，用这个名字，不直接引 Tauri 的包）。 */
+export type Unlisten = UnlistenFn;
+
+/** 插件发给界面的事件（后端 `Host::emit`：`{plugin, event, payload}`，和 `plugins.rs` 的 `EVENT` 一致）。 */
+export const PLUGIN_EVENT = "kotone://plugin";
+
+/** 听某个插件的某个事件（例如放歌插件的 `state`）。返回取消订阅。 */
+export async function listenPluginEvent<T>(plugin: string, event: string, callback: (payload: T) => void): Promise<Unlisten> {
+  if (!isTauri) return pluginsMock.subscribe(plugin, event, (payload) => callback(payload as T));
+  return listen<{ plugin: string; event: string; payload: T }>(PLUGIN_EVENT, (e) => {
+    if (e.payload?.plugin === plugin && e.payload.event === event) callback(e.payload.payload);
+  });
 }
 
 function configOf(settings: Settings | null | undefined, id: string): PluginConfig {
