@@ -2643,7 +2643,6 @@ dependencies = [
  "kotone-exec",
  "kotone-plugin-api",
  "kotone-plugin-game-voice",
- "kotone-plugin-voice-input",
  "kotone-tools",
  "serde",
  "serde_json",

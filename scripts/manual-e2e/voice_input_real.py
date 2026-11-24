@@ -43,10 +43,14 @@ Checks (PASS / FAIL / SKIP lines, total at the end):
   4. history: every session recorded with outcome sent in the isolated home; `history.list` (the history page) lists them;
   5. the floating window's states over `kotone://state` (CDP): listening → transcribing → processing → (preview →)
      sending → success → idle; the floating window appeared and went away (diagnostics overlay_show / overlay_hide);
-  6. her game_chat.send (same typer): `tools call game_chat.send` (SKIP if external agents can't call it); her
-     own path through a typed message and the mock model; the tool service's companion.type;
+  6. her game_chat.send (same typer): `tools call game_chat.send` (outside agents); her own path through a typed
+     message and the mock model; the tool service's companion.type;
   7. console channel: a profile that declares one falls back to the keyboard when its game isn't in front
-     (console_chat_skipped); the console send itself needs a real Steam game → SKIP.
+     (console_chat_skipped); the console send itself needs a real Steam game → SKIP;
+  8. voice input plugin off (ADR 039 D2: typing into game chat is the body's): the tool service still lists
+     game_chat.send (not a plugin's), `tools call game_chat.send` still types, and in a new conversation she still
+     has game_chat.send and it types; the records (automation.runs) name the sender: `tool-service` for the tool
+     service, `agent:<conversation id>` for her; then the plugin is switched back on.
 
 Prerequisites: target/debug/kotone.exe with the web UI embedded (README 准备: `pnpm build:web`, then
 `cargo build -p kotone-tauri --features tauri/custom-protocol`), copied to target/voice-input-real/bin/ on start;
@@ -98,6 +102,7 @@ RULES = {"game_chat.send": "allow", "game.act": "deny", "automation.run": "deny"
 GC_ASK = "跟队友说一句下路小心（E2E）"
 GC_TEXT = "E2E 琴音代发：下路小心"
 GC_TOOL_TEXT = "E2E 外部调用：下路小心"
+GC_OFF_TEXT = "E2E 语音输入关着：下路小心"
 CT_TEXT = "E2E companion.type 下路小心"
 CONSOLE_PROFILE = {
     "id": "e2e-console", "displayName": "测试：控制台通道（没有游戏）",
@@ -835,18 +840,14 @@ def main():
 
         # 6. her game_chat.send — the same typer
         print("\n== 6. game_chat.send ==")
-        focus("6a")  # in case the tool exists: it types at once
+        focus("6a")  # it types at once
         m = marks()
         env = call_raw("game_chat.send", {"text": GC_TOOL_TEXT, "send": True})
-        if env.get("ok"):
-            time.sleep(1.0)
-            s = collect(m, None)
-            check("6a: tools call game_chat.send typed into the test window",
-                  s["messages"] == [("team", GC_TOOL_TEXT)], f"{s['messages']}")
-        else:
-            code = (env.get("error") or {}).get("code")
-            skip("6a: tools call game_chat.send", f"not callable by external agents ({code}); it is her built-in "
-                 "(kotone-agent); outside agents type with companion.type (6c)")
+        time.sleep(1.0)
+        s = collect(m, None)
+        # outside agents can call it (since 2026-11-24; the body's tool since ADR 039 D2)
+        check("6a: tools call game_chat.send typed into the test window",
+              env.get("ok") and s["messages"] == [("team", GC_TOOL_TEXT)], f"{s['messages']} {env.get('error')}")
 
         mock = ThreadingHTTPServer(("127.0.0.1", MOCK_PORT), MockModel)
         threading.Thread(target=mock.serve_forever, daemon=True).start()
@@ -900,6 +901,51 @@ def main():
         skip("7b: console send (say_team via kotone_say.cfg + F23)",
              "needs a Steam-installed Source 2 game (Dota 2 / CS2) in front, started after Kotone's autoexec.cfg line; "
              "it writes into the game's cfg folder - not fakeable without touching a real game install")
+
+        # 8. voice input plugin off: game_chat.send is the body's (ADR 039 D2), she and outside agents still type
+        print("\n== 8. voice input plugin off: game_chat.send still works ==")
+        call("settings.update", {"patch": {"plugins": {"voice-input": {"enabled": False}}}})
+        spec = next((t for t in call("system.capabilities").get("tools", []) if t.get("name") == "game_chat.send"),
+                    None)
+        check("8a: voice input off: the tool service still lists game_chat.send, as the body's (no plugin)",
+              spec is not None and "plugin" not in spec, json.dumps(spec, ensure_ascii=False)[:200])
+        focus("8b")
+        m = marks()
+        typed = call_raw("game_chat.send", {"text": GC_OFF_TEXT, "send": True})
+        time.sleep(1.0)
+        s = collect(m, None)
+        check("8b: voice input off: tools call game_chat.send typed into the test window",
+              typed.get("ok") and s["messages"] == [("team", GC_OFF_TEXT)], f"{s['messages']} {typed.get('error')}")
+        invoke("agent_new_conversation")  # her tool list is fixed per conversation (ADR 024)
+        calls_before = len(MOCK_CALLS)
+        focus("8c")
+        m = marks()
+        sent = invoke("agent_send", {"text": GC_ASK})
+        cid8 = (sent.get("ok") or {}).get("conversationId")
+
+        def chat_result_off():
+            watch_foreground()
+            conv = invoke("agent_conversation", {"id": cid8}).get("ok") or {}
+            return next((x for x in conv.get("messages", []) if x.get("role") == "tool"
+                         and x.get("name") == "game_chat.send"), None)
+        result = wait_until(chat_result_off, 40) if cid8 else None
+        time.sleep(1.0)
+        s = collect(m, None)
+        check("8c: voice input off: she still has game_chat.send (mock model called it), recorded (runId)",
+              len(MOCK_CALLS) > calls_before and result and '"typed"' in result.get("content", "")
+              and '"runId"' in result.get("content", ""), (result or {}).get("content", "")[:200])
+        check("8c: voice input off: the test window got exactly her text",
+              s["messages"] == [("team", GC_TEXT)] and not s["still_open"], f"{s['messages']}")
+        # 「自动化 → 记录」: who sent it — the tool service as `tool-service`, her as `agent:<conversation id>`
+        runs = call("automation.runs").get("runs", [])
+        senders = {text: [r.get("sessionId") for r in runs
+                          if text in json.dumps(r.get("action"), ensure_ascii=False)]
+                   for text in (GC_TOOL_TEXT, GC_OFF_TEXT, GC_TEXT)}
+        check("8d: the records name who sent each line (tool-service / agent:<conversation>)",
+              senders[GC_TOOL_TEXT] == ["tool-service"] and senders[GC_OFF_TEXT] == ["tool-service"]
+              and f"agent:{cid8}" in senders[GC_TEXT] and f"agent:{cid}" in senders[GC_TEXT],
+              json.dumps(senders, ensure_ascii=False))
+        call("settings.update", {"patch": {"plugins": {"voice-input": {"enabled": True}}}})
     finally:
         print("\n== clean-up ==")
         release_held()

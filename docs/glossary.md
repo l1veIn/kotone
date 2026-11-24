@@ -75,7 +75,7 @@
 | --- | --- | --- |
 | 呼叫 / Call | `assistant_call`, `call_hotkey()`, `HK_ASSISTANT`, `call.rs` | 接通和角色的通话（ADR 033，见上面“界面用语”）。四种触发：呼叫键、唤醒词、聊天页的呼叫按钮、快捷指令。听和答都在**气泡**里。语音识别没准备好时，呼叫按钮先启动本地识别再听；呼叫键只在气泡里提示。 |
 | 呼叫键 / Call key | `assistant.hotkey`；0.1.x 升级用户为 `assistant.companionBindings.hotkey` | 按一下就呼叫，通话中再按 = 挂断。新用户默认 `Ctrl + ~`，升级用户默认空。不再叫“陪玩热键”“呼叫热键”。 |
-| 语音输入 / Voice input | `hotkey`, `Orchestrator`（`purpose = input`） | 说话，原话打进游戏聊天框。**不经过 Agent**。状态显示在**悬浮窗**里。是一个插件（`plugins/voice-input`，ADR 038）：从左侧栏「插件 → 语音输入」打开它的页面，分页 输入 / 文字处理 / 历史（分页 ID `general` / `processing` / `history`）；关掉插件时语音输入热键、悬浮窗、她替你打字（`game_chat.send`）一起停。 |
+| 语音输入 / Voice input | `hotkey`, `Orchestrator`（`purpose = input`） | 说话，原话打进游戏聊天框。**不经过 Agent**。状态显示在**悬浮窗**里。是一个插件（`plugins/voice-input`，ADR 038）：从左侧栏「插件 → 语音输入」打开它的页面，分页 输入 / 文字处理 / 历史（分页 ID `general` / `processing` / `history`）；关掉插件时语音输入热键、悬浮窗一起停。语音识别和往游戏聊天里打字属于本体，语音输入借用它们；她替你在游戏聊天里发言（`game_chat.send`）在本体，关掉语音输入不影响；每个游戏的聊天键留在游戏配置（ADR 039）。 |
 | 语音输入热键 / Voice input hotkey | `hotkey.key` | 按下说话的那个键（原“录制热键”）。 |
 | 停下 / Stop | `stop::stop_everything`, `automationStopHotkey` | 停止角色正在做的事和所有自动化。四种方式：她操作游戏时按 Esc、停止热键、说“停下”、托盘「停下」。不取消语音输入的录音（那是 Esc）。 |
 | 启动 / Start | `runtime::start`, `runtimeToggleHotkey`, `ui.autoStart` | **只和本地语音识别有关**：把本地识别模型加载进内存。本地识别有 未启动 / 准备中 / 已启动 / 出问题了 四种状态；在线识别打开 Kotone 就就绪，界面上看不到“启动”。 |

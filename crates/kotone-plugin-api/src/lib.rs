@@ -319,7 +319,7 @@ impl ToolSpec {
         self.visibility.contains(&Visibility::App)
     }
 
-    /// 工具服务 `system.capabilities` 里的一项（外部 Agent、MCP 看到的样子）。
+    /// 工具服务 `system.capabilities` 里的一项（外部 Agent、MCP 看到的样子），`plugin` 写明是哪个插件的。
     pub fn service_spec(&self, plugin: &str) -> Value {
         let mut ui = Map::new();
         ui.insert("visibility".into(), json!(self.visibility));
@@ -337,7 +337,6 @@ impl ToolSpec {
             "notReadyReason": null,
             "inputSchema": self.parameters,
             "outputSchema": {"type": "object"},
-            "plugin": plugin,
             "untrustedResult": self.untrusted,
             "_meta": {"ui": Value::Object(ui)},
         })
@@ -361,6 +360,14 @@ pub struct ToolResult {
     pub content: Value,
     /// 给页面的数据：她那一刻看到的样子，存进对话记录，聊天卡片用它。
     #[serde(skip_serializing_if = "Option::is_none")]
+        let mut spec = self.body_service_spec();
+        spec["plugin"] = json!(plugin);
+        spec
+    }
+
+    /// 本体自己用 `ToolSpec` 登记的工具（不属于哪个插件，例如 `game_chat.send`，ADR 039 D2）在工具服务里的样子：
+    /// 和插件的一样，只是没有 `plugin`。
+    pub fn body_service_spec(&self) -> Value {
     pub structured_content: Option<Value>,
     /// 用哪个页面显示。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -557,17 +564,6 @@ pub trait Host: Send + Sync {
     /// 她这会儿在出声没有（边生成边念的回答、应答、提醒）：放声音的插件用它压低自己（ADR 034 D7）。
     fn she_is_audible(&self) -> bool {
         false
-    }
-    /// 往前台游戏的聊天框打一句（语音输入插件的 `game_chat.send`）：按当前游戏配置的开聊天框键、频道和输入方式，
-    /// `send` 为 None 时跟随玩家的“自动发送”。共用的注入器和发送时挡住玩家按键（ADR 032）是全进程只有一份的，
-    /// 都在宿主；前台不是当前游戏时拒绝；结果记进「自动化 → 记录」（记在调用方的对话下）。
-    fn type_in_game_chat(
-        &self,
-        text: &str,
-        send: Option<bool>,
-    ) -> BoxFuture<'static, Result<Value, String>> {
-        let _ = (text, send);
-        Box::pin(async { Err("这里不能往游戏里打字".to_string()) })
     }
     /// 存在 Windows 凭据库里的秘密（登录凭据之类），按插件分开（凭据库里的名字是 `<插件 id>:<name>`）。
     /// 不进日志、不进 config.json。
@@ -819,6 +815,11 @@ rule = "- 英雄联盟：……"
             y: -0.1,
             w: 0.2,
             h: 0.1,
+        // 本体的工具（ADR 039）：一样的样子，只是没有 plugin
+        let mut body = spec.body_service_spec();
+        assert!(body.get("plugin").is_none());
+        body["plugin"] = json!("lol");
+        assert_eq!(body, v);
         }
         .rect();
         assert_eq!(off, [0.8, 0.0, 0.2, 0.1], "超出客户区的挪回来");

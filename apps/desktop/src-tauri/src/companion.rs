@@ -529,8 +529,30 @@ pub async fn type_text(app: &AppHandle, text: &str, send: bool) -> Result<Value,
     }
 }
 
-/// 替玩家打进前台游戏的聊天框，并写一条执行记录（语音输入插件的 `game_chat.send` 经宿主走到这里，ADR 038）。
-/// `session` 是记录里的发起方（她：`agent:<对话 id>`）；`send` 为 None = 跟随玩家的“自动发送”。
+/// 本体用 ToolSpec 登记的工具（[`kotone_agent::body`]，ADR 039 D2）在桌面端的实现：琴音
+/// （`BuiltinHost::body_tool`）和外部 Agent（工具服务、MCP，`tool_config::invoke`）都走这里。
+/// `caller` 是执行记录的发起方（琴音：`agent:<对话 id>`；工具服务：`tool-service`）。
+pub async fn body_tool(
+    app: &AppHandle,
+    tool: &str,
+    arguments: &Value,
+    caller: &str,
+) -> Result<kotone_plugin_api::ToolResult, String> {
+    match tool {
+        kotone_agent::body::TOOL_GAME_CHAT => {
+            let text = kotone_agent::body::chat_text(arguments)?;
+            let send = arguments.get("send").and_then(Value::as_bool);
+            send_to_game_chat(app, caller, &text, send)
+                .await
+                .map(kotone_plugin_api::ToolResult::content)
+        }
+        _ => Err(format!("本体没有 {tool} 这个工具")),
+    }
+}
+
+/// 替玩家打进前台游戏的聊天框，并写一条执行记录（`game_chat.send`，本体的工具，ADR 039 D2）。
+/// 打字经本体的注入器和 ADR 032 的挡键（[`type_text`]）。
+/// `session` 是记录里的发起方（琴音：`agent:<对话 id>`；工具服务：`tool-service`）；`send` 为 None = 跟随玩家的“自动发送”。
 pub async fn send_to_game_chat(
     app: &AppHandle,
     session: &str,

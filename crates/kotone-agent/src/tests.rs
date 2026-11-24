@@ -119,6 +119,20 @@ impl BuiltinHost for FakeBuiltin {
             json!({"players": ["很长的页面数据"]}),
         ))
     }
+
+    async fn body_tool(
+        &self,
+        tool: &str,
+        arguments: &Value,
+    ) -> Result<kotone_plugin_api::ToolResult, String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(("body".into(), json!({"tool": tool, "args": arguments})));
+        Ok(kotone_plugin_api::ToolResult::content(
+            json!({"typed": "gg", "sent": true, "runId": "run-2"}),
+        ))
+    }
 }
 
 struct FakeAsker {
@@ -176,20 +190,6 @@ struct Fixture {
     asked: Arc<Mutex<Vec<PermissionRequest>>>,
 }
 
-/// 语音输入插件（开着）给她的工具：`game_chat.send`（ADR 038 第 5 步以前是她的内置工具）。
-fn voice_input_offer() -> kotone_plugin_api::Offer {
-    let m = kotone_plugin_voice_input::plugin::manifest();
-    kotone_plugin_api::Offer {
-        plugin: m.id.clone(),
-        name: m.name.clone(),
-        text: kotone_plugin_api::AgentText {
-            overview: m.agent.overview.clone(),
-            rule: m.agent.rule.clone(),
-        },
-        tools: kotone_plugin_voice_input::plugin::specs(),
-    }
-}
-
 fn fixture(policy: Policy, answer: Answer) -> Fixture {
     let (service, host) = service();
     let specs = service.capabilities()["tools"].as_array().cloned().unwrap();
@@ -202,11 +202,7 @@ fn fixture(policy: Policy, answer: Answer) -> Fixture {
         },
         Some(json!(1)),
     );
-    let catalog = Catalog::build(
-        &specs,
-        &[saved("auto-1", vec![interval])],
-        &[voice_input_offer()],
-    );
+    let catalog = Catalog::build(&specs, &[saved("auto-1", vec![interval])], &[]);
     let builtin = FakeBuiltin::default();
     let asker = FakeAsker::new(answer);
     let asked = asker.asked.clone();
@@ -599,8 +595,8 @@ async fn saved_automations_run_through_automation_run() {
 #[tokio::test]
 async fn builtins_validate_then_reach_the_host() {
     let f = fixture(Policy::default(), Answer::Deny);
-    // game_chat.send 搬进了语音输入插件：要打的字由插件检查（kotone-plugin-voice-input 的
-    // chat_text_is_one_short_line），这里只看它照样交给桌面
+    // game_chat.send 是本体用 ToolSpec 登记的（ADR 039 D2）：要打的字由桌面端执行时检查
+    // （body.rs 的 chat_text_is_one_short_line，外部 Agent 经工具服务调也一样），这里只看它照样交给桌面
     let out = call(
         &f.port,
         "game_chat.send",
@@ -633,7 +629,7 @@ async fn builtins_validate_then_reach_the_host() {
     assert_eq!(
         calls[0],
         (
-            "plugin".into(),
+            "body".into(),
             json!({"tool": "game_chat.send", "args": {"text": "我去下路", "send": false}})
         )
     );
@@ -703,12 +699,8 @@ fn capability_overview_names_only_real_tools_and_covers_every_group() {
     use crate::prompt::capability_overview;
     let (service, _host) = service();
     let specs = service.capabilities()["tools"].as_array().cloned().unwrap();
-    // 语音输入插件开着（默认开）：替玩家在聊天框发言（game_chat.send）也在概览里
-    let catalog = Catalog::build(
-        &specs,
-        &[saved("auto-1", Vec::new())],
-        &[voice_input_offer()],
-    );
+    // 插件一个都没开：替玩家在聊天框发言（game_chat.send，本体的，ADR 039 D2）照样在概览里
+    let catalog = Catalog::build(&specs, &[saved("auto-1", Vec::new())], &[]);
     let overview = capability_overview(&catalog);
     assert!(overview.contains("## 你能做什么"));
     assert!(overview.contains("不要编") && overview.contains("下一步"));
@@ -794,7 +786,7 @@ fn chat_turn_context_says_how_to_call_her_and_whether_speech_recognition_is_read
             asr: AsrState::LocalNotStarted,
         }),
     );
-    assert!(unset.contains("呼叫键没设") && unset.contains("设置 → 怎么叫她"));
+    assert!(unset.contains("呼叫键没设") && unset.contains("琴音 → 唤醒"));
     assert!(unset.contains("语音唤醒没开") && unset.contains("本地识别，未启动"));
     // 语音入口不写这些（玩家已经在叫她了）。
     let game = base(
@@ -1137,6 +1129,8 @@ async fn main_session_gets_the_instant_set_and_the_background_gets_the_rest() {
         "web.search",
         "saved.auto-1",
         "settings.update",
+        // 本体的（ADR 039 D2）：插件一个都没开也有
+        "game_chat.send",
     ] {
         assert!(main.contains(&name.to_string()), "主会话要有 {name}");
     }
@@ -1536,6 +1530,78 @@ async fn plugin_tool_calls_give_her_only_the_content() {
             "plugin".to_string(),
             json!({"tool": "lol.scout", "args": {"player": "寒冰"}})
         )]
+    );
+}
+
+/// ADR 039 D2：`game_chat.send` 是本体用 ToolSpec 登记的工具，不属于哪个插件。插件一个都没开（例如语音输入关着）
+/// 她也有、主会话也拿，调用交给桌面的 `body_tool`（带着这段对话）；桌面端把它列进工具服务，外部 Agent 经工具服务
+/// 也能调（交给宿主执行）；工具服务里那份不会在她的清单里重复。
+#[tokio::test]
+async fn game_chat_send_is_the_bodys_and_stays_without_any_plugin() {
+    use crate::catalog::{main_offers, subagent_offers};
+    use kotone_tools::protocol::ToolCallRequest;
+    let (service, host) = service();
+    // 桌面端的工具服务列出本体用 ToolSpec 登记的工具（tool_service.rs）；插件的一个都没有
+    host.set_plugin_tools(crate::body::service_specs());
+    let specs = service.capabilities()["tools"].as_array().cloned().unwrap();
+    let listed: Vec<&Value> = specs
+        .iter()
+        .filter(|s| s["name"] == "game_chat.send")
+        .collect();
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].get("plugin").is_none(), "{}", listed[0]);
+
+    let catalog = Catalog::build(&specs, &[], &[]);
+    assert!(catalog.plugins().is_empty());
+    let entry = catalog.get("game_chat.send").expect("插件都关着也有");
+    assert_eq!(entry.source, Source::Body { instant: true });
+    assert_eq!(entry.group, "game");
+    assert!(main_offers(entry) && subagent_offers(entry) && Catalog::is_core(entry));
+    assert_eq!(
+        catalog
+            .entries()
+            .iter()
+            .filter(|e| e.name == "game_chat.send")
+            .count(),
+        1,
+        "工具服务里的那份不重复"
+    );
+
+    // 她调：交给桌面（BuiltinHost::body_tool），结果只有 content
+    let builtin = FakeBuiltin::default();
+    let port = KotonePort::new(
+        service.clone(),
+        catalog,
+        Policy::default(),
+        Arc::new(Session::default()),
+        builtin.clone(),
+        FakeAsker::new(Answer::Deny),
+    );
+    let out = call(&port, "game_chat.send", json!({"text": "gg"})).await;
+    assert!(!out.is_error && !out.untrusted, "{}", out.content);
+    assert!(out.content.contains("runId") && out.display.is_none());
+    assert_eq!(
+        builtin.calls.lock().unwrap().clone(),
+        vec![(
+            "body".to_string(),
+            json!({"tool": "game_chat.send", "args": {"text": "gg"}})
+        )]
+    );
+    assert!(host.invocations().is_empty(), "她的那份不经工具服务");
+
+    // 外部 Agent 经工具服务调：交给宿主（桌面端记成 tool-service）
+    let envelope = service
+        .call(ToolCallRequest {
+            request_id: None,
+            tool: "game_chat.send".into(),
+            arguments: json!({"text": "gg"}),
+            timeout_ms: None,
+        })
+        .await;
+    assert!(envelope.ok, "{:?}", envelope.error);
+    assert_eq!(
+        host.invocations(),
+        vec![("game_chat.send".to_string(), json!({"text": "gg"}))]
     );
 }
 

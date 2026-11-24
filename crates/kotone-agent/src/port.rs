@@ -91,6 +91,18 @@ pub trait BuiltinHost: Send + Sync {
         async move { Err(message) }
     }
 
+    /// 本体用 ToolSpec 登记的工具（[`crate::body`]，[`Source::Body`]，例如 `game_chat.send`）：桌面端执行，
+    /// 执行记录的发起方是这段对话；外部 Agent 经工具服务调的是同一个实现。结果和插件的工具一样（只有 `content` 给她）。
+    /// 没有桌面（测试、外部宿主）时不可用。
+    fn body_tool(
+        &self,
+        tool: &str,
+        _arguments: &Value,
+    ) -> impl Future<Output = Result<kotone_plugin_api::ToolResult, String>> + Send {
+        let message = format!("{tool} 在这里不可用");
+        async move { Err(message) }
+    }
+
     /// 玩家已经在别处一直允许了这次调用（例如游戏配置里“让琴音操作”设为一直允许）：
     /// 权限规则是“询问”时不再问。用户设为禁止、只读模式时仍然不执行。
     fn preapproved(&self, _tool: &str, _arguments: &Value) -> bool {
@@ -475,6 +487,10 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
                 Ok(result) => plugin_outcome(result),
                 Err(message) => ToolOutcome::error(message),
             },
+            Source::Body { .. } => match self.host.body_tool(&entry.name, &arguments).await {
+                Ok(result) => plugin_outcome(result),
+                Err(message) => ToolOutcome::error(message),
+            },
             // 由 `call` 直接交给桌面（要带上调用 id、取消和“每次询问”），不会走到这里。
             Source::Exec => ToolOutcome::error(format!("{} 在这里不可用", entry.name)),
         };
@@ -483,8 +499,8 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
     }
 }
 
-/// 插件工具的结果（照 MCP Apps）：只有 `content` 进她的上下文；`structuredContent` 和页面地址给界面
-/// （存进对话记录，聊天卡片用它）。
+/// 用 ToolSpec 登记的工具（插件的、本体的）的结果（照 MCP Apps）：只有 `content` 进她的上下文；
+/// `structuredContent` 和页面地址给界面（存进对话记录，聊天卡片用它）。
 pub fn plugin_outcome(result: kotone_plugin_api::ToolResult) -> ToolOutcome {
     let mut outcome = ToolOutcome::ok(match result.content {
         Value::String(text) => text,

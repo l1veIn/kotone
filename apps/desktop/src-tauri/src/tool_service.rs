@@ -240,14 +240,28 @@ impl AppHost for DesktopHost {
         true
     }
 
+    /// 名字叫插件的工具，本体用 ToolSpec 登记的（`game_chat.send`，ADR 039 D2）也从这里列：
+    /// 都是宿主执行、经 `invoke` 调。
     fn plugin_tools(&self) -> Vec<Value> {
-        crate::plugins::service_specs(&self.app)
+        let Some(state) = self.app.try_state::<crate::SharedState>() else {
+            return kotone_agent::body::service_specs();
+        };
+        let settings = state.settings.read().unwrap().clone();
+        hosted_tool_specs(&settings)
     }
 
     fn invoke(&self, tool: &str, args: Value) -> HostInvokeFuture<'_> {
         let tool = tool.to_string();
         Box::pin(async move { crate::tool_config::invoke(&self.app, &tool, args).await })
     }
+}
+
+/// 工具服务里由宿主执行、用 ToolSpec 登记的工具（调用经 `invoke` 到 `tool_config`）：本体的
+/// （ADR 039 D2 的 `game_chat.send`，不看插件开关）在前，再加开着的插件的（ADR 038）。
+pub(crate) fn hosted_tool_specs(settings: &kotone_core::settings::Settings) -> Vec<Value> {
+    let mut specs = kotone_agent::body::service_specs();
+    specs.extend(crate::plugins::service_specs(settings));
+    specs
 }
 
 /// 常驻的服务（启动早期尚未就绪、或应用正在退出时为 None）。

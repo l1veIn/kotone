@@ -35,7 +35,8 @@ pub const SETTINGS_SECTIONS: &[&str] = &[
     "plugins",
 ];
 
-/// 语音输入插件开着没有（ADR 038）：关着时语音输入热键、悬浮窗、她替你打字都没有。
+/// 语音输入插件开着没有（ADR 038）：关着时语音输入热键、悬浮窗都没有。她替你在游戏聊天里发言
+/// （`game_chat.send`）是本体的，不看它（ADR 039 D2）。
 pub fn voice_input_on(settings: &kotone_core::settings::Settings) -> bool {
     enabled(settings, kotone_plugin_voice_input::plugin::manifest())
 }
@@ -145,8 +146,6 @@ pub struct DesktopHost {
     app: AppHandle,
     id: String,
     manifest: Manifest,
-    /// 这一次是谁调的工具（写进执行记录的发起方，例如她的 `agent:<对话 id>`）；后台循环里没有。
-    caller: Option<String>,
 }
 
 impl DesktopHost {
@@ -161,25 +160,10 @@ impl DesktopHost {
     }
 
     pub fn for_plugin(app: &AppHandle, plugin: &Arc<dyn Plugin>) -> Arc<dyn Host> {
-        Self::shared(app, plugin, None)
-    }
-
-    /// 调一次工具用的那一份：带上是谁调的。
-    fn for_call(app: &AppHandle, plugin: &Arc<dyn Plugin>, caller: Caller<'_>) -> Arc<dyn Host> {
-        let caller = match caller {
-            Caller::Her(session) => session.to_string(),
-            Caller::Service => "tool-service".to_string(),
-            Caller::Page(page) => format!("plugin:{page}"),
-        };
-        Self::shared(app, plugin, Some(caller))
-    }
-
-    fn shared(app: &AppHandle, plugin: &Arc<dyn Plugin>, caller: Option<String>) -> Arc<dyn Host> {
         Arc::new(Self {
             app: app.clone(),
             id: plugin.manifest().id.clone(),
             manifest: plugin.manifest().clone(),
-            caller,
         })
     }
 }
@@ -376,22 +360,6 @@ impl Host for DesktopHost {
             || crate::assistant::output_busy(&self.app)
     }
 
-    fn type_in_game_chat(
-        &self,
-        text: &str,
-        send: Option<bool>,
-    ) -> BoxFuture<'static, Result<Value, String>> {
-        let app = self.app.clone();
-        let text = text.to_string();
-        let session = self
-            .caller
-            .clone()
-            .unwrap_or_else(|| format!("plugin:{}", self.id));
-        Box::pin(
-            async move { crate::companion::send_to_game_chat(&app, &session, &text, send).await },
-        )
-    }
-
     fn secret(&self, name: &str) -> Option<String> {
         use kotone_core::connection::SecretStore;
         kotone_ai::secrets::KeyringSecretStore
@@ -517,10 +485,13 @@ pub fn init(app: &AppHandle) {
 
 /// 开着的插件给她的东西（她的工具清单和系统提示）。一段对话开始时取一次，之后不变（ADR 024）。
 pub fn offers(app: &AppHandle) -> Vec<Offer> {
-    let settings = settings(app);
+    offers_for(&settings(app))
+}
+
+fn offers_for(settings: &kotone_core::settings::Settings) -> Vec<Offer> {
     registry()
         .iter()
-        .filter(|p| enabled(&settings, p.manifest()))
+        .filter(|p| enabled(settings, p.manifest()))
         .map(|p| {
             let m = p.manifest();
             Offer {
@@ -530,7 +501,7 @@ pub fn offers(app: &AppHandle) -> Vec<Offer> {
                 tools: p
                     .tools()
                     .into_iter()
-                    .filter(|t| t.for_model() && tool_available(&settings, m, t))
+                    .filter(|t| t.for_model() && tool_available(settings, m, t))
                     .collect(),
             }
         })
@@ -538,15 +509,14 @@ pub fn offers(app: &AppHandle) -> Vec<Offer> {
 }
 
 /// 工具服务 `system.capabilities` 里开着的插件的工具（给外部 Agent、MCP；带 `visibility`）。
-pub fn service_specs(app: &AppHandle) -> Vec<Value> {
-    let settings = settings(app);
+pub fn service_specs(settings: &kotone_core::settings::Settings) -> Vec<Value> {
     registry()
         .iter()
         .flat_map(|p| {
             let m = p.manifest();
             p.tools()
                 .into_iter()
-                .filter(|t| tool_available(&settings, m, t))
+                .filter(|t| tool_available(settings, m, t))
                 .map(|t| t.service_spec(&m.id))
                 .collect::<Vec<_>>()
         })
@@ -556,8 +526,8 @@ pub fn service_specs(app: &AppHandle) -> Vec<Value> {
 /// 谁在调插件的工具。
 #[derive(Debug, Clone, Copy)]
 pub enum Caller<'a> {
-    /// 她（她的工具清单里只有给她的，`visibility` 含 `model`）；带着这段对话（`agent:<对话 id>`，写执行记录用）。
-    Her(&'a str),
+    /// 她（她的工具清单里只有给她的，`visibility` 含 `model`）。
+    Her,
     /// 外部 Agent 经工具服务 / MCP（清单里两种都列出来，带 `visibility`，都能调）。
     Service,
     /// 插件自己的页面（只能调自己插件的、给页面的工具）。
@@ -584,7 +554,7 @@ pub async fn call(
             return Err(format!("{page_plugin} 的页面不能调 {tool}"));
         }
         Caller::Page(_) if !spec.for_app() => return Err(format!("{tool} 不给页面用")),
-        Caller::Her(_) if !spec.for_model() => return Err(format!("{tool} 只给插件的页面用")),
+        Caller::Her if !spec.for_model() => return Err(format!("{tool} 只给插件的页面用")),
         _ => {}
     }
     if !enabled(&settings(app), manifest) {
@@ -594,7 +564,7 @@ pub async fn call(
         })));
     }
     plugin
-        .call(DesktopHost::for_call(app, plugin, caller), tool, arguments)
+        .call(DesktopHost::for_plugin(app, plugin), tool, arguments)
         .await
 }
 
@@ -702,22 +672,20 @@ mod tests {
         assert_eq!(owner("voice_chat.say").unwrap().manifest().id, "game-voice");
     }
 
-    /// 语音输入搬进插件（ADR 038 第 5 步）：她的 `game_chat.send` 名字不变、主会话照样有；
-    /// 插件默认开，关掉以后语音输入热键、频道 / 重发 / 文字处理热键都不登记，呼叫键照常。
+    /// 语音输入搬进插件（ADR 038 第 5 步）：插件默认开，关掉以后语音输入热键、频道 / 重发 / 文字处理热键
+    /// 都不登记，呼叫键照常。它不给她工具：`game_chat.send` 是本体的（ADR 039 D2，见下一个测试）。
     #[test]
     fn voice_input_is_a_plugin_and_its_switch_takes_the_hotkeys_with_it() {
         let vi = find("voice-input").expect("语音输入插件");
         assert!(vi.manifest().enabled_by_default);
-        assert_eq!(
-            owner("game_chat.send").unwrap().manifest().id,
-            "voice-input"
-        );
-        let send = vi.tools().into_iter().find(|t| t.name == "game_chat.send");
-        assert!(send.is_some_and(|t| t.for_model() && t.instant));
+        assert!(vi.tools().is_empty());
+        assert!(owner("game_chat.send").is_none());
 
-        let mut s = kotone_core::settings::Settings::default();
-        s.channel_cycle_hotkey = "Shift+CapsLock".into();
-        s.resend_last_hotkey = "Alt+F6".into();
+        let mut s = kotone_core::settings::Settings {
+            channel_cycle_hotkey: "Shift+CapsLock".into(),
+            resend_last_hotkey: "Alt+F6".into(),
+            ..Default::default()
+        };
         assert!(voice_input_on(&s));
         s.plugins.entry("voice-input".into()).or_default().enabled = Some(false);
         assert!(!voice_input_on(&s));
@@ -738,6 +706,35 @@ mod tests {
 
     #[test]
     fn registry_manifests_and_tools_are_valid() {
+    /// ADR 039 D2：往游戏聊天里打字归本体。关掉语音输入插件，`game_chat.send` 照样在她的工具清单里
+    /// （主会话也拿），也照样在工具服务里给外部 Agent（不属于哪个插件，只有一份）。
+    #[test]
+    fn game_chat_send_stays_when_voice_input_is_off() {
+        let mut s = kotone_core::settings::Settings::default();
+        s.plugins.entry("voice-input".into()).or_default().enabled = Some(false);
+        assert!(!voice_input_on(&s));
+        let specs = crate::tool_service::hosted_tool_specs(&s);
+        let sends: Vec<&Value> = specs
+            .iter()
+            .filter(|spec| spec["name"] == "game_chat.send")
+            .collect();
+        assert_eq!(sends.len(), 1, "工具服务里有，只有一份");
+        assert!(sends[0].get("plugin").is_none(), "{}", sends[0]);
+        let offers = offers_for(&s);
+        assert!(offers.iter().all(|o| o.plugin != "voice-input"));
+        let catalog = kotone_agent::catalog::Catalog::build(&specs, &[], &offers);
+        let send = catalog.get("game_chat.send").expect("她的清单里还有");
+        assert!(kotone_agent::catalog::main_offers(send), "主会话也拿");
+        assert_eq!(
+            catalog
+                .entries()
+                .iter()
+                .filter(|e| e.name == "game_chat.send")
+                .count(),
+            1
+        );
+    }
+
         let mut ids = std::collections::HashSet::new();
         let mut tools = std::collections::HashSet::new();
         for p in registry() {
@@ -753,7 +750,8 @@ mod tests {
                     t.name
                 );
                 assert!(
-                    !kotone_agent::catalog::MAIN_TOOLS.contains(&t.name.as_str()),
+                    !kotone_agent::catalog::MAIN_TOOLS.contains(&t.name.as_str())
+                        && !kotone_agent::body::owns(&t.name),
                     "{} 和她的内置工具重名",
                     t.name
                 );

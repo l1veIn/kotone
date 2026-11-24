@@ -313,6 +313,14 @@ fn settings_error(message: String) -> HostError {
 }
 
 pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
+    // 本体用 ToolSpec 登记的工具（ADR 039 D2：game_chat.send）：外部 Agent、MCP 经工具服务调到这里，
+    // 和琴音调的是同一个实现，执行记录的发起方记成 tool-service；结果的样子和插件的工具一样
+    if kotone_agent::body::owns(tool) {
+        return crate::companion::body_tool(app, tool, &args, "tool-service")
+            .await
+            .map(|result| result.to_service_json())
+            .map_err(HostError::Failed);
+    }
     // 插件的工具（ADR 038）：外部 Agent、MCP 经工具服务调到这里，结果照 MCP（content / structuredContent / _meta.ui）
     if crate::plugins::owner(tool).is_some() {
         return crate::plugins::call(app, tool, &args, crate::plugins::Caller::Service)

@@ -71,15 +71,15 @@
 | `hotwords`、`removed_builtin_hotwords` | 本体：耳朵（语音识别） |
 | `companion_notes` | 本体：她（游戏说明写进提示词） |
 | `chat_region` | 本体：眼睛（读聊天的截图区域） |
-| `open_chat_key`、`send_key`、`pre_open_delay_ms`、`pre_paste_delay_ms`、`pre_send_delay_ms`、`prefer_clipboard_paste`、`channels`、`console_chat` | 语音输入插件：`plugins.voice-input.games.<游戏>` |
+| `open_chat_key`、`send_key`、`pre_open_delay_ms`、`pre_paste_delay_ms`、`pre_send_delay_ms`、`prefer_clipboard_paste`、`channels`、`console_chat` | 留在游戏配置（本体）：往游戏聊天里打字归本体，琴音的 `game_chat.send` 和语音输入插件都用（2026-11-25 改，[ADR 039](adr/039-desktop-companion-and-game-apps.md) D2；原来要搬进语音输入插件的 `plugins.voice-input.games.<游戏>`，作废） |
 | `allow_automation_input` | 留在游戏配置（本体）：这个游戏容不容忍模拟输入是游戏自己的事（D3 第 9 条），按键程序插件经宿主读（2026-11-24 改，原来要搬进按键程序插件） |
 | `computer_use`（让她操作：询问 / 一直允许 / 禁止） | 本体：她的“手”（computer use 留在本体，2026-11-24 改） |
 | （设置里的 `lol.enabled`） | 英雄联盟插件：`plugins.lol.sources.client` |
 
 - 内置的 lol、dota2、cs2 是游戏配置，不是插件。英雄联盟插件用 `games = ["lol"]` 挂在 lol 上，以后 CS2、Dota 2 插件也一样。
-- 游戏配置页：上面是本体的那几项，下面是各插件提供的小节（语音输入的聊天键和频道、按键程序的允许操作、英雄联盟的数据开关）。照 VS Code 的“按语言的设置”。
+- 游戏配置页：上面是本体的那几项（含聊天键、频道和发送时序），下面是各插件提供的小节（按键程序的允许操作、英雄联盟的数据开关）。照 VS Code 的“按语言的设置”。聊天键和频道原来算语音输入的小节，2026-11-25 改成本体的（ADR 039 D2）。
 - 游戏配置包（导入导出 .zip）要连同插件的这些小节一起带上。
-- 迁移：老的游戏配置文件读得进来，插件的字段在第一次保存时搬到插件的设置里（照兼容规则）。哪一步搬哪些字段：语音输入的字段在第 5 步，按键程序的在第 6 步，`lol.enabled` 在第 1 步。
+- 迁移：老的游戏配置文件读得进来，插件的字段在第一次保存时搬到插件的设置里（照兼容规则）。哪一步搬哪些字段：按键程序的在第 6 步，`lol.enabled` 在第 1 步。语音输入的聊天键和频道不搬了（留在游戏配置，原计划作废，ADR 039 D2）。
 
 ## 三、插件清单
 
@@ -110,11 +110,11 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 页面 | 语音输入热键（按住说 / 按一下开关）、悬浮窗、文字处理（翻译、润色、屏蔽词）、每个游戏的聊天键和频道、控制台通道、识别记录 |
-| 给她的工具 | `game_chat.send`（她替你发言，走同一套往聊天框打字的办法） |
+| 页面 | 语音输入热键（按住说 / 按一下开关）、悬浮窗、文字处理（翻译、润色、屏蔽词）、识别记录。每个游戏的聊天键、频道和控制台通道留在游戏配置（2026-11-25 改，ADR 039 D2） |
+| 给她的工具 | 没有。`game_chat.send`（她替你发言）是本体的工具，名字不变，关掉语音输入也照样能用（2026-11-25 改，ADR 039 D2；原来由这个插件登记） |
 | 只给页面用的 | 试听、测试打字、文字处理试一下 |
-| 用本体的 | “听一句”（录音、语音识别、热词）；游戏配置（哪个游戏） |
-| 现在的代码 | `orchestrator.rs` 里语音输入的流程、`inject.rs`、`overlay*.rs`、`runtime.rs` 里语音输入的部分、`crates/kotone-postprocess`、ADR 032 的挡键和控制台通道 |
+| 用本体的 | “听一句”（录音、语音识别、热词）；往游戏聊天里打字（注入器、ADR 032 的挡键和控制台通道）；游戏配置（哪个游戏、聊天键） |
+| 现在的代码 | `orchestrator.rs` 里语音输入的流程、`overlay*.rs`、`runtime.rs` 里语音输入的部分、`crates/kotone-postprocess`。`inject.rs`、ADR 032 的挡键和控制台通道属于本体（ADR 039 D2） |
 
 ### 3. 游戏语音（`game-voice`）
 
@@ -667,6 +667,29 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 
 **（三）（四）的检查**：`kotone-core` 单元 303（多 2 个读旧写新）、集成 84 + 1 跳过（检查一条没改）；她 79；工具服务 111；svelte-check 0 / 0；Playwright 165 全过（跟着新结构改的：左侧栏顺序里没有 `general`、语音输入经“插件 → 语音输入”进；`speech-settings` 的手写桩补上插件清单；删了没人用的 `shell_sidebar_voice_input`；放歌的 e2e 多查一条“旧配置左侧栏里的 general 跳过、不算隐藏”）。真机：`lol_tools_real.py --while-playing` 32/32、`game_events_real.py` 12/12。没有测试覆盖“打开 App 时滚到下面的分组”（例如标题栏的“启动本地识别”），代码里做了。`appearance.spec` 有一次整套跑时开页超时、单跑和重跑都过，像是开发服务器第一次优化依赖时卡了一下，留意。
 **真机 `voice_input_real.py`**（玩家离开电脑时跑，`50348033` 上）：**37/37 过、1 个跳过、53 秒**（搬家前的基线 36/36、2 个跳过）。多过的一项是 6a：外部 Agent 经工具服务调 `game_chat.send` 现在能调，正好打进测试窗口。按住说自动发送、录音笔预览确认、屏蔽词“打野 → JG”、识别记录、悬浮窗状态顺序、她的 `game_chat.send`（执行记录有 runId）、`companion.type`、控制台通道没游戏时退回键盘、`~/.kotone` 没被动过，都和以前一样。跳过的还是 7b（真的控制台通道要 Steam 装的 Dota 2 / CS2）。
+
+### `game_chat.send` 回到本体（2026-11-25）
+
+玩家原话（[交接第十一节](research/2026-11-23-session-handoff.md)）：“ASR、游戏场景的输入（回车——unicode 输入——回车）是属于本体的。语音输入法接用了这两个本体的能力。”决定写在 [ADR 039](adr/039-desktop-companion-and-game-apps.md) D2。
+
+**玩家看到的**：关掉“插件 → 语音输入”以后，琴音照样能替你在游戏聊天里发言；外部 Agent（经工具服务 / MCP）调 `game_chat.send` 也照样能用。语音输入卡片的说明去掉了“她替你在聊天框发言也走这里”，关着时那句改成“关着时呼叫她、唤醒词照常能用，她也照样能替你在聊天框发言”。名字、说明、参数、默认权限、玩家设过的规则、只读模式拒绝、前台不是这个游戏时拒绝、记进「自动化 → 记录」都和以前一样；每个游戏的聊天键、频道和发送时序还在游戏配置里。
+
+**改了什么**：
+
+- 本体的工具开始用统一的 `ToolSpec` 登记（ADR 038“怎么定的”，原则 15）：新文件 `crates/kotone-agent/src/body.rs`，`game_chat.send` 的说明、参数、副作用（`input`、`records-run`）、马上返回照搬，`chat_text` 检查要打的字。她的工具清单里是新来源 `Source::Body { instant }`，主会话拿不拿看 `instant`（`main_offers`）：**没加进 `MAIN_TOOLS`，也没另写名单**。别的本体工具还是原来的写法，以后照它挪（MCP 方案 1.5 期简化 `MAIN_TOOLS` 时一起）。
+- 执行：琴音经 `BuiltinHost::body_tool`（记在 `agent:<对话 id>` 下），外部 Agent 经工具服务 → `tool_config::invoke`（记成 `tool-service`），两条路都到桌面端的 `companion::body_tool` → `send_to_game_chat`（本体的注入器、ADR 032 的挡键、前台检查、执行记录，没改）。工具服务里列的是 `ToolSpec::body_service_spec()`（和插件的工具一样，只是没有 `plugin`），由 `tool_service::hosted_tool_specs` 放在插件的工具前面；她的清单里不重复（`service_entries` 跳过本体的）。
+- 语音输入插件：去掉 `tool_prefix = "game_chat"`、这个工具和 `[agent]` 概览，不再给她工具。概览里讲 `game_chat.send` 的话不用挪：本体的提示词里一直有（能力概览“替玩家在聊天框打字（game_chat.send）”、开头“替玩家在游戏聊天里发言”），就是搬进插件前的写法。
+- 删了 `Host::type_in_game_chat`（没有插件再用，少开给插件一样权力，ADR 038“不做”），连同桌面端 `DesktopHost` 只为它记的调用方（`Caller::Her` 不再带对话 id）。
+- 界面桩 `pluginsMock.ts` 里语音输入不再列这个工具；术语表“语音输入”一行、本计划第二节“游戏配置怎么分”和第三节“语音输入”表改了（聊天键留在游戏配置，原来搬进插件的计划作废）。
+
+**行为改了、所以改了的测试**（不是把检查改弱）：
+
+- 桌面端 `voice_input_is_a_plugin_and_its_switch_takes_the_hotkeys_with_it`：原来查“`game_chat.send` 归语音输入插件、标了马上返回”，现在查“语音输入插件没有工具、`game_chat.send` 不归任何插件”；热键那一半没动。新加 `game_chat_send_stays_when_voice_input_is_off`：关掉语音输入，工具服务里还有它（只有一份、不带 `plugin`），她的清单里也有、主会话也拿。
+- `kotone-agent`：测试夹具原来要接上语音输入插件才有 `game_chat.send`，现在一个插件都不接也有；`builtins_validate_then_reach_the_host` 交给桌面的那一路从 `plugin` 变成 `body_tool`；主会话清单多查一项 `game_chat.send`；新加 `game_chat_send_is_the_bodys_and_stays_without_any_plugin`（插件都关着她也有、交给 `body_tool`；外部 Agent 经工具服务能调、交给宿主；清单里不重复）。`chat_text` 的测试从插件搬到 `body.rs`。
+- 语音输入插件的 `manifest_and_tools_agree` 改成 `manifest_gives_her_no_tools`。
+- `voice_input_real.py`：6a 原来“外部调不了就跳过”，现在调不了算失败；新加第 8 项（关掉语音输入：工具服务里还有它、不带 `plugin`；外部调用和琴音〔新对话、脚本里的假模型〕都照样打进测试窗口；执行记录的发起方分别是 `tool-service` 和 `agent:<对话 id>`；最后再打开插件）。
+
+**检查**：`kotone-core` 单元 303、集成 84 过 + 1 个手动跑的跳过（`tests/orchestrator.rs` 一行没动）；她 82（多 3：`body.rs` 2 个、新的 1 个）；语音输入插件 11（`chat_text` 的测试搬走了）；插件契约 13；工具服务 113；桌面端 118 + 1 忽略（含同时在做的别的改动；这件事多 1 个）；命令行 33 + 3 + 2 + 2（1 忽略）；clippy `-D warnings`（她、语音输入、插件契约；桌面端用 `--no-deps`，因为同时在改的英雄联盟插件有别的 clippy 报错）干净；svelte-check 0 / 0；相关的 Playwright（导航、外壳、语音设置、术语、右侧栏、聊天、语音输入插件）49 个里 48 过，没过的 `speech-settings` “leaving the page discards old model…” 在撤掉这件事的界面改动后照样不过，是同时在做的设置重排（选模型挪出“她怎么回答”）带来的，全量没跑。真机：`lol_tools_real.py --while-playing` 32/32、`game_events_real.py` 12/12、`voice_input_real.py` **42/42 过、1 个跳过（7b）、58 秒**（之前 37/37）。
 
 ### MCP 第 1 期：`kotone-mcp`、OP.GG 迁过去（2026-11-25）
 

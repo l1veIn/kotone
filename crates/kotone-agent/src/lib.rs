@@ -17,6 +17,7 @@
 /// [`catalog::exec_entries`] 从这里取，执行由桌面端经 [`port::BuiltinHost::exec`] 调用。
 pub use kotone_exec as exec;
 
+pub mod body;
 pub mod browser;
 pub mod catalog;
 pub mod permissions;

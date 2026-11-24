@@ -1,5 +1,5 @@
 {
   "plugin_voice_input_name": "Voice input",
-  "plugin_voice_input_description": "Hold the voice input hotkey and talk: what you say is typed into the game chat (after the blocklist, polishing or translation if you set them up). She also uses it when she speaks in the chat for you",
-  "plugin_voice_input_off_note": "When it's on, hold the voice input hotkey and talk to type into the game chat; she can also speak in the chat for you. Calling her and the wake word keep working while it's off."
+  "plugin_voice_input_description": "Hold the voice input hotkey and talk: what you say is typed into the game chat (after the blocklist, polishing or translation if you set them up)",
+  "plugin_voice_input_off_note": "When it's on, hold the voice input hotkey and talk to type into the game chat. Calling her and the wake word keep working while it's off, and she can still speak in the chat for you.",
 }

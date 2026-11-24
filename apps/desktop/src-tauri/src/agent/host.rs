@@ -83,13 +83,16 @@ impl BuiltinHost for DesktopBuiltins {
         tool: &str,
         arguments: &Value,
     ) -> Result<kotone_plugin_api::ToolResult, String> {
-        crate::plugins::call(
-            &self.app,
-            tool,
-            arguments,
-            crate::plugins::Caller::Her(&self.session),
-        )
-        .await
+        crate::plugins::call(&self.app, tool, arguments, crate::plugins::Caller::Her).await
+    }
+
+    /// 本体用 ToolSpec 登记的工具（ADR 039 D2：`game_chat.send`）：执行记录记在这段对话下。
+    async fn body_tool(
+        &self,
+        tool: &str,
+        arguments: &Value,
+    ) -> Result<kotone_plugin_api::ToolResult, String> {
+        crate::companion::body_tool(&self.app, tool, arguments, &self.session).await
     }
 
     async fn exec(

@@ -114,7 +114,7 @@ const interpreter: PluginManifest = {
   agent: { overview: "", rule: "" },
 };
 
-// 语音输入（ADR 038 第 5 步）：默认开；她的 game_chat.send 是它的工具（预览里不打字）
+// 语音输入（ADR 038 第 5 步）：默认开；没有给她的工具（game_chat.send 是本体的，ADR 039 D2）
 const voiceInput: PluginManifest = {
   id: "voice-input",
   name: voiceInputZh.plugin_voice_input_name,
@@ -154,9 +154,7 @@ const TOOLS: Record<string, MockTool[]> = {
     ...["state", "login_start", "login_cancel", "logout", "search", "home", "playlist", "play", "control", "queue", "set_quality"]
       .map((t): MockTool => ({ name: `music.${t}`, needs: [], visibility: ["app"], page: null })),
   ],
-  "voice-input": [
-    { name: "game_chat.send", needs: [], visibility: BOTH, page: null },
-  ],
+  "voice-input": [],
   interpreter: [
     { name: "interpreter.status", needs: [], visibility: ["app"], page: null },
     { name: "interpreter.start", needs: [], visibility: ["app"], page: null },

@@ -1,12 +1,13 @@
 //! 内置 Agent 能用的工具清单（ADR 014 §3、ADR 015 §1 第 3 层）。
 //!
-//! 来源有四种，合成一张表：
+//! 来源有这几种，合成一张表：
 //! - **工具服务**：`system.capabilities` 里的工具，与外部 Agent 同一份实现；
 //!   给外部 Agent 的通道类工具（`agent.*`、`event.read`、`assistant.submit`）和旧陪玩流程
 //!   （`companion.ask` / `companion.check`，会再调一次模型）不交给内置 Agent；
 //! - **内置动作**：说话（`speak`）、弹幕（`danmaku`，后台用）、提醒（`reminder.create`）和查找工具（`tools.find`）；
+//! - **本体用 ToolSpec 登记的工具**（[`crate::body`]，ADR 039 D2）：发到游戏聊天（`game_chat.send`，
+//!   替代 `companion.type`，会写进执行记录），不看插件开关，经 [`crate::port::BuiltinHost::body_tool`] 执行；
 //! - **插件**（ADR 038）：开着的插件给她的工具（`visibility` 含 `model`、要的数据开关都开着），
-//!   例如语音输入插件的 `game_chat.send`（发到游戏聊天，替代 `companion.type`，会写进执行记录），
 //!   由桌面端按开关算好（[`kotone_plugin_api::Offer`]），经 [`crate::port::BuiltinHost::plugin`] 执行；
 //! - **已保存的自动化**：每个一个工具 `saved.<id>`（最多 [`MAX_SAVED_TOOLS`] 个）。
 //! - **执行命令、读写文件**（ADR 030）：`shell.run`、`file.*`，只给后台任务（[`exec_entries`]）。
@@ -72,8 +73,8 @@ pub const HOST_BUILTINS: &[&str] = &[
 /// 一步步操作）；`companion.read_chat`（同样要识别，玩家开口那一刻的聊天用 `screen.at_speech`）；
 /// `web.fetch`（3–7 秒）；`automation.save`（要先写程序、试运行）。
 pub const MAIN_TOOLS: &[&str] = &[
-    // 说话、追问、提醒（ADR 017 / 018；ADR 029 第八节）。替玩家发言（game_chat.send）是语音输入插件的，
-    // 插件工具标了马上返回的主会话也拿
+    // 说话、追问、提醒（ADR 017 / 018；ADR 029 第八节）。替玩家发言（game_chat.send）是本体用 ToolSpec
+    // 登记的（crate::body），标了马上返回，主会话也拿（main_offers），不写在这里
     TOOL_SPEAK,
     TOOL_ASK,
     TOOL_REMIND,
@@ -106,7 +107,7 @@ pub const MAIN_TOOLS: &[&str] = &[
     "runtime.status",
     // 在 Kotone 窗口里打开一个页面（插件的页面、设置页，ADR 038）
     "ui.open",
-    // 插件的工具不在这里：标了“马上返回”（`instant`）的主会话也拿（[`main_offers`]）
+    // 用 ToolSpec 登记的（本体的、插件的）不在这里：标了“马上返回”（`instant`）的主会话也拿（[`main_offers`]）
     // 交给后台
     TOOL_AGENT_START,
     TOOL_AGENT_FOLLOWUP,
@@ -133,12 +134,14 @@ pub const SUBAGENT_EXCLUDED: &[&str] = &[
     TOOL_SOUL_WRITE,
 ];
 
-/// 主会话拿不拿这个工具（[`MAIN_TOOLS`]、马上返回的插件工具与已保存的自动化）。
+/// 主会话拿不拿这个工具（[`MAIN_TOOLS`]、马上返回的本体 / 插件工具与已保存的自动化）。
 pub fn main_offers(entry: &ToolEntry) -> bool {
     MAIN_TOOLS.contains(&entry.name.as_str())
         || matches!(
             entry.source,
-            Source::Saved { .. } | Source::Plugin { instant: true, .. }
+            Source::Saved { .. }
+                | Source::Plugin { instant: true, .. }
+                | Source::Body { instant: true }
         )
 }
 
@@ -203,6 +206,9 @@ pub enum Source {
     Exec,
     /// 插件的工具（ADR 038，经 [`crate::port::BuiltinHost::plugin`]）。`instant`：马上返回，主会话也拿。
     Plugin { plugin: String, instant: bool },
+    /// 本体用 ToolSpec 登记的工具（[`crate::body`]，ADR 039 D2，经 [`crate::port::BuiltinHost::body_tool`]）。
+    /// `instant`：马上返回，主会话也拿。
+    Body { instant: bool },
 }
 
 /// 一个开着的插件给她的话（系统提示用；ADR 038 D5“能力概览按插件列，关着的不列”）。
@@ -555,13 +561,14 @@ pub fn agent_entries() -> Vec<ToolEntry> {
 }
 
 /// 工具服务 `system.capabilities` 的 `tools` 数组 → 条目（去掉 [`EXCLUDED`]）。插件的工具（带 `plugin`）
-/// 也在工具服务里（给外部 Agent），她的那份从 [`plugin_entries`] 来，这里跳过。
+/// 和本体用 ToolSpec 登记的工具（[`crate::body`]）也在工具服务里（给外部 Agent），她的那份从
+/// [`plugin_entries`]、[`body_entries`] 来，这里跳过。
 pub fn service_entries(specs: &[Value]) -> Vec<ToolEntry> {
     specs
         .iter()
         .filter_map(|spec| {
             let name = spec.get("name")?.as_str()?;
-            if EXCLUDED.contains(&name) || spec.get("plugin").is_some() {
+            if EXCLUDED.contains(&name) || spec.get("plugin").is_some() || crate::body::owns(name) {
                 return None;
             }
             let mut description = spec
@@ -637,27 +644,42 @@ pub fn exec_entries(specs: &[Value]) -> Vec<ToolEntry> {
         .collect()
 }
 
+/// 用 [`kotone_plugin_api::ToolSpec`] 登记的工具（本体的、插件的）→ 条目。
+fn spec_entry(spec: &kotone_plugin_api::ToolSpec, source: Source) -> ToolEntry {
+    ToolEntry {
+        name: spec.name.clone(),
+        description: spec.description.clone(),
+        parameters: normalize_schema(&spec.parameters),
+        side_effects: spec.side_effects.clone(),
+        group: group_of(&spec.name),
+        source,
+        untrusted: spec.untrusted,
+    }
+}
+
+/// 本体用 ToolSpec 登记、给她的工具（[`crate::body`]）：不看插件开关。
+pub fn body_entries() -> Vec<ToolEntry> {
+    crate::body::tools()
+        .iter()
+        .filter(|t| t.for_model())
+        .map(|t| spec_entry(t, Source::Body { instant: t.instant }))
+        .collect()
+}
+
 /// 开着的插件给她的工具（宿主已经按开关、`visibility` 和数据开关挑好）。
 pub fn plugin_entries(offers: &[kotone_plugin_api::Offer]) -> Vec<ToolEntry> {
     offers
         .iter()
         .flat_map(|offer| {
-            offer
-                .tools
-                .iter()
-                .filter(|t| t.for_model())
-                .map(|t| ToolEntry {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    parameters: normalize_schema(&t.parameters),
-                    side_effects: t.side_effects.clone(),
-                    group: group_of(&t.name),
-                    source: Source::Plugin {
+            offer.tools.iter().filter(|t| t.for_model()).map(|t| {
+                spec_entry(
+                    t,
+                    Source::Plugin {
                         plugin: offer.plugin.clone(),
                         instant: t.instant,
                     },
-                    untrusted: t.untrusted,
-                })
+                )
+            })
         })
         .collect()
 }
@@ -772,6 +794,7 @@ impl Catalog {
         plugins: &[kotone_plugin_api::Offer],
     ) -> Self {
         let mut entries = builtin_entries();
+        entries.extend(body_entries());
         entries.extend(agent_entries());
         entries.extend(service_entries(specs));
         entries.extend(exec_entries(&kotone_exec::tool_specs()));
@@ -838,7 +861,7 @@ impl Catalog {
         &self.entries
     }
 
-    /// 是否始终提供（核心工具、马上返回的插件工具与已保存的自动化）。
+    /// 是否始终提供（核心工具、马上返回的本体 / 插件工具与已保存的自动化）。
     pub fn is_core(entry: &ToolEntry) -> bool {
         main_offers(entry)
     }

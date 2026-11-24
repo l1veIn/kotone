@@ -3,7 +3,8 @@
    * 语音输入插件的 App（ADR 038）：原来左侧栏「语音输入」那一整块（输入 / 文字处理 / 历史三页，悬浮窗在“输入”里）
    * 原样搬进插件，从左侧栏「插件 → 语音输入」打开。页面 ID 和分组锚点不变（general / processing / history，
    * voice-asr / voice-overlay……），「去看看」的位置（「语音输入 → 悬浮窗」等）经 `open.params` 落到这里的分页和分组。
-   * 插件开关在最上面；关着时语音输入热键、悬浮窗、她替你打字都没有（宿主按开关处理），这里只留开关和一句说明。
+   * 插件开关在最上面；关着时语音输入热键、悬浮窗都没有（宿主按开关处理），这里只留开关和一句说明。
+   * 她替你在游戏聊天里发言（game_chat.send）是本体的，不跟着这个开关（ADR 039 D2）。
    */
   import { tick } from "svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
