@@ -170,7 +170,8 @@ fn title_of(messages: &[Message]) -> String {
     messages
         .iter()
         .find_map(|m| match m {
-            Message::User { text, .. } => Some(text.trim()),
+            // 自动卡片给模型的那句（ADR 039 D3）不是玩家说的，不拿来当标题
+            Message::User { text, source, .. } if source != "auto-card" => Some(text.trim()),
             _ => None,
         })
         .map(|text| {

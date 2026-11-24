@@ -25,6 +25,7 @@ mod games;
 mod history_cmd;
 mod hotkey;
 mod key_request;
+mod message_popup;
 mod model_catalog;
 mod models_cmd;
 mod ocr_engines;
@@ -502,6 +503,9 @@ pub fn run() {
             wake::wake_download_model,
             speech_models::cancel_speech_model_download,
             automation::automation_runs,
+            message_popup::message_popup_current,
+            message_popup::message_popup_close,
+            message_popup::message_popup_open,
             automation::automation_saved_list,
             games::game_state,
             automation::automation_get,
@@ -549,6 +553,8 @@ pub fn run() {
             plugins_cmd::plugins_list,
             plugins_cmd::plugin_call,
             plugins_cmd::plugin_app,
+            agent::agent_held_cards,
+            agent::auto_card_open,
             browser_cmd::browser_state,
             browser_cmd::browser_set_bounds,
             browser_cmd::browser_control,

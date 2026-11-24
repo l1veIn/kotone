@@ -321,5 +321,10 @@
   "chat_plugin_page_back": "返回",
   "chat_plugin_page_close": "关掉页面",
   "chat_plugin_page_missing": "这个页面现在打不开（插件关着，或者没有这个页面）。",
-  "chat_plugin_card_open": "打开"
+  "chat_plugin_card_open": "打开",
+  "chat_auto_card_from": "{plugin} 发来",
+  "chat_auto_card_label": "{plugin}发来的自动卡片：{title}",
+  "chat_popup_label": "消息提示：{plugin}发来一张卡片",
+  "chat_popup_open": "打开聊天看这张卡片",
+  "chat_popup_close": "关掉消息提示"
 }

@@ -324,6 +324,7 @@ pub async fn recap(app: &AppHandle, game_id: &str, start: u64, end: u64) -> Resu
         compaction: None,
         usage: reply.usage.clone().filter(|u| !u.is_empty()),
         recap: Some(body.clone()),
+        card: None,
     };
     let posted = crate::agent::append_notice_when_idle(app, note).await;
     Ok(

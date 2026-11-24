@@ -188,8 +188,8 @@ fn create(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     }
 }
 
-/// 不进截图（自己的截图识别、录屏软件的整屏捕获都看不到它；游戏捕获照常只录游戏）。
-fn exclude_from_capture(window: &tauri::WebviewWindow) {
+/// 不进截图（自己的截图识别、录屏软件的整屏捕获都看不到它；游戏捕获照常只录游戏）。消息提示也用它。
+pub(crate) fn exclude_from_capture(window: &tauri::WebviewWindow) {
     #[cfg(windows)]
     if let Ok(hwnd) = window.hwnd() {
         use windows::Win32::UI::WindowsAndMessaging::{

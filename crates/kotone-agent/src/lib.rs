@@ -18,6 +18,8 @@
 pub use kotone_exec as exec;
 
 pub mod body;
+pub mod auto_card;
+pub mod background;
 pub mod browser;
 pub mod catalog;
 pub mod permissions;

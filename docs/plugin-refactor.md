@@ -775,3 +775,26 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 **截图**：`target/plugin-shots/round7/`：`role-identity.png`、`role-memory.png`、`role-skills.png`、`role-call.png`（唤醒）、`role-reply.png`（交互）、`role-permissions.png`、`role-usage.png`、`settings.png`、`chat-composer.png`、`chat-model-menu.png`。
 
 **检查**：svelte-check 0 / 0；Playwright 全量 169 个：最后一次整套 167 过，2 个没过（`danmaku.spec` 的弹幕样式、`music.spec` 的关掉插件），原因是跑的时候别的子代理在改文件，Vite 把页面整页重载了（调试时看到测试中途页面又导航了一次、角色页回到聊天页），这两个文件单跑 15/15 过；改动相关的几个 spec 重跑 40/40、8/8。`kotone-core` 303 + 集成 84（1 跳过）、`kotone-agent` 82、`kotone-tools` 111、桌面端 113（1 跳过）；clippy：core、agent、tools 干净；桌面端 `-D warnings` 卡在不是这次改的两处（`plugins/lol` 的 6 个 `unnecessary_map_or`、`plugins.rs` 测试里的 `field_reassign_with_default`，HEAD 上在这个工具链 1.98 下就有），放过这两条后干净。没跑真机脚本（只动了界面和文字）。
+
+### 自动卡片和消息提示（2026-11-25）
+
+交接第十一节第 17、18 条，[ADR 039](adr/039-desktop-companion-and-game-apps.md) D3、D4（怎么做的写在 ADR 039 的实现记录里）。玩家原话：“检测到对局可以自动推送一些双方战绩之类的卡片进上下文，可以不触发 LLM……”“自动推卡片的同时右下角可以弹个消息，这样用户知道在哪里看新内容，更有那种桌面聊天陪伴的感觉。”
+
+**玩家看到的**：英雄联盟进加载、战绩查完时聊天里多一张“英雄联盟 发来 · 开局战绩”（“这局”的卡片），结算后一张“这局总结”（单局详情）；同时右下角弹消息提示（琴音的头像、“琴音 · 英雄联盟”、“对面的战绩到了”），6 秒后消失，点它打开聊天、滚到卡片。开关在“游戏陪玩 → 角色 → 交互 → 自动卡片”。不叫模型、不花钱。
+
+**改了哪里**（按层）：
+
+- 契约：`kotone-plugin-api` 的 `AutoCard` 和 `Host::auto_card`（默认拒绝，只有桌面端给内置插件实现）。
+- 纯逻辑：`kotone-agent/src/auto_card.rs`（两条消息怎么拼、去重、“压着”的卡片）；`kotone-ai` 的 `Message::Notice` 多一个 `card` 字段（只给界面），对话标题不拿来源 `auto-card` 的消息。
+- 设置：`kotone-core` 的 `agent.autoCards {enabled, popup}`（默认都开）和设置说明两条（“琴音 → 交互 → 自动卡片”）。
+- 桌面端：`agent/auto_card.rs`（发到哪段对话、琴音空着才记进对话、`agent_held_cards`、`auto_card_open`）；`relay.rs` 的 `main_is_quiet` 改成 `pub(super)`（同一个空闲判断）；`message_popup.rs` 和窗口 `message-popup`（`tauri.conf.json`、`capabilities/message-popup.json`）；`overlay_layer::exclude_from_capture` 改成 `pub(crate)`；系统适配层 `fullscreen::popup_blocked` / `notification_state`。
+- 界面：聊天里的 `AutoCard.svelte`（`timeline.ts` 让卡片自成一轮、给模型的那条不显示；`chatController` 处理“压着”的卡片和定位）；消息提示页面 `routes/messagePopup`；“交互”里的 `AutoCardSettings.svelte`；文案在 `messages/*/chat.json`、`companion.json`。
+- 英雄联盟：`plugins/lol/src/watcher/auto_cards.rs`（什么时候发、那两句话怎么写），`watcher.rs` 只加了模块、`State.cards` 和 `tick` 里一行。
+
+**检查**：
+
+- Rust 单元测试（新加 14 个）：`kotone-agent` 的 `auto_card` 6 个——发卡片时假模型 0 次调用、下一轮模型看到那句话但看不到页面数据（玩家名不在请求里）；DeepSeek 请求体前面每一条逐字节不变、那句话在玩家下一句前面；她在忙时压着、这一轮里一条都没插进去、结束后接在她的回答后面；同一个插件同一个键只发一次；关着不发、只关消息提示时照发不弹、旧配置按开；消息形状和截字。`kotone-core` 1 个（旧配置读进来两个开关都开）；`kotone-plugin-api` 1 个（默认实现拒绝、页面要是清单里的）；`kotone-platform-windows` 1 个（哪些通知状态不弹）；`kotone-plugin-lol` 5 个（开局战绩等查完或 20 秒、一局一次、开打后才看到的不发；自定义 / 训练 / 观战不发；开局那句的突破口、开黑、还在查；这局总结那句；重开局和详情还没出来）。
+- `cargo test`：`kotone-agent` 102、`kotone-ai` 92、`kotone-core` 304、`kotone-plugin-api` 14、`kotone-platform-windows` 91（9 忽略）、`kotone-plugin-lol` 81（1 忽略）、`kotone-tauri` 118（1 忽略），全过；clippy `-D warnings`（这七个 crate、`--all-targets`）干净；新文件 rustfmt 过。
+- svelte-check 0 / 0（英雄联盟 App 也 0 / 0）。Playwright：新的 `e2e/auto-card.spec.ts` 5/5（聊天里“英雄联盟 发来”的卡片、点开到右侧栏、给她的那句不显示；她在回答时来的卡片先显示在最后、这一轮的字留在她那一轮、记进对话后不重复；点消息提示从别的页面回到聊天、卡片滚进来闪一下；“交互”里两个开关默认开、改了存 `agent.autoCards`、关掉自动卡片时消息提示的开关变灰；消息提示页面 320 × 72、“琴音 · 英雄联盟”、点 × 只关、点它是打开）；`terminology.spec` 4/4；全量 178 个 177 过，没过的 1 个是 `sidebar-edit.spec` 新加的“每个插件卡片有自己的 logo”（同时在做的插件 logo，`fetch` 开发服务器上 `plugins/*/logo.svg` 的地址失败，单跑也一样，和这件事无关）。
+- 截图：`target/plugin-shots/round7/chat-auto-card.png`、`settings-auto-cards.png`、`message-popup-preview.png`（Playwright），`message-popup-real.png`（真机，见下）。
+- 真机 `auto_card_real.py`（新脚本，假客户端的一局 + 真 DeepSeek）：**13/13**。选人时没有卡片；进加载 2 秒后“开局战绩”接在“你好”那一轮后面（前面两条逐字不变），给琴音的那句是“开局战绩（海克斯大乱斗）。对面可能的突破口：艾希，最近 20 局只赢了 6 局、场均死 13.2 次。我方有 3 人开黑。”；消息提示弹出来了（`WS_EX_TOPMOST | WS_EX_NOACTIVATE`，前台窗口前后是同一个），截图 `target/plugin-shots/round7/message-popup-real.png`；结算 2 秒后“这局总结”（“这局赢了（海克斯大乱斗，16 分 54 秒）。你用韦鲁斯 8/9/43，伤害全队第三。”）；一局正好两张；从第一张卡片到下一次打字，`usage.jsonl` 一条没多；再打字问“刚才英雄联盟发来的卡片说了什么”，她答“开局说对面艾希是突破口……这局赢了，你韦鲁斯 8/9/43”。第一次跑时消息提示没弹：`--background` 启动后藏着的主窗口“Kotone 设置”占着前台（看不见），“Kotone 的窗口在前台”的判断把它算进去了；改成只算看得见、没最小化的窗口。

@@ -12,6 +12,7 @@
 //!
 //! 不做：游戏内入口与快速模式（第 4 步）、切换到游戏窗口（第 5 步）。
 
+mod auto_card;
 mod browser_tools;
 mod commands;
 mod context;
@@ -25,6 +26,7 @@ mod voice;
 #[cfg(test)]
 mod test_util;
 
+pub use auto_card::*;
 use browser_tools::*;
 pub use commands::*;
 use context::*;

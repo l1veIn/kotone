@@ -65,6 +65,7 @@ const COMPANION_ANCHORS: Record<string, Record<string, string>> = {
   call: { "呼叫键": "settings-call-hotkey", "语音唤醒": "settings-call-wake", "快捷指令": "companion-title", "通话": "settings-call-hotkey" },
   reply: {
     "气泡": "settings-reply-bubble", "声音与弹幕": "settings-reply-output", "回答方式": "settings-reply-output",
+    "自动卡片": "settings-reply-auto-cards", "消息提示": "settings-reply-auto-cards",
     "她用的模型": CHAT_MODEL_ANCHOR,
     // 旧写法（术语表 v2 之前的小节名；以前的对话里还引用着）
     "AI 连接": CHAT_MODEL_ANCHOR, "对话气泡": "settings-reply-bubble",

@@ -528,6 +528,57 @@ pub struct ScreenText {
 pub trait Plugin: Send + Sync + 'static {
     /// 清单（一般是 `include_str!("../plugin.toml")` 读出来的）。
     fn manifest(&self) -> &Manifest;
+// ---------- 自动卡片 ----------
+
+/// 自动卡片（ADR 039 D3）：插件看到游戏里的事（英雄联盟进加载、结算），自己往聊天里发的一张卡片。
+/// 和工具结果的聊天卡片是同一种（`uri` 页面的小尺寸版本 + 给页面的数据），卡片上写明是哪个插件发来的。
+/// **不叫模型、不花钱**；`note` 那一两句追加在对话末尾，之后的对话里琴音看得到。经 [`Host::auto_card`] 发。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoCard {
+    /// 去重键：同一个插件同一个键只发一次（例如 `opening:<对局 id>`：同一局、同一种卡片）。
+    pub key: String,
+    /// 卡片的名字（“开局战绩”），聊天里卡片上面那一行和给琴音的那句都用它。
+    pub title: String,
+    /// 显示它的页面：清单 `pages` 里的 `ui://kotone/<插件>/<页面>`。
+    pub uri: String,
+    /// 页面参数（照 MCP Apps 的 `_meta.ui`；没有为 null）。
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub params: Value,
+    /// 给页面的数据（和工具结果的 `structured_content` 一样：存进对话记录，**不发给模型**）。
+    pub data: Value,
+    /// 给琴音的一两句（不超过 [`AutoCard::NOTE_MAX`] 字，例如“对面可能的突破口：……”）。里面有别人起的名字，
+    /// 宿主按不可信数据交给模型。
+    pub note: String,
+    /// 消息提示的那一句（不超过 [`AutoCard::POPUP_MAX`] 字，例如“对面的战绩到了”）；空 = “{插件名}发来一张卡片”。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub popup: String,
+}
+
+impl AutoCard {
+    /// 给琴音的那句最多几个字（调研第五节：约 120 字；多出的宿主截掉）。
+    pub const NOTE_MAX: usize = 160;
+    /// 消息提示那句最多几个字（设计文档：≤ 16 字，放不下省略；多出的宿主截掉）。
+    pub const POPUP_MAX: usize = 24;
+
+    /// 宿主收卡片前的检查：页面是这个插件清单里的、键和标题不空。
+    pub fn check(&self, manifest: &Manifest) -> Result<(), String> {
+        if self.key.trim().is_empty() || self.title.trim().is_empty() {
+            return Err("自动卡片要有 key 和 title".into());
+        }
+        if manifest.page(&self.uri).is_none() {
+            return Err(format!(
+                "{} 不是「{}」插件清单里的页面",
+                self.uri, manifest.name
+            ));
+        }
+        if !self.params.is_null() && !self.params.is_object() {
+            return Err("自动卡片的 params 要是对象".into());
+        }
+        Ok(())
+    }
+}
+
 
     /// 全部工具（给她的和只给页面的）。宿主按开关和 `needs` 决定哪些露出来。
     fn tools(&self) -> Vec<ToolSpec>;
@@ -696,6 +747,19 @@ pub trait Host: Send + Sync {
         let _ = items;
     }
     /// 截前台窗口的一块区域（客户区比例 `[x, y, w, h]`）并识别文字（本体的文字识别，玩家选的模型）。
+    /// 往聊天里发一张自动卡片（ADR 039 D3、D4）：卡片马上出现在当前对话末尾（写明是哪个插件发来的），
+    /// **不叫模型、不花钱**；`note` 那一两句等琴音这一轮说完（她在回答、在说话、玩家在说话时不插进去）
+    /// 再追加在对话末尾，前面的消息一个字不改（前缀缓存照常命中，ADR 024）；玩家开着消息提示就在屏幕右下角
+    /// 弹一个不抢焦点的小窗。
+    ///
+    /// 返回 `Ok(true)` 发了；`Ok(false)` 没发：玩家关了自动卡片（“游戏陪玩 → 角色 → 交互”）、同一个 `key` 发过了。
+    ///
+    /// **只给内置插件**（单向门，ADR 039 D3）：往聊天和琴音的上下文里放东西是很大的权力。第三方插件（以后的
+    /// 远程插件、MCP 服务器）的宿主不实现这个方法，用这里的默认实现一律拒绝。
+    fn auto_card(&self, card: AutoCard) -> Result<bool, String> {
+        let _ = card;
+        Err("自动卡片只给内置插件".to_string())
+    }
     /// 前台不是 `process` 这个进程的窗口时不截（报错）。覆盖层不会被截进去。
     /// `local_only`：只用本地模型（在线识别要十几秒、要花钱时不识别，直接报错）。
     fn screen_text(
@@ -968,3 +1032,73 @@ rule = "- 英雄联盟：……"
         assert!(!valid_id(""));
     }
 }
+
+    /// ADR 039 D3：自动卡片只给内置插件。没实现它的宿主（以后的远程插件）一律拒绝；页面要是清单里的。
+    #[test]
+    fn auto_cards_are_for_built_in_plugins_and_their_own_pages() {
+        struct Remote;
+        impl Host for Remote {
+            fn plugin(&self) -> &str {
+                "remote"
+            }
+            fn enabled(&self) -> bool {
+                true
+            }
+            fn source_enabled(&self, _source: &str) -> bool {
+                true
+            }
+            fn settings(&self) -> Value {
+                json!({})
+            }
+            fn data_dir(&self) -> PathBuf {
+                PathBuf::new()
+            }
+            fn spawn(&self, _task: BoxFuture<'static, ()>) {}
+            fn process_ids(&self, _exe: &str) -> Vec<u32> {
+                Vec::new()
+            }
+            fn process_command_line(&self, _pid: u32) -> Option<String> {
+                None
+            }
+            fn game_observe(&self, _game: &str, _observation: Observation) {}
+            fn game_claim(&self, _game: &str, _claimed: bool) {}
+            fn game_event(
+                &self,
+                _game: &str,
+                _kind: &str,
+                _source: &str,
+                _data: Map<String, Value>,
+                _game_time: Option<f64>,
+            ) {
+            }
+        }
+        let card = AutoCard {
+            key: "opening:1".into(),
+            title: "开局战绩".into(),
+            uri: "ui://kotone/lol/match".into(),
+            params: Value::Null,
+            data: json!({"players": []}),
+            note: "对面可能的突破口：……".into(),
+            popup: "对面的战绩到了".into(),
+        };
+        assert!(Remote.auto_card(card.clone()).is_err());
+        let m = Manifest::parse(SAMPLE).unwrap();
+        assert!(card.check(&m).is_ok());
+        let elsewhere = AutoCard {
+            uri: "ui://kotone/music/player".into(),
+            ..card.clone()
+        };
+        assert!(elsewhere.check(&m).is_err());
+        let nameless = AutoCard {
+            key: " ".into(),
+            ..card.clone()
+        };
+        assert!(nameless.check(&m).is_err());
+        // 发给界面时是 camelCase，空的 params / popup 不写
+        let json = serde_json::to_value(AutoCard {
+            popup: String::new(),
+            ..card
+        })
+        .unwrap();
+        assert!(json.get("params").is_none() && json.get("popup").is_none());
+    }

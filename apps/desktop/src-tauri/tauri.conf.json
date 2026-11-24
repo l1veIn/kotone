@@ -46,6 +46,23 @@
         "visible": false
       },
       {
+        "label": "message-popup",
+        "create": false,
+        "title": "Kotone 消息提示",
+        "url": "index.html#/message-popup",
+        "width": 344,
+        "height": 104,
+        "transparent": true,
+        "decorations": false,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "focus": false,
+        "focusable": false,
+        "visible": false
+      },
+      {
         "label": "companion",
         "create": false,
         "title": "琴音",

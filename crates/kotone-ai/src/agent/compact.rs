@@ -222,6 +222,7 @@ pub async fn compact<M: ModelClient>(
             compaction: Some(summary),
             usage: reply.usage.filter(|u| !u.is_empty()),
             recap: None,
+            card: None,
         },
     )))
 }

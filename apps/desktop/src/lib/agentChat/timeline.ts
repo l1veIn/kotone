@@ -1,6 +1,6 @@
 // 把一段对话（存盘的消息 + 正在流式输出的部分）整理成按“轮”显示的时间线。Kotone 自己的实现。
 // 一轮 = 一条用户消息（或自动化送回的系统消息）及其后的回答、思考、工具调用与状态说明。
-import type { AgentMessage, CategoryTotals, ConversationCosts, TokenUsage, ToolCall, ToolDisplay, ToolStatus, UsageTotals } from "../agent";
+import { AUTO_CARD_SOURCE, type AgentMessage, type AutoCardInfo, type CategoryTotals, type ConversationCosts, type TokenUsage, type ToolCall, type ToolDisplay, type ToolStatus, type UsageTotals } from "../agent";
 
 export type UserMessage = Extract<AgentMessage, { role: "user" }>;
 
@@ -37,6 +37,8 @@ export interface Turn {
   endedAtMs: number | null;
   /** 这一轮模型以外的费用：语音合成 / 识别、读屏、联网搜索（来自本机账本，没有就不显示）。 */
   extraCosts?: CategoryTotals[];
+  /** 自动卡片（ADR 039 D3）：插件自己发进聊天的一张卡片，单独占一轮（没有玩家的话、没有她的回答）。 */
+  card?: AutoCardInfo;
 }
 
 export interface LiveState {
@@ -77,7 +79,17 @@ export function buildTurns(messages: readonly AgentMessage[], live: LiveState | 
   };
 
   messages.forEach((message, index) => {
+    // 自动卡片给她的那一两句：界面不显示（显示的是前面那张卡片）
+    if (message.role === "user" && message.source === AUTO_CARD_SOURCE) return;
     if (message.role === "user") { start(message, index, message.atMs); return; }
+    if (message.role === "notice" && message.card) {
+      const own = start(null, index, message.atMs);
+      own.card = message.card;
+      own.endedAtMs = message.atMs;
+      // 卡片自成一轮：后面的东西不挂在它下面
+      turn = null;
+      return;
+    }
     const current: Turn = turn ?? start(null, index, message.atMs);
     if (message.role === "assistant") {
       if (message.reasoning?.trim()) current.blocks.push({ kind: "thinking", key: `r${index}`, text: message.reasoning, streaming: false });
@@ -118,7 +130,8 @@ export function buildTurns(messages: readonly AgentMessage[], live: LiveState | 
     // role === "tool"：结果已并入对应的工具卡片。
   });
 
-  const last = turns[turns.length - 1];
+  // 正在回答的是最后一轮；她这一轮里来的自动卡片先显示在最后面（这一轮结束才记进对话），不算这一轮
+  const last = [...turns].reverse().find((t) => !t.card);
   if (running) {
     const current = last ?? start(null, messages.length, Date.now());
     current.active = true;

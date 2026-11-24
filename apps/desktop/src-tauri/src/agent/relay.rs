@@ -22,7 +22,8 @@ async fn wait_quiet(app: &AppHandle, span: std::time::Duration) {
 }
 
 /// 现在能不能插进主会话说一句：她没在回答、玩家没在说话、没有提问在等回答。
-fn main_is_quiet(app: &AppHandle) -> bool {
+/// 自动卡片（`auto_card.rs`）也用它判断什么时候把给她的那句记进对话。
+pub(super) fn main_is_quiet(app: &AppHandle) -> bool {
     if is_running(app) || crate::voice_ask::is_pending(app) || crate::assistant::output_busy(app) {
         return false;
     }

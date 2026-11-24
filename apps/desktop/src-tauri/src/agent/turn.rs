@@ -301,6 +301,7 @@ fn fail_early(
             compaction: None,
             usage: None,
             recap: None,
+            card: None,
         },
     ] {
         conversation.messages.push(m.clone());

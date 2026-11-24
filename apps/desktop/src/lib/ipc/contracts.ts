@@ -343,6 +343,8 @@ export interface AgentConfig {
   /** 游戏里 / 聊天窗口里的思考强度（只对 DeepSeek）：low / high / max / none；空 = 服务商默认。 */
   gameEffort?: string;
   chatEffort?: string;
+  /** 自动卡片和消息提示（ADR 039 D3、D4；默认都开，旧配置没有这一项）。 */
+  autoCards?: { enabled: boolean; popup: boolean };
 }
 
 /** 语音唤醒设置（config.json `assistant.wake`）。 */

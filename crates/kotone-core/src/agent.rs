@@ -86,6 +86,10 @@ pub struct AgentConfig {
     /// 聊天窗口里的思考强度（同上）。新字段。
     #[serde(default)]
     pub chat_effort: String,
+    /// 自动卡片和消息提示（ADR 039 D3、D4，“游戏陪玩 → 角色 → 交互”）：两个都默认开。新字段（原则 19：
+    /// 旧配置没有这一项时按默认开；旧版本读到它会忽略）。
+    #[serde(default)]
+    pub auto_cards: AutoCardsConfig,
     // `musicSite`（放歌用哪个网站，ADR 031）在 ADR 034 去掉了：放歌改成 `music` 工具，旧配置里的值读到就丢掉。
 }
 
@@ -178,6 +182,26 @@ pub struct IdentityConfig {
     pub avatar: String,
 }
 
+/// 自动卡片（ADR 039 D3）：插件看到游戏里的事（英雄联盟进加载、结算），自己往聊天里发一张卡片，不叫模型、不花钱；
+/// 消息提示（D4）：发卡片时屏幕右下角弹的小窗。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AutoCardsConfig {
+    /// 插件可以往聊天里发自动卡片。关了两种卡片都不发，也不弹消息提示。
+    pub enabled: bool,
+    /// 发卡片时弹消息提示（关了卡片照发）。
+    pub popup: bool,
+}
+
+impl Default for AutoCardsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            popup: true,
+        }
+    }
+}
+
 /// 子会话的缺省设置（照 OpenClaw `agents.defaults.subagents`）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -205,6 +229,7 @@ impl Default for AgentConfig {
             safety_check: true,
             game_effort: default_game_effort(),
             chat_effort: String::new(),
+            auto_cards: AutoCardsConfig::default(),
         }
     }
 }
@@ -227,5 +252,19 @@ mod tests {
         assert!(empty.in_game, "in-game entry goes to the agent by default");
         let json = serde_json::to_value(AgentConfig::default()).unwrap();
         assert_eq!(json["permissions"]["mode"], "default");
+    }
+
+    /// ADR 039 D3、D4：旧配置没有 `autoCards`，读进来两个开关都是开；只写了一个的，另一个照默认。
+    #[test]
+    fn old_configs_get_auto_cards_and_popups_on() {
+        let old: AgentConfig =
+            serde_json::from_str(r#"{"inGame": true, "matchRecap": false}"#).unwrap();
+        assert!(old.auto_cards.enabled && old.auto_cards.popup);
+        let partial: AgentConfig =
+            serde_json::from_str(r#"{"autoCards": {"popup": false}}"#).unwrap();
+        assert!(partial.auto_cards.enabled && !partial.auto_cards.popup);
+        let json = serde_json::to_value(AgentConfig::default()).unwrap();
+        assert_eq!(json["autoCards"]["enabled"], true);
+        assert_eq!(json["autoCards"]["popup"], true);
     }
 }

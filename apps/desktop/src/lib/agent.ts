@@ -24,7 +24,24 @@ export type AgentMessage =
   | { role: "tool"; callId: string; name: string; content: string; isError: boolean; untrusted: boolean; atMs: number; display?: ToolDisplay }
   /** `compaction`：上下文压缩的检查点（摘要）；它之前的消息不再发给模型。 */
   /** `recap`：对局复盘的正文（`text` 是标题），只给玩家看。 */
-  | { role: "notice"; text: string; atMs: number; compaction?: string; usage?: TokenUsage; recap?: string };
+  /** `card`：自动卡片（ADR 039 D3），插件不叫她、自己发进聊天的卡片；只给界面。 */
+  | { role: "notice"; text: string; atMs: number; compaction?: string; usage?: TokenUsage; recap?: string; card?: AutoCardInfo };
+
+/**
+ * 自动卡片（ADR 039 D3，后端 `kotone_agent::auto_card`）：哪个插件发的、卡片名、去重键、消息提示那句；
+ * `ui` / `structuredContent` 和工具结果的 `display` 同一个形状（聊天里用同一个卡片组件）。
+ */
+export interface AutoCardInfo {
+  plugin: string;
+  pluginName: string;
+  key: string;
+  title: string;
+  popup?: string;
+  ui: ToolDisplay["ui"];
+  structuredContent?: unknown;
+}
+/** 自动卡片给她的那一两句（来源 `auto-card` 的用户消息）：界面不显示，显示的是前面那张卡片。 */
+export const AUTO_CARD_SOURCE = "auto-card";
 
 /**
  * 交给后台做的事（ADR 029 第三节）：主会话用 `agent.start` 派出去，玩家只看到主会话里的一张卡片。
@@ -77,6 +94,8 @@ export type Answer = "allow-once" | "allow-for-conversation" | "deny";
 export type PermissionMode = "default" | "allow-all" | "read-only";
 export type PermissionRule = "allow" | "ask" | "deny";
 export interface Permissions { mode: PermissionMode; rules: Record<string, PermissionRule> }
+  /** 自动卡片来了，但她正在这一轮里（ADR 039 D3）：卡片先显示，等这一轮结束再记进对话（那时再来一条 appended）。 */
+  | { kind: "autoCard"; message: AgentMessage }
 export interface AgentState {
   current: string | null;
   running: string | null;
@@ -300,6 +319,20 @@ export async function subscribeAsks(onAsk: (ask: AgentAsk) => void, onResolved: 
 
 /** 琴音请玩家粘贴某个服务商的 Key（connections.request_key）：Key 直接存进凭据库，不经过模型。 */
 export interface KeyRequest {
+/** 某段对话里压着、还没记进对话的自动卡片（她这一轮说完才记，ADR 039 D3）：重新读对话时照样显示。 */
+export async function agentHeldCards(id: string): Promise<AgentMessage[]> {
+  if (!isTauri) return [];
+  try {
+    return (await invoke<AgentMessage[] | null>("agent_held_cards", { id })) ?? [];
+  } catch {
+    return [];
+  }
+}
+/** 玩家点了消息提示（ADR 039 D4）：主窗口定位到那张自动卡片。 */
+export async function subscribeAutoCardFocus(callback: (focus: { conversationId: string; key: string }) => void): Promise<UnlistenFn> {
+  if (!isTauri) return () => {};
+  return listen<{ conversationId: string; key: string }>("kotone://auto-card-focus", (e) => callback(e.payload));
+}
   requestId: string; conversationId: string; provider: string; displayName: string;
   apiKeyUrl: string | null; connectionId: string; reason: string;
 }

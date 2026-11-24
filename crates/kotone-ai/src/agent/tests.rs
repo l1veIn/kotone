@@ -1128,6 +1128,7 @@ fn messages_round_trip_through_json() {
 }
 
 // ---------- rig-core 客户端（本机 wiremock） ----------
+            card: None,
 
 mod http {
     use super::*;
@@ -1666,6 +1667,7 @@ fn store_trims_long_conversations_at_a_user_boundary() {
         turn(&mut d, i);
     }
     store.save(&mut d).unwrap();
+        card: None,
     assert!(d.messages.len() <= HARD_MAX_MESSAGES);
     assert!(matches!(d.messages[0], Message::User { .. }));
     assert_paired(&d.messages);
@@ -2052,6 +2054,7 @@ fn a_second_compaction_starts_after_the_previous_checkpoint() {
             Message::User { text, .. } | Message::Assistant { text, .. } => text.chars().count(),
             _ => 0,
         })
+        card: None,
         .sum();
     assert!(kept * 4 <= after + 4, "{kept} / {after}");
     assert!(

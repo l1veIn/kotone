@@ -37,6 +37,9 @@ use crate::tools::{
 };
 use crate::LolPlugin;
 
+/// 自动卡片（ADR 039 D3）：进加载发“开局战绩”，结算发“这局总结”。
+mod auto_cards;
+
 /// 客户端开着时多久看一次阶段；没开时多久看一次进程。
 const POLL: Duration = Duration::from_secs(2);
 const IDLE_POLL: Duration = Duration::from_secs(5);
@@ -96,6 +99,8 @@ pub(crate) struct State {
     live_seen: Option<i64>,
     /// 上一轮玩家自己是不是阵亡了。
     was_dead: Option<bool>,
+    /// 自动卡片发过哪局的哪种（[`auto_cards`]）。
+    cards: auto_cards::CardState,
 }
 
 fn live_client() -> Result<&'static Live, String> {
@@ -255,6 +260,9 @@ impl LolPlugin {
             s.was_dead = None;
         }
         self.report_phase(host.as_ref(), &phase, live.as_ref().map(|(_, game)| game));
+        // 自动卡片（ADR 039 D3）：进加载查完战绩发“开局战绩”，结算发“这局总结”
+        let live_ready = live.as_ref().is_some_and(|(_, game)| game.time > 0.0);
+        self.auto_cards(host, &previous, &phase, live_ready);
         // 覆盖层：选英雄时的胜率、海斗三选一时的海克斯评分（ADR 038 第 3 步）
         self.update_overlays(host, &lcu, &phase, live.as_ref().map(|(_, game)| game))
             .await;

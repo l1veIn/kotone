@@ -321,5 +321,10 @@
   "chat_plugin_page_back": "Back",
   "chat_plugin_page_close": "Close page",
   "chat_plugin_page_missing": "This page can't open right now (the plugin is off, or there is no such page).",
-  "chat_plugin_card_open": "Open"
+  "chat_plugin_card_open": "Open",
+  "chat_auto_card_from": "{plugin} posted a card",
+  "chat_auto_card_label": "Auto card from {plugin}: {title}",
+  "chat_popup_label": "Message pop-up: {plugin} posted a card",
+  "chat_popup_open": "Open the chat at this card",
+  "chat_popup_close": "Close the message pop-up"
 }

@@ -1,13 +1,14 @@
 // 「琴音」聊天页的状态：对话列表、当前对话、流式输出、工具状态、权限询问。Kotone 自己的实现。
 // 当前对话由后端决定（游戏内语音与聊天窗口共用“当前对话”）；这里显示的总是 agent_state.current。
 import {
-  agentAnswer, agentConversation, agentDeleteConversation, agentNewConversation, agentSelectConversation,
-  agentSend, agentState, agentStop, subscribeAgent, subscribeAsks, subscribeKeyRequests,
+  agentAnswer, agentConversation, agentDeleteConversation, agentHeldCards, agentNewConversation, agentSelectConversation,
+  agentSend, agentState, agentStop, subscribeAgent, subscribeAsks, subscribeAutoCardFocus, subscribeKeyRequests,
   type AgentAsk, type KeyRequest, type AgentEvent, type AgentMessage, type AgentState, type Answer, type Conversation,
   type SubagentInfo,
 } from "../agent";
 import type { LiveState } from "./timeline";
 import { m } from "../paraglide/messages.js";
+import { openTarget } from "../stores/navigation";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -15,6 +16,11 @@ function errorText(error: unknown): string {
 
 function sameMessage(a: AgentMessage, b: AgentMessage): boolean {
   return a.role === b.role && a.atMs === b.atMs && JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** 自动卡片（ADR 039 D3）的标识：插件 + 去重键。不是自动卡片时 null。 */
+function cardId(message: AgentMessage): string | null {
+  return message.role === "notice" && message.card ? `${message.card.plugin}:${message.card.key}` : null;
 }
 
 export class AgentChat {
@@ -28,8 +34,16 @@ export class AgentChat {
   keyRequests = $state<KeyRequest[]>([]);
   loading = $state(true);
   loadError = $state("");
+  /** 玩家点了消息提示：要定位到的那张自动卡片（`n` 每次都变，同一张卡片也能再闪一次）。 */
+  focusCard = $state<{ id: string; n: number } | null>(null);
 
   #disposed = false;
+  /**
+   * 她这一轮里来的自动卡片（ADR 039 D3）：先显示在当前对话的最后面，这一轮结束后端才把它记进对话。
+   * 这一轮新来的消息插在它们前面（记进对话时卡片就在这一轮后面）。
+   */
+  #held = new Set<string>();
+  #focusCount = 0;
   #revision = 0;
   /** 读取对话期间到达的事件：读完后补上（去掉已经在存盘里的）。 */
   #buffer: { id: string; event: AgentEvent }[] | null = null;
@@ -48,6 +62,7 @@ export class AgentChat {
         (request) => { if (!this.#disposed && !this.keyRequests.some((r) => r.requestId === request.requestId)) this.keyRequests.push(request); },
         (requestId) => { this.keyRequests = this.keyRequests.filter((r) => r.requestId !== requestId); },
       ));
+      retain(await subscribeAutoCardFocus((focus) => void this.#focus(focus.conversationId, focus.key)));
     } catch (error) {
       this.loadError = m.chat_load_subscribe_failed({ error: errorText(error) });
     }
@@ -67,11 +82,15 @@ export class AgentChat {
     try {
       const state = await agentState();
       const conversation = state.current ? await agentConversation(state.current) : null;
+      const held = conversation ? await agentHeldCards(conversation.id) : [];
       if (this.#disposed || revision !== this.#revision) return;
       this.state = state;
       this.runningId = state.running;
       const switched = conversation?.id !== this.conversation?.id;
       this.conversation = conversation;
+      // 压着的自动卡片（还没记进对话）照样显示在最后
+      this.#held.clear();
+      for (const card of held) this.#showHeld(card);
       if (switched || !state.running) this.live = { text: "", thought: "", tools: {} };
       this.loadError = "";
       const buffered = this.#buffer ?? [];
@@ -141,11 +160,22 @@ export class AgentChat {
       case "appended": {
         const messages = this.conversation.messages;
         // 刚读出来的对话里可能已经有这条（后端先存盘再发事件）：同内容同时间的就是同一条。
-        if (messages.some((m) => sameMessage(m, event.message))) break;
-        messages.push(event.message);
+        // 压着的自动卡片记进对话了也是这样：它已经显示在最后面。
+        if (messages.some((m) => sameMessage(m, event.message))) {
+          const id = cardId(event.message);
+          if (id) this.#held.delete(id);
+          break;
+        }
+        // 这一轮新来的消息插在压着的自动卡片前面（这一轮结束后卡片才记进对话，排在这一轮后面）
+        let at = messages.length;
+        while (at > 0 && this.#isHeld(messages[at - 1])) at -= 1;
+        messages.splice(at, 0, event.message);
         if (event.message.role === "assistant") { this.live.text = ""; this.live.thought = ""; }
         break;
       }
+      case "autoCard":
+        this.#showHeld(event.message);
+        break;
       case "discarded":
         this.live.text = "";
         this.live.thought = "";
@@ -160,6 +190,27 @@ export class AgentChat {
         void this.refreshList();
         break;
     }
+  }
+
+  #isHeld(message: AgentMessage): boolean {
+    const id = cardId(message);
+    return id !== null && this.#held.has(id);
+  }
+
+  /** 她这一轮里来的自动卡片：先显示在最后面（已经在对话里的不重复放）。 */
+  #showHeld(message: AgentMessage) {
+    const id = cardId(message);
+    if (!id || !this.conversation || this.conversation.messages.some((m) => cardId(m) === id)) return;
+    this.#held.add(id);
+    this.conversation.messages.push(message);
+  }
+
+  /** 玩家点了消息提示（ADR 039 D4）：切到聊天页、那段对话，定位到那张卡片（卡片组件看 `focusCard` 滚过去、闪一下）。 */
+  async #focus(conversationId: string, key: string) {
+    if (this.#disposed) return;
+    openTarget({ page: "assistant", section: "chat" });
+    if (this.conversation?.id !== conversationId) await this.refresh();
+    this.focusCard = { id: key, n: ++this.#focusCount };
   }
 
   #upsertSubagent(info: SubagentInfo) {
