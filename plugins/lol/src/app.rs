@@ -4,13 +4,14 @@
 //!
 //! - 几个页面共用一个打包：[`resource`] 在 `<head>` 里插一行 `<meta name="kotone:page" content="<页面>">`，
 //!   App 启动时按它选页面。
-//! - 做成 App 的页面列在 [`APP_PAGES`]（先做强度榜）；别的还是宿主里的 Svelte 页面（`ui/`），之后一页页换过来。
+//! - 做成 App 的页面列在 [`APP_PAGES`]（强度榜、这局）；别的还是宿主里的 Svelte 页面（`ui/`），之后一页页换过来。
 //! - 图片不进安装包（ADR 039 D6）：页面在 Kotone 里先从回环代理的 `/assets/lol/<路径>` 取（路径照客户端的
 //!   资源接口写，例如 `lol-game-data/assets/v1/champion-icons/<英雄 id>.png`，由 [`crate::LolPlugin`] 的 `asset`
 //!   给），取不到、或者在别的宿主里，用 CommunityDragon（[`CDRAGON`]，写进资源的 CSP 声明）。
 
 use kotone_plugin_api::{Csp, Resource};
 
+use crate::pages::PAGE_MATCH;
 use crate::stats_tools::PAGE_TIER;
 
 include!(concat!(env!("OUT_DIR"), "/app_bundle.rs"));
@@ -20,7 +21,7 @@ include!(concat!(env!("OUT_DIR"), "/app_bundle.rs"));
 const PLACEHOLDER: &str = "<!doctype html>\n<html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"light dark\"><title>英雄联盟</title></head>\n<body style=\"font: 14px system-ui, sans-serif; padding: 16px\"><p>英雄联盟 App 还没构建：在仓库里跑 <code>pnpm -C apps/desktop build:apps</code>，再重新编译 Kotone。</p><p>The League of Legends app has not been built yet: run <code>pnpm -C apps/desktop build:apps</code> and rebuild Kotone.</p></body></html>\n";
 
 /// 做成 MCP App 的页面（清单 `pages` 里的地址）。
-pub const APP_PAGES: &[&str] = &[PAGE_TIER];
+pub const APP_PAGES: &[&str] = &[PAGE_TIER, PAGE_MATCH];
 
 /// CommunityDragon：客户端资源的公开镜像（英雄头像、图标），客户端没开或在别的宿主里时用。
 pub const CDRAGON: &str = "https://raw.communitydragon.org";
@@ -62,23 +63,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tier_is_an_app_and_passes_the_manifest_check() {
-        let r = resource(PAGE_TIER).expect("强度榜是 App");
-        crate::manifest().check_resource(&r).unwrap();
-        assert_eq!(r.ui.csp.resource_domains, [CDRAGON]);
-        assert_eq!(r.ui.prefers_border, Some(false));
-        assert!(
-            r.text
-                .contains("<meta name=\"kotone:page\" content=\"tier\">"),
-            "{}",
-            &r.text[..r.text.len().min(300)]
-        );
-        if !BUILT {
-            assert!(r.text.contains("build:apps"), "占位页说清楚怎么打包");
+    fn tier_and_match_are_apps_and_pass_the_manifest_check() {
+        for (uri, page) in [(PAGE_TIER, "tier"), (PAGE_MATCH, "match")] {
+            let r = resource(uri).expect("是 App");
+            crate::manifest().check_resource(&r).unwrap();
+            // 图：Kotone 里走回环代理（宿主自己加），别的宿主里直接用 CommunityDragon
+            assert_eq!(r.ui.csp.resource_domains, [CDRAGON]);
+            assert_eq!(r.ui.prefers_border, Some(false));
+            let marker = format!("<meta name=\"kotone:page\" content=\"{page}\">");
+            assert!(
+                r.text.contains(&marker),
+                "{}",
+                &r.text[..r.text.len().min(300)]
+            );
+            if !BUILT {
+                assert!(r.text.contains("build:apps"), "占位页说清楚怎么打包");
+            }
         }
         // 别的页面还是宿主里的 Svelte 页面；覆盖层不是资源
         for uri in [
-            crate::pages::PAGE_MATCH,
             crate::pages::PAGE_PLAYER,
             "ui://kotone/lol/champ-select",
             "ui://kotone/lol/nope",

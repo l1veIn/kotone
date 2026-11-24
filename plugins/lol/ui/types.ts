@@ -52,7 +52,8 @@ export interface MatchPlayer {
   rank: string | null;
   error: string | null;
   summary: Summary | null;
-  tags: string[];
+  /** 标签：`{kind, text}`（2026-11-25 起带种类，App 按种类上色）；旧数据是一句话。 */
+  tags: (string | { kind: string; text: string })[];
   recent: RecentGame[];
   /** 是突破口时的原因。 */
   weak: string[] | null;

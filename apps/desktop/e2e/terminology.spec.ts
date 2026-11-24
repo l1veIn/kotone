@@ -20,9 +20,10 @@ const pluginIds = readdirSync(pluginsDir).filter((id) => statSync(join(pluginsDi
 const pluginCatalogs = pluginIds
   .filter((id) => { try { return statSync(join(pluginsDir, id, "messages", "zh-CN.json")).isFile(); } catch { return false; } })
   .map((id) => ({ id, zh: join(pluginsDir, id, "messages", "zh-CN.json"), en: join(pluginsDir, id, "messages", "en.json") }));
-const pluginUiFiles = () => pluginIds.flatMap((id) => {
-  try { return walk(join(pluginsDir, id, "ui"), [".svelte", ".ts"]); } catch { return []; }
-});
+/** 插件在宿主里的页面（ui/），和插件自己的 MCP App（app/src/，ADR 039 D5；文案也用 `m.<键>(…)` 取）。 */
+const pluginUiFiles = () => pluginIds.flatMap((id) => ["ui", join("app", "src")].flatMap((dir) => {
+  try { return walk(join(pluginsDir, id, dir), [".svelte", ".ts"]); } catch { return []; }
+}));
 /** 插件的名字、说明、数据开关的名字 / 说明 / 风险提示由宿主按约定的键取（lib/plugins.ts 的 pluginText），代码里不直接写 m.xxx。 */
 const pluginConventionKey = /^plugin_[a-z0-9_]+?_(name|description|source_[a-z0-9_]+_(name|desc|risk))$/;
 

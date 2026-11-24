@@ -1,14 +1,33 @@
 <script lang="ts">
-  // 强度榜（`ui://kotone/lol/tier`，`lol.tier` 的页面）：峡谷按分路（强度、胜率、选用率、禁用率、克制它的），
-  // 海斗是一张英雄榜；每行有英雄头像。数据来源写在最下面。
-  // 样子先朴素：之后照 docs/design/lol-app.md 整个重做。
+  // 强度榜（`ui://kotone/lol/tier`，`lol.tier` 的页面；docs/design/lol-app.md 第三节 5）。
+  // 全屏：模式（峡谷 | 海斗）+ 分路，一行 44 px：名次 · 级别 · 英雄 · 胜率 · 选取 · 禁用 · 被谁克制；海斗是名次 · 变化 · 英雄 · 胜率 · 选取。
+  // 级别小牌用墨的深浅（T0 墨底反白、T1 墨框墨字、T2 以下次要字色），不用彩色。
+  // 卡片（inline）：前 10 名，一行 28 px。
   import { onMount } from "svelte";
-  import ChampionIcon from "../ChampionIcon.svelte";
-  import { resultText, TOOL_TIER, type Session, type ToolResult } from "../host";
-  import { t } from "../i18n.svelte";
-  import { isTierData, rate, sourcesLine, type TierData } from "../types";
+  import ChampIcon from "../components/ChampIcon.svelte";
+  import Footer from "../components/Footer.svelte";
+  import Icon from "../components/Icon.svelte";
+  import LaneIcon from "../components/LaneIcon.svelte";
+  import TopBar, { type PageId } from "../components/TopBar.svelte";
+  import { laneName, rate } from "../format";
+  import { resultStatus, TOOL_TIER, type DisplayMode, type Session, type ToolResult } from "../host";
+  import { m } from "../i18n.svelte";
+  import { isTierData, type Source, type TierData } from "../types";
 
-  let { session }: { session: Session } = $props();
+  const PAGE_CHAMPION = "ui://kotone/lol/champion";
+
+  let {
+    session,
+    initial,
+    display,
+    onTab,
+  }: {
+    session: Session;
+    initial: Promise<ToolResult | null> | null;
+    display: DisplayMode;
+    onTab: (page: PageId) => void;
+  } = $props();
+
   let tier = $state<TierData | null>(null);
   let lane = $state("");
   let status = $state("");
@@ -20,7 +39,7 @@
       tier = result.structuredContent;
       status = "";
     } else {
-      status = resultText(result);
+      status = resultStatus(result).text;
     }
   }
 
@@ -38,7 +57,8 @@
 
   onMount(() => {
     session.onResult(show);
-    void session.initial.then((result) => {
+    const start = initial ?? Promise.resolve(null);
+    void start.then((result) => {
       if (result) {
         show(result);
         loading = false;
@@ -48,192 +68,274 @@
     });
   });
 
+  const full = $derived(display !== "inline");
   const lanes = $derived(tier?.mode === "rift" ? tier.laneNames : []);
   const shownLane = $derived(lanes.some((l) => l.id === lane) ? lane : (lanes[0]?.id ?? ""));
   const riftRows = $derived(tier?.mode === "rift" ? (tier.lanes[shownLane] ?? []) : []);
+
+  /** “数据：腾讯 101（20261124）”。 */
+  function sourcesLine(sources: Source[]): string {
+    return sources
+      .map((s) => {
+        const extra = [s.license ?? "", s.date ? s.date.slice(0, 10) : ""].filter(Boolean).join(" · ");
+        return extra ? m.plugin_lol_source_with({ name: s.name, extra }) : s.name;
+      })
+      .join(" · ");
+  }
+  const tierTone = (t: string) => (t === "T0" ? "t0" : t === "T1" ? "t1" : "");
+
+  /** 点一行进英雄页（同一种模式、同一路）；英雄页还是宿主里的页面，经 `ui://` 链接打开。 */
+  function openChampion(name: string) {
+    if (!tier) return;
+    const args: Record<string, string> = { champion: name, mode: tier.mode };
+    if (tier.mode === "rift" && shownLane) args.lane = shownLane;
+    session.openPage(PAGE_CHAMPION, args);
+  }
+  function key(event: KeyboardEvent, name: string) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openChampion(name);
+    }
+  }
 </script>
 
-<main class="page" data-testid="lol-app-tier" data-mode={tier?.mode ?? ""}>
-  <header class="bar">
-    <h1>{t("plugin_lol_page_tier")}</h1>
-    <div class="modes" role="group" aria-label={t("plugin_lol_mode")}>
-      {#each [["rift", t("plugin_lol_mode_rift")], ["mayhem", t("plugin_lol_mode_mayhem")]] as [mode, label] (mode)}
-        <button type="button" aria-pressed={tier?.mode === mode} data-testid={`lol-app-mode-${mode}`} onclick={() => void load({ mode })}>{label}</button>
-      {/each}
-    </div>
-    <button type="button" class="refresh" disabled={loading} data-testid="lol-app-refresh" onclick={() => void load({ mode: tier?.mode ?? "rift" })}>
-      {loading ? t("plugin_lol_loading") : t("plugin_lol_refresh")}
-    </button>
-  </header>
+{#snippet tierBadge(t: string)}<span class="tier {tierTone(t)}" data-tier={t}>{t}</span>{/snippet}
 
-  {#if error}<p class="note error" role="alert">{t("plugin_lol_failed", { error })}</p>{/if}
-  {#if status}<p class="note" data-testid="lol-app-status">{status}</p>{/if}
-
-  {#if tier?.mode === "rift"}
-    <div class="lanes" role="tablist" aria-label={t("plugin_lol_lane")}>
-      {#each lanes as l (l.id)}
-        <button type="button" role="tab" aria-selected={shownLane === l.id} onclick={() => (lane = l.id)}>{l.name}</button>
-      {/each}
-    </div>
-    <ol class="rows" data-testid="lol-app-rows" data-lane={shownLane}>
-      {#each riftRows as row (row.champion.id)}
-        <li class="row">
-          <span class="rank">{row.rank ?? ""}</span>
-          <ChampionIcon id={row.champion.id} label={row.champion.short} />
-          <span class="tier" data-tier={row.tier}>{row.tier}</span>
-          <span class="name">{row.champion.short}</span>
-          <span class="stats">{t("plugin_lol_tier_stats", { win: rate(row.winRate), pick: rate(row.pickRate), ban: rate(row.banRate) })}</span>
-          {#if row.counters.length}
-            <span class="counters">{t("plugin_lol_tier_counters", { names: row.counters.map((c) => c.short).join(" · ") })}</span>
-          {/if}
-        </li>
-      {/each}
-    </ol>
-  {:else if tier?.mode === "mayhem"}
-    <ol class="rows" data-testid="lol-app-rows" data-lane="mayhem">
-      {#each tier.rows as row (row.champion.id)}
-        <li class="row">
-          <span class="rank">{row.rank ?? ""}</span>
-          <ChampionIcon id={row.champion.id} label={row.champion.short} />
-          <span class="name">{row.champion.short}</span>
-          {#if row.rankChange}<span class="change" class:up={row.rankChange > 0}>{row.rankChange > 0 ? `↑${row.rankChange}` : `↓${-row.rankChange}`}</span>{/if}
-          <span class="stats">{t("plugin_lol_win_pick", { win: rate(row.winRate), pick: rate(row.pickRate) })}</span>
-        </li>
-      {/each}
-    </ol>
-  {:else if loading}
-    <p class="note">{t("plugin_lol_loading")}</p>
+<div class="app" data-testid="lol-app-tier" data-mode={tier?.mode ?? ""}>
+  {#if full}
+    <TopBar current="tier" {onTab} onRefresh={() => void load({ mode: tier?.mode ?? "rift" })} {loading} />
   {/if}
+  <main class={full ? "page" : "card"}>
+    {#if full}
+      <div class="tools">
+        <span class="seg" role="group" aria-label={m.plugin_lol_mode()}>
+          {#each [["rift", m.plugin_lol_mode_rift()], ["mayhem", m.plugin_lol_mode_mayhem()]] as [mode, label] (mode)}
+            <button type="button" aria-pressed={tier?.mode === mode} data-testid="lol-app-mode-{mode}" onclick={() => void load({ mode })}>{label}</button>
+          {/each}
+        </span>
+        {#if tier?.mode === "rift"}
+          <span class="lanes" role="tablist" aria-label={m.plugin_lol_lane()}>
+            {#each lanes as l (l.id)}
+              <button type="button" role="tab" class="lane" aria-selected={shownLane === l.id} onclick={() => (lane = l.id)}>
+                <LaneIcon lane={l.id} />{laneName(l.id) || l.name}
+              </button>
+            {/each}
+          </span>
+        {/if}
+      </div>
+    {:else}
+      <div class="card-head">
+        <span class="t">{m.plugin_lol_page_tier()}</span>
+        <span class="sub">{tier?.mode === "mayhem" ? m.plugin_lol_mode_mayhem() : [m.plugin_lol_mode_rift(), laneName(shownLane)].filter(Boolean).join(" · ")}</span>
+        {#if session.context?.availableDisplayModes?.includes("fullscreen")}
+          <button type="button" class="btn icon" title={m.plugin_lol_open_full()} aria-label={m.plugin_lol_open_full()} onclick={() => void session.requestDisplayMode("fullscreen")}>
+            <Icon name="open" />
+          </button>
+        {/if}
+      </div>
+    {/if}
 
-  {#if tier}
-    <footer class="sources" data-testid="lol-app-sources">{t("plugin_lol_sources", { sources: sourcesLine(tier.sources) })}</footer>
-  {/if}
-</main>
+    {#if error}<p class="banner danger" role="alert"><Icon name="alert" />{m.plugin_lol_failed({ error })}</p>{/if}
+    {#if status}<p class="banner" data-testid="lol-app-status"><Icon name="info" />{status}</p>{/if}
+
+    {#if tier?.mode === "rift"}
+      <div class="table rift" data-testid="lol-app-rows" data-lane={shownLane}>
+        <div class="row head">
+          <span class="c-rank">#</span><span>{m.plugin_lol_col_tier()}</span><span>{m.plugin_lol_col_champion()}</span>
+          <span class="r">{m.plugin_lol_col_win()}</span><span class="r">{m.plugin_lol_col_pick()}</span>
+          {#if full}<span class="r wide">{m.plugin_lol_col_ban()}</span><span class="wide">{m.plugin_lol_col_counters()}</span>{/if}
+        </div>
+        {#each full ? riftRows : riftRows.slice(0, 10) as row (row.champion.id)}
+          <div class="row link" role="link" tabindex="0" data-testid="lol-app-tier-row" title={row.champion.label}
+            onclick={() => openChampion(row.champion.short)} onkeydown={(e) => key(e, row.champion.short)}>
+            <span class="c-rank num">{row.rank ?? ""}</span>
+            {@render tierBadge(row.tier)}
+            <span class="champ"><ChampIcon id={row.champion.id} icon={row.champion.icon} name={row.champion.short} size={full ? 32 : 24} /><b>{row.champion.short}</b></span>
+            <span class="r num">{rate(row.winRate)}</span>
+            <span class="r num">{rate(row.pickRate)}</span>
+            {#if full}
+              <span class="r num wide">{rate(row.banRate)}</span>
+              <span class="counters wide" title={m.plugin_lol_tier_counters({ names: row.counters.map((c) => c.short).join(" · ") })}>
+                {#each row.counters as c (c.id)}<ChampIcon id={c.id} icon={c.icon} name={c.short} size={20} />{/each}
+              </span>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    {:else if tier?.mode === "mayhem"}
+      <div class="table mayhem" data-testid="lol-app-rows" data-lane="mayhem">
+        <div class="row head">
+          <span class="c-rank">#</span><span>{m.plugin_lol_col_change()}</span><span>{m.plugin_lol_col_champion()}</span>
+          <span class="r">{m.plugin_lol_col_win()}</span><span class="r">{m.plugin_lol_col_pick()}</span>
+        </div>
+        {#each full ? tier.rows : tier.rows.slice(0, 10) as row (row.champion.id)}
+          <div class="row link" role="link" tabindex="0" data-testid="lol-app-tier-row" title={row.champion.label}
+            onclick={() => openChampion(row.champion.short)} onkeydown={(e) => key(e, row.champion.short)}>
+            <span class="c-rank num">{row.rank ?? ""}</span>
+            <span class="change num">
+              {#if row.rankChange && row.rankChange > 0}<span class="good">↑{row.rankChange}</span>{:else if row.rankChange && row.rankChange < 0}<span class="bad">↓{-row.rankChange}</span>{/if}
+            </span>
+            <span class="champ"><ChampIcon id={row.champion.id} icon={row.champion.icon} name={row.champion.short} size={full ? 32 : 24} /><b>{row.champion.short}</b></span>
+            <span class="r num">{rate(row.winRate)}</span>
+            <span class="r num">{rate(row.pickRate)}</span>
+          </div>
+        {/each}
+      </div>
+    {:else if loading}
+      <div class="table" aria-busy="true" aria-label={m.plugin_lol_loading()}>
+        {#each [0, 1, 2, 3, 4, 5] as i (i)}<div class="row"><span class="skel" style:width="16px"></span><span class="ci s32"></span><span class="skel" style:width="{90 + i * 9}px"></span></div>{/each}
+      </div>
+    {/if}
+
+    {#if tier}
+      {#if full}
+        <span data-testid="lol-app-sources"><Footer data={m.plugin_lol_sources({ sources: sourcesLine(tier.sources) })} onLink={session.openLink} /></span>
+      {:else}
+        <div class="card-foot" data-testid="lol-app-sources">{m.plugin_lol_sources({ sources: sourcesLine(tier.sources) })}</div>
+      {/if}
+    {/if}
+  </main>
+</div>
 
 <style>
-  .page {
-    display: grid;
-    gap: 10px;
-    padding: 12px;
-  }
-  .bar {
+  .tools {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
+    gap: 8px 16px;
+    margin-bottom: var(--lol-sp-5);
   }
-  h1 {
-    flex: 1;
-    margin: 0;
-    font-size: 15px;
-    font-weight: 600;
-  }
-  button {
-    font: inherit;
-    font-size: 12px;
-    color: inherit;
-    background: transparent;
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: 3px 9px;
-    cursor: pointer;
-  }
-  button:hover:not(:disabled) {
-    background: var(--surface-2);
-  }
-  button:disabled {
-    opacity: 0.6;
-    cursor: default;
-  }
-  .modes,
   .lanes {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
   }
-  .modes button[aria-pressed="true"],
-  .lanes button[aria-selected="true"] {
-    background: var(--accent-soft);
-    border-color: var(--accent);
-    color: var(--accent);
-    font-weight: 600;
-  }
-  .rows {
-    display: grid;
+  .lane {
+    display: inline-flex;
+    align-items: center;
     gap: 4px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
+    height: 26px;
+    padding: 0 8px;
+    border: 1px solid transparent;
+    border-radius: var(--lol-r-md);
+    background: none;
+    cursor: pointer;
+    font-size: var(--lol-fs-xs);
+    color: var(--lol-text-2);
+  }
+  .lane:hover {
+    color: var(--lol-text);
+  }
+  .lane[aria-selected="true"] {
+    border-color: var(--lol-text);
+    color: var(--lol-text);
+    font-weight: var(--lol-fw-medium);
+  }
+  .table {
+    overflow: hidden;
+    border: 1px solid var(--lol-line);
+    border-radius: var(--lol-r-lg);
+  }
+  .card .table {
+    border: 0;
+    border-radius: 0;
   }
   .row {
+    display: grid;
+    align-items: center;
+    column-gap: 10px;
+    min-height: var(--lol-row-list);
+    padding: 0 12px;
+  }
+  .rift .row {
+    grid-template-columns: 2em 2.6em minmax(8em, 1fr) 4.6em 4.6em 4.6em 6.5em;
+  }
+  .mayhem .row {
+    grid-template-columns: 2em 2.6em minmax(8em, 1fr) 4.6em 4.6em;
+  }
+  .card .rift .row {
+    grid-template-columns: 1.6em 2.4em minmax(0, 1fr) 4.4em 4.4em;
+  }
+  .card .row {
+    min-height: var(--lol-row-card);
+  }
+  .table:not(.rift):not(.mayhem) .row {
     display: flex;
-    flex-wrap: wrap;
+  }
+  .row + .row {
+    border-top: 1px solid var(--lol-line);
+  }
+  .row.link {
+    cursor: pointer;
+  }
+  .row.link:hover {
+    background: var(--lol-hover);
+  }
+  .row.head {
+    min-height: 30px;
+    background: var(--lol-bg-2);
+    font-size: var(--lol-fs-xs);
+    color: var(--lol-text-3);
+  }
+  .card .row.head {
+    min-height: 24px;
+    background: transparent;
+  }
+  .r {
+    text-align: right;
+  }
+  .c-rank {
+    font-size: var(--lol-fs-xs);
+    color: var(--lol-text-3);
+    text-align: right;
+  }
+  .champ {
+    display: flex;
     align-items: center;
     gap: 8px;
-    padding: 5px 8px;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    background: var(--surface);
+    min-width: 0;
   }
-  .rank {
-    width: 20px;
-    text-align: right;
-    font-size: 11px;
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
+  .champ b {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--lol-fs-md);
+    font-weight: var(--lol-fw-strong);
+  }
+  .card .champ b {
+    font-size: var(--lol-fs-sm);
   }
   .tier {
+    justify-self: start;
     padding: 0 5px;
-    border-radius: 4px;
-    font-size: 11px;
-    font-weight: 700;
-    background: var(--surface-2);
-    color: var(--muted);
+    border: 1px solid transparent;
+    border-radius: var(--lol-r-xs);
+    font-size: var(--lol-fs-xs);
+    line-height: 16px;
+    font-weight: var(--lol-fw-strong);
+    color: var(--lol-text-3);
   }
-  .tier[data-tier="T0"] {
-    background: var(--hot-soft);
-    color: var(--hot);
+  .tier.t0 {
+    background: var(--lol-ink-fill);
+    color: var(--lol-ink-on);
   }
-  .tier[data-tier="T1"] {
-    background: var(--accent-soft);
-    color: var(--accent);
-  }
-  .name {
-    flex: 1;
-    min-width: 4em;
-    font-weight: 600;
-    font-size: 13px;
-  }
-  .stats {
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
+  .tier.t1 {
+    border-color: var(--lol-text);
+    color: var(--lol-text);
   }
   .counters {
-    flex-basis: 100%;
-    padding-left: 64px;
-    font-size: 11px;
-    color: var(--muted);
+    display: flex;
+    gap: 2px;
   }
   .change {
-    font-size: 11px;
-    color: var(--hot);
+    font-size: var(--lol-fs-xs);
   }
-  .change.up {
-    color: var(--good);
-  }
-  .note {
-    margin: 0;
-    padding: 8px 10px;
-    border-radius: 8px;
-    background: var(--surface-2);
-    font-size: 12px;
-  }
-  .note.error {
-    color: var(--hot);
-  }
-  .sources {
-    padding-top: 8px;
-    border-top: 1px solid var(--line);
-    font-size: 11px;
-    color: var(--muted);
+  @container (max-width: 519px) {
+    .wide {
+      display: none;
+    }
+    .rift .row {
+      grid-template-columns: 1.6em 2.4em minmax(0, 1fr) 4.4em 4.4em;
+    }
   }
 </style>

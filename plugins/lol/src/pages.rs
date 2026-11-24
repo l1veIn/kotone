@@ -186,7 +186,81 @@ pub fn game_json(g: &GameRecord, data: Option<&GameData>) -> Value {
     })
 }
 
-/// 这局（`lol.scout`）：两边各 5 个人、开黑、突破口。`puuids` 和 `players` 一一对应。
+/// 这局的阶段（游戏中心的阶段，ADR 036；docs/design/lol-app.md 第二节 1 的 `phase`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchPhase {
+    ChampSelect,
+    Loading,
+    InGame,
+    PostMatch,
+}
+
+impl MatchPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ChampSelect => "champ_select",
+            Self::Loading => "loading",
+            Self::InGame => "in_game",
+            Self::PostMatch => "post_match",
+        }
+    }
+}
+
+/// 选人时一个人选好了没有（`pick`）：锁了 / 预选 / 还没选。别的阶段都是锁了。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Pick {
+    #[default]
+    Locked,
+    Intent,
+    None,
+}
+
+impl Pick {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Locked => "locked",
+            Self::Intent => "intent",
+            Self::None => "none",
+        }
+    }
+}
+
+/// 结算后这局的结果（`result`，调研 G29）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MatchResult {
+    pub win: bool,
+    pub duration_s: i64,
+    pub game_id: i64,
+}
+
+/// 这局现在在哪个阶段、只有那个阶段才有的东西（“这局”页面的四种状态，docs/design/lol-app.md 第三节 1）。
+/// 阶段由后台（[`crate::watcher`]）知道；[`match_page`] 不带这些（阶段是 null，页面显示“在对局里”）。
+#[derive(Debug, Clone, Default)]
+pub struct MatchStage {
+    pub phase: Option<MatchPhase>,
+    /// 进这个阶段的时间（Unix 毫秒），页面算“进加载 N 秒”。
+    pub since_ms: Option<i64>,
+    /// 排位选人时名字被隐藏（调研 G1）。
+    pub names_hidden: bool,
+    /// 备选席的英雄 id（大乱斗、海斗选人）。
+    pub bench: Vec<i64>,
+    /// 选人时每个人选好了没有，和 `players` 一一对应；短了的算锁了。
+    pub picks: Vec<Pick>,
+    /// 结算后这局的结果；还没拿到是 None。
+    pub result: Option<MatchResult>,
+    /// 结算后还在等结果（最多 60 秒）。
+    pub result_pending: bool,
+}
+
+/// 标签带种类（页面按种类上色）：`{kind, text}`，`text` 和给她的字里那句一样。
+fn tags_json(s: &Summary, random_pick: bool) -> Vec<Value> {
+    scout::tagged(s, random_pick)
+        .into_iter()
+        .map(|(kind, text)| json!({"kind": kind, "text": text}))
+        .collect()
+}
+
+/// 这局（`lol.scout`）：两边各 5 个人、开黑、突破口。`puuids` 和 `players` 一一对应。不带阶段（见 [`match_page_in`]）。
 pub fn match_page(
     players: &[ScoutPlayer],
     puuids: &[String],
@@ -195,6 +269,30 @@ pub fn match_page(
     mode: &str,
     random_pick: bool,
     data: Option<&GameData>,
+) -> Value {
+    match_page_in(
+        players,
+        puuids,
+        game_id,
+        queue_id,
+        mode,
+        random_pick,
+        data,
+        &MatchStage::default(),
+    )
+}
+
+/// 同 [`match_page`]，再写上阶段和那个阶段才有的东西（选人的预选、备选席，结算的结果）。
+#[allow(clippy::too_many_arguments)]
+pub fn match_page_in(
+    players: &[ScoutPlayer],
+    puuids: &[String],
+    game_id: i64,
+    queue_id: i64,
+    mode: &str,
+    random_pick: bool,
+    data: Option<&GameData>,
+    stage: &MatchStage,
 ) -> Value {
     let summaries: Vec<Option<Summary>> = players
         .iter()
@@ -236,7 +334,7 @@ pub fn match_page(
             "rank": h.and_then(|h| h.rank.clone()),
             "error": h.and_then(|h| h.error.clone()),
             "summary": s.map(summary_json),
-            "tags": s.map(|s| scout::tags(s, random_pick)).unwrap_or_default(),
+            "tags": s.map(|s| tags_json(s, random_pick)).unwrap_or_default(),
             "recent": h.map(|h| h.games.iter().take(RECENT).map(|g| json!({
                 "gameId": g.game_id,
                 "win": g.win,
@@ -247,6 +345,7 @@ pub fn match_page(
                 "assists": g.assists,
             })).collect::<Vec<_>>()).unwrap_or_default(),
             "weak": spot.map(|w| json!(w.reasons)),
+            "pick": stage.picks.get(i).copied().unwrap_or_default().as_str(),
         })
     };
     let team = |ally: bool| -> Vec<Value> {
@@ -263,6 +362,12 @@ pub fn match_page(
         "allies": team(true),
         "enemies": team(false),
         "waiting": players.iter().filter(|p| p.history.is_none()).count(),
+        "phase": stage.phase.map(MatchPhase::as_str),
+        "phaseSince": stage.since_ms,
+        "namesHidden": stage.names_hidden,
+        "bench": stage.bench.iter().map(|id| champion(data, *id)).collect::<Vec<_>>(),
+        "result": stage.result.map(|r| json!({"win": r.win, "durationS": r.duration_s, "gameId": r.game_id})),
+        "resultPending": stage.result_pending,
     })
 }
 
@@ -548,6 +653,116 @@ mod tests {
             .is_some_and(|r| !r.is_empty()));
         assert_eq!(v["enemies"][4]["pending"], true);
         assert_eq!(v["enemies"][0]["recent"].as_array().unwrap().len(), 10);
+        // 标签带种类，字和给她的一样；没带阶段时阶段是 null、都算锁了
+        assert_eq!(
+            v["enemies"][0]["tags"],
+            json!([{"kind": "loss_streak", "text": "10 连败"}])
+        );
+        assert_eq!(v["phase"], Value::Null);
+        assert_eq!(v["result"], Value::Null);
+        assert_eq!(v["bench"], json!([]));
+        assert_eq!(v["allies"][1]["pick"], "locked");
+
+        // 选人：预选、还没选、备选席、名字被隐藏
+        let mut picks = vec![Pick::Locked; 10];
+        picks[1] = Pick::Intent;
+        picks[2] = Pick::None;
+        let stage = MatchStage {
+            phase: Some(MatchPhase::ChampSelect),
+            since_ms: Some(1_700_000_000_000),
+            names_hidden: true,
+            bench: vec![157],
+            picks,
+            ..MatchStage::default()
+        };
+        let v = match_page_in(
+            &players,
+            &puuids,
+            77,
+            420,
+            "单双排",
+            false,
+            Some(&data),
+            &stage,
+        );
+        assert_eq!(v["phase"], "champ_select");
+        assert_eq!(v["phaseSince"], 1_700_000_000_000_i64);
+        assert_eq!(v["namesHidden"], true);
+        assert_eq!(v["bench"][0]["short"], "亚索");
+        assert_eq!(
+            v["bench"][0]["icon"],
+            "/lol-game-data/assets/v1/champion-icons/157.png"
+        );
+        assert_eq!(
+            [
+                &v["allies"][0]["pick"],
+                &v["allies"][1]["pick"],
+                &v["allies"][2]["pick"]
+            ],
+            [&json!("locked"), &json!("intent"), &json!("none")]
+        );
+        assert_eq!(v["resultPending"], false);
+
+        // 结算：结果
+        let stage = MatchStage {
+            phase: Some(MatchPhase::PostMatch),
+            result: Some(MatchResult {
+                win: true,
+                duration_s: 1112,
+                game_id: 77,
+            }),
+            ..MatchStage::default()
+        };
+        let v = match_page_in(
+            &players,
+            &puuids,
+            77,
+            2400,
+            "海克斯大乱斗",
+            true,
+            Some(&data),
+            &stage,
+        );
+        assert_eq!(v["phase"], "post_match");
+        assert_eq!(
+            v["result"],
+            json!({"win": true, "durationS": 1112, "gameId": 77})
+        );
+    }
+
+    /// 标签的种类和给她的那句话是同一份（`scout::tags` 就是 `tagged` 去掉种类）。
+    #[test]
+    fn tags_carry_kinds_and_the_same_words() {
+        let mut s = Summary {
+            games: 20,
+            wins: 12,
+            streak: 4,
+            champ_games: 6,
+            champ_wins: 4,
+            ..Summary::default()
+        };
+        let kinds = |s: &Summary, random: bool| -> Vec<String> {
+            tags_json(s, random)
+                .iter()
+                .map(|t| t["kind"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(kinds(&s, false), ["win_streak", "main"]);
+        assert_eq!(kinds(&s, true), ["win_streak"]);
+        s.streak = -3;
+        s.champ_games = 0;
+        assert_eq!(kinds(&s, false), ["loss_streak", "first_time"]);
+        let texts: Vec<Value> = tags_json(&s, false)
+            .iter()
+            .map(|t| t["text"].clone())
+            .collect();
+        assert_eq!(
+            texts,
+            scout::tags(&s, false)
+                .iter()
+                .map(|t| json!(t))
+                .collect::<Vec<_>>()
+        );
     }
 
     /// 给琴音的文字：同一份录到的样子（带页面才用的字段）→ 一字不差的那几行（2026-11-25 加页面字段前录的）。

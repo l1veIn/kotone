@@ -73,7 +73,7 @@
               <span class="h-2.5 w-1.5 rounded-[2px] {g.win ? 'bg-success/80' : 'bg-destructive/70'}" title={`${g.win ? m.plugin_lol_win() : m.plugin_lol_loss()} ${kda(g.kills, g.deaths, g.assists)}`}></span>
             {/each}
           </span>
-          {#each p.tags as tag (tag)}<span class="rounded bg-muted px-1.5 text-[10px] leading-4 text-muted-foreground">{tag}</span>{/each}
+          {#each p.tags as tag, i (i)}<span class="rounded bg-muted px-1.5 text-[10px] leading-4 text-muted-foreground">{typeof tag === "string" ? tag : tag.text}</span>{/each}
         </div>
       {:else}
         <p class="m-0 mt-1 text-xs text-muted-foreground">{m.plugin_lol_no_history()}{#if p.error} · {p.error}{/if}</p>

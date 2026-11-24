@@ -88,20 +88,28 @@ pub fn main_champion(s: &Summary) -> bool {
 
 /// 标签（给每个人那一行用）。`random_pick` = 这局是随机英雄的模式。
 pub fn tags(s: &Summary, random_pick: bool) -> Vec<String> {
+    tagged(s, random_pick)
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect()
+}
+
+/// 同 [`tags`]，每条带种类（页面按种类上色）：`win_streak` / `loss_streak` / `first_time` / `main`。
+pub fn tagged(s: &Summary, random_pick: bool) -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
     if s.streak >= 3 {
-        out.push(format!("{} 连胜", s.streak));
+        out.push(("win_streak", format!("{} 连胜", s.streak)));
     } else if s.streak <= -3 {
-        out.push(format!("{} 连败", -s.streak));
+        out.push(("loss_streak", format!("{} 连败", -s.streak)));
     }
     if random_pick {
         // 英雄是随机的，玩没玩过不说明什么
     } else if first_time(s) {
-        out.push("这个英雄最近没玩过".into());
+        out.push(("first_time", "这个英雄最近没玩过".into()));
     } else if main_champion(s) {
-        out.push(format!(
-            "常玩这个英雄（{} 局 {} 胜）",
-            s.champ_games, s.champ_wins
+        out.push((
+            "main",
+            format!("常玩这个英雄（{} 局 {} 胜）", s.champ_games, s.champ_wins),
         ));
     }
     out

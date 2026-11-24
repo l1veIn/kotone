@@ -283,6 +283,7 @@
 ### 0. 约定
 
 - 页面数据就是工具结果的 `structuredContent`（原则 10：给琴音的文字一个字不改，`lol_tools_real.py` 照过）。下面“现有”是 `plugins/lol/src/pages.rs`、`stats_tools.rs` 现在就有的；“**新**”是调研 G0.1 要补的（数据都已经拿到，只是没放进页面数据）。字段名是建议，实现时改了名字就同时改这份文档。
+- **实现时的名字（2026-11-25）**：素材层先补的字段照它的名字用，没改名（[插件重构计划](../plugin-refactor.md)第九节“素材层和页面数据”）：符文是 `perks: {keystone, primaryStyle, subStyle}`；段位是 `ranked.solo / flex: {queue, tier, division, lp, wins, losses, highestTier, label, crest}`；装备只列有东西的格子，每件带 `slot`（0–6，6 是饰品），页面按 `slot` 排成 6 + 1 格；海克斯的 `rarity` 是客户端的写法 `kSilver / kGold / kPrismatic`（页面两种写法都认）；召唤师头像多一个 `profileIcon`（路径）；战绩每局的英雄等级叫 `level`。“这局”的 `phase`、`phaseSince`、`namesHidden`、`bench`、`result`、`resultPending`、每人的 `pick` 和带种类的 `tags` 照本文的名字加在 `pages.rs`（`match_page_in` + `MatchStage`）；阶段由后台写，没写时 `phase` 是 null，页面显示“在对局里”。
 - 新的共用类型：
 
 ```ts

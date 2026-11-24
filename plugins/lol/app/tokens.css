@@ -1,0 +1,158 @@
+/*
+ * 英雄联盟 App 的设计变量：风格“记分纸”（docs/design/lol-app.md 第一节）。
+ * 原样拷进 plugins/lol/app/ 当 tokens.css 用，页面里只用 --lol-* 这些名字。
+ *
+ * 主题怎么切：
+ *   - 页面连上宿主后调 ext-apps 的 applyDocumentTheme(hostContext.theme)：它在 <html> 上写 data-theme 和 color-scheme；
+ *   - 下面的颜色都用 light-dark()，跟着 color-scheme 走；
+ *   - 宿主没给主题时，color-scheme 是 "light dark"，跟着系统（prefers-color-scheme）。
+ *
+ * 和宿主怎么配合（MCP Apps 2026-01-26 “Theming”）：
+ *   - 底色、字色、线色先用宿主给的标准变量（--color-background-* / --color-text-* / --color-border-*），
+ *     没给才用这里的值：放在 Kotone 里像 Kotone，放在 Claude 里像 Claude；
+ *   - 表达意思的颜色（我方 / 对面、胜负、稀有度、开黑）、字号、间距、圆角是 App 自己的，不跟宿主；
+ *   - 宿主给的字体只换西文字体，中文接在后面（Windows 的微软雅黑）。
+ *
+ * 需要 light-dark()（Chromium 123+、Safari 17.5+；WebView2 和 Claude Desktop 都满足）。
+ * 原创配色，没有用拳头的金色描边、海克斯科技的青蓝发光，也没有用他们的字体。
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* ---------- 纸和墨：跟宿主 ---------- */
+  --lol-bg: var(--color-background-primary, light-dark(#ffffff, #16171b));        /* 页面底 */
+  --lol-bg-2: var(--color-background-secondary, light-dark(#f6f6f3, #1e1f24));    /* 区块、表头、输入框 */
+  --lol-bg-3: var(--color-background-tertiary, light-dark(#ecece8, #2a2b31));     /* 小标签、空格子、图片占位 */
+  --lol-text: var(--color-text-primary, light-dark(#1c1d21, #ecedef));            /* 正文、墨线（突破口的圈） */
+  --lol-text-2: var(--color-text-secondary, light-dark(#5b5e66, #a3a6ae));        /* 次要：玩家名、段位字 */
+  --lol-text-3: var(--color-text-tertiary, light-dark(#73767e, #868990));         /* 最弱：表头、出处、时间 */
+  --lol-line: var(--color-border-primary, light-dark(#e3e3de, #2c2d33));          /* 行间细线、区块边框 */
+  --lol-line-2: var(--color-border-secondary, light-dark(#cfcfc8, #3b3c43));      /* 输入框、按钮边框 */
+  --lol-ring: var(--color-ring-primary, light-dark(#2f66d9, #6ea2ff));            /* 键盘焦点 */
+  --lol-hover: light-dark(rgb(0 0 0 / 0.035), rgb(255 255 255 / 0.045));          /* 可点的行悬停 */
+  --lol-ink-fill: light-dark(#1c1d21, #ecedef);   /* 主按钮、“突破口”小牌的底（墨） */
+  --lol-ink-on: light-dark(#ffffff, #16171b);     /* 墨底上的字 */
+
+  /* ---------- 意思：App 自己的 ---------- */
+  /* 我方 / 对面：蓝 / 橙（色弱也分得开），另有位置、表头字、表头记号（■ / ◆）兜底 */
+  --lol-ally: light-dark(#2f66d9, #6ea2ff);
+  --lol-ally-soft: light-dark(rgb(47 102 217 / 0.08), rgb(110 162 255 / 0.12));
+  --lol-enemy: light-dark(#b85208, #ff9a50);
+  --lol-enemy-soft: light-dark(rgb(184 82 8 / 0.08), rgb(255 154 80 / 0.12));
+
+  /* 胜 / 负，也用在“好 / 差”的数字（胜率 ≥ 53% / ≤ 47%、KDA）。永远和字（胜 / 负）或形状（实 / 淡）一起出现 */
+  --lol-win: light-dark(#13804e, #4bd98b);
+  --lol-win-soft: light-dark(rgb(19 128 78 / 0.09), rgb(75 217 139 / 0.12));
+  --lol-loss: light-dark(#c8323f, #ff7b86);
+  --lol-loss-soft: light-dark(rgb(200 50 63 / 0.08), rgb(255 123 134 / 0.12));
+
+  /* 提醒：隐藏战绩、第一次玩、风险提示 */
+  --lol-warn: light-dark(#946000, #f2b53d);
+  --lol-warn-soft: light-dark(rgb(148 96 0 / 0.09), rgb(242 181 61 / 0.12));
+
+  /* 出错（跟宿主的危险色，没给用这里的） */
+  --lol-danger: var(--color-text-danger, light-dark(#c8323f, #ff7b86));
+
+  /* 开黑小队 A–D：字母小牌的底色（字母本身就能分，颜色是辅助） */
+  --lol-party-a: light-dark(#6d4fd8, #a897ff);
+  --lol-party-b: light-dark(#0b7f80, #38c9c9);
+  --lol-party-c: light-dark(#b8336f, #f07ab0);
+  --lol-party-d: light-dark(#776808, #cdbd45);
+  --lol-party-on: light-dark(#ffffff, #16171b);   /* 小牌上的字母 */
+
+  /* 海克斯稀有度：图标是白色线稿，统一放在深色格子上（亮暗主题都一样） */
+  --lol-aug-tile: #1f2228;
+  --lol-aug-silver: #a3acb8;
+  --lol-aug-gold: #e0ae3c;
+  --lol-aug-prismatic: linear-gradient(135deg, #f08bf5 0%, #8ab4ff 50%, #6ee7b7 100%);
+  --lol-aug-event: #8f98a5;   /* kEventChoice：当银色画，名字里写明 */
+
+  /* 叠在图上的小牌（等级）：深底白字，两种主题一样 */
+  --lol-badge-bg: rgb(16 17 20 / 0.86);
+  --lol-badge-text: #ffffff;
+
+  /* ---------- 字 ---------- */
+  /* 宿主给了 --font-sans 就用它的西文字体；中文接 Windows 的微软雅黑，别的系统也有兜底。不打包字体。 */
+  --lol-font: var(--font-sans, "Segoe UI Variable Text", "Segoe UI", system-ui), "Microsoft YaHei UI", "Microsoft YaHei",
+    "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
+  /* 数字不换字体，只用等宽数字：font-variant-numeric: tabular-nums（Segoe UI、微软雅黑都支持） */
+  --lol-num: tabular-nums;
+
+  /* 字号 / 行高（px）。中文最小 11px；10px 只给纯数字（头像上的等级、小牌里的数） */
+  --lol-fs-2xs: 10px;  --lol-lh-2xs: 12px;
+  --lol-fs-xs: 11px;   --lol-lh-xs: 16px;   /* 表头、标签、出处、时间 */
+  --lol-fs-sm: 12px;   --lol-lh-sm: 18px;   /* 行里的数字、玩家名 */
+  --lol-fs-md: 13px;   --lol-lh-md: 20px;   /* 行里的主字：英雄名 */
+  --lol-fs-lg: 15px;   --lol-lh-lg: 22px;   /* 区块标题、页头名字 */
+  --lol-fs-xl: 18px;   --lol-lh-xl: 24px;   /* 页头的大数字 */
+  --lol-fs-2xl: 24px;  --lol-lh-2xl: 30px;  /* 结算的“胜利 / 失败” */
+
+  --lol-fw-normal: 400;
+  --lol-fw-medium: 500;
+  --lol-fw-strong: 600;   /* 最粗只到 600，只有“胜利 / 失败”用 700 */
+
+  /* ---------- 间距（4 的倍数，另加 2 和 6 给紧凑的行） ---------- */
+  --lol-sp-1: 2px;
+  --lol-sp-2: 4px;
+  --lol-sp-3: 6px;
+  --lol-sp-4: 8px;
+  --lol-sp-5: 12px;
+  --lol-sp-6: 16px;
+  --lol-sp-7: 24px;
+  --lol-sp-8: 32px;
+
+  /* ---------- 圆角：小圆角的方形是这套风格的形状；圆形只给召唤师头像和琴音的头像 ---------- */
+  --lol-r-xs: 3px;     /* ≤ 24px 的图标、标签 */
+  --lol-r-sm: 4px;     /* 32px 的英雄头像 */
+  --lol-r-md: 6px;     /* 40–56px 的英雄头像、按钮、输入框 */
+  --lol-r-lg: 8px;     /* 区块、卡片 */
+  --lol-r-full: 999px; /* 召唤师头像、点 */
+
+  /* ---------- 图标尺寸 ---------- */
+  --lol-ic-2xs: 16px;  /* 段位小徽章、两个召唤师技能（行内竖排） */
+  --lol-ic-xs: 20px;   /* 装备、海克斯、符文（行内）、近 10 局的英雄 */
+  --lol-ic-sm: 24px;   /* 聊天卡片里的英雄头像 */
+  --lol-ic-md: 32px;   /* 战绩、单局详情、强度榜的英雄头像 */
+  --lol-ic-lg: 40px;   /* 这局每人一行的英雄头像；英雄页的海克斯 */
+  --lol-ic-xl: 56px;   /* 战绩页的召唤师头像、英雄页的英雄头像 */
+
+  /* ---------- 行高（信息密度，照 LeagueAkari） ---------- */
+  --lol-row-card: 28px;    /* 聊天卡片：一人一行 */
+  --lol-row-list: 44px;    /* 战绩、单局详情、强度榜：一行 */
+  --lol-row-player: 68px;  /* 这局：一人三行 */
+  --lol-stripe: 3px;       /* 行左边的队伍边条 */
+
+  /* ---------- 阴影：内容是平的，只有浮层有阴影 ---------- */
+  --lol-shadow-pop: 0 8px 24px light-dark(rgb(0 0 0 / 0.12), rgb(0 0 0 / 0.5)), 0 0 0 1px var(--lol-line);
+
+  /* ---------- 动效：只有淡入和 2–4px 的位移 ---------- */
+  --lol-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --lol-dur-fast: 120ms;
+  --lol-dur: 180ms;
+}
+
+/* 宿主说了主题就照宿主（applyDocumentTheme 写的）；没说就跟系统 */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
+/* 页面最基本的样子：底色、字、等宽数字 */
+html, body {
+  margin: 0;
+  background: var(--lol-bg);
+  color: var(--lol-text);
+  font-family: var(--lol-font);
+  font-size: var(--lol-fs-sm);
+  line-height: var(--lol-lh-sm);
+  -webkit-font-smoothing: antialiased;
+}
+/* 聊天卡片（inline）里底色透明，让宿主的卡片底透出来 */
+:root[data-display="inline"], :root[data-display="inline"] body { background: transparent; }
+
+.lol-num { font-variant-numeric: var(--lol-num); }
+
+:focus-visible { outline: 2px solid var(--lol-ring); outline-offset: 1px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

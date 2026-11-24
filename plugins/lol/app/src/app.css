@@ -1,60 +1,625 @@
-/* 先朴素：之后照 docs/design/lol-app.md 的颜色和字体整个重做。亮色 / 暗色跟宿主（hostContext.theme →
-   <html data-theme>），宿主没给就跟系统。 */
-:root {
-  color-scheme: light dark;
-  --bg: #ffffff;
-  --text: #1c1d21;
-  --muted: #6b6f7a;
-  --line: #e3e5ea;
-  --surface: #ffffff;
-  --surface-2: #f2f3f6;
-  --accent: #2f6fdb;
-  --accent-soft: rgba(47, 111, 219, 0.12);
-  --hot: #c8372d;
-  --hot-soft: rgba(200, 55, 45, 0.12);
-  --good: #1f8a4c;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #16171b;
-    --text: #e9eaee;
-    --muted: #9a9eaa;
-    --line: #2b2d34;
-    --surface: #1d1f24;
-    --surface-2: #26282f;
-    --accent: #7aa7ff;
-    --accent-soft: rgba(122, 167, 255, 0.16);
-    --hot: #ff7a6e;
-    --hot-soft: rgba(255, 122, 110, 0.16);
-    --good: #5ccf8d;
-  }
-}
-
-:root[data-theme="dark"] {
-  --bg: #16171b;
-  --text: #e9eaee;
-  --muted: #9a9eaa;
-  --line: #2b2d34;
-  --surface: #1d1f24;
-  --surface-2: #26282f;
-  --accent: #7aa7ff;
-  --accent-soft: rgba(122, 167, 255, 0.16);
-  --hot: #ff7a6e;
-  --hot-soft: rgba(255, 122, 110, 0.16);
-  --good: #5ccf8d;
-}
-
-html,
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 13px/1.45 system-ui, "Segoe UI", "Microsoft YaHei UI", sans-serif;
-}
+/*
+ * 英雄联盟 App 的共用样式：风格“记分纸”（docs/design/lol-app.md 第一节；样张 docs/design/lol-app-mock.html 的组件样式）。
+ * 颜色、字号、间距都用 tokens.css 的 --lol-* 变量；这里只放各页共用的组件（图、小牌、标签、顶栏、按钮、队伍记号、
+ * 页脚、出错和空页面）。只有一页用的样式写在那一页的 <style> 里。
+ */
 
 *,
 *::before,
 *::after {
   box-sizing: border-box;
+}
+
+.app {
+  container-type: inline-size;
+  min-height: 100vh;
+  font-family: var(--lol-font);
+  color: var(--lol-text);
+  background: var(--lol-bg);
+  font-size: var(--lol-fs-sm);
+  line-height: var(--lol-lh-sm);
+}
+:root[data-display="inline"] .app {
+  min-height: 0;
+  background: transparent;
+}
+.app button {
+  font: inherit;
+  color: inherit;
+}
+.num {
+  font-variant-numeric: var(--lol-num);
+}
+.good {
+  color: var(--lol-win) !important;
+}
+.bad {
+  color: var(--lol-loss) !important;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ---------- 线条图标（Icon.svelte） ---------- */
+.ico {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.spin {
+  animation: lol-spin 0.9s linear infinite;
+}
+@keyframes lol-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------- 顶栏：分页（墨线下划线）+ 阶段牌 + 刷新 ---------- */
+.top {
+  display: flex;
+  align-items: center;
+  gap: var(--lol-sp-5);
+  height: 44px;
+  padding: 0 var(--lol-sp-6);
+  border-bottom: 1px solid var(--lol-line);
+}
+.tabs {
+  display: flex;
+  gap: var(--lol-sp-6);
+  align-self: stretch;
+  min-width: 0;
+}
+.tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-size: var(--lol-fs-md);
+  color: var(--lol-text-2);
+  white-space: nowrap;
+}
+.tab:hover {
+  color: var(--lol-text);
+}
+.tab[aria-current="page"] {
+  color: var(--lol-text);
+  font-weight: var(--lol-fw-strong);
+}
+.tab[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--lol-text);
+}
+.top-end {
+  display: flex;
+  align-items: center;
+  gap: var(--lol-sp-4);
+  margin-left: auto;
+  min-width: 0;
+}
+.phase {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  min-width: 0;
+  padding: 0 10px;
+  overflow: hidden;
+  border: 1px solid var(--lol-line);
+  border-radius: var(--lol-r-full);
+  background: var(--lol-bg-2);
+  font-size: var(--lol-fs-xs);
+  color: var(--lol-text-2);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.phase .dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--lol-ally);
+}
+.phase .dot.idle {
+  background: var(--lol-text-3);
+}
+.phase .dot.off {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--lol-text-3);
+}
+.phase b {
+  font-weight: var(--lol-fw-medium);
+  color: var(--lol-text);
+}
+@container (max-width: 519px) {
+  .top {
+    gap: var(--lol-sp-4);
+    padding: 0 var(--lol-sp-5);
+  }
+  .tabs {
+    gap: var(--lol-sp-5);
+  }
+  .phase .more {
+    display: none;
+  }
+  .btn .label-wide {
+    display: none;
+  }
+}
+
+/* ---------- 按钮 ---------- */
+.btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--lol-line-2);
+  border-radius: var(--lol-r-md);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--lol-fs-xs);
+  white-space: nowrap;
+  text-decoration: none;
+}
+.btn:hover:not(:disabled) {
+  background: var(--lol-hover);
+}
+.btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.btn.primary {
+  border-color: transparent;
+  background: var(--lol-ink-fill);
+  color: var(--lol-ink-on);
+}
+.btn.primary:hover:not(:disabled) {
+  background: var(--lol-ink-fill);
+  opacity: 0.88;
+}
+.btn.icon {
+  width: 28px;
+  padding: 0;
+}
+.seg {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--lol-line-2);
+  border-radius: var(--lol-r-md);
+}
+.seg button {
+  height: 22px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--lol-fs-xs);
+  color: var(--lol-text-2);
+}
+.seg button[aria-pressed="true"] {
+  background: var(--lol-ink-fill);
+  color: var(--lol-ink-on);
+  font-weight: var(--lol-fw-medium);
+}
+
+.page {
+  padding: var(--lol-sp-5) var(--lol-sp-6) var(--lol-sp-6);
+}
+@container (max-width: 519px) {
+  .page {
+    padding: var(--lol-sp-4) var(--lol-sp-5) var(--lol-sp-5);
+  }
+}
+.note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin: 0 0 var(--lol-sp-4);
+  font-size: var(--lol-fs-xs);
+  line-height: var(--lol-lh-xs);
+  color: var(--lol-text-3);
+}
+.note .warn {
+  color: var(--lol-warn);
+}
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--lol-sp-4);
+  margin: 0 0 var(--lol-sp-5);
+  padding: 8px 12px;
+  border: 1px solid var(--lol-line);
+  border-radius: var(--lol-r-lg);
+  background: var(--lol-bg-2);
+  font-size: var(--lol-fs-xs);
+  color: var(--lol-text-2);
+}
+.banner.danger {
+  color: var(--lol-danger);
+}
+.banner .btn {
+  margin-left: auto;
+}
+
+/* ---------- 队伍：边条、记号（我方 ■，对面 ◆）、区块 ---------- */
+.ally {
+  --team: var(--lol-ally);
+  --team-soft: var(--lol-ally-soft);
+}
+.enemy {
+  --team: var(--lol-enemy);
+  --team-soft: var(--lol-enemy-soft);
+}
+.neutral {
+  --team: var(--lol-line-2);
+  --team-soft: transparent;
+}
+.mark {
+  display: inline-block;
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--team, var(--lol-ally));
+}
+.mark.diamond {
+  width: 8px;
+  height: 8px;
+  margin: 0 0.5px;
+  border-radius: 1px;
+  transform: rotate(45deg);
+}
+.team {
+  overflow: hidden;
+  border: 1px solid var(--lol-line);
+  border-radius: var(--lol-r-lg);
+  background: var(--lol-bg);
+}
+.team-head {
+  display: flex;
+  align-items: center;
+  gap: var(--lol-sp-5);
+  height: 36px;
+  padding: 0 12px 0 14px;
+  border-bottom: 1px solid var(--lol-line);
+  background: var(--lol-bg-2);
+  font-size: var(--lol-fs-xs);
+  color: var(--lol-text-2);
+  white-space: nowrap;
+}
+.team-head .label {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--lol-fs-md);
+  font-weight: var(--lol-fw-strong);
+  color: var(--lol-text);
+}
+.team-head .stats {
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+  overflow: hidden;
+}
+.team-head .stats b {
+  font-weight: var(--lol-fw-medium);
+  color: var(--lol-text);
+}
+.stripe {
+  position: relative;
+}
+.stripe::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--lol-stripe);
+  background: var(--team);
+}
+
+/* ---------- 图（Pic.svelte）：方形小圆角，加载中是空格子，挂了显示名字第一个字 ---------- */
+.ci {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: var(--s, 40px);
+  height: var(--s, 40px);
+  overflow: hidden;
+  border-radius: var(--r, var(--lol-r-md));
+  background: var(--lol-bg-3);
+  vertical-align: middle;
+}
+.ci img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.ci.crop img {
+  transform: scale(1.1);
+}
+.ci::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px light-dark(rgb(0 0 0 / 0.1), rgb(255 255 255 / 0.08));
+  pointer-events: none;
+}
+.ci.bare::after {
+  display: none;
+}
+.ci .ph {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: calc(var(--s, 40px) * 0.45);
+  line-height: 1;
+  font-weight: var(--lol-fw-medium);
+  color: var(--lol-text-2);
+}
+.ci.round {
+  --r: 50%;
+}
+.ci.empty {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--lol-line-2);
+}
+.ci.empty::after {
+  display: none;
+}
+.s14 {
+  --s: 14px;
+  --r: var(--lol-r-xs);
+}
+.s15 {
+  --s: 15px;
+  --r: var(--lol-r-xs);
+}
+.s16 {
+  --s: 16px;
+  --r: var(--lol-r-xs);
+}
+.s18 {
+  --s: 18px;
+  --r: var(--lol-r-xs);
+}
+.s19 {
+  --s: 19px;
+  --r: var(--lol-r-xs);
+}
+.s20 {
+  --s: 20px;
+  --r: var(--lol-r-xs);
+}
+.s22 {
+  --s: 22px;
+  --r: var(--lol-r-xs);
+}
+.s24 {
+  --s: 24px;
+  --r: var(--lol-r-xs);
+}
+.s28 {
+  --s: 28px;
+  --r: var(--lol-r-xs);
+}
+.s32 {
+  --s: 32px;
+  --r: var(--lol-r-sm);
+}
+.s40 {
+  --s: 40px;
+  --r: var(--lol-r-md);
+}
+.s56 {
+  --s: 56px;
+  --r: var(--lol-r-md);
+}
+/* 叠在图上的小牌（等级）：深底白字 */
+.lv {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  z-index: 1;
+  min-width: 12px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--lol-badge-bg);
+  color: var(--lol-badge-text);
+  font-size: var(--lol-fs-2xs);
+  line-height: 13px;
+  text-align: center;
+  font-variant-numeric: var(--lol-num);
+}
+
+/* ---------- 小牌、标签 ---------- */
+.chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--lol-r-xs);
+  background: var(--lol-bg-3);
+  color: var(--lol-text-2);
+  font-size: var(--lol-fs-xs);
+  line-height: 18px;
+  white-space: nowrap;
+}
+.chip.good {
+  background: var(--lol-win-soft);
+}
+.chip.bad {
+  background: var(--lol-loss-soft);
+}
+.chip.warn {
+  background: var(--lol-warn-soft);
+  color: var(--lol-warn);
+}
+.chip .ico {
+  width: 12px;
+  height: 12px;
+}
+.chip.ink {
+  background: var(--lol-ink-fill);
+  color: var(--lol-ink-on);
+  font-weight: var(--lol-fw-medium);
+}
+.chip.me {
+  height: 16px;
+  padding: 0 4px;
+  border: 1px solid var(--lol-ally);
+  background: transparent;
+  color: var(--lol-ally);
+  line-height: 14px;
+}
+.party {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--lol-r-xs);
+  background: var(--party);
+  color: var(--lol-party-on);
+  font-size: var(--lol-fs-2xs);
+  font-weight: 700;
+  line-height: 1;
+}
+.skel {
+  display: inline-block;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--lol-bg-3);
+  vertical-align: middle;
+}
+
+/* ---------- 段位：徽章 + 字 ---------- */
+.rank {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--lol-fs-xs);
+  color: var(--lol-text-2);
+  white-space: nowrap;
+}
+.rank img {
+  width: 16px;
+  height: 16px;
+}
+
+/* ---------- 页脚：出处和声明 ---------- */
+.foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  margin-top: var(--lol-sp-6);
+  padding-top: var(--lol-sp-4);
+  border-top: 1px solid var(--lol-line);
+  font-size: var(--lol-fs-xs);
+  line-height: var(--lol-lh-xs);
+  color: var(--lol-text-3);
+}
+.foot a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--lol-line-2);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.card-foot {
+  padding: 6px 12px 10px;
+  font-size: var(--lol-fs-xs);
+  line-height: var(--lol-lh-xs);
+  color: var(--lol-text-3);
+}
+
+/* ---------- 聊天卡片（inline）的标题行 ---------- */
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 12px 6px;
+}
+.card-head .t {
+  font-size: var(--lol-fs-md);
+  font-weight: var(--lol-fw-strong);
+  white-space: nowrap;
+}
+.card-head .sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--lol-fs-xs);
+  color: var(--lol-text-2);
+}
+.card-head .btn {
+  margin-left: auto;
+}
+
+/* ---------- 没数据、客户端没开、出错（全屏页面中间） ---------- */
+.empty-state {
+  display: grid;
+  justify-items: center;
+  gap: var(--lol-sp-5);
+  padding: 56px var(--lol-sp-6);
+  text-align: center;
+  color: var(--lol-text-2);
+}
+.empty-state svg {
+  width: 32px;
+  height: 32px;
+  color: var(--lol-text-3);
+}
+.empty-state p {
+  max-width: 34em;
+  margin: 0;
+  font-size: var(--lol-fs-md);
+  line-height: var(--lol-lh-md);
+}
+.card-line {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: var(--lol-fs-sm);
+  color: var(--lol-text-2);
+}
+.card-line.danger {
+  color: var(--lol-danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
 }
