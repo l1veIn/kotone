@@ -214,4 +214,6 @@
 2. 第 6 步：关掉“按键程序”会怎样？内置宏放插件页面还是两边都有？程序编辑器留在自动化里吗？
 3. 第 6 步要给插件开“操作游戏窗口”的句柄（单向门），请先看过计划第九节第 6 步。
 
+**RC**：版本号在分支上改成 0.2.0-rc.6（`67bc4fca`，`pnpm release:verify`、`release:test` 8/8 过），本机打了 NSIS 安装包 `target/release/bundle/nsis/Kotone_0.2.0-rc.6_x64-setup.exe`（SHA-256 `3191c0b825bf6734df0ea0109d75e5cd0b35e3e129927a20b21085e546c5fc19`，用 `tauri.ci.conf.json`，没有更新签名）；用正式版程序跑 `browser_real.py` 11/11。没有打 tag、没有合进 main、没有上传。
+
 **下一步（按顺序）**：先写第 5、6 步缺的真机基线脚本（`voice_input_real.py`、`key_programs_real.py`），在现在的版本上跑出基线；玩家定了上面的事以后接着第 5 步 2–6、第 6 步 3；然后第 7 步剩下的（英雄联盟的事件目录由插件登记、设置页只剩本体）。也可以先让别的 Agent 照 `docs/philosophy.md` 审查一遍再继续。
