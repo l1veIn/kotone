@@ -79,6 +79,8 @@ const ALLOWED_EFFECTS: &[&str] = &[
     // 登录、验证码、付款交给玩家（browser.handover），密码框不让输入。播放 / 暂停 Kotone 浏览器里的歌。
     "browses-web",
     "plays-media",
+    // ADR 038：在 Kotone 窗口里打开一个页面（不把窗口拉到前面）。
+    "shows-ui",
 ];
 
 /// 默认询问的副作用及原因。

@@ -1503,3 +1503,25 @@ async fn plugin_tool_calls_give_her_only_the_content() {
         )]
     );
 }
+
+/// 工具服务里每个工具的副作用都归了类（允许或询问），没有“未归类”掉进询问（ui.open 的 shows-ui 曾经漏了）。
+#[test]
+fn every_service_side_effect_is_classified() {
+    let (service, _host) = service();
+    let specs = service.capabilities()["tools"].as_array().cloned().unwrap();
+    let catalog = Catalog::build(&specs, &[], &[]);
+    for entry in catalog.entries() {
+        if let Decision::Ask { reason } = default_decision(entry, &Value::Null) {
+            assert!(
+                !reason.contains("未归类"),
+                "{} 的副作用没归类：{reason}",
+                entry.name
+            );
+        }
+    }
+    let open = catalog.get("ui.open").expect("ui.open");
+    assert_eq!(
+        default_decision(open, &json!({"page": "ui://kotone/lol/match"})),
+        Decision::Allow
+    );
+}
