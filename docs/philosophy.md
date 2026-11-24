@@ -131,7 +131,7 @@
 
 **说法**：被很多地方依赖的东西放在稳定的一层；依赖只能从易变的指向稳定的（Robert Martin 的稳定依赖原则；Parnas 的信息隐藏：每个模块藏住一个可能会变的决定）。
 
-- 在 Kotone：`kotone-core` 不反向依赖平台、语音识别、网络实现（[development.md](development.md)）；插件依赖 `kotone-plugin-api`、`kotone-core`、自己的第三方库，可以用 `kotone-platform-windows` 里没有状态的系统调用，不碰 Tauri、桌面端、她（`kotone-agent`、`kotone-ai`）；插件之间不直接调用。
+- 在 Kotone：`kotone-core` 不反向依赖平台、语音识别、网络实现（[development.md](development.md)）；插件依赖 `kotone-plugin-api`、`kotone-core`、自己的第三方库，可以用 `kotone-platform-windows` 里没有状态的系统调用和 MCP 客户端 `kotone-mcp`，不碰 Tauri、桌面端、她（`kotone-agent`、`kotone-ai`）；插件之间不直接调用。
 - **怎么查**：看每个 crate 的 `Cargo.toml`；`cargo tree -p <crate> -i <被依赖的 crate>` 看谁依赖了谁；搜插件源码里有没有用到全进程只有一份的东西（低级钩子、热键）。
 - **坏味道**：本体的“眼睛”依赖某个插件；两个插件互相 `use`；一个模块被五处 `use`，却放在最容易变的地方。
 

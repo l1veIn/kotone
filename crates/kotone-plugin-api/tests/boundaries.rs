@@ -1,6 +1,7 @@
 //! 插件的边界写成测试（ADR 038 D6、“怎么定的” 2026-11-24；软件哲学原则 13、16）：只写在文档里的规则会被悄悄违反。
 //!
-//! - 插件依赖插件契约、`kotone-core`、自己的第三方库；可以用系统适配层 `kotone-platform-windows` 里没有状态的系统调用；
+//! - 插件依赖插件契约、`kotone-core`、自己的第三方库；可以用系统适配层 `kotone-platform-windows` 里没有状态的系统调用，
+//!   和 MCP 客户端 `kotone-mcp`（2026-11-25）；
 //! - 不碰 Tauri、桌面端、她（`kotone-agent`、`kotone-ai`）、本体的其他部分（工具服务、识别、语音、文字识别……），
 //!   也不依赖别的插件（插件之间不直接调用）；
 //! - 全进程只有一份的东西（Esc 和呼叫键的低级钩子、输入闸门）只经宿主，插件的源码里不出现。
@@ -64,6 +65,9 @@ const ALLOWED_CORE: &[&str] = &[
     "kotone-plugin-api",
     "kotone-core",
     "kotone-platform-windows",
+    // MCP 客户端（2026-11-25，MCP 方案第 1 期）：只是一个协议客户端库，连接归调用方自己，不碰本体的状态
+    // （窗口、全进程只有一份的钩子、停下琴音、免问），放在哪个进程都一样能用；英雄联盟插件经它连 OP.GG。
+    "kotone-mcp",
 ];
 
 #[test]
@@ -90,7 +94,7 @@ fn plugins_depend_only_on_the_contract_core_and_stateless_system_calls() {
             if dep.starts_with("kotone-") && !dep.starts_with("kotone-plugin-") {
                 assert!(
                     ALLOWED_CORE.contains(&dep.as_str()),
-                    "插件 {dir} 依赖了本体的 {dep}：只能用插件契约、kotone-core 和系统适配层（ADR 038 D6）"
+                    "插件 {dir} 依赖了本体的 {dep}：只能用插件契约、kotone-core、系统适配层和 MCP 客户端（ADR 038 D6）"
                 );
             }
         }

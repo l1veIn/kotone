@@ -148,12 +148,14 @@ Kotone 已经有 `kotone.exe mcp`：把所有工具作为 MCP 工具对外提供
 ```
 crates/                本体：kotone-core（设置、游戏列表、游戏中心、自动化）、kotone-agent / -ai（她）、
                        kotone-stt / -tts / -ocr / -platform-windows（感官和表达）、
-                       kotone-plugin-api（新：插件契约）、kotone-tools / -cli（对外接口）
+                       kotone-plugin-api（新：插件契约）、kotone-tools / -cli（对外接口）、
+                       kotone-mcp（MCP 客户端，连外部 MCP 服务器，2026-11-25）
 apps/desktop/          宿主：窗口、聊天、侧栏、本体设置、加载插件
 plugins/<id>/          每个插件一个目录，自己的复杂度自己收着：
   plugin.toml          清单（D5）
   Cargo.toml, src/     数据来源、工具实现、游戏中心适配器；依赖 kotone-plugin-api、kotone-core 和自己的第三方库，
-                       可以用系统适配层（kotone-platform-windows）里没有状态的系统调用（音频设备、重采样、打字注入……）；
+                       可以用系统适配层（kotone-platform-windows）里没有状态的系统调用（音频设备、重采样、打字注入……），
+                       还可以用 MCP 客户端 kotone-mcp（2026-11-25）；
                        不碰 Tauri、桌面端、她（kotone-agent / -ai），全进程只有一份的东西（Esc 和呼叫键的钩子、
                        停下她、免问）只经宿主（2026-11-24 定，见“怎么定的”）
   ui/                  页面和它的设置页

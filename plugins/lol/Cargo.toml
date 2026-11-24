@@ -5,10 +5,12 @@ description = "Kotone 英雄联盟插件（ADR 035 / 038）：客户端和局内
 edition = "2021"
 rust-version = "1.77.2"
 
-# 插件只依赖插件契约、kotone-core 的纯数据类型和自己的第三方库（ADR 038 D6），不碰 Tauri。
+# 插件只依赖插件契约、kotone-core 的纯数据类型、MCP 客户端和自己的第三方库（ADR 038 D6），不碰 Tauri。
 [dependencies]
 kotone-plugin-api.workspace = true
 kotone-core.workspace = true
+# OP.GG 官方 MCP 经本体的 MCP 客户端（MCP 方案 4.7；协议客户端库，插件可以依赖，ADR 038 D6）
+kotone-mcp.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
@@ -17,3 +19,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 base64 = "0.22"
 # aramhex-data 的文件按 latest.json 里的 SHA-256 校验（版本已在工作区锁文件里）
 sha2 = "0.10"
+
+[dev-dependencies]
+# OP.GG 的单测：本地的 Streamable HTTP 测试服务器
+kotone-mcp = { workspace = true, features = ["test-support"] }

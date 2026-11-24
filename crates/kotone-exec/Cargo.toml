@@ -16,12 +16,10 @@ glob = "0.3"
 walkdir = "2"
 
 [target.'cfg(windows)'.dependencies]
+# Job Object（shell.run 的进程连同它启动的进程一起结束）：和 kotone-mcp 共用系统适配层里没有状态的那份
+kotone-platform-windows.workspace = true
+# 输出按系统代码页回退解码（text.rs：GetACP / GetOEMCP）
 windows = { workspace = true, features = [
-    "Win32_Foundation",
-    "Win32_Security",
-    "Win32_System_JobObjects",
-    "Win32_System_Threading",
-    "Win32_System_Diagnostics_ToolHelp",
     "Win32_Globalization",
 ] }
 

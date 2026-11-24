@@ -667,3 +667,28 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 
 **（三）（四）的检查**：`kotone-core` 单元 303（多 2 个读旧写新）、集成 84 + 1 跳过（检查一条没改）；她 79；工具服务 111；svelte-check 0 / 0；Playwright 165 全过（跟着新结构改的：左侧栏顺序里没有 `general`、语音输入经“插件 → 语音输入”进；`speech-settings` 的手写桩补上插件清单；删了没人用的 `shell_sidebar_voice_input`；放歌的 e2e 多查一条“旧配置左侧栏里的 general 跳过、不算隐藏”）。真机：`lol_tools_real.py --while-playing` 32/32、`game_events_real.py` 12/12。没有测试覆盖“打开 App 时滚到下面的分组”（例如标题栏的“启动本地识别”），代码里做了。`appearance.spec` 有一次整套跑时开页超时、单跑和重跑都过，像是开发服务器第一次优化依赖时卡了一下，留意。
 **真机 `voice_input_real.py`**（玩家离开电脑时跑，`50348033` 上）：**37/37 过、1 个跳过、53 秒**（搬家前的基线 36/36、2 个跳过）。多过的一项是 6a：外部 Agent 经工具服务调 `game_chat.send` 现在能调，正好打进测试窗口。按住说自动发送、录音笔预览确认、屏蔽词“打野 → JG”、识别记录、悬浮窗状态顺序、她的 `game_chat.send`（执行记录有 runId）、`companion.type`、控制台通道没游戏时退回键盘、`~/.kotone` 没被动过，都和以前一样。跳过的还是 7b（真的控制台通道要 Steam 装的 Dota 2 / CS2）。
+
+### MCP 第 1 期：`kotone-mcp`、OP.GG 迁过去（2026-11-25）
+
+照 [MCP 方案](research/2026-11-24-mcp-client.md) 4.2、4.7 和第六节第 1 期。
+
+**玩家看到的**：看不到变化。“用 OP.GG 的数据”还是默认关（opgginc/opgg-mcp#26 到 2026-11-25 还没人回）；打开以后，英雄页和琴音查英雄时的 OP.GG 那块和以前一样，只是第一次以后快了：同一个会话里一次调用一个请求（以前每次调用三个请求，每次都重新握手）。
+
+**定了什么**：
+
+- **新 crate `crates/kotone-mcp`**：在官方 `rmcp` 上包一层（`=3.11.0`，Apache-2.0，最低 Rust 1.88，工具链是 stable 1.98）。锁到补丁版本：rmcp 一个月出好几个小版本，小版本之间也改过接口；升级跟着 Goose，一次只改这一个 crate。对外的类型是协议原样的字段（`Tool`、`ToolCallResult`、`Resource`、`ResourceContents`，子对象留成 JSON），不露 rmcp 的类型（原则 13：藏住会变的决定）。
+- **接口**：`McpClient::connect(配置)` → `list_tools` / `call_tool` / `list_resources` / `read_resource`（第 3 期显示 `ui://` 页面用）→ `close`；超时照 Codex（启动 10 秒、每次请求 60 秒，可配；超时时 rmcp 给服务器发 `notifications/cancelled`）；`tools_changed()` 是一个计数，服务器每发一次 `tools/list_changed` 加一（第 2 期用）。只做子进程（stdio）和 Streamable HTTP；不做旧的 HTTP+SSE、OAuth、`.mcpb`、目录。
+- **握手用 `initialize`（2025-11-25）**，没用 Goose 的 `Auto`（先发 2026-07-28 的 `server/discover`，不认再退回）：现在的服务器几乎都是旧版，不认 `server/discover` 又不回话的 stdio 服务器要等 10 秒才退回，正好撞上启动超时。双向门，以后改一行。
+- **子进程**放进 Job Object（`KILL_ON_JOB_CLOSE`）：`close` 时先关它的标准输入、等它 2 秒，然后结束整个 Job（连同它启动的进程）；Kotone 退出或崩溃时系统关掉句柄，一样全结束。Job Object 的代码从 `kotone-exec` 抽到系统适配层 `kotone_platform_windows::job`（第二个用户出现了，原则 14）：它是没有状态的 Win32 调用，`kotone-exec` 和 `kotone-mcp` 都在它上面（原则 13）。没让 `kotone-mcp` 依赖 `kotone-exec`：那是琴音子代理的命令工具（ADR 030），插件经 `kotone-mcp` 会间接依赖它。
+- **环境变量**：先清空，只给安全基线（Codex 的 `WINDOWS_CORE_ENV_VARS`，加 Hermes `_build_safe_env` 多出来的几个：PATH、PATHEXT、SYSTEMROOT、TEMP、APPDATA、LOCALAPPDATA……都没有密钥）和配置里写的。**程序路径**：`npx` 这类名字按子进程的 PATH + PATHEXT 解析成 `npx.cmd` 的完整路径（照 Codex）；`.cmd` / `.bat` 由标准库经 `cmd.exe` 跑，参数转义、遇到转义不了的参数直接拒绝，都是 Rust 1.77.2 起标准库做的（CVE-2024-24576），不自己拼 `cmd /c`。不弹控制台窗口；stderr 留最后 4 KB，启动失败时说“程序退出了（退出码 N）。它最后说：……”。
+- **HTTP**：reqwest 0.13，加密用 ring（和 kotone-ai 一样，不引 aws-lc）；会话过期（404）时 rmcp 自己重新握手一次。
+- **插件能不能依赖它**：能。`kotone-mcp` 只是一个协议客户端库，连接归调用方自己，不碰本体的状态（窗口、全进程只有一份的钩子、停下琴音、免问），放在哪个进程都一样能用。边界测试的允许名单、ADR 038 D6、哲学原则 13 都加上了。没改成经宿主 `Host` 给：英雄联盟插件连 OP.GG 是插件自己的数据来源；第 2 期“第三方服务器 = 远程插件”时连接归宿主，那是另一件事。
+- **OP.GG**（`plugins/lol/src/stats/`）：手写的连接（`opgg_post` / `opgg_call`，手拼三个 JSON-RPC 请求、自己解析 SSE）删了，换成 `kotone-mcp`。连接放在 `Stats` 里：第一次调用时连上，之后复用；连不上、会话没了就丢掉，下次再连。`client_app = kotone/<版本>`、`clientInfo.name = kotone`、24 小时磁盘缓存、只在开关开着时请求、15 秒超时、出错时的说法（“连不上 OP.GG：……”“OP.GG 返回 502 Bad Gateway”“OP.GG：……”“OP.GG 返回的是空的”）都照旧。
+- 英雄联盟插件的 `rust-version` 留在 1.77.2（工作区的写法本来就是下限）：改成 1.88 的话 clippy 会按新的最低版本要求改 6 处和这件事无关的 `map_or`。
+
+**检查**：
+
+- `kotone-mcp` 20 个：单元 5；HTTP 5（一个会话调多次只握手一次、5 个 POST 里握手以后的 4 个都带会话、`clientInfo` 和请求头、JSON-RPC 错误和工具自己报错分开、请求超时、读资源、没人在听时说连不上）；stdio 10（列 / 调 / 读资源、环境变量只有基线和配置的、请求超时后连接还能用、启动超时、启动就崩时说退出码和它的 stderr、找不到程序时说名字、`close` 后服务器和它启动的进程都没了、不 `close` 直接丢掉也都没了、`tools/list_changed`、经 PATH 找到的 `.cmd` 包装收到的参数原样带空格和 `&`、没被 cmd 当成第二条命令）。测试服务器都是 rmcp 自己的服务端：HTTP 的在进程内（`kotone_mcp::testing`，特性 `test-support`，正式构建不带），stdio 的是 `crates/kotone-mcp/examples/stdio_server.rs`。
+- `kotone-plugin-lol` 56 个过 + 1 个手动跑的（新加：经本地测试服务器的 OP.GG——四次请求做两次调用、缓存命中不再请求、出错的说法、服务器没了说连不上并丢掉连接）；`kotone-exec` 36（Job 的超时 / 取消结束子进程那几个照过）、`kotone-platform-windows` 90 + 集成 2、插件边界 3、`kotone-plugin-api` 13、桌面端 113；clippy `-D warnings` 干净；`cargo audit` 和改之前一样（没有新的警告）。
+- **OP.GG 真调了一次**（`cargo test -p kotone-plugin-lol opgg_real -- --ignored --nocapture`，一个工具 `lol_get_champion_analysis` 查刀妹，上路、中路各一次）：服务器自称 “OP.GG MCP Server 1.0.0”，谈好的协议 2025-06-18；第一次（握手 + 调用）1,986 ms、5,575 字，第二次（复用会话）586 ms、5,520 字，都是以前那种类声明文字（`class LolGetChampionAnalysis: champion,position,data`……）；两次是同一个会话。
+- 真机 `lol_tools_real.py --while-playing`（假客户端 + 真 DeepSeek，不按键）：**32/32**，和以前一样；最后一项“OP.GG 默认不请求”照过。

@@ -17,6 +17,8 @@ kotone-ocr = { path = "crates/kotone-ocr" }
 kotone-script = { path = "crates/kotone-script" }
 kotone-exec = { path = "crates/kotone-exec" }
 kotone-plugin-api = { path = "crates/kotone-plugin-api" }
+# MCP 客户端（MCP 方案第 1 期）：协议客户端库，插件可以依赖（ADR 038 D6）
+kotone-mcp = { path = "crates/kotone-mcp" }
 # 插件（ADR 038：plugins/<id>/，一期都是内置的，编译在一起）
 kotone-plugin-lol = { path = "plugins/lol" }
 kotone-plugin-game-voice = { path = "plugins/game-voice" }

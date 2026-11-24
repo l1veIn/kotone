@@ -43,6 +43,9 @@ pub struct Fetched<T> {
 pub struct Stats {
     http: reqwest::Client,
     dir: PathBuf,
+    /// OP.GG 的 MCP 连接：第一次调用时连上，之后的调用复用同一个会话；断了下次再连。
+    opgg: tokio::sync::Mutex<Option<Arc<kotone_mcp::McpClient>>>,
+    opgg_endpoint: String,
     memory: Mutex<HashMap<String, (SystemTime, Value)>>,
     aramhex: Mutex<Option<(SystemTime, Arc<aramhex::Dataset>)>>,
     nicknames: Mutex<Option<(SystemTime, Arc<nicknames::Nicknames>)>>,
@@ -74,11 +77,20 @@ impl Stats {
         Self {
             http,
             dir,
+            opgg: tokio::sync::Mutex::new(None),
+            opgg_endpoint: opgg::ENDPOINT.to_string(),
             memory: Mutex::new(HashMap::new()),
             aramhex: Mutex::new(None),
             nicknames: Mutex::new(None),
             statics: Mutex::new(None),
         }
+    }
+
+    /// 测试用：OP.GG 换成本地的测试服务器。
+    #[cfg(test)]
+    fn with_opgg_endpoint(mut self, endpoint: &str) -> Self {
+        self.opgg_endpoint = endpoint.to_string();
+        self
     }
 
     fn disk(&self, url: &str) -> PathBuf {
@@ -384,61 +396,44 @@ impl Stats {
         }
     }
 
-    async fn opgg_post(
-        &self,
-        session: Option<&str>,
-        body: &Value,
-    ) -> Result<(Option<String>, String, String), String> {
-        let mut request = self
-            .http
-            .post(opgg::ENDPOINT)
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json, text/event-stream")
-            .body(body.to_string());
-        if let Some(id) = session {
-            request = request.header("Mcp-Session-Id", id);
-        }
-        let response = request
-            .send()
-            .await
-            .map_err(|e| format!("连不上 OP.GG：{e}"))?;
-        if !response.status().is_success() {
-            return Err(format!("OP.GG 返回 {}", response.status()));
-        }
-        let session = response
-            .headers()
-            .get("mcp-session-id")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string);
-        let content_type = response
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
-        let text = response
-            .text()
-            .await
-            .map_err(|e| format!("OP.GG 的数据没读完：{e}"))?;
-        Ok((session, content_type, text))
-    }
-
+    /// 调一次 OP.GG 的工具（经 `kotone-mcp`，复用会话）。会话没了、连接断了，就丢掉这个连接，下次重新连。
     async fn opgg_call(
         &self,
         tool: &str,
         arguments: Value,
         version: &str,
     ) -> Result<String, String> {
-        let (session, _, _) = self
-            .opgg_post(None, &opgg::initialize_body(version))
-            .await?;
-        let session = session.as_deref();
-        let _ = self.opgg_post(session, &opgg::initialized_body()).await;
-        let (_, content_type, body) = self
-            .opgg_post(session, &opgg::call_body(2, tool, arguments, version))
-            .await?;
-        let reply = opgg::parse_reply(&content_type, &body).ok_or("OP.GG 返回的不是 JSON-RPC")?;
-        opgg::result_text(&reply)
+        let client = {
+            let mut slot = self.opgg.lock().await;
+            match slot.as_ref() {
+                Some(client) if client.is_connected() => client.clone(),
+                _ => {
+                    let config = opgg::config(&self.opgg_endpoint, version);
+                    let client = Arc::new(
+                        kotone_mcp::McpClient::connect(&config)
+                            .await
+                            .map_err(|e| opgg::describe(&e))?,
+                    );
+                    *slot = Some(client.clone());
+                    client
+                }
+            }
+        };
+        match client
+            .call_tool(tool, opgg::arguments(arguments, version))
+            .await
+        {
+            Ok(result) => opgg::result_text(&result),
+            Err(error) => {
+                if opgg::should_reconnect(&error) {
+                    let mut slot = self.opgg.lock().await;
+                    if slot.as_ref().is_some_and(|c| Arc::ptr_eq(c, &client)) {
+                        *slot = None;
+                    }
+                }
+                Err(opgg::describe(&error))
+            }
+        }
     }
 
     // ---------- 名字表 ----------
@@ -559,6 +554,130 @@ mod tests {
             .await;
         assert!(missing.is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// OP.GG 经 `kotone-mcp`：一个会话里调多次（以前每次调用三个请求），`client_app` 和 `clientInfo` 照旧，
+    /// 24 小时的磁盘缓存照旧，出错时的说法照旧。服务器是本地的测试服务器（rmcp 的服务端，回复走 SSE，和 OP.GG 一样）。
+    #[tokio::test]
+    async fn opgg_reuses_one_session() {
+        use kotone_mcp::testing::{handler, text_reply, TestServer};
+        use serde_json::json;
+
+        let server = TestServer::start(
+            json!([{"name": "lol_get_champion_analysis", "inputSchema": {"type": "object"}}]),
+            json!([]),
+            handler(|_, args| async move {
+                match args["champion"].as_str() {
+                    Some("NOPE") => Ok(json!({"isError": true,
+                        "content": [{"type": "text", "text": "no such champion"}]})),
+                    Some("BAD") => Err((-32602, "bad".to_string())),
+                    Some(c) => text_reply(&format!("class {c} {{}}")),
+                    None => text_reply(""),
+                }
+            }),
+        )
+        .await;
+        let dir = std::env::temp_dir().join(format!("kotone-lol-opgg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let stats = Stats::new(dir.clone()).with_opgg_endpoint(server.url());
+        let call = |champion: &'static str| {
+            let stats = &stats;
+            async move {
+                stats
+                    .opgg(
+                        "lol_get_champion_analysis",
+                        json!({"champion": champion, "position": "top"}),
+                        "0.2.0",
+                    )
+                    .await
+            }
+        };
+
+        let irelia = call("IRELIA").await.unwrap();
+        assert_eq!(irelia.value, "class IRELIA {}");
+        assert!(!irelia.stale);
+        assert_eq!(call("YASUO").await.unwrap().value, "class YASUO {}");
+        // 同样的参数 24 小时内从磁盘拿，不再请求
+        assert_eq!(call("IRELIA").await.unwrap().value, "class IRELIA {}");
+
+        let log = server.log();
+        assert_eq!(log.initializes, 1, "只握手一次：{log:?}");
+        assert_eq!(log.calls.len(), 2);
+        // initialize、notifications/initialized、两次 tools/call
+        assert_eq!(log.posts, 4, "{log:?}");
+        assert_eq!(log.calls[0].1["client_app"], "kotone/0.2.0");
+        assert_eq!(log.calls[0].1["champion"], "IRELIA");
+        let init = log.initialize.unwrap();
+        assert_eq!(init["clientInfo"]["name"], "kotone");
+        assert_eq!(init["clientInfo"]["version"], "0.2.0");
+        assert_eq!(log.user_agent.as_deref(), Some("kotone"));
+
+        // 出错时的说法照旧；工具出错、JSON-RPC 出错都不用重新握手
+        assert_eq!(call("NOPE").await.unwrap_err(), "OP.GG：no such champion");
+        assert_eq!(call("BAD").await.unwrap_err(), "OP.GG：bad");
+        assert_eq!(call("AHRI").await.unwrap().value, "class AHRI {}");
+        assert_eq!(server.log().initializes, 1);
+
+        // 服务器没了：说连不上；磁盘上有的照样给（标成旧的要等 24 小时，这里还是新的）
+        drop(server);
+        let offline = call("ZED").await.unwrap_err();
+        assert!(offline.starts_with("连不上 OP.GG："), "{offline}");
+        assert!(
+            stats.opgg.lock().await.is_none(),
+            "连不上以后丢掉这个连接，下次重新连"
+        );
+        assert_eq!(call("IRELIA").await.unwrap().value, "class IRELIA {}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 真调 OP.GG：一个工具（查一个英雄），两次调用，第二次复用第一次的会话。OP.GG 回复 issue #26 前开关默认关，
+    /// 这个测试只在验收时手动跑：`cargo test -p kotone-plugin-lol opgg_real -- --ignored --nocapture`。
+    #[tokio::test]
+    #[ignore = "连真的 OP.GG，手动跑"]
+    async fn opgg_real_call() {
+        use serde_json::json;
+        use std::time::Instant;
+
+        let dir = std::env::temp_dir().join(format!("kotone-lol-opgg-real-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let stats = Stats::new(dir.clone());
+        let args = |position: &str| {
+            json!({"champion": opgg::champion_key("Irelia"), "position": position,
+                   "game_mode": "ranked", "lang": "zh_CN"})
+        };
+        let started = Instant::now();
+        let first = stats
+            .opgg("lol_get_champion_analysis", args("top"), "0.2.0")
+            .await;
+        let first_ms = started.elapsed().as_millis();
+        let client = stats.opgg.lock().await.clone();
+        let started = Instant::now();
+        let second = stats
+            .opgg("lol_get_champion_analysis", args("mid"), "0.2.0")
+            .await;
+        let second_ms = started.elapsed().as_millis();
+        let same_session = match (&client, stats.opgg.lock().await.as_ref()) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b) && b.is_connected(),
+            _ => false,
+        };
+        let show = |r: &Result<Fetched<String>, String>| match r {
+            Ok(f) => format!(
+                "ok, {} 字：{}",
+                f.value.chars().count(),
+                f.value.chars().take(200).collect::<String>()
+            ),
+            Err(e) => format!("出错：{e}"),
+        };
+        eprintln!(
+            "OP.GG 服务器：{:?}",
+            client.as_ref().map(|c| c.server_info().clone())
+        );
+        eprintln!("第一次（握手 + 调用）{first_ms} ms，{}", show(&first));
+        eprintln!("第二次（复用会话）{second_ms} ms，{}", show(&second));
+        eprintln!("同一个会话：{same_session}");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(first.is_ok() && second.is_ok());
+        assert!(same_session);
     }
 
     fn tempfile_dir() -> PathBuf {

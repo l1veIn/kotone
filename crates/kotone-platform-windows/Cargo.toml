@@ -28,6 +28,8 @@ windows = { workspace = true, features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Threading",
+    # Job Object（job.rs）：子进程连同它启动的进程一起结束；kotone-exec 的 shell.run 和 kotone-mcp 的服务器子进程共用
+    "Win32_System_JobObjects",
     # 读英雄联盟客户端的命令行（ADR 035）：NtQueryInformationProcess
     "Wdk_System_Threading",
     # 提权检测（TokenElevation）与 runas 重启（docs/development.md §10 R-1）

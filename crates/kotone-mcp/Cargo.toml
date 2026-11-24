@@ -1,0 +1,54 @@
+[package]
+name = "kotone-mcp"
+version = "0.1.0"
+description = "Kotone 的 MCP 客户端（MCP 方案第 1 期）：在官方 rmcp 上包一层，连外部 MCP 服务器（子进程 stdio、Streamable HTTP）"
+edition = "2021"
+# rmcp 3.11 的最低 Rust 版本
+rust-version = "1.88"
+
+# 依赖纪律（ADR 038 D6）：只是一个协议客户端，不碰本体的状态（窗口、全进程只有一份的钩子、停下琴音、免问），
+# 插件可以直接依赖；不依赖 Tauri、kotone-agent / kotone-ai、任何插件。
+[dependencies]
+# 官方 Rust SDK（Apache-2.0）。锁到补丁版本：协议在快速变化（2026-07-28 大改），rmcp 一个月出好几个小版本，
+# 小版本之间也改过接口；升级跟着 Goose 走，一次只改这一个 crate（MCP 方案第八节）。
+# 只开客户端：自己管子进程（Job Object），所以不开 transport-child-process；不开 OAuth（第 6 期）。
+rmcp = { version = "=3.11.0", default-features = false, features = [
+    "client",
+    "transport-async-rw",
+    "transport-streamable-http-client-reqwest",
+    "reqwest-tls-no-provider",
+] }
+# rmcp 的 HTTP 客户端是 reqwest 0.13；和 kotone-ai 一样不用它的 rustls 特性（会引入 aws-lc 这个 C 加密库），
+# 加密用 ring。
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "charset", "system-proxy"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+http = "1"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+# Windows 上把 `npx` 这类名字按 PATH + PATHEXT 解析成真实路径（照 Codex 的 program_resolver）
+which = "7"
+# 测试服务器（只在 test-support 下）
+hyper = { version = "1", features = ["server", "http1"], optional = true }
+hyper-util = { version = "0.1", features = ["tokio"], optional = true }
+tower-service = { version = "0.3", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+# 服务器子进程放进 Job Object（Kotone 退出时一起结束），和 kotone-exec 共用
+kotone-platform-windows.workspace = true
+
+[features]
+# 仅供测试：进程内的 Streamable HTTP 测试服务器（`testing`），正式构建不启用
+test-support = [
+    "rmcp/server",
+    "rmcp/transport-streamable-http-server",
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:tower-service",
+]
+
+[dev-dependencies]
+kotone-mcp = { path = ".", features = ["test-support"] }
+# examples/stdio_server.rs：测试用的 stdio 服务器
+rmcp = { version = "=3.11.0", default-features = false, features = ["server", "transport-io"] }
+tempfile.workspace = true

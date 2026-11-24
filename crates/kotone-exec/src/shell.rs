@@ -5,8 +5,8 @@
 //!   用 `-EncodedCommand` 时报错会变成 CLIXML，模型读不懂。
 //! - 输出强制 UTF-8（中文 Windows 控制台默认 GBK）；原生程序仍按代码页输出的行逐行回退解码。
 //! - 退出码：原生程序的非零 `$LASTEXITCODE` 优先，否则有错误记录就是 1，否则 0。
-//! - 进程放进 Job Object（`KILL_ON_JOB_CLOSE`），先挂起创建、放进去再恢复，免得它在放进去之前
-//!   就启动了子进程。超时 / 取消：结束整个 Job（连同它启动的所有进程）。正常结束：先去掉
+//! - 进程放进 Job Object（`KILL_ON_JOB_CLOSE`；代码在 `kotone_platform_windows::job`，和 `kotone-mcp`
+//!   共用），先挂起创建、放进去再恢复，免得它在放进去之前就启动了子进程。超时 / 取消：结束整个 Job（连同它启动的所有进程）。正常结束：先去掉
 //!   `KILL_ON_JOB_CLOSE` 再关掉 Job——命令里 `Start-Process` 启动、要一直开着的程序（例如
 //!   BetterGI）不会被连带结束；Kotone 自己崩溃时句柄被系统关掉，Job 里还在跑的命令一并结束。
 
@@ -17,6 +17,8 @@ use std::time::{Duration, Instant};
 use kotone_core::cancel::CancellationToken;
 
 use crate::text;
+#[cfg(windows)]
+use kotone_platform_windows::job;
 
 pub const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 pub const MAX_TIMEOUT_MS: u64 = 600_000;
@@ -133,23 +135,13 @@ pub async fn run(
     .stderr(std::process::Stdio::piped())
     .kill_on_drop(true);
     #[cfg(windows)]
-    cmd.creation_flags(job::CREATE_SUSPENDED | job::CREATE_NO_WINDOW);
+    let (mut child, job) =
+        job::spawn_in_job(&mut cmd).map_err(|e| format!("启动 PowerShell 失败：{e}"))?;
+    #[cfg(not(windows))]
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("启动 PowerShell 失败：{e}"))?;
 
-    #[cfg(windows)]
-    let job = {
-        let job = job::Job::new().ok();
-        let job = match (job, child.raw_handle()) {
-            (Some(job), Some(handle)) if job.assign(handle).is_ok() => Some(job),
-            _ => None,
-        };
-        if let Some(pid) = child.id() {
-            job::resume_process(pid);
-        }
-        job
-    };
     #[cfg(windows)]
     let in_job = job.is_some();
     #[cfg(not(windows))]
@@ -235,114 +227,6 @@ pub async fn run(
         cancelled,
         in_job,
     })
-}
-
-#[cfg(windows)]
-mod job {
-    use std::ffi::c_void;
-    use std::os::windows::io::RawHandle;
-
-    use windows::core::PCWSTR;
-    use windows::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
-    };
-    use windows::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    };
-    use windows::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
-
-    pub const CREATE_SUSPENDED: u32 = 0x0000_0004;
-    pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-    /// 句柄存成整数，保证跨 `.await` 时 `Send`。
-    pub struct Job(isize);
-
-    impl Job {
-        pub fn new() -> Result<Self, String> {
-            // SAFETY: 匿名 Job，失败返回错误。
-            let handle =
-                unsafe { CreateJobObjectW(None, PCWSTR::null()) }.map_err(|e| e.to_string())?;
-            let job = Job(handle.0 as isize);
-            job.set_limits(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)?;
-            Ok(job)
-        }
-
-        fn handle(&self) -> HANDLE {
-            HANDLE(self.0 as *mut c_void)
-        }
-
-        fn set_limits(&self, flags: JOB_OBJECT_LIMIT) -> Result<(), String> {
-            let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-            info.BasicLimitInformation.LimitFlags = flags;
-            // SAFETY: info 是正确大小的结构，句柄有效。
-            unsafe {
-                SetInformationJobObject(
-                    self.handle(),
-                    JobObjectExtendedLimitInformation,
-                    &info as *const _ as *const c_void,
-                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-                )
-            }
-            .map_err(|e| e.to_string())
-        }
-
-        pub fn assign(&self, process: RawHandle) -> Result<(), String> {
-            // SAFETY: 进程句柄来自刚创建的子进程。
-            unsafe { AssignProcessToJobObject(self.handle(), HANDLE(process)) }
-                .map_err(|e| e.to_string())
-        }
-
-        /// 结束 Job 里的所有进程。
-        pub fn terminate(self) {
-            // SAFETY: 句柄有效；之后 Drop 关闭它。
-            let _ = unsafe { TerminateJobObject(self.handle(), 1) };
-        }
-
-        /// 正常结束：不再在关闭时结束剩下的进程，然后关闭。
-        pub fn release(self) {
-            let _ = self.set_limits(JOB_OBJECT_LIMIT(0));
-        }
-    }
-
-    impl Drop for Job {
-        fn drop(&mut self) {
-            // SAFETY: 只关一次。
-            let _ = unsafe { CloseHandle(self.handle()) };
-        }
-    }
-
-    /// 恢复挂起创建的进程的所有线程。
-    pub fn resume_process(pid: u32) {
-        // SAFETY: 快照与线程句柄都在这里打开和关闭。
-        unsafe {
-            let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) else {
-                return;
-            };
-            let mut entry = THREADENTRY32 {
-                dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
-                ..Default::default()
-            };
-            if Thread32First(snapshot, &mut entry).is_ok() {
-                loop {
-                    if entry.th32OwnerProcessID == pid {
-                        if let Ok(thread) =
-                            OpenThread(THREAD_SUSPEND_RESUME, false, entry.th32ThreadID)
-                        {
-                            ResumeThread(thread);
-                            let _ = CloseHandle(thread);
-                        }
-                    }
-                    if Thread32Next(snapshot, &mut entry).is_err() {
-                        break;
-                    }
-                }
-            }
-            let _ = CloseHandle(snapshot);
-        }
-    }
 }
 
 #[cfg(all(test, windows))]
