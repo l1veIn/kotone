@@ -2,6 +2,8 @@
 
 状态：进行中（2026-11-24 起，分支 `claude/plugins`）。方向见 [ADR 038](adr/038-kotone-and-apps.md)（Accepted）。每一步的实际情况写在第九节“实现记录”。
 
+**到哪了（2026-11-24 第四轮会话结束时）**：第 1–4 步做完（英雄联盟、游戏语音、音乐、同传是插件；浏览器和 computer use 按讨论留在本体；左侧栏不放插件）。第 5 步停在“在本体里按职责拆开”，第 6 步停在两次“只搬不改”：再往下都要玩家先定几件看得见的事（见第九节第 5、6 步的“下一步”）。第 7 步做了插件边界的测试和设置里的“浏览器”一节；英雄联盟的事件目录由插件登记、设置页只剩本体这两件跟着第 5、6 步走。
+
 玩家定了方向，细节由 Claude 按 ADR 038 的原则定。每一步做完向玩家报两件事：本体删了多少行，玩家能看到什么变化。
 
 ## 一、要达到什么
@@ -550,3 +552,45 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 **第 4 步合起来**：游戏语音、音乐、同传三个插件搬完（浏览器按讨论留在本体）；设置里少了游戏语音，音乐页从左侧栏挪进“设置 → 插件”。本体 Rust 净少约 1,200 行（游戏语音）+ 3,468 行的放歌 crate 整个搬出 + 约 850 行桌面端放歌代码；宿主为插件新加的能力：她开着没有、改自己的设置、她的嘴（合成、在扬声器上说）、下载、凭据、网页登录小窗口、她在不在出声、替玩家对她说一句、耳朵在听什么；插件加了 `stop`、`settings_changed`；清单加了 `tool_prefix`。
 
 **还没测（要你来）**：游戏语音在真游戏里队友能不能听到；音乐扫码登录以后的那一半（`music_real.py --login`）；同传在真游戏 / Discord 里的识别和翻译质量。
+
+### 第 5 步：语音输入——停在“按职责拆开”（2026-11-24，`553107a8`）
+
+**做了的**：3,573 行的 `crates/kotone-core/src/orchestrator.rs` 拆成 `orchestrator/` 目录：`mod.rs`（状态、组装、胶水，490 行）、`capture.rs`（开始一次会话、录音，800）、`hotkeys.rs`（语音输入热键、频道、文字处理热键，369）、`assistant_input.rs`（她的耳朵，248）、`finalize.rs`（结束一句，209）、`lifecycle.rs`（取消、中止、确认，198）、`voice_input/`（“听到以后”：识别出的文字、文字处理、发送、记录，共 995）、`tests.rs`。只搬不改：逐行核对，新加的只有 mod / use、可见性、impl 包装、rustfmt 折行（145 行加、73 行删）；测试名和数量前后一样（单元 307、集成 85），`tests/orchestrator.rs` 一个字没改；clippy 干净；命令行 wav 直灌和虚拟声卡两条路都走到预览（隔离的 KOTONE_HOME、真的流式模型）。玩家看不到任何变化。
+
+**为什么停在这里**（实施前请规划代理把 3,573 行和 4,216 行的测试过了一遍）：
+
+- **“测试一个字不改”和“搬进插件”冲突**：`tests/orchestrator.rs` 直接用 `Orchestrator::new(设置, 引擎, 录音, 注入器, 焦点, 事件)` 六个参数构造，然后要求文字处理、打字发送、记录、重发都能用；本体不能反过来依赖插件。所以“听到以后”的代码这一轮只能在本体里按职责分开，不能出 `kotone-core`。
+- **设置也被测试钉住**：测试读写 `postProcessing`、`history`、`autoSend`、`interactionMode`；搬进 `plugins.voice-input` 是配置格式的单向门，要单独做、单独测降级。
+- **没有真机基线**：“按语音输入热键 → 悬浮窗 → 打进测试窗口”没有现成的真机脚本，规划时定的规矩是没有基线就只做纯搬。
+
+**下一步**（按顺序，每步能单独编译）：
+
+1. 写 `scripts/manual-e2e/voice_input_real.py`（隔离实例、VB-CABLE 当麦克风、测试窗口、exe 拷到仓库外），先在现在的版本上跑出基线；
+2. 拆 `capture.rs` 里 540 行的 `begin_locked`（只提函数，顺序不变）；
+3. 录音的旁听者（评测录档和识别记录都要 PCM、第一个字的时间、VAD 段落：两个用户，可以抽）；
+4. “听一句”和“听到以后”之间的缝收成约 6 个方法（听到了一句、确认、会话结束、发送在不在跑、目标窗口、重发），本体的文件不再直接碰发送和记录的类型；
+5. 之后要玩家先定的：测试里加一行把“听到以后”接上（或者把这部分测试搬进插件）；设置什么时候搬、怎么搬；关掉“语音输入”插件会怎样（没有语音输入热键、没有悬浮窗、她没有 `game_chat.send`？）。然后才是搬进 `plugins/voice-input`、文字处理（`kotone-postprocess`，要先断开它对 `kotone-ai` 的依赖）、`game_chat.send` 用 `tool_prefix = "game_chat"` 保留原名、界面（文字处理页、识别记录页、悬浮窗）。
+6. 宿主要加的：注册“听到以后”的接口和会话句柄、替插件登记几个热键（频道、重发、文字处理开关）、共用的注入器、给插件调模型（翻译、润色，Key 留在宿主）、`Plugin::call` 带上是谁在调。打字注入可以直接用系统适配层（没有状态的系统调用）。
+
+**顺带修的**：`scripts/e2e-virtual-audio.sh` 引擎名过时、改写玩家的 `~/.kotone/config.json`；跑它时路径 2 用了真实注入器，把一句识别结果打进了前台窗口（`4324441a` 修好：`listen --no-hotkey` 缺省只到预览，要打字加 `--send`；脚本用隔离的 KOTONE_HOME）。
+
+### 第 6 步：按键程序——停在两次“只搬不改”（2026-11-24，`b5105334`、`cd2b8bf0`）
+
+**做了的**（玩家看不到任何变化）：
+
+- `b5105334`：识别图片里的文字（`ocr_image` / `OcrLine`）从桌面端的 `automation.rs`（按键程序那边）挪进 `ocr_engines.rs`。computer use 的 `game.look` 和给插件的 `screen_text` 都用它：它是本体的“眼睛”。
+- `cd2b8bf0`：桌面端 `automation.rs` 拆成 `automation/mod.rs`（自动化：库、运行、事件触发、定时、停下、界面命令、启动器、模板图片）和 `automation/program.rs`（只有按键程序用的 `DesktopHost`，Luau 程序的 `ScriptHost` 实现，约 250 行）。
+- 两次都只有 use、可见性、调用路径这几类改动（逐行核对）；桌面端测试 111 个，名字和数量一样（`mean_luma` 的测试跟着函数挪进 `program.rs`，模块路径变长）；clippy、rustfmt 干净。
+
+**为什么停在这里**（实施前请规划代理把程序、自动化、computer use 和测试过了一遍）：
+
+- 再往下是把 Luau 运行时（`crates/kotone-script`，1,835 行）和 `program.rs` 搬进 `plugins/key-programs`，宿主要给插件一个“这一次运行能动的游戏窗口”的句柄（绑窗口、截图、按键 / 松开 / 打字 / 鼠标、取消、识别文字、说一句、模板图片）。这是新的大权力，以后“每个插件一个进程”时收不回来（单向门，原则 11），要玩家先看过。
+- 真按键的真机测试要机器空着（测试窗口要在前台、会抢焦点），这轮玩家一直在用电脑，没跑。目前程序的真机检查只有手跑的步骤（`docs/research/2026-11-16-companion-scripts.md`）。
+- 被测试钉住的：`AutomationScheduler::open`、`ProgramLauncher`（`FakeLauncher`）、内置宏 `BUILTIN_PROGRAM_IDS` 和 `ensure_builtin`、`automation.*` 工具名。
+
+**下一步**：
+
+1. 写 `scripts/manual-e2e/key_programs_real.py`（真按键只发给测试窗口；exe 拷到仓库外；隔离的 KOTONE_HOME；有游戏在跑或前台不是终端 / 测试窗口就退出），在现在的版本上跑出基线：按节拍按键、每个内置宏、停下时松开按住的键、窗口关了算失败、`allowAutomationInput=false` 拒绝、第 4 个同时运行的程序 BUSY、程序在跑时 `game.act` 被拒、退出时松键、窗口失焦就暂停不补、保存时语法错误被拒、`find_image` / `find_text` / `say` / `toast`；
+2. 两把输入锁（`computer_use::busy` 和 `automation::program_running` 互相查）合成本体的一把锁（顺带堵一个小竞态）；
+3. 一次提交搬过去（不能搬一半）：`kotone-script` → `plugins/key-programs/src/script/`（测试不改）、`program.rs` 改成用宿主给的句柄；插件清单不写 `[agent]`（她的提示词不变）；两个内部工具 `key_programs.run`、`key_programs.check`；
+4. 要玩家定的（看得见的）：关掉“按键程序”会怎样（程序类的自动化、内置宏、`saved.*`、快捷指令是拒绝并说明、还是消失、还是根本没有开关）；内置宏挪到插件页面，还是两边都有；程序编辑器留在自动化的编辑器里吗；每个游戏的“允许程序按键”留在游戏配置里（推荐：它也挡她的 `game.act`）。
