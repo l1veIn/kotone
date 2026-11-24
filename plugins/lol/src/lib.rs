@@ -17,6 +17,7 @@ use kotone_plugin_api::{BoxFuture, Host, Manifest, Plugin, ToolResult, ToolSpec}
 use serde_json::Value;
 
 pub mod client;
+pub mod control;
 mod overlays;
 pub mod pages;
 pub mod stats;
@@ -24,6 +25,7 @@ mod stats_tools;
 pub mod tools;
 mod watcher;
 
+pub use control::SOURCE_CONTROL;
 pub use stats_tools::{SOURCE_OPGG, SOURCE_STATS};
 pub use watcher::SOURCE_CLIENT;
 
@@ -43,6 +45,8 @@ pub struct LolPlugin {
     stats: OnceLock<stats::Stats>,
     /// 覆盖层（选英雄、海克斯评分）现在的样子。
     overlay: Mutex<overlays::OverlayState>,
+    /// 操作客户端（自动接受、自动选 / 禁）做过什么。
+    control: Mutex<control::ControlState>,
 }
 
 impl LolPlugin {

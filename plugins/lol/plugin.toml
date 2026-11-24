@@ -30,6 +30,13 @@ description = "用 OP.GG 官方 MCP 补充全球数据（英雄的出装、克�
 enabled_by_default = false
 risk = "已经替你去问 OP.GG 能不能在 Kotone 里用（github.com/opgginc/opgg-mcp/issues/26）；OP.GG 回复同意前默认关。网站协议不许程序自动访问，打开就是你自己决定先用。"
 
+[[sources]]
+id = "control"
+name = "操作客户端"
+description = "照 LeagueAkari 操作英雄联盟客户端：自动接受对局、按你排好的顺序自动选 / 禁英雄；你说了才让她替你接受对局、选或禁某个英雄。读和写都只走客户端自己的本机接口，不读游戏内存、不注入。要“读客户端数据”也开着。"
+enabled_by_default = false
+risk = "外服有人用了自动接受、自动选英雄后被永久封号（LeagueAkari 的 github.com/LeagueAkari/LeagueAkari/issues/523），国服也可能违反腾讯的用户协议。默认关，打开就是你自己决定承担这个风险。"
+
 [[pages]]
 uri = "ui://kotone/lol/match"
 title = "这局"
@@ -77,5 +84,6 @@ rule = """- 英雄联盟（读本机的客户端和局内接口，马上返回�
 挑一两个最值得说的用信息的口吻说（“对面辅助最近五连败、劫最近没玩过”），不下命令，隐藏战绩的提一句；\
 “我最近怎么样”“查一下对面亚索 / 某某#1234 的战绩”用 lol.player；\
 “亚索克制谁”“刀妹出什么”“海斗里这个英雄拿什么海克斯”用 lol.champion，“现在什么英雄强”用 lol.tier，说的时候带一句出处（“掌盟的数据”）。\
+玩家说“帮我接受对局”“帮我选 / 禁 亚索”“先亮一下亚索”才用 lol.client（操作客户端，玩家没说就不用）。\
 玩家说了“发出去 / 发聊天框”才用 game_chat.send 发：技能发 lol.spell 返回的 chat 那句，战绩一条一行。
 """

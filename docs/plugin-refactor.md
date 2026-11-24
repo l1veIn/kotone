@@ -455,3 +455,32 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 - **掉帧**（照 aramhex 的测法）：用 PresentMon 看 Present Mode 和帧率，分别记“Kotone 没开”“覆盖层显示时”“覆盖层藏起来时”，看会不会从 `Hardware: Independent Flip` 变成 `Composed: Flip`、帧率被压到刷新率；有没有黑闪；
 - 海斗三选一时真画面里认不认得出三张卡片（要装本地文字识别模型），识别的 CPU 占用；
 - 选英雄面板的位置挡不挡东西；峡谷里的分路（`assignedPosition`）。
+
+### 第 3.5 步：英雄联盟插件的“操作客户端”（2026-11-24）
+
+**玩家能看到的**：
+
+- 英雄联盟插件的“设置”里多了第四个数据开关 **操作客户端**（默认关），风险提示写着 LeagueAkari #523（外服有人用了自动接受、自动选英雄后被永久封号），能点开那个 issue。截图：`target/plugin-shots/step3.5/lol-control-settings.png`。
+- 打开以后多一块偏好：**自动接受对局**（可以设等几秒，0–8 秒）、**自动选英雄**（按你排的顺序，挑第一个能选的；“选了就锁定”或只亮出来；轮到你以后等几秒）、**自动禁英雄**（按顺序，不禁队友想玩的）。
+- 你说“帮我接受对局”“帮我选亚索”“禁掉劫”“先亮一下亚索”，她用 `lol.client` 去做；**默认要先问你一次**（这个工具的副作用是“会操作英雄联盟客户端”，权限默认询问）。开关关着时这个工具不出现。
+
+**本体变了多少**：本体只加了一个权限分类（“会操作英雄联盟客户端”默认询问）和“打开页面”默认允许的修正（`f0227384`：第 2 步漏了，`ui.open` 按“未归类的副作用”默认要问；加了测试，工具服务里每个副作用都要归类）。插件：`control.rs`（规则和每一轮，约 470 行含测试）、`lol.client` 和只给页面用的 `lol.champions`、客户端接口的 POST / PATCH。
+
+**定下来的细节**（照 LeagueAkari MIT `dev` 分支的 `auto-gameflow`、`auto-select`）：
+
+- 接受对局：阶段是 `ReadyCheck`、自己还没回应（`playerResponse` = `None`）时，等你设的秒数，`POST /lol-matchmaking/v1/ready-check/accept`；你自己点了就不管。
+- 选 / 禁：当前这一轮（第一组还有没做完的动作）里轮到自己、正在进行的那个动作；按顺序挑第一个能用的：客户端说能选 / 能禁（`pickable-champion-ids` / `bannable-champion-ids`）、没被禁、没被别人选；禁的时候不禁队友想玩的（`championPickIntent`）。`PATCH /lol-champ-select/v1/session/actions/{id}` `{championId, completed}`；禁英雄总是直接禁，选英雄看“选了就锁定”。每个动作只试一次（失败了不反复发）。
+- 和 Akari 不同的地方：Akari 收客户端的事件（WebSocket）马上反应，我们每 2 秒看一次（和读阶段同一轮），所以“等几秒”实际会多 0–2 秒。确认对局一共约 10 秒，所以等待最多 8 秒。
+- 只走客户端自己的本机接口（读和写），要“读客户端数据”也开着；不读游戏内存、不注入。偏好存在 `plugins.lol.settings`（`autoAccept`、`acceptDelaySeconds`、`pick`、`ban`）。
+
+**检查**：
+
+- Rust：`kotone-plugin-lol` 55（新加：轮到谁、挑哪个英雄、跳过被禁 / 被选 / 队友想玩的、锁不锁、准备确认、偏好的范围）、`kotone-agent` 78（新加：工具服务里每个副作用都归了类）；clippy、fmt 干净。
+- 真机（假客户端，不开游戏、不按键、不用模型）：新脚本 `scripts/manual-e2e/lol_client_real.py` 13/13：
+  - 开关关着（默认）、偏好全开：准备确认和两次轮到自己都过去了，**一个写请求都没有**，`lol.client` 不出现；
+  - 开关开着：恰好一次接受、一次禁（157，锁定）、一次选（跳过客户端说不能选的，选 39 并锁定），没有别的写请求，日志写明做了什么；
+  - 开关开着、自动的偏好关着：自己不动；经工具服务 `lol.client` 接受、亮出亚索（不锁定）、禁劫；准备确认过了再说接受会说“现在没有要确认的对局”，不写。
+- 界面：svelte-check 0 / 0；Playwright 158 个全过（新加 2 个：操作客户端默认关、LeagueAkari #523 的链接看得到、打开后才有偏好；自动接受的等待最多 8 秒、加两个英雄、调顺序、锁定、禁英雄列表都写进 `plugins.lol.settings`，别的偏好不丢）。
+- 原有的两个真机脚本：`lol_tools_real.py --while-playing` 32/32、`game_events_real.py` 12/12。
+
+**还没测（要你开局）**：真客户端里的接受、选、禁（接口路径和请求体照 Akari，假客户端按 Akari 的写法回答）；被封号的风险只有你能决定。

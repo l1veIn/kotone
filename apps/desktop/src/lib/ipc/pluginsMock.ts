@@ -7,7 +7,9 @@ import lolZh from "../../../../../plugins/lol/messages/zh-CN.json";
 import type { PluginInfo, PluginManifest, PluginToolResult, PluginVisibility } from "../plugins";
 import { getSettings } from "./browserMock";
 import { findSamplePlayer, sampleGame, sampleMatch, samplePlayer } from "./lolMock";
-import { findSampleChampion, sampleChampionMayhem, sampleChampionRift, sampleTierMayhem, sampleTierRift } from "./lolStatsMock";
+import {
+  findSampleChampion, sampleChampionList, sampleChampionMayhem, sampleChampionRift, sampleTierMayhem, sampleTierRift,
+} from "./lolStatsMock";
 import {
   OVERLAY_AUGMENTS, OVERLAY_CHAMP_SELECT, PAGE_CHAMPION, PAGE_GAME, PAGE_MATCH, PAGE_PLAYER, PAGE_TIER,
 } from "$plugins/lol/ui/types";
@@ -38,6 +40,13 @@ const lol: PluginManifest = {
     description: lolZh.plugin_lol_source_opgg_desc,
     enabledByDefault: false,
     risk: lolZh.plugin_lol_source_opgg_risk,
+  }, {
+    // 操作客户端（照 LeagueAkari，第 3.5 步）：默认关，风险提示写着 LeagueAkari #523
+    id: "control",
+    name: lolZh.plugin_lol_source_control_name,
+    description: lolZh.plugin_lol_source_control_desc,
+    enabledByDefault: false,
+    risk: lolZh.plugin_lol_source_control_risk,
   }],
   pages: [
     { uri: PAGE_MATCH, title: lolZh.plugin_lol_page_match, needs: ["client"] },
@@ -65,6 +74,8 @@ const TOOLS: Record<string, MockTool[]> = {
     { name: "lol.game", needs: ["client"], visibility: ["app"], page: PAGE_GAME },
     { name: "lol.champion", needs: ["stats"], visibility: BOTH, page: PAGE_CHAMPION },
     { name: "lol.tier", needs: ["stats"], visibility: BOTH, page: PAGE_TIER },
+    { name: "lol.client", needs: ["client", "control"], visibility: BOTH, page: null },
+    { name: "lol.champions", needs: [], visibility: ["app"], page: "ui://kotone/lol/settings" },
   ],
 };
 
@@ -102,12 +113,18 @@ export async function pluginCall(plugin: string, tool: string, args: Record<stri
   const spec = (TOOLS[plugin] ?? []).find((t) => t.name === tool);
   if (!spec) throw new Error(`${plugin}: ${tool}`);
   if (plugin !== "lol") return { content: { status: "error", text: tool } };
-  const needs = spec.needs[0] ?? "client";
-  if (await sourceOff(needs)) {
-    const name = lol.sources.find((s) => s.id === needs)?.name ?? needs;
-    return { content: { status: "disabled", text: name } };
+  for (const needs of spec.needs) {
+    if (await sourceOff(needs)) {
+      const name = lol.sources.find((s) => s.id === needs)?.name ?? needs;
+      return { content: { status: "disabled", text: name } };
+    }
   }
   switch (tool) {
+    case "lol.champions":
+      return { content: { status: "ok" }, structuredContent: { champions: sampleChampionList() }, ui: { uri: "ui://kotone/lol/settings" } };
+    case "lol.client":
+      // 预览里没有客户端：照真的回答“现在不在这个阶段”
+      return { content: { status: "not_now", text: "dev:web" } };
     case "lol.champion": {
       const query = typeof args.champion === "string" ? args.champion : "";
       const champion = findSampleChampion(query);

@@ -16,6 +16,10 @@ pub const TOOL_GAME: &str = "lol.game";
 /// 网上的统计（数据开关 `stats`）：一个英雄、强度榜。
 pub const TOOL_CHAMPION: &str = "lol.champion";
 pub const TOOL_TIER: &str = "lol.tier";
+/// 操作客户端（数据开关 `control`，默认关）。
+pub const TOOL_CLIENT: &str = "lol.client";
+/// 只给页面用：全部英雄的名字（设置里排自动选 / 禁的顺序）。
+pub const TOOL_CHAMPIONS: &str = "lol.champions";
 
 pub fn specs() -> Vec<ToolSpec> {
     vec![
@@ -109,10 +113,30 @@ mode：rift 峡谷 / mayhem 海斗，不写时这局是海斗就查海斗，否�
                 "lane": {"type": "string", "maxLength": 10, "description": "分路：上 / 野 / 中 / 下 / 辅"}
             }}),
         )
-        .page(crate::stats_tools::PAGE_TIER)
+                .page(crate::stats_tools::PAGE_TIER)
         .needs(&["stats"])
         .instant()
         .untrusted(),
+        ToolSpec::new(
+            TOOL_CLIENT,
+            "操作英雄联盟客户端（照 LeagueAkari，只走客户端的本机接口）：accept 接受对局、decline 拒绝；选英雄阶段 pick 选并锁定、\
+ban 禁、hover 只亮出来（还没轮到也行）。champion 写名字、称号或外号。**只在玩家明确说了才用**（“帮我接受”“帮我选亚索”“禁掉劫”），\
+不要自己决定选谁；没轮到、不在这个阶段时会说。有封号风险，玩家要先在插件里打开“操作客户端”。",
+            json!({"type": "object", "additionalProperties": false, "required": ["action"], "properties": {
+                "action": {"enum": ["accept", "decline", "pick", "ban", "hover"]},
+                "champion": {"type": "string", "maxLength": 30, "description": "pick / ban / hover 时：英雄的名字、称号或外号"}
+            }}),
+        )
+        .needs(&["client", "control"])
+        .side_effects(&["controls-game-client"])
+        .instant(),
+        ToolSpec::new(
+            TOOL_CHAMPIONS,
+            "全部英雄的名字和 id（插件设置里排自动选 / 禁英雄的顺序用）。",
+            json!({"type": "object", "additionalProperties": false, "properties": {}}),
+        )
+        .app_only()
+        .page(crate::pages::PAGE_SETTINGS),
     ]
 }
 
@@ -133,22 +157,36 @@ mod tests {
                 TOOL_PLAYER,
                 TOOL_GAME,
                 TOOL_CHAMPION,
-                TOOL_TIER
+                TOOL_TIER,
+                TOOL_CLIENT,
+                TOOL_CHAMPIONS
             ]
         );
         for s in &specs {
             assert_eq!(s.parameters["type"], "object");
-            assert!(s.untrusted, "{} 里有别人写的字", s.name);
             assert!(s.for_app());
-            let source = if matches!(s.name.as_str(), TOOL_CHAMPION | TOOL_TIER) {
-                "stats"
-            } else {
-                "client"
+            let needs: &[&str] = match s.name.as_str() {
+                TOOL_CHAMPION | TOOL_TIER => &["stats"],
+                TOOL_CLIENT => &["client", "control"],
+                TOOL_CHAMPIONS => &[],
+                _ => &["client"],
             };
-            assert_eq!(s.needs, [source], "{}", s.name);
+            assert_eq!(s.needs, needs, "{}", s.name);
+            // 读到别人写的字的都按不可信数据
+            let trusted = matches!(s.name.as_str(), TOOL_CLIENT | TOOL_CHAMPIONS);
+            assert_eq!(s.untrusted, !trusted, "{}", s.name);
         }
-        // 给她的都马上返回；单局详情只给页面
-        for s in specs.iter().filter(|s| s.name != TOOL_GAME) {
+        let client = specs.iter().find(|s| s.name == TOOL_CLIENT).unwrap();
+        assert_eq!(
+            client.side_effects,
+            ["controls-game-client"],
+            "默认先问玩家"
+        );
+        // 给她的都马上返回；单局详情和英雄列表只给页面
+        for s in specs
+            .iter()
+            .filter(|s| !matches!(s.name.as_str(), TOOL_GAME | TOOL_CHAMPIONS))
+        {
             assert!(s.instant && s.for_model(), "{}", s.name);
         }
         let game = specs.iter().find(|s| s.name == TOOL_GAME).unwrap();

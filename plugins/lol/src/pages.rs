@@ -14,6 +14,7 @@ use crate::client::GameData;
 pub const PAGE_MATCH: &str = "ui://kotone/lol/match";
 pub const PAGE_PLAYER: &str = "ui://kotone/lol/player";
 pub const PAGE_GAME: &str = "ui://kotone/lol/game";
+pub const PAGE_SETTINGS: &str = "ui://kotone/lol/settings";
 
 /// 页面里每个人最多带几局近况（这局页面上一排小格子）。
 const RECENT: usize = 10;

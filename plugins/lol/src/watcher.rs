@@ -30,7 +30,8 @@ use crate::client::text::{self, ScoutPlayer};
 use crate::client::{in_game_phase, GameData, Lcu, LcuAuth, Live, LolError};
 use crate::pages;
 use crate::tools::{
-    TOOL_CHAMPION, TOOL_GAME, TOOL_MATCH, TOOL_PLAYER, TOOL_SCOUT, TOOL_SPELL, TOOL_TIER,
+    TOOL_CHAMPION, TOOL_CHAMPIONS, TOOL_CLIENT, TOOL_GAME, TOOL_MATCH, TOOL_PLAYER, TOOL_SCOUT,
+    TOOL_SPELL, TOOL_TIER,
 };
 use crate::LolPlugin;
 
@@ -228,6 +229,8 @@ impl LolPlugin {
             }
         };
         let previous = std::mem::replace(&mut self.state().phase, phase.clone());
+        // 操作客户端（ADR 038 第 3.5 步，开关默认关）：自动接受对局、自动选 / 禁英雄
+        self.run_control(host.as_ref(), &lcu, &phase).await;
         self.load_data_in_background(&lcu);
         let mut live = None;
         if in_game_phase(&phase) {
@@ -626,6 +629,7 @@ impl LolPlugin {
     ) -> Result<ToolResult, String> {
         // 网上的统计不要客户端（开关各管各的）
         match name {
+            TOOL_CHAMPIONS => return Ok(self.champions_tool(host.as_ref()).await),
             TOOL_CHAMPION => return Ok(self.champion_tool(host.as_ref(), arguments).await),
             TOOL_TIER => return Ok(self.tier_tool(host.as_ref(), arguments).await),
             _ => {}
@@ -641,6 +645,10 @@ impl LolPlugin {
             TOOL_SPELL => ToolResult::content(self.spell_tool(host.as_ref(), arguments).await),
             TOOL_SCOUT => self.scout_tool(host, arguments).await,
             TOOL_PLAYER => self.player_tool(host.as_ref(), arguments).await,
+            TOOL_CLIENT => match self.lcu_or_closed(host.as_ref()) {
+                Ok(lcu) => self.client_tool(host.as_ref(), &lcu, arguments).await,
+                Err(result) => ToolResult::content(result),
+            },
             TOOL_GAME => self.game_tool(host.as_ref(), arguments).await,
             other => return Err(format!("{other} 不是英雄联盟工具")),
         })

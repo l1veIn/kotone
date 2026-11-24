@@ -51,6 +51,19 @@ const AUGMENTS = [
 // i18n-ignore-end
 
 /** 玩家说的名字（短名、称号、外号）→ 英雄；找不到时 null。 */
+/** `lol.champions`（只给页面）的示例：全部英雄的名字（这里二十个）。 */
+export function sampleChampionList(): StatChampion[] {
+  // i18n-ignore-start：示例数据
+  const more: StatChampion[] = [
+    { id: 238, label: "影流之主 劫", short: "劫" },
+    { id: 30, label: "死亡颂唱者 卡尔萨斯", short: "卡尔萨斯" },
+    { id: 63, label: "复仇焰魂 布兰德", short: "布兰德" },
+    { id: 86, label: "德玛西亚之力 盖伦", short: "盖伦" },
+  ];
+  // i18n-ignore-end
+  return [...CHAMPS, ...more].sort((a, b) => a.short.localeCompare(b.short, "zh-CN"));
+}
+
 export function findSampleChampion(query: string): StatChampion | null {
   const q = query.trim();
   if (!q) return null;

@@ -1,6 +1,7 @@
 <script lang="ts">
   // 英雄联盟插件的页面（ADR 038）：标题 + 分页。这局（`lol.scout`）、战绩（`lol.player`，能搜别人）——要“读客户端数据”；
-  // 英雄（`lol.champion`，能搜、切峡谷 / 海斗、切分路）、强度榜（`lol.tier`）——要“用网上的统计”；设置（数据开关和风险提示）。
+  // 英雄（`lol.champion`，能搜、切峡谷 / 海斗、切分路）、强度榜（`lol.tier`）——要“用网上的统计”；设置（数据开关和风险提示，
+  // 以及“操作客户端”的偏好：自动接受、自动选 / 禁英雄）。
   // 每个分页里能一路点进去（这局 → 某个人 → 某一局；强度榜 → 某个英雄 → 克制它的英雄），各自记着点到哪了，能返回。
   // 分页要的数据开关关着时，只写一句并给个“去设置”。
   import SettingsPage from "$lib/components/settings/SettingsPage.svelte";
@@ -14,6 +15,7 @@
   import type { PluginPageProps } from "$lib/pluginUi";
   import { m } from "$lib/paraglide/messages.js";
   import { PAGE_CHAMPION, PAGE_MATCH, PAGE_PLAYER, PAGE_TIER } from "./types";
+  import ControlSettings from "./ControlSettings.svelte";
 
   let { plugin }: PluginPageProps = $props();
   type StackTab = "match" | "player" | "champion" | "tier";
@@ -71,6 +73,14 @@
     <SettingsSection title={m.plugin_lol_tab_settings()} description={m.plugin_lol_settings_intro({ companion: $companionName })} testid="plugin-lol-settings">
       <PluginSwitches {plugin} />
     </SettingsSection>
+    <!-- 操作客户端的偏好（第 3.5 步，照 LeagueAkari）：数据开关 control 开着才能改 -->
+    <section class="min-w-0 space-y-2.5" data-testid="plugin-lol-control-section">
+      <div class="px-1">
+        <h2 class="m-0 text-sm font-semibold text-foreground">{m.plugin_lol_control_title()}</h2>
+        <p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">{m.plugin_lol_control_intro()}</p>
+      </div>
+      <ControlSettings {plugin} />
+    </section>
   {:else if blocked}
     <div class="flex flex-wrap items-center gap-2 rounded-xl border border-hairline bg-card/40 px-4 py-3 text-xs text-muted-foreground" data-testid="plugin-lol-source-off">
       <span>{m.plugin_lol_source_off({ source: sourceLabel(blocked) })}</span>

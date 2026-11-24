@@ -1,4 +1,5 @@
-//! 两个本机接口的 HTTP 客户端：只连 127.0.0.1、只发 GET。
+//! 两个本机接口的 HTTP 客户端：只连 127.0.0.1。读都是 GET；写（POST / PATCH）只有“操作客户端”
+//! （[`crate::control`]，数据开关 `control`，默认关）用。
 //! 证书是客户端和游戏自签的，不校验（照 LeagueAkari 的 `rejectUnauthorized: false`）。
 
 use std::time::Duration;
@@ -101,6 +102,31 @@ impl Lcu {
                 .get(format!("{}{path}", self.base))
                 .header("Authorization", &self.authorization)
                 .header("Accept", "application/json"),
+        )
+        .await
+    }
+
+    /// 写：只给“操作客户端”用（接受对局、选 / 禁英雄）。
+    pub async fn post(&self, path: &str, body: &Value) -> Result<Value, LolError> {
+        let mut request = self
+            .http
+            .post(format!("{}{path}", self.base))
+            .header("Authorization", &self.authorization)
+            .header("Accept", "application/json");
+        if !body.is_null() {
+            request = request.json(body);
+        }
+        get_json(request).await
+    }
+
+    /// 写：只给“操作客户端”用（选 / 禁英雄的动作）。
+    pub async fn patch(&self, path: &str, body: &Value) -> Result<Value, LolError> {
+        get_json(
+            self.http
+                .patch(format!("{}{path}", self.base))
+                .header("Authorization", &self.authorization)
+                .header("Accept", "application/json")
+                .json(body),
         )
         .await
     }

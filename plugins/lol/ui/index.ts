@@ -43,6 +43,8 @@ const ui: PluginUi = {
     "lol.game": () => m.plugin_lol_tool_game(),
     "lol.champion": () => m.plugin_lol_tool_champion(),
     "lol.tier": () => m.plugin_lol_tool_tier(),
+    "lol.client": () => m.plugin_lol_tool_client(),
+    "lol.champions": () => m.plugin_lol_tool_champions(),
   },
   // 游戏上方的覆盖层（照 aramhex）：选英雄时的胜率、海斗三选一时的海克斯评分
   overlays: {

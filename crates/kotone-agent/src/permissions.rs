@@ -114,6 +114,11 @@ const ASK_EFFECTS: &[(&str, &str)] = &[
     ("speaks-to-teammates", "会用麦克风对游戏里的队友说话"),
     ("writes-skills", "会修改技能"),
     ("writes-soul", "会修改琴音的人格（SOUL.md）"),
+    // ADR 038 第 3.5 步：照 LeagueAkari 操作英雄联盟客户端（有封号风险，LeagueAkari #523）
+    (
+        "controls-game-client",
+        "会操作英雄联盟客户端（接受对局、选 / 禁英雄）",
+    ),
 ];
 
 /// 一段对话里“本段对话都允许”的记录。
