@@ -111,9 +111,13 @@ enum Command {
         /// 会话强制预览收尾不触发真实注入，喂完自动 finalize 退出
         #[arg(long)]
         wav: Option<String>,
-        /// 跳过 LL 钩子：立即开始会话，--duration 到时自动结束（配合 --wav 或虚拟声卡）
+        /// 跳过 LL 钩子：立即开始会话，--duration 到时自动结束（配合 --wav 或虚拟声卡）。
+        /// 缺省只识别到预览、不碰任何窗口；要真的往前台窗口打字加 --send
         #[arg(long)]
         no_hotkey: bool,
+        /// 和 --no-hotkey 一起：识别完真的往前台窗口打字（会按回车）。先确认前台是测试窗口
+        #[arg(long)]
+        send: bool,
         /// 会话时长（秒），到时自动结束退出；--wav 模式缺省 = 音频时长
         #[arg(long)]
         duration: Option<u64>,
@@ -324,9 +328,10 @@ async fn dispatch(cli: Cli) -> i32 {
             mode,
             wav,
             no_hotkey,
+            send,
             duration,
             speed,
-        } => cmd_listen(&engine, profile, key, mode, wav, no_hotkey, duration, speed).await,
+        } => cmd_listen(&engine, profile, key, mode, wav, no_hotkey, send, duration, speed).await,
         Command::Download { target } => cmd_download(&target).await,
         Command::Config { action } => match action {
             ConfigCommand::Show => cmd_config_show(),
@@ -466,11 +471,12 @@ async fn cmd_listen(
     mode: Option<String>,
     wav: Option<String>,
     no_hotkey: bool,
+    send: bool,
     duration: Option<u64>,
     speed: Option<f64>,
 ) -> i32 {
     if wav.is_some() || no_hotkey {
-        cmd_listen_session(engine, profile_id, wav, duration, speed).await
+        cmd_listen_session(engine, profile_id, wav, send, duration, speed).await
     } else {
         cmd_listen_hotkey(engine, profile_id, key, mode).await
     }
@@ -485,6 +491,7 @@ async fn cmd_listen_session(
     engine: &str,
     profile_id: Option<String>,
     wav: Option<String>,
+    send: bool,
     duration: Option<u64>,
     speed: Option<f64>,
 ) -> i32 {
@@ -500,6 +507,7 @@ async fn cmd_listen_session(
             processor_registry: None,
             history_dir: None,
             eval_dir: None,
+            send,
         },
     )
     .await
@@ -513,6 +521,8 @@ struct ListenSessionConfig {
     processor_registry: Option<std::sync::Arc<ProcessorRegistry>>,
     history_dir: Option<std::path::PathBuf>,
     eval_dir: Option<std::path::PathBuf>,
+    /// 无热键会话（不是 --wav）真的往前台窗口打字；false = 只识别到预览（NullInjector）。
+    send: bool,
 }
 
 #[cfg(windows)]
@@ -537,6 +547,7 @@ async fn cmd_listen_session_with_config(
         processor_registry,
         history_dir,
         eval_dir,
+        send,
     } = config;
     settings.stt_engine = kotone_core::stt::canonical_stt_engine(engine).to_string();
     if let Some(profile_id) = profile_id {
@@ -585,7 +596,16 @@ async fn cmd_listen_session_with_config(
                     return 2;
                 }
             };
-            (Arc::new(CpalBackend), Arc::new(WindowsInjector), d)
+            // 无人值守的测试不该往玩家的前台窗口打字（2026-11-24：虚拟声卡测试把一句识别结果打进了前台窗口）：
+            // 缺省和 --wav 一样只到预览；加 --send 才用真实注入器。
+            if send {
+                (Arc::new(CpalBackend), Arc::new(WindowsInjector), d)
+            } else {
+                settings.interaction_mode = None;
+                settings.hotkey.mode = kotone_core::hotkey::HotkeyMode::Toggle;
+                settings.auto_send = false;
+                (Arc::new(CpalBackend), Arc::new(NullInjector), d)
+            }
         }
     };
 
@@ -907,6 +927,7 @@ async fn cmd_listen(
     _mode: Option<String>,
     _wav: Option<String>,
     _no_hotkey: bool,
+    _send: bool,
     _duration: Option<u64>,
     _speed: Option<f64>,
 ) -> i32 {
@@ -2104,6 +2125,7 @@ mod tests {
             processor_registry: Some(std::sync::Arc::new(ProcessorRegistry::new())),
             history_dir: Some(directory.path().join("history")),
             eval_dir: Some(directory.path().join("eval")),
+            send: false,
         };
         (directory, config)
     }

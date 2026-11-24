@@ -12,7 +12,7 @@
 | `send --text <文本> [--profile lol] [--clipboard] [--delay-ms N]` | 一次性注入文本到前台窗口 |
 | `listen [--engine <id>]` | 热键模式：LL 钩子 → orchestrator → JSONL 事件流（Ctrl+C 退出，码 2） |
 | `listen --wav <file> [--speed N] [--engine <id>] [--profile <id>]` | wav 直灌会话模式（可固定音频 A/B 对比 profile 热词，见下） |
-| `listen --no-hotkey --duration <秒> [--engine <id>]` | 无热键会话模式（配合虚拟声卡） |
+| `listen --no-hotkey --duration <秒> [--engine <id>] [--send]` | 无热键会话模式（配合虚拟声卡）；缺省只识别到预览、不碰任何窗口，加 `--send` 才往前台窗口打字 |
 | `download <模型id>` | 下载模型（清单内任意 id，如 `x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05` / `silero-vad`；镜像策略见 download.source） |
 | `config show` | 打印当前完整配置（JSON，含默认值合并） |
 | `config get <key>` | 读单个配置项（点路径，如 `hotkey.key`） |
