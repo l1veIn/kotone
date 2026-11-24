@@ -217,3 +217,18 @@
 **RC**：版本号在分支上改成 0.2.0-rc.6（`67bc4fca`，`pnpm release:verify`、`release:test` 8/8 过），本机打了 NSIS 安装包 `target/release/bundle/nsis/Kotone_0.2.0-rc.6_x64-setup.exe`（SHA-256 `3191c0b825bf6734df0ea0109d75e5cd0b35e3e129927a20b21085e546c5fc19`，用 `tauri.ci.conf.json`，没有更新签名）；用正式版程序跑 `browser_real.py` 11/11。没有打 tag、没有合进 main、没有上传。
 
 **下一步（按顺序）**：先写第 5、6 步缺的真机基线脚本（`voice_input_real.py`、`key_programs_real.py`），在现在的版本上跑出基线；玩家定了上面的事以后接着第 5 步 2–6、第 6 步 3；然后第 7 步剩下的（英雄联盟的事件目录由插件登记、设置页只剩本体）。也可以先让别的 Agent 照 `docs/philosophy.md` 审查一遍再继续。
+
+## 九、第五轮（2026-11-24 下午）：插件页改成 App 卡片墙；语音输入准备好搬家
+
+分支 `claude/plugins`（最新 `5ecfeda4`，已推送；没合 main、没打 tag；0.2.0-rc.6 安装包是在 `67bc4fca` 打的，这一轮的改动不在里面）。
+
+**玩家这一轮定的 / 更正的**（ADR 038“怎么定的”、计划第九节最后几节）
+
+- 插件是左侧栏单独的一页，每个插件一张卡片（= 一个 MCP App），点卡片进它自己的界面，界面风格可以完全不同；以后会从别的仓库拉第三方 MCP Apps。已做（`d2cda8c6`）：左侧栏一项“插件” → 卡片墙（卡片上有开关）→ App 占满内容区；“设置 → 插件”去掉。
+- 语音输入要搬进插件（文档一直这么写）。上一轮把任务里的“把 tests/orchestrator.rs 当行为基准，拆完一个不改照样过”读成“测试文件一个字不能动”，读严了；本意是检查一条不改、照样全过。语音识别仍只有一份、在本体，语音输入插件调用本体的“听一句”；关掉语音输入插件时她替你往聊天框打字也一起停（ADR 038 早定的）。
+- 玩家问“是不是上下文漂移了”：是。长会话中途压缩过，摘要改写了原话。约定：每一大步前先重读 ADR 038“怎么定的”和计划第九节，不靠摘要；语音输入的搬家换新会话做。
+
+**这一轮做的**：`d2cda8c6` 插件页；`12d157bc`、`fda2f8bd`、`81c6aef8` 第 5 步在本体里收窄缝（“听到以后”只经 9 个方法，行为不变）；`5ecfeda4` 语音输入真机基线 `voice_input_real.py` 36/36（要玩家离开电脑约 3 分钟；前台是 GameViewer 时不跑）。
+
+**下一轮从这里开始**：把 `crates/kotone-core/src/orchestrator/voice_input/` 搬进 `plugins/voice-input`（计划第九节“第 5 步（续）”的下一步）。每一步前后跑：`cargo test -p kotone-core`（85 个集成检查不改）、`voice_input_real.py`（要玩家离开电脑）、`lol_tools_real.py --while-playing`、`game_events_real.py`。第 6 步（按键程序）要玩家先定的事还在计划第九节第 6 步。
+
