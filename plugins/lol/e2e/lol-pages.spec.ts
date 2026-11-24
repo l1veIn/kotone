@@ -201,3 +201,39 @@ test("ui.open with parameters opens that page of the App in the right sidebar; o
   expect(await page.evaluate("window.kotoneUiOpen({ uri: 'ui://kotone/settings/' })")).toBe(false);
   expect(await page.evaluate("window.kotoneUiOpen({ uri: 'https://example.com' })")).toBe(false);
 });
+
+// 预览里的素材层是开发服务器的假代理（vite.config.ts：`/<密钥>/assets/<插件>/…` 都回一张 1×1 的 PNG），不连 CommunityDragon。
+test("the 英雄 page shows skill icons with the key on each and the name on hover; letters when there is no picture", async ({ page }, testInfo) => {
+  await open(page);
+  const lol = await pluginApp(page);
+  await lol.getByTestId("lol-app-tab-champion").click();
+  await lol.getByTestId("lol-champion-search").fill("刀妹");
+  await lol.getByTestId("lol-champion-search-go").click();
+  await expect(lol.getByTestId("lol-champion-name")).toHaveText("刀锋舞者 艾瑞莉娅");
+
+  // 主升那一排：被动 + Q W E R，每个是技能图标、右下角压键位，技能名在鼠标停留提示里
+  const skills = lol.getByTestId("lol-champion-skills");
+  const top = skills.locator(".keys").getByTestId("lol-ability");
+  await expect(top).toHaveCount(5);
+  expect(await top.evaluateAll((els) => els.map((e) => e.getAttribute("data-key")))).toEqual(["P", "Q", "W", "E", "R"]);
+  const q = top.nth(1);
+  await expect(q).toHaveAttribute("data-icon", "1");
+  // 图走 Kotone 的素材层（回环代理的 /assets/lol/ + 客户端路径）
+  await expect(q.locator("img")).toHaveAttribute("src", /\/assets\/lol\/lol-game-data\/assets\/ASSETS\/Characters\/Irelia\/HUD\/Icons2D\/Irelia_Q\.png$/);
+  await expect.poll(() => q.locator("img").evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth)).toBe(1);
+  await expect(q.locator(".lv")).toHaveText("Q");
+  await expect(q.locator(".ci")).toHaveAttribute("title", "Q · 利刃冲击");
+  await expect(top.first().locator(".ci")).toHaveAttribute("title", "被动 · 艾欧尼亚热诚");
+  // 前几级的加点顺序：每一级一个图标
+  await expect(skills.locator(".order").getByTestId("lol-ability").locator("img")).toHaveCount(11);
+  await skills.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: shot(testInfo, "kotone-champion-skills") });
+
+  // 没有技能资料的英雄（客户端没开、CommunityDragon 也没取到）：字母格子，没有被动那一格
+  await lol.getByTestId("lol-champion-bad").getByTestId("lol-champion-link").first().click();
+  await expect(lol.getByTestId("lol-champion-name")).toHaveText("武器大师 贾克斯");
+  const letters = skills.locator(".keys").getByTestId("lol-ability");
+  await expect(letters).toHaveCount(4);
+  await expect(skills.locator("img")).toHaveCount(0);
+  expect(await letters.evaluateAll((els) => els.map((e) => e.textContent?.trim()))).toEqual(["Q", "W", "E", "R"]);
+});

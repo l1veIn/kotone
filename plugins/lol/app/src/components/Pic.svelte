@@ -14,6 +14,7 @@
     round = false,
     title,
     fallback,
+    badge,
     cls = "",
     children,
   }: {
@@ -28,6 +29,8 @@
     title?: string;
     /** 图挂了时显示的字，默认是名字的第一个字。 */
     fallback?: string;
+    /** 右下角的小牌（英雄技能的键位），只在有图时压上去；没图时 `fallback` 已经写着它。 */
+    badge?: string;
     cls?: string;
     /** 叠在图上的东西（等级小牌）。 */
     children?: Snippet;
@@ -49,6 +52,7 @@
       referrerpolicy="no-referrer"
       onerror={() => (failed[key] = (failed[key] ?? 0) + 1)}
     />
+    {#if badge}<span class="lv" aria-hidden="true">{badge}</span>{/if}
   {:else}
     <span class="ph" aria-hidden="true">{fallback ?? firstChar(name)}</span>
   {/if}

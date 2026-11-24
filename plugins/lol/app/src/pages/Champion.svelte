@@ -1,11 +1,12 @@
 <script lang="ts">
   // 英雄（`ui://kotone/lol/champion`，`lol.champion` 的页面；docs/design/lol-app.md 第三节 4，调研 G39）。
   // 峡谷：头部（头像 56、名字、分路、版本、强度和胜率）、换分路、难打 / 好打（点英雄进它的页）、出装（核心、鞋、出门、
-  // 第四到第六件）、符文、加点（主升和前 18 级）、召唤师技能、OP.GG（开了才有，折叠）。
+  // 第四到第六件）、符文、加点（主升和前 18 级，技能图标压键位字母，没图时是字母格子）、召唤师技能、OP.GG（开了才有，折叠）。
   // 海斗：英雄榜名次和胜率、最搭的队友、最好的海克斯（比这个英雄平均胜率高几个百分点，样本少的变淡）。
   // 出处写在页脚：腾讯 101（版本 · 日期）、aramhex-data（CC BY-NC 4.0，署名、不商用）、OP.GG。
   // 卡片（inline，她调 `lol.champion` 时）：头像 + 强度一行；核心出装一行；海斗时前 3 个海克斯。
   import { onMount } from "svelte";
+  import AbilityIcon from "../components/AbilityIcon.svelte";
   import Augment from "../components/Augment.svelte";
   import ChampIcon from "../components/ChampIcon.svelte";
   import Footer from "../components/Footer.svelte";
@@ -18,7 +19,7 @@
   import { PAGE_SETTINGS, resultStatus, TOOL_CHAMPION, type DisplayMode, type Session, type ToolResult } from "../host";
   import { m } from "../i18n.svelte";
   import type { ToolState } from "../status";
-  import { ARAMHEX_URL, isChampionData, type BuildOption, type ChampionData, type Named, type Source } from "../types";
+  import { ARAMHEX_URL, isChampionData, type Ability, type BuildOption, type ChampionData, type Named, type Source } from "../types";
 
   let {
     session,
@@ -156,8 +157,8 @@
   <Pic path={x.icon} name={x.name || String(x.id)} {size} />
 {/snippet}
 
-{#snippet keyTile(k: string, size: number)}
-  <span class="key s{size}" class:ult={k === "R"} title={k}>{k}</span>
+{#snippet keyTile(k: string, size: number, abilities: Ability[] | undefined)}
+  <AbilityIcon {k} ability={abilities?.find((a) => a.key === k)} {size} />
 {/snippet}
 
 {#if full}
@@ -260,10 +261,13 @@
             <h3>{m.plugin_lol_skills()}</h3>
             {#if d.skillPriority.length}
               <p class="prio"><span>{m.plugin_lol_skill_priority({ order: d.skillPriority.join(" > ") })}</span>
-                <span class="keys">{#each KEYS as k (k)}{@render keyTile(k, 24)}{/each}</span></p>
+                <span class="keys">
+                  {#if d.abilities?.some((a) => a.key === "P")}{@render keyTile("P", 24, d.abilities)}<span class="bar-sep"></span>{/if}
+                  {#each KEYS as k (k)}{@render keyTile(k, 24, d.abilities)}{/each}
+                </span></p>
             {/if}
             {#if d.skillOrder.length}
-              <p class="order" aria-label={m.plugin_lol_skill_order()}>{#each d.skillOrder.slice(0, 18) as k, i (i)}{@render keyTile(k, 20)}{/each}</p>
+              <p class="order" aria-label={m.plugin_lol_skill_order()}>{#each d.skillOrder.slice(0, 18) as k, i (i)}{@render keyTile(k, 20, d.abilities)}{/each}</p>
             {/if}
           </section>
         {/if}
@@ -603,29 +607,9 @@
   .order {
     display: inline-flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 3px;
     margin: 0;
-  }
-  .key {
-    display: inline-grid;
-    place-items: center;
-    width: var(--s);
-    height: var(--s);
-    border-radius: var(--lol-r-xs);
-    background: var(--lol-bg-3);
-    font-size: var(--lol-fs-xs);
-    font-weight: var(--lol-fw-strong);
-    color: var(--lol-text-2);
-  }
-  .key.s24 {
-    --s: 24px;
-  }
-  .key.s20 {
-    --s: 20px;
-  }
-  .key.ult {
-    background: var(--lol-ink-fill);
-    color: var(--lol-ink-on);
   }
   .partners {
     display: flex;

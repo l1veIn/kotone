@@ -1,16 +1,19 @@
 //! 英雄联盟插件“用网上的统计”的工具（ADR 038 第 3 步，数据开关 `stats`）：
-//! - `lol.champion`：一个英雄的强度、克制、出装、符文、加点、召唤师技能（峡谷，腾讯 101）；
+//! - `lol.champion`：一个英雄的强度、克制、出装、符文、加点、召唤师技能（峡谷，腾讯 101）；页面还带这个英雄
+//!   技能的名字和图标路径（[`crate::client::abilities`]：客户端开着问客户端，不然 CommunityDragon）；
 //!   海斗时是英雄榜上的名次、胜率、搭档和最好的海克斯（腾讯 101 + aramhex-data）；
 //! - `lol.tier`：强度榜（峡谷各路 / 海斗）。
 //!
 //! 给她的是几行字（[`ToolResult::content`]），页面拿完整的数据。数据来源写在结果里（页面上署名）。
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kotone_plugin_api::{Host, ToolResult};
 use serde_json::{json, Value};
 
+use crate::client::abilities::{self, Abilities};
+use crate::client::gamedata::Ability;
 use crate::stats::{self, aramhex, qq101, Stats};
 use crate::LolPlugin;
 
@@ -95,6 +98,20 @@ impl LolPlugin {
         }
     }
 
+    /// 英雄技能（英雄页加点那块的图，[`abilities`]）：内存 → 客户端（连着时）→ 磁盘缓存 → CommunityDragon，
+    /// 客户端、CommunityDragon 各最多等 2 秒（和腾讯 101 的请求一起等）；拿不到是空的，页面显示字母格子。
+    /// 只给页面，给她的字不用它。
+    async fn champion_abilities(&self, host: &dyn Host, id: i64) -> Vec<Ability> {
+        static ABILITIES: OnceLock<Abilities> = OnceLock::new();
+        let cache = ABILITIES.get_or_init(|| {
+            Abilities::new(host.data_dir().join("abilities"), abilities::online_base())
+        });
+        let lcu = self.connected_lcu(host);
+        cache
+            .get(lcu.as_ref().map(|l| l as &dyn abilities::Source), id)
+            .await
+    }
+
     /// 这一局是不是海斗（不在对局里时 false）。
     fn in_mayhem(&self) -> bool {
         self.current_queue() == Some(MAYHEM_QUEUE)
@@ -172,11 +189,12 @@ impl LolPlugin {
             },
         };
         let stats = self.stats_for(host);
-        let (detail, tier, statics, names) = tokio::join!(
+        let (detail, tier, statics, names, skills) = tokio::join!(
             stats.champion(id, lane),
             stats.tier_list(lane),
             stats.statics(),
-            self.names(host)
+            self.names(host),
+            self.champion_abilities(host, id)
         );
         let detail = match detail {
             Ok(d) => d,
@@ -341,11 +359,13 @@ impl LolPlugin {
             })).collect::<Vec<_>>(),
             "skillPriority": detail.skill_priority,
             "skillOrder": detail.skill_order,
+            // 被动和 Q W E R 的名字、图标路径（拿不到时空列表，页面显示字母格子）
+            "abilities": skills,
             "spells": detail.spells.iter().map(|p| json!({
                 "spells": p.spells.iter().map(|x| json!({"id": x, "name": statics.spell(*x), "icon": spell_icon(*x)})).collect::<Vec<_>>(),
                 "winRate": p.win_rate, "pickRate": p.pick_rate,
             })).collect::<Vec<_>>(),
-                        "sources": [{"name": TENCENT, "date": date}],
+            "sources": [{"name": TENCENT, "date": date}],
             "stale": detail.stale,
             "opgg": opgg_block,
         });

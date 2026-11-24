@@ -1112,14 +1112,19 @@ impl LolPlugin {
                 }
             }
         });
-        let lcu = if enabled(host) {
-            self.state().client.as_ref().map(|c| c.lcu.clone())
-        } else {
-            None
-        };
+        let lcu = self.connected_lcu(host);
         assets
             .fetch(lcu.as_ref().map(|l| l as &dyn Origin), path)
             .await
+    }
+
+    /// 后台已经连上的客户端（插件和“读客户端数据”开着时；不去找进程）。素材层、英雄技能用。
+    pub(crate) fn connected_lcu(&self, host: &dyn Host) -> Option<Lcu> {
+        if enabled(host) {
+            self.state().client.as_ref().map(|c| c.lcu.clone())
+        } else {
+            None
+        }
     }
 
     /// 这局的队列（不在对局里时 None）。

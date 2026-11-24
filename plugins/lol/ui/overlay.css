@@ -1,0 +1,51 @@
+/*
+ * 英雄联盟的两个覆盖层（选英雄面板、海斗三选一标签）共用的颜色和评级小牌。照设计文档 docs/design/lol-app.md 第四节 4：
+ * 底是半透明深色（盖在游戏上），字用暗色主题的值；“记分纸”的颜色只表达意思，不用拳头的金色。
+ * 颜色值和 plugins/lol/app/tokens.css 的暗色一样（--lol-*），这里单独一份：覆盖层是本体窗口里的 Svelte，不在 App 里。
+ */
+.lol-overlay {
+  --ov-bg: rgb(22 23 27 / 0.86);
+  --ov-edge: rgb(255 255 255 / 0.14);
+  --ov-text: #ecedef;
+  --ov-text-2: #a3a6ae;
+  --ov-text-3: #868990;
+  --ov-ally: #6ea2ff;
+  --ov-win: #4bd98b;
+  --ov-loss: #ff7b86;
+  --ov-warn: #f2b53d;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--ov-bg);
+  border: 1px solid var(--ov-edge);
+  border-radius: 6px;
+  color: var(--ov-text);
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 1px #000;
+}
+
+/* 评级字母小牌（照 AramHex 的 S–D）：S 胜色、A 我方蓝、B 正文色、C 提醒黄、D 负色；字母本身就能分，颜色只是帮着看 */
+.lol-grade {
+  --g: var(--ov-text);
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  box-sizing: border-box;
+  min-width: 1.4em;
+  height: 1.4em;
+  padding: 0 0.15em;
+  border-radius: 0.28em;
+  font-size: 0.86em;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--g);
+  background: color-mix(in srgb, var(--g) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--g) 55%, transparent);
+}
+.lol-grade[data-grade="S"] { --g: var(--ov-win); }
+.lol-grade[data-grade="A"] { --g: var(--ov-ally); }
+.lol-grade[data-grade="B"] { --g: var(--ov-text); }
+.lol-grade[data-grade="C"] { --g: var(--ov-warn); }
+.lol-grade[data-grade="D"] { --g: var(--ov-loss); }

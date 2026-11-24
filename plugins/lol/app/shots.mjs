@@ -157,8 +157,13 @@ function gameMine(justEnded) {
   return g;
 }
 
-/** 英雄页：出装、召唤师技能、海克斯的图标借样例里真的客户端路径（录的是海斗，没有符文）。 */
-function championRift() {
+/** 亚索的技能（被动、Q、W、E、R）：客户端路径照 CommunityDragon 上的 champions/157.json。 */
+const YASUO_ABILITIES = [["P", "浪客之道", "Yasuo_Passive"], ["Q", "斩钢闪", "Yasuo_Q1"], ["W", "风之障壁", "Yasuo_W"], ["E", "踏前斩", "Yasuo_E"], ["R", "狂风绝息斩", "Yasuo_R"]]
+  .map(([key, name, file]) => ({ key, name, icon: `/lol-game-data/assets/ASSETS/Characters/Yasuo/HUD/Icons2D/${file}.png` }));
+
+/** 英雄页：出装、召唤师技能、海克斯的图标借样例里真的客户端路径（录的是海斗，没有符文）。`abilities: false`：客户端没开、
+ * CommunityDragon 也没取到（技能是字母格子）。 */
+function championRift({ abilities = true } = {}) {
   const player = read("player-sample.json");
   const items = [];
   for (const g of player.games) for (const it of g.items ?? []) if (it.slot < 6 && !items.some((x) => x.id === it.id)) items.push({ id: it.id, name: it.name, icon: it.icon });
@@ -180,6 +185,7 @@ function championRift() {
     runes: [{ primary: [rune(8010, "征服者"), rune(9111, "凯旋"), rune(9104, "传说：欢欣"), rune(8299, "坚毅不倒")], secondary: [rune(8444, "复苏之风"), rune(8473, "骸骨镀层")],
       shards: [rune(5005, "攻击速度"), rune(5008, "适应之力"), rune(5001, "生命值")], winRate: 0.521, pickRate: 0.305, games: 12840 }],
     skillPriority: ["Q", "E", "W"], skillOrder: ["Q", "E", "W", "Q", "Q", "R", "Q", "E", "Q", "E", "R", "E", "E", "W", "W", "R", "W", "W"],
+    abilities: abilities ? YASUO_ABILITIES : [],
     spells: [{ spells, winRate: 0.512, pickRate: 0.7 }],
     sources: [{ name: "腾讯 101", date: "20261124" }], stale: false, opgg: null,
   };
@@ -284,6 +290,7 @@ add("lol-app-card-game-summary", "game", { kotone_lol_game: ok(gameMine(true)) }
 add("lol-app-card-player", "player", { kotone_lol_player: ok(read("player-sample.json")) }, { display: "inline", width: 420, themes: ["dark"], push: "kotone_lol_player" });
 add("lol-app-player-narrow", "player", { kotone_lol_player: ok(read("player-sample.json")) }, { width: 480, push: "kotone_lol_player" });
 add("lol-app-champion-rift", "champion", { kotone_lol_champion: ok(championRift()) }, { themes: ["light", "dark"], push: "kotone_lol_champion" });
+add("lol-app-champion-rift-letters", "champion", { kotone_lol_champion: ok(championRift({ abilities: false })) }, { push: "kotone_lol_champion" });
 add("lol-app-champion-mayhem", "champion", { kotone_lol_champion: ok(championMayhem()) }, { themes: ["dark"], push: "kotone_lol_champion" });
 add("lol-app-card-champion", "champion", { kotone_lol_champion: ok(championRift()) }, { display: "inline", width: 420, push: "kotone_lol_champion" });
 

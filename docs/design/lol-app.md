@@ -342,7 +342,7 @@ interface Tag { kind: "win_streak" | "loss_streak" | "first_time" | "main"; text
 ### 4. 英雄（`lol.champion` → `ui://kotone/lol/champion`）、强度榜（`lol.tier` → `ui://kotone/lol/tier`）
 
 - 字段照现在的 `ChampionRift`、`ChampionMayhem`、`TierRift`、`TierMayhem`（`plugins/lol/ui/types.ts`）。
-- **新**：凡是 `Named`（出装的装备、符文、召唤师技能）都换成 `Icon`；`ChampionRift` 加 `abilities: { P, Q, W, E, R: Icon }`（加点那块用）；`MayhemAugment` 加 `icon`。
+- **新**：凡是 `Named`（出装的装备、符文、召唤师技能）都换成 `Icon`；`ChampionRift` 加 `abilities: { key, name, icon }[]`（被动和 Q W E R，按 `P Q W E R` 排；加点那块用；拿不到时是空列表，页面显示字母格子。实现时从对象改成了列表，2026-11-25）；`MayhemAugment` 加 `icon`。
 - `StatChampion` 不变（头像按 id 推）。
 
 ---
@@ -716,6 +716,12 @@ interface Tag { kind: "win_streak" | "loss_streak" | "first_time" | "main"; text
 - 评级字母小牌：S 胜色、A 我方蓝、B 正文色、C 提醒黄、D 负色，字母本身就能分；
 - 三选一的判断：“首选”胜色、“可选”正文色、“可考虑刷新”负色，配字；最好的那张从金色描边改成 2 px 白色墨线（不用金色，也和 App 里“突破口用墨线圈”一致）；
 - 出处小字照旧（aramhex-data 要署名）。
+
+2026-11-25 做了（[插件重构计划](../plugin-refactor.md)第九节“覆盖层对齐 AramHex”，颜色在 `plugins/lol/ui/overlay.css`）：
+
+- **三选一标签**三行：评级小牌 + 判断（大字）；“+7.9 · 57.8% · 1.1万局”；依据“棱彩第 2/38 · 样本少”+ 出处。高是游戏画面高度的 8.5%，底边在卡片名字上面 1%。不到 300 局的变淡（70%）。
+- **选英雄面板**：每行 评级小牌 · 英雄 ·（你）· 胜率 · 第几 / 共几，“你”那一行我方淡底；备选两个一行，比你高的胜色 + ↑（颜色不单独表达意思），最高的 2 px 白色墨线圈；高度按行数给（标题、出处和上下边 7.5%，每行 2.9%），字号按面板宽度（5.2cqw）。没有一项数据时不显示。
+- 海克斯的评级是同稀有度里的名次换算的（AramHex 用的是腾讯的官方层级，我们没有这份数据）。
 
 ---
 

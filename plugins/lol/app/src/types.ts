@@ -231,6 +231,12 @@ export interface Named {
   name: string;
   icon?: string;
 }
+/** 英雄的一个技能：`P`（被动）、`Q`、`W`、`E`、`R`；图标是客户端资源路径，拿不到时空（页面显示字母）。 */
+export interface Ability {
+  key: string;
+  name: string;
+  icon: string;
+}
 export interface Matchup {
   champion: Champion;
   winRate: number | null;
@@ -278,6 +284,8 @@ export interface ChampionRift {
   runes: RunePage[];
   skillPriority: string[];
   skillOrder: string[];
+  /** 被动和 Q W E R（按这个顺序；客户端没开、CommunityDragon 也没取到时空；旧的服务器没有这个字段）。 */
+  abilities?: Ability[];
   spells: { spells: Named[]; winRate: number | null; pickRate: number | null }[];
   sources: Source[];
   stale: boolean;

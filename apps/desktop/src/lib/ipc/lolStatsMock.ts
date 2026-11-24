@@ -43,6 +43,16 @@ const RUNES: Named[] = [
   { id: 8444, name: "复苏之风" }, { id: 8453, name: "无畏战车" }, { id: 5005, name: "攻击速度" }, { id: 5008, name: "适应之力" }, { id: 5011, name: "生命值" },
 ];
 const SPELLS: Named[] = [{ id: 4, name: "闪现" }, { id: 12, name: "传送" }, { id: 14, name: "引燃" }];
+/** 英雄技能（被动、Q、W、E、R）：客户端的图标路径（照 CommunityDragon 上的 champions/{id}.json）。只写了艾瑞莉娅和亚索，别的英雄空着（页面显示字母格子）。 */
+type Ability = { key: string; name: string; icon: string };
+const ability = (key: string, name: string, file: string): Ability =>
+  ({ key, name, icon: `/lol-game-data/assets/ASSETS/Characters/${file.split("_")[0]}/HUD/Icons2D/${file}.png` });
+const ABILITIES: Record<number, Ability[]> = {
+  39: [ability("P", "艾欧尼亚热诚", "Irelia_Passive"), ability("Q", "利刃冲击", "Irelia_Q"), ability("W", "距破之舞", "Irelia_W"),
+    ability("E", "比翼双刃", "Irelia_E"), ability("R", "先锋之刃", "Irelia_R")],
+  157: [ability("P", "浪客之道", "Yasuo_Passive"), ability("Q", "斩钢闪", "Yasuo_Q1"), ability("W", "风之障壁", "Yasuo_W"),
+    ability("E", "踏前斩", "Yasuo_E"), ability("R", "狂风绝息斩", "Yasuo_R")],
+};
 const AUGMENTS = [
   { id: 1162, name: "终极九头蛇", rarity: "prismatic" }, { id: 1288, name: "弹跳蜜蜂", rarity: "gold" },
   { id: 1124, name: "鼓声暴起 低音轰鸣", rarity: "prismatic" }, { id: 1067, name: "命运之武器", rarity: "gold" },
@@ -73,7 +83,7 @@ export function findSampleChampion(query: string): StatChampion | null {
 
 const pick = (i: number) => CHAMPS[i % CHAMPS.length];
 
-export function sampleChampionRift(champion: StatChampion, lane = "TOP"): ChampionRift {
+export function sampleChampionRift(champion: StatChampion, lane = "TOP"): ChampionRift & { abilities: Ability[] } {
   const laneName = LANES.find((l) => l.id === lane)?.name ?? lane;
   const option = (ids: number[], win: number, pickRate: number) => ({
     items: ids.map((i) => ITEMS[i]), winRate: win, pickRate,
@@ -94,6 +104,7 @@ export function sampleChampionRift(champion: StatChampion, lane = "TOP"): Champi
     runes: [{ primary: RUNES.slice(0, 4), secondary: RUNES.slice(4, 6), shards: RUNES.slice(6, 9), winRate: 0.521, pickRate: 0.305, games: 12_840 }],
     skillPriority: ["Q", "E", "W"],
     skillOrder: ["Q", "E", "W", "Q", "Q", "R", "Q", "E", "Q", "E", "R"],
+    abilities: ABILITIES[champion.id] ?? [],
     spells: [{ spells: [SPELLS[0], SPELLS[1]], winRate: 0.512, pickRate: 0.7 }, { spells: [SPELLS[0], SPELLS[2]], winRate: 0.505, pickRate: 0.22 }],
     sources: [{ name: TENCENT, date: DATE }],
     stale: false,
@@ -142,46 +153,70 @@ export function sampleTierMayhem(): TierMayhem {
   };
 }
 
-/** 覆盖层的示例（`#/plugin-overlay?demo=augments|champ-select`）：rect 是覆盖层窗口里的比例（预览里窗口是整个屏幕）。 */
+/** 覆盖层的示例（`#/plugin-overlay?demo=augments|champ-select`）：rect 是覆盖层窗口里的比例（预览里窗口是整个屏幕）。
+ * 评级、判断和插件（plugins/lol/src/overlays.rs、overlays/rules.rs）算出来的一样：海斗榜 172 个英雄，前 10% S、30% A、60% B、85% C。 */
 export function sampleOverlay(kind: string) {
   // i18n-ignore-start：示例数据
   if (kind === "champ-select") {
+    // 5 个人 + 备选 4 个（两个一行）：高度 0.075 + 0.029 × 8（和插件的 champ_select_item 一样算）
     return {
       items: [{
         plugin: "lol",
-        rect: [0.79, 0.01, 0.2, 0.32],
+        rect: [0.79, 0.01, 0.2, 0.307],
         item: {
           id: "champ-select", uri: OVERLAY_CHAMP_SELECT, target: { kind: "process", exe: "LeagueClientUx.exe" },
-          anchor: { kind: "corner", corner: "top-right", margin: 0.01, w: 0.2, h: 0.32 },
+          anchor: { kind: "corner", corner: "top-right", margin: 0.01, w: 0.2, h: 0.307 },
           data: {
-            mode: "mayhem", source: TENCENT,
+            mode: "mayhem", source: TENCENT, total: 172,
             team: [
-              { champion: "艾瑞莉娅", me: true, winRate: 0.5212, rank: 31 },
-              { champion: "塔姆", me: false, winRate: 0.5384, rank: 1 },
-              { champion: "拉克丝", me: false, winRate: 0.5101, rank: 48 },
-              { champion: "锤石", me: false, winRate: 0.4987, rank: 92 },
-              { champion: "阿狸", me: false, winRate: 0.5055, rank: 60 },
+              { champion: "艾瑞莉娅", me: true, winRate: 0.5212, rank: 31, grade: "A" },
+              { champion: "塔姆", me: false, winRate: 0.5384, rank: 1, grade: "S" },
+              { champion: "拉克丝", me: false, winRate: 0.5101, rank: 48, grade: "A" },
+              { champion: "锤石", me: false, winRate: 0.4930, rank: 120, grade: "C" },
+              { champion: "阿狸", me: false, winRate: 0.5055, rank: 60, grade: "B" },
             ],
-            bench: [{ champion: "斯莫德", winRate: 0.5302, rank: 6 }, { champion: "斯维因", winRate: 0.5266, rank: 12 }],
+            // 按胜率从高到低；比艾瑞莉娅（52.1%）高的两个标出来，最高的圈出来
+            bench: [
+              { champion: "斯莫德", winRate: 0.5302, rank: 6, grade: "S", better: true, best: true },
+              { champion: "斯维因", winRate: 0.5266, rank: 12, grade: "S", better: true, best: false },
+              { champion: "卡莎", winRate: 0.5129, rank: 41, grade: "A", better: false, best: false },
+              { champion: "提莫", winRate: 0.4821, rank: 158, grade: "D", better: false, best: false },
+            ],
           },
         },
       }],
     };
   }
-  const card = (k: number, augment: string, score: { games: number; winRate: number; smoothed: number; delta: number; lowSample: boolean } | null, best: boolean) => ({
+  type Card = {
+    verdict: "best" | "ok" | "reroll" | "noData"; grade: string | null; rarity: string; rarityRank: number | null; rarityTotal: number | null;
+    score: { games: number; winRate: number; smoothed: number; delta: number; lowSample: boolean } | null;
+    sampleWarning: boolean; thin: "few" | "tooFew" | null; rare: boolean;
+  };
+  // 三选一标签：高 0.085，底边在卡片名字上面 0.01（插件的 CARD_LABEL_H / CARD_LABEL_GAP）
+  const card = (k: number, augment: string, verdict: Card) => ({
     plugin: "lol",
-    rect: [0.18 + k * 0.25, 0.27, 0.14, 0.055],
+    rect: [0.18 + k * 0.25, 0.24, 0.14, 0.085],
     item: {
       id: `augment-${k}`, uri: OVERLAY_AUGMENTS, target: { kind: "process", exe: "League of Legends.exe" },
-      anchor: { kind: "rect", x: 0.18 + k * 0.25, y: 0.27, w: 0.14, h: 0.055 },
-      data: { augment, champion: "艾瑞莉娅", score, best, attribution: "aramhex-data" },
+      anchor: { kind: "rect", x: 0.18 + k * 0.25, y: 0.24, w: 0.14, h: 0.085 },
+      data: { augment, augmentId: 1000 + k, champion: "艾瑞莉娅", attribution: "aramhex-data", ...verdict },
     },
   });
   return {
     items: [
-      card(0, "鼓声暴起 低音轰鸣", { games: 32_573, winRate: 0.561, smoothed: 0.5609, delta: 6.5, lowSample: false }, false),
-      card(1, "终极九头蛇", { games: 10_891, winRate: 0.578, smoothed: 0.5779, delta: 7.9, lowSample: false }, true),
-      card(2, "泰坦的坚决", { games: 260, winRate: 0.62, smoothed: 0.552, delta: 2.1, lowSample: true }, false),
+      card(0, "鼓声暴起 低音轰鸣", {
+        verdict: "ok", grade: "A", rarity: "prismatic", rarityRank: 5, rarityTotal: 38, sampleWarning: false, thin: null, rare: false,
+        score: { games: 32_573, winRate: 0.561, smoothed: 0.5609, delta: 6.5, lowSample: false },
+      }),
+      card(1, "终极九头蛇", {
+        verdict: "best", grade: "S", rarity: "prismatic", rarityRank: 2, rarityTotal: 38, sampleWarning: false, thin: null, rare: false,
+        score: { games: 10_891, winRate: 0.578, smoothed: 0.5779, delta: 7.9, lowSample: false },
+      }),
+      // 不到同屏最多那张（32,573）的十分之一：样本太少，建议刷新；不到 300 局，变淡
+      card(2, "泰坦的坚决", {
+        verdict: "reroll", grade: "A", rarity: "gold", rarityRank: 9, rarityTotal: 41, sampleWarning: true, thin: "tooFew", rare: false,
+        score: { games: 260, winRate: 0.62, smoothed: 0.552, delta: 2.1, lowSample: true },
+      }),
     ],
   };
   // i18n-ignore-end
