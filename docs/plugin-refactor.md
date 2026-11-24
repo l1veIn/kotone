@@ -616,3 +616,12 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 - “设置 → 插件”去掉；旧的 `ui.open ui://kotone/settings/plugins` 和“设置 → 插件 → X”“插件 → X”“音乐”这些位置都落到插件页或对应的 App。
 - 截图：`target/plugin-shots/apps/plugins-page.png`、`lol-app.png`、`music-app.png`。
 - 检查：svelte-check 0 / 0；Playwright 165（新加：左侧栏只有一项“插件”、4 张卡片、卡片开关只切换不进 App、点卡片进 App、“← 插件”回来、设置里没有“插件”、旧地址落在插件页）；真机：`music_real.py` 14/14（脚本改成左侧栏“插件” → 音乐卡片）、`lol_tools_real.py --while-playing` 32/32、`game_events_real.py` 12/12。
+
+### 第 5 步（续）：收窄“听一句 / 听到以后”的缝，跑出语音输入的真机基线（2026-11-24 第五轮）
+
+- `12d157bc`：540 行的 `begin_locked` 按原顺序拆成几步（开识别会话、开麦、记录、VAD、录音泵 `CapturePump`、发布）。
+- `fda2f8bd`：录音的“旁听者”（`CaptureObserver`）：评测录档（本体）和识别记录（“听到以后”）走同一个接口，顺序不变。
+- `81c6aef8`：本体的文件只经 `voice_input/mod.rs` 的 9 个方法碰“听到以后”（`send_is_running`、`stop_send`、`start_record`、`on_capture_started`、`on_transcribed`、`on_heard`、`heard_audio_ms` / `discard_record`、`confirm_heard`、`on_session_ended`），其余只在 `voice_input/` 里可见，越过这道缝编译就不过。
+- 三次都是行为不变的重构：`kotone-core` 单元 309、集成 85（检查一条没改），集成每次跑两遍；测试名单逐字节一样；`scripts/e2e-virtual-audio.sh` 两条路都过。
+- **真机基线** `scripts/manual-e2e/voice_input_real.py`（新）：隔离实例、VB-CABLE 当麦克风、测试窗口在前台时才发键；隔离配置用 `hotkeyBackend: "register"`（低级钩子不认模拟按键），按 F22 走真的语音输入热键那条路。在 `81c6aef8` 上 **36/36 过、2 个跳过、50 秒**：按住说自动发送（测试窗口正好收到识别的字、只按了档案的两次回车）、录音笔模式预览不打字确认才发、屏蔽词把“打野”换成“JG”、识别记录、悬浮窗状态顺序、她的 `game_chat.send`（脚本里的模拟模型）和 `companion.type`、控制台通道没游戏时退回键盘、`~/.kotone` 没被动过。跳过：外部 Agent 调不了 `game_chat.send`；真的控制台通道要 Steam 装的 Dota 2 / CS2 在前台。跑之前玩家要离开电脑约 3 分钟（前台是 GameViewer 时脚本按规矩没跑）。
+- **下一步**：`voice_input/` 整块搬进 `plugins/voice-input`（测试加一行接上或连同搬过去，检查一条不改）、设置读旧写新、界面（文字处理、识别记录、悬浮窗）进插件 App、`game_chat.send` 用 `tool_prefix` 保留原名；每一步前后都跑 `voice_input_real.py`、85 个集成检查和英雄联盟的两个脚本。
