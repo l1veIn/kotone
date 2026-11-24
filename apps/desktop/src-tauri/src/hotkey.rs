@@ -20,6 +20,8 @@ use kotone_core::hotkey::{
     HK_QUICK_MESSAGES, HK_RESEND_LAST, HK_RUNTIME_TOGGLE,
 };
 use kotone_core::orchestrator::Orchestrator;
+// 频道、重发、文字处理开关这几个热键是语音输入插件的（宿主替它登记全进程的钩子）
+use kotone_plugin_voice_input::VoiceInputExt;
 use kotone_core::settings::HotkeyBackend;
 
 pub use kotone_core::hotkey::HotkeyMode;

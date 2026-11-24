@@ -4,7 +4,7 @@ impl Orchestrator {
     // ---------- 热键入口（hotkey 模块调用；ADR-006 单键语义表 + 策略路由） ----------
 
     /// 进行中的会话使用开始时的策略；热更新不偷换一次按住/松开配对的语义。
-    pub(super) fn policy(&self) -> InteractionPolicy {
+    pub fn policy(&self) -> InteractionPolicy {
         let inner = self.inner.lock().unwrap();
         if let Some(policy) = inner
             .session_policy

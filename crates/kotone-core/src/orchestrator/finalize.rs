@@ -105,7 +105,7 @@ impl Orchestrator {
                         if inner.gen != gen {
                             return Ok(());
                         }
-                        inner.voice.discard_record();
+                        self.discard_record();
                         inner.state = if continuous {
                             OrchestratorState::Idle
                         } else {

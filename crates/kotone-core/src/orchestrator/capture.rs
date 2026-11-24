@@ -1,4 +1,3 @@
-use super::voice_input::{RecordDraft, SEND_STILL_RUNNING};
 use super::*;
 
 mod pump;
@@ -34,7 +33,7 @@ pub(super) enum SessionOrigin {
 /// 录音的旁听者（评测录档、识别记录）：都要 PCM、识别中的字（第一个字的时间）、
 /// VAD 判为语音的段落。pump 在自己的任务里按登记顺序逐个通知，各自在自己的锁里记账；
 /// 旁听者不能拦住或改变喂给识别的音频。
-pub(super) trait CaptureObserver: Send + Sync {
+pub trait CaptureObserver: Send + Sync {
     /// 一块要喂给识别的 PCM（16kHz mono f32），在喂给 STT session 之前通知
     fn on_pcm(&self, chunk: &[f32]);
     /// 识别中的字（每个 partial 一次）
@@ -96,11 +95,7 @@ impl Orchestrator {
 
     /// solo 连续模式逐句续录：与 begin 同路径，但「录制音」提示由壳做区分
     /// （capture_started 事件带 resumed=true，不播录制音效，只保留逐句发送音）。
-    pub(super) async fn begin_resumed(
-        &self,
-        purpose: SessionPurpose,
-        gen: u64,
-    ) -> Result<(), String> {
+    pub async fn begin_resumed(&self, purpose: SessionPurpose, gen: u64) -> Result<(), String> {
         self.begin_inner(true, purpose, Some(gen), None).await
     }
 
@@ -477,9 +472,7 @@ impl Orchestrator {
         // 目标窗口记忆：用户按下热键说话前所在的前台窗口 = 注入目标，
         // 发送前（do_send）会把焦点还给它，避免 preview 交互抢焦点导致注入打错窗口；
         // 识别记录草稿一并交给语音输入
-        inner
-            .voice
-            .on_capture_started(self.focus.foreground_window(), record);
+        self.on_capture_started(self.focus.foreground_window(), record);
         inner.continuous_session =
             continuous_session && vad_degrade.inference_status.load(Ordering::SeqCst) == 0;
         inner.active = Some(active);

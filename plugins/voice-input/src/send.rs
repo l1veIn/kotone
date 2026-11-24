@@ -1,5 +1,17 @@
-use super::text::{PendingText, ReadyText};
-use crate::orchestrator::*;
+//! 往游戏聊天框打字：占住发送权、等修饰键松开、把焦点还给目标窗口、注入、超时；重发最近一条。
+
+use std::time::Duration;
+
+use kotone_core::assistant::SessionPurpose;
+use kotone_core::inject::{CancelToken, InjectError, TargetWindow};
+use kotone_core::orchestrator::{
+    Orchestrator, OrchestratorState, PendingText, ReadyText, SendCompletion, SendOperation,
+    SEND_STILL_RUNNING,
+};
+use kotone_core::profile::{self, GameProfile};
+use serde_json::json;
+
+use crate::VoiceInput;
 
 /// 已在状态机内原子占用发送权的任务快照。
 ///
@@ -14,87 +26,36 @@ pub(crate) struct SendClaim {
     channel: Option<(String, String)>,
 }
 
-/// 一次发送从准备到最后一个阻塞调用返回始终占用同一份操作权。
-/// 取消/超时只发出停止请求，不能伪装成 Win32 调用已经结束。
-#[derive(Clone)]
-pub(crate) struct SendOperation(Arc<SendOperationInner>);
-
-struct SendOperationInner {
-    cancel: CancelToken,
-    finished: AtomicBool,
-}
-
-impl SendOperation {
-    pub(crate) fn new() -> (Self, SendCompletion) {
-        let operation = Self(Arc::new(SendOperationInner {
-            cancel: CancelToken::default(),
-            finished: AtomicBool::new(false),
-        }));
-        let completion = SendCompletion {
-            operation: operation.clone(),
-        };
-        (operation, completion)
-    }
-
-    pub(crate) fn cancel(&self) {
-        self.0.cancel.cancel();
-    }
-
-    pub(crate) fn is_finished(&self) -> bool {
-        self.0.finished.load(Ordering::SeqCst)
-    }
-
-    fn same_operation(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-/// 唯一完成凭据：准备阶段由 async 调用持有，进入阻塞阶段后移交给该线程。
-/// 即使调用方取消或等待超时，也只有阻塞线程真正退出后才释放发送权。
-pub(crate) struct SendCompletion {
-    operation: SendOperation,
-}
-
-impl Drop for SendCompletion {
-    fn drop(&mut self) {
-        self.operation.cancel();
-        self.operation.0.finished.store(true, Ordering::SeqCst);
-    }
-}
-
-pub(crate) const SEND_STILL_RUNNING: &str =
-    "上一次发送仍在结束中，暂时不能开始新的发送；请稍后重试。若持续无响应，请退出并重新打开应用";
-
-impl Orchestrator {
+impl VoiceInput {
     /// 重发最近一条：把历史里最新一条「发送成功」的文本重新注入（快捷键入口）。
     /// 语义（与用户确认）：
     /// - 仅 Idle 生效：会话进行中（录音/发送/预览等）按下静默忽略，不打断当前输入；
     /// - 用当前 profile + 当前 sticky 频道（与普通发送同一条 run_send 路径，
     ///   ADR-008 频道在发送时刻读取）；历史里的 profileId 不参与；
     /// - 无历史记录或文本为空 → 静默忽略（记日志）。
-    pub async fn resend_last(&self) {
-        if self.state() != OrchestratorState::Idle {
+    pub async fn resend_last(&self, orch: &Orchestrator) {
+        if orch.state() != OrchestratorState::Idle {
             return;
         }
-        let dir = self
+        let dir = orch
             .history_dir
             .clone()
-            .unwrap_or_else(crate::history::history_dir);
-        let text = match crate::history::list_in(&dir) {
+            .unwrap_or_else(kotone_core::history::history_dir);
+        let text = match kotone_core::history::list_in(&dir) {
             Ok(records) => records
                 .iter()
                 .find(|r| {
-                    r.outcome == crate::history::HistoryOutcome::Sent
+                    r.outcome == kotone_core::history::HistoryOutcome::Sent
                         && !r.final_text.trim().is_empty()
                 })
                 .map(|r| r.final_text.clone()),
             Err(e) => {
-                crate::log::log(&format!("重发最近一条：读取历史失败（忽略）: {e}"));
+                kotone_core::log::log(&format!("重发最近一条：读取历史失败（忽略）: {e}"));
                 return;
             }
         };
         let Some(text) = text else {
-            crate::log::log("重发最近一条：历史中无发送成功的文本，忽略");
+            kotone_core::log::log("重发最近一条：历史中无发送成功的文本，忽略");
             return;
         };
         // 重发直发当前前台窗口：不沿用上次会话记录的注入目标（Idle 时
@@ -104,6 +65,7 @@ impl Orchestrator {
         // 状态已经变化时保持原有语义：静默忽略，不打断当前输入。
         if let Ok(Some(claim)) = self
             .claim_send(
+                orch,
                 Some(ReadyText::unchanged(text)),
                 None,
                 &[OrchestratorState::Idle],
@@ -112,95 +74,102 @@ impl Orchestrator {
             )
             .await
         {
-            self.run_send(claim).await;
+            self.run_send(orch, claim).await;
         }
     }
 
     /// 在 `op` 锁内校验来源状态并原子进入 Sending，保证每个状态只能产生一个发送任务。
     /// `ready=None` 用于 Preview/Error 重试：文本也在同一临界区内从 pending_text 取出。
-    pub(super) async fn claim_send(
+    pub(crate) async fn claim_send(
         &self,
+        orch: &Orchestrator,
         ready: Option<ReadyText>,
         expected_gen: Option<u64>,
         expected_states: &[OrchestratorState],
         clear_target: bool,
         input_ticket: Option<u64>,
     ) -> Result<Option<SendClaim>, String> {
-        let _op = self.op.lock().await;
-        if !self.input_ticket_is_current(input_ticket) {
+        let _op = orch.lock_op().await;
+        if !orch.input_ticket_is_current(input_ticket) {
             return Ok(None);
         }
-        if !self.runtime_inputs_enabled.load(Ordering::SeqCst) {
+        if !orch.runtime_inputs_enabled() {
             return Err("运行时已停止，不能发送".into());
         }
         let claim = {
-            let mut inner = self.inner.lock().unwrap();
-            if expected_gen.is_some_and(|gen| inner.gen != gen) {
+            let mut session = orch.session();
+            if expected_gen.is_some_and(|gen| session.gen() != gen) {
                 return Ok(None);
             }
-            if !expected_states.contains(&inner.state) {
-                return Err(format!("当前状态 {:?} 不能发送", inner.state));
+            if !expected_states.contains(&session.state()) {
+                return Err(format!("当前状态 {:?} 不能发送", session.state()));
             }
-            if clear_target && inner.state == OrchestratorState::Idle {
+            if clear_target && session.state() == OrchestratorState::Idle {
                 // 历史重发是显式的听写操作，不沿用上一次助手会话的用途。
-                inner.purpose = SessionPurpose::Dictation;
-                inner.session_policy = None;
-            } else if inner.purpose == SessionPurpose::Assistant {
+                session.reset_to_dictation();
+            } else if session.purpose() == SessionPurpose::Assistant {
                 return Err("助手请求不能进入游戏发送管线".into());
             }
-            if inner.send_is_running() {
+            if session.send_is_running() {
                 return Err(SEND_STILL_RUNNING.into());
             }
             let ready = match ready {
                 Some(ready) => ready,
-                None => inner
-                    .pending_text
-                    .as_ref()
+                None => session
+                    .pending_text()
                     .and_then(PendingText::ready)
                     .cloned()
                     .ok_or_else(|| "无待发送文本".to_string())?,
             };
-            if clear_target {
-                inner.voice.target_window = None;
-            }
+            let (target, channel) = {
+                let mut state = self.state();
+                if clear_target {
+                    state.target_window = None;
+                }
+                (state.target_window, state.channel.clone())
+            };
             let (operation, completion) = SendOperation::new();
-            inner.state = OrchestratorState::Sending;
-            inner.send_operation = Some(operation.clone());
+            session.set_state(OrchestratorState::Sending);
+            session.start_send(operation.clone());
             SendClaim {
                 ready,
-                gen: inner.gen,
+                gen: session.gen(),
                 operation,
                 completion,
-                target: inner.voice.target_window,
-                channel: inner.voice.channel.clone(),
+                target,
+                channel,
             }
         };
-        self.emit_state(
+        orch.emit_state(
             OrchestratorState::Sending,
             Some(json!({ "text": claim.ready.text })),
         );
         Ok(Some(claim))
     }
 
-    async fn wait_for_modifiers_up(&self, token: &CancelToken) -> Result<(), InjectError> {
+    async fn wait_for_modifiers_up(
+        &self,
+        orch: &Orchestrator,
+        token: &CancelToken,
+    ) -> Result<(), InjectError> {
         const MAX_WAIT: Duration = Duration::from_millis(1000);
         const POLL: Duration = Duration::from_millis(10);
         let started = std::time::Instant::now();
         if token.is_cancelled() {
             return Err(InjectError::new("发送已取消"));
         }
-        if !self.focus.modifier_keys_down() {
+        if !orch.focus().modifier_keys_down() {
             return Ok(());
         }
-        crate::log::log("inject: waiting for Ctrl/Alt/Shift/Win to release");
+        kotone_core::log::log("inject: waiting for Ctrl/Alt/Shift/Win to release");
         loop {
             if token.is_cancelled() {
                 return Err(InjectError::new("发送已取消"));
             }
-            if !self.focus.modifier_keys_down() {
-                crate::process_log::record_activity(
+            if !orch.focus().modifier_keys_down() {
+                kotone_core::process_log::record_activity(
                     "inject_wait_modifiers",
-                    crate::process_log::EventData {
+                    kotone_core::process_log::EventData {
                         detail: Some(format!("waitedMs={}", started.elapsed().as_millis())),
                         outcome: Some("ok".into()),
                         ..Default::default()
@@ -209,12 +178,12 @@ impl Orchestrator {
                 return Ok(());
             }
             if started.elapsed() >= MAX_WAIT {
-                crate::log::log(
+                kotone_core::log::log(
                     "inject: modifiers still down after 1000ms; preserving text instead of sending",
                 );
-                crate::process_log::record_activity(
+                kotone_core::process_log::record_activity(
                     "inject_wait_modifiers",
-                    crate::process_log::EventData {
+                    kotone_core::process_log::EventData {
                         detail: Some("timeoutMs=1000".into()),
                         outcome: Some("timeout".into()),
                         ..Default::default()
@@ -231,15 +200,16 @@ impl Orchestrator {
     /// 焦点恢复和输入注入共享同一个阻塞任务/完成凭据，超时也不能另开并行任务。
     async fn execute_send(
         &self,
+        orch: &Orchestrator,
         completion: SendCompletion,
         token: CancelToken,
         target: Option<TargetWindow>,
         text: String,
         profile: GameProfile,
     ) -> Result<(), InjectError> {
-        let injector = self.injector.clone();
-        let focus = self.focus.clone();
-        let restore_delay = self.focus_restore_delay;
+        let injector = orch.injector().clone();
+        let focus = orch.focus().clone();
+        let restore_delay = orch.focus_restore_delay;
         let worker_token = token.clone();
         let mut task = tokio::task::spawn_blocking(move || {
             let _completion = completion;
@@ -260,7 +230,7 @@ impl Orchestrator {
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 let fg_after = focus.foreground_process_name();
-                crate::log::log(&format!(
+                kotone_core::log::log(&format!(
                     "inject focus probe: before={} after500ms={}",
                     fg_before.as_deref().unwrap_or("(none)"),
                     fg_after.as_deref().unwrap_or("(none)")
@@ -268,7 +238,7 @@ impl Orchestrator {
             });
             injector.send(&text, &profile, worker_token)
         });
-        match tokio::time::timeout(self.inject_timeout, &mut task).await {
+        match tokio::time::timeout(orch.inject_timeout, &mut task).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(InjectError::new("发送线程异常")),
             Err(_) => {
@@ -277,7 +247,7 @@ impl Orchestrator {
                 // SendCompletion 持有，不能靠重启 runtime 绕过仍未结束的系统调用。
                 tokio::spawn(async move {
                     if let Err(error) = task.await {
-                        crate::log::log(&format!(
+                        kotone_core::log::log(&format!(
                             "timed-out send worker ended abnormally: {error}"
                         ));
                     }
@@ -285,7 +255,7 @@ impl Orchestrator {
                 Err(InjectError::new(format!(
                     "发送超时（{}s），已请求取消。目标窗口可能已有部分输入，请先检查；\
                      上一次发送结束前无法重试，若持续无响应，请退出并重新打开应用",
-                    self.inject_timeout.as_secs()
+                    orch.inject_timeout.as_secs()
                 )))
             }
         }
@@ -293,7 +263,7 @@ impl Orchestrator {
 
     /// Sending → Success/Error（§6 发送时序下半段；inject 实现负责按键细节）。
     /// 仅接受 `claim_send` 产生的已占用发送任务，不再改写状态或取消令牌。
-    pub(super) async fn run_send(&self, claim: SendClaim) {
+    pub(crate) async fn run_send(&self, orch: &Orchestrator, claim: SendClaim) {
         let SendClaim {
             ready,
             gen,
@@ -302,17 +272,17 @@ impl Orchestrator {
             target,
             channel,
         } = claim;
-        let token = operation.0.cancel.clone();
+        let token = operation.token();
         let ReadyText { source_text, text } = ready;
         let injection_started_at = std::time::Instant::now();
-        self.emit_process(
+        orch.emit_process(
             "injection_started",
             json!({
                 "textChars": text.chars().count() as u64,
                 "channelId": channel.as_ref().map(|(_, cid)| cid.clone()),
             }),
         );
-        let settings = self.settings.read().unwrap().clone();
+        let settings = orch.settings().read().unwrap().clone();
         let profile = settings
             .active_profile_id
             .as_deref()
@@ -332,7 +302,7 @@ impl Orchestrator {
 
         // Alt+F6 等组合热键在主键 down 时就触发；修饰键从不吞键，此时 Alt
         // 仍按着。立刻开框/打字会变成 Alt+Enter，游戏里看不到消息，注入却成功。
-        let modifier_result = self.wait_for_modifiers_up(&token).await;
+        let modifier_result = self.wait_for_modifiers_up(orch, &token).await;
         let modifiers_failed = modifier_result.is_err() && !token.is_cancelled();
         let result = match modifier_result {
             Err(error) => {
@@ -341,22 +311,16 @@ impl Orchestrator {
                 Err(error)
             }
             Ok(()) => {
-                self.execute_send(completion, token, target, wire_text, wire_profile)
+                self.execute_send(orch, completion, token, target, wire_text, wire_profile)
                     .await
             }
         };
 
         let (history_write, resume_continuous) = {
-            let _op = self.op.lock().await;
-            let mut inner = self.inner.lock().unwrap();
-            if inner
-                .send_operation
-                .as_ref()
-                .is_some_and(|current| current.same_operation(&operation) && current.is_finished())
-            {
-                inner.send_operation = None;
-            }
-            if inner.gen != gen || inner.state != OrchestratorState::Sending {
+            let _op = orch.lock_op().await;
+            let mut session = orch.session();
+            session.finish_send(&operation);
+            if session.gen() != gen || session.state() != OrchestratorState::Sending {
                 return;
             }
             // history 终态（锁外落账，见下方 write_history 调用；两个分支各自产出
@@ -364,42 +328,42 @@ impl Orchestrator {
             // `unneeded late initialization` 会拒绝「先声明再在两个分支赋值」的写法。
             match result {
                 Ok(()) => {
-                    inner.pending_text = None;
-                    let resuming = inner.continuous_session;
-                    inner.state = if resuming {
+                    session.set_pending_text(None);
+                    let resuming = session.continuous_session();
+                    session.set_state(if resuming {
                         OrchestratorState::Idle
                     } else {
                         OrchestratorState::Success
-                    };
-                    drop(inner);
+                    });
+                    drop(session);
                     if !resuming {
-                        self.emit_state(OrchestratorState::Success, Some(json!({ "text": text })));
+                        orch.emit_state(OrchestratorState::Success, Some(json!({ "text": text })));
                     }
-                    self.emit_process(
+                    orch.emit_process(
                         "injection_succeeded",
                         json!({
                             "outcome": "success",
                             "durationMs": injection_started_at.elapsed().as_millis() as u64
                         }),
                     );
-                    ((crate::history::HistoryOutcome::Sent, None), resuming)
+                    ((kotone_core::history::HistoryOutcome::Sent, None), resuming)
                 }
                 Err(e) => {
                     // Error 保留 ReadyText，前端/confirm_send 可重试（§4.1）；
                     // needsElevation 透传 UIPI 提权信号（§10 R-1）；
                     // inputBlocked 透传「系统级拦截」信号（安全软件/反作弊），前端弹窗引导排查；
                     // 注入超时（inject_timeout）也落此分支，message 含超时提示
-                    inner.pending_text = Some(PendingText::Ready(ReadyText {
+                    session.set_pending_text(Some(PendingText::Ready(ReadyText {
                         source_text,
                         text: text.clone(),
-                    }));
-                    inner.state = OrchestratorState::Error;
-                    drop(inner);
-                    self.emit_state(
+                    })));
+                    session.set_state(OrchestratorState::Error);
+                    drop(session);
+                    orch.emit_state(
                         OrchestratorState::Error,
                         Some(json!({ "message": e.message, "needsElevation": e.needs_elevation, "inputBlocked": e.input_blocked, "text": text })),
                     );
-                    self.emit_process(
+                    orch.emit_process(
                         "injection_failed",
                         json!({
                             "outcome": "error",
@@ -416,19 +380,19 @@ impl Orchestrator {
                         }),
                     );
                     (
-                        (crate::history::HistoryOutcome::Error, Some(e.message)),
+                        (kotone_core::history::HistoryOutcome::Error, Some(e.message)),
                         false,
                     )
                 }
             }
         };
-        self.write_history(history_write.0, history_write.1);
+        self.write_history(orch, history_write.0, history_write.1);
         if resume_continuous {
             // solo 不显示 Success toast，也不等待 toast_dwell：发送落账后立即开始下一段。
             // 续录不重复播「录制音」（capture_started resumed=true）。
-            let _ = self.begin_resumed(SessionPurpose::Dictation, gen).await;
+            let _ = orch.begin_resumed(SessionPurpose::Dictation, gen).await;
         } else {
-            self.schedule_idle(gen);
+            orch.schedule_idle(gen);
         }
     }
 }
@@ -438,7 +402,7 @@ impl Orchestrator {
 pub(crate) fn resolve_send_strategy(
     profile: &GameProfile,
     channel: &Option<(String, String)>,
-) -> crate::profile::ChannelStrategy {
+) -> profile::ChannelStrategy {
     match channel {
         Some((pid, cid)) if *pid == profile.id => profile.channel_strategy(Some(cid)),
         _ => profile.channel_strategy(None),

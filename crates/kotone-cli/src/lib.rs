@@ -29,6 +29,7 @@ use kotone_core::connection::ConnectionResolver;
 #[cfg(windows)]
 use kotone_core::hotkey::HotkeySource;
 use kotone_core::postprocess::ProcessorRegistry;
+use kotone_plugin_voice_input::VoiceInputExt;
 use kotone_core::profile::{self, GameProfile};
 use kotone_core::settings::{self, HotkeyBackend, Settings};
 use kotone_core::stt::EngineRegistry;

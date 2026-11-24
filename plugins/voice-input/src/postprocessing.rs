@@ -1,45 +1,53 @@
-use super::text::{PendingText, ReadyText, RecognizedText};
-use crate::orchestrator::*;
-use crate::postprocess::{
-    PostProcessPipeline, ProcessErrorKind, ProcessingContext, ProcessorRegistry,
+//! 文字处理（屏蔽词、润色、翻译的流程）和可交付文字的唯一出口（预览或发送）。
+
+use kotone_core::interaction::PostFinalize;
+use kotone_core::orchestrator::{
+    Orchestrator, OrchestratorState, PendingText, ReadyText, RecognizedText,
 };
+use kotone_core::postprocess::{
+    PostProcessPipeline, ProcessErrorKind, ProcessingCancelToken, ProcessingContext,
+};
+use serde_json::json;
 
-impl Orchestrator {
-    /// 注入可发现的后处理器注册表；与 STT 引擎一样由外层实现 crate 负责注册。
-    pub fn with_processors(mut self, processors: Arc<ProcessorRegistry>) -> Self {
-        self.voice_input.processors = processors;
-        self
-    }
+use crate::VoiceInput;
 
-    pub(super) fn snapshot_recognized_text(&self, source_text: String) -> RecognizedText {
-        let settings = self.settings.read().unwrap().clone();
-        let inner = self.inner.lock().unwrap();
+impl VoiceInput {
+    pub(crate) fn snapshot_recognized_text(
+        &self,
+        orch: &Orchestrator,
+        source_text: String,
+    ) -> RecognizedText {
+        let settings = orch.settings().read().unwrap().clone();
+        let session_id = orch
+            .session()
+            .process_case_id()
+            .unwrap_or_default()
+            .to_string();
+        let channel_id = self.state().channel.as_ref().map(|(_, id)| id.clone());
         RecognizedText {
             source_text,
             pipeline: settings.post_processing,
             context: ProcessingContext {
-                session_id: inner.process_case_id.clone().unwrap_or_default(),
+                session_id,
                 profile_id: settings.active_profile_id,
-                channel_id: inner.voice.channel.as_ref().map(|(_, id)| id.clone()),
+                channel_id,
             },
         }
     }
 
     /// 编译并运行一份会话级 pipeline 快照。只有非空 pipeline 才进入 Processing；
     /// Required 错误保留 RecognizedText，confirm_send 会重新运行处理而不会绕过。
-    pub(super) async fn run_postprocessing(
+    pub(crate) async fn run_postprocessing(
         &self,
+        orch: &Orchestrator,
         gen: u64,
         recognized: RecognizedText,
         expected_states: &[OrchestratorState],
     ) -> Result<(), String> {
-        let pipeline = match PostProcessPipeline::compile(
-            &recognized.pipeline,
-            &self.voice_input.processors,
-        ) {
+        let pipeline = match PostProcessPipeline::compile(&recognized.pipeline, &self.processors) {
             Ok(pipeline) => pipeline,
             Err(error) => {
-                self.finish_processing_error(gen, recognized, &error, expected_states)
+                self.finish_processing_error(orch, gen, recognized, &error, expected_states)
                     .await;
                 return Err(error);
             }
@@ -47,22 +55,22 @@ impl Orchestrator {
 
         if pipeline.is_empty() {
             return self
-                .deliver_ready_text(gen, ReadyText::unchanged(recognized.source_text))
+                .deliver_ready_text(orch, gen, ReadyText::unchanged(recognized.source_text))
                 .await;
         }
 
         let cancel = ProcessingCancelToken::default();
         {
-            let _op = self.op.lock().await;
-            let mut inner = self.inner.lock().unwrap();
-            if inner.gen != gen || !expected_states.contains(&inner.state) {
+            let _op = orch.lock_op().await;
+            let mut session = orch.session();
+            if session.gen() != gen || !expected_states.contains(&session.state()) {
                 return Ok(());
             }
-            inner.state = OrchestratorState::Processing;
-            inner.pending_text = Some(PendingText::Recognized(recognized.clone()));
-            inner.processing_cancel = Some(cancel.clone());
+            session.set_state(OrchestratorState::Processing);
+            session.set_pending_text(Some(PendingText::Recognized(recognized.clone())));
+            session.set_processing_cancel(Some(cancel.clone()));
         }
-        self.emit_state(
+        orch.emit_state(
             OrchestratorState::Processing,
             Some(json!({
                 "text": recognized.source_text,
@@ -70,7 +78,7 @@ impl Orchestrator {
                 "stepCount": pipeline.len(),
             })),
         );
-        self.emit_process(
+        orch.emit_process(
             "postprocess_started",
             json!({
                 "pipelineId": recognized.pipeline.active_pipeline().map(|p| p.id.clone()).unwrap_or_default(),
@@ -79,8 +87,8 @@ impl Orchestrator {
         );
 
         let started = std::time::Instant::now();
-        let progress_observer = |progress: crate::postprocess::PipelineStepProgress| {
-            self.emit_state(
+        let progress_observer = |progress: kotone_core::postprocess::PipelineStepProgress| {
+            orch.emit_state(
                 OrchestratorState::Processing,
                 Some(json!({
                     "text": recognized.source_text,
@@ -103,21 +111,21 @@ impl Orchestrator {
             .await;
 
         {
-            let _op = self.op.lock().await;
-            let mut inner = self.inner.lock().unwrap();
-            if inner.gen != gen || inner.state != OrchestratorState::Processing {
+            let _op = orch.lock_op().await;
+            let mut session = orch.session();
+            if session.gen() != gen || session.state() != OrchestratorState::Processing {
                 return Ok(());
             }
-            inner.processing_cancel = None;
+            session.set_processing_cancel(None);
         }
 
         match result {
             Ok(result) => {
                 let duration_ms = started.elapsed().as_millis() as u64;
-                if let Some(h) = &self.inner.lock().unwrap().voice.history {
+                if let Some(h) = &self.state().history {
                     h.lock().unwrap().process_duration_ms = Some(duration_ms);
                 }
-                self.emit_process(
+                orch.emit_process(
                     "postprocess_completed",
                     json!({
                         "pipelineId": result.pipeline_id,
@@ -128,6 +136,7 @@ impl Orchestrator {
                     }),
                 );
                 self.deliver_ready_text(
+                    orch,
                     gen,
                     ReadyText {
                         source_text: result.source_text,
@@ -140,6 +149,7 @@ impl Orchestrator {
             Err(error) => {
                 let message = format!("后处理步骤「{}」失败：{}", error.step_id, error.message);
                 self.finish_processing_error(
+                    orch,
                     gen,
                     recognized,
                     &message,
@@ -153,22 +163,23 @@ impl Orchestrator {
 
     async fn finish_processing_error(
         &self,
+        orch: &Orchestrator,
         gen: u64,
         recognized: RecognizedText,
         message: &str,
         expected_states: &[OrchestratorState],
     ) {
         {
-            let _op = self.op.lock().await;
-            let mut inner = self.inner.lock().unwrap();
-            if inner.gen != gen || !expected_states.contains(&inner.state) {
+            let _op = orch.lock_op().await;
+            let mut session = orch.session();
+            if session.gen() != gen || !expected_states.contains(&session.state()) {
                 return;
             }
-            inner.processing_cancel = None;
-            inner.pending_text = Some(PendingText::Recognized(recognized.clone()));
-            inner.state = OrchestratorState::Error;
+            session.set_processing_cancel(None);
+            session.set_pending_text(Some(PendingText::Recognized(recognized.clone())));
+            session.set_state(OrchestratorState::Error);
         }
-        self.emit_state(
+        orch.emit_state(
             OrchestratorState::Error,
             Some(json!({
                 "message": message,
@@ -176,12 +187,13 @@ impl Orchestrator {
                 "retryStage": "processing",
             })),
         );
-        self.emit_process(
+        orch.emit_process(
             "postprocess_failed",
             json!({ "outcome": "error", "errorCode": "POSTPROCESS_FAILED" }),
         );
         self.write_history(
-            crate::history::HistoryOutcome::Error,
+            orch,
+            kotone_core::history::HistoryOutcome::Error,
             Some(message.to_string()),
         );
     }
@@ -189,21 +201,27 @@ impl Orchestrator {
     /// 所有可交付文本的唯一出口：更新 UI/history 后，按交互策略进入预览或发送。
     /// STT、未来后处理和处理失败重试都必须先产出 ReadyText，再调用本方法；
     /// injector 与 Preview 因而永远不会接触「尚未处理完成」的识别原文。
-    async fn deliver_ready_text(&self, gen: u64, ready: ReadyText) -> Result<(), String> {
-        if self.inner.lock().unwrap().gen != gen {
+    async fn deliver_ready_text(
+        &self,
+        orch: &Orchestrator,
+        gen: u64,
+        ready: ReadyText,
+    ) -> Result<(), String> {
+        if orch.session().gen() != gen {
             return Ok(());
         }
 
-        self.emitter
+        orch.emitter()
             .emit("kotone://partial", json!({ "text": ready.text }));
-        if let Some(history) = &self.inner.lock().unwrap().voice.history {
+        if let Some(history) = &self.state().history {
             history.lock().unwrap().final_text = ready.text.clone();
         }
 
-        match self.policy().post {
+        match orch.policy().post {
             PostFinalize::SendDirect => {
                 if let Some(claim) = self
                     .claim_send(
+                        orch,
                         Some(ready),
                         Some(gen),
                         &[
@@ -215,26 +233,26 @@ impl Orchestrator {
                     )
                     .await?
                 {
-                    self.run_send(claim).await;
+                    self.run_send(orch, claim).await;
                 }
             }
             PostFinalize::PreviewConfirm => {
-                let _op = self.op.lock().await;
-                let mut inner = self.inner.lock().unwrap();
-                if inner.gen != gen
+                let _op = orch.lock_op().await;
+                let mut session = orch.session();
+                if session.gen() != gen
                     || ![
                         OrchestratorState::Transcribing,
                         OrchestratorState::Processing,
                     ]
-                    .contains(&inner.state)
+                    .contains(&session.state())
                 {
                     return Ok(());
                 }
                 let text = ready.text.clone();
-                inner.pending_text = Some(PendingText::Ready(ready));
-                inner.state = OrchestratorState::Preview;
-                drop(inner);
-                self.emit_state(OrchestratorState::Preview, Some(json!({ "text": text })));
+                session.set_pending_text(Some(PendingText::Ready(ready)));
+                session.set_state(OrchestratorState::Preview);
+                drop(session);
+                orch.emit_state(OrchestratorState::Preview, Some(json!({ "text": text })));
             }
         }
         Ok(())

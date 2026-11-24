@@ -22,27 +22,29 @@ use crate::assistant::{
 };
 use crate::audio::{AudioBackend, AudioHandle};
 use crate::automation::AutomationScheduler;
-use crate::inject::{CancelToken, FocusBackend, InjectError, Injector, TargetWindow};
+use crate::inject::{CancelToken, FocusBackend, Injector, TargetWindow};
 use crate::interaction::{EndTrigger, InteractionPolicy, PostFinalize};
 use crate::postprocess::ProcessingCancelToken;
 use crate::profile::{self, GameProfile};
 use crate::settings::Settings;
 use crate::stt::{EngineRegistry, SessionConfig, SttEvent, SttSession};
 
+mod after_hearing;
 mod assistant_input;
 mod capture;
 mod finalize;
 mod hotkeys;
 mod lifecycle;
-mod voice_input;
 
+pub use self::after_hearing::{
+    AfterHearing, BoxFuture, PendingText, ReadyText, RecognizedText, RecordDraft, SendCompletion,
+    SendOperation, SessionGuard, SEND_STILL_RUNNING,
+};
 use self::capture::ActiveSession;
-use self::voice_input::PendingText;
+pub use self::capture::CaptureObserver;
 
 #[cfg(test)]
 use self::capture::build_session_config;
-#[cfg(test)]
-use self::voice_input::testing::*;
 
 /// finalize 超时（docs/development.md §6：finalize 设置 10s 超时）
 const DEFAULT_FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -97,16 +99,15 @@ struct Inner {
     gen: u64,
     active: Option<ActiveSession>,
     pending_text: Option<PendingText>,
-    /// 语音输入正在准备或执行的发送（本体只经 `send_is_running` / `stop_send` 问它）。
-    send_operation: voice_input::SendSlot,
+    /// 语音输入正在准备或执行的发送。取消/超时后仍保留，直到阻塞调用真正退出；
+    /// 开始新会话、改热键前都要看它（`send_is_running`）。
+    send_operation: Option<SendOperation>,
     /// Processing 状态的取消令牌；Esc/cancel 可立即打断异步处理器 future。
     processing_cancel: Option<ProcessingCancelToken>,
     /// 本地诊断流程的 case id；无论 history 是否关闭，每次 begin 都生成。
     process_case_id: Option<String>,
     /// 仅面板按钮创建的会话接受带 ID 的面板结束/确认/取消命令。
     assistant_voice_owner: bool,
-    /// 语音输入（听到以后）的注入目标窗口、识别记录草稿、聊天频道；本体不看里面。
-    voice: voice_input::VoiceInputState,
     /// 松手宽限期的延迟结束任务（见 DEFAULT_RELEASE_GRACE）；
     /// 再次按下 / cancel / 状态变迁时 abort
     release_grace_task: Option<tokio::task::JoinHandle<()>>,
@@ -134,8 +135,8 @@ pub struct Orchestrator {
     /// 桌面停止前同步关闭入口；CLI 默认开放。必须在 op 临界区再次核验。
     runtime_inputs_enabled: AtomicBool,
     engines: Arc<EngineRegistry>,
-    /// 语音输入的部件（文字处理器注册表）
-    voice_input: voice_input::VoiceInput,
+    /// 语音输入（“听到以后”，插件实现；没接 = 听写听到的字没有去处）
+    after_hearing: Option<Arc<dyn AfterHearing>>,
     assistant: Option<(Arc<dyn AssistantHandler>, Arc<AutomationScheduler>)>,
     audio: Arc<dyn AudioBackend>,
     before_capture: Option<Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
@@ -191,7 +192,6 @@ impl Orchestrator {
                 processing_cancel: None,
                 process_case_id: None,
                 assistant_voice_owner: false,
-                voice: voice_input::VoiceInputState::default(),
                 release_grace_task: None,
                 continuous_session: false,
             })),
@@ -203,7 +203,7 @@ impl Orchestrator {
             runtime_stt_settings: RwLock::new(None),
             runtime_inputs_enabled: AtomicBool::new(true),
             engines,
-            voice_input: voice_input::VoiceInput::default(),
+            after_hearing: None,
             assistant: None,
             audio,
             before_capture: None,
@@ -324,7 +324,8 @@ impl Orchestrator {
         self.hotkey_epoch.fetch_add(1, Ordering::SeqCst);
     }
 
-    fn input_ticket_is_current(&self, ticket: Option<u64>) -> bool {
+    /// 热键排队的票据还有效吗（Esc / 重注册会让排着队的旧票据作废）；`None` = 不是热键来的。
+    pub fn input_ticket_is_current(&self, ticket: Option<u64>) -> bool {
         ticket.map_or(true, |ticket| ticket == self.hotkey_input_ticket())
     }
 
@@ -375,7 +376,7 @@ impl Orchestrator {
 
     /// Success 在 toast_dwell 后自动回 Idle（期间有新会话/取消则不动作）。
     /// Error 一律保持到用户关闭/重试，确保核心链路失败不会在用户读到前消失。
-    fn schedule_idle(&self, gen: u64) {
+    pub fn schedule_idle(&self, gen: u64) {
         let dwell = self.toast_dwell;
         let inner = self.inner.clone();
         let emitter = self.emitter.clone();
@@ -407,7 +408,7 @@ impl Orchestrator {
         }
     }
 
-    fn emit_state(&self, state: OrchestratorState, mut payload: Option<serde_json::Value>) {
+    pub fn emit_state(&self, state: OrchestratorState, mut payload: Option<serde_json::Value>) {
         let (case_id, purpose, button_owned) = {
             let inner = self.inner.lock().unwrap();
             (
@@ -443,7 +444,8 @@ impl Orchestrator {
         );
     }
 
-    fn emit_process(&self, activity: &str, data: serde_json::Value) {
+    /// 本地诊断的流程事件（`kotone://process`，带本轮的 case id）。
+    pub fn emit_process(&self, activity: &str, data: serde_json::Value) {
         let case_id = self.inner.lock().unwrap().process_case_id.clone();
         let Some(case_id) = case_id else {
             return;

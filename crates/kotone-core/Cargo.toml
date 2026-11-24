@@ -22,3 +22,5 @@ tempfile.workspace = true
 # kotone-stt 正常依赖 kotone-core，kotone-core 仅测试依赖 kotone-stt）
 kotone-stt.workspace = true
 kotone-postprocess.workspace = true
+# 听写听到以后（文字处理、发送、识别记录）在语音输入插件里；tests/orchestrator.rs 把它接上（同样是 dev 依赖环）
+kotone-plugin-voice-input.workspace = true

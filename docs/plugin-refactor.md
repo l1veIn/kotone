@@ -625,3 +625,19 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 - 三次都是行为不变的重构：`kotone-core` 单元 309、集成 85（检查一条没改），集成每次跑两遍；测试名单逐字节一样；`scripts/e2e-virtual-audio.sh` 两条路都过。
 - **真机基线** `scripts/manual-e2e/voice_input_real.py`（新）：隔离实例、VB-CABLE 当麦克风、测试窗口在前台时才发键；隔离配置用 `hotkeyBackend: "register"`（低级钩子不认模拟按键），按 F22 走真的语音输入热键那条路。在 `81c6aef8` 上 **36/36 过、2 个跳过、50 秒**：按住说自动发送（测试窗口正好收到识别的字、只按了档案的两次回车）、录音笔模式预览不打字确认才发、屏蔽词把“打野”换成“JG”、识别记录、悬浮窗状态顺序、她的 `game_chat.send`（脚本里的模拟模型）和 `companion.type`、控制台通道没游戏时退回键盘、`~/.kotone` 没被动过。跳过：外部 Agent 调不了 `game_chat.send`；真的控制台通道要 Steam 装的 Dota 2 / CS2 在前台。跑之前玩家要离开电脑约 3 分钟（前台是 GameViewer 时脚本按规矩没跑）。
 - **下一步**：`voice_input/` 整块搬进 `plugins/voice-input`（测试加一行接上或连同搬过去，检查一条不改）、设置读旧写新、界面（文字处理、识别记录、悬浮窗）进插件 App、`game_chat.send` 用 `tool_prefix` 保留原名；每一步前后都跑 `voice_input_real.py`、85 个集成检查和英雄联盟的两个脚本。
+
+### 第 5 步（续二）：“听到以后”搬进 `plugins/voice-input`（2026-11-24 第六轮）
+
+先重读了 ADR 038“怎么定的”和本节（第五轮的约定），没靠摘要。玩家这一轮的话：“`tests/orchestrator.rs` 可以加一行接上插件或者连同搬过去，但里面的检查一条不改、照样全过；设置读旧写新；文字处理、识别记录、悬浮窗进插件 App；`game_chat.send` 保留原名。”
+
+**（一）Rust 搬家**（玩家看不到变化）：
+
+- `crates/kotone-core/src/orchestrator/voice_input/`（6 个文件 1,398 行）没了。发送、文字处理的运行、识别记录、频道和文字处理热键搬进新 crate `kotone-plugin-voice-input`（`plugins/voice-input/src/`：`send.rs`、`postprocessing.rs`、`records.rs`、`hotkeys.rs`，`git mv` 保留历史），改动只是 `self`（编排器）换成 `orch` 参数、插件自己的状态换成插件自己的锁；原来 `orchestrator/tests.rs` 里 9 个语音输入的单元测试跟着搬进 `src/tests.rs`（名字、内容不变）。
+- 本体留下“听一句”和一道缝 `orchestrator/after_hearing.rs`（448 行）：
+  - `AfterHearing`（插件实现）：开始收音时建识别记录草稿（`RecordDraft`，同时是录音旁听者 `CaptureObserver`）、发布会话时记下注入目标窗口、识别完成、听到了一句、确认、会话结束；
+  - 插件改会话状态只经 `lock_op()`（begin / end / cancel / confirm 共用的临界区）和 `session()`（状态锁的句柄 `SessionGuard`：代际、状态、用途、待处置的文字、Processing 的取消令牌、发送权）；锁的顺序：op → 状态锁 → 插件自己的锁；
+  - 留在本体的数据：待处置的文字（`PendingText`：识别原文 / 可交付文字 / 她的请求，状态机和热键都要看）、发送权（`SendOperation`：发送没结束时不能开始新会话、不能改热键）；
+  - 没接语音输入时听写听到的字没有去处：以 Error 结束并说明（“语音输入插件关着……”）。
+- 接法：`VoiceInputExt::with_processors(...)`（桌面端、命令行原来就这样写，加一行 `use`）；重发、频道、文字处理开关这几个热键也在这个 trait 上。命令行（`kotone-cli`）依赖了这个插件，和它依赖放歌插件一样（它是不带窗口的宿主）。
+- **`tests/orchestrator.rs`**：留在原处，`kotone-core` 多一个开发依赖（和 `kotone-stt`、`kotone-postprocess` 一样的依赖环）。改动只有接线：1 行 `use kotone_plugin_voice_input::VoiceInputExt;`，10 处直接 `Orchestrator::new(...)` 的地方各接一行 `.with_voice_input()`（原来这些地方用的是默认的空处理器表，接上后一样）；`assert` 和测试的操作一行没动。识别记录的存储（`kotone_core::history`）和文字处理的配置类型留在本体：测试的检查直接读 `kotone_core::history::list_in` 和 `settings.post_processing`。
+- 检查：`kotone-core` 单元 300 + 插件 9 = 309（和原来一样）、集成 84 过 + 1 个手动跑的跳过（= 85，检查一条没改）；桌面端 111；`kotone-cli` 34；插件边界测试 3；clippy（core、插件、命令行、桌面端，`-D warnings`）干净。真机：`lol_tools_real.py --while-playing` 32/32、`game_events_real.py` 12/12（前后都跑）。`voice_input_real.py` 要玩家离开电脑，还没跑。

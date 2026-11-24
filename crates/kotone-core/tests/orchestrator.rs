@@ -20,6 +20,7 @@ use kotone_core::postprocess::{PipelineStepConfig, StepFailurePolicy};
 use kotone_core::profile::GameProfile;
 use kotone_core::settings::Settings;
 use kotone_core::stt::EngineRegistry;
+use kotone_plugin_voice_input::VoiceInputExt;
 use tokio::sync::mpsc;
 
 /// 10 倍速推送假音频的 mock 采集后端（每 5ms 推一个 50ms chunk）
@@ -1103,7 +1104,8 @@ async fn empty_finalize_shows_actionable_error() {
         injector,
         focus,
         emitter.clone(),
-    );
+    )
+    .with_voice_input();
     orch.toast_dwell = Duration::from_millis(10);
     orch.finalize_timeout = Duration::from_secs(2);
     orch.focus_restore_delay = Duration::ZERO;
@@ -1191,6 +1193,7 @@ async fn post_processing_hotkeys_toggle_and_cycle_persist_and_emit() {
             focus,
             emitter.clone(),
         )
+        .with_voice_input()
         .with_settings_repository(repo.clone()),
     );
 
@@ -1286,7 +1289,8 @@ fn make_orchestrator_with_eval(
         injector,
         focus,
         emitter.clone(),
-    );
+    )
+    .with_voice_input();
     orch.toast_dwell = Duration::from_millis(10);
     orch.finalize_timeout = Duration::from_secs(2);
     orch.focus_restore_delay = Duration::ZERO;
@@ -1466,7 +1470,8 @@ fn make_vad_mode_orchestrator_in(
         injector,
         focus,
         emitter.clone(),
-    );
+    )
+    .with_voice_input();
     orch.toast_dwell = Duration::from_millis(10);
     orch.finalize_timeout = Duration::from_secs(2);
     orch.focus_restore_delay = Duration::ZERO;
@@ -1716,7 +1721,8 @@ async fn push_audio_failure_aborts_session_with_visible_error() {
             true,
         )),
         emitter.clone(),
-    );
+    )
+    .with_voice_input();
     orch.toast_dwell = Duration::from_millis(10);
     orch.focus_restore_delay = Duration::ZERO;
     let orch = orch.into_arc();
@@ -2628,6 +2634,7 @@ fn assistant_orchestrator_builder(
         )),
         emitter,
     )
+    .with_voice_input()
     .with_assistant(handler, reminders);
     orch.toast_dwell = Duration::from_secs(10);
     orch.release_grace = Duration::from_millis(20);
@@ -3198,6 +3205,7 @@ async fn failed_speech_stop_prevents_microphone_capture() {
         )),
         Arc::new(VecEmitter::default()),
     )
+    .with_voice_input()
     .with_before_capture(Arc::new(|| Err("语音尚未停止".into())))
     .with_after_capture(Arc::new(move || {
         release_count.fetch_add(1, Ordering::SeqCst);
@@ -3263,6 +3271,7 @@ fn capture_lifecycle_orchestrator(
         )),
         Arc::new(VecEmitter::default()),
     )
+    .with_voice_input()
     .with_before_capture(Arc::new(move || {
         admission.fetch_add(1, Ordering::SeqCst);
         Ok(())
@@ -3644,7 +3653,8 @@ async fn end_drains_buffered_pcm_before_finalize() {
         injector,
         focus,
         Arc::new(VecEmitter::default()),
-    );
+    )
+    .with_voice_input();
     orch.toast_dwell = Duration::from_millis(10);
     orch.finalize_timeout = Duration::from_secs(2);
     orch.focus_restore_delay = Duration::ZERO;
@@ -3744,7 +3754,8 @@ async fn hold_release_right_after_speech_keeps_sentence_tail() {
         injector,
         focus,
         emitter.clone(),
-    );
+    )
+    .with_voice_input();
     orch.toast_dwell = Duration::from_millis(10);
     orch.finalize_timeout = Duration::from_secs(10);
     orch.focus_restore_delay = Duration::ZERO;

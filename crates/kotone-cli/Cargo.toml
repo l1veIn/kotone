@@ -17,6 +17,8 @@ kotone-ocr.workspace = true
 # music 子命令：网易云音乐真网络冒烟（搜歌、取链接、扫码登录、放几秒）
 # 放歌插件的网易云接口和播放器（`kotone music`，开发时试用）
 kotone-plugin-music.workspace = true
+# listen 子命令：听写听到以后（文字处理、打字、识别记录）在语音输入插件里
+kotone-plugin-voice-input.workspace = true
 base64 = "0.22"
 serde.workspace = true
 clap = { version = "4", features = ["derive"] }

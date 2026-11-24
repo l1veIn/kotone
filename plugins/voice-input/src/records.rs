@@ -1,5 +1,11 @@
-use crate::orchestrator::capture::CaptureObserver;
-use crate::orchestrator::*;
+//! 识别记录：会话期间的草稿（旁听录音）、终态落账、历史音频裁剪。
+
+use std::sync::{Arc, Mutex};
+
+use kotone_core::orchestrator::{CaptureObserver, Orchestrator};
+use kotone_core::settings::Settings;
+
+use crate::VoiceInput;
 
 /// history 草稿：会话期间累计指标，终态（sent/cancelled/error）时落账一条记录
 pub(crate) struct HistoryDraft {
@@ -40,7 +46,7 @@ const SPEECH_GAP_SAMPLES: usize = 480 * 10; // 300ms
 
 impl HistoryDraft {
     /// 开始收音时建（与 eval 录档共用 session id）；只有 history.includeAudio 开着才另存 PCM。
-    pub(super) fn new(session_id: String, engine_id: &str, settings: &Settings) -> Self {
+    pub(crate) fn new(session_id: String, engine_id: &str, settings: &Settings) -> Self {
         HistoryDraft {
             session_id,
             started: std::time::Instant::now(),
@@ -96,10 +102,27 @@ impl HistoryDraft {
     }
 }
 
+/// 草稿和它的锁。旁听录音要实现本体的 [`CaptureObserver`]，孤儿规则要求包一层。
+pub(crate) struct DraftCell(Mutex<HistoryDraft>);
+
+impl DraftCell {
+    pub(crate) fn new(draft: HistoryDraft) -> Self {
+        Self(Mutex::new(draft))
+    }
+}
+
+impl std::ops::Deref for DraftCell {
+    type Target = Mutex<HistoryDraft>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// 识别记录草稿旁听录音：每次通知锁一次草稿。
 /// PCM 计采样数（includeAudio 开时另存一份）；只记第一个字的时间；
 /// VAD 语音帧标记「开过口」（取消判据）并记录语音区间（历史音频裁剪用）。
-impl CaptureObserver for Mutex<HistoryDraft> {
+impl CaptureObserver for DraftCell {
     fn on_pcm(&self, chunk: &[f32]) {
         let mut h = self.lock().unwrap();
         h.audio_samples += chunk.len() as u64;
@@ -122,7 +145,7 @@ impl CaptureObserver for Mutex<HistoryDraft> {
     }
 }
 
-impl Orchestrator {
+impl VoiceInput {
     /// history 终态落账：取草稿快照 → 组记录 → 追加到 history.jsonl。
     /// - mode=off / 无草稿 → 不落盘；已结束的会话仍终结草稿，避免重新启用后补写旧记录；
     /// - error：落账但保留草稿（Error 态可重试，重试成功同 sessionId 再写一条 sent，
@@ -130,35 +153,35 @@ impl Orchestrator {
     /// - cancelled：草稿已被 error 落账过则跳过（Error 后的 Esc 是清理动作，不双记）；
     /// - sent / cancelled：落账并终结草稿；
     /// - IO 失败静默记日志，绝不炸主流程。
-    pub(super) fn write_history(
+    pub(crate) fn write_history(
         &self,
-        outcome: crate::history::HistoryOutcome,
+        orch: &Orchestrator,
+        outcome: kotone_core::history::HistoryOutcome,
         error: Option<String>,
     ) {
-        let draft = match self.inner.lock().unwrap().voice.history.clone() {
+        let draft = match self.state().history.clone() {
             Some(d) => d,
             None => return,
         };
-        let cfg = self.settings.read().unwrap().history.clone();
-        if cfg.mode == crate::history::HistoryMode::Off {
-            if outcome != crate::history::HistoryOutcome::Error {
+        let cfg = orch.settings().read().unwrap().history.clone();
+        if cfg.mode == kotone_core::history::HistoryMode::Off {
+            if outcome != kotone_core::history::HistoryOutcome::Error {
                 // Off 只禁止持久化，不延长已取消/发送会话的草稿生命周期。
                 // Error 仍保留草稿，允许同一次听写失败后重试。
-                let mut inner = self.inner.lock().unwrap();
-                if inner
-                    .voice
+                let mut state = self.state();
+                if state
                     .history
                     .as_ref()
                     .is_some_and(|current| Arc::ptr_eq(current, &draft))
                 {
-                    inner.voice.history = None;
+                    state.history = None;
                 }
             }
             return;
         }
         let record = {
             let mut g = draft.lock().unwrap();
-            if outcome == crate::history::HistoryOutcome::Cancelled {
+            if outcome == kotone_core::history::HistoryOutcome::Cancelled {
                 if g.reported {
                     // error 已落账过的草稿跳过（Error 后的 Esc 是清理动作，不双记 cancelled）
                     return;
@@ -177,21 +200,21 @@ impl Orchestrator {
                     // 非流式引擎（FunASR-Nano/SenseVoice 等）不发 partial 且无 VAD，
                     // 取消时无法确认是否开口，同样按无产出处理不落账。
                     drop(g);
-                    self.inner.lock().unwrap().voice.history = None;
+                    self.state().history = None;
                     return;
                 }
             } else {
                 g.reported = true;
             }
-            crate::history::HistoryRecord {
+            kotone_core::history::HistoryRecord {
                 session_id: g.session_id.clone(),
-                ts: crate::eval::utc_now_iso(),
+                ts: kotone_core::eval::utc_now_iso(),
                 engine_id: g.engine_id.clone(),
                 profile_id: g.profile_id.clone(),
                 final_text: g.final_text.clone(),
                 source_text: g.source_text.clone(),
                 process_duration_ms: g.process_duration_ms,
-                audio_ms: g.audio_samples * 1000 / crate::eval::SAMPLE_RATE as u64,
+                audio_ms: g.audio_samples * 1000 / kotone_core::eval::SAMPLE_RATE as u64,
                 first_partial_ms: g.first_partial_ms,
                 finalize_latency_ms: g.finalize_latency_ms,
                 outcome,
@@ -199,22 +222,22 @@ impl Orchestrator {
                 audio_file: g.audio_file.clone(),
             }
         };
-        let dir = self
+        let dir = orch
             .history_dir
             .clone()
-            .unwrap_or_else(crate::history::history_dir);
-        if let Err(e) = crate::history::append_in(&dir, &record, &cfg) {
-            crate::log::log(&format!("history 落账失败（忽略）: {e}"));
+            .unwrap_or_else(kotone_core::history::history_dir);
+        if let Err(e) = kotone_core::history::append_in(&dir, &record, &cfg) {
+            kotone_core::log::log(&format!("history 落账失败（忽略）: {e}"));
         } else {
             // 历史已更新：通知前端（历史记录页挂载期间据此即时刷新，无需切页）
             // 未落账的路径（off / 无草稿 / 无产出取消）不会走到这里。
-            self.emitter.emit(
+            orch.emitter().emit(
                 "kotone://history-updated",
                 serde_json::json!({ "outcome": outcome }),
             );
         }
-        if outcome != crate::history::HistoryOutcome::Error {
-            self.inner.lock().unwrap().voice.history = None;
+        if outcome != kotone_core::history::HistoryOutcome::Error {
+            self.state().history = None;
         }
     }
 
@@ -223,12 +246,12 @@ impl Orchestrator {
     /// VAD 模式（one-shot/solo）下按语音区间裁剪：段首思考静音与段尾判停
     /// 尾音不再进保存的 wav（用户反馈「独奏历史音频很长、含大量沉默」）；
     /// 非 VAD 模式无语音区间标记，原样保存。
-    pub(super) fn persist_history_audio(&self) {
-        let cfg = self.settings.read().unwrap().history.clone();
-        if cfg.mode == crate::history::HistoryMode::Off || !cfg.include_audio {
+    pub(crate) fn persist_history_audio(&self, orch: &Orchestrator) {
+        let cfg = orch.settings().read().unwrap().history.clone();
+        if cfg.mode == kotone_core::history::HistoryMode::Off || !cfg.include_audio {
             return;
         }
-        let draft = match self.inner.lock().unwrap().voice.history.clone() {
+        let draft = match self.state().history.clone() {
             Some(d) => d,
             None => return,
         };
@@ -246,18 +269,18 @@ impl Orchestrator {
         // 按语音区间裁剪（VAD 模式有区间；非 VAD 模式 segments 空 → 原样）
         let trimmed = trim_speech_pcm(&pcm, &segments);
         if trimmed.is_empty() {
-            crate::log::log("history 音频裁剪后为空（忽略保存）");
+            kotone_core::log::log("history 音频裁剪后为空（忽略保存）");
             return;
         }
         // 实际语音时长写回草稿：记录 audio_ms 与保存的 wav 一致
         draft.lock().unwrap().audio_samples = trimmed.len() as u64;
-        let dir = self
+        let dir = orch
             .history_dir
             .clone()
-            .unwrap_or_else(crate::history::history_dir);
-        let audio_file = crate::history::write_audio_in(&dir, &session_id, &trimmed);
+            .unwrap_or_else(kotone_core::history::history_dir);
+        let audio_file = kotone_core::history::write_audio_in(&dir, &session_id, &trimmed);
         if audio_file.is_none() {
-            crate::log::log("history 音频落盘失败（忽略）");
+            kotone_core::log::log("history 音频落盘失败（忽略）");
         }
         draft.lock().unwrap().audio_file = audio_file;
     }

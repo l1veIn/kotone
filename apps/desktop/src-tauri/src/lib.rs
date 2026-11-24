@@ -80,6 +80,7 @@ use kotone_core::connection::{Connection, ConnectionResolver, SecretStore};
 use kotone_core::inject::{CancelToken, FocusBackend, InjectError, Injector};
 use kotone_core::interaction::effective_hotkey_mode;
 use kotone_core::orchestrator::{Emitter, Orchestrator, OrchestratorState};
+use kotone_plugin_voice_input::VoiceInputExt;
 use kotone_core::profile::{
     self, format_hotwords_export, GameProfile, HotwordMergeReport, ProfileDeleteOutcome,
 };
@@ -275,6 +276,7 @@ pub fn run() {
                 focus,
                 emitter,
             )
+            // 听写听到以后（文字处理、发送、识别记录）：语音输入插件
             .with_processors(processors.clone())
             .with_secrets(secrets.clone())
             .with_settings_repository(settings_repository.clone());

@@ -1,0 +1,13 @@
+[package]
+name = "kotone-plugin-voice-input"
+version = "0.1.0"
+description = "Kotone 语音输入插件（ADR 038 D4）：听写听到以后的事——文字处理、预览、往游戏聊天框打字、识别记录、聊天频道"
+edition = "2021"
+rust-version = "1.77.2"
+
+# 插件只依赖插件契约、kotone-core 的纯数据类型和自己的第三方库（ADR 038 D6），不碰 Tauri。
+# 录音、语音识别（“听一句”）在本体（kotone-core 的 orchestrator），这里实现它的 AfterHearing。
+[dependencies]
+kotone-core.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
