@@ -31,6 +31,7 @@
 | `game_events_real.py [--probe 目录] [--gamedata 目录]` | 游戏中心和按游戏事件运行的自动化（ADR 036 一期）的真机测试，**不用开游戏**：沿用 `lol_tools_real.py` 的假客户端，但按时间线放一局：大厅 → 8 秒选英雄 → 16 秒 InProgress（局内接口 404，加载）→ 22 秒有局内数据 → 40 秒对面拿了火龙 → 60 秒结算 → 70 秒大厅。先打开内置模板“英雄联盟进加载界面播报突破口”，再存一个“对面拿了{dragon_name}”的播报（`on` = 对面拿龙）。查：游戏中心的阶段（menu → pre_match → loading → in_match）；当前游戏配置自动切到英雄联盟（D7）；进加载界面时模板把话交给她，她用 `lol.scout` 并开口说；拿龙时播报“对面拿了火龙”（事件数据填进参数）；`game.state` 里有最近的事；结算时 `game.match_ended` 触发复盘（`KOTONE_RECAP_MIN_SECONDS=20`）。真 DeepSeek、隔离目录 `target/game-events-real`、不发任何系统按键，玩家对局时也能跑 |
 | `background_voice_real.py` | 真实 DeepSeek 的“交给后台”语音路径（ADR 029 第二期 + ADR 030），沿用 `voice_turn_real.py` 的做法（`--background`、调试端口点呼叫、SAPI 句子放进 VB-CABLE、音量 8）：用嘴派写自动化的活，她当场一句、后台做完她自己开口说结果；用嘴让后台删文件，删除前她开口问、脚本用嘴答“可以”、删掉并开口说结果。打印她每句语音回答的字数和这一轮的费用。前台是游戏就停 |
 | `wake_eval.py` | 唤醒词实测（离线）：SAPI 和 DeepSeek 两种声音合成各个唤醒词，加几分钟不含唤醒词的普通说话，喂给和桌面端同一个唤醒检测器，统计喊中率和误唤醒 |
+| `mcp_names_real.py [--exe 路径] [--mcp 路径] [--keep]` | `kotone.exe mcp` 把带下划线的工具名还原对（MCP 方案第 0 期）：隔离实例（`target/mcp-names-real/`，`--background`，开工具服务和游戏语音插件，`includeMic: false`，exe 先复制到 `bin/`），经 stdio 走一遍真实的 MCP 对话：`initialize` → `tools/list`（Kotone 里名字带下划线的工具都以原来的 MCP 名列出）→ `tools/call kotone_voice_chat_status`（只读）→ 不存在的名字报错并说下一步；再开一个会话，不先列工具直接调。不调会打字、出声、改默认麦克风、装驱动的工具（脚本里拦着），不发系统按键；有游戏在跑或在前台就不跑；跑完删掉隔离目录。`--mcp` 选 MCP 那一端的 exe（默认和 `--exe` 同一个；只重编了命令行时用 `target/debug/kotone-cli.exe`，代码相同） |
 
 ## 准备
 

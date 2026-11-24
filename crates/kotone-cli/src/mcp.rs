@@ -7,8 +7,15 @@
 //! - 动态工具：列出工具时若实例在运行，把 capabilities 中的每个工具映射为
 //!   `kotone_<名称，点换成下划线>`（如 `agent.reply` → `kotone_agent_reply`），schema 原样提供。
 //!   `kotone_launch` 成功后发送 `notifications/tools/list_changed`。
-//! - 本进程不持有任何业务逻辑：每次调用都经已有协议转发给桌面实例。
+//! - 对外的名字只能这样算、不能改（外部 Agent 可能记住了名字、设了权限）。但 Kotone 的工具名里
+//!   本来就可能有下划线（`voice_chat.say`、`game_chat.send`），所以不能把 MCP 名里的下划线换回点：
+//!   列出工具时按 capabilities 记一张“MCP 名 → Kotone 名”的对照表，调用时查表；表里没有
+//!   （没先列工具、实例刚换过）就重新取一次 capabilities 再查，还没有才报“没有这个工具”。
+//!   两个 Kotone 名算出同一个 MCP 名（`a_b.c` 和 `a.b_c`）时两个都不列，调用这个名字会报错，
+//!   请对方用 `kotone_call` 写明 Kotone 工具名：不猜，猜错了会调到别的工具。
+//! - 本进程不持有任何业务逻辑：每次调用都经已有协议转发给桌面实例；对照表只是名字，随 capabilities 变。
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use serde_json::{json, Value};
@@ -79,37 +86,136 @@ fn static_tools() -> Vec<Value> {
     ]
 }
 
-/// 运行中实例的工具 → MCP 工具（重复的读取类工具不映射）。
-async fn dynamic_tools() -> Vec<Value> {
-    let Ok(client) = connect() else { return vec![] };
-    let Ok(envelope) = client.capabilities().await else {
-        return vec![];
-    };
-    let Some(caps) = envelope.result else {
-        return vec![];
-    };
-    caps["tools"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|t| {
-            !matches!(
-                t["name"].as_str(),
-                Some("system.capabilities" | "event.read")
-            )
-        })
+/// capabilities 里有、但不列成 MCP 工具的（和固定工具重复的读取类工具）。照旧能按名字调。
+const UNLISTED: [&str; 2] = ["system.capabilities", "event.read"];
+
+/// Kotone 工具名 → 对外的 MCP 工具名。外部 Agent 已经在用这些名字：算法不能改。
+fn mcp_name(tool: &str) -> String {
+    format!("{PREFIX}{}", tool.replace('.', "_"))
+}
+
+/// MCP 工具名 → Kotone 工具名的对照表（列出工具时按 capabilities 建）。
+///
+/// 一个 MCP 名对应的 Kotone 名按字典序排好；多于一个就是撞名。和固定工具重名的不进表（固定工具优先）。
+#[derive(Debug, Default)]
+struct Names(BTreeMap<String, Vec<String>>);
+
+#[derive(Debug, PartialEq, Eq)]
+enum Lookup<'a> {
+    Tool(&'a str),
+    Ambiguous(&'a [String]),
+    Unknown,
+}
+
+impl Names {
+    fn build<'a>(tools: impl IntoIterator<Item = &'a str>) -> Self {
+        let reserved: Vec<Value> = static_tools()
+            .into_iter()
+            .map(|t| t["name"].clone())
+            .collect();
+        let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for tool in tools {
+            let name = mcp_name(tool);
+            if reserved.iter().any(|r| r == name.as_str()) {
+                continue;
+            }
+            let entry = map.entry(name).or_default();
+            if !entry.iter().any(|t| t == tool) {
+                entry.push(tool.to_string());
+            }
+        }
+        for tools in map.values_mut() {
+            tools.sort();
+        }
+        Self(map)
+    }
+
+    fn lookup(&self, name: &str) -> Lookup<'_> {
+        match self.0.get(name).map(Vec::as_slice) {
+            Some([tool]) => Lookup::Tool(tool),
+            Some([]) | None => Lookup::Unknown,
+            Some(tools) => Lookup::Ambiguous(tools),
+        }
+    }
+}
+
+/// capabilities 的工具 → (列给 MCP 的工具, 对照表)。撞名的、和固定工具重名的不列。
+fn map_tools(tools: &[Value]) -> (Vec<Value>, Names) {
+    let names = Names::build(tools.iter().filter_map(|t| t["name"].as_str()));
+    let mut seen = BTreeSet::new();
+    let listed = tools
+        .iter()
         .filter_map(|t| {
-            let name = t["name"].as_str()?;
+            let tool = t["name"].as_str()?;
+            if UNLISTED.contains(&tool) {
+                return None;
+            }
+            let name = mcp_name(tool);
+            if names.lookup(&name) != Lookup::Tool(tool) || !seen.insert(name.clone()) {
+                return None;
+            }
             let mut schema = t["inputSchema"].clone();
             // MCP 要求 inputSchema 为 object 类型
             schema["type"] = json!("object");
             Some(json!({
-                "name": format!("{PREFIX}{}", name.replace('.', "_")),
+                "name": name,
                 "description": t["description"],
                 "inputSchema": schema,
             }))
         })
-        .collect()
+        .collect();
+    (listed, names)
+}
+
+/// 运行中实例 capabilities 里的全部工具；取不到时返回给对方看的错误结果。
+async fn capability_tools() -> Result<Vec<Value>, Value> {
+    let client = connect().map_err(|e| {
+        text_result(
+            &json!({"ok": false, "error": e, "hint": "Kotone 未在运行：先调用 kotone_launch"}),
+            true,
+        )
+    })?;
+    let envelope = client
+        .capabilities()
+        .await
+        .map_err(|e| text_result(&json!({"ok": false, "error": e}), true))?;
+    let ok = envelope.ok;
+    match envelope.result {
+        Some(caps) if ok => Ok(caps["tools"].as_array().cloned().unwrap_or_default()),
+        _ => Err(text_result(
+            &serde_json::to_value(&envelope).unwrap_or_default(),
+            true,
+        )),
+    }
+}
+
+/// 找不到这个工具时给对方的话：说清楚可能为什么、下一步怎么做。
+fn unknown_tool(name: &str) -> Value {
+    text_result(
+        &json!({
+            "ok": false,
+            "error": format!("Kotone 现在没有叫 {name} 的工具"),
+            "hint": "工具会随 Kotone 的插件开关变化：重新 tools/list 看现在有哪些；\
+                或用 kotone_capabilities 查 Kotone 工具名，再用 kotone_call 按 Kotone 工具名调用",
+        }),
+        true,
+    )
+}
+
+/// 撞名时给对方的话：不猜，请对方写明 Kotone 工具名。
+fn ambiguous_tool(name: &str, tools: &[String]) -> Value {
+    text_result(
+        &json!({
+            "ok": false,
+            "error": format!("{name} 同时对应 Kotone 的 {}，分不清要调哪个", tools.join("、")),
+            "candidates": tools,
+            "hint": format!(
+                "用 kotone_call 写明 Kotone 工具名调用，例如 {{\"tool\": \"{}\", \"arguments\": {{…}}}}",
+                tools[0]
+            ),
+        }),
+        true,
+    )
 }
 
 fn text_result(value: &Value, is_error: bool) -> Value {
@@ -150,9 +256,60 @@ async fn call_kotone(tool: &str, arguments: Value, timeout_ms: Option<u64>) -> V
     }
 }
 
-/// 处理一次 tools/call；返回 (结果, 是否需要通知工具列表变化)。
-async fn handle_call(name: &str, args: Value) -> (Value, bool) {
-    match name {
+/// 一个 MCP 会话（一条 stdio）：只记着名字对照表。
+#[derive(Default)]
+pub(crate) struct Server {
+    names: Names,
+}
+
+impl Server {
+    /// 列工具：固定工具 + 运行中实例的工具；顺便更新对照表。
+    async fn list_tools(&mut self) -> Vec<Value> {
+        let mut tools = static_tools();
+        if let Ok(caps) = capability_tools().await {
+            let (listed, names) = map_tools(&caps);
+            tools.extend(listed);
+            self.names = names;
+        }
+        tools
+    }
+
+    /// 调一个映射出来的工具：先查表，查不到就重新取一次 capabilities 再查。
+    async fn call_mapped(&mut self, name: &str, args: Value) -> Value {
+        if matches!(self.names.lookup(name), Lookup::Unknown) {
+            match capability_tools().await {
+                Ok(caps) => self.names = map_tools(&caps).1,
+                Err(e) => return e,
+            }
+        }
+        match self.names.lookup(name) {
+            // 映射工具的参数原样转发（不夹带额外字段）；期限取服务允许的上限，
+            // 快速工具照常即时返回，播报等长操作不被默认 5 秒截断
+            Lookup::Tool(tool) => call_kotone(tool, args, Some(30_000)).await,
+            Lookup::Ambiguous(tools) => ambiguous_tool(name, tools),
+            Lookup::Unknown => unknown_tool(name),
+        }
+    }
+
+    /// 处理一次 tools/call；返回 (结果, 是否需要通知工具列表变化)。
+    async fn handle_call(&mut self, name: &str, args: Value) -> (Value, bool) {
+        if let Some((result, list_changed)) = handle_static(name, &args).await {
+            if list_changed {
+                // 实例换了：下次调用重新取 capabilities
+                self.names = Names::default();
+            }
+            return (result, list_changed);
+        }
+        match name.strip_prefix(PREFIX) {
+            Some(rest) if !rest.is_empty() => (self.call_mapped(name, args).await, false),
+            _ => (unknown_tool(name), false),
+        }
+    }
+}
+
+/// 固定工具；不是固定工具时返回 None。
+async fn handle_static(name: &str, args: &Value) -> Option<(Value, bool)> {
+    Some(match name {
         "kotone_service_status" => match app::running_status().await {
             Ok(status) => (
                 text_result(&json!({"running": true, "status": status}), false),
@@ -191,7 +348,7 @@ async fn handle_call(name: &str, args: Value) -> (Value, bool) {
         }
         "kotone_call" => {
             let Some(tool) = args["tool"].as_str() else {
-                return (text_result(&json!({"error": "缺少 tool"}), true), false);
+                return Some((text_result(&json!({"error": "缺少 tool"}), true), false));
             };
             let arguments = args.get("arguments").cloned().unwrap_or(json!({}));
             (
@@ -224,20 +381,8 @@ async fn handle_call(name: &str, args: Value) -> (Value, bool) {
             };
             (result, false)
         }
-        other => match other.strip_prefix(PREFIX) {
-            // Kotone 工具名不含下划线，可无歧义还原
-            Some(rest) if !rest.is_empty() => {
-                let tool = rest.replace('_', ".");
-                // 映射工具的参数原样转发（不夹带额外字段）；期限取服务允许的上限，
-                // 快速工具照常即时返回，播报等长操作不被默认 5 秒截断
-                (call_kotone(&tool, args, Some(30_000)).await, false)
-            }
-            _ => (
-                text_result(&json!({"error": format!("未知工具 {other}")}), true),
-                false,
-            ),
-        },
-    }
+        _ => return None,
+    })
 }
 
 fn urlencode(s: &str) -> String {
@@ -260,7 +405,7 @@ fn error(id: Value, code: i64, message: &str) -> Value {
 }
 
 /// 处理一条消息；返回要写出的消息（响应与可选通知）。
-pub(crate) async fn handle_message(message: &Value) -> Vec<Value> {
+pub(crate) async fn handle_message(server: &mut Server, message: &Value) -> Vec<Value> {
     let id = message.get("id").cloned();
     let method = message["method"].as_str().unwrap_or("");
     let Some(id) = id else {
@@ -284,17 +429,13 @@ pub(crate) async fn handle_message(message: &Value) -> Vec<Value> {
             )]
         }
         "ping" => vec![response(id, json!({}))],
-        "tools/list" => {
-            let mut tools = static_tools();
-            tools.extend(dynamic_tools().await);
-            vec![response(id, json!({"tools": tools}))]
-        }
+        "tools/list" => vec![response(id, json!({"tools": server.list_tools().await}))],
         "tools/call" => {
             let Some(name) = params["name"].as_str() else {
                 return vec![error(id, -32602, "缺少 name")];
             };
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
-            let (result, list_changed) = handle_call(name, args).await;
+            let (result, list_changed) = server.handle_call(name, args).await;
             let mut out = vec![response(id, result)];
             if list_changed {
                 out.push(json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}));
@@ -310,6 +451,7 @@ pub(crate) async fn handle_message(message: &Value) -> Vec<Value> {
 pub async fn run() -> i32 {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();
+    let mut server = Server::default();
     loop {
         let line = match lines.next_line().await {
             Ok(Some(line)) => line,
@@ -323,7 +465,7 @@ pub async fn run() -> i32 {
             continue;
         }
         let outputs = match serde_json::from_str::<Value>(&line) {
-            Ok(message) => handle_message(&message).await,
+            Ok(message) => handle_message(&mut server, &message).await,
             Err(_) => vec![error(Value::Null, -32700, "无法解析 JSON")],
         };
         for output in outputs {
@@ -333,5 +475,136 @@ pub async fn run() -> i32 {
                 return 0;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn caps(names: &[&str]) -> Vec<Value> {
+        names
+            .iter()
+            .map(|n| json!({"name": n, "description": format!("{n} 的说明"), "inputSchema": {"properties": {}}}))
+            .collect()
+    }
+
+    fn listed(tools: &[Value]) -> Vec<&str> {
+        tools.iter().map(|t| t["name"].as_str().unwrap()).collect()
+    }
+
+    /// 名字里带下划线的（游戏语音、游戏里打字）列出来的名字和以前一样，调用时还原成原来的 Kotone 名。
+    #[test]
+    fn underscored_names_round_trip() {
+        let kotone = [
+            "voice_chat.say",
+            "voice_chat.status",
+            "voice_chat.default_mic",
+            "game_chat.send",
+            "music.set_quality",
+            "agent.reply",
+            "agent.request.claim",
+            "chat.track.read",
+            "screen.capture",
+        ];
+        let (tools, names) = map_tools(&caps(&kotone));
+        let expected = [
+            "kotone_voice_chat_say",
+            "kotone_voice_chat_status",
+            "kotone_voice_chat_default_mic",
+            "kotone_game_chat_send",
+            "kotone_music_set_quality",
+            "kotone_agent_reply",
+            "kotone_agent_request_claim",
+            "kotone_chat_track_read",
+            "kotone_screen_capture",
+        ];
+        // 对外的名字不变（外部 Agent 记住的、设过权限的照旧能用）
+        assert_eq!(listed(&tools), expected);
+        for (mcp, tool) in expected.iter().zip(kotone) {
+            assert_eq!(names.lookup(mcp), Lookup::Tool(tool), "{mcp}");
+        }
+        // 以前的还原法把这些还原错了
+        assert_eq!("voice_chat_say".replace('_', "."), "voice.chat.say");
+        // 说明和 schema 原样带过去，schema 补上 object
+        assert_eq!(tools[0]["description"], "voice_chat.say 的说明");
+        assert_eq!(tools[0]["inputSchema"]["type"], "object");
+    }
+
+    /// 和固定工具重复的读取类工具不列，但按名字照旧能调；没有的名字就是没有。
+    #[test]
+    fn unlisted_and_unknown_names() {
+        let (tools, names) = map_tools(&caps(&["system.capabilities", "event.read", "x.y"]));
+        assert_eq!(listed(&tools), ["kotone_x_y"]);
+        assert_eq!(
+            names.lookup("kotone_event_read"),
+            Lookup::Tool("event.read")
+        );
+        assert_eq!(names.lookup("kotone_nope"), Lookup::Unknown);
+        assert_eq!(names.lookup("x.y"), Lookup::Unknown);
+        assert_eq!(Names::default().lookup("kotone_x_y"), Lookup::Unknown);
+    }
+
+    /// 两个 Kotone 名算出同一个 MCP 名：两个都不列，查这个名字得到按字典序排好的两个（不管 capabilities 的顺序），
+    /// 别的工具不受影响。
+    #[test]
+    fn colliding_names_are_never_guessed() {
+        for order in [["a_b.c", "a.b_c", "x.y"], ["x.y", "a.b_c", "a_b.c"]] {
+            let (tools, names) = map_tools(&caps(&order));
+            assert_eq!(listed(&tools), ["kotone_x_y"], "{order:?}");
+            let expected = ["a.b_c".to_string(), "a_b.c".to_string()];
+            assert_eq!(
+                names.lookup("kotone_a_b_c"),
+                Lookup::Ambiguous(&expected),
+                "{order:?}"
+            );
+            assert_eq!(names.lookup("kotone_x_y"), Lookup::Tool("x.y"));
+        }
+        // 同一个名字列了两遍不算撞名
+        let (tools, names) = map_tools(&caps(&["voice_chat.say", "voice_chat.say"]));
+        assert_eq!(
+            names.lookup("kotone_voice_chat_say"),
+            Lookup::Tool("voice_chat.say")
+        );
+        assert_eq!(listed(&tools), ["kotone_voice_chat_say"]);
+        // 报错说清楚是哪几个、下一步怎么做
+        let error = ambiguous_tool("kotone_a_b_c", &["a.b_c".into(), "a_b.c".into()]);
+        assert_eq!(error["isError"], true);
+        let body = &error["structuredContent"];
+        assert_eq!(body["candidates"], json!(["a.b_c", "a_b.c"]));
+        assert!(body["hint"].as_str().unwrap().contains("kotone_call"));
+        assert!(body["hint"]
+            .as_str()
+            .unwrap()
+            .contains("\"tool\": \"a.b_c\""));
+    }
+
+    /// Kotone 工具算出来和固定工具重名时，固定工具优先，不列第二个同名的。
+    #[test]
+    fn static_tools_win_over_mapped_names() {
+        let (tools, names) = map_tools(&caps(&["service.status", "call", "y.z"]));
+        assert_eq!(listed(&tools), ["kotone_y_z"]);
+        assert_eq!(names.lookup("kotone_service_status"), Lookup::Unknown);
+        assert_eq!(names.lookup("kotone_call"), Lookup::Unknown);
+        let fixed: Vec<Value> = static_tools();
+        let mut all = listed(&fixed);
+        all.extend(listed(&tools));
+        let mut unique = all.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), all.len(), "{all:?}");
+    }
+
+    #[test]
+    fn unknown_tool_says_what_to_do_next() {
+        let error = unknown_tool("kotone_nope");
+        assert_eq!(error["isError"], true);
+        let body = &error["structuredContent"];
+        assert!(body["error"].as_str().unwrap().contains("kotone_nope"));
+        let hint = body["hint"].as_str().unwrap();
+        assert!(
+            hint.contains("tools/list") && hint.contains("kotone_call"),
+            "{hint}"
+        );
     }
 }

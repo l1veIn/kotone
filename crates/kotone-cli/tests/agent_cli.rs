@@ -380,3 +380,96 @@ async fn mcp_server_exposes_kotone_tools_and_the_reverse_channel() {
     assert_eq!(unknown["error"]["code"], -32601);
     drop(running);
 }
+
+/// 插件的工具名里本来就有下划线（`voice_chat.status`、`game_chat.send`）：MCP 名照旧，调用时还原对；
+/// 没先 tools/list 也能调（现取 capabilities）；撞名的不列、调用时说清楚；没有的工具说下一步。
+/// 假宿主只记下调用，不打字、不出声。
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_maps_underscored_plugin_tool_names_back() {
+    let temp = tempfile::tempdir().unwrap();
+    let run_dir = temp.path().join("run");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let (running, host) = start(&run_dir).await;
+    let spec = |name: &str| {
+        json!({
+            "name": name, "version": 1, "status": "implemented", "description": format!("{name} 的说明"),
+            "sideEffects": [], "dataEgress": "none", "ready": true, "notReadyReason": null,
+            "inputSchema": {"type": "object", "properties": {}}, "outputSchema": {"type": "object"},
+            "plugin": "test", "untrustedResult": false
+        })
+    };
+    host.set_plugin_tools(
+        [
+            "voice_chat.status",
+            "voice_chat.default_mic",
+            "game_chat.send",
+            "x_y.z",
+            "x.y_z",
+        ]
+        .into_iter()
+        .map(spec)
+        .collect(),
+    );
+    let (rd, h) = (run_dir.clone(), home.clone());
+    let outcome = tokio::task::spawn_blocking(move || {
+        let mut mcp = Mcp::start(&rd, &h);
+        mcp.request("initialize", json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}));
+        // 不先列工具就调
+        let status = mcp.call("kotone_voice_chat_status", json!({}));
+        let tools = mcp.request("tools/list", json!({}));
+        let send = mcp.call("kotone_game_chat_send", json!({"text": "gg"}));
+        let mic = mcp.call("kotone_voice_chat_default_mic", json!({"use": "restore"}));
+        let ambiguous = mcp.call("kotone_x_y_z", json!({}));
+        let unknown = mcp.call("kotone_voice_chat_nope", json!({}));
+        drop(mcp.stdin);
+        let _ = mcp.child.wait();
+        (status, tools, send, mic, ambiguous, unknown)
+    })
+    .await
+    .unwrap();
+    let (status, tools, send, mic, ambiguous, unknown) = outcome;
+    assert!(!status.1, "{}", status.0);
+    assert!(!send.1, "{}", send.0);
+    assert!(!mic.1, "{}", mic.0);
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    for expected in [
+        "kotone_voice_chat_status",
+        "kotone_voice_chat_default_mic",
+        "kotone_game_chat_send",
+    ] {
+        assert!(names.contains(&expected), "{expected} missing in {names:?}");
+    }
+    assert!(!names.contains(&"kotone_x_y_z"), "{names:?}");
+    // 宿主收到的是原来的 Kotone 名和原样的参数
+    let calls: Vec<(String, Value)> = host.invocations();
+    assert_eq!(
+        calls,
+        vec![
+            ("voice_chat.status".to_string(), json!({})),
+            ("game_chat.send".to_string(), json!({"text": "gg"})),
+            (
+                "voice_chat.default_mic".to_string(),
+                json!({"use": "restore"})
+            ),
+        ]
+    );
+    assert!(ambiguous.1);
+    assert_eq!(ambiguous.0["candidates"], json!(["x.y_z", "x_y.z"]));
+    assert!(ambiguous.0["hint"]
+        .as_str()
+        .unwrap()
+        .contains("kotone_call"));
+    assert!(unknown.1);
+    assert!(unknown.0["error"]
+        .as_str()
+        .unwrap()
+        .contains("kotone_voice_chat_nope"));
+    assert!(unknown.0["hint"].as_str().unwrap().contains("tools/list"));
+    drop(running);
+}

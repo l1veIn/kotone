@@ -1,6 +1,6 @@
-# Kotone 的 MCP 客户端：调研和方案（草案）
+# Kotone 的 MCP 客户端：调研和方案
 
-日期：2026-11-24。状态：**草案，等玩家看**；没有改代码。相关：[ADR 038](../adr/038-kotone-and-apps.md)（D5、D7 第 6 期、“不做”、“怎么定的”里第三方的方向）、[软件哲学](../philosophy.md)（原则 6–9、11–16）。
+日期：2026-11-24。状态：**方案已定（第七节都定了）**；2026-11-25 改了分期（第六节，[ADR 039](../adr/039-desktop-companion-and-game-apps.md) D9），当晚开始实现。（原来是“草案，等玩家看；没有改代码”。）相关：[ADR 038](../adr/038-kotone-and-apps.md)（D5、D7 第 6 期、“不做”、“怎么定的”里第三方的方向）、[软件哲学](../philosophy.md)（原则 6–9、11–16）。
 
 玩家的话：
 
@@ -20,7 +20,7 @@
 - Kotone 是 MCP **服务器**（`kotone.exe mcp`，`crates/kotone-cli/src/mcp.rs`，手写的 JSON-RPC），不是**客户端**：代码里没有连接外部 MCP 服务器的部分。唯一的例外是英雄联盟插件里为 OP.GG 手写的一小段（`plugins/lol/src/stats/opgg.rs`、`stats/mod.rs` 的 `opgg_post` / `opgg_call`：每次调用发三个请求、没有会话复用、没有 `tools/list`）。
 - 插件契约已经照 MCP 写：`ToolSpec` ≈ `tools/list` 的一项加 `_meta.ui`，`ToolResult` ≈ `CallToolResult`（`content` / `structuredContent` / `ui`），可见性 ≈ `_meta.ui.visibility`。挡着第三方的有三处：插件表是编译时的静态表（`apps/desktop/src-tauri/src/plugins.rs`）；页面地址只认 `ui://kotone/…`（`Manifest::owns_uri`、前端 `pluginOfUri`）；主窗口的 CSP 没有 `frame-src`，iframe 和内联脚本都会被挡（`tauri.conf.json`）。
 - 插件页的 App 位置已经留好（`PluginsPage.svelte`、`PluginPage.svelte` 的注释），还没有任何 iframe / postMessage。
-- **一个现成的 bug**：`kotone.exe mcp` 把 `x.y` 换成 `kotone_x_y`，换回来时以为名字里没有下划线，`voice_chat.say` 会变成 `voice.chat.say`（`mcp.rs` 228–233 行）。外部 Agent 经 MCP 调游戏语音的工具会失败。游戏语音一直这样，不是插件重构带进来的。
+- **一个现成的 bug**：`kotone.exe mcp` 把 `x.y` 换成 `kotone_x_y`，换回来时以为名字里没有下划线，`voice_chat.say` 会变成 `voice.chat.say`（`mcp.rs` 228–233 行）。外部 Agent 经 MCP 调游戏语音的工具会失败。游戏语音一直这样，不是插件重构带进来的。**第 0 期 2026-11-25 已修**：对外的名字不变（还是 `kotone_voice_chat_say`），换回来改成查表——`tools/list` 时按 capabilities 记下“MCP 名 → Kotone 名”，查不到就重新取一次 capabilities；两个 Kotone 名撞成同一个 MCP 名时两个都不列、调用时报错让对方用 `kotone_call` 写明，不猜。受影响的不止游戏语音：当时带下划线的 11 个工具（`game_chat.send`、`companion.read_chat`、`models.install_guide`、`music.set_quality` 等）经 MCP 都调不通。验证：`mcp.rs` 的单元测试和 `agent_cli.rs` 的集成测试（假宿主）；真机脚本 `scripts/manual-e2e/mcp_names_real.py`（隔离实例，先 `tools/list` 再 `tools/call kotone_voice_chat_status`，另开一个会话不先列也能调），旧版 5/10、修后 10/10。
 
 **外面**（详细出处见文末）：
 
@@ -71,6 +71,7 @@
 - 加服务器时弹一次信任提示：它会在你电脑上运行谁写的什么程序、能连哪些网址、要哪些 Key（照 VS Code 和 Claude Desktop）。
 - 工具的副作用从注解推出来，**永远不为空**：没标只读的都算“第三方插件的操作”（新加一个副作用分类，默认询问）；标了只读的也只当提示，第一次照样问（服务器还没被你“信任”之前）。你可以对“这个服务器的这个工具”选总是允许。
 - 第三方插件拿到的宿主能力比内置的窄（ADR 038“不做”：给插件的权力是单向门）：没有替玩家按键、没有“停下她”、没有免问。第三方工具不能绕过 ADR 032 的输入闸门。
+  - 2026-11-25 加：也没有“往聊天里发自动卡片”（不叫模型就往聊天和模型上下文里放东西，ADR 039 D3）；给不给以后再定。
 - 子进程只拿配置里写的环境变量；Key 存 Windows 凭据库（`<插件 id>:<名字>`，和现在一样）。
 - 加进来的第三方工具**默认不再经 `kotone.exe mcp` 转给外部 Agent**（要不要转见第七节）。
 
@@ -102,6 +103,7 @@ Kotone 能做的，按先后：
    - 事件：客户端的 `OnJsonApiEvent` 转成 `lol.gameflow.phase_changed`、`lol.champ_select.updated`、`lol.game.ended`（Events 扩展），要不要叫醒她由宿主定；
    - 界面：“这局”“战绩”“英雄”是 `ui://` 页面；选英雄时的胜率、海斗评分用 pip 请求，Kotone 映射成游戏上方的覆盖层，别的宿主就显示成画中画。
    - 发到官方 MCP Registry。这样在 Claude Desktop 里也能打开 Kotone 的“这局”。
+   - **2026-11-25 改**（ADR 039 D5、D9）：这一条提前到 2026-11-25 夜做（第 5 期）。以 LeagueAkari、AramHex 为基准，功能和体验对等，视觉原创；页面是独立的 HTML，Kotone 自己也照 MCP App 的方式显示（自己先用）。和上面不一样的地方：覆盖层先保持现在的做法，pip 映射等第 4 期；事件（Events 扩展）也等第 4 期，Kotone 里先用自动卡片（ADR 039 D3）；图片不进安装包（ADR 039 D6）；发 Registry 是往外发东西，等玩家看过再说。
 3. **把缺的补成提案**：先用现有原语（浮层先复用 pip），真不够用再去 `modelcontextprotocol/ext-apps` 提 issue / SEP（例如“宿主可以把 pip 放在全屏应用上方”“游戏状态作为宿主上下文”）。
 4. **找同路人**：给 LeagueAkari 提一个 issue，建议它对外提供 MCP（它是 MIT、Electron，结构上不难）；OP.GG 那边已经有 MCP 服务器（我们的 issue #26 也在那里）。
 
@@ -119,6 +121,27 @@ Kotone 能做的，按先后：
 | 4 | Events + pip → 覆盖层 | 游戏里第三方 App 能贴到游戏上 | 假客户端推事件的真机脚本 |
 | 5 | 英雄联盟插件对外做成 MCP 服务器 + App，发 Registry | Claude Desktop 里能打开 Kotone 的“这局” | 在 Goose / VS Code 里打开 |
 | 6 | 目录（官方 Registry）、`.mcpb` 导入、OAuth | 从目录里挑着装 | |
+
+**2026-11-25 改**（[ADR 039](../adr/039-desktop-companion-and-game-apps.md) D9）。玩家：“英雄联盟 MCP 升级跟后续的 MCP 客户端是需要配合的。今天晚上可以完成上面的全部内容我觉得。”上表不删，分期改成这样：
+
+- 第 0 期 2026-11-25 夜做；
+- **第 5 期提前**，和第 1–3 期一起做；
+- 第 4、6 期以后再做。
+
+今晚的顺序：**0 → 1 → 1.5 → 2 → 3 → 5**。
+
+| 顺序 | 期 | 和上表不一样的地方 |
+| --- | --- | --- |
+| 1 | 0 | 不变。`game_chat.send` 带下划线，一起修 |
+| 2 | 1 | 不变 |
+| 3 | 1.5 | 做完照 4.3 简化 `MAIN_TOOLS` 和 `instant`；验收加 `voice_turn_real.py`（真模型） |
+| 4 | 2 | 不变（照第四节和第七节 2、3）；验收加 Playwright |
+| 5 | 3 | 内置的英雄联盟 App 也走这条路显示；用 ext-apps 的 basic-host 做对照 |
+| 6 | 5 | 英雄联盟的工具和 `ui://kotone/lol/*` 页面由 `kotone.exe mcp` 对外提供，Kotone 自己也照 MCP App 的方式显示（自己先用）。页面是独立的 HTML，不再编进宿主的 Svelte。覆盖层保持现在的做法（不等第 4 期的 pip）。图片不进安装包（ADR 039 D6）。风险提示跟着服务器说明和 App 一起发。**发 Registry 今晚不做**（不上传，等玩家看过）。验收改成：假客户端上的 Playwright 和截图；`lol_tools_real.py`、`game_events_real.py`；在 ext-apps 的 basic-host 里打开一页 |
+| 以后 | 4 | 不变 |
+| 以后 | 6 | 不变 |
+
+跟在第 5 期后面做的（不算 MCP 的分期）：自动卡片和消息提示（ADR 039 D3、D4），英雄联盟第一个用。
 
 ## 七、要玩家定的（看得见的）
 
