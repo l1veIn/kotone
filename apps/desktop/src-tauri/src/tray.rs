@@ -184,9 +184,7 @@ fn show_window<R: Runtime>(app: &AppHandle<R>, label: &str) {
             crate::show_window_no_focus(&win);
             return;
         }
-        let _ = win.show();
-        let _ = win.unminimize();
-        let _ = win.set_focus();
+        crate::show_and_focus(&win);
     }
 }
 

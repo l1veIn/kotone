@@ -218,9 +218,7 @@ pub fn agent_held_cards(id: String) -> Vec<Message> {
 pub fn auto_card_open(app: AppHandle, conversation_id: String, key: String) -> Result<(), String> {
     crate::message_popup::hide(&app);
     if let Some(win) = app.get_webview_window("main") {
-        let _ = win.show();
-        let _ = win.unminimize();
-        let _ = win.set_focus();
+        crate::show_and_focus(&win);
     }
     if !is_running(&app) {
         let store = store(&app)?;

@@ -24,6 +24,19 @@ pub(crate) fn hide_window<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
     overlay::set_visible(win, false);
 }
 
+/// 玩家自己要打开窗口时（正常启动、托盘、第二个实例、点消息提示）：显示、取消最小化、拿到前面，
+/// 再把键盘焦点交给窗口里的页面。
+///
+/// 设置窗口建的时候不要焦点（`focus: false`，见 [`create_startup_windows`]）。桌面端开了 Tauri 的
+/// `unstable`（多 WebView），页面是窗口的子 WebView：激活窗口不会自己把键盘焦点交给它，
+/// 要显式 `Webview::set_focus`，不然打开后页面收不到键，得先点一下。
+pub(crate) fn show_and_focus<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
+    let _ = win.show();
+    let _ = win.unminimize();
+    let _ = win.set_focus();
+    let _ = AsRef::<tauri::Webview<R>>::as_ref(win).set_focus();
+}
+
 #[cfg(not(windows))]
 fn show_window_no_focus<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
     let _ = win.show();

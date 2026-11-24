@@ -846,3 +846,27 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 - svelte-check 0 / 0（英雄联盟 App 也 0 / 0）。Playwright：新的 `e2e/auto-card.spec.ts` 5/5（聊天里“英雄联盟 发来”的卡片、点开到右侧栏、给她的那句不显示；她在回答时来的卡片先显示在最后、这一轮的字留在她那一轮、记进对话后不重复；点消息提示从别的页面回到聊天、卡片滚进来闪一下；“交互”里两个开关默认开、改了存 `agent.autoCards`、关掉自动卡片时消息提示的开关变灰；消息提示页面 320 × 72、“琴音 · 英雄联盟”、点 × 只关、点它是打开）；`terminology.spec` 4/4；全量 178 个 177 过，没过的 1 个是 `sidebar-edit.spec` 新加的“每个插件卡片有自己的 logo”（同时在做的插件 logo，`fetch` 开发服务器上 `plugins/*/logo.svg` 的地址失败，单跑也一样，和这件事无关）。
 - 截图：`target/plugin-shots/round7/chat-auto-card.png`、`settings-auto-cards.png`、`message-popup-preview.png`（Playwright），`message-popup-real.png`（真机，见下）。
 - 真机 `auto_card_real.py`（新脚本，假客户端的一局 + 真 DeepSeek）：**13/13**。选人时没有卡片；进加载 2 秒后“开局战绩”接在“你好”那一轮后面（前面两条逐字不变），给琴音的那句是“开局战绩（海克斯大乱斗）。对面可能的突破口：艾希，最近 20 局只赢了 6 局、场均死 13.2 次。我方有 3 人开黑。”；消息提示弹出来了（`WS_EX_TOPMOST | WS_EX_NOACTIVATE`，前台窗口前后是同一个），截图 `target/plugin-shots/round7/message-popup-real.png`；结算 2 秒后“这局总结”（“这局赢了（海克斯大乱斗，16 分 54 秒）。你用韦鲁斯 8/9/43，伤害全队第三。”）；一局正好两张；从第一张卡片到下一次打字，`usage.jsonl` 一条没多；再打字问“刚才英雄联盟发来的卡片说了什么”，她答“开局说对面艾希是突破口……这局赢了，你韦鲁斯 8/9/43”。第一次跑时消息提示没弹：`--background` 启动后藏着的主窗口“Kotone 设置”占着前台（看不见），“Kotone 的窗口在前台”的判断把它算进去了；改成只算看得见、没最小化的窗口。
+
+### `--background` 启动不抢焦点（2026-11-25）
+
+做自动卡片时看到的老问题：`kotone.exe --background` 启动后，藏着的“Kotone 设置”窗口成了前台窗口（`GetForegroundWindow` 是它），终端的焦点被抢走。外部 Agent 用 `kotone_launch` / `kotone-cli app launch` 后台启动 Kotone 时，玩家要是在打游戏，游戏就丢了焦点。这和 `--background` 的说法（只驻留托盘、不打开窗口、不抢焦点）、[ADR 032](adr/032-game-chat-send-reliability.md) 的精神不合。
+
+**原因**：设置窗口建的时候默认要焦点（`focus: true`），WebView2 把键盘焦点移进还藏着的窗口（wry 的 `MoveFocus`），把它激活成了前台。正常启动时代码接着就显示窗口、`set_focus`，所以一直没看出来。
+
+**怎么改的**：
+
+- `tauri.conf.json` 里设置窗口加 `"focus": false`（气泡、覆盖层、提醒、消息提示这些窗口本来就是）。
+- 只改这一处的话，正常启动时窗口到了前面，页面却收不到键（要先点一下）：桌面端开了 Tauri 的 `unstable`（多 WebView），页面是窗口里的子 WebView，激活窗口不会自己把键盘焦点交给它。所以 `window.rs` 加了 `show_and_focus`（显示、取消最小化、拿到前面、再把焦点交给页面），玩家自己打开窗口的四个地方都用它：正常启动、托盘、第二个实例、点消息提示（`auto_card_open`）。
+- `--background` 的判断没变（`lib.rs` 里照旧不显示窗口）。开机自启不带 `--background`（照旧打开窗口），没动。
+
+**玩家看到的**：后台启动 Kotone 时，游戏或终端的焦点不再被抢；双击打开、托盘打开、点消息提示，窗口照旧到前面，能直接打字。
+
+**检查**：
+
+- 真机 `scripts/manual-e2e/background_focus_real.py`（新脚本；隔离的 `KOTONE_HOME`，不发按键、不点鼠标，拿 `real.lock`，前台是游戏或已经是 Kotone 就不跑，`--normal` / `--open` 只在前台是终端时跑）：
+  - 改前（`--background`）**2/5**：0.85 秒时前台从终端（warp.exe）变成 kotone.exe 的“Kotone 设置”（看不见），它还是自己线程的活动窗口；
+  - 改后 `--background` **5/5**：前台一直是终端，设置窗口藏着、没被激活；
+  - `--normal`（不带 `--background`）**4/4**：窗口显示、成为前台、键盘焦点在页面（WebView）里。只加 `focus: false` 时这里 3/4（焦点停在窗口本身），所以加了 `show_and_focus`；改前也是 4/4；
+  - `--open`（后台启动，再经调试端口调 `auto_card_open`，和托盘是同一个函数）**10/10**。
+- `cargo test -p kotone-tauri` 123 过（1 忽略）；clippy `-D warnings`（`-p kotone-tauri --all-targets`，没加 `--no-deps`）干净；改过的文件 rustfmt 过。
+- `message_popup.rs` 的 `kotone_in_front` 只算看得见的窗口（自动卡片那次为这个问题加的），留着：判断本来就该这样。
