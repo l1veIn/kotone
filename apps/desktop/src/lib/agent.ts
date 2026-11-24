@@ -85,6 +85,8 @@ export type AgentEvent =
   | { kind: "finished"; stop: StopReason; acpStopReason: string | null }
   /** 派出去的一件事有了新状态（ADR 029）：按 name 更新 `conversation.subagents`。 */
   | { kind: "subagent"; info: SubagentInfo }
+  /** 自动卡片来了，但她正在这一轮里（ADR 039 D3）：卡片先显示，等这一轮结束再记进对话（那时再来一条 appended）。 */
+  | { kind: "autoCard"; message: AgentMessage }
   | { kind: "idle" };
 
 export interface PermissionRequest { callId: string; tool: string; title: string; reason: string; arguments: unknown }
@@ -94,8 +96,6 @@ export type Answer = "allow-once" | "allow-for-conversation" | "deny";
 export type PermissionMode = "default" | "allow-all" | "read-only";
 export type PermissionRule = "allow" | "ask" | "deny";
 export interface Permissions { mode: PermissionMode; rules: Record<string, PermissionRule> }
-  /** 自动卡片来了，但她正在这一轮里（ADR 039 D3）：卡片先显示，等这一轮结束再记进对话（那时再来一条 appended）。 */
-  | { kind: "autoCard"; message: AgentMessage }
 export interface AgentState {
   current: string | null;
   running: string | null;
@@ -155,6 +155,12 @@ const previewConversation: Conversation = {
     { role: "tool", callId: "call-4", name: "lol.champion", content: '{"status":"ok","text":"亚索 上路（16.23 版本，国服全段位）：T1……"}', isError: false, untrusted: true, atMs: t0 + 262_000,
       display: { structuredContent: sampleChampionRift(findSampleChampion("亚索")!), ui: { uri: "ui://kotone/lol/champion" } } },
     { role: "assistant", text: "掌盟的数据：亚索上路怕贾克斯、雷克顿、孙悟空，对斯莫德、斯维因好打。", atMs: t0 + 264_000 },
+    // 强度榜是插件的 MCP App（ADR 039 D5）：卡片里是同一个 App（inline）
+    { role: "user", text: "现在上单什么强", source: "chat", atMs: t0 + 280_000 },
+    { role: "assistant", text: "", atMs: t0 + 281_000, toolCalls: [{ id: "call-5", name: "lol.tier", arguments: '{"lane":"上"}' }] },
+    { role: "tool", callId: "call-5", name: "lol.tier", content: '{"status":"ok","text":"上路：……"}', isError: false, untrusted: true, atMs: t0 + 282_000,
+      display: { structuredContent: sampleTierRift("TOP"), ui: { uri: "ui://kotone/lol/tier", params: { lane: "上" } } } },
+    { role: "assistant", text: "掌盟的数据：上路的强度榜在这里。", atMs: t0 + 284_000 },
   ],
   subagents: [{
     name: "potion", label: "写喝药脚本", conversationId: "c-preview-potion", status: "done",
@@ -183,12 +189,6 @@ const previewTools: Omit<AgentTool, "rule">[] = [
   { name: "reminder.create", group: "game", description: "过一会儿提醒玩家", sideEffects: [], defaultRule: "allow", core: true },
   { name: "game_chat.send", group: "game", description: "把一句话打进游戏聊天框并发出", sideEffects: ["input"], defaultRule: "ask", core: true },
   { name: "companion.read_chat", group: "game", description: "截取游戏窗口，识别聊天记录", sideEffects: [], defaultRule: "allow", core: true },
-    // 强度榜是插件的 MCP App（ADR 039 D5）：卡片里是同一个 App（inline）
-    { role: "user", text: "现在上单什么强", source: "chat", atMs: t0 + 280_000 },
-    { role: "assistant", text: "", atMs: t0 + 281_000, toolCalls: [{ id: "call-5", name: "lol.tier", arguments: '{"lane":"上"}' }] },
-    { role: "tool", callId: "call-5", name: "lol.tier", content: '{"status":"ok","text":"上路：……"}', isError: false, untrusted: true, atMs: t0 + 282_000,
-      display: { structuredContent: sampleTierRift("TOP"), ui: { uri: "ui://kotone/lol/tier", params: { lane: "上" } } } },
-    { role: "assistant", text: "掌盟的数据：上路的强度榜在这里。", atMs: t0 + 284_000 },
   { name: "game.list", group: "game", description: "列出已配置的游戏和它们是否在运行", sideEffects: [], defaultRule: "allow", core: true },
   { name: "game.focus", group: "game", description: "切换到游戏窗口", sideEffects: ["window"], defaultRule: "allow", core: true },
   { name: "game.launch", group: "game", description: "打开一个已配置启动路径的游戏", sideEffects: ["process"], defaultRule: "ask", core: false },
@@ -310,15 +310,6 @@ export async function subscribeAgent(callback: (conversationId: string, event: A
   if (!isTauri) return () => {};
   return listen<{ conversationId: string; event: AgentEvent }>("kotone://agent-event", (e) => callback(e.payload.conversationId, normalizeEvent(e.payload.event)));
 }
-export async function subscribeAsks(onAsk: (ask: AgentAsk) => void, onResolved: (askId: string) => void): Promise<UnlistenFn> {
-  if (!isTauri) return () => {};
-  const a = await listen<AgentAsk>("kotone://agent-ask", (e) => onAsk(e.payload));
-  const b = await listen<{ askId: string }>("kotone://agent-ask-resolved", (e) => onResolved(e.payload.askId));
-  return () => { a(); b(); };
-}
-
-/** 琴音请玩家粘贴某个服务商的 Key（connections.request_key）：Key 直接存进凭据库，不经过模型。 */
-export interface KeyRequest {
 /** 某段对话里压着、还没记进对话的自动卡片（她这一轮说完才记，ADR 039 D3）：重新读对话时照样显示。 */
 export async function agentHeldCards(id: string): Promise<AgentMessage[]> {
   if (!isTauri) return [];
@@ -333,6 +324,15 @@ export async function subscribeAutoCardFocus(callback: (focus: { conversationId:
   if (!isTauri) return () => {};
   return listen<{ conversationId: string; key: string }>("kotone://auto-card-focus", (e) => callback(e.payload));
 }
+export async function subscribeAsks(onAsk: (ask: AgentAsk) => void, onResolved: (askId: string) => void): Promise<UnlistenFn> {
+  if (!isTauri) return () => {};
+  const a = await listen<AgentAsk>("kotone://agent-ask", (e) => onAsk(e.payload));
+  const b = await listen<{ askId: string }>("kotone://agent-ask-resolved", (e) => onResolved(e.payload.askId));
+  return () => { a(); b(); };
+}
+
+/** 琴音请玩家粘贴某个服务商的 Key（connections.request_key）：Key 直接存进凭据库，不经过模型。 */
+export interface KeyRequest {
   requestId: string; conversationId: string; provider: string; displayName: string;
   apiKeyUrl: string | null; connectionId: string; reason: string;
 }

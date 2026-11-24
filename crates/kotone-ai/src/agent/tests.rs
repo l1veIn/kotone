@@ -1115,6 +1115,7 @@ fn messages_round_trip_through_json() {
             compaction: None,
             usage: None,
             recap: None,
+            card: None,
         },
     ];
     let json = serde_json::to_value(&messages).unwrap();
@@ -1128,7 +1129,6 @@ fn messages_round_trip_through_json() {
 }
 
 // ---------- rig-core 客户端（本机 wiremock） ----------
-            card: None,
 
 mod http {
     use super::*;
@@ -1653,6 +1653,7 @@ fn store_trims_long_conversations_at_a_user_boundary() {
         compaction: Some("摘要".into()),
         usage: None,
         recap: None,
+        card: None,
     });
     for i in 0..5 {
         turn(&mut c, 1000 + i);
@@ -1667,7 +1668,6 @@ fn store_trims_long_conversations_at_a_user_boundary() {
         turn(&mut d, i);
     }
     store.save(&mut d).unwrap();
-        card: None,
     assert!(d.messages.len() <= HARD_MAX_MESSAGES);
     assert!(matches!(d.messages[0], Message::User { .. }));
     assert_paired(&d.messages);
@@ -2031,6 +2031,7 @@ fn a_second_compaction_starts_after_the_previous_checkpoint() {
         compaction: Some("旧摘要".into()),
         usage: None,
         recap: None,
+        card: None,
     });
     history.extend(old_turns(3));
     let window = compact::after_checkpoint(&history);
@@ -2054,7 +2055,6 @@ fn a_second_compaction_starts_after_the_previous_checkpoint() {
             Message::User { text, .. } | Message::Assistant { text, .. } => text.chars().count(),
             _ => 0,
         })
-        card: None,
         .sum();
     assert!(kept * 4 <= after + 4, "{kept} / {after}");
     assert!(

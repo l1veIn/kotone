@@ -287,6 +287,18 @@ impl Host for DesktopHost {
         );
     }
 
+    /// 自动卡片（ADR 039 D3）：只给内置插件（这张静态表里的，和 Kotone 一起编译）。插件关着时不发。
+    fn auto_card(&self, card: kotone_plugin_api::AutoCard) -> Result<bool, String> {
+        if !registry().iter().any(|p| p.manifest().id == self.id) {
+            return Err("自动卡片只给内置插件".into());
+        }
+        card.check(&self.manifest)?;
+        if !enabled(&settings(&self.app), &self.manifest) {
+            return Ok(false);
+        }
+        crate::agent::post_auto_card(&self.app, &self.id, &self.manifest.name, card)
+    }
+
     fn companion_enabled(&self) -> bool {
         !settings(&self.app)
             .ui
@@ -320,18 +332,6 @@ impl Host for DesktopHost {
             })
             .await
             .map_err(|e| e.to_string())?
-    /// 自动卡片（ADR 039 D3）：只给内置插件（这张静态表里的，和 Kotone 一起编译）。插件关着时不发。
-    fn auto_card(&self, card: kotone_plugin_api::AutoCard) -> Result<bool, String> {
-        if !registry().iter().any(|p| p.manifest().id == self.id) {
-            return Err("自动卡片只给内置插件".into());
-        }
-        card.check(&self.manifest)?;
-        if !enabled(&settings(&self.app), &self.manifest) {
-            return Ok(false);
-        }
-        crate::agent::post_auto_card(&self.app, &self.id, &self.manifest.name, card)
-    }
-
         })
     }
 
@@ -718,8 +718,6 @@ mod tests {
             .any(|(i, combo)| *i == kotone_core::hotkey::HK_ASSISTANT && !combo.is_empty()));
     }
 
-    #[test]
-    fn registry_manifests_and_tools_are_valid() {
     /// ADR 039 D2：往游戏聊天里打字归本体。关掉语音输入插件，`game_chat.send` 照样在她的工具清单里
     /// （主会话也拿），也照样在工具服务里给外部 Agent（不属于哪个插件，只有一份）。
     #[test]
@@ -749,6 +747,8 @@ mod tests {
         );
     }
 
+    #[test]
+    fn registry_manifests_and_tools_are_valid() {
         let mut ids = std::collections::HashSet::new();
         let mut tools = std::collections::HashSet::new();
         for p in registry() {
