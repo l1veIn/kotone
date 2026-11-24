@@ -21,8 +21,8 @@ use kotone_core::hotkey::{
 };
 use kotone_core::orchestrator::Orchestrator;
 // 频道、重发、文字处理开关这几个热键是语音输入插件的（宿主替它登记全进程的钩子）
-use kotone_plugin_voice_input::VoiceInputExt;
 use kotone_core::settings::HotkeyBackend;
+use kotone_plugin_voice_input::VoiceInputExt;
 
 pub use kotone_core::hotkey::HotkeyMode;
 
@@ -437,7 +437,11 @@ fn hint_list_from(
     settings: &kotone_core::settings::Settings,
     app_combos: &[String],
 ) -> Vec<(&'static str, String)> {
-    let voice = settings.hotkey.key.trim().to_string();
+    let voice = if crate::plugins::voice_input_on(settings) {
+        settings.hotkey.key.trim().to_string()
+    } else {
+        String::new()
+    };
     let call = settings.call_hotkey().trim().to_string();
     let mut list = Vec::new();
     for (id, combo) in [(HK_HINT_VOICE_INPUT, voice.clone()), (HK_HINT_CALL, call)] {
@@ -491,6 +495,14 @@ fn named_list_from(
         HotkeyMode::Toggle
     };
     let quick = &settings.assistant.companion.quick_messages;
+    // 频道、重发、文字处理开关是语音输入插件的：插件关着时不登记（ADR 038）
+    let voice = |combo: &String| {
+        if crate::plugins::voice_input_on(settings) {
+            combo.clone()
+        } else {
+            String::new()
+        }
+    };
     let mut list = vec![
         (
             HK_ASSISTANT,
@@ -504,22 +516,22 @@ fn named_list_from(
         ),
         (
             HK_CHANNEL_CYCLE,
-            settings.channel_cycle_hotkey.clone(),
+            voice(&settings.channel_cycle_hotkey),
             HotkeyMode::Toggle,
         ),
         (
             HK_RESEND_LAST,
-            settings.resend_last_hotkey.clone(),
+            voice(&settings.resend_last_hotkey),
             HotkeyMode::Toggle,
         ),
         (
             HK_PP_TOGGLE,
-            settings.toggle_post_processing_hotkey.clone(),
+            voice(&settings.toggle_post_processing_hotkey),
             HotkeyMode::Toggle,
         ),
         (
             HK_PP_CYCLE,
-            settings.cycle_post_processing_hotkey.clone(),
+            voice(&settings.cycle_post_processing_hotkey),
             HotkeyMode::Toggle,
         ),
     ];
@@ -536,6 +548,17 @@ fn named_list_from(
         )
     }));
     list
+}
+
+/// 测试用：运行期具名热键（id, 组合）。
+#[cfg(test)]
+pub(crate) fn named_list_for_tests(
+    settings: &kotone_core::settings::Settings,
+) -> Vec<(&'static str, String)> {
+    named_list_from(settings)
+        .into_iter()
+        .map(|(id, combo, _)| (id, combo))
+        .collect()
 }
 
 /// 从配置取出应用级具名热键（独立于 runtime 生命周期）。
@@ -679,9 +702,15 @@ impl HotkeyManager {
         settings: &kotone_core::settings::Settings,
     ) -> Result<(), String> {
         self.unregister(app)?;
+        // 语音输入插件关着（ADR 038）：不登记语音输入热键（主键空着），呼叫键这些具名热键照常；
+        // 钩子照样跑（主键停用、全部放行，会话中的 Esc 取消照常）。
+        let voice_on = crate::plugins::voice_input_on(settings);
+        let key = if voice_on { key } else { "" };
         // 主键与已生效的应用级热键冲突时以主键为准：否则具名分支会先命中，
         // 录制热键静默失效（前端也会拦这种组合，这里是后端兜底）。
-        self.yield_app_hotkey_on_conflict(key);
+        if voice_on {
+            self.yield_app_hotkey_on_conflict(key);
+        }
         let pref = settings.hotkey_backend;
 
         #[cfg(windows)]
@@ -702,13 +731,18 @@ impl HotkeyManager {
             if requires_llhook && pref == HotkeyBackend::Register {
                 kotone_core::log::log("鼠标侧键不受 RegisterHotKey 支持，已强制使用低层键鼠钩子");
             }
-            match self.llhook.register(key, mode) {
+            let registered = if voice_on {
+                self.llhook.register(key, mode)
+            } else {
+                self.llhook.register_without_main()
+            };
+            match registered {
                 Ok(()) => {
                     kotone_core::log::log(&format!(
                         "hotkey backend=llhook registered ok: {key} ({mode:?})"
                     ));
                     *self.backend.lock().unwrap() = ActiveBackend::LlHook;
-                    *self.registered_key.lock().unwrap() = Some(key.to_string());
+                    *self.registered_key.lock().unwrap() = voice_on.then(|| key.to_string());
                     *self.last_error.lock().unwrap() = None;
                     self.apply_named(key, &named_list_from(settings));
                     return Ok(());
@@ -728,13 +762,19 @@ impl HotkeyManager {
             }
         }
 
-        match self.plugin.register(key, mode) {
+        let registered = if voice_on {
+            self.plugin.register(key, mode)
+        } else {
+            self.plugin.unregister();
+            Ok(())
+        };
+        match registered {
             Ok(()) => {
                 kotone_core::log::log(&format!(
                     "hotkey backend=register registered ok: {key} ({mode:?})"
                 ));
                 *self.backend.lock().unwrap() = ActiveBackend::Plugin;
-                *self.registered_key.lock().unwrap() = Some(key.to_string());
+                *self.registered_key.lock().unwrap() = voice_on.then(|| key.to_string());
                 *self.last_error.lock().unwrap() = None;
                 self.apply_named(key, &named_list_from(settings));
                 Ok(())

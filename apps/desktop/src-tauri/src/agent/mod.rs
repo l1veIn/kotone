@@ -53,7 +53,7 @@ use kotone_ai::agent::{
     now_ms, run_turn, AgentEvent, AgentLimits, Attachment, Inbox, Message, StopReason, ToolOutcome,
     ToolStatus, Turn,
 };
-use kotone_core::automation::{ChatAction, Run, RunStatus};
+use kotone_core::automation::{Run, RunStatus};
 use kotone_core::cancel::CancellationToken;
 use kotone_core::log;
 use kotone_core::reminders::DeliveryKind;

@@ -399,6 +399,17 @@ impl LlHookSource {
         Ok(())
     }
 
+    /// 运行时开着、但没有主热键（语音输入插件关着，ADR 038）：钩子照常跑着给具名热键（呼叫键……），
+    /// 主键用占位键并停用，按键全部放行；会话中的 Esc 取消照常（core `HookMatcher::on_key`）。
+    pub fn register_without_main(&self) -> Result<(), String> {
+        self.register(SENTINEL_MAIN_KEY, HotkeyMode::Toggle)?;
+        if let Some(shared) = SHARED.get() {
+            shared.matcher.lock().unwrap().set_enabled(false);
+        }
+        kotone_core::log::log("llhook registered without a main hotkey");
+        Ok(())
+    }
+
     /// 设置 / 清除一个被动具名热键：命中时照常发 `NamedHotkey` 事件，但按键不被吞掉
     /// （语音识别没准备好时的提示，D8）。RegisterHotKey 做不到放行，所以只有钩子能用。
     /// 钩子未安装时返回 Err；`None` / 空串 = 清除，钩子未安装时视为已清除。

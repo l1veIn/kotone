@@ -61,17 +61,13 @@ pub fn state_snapshot(app: &AppHandle) -> Option<serde_json::Value> {
 }
 
 pub fn can_show<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
+    let settings = app.state::<SharedState>().settings.read().unwrap().clone();
+    // 悬浮窗只属于语音输入：插件关着时和“不显示”一样（ADR 038）
     !app.state::<OverlayManager>()
         .degraded
         .load(Ordering::SeqCst)
-        && app
-            .state::<SharedState>()
-            .settings
-            .read()
-            .unwrap()
-            .overlay
-            .visibility
-            != OverlayVisibility::Never
+        && settings.overlay.visibility != OverlayVisibility::Never
+        && crate::plugins::voice_input_on(&settings)
 }
 
 /// Called inside the settings transaction, before publishing an explicit

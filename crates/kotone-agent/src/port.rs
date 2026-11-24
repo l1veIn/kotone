@@ -14,8 +14,8 @@ use kotone_tools::ToolService;
 use serde_json::{json, Value};
 
 use crate::catalog::{
-    Catalog, Source, ToolEntry, GROUPS, HOST_BUILTINS, TOOL_ASK, TOOL_DANMAKU, TOOL_GAME_CHAT,
-    TOOL_MEMORY, TOOL_REMIND, TOOL_SKILL_MANAGE, TOOL_SKILL_VIEW, TOOL_SOUL_WRITE, TOOL_SPEAK,
+    Catalog, Source, ToolEntry, GROUPS, HOST_BUILTINS, TOOL_ASK, TOOL_DANMAKU, TOOL_MEMORY,
+    TOOL_REMIND, TOOL_SKILL_MANAGE, TOOL_SKILL_VIEW, TOOL_SOUL_WRITE, TOOL_SPEAK,
 };
 use crate::permissions::{
     self, Answer, Asker, Decide, Decision, Grants, PermissionRequest, Policy,
@@ -51,13 +51,6 @@ pub trait BuiltinHost: Send + Sync {
         delay_seconds: u64,
         text: String,
         delivery: Vec<DeliveryKind>,
-    ) -> impl Future<Output = Result<Value, String>> + Send;
-
-    /// 打进当前游戏的聊天框，并写一条执行记录。`send` 为 None = 跟随用户设置。
-    fn send_to_game_chat(
-        &self,
-        text: String,
-        send: Option<bool>,
     ) -> impl Future<Output = Result<Value, String>> + Send;
 
     /// 需要知道是哪个会话调用的内置工具（[`HOST_BUILTINS`]：`session.*`、`voice.listen.*`）。
@@ -365,13 +358,6 @@ impl<H: BuiltinHost, A: Asker> KotonePort<H, A> {
                     return ToolOutcome::error("text 为空或超过 300 字");
                 }
                 self.host.remind(delay.unwrap_or(1), text, delivery).await
-            }
-            TOOL_GAME_CHAT => {
-                if text.is_empty() || text.chars().count() > 200 || text.contains(['\r', '\n']) {
-                    return ToolOutcome::error("要打的字为空、超过 200 字或含有换行");
-                }
-                let send = arguments.get("send").and_then(Value::as_bool);
-                self.host.send_to_game_chat(text, send).await
             }
             TOOL_MEMORY | TOOL_SKILL_VIEW | TOOL_SKILL_MANAGE | TOOL_SOUL_WRITE => {
                 self.call_workspace(name, arguments)

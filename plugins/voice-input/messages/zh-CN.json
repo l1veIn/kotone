@@ -1,0 +1,6 @@
+{
+  "plugin_voice_input_name": "语音输入",
+  "plugin_voice_input_description": "按住语音输入热键说话，说的话打进游戏聊天框（可以先过屏蔽词、润色、翻译）；她替你在聊天框发言也走这里",
+  "plugin_voice_input_tool_send": "替你在游戏聊天框发言",
+  "plugin_voice_input_off_note": "打开以后，按语音输入热键说话，说的话就打进游戏聊天框；她也能替你在聊天框发言。关着时呼叫她、唤醒词照常能用。"
+}

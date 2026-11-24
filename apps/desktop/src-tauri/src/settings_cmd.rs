@@ -26,6 +26,8 @@ fn hotkey_registration_changed(old: &Settings, next: &Settings) -> bool {
         || old.assistant.interaction_mode != next.assistant.interaction_mode
         || old.ui.legacy_upgrade.uses_legacy_assistant()
             != next.ui.legacy_upgrade.uses_legacy_assistant()
+        // 语音输入插件开关：语音输入热键跟着登记 / 撤掉（ADR 038）
+        || crate::plugins::voice_input_on(old) != crate::plugins::voice_input_on(next)
 }
 
 /// 应用级热键（启动 / 停止 Kotone）变化：与 runtime 是否运行无关，必须重注册。
@@ -155,14 +157,21 @@ pub(crate) fn update_settings(
     if old.browser.enabled && !updated.browser.enabled {
         crate::browser::switched_off(&app);
     }
+    let voice_on = crate::plugins::voice_input_on(&updated);
+    let voice_switched = crate::plugins::voice_input_on(&old) != voice_on;
     let old_overlay = old.overlay;
 
-    // overlay 配置变化 → 立即重排几何/点击穿透/显隐 + 通知前端（无需重启）
-    if old_overlay != updated.overlay {
+    // overlay 配置变化（含语音输入插件开关：悬浮窗只属于语音输入）→ 立即重排几何/点击穿透/显隐
+    // + 通知前端（无需重启）
+    if old_overlay != updated.overlay || voice_switched {
+        if voice_switched && voice_on && updated.overlay.visibility != OverlayVisibility::Never {
+            overlay::prepare_enable(&app);
+        }
         overlay::reconcile(
             &app,
-            old_overlay.visibility != updated.overlay.visibility
-                && updated.overlay.visibility != OverlayVisibility::Never,
+            (old_overlay.visibility != updated.overlay.visibility || voice_switched)
+                && updated.overlay.visibility != OverlayVisibility::Never
+                && voice_on,
         );
         use tauri::Emitter as _;
         let _ = app.emit("kotone://overlay-config", &updated.overlay);

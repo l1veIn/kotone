@@ -558,6 +558,17 @@ pub trait Host: Send + Sync {
     fn she_is_audible(&self) -> bool {
         false
     }
+    /// 往前台游戏的聊天框打一句（语音输入插件的 `game_chat.send`）：按当前游戏配置的开聊天框键、频道和输入方式，
+    /// `send` 为 None 时跟随玩家的“自动发送”。共用的注入器和发送时挡住玩家按键（ADR 032）是全进程只有一份的，
+    /// 都在宿主；前台不是当前游戏时拒绝；结果记进「自动化 → 记录」（记在调用方的对话下）。
+    fn type_in_game_chat(
+        &self,
+        text: &str,
+        send: Option<bool>,
+    ) -> BoxFuture<'static, Result<Value, String>> {
+        let _ = (text, send);
+        Box::pin(async { Err("这里不能往游戏里打字".to_string()) })
+    }
     /// 存在 Windows 凭据库里的秘密（登录凭据之类），按插件分开（凭据库里的名字是 `<插件 id>:<name>`）。
     /// 不进日志、不进 config.json。
     fn secret(&self, name: &str) -> Option<String> {

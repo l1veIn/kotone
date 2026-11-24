@@ -8,6 +8,7 @@ rust-version = "1.77.2"
 # 插件只依赖插件契约、kotone-core 的纯数据类型和自己的第三方库（ADR 038 D6），不碰 Tauri。
 # 录音、语音识别（“听一句”）在本体（kotone-core 的 orchestrator），这里实现它的 AfterHearing。
 [dependencies]
+kotone-plugin-api.workspace = true
 kotone-core.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

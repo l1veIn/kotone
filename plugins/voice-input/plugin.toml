@@ -1,0 +1,18 @@
+# 语音输入插件（ADR 038 D4）：按语音输入热键说话，说的话（文字处理以后）打进游戏聊天框；她替你在聊天框发言也走这里。
+# 录音和语音识别在本体（“听一句”，她的耳朵也用它）；这里是听到以后的事。清单的写法见 crates/kotone-plugin-api。
+# 关掉 = 语音输入热键、悬浮窗、文字处理、识别记录、她替你打字（game_chat.send）一起停；呼叫她、唤醒词不受影响。
+# 界面文字以 messages/<语言>.json 为准（plugin_voice_input_*）。
+
+id = "voice-input"
+name = "语音输入"
+description = "按住语音输入热键说话，说的话打进游戏聊天框（可以先过屏蔽词、润色、翻译）；她替你在聊天框发言也走这里"
+# 搬进插件以前就叫 game_chat.send：玩家设过的权限、她的习惯都不变
+tool_prefix = "game_chat"
+enabled_by_default = true
+
+[[pages]]
+uri = "ui://kotone/voice-input/home"
+title = "语音输入"
+
+[agent]
+overview = "玩家按语音输入热键说的话直接打进游戏聊天框（不经过你）；你也能替玩家在聊天框发言"

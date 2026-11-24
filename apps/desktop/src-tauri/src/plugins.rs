@@ -35,6 +35,11 @@ pub const SETTINGS_SECTIONS: &[&str] = &[
     "plugins",
 ];
 
+/// 语音输入插件开着没有（ADR 038）：关着时语音输入热键、悬浮窗、她替你打字都没有。
+pub fn voice_input_on(settings: &kotone_core::settings::Settings) -> bool {
+    enabled(settings, kotone_plugin_voice_input::plugin::manifest())
+}
+
 /// 内置的插件（按侧栏里的顺序）。
 pub fn registry() -> &'static [Arc<dyn Plugin>] {
     static PLUGINS: OnceLock<Vec<Arc<dyn Plugin>>> = OnceLock::new();
@@ -44,6 +49,7 @@ pub fn registry() -> &'static [Arc<dyn Plugin>] {
             Arc::new(kotone_plugin_game_voice::GameVoicePlugin::new()),
             Arc::new(kotone_plugin_music::MusicPlugin::new()),
             Arc::new(kotone_plugin_interpreter::InterpreterPlugin),
+            Arc::new(kotone_plugin_voice_input::VoiceInputPlugin::new()),
         ]
     })
 }
@@ -139,6 +145,8 @@ pub struct DesktopHost {
     app: AppHandle,
     id: String,
     manifest: Manifest,
+    /// 这一次是谁调的工具（写进执行记录的发起方，例如她的 `agent:<对话 id>`）；后台循环里没有。
+    caller: Option<String>,
 }
 
 impl DesktopHost {
@@ -153,10 +161,25 @@ impl DesktopHost {
     }
 
     pub fn for_plugin(app: &AppHandle, plugin: &Arc<dyn Plugin>) -> Arc<dyn Host> {
+        Self::shared(app, plugin, None)
+    }
+
+    /// 调一次工具用的那一份：带上是谁调的。
+    fn for_call(app: &AppHandle, plugin: &Arc<dyn Plugin>, caller: Caller<'_>) -> Arc<dyn Host> {
+        let caller = match caller {
+            Caller::Her(session) => session.to_string(),
+            Caller::Service => "tool-service".to_string(),
+            Caller::Page(page) => format!("plugin:{page}"),
+        };
+        Self::shared(app, plugin, Some(caller))
+    }
+
+    fn shared(app: &AppHandle, plugin: &Arc<dyn Plugin>, caller: Option<String>) -> Arc<dyn Host> {
         Arc::new(Self {
             app: app.clone(),
             id: plugin.manifest().id.clone(),
             manifest: plugin.manifest().clone(),
+            caller,
         })
     }
 }
@@ -353,6 +376,22 @@ impl Host for DesktopHost {
             || crate::assistant::output_busy(&self.app)
     }
 
+    fn type_in_game_chat(
+        &self,
+        text: &str,
+        send: Option<bool>,
+    ) -> BoxFuture<'static, Result<Value, String>> {
+        let app = self.app.clone();
+        let text = text.to_string();
+        let session = self
+            .caller
+            .clone()
+            .unwrap_or_else(|| format!("plugin:{}", self.id));
+        Box::pin(
+            async move { crate::companion::send_to_game_chat(&app, &session, &text, send).await },
+        )
+    }
+
     fn secret(&self, name: &str) -> Option<String> {
         use kotone_core::connection::SecretStore;
         kotone_ai::secrets::KeyringSecretStore
@@ -517,8 +556,8 @@ pub fn service_specs(app: &AppHandle) -> Vec<Value> {
 /// 谁在调插件的工具。
 #[derive(Debug, Clone, Copy)]
 pub enum Caller<'a> {
-    /// 她（她的工具清单里只有给她的，`visibility` 含 `model`）。
-    Her,
+    /// 她（她的工具清单里只有给她的，`visibility` 含 `model`）；带着这段对话（`agent:<对话 id>`，写执行记录用）。
+    Her(&'a str),
     /// 外部 Agent 经工具服务 / MCP（清单里两种都列出来，带 `visibility`，都能调）。
     Service,
     /// 插件自己的页面（只能调自己插件的、给页面的工具）。
@@ -545,7 +584,7 @@ pub async fn call(
             return Err(format!("{page_plugin} 的页面不能调 {tool}"));
         }
         Caller::Page(_) if !spec.for_app() => return Err(format!("{tool} 不给页面用")),
-        Caller::Her if !spec.for_model() => return Err(format!("{tool} 只给插件的页面用")),
+        Caller::Her(_) if !spec.for_model() => return Err(format!("{tool} 只给插件的页面用")),
         _ => {}
     }
     if !enabled(&settings(app), manifest) {
@@ -555,7 +594,7 @@ pub async fn call(
         })));
     }
     plugin
-        .call(DesktopHost::for_plugin(app, plugin), tool, arguments)
+        .call(DesktopHost::for_call(app, plugin, caller), tool, arguments)
         .await
 }
 
@@ -661,6 +700,40 @@ mod tests {
             "{names:?}"
         );
         assert_eq!(owner("voice_chat.say").unwrap().manifest().id, "game-voice");
+    }
+
+    /// 语音输入搬进插件（ADR 038 第 5 步）：她的 `game_chat.send` 名字不变、主会话照样有；
+    /// 插件默认开，关掉以后语音输入热键、频道 / 重发 / 文字处理热键都不登记，呼叫键照常。
+    #[test]
+    fn voice_input_is_a_plugin_and_its_switch_takes_the_hotkeys_with_it() {
+        let vi = find("voice-input").expect("语音输入插件");
+        assert!(vi.manifest().enabled_by_default);
+        assert_eq!(
+            owner("game_chat.send").unwrap().manifest().id,
+            "voice-input"
+        );
+        let send = vi.tools().into_iter().find(|t| t.name == "game_chat.send");
+        assert!(send.is_some_and(|t| t.for_model() && t.instant));
+
+        let mut s = kotone_core::settings::Settings::default();
+        s.channel_cycle_hotkey = "Shift+CapsLock".into();
+        s.resend_last_hotkey = "Alt+F6".into();
+        assert!(voice_input_on(&s));
+        s.plugins.entry("voice-input".into()).or_default().enabled = Some(false);
+        assert!(!voice_input_on(&s));
+        let named = crate::hotkey::named_list_for_tests(&s);
+        for id in [
+            kotone_core::hotkey::HK_CHANNEL_CYCLE,
+            kotone_core::hotkey::HK_RESEND_LAST,
+        ] {
+            assert!(
+                named.iter().any(|(i, combo)| *i == id && combo.is_empty()),
+                "{id}"
+            );
+        }
+        assert!(named
+            .iter()
+            .any(|(i, combo)| *i == kotone_core::hotkey::HK_ASSISTANT && !combo.is_empty()));
     }
 
     #[test]

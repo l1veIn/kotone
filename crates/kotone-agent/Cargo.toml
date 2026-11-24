@@ -26,5 +26,7 @@ url = "2"
 tempfile.workspace = true
 # 游戏语音插件的工具：搬进插件以后默认问不问和以前一样（tests.rs）
 kotone-plugin-game-voice.workspace = true
+# 语音输入插件的 game_chat.send：搬进插件以后权限、主会话、只读模式和以前一样（tests.rs）
+kotone-plugin-voice-input.workspace = true
 kotone-tools = { workspace = true, features = ["test-support"] }
 wiremock = "0.6"

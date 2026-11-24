@@ -102,14 +102,6 @@ impl BuiltinHost for FakeBuiltin {
         Ok(json!({"id": "run-1", "status": "scheduled"}))
     }
 
-    async fn send_to_game_chat(&self, text: String, send: Option<bool>) -> Result<Value, String> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push(("chat".into(), json!({"text": text, "send": send})));
-        Ok(json!({"id": "run-2", "sent": true}))
-    }
-
     async fn plugin(
         &self,
         tool: &str,
@@ -184,6 +176,20 @@ struct Fixture {
     asked: Arc<Mutex<Vec<PermissionRequest>>>,
 }
 
+/// 语音输入插件（开着）给她的工具：`game_chat.send`（ADR 038 第 5 步以前是她的内置工具）。
+fn voice_input_offer() -> kotone_plugin_api::Offer {
+    let m = kotone_plugin_voice_input::plugin::manifest();
+    kotone_plugin_api::Offer {
+        plugin: m.id.clone(),
+        name: m.name.clone(),
+        text: kotone_plugin_api::AgentText {
+            overview: m.agent.overview.clone(),
+            rule: m.agent.rule.clone(),
+        },
+        tools: kotone_plugin_voice_input::plugin::specs(),
+    }
+}
+
 fn fixture(policy: Policy, answer: Answer) -> Fixture {
     let (service, host) = service();
     let specs = service.capabilities()["tools"].as_array().cloned().unwrap();
@@ -196,7 +202,11 @@ fn fixture(policy: Policy, answer: Answer) -> Fixture {
         },
         Some(json!(1)),
     );
-    let catalog = Catalog::build(&specs, &[saved("auto-1", vec![interval])], &[]);
+    let catalog = Catalog::build(
+        &specs,
+        &[saved("auto-1", vec![interval])],
+        &[voice_input_offer()],
+    );
     let builtin = FakeBuiltin::default();
     let asker = FakeAsker::new(answer);
     let asked = asker.asked.clone();
@@ -589,8 +599,8 @@ async fn saved_automations_run_through_automation_run() {
 #[tokio::test]
 async fn builtins_validate_then_reach_the_host() {
     let f = fixture(Policy::default(), Answer::Deny);
-    let out = call(&f.port, "game_chat.send", json!({"text": "gg\nwp"})).await;
-    assert!(out.is_error);
+    // game_chat.send 搬进了语音输入插件：要打的字由插件检查（kotone-plugin-voice-input 的
+    // chat_text_is_one_short_line），这里只看它照样交给桌面
     let out = call(
         &f.port,
         "game_chat.send",
@@ -622,7 +632,10 @@ async fn builtins_validate_then_reach_the_host() {
     assert_eq!(calls.len(), 2);
     assert_eq!(
         calls[0],
-        ("chat".into(), json!({"text": "我去下路", "send": false}))
+        (
+            "plugin".into(),
+            json!({"tool": "game_chat.send", "args": {"text": "我去下路", "send": false}})
+        )
     );
     assert_eq!(calls[1].1["delay"], 300);
 }
@@ -690,7 +703,12 @@ fn capability_overview_names_only_real_tools_and_covers_every_group() {
     use crate::prompt::capability_overview;
     let (service, _host) = service();
     let specs = service.capabilities()["tools"].as_array().cloned().unwrap();
-    let catalog = Catalog::build(&specs, &[saved("auto-1", Vec::new())], &[]);
+    // 语音输入插件开着（默认开）：替玩家在聊天框发言（game_chat.send）也在概览里
+    let catalog = Catalog::build(
+        &specs,
+        &[saved("auto-1", Vec::new())],
+        &[voice_input_offer()],
+    );
     let overview = capability_overview(&catalog);
     assert!(overview.contains("## 你能做什么"));
     assert!(overview.contains("不要编") && overview.contains("下一步"));
@@ -701,6 +719,8 @@ fn capability_overview_names_only_real_tools_and_covers_every_group() {
             .rsplit_once('（')
             .and_then(|(_, rest)| rest.strip_suffix('）'))
             .unwrap_or_else(|| panic!("没有列工具：{line}"));
+        // 插件那几行写成“（<名字>插件：工具、工具）”
+        let tools = tools.split_once("插件：").map_or(tools, |(_, rest)| rest);
         for tool in tools.split('、') {
             assert!(
                 catalog.get(tool).is_some(),
@@ -1362,9 +1382,6 @@ async fn exec_tools_without_a_desktop_are_unavailable() {
             _t: String,
             _d: Vec<DeliveryKind>,
         ) -> Result<Value, String> {
-            Ok(json!({}))
-        }
-        async fn send_to_game_chat(&self, _t: String, _s: Option<bool>) -> Result<Value, String> {
             Ok(json!({}))
         }
     }

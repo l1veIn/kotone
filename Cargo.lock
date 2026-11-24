@@ -2637,6 +2637,7 @@ dependencies = [
  "kotone-exec",
  "kotone-plugin-api",
  "kotone-plugin-game-voice",
+ "kotone-plugin-voice-input",
  "kotone-tools",
  "serde",
  "serde_json",
@@ -2835,6 +2836,7 @@ name = "kotone-plugin-voice-input"
 version = "0.1.0"
 dependencies = [
  "kotone-core",
+ "kotone-plugin-api",
  "serde_json",
  "tokio",
 ]

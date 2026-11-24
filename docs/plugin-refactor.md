@@ -641,3 +641,12 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 - 接法：`VoiceInputExt::with_processors(...)`（桌面端、命令行原来就这样写，加一行 `use`）；重发、频道、文字处理开关这几个热键也在这个 trait 上。命令行（`kotone-cli`）依赖了这个插件，和它依赖放歌插件一样（它是不带窗口的宿主）。
 - **`tests/orchestrator.rs`**：留在原处，`kotone-core` 多一个开发依赖（和 `kotone-stt`、`kotone-postprocess` 一样的依赖环）。改动只有接线：1 行 `use kotone_plugin_voice_input::VoiceInputExt;`，10 处直接 `Orchestrator::new(...)` 的地方各接一行 `.with_voice_input()`（原来这些地方用的是默认的空处理器表，接上后一样）；`assert` 和测试的操作一行没动。识别记录的存储（`kotone_core::history`）和文字处理的配置类型留在本体：测试的检查直接读 `kotone_core::history::list_in` 和 `settings.post_processing`。
 - 检查：`kotone-core` 单元 300 + 插件 9 = 309（和原来一样）、集成 84 过 + 1 个手动跑的跳过（= 85，检查一条没改）；桌面端 111；`kotone-cli` 34；插件边界测试 3；clippy（core、插件、命令行、桌面端，`-D warnings`）干净。真机：`lol_tools_real.py --while-playing` 32/32、`game_events_real.py` 12/12（前后都跑）。`voice_input_real.py` 要玩家离开电脑，还没跑。
+
+**（二）语音输入成了插件清单里的一项；`game_chat.send` 由它登记（名字不变）**：
+
+- `plugins/voice-input/plugin.toml`：`voice-input`“语音输入”，默认开；`tool_prefix = "game_chat"`（搬进插件以前就叫 `game_chat.send`，玩家设过的权限和她的习惯都不变）；给她的一句能力概览。桌面端插件表加上它（`VoiceInputPlugin`）。
+- `game_chat.send` 不再是她的内置工具（`kotone-agent` 的 `MAIN_TOOLS`、内置工具表、`BuiltinHost::send_to_game_chat` 都删了），改成语音输入插件的工具：说明、参数、副作用（`input`、`records-run`）照搬，标了马上返回，所以主会话照样有；默认权限、只读模式下拒绝、玩家设的规则都和以前一样（`kotone-agent` 的测试改成从插件拿这个工具，检查不变）。要打的字在插件里检查（空、超过 200 字、换行），打字本身经宿主：新加 `Host::type_in_game_chat`（共用的注入器和 ADR 032 的挡键全进程只有一份，在宿主；前台不是这个游戏时拒绝；记进「自动化 → 记录」）。原来桌面端 `agent/host.rs` 里那段挪到 `companion::send_to_game_chat`，测试 `game_chat_is_only_typed_into_the_game` 跟着走。
+- 插件工具现在知道是谁调的：`Caller::Her` 带上这段对话（`agent:<对话 id>`，执行记录的发起方和以前一样）；外部 Agent 经工具服务调时记成 `tool-service`。**变化**：插件的工具都给工具服务，外部 Agent 现在也能调 `game_chat.send`（以前只有 `companion.type`）；`voice_input_real.py` 第 6 项原来按“调不了就跳过”写的，这一项以后会真的打字（测试窗口在前台时）。
+- **关掉语音输入插件**（ADR 038“怎么定的”）：语音输入热键不登记（低层钩子用已有的“占位主键 + 停用”跑着，呼叫键、快捷消息这些具名热键照常；RegisterHotKey 后端不注册主键），频道 / 重发 / 文字处理开关热键也不登记，没准备好时的语音输入提示键也不盯；悬浮窗不显示（和“不显示”一样，开关一变就收起 / 重建）；她的工具清单里没有 `game_chat.send`。呼叫她、唤醒词、她的耳朵不受影响。为此本体的按键匹配改了一处：主键停用时，会话中的 Esc 照样取消（以前主键停用就全部放行，语音输入关着时她的会话就没法 Esc 取消了），加了单元测试。
+- 界面还没动（下一步）：插件页里还看不到语音输入的卡片。
+- 检查：`kotone-core` 单元 301（多 1 个 Esc 的）、集成 84 + 1 跳过；她 79；插件 12；桌面端 112（多 1 个“语音输入是插件、开关带走热键”）；系统适配层 90；clippy 干净。真机：`lol_tools_real.py --while-playing` 32/32、`game_events_real.py` 12/12。

@@ -4,9 +4,9 @@
 //! - **工具服务**：`system.capabilities` 里的工具，与外部 Agent 同一份实现；
 //!   给外部 Agent 的通道类工具（`agent.*`、`event.read`、`assistant.submit`）和旧陪玩流程
 //!   （`companion.ask` / `companion.check`，会再调一次模型）不交给内置 Agent；
-//! - **内置动作**：说话（`speak`）、弹幕（`danmaku`，后台用）、提醒（`reminder.create`）、发到游戏聊天
-//!   （`game_chat.send`，替代 `companion.type`，会写进执行记录）和查找工具（`tools.find`）；
+//! - **内置动作**：说话（`speak`）、弹幕（`danmaku`，后台用）、提醒（`reminder.create`）和查找工具（`tools.find`）；
 //! - **插件**（ADR 038）：开着的插件给她的工具（`visibility` 含 `model`、要的数据开关都开着），
+//!   例如语音输入插件的 `game_chat.send`（发到游戏聊天，替代 `companion.type`，会写进执行记录），
 //!   由桌面端按开关算好（[`kotone_plugin_api::Offer`]），经 [`crate::port::BuiltinHost::plugin`] 执行；
 //! - **已保存的自动化**：每个一个工具 `saved.<id>`（最多 [`MAX_SAVED_TOOLS`] 个）。
 //! - **执行命令、读写文件**（ADR 030）：`shell.run`、`file.*`，只给后台任务（[`exec_entries`]）。
@@ -25,7 +25,6 @@ pub const TOOL_SPEAK: &str = "speak";
 /// 在屏幕上显示一句弹幕（后台任务用，例如同传；后台不能开口）。
 pub const TOOL_DANMAKU: &str = "danmaku";
 pub const TOOL_REMIND: &str = "reminder.create";
-pub const TOOL_GAME_CHAT: &str = "game_chat.send";
 /// 用语音问玩家一句，然后免唤醒收音几秒，把回答作为结果（语音入口的多轮对话）。
 pub const TOOL_ASK: &str = "reply.ask";
 /// 工作区（ADR 022）：记忆、Skill、人格。
@@ -73,11 +72,11 @@ pub const HOST_BUILTINS: &[&str] = &[
 /// 一步步操作）；`companion.read_chat`（同样要识别，玩家开口那一刻的聊天用 `screen.at_speech`）；
 /// `web.fetch`（3–7 秒）；`automation.save`（要先写程序、试运行）。
 pub const MAIN_TOOLS: &[&str] = &[
-    // 说话、追问、提醒、替玩家发言（ADR 017 / 018 / 020；ADR 029 第八节）
+    // 说话、追问、提醒（ADR 017 / 018；ADR 029 第八节）。替玩家发言（game_chat.send）是语音输入插件的，
+    // 插件工具标了马上返回的主会话也拿
     TOOL_SPEAK,
     TOOL_ASK,
     TOOL_REMIND,
-    TOOL_GAME_CHAT,
     // 玩家开口那一刻的屏幕（ADR 029 §二）、前台窗口
     TOOL_SCREEN_AT_SPEECH,
     "window.active",
@@ -370,18 +369,6 @@ pub fn builtin_entries() -> Vec<ToolEntry> {
                 "delivery": delivery_schema()
             }}),
             side_effects: vec!["creates-reminder".into()],
-            group: "game",
-            source: Source::Builtin,
-            untrusted: false,
-        },
-        ToolEntry {
-            name: TOOL_GAME_CHAT.into(),
-            description: "替玩家把一句话打进当前游戏的聊天框（按游戏配置的开聊天框键、频道与输入方式），默认按发送键（跟随用户的“自动发送”设置）。只在玩家明确要你替他说话或发送翻译时用；写成玩家本人的口吻，不加署名和引号。发出的内容会记在「自动化 → 记录」里。".into(),
-            parameters: json!({"type": "object", "additionalProperties": false, "required": ["text"], "properties": {
-                "text": {"type": "string", "minLength": 1, "maxLength": 200, "description": "单行，不含换行"},
-                "send": {"type": "boolean", "description": "缺省跟随用户设置；false 只打进聊天框不发送"}
-            }}),
-            side_effects: vec!["input".into(), "records-run".into()],
             group: "game",
             source: Source::Builtin,
             untrusted: false,

@@ -10,6 +10,8 @@
 //! - [`records`]：识别记录草稿（旁听录音）、落账、历史音频裁剪；
 //! - [`hotkeys`]：聊天频道切换、文字处理开关 / 切换流程。
 //!
+//! - [`plugin`]：插件清单那一面（ADR 038 D5）：她的工具 `game_chat.send`（打字经宿主）。
+//!
 //! 锁的顺序照本体：op → 状态锁 → 这里的 `state`。拿着 `state` 时不调本体的任何方法。
 
 use std::any::Any;
@@ -25,9 +27,12 @@ use kotone_core::postprocess::ProcessorRegistry;
 use kotone_core::settings::Settings;
 
 pub mod hotkeys;
+pub mod plugin;
 pub mod postprocessing;
 pub mod records;
 pub mod send;
+
+pub use self::plugin::VoiceInputPlugin;
 
 use self::records::{DraftCell, HistoryDraft};
 

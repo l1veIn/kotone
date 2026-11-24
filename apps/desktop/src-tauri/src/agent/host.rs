@@ -83,7 +83,13 @@ impl BuiltinHost for DesktopBuiltins {
         tool: &str,
         arguments: &Value,
     ) -> Result<kotone_plugin_api::ToolResult, String> {
-        crate::plugins::call(&self.app, tool, arguments, crate::plugins::Caller::Her).await
+        crate::plugins::call(
+            &self.app,
+            tool,
+            arguments,
+            crate::plugins::Caller::Her(&self.session),
+        )
+        .await
     }
 
     async fn exec(
@@ -171,58 +177,6 @@ impl BuiltinHost for DesktopBuiltins {
             delay_seconds,
         )
     }
-
-    async fn send_to_game_chat(&self, text: String, send: Option<bool>) -> Result<Value, String> {
-        // 前台是 Kotone 自己（例如玩家正在聊天窗口里）时不能打字，否则字会打进 Kotone。
-        let (_, window) = crate::automation::foreground_target_info()
-            .map_err(|_| "前台不是游戏窗口：请先切到游戏，再让我替你发言".to_string())?;
-        let settings = settings(&self.app);
-        // 前台也得是这个游戏：不能把字和回车打进桌面、文件夹或别的程序（2026-11-18 真机测试里
-        // 玩家说“跟队友说…”，她选了打字，而前台是桌面）。
-        let game = crate::companion::active_profile(&settings);
-        if let Some(reason) = foreground_refusal(&game, window.process_name.as_deref()) {
-            return Err(reason);
-        }
-        let send = send.unwrap_or(settings.assistant.companion.auto_send);
-        let profile = crate::companion::active_profile(&settings).id;
-        let result = crate::companion::type_text(&self.app, &text, send).await;
-        let record = crate::automation::record_chat(
-            &self.app,
-            &self.session,
-            ChatAction {
-                text,
-                sent: send && result.is_ok(),
-                profile,
-            },
-            result.as_ref().map(|_| ()).map_err(Clone::clone),
-        );
-        if let Err(e) = &record {
-            log::log(&format!("agent: chat record failed: {e}"));
-        }
-        let mut value = result?;
-        if let Ok(run) = record {
-            value["runId"] = json!(run.id);
-        }
-        Ok(value)
-    }
-}
-
-/// 前台不是这个游戏时不打字的原因（None = 可以打）。
-fn foreground_refusal(
-    game: &kotone_core::profile::GameProfile,
-    process: Option<&str>,
-) -> Option<String> {
-    let process = process.unwrap_or("");
-    if process.eq_ignore_ascii_case("explorer.exe") || process.is_empty() {
-        return Some("前台是桌面或文件夹，不是游戏：请先切到游戏，再让我替你发言".into());
-    }
-    if !kotone_core::profile::matches_process(game, process) {
-        return Some(format!(
-            "前台是 {process}，不是「{}」：请先切到游戏，再让我替你发言",
-            game.display_name
-        ));
-    }
-    None
 }
 
 pub(super) struct DesktopAsker {
@@ -327,24 +281,5 @@ impl Drop for AskGuard {
             ASK_RESOLVED_EVENT,
             json!({"askId": self.ask_id, "conversationId": self.conversation_id, "answer": self.answer}),
         );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn game_chat_is_only_typed_into_the_game() {
-        let lol = kotone_core::profile::GameProfile::builtin_lol();
-        assert!(foreground_refusal(&lol, Some("explorer.exe")).is_some());
-        assert!(foreground_refusal(&lol, None).is_some());
-        assert!(foreground_refusal(&lol, Some("notepad.exe")).is_some());
-        let game = lol.process_names[0].clone();
-        assert!(foreground_refusal(&lol, Some(&game)).is_none());
-        // 没写进程名的通用配置：除了桌面，前台是什么就算什么
-        let generic = kotone_core::profile::GameProfile::builtin_generic();
-        assert!(foreground_refusal(&generic, Some("SomeGame.exe")).is_none());
-        assert!(foreground_refusal(&generic, Some("Explorer.EXE")).is_some());
     }
 }

@@ -603,11 +603,12 @@ impl HookMatcher {
             // 非本键按下的 up：落到后续具名键 / 主键分支
         }
 
-        // 主键（enabled=false = 未注册主热键：全部放行，仅上面的具名热键仍然生效）
-        if !self.enabled {
+        // 主键（enabled=false = 未注册主热键：全部放行，仅上面的具名热键和会话中的 Esc 取消仍然生效——
+        // 语音输入插件关着时没有主键，她的会话照样能 Esc 取消，ADR 038）
+        if !self.enabled && vk != VK_ESCAPE {
             return PASS;
         }
-        if vk == self.spec.vk {
+        if self.enabled && vk == self.spec.vk {
             return if down {
                 if self.main_down {
                     // 按住不放的重复 down：命中过则继续吞（防游戏收到连发），不产生事件
@@ -955,6 +956,23 @@ mod tests {
         m.set_enabled(true);
         // 重新启用后可正常触发（按下态已重置）
         assert_eq!(down(&mut m, 0x77).event, Some(HookEvent::Toggle));
+    }
+
+    /// 没有主键（语音输入插件关着，ADR 038）：主键停用、全部放行，但她的会话照样能 Esc 取消。
+    #[test]
+    fn disabled_main_key_still_cancels_an_active_session_with_esc() {
+        let mut m = matcher("F24", HotkeyMode::Toggle);
+        m.set_enabled(false);
+        assert_eq!(down(&mut m, 0x87), PASS, "占位主键不参与匹配");
+        assert_eq!(down(&mut m, VK_ESCAPE), PASS, "没有会话：Esc 放行");
+        assert!(!up(&mut m, VK_ESCAPE).swallow);
+        m.set_session_active(true);
+        let r = down(&mut m, VK_ESCAPE);
+        assert_eq!(r.event, Some(HookEvent::Cancel));
+        assert!(r.swallow);
+        assert!(up(&mut m, VK_ESCAPE).swallow);
+        m.set_session_active(false);
+        assert_eq!(down(&mut m, VK_ESCAPE), PASS);
     }
 
     #[test]
