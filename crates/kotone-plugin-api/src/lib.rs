@@ -387,6 +387,81 @@ impl ToolResult {
     }
 }
 
+// ---------- 覆盖层 ----------
+
+/// 覆盖层盖在哪个窗口上（只在它在前台时显示）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "exe", rename_all = "camelCase")]
+pub enum OverlayTarget {
+    /// 这个进程的窗口（`League of Legends.exe`）。
+    Process(String),
+    /// 这几个进程里任何一个的窗口。
+    AnyOf(Vec<String>),
+}
+
+/// 放在目标窗口客户区的哪里。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Anchor {
+    /// 一块区域，按客户区的比例（0..1）。
+    Rect { x: f64, y: f64, w: f64, h: f64 },
+    /// 贴一个角，大小 `w` × `h`（客户区的比例）。`corner`：`top-left` / `top-right` / `bottom-left` /
+    /// `bottom-right`；`margin` 离边多远（比例）。
+    Corner {
+        corner: String,
+        margin: f64,
+        w: f64,
+        h: f64,
+    },
+}
+
+impl Anchor {
+    /// 在客户区里的位置 `[x, y, w, h]`（比例，夹在 0..1 里）。
+    pub fn rect(&self) -> [f64; 4] {
+        let clamp = |v: f64| v.clamp(0.0, 1.0);
+        match self {
+            Anchor::Rect { x, y, w, h } => {
+                let (w, h) = (clamp(*w), clamp(*h));
+                [clamp(*x).min(1.0 - w), clamp(*y).min(1.0 - h), w, h]
+            }
+            Anchor::Corner {
+                corner,
+                margin,
+                w,
+                h,
+            } => {
+                let (w, h, m) = (clamp(*w), clamp(*h), clamp(*margin));
+                let left = corner.ends_with("left");
+                let top = corner.starts_with("top");
+                let x = if left { m } else { 1.0 - m - w };
+                let y = if top { m } else { 1.0 - m - h };
+                [clamp(x), clamp(y), w, h]
+            }
+        }
+    }
+}
+
+/// 覆盖层上的一项（照 MCP Apps 的页面：`uri` 是插件登记的覆盖层页面，`data` 是它的数据）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayItem {
+    /// 插件自己起的 id（同一个插件里不重）。
+    pub id: String,
+    /// `ui://kotone/<插件>/<覆盖层>`，要在清单的 `overlays` 里。
+    pub uri: String,
+    pub target: OverlayTarget,
+    pub anchor: Anchor,
+    #[serde(default)]
+    pub data: Value,
+}
+
+/// 截图识别出来的一行字（[`Host::screen_text`]）：位置是前台窗口客户区的比例 `[x, y, w, h]`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScreenText {
+    pub text: String,
+    pub rect: [f64; 4],
+}
+
 // ---------- 插件和宿主 ----------
 
 /// 一个插件。实现放在 `plugins/<id>/src/`，桌面端在 `plugins.rs` 里登记。
@@ -420,6 +495,10 @@ pub trait Host: Send + Sync {
     fn enabled(&self) -> bool;
     /// 插件里的某个数据开关开着没有（插件关着时也是关）。
     fn source_enabled(&self, source: &str) -> bool;
+    /// Kotone 的版本（例如告诉 OP.GG 是哪个应用在用它的接口）。
+    fn app_version(&self) -> String {
+        String::new()
+    }
     /// 插件自己的设置（`plugins.<id>.settings`；没有时是空对象）。
     fn settings(&self) -> Value;
     /// 插件自己的存储目录（`<KOTONE_HOME>/plugins/<id>/`，用时才建）。
@@ -446,6 +525,23 @@ pub trait Host: Send + Sync {
     /// 给插件自己的页面发事件（界面上是 `kotone://plugin` 事件，带 `plugin`、`event`、`payload`）。
     fn emit(&self, event: &str, payload: Value) {
         let _ = (event, payload);
+    }
+    /// 换掉这个插件在覆盖层上的全部条目（空 = 什么都不显示）。覆盖层只有一个，在本体里：置顶、点击穿透、
+    /// 只在目标窗口在前台时显示、不进截图（ADR 038 D5）。
+    fn overlay(&self, items: Vec<OverlayItem>) {
+        let _ = items;
+    }
+    /// 截前台窗口的一块区域（客户区比例 `[x, y, w, h]`）并识别文字（本体的文字识别，玩家选的模型）。
+    /// 前台不是 `process` 这个进程的窗口时不截（报错）。覆盖层不会被截进去。
+    /// `local_only`：只用本地模型（在线识别要十几秒、要花钱时不识别，直接报错）。
+    fn screen_text(
+        &self,
+        process: &str,
+        region: [f64; 4],
+        local_only: bool,
+    ) -> BoxFuture<'static, Result<Vec<ScreenText>, String>> {
+        let _ = (process, region, local_only);
+        Box::pin(async { Err("这里没有截图识别".to_string()) })
     }
 }
 
@@ -573,6 +669,47 @@ rule = "- 英雄联盟：……"
         let lf = Manifest::parse(SAMPLE).unwrap();
         let crlf = Manifest::parse(&SAMPLE.replace('\n', "\r\n")).unwrap();
         assert_eq!(lf, crlf);
+    }
+
+    #[test]
+    fn overlay_items_round_trip() {
+        let item = OverlayItem {
+            id: "card-1".into(),
+            uri: "ui://kotone/lol/augment-scores".into(),
+            target: OverlayTarget::Process("League of Legends.exe".into()),
+            anchor: Anchor::Rect {
+                x: 0.2,
+                y: 0.3,
+                w: 0.15,
+                h: 0.05,
+            },
+            data: json!({"delta": 3.2}),
+        };
+        let v = serde_json::to_value(&item).unwrap();
+        assert_eq!(
+            v["target"],
+            json!({"kind": "process", "exe": "League of Legends.exe"})
+        );
+        assert_eq!(v["anchor"]["kind"], "rect");
+        let back: OverlayItem = serde_json::from_value(v).unwrap();
+        assert_eq!(back, item);
+        let corner = Anchor::Corner {
+            corner: "top-right".into(),
+            margin: 0.01,
+            w: 0.2,
+            h: 0.3,
+        };
+        assert_eq!(serde_json::to_value(&corner).unwrap()["kind"], "corner");
+        let [x, y, w, h] = corner.rect();
+        assert!((x - 0.79).abs() < 1e-9 && (y - 0.01).abs() < 1e-9 && w == 0.2 && h == 0.3);
+        let off = Anchor::Rect {
+            x: 0.95,
+            y: -0.1,
+            w: 0.2,
+            h: 0.1,
+        }
+        .rect();
+        assert_eq!(off, [0.8, 0.0, 0.2, 0.1], "超出客户区的挪回来");
     }
 
     #[test]

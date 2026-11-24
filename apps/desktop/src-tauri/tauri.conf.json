@@ -12,6 +12,23 @@
   "app": {
     "windows": [
       {
+        "label": "plugin-overlay",
+        "create": false,
+        "title": "Kotone 覆盖层",
+        "url": "index.html#/plugin-overlay",
+        "width": 800,
+        "height": 600,
+        "transparent": true,
+        "decorations": false,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "focus": false,
+        "focusable": false,
+        "visible": false
+      },
+      {
         "label": "danmaku",
         "create": false,
         "title": "Kotone 提醒",
@@ -92,6 +109,10 @@
       "../../../licenses/deepseek-harness-MIT.txt": "licenses/deepseek-harness-MIT.txt",
       "../../../licenses/CC-BY-NC-SA-4.0.txt": "licenses/CC-BY-NC-SA-4.0.txt",
       "../../../licenses/sonora-BSD-3-Clause.txt": "licenses/sonora-BSD-3-Clause.txt",
+      "../../../licenses/api-enhanced-MIT.txt": "licenses/api-enhanced-MIT.txt",
+      "../../../licenses/ncmapi-MIT.txt": "licenses/ncmapi-MIT.txt",
+      "../../../licenses/YesPlayMusic-MIT.txt": "licenses/YesPlayMusic-MIT.txt",
+      "../../../licenses/LeagueAkari-MIT.txt": "licenses/LeagueAkari-MIT.txt",
       "../src/assets/roles/README.md": "licenses/role-art.md",
       "../../../docs/third-party/rambledesk-ports.md": "licenses/rambledesk-ports.md"
     },

@@ -29,7 +29,9 @@ use crate::client::spells::{self, SpellTracker, SpellUse};
 use crate::client::text::{self, ScoutPlayer};
 use crate::client::{in_game_phase, GameData, Lcu, LcuAuth, Live, LolError};
 use crate::pages;
-use crate::tools::{TOOL_GAME, TOOL_MATCH, TOOL_PLAYER, TOOL_SCOUT, TOOL_SPELL};
+use crate::tools::{
+    TOOL_CHAMPION, TOOL_GAME, TOOL_MATCH, TOOL_PLAYER, TOOL_SCOUT, TOOL_SPELL, TOOL_TIER,
+};
 use crate::LolPlugin;
 
 /// 客户端开着时多久看一次阶段；没开时多久看一次进程。
@@ -151,6 +153,7 @@ impl LolPlugin {
     }
 
     fn reset_all(&self, host: &dyn Host) {
+        self.send_overlay(host, Vec::new());
         let claimed = {
             let mut s = self.state();
             if s.client.is_some() {
@@ -243,6 +246,9 @@ impl LolPlugin {
             s.was_dead = None;
         }
         self.report_phase(host.as_ref(), &phase, live.as_ref().map(|(_, game)| game));
+        // 覆盖层：选英雄时的胜率、海斗三选一时的海克斯评分（ADR 038 第 3 步）
+        self.update_overlays(host, &lcu, &phase, live.as_ref().map(|(_, game)| game))
+            .await;
         true
     }
 
@@ -618,6 +624,12 @@ impl LolPlugin {
         name: &str,
         arguments: &Value,
     ) -> Result<ToolResult, String> {
+        // 网上的统计不要客户端（开关各管各的）
+        match name {
+            TOOL_CHAMPION => return Ok(self.champion_tool(host.as_ref(), arguments).await),
+            TOOL_TIER => return Ok(self.tier_tool(host.as_ref(), arguments).await),
+            _ => {}
+        }
         if !enabled(host.as_ref()) {
             return Ok(ToolResult::content(status(
                 "disabled",
@@ -884,6 +896,16 @@ impl LolPlugin {
             random: crate::client::gamedata::random_pick(data, m.queue_id),
             mode,
         })
+    }
+
+    /// 这局的队列（不在对局里时 None）。
+    pub(crate) fn current_queue(&self) -> Option<i64> {
+        self.state().current.as_ref().map(|m| m.queue_id)
+    }
+
+    /// 已经读好的客户端游戏资料（没读时 None，不去读）。
+    pub(crate) fn loaded_data(&self) -> Option<Arc<GameData>> {
+        self.state().data.clone()
     }
 
     /// 连着的客户端（没开时给她的话）。

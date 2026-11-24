@@ -227,6 +227,8 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | | `lol.scout` | `player`（可选） | 这局 10 个人最近 20 局的战绩、开黑、突破口。进加载界面就在后台查。页面 `ui://kotone/lol/match`（这局） |
 | | `lol.player` | `player`（这局里的英雄名或玩家名，或“名字#编号”）或 `puuid`；都不写 = 自己 | 一个人最近 20 局的战绩、段位、常玩英雄、每一局。页面 `ui://kotone/lol/player`（战绩） |
 | | `lol.game`（只给页面） | `gameId` | 一局的详情：两边 10 个人的 KDA、伤害、经济、补刀、装备、海克斯。页面 `ui://kotone/lol/game` |
+| 英雄联盟（数据开关 `stats` 用网上的统计） | `lol.champion` | `champion`（名字、称号或外号）、`mode`（`rift` / `mayhem`，不写看这局）、`lane` | 峡谷：强度、胜率、克制、出装、符文、加点、召唤师技能（腾讯 101）；海斗：英雄榜名次、搭档、最好的海克斯（aramhex-data，CC BY-NC 4.0，要署名）。数据开关 `opgg` 开着时加 OP.GG 的分析。页面 `ui://kotone/lol/champion` |
+| | `lol.tier` | `mode`、`lane` | 峡谷各路 / 海斗的强度榜。页面 `ui://kotone/lol/tier` |
 
 **打开页面**：`ui.open {page, params?}` 在 Kotone 窗口里打开一个页面：插件的页面（上面各工具的 `resourceUri`，例如 `ui://kotone/lol/player` 带 `{puuid}`）在聊天旁边的右侧栏；`ui://kotone/settings/<分页>`（call、reply、permissions、usage、models、connections、sound、tuning、appearance、system、plugins）打开设置页。不会把窗口拉到前面。页面不存在、插件或它要的数据开关关着时报 `INVALID_ARGUMENTS`。
 

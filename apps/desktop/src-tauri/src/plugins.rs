@@ -89,6 +89,42 @@ fn tool_available(
             .all(|s| source_enabled(settings, manifest, s))
 }
 
+/// 在这个线程上临时用“低于正常”的优先级，离开作用域时改回来。
+struct BelowNormalThread(#[cfg(windows)] i32);
+
+impl BelowNormalThread {
+    fn enter() -> Self {
+        #[cfg(windows)]
+        {
+            use windows::Win32::System::Threading::{
+                GetCurrentThread, GetThreadPriority, SetThreadPriority,
+                THREAD_PRIORITY_BELOW_NORMAL,
+            };
+            // SAFETY: 只改当前线程的优先级。
+            unsafe {
+                let old = GetThreadPriority(GetCurrentThread());
+                let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+                Self(old)
+            }
+        }
+        #[cfg(not(windows))]
+        Self()
+    }
+}
+
+impl Drop for BelowNormalThread {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        // SAFETY: 改回进来时的优先级。
+        unsafe {
+            use windows::Win32::System::Threading::{
+                GetCurrentThread, SetThreadPriority, THREAD_PRIORITY,
+            };
+            let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY(self.0));
+        }
+    }
+}
+
 /// 宿主交给插件的本体能力。每个插件一份。
 pub struct DesktopHost {
     app: AppHandle,
@@ -162,6 +198,58 @@ impl Host for DesktopHost {
         game_time: Option<f64>,
     ) {
         crate::games::push(&self.app, game, kind, source, data, game_time);
+    }
+
+    fn app_version(&self) -> String {
+        self.app.package_info().version.to_string()
+    }
+
+    fn overlay(&self, items: Vec<kotone_plugin_api::OverlayItem>) {
+        // 只认清单里登记过的覆盖层；插件关着、或者覆盖层要的数据开关关着时不显示
+        let settings = settings(&self.app);
+        let items: Vec<_> = items
+            .into_iter()
+            .filter(|item| {
+                self.manifest
+                    .overlays
+                    .iter()
+                    .find(|o| o.uri == item.uri)
+                    .is_some_and(|o| {
+                        enabled(&settings, &self.manifest)
+                            && o.needs
+                                .iter()
+                                .all(|s| source_enabled(&settings, &self.manifest, s))
+                    })
+            })
+            .collect();
+        // 记一笔（插件只在变了时才发）：真机测试靠它看覆盖层要了什么，不用真的盖在玩家屏幕上
+        let uris: Vec<&str> = items.iter().map(|i| i.uri.as_str()).collect();
+        kotone_core::log::log(&format!(
+            "插件 {} 的覆盖层：{} 项 {:?}",
+            self.id,
+            items.len(),
+            uris
+        ));
+        crate::overlay_layer::set(&self.app, &self.id, items);
+    }
+
+    fn screen_text(
+        &self,
+        process: &str,
+        region: [f64; 4],
+        local_only: bool,
+    ) -> BoxFuture<'static, Result<Vec<kotone_plugin_api::ScreenText>, String>> {
+        let app = self.app.clone();
+        let process = process.to_string();
+        Box::pin(async move {
+            tauri::async_runtime::spawn_blocking(move || {
+                // 照 aramhex：识别线程用低于正常的优先级（不用最低：低配机器上会饿死）
+                let _priority = BelowNormalThread::enter();
+                crate::computer_use::screen_text(&app, &process, region, local_only)
+            })
+            .await
+            .map_err(|e| e.to_string())?
+        })
     }
 
     fn emit(&self, event: &str, payload: Value) {

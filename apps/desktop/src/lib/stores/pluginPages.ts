@@ -36,6 +36,11 @@ export function pushPluginPage(uri: string, params?: Record<string, unknown> | n
   pluginPageStack.update((stack) => [...stack, page(uri, params, data)]);
 }
 
+/** 最上面一页记下自己现在的样子（参数和数据），返回到它时照这样显示。不换 key：不重新挂载。 */
+export function replacePluginPage(params: Record<string, unknown>, data: unknown): void {
+  pluginPageStack.update((stack) => stack.map((p, i) => (i === stack.length - 1 ? { ...p, params, data } : p)));
+}
+
 export function backPluginPage(): void {
   pluginPageStack.update((stack) => (stack.length > 1 ? stack.slice(0, -1) : stack));
 }

@@ -26,7 +26,7 @@
   import SidebarTask from "./SidebarTask.svelte";
   import PluginStack from "../components/plugins/PluginStack.svelte";
   import { viewOf } from "../pluginUi";
-  import { backPluginPage, closePluginPages, pluginPageStack, pushPluginPage } from "../stores/pluginPages";
+  import { backPluginPage, closePluginPages, pluginPageStack, pushPluginPage, replacePluginPage } from "../stores/pluginPages";
 
   let { active = true, narrow = false, chatWidth = 0 }: {
     /** 聊天页正显示着（不在角色 / 记忆分页上）。 */
@@ -415,7 +415,7 @@
 
     {#if tab === "page"}
       <!-- 插件页面（ADR 038）：最上面那一页，能返回、关掉 -->
-      <PluginStack {pages} onPush={pushPluginPage} onBack={backPluginPage} onClose={closePluginPages} testid="sidebar-plugin-page" />
+      <PluginStack {pages} onPush={pushPluginPage} onBack={backPluginPage} onReplace={replacePluginPage} onClose={closePluginPages} testid="sidebar-plugin-page" />
     {:else if tab === "web"}
       <!-- 网页：浏览器占满这个标签（照 Codex 内置浏览器）：一排标签页，一行地址栏（后退、前进、刷新、网址、播放控制、全屏、回到卡片） -->
       <div class="flex min-h-0 flex-1 flex-col" data-testid="browser-panel">

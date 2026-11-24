@@ -33,3 +33,18 @@ export function partyColor(party: number, all: (number | null)[]): string {
   const index = groups.indexOf(party);
   return index >= 0 ? PARTY_COLORS[index % PARTY_COLORS.length] : "";
 }
+
+/** 0..1 的比例 → 百分比（一位小数）；没有时 “—”。 */
+export function rate(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "—";
+}
+
+/** 比平均高 / 低几个百分点（带符号，一位小数）。 */
+export function signed(value: number): string {
+  return `${value > 0 ? "+" : value < 0 ? "−" : "±"}${Math.abs(value).toFixed(1)}`;
+}
+
+/** 局数：按当前语言的紧凑写法（1.5万 / 15K）。 */
+export function compact(value: number): string {
+  return new Intl.NumberFormat(getLocale(), { notation: "compact", maximumFractionDigits: 1 }).format(value);
+}

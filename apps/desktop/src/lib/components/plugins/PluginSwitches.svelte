@@ -9,7 +9,14 @@
     pluginEnabled, pluginName, setPluginEnabled, setPluginSource, sourceDescription, sourceName, sourceRisk, sourceSwitch,
     type PluginInfo,
   } from "$lib/plugins";
+  import { openExternal } from "$lib/ipc";
   import { m } from "$lib/paraglide/messages.js";
+
+  /** 风险提示里的 GitHub 地址（例如替玩家问 OP.GG 的 issue）做成能点的链接，用系统浏览器打开。 */
+  const LINK = /(github\.com\/[\w.\-/]+[\w/])/;
+  function segments(text: string): { text: string; link: boolean }[] {
+    return text.split(LINK).filter(Boolean).map((part) => ({ text: part, link: LINK.test(part) }));
+  }
 
   let { plugin, showPluginSwitch = true }: {
     plugin: PluginInfo;
@@ -51,7 +58,9 @@
       {#if risk}
         <p class="m-0 flex items-start gap-1.5 rounded-lg bg-amber-500/8 px-2.5 py-2 text-xs leading-relaxed text-amber-700 dark:text-amber-200/90"
           data-testid={`plugin-${manifest.id}-source-${source.id}-risk`}>
-          <TriangleAlert class="mt-0.5 size-3.5 shrink-0" /><span>{risk}</span>
+          <TriangleAlert class="mt-0.5 size-3.5 shrink-0" /><span>{#each segments(risk) as part, i (i)}{#if part.link}<button type="button"
+            class="underline underline-offset-2 hover:text-foreground" data-testid={`plugin-${manifest.id}-source-${source.id}-link`}
+            onclick={() => void openExternal(`https://${part.text}`)}>{part.text}</button>{:else}{part.text}{/if}{/each}</span>
         </p>
       {/if}
     </div>

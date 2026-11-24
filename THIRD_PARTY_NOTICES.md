@@ -213,3 +213,11 @@ The DeepSeek connection client (`crates/kotone-ai/src/agent/deepseek.rs`) and we
 - YesPlayMusic, Copyright (c) 2020-2023 qier222, MIT License, https://github.com/qier222/YesPlayMusic — the `isTrackPlayable` rules (privilege / fee / copyright) are ported in `crates/kotone-music/src/netease/parse.rs`; license text in `licenses/YesPlayMusic-MIT.txt`.
 - Symphonia (`symphonia` crate 0.5), Mozilla Public License 2.0, https://github.com/pdeljanov/Symphonia — decodes MP3 / FLAC / AAC for playback; the MPL-2.0 source code is available from that repository and crates.io.
 - qrcode (`qrcode` crate 0.14), MIT OR Apache-2.0, https://github.com/kennytm/qrcode-rust — draws the login QR code.
+
+## League of Legends plugin (ADR 035 / 038, `plugins/lol`)
+
+- LeagueAkari (`dev` branch), Copyright (c) 2026 Hanxven, MIT License, https://github.com/LeagueAkari/LeagueAkari — the LCU command-line parsing and endpoint paths, the mode-haste rule for summoner spell timers, party detection from `teamParticipantId`, and the Tencent 101 response parser (`src/shared/data-adapter/champion-data/qq101-protocol.ts`, ported field by field in `plugins/lol/src/stats/qq101.rs`) are adapted; license text in `licenses/LeagueAkari-MIT.txt`. Only the MIT-licensed `dev` branch is used, not the GPL releases v1.3.x–v1.4.3.
+- aramhex, MIT License, https://github.com/czgreat/aramhex — design reference for the overlay (show only when needed, small windows, below-normal recognition thread, not reading back its own drawing); no code copied.
+- aramhex-data, Creative Commons BY-NC 4.0, https://github.com/czgreat/aramhex-data — ARAM Mayhem champion × augment statistics. Not bundled: Kotone downloads it at run time when the player turns on “用网上的统计”, verifies the SHA-256 listed in `latest.json`, and credits the repository and license on every page that shows it. Kotone is free; the data is not used commercially.
+- Tencent 101 / 掌盟 and `game.gtimg.cn` (hero list, items, runes, summoner spells) — undocumented public endpoints, requested on demand at run time; not bundled.
+- OP.GG MCP (`mcp-api.op.gg/mcp`) — off by default until OP.GG answers https://github.com/opgginc/opgg-mcp/issues/26; when turned on, results are shown with OP.GG's name and a link to op.gg.

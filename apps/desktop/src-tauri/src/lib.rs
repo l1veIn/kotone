@@ -30,6 +30,7 @@ mod music;
 mod music_cmd;
 mod ocr_engines;
 mod overlay;
+mod overlay_layer;
 mod overlay_window;
 mod plugins;
 mod plugins_cmd;
@@ -330,6 +331,8 @@ pub fn run() {
             music::init(app.handle());
             // 插件（ADR 038）：各自开后台循环（英雄联盟：客户端开着时盯对局阶段，进加载界面先查这局的战绩）
             plugins::init(app.handle());
+            // 游戏上方的覆盖层（ADR 038）：插件给了条目才建窗口；跟着前台的目标窗口挪、切走就藏
+            overlay_layer::start(app.handle());
             if companion_enabled {
                 // 琴音原来的名字和头像记进她的角色卡（只做一次）。
                 roles::migrate(app.handle());

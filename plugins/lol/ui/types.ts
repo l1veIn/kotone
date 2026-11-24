@@ -73,3 +73,99 @@ export function statusText(content: unknown): string {
   if (content && typeof content === "object" && "text" in content) return String((content as { text: unknown }).text ?? "");
   return typeof content === "string" ? content : "";
 }
+
+// ---------- 第 3 步：网上的统计（和后端 plugins/lol/src/stats_tools.rs 一一对应） ----------
+export const PAGE_CHAMPION = "ui://kotone/lol/champion";
+export const PAGE_TIER = "ui://kotone/lol/tier";
+export const OVERLAY_CHAMP_SELECT = "ui://kotone/lol/champ-select";
+export const OVERLAY_AUGMENTS = "ui://kotone/lol/augment-scores";
+
+/** 统计里的英雄（没有英文 id）。 */
+export interface StatChampion { id: number; label: string; short: string }
+
+/** 数据从哪来（页面上署名）。 */
+export interface StatSource { name: string; date?: string; license?: string }
+
+/** 胜率、选用率都是 0..1。 */
+export interface Matchup { champion: StatChampion; winRate: number | null }
+
+export interface BuildOption { items: Named[]; winRate: number | null; pickRate: number | null }
+
+export interface RunePage { primary: Named[]; secondary: Named[]; shards: Named[]; winRate: number | null; pickRate: number | null; games: number }
+
+export interface TierRowRaw {
+  rank: number | null; championId: number; tier: string; lane: string;
+  winRate: number | null; pickRate: number | null; banRate: number | null; counters: number[]; rankChange: number | null;
+}
+
+export interface OpggBlock { text?: string; error?: string; attribution: string; url: string; stale?: boolean }
+
+export interface ChampionRift {
+  mode: "rift";
+  champion: StatChampion;
+  lane: string; laneName: string; patch: string; date: string;
+  tier: TierRowRaw | null;
+  goodAgainst: Matchup[]; badAgainst: Matchup[];
+  build: { starting: BuildOption[]; boots: BuildOption[]; core: BuildOption[]; fourth: BuildOption[]; fifth: BuildOption[]; sixth: BuildOption[] };
+  runes: RunePage[];
+  skillPriority: string[]; skillOrder: string[];
+  spells: { spells: Named[]; winRate: number | null; pickRate: number | null }[];
+  sources: StatSource[];
+  stale: boolean;
+  opgg: OpggBlock | null;
+}
+
+export interface MayhemAugment { id: number; name: string; rarity: string; games: number; winRate: number; delta: number; lowSample: boolean }
+
+export interface ChampionMayhem {
+  mode: "mayhem";
+  champion: StatChampion;
+  rank: number | null; winRate: number | null; pickRate: number | null;
+  partners: StatChampion[];
+  augments: MayhemAugment[];
+  /** aramhex-data 的署名（CC BY-NC 4.0）；没读到 aramhex 时 null。 */
+  attribution: string | null;
+  sources: StatSource[];
+}
+
+export type ChampionData = ChampionRift | ChampionMayhem;
+
+export interface TierRow {
+  champion: StatChampion; tier: string; rank: number | null;
+  winRate: number | null; pickRate: number | null; banRate: number | null; counters: StatChampion[];
+}
+
+export interface TierRift {
+  mode: "rift"; date: string;
+  lanes: Record<string, TierRow[]>;
+  laneNames: { id: string; name: string }[];
+  sources: StatSource[];
+}
+
+export interface TierMayhem {
+  mode: "mayhem"; date: string;
+  rows: { champion: StatChampion; rank: number | null; rankChange: number | null; winRate: number | null; pickRate: number | null }[];
+  sources: StatSource[];
+}
+
+export type TierData = TierRift | TierMayhem;
+
+/** 覆盖层：选英雄（客户端窗口右上角）。 */
+export interface ChampSelectOverlayData {
+  mode: "mayhem" | "rift";
+  team: { champion: string; me: boolean; winRate: number | null; rank?: number | null; lane?: string | null; tier?: string | null }[];
+  bench: { champion: string; winRate: number | null; rank?: number | null }[];
+  source: string;
+}
+
+/** 覆盖层：海斗三选一，一张卡片一个。 */
+export interface AugmentOverlayData {
+  augment: string; champion: string;
+  score: { games: number; winRate: number; smoothed: number; delta: number; lowSample: boolean } | null;
+  best: boolean;
+  attribution: string;
+}
+
+/** aramhex-data 的仓库（页面上署名链接）。 */
+export const ARAMHEX_URL = "https://github.com/czgreat/aramhex-data";
+export const OPGG_URL = "https://op.gg";

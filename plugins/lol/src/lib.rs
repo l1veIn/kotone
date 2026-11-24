@@ -5,6 +5,8 @@
 //!   战绩、突破口、技能计时，都是纯函数加一个只连 127.0.0.1 的 HTTP 客户端；
 //! - [`tools`]：给她和页面的工具（名字、说明、参数）；
 //! - [`pages`]：页面的数据（这局、战绩、单局详情，照 MCP Apps 的 `structuredContent`）；
+//! - [`stats`]：数据开关“用网上的统计”（`stats`）背后的东西：腾讯 101、aramhex-data、外号和名字表，
+//!   以及默认关的 OP.GG（`opgg`）；工具在 `stats_tools.rs`；
 //! - [`watcher`]：后台每 2 秒看一次客户端（进加载界面就查战绩、往游戏中心报阶段和局内的事），以及工具的实现。
 //!
 //! 只依赖插件契约（`kotone-plugin-api`）和 `kotone-core` 的纯数据类型；进程、游戏中心、设置都由宿主给。
@@ -15,10 +17,14 @@ use kotone_plugin_api::{BoxFuture, Host, Manifest, Plugin, ToolResult, ToolSpec}
 use serde_json::Value;
 
 pub mod client;
+mod overlays;
 pub mod pages;
+pub mod stats;
+mod stats_tools;
 pub mod tools;
 mod watcher;
 
+pub use stats_tools::{SOURCE_OPGG, SOURCE_STATS};
 pub use watcher::SOURCE_CLIENT;
 
 /// 清单（`plugin.toml`）。
@@ -33,6 +39,10 @@ pub fn manifest() -> &'static Manifest {
 #[derive(Default)]
 pub struct LolPlugin {
     state: Arc<Mutex<watcher::State>>,
+    /// 网上的统计（第一次用时按宿主给的目录建）。
+    stats: OnceLock<stats::Stats>,
+    /// 覆盖层（选英雄、海克斯评分）现在的样子。
+    overlay: Mutex<overlays::OverlayState>,
 }
 
 impl LolPlugin {

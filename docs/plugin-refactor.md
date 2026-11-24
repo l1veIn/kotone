@@ -407,3 +407,51 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 - 真机（假客户端 + 真 DeepSeek，不按键）：`lol_tools_real.py --while-playing` 26/26（新加：`lol.scout` 的结果带这局的页面数据、页面数据没进她的上下文；她问一个人的战绩时用 `lol.player`；经工具服务调 `lol.player`、`lol.game`、`ui.open`），`game_events_real.py` 11/11。
 
 **还没测**：真客户端里按“名字#编号”找人；真窗口里 `ui.open` 打开右侧栏（Playwright 用的是浏览器里的同一个处理函数）。右侧栏里页面的“关闭”和侧栏自己的“关闭”挨在一起、长得一样，以后改。
+
+### 第 3 步：英雄联盟插件的统计、覆盖层，OP.GG 的 issue（2026-11-24）
+
+**玩家能看到的**：
+
+- 英雄联盟插件多了两个数据开关：**用网上的统计**（默认开）和 **用 OP.GG 的数据**（默认关），各带风险提示；OP.GG 的提示里有我们替你提的 issue 链接。截图：`target/plugin-shots/step3/settings-three-sources.png`。
+- 插件页面多了“英雄”和“强度榜”两个标签（现在是 这局 / 战绩 / 英雄 / 强度榜 / 设置）：
+  - 英雄：搜名字、称号或外号（“刀妹”“亚索”）；峡谷看这一路的强度、胜率、选用率、禁用率、难打 / 好打的英雄、出门装、鞋、核心三件、四到六件、符文、加点、召唤师技能；海斗看英雄榜名次、最搭的队友、最好的海克斯（比这个英雄平均胜率高几个百分点）。截图：`champion-rift-page.png`、`champion-mayhem-page.png`。
+  - 强度榜：峡谷五路、海斗英雄榜，点英雄进英雄页。截图：`tier-page.png`。
+  - 每一页都写着数据从哪来：腾讯 101（掌盟）和日期；海斗的海克斯数据写着 **github.com/czgreat/aramhex-data（CC BY-NC 4.0）**，能点开数据仓库。
+- 问她“亚索克制谁”“刀妹出什么”“海斗里这个英雄拿什么海克斯”“现在上单什么强”，她用 `lol.champion` / `lol.tier`，聊天里出现英雄或强度榜的卡片，她只说一两句并带出处（真模型实测：“刀妹（艾瑞莉娅）现在上路 T3，胜率 50.3%（16.23 版本，掌盟数据）”）。
+- **游戏上方的覆盖层**（第一次有）：
+  - 选英雄时，客户端窗口右上角一个小面板：我方 5 个英雄的胜率（海斗是英雄榜名次和胜率，峡谷是那一路的强度和胜率），大乱斗 / 海斗还有备选席。截图：`overlay-champ-select.png`。
+  - 海斗三选一时，每张海克斯卡片上面贴一个分：“+7.9 · 57.8% · 1.1万局”，三张里最好的那张描黄边，样本少的变淡。截图：`overlay-augment-scores.png`。
+- 我们替你在 OP.GG 的仓库提了 issue：https://github.com/opgginc/opgg-mcp/issues/26 （英文，照 Glyph 的 #17：不收费的开源项目、按需请求、缓存 24 小时、`client_app` 写 kotone、显示 OP.GG 的标志和出处；没写你的任何个人信息）。OP.GG 回复同意前“用 OP.GG 的数据”默认关。
+
+**本体变了多少**：这一步主要是插件里的新功能。本体加了覆盖层（`overlay_layer.rs` 247 行，含测试）、插件能用的“截一块识别文字”（`computer_use.rs` 里 40 行）和三项宿主能力；桌面端后端 28,639 → 29,024 行。插件：Rust 4,324 → 7,381 行（统计 `stats/`、工具 `stats_tools.rs`、覆盖层 `overlays.rs`），界面 654 → 1,427 行，文案 118 条。
+
+**定下来的细节**：
+
+- **数据来源**（`plugins/lol/src/stats/`）：
+  - 腾讯 101（`mlol.qt.qq.com`）：解析照 LeagueAkari `dev` 分支（MIT）的 `qq101-protocol.ts` 逐字段移植，读不懂的跳过。实测和 Akari 不一样的两处：分路要写 `MIDDLE` / `BOTTOM`（`MID` / `ADC` 返回空）；海斗海克斯榜在字段 `R15381`。海斗英雄榜按天出，当天的常常是空的，往前找最近有数据的一天。
+  - czgreat/aramhex-data：照它的 AGENTS.md，先读 `latest.json`，文件按 SHA-256 校验后存在插件目录下（按哈希命名，对不上的不用）；打分用 `(wins + 英雄胜率 × 300) / (games + 300)` 平滑，和这个英雄的平均胜率比。
+  - 外号：腾讯 `hero_list.js` 的 `keywords`，补了 4 个它没有的（刀妹、德玛、EZ、VN）。装备、符文、召唤师技能的名字：腾讯 `items.js` / `rune_list.js` / `summonerskill_list.js`（客户端没开时也有名字）。
+  - 缓存：内存 + 插件目录下的磁盘文件；101 存 6 小时，名字表 1 天；网络连不上时用磁盘上旧的，并标出来（`stale`）。
+  - OP.GG 官方 MCP：Streamable HTTP（`initialize` → `notifications/initialized` → `tools/call`），`client_app` 写 `kotone/<版本>`，结果存 24 小时，只在打开英雄页 / 她查一个英雄、而且开关开着时才请求。**这一步没有真的调用 OP.GG**（提 issue 以后就没再请求，单测用的是录好的回复格式）。
+- **覆盖层只有一个，在本体里**（`overlay_layer.rs`）：插件只给条目（`OverlayItem`：覆盖层页面、盖在哪个进程的窗口上、位置（一块区域或贴一个角）、数据）。本体：
+  - 只在目标窗口在前台时显示，切走、最小化就藏起来，每秒跟一次位置；
+  - **窗口只盖住条目的并集**，不盖满游戏：照 aramhex 的显示性能排查，盖在无边框游戏上的透明置顶窗口可能让游戏退出 Independent Flip、帧率被压到刷新率；窗口越小、显示的时间越短越好；
+  - 不进截图（`SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`），截图识别不会把自己画的认进去；
+  - 第一次要显示时才建窗口（没人用覆盖层时不多一个网页进程）；点击穿透、不抢焦点。
+- **截一块识别文字**（`Host::screen_text`）：只截前台是指定进程的窗口（前台是别的程序就不截），只用本地文字识别（在线识别要十几秒、要花钱，就不识别）；识别线程用“低于正常”的优先级（照 aramhex：不用最低，低配机器上会饿死）。
+- **海克斯评分**：海斗对局里每 2 秒截一次画面中间那块，认出两个以上 aramhex 的海克斯名才算三选一（名字整行对上，或一行里包含 3 个字以上的名字，长名字优先）；卡片没了 4 秒收起。
+- **选英雄面板**：数据来自客户端的选英雄接口（我方英雄、备选席）加网上的统计；位置先放在客户端窗口右上角（没在真客户端上看过会不会挡东西）。
+
+**检查**：
+
+- Rust：`kotone-plugin-lol` 51（新加：101 的解析、aramhex 的打分和校验、外号、名字表、OP.GG 的协议、认卡片和打分、覆盖层条目）、`kotone-plugin-api` 7、`kotone-agent` 77、`kotone-tools` 111、桌面端 110（新加：覆盖层窗口只盖并集）；clippy `-D warnings`、fmt 干净。
+- 真接口（`cargo run -p kotone-plugin-lol --example stats_probe`）：腾讯 101、aramhex-data、外号、名字表都解析对了；第一次请求 101 约 0.15 秒、aramhex 三个文件约 3 秒（500 万局），之后从缓存来不到 1 毫秒。
+- 界面：svelte-check 0 / 0；Playwright 156 个全过（插件 11 个，新加 5 个：英雄页峡谷 / 海斗和署名、强度榜点进英雄、数据开关和 OP.GG 默认关、覆盖层按位置画三张卡片的评分和选英雄面板）。
+- 真机（假客户端 + 真 DeepSeek + 真网络，不按键）：`lol_tools_real.py --while-playing` 32/32（新加：她问“刀妹出什么装，克制谁”用 `lol.champion`、结果带英雄页和出处；经工具服务查强度榜、海斗英雄 × 海克斯带 CC BY-NC 署名、OP.GG 默认不请求），`game_events_real.py` 12/12（新加：选英雄阶段插件要了选英雄面板；录到的选英雄接口是 404，测试里用这局的人合成了一份）。
+
+**还没测（要你开局）**：
+
+- 覆盖层真的盖在客户端 / 游戏上：位置、大小、多屏和缩放、切走时藏起来；
+- **掉帧**（照 aramhex 的测法）：用 PresentMon 看 Present Mode 和帧率，分别记“Kotone 没开”“覆盖层显示时”“覆盖层藏起来时”，看会不会从 `Hardware: Independent Flip` 变成 `Composed: Flip`、帧率被压到刷新率；有没有黑闪；
+- 海斗三选一时真画面里认不认得出三张卡片（要装本地文字识别模型），识别的 CPU 占用；
+- 选英雄面板的位置挡不挡东西；峡谷里的分路（`assignedPosition`）。

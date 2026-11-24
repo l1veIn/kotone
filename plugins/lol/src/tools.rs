@@ -13,6 +13,9 @@ pub const TOOL_SCOUT: &str = "lol.scout";
 pub const TOOL_PLAYER: &str = "lol.player";
 /// 只给页面用：一局的详情。
 pub const TOOL_GAME: &str = "lol.game";
+/// 网上的统计（数据开关 `stats`）：一个英雄、强度榜。
+pub const TOOL_CHAMPION: &str = "lol.champion";
+pub const TOOL_TIER: &str = "lol.tier";
 
 pub fn specs() -> Vec<ToolSpec> {
     vec![
@@ -76,9 +79,39 @@ pub fn specs() -> Vec<ToolSpec> {
                 "gameId": {"type": "integer", "minimum": 1}
             }}),
         )
-        .app_only()
+                .app_only()
         .page(PAGE_GAME)
         .needs(&["client"])
+        .untrusted(),
+        ToolSpec::new(
+            TOOL_CHAMPION,
+            "查一个英雄联盟英雄的统计（国服，腾讯 101 / 掌盟，每天更新；海斗还有 aramhex-data 的英雄 × 海克斯胜率）：\
+峡谷是这一路的强度（T0–T5）、胜率、选用率、禁用率，克制关系（难打 / 好打的英雄和胜率），核心出装、鞋、符文、加点、召唤师技能；\
+海斗是英雄榜名次、胜率、最搭的队友、最好的海克斯（比这个英雄平均胜率高几个百分点）。champion 写名字、称号或外号（“刀妹”“亚索”）。\
+mode：rift 峡谷 / mayhem 海斗，不写时这局是海斗就查海斗，否则查峡谷；lane 写分路（上 / 野 / 中 / 下 / 辅），不写用这个英雄最常走的路。\
+“亚索克制谁”“刀妹出什么”“海斗里狗头拿什么海克斯”都用它。聊天里会出现英雄卡片，你只说一两句要紧的，说出处（“掌盟的数据”）。",
+            json!({"type": "object", "additionalProperties": false, "required": ["champion"], "properties": {
+                "champion": {"type": "string", "minLength": 1, "maxLength": 30, "description": "英雄的名字、称号或外号"},
+                "mode": {"enum": ["rift", "mayhem"], "description": "rift 召唤师峡谷 / mayhem 海克斯大乱斗"},
+                "lane": {"type": "string", "maxLength": 10, "description": "分路：上 / 野 / 中 / 下 / 辅（峡谷）"}
+            }}),
+        )
+        .page(crate::stats_tools::PAGE_CHAMPION)
+        .needs(&["stats"])
+        .instant()
+        .untrusted(),
+        ToolSpec::new(
+            TOOL_TIER,
+            "英雄联盟的强度榜（国服，腾讯 101 / 掌盟）：峡谷每一路的 T0–T5、胜率、选用率、禁用率；海斗的英雄榜。\
+“现在上单什么强”“海斗什么英雄强”用它。mode 不写时这局是海斗就看海斗，否则看峡谷；lane 不写时每一路列前几名。",
+            json!({"type": "object", "additionalProperties": false, "properties": {
+                "mode": {"enum": ["rift", "mayhem"]},
+                "lane": {"type": "string", "maxLength": 10, "description": "分路：上 / 野 / 中 / 下 / 辅"}
+            }}),
+        )
+        .page(crate::stats_tools::PAGE_TIER)
+        .needs(&["stats"])
+        .instant()
         .untrusted(),
     ]
 }
@@ -93,13 +126,26 @@ mod tests {
         let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(
             names,
-            [TOOL_MATCH, TOOL_SPELL, TOOL_SCOUT, TOOL_PLAYER, TOOL_GAME]
+            [
+                TOOL_MATCH,
+                TOOL_SPELL,
+                TOOL_SCOUT,
+                TOOL_PLAYER,
+                TOOL_GAME,
+                TOOL_CHAMPION,
+                TOOL_TIER
+            ]
         );
         for s in &specs {
             assert_eq!(s.parameters["type"], "object");
-            assert!(s.untrusted, "{} 里有别人起的名字", s.name);
+            assert!(s.untrusted, "{} 里有别人写的字", s.name);
             assert!(s.for_app());
-            assert_eq!(s.needs, ["client"]);
+            let source = if matches!(s.name.as_str(), TOOL_CHAMPION | TOOL_TIER) {
+                "stats"
+            } else {
+                "client"
+            };
+            assert_eq!(s.needs, [source], "{}", s.name);
         }
         // 给她的都马上返回；单局详情只给页面
         for s in specs.iter().filter(|s| s.name != TOOL_GAME) {

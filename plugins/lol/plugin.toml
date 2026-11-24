@@ -4,7 +4,7 @@
 
 id = "lol"
 name = "英雄联盟"
-description = "这局 10 个人的战绩和突破口、记对面交的召唤师技能；只读本机的客户端和局内接口"
+description = "这局 10 个人的战绩和突破口、任何人的战绩、记对面交的召唤师技能；英雄的强度、克制、出装和海斗海克斯"
 games = ["lol"]
 adapter = "lol"
 enabled_by_default = true
@@ -15,6 +15,20 @@ name = "读客户端数据"
 description = "读英雄联盟客户端和对局里的本地接口（只读，不改任何东西）：查这局玩家的战绩、找对面的突破口、记对面交的召唤师技能；游戏中心靠它知道选英雄、加载、对局中这些阶段和局内的事。"
 enabled_by_default = true
 risk = "国服用这类功能可能违反腾讯的用户协议，LeagueAkari 等工具有封号、禁言的报告；Riot 也限制第三方的技能冷却计时。用不用由你决定。"
+
+[[sources]]
+id = "stats"
+name = "用网上的统计"
+description = "从网上查英雄联盟的统计（国服）：腾讯 101 / 掌盟的峡谷强度榜、克制、出装、符文、加点和海斗英雄榜；czgreat/aramhex-data 的海斗英雄 × 海克斯胜率；腾讯的英雄外号。只按需请求（打开页面、她问的时候），不带你的账号。"
+enabled_by_default = true
+risk = "数据来自腾讯和 aramhex 的非官方接口，没有文档、随时可能变或停；aramhex 的数据是 CC BY-NC 4.0，要署名、不能商用（Kotone 不收费，页面上写了出处）。"
+
+[[sources]]
+id = "opgg"
+name = "用 OP.GG 的数据"
+description = "用 OP.GG 官方 MCP 补充全球数据（英雄的出装、克制分析），只在打开英雄页面、她查一个英雄的时候请求，存 24 小时；页面上写 OP.GG 的出处和链接。"
+enabled_by_default = false
+risk = "已经替你去问 OP.GG 能不能在 Kotone 里用（github.com/opgginc/opgg-mcp/issues/26）；OP.GG 回复同意前默认关。网站协议不许程序自动访问，打开就是你自己决定先用。"
 
 [[pages]]
 uri = "ui://kotone/lol/match"
@@ -32,14 +46,36 @@ title = "单局详情"
 needs = ["client"]
 
 [[pages]]
+uri = "ui://kotone/lol/champion"
+title = "英雄"
+needs = ["stats"]
+
+[[pages]]
+uri = "ui://kotone/lol/tier"
+title = "强度榜"
+needs = ["stats"]
+
+[[pages]]
 uri = "ui://kotone/lol/settings"
 title = "设置"
 
+# 覆盖层（照 aramhex）：选英雄时的胜率、海斗三选一时贴在卡片上的海克斯评分
+[[overlays]]
+uri = "ui://kotone/lol/champ-select"
+title = "选英雄"
+needs = ["client", "stats"]
+
+[[overlays]]
+uri = "ui://kotone/lol/augment-scores"
+title = "海克斯评分"
+needs = ["stats"]
+
 [agent]
-overview = "英雄联盟里查这局玩家的战绩和突破口、查任何人的战绩、记对面交的召唤师技能"
+overview = "英雄联盟里查这局玩家的战绩和突破口、查任何人的战绩、记对面交的召唤师技能，查英雄的强度、克制、出装和海斗海克斯"
 rule = """- 英雄联盟（读本机的客户端和局内接口，马上返回）：这局的样子、“谁没闪”“对面谁没带闪”用 lol.match；\
 玩家说“对面阿狸闪了”就用 lol.spell 记下（不用问），简短应一声几点好；“查战绩”“对面谁是突破口”用 lol.scout，\
 挑一两个最值得说的用信息的口吻说（“对面辅助最近五连败、劫最近没玩过”），不下命令，隐藏战绩的提一句；\
-“我最近怎么样”“查一下对面亚索 / 某某#1234 的战绩”用 lol.player。\
+“我最近怎么样”“查一下对面亚索 / 某某#1234 的战绩”用 lol.player；\
+“亚索克制谁”“刀妹出什么”“海斗里这个英雄拿什么海克斯”用 lol.champion，“现在什么英雄强”用 lol.tier，说的时候带一句出处（“掌盟的数据”）。\
 玩家说了“发出去 / 发聊天框”才用 game_chat.send 发：技能发 lol.spell 返回的 chat 那句，战绩一条一行。
 """

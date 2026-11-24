@@ -16,6 +16,8 @@ G2. loading → the template ran: a system message in the conversation, she call
 G3. the dragon → the speak automation “对面拿了{dragon_name}” ran as “对面拿了火龙” (event data as args);
 G4. game.state lists the recent events (phase changes, lol.dragon_kill);
 G5. EndOfGame → game.match_ended → the recap ran for lol (she was asked something during the match).
+G6. (ADR 038 step 3) champion select → the LoL plugin asked the overlay layer for the champ-select panel (log only:
+    the overlay shows only when the real client window is in front, so nothing is drawn on the player's screen).
 usage: python -X utf8 -I scripts/manual-e2e/game_events_real.py [--probe DIR] [--gamedata DIR]
 """
 import json
@@ -137,6 +139,10 @@ def main():
         settings = bt.call("settings.get", {})
         active = (settings.get("settings") or settings).get("activeProfileId")
         check("G1: D7 switched the current game profile to lol", active == "lol" or "自动切到 lol" in log_text(), str(active))
+
+        panel = bt.wait_until(lambda: "ui://kotone/lol/champ-select" in log_text(), 10, 1)
+        check("G6: champion select → the LoL plugin asked for the champ-select overlay", panel,
+              [l for l in log_text().splitlines() if "覆盖层" in l][-3:])
 
         loading = bt.wait_until(lambda: lol_phase() == "loading", 20, 1)
         check("G2: InProgress without in-game data → loading", loading, str(lol_phase()))

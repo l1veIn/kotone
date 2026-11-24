@@ -5,13 +5,15 @@
   import { viewOf, type PluginBridge } from "$lib/pluginUi";
   import { m } from "$lib/paraglide/messages.js";
 
-  let { uri, params = {}, data = null, compact = false, onOpen }: {
+  let { uri, params = {}, data = null, compact = false, onOpen, onReplace }: {
     uri: string;
     params?: Record<string, unknown>;
     data?: unknown;
     compact?: boolean;
     /** 页面里点进下一页（右侧栏、插件页各自决定放在哪）。 */
     onOpen?: (uri: string, params?: Record<string, unknown>, data?: unknown) => void;
+    /** 页面记下自己现在的样子（返回到它时用）。 */
+    onReplace?: (params: Record<string, unknown>, data: unknown) => void;
   } = $props();
 
   const found = $derived(viewOf(uri));
@@ -23,6 +25,7 @@
       return pluginCall(plugin, tool, args);
     },
     openPage: (next, nextParams, nextData) => onOpen?.(next, nextParams, nextData),
+    replace: (nextParams, nextData) => onReplace?.(nextParams, nextData),
   };
 </script>
 

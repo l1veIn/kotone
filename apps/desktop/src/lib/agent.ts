@@ -6,6 +6,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { isTauri } from "./ipc";
 import { m } from "./paraglide/messages.js";
 import { sampleMatch } from "./ipc/lolMock";
+import { findSampleChampion, sampleChampionRift } from "./ipc/lolStatsMock";
 
 export interface ToolCall { id: string; name: string; arguments: string }
 /** 插件工具结果里给界面的那份（照 MCP Apps：structuredContent + 页面地址）。 */
@@ -129,6 +130,12 @@ const previewConversation: Conversation = {
     { role: "tool", callId: "call-3", name: "lol.scout", content: '{"status":"ok","text":"每人最近 20 局……突破口（对面，按数据）：亚索——6 连败"}', isError: false, untrusted: true, atMs: t0 + 242_000,
       display: { structuredContent: sampleMatch(), ui: { uri: "ui://kotone/lol/match" } } },
     { role: "assistant", text: "对面亚索最近 20 局只赢 6 局，刚 6 连败，可以多找他。", atMs: t0 + 244_000 },
+    // 网上的统计（ADR 038 第 3 步）：英雄卡片
+    { role: "user", text: "亚索克制谁", source: "chat", atMs: t0 + 260_000 },
+    { role: "assistant", text: "", atMs: t0 + 261_000, toolCalls: [{ id: "call-4", name: "lol.champion", arguments: '{"champion":"亚索"}' }] },
+    { role: "tool", callId: "call-4", name: "lol.champion", content: '{"status":"ok","text":"亚索 上路（16.23 版本，国服全段位）：T1……"}', isError: false, untrusted: true, atMs: t0 + 262_000,
+      display: { structuredContent: sampleChampionRift(findSampleChampion("亚索")!), ui: { uri: "ui://kotone/lol/champion" } } },
+    { role: "assistant", text: "掌盟的数据：亚索上路怕贾克斯、雷克顿、孙悟空，对斯莫德、斯维因好打。", atMs: t0 + 264_000 },
   ],
   subagents: [{
     name: "potion", label: "写喝药脚本", conversationId: "c-preview-potion", status: "done",

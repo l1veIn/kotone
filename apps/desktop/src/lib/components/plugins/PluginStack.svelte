@@ -9,10 +9,12 @@
 
   interface StackPage { uri: string; params: Record<string, unknown>; data: unknown; key: number }
 
-  let { pages, onPush, onBack, onClose, testid = "plugin-stack" }: {
+  let { pages, onPush, onBack, onReplace, onClose, testid = "plugin-stack" }: {
     pages: StackPage[];
     onPush: (uri: string, params?: Record<string, unknown>, data?: unknown) => void;
     onBack: () => void;
+    /** 最上面一页记下自己现在的样子（不重新挂载）。 */
+    onReplace?: (params: Record<string, unknown>, data: unknown) => void;
     /** 没有就不显示关掉按钮（左侧栏的插件页）。 */
     onClose?: () => void;
     testid?: string;
@@ -37,7 +39,7 @@
     </div>
     <div class="min-h-0 flex-1 overflow-y-auto px-3 py-3">
       {#key top.key}
-        <PluginView uri={top.uri} params={top.params} data={top.data} onOpen={onPush} />
+        <PluginView uri={top.uri} params={top.params} data={top.data} onOpen={onPush} {onReplace} />
       {/key}
     </div>
   </div>

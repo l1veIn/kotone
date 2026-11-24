@@ -85,6 +85,12 @@ class Recording:
             v = read(path)
             self.players[v["summoner"]["puuid"]] = v
         detail = os.path.join(probe, "lcu-game-detail.json")
+        cs = os.path.join(probe, "lcu_lol-champ-select_v1_session.json")
+        # 选英雄（ADR 038 第 3 步的选英雄覆盖层）：录到的那一份
+        self.champ_select = read(cs) if os.path.exists(cs) else None
+        if not self.champ_select or self.champ_select.get("status") == 404:
+            # 录的时候不在选英雄（录到的是 404）：用这局的人合成一份（我方 5 个人的英雄 + 两个备选席英雄）
+            self.champ_select = self.synth_champ_select()
         # 单局详情（ADR 038 第 2 步的单局页面）：录到的只有一局，任何 gameId 都给这一局
         self.game_detail = read(detail) if os.path.exists(detail) else None
         own = os.path.join(probe, "lcu-match-history-self.json")
@@ -92,6 +98,22 @@ class Recording:
             self.players[self.me["puuid"]] = {"summoner": self.me, "history": read(own)}
         self.recorded_time = self.live["gameData"]["gameTime"]
         self.started = time.time()
+
+    def synth_champ_select(self):
+        gd = self.session["gameData"]
+        me = self.me.get("puuid")
+        mine = "teamOne" if any(m.get("puuid") == me for m in gd["teamOne"]) else "teamTwo"
+        picks = {x.get("puuid"): x.get("championId") for x in gd.get("playerChampionSelections", [])}
+        team = []
+        local = 0
+        for i, m in enumerate(gd[mine]):
+            if m.get("puuid") == me:
+                local = i
+            team.append({"cellId": i, "championId": m.get("championId") or picks.get(m.get("puuid")) or 0,
+                         "championPickIntent": 0, "assignedPosition": "", "puuid": m.get("puuid")})
+        return {"localPlayerCellId": local, "myTeam": team, "theirTeam": [], "actions": [],
+                "benchChampions": [{"championId": 21}, {"championId": 99}],
+                "bans": {"myTeamBans": [], "theirTeamBans": []}}
 
     def queue(self):
         return self.session["gameData"]["queue"]["id"]
@@ -116,6 +138,8 @@ class Recording:
             return self.players[m.group(1)]["summoner"]
         if re.fullmatch(r"/lol-ranked/v1/ranked-stats/[^/]+", path):
             return {"queues": []}  # 录的时候没录段位
+        if path == "/lol-champ-select/v1/session" and self.champ_select is not None:
+            return self.champ_select
         if re.fullmatch(r"/lol-match-history/v1/games/\d+", path):
             return self.game_detail
         if path == "/lol-summoner/v1/alias/lookup":
@@ -366,6 +390,31 @@ def main():
             check("P2: ui.open refuses an unknown page", False, "no error")
         except Exception as e:  # noqa: BLE001
             check("P2: ui.open refuses an unknown page", True, str(e)[:120])
+
+        # T6 英雄的统计（ADR 038 第 3 步：lol.champion，真网络：腾讯 101 / aramhex-data）
+        text = "刀妹出什么装，克制谁"
+        r, msgs = say("T6", text)
+        champ = calls(msgs, "lol.champion")
+        check("T6: she used lol.champion", champ, ",".join(c["name"] for c in calls(msgs)))
+        page = (displays(msgs, "lol.champion") or [{}])[-1]
+        data = page.get("structuredContent") or {}
+        check("T6: the result carries the champion page with a source line",
+              (page.get("ui") or {}).get("uri") == "ui://kotone/lol/champion" and data.get("sources"),
+              json.dumps(page, ensure_ascii=False)[:200])
+        print(f"   T6 args {[c['arguments'] for c in champ]}; she said: {r.get('said', '')[:200]}")
+
+        # P3 经工具服务：峡谷强度榜、海斗的英雄 × 海克斯（署名）
+        tier = bt.call("lol.tier", {"mode": "rift", "lane": "上"})
+        rows = ((tier.get("structuredContent") or {}).get("lanes") or {}).get("TOP") or []
+        check("P3: lol.tier gives the top-lane tier list", len(rows) >= 20, json.dumps(tier, ensure_ascii=False)[:160])
+        mayhem = bt.call("lol.champion", {"champion": "刀妹", "mode": "mayhem"})
+        sc = mayhem.get("structuredContent") or {}
+        check("P3: mayhem champion has augments and the aramhex-data attribution (CC BY-NC)",
+              sc.get("augments") and "aramhex-data" in (sc.get("attribution") or "") and "CC BY-NC" in (sc.get("attribution") or ""),
+              json.dumps(sc, ensure_ascii=False)[:200])
+        opgg = bt.call("lol.champion", {"champion": "亚索", "mode": "rift"})
+        check("P3: OP.GG is off by default (no OP.GG request)",
+              not ((opgg.get("structuredContent") or {}).get("opgg")), json.dumps(opgg.get("structuredContent", {}).get("opgg"), ensure_ascii=False))
     finally:
         real_deepseek.delete_connection(bt.EXE, bt.ENV)
         try:
