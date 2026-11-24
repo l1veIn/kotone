@@ -31,6 +31,18 @@ pub(super) enum SessionOrigin {
     },
 }
 
+/// 录音的旁听者（评测录档、识别记录）：都要 PCM、识别中的字（第一个字的时间）、
+/// VAD 判为语音的段落。pump 在自己的任务里按登记顺序逐个通知，各自在自己的锁里记账；
+/// 旁听者不能拦住或改变喂给识别的音频。
+pub(super) trait CaptureObserver: Send + Sync {
+    /// 一块要喂给识别的 PCM（16kHz mono f32），在喂给 STT session 之前通知
+    fn on_pcm(&self, chunk: &[f32]);
+    /// 识别中的字（每个 partial 一次）
+    fn on_partial(&self, text: &str);
+    /// VAD 判为语音的一帧：采样区间 [start, end)，相对本次收音的第一块 PCM
+    fn on_speech_frame(&self, start: usize, end: usize);
+}
+
 fn kotone_core_assistant_one_shot() -> crate::interaction::InteractionMode {
     crate::assistant::AssistantInteractionMode::OneShot.into()
 }
@@ -235,6 +247,15 @@ impl Orchestrator {
         let continuous_session = policy.continuous && vad.is_some();
         let vad_degrade = Arc::new(VadDegradeSignal::default());
 
+        // 旁听者顺序固定：评测录档在前、识别记录在后。
+        let mut observers: Vec<Arc<dyn CaptureObserver>> = Vec::new();
+        if let Some(recorder) = &recorder {
+            observers.push(Arc::new(recorder.clone()));
+        }
+        if let Some(draft) = &history_draft {
+            observers.push(draft.clone());
+        }
+
         let me = self.me.read().unwrap().clone();
         // begin 持有 op；所有异步结束回调必须携带本次即将发布的会话代际。
         let capture_gen = self.inner.lock().unwrap().gen + 1;
@@ -247,8 +268,7 @@ impl Orchestrator {
             audio_err_rx,
             vad,
             cancelled: cancelled_flag.clone(),
-            recorder: recorder.clone(),
-            history: history_draft.clone(),
+            observers,
             emitter: self.emitter.clone(),
             case_id: process_case_id,
             vad_degrade: vad_degrade.clone(),

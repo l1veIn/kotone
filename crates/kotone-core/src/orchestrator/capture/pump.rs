@@ -29,8 +29,8 @@ pub(super) struct CapturePump {
     pub(super) vad: Option<VadStop>,
     /// 取消标记：收尾时 session.cancel() 还是交还 session
     pub(super) cancelled: Arc<AtomicBool>,
-    pub(super) recorder: Option<crate::eval::SessionRecorder>,
-    pub(super) history: Option<Arc<Mutex<HistoryDraft>>>,
+    /// 录音的旁听者，按登记顺序通知（评测录档在前、识别记录在后）
+    pub(super) observers: Vec<Arc<dyn CaptureObserver>>,
     pub(super) emitter: Arc<dyn Emitter>,
     pub(super) case_id: String,
     pub(super) vad_degrade: Arc<VadDegradeSignal>,
@@ -141,17 +141,10 @@ impl CapturePump {
         Ok(())
     }
 
-    /// 一块 PCM：评测录档、识别记录草稿、STT session，顺序固定。
+    /// 一块 PCM：先给旁听者（评测录档、识别记录草稿），再喂 STT session，顺序固定。
     fn feed_pcm(&mut self, c: &[f32]) -> Result<(), String> {
-        if let Some(rec) = &self.recorder {
-            rec.push_pcm(c);
-        }
-        if let Some(h) = &self.history {
-            let mut h = h.lock().unwrap();
-            h.audio_samples += c.len() as u64;
-            if let Some(pcm) = &mut h.audio_pcm {
-                pcm.extend_from_slice(c);
-            }
+        for observer in &self.observers {
+            observer.on_pcm(c);
         }
         self.session.push_audio(c)
     }
@@ -174,12 +167,10 @@ impl CapturePump {
             match vad.push_frame(&frame) {
                 Ok(speech) => {
                     if speech {
-                        // 语音判定：标记「开过口」（取消判据）
-                        // 并记录语音区间（历史音频裁剪用）
-                        if let Some(h) = &self.history {
-                            let mut g = h.lock().unwrap();
-                            g.vad_speech_seen = true;
-                            g.push_speech_range(
+                        // 语音判定：告诉旁听者这一帧的区间
+                        // （识别记录据此标记「开过口」、裁剪历史音频）
+                        for observer in &self.observers {
+                            observer.on_speech_frame(
                                 self.vad_frame_pos,
                                 self.vad_frame_pos + crate::vad::VAD_FRAME_SAMPLES,
                             );
@@ -252,14 +243,8 @@ impl CapturePump {
     fn on_stt_event(&mut self, ev: Option<SttEvent>) {
         match ev {
             Some(SttEvent::Partial { text }) => {
-                if let Some(rec) = &self.recorder {
-                    rec.push_partial(&text);
-                }
-                if let Some(h) = &self.history {
-                    let mut g = h.lock().unwrap();
-                    if g.first_partial_ms.is_none() {
-                        g.first_partial_ms = Some(g.started.elapsed().as_millis() as u64);
-                    }
+                for observer in &self.observers {
+                    observer.on_partial(&text);
                 }
                 if !self.first_partial_seen {
                     self.first_partial_seen = true;
@@ -307,6 +292,19 @@ impl CapturePump {
         // 取消路径下接收端已 drop，send 失败则 session 随之释放
         let _ = session_tx.send(session);
     }
+}
+
+/// 评测录档：录下全部 PCM 和每个 partial 的时间线；不看 VAD 段落。
+impl CaptureObserver for crate::eval::SessionRecorder {
+    fn on_pcm(&self, chunk: &[f32]) {
+        self.push_pcm(chunk);
+    }
+
+    fn on_partial(&self, text: &str) {
+        self.push_partial(text);
+    }
+
+    fn on_speech_frame(&self, _start: usize, _end: usize) {}
 }
 
 /// 录音错误通道；没有错误通道（mock/测试）时永不完成，不影响 select 的其它分支。

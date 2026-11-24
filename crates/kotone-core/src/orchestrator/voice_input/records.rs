@@ -1,3 +1,4 @@
+use crate::orchestrator::capture::CaptureObserver;
 use crate::orchestrator::*;
 
 /// history 草稿：会话期间累计指标，终态（sent/cancelled/error）时落账一条记录
@@ -71,6 +72,32 @@ impl HistoryDraft {
             vad_speech_seen: false,
             speech_segments: Vec::new(),
         }
+    }
+}
+
+/// 识别记录草稿旁听录音：每次通知锁一次草稿。
+/// PCM 计采样数（includeAudio 开时另存一份）；只记第一个字的时间；
+/// VAD 语音帧标记「开过口」（取消判据）并记录语音区间（历史音频裁剪用）。
+impl CaptureObserver for Mutex<HistoryDraft> {
+    fn on_pcm(&self, chunk: &[f32]) {
+        let mut h = self.lock().unwrap();
+        h.audio_samples += chunk.len() as u64;
+        if let Some(pcm) = &mut h.audio_pcm {
+            pcm.extend_from_slice(chunk);
+        }
+    }
+
+    fn on_partial(&self, _text: &str) {
+        let mut g = self.lock().unwrap();
+        if g.first_partial_ms.is_none() {
+            g.first_partial_ms = Some(g.started.elapsed().as_millis() as u64);
+        }
+    }
+
+    fn on_speech_frame(&self, start: usize, end: usize) {
+        let mut g = self.lock().unwrap();
+        g.vad_speech_seen = true;
+        g.push_speech_range(start, end);
     }
 }
 
