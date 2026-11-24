@@ -71,6 +71,9 @@ struct Running {
     conversation_id: String,
     cancel: CancellationToken,
     inbox: Arc<Inbox>,
+    /// 没有模型在跑：主会话里转到后台的一个工具（[`move_tool`]，ADR 029 §一）。不占后台的名额
+    /// （`MAX_RUNNING` 管的是同时在跑的模型），也插不进话。
+    moved_tool: bool,
 }
 
 /// 交给后台的一件事（子代理，ADR 029 第二期）：它属于哪段主会话、叫什么、费用记到哪一轮。

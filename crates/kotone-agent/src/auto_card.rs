@@ -10,7 +10,12 @@
 //!
 //! 时机（[`Desk`]）：琴音空着（她没在回答、没在说话，玩家没在说话；桌面端照 ADR 029“做完主动说”的空闲判断）
 //! 时两条马上记进对话；不空时先“压着”：卡片照样马上显示在聊天里（界面事件），两条都等这一轮结束再记进对话，
-//! 不插进正在跑的那一轮（不像自动化跑完的消息那样插话），也不叫她开口。去重：同一个插件同一个 `key` 只发一次。
+//! 不插进正在跑的那一轮（不像自动化跑完的消息那样插话），也不叫她开口。压着的存一份在盘上（[`Desk::restore`]），
+//! 这期间 Kotone 退出了，下次启动接着记。记进对话一直失败（读写对话出错）就试 [`MAX_FAILURES`] 次后放弃。
+//!
+//! 去重：同一个插件同一个 `key` 只发一次。贴出去了才算发过（贴不出去 [`Desk::forget`]，之后还能再发）；
+//! 去重表只在内存里，Kotone 重启以后看对话里有没有同插件同键的卡片（[`posted_in`]）。插件的键要带上是哪一局
+//! （英雄联盟：`opening:<对局 id>`），重启后同一局不重发、下一局照发。
 //!
 //! 桌面端（`apps/desktop/src-tauri/src/agent/auto_card.rs`）管存盘、界面事件、消息提示。
 
@@ -19,12 +24,15 @@ use std::collections::VecDeque;
 use kotone_ai::agent::{Attachment, Message};
 use kotone_core::agent::AutoCardsConfig;
 use kotone_plugin_api::AutoCard;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 /// 给模型的那条用户消息的来源（界面不显示它；对话标题也不拿它）。
 pub const SOURCE: &str = "auto-card";
 /// 记住最近多少张卡片的去重键（一局最多两张，够用很久）。
 const REMEMBER: usize = 256;
+/// 压着的一张卡片记进对话连着失败（读写对话出错，不算“她在忙”）几次就放弃。
+pub const MAX_FAILURES: u32 = 5;
 
 /// 截到 `max` 个字，多了在末尾加“…”。
 pub fn clip(text: &str, max: usize) -> String {
@@ -98,6 +106,26 @@ pub fn card_of(message: &Message) -> Option<&Value> {
     }
 }
 
+/// 去重用的标识：插件 + 键（键前后的空白不算）。
+fn dedup_id(plugin: &str, key: &str) -> String {
+    format!("{plugin}:{}", key.trim())
+}
+
+/// 一张卡片消息的去重标识（不是自动卡片时 None）。
+fn card_id(message: &Message) -> Option<String> {
+    let card = card_of(message)?;
+    Some(dedup_id(card["plugin"].as_str()?, card["key"].as_str()?))
+}
+
+/// 这些消息里有没有同一个插件同一个键的卡片（Kotone 重启以后去重：去重表只在内存里）。
+pub fn posted_in(messages: &[Message], plugin: &str, key: &str) -> bool {
+    let id = dedup_id(plugin, key);
+    messages
+        .iter()
+        .rev()
+        .any(|m| card_id(m).is_some_and(|c| c == id))
+}
+
 /// 来一张卡片时怎么办。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
@@ -109,11 +137,15 @@ pub enum Decision {
     Post { popup: bool },
 }
 
-/// 等这一轮结束再记进对话的卡片（一张卡片的两条消息）。
-#[derive(Debug, Clone, PartialEq)]
+/// 等这一轮结束再记进对话的卡片（一张卡片的两条消息）。会存到盘上（桌面端 `agent/auto-cards-held.json`）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Held {
     pub conversation: String,
     pub messages: Vec<Message>,
+    /// 记进对话已经连着失败了几次（[`Desk::failed`]）。
+    #[serde(default)]
+    pub failures: u32,
 }
 
 /// 去重和“压着”的卡片。桌面端全进程一份。
@@ -124,22 +156,47 @@ pub struct Desk {
 }
 
 impl Desk {
-    /// 发不发：开关、去重。决定发时就记下这个键（之后同一个键都是 [`Decision::Duplicate`]）。
+    /// 发不发：开关、去重。决定发时先占下这个键（同时来两张同键的，后一张是 [`Decision::Duplicate`]）；
+    /// 最后没贴出去要 [`forget`](Self::forget)，贴出去了才算发过。
     pub fn decide(&mut self, config: &AutoCardsConfig, plugin: &str, key: &str) -> Decision {
         if !config.enabled {
             return Decision::Off;
         }
-        let id = format!("{plugin}:{}", key.trim());
+        let id = dedup_id(plugin, key);
         if self.seen.contains(&id) {
             return Decision::Duplicate;
+        }
+        self.remember(id);
+        Decision::Post {
+            popup: config.popup,
+        }
+    }
+
+    fn remember(&mut self, id: String) {
+        if self.seen.contains(&id) {
+            return;
         }
         if self.seen.len() >= REMEMBER {
             self.seen.pop_front();
         }
         self.seen.push_back(id);
-        Decision::Post {
-            popup: config.popup,
+    }
+
+    /// 这张没贴出去（读不了对话存储、对话里已经有了以外的失败……）：不算发过，之后同一个键还能再发。
+    pub fn forget(&mut self, plugin: &str, key: &str) {
+        let id = dedup_id(plugin, key);
+        self.seen.retain(|s| *s != id);
+    }
+
+    /// 启动时接上盘上存着的压着的卡片（上次 Kotone 退出时还没记进对话的），它们的键也算发过。
+    pub fn restore(&mut self, held: Vec<Held>) {
+        for h in &held {
+            for id in h.messages.iter().filter_map(card_id) {
+                self.remember(id);
+            }
         }
+        let newer = std::mem::replace(&mut self.held, held);
+        self.held.extend(newer);
     }
 
     /// 琴音不空：先压着，这一轮结束再记进对话。
@@ -147,7 +204,26 @@ impl Desk {
         self.held.push(Held {
             conversation: conversation.to_string(),
             messages,
+            failures: 0,
         });
+    }
+
+    /// 取出来还没记成的放回去，排在取出以后新压进来的前面（保持来的先后）。
+    pub fn put_back(&mut self, held: Vec<Held>) {
+        let newer = std::mem::replace(&mut self.held, held);
+        self.held.extend(newer);
+    }
+
+    /// 记进对话失败了一次（读写对话出错）：没到 [`MAX_FAILURES`] 次就返回它（放回去下次再试），到了就放弃，
+    /// 返回 None（调用方记一次日志）。
+    pub fn failed(mut held: Held) -> Option<Held> {
+        held.failures += 1;
+        (held.failures < MAX_FAILURES).then_some(held)
+    }
+
+    /// 现在压着的（存盘用）。
+    pub fn held(&self) -> &[Held] {
+        &self.held
     }
 
     pub fn has_held(&self) -> bool {
@@ -416,6 +492,96 @@ mod tests {
             desk.decide(&on, "lol", &format!("k{i}"));
         }
         assert_eq!(desk.seen.len(), REMEMBER);
+    }
+
+    /// 贴不出去的不算发过：之后同一个键还能再发；同时来两张同键的，后一张算重复。
+    #[test]
+    fn a_card_that_was_not_posted_can_be_posted_again() {
+        let mut desk = Desk::default();
+        let on = AutoCardsConfig::default();
+        assert!(matches!(
+            desk.decide(&on, "lol", "opening:42"),
+            Decision::Post { .. }
+        ));
+        assert_eq!(desk.decide(&on, "lol", "opening:42"), Decision::Duplicate);
+        // 读不了对话存储，没贴出去
+        desk.forget("lol", " opening:42 ");
+        assert!(matches!(
+            desk.decide(&on, "lol", "opening:42"),
+            Decision::Post { .. }
+        ));
+        desk.forget("lol", "other");
+        assert_eq!(desk.decide(&on, "lol", "opening:42"), Decision::Duplicate);
+    }
+
+    /// Kotone 重启（去重表空了）：对话里已经有这局的卡片就不再发，下一局、别的插件照发。
+    #[test]
+    fn after_a_restart_the_conversation_tells_what_was_posted() {
+        let mut before = Desk::default();
+        let on = AutoCardsConfig::default();
+        let history = post(&mut before, &on, &opening()).unwrap();
+        // 重启：新的 Desk 不记得，看对话
+        let mut after = Desk::default();
+        assert!(matches!(
+            after.decide(&on, "lol", "opening:42"),
+            Decision::Post { .. }
+        ));
+        assert!(posted_in(&history, "lol", "opening:42"));
+        assert!(posted_in(&history, "lol", " opening:42"));
+        assert!(!posted_in(&history, "lol", "opening:43"), "下一局照发");
+        assert!(!posted_in(&history, "other", "opening:42"));
+        assert!(!posted_in(
+            &[Message::user("opening:42")],
+            "lol",
+            "opening:42"
+        ));
+    }
+
+    /// 压着的存盘读回来（下次启动接着记），它们的键算发过；新压进来的排在后面。记进对话连着失败几次就放弃。
+    #[test]
+    fn held_cards_survive_a_restart_and_give_up_after_repeated_failures() {
+        let on = AutoCardsConfig::default();
+        let mut desk = Desk::default();
+        let messages = post(&mut desk, &on, &opening()).unwrap();
+        desk.hold("c-1", messages);
+        let saved = serde_json::to_string(desk.held()).unwrap();
+
+        let mut restarted = Desk::default();
+        let summary = AutoCard {
+            key: "summary:42".into(),
+            ..opening()
+        };
+        let later = post(&mut restarted, &on, &summary).unwrap();
+        restarted.hold("c-1", later);
+        restarted.restore(serde_json::from_str(&saved).unwrap());
+        assert_eq!(
+            restarted.decide(&on, "lol", "opening:42"),
+            Decision::Duplicate
+        );
+        let held = restarted.take();
+        let keys: Vec<&str> = held
+            .iter()
+            .map(|h| card_of(&h.messages[0]).unwrap()["key"].as_str().unwrap())
+            .collect();
+        assert_eq!(keys, ["opening:42", "summary:42"], "按来的先后");
+        // 旧格式（没有 failures）读得进来
+        let old: Vec<Held> =
+            serde_json::from_str(r#"[{"conversation":"c-1","messages":[]}]"#).unwrap();
+        assert_eq!(old[0].failures, 0);
+
+        // 取出来、第一张没记成：放回去，排在取出以后新来的前面
+        let mut desk = Desk::default();
+        desk.put_back(held);
+        desk.hold("c-2", Vec::new());
+        assert_eq!(desk.held().len(), 3);
+        assert_eq!(desk.held()[2].conversation, "c-2");
+        // 连着失败：第 MAX_FAILURES 次放弃
+        let mut one = desk.take().remove(0);
+        for _ in 1..MAX_FAILURES {
+            one = Desk::failed(one).expect("还没到次数");
+        }
+        assert_eq!(one.failures, MAX_FAILURES - 1);
+        assert!(Desk::failed(one).is_none());
     }
 
     #[test]

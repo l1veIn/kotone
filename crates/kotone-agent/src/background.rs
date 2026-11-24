@@ -44,8 +44,9 @@ pub struct Moved {
     pub cancel: CancellationToken,
 }
 
-/// 给模型的那份结果（照 `agent.start` 返回 `running` 的写法）。`background: true` 也让界面把这一行显示成
-/// 后台任务卡片（[`is_moved_result`]）。
+/// 给模型的那份结果（照 `agent.start` 返回 `running` 的写法）。界面、语音收尾认“转到后台了”看的是工具消息上的
+/// 标记 `Message::Tool::background`（计时执行设的 `ToolOutcome::background`），不看这里的内容：第三方工具的结果
+/// 正好长成这样也不算。
 pub fn moved_result(name: &str, tool: &str) -> Value {
     json!({
         "name": name,
@@ -54,14 +55,6 @@ pub fn moved_result(name: &str, tool: &str) -> Value {
         "background": true,
         "note": "这一步超过 3 秒还没做完，转到后台接着做了，做完会把结果交回给你。不要轮询，也不要再调用它；要说话的话只说一句“这个要一会儿，好了告诉你”。",
     })
-}
-
-/// 这条工具结果是不是“转到后台了”（[`moved_result`]）。
-pub fn is_moved_result(content: &str) -> bool {
-    serde_json::from_str::<Value>(content)
-        .ok()
-        .and_then(|v| v.get("background").and_then(Value::as_bool))
-        == Some(true)
 }
 
 /// 这件后台的事在登记里的名字：工具名改成小写字母、数字、连字符（`lol.scout` → `lol-scout`），
@@ -383,12 +376,12 @@ mod tests {
     }
 
     #[test]
-    fn moved_results_are_recognised_and_named_like_tasks() {
+    fn moved_results_are_named_like_tasks() {
         let v = moved_result("lol-scout", "lol.scout");
-        assert!(is_moved_result(&v.to_string()));
-        assert_eq!(v["status"], "running");
-        assert!(!is_moved_result(r#"{"status":"running"}"#));
-        assert!(!is_moved_result("不是 JSON"));
+        assert_eq!(
+            (v["name"].as_str(), v["status"].as_str()),
+            (Some("lol-scout"), Some("running"))
+        );
         assert_eq!(name_for("lol.scout", []), "lol-scout");
         assert_eq!(name_for("game_chat.send", []), "game-chat-send");
         assert_eq!(

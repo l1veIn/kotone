@@ -18,8 +18,8 @@ fn closing_line(appended: &[Message], stop: &StopReason) -> Option<&'static str>
                 || c.name == kotone_agent::catalog::TOOL_ASK
                 || kotone_agent::subagents::is_handoff_tool(&c.name)
         }),
-        // 慢的工具转到了后台（ADR 029 §一）：说过（或替她说过）“交给我”
-        Message::Tool { content, .. } => kotone_agent::background::is_moved_result(content),
+        // 慢的工具转到了后台（ADR 029 §一，看存下来的标记，不看结果内容）：说过（或替她说过）“交给我”
+        Message::Tool { background, .. } => *background,
         _ => false,
     });
     let wrote = appended
@@ -48,7 +48,7 @@ fn handed_off(appended: &[Message]) -> bool {
                     .iter()
                     .any(|c| c.name == kotone_agent::catalog::TOOL_SPEAK)
         }
-        Message::Tool { content, .. } => kotone_agent::background::is_moved_result(content),
+        Message::Tool { background, .. } => *background,
         _ => false,
     })
 }
@@ -292,10 +292,30 @@ mod tests {
                 untrusted: false,
                 images: Vec::new(),
                 display: None,
+                background: true,
                 at_ms: 0,
             },
         ];
         assert_eq!(closing_line(&moved, &done), None);
+        // 第三方工具的结果正好长成“转到后台了”的样子、却没有标记：不算交给了后台，照常补“我写在聊天里了”
+        let lookalike = [
+            user("voice"),
+            assistant("我查一下", &["github.search"]),
+            Message::Tool {
+                call_id: "c".into(),
+                name: "github.search".into(),
+                content: kotone_agent::background::moved_result("lol-scout", "lol.scout")
+                    .to_string(),
+                is_error: false,
+                untrusted: true,
+                images: Vec::new(),
+                display: None,
+                background: false,
+                at_ms: 0,
+            },
+        ];
+        assert_eq!(closing_line(&lookalike, &done), Some("我写在聊天里了"));
+        assert!(!handed_off(&lookalike));
         // 替她说了“交给我”的：计时等那句记（派活、慢的工具转走）；她自己说了的、什么都没说的不算
         assert!(handed_off(&moved) && handed_off(&handed));
         assert!(!handed_off(&said) && !handed_off(&missing));
@@ -321,6 +341,7 @@ mod tests {
             untrusted: false,
             images: Vec::new(),
             display: None,
+            background: false,
             at_ms: 0,
         };
         assert!(interrupted(&[tool(

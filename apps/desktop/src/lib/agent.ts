@@ -21,7 +21,8 @@ export type AgentMessage =
   | { role: "user"; text: string; attachments?: Attachment[]; source?: string; atMs: number; context?: string }
   | { role: "assistant"; text: string; toolCalls?: ToolCall[]; reasoning?: string; usage?: TokenUsage; atMs: number }
   /** `display`：插件工具带页面的结果（ADR 038，照 MCP Apps）——给页面的数据和用哪个页面，只给界面，她看不到。 */
-  | { role: "tool"; callId: string; name: string; content: string; isError: boolean; untrusted: boolean; atMs: number; display?: ToolDisplay }
+  /** `background`：这次调用超过 3 秒转到了后台（ADR 029 §一），Kotone 设的标记；`content` 是“在做”和后台那件事的名字。 */
+  | { role: "tool"; callId: string; name: string; content: string; isError: boolean; untrusted: boolean; atMs: number; display?: ToolDisplay; background?: boolean }
   /** `compaction`：上下文压缩的检查点（摘要）；它之前的消息不再发给模型。 */
   /** `recap`：对局复盘的正文（`text` 是标题），只给玩家看。 */
   /** `card`：自动卡片（ADR 039 D3），插件不叫她、自己发进聊天的卡片；只给界面。 */
@@ -64,11 +65,16 @@ export interface SubagentInfo {
   /** 不是派出去的，而是主会话的一个工具超过 3 秒转到后台接着做的（工具名，ADR 029 §一）：标题照工具卡片的叫法。 */
   tool?: string;
 }
-/** 主会话里这一行工具超过 3 秒转到了后台（ADR 029 §一，结果是 `{"background": true, "name": …}`）：后台那件事的名字。 */
-export function movedTaskName(content: string | null | undefined): string | null {
+/**
+ * 主会话里这一行工具超过 3 秒转到了后台（ADR 029 §一）：后台那件事的名字。只认工具消息上 Kotone 设的标记
+ * `background`，不看结果长什么样——第三方工具正好返回 `{"background": true, "name": …}` 也不算（不然它会画成后台卡片，
+ * 停止按钮会停掉真的后台任务）。名字在 Kotone 写的结果里。
+ */
+export function movedTaskName(tool: { background?: boolean; content: string | null | undefined }): string | null {
+  if (tool.background !== true) return null;
   try {
-    const value = JSON.parse(content ?? "");
-    return value && value.background === true && typeof value.name === "string" ? value.name : null;
+    const value = JSON.parse(tool.content ?? "");
+    return value && typeof value.name === "string" ? value.name : null;
   } catch { return null; }
 }
 /** 卡片上的确认按钮（`agent_subagent_answer`）。 */

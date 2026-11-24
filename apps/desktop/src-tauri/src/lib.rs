@@ -330,6 +330,8 @@ pub fn run() {
             automation::start_schedules(app.handle());
             // 内置琴音 Agent：对话存储与运行状态（ADR 014 / 015）
             app.manage(agent::AgentRuntime::open(companion_enabled));
+            // 上次退出时还压着、没记进对话的自动卡片：空下来接着记（ADR 039 D3）
+            agent::resume_held_cards(app.handle());
             // 插件（ADR 038）：各自开后台循环（英雄联盟：客户端开着时盯对局阶段，进加载界面先查这局的战绩）
             plugins::init(app.handle());
             // 游戏上方的覆盖层（ADR 038）：插件给了条目才建窗口；跟着前台的目标窗口挪、切走就藏

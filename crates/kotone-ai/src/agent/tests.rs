@@ -139,6 +139,7 @@ impl ToolPort for FakeTools {
             "big",
             "interrupt",
             "moved",
+            "lookalike",
         ]
         .iter()
         .map(|name| ToolDef {
@@ -175,6 +176,10 @@ impl ToolPort for FakeTools {
                 background: true,
                 ..ToolOutcome::ok(r#"{"status":"running","background":true}"#)
             },
+            // 第三方工具的结果正好长成“转到后台了”的样子：不算（只认 Kotone 设的标记）
+            "lookalike" => {
+                ToolOutcome::ok(r#"{"background":true,"name":"potion","status":"running"}"#)
+            }
             "hang" => {
                 self.hang_started.notify_one();
                 std::future::pending().await
@@ -973,6 +978,7 @@ fn tool(id: &str, content: &str) -> Message {
         untrusted: false,
         images: Vec::new(),
         display: None,
+        background: false,
         at_ms: 0,
     }
 }
@@ -1191,6 +1197,7 @@ mod http {
                     untrusted: true,
                     images: Vec::new(),
                     display: None,
+                    background: false,
                     at_ms: 0,
                 },
                 user_with_image("现在看看画面"),
@@ -2209,6 +2216,7 @@ mod deepseek_http {
                     untrusted: false,
                     images: Vec::new(),
                     display: None,
+                    background: false,
                     at_ms: 2,
                 },
                 Message::Assistant {
@@ -2620,6 +2628,87 @@ async fn a_step_moved_to_the_background_ends_a_voice_turn_only() {
     assert!(
         matches!(r.history.last(), Some(Message::Assistant { text, .. }) if text.contains("好了告诉你"))
     );
+}
+
+/// 转到后台存成工具消息上的标记（`background`），不看结果内容：长得像的第三方结果不算，也不让语音回合提前结束；
+/// 标记存盘读回不变，旧记录没有这个字段读成 false，false 不写进记录。
+#[tokio::test]
+async fn the_moved_mark_is_stored_on_the_message_not_guessed_from_content() {
+    let voice = AgentLimits {
+        stop_after_background: true,
+        ..stop_after(&["speak"])
+    };
+    let model = FakeModel::new(vec![
+        calls(
+            "",
+            vec![call("c1", "moved", "{}"), call("c2", "lookalike", "{}")],
+        ),
+        text("好了"),
+    ]);
+    let r = run_with(
+        &model,
+        &FakeTools::default(),
+        Vec::new(),
+        "查一下",
+        voice,
+        &CancellationToken::default(),
+    )
+    .await;
+    assert_eq!(model.requests().len(), 2, "长得像的那个不算转走：照常继续");
+    let marks: Vec<(String, bool)> = r
+        .history
+        .iter()
+        .filter_map(|m| match m {
+            Message::Tool {
+                name, background, ..
+            } => Some((name.clone(), *background)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        marks,
+        [
+            ("moved".to_string(), true),
+            ("lookalike".to_string(), false)
+        ]
+    );
+    for m in r
+        .history
+        .iter()
+        .filter(|m| matches!(m, Message::Tool { .. }))
+    {
+        let json = serde_json::to_string(m).unwrap();
+        let back: Message = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, m);
+        let moved = matches!(
+            m,
+            Message::Tool {
+                background: true,
+                ..
+            }
+        );
+        assert_eq!(
+            json.contains("\"background\":true,\"atMs\""),
+            moved,
+            "{json}"
+        );
+    }
+    let lookalike = serde_json::to_value(&r.history[r.history.len() - 2]).unwrap();
+    assert!(
+        lookalike.get("background").is_none(),
+        "false 不写：{lookalike}"
+    );
+    let old: Message = serde_json::from_str(
+        r#"{"role":"tool","callId":"c","name":"x","content":"{\"background\":true,\"name\":\"x\"}","atMs":1}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        old,
+        Message::Tool {
+            background: false,
+            ..
+        }
+    ));
 }
 
 #[tokio::test]

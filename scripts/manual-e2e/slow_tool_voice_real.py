@@ -8,7 +8,8 @@ volume comes from KOTONE_TEST_SPEECH_VOLUME (default 8; 0 = silent). The app run
 KOTONE_TEST_SLOW_TOOL=web.search:5000 (a debug-build test hook): web.search waits 5 s before searching.
 
 S1. call → “帮我搜一下英雄联盟现在是哪个版本”: web.search is still running after 3 s, so it moves to the background — the
-    tool result says `background: true`, the registry has a task for it (tool = web.search), Kotone says the pre-made
+    stored tool message carries the `background: true` mark (Kotone's flag, not the result text), the registry
+    has a task for it (tool = web.search), Kotone says the pre-made
     “交给我，好了告诉你”, the turn ends and she listens on. About 2 s later the search finishes, the result is handed
     back once, and she says it by herself (speak, no click).
 Prints: utterance end → first sound, tool start → moved, moved → handed back, handed back → she speaks.
@@ -71,8 +72,9 @@ def main():
                        and m.get("source") not in ("agent-report", "auto-card")), {})
         turn = bv.after(conv["messages"], player.get("atMs", 0))
         searches = [m for m in turn if m["role"] == "tool" and m.get("name") == "web.search"]
-        moved = [m for m in searches if '"background":true' in (m.get("content") or "").replace(" ", "")]
-        v.check("S1: web.search moved to the background after 3 s (tool result background: true)", moved,
+        # 看存下来的标记（Message::Tool::background），不看结果内容（审查 2026-11-25）
+        moved = [m for m in searches if m.get("background") is True]
+        v.check("S1: web.search moved to the background after 3 s (tool message marked background)", moved,
                 (searches[0].get("content") or "")[:160] if searches else "no web.search in this turn")
         hook = v.line_time(mark, r"test hook: web\.search waits")
         moved_at = v.line_time(mark, r"web\.search took over \d+ s, moved to the background")
@@ -91,7 +93,7 @@ def main():
         before_report = [m for m in msgs[:report_at] if m.get("atMs", 0) >= player.get("atMs", 0)]
         v.check("S1: the turn ended at the move (no further model call)",
                 before_report and before_report[-1]["role"] == "tool"
-                and '"background":true' in (before_report[-1].get("content") or "").replace(" ", ""),
+                and before_report[-1].get("background") is True,
                 before_report[-1]["role"] if before_report else "-")
         handed_at = v.line_time(mark, r"background result\(s\) handed back")
         ended = v.line_time(mark, r"call: ended")

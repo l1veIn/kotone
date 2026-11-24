@@ -166,19 +166,11 @@ pub fn run_prompt(
     });
 }
 
-/// 只把一条消息记进某段对话（不调用模型）。
+/// 只把一条消息记进某段对话（不调用模型）；那段对话恰好在跑就作为插话交给它（和 `send_message` 同一把锁，
+/// 见 [`append_to_conversation`]）。
 fn append_to(app: &AppHandle, id: &str, message: Message) {
-    let Ok(store) = store(app) else { return };
-    match store.load(id) {
-        Ok(Some(mut conversation)) => {
-            conversation.messages.push(message.clone());
-            if let Err(e) = store.save(&mut conversation) {
-                log::log(&format!("agent: save failed: {e}"));
-            }
-            emit(app, id, event_json(&AgentEvent::Appended { message }));
-        }
-        Ok(None) => {}
-        Err(e) => log::log(&format!("agent: load failed: {e}")),
+    if let Err(e) = append_to_conversation(app, id, &[message], IfBusy::Steer) {
+        log::log(&format!("agent: background result not saved: {e}"));
     }
 }
 

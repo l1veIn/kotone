@@ -122,11 +122,14 @@ pub(super) fn is_task(source: &str) -> bool {
     source.starts_with(kotone_agent::subagents::TASK_SOURCE)
 }
 
+/// 后台同时在跑的事有几件（和 `MAX_RUNNING` 比）。主会话里转到后台的工具不算（ADR 029 §一）：它们不叫模型，
+/// 只是一次工具调用在等结果，各自有工具自己的超时；算进去的话，加载时三个慢的英雄联盟 / OP.GG 调用转走以后
+/// `agent.start` 就派不出去了。它们照样在“停下”、`agent.list` 里。
 fn running_count(inner: &Inner) -> usize {
     inner
         .children
         .values()
-        .filter(|c| c.running.is_some())
+        .filter(|c| c.running.as_ref().is_some_and(|r| !r.moved_tool))
         .count()
 }
 
@@ -313,9 +316,11 @@ pub(super) async fn resume(
         let running = inner
             .children
             .get(&child_id)
-            .is_some_and(|c| c.running.is_some());
+            .and_then(|c| c.running.as_ref());
+        let moved_tool = running.is_some_and(|r| r.moved_tool);
+        let running = running.is_some();
         // 主会话的工具转到后台的那件（ADR 029 §一）还在做：没有模型在跑，插不进话；做完以后可以接着做。
-        if running && agent.tool.is_some() {
+        if moved_tool {
             return Err(format!(
                 "{name} 还在做（是 {} 转到后台的），做完会交回给你；等它做完再说",
                 agent.tool.as_deref().unwrap_or_default()
@@ -458,6 +463,7 @@ fn deliver_to_child(
                     conversation_id: id.to_string(),
                     cancel: cancel.clone(),
                     inbox: inbox.clone(),
+                    moved_tool: false,
                 });
                 Some((message, cancel, inbox, child.spec.clone()))
             }
@@ -708,11 +714,12 @@ pub(super) fn move_tool(
                         turn,
                     },
                 },
-                // 没有模型在跑：收件箱不会有人读（resume 不往这里插话）
+                // 没有模型在跑：收件箱不会有人读（resume 不往这里插话），不占后台的名额（running_count）
                 running: Some(Running {
                     conversation_id: child_id.clone(),
                     cancel: moved.cancel.clone(),
                     inbox: Arc::default(),
+                    moved_tool: true,
                 }),
                 waiters: HashMap::new(),
                 ask: None,
@@ -774,6 +781,7 @@ pub(super) fn finish_moved(
                     untrusted: outcome.untrusted,
                     images: outcome.images.clone(),
                     display: outcome.display.clone(),
+                    background: false,
                     at_ms,
                 });
                 if let Err(e) = store.save(&mut conversation) {
@@ -932,5 +940,51 @@ mod tests {
         // 不是听到的话：原样返回
         let (same, none) = merge_heard(Message::user("hi"), &inbox);
         assert!(matches!(same, Message::User { ref text, .. } if text == "hi") && none.is_none());
+    }
+
+    fn child(name: &str, running: Option<bool>) -> Child {
+        Child {
+            spec: ChildSpec {
+                parent: "c-main".into(),
+                name: name.into(),
+                label: name.into(),
+                owner: kotone_core::usage::Owner {
+                    conversation: "c-main".into(),
+                    turn: None,
+                },
+            },
+            running: running.map(|moved_tool| Running {
+                conversation_id: format!("c-{name}"),
+                cancel: CancellationToken::default(),
+                inbox: Arc::default(),
+                moved_tool,
+            }),
+            waiters: HashMap::new(),
+            ask: None,
+        }
+    }
+
+    /// 加载时三个慢的英雄联盟 / OP.GG 调用转到了后台：不占名额，`agent.start` 照样派得出去；
+    /// 派出去的（叫模型的）照旧最多 `MAX_RUNNING` 件。
+    #[test]
+    fn moved_tools_do_not_take_background_slots() {
+        use kotone_agent::subagents::MAX_RUNNING;
+        let mut inner = Inner::default();
+        for name in ["lol-scout", "lol-scout-2", "opgg-champion"] {
+            inner
+                .children
+                .insert(format!("c-{name}"), child(name, Some(true)));
+        }
+        assert_eq!(running_count(&inner), 0);
+        assert!(running_count(&inner) < MAX_RUNNING, "agent.start 不会被拒");
+        // 做完的（running 清掉了）、派出去在做的
+        inner.children.insert("c-done".into(), child("done", None));
+        for i in 0..MAX_RUNNING {
+            let name = format!("task-{i}");
+            inner
+                .children
+                .insert(format!("c-{name}"), child(&name, Some(false)));
+        }
+        assert_eq!(running_count(&inner), MAX_RUNNING, "叫模型的照旧算");
     }
 }

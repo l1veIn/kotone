@@ -98,7 +98,7 @@
           {#if said.written.trim()}
             <div class="py-0.5" data-testid="agent-written"><MessageMarkdown text={said.written} /></div>
           {/if}
-        {:else if block.kind === "tool" && (block.tool.call.name === "agent.start" || block.tool.call.name === "agent.followup" || movedTaskName(block.tool.content))}
+        {:else if block.kind === "tool" && (block.tool.call.name === "agent.start" || block.tool.call.name === "agent.followup" || movedTaskName(block.tool))}
           <!-- 交给后台的事；主会话里超过 3 秒转到后台的工具也显示成同一种卡片（ADR 029 §一） -->
           <BackgroundTaskCard tool={block.tool} runActive={turn.active} />
         {:else if block.kind === "tool"}

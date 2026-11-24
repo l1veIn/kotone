@@ -135,42 +135,191 @@ pub fn send(app: &AppHandle, outgoing: Outgoing) -> Result<Value, String> {
 pub fn send_message(app: &AppHandle, message: Message) -> Result<Value, String> {
     let rt = runtime(app)?;
     let store = store(app)?;
-    {
-        let inner = rt.inner.lock().unwrap();
-        if let Some(running) = &inner.running {
-            running.inbox.steer(message);
-            return Ok(json!({"status": "steered", "conversationId": running.conversation_id}));
-        }
-    }
-    // 子会话的记录只能看：玩家选着它发消息时开一段新对话（子会话由父会话驱动，ADR 022）。
-    let conversation = match store.current() {
-        Some(id) => store
-            .load(&id)?
-            .filter(|c| c.parent.is_none())
-            .unwrap_or_else(|| store.create()),
-        None => store.create(),
+    let Started {
+        conversation,
+        message,
+        cancel,
+        inbox,
+    } = match claim_main(&rt.inner, &store, message)? {
+        Claim::Steered(id) => return Ok(json!({"status": "steered", "conversationId": id})),
+        Claim::Started(started) => *started,
     };
-    let cancel = CancellationToken::default();
-    let inbox = Arc::new(Inbox::default());
-    {
-        let mut inner = rt.inner.lock().unwrap();
-        if let Some(running) = &inner.running {
-            running.inbox.steer(message);
-            return Ok(json!({"status": "steered", "conversationId": running.conversation_id}));
-        }
-        inner.running = Some(Running {
-            conversation_id: conversation.id.clone(),
-            cancel: cancel.clone(),
-            inbox: inbox.clone(),
-        });
+    // 已经认领了：这里出错也要跑这一轮（否则 `running` 一直占着，之后的话全成了没人收的插话）
+    if let Err(e) = store.set_current(Some(&conversation.id)) {
+        log::log(&format!("agent: set current failed: {e}"));
     }
-    store.set_current(Some(&conversation.id))?;
     let id = conversation.id.clone();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         drive(app, conversation, message, cancel, inbox).await;
     });
     Ok(json!({"status": "started", "conversationId": id}))
+}
+
+/// [`claim_main`] 的结果。
+enum Claim {
+    /// 已经有一轮在跑：交给它当插话（那段对话的 id）。
+    Steered(String),
+    /// 认领了主会话（`running`）：拿着这段对话开始一轮。
+    Started(Box<Started>),
+}
+
+struct Started {
+    conversation: Conversation,
+    message: Message,
+    cancel: CancellationToken,
+    inbox: Arc<Inbox>,
+}
+
+/// 认领主会话，**认领之后再读对话**。往对话末尾追加的（自动卡片、复盘提示、自动化的结果、交回的后台结果，
+/// [`append_locked`]）和这里用同一把锁，读、改、存都在锁里，而且那段对话在跑时不写；所以认领之前写进去的，
+/// 认领之后再读一定读得到，这一轮存盘不会把它们盖掉（审查 2026-11-25：先读对话再认领，中间那一下写进去的
+/// 卡片会被这一轮拿着旧对话存盘时盖掉）。
+fn claim_main(
+    inner: &Mutex<Inner>,
+    store: &ConversationStore,
+    message: Message,
+) -> Result<Claim, String> {
+    if let Some(running) = &inner.lock().unwrap().running {
+        running.inbox.steer(message);
+        return Ok(Claim::Steered(running.conversation_id.clone()));
+    }
+    // 先选好是哪段（读盘不占锁）
+    let picked = pick_conversation(store)?;
+    claim_picked(inner, store, picked, message)
+}
+
+/// 这句话进哪段对话：当前对话。子会话的记录只能看：玩家选着它发消息时开一段新对话（子会话由父会话驱动，ADR 022）；
+/// 没有当前对话也开一段新的（第一次存盘时才写盘）。
+fn pick_conversation(store: &ConversationStore) -> Result<Conversation, String> {
+    Ok(match store.current() {
+        Some(id) => store
+            .load(&id)?
+            .filter(|c| c.parent.is_none())
+            .unwrap_or_else(|| store.create()),
+        None => store.create(),
+    })
+}
+
+/// 认领选好的那段（[`claim_main`] 的后一半）：已经有一轮在跑就插话；认领了再读一次对话。
+fn claim_picked(
+    inner: &Mutex<Inner>,
+    store: &ConversationStore,
+    picked: Conversation,
+    message: Message,
+) -> Result<Claim, String> {
+    let cancel = CancellationToken::default();
+    let inbox = Arc::new(Inbox::default());
+    {
+        let mut inner = inner.lock().unwrap();
+        if let Some(running) = &inner.running {
+            running.inbox.steer(message);
+            return Ok(Claim::Steered(running.conversation_id.clone()));
+        }
+        inner.running = Some(Running {
+            conversation_id: picked.id.clone(),
+            cancel: cancel.clone(),
+            inbox: inbox.clone(),
+            moved_tool: false,
+        });
+    }
+    // 认领了：从这里起没人再往这段对话里写（见上），再读一次拿到最新的。新开的还没存过盘（读到 None），
+    // 读不了时用刚才读到的。
+    let conversation = match store.load(&picked.id) {
+        Ok(Some(c)) => c,
+        Ok(None) => picked,
+        Err(e) => {
+            log::log(&format!("agent: reload after claim failed: {e}"));
+            picked
+        }
+    };
+    Ok(Claim::Started(Box::new(Started {
+        conversation,
+        message,
+        cancel,
+        inbox,
+    })))
+}
+
+/// 往对话末尾追加时，那段对话正在跑一轮怎么办。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum IfBusy {
+    /// 不写，返回 [`Appended::Busy`]：调用方自己等（自动卡片、复盘提示：不插进正在跑的那一轮）。
+    Wait,
+    /// 作为插话交给正在跑的那一轮（自动化的结果、交回的后台结果：本来就要她看）。
+    Steer,
+}
+
+/// 往对话末尾追加的结果。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Appended {
+    /// 存进对话了。
+    Saved,
+    /// 那段对话在跑，作为插话交给它了（[`IfBusy::Steer`]）。
+    Steered,
+    /// 那段对话在跑，没写（[`IfBusy::Wait`]）。
+    Busy,
+    /// 那段对话没了（被删了）。
+    Gone,
+}
+
+/// 往对话末尾追加几条，不叫模型。和 [`claim_main`] 认领 `running` 同一把锁，读、改、存都在锁里：正要开始的一轮
+/// 在认领之后才读对话，看得到这里写的；那段对话（主会话，或后台的一件事）正在跑时不写——那一轮存盘时会把这里写的
+/// 盖掉——照 `if_busy` 插话或者交回调用方等。所有往对话里追加的都走这里（原则 15）。
+fn append_locked(
+    inner: &Mutex<Inner>,
+    store: &ConversationStore,
+    id: &str,
+    messages: &[Message],
+    if_busy: IfBusy,
+) -> Result<Appended, String> {
+    let inner = inner.lock().unwrap();
+    let running = inner
+        .running
+        .as_ref()
+        .filter(|r| r.conversation_id == id)
+        .or_else(|| inner.children.get(id).and_then(|c| c.running.as_ref()));
+    if let Some(running) = running {
+        // 转到后台的工具没有模型在读收件箱：插不进话，算在忙
+        return Ok(if if_busy == IfBusy::Steer && !running.moved_tool {
+            for message in messages {
+                running.inbox.steer(message.clone());
+            }
+            Appended::Steered
+        } else {
+            Appended::Busy
+        });
+    }
+    let Some(mut conversation) = store.load(id)? else {
+        return Ok(Appended::Gone);
+    };
+    conversation.messages.extend(messages.iter().cloned());
+    store.save(&mut conversation)?;
+    Ok(Appended::Saved)
+}
+
+/// [`append_locked`]，存进去了再通知界面。
+pub(super) fn append_to_conversation(
+    app: &AppHandle,
+    id: &str,
+    messages: &[Message],
+    if_busy: IfBusy,
+) -> Result<Appended, String> {
+    let rt = runtime(app)?;
+    let store = store(app)?;
+    let appended = append_locked(&rt.inner, &store, id, messages, if_busy)?;
+    if appended == Appended::Saved {
+        for message in messages {
+            emit(
+                app,
+                id,
+                event_json(&AgentEvent::Appended {
+                    message: message.clone(),
+                }),
+            );
+        }
+    }
+    Ok(appended)
 }
 
 /// 一轮接一轮地跑，直到没有待处理的消息。
@@ -819,41 +968,209 @@ pub fn on_run_finished(app: &AppHandle, run: &Run) {
         at_ms: now_ms(),
         context: String::new(),
     };
-    {
-        let inner = rt.inner.lock().unwrap();
-        // 主会话或后台的那件事还在做：作为插话交给它。
-        let running = inner
-            .running
-            .as_ref()
-            .filter(|r| r.conversation_id == conversation_id)
-            .or_else(|| {
-                inner
-                    .children
-                    .get(&conversation_id)
-                    .and_then(|c| c.running.as_ref())
-            });
-        if let Some(running) = running {
-            running.inbox.steer(message);
-            return;
-        }
-    }
-    // 没在跑：只记进对话，不自动调用模型（不花钱）；玩家下次说话时模型能看到。
-    let Ok(store) = store(app) else { return };
-    match store.load(&conversation_id) {
-        Ok(Some(mut conversation)) => {
-            conversation.messages.push(message.clone());
-            if let Err(e) = store.save(&mut conversation) {
-                log::log(&format!("agent: save failed: {e}"));
-            }
-            emit(
-                app,
-                &conversation_id,
-                event_json(&AgentEvent::Appended { message }),
-            );
-        }
-        Ok(None) => {}
-        Err(e) => log::log(&format!("agent: load failed: {e}")),
+    // 主会话或后台的那件事还在做：作为插话交给它。没在跑：只记进对话，不自动调用模型（不花钱）；玩家下次说话时
+    // 模型能看到。
+    match append_to_conversation(app, &conversation_id, &[message], IfBusy::Steer) {
+        Ok(Appended::Busy) => log::log(&format!(
+            "agent: 自动化 {} 的结果没能交回对话 {conversation_id}（那边插不进话）",
+            run.id
+        )),
+        Ok(_) => {}
+        Err(e) => log::log(&format!("agent: run result not saved: {e}")),
     }
 }
 
 // ---------- 内置动作与询问 ----------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::test_util::*;
+
+    fn open_store() -> (tempfile::TempDir, ConversationStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConversationStore::open(dir.path()).unwrap();
+        (dir, store)
+    }
+
+    /// 一段已有一问一答的当前对话。
+    fn current(store: &ConversationStore) -> String {
+        let mut c = store.create();
+        c.messages = vec![user("chat"), assistant("在呢", &[])];
+        store.save(&mut c).unwrap();
+        store.set_current(Some(&c.id)).unwrap();
+        c.id
+    }
+
+    fn card() -> Vec<Message> {
+        vec![
+            Message::Notice {
+                text: "英雄联盟 发来一张卡片：开局战绩".into(),
+                at_ms: 1,
+                compaction: None,
+                usage: None,
+                recap: None,
+                card: Some(json!({"plugin": "lol", "key": "opening:42"})),
+            },
+            Message::User {
+                text: "（系统消息，不是玩家说的话：……）".into(),
+                attachments: Vec::new(),
+                source: kotone_agent::auto_card::SOURCE.into(),
+                at_ms: 1,
+                context: String::new(),
+            },
+        ]
+    }
+
+    fn has_card(messages: &[Message]) -> bool {
+        kotone_agent::auto_card::posted_in(messages, "lol", "opening:42")
+    }
+
+    /// 审查 2026-11-25 的交错：玩家的话进来、主会话选好了对话（读了盘）还没认领，自动卡片正好在这一下记进对话。
+    /// 认领之后再读，这一轮拿到的是带卡片的对话；这一轮存盘（照 `turn` 的 on_event）以后卡片和那句话都还在。
+    #[test]
+    fn a_card_saved_between_picking_and_claiming_survives_the_turn() {
+        let (_dir, store) = open_store();
+        let id = current(&store);
+        let inner = Mutex::new(Inner::default());
+
+        let picked = pick_conversation(&store).unwrap();
+        assert_eq!(picked.id, id);
+        assert!(!has_card(&picked.messages));
+        // 这时候还没人认领：自动卡片记进去了
+        assert_eq!(
+            append_locked(&inner, &store, &id, &card(), IfBusy::Wait).unwrap(),
+            Appended::Saved
+        );
+        let Claim::Started(started) =
+            claim_picked(&inner, &store, picked, Message::user("对面谁最菜")).unwrap()
+        else {
+            panic!("没在跑，应该开始一轮")
+        };
+        let mut conversation = started.conversation;
+        assert!(
+            has_card(&conversation.messages),
+            "认领之后再读，拿到带卡片的"
+        );
+        // 这一轮：玩家的话和回答进对话、存盘
+        conversation.messages.push(Message::user("对面谁最菜"));
+        conversation.messages.push(assistant("寒冰", &[]));
+        store.save(&mut conversation).unwrap();
+        let saved = store.load(&id).unwrap().unwrap();
+        assert!(has_card(&saved.messages), "存盘没盖掉卡片");
+        assert!(saved.messages.iter().any(
+            |m| matches!(m, Message::User { source, .. } if source == kotone_agent::auto_card::SOURCE)
+        ));
+        assert_eq!(saved.messages.len(), 6);
+    }
+
+    /// 认领之后（她在这一轮里）：等的不写（压着，等这一轮结束）、插话的交给这一轮，文件一个字不动；
+    /// 这一轮结束（`running` 清掉）以后再记，接在她的回答后面。另一段对话照常能写，没了的对话报 Gone。
+    #[test]
+    fn while_a_turn_runs_its_conversation_is_not_written() {
+        let (_dir, store) = open_store();
+        let id = current(&store);
+        let inner = Mutex::new(Inner::default());
+        let Claim::Started(started) = claim_main(&inner, &store, Message::user("在吗")).unwrap()
+        else {
+            panic!()
+        };
+        let Started {
+            mut conversation,
+            inbox,
+            ..
+        } = *started;
+        assert_eq!(conversation.id, id);
+        let before = store.load(&id).unwrap().unwrap().messages.len();
+        assert_eq!(
+            append_locked(&inner, &store, &id, &card(), IfBusy::Wait).unwrap(),
+            Appended::Busy
+        );
+        let report = vec![Message::user("<agent-report>")];
+        assert_eq!(
+            append_locked(&inner, &store, &id, &report, IfBusy::Steer).unwrap(),
+            Appended::Steered
+        );
+        assert!(
+            matches!(inbox.next_follow_up(), Some(Message::User { text, .. }) if text == "<agent-report>"),
+            "交回的结果作为插话给这一轮"
+        );
+        assert_eq!(store.load(&id).unwrap().unwrap().messages.len(), before);
+        // 再来一句：插话，不另开一轮
+        assert!(matches!(
+            claim_main(&inner, &store, Message::user("还有")).unwrap(),
+            Claim::Steered(steered) if steered == id
+        ));
+        // 别的对话不受影响
+        let mut other = store.create();
+        store.save(&mut other).unwrap();
+        assert_eq!(
+            append_locked(&inner, &store, &other.id, &card(), IfBusy::Wait).unwrap(),
+            Appended::Saved
+        );
+        assert_eq!(
+            append_locked(&inner, &store, "c-gone", &card(), IfBusy::Wait).unwrap(),
+            Appended::Gone
+        );
+        // 这一轮存盘、结束
+        conversation.messages.push(assistant("在", &[]));
+        store.save(&mut conversation).unwrap();
+        inner.lock().unwrap().running = None;
+        assert_eq!(
+            append_locked(&inner, &store, &id, &card(), IfBusy::Wait).unwrap(),
+            Appended::Saved
+        );
+        let saved = store.load(&id).unwrap().unwrap().messages;
+        assert!(matches!(&saved[saved.len() - 3], Message::Assistant { text, .. } if text == "在"));
+        assert!(has_card(&saved[saved.len() - 2..]));
+    }
+
+    /// 后台的一件事在跑时它那段对话也不写；转到后台的工具没有模型读收件箱，插不进话（算在忙）。
+    #[test]
+    fn running_background_conversations_are_not_written_either() {
+        let (_dir, store) = open_store();
+        let mut child = store.create();
+        child.parent = Some("c-main".into());
+        store.save(&mut child).unwrap();
+        let inner = Mutex::new(Inner::default());
+        let running = |moved_tool| Child {
+            spec: ChildSpec {
+                parent: "c-main".into(),
+                name: "x".into(),
+                label: "x".into(),
+                owner: kotone_core::usage::Owner {
+                    conversation: "c-main".into(),
+                    turn: None,
+                },
+            },
+            running: Some(Running {
+                conversation_id: child.id.clone(),
+                cancel: CancellationToken::default(),
+                inbox: Arc::default(),
+                moved_tool,
+            }),
+            waiters: HashMap::new(),
+            ask: None,
+        };
+        let message = [Message::user("自动化跑完了")];
+        inner
+            .lock()
+            .unwrap()
+            .children
+            .insert(child.id.clone(), running(false));
+        assert_eq!(
+            append_locked(&inner, &store, &child.id, &message, IfBusy::Steer).unwrap(),
+            Appended::Steered
+        );
+        inner
+            .lock()
+            .unwrap()
+            .children
+            .insert(child.id.clone(), running(true));
+        assert_eq!(
+            append_locked(&inner, &store, &child.id, &message, IfBusy::Steer).unwrap(),
+            Appended::Busy
+        );
+        assert!(store.load(&child.id).unwrap().unwrap().messages.is_empty());
+    }
+}

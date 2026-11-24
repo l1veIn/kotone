@@ -123,6 +123,7 @@ mod tests {
                 untrusted: true,
                 images: Vec::new(),
                 display: None,
+                background: false,
                 at_ms: 0,
             },
         ];

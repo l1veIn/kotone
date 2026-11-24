@@ -12,6 +12,8 @@ export interface ToolView {
   untrusted: boolean;
   /** 插件工具的页面（ADR 038）：聊天里显示成卡片。 */
   display?: ToolDisplay;
+  /** 超过 3 秒转到了后台（存盘的工具消息上的标记，ADR 029 §一）：显示成后台任务卡片。 */
+  background?: boolean;
 }
 
 export type Block =
@@ -99,7 +101,7 @@ export function buildTurns(messages: readonly AgentMessage[], live: LiveState | 
         const status: ToolStatus = result ? (result.isError ? "failed" : "completed") : event?.status ?? "pending";
         current.blocks.push({
           kind: "tool", key: `t${call.id}`,
-          tool: { call, status, content: result?.content ?? event?.content ?? null, untrusted: result?.untrusted ?? false, display: result?.display },
+          tool: { call, status, content: result?.content ?? event?.content ?? null, untrusted: result?.untrusted ?? false, display: result?.display, background: result?.background },
         });
       };
       // 她说出口的话（speak，ADR 029 第八节）排在正文前面：先听到结论，细节在下面。

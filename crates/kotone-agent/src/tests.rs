@@ -2057,6 +2057,18 @@ fn last_tool(history: &[kotone_ai::agent::Message]) -> (String, String) {
         .expect("有工具结果")
 }
 
+/// 最后一条工具结果上有没有“转到后台了”的标记（`Message::Tool::background`）。
+fn last_tool_moved(history: &[kotone_ai::agent::Message]) -> bool {
+    history
+        .iter()
+        .rev()
+        .find_map(|m| match m {
+            kotone_ai::agent::Message::Tool { background, .. } => Some(*background),
+            _ => None,
+        })
+        .expect("有工具结果")
+}
+
 /// ADR 029 §一：语音回合里一个睡 5 秒的工具——3 秒时这一轮结束、给模型“转到后台”的结果、Kotone 念了“交给我”；
 /// 5 秒时做完，结果交回（只交回一次，原来的不可信标记还在）。
 #[tokio::test(start_paused = true)]
@@ -2079,7 +2091,7 @@ async fn a_slow_tool_moves_to_the_background_at_three_seconds_and_reports_once()
     assert_eq!(model.requests(), 1, "语音回合这一步之后不再调用模型");
     let (tool, content) = last_tool(&history);
     assert_eq!(tool, "slow.5");
-    assert!(crate::background::is_moved_result(&content), "{content}");
+    assert!(last_tool_moved(&history), "{content}");
     assert!(content.contains("好了告诉你"));
     assert_eq!(*builtin.handoff_said.lock().unwrap(), 1, "念了“交给我”");
     {
@@ -2228,6 +2240,6 @@ async fn tools_that_wait_on_purpose_are_not_timed() {
     .await;
     assert_eq!(stop, kotone_ai::agent::StopReason::Completed);
     assert_eq!(took, std::time::Duration::from_secs(5));
-    assert!(!crate::background::is_moved_result(&last_tool(&history).1));
+    assert!(!last_tool_moved(&history));
     assert!(builtin.moved.lock().unwrap().is_empty());
 }

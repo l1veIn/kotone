@@ -25,7 +25,7 @@
   const args = $derived(parse(tool.call.arguments));
   const result = $derived(parse(tool.content));
   /** 超过 3 秒转到后台的工具：后台那件事的名字在结果里（参数是工具自己的）。 */
-  const moved = $derived(movedTaskName(tool.content));
+  const moved = $derived(movedTaskName(tool));
   const name = $derived(moved ?? (typeof args.name === "string" ? args.name : ""));
   const conversationId = $derived(chat?.conversation?.id ?? "");
   const info = $derived<SubagentInfo | undefined>(name ? chat?.subagent(name) : undefined);

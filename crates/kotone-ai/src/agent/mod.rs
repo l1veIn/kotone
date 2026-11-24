@@ -96,6 +96,12 @@ pub enum Message {
         /// 存进对话记录，聊天卡片用它；**不发给模型**。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         display: Option<Value>,
+        /// 这次调用没等它做完、转到后台接着做了（[`ToolOutcome::background`]，ADR 029 §一）：`content` 只是“在做”。
+        /// 界面把这一行画成后台任务卡片、语音收尾当她说过“交给我”，**都看这个标记，不看 `content` 长什么样**
+        /// （第三方工具的结果正好长成 `{"background": true, "name": …}` 也不算）。旧记录没有这个字段，读成 false；
+        /// 是 false 时不写（原则 19）。
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        background: bool,
         at_ms: u64,
     },
     /// 给用户看的状态说明（已停止、达到步数上限……），不发给模型。
@@ -290,7 +296,8 @@ pub struct ToolOutcome {
     pub display: Option<Value>,
     /// 这次调用没等它做完：转到后台接着做了，`content` 只是“在做”，结果之后另外交回
     /// （ADR 029 §一：主会话里工具超过 3 秒没回来就转到后台）。[`AgentLimits::stop_after_background`]
-    /// 时和 `stop_after` 里的工具一样算。
+    /// 时和 `stop_after` 里的工具一样算；原样记进 [`Message::Tool::background`]。只有 Kotone 自己（计时执行）
+    /// 设它，工具的返回内容设不了。
     pub background: bool,
 }
 
@@ -1130,6 +1137,7 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
                         untrusted: false,
                         images: Vec::new(),
                         display: None,
+                        background: false,
                         at_ms: now_ms(),
                     },
                 );
@@ -1225,6 +1233,7 @@ async fn run_inner<M: ModelClient, T: ToolPort>(
                     untrusted: outcome.untrusted,
                     images: outcome.images,
                     display: outcome.display,
+                    background: outcome.background,
                     at_ms: now_ms(),
                 },
             );
