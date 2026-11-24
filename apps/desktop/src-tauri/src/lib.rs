@@ -85,7 +85,6 @@ use kotone_core::connection::{Connection, ConnectionResolver, SecretStore};
 use kotone_core::inject::{CancelToken, FocusBackend, InjectError, Injector};
 use kotone_core::interaction::effective_hotkey_mode;
 use kotone_core::orchestrator::{Emitter, Orchestrator, OrchestratorState};
-use kotone_plugin_voice_input::VoiceInputExt;
 use kotone_core::profile::{
     self, format_hotwords_export, GameProfile, HotwordMergeReport, ProfileDeleteOutcome,
 };
@@ -100,6 +99,7 @@ use kotone_platform_windows::inject::{WinFocusBackend, WindowsInjector};
 use kotone_platform_windows::{
     audio as platform_audio, autostart, elevation, fullscreen, playback,
 };
+use kotone_plugin_voice_input::VoiceInputExt;
 use kotone_stt::model;
 use runtime::{RuntimeManager, RuntimeStatus};
 

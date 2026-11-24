@@ -29,10 +29,10 @@ use kotone_core::connection::ConnectionResolver;
 #[cfg(windows)]
 use kotone_core::hotkey::HotkeySource;
 use kotone_core::postprocess::ProcessorRegistry;
-use kotone_plugin_voice_input::VoiceInputExt;
 use kotone_core::profile::{self, GameProfile};
 use kotone_core::settings::{self, HotkeyBackend, Settings};
 use kotone_core::stt::EngineRegistry;
+use kotone_plugin_voice_input::VoiceInputExt;
 
 /// wav 直灌会话模式的注入器（ADR-007）：不碰真实窗口——
 /// one-shot（C1 直发）在无人值守测试里也绝不能触发真实注入，
@@ -332,7 +332,12 @@ async fn dispatch(cli: Cli) -> i32 {
             send,
             duration,
             speed,
-        } => cmd_listen(&engine, profile, key, mode, wav, no_hotkey, send, duration, speed).await,
+        } => {
+            cmd_listen(
+                &engine, profile, key, mode, wav, no_hotkey, send, duration, speed,
+            )
+            .await
+        }
         Command::Download { target } => cmd_download(&target).await,
         Command::Config { action } => match action {
             ConfigCommand::Show => cmd_config_show(),
