@@ -1,4 +1,5 @@
 use crate::orchestrator::*;
+use crate::postprocess::{PostProcessingConfig, ProcessingContext};
 
 /// 已完成全部文本生产步骤、可安全进入预览或注入的文本。
 /// `source_text` 保留识别原文，`text` 承载后处理完成的可交付文本。
@@ -36,6 +37,11 @@ pub(crate) enum PendingText {
 }
 
 impl PendingText {
+    /// 出错但保留文字：Error 态可重试发送（不再经过文字处理）。
+    pub(crate) fn retryable(text: String) -> Self {
+        Self::Ready(ReadyText::unchanged(text))
+    }
+
     pub(super) fn ready(&self) -> Option<&ReadyText> {
         match self {
             Self::Recognized(_) | Self::Assistant(_) => None,

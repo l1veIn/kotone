@@ -3,7 +3,7 @@ use super::*;
 impl Orchestrator {
     /// Preview 状态下用户确认发送；Error 状态（payload 带文本）也接受，
     /// 重新进入 Sending 实现重试（docs/development.md §4.1「Error 保留文本可重试」）。
-    /// ADR-006 预览只读化：不再接受编辑文本，一律发送已定的 ReadyText。
+    /// ADR-006 预览只读化：不再接受编辑文本，一律发送已定的可交付文本。
     pub async fn confirm_send(&self) -> Result<(), String> {
         self.confirm_send_inner(None, None).await
     }
@@ -43,37 +43,8 @@ impl Orchestrator {
         if let Some((gen, request)) = assistant_preview {
             return self.run_assistant(gen, request).await;
         }
-        let retry_processing = {
-            let inner = self.inner.lock().unwrap();
-            if inner.gen == confirmation_gen && inner.state == OrchestratorState::Error {
-                inner
-                    .pending_text
-                    .as_ref()
-                    .and_then(PendingText::recognized)
-                    .cloned()
-                    .map(|recognized| (inner.gen, recognized))
-            } else {
-                None
-            }
-        };
-        if let Some((gen, recognized)) = retry_processing {
-            return self
-                .run_postprocessing(gen, recognized, &[OrchestratorState::Error])
-                .await;
-        }
-
-        let claim = self
-            .claim_send(
-                None,
-                Some(confirmation_gen),
-                &[OrchestratorState::Preview, OrchestratorState::Error],
-                false,
-                input_ticket,
-            )
-            .await?
-            .ok_or_else(|| "待发送内容已失效".to_string())?;
-        self.run_send(claim).await;
-        Ok(())
+        // 听写：交给语音输入（预览后发送、出错后重试处理或发送）
+        self.confirm_heard(confirmation_gen, input_ticket).await
     }
 
     /// 录音设备故障等会话中止：与 cancel 相同清理，但以 Error toast 告知原因
@@ -111,9 +82,7 @@ impl Orchestrator {
             gen = inner.gen;
             let mut active = inner.active.take();
             inner.pending_text = None;
-            if let Some(operation) = &inner.send_operation {
-                operation.cancel();
-            }
+            inner.stop_send();
             if let Some(token) = inner.processing_cancel.take() {
                 token.cancel();
             }
@@ -137,7 +106,7 @@ impl Orchestrator {
             "session_aborted",
             json!({ "outcome": "error", "errorCode": error_code }),
         );
-        self.write_history(crate::history::HistoryOutcome::Cancelled, None);
+        self.on_session_ended(crate::history::HistoryOutcome::Cancelled, None);
         self.schedule_idle(gen);
     }
 
@@ -171,9 +140,7 @@ impl Orchestrator {
         inner.gen += 1;
         let mut active = inner.active.take();
         inner.pending_text = None;
-        if let Some(operation) = &inner.send_operation {
-            operation.cancel();
-        }
+        inner.stop_send();
         if let Some(token) = inner.processing_cancel.take() {
             token.cancel();
         }
@@ -193,6 +160,6 @@ impl Orchestrator {
         self.emit_state(OrchestratorState::Idle, None);
         self.emit_process("session_cancelled", json!({ "outcome": "cancelled" }));
         // error 已落账过的草稿跳过（Error 后的 Esc 是清理动作，不双记 cancelled）
-        self.write_history(crate::history::HistoryOutcome::Cancelled, None);
+        self.on_session_ended(crate::history::HistoryOutcome::Cancelled, None);
     }
 }

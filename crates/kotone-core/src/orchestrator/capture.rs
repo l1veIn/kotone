@@ -1,4 +1,4 @@
-use super::voice_input::send::SEND_STILL_RUNNING;
+use super::voice_input::{RecordDraft, SEND_STILL_RUNNING};
 use super::*;
 
 mod pump;
@@ -241,7 +241,7 @@ impl Orchestrator {
         let (session_tx, session_rx) = oneshot::channel::<Box<dyn SttSession>>();
         let cancelled_flag = Arc::new(AtomicBool::new(false));
 
-        let (process_case_id, recorder, history_draft) =
+        let (process_case_id, recorder, record) =
             self.start_capture_records(purpose, &settings, &engine_id);
         let (vad, vad_warning_code) = self.prepare_vad(&settings, policy, no_speech_timeout_ms);
         let continuous_session = policy.continuous && vad.is_some();
@@ -252,8 +252,8 @@ impl Orchestrator {
         if let Some(recorder) = &recorder {
             observers.push(Arc::new(recorder.clone()));
         }
-        if let Some(draft) = &history_draft {
-            observers.push(draft.clone());
+        if let Some(observer) = record.observer() {
+            observers.push(observer);
         }
 
         let me = self.me.read().unwrap().clone();
@@ -298,7 +298,7 @@ impl Orchestrator {
                     level_task,
                     recorder,
                 },
-                history: history_draft,
+                record,
                 continuous_session,
                 vad_degrade,
                 vad_warning_code,
@@ -392,13 +392,7 @@ impl Orchestrator {
         purpose: SessionPurpose,
         settings: &Settings,
         engine_id: &str,
-    ) -> (
-        String,
-        Option<crate::eval::SessionRecorder>,
-        Option<Arc<Mutex<HistoryDraft>>>,
-    ) {
-        let history_on = purpose == SessionPurpose::Dictation
-            && settings.history.mode != crate::history::HistoryMode::Off;
+    ) -> (String, Option<crate::eval::SessionRecorder>, RecordDraft) {
         let process_case_id = self
             .inner
             .lock()
@@ -406,32 +400,14 @@ impl Orchestrator {
             .process_case_id
             .clone()
             .unwrap_or_else(|| format!("session-{}", crate::eval::new_session_id()));
-        let session_id = history_on.then(|| process_case_id.clone());
         let recorder =
             (purpose == SessionPurpose::Dictation && settings.eval_recording).then(|| {
                 let dir = self.eval_dir.clone().unwrap_or_else(crate::eval::eval_dir);
                 crate::eval::SessionRecorder::new_with_id(dir, engine_id, process_case_id.clone())
             });
-        let history_draft = session_id.map(|sid| {
-            Arc::new(Mutex::new(HistoryDraft {
-                session_id: sid,
-                started: std::time::Instant::now(),
-                engine_id: engine_id.to_string(),
-                profile_id: settings.active_profile_id.clone(),
-                audio_samples: 0,
-                audio_pcm: settings.history.include_audio.then(Vec::new),
-                audio_file: None,
-                first_partial_ms: None,
-                final_text: String::new(),
-                source_text: None,
-                process_duration_ms: None,
-                finalize_latency_ms: None,
-                reported: false,
-                vad_speech_seen: false,
-                speech_segments: Vec::new(),
-            }))
-        });
-        (process_case_id, recorder, history_draft)
+        // 识别记录草稿（语音输入；history 关着或不是听写时为空）
+        let record = self.start_record(purpose, settings, engine_id, &process_case_id);
+        (process_case_id, recorder, record)
     }
 
     /// B3（VAD 静音判停，ADR-007）：初始化失败不能让整个输入模式失效。
@@ -487,7 +463,7 @@ impl Orchestrator {
         let PreparedCapture {
             policy,
             active,
-            history,
+            record,
             continuous_session,
             vad_degrade,
             vad_warning_code,
@@ -499,9 +475,11 @@ impl Orchestrator {
         inner.pending_text = None;
         inner.processing_cancel = None;
         // 目标窗口记忆：用户按下热键说话前所在的前台窗口 = 注入目标，
-        // 发送前（do_send）会把焦点还给它，避免 preview 交互抢焦点导致注入打错窗口
-        inner.target_window = self.focus.foreground_window();
-        inner.history = history;
+        // 发送前（do_send）会把焦点还给它，避免 preview 交互抢焦点导致注入打错窗口；
+        // 识别记录草稿一并交给语音输入
+        inner
+            .voice
+            .on_capture_started(self.focus.foreground_window(), record);
         inner.continuous_session =
             continuous_session && vad_degrade.inference_status.load(Ordering::SeqCst) == 0;
         inner.active = Some(active);
@@ -580,7 +558,7 @@ struct SttStart {
 struct PreparedCapture {
     policy: InteractionPolicy,
     active: ActiveSession,
-    history: Option<Arc<Mutex<HistoryDraft>>>,
+    record: RecordDraft,
     continuous_session: bool,
     vad_degrade: Arc<VadDegradeSignal>,
     vad_warning_code: Option<&'static str>,

@@ -24,10 +24,7 @@ use crate::audio::{AudioBackend, AudioHandle};
 use crate::automation::AutomationScheduler;
 use crate::inject::{CancelToken, FocusBackend, InjectError, Injector, TargetWindow};
 use crate::interaction::{EndTrigger, InteractionPolicy, PostFinalize};
-use crate::postprocess::{
-    PostProcessPipeline, PostProcessingConfig, ProcessErrorKind, ProcessingCancelToken,
-    ProcessingContext, ProcessorRegistry,
-};
+use crate::postprocess::ProcessingCancelToken;
 use crate::profile::{self, GameProfile};
 use crate::settings::Settings;
 use crate::stt::{EngineRegistry, SessionConfig, SttEvent, SttSession};
@@ -40,16 +37,12 @@ mod lifecycle;
 mod voice_input;
 
 use self::capture::ActiveSession;
-use self::voice_input::records::HistoryDraft;
-use self::voice_input::send::SendOperation;
-use self::voice_input::text::{PendingText, ReadyText};
+use self::voice_input::PendingText;
 
 #[cfg(test)]
 use self::capture::build_session_config;
 #[cfg(test)]
-use self::voice_input::records::trim_speech_pcm;
-#[cfg(test)]
-use self::voice_input::send::resolve_send_strategy;
+use self::voice_input::testing::*;
 
 /// finalize 超时（docs/development.md §6：finalize 设置 10s 超时）
 const DEFAULT_FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -104,42 +97,22 @@ struct Inner {
     gen: u64,
     active: Option<ActiveSession>,
     pending_text: Option<PendingText>,
-    /// 正在准备或执行的发送。取消/超时后仍保留，直到阻塞调用真正退出。
-    send_operation: Option<SendOperation>,
+    /// 语音输入正在准备或执行的发送（本体只经 `send_is_running` / `stop_send` 问它）。
+    send_operation: voice_input::SendSlot,
     /// Processing 状态的取消令牌；Esc/cancel 可立即打断异步处理器 future。
     processing_cancel: Option<ProcessingCancelToken>,
-    /// begin 时记录的前台窗口 = 注入目标（发送前把焦点还给它）
-    target_window: Option<TargetWindow>,
     /// 本地诊断流程的 case id；无论 history 是否关闭，每次 begin 都生成。
     process_case_id: Option<String>,
     /// 仅面板按钮创建的会话接受带 ID 的面板结束/确认/取消命令。
     assistant_voice_owner: bool,
-    /// history 草稿（history.mode != off 时 begin 创建；不放 ActiveSession——
-    /// end() 会 take 走 active，而 Sending/Error 态的终态落账仍需要草稿）
-    history: Option<Arc<Mutex<HistoryDraft>>>,
-    /// 当前聊天频道（ADR-008）：(profile_id, channel_id)，sticky——
-    /// 切换后保持到下次切换；profile_id 与当前激活 profile 不符时视为默认频道
-    /// （用户切了游戏适配，旧频道选择自动失效）。None = 默认频道。
-    channel: Option<(String, String)>,
+    /// 语音输入（听到以后）的注入目标窗口、识别记录草稿、聊天频道；本体不看里面。
+    voice: voice_input::VoiceInputState,
     /// 松手宽限期的延迟结束任务（见 DEFAULT_RELEASE_GRACE）；
     /// 再次按下 / cancel / 状态变迁时 abort
     release_grace_task: Option<tokio::task::JoinHandle<()>>,
     /// 本轮会话是否按 solo 连续策略运行。VAD 初始化/推理失败时会降级为 false，
     /// 让第二次热键结束并发送当前句，而不是丢弃在途音频或自动续段。
     continuous_session: bool,
-}
-
-impl Inner {
-    fn send_is_running(&mut self) -> bool {
-        if self
-            .send_operation
-            .as_ref()
-            .is_some_and(SendOperation::is_finished)
-        {
-            self.send_operation = None;
-        }
-        self.send_operation.is_some()
-    }
 }
 
 pub struct Orchestrator {
@@ -161,7 +134,8 @@ pub struct Orchestrator {
     /// 桌面停止前同步关闭入口；CLI 默认开放。必须在 op 临界区再次核验。
     runtime_inputs_enabled: AtomicBool,
     engines: Arc<EngineRegistry>,
-    processors: Arc<ProcessorRegistry>,
+    /// 语音输入的部件（文字处理器注册表）
+    voice_input: voice_input::VoiceInput,
     assistant: Option<(Arc<dyn AssistantHandler>, Arc<AutomationScheduler>)>,
     audio: Arc<dyn AudioBackend>,
     before_capture: Option<Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
@@ -215,11 +189,9 @@ impl Orchestrator {
                 pending_text: None,
                 send_operation: None,
                 processing_cancel: None,
-                target_window: None,
                 process_case_id: None,
                 assistant_voice_owner: false,
-                history: None,
-                channel: None,
+                voice: voice_input::VoiceInputState::default(),
                 release_grace_task: None,
                 continuous_session: false,
             })),
@@ -231,7 +203,7 @@ impl Orchestrator {
             runtime_stt_settings: RwLock::new(None),
             runtime_inputs_enabled: AtomicBool::new(true),
             engines,
-            processors: Arc::new(ProcessorRegistry::new()),
+            voice_input: voice_input::VoiceInput::default(),
             assistant: None,
             audio,
             before_capture: None,
@@ -386,10 +358,7 @@ impl Orchestrator {
         if inner.gen != gen {
             return;
         }
-        inner.pending_text = text
-            .clone()
-            .map(ReadyText::unchanged)
-            .map(PendingText::Ready);
+        inner.pending_text = text.clone().map(PendingText::retryable);
         inner.processing_cancel = None;
         inner.state = OrchestratorState::Error;
         drop(inner);
@@ -397,7 +366,7 @@ impl Orchestrator {
             OrchestratorState::Error,
             Some(json!({ "message": message, "text": text })),
         );
-        self.write_history(
+        self.on_session_ended(
             crate::history::HistoryOutcome::Error,
             Some(message.to_string()),
         );

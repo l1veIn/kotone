@@ -84,10 +84,7 @@ impl Orchestrator {
                 // 脱敏指标供诊断。普通模式进入 Error 告知用户；solo 连续模式仍
                 // 直接续录，避免把一句静音打断变成必须手动恢复的错误状态。
                 if t.text.trim().is_empty() {
-                    let audio_ms = self.inner.lock().unwrap().history.as_ref().map(|draft| {
-                        let draft = draft.lock().unwrap();
-                        draft.audio_samples * 1000 / crate::eval::SAMPLE_RATE as u64
-                    });
+                    let audio_ms = self.heard_audio_ms();
                     self.emit_process(
                         "transcript_empty",
                         json!({
@@ -108,7 +105,7 @@ impl Orchestrator {
                         if inner.gen != gen {
                             return Ok(());
                         }
-                        inner.history = None;
+                        inner.voice.discard_record();
                         inner.state = if continuous {
                             OrchestratorState::Idle
                         } else {
@@ -170,13 +167,8 @@ impl Orchestrator {
                         "textChars": t.text.chars().count() as u64
                     }),
                 );
-                // history 草稿补齐 finalize 产物（终态落账时写入记录）
-                if let Some(h) = &self.inner.lock().unwrap().history {
-                    let mut g = h.lock().unwrap();
-                    g.finalize_latency_ms = Some(t.latency_ms as u64);
-                }
-                // 历史音频独立落盘：即使 evalRecording 关闭也能保存与播放。
-                self.persist_history_audio();
+                // 识别记录补齐 finalize 产物、历史音频独立落盘（语音输入）
+                self.on_transcribed(t.latency_ms as u64);
                 // eval 录档落盘（wav + partial 时间线 + 指标）；失败静默记日志不阻断流程
                 if let Some(rec) = active.recorder.take() {
                     match rec.finish(&t.text, t.latency_ms as u64) {
@@ -186,14 +178,8 @@ impl Orchestrator {
                         Err(e) => crate::log::log(&format!("eval 录档失败（忽略）: {e}")),
                     }
                 }
-                // STT 产物与可交付文本从此分离。pipeline 关闭/为空时 runner 走零步骤
-                // 透传，不产生 Processing 状态，保证旧配置行为与事件序列不变。
-                let recognized = self.snapshot_recognized_text(t.text);
-                if let Some(h) = &self.inner.lock().unwrap().history {
-                    h.lock().unwrap().source_text = Some(recognized.source_text.clone());
-                }
-                self.run_postprocessing(gen, recognized, &[OrchestratorState::Transcribing])
-                    .await?;
+                // 听到了一句：交给语音输入（文字处理，然后预览或发送）
+                self.on_heard(gen, t.text).await?;
             }
             Err(e) => {
                 self.emit_process(

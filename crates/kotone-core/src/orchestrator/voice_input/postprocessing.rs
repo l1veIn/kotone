@@ -1,14 +1,17 @@
-use super::text::RecognizedText;
+use super::text::{PendingText, ReadyText, RecognizedText};
 use crate::orchestrator::*;
+use crate::postprocess::{
+    PostProcessPipeline, ProcessErrorKind, ProcessingContext, ProcessorRegistry,
+};
 
 impl Orchestrator {
     /// 注入可发现的后处理器注册表；与 STT 引擎一样由外层实现 crate 负责注册。
     pub fn with_processors(mut self, processors: Arc<ProcessorRegistry>) -> Self {
-        self.processors = processors;
+        self.voice_input.processors = processors;
         self
     }
 
-    pub(crate) fn snapshot_recognized_text(&self, source_text: String) -> RecognizedText {
+    pub(super) fn snapshot_recognized_text(&self, source_text: String) -> RecognizedText {
         let settings = self.settings.read().unwrap().clone();
         let inner = self.inner.lock().unwrap();
         RecognizedText {
@@ -17,20 +20,23 @@ impl Orchestrator {
             context: ProcessingContext {
                 session_id: inner.process_case_id.clone().unwrap_or_default(),
                 profile_id: settings.active_profile_id,
-                channel_id: inner.channel.as_ref().map(|(_, id)| id.clone()),
+                channel_id: inner.voice.channel.as_ref().map(|(_, id)| id.clone()),
             },
         }
     }
 
     /// 编译并运行一份会话级 pipeline 快照。只有非空 pipeline 才进入 Processing；
     /// Required 错误保留 RecognizedText，confirm_send 会重新运行处理而不会绕过。
-    pub(crate) async fn run_postprocessing(
+    pub(super) async fn run_postprocessing(
         &self,
         gen: u64,
         recognized: RecognizedText,
         expected_states: &[OrchestratorState],
     ) -> Result<(), String> {
-        let pipeline = match PostProcessPipeline::compile(&recognized.pipeline, &self.processors) {
+        let pipeline = match PostProcessPipeline::compile(
+            &recognized.pipeline,
+            &self.voice_input.processors,
+        ) {
             Ok(pipeline) => pipeline,
             Err(error) => {
                 self.finish_processing_error(gen, recognized, &error, expected_states)
@@ -108,7 +114,7 @@ impl Orchestrator {
         match result {
             Ok(result) => {
                 let duration_ms = started.elapsed().as_millis() as u64;
-                if let Some(h) = &self.inner.lock().unwrap().history {
+                if let Some(h) = &self.inner.lock().unwrap().voice.history {
                     h.lock().unwrap().process_duration_ms = Some(duration_ms);
                 }
                 self.emit_process(
@@ -190,7 +196,7 @@ impl Orchestrator {
 
         self.emitter
             .emit("kotone://partial", json!({ "text": ready.text }));
-        if let Some(history) = &self.inner.lock().unwrap().history {
+        if let Some(history) = &self.inner.lock().unwrap().voice.history {
             history.lock().unwrap().final_text = ready.text.clone();
         }
 

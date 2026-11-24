@@ -39,6 +39,27 @@ pub(crate) struct HistoryDraft {
 const SPEECH_GAP_SAMPLES: usize = 480 * 10; // 300ms
 
 impl HistoryDraft {
+    /// 开始收音时建（与 eval 录档共用 session id）；只有 history.includeAudio 开着才另存 PCM。
+    pub(super) fn new(session_id: String, engine_id: &str, settings: &Settings) -> Self {
+        HistoryDraft {
+            session_id,
+            started: std::time::Instant::now(),
+            engine_id: engine_id.to_string(),
+            profile_id: settings.active_profile_id.clone(),
+            audio_samples: 0,
+            audio_pcm: settings.history.include_audio.then(Vec::new),
+            audio_file: None,
+            first_partial_ms: None,
+            final_text: String::new(),
+            source_text: None,
+            process_duration_ms: None,
+            finalize_latency_ms: None,
+            reported: false,
+            vad_speech_seen: false,
+            speech_segments: Vec::new(),
+        }
+    }
+
     /// 追加一段语音区间（按 VAD 帧判定逐步喂入）：与上一段间隙小则合并。
     pub(crate) fn push_speech_range(&mut self, start: usize, end: usize) {
         if start >= end {
@@ -109,12 +130,12 @@ impl Orchestrator {
     /// - cancelled：草稿已被 error 落账过则跳过（Error 后的 Esc 是清理动作，不双记）；
     /// - sent / cancelled：落账并终结草稿；
     /// - IO 失败静默记日志，绝不炸主流程。
-    pub(crate) fn write_history(
+    pub(super) fn write_history(
         &self,
         outcome: crate::history::HistoryOutcome,
         error: Option<String>,
     ) {
-        let draft = match self.inner.lock().unwrap().history.clone() {
+        let draft = match self.inner.lock().unwrap().voice.history.clone() {
             Some(d) => d,
             None => return,
         };
@@ -125,11 +146,12 @@ impl Orchestrator {
                 // Error 仍保留草稿，允许同一次听写失败后重试。
                 let mut inner = self.inner.lock().unwrap();
                 if inner
+                    .voice
                     .history
                     .as_ref()
                     .is_some_and(|current| Arc::ptr_eq(current, &draft))
                 {
-                    inner.history = None;
+                    inner.voice.history = None;
                 }
             }
             return;
@@ -155,7 +177,7 @@ impl Orchestrator {
                     // 非流式引擎（FunASR-Nano/SenseVoice 等）不发 partial 且无 VAD，
                     // 取消时无法确认是否开口，同样按无产出处理不落账。
                     drop(g);
-                    self.inner.lock().unwrap().history = None;
+                    self.inner.lock().unwrap().voice.history = None;
                     return;
                 }
             } else {
@@ -192,7 +214,7 @@ impl Orchestrator {
             );
         }
         if outcome != crate::history::HistoryOutcome::Error {
-            self.inner.lock().unwrap().history = None;
+            self.inner.lock().unwrap().voice.history = None;
         }
     }
 
@@ -201,12 +223,12 @@ impl Orchestrator {
     /// VAD 模式（one-shot/solo）下按语音区间裁剪：段首思考静音与段尾判停
     /// 尾音不再进保存的 wav（用户反馈「独奏历史音频很长、含大量沉默」）；
     /// 非 VAD 模式无语音区间标记，原样保存。
-    pub(crate) fn persist_history_audio(&self) {
+    pub(super) fn persist_history_audio(&self) {
         let cfg = self.settings.read().unwrap().history.clone();
         if cfg.mode == crate::history::HistoryMode::Off || !cfg.include_audio {
             return;
         }
-        let draft = match self.inner.lock().unwrap().history.clone() {
+        let draft = match self.inner.lock().unwrap().voice.history.clone() {
             Some(d) => d,
             None => return,
         };

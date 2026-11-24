@@ -1,3 +1,4 @@
+use super::text::{PendingText, ReadyText};
 use crate::orchestrator::*;
 
 /// 已在状态机内原子占用发送权的任务快照。
@@ -117,7 +118,7 @@ impl Orchestrator {
 
     /// 在 `op` 锁内校验来源状态并原子进入 Sending，保证每个状态只能产生一个发送任务。
     /// `ready=None` 用于 Preview/Error 重试：文本也在同一临界区内从 pending_text 取出。
-    pub(crate) async fn claim_send(
+    pub(super) async fn claim_send(
         &self,
         ready: Option<ReadyText>,
         expected_gen: Option<u64>,
@@ -160,7 +161,7 @@ impl Orchestrator {
                     .ok_or_else(|| "无待发送文本".to_string())?,
             };
             if clear_target {
-                inner.target_window = None;
+                inner.voice.target_window = None;
             }
             let (operation, completion) = SendOperation::new();
             inner.state = OrchestratorState::Sending;
@@ -170,8 +171,8 @@ impl Orchestrator {
                 gen: inner.gen,
                 operation,
                 completion,
-                target: inner.target_window,
-                channel: inner.channel.clone(),
+                target: inner.voice.target_window,
+                channel: inner.voice.channel.clone(),
             }
         };
         self.emit_state(
@@ -292,7 +293,7 @@ impl Orchestrator {
 
     /// Sending → Success/Error（§6 发送时序下半段；inject 实现负责按键细节）。
     /// 仅接受 `claim_send` 产生的已占用发送任务，不再改写状态或取消令牌。
-    pub(crate) async fn run_send(&self, claim: SendClaim) {
+    pub(super) async fn run_send(&self, claim: SendClaim) {
         let SendClaim {
             ready,
             gen,
