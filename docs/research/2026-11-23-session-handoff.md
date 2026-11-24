@@ -658,4 +658,4 @@
 
 ### RC
 
-0.2.0-rc.8：安装包路径、SHA-256（主会话填）。
+0.2.0-rc.8：版本号在分支上改成 0.2.0-rc.8（`ebae6b34`，`pnpm release:verify` 过、`release:test` 8/8，CHANGELOG 的 Unreleased 归进“0.2.0-rc.8 — 2026-11-25”）。本机打了 NSIS 安装包 `target/release/bundle/nsis/Kotone_0.2.0-rc.8_x64-setup.exe`（24,106,499 字节，SHA-256 `e594000ce3872580007ed2abf1d2edf47d5cf1c63b5df39b2637cecccf2b30d9`，`pnpm -C apps/desktop tauri build --bundles nsis --config src-tauri/tauri.ci.conf.json`，没有更新签名）。用正式版程序 `target/release/kotone.exe` 跑 `mcp_app_resources_real.py --exe` 22/22：正式版里英雄联盟 App 是真的打包（不是占位页），五页都连着工具。没有打 tag、没有合进 main、没有上传；分支 `claude/plugins` 已推送。
