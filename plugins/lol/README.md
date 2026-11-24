@@ -51,6 +51,54 @@
 
 **不做**：读游戏内存、注入。只用客户端和游戏自己提供的本机接口。
 
+## 在 Claude Desktop、Codex 里用
+
+英雄联盟插件本身就是一个独立的 MCP 服务器 + MCP App（ADR 039 D5）：`kotone.exe mcp` 是标准的 stdio MCP 服务器，Claude Desktop、Codex 这类宿主直接连它就能调英雄联盟的工具；会显示 MCP App 的宿主（Claude、ChatGPT、VS Code、Goose 等）还会把结果画成英雄联盟 App 的页面，和 Kotone 里显示的是同一份。
+
+**前提**：Kotone 在跑，而且开着工具服务（默认关：让外部 Agent 先调 `kotone_launch`，它会打开工具服务、在后台启动 Kotone；或者自己退出 Kotone → `kotone.exe config set toolService.enabled true` → 重新启动，见 [工具服务手册](../../docs/tool-service.md)第二节）。`kotone.exe mcp` 自己不带业务逻辑，每次调用都转给运行中的 Kotone：Kotone 里关掉英雄联盟插件或者某个数据开关，对应的工具和页面也就没了。
+
+Claude Desktop：设置 → 开发者 → 编辑配置，打开 `%APPDATA%\Claude\claude_desktop_config.json`，加上：
+
+```json
+{
+  "mcpServers": {
+    "kotone": {
+      "command": "C:\\Users\\<你的用户名>\\AppData\\Local\\Kotone\\kotone.exe",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Codex：`%USERPROFILE%\.codex\config.toml` 里加上：
+
+```toml
+[mcp_servers.kotone]
+command = 'C:\Users\<你的用户名>\AppData\Local\Kotone\kotone.exe'
+args = ["mcp"]
+```
+
+`command` 写 `kotone.exe` 的完整路径（安装包默认装在 `%LOCALAPPDATA%\Kotone\`；JSON 里的反斜杠要写两个，TOML 用单引号就不用）。改完重启 Claude Desktop / Codex。
+
+**能用的工具**（对外的名字是 Kotone 工具名的点换成下划线、前面加 `kotone_`；只给页面按钮用的标 `visibility: ["app"]`，宿主不交给模型）：
+
+| 工具 | 做什么 | 页面 | 要开的数据开关 |
+| --- | --- | --- | --- |
+| `kotone_lol_scout` | 这局 10 个人的战绩和突破口 | `ui://kotone/lol/match` 这局（选人、加载、对局中、结算） | 读客户端数据 |
+| `kotone_lol_tier` | 强度榜（峡谷按位置、海斗） | `ui://kotone/lol/tier` 强度榜 | 用网上的统计 |
+| `kotone_lol_match` | 这局的样子、谁的召唤师技能没好 | — | 读客户端数据 |
+| `kotone_lol_spell` | 记对面交的召唤师技能 | — | 读客户端数据 |
+| `kotone_lol_player` | 任何人的战绩 | `ui://kotone/lol/player`（还在 Kotone 里，见下） | 读客户端数据 |
+| `kotone_lol_champion` | 英雄的强度、克制、出装、海斗海克斯 | `ui://kotone/lol/champion`（同上） | 用网上的统计 |
+| `kotone_lol_client` | 操作客户端：接受对局、选 / 禁英雄 | — | 操作客户端（**默认关**） |
+| `kotone_lol_game`、`kotone_lol_champions` | 只给页面用：单局详情、英雄列表 | — | 同上 |
+
+页面一页页从 Kotone 里的 Svelte 换成 App，以 `src/app.rs` 的 `APP_PAGES` 为准：是 App 的，工具带 `_meta.ui.resourceUri`、`resources/list` 里有它；还不是的，外部宿主里这个工具只给文字。宿主不支持 MCP Apps 的（例如终端里的 Codex CLI）照样能用，只拿给模型的那几行字。图片在别的宿主里直接从 CommunityDragon 取（域名写在资源的 CSP 声明里），不经 Kotone。
+
+**风险提示**（跟着服务器说明发：`initialize` 的 `instructions` 里有同样的话，宿主会交给模型）：读本机客户端和对局的接口可能违反腾讯（国服）和拳头（Riot）的用户协议，LeagueAkari 等工具有封号、禁言的报告；外服有人用了自动接受、自动选英雄后被永久封号（[LeagueAkari #523](https://github.com/LeagueAkari/LeagueAkari/issues/523)）。用不用由玩家决定，只提示、不拦着。操作客户端默认关，要玩家自己在 Kotone 的英雄联盟插件设置里打开。图片属于拳头，Kotone 没有拳头的许可（见上面“素材”）。
+
+**怎么验的**：`scripts/manual-e2e/mcp_app_external_real.py` 用 MCP Apps 官方的参考宿主（`modelcontextprotocol/ext-apps` 的 `examples/basic-host`）经一个 stdio ↔ Streamable HTTP 的桥连 `kotone.exe mcp`，在里面调 `kotone_lol_tier` 和 `kotone_lol_scout`（假客户端），看 App 在它的沙盒里画出来、图从 CommunityDragon 来。Claude Desktop 里的实际效果还没试。
+
 ## 照着谁做
 
 [LeagueAkari](https://github.com/LeagueAkari/LeagueAkari)（MIT 的 `dev` 分支，不拷 v1.3.x–v1.4.3 的 GPL 版本）：读命令行、接口路径、模式急速、开黑分组、腾讯 101 的解析。突破口的算法是自己写的。[aramhex](https://github.com/czgreat/aramhex)（代码 MIT）：覆盖层怎么显示、显示性能怎么排查（只在需要时显示、窗口小、识别线程低优先级、截图时不认自己画的）。
