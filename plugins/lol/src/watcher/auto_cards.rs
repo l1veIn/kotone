@@ -268,7 +268,7 @@ impl LolPlugin {
             ));
             return;
         }
-        let page = pages::match_page(
+        let page = pages::match_page_in(
             &view.players,
             &view.puuids,
             view.game_id,
@@ -276,6 +276,7 @@ impl LolPlugin {
             &view.mode,
             view.random,
             data.as_deref(),
+            &view.stage,
         );
         let result = host.auto_card(AutoCard {
             key: format!("opening:{game_id}"),
@@ -317,6 +318,7 @@ impl LolPlugin {
         };
         let data = self.loaded_data();
         let task_host = host.clone();
+        let state = self.state.clone();
         host.spawn(Box::pin(async move {
             let deadline = Instant::now() + SUMMARY_WAIT;
             let detail = loop {
@@ -336,9 +338,29 @@ impl LolPlugin {
                 log::log(&format!("lol: 这局（{game_id}）是重开局，不发这局总结"));
                 return;
             }
-            let Some(mut page) = pages::game_page(&detail, data.as_deref()) else {
+            let Some(mut page) = pages::game_page_for(&detail, data.as_deref(), Some(&me)) else {
                 return;
             };
+            // “这局”页面结算时的“刚结束”（调研 G29）：我那一队赢没赢、时长
+            if let Some(mine) = page["teams"]
+                .as_array()
+                .and_then(|t| t.iter().find(|t| t["ally"] == json!(true)))
+            {
+                let result = pages::MatchResult {
+                    win: mine["win"].as_bool().unwrap_or(false),
+                    duration_s: page["durationS"].as_i64().unwrap_or(0),
+                    game_id,
+                };
+                if let Some(m) = state
+                    .lock()
+                    .unwrap()
+                    .current
+                    .as_mut()
+                    .filter(|m| m.game_id == game_id)
+                {
+                    m.result = Some(result);
+                }
+            }
             // 单局详情带“刚结束”的头部（设计文档第三节 3）
             page["justEnded"] = json!(true);
             let note = summary_note(&page, &me);
@@ -411,6 +433,7 @@ mod tests {
             queue_id: 2400,
             mode: "海克斯大乱斗".into(),
             random: true,
+            stage: pages::MatchStage::default(),
         }
     }
 

@@ -753,6 +753,54 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 
 **没验的（要玩家开客户端时看）**：国服客户端的图片接口本身（`/lol-game-data/assets/…png`、`/fe/lol-static-assets/images/ranked-mini-crests/*.svg`）能不能取到；取不到时会自动走 CommunityDragon。
 
+### 英雄联盟 App 的页面（2026-11-25）
+
+照 [设计文档](design/lol-app.md)（风格“记分纸”）、[对标调研](research/2026-11-25-lol-app-parity.md)“今晚做”第 3–8 条、[ADR 039](adr/039-desktop-companion-and-game-apps.md) D5、D6。玩家原话：“需要把这个插件当作一个独立的 MCP apps 来做……这些项目里怎么展示英雄头像、玩家头像，怎么展示海克斯 logo 都需要复刻。”“风格不需要我来拍板，你替我决定就好。”两个提交：第一段（`7dae6aa4`，骨架、“这局”、强度榜），第二段（本节其余）。
+
+**玩家看到的**：
+
+- 左侧栏「插件 → 英雄联盟」整页就是 App（fullscreen），导航在 App 里：**这局 · 战绩 · 英雄 · 强度榜**；宿主只留顶上一条“← 插件 / 英雄联盟”，右边一个“设置”按钮（数据开关、风险提示、操作客户端的偏好，还是宿主的 Svelte 页面）。插件关着、两个数据开关都关着时整页就是设置。
+- 这局：选人 / 加载 / 对局中 / 结算四种状态（结算顶上“刚结束 · 胜利 / 失败”，点“看这局详情”进单局详情、带“刚结束”小牌）；每人一块：英雄头像压召唤师等级、两个召唤师技能、段位徽章、近 20 局胜负和胜率着色、KDA、最近 10 局小头像（赢亮输淡）、标签、开黑字母、突破口墨线圈出来；全屏时每 5 秒（不在对局里 10 秒）自己更新。
+- 战绩：搜人；召唤师头像 + 等级、单双排 / 灵活的段位、近 20 局、常玩英雄；每局一行（结果格、英雄和等级、技能、符文、KDA、伤害、6 + 1 格装备、带稀有度边框的海克斯）；点一局看单局详情，“←”回来。
+- 单局详情：两队（知道我是谁时是“我方 / 对面”，我那一行高亮；不知道时是“胜方 / 负方”）、伤害条、承伤、经济、补刀、装备、海克斯；点名字看那个人的战绩。
+- 英雄：峡谷（分路、强度、难打 / 好打点进去、出装、符文、加点、召唤师技能、OP.GG 折叠）和海斗（名次、搭档、最好的海克斯）；强度榜点一行进英雄页（同一种模式、同一路）。
+- 聊天里这几个工具的卡片都是同一个 App 的 inline：开局战绩、战绩、这局总结、英雄、强度榜；右侧栏打开是 fullscreen。
+- 每页页脚：数据出处、图片出处（客户端 / CommunityDragon）、拳头 “Legal Jibber Jabber” 的声明、可以展开的“风险”（就是 `plugin.toml` 里 client / control 两个数据开关的风险原文和 LeagueAkari #523 的链接；在 Claude 这类宿主里也看得到；只提示，不拦着）。
+- 没数据时的话按工具结果的 `status`（和以后的 `reason`）选翻译好的文案（“英雄联盟客户端没开……”“现在不在对局里……”“要先在设置里打开……”给“去设置”），不再直接显示给琴音的原话（原话放在 title 里方便排查）。
+
+**结构**（`plugins/lol/app/`，Vite + Svelte，单文件打包编进插件）：
+
+- `tokens.css`（设计文档原样）、`src/app.css`（共用组件样式）、`src/components/`（图：`Pic`、`ChampIcon`、`Augment`、`Items`、`Spells`、`Perks`、`Recent`；`RankBadge`、`Tags`、`LaneIcon`、`TopBar`、`Footer`、`StateBlock`）、`src/pages/`（`Match` + `match/`、`Player`、`Game`、`Champion`、`Tier`）、`src/status.ts`（状态码 → 文案）、`src/host.ts`（ext-apps 的 `App`：主题、宿主的颜色变量和字体、语言、显示方式写到 `<html>`）。
+- 文案在 `plugins/lol/messages/`，写法和宿主一样是 `m.<键>()`（`i18n.svelte.ts` 的 Proxy）；`apps/desktop/e2e/terminology.spec.ts` 也扫 `plugins/<id>/app/src/`。
+- 图：页面数据只给客户端路径，`assets.ts` 决定从哪取（Kotone 里先走回环代理的素材层，再退到 CommunityDragon；别的宿主直接 CommunityDragon）。英雄页的出装、符文、召唤师技能、海斗海克斯的图标（`stats_tools.rs`）用读过的客户端资料（`loaded_data`），没读过是空字符串（页面显示名字的第一个字）。
+- 宿主：`PluginUi.settings`（通用：登记了，插件页顶栏就有“设置”按钮；App 里的“去设置”是 `ui://kotone/<插件>/settings` 链接，宿主在插件页打开它）；`McpAppFrame` 带参数、没带数据打开时（她 `ui.open`、别处跳过来）宿主先替 App 调这一页的工具再推结果；英雄联盟的五个页面在 `ui/index.ts` 都标成 App；`LolPage` 只是 App 的容器（“读客户端数据”开着从“这局”开始，只开了统计从“强度榜”开始）。旧的 Svelte 页面删了（这局、战绩、单局详情、英雄和它们的卡片、`stats.ts`），覆盖层、设置、游戏配置页的小节留着。
+- 页面数据（`pages.rs`）：`match_page_in` + `MatchStage`（`phase`、`phaseSince`、`namesHidden`、`bench`、`result`、`resultPending`、每人的 `pick`）；标签带种类 `{kind, text}`（`scout::tagged`，字和给琴音的同一份）；`game_page_for(…, me)` 给我那一行 `me`、我那一队 `ally`。原来的 `match_page`、`game_page` 签名不变（自动卡片在用）。
+
+**定了什么**：
+
+- App 自己带导航，在 Claude 这类宿主里也能用；Kotone 插件页不再有宿主那一排分页（主会话定的）。App 里没有“设置”分页。
+- 我自己的标记用“我”（新键 `plugin_lol_me_tag`）；选英雄覆盖层还是“你”（`plugin_lol_me`，它在跟玩家说话）。
+- 卡片上的标签用短说法（“3 连胜”“第一次玩”“常玩 8 局”），完整的话在 title。
+- 开黑按“哪一队 + teamParticipantId”分组（这个编号只在一队里有意义），整局按出现顺序给 A、B、C、D。
+- 页面不设 `min-height: 100vh`：宿主按 App 报的高度定 iframe 的高，100vh 会让页面只长不缩。
+- 截图脚本 `plugins/lol/app/shots.mjs`：打好的 App + 最小的假宿主（postMessage JSON-RPC），用 `target/plugin-shots/round7/*-sample.json` 改出各种状态，截到 `target/plugin-shots/round7/lol-app-*.png`。
+
+**后台接线**（`watcher.rs`、`watcher/champ_select.rs`，自动卡片提交以后改的）：
+
+1. 原因码：`not_in_game` 的结果多一个 `reason`：客户端没开 `client_closed`、选人 `champ_select`、加载 `loading`、别的 `not_in_game`；“这局刚结束”是 `ended`。给琴音的话一个字没变。
+2. 阶段：每一轮按客户端阶段、局内接口有没有游戏时间、这局进没进过加载算出页面的阶段（`stage_of`：ChampSelect → 选人，GameStart / InProgress / Reconnect 没有游戏时间 → 加载、有 → 对局中，WaitingForStats / PreEndOfGame / EndOfGame 和打完回到大厅 → 结算；选人被秒退的不算这局），变了就记时间。`lol.scout` 和“开局战绩”自动卡片都改调 `match_page_in`。
+3. 选人（G1）：ChampSelect 时读 `/lol-champ-select/v1/session`：双方的英雄（锁了 / 预选 / 还没选）、我方的分路和召唤师技能、备选席、名字是否被隐藏；我方看得到名字的人马上查战绩（同一个对局 id，进了加载接着用，不重查）；对面和看不到名字的队友没有 `puuid`，不查，也不算“还在查”。`lol.scout` 在选人时也答，只说我方。
+4. 结算（G29）：“这局总结”自动卡片读到这局的详情时，顺手把“我那一队赢没赢、时长”写进这局（`MatchStage.result`）；结算后 60 秒内没拿到是 `resultPending`，过了页面说“这局的结果没拿到，去战绩里看”。
+5. `lol.game` 和“这局总结”卡片都改调 `game_page_for(…, 我的 puuid)`：我那一行、我方 / 对面。
+
+**检查**：
+
+- svelte-check：桌面端 0 / 0，App 0 / 0；`pnpm -C apps/desktop build:apps` 过。
+- `cargo test -p kotone-plugin-lol` 88 个过 + 1 个手动跑的（这件事新加：标签带种类、阶段字段、`game_page_for`、没有 puuid 的人不算“还在查”、选人 session 的两种（排位隐藏名字、海斗备选席）、页面阶段跟着客户端阶段；“给琴音的文字不变”照过）；`cargo clippy -p kotone-plugin-lol --no-deps --all-targets -- -D warnings` 干净（不加 `--no-deps` 会撞上别人正在改的 `kotone-core`）。
+- Playwright：`plugins/lol/e2e/` 19 个全过（插件页整页是 App、四个分页、这局加载 / 结算 / 不在对局里、战绩搜人、单局详情和返回、英雄峡谷 / 海斗、强度榜点一行进英雄页、设置按钮、App 里的“去设置”、聊天卡片和右侧栏、`ui.open` 带参数）；全量 181 过、1 个没过（`terminology` 说 `plugin_lol_event_*` 十个键没用到：别的子代理正在加的游戏事件文案，不是这件事的）。
+- 截图（自己看过，和样张对过）：`target/plugin-shots/round7/lol-app-*.png`（App 单独打开：这局四种状态、亮暗、窄屏、英文、卡片 420 / 360、战绩、单局详情、这局总结卡片、英雄峡谷 / 海斗、强度榜）和 `kotone-*.png`（Kotone 里：插件页、设置、聊天卡片、右侧栏；预览里的图是假代理给的色块）。
+- 没跑：真机 `lol_tools_real.py`、`game_events_real.py`（要重编整个桌面端，`real.lock` 一直有人在用）。要主会话提交以后跑一遍：给琴音的字有单元测试管着，选人阶段的“这局”只能在真客户端里看。
+
 ### 设置重排（2026-11-25）
 
 交接第十一节第 8 条。玩家原话：“陪玩相关的设置项我觉得都应该在游戏陪玩-角色页面配置吧，现在这个页面有角色、记忆、技能，再加上唤醒、交互、权限、用量我觉得很合理啊。然后模型选择这块，我觉得还是放在 chat 聊天吧。”

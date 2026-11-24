@@ -1,7 +1,7 @@
 <script lang="ts" module>
-  /** App 里的分页（全屏时顶栏上的字）。英雄、设置还是宿主里的页面（交接第十一节第 12 条第二段再换）。 */
-  export type PageId = "match" | "player" | "game" | "tier";
-  export const TABS: PageId[] = ["match", "player", "tier"];
+  /** App 里的页面；顶栏上的分页是这局、战绩、英雄、强度榜（单局详情从战绩、这局点进去）。插件的设置是宿主的页面（插件页顶栏的“设置”）。 */
+  export type PageId = "match" | "player" | "game" | "champion" | "tier";
+  export const TABS: PageId[] = ["match", "player", "champion", "tier"];
 </script>
 
 <script lang="ts">
@@ -27,7 +27,13 @@
   } = $props();
 
   const label = (page: PageId) =>
-    page === "match" ? m.plugin_lol_page_match() : page === "player" ? m.plugin_lol_page_player() : m.plugin_lol_page_tier();
+    page === "match"
+      ? m.plugin_lol_page_match()
+      : page === "player"
+        ? m.plugin_lol_page_player()
+        : page === "champion"
+          ? m.plugin_lol_page_champion()
+          : m.plugin_lol_page_tier();
 </script>
 
 <header class="top">

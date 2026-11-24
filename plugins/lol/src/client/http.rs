@@ -197,6 +197,8 @@ impl Live {
 pub mod paths {
     pub const PHASE: &str = "/lol-gameflow/v1/gameflow-phase";
     pub const SESSION: &str = "/lol-gameflow/v1/session";
+    /// 选人阶段（双方英雄、我方分路和召唤师技能、备选席）。
+    pub const CHAMP_SELECT: &str = "/lol-champ-select/v1/session";
     pub const ME: &str = "/lol-summoner/v1/current-summoner";
     pub const CHAMPIONS: &str = "/lol-game-data/assets/v1/champion-summary.json";
     pub const SPELLS: &str = "/lol-game-data/assets/v1/summoner-spells.json";

@@ -329,7 +329,8 @@ pub fn match_page_in(
             "me": p.me,
             "ally": p.ally,
             "party": p.party,
-            "pending": h.is_none(),
+            // 没有 puuid 的（选人时的对面、排位里看不到名字的队友）不查，也不算“还在查”
+            "pending": h.is_none() && puuids.get(i).is_some_and(|p| !p.is_empty()),
             "hidden": h.is_some_and(PlayerHistory::hidden),
             "rank": h.and_then(|h| h.rank.clone()),
             "error": h.and_then(|h| h.error.clone()),
@@ -361,7 +362,11 @@ pub fn match_page_in(
         "random": random_pick,
         "allies": team(true),
         "enemies": team(false),
-        "waiting": players.iter().filter(|p| p.history.is_none()).count(),
+        "waiting": players
+            .iter()
+            .enumerate()
+            .filter(|(i, p)| p.history.is_none() && puuids.get(*i).is_some_and(|p| !p.is_empty()))
+            .count(),
         "phase": stage.phase.map(MatchPhase::as_str),
         "phaseSince": stage.since_ms,
         "namesHidden": stage.names_hidden,
@@ -478,8 +483,13 @@ fn s(v: &Value, key: &str) -> String {
     v.get(key).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
-/// 单局详情（`/lol-match-history/v1/games/{gameId}`，`lol.game`）：两边 10 个人。
+/// 单局详情（`/lol-match-history/v1/games/{gameId}`，`lol.game`）：两边 10 个人。不知道我是谁（见 [`game_page_for`]）。
 pub fn game_page(detail: &Value, data: Option<&GameData>) -> Option<Value> {
+    game_page_for(detail, data, None)
+}
+
+/// 同 [`game_page`]，`me` 是我的 puuid：我那一行 `me`、我在的那一队 `ally`（页面写“我方 / 对面”，不然是“胜方 / 负方”）。
+pub fn game_page_for(detail: &Value, data: Option<&GameData>, me: Option<&str>) -> Option<Value> {
     let participants = detail.get("participants")?.as_array()?;
     let identities = detail
         .get("participantIdentities")
@@ -514,8 +524,11 @@ pub fn game_page(detail: &Value, data: Option<&GameData>) -> Option<Value> {
         let damage = i(&st, "totalDamageDealtToChampions");
         let team_id = i(p, "teamId");
         let win = st.get("win").and_then(Value::as_bool).unwrap_or(false);
+        let puuid = s(&player, "puuid");
+        let is_me = me.is_some_and(|me| !me.is_empty() && me == puuid);
         let row = json!({
-            "puuid": s(&player, "puuid"),
+            "me": is_me,
+            "puuid": puuid,
             "riotId": riot_id,
             "champion": champion(data, i(p, "championId")),
             "level": i(&st, "champLevel"),
@@ -540,6 +553,7 @@ pub fn game_page(detail: &Value, data: Option<&GameData>) -> Option<Value> {
         }
     }
     teams.sort_by_key(|(t, _, _)| *t);
+    let ally = |players: &[Value]| players.iter().any(|p| p["me"] == json!(true));
     Some(json!({
         "gameId": i(detail, "gameId"),
         "queueId": i(detail, "queueId"),
@@ -547,7 +561,7 @@ pub fn game_page(detail: &Value, data: Option<&GameData>) -> Option<Value> {
         "createdMs": i(detail, "gameCreation"),
         "durationS": duration,
         "teams": teams.into_iter().map(|(id, win, players)| json!({
-            "teamId": id, "win": win, "players": players,
+            "teamId": id, "win": win, "ally": ally(&players), "players": players,
         })).collect::<Vec<_>>(),
     }))
 }
@@ -702,6 +716,23 @@ mod tests {
             [&json!("locked"), &json!("intent"), &json!("none")]
         );
         assert_eq!(v["resultPending"], false);
+        // 没有 puuid 的人（选人时的对面、看不到名字的队友）不查，也不算“还在查”
+        let mut anonymous = players.clone();
+        anonymous[9].history = None;
+        let mut ids = puuids.clone();
+        ids[9] = String::new();
+        let v = match_page_in(
+            &anonymous,
+            &ids,
+            77,
+            420,
+            "单双排",
+            false,
+            Some(&data),
+            &stage,
+        );
+        assert_eq!(v["enemies"][4]["pending"], false);
+        assert_eq!(v["waiting"], 0);
 
         // 结算：结果
         let stage = MatchStage {
@@ -1081,5 +1112,13 @@ mod tests {
         assert_eq!(v["teams"][1]["players"][0]["spells"], json!([]));
         assert_eq!(v["teams"][1]["players"][0]["riotId"], "乙");
         assert!(game_page(&json!({}), None).is_none());
+        // 不知道我是谁：都不是我、两队都不是我方
+        assert_eq!(v["teams"][0]["ally"], false);
+        assert_eq!(v["teams"][0]["players"][0]["me"], false);
+        // 知道：我那一行、我那一队
+        let v = game_page_for(&detail, None, Some("b")).unwrap();
+        assert_eq!(v["teams"][1]["ally"], true);
+        assert_eq!(v["teams"][1]["players"][0]["me"], true);
+        assert_eq!(v["teams"][0]["ally"], false);
     }
 }

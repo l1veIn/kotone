@@ -10,9 +10,9 @@
   box-sizing: border-box;
 }
 
+/* 不设 min-height: 100vh：宿主按 App 报的高度定 iframe 的高，100vh 会让页面只长不缩 */
 .app {
   container-type: inline-size;
-  min-height: 100vh;
   font-family: var(--lol-font);
   color: var(--lol-text);
   background: var(--lol-bg);
@@ -20,7 +20,6 @@
   line-height: var(--lol-lh-sm);
 }
 :root[data-display="inline"] .app {
-  min-height: 0;
   background: transparent;
 }
 .app button {

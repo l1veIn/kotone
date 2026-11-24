@@ -39,6 +39,11 @@ use crate::LolPlugin;
 
 /// 自动卡片（ADR 039 D3）：进加载发“开局战绩”，结算发“这局总结”。
 mod auto_cards;
+/// 选人阶段的“这局”（调研 G1）。
+mod champ_select;
+
+/// 结算后多久还没拿到这局的结果就不再等（和自动卡片“这局总结”一样，调研 G29）。
+const RESULT_WAIT_MS: i64 = 60_000;
 
 /// 客户端开着时多久看一次阶段；没开时多久看一次进程。
 const POLL: Duration = Duration::from_secs(2);
@@ -72,6 +77,8 @@ struct Member {
     profile_icon_id: Option<i64>,
     spells: [i64; 2],
     position: String,
+    /// 选人时选好了没有（别的阶段都是锁了）。
+    pick: pages::Pick,
 }
 
 #[derive(Default)]
@@ -83,6 +90,13 @@ struct Match {
     histories: HashMap<String, PlayerHistory>,
     /// 还在查的人。
     pending: HashSet<String>,
+    /// 进过加载（不只是选人；选人被秒退的不算这局）。
+    started: bool,
+    /// 选人时的备选席、名字被隐藏（页面用）。
+    bench: Vec<i64>,
+    names_hidden: bool,
+    /// 结算后这局的结果（自动卡片读到这局的详情时写，调研 G29）。
+    result: Option<pages::MatchResult>,
 }
 
 #[derive(Default)]
@@ -101,6 +115,8 @@ pub(crate) struct State {
     was_dead: Option<bool>,
     /// 自动卡片发过哪局的哪种（[`auto_cards`]）。
     cards: auto_cards::CardState,
+    /// “这局”页面的阶段和进这个阶段的时间（Unix 毫秒）。
+    stage: Option<(pages::MatchPhase, i64)>,
 }
 
 fn live_client() -> Result<&'static Live, String> {
@@ -244,7 +260,13 @@ impl LolPlugin {
         self.run_control(host.as_ref(), &lcu, &phase).await;
         self.load_data_in_background(&lcu);
         let mut live = None;
-        if in_game_phase(&phase) {
+        if phase == "ChampSelect" {
+            // 选人（调研 G1）：双方的英雄、我方看得到名字的人马上查战绩
+            if let Ok(session) = lcu.get(paths::CHAMP_SELECT).await {
+                let flow = lcu.get(paths::SESSION).await.unwrap_or(Value::Null);
+                self.on_champ_select(&lcu, &session, &flow).await;
+            }
+        } else if in_game_phase(&phase) {
             if let Ok(session) = lcu.get(paths::SESSION).await {
                 self.on_session(&lcu, &session).await;
             }
@@ -262,6 +284,7 @@ impl LolPlugin {
         self.report_phase(host.as_ref(), &phase, live.as_ref().map(|(_, game)| game));
         // 自动卡片（ADR 039 D3）：进加载查完战绩发“开局战绩”，结算发“这局总结”
         let live_ready = live.as_ref().is_some_and(|(_, game)| game.time > 0.0);
+        self.update_stage(&phase, live_ready);
         self.auto_cards(host, &previous, &phase, live_ready);
         // 覆盖层：选英雄时的胜率、海斗三选一时的海克斯评分（ADR 038 第 3 步）
         self.update_overlays(host, &lcu, &phase, live.as_ref().map(|(_, game)| game))
@@ -421,6 +444,9 @@ impl LolPlugin {
                 });
             }
             let m = s.current.as_mut().unwrap();
+            m.started = true;
+            // 选人时看不到名字的人（对面、排位里的队友）没有 puuid：进了加载按 gameflow 的名单重来；查过的战绩接着用
+            m.members.retain(|x| !x.puuid.is_empty());
             // 英雄可能晚一点才填上（加载界面前后），每轮都按最新的
             for member in &found {
                 match m.members.iter_mut().find(|x| x.puuid == member.puuid) {
@@ -443,6 +469,64 @@ impl LolPlugin {
         let _ = self.my_puuid(lcu).await;
         log::log(&format!("lol: 这局开始查 {} 个人的战绩", missing.len()));
         tokio::spawn(prefetch(self.state.clone(), lcu.clone(), game_id, missing));
+    }
+
+    /// 选人（调研 G1）：双方的英雄、我方的分路和召唤师技能、备选席；我方看得到名字的人马上开始查战绩
+    /// （和加载同一套：同一局进了加载接着用，不重查）。`flow` 是 gameflow 的 session（队列、模式、对局 id 的后备）。
+    async fn on_champ_select(&self, lcu: &Lcu, session: &Value, flow: &Value) {
+        let Some(cs) =
+            champ_select::parse(session, flow["gameData"]["gameId"].as_i64().unwrap_or(0))
+        else {
+            return;
+        };
+        let game_id = cs.game_id;
+        let missing: Vec<String> = {
+            let mut s = self.state();
+            if s.current.as_ref().map(|m| m.game_id) != Some(game_id) {
+                s.tracker = SpellTracker::default();
+                s.current = Some(Match {
+                    game_id,
+                    queue_id: flow["gameData"]["queue"]["id"].as_i64().unwrap_or(0),
+                    mode: flow["gameData"]["queue"]["gameMode"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string(),
+                    ..Match::default()
+                });
+            }
+            let m = s.current.as_mut().unwrap();
+            if m.started {
+                return;
+            }
+            // 选人时的名单每轮整个换（英雄、预选一直在变）
+            m.members = cs.members;
+            m.bench = cs.bench;
+            m.names_hidden = cs.names_hidden;
+            let missing: Vec<String> = m
+                .members
+                .iter()
+                .map(|x| x.puuid.clone())
+                .filter(|p| !p.is_empty() && !m.histories.contains_key(p) && !m.pending.contains(p))
+                .collect();
+            m.pending.extend(missing.iter().cloned());
+            missing
+        };
+        if missing.is_empty() {
+            return;
+        }
+        let _ = self.my_puuid(lcu).await;
+        log::log(&format!("lol: 选人时开始查 {} 个队友的战绩", missing.len()));
+        tokio::spawn(prefetch(self.state.clone(), lcu.clone(), game_id, missing));
+    }
+
+    /// 记下“这局”页面的阶段；变了就记进这个阶段的时间（阶段牌上“进加载 N 秒”、结算后等结果最多 60 秒）。
+    fn update_stage(&self, native: &str, live_ready: bool) {
+        let mut s = self.state();
+        let started = s.current.as_ref().is_some_and(|m| m.started);
+        let stage = stage_of(native, live_ready, started);
+        if s.stage.map(|(p, _)| p) != stage {
+            s.stage = stage.map(|p| (p, now_ms()));
+        }
     }
 }
 
@@ -511,6 +595,7 @@ fn members(session: &Value) -> Vec<Member> {
                     position.to_ascii_uppercase()
                 },
                 puuid,
+                pick: pages::Pick::Locked,
             });
         }
     }
@@ -619,6 +704,36 @@ fn status(status: &str, text: impl Into<String>) -> Value {
     json!({"status": status, "text": text.into()})
 }
 
+/// 局内接口还没有游戏（加载界面）。
+fn loading() -> Value {
+    let mut out = status("not_in_game", "游戏还在加载，进了游戏再问");
+    out["reason"] = json!("loading");
+    out
+}
+
+/// 现在的 Unix 毫秒。
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// “这局”页面的阶段：客户端阶段 + 局内接口有没有游戏时间 + 这局进没进过加载。不在这几个阶段、也没打过这局时是 None。
+fn stage_of(native: &str, live_ready: bool, started: bool) -> Option<pages::MatchPhase> {
+    use pages::MatchPhase as P;
+    if native == "ChampSelect" {
+        Some(P::ChampSelect)
+    } else if in_game_phase(native) {
+        Some(if live_ready { P::InGame } else { P::Loading })
+    } else if matches!(native, "WaitingForStats" | "PreEndOfGame" | "EndOfGame") || started {
+        // 打完回到大厅：页面留着上一局（设计第四节 1）
+        started.then_some(P::PostMatch)
+    } else {
+        None
+    }
+}
+
 impl LolPlugin {
     /// 不在对局里时怎么说。
     fn not_in_game(&self, host: &dyn Host) -> Value {
@@ -626,28 +741,28 @@ impl LolPlugin {
             let s = self.state();
             (s.phase.clone(), s.client.is_some())
         };
-        let text = if in_game_phase(&phase) {
-            "游戏还在加载，进了游戏再问"
+        // `reason` 给页面选翻译好的文案（App 的 status.ts）；给她的话不变
+        let (reason, text) = if in_game_phase(&phase) {
+            ("loading", "游戏还在加载，进了游戏再问")
         } else if phase == "ChampSelect" {
-            "还在选英雄；进了加载界面才查得到这局的人"
+            ("champ_select", "还在选英雄；进了加载界面才查得到这局的人")
         } else if client || client_pid(host).is_some() {
-            "现在不在英雄联盟的对局里"
+            ("not_in_game", "现在不在英雄联盟的对局里")
         } else {
-            "英雄联盟没开"
+            ("client_closed", "英雄联盟没开")
         };
-        status("not_in_game", text)
+        let mut out = status("not_in_game", text);
+        out["reason"] = json!(reason);
+        out
     }
 
     /// 局内数据；不在对局里时 Err(给模型的结果)。
     async fn live_game(&self, host: &dyn Host) -> Result<LiveGame, Value> {
         let live = live_client().map_err(|e| status("error", e))?;
         match live.all_game_data().await {
-            Ok(v) => live::parse_all_game_data(&v)
-                .ok_or_else(|| status("not_in_game", "游戏还在加载，进了游戏再问")),
+            Ok(v) => live::parse_all_game_data(&v).ok_or_else(loading),
             Err(LolError::Unavailable) => Err(self.not_in_game(host)),
-            Err(LolError::Status(404, _)) => {
-                Err(status("not_in_game", "游戏还在加载，进了游戏再问"))
-            }
+            Err(LolError::Status(404, _)) => Err(loading()),
             Err(error) => Err(status("error", format!("读局内数据失败：{error}"))),
         }
     }
@@ -861,16 +976,26 @@ impl LolPlugin {
             }
         }
         let data = self.ensure_data().await;
-        if self.state().current.is_none() {
+        // 选人被秒退、只剩上一次选人的名单：不算这局
+        if self.state().current.is_none() || self.state().stage.is_none() {
             return ToolResult::content(self.not_in_game(host.as_ref()));
         }
         let Some(view) = self.match_view(data.as_deref()) else {
-            return ToolResult::content(status("not_in_game", "这局刚结束"));
+            let mut out = status("not_in_game", "这局刚结束");
+            out["reason"] = json!("ended");
+            return ToolResult::content(out);
         };
-        let text = text::render_scout(&view.players, view.queue_id, &view.mode, view.random, only);
+        // 选人时只说我方（对面只有英雄，查不到人）
+        let text = if view.stage.phase == Some(pages::MatchPhase::ChampSelect) {
+            let allies: Vec<ScoutPlayer> =
+                view.players.iter().filter(|p| p.ally).cloned().collect();
+            text::render_scout(&allies, view.queue_id, &view.mode, view.random, only)
+        } else {
+            text::render_scout(&view.players, view.queue_id, &view.mode, view.random, only)
+        };
         ToolResult::content(json!({"status": "ok", "text": text})).with_page(
             pages::PAGE_MATCH,
-            pages::match_page(
+            pages::match_page_in(
                 &view.players,
                 &view.puuids,
                 view.game_id,
@@ -878,6 +1003,7 @@ impl LolPlugin {
                 &view.mode,
                 view.random,
                 data.as_deref(),
+                &view.stage,
             ),
         )
     }
@@ -931,6 +1057,27 @@ impl LolPlugin {
             .and_then(|d| d.queue_name(m.queue_id))
             .map(str::to_string)
             .unwrap_or_else(|| text::mode_name(&m.mode).to_string());
+        // “这局”页面的阶段（设计第三节 1 的四种状态）；结算后最多等 60 秒结果
+        let (phase, since) = s
+            .stage
+            .map(|(p, t)| (Some(p), Some(t)))
+            .unwrap_or((None, None));
+        let result_pending = phase == Some(pages::MatchPhase::PostMatch)
+            && m.result.is_none()
+            && since.is_some_and(|t| now_ms() - t < RESULT_WAIT_MS);
+        let stage = pages::MatchStage {
+            phase,
+            since_ms: since,
+            names_hidden: m.names_hidden,
+            bench: if phase == Some(pages::MatchPhase::ChampSelect) {
+                m.bench.clone()
+            } else {
+                Vec::new()
+            },
+            picks: m.members.iter().map(|x| x.pick).collect(),
+            result: m.result,
+            result_pending,
+        };
         Some(MatchView {
             puuids: m.members.iter().map(|x| x.puuid.clone()).collect(),
             players,
@@ -938,6 +1085,7 @@ impl LolPlugin {
             queue_id: m.queue_id,
             random: crate::client::gamedata::random_pick(data, m.queue_id),
             mode,
+            stage,
         })
     }
 
@@ -1114,7 +1262,8 @@ impl LolPlugin {
                 return ToolResult::content(status("error", format!("这局的详情读不到：{error}")))
             }
         };
-        match pages::game_page(&detail, data.as_deref()) {
+        let me = self.state().client.as_ref().and_then(|c| c.me.clone());
+        match pages::game_page_for(&detail, data.as_deref(), me.as_deref()) {
             Some(page) => ToolResult::content(json!({"status": "ok", "gameId": game_id}))
                 .with_page(pages::PAGE_GAME, page),
             None => ToolResult::content(status("error", "这局的详情是空的")),
@@ -1130,6 +1279,8 @@ struct MatchView {
     queue_id: i64,
     mode: String,
     random: bool,
+    /// 阶段和那个阶段才有的东西（页面用）。
+    stage: pages::MatchStage,
 }
 
 /// 查询参数里的值（UTF-8 按字节百分号编码，只留字母数字和 -_.~）。
@@ -1148,6 +1299,21 @@ fn encode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// “这局”页面的四种状态（设计第三节 1）从客户端阶段、局内接口有没有游戏时间、这局进没进过加载来。
+    #[test]
+    fn the_page_stage_follows_the_client_phase() {
+        use pages::MatchPhase as P;
+        assert_eq!(stage_of("ChampSelect", false, false), Some(P::ChampSelect));
+        assert_eq!(stage_of("InProgress", false, true), Some(P::Loading));
+        assert_eq!(stage_of("GameStart", false, true), Some(P::Loading));
+        assert_eq!(stage_of("InProgress", true, true), Some(P::InGame));
+        assert_eq!(stage_of("EndOfGame", false, true), Some(P::PostMatch));
+        // 打完回到大厅：页面留着上一局；选人被秒退（没进过加载）：不算这局
+        assert_eq!(stage_of("Lobby", false, true), Some(P::PostMatch));
+        assert_eq!(stage_of("Lobby", false, false), None);
+        assert_eq!(stage_of("None", false, false), None);
+    }
 
     #[test]
     fn query_values_are_percent_encoded() {

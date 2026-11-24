@@ -12,6 +12,7 @@ import interpreterZh from "../../../../../plugins/interpreter/messages/zh-CN.jso
 import voiceInputZh from "../../../../../plugins/voice-input/messages/zh-CN.json";
 import type { PluginInfo, PluginManifest, PluginToolResult, PluginVisibility } from "../plugins";
 import { getSettings } from "./browserMock";
+import { remotePlugins } from "./mcpServersMock";
 import { gameVoiceCall } from "./gameVoiceMock";
 import { interpreterCall } from "./interpreterMock";
 import { musicCall, pluginTurnedOff as musicTurnedOff, subscribe as subscribeMusic } from "./musicMock";
@@ -70,6 +71,16 @@ const lol: PluginManifest = {
     { uri: OVERLAY_AUGMENTS, title: lolZh.plugin_lol_best_augments, needs: ["stats"] },
   ],
   agent: { overview: "", rule: "" },
+  // 游戏中心的事（plugin.toml 的 [[events]]）：名字用插件的文案；都要“读客户端数据”；带 team 的能选哪一边
+  events: ([
+    ["first_blood", true], ["dragon_kill", true], ["herald_kill", true], ["baron_kill", true], ["turret_killed", true],
+    ["inhib_killed", true], ["ace", true], ["multikill", true], ["my_death", false], ["my_respawn", false],
+  ] as [string, boolean][]).map(([name, team]) => ({
+    type: `lol.${name}`,
+    label: (lolZh as Record<string, string>)[`plugin_lol_event_${name}`],
+    needs: ["client"],
+    data: (team ? { team: "ally / enemy" } : {}) as Record<string, string>,
+  })),
 };
 
 // 游戏语音（ADR 020、038 第 4 步）：工具名沿用 voice_chat.*，默认关
@@ -182,6 +193,8 @@ export async function settingsChanged(): Promise<void> {
 
 export async function listPlugins(): Promise<PluginInfo[]> {
   const settings = await getSettings();
+  // 第三方插件（MCP 方案第 2 期）接在内置的后面，和桌面端 plugins::list 一样
+  const remote = await remotePlugins();
   return MANIFESTS.map((manifest) => {
     const config = settings.plugins?.[manifest.id] ?? {};
     const enabled = config.enabled ?? manifest.enabledByDefault;
@@ -197,7 +210,7 @@ export async function listPlugins(): Promise<PluginInfo[]> {
         available: enabled && t.needs.every((n) => sources[n]),
       })),
     };
-  });
+  }).concat(remote);
 }
 
 /** 和真的一样：工具要的数据开关关着时只回一句“已关闭”。 */
@@ -260,8 +273,12 @@ export async function pluginCall(plugin: string, tool: string, args: Record<stri
       const data = args.mode === "mayhem" ? sampleTierMayhem() : sampleTierRift(typeof args.lane === "string" ? args.lane : undefined);
       return { content: { status: "ok", text: "tier" }, structuredContent: data, ui: { uri: PAGE_TIER } };
     }
-    case "lol.scout":
-      return { content: { status: "ok", text: "scout" }, structuredContent: sampleMatch(), ui: { uri: PAGE_MATCH } };
+    case "lol.scout": {
+      // 预览和测试切阶段：window.__kotoneLolPhase（none = 不在对局里）
+      const phase = (globalThis as { __kotoneLolPhase?: string }).__kotoneLolPhase ?? "loading";
+      if (phase === "none") return { content: { status: "not_in_game", reason: "not_in_game", text: "dev:web" } };
+      return { content: { status: "ok", text: "scout" }, structuredContent: sampleMatch(phase as SamplePhase), ui: { uri: PAGE_MATCH } };
+    }
     case "lol.player": {
       const query = typeof args.player === "string" ? args.player : "";
       const id = typeof args.puuid === "string" ? args.puuid : query ? findSamplePlayer(query) : undefined;

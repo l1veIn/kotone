@@ -31,12 +31,11 @@ test("the League of Legends plugin opens from 插件 with the client-data switch
   await open(page);
   await expect(page.getByTestId("app-sidebar")).not.toContainText("英雄联盟");
   await openPlugin(page, "lol");
-  const pluginPage = page.getByTestId("plugin-page-lol");
-  await expect(pluginPage.getByRole("heading", { name: "英雄联盟", exact: true })).toBeVisible();
-  // 开着时先是“这局”（第 2 步）；开关在“设置”
-  await expect(pluginPage.getByTestId("plugin-lol-tab-match")).toHaveAttribute("aria-current", "page");
-  await pluginPage.getByTestId("plugin-lol-tab-settings").click();
-  await expect(pluginPage.getByTestId("plugin-lol-tab-settings")).toHaveAttribute("aria-current", "page");
+  // 开着时整页是 App（从“这局”开始）；开关在顶栏的“设置”里
+  await expect(page.getByTestId("plugin-app-name")).toHaveText("英雄联盟");
+  await expect(page.getByTestId("plugin-page-lol")).toHaveAttribute("data-start", "ui://kotone/lol/match");
+  await page.getByTestId("plugin-settings-button").click();
+  const pluginPage = page.getByTestId("plugin-settings");
   const enabled = pluginPage.getByTestId("plugin-lol-enabled");
   const client = pluginPage.getByTestId("plugin-lol-source-client");
   await expect(enabled).toHaveAttribute("aria-checked", "true");
@@ -66,8 +65,8 @@ test("the League of Legends plugin opens from 插件 with the client-data switch
   expect((await settings(page)).plugins?.lol?.sources?.client).toBe(true);
   await expect(events.getByTestId("game-profile-events-list")).toContainText("拿了大龙");
   await section.getByTestId("game-profile-lol-open").click();
-  await page.getByTestId("plugin-page-lol").getByTestId("plugin-lol-tab-settings").click();
-  await expect(page.getByTestId("plugin-page-lol").getByTestId("plugin-lol-source-client")).toHaveAttribute("aria-checked", "true");
+  await page.getByTestId("plugin-settings-button").click();
+  await expect(page.getByTestId("plugin-settings").getByTestId("plugin-lol-source-client")).toHaveAttribute("aria-checked", "true");
 });
 
 test("插件 lists the plugin as a card; turning the whole plugin off greys out its data switch", async ({ page }, testInfo) => {
@@ -82,14 +81,17 @@ test("插件 lists the plugin as a card; turning the whole plugin off greys out 
   await expect(card.getByTestId("plugins-card-lol-off")).toBeVisible();
   await expect(page.getByTestId("plugin-page")).toHaveCount(0);
   expect((await settings(page)).plugins?.lol?.enabled).toBe(false);
-  // 插件关着，卡片照样能点开（App 里能把它打开；数据开关变灰）
+  // 插件关着，卡片照样能点开：整页是它的设置（能把它打开；数据开关变灰）
   await card.getByTestId("plugins-card-lol-open").click();
   const pluginPage = page.getByTestId("plugin-page-lol");
+  await expect(pluginPage).toHaveAttribute("data-start", "");
   await expect(pluginPage.getByTestId("plugin-lol-source-client")).toBeDisabled();
   await expect(pluginPage.getByTestId("plugin-lol-enabled")).toHaveAttribute("aria-checked", "false");
   await pluginPage.getByTestId("plugin-lol-enabled").click();
-  await expect(pluginPage.getByTestId("plugin-lol-source-client")).toBeEnabled();
   expect((await settings(page)).plugins?.lol?.enabled).toBe(true);
+  // 打开了：整页换成 App
+  await expect(pluginPage).toHaveAttribute("data-start", "ui://kotone/lol/match");
+  await expect(pluginPage.getByTestId("mcp-app-frame")).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
 });
 
 test("a settings location 插件 → 英雄联盟 opens the plugin page", async ({ page }) => {

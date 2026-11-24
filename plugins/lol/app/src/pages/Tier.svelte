@@ -10,36 +10,43 @@
   import LaneIcon from "../components/LaneIcon.svelte";
   import TopBar, { type PageId } from "../components/TopBar.svelte";
   import { laneName, rate } from "../format";
-  import { resultStatus, TOOL_TIER, type DisplayMode, type Session, type ToolResult } from "../host";
+  import { PAGE_SETTINGS, resultStatus, TOOL_TIER, type DisplayMode, type Session, type ToolResult } from "../host";
+  import StateBlock from "../components/StateBlock.svelte";
+  import type { ToolState } from "../status";
   import { m } from "../i18n.svelte";
   import { isTierData, type Source, type TierData } from "../types";
 
-  const PAGE_CHAMPION = "ui://kotone/lol/champion";
 
   let {
     session,
     initial,
     display,
+    args = {},
     onTab,
+    onChampion,
   }: {
     session: Session;
     initial: Promise<ToolResult | null> | null;
     display: DisplayMode;
+    /** `{ mode, lane }`。 */
+    args?: Record<string, unknown>;
     onTab: (page: PageId) => void;
+    /** 点一行：进这个英雄的页（同一种模式、同一路）。 */
+    onChampion: (args: Record<string, string>) => void;
   } = $props();
 
   let tier = $state<TierData | null>(null);
   let lane = $state("");
-  let status = $state("");
+  let status = $state<ToolState | null>(null);
   let error = $state("");
   let loading = $state(true);
 
   function show(result: ToolResult) {
     if (isTierData(result.structuredContent)) {
       tier = result.structuredContent;
-      status = "";
+      status = null;
     } else {
-      status = resultStatus(result).text;
+      status = resultStatus(result);
     }
   }
 
@@ -63,7 +70,8 @@
         show(result);
         loading = false;
       } else {
-        void load({});
+        const given = args.mode || args.lane ? args : session.input();
+        void load(given && (given.mode || given.lane) ? { mode: given.mode, lane: given.lane } : {});
       }
     });
   });
@@ -84,12 +92,12 @@
   }
   const tierTone = (t: string) => (t === "T0" ? "t0" : t === "T1" ? "t1" : "");
 
-  /** 点一行进英雄页（同一种模式、同一路）；英雄页还是宿主里的页面，经 `ui://` 链接打开。 */
+  /** 点一行进英雄页（同一种模式、同一路）。 */
   function openChampion(name: string) {
     if (!tier) return;
-    const args: Record<string, string> = { champion: name, mode: tier.mode };
-    if (tier.mode === "rift" && shownLane) args.lane = shownLane;
-    session.openPage(PAGE_CHAMPION, args);
+    const next: Record<string, string> = { champion: name, mode: tier.mode };
+    if (tier.mode === "rift" && shownLane) next.lane = shownLane;
+    onChampion(next);
   }
   function key(event: KeyboardEvent, name: string) {
     if (event.key === "Enter" || event.key === " ") {
@@ -136,7 +144,7 @@
     {/if}
 
     {#if error}<p class="banner danger" role="alert"><Icon name="alert" />{m.plugin_lol_failed({ error })}</p>{/if}
-    {#if status}<p class="banner" data-testid="lol-app-status"><Icon name="info" />{status}</p>{/if}
+    {#if status}<StateBlock state={status} inline={!full} onSettings={() => session.openPage(PAGE_SETTINGS, {})} />{/if}
 
     {#if tier?.mode === "rift"}
       <div class="table rift" data-testid="lol-app-rows" data-lane={shownLane}>
@@ -191,7 +199,7 @@
       {#if full}
         <span data-testid="lol-app-sources"><Footer data={m.plugin_lol_sources({ sources: sourcesLine(tier.sources) })} onLink={session.openLink} /></span>
       {:else}
-        <div class="card-foot" data-testid="lol-app-sources">{m.plugin_lol_sources({ sources: sourcesLine(tier.sources) })}</div>
+        <span data-testid="lol-app-sources"><Footer data={m.plugin_lol_sources({ sources: sourcesLine(tier.sources) })} card onLink={session.openLink} /></span>
       {/if}
     {/if}
   </main>

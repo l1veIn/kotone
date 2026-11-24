@@ -145,6 +145,59 @@ function tierRift() {
   };
 }
 
+
+/** 单局详情：样例里第 8 个人是我（和这局样例一样），我在的那一队标上 ally；结算后打开时带 justEnded。 */
+function gameMine(justEnded) {
+  const g = clone(read("game-sample.json"));
+  for (const t of g.teams) {
+    for (const p of t.players) p.me = p.puuid === "puuid-8";
+    t.ally = t.players.some((p) => p.me);
+  }
+  g.justEnded = justEnded;
+  return g;
+}
+
+/** 英雄页：出装、召唤师技能、海克斯的图标借样例里真的客户端路径（录的是海斗，没有符文）。 */
+function championRift() {
+  const player = read("player-sample.json");
+  const items = [];
+  for (const g of player.games) for (const it of g.items ?? []) if (it.slot < 6 && !items.some((x) => x.id === it.id)) items.push({ id: it.id, name: it.name, icon: it.icon });
+  const spells = read("match-sample.json").allies[0].spells;
+  const opt = (list, win, pick) => ({ items: list, winRate: win, pickRate: pick });
+  const rune = (id, name) => ({ id, name, icon: "" });
+  return {
+    mode: "rift", champion: { id: 157, label: "疾风剑豪 亚索", short: "亚索", icon: "/lol-game-data/assets/v1/champion-icons/157.png" },
+    lane: "MIDDLE", laneName: "中路", patch: "16.23", date: "20261124",
+    tier: { rank: 4, championId: 157, tier: "T1", lane: "MIDDLE", winRate: 0.512, pickRate: 0.12, banRate: 0.031 },
+    badAgainst: [[86, "盖伦"], [99, "拉克丝"], [238, "劫"]].map(([id, short], k) => ({ champion: { id, label: short, short }, winRate: 0.47 - k * 0.006 })),
+    goodAgainst: [[22, "寒冰"], [25, "莫甘娜"], [63, "布兰德"]].map(([id, short], k) => ({ champion: { id, label: short, short }, winRate: 0.55 - k * 0.006 })),
+    build: {
+      core: [opt(items.slice(0, 3), 0.54, 0.31), opt(items.slice(3, 6), 0.53, 0.12)],
+      boots: [opt(items.slice(6, 7), 0.52, 0.6)],
+      starting: [opt(items.slice(7, 9), 0.51, 0.8)],
+      fourth: [opt(items.slice(9, 10), 0.56, 0.2)], fifth: [opt(items.slice(10, 11), 0.57, 0.12)], sixth: [],
+    },
+    runes: [{ primary: [rune(8010, "征服者"), rune(9111, "凯旋"), rune(9104, "传说：欢欣"), rune(8299, "坚毅不倒")], secondary: [rune(8444, "复苏之风"), rune(8473, "骸骨镀层")],
+      shards: [rune(5005, "攻击速度"), rune(5008, "适应之力"), rune(5001, "生命值")], winRate: 0.521, pickRate: 0.305, games: 12840 }],
+    skillPriority: ["Q", "E", "W"], skillOrder: ["Q", "E", "W", "Q", "Q", "R", "Q", "E", "Q", "E", "R", "E", "E", "W", "W", "R", "W", "W"],
+    spells: [{ spells, winRate: 0.512, pickRate: 0.7 }],
+    sources: [{ name: "腾讯 101", date: "20261124" }], stale: false, opgg: null,
+  };
+}
+
+function championMayhem() {
+  const player = read("player-sample.json");
+  const augments = [];
+  for (const g of player.games) for (const a of g.augments ?? []) if (!augments.some((x) => x.id === a.id)) augments.push(a);
+  return {
+    mode: "mayhem", champion: { id: 157, label: "疾风剑豪 亚索", short: "亚索" }, rank: 12, winRate: 0.523, pickRate: 0.041,
+    partners: [[22, "寒冰"], [99, "拉克丝"], [412, "锤石"], [63, "布兰德"], [25, "莫甘娜"]].map(([id, short]) => ({ id, label: short, short })),
+    augments: augments.slice(0, 8).map((a, k) => ({ ...a, games: 3210 - k * 300, winRate: 0.561 - k * 0.004, delta: 4.2 - k * 0.5, lowSample: k === 7 })),
+    attribution: "海斗数据：github.com/czgreat/aramhex-data（CC BY-NC 4.0）",
+    sources: [{ name: "腾讯 101", date: "20261124" }, { name: "github.com/czgreat/aramhex-data", license: "CC BY-NC 4.0", date: "2026-11-20" }],
+  };
+}
+
 const ok = (structuredContent, text = "ok") => ({ content: [{ type: "text", text: JSON.stringify({ status: "ok", text }) }], structuredContent });
 const notInGame = { content: [{ type: "text", text: JSON.stringify({ status: "not_in_game", text: "现在不在英雄联盟的对局里" }) }] };
 
@@ -224,8 +277,15 @@ add("lol-app-card-select", "match", { kotone_lol_scout: ok(champSelect({ ranked:
 add("lol-app-card-post", "match", { kotone_lol_scout: ok(postMatch()) }, { display: "inline", width: 420, themes: ["dark"] });
 add("lol-app-tier", "tier", { kotone_lol_tier: ok(tierRift()) }, { themes: ["light", "dark"] });
 add("lol-app-tier-card", "tier", { kotone_lol_tier: ok(tierRift()) }, { display: "inline", width: 420 });
-add("lol-app-player", "player", { kotone_lol_player: ok(read("player-sample.json")) }, { themes: ["light"] });
+add("lol-app-player", "player", { kotone_lol_player: ok(read("player-sample.json")) }, { themes: ["light", "dark"] });
 add("lol-app-game", "game", { kotone_lol_game: ok(read("game-sample.json")) }, { themes: ["dark"], push: "kotone_lol_game" });
+add("lol-app-game-mine", "game", { kotone_lol_game: ok(gameMine(true)) }, { themes: ["light", "dark"], push: "kotone_lol_game" });
+add("lol-app-card-game-summary", "game", { kotone_lol_game: ok(gameMine(true)) }, { display: "inline", width: 420, themes: ["light", "dark"], push: "kotone_lol_game" });
+add("lol-app-card-player", "player", { kotone_lol_player: ok(read("player-sample.json")) }, { display: "inline", width: 420, themes: ["dark"], push: "kotone_lol_player" });
+add("lol-app-player-narrow", "player", { kotone_lol_player: ok(read("player-sample.json")) }, { width: 480, push: "kotone_lol_player" });
+add("lol-app-champion-rift", "champion", { kotone_lol_champion: ok(championRift()) }, { themes: ["light", "dark"], push: "kotone_lol_champion" });
+add("lol-app-champion-mayhem", "champion", { kotone_lol_champion: ok(championMayhem()) }, { themes: ["dark"], push: "kotone_lol_champion" });
+add("lol-app-card-champion", "champion", { kotone_lol_champion: ok(championRift()) }, { display: "inline", width: 420, push: "kotone_lol_champion" });
 
 const only = process.env.SHOTS_ONLY ? new RegExp(process.env.SHOTS_ONLY) : null;
 const browser = await chromium.launch({ channel: "chrome", headless: true });

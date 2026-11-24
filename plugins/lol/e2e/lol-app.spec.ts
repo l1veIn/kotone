@@ -1,5 +1,5 @@
-// 英雄联盟的 MCP App（ADR 039 D5；MCP 方案第 3 期）在 Kotone 里的样子：强度榜是插件给的独立 HTML，宿主放进
-// 沙盒 iframe（McpAppFrame + ext-apps 的 AppBridge）。浏览器预览里沙盒代理页和 App 由 Vite 开发服务器旁边的小服务照回环代理
+// 英雄联盟的 MCP App（ADR 039 D5；MCP 方案第 3 期）在 Kotone 里的样子：插件页整页是插件给的独立 HTML（从“这局”开始，
+// 导航在 App 里），宿主放进沙盒 iframe（McpAppFrame + ext-apps 的 AppBridge）。浏览器预览里沙盒代理页和 App 由 Vite 开发服务器旁边的小服务照回环代理
 // 的路径、在 127.0.0.1 的另一个端口上给（apps/desktop/vite.config.ts 的 mcpAppsDevServer），App 是 plugins/lol/app/dist
 // （test:e2e 先打包）。
 // 只看宿主这一侧：握手完成、插件页是 fullscreen、聊天卡片是 inline 并且用的是推过去的结果、App 调工具时宿主绑定的是
@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const TIER = "ui://kotone/lol/tier";
+const MATCH = "ui://kotone/lol/match";
 
 /** 插件的 App（ADR 038）：左侧栏「插件」→ 点它的卡片（和 apps/desktop/e2e/nav.ts 的 openPlugin 一样）。 */
 async function openPlugin(page: Page, id: string) {
@@ -26,17 +27,16 @@ async function open(page: Page) {
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
 }
 
-async function tierTab(page: Page) {
+async function lolPage(page: Page) {
   await openPlugin(page, "lol");
-  const pluginPage = page.getByTestId("plugin-page-lol");
-  await pluginPage.getByTestId("plugin-lol-tab-tier").click();
-  return pluginPage;
+  return page.getByTestId("plugin-page-lol");
 }
 
-/** App 所在的那一层 iframe（沙盒代理页里面那一层，地址是 /<密钥>/app/lol/tier）。 */
-async function appFrame(page: Page): Promise<Frame> {
-  await expect.poll(() => page.frames().filter((f) => /\/app\/lol\/tier$/.test(f.url())).length, { timeout: 15_000 }).toBeGreaterThan(0);
-  return page.frames().find((f) => /\/app\/lol\/tier$/.test(f.url()))!;
+/** App 所在的那一层 iframe（沙盒代理页里面那一层，地址是 /<密钥>/app/lol/<页面>）。 */
+async function appFrame(page: Page, which = "match|tier"): Promise<Frame> {
+  const pattern = new RegExp(`/app/lol/(${which})$`);
+  await expect.poll(() => page.frames().filter((f) => pattern.test(f.url())).length, { timeout: 15_000 }).toBeGreaterThan(0);
+  return page.frames().find((f) => pattern.test(f.url()))!;
 }
 
 /** 预览里插件工具被调过的记录（pluginsMock 记的）。 */
@@ -56,31 +56,34 @@ function rpc(frame: Frame, id: number, method: string, params: unknown): Promise
   }), [id, method, params] as const);
 }
 
-test("the 强度榜 tab is the plugin's MCP App: a sandboxed iframe on another origin that fetches through the lol plugin", async ({ page }, testInfo) => {
+test("the plugin page is the plugin's MCP App: a sandboxed iframe on another origin that fetches through the lol plugin", async ({ page }, testInfo) => {
   await open(page);
-  const pluginPage = await tierTab(page);
-  const frame = pluginPage.locator(`[data-testid="mcp-app-frame"][data-uri="${TIER}"]`);
+  const pluginPage = await lolPage(page);
+  const frame = pluginPage.locator(`[data-testid="mcp-app-frame"][data-uri="${MATCH}"]`);
   await expect(frame).toHaveAttribute("data-display", "fullscreen");
   await expect(frame).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
   await expect(frame).toHaveAttribute("data-plugin", "lol");
   const iframe = frame.getByTestId("mcp-app-iframe");
   await expect(iframe).toHaveAttribute("sandbox", "allow-scripts allow-same-origin allow-forms");
   // 沙盒代理页在另一个源上（127.0.0.1 的另一个端口），路径照回环代理
-  await expect(iframe).toHaveAttribute("src", /^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f]+\/sandbox\/lol\/tier$/);
+  await expect(iframe).toHaveAttribute("src", /^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f]+\/sandbox\/lol\/match$/);
   expect(new URL((await iframe.getAttribute("src"))!).port).not.toBe(new URL(page.url()).port);
-  // 插件页直接打开（宿主没推结果）：App 自己调 kotone_lol_tier，宿主还原成 lol.tier、绑定英雄联盟插件
+  // 插件页直接打开（宿主没推结果）：App 自己调 kotone_lol_scout，宿主还原成 lol.scout、绑定英雄联盟插件
+  await expect.poll(async () => (await calls(page)).filter((c) => c.tool === "lol.scout").slice(0, 1)).toEqual([{ plugin: "lol", tool: "lol.scout" }]);
+  const app = await appFrame(page, "match");
+  // App 里换到强度榜：App 自己调 kotone_lol_tier
+  await app.getByTestId("lol-app-tab-tier").click();
   await expect.poll(async () => (await calls(page)).filter((c) => c.tool === "lol.tier")).toEqual([{ plugin: "lol", tool: "lol.tier" }]);
-  const app = await appFrame(page);
   await expect(app.locator("body")).toContainText("腾讯 101");
   await expect(app.locator("body")).toContainText("T0");
   await page.screenshot({ path: shot(testInfo, "tier-app-plugin-page") });
 });
 
-test("the App only reaches its own plugin: lol tools work, other plugins' tools are refused, ui:// links open its pages", async ({ page }) => {
+test("the App only reaches its own plugin: lol tools work, other plugins' tools are refused, its settings link opens the plugin's settings", async ({ page }) => {
   await open(page);
-  const pluginPage = await tierTab(page);
-  await expect(pluginPage.locator(`[data-testid="mcp-app-frame"][data-uri="${TIER}"]`)).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
-  const app = await appFrame(page);
+  const pluginPage = await lolPage(page);
+  await expect(pluginPage.locator(`[data-testid="mcp-app-frame"][data-uri="${MATCH}"]`)).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
+  const app = await appFrame(page, "match");
   // 从这里起宿主替 App 调的工具（别的界面，例如左侧栏的播放条，也会调自己插件的工具）
   const before = (await calls(page)).length;
   const since = async () => (await calls(page)).slice(before);
@@ -97,7 +100,7 @@ test("the App only reaches its own plugin: lol tools work, other plugins' tools 
     expect(refused.error?.message, name).toContain("cannot call");
   }
   // 读资源只读自己插件的
-  const own = await rpc(app, 90_005, "resources/read", { uri: TIER });
+  const own = await rpc(app, 90_005, "resources/read", { uri: MATCH });
   expect((own.result?.contents as { mimeType: string }[])[0].mimeType).toBe("text/html;profile=mcp-app");
   const other = await rpc(app, 90_006, "resources/read", { uri: "ui://kotone/music/home" });
   expect(other.error).toBeDefined();
@@ -108,15 +111,13 @@ test("the App only reaches its own plugin: lol tools work, other plugins' tools 
   for (const [id, url] of [[90_007, "ui://kotone/music/home"], [90_008, "javascript:alert(1)"]] as const) {
     expect((await rpc(app, id, "ui/open-link", { url })).result?.isError, url).toBe(true);
   }
-  // App 请宿主打开本插件的另一个页面（ui://kotone/lol/…?参数）：在插件页里点进去（App 跟着卸下），能返回
+  // App 请宿主打开本插件的设置（App 里的“去设置”）：插件页切到设置，再点“设置”回到 App
   await app.evaluate(() => window.parent.postMessage({ jsonrpc: "2.0", id: 90_009, method: "ui/open-link",
-    params: { url: "ui://kotone/lol/champion?champion=亚索&mode=rift&lane=TOP" } }, "*"));
-  const stack = pluginPage.getByTestId("plugin-lol-tier");
-  await expect(stack).toHaveAttribute("data-uri", "ui://kotone/lol/champion");
-  await expect(stack.getByTestId("lol-champion-name")).toContainText("亚索");
-  await stack.getByTestId("plugin-lol-tier-back").click();
-  await expect(stack).toHaveAttribute("data-uri", TIER);
-  await expect(stack.locator('[data-testid="mcp-app-frame"]')).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
+    params: { url: "ui://kotone/lol/settings" } }, "*"));
+  await expect(page.getByTestId("plugin-page")).toHaveAttribute("data-view", "settings");
+  await expect(page.getByTestId("plugin-settings").getByTestId("plugin-lol-source-client")).toBeVisible();
+  await page.getByTestId("plugin-settings-button").click();
+  await expect(page.getByTestId("plugin-page")).toHaveAttribute("data-view", "app");
 });
 
 test("the tier card in the chat is the same App, inline, shown with the result she got (it does not fetch again)", async ({ page }, testInfo) => {
@@ -126,7 +127,7 @@ test("the tier card in the chat is the same App, inline, shown with the result s
   const frame = card.locator('[data-testid="mcp-app-frame"]');
   await expect(frame).toHaveAttribute("data-display", "inline");
   await expect(frame).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
-  const app = await appFrame(page);
+  const app = await appFrame(page, "tier");
   await expect(app.locator("body")).toContainText("腾讯 101");
   // 卡片用的是推过去的结果：宿主没替它再调 lol.tier
   expect((await calls(page)).filter((c) => c.tool === "lol.tier")).toEqual([]);

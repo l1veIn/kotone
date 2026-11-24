@@ -286,9 +286,27 @@ impl LolPlugin {
             }
         ));
         let champion = |cid: i64| Self::champion_json(names, cid);
+        // 图（页面用，ADR 039 D6）：客户端资料读过才有路径，没读过是空字符串（页面显示名字的第一个字）
+        let data = self.loaded_data();
+        let data = data.as_deref();
+        let item_icon = |i: i64| {
+            data.and_then(|d| d.item_icons.get(&i))
+                .cloned()
+                .unwrap_or_default()
+        };
+        let rune_icon = |i: i64| {
+            data.and_then(|d| d.perks.get(&i).or_else(|| d.perk_styles.get(&i)))
+                .map(|p| p.icon.clone())
+                .unwrap_or_default()
+        };
+        let spell_icon = |i: i64| {
+            data.and_then(|d| d.spell_by_id(i))
+                .map(|s| s.icon.clone())
+                .unwrap_or_default()
+        };
         let named_items = |ids: &[i64]| -> Vec<Value> {
             ids.iter()
-                .map(|i| json!({"id": i, "name": statics.item(*i)}))
+                .map(|i| json!({"id": i, "name": statics.item(*i), "icon": item_icon(*i)}))
                 .collect()
         };
         let options = |list: &[qq101::BuildOption]| -> Vec<Value> {
@@ -316,15 +334,15 @@ impl LolPlugin {
                 "sixth": options(&detail.build.sixth),
             },
             "runes": detail.runes.iter().take(3).map(|r| json!({
-                "primary": r.primary.iter().map(|x| json!({"id": x, "name": statics.rune(*x)})).collect::<Vec<_>>(),
-                "secondary": r.secondary.iter().map(|x| json!({"id": x, "name": statics.rune(*x)})).collect::<Vec<_>>(),
-                "shards": r.shards.iter().map(|x| json!({"id": x, "name": statics.rune(*x)})).collect::<Vec<_>>(),
+                "primary": r.primary.iter().map(|x| json!({"id": x, "name": statics.rune(*x), "icon": rune_icon(*x)})).collect::<Vec<_>>(),
+                "secondary": r.secondary.iter().map(|x| json!({"id": x, "name": statics.rune(*x), "icon": rune_icon(*x)})).collect::<Vec<_>>(),
+                "shards": r.shards.iter().map(|x| json!({"id": x, "name": statics.rune(*x), "icon": rune_icon(*x)})).collect::<Vec<_>>(),
                 "winRate": r.win_rate, "pickRate": r.pick_rate, "games": r.games,
             })).collect::<Vec<_>>(),
             "skillPriority": detail.skill_priority,
             "skillOrder": detail.skill_order,
             "spells": detail.spells.iter().map(|p| json!({
-                "spells": p.spells.iter().map(|x| json!({"id": x, "name": statics.spell(*x)})).collect::<Vec<_>>(),
+                "spells": p.spells.iter().map(|x| json!({"id": x, "name": statics.spell(*x), "icon": spell_icon(*x)})).collect::<Vec<_>>(),
                 "winRate": p.win_rate, "pickRate": p.pick_rate,
             })).collect::<Vec<_>>(),
                         "sources": [{"name": TENCENT, "date": date}],
@@ -374,6 +392,7 @@ impl LolPlugin {
         }
         let mut augments = Vec::new();
         let mut attribution = None;
+        let data = self.loaded_data();
         if let Ok(d) = &hex {
             attribution = Some(aramhex::attribution(d));
             for (aid, s) in d.best_for(id, 10, MIN_AUGMENT_GAMES) {
@@ -382,6 +401,8 @@ impl LolPlugin {
                     "id": aid,
                     "name": a.map(|a| a.name.as_str()).unwrap_or(""),
                     "rarity": a.map(|a| a.rarity.as_str()).unwrap_or(""),
+                    // 图标：客户端资料里同一个 id 的海克斯（读过才有）
+                    "icon": data.as_ref().and_then(|g| g.augments.get(&aid)).map(|g| g.icon.as_str()).unwrap_or(""),
                     "games": s.games, "winRate": s.win_rate, "delta": s.delta, "lowSample": s.low_sample,
                 }));
             }

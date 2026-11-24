@@ -12,9 +12,7 @@
   import { sources } from "../assets";
   import { firstChar } from "../format";
   import { m } from "../i18n.svelte";
-  import type { Augment } from "../types";
-
-  let { augment, size = 20 }: { augment: Augment; size?: number } = $props();
+  let { augment, size = 20 }: { augment: { id: number; name: string; icon?: string; rarity?: string }; size?: number } = $props();
   const rarity = $derived(rarityOf(augment.rarity));
   const rarityName = $derived(
     {

@@ -12,6 +12,7 @@ import {
   type McpUiHostContext,
 } from "@modelcontextprotocol/ext-apps";
 import { setLocale } from "./i18n.svelte";
+import type { ToolState } from "./status";
 
 export type ToolResult = Awaited<ReturnType<App["callServerTool"]>>;
 export type DisplayMode = McpUiDisplayMode;
@@ -21,6 +22,10 @@ export const TOOL_TIER = "kotone_lol_tier";
 export const TOOL_SCOUT = "kotone_lol_scout";
 export const TOOL_PLAYER = "kotone_lol_player";
 export const TOOL_GAME = "kotone_lol_game";
+export const TOOL_CHAMPION = "kotone_lol_champion";
+
+/** 插件的设置页（宿主的页面：数据开关、风险提示、操作客户端的偏好）。 */
+export const PAGE_SETTINGS = "ui://kotone/lol/settings";
 
 /** 插件给资源时插的那一行（`plugins/lol/src/app.rs`）：这个 HTML 显示哪一页。 */
 export function currentPage(): string {
@@ -130,15 +135,17 @@ export function resultText(result: ToolResult): string {
   return resultStatus(result).text;
 }
 
-/** 结果里的状态（`ok` / `not_in_game` / `error`……）和那句话；不是 JSON 时状态是空。 */
-export function resultStatus(result: ToolResult): { status: string; text: string } {
+/** 结果里的状态（`ok` / `not_in_game` / `error`……）、细分的原因和那句话；不是 JSON 时状态是空（出错时 `error`）。 */
+export function resultStatus(result: ToolResult): ToolState {
   const block = result.content?.find((c) => c.type === "text");
   const text = block && "text" in block ? String(block.text) : "";
   try {
-    const parsed = JSON.parse(text) as { status?: unknown; text?: unknown; error?: unknown };
+    const parsed = JSON.parse(text) as { status?: unknown; reason?: unknown; text?: unknown; error?: unknown };
     const status = typeof parsed.status === "string" ? parsed.status : result.isError ? "error" : "";
-    if (typeof parsed.text === "string") return { status, text: parsed.text };
+    const reason = typeof parsed.reason === "string" ? parsed.reason : undefined;
+    if (typeof parsed.text === "string") return { status, reason, text: parsed.text };
     if (typeof parsed.error === "string") return { status: "error", text: parsed.error };
+    return { status, reason, text: "" };
   } catch {
     // 就是一句话
   }

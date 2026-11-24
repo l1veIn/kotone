@@ -182,5 +182,7 @@
   "role_character_footer": "Profile generated with the repochan persona protocol · Stickers and character art © the Kotone project",
   "shell_plugin_missing": "This version has no page for this plugin.",
   "shell_plugin_back": "Back to plugins",
+  "shell_plugin_settings": "Settings",
+  "shell_plugin_settings_close": "Back to the plugin",
   "shell_plugins_open_aria": "Open {name}"
 }

@@ -17,6 +17,13 @@ export interface PluginPageProps {
   plugin: PluginInfo;
   /** 这次打开在 App 的哪里（「去看看」的位置、`openTarget({ page: "plugin", id, params })`）；`n` 每次打开都变。 */
   open?: { params: Record<string, unknown>; n: number } | null;
+  /** 打开插件的设置（插件登记了 `settings` 才有；插件页顶栏的“设置”按钮也是它）。 */
+  openSettings?: () => void;
+}
+
+/** 插件设置页的地址（`ui://kotone/<插件>/settings`）：App 里的“去设置”链接指向它，宿主打开插件页的设置。 */
+export function settingsUri(plugin: string): string {
+  return `ui://kotone/${plugin}/settings`;
 }
 export interface PluginGameSectionProps {
   plugin: PluginInfo;
@@ -84,6 +91,11 @@ export interface PluginUi {
   icon: Component;
   /** 插件的 App：左侧栏「插件」里点卡片打开，占满内容区，用插件自己的界面（宿主只给顶上“← 插件”一条）。 */
   page: Component<PluginPageProps>;
+  /**
+   * 插件的设置（数据开关、风险提示、插件自己的偏好），宿主的 Svelte 页面。登记了，插件页顶栏“← 插件 · 名字”旁边就有
+   * 一个“设置”按钮打开它（插件的 App 是 MCP App 时，App 里不放设置：别的宿主没有 Kotone 的设置）。
+   */
+  settings?: Component<PluginPageProps>;
   /** 左侧栏底部的一小块（例如放歌的小播放条）。插件开着时才显示；要不要显示东西由它自己定。 */
   sidebarFooter?: Component<PluginSidebarFooterProps>;
   /** 聊天输入框上面的一条（例如她要放歌而你没登录网易云时的登录卡片）。插件开着时才显示。 */

@@ -5,8 +5,10 @@
   import { onMount } from "svelte";
   import Footer from "../components/Footer.svelte";
   import Icon from "../components/Icon.svelte";
+  import StateBlock from "../components/StateBlock.svelte";
   import TopBar, { type PageId } from "../components/TopBar.svelte";
-  import { resultStatus, TOOL_SCOUT, type DisplayMode, type Session, type ToolResult } from "../host";
+  import { PAGE_SETTINGS, resultStatus, TOOL_SCOUT, type DisplayMode, type Session, type ToolResult } from "../host";
+  import { stateView, type ToolState } from "../status";
   import { m } from "../i18n.svelte";
   import { isMatchData, type MatchData, type MatchPlayer } from "../types";
   import MatchCard from "./match/MatchCard.svelte";
@@ -27,11 +29,12 @@
     display: DisplayMode;
     onTab: (page: PageId) => void;
     onPlayer: (puuid: string) => void;
-    onGame: (gameId: number) => void;
+    /** 打开单局详情；`justEnded`：从结算的“看这局详情”点进去。 */
+    onGame: (gameId: number, justEnded?: boolean) => void;
   } = $props();
 
   let match = $state<MatchData | null>(null);
-  let status = $state<{ status: string; text: string } | null>(null);
+  let status = $state<ToolState | null>(null);
   let error = $state("");
   let loading = $state(false);
   let loaded = $state(false);
@@ -97,7 +100,10 @@
   });
 
   const pill = $derived.by(() => {
-    if (status && status.status !== "ok") return { dot: "off", label: m.plugin_lol_phase_none(), more: "" };
+    if (status && status.status !== "ok") {
+      const view = stateView(status);
+      return { dot: view.dot, label: view.pill || m.plugin_lol_phase_none(), more: "" };
+    }
     if (!match) return null;
     const label =
       phase === "champ_select"
@@ -147,14 +153,14 @@
         <p class="banner danger" role="alert"><Icon name="alert" />{m.plugin_lol_match_failed({ error })}<button type="button" class="btn" onclick={() => void load()}>{m.plugin_lol_retry()}</button></p>
       {/if}
       {#if match}
-        {#if status}<p class="banner" data-testid="lol-app-status"><Icon name="info" />{status.text}</p>{/if}
-        <MatchFull {match} onPlayer={openPlayer} {onGame} onMine={() => onPlayer("")} />
+        {#if status}<p class="banner" data-testid="lol-app-status-banner" title={status.text}><Icon name="info" />{stateView(status).text}</p>{/if}
+        <MatchFull {match} onPlayer={openPlayer} onGame={(id) => onGame(id, true)} onMine={() => onPlayer("")} />
       {:else if status}
-        <div class="empty-state" data-testid="lol-app-status">
-          <Icon name="map" />
-          <p>{status.text || m.plugin_lol_not_in_game()}</p>
-          <button type="button" class="btn primary" onclick={() => onPlayer("")}>{m.plugin_lol_see_mine()}</button>
-        </div>
+        <StateBlock state={status} onSettings={() => session.openPage(PAGE_SETTINGS, {})}>
+          {#if status.status !== "disabled"}
+            <button type="button" class="btn" data-testid="lol-app-see-mine" onclick={() => onPlayer("")}>{m.plugin_lol_see_mine()}</button>
+          {/if}
+        </StateBlock>
       {:else if !loaded}
         <div class="sk-teams" aria-busy="true" aria-label={m.plugin_lol_loading()}>
           <div class="team">{@render skeleton(5)}</div>
@@ -167,11 +173,11 @@
 {:else}
   <div class="app" data-testid="lol-app-match" data-phase={phase ?? ""}>
     {#if match}
-      <MatchCard {match} {canOpen} onOpen={() => void session.requestDisplayMode("fullscreen")} />
+      <MatchCard {match} {canOpen} onOpen={() => void session.requestDisplayMode("fullscreen")} onLink={session.openLink} />
     {:else if error}
       <p class="card-line danger" role="alert">{m.plugin_lol_match_failed({ error })}</p>
     {:else if status}
-      <p class="card-line" data-testid="lol-app-status">{status.text || m.plugin_lol_not_in_game()}</p>
+      <StateBlock state={status} inline />
     {:else}
       <div aria-busy="true" aria-label={m.plugin_lol_loading()}>{@render skeleton(3)}</div>
     {/if}

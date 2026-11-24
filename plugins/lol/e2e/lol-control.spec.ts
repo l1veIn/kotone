@@ -21,9 +21,10 @@ async function open(page: Page) {
   await page.goto("/#/settings?onboarding=never");
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
   await openPlugin(page, "lol");
-  const pluginPage = page.getByTestId("plugin-page-lol");
+  // 插件的设置在插件页顶栏的“设置”里（App 里不放设置）
+  await page.getByTestId("plugin-settings-button").click();
+  const pluginPage = page.getByTestId("plugin-settings");
   await expect(pluginPage).toBeVisible();
-  await pluginPage.getByTestId("plugin-lol-tab-settings").click();
   return pluginPage;
 }
 

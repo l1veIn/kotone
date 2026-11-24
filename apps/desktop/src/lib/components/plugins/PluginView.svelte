@@ -4,7 +4,8 @@
   // 插件做成 MCP App 的页面（ADR 039 D5）放进 McpAppFrame：卡片是 inline，完整页面是 fullscreen；App 要开本插件的
   // 另一个页面时照旧交给 onOpen，卡片里的 App 请求全屏时交给 onFullscreen（聊天卡片：在右侧栏打开）。
   import { pluginCall } from "$lib/plugins";
-  import { viewOf, type PluginBridge } from "$lib/pluginUi";
+  import { PLUGIN_UI, settingsUri, viewOf, type PluginBridge } from "$lib/pluginUi";
+  import { openTarget } from "$lib/stores/navigation";
   import { m } from "$lib/paraglide/messages.js";
   import McpAppFrame from "./McpAppFrame.svelte";
 
@@ -22,6 +23,15 @@
   } = $props();
 
   const found = $derived(viewOf(uri));
+  /** App 要开的页面：本插件的设置（App 里的“去设置”）在插件页打开，别的交给 onOpen。 */
+  function openFromApp(next: string, nextParams?: Record<string, unknown>) {
+    const plugin = found?.plugin;
+    if (plugin && next === settingsUri(plugin) && PLUGIN_UI[plugin]?.settings) {
+      openTarget({ page: "plugin", id: plugin, params: { view: "settings" } });
+      return;
+    }
+    onOpen?.(next, nextParams);
+  }
   const View = $derived(found ? (compact ? found.view.card : found.view.page) : undefined);
   const bridge: PluginBridge = {
     call: (tool, args = {}) => {
@@ -36,7 +46,7 @@
 
 {#if found?.view.app}
   <McpAppFrame {uri} {params} {data} displayMode={compact ? "inline" : "fullscreen"}
-    onOpenPage={(next, nextParams) => onOpen?.(next, nextParams)} onRequestFullscreen={onFullscreen} />
+    onOpenPage={openFromApp} onRequestFullscreen={onFullscreen} />
 {:else if View}
   <View {uri} {params} {data} {bridge} />
 {:else if !compact}

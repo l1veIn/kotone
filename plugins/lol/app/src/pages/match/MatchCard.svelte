@@ -12,7 +12,7 @@
   import type { MatchData, MatchPlayer } from "../../types";
   import { partiesIn, partyOf, phaseOf, pickOf, teamStats } from "./match";
 
-  let { match, canOpen, onOpen }: { match: MatchData; canOpen: boolean; onOpen: () => void } = $props();
+  let { match, canOpen, onOpen, onLink }: { match: MatchData; canOpen: boolean; onOpen: () => void; onLink?: (url: string) => void } = $props();
 
   const phase = $derived(phaseOf(match));
   const champSelect = $derived(phase === "champ_select");
@@ -93,7 +93,7 @@
   {#each weak as p (p.puuid)}
     <div class="card-why" data-testid="lol-card-weak"><Icon name="target" /><span><b>{p.champion.short}</b>{m.plugin_lol_card_weak_why({ why: (p.weak ?? []).join(m.plugin_lol_list_sep()) })}</span></div>
   {/each}
-  <Footer data="" card extra={match.waiting > 0 ? m.plugin_lol_waiting_count({ count: match.waiting }) : ""} />
+  <Footer data="" card extra={match.waiting > 0 ? m.plugin_lol_waiting_count({ count: match.waiting }) : ""} onLink={onLink} />
 </div>
 
 <style>

@@ -195,6 +195,16 @@ export interface GamePlayer {
   profileIcon?: string;
   spells?: Iconed[];
   perks?: Perks | null;
+  /** 这一行是我（看别人的对局时都是 false）。 */
+  me?: boolean;
+}
+
+export interface GameTeam {
+  teamId: number;
+  win: boolean;
+  /** 我在这一队。 */
+  ally?: boolean;
+  players: GamePlayer[];
 }
 
 export interface GameData {
@@ -203,13 +213,107 @@ export interface GameData {
   queue: string;
   createdMs: number;
   durationS: number;
-  teams: { teamId: number; win: boolean; players: GamePlayer[] }[];
+  teams: GameTeam[];
+  /** 这一局刚结束（结算、“这局总结”自动卡片打开时）。 */
+  justEnded?: boolean;
 }
 
 export function isGameData(value: unknown): value is GameData {
   const v = value as Partial<GameData> | null;
   return !!v && Array.isArray(v.teams);
 }
+
+// ---------- 英雄（`lol.champion`，plugins/lol/src/stats_tools.rs 的 champion_tool） ----------
+
+/** 出装、符文、召唤师技能的一项：图标路径是后加的（客户端资料读过才有，没有时空）。 */
+export interface Named {
+  id: number;
+  name: string;
+  icon?: string;
+}
+export interface Matchup {
+  champion: Champion;
+  winRate: number | null;
+}
+export interface BuildOption {
+  items: Named[];
+  winRate: number | null;
+  pickRate: number | null;
+}
+export interface RunePage {
+  primary: Named[];
+  secondary: Named[];
+  shards: Named[];
+  winRate: number | null;
+  pickRate: number | null;
+  games: number;
+}
+export interface TierRowRaw {
+  rank: number | null;
+  championId: number;
+  tier: string;
+  lane: string;
+  winRate: number | null;
+  pickRate: number | null;
+  banRate: number | null;
+}
+export interface OpggBlock {
+  text?: string;
+  error?: string;
+  attribution: string;
+  url: string;
+  stale?: boolean;
+}
+export interface ChampionRift {
+  mode: "rift";
+  champion: Champion;
+  lane: string;
+  laneName: string;
+  patch: string;
+  date: string;
+  tier: TierRowRaw | null;
+  goodAgainst: Matchup[];
+  badAgainst: Matchup[];
+  build: { starting: BuildOption[]; boots: BuildOption[]; core: BuildOption[]; fourth: BuildOption[]; fifth: BuildOption[]; sixth: BuildOption[] };
+  runes: RunePage[];
+  skillPriority: string[];
+  skillOrder: string[];
+  spells: { spells: Named[]; winRate: number | null; pickRate: number | null }[];
+  sources: Source[];
+  stale: boolean;
+  opgg: OpggBlock | null;
+}
+export interface MayhemAugment {
+  id: number;
+  name: string;
+  rarity: string;
+  icon?: string;
+  games: number;
+  winRate: number;
+  delta: number;
+  lowSample: boolean;
+}
+export interface ChampionMayhem {
+  mode: "mayhem";
+  champion: Champion;
+  rank: number | null;
+  winRate: number | null;
+  pickRate: number | null;
+  partners: Champion[];
+  augments: MayhemAugment[];
+  /** aramhex-data 的署名（CC BY-NC 4.0）；没读到时 null。 */
+  attribution: string | null;
+  sources: Source[];
+}
+export type ChampionData = ChampionRift | ChampionMayhem;
+
+export function isChampionData(value: unknown): value is ChampionData {
+  const v = value as { mode?: unknown; champion?: unknown } | null;
+  return !!v && (v.mode === "rift" || v.mode === "mayhem") && typeof v.champion === "object" && v.champion !== null;
+}
+
+/** aramhex-data 的仓库（署名链接）。 */
+export const ARAMHEX_URL = "https://github.com/czgreat/aramhex-data";
 
 // ---------- 强度榜（`lol.tier`，plugins/lol/src/stats_tools.rs 的 tier_tool） ----------
 
@@ -243,6 +347,6 @@ export type TierData =
   | { mode: "mayhem"; date: string; rows: MayhemRow[]; sources: Source[]; stale?: boolean };
 
 export function isTierData(value: unknown): value is TierData {
-  const mode = (value as { mode?: unknown } | null)?.mode;
-  return mode === "rift" || mode === "mayhem";
+  const v = value as { mode?: unknown; lanes?: unknown; rows?: unknown } | null;
+  return (v?.mode === "rift" && typeof v.lanes === "object" && v.lanes !== null) || (v?.mode === "mayhem" && Array.isArray(v.rows));
 }

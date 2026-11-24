@@ -182,5 +182,7 @@
   "role_character_footer": "档案由 repochan persona 协议生成 · 贴纸与立绘版权归 Kotone 项目",
   "shell_plugin_missing": "这个版本里没有这个插件的页面。",
   "shell_plugin_back": "返回插件",
+  "shell_plugin_settings": "设置",
+  "shell_plugin_settings_close": "回到插件",
   "shell_plugins_open_aria": "打开{name}"
 }

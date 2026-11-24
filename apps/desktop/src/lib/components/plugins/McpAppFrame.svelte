@@ -18,7 +18,9 @@
   import { openExternal } from "$lib/ipc";
   import { resolvedTheme } from "$lib/appearance/appearanceRuntime";
   import { currentLocale } from "$lib/locale";
-  import { callAppTool, mcpToolName, openApp, parseAppLink, pluginInfo, readAppResource } from "$lib/mcpApps";
+  import { callAppTool, mcpToolName, openApp, parseAppLink, pluginInfo, readAppResource, toCallToolResult, type CallToolResult } from "$lib/mcpApps";
+  import { pluginCall } from "$lib/plugins";
+  import { FROM_PAGE } from "$lib/pluginUi";
   import { m } from "$lib/paraglide/messages.js";
 
   let { uri, displayMode, data = null, params = {}, onOpenPage, onRequestFullscreen }: {
@@ -26,7 +28,10 @@
     uri: string;
     /** fullscreen：插件页、右侧栏（宽度占满，高度跟 App 报的走、至少 22rem，外面的页面滚）；inline：聊天卡片（高度跟 App 报的走，有上限）。 */
     displayMode: "inline" | "fullscreen";
-    /** 工具结果给页面的数据（structuredContent）：有就在握手后推给 App；null = App 自己去取。 */
+    /**
+     * 工具结果给页面的数据（structuredContent）：有就在握手后推给 App。null 而 `params` 有东西（她 `ui.open` 带参数打开、
+     * 别处跳过来）时宿主先替 App 调这一页的工具再推（App 照样只认推来的结果）；都没有 = App 自己去取。
+     */
     data?: unknown;
     /** 工具的参数（推结果前先推 tool-input）。 */
     params?: Record<string, unknown>;
@@ -78,8 +83,21 @@
       if (disposed) return dispose;
       plugin = app.plugin;
       // 推了结果就告诉 App 是哪个工具开的它（App 等结果，不自己再取一遍）
-      const info = data != null ? await pluginInfo(app.plugin) : null;
-      const tool = info?.tools.find((t) => t.page === uri && t.visibility.includes("model"))?.name;
+      const args = Object.fromEntries(Object.entries(plain(params) as Record<string, unknown>).filter(([key]) => key !== FROM_PAGE));
+      const withArgs = data == null && Object.keys(args).length > 0;
+      const info = data != null || withArgs ? await pluginInfo(app.plugin) : null;
+      // 这一页的工具（她调的、或只给页面用的，例如单局详情的 lol.game）
+      const pageTool = info?.tools.find((t) => t.page === uri && (data != null || t.visibility.includes("app")))?.name;
+      let pushed: CallToolResult | null = data != null ? { content: [], structuredContent: plain(data) as Record<string, unknown> } : null;
+      if (withArgs && pageTool) {
+        try {
+          pushed = toCallToolResult(await pluginCall(app.plugin, pageTool, args));
+        } catch (e) {
+          console.debug("[mcp app] page tool", pageTool, e);
+        }
+      }
+      if (disposed) return dispose;
+      const tool = pushed ? pageTool : undefined;
 
       frame = document.createElement("iframe");
       frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms");
@@ -134,10 +152,10 @@
         if (disposed) return;
         initialized = true;
         phase = "ready";
-        if (data != null) {
+        if (pushed) {
           // 对话记录里的数据是 Svelte 的响应式代理，postMessage 克隆不了：先变成普通对象
-          void b.sendToolInput({ arguments: plain(params) as Record<string, unknown> });
-          void b.sendToolResult({ content: [], structuredContent: plain(data) as Record<string, unknown> });
+          void b.sendToolInput({ arguments: args });
+          void b.sendToolResult(pushed as never);
         }
       });
 

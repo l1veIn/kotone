@@ -76,11 +76,16 @@ function player(i: number): MatchPlayer {
   };
 }
 
+/** 这局的阶段（预览和测试里用 `window.__kotoneLolPhase` 切：champ_select / loading / in_game / post_match）。 */
+export type SamplePhase = "champ_select" | "loading" | "in_game" | "post_match";
+
 /** 这局（`lol.scout` 的页面数据）。 */
-export function sampleMatch(): MatchData {
+export function sampleMatch(phase: SamplePhase = "loading"): MatchData & Record<string, unknown> {
   return {
     gameId: 9_100_000, queueId: 2400, mode: QUEUE, random: true, waiting: 0,
     allies: [0, 1, 2, 3, 4].map(player), enemies: [5, 6, 7, 8, 9].map(player),
+    phase, phaseSince: Date.now() - 12_000, namesHidden: false, bench: [],
+    result: phase === "post_match" ? { win: true, durationS: 1112, gameId: 9_000_000 } : null, resultPending: false,
   };
 }
 

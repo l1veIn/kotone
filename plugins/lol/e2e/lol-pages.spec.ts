@@ -1,8 +1,9 @@
-// 英雄联盟插件的页面和聊天卡片（ADR 038 第 2 步，照 MCP Apps）：她查战绩，聊天里出一张卡片（她那一刻看到的样子）；
-// 点开在右侧栏是完整页面，能点进某个人的战绩、再点进某一局，能返回、关掉；她用 ui.open 也能打开插件页面和设置页；
-// 从左侧栏「插件」的卡片点开的英雄联盟插件（App）有“这局 / 战绩 / 设置”。数据是浏览器预览的示例（apps/desktop/src/lib/ipc/lolMock.ts）。
-// 由 apps/desktop 的 Playwright 一起跑（plugins 项目）。
-import { expect, test, type Page, type TestInfo } from "@playwright/test";
+// 英雄联盟插件的页面都是插件的 MCP App（ADR 039 D5；docs/design/lol-app.md）：插件页整页是 App（自己的导航：这局 · 战绩 ·
+// 英雄 · 强度榜），聊天里的卡片是同一个 App 的 inline，右侧栏是 fullscreen。插件的设置是宿主的页面（插件页顶栏的“设置”）。
+// 这里看 App 在 Kotone 里的样子和用法：这局的加载、结算、不在对局里；点人看战绩、点一局看单局详情、能返回；搜人；她 ui.open
+// 带参数打开；设置按钮。数据是浏览器预览的示例（apps/desktop/src/lib/ipc/lolMock.ts、lolStatsMock.ts）；App 是
+// plugins/lol/app/dist（test:e2e 先打包）。由 apps/desktop 的 Playwright 一起跑（plugins 项目）。
+import { expect, test, type FrameLocator, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { join } from "node:path";
 
 /** 插件的 App（ADR 038）：左侧栏「插件」→ 点它的卡片；左侧栏亮的是「插件」。
@@ -14,88 +15,170 @@ async function openPlugin(page: Page, id: string) {
   await expect(page.getByTestId("settings-nav-plugins")).toHaveAttribute("aria-current", "page");
 }
 
-/** 截图放在仓库的 target/plugin-shots/step2/（实现记录用）；testDir 是 plugins/。 */
-const shot = (testInfo: TestInfo, name: string) => join(testInfo.project.testDir, "..", "target", "plugin-shots", "step2", `${name}.png`);
+/** 截图放在仓库的 target/plugin-shots/round7/（实现记录用）；testDir 是 plugins/。 */
+const shot = (testInfo: TestInfo, name: string) => join(testInfo.project.testDir, "..", "target", "plugin-shots", "round7", `${name}.png`);
 
-async function open(page: Page) {
+async function open(page: Page, phase?: string) {
   await page.setViewportSize({ width: 1440, height: 900 });
+  if (phase) await page.addInitScript(`window.__kotoneLolPhase = ${JSON.stringify(phase)}`);
   await page.goto("/#/settings?onboarding=never");
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
 }
 
-test("asking for this match's history leaves a card in the chat that opens the full page in the right sidebar", async ({ page }, testInfo) => {
+/** 一个 McpAppFrame 里的 App（沙盒代理页里面那一层 iframe）。 */
+function app(scope: Locator): FrameLocator {
+  return scope.frameLocator('[data-testid="mcp-app-iframe"]').frameLocator("iframe");
+}
+
+/** 插件页（整页是 App）。 */
+async function pluginApp(page: Page): Promise<FrameLocator> {
+  await openPlugin(page, "lol");
+  const frame = page.getByTestId("plugin-page-lol").getByTestId("mcp-app-frame");
+  await expect(frame).toHaveAttribute("data-display", "fullscreen");
+  await expect(frame).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
+  return app(page.getByTestId("plugin-page-lol"));
+}
+
+test("the plugin page is the App itself: its own tabs, 这局 while loading, a player, a game and back", async ({ page }, testInfo) => {
+  await open(page);
+  const lol = await pluginApp(page);
+  // 宿主不再给一排分页：导航在 App 里
+  await expect(page.getByTestId("plugin-lol-tab-match")).toHaveCount(0);
+  await expect(lol.getByTestId("lol-app-tab-match")).toHaveAttribute("aria-current", "page");
+  for (const tab of ["player", "champion", "tier"]) await expect(lol.getByTestId(`lol-app-tab-${tab}`)).toBeVisible();
+  await expect(lol.getByTestId("lol-app-tab-settings")).toHaveCount(0);
+
+  // 这局（加载）：阶段牌、10 个人、突破口、隐藏战绩、开黑字母、页脚的出处和风险
+  const match = lol.getByTestId("lol-app-match");
+  await expect(match).toHaveAttribute("data-phase", "loading");
+  await expect(lol.getByTestId("lol-match-phase")).toContainText("加载中");
+  await expect(lol.getByTestId("lol-match-player")).toHaveCount(10);
+  const weak = lol.locator('[data-testid="lol-match-player"][data-weak="true"]');
+  await expect(weak).toHaveCount(1);
+  await expect(weak.getByTestId("lol-match-weak")).toContainText("6 连败");
+  await expect(lol.getByTestId("lol-match-hidden")).toHaveCount(1);
+  await expect(lol.getByTestId("lol-match-party")).toHaveCount(4);
+  await expect(lol.getByTestId("lol-app-foot")).toContainText("Legal Jibber Jabber");
+  await lol.getByTestId("lol-app-risk").locator("summary").click();
+  await expect(lol.getByTestId("lol-app-risk")).toContainText("github.com/LeagueAkari/LeagueAkari/issues/523");
+  await page.screenshot({ path: shot(testInfo, "kotone-plugin-page-match") });
+
+  // 点对面的亚索：他的战绩（App 里换页）
+  await weak.click();
+  await expect(lol.getByTestId("lol-app-player")).toBeVisible();
+  await expect(lol.getByTestId("lol-app-tab-player")).toHaveAttribute("aria-current", "page");
+  await expect(lol.getByTestId("lol-player-name")).toHaveText("对手子#1006");
+  await expect(lol.getByTestId("lol-player-game")).toHaveCount(20);
+  await page.screenshot({ path: shot(testInfo, "kotone-plugin-page-player") });
+
+  // 点一局：两队 10 个人；“← 战绩”回去
+  await lol.getByTestId("lol-player-game").first().click();
+  await expect(lol.getByTestId("lol-app-game")).toBeVisible();
+  await expect(lol.getByTestId("lol-game-team")).toHaveCount(2);
+  await expect(lol.getByTestId("lol-game-player")).toHaveCount(10);
+  await expect(lol.getByTestId("lol-game-team").first()).toHaveAttribute("data-win", "true");
+  await page.screenshot({ path: shot(testInfo, "kotone-plugin-page-game") });
+  await lol.getByTestId("lol-game-back").click();
+  await expect(lol.getByTestId("lol-player-name")).toHaveText("对手子#1006");
+  // 从单局点某个人：他的战绩
+  await lol.getByTestId("lol-player-game").first().click();
+  await lol.getByTestId("lol-game-player-open").nth(2).click();
+  await expect(lol.getByTestId("lol-player-name")).toHaveText("玩家丙#1003");
+
+  // 战绩分页：搜人（名字#编号）；找不到的说一句，不清掉
+  await lol.getByTestId("lol-app-tab-player").click();
+  await expect(lol.getByTestId("lol-player-name")).toHaveText("玩家甲#1001");
+  await lol.getByTestId("lol-player-search").fill("对手丑#1007");
+  await lol.getByTestId("lol-player-search-go").click();
+  await expect(lol.getByTestId("lol-player-name")).toHaveText("对手丑#1007");
+  await lol.getByTestId("lol-player-search").fill("没有这个人#0000");
+  await lol.getByTestId("lol-player-search-go").click();
+  await expect(lol.getByTestId("lol-app-status-banner")).toContainText("没找到");
+  await expect(lol.getByTestId("lol-player-name")).toHaveText("对手丑#1007");
+});
+
+test("after the game 这局 shows the result and opens this game with the 刚结束 tag; outside a game it says so", async ({ page }, testInfo) => {
+  await open(page, "post_match");
+  const lol = await pluginApp(page);
+  await expect(lol.getByTestId("lol-app-match")).toHaveAttribute("data-phase", "post_match");
+  await expect(lol.getByTestId("lol-match-phase")).toContainText("结算");
+  const result = lol.getByTestId("lol-match-result");
+  await expect(result).toContainText("胜利");
+  await expect(result).toContainText("18:32");
+  await expect(lol.getByTestId("lol-match-player")).toHaveCount(10);
+  await page.screenshot({ path: shot(testInfo, "kotone-plugin-page-post-match") });
+  await lol.getByTestId("lol-match-result-open").click();
+  await expect(lol.getByTestId("lol-app-game")).toHaveAttribute("data-just-ended", "true");
+  await expect(lol.getByTestId("lol-game-just-ended")).toHaveText("刚结束");
+  await lol.getByTestId("lol-game-back").click();
+  await expect(lol.getByTestId("lol-match-result")).toBeVisible();
+
+  // 不在对局里：翻译好的一句话（不是给她的原话）+ 看我的战绩
+  await page.evaluate("window.__kotoneLolPhase = 'none'");
+  await lol.getByTestId("lol-app-refresh").click();
+  await expect(lol.getByTestId("lol-match-phase")).toContainText("不在对局里");
+  await lol.getByTestId("lol-app-tab-player").click();
+  await lol.getByTestId("lol-app-tab-match").click();
+  const status = lol.getByTestId("lol-app-status");
+  await expect(status).toHaveAttribute("data-status", "not_in_game");
+  await expect(status).toContainText("现在不在对局里");
+  await expect(status).not.toContainText("dev:web");
+  await status.getByTestId("lol-app-see-mine").click();
+  await expect(lol.getByTestId("lol-player-name")).toHaveText("玩家甲#1001");
+});
+
+test("the 设置 button next to the plugin's name opens the host's settings for it and goes back to the App", async ({ page }, testInfo) => {
+  await open(page);
+  await pluginApp(page);
+  const button = page.getByTestId("plugin-settings-button");
+  await expect(button).toHaveAttribute("aria-pressed", "false");
+  await button.click();
+  await expect(page.getByTestId("plugin-page")).toHaveAttribute("data-view", "settings");
+  const settings = page.getByTestId("plugin-settings");
+  await expect(settings.getByTestId("plugin-lol-source-client")).toHaveAttribute("aria-checked", "true");
+  await expect(settings.getByTestId("plugin-lol-source-client-risk")).toContainText("可能违反腾讯的用户协议");
+  await expect(settings.getByTestId("plugin-lol-control-section")).toBeVisible();
+  await page.screenshot({ path: shot(testInfo, "kotone-plugin-settings") });
+  // 点插件名或再点一次“设置”：回到 App（没重新加载，还在原来那页）
+  await page.getByTestId("plugin-app-name").click();
+  await expect(page.getByTestId("plugin-page")).toHaveAttribute("data-view", "app");
+  await expect(page.getByTestId("plugin-settings")).toHaveCount(0);
+  await expect(app(page.getByTestId("plugin-page-lol")).getByTestId("lol-app-match")).toBeVisible();
+});
+
+test("asking for this match's history leaves the App as a card in the chat; opening it shows the full App in the right sidebar", async ({ page }, testInfo) => {
   await open(page);
   const card = page.locator('[data-testid="plugin-card"][data-uri="ui://kotone/lol/match"]');
   await expect(card).toBeVisible();
+  await expect(card).toHaveAttribute("data-app", "true");
   // 工具那一行写人话，不是 lol.scout
   await expect(page.locator('[data-testid="agent-tool-card"][data-tool-name="lol.scout"]')).toContainText("查这局的战绩");
-  // 卡片：对面 5 个人、突破口一句、我方收成一行
-  await expect(card.getByTestId("lol-match-card-enemy")).toHaveCount(5);
-  await expect(card.getByTestId("lol-match-card-weak")).toContainText("突破口：亚索");
-  await expect(card).toContainText("我方：");
   await card.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: shot(testInfo, "chat-card") });
+  const frame = card.getByTestId("mcp-app-frame");
+  await expect(frame).toHaveAttribute("data-display", "inline");
+  await expect(frame).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
+  const inline = app(card);
+  await expect(inline.getByTestId("lol-match-card")).toBeVisible();
+  await expect(inline.getByTestId("lol-card-row")).toHaveCount(10);
+  await expect(inline.getByTestId("lol-card-weak")).toContainText("亚索");
+  await card.screenshot({ path: shot(testInfo, "kotone-chat-card-match") });
 
   await card.getByTestId("plugin-card-open").click();
   const sidebar = page.getByTestId("right-sidebar");
   await expect(sidebar.getByTestId("sidebar-tab-page")).toHaveAttribute("aria-selected", "true");
-  await expect(sidebar.getByTestId("sidebar-tab-page")).toContainText("这局");
   const stack = sidebar.getByTestId("sidebar-plugin-page");
   await expect(stack).toHaveAttribute("data-uri", "ui://kotone/lol/match");
+  await expect(stack.getByTestId("mcp-app-frame")).toHaveAttribute("data-phase", "ready", { timeout: 15_000 });
+  const full = app(stack);
+  await expect(full.getByTestId("lol-match-player")).toHaveCount(10);
+  // App 里点人：在 App 里换页（右侧栏的一叠不变）
+  await full.locator('[data-testid="lol-match-player"][data-weak="true"]').click();
+  await expect(full.getByTestId("lol-player-name")).toHaveText("对手子#1006");
   await expect(stack).toHaveAttribute("data-depth", "1");
-  // 先是她查的那一刻的样子
-  await expect(stack.getByTestId("lol-snapshot")).toBeVisible();
-  await expect(stack.getByTestId("lol-match-player")).toHaveCount(10);
-  const weak = stack.locator('[data-testid="lol-match-player"][data-weak="true"]');
-  await expect(weak).toHaveCount(1);
-  await expect(weak.getByTestId("lol-match-weak")).toContainText("6 连败");
-  await expect(stack.getByTestId("lol-match-hidden")).toHaveCount(1);
-  await expect(stack.getByTestId("lol-match-party")).toHaveCount(4);
-  await page.screenshot({ path: shot(testInfo, "sidebar-match-page") });
-  // 刷新：看现在的（示例数据一样），快照的说明去掉
-  await stack.getByTestId("lol-refresh").click();
-  await expect(stack.getByTestId("lol-snapshot")).toHaveCount(0);
-
-  // 点对面的亚索：他的战绩
-  await weak.click();
-  await expect(stack).toHaveAttribute("data-uri", "ui://kotone/lol/player");
-  await expect(stack).toHaveAttribute("data-depth", "2");
-  await expect(sidebar.getByTestId("sidebar-plugin-page-title")).toHaveText("战绩");
-  await expect(stack.getByTestId("lol-player-name")).toHaveText("对手子#1006");
-  await expect(stack.getByTestId("lol-player-game")).toHaveCount(20);
-  await page.screenshot({ path: shot(testInfo, "sidebar-player-page") });
-
-  // 点一局：这局 10 个人
-  await stack.getByTestId("lol-player-game").first().click();
-  await expect(stack).toHaveAttribute("data-uri", "ui://kotone/lol/game");
-  await expect(stack).toHaveAttribute("data-depth", "3");
-  await expect(stack.getByTestId("lol-game-team")).toHaveCount(2);
-  await expect(stack.getByTestId("lol-game-player")).toHaveCount(10);
-  await expect(stack.getByTestId("lol-game-team").first()).toHaveAttribute("data-win", "true");
-  await page.screenshot({ path: shot(testInfo, "sidebar-game-page") });
-  // 从单局点某个人：又是战绩
-  await stack.getByTestId("lol-game-player-open").nth(2).click();
-  await expect(stack).toHaveAttribute("data-depth", "4");
-  await expect(stack.getByTestId("lol-player-name")).toHaveText("玩家丙#1003");
-
-  // 返回一层层回去
-  for (const depth of ["3", "2", "1"]) {
-    await sidebar.getByTestId("sidebar-plugin-page-back").click();
-    await expect(stack).toHaveAttribute("data-depth", depth);
-  }
-  await expect(sidebar.getByTestId("sidebar-plugin-page-back")).toHaveCount(0);
-  await expect(stack).toHaveAttribute("data-uri", "ui://kotone/lol/match");
-
-  // 关掉：回到“卡片”，“页面”标签没了
-  await sidebar.getByTestId("sidebar-plugin-page-close").click();
-  await expect(sidebar.getByTestId("sidebar-tab-page")).toHaveCount(0);
-  await expect(sidebar.getByTestId("sidebar-tab-cards")).toHaveAttribute("aria-selected", "true");
-  // 卡片还在，再点开是一叠新的
-  await card.getByTestId("plugin-card-body").click();
-  await expect(sidebar.getByTestId("sidebar-plugin-page")).toHaveAttribute("data-depth", "1");
+  await page.screenshot({ path: shot(testInfo, "kotone-sidebar-player") });
 });
 
-test("ui.open opens a plugin page in the right sidebar and a settings page in settings", async ({ page }) => {
+test("ui.open with parameters opens that page of the App in the right sidebar; old settings addresses still land", async ({ page }) => {
   await open(page);
   // 先离开聊天页：插件页面要回到聊天页的右侧栏
   await page.getByTestId("settings-nav-game").click();
@@ -105,10 +188,10 @@ test("ui.open opens a plugin page in the right sidebar and a settings page in se
   await expect(page.getByTestId("assistant-chat")).toBeVisible();
   const stack = sidebar.getByTestId("sidebar-plugin-page");
   await expect(stack).toHaveAttribute("data-uri", "ui://kotone/lol/player");
-  // 没带数据：页面自己去读（lol.player），这个人是隐藏战绩
-  await expect(stack.getByTestId("lol-player-name")).toHaveText("对手寅#1008");
-  await expect(stack).toContainText("隐藏战绩");
-  await expect(stack.getByTestId("lol-snapshot")).toHaveCount(0);
+  // 带了参数没带数据：宿主替 App 调 lol.player 再推过去；这个人是隐藏战绩
+  const full = app(stack);
+  await expect(full.getByTestId("lol-player-name")).toHaveText("对手寅#1008");
+  await expect(full.getByTestId("lol-player-hidden")).toBeVisible();
 
   // 旧的设置页地址：插件搬到了左侧栏的「插件」
   expect(await page.evaluate("window.kotoneUiOpen({ uri: 'ui://kotone/settings/plugins' })")).toBe(true);
@@ -117,37 +200,4 @@ test("ui.open opens a plugin page in the right sidebar and a settings page in se
   // 认不出的地址：不动
   expect(await page.evaluate("window.kotoneUiOpen({ uri: 'ui://kotone/settings/' })")).toBe(false);
   expect(await page.evaluate("window.kotoneUiOpen({ uri: 'https://example.com' })")).toBe(false);
-});
-
-test("the League of Legends plugin page has 这局 and 战绩 tabs that work without her", async ({ page }, testInfo) => {
-  await open(page);
-  await openPlugin(page, "lol");
-  const pluginPage = page.getByTestId("plugin-page-lol");
-  // 默认是这局：自己去读 lol.scout
-  await expect(pluginPage.getByTestId("plugin-lol-tab-match")).toHaveAttribute("aria-current", "page");
-  const match = pluginPage.getByTestId("plugin-lol-match");
-  await expect(match.getByTestId("lol-match-player")).toHaveCount(10);
-  await expect(match.getByTestId("lol-snapshot")).toHaveCount(0);
-  await match.locator('[data-testid="lol-match-player"][data-puuid="sample-puuid-0"]').click();
-  await expect(match).toHaveAttribute("data-depth", "2");
-  await expect(match.getByTestId("lol-player-name")).toHaveText("玩家甲#1001");
-
-  // 战绩：默认是自己，能搜别人（名字#编号）
-  await pluginPage.getByTestId("plugin-lol-tab-player").click();
-  const player = pluginPage.getByTestId("plugin-lol-player");
-  await expect(player.getByTestId("lol-player-name")).toHaveText("玩家甲#1001");
-  await player.getByTestId("lol-player-search-input").fill("对手丑#1007");
-  await player.getByTestId("lol-player-search-go").click();
-  await expect(player.getByTestId("lol-player-name")).toHaveText("对手丑#1007");
-  await page.screenshot({ path: shot(testInfo, "plugin-page-player-tab") });
-  // 找不到的人：说一句，不清掉
-  await player.getByTestId("lol-player-search-input").fill("没有这个人#0000");
-  await player.getByTestId("lol-player-search-go").click();
-  await expect(player.getByTestId("lol-status")).toContainText("没有这个人#0000");
-
-  // 切回这局：刚才点到哪还在那
-  await pluginPage.getByTestId("plugin-lol-tab-match").click();
-  await expect(pluginPage.getByTestId("plugin-lol-match")).toHaveAttribute("data-depth", "2");
-  await pluginPage.getByTestId("plugin-lol-match-back").click();
-  await expect(pluginPage.getByTestId("plugin-lol-match")).toHaveAttribute("data-depth", "1");
 });
