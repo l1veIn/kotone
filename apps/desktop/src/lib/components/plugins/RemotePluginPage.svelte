@@ -80,7 +80,7 @@
     {/if}
     {#key shown}
       <div class="min-h-0 flex-1" data-testid="remote-plugin-app" data-uri={shown}>
-        <McpAppFrame uri={shown} displayMode="fullscreen" />
+        <McpAppFrame uri={shown} pluginId={id} displayMode="fullscreen" />
       </div>
     {/key}
   {:else}

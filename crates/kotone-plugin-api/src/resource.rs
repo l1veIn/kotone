@@ -177,6 +177,59 @@ pub fn normalize_csp_source(source: &str) -> Option<String> {
     valid_host_source(source).then(|| source.to_ascii_lowercase())
 }
 
+/// **第三方插件**（玩家加的别人的 MCP 服务器）的 CSP 声明：在 [`normalize_csp_source`] 之上再去掉本机和局域网的地址
+/// （`localhost`、`*.localhost`、`*.local` 这类、回环 / 私网 / 链路本地 / 共享地址段的 IPv4）。
+///
+/// 为什么：App 在 Kotone 里跑在回环代理（`127.0.0.1` 的源）上，浏览器的私网访问检查不拦它；网上的服务器要是能声明
+/// `connectDomains: ["http://127.0.0.1:<端口>"]`，它的页面就能碰你电脑上、局域网里没鉴权的服务。内置插件不走这里。
+/// 解析到本机的公网域名（DNS 重绑定那一类）在这里查不出来，靠的是本机服务自己检查 `Host` / `Origin`。
+pub fn public_csp_source(source: &str) -> Option<String> {
+    let normalized = normalize_csp_source(source)?;
+    let authority = normalized
+        .split_once("://")
+        .map_or(normalized.as_str(), |(_, rest)| rest);
+    let host = match authority.rsplit_once(':') {
+        Some((host, port)) if port.chars().all(|c| c.is_ascii_digit()) => host,
+        _ => authority,
+    };
+    (!local_host(host)).then_some(normalized)
+}
+
+/// 本机、局域网的主机名或地址（[`public_csp_source`]）。
+fn local_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    let bare = host.strip_prefix("*.").unwrap_or(&host);
+    if bare == "localhost"
+        || [
+            ".localhost",
+            ".local",
+            ".lan",
+            ".internal",
+            ".intranet",
+            ".home.arpa",
+        ]
+        .iter()
+        .any(|suffix| bare.ends_with(suffix))
+    {
+        return true;
+    }
+    if let Ok(ip) = bare.parse::<std::net::Ipv4Addr>() {
+        let [a, b, ..] = ip.octets();
+        return ip.is_loopback()
+            || ip.is_private()
+            || ip.is_link_local()
+            || ip.is_unspecified()
+            || ip.is_broadcast()
+            || a == 0
+            // 100.64.0.0/10（运营商级 NAT、Tailscale 这类组网）
+            || (a == 100 && (64..128).contains(&b));
+    }
+    // 最后一段全是数字、又不是完整的 IPv4（`*.0.0.1` 这类，像在通配地址）：不认
+    bare.rsplit('.')
+        .next()
+        .is_some_and(|label| !label.is_empty() && label.chars().all(|c| c.is_ascii_digit()))
+}
+
 fn valid_host_source(source: &str) -> bool {
     if source.is_empty() || source == "*" || source.contains('@') {
         return false;
@@ -266,6 +319,50 @@ mod tests {
         ] {
             assert_eq!(normalize_csp_source(input).as_deref(), expected, "{input}");
         }
+    }
+
+    /// 第三方插件的声明：本机、局域网的地址不要（内置插件照旧用 `normalize_csp_source`）。
+    #[test]
+    fn third_party_csp_drops_local_and_private_hosts() {
+        for refused in [
+            "http://127.0.0.1:8080",
+            "http://127.0.0.1",
+            "127.0.0.1:3000",
+            "ws://localhost:9229",
+            "localhost",
+            "https://*.localhost",
+            "http://printer.local",
+            "https://nas.lan",
+            "https://svc.internal:8443",
+            "http://router.home.arpa",
+            "http://10.0.0.5",
+            "https://172.16.3.4",
+            "https://172.31.255.1",
+            "http://192.168.1.1:80",
+            "http://169.254.169.254",
+            "http://0.0.0.0:8000",
+            "http://100.100.100.100",
+            "https://*.0.0.1",
+            "intranet",
+        ] {
+            assert_eq!(public_csp_source(refused), None, "{refused}");
+        }
+        for (kept, expected) in [
+            ("https://api.example.com/v1", "https://api.example.com"),
+            ("wss://live.example.com", "wss://live.example.com"),
+            ("https://*.example.com", "https://*.example.com"),
+            ("cdn.example.com:8443", "cdn.example.com:8443"),
+            ("http://8.8.8.8", "http://8.8.8.8"),
+            ("https://172.32.0.1", "https://172.32.0.1"),
+            ("https://local.example.com", "https://local.example.com"),
+        ] {
+            assert_eq!(public_csp_source(kept).as_deref(), Some(expected), "{kept}");
+        }
+        // 内置插件的写法检查不变
+        assert_eq!(
+            normalize_csp_source("http://127.0.0.1:8080").as_deref(),
+            Some("http://127.0.0.1:8080")
+        );
     }
 
     #[test]

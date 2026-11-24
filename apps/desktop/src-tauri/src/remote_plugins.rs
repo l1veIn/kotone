@@ -8,7 +8,11 @@
 //!   改设置都用 `Host` 的默认实现（一律拒绝）。
 //! - **不进工具服务**（方案第七节第 2 条，隐私）：工具服务、`kotone.exe mcp` 只列内置插件的工具和资源
 //!   （`plugins::service_specs`、`plugin_apps::list` 只看静态表），外部 Agent 调它们被拒（`plugins::call`）。
-//! - id 不能和内置插件、本体工具的前缀撞（`<id>.<工具>` 要唯一）：撞了的那一项当成配置写错了的卡片。
+//! - id 不能和内置插件、本体工具的前缀撞（`<id>.<工具>` 要唯一）：撞了的、写法不对的那一项**不进插件表**
+//!   （进了的话 `is_remote("lol")` 就成真，真的英雄联盟插件会拿到第三方那份窄的宿主；审查后改的，2026-11-25），
+//!   另列成“有问题的配置”（[`status`]），插件页上说清原因。`mcp.json` 读不出来时也在那里说一句。
+//! - 配置变了（指纹不同）或删掉了：“总是允许”的规则（`agent.permissions.rules` 里 `<id>.*`）跟着清掉，
+//!   和信任一样不留给换上来的那份配置（[`forget_rules`]）。
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -23,6 +27,40 @@ use tauri::AppHandle;
 fn table() -> &'static RwLock<Vec<Arc<RemotePlugin>>> {
     static TABLE: OnceLock<RwLock<Vec<Arc<RemotePlugin>>>> = OnceLock::new();
     TABLE.get_or_init(RwLock::default)
+}
+
+/// `mcp.json` 里没加进来的项（名字和 Kotone 的撞了、不能当 id）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Problem {
+    /// `mcp.json` 里的键。
+    pub id: String,
+    /// `taken`（和内置插件、本体的工具撞了，或者是 Kotone 自己用的名字）、`invalid`（不能当插件 id）。
+    pub kind: &'static str,
+    /// 后端的原话。
+    pub error: String,
+}
+
+/// 上一次读 `mcp.json` 的结果：读不出来的原因（读不出来时插件表不动）、没加进来的项。
+#[derive(Debug, Clone, Default)]
+struct FileState {
+    error: Option<String>,
+    problems: Vec<Problem>,
+}
+
+fn file_state() -> &'static RwLock<FileState> {
+    static STATE: OnceLock<RwLock<FileState>> = OnceLock::new();
+    STATE.get_or_init(RwLock::default)
+}
+
+/// 插件页要的：`mcp.json` 在哪、读不出来的原因、没加进来的项（`mcp_servers_status`）。
+pub fn status() -> Value {
+    let state = file_state().read().unwrap().clone();
+    json!({
+        "path": mcp_path().display().to_string(),
+        "fileError": state.error,
+        "problems": state.problems,
+    })
 }
 
 /// 现在的第三方插件（`mcp.json` 里的顺序）。
@@ -42,8 +80,16 @@ pub fn find(id: &str) -> Option<Arc<RemotePlugin>> {
     plugins().into_iter().find(|p| p.manifest().id == id)
 }
 
+/// 内置插件的 id（编译进来的静态表）。
+fn builtin(id: &str) -> bool {
+    crate::plugins::registry()
+        .iter()
+        .any(|p| p.manifest().id == id)
+}
+
+/// 这个 id 是第三方插件。**先看内置表**：内置插件的 id 永远不算第三方（插件表本来就不收撞名的，这里再挡一道）。
 pub fn is_remote(id: &str) -> bool {
-    find(id).is_some()
+    !builtin(id) && find(id).is_some()
 }
 
 /// `KOTONE_HOME/mcp.json`。
@@ -207,16 +253,59 @@ pub fn host(app: &AppHandle, id: &str) -> Arc<dyn Host> {
     })
 }
 
+/// 能加进插件表的一项：id 和读出来的配置（配置写错了也算，是一张说清哪里不对的卡片）。
+type Entry = (String, Result<ServerSpec, String>);
+
+/// `mcp.json` 的每一项：能加进来的和没加进来的（名字和 Kotone 的撞了、不能当 id）。
+fn split_entries(file: &McpFile) -> (Vec<Entry>, Vec<Problem>) {
+    let mut entries = Vec::new();
+    let mut problems = Vec::new();
+    for id in file.ids() {
+        if let Err(error) = check_new_id(&id) {
+            let kind = if kotone_plugin_api::valid_id(&id) {
+                "taken"
+            } else {
+                "invalid"
+            };
+            problems.push(Problem { id, kind, error });
+            continue;
+        }
+        let spec = file
+            .entry(&id)
+            .ok_or_else(|| "没有这一项".to_string())
+            .and_then(ServerSpec::parse);
+        entries.push((id, spec));
+    }
+    (entries, problems)
+}
+
 /// 读 `mcp.json`，对一遍插件表：配置没变的留着（连接不断）；变了的、删掉的断开；新的加进来并开始（开着、
-/// 还不知道有哪些工具的会去连）。文件坏了不动现在的表（报错）。
+/// 还不知道有哪些工具的会去连）。名字和 Kotone 撞了、不能当 id 的不进表（[`status`] 里说原因）。
+/// 文件坏了不动现在的表（报错，[`status`] 里也有）。
 pub fn reload(app: &AppHandle) -> Result<(), String> {
-    let file = McpFile::load(&mcp_path())?;
+    let file = match McpFile::load(&mcp_path()) {
+        Ok(file) => file,
+        Err(error) => {
+            file_state().write().unwrap().error = Some(error.clone());
+            return Err(error);
+        }
+    };
+    let (entries, problems) = split_entries(&file);
+    for problem in &problems {
+        kotone_core::log::log(&format!(
+            "mcp.json 里的「{}」没加进来：{}",
+            problem.id, problem.error
+        ));
+    }
+    *file_state().write().unwrap() = FileState {
+        error: None,
+        problems,
+    };
     let version = app.package_info().version.to_string();
     let old = plugins();
     let mut next: Vec<Arc<RemotePlugin>> = Vec::new();
     let mut started: Vec<Arc<RemotePlugin>> = Vec::new();
-    for (id, spec) in file.servers() {
-        let spec = spec.and_then(|s| check_new_id(&id).map(|()| s));
+    for (id, spec) in entries {
         let same = old.iter().find(|p| {
             p.manifest().id == id
                 && match (p.server().spec(), &spec) {
@@ -243,12 +332,58 @@ pub fn reload(app: &AppHandle) -> Result<(), String> {
         let server = plugin.server().clone();
         tauri::async_runtime::spawn(async move { server.disconnect().await });
     }
+    // 配置和上次连过的不一样了（这次运行里改的，或者 Kotone 关着时改的、删了又加了同名的）：
+    // “总是允许”的规则不留给新的那份配置
+    for plugin in &started {
+        if let Some(before) = plugin.server().replaced_fingerprint() {
+            let id = &plugin.manifest().id;
+            kotone_core::log::log(&format!(
+                "第三方插件 {id} 的配置变了（{before} → {}），清掉它的“总是允许”",
+                plugin.server().fingerprint()
+            ));
+            forget_rules(app, id);
+            let _ = std::fs::remove_file(data_dir(id).join(kotone_remote_plugin::CACHE_FILE));
+        }
+    }
     for plugin in started {
         let id = plugin.manifest().id.clone();
         kotone_core::log::log(&format!("第三方插件 {id} 登记了"));
         plugin.start(host(app, &id));
     }
     Ok(())
+}
+
+/// 权限里这个第三方插件的工具的规则（`<id>.<工具>`，“总是允许这个工具”记在这里）全部清掉：删掉插件、
+/// 配置变了的时候（信任记的是指纹，配置一变就失效；规则也一样，不留给换上来的那份配置）。
+/// 只对真的第三方插件用：id 和内置插件、本体工具的前缀不会撞（`check_new_id`），清不到别人的规则。
+pub fn forget_rules(app: &AppHandle, id: &str) {
+    use tauri::Manager;
+    let prefix = format!("{id}.");
+    let has = settings(app)
+        .agent
+        .permissions
+        .rules
+        .keys()
+        .any(|tool| tool.starts_with(&prefix));
+    if !has {
+        return;
+    }
+    let updated = app
+        .state::<crate::SharedState>()
+        .settings_repository
+        .update(|next| {
+            next.agent
+                .permissions
+                .rules
+                .retain(|tool, _| !tool.starts_with(&prefix));
+            Ok(())
+        });
+    match updated {
+        Ok(_) => crate::tool_config::notify_settings_changed(app),
+        Err(error) => {
+            kotone_core::log::log(&format!("第三方插件 {id} 的“总是允许”没清掉：{error}"))
+        }
+    }
 }
 
 /// 启动时：读 `mcp.json`、登记第三方插件。
@@ -377,14 +512,15 @@ pub fn preview(
     out
 }
 
-/// 测试用：一个记着 `count` 个给她的工具（`t0`…）和一个只给页面的工具的第三方插件（连不上的地址，不会去连）。
+/// 测试用：一个记着 `count` 个给她的工具（`t0`…）和一个只给页面的工具（它的页面是 `ui://<id>/app`）的
+/// 第三方插件（连不上的地址，不会去连）。
 #[cfg(test)]
 pub(crate) fn test_plugin(id: &str, count: usize) -> Arc<RemotePlugin> {
     let tools: Vec<Value> = (0..count)
         .map(|i| json!({"name": format!("t{i}"), "inputSchema": {"type": "object"}}))
         .chain(std::iter::once(
             json!({"name": "page_only", "inputSchema": {},
-            "_meta": {"ui": {"visibility": ["app"]}}}),
+            "_meta": {"ui": {"visibility": ["app"], "resourceUri": format!("ui://{id}/app")}}}),
         ))
         .collect();
     let spec = ServerSpec::parse(&json!({"url": "http://127.0.0.1:9/mcp"})).unwrap();
@@ -469,11 +605,46 @@ mod tests {
             "reply",
             "memory",
             "web",
+            "saved",
         ] {
             assert!(check_new_id(taken).is_err(), "{taken}");
         }
         assert!(check_new_id("everything").is_ok());
         assert!(check_new_id("Everything").is_err());
+    }
+
+    /// 审查后改的（2026-11-25）：`mcp.json` 里和内置插件撞名（手抄 Claude Desktop 的配置，键名正好是 `lol` /
+    /// `music`）、不能当 id 的项不进插件表，另列成“有问题的配置”；配置写错了但名字没问题的照旧是一张卡片。
+    #[test]
+    fn colliding_entries_stay_out_of_the_plugin_table() {
+        let file = McpFile::parse(
+            r#"{"mcpServers": {
+                "lol": {"command": "npx", "args": ["-y", "lol-mcp"]},
+                "music": {"url": "https://music.example.com/mcp"},
+                "saved": {"command": "x"},
+                "Bad_Name": {"command": "x"},
+                "everything": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-everything"]},
+                "old": {"type": "sse", "url": "https://x.example.com/sse"}
+            }}"#,
+        )
+        .unwrap();
+        let (entries, problems) = split_entries(&file);
+        let ids: Vec<&str> = entries.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, ["everything", "old"]);
+        assert!(
+            entries[0].1.is_ok() && entries[1].1.is_err(),
+            "写错了的还是一张卡片"
+        );
+        let by_id: std::collections::BTreeMap<&str, &Problem> =
+            problems.iter().map(|p| (p.id.as_str(), p)).collect();
+        assert_eq!(by_id.len(), 4);
+        for id in ["lol", "music", "saved"] {
+            assert_eq!(by_id[id].kind, "taken", "{id}");
+            assert!(by_id[id].error.contains("换一个"), "{}", by_id[id].error);
+        }
+        assert_eq!(by_id["Bad_Name"].kind, "invalid");
+        // 内置插件的 id 永远不算第三方
+        assert!(!is_remote("lol") && !is_remote("music"));
     }
 
     #[test]

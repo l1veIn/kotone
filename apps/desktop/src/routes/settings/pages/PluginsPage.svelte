@@ -5,6 +5,8 @@
   // 第三方插件（MCP 方案第 2 期：玩家自己加的别人的 MCP 服务器）在下面另一组：logo 用服务器声明的图标（没有就是首字块），
   // 卡片上标“第三方”和状态（没连上、还没填 Key、还没信任）；右上角“加 MCP 服务器”（粘贴配置、从 Claude / VS Code 导入，
   // 加之前有信任提示）。点开和内置的进同一个位置（PluginPage.svelte：它的 MCP App，或一页工具列表）。
+  // mcp.json 读不出来、里面有没加进来的项（名字和 Kotone 自带的撞了、不能当 id）时，第三方一组里说一句原因，
+  // 能重新读、能把没加进来的那一项从 mcp.json 删掉（同名的内置插件不受影响）。
   import { onMount } from "svelte";
   import { Plus } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
@@ -14,7 +16,7 @@
   import { openTarget } from "$lib/stores/navigation";
   import { listPlugins, pluginDescription, pluginEnabled, pluginName, pluginsStore, setPluginEnabled, type PluginInfo } from "$lib/plugins";
   import { PLUGIN_UI } from "$lib/pluginUi";
-  import { isRemote, remoteIcon, remoteOf, remoteTitle } from "$lib/mcpServers";
+  import { isRemote, loadMcpStatus, mcpFileStatus, reloadServers, remoteIcon, remoteOf, remoteTitle, removeServer } from "$lib/mcpServers";
   import PluginLogo from "$lib/components/plugins/PluginLogo.svelte";
   import AddMcpServerDialog from "$lib/components/plugins/AddMcpServerDialog.svelte";
   import { m } from "$lib/paraglide/messages.js";
@@ -22,12 +24,30 @@
   let adding = $state(false);
   const builtins = $derived($pluginsStore.filter((p) => !isRemote(p)));
   const remotes = $derived($pluginsStore.filter((p) => isRemote(p)));
+  const fileError = $derived($mcpFileStatus?.fileError ?? null);
+  const problems = $derived($mcpFileStatus?.problems ?? []);
+  let reloading = $state(false);
+
+  async function reloadFile() {
+    reloading = true;
+    try { await reloadServers(); } catch (error) { toast(false, errText(error)); } finally { reloading = false; }
+  }
+
+  async function removeProblem(id: string) {
+    try {
+      await removeServer(id);
+      toast(true, m.system_mcp_problem_removed({ id }));
+    } catch (error) {
+      toast(false, errText(error));
+    }
+  }
 
   /** 刚加了第三方插件：这之前一直隔一会儿重新读清单（它在后台连，卡片上的状态跟着变）。 */
   let pollUntil = 0;
   onMount(() => {
     // 每次进来都读一次：第三方插件的连接状态会变（内置的清单不变，读一次也很便宜）
     void listPlugins().catch((error) => toast(false, errText(error)));
+    void loadMcpStatus();
     const timer = setInterval(() => {
       const busy = remotes.some((p) => remoteOf(p)?.status === "connecting");
       if (busy || Date.now() < pollUntil) void listPlugins().catch(() => {});
@@ -105,14 +125,38 @@
     {/each}
   </div>
 
-  {#if remotes.length}
+  {#if remotes.length || fileError || problems.length}
     <h2 class="mt-8 mb-0 text-sm font-semibold text-foreground">{m.system_mcp_section()}</h2>
     <p class="mt-1 mb-0 max-w-3xl text-xs leading-relaxed text-muted-foreground">{m.system_mcp_section_hint()}</p>
-    <div class="mt-3 grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(15rem,1fr))]" data-testid="plugins-grid-third-party">
-      {#each remotes as plugin (plugin.manifest.id)}
-        {@render card(plugin)}
-      {/each}
-    </div>
+    {#if fileError || problems.length}
+      <!-- mcp.json 的问题：读不出来（第三方插件都没加载）、没加进来的项 -->
+      <div class="mt-3 max-w-3xl rounded-xl border border-warning/40 bg-warning/5 px-4 py-3 text-xs" data-testid="plugins-mcp-status">
+        {#if fileError}
+          <p class="m-0 break-all text-warning" data-testid="plugins-mcp-file-error">{m.system_mcp_file_error({ error: fileError })}</p>
+        {/if}
+        {#if problems.length}
+          <p class="m-0 font-medium text-foreground {fileError ? 'mt-2' : ''}">{m.system_mcp_problems_title()}</p>
+          <ul class="m-0 mt-1 list-none p-0">
+            {#each problems as problem (problem.id)}
+              <li class="flex flex-wrap items-center gap-2 py-1" data-testid="plugins-mcp-problem" data-id={problem.id} data-kind={problem.kind}>
+                <code class="font-mono text-foreground">{problem.id}</code>
+                <span class="min-w-0 flex-1 text-warning" title={problem.error}>{problem.kind === "taken" ? m.system_mcp_problem_taken() : m.system_mcp_problem_invalid()}</span>
+                <Button size="sm" variant="ghost" class="h-7 text-xs" data-testid="plugins-mcp-problem-remove" onclick={() => void removeProblem(problem.id)}>{m.system_mcp_problem_remove()}</Button>
+              </li>
+            {/each}
+          </ul>
+          <p class="m-0 mt-1 break-all text-[11px] leading-relaxed text-muted-foreground">{m.system_mcp_problems_hint({ path: $mcpFileStatus?.path ?? "mcp.json" })}</p>
+        {/if}
+        <Button size="sm" variant="outline" class="mt-2 h-7 text-xs" disabled={reloading} data-testid="plugins-mcp-reload" onclick={() => void reloadFile()}>{m.system_mcp_reload()}</Button>
+      </div>
+    {/if}
+    {#if remotes.length}
+      <div class="mt-3 grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(15rem,1fr))]" data-testid="plugins-grid-third-party">
+        {#each remotes as plugin (plugin.manifest.id)}
+          {@render card(plugin)}
+        {/each}
+      </div>
+    {/if}
   {/if}
 </div>
 

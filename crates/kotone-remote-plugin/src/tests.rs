@@ -220,11 +220,14 @@ async fn a_stdio_server_is_a_plugin() {
     let other =
         ServerSpec::parse(&json!({"command": server_exe().to_string_lossy(), "args": ["--x"]}))
             .unwrap();
-    assert!(
-        RemotePlugin::new("rt", Ok(other), Some(dir.path().to_path_buf()), "x")
-            .tools()
-            .is_empty()
+    let changed = RemotePlugin::new("rt", Ok(other), Some(dir.path().to_path_buf()), "x");
+    assert!(changed.tools().is_empty());
+    // 配置变了：认得出上次连的是哪份（宿主据此清掉“总是允许”），同一份配置不算
+    assert_eq!(
+        changed.server().replaced_fingerprint(),
+        Some(fingerprint.as_str())
     );
+    assert_eq!(reopened.server().replaced_fingerprint(), None);
 
     // 掉线：进程退出了，这一次回答“没连上”（工具还在清单里）；下一次用的时候重新连
     let pid_before = describe_pid(&plugin).await;
@@ -308,6 +311,54 @@ async fn an_http_server_gets_its_key_from_the_credential_store() {
         log.calls,
         vec![("weather".to_string(), json!({"city": "上海"}))]
     );
+}
+
+/// 地址里的 Key（`?token=${input:token}`）连不上时不出现在给模型的“没连上”和卡片的错误里（审查后加的，2026-11-25）。
+#[tokio::test]
+async fn keys_in_the_url_stay_out_of_errors() {
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let spec = ServerSpec::parse(&json!({
+        "url": format!("http://127.0.0.1:{port}/mcp?token=${{input:token}}"),
+        "headers": {"X-Key": "${input:header}"}
+    }))
+    .unwrap();
+    let known = crate::Known {
+        fingerprint: spec.fingerprint(),
+        tools: vec![serde_json::from_value(json!({"name": "ping", "inputSchema": {}})).unwrap()],
+        ..Default::default()
+    };
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(crate::CACHE_FILE),
+        serde_json::to_string(&known).unwrap(),
+    )
+    .unwrap();
+    let plugin = RemotePlugin::new("leaky", Ok(spec), Some(dir.path().to_path_buf()), "x");
+    let host = Arc::new(TestHost::default());
+    host.secrets
+        .lock()
+        .unwrap()
+        .insert("token".into(), "sk-url-secret-1".into());
+    host.secrets
+        .lock()
+        .unwrap()
+        .insert("header".into(), "hdr-secret-22".into());
+    let dyn_host: Arc<dyn Host> = host.clone();
+    let error = plugin
+        .call(dyn_host.clone(), "leaky.ping", &json!({}))
+        .await
+        .unwrap_err();
+    assert!(error.contains("现在没连上"), "{error}");
+    let card = plugin.server().describe().to_string();
+    for text in [&error, &card] {
+        assert!(
+            !text.contains("sk-url-secret-1") && !text.contains("hdr-secret-22"),
+            "{text}"
+        );
+    }
 }
 
 /// 服务器掉线（连不上）：工具还在（一段对话里清单不变），调用回答“这个插件现在没连上”；

@@ -301,8 +301,62 @@ pub fn secret_name(name: &str) -> bool {
         || upper.ends_with("_PAT")
 }
 
-/// 把配置里明文写着的 Key 拿出来：返回换成 `${input:名字}` 的配置和拿出来的 `(名字, Key)`。
-/// 看的是 `env` 和 `headers` 里名字像 Key、值不是空的也不已经是 `${input:…}` 的项；名字撞了加 `_2`。
+/// 参数、网址查询串里的名字看起来是 Key：[`secret_name`]，但不是指向 Key 的东西（`--key-file`、`--token-path`、
+/// `--auth-type`、`--api-key-env` 这类的值是路径、类型、变量名，不是 Key 本身）。
+fn secret_flag(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    secret_name(name)
+        && ![
+            "FILE", "PATH", "DIR", "URL", "URI", "TYPE", "MODE", "HOST", "PORT", "ENV", "NAME",
+        ]
+        .iter()
+        .any(|word| upper.contains(word))
+}
+
+/// 一个参数的值像不像 Key：8 个字以上，没有空白，不是路径、网址、包名、选项。
+fn secret_value(value: &str) -> bool {
+    let chars: Vec<char> = value.chars().collect();
+    chars.len() >= 8
+        && !value.chars().any(char::is_whitespace)
+        && !value.starts_with(['-', '/', '.', '~', '@', '$'])
+        && !value.contains('\\')
+        && !value.contains("://")
+        && chars.get(1) != Some(&':')
+        && placeholders(value).is_empty()
+}
+
+/// 拿出来的 Key 叫什么（`${input:名字}`）：原来的名字里不合规矩的字换成 `_`，撞了加 `_2`。
+fn key_name(name: &str, used: &mut Vec<String>) -> String {
+    let base: String = name
+        .trim_start_matches('-')
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(60)
+        .collect();
+    let base = if valid_key_name(&base) {
+        base
+    } else {
+        "KEY".into()
+    };
+    let key = std::iter::once(base.clone())
+        .chain((2..).map(|n| format!("{base}_{n}")))
+        .find(|k| !used.contains(k))
+        .expect("总能找到一个没用过的");
+    used.push(key.clone());
+    key
+}
+
+/// 把配置里明文写着的 Key 拿出来：返回换成 `${input:名字}` 的配置和拿出来的 `(名字, Key)`。名字撞了加 `_2`。看这几处：
+/// - `env`、`headers` 里名字像 Key、值不是空的也不已经是 `${input:…}` 的项；
+/// - `url` 的查询串里名字像 Key 的参数（`?token=…`、`?api_key=…`，原样搬走，填回去还是原来的写法）；
+/// - `args` 里的 `--api-key=…`、`TOKEN=…`，和 `--token <值>`（后面那个值像 Key 才算：8 个字以上、不是路径、
+///   网址、包名、选项）。猜不准的不搬：留在 `mcp.json` 里照样能用，只是没进安全存储。
 pub fn split_secrets(entry: &Value) -> (Value, Vec<(String, String)>) {
     let mut entry = entry.clone();
     let mut secrets: Vec<(String, String)> = Vec::new();
@@ -316,29 +370,72 @@ pub fn split_secrets(entry: &Value) -> (Value, Vec<(String, String)>) {
             if text.trim().is_empty() || !placeholders(text).is_empty() || !secret_name(name) {
                 continue;
             }
-            let base: String = name
-                .chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-') {
-                        c
-                    } else {
-                        '_'
-                    }
-                })
-                .take(60)
-                .collect();
-            let base = if valid_key_name(&base) {
-                base
-            } else {
-                "KEY".into()
-            };
-            let key = std::iter::once(base.clone())
-                .chain((2..).map(|n| format!("{base}_{n}")))
-                .find(|k| !used.contains(k))
-                .expect("总能找到一个没用过的");
-            used.push(key.clone());
+            let key = key_name(name, &mut used);
             secrets.push((key.clone(), text.to_string()));
             *value = Value::String(placeholder(&key));
+        }
+    }
+    // 网址的查询串：`https://x/mcp?token=…&region=eu` → `…?token=${input:token}&region=eu`
+    if let Some(Value::String(url)) = entry.get_mut("url") {
+        if let Some((base, rest)) = url.clone().split_once('?') {
+            let (query, fragment) = match rest.split_once('#') {
+                Some((q, f)) => (q, Some(f)),
+                None => (rest, None),
+            };
+            let pairs: Vec<String> = query
+                .split('&')
+                .map(|pair| match pair.split_once('=') {
+                    Some((name, value))
+                        if secret_flag(name)
+                            && value.chars().count() >= 4
+                            && placeholders(value).is_empty() =>
+                    {
+                        let key = key_name(name, &mut used);
+                        secrets.push((key.clone(), value.to_string()));
+                        format!("{name}={}", placeholder(&key))
+                    }
+                    _ => pair.to_string(),
+                })
+                .collect();
+            *url = format!(
+                "{base}?{}{}",
+                pairs.join("&"),
+                fragment.map(|f| format!("#{f}")).unwrap_or_default()
+            );
+        }
+    }
+    // 参数：`--api-key=…`、`API_TOKEN=…`、`--token <值>`
+    if let Some(args) = entry.get_mut("args").and_then(Value::as_array_mut) {
+        let mut i = 0;
+        while i < args.len() {
+            let Some(arg) = args[i].as_str().map(str::to_string) else {
+                i += 1;
+                continue;
+            };
+            if let Some((name, value)) = arg.split_once('=') {
+                let env_style = !name.starts_with('-')
+                    && !name.is_empty()
+                    && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+                if (name.starts_with('-') || env_style) && secret_flag(name) && secret_value(value)
+                {
+                    let key = key_name(name, &mut used);
+                    secrets.push((key.clone(), value.to_string()));
+                    args[i] = Value::String(format!("{name}={}", placeholder(&key)));
+                }
+            } else if arg.starts_with('-') && secret_flag(&arg) {
+                if let Some(value) = args
+                    .get(i + 1)
+                    .and_then(Value::as_str)
+                    .filter(|v| secret_value(v))
+                    .map(str::to_string)
+                {
+                    let key = key_name(&arg, &mut used);
+                    secrets.push((key.clone(), value));
+                    args[i + 1] = Value::String(placeholder(&key));
+                    i += 1;
+                }
+            }
+            i += 1;
         }
     }
     (entry, secrets)
@@ -564,6 +661,84 @@ mod tests {
         );
         assert_eq!(clean["headers"]["Authorization"], "${input:Authorization}");
         assert_eq!(clean["headers"]["X-Client"], "kotone");
+    }
+
+    /// 网址查询串和参数里明文写着的 Key 也搬走（审查后加的，2026-11-25）：连不上时的错误、信任提示、
+    /// 卡片上的摘要里就看不到了；填回去和原来一字不差。路径、类型、变量名这类不是 Key 的不动。
+    #[test]
+    fn keys_in_urls_and_args_move_out_too() {
+        let http = json!({"url": "https://mcp.example.com/mcp?token=abc123def456&region=eu#x"});
+        let (clean, secrets) = split_secrets(&http);
+        assert_eq!(
+            clean["url"],
+            "https://mcp.example.com/mcp?token=${input:token}&region=eu#x"
+        );
+        assert_eq!(
+            secrets,
+            vec![("token".to_string(), "abc123def456".to_string())]
+        );
+        let spec = crate::ServerSpec::parse(&clean).unwrap();
+        assert!(!spec.summary().contains("abc123"));
+        let kotone_mcp::Transport::Http { url, .. } = spec
+            .resolve(&|name| {
+                secrets
+                    .iter()
+                    .find(|(k, _)| k == name)
+                    .map(|(_, v)| v.clone())
+            })
+            .unwrap()
+            .transport
+        else {
+            panic!()
+        };
+        assert_eq!(
+            url,
+            "https://mcp.example.com/mcp?token=abc123def456&region=eu#x"
+        );
+
+        let stdio = json!({"command": "npx", "args": [
+            "-y", "@acme/mcp-server", "--api-key=sk-1234567890", "--token", "ghp_abcdefgh12345",
+            "--key-file", "C:\\keys\\k.pem", "--auth-type", "bearer-token-mode", "-e", "API_TOKEN=xyz12345678",
+            "--secret", "--verbose", "--token", "short"
+        ]});
+        let (clean, secrets) = split_secrets(&stdio);
+        let args: Vec<&str> = clean["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "-y",
+                "@acme/mcp-server",
+                "--api-key=${input:api-key}",
+                "--token",
+                "${input:token}",
+                "--key-file",
+                "C:\\keys\\k.pem",
+                "--auth-type",
+                "bearer-token-mode",
+                "-e",
+                "API_TOKEN=${input:API_TOKEN}",
+                "--secret",
+                "--verbose",
+                "--token",
+                "short"
+            ]
+        );
+        assert_eq!(
+            secrets,
+            vec![
+                ("api-key".to_string(), "sk-1234567890".to_string()),
+                ("token".to_string(), "ghp_abcdefgh12345".to_string()),
+                ("API_TOKEN".to_string(), "xyz12345678".to_string()),
+            ]
+        );
+        let spec = crate::ServerSpec::parse(&clean).unwrap();
+        assert_eq!(spec.package().as_deref(), Some("@acme/mcp-server"));
+        assert!(!spec.trust_facts().to_string().contains("sk-1234567890"));
     }
 
     #[test]

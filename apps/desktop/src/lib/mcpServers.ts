@@ -6,10 +6,13 @@
 // - 加服务器：粘贴配置或从 Claude Desktop / VS Code 导入 → 候选 → 信任提示 → `mcp_server_add`；
 // - 卡片和插件页：开关照旧是设置 `plugins.<id>.enabled`；点卡片进它的 MCP App（有 `ui://` 页面的）或一页工具列表，
 //   顶栏的“设置”里是连接、Key、信任、删除（[`REMOTE_UI`] 登记进 `PLUGIN_UI`，和内置插件同一个容器）；
-// - 确认卡片：第三方工具多一个“总是允许这个工具”（权限里这个工具一条“允许”）或“信任这个插件”（它说只读的工具不再问）。
+// - 确认卡片：第三方工具多一个“总是允许这个工具”（权限里这个工具一条“允许”）或“信任这个插件”（它说只读的工具不再问）；
+// - `mcp.json` 的情况（`mcp_servers_status`）：读不出来的原因、没加进来的项（名字和 Kotone 自带的撞了、不能当 id），
+//   插件页的第三方一组里说一句人话。插件清单本身还是一个数组，这些另外读。
 // 浏览器预览（dev:web、Playwright）用 ipc/mcpServersMock。
 import { invoke } from "@tauri-apps/api/core";
 import type { Component } from "svelte";
+import { writable, type Readable } from "svelte/store";
 import { Blocks } from "@lucide/svelte";
 import { isTauri, updateSettings } from "./ipc";
 import * as mock from "./ipc/mcpServersMock";
@@ -71,6 +74,53 @@ export interface RemoteInfo {
 }
 
 export type RemotePluginInfo = PluginInfo & { remote: RemoteInfo };
+
+/** `mcp.json` 里没加进来的一项（后端 `remote_plugins::Problem`）。 */
+export interface McpProblem {
+  /** `mcp.json` 里的键。 */
+  id: string;
+  /** taken：和 Kotone 自带的插件或工具撞名；invalid：不能当插件 id。 */
+  kind: "taken" | "invalid";
+  /** 后端的原话。 */
+  error: string;
+}
+
+/** `mcp.json` 的情况（后端 `mcp_servers_status`）。 */
+export interface McpFileStatus {
+  /** 文件在哪。 */
+  path: string;
+  /** 读不出来的原因（读不出来时第三方插件都没加载）。 */
+  fileError: string | null;
+  problems: McpProblem[];
+}
+
+const statusStore = writable<McpFileStatus | null>(null);
+/** 上一次读到的 `mcp.json` 情况（没读过、读不到命令时是 null）。 */
+export const mcpFileStatus: Readable<McpFileStatus | null> = { subscribe: statusStore.subscribe };
+
+/** 读一次 `mcp.json` 的情况。只模拟了部分命令的测试会回 null：当成没有要说的。 */
+export async function loadMcpStatus(): Promise<McpFileStatus | null> {
+  try {
+    const out = isTauri ? await invoke<McpFileStatus | null>("mcp_servers_status") : await mock.status();
+    const status = out && typeof out === "object" && Array.isArray(out.problems) ? out : null;
+    statusStore.set(status);
+    return status;
+  } catch {
+    statusStore.set(null);
+    return null;
+  }
+}
+
+/** 重新读 `mcp.json`（玩家手改过、改好了写坏的）。读不出来时原因在 [`mcpFileStatus`] 里，这里不另报错。 */
+export async function reloadServers(): Promise<void> {
+  try {
+    if (isTauri) await invoke("mcp_servers_reload");
+    else await mock.reload();
+  } catch {
+    // 读不出来：原因由 mcp_servers_status 给
+  }
+  await refresh();
+}
 
 /** 一个候选的服务器（粘贴的、导入的；后端 `remote_plugins::preview`）。 */
 export interface McpCandidate {
@@ -181,6 +231,7 @@ export async function alwaysAllow(tool: string): Promise<void> {
 
 async function refresh(): Promise<void> {
   await listPlugins();
+  await loadMcpStatus();
 }
 
 /** 第三方插件在插件页（同一个容器，`PluginPage.svelte`）里的样子：App 或工具列表；顶栏的“设置”是连接、Key、信任、删除。 */

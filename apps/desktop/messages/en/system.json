@@ -512,5 +512,13 @@
   "system_mcp_server_says": "The server calls itself: {title}",
   "system_mcp_ask_always": "Always allow this tool",
   "system_mcp_ask_trust": "Trust this plugin",
-  "system_mcp_ask_note": "A tool of the third-party plugin “{id}”"
+  "system_mcp_ask_note": "A tool of the third-party plugin “{id}”",
+  "system_mcp_file_error": "Couldn't read mcp.json, so no third-party plugins were loaded: {error}",
+  "system_mcp_reload": "Read mcp.json again",
+  "system_mcp_problems_title": "These entries in mcp.json weren't added",
+  "system_mcp_problem_taken": "The name is already used by a built-in Kotone plugin or tool",
+  "system_mcp_problem_invalid": "This name can't be a plugin name (lowercase letters, digits and hyphens only)",
+  "system_mcp_problems_hint": "Rename it in {path} and click “Read mcp.json again”, or remove the entry. The built-in plugin with the same name isn't affected.",
+  "system_mcp_problem_remove": "Remove from mcp.json",
+  "system_mcp_problem_removed": "Removed “{id}” from mcp.json"
 }

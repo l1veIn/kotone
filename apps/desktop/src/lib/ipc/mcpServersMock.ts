@@ -2,11 +2,12 @@
  * dev:web 的第三方插件（MCP 方案第 2 期）：照桌面端 `mcp_servers_cmd.rs` / `remote_plugins.rs` 在内存里模拟
  * `mcp.json` 里的服务器——粘贴的配置认出候选、从 Claude Desktop / VS Code 导入（两份示例配置）、加 / 删 / 信任 /
  * 重新连接 / 填 Key。加进来的服务器“连上”以后有两个工具（`<id>.echo` 标了只读、`<id>.add` 没标）。
- * 测试可以在页面加载前放 `window.__kotoneMcpSeed`（服务器列表）当作手改 `mcp.json` 加的（没信任）。
+ * 测试可以在页面加载前放 `window.__kotoneMcpSeed`（服务器列表）当作手改 `mcp.json` 加的（没信任），
+ * 放 `window.__kotoneMcpFileSeed`（`{fileError?, problems?}`）当作 `mcp.json` 读不出来、有没加进来的项。
  * 不连任何真的服务器。
  */
 import type { PluginInfo } from "../plugins";
-import type { McpCandidate, McpImportSource, RemoteInfo, TrustFacts } from "../mcpServers";
+import type { McpCandidate, McpFileStatus, McpImportSource, McpProblem, RemoteInfo, TrustFacts } from "../mcpServers";
 import { getSettings } from "./browserMock";
 
 interface MockServer {
@@ -24,6 +25,26 @@ interface MockServer {
 }
 
 let servers: MockServer[] | null = null;
+let file: { fileError: string | null; problems: McpProblem[] } | null = null;
+
+function fileState(): { fileError: string | null; problems: McpProblem[] } {
+  if (!file) {
+    const seed = (globalThis as { __kotoneMcpFileSeed?: Partial<McpFileStatus> }).__kotoneMcpFileSeed;
+    file = { fileError: seed?.fileError ?? null, problems: Array.isArray(seed?.problems) ? [...seed.problems] : [] };
+  }
+  return file;
+}
+
+/** `mcp_servers_status`。 */
+export async function status(): Promise<McpFileStatus> {
+  const state = fileState();
+  return { path: "C:\\Users\\me\\.kotone\\mcp.json", fileError: state.fileError, problems: [...state.problems] };
+}
+
+/** `mcp_servers_reload`：预览里没有文件，读不出来的照旧读不出来。 */
+export async function reload(): Promise<void> {
+  if (fileState().fileError) throw new Error(fileState().fileError ?? "");
+}
 
 function all(): MockServer[] {
   if (!servers) {
@@ -168,6 +189,12 @@ export async function add(id: string, entry: Record<string, unknown>): Promise<v
 }
 
 export async function remove(id: string): Promise<void> {
+  // 没加进来的项：只从 mcp.json 删掉这一项（和后端一样，同名的内置插件不受影响）
+  const state = fileState();
+  if (state.problems.some((p) => p.id === id)) {
+    state.problems = state.problems.filter((p) => p.id !== id);
+    return;
+  }
   servers = all().filter((s) => s.id !== id);
 }
 

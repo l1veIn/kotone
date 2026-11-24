@@ -28,10 +28,13 @@ export interface AppHandle {
   ui: AppResourceUi;
 }
 
-/** 打开一个插件页面的 App；插件或数据开关关着、页面不是 App 时报错。 */
-export async function openApp(uri: string): Promise<AppHandle> {
+/**
+ * 打开一个插件页面的 App；插件或数据开关关着、页面不是 App 时报错。`plugin`：知道是哪个插件的页面时写上——第三方插件的
+ * `ui://` 地址不限于 `ui://kotone/`，两个开着的服务器给了同一个地址时，后端不写明就不猜（`plugin_apps::remote_owner`）。
+ */
+export async function openApp(uri: string, plugin?: string | null): Promise<AppHandle> {
   if (!isTauri) return pluginsMock.pluginApp(uri);
-  return invoke<AppHandle>("plugin_app", { uri });
+  return invoke<AppHandle>("plugin_app", plugin ? { uri, plugin } : { uri });
 }
 
 /** App 读自己插件的资源（`resources/read` 的 `contents` 一项）。 */

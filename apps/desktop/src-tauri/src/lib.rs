@@ -566,6 +566,7 @@ pub fn run() {
             mcp_servers_cmd::mcp_server_reconnect,
             mcp_servers_cmd::mcp_server_set_key,
             mcp_servers_cmd::mcp_servers_reload,
+            mcp_servers_cmd::mcp_servers_status,
             browser_cmd::browser_state,
             browser_cmd::browser_set_bounds,
             browser_cmd::browser_control,

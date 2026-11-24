@@ -24,7 +24,8 @@ pub const FILE_NAME: &str = "mcp.json";
 pub const SERVERS: &str = "mcpServers";
 
 /// 不能当第三方插件 id 的名字：本体自己的地址和工具前缀（`ui://kotone/…`、`settings.*`、`tools.find`……）、
-/// 凭据库里本体用的名字（`connection:<id>`）。内置插件的 id 和本体工具的前缀由宿主再查一遍（桌面端知道全部）。
+/// 凭据库里本体用的名字（`connection:<id>`）、已保存自动化的工具名前缀（`saved.<自动化 id>`，琴音的清单里
+/// 现算出来的，宿主查不到）。内置插件的 id 和本体工具的前缀由宿主再查一遍（桌面端知道全部）。
 pub const RESERVED_IDS: &[&str] = &[
     "kotone",
     "connection",
@@ -37,6 +38,7 @@ pub const RESERVED_IDS: &[&str] = &[
     "agent",
     "app",
     "mcp",
+    "saved",
 ];
 
 /// 插件 id 的写法和保留名。
@@ -616,6 +618,7 @@ mod tests {
             "kotone",
             "connection",
             "settings",
+            "saved",
         ] {
             assert!(check_id(bad).is_err(), "{bad}");
         }

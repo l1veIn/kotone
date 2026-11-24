@@ -22,9 +22,8 @@ pub(crate) fn transport(
 ) -> Result<StreamableHttpClientTransport<reqwest::Client>, McpError> {
     let lower = url.trim().to_ascii_lowercase();
     if !(lower.starts_with("http://") || lower.starts_with("https://")) {
-        return Err(McpError::Config(format!(
-            "地址要以 http:// 或 https:// 开头：{url}"
-        )));
+        // 不带地址本身：里面可能有 Key（`?token=…`），这句话会进插件卡片、发给模型
+        return Err(McpError::Config("地址要以 http:// 或 https:// 开头".into()));
     }
     let mut custom = HashMap::new();
     for (name, value) in headers {

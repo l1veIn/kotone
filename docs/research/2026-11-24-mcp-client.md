@@ -231,6 +231,32 @@ Kotone 能做的，按先后：
 
 **还没做**：后台的事的确认（`BackgroundTaskCard`、`SidebarTask` 里的确认）没加“总是允许 / 信任这个插件”（这两个文件今晚别的子代理在改；用 `ThirdPartyAskActions` 放进去就行）；`https:` 的服务器图标没显示（要由后端取回来缓存，再交给界面）；`.mcpb` 和目录（第 6 期）。
 
+#### 审查后修的（2026-11-25）
+
+一个只读的审查代理看了第 2 期的代码，找到 8 个问题，都修了：
+
+1. **`mcp.json` 里一项的名字和内置插件撞了，会弄坏内置插件**（必须修）。原来撞名的项照样进了第三方插件表（只是带一个配置错误），于是 `is_remote("lol")` 为真：真的英雄联盟插件拿到第三方那份窄的宿主（看不到进程、数据开关全算关），外部 Agent 调它被拒，读它的 App 走第三方的路，删掉那一项还会把英雄联盟的开关重置。触发：手抄 Claude Desktop 的配置，键名正好是 `lol` / `music`。改成：
+   - 名字和本体、内置插件撞了的、不能当插件 id 的，**不进插件表**，另列成“有问题的配置”（`remote_plugins::status`，新命令 `mcp_servers_status`）。插件页的第三方一组里一行一项：名字、原因（“名字和 Kotone 自带的插件或工具撞了”），可以“从 mcp.json 删掉”；删掉只删 `mcp.json` 里这一项，Key、工具清单、开关、规则都是同名内置插件的，一样不碰。
+   - 配置写错了、但名字没问题的，还是一张说清哪里不对的卡片（和原来一样）。
+   - `is_remote`、`plugins::host_for` 先看内置表：内置插件永远拿 `DesktopHost`。
+   - `saved` 也算保留名（已保存自动化的工具名是 `saved.<id>`，琴音的清单里现算出来的，宿主查不到）。
+2. **两个开着的服务器给了同一个 `ui://` 地址时，第三方的 App 页打不开**：插件页知道是哪个插件，但调 `plugin_app` 时只带了地址。现在 `openApp(uri, plugin)` → `McpAppFrame` 的 `pluginId` → `RemotePluginPage` 一路带上。
+3. **`ui.open` 打开第三方页面时说“打开了”，界面却什么都不开**（界面的右侧栏只认 `ui://kotone/<插件>/<页面>`）。选了简单可靠的一边：`resolve_page` 对第三方的页面明确拒绝，说“第三方插件的页面现在只能在插件页里打开：请玩家在左侧栏的「插件」里点「X」”。要在右侧栏里开，以后再做。
+4. **“总是允许”在配置改了、删掉以后还在**：规则按工具名记在 `agent.permissions.rules["<id>.<工具>"]`，信任跟着配置的指纹失效，规则却没有。现在删掉插件时清掉 `<id>.*` 的规则；配置变了也清。“配置变了”看的是磁盘上记着的工具清单（`plugins/<id>/remote-cache.json`）是哪份配置连出来的：和现在的指纹不同就清（Kotone 关着时改的、删了又加了同名的都认得出），清完把那份旧清单删掉。没有另记一份指纹：规则只能在知道它有哪些工具以后才加得上，而知道工具就一定写过这份清单。
+5. **琴音能自己把第三方服务器设成“信任”**：`settings.update` 能写 `plugins.<id>.settings.trusted`。现在 `AGENT_PROTECTED` 多了 `plugins.*.settings.trusted`（中间的 `*` 是任意一段），她写会被拒：“第三方插件信不信任只能由玩家在左侧栏的「插件」里这个插件的设置里改”。顺带修了检查本身：原来从空对象比，只比到第一层（`plugins`），往下的规则对不上；现在看补丁里写到的每一个叶子。
+6. **服务器地址里的 Key 可能漏给模型和界面**：
+   - `kotone-mcp` 拼错误时去掉 reqwest 的 “for url (…)”（照 `without_url`；拿到的是借用，按它的写法去字），别处再提到这个地址的只留协议、主机和端口；`http_transport` 的配置错误也不带地址。
+   - 第三方插件这边再挡一道：这次连接填进去的 Key，在出错的话里出现就换成 `***`（连不上的原因、程序在 stderr 说的话、服务器报的错、给琴音的“没连上”，`Server::scrub`）。
+   - 导入时（`import::split_secrets`）除了 `env`、`headers`，网址查询串里名字像 Key 的参数（`?token=…`、`?api_key=…`）和参数里的 `--api-key=…`、`TOKEN=…`、`--token <值>` 也搬进 Windows 的安全存储，`mcp.json` 里换成 `${input:名字}`，填回去一字不差。`--token <值>` 这种只在值像 Key 时才搬（8 个字以上，不是路径、网址、包名、选项）；`--key-file`、`--auth-type`、`--token-path` 这类名字里带 FILE / PATH / TYPE / ENV… 的不动（值是路径、类型、变量名）。猜不准的留在文件里，照样能用。手写进 `mcp.json` 的明文 Key 不动（玩家自己写的）。
+7. **`mcp.json` 写坏了，第三方插件一声不吭地都没了**：现在读不出来的原因记下来，插件页第三方一组里说“mcp.json 读不出来，第三方插件都没加载：……”，旁边“重新读 mcp.json”。读不出来时插件表不动（照旧）。插件清单 `plugins_list` 还是一个数组（好几个真机脚本和别处在读它），这些另外用 `mcp_servers_status` 给，插件页进来时、加删以后一起读。
+8. **远程服务器的 App 能在 CSP 里声明本机地址**：App 在 Kotone 里跑在回环代理（`127.0.0.1` 的源）上，浏览器的私网检查不拦它；网上的服务器声明 `connectDomains: ["http://127.0.0.1:<端口>"]` 就能碰本机没鉴权的服务。现在第三方插件（stdio 和 HTTP 都算）的声明经 `resource::public_csp_source` 过一遍：`localhost`、`*.localhost`、`*.local` / `.lan` / `.internal` / `.home.arpa`、回环 / 私网 / 链路本地 / 共享地址段的 IPv4、像通配 IP 的写法都去掉。内置插件照旧（`normalize_csp_source`）。查不出的：解析到本机的公网域名（DNS 重绑定），靠本机服务自己查 `Host` / `Origin`。
+
+**怎么验的**（2026-11-25 04:10）：
+
+- 单元测试：`kotone-remote-plugin` 31 个（加了地址和参数里的 Key 搬走、出错的话里换掉 Key、地址里带 Key 的服务器连不上时卡片和“没连上”里都没有 Key、配置变了认得出上次的指纹、本机地址的 CSP 声明丢掉）；`kotone-mcp` 21 个（加了 reqwest 连不上时的错误不带地址）；`kotone-plugin-api` 24 个（`public_csp_source`：19 种本机 / 局域网写法都不要，公网的照旧，内置的写法检查不变）；`kotone-core` 308 + 84 个（她写不了 `plugins.*.settings.trusted`，插件别的设置、开关照旧能改）；`kotone-tauri` 129 个（撞名、不能当 id 的不进插件表，配置写错的还是卡片；`saved` 是保留名；`ui.open` 第三方页面明说去插件页）。五个 crate 的 clippy `-D warnings` 干净。
+- `pnpm -C apps/desktop check` 0 错误 0 警告；Playwright `e2e/mcp-servers.spec.ts` 6/6（加了两条：`mcp.json` 里的 `lol`、`Bad_Name` 在第三方一组里说原因、英雄联盟还是一张内置卡片、删掉那一项内置的照旧；`mcp.json` 写坏了说一句、能重新读），`terminology.spec` 4/4。全量 191 个里 178 过、13 个在机器忙（同时在编 `kotone.exe`、跑真机）时超时，单独重跑那 13 个（6 个文件 47 条、3 个插件文件 7 条）全过。
+- 真机 `mcp_servers_real.py` 36/36：开始前 `mcp.json` 里写了一个 `lol` 键——它不是插件，`mcp_servers_status` 和插件页上那一行说“名字和 Kotone 自带的插件或工具撞了”；内置英雄联盟还是一个内置插件、App 资源走内置的路、外部 Agent 调 `lol.scout` 没被当第三方拒；删掉这一项只动 `mcp.json`，`config.json` 里英雄联盟的开关还在。删掉 `everything-http` 以后它的“总是允许”没了；手改 `everything` 的配置再重新读，它的“总是允许”清掉、也不再信任；再打开用新配置连上，Kotone 退出后进程跟着没了。原来的各项照旧过。`mcp_remote_app_real.py` 10/10（插件页打开别人的 App 现在带着插件 id）。
+
 ### 第 5 期（2026-11-25）：在 basic-host 里打开英雄联盟 App
 
 玩家：英雄联盟 App“使用 Claude、Codex 之类的也可以使用它”；准确说法是“它本身是独立的 MCP 服务器 + MCP App，Claude、Codex 也能直接用”（交接第十一节第 15、16 条）。

@@ -23,9 +23,11 @@
   import { FROM_PAGE } from "$lib/pluginUi";
   import { m } from "$lib/paraglide/messages.js";
 
-  let { uri, displayMode, data = null, params = {}, onOpenPage, onRequestFullscreen }: {
-    /** `ui://kotone/<插件>/<页面>`。 */
+  let { uri, pluginId = null, displayMode, data = null, params = {}, onOpenPage, onRequestFullscreen }: {
+    /** `ui://kotone/<插件>/<页面>`；第三方插件的是它的服务器给的 `ui://` 地址。 */
     uri: string;
+    /** 知道是哪个插件的页面时写上（第三方插件的插件页）：两个服务器给了同一个地址时后端不猜。 */
+    pluginId?: string | null;
     /** fullscreen：插件页、右侧栏（宽度占满，高度跟 App 报的走、至少 22rem，外面的页面滚）；inline：聊天卡片（高度跟 App 报的走，有上限）。 */
     displayMode: "inline" | "fullscreen";
     /**
@@ -78,7 +80,7 @@
       frame?.remove();
     };
     try {
-      const app = await openApp(uri);
+      const app = await openApp(uri, pluginId);
       const { AppBridge, PostMessageTransport } = await import("@modelcontextprotocol/ext-apps/app-bridge");
       if (disposed) return dispose;
       plugin = app.plugin;

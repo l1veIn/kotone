@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use kotone_mcp::{McpClient, McpError, ServerInfo, Tool};
-use kotone_plugin_api::resource::normalize_csp_source;
+use kotone_plugin_api::resource::public_csp_source;
 use kotone_plugin_api::{Host, Resource, ResourceUi, ToolResult, ToolSpec, APP_MIME};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -90,6 +90,8 @@ struct State {
     error: Option<String>,
     retry_after: Option<Instant>,
     trusted: bool,
+    /// 这次连接填进去的 Key（`${input:名字}` 的值）：出错的话里出现了就换成 `***`（[`Server::scrub`]）。
+    secrets: Vec<String>,
 }
 
 pub struct Server {
@@ -97,6 +99,8 @@ pub struct Server {
     spec: Result<ServerSpec, String>,
     fingerprint: String,
     cache: Option<PathBuf>,
+    /// 磁盘上记着的工具清单是另一份配置连出来的：那份配置的指纹（[`Server::replaced_fingerprint`]）。
+    replaced: Option<String>,
     version: String,
     state: Mutex<State>,
     client: tokio::sync::Mutex<Option<Arc<McpClient>>>,
@@ -126,10 +130,15 @@ impl Server {
             .map(ServerSpec::fingerprint)
             .unwrap_or_default();
         let cache = data_dir.map(|dir| dir.join(CACHE_FILE));
-        let known = cache
+        let stored = cache
             .as_ref()
             .and_then(|path| std::fs::read_to_string(path).ok())
-            .and_then(|text| serde_json::from_str::<Known>(&text).ok())
+            .and_then(|text| serde_json::from_str::<Known>(&text).ok());
+        let replaced = stored
+            .as_ref()
+            .map(|k| k.fingerprint.clone())
+            .filter(|old| !old.is_empty() && !fingerprint.is_empty() && *old != fingerprint);
+        let known = stored
             .filter(|k| !fingerprint.is_empty() && k.fingerprint == fingerprint)
             .unwrap_or_default();
         let error = spec.as_ref().err().map(|e| format!("配置不对：{e}"));
@@ -138,6 +147,7 @@ impl Server {
             spec,
             fingerprint,
             cache,
+            replaced,
             version: version.to_string(),
             state: Mutex::new(State {
                 known,
@@ -149,6 +159,7 @@ impl Server {
                 error,
                 retry_after: None,
                 trusted: false,
+                secrets: Vec::new(),
             }),
             client: tokio::sync::Mutex::new(None),
         }
@@ -165,6 +176,12 @@ impl Server {
     /// 配置的指纹（配置写错了是空的）。
     pub fn fingerprint(&self) -> &str {
         &self.fingerprint
+    }
+
+    /// 这个插件上次连上时用的是另一份配置（程序、参数、网址改过，或者删了又加了一个同名的）：那份配置的指纹。
+    /// 看的是磁盘上记着的工具清单是哪份配置连出来的（Kotone 关着时改的也认得出）。宿主据此清掉“总是允许”。
+    pub fn replaced_fingerprint(&self) -> Option<&str> {
+        self.replaced.as_deref()
     }
 
     pub fn set_trusted(&self, trusted: bool) {
@@ -278,7 +295,14 @@ impl Server {
         })
     }
 
+    /// 出错的话里去掉填进去的 Key。这些话会进插件卡片，也会经“没连上”发给模型（[`Server::offline`]）：
+    /// 连不上时 HTTP 库的错误、程序在 stderr 说的话、服务器报的错都可能带着地址或参数里的 Key。
+    pub fn scrub(&self, text: &str) -> String {
+        redact(text, &self.state.lock().unwrap().secrets)
+    }
+
     fn fail(&self, message: String, retry_later: bool) -> String {
+        let message = self.scrub(&message);
         let mut state = self.state.lock().unwrap();
         state.status = Status::Failed;
         state.error = Some(message.clone());
@@ -332,7 +356,11 @@ impl Server {
             Err(e) => return Err(self.fail(format!("配置不对：{e}"), false)),
         };
         let config = match spec.resolve(&|name: &str| host.secret(name)) {
-            Ok(config) => config.client("kotone", &self.version),
+            Ok(config) => {
+                self.state.lock().unwrap().secrets =
+                    spec.keys().iter().filter_map(|n| host.secret(n)).collect();
+                config.client("kotone", &self.version)
+            }
             Err(missing) => {
                 return Err(self.fail(
                     format!(
@@ -415,16 +443,18 @@ impl Server {
                 old.close().await;
             }
         }
+        let message = self.scrub(&error.to_string());
         let mut state = self.state.lock().unwrap();
         state.status = Status::NotConnected;
-        state.error = Some(error.to_string());
+        state.error = Some(message);
     }
 
     /// “这个插件现在没连上”的说法（琴音照着跟玩家说，原则 21：说下一步）。
     pub fn offline(&self, reason: &str) -> String {
         format!(
-            "「{}」插件现在没连上（{reason}）。玩家可以在左侧栏的「插件」里重新连接",
-            self.id
+            "「{}」插件现在没连上（{}）。玩家可以在左侧栏的「插件」里重新连接",
+            self.id,
+            self.scrub(reason)
         )
     }
 
@@ -466,9 +496,13 @@ impl Server {
             Err(McpError::Server { message, .. }) => Err(format!(
                 "「{}」插件的 {original} 出错：{}",
                 self.id,
-                short_text(&message, 500)
+                short_text(&self.scrub(&message), 500)
             )),
-            Err(error) => Err(format!("「{}」插件的 {original} 出错：{error}", self.id)),
+            Err(error) => Err(format!(
+                "「{}」插件的 {original} 出错：{}",
+                self.id,
+                self.scrub(&error.to_string())
+            )),
         }
     }
 
@@ -489,7 +523,7 @@ impl Server {
         let contents = client
             .read_resource(uri)
             .await
-            .map_err(|e| format!("读不了 {uri}：{e}"))?;
+            .map_err(|e| self.scrub(&format!("读不了 {uri}：{e}")))?;
         let item = contents
             .into_iter()
             .find(|c| c.text.is_some())
@@ -521,7 +555,8 @@ impl Server {
     }
 }
 
-/// `_meta.ui` → 资源的显示要求（CSP、边框）；声明写法不对的丢掉。
+/// `_meta.ui` → 资源的显示要求（CSP、边框）；声明写法不对的、本机和局域网的地址丢掉（[`public_csp_source`]：
+/// App 跑在回环代理上，别人的页面不能借它碰你电脑上、局域网里的服务）。
 fn resource_ui(meta: Option<&Value>) -> Option<ResourceUi> {
     let ui = meta?.get("ui")?;
     let mut parsed: ResourceUi = serde_json::from_value(ui.clone()).ok()?;
@@ -531,12 +566,22 @@ fn resource_ui(meta: Option<&Value>) -> Option<ResourceUi> {
         &mut parsed.csp.frame_domains,
         &mut parsed.csp.base_uri_domains,
     ] {
-        *list = list
-            .iter()
-            .filter_map(|d| normalize_csp_source(d))
-            .collect();
+        *list = list.iter().filter_map(|d| public_csp_source(d)).collect();
     }
     Some(parsed)
+}
+
+/// 一段话里出现的 Key 换成 `***`（太短的不换：会把正常的字换掉，也不像 Key）。
+fn redact(text: &str, secrets: &[String]) -> String {
+    let mut out = text.to_string();
+    for secret in secrets.iter().filter(|s| s.trim().chars().count() >= 4) {
+        out = out.replace(secret.as_str(), "***");
+        let trimmed = secret.trim();
+        if trimmed != secret {
+            out = out.replace(trimmed, "***");
+        }
+    }
+    out
 }
 
 /// 图标只认 `https:` 和 `data:image/` 的地址（规范：宿主应拒绝别的协议）。
@@ -565,16 +610,49 @@ mod tests {
     fn declared_csp_is_kept_and_bad_entries_dropped() {
         let meta = json!({"ui": {"csp": {
             "resourceDomains": ["https://cdn.example.com/lib.js", "*", "'unsafe-eval'"],
-            "connectDomains": ["wss://live.example.com"]
+            "connectDomains": ["wss://live.example.com", "http://127.0.0.1:8080", "http://localhost:3000",
+                               "https://192.168.1.2", "http://router.local"],
+            "frameDomains": ["http://10.0.0.1"],
+            "baseUriDomains": ["https://127.0.0.1"]
         }, "prefersBorder": false, "domain": "x.example.com"}});
         let ui = resource_ui(Some(&meta)).unwrap();
         assert_eq!(ui.csp.resource_domains, vec!["https://cdn.example.com"]);
-        assert_eq!(ui.csp.connect_domains, vec!["wss://live.example.com"]);
+        assert_eq!(
+            ui.csp.connect_domains,
+            vec!["wss://live.example.com"],
+            "别人的页面不能声明本机和局域网的地址"
+        );
+        assert!(ui.csp.frame_domains.is_empty() && ui.csp.base_uri_domains.is_empty());
         assert_eq!(ui.prefers_border, Some(false));
         assert!(resource_ui(Some(&json!({}))).is_none());
         assert!(icon_ok(&json!({"src": "https://x.example.com/i.png"})));
         assert!(icon_ok(&json!({"src": "data:image/png;base64,AAAA"})));
         assert!(!icon_ok(&json!({"src": "javascript:alert(1)"})));
         assert!(!icon_ok(&json!({"src": "file:///c:/x.png"})));
+    }
+
+    /// 出错的话里的 Key 换掉（会进卡片、经“没连上”发给模型）；太短的不换。
+    #[test]
+    fn keys_are_scrubbed_from_errors() {
+        let secrets = vec![
+            "sk-live-123456".to_string(),
+            "Bearer abc123".to_string(),
+            "ab".to_string(),
+        ];
+        assert_eq!(
+            redact(
+                "连不上 http://x.example.com/mcp?token=sk-live-123456：Bearer abc123 不对，ab",
+                &secrets
+            ),
+            "连不上 http://x.example.com/mcp?token=***：*** 不对，ab"
+        );
+        let server = Server::new("x", Err("坏了".into()), None, "test");
+        assert_eq!(
+            server.scrub("sk-live-123456"),
+            "sk-live-123456",
+            "没连过：没有要换的"
+        );
+        server.state.lock().unwrap().secrets = secrets;
+        assert!(!server.offline("for sk-live-123456").contains("sk-live"));
     }
 }

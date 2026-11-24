@@ -5,6 +5,11 @@ No AI key, no OS input, nothing typed, no sound. The real desktop app (debug bui
 KOTONE_HOME=target/mcp-servers-real/home; host commands go through WebView2's DevTools port
 (`window.__TAURI_INTERNALS__.invoke` in the settings page); her side runs against a local mock model in this script.
 
+0. (review fixes, 2026-11-25) mcp.json starts with a hand-copied `lol` entry — the same name as the built-in
+   英雄联盟 plugin: it is NOT a plugin (`mcp_servers_status` lists it with the reason, the plugins page shows the row),
+   the built-in 英雄联盟 stays one built-in plugin (its App resource reads the built-in way, external agents are not
+   refused as for a third-party tool), and removing that entry only drops it from mcp.json (the built-in's switch
+   in config.json stays);
 1. the HTTP server: `npx -y @modelcontextprotocol/server-everything streamableHttp` on a free port (PORT); this also
    puts the package into the npx cache so the stdio start below is quick (the connect timeout is 10 s);
 2. `mcp_servers_preview` of a Claude-Desktop-style paste (`{"mcpServers": {"everything": {"command": "npx", ...}}}`):
@@ -22,7 +27,10 @@ KOTONE_HOME=target/mcp-servers-real/home; host commands go through WebView2's De
 5. external agents never see them: `kotone.exe tools call system.capabilities` (what `kotone.exe mcp` lists) has
    none of their tools, and `kotone.exe tools call everything.echo` is refused;
 6. switch `everything` off → its card says notConnected; she calls `everything-http.echo` the same way;
-7. the page path (`plugin_call` as its own page) works; `mcp_server_remove` → gone from mcp.json and the list.
+7. the page path (`plugin_call` as its own page) works; `mcp_server_remove` → gone from mcp.json and the list,
+   and its “always allow” rule is gone too; then `everything`'s config is changed by hand (an extra env var) and
+   reloaded → its “always allow” rule is cleared and it is no longer trusted (both follow the config);
+8. switched back on, it connects with the new config; its processes go when Kotone quits (Job Object).
 
 Stops before starting if a game is running or in front. Takes target/tmp/real.lock. Prerequisites (README 准备):
 `pnpm -C apps/desktop build:web`, then `cargo build -p kotone-tauri --features tauri/custom-protocol`; the exe is
@@ -112,6 +120,11 @@ try {
 def invoke(command, args=None):
     body = "return await window.__TAURI_INTERNALS__.invoke(%s, %s);" % (
         json.dumps(command), json.dumps(args or {}, ensure_ascii=False))
+    return page_js(body)
+
+
+def page_js(body):
+    """Run `body` (an async function body) in the settings page; DOM clicks only, no OS input."""
     code = PAGE_EVAL.replace("__PORT__", str(DEVTOOLS)).replace("__BODY__", body)
     out = subprocess.run(["node", "--input-type=module"], input=code, capture_output=True, text=True,
                          encoding="utf-8", cwd=os.path.join(REPO, "apps", "desktop"))
@@ -202,6 +215,8 @@ def write_config():
         "agent": {"permissions": {"mode": "default", "rules": {"everything.echo": "allow",
                                                               "everything-http.echo": "allow"}},
                   "progressSpeech": False},
+        # 内置英雄联盟的开关写明（删掉 mcp.json 里同名的那一项以后还在）
+        "plugins": {"lol": {"enabled": True}},
     }
     with open(os.path.join(HOME, "config.json"), "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=1)
@@ -213,6 +228,65 @@ def sweep_credentials():
     for line in listing.splitlines():
         if "target=" in line and WORK in line:
             subprocess.run(["cmdkey", f"/delete:{line.split('target=', 1)[1].strip()}"], capture_output=True)
+
+
+def config_file():
+    with open(os.path.join(HOME, "config.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def read_mcp_file():
+    with open(os.path.join(HOME, "mcp.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def rules():
+    return ((config_file().get("agent") or {}).get("permissions") or {}).get("rules") or {}
+
+
+PROBLEM_ROW = r"""
+document.querySelector('[data-testid="settings-nav-plugins"]')?.click();
+for (let i = 0; i < 60; i++) {
+  const row = document.querySelector('[data-testid="plugins-mcp-problem"][data-id="lol"]');
+  if (row) return { kind: row.dataset.kind, text: row.textContent,
+                    cards: document.querySelectorAll('[data-testid="plugins-card-lol"]').length,
+                    thirdParty: document.querySelectorAll('[data-testid="plugins-card-lol-third-party"]').length };
+  await new Promise((r) => setTimeout(r, 250));
+}
+return null;
+"""
+
+
+def builtin_lol_checks():
+    """0. mcp.json's `lol` entry is a problem, not a plugin; the built-in 英雄联盟 is untouched."""
+    status = invoke("mcp_servers_status").get("ok") or {}
+    problem = next((p for p in status.get("problems") or [] if p.get("id") == "lol"), None)
+    check("mcp.json `lol`: not a plugin, listed with the reason",
+          problem and problem.get("kind") == "taken" and "撞了" in problem.get("error", ""),
+          json.dumps(status, ensure_ascii=False)[:300])
+    plugins = invoke("plugins_list").get("ok") or []
+    lols = [p for p in plugins if p.get("manifest", {}).get("id") == "lol"]
+    check("built-in 英雄联盟 is still one built-in plugin (no `remote`)",
+          len(lols) == 1 and "remote" not in lols[0] and lols[0].get("enabled") is True,
+          json.dumps([{k: p.get(k) for k in ("enabled",)} | {"remote": "remote" in p} for p in lols]))
+    resource = invoke("plugin_resource", {"plugin": "lol", "uri": "ui://kotone/lol/tier"})
+    check("built-in 英雄联盟's App resource reads the built-in way",
+          "mcp-app" in ((resource.get("ok") or {}).get("mimeType") or ""), json.dumps(resource, ensure_ascii=False)[:200])
+    external = tools_call("lol.scout", {}, timeout_ms=20_000)
+    check("external agents are not refused as for a third-party tool",
+          "第三方插件" not in json.dumps(external, ensure_ascii=False), json.dumps(external, ensure_ascii=False)[:200])
+    row = page_js(PROBLEM_ROW)
+    shown = row.get("ok") or {}
+    check("plugins page: the `lol` row says why; the 英雄联盟 card is the built-in one",
+          shown.get("kind") == "taken" and shown.get("cards") == 1 and shown.get("thirdParty") == 0,
+          json.dumps(row, ensure_ascii=False)[:300])
+    removed = invoke("mcp_server_remove", {"id": "lol"})
+    status = invoke("mcp_servers_status").get("ok") or {}
+    lol_config = (config_file().get("plugins") or {}).get("lol") or {}
+    check("removing that entry only drops it from mcp.json (the built-in's switch stays)",
+          "error" not in removed and "lol" not in read_mcp_file().get("mcpServers", {})
+          and not status.get("problems") and lol_config.get("enabled") is True,
+          json.dumps({"removed": removed, "lol": lol_config}, ensure_ascii=False)[:300])
 
 
 def remote_of(plugins, pid):
@@ -311,6 +385,9 @@ def main():
         os.makedirs(BIN)
         shutil.copy2(SRC_EXE, EXE)
         write_config()
+        # 0. 手抄来的配置，键名正好是内置插件的 id
+        with open(os.path.join(HOME, "mcp.json"), "w", encoding="utf-8") as f:
+            json.dump({"mcpServers": {"lol": {"command": "npx", "args": ["-y", "some-lol-mcp"]}}}, f)
 
         # 1. the HTTP server (also warms the npx cache for the stdio one)
         port = free_port()
@@ -337,6 +414,7 @@ def main():
             "baseUrl": f"http://127.0.0.1:{mock_port}/v1", "model": "mock"}, "apiKey": "sk-local-fixture"})
         tools_call("settings.update", {"patch": {"assistant": {"connectionId": "mock"}}})
         check("mock model connection", up.get("ok"), json.dumps(up, ensure_ascii=False)[:200])
+        builtin_lol_checks()
 
         # 2. preview + add the stdio one (pasted the Claude Desktop way); it connects (on, tools unknown)
         paste = json.dumps({"mcpServers": {"everything": {"command": "npx", "args": ["-y", PACKAGE]}}})
@@ -417,6 +495,22 @@ def main():
               "error" not in removed and "everything-http" not in left
               and not remote_of(invoke("plugins_list").get("ok") or [], "everything-http"),
               json.dumps(removed, ensure_ascii=False)[:200])
+        check("remove: its “always allow” rule is gone too", "everything-http.echo" not in rules(),
+              json.dumps(rules(), ensure_ascii=False))
+
+        # 7b. everything's config is changed by hand (still off): its “always allow” and the trust don't carry over
+        check("before the change: everything.echo is always allowed", rules().get("everything.echo") == "allow",
+              json.dumps(rules(), ensure_ascii=False))
+        data = read_mcp_file()
+        data["mcpServers"]["everything"]["env"] = {"KOTONE_E2E": "changed"}
+        with open(os.path.join(HOME, "mcp.json"), "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        reloaded = invoke("mcp_servers_reload")
+        card = remote_of(invoke("plugins_list").get("ok") or [], "everything") or {}
+        check("config changed → its “always allow” rule is cleared and it is no longer trusted",
+              "error" not in reloaded and "everything.echo" not in rules()
+              and (card.get("remote") or {}).get("trusted") is False,
+              json.dumps({"rules": rules(), "trusted": (card.get("remote") or {}).get("trusted")}, ensure_ascii=False))
 
         # 8. a stdio server still running when Kotone quits goes with it (Job Object)
         invoke("update_settings", {"patch": {"plugins": {"everything": {"enabled": True}}}})

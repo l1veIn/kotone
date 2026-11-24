@@ -3,7 +3,8 @@
 //! - `mcp_servers_preview`：粘贴的配置 → 候选（建议的 id、信任提示要的事实、会搬进凭据库的 Key、提醒）；
 //! - `mcp_servers_import_sources`：Claude Desktop、VS Code 的配置文件里有哪些服务器（同样是候选）；
 //! - `mcp_server_add`：玩家看过信任提示、同意了：明文的 Key 搬进凭据库、写进 `mcp.json`、打开开关、记下信任；
-//! - `mcp_server_remove`、`mcp_server_trust`、`mcp_server_reconnect`、`mcp_server_set_key`、`mcp_servers_reload`。
+//! - `mcp_server_remove`、`mcp_server_trust`、`mcp_server_reconnect`、`mcp_server_set_key`、`mcp_servers_reload`；
+//! - `mcp_servers_status`：`mcp.json` 读不出来的原因、没加进来的项（名字和 Kotone 的撞了、不能当 id）。
 //!
 //! 开关不另开命令：和内置插件一样走设置 `plugins.<id>.enabled`。插件清单在 `plugins_list`（每项多一个 `remote`）。
 
@@ -103,9 +104,23 @@ pub async fn mcp_server_add(app: AppHandle, id: String, entry: Value) -> Result<
     item(&id)
 }
 
-/// 删掉一个：断开、从 `mcp.json` 删掉、删掉它的 Key 和记着的工具清单、清掉开关和信任。
+/// 删掉一个：断开、从 `mcp.json` 删掉、删掉它的 Key 和记着的工具清单、清掉开关、信任和“总是允许”。
+///
+/// 没加进来的项（名字和内置插件撞了，例如手抄来的 `lol`、`music`）**只从 `mcp.json` 删掉这一项**：
+/// Key、工具清单、开关、规则都是同名的内置插件的，一样都不碰。
 #[tauri::command]
 pub async fn mcp_server_remove(app: AppHandle, id: String) -> Result<(), String> {
+    if remote_plugins::check_new_id(&id).is_err() {
+        let path = remote_plugins::mcp_path();
+        let mut file = McpFile::load(&path)?;
+        if !file.remove(&id) {
+            return Err(format!("mcp.json 里没有“{id}”"));
+        }
+        file.save(&path)?;
+        remote_plugins::reload(&app)?;
+        kotone_core::log::log(&format!("从 mcp.json 删掉了没加进来的「{id}」"));
+        return Ok(());
+    }
     let plugin = remote_plugins::find(&id);
     if let Some(plugin) = &plugin {
         plugin.server().disconnect().await;
@@ -134,6 +149,7 @@ pub async fn mcp_server_remove(app: AppHandle, id: String) -> Result<(), String>
         &app,
         json!({"plugins": {&id: {"enabled": null, "settings": {TRUST_KEY: null}}}}),
     )?;
+    remote_plugins::forget_rules(&app, &id);
     remote_plugins::reload(&app)?;
     kotone_core::log::log(&format!("删掉了第三方插件 {id}"));
     Ok(())
@@ -210,4 +226,11 @@ pub async fn mcp_server_set_key(
 pub fn mcp_servers_reload(app: AppHandle) -> Result<Value, String> {
     remote_plugins::reload(&app)?;
     Ok(crate::plugins::list(&app))
+}
+
+/// `mcp.json` 的情况（插件页的第三方一组用）：文件在哪、读不出来的原因、没加进来的项和原因。
+/// 插件清单（`plugins_list`）还是一个数组（好几处在读它），这些另外给。
+#[tauri::command]
+pub fn mcp_servers_status() -> Value {
+    remote_plugins::status()
 }

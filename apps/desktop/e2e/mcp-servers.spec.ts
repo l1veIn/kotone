@@ -143,3 +143,50 @@ test("a third-party plugin opens to its status and tool list; settings fill the 
   await expect(page.getByTestId("plugins-page")).toBeVisible();
   await expect(page.getByTestId("plugins-card-weather")).toHaveCount(0);
 });
+
+// 审查后改的（2026-11-25）：mcp.json 里和内置插件撞名（手抄来的 `lol`）、不能当 id 的项不进插件表，在第三方一组里说原因，
+// 能从 mcp.json 删掉那一项（内置的英雄联盟照常，还是一张内置卡片）；mcp.json 读不出来时说一句，不再一声不吭。
+test("mcp.json entries that clash with built-in plugins are listed with the reason, not as cards", async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    (window as unknown as { __kotoneMcpFileSeed: unknown }).__kotoneMcpFileSeed = {
+      problems: [
+        { id: "lol", kind: "taken", error: "名字“lol”和 Kotone 里已有的插件或工具撞了，换一个" },
+        { id: "Bad_Name", kind: "invalid", error: "名字“Bad_Name”不能当插件 id" },
+      ],
+    };
+  });
+  await openPlugins(page);
+  const status = page.getByTestId("plugins-mcp-status");
+  await expect(status).toBeVisible();
+  await expect(status.locator('[data-id="lol"]')).toHaveAttribute("data-kind", "taken");
+  await expect(status.locator('[data-id="lol"]')).toContainText("撞了");
+  await expect(status.locator('[data-id="Bad_Name"]')).toContainText("小写字母");
+  await expect(status).toContainText("mcp.json");
+  await expect(page.getByTestId("plugins-mcp-file-error")).toHaveCount(0);
+  // 内置的英雄联盟只有一张卡片，在内置那一组、没有“第三方”标
+  await expect(page.getByTestId("plugins-card-lol")).toHaveCount(1);
+  await expect(page.getByTestId("plugins-grid").getByTestId("plugins-card-lol")).toBeVisible();
+  await expect(page.getByTestId("plugins-card-lol-third-party")).toHaveCount(0);
+  await status.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("mcp-problems.png"), animations: "disabled" });
+  // 从 mcp.json 删掉那一项：只删它，内置的照旧
+  await status.locator('[data-id="lol"]').getByTestId("plugins-mcp-problem-remove").click();
+  await expect(status.locator('[data-id="lol"]')).toHaveCount(0);
+  await expect(page.getByTestId("plugins-grid").getByTestId("plugins-card-lol")).toBeVisible();
+  await expect(page.getByTestId("plugins-card-weather")).toBeVisible();
+});
+
+test("a broken mcp.json is reported on the plugins page instead of silently dropping third-party plugins", async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as unknown as { __kotoneMcpFileSeed: unknown }).__kotoneMcpFileSeed = {
+      fileError: "mcp.json 不是合法的 JSON：expected `,` or `}` at line 3 column 5",
+    };
+  });
+  await openPlugins(page, []);
+  const error = page.getByTestId("plugins-mcp-file-error");
+  await expect(error).toBeVisible();
+  await expect(error).toContainText("mcp.json 读不出来");
+  await expect(error).toContainText("line 3 column 5");
+  await page.getByTestId("plugins-mcp-reload").click();
+  await expect(error).toBeVisible();
+});

@@ -329,12 +329,24 @@ pub const INTERNAL: &[(&str, &str)] = &[
     ),
 ];
 
-/// 内置 Agent 改设置时不允许出现的路径（权限不能由 Agent 自己改）。
-pub const AGENT_PROTECTED: &[&str] = &["agent.permissions"];
+/// 内置 Agent 改设置时不允许出现的路径（权限不能由 Agent 自己改）：
+/// - `agent.permissions`：她自己的权限（模式、每个工具的规则，含第三方工具的“总是允许”）；
+/// - `plugins.*.settings.trusted`：第三方插件的信任（记的是玩家信任时那份配置的指纹，MCP 方案第 2 期）。
+///   信任以后它说只读的工具就不再问，只能由玩家在「插件」里点（审查后加的，2026-11-25）。
+///
+/// 中间的 `*` 是任意一段（插件 id 里没有点）。
+pub const AGENT_PROTECTED: &[&str] = &["agent.permissions", "plugins.*.settings.trusted"];
 
 fn path_matches(pattern: &str, path: &str) -> bool {
     if let Some(prefix) = pattern.strip_suffix(".*") {
         return path == prefix || path.starts_with(&format!("{prefix}."));
+    }
+    if pattern.contains('*') {
+        // 一段一段比，`*` 是任意一段；路径比规则长（往下的字段）也算
+        let wanted: Vec<&str> = pattern.split('.').collect();
+        let got: Vec<&str> = path.split('.').collect();
+        return got.len() >= wanted.len()
+            && wanted.iter().zip(&got).all(|(w, g)| *w == "*" || w == g);
     }
     path == pattern || path.starts_with(&format!("{pattern}."))
 }
@@ -491,10 +503,31 @@ pub fn effects(changed: Vec<String>, runtime_restart_needed: bool) -> Effects {
 
 /// 内置 Agent 的设置补丁里不允许出现的路径；有则返回原因。
 pub fn agent_protected_violation(patch: &Value) -> Option<String> {
+    // 补丁里写到的每一个叶子（和空对象）：`diff` 从空对象比只到第一层（`plugins`），往下的规则对不上
+    fn leaves(prefix: &str, value: &Value, out: &mut Vec<String>) {
+        match value {
+            Value::Object(map) if !map.is_empty() => {
+                for (key, child) in map {
+                    let path = if prefix.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{prefix}.{key}")
+                    };
+                    leaves(&path, child, out);
+                }
+            }
+            _ => out.push(prefix.to_string()),
+        }
+    }
     let mut paths = Vec::new();
-    diff("", &Value::Object(Default::default()), patch, &mut paths);
+    leaves("", patch, &mut paths);
     for path in paths {
         if let Some(protected) = AGENT_PROTECTED.iter().find(|p| path_matches(p, &path)) {
+            if protected.starts_with("plugins.") {
+                return Some(format!(
+                    "{path}：第三方插件信不信任只能由玩家在左侧栏的「插件」里这个插件的设置里改，琴音不能替玩家信任"
+                ));
+            }
             return Some(format!(
                 "{protected} 只能由用户在「琴音 → 权限」里修改，琴音不能改自己的权限"
             ));
@@ -776,6 +809,46 @@ mod tests {
         .is_some());
         assert!(agent_protected_violation(&json!({"browser": null})).is_some());
         assert!(agent_protected_violation(&json!({"browser": {"enabled": false}})).is_none());
+    }
+
+    /// 第三方插件的信任（MCP 方案第 2 期）她不能自己写；插件别的设置、开关照旧能改。
+    #[test]
+    fn agent_cannot_trust_third_party_plugins() {
+        use serde_json::json;
+        let trust = agent_protected_violation(
+            &json!({"plugins": {"everything": {"settings": {"trusted": "0123456789abcdef"}}}}),
+        )
+        .expect("信任不能由她写");
+        assert!(trust.contains("「插件」"), "{trust}");
+        assert!(agent_protected_violation(
+            &json!({"plugins": {"files": {"enabled": true, "settings": {"trusted": {"x": 1}}}}})
+        )
+        .is_some());
+        assert!(
+            agent_protected_violation(&json!({"plugins": {"everything": {"enabled": false}}}))
+                .is_none()
+        );
+        assert!(agent_protected_violation(
+            &json!({"plugins": {"music": {"settings": {"quality": "standard", "volume": 50}}}})
+        )
+        .is_none());
+        assert!(path_matches(
+            "plugins.*.settings.trusted",
+            "plugins.a-b.settings.trusted"
+        ));
+        assert!(!path_matches(
+            "plugins.*.settings.trusted",
+            "plugins.a.settings.trustedness"
+        ));
+        assert!(!path_matches(
+            "plugins.*.settings.trusted",
+            "plugins.a.settings"
+        ));
+        // 原来的写法不变
+        assert_eq!(
+            field_for("plugins.lol.enabled").map(|f| f.path),
+            Some("plugins.*")
+        );
     }
 
     /// 内置浏览器的开关有说明、在“设置 → 浏览器”；扩展和待卸载的记录不给她改（ADR 038）。

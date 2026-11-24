@@ -87,13 +87,14 @@ fn third_party_refusal(remote: bool, caller: Caller<'_>) -> Option<&'static str>
     (remote && matches!(caller, Caller::Service)).then_some(NOT_SHARED)
 }
 
-/// 交给这个插件的宿主：第三方插件拿更窄的那一份（`remote_plugins::RemoteHost`）。
+/// 交给这个插件的宿主：第三方插件拿更窄的那一份（`remote_plugins::RemoteHost`）。**先看内置表**：内置插件
+/// 永远拿 `DesktopHost`（`mcp.json` 里写了同名的一项也一样，那一项不进插件表，见 `remote_plugins`）。
 fn host_for(app: &AppHandle, plugin: &Arc<dyn Plugin>) -> Arc<dyn Host> {
     let id = &plugin.manifest().id;
-    if crate::remote_plugins::is_remote(id) {
-        crate::remote_plugins::host(app, id)
-    } else {
+    if registry().iter().any(|p| Arc::ptr_eq(p, plugin)) || !crate::remote_plugins::is_remote(id) {
         DesktopHost::for_plugin(app, plugin)
+    } else {
+        crate::remote_plugins::host(app, id)
     }
 }
 
@@ -667,20 +668,19 @@ fn resolve_page(
             ))
         };
     }
-    // 第三方插件的 MCP App：`ui://` 不限于 `ui://kotone/`，按“哪个服务器给的”认归属（开着的里面第一个）
+    // 第三方插件的 MCP App（`ui://` 不限于 `ui://kotone/`）：界面的右侧栏只认 `ui://kotone/<插件>/<页面>`，
+    // 这里说“打开了”界面却什么都不开。现在明说打不开、去哪打开（审查后改的，2026-11-25）
     if !uri.starts_with("ui://kotone/") {
-        return crate::remote_plugins::plugins()
-            .iter()
-            .filter(|p| settings.plugin_enabled(&p.manifest().id, true))
-            .find_map(|p| {
-                let (_, title) = p
-                    .server()
-                    .app_pages()
-                    .into_iter()
-                    .find(|(page, _)| page == uri)?;
-                Some((title, Some(p.manifest().id.clone())))
-            })
-            .ok_or_else(|| format!("没有这个页面：{uri}"));
+        let owner = crate::remote_plugins::plugins()
+            .into_iter()
+            .find(|p| p.server().owns_uri(uri));
+        return Err(match owner {
+            Some(p) => format!(
+                "第三方插件的页面现在只能在插件页里打开：请玩家在左侧栏的「插件」里点「{}」",
+                p.manifest().id
+            ),
+            None => format!("没有这个页面：{uri}"),
+        });
     }
     let plugin = registry()
         .iter()
@@ -922,6 +922,15 @@ mod tests {
         assert!(resolve_page(&s, "ui://kotone/lol/nope").is_err());
         assert!(resolve_page(&s, "ui://kotone/nope/x").is_err());
         assert!(resolve_page(&s, "https://example.com").is_err());
+        // 第三方插件的页面：界面的右侧栏打不开，明说去插件页（不回“打开了”）
+        let id = "zz-ui-open-test";
+        crate::remote_plugins::insert_for_test(crate::remote_plugins::test_plugin(id, 1));
+        let refused = resolve_page(&s, "ui://zz-ui-open-test/app").unwrap_err();
+        assert!(
+            refused.contains("只能在插件页里打开") && refused.contains(id),
+            "{refused}"
+        );
+        crate::remote_plugins::remove_for_test(id);
         let mut off = kotone_core::settings::Settings::default();
         off.plugins.entry("lol".into()).or_default().enabled = Some(false);
         assert!(resolve_page(&off, "ui://kotone/lol/settings")

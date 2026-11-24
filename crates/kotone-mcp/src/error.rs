@@ -74,17 +74,34 @@ pub(crate) fn seconds(d: Duration) -> String {
 }
 
 /// 一串错误（含 source 链）接成一句。
+///
+/// **不带地址**：reqwest 的错误会写上 “for url (…)”，地址里可能有 Key（`?token=…`），而这句话会进插件卡片、
+/// 经“没连上”发给模型。链上每个 reqwest 错误的地址都去掉（照 `reqwest::Error::without_url`；这里拿到的是借用，
+/// 只能按它的写法去字），别处还提到这个地址的换成只有协议、主机和端口的写法。
 pub(crate) fn chain(error: &(dyn StdError + 'static)) -> String {
-    let mut parts = vec![error.to_string()];
-    let mut source = error.source();
-    while let Some(e) = source {
+    let mut parts: Vec<String> = Vec::new();
+    let mut urls: Vec<reqwest::Url> = Vec::new();
+    let mut current = Some(error);
+    while let Some(e) = current {
+        if let Some(url) = e
+            .downcast_ref::<reqwest::Error>()
+            .and_then(reqwest::Error::url)
+        {
+            urls.push(url.clone());
+        }
         let text = e.to_string();
         if !parts.iter().any(|p| p.contains(&text)) {
             parts.push(text);
         }
-        source = e.source();
+        current = e.source();
     }
-    parts.join("：")
+    let mut out = parts.join("：");
+    for url in urls {
+        out = out
+            .replace(&format!(" for url ({url})"), "")
+            .replace(url.as_str(), &url.origin().ascii_serialization());
+    }
+    out
 }
 
 type HttpError = rmcp::transport::streamable_http_client::StreamableHttpError<reqwest::Error>;
@@ -178,5 +195,28 @@ mod tests {
         assert_eq!(seconds(Duration::from_secs(10)), "10");
         let io = std::io::Error::other("拒绝连接");
         assert!(chain(&io).contains("拒绝连接"));
+    }
+
+    /// reqwest 连不上时的错误带着 “for url (…)”：地址（和里面的 Key）不进这句话。
+    #[tokio::test]
+    async fn connect_errors_do_not_carry_the_url() {
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let url = format!("http://127.0.0.1:{port}/mcp?token=sk-secret-123");
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let error = client.get(&url).send().await.unwrap_err();
+        assert!(
+            error.to_string().contains("sk-secret-123"),
+            "reqwest 自己会带上地址"
+        );
+        let text = chain(&error);
+        assert!(
+            !text.contains("sk-secret-123") && !text.contains("/mcp"),
+            "{text}"
+        );
+        assert!(!text.is_empty());
     }
 }

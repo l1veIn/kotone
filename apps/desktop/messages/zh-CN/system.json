@@ -512,5 +512,13 @@
   "system_mcp_server_says": "服务器自称：{title}",
   "system_mcp_ask_always": "总是允许这个工具",
   "system_mcp_ask_trust": "信任这个插件",
-  "system_mcp_ask_note": "第三方插件「{id}」的工具"
+  "system_mcp_ask_note": "第三方插件「{id}」的工具",
+  "system_mcp_file_error": "mcp.json 读不出来，第三方插件都没加载：{error}",
+  "system_mcp_reload": "重新读 mcp.json",
+  "system_mcp_problems_title": "mcp.json 里这几项没加进来",
+  "system_mcp_problem_taken": "名字和 Kotone 自带的插件或工具撞了",
+  "system_mcp_problem_invalid": "这个名字不能当插件名（只能用小写字母、数字和连字符）",
+  "system_mcp_problems_hint": "在 {path} 里给它换个名字，再点“重新读 mcp.json”；或者删掉这一项。同名的内置插件不受影响。",
+  "system_mcp_problem_remove": "从 mcp.json 删掉",
+  "system_mcp_problem_removed": "从 mcp.json 删掉了「{id}」"
 }
