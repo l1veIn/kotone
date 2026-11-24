@@ -15,6 +15,7 @@
   import { openExternal } from "$lib/ipc";
   import PluginCard from "./PluginCard.svelte";
   import { pluginToolLabel } from "../pluginUi";
+  import ThirdPartyAskActions from "./ThirdPartyAskActions.svelte";
 
   let { tool, runActive = false, ask, onAnswer }: {
     tool: ToolView;
@@ -123,6 +124,8 @@
         <div class="mt-3 flex flex-wrap gap-2">
           <Button size="sm" data-testid="agent-ask-allow-once" disabled={!!answering} onclick={() => void answer("allow-once")}>{m.chat_ask_allow_once()}</Button>
           <Button size="sm" variant="outline" data-testid="agent-ask-allow-conversation" disabled={!!answering} onclick={() => void answer("allow-for-conversation")}>{m.chat_ask_allow_conversation()}</Button>
+          <!-- 第三方插件的工具（MCP 方案第 2 期）：多一个“总是允许这个工具”或“信任这个插件” -->
+          <ThirdPartyAskActions tool={tool.call.name} disabled={!!answering} onAnswer={answer} />
           <Button size="sm" variant="ghost" class="text-destructive hover:bg-destructive/10 hover:text-destructive" data-testid="agent-ask-deny" disabled={!!answering} onclick={() => void answer("deny")}>{m.chat_ask_deny()}</Button>
         </div>
         {#if answerError}<p role="alert" class="mt-2 mb-0 text-xs text-destructive">{answerError}</p>{/if}

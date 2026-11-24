@@ -52,6 +52,9 @@ export function mcpToolName(tool: string): string {
 export function resolveAppTool(name: string, plugin: PluginInfo): string | null {
   const tools = plugin.tools.filter((t) => t.visibility.includes("app")).map((t) => t.name);
   if (tools.includes(name)) return name;
+  // 第三方插件（MCP 方案第 2 期）的 App 是它的服务器自己的页面，调的是服务器上原来的名字：在 Kotone 里是 `<插件 id>.<原名>`
+  const prefixed = `${plugin.manifest.id}.${name}`;
+  if ("remote" in plugin && tools.includes(prefixed)) return prefixed;
   const matches = tools.filter((t) => mcpToolName(t) === name);
   return matches.length === 1 ? matches[0] : null;
 }

@@ -1,11 +1,14 @@
 <script lang="ts">
   // 插件的 logo（ADR 039 D8，docs/design/lol-app.md 第五节）：一块自带底色的圆角方块，亮暗主题下都一样。
-  // 有 plugins/<id>/logo.svg 就用它；没有就是首字块（名字第一个字 + 按 id 定的底色）。
+  // 有 plugins/<id>/logo.svg 就用它；第三方插件用服务器自己声明的图标（`src`，MCP 的 `icons`，只给 data: 的）；
+  // 都没有就是首字块（名字第一个字 + 按 id 定的底色）。
   // 尺寸照设计：插件页卡片 40、App 顶上一条 20、自动卡片那一行 16、消息提示的角标 18。
   import { fallbackLogo, pluginLogo } from "$lib/pluginLogos";
 
-  let { id, name, size = 40, off = false, class: className = "", testid }: {
+  let { id, name, src: declared = null, size = 40, off = false, class: className = "", testid }: {
     id: string;
+    /** 第三方插件的服务器声明的图标（`data:image/…`）；没有 = 看 logo.svg、再没有用首字块。 */
+    src?: string | null;
     /** 插件的显示名（首字块用它的第一个字）。 */
     name: string;
     /** 边长，px。 */
@@ -16,7 +19,7 @@
     testid?: string;
   } = $props();
 
-  const src = $derived(pluginLogo(id));
+  const src = $derived(pluginLogo(id) ?? declared);
   const fallback = $derived(fallbackLogo(id, name));
 </script>
 

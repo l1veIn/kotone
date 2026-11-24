@@ -3,7 +3,8 @@
 // img-src 'self' data: 都放行）。新插件放一个 logo.svg 就有，不用改这里，也不用改插件的 ui/index.ts。
 //
 // 没有 logo 的插件（以后的第三方）用“首字块”：名字的第一个字（英文取第一个字母大写），底色按插件 id 定，
-// 同一个插件每次都是同一个颜色。第三方 MCP 服务器自己声明了图标（MCP 的 `icons`）时用它，接上时在这里加。
+// 同一个插件每次都是同一个颜色。第三方 MCP 服务器自己声明了图标（MCP 的 `icons`）时用它：`PluginLogo` 的 `src`
+// （`mcpServers.ts` 的 `remoteIcon`，只用 data: 的，主窗口不去连别人的网址拿图）。
 
 /** 插件 id → logo 地址。 */
 const LOGOS: Record<string, string> = Object.fromEntries(

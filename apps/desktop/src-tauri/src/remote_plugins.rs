@@ -315,6 +315,27 @@ pub fn describe(plugin: &RemotePlugin) -> Value {
         }
     }
     out["fingerprint"] = json!(server.fingerprint());
+    // 一页工具列表（没有 MCP App 的第三方插件，点卡片看到的就是它）：服务器说的名字、说明（剥过字、限长）、
+    // 标没标只读、给谁
+    let known = server.known();
+    out["toolList"] = Value::Array(
+        known
+            .tools
+            .iter()
+            .filter(|t| kotone_remote_plugin::tools::valid_tool_name(&t.name))
+            .map(|t| {
+                let (visibility, page) = kotone_remote_plugin::tools::ui_meta(t);
+                json!({
+                    "name": kotone_remote_plugin::tools::kotone_name(id, &t.name),
+                    "title": t.title.as_deref().map(|s| kotone_remote_plugin::tools::short_text(s, 60)),
+                    "description": t.description.as_deref().map(|s| kotone_remote_plugin::tools::short_text(s, 300)),
+                    "readOnly": kotone_remote_plugin::tools::read_only(t),
+                    "visibility": visibility,
+                    "page": page,
+                })
+            })
+            .collect(),
+    );
     out
 }
 
