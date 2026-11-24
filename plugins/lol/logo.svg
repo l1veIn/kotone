@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="英雄联盟">
+  <title>英雄联盟</title>
+  <!-- Kotone 原创：一张三条路的小地图。方框是上路和下路，对角线是中路，淡的一道是河；
+       左下实心的角是我方基地，右上空心的角是对面基地（和 App 里“我方实、对面空”的记号一致）。 -->
+  <defs><clipPath id="kotone-lol-logo-map"><rect x="12" y="12" width="24" height="24" rx="4"/></clipPath></defs>
+  <rect width="48" height="48" rx="12" fill="#4c58dd"/>
+  <rect x="0.5" y="0.5" width="47" height="47" rx="11.5" fill="none" stroke="#fff" stroke-opacity=".14"/>
+  <g clip-path="url(#kotone-lol-logo-map)">
+    <circle cx="12" cy="36" r="9" fill="#fff"/>
+    <circle cx="36" cy="12" r="9" fill="none" stroke="#fff" stroke-width="5.6"/>
+  </g>
+  <path d="M16.5 17.5c3.5 1.5 4 4 7.5 6.5s4 4.5 7.5 6.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="2.2" stroke-linecap="round"/>
+  <path d="M20 28 28 20" stroke="#fff" stroke-width="2.8" stroke-linecap="round"/>
+  <rect x="12" y="12" width="24" height="24" rx="4" fill="none" stroke="#fff" stroke-width="2.8"/>
+</svg>

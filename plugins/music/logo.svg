@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="网易云音乐">
+  <title>网易云音乐</title>
+  <!-- Kotone 原创：一朵云里一个音符（“云” + “音乐”）。紫色，不用网易云的红色和唱片标志。 -->
+  <rect width="48" height="48" rx="12" fill="#9b47c8"/>
+  <rect x="0.5" y="0.5" width="47" height="47" rx="11.5" fill="none" stroke="#fff" stroke-opacity=".14"/>
+  <g fill="#fff">
+    <circle cx="16" cy="27.5" r="7"/>
+    <circle cx="25" cy="22.5" r="9"/>
+    <circle cx="32.5" cy="28" r="6.5"/>
+    <rect x="16" y="27.5" width="16.5" height="7"/>
+  </g>
+  <path d="M27.4 20.2v9.4" stroke="#9b47c8" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M27.4 20.2c2 .5 3.7 1.7 4.1 3.8" fill="none" stroke="#9b47c8" stroke-width="2.4" stroke-linecap="round"/>
+  <ellipse cx="24.5" cy="29.8" rx="3.5" ry="2.7" transform="rotate(-20 24.5 29.8)" fill="#9b47c8"/>
+</svg>

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="语音输入">
+  <title>语音输入</title>
+  <!-- Kotone 原创：麦克风下面是一行正在打出来的字和光标——说的话变成聊天框里的字。 -->
+  <rect width="48" height="48" rx="12" fill="#d46a17"/>
+  <rect x="0.5" y="0.5" width="47" height="47" rx="11.5" fill="none" stroke="#fff" stroke-opacity=".14"/>
+  <rect x="19" y="8.5" width="10" height="17" rx="5" fill="#fff"/>
+  <path d="M14.5 19.5a9.5 9.5 0 0 0 19 0M24 29v3" fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round"/>
+  <g fill="#fff">
+    <circle cx="14.5" cy="37.5" r="2"/>
+    <circle cx="20.5" cy="37.5" r="2"/>
+    <circle cx="26.5" cy="37.5" r="2"/>
+  </g>
+  <path d="M33 33.5v8" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/>
+</svg>

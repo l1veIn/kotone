@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>英雄联盟 App 样张</title>
+<!--
+  docs/design/lol-app.md 的样张：风格“记分纸”。假数据；图片按“取图规则”换成 CommunityDragon 的地址（没有本机代理时就是这样）。
+  画了：这局（加载阶段，全屏）、开局战绩（自动卡片，420 / 360 宽）、插件 logo、消息提示。
+  第一段 <style> 是 lol-app-tokens.css 原样内联（改 token 时两边一起改）；第二段是组件样式，实现的人可以照搬。
+  右上角切亮色 / 暗色；地址后加 ?theme=dark 直接打开暗色。
+-->
+<style id="tokens">
+/*
+ * 英雄联盟 App 的设计变量：风格“记分纸”（docs/design/lol-app.md 第一节）。
+ * 原样拷进 plugins/lol/app/ 当 tokens.css 用，页面里只用 --lol-* 这些名字。
+ *
+ * 主题怎么切：
+ *   - 页面连上宿主后调 ext-apps 的 applyDocumentTheme(hostContext.theme)：它在 <html> 上写 data-theme 和 color-scheme；
+ *   - 下面的颜色都用 light-dark()，跟着 color-scheme 走；
+ *   - 宿主没给主题时，color-scheme 是 "light dark"，跟着系统（prefers-color-scheme）。
+ *
+ * 和宿主怎么配合（MCP Apps 2026-01-26 “Theming”）：
+ *   - 底色、字色、线色先用宿主给的标准变量（--color-background-* / --color-text-* / --color-border-*），
+ *     没给才用这里的值：放在 Kotone 里像 Kotone，放在 Claude 里像 Claude；
+ *   - 表达意思的颜色（我方 / 对面、胜负、稀有度、开黑）、字号、间距、圆角是 App 自己的，不跟宿主；
+ *   - 宿主给的字体只换西文字体，中文接在后面（Windows 的微软雅黑）。
+ *
+ * 需要 light-dark()（Chromium 123+、Safari 17.5+；WebView2 和 Claude Desktop 都满足）。
+ * 原创配色，没有用拳头的金色描边、海克斯科技的青蓝发光，也没有用他们的字体。
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* ---------- 纸和墨：跟宿主 ---------- */
+  --lol-bg: var(--color-background-primary, light-dark(#ffffff, #16171b));        /* 页面底 */
+  --lol-bg-2: var(--color-background-secondary, light-dark(#f6f6f3, #1e1f24));    /* 区块、表头、输入框 */
+  --lol-bg-3: var(--color-background-tertiary, light-dark(#ecece8, #2a2b31));     /* 小标签、空格子、图片占位 */
+  --lol-text: var(--color-text-primary, light-dark(#1c1d21, #ecedef));            /* 正文、墨线（突破口的圈） */
+  --lol-text-2: var(--color-text-secondary, light-dark(#5b5e66, #a3a6ae));        /* 次要：玩家名、段位字 */
+  --lol-text-3: var(--color-text-tertiary, light-dark(#73767e, #868990));         /* 最弱：表头、出处、时间 */
+  --lol-line: var(--color-border-primary, light-dark(#e3e3de, #2c2d33));          /* 行间细线、区块边框 */
+  --lol-line-2: var(--color-border-secondary, light-dark(#cfcfc8, #3b3c43));      /* 输入框、按钮边框 */
+  --lol-ring: var(--color-ring-primary, light-dark(#2f66d9, #6ea2ff));            /* 键盘焦点 */
+  --lol-hover: light-dark(rgb(0 0 0 / 0.035), rgb(255 255 255 / 0.045));          /* 可点的行悬停 */
+  --lol-ink-fill: light-dark(#1c1d21, #ecedef);   /* 主按钮、“突破口”小牌的底（墨） */
+  --lol-ink-on: light-dark(#ffffff, #16171b);     /* 墨底上的字 */
+
+  /* ---------- 意思：App 自己的 ---------- */
+  /* 我方 / 对面：蓝 / 橙（色弱也分得开），另有位置、表头字、表头记号（■ / ◆）兜底 */
+  --lol-ally: light-dark(#2f66d9, #6ea2ff);
+  --lol-ally-soft: light-dark(rgb(47 102 217 / 0.08), rgb(110 162 255 / 0.12));
+  --lol-enemy: light-dark(#b85208, #ff9a50);
+  --lol-enemy-soft: light-dark(rgb(184 82 8 / 0.08), rgb(255 154 80 / 0.12));
+
+  /* 胜 / 负，也用在“好 / 差”的数字（胜率 ≥ 53% / ≤ 47%、KDA）。永远和字（胜 / 负）或形状（实 / 淡）一起出现 */
+  --lol-win: light-dark(#13804e, #4bd98b);
+  --lol-win-soft: light-dark(rgb(19 128 78 / 0.09), rgb(75 217 139 / 0.12));
+  --lol-loss: light-dark(#c8323f, #ff7b86);
+  --lol-loss-soft: light-dark(rgb(200 50 63 / 0.08), rgb(255 123 134 / 0.12));
+
+  /* 提醒：隐藏战绩、第一次玩、风险提示 */
+  --lol-warn: light-dark(#946000, #f2b53d);
+  --lol-warn-soft: light-dark(rgb(148 96 0 / 0.09), rgb(242 181 61 / 0.12));
+
+  /* 出错（跟宿主的危险色，没给用这里的） */
+  --lol-danger: var(--color-text-danger, light-dark(#c8323f, #ff7b86));
+
+  /* 开黑小队 A–D：字母小牌的底色（字母本身就能分，颜色是辅助） */
+  --lol-party-a: light-dark(#6d4fd8, #a897ff);
+  --lol-party-b: light-dark(#0b7f80, #38c9c9);
+  --lol-party-c: light-dark(#b8336f, #f07ab0);
+  --lol-party-d: light-dark(#776808, #cdbd45);
+  --lol-party-on: light-dark(#ffffff, #16171b);   /* 小牌上的字母 */
+
+  /* 海克斯稀有度：图标是白色线稿，统一放在深色格子上（亮暗主题都一样） */
+  --lol-aug-tile: #1f2228;
+  --lol-aug-silver: #a3acb8;
+  --lol-aug-gold: #e0ae3c;
+  --lol-aug-prismatic: linear-gradient(135deg, #f08bf5 0%, #8ab4ff 50%, #6ee7b7 100%);
+  --lol-aug-event: #8f98a5;   /* kEventChoice：当银色画，名字里写明 */
+
+  /* 叠在图上的小牌（等级）：深底白字，两种主题一样 */
+  --lol-badge-bg: rgb(16 17 20 / 0.86);
+  --lol-badge-text: #ffffff;
+
+  /* ---------- 字 ---------- */
+  /* 宿主给了 --font-sans 就用它的西文字体；中文接 Windows 的微软雅黑，别的系统也有兜底。不打包字体。 */
+  --lol-font: var(--font-sans, "Segoe UI Variable Text", "Segoe UI", system-ui), "Microsoft YaHei UI", "Microsoft YaHei",
+    "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
+  /* 数字不换字体，只用等宽数字：font-variant-numeric: tabular-nums（Segoe UI、微软雅黑都支持） */
+  --lol-num: tabular-nums;
+
+  /* 字号 / 行高（px）。中文最小 11px；10px 只给纯数字（头像上的等级、小牌里的数） */
+  --lol-fs-2xs: 10px;  --lol-lh-2xs: 12px;
+  --lol-fs-xs: 11px;   --lol-lh-xs: 16px;   /* 表头、标签、出处、时间 */
+  --lol-fs-sm: 12px;   --lol-lh-sm: 18px;   /* 行里的数字、玩家名 */
+  --lol-fs-md: 13px;   --lol-lh-md: 20px;   /* 行里的主字：英雄名 */
+  --lol-fs-lg: 15px;   --lol-lh-lg: 22px;   /* 区块标题、页头名字 */
+  --lol-fs-xl: 18px;   --lol-lh-xl: 24px;   /* 页头的大数字 */
+  --lol-fs-2xl: 24px;  --lol-lh-2xl: 30px;  /* 结算的“胜利 / 失败” */
+
+  --lol-fw-normal: 400;
+  --lol-fw-medium: 500;
+  --lol-fw-strong: 600;   /* 最粗只到 600，只有“胜利 / 失败”用 700 */
+
+  /* ---------- 间距（4 的倍数，另加 2 和 6 给紧凑的行） ---------- */
+  --lol-sp-1: 2px;
+  --lol-sp-2: 4px;
+  --lol-sp-3: 6px;
+  --lol-sp-4: 8px;
+  --lol-sp-5: 12px;
+  --lol-sp-6: 16px;
+  --lol-sp-7: 24px;
+  --lol-sp-8: 32px;
+
+  /* ---------- 圆角：小圆角的方形是这套风格的形状；圆形只给召唤师头像和琴音的头像 ---------- */
+  --lol-r-xs: 3px;     /* ≤ 24px 的图标、标签 */
+  --lol-r-sm: 4px;     /* 32px 的英雄头像 */
+  --lol-r-md: 6px;     /* 40–56px 的英雄头像、按钮、输入框 */
+  --lol-r-lg: 8px;     /* 区块、卡片 */
+  --lol-r-full: 999px; /* 召唤师头像、点 */
+
+  /* ---------- 图标尺寸 ---------- */
+  --lol-ic-2xs: 16px;  /* 段位小徽章、两个召唤师技能（行内竖排） */
+  --lol-ic-xs: 20px;   /* 装备、海克斯、符文（行内）、近 10 局的英雄 */
+  --lol-ic-sm: 24px;   /* 聊天卡片里的英雄头像 */
+  --lol-ic-md: 32px;   /* 战绩、单局详情、强度榜的英雄头像 */
+  --lol-ic-lg: 40px;   /* 这局每人一行的英雄头像；英雄页的海克斯 */
+  --lol-ic-xl: 56px;   /* 战绩页的召唤师头像、英雄页的英雄头像 */
+
+  /* ---------- 行高（信息密度，照 LeagueAkari） ---------- */
+  --lol-row-card: 28px;    /* 聊天卡片：一人一行 */
+  --lol-row-list: 44px;    /* 战绩、单局详情、强度榜：一行 */
+  --lol-row-player: 68px;  /* 这局：一人三行 */
+  --lol-stripe: 3px;       /* 行左边的队伍边条 */
+
+  /* ---------- 阴影：内容是平的，只有浮层有阴影 ---------- */
+  --lol-shadow-pop: 0 8px 24px light-dark(rgb(0 0 0 / 0.12), rgb(0 0 0 / 0.5)), 0 0 0 1px var(--lol-line);
+
+  /* ---------- 动效：只有淡入和 2–4px 的位移 ---------- */
+  --lol-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --lol-dur-fast: 120ms;
+  --lol-dur: 180ms;
+}
+
+/* 宿主说了主题就照宿主（applyDocumentTheme 写的）；没说就跟系统 */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
+/* 页面最基本的样子：底色、字、等宽数字 */
+html, body {
+  margin: 0;
+  background: var(--lol-bg);
+  color: var(--lol-text);
+  font-family: var(--lol-font);
+  font-size: var(--lol-fs-sm);
+  line-height: var(--lol-lh-sm);
+  -webkit-font-smoothing: antialiased;
+}
+/* 聊天卡片（inline）里底色透明，让宿主的卡片底透出来 */
+:root[data-display="inline"], :root[data-display="inline"] body { background: transparent; }
+
+.lol-num { font-variant-numeric: var(--lol-num); }
+
+:focus-visible { outline: 2px solid var(--lol-ring); outline-offset: 1px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+</style>
+<style>
+/* ================= 样张外壳（不是设计的一部分） ================= */
+.mock { --mock-page: light-dark(#e9e9e4, #0d0e11); --mock-text: light-dark(#44464d, #9a9ca4); }
+body.mock { background: var(--mock-page); padding: 0 0 48px; }
+.mock-bar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 10px 24px; background: var(--mock-page); border-bottom: 1px solid var(--lol-line); font-size: 13px; color: var(--mock-text); }
+.mock-bar strong { color: var(--lol-text); }
+.mock-bar .sw { margin-left: auto; display: flex; gap: 4px; }
+.mock-sec { width: fit-content; margin: 28px auto 0; }
+.mock-cap { max-width: 1120px; margin: 8px 2px 0; font-size: 12px; line-height: 18px; color: var(--mock-text); }
+.mock-cap code { font-size: 11px; }
+.frame { border-radius: 10px; overflow: hidden; box-shadow: 0 1px 0 var(--lol-line), 0 0 0 1px var(--lol-line); }
+.frame.wide { width: 1120px; }
+.row-frames { display: flex; gap: 24px; align-items: flex-start; }
+
+/* ================= 组件（照搬到 plugins/lol/app/） ================= */
+.app { container-type: inline-size; font-family: var(--lol-font); color: var(--lol-text); background: var(--lol-bg); font-size: var(--lol-fs-sm); line-height: var(--lol-lh-sm); }
+.app[data-display="inline"] { background: transparent; }
+.app button { font: inherit; color: inherit; }
+.num { font-variant-numeric: var(--lol-num); }
+.ico { width: 14px; height: 14px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+/* 顶栏：分页（墨线下划线）+ 阶段牌 + 刷新 */
+.top { display: flex; align-items: center; gap: var(--lol-sp-5); height: 44px; padding: 0 var(--lol-sp-6); border-bottom: 1px solid var(--lol-line); }
+.tabs { display: flex; gap: var(--lol-sp-6); align-self: stretch; }
+.tab { position: relative; display: flex; align-items: center; padding: 0; border: 0; background: none; cursor: pointer; font-size: var(--lol-fs-md); color: var(--lol-text-2); }
+.tab:hover { color: var(--lol-text); }
+.tab[aria-current="page"] { color: var(--lol-text); font-weight: var(--lol-fw-strong); }
+.tab[aria-current="page"]::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--lol-text); }
+.phase { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border: 1px solid var(--lol-line); border-radius: var(--lol-r-full); background: var(--lol-bg-2); font-size: var(--lol-fs-xs); color: var(--lol-text-2); white-space: nowrap; }
+.phase .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--lol-ally); }
+.phase b { font-weight: var(--lol-fw-medium); color: var(--lol-text); }
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--lol-line-2); border-radius: var(--lol-r-md); background: transparent; cursor: pointer; font-size: var(--lol-fs-xs); white-space: nowrap; }
+.btn:hover { background: var(--lol-hover); }
+.btn.primary { border-color: transparent; background: var(--lol-ink-fill); color: var(--lol-ink-on); }
+.btn.icon { width: 28px; padding: 0; justify-content: center; }
+
+.page { padding: var(--lol-sp-5) var(--lol-sp-6) var(--lol-sp-6); }
+.note { display: flex; gap: 12px; margin: 0 0 var(--lol-sp-4); font-size: var(--lol-fs-xs); color: var(--lol-text-3); }
+.note .warn { color: var(--lol-warn); }
+
+/* 两队：宽 ≥ 880 并排（我方左、对面右），窄时上下叠（对面在上） */
+.teams { display: grid; gap: var(--lol-sp-5); grid-template-columns: minmax(0, 1fr); }
+.teams .team.enemy { order: -1; }
+@container (min-width: 880px) {
+  .teams { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .teams .team.enemy { order: 0; }
+}
+.ally { --team: var(--lol-ally); --team-soft: var(--lol-ally-soft); }
+.enemy { --team: var(--lol-enemy); --team-soft: var(--lol-enemy-soft); }
+.team { overflow: hidden; border: 1px solid var(--lol-line); border-radius: var(--lol-r-lg); background: var(--lol-bg); }
+.team-head { display: flex; align-items: center; gap: var(--lol-sp-5); height: 36px; padding: 0 12px 0 14px; border-bottom: 1px solid var(--lol-line); background: var(--lol-bg-2); font-size: var(--lol-fs-xs); color: var(--lol-text-2); white-space: nowrap; }
+.team-head .label { display: inline-flex; align-items: center; gap: 7px; font-size: var(--lol-fs-md); font-weight: var(--lol-fw-strong); color: var(--lol-text); }
+.team-head .stats { display: flex; gap: 12px; overflow: hidden; }
+.team-head .stats b { font-weight: var(--lol-fw-medium); color: var(--lol-text); }
+/* 队伍记号：我方方块、对面菱形（色弱时靠形状和字） */
+.mark { display: inline-block; flex: none; width: 9px; height: 9px; border-radius: 2px; background: var(--team); }
+.enemy .mark, .mark.enemy { width: 8px; height: 8px; border-radius: 1px; transform: rotate(45deg); background: var(--lol-enemy); }
+.mark.ally { background: var(--lol-ally); }
+
+/* 这局：一人三行 */
+.p { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; min-height: var(--lol-row-player); box-sizing: border-box; padding: 8px 12px 8px 14px; border-top: 1px solid var(--lol-line); cursor: pointer; }
+.p:first-of-type { border-top: 0; }
+.p::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: var(--lol-stripe); background: var(--team); }
+.p:hover { background: var(--lol-hover); }
+.p.me { background: var(--lol-ally-soft); }
+.p.weak { outline: 1.5px solid var(--lol-text); outline-offset: -3px; border-radius: 7px; }
+.pics { display: flex; gap: 2px; }
+.spells { display: flex; flex-direction: column; gap: 2px; }
+
+/* 图：方形小圆角，裁掉原图的暗边；加载中是空格子，挂了显示名字的第一个字 */
+.ci { position: relative; flex: none; width: var(--s, 40px); height: var(--s, 40px); overflow: hidden; border-radius: var(--r, var(--lol-r-md)); background: var(--lol-bg-3); }
+.ci img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.ci.crop img { transform: scale(1.1); }
+.ci::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px light-dark(rgb(0 0 0 / 0.1), rgb(255 255 255 / 0.08)); pointer-events: none; }
+.ci .ph { position: absolute; inset: 0; display: none; place-items: center; font-size: calc(var(--s, 40px) * 0.45); font-weight: var(--lol-fw-medium); color: var(--lol-text-2); }
+.ci.broken .ph { display: grid; }
+.s16 { --s: 16px; --r: var(--lol-r-xs); } .s18 { --s: 18px; --r: var(--lol-r-xs); } .s19 { --s: 19px; --r: var(--lol-r-xs); }
+.s20 { --s: 20px; --r: var(--lol-r-xs); } .s24 { --s: 24px; --r: var(--lol-r-xs); } .s32 { --s: 32px; --r: var(--lol-r-sm); }
+.s40 { --s: 40px; --r: var(--lol-r-md); } .s56 { --s: 56px; --r: var(--lol-r-md); }
+.lv { position: absolute; right: 1px; bottom: 1px; z-index: 1; min-width: 12px; height: 13px; padding: 0 3px; border-radius: 3px; background: var(--lol-badge-bg); color: var(--lol-badge-text); font-size: var(--lol-fs-2xs); line-height: 13px; text-align: center; font-variant-numeric: var(--lol-num); }
+
+.l1 { display: flex; align-items: center; gap: 6px; min-width: 0; height: 20px; }
+.champ { flex: none; font-size: var(--lol-fs-md); font-weight: var(--lol-fw-strong); }
+.who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--lol-text-2); }
+.who .tagline { color: var(--lol-text-3); }
+.rank { flex: none; display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: var(--lol-fs-xs); color: var(--lol-text-2); white-space: nowrap; }
+.rank img { width: 16px; height: 16px; }
+.l2 { display: flex; gap: 10px; height: 18px; overflow: hidden; white-space: nowrap; color: var(--lol-text-2); font-variant-numeric: var(--lol-num); }
+.l2 .v { color: var(--lol-text); }
+.good { color: var(--lol-win) !important; }
+.bad { color: var(--lol-loss) !important; }
+.l3 { display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: 4px; }
+.recent { display: flex; gap: 2px; flex: none; }
+/* 近 10 局：赢的亮、输的淡，底下一条胜负色 */
+.rg { --s: 18px; --r: var(--lol-r-xs); }
+.rg::before { content: ""; position: absolute; left: 0; right: 0; bottom: 0; z-index: 1; height: 2px; background: var(--lol-win); }
+.rg.l::before { background: var(--lol-loss); }
+.rg.l img { opacity: 0.5; filter: grayscale(0.6); }
+.tags { display: flex; gap: 4px; min-width: 0; overflow: hidden; }
+
+.chip { display: inline-flex; flex: none; align-items: center; gap: 3px; height: 18px; padding: 0 6px; border-radius: var(--lol-r-xs); background: var(--lol-bg-3); color: var(--lol-text-2); font-size: var(--lol-fs-xs); line-height: 18px; white-space: nowrap; }
+.chip.good { background: var(--lol-win-soft); }
+.chip.bad { background: var(--lol-loss-soft); }
+.chip.warn { background: var(--lol-warn-soft); color: var(--lol-warn); }
+.chip .ico { width: 12px; height: 12px; }
+.chip.ink { background: var(--lol-ink-fill); color: var(--lol-ink-on); font-weight: var(--lol-fw-medium); }
+.chip.me { height: 16px; padding: 0 4px; border: 1px solid var(--lol-ally); background: transparent; color: var(--lol-ally); line-height: 14px; box-sizing: border-box; }
+.party { display: inline-grid; flex: none; place-items: center; width: 16px; height: 16px; border-radius: var(--lol-r-xs); background: var(--party); color: var(--lol-party-on); font-size: var(--lol-fs-2xs); font-weight: 700; }
+.why { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--lol-text); }
+.skel { display: inline-block; height: 10px; border-radius: 3px; background: var(--lol-bg-3); vertical-align: middle; }
+
+.foot { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: var(--lol-sp-6); padding-top: var(--lol-sp-4); border-top: 1px solid var(--lol-line); font-size: var(--lol-fs-xs); line-height: var(--lol-lh-xs); color: var(--lol-text-3); }
+.foot a { color: inherit; text-decoration: underline; text-decoration-color: var(--lol-line-2); text-underline-offset: 2px; }
+
+/* ================= 聊天卡片（inline） ================= */
+/* 宿主画外框和“英雄联盟发来一张卡片”那一行；App 只画里面 */
+.host-card { overflow: hidden; border: 1px solid var(--host-line); border-radius: 12px; background: var(--host-card); }
+.host-card .host-head { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--host-line); font: 12px/16px "Segoe UI", "Microsoft YaHei UI", sans-serif; color: var(--host-muted); }
+.host-card .host-head img { width: 16px; height: 16px; }
+.mock-host { --host-card: light-dark(#ffffff, #212140); --host-line: light-dark(rgb(0 0 0 / 0.09), rgb(255 255 255 / 0.09)); --host-muted: light-dark(#5f6380, #a3a6c8); }
+
+.card-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; }
+.card-head .t { font-size: var(--lol-fs-md); font-weight: var(--lol-fw-strong); white-space: nowrap; }
+.card-head .sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--lol-fs-xs); color: var(--lol-text-2); }
+.card-head .btn { margin-left: auto; }
+/* 卡片的行和列头用同一套列：头像 · 英雄 · 玩家 · 段位 · 近 20 局 · KDA · 标签（最多 1 个） */
+.cgrid { display: grid; grid-template-columns: 24px 4.4em minmax(0, 1fr) 4em 6.2em 2.2em 3.6em; align-items: center; column-gap: 6px; padding: 0 12px 0 14px; }
+.cblock-head { height: 26px; margin-top: 4px; font-size: var(--lol-fs-xs); color: var(--lol-text-3); white-space: nowrap; }
+.cblock-head .label { grid-column: 1 / 4; display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--lol-text-2); }
+.cblock-head .label b { font-weight: var(--lol-fw-strong); color: var(--lol-text); }
+.cblock-head .c-rec, .cblock-head .c-kda { text-align: right; }
+.cr { position: relative; height: var(--lol-row-card); white-space: nowrap; cursor: pointer; }
+.cr .who { display: flex; align-items: center; gap: 4px; }
+.cr .who .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cr .who .ico { width: 13px; height: 13px; color: var(--lol-warn); }
+.cr .span2 { grid-column: span 2; text-align: right; color: var(--lol-text-3); }
+.cr + .cr { box-shadow: inset 0 1px 0 var(--lol-line); }
+.cr::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: var(--lol-stripe); background: var(--team); }
+.cr:hover { background: var(--lol-hover); }
+.cr.me { background: var(--lol-ally-soft); }
+.cr.weak { outline: 1.5px solid var(--lol-text); outline-offset: -2px; border-radius: 6px; }
+.cr .champ { overflow: hidden; text-overflow: ellipsis; font-size: var(--lol-fs-sm); }
+.cr .who { font-size: var(--lol-fs-xs); }
+.cr .rank { margin: 0; }
+.cr .rec { text-align: right; color: var(--lol-text-2); font-variant-numeric: var(--lol-num); }
+.cr .kda { text-align: right; font-variant-numeric: var(--lol-num); }
+.cr .tags { justify-content: flex-end; }
+.card-why { display: flex; align-items: center; gap: 6px; margin: 8px 12px 0; padding: 6px 8px; border-radius: var(--lol-r-md); background: var(--lol-bg-2); }
+.card-foot { padding: 6px 12px 10px; font-size: var(--lol-fs-xs); color: var(--lol-text-3); }
+@container (max-width: 400px) {
+  .cgrid { grid-template-columns: 24px 4.4em minmax(0, 1fr) 16px 6.2em 2.2em; }
+  .cr .tags, .cr .rank .rt, .cblock-head .c-tag { display: none; }
+  .cblock-head .c-rank { visibility: hidden; }
+}
+
+/* ================= 附：logo、消息提示 ================= */
+.logo-grid { display: grid; grid-template-columns: repeat(4, auto); gap: 12px; }
+.logo-bg { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: 10px; }
+.logo-bg .lbl { font: 11px/14px "Segoe UI", "Microsoft YaHei UI", sans-serif; opacity: 0.7; }
+.logo-bg .ln { display: flex; align-items: center; gap: 10px; }
+.logo-bg .ln img { display: block; }
+.tp { display: grid; place-items: center; border-radius: 25%; color: #fff; font: 600 18px/1 "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+
+.k-pop { --k-card: light-dark(#ffffff, #212140); --k-fg: light-dark(#1a1a2e, #f2f4ff); --k-muted: light-dark(#5f6380, #a3a6c8); --k-line: light-dark(rgb(0 0 0 / 0.08), rgb(255 255 255 / 0.1)); --k-accent: light-dark(#007c8f, #00e5ff); }
+.k-pop { position: relative; display: flex; align-items: center; gap: 12px; width: 320px; height: 72px; box-sizing: border-box; padding: 0 36px 0 14px; overflow: hidden; border: 1px solid var(--k-line); border-radius: 12px; background: var(--k-card); color: var(--k-fg); box-shadow: 0 10px 28px light-dark(rgb(0 0 0 / 0.16), rgb(0 0 0 / 0.55)); font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif; }
+.k-pop .av { position: relative; flex: none; width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #00e5ff, #7b2fff 60%, #ff2d78); display: grid; place-items: center; color: #fff; font-size: 17px; font-weight: 600; }
+.k-pop .av img { position: absolute; right: -4px; bottom: -4px; width: 18px; height: 18px; border-radius: 5px; box-shadow: 0 0 0 2px var(--k-card); }
+.k-pop .tx { min-width: 0; }
+.k-pop .from { font-size: 12px; line-height: 16px; color: var(--k-muted); }
+.k-pop .msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 20px; font-weight: 500; }
+.k-pop .x { position: absolute; top: 8px; right: 8px; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 6px; color: var(--k-muted); }
+.k-pop .x:hover { background: light-dark(rgb(0 0 0 / 0.06), rgb(255 255 255 / 0.08)); }
+.k-pop .timer { position: absolute; left: 0; bottom: 0; height: 2px; width: 64%; background: var(--k-accent); }
+</style>
+</head>
+<body class="mock">
+<div class="mock-bar">
+  <strong>英雄联盟 App 样张</strong><span>风格“记分纸” · 假数据 · 图片来自 CommunityDragon</span>
+  <span class="sw"><button class="btn" data-theme-set="light">亮色</button><button class="btn" data-theme-set="dark">暗色</button></span>
+</div>
+
+<section class="mock-sec" id="full">
+  <div class="frame wide"><div class="app" data-display="fullscreen" id="match-full"></div></div>
+  <p class="mock-cap">这局 · 加载阶段（全屏，插件页里 / Claude 的全屏）。我方左、对面右；行左边 3px 是队伍边条；开黑是字母小牌；突破口用墨线圈出来并写原因；
+    “布兰德”故意给了一个取不到的图，看占位（名字的第一个字）；莫甘娜没定级，只有字没有徽章；锤石还在查。</p>
+</section>
+
+<section class="mock-sec" id="cards">
+  <div class="row-frames mock-host">
+    <div style="width:420px"><div class="host-card"><div class="host-head"><img src="../../plugins/lol/logo.svg" alt="">英雄联盟发来一张卡片 · 21:04</div>
+      <div class="app" data-display="inline" id="card-420"></div></div></div>
+    <div style="width:360px"><div class="host-card"><div class="host-head"><img src="../../plugins/lol/logo.svg" alt="">英雄联盟发来一张卡片 · 21:04</div>
+      <div class="app" data-display="inline" id="card-360"></div></div></div>
+  </div>
+  <p class="mock-cap">开局战绩（自动卡片，inline）：420 宽和 360 宽。外框和最上面一行是宿主画的；对面在上；窄于 400 时去掉标签和段位字，只留徽章。</p>
+</section>
+
+<section class="mock-sec" id="extras">
+  <div class="logo-grid" id="logos"></div>
+  <div class="row-frames" style="margin-top:20px">
+    <div class="k-pop" data-theme-local="light"><div class="av">琴<img src="../../plugins/lol/logo.svg" alt=""></div>
+      <div class="tx"><div class="from">琴音 · 英雄联盟</div><div class="msg">对面的战绩到了</div></div>
+      <div class="x"><svg class="ico" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M6 6l12 12M18 6 6 18"/></svg></div><div class="timer"></div></div>
+    <div class="k-pop" data-theme-local="dark"><div class="av">琴<img src="../../plugins/lol/logo.svg" alt=""></div>
+      <div class="tx"><div class="from">琴音 · 英雄联盟</div><div class="msg">这局的总结好了</div></div>
+      <div class="x"><svg class="ico" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M6 6l12 12M18 6 6 18"/></svg></div><div class="timer"></div></div>
+  </div>
+  <p class="mock-cap">插件 logo（48 / 40 / 20 / 16 px，四种底：白、Kotone 亮、Kotone 暗、Claude 暗）、第三方没 logo 时的首字块；消息提示（亮 / 暗，320×72，头像用占位，真窗口里是角色头像）。</p>
+</section>
+
+<script>
+// ---------- 取图（docs/design/lol-app.md “素材”）：数据里只有客户端路径；Kotone 里宿主给 assetBase（本机代理），别的宿主换成 CommunityDragon ----------
+const CD = "https://raw.communitydragon.org/latest/plugins/";
+const RULES = [
+  ["/lol-game-data/assets/", "rcp-be-lol-game-data/global/default/", true],
+  ["/fe/lol-static-assets/", "rcp-fe-lol-static-assets/global/default/", false],
+  ["/fe/lol-shared-components/", "rcp-fe-lol-shared-components/global/default/", false],
+];
+function asset(path, assetBase) {
+  if (!path) return "";
+  if (assetBase) return assetBase + path;
+  for (const [from, to, lower] of RULES) {
+    if (path.startsWith(from)) { const rest = path.slice(from.length); return CD + to + (lower ? rest.toLowerCase() : rest); }
+  }
+  return "";
+}
+const champIcon = (id) => `/lol-game-data/assets/v1/champion-icons/${id}.png`;
+const crestPath = (tier) => `/fe/lol-static-assets/images/ranked-mini-crests/${tier.toLowerCase()}.svg`;
+
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const first = (s) => Array.from(String(s ?? "").trim())[0] ?? "?";
+/** 一张图：加载中是空格子；挂了显示名字第一个字；名字一直在 title 里。 */
+function pic(path, name, cls, inner = "") {
+  const src = asset(path);
+  return `<span class="ci ${cls}${src ? "" : " broken"}" title="${esc(name)}">${src ? `<img src="${src}" alt="" loading="lazy" onerror="this.parentNode.classList.add('broken');this.remove()">` : ""}<span class="ph" aria-hidden="true">${esc(first(name))}</span>${inner}</span>`;
+}
+
+const ICON = {
+  refresh: '<svg class="ico" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
+  target: '<svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg>',
+  eyeOff: '<svg class="ico" viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 5.1A9.7 9.7 0 0 1 12 5c5 0 8.5 4.5 9.5 7a13 13 0 0 1-2.6 3.7M6.4 6.4A13 13 0 0 0 2.5 12c1 2.5 4.5 7 9.5 7a9.6 9.6 0 0 0 5.6-1.8"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
+  open: '<svg class="ico" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-8 8"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg>',
+};
+
+const TIER = { IRON: ["黑铁", "铁"], BRONZE: ["青铜", "铜"], SILVER: ["白银", "银"], GOLD: ["黄金", "金"], PLATINUM: ["铂金", "铂"], EMERALD: ["翡翠", "翠"],
+  DIAMOND: ["钻石", "钻"], MASTER: ["大师", "大师"], GRANDMASTER: ["宗师", "宗师"], CHALLENGER: ["王者", "王者"] };
+const APEX = new Set(["MASTER", "GRANDMASTER", "CHALLENGER"]);
+function rankText(r, short) {
+  if (!r) return "未定级";
+  const [full, abbr] = TIER[r.tier] ?? [r.tier, r.tier];
+  const div = APEX.has(r.tier) ? "" : ` ${r.division}`;
+  return short ? `${abbr}${div}` : `${full}${div} · ${r.lp} 点`;
+}
+const pct = (w, g) => (g > 0 ? Math.round((w / g) * 100) : 0);
+const rateClass = (w, g) => (g < 5 ? "" : pct(w, g) >= 53 ? "good" : pct(w, g) <= 47 ? "bad" : "");
+const kdaClass = (k) => (k >= 3.5 ? "good" : k < 2 ? "bad" : "");
+const PARTY = ["a", "b", "c", "d"];
+
+// ---------- 假数据：照 docs/design/lol-app.md 第二节写的 MatchData（G0.1 补的字段都在） ----------
+const S = (id, name, file) => ({ id, name, icon: `/lol-game-data/assets/DATA/Spells/Icons2D/${file}.png` });
+const FLASH = S(4, "闪现", "Summoner_flash"), MARK = S(32, "标记", "Summoner_Mark"), HEAL = S(7, "治疗术", "Summoner_heal"), GHOST = S(6, "幽灵疾步", "Summoner_haste"), EXHAUST = S(3, "虚弱", "Summoner_exhaust"), IGNITE = S(14, "引燃", "SummonerIgnite");
+const POOL = [22, 99, 86, 103, 412, 222, 157, 25, 63, 81, 64, 238, 122, 55, 54, 37, 17, 67, 1, 39];
+function recent(pattern, seed) {
+  return Array.from(pattern).map((c, i) => ({ gameId: seed * 100 + i, win: c === "W", championId: POOL[(seed * 7 + i * 3) % POOL.length], kills: 5, deaths: 4, assists: 12 }));
+}
+function person(o) {
+  const games = o.w + o.l;
+  return {
+    puuid: "p-" + o.id, champion: { id: o.cid, label: o.cn, short: o.cn, alias: "" }, name: o.name, riotId: o.name, me: !!o.me, ally: o.ally,
+    party: o.party ?? null, pending: !!o.pending, hidden: !!o.hidden, profileIconId: 4568, summonerLevel: o.lv, spells: o.spells, position: "",
+    ranked: { solo: o.rank ?? null, flex: null }, error: null,
+    summary: o.pending ? null : { games, wins: o.w, losses: o.l, streak: o.streak ?? 0, kda: o.kda, deaths: o.deaths, modeGames: o.mg ?? 0, modeWins: o.mw ?? 0, modeDpm: o.dpm ?? 0, champGames: 0, champWins: 0 },
+    tags: o.tags ?? [], recent: o.pending ? [] : recent(o.pattern, o.id), weak: o.weak ?? null,
+  };
+}
+const match = {
+  phase: "loading", phaseSeconds: 12, gameId: 7712345, queueId: 2400, mode: "海克斯大乱斗", random: true, waiting: 1,
+  allies: [
+    person({ id: 1, ally: true, me: true, cid: 81, cn: "伊泽瑞尔", name: "晚风与琴#5201", lv: 312, spells: [FLASH, MARK], party: 1, rank: { tier: "DIAMOND", division: "II", lp: 45 }, w: 12, l: 8, kda: 3.4, deaths: 4.1, mg: 9, mw: 6, dpm: 1820, streak: 3, tags: [{ kind: "win_streak", text: "3 连胜" }], pattern: "WWWLWLWWLW" }),
+    person({ id: 2, ally: true, cid: 99, cn: "拉克丝", name: "小绵羊不咩#1024", lv: 188, spells: [FLASH, MARK], party: 1, rank: { tier: "PLATINUM", division: "I", lp: 12 }, w: 11, l: 9, kda: 2.9, deaths: 5.2, mg: 6, mw: 3, dpm: 1640, pattern: "LWWLWLWWLW" }),
+    person({ id: 3, ally: true, cid: 86, cn: "盖伦", name: "上单之王#8888", lv: 76, spells: [GHOST, MARK], party: 1, rank: { tier: "GOLD", division: "III", lp: 60 }, w: 9, l: 11, kda: 2.1, deaths: 6.0, mg: 12, mw: 5, dpm: 1390, pattern: "LWLLWWLWLL" }),
+    person({ id: 4, ally: true, cid: 103, cn: "阿狸", name: "Moonlight#KR1", lv: 45, hidden: true, spells: [FLASH, IGNITE], rank: { tier: "EMERALD", division: "IV", lp: 0 }, w: 10, l: 10, kda: 2.7, deaths: 5.5, pattern: "WLWLWLWLWL" }),
+    person({ id: 5, ally: true, cid: 412, cn: "锤石", name: "钩子不中不睡觉#233", lv: 220, spells: [FLASH, EXHAUST], pending: true }),
+  ],
+  enemies: [
+    person({ id: 6, ally: false, cid: 222, cn: "金克丝", name: "晚安玛卡巴卡#666", lv: 401, spells: [FLASH, HEAL], party: 2, rank: { tier: "DIAMOND", division: "I", lp: 88 }, w: 13, l: 7, kda: 3.8, deaths: 3.9, mg: 10, mw: 7, dpm: 2150, streak: 5, tags: [{ kind: "win_streak", text: "5 连胜" }], pattern: "WWWWWLWLWW" }),
+    person({ id: 7, ally: false, cid: 157, cn: "亚索", name: "疾风不止#0001", lv: 266, spells: [FLASH, IGNITE], party: 2, rank: { tier: "MASTER", division: "I", lp: 132 }, w: 10, l: 10, kda: 2.6, deaths: 6.8, pattern: "LWLWWLLWWL" }),
+    person({ id: 8, ally: false, cid: 22, cn: "寒冰", name: "冰霜射手#3344", lv: 58, spells: [FLASH, MARK], rank: { tier: "SILVER", division: "II", lp: 33 }, w: 6, l: 14, kda: 1.2, deaths: 13.0, mg: 14, mw: 4, dpm: 980, streak: -4,
+      tags: [{ kind: "loss_streak", text: "4 连败" }], weak: ["近 20 局 6 胜 14 负", "场均死 13 次"], pattern: "LLLLWLLWLL" }),
+    person({ id: 9, ally: false, cid: 25, cn: "莫甘娜", name: "暮光#9527", lv: 133, spells: [FLASH, MARK], rank: null, w: 8, l: 12, kda: 2.3, deaths: 5.8, pattern: "LWLLWLWLWL" }),
+    person({ id: 10, ally: false, cid: 99999, cn: "布兰德", name: "火男#1111", lv: 97, spells: [FLASH, IGNITE], rank: { tier: "GOLD", division: "I", lp: 71 }, w: 11, l: 9, kda: 3.1, deaths: 5.0, pattern: "WWLWLWWLLW" }),
+  ],
+};
+
+// 开黑字母：整局里按出现顺序给 A、B、C、D（只给 2 人以上的组）
+function partyLetters(m) {
+  const all = [...m.allies, ...m.enemies];
+  const groups = [...new Set(all.map((p) => p.party).filter((x) => x !== null && all.filter((q) => q.party === x).length > 1))];
+  return (p) => { const i = groups.indexOf(p.party); return i < 0 ? null : { letter: "ABCD"[i] ?? "?", color: `var(--lol-party-${PARTY[i % 4]})`, size: all.filter((q) => q.party === p.party).length }; };
+}
+function teamStats(team) {
+  const s = team.map((p) => p.summary).filter((x) => x && x.games > 0);
+  const games = s.reduce((a, x) => a + x.games, 0), wins = s.reduce((a, x) => a + x.wins, 0);
+  const kda = s.length ? s.reduce((a, x) => a + x.kda, 0) / s.length : 0;
+  return { rate: pct(wins, games), rateCls: rateClass(wins, games), kda: kda.toFixed(1) };
+}
+
+// ---------- 这局（全屏） ----------
+function playerRow(p, party) {
+  const s = p.summary;
+  const pt = party(p);
+  const cls = ["p", p.me ? "me" : "", p.weak ? "weak" : ""].join(" ");
+  const [nm, tag] = p.riotId.split("#");
+  const rank = p.ranked.solo;
+  const head = `<div class="l1"><span class="champ">${esc(p.champion.short)}</span>
+      <span class="who" title="${esc(p.riotId)}">${esc(nm)}${tag ? `<span class="tagline">#${esc(tag)}</span>` : ""}</span>
+      ${pt ? `<span class="party" style="--party:${pt.color}" title="开黑 ${pt.letter} 组（${pt.size} 人一起排）">${pt.letter}</span>` : ""}
+      ${p.me ? '<span class="chip me">我</span>' : ""}
+      ${p.hidden ? `<span class="chip warn">${ICON.eyeOff}隐藏战绩</span>` : ""}
+      ${p.pending ? "" : `<span class="rank">${rank ? `<img src="${asset(crestPath(rank.tier))}" alt="" onerror="this.remove()">` : ""}${rankText(rank, false)}</span>`}</div>`;
+  let l2, l3 = "";
+  if (p.pending) {
+    l2 = `<div class="l2">还在查… <span class="skel" style="width:72px"></span><span class="skel" style="width:48px"></span></div>`;
+  } else if (s && s.games > 0) {
+    l2 = `<div class="l2"><span class="v">${s.wins} 胜 ${s.losses} 负</span><span class="${rateClass(s.wins, s.games)} v">${pct(s.wins, s.games)}%</span>
+      <span>KDA <span class="v ${kdaClass(s.kda)}">${s.kda.toFixed(1)}</span></span><span>场均死 <span class="v">${s.deaths.toFixed(1)}</span></span>
+      ${s.modeGames > 0 ? `<span>${esc(match.mode)} ${s.modeGames} 局 ${pct(s.modeWins, s.modeGames)}% · 分均 ${s.modeDpm.toLocaleString("zh-CN")}</span>` : ""}</div>`;
+    const tags = p.tags.map((t) => `<span class="chip ${t.kind === "win_streak" ? "good" : t.kind === "loss_streak" ? "bad" : t.kind === "first_time" ? "warn" : ""}"><span class="${t.kind === "win_streak" ? "good" : t.kind === "loss_streak" ? "bad" : ""}">${esc(t.text)}</span></span>`).join("");
+    l3 = `<div class="l3"><span class="recent" aria-label="最近 ${p.recent.length} 局">${p.recent.map((g) => pic(champIcon(g.championId), `${g.win ? "胜" : "负"} ${g.kills}/${g.deaths}/${g.assists}`, `rg crop${g.win ? "" : " l"}`)).join("")}</span><span class="tags">${tags}</span></div>`;
+  } else {
+    l2 = `<div class="l2">最近没有对局</div>`;
+  }
+  const why = p.weak ? `<div class="why"><span class="chip ink">${ICON.target}突破口</span><span>${esc(p.weak.join(" · "))}</span></div>` : "";
+  return `<div class="${cls}" role="button" tabindex="0" title="点开看 ${esc(p.riotId)} 的战绩">
+    <div class="pics">${pic(champIcon(p.champion.id), p.champion.short, "s40 crop", `<span class="lv">${p.summonerLevel}</span>`)}
+      <div class="spells">${p.spells.map((sp) => pic(sp.icon, sp.name, "s19")).join("")}</div></div>
+    <div>${head}${l2}${l3}</div>${why}</div>`;
+}
+function teamBlock(side, label, team, party) {
+  const st = teamStats(team);
+  const groups = [...new Set(team.map((p) => party(p)).filter(Boolean).map((g) => `${g.letter} 组 ${g.size} 人开黑`))];
+  return `<section class="team ${side}" aria-label="${label}"><div class="team-head"><span class="label"><span class="mark"></span>${label}</span>
+    <span class="stats num"><span>平均胜率 <b class="${st.rateCls}">${st.rate}%</b></span><span>平均 KDA <b>${st.kda}</b></span>${groups.map((g) => `<span>${g}</span>`).join("")}</span></div>
+    ${team.map((p) => playerRow(p, party)).join("")}</section>`;
+}
+function renderFull(el, m) {
+  const party = partyLetters(m);
+  el.innerHTML = `<div class="top"><nav class="tabs" aria-label="英雄联盟">${["这局", "战绩", "英雄", "强度榜", "设置"].map((t, i) => `<button class="tab" ${i === 0 ? 'aria-current="page"' : ""}>${t}</button>`).join("")}</nav>
+    <span class="phase"><span class="dot"></span><b>加载中</b>· ${esc(m.mode)} · 进加载 ${m.phaseSeconds} 秒</span>
+    <button class="btn">${ICON.refresh}刷新</button></div>
+    <div class="page"><p class="note"><span>每人看最近 20 局</span>${m.waiting ? `<span class="warn">还在查 ${m.waiting} 人</span>` : ""}<span>英雄是随机的，不看“第一次玩”</span></p>
+    <div class="teams">${teamBlock("ally", "我方", m.allies, party)}${teamBlock("enemy", "对面", m.enemies, party)}</div>
+    <footer class="foot"><span>数据：英雄联盟客户端（本机，只读）</span><span>图片：英雄联盟客户端 / <a href="https://www.communitydragon.org/">CommunityDragon</a></span>
+      <span>Kotone 依照 Riot Games 的 “Legal Jibber Jabber” 政策使用了 Riot Games 的素材；Riot Games 不认可、也不赞助本项目。</span></footer></div>`;
+}
+
+// ---------- 开局战绩（inline） ----------
+function cardRow(p, party) {
+  const s = p.summary, rank = p.ranked.solo, pt = party(p);
+  const cls = ["cr", p.me ? "me" : "", p.weak ? "weak" : ""].join(" ");
+  const [nm] = p.riotId.split("#");
+  const rec = p.pending ? `<span class="span2">还在查…</span>` : s && s.games > 0
+    ? `<span class="rec">${s.wins}胜${s.losses}负 <span class="${rateClass(s.wins, s.games)}">${pct(s.wins, s.games)}%</span></span><span class="kda ${kdaClass(s.kda)}">${s.kda.toFixed(1)}</span>`
+    : `<span class="span2">没有对局</span>`;
+  // 卡片里最多 1 个标签：连败 > 第一次玩 > 连胜 > 常玩；隐藏战绩是名字后面的眼睛
+  const ORDER = ["loss_streak", "first_time", "win_streak", "main"];
+  const tag = [...p.tags].sort((a, b) => ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind))[0];
+  const tone = (k) => (k === "win_streak" ? "good" : k === "loss_streak" ? "bad" : k === "first_time" ? "warn" : "");
+  return `<div class="${cls} cgrid ${p.ally ? "ally" : "enemy"}" title="${esc(p.riotId)}">${pic(champIcon(p.champion.id), p.champion.short, "s24 crop")}
+    <span class="champ">${esc(p.champion.short)}</span>
+    <span class="who"><span class="nm">${esc(nm)}</span>${pt ? `<span class="party" style="--party:${pt.color}">${pt.letter}</span>` : ""}${p.hidden ? `<span title="隐藏战绩">${ICON.eyeOff}</span>` : ""}</span>
+    <span class="rank">${p.pending ? "" : `${rank ? `<img src="${asset(crestPath(rank.tier))}" alt="" onerror="this.remove()">` : ""}<span class="rt">${rankText(rank, true)}</span>`}</span>
+    ${rec}<span class="tags">${tag ? `<span class="chip ${tone(tag.kind)}"><span class="${tone(tag.kind)}">${esc(tag.text)}</span></span>` : ""}</span></div>`;
+}
+function renderCard(el, m) {
+  const party = partyLetters(m);
+  const allyGroups = [...new Set(m.allies.map((p) => party(p)).filter(Boolean).map((g) => g.size))];
+  const weak = m.enemies.filter((p) => p.weak);
+  const block = (side, label, team) => {
+    const st = teamStats(team);
+    return `<div class="${side}"><div class="cblock-head cgrid"><span class="label"><span class="mark"></span><b>${label}</b><span class="num">平均 <b class="${st.rateCls}">${st.rate}%</b></span></span>
+      <span class="c-rank">段位</span><span class="c-rec">近 20 局</span><span class="c-kda">KDA</span><span class="c-tag"></span></div>${team.map((p) => cardRow(p, party)).join("")}</div>`;
+  };
+  el.innerHTML = `<div class="card-head"><span class="t">开局战绩</span><span class="sub">${esc(m.mode)}${allyGroups.length ? ` · 我方 ${allyGroups[0]} 黑` : ""}</span>
+      <button class="btn icon" title="打开这局">${ICON.open}</button></div>
+    ${block("enemy", "对面", m.enemies)}${block("ally", "我方", m.allies)}
+    ${weak.map((p) => `<div class="card-why">${ICON.target}<span><b>${esc(p.champion.short)}</b>：${esc(p.weak.join("，"))}</span></div>`).join("")}
+    <div class="card-foot">还在查 ${m.waiting} 人 · 数据：客户端 · 素材归 Riot Games</div>`;
+}
+
+// ---------- logo ----------
+function renderLogos(el) {
+  const ids = [["lol", "英雄联盟"], ["game-voice", "游戏语音"], ["music", "网易云音乐"], ["interpreter", "同传"], ["voice-input", "语音输入"]];
+  const bgs = [["#ffffff", "#1a1a2e", "白"], ["#f5f6fb", "#1a1a2e", "Kotone 亮"], ["#1a1a2e", "#f2f4ff", "Kotone 暗"], ["#262624", "#f5f4ef", "Claude 暗"]];
+  const third = [["天", "#5b6b7f"], ["M", "#b0466f"]];
+  el.innerHTML = bgs.map(([bg, fg, name]) => `<div class="logo-bg" style="background:${bg};color:${fg}"><span class="lbl">${name}</span>
+    ${[48, 40, 20, 16].map((sz) => `<div class="ln">${ids.map(([id, n]) => `<img src="../../plugins/${id}/logo.svg" width="${sz}" height="${sz}" alt="${n}" title="${n}">`).join("")}
+      ${third.map(([c, col]) => `<span class="tp" style="width:${sz}px;height:${sz}px;background:${col};font-size:${Math.round(sz * 0.46)}px">${c}</span>`).join("")}</div>`).join("")}</div>`).join("");
+}
+
+renderFull(document.getElementById("match-full"), match);
+renderCard(document.getElementById("card-420"), match);
+renderCard(document.getElementById("card-360"), match);
+renderLogos(document.getElementById("logos"));
+
+// ---------- 主题：真页面里是 ext-apps 的 applyDocumentTheme(hostContext.theme)；这里用按钮和 ?theme= ----------
+function setTheme(t) { document.documentElement.setAttribute("data-theme", t); document.documentElement.style.colorScheme = t; }
+document.querySelectorAll("[data-theme-set]").forEach((b) => b.addEventListener("click", () => setTheme(b.dataset.themeSet)));
+document.querySelectorAll("[data-theme-local]").forEach((n) => { n.style.colorScheme = n.dataset.themeLocal; });
+const q = new URLSearchParams(location.search).get("theme");
+if (q === "light" || q === "dark") setTheme(q);
+</script>
+</body>
+</html>

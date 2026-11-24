@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="游戏语音">
+  <title>游戏语音</title>
+  <!-- Kotone 原创：带麦克风的耳机——她在游戏语音里替你说话，你也照样听得见队友。 -->
+  <rect width="48" height="48" rx="12" fill="#179160"/>
+  <rect x="0.5" y="0.5" width="47" height="47" rx="11.5" fill="none" stroke="#fff" stroke-opacity=".14"/>
+  <path d="M13 24v-3a11 11 0 0 1 22 0v3" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+  <rect x="10.5" y="21.5" width="7" height="11" rx="3" fill="#fff"/>
+  <rect x="30.5" y="21.5" width="7" height="11" rx="3" fill="#fff"/>
+  <path d="M34 32.5c0 2.8-2.6 4-6.5 4" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="25.6" cy="36.5" r="2.7" fill="#fff"/>
+</svg>

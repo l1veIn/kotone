@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="同传">
+  <title>同传</title>
+  <!-- Kotone 原创：后面一句外语（空心气泡），前面翻好的一句（实心气泡）。 -->
+  <rect width="48" height="48" rx="12" fill="#0b87aa"/>
+  <rect x="0.5" y="0.5" width="47" height="47" rx="11.5" fill="none" stroke="#fff" stroke-opacity=".14"/>
+  <path d="M14 11h12a4 4 0 0 1 4 4v6a4 4 0 0 1-4 4h-8l-4.5 4v-4H14a4 4 0 0 1-4-4v-6a4 4 0 0 1 4-4z" fill="none" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M14.5 16.5h7" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+  <path d="M22 20h12a4 4 0 0 1 4 4v6a4 4 0 0 1-4 4h-.5v4L29 34h-7a4 4 0 0 1-4-4v-6a4 4 0 0 1 4-4z" fill="#fff" stroke="#0b87aa" stroke-width="3" stroke-linejoin="round" paint-order="stroke"/>
+  <path d="M22.8 25.4h10.4M22.8 29.2h6.4" stroke="#0b87aa" stroke-width="2.2" stroke-linecap="round"/>
+</svg>
