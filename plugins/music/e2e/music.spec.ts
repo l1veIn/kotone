@@ -47,7 +47,7 @@ test("logged out: log in through NetEase's login window, then play daily picks a
   await page.evaluate(() => localStorage.removeItem("kotone.mock.sidebar"));
   await openMusic(page, "&mockMusicLogin=manual");
   // 音乐是插件（ADR 038）：左侧栏只有一项「插件」，没有单独的音乐
-  expect(await navOrder(page)).toEqual(["assistant", "game", "automation", "plugins", "general"]);
+  expect(await navOrder(page)).toEqual(["assistant", "game", "automation", "plugins"]);
   await expect(page.getByTestId("settings-nav-music")).toHaveCount(0);
 
   const card = page.getByTestId("music-login-card");
@@ -238,10 +238,11 @@ test("turning the music plugin off stops playback and hides the mini player and 
 test("an old sidebar order or hidden list that says `music` doesn't bring music back into the sidebar", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/#/settings?onboarding=never");
-  await page.evaluate(() => localStorage.setItem("kotone.mock.sidebar", JSON.stringify({ order: ["music", "plugin:lol"], hidden: ["music"] })));
+  // `general` 是原来左侧栏的「语音输入」（也搬进了插件）：一样认不出就跳过
+  await page.evaluate(() => localStorage.setItem("kotone.mock.sidebar", JSON.stringify({ order: ["music", "plugin:lol", "general"], hidden: ["music", "general"] })));
   await page.reload();
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
-  expect(await navOrder(page)).toEqual(["assistant", "game", "automation", "plugins", "general"]);
+  expect(await navOrder(page)).toEqual(["assistant", "game", "automation", "plugins"]);
   await expect(page.getByTestId("sidebar-hidden-count")).toHaveCount(0);
   // 音乐的 App 照样从「插件」的卡片点开
   await openPlugin(page, "music");

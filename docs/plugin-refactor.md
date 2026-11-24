@@ -650,3 +650,20 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 - **关掉语音输入插件**（ADR 038“怎么定的”）：语音输入热键不登记（低层钩子用已有的“占位主键 + 停用”跑着，呼叫键、快捷消息这些具名热键照常；RegisterHotKey 后端不注册主键），频道 / 重发 / 文字处理开关热键也不登记，没准备好时的语音输入提示键也不盯；悬浮窗不显示（和“不显示”一样，开关一变就收起 / 重建）；她的工具清单里没有 `game_chat.send`。呼叫她、唤醒词、她的耳朵不受影响。为此本体的按键匹配改了一处：主键停用时，会话中的 Esc 照样取消（以前主键停用就全部放行，语音输入关着时她的会话就没法 Esc 取消了），加了单元测试。
 - 界面还没动（下一步）：插件页里还看不到语音输入的卡片。
 - 检查：`kotone-core` 单元 301（多 1 个 Esc 的）、集成 84 + 1 跳过；她 79；插件 12；桌面端 112（多 1 个“语音输入是插件、开关带走热键”）；系统适配层 90；clippy 干净。真机：`lol_tools_real.py --while-playing` 32/32、`game_events_real.py` 12/12。
+
+**（三）界面：语音输入的整块搬进插件的 App**（玩家看得到）：
+
+- 左侧栏没有单独的“语音输入”了（左侧栏只有一个“插件”入口，ADR 038“怎么定的”）；“插件”页多了一张“语音输入”卡片（排第一，默认开，卡片上有开关），点开就是原来的语音输入：输入 / 文字处理 / 历史三页，悬浮窗、语音识别、语音输入热键、其他热键都在“输入”页，和原来一样。开关在 App 最上面；关着时只有开关和一句“开着会怎样”。
+- 文件从 `apps/desktop/src/routes/settings/pages/`（`GeneralPage`、`TextProcessingPage`、`HistoryPage`、`voice/*`）`git mv` 到 `plugins/voice-input/ui/`，只改了 import 的写法；新加 `VoiceInputApp.svelte`（开关 + 三个分页）和 `index.ts`（图标、App）。插件的文案 `plugins/voice-input/messages/` 并进 Paraglide。插件页面里用到的 `@tauri-apps/api/*`、`@tauri-apps/plugin-dialog` 在 `tsconfig.json` / `vite.config.ts` 里指到桌面端的那一份（和 `svelte`、图标库一样）。
+- 插件的 App 能打开在某一处：`openTarget({ page: "plugin", id, params })`，`PluginPageProps` 多了 `open`（照 MCP Apps 打开页面时带的参数）。原来的位置都还认：“语音输入 → 悬浮窗 / 交互模式 / 其他热键”“文字处理”“历史记录”“设置 → 其他热键 → …”（她在聊天里给的“去看看”）落到 App 里对应的分页和分组，“插件 → 语音输入 → 文字处理”也认。“打开软件时显示：语音输入”、0.1.x 升级来只用语音输入的玩家、引导里选“只用语音输入”、标题栏的“启动本地识别”都落到这个 App。“让 Kotone 帮我配置”照旧（她连好了就请她帮忙，没连就先填 Key：新加的位置 `setup-key`）。
+- 左侧栏原来的“语音输入”一组只剩 0.1.x 升级用户的“提醒助手”；旧配置里左侧栏顺序 / 隐藏里的 `general` 认不出来就跳过（和 `music` 一样）。术语表“语音输入”一行改了。
+
+**（四）设置读旧写新**：
+
+- 语音输入插件的设置——文字处理（`postProcessing`）、识别记录（`history`）、悬浮窗（`overlay`）、频道切换 / 重发 / 文字处理开关和切换流程四个热键——在配置文件里写进 `plugins.voice-input.settings`；读的时候新位置为准，没有就用旧的顶层字段（`settings.rs` 的 `lift_voice_input_json` / `stash_voice_input_json`，加了两个测试）。
+- 程序里它们仍是 `Settings` 上的字段：本体的“听一句”、宿主、界面都照旧读写，`tests/orchestrator.rs` 的检查（例如“文字处理开关热键落盘”读的是 `settings.post_processing`）一条不改照样过。所以这一步只动配置文件的样子，改动集中在读写两处。
+- 代价（单向门，和 `lol.enabled`、`voiceChat`、`music` 搬家一样）：装回旧版本时，旧版本在顶层找不到这几项，会用它的默认值（自定义的屏蔽词、润色流程、识别记录设置看不到；旧版本一保存就丢了）。
+- 语音输入热键本身（`hotkey`）、交互模式、静音判停这些“听一句”的设置留在本体（她的耳朵也用）；每个游戏的聊天键和频道还在游戏配置里（计划里写的 `plugins.voice-input.games.<游戏>` 没做，游戏配置是另一份文件，单独做）。
+
+**（三）（四）的检查**：`kotone-core` 单元 303（多 2 个读旧写新）、集成 84 + 1 跳过（检查一条没改）；她 79；工具服务 111；svelte-check 0 / 0；Playwright 165 全过（跟着新结构改的：左侧栏顺序里没有 `general`、语音输入经“插件 → 语音输入”进；`speech-settings` 的手写桩补上插件清单；删了没人用的 `shell_sidebar_voice_input`；放歌的 e2e 多查一条“旧配置左侧栏里的 general 跳过、不算隐藏”）。真机：`lol_tools_real.py --while-playing` 32/32、`game_events_real.py` 12/12。没有测试覆盖“打开 App 时滚到下面的分组”（例如标题栏的“启动本地识别”），代码里做了。`appearance.spec` 有一次整套跑时开页超时、单跑和重跑都过，像是开发服务器第一次优化依赖时卡了一下，留意。
+**还没跑**：`voice_input_real.py`（会往测试窗口打字，要玩家离开电脑约 3 分钟）。

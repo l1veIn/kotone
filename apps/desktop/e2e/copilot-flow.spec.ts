@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { openVoiceInput } from "./nav";
 
 const here = (relative: string) => fileURLToPath(new URL(relative, import.meta.url));
 
@@ -59,7 +60,7 @@ test("1 · new user: one DeepSeek key → five things on DeepSeek → call key �
   // 在线识别：标题栏、聊天页、语音输入、设置里都没有启动按钮
   await expect(page.getByTestId("titlebar-asr")).toHaveCount(0);
   await expect(startButtons(page)).toHaveCount(0);
-  await page.getByTestId("settings-nav-general").click();
+  await openVoiceInput(page);
   await expect(page.getByTestId("asr-card")).toHaveAttribute("data-asr-state", "online-ready");
   await expect(startButtons(page)).toHaveCount(0);
   await page.getByTestId("settings-nav-advanced").click();
@@ -169,7 +170,7 @@ test("4 · 0.1.x config → add a key → chat; voice input stays on local recog
   await expect(page.getByTestId("titlebar-asr")).toBeVisible();
   await page.getByTestId("sidebar-new-chat").click();
   await expect(page.getByTestId("chat-local-asr")).toBeVisible();
-  await page.getByTestId("settings-nav-general").click();
+  await openVoiceInput(page);
   await expect(page.getByTestId("asr-start")).toBeVisible();
 });
 
@@ -177,13 +178,13 @@ test("5 · online recognition is ready on launch: no start button on any page", 
   await page.goto("/#/settings?onboarding=never&mockAsr=online");
   await expect(page.getByTestId("assistant-chat")).toBeVisible();
   await expect(page.getByTestId("titlebar-asr")).toHaveCount(0);
-  for (const nav of ["assistant", "game", "automation", "general", "advanced", "about"]) {
+  for (const nav of ["assistant", "game", "automation", "advanced", "about"]) {
     await page.getByTestId(`settings-nav-${nav}`).click();
     await expect(startButtons(page), nav).toHaveCount(0);
   }
-  for (const tab of ["processing", "history"]) {
-    await page.getByTestId("settings-nav-general").click();
-    await page.getByTestId(`voice-tab-${tab}`).click();
+  // 语音输入是插件的 App（ADR 038）
+  for (const tab of ["general", "processing", "history"] as const) {
+    await openVoiceInput(page, tab);
     await expect(startButtons(page), tab).toHaveCount(0);
   }
   for (const tab of ["call", "reply", "permissions", "usage", "models", "connections", "sound", "tuning", "appearance", "system"]) {
@@ -215,7 +216,7 @@ test("6 · local recognition not started: chat shows the state and starts it fro
 
 test("7 · online ↔ local: the start UI appears and disappears, the start shortcut is kept", async ({ page }, testInfo) => {
   await page.goto("/#/settings?onboarding=never&mockAsr=online");
-  await page.getByTestId("settings-nav-general").click();
+  await openVoiceInput(page);
   const card = page.getByTestId("asr-card");
   await expect(card).toHaveAttribute("data-asr-state", "online-ready");
   await expect(page.getByTestId("asr-switch-local")).toContainText("换成本地识别：免费、不联网、边说边出字");
@@ -271,8 +272,11 @@ test("8 · every location in settings_guide (and the old wording) opens the righ
       await expect(page.getByTestId(`advanced-nav-${target.tab}`), where).toHaveAttribute("aria-current", "page");
     } else if (target.page === "assistant") {
       await expect(page.getByTestId(`assistant-nav-${target.section}`), where).toHaveAttribute("aria-current", "page");
-    } else if (target.page === "general" || target.page === "processing" || target.page === "history") {
-      await expect(page.getByTestId(`voice-tab-${target.page}`), where).toHaveAttribute("aria-current", "page");
+    } else if (target.page === "plugin" && target.id === "voice-input") {
+      // 语音输入（插件的 App，ADR 038）：落在对应的分页
+      const tab = String(target.params?.tab ?? "general");
+      await expect(page.getByTestId(`voice-tab-${tab}`), where).toHaveAttribute("aria-current", "page");
+      await expect(page.getByTestId("settings-nav-plugins"), where).toHaveAttribute("aria-current", "page");
     } else if (target.page === "sidebar-pages") {
       // 「左侧栏 → ⋯」= 全部页面（ADR 034）：打开对话框，看完关掉
       await expect(page.getByTestId("sidebar-pages-dialog"), where).toBeVisible();

@@ -17,25 +17,25 @@
     type GameProfile,
     type HotkeyStatus,
     type InteractionMode,
-  } from "../../../lib/ipc";
-  import { captureHotkey } from "../../../lib/hotkeyCapture";
-  import ToggleField from "../../../lib/components/settings/ToggleField.svelte";
-  import SettingsPage from "../../../lib/components/settings/SettingsPage.svelte";
-  import SettingsSection from "../../../lib/components/settings/SettingsSection.svelte";
-  import SettingsRow from "../../../lib/components/settings/SettingsRow.svelte";
+  } from "$lib/ipc";
+  import { captureHotkey } from "$lib/hotkeyCapture";
+  import ToggleField from "$lib/components/settings/ToggleField.svelte";
+  import SettingsPage from "$lib/components/settings/SettingsPage.svelte";
+  import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
+  import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
   import { Button } from "$lib/components/ui/button";
-  import { findHotkeyConflict } from "../../../lib/hotkeyCombo";
+  import { findHotkeyConflict } from "$lib/hotkeyCombo";
   import {
     settingsStore,
     fullscreenWarningStore,
     patchSettings,
     toast,
     errText,
-  } from "../../../lib/stores/ui";
-  import { asrLocalStore } from "../../../lib/stores/runtime";
-  import AsrCard from "./voice/AsrCard.svelte";
-  import VoiceHotkeysSection from "./voice/VoiceHotkeysSection.svelte";
-  import VoiceSetupGuide from "./voice/VoiceSetupGuide.svelte";
+  } from "$lib/stores/ui";
+  import { asrLocalStore } from "$lib/stores/runtime";
+  import AsrCard from "./AsrCard.svelte";
+  import VoiceHotkeysSection from "./VoiceHotkeysSection.svelte";
+  import VoiceSetupGuide from "./VoiceSetupGuide.svelte";
   import { m } from "$lib/paraglide/messages.js";
 
   let { guideOpen = false, onOpenGuide, onCloseGuide, onConfigure, onOpenModels, onOpenSound, onOpenGames }: {

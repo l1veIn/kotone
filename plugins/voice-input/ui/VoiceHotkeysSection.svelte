@@ -1,9 +1,9 @@
 <script lang="ts">
   // 语音输入的其他热键（ADR 028 D12：从原「设置 → 其他热键」搬来）。
   // 启动 / 停止本地语音识别的快捷键在识别卡片里，停止热键在「设置 → 系统 → 停下」。
-  import { updateSettings } from "../../../../lib/ipc";
-  import { settingsStore } from "../../../../lib/stores/ui";
-  import HotkeyField from "../../../../lib/components/HotkeyField.svelte";
+  import { updateSettings } from "$lib/ipc";
+  import { settingsStore } from "$lib/stores/ui";
+  import HotkeyField from "$lib/components/HotkeyField.svelte";
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
   import { m } from "$lib/paraglide/messages.js";

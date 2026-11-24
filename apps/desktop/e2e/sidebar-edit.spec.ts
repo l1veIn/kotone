@@ -28,7 +28,7 @@ const row = (page: Page, id: string) => page.getByTestId("sidebar-pages-dialog")
 
 test("sidebar pages: move and hide in 全部页面, kept after a reload, hidden pages still open, restore defaults", async ({ page }, testInfo) => {
   await open(page);
-  expect(await navOrder(page)).toEqual(["assistant", "game", "automation", "plugins", "general"]);
+  expect(await navOrder(page)).toEqual(["assistant", "game", "automation", "plugins"]);
 
   await page.getByTestId("sidebar-all-pages").click();
   const dialog = page.getByTestId("sidebar-pages-dialog");
@@ -44,10 +44,10 @@ test("sidebar pages: move and hide in 全部页面, kept after a reload, hidden 
   await expect(row(page, "plugins")).toBeVisible();
   await expect(dialog.locator('[data-page-id^="plugin:"]')).toHaveCount(0);
   await row(page, "automation").getByTestId("sidebar-page-up").click();
-  await expect.poll(() => navOrder(page)).toEqual(["assistant", "automation", "game", "plugins", "general"]);
+  await expect.poll(() => navOrder(page)).toEqual(["assistant", "automation", "game", "plugins"]);
   await row(page, "game").getByTestId("sidebar-page-toggle").click();
   await expect(row(page, "game")).toHaveAttribute("data-hidden", "true");
-  await expect.poll(() => navOrder(page)).toEqual(["assistant", "automation", "plugins", "general"]);
+  await expect.poll(() => navOrder(page)).toEqual(["assistant", "automation", "plugins"]);
   await page.screenshot({ path: shot(testInfo, "sidebar-pages") });
   await dialog.getByTestId("sidebar-pages-done").click();
   await expect(dialog).toHaveCount(0);
@@ -56,7 +56,7 @@ test("sidebar pages: move and hide in 全部页面, kept after a reload, hidden 
   // 刷新后还是这样
   await page.reload();
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
-  await expect.poll(() => navOrder(page)).toEqual(["assistant", "automation", "plugins", "general"]);
+  await expect.poll(() => navOrder(page)).toEqual(["assistant", "automation", "plugins"]);
 
   // 藏起来的页面从全部页面里还能打开
   await page.getByTestId("sidebar-all-pages").click();
@@ -68,7 +68,7 @@ test("sidebar pages: move and hide in 全部页面, kept after a reload, hidden 
   // 恢复默认
   await page.getByTestId("sidebar-all-pages").click();
   await dialog.getByTestId("sidebar-pages-reset").click();
-  await expect.poll(() => navOrder(page)).toEqual(["assistant", "game", "automation", "plugins", "general"]);
+  await expect.poll(() => navOrder(page)).toEqual(["assistant", "game", "automation", "plugins"]);
   await expect(dialog.getByTestId("sidebar-pages-reset")).toBeDisabled();
 });
 
@@ -79,18 +79,15 @@ test("sidebar pages: right-click a page to move or hide it; the rail has 全部�
   await expect(menu).toBeVisible();
   await page.screenshot({ path: shot(testInfo, "sidebar-context-menu") });
   await menu.getByTestId("sidebar-menu-down").click();
-  await expect.poll(() => navOrder(page)).toEqual(["assistant", "automation", "game", "plugins", "general"]);
+  await expect.poll(() => navOrder(page)).toEqual(["assistant", "automation", "game", "plugins"]);
   // 每组最后一项不能再下移（「插件」也和别的页面一样能排、能藏）
   await page.getByTestId("settings-nav-plugins").click({ button: "right" });
   await expect(page.getByTestId("sidebar-context-menu").getByTestId("sidebar-menu-down")).toHaveAttribute("data-disabled", "");
   await page.getByTestId("sidebar-context-menu").getByTestId("sidebar-menu-hide").click();
-  await expect.poll(() => navOrder(page)).toEqual(["assistant", "automation", "game", "general"]);
-  // 语音输入整组都藏了：组名也不显示
-  await page.getByTestId("settings-nav-general").click({ button: "right" });
-  await page.getByTestId("sidebar-context-menu").getByTestId("sidebar-menu-hide").click();
+  await expect.poll(() => navOrder(page)).toEqual(["assistant", "automation", "game"]);
+  // 语音输入搬进了插件（ADR 038）：没有“语音输入”一组
   await expect(page.locator('[data-testid^="sidebar-group-"]', { hasText: "语音输入" })).toHaveCount(0);
   await expect(page.getByTestId("sidebar-group-1")).toHaveCount(0);
-  await expect.poll(() => navOrder(page)).toEqual(["assistant", "automation", "game"]);
 
   // 图标栏：底部也有“⋯”
   await page.getByTestId("sidebar-toggle").click();
@@ -99,7 +96,7 @@ test("sidebar pages: right-click a page to move or hide it; the rail has 全部�
   await expect(page.getByTestId("sidebar-pages-dialog")).toBeVisible();
   await page.getByTestId("sidebar-pages-dialog").getByTestId("sidebar-pages-reset").click();
   await page.getByTestId("sidebar-pages-dialog").getByTestId("sidebar-pages-done").click();
-  await expect.poll(() => navOrder(page)).toEqual(["assistant", "game", "automation", "plugins", "general"]);
+  await expect.poll(() => navOrder(page)).toEqual(["assistant", "game", "automation", "plugins"]);
   await page.getByTestId("sidebar-toggle").click();
 });
 
@@ -136,14 +133,14 @@ test("the sidebar has one 插件 page of app cards, even with an old saved order
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
   await expect(page.getByTestId("app-sidebar").locator('[data-testid^="settings-nav-plugin:"]')).toHaveCount(0);
   await expect(page.getByTestId("app-sidebar")).not.toContainText("英雄联盟");
-  expect(await navOrder(page)).toEqual(["assistant", "game", "automation", "plugins", "general"]);
+  expect(await navOrder(page)).toEqual(["assistant", "game", "automation", "plugins"]);
   await expect(page.getByTestId("sidebar-hidden-count")).toHaveCount(0);
 
-  // 「插件」：四张卡片（像应用启动器）
+  // 「插件」：五张卡片（像应用启动器）；语音输入排第一（ADR 038 第 5 步）
   await page.getByTestId("settings-nav-plugins").click();
   await expect(page.getByTestId("settings-nav-plugins")).toHaveAttribute("aria-current", "page");
   const grid = page.getByTestId("plugins-grid");
-  for (const id of ["lol", "game-voice", "music", "interpreter"]) await expect(grid.getByTestId(`plugins-card-${id}`)).toBeVisible();
+  for (const id of ["voice-input", "lol", "game-voice", "music", "interpreter"]) await expect(grid.getByTestId(`plugins-card-${id}`)).toBeVisible();
   // 游戏语音默认关：卡片变淡、有“已关闭”
   await expect(grid.getByTestId("plugins-card-game-voice")).toHaveAttribute("data-enabled", "false");
   await expect(grid.getByTestId("plugins-card-game-voice-off")).toBeVisible();

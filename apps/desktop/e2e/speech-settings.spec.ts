@@ -78,6 +78,8 @@ async function openNativeSettings(page: Page) {
       if (command === "list_reminders") return [];
       if (command === "get_startup_options") return { onboarding: "never" };
       if (command === "update_settings") return browser.updateSettings(args.patch);
+      // 插件清单照预览的那份（语音输入是插件的 App，ADR 038：从「插件 → 语音输入」进）
+      if (command === "plugins_list") return (await import("/src/lib/ipc/pluginsMock.ts")).listPlugins();
       if (command.startsWith("plugin:")) return null;
       const method = command.replace(/_([a-z])/g, (_all, letter: string) => letter.toUpperCase());
       return typeof browser[method] === "function" ? browser[method]() : null;

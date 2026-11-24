@@ -28,11 +28,13 @@ test("chat is home; sidebar groups; companion settings live in 设置; one conte
   await expect(page.getByTestId("assistant-chat")).toBeVisible();
   const sidebar = page.getByTestId("app-sidebar");
   await expect(sidebar.getByTestId("sidebar-group-0")).toHaveText("游戏陪玩");
-  await expect(sidebar.getByTestId("sidebar-group-1")).toHaveText("语音输入");
+  // 语音输入搬进了插件（ADR 038）：左侧栏没有单独一项、也没有“语音输入”一组，从「插件」进
+  await expect(sidebar.getByTestId("sidebar-group-1")).toHaveCount(0);
   await expect(sidebar.getByTestId("settings-nav-assistant")).toHaveText("琴音");
   await expect(sidebar.getByTestId("settings-nav-game")).toHaveText("游戏列表");
   await expect(sidebar.getByTestId("settings-nav-automation")).toHaveText("自动化");
-  await expect(sidebar.getByTestId("settings-nav-general")).toHaveText("语音输入");
+  await expect(sidebar.getByTestId("settings-nav-general")).toHaveCount(0);
+  await expect(sidebar.getByTestId("settings-nav-plugins")).toHaveText("插件");
   await expect(sidebar.getByTestId("settings-nav-processing")).toHaveCount(0);
   await expect(sidebar.getByTestId("settings-nav-history")).toHaveCount(0);
   await expect(sidebar.getByTestId("settings-nav-talk")).toHaveCount(0);
@@ -67,11 +69,11 @@ test("chat is home; sidebar groups; companion settings live in 设置; one conte
 
   // 所有设置页内容列一样宽（包括模型、连接这些以前更宽的页）
   const widths: number[] = [];
-  for (const nav of ["general", "game", "automation", "about"]) {
+  for (const nav of ["game", "automation", "about"]) {
     await page.getByTestId(`settings-nav-${nav}`).click();
     widths.push(await page.locator("main .ui-scope").first().evaluate((el) => el.getBoundingClientRect().width));
   }
-  for (const tab of ["processing", "history"] as const) {
+  for (const tab of ["general", "processing", "history"] as const) {
     await openVoiceInput(page, tab);
     widths.push(await page.locator("main .ui-scope").last().evaluate((el) => el.getBoundingClientRect().width));
   }

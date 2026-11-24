@@ -9,6 +9,7 @@ import lolZh from "../../../../../plugins/lol/messages/zh-CN.json";
 import gameVoiceZh from "../../../../../plugins/game-voice/messages/zh-CN.json";
 import musicZh from "../../../../../plugins/music/messages/zh-CN.json";
 import interpreterZh from "../../../../../plugins/interpreter/messages/zh-CN.json";
+import voiceInputZh from "../../../../../plugins/voice-input/messages/zh-CN.json";
 import type { PluginInfo, PluginManifest, PluginToolResult, PluginVisibility } from "../plugins";
 import { getSettings } from "./browserMock";
 import { gameVoiceCall } from "./gameVoiceMock";
@@ -113,6 +114,20 @@ const interpreter: PluginManifest = {
   agent: { overview: "", rule: "" },
 };
 
+// 语音输入（ADR 038 第 5 步）：默认开；她的 game_chat.send 是它的工具（预览里不打字）
+const voiceInput: PluginManifest = {
+  id: "voice-input",
+  name: voiceInputZh.plugin_voice_input_name,
+  description: voiceInputZh.plugin_voice_input_description,
+  games: [],
+  adapter: null,
+  enabledByDefault: true,
+  sources: [],
+  pages: [{ uri: "ui://kotone/voice-input/home", title: voiceInputZh.plugin_voice_input_name, needs: [] }],
+  overlays: [],
+  agent: { overview: "", rule: "" },
+};
+
 interface MockTool { name: string; needs: string[]; visibility: PluginVisibility[]; page: string | null }
 const BOTH: PluginVisibility[] = ["model", "app"];
 const TOOLS: Record<string, MockTool[]> = {
@@ -139,6 +154,9 @@ const TOOLS: Record<string, MockTool[]> = {
     ...["state", "login_start", "login_cancel", "logout", "search", "home", "playlist", "play", "control", "queue", "set_quality"]
       .map((t): MockTool => ({ name: `music.${t}`, needs: [], visibility: ["app"], page: null })),
   ],
+  "voice-input": [
+    { name: "game_chat.send", needs: [], visibility: BOTH, page: null },
+  ],
   interpreter: [
     { name: "interpreter.status", needs: [], visibility: ["app"], page: null },
     { name: "interpreter.start", needs: [], visibility: ["app"], page: null },
@@ -146,7 +164,7 @@ const TOOLS: Record<string, MockTool[]> = {
   ],
 };
 
-const MANIFESTS: PluginManifest[] = [lol, gameVoice, music, interpreter];
+const MANIFESTS: PluginManifest[] = [voiceInput, lol, gameVoice, music, interpreter];
 
 /** 插件开着没有（设置里写了按设置，没写按清单的默认）。 */
 async function enabled(manifest: PluginManifest): Promise<boolean> {
@@ -203,6 +221,11 @@ export async function pluginCall(plugin: string, tool: string, args: Record<stri
   if (plugin === "music") {
     if (!(await enabled(music))) return { content: { status: "disabled", text: music.name } };
     return musicCall(tool, args);
+  }
+  if (plugin === "voice-input") {
+    if (!(await enabled(voiceInput))) return { content: { status: "disabled", text: voiceInput.name } };
+    // 预览里不打字（和别的没模拟的工具一样回工具名）
+    return { content: { status: "error", text: tool } };
   }
   if (plugin === "interpreter") {
     if (!(await enabled(interpreter))) return { content: { status: "disabled", text: interpreter.name } };

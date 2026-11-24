@@ -33,7 +33,7 @@ export default defineConfig({
     },
     // plugins/<id>/ui 下的组件也用这里的依赖：从项目根解析，只有一份（否则往上找不到 node_modules，
     // 或者另起一份 svelte 运行时）
-    dedupe: ["svelte", "@lucide/svelte", "bits-ui", "@tauri-apps/api", "clsx", "tailwind-merge", "tailwind-variants"],
+    dedupe: ["svelte", "@lucide/svelte", "bits-ui", "@tauri-apps/api", "@tauri-apps/plugin-dialog", "clsx", "tailwind-merge", "tailwind-variants"],
   },
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),

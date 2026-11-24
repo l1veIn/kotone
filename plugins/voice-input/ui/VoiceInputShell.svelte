@@ -8,7 +8,7 @@
   import { companionName } from "$lib/stores/companion";
   import { Button } from "$lib/components/ui/button";
   import { Sparkles } from "@lucide/svelte";
-  import type { VoiceInputPage } from "../../../../lib/stores/navigation";
+  import type { VoiceInputPage } from "$lib/stores/navigation";
   import { m } from "$lib/paraglide/messages.js";
 
   let { page, onTab, onConfigure, children }: {

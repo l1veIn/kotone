@@ -18,7 +18,9 @@
       "$plugins/*": ["../../plugins/*"],
       "svelte": ["./node_modules/svelte"],
       "svelte/*": ["./node_modules/svelte/*"],
-      "@lucide/svelte": ["./node_modules/@lucide/svelte"]
+      "@lucide/svelte": ["./node_modules/@lucide/svelte"],
+      "@tauri-apps/api/*": ["./node_modules/@tauri-apps/api/*"],
+      "@tauri-apps/plugin-dialog": ["./node_modules/@tauri-apps/plugin-dialog"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.svelte", "vite.config.ts", "../../plugins/*/ui/**/*.ts", "../../plugins/*/ui/**/*.svelte"]

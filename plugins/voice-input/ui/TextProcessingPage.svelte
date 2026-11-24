@@ -21,7 +21,7 @@
     type PostProcessingConfig,
     type PostProcessingTestResult,
     type PostProcessStepConfig,
-  } from "../../../lib/ipc";
+  } from "$lib/ipc";
   import { ArrowDown, ArrowUp, FlaskConical, Plus, Settings2 } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import * as Dialog from "$lib/components/ui/dialog";
@@ -30,7 +30,7 @@
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
   import ToggleField from "$lib/components/settings/ToggleField.svelte";
-  import { errText, patchSettings, settingsStore, toast } from "../../../lib/stores/ui";
+  import { errText, patchSettings, settingsStore, toast } from "$lib/stores/ui";
   import { m } from "$lib/paraglide/messages.js";
 
   let { onOpenConnections }: { onOpenConnections?: () => void } = $props();

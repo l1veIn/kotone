@@ -8,7 +8,7 @@ test("sidebar collapses to an icon rail and remembers it", async ({ page }, test
   await page.goto("/#/settings?onboarding=never");
   const sidebar = page.getByTestId("app-sidebar");
   await expect(sidebar).toHaveAttribute("data-rail", "false");
-  await expect(sidebar.getByTestId("settings-nav-general")).toHaveText("语音输入");
+  await expect(sidebar.getByTestId("settings-nav-plugins")).toHaveText("插件");
   await expect(sidebar.getByTestId("agent-conversations")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("shell-expanded.png"), animations: "disabled" });
 
@@ -33,9 +33,9 @@ test("narrow windows use a drawer that closes after navigating", async ({ page }
   const drawer = page.getByTestId("sidebar-drawer");
   await expect(drawer).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("shell-drawer.png"), animations: "disabled" });
-  await drawer.getByTestId("settings-nav-general").click();
+  await drawer.getByTestId("settings-nav-plugins").click();
   await expect(drawer).toHaveCount(0);
-  await expect(page.getByTestId("voice-input")).toBeVisible();
+  await expect(page.getByTestId("plugins-page")).toBeVisible();
   // 抽屉里的对话列表回到聊天，抽屉同样收起
   await page.getByTestId("sidebar-toggle").click();
   await page.getByTestId("sidebar-drawer").getByTestId("agent-conversation").first().click();

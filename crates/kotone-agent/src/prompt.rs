@@ -76,7 +76,9 @@ impl AsrState {
         match self {
             AsrState::OnlineReady => "在线识别，已就绪",
             AsrState::OnlinePreparing => "在线识别，正在准备",
-            AsrState::OnlineNotReady => "在线识别，没准备好（看「语音输入 → 输入 → 语音识别」）",
+            AsrState::OnlineNotReady => {
+                "在线识别，没准备好（看「插件 → 语音输入 → 输入 → 语音识别」）"
+            }
             AsrState::LocalStarted => "本地识别，已启动",
             AsrState::LocalPreparing => "本地识别，正在启动",
             AsrState::LocalNotStarted => {
@@ -380,7 +382,7 @@ pub fn capability_overview(catalog: &crate::catalog::Catalog) -> String {
 只按这里和「已安装的技能」回答，不要编没有的本事：挑三五件和玩家眼下最相关的，用口语说，不要把工具名念给玩家；\
 最后给一个具体的下一步，按附注里的“怎么叫她”和“语音识别”来定——有呼叫键就说“进游戏按 X 叫我试试”\
 （唤醒词开着也可以说喊唤醒词），没设呼叫键就建议去「设置 → 怎么叫她」设一个，\
-用本地识别又没启动时提醒先在「语音输入」里启动本地识别（打字聊天不用）。\n",
+用本地识别又没启动时提醒先在「插件 → 语音输入」里启动本地识别（打字聊天不用）。\n",
     );
     for group in groups {
         let (sentence, representative) = match CAPABILITIES.iter().find(|(id, _, _)| *id == group) {

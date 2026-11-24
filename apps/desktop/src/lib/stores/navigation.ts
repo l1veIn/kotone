@@ -10,15 +10,22 @@ export type AssistantSection = "chat" | "identity" | "memory" | "skills";
 export type VoiceInputPage = "general" | "processing" | "history";
 
 export type PageTarget =
-  | { page: VoiceInputPage | "automation" | "game" | "about" | "legacy-reminders"; anchor?: string }
+  | { page: "automation" | "game" | "about" | "legacy-reminders"; anchor?: string }
   /** 左侧栏的“全部页面”（排顺序、显示 / 隐藏；ADR 034 第六节）。 */
   | { page: "sidebar-pages" }
   | { page: "assistant"; section: AssistantSection }
   | { page: "advanced"; tab: string; anchor?: string }
   /** 左侧栏的「插件」：每个插件一张卡片（ADR 038）。 */
   | { page: "plugins" }
-  /** 一个插件的 App（从「插件」的卡片点开）。 */
-  | { page: "plugin"; id: string };
+  /** 一个插件的 App（从「插件」的卡片点开）；`params` 是打开在 App 的哪里（插件自己认，例如语音输入的分页）。 */
+  | { page: "plugin"; id: string; params?: Record<string, unknown> }
+  /** 填 Key 的引导（语音输入的「让 Kotone 帮我配置」在她还没连上时）。 */
+  | { page: "setup-key" };
+
+/** 语音输入插件的 App 里的一页和分组（ADR 038：原来左侧栏的「语音输入」整块搬进了插件）。 */
+export function voiceInputTarget(tab: VoiceInputPage = "general", anchor?: string, extra: Record<string, unknown> = {}): PageTarget {
+  return { page: "plugin", id: "voice-input", params: { tab, ...(anchor ? { anchor } : {}), ...extra } };
+}
 
 /** 「设置」的分页（页面 ID 不变；陪玩组是 ADR 028 新加的分页）。 */
 /** 左侧栏的“全部页面”开着（侧栏的“⋯”、聊天里“去看看：左侧栏 → ⋯”）。 */
@@ -45,7 +52,7 @@ const ADVANCED_ANCHORS: Record<string, Record<string, string>> = {
   system: { "停下": "system-stop", "打开软件时显示": "system-start-page" },
 };
 
-/** 「语音输入」子板块的分页与分组。 */
+/** 「语音输入」（插件的 App）的分页与分组。 */
 const VOICE_TABS: Record<string, VoiceInputPage> = { "输入": "general", "文字处理": "processing", "历史": "history", "历史记录": "history" };
 const VOICE_ANCHORS: Record<string, string> = {
   "语音识别": "voice-asr", "其他热键": "voice-hotkeys", "悬浮窗": "voice-overlay", "交互模式": "voice-mode", "热键": "voice-hotkey",
@@ -86,9 +93,16 @@ const PAGES: Record<string, "automation" | "game" | "about" | "legacy-reminders"
 
 /** 旧版「设置 → 其他热键」里的热键现在分散在三处；按第三段（热键名）分，认不出就去语音输入的其他热键。 */
 function oldHotkeysTarget(name: string | undefined): PageTarget {
-  if (name && /启动|停止 Kotone|本地语音识别/.test(name) && !/自动化|停下/.test(name)) return { page: "general", anchor: "voice-asr" };
+  if (name && /启动|停止 Kotone|本地语音识别/.test(name) && !/自动化|停下/.test(name)) return voiceInputTarget("general", "voice-asr");
   if (name && /自动化|停下/.test(name)) return { page: "advanced", tab: "system", anchor: "system-stop" };
-  return { page: "general", anchor: "voice-hotkeys" };
+  return voiceInputTarget("general", "voice-hotkeys");
+}
+
+/** 「语音输入 → 分页 → 分组」或「语音输入 → 分组」。 */
+function voiceTarget(second: string | undefined, third: string | undefined): PageTarget {
+  const tab = VOICE_TABS[second ?? "输入"];
+  if (tab) return voiceInputTarget(tab, tab === "general" && third ? VOICE_ANCHORS[third] : undefined);
+  return voiceInputTarget("general", second ? VOICE_ANCHORS[second] : undefined);
 }
 
 function parseOne(where: string): PageTarget | null {
@@ -113,6 +127,8 @@ function parseOne(where: string): PageTarget | null {
   if (first === "插件") {
     // 「插件 → 英雄联盟 / 游戏语音」：取第一个认得出的
     const id = second?.split("/").map((name) => PLUGIN_NAMES[name.trim()]).find(Boolean);
+    // 「插件 → 语音输入 → 文字处理 / 悬浮窗」：App 里的分页和分组
+    if (id === "voice-input" && third) return voiceTarget(third, parts[3]);
     return id ? { page: "plugin", id } : { page: "plugins" };
   }
   if (first === "设置") {
@@ -127,13 +143,10 @@ function parseOne(where: string): PageTarget | null {
     const tab = ADVANCED_TABS[second ?? "系统"] ?? "system";
     return { page: "advanced", tab, anchor: third ? ADVANCED_ANCHORS[tab]?.[third] : undefined };
   }
-  if (first === "语音输入" || first === "通用") {
-    const page = VOICE_TABS[second ?? "输入"];
-    if (page) return { page, anchor: page === "general" && third ? VOICE_ANCHORS[third] : undefined };
-    return { page: "general", anchor: second ? VOICE_ANCHORS[second] : undefined };
-  }
-  if (first === "文字处理") return { page: "processing" };
-  if (first === "历史记录") return { page: "history" };
+  // 原来左侧栏的「语音输入」（现在是语音输入插件的 App，ADR 038）
+  if (first === "语音输入" || first === "通用") return voiceTarget(second, third);
+  if (first === "文字处理") return voiceInputTarget("processing");
+  if (first === "历史记录") return voiceInputTarget("history");
   const page = PAGES[first];
   return page ? { page } : null;
 }

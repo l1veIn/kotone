@@ -10,7 +10,8 @@ export type SidebarGroupId = "companion" | "voice";
 /** 两组的默认顺序（页面 ID 和 AppSidebar 的 PageId 一致）。 */
 export const SIDEBAR_GROUPS: { id: SidebarGroupId; pages: string[] }[] = [
   { id: "companion", pages: ["assistant", "game", "automation", "plugins"] },
-  { id: "voice", pages: ["general", "legacy-reminders"] },
+  // 语音输入搬进了插件（ADR 038，「插件 → 语音输入」）；这一组只剩 0.1.x 升级用户的旧提醒
+  { id: "voice", pages: ["legacy-reminders"] },
 ];
 
 /** 永远不能隐藏的页面（“设置”：藏起来就改不回来了）。 */

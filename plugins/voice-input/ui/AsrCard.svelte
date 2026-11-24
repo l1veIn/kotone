@@ -10,13 +10,13 @@
     cancelDownload, downloadModel, getModelInstallGuide, isDownloadCancelled, isTauri, listModels, setActiveModel,
     startRuntime, stopRuntime, updateSettings,
     type DownloadProgress, type ModelInfo, type ModelInstallGuide,
-  } from "../../../../lib/ipc";
-  import { LOCAL_ASR_LABELS } from "../../../../lib/ipc/contracts";
-  import { asrStore, runtimeStore } from "../../../../lib/stores/runtime";
-  import { errText, patchSettings, settingsStore, toast, toastInfo } from "../../../../lib/stores/ui";
-  import HotkeyField from "../../../../lib/components/HotkeyField.svelte";
-  import ToggleField from "../../../../lib/components/settings/ToggleField.svelte";
-  import ManualDownloadDialog from "../../../../lib/components/ManualDownloadDialog.svelte";
+  } from "$lib/ipc";
+  import { LOCAL_ASR_LABELS } from "$lib/ipc/contracts";
+  import { asrStore, runtimeStore } from "$lib/stores/runtime";
+  import { errText, patchSettings, settingsStore, toast, toastInfo } from "$lib/stores/ui";
+  import HotkeyField from "$lib/components/HotkeyField.svelte";
+  import ToggleField from "$lib/components/settings/ToggleField.svelte";
+  import ManualDownloadDialog from "$lib/components/ManualDownloadDialog.svelte";
   import { Button } from "$lib/components/ui/button";
   import { m } from "$lib/paraglide/messages.js";
 

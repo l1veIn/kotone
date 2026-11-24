@@ -63,7 +63,6 @@
   "shell_sidebar_done": "Done",
   "shell_sidebar_save_failed": "Couldn't save the sidebar: {error}",
   "shell_sidebar_group_voice_input": "Voice input",
-  "shell_sidebar_voice_input": "Voice input",
   "shell_sidebar_legacy_reminders": "Reminder assistant",
   "shell_sidebar_settings": "Settings",
   "shell_sidebar_about": "About",

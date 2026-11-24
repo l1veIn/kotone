@@ -13,13 +13,13 @@
     setModelsDir, startRuntime, updateSettings,
     type DownloadProgress, type GameProfile, type InputEnvironmentCheck, type InteractionMode, type ModelInfo,
     type ModelInstallGuide, type ModelsDirInfo,
-  } from "../../../../lib/ipc";
-  import { captureHotkey } from "../../../../lib/hotkeyCapture";
-  import { findHotkeyConflict, hotkeyLabel } from "../../../../lib/hotkeyCombo";
-  import { appState } from "../../../../lib/stores/state";
-  import { runtimeStore } from "../../../../lib/stores/runtime";
-  import { errText, settingsStore, toast, toastInfo, toastWarn } from "../../../../lib/stores/ui";
-  import ManualDownloadDialog from "../../../../lib/components/ManualDownloadDialog.svelte";
+  } from "$lib/ipc";
+  import { captureHotkey } from "$lib/hotkeyCapture";
+  import { findHotkeyConflict, hotkeyLabel } from "$lib/hotkeyCombo";
+  import { appState } from "$lib/stores/state";
+  import { runtimeStore } from "$lib/stores/runtime";
+  import { errText, settingsStore, toast, toastInfo, toastWarn } from "$lib/stores/ui";
+  import ManualDownloadDialog from "$lib/components/ManualDownloadDialog.svelte";
   import { m } from "$lib/paraglide/messages.js";
 
   let { onClose, onConfigure }: {

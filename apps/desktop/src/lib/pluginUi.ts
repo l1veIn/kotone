@@ -11,9 +11,12 @@ import lol from "$plugins/lol/ui/index";
 import gameVoice from "$plugins/game-voice/ui/index";
 import music from "$plugins/music/ui/index";
 import interpreter from "$plugins/interpreter/ui/index";
+import voiceInput from "$plugins/voice-input/ui/index";
 
 export interface PluginPageProps {
   plugin: PluginInfo;
+  /** 这次打开在 App 的哪里（「去看看」的位置、`openTarget({ page: "plugin", id, params })`）；`n` 每次打开都变。 */
+  open?: { params: Record<string, unknown>; n: number } | null;
 }
 export interface PluginGameSectionProps {
   plugin: PluginInfo;
@@ -94,7 +97,7 @@ export interface PluginUi {
   overlays?: Record<string, Component<PluginOverlayProps>>;
 }
 
-export const PLUGIN_UI: Record<string, PluginUi> = { lol, "game-voice": gameVoice, music, interpreter };
+export const PLUGIN_UI: Record<string, PluginUi> = { "voice-input": voiceInput, lol, "game-voice": gameVoice, music, interpreter };
 
 /** 有页面的插件 id（「插件」里卡片的顺序）。 */
 export const PLUGIN_IDS: string[] = Object.keys(PLUGIN_UI);

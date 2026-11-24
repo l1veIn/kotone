@@ -5,8 +5,8 @@
 <script lang="ts">
   /*
    * 设置窗口侧边栏（ADR 028，参照 DeepSeek Harness 的侧边栏：顶部“新对话”和会话列表、底部固定的设置项）。
-   * 新对话和对话列表在最上面并占满剩余高度；「游戏陪玩」分组和单独一项「语音输入」固定在底部，始终看得见。
-   * 页面 ID 不变：语音输入一项对应 general / processing / history 三个分页。
+   * 新对话和对话列表在最上面并占满剩余高度；「游戏陪玩」分组固定在底部，始终看得见。
+   * 语音输入搬进了插件（ADR 038）：从「插件 → 语音输入」打开，左侧栏没有单独一项。
    * 三种形态：展开（236px）、图标栏（56px）、窄窗口时的抽屉。
    * 两组里的页面可以自己排（ADR 034 第六节）：右键上移 / 下移 / 隐藏，“⋯”打开全部页面（对话框在 Settings.svelte）。
    * 在放歌时底部有一个小播放条（ADR 034）。插件（ADR 038，2026-11-24 玩家定的）：左侧栏只有一项「插件」，
@@ -62,7 +62,6 @@
   const menuItem = "flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-[13px] outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-45";
 
   function isActive(id: PageId): boolean {
-    if (id === "general") return page === "general" || page === "processing" || page === "history";
     if (id === "assistant") return page === "assistant" && !chatActive;
     if (id === "about") return page === "about" || page === "character";
     // 插件的 App 从「插件」的卡片点进来

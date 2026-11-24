@@ -8,11 +8,11 @@
    * 波形用 canvas 手绘（峰值柱 + 进度高亮），点击可 seek。
    */
   import { onDestroy, onMount, tick } from "svelte";
-  import SelectField from "../../../lib/components/settings/SelectField.svelte";
-  import ToggleField from "../../../lib/components/settings/ToggleField.svelte";
-  import SettingsPage from "../../../lib/components/settings/SettingsPage.svelte";
-  import SettingsSection from "../../../lib/components/settings/SettingsSection.svelte";
-  import SettingsRow from "../../../lib/components/settings/SettingsRow.svelte";
+  import SelectField from "$lib/components/settings/SelectField.svelte";
+  import ToggleField from "$lib/components/settings/ToggleField.svelte";
+  import SettingsPage from "$lib/components/settings/SettingsPage.svelte";
+  import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
+  import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
   import { listen } from "@tauri-apps/api/event";
@@ -24,9 +24,9 @@
     readHistoryAudio,
     isTauri,
     type HistoryRecord,
-  } from "../../../lib/ipc";
-  import { settingsStore, toast, errText } from "../../../lib/stores/ui";
-  import stickerSleepy from "../../../assets/brand/stickers/sleepy.webp";
+  } from "$lib/ipc";
+  import { settingsStore, toast, errText } from "$lib/stores/ui";
+  import stickerSleepy from "$lib/../assets/brand/stickers/sleepy.webp";
   import { m } from "$lib/paraglide/messages.js";
 
   let records = $state<HistoryRecord[] | null>(null);

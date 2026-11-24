@@ -8,9 +8,10 @@ export async function openSettingsTab(page: Page, tab: string) {
   await expect(page.getByTestId(`advanced-nav-${tab}`)).toHaveAttribute("aria-current", "page");
 }
 
-/** 「语音输入」子板块的某个分页（输入 = general、文字处理 = processing、历史 = history）。 */
+/** 「语音输入」（插件的 App，ADR 038：左侧栏「插件 → 语音输入」）的某个分页（输入 = general、文字处理 = processing、历史 = history）。 */
 export async function openVoiceInput(page: Page, tab: "general" | "processing" | "history" = "general") {
-  await page.getByTestId("settings-nav-general").click();
+  await page.getByTestId("settings-nav-plugins").click();
+  await page.getByTestId("plugins-card-voice-input-open").click();
   if (tab !== "general") await page.getByTestId(`voice-tab-${tab}`).click();
   await expect(page.getByTestId(`voice-tab-${tab}`)).toHaveAttribute("aria-current", "page");
 }

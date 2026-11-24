@@ -25,7 +25,7 @@
     AUTO_ADMIN_PROMPT_FLAG,
   } from "../../lib/stores/ui";
   import { initRuntime } from "../../lib/stores/runtime";
-  import { companionBindings, startPageOf, usesLegacyVoiceInput } from "../../lib/ipc/contracts";
+  import { startPageOf, usesLegacyVoiceInput } from "../../lib/ipc/contracts";
   import LegacyRemindersPage from "./pages/LegacyRemindersPage.svelte";
   import { checkForUpdates } from "../../lib/updater";
   import { Sonner } from "$lib/components/ui/sonner";
@@ -38,17 +38,13 @@
   import type { DeepSeekSetupResult } from "../../lib/deepseekSetup";
   import { pendingPrompt } from "../../lib/agentChat/pendingPrompt";
   import Titlebar from "./Titlebar.svelte";
-  import GeneralPage from "./pages/GeneralPage.svelte";
-  import TextProcessingPage from "./pages/TextProcessingPage.svelte";
-  import { navigationRequest, sidebarPagesOpen, type AssistantSection, type VoiceInputPage } from "../../lib/stores/navigation";
-  import VoiceInputShell from "./pages/voice/VoiceInputShell.svelte";
+  import { navigationRequest, sidebarPagesOpen, voiceInputTarget, type AssistantSection, type PageTarget } from "../../lib/stores/navigation";
   import AssistantPage from "./pages/AssistantPage.svelte";
   import AutomationPage from "./pages/AutomationPage.svelte";
   import AdvancedPage from "./pages/AdvancedPage.svelte";
   import { isAdvancedSection, type AdvancedSection } from "./pages/advanced/types";
   import GamePage from "./pages/GamePage.svelte";
   import SidebarPagesDialog from "./SidebarPagesDialog.svelte";
-  import HistoryPage from "./pages/HistoryPage.svelte";
   import AboutPage from "./pages/AboutPage.svelte";
   import CharacterPage from "./pages/CharacterPage.svelte";
   import PluginPage from "./pages/PluginPage.svelte";
@@ -78,6 +74,7 @@
   }
   function navigate(id: PageId) {
     assistantOpen = null;
+    pluginOpen = null;
     if (id === "advanced" && page !== "advanced") advancedAnchor = null;
     page = id;
     drawerOpen = false;
@@ -104,7 +101,8 @@
     const target = request.target;
     if (target.page === "assistant") openCompanion(target.section);
     else if (target.page === "sidebar-pages") sidebarPagesOpen.set(true);
-    else if (target.page === "plugin") navigate(pluginPageId(target.id));
+    else if (target.page === "plugin") openPlugin(target);
+    else if (target.page === "setup-key") onboarding = { mode: legacyVoiceOnly ? "upgrade" : "new", initialStep: "key" };
     else if (target.page === "plugins") navigate("plugins");
     // 旧的「设置 → 插件」（插件搬到了左侧栏的「插件」，ADR 038）
     else if (target.page === "advanced" && target.tab === "plugins") navigate("plugins");
@@ -115,6 +113,17 @@
     }
   });
   onDestroy(unsubscribeNavigation);
+  /** 插件 App 这次打开在哪里（`params`，例如语音输入的分页）；普通导航清掉。 */
+  let pluginOpen = $state<{ params: Record<string, unknown>; n: number } | null>(null);
+  let pluginOpenCount = 0;
+  function openPlugin(target: Extract<PageTarget, { page: "plugin" }>) {
+    navigate(pluginPageId(target.id));
+    pluginOpen = target.params ? { params: target.params, n: ++pluginOpenCount } : null;
+  }
+  /** 语音输入（插件的 App，ADR 038）的某一页 / 某一组。 */
+  function openVoiceInput(tab: "general" | "processing" | "history" = "general", anchor?: string, extra: Record<string, unknown> = {}) {
+    openPlugin(voiceInputTarget(tab, anchor, extra) as Extract<PageTarget, { page: "plugin" }>);
+  }
   function scrollToAnchor(id: string) {
     void tick().then(() => requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ block: "start" })));
   }
@@ -130,8 +139,6 @@
   // ---------- 引导（ADR 028） ----------
   /** 正在显示的引导：新用户 / 0.1.x 升级用户；从聊天页 Key 卡片或“让 Kotone 帮我配置”进来时带起始步骤。 */
   let onboarding = $state<{ mode: "new" | "upgrade"; initialStep?: "key" | "connected"; result?: DeepSeekSetupResult | null } | null>(null);
-  /** 语音输入子板块顶部的四步引导（V 路径）。 */
-  let voiceGuideOpen = $state(false);
 
   function openOnboarding() {
     onboarding = { mode: legacyVoiceOnly ? "upgrade" : "new" };
@@ -139,24 +146,11 @@
   function onboardingDone(next: OnboardingNext, prompt?: string) {
     onboarding = null;
     if (next === "chat") openChat(prompt);
-    else {
-      navigate("general");
-      if (next === "voiceGuide") voiceGuideOpen = true;
-    }
+    else openVoiceInput("general", undefined, next === "voiceGuide" ? { guide: true } : {});
   }
   /** 聊天页的 Key 卡片连好了：接着设呼叫键（引导的“已连接”页）。 */
   function keyConnected(result: DeepSeekSetupResult) {
     onboarding = { mode: "new", initialStep: "connected", result };
-  }
-  /** 语音输入的「让 Kotone 帮我配置」：有可用的角色就请她帮忙（只预填，不经过语音输入）；没有就先填 Key。 */
-  function configureVoiceInput() {
-    const s = $settingsStore;
-    const connectionId = companionBindings(s?.assistant)?.connectionId?.trim();
-    if (s && !legacyVoiceOnly && connectionId && s.connections.some((c) => c.id === connectionId)) {
-      openChat(m.shell_settings_voice_setup_prompt());
-    } else {
-      onboarding = { mode: legacyVoiceOnly ? "upgrade" : "new", initialStep: "key" };
-    }
   }
 
   // 侧边栏的对话列表与聊天页共用一份状态。
@@ -238,7 +232,8 @@
       ]);
       if (settingsWarning) toastWarn(settingsWarning);
       const legacy = usesLegacyVoiceInput(s.ui);
-      page = legacy || startPageOf(s.ui) === "voiceInput" ? "general" : "assistant";
+      // 语音输入现在是插件的 App（ADR 038）
+      page = legacy || startPageOf(s.ui) === "voiceInput" ? pluginPageId("voice-input") : "assistant";
       if (legacy) advancedSection = "models";
       if (legacy) {
         // 0.1.x 升级用户：新引导显示一次（即使 firstRunCompleted 为真），看过 = legacyUpgrade 不再是 pending。
@@ -357,7 +352,7 @@
 <svelte:window bind:innerWidth={viewportWidth} />
 <div class="flex h-full flex-col overflow-hidden bg-sidebar text-foreground" data-testid="app-frame">
   <!-- 自绘标题栏（decorations:false）：侧边栏开关 + 本地识别状态（只在用本地识别时）+ 窗口控制 -->
-  <Titlebar onOpenVoiceInput={() => { navigate("general"); scrollToAnchor("voice-asr"); }} onToggleSidebar={toggleSidebar}
+  <Titlebar onOpenVoiceInput={() => openVoiceInput("general", "voice-asr")} onToggleSidebar={toggleSidebar}
     brandWidth={narrow ? "auto" : rail ? "3.5rem" : "14.75rem"} />
   <div class="relative flex min-h-0 flex-1 overflow-hidden">
   {#if !narrow}
@@ -380,18 +375,6 @@
     {/if}
     {#if loading}
       <p class="px-8 py-10 text-sm text-muted-foreground">{m.shell_settings_loading()}</p>
-    {:else if page === "general" || page === "processing" || page === "history"}
-      <VoiceInputShell {page} onTab={(next: VoiceInputPage) => navigate(next)} onConfigure={configureVoiceInput}>
-        {#if page === "general"}
-          <GeneralPage guideOpen={voiceGuideOpen} onOpenGuide={() => (voiceGuideOpen = true)} onCloseGuide={() => (voiceGuideOpen = false)}
-            onConfigure={configureVoiceInput} onOpenModels={() => openAdvanced("models", "models-asr")}
-            onOpenSound={() => openAdvanced("sound")} onOpenGames={() => navigate("game")} />
-        {:else if page === "processing"}
-          <TextProcessingPage onOpenConnections={() => openAdvanced("connections")} />
-        {:else}
-          <HistoryPage />
-        {/if}
-      </VoiceInputShell>
     {:else if page === "advanced"}
       <AdvancedPage
         section={advancedSection}
@@ -403,7 +386,7 @@
       <AssistantPage {chatRequest} open={assistantOpen}
         onOpenConnections={() => openAdvanced("connections")} onOpenAutomation={() => navigate("automation")}
         onOpenSettings={() => openCompanionSettings("reply", "settings-reply-ai")} onOpenTalk={() => openCompanionSettings("call", "settings-call-hotkey")}
-        onKeyConnected={keyConnected} onBackToVoice={() => navigate("general")} />
+        onKeyConnected={keyConnected} onBackToVoice={() => openVoiceInput()} />
     {:else if page === "legacy-reminders"}
       <LegacyRemindersPage onOpenConnections={() => openAdvanced("connections")} />
     {:else if page === "automation"}
@@ -416,7 +399,7 @@
       <PluginsPage />
     {:else if pluginOfPage(page)}
       <!-- 插件的 App 占满内容区（宿主不在下面留白） -->
-      {#key page}<PluginPage id={pluginOfPage(page) ?? ""} />{/key}
+      {#key page}<PluginPage id={pluginOfPage(page) ?? ""} open={pluginOpen} />{/key}
     {:else}
       <AboutPage onOpenCharacter={() => (page = "character")} />
     {/if}

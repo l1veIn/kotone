@@ -11,7 +11,7 @@
   import { PLUGIN_UI } from "$lib/pluginUi";
   import { m } from "$lib/paraglide/messages.js";
 
-  let { id }: { id: string } = $props();
+  let { id, open = null }: { id: string; open?: { params: Record<string, unknown>; n: number } | null } = $props();
   const plugin = $derived($pluginsStore.find((p) => p.manifest.id === id));
   const ui = $derived(PLUGIN_UI[id]);
   const Page = $derived(ui?.page);
@@ -37,7 +37,7 @@
   <!-- App 的位置：插件自己的界面，宿主不加边距、标题、样式 -->
   <div class="relative min-h-0 flex-1" data-testid="plugin-app">
     {#if plugin && Page}
-      <Page {plugin} />
+      <Page {plugin} {open} />
     {:else if loaded}
       <p class="m-0 px-8 py-10 text-sm text-muted-foreground" data-testid="plugin-page-missing">{m.shell_plugin_missing()}</p>
     {/if}
