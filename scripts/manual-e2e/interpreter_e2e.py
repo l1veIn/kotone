@@ -3,7 +3,9 @@
 琴音 (mock AI, scripted by mock_interpreter.py) hands “帮我盯着队友” to a background task with `agent.start`; the
 background task starts listening to kotone-speaker.exe (a renamed copy of powershell.exe that this script uses to
 play an English sentence, at SAPI volume 40); the background task must receive the recognised sentence and show a (mock) translation as danmaku;
-“停止同传” must stop it (`agent.stop`) together with its listener.
+“停止同传” must stop it (`agent.stop`) together with its listener. Then the same through the interpreter plugin's page
+(ADR 038 step 4): “开始” says the sentence for the player (it shows in the chat), she hands it to the background; “停下”
+says “停止同传”.
 
 Messages go in through the chat page (WebView2 DevTools port → `agent_send`): only the player's own words can hand
 work to the background, so `assistant.submit` (an external agent's message) would be refused. No OS input.
@@ -208,6 +210,36 @@ def main():
                              and f"listen: {c['conversationId']} stopped" in log_text(), 60)
         check("“停止同传” stopped the background task and its listener", stopped)
         check("the card says stopped", (card() or {}).get("status") == "stopped")
+
+        # 同传插件的页面（ADR 038 第 4 步）：设好听哪个程序，点“开始”= 玩家对她说了这句话（出现在聊天里），
+        # 她照样交给后台；点“停下”= “停止同传”。新开一段对话（上一段里已经有叫 interpreter 的后台了）。
+        invoke("agent_new_conversation", {})
+        call("settings.update", {"patch": {"plugins": {"interpreter": {"settings": {"app": SPEAKER, "target": "中文"}}}}})
+
+        def page(tool):
+            r = invoke("plugin_call", {"plugin": "interpreter", "tool": tool, "arguments": {}})
+            return (r.get("ok") or {}).get("content") or r
+        said = page("interpreter.start").get("said", "")
+        check("page: “开始” said the sentence for the player", said.startswith("帮我盯着队友") and SPEAKER in said, said)
+        page_id = wait_until(lambda: (invoke("agent_state", {}).get("ok") or {}).get("current"), 10, "current conversation")
+        check("page: a new conversation (not the one above)", page_id and page_id != main_id, page_id)
+
+        def page_card():
+            conv = invoke("agent_conversation", {"id": page_id}).get("ok") or {}
+            return next((a for a in conv.get("subagents", []) if a["name"] == "interpreter"), None)
+        conv = invoke("agent_conversation", {"id": page_id}).get("ok") or {}
+        mine = [m for m in conv.get("messages", []) if m.get("role") == "user" and m.get("source") == "chat"]
+        check("page: it shows in the chat as the player's message", mine and said in mine[0].get("text", ""),
+              (mine[0].get("text", "") if mine else "")[:80])
+        pc = wait_until(page_card, 60)
+        check("page: she handed it to the background (card)", pc, (pc or {}).get("status"))
+        listening = wait_until(lambda: SPEAKER in page("interpreter.status").get("listening", []), 60)
+        check(f"page: the status shows it listening to {SPEAKER}", listening, page("interpreter.status").get("listening"))
+        page("interpreter.stop")
+        check("page: “停下” stopped the background task", wait_until(lambda: (page_card() or {}).get("status") == "stopped", 60),
+              (page_card() or {}).get("status"))
+        check("page: nothing is listening any more", wait_until(lambda: not page("interpreter.status").get("listening"), 30),
+              page("interpreter.status").get("listening"))
     finally:
         if player:
             try:

@@ -1,0 +1,11 @@
+[package]
+name = "kotone-plugin-interpreter"
+version = "0.1.0"
+description = "Kotone 同传插件（ADR 021、038）：页面上设好听哪个程序、译成什么，点开始就替玩家对她说，由她交给后台"
+edition = "2021"
+rust-version = "1.77.2"
+
+[dependencies]
+kotone-plugin-api.workspace = true
+serde.workspace = true
+serde_json.workspace = true

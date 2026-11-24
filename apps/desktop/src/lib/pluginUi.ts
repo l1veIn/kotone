@@ -10,6 +10,7 @@ import { pluginEnabled, type PluginInfo, type PluginToolResult } from "./plugins
 import lol from "$plugins/lol/ui/index";
 import gameVoice from "$plugins/game-voice/ui/index";
 import music from "$plugins/music/ui/index";
+import interpreter from "$plugins/interpreter/ui/index";
 
 export interface PluginPageProps {
   plugin: PluginInfo;
@@ -55,7 +56,7 @@ export interface PluginSidebarFooterProps {
   plugin: PluginInfo;
   /** 左侧栏收成图标栏了：只给一个小按钮。 */
   rail: boolean;
-  /** 打开这个插件的页面（左侧栏「插件」组里那一页）。 */
+  /** 打开这个插件的页面（从「设置 → 插件」点开的那一页）。 */
   onOpen: () => void;
 }
 
@@ -73,7 +74,7 @@ export interface PluginOverlayProps {
 export interface PluginUi {
   /** 左侧栏和插件列表里的图标。 */
   icon: Component;
-  /** 插件的完整页面（左侧栏「插件」组里点开）。 */
+  /** 插件的完整页面（从「设置 → 插件」点开；左侧栏不放插件）。 */
   page: Component<PluginPageProps>;
   /** 页面自己占满整块（自己有顶栏、底部的播放条之类），宿主不在下面留白。 */
   fullBleed?: boolean;
@@ -95,9 +96,9 @@ export interface PluginUi {
   overlays?: Record<string, Component<PluginOverlayProps>>;
 }
 
-export const PLUGIN_UI: Record<string, PluginUi> = { lol, "game-voice": gameVoice, music };
+export const PLUGIN_UI: Record<string, PluginUi> = { lol, "game-voice": gameVoice, music, interpreter };
 
-/** 有页面的插件 id（左侧栏「插件」组的顺序）。 */
+/** 有页面的插件 id（「设置 → 插件」里的顺序）。 */
 export const PLUGIN_IDS: string[] = Object.keys(PLUGIN_UI);
 
 /** `ui://kotone/<插件>/<页面>` 是哪个插件的；不是插件页面时 null。 */
@@ -122,7 +123,7 @@ export function pluginToolLabel(tool: string): string | null {
   return null;
 }
 
-/** 开着的插件里给了某一块（左侧栏底部、聊天输入框上面）的：插件和那一块的组件，按左侧栏「插件」组的顺序。 */
+/** 开着的插件里给了某一块（左侧栏底部、聊天输入框上面）的：插件和那一块的组件，按「设置 → 插件」里的顺序。 */
 export function enabledSlots<K extends "sidebarFooter" | "chatBanner">(
   plugins: PluginInfo[],
   settings: Settings | null | undefined,

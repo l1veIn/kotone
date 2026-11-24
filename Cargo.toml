@@ -21,6 +21,7 @@ kotone-plugin-api = { path = "crates/kotone-plugin-api" }
 kotone-plugin-lol = { path = "plugins/lol" }
 kotone-plugin-game-voice = { path = "plugins/game-voice" }
 kotone-plugin-music = { path = "plugins/music" }
+kotone-plugin-interpreter = { path = "plugins/interpreter" }
 # 桌面端 `kotone.exe <子命令>` 复用 CLI；特性由桌面端按自身特性转发
 kotone-cli = { path = "crates/kotone-cli", default-features = false }
 

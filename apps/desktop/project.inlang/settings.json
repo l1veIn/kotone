@@ -19,7 +19,8 @@
       "./messages/{locale}/locale.json",
       "../../plugins/lol/messages/{locale}.json",
       "../../plugins/game-voice/messages/{locale}.json",
-      "../../plugins/music/messages/{locale}.json"
+      "../../plugins/music/messages/{locale}.json",
+      "../../plugins/interpreter/messages/{locale}.json"
     ]
   }
 }

@@ -544,6 +544,16 @@ pub trait Host: Send + Sync {
         let _ = text;
         Box::pin(async { Err("这里没有语音".to_string()) })
     }
+    /// 玩家在插件页面上点了按钮，等于玩家对她说了这句话：出现在聊天里，算玩家亲口说的（能交给后台，
+    /// ADR 030 第 2 节）。只在玩家操作页面时调（插件只在“只给页面用”的工具里调它）。
+    fn player_says(&self, text: &str) -> Result<(), String> {
+        let _ = text;
+        Err("这里不能替玩家说话".to_string())
+    }
+    /// 她的耳朵（ADR 021 的 `voice.listen`）现在在听哪些程序（程序名）。
+    fn listening(&self) -> Vec<String> {
+        Vec::new()
+    }
     /// 她这会儿在出声没有（边生成边念的回答、应答、提醒）：放声音的插件用它压低自己（ADR 034 D7）。
     fn she_is_audible(&self) -> bool {
         false

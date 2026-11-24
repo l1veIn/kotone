@@ -2782,6 +2782,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kotone-plugin-interpreter"
+version = "0.1.0"
+dependencies = [
+ "kotone-plugin-api",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kotone-plugin-lol"
 version = "0.1.0"
 dependencies = [
@@ -2879,6 +2888,7 @@ dependencies = [
  "kotone-platform-windows",
  "kotone-plugin-api",
  "kotone-plugin-game-voice",
+ "kotone-plugin-interpreter",
  "kotone-plugin-lol",
  "kotone-plugin-music",
  "kotone-postprocess",

@@ -3,14 +3,16 @@
  * 插件页面调工具。清单的文字从插件自己的文案读（plugins/<id>/messages/zh-CN.json），和 plugin.toml 一致
  * （插件的 Rust 测试对过）。英雄联盟的工具返回示例数据（lolMock.ts），页面和聊天卡片照真的显示；
  * 游戏语音（默认关）的驱动、默认麦克风是模拟的（gameVoiceMock.ts）；放歌（默认开）是模拟的网易云和播放器（musicMock.ts），
- * 状态照真的作为插件事件发出（[`subscribe`]）。
+ * 状态照真的作为插件事件发出（[`subscribe`]）；同传（默认开）的“开始 / 停止”只模拟她的耳朵在不在听（interpreterMock.ts）。
  */
 import lolZh from "../../../../../plugins/lol/messages/zh-CN.json";
 import gameVoiceZh from "../../../../../plugins/game-voice/messages/zh-CN.json";
 import musicZh from "../../../../../plugins/music/messages/zh-CN.json";
+import interpreterZh from "../../../../../plugins/interpreter/messages/zh-CN.json";
 import type { PluginInfo, PluginManifest, PluginToolResult, PluginVisibility } from "../plugins";
 import { getSettings } from "./browserMock";
 import { gameVoiceCall } from "./gameVoiceMock";
+import { interpreterCall } from "./interpreterMock";
 import { musicCall, pluginTurnedOff as musicTurnedOff, subscribe as subscribeMusic } from "./musicMock";
 import { findSamplePlayer, sampleGame, sampleMatch, samplePlayer } from "./lolMock";
 import {
@@ -97,6 +99,20 @@ const music: PluginManifest = {
   agent: { overview: "", rule: "" },
 };
 
+// 同传（ADR 021、038）：工具只给页面用，默认开
+const interpreter: PluginManifest = {
+  id: "interpreter",
+  name: interpreterZh.plugin_interpreter_name,
+  description: interpreterZh.plugin_interpreter_description,
+  games: [],
+  adapter: null,
+  enabledByDefault: true,
+  sources: [],
+  pages: [{ uri: "ui://kotone/interpreter/home", title: interpreterZh.plugin_interpreter_name, needs: [] }],
+  overlays: [],
+  agent: { overview: "", rule: "" },
+};
+
 interface MockTool { name: string; needs: string[]; visibility: PluginVisibility[]; page: string | null }
 const BOTH: PluginVisibility[] = ["model", "app"];
 const TOOLS: Record<string, MockTool[]> = {
@@ -123,9 +139,14 @@ const TOOLS: Record<string, MockTool[]> = {
     ...["state", "login_start", "login_cancel", "logout", "search", "home", "playlist", "play", "control", "queue", "set_quality"]
       .map((t): MockTool => ({ name: `music.${t}`, needs: [], visibility: ["app"], page: null })),
   ],
+  interpreter: [
+    { name: "interpreter.status", needs: [], visibility: ["app"], page: null },
+    { name: "interpreter.start", needs: [], visibility: ["app"], page: null },
+    { name: "interpreter.stop", needs: [], visibility: ["app"], page: null },
+  ],
 };
 
-const MANIFESTS: PluginManifest[] = [lol, gameVoice, music];
+const MANIFESTS: PluginManifest[] = [lol, gameVoice, music, interpreter];
 
 /** 插件开着没有（设置里写了按设置，没写按清单的默认）。 */
 async function enabled(manifest: PluginManifest): Promise<boolean> {
@@ -182,6 +203,10 @@ export async function pluginCall(plugin: string, tool: string, args: Record<stri
   if (plugin === "music") {
     if (!(await enabled(music))) return { content: { status: "disabled", text: music.name } };
     return musicCall(tool, args);
+  }
+  if (plugin === "interpreter") {
+    if (!(await enabled(interpreter))) return { content: { status: "disabled", text: interpreter.name } };
+    return interpreterCall(tool);
   }
   if (plugin !== "lol") return { content: { status: "error", text: tool } };
   for (const needs of spec.needs) {

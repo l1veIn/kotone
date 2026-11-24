@@ -41,6 +41,7 @@ pub fn registry() -> &'static [Arc<dyn Plugin>] {
             Arc::new(kotone_plugin_lol::LolPlugin::new()) as Arc<dyn Plugin>,
             Arc::new(kotone_plugin_game_voice::GameVoicePlugin::new()),
             Arc::new(kotone_plugin_music::MusicPlugin::new()),
+            Arc::new(kotone_plugin_interpreter::InterpreterPlugin),
         ]
     })
 }
@@ -322,6 +323,26 @@ impl Host for DesktopHost {
             .await
             .map_err(|e| e.to_string())?
         })
+    }
+
+    fn player_says(&self, text: &str) -> Result<(), String> {
+        // 和在聊天窗口里打字一样（来源 chat：算玩家亲口说的，回复写在聊天里）
+        crate::agent::send(
+            &self.app,
+            crate::agent::Outgoing {
+                text: text.to_string(),
+                source: "chat".into(),
+                attachments: Vec::new(),
+            },
+        )
+        .map(|_| ())
+    }
+
+    fn listening(&self) -> Vec<String> {
+        crate::voice_listen::active(&self.app)
+            .into_iter()
+            .map(|(_, app)| app)
+            .collect()
     }
 
     fn she_is_audible(&self) -> bool {
