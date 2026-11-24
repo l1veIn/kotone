@@ -232,3 +232,22 @@
 
 **下一轮从这里开始**：把 `crates/kotone-core/src/orchestrator/voice_input/` 搬进 `plugins/voice-input`（计划第九节“第 5 步（续）”的下一步）。每一步前后跑：`cargo test -p kotone-core`（85 个集成检查不改）、`voice_input_real.py`（要玩家离开电脑）、`lol_tools_real.py --while-playing`、`game_events_real.py`。第 6 步（按键程序）要玩家先定的事还在计划第九节第 6 步。
 
+## 十、第六轮（2026-11-24 晚）：语音输入搬进插件
+
+分支 `claude/plugins`（没推送、没合 main、没打 tag）。细节和数字在 [插件重构计划](../plugin-refactor.md) 第九节“第 5 步（续二）”。
+
+**玩家这一轮的话**：“`tests/orchestrator.rs` 可以加一行接上插件或者连同搬过去，但里面的检查一条不改、照样全过；设置读旧写新；文字处理、识别记录、悬浮窗进插件 App；`game_chat.send` 保留原名。”另外玩家要求（记忆 `long-tasks-orchestrate-not-code`）：长任务主会话只编排，代码交给子代理——这一轮前半段主会话自己写了代码，界面测试的修复交给了子代理。
+
+| 提交 | 玩家看到的 |
+| --- | --- |
+| `18bd7aec` | 看不到：“听到以后”搬进 `plugins/voice-input`，本体留“听一句”和 `orchestrator/after_hearing.rs` 这道缝；测试只加接线 |
+| `0dd1687b` | 语音输入成了插件（默认开），`game_chat.send` 由它登记、名字不变；关掉插件：语音输入热键、悬浮窗、她替你打字一起停 |
+| `c69f8dc2` | 看不到：设置读旧写新（配置文件里写进 `plugins.voice-input.settings`） |
+| `50348033` | 左侧栏不再单列“语音输入”，从“插件 → 语音输入”进；原来的三页原样在插件的页面里 |
+
+**检查**：85 个集成检查每步前后都过（检查一条没改）；`lol_tools_real.py` 32/32、`game_events_real.py` 12/12 每步前后都过；Playwright 165；`voice_input_real.py` 37/37（1 跳过）。
+
+**变化要知道的**：外部 Agent 现在也能调 `game_chat.send`；装回旧版本时语音输入的设置按旧版本默认；每个游戏的聊天键和频道还在游戏配置里。
+
+**下一步**：语音输入剩下的（文字处理的引擎 `kotone-postprocess` 和识别记录的存储还在本体，测试的检查直接读它们；每个游戏的聊天键搬进插件）；第 6 步按键程序要玩家先定的事还在计划第九节第 6 步；第 7 步收尾。
+

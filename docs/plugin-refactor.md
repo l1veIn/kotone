@@ -666,4 +666,4 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 - 语音输入热键本身（`hotkey`）、交互模式、静音判停这些“听一句”的设置留在本体（她的耳朵也用）；每个游戏的聊天键和频道还在游戏配置里（计划里写的 `plugins.voice-input.games.<游戏>` 没做，游戏配置是另一份文件，单独做）。
 
 **（三）（四）的检查**：`kotone-core` 单元 303（多 2 个读旧写新）、集成 84 + 1 跳过（检查一条没改）；她 79；工具服务 111；svelte-check 0 / 0；Playwright 165 全过（跟着新结构改的：左侧栏顺序里没有 `general`、语音输入经“插件 → 语音输入”进；`speech-settings` 的手写桩补上插件清单；删了没人用的 `shell_sidebar_voice_input`；放歌的 e2e 多查一条“旧配置左侧栏里的 general 跳过、不算隐藏”）。真机：`lol_tools_real.py --while-playing` 32/32、`game_events_real.py` 12/12。没有测试覆盖“打开 App 时滚到下面的分组”（例如标题栏的“启动本地识别”），代码里做了。`appearance.spec` 有一次整套跑时开页超时、单跑和重跑都过，像是开发服务器第一次优化依赖时卡了一下，留意。
-**还没跑**：`voice_input_real.py`（会往测试窗口打字，要玩家离开电脑约 3 分钟）。
+**真机 `voice_input_real.py`**（玩家离开电脑时跑，`50348033` 上）：**37/37 过、1 个跳过、53 秒**（搬家前的基线 36/36、2 个跳过）。多过的一项是 6a：外部 Agent 经工具服务调 `game_chat.send` 现在能调，正好打进测试窗口。按住说自动发送、录音笔预览确认、屏蔽词“打野 → JG”、识别记录、悬浮窗状态顺序、她的 `game_chat.send`（执行记录有 runId）、`companion.type`、控制台通道没游戏时退回键盘、`~/.kotone` 没被动过，都和以前一样。跳过的还是 7b（真的控制台通道要 Steam 装的 Dota 2 / CS2）。
