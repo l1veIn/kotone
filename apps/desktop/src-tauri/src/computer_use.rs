@@ -114,7 +114,7 @@ fn foreground_game() -> Result<WindowInfo, String> {
 
 /// OCR 结果 → 文字框（窗口比例）。识别不可用时返回原因，截图照常给出。
 fn recognize(app: &AppHandle, image: &RgbaImage) -> (Vec<TextBox>, Option<String>) {
-    match crate::automation::ocr_image(app, image) {
+    match crate::ocr_engines::ocr_image(app, image) {
         Ok(lines) => (
             lines
                 .into_iter()
@@ -174,7 +174,7 @@ pub fn screen_text(
     let (capture, _view, _notes) = session.capture_view()?;
     let [rx, ry, rw, rh] = region;
     let crop = crop_ratio(&capture, region);
-    let lines = crate::automation::ocr_image(app, &crop)?;
+    let lines = crate::ocr_engines::ocr_image(app, &crop)?;
     Ok(lines
         .into_iter()
         .filter_map(|(text, rect)| {

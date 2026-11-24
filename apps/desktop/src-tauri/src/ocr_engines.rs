@@ -8,10 +8,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use kotone_core::ocr::OcrBackend;
+use kotone_core::ocr::{OcrBackend, OcrCancel, OcrInput, OcrParams};
 use kotone_core::settings::Settings;
 use kotone_ocr::manifest::{self, ModelPackage};
+use serde_json::Value;
 use tauri::{AppHandle, Manager};
 
 use crate::SharedState;
@@ -77,4 +79,61 @@ impl OcrEngines {
         let package = manifest::package(model_id)?;
         Some(self.local(&kotone_stt::model::models_dir_from(settings), package))
     }
+}
+
+/// 一行识别结果：文字与它在图里的比例框 `[x, y, w, h]`（识别器没给框时为 None）。
+pub type OcrLine = (String, Option<[f64; 4]>);
+
+/// 用陪玩选定的 OCR 模型识别一张图：返回每行文字与它在图里的比例框 `[x, y, w, h]`（0–1）。
+/// 自动化的 `ocr()` 与 `game.look` 共用。
+pub fn ocr_image(
+    app: &AppHandle,
+    image: &kotone_tools::image::RgbaImage,
+) -> Result<Vec<OcrLine>, String> {
+    let settings = app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .clone();
+    let (_, backend) = crate::companion::ocr_backend(app, &settings)?;
+    let info = backend.info();
+    if !info.ready {
+        return Err(format!(
+            "文字识别模型还不能用：{}",
+            info.reason.unwrap_or(info.state)
+        ));
+    }
+    let png = if backend.kind() == kotone_core::ocr::OcrBackendKind::Online {
+        kotone_tools::image::encode_png(image).map_err(|e| e.to_string())?
+    } else {
+        Vec::new()
+    };
+    let output = backend
+        .recognize(
+            &OcrInput {
+                width: image.width(),
+                height: image.height(),
+                rgba: image.pixels(),
+                png: &png,
+            },
+            &OcrParams {
+                language: info.default_language,
+                options: Value::Null,
+            },
+            &OcrCancel::new(),
+            Instant::now() + Duration::from_secs(20),
+        )
+        .map_err(|e| format!("文字识别失败：{e}"))?;
+    let (w, h) = (f64::from(image.width()), f64::from(image.height()));
+    Ok(output
+        .observations
+        .into_iter()
+        .map(|o| {
+            let rect = o
+                .bbox
+                .map(|b| [b.x / w, b.y / h, b.width / w, b.height / h]);
+            (o.text, rect)
+        })
+        .collect())
 }

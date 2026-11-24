@@ -23,7 +23,6 @@ use kotone_core::automation::{
     AutomationScheduler, ChatAction, ProgramAction, ProgramLauncher, ProgramReport, Run, RunAction,
     RunStatus, RunTarget, SpeakAction, MAX_RUNNING_PROGRAMS, MAX_SOURCE_CHARS,
 };
-use kotone_core::ocr::{OcrCancel, OcrInput, OcrParams};
 use kotone_core::reminders::DeliveryKind;
 use kotone_core::tools::{WindowIdentity, WindowInfo, WindowObserver};
 use kotone_platform_windows::inject;
@@ -36,6 +35,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::game_session::GameSession;
+use crate::ocr_engines::ocr_image;
 
 /// 工具 `automation.runs` 最多返回的条数。
 const MAX_LISTED_RUNS: usize = 50;
@@ -401,63 +401,6 @@ impl ScriptHost for DesktopHost {
     fn toast(&self, text: &str) -> Result<(), String> {
         self.deliver(text, DeliveryKind::Danmaku, false)
     }
-}
-
-/// 一行识别结果：文字与它在图里的比例框 `[x, y, w, h]`（识别器没给框时为 None）。
-pub type OcrLine = (String, Option<[f64; 4]>);
-
-/// 用陪玩选定的 OCR 模型识别一张图：返回每行文字与它在图里的比例框 `[x, y, w, h]`（0–1）。
-/// 自动化的 `ocr()` 与 `game.look` 共用。
-pub fn ocr_image(
-    app: &AppHandle,
-    image: &kotone_tools::image::RgbaImage,
-) -> Result<Vec<OcrLine>, String> {
-    let settings = app
-        .state::<crate::SharedState>()
-        .settings
-        .read()
-        .unwrap()
-        .clone();
-    let (_, backend) = crate::companion::ocr_backend(app, &settings)?;
-    let info = backend.info();
-    if !info.ready {
-        return Err(format!(
-            "文字识别模型还不能用：{}",
-            info.reason.unwrap_or(info.state)
-        ));
-    }
-    let png = if backend.kind() == kotone_core::ocr::OcrBackendKind::Online {
-        kotone_tools::image::encode_png(image).map_err(|e| e.to_string())?
-    } else {
-        Vec::new()
-    };
-    let output = backend
-        .recognize(
-            &OcrInput {
-                width: image.width(),
-                height: image.height(),
-                rgba: image.pixels(),
-                png: &png,
-            },
-            &OcrParams {
-                language: info.default_language,
-                options: Value::Null,
-            },
-            &OcrCancel::new(),
-            Instant::now() + Duration::from_secs(20),
-        )
-        .map_err(|e| format!("文字识别失败：{e}"))?;
-    let (w, h) = (f64::from(image.width()), f64::from(image.height()));
-    Ok(output
-        .observations
-        .into_iter()
-        .map(|o| {
-            let rect = o
-                .bbox
-                .map(|b| [b.x / w, b.y / h, b.width / w, b.height / h]);
-            (o.text, rect)
-        })
-        .collect())
 }
 
 /// 执行记录的对外形状（工具与事件）。`with_source = false` 时省略程序源码。
