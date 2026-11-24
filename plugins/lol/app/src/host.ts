@@ -43,6 +43,11 @@ export interface Session {
   /** 宿主上下文变了（主题、显示方式……）；已经写到 <html> 上了，页面按需要更新自己。 */
   onContext(listener: (context: McpUiHostContext) => void): void;
   call(tool: string, args?: Record<string, unknown>): Promise<ToolResult>;
+  /**
+   * 宿主没推结果（`initial` 是 null）、页面自己取第一份时用这个，不用 `call`：取的路上宿主推来了结果（推得晚的宿主），
+   * 给推来的那份，不让自己取的（常常是缺省参数）盖掉宿主的。之后玩家自己点的（换分路、刷新）照常用 `call`。
+   */
+  firstCall(tool: string, args?: Record<string, unknown>): Promise<ToolResult>;
   /** 请宿主换显示方式（卡片上的“打开”）；宿主不支持时什么也不做。 */
   requestDisplayMode(mode: DisplayMode): Promise<void>;
   /** 用宿主打开一个网址（出处链接）。 */
@@ -69,8 +74,15 @@ export function displayOf(context: McpUiHostContext | undefined): DisplayMode {
   return context?.displayMode ?? "inline";
 }
 
-/** 宿主说了是因为调工具才打开的，最多等这么久它把结果推来，不来就自己取。 */
+/** 宿主说了是因为调工具才打开的（toolInfo，或者推来了工具的输入），最多等这么久它把结果推来，不来就自己取。 */
 const RESULT_WAIT_MS = 4000;
+/**
+ * 宿主上下文里没有 toolInfo（规范里是可选的，ext-apps 的 basic-host 就不带）时，先等这么久看宿主推不推工具的输入或结果：
+ * 推了就是因工具打开的，照上面等结果；没推就当是直接打开的，自己取。
+ */
+const HINT_WAIT_MS = 1000;
+/** Kotone 自己的宿主（McpAppFrame）：因工具打开时总带 toolInfo，没带就是插件页直接打开的，不用等。 */
+const KOTONE_HOST = "Kotone";
 
 export async function connect(): Promise<Session> {
   document.documentElement.dataset.display ??= "inline";
@@ -80,19 +92,38 @@ export async function connect(): Promise<Session> {
   let settle!: (result: ToolResult | null) => void;
   let settled = false;
   let input: Record<string, unknown> | null = null;
+  /** 宿主推来过几次结果、最后一次是哪个（firstCall 用：取的路上推来了就给推来的）。 */
+  let pushes = 0;
+  let lastPushed: ToolResult | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const waitFor = (ms: number) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => settle(null), ms);
+  };
   const initial = new Promise<ToolResult | null>((resolve) => {
     settle = (result) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       resolve(result);
     };
   });
   // 处理函数要在 connect 之前挂好：握手一完成宿主就会推工具的输入和结果
   app.ontoolresult = (result) => {
+    pushes += 1;
+    lastPushed = result;
     if (!settled) settle(result);
     else for (const listener of listeners) listener(result);
   };
-  app.ontoolinput = (params) => (input = params.arguments ?? null);
+  let hinting = false;
+  app.ontoolinput = (params) => {
+    input = params.arguments ?? null;
+    // 没带 toolInfo 的宿主推来了工具的输入：是因工具打开的，结果会跟着来，照带了 toolInfo 的等
+    if (hinting && !settled) {
+      hinting = false;
+      waitFor(RESULT_WAIT_MS);
+    }
+  };
   app.ontoolcancelled = () => settle(null);
   app.onhostcontextchanged = () => {
     const context = app.getHostContext() ?? {};
@@ -103,15 +134,32 @@ export async function connect(): Promise<Session> {
   await app.connect();
   const context = app.getHostContext();
   applyContext(context);
-  if (context?.toolInfo) setTimeout(() => settle(null), RESULT_WAIT_MS);
-  else settle(null);
+  if (context?.toolInfo || input) waitFor(RESULT_WAIT_MS);
+  else if (app.getHostVersion()?.name === KOTONE_HOST) settle(null);
+  else {
+    hinting = true;
+    waitFor(HINT_WAIT_MS);
+  }
+  const call = (tool: string, args: Record<string, unknown> = {}) => app.callServerTool({ name: tool, arguments: args });
   return {
     context,
     initial,
     onResult: (listener) => listeners.push(listener),
     input: () => input,
     onContext: (listener) => contextListeners.push(listener),
-    call: (tool, args = {}) => app.callServerTool({ name: tool, arguments: args }),
+    call,
+    firstCall: async (tool, args = {}) => {
+      const before = pushes;
+      const pushed = () => (pushes !== before ? lastPushed : null);
+      try {
+        const own = await call(tool, args);
+        return pushed() ?? own;
+      } catch (error) {
+        const result = pushed();
+        if (result) return result;
+        throw error;
+      }
+    },
     requestDisplayMode: async (mode) => {
       if (!app.getHostContext()?.availableDisplayModes?.includes(mode)) return;
       try {

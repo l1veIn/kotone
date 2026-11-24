@@ -60,12 +60,13 @@
     }
   }
 
-  async function load(next: Record<string, unknown>) {
+  /** `first`：宿主没推结果时取的第一份（推得晚的宿主推来了就用推来的，见 host.ts 的 firstCall）。 */
+  async function load(next: Record<string, unknown>, first = false) {
     lastArgs = next;
     loading = true;
     error = "";
     try {
-      show(await session.call(TOOL_CHAMPION, next));
+      show(await (first ? session.firstCall : session.call)(TOOL_CHAMPION, next));
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -89,7 +90,7 @@
       if (result) show(result);
       else {
         const given = own ?? fromArgs(session.input());
-        if (given) void load(given);
+        if (given) void load(given, true);
       }
     });
     else if (own) void load(own);

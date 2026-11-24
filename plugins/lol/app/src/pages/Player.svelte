@@ -59,12 +59,13 @@
     }
   }
 
-  async function load(next: Record<string, unknown>) {
+  /** `first`：宿主没推结果时取的第一份（推得晚的宿主推来了就用推来的，见 host.ts 的 firstCall）。 */
+  async function load(next: Record<string, unknown>, first = false) {
     lastArgs = next;
     loading = true;
     error = "";
     try {
-      show(await session.call(TOOL_PLAYER, next));
+      show(await (first ? session.firstCall : session.call)(TOOL_PLAYER, next));
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -75,7 +76,7 @@
   onMount(() => {
     session.onResult(show);
     const own = typeof args.puuid === "string" && args.puuid ? { puuid: args.puuid } : typeof args.player === "string" && args.player ? { player: args.player } : null;
-    if (initial) void initial.then((result) => (result ? show(result) : load(own ?? session.input() ?? {})));
+    if (initial) void initial.then((result) => (result ? show(result) : load(own ?? session.input() ?? {}, true)));
     else void load(own ?? {});
   });
 

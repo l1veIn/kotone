@@ -63,14 +63,15 @@
     }
   }
 
-  async function load() {
+  /** `first`：宿主没推结果时取的第一份（推得晚的宿主推来了就用推来的，见 host.ts 的 firstCall）。 */
+  async function load(first = false) {
     const id = gameId || Number(args.gameId ?? session.input()?.gameId ?? 0);
     if (!id) return;
     gameId = id;
     loading = true;
     error = "";
     try {
-      show(await session.call(TOOL_GAME, { gameId: id }));
+      show(await (first ? session.firstCall : session.call)(TOOL_GAME, { gameId: id }));
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -80,7 +81,7 @@
 
   onMount(() => {
     session.onResult(show);
-    if (initial) void initial.then((result) => (result ? show(result) : load()));
+    if (initial) void initial.then((result) => (result ? show(result) : load(true)));
     else void load();
   });
 
