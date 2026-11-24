@@ -1,25 +1,34 @@
 """MCP plan phase 3 (2026-11-25, ADR 039 D5): the League of Legends MCP App shows inside the real Kotone (WebView2).
 
 The real desktop app (debug build) in an isolated KOTONE_HOME=target/mcp-app-real-ui/home, driven through WebView2's
-DevTools port (Playwright connectOverCDP) — no OS input, nothing typed, no sound:
+DevTools port (Playwright connectOverCDP) — no OS input, nothing typed, no sound. A fake LoL client (the HTTPS replay
+of one recorded game from lol_tools_real.py: LCU with a random token + in-game API, phase InProgress) is the client, so
+the pages that need “读客户端数据” have real-shaped data; KOTONE_LOL_LCU / KOTONE_LOL_LIVE point the app at it.
 
-- 插件 → 英雄联盟 → 强度榜: the tab is an iframe (McpAppFrame) pointing at the loopback proxy's sandbox page
-  (http://127.0.0.1:<port>/<key>/sandbox/lol/tier); the handshake finishes (data-phase=ready), which only happens if
-  neither the main window's CSP (frame-src, in both tauri.conf.json and index.html), the App's CSP (HTTP header from
-  the proxy) nor mixed content blocked anything; the inner frame is the App (/<key>/app/lol/tier) and shows the tier
-  list it fetched through the host (lol.tier → Tencent 101: one public request, no account; a network failure shows the
-  App's status line instead and is reported, not failed);
-- the App's frames have no Tauri IPC (`window.__TAURI_INTERNALS__` is undefined in both the sandbox page and the App);
-- the proxy refuses requests without the key (a plain GET to the origin is 404);
+1. 插件 → 英雄联盟: the whole page is the App, starting at “这局” (client data on). The frame is an iframe (McpAppFrame)
+   pointing at the loopback proxy's sandbox page (http://127.0.0.1:<port>/<key>/sandbox/lol/match); the handshake
+   finishes (data-phase=ready), which only happens if neither the main window's CSP (frame-src, in both
+   tauri.conf.json and index.html), the App's CSP (HTTP header from the proxy) nor mixed content blocked anything; the
+   inner frame is the App (/<key>/app/lol/match) and shows this game from the fake client;
+   - the App's frames have no Tauri IPC (commands are refused in both the sandbox page and the App);
+   - the proxy refuses requests without the key (a plain GET to the origin is 404).
+2. Each page opened on its own, the way chat cards, the “这局总结” auto card and `ui.open` open them (2026-11-25 review:
+   战绩 / 单局详情 / 英雄 were marked as Apps in the frontend but not in Rust, so they showed “页面没有” in the real
+   Kotone while the browser preview passed): `kotone.exe tools call ui.open` with parameters → the right sidebar shows
+   the App for 战绩 (the recorded player's puuid), 单局详情 (the recorded gameId), 英雄 (亚索, rift) and 强度榜 (rift, 中);
+   for each: no “页面没有” (mcp-app-failed), handshake ready, the inner frame is /app/lol/<page>, and the page shows
+   its data (战绩 / 单局详情 from the fake client must; 英雄 / 强度榜 need one public request to Tencent 101 — a network
+   failure shows the App's status line instead and is reported, not failed).
 - how many champion icons loaded (client assets → CommunityDragon; informational, needs the network);
-- screenshots of the window and of the App go to target/plugin-shots/round7/.
+- screenshots of the window and of each App go to target/plugin-shots/round7/real-*.png.
 
 The window opens on screen (it is a normal start), but nothing is clicked with the OS — only DevTools. Stops before
 starting if a game is running or in front. Takes target/tmp/real.lock (the shared rule for scripts that open a Kotone
 window). Prerequisite (README 准备): `pnpm -C apps/desktop build:apps`, `pnpm -C apps/desktop build:web`, then
 `cargo build -p kotone-tauri --features tauri/custom-protocol` (the web UI and the App embedded); the exe is copied to
-target/mcp-app-real-ui/bin first (a running exe would block other builds).
-usage: python -X utf8 -I scripts/manual-e2e/mcp_app_real.py [--keep]
+target/mcp-app-real-ui/bin first (a running exe would block other builds). The recording (default
+target/lol-probe/20261123-210745, see lol_tools_real.py) has real player names: it stays under target/.
+usage: python -X utf8 -I scripts/manual-e2e/mcp_app_real.py [--probe DIR] [--gamedata DIR] [--keep]
 """
 import json
 import os
@@ -32,6 +41,7 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import lol_tools_real as lt  # noqa: E402
 from voice_turn_real import GAMES, foreground_process  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -81,8 +91,9 @@ try {
 %s
 } finally { console.log(JSON.stringify(out)); await browser.close(); }
 """ % (PORT, script)
+    # env=ENV：脚本里用 child_process 调 kotone.exe tools call 时连的是这个隔离的实例
     proc = subprocess.run(["node", "--input-type=module", "-e", code], capture_output=True, text=True,
-                          encoding="utf-8", cwd=os.path.join(REPO, "apps", "desktop"))
+                          encoding="utf-8", cwd=os.path.join(REPO, "apps", "desktop"), env=ENV)
     if proc.returncode != 0:
         raise RuntimeError((proc.stdout + proc.stderr)[-3000:])
     return json.loads(proc.stdout.strip().splitlines()[-1])
@@ -104,33 +115,55 @@ def tools_quit():
                    timeout=30)
 
 
-SHOW_TIER = """
-await page.getByTestId("settings-nav-plugins").click();
-await page.getByTestId("plugins-card-lol-open").click();
-await page.getByTestId("plugin-lol-tab-tier").click();
-const frame = page.locator('[data-testid="mcp-app-frame"][data-uri="ui://kotone/lol/tier"]');
-await frame.waitFor({ timeout: 15000 });
+# 等一个 McpAppFrame 握手完（ready / failed），记下它的样子。`frame` 是它的 locator。
+FRAME_STATE = """
 const deadline = Date.now() + 30000;
 while (Date.now() < deadline && !["ready", "failed"].includes(await frame.getAttribute("data-phase"))) await page.waitForTimeout(250);
 out.phase = await frame.getAttribute("data-phase");
+out.uri = await frame.getAttribute("data-uri");
 out.display = await frame.getAttribute("data-display");
 out.plugin = await frame.getAttribute("data-plugin");
 out.src = await frame.getByTestId("mcp-app-iframe").getAttribute("src").catch(() => null);
 out.sandbox = await frame.getByTestId("mcp-app-iframe").getAttribute("sandbox").catch(() => null);
-out.failed = await frame.getByTestId("mcp-app-failed").getAttribute("title").catch(() => null);
-// 等 App 把强度榜（或者一句状态）画出来
-const app = () => page.frames().find((f) => /\\/app\\/lol\\/tier$/.test(f.url()));
-const until = Date.now() + 40000;
+out.failed = await frame.getByTestId("mcp-app-failed").count() ? await frame.getByTestId("mcp-app-failed").getAttribute("title") : null;
+"""
+
+# 等 App（内层 iframe，路径 /app/lol/<页面>）画出 `want` 这个 testid，或者一句状态；记下文字、数量、图
+APP_CONTENT = """
+const appFrame = () => page.frames().filter((f) => f.url().endsWith("/app/lol/" + PAGE)).pop();
+const until = Date.now() + 45000;
 while (Date.now() < until) {
-  const f = app();
-  const text = f ? await f.locator("body").innerText().catch(() => "") : "";
-  if (/T0|T1|腾讯|没读到|查不到|连不上/.test(text)) break;
+  const f = appFrame();
+  if (f) {
+    const n = await f.locator(`[data-testid="${WANT}"]`).count().catch(() => 0);
+    const status = await f.locator('[data-testid="lol-app-status"]').count().catch(() => 0);
+    if (n > 0 || status > 0) break;
+  }
   await page.waitForTimeout(500);
 }
-const inner = app();
-const sandboxFrame = page.frames().find((f) => /\\/sandbox\\/lol\\/tier$/.test(f.url()));
+const inner = appFrame();
 out.appUrl = inner ? inner.url() : null;
+out.count = inner ? await inner.locator(`[data-testid="${WANT}"]`).count() : 0;
+out.status = inner && await inner.locator('[data-testid="lol-app-status"]').count()
+  ? (await inner.locator('[data-testid="lol-app-status"]').first().innerText()).slice(0, 200) : null;
 out.appText = inner ? (await inner.locator("body").innerText()).slice(0, 600) : "";
+// 图多给一点时间（素材层 → CommunityDragon）
+await page.waitForTimeout(1500);
+out.icons = inner ? await inner.evaluate(() => {
+  const imgs = [...document.querySelectorAll("img")];
+  return { total: imgs.length, loaded: imgs.filter((i) => i.complete && i.naturalWidth > 0).length, sample: imgs.slice(0, 2).map((i) => i.currentSrc.replace(/\\/[0-9a-f]{64}\\//, "/<key>/")) };
+}) : null;
+"""
+
+SHOW_PLUGIN_PAGE = """
+await page.getByTestId("settings-nav-plugins").click();
+await page.getByTestId("plugins-card-lol-open").click();
+const frame = page.getByTestId("plugin-page-lol").getByTestId("mcp-app-frame");
+await frame.waitFor({ timeout: 15000 });
+%s
+const PAGE = "match", WANT = "lol-match-player";
+%s
+const sandboxFrame = page.frames().find((f) => /\\/sandbox\\/lol\\/match$/.test(f.url()));
 // Tauri 在 WebView2 里把它的初始化脚本也放进了 iframe（__TAURI_INTERNALS__ 在），要看的是命令调不调得通：
 // 回环代理的源不在任何 capability 里（没有 remote.urls），Tauri 应该拒绝
 // 回不来也可能是“跑了但回不到 iframe”：另外调一个会留痕的（log_frontend_error 往 kotone.log 写一行），看日志里有没有
@@ -152,13 +185,48 @@ out.appIpc = inner ? await tryInvoke(inner, "IPC-PROBE-FROM-APP") : null;
 out.sandboxIpc = sandboxFrame ? await tryInvoke(sandboxFrame, "IPC-PROBE-FROM-SANDBOX") : null;
 // 对照：主窗口自己调同一个命令，日志里应该有
 await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("log_frontend_error", { context: "ipc-probe", message: "IPC-PROBE-FROM-MAIN" }));
-out.icons = inner ? await inner.evaluate(() => {
-  const imgs = [...document.querySelectorAll("img")];
-  return { total: imgs.length, loaded: imgs.filter((i) => i.complete && i.naturalWidth > 0).length, sample: imgs.slice(0, 2).map((i) => i.currentSrc.replace(/\\/[0-9a-f]{64}\\//, "/<key>/")) };
-}) : null;
 await page.screenshot({ path: %s });
 await frame.screenshot({ path: %s });
 """
+
+# 在连着调试端口的时候再 ui.open（kotone.exe tools call，和她、外部 Agent 打开页面是同一条路）：连上之前就已经在的
+# 跨源 iframe 里的子框架，connectOverCDP 后 Playwright 看不到（第一次跑时战绩、单局详情、强度榜都是“no App frame”，
+# 截图里页面其实好好的）
+SHOW_SIDEBAR_PAGE = """
+const URI = %s;
+const { spawnSync } = await import("node:child_process");
+const opened = spawnSync(%s, ["tools", "call", "ui.open", "--args-file", "-", "--timeout-ms", "30000"],
+  { input: JSON.stringify({ page: URI, params: %s }), encoding: "utf-8", timeout: 60000 });
+try { out.opened = JSON.parse(opened.stdout); } catch { out.opened = { ok: false, raw: String(opened.stdout) + String(opened.stderr) }; }
+const frame = page.locator(`[data-testid="sidebar-plugin-page"][data-uri="${URI}"] [data-testid="mcp-app-frame"][data-uri="${URI}"]`);
+await frame.waitFor({ timeout: 20000 });
+%s
+const PAGE = %s, WANT = %s;
+%s
+await page.screenshot({ path: %s });
+await frame.screenshot({ path: %s });
+"""
+
+# 单独打开的页面（照聊天卡片、“这局总结”自动卡片、ui.open 的路）：(页面, 参数, 有数据时出现的 testid, 要不要网)
+def sidebar_pages(rec):
+    return [
+        ("player", {"puuid": rec.me["puuid"]}, "lol-player-game", False),
+        ("game", {"gameId": (rec.game_detail or {}).get("gameId") or rec.session["gameData"]["gameId"]},
+         "lol-game-player", False),
+        ("champion", {"champion": "亚索", "mode": "rift"}, "lol-champion-name", True),
+        ("tier", {"mode": "rift", "lane": "中"}, "lol-app-tier-row", True),
+    ]
+
+
+def frame_checks(where, r, page):
+    check(f"{where}: an iframe on the loopback proxy's sandbox page for {page}",
+          bool(r.get("src")) and r["src"].startswith("http://127.0.0.1:") and f"/sandbox/lol/{page}" in r["src"],
+          (r.get("src") or "").split("/")[2] if r.get("src") else f"no iframe, failed: {r.get('failed')}")
+    check(f"{where}: not “页面没有”, and the MCP Apps handshake finished in WebView2",
+          r.get("phase") == "ready" and r.get("failed") is None, f"phase {r.get('phase')} {r.get('failed') or ''}")
+    check(f"{where}: the inner frame is the App from the proxy's /app/lol/{page} path",
+          bool(r.get("appUrl")) and r["appUrl"].endswith(f"/app/lol/{page}") and r["appUrl"].startswith("http://127.0.0.1:"),
+          r.get("appUrl") or "no App frame")
 
 
 def main():
@@ -170,12 +238,19 @@ def main():
     except FileExistsError:
         raise SystemExit(f"STOP: {LOCK} exists (another real-machine script is running)")
     app = None
+    server = None
     try:
         shutil.rmtree(WORK, ignore_errors=True)
         os.makedirs(HOME)
         os.makedirs(BIN)
         os.makedirs(SHOTS, exist_ok=True)
         shutil.copy2(SRC_EXE, EXE)
+        # 假客户端（lol_tools_real.py 的录像回放；证书写在这个脚本的工作目录里）
+        lt.bt.WORK = WORK
+        lt.REC = lt.Recording(lt.PROBE, lt.GAMEDATA)
+        server, port = lt.serve()
+        ENV.update(KOTONE_LOL_LCU=f"{port}:{lt.TOKEN}", KOTONE_LOL_LIVE=f"https://127.0.0.1:{port}")
+        print(f"fake client on 127.0.0.1:{port} (recording {os.path.basename(lt.PROBE)}, queue {lt.REC.queue()})")
         with open(os.path.join(HOME, "config.json"), "w", encoding="utf-8") as f:
             json.dump({"ui": {"firstRunCompleted": True}, "adminPromptDismissed": True,
                        "toolService": {"enabled": True}, "hotkey": {"key": "F24", "mode": "toggle"},
@@ -184,26 +259,25 @@ def main():
                                      "wake": {"enabled": False}}}, f)
         app = subprocess.Popen([EXE], env=ENV)
         wait_ui()
-        r = ui(SHOW_TIER % (json.dumps(os.path.join(SHOTS, "real-tier-app-window.png")),
-                            json.dumps(os.path.join(SHOTS, "real-tier-app.png"))))
-        print("  frame:", json.dumps({k: r.get(k) for k in ("phase", "display", "plugin", "failed")}, ensure_ascii=False))
+        # 后台先连上假客户端、把 10 个人的战绩查好（“这局”要有人）
+        time.sleep(8)
+
+        # 1. 插件页：整页是 App，从“这局”开始
+        r = ui(SHOW_PLUGIN_PAGE % (FRAME_STATE, APP_CONTENT,
+                                   json.dumps(os.path.join(SHOTS, "real-plugin-page-window.png")),
+                                   json.dumps(os.path.join(SHOTS, "real-match-app.png"))))
+        print("  frame:", json.dumps({k: r.get(k) for k in ("phase", "uri", "display", "plugin", "failed")},
+                                     ensure_ascii=False))
         print("  app text:", (r.get("appText") or "").replace("\n", " ")[:300])
         print("  icons:", json.dumps(r.get("icons"), ensure_ascii=False))
-        check("the 强度榜 tab is an iframe on the loopback proxy's sandbox page",
-              bool(r.get("src")) and r["src"].startswith("http://127.0.0.1:") and "/sandbox/lol/tier" in r["src"],
-              (r.get("src") or "").split("/")[2] if r.get("src") else "no iframe")
+        check("插件 → 英雄联盟 starts the App at 这局 (client data on)", r.get("uri") == "ui://kotone/lol/match",
+              str(r.get("uri")))
+        frame_checks("plugin page", r, "match")
         check("sandbox attribute is allow-scripts allow-same-origin allow-forms",
               r.get("sandbox") == "allow-scripts allow-same-origin allow-forms")
-        check("the MCP Apps handshake finished in WebView2 (CSP / frame-src / mixed content did not block it)",
-              r.get("phase") == "ready", f"phase {r.get('phase')} {r.get('failed') or ''}")
         check("fullscreen, bound to the lol plugin", r.get("display") == "fullscreen" and r.get("plugin") == "lol")
-        check("the inner frame is the App from the proxy's /app/ path",
-              bool(r.get("appUrl")) and r["appUrl"].endswith("/app/lol/tier") and r["appUrl"].startswith("http://127.0.0.1:"))
-        text = r.get("appText") or ""
-        if "T0" in text or "T1" in text:
-            check("the App shows the tier list it fetched through the host (lol.tier)", True, text[:80].replace("\n", " "))
-        else:
-            check("the App shows something (no data: network / Tencent 101?)", bool(text.strip()), text[:200])
+        check("这局 shows the players of the recorded game (from the fake client)", r.get("count", 0) >= 10,
+              f"{r.get('count')} players; status {r.get('status')}")
         print("  IPC from the App:", json.dumps(r.get("appIpc"), ensure_ascii=False))
         print("  IPC from the sandbox page:", json.dumps(r.get("sandboxIpc"), ensure_ascii=False))
         allowed = [f"{where}:{cmd}" for where in ("appIpc", "sandboxIpc") for cmd, v in (r.get(where) or {}).items()
@@ -220,13 +294,38 @@ def main():
               f"answered: {allowed}, ran (in kotone.log): {ran}, main window probe logged: {'IPC-PROBE-FROM-MAIN' in log}")
         origin = "/".join((r.get("src") or "http://127.0.0.1:1/").split("/")[:3])
         try:
-            urllib.request.urlopen(origin + "/sandbox/lol/tier", timeout=5)
+            urllib.request.urlopen(origin + "/sandbox/lol/match", timeout=5)
             status = 200
         except urllib.error.HTTPError as e:
             status = e.code
         except Exception as e:  # noqa: BLE001
             status = str(e)
         check("the proxy refuses a request without the key", status == 404, str(status))
+
+        # 2. 每一页单独打开（ui.open → 右侧栏；聊天卡片和“这局总结”自动卡片走的是同一个 plugin_app）
+        for page, params, want, online in sidebar_pages(lt.REC):
+            uri = f"ui://kotone/lol/{page}"
+            try:
+                r = ui(SHOW_SIDEBAR_PAGE % (json.dumps(uri), json.dumps(EXE), json.dumps(params, ensure_ascii=False),
+                                            FRAME_STATE, json.dumps(page), json.dumps(want), APP_CONTENT,
+                                            json.dumps(os.path.join(SHOTS, f"real-{page}-app-window.png")),
+                                            json.dumps(os.path.join(SHOTS, f"real-{page}-app.png"))))
+            except RuntimeError as e:
+                check(f"ui.open {uri} shows the page in the right sidebar", False, str(e)[-300:])
+                continue
+            opened = r.get("opened") or {}
+            check(f"ui.open {uri} is accepted", opened.get("ok"), json.dumps(opened, ensure_ascii=False)[:200])
+            print(f"  [{page}] frame:", json.dumps({k: r.get(k) for k in ("phase", "display", "plugin", "failed")},
+                                                   ensure_ascii=False))
+            print(f"  [{page}] app text:", (r.get("appText") or "").replace("\n", " ")[:240])
+            print(f"  [{page}] icons:", json.dumps(r.get("icons"), ensure_ascii=False))
+            frame_checks(f"right sidebar {page}", r, page)
+            if r.get("count", 0) > 0 or not online:
+                check(f"{page} shows its data ({want} × {r.get('count')})", r.get("count", 0) > 0,
+                      f"status {r.get('status')}")
+            else:
+                check(f"{page} shows something (no data: network / Tencent 101?)",
+                      bool(r.get("status") or (r.get("appText") or "").strip()), r.get("status") or "")
         print("  screenshots:", SHOTS)
     finally:
         try:
@@ -239,6 +338,9 @@ def main():
             except subprocess.TimeoutExpired:
                 app.terminate()
                 app.wait(10)
+        if server is not None:
+            server.shutdown()
+            print("fake client hits:", dict(lt.HITS))
         os.rmdir(LOCK)
         if "--keep" not in sys.argv:
             for _ in range(10):

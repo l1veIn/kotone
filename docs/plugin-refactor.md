@@ -807,6 +807,8 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 - 截图（自己看过，和样张对过）：`target/plugin-shots/round7/lol-app-*.png`（App 单独打开：这局四种状态、亮暗、窄屏、英文、卡片 420 / 360、战绩、单局详情、这局总结卡片、英雄峡谷 / 海斗、强度榜）和 `kotone-*.png`（Kotone 里：插件页、设置、聊天卡片、右侧栏；预览里的图是假代理给的色块）。
 - 没跑：真机 `lol_tools_real.py`、`game_events_real.py`（要重编整个桌面端，`real.lock` 一直有人在用）。要主会话提交以后跑一遍：给琴音的字有单元测试管着，选人阶段的“这局”只能在真客户端里看。
 
+**审查发现、已修（2026-11-25 夜）**：前端（`ui/index.ts`）和浏览器预览的模拟（`pluginsMock.ts`）把五页都标成了 App，Rust 的 `app.rs` `APP_PAGES` 却只有强度榜和这局，旧的 Svelte 页面又删了，于是真 Kotone 里单独打开战绩、单局详情、英雄（聊天卡片、结算后的“这局总结”自动卡片、`ui.open`、外部宿主）都是“页面没有”；预览和 Playwright 照过，真机只开过强度榜和这局，`mcp_app_resources_real.py` 还把“这三页不是 App”写成了断言。修法：`APP_PAGES` 补齐五页（数据开关照清单的 `needs`，CSP 和另外两页一样只有 CommunityDragon），`kotone.exe mcp` 里 `kotone_lol_player` / `game` / `champion` 也连上了自己的页面。加了边界测试（原则 16）：插件里“清单除设置以外每页都是 App、都写了 `needs`”；桌面端 `plugin_apps::tests::app_pages_agree_with_the_frontend` 读 `plugins/<id>/ui/index.ts` 和 `pluginsMock.ts` 的文本，和每个内置插件的 `resource` 比集合、和清单的 `needs` 比开关，三处对不上就报错（把 `APP_PAGES` 改回两页试过，会报）。真机：`mcp_app_resources_real.py` 改回事实 22/22；`mcp_app_real.py` 接上假客户端，插件页从“这局”开始，再用 `ui.open` 在右侧栏单独打开战绩、单局详情、英雄、强度榜，29/29，截图 `target/plugin-shots/round7/real-*.png`。
+
 ### 设置重排（2026-11-25）
 
 交接第十一节第 8 条。玩家原话：“陪玩相关的设置项我觉得都应该在游戏陪玩-角色页面配置吧，现在这个页面有角色、记忆、技能，再加上唤醒、交互、权限、用量我觉得很合理啊。然后模型选择这块，我觉得还是放在 chat 聊天吧。”

@@ -7,14 +7,16 @@ it):
   tool service on, the League of Legends plugin with its defaults (it only reads the local client, which is not running
   tonight), speech volume 0, hotkeys and the wake word off, no AI connection;
 - initialize (capabilities: `resources` and the MCP Apps extension `io.modelcontextprotocol/ui`) →
-  notifications/initialized → resources/list (the pages that are MCP Apps, `plugins/lol/src/app.rs` APP_PAGES:
-  ui://kotone/lol/tier and ui://kotone/lol/match, text/html;profile=mcp-app, CSP declares CommunityDragon; the other
-  pages are not listed: player / game / champion are drawn inside the same bundle by its own navigation, settings is the
-  host's page) → resources/read of each App (a whole HTML document with `<meta name="kotone:page" content="<page>">`;
-  the real bundle when `pnpm -C apps/desktop build:apps` ran before the cargo build, otherwise the placeholder page —
-  reported, not failed) → resources/read of a page that is not an App (the settings page: error -32002) →
-  tools/list (`kotone_lol_tier` and `kotone_lol_scout` have `_meta.ui.resourceUri`, `kotone_lol_player` does not (its
-  page is not offered on its own), `kotone_lol_champions` is listed with visibility ["app"]);
+  notifications/initialized → resources/list (the pages that are MCP Apps, `plugins/lol/src/app.rs` APP_PAGES: all
+  five content pages — ui://kotone/lol/match, player, game, champion, tier — text/html;profile=mcp-app, CSP declares
+  CommunityDragon; every one can be opened on its own (chat cards, the “这局总结” auto card, ui.open, an external host)
+  and then navigates inside the same bundle; the settings page is the host's page and is not listed) → resources/read
+  of each App (a whole HTML document with `<meta name="kotone:page" content="<page>">`; the real bundle when
+  `pnpm -C apps/desktop build:apps` ran before the cargo build, otherwise the placeholder page — reported, not failed)
+  → resources/read of a page that is not an App (the settings page: error -32002) → tools/list (`kotone_lol_scout`,
+  `kotone_lol_player`, `kotone_lol_game`, `kotone_lol_champion`, `kotone_lol_tier` have `_meta.ui.resourceUri` for
+  their page; `kotone_lol_champions` is listed with visibility ["app"] and does not link the settings page, which
+  external hosts cannot read);
 - unless `--offline`: tools/call kotone_lol_tier {mode: rift, lane: 中} — one public request to Tencent 101 (no account,
   no key): the result follows MCP Apps (content = the few lines for the model, structuredContent = the page data).
   A network failure is reported as SKIP, not FAIL.
@@ -51,11 +53,18 @@ ENV.pop("KOTONE_EXE", None)
 APP_MIME = "text/html;profile=mcp-app"
 TIER = "ui://kotone/lol/tier"
 MATCH = "ui://kotone/lol/match"
-# 做成 MCP App 的页面（plugins/lol/src/app.rs 的 APP_PAGES）→ 页面标记
-APPS = {TIER: "tier", MATCH: "match"}
-# 清单里有、但不单独作为资源给的页面：战绩 / 单局详情 / 英雄在同一个打包里由 App 自己导航过去，设置是宿主的页面
-NOT_APPS = ("ui://kotone/lol/player", "ui://kotone/lol/game", "ui://kotone/lol/champion", "ui://kotone/lol/settings")
+PLAYER = "ui://kotone/lol/player"
+GAME = "ui://kotone/lol/game"
+CHAMPION = "ui://kotone/lol/champion"
+# 做成 MCP App 的页面（plugins/lol/src/app.rs 的 APP_PAGES）→ 页面标记。五页都能单独打开（聊天卡片、自动卡片、
+# ui.open、外部宿主），打开以后在同一个打包里自己导航
+APPS = {MATCH: "match", PLAYER: "player", GAME: "game", CHAMPION: "champion", TIER: "tier"}
+# 每一页的工具（_meta.ui.resourceUri 连着它）
+PAGE_TOOLS = {"kotone_lol_scout": MATCH, "kotone_lol_player": PLAYER, "kotone_lol_game": GAME,
+              "kotone_lol_champion": CHAMPION, "kotone_lol_tier": TIER}
+# 清单里有、但不是 App 的页面：设置是宿主的页面
 SETTINGS = "ui://kotone/lol/settings"
+NOT_APPS = (SETTINGS,)
 # 会打字、出声、操作客户端的：这个脚本一个都不调
 FORBIDDEN = {"kotone_lol_client", "kotone_game_chat_send", "kotone_voice_chat_say", "kotone_call"}
 RESULTS = []
@@ -165,7 +174,7 @@ def session(offline):
             check(f"resources/list has the {uri} App ({APP_MIME}); its CSP declares CommunityDragon (icons)",
                   app and app.get("mimeType") == APP_MIME and "https://raw.communitydragon.org" in domains,
                   json.dumps(app, ensure_ascii=False) if app else "missing")
-        check("pages that are not offered as Apps on their own (player, game, champion, settings) are not listed",
+        check("the settings page (the host's page, not an App) is not listed",
               not [uri for uri in NOT_APPS if uri in listed], str([uri for uri in NOT_APPS if uri in listed]))
 
         for uri, page in APPS.items():
@@ -186,17 +195,17 @@ def session(offline):
 
         tools = {t["name"]: t for t in mcp.request("tools/list")["result"]["tools"]}
         meta = lambda name: tools.get(name, {}).get("_meta", {})  # noqa: E731
-        print("  kotone_lol_tier _meta:", json.dumps(meta("kotone_lol_tier"), ensure_ascii=False))
-        print("  kotone_lol_scout _meta:", json.dumps(meta("kotone_lol_scout"), ensure_ascii=False))
-        for tool, uri in (("kotone_lol_tier", TIER), ("kotone_lol_scout", MATCH)):
+        for tool, uri in PAGE_TOOLS.items():
+            print(f"  {tool} _meta:", json.dumps(meta(tool), ensure_ascii=False))
             check(f"{tool} links its App {uri} (_meta.ui.resourceUri, and the old flat key)",
                   meta(tool).get("ui", {}).get("resourceUri") == uri and meta(tool).get("ui/resourceUri") == uri)
-        check("kotone_lol_player does not link a page external hosts cannot read",
-              "kotone_lol_player" in tools and "resourceUri" not in meta("kotone_lol_player").get("ui", {})
-              and "ui/resourceUri" not in meta("kotone_lol_player"),
-              json.dumps(meta("kotone_lol_player"), ensure_ascii=False))
-        check("an app-only tool is listed with visibility [\"app\"]",
-              meta("kotone_lol_champions").get("ui", {}).get("visibility") == ["app"])
+        check("app-only tools are listed with visibility [\"app\"] (kotone_lol_game, kotone_lol_champions)",
+              meta("kotone_lol_game").get("ui", {}).get("visibility") == ["app"]
+              and meta("kotone_lol_champions").get("ui", {}).get("visibility") == ["app"])
+        check("kotone_lol_champions does not link the settings page (external hosts cannot read it)",
+              "kotone_lol_champions" in tools and "resourceUri" not in meta("kotone_lol_champions").get("ui", {})
+              and "ui/resourceUri" not in meta("kotone_lol_champions"),
+              json.dumps(meta("kotone_lol_champions"), ensure_ascii=False))
 
         if offline:
             print("SKIP tools/call kotone_lol_tier (--offline)")

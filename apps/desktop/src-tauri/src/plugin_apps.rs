@@ -184,24 +184,48 @@ impl crate::app_proxy::Source for RemoteSource {
 mod tests {
     use super::*;
 
-    /// 英雄联盟的强度榜是 App（没打包时是占位页），还没换过来的页面不是；关掉插件或“用网上的统计”就没有了；覆盖层不是资源。
+    const LOL_CLIENT_APPS: [&str; 3] = [
+        "ui://kotone/lol/match",
+        "ui://kotone/lol/player",
+        "ui://kotone/lol/game",
+    ];
+    const LOL_STATS_APPS: [&str; 2] = ["ui://kotone/lol/champion", "ui://kotone/lol/tier"];
+
+    fn listed_uris(settings: &Settings) -> Vec<String> {
+        list(settings)
+            .iter()
+            .filter_map(|r| r["uri"].as_str().map(str::to_string))
+            .collect()
+    }
+
+    fn with_source_off(source: &str) -> Settings {
+        let mut s = Settings::default();
+        s.plugins
+            .entry("lol".into())
+            .or_default()
+            .sources
+            .insert(source.into(), false);
+        s
+    }
+
+    /// 英雄联盟的五页（这局、战绩、单局详情、英雄、强度榜）都是 App（没打包时是占位页），设置页不是；页面要的数据开关
+    /// 关着就没有那一页（“读客户端数据”管前三页，“用网上的统计”管后两页）；关掉插件全没有；覆盖层不是资源。
     #[test]
     fn app_pages_follow_the_switches() {
         let s = Settings::default();
-        let tier = read(&s, "ui://kotone/lol/tier").unwrap();
-        assert_eq!(tier.mime_type, kotone_plugin_api::APP_MIME);
-        assert!(tier.text.contains("kotone:page"));
+        let uris = listed_uris(&s);
+        for uri in LOL_CLIENT_APPS.iter().chain(&LOL_STATS_APPS) {
+            let r = read(&s, uri).unwrap_or_else(|e| panic!("{uri}：{e}"));
+            assert_eq!(r.mime_type, kotone_plugin_api::APP_MIME, "{uri}");
+            let page = uri.rsplit('/').next().unwrap();
+            assert!(
+                r.text
+                    .contains(&format!("<meta name=\"kotone:page\" content=\"{page}\">")),
+                "{uri}"
+            );
+            assert!(uris.iter().any(|u| u == uri), "{uri} 不在 {uris:?}");
+        }
         let listed = list(&s);
-        let uris: Vec<&str> = listed.iter().filter_map(|r| r["uri"].as_str()).collect();
-        assert!(uris.contains(&"ui://kotone/lol/tier"), "{uris:?}");
-        // 还没换成 App 的页面（一页页换过来，挑一个现在还不是的）
-        let not_app = kotone_plugin_lol::manifest()
-            .pages
-            .iter()
-            .map(|p| p.uri.as_str())
-            .find(|uri| !kotone_plugin_lol::app::APP_PAGES.contains(uri))
-            .expect("还有没换成 App 的页面");
-        assert!(!uris.contains(&not_app), "{uris:?}");
         let tier_listing = listed
             .iter()
             .find(|r| r["uri"] == "ui://kotone/lol/tier")
@@ -211,26 +235,275 @@ mod tests {
             tier_listing["_meta"]["ui"]["csp"]["resourceDomains"][0],
             "https://raw.communitydragon.org"
         );
+        let player_listing = listed
+            .iter()
+            .find(|r| r["uri"] == "ui://kotone/lol/player")
+            .unwrap();
+        assert_eq!(player_listing["name"], "战绩");
 
-        assert!(read(&s, not_app).unwrap_err().contains("还不是 App"));
+        // 设置是宿主的页面，不是 App
+        assert!(!uris.iter().any(|u| u == "ui://kotone/lol/settings"));
+        assert!(read(&s, "ui://kotone/lol/settings")
+            .unwrap_err()
+            .contains("不是 App"));
         assert!(read(&s, "ui://kotone/lol/champ-select").is_err(), "覆盖层");
         assert!(read(&s, "ui://kotone/nope/tier").is_err());
 
-        let mut off = Settings::default();
-        off.plugins
-            .entry("lol".into())
-            .or_default()
-            .sources
-            .insert("stats".into(), false);
-        assert!(read(&off, "ui://kotone/lol/tier")
-            .unwrap_err()
-            .contains("关着"));
-        assert!(list(&off)
-            .iter()
-            .all(|r| r["uri"] != "ui://kotone/lol/tier"));
+        for (source, gone, kept) in [
+            ("stats", &LOL_STATS_APPS[..], &LOL_CLIENT_APPS[..]),
+            ("client", &LOL_CLIENT_APPS[..], &LOL_STATS_APPS[..]),
+        ] {
+            let off = with_source_off(source);
+            let uris = listed_uris(&off);
+            for uri in gone {
+                assert!(read(&off, uri).unwrap_err().contains("关着"), "{uri}");
+                assert!(!uris.iter().any(|u| u == uri), "{source} 关着还列了 {uri}");
+            }
+            for uri in kept {
+                assert!(read(&off, uri).is_ok(), "{source} 关着不该影响 {uri}");
+            }
+        }
         let mut disabled = Settings::default();
         disabled.plugins.entry("lol".into()).or_default().enabled = Some(false);
         assert!(read(&disabled, "ui://kotone/lol/tier").is_err());
+        assert!(read(&disabled, "ui://kotone/lol/player").is_err());
+    }
+
+    /// 哪些页面是 App，三处要一样（原则 16：边界写成测试）：
+    /// - Rust：插件的 `resource` 给不给（英雄联盟是 `plugins/lol/src/app.rs` 的 `APP_PAGES`）；
+    /// - 前端：`plugins/<id>/ui/index.ts` 的 `views` 里标了 `app: true` 的（宿主据此用 McpAppFrame 打开它）；
+    /// - 浏览器预览的模拟：`apps/desktop/src/lib/ipc/pluginsMock.ts` 的 `APP_PAGES`（连它记的数据开关和清单的 `needs`）。
+    ///
+    /// 2026-11-25 前端和模拟标了五页、Rust 只有两页：真 Kotone 里战绩、单局详情、英雄打开就是“页面没有”，
+    /// 浏览器预览和 Playwright 却照过。
+    #[test]
+    fn app_pages_agree_with_the_frontend() {
+        use std::collections::{BTreeMap, BTreeSet};
+        use std::path::Path;
+
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let read_file = |path: &Path| {
+            std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}：{e}", path.display()))
+        };
+        // 地址 → 清单的 needs，所有内置插件做成 App 的页面
+        let mut rust_apps: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        // 常量名 → 地址（所有插件的 ui/；同名不同值的记成 None，用到时报错）
+        let mut all_constants: BTreeMap<String, Option<String>> = BTreeMap::new();
+        for plugin in crate::plugins::registry() {
+            let m = plugin.manifest();
+            let ui = repo.join("plugins").join(&m.id).join("ui");
+            let constants = ts_ui_constants(&ui);
+            for (name, uri) in &constants {
+                let entry = all_constants
+                    .entry(name.clone())
+                    .or_insert_with(|| Some(uri.clone()));
+                if entry.as_deref() != Some(uri.as_str()) {
+                    *entry = None;
+                }
+            }
+            let rust: BTreeSet<String> = m
+                .pages
+                .iter()
+                .filter(|p| plugin.resource(&p.uri).is_some())
+                .map(|p| p.uri.clone())
+                .collect();
+            let index = ui.join("index.ts");
+            let front = if index.exists() {
+                ts_app_views(&read_file(&index), |name| constants.get(name).cloned())
+            } else {
+                BTreeSet::new()
+            };
+            assert_eq!(
+                front,
+                rust,
+                "「{}」：{} 里标了 app: true 的页面和插件的 resource（Rust）对不上",
+                m.name,
+                index.display()
+            );
+            for uri in rust {
+                let needs = m.page(&uri).unwrap().needs.clone();
+                rust_apps.insert(uri, needs);
+            }
+        }
+        assert!(
+            rust_apps.contains_key("ui://kotone/lol/player")
+                && rust_apps.contains_key("ui://kotone/lol/tier"),
+            "{rust_apps:?}"
+        );
+
+        let mock_path = repo.join("apps/desktop/src/lib/ipc/pluginsMock.ts");
+        let mock = ts_mock_app_pages(&read_file(&mock_path), |name| {
+            match all_constants.get(name) {
+                Some(Some(uri)) => Some(uri.clone()),
+                Some(None) => panic!("{name} 在好几个插件里是不同的地址，模拟里别用它"),
+                None => None,
+            }
+        });
+        assert_eq!(
+            mock.keys().collect::<BTreeSet<_>>(),
+            rust_apps.keys().collect::<BTreeSet<_>>(),
+            "pluginsMock.ts 的 APP_PAGES 和插件的 resource（Rust）对不上"
+        );
+        for (uri, source) in &mock {
+            assert_eq!(
+                std::slice::from_ref(source),
+                rust_apps[uri].as_slice(),
+                "{uri}：pluginsMock.ts 记的数据开关和清单的 needs 对不上"
+            );
+        }
+    }
+
+    /// 去掉整行注释（`//`、`/*`、` *` 开头的行；`ui://` 里的 `//` 不算）。
+    fn ts_strip_comment_lines(src: &str) -> String {
+        src.lines()
+            .filter(|line| {
+                let t = line.trim_start();
+                !(t.starts_with("//") || t.starts_with("/*") || t.starts_with('*'))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// 从 `at` 起的字符串字面量（`"…"` 或 `'…'`）的内容。
+    fn ts_string_at(src: &str) -> Option<String> {
+        let quote = src.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+        let rest = &src[1..];
+        rest.find(quote).map(|end| rest[..end].to_string())
+    }
+
+    /// `dir` 下（含子目录，不进 node_modules）`.ts` 文件里的 `export const NAME = "ui://…"`。
+    fn ts_ui_constants(dir: &std::path::Path) -> std::collections::BTreeMap<String, String> {
+        let mut out = std::collections::BTreeMap::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if path.file_name().is_some_and(|n| n != "node_modules") {
+                        stack.push(path);
+                    }
+                    continue;
+                }
+                if path.extension() != Some(std::ffi::OsStr::new("ts")) {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                for line in text.lines() {
+                    let Some(rest) = line.trim_start().strip_prefix("export const ") else {
+                        continue;
+                    };
+                    let Some((name, value)) = rest.split_once('=') else {
+                        continue;
+                    };
+                    let name = name.split(':').next().unwrap().trim();
+                    if let Some(uri) = ts_string_at(value.trim_start()) {
+                        if uri.starts_with("ui://") {
+                            out.insert(name.to_string(), uri);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// 对象字面量里一项的键：`[NAME]`（查常量）或 `"ui://…"`。`before` 是 `{` 前面的文字（以 `:` 结尾）。
+    fn ts_key_before(before: &str, constant: &impl Fn(&str) -> Option<String>) -> String {
+        let key = before
+            .trim_end()
+            .strip_suffix(':')
+            .unwrap_or_else(|| panic!("看不懂这一项的键：…{}", tail(before)))
+            .trim_end();
+        if let Some(inner) = key.strip_suffix(']') {
+            let name = inner[inner.rfind('[').expect("[NAME]") + 1..].trim();
+            return constant(name).unwrap_or_else(|| {
+                panic!("找不到常量 {name}（要是 export const {name} = \"ui://…\"）")
+            });
+        }
+        if let Some(inner) = key.strip_suffix('"').or_else(|| key.strip_suffix('\'')) {
+            let start = inner.rfind(['"', '\'']).expect("字符串键");
+            return inner[start + 1..].to_string();
+        }
+        panic!("看不懂这一项的键：…{}", tail(key))
+    }
+
+    fn tail(s: &str) -> &str {
+        let start = s.char_indices().rev().nth(60).map_or(0, |(i, _)| i);
+        &s[start..]
+    }
+
+    /// `ui/index.ts` 里标了 `app: true` 的页面（`[PAGE_X]: { app: true, … }`，可以跨行）。
+    fn ts_app_views(
+        src: &str,
+        constant: impl Fn(&str) -> Option<String>,
+    ) -> std::collections::BTreeSet<String> {
+        let src = ts_strip_comment_lines(src);
+        let mut out = std::collections::BTreeSet::new();
+        for (at, _) in src.match_indices("app:") {
+            let after = src[at + 4..].trim_start();
+            let word_before = src[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$');
+            if word_before || !after.starts_with("true") {
+                continue;
+            }
+            // 往回找包着它的 `{`
+            let mut depth = 0usize;
+            let brace = src[..at]
+                .char_indices()
+                .rev()
+                .find(|&(_, c)| match c {
+                    '}' => {
+                        depth += 1;
+                        false
+                    }
+                    '{' if depth == 0 => true,
+                    '{' => {
+                        depth -= 1;
+                        false
+                    }
+                    _ => false,
+                })
+                .map(|(i, _)| i)
+                .expect("app: true 外面没有 {");
+            out.insert(ts_key_before(&src[..brace], &constant));
+        }
+        out
+    }
+
+    /// `pluginsMock.ts` 的 `const APP_PAGES: Record<string, string> = { [PAGE_X]: "client", … }`：地址 → 数据开关。
+    fn ts_mock_app_pages(
+        src: &str,
+        constant: impl Fn(&str) -> Option<String>,
+    ) -> std::collections::BTreeMap<String, String> {
+        let src = ts_strip_comment_lines(src);
+        let at = src
+            .find("const APP_PAGES")
+            .expect("pluginsMock.ts 里没有 APP_PAGES");
+        let open = at + src[at..].find('{').expect("APP_PAGES = {");
+        let close = open + src[open..].find('}').expect("APP_PAGES 的 }");
+        let mut out = std::collections::BTreeMap::new();
+        for item in src[open + 1..close].split(',') {
+            let item = item.trim();
+            if item.is_empty() {
+                continue;
+            }
+            let colon = if item.starts_with('[') {
+                item.find("]:").map(|i| i + 1)
+            } else {
+                item.find("\":").or_else(|| item.find("':")).map(|i| i + 1)
+            }
+            .unwrap_or_else(|| panic!("看不懂 APP_PAGES 的这一项：{item}"));
+            let uri = ts_key_before(&item[..=colon], &constant);
+            let source = ts_string_at(item[colon + 1..].trim_start())
+                .unwrap_or_else(|| panic!("APP_PAGES 的这一项不是字符串：{item}"));
+            out.insert(uri, source);
+        }
+        out
     }
 
     /// 回环代理的 `/assets/lol/<路径>` 走到英雄联盟插件的素材层（`Plugin::asset` → `fetch_asset`）：

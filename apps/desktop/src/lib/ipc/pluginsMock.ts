@@ -298,7 +298,9 @@ export async function pluginCall(plugin: string, tool: string, args: Record<stri
 
 // ---------- 插件的 MCP App（ADR 039 D5） ----------
 
-/** 做成 App 的页面（和 plugins/lol/src/app.rs 的 APP_PAGES 一致）和它们要的数据开关（plugin.toml 的 pages.needs）。 */
+/** 做成 App 的页面（和 plugins/lol/src/app.rs 的 APP_PAGES 一致）和它们要的数据开关（plugin.toml 的 pages.needs）。
+ * 三处（这里、plugins/lol/ui/index.ts 的 `app: true`、Rust）对不上时桌面端的 Rust 测试
+ * `plugin_apps::tests::app_pages_agree_with_the_frontend` 报错。 */
 const APP_PAGES: Record<string, string> = {
   [PAGE_MATCH]: "client", [PAGE_PLAYER]: "client", [PAGE_GAME]: "client", [PAGE_CHAMPION]: "stats", [PAGE_TIER]: "stats",
 };
