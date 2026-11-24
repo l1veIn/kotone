@@ -26,8 +26,10 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-pub use kotone_core::games::{Observation, Phase};
+pub use kotone_core::games::{EventSpec, Observation, Phase};
 
+mod events;
+pub use events::event_catalog;
 pub mod resource;
 pub use resource::{valid_asset_path, Asset, Csp, Resource, ResourceUi, APP_MIME};
 
@@ -69,6 +71,10 @@ pub struct Manifest {
     /// 给她的话（写进系统提示）。
     #[serde(default)]
     pub agent: AgentText,
+    /// 游戏中心的事（ADR 036 D4）：带适配器的插件登记自己会报的事（`[[events]]`：类型、中文说明、`data` 字段和
+    /// 说明、要的数据开关）。类型以 `<适配器>.` 开头；只有登记过的才报得出去。见 [`event_catalog`]。
+    #[serde(default)]
+    pub events: Vec<EventSpec>,
 }
 
 fn yes() -> bool {
@@ -128,7 +134,7 @@ pub fn valid_id(id: &str) -> bool {
 
 impl Manifest {
     /// 读 `plugin.toml` 并检查：id 的写法、页面地址在自己的 `ui://kotone/<id>/` 下、
-    /// `needs` 只写自己有的数据开关、开关和页面不重名。
+    /// `needs` 只写自己有的数据开关、开关和页面不重名、登记的游戏事件（`[[events]]`）写法对。
     pub fn parse(text: &str) -> Result<Self, String> {
         // Windows 上检出的文件是 CRLF（core.autocrlf）：多行字符串里的换行统一成 LF，给她的话两边一样
         let text = text.replace("\r\n", "\n");
@@ -167,7 +173,7 @@ impl Manifest {
             }
             self.check_needs(&page.uri, &page.needs)?;
         }
-        Ok(())
+        self.check_events()
     }
 
     /// 页面地址是不是这个插件的（`ui://kotone/<id>/<页面>`）。
@@ -522,12 +528,6 @@ pub struct ScreenText {
     pub rect: [f64; 4],
 }
 
-// ---------- 插件和宿主 ----------
-
-/// 一个插件。实现放在 `plugins/<id>/src/`，桌面端在 `plugins.rs` 里登记。
-pub trait Plugin: Send + Sync + 'static {
-    /// 清单（一般是 `include_str!("../plugin.toml")` 读出来的）。
-    fn manifest(&self) -> &Manifest;
 // ---------- 自动卡片 ----------
 
 /// 自动卡片（ADR 039 D3）：插件看到游戏里的事（英雄联盟进加载、结算），自己往聊天里发的一张卡片。
@@ -579,6 +579,12 @@ impl AutoCard {
     }
 }
 
+// ---------- 插件和宿主 ----------
+
+/// 一个插件。实现放在 `plugins/<id>/src/`，桌面端在 `plugins.rs` 里登记。
+pub trait Plugin: Send + Sync + 'static {
+    /// 清单（一般是 `include_str!("../plugin.toml")` 读出来的）。
+    fn manifest(&self) -> &Manifest;
 
     /// 全部工具（给她的和只给页面的）。宿主按开关和 `needs` 决定哪些露出来。
     fn tools(&self) -> Vec<ToolSpec>;
@@ -728,7 +734,7 @@ pub trait Host: Send + Sync {
     fn game_observe(&self, game: &str, observation: Observation);
     /// 游戏中心：认领（true）或交回（false）某个游戏的阶段。认领了以后进程那一路不再报阶段。
     fn game_claim(&self, game: &str, claimed: bool);
-    /// 游戏中心：报一件游戏专用的事（`lol.dragon_kill`）。
+    /// 游戏中心：报一件游戏专用的事（`<适配器>.<名字>`）。`kind` 要是清单 `[[events]]` 里登记过的，宿主不收没登记的。
     fn game_event(
         &self,
         game: &str,
@@ -741,12 +747,6 @@ pub trait Host: Send + Sync {
     fn emit(&self, event: &str, payload: Value) {
         let _ = (event, payload);
     }
-    /// 换掉这个插件在覆盖层上的全部条目（空 = 什么都不显示）。覆盖层只有一个，在本体里：置顶、点击穿透、
-    /// 只在目标窗口在前台时显示、不进截图（ADR 038 D5）。
-    fn overlay(&self, items: Vec<OverlayItem>) {
-        let _ = items;
-    }
-    /// 截前台窗口的一块区域（客户区比例 `[x, y, w, h]`）并识别文字（本体的文字识别，玩家选的模型）。
     /// 往聊天里发一张自动卡片（ADR 039 D3、D4）：卡片马上出现在当前对话末尾（写明是哪个插件发来的），
     /// **不叫模型、不花钱**；`note` 那一两句等琴音这一轮说完（她在回答、在说话、玩家在说话时不插进去）
     /// 再追加在对话末尾，前面的消息一个字不改（前缀缓存照常命中，ADR 024）；玩家开着消息提示就在屏幕右下角
@@ -760,6 +760,12 @@ pub trait Host: Send + Sync {
         let _ = card;
         Err("自动卡片只给内置插件".to_string())
     }
+    /// 换掉这个插件在覆盖层上的全部条目（空 = 什么都不显示）。覆盖层只有一个，在本体里：置顶、点击穿透、
+    /// 只在目标窗口在前台时显示、不进截图（ADR 038 D5）。
+    fn overlay(&self, items: Vec<OverlayItem>) {
+        let _ = items;
+    }
+    /// 截前台窗口的一块区域（客户区比例 `[x, y, w, h]`）并识别文字（本体的文字识别，玩家选的模型）。
     /// 前台不是 `process` 这个进程的窗口时不截（报错）。覆盖层不会被截进去。
     /// `local_only`：只用本地模型（在线识别要十几秒、要花钱时不识别，直接报错）。
     fn screen_text(
@@ -1031,7 +1037,6 @@ rule = "- 英雄联盟：……"
         assert!(!valid_id("-a"));
         assert!(!valid_id(""));
     }
-}
 
     /// ADR 039 D3：自动卡片只给内置插件。没实现它的宿主（以后的远程插件）一律拒绝；页面要是清单里的。
     #[test]
@@ -1102,3 +1107,4 @@ rule = "- 英雄联盟：……"
         .unwrap();
         assert!(json.get("params").is_none() && json.get("popup").is_none());
     }
+}

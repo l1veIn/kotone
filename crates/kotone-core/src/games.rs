@@ -328,7 +328,7 @@ impl Hub {
         out
     }
 
-    /// 游戏专用的事（`lol.dragon_kill`……），由适配器报；游戏没在跑时不收。
+    /// 游戏专用的事（`<适配器>.<名字>`，插件在清单里登记过的），由适配器报；游戏没在跑时不收。
     pub fn push(
         &mut self,
         game: &str,
@@ -347,135 +347,10 @@ impl Hub {
 
 // ---------- 能给的事（目录，D4） ----------
 
-/// 一种事：类型、中文说明、`data` 里的字段（名字，说明）。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct EventSpec {
-    pub kind: &'static str,
-    pub label: &'static str,
-    pub fields: &'static [(&'static str, &'static str)],
-}
-
-const TEAM: (&str, &str) = ("team", "哪一边：ally（我方）/ enemy（对面）");
-
-/// 任何游戏都有的（不需要适配器）。
-pub const GENERIC_EVENTS: &[EventSpec] = &[
-    EventSpec {
-        kind: "game.started",
-        label: "游戏启动了",
-        fields: &[],
-    },
-    EventSpec {
-        kind: "game.stopped",
-        label: "游戏退出了",
-        fields: &[("elapsedSeconds", "这次玩了多少秒")],
-    },
-    EventSpec {
-        kind: "game.focused",
-        label: "切回游戏窗口",
-        fields: &[],
-    },
-    EventSpec {
-        kind: "game.unfocused",
-        label: "离开游戏窗口",
-        fields: &[],
-    },
-    EventSpec {
-        kind: "game.phase_changed",
-        label: "阶段变了",
-        fields: &[
-            ("from", "之前的阶段"),
-            (
-                "to",
-                "现在的阶段：stopped / running / menu / queue / pre_match / loading / in_match / post_match",
-            ),
-            ("native", "游戏自己的阶段名"),
-        ],
-    },
-    EventSpec {
-        kind: "game.match_started",
-        label: "一局开始了（选英雄、加载或进对局，先到哪个算哪个）",
-        fields: &[],
-    },
-    EventSpec {
-        kind: "game.match_ended",
-        label: "一局结束了",
-        fields: &[("elapsedSeconds", "这一局多少秒")],
-    },
-];
-
-/// 英雄联盟（局内接口的事件列表和玩家列表）。
-pub const LOL_EVENTS: &[EventSpec] = &[
-    EventSpec {
-        kind: "lol.first_blood",
-        label: "一血",
-        fields: &[TEAM, ("killer", "拿一血的英雄")],
-    },
-    EventSpec {
-        kind: "lol.dragon_kill",
-        label: "拿了小龙",
-        fields: &[
-            TEAM,
-            (
-                "dragon",
-                "哪条龙：fire / water / earth / air / hextech / chemtech / elder",
-            ),
-            ("dragonName", "龙的中文名（火龙、远古龙……），播报用"),
-            ("stolen", "是不是抢的"),
-        ],
-    },
-    EventSpec {
-        kind: "lol.herald_kill",
-        label: "拿了峡谷先锋",
-        fields: &[TEAM, ("stolen", "是不是抢的")],
-    },
-    EventSpec {
-        kind: "lol.baron_kill",
-        label: "拿了大龙",
-        fields: &[TEAM, ("stolen", "是不是抢的")],
-    },
-    EventSpec {
-        kind: "lol.turret_killed",
-        label: "推掉一座塔",
-        fields: &[TEAM],
-    },
-    EventSpec {
-        kind: "lol.inhib_killed",
-        label: "推掉一个水晶",
-        fields: &[TEAM],
-    },
-    EventSpec {
-        kind: "lol.ace",
-        label: "团灭（team 是团灭了对面的那一边）",
-        fields: &[TEAM],
-    },
-    EventSpec {
-        kind: "lol.multikill",
-        label: "多杀（三杀以上）",
-        fields: &[TEAM, ("killer", "英雄"), ("count", "几杀：3 / 4 / 5")],
-    },
-    EventSpec {
-        kind: "lol.my_death",
-        label: "我阵亡了",
-        fields: &[("respawnSeconds", "多少秒后复活")],
-    },
-    EventSpec {
-        kind: "lol.my_respawn",
-        label: "我复活了",
-        fields: &[],
-    },
-];
-
-/// 内置适配器各自能给的事：（适配器 id，事件）。`generic` 的对所有游戏配置都有。
-pub fn catalog() -> [(&'static str, &'static [EventSpec]); 2] {
-    [("generic", GENERIC_EVENTS), ("lol", LOL_EVENTS)]
-}
-
-pub fn spec(kind: &str) -> Option<&'static EventSpec> {
-    catalog()
-        .into_iter()
-        .flat_map(|(_, specs)| specs.iter())
-        .find(|s| s.kind == kind)
-}
+mod catalog;
+pub use catalog::{
+    generic_events, CatalogEntry, EventCatalog, EventSpec, GENERIC_ADAPTER, GENERIC_SCOPE,
+};
 
 // ---------- 自动化的事件触发（D6） ----------
 
@@ -528,22 +403,16 @@ pub const MAX_MATCH_KEYS: usize = 16;
 pub const MAX_FOR_SECONDS: u32 = 3600;
 pub const MAX_COOLDOWN_SECONDS: u32 = 86_400;
 
-fn known_pattern(pattern: &str) -> bool {
-    match pattern.strip_suffix(".*") {
-        Some(prefix) => catalog()
-            .into_iter()
-            .flat_map(|(_, specs)| specs.iter())
-            .any(|s| s.kind.starts_with(&format!("{prefix}."))),
-        None => spec(pattern).is_some(),
-    }
-}
-
 fn scalar(v: &Value) -> bool {
     matches!(v, Value::String(_) | Value::Number(_) | Value::Bool(_))
 }
 
-/// 保存前检查并整理（去空白）。
-pub fn validate_trigger(trigger: &EventTrigger) -> Result<EventTrigger, String> {
+/// 保存前检查并整理（去空白）。事件名按合并后的目录 `events` 认（本体的 `game.*` 加插件登记的，插件关着的也认得；
+/// 现在不会发生的由 [`EventCatalog::notes`] 提醒，不算错）。
+pub fn validate_trigger(
+    trigger: &EventTrigger,
+    events: &EventCatalog,
+) -> Result<EventTrigger, String> {
     let mut out = trigger.clone();
     out.event = trigger
         .event
@@ -557,7 +426,7 @@ pub fn validate_trigger(trigger: &EventTrigger) -> Result<EventTrigger, String> 
     if out.event.len() > MAX_TRIGGER_EVENTS {
         return Err(format!("on.event 最多 {MAX_TRIGGER_EVENTS} 种"));
     }
-    if let Some(bad) = out.event.iter().find(|e| !known_pattern(e)) {
+    if let Some(bad) = out.event.iter().find(|e| !events.knows(e)) {
         return Err(format!(
             "没有“{bad}”这种游戏事件（用 game.state 看每个游戏能给哪些事）"
         ));

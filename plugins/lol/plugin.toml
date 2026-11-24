@@ -77,6 +77,77 @@ uri = "ui://kotone/lol/augment-scores"
 title = "海克斯评分"
 needs = ["stats"]
 
+# 游戏中心的事（ADR 036 D4）：lol 适配器报给游戏中心的局内事件，自动化按它们触发、保存时按这里校验，
+# game.state 和自动化编辑里的选择也从这里来。都来自局内接口（事件列表和玩家列表），要“读客户端数据”开着。
+# label 是界面上的名字（messages 里 plugin_lol_event_<名字> 要和它一致）；data 是事件数据的字段和说明（camelCase）。
+# 插件只报得出这里登记过的（tests::every_emitted_event_is_registered 查）。
+[[events]]
+type = "lol.first_blood"
+label = "一血"
+needs = ["client"]
+data.team = "哪一边：ally（我方）/ enemy（对面）"
+data.killer = "拿一血的英雄"
+
+[[events]]
+type = "lol.dragon_kill"
+label = "拿了小龙"
+needs = ["client"]
+data.team = "哪一边：ally（我方）/ enemy（对面）"
+data.dragon = "哪条龙：fire / water / earth / air / hextech / chemtech / elder"
+data.dragonName = "龙的中文名（火龙、远古龙……），播报用"
+data.stolen = "是不是抢的"
+
+[[events]]
+type = "lol.herald_kill"
+label = "拿了峡谷先锋"
+needs = ["client"]
+data.team = "哪一边：ally（我方）/ enemy（对面）"
+data.stolen = "是不是抢的"
+
+[[events]]
+type = "lol.baron_kill"
+label = "拿了大龙"
+needs = ["client"]
+data.team = "哪一边：ally（我方）/ enemy（对面）"
+data.stolen = "是不是抢的"
+
+[[events]]
+type = "lol.turret_killed"
+label = "推掉一座塔"
+needs = ["client"]
+data.team = "哪一边推的：ally（我方）/ enemy（对面）"
+
+[[events]]
+type = "lol.inhib_killed"
+label = "推掉一个水晶"
+needs = ["client"]
+data.team = "哪一边推的：ally（我方）/ enemy（对面）"
+
+[[events]]
+type = "lol.ace"
+label = "团灭"
+needs = ["client"]
+data.team = "团灭了对面的是哪一边：ally（我方）/ enemy（对面）"
+
+[[events]]
+type = "lol.multikill"
+label = "三杀以上"
+needs = ["client"]
+data.team = "哪一边：ally（我方）/ enemy（对面）"
+data.killer = "英雄"
+data.count = "几杀：3 / 4 / 5"
+
+[[events]]
+type = "lol.my_death"
+label = "我阵亡了"
+needs = ["client"]
+data.respawnSeconds = "多少秒后复活"
+
+[[events]]
+type = "lol.my_respawn"
+label = "我复活了"
+needs = ["client"]
+
 [agent]
 overview = "英雄联盟里查这局玩家的战绩和突破口、查任何人的战绩、记对面交的召唤师技能，查英雄的强度、克制、出装和海斗海克斯"
 rule = """- 英雄联盟（读本机的客户端和局内接口，马上返回）：这局的样子、“谁没闪”“对面谁没带闪”用 lol.match；\

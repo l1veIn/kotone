@@ -11,7 +11,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use kotone_core::automation::library::{Automation, AutomationBody};
-use kotone_core::games::{Armed, Fire, GameEvent, GameState, Hub, Observation, Phase, Triggers};
+use kotone_core::games::{
+    Armed, EventCatalog, Fire, GameEvent, GameState, Hub, Observation, Phase, Triggers,
+};
 use kotone_core::log;
 use kotone_core::profile;
 use serde_json::{Map, Value};
@@ -76,7 +78,7 @@ pub fn observe(app: &AppHandle, game: &str, seen: Observation) {
     dispatch(app, events);
 }
 
-/// 适配器报一件游戏专用的事（`lol.dragon_kill`……）。
+/// 适配器报一件游戏专用的事（`<适配器>.<名字>`，插件在清单里登记过的；宿主在 `DesktopHost::game_event` 挡掉没登记的）。
 pub fn push(
     app: &AppHandle,
     game: &str,
@@ -226,8 +228,18 @@ fn poll(app: &AppHandle) {
     run(app, fires);
 }
 
+/// 合并后的事件目录（ADR 036 D4、D5：一处合并）：本体的 `game.*`，加上每个插件 `[[events]]` 登记的。
+/// 插件关着、或它要的数据开关关着时，那几种事还在（保存校验认得、旧的自动化不报废），标着现在为什么不会发生。
+/// 自动化保存时的校验、`game.state` 都用它；界面照同样的规则从插件清单现算（`gameEvents.ts`）。
+pub fn event_catalog(settings: &kotone_core::settings::Settings) -> EventCatalog {
+    kotone_plugin_api::event_catalog(
+        crate::plugins::registry().iter().map(|p| p.manifest()),
+        settings,
+    )
+}
+
 /// `game.state` 工具：现在在玩什么、在哪个阶段、这局多久了、最近几件事，以及每个游戏能给哪些事。
-pub fn state_json(game: Option<&str>) -> Value {
+pub fn state_json(app: &AppHandle, game: Option<&str>) -> Value {
     let now = now_ms();
     let states: Vec<Value> = states()
         .into_iter()
@@ -262,25 +274,69 @@ pub fn state_json(game: Option<&str>) -> Value {
             })
         })
         .collect();
-    let catalog: Vec<Value> = kotone_core::games::catalog()
-        .into_iter()
-        .map(|(adapter, specs)| {
-            serde_json::json!({
-                "adapter": adapter,
-                "games": if adapter == "generic" { "所有有进程名的游戏配置" } else { adapter },
-                "events": specs.iter().map(|s| serde_json::json!({
-                    "type": s.kind,
-                    "label": s.label,
-                    "data": s.fields.iter().map(|(k, v)| (k.to_string(), Value::String(v.to_string()))).collect::<Map<_, _>>(),
-                })).collect::<Vec<_>>(),
-            })
-        })
-        .collect();
-    serde_json::json!({"playing": states, "events": catalog})
+    let settings = app
+        .state::<crate::SharedState>()
+        .settings
+        .read()
+        .unwrap()
+        .clone();
+    serde_json::json!({"playing": states, "events": event_catalog(&settings).summary()})
 }
 
 /// 界面：现在在玩什么（和 `game.state` 工具同一份）。
 #[tauri::command]
-pub fn game_state() -> Value {
-    state_json(None)
+pub fn game_state(app: AppHandle) -> Value {
+    state_json(&app, None)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kotone_core::settings::Settings;
+
+    /// 插件重构第 7 步：事件目录 = 本体的 `game.*` + 内置插件 `[[events]]` 登记的；两个插件不登记同一种事；
+    /// 插件关着时它的事还认得，`game.state` 里不列、只说为什么。
+    #[test]
+    fn the_event_catalog_merges_what_plugins_register() {
+        let registered: Vec<(String, String)> = crate::plugins::registry()
+            .iter()
+            .flat_map(|p| {
+                let m = p.manifest();
+                m.events
+                    .iter()
+                    .map(|e| (m.id.clone(), e.kind.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert!(!registered.is_empty(), "英雄联盟插件登记了自己的事");
+        let generic = EventCatalog::generic().entries().len();
+        let on = event_catalog(&Settings::default());
+        assert_eq!(
+            on.entries().len(),
+            generic + registered.len(),
+            "插件之间重名了"
+        );
+        for (plugin, kind) in &registered {
+            let entry = on.get(kind).unwrap();
+            assert_eq!(entry.plugin.as_ref().map(|(id, _)| id), Some(plugin));
+        }
+
+        // 英雄联盟插件关着：它的事还在目录里（保存校验认得），标着“英雄联盟插件关着”；game.state 里不列
+        let (lol, lol_kind) = registered.iter().find(|(p, _)| p == "lol").unwrap();
+        let mut off = Settings::default();
+        off.plugins.entry(lol.clone()).or_default().enabled = Some(false);
+        let closed = event_catalog(&off);
+        assert!(closed.knows(lol_kind));
+        let reason = closed.get(lol_kind).unwrap().off.clone().unwrap();
+        assert!(reason.contains("英雄联盟插件关着"), "{reason}");
+        let summary = closed.summary();
+        let group = summary
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["adapter"] == "lol")
+            .unwrap();
+        assert_eq!(group["events"], serde_json::json!([]));
+        assert!(group["off"].as_str().unwrap().contains("英雄联盟插件关着"));
+        assert!(!summary.to_string().contains(lol_kind.as_str()));
+    }
 }

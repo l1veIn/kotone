@@ -24,8 +24,9 @@ const pluginCatalogs = pluginIds
 const pluginUiFiles = () => pluginIds.flatMap((id) => ["ui", join("app", "src")].flatMap((dir) => {
   try { return walk(join(pluginsDir, id, dir), [".svelte", ".ts"]); } catch { return []; }
 }));
-/** 插件的名字、说明、数据开关的名字 / 说明 / 风险提示由宿主按约定的键取（lib/plugins.ts 的 pluginText），代码里不直接写 m.xxx。 */
-const pluginConventionKey = /^plugin_[a-z0-9_]+?_(name|description|source_[a-z0-9_]+_(name|desc|risk))$/;
+/** 插件的名字、说明、数据开关的名字 / 说明 / 风险提示、登记的游戏事件的名字（`event_<名字>`，lib/gameEvents.ts）由宿主按约定的键取
+ * （lib/plugins.ts 的 pluginText），代码里不直接写 m.xxx。 */
+const pluginConventionKey = /^plugin_[a-z0-9_]+?_(name|description|source_[a-z0-9_]+_(name|desc|risk)|event_[a-z0-9_]+)$/;
 
 function walk(dir: string, exts: string[]): string[] {
   return readdirSync(dir).flatMap((name) => {

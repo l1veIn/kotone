@@ -20,6 +20,8 @@ use serde_json::Value;
 pub mod app;
 pub mod client;
 pub mod control;
+#[cfg(test)]
+mod event_catalog_tests;
 mod overlays;
 pub mod pages;
 pub mod stats;

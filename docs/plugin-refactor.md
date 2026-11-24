@@ -208,6 +208,12 @@ name = "lol.scout"
 visibility = ["model", "app"]   # 照 MCP Apps：model = 给她，app = 给页面
 page = "ui://kotone/lol/match"
 needs = ["client"]
+
+[[events]]                      # 游戏中心的事（ADR 036 D4；2026-11-25 第 7 步加的，事件只在这里登记）
+type = "lol.dragon_kill"        # <适配器>.<名字>
+label = "拿了小龙"
+needs = ["client"]
+data.team = "哪一边：ally（我方）/ enemy（对面）"
 ```
 
 工具的说明和参数（JSON Schema）写在插件的 Rust 代码里，和现在 `kotone-agent/src/lol.rs` 一样，清单只引用名字。是不是全放进清单，第一步实测时再定。`needs` 写这个页面 / 工具要哪个数据开关；开关关了，它就不出现（她的工具清单照样只在开关变时变）。
@@ -846,6 +852,25 @@ plugins/<id>/    plugin.toml、Cargo.toml + src/、ui/、messages/、skills/、e
 - svelte-check 0 / 0（英雄联盟 App 也 0 / 0）。Playwright：新的 `e2e/auto-card.spec.ts` 5/5（聊天里“英雄联盟 发来”的卡片、点开到右侧栏、给她的那句不显示；她在回答时来的卡片先显示在最后、这一轮的字留在她那一轮、记进对话后不重复；点消息提示从别的页面回到聊天、卡片滚进来闪一下；“交互”里两个开关默认开、改了存 `agent.autoCards`、关掉自动卡片时消息提示的开关变灰；消息提示页面 320 × 72、“琴音 · 英雄联盟”、点 × 只关、点它是打开）；`terminology.spec` 4/4；全量 178 个 177 过，没过的 1 个是 `sidebar-edit.spec` 新加的“每个插件卡片有自己的 logo”（同时在做的插件 logo，`fetch` 开发服务器上 `plugins/*/logo.svg` 的地址失败，单跑也一样，和这件事无关）。
 - 截图：`target/plugin-shots/round7/chat-auto-card.png`、`settings-auto-cards.png`、`message-popup-preview.png`（Playwright），`message-popup-real.png`（真机，见下）。
 - 真机 `auto_card_real.py`（新脚本，假客户端的一局 + 真 DeepSeek）：**13/13**。选人时没有卡片；进加载 2 秒后“开局战绩”接在“你好”那一轮后面（前面两条逐字不变），给琴音的那句是“开局战绩（海克斯大乱斗）。对面可能的突破口：艾希，最近 20 局只赢了 6 局、场均死 13.2 次。我方有 3 人开黑。”；消息提示弹出来了（`WS_EX_TOPMOST | WS_EX_NOACTIVATE`，前台窗口前后是同一个），截图 `target/plugin-shots/round7/message-popup-real.png`；结算 2 秒后“这局总结”（“这局赢了（海克斯大乱斗，16 分 54 秒）。你用韦鲁斯 8/9/43，伤害全队第三。”）；一局正好两张；从第一张卡片到下一次打字，`usage.jsonl` 一条没多；再打字问“刚才英雄联盟发来的卡片说了什么”，她答“开局说对面艾希是突破口……这局赢了，你韦鲁斯 8/9/43”。第一次跑时消息提示没弹：`--background` 启动后藏着的主窗口“Kotone 设置”占着前台（看不见），“Kotone 的窗口在前台”的判断把它算进去了；改成只算看得见、没最小化的窗口。
+
+### 第 7 步：英雄联盟的事件目录由插件登记（2026-11-25）
+
+交接第十一节第 20 条。第 1 步“没搬的”和第 7 步（部分）记着：英雄联盟的事件目录（`lol.dragon_kill` 等）还是 `kotone-core::games` 里的常量，插件关着时自动化编辑里还能选到；要先有“插件登记事件”的机制。
+
+**怎么做的**（ADR 036 D4 的目录形状，ADR 038 D3 第 10 条，原则 15、16、19、21）：
+
+- **登记方式只有一种**：插件在 `plugin.toml` 里用 `[[events]]` 登记（`type = "<适配器>.<名字>"`、`label` 中文说明、`needs` 要的数据开关、`data.<字段> = "说明"`）。`Manifest::parse` 查：要写 `adapter`（不能叫 `game` / `generic`），类型以 `<适配器>.` 开头、名字小写加下划线，有说明，字段名 camelCase，`needs` 是自己的开关，不重名。英雄联盟的十种从 `kotone-core` 搬进 `plugins/lol/plugin.toml`（都要“读客户端数据”）；本体（`kotone_core::games::generic_events`）只留通用的 `game.*`。“团灭”“三杀以上”原来在本体目录里的补充说明挪进了 `data.team` / `data.count` 的说明，`label` 和界面上的名字一样（插件文案 `plugin_lol_event_<名字>`，测试查一致）。
+- **合并**：`kotone_plugin_api::event_catalog(清单, 设置)` → `kotone_core::games::EventCatalog`（本体的 + 每个插件登记的，关着的也在，标着 `off`：“英雄联盟插件关着”“英雄联盟插件的“读客户端数据”关着”）。桌面端 `games::event_catalog` 用内置插件表算；自动化保存时的校验（`AutomationLibrary::save` 多一个目录参数）、`game.state` 的 `events`（`EventCatalog::summary`）都用它。界面照同样的规则从插件清单（`manifest.events`）现算（`gameEvents.ts` 的 `eventCatalog`），自动化编辑、自动化列表、游戏配置页的“游戏事件”都用它；前端写死的英雄联盟事件表和本体文案里的 `game_event_lol_*` 删了。
+- **插件关着时**：它的事不出现在选择里；已经保存的不删、不报废：列表里多一行“英雄联盟插件关着，这个触发不会发生；到「插件」里打开以后照常触发。”，编辑时当前选的那项照样显示（“拿了小龙（英雄联盟插件关着）”）、下面同一句提示，照样能保存；`automation.save` 照常成功，结果多一项 `triggerNotes`（同一句）；`game.state` 里英雄联盟那一组不列事件，只有一句 `off`。运行时照旧只是收不到。没装这个插件（目录里没有）的名字照旧报“没有这种游戏事件”。
+- **插件只报得出登记过的**：`DesktopHost::game_event` 挡掉清单里没有的（记日志）。`plugins::enabled` / `source_enabled` 改成调契约里的 `Manifest::enabled_in` / `source_enabled_in`（事件目录也用它，规则只有一份）。
+- **旧配置**：自动化文件格式没变，旧版存的 `lol.*` 触发照样读进来、照样触发（测试用 0.2.0-rc.7 的样子）；装回旧版时旧版用自己的常量，也认得这些名字。
+
+**边界写成测试**：
+
+- `crates/kotone-plugin-api/tests/event_boundaries.rs`：插件登记的事件名在本体代码里一个都不出现（`crates/*/src`、`crates/*/tests`、桌面端后端和界面、本体文案；跳过生成的 `paraglide` 和预览里假装插件后端的 `*Mock.ts`）；两个插件不登记同一种事；扫描真能抓到（插件自己的源码里有）。本体的测试改用一个假的“示例”插件（`demo.*`），`kotone-tools` 的工具说明里不再举 `lol.dragon_kill` 的例子。
+- `plugins/lol/src/event_catalog_tests.rs`：局内接口的每种事都换得出来、都在清单里、`data` 字段都登记了；源码里 `game_event` 报的字面量都登记了、不是字面量的只能是 `new_events` 的 `kind`；登记的每种源码里都报得出（没有空登记）；文案和清单一致；宿主的目录跟着插件开关；旧的自动化读得进来、照样触发，插件关着时改名保存照常、提醒说清楚，没有这个插件时报错。
+
+**检查**：`kotone-core` 307 + 编排 84（1 跳过，检查没改）、`kotone-plugin-api` 17 + 边界 3 + 事件边界 3、`kotone-plugin-lol` 85（1 跳过）、`kotone-tools` 113、桌面端 123（1 跳过），全过；clippy `-D warnings`（这五个 crate、`--all-targets`）干净；svelte-check 0 / 0。Playwright：新的 `e2e/plugin-events.spec.ts`（插件开着能选“拿了小龙”、带“哪一边”；关掉英雄联盟插件后保存过的还在、列表和编辑里说清楚、照样能保存、新建时选不到；打开回来又能选）和相关的 `automation`、`game-profile`、`terminology`、`plugins/lol/e2e/lol-plugin` 16/16（`terminology.spec` 的“文案都用到了”认插件文案 `plugin_<id>_event_<名字>` 这种按约定取的键）；全量 182 个 174 过，没过的 8 个（`post-processing`、`right-sidebar`、`sidebar-edit`、`update-dialog`、游戏语音、同传、`lol-plugin` 的“设置位置打开插件页”）单独重跑 23/23 过，是跑的时候别的子代理在改文件、开发服务器重载页面。真机（不开游戏、不发系统按键、隔离的 `KOTONE_HOME`）：`game_events_real.py` **12/12**（真 DeepSeek；进加载时她用 `lol.scout` 说“对面艾希最近二十局只赢六场，场均死十三次，先盯她。”，对面拿龙时播报“对面拿了火龙”，`game.state` 的事件目录里英雄联盟那一组来自插件）；另跑了一个一次性的检查（不叫模型）6/6：英雄联盟插件关着时 `automation.save` 存 `lol.dragon_kill` 照常成功、带 `triggerNotes`，`game.state` 里英雄联盟那一组没有事件、只有 `off`，`lol.pentakill` 被拒；打开以后没有提醒、列出 10 种。
 
 ### `--background` 启动不抢焦点（2026-11-25）
 

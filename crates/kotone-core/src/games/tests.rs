@@ -90,44 +90,80 @@ fn lol_phases_make_matches_between_lobby_and_end_of_game() {
 #[test]
 fn focus_and_game_specific_events_only_for_running_games() {
     let mut hub = Hub::default();
-    assert!(hub.focus(Some("lol"), 1).is_empty(), "没在跑的游戏不算");
+    assert!(hub.focus(Some("demo"), 1).is_empty(), "没在跑的游戏不算");
     assert!(hub
-        .push("lol", "lol.ace", "lol/live-client", Map::new(), None, 1)
+        .push("demo", "demo.ace", "demo/live", Map::new(), None, 1)
         .is_none());
-    hub.observe("lol", seen(Phase::InMatch, "InProgress"), 2);
+    hub.observe("demo", seen(Phase::InMatch, "InProgress"), 2);
     hub.observe("cs2", seen(Phase::Running, ""), 2);
-    assert_eq!(kinds(&hub.focus(Some("lol"), 3)), ["game.focused"]);
-    assert!(hub.focus(Some("lol"), 4).is_empty());
+    assert_eq!(kinds(&hub.focus(Some("demo"), 3)), ["game.focused"]);
+    assert!(hub.focus(Some("demo"), 4).is_empty());
     let switched = hub.focus(Some("cs2"), 5);
     assert_eq!(kinds(&switched), ["game.focused", "game.unfocused"]);
     assert_eq!(switched[0].game, "cs2");
     let ace = hub
         .push(
-            "lol",
-            "lol.ace",
-            "lol/live-client",
+            "demo",
+            "demo.ace",
+            "demo/live",
             json!({"team": "ally"}).as_object().unwrap().clone(),
             Some(612.5),
             6,
         )
         .unwrap();
-    assert_eq!(ace.match_id, hub.state("lol").unwrap().match_id);
+    assert_eq!(ace.match_id, hub.state("demo").unwrap().match_id);
     assert_eq!(ace.game_time, Some(612.5));
     let envelope = serde_json::to_value(&ace).unwrap();
-    assert_eq!(envelope["type"], "lol.ace");
+    assert_eq!(envelope["type"], "demo.ace");
     assert_eq!(envelope["gameTime"], 612.5);
-    assert!(envelope["match"].as_str().unwrap().starts_with("lol-"));
+    assert!(envelope["match"].as_str().unwrap().starts_with("demo-"));
 }
 
 #[test]
 fn recent_events_are_capped() {
     let mut hub = Hub::default();
-    hub.observe("lol", seen(Phase::InMatch, ""), 0);
+    hub.observe("demo", seen(Phase::InMatch, ""), 0);
     for i in 0..(RECENT_EVENTS as u64 + 20) {
-        hub.push("lol", "lol.turret_killed", "x", Map::new(), None, i);
+        hub.push("demo", "demo.tower_down", "x", Map::new(), None, i);
     }
-    assert_eq!(hub.recent("lol", 1000).len(), RECENT_EVENTS);
-    assert_eq!(hub.recent("lol", 3).len(), 3);
+    assert_eq!(hub.recent("demo", 1000).len(), RECENT_EVENTS);
+    assert_eq!(hub.recent("demo", 3).len(), 3);
+}
+
+/// 一个假的插件“示例”（适配器 `demo`）登记的事：本体不认识任何具体游戏的事，测试也用不着英雄联盟。
+fn demo_spec(kind: &str, label: &str, fields: &[&str]) -> EventSpec {
+    EventSpec {
+        kind: kind.into(),
+        label: label.into(),
+        data: fields
+            .iter()
+            .map(|f| (f.to_string(), format!("{f} 的说明")))
+            .collect(),
+        needs: vec!["live".into()],
+    }
+}
+
+fn demo_entry(spec: EventSpec, off: Option<&str>) -> CatalogEntry {
+    CatalogEntry {
+        spec,
+        adapter: "demo".into(),
+        plugin: Some(("demo".into(), "示例".into())),
+        games: vec!["demo".into()],
+        off: off.map(str::to_string),
+    }
+}
+
+/// 本体的 `game.*` 加上“示例”插件登记的事；`off` 是插件关着时的原因。
+fn demo_catalog(off: Option<&str>) -> EventCatalog {
+    let mut catalog = EventCatalog::generic();
+    for spec in [
+        demo_spec("demo.boss_down", "打掉了首领", &["team", "boss", "stolen"]),
+        demo_spec("demo.ace", "团灭", &["team"]),
+        demo_spec("demo.multikill", "三杀以上", &["team", "count"]),
+    ] {
+        catalog.add(demo_entry(spec, off)).unwrap();
+    }
+    catalog
 }
 
 fn trigger(value: serde_json::Value) -> EventTrigger {
@@ -136,26 +172,34 @@ fn trigger(value: serde_json::Value) -> EventTrigger {
 
 #[test]
 fn triggers_are_checked_before_saving() {
-    let ok = validate_trigger(&trigger(json!({
-        "event": [" game.phase_changed "], "game": "lol", "match": {"to": ["loading", "in_match"]}, "for": 60
-    })))
+    let events = demo_catalog(None);
+    let ok = validate_trigger(
+        &trigger(json!({
+            "event": [" game.phase_changed "], "game": "demo", "match": {"to": ["loading", "in_match"]}, "for": 60
+        })),
+        &events,
+    )
     .unwrap();
     assert_eq!(ok.event, ["game.phase_changed"]);
     assert_eq!(ok.mode, RunMode::Single);
     assert!(ok.enabled);
-    assert!(validate_trigger(&trigger(json!({"event": ["lol.*"]}))).is_ok());
-    assert!(validate_trigger(&trigger(json!({"event": ["game.*", "lol.dragon_kill"]}))).is_ok());
+    assert!(validate_trigger(&trigger(json!({"event": ["demo.*"]})), &events).is_ok());
+    assert!(validate_trigger(
+        &trigger(json!({"event": ["game.*", "demo.boss_down"]})),
+        &events
+    )
+    .is_ok());
     for (bad, want) in [
         (json!({"event": []}), "至少"),
-        (json!({"event": ["lol.pentakill"]}), "没有"),
+        (json!({"event": ["demo.pentakill"]}), "没有"),
         (json!({"event": ["foo.*"]}), "没有"),
-        (json!({"event": ["lo.*"]}), "没有"),
+        (json!({"event": ["dem.*"]}), "没有"),
         (
-            json!({"event": ["lol.ace"], "for": 10}),
+            json!({"event": ["demo.ace"], "for": 10}),
             "game.phase_changed",
         ),
         (
-            json!({"event": ["lol.ace"], "match": {"team": {"a": 1}}}),
+            json!({"event": ["demo.ace"], "match": {"team": {"a": 1}}}),
             "match.team",
         ),
         (
@@ -163,13 +207,94 @@ fn triggers_are_checked_before_saving() {
             "for",
         ),
     ] {
-        let error = validate_trigger(&trigger(bad.clone())).unwrap_err();
+        let error = validate_trigger(&trigger(bad.clone()), &events).unwrap_err();
         assert!(error.contains(want), "{bad} → {error}");
     }
     // 不认识的字段直接拒（打错字不会悄悄失效）
     assert!(
-        serde_json::from_value::<EventTrigger>(json!({"event": ["lol.ace"], "when": 1})).is_err()
+        serde_json::from_value::<EventTrigger>(json!({"event": ["demo.ace"], "when": 1})).is_err()
     );
+    // 只有本体的目录（插件没装）：插件的事认不得
+    let error = validate_trigger(
+        &trigger(json!({"event": ["demo.ace"]})),
+        &EventCatalog::generic(),
+    )
+    .unwrap_err();
+    assert!(error.contains("没有“demo.ace”"), "{error}");
+}
+
+/// 插件关着：它登记的事还认得（保存成功、旧的不报废），保存时说清楚“这个触发不会发生”（原则 21）。
+#[test]
+fn a_closed_plugins_events_still_validate_with_a_note() {
+    let closed = demo_catalog(Some("示例插件关着"));
+    let open = demo_catalog(None);
+    let only_demo =
+        trigger(json!({"event": ["demo.boss_down", "demo.ace"], "match": {"team": "enemy"}}));
+    assert!(validate_trigger(&only_demo, &closed).is_ok());
+    assert!(open.notes(&only_demo).is_empty());
+    assert_eq!(
+        closed.notes(&only_demo),
+        ["示例插件关着，这个触发不会发生；到「插件」里打开以后照常触发"]
+    );
+    // 前缀也一样
+    let any = trigger(json!({"event": ["demo.*"]}));
+    assert_eq!(closed.notes(&any).len(), 1);
+    // 和通用的事混着写：只说不会发生的那几种
+    let mixed = trigger(json!({"event": ["game.match_ended", "demo.ace"]}));
+    assert_eq!(
+        closed.notes(&mixed),
+        ["示例插件关着，其中“团灭”不会发生；到「插件」里打开以后照常触发"]
+    );
+    // 触发关着：不用提醒
+    let mut paused = only_demo.clone();
+    paused.enabled = false;
+    assert!(closed.notes(&paused).is_empty());
+    // 本体的事从不提醒
+    assert!(closed
+        .notes(&trigger(json!({"event": ["game.phase_changed"]})))
+        .is_empty());
+}
+
+/// `game.state` 的事件目录：按适配器分组；插件关着时不列它的事，只说为什么、怎么办。
+#[test]
+fn the_summary_lists_what_can_happen_now() {
+    let open = demo_catalog(None).summary();
+    assert_eq!(open[0]["adapter"], "generic");
+    assert_eq!(open[0]["games"], "所有有进程名的游戏配置");
+    assert!(open[0].get("plugin").is_none());
+    assert_eq!(open[1]["adapter"], "demo");
+    assert_eq!(open[1]["plugin"], "示例");
+    assert_eq!(open[1]["games"], "demo");
+    assert_eq!(open[1]["events"].as_array().unwrap().len(), 3);
+    assert_eq!(open[1]["events"][0]["type"], "demo.boss_down");
+    assert!(open[1]["events"][0]["data"]["boss"].is_string());
+    assert!(open[1].get("off").is_none());
+
+    let closed = demo_catalog(Some("示例插件关着")).summary();
+    assert_eq!(closed[1]["events"], json!([]));
+    assert_eq!(
+        closed[1]["off"],
+        "示例插件关着：这些事现在都不会发生；到「插件」里打开以后才有"
+    );
+    // 本体的照常
+    assert_eq!(
+        closed[0]["events"].as_array().unwrap().len(),
+        generic_events().len()
+    );
+}
+
+#[test]
+fn two_plugins_cannot_register_the_same_event() {
+    let mut catalog = demo_catalog(None);
+    let error = catalog
+        .add(demo_entry(demo_spec("demo.ace", "又一个团灭", &[]), None))
+        .unwrap_err();
+    assert!(error.contains("示例插件"), "{error}");
+    let error = catalog
+        .add(demo_entry(demo_spec("game.started", "x", &[]), None))
+        .unwrap_err();
+    assert!(error.contains("本体"), "{error}");
+    assert_eq!(catalog.entries().len(), generic_events().len() + 3);
 }
 
 fn event(kind: &str, game: &str, data: serde_json::Value) -> GameEvent {
@@ -187,56 +312,56 @@ fn event(kind: &str, game: &str, data: serde_json::Value) -> GameEvent {
 
 #[test]
 fn matching_is_a_subset_with_arrays_as_or() {
-    let t = trigger(json!({"event": ["lol.dragon_kill"], "game": "lol",
-        "match": {"team": "enemy", "dragon": ["fire", "elder"]}}));
+    let t = trigger(json!({"event": ["demo.boss_down"], "game": "demo",
+        "match": {"team": "enemy", "boss": ["golem", "dragon"]}}));
     let fire = event(
-        "lol.dragon_kill",
-        "lol",
-        json!({"team": "enemy", "dragon": "fire", "stolen": false}),
+        "demo.boss_down",
+        "demo",
+        json!({"team": "enemy", "boss": "golem", "stolen": false}),
     );
     assert!(trigger_matches(&t, &fire), "多出来的字段不影响");
     assert!(!trigger_matches(
         &t,
         &event(
-            "lol.dragon_kill",
-            "lol",
-            json!({"team": "ally", "dragon": "fire"})
+            "demo.boss_down",
+            "demo",
+            json!({"team": "ally", "boss": "golem"})
         )
     ));
     assert!(!trigger_matches(
         &t,
-        &event("lol.dragon_kill", "lol", json!({"team": "enemy"}))
+        &event("demo.boss_down", "demo", json!({"team": "enemy"}))
     ));
     assert!(!trigger_matches(
         &t,
         &event(
-            "lol.dragon_kill",
+            "demo.boss_down",
             "cs2",
-            json!({"team": "enemy", "dragon": "fire"})
+            json!({"team": "enemy", "boss": "golem"})
         )
     ));
-    let any = trigger(json!({"event": ["lol.*"], "match": {"count": 5}}));
+    let any = trigger(json!({"event": ["demo.*"], "match": {"count": 5}}));
     assert!(trigger_matches(
         &any,
-        &event("lol.multikill", "lol", json!({"count": 5.0}))
+        &event("demo.multikill", "demo", json!({"count": 5.0}))
     ));
     assert!(!trigger_matches(
         &any,
-        &event("lolx.multikill", "lol", json!({"count": 5}))
+        &event("demox.multikill", "demo", json!({"count": 5}))
     ));
     let mut off = any.clone();
     off.enabled = false;
     assert!(!trigger_matches(
         &off,
-        &event("lol.multikill", "lol", json!({"count": 5}))
+        &event("demo.multikill", "demo", json!({"count": 5}))
     ));
 }
 
 #[test]
 fn once_per_match_cap_and_cooldown() {
-    let once = trigger(json!({"event": ["lol.dragon_kill"], "oncePerMatch": true}));
-    let capped = trigger(json!({"event": ["lol.dragon_kill"]}));
-    let cooled = trigger(json!({"event": ["lol.dragon_kill"], "cooldownSeconds": 60}));
+    let once = trigger(json!({"event": ["demo.boss_down"], "oncePerMatch": true}));
+    let capped = trigger(json!({"event": ["demo.boss_down"]}));
+    let cooled = trigger(json!({"event": ["demo.boss_down"], "cooldownSeconds": 60}));
     let armed = [
         Armed {
             id: "once",
@@ -254,11 +379,11 @@ fn once_per_match_cap_and_cooldown() {
             per_match: None,
         },
     ];
-    let dragon = event("lol.dragon_kill", "lol", json!({}));
+    let boss = event("demo.boss_down", "demo", json!({}));
     let mut t = Triggers::default();
     let mut fired: HashMap<String, u32> = HashMap::new();
     for i in 0..5u64 {
-        for f in t.on_event(&armed, &dragon, i * 10_000) {
+        for f in t.on_event(&armed, &boss, i * 10_000) {
             *fired.entry(f.automation).or_default() += 1;
         }
     }
@@ -270,11 +395,11 @@ fn once_per_match_cap_and_cooldown() {
     // 一局结束：次数清零
     t.on_event(
         &armed,
-        &event("game.match_ended", "lol", json!({})),
+        &event("game.match_ended", "demo", json!({})),
         100_000,
     );
     let again: Vec<String> = t
-        .on_event(&armed, &dragon, 200_000)
+        .on_event(&armed, &boss, 200_000)
         .into_iter()
         .map(|f| f.automation)
         .collect();
@@ -327,28 +452,32 @@ fn for_waits_until_the_phase_has_held() {
 
 #[test]
 fn catalog_names_follow_the_naming_rule() {
-    for (adapter, specs) in catalog() {
-        for s in specs {
-            let (scope, name) = s.kind.split_once('.').unwrap();
-            assert!(
-                scope == "game" || scope == adapter,
-                "{} 的前缀要是 game 或 {adapter}",
-                s.kind
-            );
-            assert!(
-                name.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
-                "{}",
-                s.kind
-            );
-            for (field, _) in s.fields {
-                assert!(
-                    field.chars().next().unwrap().is_ascii_lowercase(),
-                    "{field}"
-                );
-                assert!(!field.contains('_'), "{field} 用 camelCase");
-            }
-        }
+    // 本体只登记通用的 game.*（游戏专用的事由插件在 plugin.toml 里登记，原则 15）
+    for s in generic_events() {
+        s.check(GENERIC_SCOPE).unwrap();
+        assert!(s.needs.is_empty());
     }
+    assert!(EventCatalog::generic()
+        .entries()
+        .iter()
+        .all(|e| e.adapter == GENERIC_ADAPTER && e.plugin.is_none() && e.off.is_none()));
+    // 写法的检查真能抓到违反（插件的清单也用它）
+    for (bad, want) in [
+        (demo_spec("demo.BossDown", "x", &[]), "demo.<名字>"),
+        (demo_spec("game.boss_down", "x", &[]), "demo.<名字>"),
+        (demo_spec("demo.", "x", &[]), "demo.<名字>"),
+        (demo_spec("demo.boss_down", " ", &[]), "说明"),
+        (
+            demo_spec("demo.boss_down", "x", &["boss_name"]),
+            "camelCase",
+        ),
+    ] {
+        let error = bad.check("demo").unwrap_err();
+        assert!(error.contains(want), "{} → {error}", bad.kind);
+    }
+    demo_spec("demo.boss_down", "打掉了首领", &["bossName"])
+        .check("demo")
+        .unwrap();
     for p in Phase::ALL {
         let text = serde_json::to_value(p).unwrap();
         assert_eq!(text, p.as_str());

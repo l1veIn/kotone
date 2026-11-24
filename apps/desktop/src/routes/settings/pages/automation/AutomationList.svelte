@@ -11,7 +11,8 @@
     type Automation, type AutomationRun,
   } from "../../../../lib/automation";
   import { agentSetAutomationHidden } from "../../../../lib/agent";
-  import { describeTrigger } from "../../../../lib/gameEvents";
+  import { describeTrigger, eventCatalog, triggerOff } from "../../../../lib/gameEvents";
+  import { pluginsStore } from "../../../../lib/plugins";
   import { listProfiles } from "../../../../lib/ipc";
   import { onMount } from "svelte";
   import { errText, settingsStore, toast } from "../../../../lib/stores/ui";
@@ -46,6 +47,8 @@
     try { profileNames = Object.fromEntries((await listProfiles()).map((p) => [p.id, p.displayName])); } catch { profileNames = {}; }
   });
   const gameName = (id: string) => profileNames[id] ?? id;
+  // 事件目录（本体的 game.* + 插件登记的）：事件的名字、插件关着时“这个触发不会发生”
+  const catalog = $derived(eventCatalog($pluginsStore, $settingsStore));
   function kindLabel(item: Automation): string {
     if (item.action.kind === "speak") return m.auto_list_kind_speak();
     if (item.action.kind === "prompt") return m.auto_list_kind_prompt({ name: $companionName });
@@ -189,7 +192,9 @@
                 <span>{kindLabel(item)}</span>
                 {#if active.length}<span class="text-primary" data-testid="automation-item-running">{m.auto_run_status_running()}</span>{/if}
                 {#if item.on?.enabled}
-                  <span class="flex items-center gap-1 text-foreground/80" data-testid="automation-item-trigger"><Gamepad2 class="size-3" />{describeTrigger(item.on, gameName)}</span>
+                  {@const off = triggerOff(item.on, catalog)}
+                  <span class="flex items-center gap-1 text-foreground/80" data-testid="automation-item-trigger"><Gamepad2 class="size-3" />{describeTrigger(item.on, catalog, gameName)}</span>
+                  {#if off}<span class="text-warning" data-testid="automation-item-trigger-off">{m.auto_editor_on_event_off({ reason: off })}</span>{/if}
                 {/if}
                 {#if item.schedule?.enabled}
                   <span class="flex items-center gap-1 text-foreground/80" data-testid="automation-item-schedule"><Clock class="size-3" />{describeSchedule(item.schedule.cron)}{#if item.nextRunAtMs}{` · ${m.auto_list_next_run({ time: clock(item.nextRunAtMs) })}`}{/if}</span>
@@ -231,7 +236,7 @@
                 <dt class="text-muted-foreground">{m.auto_field_schedule()}</dt>
                 <dd class="m-0">{#if item.schedule}{m.auto_list_schedule_detail({ schedule: item.schedule.enabled ? describeSchedule(item.schedule.cron) : m.auto_list_schedule_paused(), cron: item.schedule.cron })}{:else}{m.auto_list_unscheduled({ companion: $companionName })}{/if}</dd>
                 <dt class="text-muted-foreground">{m.auto_field_trigger()}</dt>
-                <dd class="m-0" data-testid="automation-detail-trigger">{#if item.on}{item.on.enabled ? describeTrigger(item.on, gameName) : m.auto_list_trigger_paused({ trigger: describeTrigger(item.on, gameName) })}{:else}{m.auto_list_no_trigger()}{/if}</dd>
+                <dd class="m-0" data-testid="automation-detail-trigger">{#if item.on}{item.on.enabled ? describeTrigger(item.on, catalog, gameName) : m.auto_list_trigger_paused({ trigger: describeTrigger(item.on, catalog, gameName) })}{:else}{m.auto_list_no_trigger()}{/if}</dd>
                 <dt class="text-muted-foreground">{m.auto_list_created()}</dt>
                 <dd class="m-0">{by[item.createdBy]} · {new Date(item.createdAtMs).toLocaleDateString()}</dd>
               </dl>

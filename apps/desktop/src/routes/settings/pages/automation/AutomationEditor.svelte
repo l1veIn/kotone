@@ -7,11 +7,12 @@
   import {
     PARAM_TYPES, PROMPT_PER_MATCH, saveAutomation, type Automation, type AutomationBody, type EventTrigger, type ParamSpec, type ParamType,
   } from "../../../../lib/automation";
-  import { eventLabel, eventsFor, GAME_EVENTS, phaseLabel, TRIGGER_PHASES } from "../../../../lib/gameEvents";
+  import { eventCatalog, eventLabel, eventsFor, phaseLabel, TRIGGER_PHASES } from "../../../../lib/gameEvents";
+  import { pluginsStore } from "../../../../lib/plugins";
   import { listProfiles } from "../../../../lib/ipc";
   import type { GameProfile } from "../../../../lib/ipc/contracts";
   import { companionName } from "$lib/stores/companion";
-  import { errText, toast } from "../../../../lib/stores/ui";
+  import { errText, settingsStore, toast } from "../../../../lib/stores/ui";
   import ParamInput from "./ParamInput.svelte";
   import ArgsForm from "./ArgsForm.svelte";
   import { cronToPreset, presetToCron, type SchedulePreset } from "../../../../lib/automation";
@@ -55,8 +56,18 @@
   let onCooldown = $state(initialOn?.cooldownSeconds ?? 0);
   let profiles = $state<GameProfile[]>([]);
   const games = $derived(profiles.filter((p) => p.processNames.length > 0));
-  const eventOptions = $derived(eventsFor(onGame));
-  const teamEvent = $derived(GAME_EVENTS.find((e) => e.type === onEvent)?.team ?? false);
+  // 事件目录：本体的 game.* + 插件登记的（插件关着的不在选择里；已经选了的照样显示，旁边说清楚不会发生）
+  const catalog = $derived(eventCatalog($pluginsStore, $settingsStore));
+  const eventOptions = $derived.by(() => {
+    const options = eventsFor(catalog, onGame).map((e) => ({ value: e.type, label: eventLabel(e.type, catalog) }));
+    const current = catalog.find((e) => e.type === onEvent);
+    if (current?.off && !options.some((o) => o.value === onEvent)) {
+      options.push({ value: onEvent, label: m.auto_editor_on_event_off_option({ event: eventLabel(onEvent, catalog), reason: current.off }) });
+    }
+    return options;
+  });
+  const eventOff = $derived(catalog.find((e) => e.type === onEvent)?.off ?? null);
+  const teamEvent = $derived(catalog.find((e) => e.type === onEvent)?.team ?? false);
 
   onMount(async () => {
     try { profiles = await listProfiles(); } catch { profiles = []; }
@@ -65,7 +76,7 @@
   function pickGame(game: string) {
     onGame = game;
     // 换了游戏，这个游戏给不了的事换回“阶段变化”
-    if (!eventsFor(game).some((e) => e.type === onEvent)) onEvent = "game.phase_changed";
+    if (!eventsFor(catalog, game).some((e) => e.type === onEvent)) onEvent = "game.phase_changed";
   }
 
   function trigger(): EventTrigger | null {
@@ -285,9 +296,12 @@
           </div>
           <div class="row"><span>{m.auto_editor_on_event()}</span>
             <div class="w-52"><SelectField ariaLabel={m.auto_editor_on_event()} value={onEvent} testid="automation-trigger-event"
-              options={eventOptions.map((e) => ({ value: e.type, label: eventLabel(e.type) }))}
+              options={eventOptions}
               onchange={(value) => { onEvent = String(value); }} /></div>
           </div>
+          {#if eventOff}
+            <p class="m-0 text-xs text-warning" data-testid="automation-trigger-off">{m.auto_editor_on_event_off({ reason: eventOff })}</p>
+          {/if}
           {#if onEvent === "game.phase_changed"}
             <div class="row"><span>{m.auto_editor_on_phase()}</span>
               <div class="w-40"><SelectField ariaLabel={m.auto_editor_on_phase()} value={onPhase} testid="automation-trigger-phase"

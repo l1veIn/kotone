@@ -693,7 +693,7 @@ fn defs() -> Vec<Def> {
                     "args": {"type": "object", "description": "到点运行时的入参"}
                 }},
                 "on": {"type": ["object", "null"], "required": ["event"], "properties": {
-                    "event": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "string", "maxLength": 64}, "description": "游戏事件类型，如 game.phase_changed、lol.dragon_kill，或前缀 lol.*（见 game.state）"},
+                    "event": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "string", "maxLength": 64}, "description": "游戏事件类型，如 game.phase_changed，或某个游戏的前缀如 lol.*（全部名字见 game.state 的事件目录）"},
                     "game": {"type": "string", "maxLength": 64, "description": "只在这个游戏配置上触发；不写 = 任何游戏"},
                     "match": {"type": "object", "description": "对事件 data 的子集匹配，数组表示“或”，如 {\"to\": \"loading\"}、{\"team\": \"enemy\"}"},
                     "for": {"type": "integer", "minimum": 0, "maximum": 3600, "description": "阶段保持多少秒才触发（只用于 game.phase_changed）"},
@@ -778,7 +778,7 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_GAME_STATE,
-            description: "What the player is playing right now (ADR 036 game hub): for each running game, phase (stopped / running / menu / queue / pre_match / loading / in_match / post_match; games without an adapter stay at running), phaseLabel, nativePhase (the game's own name, e.g. LoL InProgress), focused, runningSeconds, matchSeconds (null outside a match), attrs (adapter-specific, e.g. lol.gameTime, lol.queueId) and recent events [{type, secondsAgo, gameTime, data}]. Also the event catalog: which events each adapter can give (generic game.* for every profile with processNames; lol.* for League of Legends) with their data fields - use these names in an automation's `on` trigger. With game (a profile id), only that game.",
+            description: "What the player is playing right now (ADR 036 game hub): for each running game, phase (stopped / running / menu / queue / pre_match / loading / in_match / post_match; games without an adapter stay at running), phaseLabel, nativePhase (the game's own name, e.g. LoL InProgress), focused, runningSeconds, matchSeconds (null outside a match), attrs (adapter-specific, e.g. lol.gameTime, lol.queueId) and recent events [{type, secondsAgo, gameTime, data}]. Also the event catalog: which events each adapter can give (generic game.* for every profile with processNames; game-specific ones registered by plugins with a game adapter, e.g. lol.* by the League of Legends plugin, listed only while that plugin and the data switch they need are on - otherwise an `off` note says why) with their data fields - use these names in an automation's `on` trigger. With game (a profile id), only that game.",
             side_effects: &[],
             egress: "none",
             input: object(&[], json!({"game": id("只看这个游戏配置")})),

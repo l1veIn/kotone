@@ -105,21 +105,18 @@ fn settings(app: &AppHandle) -> kotone_core::settings::Settings {
         .clone()
 }
 
-/// 插件开着没有。
+/// 插件开着没有（规则在契约里，事件目录也用它：`Manifest::enabled_in`）。
 pub fn enabled(settings: &kotone_core::settings::Settings, manifest: &Manifest) -> bool {
-    settings.plugin_enabled(&manifest.id, manifest.enabled_by_default)
+    manifest.enabled_in(settings)
 }
 
-/// 插件里的某个数据开关开着没有（插件关着也算关）。
+/// 插件里的某个数据开关开着没有（插件关着也算关；`Manifest::source_enabled_in`）。
 pub fn source_enabled(
     settings: &kotone_core::settings::Settings,
     manifest: &Manifest,
     source: &str,
 ) -> bool {
-    enabled(settings, manifest)
-        && manifest.source(source).is_some_and(|s| {
-            settings.plugin_source_enabled(&manifest.id, source, s.enabled_by_default)
-        })
+    manifest.source_enabled_in(settings, source)
 }
 
 /// 插件开着、工具要的数据开关都开着。
@@ -253,6 +250,14 @@ impl Host for DesktopHost {
         data: Map<String, Value>,
         game_time: Option<f64>,
     ) {
+        // 只收清单 `[[events]]` 里登记过的（事件目录只有一种登记方式；插件的测试查它报的都登记了）
+        if !self.manifest.declares_event(kind) {
+            kotone_core::log::log(&format!(
+                "插件 {} 报了没登记的游戏事件 {kind}，没收",
+                self.id
+            ));
+            return;
+        }
         crate::games::push(&self.app, game, kind, source, data, game_time);
     }
 

@@ -47,7 +47,7 @@
   import ToggleField from "$lib/components/settings/ToggleField.svelte";
   import SelectField from "$lib/components/settings/SelectField.svelte";
   import InstalledGamesSection from "./InstalledGamesSection.svelte";
-  import { eventLabel, eventsFor, phaseLabel, playingGames, type PlayingGame } from "../../../lib/gameEvents";
+  import { eventCatalog, eventLabel, eventsFor, phaseLabel, playingGames, type PlayingGame } from "../../../lib/gameEvents";
   import { pluginEnabled, pluginsStore, type PluginInfo } from "../../../lib/plugins";
   import { PLUGIN_UI } from "../../../lib/pluginUi";
   import { listSeparator } from "$lib/locale";
@@ -246,9 +246,11 @@
     const off = listen("kotone://game", () => void refreshPlaying());
     return () => { void off.then((unlisten) => unlisten()); };
   });
+  /** 事件目录：本体的 game.* + 插件登记的（插件关着、要的数据开关关着的不算）。 */
+  const catalog = $derived(eventCatalog($pluginsStore, $settingsStore));
   /** 这个游戏配置能给的事：适配器的插件关着时只有通用的。 */
   function profileEvents(id: string): string {
-    return eventsFor(adapterOff(id) ? null : id).map((e) => eventLabel(e.type)).join(listSeparator());
+    return eventsFor(catalog, adapterOff(id) ? null : id).map((e) => eventLabel(e.type, catalog)).join(listSeparator());
   }
 
   async function onActivate(id: string) {

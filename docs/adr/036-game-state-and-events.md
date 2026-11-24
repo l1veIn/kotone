@@ -252,3 +252,5 @@ GSI 要在游戏的 cfg 目录放 `gamestate_integration_kotone.cfg`，游戏才
 - 第一次跑时复盘失败过一次，错误是“复盘结果不是约定的 JSON”（模型这次没回 JSON，之后两次都正常）。现在解析失败时会把回复开头记进本机日志，再遇到能看出原因。
 
 **还没测**（要真机）：真客户端下游戏中心的阶段和局内事件；D7 切配置以后热词是不是跟着变；真对局里的复盘。
+
+**2026-11-25 改：英雄联盟的事件目录由插件登记**（[插件重构](../plugin-refactor.md)第 7 步，ADR 038 D3 第 10 条）。D4 的目录现在只有一种登记方式：本体（`kotone_core::games::generic_events`）只登记通用的 `game.*`；游戏专用的事由带适配器的插件在自己的 `plugin.toml` 里用 `[[events]]` 登记（`type`、`label`、`data.<字段>`、`needs`），`lol.*` 十种从 `kotone-core` 的常量搬进了 `plugins/lol/plugin.toml`。宿主按插件开关合成一份目录（`kotone_plugin_api::event_catalog` → `EventCatalog`）：自动化保存时的校验、`game.state` 的 `events`、自动化编辑和游戏配置页里的选择都用它。插件关着（或某种事要的数据开关关着）时，它登记的事还在目录里：保存照常成功（旧的自动化不报废），结果里多一句 `triggerNotes`“英雄联盟插件关着，这个触发不会发生；到「插件」里打开以后照常触发”，`game.state` 不列这些事、只写一句 `off`，编辑里不出现在选择中；运行时照旧只是收不到。插件只报得出清单里登记过的事（宿主挡掉别的）。边界写成测试：插件登记的事件名在本体代码里一个都不出现（`kotone-plugin-api/tests/event_boundaries.rs`），英雄联盟插件报的每种事都登记了、登记的每种都会报（`plugins/lol/src/event_catalog_tests.rs`）。

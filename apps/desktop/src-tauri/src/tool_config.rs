@@ -999,7 +999,7 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|g| !g.is_empty());
-            Ok(crate::games::state_json(game))
+            Ok(crate::games::state_json(app, game))
         }
         c::TOOL_GAME_CLOSE => {
             let a: GameIdArgs = parse(tool, args)?;

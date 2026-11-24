@@ -517,20 +517,39 @@ pub fn automation_json(automation: &Automation, with_source: bool) -> Value {
     value
 }
 
-/// 保存（新建或按 id 覆盖）；程序先检查语法。
+/// 保存（新建或按 id 覆盖）；程序先检查语法。游戏事件触发按合并后的事件目录校验（插件登记的也认得）；
+/// 触发里的事现在不会发生时（例如英雄联盟插件关着）照常保存，结果里多一项 `triggerNotes` 说清楚（原则 21）。
 pub fn save(app: &AppHandle, mut draft: AutomationDraft, by: CreatedBy) -> Result<Value, String> {
     if let AutomationBody::Program(program) = &mut draft.action {
         program.source = check_source(&program.source)?.to_string();
     }
     store_draft_images(&mut draft)?;
-    let saved = library(app)?.save(draft, by)?;
+    let events = {
+        let settings = app
+            .state::<crate::SharedState>()
+            .settings
+            .read()
+            .unwrap()
+            .clone();
+        crate::games::event_catalog(&settings)
+    };
+    let saved = library(app)?.save(draft, by, &events)?;
     let _ = app.emit("kotone://automations-updated", ());
     crate::tool_service::publish(
         app,
         "automation.saved",
         json!({"id": saved.id, "name": saved.name}),
     );
-    Ok(automation_json(&saved, true))
+    let mut value = automation_json(&saved, true);
+    let notes = saved
+        .on
+        .as_ref()
+        .map(|on| events.notes(on))
+        .unwrap_or_default();
+    if let (false, Some(object)) = (notes.is_empty(), value.as_object_mut()) {
+        object.insert("triggerNotes".into(), json!(notes));
+    }
+    Ok(value)
 }
 
 pub fn get(app: &AppHandle, id: &str) -> Result<Value, String> {

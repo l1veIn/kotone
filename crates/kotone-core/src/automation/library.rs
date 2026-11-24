@@ -7,7 +7,7 @@ use std::{path::PathBuf, sync::Mutex};
 use serde_json::{Map, Value};
 
 use super::{now_ms, write_atomic, SpeakAction, MAX_NAME_CHARS, MAX_SOURCE_CHARS};
-use crate::games::{validate_trigger, EventTrigger};
+use crate::games::{validate_trigger, EventCatalog, EventTrigger};
 use crate::reminders::{validate_content, DeliveryKind};
 
 pub const MAX_AUTOMATIONS: usize = 200;
@@ -421,7 +421,8 @@ fn validate_params(params: &mut [ParamSpec]) -> Result<(), String> {
 }
 
 impl AutomationDraft {
-    fn normalized(mut self) -> Result<Self, String> {
+    /// 检查并整理。游戏事件触发按合并后的事件目录 `events` 认名字（本体的 `game.*` 加插件登记的）。
+    fn normalized(mut self, events: &EventCatalog) -> Result<Self, String> {
         self.name = self.name.trim().to_string();
         self.description = self.description.trim().to_string();
         if self.name.is_empty() || self.name.chars().count() > MAX_NAME_CHARS {
@@ -437,7 +438,7 @@ impl AutomationDraft {
             validate_args(&self.params, &schedule.args)?;
         }
         if let Some(on) = &self.on {
-            self.on = Some(validate_trigger(on)?);
+            self.on = Some(validate_trigger(on, events)?);
         }
         match &mut self.action {
             AutomationBody::Speak(speak) => {
@@ -855,8 +856,14 @@ impl AutomationLibrary {
     }
 
     /// 新建（`draft.id` 为空）或覆盖已有定义。覆盖时保留创建者与创建时间。
-    pub fn save(&self, draft: AutomationDraft, by: CreatedBy) -> Result<Automation, String> {
-        let draft = draft.normalized()?;
+    /// `events`：合并后的事件目录（宿主按插件开关算好），游戏事件触发按它校验。
+    pub fn save(
+        &self,
+        draft: AutomationDraft,
+        by: CreatedBy,
+        events: &EventCatalog,
+    ) -> Result<Automation, String> {
+        let draft = draft.normalized(events)?;
         let mut state = self.state.lock().unwrap();
         let mut next = state.clone();
         let now = now_ms();
@@ -991,7 +998,7 @@ mod tests {
             "action": {"kind": "speak", "text": "该{text}了", "delivery": ["voice"]},
         }))
         .unwrap();
-        let ok = draft.clone().normalized().unwrap();
+        let ok = draft.clone().normalized(&EventCatalog::generic()).unwrap();
         let AutomationBody::Speak(speak) = &ok.action else {
             panic!()
         };
@@ -1006,12 +1013,15 @@ mod tests {
             json!({"kind": "speak", "text": "{who}", "delivery": ["voice"]}),
         )
         .unwrap();
-        assert!(unknown.normalized().unwrap_err().contains("{who}"));
+        assert!(unknown
+            .normalized(&EventCatalog::generic())
+            .unwrap_err()
+            .contains("{who}"));
         let mut region = draft;
         region
             .params
             .push(spec(json!({"name": "area", "type": "region"})));
-        assert!(region.normalized().is_err());
+        assert!(region.normalized(&EventCatalog::generic()).is_err());
     }
 
     #[test]
@@ -1023,20 +1033,20 @@ mod tests {
             enabled: true,
             args: args(json!({"key": "E"})),
         });
-        let ok = draft.clone().normalized().unwrap();
+        let ok = draft.clone().normalized(&EventCatalog::generic()).unwrap();
         assert_eq!(ok.schedule.as_ref().unwrap().cron, "0 8 * * *");
         draft.schedule = Some(Schedule {
             cron: "8 点".into(),
             enabled: true,
             args: Map::new(),
         });
-        assert!(draft.clone().normalized().is_err());
+        assert!(draft.clone().normalized(&EventCatalog::generic()).is_err());
         draft.schedule = Some(Schedule {
             cron: "@daily".into(),
             enabled: true,
             args: args(json!({"nope": 1})),
         });
-        assert!(draft.normalized().is_err());
+        assert!(draft.normalized(&EventCatalog::generic()).is_err());
     }
 
     #[test]
@@ -1056,7 +1066,7 @@ mod tests {
             schedule: None,
             on: None,
         }
-        .normalized()
+        .normalized(&EventCatalog::generic())
         .unwrap();
         assert!(!library.ensure_builtin().unwrap());
         library.delete(BUILTIN_REMIND_ID).unwrap();
@@ -1090,7 +1100,7 @@ mod tests {
                 schedule: None,
                 on: None,
             }
-            .normalized()
+            .normalized(&EventCatalog::generic())
             .unwrap_or_else(|e| panic!("{id}: {e}"));
             // 缺省值本身能通过入参校验（什么都不填也能跑）
             validate_args(&draft.params, &Map::new()).unwrap_or_else(|e| panic!("{id}: {e}"));
@@ -1104,7 +1114,10 @@ mod tests {
 
     #[test]
     fn args_are_checked_against_the_declaration_and_defaults_filled() {
-        let params = press_every().normalized().unwrap().params;
+        let params = press_every()
+            .normalized(&EventCatalog::generic())
+            .unwrap()
+            .params;
         let area = json!({"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4});
         let ok = validate_args(&params, &args(json!({"area": area, "key": " E "}))).unwrap();
         assert_eq!(ok["key"], "E");
@@ -1179,7 +1192,7 @@ mod tests {
             (empty, "为空"),
             (no_name, "名字"),
         ] {
-            let err = draft.normalized().unwrap_err();
+            let err = draft.normalized(&EventCatalog::generic()).unwrap_err();
             assert!(err.contains(why), "{err}");
         }
         assert!(serde_json::from_value::<ParamSpec>(json!({"name": "x", "type": "file"})).is_err());
@@ -1190,19 +1203,25 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("automations.json");
         let library = AutomationLibrary::open(path.clone()).unwrap();
-        let saved = library.save(press_every(), CreatedBy::Agent).unwrap();
+        let saved = library
+            .save(press_every(), CreatedBy::Agent, &EventCatalog::generic())
+            .unwrap();
         assert_eq!(saved.id, "auto-1");
         assert_eq!(saved.name, "连按某键");
         assert_eq!(saved.params[1].label, "interval");
         let mut edit = press_every();
         edit.id = Some(saved.id.clone());
         edit.name = "连按".into();
-        let updated = library.save(edit, CreatedBy::User).unwrap();
+        let updated = library
+            .save(edit, CreatedBy::User, &EventCatalog::generic())
+            .unwrap();
         assert_eq!(updated.created_by, CreatedBy::Agent, "覆盖保留创建者");
         assert_eq!(updated.created_at_ms, saved.created_at_ms);
         let mut missing = press_every();
         missing.id = Some("auto-99".into());
-        assert!(library.save(missing, CreatedBy::User).is_err());
+        assert!(library
+            .save(missing, CreatedBy::User, &EventCatalog::generic())
+            .is_err());
         drop(library);
         let library = AutomationLibrary::open(path.clone()).unwrap();
         assert_eq!(library.list().len(), 1);
@@ -1215,7 +1234,10 @@ mod tests {
         assert!(library.list().is_empty());
         // 编号不复用
         assert_eq!(
-            library.save(press_every(), CreatedBy::User).unwrap().id,
+            library
+                .save(press_every(), CreatedBy::User, &EventCatalog::generic())
+                .unwrap()
+                .id,
             "auto-2"
         );
     }
@@ -1228,7 +1250,7 @@ mod tests {
             "action": {"kind": "prompt", "text": "  用 lol.scout 看看对面谁是突破口  "},
             "on": {"event": ["game.phase_changed"], "game": "lol", "match": {"to": "loading"}, "oncePerMatch": true}
         }))
-        .normalized()
+        .normalized(&EventCatalog::generic())
         .unwrap();
         let AutomationBody::Prompt(prompt) = &ok.action else {
             panic!("{:?}", ok.action)
@@ -1255,7 +1277,9 @@ mod tests {
                 "没有",
             ),
         ] {
-            let error = draft(bad.clone()).normalized().unwrap_err();
+            let error = draft(bad.clone())
+                .normalized(&EventCatalog::generic())
+                .unwrap_err();
             assert!(error.contains(want), "{bad} → {error}");
         }
     }
@@ -1279,7 +1303,7 @@ mod tests {
             schedule: None,
             on: a.on.clone(),
         }
-        .normalized()
+        .normalized(&EventCatalog::generic())
         .unwrap();
         assert_eq!(draft.on, a.on);
         // 老的自动化文件里没有 on：照兼容规则读成 None

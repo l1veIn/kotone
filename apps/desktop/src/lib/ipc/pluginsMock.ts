@@ -16,7 +16,7 @@ import { remotePlugins } from "./mcpServersMock";
 import { gameVoiceCall } from "./gameVoiceMock";
 import { interpreterCall } from "./interpreterMock";
 import { musicCall, pluginTurnedOff as musicTurnedOff, subscribe as subscribeMusic } from "./musicMock";
-import { findSamplePlayer, sampleGame, sampleMatch, samplePlayer } from "./lolMock";
+import { findSamplePlayer, sampleGame, sampleMatch, samplePlayer, type SamplePhase } from "./lolMock";
 import {
   findSampleChampion, sampleChampionList, sampleChampionMayhem, sampleChampionRift, sampleTierMayhem, sampleTierRift,
 } from "./lolStatsMock";
@@ -298,8 +298,10 @@ export async function pluginCall(plugin: string, tool: string, args: Record<stri
 
 // ---------- 插件的 MCP App（ADR 039 D5） ----------
 
-/** 做成 App 的页面（和 plugins/lol/src/app.rs 的 APP_PAGES 一致）。 */
-const APP_PAGES: string[] = [PAGE_TIER];
+/** 做成 App 的页面（和 plugins/lol/src/app.rs 的 APP_PAGES 一致）和它们要的数据开关（plugin.toml 的 pages.needs）。 */
+const APP_PAGES: Record<string, string> = {
+  [PAGE_MATCH]: "client", [PAGE_PLAYER]: "client", [PAGE_GAME]: "client", [PAGE_CHAMPION]: "stats", [PAGE_TIER]: "stats",
+};
 /** 预览里代理路径的“密钥”（真的是每次启动随机的 64 位十六进制）。 */
 const MOCK_KEY = "0000feed";
 
@@ -312,8 +314,8 @@ async function appBase(): Promise<string> {
 
 /** `plugin_app`：和真的一样，插件或页面要的数据开关关着、页面不是 App 时报错。 */
 export async function pluginApp(uri: string): Promise<{ plugin: string; uri: string; sandboxUrl: string; ui: Record<string, unknown> }> {
-  if (!APP_PAGES.includes(uri)) throw new Error(`${uri} is not an app`);
-  if (!(await enabled(lol)) || (await sourceOff("stats"))) throw new Error(`${uri} is off`);
+  if (!(uri in APP_PAGES)) throw new Error(`${uri} is not an app`);
+  if (!(await enabled(lol)) || (await sourceOff(APP_PAGES[uri]))) throw new Error(`${uri} is off`);
   const page = uri.slice(uri.lastIndexOf("/") + 1);
   return {
     plugin: "lol",
@@ -325,7 +327,7 @@ export async function pluginApp(uri: string): Promise<{ plugin: string; uri: str
 
 /** `plugin_resource`：App 读自己插件的资源。 */
 export async function pluginResource(plugin: string, uri: string): Promise<Record<string, unknown>> {
-  if (plugin !== "lol" || !APP_PAGES.includes(uri)) throw new Error(`${plugin} cannot read ${uri}`);
+  if (plugin !== "lol" || !(uri in APP_PAGES)) throw new Error(`${plugin} cannot read ${uri}`);
   const page = uri.slice(uri.lastIndexOf("/") + 1);
   const text = await (await fetch(`/__kotone/app-html/lol/${page}`)).text();
   return { uri, mimeType: "text/html;profile=mcp-app", text, _meta: { ui: { csp: { resourceDomains: ["https://raw.communitydragon.org"] } } } };

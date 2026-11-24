@@ -30,6 +30,15 @@ export interface PluginPageSpec {
   title: string;
   needs: string[];
 }
+/** 插件登记的游戏事件（`plugin.toml` 的 `[[events]]`，ADR 036 D4）：类型、中文说明、`data` 字段和说明、要的数据开关。 */
+export interface PluginEventSpec {
+  /** `<适配器>.<名字>` */
+  type: string;
+  /** 中文说明（界面上用插件的文案 `plugin_<id>_event_<名字>`，没有时用它）。 */
+  label: string;
+  data: Record<string, string>;
+  needs: string[];
+}
 export interface PluginManifest {
   id: string;
   name: string;
@@ -42,6 +51,8 @@ export interface PluginManifest {
   pages: PluginPageSpec[];
   overlays: PluginPageSpec[];
   agent: { overview: string; rule: string };
+  /** 带适配器的插件登记的游戏事件（没有 = 不登记）。 */
+  events?: PluginEventSpec[];
 }
 export interface PluginToolInfo {
   name: string;
