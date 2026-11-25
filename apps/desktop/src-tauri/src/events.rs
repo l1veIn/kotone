@@ -110,7 +110,7 @@ impl Emitter for TauriEmitter {
                 // 会话可继续全程靠热键/声音操作，但对本次 Show 做安全拦截，
                 // 并让设置根页记住提示（即使当时窗口隐藏/不在通用页）。
                 let block_for_fullscreen = action == OnDemandOverlayAction::Show
-                    && fullscreen::is_exclusive_fullscreen_active() == Some(true);
+                    && crate::attention::exclusive_fullscreen();
                 if block_for_fullscreen {
                     hide_window(&win);
                     record_overlay_event("fullscreen_state", "state", Some(true));
@@ -166,7 +166,7 @@ impl Emitter for TauriEmitter {
                                     .hidden_for_companion
                                     .swap(false, std::sync::atomic::Ordering::SeqCst)
                                 && visibility == OverlayVisibility::Always
-                                && fullscreen::is_exclusive_fullscreen_active() != Some(true)
+                                && !crate::attention::exclusive_fullscreen()
                             {
                                 show_window_no_focus(&win);
                             }

@@ -615,7 +615,7 @@ fn apply_window(app: &AppHandle) {
             crate::hide_window(&window);
             return;
         }
-        if crate::fullscreen::is_exclusive_fullscreen_active() == Some(true) {
+        if crate::attention::exclusive_fullscreen() {
             // 独占全屏时透明窗口会让游戏最小化或显示不出来：只靠语音。
             crate::hide_window(&window);
             return;
@@ -629,67 +629,18 @@ fn apply_window(app: &AppHandle) {
     });
 }
 
-/// 摆到前台窗口所在显示器的工作区角落（避开任务栏），DPI 按那块屏幕换算。
+/// 摆到前台窗口所在显示器的工作区角落（避开任务栏），DPI 按那块屏幕换算；同一个角上有语音输入悬浮窗时
+/// 让开它（屏幕角落分配，`screen_corner.rs`）。
 fn place(window: &tauri::WebviewWindow, config: &BubbleConfig) -> Result<(), String> {
-    let (left, top, right, bottom) = foreground_work_area().ok_or("无法确定显示器")?;
-    let scale = window
-        .available_monitors()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .find(|m| {
-            let p = m.position();
-            let s = m.size();
-            let cx = (left + right) / 2;
-            let cy = (top + bottom) / 2;
-            cx >= p.x && cx < p.x + s.width as i32 && cy >= p.y && cy < p.y + s.height as i32
-        })
-        .map(|m| m.scale_factor())
-        .unwrap_or(1.0);
-    let width = (WINDOW_SIZE.0 * scale).round() as i32;
-    let height = (WINDOW_SIZE.1 * scale).round() as i32;
-    let margin = (MARGIN * scale).round() as i32;
-    let offset = (config.offset_y as f64 * scale).round() as i32;
-    let x = match config.corner {
-        BubbleCorner::BottomRight | BubbleCorner::TopRight => right - width - margin,
-        BubbleCorner::BottomLeft | BubbleCorner::TopLeft => left + margin,
+    use crate::screen_corner::Corner;
+    let corner = match config.corner {
+        BubbleCorner::BottomRight => Corner::BottomRight,
+        BubbleCorner::BottomLeft => Corner::BottomLeft,
+        BubbleCorner::TopRight => Corner::TopRight,
+        BubbleCorner::TopLeft => Corner::TopLeft,
     };
-    let y = match config.corner {
-        BubbleCorner::BottomRight | BubbleCorner::BottomLeft => bottom - height - margin - offset,
-        BubbleCorner::TopRight | BubbleCorner::TopLeft => top + margin + offset,
-    };
-    window
-        .set_size(tauri::PhysicalSize::new(width as u32, height as u32))
-        .map_err(|e| e.to_string())?;
-    window
-        .set_position(tauri::PhysicalPosition::new(x, y))
-        .map_err(|e| e.to_string())
-}
-
-#[cfg(windows)]
-fn foreground_work_area() -> Option<(i32, i32, i32, i32)> {
-    use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
-    let mut info = MONITORINFO {
-        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-        ..Default::default()
-    };
-    let ok = unsafe {
-        GetMonitorInfoW(
-            MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTOPRIMARY),
-            &mut info,
-        )
-    };
-    ok.as_bool().then(|| {
-        let r = info.rcWork;
-        (r.left, r.top, r.right, r.bottom)
-    })
-}
-
-#[cfg(not(windows))]
-fn foreground_work_area() -> Option<(i32, i32, i32, i32)> {
-    None
+    let offset = config.offset_y as f64;
+    crate::screen_corner::place(window, corner, WINDOW_SIZE, (MARGIN, MARGIN + offset))
 }
 
 #[tauri::command]

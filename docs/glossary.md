@@ -90,6 +90,7 @@
 | 启动 / Start | `runtime::start`, `runtimeToggleHotkey`, `ui.autoStart` | **只和本地语音识别有关**：把本地识别模型加载进内存。本地识别有 未启动 / 准备中 / 已启动 / 出问题了 四种状态；在线识别打开 Kotone 就就绪，界面上看不到“启动”。 |
 | 气泡 / Bubble | `bubble.rs`, `assistant.bubble` | 只属于角色：她在听、在想、在说什么。关掉后只用声音和弹幕，不借用悬浮窗。 |
 | 悬浮窗 / Overlay | `overlay.rs`, `overlay.*` | 只属于语音输入：识别进度、频道、没准备好的提示。 |
+| 屏幕角落分配 / Screen corner | `screen_corner.rs` | 摆在屏幕角上的小窗从角往外排成一列：悬浮窗（选了角上的预设或拖到角上）贴着角、从不被挪，气泡在它外面，消息提示最外面；谁没显示就不占地方，后出来的里面的窗口叠上外面的，外面的让开（ADR 039 实施记录“右下角排成一列”）。弹幕、插件覆盖层不占角落。只在代码和文档里用，界面上不说。 |
 | 打开软件时显示 / Start page | `ui.startPage` | `voiceInput` = 语音输入；空或其它任何值 = 聊天（默认）。 |
 | 主会话 / Main conversation | `agent.rs` `drive`，`kotone_agent::catalog::main_offers`（`ToolEntry::main`） | 玩家唯一看得到的对话：语音和打字共用一段、共用一小套马上出结果的工具（ADR 029 第二期；每个工具登记时自己标给不给主会话，MCP 方案第 1.5 期）。工具超过 3 秒没回来就转到后台（`kotone_agent::background`）。界面上就叫“对话”。 |
 | 后台的事 / Background task | `agent.start`、`Subagent`、`kotone_agent::subagents`（代码与 ADR 里叫“子代理”） | 主会话交出去的复杂、慢、多步的事。玩家看到的是主会话里的一张卡片（“写喝药脚本 · 进行中”），做完由主会话说一句；不进对话列表，不能点进去聊。界面和文案不说“子代理”“子会话”。旧的“子会话”（ADR 022）已经并进来，这个词不再用。 |

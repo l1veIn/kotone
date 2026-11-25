@@ -45,6 +45,7 @@ mod remote_plugins;
 mod roles;
 mod runtime;
 mod runtime_cmd;
+mod screen_corner;
 mod settings_cmd;
 mod speech_models;
 mod speech_screen;

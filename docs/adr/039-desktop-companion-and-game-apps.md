@@ -361,3 +361,26 @@
 **测试**：`focus_steal_real.py` 改前的版本 20/28（A1、A2 前台被拿走、登录窗口在测试窗口上面；B2、B3 点完前台不回来），改后 28/28；Playwright `mcp-app-links.spec.ts` 改前失败（“nothing opens before the player says so”：收到的是那个网址），改后过；`cargo test -p kotone-tauri --lib` 142 个过（新加 `attention::tests::windows_over_the_game_never_take_the_focus`，改前在 `overlay` 上失败）。
 
 **还没测 / 已知**：真游戏没测，用的是测试窗口；外部 Agent 只测了 `kotone.exe tools call`，`kotone.exe mcp` 走的是同一个工具服务；悬浮窗的预览按钮（确认 / 取消 / 重试）只在收音以后出现，真机没点到，测的是同一个页面收到了按下和点击；英文界面下的确认框没看；网易云登录窗口开着、关掉前后，Kotone 的界面线程偶尔不再响应（改前的版本也有，脚本里会打出来，A、B 两部分因此各起一个 Kotone），这次没查。
+
+### 实施记录（右下角排成一列；消息提示点得到，2026-11-25）
+
+[共享资源评估](../research/2026-11-25-shared-resources-audit.md)第二节第 10 条、第四节“屏幕”那一行（“屏幕角落按位置分配，右下角排成一列”），加上“游戏中途不被抢焦点”那次留下的一个疑问：悬浮窗不可聚焦时 WebView2 收不到点击，消息提示也是 `focusable: false`，点它（打开聊天、滚到卡片）可能没反应。两条都先在真机上试：`scripts/manual-e2e/message_popup_real.py`（隔离实例，`game_events_real.py` 的假英雄联盟客户端时间线只让它发两张自动卡片、各弹一次消息提示；语音输入悬浮窗“常驻”+“右下角”；测试窗口代替游戏在前台；不用 Key）。
+
+**复现**（改前 18/20）：
+
+1. **右下角挤：复现了。** M3：消息提示的窗口 (3306, 1914)–(3822, 2070) 和悬浮窗 (3024, 1956)–(3804, 2052) 叠在一起（3840 × 2160、缩放 150%），截图里悬浮窗的胶囊被小窗盖住一大半；M5：消息提示先贴着角弹出来、悬浮窗后出来，1 秒后还叠着。评估说的“弹幕也在右下角”不对：弹幕窗口是整块屏幕大的透明窗口，字在离上边 `danmakuTopOffsetPx`（缺省 120）的那条道上飘（`assistant.rs` 的 `position_on_foreground_monitor`），不占角落。
+2. **消息提示点不动：没复现。** M4 用 SendInput 点卡片：页面收到 pointerdown、pointerup、click，0.7 秒内 Kotone 到了前面、聊天页里那张卡片在视野里、小窗收起，测试窗口没收到键（打开聊天没往游戏按 Alt）；M6 点 ×：小窗收起，前台从头到尾是测试窗口——不可聚焦的窗口被点了也不激活。所以**没去掉** `focusable: false`：去掉以后点 × 反而会把游戏的前台拿走。悬浮窗那次为什么收不到点击，这次没查清。
+
+**玩家看到的**：语音输入悬浮窗选了“右下角”（或拖到了右下角）、气泡也在右下角时，右下角从下往上是悬浮窗、气泡、消息提示，互不遮挡，隔 12；谁没显示就往下补。消息提示正显示着时悬浮窗或气泡出来了，消息提示往上让开（没被叠上的不动；收起时不往回挪，玩家可能正要点它）。悬浮窗自己的位置不变，拖过的照旧在玩家放的地方。悬浮窗用默认的“跟随样式”（底部正中）、气泡在别的角时，和原来一样；只是屏幕窄时（逻辑宽度不到 1472，例如 1366 × 768、1440 × 900）底部正中的胶囊窗口和右下角的气泡窗口左右有重叠，两个同时显示时气泡往上让。点消息提示和原来一样。没有新设置。
+
+**怎么做的**（原则 2、7、15、18）：
+
+- **规矩只写一处**：新文件 `apps/desktop/src-tauri/src/screen_corner.rs`（术语表“屏幕角落分配”）。从角往外的顺序 `ORDER`：悬浮窗 → 气泡 → 消息提示。每个窗口先贴着角放，和比它靠角的、正显示着的窗口叠上了（隔不到 12 也算）就跳到那个窗口外面（底下的角往上、上面的角往下），直到谁都不叠；屏幕太小放不下时停在工作区里。不在同一列的（另一个角的、拖到屏幕中间的悬浮窗）不碍事。悬浮窗在最里面、从不被挪：位置是玩家选的，它还能点能拖。
+- **照谁**：Steam 覆盖层的 `ISteamUtils::SetOverlayNotificationInset`（[文档](https://partner.steamgames.com/doc/api/ISteamUtils)：游戏自己的界面占着通知的那个角时，把通知从角上挪开）——来来去去的通知让着常驻在角上的东西；Windows 的通知也在右下角、任务栏上面一个个往上叠（[通知的 UX 指南](https://learn.microsoft.com/windows/apps/design/shell/tiles-and-notifications/toast-ux-guidance)）。
+- **怎么接上**：气泡（`bubble.rs`）和消息提示（`message_popup.rs`）摆位都调 `screen_corner::place`；原来两个文件各有一份“前台窗口所在显示器的工作区 + 缩放”，合成一份，消息提示原来只避开气泡（`bubble_top_right_corner`）也删了。后出来的：`show_window_no_focus`（`window.rs`，所有盖在游戏上的窗口都经它显示）每次显示完调 `screen_corner::shown`，是角落窗口的话在主线程上把被它叠上的外面的窗口挪出去（`settle`）。窗口显没显示、在哪直接问系统（`IsWindowVisible`、`GetWindowRect`）：显隐走的是原始的 `SW_SHOWNA` / `SW_HIDE`，tao 记的可见状态不准。悬浮窗自己的摆位（`overlay_window.rs`）没动。`lib.rs` 只加了 `mod screen_corner;` 一行。
+- **独占全屏的判断（顺手）**：`attention::exclusive_fullscreen` 一份，气泡（`bubble.rs`）、语音输入悬浮窗（`overlay.rs` 三处、`events.rs` 两处）改调它。还剩：弹幕（`assistant.rs` 的 `present_danmaku_active`，另一个任务正在改这个文件，这次没动；它出错时还要说“请切换为无边框”）；诊断（`diagnostics.rs`）、全屏提醒（`compatibility.rs`）、悬浮窗显隐的记录（`overlay_window.rs` 的 peek、`events.rs` 记日志那处）要“查不到”这第三种结果，照旧直接读 `fullscreen::is_exclusive_fullscreen_active`。插件覆盖层本来就没查独占全屏（评估说它查了，不对；它只在目标游戏窗口在前台时显示）。
+- **消息提示保持不可聚焦**：`attention::tests::windows_over_the_game_never_take_the_focus` 加了一条，`message-popup` 要 `focusable: false`，理由写在测试里；`attention.rs` 模块说明里“这种小窗不能做成不可聚焦”改成只说悬浮窗。
+
+**测试**：真机 `message_popup_real.py` 改前 18/20（M3、M5 失败，见“复现”），改后 20/20（截图 `target/plugin-shots/round8/corner-first.png`、`corner-reflow.png`：消息提示在胶囊上面，隔 12；M4、M6 改前改后都过）。`cargo test -p kotone-tauri --lib` 156 个过，新加 `screen_corner::tests` 5 个（右下角一列：只有悬浮窗、三个都在、只有气泡、谁都没有；不在同一列的不碍事、拖到角上的照样让开；上面的角往下排、气泡的偏移照算；后出来的里面的叠上了外面的就挪出去、不叠的不动；放不下时不出工作区），`attention::tests` 加了消息提示不可聚焦那条；`cargo clippy -p kotone-tauri --all-targets -- -D warnings` 干净；Playwright `terminology.spec` 4/4。
+
+**还没测**：真游戏（用的是测试窗口）；多显示器（摆位跟前台窗口所在那块屏，和原来一样）；气泡和消息提示同时在右下角、左下角和上面的角只有单元测试（`screen_corner::tests`），真机脚本没叫她开口；玩家把悬浮窗拖到正显示着的消息提示上面时不挪（玩家自己拖的，消息提示几秒就走）。

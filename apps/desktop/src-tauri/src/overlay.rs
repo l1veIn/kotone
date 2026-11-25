@@ -149,10 +149,7 @@ pub fn reconcile(app: &AppHandle, explicitly_enabled: bool) {
                         || (visibility == OverlayVisibility::Always
                             && handle.state::<crate::RuntimeManager>().phase()
                                 == kotone_core::runtime::RuntimePhase::Running);
-                    if show
-                        && kotone_platform_windows::fullscreen::is_exclusive_fullscreen_active()
-                            != Some(true)
-                    {
+                    if show && !crate::attention::exclusive_fullscreen() {
                         crate::show_window_no_focus(&win);
                     } else {
                         crate::hide_window(&win);
@@ -355,11 +352,7 @@ pub fn set_visible<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>, visible: bo
             if visible && window.label() == "overlay" && !can_show(window.app_handle()) {
                 return;
             }
-            if visible
-                && window.label() == "overlay"
-                && kotone_platform_windows::fullscreen::is_exclusive_fullscreen_active()
-                    == Some(true)
-            {
+            if visible && window.label() == "overlay" && crate::attention::exclusive_fullscreen() {
                 return;
             }
             let result = (|| -> windows::core::Result<bool> {
@@ -480,7 +473,7 @@ pub fn show_hint(app: &AppHandle, title: &str, detail: &str) {
     if !can_show(app) {
         return;
     }
-    if kotone_platform_windows::fullscreen::is_exclusive_fullscreen_active() == Some(true) {
+    if crate::attention::exclusive_fullscreen() {
         log::log("overlay hint skipped: exclusive fullscreen game is active");
         return;
     }

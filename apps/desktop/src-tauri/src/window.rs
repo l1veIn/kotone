@@ -7,9 +7,13 @@ use super::*;
 ///
 /// 注意：本函数绕开 tao 的 window_flags 缓存直接操作 Win32 状态，因此隐藏必须
 /// 走对称的 `hide_window`（见下），不能混用 Tauri 的 hide()/show()。
+///
+/// 显示的是屏幕角落的小窗（悬浮窗、气泡、消息提示）时，同一个角上被它叠上的外面的小窗跟着让开
+/// （[`crate::screen_corner::shown`]）。
 #[cfg(windows)]
 pub(crate) fn show_window_no_focus<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
     overlay::set_visible(win, true);
+    crate::screen_corner::shown(win);
 }
 
 /// 隐藏窗口（与 show_window_no_focus 对称的原始 Win32 路径）。
@@ -79,6 +83,7 @@ pub(crate) fn show_behind<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
 #[cfg(not(windows))]
 fn show_window_no_focus<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
     let _ = win.show();
+    crate::screen_corner::shown(win);
 }
 
 #[cfg(not(windows))]

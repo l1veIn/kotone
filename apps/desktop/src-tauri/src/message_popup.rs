@@ -4,13 +4,17 @@
 //! - **绝不抢焦点**：和气泡同一套做法（ADR 018）——窗口不可聚焦（`focusable: false`，Windows 上是
 //!   `WS_EX_NOACTIVATE`）、不进任务栏、置顶，用 `SW_SHOWNA` 显示（不激活窗口，不 `SetForegroundWindow`）。
 //!   和气泡不同的是它能点（不整窗鼠标穿透）；玩家点了它才把 Kotone 主窗口拿到前面（`agent::auto_card_open`）。
+//!   不可聚焦照样点得到：2026-11-25 真机（`scripts/manual-e2e/message_popup_real.py` M4、M6）页面收到按下和点击，
+//!   点卡片打开聊天、滚到那张卡片，点 × 收起时前台一直是游戏（测试窗口）。别照语音输入悬浮窗改成可聚焦（那边不可
+//!   聚焦时收不到点击，`attention.rs`）：改了以后点 × 会把游戏的前台拿走。
 //! - **不弹的时候**：游戏独占全屏、演示模式、别的程序全屏（`fullscreen::popup_blocked`：无边框全屏的游戏照样弹）；
 //!   Kotone 自己的窗口在前台（玩家正看着 Kotone，卡片就在聊天里）。卡片照样进聊天。判断在 [`crate::attention`]
 //!   （“能不能现在打扰”全宿主共用一份）。
 //! - 同一时间只有一个：新的替换旧的。界面（`routes/messagePopup`）管动效和 6 秒倒计时（鼠标停在上面时不走），
 //!   到点调 [`message_popup_close`]；万一界面没调，这里 60 秒后也收起。
-//! - 位置：前台窗口所在显示器的工作区右下角（避开任务栏），DPI 按那块屏幕换算；气泡也在右下角而且正显示着时，
-//!   放在气泡窗口上面。
+//! - 位置：前台窗口所在显示器的工作区右下角（避开任务栏），DPI 按那块屏幕换算；同一个角上的语音输入悬浮窗、气泡
+//!   正显示着时让开它们，排在最外面（屏幕角落分配，`screen_corner.rs`：右下角排成一列，后出来的悬浮窗、气泡叠上它时
+//!   它往外挪）。
 //! - 不进截图（`WDA_EXCLUDEFROMCAPTURE`，照覆盖层）：她看屏幕、截图识别时不会把它认进去。
 
 use std::sync::Mutex;
@@ -26,8 +30,6 @@ pub const EVENT: &str = "kotone://message-popup";
 const WINDOW_SIZE: (f64, f64) = (344.0, 104.0);
 /// 小窗离工作区边缘 24（和气泡一样）；窗口四周有 12 的阴影边，所以窗口离边缘 12。
 const MARGIN: f64 = 12.0;
-/// 气泡在右下角显示着时，和气泡窗口之间隔多少。
-const GAP: f64 = 12.0;
 /// 界面没来收起时，最多显示多久。
 const MAX_SHOWN: Duration = Duration::from_secs(60);
 
@@ -80,7 +82,7 @@ pub fn show(app: &AppHandle, mut popup: Popup) {
         let Some(window) = handle.get_webview_window(LABEL).or_else(|| create(&handle)) else {
             return;
         };
-        if let Err(e) = place(&handle, &window) {
+        if let Err(e) = place(&window) {
             log::log(&format!("消息提示：摆不好位置：{e}"));
         }
         if std::env::var_os("KOTONE_POPUP_CAPTURABLE").is_none() {
@@ -140,79 +142,14 @@ fn create(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     }
 }
 
-/// 摆到前台窗口所在显示器工作区的右下角；气泡在右下角显示着时放在气泡上面。
-fn place(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<(), String> {
-    let (left, top, right, bottom) = foreground_work_area().ok_or("无法确定显示器")?;
-    let scale = window
-        .available_monitors()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .find(|m| {
-            let p = m.position();
-            let s = m.size();
-            let cx = (left + right) / 2;
-            let cy = (top + bottom) / 2;
-            cx >= p.x && cx < p.x + s.width as i32 && cy >= p.y && cy < p.y + s.height as i32
-        })
-        .map(|m| m.scale_factor())
-        .unwrap_or(1.0);
-    let width = (WINDOW_SIZE.0 * scale).round() as i32;
-    let height = (WINDOW_SIZE.1 * scale).round() as i32;
-    let margin = (MARGIN * scale).round() as i32;
-    let x = right - width - margin;
-    let mut y = bottom - height - margin;
-    if let Some(bubble_top) = bubble_top_right_corner(app, (left, top, right, bottom)) {
-        y = y.min(bubble_top - height - (GAP * scale).round() as i32);
-    }
-    let y = y.max(top);
-    window
-        .set_size(tauri::PhysicalSize::new(width as u32, height as u32))
-        .map_err(|e| e.to_string())?;
-    window
-        .set_position(tauri::PhysicalPosition::new(x, y))
-        .map_err(|e| e.to_string())
-}
-
-/// 气泡正显示在这块屏的右下角时，气泡窗口的上沿（物理像素）。
-fn bubble_top_right_corner(app: &AppHandle, area: (i32, i32, i32, i32)) -> Option<i32> {
-    let snap = crate::bubble::snapshot(app)?;
-    if snap.phase == crate::bubble::Phase::Hidden
-        || snap.corner != kotone_core::assistant::BubbleCorner::BottomRight
-    {
-        return None;
-    }
-    let window = app.get_webview_window("companion")?;
-    let p = window.outer_position().ok()?;
-    let (l, t, r, b) = area;
-    (p.x >= l && p.x < r && p.y >= t && p.y < b).then_some(p.y)
-}
-
-#[cfg(windows)]
-fn foreground_work_area() -> Option<(i32, i32, i32, i32)> {
-    use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
-    let mut info = MONITORINFO {
-        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-        ..Default::default()
-    };
-    // SAFETY: 只读当前前台窗口所在的显示器信息
-    let ok = unsafe {
-        GetMonitorInfoW(
-            MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTOPRIMARY),
-            &mut info,
-        )
-    };
-    ok.as_bool().then(|| {
-        let r = info.rcWork;
-        (r.left, r.top, r.right, r.bottom)
-    })
-}
-
-#[cfg(not(windows))]
-fn foreground_work_area() -> Option<(i32, i32, i32, i32)> {
-    None
+/// 摆到前台窗口所在显示器工作区的右下角，让开同一个角上正显示着的悬浮窗、气泡。
+fn place(window: &tauri::WebviewWindow) -> Result<(), String> {
+    crate::screen_corner::place(
+        window,
+        crate::screen_corner::Corner::BottomRight,
+        WINDOW_SIZE,
+        (MARGIN, MARGIN),
+    )
 }
 
 /// 小窗的界面刚加载好：拿现在要显示的那条（窗口第一次建的时候，事件可能比页面先到）。
