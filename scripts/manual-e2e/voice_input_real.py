@@ -44,7 +44,11 @@ Checks (PASS / FAIL / SKIP lines, total at the end):
   5. the floating window's states over `kotone://state` (CDP): listening → transcribing → processing → (preview →)
      sending → success → idle; the floating window appeared and went away (diagnostics overlay_show / overlay_hide);
   6. her game_chat.send (same typer): `tools call game_chat.send` (outside agents); her own path through a typed
-     message and the mock model; the tool service's companion.type;
+     message and the mock model; the tool service's companion.type. Since ADR 041 phase 1 all of these (and voice
+     input) go through the send-to-game entry, which refuses to type for her / outside agents unless a game it knows
+     is in front or the selected profile is "generic" (any window): this test selects "generic", so they type into
+     the test window as before. It deliberately adds NO profile for the test window's process (powershell.exe): the
+     entry would then prefer it over the selected one, and sections 1-5 and 7 check which profile voice input used;
   7. console channel: a profile that declares one falls back to the keyboard when its game isn't in front
      (console_chat_skipped); the console send itself needs a real Steam game → SKIP;
   8. voice input plugin off (ADR 039 D2: typing into game chat is the body's): the tool service still lists
@@ -660,6 +664,8 @@ def write_config():
         "hotkeyBackend": "register",
         "hotkey": {"key": KEY, "mode": "toggle"},
         "interactionMode": "push-to-talk",
+        # "generic" = any foreground window: the send-to-game entry (ADR 041) then lets game_chat.send / companion.type
+        # type into the test window; no profile for powershell.exe on purpose (see the docstring, step 6)
         "activeProfileId": "generic",
         # nothing else registered system-wide through RegisterHotKey while the test runs
         "channelCycleHotkey": "", "resendLastHotkey": "", "togglePostProcessingHotkey": "",

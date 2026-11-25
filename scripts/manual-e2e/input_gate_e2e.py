@@ -1,7 +1,9 @@
 """Real-machine test of ADR 032 decision 1: while Kotone types a chat message, the player's key downs are swallowed.
 
 Everything is isolated: KOTONE_HOME=target/gate-e2e/home, the test window target_window.ps1 -Chat, no game, no player
-config. The "player" is this script: SendInput WITHOUT Kotone's tag (dwExtraInfo 0), which the hook treats exactly like
+config. The isolated home gets a game profile "e2e-chat" for the test window's process (powershell.exe) with League of
+Legends' chat keys: since ADR 041 phase 1 companion.type goes through the send-to-game entry, which only types into a
+game it recognises in front. The "player" is this script: SendInput WITHOUT Kotone's tag (dwExtraInfo 0), which the hook treats exactly like
 a physical key. The test window logs every key with its Shift state and dwExtraInfo (Kotone's keys carry 4B544E49), and
 this script rebuilds what a chat box would have received: Enter opens it (Shift+Enter = "all" channel), characters go
 in, Enter sends it.
@@ -203,6 +205,28 @@ def gate_records():
         return [json.loads(l) for l in f if '"inject_gate"' in l]
 
 
+PROFILE_ID = "e2e-chat"
+
+
+def write_test_window_profile():
+    """A game profile for the test window's process (powershell.exe), with League of Legends' chat keys (team = Enter,
+    all = Shift+Enter, send = Enter, same delays). Since ADR 041 phase 1 companion.type goes through the send-to-game
+    entry, which picks the profile of the game in front and refuses a foreground that is not a game; before that it
+    typed into whatever was in front with the selected profile (League of Legends by default). This profile keeps the
+    keys exactly as they were and lets the entry accept the test window."""
+    os.makedirs(os.path.join(HOME, "profiles"), exist_ok=True)
+    profile = {
+        "id": PROFILE_ID, "displayName": "E2E chat (LoL keys)", "processNames": ["powershell.exe"],
+        "windowTitlePatterns": [], "openChatKey": "Enter", "sendKey": "Enter",
+        "preOpenDelayMs": 20, "prePasteDelayMs": 20, "preSendDelayMs": 100, "preferClipboardPaste": False,
+        "hotwords": [],
+        "channels": [{"id": "team", "displayName": "队伍", "default": True},
+                     {"id": "all", "displayName": "所有人", "openChatKey": "Shift+Enter"}],
+    }
+    with open(os.path.join(HOME, "profiles", f"{PROFILE_ID}.json"), "w", encoding="utf-8") as f:
+        json.dump(profile, f, ensure_ascii=False, indent=1)
+
+
 def wait_for(pred, seconds, what):
     deadline = time.time() + seconds
     while time.time() < deadline:
@@ -223,6 +247,7 @@ def main():
     if not os.path.exists(config):
         with open(config, "w", encoding="utf-8") as f:
             json.dump({"toolService": {"enabled": True}, "ui": {"firstRunCompleted": True}}, f)
+    write_test_window_profile()
 
     app = subprocess.Popen([EXE, "--background"], env=ENV)
     window = subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",

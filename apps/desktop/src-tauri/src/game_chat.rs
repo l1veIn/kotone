@@ -152,15 +152,26 @@ pub async fn send_to_game_chat(
         kotone_core::log::log(&format!("game_chat: chat record failed: {e}"));
     }
     let outcome = result.map_err(|failure| failure.to_string())?;
-    let mut value = outcome.to_json();
-    value["receipt"] = json!(receipt(&outcome, send));
+    let mut value = result_json(&outcome, send);
     if let Ok(run) = record {
         value["runId"] = json!(run.id);
     }
     Ok(value)
 }
 
-/// 旧的结果样子（`companion.type`、旧陪玩流程）：`{typed, sent, profile, receipt}`，再加上入口的字段（只加不改）。
+/// 给她 / 外部 Agent 的结果：以前的 `{typed, sent, profile, receipt}` 照旧（外部 Agent、脚本认这几个字段），
+/// 再加上入口的 `route`、`channel`、`lines`、`sentLines`、`stopped`……（只加不改）。`sent` 照旧是“按了发送键”：
+/// 只打进聊天框（`send = false`）时是 false；多行时要每一行都发了才是 true。
+fn result_json(outcome: &ChatOutcome, send: bool) -> Value {
+    let mut value = outcome.to_json();
+    value["typed"] = json!(outcome.lines.join("\n"));
+    value["sent"] = json!(send && outcome.sent);
+    value["profile"] = json!(outcome.game);
+    value["receipt"] = json!(receipt(outcome, send));
+    value
+}
+
+/// 旧工具 `companion.type`、旧陪玩流程：只收一行，结果同 [`result_json`]，不写执行记录。
 pub async fn type_into_chat(
     app: &AppHandle,
     text: &str,
@@ -179,12 +190,7 @@ pub async fn type_into_chat(
     let outcome = send_logged(app, request)
         .await
         .map_err(|failure| failure.to_string())?;
-    let mut value = outcome.to_json();
-    value["typed"] = json!(text);
-    value["sent"] = json!(send && outcome.sent);
-    value["profile"] = json!(outcome.game);
-    value["receipt"] = json!(receipt(&outcome, send));
-    Ok(value)
+    Ok(result_json(&outcome, send))
 }
 
 /// 发，并把结果记进日志（不记文字）。
@@ -218,6 +224,49 @@ fn selected_game(app: &AppHandle) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn outcome(lines: &[&str], sent_lines: usize) -> ChatOutcome {
+        ChatOutcome {
+            route: SendRoute::Keys,
+            game: "lol".into(),
+            game_name: "League of Legends".into(),
+            channel: "team".into(),
+            channel_name: "队伍".into(),
+            channel_fell_back: false,
+            lines: lines.iter().map(|l| l.to_string()).collect(),
+            sent_lines,
+            sent: sent_lines == lines.len(),
+            stopped: (sent_lines < lines.len()).then_some(ChatFailure::ForegroundChanged),
+            waited_ms: 0,
+        }
+    }
+
+    /// 以前的结果字段（`typed`、`sent`、`profile`、`receipt`）一个不少，入口的字段是加上去的（单向门）。
+    #[test]
+    fn the_result_keeps_the_old_fields_and_adds_the_new_ones() {
+        let v = result_json(&outcome(&["我去下路"], 1), true);
+        assert_eq!(v["typed"], "我去下路");
+        assert_eq!(v["sent"], true);
+        assert_eq!(v["profile"], "lol");
+        assert!(v["receipt"].as_str().unwrap().contains("发到队伍"));
+        assert_eq!(
+            (v["route"].as_str(), v["channel"].as_str()),
+            (Some("keys"), Some("team"))
+        );
+        assert_eq!(
+            (v["lines"].as_u64(), v["sentLines"].as_u64()),
+            (Some(1), Some(1))
+        );
+        // 只打进聊天框：sent 照旧是 false（没按发送键）
+        let v = result_json(&outcome(&["先别发"], 1), false);
+        assert_eq!(v["sent"], false);
+        assert!(v["receipt"].as_str().unwrap().starts_with("已打进聊天框"));
+        // 多行发了一半：sent 是 false，stopped 说哪几行没发
+        let v = result_json(&outcome(&["一", "二"], 1), true);
+        assert_eq!(v["typed"], "一\n二");
+        assert_eq!(v["sent"], false);
+        assert_eq!(v["stopped"]["code"], "foregroundChanged");
+    }
 
     #[test]
     fn the_service_deadline_keeps_a_margin_and_never_lies_in_the_past() {
