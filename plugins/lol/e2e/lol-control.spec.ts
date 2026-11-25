@@ -129,3 +129,20 @@ test("auto-accept, an ordered pick list with lock-in, and a ban list are written
   await page.getByTestId("plugin-lol-control-section").scrollIntoViewIfNeeded();
   await page.screenshot({ path: shot(testInfo, "lol-control-settings"), fullPage: true });
 });
+
+// 在客户端里发聊天（ADR 041 第 2 期）：选英雄、房间里经客户端的聊天接口发，不按键。默认开（只在有人要发时发），
+// 风险提示写出处（屏蔽词 #480、WeGame 去掉的一键喊话 #524、Riot 说客户端接口不正式支持第三方）；关掉写进设置。
+test("在客户端里发聊天 is on by default with its sources in the risk note, and can be turned off", async ({ page }) => {
+  const pluginPage = await open(page);
+  const toggle = pluginPage.getByTestId("plugin-lol-source-chat");
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  const risk = pluginPage.getByTestId("plugin-lol-source-chat-risk");
+  await expect(risk).toContainText("developer.riotgames.com/docs/lol");
+  await expect(risk.getByTestId("plugin-lol-source-chat-link")).toHaveText([
+    "github.com/LeagueAkari/LeagueAkari/issues/480",
+    "github.com/LeagueAkari/LeagueAkari/issues/524",
+  ]);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await expect.poll(async () => (await lolConfig(page)).sources?.chat).toBe(false);
+});

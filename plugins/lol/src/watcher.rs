@@ -1138,7 +1138,7 @@ impl LolPlugin {
     }
 
     /// 连着的客户端（没开时给她的话）。
-    fn lcu_or_closed(&self, host: &dyn Host) -> Result<Lcu, Value> {
+    pub(crate) fn lcu_or_closed(&self, host: &dyn Host) -> Result<Lcu, Value> {
         if let Some(lcu) = self.state().client.as_ref().map(|c| c.lcu.clone()) {
             return Ok(lcu);
         }

@@ -8,16 +8,21 @@
 //! - [`stats`]：数据开关“用网上的统计”（`stats`）背后的东西：腾讯 101、aramhex-data、外号和名字表，
 //!   以及默认关的 OP.GG（`opgg`）；工具在 `stats_tools.rs`；
 //! - [`watcher`]：后台每 2 秒看一次客户端（进加载界面就查战绩、往游戏中心报阶段和局内的事），以及工具的实现；
-//! - [`app`]：做成 MCP App 的页面（`app/` 里独立的 HTML，ADR 039 D5），Kotone 和外部宿主显示同一份。
+//! - [`app`]：做成 MCP App 的页面（`app/` 里独立的 HTML，ADR 039 D5），Kotone 和外部宿主显示同一份；
+//! - [`chat`]：发到游戏（ADR 041 D3，数据开关“在客户端里发聊天” `chat`）：客户端在前台时（选英雄、房间里）经客户端的
+//!   聊天接口发，不按键。
 //!
 //! 只依赖插件契约（`kotone-plugin-api`）和 `kotone-core` 的纯数据类型；进程、游戏中心、设置都由宿主给。
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use kotone_plugin_api::{BoxFuture, Host, Manifest, Plugin, Resource, ToolResult, ToolSpec};
+use kotone_plugin_api::{
+    BoxFuture, ChatSend, ChatSent, ChatStop, Host, Manifest, Plugin, Resource, ToolResult, ToolSpec,
+};
 use serde_json::Value;
 
 pub mod app;
+pub mod chat;
 pub mod client;
 pub mod control;
 #[cfg(test)]
@@ -29,6 +34,7 @@ mod stats_tools;
 pub mod tools;
 mod watcher;
 
+pub use chat::SOURCE_CHAT;
 pub use control::SOURCE_CONTROL;
 pub use stats_tools::{SOURCE_OPGG, SOURCE_STATS};
 pub use watcher::SOURCE_CLIENT;
@@ -99,6 +105,15 @@ impl Plugin for LolPlugin {
             })
         })
     }
+
+    /// 发到游戏（ADR 041 D3）：客户端在前台时（选英雄、房间里）经客户端的聊天接口发（[`chat`]）。
+    fn send_to_game<'a>(
+        &'a self,
+        host: Arc<dyn Host>,
+        request: &'a ChatSend,
+    ) -> BoxFuture<'a, Result<ChatSent, ChatStop>> {
+        Box::pin(async move { self.send_chat(host.as_ref(), request).await })
+    }
 }
 
 #[cfg(test)]
@@ -115,6 +130,17 @@ mod tests {
             .source(SOURCE_CLIENT)
             .is_some_and(|s| s.enabled_by_default && !s.risk.is_empty()));
         m.check_tools(&tools::specs()).unwrap();
+        // 发到游戏（ADR 041 第 2 期）：只登记客户端，不登记游戏本身（对局里照旧是本体按键）；要“读客户端数据”和
+        // “在客户端里发聊天”；后者默认开、带风险提示
+        assert_eq!(m.send_to_game.len(), 1);
+        let chat = &m.send_to_game[0];
+        assert_eq!(chat.game, "lol");
+        assert!(chat.covers(crate::client::CLIENT_PROCESS));
+        assert!(!chat.covers(crate::client::GAME_PROCESS));
+        assert_eq!(chat.needs, [SOURCE_CLIENT, SOURCE_CHAT]);
+        assert!(m
+            .source(SOURCE_CHAT)
+            .is_some_and(|s| s.enabled_by_default && s.risk.contains("issues/480")));
         assert!(m.agent.rule.starts_with("- 英雄联盟") && m.agent.rule.ends_with("一条一行。\n"));
         assert!(
             !m.agent.rule.contains('\\'),

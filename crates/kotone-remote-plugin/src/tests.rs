@@ -523,3 +523,16 @@ fn a_broken_entry_is_a_plugin_that_explains_itself() {
     assert!(m.enabled_by_default && m.sources.is_empty() && m.overlays.is_empty());
     assert!(m.agent.overview.contains("只当数据"));
 }
+
+/// 第三方插件不能提供发到游戏的发法（ADR 041 D7，单向门）：合成的清单里这一项永远是空的。
+#[test]
+fn third_party_plugins_never_provide_send_to_game() {
+    for spec in [
+        Err("要写 command".to_string()),
+        ServerSpec::parse(&json!({"command": "npx", "args": ["-y", "x"]})),
+        ServerSpec::parse(&json!({"url": "https://example.com/mcp"})),
+    ] {
+        let m = crate::manifest("srv", &spec);
+        assert!(m.send_to_game.is_empty(), "{m:?}");
+    }
+}

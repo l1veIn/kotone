@@ -37,6 +37,13 @@ description = "照 LeagueAkari 操作英雄联盟客户端：自动接受对局�
 enabled_by_default = false
 risk = "外服有人用了自动接受、自动选英雄后被永久封号（LeagueAkari 的 github.com/LeagueAkari/LeagueAkari/issues/523），国服也可能违反腾讯的用户协议。默认关，打开就是你自己决定承担这个风险。"
 
+[[sources]]
+id = "chat"
+name = "在客户端里发聊天"
+description = "选英雄、房间里，你用语音输入说的话、她替你发的话，经客户端自己的本机聊天接口发出去，不按键（照 LeagueAkari）。几行连成一条消息发。只在你说话、让她发、或者你设的热键和自动化要发的时候发。要“读客户端数据”也开着。"
+enabled_by_default = true
+risk = "国服用第三方工具可能违反腾讯的用户协议；经接口发的话照样过腾讯的屏蔽词和禁言规则（LeagueAkari 用户报告过模板里的词被屏蔽：github.com/LeagueAkari/LeagueAkari/issues/480；WeGame 去掉了能改内容的一键喊话：github.com/LeagueAkari/LeagueAkari/issues/524）。Riot 说客户端接口不正式支持第三方使用（developer.riotgames.com/docs/lol）。关掉以后，选英雄时她不替你发；你自己的语音输入照旧按键打进前台窗口。"
+
 [[pages]]
 uri = "ui://kotone/lol/match"
 title = "这局"
@@ -65,6 +72,14 @@ needs = ["stats"]
 [[pages]]
 uri = "ui://kotone/lol/settings"
 title = "设置"
+
+# 发到游戏（ADR 041 D3，第 2 期）：英雄联盟客户端在前台时（选英雄、房间里），宿主把要发的话交给这个插件
+# （Plugin::send_to_game），经客户端的聊天接口发，不按键。对局里（League of Legends.exe 在前台）照旧是本体的通用发法：
+# 游戏配置里英雄联盟的聊天键、频道和时序就是英雄联盟的规矩。
+[[send_to_game]]
+game = "lol"
+windows = ["LeagueClientUx.exe"]
+needs = ["client", "chat"]
 
 # 覆盖层（照 aramhex）：选英雄时的胜率、海斗三选一时贴在卡片上的海克斯评分
 [[overlays]]
@@ -156,5 +171,6 @@ rule = """- 英雄联盟（读本机的客户端和局内接口，马上返回�
 “我最近怎么样”“查一下对面亚索 / 某某#1234 的战绩”用 lol.player；\
 “亚索克制谁”“刀妹出什么”“海斗里这个英雄拿什么海克斯”用 lol.champion，“现在什么英雄强”用 lol.tier，说的时候带一句出处（“掌盟的数据”）。\
 玩家说“帮我接受对局”“帮我选 / 禁 亚索”“先亮一下亚索”才用 lol.client（操作客户端，玩家没说就不用）。\
-玩家说了“发出去 / 发聊天框”才用 game_chat.send 发：技能发 lol.spell 返回的 chat 那句，战绩一条一行。
+玩家说了“发出去 / 发聊天框”才用 game_chat.send 发（选英雄、房间里也是它：客户端在前台时经客户端的聊天接口发，只有队伍频道）：\
+技能发 lol.spell 返回的 chat 那句，战绩一条一行。
 """

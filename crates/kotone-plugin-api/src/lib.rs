@@ -28,6 +28,10 @@ use serde_json::{json, Map, Value};
 
 pub use kotone_core::games::{EventSpec, Observation, Phase};
 pub use kotone_core::hotkey_commands::{CommandKind, CommandSpec};
+pub use kotone_core::inject::CancelToken;
+pub use kotone_core::send_to_game::provider::{
+    ChatSend, ChatSent, ChatStop, SendToGameSpec, StopCode,
+};
 
 mod events;
 pub use events::event_catalog;
@@ -80,6 +84,10 @@ pub struct Manifest {
     /// 插件只登记命令，不登记键（D7）；也没有默认键这个字段（D4）。完整名是 `<插件 id>.<命令 id>`。
     #[serde(default)]
     pub commands: Vec<CommandSpec>,
+    /// 发到游戏的发法（ADR 041 D3，`[[send_to_game]]`：给哪个游戏、前台是哪些程序的窗口时交给插件、要的数据开关）。
+    /// 宿主按前台挑：前台是登记的窗口就调 [`Plugin::send_to_game`]，否则用本体的通用发法。只给内置插件（D7）。
+    #[serde(default)]
+    pub send_to_game: Vec<SendToGameSpec>,
 }
 
 fn yes() -> bool {
@@ -189,6 +197,27 @@ impl Manifest {
                     self.id, command.id
                 ));
             }
+        }
+        let mut chat_games = std::collections::HashSet::new();
+        for chat in &self.send_to_game {
+            if !self.games.contains(&chat.game) || !chat_games.insert(chat.game.as_str()) {
+                return Err(format!(
+                    "插件 {} 的发到游戏（send_to_game）给的游戏 “{}” 要写在 games 里，并且一个游戏只写一项",
+                    self.id, chat.game
+                ));
+            }
+            if chat.windows.is_empty()
+                || !chat
+                    .windows
+                    .iter()
+                    .all(|w| kotone_core::send_to_game::provider::valid_window(w))
+            {
+                return Err(format!(
+                    "插件 {} 给游戏 {} 的发到游戏要写 windows（程序名.exe，不带路径）",
+                    self.id, chat.game
+                ));
+            }
+            self.check_needs(&format!("发到游戏（{}）", chat.game), &chat.needs)?;
         }
         self.check_events()
     }
@@ -644,6 +673,23 @@ pub trait Plugin: Send + Sync + 'static {
         let _ = (host, path);
         Box::pin(async { None })
     }
+
+    /// 发到游戏（ADR 041 D3）：清单 `[[send_to_game]]` 登记过、前台是登记的窗口时宿主调这里。行已经整理好、频道已经
+    /// 算好（[`ChatSend`]）。规矩：截止时间前一定返回；**不按键**（按键只经宿主的入口，`tests/boundaries.rs` 管着）；
+    /// 不重试；`Ok` 至少发了一行。插件关着、`needs` 有关着的时候宿主不会调（插件自己可以再看一遍）。默认没有。
+    fn send_to_game<'a>(
+        &'a self,
+        host: Arc<dyn Host>,
+        request: &'a ChatSend,
+    ) -> BoxFuture<'a, Result<ChatSent, ChatStop>> {
+        let _ = (host, request);
+        Box::pin(async {
+            Err(ChatStop::new(
+                StopCode::NoChatHere,
+                "这个插件不提供发到游戏",
+            ))
+        })
+    }
 }
 
 /// 宿主交给插件的本体能力（ADR 038 D5）。每个插件拿到的是自己那一份（设置、目录按插件 id 分开）。
@@ -1085,6 +1131,33 @@ kind = \"double\"
                 ..Csp::default()
             });
             assert!(m.check_resource(&r).is_err(), "{bad}");
+        }
+    }
+
+    /// 发到游戏的发法（ADR 041 D3）：给的游戏要在 `games` 里、一个游戏一项、窗口写成程序名、`needs` 是自己的开关。
+    #[test]
+    fn send_to_game_is_checked_against_the_manifest() {
+        let chat = "\n[[send_to_game]]\ngame = \"lol\"\nwindows = [\"LeagueClientUx.exe\"]\nneeds = [\"client\"]\n";
+        let m = Manifest::parse(&format!("{SAMPLE}{chat}")).unwrap();
+        assert_eq!(m.send_to_game.len(), 1);
+        assert!(m.send_to_game[0].covers("leagueclientux.exe"));
+        let v = serde_json::to_value(&m).unwrap();
+        assert_eq!(v["sendToGame"][0]["windows"][0], "LeagueClientUx.exe");
+        // 不写就是没有
+        assert!(Manifest::parse(SAMPLE).unwrap().send_to_game.is_empty());
+        for bad in [
+            chat.replace("game = \"lol\"", "game = \"dota2\""),
+            format!("{chat}{chat}"),
+            chat.replace("[\"LeagueClientUx.exe\"]", "[]"),
+            chat.replace("LeagueClientUx.exe", "C:\\\\Riot\\\\LeagueClientUx.exe"),
+            chat.replace("LeagueClientUx.exe", "LeagueClientUx"),
+            chat.replace("[\"client\"]", "[\"chat\"]"),
+            chat.replace("needs", "default_route"),
+        ] {
+            assert!(
+                Manifest::parse(&format!("{SAMPLE}{bad}")).is_err(),
+                "应该读不进：{bad}"
+            );
         }
     }
 

@@ -1,5 +1,5 @@
 //! 两个本机接口的 HTTP 客户端：只连 127.0.0.1。读都是 GET；写（POST / PATCH）只有“操作客户端”
-//! （[`crate::control`]，数据开关 `control`，默认关）用。
+//! （[`crate::control`]，数据开关 `control`，默认关）和“在客户端里发聊天”（[`crate::chat`]，数据开关 `chat`）用。
 //! 证书是客户端和游戏自签的，不校验（照 LeagueAkari 的 `rejectUnauthorized: false`）。
 
 use std::time::Duration;
@@ -24,6 +24,8 @@ pub fn loopback_base(value: &str) -> Option<String> {
 pub enum LolError {
     /// 连不上：客户端 / 游戏没开，或者游戏还在加载。
     Unavailable,
+    /// 这一次的期限到了还没回话（[`Lcu::get_until`] / [`Lcu::post_until`]）。
+    Timeout,
     /// 有回应但不是 200（游戏加载时局内接口返回 404）。
     Status(u16, String),
     Other(String),
@@ -33,6 +35,7 @@ impl std::fmt::Display for LolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LolError::Unavailable => write!(f, "连不上（没开或还在加载）"),
+            LolError::Timeout => write!(f, "没在期限内回话"),
             LolError::Status(code, message) => write!(f, "返回 {code}：{message}"),
             LolError::Other(message) => write!(f, "{message}"),
         }
@@ -50,14 +53,19 @@ fn client(timeout: Duration) -> Result<reqwest::Client, LolError> {
         .map_err(|e| LolError::Other(e.to_string()))
 }
 
+/// 发请求时的错：连不上、期限到了、别的。
+fn send_error(e: reqwest::Error) -> LolError {
+    if e.is_connect() {
+        LolError::Unavailable
+    } else if e.is_timeout() {
+        LolError::Timeout
+    } else {
+        LolError::Other(e.to_string())
+    }
+}
+
 async fn get_json(request: reqwest::RequestBuilder) -> Result<Value, LolError> {
-    let response = request.send().await.map_err(|e| {
-        if e.is_connect() {
-            LolError::Unavailable
-        } else {
-            LolError::Other(e.to_string())
-        }
-    })?;
+    let response = request.send().await.map_err(send_error)?;
     let status = response.status();
     let body = response
         .bytes()
@@ -144,6 +152,60 @@ impl Lcu {
             request = request.json(body);
         }
         get_json(request).await
+    }
+
+    /// 读，带这一次的期限（不用建连接时定的 15 秒）：发聊天时截止时间前一定返回。
+    pub async fn get_until(&self, path: &str, timeout: Duration) -> Result<Value, LolError> {
+        get_json(
+            self.http
+                .get(format!("{}{path}", self.base))
+                .header("Authorization", &self.authorization)
+                .header("Accept", "application/json")
+                .timeout(timeout),
+        )
+        .await
+    }
+
+    /// 写，带这一次的期限，只看回的状态（发聊天，[`crate::chat`]）：2xx 就是收下了，回的内容不管。
+    /// 期限到了是 [`LolError::Timeout`]：这时请求可能已经到了客户端。
+    pub async fn post_until(
+        &self,
+        path: &str,
+        body: &Value,
+        timeout: Duration,
+    ) -> Result<(), LolError> {
+        let response = self
+            .http
+            .post(format!("{}{path}", self.base))
+            .header("Authorization", &self.authorization)
+            .header("Accept", "application/json")
+            .json(body)
+            .timeout(timeout)
+            .send()
+            .await
+            .map_err(send_error)?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let message = response
+            .json::<Value>()
+            .await
+            .ok()
+            .and_then(|v| v.get("message").and_then(Value::as_str).map(str::to_string))
+            .unwrap_or_default();
+        Err(LolError::Status(status.as_u16(), message))
+    }
+
+    /// 测试用：连本机的假客户端（http，不是 https）。
+    #[cfg(test)]
+    pub(crate) fn with_base(base: &str, token: &str) -> Self {
+        let credentials = base64::engine::general_purpose::STANDARD.encode(format!("riot:{token}"));
+        Self {
+            http: client(Duration::from_secs(15)).unwrap(),
+            base: base.trim_end_matches('/').to_string(),
+            authorization: format!("Basic {credentials}"),
+        }
     }
 
     /// 写：只给“操作客户端”用（选 / 禁英雄的动作）。

@@ -27,8 +27,22 @@
 | `client` 读客户端数据 | 英雄联盟客户端的本机接口（LCU，端口和令牌从 `LeagueClientUx.exe` 的命令行读，不用管理员）和局内接口（Live Client Data，`127.0.0.1:2999`）。只读，只连 127.0.0.1 | 开 |
 | `stats` 用网上的统计 | 腾讯 101 / 掌盟（`mlol.qt.qq.com`，峡谷强度、克制、出装、符文、加点，海斗英雄榜和海克斯榜）；[czgreat/aramhex-data](https://github.com/czgreat/aramhex-data)（海斗英雄 × 海克斯胜率，**CC BY-NC 4.0**，运行时下载、页面上署名、不能商用）；腾讯 `game.gtimg.cn` 的英雄外号和装备、符文、召唤师技能名字。按需请求，缓存在插件目录 | 开 |
 | `opgg` 用 OP.GG 的数据 | OP.GG 官方 MCP（`mcp-api.op.gg/mcp`），只在打开英雄页、她查一个英雄时请求，存 24 小时，页面上写 OP.GG 的出处。等 OP.GG 回复 [issue #26](https://github.com/opgginc/opgg-mcp/issues/26) | **关** |
+| `control` 操作客户端 | 照 LeagueAkari 自动接受对局、自动选 / 禁英雄，她替你接受 / 选 / 禁（`lol.client`）。写客户端的本机接口 | **关** |
+| `chat` 在客户端里发聊天 | 发到游戏（ADR 041 第 2 期）：客户端在前台时（选英雄、房间里），你的语音输入和她替你发的话经客户端的聊天接口发（`POST /lol-chat/v1/conversations/{id}/messages`），不按键；几行连成一条。只在有人要发时发。要 `client` 也开着。见下面“发到游戏” | 开 |
 
 设置在 `config.json` 的 `plugins.lol`（`enabled`、`sources.client`）。以前的 `lol.enabled` 读进来时搬到 `plugins.lol.sources.client`。
+
+## 发到游戏（ADR 041 第 2 期，`src/chat.rs`）
+
+清单 `[[send_to_game]]` 登记 `LeagueClientUx.exe`：前台（语音输入：开始收音的那个窗口）是英雄联盟客户端时，本体的“发到游戏”入口把整理好的几行交给这个插件，不拿输入锁、不等修饰键、不切窗口。对局里（`League of Legends.exe` 在前台）不归这里，本体照游戏配置按键（英雄联盟的 Enter / Shift+Enter、行间 65 毫秒）。
+
+- **阶段**（发的时候现读 `/lol-gameflow/v1/gameflow-phase`）：`ChampSelect` → 选英雄的聊天；`Lobby` / `Matchmaking` / `ReadyCheck` → 房间的聊天；对局里、结算、客户端首页 → 不发，说清楚为什么（结算的聊天这一期不做）。
+- **会话**：`GET /lol-chat/v1/conversations`，选英雄认 `type == "championSelect"` 而且 id 里有 `lol-champ-select` 的，房间认 `type == "customGame"`；id 里有 `/`、`?`、`#` 的不拼进路径。每次发都现查，不缓存。
+- **频道**：选英雄、房间只有自己这边看得到（`team`）；自定义对局（房间的 `gameConfig.isCustom`、选英雄的 `isCustomGame`）两边都看得到（`all`）。要的频道和这里一样才发，否则不发（“发给更多人不退”）。
+- **多行**：用换行连成一条发，请求体 `{"body": "...", "type": "chat"}`（照 LeagueAkari）。
+- **只发一次**：截止时间前一定返回；客户端回错误 = 没发；没在期限内回话 = 可能已经发出去了，照实说、不重发、也不退回按键。日志不记文字。
+- **出处**：照 LeagueAkari 的做法（`dev` 分支提交 `4f8981f8` 的 `in-game-send/send-executor.ts`、`league-client/lc-state/index.ts`），只学做法、不抄代码（ADR 039 D5）。
+- **还没在真客户端上核对**：客户端窗口的前台进程名、换行在选英雄聊天里怎么显示、10 行 × 200 字收不收、自定义对局和斗魂竞技场的选英雄聊天谁看得到、国服屏蔽词的表现。
 
 ## 素材（图片）
 
@@ -48,6 +62,8 @@
 ## 风险
 
 国服用这类功能可能违反腾讯的用户协议，LeagueAkari 等工具有封号、禁言的报告；Riot 25.17 起限制第三方的技能冷却计时。默认开，界面上写着风险，用不用由玩家决定。
+
+“在客户端里发聊天”（`chat`，默认开）：经接口发的话照样过腾讯的屏蔽词和禁言规则（LeagueAkari 用户报告过模板里的词被屏蔽，[#480](https://github.com/LeagueAkari/LeagueAkari/issues/480)；WeGame 去掉了能改内容的一键喊话，[#524](https://github.com/LeagueAkari/LeagueAkari/issues/524)）；Riot 说客户端接口不正式支持第三方使用（[developer.riotgames.com/docs/lol](https://developer.riotgames.com/docs/lol)）。没查到因为经接口发聊天被封号或禁言的报告。默认开的理由：只在有人要发时发，和玩家自己打字是一类；关着时选英雄里她不替你发，你的语音输入按键打进客户端窗口，效果不可预料。
 
 **不做**：读游戏内存、注入。只用客户端和游戏自己提供的本机接口。
 

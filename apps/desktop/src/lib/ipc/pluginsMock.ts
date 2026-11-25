@@ -57,6 +57,13 @@ const lol: PluginManifest = {
     description: lolZh.plugin_lol_source_control_desc,
     enabledByDefault: false,
     risk: lolZh.plugin_lol_source_control_risk,
+  }, {
+    // 在客户端里发聊天（ADR 041 第 2 期）：选英雄、房间里经客户端的聊天接口发，不按键；默认开，风险提示带出处
+    id: "chat",
+    name: lolZh.plugin_lol_source_chat_name,
+    description: lolZh.plugin_lol_source_chat_desc,
+    enabledByDefault: true,
+    risk: lolZh.plugin_lol_source_chat_risk,
   }],
   pages: [
     { uri: PAGE_MATCH, title: lolZh.plugin_lol_page_match, needs: ["client"] },
