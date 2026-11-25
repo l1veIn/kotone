@@ -7,6 +7,7 @@
     "dev:web": "pnpm -C apps/desktop dev:web",
     "build:web": "pnpm -C apps/desktop build:web",
     "check": "pnpm -C apps/desktop check",
+    "prepush": "node scripts/prepush.mjs",
     "release:verify": "node scripts/verify-release-version.mjs",
     "release:test": "node --test scripts/*.test.mjs",
     "release:bump": "node scripts/bump-version.mjs",

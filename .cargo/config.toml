@@ -3,7 +3,8 @@
 
 [build]
 # 串行构建，避免多个 MSVC link.exe 同时链接超大静态库耗尽提交内存。
-# 并行 2 任务已复现 Windows 1455；CI 与本地保持相同的保守默认值。
+# 并行 2 任务已复现 Windows 1455，本地保持这个保守默认值。CI 用环境变量 CARGO_BUILD_JOBS 覆盖
+# （clippy 4、test 2，见 .github/workflows/ci.yml）；`pnpm prepush` 也自己传 -j。
 jobs = 1
 
 [env]

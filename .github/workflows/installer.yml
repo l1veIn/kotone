@@ -1,0 +1,73 @@
+name: Debug installer
+
+# 打一个 debug NSIS 安装包，只在打包相关的文件变了时跑（以前每次推送都打，热的也要 2 到 3.5 分钟）。
+# 每次发 RC，release.yml 都会打正式的安装包；这里管的是“改了打包配置，在发版之前就知道坏没坏”。
+# 前端的生产构建（以前靠这里的 beforeBuildCommand 顺带做）挪到了 ci.yml 的 Frontend job。
+
+on:
+  push:
+    branches: [main]
+    paths: &packaging
+      - apps/desktop/src-tauri/tauri*.json
+      - apps/desktop/src-tauri/Cargo.toml
+      - apps/desktop/src-tauri/build.rs
+      - apps/desktop/src-tauri/icons/**
+      - apps/desktop/src-tauri/installer/**
+      - apps/desktop/package.json
+      - Cargo.toml
+      - Cargo.lock
+      - pnpm-lock.yaml
+      - rust-toolchain.toml
+      - .cargo/config.toml
+      # tauri.conf.json 的 bundle.resources 打进安装包的文件
+      - LICENSE
+      - licenses/**
+      - THIRD_PARTY_NOTICES.md
+      - apps/desktop/src/assets/roles/README.md
+      - docs/third-party/**
+      - .github/workflows/installer.yml
+      - .github/actions/setup-rust/**
+  pull_request:
+    paths: *packaging
+  workflow_dispatch:
+
+concurrency:
+  group: installer-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  nsis-debug:
+    name: Debug NSIS installer
+    runs-on: windows-latest
+    # 用 Rust test 的缓存（同是 dev profile）时约 8 分钟；缓存没命中时冷编译约 20 分钟
+    timeout-minutes: 45
+    env:
+      # 和 ci.yml 的 Rust test 一样（缓存的 key 里有 CARGO_* 环境变量，不一样就用不上它的缓存）
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.16.0
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # 只读 Rust test 的缓存（依赖同是 dev profile），不另存一份：这个 job 很少跑，存了也很快过期
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: test
+          save-cache: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Compile the Tauri desktop shell and NSIS installer
+        run: pnpm -C apps/desktop tauri build --debug --bundles nsis --config src-tauri/tauri.ci.conf.json

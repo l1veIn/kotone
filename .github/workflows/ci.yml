@@ -1,23 +1,90 @@
 name: CI
 
+# 三个 job 并行（2026-11-25 起；以前一个 job 串行跑全部要 25 到 50 分钟）：
+#   Rust lint  fmt + clippy
+#   Rust test  cargo test 全量
+#   Frontend   release 校验、pnpm check、生产构建、Playwright
+# 依赖审计在 audit.yml（锁文件变了 + 每天一次），debug 安装包在 installer.yml（打包相关文件变了才打）。
+# 拆法照 Zed（clippy 和测试分开 job）、Tauri（按路径过滤、只在主分支存缓存）。
+# release.yml 发版时会查这个工作流对同一个提交有没有跑绿：job 名字改了要同步改那边。
+
 on:
   push:
     branches: [main]
+    paths: &code
+      - "**"
+      # 只改文档、官网的推送不跑（官网有自己的 site.yml）
+      - "!docs/**"
+      - "!website/**"
+      - "!**.md"
+      # 但这几份是测试的输入，改了照样跑：terminology.spec 读术语表、助手手册、官网中文文案；
+      # kotone-agent 把 skills/*/SKILL.md 编进程序
+      - "docs/glossary.md"
+      - "docs/assistant.md"
+      - "website/src/i18n/**"
+      - "crates/*/skills/**"
   pull_request:
+    paths: *code
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # main 上每个提交各跑各的、不互相取消：发版要查“这个提交的 CI 过没过”，被下一次推送取消的提交
+  # 就查不到了（rc.9 的提交就是这样被取消的）。PR 上新推送取消旧的。照 Zed 的 run_tests.yml。
+  group: ci-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || 'latest' }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  verify-windows:
+  rust-lint:
+    name: Rust lint
     runs-on: windows-latest
-    timeout-minutes: 45
+    # 热缓存约 4 分钟，冷的约 10 分钟
+    timeout-minutes: 30
+    env:
+      # 环境变量优先于 .cargo/config.toml 的 jobs = 1（Cargo Book）。本机的 jobs = 1 不动；
+      # clippy 只做 check、不链接 sherpa / tauri 的大库，4 核都用上。
+      CARGO_BUILD_JOBS: 4
+    steps:
+      - uses: actions/checkout@v4
 
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: lint
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint Rust workspace
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  rust-test:
+    name: Rust test
+    runs-on: windows-latest
+    # 热缓存约 8 分钟，冷的约 15 到 18 分钟
+    timeout-minutes: 40
+    env:
+      # cargo test 要链接约 40 个带 sherpa-onnx / tauri 的大测试程序，吃内存：用 2。
+      # 10-04 之前 CI 一直是 2，没出过 Windows 1455（本机 2 个并行链接复现过，所以本机还是 1）。
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: test
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test Rust workspace
+        # 一个测试程序挂了，后面的照样跑完，一次看到所有失败（照 Zed）
+        run: cargo test --workspace --locked --no-fail-fast
+
+  frontend:
+    name: Frontend
+    runs-on: windows-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -31,44 +98,8 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: .
-          # sherpa-onnx-sys downloads native .lib files outside Cargo's normal
-          # dependency artifacts. Keep them explicitly; rust-cache otherwise
-          # prunes the files but leaves the directory, which fools its build.rs.
-          cache-directories: target/sherpa-onnx-prebuilt
-          prefix-key: v2-rust
-
-      - name: Drop an incomplete sherpa-onnx download
-        # rust-cache prunes files under target/ before saving (cache-directories
-        # included), so a restore can bring back an empty lib/ directory. The
-        # sherpa-onnx-sys build.rs only checks that lib/ exists, skips the
-        # download and then fails with "could not find native static library
-        # sherpa-onnx-c-api". Remove such a directory so build.rs downloads again.
-        shell: pwsh
-        run: |
-          Get-ChildItem target/sherpa-onnx-prebuilt -Directory -ErrorAction SilentlyContinue |
-            Where-Object { -not (Test-Path (Join-Path $_.FullName 'lib/sherpa-onnx-c-api.lib')) } |
-            ForEach-Object { Write-Host "Removing incomplete $($_.FullName)"; Remove-Item -LiteralPath $_.FullName -Recurse -Force }
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Install Playwright Chromium
-        run: pnpm -C apps/desktop exec playwright install chromium
-
-      - name: Audit production JavaScript dependencies
-        run: pnpm audit --prod
-
-      - name: Audit Rust dependencies
-        run: |
-          cargo install cargo-audit --locked
-          cargo audit --ignore RUSTSEC-2024-0429
 
       - name: Verify release metadata
         run: pnpm release:verify
@@ -76,20 +107,15 @@ jobs:
       - name: Test release tooling
         run: pnpm release:test
 
-      - name: Check Rust formatting
-        run: cargo fmt --all -- --check
-
-      - name: Lint Rust workspace
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
-
       - name: Check desktop UI
         run: pnpm check
 
+      - name: Build desktop UI
+        # 生产构建（vite build）。以前每次打 debug 安装包时由 beforeBuildCommand 顺带做；
+        # 安装包不再每次打，这一步留在这里。
+        run: pnpm build:web
+
       - name: Test desktop journeys
+        # 用 runner 自带的 Chrome（playwright.config.ts 的 channel: "chrome"），不另装 Chromium。
+        # worker 数由 playwright.config.ts 按 CI 环境变量定（GitHub 自动设 CI=true）。
         run: pnpm -C apps/desktop test:e2e
-
-      - name: Test Rust workspace
-        run: cargo test --workspace --locked
-
-      - name: Compile the Tauri desktop shell and NSIS installer
-        run: pnpm -C apps/desktop tauri build --debug --bundles nsis --config src-tauri/tauri.ci.conf.json

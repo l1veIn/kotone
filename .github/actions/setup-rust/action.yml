@@ -1,0 +1,51 @@
+name: Set up Rust
+description: >
+  装 rust-toolchain.toml 钉住的工具链，恢复（按需保存）Rust 缓存，再清掉不完整的 sherpa-onnx 下载。
+  ci.yml、installer.yml、release.yml 共用，sherpa 的绕法只写这一处。
+
+inputs:
+  cache-key:
+    description: >
+      Rust 缓存的 shared-key。clippy 只做 check（产物是 rmeta），cargo test 是完整编译，
+      两者的产物不能互相用，所以各用各的 key，免得互相覆盖。
+    required: true
+  save-cache:
+    description: 跑完要不要保存缓存（"true" / "false"）。
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # 版本只写在 rust-toolchain.toml 一处；rustup 1.28 起不带参数的 `toolchain install` 装的就是它
+    # （连同里面列的 rustfmt、clippy）。
+    - name: Install the pinned Rust toolchain
+      shell: bash
+      run: |
+        rustup toolchain install
+        rustc --version
+
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        workspaces: .
+        prefix-key: v2-rust
+        shared-key: ${{ inputs.cache-key }}
+        # 只在 main 上存（照 Tauri 只在 dev 分支存）：PR 的缓存会把 main 的挤出 10 GB 的仓库上限。
+        save-if: ${{ inputs.save-cache == 'true' }}
+        # 测试挂了也存：依赖已经编好了，下一次（通常就是修测试的那次）不用再冷编译一遍。
+        cache-on-failure: true
+        # sherpa-onnx-sys downloads native .lib files outside Cargo's normal
+        # dependency artifacts. Keep them explicitly; rust-cache otherwise
+        # prunes the files but leaves the directory, which fools its build.rs.
+        cache-directories: target/sherpa-onnx-prebuilt
+
+    - name: Drop an incomplete sherpa-onnx download
+      # rust-cache prunes files under target/ before saving (cache-directories
+      # included), so a restore can bring back an empty lib/ directory. The
+      # sherpa-onnx-sys build.rs only checks that lib/ exists, skips the
+      # download and then fails with "could not find native static library
+      # sherpa-onnx-c-api". Remove such a directory so build.rs downloads again.
+      shell: pwsh
+      run: |
+        Get-ChildItem target/sherpa-onnx-prebuilt -Directory -ErrorAction SilentlyContinue |
+          Where-Object { -not (Test-Path (Join-Path $_.FullName 'lib/sherpa-onnx-c-api.lib')) } |
+          ForEach-Object { Write-Host "Removing incomplete $($_.FullName)"; Remove-Item -LiteralPath $_.FullName -Recurse -Force }

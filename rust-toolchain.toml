@@ -1,3 +1,12 @@
-# 钉 stable 工具链（成员 crate 的 rust-version 下界为 1.77.2）
+# 钉死 Rust 版本：本机、CI、发版用同一个编译器（rustup 进到仓库目录会自动用这个版本）。
+#
+# 为什么：2026-11-25 这里写的还是 `stable`，CI 上的 stable 是 1.100.0、本机是 1.98，CI 一天挂了两次
+# （新 clippy 的弃用警告、新 cargo 把测试要找的 example 挪了位置），本机都看不到；runner 每次升级
+# stable，Rust 缓存也会整个失效、来一次冷编译。Zed 也这样钉（它的 rust-toolchain.toml 写的是具体版本号）。
+#
+# 怎么升：单独一个提交只改这一行；先在本机 `pnpm prepush`（clippy、全量测试）过了再推，
+# 新 clippy 的警告在同一个提交里修掉。推上去以后 CI 会重建一次缓存（冷编译）。
 [toolchain]
-channel = "stable"
+channel = "1.100.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

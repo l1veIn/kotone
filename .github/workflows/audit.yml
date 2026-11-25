@@ -1,0 +1,63 @@
+name: Audit
+
+# 依赖审计只在锁文件变了时跑，另外每天定时跑一次（照 Tauri 的 audit.yml 和 rustsec/audit-check 的用法）。
+# 以前每次推送都审计：47 次 CI 失败里 9 次是新发布的安全公告，和那次提交没关系。
+# 现在新公告最晚一天后在定时任务里报出来；发 RC 时 release.yml 照旧审计。
+
+on:
+  push:
+    branches: [main]
+    paths: &lockfiles
+      - Cargo.lock
+      - pnpm-lock.yaml
+      - .cargo/audit.toml
+      - .github/workflows/audit.yml
+  pull_request:
+    paths: *lockfiles
+  schedule:
+    # 每天 UTC 01:17（北京 09:17）
+    - cron: "17 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  javascript:
+    name: JavaScript audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.16.0
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Audit production JavaScript dependencies
+        # 只读 pnpm-lock.yaml，不用装依赖
+        run: pnpm audit --prod
+
+  rust:
+    name: Rust audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # 审计只读 Cargo.lock、不编译工作区：用 runner 自带的 stable，不装 rust-toolchain.toml 钉的版本
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+
+      # 下载编好的 cargo-audit，不用每次从源码编（照 Tauri 的 audit.yml）
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit Rust dependencies
+        # 忽略的公告和理由写在 .cargo/audit.toml（cargo audit 自己会读）
+        run: cargo audit

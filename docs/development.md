@@ -4,7 +4,7 @@
 
 ## 环境与启动
 
-完整桌面构建面向 Windows 10/11 x64，需要 Rust stable/MSVC、Windows C++ Build Tools、WebView2，以及根 `package.json` 指定的 pnpm。先安装依赖，再从仓库根运行：
+完整桌面构建面向 Windows 10/11 x64，需要 rustup（Rust 版本钉在根目录的 `rust-toolchain.toml`，进仓库目录自动用它，不用再写 `+版本号`）、MSVC / Windows C++ Build Tools、WebView2，以及根 `package.json` 指定的 pnpm。先安装依赖，再从仓库根运行：
 
 ```powershell
 pnpm install --frozen-lockfile
@@ -50,6 +50,17 @@ pnpm release:verify
 pnpm release:test
 ```
 
+### 推送前
+
+**推送到 main 之前跑 `pnpm prepush`**，最后一行是“可以推送”才推。它把上面的检查按 CI 的样子跑一遍（`scripts/prepush.mjs`）：
+
+- 每次都跑：`cargo fmt --check`、`release:verify` / `release:test`、`pnpm check`、`cargo clippy … -D warnings`、`cargo test --workspace --locked --no-fail-fast`；
+- 相对 `origin/main` 改了前端（`apps/desktop/`、`plugins/`，以及 spec 直接读的几个 Rust 文件和文档）才跑 Playwright（4 个 worker）；改了 `Cargo.lock` / `pnpm-lock.yaml` 才跑两种依赖审计。`--all` 全跑，`--dry-run` 只列出要跑什么；
+- 开头查游戏进程：有游戏就把自己和子进程降到低优先级、cargo 用 `-j 2`、Playwright 2 个 worker；`target/` 里的 `kotone.exe` 在跑（玩家在用 `pnpm dev` 测）就不跑。`TMP` / `TEMP` 设到 `target/tmp`，每一步的日志在 `target/prepush/`；
+- 一步失败也接着跑后面的，最后一起列出没过的步骤。
+
+这是文档里的规矩，不是 git hook：推送的多半是 Agent，全量要好几分钟，做成 hook 每次推送（包括只改文档的）都要干等。
+
 受控窗口的前台像素测试会短暂把测试窗口切到前台，默认忽略，需要交互式桌面时单独运行：`cargo test -p kotone-platform-windows --test native_capture -- --ignored --test-threads=1`。
 
 两条构建与真机测试的环境事实（2026-11-16 自动化真机测试时确认）：
@@ -57,7 +68,15 @@ pnpm release:test
 - **C++ 依赖统一用静态运行时 `/MT`**：sherpa-onnx 预编译库是 `static-MT`，`.cargo/config.toml` 的 `[env]` 因此给 MSVC 目标设了 `CXXFLAGS_x86_64_pc_windows_msvc=/MT`，否则 cc 以 `/MD` 编译的 C++（如 `kotone-script` 用的 Luau）会和 sherpa 的 `libcpmt` 冲突（LNK2005 / LNK2038）。改过这个设置后需 `cargo clean -p luau0-src -p mlua-sys -p mlua` 让 C++ 重新编译。
 - **从本仓库目录启动的 exe 以低完整性级别运行**：仓库根目录带 `Mandatory Label\Low Mandatory Level`（OI/CI 继承，供工具沙盒写入），所以 `target/debug/kotone.exe` 是 Low IL。Windows 的 UIPI 会**静默丢弃**它向普通（Medium）窗口发送的模拟输入——`SendInput` 仍返回成功。需要真实按键 / 打字的真机测试，先把 exe 复制到仓库外（例如 `%LOCALAPPDATA%\Temp\kotone-script-e2e\`）再启动；已安装的 Kotone 不受影响。不要改仓库目录的完整性标签。
 
-CI 还执行依赖审计与 debug NSIS 构建；精确命令以 [ci.yml](../.github/workflows/ci.yml) 和 [发布清单](release-checklist.md) 为准。`pnpm build` 生成 release NSIS 安装包；用户配置与模型不会因为构建而迁移。
+GitHub 上（精确命令以工作流文件和 [发布清单](release-checklist.md) 为准）：
+
+- [ci.yml](../.github/workflows/ci.yml)：推 main、PR、手动时跑，三个 job 并行——Rust lint（fmt、clippy）、Rust test（全量）、Frontend（release 校验、`pnpm check`、`pnpm build:web`、Playwright）。只改 `docs/`、`website/`、`*.md` 的推送不跑（测试会读的术语表、助手手册、官网中文文案、`SKILL.md` 除外）。CI 里 `CARGO_BUILD_JOBS` 覆盖本机 `.cargo/config.toml` 的 `jobs = 1`（clippy 4、test 2）；Rust 缓存只在 main 上保存。
+- [audit.yml](../.github/workflows/audit.yml)：依赖审计，锁文件变了时跑，另外每天定时一次；忽略的公告写在 `.cargo/audit.toml`。
+- [installer.yml](../.github/workflows/installer.yml)：debug NSIS 安装包，只在打包相关文件（Tauri 配置、`installer/`、图标、`Cargo.toml` / 锁文件、打进安装包的许可证文件等）变了时打。
+- [release.yml](../.github/workflows/release.yml)：推 `v*` tag 时打正式安装包。依赖审计、版本校验每次都跑；这个提交在 ci.yml 上三个 job 都绿了就不再跑一遍测试（CI 还在跑就等它，最多 25 分钟），查不到就照旧全跑。
+- 升级 Rust：单独一个提交只改 `rust-toolchain.toml` 的版本号，本机 `pnpm prepush` 过了再推。
+
+`pnpm build` 生成 release NSIS 安装包；用户配置与模型不会因为构建而迁移。
 
 ## 文档和发布
 

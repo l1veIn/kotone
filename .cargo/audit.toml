@@ -1,8 +1,12 @@
 [advisories]
-# rustls 0.22 / rustls-webpki 0.102 只由 kotone-stt 的 tungstenite 0.21 引入，
-# 用来连固定厂商 WebSocket（讯飞 / 火山）。这些公告针对 CRL 匹配与证书
-# name constraint，不影响当前用法。升级 tungstenite 会改握手 API，另开。
+# 忽略的公告只写在这一处（cargo audit 自己读 .cargo/audit.toml；CI、发版、prepush 都直接跑 `cargo audit`）。
 ignore = [
+  # glib 0.18 只是 Cargo.lock 里 Tauri / GTK 带进来的 Linux 依赖，Windows 上不编译。
+  # （以前写在仓库根的 audit.toml，cargo audit 不读那里，靠命令行 --ignore 生效。）
+  "RUSTSEC-2024-0429",
+  # rustls 0.22 / rustls-webpki 0.102 只由 kotone-stt 的 tungstenite 0.21 引入，
+  # 用来连固定厂商 WebSocket（讯飞 / 火山）。这些公告针对 CRL 匹配与证书
+  # name constraint，不影响当前用法。升级 tungstenite 会改握手 API，另开。
   "RUSTSEC-2026-0049",
   "RUSTSEC-2026-0098",
   "RUSTSEC-2026-0099",

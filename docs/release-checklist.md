@@ -5,14 +5,15 @@
 - `pnpm release:verify`：桌面 package、Tauri 配置、桌面 Rust crate 与其 Cargo.lock 条目版本一致，Tag 必须为 `v<version>`；库 crate 有独立版本。
 - `pnpm release:test`：更新说明提取、Unreleased 归档与缺失说明门禁通过。
 - `pnpm audit --prod`：生产 JavaScript 依赖审计。
-- `cargo audit --ignore RUSTSEC-2024-0429`：与 CI 当前例外一致的 Rust 依赖审计；例外变动需同时审查工作流与这里。
+- `cargo audit`：Rust 依赖审计；忽略的公告和理由只写在 `.cargo/audit.toml`。
 - `cargo fmt --all -- --check`：Rust 格式。
 - `cargo clippy --workspace --all-targets --locked -- -D warnings`：Rust lint 无警告。
 - `pnpm check`：Svelte/TypeScript 静态检查无错误和警告。
 - `pnpm -C apps/desktop test:e2e`：首次向导、跳过策略、缺失模型与下载失败恢复，以及助手分页、三种模式、语音按钮和弹幕/语音设置。
 - `cargo test --workspace --locked`：核心状态机、模型下载、注入、热键和 Tauri 启动参数。
-- `pnpm -C apps/desktop tauri build --debug --bundles nsis --config src-tauri/tauri.ci.conf.json`：真实 Windows WebView 壳与 NSIS 安装器编译。
-- GitHub [CI](../.github/workflows/ci.yml)：主分支和 PR 门禁，精确工具版本与步骤以工作流为准。
+- `pnpm -C apps/desktop tauri build --debug --bundles nsis --config src-tauri/tauri.ci.conf.json`：真实 Windows WebView 壳与 NSIS 安装器编译（GitHub 上由 [installer.yml](../.github/workflows/installer.yml) 在打包相关文件变了时跑）。
+- GitHub [CI](../.github/workflows/ci.yml)：主分支和 PR 门禁（Rust lint、Rust test、Frontend 三个 job），精确步骤以工作流为准；依赖审计在 [audit.yml](../.github/workflows/audit.yml)（锁文件变了 + 每天一次）。Rust 版本钉在 `rust-toolchain.toml`。
+- 发版（[release.yml](../.github/workflows/release.yml)）：审计和版本校验每次都跑；tag 指向的提交在 CI 上三个 job 都绿了，就不再跑 `pnpm check`、Playwright、`cargo test`（CI 还在跑就等它跑完，最多 25 分钟；查不到就全跑）。
 
 网站有改动时另跑 `pnpm --dir website check` 和 `pnpm --dir website build`，并检查中英文页面；当前桌面 CI 不代替这两项网站验证。构建不等于发布官网。
 
