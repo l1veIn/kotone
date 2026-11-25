@@ -114,7 +114,7 @@ Kotone 已经有 `kotone.exe mcp`：把所有工具作为 MCP 工具对外提供
 | **英雄联盟**（`lol`） | 这局、战绩（单局详情）、英雄（强度、克制、出装、符文）、海克斯、设置；覆盖层：选英雄的胜率、海斗三选一的评分（像 LeagueAkari 加 OP.GG / aramhex；原来的 ADR 037 并进这里） | `lol.match`、`lol.spell`、`lol.scout`；以后 `lol.player`、`lol.champion`、`lol.tier` | 翻战绩、单局详情、搜玩家、切模式、搜英雄 | `kotone-lol`、桌面端 `lol.rs`；统计部分是新的（[调研](../research/2026-11-23-lol-data-sources.md)） |
 | **语音输入**（`voice-input`） | 语音输入热键（按住说 / 按一下开关）、悬浮窗、文字处理（翻译、润色、屏蔽词）、每个游戏的聊天键和频道、识别记录 | `game_chat.send`（她替你发言，走同一套往聊天框打字的办法） | 试听、测试打字 | 语音输入的流程、`inject`、文字处理、ADR 032。**录音和语音识别不在这里**，用本体的（D3 第 7 条） |
 | **游戏语音**（`game-voice`） | 给队友的虚拟麦克风、路由、测试 | `voice_chat.say` | 安装、测试、设成默认麦克风 | `voice_chat.*`（ADR 020） |
-| **同传**（`interpreter`） | 听哪个程序、译成什么 | 开始 / 停下 | — | `voice.listen.*`（ADR 021） |
+| **同传**（`interpreter`） | 听哪个程序、译成什么 | 开始 / 停下（2026-11-25 注：做出来以后插件没有给她的工具。她自己的做法是本体的 `agent.start` + `voice.listen.*`，规则写在插件清单的 `[agent]` 里） | —（2026-11-25 注：开始 / 停下在这一栏：`interpreter.status`、`interpreter.start`、`interpreter.stop` 都是 `.app_only()`，页面上点“开始”等于玩家对她说了“开始同传”，见 `plugins/interpreter/src/lib.rs`） | `voice.listen.*`（ADR 021） |
 | **音乐**（`music`） | 正在放、每日推荐、歌单、搜索 | `music` | 扫码登录、翻歌单、播放队列 | `kotone-music`（ADR 034） |
 | **按键程序**（`key-programs`） | 程序编辑、内置的宏（连发、连点、按住……）、每个游戏允不允许程序按键 | 运行程序 | 编辑器里的校验、存图片 | `kotone-script`（ADR 013） |
 | 以后：**CS2、Dota 2** | 这一局、这一回合 | `cs2.*` / `dota2.*` | …… | GSI（ADR 036 D9） |
