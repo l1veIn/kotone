@@ -5,7 +5,7 @@
 ## 规矩（照旧，外加一条新授权）
 
 - 只在 `claude/kotone-agent` 上工作；每个提交单独能编译；只暂存自己的文件（不要碰 `.archify/ .codegraph/ .rambledesk/ .reasonix/ .tmp-analysis/ bash.exe.stackdump`、`apps/desktop/src-tauri/Cargo.toml` 的纯换行改动、stash `codex-preserve-before-single-folder-consolidation`）。可以推送分支。**玩家明确说“合并并发布”之前不合并、不打 tag、不发版。**
-- 测试用隔离实例：设 `KOTONE_HOME`（在 `target/` 下）和 `WEBVIEW2_USER_DATA_FOLDER`；隔离实例不参与单实例，配置里要关掉全部热键（参考 `scripts/manual-e2e/happy_path_e2e.py` 写的配置）。不碰玩家的 `~/.kotone`、正式安装（`D:\琴音`）和玩家自己在跑的 Kotone。
+- 测试用隔离实例：设 `KOTONE_HOME`（在 `target/` 下）和 `WEBVIEW2_USER_DATA_FOLDER`；隔离实例不参与单实例，配置里要关掉全部热键（参考 `scripts/manual-e2e/happy_path_e2e.py` 写的配置；它 2026-11-25 删了，同样的配置在 `happy_path_real.py` 里）。不碰玩家的 `~/.kotone`、正式安装（`D:\琴音`）和玩家自己在跑的 Kotone。
 - 发模拟键鼠之前先确认前台不是游戏（`scripts/manual-e2e/computer_use_e2e.py` 有守卫）。
 - 每一步用简单的中文汇报：做了什么、怎么验证的、没验证的；不编造。
 - **新授权：可以用真实的 DeepSeek 服务测试，不用担心花钱。** 取 Key 的方式：玩家的 DeepSeek 连接 id 是 `deepseek-mwjiotc0`，Key 在 Windows 凭据库里（keyring 服务名 `kotone`，用户名 `connection:deepseek-mwjiotc0`，见 `crates/kotone-ai/src/secrets.rs`）。只在内存里读出来，经 `connections.upsert` 的 `apiKey` 交给隔离实例（隔离实例有自己的凭据空间）；**不打印、不写进任何文件、日志、提交或报告**；测完在隔离实例里 `connections.delete`。拿不到就请玩家用 `! <命令>` 设一个环境变量。
@@ -47,7 +47,7 @@
 - **内置角色**：琴音是默认，用现有的全套立绘和表情；另外内置几个角色，先用占位头像（不要冒用别人的形象），以后玩家补画。用户也能新建自己的角色（名字、头像、性格、声音、唤醒词）。
 - 数据：工作区下每个角色一个目录（例如 `<workspace>/roles/<id>/`：角色说明、SOUL.md、头像），现在的 `IDENTITY.md` / `agent.identity` 迁移成“琴音”这个角色；当前角色记在设置里。气泡、聊天、「她是谁」、系统提示都用当前角色。「琴音 → 她是谁」改成角色列表 + 编辑。
 - **自定义唤醒词**：现在的唤醒模型（sherpa-onnx KWS，WenetSpeech zipformer）认拼音音节。把唤醒词（默认取角色名重复两遍，如“小雨小雨”）转成拼音、检查每个音节都在模型的 `tokens.txt` 里，不在就提示换一个。中文转拼音需要一个字典库（选 MIT 等宽松许可证的，写进第三方声明）。
-- **准确度要实测**：照 `target/agent-smoke/wake_e2e.py` 的办法，用几种合成声音（SAPI、DeepSeek 语音、Kokoro）把唤醒词通过 VB-CABLE 放给隔离实例，统计喊中率；再放一段游戏声音 / 普通对话，统计误唤醒。达不到预置唤醒词的水平就在界面上标“实验性”。
+- **准确度要实测**：照 `target/agent-smoke/wake_e2e.py` 的办法（那是 `target/` 里的临时脚本，没进仓库；后来写成 `scripts/manual-e2e/wake_eval.py`，见 ADR 025），用几种合成声音（SAPI、DeepSeek 语音、Kokoro）把唤醒词通过 VB-CABLE 放给隔离实例，统计喊中率；再放一段游戏声音 / 普通对话，统计误唤醒。达不到预置唤醒词的水平就在界面上标“实验性”。
 - 测试：Playwright（切换角色、新建角色、唤醒词校验提示）；真机（换角色后气泡、名字、声音、唤醒词都跟着变）。
 
 ### 4. 对局复盘
@@ -57,8 +57,8 @@ Rust 核心检测到游戏进程退出时，主动触发一次摘要：把这一
 ### 5. 用真实 DeepSeek 补验证
 
 - **玩家报的“试听语音没声音”**（DeepSeek 语音）：之前用假 DeepSeek 复现不出来，已加日志（`kotone.log` 里 `speech preview:` 开头的行）。先在隔离实例里用真实 DeepSeek 语音复现，找到原因修掉。
-- `scripts/manual-e2e/happy_path_e2e.py` 改成可选用真实 DeepSeek（聊天、语音识别、语音合成、OCR），验证琴音真的会读《Kotone 配置》技能、照着做。
-- 同传子会话用真实模型跑一次（`scripts/manual-e2e/sessions_e2e.py`）。
+- `scripts/manual-e2e/happy_path_e2e.py` 改成可选用真实 DeepSeek（聊天、语音识别、语音合成、OCR），验证琴音真的会读《Kotone 配置》技能、照着做。（做成了单独的 `happy_path_real.py`；假 DeepSeek 的那份 2026-11-25 删了。）
+- 同传子会话用真实模型跑一次（`scripts/manual-e2e/sessions_e2e.py`）。（11-20 同传改成后台任务，这个脚本换成了 `interpreter_e2e.py`，`99d091e0`。）
 - 琴音替玩家跟队友说话（游戏语音）在真机上跑一次：先应一声，再从虚拟麦克风说出来，玩家耳机里也听得到。
 
 ### 6. 零碎

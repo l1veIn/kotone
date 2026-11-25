@@ -1,11 +1,13 @@
 """Real-DeepSeek happy path: with only a DeepSeek key, 琴音 configures Kotone; then voice, TTS and OCR all go to DeepSeek.
 
-Same story as happy_path_e2e.py, but against the real DeepSeek service (real_deepseek.py: the player's key, memory
-only, deleted afterwards) instead of mock_deepseek.py, so it judges outcomes instead of captured requests:
+Against the real DeepSeek service (real_deepseek.py: the player's key, memory only, deleted afterwards), so it judges
+outcomes. (The mock twin happy_path_e2e.py + mock_deepseek.py was deleted 2026-11-25: same story, weaker evidence.)
+The connection is added through the tool service, not the onboarding (which would switch everything itself, ADR 028;
+that path is copilot_flow_real.py), so her settings start local and it is her job to switch them:
 1. Chat "帮我把 Kotone 配置好，用 DeepSeek 就行" (one follow-up if she only asks): she reads the bundled kotone-config
    skill (skill.view) and switches speech recognition to deepseek-asr and OCR to deepseek-ocr.
-2. 呼叫琴音 + a SAPI sentence into VB-CABLE: the words are recognized by DeepSeek ASR (ledger: asr), reach her, and
-   her answer is synthesized with a DeepSeek voice (log: "speech: synthesized … with deepseek/").
+2. The chat page's call button + a SAPI sentence into VB-CABLE: the words are recognized by DeepSeek ASR (ledger: asr),
+   reach her, and her answer is synthesized with a DeepSeek voice (log: "speech: synthesized … with deepseek/").
 3. OCR: the test window (target_window.ps1, shows 找到对局) is brought to the front — only if no game is in front —
    captured with screen.capture and recognized with ocr.recognize {backend: deepseek-ocr} (ledger: ocr).
 Isolated KOTONE_HOME=target/happy-real/home, hotkeys off, speech volume 0, input tools denied.
@@ -23,7 +25,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import real_deepseek  # noqa: E402
 from computer_use_e2e import focus  # noqa: E402
-from happy_path_e2e import check, make_speech, play_into_cable, ASR_TEXT  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(HERE))
 WORK = os.path.join(REPO, "target", "happy-real")
@@ -34,6 +35,37 @@ ENV = dict(os.environ, KOTONE_HOME=HOME, WEBVIEW2_USER_DATA_FOLDER=os.path.join(
            WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9333")
 ENV.pop("KOTONE_TOOL_SERVICE_DIR", None)
 NO_INPUT = {"game_chat.send": "deny", "game.act": "deny", "automation.run": "deny", "companion.type": "deny"}
+ASR_TEXT = "帮我看看队友说了什么"
+
+
+def check(name, ok, detail=""):
+    print(("PASS " if ok else "FAIL ") + name + (f"  ({detail})" if detail else ""))
+    return bool(ok)
+
+
+def make_speech(path):
+    script = (
+        "Add-Type -AssemblyName System.Speech;"
+        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+        "$f = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(16000, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono);"
+        f"$s.SetOutputToWaveFile('{path}', $f);"
+        f"$s.Speak('{ASR_TEXT}');"
+        "$s.Dispose()"
+    )
+    subprocess.run(["powershell", "-NoProfile", "-Command", script], check=True)
+
+
+def play_into_cable(path, lead_s):
+    import numpy as np
+    import sounddevice as sd
+    import wave
+    w = wave.open(path)
+    data = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
+    data = np.concatenate([np.zeros(int(16000 * lead_s), dtype=np.float32), data, np.zeros(16000 * 2, dtype=np.float32)])
+    dev = next(i for i, d in enumerate(sd.query_devices())
+               if d["name"].startswith("CABLE Input") and d["max_output_channels"] > 0
+               and sd.query_hostapis(d["hostapi"])["name"] == "MME")
+    sd.play(data, 16000, device=dev, blocking=True)
 
 
 def call(tool, args=None, timeout_ms=30_000):
@@ -57,10 +89,11 @@ try {
 
 
 def send_chat(text):
+    # The app opens on the chat (ADR 028); the composer is `assistant-request`. Only if some other page is showing,
+    # open a new chat from the sidebar (the follow-up stays in the same conversation).
     ui("""
-await page.getByTestId("settings-nav-assistant").click();
-await page.getByTestId("assistant-nav-chat").click();
 const box = page.getByTestId("assistant-request");
+if (!(await box.count())) await page.getByTestId("sidebar-new-chat").click();
 await box.fill(%s);
 await box.press("Enter");
 """ % json.dumps(text, ensure_ascii=False))
@@ -150,10 +183,12 @@ def main():
         make_speech(speech)
         asr_before = sum(1 for r in ledger() if r.get("kind") == "asr")
         log_before = len(log_text())
+        # The chat page's call button (the big one on an empty chat, the small one under a conversation), as in
+        # voice_turn_real.py; the home page and its `home-call` went away with ADR 028 (254b2748).
         ui("""
-await page.getByTestId("settings-nav-general").click();
-await page.getByTestId("home-call").waitFor({ timeout: 15000 });
-await page.getByTestId("home-call").click();
+const button = page.locator('[data-testid=chat-call], [data-testid=call-kotone]').first();
+await button.waitFor({ state: "attached", timeout: 15000 });
+await button.evaluate((el) => el.click());
 """)
         play_into_cable(speech, 0.6)
         deadline = time.time() + 60

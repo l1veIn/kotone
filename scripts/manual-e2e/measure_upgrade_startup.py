@@ -104,12 +104,13 @@ async function run() {
     });
   }
 
+  // 0.1.13: the voice settings page with #hotkey-input. 0.2: an old config first sees the upgrade step of the
+  // onboarding (ADR 028, onboarding-upgrade); "继续使用语音输入法" lands on the voice input plugin's App (ADR 038).
   const firstPage = '(' + (() => {
     if (document.readyState !== "complete") return null;
-    const notice = document.querySelector('[data-testid="legacy-upgrade-notice"]');
-    if (notice?.getClientRects().length) return "upgradeNotice";
-    const input = document.getElementById("hotkey-input");
-    return input?.getClientRects().length ? "voiceSettings" : null;
+    const shown = (selector) => !!document.querySelector(selector)?.getClientRects().length;
+    if (shown('[data-testid="onboarding-upgrade"]')) return "upgradeNotice";
+    return shown("#hotkey-input") || shown('[data-testid="voice-input"]') ? "voiceSettings" : null;
   }).toString() + ')()';
 
   let signal;
@@ -117,10 +118,7 @@ async function run() {
   console.log(JSON.stringify({ screen: signal }));
   if (signal === "upgradeNotice") {
     const dismissed = await evaluate('(' + (() => {
-      const notice = document.querySelector('[data-testid="legacy-upgrade-notice"]');
-      const button = [...(notice?.querySelectorAll("button") ?? [])].find(
-        (button) => button.textContent.trim() === "继续只用语音输入法",
-      );
+      const button = document.querySelector('[data-testid="onboarding-keep-voice"]');
       if (!button || button.disabled) return false;
       button.click();
       return true;

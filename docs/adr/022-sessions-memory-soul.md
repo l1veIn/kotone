@@ -103,7 +103,7 @@
 
 - 内置两个 Skill：`kotone-config`（只用一个 DeepSeek Key 配好全部功能；本地模型的做法）和 `skill-creator`（参照 Anthropic skill-creator 与 Hermes `skill_manage`）。第一次用时装进工作区，记在 `.bundled-skills.json`：玩家删了不再装回，玩家改过的不被新版本覆盖。系统提示要求做事前先看有没有对得上的 Skill；`skill.view` 不带名字 = 列出全部。
 - 新工具 `connections.request_key`：聊天里弹出只给玩家看的输入框，Key 直接存进凭据库，模型只拿到“已保存”和连接 id（原来“Key 只能由玩家在连接页粘贴”的规矩不变，只是不用玩家自己找页面）。
-- 真机：`scripts/manual-e2e/happy_path_e2e.py`（隔离实例 + 本地假 DeepSeek）——琴音读 `kotone-config`，把语音识别、文字识别换成 DeepSeek；之后点“呼叫琴音”说话，录音送到 DeepSeek 语音识别，她的回答用 DeepSeek 语音说出来。全部通过。没验证：真实 DeepSeek 模型会不会照着技能做（需要真 Key）。
+- 真机：`scripts/manual-e2e/happy_path_e2e.py`（隔离实例 + 本地假 DeepSeek）——琴音读 `kotone-config`，把语音识别、文字识别换成 DeepSeek；之后点“呼叫琴音”说话，录音送到 DeepSeek 语音识别，她的回答用 DeepSeek 语音说出来。全部通过。没验证：真实 DeepSeek 模型会不会照着技能做（需要真 Key）。（后来写了真 DeepSeek 的 `happy_path_real.py`，同一流程外加 DeepSeek 文字识别；2026-11-25 假 DeepSeek 的这份连同 `mock_deepseek.py` 删了，只留 `happy_path_real.py`，见 [测试和 CI 评估](../research/2026-11-25-ci-and-tests-audit.md)第六节。）
 
 ### 补充（2026-11-18，下一个会话）
 

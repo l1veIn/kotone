@@ -74,7 +74,9 @@ def main():
     with open(os.path.join(HOME, "config.json"), "w", encoding="utf-8") as f:
         json.dump({"ui": {"firstRunCompleted": True}, "adminPromptDismissed": True, "toolService": {"enabled": True},
                    "hotkey": {"key": "F24", "mode": "toggle"}, "runtimeToggleHotkey": "", "automationStopHotkey": "",
-                   "assistant": {"hotkey": "", "callHotkeyDefaulted": True, "speechVolume": 0,
+                   # callIdleSeconds 0 = 不通话（ADR 033）：喊醒以后没人说话就结束，下一个角色的唤醒词才会被当成唤醒词
+                   # 听（通话开着时开口就是下一句，不再认唤醒词；缺省 30 秒，比下面等的 7 秒长）
+                   "assistant": {"hotkey": "", "callHotkeyDefaulted": True, "speechVolume": 0, "callIdleSeconds": 0,
                                  "wake": {"enabled": True, "ack": "voice"}}}, f)
     app = subprocess.Popen([EXE, "--background"], env=ENV)
     passed = True
@@ -85,7 +87,8 @@ def main():
         call("settings.update", {"patch": {"assistant": {"connectionId": cid}, "sttEngine": "deepseek-asr", "audioDeviceId": cable}})
         since = len(log_lines())
         call("runtime.start")
-        line = wait_log(r"wake: listening \(phrase=琴音琴音", since, 30)
+        # wake.rs 从 ce4e66ca（ADR 033）起打的是 "wake: listening (wake=true, phrase=…"
+        line = wait_log(r"wake: listening \(wake=true, phrase=琴音琴音", since, 30)
         passed &= check("琴音: wake detector listens for 琴音琴音", line, line)
         for role, word, voice in [("dafeiyu", "你好大肥鱼", "deepseek/stella"), ("claude-ojou", "你好大小姐", "deepseek/stella"), ("kotone", "琴音琴音", None)]:
             since = len(log_lines())
@@ -96,7 +99,7 @@ def main():
             identity = settings["agent"]["identity"]
             passed &= check(f"{role}: switched, identity follows", result["current"] == role and identity["name"] == result["name"],
                             f"{identity['name']}")
-            line = wait_log(rf"wake: listening \(phrase={word}", since, 30)
+            line = wait_log(rf"wake: listening \(wake=true, phrase={word}", since, 30)
             passed &= check(f"{role}: wake detector restarted with {word}", line)
             wav = os.path.join(WORK, f"{word}.wav")
             sapi(word, wav + ".src.wav")

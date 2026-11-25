@@ -484,7 +484,7 @@
 
 | 脚本 | 分数 | 提交 |
 | --- | --- | --- |
-| `mcp_names_real.py`（新） | 修前 5/10，修后 10/10（用 `kotone-cli.exe mcp` 跑的） | `44d49207` |
+| `mcp_names_real.py`（新；2026-11-25 删了：名字还原由 `kotone-cli` 的集成测试 `mcp_maps_underscored_plugin_tool_names_back` 管，`kotone.exe mcp` 连真实例由 `mcp_app_resources_real.py` 管） | 修前 5/10，修后 10/10（用 `kotone-cli.exe mcp` 跑的） | `44d49207` |
 | `voice_input_real.py` | 42/42，1 跳过（第六轮 37/37） | `4869ef50` |
 | `lol_tools_real.py --while-playing` | 32/32 → 34/34 | `eb547094`、`4869ef50` → `bd3ca0f4` |
 | `game_events_real.py`（真 DeepSeek） | 12/12 | `4869ef50`、`43b4a3c2` |

@@ -176,7 +176,8 @@ def part_new_user():
         r = ui('await page.getByTestId("onboarding-add-key").click();' + ONBOARD_KEY, stdin_secret=key)
         del key
         check("five things switched to DeepSeek", all(w in r["switched"] for w in ["对话", "语音识别", "文字识别", "语音合成", "联网搜索"]), r["switched"].replace("\n", " "))
-        check("call key defaults to ~", r["callKey"].strip() == "~")
+        # 默认呼叫键 2026-11-21 从 ` 改成 Ctrl+`（2fd7c2eb），界面写作“Ctrl + ~”
+        check("call key defaults to Ctrl + ~", r["callKey"].strip() == "Ctrl + ~", r["callKey"].strip())
         r = ui("""
 await page.getByTestId("onboarding-enter-chat").click();
 await page.getByTestId("assistant-request").waitFor();
@@ -191,7 +192,9 @@ out.draft = await page.getByTestId("assistant-request").inputValue();
         r = ui("""
 out.titlebar = await page.getByTestId("titlebar-asr").count();
 out.chatStart = await page.getByRole("button", { name: /启动/ }).filter({ visible: true }).count();
-await page.getByTestId("settings-nav-general").click();
+// 语音输入是插件的 App（ADR 038，50348033 起左侧栏不再单列）：插件 → 语音输入
+await page.getByTestId("settings-nav-plugins").click();
+await page.getByTestId("plugins-card-voice-input-open").click();
 await page.getByTestId("asr-card").waitFor();
 out.card = await page.getByTestId("asr-card").getAttribute("data-asr-state");
 out.voiceStart = await page.getByRole("button", { name: /启动/ }).filter({ visible: true }).count();
@@ -306,7 +309,7 @@ await page.getByTestId("assistant-request").waitFor();
         after = read_config(home)
         status = ui('out.s = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("get_runtime_status"));')["s"]
         check("opted in, chat landing", after["ui"].get("legacyUpgrade") == "optedIn" and after["ui"].get("startPage") == "chat")
-        check("call key and connection in companionBindings", (after["assistant"].get("companionBindings") or {}).get("hotkey") == "Backquote")
+        check("call key and connection in companionBindings", (after["assistant"].get("companionBindings") or {}).get("hotkey") == "Ctrl+Backquote")
         check("old reminder key and ASR untouched", after["assistant"]["hotkey"] == "Alt+F9" and after.get("sttEngine") == before.get("sttEngine")
               and after.get("activeModelId", "") == before.get("activeModelId", ""))
         check("recognition is still local", status.get("asrLocal") is True, json.dumps(status, ensure_ascii=False))

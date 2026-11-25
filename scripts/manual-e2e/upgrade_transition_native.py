@@ -8,6 +8,7 @@ import argparse
 import ctypes
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -75,14 +76,16 @@ def main():
     exe = args.exe.resolve(strict=True)
     if exe.name.lower() != "kotone.exe" or "target" not in [part.lower() for part in exe.parts]:
         raise RuntimeError("Provide a local build under a target directory, not an installed executable.")
+    # Windows PowerShell 5.1 ships with Windows; pwsh (7) is often not installed.
     version = subprocess.check_output(
-        ["pwsh", "-NoProfile", "-Command",
+        ["powershell", "-NoProfile", "-Command",
          "[Diagnostics.FileVersionInfo]::GetVersionInfo($env:KOTONE_TEST_PE).ProductVersion"],
         env={**os.environ, "KOTONE_TEST_PE": str(exe)}, text=True,
         creationflags=subprocess.CREATE_NO_WINDOW,
     ).strip()
-    if version not in {"0.2.0", "0.2.0.0"}:
-        raise RuntimeError("Expected a local 0.2.0 PE version before launching an isolated executable.")
+    # 0.2 release candidates carry their pre-release tag in the PE version (e.g. "0.2.0-rc.9").
+    if not re.fullmatch(r"0\.2\.\d+(\.0)?(-[0-9A-Za-z.]+)?", version):
+        raise RuntimeError(f"Expected a local 0.2.x PE version before launching an isolated executable, got {version!r}.")
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     user32.GetForegroundWindow.restype = ctypes.c_void_p
     user32.GetWindowThreadProcessId.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong))
@@ -147,7 +150,7 @@ def main():
         call("settings.update", {"patch": {"audioDeviceId": inputs[0]}})
         call("runtime.start")
         assert call("runtime.status")["phase"] == "running"
-        target = subprocess.Popen(["pwsh", "-NoProfile", "-STA", "-File", target_ps,
+        target = subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-STA", "-File", target_ps,
                                    "-TestDirectory", root], creationflags=subprocess.CREATE_NO_WINDOW)
         handle_file = root / "hwnd.txt"
         wait_for(handle_file.is_file, "isolated textbox")
