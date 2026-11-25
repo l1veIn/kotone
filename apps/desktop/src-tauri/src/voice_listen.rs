@@ -76,13 +76,20 @@ fn default_app() -> Result<String, String> {
         .ok_or_else(|| "读不到前台程序的名字：指定 app".to_string())
 }
 
-/// 按现在的设置挑同传的识别，在线识别把连接（地址、密钥）填好。
+/// 按现在的设置挑同传的识别，在线识别把连接（地址、模型、密钥）填好。
 fn listen_model(app: &AppHandle) -> Result<kotone_stt::listen::ListenModel, String> {
     let shared = app.state::<crate::SharedState>();
     let settings = shared.settings.read().unwrap().clone();
     let mut model = kotone_stt::listen::listen_model(&settings, &shared.engines)?;
-    let secrets = shared.secrets.clone();
-    kotone_stt::listen::add_connection(&settings, &mut model, |id| secrets.get(id).ok().flatten());
+    if !model.local {
+        // 和呼叫 / 语音输入同一份填法（kotone-core）
+        kotone_core::stt::add_remote_connection(
+            &settings,
+            &model.engine_id,
+            &mut model.config,
+            Some(shared.secrets.as_ref()),
+        );
+    }
     Ok(model)
 }
 

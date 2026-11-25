@@ -333,7 +333,12 @@ impl Orchestrator {
             .and_then(profile::get)
             .unwrap_or_else(GameProfile::builtin_generic);
         let mut cfg = build_session_config(&stt_settings, &engine_id, &active_profile);
-        enrich_remote_connection(&stt_settings, &engine_id, &mut cfg, self.secrets.as_deref());
+        crate::stt::add_remote_connection(
+            &stt_settings,
+            &engine_id,
+            &mut cfg,
+            self.secrets.as_deref(),
+        );
 
         let (stt_tx, stt_rx) = mpsc::unbounded_channel::<SttEvent>();
         let session = engine
@@ -571,46 +576,3 @@ pub(super) fn build_session_config(
         options: settings.session_options(engine_id),
     }
 }
-
-fn enrich_remote_connection(
-    settings: &Settings,
-    engine_id: &str,
-    cfg: &mut SessionConfig,
-    secrets: Option<&dyn crate::connection::SecretStore>,
-) {
-    let configured = cfg
-        .options
-        .get("connectionId")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(str::to_string);
-    // DeepSeek 语音识别不用单独选连接：用琴音的 DeepSeek 连接，没有就用第一条 DeepSeek 连接。
-    let connection_id = configured.or_else(|| {
-        (engine_id == DEEPSEEK_ASR_ENGINE_ID)
-            .then(|| settings.deepseek_connection_id())
-            .flatten()
-    });
-    let Some(connection_id) = connection_id else {
-        return;
-    };
-    let Some(connection) = settings
-        .connections
-        .iter()
-        .find(|item| item.id == connection_id)
-    else {
-        return;
-    };
-    if let Some(opts) = cfg.options.as_object_mut() {
-        opts.insert("baseUrl".into(), serde_json::json!(connection.base_url));
-        opts.insert("remoteModel".into(), serde_json::json!(connection.model));
-        if let Some(store) = secrets {
-            if let Ok(Some(key)) = store.get(&connection_id) {
-                opts.insert("apiKey".into(), serde_json::json!(key));
-            }
-        }
-    }
-}
-
-/// 与 `kotone_stt::model::DEEPSEEK_ASR_STT_ID` 相同（core 不依赖 stt）。
-const DEEPSEEK_ASR_ENGINE_ID: &str = "deepseek-asr";

@@ -181,9 +181,110 @@ pub fn stt_engine_option_keys(id: &str) -> &'static [&'static str] {
     }
 }
 
+/// 与 `kotone_stt::model::DEEPSEEK_ASR_STT_ID` 相同（core 不依赖 stt）。
+const DEEPSEEK_ASR_ENGINE_ID: &str = "deepseek-asr";
+
+/// 在线识别要的连接（地址、模型、密钥）填进会话配置：模型配置里选了连接（`connectionId`）就用它，
+/// DeepSeek 语音识别没选时用她的 DeepSeek 连接（没有就用第一条 DeepSeek 连接）。本地引擎的配置里没有
+/// `connectionId`、引擎也不是 DeepSeek，什么都不填。只有这一份：呼叫 / 语音输入（`Orchestrator`）和
+/// 同传（`kotone_stt::listen`，经桌面端 `voice_listen.rs`）都调它。`secrets` 按连接 id 取密钥（凭据库）。
+pub fn add_remote_connection(
+    settings: &crate::settings::Settings,
+    engine_id: &str,
+    cfg: &mut SessionConfig,
+    secrets: Option<&dyn crate::connection::SecretStore>,
+) {
+    let configured = cfg
+        .options
+        .get("connectionId")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string);
+    let connection_id = configured.or_else(|| {
+        (engine_id == DEEPSEEK_ASR_ENGINE_ID)
+            .then(|| settings.deepseek_connection_id())
+            .flatten()
+    });
+    let Some(connection_id) = connection_id else {
+        return;
+    };
+    let Some(connection) = settings
+        .connections
+        .iter()
+        .find(|item| item.id == connection_id)
+    else {
+        return;
+    };
+    if let Some(opts) = cfg.options.as_object_mut() {
+        opts.insert("baseUrl".into(), serde_json::json!(connection.base_url));
+        opts.insert("remoteModel".into(), serde_json::json!(connection.model));
+        if let Some(store) = secrets {
+            if let Ok(Some(key)) = store.get(&connection_id) {
+                opts.insert("apiKey".into(), serde_json::json!(key));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct OneKey;
+
+    impl crate::connection::SecretStore for OneKey {
+        fn get(&self, connection_id: &str) -> Result<Option<String>, String> {
+            Ok((connection_id == "ds").then(|| "sk-test".to_string()))
+        }
+        fn set(&self, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn delete(&self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    fn connection(id: &str, provider: &str) -> crate::connection::Connection {
+        crate::connection::Connection {
+            id: id.into(),
+            display_name: id.into(),
+            kind: Default::default(),
+            provider: provider.into(),
+            base_url: format!("https://{id}.example/v1"),
+            model: format!("{id}-model"),
+        }
+    }
+
+    #[test]
+    fn remote_connection_is_filled_in_once_for_everyone() {
+        let settings = crate::settings::Settings {
+            connections: vec![connection("other", "custom"), connection("ds", "deepseek")],
+            ..Default::default()
+        };
+        let cfg = || SessionConfig {
+            options: serde_json::json!({}),
+            ..Default::default()
+        };
+        // DeepSeek 语音识别没选连接：用 DeepSeek 那条，密钥从凭据库取
+        let mut c = cfg();
+        add_remote_connection(&settings, "deepseek-asr", &mut c, Some(&OneKey));
+        assert_eq!(c.options["baseUrl"], "https://ds.example/v1");
+        assert_eq!(c.options["remoteModel"], "ds-model");
+        assert_eq!(c.options["apiKey"], "sk-test");
+        // 模型配置里选了连接：用选的（没有密钥就不填）
+        let mut c = SessionConfig {
+            options: serde_json::json!({"connectionId": "other"}),
+            ..Default::default()
+        };
+        add_remote_connection(&settings, "remote-openai-compat", &mut c, Some(&OneKey));
+        assert_eq!(c.options["baseUrl"], "https://other.example/v1");
+        assert!(c.options.get("apiKey").is_none());
+        // 本地引擎：什么都不填
+        let mut c = cfg();
+        add_remote_connection(&settings, "sherpa-offline", &mut c, Some(&OneKey));
+        assert_eq!(c.options, serde_json::json!({}));
+    }
 
     #[test]
     fn family_ids_map_to_io_runtimes() {

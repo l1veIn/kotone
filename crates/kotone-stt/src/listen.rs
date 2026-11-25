@@ -13,8 +13,7 @@ use kotone_core::settings::Settings;
 use kotone_core::stt::{canonical_stt_engine, EngineRegistry, SessionConfig, SttEngine};
 
 use crate::model::{
-    active_model_from, is_remote_model, multi_model_ready_from, DEEPSEEK_ASR_STT_ID,
-    SHERPA_OFFLINE_ENGINE_ID,
+    active_model_from, is_remote_model, multi_model_ready_from, SHERPA_OFFLINE_ENGINE_ID,
 };
 use crate::transcriber::Utterance;
 
@@ -35,7 +34,8 @@ pub struct ListenModel {
     /// 两边共用那一份。另用 SenseVoice 时（玩家用 X-ASR 之类）不启动本地语音识别、只加载 SenseVoice——
     /// 启动会把玩家那个模型也加载进来，没下载时还会失败。
     pub follows_selected: bool,
-    /// 每一句的会话配置（不带连接的密钥，见 [`add_connection`]）。
+    /// 每一句的会话配置（在线识别的连接和密钥由调用方用 `kotone_core::stt::add_remote_connection` 填，
+    /// 和呼叫 / 语音输入同一份）。
     pub config: SessionConfig,
 }
 
@@ -105,45 +105,6 @@ pub fn listen_model(settings: &Settings, engines: &EngineRegistry) -> Result<Lis
             ..Default::default()
         },
     })
-}
-
-/// 在线识别要的连接（地址、模型、密钥）填进会话配置。和 `kotone-core` 里给呼叫 / 语音输入填的那份
-/// （`orchestrator/capture.rs` 的 `enrich_remote_connection`）同一个规矩：模型配置里选了连接就用它，
-/// DeepSeek 语音识别没选时用她的 DeepSeek 连接。`secret` 按连接 id 取密钥（凭据库）。
-pub fn add_connection(
-    settings: &Settings,
-    model: &mut ListenModel,
-    secret: impl Fn(&str) -> Option<String>,
-) {
-    if model.local {
-        return;
-    }
-    let configured = model
-        .config
-        .options
-        .get("connectionId")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(str::to_string);
-    let connection_id = configured.or_else(|| {
-        (model.engine_id == DEEPSEEK_ASR_STT_ID)
-            .then(|| settings.deepseek_connection_id())
-            .flatten()
-    });
-    let Some(connection) = connection_id
-        .as_deref()
-        .and_then(|id| settings.connections.iter().find(|c| c.id == id))
-    else {
-        return;
-    };
-    if let Some(opts) = model.config.options.as_object_mut() {
-        opts.insert("baseUrl".into(), serde_json::json!(connection.base_url));
-        opts.insert("remoteModel".into(), serde_json::json!(connection.model));
-        if let Some(key) = secret(&connection.id) {
-            opts.insert("apiKey".into(), serde_json::json!(key));
-        }
-    }
 }
 
 /// 识别一句（一句一个会话；本地模型的会话很便宜，共用识别器）。不算一句话（噪声、“嗯”）时 None。
@@ -370,23 +331,6 @@ mod tests {
         // 和本体启动时一样的线程数、同一个模型：offline_sherpa 的缓存键一样，只加载一份
         assert_eq!(m.config.options["threads"], 3);
         assert_eq!(m.config.options["model"], SENSEVOICE_ID);
-    }
-
-    #[test]
-    fn the_deepseek_connection_is_filled_in() {
-        let (mut s, _dir) = settings("deepseek-asr", "deepseek-asr", false);
-        s.connections.push(kotone_core::connection::Connection {
-            id: "ds".into(),
-            display_name: "DeepSeek".into(),
-            kind: Default::default(),
-            provider: "deepseek".into(),
-            base_url: "https://api.deepseek.com/v1".into(),
-            model: "deepseek-chat".into(),
-        });
-        let mut m = listen_model(&s, &registry(true)).unwrap();
-        add_connection(&s, &mut m, |id| (id == "ds").then(|| "sk-test".to_string()));
-        assert_eq!(m.config.options["baseUrl"], "https://api.deepseek.com/v1");
-        assert_eq!(m.config.options["apiKey"], "sk-test");
     }
 
     #[test]

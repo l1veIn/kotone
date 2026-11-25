@@ -325,11 +325,11 @@
 
 **怎么做的**：
 
-- `kotone-stt/src/listen.rs`（新）：`listen_model` 只有一条规矩——你选的识别的能力声明（`EngineCapabilities.languages`）里有 `auto` 或中英日韩都有就用它，否则 SenseVoice；本地的没下载 / 在线的没配好时说下一步；`add_connection` 给在线识别填连接（和 `kotone-core` 里 `enrich_remote_connection` 同一个规矩，`kotone-core` 这次在别人手里，先复制了一份，见“还没做”）；`recognize` 一句一个会话。
+- `kotone-stt/src/listen.rs`（新）：`listen_model` 只有一条规矩——你选的识别的能力声明（`EngineCapabilities.languages`）里有 `auto` 或中英日韩都有就用它，否则 SenseVoice；本地的没下载 / 在线的没配好时说下一步；在线识别的连接（地址、模型、密钥）由 `kotone_core::stt::add_remote_connection` 填——呼叫 / 语音输入（`Orchestrator`）和同传共用这一份（原来是 `orchestrator/capture.rs` 里私有的 `enrich_remote_connection`，同传先复制过一份，当天合回 core：kotone-stt 依赖 kotone-core，由 core 拥有，原则 13、15）；`recognize` 一句一个会话。
 - `transcriber.rs` 只切句（`Segmenter`，VAD 参数不变），删掉自己建 SenseVoice 的那段；`offline_sherpa.rs` 的识别器按格缓存（原来只有一个格子，第一次建好以后不管要哪个模型都返回它），每格自己一把锁（加载一个模型时只挡住要同一份的，原则 20）。
 - `voice_listen.rs`：切句、识别各一个线程（在线识别一句一两秒，切句那边照常收声音）；删掉 `sensevoice_dir`；`stop_local`。`runtime.rs`：玩家停止时先停用本地模型的同传，再卸掉注册表里全部本地模型（同传可能另加载了 SenseVoice）；运行时状态加 `listenModelId` / `listenOnline` / `listenError`，同传页面照它显示“识别”一行和去「设置 → 模型」的链接。`agent/subagents.rs` 加 `deliver_listen_note`（Kotone 自己的说明，不按不可信数据交）。
 - 没给插件加 `Host` 方法（原则 14：插件里没有一个直接要识别的——语音输入经 `AfterHearing` 拿字，同传经她的 `voice.listen`；等第一个要自己要字的插件出现再加）。`voice.listen.start` 的说明改对（不再写死“本地 SenseVoice”，写明在线时每句计费、停止本地识别时会停）；`languages` 参数名不变（单向门），说明里写明“收下但不用：识别自动判语种”。
 
 **测试**：`kotone-stt` 单元 105 个（新加：选识别的表、在线不用下载、X-ASR 用 SenseVoice 或提示下载、SenseVoice 用户同一份设置、DeepSeek 连接、一句一个会话、短噪声不算一句、SenseVoice 缺省 `auto`）；真模型 `interpreter_sensevoice` 2/2（本体 +294 MB、同传 +11 MB，卸掉回到 18 MB；定成 `zh` 时两份、没定时一份；语言探针见上表）；`kotone-agent` 106、桌面端 142；clippy 三个包干净；Playwright 同传 3/3（新加：页面先说“还不能用、下载 SenseVoice”，换成 DeepSeek 后写“在线、每句计费”，链接去「设置 → 模型」）。真机（隔离实例、假 AI、不按键）：`interpreter_asr_real.py` 6/6（修之前 1/5）——(a) DeepSeek 在线识别、模型目录里只有 VAD，同传开始听、队友那句经在线识别认出来、`usage.jsonl` 记一行 `asr`（deepseek，按时长计费）、之后模型目录里还是没有 SenseVoice；(b) 启动本地语音识别 +286 MB，开同传只再 +36 MB；(d) 呼叫和同传同一时间都认出来，呼叫的 vad→text 单独 95 ms、同传同时在识别 82 ms，识别一共 322 MB（一份）；(c) `runtime.stop` 以后不在听、之后没认出东西、内存回到空闲 +40 MB、后台那段对话里有那句说明。`interpreter_e2e.py` 16/16（玩家选的是没下载的 X-ASR、同传另用 SenseVoice，不去启动本地语音识别）。
 
-**还没测 / 还没做**：真游戏和 Discord 里的队友语音；在线识别在枪声下的效果；同传和语音输入（按键）同时用（真机脚本用的是呼叫按钮，同一个识别）；在线识别的费用归属——玩家正在呼叫她时（`hold_asr` 扣着），同传那一句的识别费会记到玩家那一轮；`add_connection` 和 `kotone-core` 的 `enrich_remote_connection` 是两份，等 `kotone-core` 空出来合成一份；每句弹幕要等约 20 秒（`danmaku` 工具等显示完），后面的句子只能合进下一条等它（评估外的新发现，没修）；`voice.listen.*` 不在工具服务里，外部 Agent 用不了（原则 6，没修）。
+**还没测 / 还没做**：真游戏和 Discord 里的队友语音；在线识别在枪声下的效果；同传和语音输入（按键）同时用（真机脚本用的是呼叫按钮，同一个识别）；在线识别的费用归属——玩家正在呼叫她时（`hold_asr` 扣着），同传那一句的识别费会记到玩家那一轮；每句弹幕要等约 20 秒（`danmaku` 工具等显示完），后面的句子只能合进下一条等它（评估外的新发现，没修）；`voice.listen.*` 不在工具服务里，外部 Agent 用不了（原则 6，没修）。
