@@ -50,7 +50,7 @@
   import PluginPage from "./pages/PluginPage.svelte";
   import PluginsPage from "./pages/PluginsPage.svelte";
   import { listPlugins, pluginOfPage, pluginPageId } from "../../lib/plugins";
-  import { listenUiOpen } from "../../lib/stores/pluginPages";
+  import { chatShowing, listenUiOpen } from "../../lib/stores/uiOpen";
   import { initializeAppearance, resolvedTheme } from "../../lib/appearance/appearanceRuntime";
 
   import AppSidebar, { type PageId } from "./AppSidebar.svelte";
@@ -168,6 +168,8 @@
   let page = $state<PageId>("assistant");
   let advancedSection = $state<AdvancedSection>("models");
   const chatActive = $derived(page === "assistant" && (assistantOpen?.section ?? "chat") === "chat");
+  // `ui.open` 看玩家是不是正看着聊天页：不在就不切过去（stores/uiOpen.ts）
+  $effect(() => { chatShowing.set(chatActive); });
   let advancedAnchor = $state<{ id: string; n: number } | null>(null);
   let anchorCount = 0;
 

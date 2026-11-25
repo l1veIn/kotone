@@ -68,7 +68,8 @@ pub const TOOL_GAME_FOCUS: &str = "game.focus";
 pub const TOOL_GAME_LAUNCH: &str = "game.launch";
 pub const TOOL_GAME_INSTALLED: &str = "game.installed";
 pub const TOOL_GAME_STATE: &str = "game.state";
-/// 打开一个页面给玩家看（ADR 038：插件的页面在右侧栏，本体的设置页在设置窗口）。
+/// 打开一个页面给玩家看（ADR 038：插件的页面在右侧栏，本体的设置页在设置窗口）。不打断玩家正在看的：
+/// 别的时候放在右侧栏等玩家点（共享资源评估第二节第 6 条，ADR 039 实施记录）。
 pub const TOOL_UI_OPEN: &str = "ui.open";
 pub const TOOL_GAME_CLOSE: &str = "game.close";
 pub const TOOL_GAME_LOOK: &str = "game.look";
@@ -786,14 +787,20 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_UI_OPEN,
-            description: "Open a page in the Kotone window for the player (ADR 038; MCP Apps style ui:// addresses). Plugin pages (ui://kotone/<plugin>/<page>, listed with each plugin tool as _meta.ui.resourceUri; e.g. ui://kotone/lol/match this match, ui://kotone/lol/player a player's match history with params {puuid} or {riotId: \"name#tag\"}, ui://kotone/lol/game one game with params {gameId}) open in the right sidebar next to the chat; ui://kotone/settings/<section> opens a settings page (models, connections, sound, tuning, appearance, system, browser; plugins opens the plugin list); call, reply, permissions, usage open those tabs on her character page (Wake-up, Interaction, Permissions, Usage). Her chat model is picked next to the chat box, not in settings. Does not bring the Kotone window to the front (the player may be in a game). Returns opened, uri, title; fails for unknown pages or a plugin that is off.",
+            description: "Open a page in the Kotone window for the player (ADR 038; MCP Apps style ui:// addresses). Plugin pages (ui://kotone/<plugin>/<page>, listed with each plugin tool as _meta.ui.resourceUri; e.g. ui://kotone/lol/match this match, ui://kotone/lol/player a player's match history with params {puuid} or {riotId: \"name#tag\"}, ui://kotone/lol/game one game with params {gameId}) open in the right sidebar next to the chat; ui://kotone/settings/<section> opens a settings page (models, connections, sound, tuning, appearance, system, browser; plugins opens the plugin list); call, reply, permissions, usage open those tabs on her character page (Wake-up, Interaction, Permissions, Usage). Her chat model is picked next to the chat box, not in settings. Never interrupts what the player is looking at: the page shows right away only when the player is on the chat page and the right sidebar is free (closed, on Cards, no web page open) or already shows that plugin (the new page stacks on top, Back returns); a settings page opens right away only when the player is on the chat page. Otherwise nothing switches: the page waits as a card at the top of the right sidebar's Cards with a small notice in the window, and opens when the player clicks it. Opening the same page (address + params) again counts once. Does not bring the Kotone window to the front (the player may be in a game). Returns opened (shown now), status (shown / waiting = in the sidebar for the player to click / sent = the window did not answer), uri, title, note (what to tell the player); fails for unknown pages or a plugin that is off.",
             side_effects: &["shows-ui"],
             egress: "none",
             input: object(&["page"], json!({
                 "page": {"type": "string", "minLength": 12, "maxLength": 200, "description": "页面地址，如 ui://kotone/lol/match、ui://kotone/settings/plugins"},
                 "params": {"type": "object", "description": "页面的参数（可选），如 {\"puuid\": \"…\"}"}
             })),
-            output: object(&["opened", "uri"], json!({"opened": {"type": "boolean"}, "uri": {"type": "string"}, "title": {"type": "string"}})),
+            output: object(&["opened", "uri"], json!({
+                "opened": {"type": "boolean", "description": "已经显示了（false = 放在右侧栏等玩家点，或窗口没回话）"},
+                "status": {"enum": ["shown", "waiting", "sent"]},
+                "uri": {"type": "string"},
+                "title": {"type": "string"},
+                "note": {"type": "string"}
+            })),
         },
         Def {
             name: TOOL_GAME_LOOK,

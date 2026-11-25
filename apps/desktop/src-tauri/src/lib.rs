@@ -52,6 +52,7 @@ mod tool_config;
 mod tool_service;
 mod tray;
 mod tts_online;
+mod ui_open;
 mod usage;
 mod voice_ask;
 mod voice_listen;
@@ -266,6 +267,7 @@ pub fn run() {
             app.manage(computer_use::ComputerUse::default());
             app.manage(voice_listen::VoiceListen::default());
             app.manage(key_request::KeyRequests::default());
+            app.manage(ui_open::UiOpenReplies::default());
             app.manage(browser::BrowserRuntime::default());
             // 插件 MCP App 的回环代理（ADR 039 D5）：每个插件第一次显示 App 时才起
             app.manage(app_proxy::Proxies::default());
@@ -529,6 +531,7 @@ pub fn run() {
             agent::agent_send,
             workspace_cmd::workspace_overview,
             key_request::agent_submit_key,
+            ui_open::ui_open_reply,
             game_tools::game_icon,
             game_tools::launch_installed_game,
             workspace_cmd::workspace_read,

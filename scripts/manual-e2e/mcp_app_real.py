@@ -19,6 +19,11 @@ the pages that need “读客户端数据” have real-shaped data; KOTONE_LOL_L
    for each: no “页面没有” (mcp-app-failed), handshake ready, the inner frame is /app/lol/<page>, and the page shows
    its data (战绩 / 单局详情 from the fake client must; 英雄 / 强度榜 need one public request to Tencent 101 — a network
    failure shows the App's status line instead and is reported, not failed).
+   Before that (shared-resources audit §2 item 6, 2026-11-25): `ui.open` while the player is on the plugin page does not
+   switch pages — the result says status "waiting" / opened false (the window answered over `ui_open_reply`), the plugin
+   page stays, one in-window notice names the page, and on the chat page the right sidebar's Cards has exactly one
+   waiting card for it (opening it twice counts once). Then the script goes to the chat page (DevTools click) and every
+   `ui.open` above says status "shown": the first into a free sidebar, the rest stack on the same plugin's App.
 - how many champion icons loaded (client assets → CommunityDragon; informational, needs the network);
 - screenshots of the window and of each App go to target/plugin-shots/round7/real-*.png.
 
@@ -207,6 +212,33 @@ await page.screenshot({ path: %s });
 await frame.screenshot({ path: %s });
 """
 
+# 玩家在插件页时 ui.open（共享资源评估第二节第 6 条）：不切页，放在聊天页右侧栏等玩家点；同一个页面开两次只算一次。
+# 看完回到聊天页、把等着的卡片拿掉，后面每一页都直接显示在右侧栏
+WAITING_PAGE = """
+const { spawnSync } = await import("node:child_process");
+const call = (uri, params) => {
+  const r = spawnSync(%s, ["tools", "call", "ui.open", "--args-file", "-", "--timeout-ms", "30000"],
+    { input: JSON.stringify({ page: uri, params }), encoding: "utf-8", timeout: 60000 });
+  try { return JSON.parse(r.stdout); } catch { return { ok: false, raw: String(r.stdout) + String(r.stderr) }; }
+};
+out.first = call("ui://kotone/lol/player", %s);
+out.again = call("ui://kotone/lol/player", %s);
+await page.waitForTimeout(500);
+out.stillPlugin = await page.getByTestId("plugin-page-lol").isVisible();
+out.chatVisible = await page.getByTestId("assistant-chat").isVisible();
+out.toasts = await page.locator("[data-sonner-toast]").allInnerTexts();
+await page.screenshot({ path: %s });
+// 隔离的 KOTONE_HOME 里还没有对话：左侧栏的“新对话”打开聊天页
+await page.getByTestId("sidebar-new-chat").click();
+await page.getByTestId("assistant-chat").waitFor({ timeout: 10000 });
+out.waiting = await page.getByTestId("ui-open-waiting").evaluateAll((els) => els.map((e) => e.getAttribute("data-uri")));
+out.tab = await page.getByTestId("right-sidebar").getAttribute("data-tab").catch(() => null);
+await page.screenshot({ path: %s });
+for (const el of await page.getByTestId("ui-open-waiting-dismiss").all()) await el.click();
+out.left = await page.getByTestId("ui-open-waiting").count();
+"""
+
+
 # 单独打开的页面（照聊天卡片、“这局总结”自动卡片、ui.open 的路）：(页面, 参数, 有数据时出现的 testid, 要不要网)
 def sidebar_pages(rec):
     return [
@@ -302,7 +334,28 @@ def main():
             status = str(e)
         check("the proxy refuses a request without the key", status == 404, str(status))
 
-        # 2. 每一页单独打开（ui.open → 右侧栏；聊天卡片和“这局总结”自动卡片走的是同一个 plugin_app）
+        # 1.5 玩家还在插件页：ui.open 不切过去，放在聊天页右侧栏等玩家点（共享资源评估第二节第 6 条）
+        player = {"puuid": lt.REC.me["puuid"]}
+        r = ui(WAITING_PAGE % (json.dumps(EXE), json.dumps(player), json.dumps(player),
+                               json.dumps(os.path.join(SHOTS, "real-ui-open-waiting-plugin-page.png")),
+                               json.dumps(os.path.join(SHOTS, "real-ui-open-waiting-card.png"))))
+        first, again = (r.get("first") or {}).get("result") or {}, (r.get("again") or {}).get("result") or {}
+        check("ui.open while the player is on the plugin page: the result says waiting (the window answered)",
+              (r.get("first") or {}).get("ok") and first.get("status") == "waiting" and first.get("opened") is False,
+              json.dumps(r.get("first"), ensure_ascii=False)[:300])
+        check("ui.open did not switch pages: still on 插件 → 英雄联盟, not the chat",
+              r.get("stillPlugin") is True and r.get("chatVisible") is False,
+              f"plugin page {r.get('stillPlugin')}, chat {r.get('chatVisible')}")
+        check("one in-window notice names the page (the second open did not add one)",
+              sum("英雄联盟 · 战绩" in t for t in (r.get("toasts") or [])) == 1,
+              json.dumps(r.get("toasts"), ensure_ascii=False))
+        check("opening the same page twice counts once: again waiting, one waiting card in the chat page's Cards",
+              again.get("status") == "waiting" and r.get("waiting") == ["ui://kotone/lol/player"]
+              and r.get("tab") == "cards", f"again {again.get('status')}, cards {r.get('waiting')}, tab {r.get('tab')}")
+        check("the waiting card can be dismissed", r.get("left") == 0, str(r.get("left")))
+
+        # 2. 每一页单独打开（ui.open → 右侧栏；聊天卡片和“这局总结”自动卡片走的是同一个 plugin_app）。
+        #    玩家在聊天页（上一步点过去了）：第一页放进空着的右侧栏，后面的是同一个插件，往上叠，都直接显示
         for page, params, want, online in sidebar_pages(lt.REC):
             uri = f"ui://kotone/lol/{page}"
             try:
@@ -314,7 +367,9 @@ def main():
                 check(f"ui.open {uri} shows the page in the right sidebar", False, str(e)[-300:])
                 continue
             opened = r.get("opened") or {}
-            check(f"ui.open {uri} is accepted", opened.get("ok"), json.dumps(opened, ensure_ascii=False)[:200])
+            check(f"ui.open {uri} is accepted and shown right away (chat page, sidebar free or the same plugin)",
+                  opened.get("ok") and (opened.get("result") or {}).get("status") == "shown",
+                  json.dumps(opened, ensure_ascii=False)[:200])
             print(f"  [{page}] frame:", json.dumps({k: r.get(k) for k in ("phase", "display", "plugin", "failed")},
                                                    ensure_ascii=False))
             print(f"  [{page}] app text:", (r.get("appText") or "").replace("\n", " ")[:240])

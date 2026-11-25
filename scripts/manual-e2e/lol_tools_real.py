@@ -400,7 +400,10 @@ def main():
                                    for p in rows),
                   json.dumps(rows[:1], ensure_ascii=False)[:300])
         opened = bt.call("ui.open", {"page": "ui://kotone/lol/match"})
-        check("P2: ui.open opens the match page", opened.get("opened") is True, json.dumps(opened, ensure_ascii=False))
+        # 2026-11-25 起不打断玩家：直接显示（shown）或放在右侧栏等玩家点（waiting），都是窗口回了话；sent = 窗口没回话
+        check("P2: ui.open opens the match page (the window says shown or waiting)",
+              opened.get("status") in ("shown", "waiting") and opened.get("opened") is (opened.get("status") == "shown"),
+              json.dumps(opened, ensure_ascii=False))
         try:
             bt.call("ui.open", {"page": "ui://kotone/lol/nope"})
             check("P2: ui.open refuses an unknown page", False, "no error")

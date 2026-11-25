@@ -174,8 +174,10 @@ test("the sidebar has one 插件 page of app cards, even with an old saved order
   // 设置里没有「插件」了
   await page.getByTestId("settings-nav-advanced").click();
   await expect(page.getByTestId("advanced-nav-plugins")).toHaveCount(0);
-  // 她的 ui.open 用旧地址 ui://kotone/settings/plugins：打开「插件」
-  await page.evaluate(() => (window as unknown as { kotoneUiOpen: (e: unknown) => boolean }).kotoneUiOpen({ uri: "ui://kotone/settings/plugins" }));
+  // 她的 ui.open 用旧地址 ui://kotone/settings/plugins：落到「插件」。玩家正在「设置」：不跳，提示上点“打开”才去
+  expect(await page.evaluate(() => (window as unknown as { kotoneUiOpen: (e: unknown) => string | null }).kotoneUiOpen({ uri: "ui://kotone/settings/plugins" }))).toBe("waiting");
+  await expect(page.getByTestId("advanced-page")).toBeVisible();
+  await page.locator("[data-sonner-toast]").filter({ hasText: "插件" }).getByRole("button", { name: "打开" }).click();
   await expect(page.getByTestId("plugins-page")).toBeVisible();
 });
 

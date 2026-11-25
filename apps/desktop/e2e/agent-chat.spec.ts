@@ -69,7 +69,7 @@ async function openChat(page: Page, options: { empty?: boolean; notReady?: strin
     await browser.updateSettings({ assistant: { connectionId: "test-ai" } });
     mockWindows("settings");
     mockIPC(async (command, args) => {
-      if (command.startsWith("agent_")) bridge.calls.push({ command, args: args as Record<string, unknown> });
+      if (command.startsWith("agent_") || command === "ui_open_reply") bridge.calls.push({ command, args: args as Record<string, unknown> });
       switch (command) {
         case "agent_state": return structuredClone({ ...state, permissions: { mode: "default", rules: {} } });
         case "agent_conversation": return structuredClone(conversations[(args as { id: string }).id] ?? null);
@@ -729,5 +729,15 @@ test("where her model used to be (设置 → 她怎么回答 → 她用的模型
     const { emit } = await import("/node_modules/@tauri-apps/api/event.js");
     await emit("kotone://ui-open", { uri: "ui://kotone/settings/reply", params: null, title: "reply", plugin: null });
   });
+  await expect(page.getByTestId("assistant-nav-reply")).toHaveAttribute("aria-current", "page");
+  // 处理完把结果交回后端（工具结果里的 status，ui_open.rs）：玩家在聊天页，她带你过去 = 直接显示
+  await expect.poll(() => agentCalls(page, "ui_open_reply")).toEqual([{ uri: "ui://kotone/settings/reply", outcome: "shown" }]);
+  // 玩家现在在「交互」：再来一个插件的页面不切过去，交回 waiting
+  await page.evaluate(async () => {
+    const { emit } = await import("/node_modules/@tauri-apps/api/event.js");
+    await emit("kotone://ui-open", { uri: "ui://kotone/interpreter/home", params: null, title: "同传", plugin: "interpreter" });
+  });
+  await expect.poll(() => agentCalls(page, "ui_open_reply")).toHaveLength(2);
+  expect((await agentCalls(page, "ui_open_reply"))[1]).toEqual({ uri: "ui://kotone/interpreter/home", outcome: "waiting" });
   await expect(page.getByTestId("assistant-nav-reply")).toHaveAttribute("aria-current", "page");
 });

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { fileURLToPath } from "node:url";
-import { openSettingsTab, openVoiceInput } from "./nav";
+import { openChat, openSettingsTab, openVoiceInput } from "./nav";
 
 /** 设置重排的截图（交接第十一节第 8 条）放在仓库的 target/plugin-shots/round7/。 */
 const round7 = (name: string) => fileURLToPath(new URL(`../../../target/plugin-shots/round7/${name}.png`, import.meta.url));
@@ -113,13 +113,15 @@ test("old settings addresses for wake-up, interaction, permissions and usage lan
   await page.goto("/#/settings?onboarding=never");
   await expect(page.getByTestId("assistant-chat")).toBeVisible();
   for (const [section, tab] of [["call", "call"], ["reply", "reply"], ["permissions", "permissions"], ["usage", "usage"]] as const) {
-    await page.getByTestId("settings-nav-game").click();
-    expect(await page.evaluate((uri) => (window as unknown as { kotoneUiOpen: (e: unknown) => boolean }).kotoneUiOpen({ uri }), `ui://kotone/settings/${section}`)).toBe(true);
+    // 从聊天页打开：她带你过去（玩家在别的页面时先放进右侧栏等玩家点，见 ui-open.spec.ts）
+    await openChat(page);
+    expect(await page.evaluate((uri) => (window as unknown as { kotoneUiOpen: (e: unknown) => string | null }).kotoneUiOpen({ uri }), `ui://kotone/settings/${section}`)).toBe("shown");
     await expect(page.getByTestId(`assistant-nav-${tab}`), section).toHaveAttribute("aria-current", "page");
     await expect(page.getByTestId(`settings-${tab}`), section).toBeVisible();
   }
   // 设置里还在的分页照旧
-  expect(await page.evaluate(() => (window as unknown as { kotoneUiOpen: (e: unknown) => boolean }).kotoneUiOpen({ uri: "ui://kotone/settings/models" }))).toBe(true);
+  await openChat(page);
+  expect(await page.evaluate(() => (window as unknown as { kotoneUiOpen: (e: unknown) => string | null }).kotoneUiOpen({ uri: "ui://kotone/settings/models" }))).toBe("shown");
   await expect(page.getByTestId("advanced-nav-models")).toHaveAttribute("aria-current", "page");
   for (const [where, tab, anchor] of [
     ["设置 → 怎么叫她 → 呼叫键", "call", "settings-call-hotkey"],

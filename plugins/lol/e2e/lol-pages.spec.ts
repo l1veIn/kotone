@@ -180,10 +180,12 @@ test("asking for this match's history leaves the App as a card in the chat; open
 
 test("ui.open with parameters opens that page of the App in the right sidebar; old settings addresses still land", async ({ page }) => {
   await open(page);
-  // 先离开聊天页：插件页面要回到聊天页的右侧栏
+  // 玩家在别的页面（游戏列表）：不切过去，放在右侧栏等玩家点（共享资源评估第二节第 6 条）；点提示上的“打开”才回到聊天页的右侧栏
   await page.getByTestId("settings-nav-game").click();
   const opened = await page.evaluate("window.kotoneUiOpen({ uri: 'ui://kotone/lol/player', params: { puuid: 'sample-puuid-7' }, plugin: 'lol' })");
-  expect(opened).toBe(true);
+  expect(opened).toBe("waiting");
+  await expect(page.getByTestId("assistant-chat")).toBeHidden();
+  await page.locator("[data-sonner-toast]").filter({ hasText: "英雄联盟 · 战绩" }).getByRole("button", { name: "打开" }).click();
   const sidebar = page.getByTestId("right-sidebar");
   await expect(page.getByTestId("assistant-chat")).toBeVisible();
   const stack = sidebar.getByTestId("sidebar-plugin-page");
@@ -193,13 +195,13 @@ test("ui.open with parameters opens that page of the App in the right sidebar; o
   await expect(full.getByTestId("lol-player-name")).toHaveText("对手寅#1008");
   await expect(full.getByTestId("lol-player-hidden")).toBeVisible();
 
-  // 旧的设置页地址：插件搬到了左侧栏的「插件」
-  expect(await page.evaluate("window.kotoneUiOpen({ uri: 'ui://kotone/settings/plugins' })")).toBe(true);
+  // 旧的设置页地址：插件搬到了左侧栏的「插件」（玩家在聊天页：她带你过去）
+  expect(await page.evaluate("window.kotoneUiOpen({ uri: 'ui://kotone/settings/plugins' })")).toBe("shown");
   await expect(page.getByTestId("settings-nav-plugins")).toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("plugins-card-lol")).toBeVisible();
   // 认不出的地址：不动
-  expect(await page.evaluate("window.kotoneUiOpen({ uri: 'ui://kotone/settings/' })")).toBe(false);
-  expect(await page.evaluate("window.kotoneUiOpen({ uri: 'https://example.com' })")).toBe(false);
+  expect(await page.evaluate("window.kotoneUiOpen({ uri: 'ui://kotone/settings/' })")).toBe(null);
+  expect(await page.evaluate("window.kotoneUiOpen({ uri: 'https://example.com' })")).toBe(null);
 });
 
 // 预览里的素材层是开发服务器的假代理（vite.config.ts：`/<密钥>/assets/<插件>/…` 都回一张 1×1 的 PNG），不连 CommunityDragon。

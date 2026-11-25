@@ -87,7 +87,9 @@ test("old 游戏语音 locations and her ui.open land on the game voice plugin p
   await page.evaluate("import('/src/lib/stores/navigation.ts').then((n) => n.openLocation('设置 → 她怎么回答 → 游戏语音'))");
   await expect(page.getByTestId("plugin-page-game-voice")).toBeVisible();
   await expect(page.getByTestId("settings-nav-plugins")).toHaveAttribute("aria-current", "page");
-  // 她打开插件的页面：在聊天页的右侧栏
-  await page.evaluate("window.kotoneUiOpen({ uri: 'ui://kotone/game-voice/home' })");
+  // 她打开插件的页面：玩家正在插件页，不切过去（共享资源评估第二节第 6 条）；点提示上的“打开”在聊天页的右侧栏打开
+  expect(await page.evaluate("window.kotoneUiOpen({ uri: 'ui://kotone/game-voice/home' })")).toBe("waiting");
+  await expect(page.getByTestId("plugin-page-game-voice")).toBeVisible();
+  await page.locator("[data-sonner-toast]").filter({ hasText: "游戏语音" }).getByRole("button", { name: "打开" }).click();
   await expect(page.getByTestId("plugin-view-game-voice").getByTestId("plugin-game-voice-enabled")).toBeVisible();
 });

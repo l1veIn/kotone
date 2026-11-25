@@ -2,6 +2,7 @@
 <!-- 顶部两个标签——“卡片”（网页卡片 + 后台在做的事，按宽度 1–3 列）和“网页”（浏览器占满）；左边缘拖动调宽、 -->
 <!-- 双击恢复；网页可以全屏（铺满整个 Kotone 窗口）。网页由后端摆在窗口里（盖在界面上），这里只报那块区域的位置。 -->
 <!-- 第三个标签“页面”（ADR 038）：聊天卡片点开的插件页面（或她用 ui.open 打开的），能往下点、返回、关掉。 -->
+<!-- ui.open 来时玩家正在这里看别的（另一个插件的页面、网页、展开的后台的事）：不换掉，放进“卡片”最上面等玩家点（stores/uiOpen.ts）。 -->
 <!-- 设置里关了内置浏览器（设置 → 浏览器，ADR 038）：没有“网页”标签和网页卡片，网页也不摆出来（后端把标签页都关掉）。 -->
 <script lang="ts">
   import { onDestroy } from "svelte";
@@ -28,8 +29,10 @@
   import { tryAgentChat } from "./context";
   import SidebarTask from "./SidebarTask.svelte";
   import PluginStack from "../components/plugins/PluginStack.svelte";
-  import { viewOf } from "../pluginUi";
+  import { pluginOfUri, viewOf } from "../pluginUi";
   import { backPluginPage, closePluginPages, pluginPageStack, pushPluginPage, replacePluginPage } from "../stores/pluginPages";
+  import { SIDEBAR_FREE, sidebarShowing, waitingPages } from "../stores/uiOpen";
+  import SidebarWaitingPage from "./SidebarWaitingPage.svelte";
 
   let { active = true, narrow = false, chatWidth = 0 }: {
     /** 聊天页正显示着（不在角色 / 记忆分页上）。 */
@@ -71,6 +74,17 @@
   const liveCount = $derived(tasks.filter((t) => t.status === "running" || t.status === "waiting").length);
   const conversationId = $derived(chat?.conversation?.id ?? "");
   let openTasks = $state<Record<string, boolean>>({});
+
+  // ---- `ui.open`（stores/uiOpen.ts）：报上右侧栏现在显示着什么——空着才直接显示，别的放进“卡片”等玩家点 ----
+  const waiting = $derived($waitingPages);
+  $effect(() => {
+    const top = pages[pages.length - 1];
+    const reading = (tab === "web" && webAvailable) || (tab === "cards" && Object.values(openTasks).some(Boolean));
+    sidebarShowing.set(!open ? SIDEBAR_FREE
+      : tab === "page" && top ? { kind: "app", plugin: pluginOfUri(top.uri) ?? "" }
+      : reading ? { kind: "busy" } : SIDEBAR_FREE);
+  });
+  onDestroy(() => sidebarShowing.set(SIDEBAR_FREE));
 
   // ---- 要玩家来（登录、验证码）：打开右侧栏、切到“网页” ----
   let lastHandover: string | null = null;
@@ -505,6 +519,8 @@
       <div class="min-h-0 flex-1 overflow-y-auto px-3 py-3" bind:clientWidth={cardsWidth}>
         <ul class="m-0 grid list-none gap-3 p-0" style:grid-template-columns={`repeat(${columns}, minmax(0, 1fr))`}
           aria-label={m.chat_sidebar_cards_label()} data-testid="sidebar-cards" data-columns={columns}>
+          <!-- `ui.open` 打开、但玩家当时在看别的：放在最上面等玩家点（stores/uiOpen.ts） -->
+          {#each waiting as item (item.key)}<SidebarWaitingPage {item} />{/each}
           {#if browserOn}
           <li class="min-w-0">
             <section aria-label={m.chat_sidebar_tab_web()} class="h-full min-w-0 overflow-hidden rounded-xl border border-hairline bg-card/60" data-testid="sidebar-browser-card"

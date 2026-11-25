@@ -233,7 +233,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | 英雄联盟（数据开关 `control` 操作客户端，**默认关**，要 `client` 也开着） | `lol.client` | `action`：`accept` / `decline` / `pick` / `ban` / `hover`；`champion` | 照 LeagueAkari 经客户端的本机接口接受 / 拒绝对局、选（并锁定）/ 禁 / 亮出英雄。副作用 `controls-game-client`（她默认先问玩家）。有封号风险（LeagueAkari #523） |
 | | `lol.champions`（只给页面） | 无 | 全部英雄的 id 和名字（设置里排自动选 / 禁的顺序） |
 
-**打开页面**：`ui.open {page, params?}` 在 Kotone 窗口里打开一个页面：插件的页面（上面各工具的 `resourceUri`，例如 `ui://kotone/lol/player` 带 `{puuid}`）在聊天旁边的右侧栏；`ui://kotone/settings/<分页>`（models、connections、sound、tuning、appearance、system、browser）打开设置页；`plugins` 打开左侧栏的「插件」；`call`、`reply`、`permissions`、`usage` 打开角色页的唤醒、交互、权限、用量（2026-11-25 从设置搬过去，地址没变）。不会把窗口拉到前面。页面不存在、插件或它要的数据开关关着时报 `INVALID_ARGUMENTS`。
+**打开页面**：`ui.open {page, params?}` 在 Kotone 窗口里打开一个页面：插件的页面（上面各工具的 `resourceUri`，例如 `ui://kotone/lol/player` 带 `{puuid}`）在聊天旁边的右侧栏；`ui://kotone/settings/<分页>`（models、connections、sound、tuning、appearance、system、browser）打开设置页；`plugins` 打开左侧栏的「插件」；`call`、`reply`、`permissions`、`usage` 打开角色页的唤醒、交互、权限、用量（2026-11-25 从设置搬过去，地址没变）。不会把窗口拉到前面。**不打断玩家正在看的**（2026-11-25，ADR 039 实施记录“ui.open 不打断玩家”）：玩家在聊天页、右侧栏空着（收着、停在“卡片”、“网页”里没开网页）或显示的就是这个插件时直接显示（同一个插件的下一页往上叠，“返回”回到刚才那页），设置页在聊天页时直接跳过去；别的时候不切页、不换掉，放在右侧栏“卡片”最上面、窗口里出一个提示，玩家点“打开”才打开。同一个页面（地址 + 参数）反复打开只算一次。结果：`opened`（已经显示了）、`status`（`shown` / `waiting` = 放在右侧栏等玩家点 / `sent` = 窗口没回话）、`uri`、`title`、`note`（照着告诉玩家的话）。她和外部 Agent 同一条规矩；外部 Agent 调它照旧不经 Kotone 询问（和上面的 `game.act` 一样，权限由它们自己的运行框架管，ADR 014 第 5 节）。页面不存在、插件或它要的数据开关关着时报 `INVALID_ARGUMENTS`。
 
 ### Kotone 陪玩（委托桌面宿主，2026-11-15）
 

@@ -990,9 +990,10 @@ pub async fn invoke(app: &AppHandle, tool: &str, args: Value) -> HostResult {
             };
             blocking(move || Ok(crate::game_tools::installed(a.query.as_deref()))).await
         }
-        c::TOOL_UI_OPEN => {
-            crate::plugins::open_page(app, &args).map_err(HostError::InvalidArguments)
-        }
+        // 不打断玩家：界面说直接显示了还是放在右侧栏等玩家点（ui_open.rs）
+        c::TOOL_UI_OPEN => crate::ui_open::open(app, &args)
+            .await
+            .map_err(HostError::InvalidArguments),
         c::TOOL_GAME_STATE => {
             let game = args
                 .get("game")

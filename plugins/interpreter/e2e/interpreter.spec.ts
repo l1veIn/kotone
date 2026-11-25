@@ -88,8 +88,10 @@ test("empty program means the current game, and her ui.open lands on the interpr
   await expect(page.getByText("帮我盯着队友说的话，当同传：听 现在的游戏，每句外语翻成中文，用弹幕显示。")).toBeVisible();
   await expect(pluginPage.getByTestId("interpreter-listening")).toHaveText("正在听：TslGame.exe");
 
-  // 她打开插件的页面：在聊天页的右侧栏
-  await page.evaluate("window.kotoneUiOpen({ uri: 'ui://kotone/interpreter/home' })");
+  // 她打开插件的页面：玩家正在插件页，不切过去（共享资源评估第二节第 6 条）；点提示上的“打开”在聊天页的右侧栏打开
+  expect(await page.evaluate("window.kotoneUiOpen({ uri: 'ui://kotone/interpreter/home' })")).toBe("waiting");
+  await expect(pluginPage).toBeVisible();
+  await page.locator("[data-sonner-toast]").filter({ hasText: "同传" }).getByRole("button", { name: "打开" }).click();
   const view = page.getByTestId("plugin-view-interpreter");
   await expect(view.getByTestId("plugin-interpreter-enabled")).toBeVisible();
   await expect(view.getByTestId("interpreter-listening")).toHaveText("正在听：TslGame.exe");
