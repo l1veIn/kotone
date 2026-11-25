@@ -75,3 +75,7 @@
 | 3 | 快捷指令并进表；工具、页面可以绑；绑的时候问权限 | 自己加快捷键 | Playwright；一个第三方 MCP 示例服务器的工具绑键测试 |
 
 顺手修：语音识别开着时改快捷指令的键不立即生效（`settings_cmd.rs` 的 `hotkey_registration_changed` 没比较 `quickMessages[].hotkey`，先复现）；ADR 028 的默认呼叫键（文档写 `~`，代码是 Ctrl+`）。
+
+## 实施记录
+
+- **2026-11-25 快捷指令的键改了立即生效**（[共享资源评估](../research/2026-11-25-shared-resources-audit.md)第二节第 13 条）。复现：单元测试 `settings_cmd::hotkey_settings_tests::changing_a_quick_message_hotkey_requires_registration`，给快捷指令绑键、换键，判断函数都说“没变”，语音识别开着时不重新登记。界面上的样子：这一格原来没绑键时提示“已保存，语音识别准备好后生效”（识别明明开着）；原来绑着键时提示“已保存并生效：<旧的键>”，按新键没反应。修法：`hotkey_registration_changed` 比较 8 个槽位各自登记的键（照 `hotkey.rs` 的 `named_list_from`：第 n 条占 `quick-message-n`，没有这一条就是空的），键变了、加了一条带键的、删了一条（后面的挪了格子）都立即重新登记；加一条没绑键的、只改说的话或自动化的入参不重新登记（按下时才读那一格）。修完以后“……后生效”只在语音识别还没开始时出现。没做本 ADR 的第 3 期（快捷指令并进快捷键表）。
