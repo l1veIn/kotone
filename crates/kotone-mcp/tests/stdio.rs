@@ -9,16 +9,25 @@ use kotone_mcp::{McpClient, McpError, ServerConfig, Stage};
 use serde_json::json;
 
 /// `target/debug/examples/stdio_server.exe`（`cargo test -p kotone-mcp` 会先编译 examples）。
+///
+/// 测试程序自己放在哪随 cargo 版本变：1.100 之前在 `target/debug/deps/`，1.100 起在
+/// `target/debug/build/kotone-mcp/<哈希>/out/`（Cargo 1.100 changelog，cargo#17354：build-dir 新布局）；
+/// example 一直放到 `target/debug/examples/`。所以不数层数，从测试程序往上一级级找。
 fn server_exe() -> PathBuf {
     let exe = std::env::current_exe().unwrap();
-    let profile = exe.parent().unwrap().parent().unwrap();
-    let path = profile.join("examples").join("stdio_server.exe");
-    assert!(
-        path.is_file(),
-        "{} 不存在：先 `cargo test -p kotone-mcp`（会编译 examples/stdio_server.rs）",
-        path.display()
+    let mut tried = Vec::new();
+    for dir in exe.ancestors().skip(1) {
+        let path = dir.join("examples").join("stdio_server.exe");
+        if path.is_file() {
+            return path;
+        }
+        tried.push(path.display().to_string());
+    }
+    panic!(
+        "找不到 stdio_server.exe：先 `cargo test -p kotone-mcp`（会编译 examples/stdio_server.rs；\
+         只跑 `--test stdio` 不会编译它）。找过：\n{}",
+        tried.join("\n")
     );
-    path
 }
 
 fn config(args: &[&str]) -> ServerConfig {

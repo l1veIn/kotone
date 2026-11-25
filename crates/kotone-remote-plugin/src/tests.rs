@@ -59,21 +59,25 @@ impl Host for TestHost {
 }
 
 /// `target/debug/examples/remote_test_server.exe`（`cargo test -p kotone-remote-plugin` 会先编译 examples）。
+///
+/// 测试程序自己放在哪随 cargo 版本变：1.100 之前在 `target/debug/deps/`，1.100 起在
+/// `target/debug/build/kotone-remote-plugin/<哈希>/out/`（Cargo 1.100 changelog，cargo#17354：build-dir 新布局）；
+/// example 一直放到 `target/debug/examples/`。所以不数层数，从测试程序往上一级级找。
 fn server_exe() -> PathBuf {
+    let name = format!("remote_test_server{}", std::env::consts::EXE_SUFFIX);
     let exe = std::env::current_exe().unwrap();
-    let profile = exe.parent().unwrap().parent().unwrap();
-    let name = if cfg!(windows) {
-        "remote_test_server.exe"
-    } else {
-        "remote_test_server"
-    };
-    let path = profile.join("examples").join(name);
-    assert!(
-        path.is_file(),
-        "{} 不存在：用 `cargo test -p kotone-remote-plugin` 跑（会先编译 examples/remote_test_server.rs）",
-        path.display()
+    let mut tried = Vec::new();
+    for dir in exe.ancestors().skip(1) {
+        let path = dir.join("examples").join(&name);
+        if path.is_file() {
+            return path;
+        }
+        tried.push(path.display().to_string());
+    }
+    panic!(
+        "找不到 {name}：用 `cargo test -p kotone-remote-plugin` 跑（会先编译 examples/remote_test_server.rs）。找过：\n{}",
+        tried.join("\n")
     );
-    path
 }
 
 async fn until<T>(what: &str, mut check: impl FnMut() -> Option<T>) -> T {
