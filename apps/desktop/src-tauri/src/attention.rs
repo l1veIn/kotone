@@ -5,6 +5,8 @@
 //!   前台被拿走，游戏就收不到他的键了（真机：`scripts/manual-e2e/focus_steal_real.py`）。
 //! - [`present`]：想让玩家看到一个窗口时用它：能拿前台就拿到前面；不能就放在最后面、不激活，任务栏按钮闪。
 //!   照 Windows 自己的前台锁：后台程序要前台时，系统也只是闪它的任务栏按钮，玩家切出来就看得到。
+//! - [`show_for_player`]：玩家自己按了要看 Kotone 窗口的热键（“打开页面”，ADR 040 第 3 期 P1）：是他自己要的，拿到前面；
+//!   只有游戏独占全屏时不拿（拿了游戏会被切到后台、可能最小化），照 [`present`] 不能拿时的做法。
 //! - [`popup_blocked`]：消息提示（ADR 039 D4）现在能不能弹：Kotone 在前台、独占全屏、演示模式、别的程序全屏时不弹。
 //! - [`remember_player_window`] / [`give_back_foreground`]：玩家点了盖在游戏上面、又必须能点的 Kotone 小窗
 //!   （语音输入悬浮窗开着“允许交互并拖动”时）：点完把前台还给他原来在用的窗口，游戏马上又收得到键。
@@ -62,6 +64,17 @@ pub fn present(window: &tauri::WebviewWindow) -> bool {
     } else {
         crate::show_behind(window);
         false
+    }
+}
+
+/// 玩家自己按热键要看这个窗口（见模块说明）：拿到前面；游戏独占全屏时放在最后面、闪任务栏。返回拿没拿前台。
+pub fn show_for_player(window: &tauri::WebviewWindow) -> bool {
+    if exclusive_fullscreen() {
+        crate::show_behind(window);
+        false
+    } else {
+        crate::show_and_focus(window);
+        true
     }
 }
 

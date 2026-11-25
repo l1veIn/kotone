@@ -267,7 +267,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | --- | --- | --- |
 | `settings.get` | 无 | 与设置页相同的完整设置（camelCase）；连接条目不含 API key |
 | `settings.describe` | `query?`（关键词） | `fields[]`：每个用户可改的设置的点分路径、中文名、在设置页的位置、含义、可选值和生效方式（`immediate` / `restart-voice` / `restart-app` / `next-launch`）；`dedicated[]`：要用专用工具改、或不能由 Agent 改的设置。说明表与真实设置由测试保证一一对应 |
-| `settings.update` | `patch`（部分设置，深合并） | `settings`（更新后）、`runtime`（含 `restartNeeded`）、`effects`（`changed` 改动的路径、`restartVoice`、`restartApp`、`nextLaunch`、给用户的 `summary`）。立即生效：热键（运行时运行中重注册）、助手去向与提醒方式、悬浮窗、音效等；换引擎/模型使 `restartNeeded=true`。`connections` 与 `models.dir` 不接受（用下面的专用工具）；热键改成和别的热键、Esc、游戏配置的聊天键一样的键不接受（先用 `hotkeys.conflicts` 查，ADR 040）；`toolService.*` 下次启动生效。完成首次引导：`{"ui": {"firstRunCompleted": true}}` |
+| `settings.update` | `patch`（部分设置，深合并） | `settings`（更新后）、`runtime`（含 `restartNeeded`）、`effects`（`changed` 改动的路径、`restartVoice`、`restartApp`、`nextLaunch`、给用户的 `summary`）。立即生效：热键（运行时运行中重注册）、助手去向与提醒方式、悬浮窗、音效等；换引擎/模型使 `restartNeeded=true`。`connections` 与 `models.dir` 不接受（用下面的专用工具）；热键改成和别的热键、Esc、游戏配置的聊天键一样的键不接受（先用 `hotkeys.conflicts` 查，ADR 040）；`hotkeys.bindings` 里写的 `confirmed`（绑热键时玩家的确认）不算、会被去掉：调要问的工具的热键要玩家在「设置 → 热键」确认一次才生效（ADR 040 D9）；`toolService.*` 下次启动生效。完成首次引导：`{"ui": {"firstRunCompleted": true}}` |
 | `audio.devices` | 无 | `devices[]`（标出默认与虚拟声卡）、`selected`；选择用 `settings.update {"audioDeviceId": …}` |
 | `stt.engines` | 无 | `engines[]`（可用性）、`current` |
 | `models.list` | 可选 `category`（`asr` 缺省 / `ocr` / `tts` / `search`） | `models[]`（本地/在线、大小、是否已下载、配置项、API key 页面）、`dir{dir,isDefault}`、`active`、`downloading`。`asr` 的返回与加入类别前相同（`active{engine,modelId}`）；`ocr` / `tts` 多 `category`，条目另含 `ready`/`state`/`reason`、`active`、`recommended`、`languages`、`dataEgress`（`selected-image` = 每次识别上传截图）、`files[]`，`active{modelId}` |
@@ -289,7 +289,7 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `connections.delete` | `id` | 更新后的 `connections[]`（同时删除其 key） |
 | `profiles.list` | 无 | `profiles[]`、`activeProfileId`；激活用 `settings.update {"activeProfileId": …}` |
 | `profiles.save` / `profiles.delete` | `profile` / `id` | 保存（内置 profile 记住被删的内置热词）/ 删除（内置恢复出厂，导入的永久删除） |
-| `hotkeys.status` | 无 | 热键注册状态（失败原因，如被其他程序占用）；`bindings[]`：全部热键（本体的、插件的、自己加的、固定的 Esc），每项有键、绑的命令（`command`，如 `kotone.call`、`voice-input.talk`）或者自己加的要做什么（`action`：`say` 跟她说一句即快捷指令、`automation` 运行自动化）、来源、字段、在哪改（`page`）和 `conflicts`（冲突的 id，可能指 `gameKeys[]` 里游戏配置的聊天键、控制台触发键；ADR 040）。**自己加的行 id 是 `custom.<条目 id>`**（`hotkeys.bindings[].id`；ADR 040 第 3 期起，`named[]` 里快捷指令的登记 id 也从 `quick-message-1`…`8` 改成这个，没绑键的不在 `named[]` 里） |
+| `hotkeys.status` | 无 | 热键注册状态（失败原因，如被其他程序占用）；`bindings[]`：全部热键（本体的、插件的、自己加的、固定的 Esc），每项有键、绑的命令（`command`，如 `kotone.call`、`voice-input.talk`）或者自己加的要做什么（`action`：`say` 跟她说一句即快捷指令、`automation` 运行自动化、`tool` 调工具、`page` 打开页面）、来源、字段、在哪改（`page`）和 `conflicts`（冲突的 id，可能指 `gameKeys[]` 里游戏配置的聊天键、控制台触发键；ADR 040）。**自己加的行 id 是 `custom.<条目 id>`**（`hotkeys.bindings[].id`；ADR 040 第 3 期起，`named[]` 里快捷指令的登记 id 也从 `quick-message-1`…`8` 改成这个，没绑键的不在 `named[]` 里）；自己加的调工具要玩家确认的有 `confirm`（这个工具会做什么，确认之前不登记，`named[].error` 说去「设置 → 热键」确认），按不了的有 `blocked`（原因），最近一次按下的结果在 `lastRun {atMs, ok, message}` |
 | `hotkeys.conflicts` | `key`、`except`（正在改的那一项的 id，可省；命令名、`custom.<id>`，第 1 期的 `assistant`、`record` 和快捷指令的 `quick-message-n` 也认） | `conflicts[]`：已经占着这个键的热键、Esc、游戏配置的聊天键和控制台触发键（有就别用这个键，ADR 040 D6）；`warnings[]`：与常见游戏键位的冲突提示 |
 | `input.check` | 无 | 低级键盘钩子与模拟输入（SendInput）自检，不需要先启动运行时 |
 | `elevation.status` | 无 | 是否已提权、能否提权、前台游戏是否以管理员运行 / 独占全屏 |

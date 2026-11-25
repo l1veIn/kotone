@@ -235,6 +235,16 @@ impl ToolEntry {
         self.own_wait = true;
         self
     }
+
+    /// 玩家能把它绑成热键吗（ADR 040 第 3 期）：工具服务的、插件的（含第三方）、本体用 ToolSpec 登记的。
+    /// 一段对话里才有意义的内置动作（说话、问玩家、交给后台、`tools.find`）、只给后台的（执行命令、读写文件、浏览器）、
+    /// 已保存的自动化（经 `automation.run` 绑）都不行。
+    pub fn bindable(&self) -> bool {
+        matches!(
+            self.source,
+            Source::Service | Source::Plugin { .. } | Source::Body
+        )
+    }
 }
 
 /// 分组：(id, 中文名, 查找时也匹配的关键词)。

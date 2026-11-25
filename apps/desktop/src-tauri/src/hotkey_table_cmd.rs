@@ -1,6 +1,7 @@
 //! 热键表的命令（ADR 040）：「设置 → 热键」那一页、各页面改键前的冲突提示、`settings.update` 拒绝新冲突、
 //! 宿主登记热键（`hotkey.rs`）、`hotkeys.status` / `hotkeys.conflicts` 工具都经这里读
-//! [`kotone_core::hotkey_table`]——表、冲突、谁先登记都只在那里算一次，前端只显示结果。
+//! [`kotone_core::hotkey_table`]——表、冲突、谁先登记都只在那里算一次，前端只显示结果。自己加的调工具、打开页面现在
+//! 能不能按（工具目录、插件开关、权限）由 [`crate::hotkey_bind::state`] 交给它（ADR 040 第 3 期 D9）。
 
 use kotone_core::hotkey_bindings::legacy_by_id;
 use kotone_core::hotkey_commands::split_command;
@@ -34,10 +35,15 @@ fn with_sources<T>(
     f: impl FnOnce(&Sources<'_>) -> T,
 ) -> T {
     let plugins = plugin_infos(settings);
+    let catalog = crate::hotkey_bind::catalog(settings);
+    let custom = |binding: &kotone_core::hotkey_bindings::Binding| {
+        crate::hotkey_bind::state(settings, &catalog, binding)
+    };
     f(&Sources {
         settings,
         profiles,
         plugins: &plugins,
+        custom: Some(&custom),
     })
 }
 
@@ -48,15 +54,21 @@ fn with_current<T>(app: &AppHandle, f: impl FnOnce(&Sources<'_>) -> T) -> T {
     with_sources(&settings, &profiles, f)
 }
 
+/// 整张表；自己加的那几行带最近一次按下的结果（`lastRun`，[`crate::hotkey_run`]）。
 pub(crate) fn table(app: &AppHandle) -> HotkeyTable {
-    with_current(app, hotkey_table::table)
+    let mut table = with_current(app, hotkey_table::table);
+    for row in &mut table.bindings {
+        row.last_run = crate::hotkey_run::last_run(&row.id);
+    }
+    table
 }
 
 pub(crate) fn check(app: &AppHandle, key: &str, except: Option<&str>) -> HotkeyCheck {
     with_current(app, |src| hotkey_table::check(src, key, except))
 }
 
-/// 登记计划（谁先拿到键、哪些识别没跑也登记、哪些只看不吞）。登记不看游戏配置，不读磁盘，可以在设置事务里调。
+/// 登记计划（谁先拿到键、哪些识别没跑也登记、哪些只看不吞）。登记不看游戏配置，不读磁盘，可以在设置事务里调
+/// （自己加的能不能按只读内存里的工具目录和设置）。
 pub(crate) fn registration_plan(settings: &Settings) -> Vec<Planned> {
     with_sources(settings, &[], hotkey_table::registration_plan)
 }
@@ -74,11 +86,13 @@ pub(crate) fn new_conflict(
             settings: before,
             profiles,
             plugins: &before_plugins,
+            custom: None,
         },
         &Sources {
             settings: after,
             profiles,
             plugins: &after_plugins,
+            custom: None,
         },
     )
 }

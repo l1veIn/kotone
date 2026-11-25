@@ -543,7 +543,7 @@ pub fn offers(app: &AppHandle) -> Vec<Offer> {
     offers_for(&settings(app))
 }
 
-fn offers_for(settings: &kotone_core::settings::Settings) -> Vec<Offer> {
+pub(crate) fn offers_for(settings: &kotone_core::settings::Settings) -> Vec<Offer> {
     let mut offers = builtin_offers(settings);
     // 第三方插件：工具多了只给后台（`remote_plugins::offers`）
     offers.extend(crate::remote_plugins::offers(
@@ -597,6 +597,9 @@ pub enum Caller<'a> {
     Service,
     /// 插件自己的页面（只能调自己插件的、给页面的工具）。
     Page(&'a str),
+    /// 玩家自己加的热键（ADR 040 第 3 期）：和她一样只调给她的工具（`visibility` 含 `model`）；第三方插件的也能调
+    /// （是玩家在 Kotone 里按的，不是转给外部 Agent）。
+    Hotkey,
 }
 
 /// 调一个插件的工具。
@@ -624,7 +627,9 @@ pub async fn call(
             return Err(format!("{page_plugin} 的页面不能调 {tool}"));
         }
         Caller::Page(_) if !spec.for_app() => return Err(format!("{tool} 不给页面用")),
-        Caller::Her if !spec.for_model() => return Err(format!("{tool} 只给插件的页面用")),
+        Caller::Her | Caller::Hotkey if !spec.for_model() => {
+            return Err(format!("{tool} 只给插件的页面用"))
+        }
         _ => {}
     }
     if !enabled(&settings(app), manifest) {
@@ -655,6 +660,55 @@ pub fn open_page(app: &AppHandle, args: &Value) -> Result<Value, String> {
     );
     Ok(json!({"opened": true, "uri": uri, "title": title,
         "note": "在 Kotone 窗口里打开了（插件的页面在右侧栏）；玩家在游戏里时窗口不会自己跳出来"}))
+}
+
+/// 自己加的“打开页面”热键要打开的地方（ADR 040 第 3 期）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum HotkeyPage {
+    /// 设置的一页、内置插件的页面：经 `kotone://ui-open` 交给界面（标着是玩家自己要看的）。
+    Kotone {
+        uri: String,
+        title: String,
+        plugin: Option<String>,
+    },
+    /// 第三方插件的页面：打开左侧栏「插件」里这个插件的页面（右侧栏还显示不了第三方的 App）。
+    ThirdParty { plugin: String },
+}
+
+/// 热键的页面打不打得开：`Err(None)` = 插件关着（热键不登记、也不占键，打开插件就回来）；`Err(Some(原因))` 打不开。
+pub fn hotkey_page(
+    settings: &kotone_core::settings::Settings,
+    uri: &str,
+) -> Result<HotkeyPage, Option<String>> {
+    let uri = uri.trim();
+    if !uri.starts_with("ui://kotone/") {
+        let owner = crate::remote_plugins::plugins()
+            .into_iter()
+            .find(|p| p.server().owns_uri(uri));
+        return match owner {
+            Some(p) if settings.plugin_enabled(&p.manifest().id, true) => {
+                Ok(HotkeyPage::ThirdParty {
+                    plugin: p.manifest().id.clone(),
+                })
+            }
+            Some(_) => Err(None),
+            None => Err(Some(format!("没有这个页面：{uri}（第三方插件删掉了？）"))),
+        };
+    }
+    if registry()
+        .iter()
+        .find(|p| p.manifest().owns_uri(uri))
+        .is_some_and(|p| !enabled(settings, p.manifest()))
+    {
+        return Err(None);
+    }
+    resolve_page(settings, uri)
+        .map(|(title, plugin)| HotkeyPage::Kotone {
+            uri: uri.to_string(),
+            title,
+            plugin,
+        })
+        .map_err(Some)
 }
 
 /// 页面地址 → (标题, 插件 id)。设置页的插件 id 是 None。
@@ -898,6 +952,10 @@ mod tests {
         assert!(catalog.get(&tool).unwrap().untrusted);
         assert_eq!(third_party_refusal(true, Caller::Service), Some(NOT_SHARED));
         assert!(third_party_refusal(true, Caller::Her).is_none());
+        assert!(
+            third_party_refusal(true, Caller::Hotkey).is_none(),
+            "玩家自己加的热键能调第三方的工具（在 Kotone 里按的）"
+        );
         assert!(third_party_refusal(true, Caller::Page(id)).is_none());
         assert!(third_party_refusal(false, Caller::Service).is_none());
         assert!(crate::plugin_apps::list(&s)

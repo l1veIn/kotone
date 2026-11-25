@@ -239,6 +239,39 @@ impl Decide for Policy {
     }
 }
 
+/// 玩家自己加的热键调这个工具（ADR 040 D9）：绑的时候问，按的时候不问。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindingDecision {
+    /// 按了就跑（只读的、默认允许的、确认过的）。
+    Run,
+    /// 要玩家在「设置 → 热键」确认一次：这个工具会做什么（权限的原因）。
+    Confirm { reason: String },
+    /// 不能跑：规则设成了禁止、只读模式。
+    Refused { reason: String },
+}
+
+/// 热键能不能调这个工具（ADR 040 D9，照浏览器扩展装的时候问权限、按快捷键时不问）。和她用的是**同一张权限表、
+/// 同一个判定**（[`Decide::decide`]，含整体模式）：允许 → 跑；禁止 → 不能跑；要问 → 绑的时候问过一次（`confirmed` 是当时
+/// 这个工具的副作用）就跑，工具后来多了没确认过的副作用要重新确认（照 Chrome：扩展更新多要权限时先停用到用户同意）。
+/// 参数变了要重新确认由存法保证（改了参数，确认就被抹掉，`kotone_core::hotkey_custom`）。
+pub fn binding_decision(
+    policy: &Policy,
+    entry: &ToolEntry,
+    arguments: &Value,
+    confirmed: Option<&[&str]>,
+) -> BindingDecision {
+    match policy.decide(entry, arguments) {
+        Decision::Allow => BindingDecision::Run,
+        Decision::Deny { reason } => BindingDecision::Refused { reason },
+        Decision::Ask { reason } => match confirmed {
+            Some(ok) if entry.side_effects.iter().all(|e| ok.contains(&e.as_str())) => {
+                BindingDecision::Run
+            }
+            _ => BindingDecision::Confirm { reason },
+        },
+    }
+}
+
 /// 一次询问（界面给按钮；游戏内用语音 / 弹幕问或留到窗口里确认）。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

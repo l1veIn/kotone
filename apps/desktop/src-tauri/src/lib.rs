@@ -26,6 +26,7 @@ mod game_tools;
 mod games;
 mod history_cmd;
 mod hotkey;
+mod hotkey_bind;
 mod hotkey_run;
 mod hotkey_table_cmd;
 mod key_request;
@@ -479,6 +480,7 @@ pub fn run() {
             hotkey_table_cmd::get_hotkey_table,
             hotkey_table_cmd::check_hotkey,
             hotkey_table_cmd::set_hotkey,
+            hotkey_bind::confirm_hotkey,
             start_hotkey_capture,
             cancel_hotkey_capture,
             restart_as_admin,

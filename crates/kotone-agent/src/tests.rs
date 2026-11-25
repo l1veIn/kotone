@@ -526,6 +526,89 @@ fn default_rules_follow_side_effects() {
     ));
 }
 
+/// 热键调工具（ADR 040 D9）：和她同一张权限表、同一个判定；要问的绑的时候确认一次（记下当时的副作用），按的时候不问；
+/// 工具后来多了副作用要重新确认；禁止、只读模式不能跑。能绑的只有工具服务、插件、本体 ToolSpec 的工具。
+#[test]
+fn hotkeys_ask_once_when_bound() {
+    use crate::permissions::{binding_decision, BindingDecision};
+    let f = fixture(Policy::default(), Answer::Deny);
+    let policy = Policy::default();
+    let decide = |name: &str, args: Value, confirmed: Option<&[&str]>| {
+        binding_decision(&policy, entry(&f, name), &args, confirmed)
+    };
+    // 只读的、默认允许的（发到游戏、运行已保存的自动化）不问
+    assert_eq!(
+        decide("settings.get", json!({}), None),
+        BindingDecision::Run
+    );
+    assert_eq!(
+        decide("game_chat.send", json!({"text": "gg"}), None),
+        BindingDecision::Run
+    );
+    assert_eq!(
+        decide("automation.run", json!({"id": "auto-1"}), None),
+        BindingDecision::Run
+    );
+    // 要问的：没确认 → 要确认（原因是会做什么）；确认过（当时的副作用都在）→ 跑
+    let BindingDecision::Confirm { reason } = decide("settings.update", json!({}), None) else {
+        panic!("改设置要确认");
+    };
+    assert_eq!(reason, "会修改设置");
+    let effects: Vec<&str> = entry(&f, "settings.update")
+        .side_effects
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        decide("settings.update", json!({}), Some(&effects)),
+        BindingDecision::Run
+    );
+    // AI 写的程序也一样（参数变了要重新确认由存法保证）
+    assert!(matches!(
+        decide("automation.run", json!({"source": "key('Q')"}), None),
+        BindingDecision::Confirm { .. }
+    ));
+    // 工具后来多了副作用：确认过的不够了，要重新确认（照浏览器扩展更新多要权限时先停用）
+    let mut updated = entry(&f, "settings.update").clone();
+    updated.side_effects.push("launches-rockets".into());
+    assert!(matches!(
+        binding_decision(&policy, &updated, &json!({}), Some(&effects)),
+        BindingDecision::Confirm { .. }
+    ));
+    // 玩家设成禁止、只读模式：不能跑；设成“每次询问”：绑的时候问一次就够（按键时没法问）
+    let mut rules = Policy::default();
+    rules
+        .rules
+        .insert("game_chat.send".into(), crate::permissions::Rule::Deny);
+    rules
+        .rules
+        .insert("settings.get".into(), crate::permissions::Rule::Ask);
+    let chat = entry(&f, "game_chat.send");
+    assert!(matches!(
+        binding_decision(&rules, chat, &json!({}), Some(&["input", "records-run"])),
+        BindingDecision::Refused { .. }
+    ));
+    assert!(matches!(
+        binding_decision(&rules, entry(&f, "settings.get"), &json!({}), None),
+        BindingDecision::Confirm { .. }
+    ));
+    assert_eq!(
+        binding_decision(&rules, entry(&f, "settings.get"), &json!({}), Some(&[])),
+        BindingDecision::Run
+    );
+    let read_only = Policy {
+        mode: Mode::ReadOnly,
+        ..Default::default()
+    };
+    assert!(matches!(
+        binding_decision(&read_only, chat, &json!({}), None),
+        BindingDecision::Refused { .. }
+    ));
+    // 能绑的
+    assert!(entry(&f, "settings.get").bindable() && chat.bindable());
+    assert!(!entry(&f, "speak").bindable() && !entry(&f, "saved.auto-1").bindable());
+}
+
 #[test]
 fn modes_and_user_rules() {
     let f = fixture(Policy::default(), Answer::Deny);

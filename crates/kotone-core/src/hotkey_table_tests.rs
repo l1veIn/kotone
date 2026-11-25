@@ -7,6 +7,7 @@ use crate::hotkey::{
     HK_RUNTIME_TOGGLE,
 };
 use crate::hotkey_bindings::{Binding, CMD_TALK};
+use crate::hotkey_custom::CustomState;
 use crate::profile::ConsoleChat;
 use crate::settings::LegacyUpgrade;
 
@@ -73,6 +74,7 @@ fn check_ids(settings: &Settings, key: &str, except: Option<&str>) -> Vec<String
         settings,
         profiles: &profiles,
         plugins: plugins_on(),
+        custom: None,
     };
     check(&src, key, except)
         .conflicts
@@ -92,6 +94,7 @@ fn table_of(settings: &Settings) -> HotkeyTable {
         settings,
         profiles: &profiles,
         plugins: plugins_on(),
+        custom: None,
     });
     for row in &mut table.bindings {
         row.id = short_id(&row.id);
@@ -187,6 +190,7 @@ fn core_against_plugin() {
         settings: &settings,
         profiles: &profiles,
         plugins: &off,
+        custom: None,
     };
     let conflicts = check(&src, "CapsLock", Some(HK_ASSISTANT)).conflicts;
     assert_eq!(conflicts.len(), 1);
@@ -239,18 +243,84 @@ fn custom_rows_say_what_they_do() {
         ("连发", Some("automation"))
     );
     assert_eq!(auto.detail, "运行自动化 auto-1");
-    let tool = table
-        .bindings
-        .iter()
-        .find(|b| b.source == KeySource::Unknown)
-        .expect("工具热键第 2 步才按得了");
-    assert_eq!(tool.label, "game_chat.send");
+    let tool = row(&table, "custom.c");
+    assert_eq!(
+        (tool.label.as_str(), tool.action, tool.source),
+        ("调用 game_chat.send", Some("tool"), KeySource::Custom)
+    );
     let plan = plan_of(&settings);
     let say = planned(&plan, "custom.a");
     assert_eq!((say.always, say.hint), (false, Some(HintAt::Bubble)));
     let auto = planned(&plan, "custom.b");
     assert_eq!((auto.always, auto.hint), (true, None));
-    assert!(plan.iter().any(|p| p.error.is_some() && p.combo == "F9"));
+    // 调工具不用听：随应用登记（宿主没说能不能按时当能按，按下时宿主还会再判）
+    let tool = planned(&plan, "custom.c");
+    assert_eq!((tool.always, tool.error.as_deref()), (true, None));
+}
+
+/// 调工具、打开页面能不能按由宿主算（工具目录、插件开关、权限，ADR 040 D9）：插件关着的不登记也不占键；要确认的、
+/// 按不了的不登记，写原因（玩家看得到要去哪确认）；说一句不问宿主。
+#[test]
+fn custom_rows_follow_what_the_host_says() {
+    let mut settings = Settings::default();
+    settings.hotkeys.bindings.extend([
+        Binding(serde_json::json!({"key": "F5", "say": "一句", "id": "say"})),
+        Binding(serde_json::json!({"key": "F6", "tool": "x.ready", "id": "ready"})),
+        Binding(serde_json::json!({"key": "F7", "tool": "x.ask", "id": "ask"})),
+        Binding(serde_json::json!({"key": "F8", "tool": "x.denied", "id": "denied"})),
+        Binding(serde_json::json!({"key": "F9", "page": "ui://kotone/off/page", "id": "off"})),
+    ]);
+    settings.sync_hotkey_mirrors();
+    let host = |b: &Binding| match b.id() {
+        Some("ask") => CustomState::NeedsConfirm("会修改设置（x.ask）".into()),
+        Some("denied") => CustomState::Blocked("用户设置为禁止".into()),
+        Some("off") => CustomState::Off,
+        Some("say") => panic!("说一句不问宿主"),
+        _ => CustomState::Ready,
+    };
+    let src = Sources {
+        settings: &settings,
+        profiles: &[],
+        plugins: plugins_on(),
+        custom: Some(&host),
+    };
+    let rows = bindings(&src);
+    let find = |id: &str| rows.iter().find(|r| r.id == id).unwrap();
+    assert_eq!(
+        find("custom.ask").confirm.as_deref(),
+        Some("会修改设置（x.ask）")
+    );
+    assert_eq!(
+        find("custom.denied").blocked.as_deref(),
+        Some("用户设置为禁止")
+    );
+    assert!(!find("custom.off").enabled);
+    let plan = registration_plan(&src);
+    let ids: Vec<&str> = plan.iter().map(|p| p.id.as_str()).collect();
+    assert!(!ids.contains(&"custom.off"), "插件关着：不登记也不占键");
+    assert!(planned(&plan, "custom.ready").error.is_none());
+    assert_eq!(
+        planned(&plan, "custom.ask").error.as_deref(),
+        Some("要先在「设置 → 热键」确认一次：会修改设置（x.ask）")
+    );
+    assert_eq!(
+        planned(&plan, "custom.denied").error.as_deref(),
+        Some("用户设置为禁止")
+    );
+    // 没登记的不占键：后面同一个键的照样拿得到
+    settings.hotkeys.bindings.push(Binding(
+        serde_json::json!({"key": "F7", "say": "同一个键", "id": "later"}),
+    ));
+    settings.sync_hotkey_mirrors();
+    let src = Sources {
+        settings: &settings,
+        profiles: &[],
+        plugins: plugins_on(),
+        custom: Some(&host),
+    };
+    assert!(planned(&registration_plan(&src), "custom.later")
+        .error
+        .is_none());
 }
 
 #[test]
@@ -281,6 +351,7 @@ fn against_game_chat_keys() {
         settings: &settings,
         profiles: &profiles,
         plugins: plugins_on(),
+        custom: None,
     };
     let lol = &check(&src, "Enter", None).conflicts[0];
     assert_eq!(
@@ -311,6 +382,7 @@ fn against_the_console_trigger_key() {
         settings: &settings,
         profiles: &builtin,
         plugins: plugins_on(),
+        custom: None,
     };
     assert!(check(&src, "F23", Some(HK_ASSISTANT)).conflicts.is_empty());
 }
@@ -452,6 +524,7 @@ fn warnings_still_flag_common_game_keys() {
         settings: &settings,
         profiles: &profiles,
         plugins: plugins_on(),
+        custom: None,
     };
     assert_eq!(check(&src, "F1", Some(HK_ASSISTANT)).warnings.len(), 1);
     assert!(check(&src, "Ctrl+F9", Some(HK_ASSISTANT))
@@ -464,6 +537,7 @@ fn plan_of(settings: &Settings) -> Vec<Planned> {
         settings,
         profiles: &[],
         plugins: plugins_on(),
+        custom: None,
     })
 }
 
@@ -569,6 +643,7 @@ fn plugin_off_unknown_commands_and_legacy_reminders_in_the_plan() {
         settings: &settings,
         profiles: &[],
         plugins: &off,
+        custom: None,
     });
     assert!(
         plan.iter().all(|p| p.id != HK_RECORD),
@@ -578,8 +653,12 @@ fn plugin_off_unknown_commands_and_legacy_reminders_in_the_plan() {
         .iter()
         .filter(|p| p.id.starts_with("binding."))
         .collect();
-    assert_eq!(unknown.len(), 2);
+    assert_eq!(unknown.len(), 1);
     assert!(unknown.iter().all(|p| p.error.is_some()));
+    // 打开页面是自己加的（第 3 期）：还没补 id 的行 id 是 `custom.#<下标>`
+    assert!(plan
+        .iter()
+        .any(|p| p.id.starts_with("custom.#") && p.combo == "F6"));
     // 表里也列出来（标“找不到”），条目原样留着
     let table = table_of(&settings);
     assert!(table
@@ -621,6 +700,7 @@ fn sources<'a>(settings: &'a Settings, profiles: &'a [GameProfile]) -> Sources<'
         settings,
         profiles,
         plugins: plugins_on(),
+        custom: None,
     }
 }
 
@@ -700,6 +780,7 @@ fn rows_are_named_by_command_and_old_ids_still_work() {
         settings: &settings,
         profiles: &profiles,
         plugins: plugins_on(),
+        custom: None,
     };
     let rows = bindings(&src);
     let ids: Vec<&str> = rows.iter().take(3).map(|r| r.id.as_str()).collect();

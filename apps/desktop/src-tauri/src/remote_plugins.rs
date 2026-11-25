@@ -353,19 +353,22 @@ pub fn reload(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 权限里这个第三方插件的工具的规则（`<id>.<工具>`，“总是允许这个工具”记在这里）全部清掉：删掉插件、
-/// 配置变了的时候（信任记的是指纹，配置一变就失效；规则也一样，不留给换上来的那份配置）。
+/// 权限里这个第三方插件的工具的规则（`<id>.<工具>`，“总是允许这个工具”记在这里）和绑热键时的确认（ADR 040 D9）
+/// 全部清掉：删掉插件、配置变了的时候（信任记的是指纹，配置一变就失效；规则和确认也一样，不留给换上来的那份配置）。
 /// 只对真的第三方插件用：id 和内置插件、本体工具的前缀不会撞（`check_new_id`），清不到别人的规则。
 pub fn forget_rules(app: &AppHandle, id: &str) {
     use tauri::Manager;
     let prefix = format!("{id}.");
-    let has = settings(app)
+    let current = settings(app);
+    let has_rule = current
         .agent
         .permissions
         .rules
         .keys()
         .any(|tool| tool.starts_with(&prefix));
-    if !has {
+    // 绑热键时的确认（ADR 040 D9）也一样作废：配置换了，确认的就不是现在这个服务器的工具了
+    let has_confirmation = current.clone().forget_confirmations(&prefix);
+    if !has_rule && !has_confirmation {
         return;
     }
     let updated = app
@@ -376,10 +379,19 @@ pub fn forget_rules(app: &AppHandle, id: &str) {
                 .permissions
                 .rules
                 .retain(|tool, _| !tool.starts_with(&prefix));
+            next.forget_confirmations(&prefix);
             Ok(())
         });
     match updated {
-        Ok(_) => crate::tool_config::notify_settings_changed(app),
+        Ok(next) => {
+            // 这些热键从“能按”变成“要先确认”：重新算谁登记（它们随应用登记）
+            if has_confirmation {
+                if let Some(manager) = app.try_state::<crate::hotkey::HotkeyManager>() {
+                    manager.apply_app_hotkeys(&next);
+                }
+            }
+            crate::tool_config::notify_settings_changed(app)
+        }
         Err(error) => {
             kotone_core::log::log(&format!("第三方插件 {id} 的“总是允许”没清掉：{error}"))
         }

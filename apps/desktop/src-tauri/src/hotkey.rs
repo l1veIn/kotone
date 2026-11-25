@@ -1367,6 +1367,7 @@ mod tests {
             settings: &settings,
             profiles: &[],
             plugins: &plugins,
+            custom: None,
         })
         .into_iter()
         .map(|b| b.id)

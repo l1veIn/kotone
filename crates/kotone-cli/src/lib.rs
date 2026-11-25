@@ -1216,6 +1216,7 @@ fn listen_hotkey_plan(settings: &Settings) -> Vec<kotone_core::hotkey_table::Pla
         settings: &only,
         profiles: &[],
         plugins: &plugins,
+        custom: None,
     })
 }
 
@@ -1239,11 +1240,13 @@ fn apply_config_set_with(
             settings: current,
             profiles,
             plugins: &before,
+            custom: None,
         },
         &kotone_core::hotkey_table::Sources {
             settings: &next,
             profiles,
             plugins: &after,
+            custom: None,
         },
     ) {
         Some(error) => Err(format!("{error}（未写入）")),
@@ -1330,6 +1333,8 @@ fn apply_config_value(current: &Settings, key: &str, raw: &str) -> Result<Settin
         serde_json::from_value(merged).map_err(|e| format!("值「{raw}」对 {key} 不合法: {e}"))?;
     // 热键的旧字段（hotkey.key……）是热键表的镜像：改了它就改表（ADR 040 D8）
     next.reconcile_hotkeys(current);
+    // 绑热键时的确认只能在「设置 → 热键」里点（ADR 040 D9）：命令行写进来的不算
+    next.drop_unconfirmed(current);
     Ok(next)
 }
 

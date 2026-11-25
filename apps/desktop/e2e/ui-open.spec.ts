@@ -128,3 +128,22 @@ test("a web page or an opened background task in the sidebar is not replaced; a 
   await expect(page.getByTestId("ui-open-waiting")).toHaveCount(1);
   await expect(page.getByTestId("ui-open-waiting")).toHaveAttribute("data-uri", GAME_VOICE);
 });
+
+// ADR 040 第 3 期：玩家自己按了“打开页面”的热键（后端 `hotkey_run.rs` 发同一个事件，带 `byPlayer`）——是他自己要看，
+// 照他点“打开”时一样直接切过去，不放进卡片等着；第三方插件的页面打开左侧栏「插件」里它的页面。
+test("a page the player opened with his own hotkey is shown right away, not parked", async ({ page }) => {
+  await open(page);
+  await openSettingsTab(page, "sound");
+  expect(await uiOpen(page, { uri: INTERPRETER, plugin: "interpreter", byPlayer: true })).toBe("shown");
+  await expect(page.getByTestId("assistant-chat")).toBeVisible();
+  await expect(page.getByTestId("sidebar-plugin-page")).toHaveAttribute("data-uri", INTERPRETER);
+  await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
+  await expect(page.getByTestId("ui-open-waiting")).toHaveCount(0);
+  // 设置的一页：直接跳过去
+  expect(await uiOpen(page, { uri: "ui://kotone/settings/models", byPlayer: true })).toBe("shown");
+  await expect(page.getByTestId("advanced-nav-models")).toHaveAttribute("aria-current", "page");
+  // 第三方插件的页面：左侧栏「插件」里它的页面
+  expect(await uiOpen(page, { uri: "ui://everything/app", plugin: "everything", thirdParty: true, byPlayer: true }))
+    .toBe("shown");
+  await expect(page.getByTestId("plugin-page")).toHaveAttribute("data-plugin-id", "everything");
+});

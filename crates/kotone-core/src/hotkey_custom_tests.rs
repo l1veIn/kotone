@@ -499,3 +499,128 @@ fn what_an_entry_does() {
     assert_eq!(action(json!({"key": "F1", "say": 3})), None);
     assert_eq!(action(json!("not an object")), None);
 }
+
+/// 调工具的一条（还没确认）。
+fn tool_entry(id: &str, tool: &str, args: Value) -> Binding {
+    Binding(json!({"key": "F6", "tool": tool, "args": args, "id": id}))
+}
+
+/// 绑的时候问权限（D9）：确认只有确认命令能写。补丁（界面的通用保存、她和外部 Agent 的 `settings.update`、命令行）
+/// 写进来的确认抹掉——新加的条目自带确认、给已有的条目加确认、改了参数还留着原来的确认，都不算；只改键、名字不动确认。
+#[test]
+fn only_the_confirm_command_can_confirm() {
+    let mut current = Settings::default();
+    current
+        .hotkeys
+        .bindings
+        .push(tool_entry("t", "settings.update", json!({"patch": {}})));
+    current.sync_hotkey_mirrors();
+    // 确认命令：记下这时的副作用
+    let mut confirmed = current.clone();
+    confirmed
+        .confirm_custom("custom.t", &["writes-settings".to_string()])
+        .unwrap();
+    let index = find_row(&confirmed.hotkeys, "custom.t").unwrap();
+    assert_eq!(
+        confirmed.hotkeys.bindings[index].confirmed(),
+        Some(vec!["writes-settings"])
+    );
+    // 补丁给已有的条目加确认（外部 Agent 伪造）：抹掉
+    let mut forged = current.clone();
+    forged.hotkeys.bindings[index].0["confirmed"] = json!(["writes-settings"]);
+    let mut after = patch(
+        &current,
+        json!({"hotkeys": {"bindings": forged.hotkeys.bindings}}),
+    );
+    after.drop_unconfirmed(&current);
+    assert_eq!(after.hotkeys.bindings[index].confirmed(), None);
+    // 补丁加一条自带确认的新条目：抹掉
+    let mut bindings = current.hotkeys.bindings.clone();
+    let mut new = tool_entry("n", "everything.echo", json!({"message": "hi"}));
+    new.0["confirmed"] = json!(["third-party-action"]);
+    bindings.push(new);
+    let mut after = patch(&current, json!({"hotkeys": {"bindings": bindings}}));
+    after.drop_unconfirmed(&current);
+    assert!(after
+        .hotkeys
+        .bindings
+        .iter()
+        .all(|b| b.confirmed().is_none()));
+    // 确认过的：只改键、名字，确认留着；改了参数，确认抹掉（要重新问）
+    let mut bindings = confirmed.hotkeys.bindings.clone();
+    bindings[index].0["key"] = json!("F9");
+    bindings[index].0["label"] = json!("改设置");
+    let mut keyed = patch(
+        &confirmed,
+        json!({"hotkeys": {"bindings": bindings.clone()}}),
+    );
+    keyed.drop_unconfirmed(&confirmed);
+    assert!(keyed.hotkeys.bindings[index].confirmed().is_some());
+    bindings[index].0["args"] = json!({"patch": {"language": "en"}});
+    let mut changed = patch(&confirmed, json!({"hotkeys": {"bindings": bindings}}));
+    changed.drop_unconfirmed(&confirmed);
+    assert_eq!(changed.hotkeys.bindings[index].confirmed(), None);
+    // 别的设置改了：确认不动
+    let mut other = patch(&confirmed, json!({"language": "en"}));
+    other.drop_unconfirmed(&confirmed);
+    assert!(other.hotkeys.bindings[index].confirmed().is_some());
+    // 存盘读回来还在（配置文件是玩家自己的，读的时候不抹）
+    assert!(round_trip(&confirmed).hotkeys.bindings[index]
+        .confirmed()
+        .is_some());
+    // 确认了、作废了都要重新登记（从不登记变成登记，或者反过来）
+    assert_ne!(
+        registration_view(&confirmed.hotkeys),
+        registration_view(&current.hotkeys)
+    );
+}
+
+/// 只有调工具、运行自动化的能确认；第三方插件的配置变了，它的工具的确认清掉，别的不动。
+#[test]
+fn confirmations_belong_to_tool_calls_and_follow_the_plugin() {
+    let mut settings = Settings::default();
+    settings.hotkeys.bindings.extend([
+        tool_entry("a", "everything.echo", json!({"message": "hi"})),
+        tool_entry("b", "everything-http.echo", json!({})),
+        tool_entry("c", "settings.update", json!({"patch": {}})),
+        say_entry("s", "F1", "一句"),
+    ]);
+    settings.sync_hotkey_mirrors();
+    for row in ["custom.a", "custom.b", "custom.c"] {
+        settings.confirm_custom(row, &["x".to_string()]).unwrap();
+    }
+    assert!(
+        settings.confirm_custom("custom.s", &[]).is_err(),
+        "说一句不用确认"
+    );
+    assert!(settings.confirm_custom("custom.gone", &[]).is_err());
+    assert!(settings.forget_confirmations("everything."));
+    let confirmed: Vec<bool> = settings
+        .hotkeys
+        .bindings
+        .iter()
+        .filter(|b| b.action().is_some())
+        .map(|b| b.confirmed().is_some())
+        .collect();
+    assert_eq!(confirmed, vec![false, true, true, false]);
+    assert!(!settings.forget_confirmations("everything."), "没有可清的");
+    // 调的是哪个工具：运行自动化就是 automation.run {id, args}
+    let auto = Binding(
+        json!({"key": "", "tool": "automation.run", "args": {"id": "auto-1", "args": {"n": 3}}, "id": "x"}),
+    );
+    assert_eq!(
+        auto.action().unwrap().tool_call(),
+        Some(("automation.run", json!({"id": "auto-1", "args": {"n": 3}})))
+    );
+    assert_eq!(
+        tool_entry("y", "game_chat.send", json!({"text": "gg"}))
+            .action()
+            .unwrap()
+            .tool_call(),
+        Some(("game_chat.send", json!({"text": "gg"})))
+    );
+    assert_eq!(
+        say_entry("z", "", "一句").action().unwrap().tool_call(),
+        None
+    );
+}

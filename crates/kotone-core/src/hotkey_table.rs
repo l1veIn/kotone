@@ -17,7 +17,7 @@ use crate::hotkey_bindings::{
     legacy_by_id, legacy_for, normalized, Binding, CMD_CALL, CMD_STOP, DEFAULT_BINDINGS,
 };
 use crate::hotkey_commands::{core_commands, CommandKind, CommandSpec, CORE_SOURCE};
-use crate::hotkey_custom::{custom_entries, resolve_row, row_id, Action};
+use crate::hotkey_custom::{custom_entries, resolve_row, row_id, Action, CustomState};
 use crate::profile::GameProfile;
 use crate::settings::{LegacyUpgrade, Settings};
 
@@ -122,6 +122,25 @@ pub struct KeyUse {
     /// 要语音识别（识别没在跑时只看不吞、按了提示）；登记用，不给界面。
     #[serde(skip)]
     pub listens: bool,
+    /// 自己加的调工具要玩家在「设置 → 热键」确认一次（D9）：这个工具会做什么。确认之前不登记。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirm: Option<String>,
+    /// 自己加的调工具、打开页面按不了的原因和下一步（找不到、权限里设成了禁止……）。不登记。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked: Option<String>,
+    /// 最近一次按（自己加的；宿主填）：什么时候、成没成、说了什么。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_run: Option<LastRun>,
+}
+
+/// 自己加的热键最近一次按下的结果（`hotkeys.status` 的 `bindings[].lastRun`）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastRun {
+    pub at_ms: u64,
+    pub ok: bool,
+    /// 给玩家的那句话（成了是工具回的第一句，没成是原因）。
+    pub message: String,
 }
 
 impl KeyUse {
@@ -150,12 +169,14 @@ pub struct PluginInfo<'a> {
     pub commands: &'a [CommandSpec],
 }
 
-/// 查表要的东西：设置、全部游戏配置、插件（按左侧栏 / 插件表的顺序）。
-#[derive(Debug, Clone, Copy)]
+/// 查表要的东西：设置、全部游戏配置、插件（按左侧栏 / 插件表的顺序）、自己加的调工具 / 打开页面现在能不能按
+/// （宿主照工具目录和权限算，[`CustomState`]；None = 不知道，当能按：按下时宿主还会再判一次）。
+#[derive(Clone, Copy)]
 pub struct Sources<'a> {
     pub settings: &'a Settings,
     pub profiles: &'a [GameProfile],
     pub plugins: &'a [PluginInfo<'a>],
+    pub custom: Option<&'a dyn Fn(&Binding) -> CustomState>,
 }
 
 /// 「设置 → 热键」那一页：全部热键（本体的、插件的、自己加的、固定的），每一项带冲突；
@@ -205,6 +226,9 @@ fn row(id: &str, key: &str, label: &str, source: KeySource) -> KeyUse {
         status_id: String::new(),
         hold: false,
         listens: false,
+        confirm: None,
+        blocked: None,
+        last_run: None,
     }
 }
 
@@ -294,10 +318,12 @@ pub fn bindings(src: &Sources<'_>) -> Vec<KeyUse> {
     }
     if !legacy_only {
         for (index, binding, action) in custom_entries(&s.hotkeys) {
-            if !action.runnable() {
-                continue; // 工具、页面（第 3 期第 2 步）：这个版本还按不了，下面列成“找不到”
-            }
-            out.push(custom_row(index, binding, action));
+            // 说一句不用问；运行自动化、调工具、打开页面照宿主算的（工具目录、插件开关、权限）
+            let state = match (action, src.custom) {
+                (Action::Say(_), _) | (_, None) => CustomState::Ready,
+                (_, Some(custom)) => custom(binding),
+            };
+            out.push(custom_row(index, binding, action, state));
         }
     }
     // 这个版本认识的命令（本体的、插件清单里的；0.1.x 用户看不到的呼叫、停下也算认识）
@@ -317,8 +343,8 @@ pub fn bindings(src: &Sources<'_>) -> Vec<KeyUse> {
         {
             continue;
         }
-        // 自己加的、这个版本按得了的上面列过了（0.1.x 只用语音输入的人不列：他没有快捷指令）
-        if binding.action().is_some_and(|a| a.runnable()) {
+        // 自己加的上面列过了（0.1.x 只用语音输入的人不列：他没有快捷指令）
+        if binding.action().is_some() {
             continue;
         }
         out.push(unknown_row(index, binding));
@@ -336,8 +362,9 @@ fn short(text: &str) -> String {
     out
 }
 
-/// 自己加的那一行（快捷指令、运行自动化）：名字是玩家起的，没起就用要做的事；在「设置 → 热键」改，存在热键表里。
-fn custom_row(index: usize, binding: &Binding, action: Action<'_>) -> KeyUse {
+/// 自己加的那一行（快捷指令、运行自动化、调工具、打开页面）：名字是玩家起的，没起就用要做的事；在「设置 → 热键」改，
+/// 存在热键表里。`state` 是现在能不能按（插件关着的不登记也不占键；要确认、按不了的不登记，写原因）。
+fn custom_row(index: usize, binding: &Binding, action: Action<'_>, state: CustomState) -> KeyUse {
     let id = row_id(index, binding);
     let (name, detail) = match action {
         Action::Say(text) => (
@@ -359,9 +386,18 @@ fn custom_row(index: usize, binding: &Binding, action: Action<'_>) -> KeyUse {
         detail,
         page: HOTKEYS_PAGE.into(),
         field: "hotkeys.bindings".into(),
-        // 跟她说一句：按了也会接通通话，要语音识别（ADR 040 实施记录，主会话定的第 2 条）；运行自动化不要（第 3 期 P4）
+        // 跟她说一句：按了也会接通通话，要语音识别（ADR 040 实施记录，主会话定的第 2 条）；别的不要（第 3 期 P4）
         listens: matches!(action, Action::Say(_)),
         status_id: id.clone(),
+        enabled: state != CustomState::Off,
+        confirm: match &state {
+            CustomState::NeedsConfirm(reason) => Some(reason.clone()),
+            _ => None,
+        },
+        blocked: match state {
+            CustomState::Blocked(reason) => Some(reason),
+            _ => None,
+        },
         ..row(&id, binding.key(), &label, KeySource::Custom)
     }
 }
@@ -462,6 +498,9 @@ pub fn game_keys(profiles: &[GameProfile], active_profile_id: Option<&str>) -> V
                 status_id: String::new(),
                 hold: false,
                 listens: false,
+                confirm: None,
+                blocked: None,
+                last_run: None,
             });
         }
     }
@@ -566,6 +605,11 @@ pub fn registration_plan(src: &Sources<'_>) -> Vec<Planned> {
         }
         let error = if row.source == KeySource::Unknown {
             Some("这个版本找不到这个命令（插件没装或被删了，或者是更新的版本加的）".to_string())
+        } else if let Some(reason) = &row.blocked {
+            Some(reason.clone())
+        } else if let Some(reason) = &row.confirm {
+            // 绑的时候问权限（D9）：玩家确认之前不登记，键照常给游戏
+            Some(format!("要先在「{HOTKEYS_PAGE}」确认一次：{reason}"))
         } else if escape.as_ref().is_some_and(|esc| esc.collides(&row.key)) {
             Some(ESC_REASON.to_string())
         } else {

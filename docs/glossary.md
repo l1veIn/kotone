@@ -38,7 +38,7 @@
 | 停止 / 取消 / 打断 | 停止 = 停一件具体的事（这个自动化、播放、本地语音识别）；取消 = 不做还没做的（对话框、下载、这次录音）；打断 = 她说话时被你打断 | | | stop / cancel / interrupt |
 | 权限 | 每个工具是 允许 / 先问我 / 禁止（角色页 → 权限；以前在「设置」里） | `授权`、`设置 → 权限` | `agent.permissions` | permissions: Allow / Ask first / Block |
 | 用量 | 今天 / 本月花了多少 token 和钱、命中缓存多少、对话多长整理成摘要（角色页 → 用量；以前在「设置」里） | `设置 → 用量` | `usage.jsonl`、`agent.compactAtTokens` | usage |
-| 确认 | 她做某件事前问你一次（“这一步……，可以吗？”），回答是 允许 / 拒绝 / 这段对话都允许；通话里直接说“可以 / 不要” | `授权`、`批准` | `Asker`、`PermissionRequest` | confirmation: Allow / Deny / Allow for this conversation |
+| 确认 | 她做某件事前问你一次（“这一步……，可以吗？”），回答是 允许 / 拒绝 / 这段对话都允许；通话里直接说“可以 / 不要”。给一个要问的工具绑热键时，在「设置 → 热键」确认一次，按的时候不再问（ADR 040 D9） | `授权`、`批准` | `Asker`、`PermissionRequest`；热键的 `hotkeys.bindings[].confirmed` | confirmation: Allow / Deny / Allow for this conversation |
 | Key | 服务商给你的那串钥匙（“DeepSeek Key”） | `密钥`、`API Key`、`API 密钥`、`凭据` | `apiKey`、`SecretStore` | API key |
 | API 连接 | 一个服务商的地址、模型和 Key（设置 → API 连接）；她用哪个连接、哪个模型在聊天页输入框旁的“她用的模型”里选 | `AI 连接`、`API连接` | `Connection`、`connectionId` | API connection |
 | 服务商 | DeepSeek、阿里云百炼、火山等 | `提供商`、`厂商` | `provider` | provider |

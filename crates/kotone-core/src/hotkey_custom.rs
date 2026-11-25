@@ -4,8 +4,16 @@
 //! - 跟她说一句（快捷指令）：`{"key", "say": "帮我看看队友说了什么", "id", "label"?}`；
 //! - 运行自动化：`{"key", "tool": "automation.run", "args": {"id": "auto-1", "args": {…}}, "id", "label"?}`
 //!   ——就是调工具 `automation.run`（一种东西一种登记，原则 15）；
-//! - 调一个工具：`{"key", "tool", "args"?, "id", "label"?}`（第 3 期第 2 步）；
-//! - 打开一个页面：`{"key", "page": "ui://…", "id", "label"?}`（第 3 期第 2 步）。
+//! - 调一个工具：`{"key", "tool", "args"?, "id", "label"?, "confirmed"?}`；
+//! - 打开一个页面：`{"key", "page": "ui://…", "id", "label"?}`。
+//!
+//! **绑的时候问权限（D9）**：调工具（运行自动化也是）照这个工具在她那张权限表里的规则判一次
+//! （`kotone_agent::permissions::binding_decision`）：允许的不问；要问的，玩家在「设置 → 热键」确认一次，确认时这个工具的
+//! 副作用记进这一条的 `confirmed`（[`Settings::confirm_custom`]），按键时不再问；工具后来多了没确认过的副作用就要重新确认
+//! （照浏览器扩展更新多要权限时先停用）。**`confirmed` 只有那个确认命令能写**：补丁（界面的通用保存、她和外部 Agent 的
+//! `settings.update`、命令行）写进来的，只要这一条做的事（工具、参数）和改之前不一样、或者确认是这次才写上的，就抹掉
+//! （[`Settings::drop_unconfirmed`]，两条补丁的路都调）。第三方插件的配置变了，它的工具的确认清掉（信任也一起作废）。
+//! 现在能不能按由宿主照工具目录和权限算（[`CustomState`]，本体不认识工具）。
 //!
 //! **快捷指令的旧字段 `assistant.companion.quickMessages` 是镜像**（照第 2 期别的热键旧字段，原则 19）：表里前
 //! [`MAX_QUICK_MESSAGES`] 条“说一句 / 运行已保存的自动化”每次保存都写回去（只写过得了旧版本 `CompanionConfig::validate`
@@ -52,12 +60,12 @@ pub enum Action<'a> {
         id: &'a str,
         args: Option<&'a Map<String, Value>>,
     },
-    /// 调一个工具，带固定参数（第 3 期第 2 步）。
+    /// 调一个工具，带固定参数。
     Tool {
         tool: &'a str,
         args: Option<&'a Value>,
     },
-    /// 打开一个页面（第 3 期第 2 步）。
+    /// 打开一个页面。
     Page(&'a str),
 }
 
@@ -71,11 +79,40 @@ impl Action<'_> {
             Action::Page(_) => "page",
         }
     }
+}
 
-    /// 这个版本按得了吗（第 1 步只有说一句和运行自动化；工具、页面第 2 步）。
-    pub fn runnable(&self) -> bool {
-        matches!(self, Action::Say(_) | Action::Automation { .. })
+impl<'a> Action<'a> {
+    /// 调的是哪个工具、带什么参数（运行自动化就是 `automation.run {id, args}`）；说一句、打开页面为 None。
+    pub fn tool_call(&self) -> Option<(&'a str, Value)> {
+        match self {
+            Action::Automation { id, args } => {
+                let mut call = Map::new();
+                call.insert("id".into(), (*id).into());
+                if let Some(args) = args {
+                    call.insert("args".into(), Value::Object((*args).clone()));
+                }
+                Some((TOOL_AUTOMATION_RUN, Value::Object(call)))
+            }
+            Action::Tool { tool, args } => Some((
+                *tool,
+                args.cloned().unwrap_or_else(|| Value::Object(Map::new())),
+            )),
+            Action::Say(_) | Action::Page(_) => None,
+        }
     }
+}
+
+/// 自己加的调工具、打开页面现在能不能按（宿主照工具目录、插件开关和权限算；本体不认识工具）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CustomState {
+    /// 能按。
+    Ready,
+    /// 插件关着：不登记、也不占键（和插件的命令一样，打开插件就回来）。
+    Off,
+    /// 要玩家在「设置 → 热键」确认一次（D9）：确认之前不登记。里面是这个工具会做什么（权限的原因）。
+    NeedsConfirm(String),
+    /// 按不了（找不到、不能绑、权限里设成了禁止、只读模式）：不登记，里面是原因和下一步。
+    Blocked(String),
 }
 
 /// `automation.run` 的参数是不是“运行一个已保存的自动化”：只有 `id`（非空的字）和可选的 `args`（对象）。
@@ -114,6 +151,30 @@ impl Binding {
     /// 玩家起的名字（没起为空）。
     pub fn label(&self) -> &str {
         self.0.get("label").and_then(Value::as_str).unwrap_or("")
+    }
+
+    /// 绑的时候玩家确认过的副作用（D9）；没确认过为 None（确认过、工具没有副作用的是空的）。
+    pub fn confirmed(&self) -> Option<Vec<&str>> {
+        self.0
+            .get("confirmed")?
+            .as_array()?
+            .iter()
+            .map(Value::as_str)
+            .collect()
+    }
+
+    /// 这一条做的事：去掉键、名字、确认以后的样子（命令、工具 + 参数、页面、说的话，还有 id）。
+    fn what(&self) -> Value {
+        match &self.0 {
+            Value::Object(object) => Value::Object(
+                object
+                    .iter()
+                    .filter(|(k, _)| !matches!(k.as_str(), "key" | "label" | "confirmed"))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
     }
 
     /// 自己加的条目要做的事；绑命令的、读不懂的（种类不止一个、值的类型不对、不是对象）为 None。
@@ -206,6 +267,8 @@ pub fn registration_view(hotkeys: &HotkeysConfig) -> Value {
                 "key": binding.key(),
                 "row": row_id(index, binding),
                 "kind": action.kind(),
+                // 确认了 / 确认作废了：从不登记变成登记，或者反过来
+                "confirmed": binding.confirmed(),
             })),
             None => Some(binding.0.clone()),
         })
@@ -453,6 +516,63 @@ impl Settings {
                 object.insert("id".into(), id.into());
             }
         }
+    }
+
+    /// 补丁写进来的确认不算（D9，见模块说明）：这次以后带 `confirmed` 的条目，改之前要有一条做的事一样、确认也一样的，
+    /// 不然抹掉。界面的通用保存、她和外部 Agent 的 `settings.update`、命令行 `config set` 在对齐以后调；
+    /// 「设置 → 热键」的确认命令在这之后才写确认（[`Settings::confirm_custom`]）。
+    pub fn drop_unconfirmed(&mut self, previous: &Settings) {
+        let before: Vec<(Value, Value)> = previous
+            .hotkeys
+            .bindings
+            .iter()
+            .filter_map(|b| b.0.get("confirmed").map(|c| (b.what(), c.clone())))
+            .collect();
+        for binding in &mut self.hotkeys.bindings {
+            let Some(confirmed) = binding.0.get("confirmed").cloned() else {
+                continue;
+            };
+            let what = binding.what();
+            if before.iter().any(|(w, c)| *w == what && *c == confirmed) {
+                continue;
+            }
+            if let Some(object) = binding.0.as_object_mut() {
+                object.remove("confirmed");
+            }
+        }
+    }
+
+    /// 玩家在「设置 → 热键」确认了这一条（`row` 是 `custom.<id>`）：记下确认时这个工具的副作用（D9）。
+    /// 只给确认命令用（它先查过这个工具现在确实要问）；补丁写进来的确认会被 [`Settings::drop_unconfirmed`] 抹掉。
+    pub fn confirm_custom(&mut self, row: &str, effects: &[String]) -> Result<(), String> {
+        let index =
+            find_row(&self.hotkeys, row).ok_or("这条自己加的热键已经没有了，刷新一下再确认")?;
+        let binding = &mut self.hotkeys.bindings[index];
+        if binding.action().and_then(|a| a.tool_call()).is_none() {
+            return Err("只有调工具、运行自动化的热键要确认".into());
+        }
+        if let Some(object) = binding.0.as_object_mut() {
+            object.insert("confirmed".into(), effects.to_vec().into());
+        }
+        Ok(())
+    }
+
+    /// 这些工具（名字以 `prefix` 开头，例如第三方插件 `everything.`）的热键确认作废（插件的配置变了、删了）。
+    /// 返回有没有改。
+    pub fn forget_confirmations(&mut self, prefix: &str) -> bool {
+        let mut changed = false;
+        for binding in &mut self.hotkeys.bindings {
+            let calls_it = binding
+                .action()
+                .and_then(|a| a.tool_call().map(|(tool, _)| tool.starts_with(prefix)))
+                .unwrap_or(false);
+            if calls_it {
+                if let Some(object) = binding.0.as_object_mut() {
+                    changed |= object.remove("confirmed").is_some();
+                }
+            }
+        }
+        changed
     }
 
     /// 把表写回快捷指令的旧字段（镜像）。

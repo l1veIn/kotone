@@ -930,6 +930,12 @@ export interface KeyUse {
   statusId?: string;
   /** 和谁冲突（别的项的 id，可能是 gameKeys 里的） */
   conflicts?: string[];
+  /** 自己加的调工具要先在这一页确认一次（ADR 040 D9）：这个工具会做什么；确认之前不登记 */
+  confirm?: string;
+  /** 自己加的调工具、打开页面按不了的原因（找不到、权限里设成了禁止……）；不登记 */
+  blocked?: string;
+  /** 自己加的最近一次按下的结果（这次启动以后） */
+  lastRun?: { atMs: number; ok: boolean; message: string };
 }
 
 /** get_hotkey_table：「设置 → 热键」那一页 */

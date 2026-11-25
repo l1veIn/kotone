@@ -67,8 +67,18 @@ fn app_hotkey_changed(old: &Settings, next: &Settings) -> bool {
         || old.ui.legacy_upgrade.uses_legacy_assistant()
             != next.ui.legacy_upgrade.uses_legacy_assistant()
         // 谁先拿到键按表的顺序算（ADR 040 D6）：呼叫键变了，停下热键可能从“被占了”变成能登记；
-        // 自己加的不用听的（运行自动化，第 3 期）也随应用登记
+        // 自己加的不用听的（运行自动化、调工具、打开页面，第 3 期）也随应用登记
         || hotkey_table_changed(old, next)
+        // 它们能不能按看权限和插件开关（含第三方插件的信任）：变了重新算谁登记
+        || (crate::hotkey_bind::has_tool_bindings(next)
+            && (old.agent.permissions != next.agent.permissions || old.plugins != next.plugins))
+}
+
+/// 「设置 → 热键」的确认（ADR 040 D9）：哪一条、玩家看到的工具和参数、这个工具这时的副作用。
+pub(crate) struct Confirmation<'a> {
+    pub row: &'a str,
+    pub call: (String, serde_json::Value),
+    pub effects: Vec<String>,
 }
 
 /// 局部更新配置；热键变化时触发重注册
@@ -77,6 +87,17 @@ pub(crate) fn update_settings(
     app: AppHandle,
     state: tauri::State<SharedState>,
     patch: serde_json::Value,
+) -> Result<Settings, String> {
+    apply_update(app, state, patch, None)
+}
+
+/// 补丁（界面的通用保存、她和外部 Agent 的 `settings.update`）和「设置 → 热键」的确认共用这一条路：校验、对齐热键表、
+/// 冲突、登记。补丁写进来的热键确认一律抹掉（D9）；只有 `confirmation`（确认命令）在那之后写确认。
+fn apply_update(
+    app: AppHandle,
+    state: tauri::State<SharedState>,
+    patch: serde_json::Value,
+    confirmation: Option<Confirmation<'_>>,
 ) -> Result<Settings, String> {
     let runtime_manager = app.try_state::<RuntimeManager>();
     let configuration_guard = runtime_manager.as_ref().map(|rt| rt.configuration_guard());
@@ -115,6 +136,17 @@ pub(crate) fn update_settings(
             }
             // 热键：旧字段（hotkey.key、快捷指令……）改了就改表，再照表写回（ADR 040 D8）；下面的检查看的是对齐以后的值
             next.reconcile_hotkeys(&previous);
+            // 绑的时候问权限（ADR 040 D9）：补丁写进来的确认不算，只有「设置 → 热键」的确认命令能写
+            next.drop_unconfirmed(&previous);
+            if let Some(confirm) = &confirmation {
+                let index = kotone_core::hotkey_custom::find_row(&next.hotkeys, confirm.row)
+                    .ok_or("这条自己加的热键已经没有了，刷新一下再确认")?;
+                let (tool, args) = &confirm.call;
+                if !crate::hotkey_bind::same_call(&next.hotkeys.bindings[index], tool, args) {
+                    return Err("这条热键刚被改过，刷新一下再确认".into());
+                }
+                next.confirm_custom(confirm.row, &confirm.effects)?;
+            }
             next.hotkeys.validate_custom()?;
             next.overlay.normalize_interaction();
             next.assistant.normalize_voices();
@@ -252,6 +284,24 @@ pub(crate) fn update_settings_from_backend(
 ) -> Result<Settings, String> {
     use tauri::Emitter as _;
     let updated = update_settings(app.clone(), app.state(), patch)?;
+    let _ = app.emit("kotone://settings-changed", &updated);
+    Ok(updated)
+}
+
+/// 「设置 → 热键」的确认命令（[`crate::hotkey_bind::confirm_hotkey`]）：记下确认，重新登记，通知各窗口刷新。
+pub(crate) fn confirm_from_backend(
+    app: &AppHandle,
+    row: &str,
+    call: (String, serde_json::Value),
+    effects: Vec<String>,
+) -> Result<Settings, String> {
+    use tauri::Emitter as _;
+    let updated = apply_update(
+        app.clone(),
+        app.state(),
+        serde_json::json!({}),
+        Some(Confirmation { row, call, effects }),
+    )?;
     let _ = app.emit("kotone://settings-changed", &updated);
     Ok(updated)
 }

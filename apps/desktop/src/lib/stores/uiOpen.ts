@@ -23,8 +23,13 @@ import { openTarget } from "./navigation";
 import { openPluginPage, pluginPageStack, pushPluginPage } from "./pluginPages";
 import { openRightSidebar, setRightSidebarTab } from "./rightSidebar";
 
-/** `ui.open` 的事件（后端 `plugins::open_page` 发的 `kotone://ui-open`）。 */
-export interface UiOpen { uri: string; params?: Record<string, unknown> | null; title?: string; plugin?: string | null }
+/** `ui.open` 的事件（后端 `plugins::open_page` 发的 `kotone://ui-open`）。`byPlayer`：玩家自己按了“打开页面”的热键
+ * （ADR 040 第 3 期，`hotkey_run.rs`）——是他自己要看，直接切过去（窗口后端已经拿到前面了）；`thirdParty`：第三方插件的
+ * 页面，打开左侧栏「插件」里它的页面（右侧栏还显示不了第三方的 App）。 */
+export interface UiOpen {
+  uri: string; params?: Record<string, unknown> | null; title?: string; plugin?: string | null;
+  byPlayer?: boolean; thirdParty?: boolean;
+}
 
 /** 处理完的结果：直接显示了 / 放在右侧栏等玩家点。 */
 export type UiOpenOutcome = "shown" | "waiting";
@@ -149,6 +154,10 @@ export function dismissWaiting(key: string): void {
 export function handleUiOpen(event: UiOpen): UiOpenOutcome | null {
   const uri = String(event?.uri ?? "");
   const params = event?.params && typeof event.params === "object" ? event.params : null;
+  if (event?.byPlayer && event.thirdParty && event.plugin) {
+    openTarget({ page: "plugin", id: event.plugin });
+    return "shown";
+  }
   const section = /^ui:\/\/kotone\/settings\/([a-z]+)$/.exec(uri)?.[1] ?? null;
   const plugin = section ? null : pluginOfUri(uri);
   if (!section && !plugin) return null;
@@ -156,6 +165,12 @@ export function handleUiOpen(event: UiOpen): UiOpenOutcome | null {
     key: pageKey(uri, params), uri, params, plugin, section,
     title: section ? settingsTitle(section) : pageTitle(uri, plugin!, event?.title),
   };
+  if (event?.byPlayer) {
+    // 玩家自己按热键要看：照他点“打开”时一样切过去
+    if (section !== null) openTarget(settingsTargetOf(section));
+    else { openTarget({ page: "assistant", section: "chat" }); show(page); }
+    return "shown";
+  }
   if (canShowNow(plugin, get(chatShowing), get(sidebarShowing))) {
     show(page);
     return "shown";
