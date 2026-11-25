@@ -50,13 +50,19 @@ pnpm release:verify
 pnpm release:test
 ```
 
+三条写测试的约定（2026-11-25，CI 提速时定的）：
+
+- **Playwright**：CI 上 4 个 worker、`fullyParallel`，本地默认 1 个，要快加 `--workers=4`；所以 spec 之间不能共享状态（固定端口、同一个文件）。截图一律走 `e2e/screenshot.cts`：CI 上不截，`KOTONE_E2E_SHOTS=1` 强制截、`=0` 强制不截。
+- **kotone-cli 的集成测试**写成 `crates/kotone-cli/tests/it/` 下的子模块（在 `it/main.rs` 里 `mod`），不要在 `tests/` 下再加文件：每多一个文件就多链接一个大测试程序。
+- **要一个“没人听的端口”**：绑一个不 `listen` 的 socket，测完再放；不要绑了马上放掉再连（Windows 上连没人听的端口要重试约 2 秒，这期间同进程别的测试可能正好绑上它）。
+
 ### 推送前
 
 **推送到 main 之前跑 `pnpm prepush`**，最后一行是“可以推送”才推。它把上面的检查按 CI 的样子跑一遍（`scripts/prepush.mjs`）：
 
 - 每次都跑：`cargo fmt --check`、`release:verify` / `release:test`、`pnpm check`、`cargo clippy … -D warnings`、`cargo test --workspace --locked --no-fail-fast`；
-- 相对 `origin/main` 改了前端（`apps/desktop/`、`plugins/`，以及 spec 直接读的几个 Rust 文件和文档）才跑 Playwright（4 个 worker）；改了 `Cargo.lock` / `pnpm-lock.yaml` 才跑两种依赖审计。`--all` 全跑，`--dry-run` 只列出要跑什么；
-- 开头查游戏进程：有游戏就把自己和子进程降到低优先级、cargo 用 `-j 2`、Playwright 2 个 worker；`target/` 里的 `kotone.exe` 在跑（玩家在用 `pnpm dev` 测）就不跑。`TMP` / `TEMP` 设到 `target/tmp`，每一步的日志在 `target/prepush/`；
+- 相对 `origin/main` 改了前端（`apps/desktop/`、`plugins/`，以及 spec 直接读的几个 Rust 文件和文档）才跑 Playwright（4 个 worker、`KOTONE_E2E_SHOTS=0`，不覆盖 `target/plugin-shots/` 里的审查截图）；改了 `Cargo.lock` / `pnpm-lock.yaml` 才跑两种依赖审计。`--all` 全跑，`--dry-run` 只列出要跑什么；
+- 每一步开跑前都查游戏进程（含地下城与勇士和腾讯 ACE 反作弊的进程），跑着的时候也每 15 秒查一次：查到就把自己和之后的子进程降到低优先级、cargo 用 `-j 2`、Playwright 1 个 worker，正按正常设置跑的那一步停掉、按游戏模式重跑；`target/` 里的 `kotone.exe` 在跑（玩家在用 `pnpm dev` 测）就不跑。`TMP` / `TEMP` 设到 `target/tmp`，每一步的日志在 `target/prepush/`；
 - 一步失败也接着跑后面的，最后一起列出没过的步骤。
 
 这是文档里的规矩，不是 git hook：推送的多半是 Agent，全量要好几分钟，做成 hook 每次推送（包括只改文档的）都要干等。

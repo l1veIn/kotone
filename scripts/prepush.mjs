@@ -5,8 +5,10 @@
 //   pnpm prepush --all       不看改了什么，Playwright 和审计也跑
 //
 // 每一步失败了也接着跑后面的，最后一起报告；最后一行是“可以推送”或没过的步骤。
-// 这台机器上有人打游戏：开头查游戏进程，有就把自己降到低优先级（子进程跟着降）、cargo 用 -j 2、
-// Playwright 用 2 个 worker。不发任何系统输入。
+// 这台机器上有人打游戏：每一步开跑前都查游戏进程，一步跑着的时候也每 15 秒查一次。查到了就把自己降到
+// 低优先级（之后起的子进程跟着降）、cargo 用 -j 2、Playwright 用 1 个 worker；正跑着的那一步按正常设置
+// 起的，就停掉、按游戏模式从头再跑这一步（2026-11-25 夜里只在开头查了一次，玩家 3 分钟后开了 DNF，
+// 4 个 worker 把虚拟内存吃满、卡了两小时）。不发任何系统输入。
 
 import { spawn, spawnSync } from "node:child_process";
 import { createWriteStream, mkdirSync, rmdirSync } from "node:fs";
@@ -24,10 +26,15 @@ if (unknown.length) {
 const dryRun = flags.includes("--dry-run");
 const all = flags.includes("--all");
 
-// 和 scripts/manual-e2e 各脚本 guard() 的名单一样（tasklist 的输出里出现就算），加上星铁、绝区零
+// tasklist 的输出里出现就算。前两行和 scripts/manual-e2e 各脚本 guard() 的名单一样，再加星铁、绝区零；
+// 后面是地下城与勇士和腾讯的反作弊（ACE：SGuard64 / SGuardSvc64 / ACE-*；老的 TP：TPHelper / TenSafe），
+// 它们只在受保护的游戏开着时跑，用来兜住名单里没有的腾讯游戏。宁可多认，认错了只是跑慢一点。
+// WeGame 不算：它常年挂在托盘里，不代表在打游戏。
 const GAMES = [
   "league of legends.exe", "leagueclient", "riotclient", "valorant", "cs2.exe", "dota2.exe",
   "yuanshen", "genshinimpact", "starrail", "zenlesszonezero",
+  "dnf.exe", "sguard64.exe", "sguardsvc64.exe", "ace-tray.exe", "ace-service64.exe", "ace-guard",
+  "tphelper.exe", "tensafe",
 ];
 
 // Playwright 的输入：页面、e2e、文案，以及 spec 直接读的源文件（terminology.spec 读术语表、助手手册、
@@ -97,18 +104,31 @@ if (dev.length) {
   if (!dryRun) process.exit(1);
 }
 
-const games = process.platform === "win32" ? runningGames() : [];
-const lowPriority = games.length > 0;
-const jobs = lowPriority ? { clippy: 2, test: 2, workers: 2 } : { clippy: 4, test: 2, workers: 4 };
-if (lowPriority && !dryRun) {
-  try {
-    // Windows 上子进程（cargo、rustc、link.exe、Chrome）默认继承低于正常的优先级
-    os.setPriority(os.constants.priority.PRIORITY_BELOW_NORMAL);
-  } catch (e) {
-    console.error(`降优先级失败（${e.message}），不跑了：有游戏在跑。`);
-    process.exit(1);
+const NORMAL = { game: false, clippy: 4, test: 2, workers: 4 };
+const GAME = { game: true, clippy: 2, test: 2, workers: 1 };
+// 一旦见过游戏，这次就一直按游戏模式跑（游戏关了也不升回去）
+let mode = NORMAL;
+/** 重新查一次游戏；查到了切到游戏模式、降优先级。返回查到的游戏。 */
+function checkGames() {
+  const games = process.platform === "win32" ? runningGames() : [];
+  if (games.length && !mode.game) {
+    mode = GAME;
+    if (!dryRun) {
+      try {
+        // Windows 上之后起的子进程（cargo、rustc、link.exe、Chrome）默认继承低于正常的优先级
+        os.setPriority(os.constants.priority.PRIORITY_BELOW_NORMAL);
+      } catch (e) {
+        console.error(`降优先级失败（${e.message}），不跑了：有游戏在跑。`);
+        process.exit(1);
+      }
+    }
   }
+  return games;
 }
+const describe = (games) =>
+  mode.game
+    ? `有游戏在跑（${games.join("、") || "之前查到过"}）：低优先级，cargo clippy -j ${mode.clippy}、cargo test -j ${mode.test}，Playwright ${mode.workers} 个 worker`
+    : `没有游戏：cargo clippy -j ${mode.clippy}、cargo test -j ${mode.test}，Playwright ${mode.workers} 个 worker`;
 
 const tmp = join(root, "target", "tmp");
 const logs = join(root, "target", "prepush");
@@ -128,28 +148,40 @@ const playwright = why(PLAYWRIGHT_INPUTS, "前端和 spec 读的文件");
 const audit = why(LOCKFILES, "锁文件");
 
 // 版本号校验和发版脚本测试加起来一两秒，不按“改没改版本号”挑，每次都跑（CI 的 Frontend job 也是每次跑）
+// cmd 在每一步开跑前按当时的模式（有没有游戏）生成。heavy：跑着的时候盯着游戏，开了就停、按游戏模式重跑。
 const steps = [
-  { name: "cargo fmt", cmd: "cargo fmt --all -- --check", ...always },
-  { name: "release:verify", cmd: "pnpm release:verify", ...always },
-  { name: "release:test", cmd: "pnpm release:test", ...always },
-  { name: "pnpm audit", cmd: "pnpm audit --prod", ...audit },
-  { name: "cargo audit", cmd: "cargo audit", ...audit },
-  { name: "pnpm check", cmd: "pnpm check", ...always },
+  { name: "cargo fmt", cmd: () => "cargo fmt --all -- --check", ...always },
+  { name: "release:verify", cmd: () => "pnpm release:verify", ...always },
+  { name: "release:test", cmd: () => "pnpm release:test", ...always },
+  { name: "pnpm audit", cmd: () => "pnpm audit --prod", ...audit },
+  { name: "cargo audit", cmd: () => "cargo audit", ...audit },
+  { name: "pnpm check", cmd: () => "pnpm check", ...always },
   {
     name: "cargo clippy",
-    cmd: `cargo clippy --workspace --all-targets --locked -j ${jobs.clippy} -- -D warnings`,
+    cmd: (m) => `cargo clippy --workspace --all-targets --locked -j ${m.clippy} -- -D warnings`,
     cargo: true,
+    heavy: true,
     ...always,
   },
-  { name: "cargo test", cmd: `cargo test --workspace --locked --no-fail-fast -j ${jobs.test}`, cargo: true, ...always },
-  { name: "Playwright", cmd: `pnpm -C apps/desktop test:e2e --workers=${jobs.workers}`, lock: true, ...playwright },
+  {
+    name: "cargo test",
+    cmd: (m) => `cargo test --workspace --locked --no-fail-fast -j ${m.test}`,
+    cargo: true,
+    heavy: true,
+    ...always,
+  },
+  {
+    name: "Playwright",
+    cmd: (m) => `pnpm -C apps/desktop test:e2e --workers=${m.workers}`,
+    // 多 worker 全量跑时不截图，免得覆盖 target/plugin-shots/ 里给人审查的截图（e2e/screenshot.cts）
+    env: { KOTONE_E2E_SHOTS: "0" },
+    lock: true,
+    heavy: true,
+    ...playwright,
+  },
 ];
 
-console.log(
-  lowPriority
-    ? `有游戏在跑（${games.join("、")}）：低优先级，cargo clippy -j ${jobs.clippy}、cargo test -j ${jobs.test}，Playwright ${jobs.workers} 个 worker`
-    : `没有游戏：cargo clippy -j ${jobs.clippy}、cargo test -j ${jobs.test}，Playwright ${jobs.workers} 个 worker`,
-);
+console.log(describe(checkGames()));
 if (files !== null) console.log(`相对 origin/main 改了 ${files.length} 个文件`);
 console.log(`TMP / TEMP = ${relative(root, tmp)}，日志在 ${relative(root, logs)}`);
 for (const s of steps) console.log(`  ${s.run ? "跑  " : "跳过"} ${s.name.padEnd(15)} ${s.reason}`);
@@ -188,17 +220,33 @@ function releaseLock() {
     // 已经没了
   }
 }
-process.on("SIGINT", () => {
-  releaseLock();
-  process.exit(130);
-});
+process.on("exit", releaseLock);
+process.on("SIGINT", () => process.exit(130));
 
-function run(step, index) {
+/** 跑一步。按正常设置跑的 heavy 步骤，每 15 秒查一次游戏：开了就停掉整棵进程树，返回 { restart: true }。 */
+function run(step, index, cmd) {
   const log = join(logs, `${String(index + 1).padStart(2, "0")}-${step.name.replace(/[^a-z0-9]+/gi, "-")}.log`);
   return new Promise((done) => {
     const file = createWriteStream(log);
     let text = "";
-    const child = spawn(step.cmd, { cwd: root, env, shell: true, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    let stopped = null;
+    const child = spawn(cmd, {
+      cwd: root,
+      env: { ...env, ...step.env },
+      shell: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const watch =
+      step.heavy && !mode.game
+        ? setInterval(() => {
+            const games = checkGames();
+            if (!games.length || stopped) return;
+            stopped = games;
+            console.log(`\n开了游戏（${games.join("、")}）：停掉 ${step.name}，按游戏模式重跑这一步`);
+            spawnSync("taskkill", ["/T", "/F", "/PID", String(child.pid)], { windowsHide: true });
+          }, 15_000)
+        : null;
     const tee = (out) => (chunk) => {
       out.write(chunk);
       file.write(chunk);
@@ -207,11 +255,14 @@ function run(step, index) {
     child.stdout.on("data", tee(process.stdout));
     child.stderr.on("data", tee(process.stderr));
     child.on("error", (e) => {
+      clearInterval(watch);
       file.end();
       done({ ok: false, log, note: e.message });
     });
     child.on("close", (code) => {
+      clearInterval(watch);
       file.end();
+      if (stopped) return done({ restart: true });
       let ok = code === 0;
       let note = ok ? "" : `退出码 ${code}`;
       if (step.cargo) {
@@ -232,18 +283,24 @@ for (const [index, step] of steps.entries()) {
     results.push({ step, status: "跳过", note: step.reason });
     continue;
   }
-  console.log(`\n==> ${step.name}: ${step.cmd}`);
   if (step.lock && !(await takeLock())) {
     results.push({ step, status: "失败", note: `${relative(root, pwLock)} 等了 10 分钟还被拿着（确认没人在跑浏览器测试再删）` });
     continue;
   }
   const started = Date.now();
-  const r = await run(step, index);
+  let r;
+  for (;;) {
+    const games = checkGames();
+    const cmd = step.cmd(mode);
+    console.log(`\n==> ${step.name}: ${cmd}${mode.game ? `（游戏模式：${games.join("、") || "之前查到过"}）` : ""}`);
+    r = await run(step, index, cmd);
+    if (!r.restart) break;
+  }
   if (step.lock) releaseLock();
   results.push({ step, status: r.ok ? "通过" : "失败", took: duration(Date.now() - started), note: r.ok ? "" : `${r.note}，日志 ${relative(root, r.log)}` });
 }
 
-console.log("\n—— 结果 ——");
+console.log(`\n—— 结果 ——${mode.game ? "（中途查到过游戏：之后的步骤按游戏模式跑）" : ""}`);
 for (const r of results) console.log(`  ${r.status}  ${r.step.name.padEnd(15)} ${(r.took ?? "").padEnd(7)} ${r.note ?? ""}`);
 const failed = results.filter((r) => r.status === "失败").map((r) => r.step.name);
 console.log(failed.length ? `不能推送：${failed.join("、")} 没过` : "可以推送");
