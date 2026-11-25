@@ -25,6 +25,7 @@ import ctypes
 import ctypes.wintypes as wt
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -35,7 +36,9 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 WORK = os.path.join(REPO, "target", "gate-e2e")
 HOME = os.path.join(WORK, "home")
 TARGET = os.path.join(WORK, "target")
-EXE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(WORK, "bin", "kotone.exe")
+DEBUG_EXE = os.path.join(REPO, "target", "debug", "kotone.exe")
+BIN = os.path.join(WORK, "bin", "kotone.exe")
+EXE = sys.argv[1] if len(sys.argv) > 1 else BIN
 ENV = dict(os.environ, KOTONE_HOME=HOME, WEBVIEW2_USER_DATA_FOLDER=os.path.join(WORK, "webview"))
 ENV.pop("KOTONE_TOOL_SERVICE_DIR", None)
 KOTONE_TAG = "4B544E49"
@@ -236,8 +239,20 @@ def wait_for(pred, seconds, what):
     raise AssertionError(f"timed out waiting for {what}")
 
 
+def refresh_copy():
+    """The default exe is a copy of target/debug/kotone.exe (refreshed when the build is newer)."""
+    if EXE != BIN:
+        return
+    if not os.path.exists(DEBUG_EXE) and not os.path.exists(BIN):
+        raise SystemExit("no target/debug/kotone.exe - build it first (cargo build -p kotone-tauri)")
+    if os.path.exists(DEBUG_EXE) and (not os.path.exists(BIN) or os.path.getmtime(DEBUG_EXE) > os.path.getmtime(BIN)):
+        os.makedirs(os.path.dirname(BIN), exist_ok=True)
+        shutil.copy2(DEBUG_EXE, BIN)
+
+
 def main():
     guard()
+    refresh_copy()
     os.makedirs(HOME, exist_ok=True)
     os.makedirs(TARGET, exist_ok=True)
     for name in ("ready.txt", "events.log"):

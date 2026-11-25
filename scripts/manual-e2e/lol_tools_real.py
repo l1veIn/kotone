@@ -146,8 +146,15 @@ class Recording:
             self.players[self.me["puuid"]] = {"summoner": self.me, "history": read(own)}
         self.recorded_time = self.live["gameData"]["gameTime"]
         self.started = time.time()
-        # 对局阶段：T 部分是对局里；C 部分切成选英雄 / 房间 / 首页
-        self.phase = "InProgress"
+        # 对局阶段：T 部分是对局里；C 部分切成选英雄 / 房间 / 首页（set_phase）。phase() 是方法：
+        # game_events_real.Timeline、lol_client_real.ClientFlow 按时间线覆盖它，存成属性会把它们的方法盖掉
+        self._phase = "InProgress"
+
+    def phase(self):
+        return self._phase
+
+    def set_phase(self, name):
+        self._phase = name
 
     def synth_champ_select(self):
         gd = self.session["gameData"]
@@ -171,7 +178,7 @@ class Recording:
     def lcu(self, path):
         path, _, query = path.partition("?")
         if path == "/lol-gameflow/v1/gameflow-phase":
-            return self.phase
+            return self.phase()
         if path == "/lol-chat/v1/conversations":
             return [{"id": "friend@pvp.net", "type": "chat"},
                     {"id": CHAMP_SELECT_CHAT, "type": "championSelect"},
@@ -352,7 +359,11 @@ def chat_send(args, timeout_ms=8000):
     """game_chat.send over the tool service (caller = external Agent): (ok, result or error text, seconds)."""
     started = time.time()
     try:
-        return True, bt.call("game_chat.send", args, timeout_ms), time.time() - started
+        result = bt.call("game_chat.send", args, timeout_ms)
+        # the tool service wraps a tool's result in {"content": ...} (as lol.shout / lol.spell below)
+        if isinstance(result, dict) and isinstance(result.get("content"), dict):
+            result = result["content"]
+        return True, result, time.time() - started
     except Exception as e:  # noqa: BLE001
         return False, str(e), time.time() - started
 
@@ -373,7 +384,7 @@ def chat_c0():
     if WHILE_PLAYING or process.lower() not in SAFE_FOREGROUND or process.lower() == "leagueclientux.exe":
         print(f"   C0 skipped: '{title}' ({process}) is in front{' (--while-playing)' if WHILE_PLAYING else ''}")
         return
-    REC.phase = "ChampSelect"
+    REC.set_phase("ChampSelect")
     before = len(POSTS)
     ok, out, _ = chat_send({"text": "C0 这句不该发出去"})
     # 前台是终端时是“不是「League of Legends」”；是 Kotone 自己 / 桌面时是那两句：都是没发
@@ -420,7 +431,7 @@ def chat_front(with_model):
         if not in_front:
             return
         # C1 选英雄：一条消息、几行用换行连起来、不按键
-        REC.phase = "ChampSelect"
+        REC.set_phase("ChampSelect")
         client_in_front()
         before = len(POSTS)
         ok, out, _ = chat_send({"text": "第一行\n第二行"})
@@ -444,7 +455,7 @@ def chat_front(with_model):
         check("C2: no message, no key", len(POSTS) == before and not kotone_keys())
 
         # C3 房间
-        REC.phase = "Lobby"
+        REC.set_phase("Lobby")
         client_in_front()
         before = len(POSTS)
         ok, out, _ = chat_send({"text": "我先排位"})
@@ -453,7 +464,7 @@ def chat_front(with_model):
               and LOBBY_CHAT in new[0][0], f"{out} {new}"[:300])
 
         # C4 首页：不发
-        REC.phase = "None"
+        REC.set_phase("None")
         client_in_front()
         before = len(POSTS)
         ok, out, _ = chat_send({"text": "gg"})
@@ -461,7 +472,7 @@ def chat_front(with_model):
               not ok and "进房间或选英雄" in str(out) and len(POSTS) == before, str(out)[:200])
 
         # C5 客户端不回话：期限内返回、说可能已经发出去了、只发一次
-        REC.phase = "ChampSelect"
+        REC.set_phase("ChampSelect")
         CHAT_POST["mode"] = "hang"
         client_in_front()
         before = len(POSTS)
@@ -738,7 +749,7 @@ def player_names():
 
 def shout_part():
     """S: one-key shout (ADR 041 phase 3), no OS input."""
-    REC.phase = "InProgress"
+    REC.set_phase("InProgress")
     log = os.path.join(bt.HOME, "kotone.log")
     # 战绩是后台查好的（喊话不现查）：等它查完
     bt.wait_until(lambda: "个人的战绩查完了" in open(log, encoding="utf-8", errors="replace").read(), 60, 1)
