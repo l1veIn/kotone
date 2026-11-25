@@ -78,7 +78,7 @@ test("chat is home; sidebar groups; companion settings live on her page; one con
 
   // 「设置」只剩一排（不写组名），说明下面一行指向她的页面
   await sidebar.getByTestId("settings-nav-advanced").click();
-  await expect(page.getByTestId("advanced-nav").getByRole("button")).toHaveText(["模型", "API 连接", "声音", "调参", "外观", "系统", "浏览器"]);
+  await expect(page.getByTestId("advanced-nav").getByRole("button")).toHaveText(["模型", "API 连接", "声音", "热键", "调参", "外观", "系统", "浏览器"]);
   await expect(page.getByTestId("advanced-group-陪玩")).toHaveCount(0);
   await expect(page.getByTestId("advanced-group-通用")).toHaveCount(0);
   await expect(page.getByTestId("advanced-companion-moved")).toContainText("唤醒、交互、权限和用量在琴音自己的页面里");

@@ -26,7 +26,8 @@ use kotone_plugin_voice_input::VoiceInputExt;
 
 pub use kotone_core::hotkey::HotkeyMode;
 
-const HK_LEGACY_REMINDER: &str = "legacy-reminder";
+// 提醒助手热键的 id 和「设置 → 热键」那张表共用一份（ADR 040）
+use kotone_core::hotkey_table::HK_LEGACY_REMINDER;
 
 /// 当前生效的热键后端
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1185,22 +1186,6 @@ impl HotkeyManager {
     }
 }
 
-/// 检测与常见游戏键位的冲突（首次启动引导用，P2-⑩ 已接入向导热键步骤）。
-/// TODO(后续)：与常见游戏默认键位表对比 + 尝试注册探测占用情况。当前仅做静态提示。
-pub fn detect_conflicts(key: &str) -> Vec<String> {
-    let common_game_keys = [
-        "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F9", "F10", "F11", "F12", "Tab", "Space",
-        "Enter", "Shift", "Control", "Alt",
-    ];
-    if common_game_keys.iter().any(|k| k.eq_ignore_ascii_case(key)) {
-        vec![format!(
-            "「{key}」是常见游戏/系统键位，可能与游戏内操作冲突"
-        )]
-    } else {
-        Vec::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1332,5 +1317,33 @@ mod tests {
                 HotkeyMode::Toggle
             ))
         );
+    }
+
+    /// 宿主登记的每一个热键都在「设置 → 热键」那张表里、参与冲突检查（ADR 040 D2、D6）：
+    /// 加了新热键忘了进表就失败。
+    #[test]
+    fn every_registered_hotkey_is_in_the_hotkey_table() {
+        use kotone_core::hotkey_table::{bindings, PluginInfo, Sources, HK_RECORD};
+        let mut settings = kotone_core::settings::Settings::default();
+        // 升级后启用了她：呼叫键和提醒助手热键都在
+        settings.ui.legacy_upgrade = kotone_core::settings::LegacyUpgrade::OptedIn;
+        settings.assistant.companion.quick_messages =
+            vec![Default::default(); HK_QUICK_MESSAGES.len()];
+        let voice_input = PluginInfo {
+            id: "voice-input",
+            name: "语音输入",
+            enabled: true,
+        };
+        let ids: Vec<String> = bindings(&Sources {
+            settings: &settings,
+            profiles: &[],
+            voice_input,
+        })
+        .into_iter()
+        .map(|b| b.id)
+        .collect();
+        for id in KNOWN_NAMED_HOTKEYS.iter().chain([&HK_RECORD]) {
+            assert!(ids.iter().any(|known| known == id), "{id} 不在热键表里");
+        }
     }
 }

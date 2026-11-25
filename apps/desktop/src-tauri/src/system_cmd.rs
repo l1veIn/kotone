@@ -1,4 +1,5 @@
 //! 系统命令：管理员权限、热键环境与录键、开机启动、提示音试听、打开链接和文件夹。
+//! 热键冲突和「设置 → 热键」那张表在 `hotkey_table_cmd.rs`（ADR 040）。
 
 use super::*;
 
@@ -28,12 +29,6 @@ pub(crate) async fn check_input_environment(
     })
     .await
     .map_err(|e| format!("输入环境自检任务失败：{e}"))
-}
-
-/// 静态键位冲突提示（P2-⑩：向导热键步骤录入后展示；常见游戏键位表）
-#[tauri::command]
-pub(crate) fn detect_hotkey_conflicts(key: String) -> Vec<String> {
-    crate::hotkey::detect_conflicts(&key)
 }
 
 /// 开始热键捕获（设置页「点击录入」）：结果经 `kotone://hotkey-capture` 事件推送

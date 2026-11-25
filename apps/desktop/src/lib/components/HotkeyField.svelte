@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { getHotkeyStatus, type NamedHotkeyStatus } from "../ipc";
+  import { checkHotkey, getHotkeyStatus, type NamedHotkeyStatus } from "../ipc";
   import { captureHotkey } from "../hotkeyCapture";
-  import { findHotkeyConflict } from "../hotkeyCombo";
+  import { firstConflictName } from "../hotkeyNames";
   import { asrLocalStore, runtimeStore } from "../stores/runtime";
-  import { errText, settingsStore, toast } from "../stores/ui";
+  import { errText, toast } from "../stores/ui";
   import { m } from "$lib/paraglide/messages.js";
 
   let {
@@ -57,13 +57,15 @@
 
   async function persist(key: string) {
     if (disposed || disabled || saving) return;
-    const conflict = findHotkeyConflict($settingsStore, id, key);
-    if (conflict) {
-      toast(false, m.voice_hotkey_conflict({ title, conflict, key }));
-      return;
-    }
     saving = true;
     try {
+      // 冲突由后端查（ADR 040 D6）：别的热键、Esc、游戏配置的聊天键和控制台触发键
+      const conflict = key ? firstConflictName(await checkHotkey(key, id)) : null;
+      if (disposed) return;
+      if (conflict) {
+        toast(false, m.voice_hotkey_conflict({ title, conflict, key }));
+        return;
+      }
       await onSave(key);
       if (disposed) return;
       draft = key;

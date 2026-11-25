@@ -8,14 +8,15 @@
   import { listen } from "@tauri-apps/api/event";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import {
-    cancelDownload, checkInputEnvironment, detectHotkeyConflicts, downloadModel, getModelInstallGuide, getModelsDir,
+    cancelDownload, checkHotkey, checkInputEnvironment, downloadModel, getModelInstallGuide, getModelsDir,
     getProfileIcon, isDownloadCancelled, isTauri, listModels, listProfiles, modelsDirPathError, setActiveModel,
     setModelsDir, startRuntime, updateSettings,
     type DownloadProgress, type GameProfile, type InputEnvironmentCheck, type InteractionMode, type ModelInfo,
     type ModelInstallGuide, type ModelsDirInfo,
   } from "$lib/ipc";
   import { captureHotkey } from "$lib/hotkeyCapture";
-  import { findHotkeyConflict, hotkeyLabel } from "$lib/hotkeyCombo";
+  import { hotkeyLabel } from "$lib/hotkeyCombo";
+  import { firstConflictName } from "$lib/hotkeyNames";
   import { appState } from "$lib/stores/state";
   import { runtimeStore } from "$lib/stores/runtime";
   import { errText, settingsStore, toast, toastInfo, toastWarn } from "$lib/stores/ui";
@@ -196,7 +197,7 @@
       captureCleanup = null;
       if (result.kind === "combo") {
         currentKey = result.combo;
-        void detectHotkeyConflicts(result.combo).then((list) => (hotkeyWarnings = list)).catch(() => (hotkeyWarnings = []));
+        void checkHotkey(result.combo, "record").then((check) => (hotkeyWarnings = check.warnings)).catch(() => (hotkeyWarnings = []));
       } else if (result.kind === "error") toast(false, result.message);
     });
   }
@@ -204,10 +205,11 @@
   let saving = $state(false);
   async function saveHotkeyAndTry() {
     if (saving) return;
-    const conflict = findHotkeyConflict($settingsStore, "record", currentKey);
-    if (conflict) { toast(false, m.voice_guide_hotkey_conflict({ conflict })); return; }
     saving = true;
     try {
+      // 冲突由后端查（ADR 040 D6）
+      const conflict = firstConflictName(await checkHotkey(currentKey, "record"));
+      if (conflict) { toast(false, m.voice_guide_hotkey_conflict({ conflict })); return; }
       settingsStore.set(await updateSettings({
         activeProfileId: selectedProfileId,
         interactionMode: selectedMode,

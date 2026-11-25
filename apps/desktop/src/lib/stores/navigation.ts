@@ -49,7 +49,7 @@ export const sidebarPagesOpen = writable(false);
 export const ADVANCED_TABS: Record<string, string> = {
   // i18n-ignore-start：设置位置的词：要和后端 settings_guide.rs 写的位置一字不差（玩家点“去看看”时据此跳转），不是界面文字
   "模型": "models", "API 连接": "connections", "声音": "sound", "调参": "tuning", "外观": "appearance", "系统": "system",
-  "浏览器": "browser",
+  "浏览器": "browser", "热键": "hotkeys",
   // 旧写法：「音效」；陪玩那一排（「设置 → 怎么叫她 / 她怎么回答 / 权限 / 用量」）搬进了角色页，normalizeTarget 落过去
   "音效": "sound", "怎么叫她": "call", "她怎么回答": "reply", "权限": "permissions", "用量": "usage",
 };
@@ -138,7 +138,7 @@ const PAGES: Record<string, "automation" | "game" | "about" | "legacy-reminders"
   "自动化": "automation", "游戏列表": "game", "游戏": "game", "游戏适配": "game", "关于": "about", "提醒助手": "legacy-reminders",
 };
 
-/** 旧版「设置 → 其他热键」里的热键现在分散在三处；按第三段（热键名）分，认不出就去语音输入的其他热键。 */
+/** 旧版「设置 → 其他热键」里的热键现在分散在三处（「设置 → 热键」一页列出全部，ADR 040）；按第三段（热键名）分，认不出就去语音输入的其他热键。 */
 function oldHotkeysTarget(name: string | undefined): PageTarget {
   if (name && /启动|停止 Kotone|本地语音识别/.test(name) && !/自动化|停下/.test(name)) return ASR_SETTINGS;
   if (name && /自动化|停下/.test(name)) return { page: "advanced", tab: "system", anchor: "system-stop" };

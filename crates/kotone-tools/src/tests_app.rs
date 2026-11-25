@@ -599,15 +599,28 @@ async fn configuration_tools_are_delegated_to_the_host() {
     h.ok("settings.get", Value::Null).await;
     h.host.set_invoke_result(
         "hotkeys.conflicts",
-        Ok(json!({"key": "F8", "warnings": ["F8: 某游戏默认键位"]})),
+        Ok(json!({
+            "key": "F8",
+            "conflicts": [{"id": "record", "key": "F8", "source": "plugin", "label": "语音输入热键"}],
+            "warnings": ["F8: 某游戏默认键位"]
+        })),
     );
-    let r = h.ok("hotkeys.conflicts", json!({"key": "F8"})).await;
+    let r = h
+        .ok(
+            "hotkeys.conflicts",
+            json!({"key": "F8", "except": "assistant"}),
+        )
+        .await;
     assert_eq!(r["warnings"][0], "F8: 某游戏默认键位");
+    assert_eq!(r["conflicts"][0]["id"], "record");
     assert_eq!(
         h.host.invocations(),
         vec![
             ("settings.get".to_string(), json!({})),
-            ("hotkeys.conflicts".to_string(), json!({"key": "F8"})),
+            (
+                "hotkeys.conflicts".to_string(),
+                json!({"key": "F8", "except": "assistant"})
+            ),
         ]
     );
 

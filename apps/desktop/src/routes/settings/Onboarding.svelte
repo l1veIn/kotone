@@ -15,7 +15,7 @@
   import { companionName } from "$lib/stores/companion";
   import { onDestroy, onMount, untrack } from "svelte";
   import {
-    detectHotkeyConflicts,
+    checkHotkey,
     listModels,
     listProfiles,
     updateSettings,
@@ -24,7 +24,8 @@
   } from "../../lib/ipc";
   import { hasLegacyReminders } from "../../lib/ipc/contracts";
   import { captureHotkey } from "../../lib/hotkeyCapture";
-  import { findHotkeyConflict, hotkeyLabel } from "../../lib/hotkeyCombo";
+  import { hotkeyLabel } from "../../lib/hotkeyCombo";
+  import { firstConflictName } from "../../lib/hotkeyNames";
   import { errText, settingsStore, toast } from "../../lib/stores/ui";
   import { runtimeStore } from "../../lib/stores/runtime";
   import type { DeepSeekSetupResult } from "../../lib/deepseekSetup";
@@ -113,7 +114,9 @@
   let capturing = $state(false);
   let captureCleanup: (() => void) | null = null;
   let staticWarnings = $state<string[]>([]);
-  const conflict = $derived(callKey ? findHotkeyConflict($settingsStore, "assistant", callKey) : null);
+  /** 和谁冲突（后端查，ADR 040 D6：别的热键、Esc、游戏配置的聊天键）；null = 不冲突。 */
+  let conflict = $state<string | null>(null);
+  let checkVersion = 0;
 
   function onConnected(next: DeepSeekSetupResult) {
     result = next;
@@ -133,13 +136,23 @@
   });
 
   async function refreshWarnings(key: string) {
-    try { staticWarnings = await detectHotkeyConflicts(key); } catch { staticWarnings = []; }
+    const version = ++checkVersion;
+    try {
+      const check = await checkHotkey(key, "assistant");
+      if (version !== checkVersion) return;
+      staticWarnings = check.warnings;
+      conflict = firstConflictName(check);
+    } catch {
+      if (version === checkVersion) { staticWarnings = []; conflict = null; }
+    }
   }
 
   function useKey(key: string) {
     callKey = key;
     callKeyTouched = true;
     staticWarnings = [];
+    conflict = null;
+    checkVersion++;
     if (key) void refreshWarnings(key);
   }
 
@@ -159,6 +172,9 @@
     if (conflict) { toast(false, m.shell_onboarding_call_key_conflict_toast({ conflict })); return; }
     saving = true;
     try {
+      // 还没查完就点了：保存前再问一次后端
+      const late = callKey ? firstConflictName(await checkHotkey(callKey, "assistant")) : null;
+      if (late) { conflict = late; toast(false, m.shell_onboarding_call_key_conflict_toast({ conflict: late })); return; }
       if (callKeyTouched || (companionBindings($settingsStore?.assistant)?.hotkey ?? "") !== callKey) {
         settingsStore.set(await updateSettings({
           assistant: companionBindingPatch($settingsStore?.assistant, { hotkey: callKey }),

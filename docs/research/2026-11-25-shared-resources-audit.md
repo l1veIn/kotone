@@ -37,7 +37,7 @@
 
 ### 快捷键（详见 [ADR 040](../adr/040-hotkeys-belong-to-core.md)）
 
-- 有：一个低级键盘钩子线程、一个 `HotkeyManager`（`apps/desktop/src-tauri/src/hotkey.rs`）、前端一个冲突检查 `findHotkeyConflict`（`hotkeyCombo.ts:105`）覆盖 16 个可设置的键。
+- 有：一个低级键盘钩子线程、一个 `HotkeyManager`（`apps/desktop/src-tauri/src/hotkey.rs`）、前端一个冲突检查 `findHotkeyConflict`（`hotkeyCombo.ts:105`）覆盖 16 个可设置的键。（2026-11-25 ADR 040 第 1 期：冲突检查挪到后端 `kotone_core::hotkey_table` 一处，补上游戏聊天键、控制台触发键、Esc；「设置 → 热键」只读列出全部。）
 - 毛病：设置散在 7 个以上的地方（代码注释自己写着“现在分散在三处”，`navigation.ts:141`）；插件接口没有快捷键，语音输入的 5 个键在本体设置、桌面端、命令行里分别写死；快捷指令是 8 个固定格子；冲突检查不看游戏聊天键、F23、Esc，插件不参与；ADR 028 写默认呼叫键是 `~`，代码是 Ctrl+`。
 
 ### 往游戏里输入（发到游戏，见 [ADR 041](../adr/041-send-to-game.md)）

@@ -25,6 +25,7 @@ mod game_tools;
 mod games;
 mod history_cmd;
 mod hotkey;
+mod hotkey_table_cmd;
 mod key_request;
 mod mcp_servers_cmd;
 mod message_popup;
@@ -466,7 +467,8 @@ pub fn run() {
             get_elevation_status,
             get_hotkey_status,
             check_input_environment,
-            detect_hotkey_conflicts,
+            hotkey_table_cmd::get_hotkey_table,
+            hotkey_table_cmd::check_hotkey,
             start_hotkey_capture,
             cancel_hotkey_capture,
             restart_as_admin,

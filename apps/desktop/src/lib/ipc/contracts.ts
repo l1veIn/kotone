@@ -860,6 +860,55 @@ export interface HotkeyStatus {
   named: NamedHotkeyStatus[];
 }
 
+/**
+ * 热键表（ADR 040 第 1 期，后端 `kotone_core::hotkey_table`）：一个占着某个键的东西。
+ * core = Kotone 自己的；plugin = 插件的；custom = 玩家自己加的（快捷指令）；fixed = Esc；
+ * game = 游戏配置里往游戏里按的键（不进表，只参与冲突检查）。
+ */
+export type KeySource = "core" | "plugin" | "custom" | "fixed" | "game";
+export type GameKeyKind = "open-chat" | "channel" | "send" | "console";
+
+export interface KeyUse {
+  /** 稳定 id：热键同设置页 / `named[].id`（assistant、record、quick-message-3…）；Esc 是 escape；游戏的键是 game.<配置 id>.<哪个键> */
+  id: string;
+  /** 设置里写的键；空 = 没设 */
+  key: string;
+  /** 规范写法（和录键得到的一样，Ctrl+Alt+Shift+主键）；没设 / 认不出为空 */
+  combo: string;
+  source: KeySource;
+  /** 插件 id 或游戏配置 id */
+  owner?: string;
+  /** 插件名或游戏名 */
+  ownerName?: string;
+  gameKey?: GameKeyKind;
+  /** 后端的中文名（给 Agent 看）；界面按 id 用 messages 里的名字 */
+  label: string;
+  /** 快捷指令说的话 / 运行的自动化、频道名、Esc 做什么 */
+  detail?: string;
+  /** 在哪改（设置说明里的位置，openLocation 认得）；Esc 没有 */
+  page?: string;
+  field?: string;
+  /** false = 插件关着，这个键现在没登记 */
+  enabled: boolean;
+  /** 和谁冲突（别的项的 id，可能是 gameKeys 里的） */
+  conflicts?: string[];
+}
+
+/** get_hotkey_table：「设置 → 热键」那一页 */
+export interface HotkeyTable {
+  bindings: KeyUse[];
+  gameKeys: KeyUse[];
+}
+
+/** check_hotkey：改一个键之前查一次 */
+export interface HotkeyCheck {
+  key: string;
+  /** 会撞上的；有就不该用这个键 */
+  conflicts: KeyUse[];
+  /** 提示（不拦）：常见的游戏 / 系统键 */
+  warnings: string[];
+}
+
 /** 录入/启动前的低级键盘钩子与 SendInput 环境自检结果。 */
 export interface InputEnvironmentCheck {
   /** false = hook 安装失败或 SendInput 明确少发事件，应提前提示安全软件信任区。 */

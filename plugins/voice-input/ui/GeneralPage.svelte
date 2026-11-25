@@ -12,6 +12,7 @@
     getElevationStatus,
     restartAsAdmin,
     getHotkeyStatus,
+    checkHotkey,
     type AudioDevice,
     type ElevationStatus,
     type GameProfile,
@@ -24,7 +25,7 @@
   import SettingsSection from "$lib/components/settings/SettingsSection.svelte";
   import SettingsRow from "$lib/components/settings/SettingsRow.svelte";
   import { Button } from "$lib/components/ui/button";
-  import { findHotkeyConflict } from "$lib/hotkeyCombo";
+  import { firstConflictName } from "$lib/hotkeyNames";
   import {
     settingsStore,
     fullscreenWarningStore,
@@ -201,12 +202,13 @@
       toast(false, m.voice_general_hotkey_empty());
       return;
     }
-    const conflict = findHotkeyConflict($settingsStore, "record", key);
-    if (conflict) {
-      toast(false, m.voice_general_hotkey_conflict({ conflict }));
-      return;
-    }
     try {
+      // 冲突由后端查（ADR 040 D6）：别的热键、Esc、游戏配置的聊天键和控制台触发键
+      const conflict = firstConflictName(await checkHotkey(key, "record"));
+      if (conflict) {
+        toast(false, m.voice_general_hotkey_conflict({ conflict }));
+        return;
+      }
       // 热键变更后端自动重注册（lib.rs update_settings）；模式沿用当前值
       settingsStore.set(
         await updateSettings({ hotkey: { key, mode: $settingsStore?.hotkey.mode ?? "toggle" } }),

@@ -403,19 +403,26 @@ fn defs() -> Vec<Def> {
         },
         Def {
             name: TOOL_HOTKEYS_STATUS,
-            description: "Hotkey registration status (which hotkeys registered, failures such as a key taken by another program).",
+            description: "Hotkey registration status (which hotkeys registered, failures such as a key taken by another program), plus bindings: every hotkey in Kotone (the call key and other core keys, each plugin's keys, the player's quick commands, the fixed Esc) with its key, source, the settings field, where to change it (page, a settings location) and conflicts (ids of other bindings or of gameKeys: the chat / console keys in game profiles, which Kotone presses into games).",
             side_effects: &[],
             egress: "none",
             input: none(),
-            output: open("热键注册状态"),
+            output: open("热键注册状态和全部热键（bindings、gameKeys）"),
         },
         Def {
             name: TOOL_HOTKEYS_CONFLICTS,
-            description: "Check a hotkey (e.g. F8, Ctrl+Alt+K) against common game key bindings; returns human-readable warnings. Set it with settings.update {\"hotkey\": {\"key\": ...}} (assistant: {\"assistant\": {\"hotkey\": ...}}).",
+            description: "Check a hotkey (e.g. F8, Ctrl+Alt+K) before setting it. conflicts lists what already uses that key: other Kotone hotkeys (pass except = the id of the one being changed, e.g. assistant, record, quick-message-2), Esc, and the chat / console keys of every game profile (a hotkey equal to one would take that key away from the game); don't set a key that has conflicts. warnings flags common game keys. Set it with settings.update {\"hotkey\": {\"key\": ...}} (assistant: {\"assistant\": {\"hotkey\": ...}}).",
             side_effects: &[],
             egress: "none",
-            input: object(&["key"], json!({"key": {"type": "string", "minLength": 1, "maxLength": 64}})),
-            output: object(&["key", "warnings"], json!({"key": {"type": "string"}, "warnings": {"type": "array", "items": {"type": "string"}}})),
+            input: object(&["key"], json!({
+                "key": {"type": "string", "minLength": 1, "maxLength": 64},
+                "except": {"type": "string", "maxLength": 64, "description": "id of the hotkey being changed (not compared with itself)"}
+            })),
+            output: object(&["key", "conflicts", "warnings"], json!({
+                "key": {"type": "string"},
+                "conflicts": {"type": "array", "items": {"type": "object"}},
+                "warnings": {"type": "array", "items": {"type": "string"}}
+            })),
         },
         Def {
             name: TOOL_INPUT_CHECK,

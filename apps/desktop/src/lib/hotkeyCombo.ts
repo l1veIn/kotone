@@ -1,5 +1,4 @@
-import { companionBindings, hasLegacyReminders, usesLegacyVoiceInput, type Settings } from "./ipc/contracts";
-import { m } from "./paraglide/messages.js";
+// 键名：录键得到的规范写法、给人看的写法。热键冲突只在后端查（ADR 040 D6：`checkHotkey` / `getHotkeyTable`），这里不判断。
 
 const NAMED_CODES: Record<string, string> = {
   Space: "Space",
@@ -77,50 +76,6 @@ export function normalizeHotkeyCombo(combo: string): string {
     .map((part) => part.trim().toLowerCase())
     .filter(Boolean)
     .join("+");
-}
-
-const HOTKEY_ALIASES: Record<string, string> = {
-  control: "ctrl", menu: "alt",
-  xbutton1: "mouse4", xbutton2: "mouse5", return: "enter",
-  esc: "escape", back: "backspace", del: "delete", ins: "insert",
-  pgup: "pageup", pgdn: "pagedown", print: "printscreen", caps: "capslock",
-  "`": "backquote", "~": "backquote", grave: "backquote", tilde: "backquote",
-};
-
-/**
- * 与 Rust 侧 combos_conflict 同语义：修饰键集合 + 主键完全相同即冲突。
- * 用于录制键与频道切换键的双向冲突预检（后端注册时仍有双保险）。
- */
-export function combosConflict(a: string, b: string): boolean {
-  const norm = (c: string): string => {
-    const parts = normalizeHotkeyCombo(c).split("+").filter(Boolean)
-      .map((part) => HOTKEY_ALIASES[part] ?? part);
-    const main = parts.pop() ?? "";
-    return [...new Set(parts)].sort().concat(main).join("+");
-  };
-  return norm(a) === norm(b);
-}
-
-/** One binding catalog for every settings editor, including the onboarding record key. */
-export function findHotkeyConflict(settings: Settings | null, selfId: string, key: string): string | null {
-  if (!settings || !key.trim()) return null;
-  const legacyVoiceOnly = usesLegacyVoiceInput(settings.ui);
-  const bindings: [string, string, string][] = [
-    ["record", m.voice_hotkey_name_record(), settings.hotkey.key],
-    ["legacy-reminder", m.voice_hotkey_name_legacy_reminder(), hasLegacyReminders(settings.ui) ? settings.assistant.hotkey : ""],
-    ["assistant", m.voice_hotkey_name_call(), legacyVoiceOnly ? "" : companionBindings(settings.assistant)?.hotkey ?? ""],
-    ...(legacyVoiceOnly ? [] : settings.assistant.companion?.quickMessages ?? []).map(
-      (message, index): [string, string, string] => [`quick-message-${index + 1}`, m.voice_hotkey_name_quick_message({ number: index + 1 }), message.hotkey],
-    ),
-    ["channel-cycle", m.voice_hotkey_name_channel_cycle(), settings.channelCycleHotkey],
-    ["resend-last", m.voice_hotkey_name_resend_last(), settings.resendLastHotkey],
-    ["post-process-toggle", m.voice_hotkey_name_post_process_toggle(), settings.togglePostProcessingHotkey],
-    ["post-process-cycle", m.voice_hotkey_name_post_process_cycle(), settings.cyclePostProcessingHotkey],
-    ["runtime-toggle", m.voice_hotkey_name_runtime_toggle(), settings.runtimeToggleHotkey],
-    ["automation-stop", m.voice_hotkey_name_automation_stop(),
-      legacyVoiceOnly ? "" : settings.automationStopHotkey ?? ""],
-  ];
-  return bindings.find(([id, , combo]) => id !== selfId && combo && combosConflict(key, combo))?.[1] ?? null;
 }
 
 /** 已按下组合中的主键或修饰键松开时，都应结束一次 hold。 */

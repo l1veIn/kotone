@@ -280,8 +280,8 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 | `connections.delete` | `id` | 更新后的 `connections[]`（同时删除其 key） |
 | `profiles.list` | 无 | `profiles[]`、`activeProfileId`；激活用 `settings.update {"activeProfileId": …}` |
 | `profiles.save` / `profiles.delete` | `profile` / `id` | 保存（内置 profile 记住被删的内置热词）/ 删除（内置恢复出厂，导入的永久删除） |
-| `hotkeys.status` | 无 | 热键注册状态（失败原因，如被其他程序占用） |
-| `hotkeys.conflicts` | `key` | `warnings[]`：与常见游戏键位的冲突提示 |
+| `hotkeys.status` | 无 | 热键注册状态（失败原因，如被其他程序占用）；`bindings[]`：全部热键（本体的、插件的、快捷指令、固定的 Esc），每项有键、来源、字段、在哪改（`page`）和 `conflicts`（冲突的 id，可能指 `gameKeys[]` 里游戏配置的聊天键、控制台触发键；ADR 040） |
+| `hotkeys.conflicts` | `key`、`except`（正在改的那一项的 id，可省） | `conflicts[]`：已经占着这个键的热键、Esc、游戏配置的聊天键和控制台触发键（有就别用这个键，ADR 040 D6）；`warnings[]`：与常见游戏键位的冲突提示 |
 | `input.check` | 无 | 低级键盘钩子与模拟输入（SendInput）自检，不需要先启动运行时 |
 | `elevation.status` | 无 | 是否已提权、能否提权、前台游戏是否以管理员运行 / 独占全屏 |
 | `elevation.restart` | 无 | 先返回 `status=restarting`，再弹系统 UAC：用户同意后本实例退出、新的提权实例接替（新 `instanceId`，用 `app status` 重连）；拒绝则发布 `elevation.restart.failed`，本实例继续运行 |

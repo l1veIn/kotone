@@ -34,6 +34,8 @@ import type {
   HotwordMergeReport,
   ElevationStatus,
   HotkeyStatus,
+  HotkeyCheck,
+  HotkeyTable,
   InputEnvironmentCheck,
   ResourceUsage,
   DiagnosticExportResult,
@@ -317,10 +319,19 @@ export async function logFrontendError(context: string, message: string): Promis
   return invoke<void>("log_frontend_error", { context, message });
 }
 
-/** 静态键位冲突提示（向导热键步骤；常见游戏键位表） */
-export async function detectHotkeyConflicts(key: string): Promise<string[]> {
-  if (!isTauri) return browserMock.detectHotkeyConflicts(key);
-  return invoke<string[]>("detect_hotkey_conflicts", { key });
+/** 「设置 → 热键」：全部热键，每一项带冲突和在哪改（ADR 040；冲突只在后端查） */
+export async function getHotkeyTable(): Promise<HotkeyTable> {
+  if (!isTauri) return browserMock.getHotkeyTable();
+  return invoke<HotkeyTable>("get_hotkey_table");
+}
+
+/**
+ * 把 `except` 这一项改成 `key` 之前查一次（后端查，ADR 040 D6）：和谁冲突（别的热键、Esc、游戏配置的聊天键和
+ * 控制台触发键），以及这个键游戏里常不常用。`except` 是正在改的那一项的 id（不和自己比）。
+ */
+export async function checkHotkey(key: string, except?: string): Promise<HotkeyCheck> {
+  if (!isTauri) return browserMock.checkHotkey(key, except);
+  return invoke<HotkeyCheck>("check_hotkey", { key, except: except ?? null });
 }
 
 /** 开始热键捕获（设置页「点击录入」）；结果经 kotone://hotkey-capture 事件推送 */

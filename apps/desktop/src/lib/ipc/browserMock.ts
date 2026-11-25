@@ -33,6 +33,8 @@ import type {
   HotwordMergeReport,
   ElevationStatus,
   HotkeyStatus,
+  HotkeyCheck,
+  HotkeyTable,
   InputEnvironmentCheck,
   ResourceUsage,
   DiagnosticExportResult,
@@ -42,6 +44,7 @@ import type {
 } from "./contracts";
 import { companionBindings, defaultPostProcessing, hasLegacyReminders, modelsDirPathError, usesLegacyVoiceInput } from "./contracts";
 import type { BrowserAction, BrowserBounds, BrowserExtension, BrowserState, BrowserTab } from "../browser";
+import { checkHotkey as checkHotkeyInMock, hotkeyTable, type HotkeySources } from "./hotkeysMock";
 
 // ================================================================
 // 浏览器 mock：内存态，模拟后端行为（仅 dev:web 使用）
@@ -953,9 +956,21 @@ export async function logFrontendError(context: string, message: string): Promis
   return;
 }
 
-/** 静态键位冲突提示（向导热键步骤；常见游戏键位表） */
-export async function detectHotkeyConflicts(key: string): Promise<string[]> {
-  return [];
+/** 热键表和改键前的冲突检查（ADR 040）：后端 hotkey_table 的内存版在 hotkeysMock.ts */
+function hotkeySources(): HotkeySources {
+  return {
+    settings: mock.settings,
+    profiles: mock.profiles,
+    voiceInput: { id: "voice-input", name: "语音输入", enabled: mock.settings.plugins?.["voice-input"]?.enabled ?? true },
+  };
+}
+
+export async function getHotkeyTable(): Promise<HotkeyTable> {
+  return clone(hotkeyTable(hotkeySources()));
+}
+
+export async function checkHotkey(key: string, except?: string): Promise<HotkeyCheck> {
+  return clone(checkHotkeyInMock(hotkeySources(), key, except));
 }
 
 /** 开始热键捕获（设置页「点击录入」）；结果经 kotone://hotkey-capture 事件推送 */

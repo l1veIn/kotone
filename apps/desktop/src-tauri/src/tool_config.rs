@@ -242,6 +242,9 @@ struct ProfileArgs {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct KeyArgs {
     key: String,
+    /// 正在改的那一项的 id（不和自己比，ADR 040）；不传 = 新加的键。
+    #[serde(default)]
+    except: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -650,12 +653,17 @@ pub async fn invoke_until(
         }
         c::TOOL_HOTKEYS_STATUS => {
             let _: NoArgs = parse(tool, args)?;
-            to_json(crate::get_hotkey_status(app.clone()))
+            // 登记状态 + 「设置 → 热键」那张表（每个热键是谁的、在哪改、和谁冲突，ADR 040）
+            let mut status = to_json(crate::get_hotkey_status(app.clone()))?;
+            let table = to_json(crate::hotkey_table_cmd::table(app))?;
+            if let (Some(status), Value::Object(table)) = (status.as_object_mut(), table) {
+                status.extend(table);
+            }
+            Ok(status)
         }
         c::TOOL_HOTKEYS_CONFLICTS => {
-            let KeyArgs { key } = parse(tool, args)?;
-            let warnings = crate::detect_hotkey_conflicts(key.clone());
-            Ok(json!({"key": key, "warnings": warnings}))
+            let KeyArgs { key, except } = parse(tool, args)?;
+            to_json(crate::hotkey_table_cmd::check(app, &key, except.as_deref()))
         }
         c::TOOL_INPUT_CHECK => {
             let _: NoArgs = parse(tool, args)?;

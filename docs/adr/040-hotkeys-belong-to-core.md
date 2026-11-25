@@ -1,6 +1,6 @@
 # ADR 040：快捷键归本体——插件只登记命令，一张表、一个地方改
 
-状态：Accepted（方向，2026-11-25，玩家：“可以，你这套很清晰”）/ 未开始。
+状态：Accepted（方向，2026-11-25，玩家：“可以，你这套很清晰”）/ 第 1 期做完（2026-11-25，见末尾实施记录；界面上这一页叫「设置 → 热键」，照术语表不叫“快捷键”）。
 
 ## 背景
 
@@ -79,3 +79,4 @@
 ## 实施记录
 
 - **2026-11-25 快捷指令的键改了立即生效**（[共享资源评估](../research/2026-11-25-shared-resources-audit.md)第二节第 13 条）。复现：单元测试 `settings_cmd::hotkey_settings_tests::changing_a_quick_message_hotkey_requires_registration`，给快捷指令绑键、换键，判断函数都说“没变”，语音识别开着时不重新登记。界面上的样子：这一格原来没绑键时提示“已保存，语音识别准备好后生效”（识别明明开着）；原来绑着键时提示“已保存并生效：<旧的键>”，按新键没反应。修法：`hotkey_registration_changed` 比较 8 个槽位各自登记的键（照 `hotkey.rs` 的 `named_list_from`：第 n 条占 `quick-message-n`，没有这一条就是空的），键变了、加了一条带键的、删了一条（后面的挪了格子）都立即重新登记；加一条没绑键的、只改说的话或自动化的入参不重新登记（按下时才读那一格）。修完以后“……后生效”只在语音识别还没开始时出现。没做本 ADR 的第 3 期（快捷指令并进快捷键表）。
+- **2026-11-25 第 1 期：冲突只在后端查一次，「设置 → 热键」只读列出全部**（D2、D4、D6）。复现：Playwright `apps/desktop/e2e/hotkeys-page.spec.ts` 第一条，在唤醒页把呼叫键设成 Enter、Shift+Enter（英雄联盟的开聊天框键）、F23（带控制台通道的游戏配置）、Escape，改之前 4 个都直接保存、没有提示（前端 `findHotkeyConflict(settings, "assistant", key)` 对这 4 个都返回 null，它只比 16 个可设置的键）。修法：表和冲突的规矩只在 `crates/kotone-core/src/hotkey_table.rs`（修饰键加主键相同算冲突；Esc 不看修饰键，因为录音时按 Esc 取消、她操作游戏时按 Esc 停下都不管修饰键）；范围是本体的键、语音输入的 5 个、快捷指令、Esc、所有游戏配置的打开聊天框键 / 各频道的开框键 / 发送键 / 控制台触发键（同一个游戏里键相同的算一条，正在用的游戏排前面）；0.1.x 只用语音输入的人没有呼叫键、停下热键、快捷指令，插件关着时它的键照样参与检查（打开插件就会撞上）。桌面端 `hotkey_table_cmd.rs` 给 `get_hotkey_table`、`check_hotkey`（原来的 `detect_hotkey_conflicts` 并进来：同一次给冲突和“这个键游戏里常用”的提示）；前端的 `findHotkeyConflict`、`combosConflict` 删掉，改键的各处（热键输入框、新手引导、语音输入页和它的引导）改调 `checkHotkey`，提示的字不变。「设置」多一个分页“热键”（不叫“快捷键”：术语表里它是不说的词），每行标来源（Kotone / 插件名 / 自己加的 / 固定），冲突标红并写和谁冲突，“去改”用设置说明里的位置跳到现在改它的页面；表里每项的字段和位置有测试对着 `settings_guide.rs`，宿主登记的每个热键都要在表里（`hotkey.rs` 的测试）。她和外部 Agent：`hotkeys.status` 多了 `bindings`、`gameKeys`，`hotkeys.conflicts` 多了 `conflicts` 和可选入参 `except`，没加新工具名。还没做（第 2 期）：`HotkeyManager` 登记时的冲突（同一个键谁先登记）、命令行（`kotone-cli`）各自的检查照旧；`settings.update` 不拒绝冲突的键，Agent 要先查 `hotkeys.conflicts`。

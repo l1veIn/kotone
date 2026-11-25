@@ -1,6 +1,6 @@
 <script lang="ts">
   /*
-   * 「设置」（ADR 028）：一排分页，模型 · API 连接 · 声音 · 调参 · 外观 · 系统 · 浏览器（原来的通用组）。
+   * 「设置」（ADR 028）：一排分页，模型 · API 连接 · 声音 · 热键 · 调参 · 外观 · 系统 · 浏览器（原来的通用组）。
    * 原来的陪玩组（怎么叫她 · 她怎么回答 · 权限 · 用量）搬进了角色页，叫 唤醒 · 交互 · 权限 · 用量（交接第十一节第 8 条，2026-11-25）；
    * 只剩一组，就不再写组名。说明下面一行链接指过去，找老位置的人一眼看得到。
    * 判断标准照旧：“如果删掉角色，这项设置还需要吗？”需要的留在设置里。
@@ -13,6 +13,7 @@
   import ConnectionsSection from "./advanced/ConnectionsSection.svelte";
   import ModelsSection from "./advanced/ModelsSection.svelte";
   import SoundSection from "./advanced/SoundSection.svelte";
+  import HotkeysSection from "./advanced/HotkeysSection.svelte";
   import SystemSection from "./advanced/SystemSection.svelte";
   import TuningSection from "./advanced/TuningSection.svelte";
   import BrowserDataSettings from "./assistant/BrowserDataSettings.svelte";
@@ -83,6 +84,9 @@
       <ConnectionsSection />
     {:else if section === "sound"}
       <SoundSection />
+    {:else if section === "hotkeys"}
+      <!-- 全部热键（ADR 040 D2）：只读列出，冲突标红，“去改”跳到原来改它的地方 -->
+      <HotkeysSection />
     {:else if section === "tuning"}
       <TuningSection />
     {:else if section === "system"}

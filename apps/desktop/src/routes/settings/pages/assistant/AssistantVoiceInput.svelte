@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { isTauri } from "../../../../lib/ipc";
+  import { getHotkeyTable, isTauri } from "../../../../lib/ipc";
   import { createAssistantVoiceControl } from "../../../../lib/assistantVoice";
-  import { findHotkeyConflict, keyboardEventCombo } from "../../../../lib/hotkeyCombo";
+  import { keyboardEventCombo } from "../../../../lib/hotkeyCombo";
   import { appState } from "../../../../lib/stores/state";
   import { runtimeStore } from "../../../../lib/stores/runtime";
   import { errText, settingsStore } from "../../../../lib/stores/ui";
@@ -35,6 +35,19 @@
   let pointer: number | null = null;
   let heldKey: string | null = null;
   let globalKey: string | null = null;
+  /** 已经设成热键的键（后端给的规范写法，ADR 040）：按下时全局钩子已经处理过，按钮不再跟着响应。 */
+  let boundCombos = $state<Set<string>>(new Set());
+  $effect(() => {
+    void $settingsStore;
+    let stale = false;
+    getHotkeyTable()
+      .then((table) => {
+        if (stale) return;
+        boundCombos = new Set(table.bindings.filter((b) => b.source !== "fixed" && b.combo).map((b) => b.combo));
+      })
+      .catch(() => {});
+    return () => { stale = true; };
+  });
 
   $effect(() => { voice.observe($appState); });
   $effect(() => { onBusyChange(own); });
@@ -79,7 +92,7 @@
     if ([" ", "Enter"].includes(event.key)) {
       const combo = keyboardEventCombo(event);
       // The native hook has already seen this key. Do not also activate the DOM button.
-      if (combo && findHotkeyConflict($settingsStore, "assistant-voice-button", combo)) {
+      if (combo && boundCombos.has(combo)) {
         event.preventDefault();
         globalKey = event.key;
         return;
