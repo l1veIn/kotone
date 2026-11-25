@@ -12,3 +12,38 @@ enabled_by_default = true
 [[pages]]
 uri = "ui://kotone/voice-input/home"
 title = "语音输入"
+
+# 能绑热键的命令（ADR 040 D1）：宿主在按下 / 松开时经本体的“听一句”调插件（AfterHearing::command）。
+# 只登记命令，不带默认键（D4；新装时“说话”的 CapsLock 写在本体的默认设置里）。都要语音识别（listens）：
+# 识别没在跑时键照常给游戏，按了在悬浮窗提示（ADR 040 实施记录，主会话定的第 2 条）。
+# 名字是热键表里那一行的名字；界面文字以 messages 为准（plugin_voice_input_command_<id>_name）。
+[[commands]]
+id = "talk"
+name = "语音输入热键"
+description = "按住说话、松开发出去；按一下开始还是按住说，看“输入”里的交互模式"
+kind = "hold"
+listens = true
+
+[[commands]]
+id = "channel-cycle"
+name = "切换频道热键"
+description = "在这个游戏的聊天频道之间切换（队伍 / 所有人）"
+listens = true
+
+[[commands]]
+id = "resend-last"
+name = "重发上一句热键"
+description = "把上一句发成功的话再发一次"
+listens = true
+
+[[commands]]
+id = "post-process-toggle"
+name = "开关文字处理热键"
+description = "屏蔽词、润色、翻译一起开或关"
+listens = true
+
+[[commands]]
+id = "post-process-cycle"
+name = "切换文字处理方案热键"
+description = "换到下一个文字处理方案"
+listens = true

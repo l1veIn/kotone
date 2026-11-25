@@ -30,8 +30,28 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// 听写听到以后的事（语音输入插件实现）。
 pub trait AfterHearing: Send + Sync + 'static {
-    /// 宿主拿回具体类型用（热键、重发这类只有插件自己懂的入口）。
+    /// 宿主拿回具体类型用（测试和“听到以后”的细节）。
     fn as_any(&self) -> &dyn Any;
+
+    /// 这一段是哪个插件的（插件 id）：它在清单里登记的命令（`<插件 id>.<命令>`）由宿主经
+    /// [`Orchestrator::hearing_command`] 转给 [`AfterHearing::command`]（ADR 040 D1）。
+    fn owner(&self) -> &str {
+        ""
+    }
+
+    /// 这一段登记的命令被按了（ADR 040 D1：插件自己处理的动作）。按住的命令按下、松开各来一次，按物理顺序；
+    /// 按一下的只有 [`Edge::Press`]。`input_ticket` 是按下那一刻的入场票（宿主给；按 Esc、重新登记热键以后的
+    /// 旧边沿由本体拒掉），命令行没有票。不认识的命令什么都不做。
+    fn command<'a>(
+        &'a self,
+        orch: &'a Orchestrator,
+        command: &'a str,
+        edge: crate::hotkey_commands::Edge,
+        input_ticket: Option<u64>,
+    ) -> BoxFuture<'a, ()> {
+        let _ = (orch, command, edge, input_ticket);
+        Box::pin(async {})
+    }
 
     /// 开始收音（还没发布会话，不持锁）：识别记录开着且是听写时给一份草稿，草稿同时旁听录音。
     fn start_record(
@@ -335,6 +355,27 @@ impl Orchestrator {
     /// 接上的语音输入（宿主拿回具体类型用）。
     pub fn after_hearing(&self) -> Option<&Arc<dyn AfterHearing>> {
         self.after_hearing.as_ref()
+    }
+
+    /// 接在“听一句”后面的是哪个插件（插件 id；没接为 None）。
+    pub fn hearing_owner(&self) -> Option<&str> {
+        self.after_hearing
+            .as_ref()
+            .map(|after| after.owner())
+            .filter(|owner| !owner.is_empty())
+    }
+
+    /// 把这个插件的命令交给它（`command` 是插件里的命令 id，不带插件名；ADR 040 D1）。没接时什么都不做。
+    pub async fn hearing_command(
+        &self,
+        command: &str,
+        edge: crate::hotkey_commands::Edge,
+        input_ticket: Option<u64>,
+    ) {
+        match self.after_hearing.clone() {
+            Some(after) => after.command(self, command, edge, input_ticket).await,
+            None => crate::log::log(&format!("命令 {command}：没接语音输入，忽略")),
+        }
     }
 
     /// begin / end / cancel / confirm 串行化的临界区（op 锁）。拿着它再 [`Self::session`]，

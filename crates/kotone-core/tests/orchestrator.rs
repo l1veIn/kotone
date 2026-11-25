@@ -21,6 +21,8 @@ use kotone_core::profile::GameProfile;
 use kotone_core::settings::Settings;
 use kotone_core::stt::EngineRegistry;
 use kotone_plugin_voice_input::VoiceInputExt;
+// 语音输入的热键是插件登记的命令，经“听一句”转给插件（ADR 040 D1）
+use kotone_core::hotkey_commands::Edge;
 use tokio::sync::mpsc;
 
 /// 10 倍速推送假音频的 mock 采集后端（每 5ms 推一个 50ms chunk）
@@ -961,6 +963,39 @@ async fn hotkey_hold_release_waits_grace_before_sending() {
     assert_ne!(orch.state(), OrchestratorState::Listening);
 }
 
+/// 语音输入的“说话”是插件登记的按住命令（ADR 040 D1，经“听一句”转给插件）：对讲机按下开始、松开结束；
+/// 按一下开始的交互模式只认按下，松开不算；不认识的命令什么都不做。
+#[tokio::test]
+async fn the_talk_command_follows_the_interaction_mode() {
+    use kotone_core::interaction::InteractionMode;
+    let (orch, _emitter, sent) = make_orchestrator(true);
+    assert_eq!(orch.hearing_owner(), Some("voice-input"));
+    orch.settings().write().unwrap().interaction_mode = Some(InteractionMode::PushToTalk);
+    orch.hearing_command("talk", Edge::Press, None).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    orch.hearing_command("talk", Edge::Release, None).await;
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert_eq!(
+        sent.lock().unwrap().as_slice(),
+        &["对面打野在下路".to_string()]
+    );
+
+    let (orch, _emitter, _sent) = make_orchestrator(true);
+    orch.settings().write().unwrap().interaction_mode = Some(InteractionMode::Dictation);
+    orch.hearing_command("talk", Edge::Press, None).await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+    orch.hearing_command("talk", Edge::Release, None).await;
+    assert_eq!(
+        orch.state(),
+        OrchestratorState::Listening,
+        "按一下开始的模式：松开不算"
+    );
+    orch.hearing_command("no-such-command", Edge::Press, None)
+        .await;
+    assert_eq!(orch.state(), OrchestratorState::Listening);
+}
+
 /// 宽限期内再次按下 = 收回结束、继续这句（对讲机直觉）；
 /// 随后正常松手仍能完整结束发送
 #[tokio::test]
@@ -1209,7 +1244,8 @@ async fn post_processing_hotkeys_toggle_and_cycle_persist_and_emit() {
     };
 
     // 开关：false → true，广播 toggle；并真正落盘
-    orch.on_post_processing_toggle().await;
+    orch.hearing_command("post-process-toggle", Edge::Press, None)
+        .await;
     assert!(settings_arc.read().unwrap().post_processing.enabled);
     assert!(
         kotone_core::settings::load_from(&config_path)
@@ -1220,12 +1256,14 @@ async fn post_processing_hotkeys_toggle_and_cycle_persist_and_emit() {
     assert_eq!(pp_events("toggle"), 1);
 
     // 再开关：true → false
-    orch.on_post_processing_toggle().await;
+    orch.hearing_command("post-process-toggle", Edge::Press, None)
+        .await;
     assert!(!settings_arc.read().unwrap().post_processing.enabled);
     assert_eq!(pp_events("toggle"), 2);
 
     // 切流程：blocklist → custom → blocklist（声明顺序循环），并落盘
-    orch.on_post_processing_cycle().await;
+    orch.hearing_command("post-process-cycle", Edge::Press, None)
+        .await;
     assert_eq!(
         settings_arc
             .read()
@@ -1235,7 +1273,8 @@ async fn post_processing_hotkeys_toggle_and_cycle_persist_and_emit() {
         "custom"
     );
     assert_eq!(pp_events("cycle"), 1);
-    orch.on_post_processing_cycle().await;
+    orch.hearing_command("post-process-cycle", Edge::Press, None)
+        .await;
     assert_eq!(
         settings_arc
             .read()
@@ -1258,7 +1297,8 @@ async fn post_processing_hotkeys_toggle_and_cycle_persist_and_emit() {
         s.post_processing.pipelines.truncate(1);
     }
     let before = pp_events("cycle");
-    orch.on_post_processing_cycle().await;
+    orch.hearing_command("post-process-cycle", Edge::Press, None)
+        .await;
     assert_eq!(pp_events("cycle"), before, "单流程时切流程应无操作");
 }
 
@@ -2358,7 +2398,7 @@ async fn resend_last_sends_latest_history_text() {
     assert_eq!(sent.lock().unwrap().as_slice(), ["对面打野在下路"]);
 
     // Idle 时重发：注入同一条文本（重发不新建会话草稿，不产生新 history 记录）
-    orch.resend_last().await;
+    orch.hearing_command("resend-last", Edge::Press, None).await;
     let start = std::time::Instant::now();
     loop {
         if sent.lock().unwrap().len() == 2 {
@@ -2401,7 +2441,7 @@ async fn resend_last_waits_until_modifiers_release() {
     wait_state(&orch, OrchestratorState::Idle, Duration::from_secs(2)).await;
     assert_eq!(sent.lock().unwrap().len(), 1);
 
-    orch.resend_last().await;
+    orch.hearing_command("resend-last", Edge::Press, None).await;
     wait_state(&orch, OrchestratorState::Idle, Duration::from_secs(2)).await;
     assert_eq!(sent.lock().unwrap().len(), 2, "修饰键松开后应完成重发");
 }
@@ -3349,7 +3389,7 @@ async fn resend_last_ignored_when_not_idle() {
 
     orch.begin().await.unwrap();
     assert_eq!(orch.state(), OrchestratorState::Listening);
-    orch.resend_last().await;
+    orch.hearing_command("resend-last", Edge::Press, None).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(
         sent.lock().unwrap().is_empty(),
@@ -3385,7 +3425,9 @@ async fn concurrent_begin_and_resend_claim_idle_exclusively() {
     let resend_barrier = barrier.clone();
     let resend = tokio::spawn(async move {
         resend_barrier.wait().await;
-        resend_orch.resend_last().await;
+        resend_orch
+            .hearing_command("resend-last", Edge::Press, None)
+            .await;
     });
     barrier.wait().await;
 
@@ -3413,7 +3455,7 @@ async fn resend_last_noop_without_history() {
     let injector: Arc<dyn Injector> = Arc::new(RecordingInjector { sent: sent.clone() });
     let orch = make_history_orchestrator(true, injector, dir.path().to_path_buf(), None);
 
-    orch.resend_last().await;
+    orch.hearing_command("resend-last", Edge::Press, None).await;
     assert!(sent.lock().unwrap().is_empty());
 }
 

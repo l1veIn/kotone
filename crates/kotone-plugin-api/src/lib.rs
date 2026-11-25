@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 pub use kotone_core::games::{EventSpec, Observation, Phase};
+pub use kotone_core::hotkey_commands::{CommandKind, CommandSpec};
 
 mod events;
 pub use events::event_catalog;
@@ -75,6 +76,10 @@ pub struct Manifest {
     /// 说明、要的数据开关）。类型以 `<适配器>.` 开头；只有登记过的才报得出去。见 [`event_catalog`]。
     #[serde(default)]
     pub events: Vec<EventSpec>,
+    /// 能绑热键的命令（ADR 040 D1，`[[commands]]`：id、名字、一句说明、按一下 / 按住、要不要语音识别）。
+    /// 插件只登记命令，不登记键（D7）；也没有默认键这个字段（D4）。完整名是 `<插件 id>.<命令 id>`。
+    #[serde(default)]
+    pub commands: Vec<CommandSpec>,
 }
 
 fn yes() -> bool {
@@ -172,6 +177,18 @@ impl Manifest {
                 ));
             }
             self.check_needs(&page.uri, &page.needs)?;
+        }
+        let mut commands = std::collections::HashSet::new();
+        for command in &self.commands {
+            if !kotone_core::hotkey_commands::valid_command_id(&command.id)
+                || !commands.insert(command.id.as_str())
+                || command.name.trim().is_empty()
+            {
+                return Err(format!(
+                    "插件 {} 的命令 “{}” 重名、写法不对或者没有名字（只能用小写字母、数字和连字符）",
+                    self.id, command.id
+                ));
+            }
         }
         self.check_events()
     }
@@ -659,7 +676,11 @@ pub trait Host: Send + Sync {
     fn can_synthesize(&self) -> bool {
         false
     }
-    /// 用她的声音在玩家的扬声器上说一句（和 `synthesize` 同一句时走缓存）。
+    /// 用她的声音在玩家的扬声器上说一句（和 `synthesize` 同一句时走缓存）。和她自己的话走同一条路：
+    /// 排在她正在说的话、提醒、填充话后面，和她拿同一把播报锁，放的时候算她在出声（[`Host::she_is_audible`]）；
+    /// 玩家让她停下时一起停。放不出来（又不是被停下的）时改用弹幕显示这句，原因交回来。返回的 future 放完才结束，
+    /// 但调用方不用等它放完：工具里可以交给 [`Host::spawn`] 就返回（她常在同一步里接着用 `speak` 说话，工具等着
+    /// 这一遍会和她的话互相等）。见 ADR 020 末尾实施记录、宿主的 `assistant::speak_in_turn`。
     fn speak(&self, text: &str) -> BoxFuture<'static, Result<(), String>> {
         let _ = text;
         Box::pin(async { Err("这里没有语音".to_string()) })
@@ -835,6 +856,66 @@ rule = "- 英雄联盟：……"
         let v = serde_json::to_value(&m).unwrap();
         assert_eq!(v["enabledByDefault"], true);
         assert_eq!(v["sources"][1]["enabledByDefault"], false);
+    }
+
+    /// 命令（ADR 040 D1）：清单里只登记命令，不带默认键（D4：写了 default_key 读不进来）。
+    #[test]
+    fn commands_are_registered_without_keys() {
+        let base = "id = \"demo\"
+name = \"示例\"
+description = \"说明\"
+";
+        let ok = Manifest::parse(&format!(
+            "{base}[[commands]]
+id = \"talk\"
+name = \"说话\"
+description = \"按住说话\"
+kind = \"hold\"
+listens = true
+
+[[commands]]
+id = \"next\"
+name = \"下一首\"
+description = \"\"
+"
+        ))
+        .unwrap();
+        assert_eq!(ok.commands.len(), 2);
+        assert_eq!(ok.commands[0].kind, CommandKind::Hold);
+        assert!(ok.commands[0].listens);
+        assert_eq!(ok.commands[1].kind, CommandKind::Press, "不写就是按一下");
+        for bad in [
+            "[[commands]]
+id = \"talk\"
+name = \"说话\"
+description = \"\"
+default_key = \"F8\"
+",
+            "[[commands]]
+id = \"Talk\"
+name = \"说话\"
+description = \"\"
+",
+            "[[commands]]
+id = \"a\"
+name = \"甲\"
+description = \"\"
+[[commands]]
+id = \"a\"
+name = \"乙\"
+description = \"\"
+",
+            "[[commands]]
+id = \"a\"
+name = \"甲\"
+description = \"\"
+kind = \"double\"
+",
+        ] {
+            assert!(Manifest::parse(&format!("{base}{bad}")).is_err(), "{bad}");
+        }
+        // 不写 [[commands]] 的插件（还有第三方插件合成的清单）就是没有命令
+        assert!(Manifest::parse(base).unwrap().commands.is_empty());
     }
 
     #[test]

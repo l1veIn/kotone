@@ -13,6 +13,26 @@ pub(crate) fn get_settings_load_warning(state: tauri::State<SharedState>) -> Opt
     state.settings_load_warning.lock().unwrap().take()
 }
 
+/// 补丁会不会改到热键（热键表、旧的热键字段、呼叫键和快捷指令所在的 `assistant`、插件开关、0.1.x 升级状态）。
+fn touches_hotkeys(patch: &serde_json::Value) -> bool {
+    const KEYS: &[&str] = &[
+        "hotkeys",
+        "hotkey",
+        "assistant",
+        "plugins",
+        "ui",
+        "channelCycleHotkey",
+        "resendLastHotkey",
+        "togglePostProcessingHotkey",
+        "cyclePostProcessingHotkey",
+        "runtimeToggleHotkey",
+        "automationStopHotkey",
+    ];
+    patch
+        .as_object()
+        .is_some_and(|object| KEYS.iter().any(|key| object.contains_key(*key)))
+}
+
 fn hotkey_registration_changed(old: &Settings, next: &Settings) -> bool {
     old.hotkey.key != next.hotkey.key
         || effective_hotkey_mode(old) != effective_hotkey_mode(next)
@@ -31,6 +51,8 @@ fn hotkey_registration_changed(old: &Settings, next: &Settings) -> bool {
         // 快捷指令按槽位登记（第 n 条占 quick-message-n）：键变了、加了 / 删了一条都要重新登记
         // （共享资源评估第二节第 13 条）；说的话、自动化按下时才读，不用
         || quick_message_hotkeys(old) != quick_message_hotkeys(next)
+        // 热键表（ADR 040 D8）：上面的旧字段都是它的镜像，表里别的条目（更新的版本写的）变了也重新算一遍
+        || old.hotkeys != next.hotkeys
 }
 
 /// 每个快捷指令槽位登记的键（照 `hotkey.rs` 的 `named_list_from`：没有这一条就是空的）。
@@ -51,6 +73,8 @@ fn app_hotkey_changed(old: &Settings, next: &Settings) -> bool {
         || old.automation_stop_hotkey != next.automation_stop_hotkey
         || old.ui.legacy_upgrade.uses_legacy_assistant()
             != next.ui.legacy_upgrade.uses_legacy_assistant()
+        // 谁先拿到键按表的顺序算（ADR 040 D6）：呼叫键变了，停下热键可能从“被占了”变成能登记
+        || old.hotkeys != next.hotkeys
 }
 
 /// 局部更新配置；热键变化时触发重注册
@@ -76,6 +100,8 @@ pub(crate) fn update_settings(
     {
         return Err("模型目录请使用目录迁移接口修改".into());
     }
+    // 改到热键的补丁要查新冲突（和游戏配置的聊天键也比），游戏配置在设置事务外先读好（锁里不读磁盘）
+    let profiles = touches_hotkeys(&patch).then(kotone_core::profile::list);
     // Drop the core admission lock before accepting fresh source events, including
     // error/rollback exits. The runtime pause owns no mutex and may outlive apply.
     let mut input_pause = None;
@@ -93,11 +119,13 @@ pub(crate) fn update_settings(
             next.assistant.normalize_voices();
             next.ui.sidebar.normalize();
             next.assistant.validate()?;
-            let call_key = kotone_core::hotkey::parse_hotkey(next.call_hotkey());
-            if call_key.is_some()
-                && call_key == kotone_core::hotkey::parse_hotkey(next.legacy_reminder_hotkey())
-            {
-                return Err("呼叫琴音和提醒助手不能共用热键".into());
+            // 新造成的热键冲突不让存（和别的热键、Esc、游戏配置的聊天键；已经冲突着、这次没动的不拦，ADR 040 D6）
+            if let Some(error) = crate::hotkey_table_cmd::new_conflict(
+                &previous,
+                next,
+                profiles.as_deref().unwrap_or_default(),
+            ) {
+                return Err(error);
             }
             if previous.overlay.visibility != next.overlay.visibility
                 && next.overlay.visibility != OverlayVisibility::Never

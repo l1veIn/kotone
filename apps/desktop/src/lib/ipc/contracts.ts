@@ -887,14 +887,16 @@ export interface HotkeyStatus {
 /**
  * 热键表（ADR 040 第 1 期，后端 `kotone_core::hotkey_table`）：一个占着某个键的东西。
  * core = Kotone 自己的；plugin = 插件的；custom = 玩家自己加的（快捷指令）；fixed = Esc；
- * game = 游戏配置里往游戏里按的键（不进表，只参与冲突检查）。
+ * game = 游戏配置里往游戏里按的键（不进表，只参与冲突检查）；unknown = 表里有、这个版本找不到的命令（不登记）。
  */
-export type KeySource = "core" | "plugin" | "custom" | "fixed" | "game";
+export type KeySource = "core" | "plugin" | "custom" | "fixed" | "game" | "unknown";
 export type GameKeyKind = "open-chat" | "channel" | "send" | "console";
 
 export interface KeyUse {
   /** 稳定 id：热键同设置页 / `named[].id`（assistant、record、quick-message-3…）；Esc 是 escape；游戏的键是 game.<配置 id>.<哪个键> */
   id: string;
+  /** 绑的命令（`kotone.call`、`voice-input.talk`）；提醒助手热键、快捷指令、Esc、游戏的键没有 */
+  command?: string;
   /** 设置里写的键；空 = 没设 */
   key: string;
   /** 规范写法（和录键得到的一样，Ctrl+Alt+Shift+主键）；没设 / 认不出为空 */

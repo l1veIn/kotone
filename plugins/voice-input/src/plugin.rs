@@ -12,6 +12,13 @@ use serde_json::Value;
 
 pub const PAGE: &str = "ui://kotone/voice-input/home";
 
+/// 清单里登记的命令（`[[commands]]` 的 id；完整名是 `voice-input.<id>`，ADR 040 D1）。
+pub const CMD_TALK: &str = "talk";
+pub const CMD_CHANNEL_CYCLE: &str = "channel-cycle";
+pub const CMD_RESEND_LAST: &str = "resend-last";
+pub const CMD_PP_TOGGLE: &str = "post-process-toggle";
+pub const CMD_PP_CYCLE: &str = "post-process-cycle";
+
 pub fn manifest() -> &'static Manifest {
     static MANIFEST: OnceLock<Manifest> = OnceLock::new();
     MANIFEST.get_or_init(|| {
@@ -62,6 +69,36 @@ mod tests {
         assert!(VoiceInputPlugin::new().tools().is_empty());
         assert_eq!(m.agent, kotone_plugin_api::AgentText::default());
         assert!(m.pages.iter().any(|p| p.uri == PAGE));
+    }
+
+    /// 清单里的命令就是本体对照表里语音输入的那 5 个（旧字段 `hotkey.key`、`channelCycleHotkey`…… 迁进热键表时
+    /// 写的就是这些完整名，ADR 040 D8）：“说话”按住，全部要语音识别；不给她工具，也不带默认键。
+    #[test]
+    fn commands_are_the_five_voice_input_keys() {
+        use kotone_plugin_api::CommandKind;
+        let m = manifest();
+        let ids: Vec<&str> = m.commands.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                CMD_TALK,
+                CMD_CHANNEL_CYCLE,
+                CMD_RESEND_LAST,
+                CMD_PP_TOGGLE,
+                CMD_PP_CYCLE
+            ]
+        );
+        let legacy: Vec<String> = kotone_core::hotkey_bindings::LEGACY
+            .iter()
+            .filter(|l| l.command.starts_with("voice-input."))
+            .map(|l| l.command.to_string())
+            .collect();
+        let full: Vec<String> = ids.iter().map(|id| format!("{}.{id}", m.id)).collect();
+        assert_eq!(full, legacy);
+        assert!(m.commands.iter().all(|c| c.listens));
+        let kinds: Vec<CommandKind> = m.commands.iter().map(|c| c.kind).collect();
+        assert_eq!(kinds[0], CommandKind::Hold);
+        assert!(kinds[1..].iter().all(|k| *k == CommandKind::Press));
     }
 
     #[test]

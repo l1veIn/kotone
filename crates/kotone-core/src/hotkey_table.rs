@@ -1,20 +1,19 @@
-//! 热键表（ADR 040 第 1 期）：Kotone 里所有的热键、固定的键（Esc）和游戏配置里往游戏里按的键放在一张表里，
-//! **冲突只在这里查**（D6）。「设置 → 热键」那一页、各页面改键时的冲突提示、`hotkeys.status` /
-//! `hotkeys.conflicts` 工具都读这里，前端只显示结果。
+//! 热键表（ADR 040）：Kotone 里所有的热键、固定的键（Esc）和游戏配置里往游戏里按的键放在一张表里，
+//! **冲突只在这里查**（D6）。「设置 → 热键」那一页、各页面改键时的冲突提示、`settings.update` 拒绝新冲突、
+//! 宿主和命令行登记热键（[`registration_plan`]）、`hotkeys.status` / `hotkeys.conflicts` 工具都读这里。
 //!
-//! 这一期只读：键还存在原来的字段里，每一项写着字段和在哪改（和设置说明 `settings_guide` 里的位置一致，
-//! 测试保证）；第 2 期才收成 `hotkeys.bindings`（D8）。游戏的聊天键、控制台触发键不是热键、不进表，
-//! 但参与冲突检查（D2）：热键和它们一样时，在游戏里按这个键会被 Kotone 拿走。
+//! 行从热键表（`hotkeys.bindings`，[`crate::hotkey_bindings`]）和命令目录（本体的 [`core_commands`]、插件清单里的
+//! `[[commands]]`）来；提醒助手热键（D10）、快捷指令（第 3 期，D5）还存在原来的地方，照旧列出。游戏的聊天键、
+//! 控制台触发键不是热键、不进表，但参与冲突检查（D2）：热键和它们一样时，在游戏里按这个键会被 Kotone 拿走。
 //!
 //! 冲突的规矩（和 [`crate::hotkey::combos_conflict`] 一样）：修饰键集合加主键完全相同才算；
 //! 只有 Esc 不看修饰键——录音时按 Esc 取消、她操作游戏时按 Esc 停下，都不管有没有按着 Ctrl / Shift / Alt。
 
 use serde::Serialize;
 
-use crate::hotkey::{
-    combos_conflict, parse_hotkey, HK_ASSISTANT, HK_AUTOMATION_STOP, HK_CHANNEL_CYCLE, HK_PP_CYCLE,
-    HK_PP_TOGGLE, HK_QUICK_MESSAGES, HK_RESEND_LAST, HK_RUNTIME_TOGGLE, VK_ESCAPE,
-};
+use crate::hotkey::{combos_conflict, parse_hotkey, HK_QUICK_MESSAGES, VK_ESCAPE};
+use crate::hotkey_bindings::{legacy_for, normalized, Binding, CMD_CALL, CMD_STOP};
+use crate::hotkey_commands::{core_commands, CommandKind, CommandSpec, CORE_SOURCE};
 use crate::profile::GameProfile;
 use crate::settings::{LegacyUpgrade, Settings};
 
@@ -24,6 +23,8 @@ pub const HK_RECORD: &str = "record";
 pub const HK_LEGACY_REMINDER: &str = "legacy-reminder";
 /// Esc：固定的键，不能改。
 pub const KEY_ESCAPE: &str = "escape";
+/// 热键和 Esc 撞上时的话（ADR 040 实施记录，主会话定的第 4 条）。
+pub const ESC_REASON: &str = "Esc 留给停下她和取消收音，换一个键";
 
 /// 这个键是谁的。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -31,7 +32,7 @@ pub const KEY_ESCAPE: &str = "escape";
 pub enum KeySource {
     /// Kotone 自己的（呼叫键、停下热键……）。
     Core,
-    /// 插件的（现在只有语音输入的 5 个，还写死在本体的设置里，ADR 040 第 2 期改成命令）。
+    /// 插件的（清单里 `[[commands]]` 登记的）。
     Plugin,
     /// 玩家自己加的（快捷指令）。
     Custom,
@@ -39,6 +40,8 @@ pub enum KeySource {
     Fixed,
     /// 游戏配置里往游戏里按的键：不是热键，不进表，只参与冲突检查。
     Game,
+    /// 表里有、这个版本找不到的（插件没装或被删了、新版本写的命令、第 3 期的工具 / 页面热键）：原样留着，不登记。
+    Unknown,
 }
 
 /// 游戏配置里的哪一个键。
@@ -59,9 +62,12 @@ pub enum GameKey {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyUse {
-    /// 稳定 id：热键和设置页、`hotkeys.status` 的 `named[].id` 一样（`assistant`、`record`、`quick-message-3`……）；
-    /// Esc 是 `escape`；游戏的键是 `game.<配置 id>.<哪个键>`（频道再加 `.<频道 id>`）。
+    /// 稳定 id：热键和设置页、`hotkeys.status` 的 `named[].id` 一样（`assistant`、`record`、`quick-message-3`……；
+    /// 没有旧 id 的命令就是命令的完整名）；Esc 是 `escape`；游戏的键是 `game.<配置 id>.<哪个键>`（频道再加 `.<频道 id>`）。
     pub id: String,
+    /// 绑的命令（`kotone.call`、`voice-input.talk`）；提醒助手热键、快捷指令、Esc、游戏的键没有。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
     /// 设置里写的键（空 = 没设）。
     pub key: String,
     /// 规范写法（`Ctrl+Alt+Shift+主键`，和录键得到的一样）；没设或认不出时为空。
@@ -87,11 +93,17 @@ pub struct KeyUse {
     /// 存在设置里的哪个字段（点分路径）；Esc 和游戏的键为空。
     #[serde(skip_serializing_if = "String::is_empty")]
     pub field: String,
-    /// false：插件关着，这个键现在没登记（照样参与冲突检查：打开插件就会撞上）。
+    /// false：插件关着（或命令找不到），这个键现在没登记（插件关着的照样参与冲突检查：打开插件就会撞上）。
     pub enabled: bool,
     /// 和谁冲突（别的项的 id）；只在 [`table`] 的结果里填。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub conflicts: Vec<String>,
+    /// 按住（按下、松开都要）；登记用，不给界面。
+    #[serde(skip)]
+    pub hold: bool,
+    /// 要语音识别（识别没在跑时只看不吞、按了提示）；登记用，不给界面。
+    #[serde(skip)]
+    pub listens: bool,
 }
 
 impl KeyUse {
@@ -111,20 +123,21 @@ impl KeyUse {
     }
 }
 
-/// 插件在表里的样子（宿主给：本体不认识具体的插件）。
+/// 一个插件在表里的样子（宿主给：本体不认识具体的插件）：名字、开没开、清单里登记的命令。
 #[derive(Debug, Clone, Copy)]
 pub struct PluginInfo<'a> {
     pub id: &'a str,
     pub name: &'a str,
     pub enabled: bool,
+    pub commands: &'a [CommandSpec],
 }
 
-/// 查表要的东西：设置、全部游戏配置、语音输入插件（它的 5 个键还写死在本体的设置里）。
+/// 查表要的东西：设置、全部游戏配置、插件（按左侧栏 / 插件表的顺序）。
 #[derive(Debug, Clone, Copy)]
 pub struct Sources<'a> {
     pub settings: &'a Settings,
     pub profiles: &'a [GameProfile],
-    pub voice_input: PluginInfo<'a>,
+    pub plugins: &'a [PluginInfo<'a>],
 }
 
 /// 「设置 → 热键」那一页：全部热键（本体的、插件的、自己加的、固定的），每一项带冲突；
@@ -153,156 +166,108 @@ fn combo_of(key: &str) -> String {
         .unwrap_or_default()
 }
 
-struct Row<'a> {
-    id: &'a str,
-    key: &'a str,
-    label: &'a str,
-    page: &'a str,
-    field: &'a str,
+fn row(id: &str, key: &str, label: &str, source: KeySource) -> KeyUse {
+    KeyUse {
+        id: id.into(),
+        command: None,
+        key: key.trim().into(),
+        combo: combo_of(key),
+        source,
+        owner: None,
+        owner_name: None,
+        game_key: None,
+        label: label.into(),
+        detail: String::new(),
+        page: String::new(),
+        field: String::new(),
+        enabled: true,
+        conflicts: Vec::new(),
+        hold: false,
+        listens: false,
+    }
 }
 
-fn binding(row: Row<'_>, source: KeySource, plugin: Option<PluginInfo<'_>>) -> KeyUse {
+/// 一个命令那一行：键是表里这个命令的第一条（没绑为空）；id、字段、在哪改照对照表（没有旧字段的命令写热键表）。
+fn command_row(
+    s: &Settings,
+    name: &str,
+    spec: &CommandSpec,
+    plugin: Option<&PluginInfo<'_>>,
+) -> KeyUse {
+    let legacy = legacy_for(name);
+    let field = match legacy {
+        Some(_) if name == CMD_CALL && s.ui.legacy_upgrade == LegacyUpgrade::OptedIn => {
+            "assistant.companionBindings.hotkey"
+        }
+        Some(l) => l.field,
+        None => "hotkeys.bindings",
+    };
     KeyUse {
-        id: row.id.into(),
-        key: row.key.trim().into(),
-        combo: combo_of(row.key),
-        source,
+        command: Some(name.into()),
         owner: plugin.map(|p| p.id.into()),
         owner_name: plugin.map(|p| p.name.into()),
-        game_key: None,
-        label: row.label.into(),
-        detail: String::new(),
-        page: row.page.into(),
-        field: row.field.into(),
+        page: legacy.map_or("设置 → 热键", |l| l.page).into(),
+        field: field.into(),
         enabled: plugin.map_or(true, |p| p.enabled),
-        conflicts: Vec::new(),
+        hold: spec.kind == CommandKind::Hold,
+        listens: spec.listens,
+        ..row(
+            legacy.map_or(name, |l| l.id),
+            s.binding_key(name),
+            &spec.name,
+            if plugin.is_some() {
+                KeySource::Plugin
+            } else {
+                KeySource::Core
+            },
+        )
     }
 }
 
-/// 表里的全部热键，顺序 = 页面上的顺序：本体的（Esc 跟在后面）→ 插件的 → 自己加的。
-/// 只列这个玩家用得上的：0.1.x 升级后只用语音输入的人没有呼叫键、停下热键和快捷指令；
-/// 提醒助手热键只有升级用户有（和 `hotkey.rs` 登记的一致）。
+/// 表里的全部热键，顺序 = 页面上的顺序 = 登记时谁先拿到键：本体的（Esc 跟在后面）→ 插件的 → 自己加的
+/// → 这个版本找不到的。没绑键的命令也列出来（玩家看得到还能设什么）。只列这个玩家用得上的：0.1.x 升级后只用
+/// 语音输入的人没有呼叫键、停下热键和快捷指令；提醒助手热键只有升级用户有。
 pub fn bindings(src: &Sources<'_>) -> Vec<KeyUse> {
-    let s = src.settings;
+    let settings = normalized(src.settings);
+    let s: &Settings = &settings;
     let legacy_only = s.ui.legacy_upgrade.uses_legacy_assistant();
     let mut out = Vec::new();
-    if !legacy_only {
-        let field = if s.ui.legacy_upgrade == LegacyUpgrade::OptedIn {
-            "assistant.companionBindings.hotkey"
-        } else {
-            "assistant.hotkey"
-        };
-        out.push(binding(
-            Row {
-                id: HK_ASSISTANT,
-                key: s.call_hotkey(),
-                label: "呼叫键",
-                page: "琴音 → 唤醒 → 呼叫键",
-                field,
-            },
-            KeySource::Core,
-            None,
-        ));
-        out.push(binding(
-            Row {
-                id: HK_AUTOMATION_STOP,
-                key: &s.automation_stop_hotkey,
-                label: "停下热键",
-                page: "设置 → 系统 → 停下",
-                field: "automationStopHotkey",
-            },
-            KeySource::Core,
-            None,
-        ));
+    for spec in core_commands() {
+        let name = format!("{CORE_SOURCE}.{}", spec.id);
+        if legacy_only && (name == CMD_CALL || name == CMD_STOP) {
+            continue;
+        }
+        out.push(command_row(s, &name, &spec, None));
     }
-    out.push(binding(
-        Row {
-            id: HK_RUNTIME_TOGGLE,
-            key: &s.runtime_toggle_hotkey,
-            label: "启动 / 停止本地语音识别热键",
-            page: "设置 → 模型 → 语音识别",
-            field: "runtimeToggleHotkey",
-        },
-        KeySource::Core,
-        None,
-    ));
     if s.ui.legacy_upgrade.has_legacy_reminders() {
-        out.push(binding(
-            Row {
-                id: HK_LEGACY_REMINDER,
-                key: s.legacy_reminder_hotkey(),
-                label: "提醒助手热键",
-                page: "提醒助手 → 提醒设置",
-                field: "assistant.hotkey",
-            },
-            KeySource::Core,
-            None,
-        ));
+        out.push(KeyUse {
+            page: "提醒助手 → 提醒设置".into(),
+            field: "assistant.hotkey".into(),
+            hold: s.assistant.interaction_mode
+                == crate::assistant::AssistantInteractionMode::PushToTalk,
+            ..row(
+                HK_LEGACY_REMINDER,
+                s.legacy_reminder_hotkey(),
+                "提醒助手热键",
+                KeySource::Core,
+            )
+        });
     }
     out.push(KeyUse {
         detail: "取消这次录音；她操作游戏时让她停下".into(),
-        ..binding(
-            Row {
-                id: KEY_ESCAPE,
-                key: "Escape",
-                label: "Esc",
-                page: "",
-                field: "",
-            },
-            KeySource::Fixed,
-            None,
-        )
+        ..row(KEY_ESCAPE, "Escape", "Esc", KeySource::Fixed)
     });
-
-    let voice = Some(src.voice_input);
-    let others = "插件 → 语音输入 → 输入 → 其他热键";
-    for row in [
-        Row {
-            id: HK_RECORD,
-            key: &s.hotkey.key,
-            label: "语音输入热键",
-            page: "插件 → 语音输入 → 输入",
-            field: "hotkey.key",
-        },
-        Row {
-            id: HK_CHANNEL_CYCLE,
-            key: &s.channel_cycle_hotkey,
-            label: "切换频道热键",
-            page: others,
-            field: "channelCycleHotkey",
-        },
-        Row {
-            id: HK_RESEND_LAST,
-            key: &s.resend_last_hotkey,
-            label: "重发上一句热键",
-            page: others,
-            field: "resendLastHotkey",
-        },
-        Row {
-            id: HK_PP_TOGGLE,
-            key: &s.toggle_post_processing_hotkey,
-            label: "开关文字处理热键",
-            page: others,
-            field: "togglePostProcessingHotkey",
-        },
-        Row {
-            id: HK_PP_CYCLE,
-            key: &s.cycle_post_processing_hotkey,
-            label: "切换文字处理方案热键",
-            page: others,
-            field: "cyclePostProcessingHotkey",
-        },
-    ] {
-        out.push(binding(row, KeySource::Plugin, voice));
+    for plugin in src.plugins {
+        for spec in plugin.commands {
+            let name = format!("{}.{}", plugin.id, spec.id);
+            out.push(command_row(s, &name, spec, Some(plugin)));
+        }
     }
-
     if !legacy_only {
         for (index, message) in s.assistant.companion.quick_messages.iter().enumerate() {
             let Some(id) = HK_QUICK_MESSAGES.get(index) else {
                 break;
             };
-            let label = format!("快捷指令 {}", index + 1);
-            let field = format!("assistant.companion.quickMessages.{index}.hotkey");
             let detail = if message.runs_automation() {
                 format!("运行自动化 {}", message.automation_id.trim())
             } else if message.label.trim().is_empty() {
@@ -312,21 +277,61 @@ pub fn bindings(src: &Sources<'_>) -> Vec<KeyUse> {
             };
             out.push(KeyUse {
                 detail,
-                ..binding(
-                    Row {
-                        id,
-                        key: &message.hotkey,
-                        label: &label,
-                        page: "琴音 → 唤醒 → 快捷指令",
-                        field: &field,
-                    },
+                page: "琴音 → 唤醒 → 快捷指令".into(),
+                field: format!("assistant.companion.quickMessages.{index}.hotkey"),
+                // 按了也会接通通话：要语音识别（ADR 040 实施记录，主会话定的第 2 条）
+                listens: true,
+                ..row(
+                    id,
+                    &message.hotkey,
+                    &format!("快捷指令 {}", index + 1),
                     KeySource::Custom,
-                    None,
                 )
             });
         }
     }
+    // 这个版本认识的命令（本体的、插件清单里的；0.1.x 用户看不到的呼叫、停下也算认识）
+    let known: Vec<String> = core_commands()
+        .iter()
+        .map(|c| format!("{CORE_SOURCE}.{}", c.id))
+        .chain(
+            src.plugins
+                .iter()
+                .flat_map(|p| p.commands.iter().map(move |c| format!("{}.{}", p.id, c.id))),
+        )
+        .collect();
+    for (index, binding) in s.hotkeys.bindings.iter().enumerate() {
+        if binding
+            .command_name()
+            .is_some_and(|c| known.iter().any(|k| k == c))
+        {
+            continue;
+        }
+        out.push(unknown_row(index, binding));
+    }
     out
+}
+
+/// 这个版本找不到的那一条（插件没装、新版本的命令、第 3 期的工具 / 页面热键）。
+fn unknown_row(index: usize, binding: &Binding) -> KeyUse {
+    let what = binding
+        .command_name()
+        .or(binding.tool())
+        .or(binding.page())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("第 {} 条", index + 1));
+    KeyUse {
+        command: binding.command_name().map(str::to_string),
+        page: "设置 → 热键".into(),
+        field: "hotkeys.bindings".into(),
+        enabled: false,
+        ..row(
+            &format!("binding.{index}"),
+            binding.key(),
+            &what,
+            KeySource::Unknown,
+        )
+    }
 }
 
 /// 全部游戏配置里往游戏里按的键：打开聊天框、各频道自己的开框键、发送、控制台触发键。
@@ -397,6 +402,9 @@ pub fn game_keys(profiles: &[GameProfile], active_profile_id: Option<&str>) -> V
                 field: String::new(),
                 enabled: true,
                 conflicts: Vec::new(),
+                command: None,
+                hold: false,
+                listens: false,
             });
         }
     }
@@ -427,7 +435,7 @@ pub fn table(src: &Sources<'_>) -> HotkeyTable {
 }
 
 /// 把 `except` 这一项改成 `key` 之前查一次：会撞上谁（热键、Esc、游戏配置里的键），这个键游戏里常不常用。
-/// `except` 是正在改的那一项的 id（不和自己比）；不传 = 新加的键。
+/// `except` 是正在改的那一项的 id 或命令名（不和自己比）；不传 = 新加的键。
 pub fn check(src: &Sources<'_>, key: &str, except: Option<&str>) -> HotkeyCheck {
     let key = key.trim();
     let conflicts = bindings(src)
@@ -436,13 +444,134 @@ pub fn check(src: &Sources<'_>, key: &str, except: Option<&str>) -> HotkeyCheck 
             src.profiles,
             src.settings.active_profile_id.as_deref(),
         ))
-        .filter(|item| Some(item.id.as_str()) != except && item.collides(key))
+        .filter(|item| {
+            let is_self =
+                except.is_some_and(|e| item.id == e || item.command.as_deref() == Some(e));
+            !is_self && item.collides(key)
+        })
         .collect();
     HotkeyCheck {
         key: key.into(),
         conflicts,
         warnings: common_game_key_warnings(key),
     }
+}
+
+/// 识别没在跑时，按了要“听一句”的热键在哪说“还没准备好”。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HintAt {
+    /// 她的气泡（呼叫键、快捷指令）。
+    Bubble,
+    /// 语音输入的悬浮窗（插件的命令）。
+    Overlay,
+}
+
+/// 登记计划里的一条（宿主和命令行照它登记，谁先拿到键只在这里算一次）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Planned {
+    /// 登记用的 id（第 1 期的 id、命令的完整名、`legacy-reminder`、`quick-message-n`）。
+    pub id: String,
+    pub command: Option<String>,
+    /// 设置里写的键。
+    pub combo: String,
+    /// 按下、松开都要。
+    pub hold: bool,
+    /// 识别没在跑时也登记（停下热键、启停本地语音识别）。
+    pub always: bool,
+    /// 要语音识别：识别没在跑时只看不吞，按了在这里提示。
+    pub hint: Option<HintAt>,
+    /// 没登记的原因（撞了 Esc、被前面的热键占了、命令找不到）。
+    pub error: Option<String>,
+}
+
+/// 登记计划：表里每个绑了键、插件开着的热键一条，顺序 = 表的顺序 = 谁先拿到键（本体 → 提醒助手 → 插件 → 快捷指令）。
+/// 撞上 Esc 的不登记（Esc 留给停下她和取消收音）；撞上前面已经拿到的、找不到命令的也不登记，都写原因。
+/// 和游戏聊天键一样的照旧登记（表里标红；写入时 [`new_conflict_error`] 会拦新的）。
+pub fn registration_plan(src: &Sources<'_>) -> Vec<Planned> {
+    let rows = bindings(src);
+    let escape = rows.iter().find(|r| r.id == KEY_ESCAPE).cloned();
+    let mut taken: Vec<&KeyUse> = Vec::new();
+    let mut plan = Vec::new();
+    for row in &rows {
+        if row.key.is_empty() || row.source == KeySource::Fixed {
+            continue;
+        }
+        if !row.enabled && row.source != KeySource::Unknown {
+            continue; // 插件关着：不登记，也不占键
+        }
+        let error = if row.source == KeySource::Unknown {
+            Some("这个版本找不到这个命令（插件没装或被删了，或者是更新的版本加的）".to_string())
+        } else if escape.as_ref().is_some_and(|esc| esc.collides(&row.key)) {
+            Some(ESC_REASON.to_string())
+        } else {
+            taken
+                .iter()
+                .find(|prior| prior.collides(&row.key))
+                .map(|prior| format!("和「{}」用的是同一个键，没生效", prior.label))
+        };
+        if error.is_none() {
+            taken.push(row);
+        }
+        let always = row.source == KeySource::Core && row.command.is_some() && !row.listens;
+        let hint = row.listens.then_some(match row.source {
+            KeySource::Plugin => HintAt::Overlay,
+            _ => HintAt::Bubble,
+        });
+        plan.push(Planned {
+            id: row.id.clone(),
+            command: row.command.clone(),
+            combo: row.key.clone(),
+            hold: row.hold,
+            always,
+            hint,
+            error,
+        });
+    }
+    plan
+}
+
+/// 一次修改（`before` → `after`）新造成的冲突：改了键、新加的热键撞上了别的热键、Esc 或游戏配置里的键，就说人话、
+/// 说下一步（不让存，ADR 040 实施记录主会话定的第 1 条）。已经冲突着、这次没动的不拦。没有返回 None。
+pub fn new_conflict_error(before: &Sources<'_>, after: &Sources<'_>) -> Option<String> {
+    let old = bindings(before);
+    let rows = bindings(after);
+    let games = game_keys(after.profiles, after.settings.active_profile_id.as_deref());
+    let unchanged = |row: &KeyUse| {
+        old.iter().any(|o| {
+            o.key == row.key
+                && (o.id == row.id
+                    || (o.source == KeySource::Custom && row.source == KeySource::Custom))
+        })
+    };
+    for row in &rows {
+        if row.key.is_empty()
+            || matches!(row.source, KeySource::Fixed | KeySource::Unknown)
+            || unchanged(row)
+        {
+            continue;
+        }
+        let key = &row.key;
+        for other in &rows {
+            if other.id == row.id || other.source == KeySource::Unknown || !other.collides(key) {
+                continue;
+            }
+            if other.source == KeySource::Fixed {
+                return Some(format!("「{key}」：{ESC_REASON}。"));
+            }
+            return Some(format!(
+                "「{key}」已经是「{}」的热键：先在「设置 → 热键」把它换掉，或者换一个键。",
+                other.label
+            ));
+        }
+        if let Some(game) = games.iter().find(|g| g.collides(key)) {
+            return Some(format!(
+                "「{key}」是《{}》的{}，设成热键以后在游戏里按它会被 Kotone 拿走，换一个键。",
+                game.owner_name.as_deref().unwrap_or_default(),
+                game.label
+            ));
+        }
+    }
+    None
 }
 
 /// 这个键是不是常见的游戏 / 系统键（只提示、不拦；首次引导和 `hotkeys.conflicts` 用）。

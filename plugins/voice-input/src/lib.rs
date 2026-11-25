@@ -10,15 +10,19 @@
 //! - [`records`]：识别记录草稿（旁听录音）、落账、历史音频裁剪；
 //! - [`hotkeys`]：聊天频道切换、文字处理开关 / 切换流程。
 //!
+//! 能绑热键的 5 个命令登记在 `plugin.toml` 的 `[[commands]]`（ADR 040 D1）：宿主按热键时经本体的“听一句”
+//! 调 [`AfterHearing::command`]（这里的实现），插件不碰键盘钩子（D7）。
+//!
 //! - [`plugin`]：插件清单那一面（ADR 038 D5）。没有给她的工具：她替玩家发言是本体的 `game_chat.send`（ADR 039 D2）。
 //!
 //! 锁的顺序照本体：op → 状态锁 → 这里的 `state`。拿着 `state` 时不调本体的任何方法。
 
 use std::any::Any;
-use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use kotone_core::assistant::SessionPurpose;
+use kotone_core::hotkey::HotkeyMode;
+use kotone_core::hotkey_commands::Edge;
 use kotone_core::inject::TargetWindow;
 use kotone_core::orchestrator::{
     AfterHearing, BoxFuture, Orchestrator, OrchestratorState, PendingText, RecordDraft,
@@ -71,6 +75,50 @@ impl VoiceInput {
 impl AfterHearing for VoiceInput {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn owner(&self) -> &str {
+        &plugin::manifest().id
+    }
+
+    /// 清单里登记的 5 个命令（`plugin.toml` 的 `[[commands]]`，ADR 040 D1），宿主经“听一句”转进来。
+    /// “说话”是按住的命令：按住还是按一下由交互模式决定（对讲机按住说、松开发；其余按一下开始、再按一下），
+    /// 本体的“听一句”照旧管收音和入场票。其余 4 个按下时做一次（任意状态都接受，和会话正交）。
+    fn command<'a>(
+        &'a self,
+        orch: &'a Orchestrator,
+        command: &'a str,
+        edge: Edge,
+        input_ticket: Option<u64>,
+    ) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            let pressed = edge == Edge::Press;
+            match command {
+                plugin::CMD_TALK => {
+                    let mode = {
+                        let settings = orch.settings().read().unwrap();
+                        kotone_core::interaction::effective_hotkey_mode(&settings)
+                    };
+                    match (mode, input_ticket) {
+                        (HotkeyMode::Hold, Some(ticket)) => {
+                            orch.on_hotkey_hold_with_ticket(pressed, ticket).await
+                        }
+                        (HotkeyMode::Hold, None) => orch.on_hotkey_hold(pressed).await,
+                        (HotkeyMode::Toggle, _) if !pressed => {}
+                        (HotkeyMode::Toggle, Some(ticket)) => {
+                            orch.on_hotkey_toggle_with_ticket(ticket).await
+                        }
+                        (HotkeyMode::Toggle, None) => orch.on_hotkey_toggle().await,
+                    }
+                }
+                _ if !pressed => {}
+                plugin::CMD_CHANNEL_CYCLE => self.on_cycle_channel(orch).await,
+                plugin::CMD_RESEND_LAST => self.resend_last(orch).await,
+                plugin::CMD_PP_TOGGLE => hotkeys::toggle_post_processing(orch).await,
+                plugin::CMD_PP_CYCLE => hotkeys::cycle_post_processing(orch).await,
+                other => kotone_core::log::log(&format!("语音输入没有命令 {other}")),
+            }
+        })
     }
 
     /// 开始收音：history 开着且是听写时建识别记录草稿（与评测录档共用 process case id）。
@@ -204,18 +252,6 @@ pub trait VoiceInputExt: Sized {
 
     /// 接上的语音输入（没接时 None）。
     fn voice_input(&self) -> Option<&VoiceInput>;
-
-    /// 重发最近一条（见 [`VoiceInput::resend_last`]）；没接语音输入时什么都不做。
-    fn resend_last(&self) -> impl Future<Output = ()> + Send;
-
-    /// 聊天频道切换键（见 [`VoiceInput::on_cycle_channel`]）；没接语音输入时什么都不做。
-    fn on_cycle_channel(&self) -> impl Future<Output = ()> + Send;
-
-    /// 文字处理开关热键（见 [`hotkeys::toggle_post_processing`]）。
-    fn on_post_processing_toggle(&self) -> impl Future<Output = ()> + Send;
-
-    /// 切换文字处理流程热键（见 [`hotkeys::cycle_post_processing`]）。
-    fn on_post_processing_cycle(&self) -> impl Future<Output = ()> + Send;
 }
 
 impl VoiceInputExt for Orchestrator {
@@ -226,26 +262,6 @@ impl VoiceInputExt for Orchestrator {
     fn voice_input(&self) -> Option<&VoiceInput> {
         self.after_hearing()
             .and_then(|after| after.as_any().downcast_ref::<VoiceInput>())
-    }
-
-    async fn resend_last(&self) {
-        if let Some(voice) = self.voice_input() {
-            voice.resend_last(self).await;
-        }
-    }
-
-    async fn on_cycle_channel(&self) {
-        if let Some(voice) = self.voice_input() {
-            voice.on_cycle_channel(self).await;
-        }
-    }
-
-    fn on_post_processing_toggle(&self) -> impl Future<Output = ()> + Send {
-        hotkeys::toggle_post_processing(self)
-    }
-
-    fn on_post_processing_cycle(&self) -> impl Future<Output = ()> + Send {
-        hotkeys::cycle_post_processing(self)
     }
 }
 

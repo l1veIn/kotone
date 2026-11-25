@@ -10,7 +10,7 @@
 | 命令 | 说明 |
 |------|------|
 | `send --text <文本> [--profile lol] [--clipboard] [--delay-ms N]` | 一次性注入文本到前台窗口 |
-| `listen [--engine <id>]` | 热键模式：LL 钩子 → orchestrator → JSONL 事件流（Ctrl+C 退出，码 2） |
+| `listen [--engine <id>]` | 热键模式：LL 钩子 → orchestrator → JSONL 事件流（Ctrl+C 退出，码 2）。登记语音输入的说话、切换频道、重发上一句三个热键，照热键表（`hotkeys.bindings`）和桌面端同一个登记计划：被前面的占了键、撞了 Esc 的不登记并告警；`--key` / `--mode` 只覆盖说话那一个 |
 | `listen --wav <file> [--speed N] [--engine <id>] [--profile <id>]` | wav 直灌会话模式（可固定音频 A/B 对比 profile 热词，见下） |
 | `listen --no-hotkey --duration <秒> [--engine <id>] [--send]` | 无热键会话模式（配合虚拟声卡）；缺省只识别到预览、不碰任何窗口，加 `--send` 才往前台窗口打字 |
 | `download <模型id>` | 下载模型（清单内任意 id，如 `x-asr-480ms-streaming-zh-en-punct-int8-2026-06-05` / `silero-vad`；镜像策略见 download.source） |
@@ -39,6 +39,8 @@
 | `ocr install [--model-dir <目录>] [--from-dir <目录>] [--json]` | 显式安装本地韩文 OCR 模型（PP-OCRv5 mobile，约 18.3 MB）；校验通过才发布 |
 
 ### config set 支持的键
+
+热键存在热键表 `hotkeys.bindings` 里（[ADR 040](adr/040-hotkeys-belong-to-core.md) D8），`hotkey.key` 这类旧字段是它的镜像：`config set hotkey.key F8` 照旧能用，写进表里；`config get` 读到的是表里的值。改成和别的热键、Esc、游戏配置的聊天键一样的键不写入（退出码 2，说明撞了谁）。
 
 `hotkey.key`、`hotkey.mode`(hold/toggle)、`hotkeyBackend`(auto/llhook/register)、
 `sttEngine`（校验已注册）、`activeProfileId`、`autoSend`(true/false)、

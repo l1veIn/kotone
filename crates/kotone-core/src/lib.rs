@@ -9,6 +9,7 @@
 //! - `send_to_game` / `input_lock`：发到游戏的唯一入口（ADR 041）和一把输入锁（实例由宿主建）
 //! - `hotkey`：HotkeySource 端口 + 键名解析/匹配状态机（纯逻辑）
 //! - `hotkey_bindings`：热键表怎么存（`hotkeys.bindings`）、从旧字段造、旧字段照表写回（ADR 040 D8）
+//! - `hotkey_commands`：命令（能绑热键的一件事，本体的和插件 `[[commands]]` 的同一个结构，ADR 040 D1）
 //! - `hotkey_table`：全部热键、Esc 和游戏配置里的键列成一张表，冲突只在这里查（ADR 040 D6）
 //! - `postprocess`：TextProcessor/ProcessorFactory 端口 + 注册表 + 有序 pipeline runner
 //! - `stt`：SttEngine/SttSession 端口 + EngineRegistry 容器（引擎实例由 kotone-stt 注入）
@@ -27,6 +28,7 @@ pub mod games;
 pub mod history;
 pub mod hotkey;
 pub mod hotkey_bindings;
+pub mod hotkey_commands;
 pub mod hotkey_table;
 pub mod inject;
 pub mod input_lock;

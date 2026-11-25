@@ -2,14 +2,56 @@
 
 use super::*;
 use crate::assistant::QuickMessage;
+use crate::hotkey::{
+    HK_ASSISTANT, HK_AUTOMATION_STOP, HK_CHANNEL_CYCLE, HK_PP_CYCLE, HK_PP_TOGGLE, HK_RESEND_LAST,
+    HK_RUNTIME_TOGGLE,
+};
+use crate::hotkey_bindings::{Binding, CMD_TALK};
 use crate::profile::ConsoleChat;
 use crate::settings::LegacyUpgrade;
 
-const VOICE: PluginInfo<'static> = PluginInfo {
-    id: "voice-input",
-    name: "语音输入",
-    enabled: true,
-};
+/// 语音输入插件清单里的 5 个命令（`plugins/voice-input/plugin.toml`；插件那边有测试对着本体的对照表）。
+fn voice_commands() -> &'static [CommandSpec] {
+    static COMMANDS: std::sync::OnceLock<Vec<CommandSpec>> = std::sync::OnceLock::new();
+    COMMANDS.get_or_init(|| {
+        let spec = |id: &str, name: &str, kind: CommandKind| CommandSpec {
+            id: id.into(),
+            name: name.into(),
+            description: String::new(),
+            kind,
+            listens: true,
+        };
+        vec![
+            spec("talk", "语音输入热键", CommandKind::Hold),
+            spec("channel-cycle", "切换频道热键", CommandKind::Press),
+            spec("resend-last", "重发上一句热键", CommandKind::Press),
+            spec(
+                "post-process-toggle",
+                "开关文字处理热键",
+                CommandKind::Press,
+            ),
+            spec(
+                "post-process-cycle",
+                "切换文字处理方案热键",
+                CommandKind::Press,
+            ),
+        ]
+    })
+}
+
+fn voice(enabled: bool) -> PluginInfo<'static> {
+    PluginInfo {
+        id: "voice-input",
+        name: "语音输入",
+        enabled,
+        commands: voice_commands(),
+    }
+}
+
+fn plugins_on() -> &'static [PluginInfo<'static>] {
+    static ON: std::sync::OnceLock<Vec<PluginInfo<'static>>> = std::sync::OnceLock::new();
+    ON.get_or_init(|| vec![voice(true)])
+}
 
 fn profiles() -> Vec<GameProfile> {
     let mut dota = GameProfile::builtin_dota2();
@@ -30,7 +72,7 @@ fn check_ids(settings: &Settings, key: &str, except: Option<&str>) -> Vec<String
     let src = Sources {
         settings,
         profiles: &profiles,
-        voice_input: VOICE,
+        plugins: plugins_on(),
     };
     check(&src, key, except)
         .conflicts
@@ -44,7 +86,7 @@ fn table_of(settings: &Settings) -> HotkeyTable {
     table(&Sources {
         settings,
         profiles: &profiles,
-        voice_input: VOICE,
+        plugins: plugins_on(),
     })
 }
 
@@ -130,14 +172,11 @@ fn core_against_plugin() {
     );
     // 插件关着也算：键还在设置里，打开插件就会撞上
     let profiles = profiles();
-    let off = PluginInfo {
-        enabled: false,
-        ..VOICE
-    };
+    let off = [voice(false)];
     let src = Sources {
         settings: &settings,
         profiles: &profiles,
-        voice_input: off,
+        plugins: &off,
     };
     let conflicts = check(&src, "CapsLock", Some(HK_ASSISTANT)).conflicts;
     assert_eq!(conflicts.len(), 1);
@@ -197,7 +236,7 @@ fn against_game_chat_keys() {
     let src = Sources {
         settings: &settings,
         profiles: &profiles,
-        voice_input: VOICE,
+        plugins: plugins_on(),
     };
     let lol = &check(&src, "Enter", None).conflicts[0];
     assert_eq!(
@@ -227,7 +266,7 @@ fn against_the_console_trigger_key() {
     let src = Sources {
         settings: &settings,
         profiles: &builtin,
-        voice_input: VOICE,
+        plugins: plugins_on(),
     };
     assert!(check(&src, "F23", Some(HK_ASSISTANT)).conflicts.is_empty());
 }
@@ -368,10 +407,233 @@ fn warnings_still_flag_common_game_keys() {
     let src = Sources {
         settings: &settings,
         profiles: &profiles,
-        voice_input: VOICE,
+        plugins: plugins_on(),
     };
     assert_eq!(check(&src, "F1", Some(HK_ASSISTANT)).warnings.len(), 1);
     assert!(check(&src, "Ctrl+F9", Some(HK_ASSISTANT))
         .warnings
         .is_empty());
+}
+
+fn plan_of(settings: &Settings) -> Vec<Planned> {
+    registration_plan(&Sources {
+        settings,
+        profiles: &[],
+        plugins: plugins_on(),
+    })
+}
+
+fn planned<'a>(plan: &'a [Planned], id: &str) -> &'a Planned {
+    plan.iter()
+        .find(|p| p.id == id)
+        .unwrap_or_else(|| panic!("{id} 不在登记计划里"))
+}
+
+#[test]
+fn the_plan_follows_the_table_order_and_says_when_each_key_registers() {
+    let mut settings = Settings::default();
+    settings.set_binding(crate::hotkey_bindings::CMD_CHANNEL_CYCLE, "Shift+CapsLock");
+    settings.assistant.companion.quick_messages = vec![quick("F8", "集合打龙")];
+    settings.sync_hotkey_mirrors();
+    let plan = plan_of(&settings);
+    let ids: Vec<&str> = plan.iter().map(|p| p.id.as_str()).collect();
+    // 没绑的（启停识别、重发……）不登记
+    assert_eq!(
+        ids,
+        vec![
+            HK_ASSISTANT,
+            HK_AUTOMATION_STOP,
+            HK_RECORD,
+            HK_CHANNEL_CYCLE,
+            HK_QUICK_MESSAGES[0]
+        ]
+    );
+    assert!(plan.iter().all(|p| p.error.is_none()));
+    // 停下一直登记；呼叫、快捷指令要听（识别没跑时只看不吞、气泡提示）；语音输入的命令在悬浮窗提示
+    let stop = planned(&plan, HK_AUTOMATION_STOP);
+    assert!(stop.always && stop.hint.is_none());
+    let call = planned(&plan, HK_ASSISTANT);
+    assert_eq!((call.always, call.hint), (false, Some(HintAt::Bubble)));
+    assert_eq!(
+        call.command.as_deref(),
+        Some(crate::hotkey_bindings::CMD_CALL)
+    );
+    let talk = planned(&plan, HK_RECORD);
+    assert_eq!(
+        (talk.always, talk.hold, talk.hint),
+        (false, true, Some(HintAt::Overlay))
+    );
+    assert_eq!(planned(&plan, HK_CHANNEL_CYCLE).hint, Some(HintAt::Overlay));
+    assert_eq!(
+        planned(&plan, HK_QUICK_MESSAGES[0]).hint,
+        Some(HintAt::Bubble)
+    );
+}
+
+#[test]
+fn the_first_one_keeps_a_shared_key_and_esc_is_never_taken() {
+    let mut settings = Settings {
+        automation_stop_hotkey: "Ctrl+Backquote".into(),
+        runtime_toggle_hotkey: "Ctrl+Escape".into(),
+        ..Default::default()
+    };
+    settings.assistant.companion.quick_messages = vec![quick("CapsLock", "集合")];
+    let plan = plan_of(&settings);
+    assert!(
+        planned(&plan, HK_ASSISTANT).error.is_none(),
+        "表里靠前的先拿到"
+    );
+    assert_eq!(
+        planned(&plan, HK_AUTOMATION_STOP).error.as_deref(),
+        Some("和「呼叫键」用的是同一个键，没生效")
+    );
+    assert_eq!(
+        planned(&plan, HK_RUNTIME_TOGGLE).error.as_deref(),
+        Some(ESC_REASON)
+    );
+    assert!(planned(&plan, HK_RECORD).error.is_none());
+    assert_eq!(
+        planned(&plan, HK_QUICK_MESSAGES[0]).error.as_deref(),
+        Some("和「语音输入热键」用的是同一个键，没生效")
+    );
+    // 和游戏聊天键一样的照旧登记（表里标红；写入时才拦）
+    let enter = Settings {
+        hotkey: crate::settings::HotkeyConfig {
+            key: "Enter".into(),
+            mode: crate::hotkey::HotkeyMode::Toggle,
+        },
+        ..Default::default()
+    };
+    assert!(planned(&plan_of(&enter), HK_RECORD).error.is_none());
+}
+
+#[test]
+fn plugin_off_unknown_commands_and_legacy_reminders_in_the_plan() {
+    let mut settings = Settings::default();
+    settings
+        .hotkeys
+        .bindings
+        .push(Binding::command("F7", "someone.new-thing"));
+    settings.hotkeys.bindings.push(Binding(
+        serde_json::json!({"key": "F6", "page": "ui://kotone/lol/tier"}),
+    ));
+    let off = [voice(false)];
+    let plan = registration_plan(&Sources {
+        settings: &settings,
+        profiles: &[],
+        plugins: &off,
+    });
+    assert!(
+        plan.iter().all(|p| p.id != HK_RECORD),
+        "插件关着：语音输入的键不登记"
+    );
+    let unknown: Vec<&Planned> = plan
+        .iter()
+        .filter(|p| p.id.starts_with("binding."))
+        .collect();
+    assert_eq!(unknown.len(), 2);
+    assert!(unknown.iter().all(|p| p.error.is_some()));
+    // 表里也列出来（标“找不到”），条目原样留着
+    let table = table_of(&settings);
+    assert!(table
+        .bindings
+        .iter()
+        .any(|b| b.source == KeySource::Unknown && b.label == "someone.new-thing"));
+
+    // 0.1.x 升级用户的提醒助手热键：按交互模式按住 / 按一下，识别没跑时不登记也不提示（D10 照旧）
+    let legacy = Settings {
+        ui: crate::settings::UiConfig {
+            legacy_upgrade: LegacyUpgrade::Dismissed,
+            ..Default::default()
+        },
+        assistant: crate::assistant::AssistantConfig {
+            hotkey: "Alt+F9".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let plan = plan_of(&legacy);
+    let reminder = planned(&plan, HK_LEGACY_REMINDER);
+    assert_eq!(
+        (reminder.hold, reminder.always, reminder.hint),
+        (true, false, None)
+    );
+    assert!(plan
+        .iter()
+        .all(|p| p.id != HK_ASSISTANT && p.id != HK_AUTOMATION_STOP));
+    // 表里还存着呼叫、停下（只是这种用户看不到）：认识的命令，不算“找不到”
+    assert!(plan.iter().all(|p| !p.id.starts_with("binding.")));
+    assert!(table_of(&legacy)
+        .bindings
+        .iter()
+        .all(|b| b.source != KeySource::Unknown));
+}
+
+fn sources<'a>(settings: &'a Settings, profiles: &'a [GameProfile]) -> Sources<'a> {
+    Sources {
+        settings,
+        profiles,
+        plugins: plugins_on(),
+    }
+}
+
+#[test]
+fn saving_a_new_conflict_is_refused_with_what_to_do_next() {
+    let profiles = profiles();
+    let before = Settings::default();
+    let changed = |change: &dyn Fn(&mut Settings)| {
+        let mut after = before.clone();
+        change(&mut after);
+        after.reconcile_hotkeys(&before);
+        new_conflict_error(&sources(&before, &profiles), &sources(&after, &profiles))
+    };
+    // 和别的热键撞
+    assert_eq!(
+        changed(&|s| s.channel_cycle_hotkey = "CapsLock".into()).as_deref(),
+        Some(
+            "「CapsLock」已经是「语音输入热键」的热键：先在「设置 → 热键」把它换掉，或者换一个键。"
+        )
+    );
+    // 和 Esc 撞
+    assert_eq!(
+        changed(&|s| s.runtime_toggle_hotkey = "Shift+Escape".into()).as_deref(),
+        Some("「Shift+Escape」：Esc 留给停下她和取消收音，换一个键。")
+    );
+    // 和游戏的聊天键撞
+    assert_eq!(
+        changed(&|s| s.assistant.hotkey = "Enter".into()).as_deref(),
+        Some("「Enter」是《League of Legends》的打开聊天框键，设成热键以后在游戏里按它会被 Kotone 拿走，换一个键。")
+    );
+    // 不冲突、只改别的设置：放行
+    assert_eq!(changed(&|s| s.channel_cycle_hotkey = "Alt+C".into()), None);
+    assert_eq!(changed(&|s| s.language = "en".into()), None);
+}
+
+#[test]
+fn an_existing_conflict_does_not_block_other_edits() {
+    let profiles = profiles();
+    // 老配置里本来就冲突着（停下热键 = 呼叫键）
+    let mut before = Settings::default();
+    before.set_binding(crate::hotkey_bindings::CMD_STOP, "Ctrl+Backquote");
+    before.assistant.companion.quick_messages = vec![quick("F8", "集合")];
+    before.sync_hotkey_mirrors();
+    let mut after = before.clone();
+    after.language = "en".into();
+    // 前面插一条快捷指令：槽位挪了，键没变，不算新冲突
+    after
+        .assistant
+        .companion
+        .quick_messages
+        .insert(0, quick("", "新的一条"));
+    assert_eq!(
+        new_conflict_error(&sources(&before, &profiles), &sources(&after, &profiles)),
+        None
+    );
+    // 改说话键：不冲突，放行（老冲突不挡）
+    after.set_binding(CMD_TALK, "F9");
+    after.sync_hotkey_mirrors();
+    assert_eq!(
+        new_conflict_error(&sources(&before, &profiles), &sources(&after, &profiles)),
+        None
+    );
 }

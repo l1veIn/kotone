@@ -47,6 +47,10 @@ pub struct Legacy {
     pub command: &'static str,
     pub id: &'static str,
     pub old_default: &'static str,
+    /// 旧字段（点分路径）；呼叫键对 0.1.x 升级后启用了她的人是 `assistant.companionBindings.hotkey`。
+    pub field: &'static str,
+    /// 现在改它的地方（设置说明里的位置；界面第 2 期第 3 步改成「设置 → 热键」）。
+    pub page: &'static str,
 }
 
 pub const LEGACY: &[Legacy] = &[
@@ -54,43 +58,69 @@ pub const LEGACY: &[Legacy] = &[
         command: CMD_CALL,
         id: "assistant",
         old_default: DEFAULT_CALL_HOTKEY,
+        field: "assistant.hotkey",
+        page: "琴音 → 唤醒 → 呼叫键",
     },
     Legacy {
         command: CMD_STOP,
         id: "automation-stop",
         old_default: "Ctrl+Shift+F12",
+        field: "automationStopHotkey",
+        page: "设置 → 系统 → 停下",
     },
     Legacy {
         command: CMD_SPEECH_TOGGLE,
         id: "runtime-toggle",
         old_default: "",
+        field: "runtimeToggleHotkey",
+        page: "设置 → 模型 → 语音识别",
     },
     Legacy {
         command: CMD_TALK,
         id: "record",
         old_default: "CapsLock",
+        field: "hotkey.key",
+        page: "插件 → 语音输入 → 输入",
     },
     Legacy {
         command: CMD_CHANNEL_CYCLE,
         id: "channel-cycle",
         old_default: "Shift+CapsLock",
+        field: "channelCycleHotkey",
+        page: "插件 → 语音输入 → 输入 → 其他热键",
     },
     Legacy {
         command: CMD_RESEND_LAST,
         id: "resend-last",
         old_default: "",
+        field: "resendLastHotkey",
+        page: "插件 → 语音输入 → 输入 → 其他热键",
     },
     Legacy {
         command: CMD_PP_TOGGLE,
         id: "post-process-toggle",
         old_default: "",
+        field: "togglePostProcessingHotkey",
+        page: "插件 → 语音输入 → 输入 → 其他热键",
     },
     Legacy {
         command: CMD_PP_CYCLE,
         id: "post-process-cycle",
         old_default: "",
+        field: "cyclePostProcessingHotkey",
+        page: "插件 → 语音输入 → 输入 → 其他热键",
     },
 ];
+
+/// 命令在对照表里的那一条。
+pub fn legacy_for(command: &str) -> Option<&'static Legacy> {
+    LEGACY.iter().find(|l| l.command == command)
+}
+
+/// 第 1 期的 id（`assistant`、`record`……）在对照表里的那一条。
+pub fn legacy_by_id(id: &str) -> Option<&'static Legacy> {
+    LEGACY.iter().find(|l| l.id == id)
+}
 
 /// 新装时表里的键（ADR 040 D4）：只有呼叫键、停下热键和语音输入的“说话”。
 pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
@@ -242,6 +272,15 @@ pub(crate) fn with_direct_edits(settings: &Settings) -> Option<Settings> {
     let mut fixed = settings.clone();
     fixed.reconcile_hotkeys(&expected);
     Some(fixed)
+}
+
+/// 登记热键、查冲突用的设置：内存里的旧字段被直接改过（没经过 reconcile，测试里常见）时，先照旧写法算进表。
+/// 正常的设置（读进来、经 `SettingsRepository` 改过的）原样借用。
+pub fn normalized(settings: &Settings) -> std::borrow::Cow<'_, Settings> {
+    match with_direct_edits(settings) {
+        Some(fixed) => std::borrow::Cow::Owned(fixed),
+        None => std::borrow::Cow::Borrowed(settings),
+    }
 }
 
 /// 这个命令在旧字段里的镜像（这种用户没有这个镜像时为 None）。

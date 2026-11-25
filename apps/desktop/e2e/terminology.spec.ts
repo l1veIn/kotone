@@ -207,6 +207,8 @@ test("words the glossary says not to use stay out of everything players see or s
     "crates/kotone-core/src/settings_guide.rs",
     // 热键表里每个热键的名字和在哪改（hotkeys.status / hotkeys.conflicts 原样给她和外部 Agent，ADR 040）
     "crates/kotone-core/src/hotkey_table.rs",
+    // 本体命令的名字和说明（热键表里那一行叫什么，ADR 040 D1）
+    "crates/kotone-core/src/hotkey_commands.rs",
     "crates/kotone-agent/src/prompt.rs",
     "crates/kotone-agent/src/catalog.rs",
     "apps/desktop/src-tauri/src/bubble.rs",

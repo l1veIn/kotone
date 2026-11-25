@@ -759,13 +759,37 @@ async fn cmd_listen_hotkey(
     if let Some(p) = profile_id {
         settings.active_profile_id = Some(p);
     }
-    let hotkey_key = key.unwrap_or_else(|| settings.hotkey.key.clone());
-    let hotkey_mode = match mode.as_deref().unwrap_or("") {
-        "hold" => HotkeyMode::Hold,
-        "toggle" => HotkeyMode::Toggle,
-        // 未显式指定时按 interactionMode 预设推导生效模式（与壳同一源）
-        _ => kotone_core::interaction::effective_hotkey_mode(&settings),
-    };
+    // --key 覆盖热键表里“说话”那条；--mode 覆盖说话的方式（“说话”是语音输入插件的按住命令，按住还是按一下
+    // 由插件照 interactionMode / hotkey.mode 决定，这里清掉 interactionMode 让 --mode 生效）
+    if let Some(key) = key.as_deref() {
+        settings.set_binding(kotone_core::hotkey_bindings::CMD_TALK, key);
+        settings.sync_hotkey_mirrors();
+    }
+    match mode.as_deref().unwrap_or("") {
+        "hold" | "toggle" => {
+            settings.interaction_mode = None;
+            settings.hotkey.mode = if mode.as_deref() == Some("hold") {
+                HotkeyMode::Hold
+            } else {
+                HotkeyMode::Toggle
+            };
+        }
+        _ => {}
+    }
+    let hotkey_mode = kotone_core::interaction::effective_hotkey_mode(&settings);
+    // 登记什么、谁先拿到键照热键表的登记计划（ADR 040，和桌面端同一个函数）
+    let plan = listen_hotkey_plan(&settings);
+    let talk = plan
+        .iter()
+        .find(|p| p.command.as_deref() == Some(kotone_core::hotkey_bindings::CMD_TALK));
+    if let Some(error) = talk.and_then(|p| p.error.as_deref()) {
+        eprintln!(
+            "语音输入热键「{}」没登记：{error}",
+            talk.map_or("", |p| p.combo.as_str())
+        );
+        return 1;
+    }
+    let hotkey_key = talk.map(|p| p.combo.clone()).unwrap_or_default();
 
     // 提权预检（只警告不阻断）：激活 profile 的目标进程已提权而自身未提权时，
     // 注入会被 UIPI 整体丢弃——启动即提示（完整链路见 doctor，修复用 elevate）
@@ -806,9 +830,6 @@ async fn cmd_listen_hotkey(
     let emitter: Arc<dyn Emitter> = Arc::new(JsonlEmitter {
         hotkey: Some(hotkey.clone()),
     });
-    // settings 随后移交给 orchestrator，频道切换热键先取出备用（ADR-008）
-    let cycle_hotkey = settings.read().unwrap().channel_cycle_hotkey.clone();
-    let resend_hotkey = settings.read().unwrap().resend_last_hotkey.clone();
     let processor_registry = match register_processors(settings.clone()) {
         Ok(registry) => registry,
         Err(error) => {
@@ -832,26 +853,18 @@ async fn cmd_listen_hotkey(
         eprintln!("注册热键失败: {e}");
         return 1;
     }
-    // 频道切换热键（ADR-008）：与录制热键冲突时忽略并告警，不影响主流程
-    if !cycle_hotkey.trim().is_empty() {
-        if kotone_core::hotkey::combos_conflict(&cycle_hotkey, &hotkey_key) {
-            eprintln!("频道切换热键「{cycle_hotkey}」与录制热键冲突，已忽略");
-        } else if let Err(e) =
-            hotkey.set_named_hotkey(kotone_core::hotkey::HK_CHANNEL_CYCLE, Some(&cycle_hotkey))
-        {
-            eprintln!("注册频道切换热键失败: {e}");
-        }
-    }
-    // 重发最近一条热键：与录制/频道切换热键冲突时忽略并告警，不影响主流程
-    if !resend_hotkey.trim().is_empty() {
-        if kotone_core::hotkey::combos_conflict(&resend_hotkey, &hotkey_key) {
-            eprintln!("重发热键「{resend_hotkey}」与录制热键冲突，已忽略");
-        } else if kotone_core::hotkey::combos_conflict(&resend_hotkey, &cycle_hotkey) {
-            eprintln!("重发热键「{resend_hotkey}」与频道切换热键冲突，已忽略");
-        } else if let Err(e) =
-            hotkey.set_named_hotkey(kotone_core::hotkey::HK_RESEND_LAST, Some(&resend_hotkey))
-        {
-            eprintln!("注册重发热键失败: {e}");
+    // 切换频道、重发上一句（ADR-008）：照登记计划，被前面的占了键、撞了 Esc 的不登记并告警，不影响主流程
+    for planned in plan
+        .iter()
+        .filter(|p| p.id != talk.map_or("", |t| t.id.as_str()))
+    {
+        match &planned.error {
+            Some(error) => eprintln!("热键「{}」没登记：{error}", planned.combo),
+            None => {
+                if let Err(e) = hotkey.set_named_hotkey(&planned.id, Some(&planned.combo)) {
+                    eprintln!("注册热键「{}」失败: {e}", planned.combo);
+                }
+            }
         }
     }
     println!(
@@ -873,16 +886,28 @@ async fn cmd_listen_hotkey(
         let orch = orchestrator.clone();
         tokio::spawn(async move {
             while let Some(ev) = ev_rx.recv().await {
+                // 说话和别的语音输入热键都是插件登记的命令，经“听一句”交给插件（ADR 040 D1）
+                use kotone_core::hotkey_commands::{split_command, Edge};
+                let talk = split_command(kotone_core::hotkey_bindings::CMD_TALK).map(|(_, c)| c);
                 match ev {
-                    HookEvent::HoldPressed => orch.on_hotkey_hold(true).await,
-                    HookEvent::HoldReleased => orch.on_hotkey_hold(false).await,
-                    HookEvent::Toggle => orch.on_hotkey_toggle().await,
+                    HookEvent::HoldPressed | HookEvent::Toggle => {
+                        if let Some(talk) = talk {
+                            orch.hearing_command(talk, Edge::Press, None).await
+                        }
+                    }
+                    HookEvent::HoldReleased => {
+                        if let Some(talk) = talk {
+                            orch.hearing_command(talk, Edge::Release, None).await
+                        }
+                    }
                     HookEvent::Cancel => orch.cancel().await,
-                    HookEvent::NamedHotkey { id } => match id.as_str() {
-                        kotone_core::hotkey::HK_CHANNEL_CYCLE => orch.on_cycle_channel().await,
-                        kotone_core::hotkey::HK_RESEND_LAST => orch.resend_last().await,
-                        _ => {}
-                    },
+                    HookEvent::NamedHotkey { id } => {
+                        let full = kotone_core::hotkey_bindings::legacy_by_id(&id)
+                            .map_or(id.as_str(), |legacy| legacy.command);
+                        if let Some((_, command)) = split_command(full) {
+                            orch.hearing_command(command, Edge::Press, None).await;
+                        }
+                    }
                     // 诊断事件（修饰键失配）：consumer 已记日志，业务不处理
                     HookEvent::MainKeyMissed { .. } | HookEvent::NamedHold { .. } => {}
                 }
@@ -1161,7 +1186,70 @@ const CONFIG_SETTABLE_KEYS: &[&str] = &[
 
 /// 点路径写入：current 上套 patch → Settings 反序列化校验（枚举值在此拦截）。
 /// 纯逻辑可单测；文件 IO 在 cmd 包装层。
+/// 命令行认的插件：只有语音输入（它的命令登记在清单里，ADR 040 D1）。
+fn cli_plugins(settings: &Settings) -> [kotone_core::hotkey_table::PluginInfo<'static>; 1] {
+    let manifest = kotone_plugin_voice_input::plugin::manifest();
+    [kotone_core::hotkey_table::PluginInfo {
+        id: &manifest.id,
+        name: &manifest.name,
+        enabled: manifest.enabled_in(settings),
+        commands: &manifest.commands,
+    }]
+}
+
+/// `listen` 登记的热键：说话、切换频道、重发上一句。用和桌面端同一个登记计划（谁先拿到键、撞没撞 Esc
+/// 只在 `hotkey_table` 算一次），只是表里先只留这三条（命令行不做呼叫、停下、快捷指令）。
+fn listen_hotkey_plan(settings: &Settings) -> Vec<kotone_core::hotkey_table::Planned> {
+    use kotone_core::hotkey_bindings::{CMD_CHANNEL_CYCLE, CMD_RESEND_LAST, CMD_TALK};
+    let mut only = settings.clone();
+    only.hotkeys.bindings.retain(|b| {
+        b.command_name()
+            .is_some_and(|c| [CMD_TALK, CMD_CHANNEL_CYCLE, CMD_RESEND_LAST].contains(&c))
+    });
+    only.assistant.companion.quick_messages.clear();
+    only.ui.legacy_upgrade = kotone_core::settings::LegacyUpgrade::NotNeeded;
+    only.sync_hotkey_mirrors();
+    let plugins = cli_plugins(&only);
+    kotone_core::hotkey_table::registration_plan(&kotone_core::hotkey_table::Sources {
+        settings: &only,
+        profiles: &[],
+        plugins: &plugins,
+    })
+}
+
+#[cfg(test)]
 fn apply_config_set(current: &Settings, key: &str, raw: &str) -> Result<Settings, String> {
+    apply_config_set_with(current, key, raw, &[])
+}
+
+/// `config set`：和桌面端保存一样，热键的旧写法改进热键表，新造成的热键冲突不让写（和别的热键、Esc、
+/// `profiles` 里游戏配置的聊天键比，ADR 040 D6）。
+fn apply_config_set_with(
+    current: &Settings,
+    key: &str,
+    raw: &str,
+    profiles: &[GameProfile],
+) -> Result<Settings, String> {
+    let next = apply_config_value(current, key, raw)?;
+    let (before, after) = (cli_plugins(current), cli_plugins(&next));
+    match kotone_core::hotkey_table::new_conflict_error(
+        &kotone_core::hotkey_table::Sources {
+            settings: current,
+            profiles,
+            plugins: &before,
+        },
+        &kotone_core::hotkey_table::Sources {
+            settings: &next,
+            profiles,
+            plugins: &after,
+        },
+    ) {
+        Some(error) => Err(format!("{error}（未写入）")),
+        None => Ok(next),
+    }
+}
+
+fn apply_config_value(current: &Settings, key: &str, raw: &str) -> Result<Settings, String> {
     if !CONFIG_SETTABLE_KEYS.contains(&key) {
         return Err(format!(
             "不支持的配置键「{key}」（支持：{}）",
@@ -1337,7 +1425,7 @@ fn cmd_config_set(key: &str, value: Option<&str>, capture: bool) -> i32 {
         }
     };
     let current = settings::load();
-    let mut next = match apply_config_set(&current, key, value) {
+    let mut next = match apply_config_set_with(&current, key, value, &profile::list()) {
         Ok(n) => n,
         Err(e) => {
             eprintln!("{e}");
@@ -1828,6 +1916,18 @@ mod tests {
         assert_eq!(s.hotkey.key, "F9");
         // 存进热键表（ADR 040 D8）：旧写法照样能改
         assert_eq!(s.binding_key(kotone_core::hotkey_bindings::CMD_TALK), "F9");
+        // 新造成的冲突不让写（ADR 040 D6）：和呼叫键、Esc、游戏的聊天键
+        let call = apply_config_set(&Settings::default(), "hotkey.key", "Ctrl+Backquote");
+        assert!(call.unwrap_err().contains("呼叫键"));
+        let esc = apply_config_set(&Settings::default(), "hotkey.key", "Shift+Escape");
+        assert!(esc.unwrap_err().contains("Esc 留给停下她和取消收音"));
+        let game = apply_config_set_with(
+            &Settings::default(),
+            "hotkey.key",
+            "Enter",
+            &[GameProfile::builtin_lol()],
+        );
+        assert!(game.unwrap_err().contains("League of Legends"));
         // 其余字段不受影响
         assert_eq!(s.hotkey.mode, kotone_core::hotkey::HotkeyMode::Toggle);
     }
