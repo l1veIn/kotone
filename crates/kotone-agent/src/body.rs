@@ -26,7 +26,7 @@ pub fn tools() -> Vec<ToolSpec> {
     vec![ToolSpec::new(
         TOOL_GAME_CHAT,
         &format!(
-            "替玩家把话发到当前游戏的聊天（按前台那个游戏的游戏配置：开聊天框键、频道与时序），默认发到队伍频道、按发送键（跟随用户的“自动发送”设置）。只在玩家明确要你替他说话或发送翻译时用；写成玩家本人的口吻，不加署名和引号。要发几条（例如战绩一人一条）就写成几行，一行发一条（最多 {MAX_LINES} 行，每行最多 {MAX_LINE_CHARS} 字）。结果说走了哪条路、发到哪个频道、发了几行；没发出去会说原因（例如前台不是游戏、修饰键一直按着、正在发别的），不要自己重发同一句。发出的内容会记在「自动化 → 记录」里。"
+            "替玩家把话发到当前游戏的聊天（按前台那个游戏的游戏配置：开聊天框键、频道与时序），默认发到队伍频道、按发送键（跟随用户的“自动发送”设置）。只在玩家明确要你替他说话或发送翻译时用；写成玩家本人的口吻，不加署名和引号。要发几条（例如战绩一人一条）就写成几行，一行发一条（最多 {MAX_LINES} 行，每行最多 {MAX_LINE_CHARS} 字）。英雄联盟客户端在前台时（选英雄、房间里）经英雄联盟插件走客户端的聊天接口发，不按键，几行连成一条，那里只有队伍频道（自定义对局两边都看得到）、不能只打进聊天框不发。结果说走了哪条路（route：keys 按键 / console 控制台 / client 客户端的聊天接口）、发到哪个频道、发了几行；没发出去会说原因（例如前台不是游戏、修饰键一直按着、正在发别的），不要自己重发同一句。发出的内容会记在「自动化 → 记录」里。"
         ),
         json!({"type": "object", "additionalProperties": false, "required": ["text"], "properties": {
             "text": {"type": "string", "minLength": 1, "maxLength": MAX_TEXT_CHARS, "description": format!("要发的话；多行时一行发一条（最多 {MAX_LINES} 行，每行最多 {MAX_LINE_CHARS} 字）")},
@@ -115,6 +115,10 @@ mod tests {
         assert_eq!(props["channel"]["enum"], json!(["team", "all"]));
         assert_eq!(props["text"]["maxLength"], json!(2000));
         assert!(send.description.contains("一行发一条"));
+        // ADR 041 第 2 期：说明里讲清选英雄、房间里走客户端的聊天接口，和 route 的三个值
+        assert!(
+            send.description.contains("客户端的聊天接口") && send.description.contains("client")
+        );
         // 加的都是可选参数：只给 text 的旧调用照旧
         assert_eq!(send.parameters["required"], json!(["text"]));
     }

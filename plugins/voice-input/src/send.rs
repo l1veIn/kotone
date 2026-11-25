@@ -344,6 +344,8 @@ impl From<ChatFailure> for SendFailure {
         let code = match &failure {
             ChatFailure::ModifiersHeld => "MODIFIERS_STILL_DOWN",
             ChatFailure::Busy(_) => "INPUT_BUSY",
+            // 选英雄、房间里经游戏插件的客户端接口发（ADR 041 第 2 期），没按键
+            ChatFailure::Provider(_) => "CLIENT_CHAT_FAILED",
             _ if input_blocked => "INJECTION_BLOCKED",
             _ if needs_elevation => "INJECTION_ELEVATION_REQUIRED",
             _ => "INJECTION_FAILED",

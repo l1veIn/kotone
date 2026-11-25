@@ -5,7 +5,10 @@
 //! - 本体工具 `game_chat.send`（她：发起方 `agent:<对话 id>`；外部 Agent：`tool-service`）、旧工具
 //!   `companion.type`、旧陪玩流程的“帮忙打字”都从这里进入口；
 //! - 在阻塞线程里跑入口，看门狗只防系统调用被安全软件挂住；
-//! - `game_chat.send` 写执行记录（「自动化 → 记录」）。
+//! - `game_chat.send` 写执行记录（「自动化 → 记录」）；
+//! - 把内置插件登记的发法（清单 `[[send_to_game]]`，ADR 041 D3）包成入口的 [`ChatProvider`]（[`providers`]）：
+//!   前台是插件登记的窗口时入口交给插件（英雄联盟客户端：选英雄、房间里走客户端的聊天接口，不按键）。只从内置插件表建，
+//!   第三方插件（`remote_plugins`）拿不到这个能力（D7）。
 //!
 //! 工具服务调用时带它自己的期限（减一点余量）进来：入口保证期限前返回真实结果——排不上就一个键都不按，
 //! 下一行来不及就不开始——不会出现“报超时、其实字发出去了”，外部 Agent 也就不会因此重发（ADR 041 实施记录）。
@@ -16,9 +19,10 @@ use std::time::{Duration, Instant};
 use kotone_core::inject::InjectError;
 use kotone_core::input_lock::InputLock;
 use kotone_core::send_to_game::{
-    ChatFailure, ChatOutcome, ChatRequest, GameChat, SendRoute, SendToGame, Speaker,
-    DEFAULT_DEADLINE,
+    ChatFailure, ChatOutcome, ChatProvider, ChatRequest, ChatSend, ChatSent, ChatStop, GameChat,
+    SendRoute, SendToGame, SendToGameSpec, Speaker, StopCode, DEFAULT_DEADLINE,
 };
+use kotone_plugin_api::Plugin;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
@@ -28,6 +32,70 @@ use crate::SharedState;
 const SERVICE_MARGIN: Duration = Duration::from_millis(300);
 /// 截止时间之后阻塞线程还没回来，再等这么久就不等了（只有系统调用被挂住时才会走到）。
 const WATCHDOG_GRACE: Duration = Duration::from_secs(2);
+
+/// 插件的发法过了截止时间还没回，再等这么久就不等了（插件的规矩是截止前一定返回，这里只防它卡住；比上面的看门狗短）。
+const PROVIDER_GRACE: Duration = Duration::from_millis(500);
+
+/// 内置插件登记的发法（清单 `[[send_to_game]]`）→ 入口的发法（`lib.rs` 建入口时交给它）。
+pub fn providers(app: &AppHandle) -> Vec<Arc<dyn ChatProvider>> {
+    crate::plugins::registry()
+        .iter()
+        .flat_map(|plugin| {
+            plugin.manifest().send_to_game.iter().map(move |spec| {
+                Arc::new(PluginChat {
+                    app: app.clone(),
+                    plugin: plugin.clone(),
+                    spec: spec.clone(),
+                }) as Arc<dyn ChatProvider>
+            })
+        })
+        .collect()
+}
+
+/// 一个内置插件的一项 `[[send_to_game]]`。
+struct PluginChat {
+    app: AppHandle,
+    plugin: Arc<dyn Plugin>,
+    spec: SendToGameSpec,
+}
+
+impl ChatProvider for PluginChat {
+    fn plugin(&self) -> &str {
+        &self.plugin.manifest().id
+    }
+
+    fn spec(&self) -> &SendToGameSpec {
+        &self.spec
+    }
+
+    /// 插件关着，或者 `needs` 里有个开关关着：为什么（话和游戏中心的事共用，`Manifest::needs_off`）。
+    fn off(&self) -> Option<String> {
+        let state = self.app.state::<SharedState>();
+        let settings = state.settings.read().unwrap();
+        self.plugin
+            .manifest()
+            .needs_off(&settings, &self.spec.needs)
+    }
+
+    /// 入口在阻塞线程里调：把插件的异步方法交给运行时，在这里等结果（用 channel 等，不 `block_on`：哪个线程调都不会
+    /// 卡住运行时）。插件过了截止时间还没回，就说可能已经发出去了（不重发）。
+    fn send(&self, request: ChatSend) -> Result<ChatSent, ChatStop> {
+        let host = crate::plugins::DesktopHost::for_plugin(&self.app, &self.plugin);
+        let plugin = self.plugin.clone();
+        let wait = request.deadline.saturating_duration_since(Instant::now()) + PROVIDER_GRACE;
+        let (tx, rx) = std::sync::mpsc::channel();
+        tauri::async_runtime::spawn(async move {
+            let _ = tx.send(plugin.send_to_game(host, &request).await);
+        });
+        rx.recv_timeout(wait).unwrap_or_else(|_| {
+            kotone_core::log::log("game_chat: plugin send_to_game did not answer in time");
+            Err(ChatStop::new(
+                StopCode::ClientNoReply,
+                "没在期限内发完：这句可能已经发出去了，先看一眼聊天，别再发一遍",
+            ))
+        })
+    }
+}
 
 /// 宿主那一份入口。
 pub fn entry(app: &AppHandle) -> Arc<GameChat> {
@@ -300,6 +368,39 @@ mod tests {
             "已按发送键发到队伍（1/1 行）；只证明本机按键已执行，不证明服务器已收到"
         );
         assert!(v.get("plugin").is_none());
+    }
+
+    /// 内置插件登记的发法（ADR 041 D3）：窗口不重复（入口不用排先后）；第 2 期不能是游戏配置里的进程（还没有按键的
+    /// 发法，对局里归本体；以后加 `keys` 时删掉这一条）；英雄联盟登记了客户端。
+    #[test]
+    fn plugins_register_their_own_windows_and_never_a_game_window() {
+        use kotone_core::profile::GameProfile;
+        let games: Vec<String> = [
+            GameProfile::builtin_lol(),
+            GameProfile::builtin_dota2(),
+            GameProfile::builtin_cs2(),
+        ]
+        .into_iter()
+        .flat_map(|g| g.process_names)
+        .collect();
+        let mut seen: Vec<String> = Vec::new();
+        for plugin in crate::plugins::registry() {
+            let m = plugin.manifest();
+            for spec in &m.send_to_game {
+                assert!(m.games.contains(&spec.game), "{} {}", m.id, spec.game);
+                for window in &spec.windows {
+                    let w = window.to_ascii_lowercase();
+                    assert!(!seen.contains(&w), "{window} 登记了两次");
+                    assert!(
+                        !games.iter().any(|g| g.eq_ignore_ascii_case(window)),
+                        "{} 登记了游戏本身的窗口 {window}",
+                        m.id
+                    );
+                    seen.push(w);
+                }
+            }
+        }
+        assert!(seen.contains(&"leagueclientux.exe".to_string()), "{seen:?}");
     }
 
     #[test]

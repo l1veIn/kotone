@@ -60,10 +60,16 @@ impl Manifest {
 
     /// 这种事现在为什么不会发生（“英雄联盟插件关着”“英雄联盟插件的“读客户端数据”关着”）；None = 会发生。
     pub fn event_off(&self, settings: &Settings, spec: &EventSpec) -> Option<String> {
+        self.needs_off(settings, &spec.needs)
+    }
+
+    /// 插件关着，或者 `needs` 里有个数据开关关着：为什么（“英雄联盟插件关着”“英雄联盟插件的“读客户端数据”关着”）；
+    /// None = 都开着。游戏中心的事、发到游戏的发法（ADR 041 D3）共用这一句。
+    pub fn needs_off(&self, settings: &Settings, needs: &[String]) -> Option<String> {
         if !self.enabled_in(settings) {
             return Some(format!("{}插件关着", self.name));
         }
-        spec.needs
+        needs
             .iter()
             .find(|s| !self.source_enabled_in(settings, s))
             .map(|s| {

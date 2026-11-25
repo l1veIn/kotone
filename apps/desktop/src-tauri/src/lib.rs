@@ -260,12 +260,15 @@ pub fn run() {
             let focus: Arc<dyn FocusBackend> = Arc::new(WinFocusBackend);
             // 发到游戏的唯一入口和那一把输入锁（ADR 041 D4）：语音输入（经编排器）、game_chat.send、
             // companion.type、旧陪玩流程、自动化的 chat()、game.act、按键程序共用这一份。
-            let game_chat = Arc::new(kotone_core::send_to_game::GameChat::new(
+            let game_chat = kotone_core::send_to_game::GameChat::new(
                 injector.clone(),
                 focus.clone(),
                 kotone_core::input_lock::InputLock::new(),
                 settings.clone(),
-            ));
+            );
+            // 前台是插件登记的窗口时交给插件的发法（ADR 041 D3：英雄联盟客户端，选英雄、房间里不按键）
+            let providers = crate::game_chat::providers(app.handle());
+            let game_chat = Arc::new(game_chat.with_providers(providers));
             // 语音唤醒（ADR 017）：唤醒后的那次会话改用唤醒线程转来的音频，其余照常开麦克风。
             let wake_runtime = wake::WakeRuntime::default();
             let audio_backend: Arc<dyn kotone_core::audio::AudioBackend> =

@@ -22,10 +22,41 @@ The recording has real player names: it stays under target/ and this printout is
 Stops before starting if a game is running or in front (the player plays on this machine). `--while-playing` skips
 that check (the player OK'd keyless tests during a match, 2026-11-23): this test sends no OS input at all, only types
 through the debugging port with input tools denied; the test instance's hotkey hooks run on their own thread.
+
+C. Send to game in the client (ADR 041 phase 2): the fake client also answers `/lol-chat/v1/conversations`,
+`/lol-lobby/v2/lobby` and records every `POST /lol-chat/v1/conversations/<id>/messages`; its phase can be switched.
+The isolated config selects the League of Legends game profile, so a send that went the keyboard way for her / an
+external Agent would be refused (the foreground is not the game) - nothing below can type into the player's windows.
+C0 (always, no OS input, the foreground is not touched): champion select in the fake client, the window in front is
+   NOT the client -> `game_chat.send` over the tool service is refused and the fake client gets no message
+   (the foreground decides, not the client's phase). Only runs while a terminal / Explorer / VS Code is in front
+   (with a game in front the keyboard way would type into it), never with --while-playing.
+C1-C7 (only with --chat-front and never with --while-playing: they need the fake client window IN FRONT, so the
+   player has to leave the machine):
+   a copy of powershell.exe named LeagueClientUx.exe runs target_window.ps1 -Chat (title KotoneScriptTarget; it logs
+   every key and Kotone's tag 4B544E49) and is brought to the front with fg.ps1 (that presses Alt once). If the
+   window in front is not LeagueClientUx.exe the part is skipped and says so. Before every call the script checks
+   the test window is still in front.
+   C1 champion select, "第一行\n第二行": route client, plugin lol, channel team, 2/2 lines, ONE POST to the champion
+      select conversation with the lines joined by a newline, no Kotone key in the window;
+   C2 channel all in champion select: refused ("只有队友看得到"), no POST, no key;
+   C3 lobby: one POST to the lobby conversation ("房间的聊天");
+   C4 client home (phase None): refused ("进房间或选英雄"), no POST;
+   C5 the client never answers the POST (6 s), timeoutMs 3000: back within the deadline, "可能已经发出去了", ONE
+      POST (not retried), no key;
+   C6 the plugin's "在客户端里发聊天" switch off: refused with the switch named, no POST, no key (she does not type
+      into the client);
+   C7 send:false: refused ("没法只打进聊天框"), no POST, no key;
+   C8 (with --chat-front and without --chat-only, real model): game_chat.send allowed for this turn only, "把对面谁是
+      突破口发到聊天里" -> she sends, ONE POST, no key.
+`--chat-only` skips T1-T6 / P2 / P3 (no DeepSeek key needed) and runs C only.
+Not covered here: the player's own voice input in the client (needs a microphone or VB-CABLE), a real client.
 usage: python -X utf8 -I scripts/manual-e2e/lol_tools_real.py [--probe DIR] [--gamedata DIR] [--while-playing]
+       [--chat-only] [--chat-front]
 """
 import base64
 import collections
+import ctypes
 import glob
 import http.server
 import json
@@ -59,12 +90,19 @@ def arg(name, default):
 PROBE = arg("--probe", os.path.join(REPO, "target", "lol-probe", "20261123-210745"))
 GAMEDATA = arg("--gamedata", os.path.join(REPO, "target", "lol-probe", "gamedata"))
 WHILE_PLAYING = "--while-playing" in sys.argv
+CHAT_ONLY = "--chat-only" in sys.argv
+CHAT_FRONT = "--chat-front" in sys.argv
 # 会按键的，加上会动玩家真实游戏窗口的（切到前台、打开、关闭）
 DENIED = dict(bt.NO_INPUT, **{"game.focus": "deny", "game.launch": "deny", "game.close": "deny"})
 TOKEN = secrets.token_urlsafe(18)
 AUTH = "Basic " + base64.b64encode(f"riot:{TOKEN}".encode()).decode()
 HITS = collections.Counter()
 MISSES = collections.Counter()
+# 发到游戏（C 部分）：假客户端收到的每个 POST（路径, 请求体）；POST 怎么回：ok / 500 / hang（6 秒以后才回）
+POSTS = []
+CHAT_POST = {"mode": "ok"}
+CHAMP_SELECT_CHAT = "c0ffee00@lol-champ-select.tj100.pvp.net"
+LOBBY_CHAT = "10bb7000@lol-lobby.tj100.pvp.net"
 
 
 def read(path):
@@ -98,6 +136,8 @@ class Recording:
             self.players[self.me["puuid"]] = {"summoner": self.me, "history": read(own)}
         self.recorded_time = self.live["gameData"]["gameTime"]
         self.started = time.time()
+        # 对局阶段：T 部分是对局里；C 部分切成选英雄 / 房间 / 首页
+        self.phase = "InProgress"
 
     def synth_champ_select(self):
         gd = self.session["gameData"]
@@ -113,7 +153,7 @@ class Recording:
                          "championPickIntent": 0, "assignedPosition": "", "puuid": m.get("puuid")})
         return {"localPlayerCellId": local, "myTeam": team, "theirTeam": [], "actions": [],
                 "benchChampions": [{"championId": 21}, {"championId": 99}],
-                "bans": {"myTeamBans": [], "theirTeamBans": []}}
+                "bans": {"myTeamBans": [], "theirTeamBans": []}, "isCustomGame": False}
 
     def queue(self):
         return self.session["gameData"]["queue"]["id"]
@@ -121,7 +161,13 @@ class Recording:
     def lcu(self, path):
         path, _, query = path.partition("?")
         if path == "/lol-gameflow/v1/gameflow-phase":
-            return "InProgress"
+            return self.phase
+        if path == "/lol-chat/v1/conversations":
+            return [{"id": "friend@pvp.net", "type": "chat"},
+                    {"id": CHAMP_SELECT_CHAT, "type": "championSelect"},
+                    {"id": LOBBY_CHAT, "type": "customGame"}]
+        if path == "/lol-lobby/v2/lobby":
+            return {"gameConfig": {"isCustom": False, "queueId": self.queue()}}
         if path == "/lol-gameflow/v1/session":
             return self.session
         if path == "/lol-summoner/v1/current-summoner":
@@ -188,6 +234,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.reply(404, {"message": "not in the recording"})
         HITS[kind] += 1
         self.reply(200, body)
+
+    def do_POST(self):  # noqa: N802
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length).decode("utf-8", errors="replace")
+        if self.headers.get("Authorization") != AUTH:
+            MISSES["401 POST"] += 1
+            return self.reply(401, {"message": "bad auth"})
+        if not re.fullmatch(r"/lol-chat/v1/conversations/[^/]+/messages", self.path):
+            MISSES["404 POST " + self.path] += 1
+            return self.reply(404, {"message": "not in the recording"})
+        POSTS.append((self.path, body))
+        if CHAT_POST["mode"] == "hang":
+            time.sleep(6)
+        if CHAT_POST["mode"] == "500":
+            return self.reply(500, {"message": "chat restricted"})
+        self.reply(200, {"id": str(len(POSTS)), "type": "chat"})
 
     def reply(self, code, body):
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -259,6 +321,180 @@ def say(name, text):
     return r, msgs
 
 
+# ---------- C：发到游戏（ADR 041 第 2 期） ----------
+
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+KOTONE_TAG = "4B544E49"
+CLIENT_DIR = os.path.join(bt.WORK, "client-window")
+SAFE_FOREGROUND = {"powershell.exe", "pwsh.exe", "windowsterminal.exe", "openconsole.exe", "conhost.exe",
+                   "explorer.exe", "code.exe", "claude.exe", "python.exe", "warp.exe", "leagueclientux.exe", ""}
+
+
+def front():
+    """(进程名, 窗口标题) of the window in front."""
+    path = bt.foreground_process()
+    title = ctypes.create_unicode_buffer(256)
+    user32.GetWindowTextW(user32.GetForegroundWindow(), title, 256)
+    return os.path.basename(path), title.value
+
+
+def chat_send(args, timeout_ms=8000):
+    """game_chat.send over the tool service (caller = external Agent): (ok, result or error text, seconds)."""
+    started = time.time()
+    try:
+        return True, bt.call("game_chat.send", args, timeout_ms), time.time() - started
+    except Exception as e:  # noqa: BLE001
+        return False, str(e), time.time() - started
+
+
+def kotone_keys():
+    """Key downs carrying Kotone's tag that reached the fake client window."""
+    try:
+        with open(os.path.join(CLIENT_DIR, "events.log"), encoding="utf-8") as f:
+            return [l for l in f.read().splitlines() if " DOWN " in f" {l} " and f"x={KOTONE_TAG}" in l]
+    except FileNotFoundError:
+        return []
+
+
+def chat_c0():
+    """C0: the window in front is not the client -> nothing goes through the client, nothing is typed."""
+    process, title = front()
+    # 只在终端、资源管理器这类窗口在前台时跑：前台要是游戏，按键那条路会往游戏里打字（选中的是英雄联盟）
+    if WHILE_PLAYING or process.lower() not in SAFE_FOREGROUND or process.lower() == "leagueclientux.exe":
+        print(f"   C0 skipped: '{title}' ({process}) is in front{' (--while-playing)' if WHILE_PLAYING else ''}")
+        return
+    REC.phase = "ChampSelect"
+    before = len(POSTS)
+    ok, out, _ = chat_send({"text": "C0 这句不该发出去"})
+    # 前台是终端时是“不是「League of Legends」”；是 Kotone 自己 / 桌面时是那两句：都是没发
+    check("C0: champion select but the client is not in front: game_chat.send is refused (the foreground decides)",
+          not ok and "请先切到游戏" in str(out), f"front {process}: {str(out)[:200]}")
+    check("C0: the fake client got no message", len(POSTS) == before, str(POSTS[before:])[:200])
+
+
+def client_window():
+    """A copy of powershell.exe named LeagueClientUx.exe showing target_window.ps1 -Chat. None = could not get it
+    in front as LeagueClientUx.exe (the part is skipped)."""
+    bin_dir = os.path.join(bt.WORK, "bin")
+    os.makedirs(bin_dir, exist_ok=True)
+    exe = os.path.join(bin_dir, "LeagueClientUx.exe")
+    shutil.copy2(os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "WindowsPowerShell", "v1.0",
+                              "powershell.exe"), exe)
+    window = subprocess.Popen([exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                               os.path.join(HERE, "target_window.ps1"), "-Dir", CLIENT_DIR, "-Chat"])
+    if not bt.wait_until(lambda: os.path.exists(os.path.join(CLIENT_DIR, "ready.txt")), 30, 0.5):
+        print("   C: the fake client window did not come up")
+        return window, False
+    if front() != ("LeagueClientUx.exe", "KotoneScriptTarget"):
+        process, title = front()
+        if process.lower() not in SAFE_FOREGROUND and title != "KotoneScriptTarget":
+            raise SystemExit(f"STOP: '{title}' ({process}) is in front - not touching it.")
+        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                        os.path.join(HERE, "fg.ps1"), "-Title", "KotoneScriptTarget"], capture_output=True, text=True)
+        time.sleep(0.4)
+    in_front = front() == ("LeagueClientUx.exe", "KotoneScriptTarget")
+    if not in_front:
+        print(f"   C1-C7 skipped: the window in front is {front()}, not the fake client (LeagueClientUx.exe)")
+    return window, in_front
+
+
+def client_in_front():
+    if front() != ("LeagueClientUx.exe", "KotoneScriptTarget"):
+        raise SystemExit(f"STOP: the fake client window is not in front ({front()}) - not sending.")
+
+
+def chat_front(with_model):
+    """C1-C8: the fake client window in front."""
+    window, in_front = client_window()
+    try:
+        if not in_front:
+            return
+        # C1 选英雄：一条消息、几行用换行连起来、不按键
+        REC.phase = "ChampSelect"
+        client_in_front()
+        before = len(POSTS)
+        ok, out, _ = chat_send({"text": "第一行\n第二行"})
+        out = out if ok else {}
+        check("C1: champion select: route client, plugin lol, team, 2/2 lines",
+              ok and out.get("route") == "client" and out.get("plugin") == "lol" and out.get("channel") == "team"
+              and out.get("sent") is True and out.get("sentLines") == 2, json.dumps(out, ensure_ascii=False)[:300])
+        check("C1: the receipt says only the client took it", "只证明客户端收下了" in str(out.get("receipt")),
+              str(out.get("receipt")))
+        new = POSTS[before:]
+        check("C1: ONE message to the champion select chat, the lines joined by a newline",
+              len(new) == 1 and CHAMP_SELECT_CHAT in new[0][0]
+              and json.loads(new[0][1]) == {"body": "第一行\n第二行", "type": "chat"}, str(new)[:300])
+        check("C1: no Kotone key reached the window", not kotone_keys(), str(kotone_keys()[:5]))
+
+        # C2 选英雄要“所有人”：不发
+        client_in_front()
+        before = len(POSTS)
+        ok, out, _ = chat_send({"text": "gg", "channel": "all"})
+        check("C2: all in champion select is refused", not ok and "只有队友看得到" in str(out), str(out)[:200])
+        check("C2: no message, no key", len(POSTS) == before and not kotone_keys())
+
+        # C3 房间
+        REC.phase = "Lobby"
+        client_in_front()
+        before = len(POSTS)
+        ok, out, _ = chat_send({"text": "我先排位"})
+        new = POSTS[before:]
+        check("C3: the lobby chat", ok and (out or {}).get("channelName") == "房间的聊天" and len(new) == 1
+              and LOBBY_CHAT in new[0][0], f"{out} {new}"[:300])
+
+        # C4 首页：不发
+        REC.phase = "None"
+        client_in_front()
+        before = len(POSTS)
+        ok, out, _ = chat_send({"text": "gg"})
+        check("C4: client home: refused, says to go into a lobby or champion select",
+              not ok and "进房间或选英雄" in str(out) and len(POSTS) == before, str(out)[:200])
+
+        # C5 客户端不回话：期限内返回、说可能已经发出去了、只发一次
+        REC.phase = "ChampSelect"
+        CHAT_POST["mode"] = "hang"
+        client_in_front()
+        before = len(POSTS)
+        ok, out, took = chat_send({"text": "gg"}, timeout_ms=3000)
+        CHAT_POST["mode"] = "ok"
+        check("C5: no answer from the client: back within the deadline, says it may have gone out",
+              not ok and "可能已经发出去了" in str(out) and took < 4.5, f"{took:.1f}s {str(out)[:160]}")
+        check("C5: ONE POST (not retried), no key", len(POSTS) == before + 1 and not kotone_keys(), str(POSTS[before:]))
+
+        # C6 关掉“在客户端里发聊天”：她不往客户端里按键
+        bt.call("settings.update", {"patch": {"plugins": {"lol": {"sources": {"chat": False}}}}})
+        client_in_front()
+        before = len(POSTS)
+        ok, out, _ = chat_send({"text": "gg"})
+        bt.call("settings.update", {"patch": {"plugins": {"lol": {"sources": {"chat": True}}}}})
+        check("C6: the switch off: refused with the switch named",
+              not ok and "在客户端里发聊天" in str(out) and "关着" in str(out), str(out)[:200])
+        check("C6: no message, no key", len(POSTS) == before and not kotone_keys())
+
+        # C7 只打进聊天框不发：这里做不到，不发
+        client_in_front()
+        before = len(POSTS)
+        ok, out, _ = chat_send({"text": "先别发", "send": False})
+        check("C7: send:false is refused here", not ok and "没法只打进聊天框" in str(out) and len(POSTS) == before,
+              str(out)[:200])
+
+        # C8 真模型：选英雄里让她发（这一轮放开 game_chat.send）
+        if with_model:
+            rules = dict(DENIED, **{"game_chat.send": "allow"})
+            bt.call("settings.update", {"patch": {"agent": {"permissions": {"mode": "allow-all", "rules": rules}}}})
+            client_in_front()
+            before = len(POSTS)
+            text = "把对面谁是突破口发到聊天里"
+            r, msgs = say("C8", text)
+            bt.call("settings.update", {"patch": {"agent": {"permissions": {"mode": "allow-all", "rules": DENIED}}}})
+            check("C8: she sent it through the client: one message, no key",
+                  calls(msgs, "game_chat.send") and len(POSTS) == before + 1 and not kotone_keys(),
+                  f"{[c['name'] for c in calls(msgs)]} {POSTS[before:]}"[:300])
+        print(f"   C: {len(POSTS)} chat message(s) reached the fake client; Kotone keys in the window: {len(kotone_keys())}")
+    finally:
+        window.terminate()
+
+
 def main():
     global REC
     if WHILE_PLAYING:
@@ -283,11 +519,25 @@ def main():
     with open(os.path.join(bt.HOME, "config.json"), "w", encoding="utf-8") as f:
         json.dump({"ui": {"firstRunCompleted": True}, "adminPromptDismissed": True, "toolService": {"enabled": True},
                    "hotkey": {"key": "F24", "mode": "toggle"}, "runtimeToggleHotkey": "", "automationStopHotkey": "",
+                   # 选中英雄联盟：替玩家发言走按键时前台必须是游戏，C 部分不会往别的窗口里打字
+                   "activeProfileId": "lol",
                    "assistant": {"hotkey": "", "callHotkeyDefaulted": True, "speechVolume": 0,
                                  "wake": {"enabled": False}},
                    "agent": {"permissions": {"mode": "allow-all", "rules": DENIED}}}, f)
     app = subprocess.Popen([bt.EXE, "--background"], env=bt.ENV)
     try:
+        if CHAT_ONLY:
+            # 只要工具服务（C 部分不看界面，界面没嵌进 exe 也能跑）
+            def service_up():
+                try:
+                    return bool(bt.call("app.status", {}, 3000))
+                except Exception:  # noqa: BLE001
+                    return False
+            if not bt.wait_until(service_up, 90, 1):
+                raise RuntimeError("the tool service did not come up")
+            # 等插件连上假客户端（后台每 2–5 秒看一次）
+            bt.wait_until(lambda: HITS["/lol-gameflow/v1/gameflow-phase"] > 0, 30, 0.5)
+            return chat_part(with_model=False)
         bt.wait_ui()
         cid = real_deepseek.add_connection(bt.EXE, bt.ENV, model="deepseek-flash")
         bt.call("settings.update", {"patch": {"assistant": {"connectionId": cid}}})
@@ -434,8 +684,10 @@ def main():
         opgg = bt.call("lol.champion", {"champion": "亚索", "mode": "rift"})
         check("P3: OP.GG is off by default (no OP.GG request)",
               not ((opgg.get("structuredContent") or {}).get("opgg")), json.dumps(opgg.get("structuredContent", {}).get("opgg"), ensure_ascii=False))
+        return chat_part(with_model=True)
     finally:
-        real_deepseek.delete_connection(bt.EXE, bt.ENV)
+        if not CHAT_ONLY:
+            real_deepseek.delete_connection(bt.EXE, bt.ENV)
         try:
             bt.call("app.quit")
         except Exception as e:  # noqa: BLE001
@@ -448,6 +700,15 @@ def main():
         print("\nfake client hits:", dict(HITS))
         if MISSES:
             print("not served:", dict(MISSES))
+
+
+def chat_part(with_model):
+    """C0 always; C1-C8 only with --chat-front (the fake client window has to be in front)."""
+    chat_c0()
+    if CHAT_FRONT and not WHILE_PLAYING:
+        chat_front(with_model)
+    else:
+        print("   C1-C8 not run: they need the fake client window in front (--chat-front, the player away)")
     return bt.finish()
 
 

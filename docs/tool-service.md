@@ -250,6 +250,15 @@ M2 沿用同一套闸门：OCR 名额在期限内于进入工作线程**之前**
 
 数据外发：`companion.ask` / `companion.check` 把请求与识别出的聊天发给用户的 AI 连接（`connection-dependent`）；所选 OCR 模型是在线模型时，`companion.ask` / `companion.read_chat` 每次都会上传截图（`ocr.dataEgress=selected-image`）。识别出的文字对 Kotone 与 Agent 都只是数据，不是指令；模型能选的动作只有上面三种。
 
+**发到游戏的结果**（`game_chat.send`、`companion.type`，ADR 041）。只加不改（单向门）：
+
+- `route`：这次走了哪条路。`keys` = 开聊天框 → 打字 → 发送键（游戏配置里的键）；`console` = Source 2 控制台通道（ADR 032）；`client` = 游戏客户端自己的聊天接口，不按键（ADR 041 第 2 期：英雄联盟客户端在前台时，选英雄、房间里经英雄联盟插件发，几行连成一条消息）。
+- `plugin`：走了游戏插件提供的发法时是那个插件的 id（例如 `lol`）；本体的通用发法没有这个字段。
+- `channel` / `channelName`：实际的频道。客户端的聊天里：选英雄、房间只有自己这边看得到（`team`，`channelName` 是“选英雄的聊天”“房间的聊天”）；自定义对局两边都看得到（`all`）。要的频道和这里不一样就不发。
+- `receipt`：按键的“只证明本机按键已执行，不证明服务器已收到”；客户端的“只证明客户端收下了，不证明队友已经看到”。
+- 一行都没发 → 工具返回错误（话里说原因和下一步）；发了一部分 → `sent: false`、`stopped: {code, message}`。原因代码（`stopped.code`、执行记录、进程日志）：第 1 期的 `emptyText` / `tooManyLines` / `lineTooLong` / `multiLineWithoutSend` / `noForeground` / `ownWindow` / `desktop` / `notAGame` / `noSuchChannel` / `modifiersHeld` / `foregroundChanged` / `busy` / `timeUp` / `cancelled` / `inputBlocked` / `needsElevation` / `injectFailed`，第 2 期加 `noChatHere`（这里现在没有能发的聊天：不在房间或选英雄里、聊天还没连上、在对局里、在结算）、`clientUnavailable`（连不上游戏客户端）、`clientRejected`（客户端回了错误，没发）、`clientNoReply`（客户端没在期限内回话：**可能已经发出去了**，不要重发）、`providerOff`（前台是插件登记的窗口，但插件或它要的开关关着：替玩家发言的不往那个窗口里按键）、`noDraftHere`（这里经客户端发，没法 `send: false` 只打进聊天框）。
+- 客户端的发法不重试、失败也不退回按键；只有插件关着时，玩家自己的语音输入才照旧按键。
+
 ### 配置与首次引导（委托桌面宿主）
 
 下列 35 个工具让 Agent 完成引导页与设置页里的全部配置。它们由服务检查“参数是 JSON 对象”后交给桌面宿主，调用的是与设置页**同一个**实现（校验、原子落盘、热键重注册、运行时状态推送完全一致），参数按工具严格解析（未知字段、类型或取值不合法 → `INVALID_ARGUMENTS`；已有下载进行中 → `BUSY`；执行失败 → `HOST_ACTION_FAILED`）。没有桌面宿主的实例里它们 `ready=false`。改动设置后，打开着的设置窗口会自动刷新。
