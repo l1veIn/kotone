@@ -701,9 +701,9 @@ mod tests {
     #[test]
     #[ignore]
     fn launch_passes_arguments() {
-        let dir = std::env::temp_dir().join(format!("kotone-launch-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let out = dir.join("ok.txt");
+        // 每次新建的空目录：上次失败留下的 ok.txt 不会被当成这次的结果
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("ok.txt");
         let cmd = command(
             r"C:\Windows\System32\cmd.exe",
             &["/c", &format!("cd > \"{}\"", out.display())],
@@ -720,7 +720,6 @@ mod tests {
             cwd.trim().eq_ignore_ascii_case(r"C:\Windows\System32"),
             "{cwd}"
         );
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

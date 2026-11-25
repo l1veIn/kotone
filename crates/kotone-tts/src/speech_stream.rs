@@ -1495,10 +1495,32 @@ mod tests {
 
     #[test]
     fn every_sentence_is_billed_to_the_owner_turn() {
-        // 账本是进程里唯一的：开在临时目录，只看这个测试自己那段对话的记录。
-        let dir = std::env::temp_dir().join(format!("kotone-tts-billing-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        kotone_core::usage::enable(dir.join("usage.jsonl"));
+        // 账本是进程里唯一的（`usage::enable` 只认第一次），开了以后同一进程里别的测试合成的声音也往里记，
+        // 目录删了还会被它们重新建出来。所以这个测试让测试程序再跑一遍自己、只跑这一个：
+        // 账本放在这次新建的空目录里，子进程退出、没人再写了才删。
+        // 以前按进程号起名、不删：进程号撞上上次的，就读到上次留下的两条。
+        const LEDGER: &str = "KOTONE_TTS_BILLING_LEDGER";
+        let Some(ledger) = std::env::var_os(LEDGER) else {
+            let dir = tempfile::tempdir().unwrap();
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "speech_stream::tests::every_sentence_is_billed_to_the_owner_turn",
+                    "--nocapture",
+                ])
+                .env(LEDGER, dir.path().join("usage.jsonl"))
+                .output()
+                .unwrap();
+            let out = format!(
+                "{}{}",
+                String::from_utf8_lossy(&child.stdout),
+                String::from_utf8_lossy(&child.stderr)
+            );
+            // 改了测试名、子进程一个都没跑也会“成功”：要看到正好跑了一个
+            assert!(child.status.success() && out.contains(" 1 passed"), "{out}");
+            return;
+        };
+        kotone_core::usage::enable(ledger);
         let ledger = kotone_core::usage::global().unwrap().path().to_path_buf();
         let (base, _) = fake_server(Script::echo(240));
         let owner = kotone_core::usage::Owner {
