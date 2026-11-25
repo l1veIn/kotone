@@ -776,6 +776,17 @@
 
 玩家：“完事之后推送、合并、打包rc”。版本号改成 0.2.0-rc.9（`69dad3bb`，`pnpm release:verify` 过、`release:test` 8/8，CHANGELOG 的 Unreleased 归进“0.2.0-rc.9 — 2026-11-25”）。分支 `claude/plugins` 推送到 `69dad3bb`，`main` 快进到同一个提交并推送（`c8c0b8b4..69dad3bb`，会触发 CI；没打 tag，所以不触发发布流程）。本机打了 NSIS 安装包 `target/release/bundle/nsis/Kotone_0.2.0-rc.9_x64-setup.exe`（24,321,011 字节，SHA-256 `034a1d1bba4e43f11064af9b6b62c338bd3def3a46e460ed05ed7e2780af90dd`，`pnpm -C apps/desktop tauri build --bundles nsis --config src-tauri/tauri.ci.conf.json`，没有更新签名）。正式版程序 `target/release/kotone.exe` 跑 `mcp_app_resources_real.py --exe` 22/22（英雄联盟 App 是真打包）。没有上传、没有发布。
 
+### 合并后 CI 挂了两次（都修了，main 在 `5a9fefea` 绿了）
+
+main 上第一次跑这一轮的代码（第七轮起都只推了分支，main 上的 CI 没跑过），CI 的 stable 是 1.100.0、本机是 1.98：
+
+1. clippy：`AtomicUsize::fetch_update` 在 1.100 弃用（`-D warnings` 当错误），出在 `5b4820bf` 的测试替身——`7a2df3a4` 换成 `compare_exchange` 循环。
+2. 测试：Cargo 1.100 的 build-dir 新布局（cargo#17354）把测试程序挪进 `target/debug/build/<包>/<哈希>/out/`，`kotone-mcp/tests/stdio.rs`、`kotone-remote-plugin/src/tests.rs` 用 `current_exe().parent().parent()` 找 example 找不到——`5a9fefea` 改成沿祖先目录找。
+
+玩家：“git上CI太慢了，本地先过一下如何？”推送前在本机用 `+1.100.0` 照 CI 的步骤跑了一遍（`scratchpad/local_ci.sh`：两种审计、release:verify / test、fmt、clippy、`pnpm check`、Playwright 206/206、`cargo test --workspace --no-fail-fast` 1654/0/34），过了再推，CI 一次绿。rc.9 安装包不用重打：这两处都是测试代码。
+
+玩家：“是否我们项目存在过渡CI检测或者过渡测试的情况？需要分析一下”。只读分析（全文在会话 scratchpad 的 `ci-test-analysis.md`，要整理进 `docs/research/`）：测试本身不多（1654 个 Rust 测试在 CI 上只跑约 30 秒），慢在构建——`.cargo/config.toml` 的 `jobs = 1`（为本机 1455 加的）CI 也用、每次推送编三遍（clippy / test / debug 安装包）、Playwright 1 个 worker 10 分钟、一个任务串到底；**冷缓存的一次会超过 45 分钟上限，超时又存不下缓存，会一直超时**；今天两次失败都因为工具链没钉死。建议（低风险，等玩家点头）：CI 里 `CARGO_BUILD_JOBS` 4 / 2、`rust-toolchain.toml` 钉 1.100.0、前端和 Playwright（4 个 worker）单独一个任务、clippy 和测试分开、缓存只在 main 上存、审计只在锁文件变了时 + 每天一次、debug 安装包只在安装包配置变了时编、只改文档不跑 CI、`--no-fail-fast`、CI 里不截图、删 / 修过时的真机脚本（约 1,200 行）、写一个推送前本地跑的脚本。预计热缓存 25–30 → 7–9 分钟、冷缓存超时 → 15–18 分钟。要玩家定的两条：浏览器预览的假后端不再复制后端规则（预览能看到的会变少）；发 RC 时这个提交已经在 CI 过了就不再跑测试（每次省 15–20 分钟）。
+
 ### 下一步
 
 1. 玩家在场时做“还要玩家的”三样；真人按过以后做 ADR 040 第 2 期第 4 步（删“主键位”旧路径）。
