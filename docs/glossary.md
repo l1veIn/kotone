@@ -74,6 +74,7 @@
 | 本体 | Kotone 自己：感官和表达（耳、眼、嘴、手）、对话、自动化、宿主（ADR 038 D2）。语音识别和往游戏聊天里打字也在本体（ADR 039 D2） | core |
 | 插件 | 装在本体上的 App（ADR 038），界面上的说法见上一节 | plugin |
 | 琴音 | 角色（默认的那个）。讲“谁在听、谁在说、谁在想”时用；玩家可以换角色 | Kotone (the character) |
+| 共享资源 / 管家 | 共享资源：全进程（或全屏、全机）只有一份、又有两个以上的用户要用的东西，例如热键、往游戏里输入、麦克风、扬声器、屏幕上的位置和前台、聊天流、语音识别。管家：本体里拥有它的那一处代码，“能不能用、谁先用”的规矩只写在这里，插件经宿主向它要（ADR 042）。界面上不说 | shared resource / owner |
 | 命令 / 热键表 | 命令：能绑热键的一件事，`<来源>.<命令 id>`（本体的 `kotone.call`、插件 `plugin.toml` 里 `[[commands]]` 登记的 `voice-input.talk`）。热键表：config.json 的 `hotkeys.bindings`，每条 键 + 命令（第 3 期还有工具、页面）；热键的旧字段（`hotkey.key`、`channelCycleHotkey`……）是它的镜像（ADR 040 D1、D8）。界面上不说“命令”，行名就是命令的名字 | command / hotkey table |
 
 ## 游戏陪玩的核心概念（ADR 028）
