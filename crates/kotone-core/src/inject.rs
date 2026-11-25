@@ -99,13 +99,15 @@ pub trait Injector: Send + Sync {
     }
 }
 
-/// 一行是怎么发出去的（ADR 041 D6）。第 2 期加“客户端聊天接口”。
+/// 一行是怎么发出去的（ADR 041 D6）。`as_str` 的值外部 Agent 认（`route`，单向门）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SendRoute {
     /// 开聊天框 → 逐字 Unicode（或剪贴板）→ 发送键
     Keys,
     /// Source 2 控制台通道（ADR 032 决定 3）：写 cfg、按触发键，不开聊天框
     Console,
+    /// 游戏客户端自己的聊天接口（ADR 041 第 2 期：游戏插件提供的发法，例如英雄联盟选英雄、房间里），不按键
+    Client,
 }
 
 impl SendRoute {
@@ -113,6 +115,7 @@ impl SendRoute {
         match self {
             Self::Keys => "keys",
             Self::Console => "console",
+            Self::Client => "client",
         }
     }
 }
@@ -164,6 +167,13 @@ pub trait FocusBackend: Send + Sync {
             process: self.foreground_process_name(),
             own_process: false,
         })
+    }
+
+    /// 某个窗口（不一定在前台）的进程名、是不是 Kotone 自己；窗口没了或拿不到时 None。发到游戏的入口用它看
+    /// 语音输入开始收音的那个窗口归不归某个插件的发法（ADR 041 第 2 期）。默认 None；Windows 实现覆盖。
+    fn window_info(&self, window: TargetWindow) -> Option<ForegroundInfo> {
+        let _ = window;
+        None
     }
 }
 

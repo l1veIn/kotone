@@ -744,6 +744,27 @@ mod windows_imp {
                 own_process: pid == Some(std::process::id()),
             })
         }
+
+        /// 某个窗口的进程（发到游戏的入口看语音输入开始收音的那个窗口归不归插件的发法，ADR 041 第 2 期）。
+        fn window_info(&self, window: TargetWindow) -> Option<ForegroundInfo> {
+            let hwnd = HWND(window.0 as *mut std::ffi::c_void);
+            let mut pid: u32 = 0;
+            // SAFETY: 只读窗口所属的进程号；窗口已经没了时 IsWindow 为 false、不再往下读。
+            unsafe {
+                if !IsWindow(Some(hwnd)).as_bool() {
+                    return None;
+                }
+                GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            }
+            if pid == 0 {
+                return None;
+            }
+            Some(ForegroundInfo {
+                window,
+                process: process_name_from_pid(pid),
+                own_process: pid == std::process::id(),
+            })
+        }
     }
 
     /// 全部进程：(PID, 父进程 PID, 可执行文件名)。

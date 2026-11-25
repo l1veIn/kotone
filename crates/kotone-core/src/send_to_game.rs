@@ -4,12 +4,15 @@
 //! 旧陪玩流程的“帮忙打字”、自动化的 `chat()`。入口里统一做（D4–D6）：
 //!
 //! 1. 整理文字：一行一条，丢掉空行，最多 [`MAX_LINES`] 行、每行 [`MAX_LINE_CHARS`] 字；
-//! 2. 拿宿主那一把输入锁（[`crate::input_lock`]），排队最多 5 秒、不超过调用方的截止时间；
-//! 3. 等修饰键松开（每行最多 1 秒）；按住 Shift 时开聊天框的回车会变成 Shift+Enter（全体频道）；
-//! 4. 有 `restore` 就拿到锁以后再切回那个窗口（语音输入：回到开始收音时的窗口，D5）；
-//! 5. 按**前台检测到的游戏**挑游戏配置（[`pick_game`]），再挑频道（[`pick_channel`]）；
-//! 6. 逐行发：每行之前看取消、截止时间、前台还是不是同一个窗口；一行一个 ADR 032 的挡键窗口；行间 65 毫秒；
-//! 7. 结果说清楚（[`ChatOutcome`]）：走了哪条路、哪个频道、发了几行、没发完的原因。
+//! 2. 挑发法（D3，第 2 期）：前台（语音输入：开始收音的那个窗口）是某个游戏插件登记的窗口（例如英雄联盟客户端）
+//!    → 交给插件（[`provider`]），不按键，下面 3–7 都不做；插件关着时替玩家发言的不发、说开哪个开关，玩家自己的
+//!    语音输入照旧往下走。插件接手以后失败了也不退回按键；
+//! 3. 拿宿主那一把输入锁（[`crate::input_lock`]），排队最多 5 秒、不超过调用方的截止时间；
+//! 4. 等修饰键松开（每行最多 1 秒）；按住 Shift 时开聊天框的回车会变成 Shift+Enter（全体频道）；
+//! 5. 有 `restore` 就拿到锁以后再切回那个窗口（语音输入：回到开始收音时的窗口，D5）；
+//! 6. 按**前台检测到的游戏**挑游戏配置（[`pick_game`]），再挑频道（[`pick_channel`]）；
+//! 7. 逐行发：每行之前看取消、截止时间、前台还是不是同一个窗口；一行一个 ADR 032 的挡键窗口；行间 65 毫秒；
+//! 8. 结果说清楚（[`ChatOutcome`]）：走了哪条路、哪个频道、发了几行、没发完的原因。
 //!
 //! **不重试、不补发**（ADR 032、原则 4）：没发出去的就说没发出去。调用方拿到的结果总是真的——
 //! 截止时间之前一定返回，开始一行之前估计来不及就不开始。
@@ -25,6 +28,9 @@ use crate::input_lock::{InputBusy, InputLock, InputUser, LockError, INPUT_LOCK_W
 use crate::process_log::EventData;
 use crate::profile::{self, ChannelStrategy, GameProfile};
 use crate::settings::Settings;
+
+pub mod provider;
+pub use provider::{ChatProvider, ChatSend, ChatSent, ChatStop, SendToGameSpec, StopCode};
 
 /// 一次最多几行：英雄联盟“战绩一条一行”，一局 10 个人。
 pub const MAX_LINES: usize = 10;
@@ -113,6 +119,8 @@ impl ChatRequest {
 #[derive(Debug, Clone)]
 pub struct ChatOutcome {
     pub route: SendRoute,
+    /// 提供发法的插件（走插件的发法时，例如 `lol`）；本体的通用发法是 None
+    pub plugin: Option<String>,
     /// 用的游戏配置
     pub game: String,
     pub game_name: String,
@@ -147,6 +155,9 @@ impl ChatOutcome {
             "sentLines": self.sent_lines,
             "waitedMs": self.waited_ms,
         });
+        if let Some(plugin) = &self.plugin {
+            value["plugin"] = json!(plugin);
+        }
         if self.channel_fell_back {
             value["channelFellBack"] = json!(true);
         }
@@ -199,6 +210,16 @@ pub enum ChatFailure {
     TimeUp,
     Cancelled,
     Inject(InjectError),
+    /// 插件的发法没发（或没发完）：插件给的原因（[`StopCode`]）。不退回按键
+    Provider(ChatStop),
+    /// 前台是插件登记的窗口，但插件或它要的开关关着；替玩家发言的不往这个窗口里按键
+    ProviderOff {
+        process: String,
+        /// “英雄联盟插件的「在客户端里发聊天」关着”
+        why: String,
+    },
+    /// 这里经插件的发法发（客户端接口），没法只打进聊天框不发（`send = false`）
+    NoDraftHere,
 }
 
 impl ChatFailure {
@@ -221,6 +242,9 @@ impl ChatFailure {
             Self::Inject(e) if e.input_blocked => "inputBlocked",
             Self::Inject(e) if e.needs_elevation => "needsElevation",
             Self::Inject(_) => "injectFailed",
+            Self::Provider(stop) => stop.code.as_str(),
+            Self::ProviderOff { .. } => "providerOff",
+            Self::NoDraftHere => "noDraftHere",
         }
     }
 
@@ -265,6 +289,15 @@ impl std::fmt::Display for ChatFailure {
             Self::TimeUp => write!(f, "时间不够了（调用的期限快到了），没开始发"),
             Self::Cancelled => write!(f, "发送已取消"),
             Self::Inject(e) => write!(f, "{}", e.message),
+            Self::Provider(stop) => write!(f, "{stop}"),
+            Self::ProviderOff { process, why } => write!(
+                f,
+                "前台是 {process}，{why}，这次没替你发：打开它，或者切到游戏里再让我替你发言"
+            ),
+            Self::NoDraftHere => write!(
+                f,
+                "这里的聊天经客户端发，没法只打进聊天框不发，这次没发：要直接发，打开“帮忙打字后自动发送”（唤醒 → 快捷指令）"
+            ),
         }
     }
 }
@@ -303,6 +336,8 @@ pub struct GameChat {
     profiles: ProfileSource,
     clock: Arc<dyn Clock>,
     note: Note,
+    /// 游戏插件提供的发法（D3，第 2 期；桌面端从内置插件表建）。
+    providers: Vec<Arc<dyn ChatProvider>>,
 }
 
 impl GameChat {
@@ -321,7 +356,14 @@ impl GameChat {
             profiles: Arc::new(profile::list),
             clock: Arc::new(RealClock),
             note: Arc::new(|activity, data| crate::process_log::record_activity(activity, data)),
+            providers: Vec::new(),
         }
+    }
+
+    /// 游戏插件提供的发法（桌面端：内置插件清单里的 `[[send_to_game]]`）。
+    pub fn with_providers(mut self, providers: Vec<Arc<dyn ChatProvider>>) -> Self {
+        self.providers = providers;
+        self
     }
 
     /// 游戏配置从哪来（测试给固定的；生产是 `profile::list`）。
@@ -413,6 +455,101 @@ impl GameChat {
             .unwrap_or_else(GameProfile::builtin_generic);
         (active, profiles)
     }
+
+    /// 这次的话归不归某个插件的发法（D3）：看语音输入开始收音的那个窗口（窗口没了就看现在的前台），否则看
+    /// 现在的前台；它的程序在某个插件登记的窗口里 → (那个发法, 程序名)。Kotone 自己的窗口不归谁。
+    fn provider_for(&self, request: &ChatRequest) -> Option<(&Arc<dyn ChatProvider>, String)> {
+        if self.providers.is_empty() {
+            return None;
+        }
+        let info = request
+            .restore
+            .and_then(|r| self.focus.window_info(r.window))
+            .or_else(|| self.focus.foreground_info())?;
+        if info.own_process {
+            return None;
+        }
+        let process = info.process?;
+        self.providers
+            .iter()
+            .find(|p| p.spec().covers(&process))
+            .map(|p| (p, process))
+    }
+
+    /// 交给插件的发法：不拿锁、不等修饰键、不切窗口（不按键）。插件的结果就是最终结果，不退回按键（D6、ADR 032）。
+    fn send_via_provider(
+        &self,
+        provider: &dyn ChatProvider,
+        request: &ChatRequest,
+        lines: Vec<String>,
+        deadline: Instant,
+    ) -> Result<ChatOutcome, ChatFailure> {
+        if !request.send {
+            return Err(ChatFailure::NoDraftHere);
+        }
+        if request.cancel.is_cancelled() {
+            return Err(ChatFailure::Cancelled);
+        }
+        let spec = provider.spec();
+        let game = (self.profiles)().into_iter().find(|p| p.id == spec.game);
+        let (channel, channel_fell_back) = match &game {
+            Some(game) => requested_channel(game, request.channel.as_ref()),
+            None => (
+                request
+                    .channel
+                    .as_ref()
+                    .map_or(CHANNEL_TEAM.to_string(), |c| c.id.clone()),
+                false,
+            ),
+        };
+        let result = provider.send(ChatSend {
+            game: spec.game.clone(),
+            lines: lines.clone(),
+            channel,
+            deadline,
+            cancel: request.cancel.clone(),
+        });
+        let result = match result {
+            // 守住“Ok 至少发了一行”
+            Ok(sent) if sent.sent_lines == 0 => Err(sent.stopped.unwrap_or_else(|| {
+                ChatStop::new(StopCode::ClientRejected, "客户端说一行都没发出去，这次没发")
+            })),
+            other => other,
+        };
+        (self.note)(
+            "send_to_game_provider",
+            EventData {
+                detail: Some(format!(
+                    "plugin={} game={} lines={}",
+                    provider.plugin(),
+                    spec.game,
+                    lines.len()
+                )),
+                outcome: Some(match &result {
+                    Ok(sent) if sent.stopped.is_none() => "ok".into(),
+                    Ok(_) => "partial".into(),
+                    Err(stop) => stop.code.as_str().into(),
+                }),
+                ..Default::default()
+            },
+        );
+        let sent = result.map_err(ChatFailure::Provider)?;
+        let sent_lines = sent.sent_lines.min(lines.len());
+        Ok(ChatOutcome {
+            route: SendRoute::Client,
+            plugin: Some(provider.plugin().to_string()),
+            game: spec.game.clone(),
+            game_name: game.map_or_else(|| spec.game.clone(), |g| g.display_name),
+            channel: sent.channel,
+            channel_name: sent.channel_name,
+            channel_fell_back,
+            sent: sent_lines == lines.len() && sent.stopped.is_none(),
+            stopped: sent.stopped.map(ChatFailure::Provider),
+            lines,
+            sent_lines,
+            waited_ms: 0,
+        })
+    }
 }
 
 impl SendToGame for GameChat {
@@ -421,6 +558,21 @@ impl SendToGame for GameChat {
         let lines = split_lines(&request.text, request.send)?;
         let deadline = request.deadline.unwrap_or(started + DEFAULT_DEADLINE);
         let cancel = request.cancel.clone();
+
+        // 挑发法（D3，第 2 期）：前台是插件登记的窗口 → 交给插件，不按键
+        if let Some((provider, process)) = self.provider_for(&request) {
+            match provider.off() {
+                None => {
+                    return self.send_via_provider(provider.as_ref(), &request, lines, deadline)
+                }
+                // 替玩家发言的：不往插件登记的窗口里按键（客户端里按 Enter 可能点到有焦点的按钮）
+                Some(why) if request.speaker != Speaker::Player => {
+                    return Err(ChatFailure::ProviderOff { process, why })
+                }
+                // 玩家自己的语音输入：照旧按键（玩家拍板过“前台是什么窗就往哪发”）
+                Some(_) => {}
+            }
+        }
 
         // 排队：最多 5 秒，不超过截止时间。锁按真实时间等（测试的假时钟只管睡觉）。
         let lock_wait = deadline
@@ -459,6 +611,7 @@ impl SendToGame for GameChat {
 
         let mut outcome = ChatOutcome {
             route: SendRoute::Keys,
+            plugin: None,
             game: game.id.clone(),
             game_name: game.display_name.clone(),
             channel: strategy.id.clone(),
@@ -618,6 +771,21 @@ pub fn pick_channel(
         channel: channel_label(&pick.id).to_string(),
         game: game.display_name.clone(),
     })
+}
+
+/// 交给插件的发法时要哪个频道（id）：缺省 = 游戏配置的默认频道；语音输入选的频道属于别的游戏 → 默认频道
+/// （和 [`pick_channel`] 前两条一样）。插件那边只有“这里有这个频道就发、没有就不发”（不退，ADR 041 第 2 期）。
+/// 返回 (频道 id, 是否因为 `for_game` 不是这个游戏而退回了默认频道)。
+pub fn requested_channel(game: &GameProfile, pick: Option<&ChannelPick>) -> (String, bool) {
+    let default = game.channel_strategy(None).id;
+    match pick {
+        None => (default, false),
+        Some(pick) if pick.for_game.as_deref().is_some_and(|g| g != game.id) => {
+            let fell_back = pick.id != default;
+            (default, fell_back)
+        }
+        Some(pick) => (pick.id.clone(), false),
+    }
 }
 
 fn channel_label(id: &str) -> &str {

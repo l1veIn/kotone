@@ -68,18 +68,27 @@ pub async fn send(app: &AppHandle, request: ChatRequest) -> Result<ChatOutcome, 
     }
 }
 
-/// 回执：只证明本机按键已执行。
+/// 回执：按键的只证明本机按键已执行；经客户端接口的只证明客户端收下了（ADR 041 D6）。
 fn receipt(outcome: &ChatOutcome, send: bool) -> String {
-    let how = match (outcome.route, send) {
-        (_, false) => "已打进聊天框，未按发送键".to_string(),
-        (SendRoute::Console, true) => format!("已经由控制台发到{}", outcome.channel_name),
-        (SendRoute::Keys, true) => format!("已按发送键发到{}", outcome.channel_name),
-    };
-    format!(
-        "{how}（{}/{} 行）；只证明本机按键已执行，不证明服务器已收到",
-        outcome.sent_lines,
-        outcome.lines.len()
-    )
+    let (n, total) = (outcome.sent_lines, outcome.lines.len());
+    match (outcome.route, send) {
+        (SendRoute::Client, _) => format!(
+            "已经经客户端的聊天接口发到{}（{n}/{total} 行{}）；只证明客户端收下了，不证明队友已经看到",
+            outcome.channel_name,
+            if total > 1 { "，连成一条" } else { "" }
+        ),
+        (_, false) => {
+            format!("已打进聊天框，未按发送键（{n}/{total} 行）；只证明本机按键已执行，不证明服务器已收到")
+        }
+        (SendRoute::Console, true) => format!(
+            "已经由控制台发到{}（{n}/{total} 行）；只证明本机按键已执行，不证明服务器已收到",
+            outcome.channel_name
+        ),
+        (SendRoute::Keys, true) => format!(
+            "已按发送键发到{}（{n}/{total} 行）；只证明本机按键已执行，不证明服务器已收到",
+            outcome.channel_name
+        ),
+    }
 }
 
 /// 本体用 ToolSpec 登记的工具（[`kotone_agent::body`]，ADR 039 D2）在桌面端的实现：她
@@ -228,6 +237,7 @@ mod tests {
     fn outcome(lines: &[&str], sent_lines: usize) -> ChatOutcome {
         ChatOutcome {
             route: SendRoute::Keys,
+            plugin: None,
             game: "lol".into(),
             game_name: "League of Legends".into(),
             channel: "team".into(),
@@ -266,6 +276,30 @@ mod tests {
         assert_eq!(v["typed"], "一\n二");
         assert_eq!(v["sent"], false);
         assert_eq!(v["stopped"]["code"], "foregroundChanged");
+    }
+
+    /// 走插件的发法（英雄联盟客户端的聊天接口，ADR 041 第 2 期）：回执说清楚只证明客户端收下了，带上 plugin。
+    #[test]
+    fn the_client_route_says_what_its_receipt_proves() {
+        let mut out = outcome(&["亚索 5/0/2", "劫 0/4/1"], 2);
+        out.route = SendRoute::Client;
+        out.plugin = Some("lol".into());
+        out.channel_name = "选英雄的聊天".into();
+        let v = result_json(&out, true);
+        assert_eq!(v["route"], "client");
+        assert_eq!(v["plugin"], "lol");
+        assert_eq!(v["sent"], true);
+        assert_eq!(
+            v["receipt"],
+            "已经经客户端的聊天接口发到选英雄的聊天（2/2 行，连成一条）；只证明客户端收下了，不证明队友已经看到"
+        );
+        // 按键的回执一字不变
+        let v = result_json(&outcome(&["gg"], 1), true);
+        assert_eq!(
+            v["receipt"],
+            "已按发送键发到队伍（1/1 行）；只证明本机按键已执行，不证明服务器已收到"
+        );
+        assert!(v.get("plugin").is_none());
     }
 
     #[test]
