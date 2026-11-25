@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use kotone_core::cancel::CancellationToken;
 use kotone_plugin_api::Host;
 use serde_json::{json, Value};
 
@@ -51,6 +52,8 @@ pub struct VoiceChat {
     inner: Mutex<Inner>,
     /// `sync` 串行执行（打开设备要一点时间）。
     syncing: Mutex<()>,
+    /// 玩家这边那一遍（[`echo_to_player`]）：停下她时还在排队、正在放的都不放了。
+    echoes: Mutex<CancellationToken>,
 }
 
 impl VoiceChat {
@@ -63,8 +66,9 @@ impl VoiceChat {
             .map(|(_, r)| r.clone())
     }
 
-    /// 停掉还没说完的话（停止她时调用）。
+    /// 停掉还没说完的话（停止她时调用）：队友那边的，和玩家这边还在排队、正在放的那一遍。
     pub fn hush(&self) {
+        std::mem::take(&mut *self.echoes.lock().unwrap()).cancel();
         if let Some(router) = self.router() {
             router.hush();
         }
@@ -377,7 +381,7 @@ fn running_router(state: &VoiceChat, host: &dyn Host) -> Result<Arc<VoiceRouter>
     })
 }
 
-/// 把一句话说给队友听：合成一次送进虚拟麦克风，玩家自己也照常从耳机里听到。
+/// 把一句话说给队友听：合成一次送进虚拟麦克风，玩家自己也照常从耳机里听到（[`echo_to_player`]）。
 pub async fn say(state: &Arc<VoiceChat>, host: Arc<dyn Host>, text: &str) -> Result<Value, String> {
     let router = {
         let (state, host) = (state.clone(), host.clone());
@@ -385,15 +389,31 @@ pub async fn say(state: &Arc<VoiceChat>, host: Arc<dyn Host>, text: &str) -> Res
     };
     let (samples, rate) = host.synthesize(text).await?;
     let duration_ms = router.say(&samples, rate);
-    // 同一句已经在缓存里，玩家这边几乎同时出声；本机播放失败不影响队友那边。
-    if let Err(e) = host.speak(text).await {
-        kotone_core::log::log(&format!("voice chat: local playback failed: {e}"));
-    }
+    echo_to_player(state, &host, text);
     kotone_core::log::log(&format!(
         "voice chat: said {} chars to teammates",
         text.chars().count()
     ));
     Ok(json!({"sent": true, "durationMs": duration_ms}))
+}
+
+/// 玩家这边也听一遍：交给宿主，和她自己的话轮流放（她正在说就排在她后面，放的时候音乐压低）。
+/// 同一句已经在缓存里，轮到了马上出声。工具不等它放完：她常在同一步里先 `voice_chat.say` 再 `speak`
+/// “说了”，边生成边念的那句在模型写参数时就开口、拿着播报，要等 `speak` 执行才收尾，而工具是一个一个
+/// 执行的——这里等它，两边就互相等着。宿主放不出来时会改用弹幕显示这句，这里记一笔原因；队友那边不受影响。
+fn echo_to_player(state: &VoiceChat, host: &Arc<dyn Host>, text: &str) {
+    let stop = state.echoes.lock().unwrap().clone();
+    let speak = host.speak(text);
+    host.spawn(Box::pin(async move {
+        tokio::select! {
+            _ = stop.cancelled() => {}
+            result = speak => {
+                if let Err(e) = result {
+                    kotone_core::log::log(&format!("voice chat: local playback failed: {e}"));
+                }
+            }
+        }
+    }));
 }
 
 /// 自检：往虚拟麦克风放 1 秒测试音，同时从 CABLE Output 录回来（约 1.5 秒）。
@@ -423,6 +443,95 @@ pub async fn test(state: &Arc<VoiceChat>, host: &dyn Host) -> Result<Value, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use kotone_plugin_api::{BoxFuture, Observation};
+
+    /// 宿主那边“她正在说”：`speak` 一直轮不到（排在她的话后面），被丢掉时记一笔。
+    #[derive(Default)]
+    struct BusyHost {
+        asked: AtomicUsize,
+        dropped: Arc<AtomicUsize>,
+    }
+
+    struct Dropped(Arc<AtomicUsize>);
+
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl Host for BusyHost {
+        fn plugin(&self) -> &str {
+            "game-voice"
+        }
+        fn enabled(&self) -> bool {
+            true
+        }
+        fn source_enabled(&self, _: &str) -> bool {
+            true
+        }
+        fn settings(&self) -> Value {
+            Value::Null
+        }
+        fn data_dir(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn spawn(&self, task: BoxFuture<'static, ()>) {
+            tokio::spawn(task);
+        }
+        fn process_ids(&self, _: &str) -> Vec<u32> {
+            Vec::new()
+        }
+        fn process_command_line(&self, _: u32) -> Option<String> {
+            None
+        }
+        fn game_observe(&self, _: &str, _: Observation) {}
+        fn game_claim(&self, _: &str, _: bool) {}
+        fn game_event(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: serde_json::Map<String, Value>,
+            _: Option<f64>,
+        ) {
+        }
+        fn speak(&self, _: &str) -> BoxFuture<'static, Result<(), String>> {
+            self.asked.fetch_add(1, Ordering::SeqCst);
+            let dropped = Dropped(self.dropped.clone());
+            Box::pin(async move {
+                let _dropped = dropped;
+                std::future::pending::<Result<(), String>>().await
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn the_player_side_echo_does_not_hold_up_the_tool() {
+        let state = VoiceChat::default();
+        let busy = Arc::new(BusyHost::default());
+        let host: Arc<dyn Host> = busy.clone();
+        // 她这一步里接着要 `speak`，那句拿着播报：这里要是等，就和她互相等着
+        echo_to_player(&state, &host, "我去拿龙了");
+        tokio::task::yield_now().await;
+        assert_eq!(busy.asked.load(Ordering::SeqCst), 1, "交给宿主排队了");
+        assert_eq!(busy.dropped.load(Ordering::SeqCst), 0, "还在排队，没丢");
+        // 玩家让她停下：还在排队的那一遍也不放了；之后再说照常排队
+        state.hush();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while busy.dropped.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("停下她时丢掉还在排队的那一遍");
+        echo_to_player(&state, &host, "撤了");
+        tokio::task::yield_now().await;
+        assert_eq!(busy.asked.load(Ordering::SeqCst), 2);
+        assert_eq!(busy.dropped.load(Ordering::SeqCst), 1);
+    }
 
     fn cable() -> CableDevices {
         CableDevices {

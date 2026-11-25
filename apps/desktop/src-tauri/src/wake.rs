@@ -774,7 +774,8 @@ impl CallEars {
 
     /// 喂一块；玩家开口了就返回要交给收音会话的音频（开口前的一小段 + 这一块）。
     fn accept(&mut self, app: &AppHandle, chunk: Vec<f32>) -> Option<Vec<Vec<f32>>> {
-        let speaking = her_voice_playing(app);
+        // 她在出声（和音乐压低同一个判断，含插件用她的声音说的话）
+        let speaking = crate::assistant::she_is_audible(app);
         if speaking {
             self.her_voice_at = Some(Instant::now());
         }
@@ -846,15 +847,6 @@ impl CallEars {
         self.reset();
         Some(prefill)
     }
-}
-
-#[cfg(feature = "engine-sherpa")]
-/// 她正在出声吗（边生成边念的回答、整段念的话、等待短句、应答）。
-fn her_voice_playing(app: &AppHandle) -> bool {
-    crate::assistant::output_busy(app)
-        || crate::assistant::speaking_now()
-        || crate::voice_reply::active()
-        || crate::bubble::is_speaking(app)
 }
 
 /// 把已收集的音频交给新的唤醒会话并开始它；失败就回到冷却。

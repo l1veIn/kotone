@@ -429,6 +429,130 @@ pub fn speaker_and_request(
     Ok((speaker, request))
 }
 
+/// 插件用她的声音在玩家的扬声器上说一句（`Host::speak`，例如游戏语音说给队友的话玩家自己也听一遍）。
+/// 和她自己的话走同一条路（[`take_turn_and_speak`]）：排在她的话、提醒、填充话后面，放的时候算她在出声。
+/// 放完才返回。没放出来、又不是玩家让她停下的，照提醒的做法改用弹幕显示这句（玩家至少看得到），
+/// 原因也交回给插件。
+pub async fn speak_in_turn(app: &AppHandle, text: &str) -> Result<(), String> {
+    let (speaker, request) = {
+        let (app, text) = (app.clone(), text.to_string());
+        // 换了模型目录时取扬声器要等旧的关掉（最多 10 秒）：不在异步线程里等
+        tauri::async_runtime::spawn_blocking(move || speaker_and_request(&app, &text))
+            .await
+            .map_err(|e| e.to_string())??
+    };
+    let runtime = app.state::<AssistantRuntime>();
+    let started = std::time::Instant::now();
+    let waited_for_her = she_is_audible(app);
+    let result = take_turn_and_speak(
+        &runtime.output_lock,
+        &runtime.output_cancel,
+        &runtime.active_captures,
+        speaker,
+        request,
+    )
+    .await;
+    if waited_for_her {
+        kotone_core::log::log(&format!(
+            "assistant: 插件的话排在她后面放（共 {} 毫秒）",
+            started.elapsed().as_millis()
+        ));
+    }
+    match result {
+        Ok(()) => Ok(()),
+        Err(Unspoken::Stopped) => Err("玩家让她停下了，这句没有放完".into()),
+        Err(Unspoken::Failed(error)) => {
+            kotone_core::log::log(&format!("assistant: 插件的话没能放出来，改用弹幕：{error}"));
+            if let Err(e) = deliver_text(app, text.to_string(), vec![DeliveryKind::Danmaku]).await {
+                kotone_core::log::log(&format!("assistant: 弹幕也没能显示：{e}"));
+            }
+            Err(format!("没能在玩家这边放出来：{error}"))
+        }
+    }
+}
+
+/// 插件的一句话为什么没放出来。
+#[derive(Debug, PartialEq)]
+enum Unspoken {
+    /// 玩家让她停下了（停止、呼叫键打断：[`stop_speech`]）。
+    Stopped,
+    /// 别的原因：麦克风一直开着、语音出错、超时。
+    Failed(String),
+}
+
+/// 麦克风开着时插件的话最多等这么久（同提醒、边生成边念的回答）。
+const PLUGIN_CAPTURE_WAIT: Duration = Duration::from_secs(30);
+
+/// 轮到了再说（插件的话，[`speak_in_turn`]）：
+/// 1. 排队拿播报锁——她的话（边生成边念的回答、整段念的话）、提醒、填充话放完才轮到；放的时候一直拿着，
+///    她下一句也等它放完，[`she_is_audible`] 也就是真的（音乐压低、通话里不把这句当成玩家说的）；
+/// 2. 麦克风开着先不出声（免得录进去），一直开着就不放了；
+/// 3. 记进“她最近说过的话”（通话里开着回声消除时认回声用），和她整段念的话一样；
+/// 4. 玩家让她停下（[`stop_speech`]）、或者调用方不等了（future 被丢掉）时这句也停。
+async fn take_turn_and_speak(
+    lock: &tokio::sync::Mutex<()>,
+    outputs: &OutputCancellation,
+    captures: &AtomicUsize,
+    speaker: Arc<dyn SpeechOutput>,
+    request: SpeechRequest,
+) -> Result<(), Unspoken> {
+    let _turn = lock.lock().await;
+    let stop = outputs.begin();
+    let text = request.text.clone();
+    let spoken = until_output_stopped(&stop, async {
+        let waited = std::time::Instant::now();
+        while captures.load(Ordering::SeqCst) != 0 {
+            if waited.elapsed() >= PLUGIN_CAPTURE_WAIT {
+                return Err("麦克风一直开着，这句没有放".to_string());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        crate::voice_reply::remember_spoken(&text);
+        let mut playing = StopOnDrop(Some(speaker.clone()));
+        let task = queue_speech(speaker, request, captures, &stop)?;
+        match tokio::time::timeout(Duration::from_secs(60), task).await {
+            Ok(Ok(result)) => {
+                playing.0 = None;
+                result
+            }
+            Ok(Err(_)) => Err("语音工作线程异常".into()),
+            Err(_) => Err("语音播报超时".into()),
+        }
+    })
+    .await;
+    match spoken {
+        Ok(()) => {
+            // 念完的时刻再记一次（“最近”从念完算）
+            crate::voice_reply::remember_spoken(&text);
+            Ok(())
+        }
+        Err(_) if stop.is_cancelled() => Err(Unspoken::Stopped),
+        Err(error) => Err(Unspoken::Failed(error)),
+    }
+}
+
+/// 这句还没放完就被丢下（停下、超时、调用方不等了）：语音也停。
+struct StopOnDrop(Option<Arc<dyn SpeechOutput>>);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        if let Some(speaker) = self.0.take() {
+            let _ = speaker.cancel();
+        }
+    }
+}
+
+/// 她这会儿在出声没有——“她在说话”只有这一种判断：音乐压低（`Host::she_is_audible`）、唤醒和通话的
+/// 半双工（没有回声消除时她说话就不听）都用它。算进去的：边生成边念的回答（[`crate::voice_reply`]）、
+/// 应答和追问（[`speak_now`]）、拿着播报锁的一切（整段念的话、提醒、填充话、插件的话）。
+pub fn she_is_audible(app: &AppHandle) -> bool {
+    audible(output_busy(app))
+}
+
+fn audible(output_busy: bool) -> bool {
+    output_busy || speaking_now() || crate::voice_reply::active()
+}
+
 /// 先把这些短句合成进缓存（唤醒应答“嗯？/我在”），用时立刻出声、不用现场请求在线语音。
 pub fn prefetch(app: &AppHandle, texts: &[&str]) {
     let config = app
@@ -862,6 +986,9 @@ async fn until_output_stopped<T>(
     }
 }
 
+/// 语音队列满了最多等这么久。
+const QUEUE_FULL_WAIT: Duration = Duration::from_secs(3);
+
 fn queue_speech(
     speaker: Arc<dyn SpeechOutput>,
     request: SpeechRequest,
@@ -877,7 +1004,20 @@ fn queue_speech(
                 return Err("录音已开始，已停止语音提醒".into());
             }
             Ok(tokio::task::spawn_blocking(move || {
-                speaker.speak_if_current(request, generation)
+                // 本地语音的工作线程队列只有 2 格（预取、合成填充话、边生成边念的合成也往里放）：
+                // 满了稍等再试，不丢这句（同 `kotone_tts` 合成时的重试）。被停下时票据失效，马上返回。
+                let deadline = std::time::Instant::now() + QUEUE_FULL_WAIT;
+                loop {
+                    match speaker.speak_if_current(request.clone(), generation) {
+                        Err(error)
+                            if error.contains("队列已满")
+                                && std::time::Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(Duration::from_millis(100));
+                        }
+                        other => return other,
+                    }
+                }
             }))
         })
         .ok_or_else(|| "提醒输出已停止".to_string())?
@@ -1490,6 +1630,250 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(speaker.spoken.load(Ordering::SeqCst), 1);
+    }
+
+    // ---------- 插件经宿主出声（`Host::speak`，游戏语音“说给队友”时玩家这边听的那一遍） ----------
+
+    /// 假扬声器：开始说一句就记一笔，然后一直“放着”，等测试放行；被停下（`cancel`）就返回“已取消”。
+    /// `full` 是前几次说的时候回“队列已满”（本地语音的工作线程队列只有 2 格）。
+    #[derive(Default)]
+    struct PlayingSpeaker {
+        generation: AtomicU64,
+        full: AtomicUsize,
+        started: AtomicUsize,
+        finished: AtomicUsize,
+        released: Mutex<bool>,
+        wake: std::sync::Condvar,
+    }
+
+    impl PlayingSpeaker {
+        fn queue_full_for(times: usize) -> Arc<Self> {
+            let speaker = Self::default();
+            speaker.full.store(times, Ordering::SeqCst);
+            Arc::new(speaker)
+        }
+
+        fn release(&self) {
+            *self.released.lock().unwrap() = true;
+            self.wake.notify_all();
+        }
+
+        fn started(&self) -> usize {
+            self.started.load(Ordering::SeqCst)
+        }
+    }
+
+    impl SpeechOutput for PlayingSpeaker {
+        fn voices(&self) -> Result<Vec<SpeechVoice>, String> {
+            Ok(Vec::new())
+        }
+
+        fn generation(&self) -> u64 {
+            self.generation.load(Ordering::SeqCst)
+        }
+
+        fn speak_if_current(&self, _: SpeechRequest, ticket: u64) -> Result<(), String> {
+            if ticket != self.generation() {
+                return Err("播报已取消".into());
+            }
+            if self
+                .full
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .is_ok()
+            {
+                return Err("本地语音队列已满或服务已停止".into());
+            }
+            self.started.fetch_add(1, Ordering::SeqCst);
+            let playing = std::time::Instant::now();
+            let mut released = self.released.lock().unwrap();
+            while !*released {
+                if ticket != self.generation() {
+                    return Err("播报已取消".into());
+                }
+                // 测试断言失败、没人放行时也要结束（tokio 退出时会等这条线程）
+                if playing.elapsed() > Duration::from_secs(5) {
+                    return Err("测试里一直没放行".into());
+                }
+                released = self
+                    .wake
+                    .wait_timeout(released, Duration::from_millis(10))
+                    .unwrap()
+                    .0;
+            }
+            self.finished.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn cancel(&self) -> Result<(), String> {
+            self.generation.fetch_add(1, Ordering::SeqCst);
+            self.wake.notify_all();
+            Ok(())
+        }
+    }
+
+    /// 宿主那一份播报状态：同一把播报锁、同一个“停下”、同一个“麦克风开着”。
+    #[derive(Clone, Default)]
+    struct Turns {
+        lock: Arc<tokio::sync::Mutex<()>>,
+        outputs: Arc<OutputCancellation>,
+        captures: Arc<AtomicUsize>,
+    }
+
+    impl Turns {
+        /// 插件说一句（和 `DesktopHost::speak` 走同一个函数）。
+        fn plugin_says(
+            &self,
+            speaker: &Arc<PlayingSpeaker>,
+        ) -> tokio::task::JoinHandle<Result<(), Unspoken>> {
+            let turns = self.clone();
+            let speaker: Arc<dyn SpeechOutput> = speaker.clone();
+            tokio::spawn(async move {
+                let request =
+                    speech_request(TtsEngine::Kokoro, &AssistantConfig::default(), "我去拿龙了");
+                take_turn_and_speak(
+                    &turns.lock,
+                    &turns.outputs,
+                    &turns.captures,
+                    speaker,
+                    request,
+                )
+                .await
+            })
+        }
+    }
+
+    async fn eventually(what: &str, done: impl Fn() -> bool) {
+        let started = std::time::Instant::now();
+        while !done() {
+            assert!(started.elapsed() < Duration::from_secs(3), "等不到：{what}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn plugin_speech_waits_until_she_has_finished() {
+        let turns = Turns::default();
+        let speaker = Arc::new(PlayingSpeaker::default());
+        // 她正在说（边生成边念的回答、提醒、填充话都拿着这把播报锁）
+        let her_words = turns.lock.clone().lock_owned().await;
+        let plugin = turns.plugin_says(&speaker);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            speaker.started(),
+            0,
+            "她还在说：插件的话要排在她后面，不能两段同时放"
+        );
+        drop(her_words);
+        eventually("轮到插件的话", || speaker.started() == 1).await;
+        speaker.release();
+        plugin.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn her_next_words_wait_for_plugin_speech() {
+        let turns = Turns::default();
+        let speaker = Arc::new(PlayingSpeaker::default());
+        let plugin = turns.plugin_says(&speaker);
+        eventually("插件的话开始放", || speaker.started() == 1).await;
+        // 她要开口了（`hold_output`：边生成边念的回答第一个字到了就排队拿播报）
+        let her_turn = tokio::time::timeout(Duration::from_millis(200), turns.lock.lock()).await;
+        assert!(
+            her_turn.is_err(),
+            "插件的话还在放：她下一句要等它放完，不能叠在一起"
+        );
+        speaker.release();
+        plugin.await.unwrap().unwrap();
+        assert!(turns.lock.try_lock().is_ok(), "放完了就让出来");
+    }
+
+    #[tokio::test]
+    async fn plugin_speech_counts_as_her_voice() {
+        let turns = Turns::default();
+        let speaker = Arc::new(PlayingSpeaker::default());
+        assert!(!audible(turns.lock.try_lock().is_err()));
+        let plugin = turns.plugin_says(&speaker);
+        eventually("插件的话开始放", || speaker.started() == 1).await;
+        assert!(
+            audible(turns.lock.try_lock().is_err()),
+            "插件用她的声音在放：算她在出声（音乐压低；通话里没有回声消除时不把这句当成玩家说的）"
+        );
+        speaker.release();
+        plugin.await.unwrap().unwrap();
+        assert!(!audible(turns.lock.try_lock().is_err()));
+    }
+
+    #[tokio::test]
+    async fn plugin_speech_is_not_dropped_when_the_speech_queue_is_full() {
+        let turns = Turns::default();
+        let speaker = PlayingSpeaker::queue_full_for(2);
+        speaker.release();
+        let result = turns.plugin_says(&speaker).await.unwrap();
+        assert_eq!(result, Ok(()), "队列满了稍等再放，不丢");
+        assert_eq!(speaker.finished.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn plugin_speech_waits_for_the_microphone() {
+        let turns = Turns::default();
+        let speaker = Arc::new(PlayingSpeaker::default());
+        speaker.release();
+        turns.captures.store(1, Ordering::SeqCst);
+        let plugin = turns.plugin_says(&speaker);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            speaker.started(),
+            0,
+            "麦克风开着：先不出声，免得把她的声音录成玩家说的"
+        );
+        turns.captures.store(0, Ordering::SeqCst);
+        plugin.await.unwrap().unwrap();
+        assert_eq!(speaker.started(), 1);
+    }
+
+    #[tokio::test]
+    async fn stopping_her_also_stops_plugin_speech() {
+        // 还在等麦克风关：停下就不放了
+        let turns = Turns::default();
+        let speaker = Arc::new(PlayingSpeaker::default());
+        turns.captures.store(1, Ordering::SeqCst);
+        let waiting = turns.plugin_says(&speaker);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        drop(turns.outputs.stop());
+        assert_eq!(waiting.await.unwrap(), Err(Unspoken::Stopped));
+        assert_eq!(speaker.started(), 0);
+        // 正在放：停下就停（不算“没放出来”，不改用弹幕）
+        turns.captures.store(0, Ordering::SeqCst);
+        let playing = turns.plugin_says(&speaker);
+        eventually("插件的话开始放", || speaker.started() == 1).await;
+        drop(turns.outputs.stop());
+        assert_eq!(playing.await.unwrap(), Err(Unspoken::Stopped));
+        assert_eq!(speaker.finished.load(Ordering::SeqCst), 0);
+        assert!(turns.lock.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn plugin_speech_stops_when_the_caller_gives_up() {
+        // 插件不等了（游戏语音停下时丢掉还在排队、正在放的那一遍）
+        let turns = Turns::default();
+        let speaker = Arc::new(PlayingSpeaker::default());
+        let playing = turns.plugin_says(&speaker);
+        eventually("插件的话开始放", || speaker.started() == 1).await;
+        playing.abort();
+        eventually("语音被停下", || speaker.generation() > 0).await;
+        assert_eq!(speaker.finished.load(Ordering::SeqCst), 0);
+        eventually("播报锁让出来", || turns.lock.try_lock().is_ok()).await;
+    }
+
+    #[tokio::test]
+    async fn a_failure_other_than_a_stop_is_reported() {
+        let turns = Turns::default();
+        let speaker = PlayingSpeaker::queue_full_for(usize::MAX);
+        let result = turns.plugin_says(&speaker).await.unwrap();
+        assert_eq!(
+            result,
+            Err(Unspoken::Failed("本地语音队列已满或服务已停止".into())),
+            "一直满（服务停了）：等一会儿还是不行就说出来，宿主改用弹幕、告诉插件"
+        );
     }
 
     #[tokio::test]

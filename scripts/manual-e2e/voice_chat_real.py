@@ -5,6 +5,13 @@ memory only, deleted afterwards); game voice on, the player's own microphone NOT
 琴音's voice goes into the virtual cable. The player says (in-game entry) "跟队友说我去拿龙了"; expected: she first
 speaks to the teammates with voice_chat.say, then answers the player with speak — heard on "CABLE Output" (what the game
 would hear as the microphone) and on the player's own speakers (WASAPI loopback, needs `soundcard`).
+
+2026-11-25 (shared-resources audit #8): the player-side copy of the sentence goes through the same turn as her own
+words (`assistant::speak_in_turn`): it must not be dropped ("voice chat: local playback failed" absent), and when her
+`speak` in the same step was already talking, the copy waits for it ("插件的话排在她后面放" in the log) instead of
+both playing at once; the turn must not stall (the tool does not wait for the copy). Prints those log lines.
+Runs a copy of target/debug/kotone.exe (target/voicechat-e2e/bin/), so it is not mistaken for the player's `pnpm dev`.
+Plays sound on the default speakers: exits when a game is running.
 usage: python -X utf8 -I scripts/manual-e2e/voice_chat_real.py
 """
 import glob
@@ -23,10 +30,19 @@ import real_deepseek  # noqa: E402
 REPO = os.path.dirname(os.path.dirname(HERE))
 WORK = os.path.join(REPO, "target", "voicechat-e2e")
 HOME = os.path.join(WORK, "home")
-EXE = os.path.join(REPO, "target", "debug", "kotone.exe")
+DEBUG_EXE = os.path.join(REPO, "target", "debug", "kotone.exe")
+EXE = os.path.join(WORK, "bin", "kotone.exe")
 ENV = dict(os.environ, KOTONE_HOME=HOME, WEBVIEW2_USER_DATA_FOLDER=os.path.join(WORK, "webview"))
 ENV.pop("KOTONE_TOOL_SERVICE_DIR", None)
 LISTEN_S = 40
+GAMES = ("league of legends", "leagueclient", "riotclient", "dota2", "cs2", "yuanshen", "genshinimpact",
+         "valorant", "starrail", "zenlesszonezero")
+
+
+def running_games():
+    out = subprocess.run(["tasklist", "/fo", "csv", "/nh"], capture_output=True, text=True, errors="replace").stdout
+    names = {line.split('","')[0].strip('"').lower() for line in out.splitlines() if line}
+    return sorted(n for n in names if any(g in n for g in GAMES))
 
 
 # 真机测试不让琴音按键：会往前台窗口打字、点鼠标的工具一律禁止（2026-11-18 voice_chat_real 里她选了打字，
@@ -74,8 +90,14 @@ def check(name, ok, detail=""):
 
 
 def main():
+    games = running_games()
+    if games:
+        print("a game is running, not playing sound on the player's speakers:", games)
+        return False
     shutil.rmtree(WORK, ignore_errors=True)
     os.makedirs(HOME)
+    os.makedirs(os.path.dirname(EXE))
+    shutil.copy2(DEBUG_EXE, EXE)
     with open(os.path.join(HOME, "config.json"), "w", encoding="utf-8") as f:
         json.dump({"ui": {"firstRunCompleted": True}, "adminPromptDismissed": True, "toolService": {"enabled": True},
                    "hotkey": {"key": "F24", "mode": "toggle"}, "runtimeToggleHotkey": "", "automationStopHotkey": "",
@@ -119,6 +141,11 @@ def main():
             print("SKIP player's speakers:", result.get("speaker_error"))
         else:
             passed &= check("the player heard it too (default speaker)", max(speaker) > 0.05, f"peak {max(speaker):.2f}")
+        log = log_text()
+        passed &= check("the player-side copy was not dropped", "voice chat: local playback failed" not in log)
+        for line in log.splitlines():
+            if any(k in line for k in ("插件的话", "voice chat: said", "voice-timing", "voice reply:")):
+                print("  log:", line.strip()[:200])
         print(f"took {time.time() - t0:.1f} s")
     finally:
         real_deepseek.delete_connection(EXE, ENV)

@@ -372,14 +372,7 @@ impl Host for DesktopHost {
     fn speak(&self, text: &str) -> BoxFuture<'static, Result<(), String>> {
         let app = self.app.clone();
         let text = text.to_string();
-        Box::pin(async move {
-            tauri::async_runtime::spawn_blocking(move || {
-                let (speaker, request) = crate::assistant::speaker_and_request(&app, &text)?;
-                speaker.speak(request)
-            })
-            .await
-            .map_err(|e| e.to_string())?
-        })
+        Box::pin(async move { crate::assistant::speak_in_turn(&app, &text).await })
     }
 
     fn player_says(&self, text: &str) -> Result<(), String> {
@@ -403,9 +396,7 @@ impl Host for DesktopHost {
     }
 
     fn she_is_audible(&self) -> bool {
-        crate::voice_reply::active()
-            || crate::assistant::speaking_now()
-            || crate::assistant::output_busy(&self.app)
+        crate::assistant::she_is_audible(&self.app)
     }
 
     fn secret(&self, name: &str) -> Option<String> {
