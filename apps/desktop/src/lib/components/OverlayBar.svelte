@@ -23,6 +23,9 @@
     companionBindings,
     getSettings,
     isTauri,
+    dragOverlay,
+    overlayGiveBack,
+    overlayPointerEnter,
     saveOverlayPosition,
     hasLegacyReminders,
     type OverlayConfig,
@@ -207,6 +210,18 @@
     };
   });
 
+  // 点悬浮窗会把它激活（不可聚焦的窗口里 WebView2 收不到点击，所以它只能可聚焦）：鼠标移上来时记下玩家在用的窗口，
+  // 点完把前台还给它，游戏马上又收得到键（共享资源评估第二节第 5 条）。拖动松开时后端自己还。
+  function onPointerEnter() {
+    if (isTauri && !clickThrough) void overlayPointerEnter();
+  }
+
+  function onPointerUp(event: PointerEvent) {
+    if (!isTauri || clickThrough || event.button !== 0) return;
+    // 等这次点击的处理先跑（按钮的 onclick 在 pointerup 之后）
+    setTimeout(() => void overlayGiveBack(), 0);
+  }
+
   function onDragPointerDown(event: PointerEvent) {
     if (!isTauri || !draggable || clickThrough || event.button !== 0) return;
     if ((event.target as HTMLElement).closest("button")) return;
@@ -218,9 +233,9 @@
     dragDisarmTimer = setTimeout(() => {
       if (!manualDragMoved) manualDragArmed = false;
     }, 3000);
-    // data-tauri-drag-region 只在 event.target 自身带属性时生效（子元素无法拖动），
-    // 改为与 Titlebar 一致的 startDragging()：任意非交互位置按下即可整窗拖动。
-    void getCurrentWindow().startDragging();
+    // 任意非交互位置按下即可整窗拖动：后端跟着光标挪，松开时把前台还给游戏（drag_overlay；系统的
+    // startDragging() 是个模态循环，结束时页面不知道，没法及时还）。
+    void dragOverlay();
   }
 
   let textScrollEl: HTMLDivElement | undefined = $state();
@@ -300,7 +315,7 @@
 
 <!--
   两种样式（overlay.style）：
-  - card：480×120 窗口内铺满一条圆角悬浮条；非按钮区 pointerdown 由 startDragging() 整窗拖动。
+  - card：480×120 窗口内铺满一条圆角悬浮条；非按钮区 pointerdown 由后端 drag_overlay 跟着光标整窗拖动。
     整体小巧不遮挡游戏：透明背景 + 微弱青光晕描边面板。
   - capsule：520×64 窗口（后端 SetWindowPos 水平居中靠下，底部留 48px），
     胶囊本体宽度随内容伸缩（fit-content），轻装饰——Win11 语音输入条风格。
@@ -314,7 +329,9 @@
       ? 'cursor-move'
       : ''}"
     class:render-paused={!renderActive}
+    onpointerenter={onPointerEnter}
     onpointerdown={onDragPointerDown}
+    onpointerup={onPointerUp}
   >
     <div
       class="flex max-w-full items-center gap-2.5 rounded-full bg-kotone-deep/96 py-2 pr-4 pl-3.5 ring-1 ring-kotone-cyan/35"
@@ -453,7 +470,9 @@
 <div
   class="flex h-full items-stretch select-none {draggable && !clickThrough ? 'cursor-move' : ''}"
   class:render-paused={!renderActive}
+  onpointerenter={onPointerEnter}
   onpointerdown={onDragPointerDown}
+  onpointerup={onPointerUp}
 >
   <div
     class="flex w-full items-center gap-3 rounded-2xl bg-kotone-deep/96 px-4 py-2 ring-1 ring-inset ring-kotone-cyan/40"

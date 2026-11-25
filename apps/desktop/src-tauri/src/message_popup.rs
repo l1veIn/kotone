@@ -5,7 +5,8 @@
 //!   `WS_EX_NOACTIVATE`）、不进任务栏、置顶，用 `SW_SHOWNA` 显示（不激活窗口，不 `SetForegroundWindow`）。
 //!   和气泡不同的是它能点（不整窗鼠标穿透）；玩家点了它才把 Kotone 主窗口拿到前面（`agent::auto_card_open`）。
 //! - **不弹的时候**：游戏独占全屏、演示模式、别的程序全屏（`fullscreen::popup_blocked`：无边框全屏的游戏照样弹）；
-//!   Kotone 自己的窗口在前台（玩家正看着 Kotone，卡片就在聊天里）。卡片照样进聊天。
+//!   Kotone 自己的窗口在前台（玩家正看着 Kotone，卡片就在聊天里）。卡片照样进聊天。判断在 [`crate::attention`]
+//!   （“能不能现在打扰”全宿主共用一份）。
 //! - 同一时间只有一个：新的替换旧的。界面（`routes/messagePopup`）管动效和 6 秒倒计时（鼠标停在上面时不走），
 //!   到点调 [`message_popup_close`]；万一界面没调，这里 60 秒后也收起。
 //! - 位置：前台窗口所在显示器的工作区右下角（避开任务栏），DPI 按那块屏幕换算；气泡也在右下角而且正显示着时，
@@ -57,52 +58,9 @@ fn state() -> &'static Mutex<State> {
     STATE.get_or_init(Default::default)
 }
 
-/// 玩家正看着 Kotone 自己的窗口（主窗口、网页登录窗口……）吗：前台窗口是它、而且看得见、没最小化。
-/// 看不见的不算：`--background` 启动时藏着的主窗口会占着“前台”（2026-11-25 真机看到的），那时玩家看的是别的。
-fn kotone_in_front(app: &AppHandle) -> bool {
-    #[cfg(windows)]
-    {
-        use windows::Win32::UI::WindowsAndMessaging::{
-            GetForegroundWindow, IsIconic, IsWindowVisible,
-        };
-        // SAFETY: 只读当前前台窗口的句柄和状态
-        let front = unsafe { GetForegroundWindow() };
-        let shown = !front.0.is_null()
-            && unsafe { IsWindowVisible(front).as_bool() && !IsIconic(front).as_bool() };
-        shown
-            && app
-                .webview_windows()
-                .values()
-                .any(|w| w.hwnd().is_ok_and(|h| h.0 == front.0))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = app;
-        false
-    }
-}
-
-/// 现在不弹的原因（None = 可以弹）。
-fn blocked(app: &AppHandle) -> Option<&'static str> {
-    if kotone_in_front(app) {
-        return Some("Kotone 的窗口在前台");
-    }
-    let game_in_front = crate::games::states().iter().any(|s| s.focused);
-    match kotone_platform_windows::fullscreen::notification_state() {
-        Some(code) if kotone_platform_windows::fullscreen::popup_blocked(code, game_in_front) => {
-            Some(match code {
-                3 => "游戏独占全屏",
-                4 => "演示模式",
-                _ => "别的程序全屏",
-            })
-        }
-        _ => None,
-    }
-}
-
 /// 弹一条（替换正在显示的）。不弹的时候只记一笔。
 pub fn show(app: &AppHandle, mut popup: Popup) {
-    if let Some(why) = blocked(app) {
+    if let Some(why) = crate::attention::popup_blocked() {
         log::log(&format!("消息提示：没弹（{why}），卡片照样在聊天里"));
         return;
     }

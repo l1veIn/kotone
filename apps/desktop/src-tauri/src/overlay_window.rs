@@ -423,3 +423,94 @@ pub(crate) fn save_overlay_position(
     let _ = app.emit("kotone://overlay-config", &updated.overlay);
     Ok(updated)
 }
+
+/// 鼠标移到悬浮窗上（页面的 `pointerenter`）：记下玩家正在用的窗口，点完悬浮窗把前台还给它
+/// （[`crate::attention::give_back_foreground`]）。悬浮窗只有开着“允许交互并拖动”时才收得到鼠标。
+#[tauri::command]
+pub(crate) fn overlay_pointer_enter() {
+    crate::attention::remember_player_window();
+}
+
+/// 点完悬浮窗（页面的 `pointerup`）：前台还在悬浮窗上就还给玩家原来在用的窗口（游戏）。
+///
+/// 悬浮窗开着“允许交互并拖动”时，点它会把它激活、游戏就收不到键了（共享资源评估第二节第 5 条，2026-11-25
+/// 真机复现：`focus_steal_real.py` B2）。不能把它做成不可聚焦：那样 WebView2 收不到点击，按钮点不了、也拖不动
+/// （同一个脚本试过）。所以照旧让它被点、被激活，点完马上把前台还回去。
+#[tauri::command]
+pub(crate) fn overlay_give_back(app: AppHandle) {
+    if let Some(win) = app.get_webview_window("overlay") {
+        crate::attention::give_back_foreground(&win);
+    }
+}
+
+/// 拖动悬浮窗（悬浮窗页面在没点到按钮的地方按下左键时调）：按着左键时每 8 毫秒看一次光标，用原始
+/// `SetWindowPos` 挪窗口（不激活、不改叠放次序，和摆位一样不走 tao 的位置缓存）；松开就停（最多跟 60 秒），
+/// 再把前台还给玩家原来在用的窗口（[`overlay_give_back`]）。不用系统的拖动（`startDragging`）：
+/// 系统拖动是个模态循环，什么时候结束页面不知道，前台没法及时还回去。
+/// 位置照旧由页面在窗口挪完 300 毫秒后存（[`save_overlay_position`]）。
+#[tauri::command]
+pub(crate) fn drag_overlay(app: AppHandle) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use windows::Win32::Foundation::{HWND, POINT, RECT};
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetCursorPos, GetSystemMetrics, GetWindowRect, SetWindowPos, SM_SWAPBUTTON,
+            SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+        };
+        static DRAGGING: AtomicBool = AtomicBool::new(false);
+        let win = app
+            .get_webview_window("overlay")
+            .ok_or_else(|| "悬浮窗不存在".to_string())?;
+        let hwnd = win.hwnd().map_err(|e| e.to_string())?.0 as isize;
+        if DRAGGING.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        std::thread::spawn(move || {
+            let hwnd = HWND(hwnd as _);
+            // 左右键对调了的话，主键是物理上的右键（GetAsyncKeyState 看的是物理按键）
+            // SAFETY: 只读光标、按键状态和这个窗口的位置，只挪这个窗口
+            let button = if unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0 {
+                VK_RBUTTON
+            } else {
+                VK_LBUTTON
+            };
+            let pressed = || unsafe { GetAsyncKeyState(button.0 as i32) } < 0;
+            let mut start = POINT::default();
+            let mut rect = RECT::default();
+            if unsafe { GetCursorPos(&mut start).is_ok() && GetWindowRect(hwnd, &mut rect).is_ok() }
+            {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                let mut last = start;
+                while pressed() && std::time::Instant::now() < deadline {
+                    let mut now = POINT::default();
+                    if unsafe { GetCursorPos(&mut now).is_ok() }
+                        && (now.x != last.x || now.y != last.y)
+                    {
+                        let _ = unsafe {
+                            SetWindowPos(
+                                hwnd,
+                                None,
+                                rect.left + now.x - start.x,
+                                rect.top + now.y - start.y,
+                                0,
+                                0,
+                                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                            )
+                        };
+                        last = now;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(8));
+                }
+            }
+            DRAGGING.store(false, Ordering::SeqCst);
+            overlay_give_back(app);
+        });
+    }
+    #[cfg(not(windows))]
+    let _ = app;
+    Ok(())
+}

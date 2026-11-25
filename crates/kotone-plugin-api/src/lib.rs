@@ -692,7 +692,8 @@ pub trait Host: Send + Sync {
         let _ = name;
     }
     /// 网页登录窗口：宿主开的独立小窗口（无痕，关掉网页数据就没了，每个插件一个），给要在官网上登录的插件
-    /// （例如网易云）。已经开着就调到前面。
+    /// （例如网易云）。已经开着就再让玩家看到它。玩家正看着 Kotone 时（他在插件页上点的）拿到前面；
+    /// 玩家在游戏或别的程序里时（例如外部 Agent 调了页面的工具）只放在后面、闪任务栏，不抢前台。
     fn open_web_window(&self, url: &str, title: &str) -> Result<(), String> {
         let _ = (url, title);
         Err("这里不能开网页窗口".to_string())

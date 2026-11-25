@@ -333,5 +333,9 @@
   "chat_auto_card_label": "{plugin}发来的自动卡片：{title}",
   "chat_popup_label": "消息提示：{plugin}发来一张卡片",
   "chat_popup_open": "打开聊天看这张卡片",
-  "chat_popup_close": "关掉消息提示"
+  "chat_popup_close": "关掉消息提示",
+  "chat_app_link_title": "打开外部链接？",
+  "chat_app_link_body": "「{plugin}」想用浏览器打开下面这个网址。认得它再打开。",
+  "chat_app_link_open": "打开",
+  "chat_app_link_cancel": "取消"
 }

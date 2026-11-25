@@ -333,3 +333,31 @@
 **测试**：`kotone-stt` 单元 105 个（新加：选识别的表、在线不用下载、X-ASR 用 SenseVoice 或提示下载、SenseVoice 用户同一份设置、DeepSeek 连接、一句一个会话、短噪声不算一句、SenseVoice 缺省 `auto`）；真模型 `interpreter_sensevoice` 2/2（本体 +294 MB、同传 +11 MB，卸掉回到 18 MB；定成 `zh` 时两份、没定时一份；语言探针见上表）；`kotone-agent` 106、桌面端 142；clippy 三个包干净；Playwright 同传 3/3（新加：页面先说“还不能用、下载 SenseVoice”，换成 DeepSeek 后写“在线、每句计费”，链接去「设置 → 模型」）。真机（隔离实例、假 AI、不按键）：`interpreter_asr_real.py` 6/6（修之前 1/5）——(a) DeepSeek 在线识别、模型目录里只有 VAD，同传开始听、队友那句经在线识别认出来、`usage.jsonl` 记一行 `asr`（deepseek，按时长计费）、之后模型目录里还是没有 SenseVoice；(b) 启动本地语音识别 +286 MB，开同传只再 +36 MB；(d) 呼叫和同传同一时间都认出来，呼叫的 vad→text 单独 95 ms、同传同时在识别 82 ms，识别一共 322 MB（一份）；(c) `runtime.stop` 以后不在听、之后没认出东西、内存回到空闲 +40 MB、后台那段对话里有那句说明。`interpreter_e2e.py` 16/16（玩家选的是没下载的 X-ASR、同传另用 SenseVoice，不去启动本地语音识别）。
 
 **还没测 / 还没做**：真游戏和 Discord 里的队友语音；在线识别在枪声下的效果；同传和语音输入（按键）同时用（真机脚本用的是呼叫按钮，同一个识别）；在线识别的费用归属——玩家正在呼叫她时（`hold_asr` 扣着），同传那一句的识别费会记到玩家那一轮；每句弹幕要等约 20 秒（`danmaku` 工具等显示完），后面的句子只能合进下一条等它（评估外的新发现，没修）；`voice.listen.*` 不在工具服务里，外部 Agent 用不了（原则 6，没修）。
+
+### 实施记录（游戏中途不被抢焦点，2026-11-25）
+
+[共享资源评估](../research/2026-11-25-shared-resources-audit.md)第二节第 5 条、第四节“屏幕”那一行（“一个‘能不能现在打扰’的判断全宿主共用”）。评估只读了代码，说有三处；三处都先复现了再改。真机脚本 `scripts/manual-e2e/focus_steal_real.py`（测试窗口代替游戏，记焦点变化和收到的每个键），外部链接用 Playwright `apps/desktop/e2e/mcp-app-links.spec.ts`。
+
+**复现**：
+
+1. **插件的网页窗口**（网易云登录窗口，`Host::open_web_window`）。谁开它：网易云音乐页上玩家点“登录”“放”；还有外部 Agent 经工具服务 / `kotone.exe mcp` 调页面的工具 `music.login_start` / `music.play`（工具服务能调只给页面的工具，`Caller::Service`）。她的 `music` 工具本来就不开窗口。外部 Agent 调 `music.login_start`：新建窗口时前台 0.05 秒内被登录窗口拿走（4 次里 3 次；另一次 Windows 没给）；窗口开着再调一次（旧代码 `set_focus`）每次都被拿走，有一次测试窗口还收到一个 Alt（tao 的 `force_window_active`：系统不给前台时自己按一下 Alt）。
+2. **MCP App 的 `ui/open-link`**：App 一请求，宿主马上交给系统浏览器，不问。App 不一定是玩家点了才请求（聊天卡片在后台加载着，第三方 App 想调就调），对局中浏览器会跳到游戏上面。
+3. **语音输入悬浮窗**（开着“允许交互并拖动”时）：点一下，前台就留在悬浮窗上，游戏收不到键，要玩家再点回游戏。
+
+**玩家看到的**：
+
+- 玩家在游戏或别的程序里时，外部 Agent 让网易云登录：登录窗口出现在所有窗口后面、不抢前台，任务栏按钮闪几下后一直亮着，切出来点它就行。玩家在 Kotone 里点“登录”：和原来一样，登录窗口直接到前面。
+- App 里的外部链接（包括英雄联盟 App 里 OP.GG、AramHex 的出处链接）：Kotone 窗口里先弹“打开外部链接？”，写明是哪个插件、哪个网址；点「打开」才用浏览器打开，「取消」或 Esc 就不开（App 收到“被拒”）；正在问时再来的请求直接被拒，不叠第二个框。框只在 Kotone 窗口里，不另开系统窗口。
+- 点悬浮窗（按钮、拖动）：照样点得到、拖得动；点完前台马上回到游戏（真机：点一下离开约 0.05 秒；拖动时离开到松开为止）。
+
+**怎么做的**（照原则 2、7、15 定）：
+
+- **一个判断**：`apps/desktop/src-tauri/src/attention.rs`。`may_take_focus`：Kotone 自己的窗口在前台（玩家正看着 Kotone）才能拿前台，她、外部 Agent、自动触发的都不分谁调的；`present`：能拿就显示、拿到前面、键盘焦点给页面，不能就放在最后面不激活地显示、闪任务栏（照 Windows 自己的前台锁：后台程序要前台时系统也是闪任务栏）。消息提示原来的“Kotone 在前台 / 独占全屏 / 演示模式 / 别的程序全屏”判断从 `message_popup.rs` 搬进来（`popup_blocked`），全屏判断没再多写一份。“前台是不是 Kotone 的”只看前台窗口的进程号，不挨个向窗口要句柄。
+- **网页窗口**：建的时候不显示、不要焦点（WebView2 建好会把键盘焦点移进去、窗口就被激活了），建好交给 `present`；已经开着的也交给 `present`。放到最后面和显示是同一次 `SetWindowPos`（`SWP_SHOWWINDOW`）：先放最后面再 `SW_SHOWNA`，真机上第一次显示时它又跑到测试窗口上面了。
+- **外部链接**：照 Claude 的“Open external link”确认框（[说明](https://claude.com/docs/connectors/building/mcp-apps/external-links)：自定义连接器一律先问；正在问时再来的不弹框、直接回 isError）和 ext-apps `AppBridge.onopenlink` 文档的例子；MCP Apps 规范给了“Link opening denied by user”这个错误。没做“这个网站以后不用问”：要一张信任表和设置（原则 2），Claude 也只给目录里的连接器做了白名单。`ui://kotone/<本插件>/<页面>` 是 Kotone 里面的页面，照旧直接打开。文案键 `chat_app_link_title` / `chat_app_link_body` / `chat_app_link_open` / `chat_app_link_cancel`。
+- **悬浮窗**：先试了评估建议的 `focusable: false`（`WS_EX_NOACTIVATE`）：前台是不动了，但 WebView2 一个鼠标事件都收不到（真机：页面没收到按下，按钮点不了、拖不动），撤回。改成：照旧能被点、点的时候被激活；鼠标移上来时（页面的 `pointerenter`）记下玩家在用的窗口，点完（`pointerup`）把前台还给它（那时前台是 Kotone 自己，系统允许交出去，不用按 Alt）；拖动改成 Kotone 自己跟着光标挪（`drag_overlay`：按着左键时每 8 毫秒看光标、`SetWindowPos` 不激活地挪，松开就停、还前台；系统的 `startDragging` 是个模态循环，结束时页面不知道，没法及时还），位置照旧由页面存。悬浮窗的权限里去掉了用不到的 `core:window:allow-start-dragging`。建的时候不要焦点（`focus: false`）写进了配置，和别的盖在游戏上的窗口一样；单元测试 `attention::tests` 管着：除了主窗口都 `focus: false`，气泡、弹幕、插件覆盖层 `focusable: false`，悬浮窗可聚焦（理由写在测试里）。
+- 气泡、弹幕、插件覆盖层现在还是各自查独占全屏（这次没动，右下角的摆放另有人做），以后它们“现在能不能出来”也可以从 `attention` 拿。
+
+**测试**：`focus_steal_real.py` 改前的版本 20/28（A1、A2 前台被拿走、登录窗口在测试窗口上面；B2、B3 点完前台不回来），改后 28/28；Playwright `mcp-app-links.spec.ts` 改前失败（“nothing opens before the player says so”：收到的是那个网址），改后过；`cargo test -p kotone-tauri --lib` 142 个过（新加 `attention::tests::windows_over_the_game_never_take_the_focus`，改前在 `overlay` 上失败）。
+
+**还没测 / 已知**：真游戏没测，用的是测试窗口；外部 Agent 只测了 `kotone.exe tools call`，`kotone.exe mcp` 走的是同一个工具服务；悬浮窗的预览按钮（确认 / 取消 / 重试）只在收音以后出现，真机没点到，测的是同一个页面收到了按下和点击；英文界面下的确认框没看；网易云登录窗口开着、关掉前后，Kotone 的界面线程偶尔不再响应（改前的版本也有，脚本里会打出来，A、B 两部分因此各起一个 Kotone），这次没查。

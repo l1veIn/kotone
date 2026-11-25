@@ -1,11 +1,10 @@
 {
   "identifier": "overlay",
-  "description": "Kotone 浮窗最小权限集：仅事件、窗口信息与用户拖动",
+  "description": "Kotone 浮窗最小权限集：仅事件与窗口信息（拖动走 Kotone 自己的 drag_overlay，点完把前台还给游戏）",
   "windows": ["overlay"],
   "permissions": [
     "core:default",
     "core:window:default",
-    "core:window:allow-start-dragging",
     "core:event:default"
   ]
 }

@@ -333,5 +333,9 @@
   "chat_auto_card_label": "Auto card from {plugin}: {title}",
   "chat_popup_label": "Message pop-up: {plugin} posted a card",
   "chat_popup_open": "Open the chat at this card",
-  "chat_popup_close": "Close the message pop-up"
+  "chat_popup_close": "Close the message pop-up",
+  "chat_app_link_title": "Open external link?",
+  "chat_app_link_body": "“{plugin}” wants to open this address in your browser. Open it only if you recognize it.",
+  "chat_app_link_open": "Open",
+  "chat_app_link_cancel": "Cancel"
 }

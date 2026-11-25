@@ -1,3 +1,8 @@
+<script lang="ts" module>
+  /** 有 App 框正在问玩家开不开外部链接（全部 App 框共用：同一时间只问一个）。 */
+  let linkAsking = false;
+</script>
+
 <script lang="ts">
   // 显示一个插件的 MCP App（ADR 039 D5；MCP Apps 规范 2026-01-26）：iframe 指向回环代理上的沙盒代理页（每个插件一个源，
   // 和 Kotone 的页面、IPC 隔开），用 ext-apps 的 AppBridge（锁 2.1.0）和 App 说话。
@@ -7,7 +12,11 @@
   // - 宿主上下文：主题（亮 / 暗）、语言、显示方式（插件页 = fullscreen，聊天卡片 = inline）、容器尺寸；推了结果时带 toolInfo；
   // - App 调工具：宿主按这个 iframe 是哪个插件的来绑定（后端 `plugin_app` 给的 plugin），只认这个插件给页面的工具，
   //   名字认 `kotone.exe mcp` 对外的那套（$lib/mcpApps）；读资源也只读这个插件的；
-  // - 打开链接：外链交给系统浏览器（和 Kotone 别处一样，不在 App 里跳）；`ui://kotone/<本插件>/<页面>?参数` 在 Kotone 里打开；
+  // - 打开链接：外链先在 Kotone 窗口里问玩家（框里写明是哪个插件、哪个网址），点了「打开」才交给系统浏览器，取消回 isError
+  //   （规范的“Link opening denied by user”；照 ext-apps AppBridge `onopenlink` 文档的例子，和 Claude 的“Open external link”
+  //   确认框：自定义连接器一律先问，正在问时再来的不弹框、直接回 isError，claude.com/docs/connectors/building/mcp-apps/external-links）。
+  //   App 不一定是玩家点了才请求（聊天卡片在后台加载着，第三方 App 想调就调），直接打开会把浏览器弹到游戏上面（共享资源评估
+  //   第二节第 5 条）。`ui://kotone/<本插件>/<页面>?参数` 是 Kotone 里面的页面，直接打开；
   // - 请求换显示方式：聊天卡片请求 fullscreen 时在右侧栏打开完整页面，自己还是 inline；pip 先不支持（方案第 4 期映射到覆盖层）；
   // - `ui/message`（替玩家往聊天里发话）：先不给，回 isError（往聊天和她的上下文里放东西是大权力，ADR 039 D3）；
   // - `ui/update-model-context`：接住、回成功，但不存、不进她的上下文（同上，以后再定；宿主能力里也不声明它）；
@@ -22,6 +31,8 @@
   import { pluginCall } from "$lib/plugins";
   import { FROM_PAGE } from "$lib/pluginUi";
   import { m } from "$lib/paraglide/messages.js";
+  import * as Dialog from "$lib/components/ui/dialog";
+  import { Button } from "$lib/components/ui/button";
 
   let { uri, pluginId = null, displayMode, data = null, params = {}, onOpenPage, onRequestFullscreen }: {
     /** `ui://kotone/<插件>/<页面>`；第三方插件的是它的服务器给的 `ui://` 地址。 */
@@ -60,6 +71,29 @@
 
   const plain = (value: unknown): unknown => JSON.parse(JSON.stringify(value ?? null));
 
+  /** App 请求打开的外部网址，等玩家回答（`ui/open-link`）。 */
+  let linkAsk = $state<{ url: string; plugin: string; answer: (open: boolean) => void } | null>(null);
+  /** 框里显示的（关框的动画里还留着，不闪成空的）。 */
+  let linkShown = $state({ url: "", plugin: "" });
+
+  /** 问玩家开不开这个网址；别的 App 框正在问时不叠第二个，直接当没同意。 */
+  function askOpenLink(url: string, plugin: string): Promise<boolean> {
+    if (linkAsking) return Promise.resolve(false);
+    linkAsking = true;
+    linkShown = { url, plugin };
+    return new Promise((resolve) => {
+      linkAsk = {
+        url,
+        plugin,
+        answer: (open) => {
+          linkAsk = null;
+          linkAsking = false;
+          resolve(open);
+        },
+      };
+    });
+  }
+
   const dimensions = () => {
     const width = Math.round(container?.clientWidth ?? 0) || undefined;
     return displayMode === "inline" ? { width, maxHeight: INLINE_MAX } : { width };
@@ -74,6 +108,7 @@
     const cleanups: (() => void)[] = [];
     const dispose = () => {
       disposed = true;
+      linkAsk?.answer(false);
       for (const cleanup of cleanups) cleanup();
       if (bridge && initialized) void bridge.teardownResource({}).catch(() => {});
       void bridge?.close().catch(() => {});
@@ -132,8 +167,18 @@
       b.onopenlink = async ({ url }) => {
         const link = parseAppLink(url, app.plugin);
         if (!link) return { isError: true };
-        if (link.kind === "external") await openExternal(link.url);
-        else onOpenPage?.(link.uri, link.params);
+        if (link.kind === "page") {
+          onOpenPage?.(link.uri, link.params);
+          return {};
+        }
+        const name = (await pluginInfo(app.plugin))?.manifest.name ?? app.plugin;
+        if (disposed || !(await askOpenLink(link.url, name))) return { isError: true };
+        try {
+          await openExternal(link.url);
+        } catch (e) {
+          console.debug("[mcp app] open link", e);
+          return { isError: true };
+        }
         return {};
       };
       b.onmessage = async () => ({ isError: true });
@@ -235,3 +280,17 @@
     <p class="m-0 px-1 py-6 text-center text-xs text-muted-foreground" data-testid="mcp-app-failed" title={error}>{m.chat_plugin_page_missing()}</p>
   {/if}
 </div>
+
+<Dialog.Root open={linkAsk !== null} onOpenChange={(open) => { if (!open) linkAsk?.answer(false); }}>
+  <Dialog.Content class="ui-scope" data-testid="mcp-app-link-dialog" showCloseButton={false}>
+    <Dialog.Header>
+      <Dialog.Title>{m.chat_app_link_title()}</Dialog.Title>
+      <Dialog.Description>{m.chat_app_link_body({ plugin: linkShown.plugin })}</Dialog.Description>
+    </Dialog.Header>
+    <p class="m-0 break-all rounded-md bg-muted px-3 py-2 font-mono text-xs" data-testid="mcp-app-link-url">{linkShown.url}</p>
+    <Dialog.Footer>
+      <Button variant="ghost" data-testid="mcp-app-link-cancel" onclick={() => linkAsk?.answer(false)}>{m.chat_app_link_cancel()}</Button>
+      <Button data-testid="mcp-app-link-open" onclick={() => linkAsk?.answer(true)}>{m.chat_app_link_open()}</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>

@@ -428,25 +428,38 @@ impl Host for DesktopHost {
         let _ = kotone_ai::secrets::KeyringSecretStore.delete(&self.secret_id(name));
     }
 
+    /// 谁都能让插件开它（玩家在插件页上点的，也可能是外部 Agent 经工具服务调了页面的工具）：玩家正看着 Kotone 时
+    /// 拿到前面；不然（玩家在游戏或别的程序里）放在后面、闪任务栏，不抢前台（[`crate::attention::present`]）。
     fn open_web_window(&self, url: &str, title: &str) -> Result<(), String> {
         let label = self.web_window_label();
         if let Some(window) = self.app.get_webview_window(&label) {
-            let _ = window.unminimize();
-            let _ = window.show();
-            let _ = window.set_focus();
+            crate::attention::present(&window);
             return Ok(());
         }
         let url = url.parse().map_err(|e| format!("网址不对：{e}"))?;
+        // 建的时候不显示、不要焦点（WebView2 建好会把键盘焦点移进去，窗口就被激活了），建好再按能不能拿前台显示
         // 无痕（WebView2 InPrivate，和主窗口同一个浏览器进程）：网页数据关窗口就没了，登录凭据只在插件那边。
         // 用单独的数据目录会另起一个浏览器进程，真机测试的调试端口会被它占走。
-        tauri::WebviewWindowBuilder::new(&self.app, &label, tauri::WebviewUrl::External(url))
-            .title(title)
-            .inner_size(1000.0, 720.0)
-            .center()
-            .incognito(true)
-            .build()
-            .map_err(|e| format!("打不开网页窗口：{e}"))?;
-        kotone_core::log::log(&format!("插件 {} 的网页窗口建好了（无痕）", self.id));
+        let window =
+            tauri::WebviewWindowBuilder::new(&self.app, &label, tauri::WebviewUrl::External(url))
+                .title(title)
+                .inner_size(1000.0, 720.0)
+                .center()
+                .incognito(true)
+                .visible(false)
+                .focused(false)
+                .build()
+                .map_err(|e| format!("打不开网页窗口：{e}"))?;
+        let front = crate::attention::present(&window);
+        kotone_core::log::log(&format!(
+            "插件 {} 的网页窗口建好了（无痕，{}）",
+            self.id,
+            if front {
+                "拿到了前面"
+            } else {
+                "玩家不在 Kotone 里：放在后面、闪任务栏"
+            }
+        ));
         Ok(())
     }
 

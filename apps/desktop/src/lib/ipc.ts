@@ -140,6 +140,24 @@ export async function saveOverlayPosition(): Promise<Settings> {
   return invoke<Settings>("save_overlay_position");
 }
 
+/** 悬浮窗按下左键后跟着光标挪，松开就停，再把前台还给玩家原来在用的窗口（后端 `drag_overlay`）。 */
+export async function dragOverlay(): Promise<void> {
+  if (!isTauri) return;
+  return invoke<void>("drag_overlay");
+}
+
+/** 鼠标移到悬浮窗上：记下玩家正在用的窗口（点完悬浮窗把前台还给它）。 */
+export async function overlayPointerEnter(): Promise<void> {
+  if (!isTauri) return;
+  return invoke<void>("overlay_pointer_enter");
+}
+
+/** 点完悬浮窗：前台还在悬浮窗上就还给玩家原来在用的窗口（游戏）。 */
+export async function overlayGiveBack(): Promise<void> {
+  if (!isTauri) return;
+  return invoke<void>("overlay_give_back");
+}
+
 export async function listAudioDevices(): Promise<AudioDevice[]> {
   if (!isTauri) return browserMock.listAudioDevices();
   return invoke<AudioDevice[]>("list_audio_devices");

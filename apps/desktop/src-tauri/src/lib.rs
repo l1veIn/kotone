@@ -5,6 +5,7 @@ mod agent;
 mod app_proxy;
 mod assistant;
 mod assistant_input;
+mod attention;
 mod automation;
 mod browser;
 mod browser_cmd;
@@ -464,6 +465,9 @@ pub fn run() {
             console_chat_status,
             console_chat_set,
             save_overlay_position,
+            drag_overlay,
+            overlay_pointer_enter,
+            overlay_give_back,
             get_elevation_status,
             get_hotkey_status,
             check_input_environment,

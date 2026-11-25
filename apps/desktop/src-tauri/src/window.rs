@@ -37,6 +37,45 @@ pub(crate) fn show_and_focus<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
     let _ = AsRef::<tauri::Webview<R>>::as_ref(win).set_focus();
 }
 
+/// 想让玩家之后看到、但现在不能拿前台的窗口（[`crate::attention::present`]）：没显示的放到所有窗口最后面、
+/// 不激活地显示（盖不到游戏，也点不到它）；然后闪任务栏按钮，闪完按钮一直亮着，等玩家切出来点它。
+/// 已经显示着的（包括最小化了的）不动，只闪任务栏。
+///
+/// 显示和放到最后面是同一次 `SetWindowPos`（`SWP_SHOWWINDOW`），在窗口自己的线程里做：先放到最后面再
+/// `SW_SHOWNA`，第一次显示时窗口又回到了最上面（2026-11-25 真机，盖在测试窗口上面）。
+pub(crate) fn show_behind<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
+    #[cfg(windows)]
+    {
+        let window = win.clone();
+        let _ = win.with_webview(move |webview| {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                IsWindowVisible, SetWindowPos, HWND_BOTTOM, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+                SWP_SHOWWINDOW,
+            };
+            let Ok(hwnd) = window.hwnd() else { return };
+            // SAFETY: 只显示这个窗口自己、改它的叠放次序，不激活
+            unsafe {
+                if IsWindowVisible(hwnd).as_bool() {
+                    return;
+                }
+                let _ = webview.controller().SetIsVisible(true);
+                let _ = SetWindowPos(
+                    hwnd,
+                    Some(HWND_BOTTOM),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                );
+            }
+        });
+    }
+    #[cfg(not(windows))]
+    show_window_no_focus(win);
+    let _ = win.request_user_attention(Some(tauri::UserAttentionType::Informational));
+}
+
 #[cfg(not(windows))]
 fn show_window_no_focus<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
     let _ = win.show();
