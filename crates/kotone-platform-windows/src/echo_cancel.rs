@@ -145,15 +145,7 @@ fn open_streams(
     error_tx: &mpsc::UnboundedSender<String>,
 ) -> Result<Streams, String> {
     let host = cpal::default_host();
-    let microphone_device = if device_id == "default" || device_id.is_empty() {
-        host.default_input_device()
-            .ok_or_else(|| "未找到系统默认音频输入设备".to_string())?
-    } else {
-        host.input_devices()
-            .map_err(|e| format!("枚举音频输入设备失败: {e}"))?
-            .find(|d| d.name().map(|n| n == device_id).unwrap_or(false))
-            .ok_or_else(|| format!("未找到音频输入设备: {device_id}"))?
-    };
+    let (microphone_device, _) = crate::audio::input_device(&host, device_id)?;
     let speaker = host
         .default_output_device()
         .ok_or_else(|| "未找到系统默认音频输出设备，没法做回声消除".to_string())?;

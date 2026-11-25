@@ -430,27 +430,14 @@ mod imp {
 
     /// 走控制台通道发一条（ADR 032 决定 3 第 4 条）：整理文字 → 写文件 → 按一下触发键（按住
     /// 50ms）→ 约 1 秒后清空文件。
+    ///
+    /// 两条同时调这里时，后写的会把先写的换掉（先按的那一下执行的是后一条）。现在不会同时：唯一的调用方
+    /// `WindowsInjector::send_line` 只经发到游戏的入口调，入口一条发言拿一次输入锁（ADR 041 D4，
+    /// 见测试 `two_statements_through_the_entry_never_swap_the_file`）。命令行的 `kotone send` / `listen`
+    /// 是另一个进程、不在锁里（ADR 042 D3），这里进程内的锁也管不到它。
     pub fn send(route: &Route, text: &str) -> Result<(), InjectError> {
         let text = sanitize(text).ok_or_else(|| InjectError::new("要发的文字是空的"))?;
-        let path = route.cfg_dir.join(SAY_FILE);
-        let seq = {
-            let mut seq = SAY_FILE_SEQ.lock().unwrap_or_else(|e| e.into_inner());
-            std::fs::write(&path, say_line(&route.command, &text))
-                .map_err(|e| InjectError::new(format!("写 {SAY_FILE} 失败：{e}")))?;
-            *seq += 1;
-            *seq
-        };
-        let result = crate::inject::key_down_up(&route.trigger_key);
-        std::thread::Builder::new()
-            .name("kotone-console-say-clear".into())
-            .spawn(move || {
-                std::thread::sleep(CLEAR_AFTER);
-                let current = SAY_FILE_SEQ.lock().unwrap_or_else(|e| e.into_inner());
-                if *current == seq {
-                    let _ = std::fs::write(&path, b"");
-                }
-            })
-            .ok();
+        let result = write_and_press(route, &text, crate::inject::key_down_up);
         let (outcome, error_code) = match &result {
             Ok(()) => ("ok", None),
             Err(_) => ("error", Some("INJECTION_FAILED".to_string())),
@@ -468,6 +455,35 @@ mod imp {
                 ..Default::default()
             },
         );
+        result
+    }
+
+    /// 写 `kotone_say.cfg` → `press`（按触发键；测试里换成“游戏读这个文件”）→ 约 1 秒后清空
+    /// （这期间没写过新的一条才清）。`text` 已经整理过。
+    pub(crate) fn write_and_press(
+        route: &Route,
+        text: &str,
+        press: impl FnOnce(&str) -> Result<(), InjectError>,
+    ) -> Result<(), InjectError> {
+        let path = route.cfg_dir.join(SAY_FILE);
+        let seq = {
+            let mut seq = SAY_FILE_SEQ.lock().unwrap_or_else(|e| e.into_inner());
+            std::fs::write(&path, say_line(&route.command, text))
+                .map_err(|e| InjectError::new(format!("写 {SAY_FILE} 失败：{e}")))?;
+            *seq += 1;
+            *seq
+        };
+        let result = press(&route.trigger_key);
+        std::thread::Builder::new()
+            .name("kotone-console-say-clear".into())
+            .spawn(move || {
+                std::thread::sleep(CLEAR_AFTER);
+                let current = SAY_FILE_SEQ.lock().unwrap_or_else(|e| e.into_inner());
+                if *current == seq {
+                    let _ = std::fs::write(&path, b"");
+                }
+            })
+            .ok();
         result
     }
 
@@ -624,6 +640,98 @@ mod tests {
         let fresh = &log[log_before.len()..];
         assert!(fresh.contains("DOWN F23 shift=False x=4B544E49"), "{fresh}");
         assert!(fresh.contains("UP F23 x=4B544E49"), "{fresh}");
+    }
+
+    /// 评估第二节第 12 条（核对）：两条发言同时经发到游戏的入口发。入口一条发言拿一次输入锁（ADR 041 D4），
+    /// 第二条写 `kotone_say.cfg` 时第一条已经按完，所以游戏每按一下读到的都是自己那一条：不丢、不重。
+    /// 注入器照 `WindowsInjector` 走控制台通道那一支（写文件 → 按触发键），“游戏”在按下时读文件。
+    #[test]
+    fn two_statements_through_the_entry_never_swap_the_file() {
+        use std::sync::{Arc, Barrier, RwLock};
+
+        use kotone_core::inject::{CancelToken, FocusBackend, Injector, SendRoute, TargetWindow};
+        use kotone_core::input_lock::InputLock;
+        use kotone_core::send_to_game::{ChatRequest, GameChat, SendToGame, Speaker};
+        use kotone_core::settings::Settings;
+
+        struct DotaInFront;
+        impl FocusBackend for DotaInFront {
+            fn foreground_window(&self) -> Option<TargetWindow> {
+                Some(TargetWindow(7))
+            }
+            fn restore(&self, _: TargetWindow) -> bool {
+                true
+            }
+            fn foreground_process_name(&self) -> Option<String> {
+                Some("dota2.exe".into())
+            }
+        }
+
+        struct Console {
+            route: Route,
+            executed: Mutex<Vec<String>>,
+        }
+        impl Injector for Console {
+            fn send(&self, _: &str, _: &GameProfile, _: CancelToken) -> Result<(), InjectError> {
+                unreachable!("入口调 send_line")
+            }
+            fn send_line(
+                &self,
+                text: &str,
+                _: &GameProfile,
+                _: CancelToken,
+            ) -> Result<SendRoute, InjectError> {
+                let text = sanitize(text).unwrap();
+                write_and_press(&self.route, &text, |_| {
+                    // 游戏过一会儿才处理这一下按键；拉长这段，同时进来的另一条要是能写，就一定会把文件换掉
+                    std::thread::sleep(Duration::from_millis(60));
+                    let line = std::fs::read_to_string(self.route.cfg_dir.join(SAY_FILE)).unwrap();
+                    self.executed.lock().unwrap().push(line);
+                    Ok(())
+                })
+                .map(|()| SendRoute::Console)
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let console = Arc::new(Console {
+            route: Route {
+                cfg_dir: dir.path().to_path_buf(),
+                trigger_key: "F23".into(),
+                command: "say_team".into(),
+            },
+            executed: Mutex::new(Vec::new()),
+        });
+        let chat = Arc::new(
+            GameChat::new(
+                console.clone(),
+                Arc::new(DotaInFront),
+                InputLock::new(),
+                Arc::new(RwLock::new(Settings::default())),
+            )
+            .with_profiles(|| vec![GameProfile::builtin_dota2()])
+            .with_note(|_, _| {}),
+        );
+        let start = Arc::new(Barrier::new(2));
+        let speakers =
+            [("推中", Speaker::Companion), ("撤退", Speaker::Player)].map(|(text, who)| {
+                let (chat, start) = (chat.clone(), start.clone());
+                std::thread::spawn(move || {
+                    start.wait();
+                    chat.send(ChatRequest::new(text, who))
+                })
+            });
+        for speaker in speakers {
+            let outcome = speaker.join().unwrap().unwrap();
+            assert!(outcome.sent && outcome.route == SendRoute::Console);
+        }
+        let mut executed = console.executed.lock().unwrap().clone();
+        executed.sort();
+        assert_eq!(
+            executed,
+            ["say_team \"推中\"\n", "say_team \"撤退\"\n"],
+            "每条各执行一次"
+        );
     }
 
     #[test]

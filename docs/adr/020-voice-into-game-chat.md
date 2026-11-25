@@ -62,3 +62,8 @@
 - **测试**：`assistant::tests` 新加 8 个（上面 5 个复现 + 停下时一起停、调用方不等了就停、一直放不出来要报原因）；`voice_chat::tests::the_player_side_echo_does_not_hold_up_the_tool`（工具不等、停下她时丢掉还在排队的那一遍）。真机：`scripts/manual-e2e/voice_chat_real.py` 加了“玩家这边那一遍没被丢”的检查和相关日志（`插件的话排在她后面放`），改成跑 exe 的副本；2026-11-25 跑了 7 项全过（真 DeepSeek、VB-CABLE）：她分两步说（先 `voice_chat.say`，下一步 `speak`“说了，我去拿龙了。”），`say` 合成完送进 CABLE 就返回（这一步 2.4 秒），玩家这边那一遍随后放了 0.8 秒，她的“说了”在它放完以后才出声，没有叠在一起、没被丢。这次她没在同一步里接着 `speak`，所以“排在她后面”那条路只有单元测试管着。
 - **没测**：音乐压低的实际听感（要网易云登录）；通话里开着回声消除时这一遍被当成回声的效果；真实游戏。
 
+## 实施记录（Windows 默认麦克风是 CABLE Output 时，2026-11-25）
+
+- **问题**（[共享资源评估](../research/2026-11-25-shared-resources-audit.md)第二节第 4 条，复现了）：`voice_chat.default_mic` 把 Windows 默认麦克风设成 CABLE Output 以后，本体跟随系统默认的收音打开的就是 CABLE Output（“约束”里“语音唤醒、语音输入永远不该听 CABLE Output”只在玩家明确选它时提示，跟随系统默认时没管）；游戏语音的麦克风选“默认”时，下次重开转发报“真麦克风不能选 CABLE Output”。
+- **改法**：跟随系统默认、而系统默认是 CABLE Output 时，本体的收音和游戏语音的转发都改用上一个默认（Windows 在注册表里记的先后）。设备列表里“系统默认”那一项写明改用了哪个。判断只在 `kotone-platform-windows/src/virtual_cable.rs` 一处，游戏语音 `cable.rs` 的 `is_cable` 改成用它。详见 [ADR 042](042-shared-resources-belong-to-core.md) 实施记录。
+- **没测**：真的切 Windows 默认麦克风（会改玩家的系统设置），验法写在 ADR 042 实施记录里。

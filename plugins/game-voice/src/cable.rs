@@ -9,15 +9,10 @@
 //!   （未公开的 COM 接口，AudioDeviceCmdlets、EarTrumpet、SoundSwitch 都用它），三个角色
 //!   （控制台、多媒体、通信）一起设。
 
-/// VB-CABLE 的播放端（Kotone 往这里放声音）。
-pub const CABLE_INPUT: &str = "CABLE Input";
-/// VB-CABLE 的录音端（游戏选它当麦克风）。
-pub const CABLE_OUTPUT: &str = "CABLE Output";
-
-/// 设备名是不是 VB-CABLE 的某一端（只认标准 VB-CABLE，不认 A+B / C+D 等其他版本）。
-pub fn is_cable(name: &str, end: &str) -> bool {
-    name.starts_with(end) && name.contains("VB-Audio Virtual Cable")
-}
+// “是不是 CABLE”只在系统适配层判断一次（本体的收音也用它，共享资源评估第二节第 4 条）。
+pub use kotone_platform_windows::virtual_cable::{
+    is_cable, is_cable_output, CABLE_INPUT, CABLE_OUTPUT,
+};
 
 /// 两端的设备名（没装时为 None）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -36,7 +31,7 @@ impl CableDevices {
 pub fn find_cable(outputs: &[String], inputs: &[String]) -> CableDevices {
     CableDevices {
         input: outputs.iter().find(|n| is_cable(n, CABLE_INPUT)).cloned(),
-        output: inputs.iter().find(|n| is_cable(n, CABLE_OUTPUT)).cloned(),
+        output: inputs.iter().find(|n| is_cable_output(n)).cloned(),
     }
 }
 

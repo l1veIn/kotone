@@ -177,7 +177,7 @@ pub fn status(state: &VoiceChat, host: &dyn Host) -> Value {
     let (default_mic, communications_mic) = platform::default_capture().unwrap_or((None, None));
     let uses_cable = |e: &Option<platform::CaptureEndpoint>| {
         e.as_ref()
-            .is_some_and(|e| platform::is_cable(&e.name, platform::CABLE_OUTPUT))
+            .is_some_and(|e| platform::is_cable_output(&e.name))
     };
     json!({
         "driverInstalled": cable.installed(),
@@ -314,19 +314,17 @@ fn default_mic_now(host: &dyn Host, use_cable: bool) -> Result<Value, String> {
     if use_cable {
         let cable = platform::capture_endpoints()?
             .into_iter()
-            .find(|e| platform::is_cable(&e.name, platform::CABLE_OUTPUT))
+            .find(|e| platform::is_cable_output(&e.name))
             .ok_or("没有找到 CABLE Output：先安装 VB-CABLE")?;
         let (console, communications) = platform::default_capture()?;
         let is_cable = |e: &Option<platform::CaptureEndpoint>| {
             e.as_ref()
-                .is_some_and(|e| platform::is_cable(&e.name, platform::CABLE_OUTPUT))
+                .is_some_and(|e| platform::is_cable_output(&e.name))
         };
         // 已经是 CABLE 时不覆盖记下的“原来的设备”。
         if !is_cable(&console) || !is_cable(&communications) {
-            let prev_console =
-                console.filter(|e| !platform::is_cable(&e.name, platform::CABLE_OUTPUT));
-            let prev_comm =
-                communications.filter(|e| !platform::is_cable(&e.name, platform::CABLE_OUTPUT));
+            let prev_console = console.filter(|e| !platform::is_cable_output(&e.name));
+            let prev_comm = communications.filter(|e| !platform::is_cable_output(&e.name));
             let mut patch = serde_json::Map::new();
             if let Some(e) = &prev_console {
                 patch.insert("previousDefaultMic".into(), e.id.clone().into());

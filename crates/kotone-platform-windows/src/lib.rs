@@ -1,6 +1,8 @@
 //! kotone-platform-windows：Windows 平台适配器。
 //!
 //! - `audio`：cpal 生产音频采集（CpalBackend，实现 core 的 AudioBackend 端口）
+//! - `virtual_cable`：VB-CABLE 的设备名判断和“收音用哪个录音设备”（跟随系统默认时不收 CABLE Output）
+//! - `default_order`：Windows 记的录音设备当默认的先后（找“上一个默认”）；`registry`：只读注册表
 //! - `echo_cancel`：通话用的回声消除麦克风（扬声器回采作参考 + sonora AEC3，ADR 033）
 //! - `inject`：raw windows crate 直调 Win32 SendInput（WindowsInjector / WinFocusBackend），
 //!   非 Windows 编译时提供保持可编译的兜底实现（运行时明确报错）
@@ -20,6 +22,7 @@ pub mod audio;
 pub mod autostart;
 #[cfg(windows)]
 pub mod console_chat;
+pub mod default_order;
 pub mod detached;
 pub mod echo_cancel;
 pub mod elevation;
@@ -39,7 +42,10 @@ pub mod keyboard;
 pub mod output_volume;
 pub mod playback;
 pub mod process_cmdline;
+#[cfg(windows)]
+mod registry;
 pub mod speech;
 pub mod tool_host;
+pub mod virtual_cable;
 pub mod wav_audio;
 pub mod window_tools;

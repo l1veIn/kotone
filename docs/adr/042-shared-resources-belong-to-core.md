@@ -87,7 +87,7 @@
 
 #### 1. 麦克风（排第一）
 
-- **依据**（评估第二节第 4、11 条）：本体用“系统默认”麦克风时，不查它是不是 CABLE（`kotone-platform-windows/src/audio.rs` 的 `open_stream`），只有游戏语音自己查（`plugins/game-voice/src/router.rs`）。所以 `voice_chat.default_mic` 把系统默认麦克风设成 CABLE Output 以后，呼叫和语音输入听到的可能是她自己的声音，听不到你。这坏的正是玩家唯一要记的那个键（原则 1）。游戏语音的麦克风选“默认”时，下次重开也会因为默认成了 CABLE 而失败。另外，游戏语音自己开麦克风、自己存一份麦克风设置，所以在“声音”里换了麦克风，队友听到的不跟着换。
+- **依据**（评估第二节第 4、11 条）：本体用“系统默认”麦克风时，不查它是不是 CABLE（`kotone-platform-windows/src/audio.rs` 的 `open_stream`），只有游戏语音自己查（`plugins/game-voice/src/router.rs`）。所以 `voice_chat.default_mic` 把系统默认麦克风设成 CABLE Output 以后，呼叫和语音输入听到的可能是她自己的声音，听不到你。这坏的正是玩家唯一要记的那个键（原则 1）。游戏语音的麦克风选“默认”时，下次重开也会因为默认成了 CABLE 而失败。（这两半 2026-11-25 先修了：跟随系统默认时改用上一个默认，见实施记录。管家要做的“只在一处选、只开一次”还没做。）另外，游戏语音自己开麦克风、自己存一份麦克风设置，所以在“声音”里换了麦克风，队友听到的不跟着换。
 - **管家管什么**：
   - 用哪个真麦克风只在一处定（「设置 → 声音」）。CABLE Output 永远不当真麦克风，这条规矩只写在管家里。
   - 本体只开一次麦克风。本体自己的收音（呼叫、语音输入、`reply.ask`、唤醒）和游戏语音的转发都从这一份拿声音。
@@ -198,3 +198,37 @@
 ## 实施记录
 
 第 0 期写在各自的 ADR 里：040、041 末尾，020、021 的实施记录，039 的“游戏中途不被抢焦点”“右下角排成一列”“她正忙时插进来的”“同传用本体的识别”。第 1 期起写在这里。
+
+### 2026-11-25 跟随系统默认时不收 CABLE Output（评估第二节第 4 条；第 1 期之前的一小步，不是麦克风管家）
+
+- **复现**（单元测试，改前都失败）：
+  - `kotone-platform-windows` 的 `virtual_cable::tests::following_the_default_never_hears_cable_output`：系统默认是 CABLE Output 时，跟随系统默认的收音（呼叫、语音输入、`reply.ask`、唤醒）选的就是它，输出 `SystemDefault("CABLE Output (VB-Audio Virtual Cable)")`。CABLE Output 里是她说给队友的话和转过去的麦克风：游戏语音在转时她听到的是自己，不在转时什么也听不到。
+  - 游戏语音的 `router::tests::the_default_mic_still_forwards_after_windows_switched_to_cable`：麦克风是“默认”时，重开转发报“真麦克风不能选 CABLE Output”。为什么是“下次重开”：`voice_chat.default_mic` 改完设置以后，转发器的配置（`default`）没变，所以不重开，正在转的还是原来的真麦克风；重启 Kotone、改音量或麦克风时才重开，这时才打开 CABLE Output 并失败。
+  - 没在真机上把 Windows 默认麦克风切成 CABLE Output：这会改玩家的系统设置（ADR 020 实施步骤第 6 条）。
+- **改法**：
+  - “收音用哪个录音设备”只在 `kotone-platform-windows/src/virtual_cable.rs` 的 `choose_input` 判断一次，没有状态。本体的收音（`audio.rs`）、回声消除（`echo_cancel.rs`）、游戏语音的转发都经 `audio::input_device`。
+  - 跟随系统默认、而系统默认是 CABLE Output 时，改用上一个默认。依据：Windows 在 MMDevices 注册表里给每个录音设备记了 `Level:0`，设成默认时变成最大的，所以按它从大到小排就是“现在的默认、上一个默认……”（`default_order.rs`）。取排在前面的第一个看着不像虚拟声卡的设备，和 Windows 自己在默认设备被拔掉时的选法一样。
+  - 开发机上只读核对过：现在的默认 PD200X 的 `Level:0` 最大（144），默认播放设备也是。按枚举顺序取第一个真麦克风会拿到 EDIFIER（另一个麦克风），所以没用枚举顺序。注册表这几项没有公开文档（和切默认设备用的 `IPolicyConfig` 一样），读不到时退回枚举顺序，不报错。
+  - 玩家明确选的设备照用（真机脚本就是明确选 CABLE Output、往 CABLE Input 里放录音来测的）。游戏语音另外拦掉明确选成 CABLE Output 的（会把自己的声音循环回去）。
+- **说清楚**：
+  - 日志：`audio: the system default mic is CABLE Output (…), using <真麦克风> instead`。
+  - 设备列表里“系统默认”那一项写成“系统默认（CABLE Output 是虚拟麦克风，改用 <真麦克风>）”。设置里的麦克风、游戏语音的麦克风、诊断、`audio.devices` 都显示这一项。
+  - 一个真麦克风也没有时报错，并说下一步：接上麦克风，或者在「设置 → 声音」里选。
+- **“是不是 CABLE”只剩一处**：原来游戏语音 `cable.rs` 有一份，命令行 `devices` / `doctor` 的 `looks_virtual` 有一份，本体没有。现在都在 `virtual_cable.rs`（游戏语音 `pub use`，命令行 `use`）。注册表读法从 `games.rs` 挪到 `registry.rs`，游戏库扫描和它共用。还剩游戏语音页面 `GameVoicePage.svelte` 下拉框的过滤（`startsWith("CABLE Output")`），在前端，挪不过来。
+- **测试**：
+  - `virtual_cable::tests` 7 个、`default_order::tests` 1 个、游戏语音 `router::tests::the_default_mic_still_forwards_after_windows_switched_to_cable`。
+  - 真机只读：`audio::tests::this_machines_default_mic_and_what_cable_as_default_would_pick`（`--ignored`），列出设备和 `Level:0`，算一遍“切成 CABLE 以后改用哪个”，开发机上是原来的默认 PD200X。
+  - `router::tests::tone_reaches_cable_output`（`--ignored`，VB-CABLE）照样过。
+- **没测**：真的把 Windows 默认麦克风切成 CABLE Output。切完以后 `Level:0` 是不是像推的那样变（CABLE 最大，原来的默认第二），要玩家自己验，步骤是：
+  1. 游戏语音页点“设成 CABLE Output”。
+  2. 「设置 → 声音」的麦克风下拉框里，“系统默认”那一项应该写“改用 <原来的麦克风>”。
+  3. 按呼叫键说一句，她应该听得到。
+  4. 回游戏语音页点“改回原来的”。
+
+### 2026-11-25 控制台发话两条同时发（评估第二节第 12 条，只核对，没改行为）
+
+- **经入口的不会撞**：入口一条发言拿一次输入锁（ADR 041 D4）。`console_chat::send` 唯一的调用方是 `WindowsInjector::send_line`，它只经入口调。
+  - 测试 `console_chat::tests::two_statements_through_the_entry_never_swap_the_file`：注入器照 `WindowsInjector` 控制台那一支写文件、按触发键，“游戏”在按下时读文件。两条同时经入口发，每条各执行一次。
+  - 临时改成两个入口、各一把锁（相当于另一个进程），就撞了：`["say_team \"撤退\"", "say_team \"撤退\""]`，第一条丢、第二条两次。不经入口、两个线程直接调也一样。生产代码里没有这两种调法。
+- **还能同时调到它的**：只有命令行的 `kotone send` / `listen`，它们是另一个进程（D3 记着“不在锁里”）。评估建议的“序号在按键之后再放”是进程内的锁，管不到另一个进程，所以没改。
+- **改了什么**：只把写文件、按键、清空拆成 `write_and_press`，好测，行为没变。

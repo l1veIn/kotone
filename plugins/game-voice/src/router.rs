@@ -15,6 +15,7 @@ use std::thread::JoinHandle;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use kotone_platform_windows::audio::Resampler;
+use kotone_platform_windows::virtual_cable::{self, InputChoice};
 
 /// 麦克风缓冲最多多少毫秒（超出丢最旧的）。
 pub const MAX_MIC_LATENCY_MS: u32 = 200;
@@ -109,25 +110,23 @@ pub struct VoiceRouter {
 }
 
 fn find_device(host: &cpal::Host, name: &str, input: bool) -> Result<cpal::Device, String> {
-    if input && (name.is_empty() || name == "default") {
-        return host
-            .default_input_device()
-            .ok_or_else(|| "找不到系统默认麦克风".to_string());
+    if input {
+        // 录音设备和本体的收音照同一条规矩找（`default` = 系统默认，但不收 CABLE Output）
+        return kotone_platform_windows::audio::input_device(host, name).map(|(device, _)| device);
     }
-    let mut devices: Box<dyn Iterator<Item = cpal::Device>> = if input {
-        Box::new(
-            host.input_devices()
-                .map_err(|e| format!("枚举录音设备失败：{e}"))?,
-        )
-    } else {
-        Box::new(
-            host.output_devices()
-                .map_err(|e| format!("枚举播放设备失败：{e}"))?,
-        )
-    };
-    devices
+    host.output_devices()
+        .map_err(|e| format!("枚举播放设备失败：{e}"))?
         .find(|d| d.name().is_ok_and(|n| n == name))
         .ok_or_else(|| format!("找不到音频设备「{name}」"))
+}
+
+/// 转发哪个真麦克风（纯逻辑）：本体收音的那条规矩选出来的，再拦掉明确选成 CABLE Output 的
+/// （会把自己的声音循环回去）。
+fn forwarded_mic(choice: InputChoice) -> Result<InputChoice, String> {
+    if virtual_cable::is_cable_output(choice.name()) {
+        return Err("真麦克风不能选 CABLE Output（会把自己的声音循环回去）".into());
+    }
+    Ok(choice)
 }
 
 fn output_stream<T>(
@@ -217,13 +216,8 @@ fn open(config: &RouterConfig, shared: &Arc<Shared>) -> Result<(Vec<cpal::Stream
     }?;
     let mut streams = vec![output];
     if let Some(mic) = &config.mic {
-        let in_device = find_device(&host, mic, true)?;
-        if in_device
-            .name()
-            .is_ok_and(|n| crate::cable::is_cable(&n, crate::cable::CABLE_OUTPUT))
-        {
-            return Err("真麦克风不能选 CABLE Output（会把自己的声音循环回去）".into());
-        }
+        let (in_device, choice) = kotone_platform_windows::audio::input_device(&host, mic)?;
+        forwarded_mic(choice)?;
         let in_config = in_device
             .default_input_config()
             .map_err(|e| format!("读取麦克风格式失败：{e}"))?;
@@ -420,6 +414,23 @@ mod tests {
         m.push_speech(&[0.9; 1]);
         m.push_mic(&[0.9; 1]);
         assert_eq!(m.next_sample(), 1.0, "clamped");
+    }
+
+    /// 评估第二节第 4 条：`voice_chat.default_mic` 把 Windows 默认麦克风设成 CABLE Output 以后，
+    /// 转发的麦克风是“默认”的，下次重开转发（重启 Kotone、改音量）不该失败，而是照样转发真麦克风。
+    #[test]
+    fn the_default_mic_still_forwards_after_windows_switched_to_cable() {
+        const CABLE: &str = "CABLE Output (VB-Audio Virtual Cable)";
+        const USB: &str = "麦克风 (USB Audio)";
+        let devices = || Ok(vec![CABLE.to_string(), USB.to_string()]);
+        let reopened = virtual_cable::choose_input("default", Some(CABLE), devices)
+            .and_then(forwarded_mic)
+            .map(|choice| choice.name().to_string());
+        assert_eq!(reopened, Ok(USB.to_string()));
+        // 明确选成 CABLE Output 还是不行（会把自己的声音循环回去）
+        assert!(virtual_cable::choose_input(CABLE, Some(USB), devices)
+            .and_then(forwarded_mic)
+            .is_err());
     }
 
     #[test]

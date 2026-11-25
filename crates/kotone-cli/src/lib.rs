@@ -1461,11 +1461,8 @@ fn cmd_config_set(key: &str, value: Option<&str>, capture: bool) -> i32 {
 
 // ---------- devices：音频设备枚举 ----------
 
-/// 名称关键词判断虚拟声卡（VB-CABLE / Virtual Audio / 虚拟）
-fn looks_virtual(name: &str) -> bool {
-    let n = name.to_lowercase();
-    n.contains("cable") || n.contains("virtual") || name.contains("虚拟")
-}
+// 名称关键词判断虚拟声卡（VB-CABLE / VoiceMeeter / Virtual / 虚拟），和本体收音挑真麦克风用同一个判断
+use kotone_platform_windows::virtual_cable::looks_virtual;
 
 fn print_device_line(kind: &str, d: &kotone_core::audio::AudioDevice) {
     let mut desc = String::new();
@@ -2185,18 +2182,6 @@ mod tests {
         );
         assert!(config_get_value(&s, "hotkey.nosuch").is_err());
         assert!(config_get_value(&s, "nosuch").is_err());
-    }
-
-    // ---------- devices 虚拟声卡识别 ----------
-
-    #[test]
-    fn virtual_device_keyword_detection() {
-        assert!(looks_virtual("CABLE Output (VB-Audio Virtual Cable)"));
-        assert!(looks_virtual("CABLE Input (VB-Audio Virtual Cable)"));
-        assert!(looks_virtual("VoiceMeeter Virtual Output"));
-        assert!(looks_virtual("虚拟声卡驱动"));
-        assert!(!looks_virtual("麦克风 (Realtek(R) Audio)"));
-        assert!(!looks_virtual("Microphone (USB Audio Device)"));
     }
 
     // ---------- listen 会话模式退出码（wav 直灌 + mock 引擎全链路） ----------

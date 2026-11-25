@@ -12,28 +12,25 @@ use kotone_core::audio::{
     AudioBackend, AudioDevice, AudioHandle, CHUNK_SAMPLES, TARGET_SAMPLE_RATE,
 };
 
-/// 枚举可用输入设备；首条为 "default" 伪设备（跟随系统默认）
+use crate::default_order;
+use crate::virtual_cable::{self, InputChoice};
+
+/// 枚举可用输入设备；首条为 "default" 伪设备（跟随系统默认；系统默认是 CABLE Output 时写明改用了哪个，
+/// 见 [`virtual_cable::default_label`]）
 pub fn list_devices() -> Vec<AudioDevice> {
     let host = cpal::default_host();
+    let names = input_names(&host).unwrap_or_default();
     let mut out = Vec::new();
-    if let Some(d) = host.default_input_device() {
-        if let Ok(name) = d.name() {
-            out.push(AudioDevice {
-                id: "default".into(),
-                name: format!("系统默认（{name}）"),
-            });
-        }
+    if let Some(name) = host.default_input_device().and_then(|d| d.name().ok()) {
+        out.push(AudioDevice {
+            id: "default".into(),
+            name: virtual_cable::default_label(&name, || inputs_by_recent_default(&host)),
+        });
     }
-    if let Ok(devices) = host.input_devices() {
-        for d in devices {
-            if let Ok(name) = d.name() {
-                out.push(AudioDevice {
-                    id: name.clone(),
-                    name,
-                });
-            }
-        }
-    }
+    out.extend(names.into_iter().map(|name| AudioDevice {
+        id: name.clone(),
+        name,
+    }));
     out
 }
 
@@ -148,6 +145,56 @@ fn default_config_error_message(device_name: &str, detail: &str) -> String {
     format!("读取设备「{device_name}」默认输入配置失败: {detail}")
 }
 
+fn input_names(host: &cpal::Host) -> Result<Vec<String>, String> {
+    Ok(host
+        .input_devices()
+        .map_err(|e| format!("枚举音频输入设备失败: {e}"))?
+        .filter_map(|d| d.name().ok())
+        .collect())
+}
+
+/// 录音设备，最近当过默认的在前（找“上一个默认”用，见 [`crate::default_order`]）。
+fn inputs_by_recent_default(host: &cpal::Host) -> Result<Vec<String>, String> {
+    Ok(default_order::by_recent_default(
+        input_names(host)?,
+        &default_order::capture_levels(),
+    ))
+}
+
+/// 按设置找录音设备：`default` / 空 = 跟随系统默认，其余是设备名。用哪个由
+/// [`virtual_cable::choose_input`] 定；本体的收音、回声消除、游戏语音的转发都经这里。
+/// 同时交回选的结果（游戏语音还要拦掉明确选成 CABLE Output 的）。
+pub fn input_device(
+    host: &cpal::Host,
+    device_id: &str,
+) -> Result<(cpal::Device, InputChoice), String> {
+    let default = host.default_input_device();
+    let default_name = default.as_ref().and_then(|d| d.name().ok());
+    let choice = virtual_cable::choose_input(device_id, default_name.as_deref(), || {
+        inputs_by_recent_default(host)
+    })?;
+    let device = match &choice {
+        InputChoice::SystemDefault(_) => default.ok_or_else(|| {
+            "未找到系统默认音频输入设备（请检查麦克风连接与系统权限）".to_string()
+        })?,
+        InputChoice::InsteadOfCable { mic, cable } => {
+            kotone_core::log::log(&format!(
+                "audio: the system default mic is {cable} (the virtual mic she talks to teammates through), using {mic} instead"
+            ));
+            find_input(host, mic)?
+        }
+        InputChoice::Named(name) => find_input(host, name)?,
+    };
+    Ok((device, choice))
+}
+
+fn find_input(host: &cpal::Host, name: &str) -> Result<cpal::Device, String> {
+    host.input_devices()
+        .map_err(|e| format!("枚举音频输入设备失败: {e}"))?
+        .find(|d| d.name().is_ok_and(|n| n == name))
+        .ok_or_else(|| format!("未找到音频输入设备: {name}"))
+}
+
 /// 在线程内打开设备并构建输入流
 fn open_stream(
     device_id: &str,
@@ -156,15 +203,7 @@ fn open_stream(
     error_tx: mpsc::UnboundedSender<String>,
 ) -> Result<OpenedInput, String> {
     let host = cpal::default_host();
-    let device = if device_id == "default" || device_id.is_empty() {
-        host.default_input_device()
-            .ok_or_else(|| "未找到系统默认音频输入设备（请检查麦克风连接与系统权限）".to_string())?
-    } else {
-        host.input_devices()
-            .map_err(|e| format!("枚举音频输入设备失败: {e}"))?
-            .find(|d| d.name().map(|n| n == device_id).unwrap_or(false))
-            .ok_or_else(|| format!("未找到音频输入设备: {device_id}"))?
-    };
+    let (device, _) = input_device(&host, device_id)?;
 
     let device_name = device.name().unwrap_or_else(|_| device_id.into());
     let config = device.default_input_config().map_err(|e| {
@@ -390,6 +429,39 @@ impl Resampler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 真机（只读设备名：不开流、不改 Windows 默认设备）：列出录音设备和“系统默认”那一项；本机装了
+    /// VB-CABLE 时，再算一遍“要是系统默认被设成 CABLE Output，跟随系统默认的收音改用哪个”。
+    #[test]
+    #[ignore = "reads this machine's audio devices"]
+    fn this_machines_default_mic_and_what_cable_as_default_would_pick() {
+        let host = cpal::default_host();
+        for d in list_devices() {
+            println!("{} | {}", d.id, d.name);
+        }
+        println!("Level:0 = {:?}", default_order::capture_levels());
+        let names = inputs_by_recent_default(&host).unwrap();
+        println!("most recent default first: {names:?}");
+        let (_, choice) = input_device(&host, "default").unwrap();
+        println!("default -> {choice:?}");
+        assert!(!virtual_cable::is_cable_output(choice.name()));
+        // 现在的默认（没切成 CABLE）排在最前面
+        assert_eq!(names.first().map(String::as_str), Some(choice.name()));
+        if let Some(cable) = names.iter().find(|n| virtual_cable::is_cable_output(n)) {
+            // 切成 CABLE 以后 CABLE 排最前、现在的默认排第二：照这个先后算一遍
+            let mut after_switch = names.clone();
+            after_switch.retain(|n| n != cable);
+            after_switch.insert(0, cable.clone());
+            let pretend =
+                virtual_cable::choose_input("default", Some(cable), || Ok(after_switch)).unwrap();
+            println!("if the Windows default were {cable}: {pretend:?}");
+            assert_eq!(
+                pretend.name(),
+                choice.name(),
+                "falls back to the previous default"
+            );
+        }
+    }
 
     #[test]
     fn unsupported_windows_mix_format_has_actionable_message() {
