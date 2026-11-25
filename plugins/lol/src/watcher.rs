@@ -33,7 +33,7 @@ use crate::client::{in_game_phase, GameData, Lcu, LcuAuth, Live, LolError};
 use crate::pages;
 use crate::tools::{
     TOOL_CHAMPION, TOOL_CHAMPIONS, TOOL_CLIENT, TOOL_GAME, TOOL_MATCH, TOOL_PLAYER, TOOL_SCOUT,
-    TOOL_SPELL, TOOL_TIER,
+    TOOL_SHOUT, TOOL_SPELL, TOOL_TIER,
 };
 use crate::LolPlugin;
 
@@ -41,6 +41,14 @@ use crate::LolPlugin;
 mod auto_cards;
 /// 选人阶段的“这局”（调研 G1）。
 mod champ_select;
+/// 一键喊话（ADR 041 第 3 期，`lol.shout`）。
+mod shout;
+
+/// 清单里预设命令的参数 `lol.shout` 认不认（`lib.rs` 的清单测试用）。
+#[cfg(test)]
+pub(crate) fn shout_args_ok(args: &Value) -> bool {
+    shout::Shout::parse(args).is_ok()
+}
 
 /// 结算后多久还没拿到这局的结果就不再等（和自动卡片“这局总结”一样，调研 G29）。
 const RESULT_WAIT_MS: i64 = 60_000;
@@ -767,7 +775,7 @@ impl LolPlugin {
         }
     }
 
-    /// `lol.match` / `lol.spell` / `lol.scout`。结果只有给她的那份（页面在第 2 步加）。
+    /// `lol.match` / `lol.spell` / `lol.scout` / `lol.shout`……。结果只有给她的那份（页面在第 2 步加）。
     pub(crate) async fn tool(
         &self,
         host: &Arc<dyn Host>,
@@ -782,10 +790,15 @@ impl LolPlugin {
             _ => {}
         }
         if !enabled(host.as_ref()) {
-            return Ok(ToolResult::content(status(
-                "disabled",
-                "英雄联盟插件的“读客户端数据”已关闭（插件 → 英雄联盟 里可以打开）",
-            )));
+            let off = "英雄联盟插件的“读客户端数据”已关闭（插件 → 英雄联盟 里可以打开）";
+            if name == TOOL_SHOUT {
+                // 喊话没喊出去就是没成（热键那边照“没成”告诉玩家）
+                return Err(format!("{off}：这次没发"));
+            }
+            return Ok(ToolResult::content(status("disabled", off)));
+        }
+        if name == TOOL_SHOUT {
+            return self.shout_tool(host.as_ref(), arguments).await;
         }
         Ok(match name {
             TOOL_MATCH => ToolResult::content(self.match_tool(host.as_ref()).await),

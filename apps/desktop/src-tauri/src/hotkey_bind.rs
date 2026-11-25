@@ -49,6 +49,33 @@ fn owner_of(settings: &Settings, tool: &str) -> Option<(String, bool)> {
         })
 }
 
+/// 内置插件开着、这个工具要的数据开关关着（英雄联盟的“读客户端数据”）：工具不在目录里，说要打开哪个开关。
+fn sources_off(settings: &Settings, tool: &str) -> Option<String> {
+    let (manifest, spec) = crate::plugins::registry().iter().find_map(|p| {
+        let spec = p.tools().into_iter().find(|t| t.name == tool)?;
+        Some((p.manifest(), spec))
+    })?;
+    if !crate::plugins::enabled(settings, manifest) {
+        return None;
+    }
+    let off: Vec<String> = spec
+        .needs
+        .iter()
+        .filter(|s| !crate::plugins::source_enabled(settings, manifest, s))
+        .map(|s| {
+            let name = manifest.source(s).map_or(s.as_str(), |x| x.name.as_str());
+            format!("“{name}”")
+        })
+        .collect();
+    (!off.is_empty()).then(|| {
+        format!(
+            "要先在左侧栏「插件 → {}」打开{}",
+            manifest.name,
+            off.join("、")
+        )
+    })
+}
+
 /// 自己加的那一条现在能不能按（说一句总能按；按下时宿主还会再判一次，规则可能刚改过）。
 pub(crate) fn state(settings: &Settings, catalog: &Catalog, binding: &Binding) -> CustomState {
     let Some(action) = binding.action() else {
@@ -65,6 +92,9 @@ pub(crate) fn state(settings: &Settings, catalog: &Catalog, binding: &Binding) -
         return CustomState::Ready;
     };
     let Some(entry) = catalog.get(tool) else {
+        if let Some(reason) = sources_off(settings, tool) {
+            return CustomState::Blocked(reason);
+        }
         return match owner_of(settings, tool) {
             Some((_, false)) => CustomState::Off,
             Some((name, true)) => CustomState::Blocked(format!(
@@ -95,13 +125,26 @@ pub(crate) fn state(settings: &Settings, catalog: &Catalog, binding: &Binding) -
     }
 }
 
-/// 表里有没有调工具、打开页面的热键（权限、插件开关变了要不要重新登记）。
+/// 表里有没有调工具、打开页面的热键（权限、插件开关变了要不要重新登记）：自己加的，和绑了键的插件预设
+/// （英雄联盟的“喊对面闪现”这类调工具的命令）。
 pub(crate) fn has_tool_bindings(settings: &Settings) -> bool {
-    settings
-        .hotkeys
-        .bindings
+    settings.hotkeys.bindings.iter().any(|b| {
+        b.action().is_some_and(|a| !matches!(a, Action::Say(_)))
+            || b.command_name().is_some_and(|c| tool_command(c).is_some())
+    })
+}
+
+/// 插件登记的调工具的命令（`<插件>.<命令>`，清单 `[[commands]]` 写了 `tool`）：(名字, 当成“调一个工具”看的条目)。
+/// 只有内置插件有命令（第三方插件的清单是合成的，没有 `[[commands]]`）。
+pub(crate) fn tool_command(command: &str) -> Option<(String, Binding)> {
+    let (plugin, id) = kotone_core::hotkey_commands::split_command(command)?;
+    let manifest = crate::plugins::registry()
         .iter()
-        .any(|b| b.action().is_some_and(|a| !matches!(a, Action::Say(_))))
+        .map(|p| p.manifest())
+        .find(|m| m.id == plugin)?;
+    let spec = manifest.commands.iter().find(|c| c.id == id)?;
+    let binding = kotone_core::hotkey_custom::command_binding(spec)?;
+    Some((spec.name.clone(), binding))
 }
 
 /// 「设置 → 热键」的确认（D9）：这一条（`id` 是 `custom.<id>`，第 1、2 期的 `quick-message-n` 也认）调的工具现在要问，
@@ -461,6 +504,57 @@ mod tests {
             "Echoes back the input"
         );
         assert_eq!(title_of(""), "");
+    }
+
+    /// 英雄联盟的四条预设（ADR 041 第 3 期）当成“调一个工具”看：默认能按（和 game_chat.send 一样的副作用）；
+    /// “读客户端数据”关着说要打开它；插件关着不登记；权限里设成每次问 / 禁止的不能按。语音输入的命令不是调工具的。
+    #[test]
+    fn lol_shout_presets_follow_the_tool() {
+        let (name, preset) =
+            tool_command("lol.shout-enemy-flash").expect("英雄联盟登记了喊对面闪现");
+        assert_eq!(name, "喊对面闪现");
+        assert_eq!(preset.tool(), Some("lol.shout"));
+        assert_eq!(preset.args().unwrap()["what"], "flash");
+        assert!(preset.id().is_none() && preset.confirmed().is_none());
+        for id in ["shout-enemy-records", "shout-ally-records", "shout-premade"] {
+            assert!(tool_command(&format!("lol.{id}")).is_some(), "{id}");
+        }
+        for not_tool in ["voice-input.talk", "kotone.call", "lol.nope", "nope"] {
+            assert!(tool_command(not_tool).is_none(), "{not_tool}");
+        }
+        let state_now = |s: &Settings| state(s, &catalog(s), &preset);
+        let mut settings = Settings::default();
+        assert_eq!(state_now(&settings), CustomState::Ready);
+        let mut with_preset = settings.clone();
+        with_preset
+            .hotkeys
+            .bindings
+            .push(Binding::command("F7", "lol.shout-enemy-flash"));
+        assert!(has_tool_bindings(&with_preset), "权限、开关变了要重新登记");
+
+        let lol = settings.plugins.entry("lol".into()).or_default();
+        lol.sources.insert("client".into(), false);
+        assert!(matches!(
+            state_now(&settings),
+            CustomState::Blocked(r) if r.contains("插件 → 英雄联盟") && r.contains("“读客户端数据”")
+        ));
+        let lol = settings.plugins.get_mut("lol").unwrap();
+        lol.sources.clear();
+        lol.enabled = Some(false);
+        assert_eq!(state_now(&settings), CustomState::Off);
+        settings.plugins.clear();
+        settings
+            .agent
+            .permissions
+            .rules
+            .insert("lol.shout".into(), kotone_core::agent::Rule::Ask);
+        assert!(matches!(state_now(&settings), CustomState::NeedsConfirm(_)));
+        settings
+            .agent
+            .permissions
+            .rules
+            .insert("lol.shout".into(), kotone_core::agent::Rule::Deny);
+        assert!(matches!(state_now(&settings), CustomState::Blocked(r) if r.contains("权限")));
     }
 
     #[test]

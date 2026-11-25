@@ -29,8 +29,11 @@ pub struct LivePlayer {
     pub cs: i64,
     pub dead: bool,
     pub respawn: f64,
-    /// 召唤师技能的名字（两个）。
+    /// 召唤师技能的名字（两个；随客户端语言变：国服“闪现”，英文“Flash”）。说给玩家听用，认技能用 [`Self::spell_keys`]。
     pub spells: Vec<String>,
+    /// 召唤师技能不随语言变的 id，从 `rawDisplayName`（`GeneratedTip_SummonerSpell_SummonerFlash_DisplayName`）取：
+    /// `SummonerFlash`。两个槽位各一个，认不出的槽位是空串。
+    pub spell_keys: [String; 2],
     pub items: Vec<LiveItem>,
     pub bot: bool,
 }
@@ -112,6 +115,34 @@ fn n(v: &Value, key: &str) -> f64 {
 }
 
 /// `game_character_displayname_Irelia` → `Irelia`。
+/// 闪现的 id（`rawDisplayName` 里的那一段；海克斯闪现符文换过的槽位是 `SummonerFlashPerksHextechFlashtraptionV2` 一类，
+/// 也算带着闪现）。
+const FLASH_KEY: &str = "SummonerFlash";
+
+/// `GeneratedTip_SummonerSpell_SummonerFlash_DisplayName` → `SummonerFlash`；不是这个样子 → 空串。
+fn spell_key(raw: &str) -> String {
+    raw.strip_prefix("GeneratedTip_SummonerSpell_")
+        .and_then(|rest| rest.strip_suffix("_DisplayName"))
+        .filter(|key| key.starts_with("Summoner"))
+        .unwrap_or("")
+        .to_string()
+}
+
+impl LivePlayer {
+    /// 带没带闪现（“谁没带闪”只用这一个判断：`lol.match`、一键喊话）。按不随客户端语言变的 id 认，不看显示的名字
+    /// （英文客户端是“Flash”）。有一个槽位是闪现 → 带着；两个槽位都认得出、都不是 → 没带；字段缺、认不出 → None：
+    /// 不知道，就不说“没带闪”（宁可不说，也不把错的信息发给队友）。
+    pub fn carries_flash(&self) -> Option<bool> {
+        if self.spell_keys.iter().any(|k| k.starts_with(FLASH_KEY)) {
+            Some(true)
+        } else if self.spell_keys.iter().all(|k| !k.is_empty()) {
+            Some(false)
+        } else {
+            None
+        }
+    }
+}
+
 pub fn alias_from_raw(raw: &str) -> String {
     raw.rsplit('_').next().unwrap_or("").to_string()
 }
@@ -154,6 +185,12 @@ fn player(p: &Value) -> LivePlayer {
             .map(|x| s(x, "displayName"))
             .filter(|x| !x.is_empty())
             .collect(),
+        spell_keys: ["summonerSpellOne", "summonerSpellTwo"].map(|slot| {
+            spell_key(&s(
+                spells.get(slot).unwrap_or(&Value::Null),
+                "rawDisplayName",
+            ))
+        }),
         items: p
             .get("items")
             .and_then(Value::as_array)
@@ -233,6 +270,18 @@ pub(crate) mod tests {
     use super::*;
     use serde_json::json;
 
+    /// 局内接口里召唤师技能的 `rawDisplayName`（照实录的样子）。
+    fn raw_spell(name: &str) -> String {
+        let key = match name {
+            "闪现" | "Flash" => "SummonerFlash",
+            "引燃" | "Ignite" => "SummonerDot",
+            "标记" | "Mark" => "SummonerSnowball",
+            "幽灵疾步" | "Ghost" => "SummonerHaste",
+            _ => "SummonerBarrier",
+        };
+        format!("GeneratedTip_SummonerSpell_{key}_DisplayName")
+    }
+
     fn p(name: &str, raw: &str, title: &str, team: &str, spells: [&str; 2], kills: i64) -> Value {
         json!({
             "championName": title, "isBot": false, "isDead": false, "items": [],
@@ -241,8 +290,8 @@ pub(crate) mod tests {
             "scores": {"assists": 1, "creepScore": 30, "deaths": 2, "kills": kills, "wardScore": 0.0},
             "summonerName": format!("{name}#1"),
             "summonerSpells": {
-                "summonerSpellOne": {"displayName": spells[0], "rawDisplayName": "x"},
-                "summonerSpellTwo": {"displayName": spells[1], "rawDisplayName": "y"}
+                "summonerSpellOne": {"displayName": spells[0], "rawDisplayName": raw_spell(spells[0])},
+                "summonerSpellTwo": {"displayName": spells[1], "rawDisplayName": raw_spell(spells[1])}
             },
             "team": team
         })
@@ -283,6 +332,57 @@ pub(crate) mod tests {
         assert_eq!(yasuo.name, "敌人一");
         assert_eq!(game.events[1].detail, "Fire 抢的");
         assert_eq!(game.is_ally_name("敌人一"), Some(false));
+    }
+
+    /// 带没带闪现按 `rawDisplayName` 认（ADR 041 第 3 期修）：中文、英文客户端一样；字段缺、认不出时不知道（不说没带）。
+    #[test]
+    fn flash_is_recognized_by_the_raw_name_not_the_language() {
+        let flash_of = |spells: Value| {
+            let mut v = sample_json();
+            v["allPlayers"][2]["summonerSpells"] = spells;
+            let game = parse_all_game_data(&v).unwrap();
+            (
+                game.players[2].carries_flash(),
+                game.players[2].spell_keys.clone(),
+            )
+        };
+        let slot =
+            |display: &str, raw: &str| json!({"displayName": display, "rawDisplayName": raw});
+        // 中文客户端（实录的样子）
+        let (zh, keys) = flash_of(json!({
+            "summonerSpellOne": slot("闪现", "GeneratedTip_SummonerSpell_SummonerFlash_DisplayName"),
+            "summonerSpellTwo": slot("幽灵疾步", "GeneratedTip_SummonerSpell_SummonerHaste_DisplayName"),
+        }));
+        assert_eq!(zh, Some(true));
+        assert_eq!(keys, ["SummonerFlash", "SummonerHaste"]);
+        // 英文客户端：显示的名字是 Flash，照样认得
+        assert_eq!(flash_of(json!({
+            "summonerSpellOne": slot("Ignite", "GeneratedTip_SummonerSpell_SummonerDot_DisplayName"),
+            "summonerSpellTwo": slot("Flash", "GeneratedTip_SummonerSpell_SummonerFlash_DisplayName"),
+        })).0, Some(true));
+        assert_eq!(flash_of(json!({
+            "summonerSpellOne": slot("Ignite", "GeneratedTip_SummonerSpell_SummonerDot_DisplayName"),
+            "summonerSpellTwo": slot("Ghost", "GeneratedTip_SummonerSpell_SummonerHaste_DisplayName"),
+        })).0, Some(false), "两个都认得出、都不是闪现：没带");
+        // 海克斯闪现符文换过的槽位也算带着
+        assert_eq!(flash_of(json!({
+            "summonerSpellOne": slot("海克斯闪现", "GeneratedTip_SummonerSpell_SummonerFlashPerksHextechFlashtraptionV2_DisplayName"),
+            "summonerSpellTwo": slot("引燃", "GeneratedTip_SummonerSpell_SummonerDot_DisplayName"),
+        })).0, Some(true));
+        // 字段缺、认不出：不知道（只有显示的名字也不猜）
+        assert_eq!(
+            flash_of(json!({
+                "summonerSpellOne": {"displayName": "Ignite"},
+                "summonerSpellTwo": {"displayName": "Ghost"},
+            }))
+            .0,
+            None
+        );
+        assert_eq!(flash_of(json!({
+            "summonerSpellOne": slot("引燃", "GeneratedTip_SummonerSpell_SummonerDot_DisplayName"),
+            "summonerSpellTwo": slot("?", "x"),
+        })).0, None);
+        assert_eq!(flash_of(Value::Null).0, None);
     }
 
     #[test]

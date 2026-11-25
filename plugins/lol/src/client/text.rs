@@ -162,7 +162,8 @@ pub fn enemy_flash_line(
     let mut without = Vec::new();
     for p in game.enemies() {
         let (_, short) = champion_names(p, data);
-        if !p.spells.iter().any(|s| s == "闪现") {
+        // 认闪现只用 `carries_flash`（不看显示的名字；认不出就不说没带）
+        if p.carries_flash() == Some(false) {
             without.push(short);
         } else if let Some(ready) = tracker.ready_at(&p.alias, "闪现", now) {
             down.push(format!(

@@ -52,6 +52,8 @@ export interface HotkeySources {
   settings: Settings;
   profiles: GameProfile[];
   voiceInput: { id: string; name: string; enabled: boolean };
+  /** 英雄联盟插件（一键喊话的四条预设）：开没开、“读客户端数据”开没开。 */
+  lol?: { id: string; name: string; enabled: boolean; client: boolean };
 }
 
 type MirrorKey = "automationStopHotkey" | "runtimeToggleHotkey" | "channelCycleHotkey" | "resendLastHotkey"
@@ -103,7 +105,29 @@ function commandRow(settings: Settings, c: (typeof COMMANDS)[number], plugin?: {
   });
 }
 
-function bindings({ settings, voiceInput }: HotkeySources): KeyUse[] {
+/** 英雄联盟登记的一键喊话（同 plugins/lol/plugin.toml 的 [[commands]]，ADR 041 第 3 期）：调 lol.shout，不带默认键，键存在热键表里。 */
+const LOL_PRESETS: { command: string; name: string; description: string }[] = [
+  { command: "lol.shout-enemy-flash", name: "喊对面闪现", description: "把对面谁的闪现没好、几点好（你报过的）和谁没带闪发到队伍聊天" },
+  { command: "lol.shout-enemy-records", name: "喊对面战绩", description: "把对面每个人的段位、近 20 局胜负、KDA、连胜连败发到队伍聊天（一人一行）" },
+  { command: "lol.shout-ally-records", name: "喊我方战绩", description: "把我方每个人的段位、近 20 局胜负、KDA、连胜连败发到队伍聊天（一人一行）" },
+  { command: "lol.shout-premade", name: "喊开黑情况", description: "把两边谁和谁开黑发到队伍聊天" },
+];
+
+function presetOf(id: string) {
+  return LOL_PRESETS.find((p) => p.command === id);
+}
+
+/** 同后端 `hotkey_table::tool_command`：照 lol.shout 能不能按（插件关着不登记；“读客户端数据”关着写原因）。 */
+function presetRow(settings: Settings, p: (typeof LOL_PRESETS)[number], lol: NonNullable<HotkeySources["lol"]>): KeyUse {
+  const key = (settings.hotkeys?.bindings ?? []).find((b) => b.command === p.command)?.key ?? "";
+  return entry(p.command, key, "plugin", p.name, PAGE, "hotkeys.bindings", {
+    command: p.command, statusId: p.command, action: "tool", detail: p.description,
+    owner: lol.id, ownerName: lol.name, enabled: lol.enabled,
+    ...(lol.enabled && !lol.client ? { blocked: `要先在左侧栏「插件 → ${lol.name}」打开“读客户端数据”` } : {}),
+  });
+}
+
+function bindings({ settings, voiceInput, lol }: HotkeySources): KeyUse[] {
   const legacyOnly = usesLegacyVoiceInput(settings.ui);
   const out: KeyUse[] = [];
   for (const c of COMMANDS.filter((c) => c.command.startsWith("kotone."))) {
@@ -116,6 +140,7 @@ function bindings({ settings, voiceInput }: HotkeySources): KeyUse[] {
   out.push(entry("escape", "Escape", "fixed", "Esc", "", "", { detail: "取消这次录音；她操作游戏时让她停下" }));
   const plugin = { owner: voiceInput.id, ownerName: voiceInput.name, enabled: voiceInput.enabled };
   for (const c of COMMANDS.filter((c) => c.command.startsWith("voice-input."))) out.push(commandRow(settings, c, plugin));
+  if (lol) for (const p of LOL_PRESETS) out.push(presetRow(settings, p, lol));
   if (!legacyOnly) {
     // 自己加的（第 3 期，后端 `hotkey_custom`）：在热键表里，每条一行，行 id 是 `custom.<id>`
     for (const b of customEntries(settings)) out.push(customRow(settings, b));
@@ -230,6 +255,15 @@ export function customStatus(settings: Settings): NamedHotkeyStatus[] {
       const error = st.state === "confirm" ? `要先在「设置 → 热键」确认一次：${st.reason}` : st.state === "blocked" ? st.reason : null;
       return { id: `custom.${b.id}`, key: error ? null : String(b.key), error };
     });
+}
+
+/** 绑了键的英雄联盟预设（同后端：登记 id 是命令名，随应用登记；插件关着不登记，按不了的写原因）。 */
+export function presetStatus(src: HotkeySources): NamedHotkeyStatus[] {
+  const lol = src.lol;
+  if (!lol?.enabled) return [];
+  return LOL_PRESETS.map((p) => presetRow(src.settings, p, lol))
+    .filter((row) => row.key)
+    .map((row) => ({ id: row.id, key: row.blocked ? null : row.key, error: row.blocked ?? null }));
 }
 
 /** 同后端 `hotkey_binding_options`。 */
@@ -368,7 +402,8 @@ export function setHotkey(src: HotkeySources, id: string, key: string): void {
   if (trimmed && !canonicalCombo(trimmed)) throw new Error(`认不出「${trimmed}」这个键：写成 F8、Ctrl+Alt+K、Mouse4 这样，或者点“录入”直接按`);
   const isQuick = id.startsWith("custom.") || /^quick-message-\d+$/.test(id);
   const command = commandOf(id);
-  if (!isQuick && !command) throw new Error(id === "escape" ? "Esc 是固定的，不能改" : id === "legacy-reminder" ? "提醒助手热键在「提醒助手」页改" : `「${id}」在这里改不了`);
+  const preset = presetOf(id);
+  if (!isQuick && !command && !preset) throw new Error(id === "escape" ? "Esc 是固定的，不能改" : id === "legacy-reminder" ? "提醒助手热键在「提醒助手」页改" : `「${id}」在这里改不了`);
   // i18n-ignore-end
   if (trimmed) {
     const conflict = checkHotkey(src, trimmed, id).conflicts[0];
@@ -381,8 +416,10 @@ export function setHotkey(src: HotkeySources, id: string, key: string): void {
     custom.key = trimmed;
     return;
   }
-  setMirror(settings, command!.field, trimmed);
-  const list: HotkeyBinding[] = (settings.hotkeys?.bindings ?? []).filter((b) => b.command !== command!.command);
-  if (trimmed) list.push({ key: trimmed, command: command!.command });
+  // 插件的预设没有旧字段，键只在热键表里
+  if (command) setMirror(settings, command.field, trimmed);
+  const name = command?.command ?? preset!.command;
+  const list: HotkeyBinding[] = (settings.hotkeys?.bindings ?? []).filter((b) => b.command !== name);
+  if (trimmed) list.push({ key: trimmed, command: name });
   settings.hotkeys = { bindings: list };
 }

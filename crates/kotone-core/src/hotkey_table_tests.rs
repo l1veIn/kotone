@@ -21,6 +21,8 @@ fn voice_commands() -> &'static [CommandSpec] {
             description: String::new(),
             kind,
             listens: true,
+            tool: None,
+            args: None,
         };
         vec![
             spec("talk", "语音输入热键", CommandKind::Hold),
@@ -804,4 +806,117 @@ fn rows_are_named_by_command_and_old_ids_still_work() {
             .as_deref(),
         Some(CMD_TALK)
     );
+}
+
+/// 插件登记的调工具的命令（第 3 期，英雄联盟的一键喊话）：表里列出来、不带键；照宿主算的判（权限、开关）；
+/// 绑了键随应用登记（不用语音识别，也不只看不吞）；权限里设成每次问的写原因、不登记。
+#[test]
+fn plugin_tool_commands_are_listed_and_run_without_listening() {
+    let shout = |id: &str, what: &str| CommandSpec {
+        id: id.into(),
+        name: format!("喊{what}"),
+        description: format!("把{what}发到队伍聊天"),
+        kind: CommandKind::Press,
+        listens: false,
+        tool: Some("lol.shout".into()),
+        args: Some(serde_json::json!({"what": what})),
+    };
+    let commands = vec![
+        shout("shout-flash", "flash"),
+        shout("shout-records", "records"),
+        shout("shout-premade", "premade"),
+    ];
+    let lol = PluginInfo {
+        id: "lol",
+        name: "英雄联盟",
+        enabled: true,
+        commands: &commands,
+    };
+    let plugins = [voice(true), lol];
+    let mut settings = Settings::default();
+    settings.hotkeys.bindings.extend([
+        Binding::command("F7", "lol.shout-flash"),
+        Binding::command("F8", "lol.shout-records"),
+        Binding::command("F9", "lol.shout-premade"),
+    ]);
+    settings.sync_hotkey_mirrors();
+    let host = |b: &Binding| match b.args().and_then(|a| a["what"].as_str()) {
+        Some("records") => CustomState::NeedsConfirm("用户设置为每次询问（lol.shout）".into()),
+        Some("premade") => {
+            CustomState::Blocked("当前是只读模式：去她的「权限」里改（lol.shout）".into())
+        }
+        _ => {
+            assert_eq!(b.tool(), Some("lol.shout"));
+            CustomState::Ready
+        }
+    };
+    let src = Sources {
+        settings: &settings,
+        profiles: &[],
+        plugins: &plugins,
+        custom: Some(&host),
+    };
+    let rows = bindings(&src);
+    let find = |id: &str| rows.iter().find(|r| r.id == id).unwrap();
+    let flash = find("lol.shout-flash");
+    assert_eq!(flash.source, KeySource::Plugin);
+    assert_eq!(flash.action, Some("tool"));
+    assert_eq!(flash.label, "喊flash");
+    assert_eq!(flash.detail, "把flash发到队伍聊天");
+    assert_eq!(flash.owner_name.as_deref(), Some("英雄联盟"));
+    assert!(flash.enabled && flash.blocked.is_none() && flash.confirm.is_none());
+    assert!(find("lol.shout-records")
+        .blocked
+        .as_deref()
+        .is_some_and(|b| b.contains("热键上没法每次问")));
+    assert!(
+        find("lol.shout-records").confirm.is_none(),
+        "预设没有确认这一步"
+    );
+    let plan = registration_plan(&src);
+    let flash = planned(&plan, "lol.shout-flash");
+    assert!(flash.error.is_none(), "{:?}", flash.error);
+    assert!(flash.always && flash.hint.is_none(), "不用听：随应用登记");
+    assert!(planned(&plan, "lol.shout-records").error.is_some());
+    assert!(planned(&plan, "lol.shout-premade")
+        .error
+        .as_deref()
+        .is_some_and(|e| e.contains("只读模式")));
+    // 语音输入的命令照旧要听
+    if let Some(talk) = plan.iter().find(|p| p.id == HK_RECORD) {
+        assert!(!talk.always && talk.hint.is_some());
+    }
+
+    // 没设键的照样列出来（D4：插件不带默认键）；插件关着的不登记
+    let off = PluginInfo {
+        enabled: false,
+        ..plugins[1]
+    };
+    let plugins = [voice(true), off];
+    let src = Sources {
+        settings: &settings,
+        profiles: &[],
+        plugins: &plugins,
+        custom: Some(&host),
+    };
+    assert!(registration_plan(&src)
+        .iter()
+        .all(|p| !p.id.starts_with("lol.")));
+    let empty = Settings::default();
+    let plugins = [voice(true), lol];
+    let src = Sources {
+        settings: &empty,
+        profiles: &[],
+        plugins: &plugins,
+        custom: None,
+    };
+    let rows = bindings(&src);
+    let lol_rows: Vec<&KeyUse> = rows
+        .iter()
+        .filter(|r| r.owner.as_deref() == Some("lol"))
+        .collect();
+    assert_eq!(lol_rows.len(), 3);
+    assert!(lol_rows
+        .iter()
+        .all(|r| r.key.is_empty() && r.default_key.is_empty()));
 }

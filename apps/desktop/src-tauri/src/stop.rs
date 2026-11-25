@@ -17,8 +17,10 @@ pub fn stop_everything(app: &AppHandle, reason: &str) -> bool {
     let turn = crate::agent::stop(app).unwrap_or(false);
     // 正在念的回答、弹幕一起收掉。
     crate::assistant::stop_speech(app.clone());
+    // 她、外部 Agent、热键（一键喊话）正在往游戏聊天里发的几行：停在下一行之前（ADR 041 第 3 期）。
+    let sends = crate::game_chat::stop_sends();
     kotone_core::log::log(&format!(
-        "停下（{reason}）：自动化 {automations} 个，操作 {acting}，后台 {children} 件，这一轮 {turn}"
+        "停下（{reason}）：自动化 {automations} 个，操作 {acting}，后台 {children} 件，这一轮 {turn}，发话 {sends} 段"
     ));
-    automations > 0 || acting || children > 0 || turn
+    automations > 0 || acting || children > 0 || turn || sends > 0
 }

@@ -109,6 +109,7 @@
 | 游戏配置 / Game profile | `GameProfile`, `ChatChannel` | 前台程序匹配、聊天打开/发送按键、频道、前缀和热词等游戏适配数据。不是 AI 连接，也不是全局设置。 |
 | 发到游戏 / Send to game | `SendToGame`, `GameChat`, `ChatRequest`, `ChatOutcome`, `game_chat.send` | “把这段话发到当前游戏的聊天”唯一的入口（ADR 041）：语音输入、她、外部 Agent、自动化的 `chat()` 都经它。按前台检测到的游戏挑游戏配置和频道，等修饰键松开，一行发一条，结果说走了哪条路、哪个频道、发了几行、没发完的原因。不重试、不补发。 |
 | 发法 / Chat provider | `[[send_to_game]]`, `SendToGameSpec`, `ChatProvider`, `Plugin::send_to_game`, `route: client` | 游戏插件给某个游戏提供的“发到游戏”的另一种做法（ADR 041 D3）：插件在 `plugin.toml` 里登记“前台是这些窗口时交给我”，入口照前台挑，没有就是本体的通用发法（按键）。英雄联盟登记的是客户端：选英雄、房间里经客户端的聊天接口发，不按键、不拿输入锁。插件接手以后失败也不退回按键。界面上不出现这个词，玩家看到的是插件的开关（“在客户端里发聊天”）和回执里的“经客户端的聊天接口发”。只给内置插件。 |
+| 一键喊话 / Shout preset | `lol.shout`, `[[commands]]` 的 `tool` + `args`, `Host::send_to_game` | 英雄联盟插件登记的热键预设（ADR 041 第 3 期）：按一个键，把这局的情况（对面谁的闪现没好、战绩、开黑）现生成几行发到队伍聊天，和她替你发言同一个入口。表里的名字是“喊对面闪现”“喊对面战绩”“喊我方战绩”“喊开黑情况”。闪现只喊玩家报过的（接口里没有冷却）；不发玩家名。固定的一句话不是一键喊话，是自己加的“调一个工具”绑发到游戏聊天。 |
 | 输入锁 / Input lock | `InputLock`, `InputUser` | 往游戏里按键的人共用的一把锁（ADR 041 D4）：一条发言、一次 `game.act`、按键程序的每一下各拿一次，后来的排队，最多 5 秒（或调用方的期限）。实例只有宿主一份。不是 ADR 032 的挡键（那个挡的是玩家的键，输入锁排的是 Kotone 自己的几路）。 |
 | 连接 / Connection | `Connection`, `connectionId`, `ResolvedConnection` | 可复用的服务地址、协议、模型与凭据引用。凭据由独立存储管理，不嵌入 pipeline、profile 导出或诊断包。 |
 | 后处理流水线 / Post-processing pipeline | `PostProcessPipeline`, `PipelineStepConfig`, `TextProcessor` | 有序处理步骤；每步消费上一步输出。处理器是能力定义，步骤是带配置和失败策略的实例。`required` 阻止失败交付；`best-effort` 保留上一文本继续。 |

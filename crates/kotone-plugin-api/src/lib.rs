@@ -82,6 +82,8 @@ pub struct Manifest {
     pub events: Vec<EventSpec>,
     /// 能绑热键的命令（ADR 040 D1，`[[commands]]`：id、名字、一句说明、按一下 / 按住、要不要语音识别）。
     /// 插件只登记命令，不登记键（D7）；也没有默认键这个字段（D4）。完整名是 `<插件 id>.<命令 id>`。
+    /// 第二种命令（ADR 040 第 3 期）：`tool` + `args`，按下时宿主调插件**自己的**一个给她的工具、带这些固定参数
+    /// （照这个工具的权限；英雄联盟的一键喊话）。这种命令按一下、不听；工具在不在、给不给她由 [`Manifest::check_tools`] 查。
     #[serde(default)]
     pub commands: Vec<CommandSpec>,
     /// 发到游戏的发法（ADR 041 D3，`[[send_to_game]]`：给哪个游戏、前台是哪些程序的窗口时交给插件、要的数据开关）。
@@ -197,6 +199,7 @@ impl Manifest {
                     self.id, command.id
                 ));
             }
+            self.check_tool_command(command)?;
         }
         let mut chat_games = std::collections::HashSet::new();
         for chat in &self.send_to_game {
@@ -255,7 +258,42 @@ impl Manifest {
         self.tool_prefix.as_deref().unwrap_or(&self.id)
     }
 
-    /// 检查插件代码给的工具：名字以 `<前缀>.` 开头（或就是前缀），页面是自己的，`needs` 是自己的开关，不重名。
+    /// 调工具的命令（ADR 040 第 3 期）：只调自己的工具（插件之间不直接调用，也免得插件登记一个调 `settings.update` 的
+    /// 预设）、按一下、不听、参数是对象。
+    fn check_tool_command(&self, command: &CommandSpec) -> Result<(), String> {
+        let Some(tool) = &command.tool else {
+            return match command.args {
+                Some(_) => Err(format!(
+                    "插件 {} 的命令 “{}” 写了 args 没写 tool",
+                    self.id, command.id
+                )),
+                None => Ok(()),
+            };
+        };
+        let prefix = self.tool_prefix();
+        if tool != prefix && !tool.starts_with(&format!("{prefix}.")) {
+            return Err(format!(
+                "插件 {} 的命令 “{}” 只能调自己的工具（以 “{prefix}.” 开头），不是 {tool}",
+                self.id, command.id
+            ));
+        }
+        if command.listens || command.kind != CommandKind::Press {
+            return Err(format!(
+                "插件 {} 的命令 “{}” 调工具：只能按一下（kind = press）、不听（listens = false）",
+                self.id, command.id
+            ));
+        }
+        if command.args.as_ref().is_some_and(|a| !a.is_object()) {
+            return Err(format!(
+                "插件 {} 的命令 “{}” 的 args 要是表（对象）",
+                self.id, command.id
+            ));
+        }
+        Ok(())
+    }
+
+    /// 检查插件代码给的工具：名字以 `<前缀>.` 开头（或就是前缀），页面是自己的，`needs` 是自己的开关，不重名；
+    /// 调工具的命令（`[[commands]]` 的 `tool`）调的是这里给她的工具。
     pub fn check_tools(&self, tools: &[ToolSpec]) -> Result<(), String> {
         let mut names = std::collections::HashSet::new();
         let prefix = self.tool_prefix();
@@ -278,6 +316,15 @@ impl Manifest {
             self.check_needs(&tool.name, &tool.needs)?;
             if tool.parameters.get("type").and_then(Value::as_str) != Some("object") {
                 return Err(format!("工具 {} 的参数顶层要是 object", tool.name));
+            }
+        }
+        for command in &self.commands {
+            let Some(name) = &command.tool else { continue };
+            if !tools.iter().any(|t| &t.name == name && t.for_model()) {
+                return Err(format!(
+                    "插件 {} 的命令 “{}” 调的 {name} 不是它给她的工具（热键和她调的是同一批工具）",
+                    self.id, command.id
+                ));
             }
         }
         Ok(())
@@ -828,6 +875,22 @@ pub trait Host: Send + Sync {
         let _ = card;
         Err("自动卡片只给内置插件".to_string())
     }
+    /// 发到游戏（ADR 041 第 3 期，英雄联盟的一键喊话）：把几行字交给本体**唯一的发话入口**——和她的 `game_chat.send`、
+    /// 语音输入、自动化同一个入口：前台是哪个游戏、走哪条路（客户端在前台交给登记了发法的插件，对局里是本体按键）、
+    /// 频道、一把输入锁、等修饰键、不补发都在入口里。插件拿到的只是“经入口发一段话”，自己不按键
+    /// （`plugins_never_press_keys_themselves`）。`channel`：`team` / `all`，None = 游戏配置的默认频道（队伍）。
+    /// 成了返回和 `game_chat.send` 一样的结果（`route`、`channelName`、`sentLines`、`receipt`……）；没发出去返回原因。
+    ///
+    /// 只在有人调这个插件的工具时能发（她、外部 Agent、玩家的热键；谁发的就照谁的规矩），插件自己在后台不能发。
+    /// **只给内置插件**（单向门，ADR 041 D7）：第三方插件的宿主用这里的默认实现，一律拒绝。
+    fn send_to_game(
+        &self,
+        text: &str,
+        channel: Option<&str>,
+    ) -> BoxFuture<'static, Result<Value, String>> {
+        let _ = (text, channel);
+        Box::pin(async { Err("发到游戏只给内置插件".to_string()) })
+    }
     /// 换掉这个插件在覆盖层上的全部条目（空 = 什么都不显示）。覆盖层只有一个，在本体里：置顶、点击穿透、
     /// 只在目标窗口在前台时显示、不进截图（ADR 038 D5）。
     fn overlay(&self, items: Vec<OverlayItem>) {
@@ -962,6 +1025,52 @@ kind = \"double\"
         }
         // 不写 [[commands]] 的插件（还有第三方插件合成的清单）就是没有命令
         assert!(Manifest::parse(base).unwrap().commands.is_empty());
+    }
+
+    /// 调工具的命令（ADR 040 第 3 期）：只调自己的、给她的工具；按一下、不听；参数是表。
+    #[test]
+    fn tool_commands_call_the_plugins_own_tools() {
+        let base = "id = \"demo\"
+name = \"示例\"
+description = \"说明\"
+";
+        let command = |extra: &str| {
+            format!(
+                "{base}[[commands]]
+id = \"shout\"
+name = \"喊一句\"
+description = \"发到队伍聊天\"
+{extra}
+"
+            )
+        };
+        let ok = Manifest::parse(&command(
+            "tool = \"demo.shout\"\nargs = { what = \"flash\", side = \"enemy\" }",
+        ))
+        .unwrap();
+        let spec = &ok.commands[0];
+        assert_eq!(spec.tool.as_deref(), Some("demo.shout"));
+        assert_eq!(
+            spec.args,
+            Some(serde_json::json!({"what": "flash", "side": "enemy"}))
+        );
+        let shout = ToolSpec::new("demo.shout", "喊", serde_json::json!({"type": "object"}));
+        ok.check_tools(std::slice::from_ref(&shout)).unwrap();
+        assert!(ok.check_tools(&[]).is_err(), "工具不在");
+        assert!(
+            ok.check_tools(&[shout.clone().app_only()]).is_err(),
+            "只给页面的不能绑"
+        );
+        for bad in [
+            "tool = \"settings.update\"",
+            "tool = \"other.shout\"",
+            "tool = \"demo.shout\"\nlistens = true",
+            "tool = \"demo.shout\"\nkind = \"hold\"",
+            "tool = \"demo.shout\"\nargs = [1, 2]",
+            "args = { what = \"flash\" }",
+        ] {
+            assert!(Manifest::parse(&command(bad)).is_err(), "{bad}");
+        }
     }
 
     #[test]
@@ -1242,6 +1351,20 @@ kind = \"double\"
             popup: "对面的战绩到了".into(),
         };
         assert!(Remote.auto_card(card.clone()).is_err());
+        // 发到游戏（ADR 041 第 3 期）同样是单向门：没实现的宿主一律拒绝
+        struct Noop;
+        impl std::task::Wake for Noop {
+            fn wake(self: Arc<Self>) {}
+        }
+        let waker = std::task::Waker::from(Arc::new(Noop));
+        let mut sending = Remote.send_to_game("亚索 闪 14:32好", Some("team"));
+        let sent = sending
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(&waker));
+        assert!(
+            matches!(&sent, std::task::Poll::Ready(Err(e)) if e.contains("只给内置插件")),
+            "{sent:?}"
+        );
         let m = Manifest::parse(SAMPLE).unwrap();
         assert!(card.check(&m).is_ok());
         let elsewhere = AutoCard {

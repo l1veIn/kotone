@@ -64,7 +64,8 @@ test("设置 → 热键 lists every hotkey with its source and edits them in pla
   await addCustom(page, { key: "F8", say: "集合打小龙" });
   await openSettingsTab(page, "hotkeys");
   const list = page.getByTestId("hotkeys-page");
-  await expect(list.locator("[data-testid^='hotkeys-row-']")).toHaveCount(10);
+  // 本体 3 + Esc + 语音输入 5 + 英雄联盟的一键喊话 4（ADR 041 第 3 期）+ 自己加的 1
+  await expect(list.locator("[data-testid^='hotkeys-row-']")).toHaveCount(14);
   const expectRow = async (id: string, name: string, source: string, key: string) => {
     await expect(page.getByTestId(`hotkeys-row-${id}`), id).toContainText(name);
     await expect(page.getByTestId(`hotkeys-source-${id}`), id).toHaveText(source);
@@ -128,6 +129,42 @@ test("设置 → 热键 lists every hotkey with its source and edits them in pla
   await page.getByTestId("settings-nav-game").click();
   await page.evaluate(async () => (await import("/src/lib/stores/navigation.ts")).openLocation("设置 → 热键"));
   await expect(page.getByTestId("advanced-nav-hotkeys")).toHaveAttribute("aria-current", "page");
+});
+
+// ADR 041 第 3 期：英雄联盟在 [[commands]] 登记的四条一键喊话（调 lol.shout，发队伍频道）列在表里、没有默认键；
+// 录一个键就存进热键表（`{key, command}`）、随应用登记；“读客户端数据”关着时写要打开它、不登记。
+test("英雄联盟的一键喊话：四行列在表里、没设键，录一个键就生效", async ({ page }, testInfo) => {
+  await page.goto("/#/settings?onboarding=never");
+  await openSettingsTab(page, "hotkeys");
+  const presets = [
+    ["lol.shout-enemy-flash", "喊对面闪现"],
+    ["lol.shout-enemy-records", "喊对面战绩"],
+    ["lol.shout-ally-records", "喊我方战绩"],
+    ["lol.shout-premade", "喊开黑情况"],
+  ];
+  for (const [id, name] of presets) {
+    await expect(page.getByTestId(`hotkeys-row-${id}`), id).toContainText(name);
+    await expect(page.getByTestId(`hotkeys-source-${id}`), id).toHaveText("英雄联盟");
+    await expect(page.getByTestId(`hotkey-input-${id}`), id).toHaveValue("");
+    await expect(page.getByTestId(`hotkeys-reset-${id}`), "没有默认键").toHaveCount(0);
+  }
+  const list = page.getByTestId("hotkeys-page");
+  await page.getByTestId("hotkeys-search").fill("英雄联盟");
+  await expect(list.locator("[data-testid^='hotkeys-row-']")).toHaveCount(4);
+  await page.getByTestId("hotkeys-search").fill("");
+
+  const flash = page.getByTestId("hotkey-input-lol.shout-enemy-flash");
+  await flash.fill("Alt+F1");
+  await flash.press("Enter");
+  await expect(page.getByTestId("hotkey-status-lol.shout-enemy-flash")).toHaveText("当前生效：Alt+F1");
+  expect((await mockSettings(page)).hotkeys.bindings).toContainEqual({ key: "Alt+F1", command: "lol.shout-enemy-flash" });
+  await page.getByTestId("hotkeys-row-lol.shout-enemy-flash").screenshot({ path: testInfo.outputPath("lol-shout-row.png"), animations: "disabled" });
+
+  // “读客户端数据”关着：工具不在，写要打开哪个开关，不登记
+  await patchMock(page, { plugins: { lol: { sources: { client: false } } } });
+  await openSettingsTab(page, "hotkeys");
+  await expect(page.getByTestId("hotkeys-blocked-lol.shout-enemy-flash")).toContainText("“读客户端数据”");
+  await expect(page.getByTestId("hotkey-status-lol.shout-enemy-flash")).not.toContainText("当前生效");
 });
 
 test("conflicts are marked red, including a game's chat key and Esc", async ({ page }, testInfo) => {

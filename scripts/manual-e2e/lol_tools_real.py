@@ -49,7 +49,17 @@ C1-C7 (only with --chat-front and never with --while-playing: they need the fake
    C7 send:false: refused ("没法只打进聊天框"), no POST, no key;
    C8 (with --chat-front and without --chat-only, real model): game_chat.send allowed for this turn only, "把对面谁是
       突破口发到聊天里" -> she sends, ONE POST, no key.
-`--chat-only` skips T1-T6 / P2 / P3 (no DeepSeek key needed) and runs C only.
+S. One-key shout (ADR 041 phase 3: `lol.shout` + the four presets in the plugin's [[commands]]), always, no OS input,
+   nothing reaches the player's windows (the parts that would type need a game in front and are not run here):
+   S1 `hotkeys.status`: the four presets are rows of the hotkey table (plugin lol, action tool, no key);
+   S2 `lol.shout {what: flash, preview: true}`: nothing recorded -> not sent, says how to record (or only "没带闪");
+      after `lol.spell` 丽桑卓 the first line is exactly lol.spell's `chat` line;
+   S3 records (enemy) and premade previews: one line per enemy starting "对面 ", no player name from the recording;
+   S4 (only with a terminal / Explorer / VS Code in front, never --while-playing) a real send (no preview): refused by
+      the entry ("请先切到游戏"), the fake client got no message;
+   S5 binding F19 to 喊对面闪现 over settings.update: lol.shout is denied in this test's permissions -> the key is not
+      registered and the reason names the permission; the binding is removed again.
+`--chat-only` skips T1-T6 / P2 / P3 (no DeepSeek key needed) and runs S and C only.
 Not covered here: the player's own voice input in the client (needs a microphone or VB-CABLE), a real client.
 usage: python -X utf8 -I scripts/manual-e2e/lol_tools_real.py [--probe DIR] [--gamedata DIR] [--while-playing]
        [--chat-only] [--chat-front]
@@ -93,7 +103,7 @@ WHILE_PLAYING = "--while-playing" in sys.argv
 CHAT_ONLY = "--chat-only" in sys.argv
 CHAT_FRONT = "--chat-front" in sys.argv
 # 会按键的，加上会动玩家真实游戏窗口的（切到前台、打开、关闭）
-DENIED = dict(bt.NO_INPUT, **{"game.focus": "deny", "game.launch": "deny", "game.close": "deny"})
+DENIED = dict(bt.NO_INPUT, **{"game.focus": "deny", "game.launch": "deny", "game.close": "deny", "lol.shout": "deny"})
 TOKEN = secrets.token_urlsafe(18)
 AUTH = "Basic " + base64.b64encode(f"riot:{TOKEN}".encode()).decode()
 HITS = collections.Counter()
@@ -702,8 +712,97 @@ def main():
             print("not served:", dict(MISSES))
 
 
+PRESETS = ["lol.shout-enemy-flash", "lol.shout-enemy-records", "lol.shout-ally-records", "lol.shout-premade"]
+
+
+def shout(args):
+    """lol.shout over the tool service: (ok, content dict or error text)."""
+    try:
+        return True, (bt.call("lol.shout", args) or {}).get("content") or {}
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
+
+
+def hotkey_status():
+    try:
+        return bt.call("hotkeys.status", {}) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def player_names():
+    names = {(v.get("summoner") or {}).get("gameName") for v in REC.players.values()}
+    names |= {p.get("riotIdGameName") for p in REC.live.get("allPlayers") or []}
+    return {n for n in names if n and len(n) >= 2}
+
+
+def shout_part():
+    """S: one-key shout (ADR 041 phase 3), no OS input."""
+    REC.phase = "InProgress"
+    log = os.path.join(bt.HOME, "kotone.log")
+    # 战绩是后台查好的（喊话不现查）：等它查完
+    bt.wait_until(lambda: "个人的战绩查完了" in open(log, encoding="utf-8", errors="replace").read(), 60, 1)
+    st = hotkey_status()
+    rows = {b.get("id"): b for b in st.get("bindings") or []}
+    check("S1: the four LoL shout presets are rows of the hotkey table (plugin lol, calls a tool, no key)",
+          all(rows.get(p, {}).get("owner") == "lol" and rows[p].get("action") == "tool" and not rows[p].get("key")
+              for p in PRESETS), json.dumps([rows.get(p) for p in PRESETS], ensure_ascii=False)[:300])
+
+    bt.call("lol.spell", {"clear": True})
+    ok, out = shout({"what": "flash", "preview": True})
+    lines = out.get("lines") if ok else []
+    check("S2: nothing recorded -> nothing to shout but who has no Flash (says how to record it)",
+          (not ok and "对面亚索闪了" in out) or (ok and all(line.startswith("对面没带闪") for line in lines)),
+          json.dumps(out, ensure_ascii=False)[:200])
+    spell = (bt.call("lol.spell", {"champion": "丽桑卓"}) or {}).get("content") or {}
+    ok, out = shout({"what": "flash", "preview": True})
+    lines = out.get("lines") if ok else []
+    check("S2: after lol.spell 丽桑卓 the first line is lol.spell's chat line",
+          ok and spell.get("chat") and lines and lines[0] == spell["chat"],
+          f"spell {json.dumps(spell, ensure_ascii=False)[:120]}; shout {json.dumps(out, ensure_ascii=False)[:200]}")
+
+    names = player_names()
+    ok, out = shout({"what": "records", "side": "enemy", "preview": True})
+    lines = out.get("lines") if ok else []
+    leaked = [n for n in names if any(n in line for line in lines)]
+    check("S3: enemy records: one line per enemy, '对面 <champion>：…', no player names",
+          ok and len(lines) == 5 and all(line.startswith("对面 ") for line in lines) and not leaked,
+          json.dumps(out, ensure_ascii=False)[:300] + (f" leaked {leaked}" if leaked else ""))
+    print("   S3 lines:", " | ".join(lines))
+    ok, out = shout({"what": "premade", "preview": True})
+    text = json.dumps(out, ensure_ascii=False)
+    check("S3: premade: one line per group, or 'no premade' and nothing sent",
+          (ok and all("开黑：" in line for line in out.get("lines") or [])) or (not ok and "没看出谁和谁开黑" in out),
+          text[:200])
+    check("S3: premade names no players", not [n for n in names if n in text], text[:200])
+
+    process, title = front()
+    if WHILE_PLAYING or process.lower() not in SAFE_FOREGROUND or process.lower() == "leagueclientux.exe":
+        print(f"   S4 skipped: '{title}' ({process}) is in front{' (--while-playing)' if WHILE_PLAYING else ''}")
+    else:
+        before = len(POSTS)
+        ok, out = shout({"what": "flash"})
+        check("S4: a real send with a terminal in front is refused by the entry (the foreground decides)",
+              not ok and "请先切到游戏" in str(out), f"front {process}: {str(out)[:200]}")
+        check("S4: the fake client got no message", len(POSTS) == before, str(POSTS[before:])[:200])
+
+    with open(os.path.join(bt.HOME, "config.json"), encoding="utf-8") as f:
+        saved = ((json.load(f).get("hotkeys") or {}).get("bindings")) or []
+    bt.call("settings.update", {"patch": {"hotkeys": {"bindings": saved + [{"key": "F19", "command": PRESETS[0]}]}}})
+    named = None
+    for _ in range(20):
+        named = next((n for n in hotkey_status().get("named") or [] if n.get("id") == PRESETS[0]), None)
+        if named:
+            break
+        time.sleep(0.25)
+    check("S5: F19 on 喊对面闪现 is not registered while lol.shout is denied, and says so",
+          named and not named.get("key") and "禁止" in (named.get("error") or ""), json.dumps(named, ensure_ascii=False))
+    bt.call("settings.update", {"patch": {"hotkeys": {"bindings": saved}}})
+
+
 def chat_part(with_model):
-    """C0 always; C1-C8 only with --chat-front (the fake client window has to be in front)."""
+    """S and C0 always; C1-C8 only with --chat-front (the fake client window has to be in front)."""
+    shout_part()
     chat_c0()
     if CHAT_FRONT and not WHILE_PLAYING:
         chat_front(with_model)

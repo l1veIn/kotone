@@ -10,6 +10,8 @@
 //! - 打开页面：打开 Kotone 窗口到这一页，窗口拿到前面（玩家自己按的）；游戏独占全屏时不拿、放在后面闪任务栏，用语音
 //!   说一句（P1，[`crate::attention::show_for_player`]）。第三方插件的页面打开左侧栏「插件」里那个插件的页面。
 //!
+//! - 插件登记的调工具的命令（英雄联盟的一键喊话，[`press_command`]）：和调工具一样，随应用登记、照工具的权限再判一次。
+//!
 //! 每条最近一次的结果记在内存里（[`last_run`]），`hotkeys.status` 的 `bindings[].lastRun` 给她和外部 Agent 看。
 
 use std::collections::{HashMap, HashSet};
@@ -44,7 +46,7 @@ fn last_runs() -> &'static Mutex<HashMap<String, LastRun>> {
     LAST.get_or_init(Default::default)
 }
 
-/// 这一条（行 id `custom.<id>`）最近一次按下的结果；这次启动以后没按过为 None。
+/// 这一条（行 id `custom.<id>`，插件预设是命令名）最近一次按下的结果；这次启动以后没按过为 None。
 pub(crate) fn last_run(id: &str) -> Option<LastRun> {
     last_runs().lock().unwrap().get(id).cloned()
 }
@@ -115,6 +117,16 @@ pub(crate) fn press(app: &AppHandle, id: &str) {
     }
 }
 
+/// 按下了插件登记的调工具的命令（`<插件>.<命令>`，英雄联盟的“喊对面闪现”，ADR 041 第 3 期）：和自己加的“调一个工具”
+/// 同一条路（照这个工具现在的权限再判一次、不叠加、成了弹幕一行、没成说原因）。不是这种命令返回 false。
+pub(crate) fn press_command(app: &AppHandle, command: &str) -> bool {
+    let Some((name, binding)) = crate::hotkey_bind::tool_command(command) else {
+        return false;
+    };
+    run_tool(app, command, format!("「{name}」"), binding);
+    true
+}
+
 /// 调工具 / 运行自动化：后台跑，上一次没做完不叠加，做完记结果、告诉玩家。
 fn run_tool(app: &AppHandle, id: &str, name: String, binding: Binding) {
     if !running().lock().unwrap().insert(id.to_string()) {
@@ -159,6 +171,12 @@ async fn call(app: &AppHandle, binding: &Binding) -> Result<String, String> {
     match crate::hotkey_bind::state(&settings, &catalog, binding) {
         CustomState::Ready => {}
         CustomState::Off => return Err("它用的插件关着（在左侧栏的「插件」里可以打开）".into()),
+        // 插件登记的预设没有确认这一步（条目里没有 id）
+        CustomState::NeedsConfirm(reason) if binding.id().is_none() => {
+            return Err(format!(
+                "{reason}：热键上没法每次问，去她的「权限」里改成允许"
+            ))
+        }
         CustomState::NeedsConfirm(reason) => {
             return Err(format!("要先在「设置 → 热键」确认一次：{reason}"))
         }

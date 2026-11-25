@@ -9,6 +9,7 @@
 //! `deny_unknown_fields`，写了读不进来。新装时的三个默认键写在本体的默认设置里（[`crate::hotkey_bindings::DEFAULT_BINDINGS`]）。
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// 本体命令的来源。
 pub const CORE_SOURCE: &str = "kotone";
@@ -47,6 +48,15 @@ pub struct CommandSpec {
     /// （ADR 040 实施记录，主会话定的第 2 条）。
     #[serde(default)]
     pub listens: bool,
+    /// 调插件自己的一个工具、带固定参数（D1 的第二种命令，第 3 期落地）：英雄联盟的“喊对面闪现”是
+    /// `lol.shout {what: "flash", side: "enemy", channel: "team"}`。按下时照这个工具的权限调（宿主判，和自己加的
+    /// “调一个工具”同一条路，`hotkey_custom`），不用语音识别；只能是插件自己的工具、按一下、不听（清单检查）。
+    /// 本体的命令没有。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// 调工具时的固定参数（对象；不写 = 空对象）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Value>,
 }
 
 impl CommandSpec {
@@ -57,6 +67,8 @@ impl CommandSpec {
             description: description.into(),
             kind: CommandKind::Press,
             listens,
+            tool: None,
+            args: None,
         }
     }
 }

@@ -47,7 +47,7 @@ import type {
 import { companionBindings, defaultPostProcessing, hasLegacyReminders, modelsDirPathError, usesLegacyVoiceInput } from "./contracts";
 import type { BrowserAction, BrowserBounds, BrowserExtension, BrowserState, BrowserTab } from "../browser";
 import {
-  bindingOptions, checkHotkey as checkHotkeyInMock, confirmCustom, customStatus, hotkeyTable, removeCustom, saveCustom,
+  bindingOptions, checkHotkey as checkHotkeyInMock, confirmCustom, customStatus, hotkeyTable, presetStatus, removeCustom, saveCustom,
   setHotkey as setHotkeyInMock, type HotkeySources,
 } from "./hotkeysMock";
 
@@ -916,6 +916,8 @@ export async function getHotkeyStatus(): Promise<HotkeyStatus> {
         },
         // 自己加的每条用自己的 id 登记，接在后面（同后端：`custom.<id>`；要确认、按不了的不登记，写原因）
         ...customStatus(mock.settings),
+        // 插件登记的调工具的命令（英雄联盟的一键喊话）：登记 id 是命令名
+        ...presetStatus(hotkeySources()),
       ],
     };
 }
@@ -978,6 +980,10 @@ function hotkeySources(): HotkeySources {
     settings: mock.settings,
     profiles: mock.profiles,
     voiceInput: { id: "voice-input", name: "语音输入", enabled: mock.settings.plugins?.["voice-input"]?.enabled ?? true },
+    lol: {
+      id: "lol", name: "英雄联盟", enabled: mock.settings.plugins?.lol?.enabled ?? true,
+      client: mock.settings.plugins?.lol?.sources?.client ?? true,
+    },
   };
 }
 

@@ -10,7 +10,9 @@
 //! - [`watcher`]：后台每 2 秒看一次客户端（进加载界面就查战绩、往游戏中心报阶段和局内的事），以及工具的实现；
 //! - [`app`]：做成 MCP App 的页面（`app/` 里独立的 HTML，ADR 039 D5），Kotone 和外部宿主显示同一份；
 //! - [`chat`]：发到游戏（ADR 041 D3，数据开关“在客户端里发聊天” `chat`）：客户端在前台时（选英雄、房间里）经客户端的
-//!   聊天接口发，不按键。
+//!   聊天接口发，不按键；
+//! - 一键喊话（ADR 041 第 3 期，`watcher/shout.rs`）：`lol.shout` 现生成几行（对面闪现、战绩、开黑），经宿主交给本体唯一的
+//!   发话入口（`Host::send_to_game`）；清单 `[[commands]]` 登记四条热键预设调它。
 //!
 //! 只依赖插件契约（`kotone-plugin-api`）和 `kotone-core` 的纯数据类型；进程、游戏中心、设置都由宿主给。
 
@@ -141,7 +143,39 @@ mod tests {
         assert!(m
             .source(SOURCE_CHAT)
             .is_some_and(|s| s.enabled_by_default && s.risk.contains("issues/480")));
-        assert!(m.agent.rule.starts_with("- 英雄联盟") && m.agent.rule.ends_with("一条一行。\n"));
+        assert!(
+            m.agent.rule.starts_with("- 英雄联盟") && m.agent.rule.ends_with("不发玩家名）。\n")
+        );
+        // 一键喊话（ADR 041 第 3 期）：四条预设都调 lol.shout、发队伍频道、不听（清单里没有键这个字段）
+        let presets: Vec<(&str, &str, &str)> = m
+            .commands
+            .iter()
+            .map(|c| {
+                let args = c.args.as_ref().unwrap();
+                assert_eq!(c.tool.as_deref(), Some(tools::TOOL_SHOUT), "{}", c.id);
+                assert_eq!(args["channel"], "team", "{}", c.id);
+                assert!(!c.listens, "{}", c.id);
+                assert!(
+                    watcher::shout_args_ok(args),
+                    "{} 的参数 lol.shout 认不得",
+                    c.id
+                );
+                (
+                    c.name.as_str(),
+                    args["what"].as_str().unwrap(),
+                    args["side"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            presets,
+            [
+                ("喊对面闪现", "flash", "enemy"),
+                ("喊对面战绩", "records", "enemy"),
+                ("喊我方战绩", "records", "ally"),
+                ("喊开黑情况", "premade", "all"),
+            ]
+        );
         assert!(
             !m.agent.rule.contains('\\'),
             "TOML 的续行没吃掉：{}",
@@ -161,6 +195,12 @@ mod tests {
             ("plugin_lol_name".to_string(), m.name.clone()),
             ("plugin_lol_description".to_string(), m.description.clone()),
         ];
+        for c in &m.commands {
+            expect.push((
+                format!("plugin_lol_command_{}_name", c.id.replace('-', "_")),
+                c.name.clone(),
+            ));
+        }
         for s in &m.sources {
             expect.push((format!("plugin_lol_source_{}_name", s.id), s.name.clone()));
             expect.push((

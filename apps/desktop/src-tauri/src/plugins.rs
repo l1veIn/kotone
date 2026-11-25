@@ -89,10 +89,10 @@ fn third_party_refusal(remote: bool, caller: Caller<'_>) -> Option<&'static str>
 
 /// 交给这个插件的宿主：第三方插件拿更窄的那一份（`remote_plugins::RemoteHost`）。**先看内置表**：内置插件
 /// 永远拿 `DesktopHost`（`mcp.json` 里写了同名的一项也一样，那一项不进插件表，见 `remote_plugins`）。
-fn host_for(app: &AppHandle, plugin: &Arc<dyn Plugin>) -> Arc<dyn Host> {
+fn host_for(app: &AppHandle, plugin: &Arc<dyn Plugin>, caller: Caller<'_>) -> Arc<dyn Host> {
     let id = &plugin.manifest().id;
     if registry().iter().any(|p| Arc::ptr_eq(p, plugin)) || !crate::remote_plugins::is_remote(id) {
-        DesktopHost::for_plugin(app, plugin)
+        DesktopHost::for_call(app, plugin, caller)
     } else {
         crate::remote_plugins::host(app, id)
     }
@@ -174,6 +174,9 @@ pub struct DesktopHost {
     app: AppHandle,
     id: String,
     manifest: Manifest,
+    /// 这次是谁调了插件的工具（她、外部 Agent、玩家的热键）：插件经入口发到游戏时照谁的规矩、记成谁发的
+    /// （[`Host::send_to_game`]）。插件自己的后台、页面调的、入口回头调插件的发法时是 None：不能发。
+    speaker: Option<kotone_core::send_to_game::Speaker>,
 }
 
 impl DesktopHost {
@@ -192,7 +195,31 @@ impl DesktopHost {
             app: app.clone(),
             id: plugin.manifest().id.clone(),
             manifest: plugin.manifest().clone(),
+            speaker: None,
         })
+    }
+
+    /// 调插件工具时的宿主：记下是谁调的（[`speaker_of`]）。
+    fn for_call(app: &AppHandle, plugin: &Arc<dyn Plugin>, caller: Caller<'_>) -> Arc<dyn Host> {
+        Arc::new(Self {
+            app: app.clone(),
+            id: plugin.manifest().id.clone(),
+            manifest: plugin.manifest().clone(),
+            speaker: speaker_of(caller),
+        })
+    }
+}
+
+/// 谁调了插件的工具 → 插件经入口发话时算谁在发（入口按它判前台规矩、记占用者）。页面调的不算：玩家点页面时
+/// Kotone 在前台，插件不该借页面往游戏里发话。
+fn speaker_of(caller: Caller<'_>) -> Option<kotone_core::send_to_game::Speaker> {
+    use kotone_core::send_to_game::Speaker;
+    match caller {
+        Caller::Her => Some(Speaker::Companion),
+        Caller::Service => Some(Speaker::Agent),
+        // 玩家自己加的、插件预设的热键：照“替玩家发言”的规矩（前台要是游戏），和热键调 game_chat.send 一样
+        Caller::Hotkey => Some(Speaker::Automation),
+        Caller::Page(_) => None,
     }
 }
 
@@ -319,6 +346,40 @@ impl Host for DesktopHost {
             EVENT,
             json!({"plugin": self.id, "event": event, "payload": payload}),
         );
+    }
+
+    /// 发到游戏（ADR 041 第 3 期）：只给内置插件、插件开着、有人在调它的工具（[`DesktopHost::speaker`]）时；
+    /// 交给和 `game_chat.send` 同一个入口（[`crate::game_chat::send_to_game_chat`]：前台、频道、锁、修饰键、执行记录
+    /// 都在那里），“停下”能停掉还没发完的几行。
+    fn send_to_game(
+        &self,
+        text: &str,
+        channel: Option<&str>,
+    ) -> BoxFuture<'static, Result<Value, String>> {
+        let refusal = if !registry().iter().any(|p| p.manifest().id == self.id) {
+            Some("发到游戏只给内置插件".to_string())
+        } else if !enabled(&settings(&self.app), &self.manifest) {
+            Some(format!(
+                "「{}」插件关着（在左侧栏的「插件」里可以打开）",
+                self.manifest.name
+            ))
+        } else if self.speaker.is_none() {
+            Some("插件只能在她、外部 Agent 或热键调它的工具时发到游戏".to_string())
+        } else {
+            None
+        };
+        let app = self.app.clone();
+        let session = format!("plugin:{}", self.id);
+        let arguments = json!({"text": text, "channel": channel, "send": true});
+        let speaker = self.speaker;
+        Box::pin(async move {
+            if let Some(refusal) = refusal {
+                return Err(refusal);
+            }
+            let speaker = speaker.ok_or("没有发话的人")?;
+            let request = kotone_agent::body::chat_request(&arguments, true, speaker)?;
+            crate::game_chat::send_to_game_chat(&app, &session, request).await
+        })
     }
 
     /// 自动卡片（ADR 039 D3）：只给内置插件（这张静态表里的，和 Kotone 一起编译）。插件关着时不发。
@@ -638,7 +699,9 @@ pub async fn call(
             "text": format!("「{}」插件关着（在左侧栏的「插件」里可以打开）", manifest.name),
         })));
     }
-    plugin.call(host_for(app, &plugin), tool, arguments).await
+    plugin
+        .call(host_for(app, &plugin, caller), tool, arguments)
+        .await
 }
 
 /// `ui.open`（ADR 038 D5）：检查页面地址，再让界面打开它。不把 Kotone 窗口拉到前面（玩家可能在游戏里）。
@@ -805,6 +868,21 @@ pub fn list(app: &AppHandle) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 插件经入口发话（ADR 041 第 3 期）照调它的人的规矩：她、外部 Agent、热键；页面调的不能发。
+    #[test]
+    fn plugins_speak_for_whoever_called_their_tool() {
+        use kotone_core::send_to_game::Speaker;
+        assert_eq!(speaker_of(Caller::Her), Some(Speaker::Companion));
+        assert_eq!(speaker_of(Caller::Service), Some(Speaker::Agent));
+        assert_eq!(speaker_of(Caller::Hotkey), Some(Speaker::Automation));
+        assert_eq!(speaker_of(Caller::Page("lol")), None);
+        // 英雄联盟的一键喊话只给她（和热键、外部 Agent），页面调不到
+        let shout = find("lol")
+            .and_then(|p| p.tools().into_iter().find(|t| t.name == "lol.shout"))
+            .expect("lol.shout");
+        assert!(shout.for_model() && !shout.for_app());
+    }
 
     #[test]
     fn game_voice_is_a_plugin_and_keeps_its_tool_names() {

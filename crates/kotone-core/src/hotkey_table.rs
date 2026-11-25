@@ -17,7 +17,9 @@ use crate::hotkey_bindings::{
     legacy_by_id, legacy_for, normalized, Binding, CMD_CALL, CMD_STOP, DEFAULT_BINDINGS,
 };
 use crate::hotkey_commands::{core_commands, CommandKind, CommandSpec, CORE_SOURCE};
-use crate::hotkey_custom::{custom_entries, resolve_row, row_id, Action, CustomState};
+use crate::hotkey_custom::{
+    command_binding, custom_entries, resolve_row, row_id, Action, CustomState,
+};
 use crate::profile::GameProfile;
 use crate::settings::{LegacyUpgrade, Settings};
 
@@ -77,7 +79,8 @@ pub struct KeyUse {
     /// 绑的命令（`kotone.call`、`voice-input.talk`）；提醒助手热键、自己加的、Esc、游戏的键没有。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
-    /// 自己加的要做什么：`say`（跟她说一句）、`automation`（运行自动化）、`tool`、`page`；别的没有。
+    /// 自己加的要做什么：`say`（跟她说一句）、`automation`（运行自动化）、`tool`、`page`；插件登记的调工具的命令
+    /// （英雄联盟的“喊对面闪现”）是 `tool`；别的没有。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<&'static str>,
     /// 设置里写的键（空 = 没设）。
@@ -313,7 +316,11 @@ pub fn bindings(src: &Sources<'_>) -> Vec<KeyUse> {
     for plugin in src.plugins {
         for spec in plugin.commands {
             let name = format!("{}.{}", plugin.id, spec.id);
-            out.push(command_row(s, &name, spec, Some(plugin)));
+            let mut row = command_row(s, &name, spec, Some(plugin));
+            if let Some(binding) = command_binding(spec) {
+                tool_command(&mut row, spec, &binding, src.custom);
+            }
+            out.push(row);
         }
     }
     if !legacy_only {
@@ -399,6 +406,28 @@ fn custom_row(index: usize, binding: &Binding, action: Action<'_>, state: Custom
             _ => None,
         },
         ..row(&id, binding.key(), &label, KeySource::Custom)
+    }
+}
+
+/// 插件登记的调工具的命令（英雄联盟的“喊对面闪现”，[`CommandSpec::tool`]）：和自己加的“调一个工具”一样照宿主算的
+/// 判（工具在不在、数据开关、权限）。插件登记的预设没有确认这一步：权限里设成每次问的，写原因、不登记。
+fn tool_command(
+    row: &mut KeyUse,
+    spec: &CommandSpec,
+    binding: &Binding,
+    custom: Option<&dyn Fn(&Binding) -> CustomState>,
+) {
+    row.action = Some("tool");
+    row.detail = spec.description.clone();
+    match custom.map_or(CustomState::Ready, |state| state(binding)) {
+        CustomState::Ready => {}
+        CustomState::Off => row.enabled = false,
+        CustomState::NeedsConfirm(reason) => {
+            row.blocked = Some(format!(
+                "{reason}：热键上没法每次问，去她的「权限」里改成允许"
+            ))
+        }
+        CustomState::Blocked(reason) => row.blocked = Some(reason),
     }
 }
 
@@ -621,11 +650,12 @@ pub fn registration_plan(src: &Sources<'_>) -> Vec<Planned> {
         if error.is_none() {
             taken.push(row);
         }
-        // 不用听的命令和自己加的（停下、启停识别、运行自动化）识别没在跑也登记
+        // 不用听的命令和自己加的（停下、启停识别、运行自动化、插件登记的调工具的命令）识别没在跑也登记
         let always = !row.listens
             && match row.source {
                 KeySource::Core => row.command.is_some(),
                 KeySource::Custom => true,
+                KeySource::Plugin => row.action.is_some(),
                 _ => false,
             };
         let hint = row.listens.then_some(match row.source {

@@ -81,6 +81,37 @@ game = "lol"
 windows = ["LeagueClientUx.exe"]
 needs = ["client", "chat"]
 
+# 一键喊话（ADR 041 第 3 期，照 LeagueAkari 的“游戏内发送”预设）：能绑热键的命令（ADR 040 D1 的第二种：调自己的工具、
+# 带固定参数）。热键表里列出来、不带默认键（D4），玩家在「设置 → 热键」录键；按下时宿主照 lol.shout 的权限调它，
+# lol.shout 现生成几行、经本体唯一的发话入口发（插件不按键）。界面上的名字在 messages 里（plugin_lol_command_<id>_name）。
+[[commands]]
+id = "shout-enemy-flash"
+name = "喊对面闪现"
+description = "把对面谁的闪现没好、几点好（你报过的）和谁没带闪发到队伍聊天"
+tool = "lol.shout"
+args = { what = "flash", side = "enemy", channel = "team" }
+
+[[commands]]
+id = "shout-enemy-records"
+name = "喊对面战绩"
+description = "把对面每个人的段位、近 20 局胜负、KDA、连胜连败发到队伍聊天（一人一行）"
+tool = "lol.shout"
+args = { what = "records", side = "enemy", channel = "team" }
+
+[[commands]]
+id = "shout-ally-records"
+name = "喊我方战绩"
+description = "把我方每个人的段位、近 20 局胜负、KDA、连胜连败发到队伍聊天（一人一行）"
+tool = "lol.shout"
+args = { what = "records", side = "ally", channel = "team" }
+
+[[commands]]
+id = "shout-premade"
+name = "喊开黑情况"
+description = "把两边谁和谁开黑发到队伍聊天"
+tool = "lol.shout"
+args = { what = "premade", side = "all", channel = "team" }
+
 # 覆盖层（照 aramhex）：选英雄时的胜率、海斗三选一时贴在卡片上的海克斯评分
 [[overlays]]
 uri = "ui://kotone/lol/champ-select"
@@ -172,5 +203,5 @@ rule = """- 英雄联盟（读本机的客户端和局内接口，马上返回�
 “亚索克制谁”“刀妹出什么”“海斗里这个英雄拿什么海克斯”用 lol.champion，“现在什么英雄强”用 lol.tier，说的时候带一句出处（“掌盟的数据”）。\
 玩家说“帮我接受对局”“帮我选 / 禁 亚索”“先亮一下亚索”才用 lol.client（操作客户端，玩家没说就不用）。\
 玩家说了“发出去 / 发聊天框”才用 game_chat.send 发（选英雄、房间里也是它：客户端在前台时经客户端的聊天接口发，只有队伍频道）：\
-技能发 lol.spell 返回的 chat 那句，战绩一条一行。
+技能发 lol.spell 返回的 chat 那句，战绩一条一行；“把对面闪现 / 战绩 / 开黑发出去”用 lol.shout（一次调用、措辞固定、不发玩家名）。
 """

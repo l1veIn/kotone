@@ -33,6 +33,7 @@ use serde_json::{Map, Value};
 use crate::assistant::{QuickMessage, MAX_QUICK_MESSAGES};
 use crate::hotkey::quick_message_slot;
 use crate::hotkey_bindings::{Binding, HotkeysConfig};
+use crate::hotkey_commands::CommandSpec;
 use crate::settings::Settings;
 
 /// 运行已保存的自动化的工具。
@@ -205,6 +206,16 @@ impl Binding {
         }
         Some(Action::Tool { tool, args })
     }
+}
+
+/// 插件的工具命令（[`CommandSpec::tool`]）照“调一个工具”看的样子：`{"tool", "args"}`，没有确认（插件登记的预设
+/// 照这个工具的权限判，要问的不能在热键上问，宿主写原因）。不是工具命令为 None。
+pub fn command_binding(spec: &CommandSpec) -> Option<Binding> {
+    let tool = spec.tool.as_deref()?;
+    Some(Binding(serde_json::json!({
+        "tool": tool,
+        "args": spec.args.clone().unwrap_or_else(|| Value::Object(Map::new())),
+    })))
 }
 
 /// 表里自己加的条目，按表的顺序：(在表里的下标, 条目, 要做的事)。

@@ -20,6 +20,8 @@ pub const TOOL_TIER: &str = "lol.tier";
 pub const TOOL_CLIENT: &str = "lol.client";
 /// 只给页面用：全部英雄的名字（设置里排自动选 / 禁的顺序）。
 pub const TOOL_CHAMPIONS: &str = "lol.champions";
+/// 一键喊话（ADR 041 第 3 期）：现生成几行、经本体的发话入口发到游戏聊天。给她和热键（插件命令），不给页面。
+pub const TOOL_SHOUT: &str = "lol.shout";
 
 pub fn specs() -> Vec<ToolSpec> {
     vec![
@@ -130,6 +132,7 @@ ban 禁、hover 只亮出来（还没轮到也行）。champion 写名字、称�
         .needs(&["client", "control"])
         .side_effects(&["controls-game-client"])
         .instant(),
+        shout_spec(),
         ToolSpec::new(
             TOOL_CHAMPIONS,
             "全部英雄的名字和 id（插件设置里排自动选 / 禁英雄的顺序用）。",
@@ -138,6 +141,31 @@ ban 禁、hover 只亮出来（还没轮到也行）。champion 写名字、称�
         .app_only()
         .page(crate::pages::PAGE_SETTINGS),
     ]
+}
+
+/// `lol.shout`：四条热键预设（`plugin.toml` 的 `[[commands]]`）调的就是它。
+fn shout_spec() -> ToolSpec {
+    let mut spec = ToolSpec::new(
+        TOOL_SHOUT,
+        "一键喊话（马上返回）：按这局已有的数据现生成几行，经 Kotone 发到英雄联盟的聊天。what = flash：对面谁的闪现没好、\
+几点好（只有玩家报过、lol.spell 记下的，接口里没有冷却）和谁没带闪；records：一边的战绩（段位、近 20 局胜负、KDA、连胜连败，\
+一人一行）；premade：谁和谁开黑。side 说的是谁的情况（不是频道）：enemy 对面（默认）、ally 我方、all 两边（开黑默认 all）。\
+只写英雄、不发玩家名。玩家说了“把对面闪现 / 战绩 / 开黑发出去”才用（一次调用，不用先查再发）；只看会发什么用 preview: true。\
+没东西可喊（没记过谁交闪、战绩还没查完）时不发，返回原因。选英雄、房间里经客户端的聊天接口发（只有队伍频道），对局里按键发、\
+前台要是游戏（和 game_chat.send 同一个入口）。",
+        json!({"type": "object", "additionalProperties": false, "required": ["what"], "properties": {
+            "what": {"enum": ["flash", "records", "premade"], "description": "flash 对面闪现、records 战绩、premade 开黑"},
+            "side": {"enum": ["enemy", "ally", "all"], "description": "说谁的情况：enemy 对面（默认）、ally 我方、all 两边（开黑默认 all）"},
+            "channel": {"enum": ["team", "all"], "description": "发到哪个频道，默认队伍"},
+            "preview": {"type": "boolean", "description": "true：只返回会发的几行，不发"}
+        }}),
+    )
+    .needs(&["client"])
+    .side_effects(&["input", "records-run"])
+    .instant();
+    // 页面用不着：发话只在她、外部 Agent、热键调的时候（宿主只在这几种调用里让插件经入口发）
+    spec.visibility = vec![kotone_plugin_api::Visibility::Model];
+    spec
 }
 
 #[cfg(test)]
@@ -159,12 +187,13 @@ mod tests {
                 TOOL_CHAMPION,
                 TOOL_TIER,
                 TOOL_CLIENT,
+                TOOL_SHOUT,
                 TOOL_CHAMPIONS
             ]
         );
         for s in &specs {
             assert_eq!(s.parameters["type"], "object");
-            assert!(s.for_app());
+            assert_eq!(s.for_app(), s.name != TOOL_SHOUT, "{}", s.name);
             let needs: &[&str] = match s.name.as_str() {
                 TOOL_CHAMPION | TOOL_TIER => &["stats"],
                 TOOL_CLIENT => &["client", "control"],
@@ -173,7 +202,7 @@ mod tests {
             };
             assert_eq!(s.needs, needs, "{}", s.name);
             // 读到别人写的字的都按不可信数据
-            let trusted = matches!(s.name.as_str(), TOOL_CLIENT | TOOL_CHAMPIONS);
+            let trusted = matches!(s.name.as_str(), TOOL_CLIENT | TOOL_CHAMPIONS | TOOL_SHOUT);
             assert_eq!(s.untrusted, !trusted, "{}", s.name);
         }
         let client = specs.iter().find(|s| s.name == TOOL_CLIENT).unwrap();
@@ -189,6 +218,9 @@ mod tests {
         {
             assert!(s.instant && s.for_model(), "{}", s.name);
         }
+        // 一键喊话：和 game_chat.send 一样的副作用（默认允许，绑热键时不问）
+        let shout = specs.iter().find(|s| s.name == TOOL_SHOUT).unwrap();
+        assert_eq!(shout.side_effects, ["input", "records-run"]);
         let game = specs.iter().find(|s| s.name == TOOL_GAME).unwrap();
         assert!(!game.for_model());
         assert_eq!(specs[2].page.as_deref(), Some(PAGE_MATCH));

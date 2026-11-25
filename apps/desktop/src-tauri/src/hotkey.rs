@@ -330,6 +330,10 @@ fn route_named_hotkey(app: &AppHandle, orch: &Arc<Orchestrator>, id: &str) {
         crate::hotkey_run::press(app, id);
         return;
     }
+    // 插件登记的调工具的命令（英雄联盟的一键喊话，ADR 041 第 3 期）：同样随应用登记、不用听
+    if crate::hotkey_run::press_command(app, id) {
+        return;
+    }
     dispatch_runtime_hotkey(app, orch, HookEvent::NamedHotkey { id: id.to_string() });
 }
 
@@ -1319,6 +1323,35 @@ mod tests {
                 kotone_core::assistant::DEFAULT_CALL_HOTKEY.into(),
                 HotkeyMode::Toggle
             ))
+        );
+    }
+
+    /// 英雄联盟的一键喊话预设（ADR 041 第 3 期）：绑了键随应用登记（识别没在跑也能按、不只看不吞），登记 id 是命令名；
+    /// 不交给“听一句”的插件。
+    #[test]
+    fn lol_shout_presets_register_with_the_app() {
+        let mut settings = kotone_core::settings::Settings::default();
+        settings.set_binding("lol.shout-enemy-flash", "F19");
+        settings.sync_hotkey_mirrors();
+        let plan = plan_from(&settings);
+        let shout = plan
+            .iter()
+            .find(|p| p.id == "lol.shout-enemy-flash")
+            .expect("绑了键就登记");
+        assert!(shout.error.is_none(), "{:?}", shout.error);
+        assert!(shout.always && shout.hint.is_none());
+        assert!(app_entries(&plan)
+            .iter()
+            .any(|e| e.id == "lol.shout-enemy-flash"));
+        assert!(!runtime_entries(&plan)
+            .iter()
+            .any(|e| e.id == "lol.shout-enemy-flash"));
+        assert!(hint_entries(&plan)
+            .iter()
+            .all(|(id, _, _)| !id.contains("lol.")));
+        assert_eq!(
+            hearing_command_for(Some("voice-input"), "lol.shout-enemy-flash"),
+            None
         );
     }
 

@@ -13,10 +13,11 @@
 //! 工具服务调用时带它自己的期限（减一点余量）进来：入口保证期限前返回真实结果——排不上就一个键都不按，
 //! 下一行来不及就不开始——不会出现“报超时、其实字发出去了”，外部 Agent 也就不会因此重发（ADR 041 实施记录）。
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use kotone_core::inject::InjectError;
+use kotone_core::inject::{CancelToken, InjectError};
 use kotone_core::input_lock::InputLock;
 use kotone_core::send_to_game::{
     ChatFailure, ChatOutcome, ChatProvider, ChatRequest, ChatSend, ChatSent, ChatStop, GameChat,
@@ -190,8 +191,42 @@ pub async fn body_tool(
     }
 }
 
+/// 正在经 [`send_to_game_chat`] 发的（她、外部 Agent、热键、插件的一键喊话）的取消：“停下”一起停掉还没发的几行
+/// （ADR 041 第 3 期，[`stop_sends`]）。语音输入（玩家自己说的话）、自动化各有自己的取消，不在这里。
+fn sending() -> &'static Mutex<Vec<(u64, CancelToken)>> {
+    static SENDING: OnceLock<Mutex<Vec<(u64, CancelToken)>>> = OnceLock::new();
+    SENDING.get_or_init(Default::default)
+}
+
+/// 发完（不管成没成）从 [`sending`] 里拿掉。
+struct Sending(u64);
+
+impl Sending {
+    fn start(cancel: &CancelToken) -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        sending().lock().unwrap().push((id, cancel.clone()));
+        Self(id)
+    }
+}
+
+impl Drop for Sending {
+    fn drop(&mut self) {
+        sending().lock().unwrap().retain(|(id, _)| *id != self.0);
+    }
+}
+
+/// “停下”（[`crate::stop::stop_everything`]）：正在发的几行停在下一行之前（已经按下去的不撤回，也不补发）。返回停了几个。
+pub fn stop_sends() -> usize {
+    let list = sending().lock().unwrap();
+    for (_, cancel) in list.iter() {
+        cancel.cancel();
+    }
+    list.len()
+}
+
 /// 经入口发，并写一条执行记录（`game_chat.send`）。没发出去返回原因（一个键都没按，或者卡住了）；
-/// 发了一部分照实说哪几行没发。
+/// 发了一部分照实说哪几行没发。“停下”能停掉还没发的行（[`stop_sends`]）。
 pub async fn send_to_game_chat(
     app: &AppHandle,
     session: &str,
@@ -199,6 +234,7 @@ pub async fn send_to_game_chat(
 ) -> Result<Value, String> {
     let text = request.text.clone();
     let send = request.send;
+    let _sending = Sending::start(&request.cancel);
     let result = send_logged(app, request).await;
     let (profile, sent, recorded) = match &result {
         Ok(outcome) => (
@@ -301,6 +337,26 @@ fn selected_game(app: &AppHandle) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// “停下”停掉正在经入口发的（ADR 041 第 3 期）：发着的取消掉，发完的不在名单里。
+    #[test]
+    fn stop_cancels_the_sends_in_flight() {
+        let first = CancelToken::default();
+        let second = CancelToken::default();
+        let a = Sending::start(&first);
+        {
+            let _b = Sending::start(&second);
+        }
+        assert!(stop_sends() >= 1);
+        assert!(first.is_cancelled(), "还在发的停下");
+        assert!(!second.is_cancelled(), "发完了的不碰");
+        drop(a);
+        assert!(!sending()
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, c)| c.is_cancelled()));
+    }
 
     fn outcome(lines: &[&str], sent_lines: usize) -> ChatOutcome {
         ChatOutcome {
